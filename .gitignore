@@ -1,0 +1,15 @@
+**/*.o
+**/*.d
+**/kernel.asm
+**/kernel.dis
+**/kernel.elf
+debug.sh
+ls2k_debug.sh
+ls2k_release.sh
+build/**
+.vscode/
+.vscode/*
+*.bin
+*.dis
+copy_kernel_to_ext4.sh
+oscomp/*

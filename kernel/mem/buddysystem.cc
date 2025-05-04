@@ -67,7 +67,7 @@ void BuddySystem::MarkParent(int index) {
 }
 
 int BuddySystem::Alloc(int size) {
-    uint32 actual_size = size == 0 ? 1 : NextPowerOfTwo(size);
+    int actual_size = size == 0 ? 1 : NextPowerOfTwo(size);
     int length = 1 << level;
 
     if (actual_size > length) return -1;

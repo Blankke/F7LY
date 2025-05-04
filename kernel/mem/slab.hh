@@ -2,7 +2,7 @@
 
 #include "types.hh"
 
-#include "kernel/libs/param.h"
+#include "param.h"
 #include <EASTL/list.h>
 
 namespace mem{

@@ -1,5 +1,5 @@
 #pragma once
-
+#include "types.hh"
 
 #define PAGE_ORDER 10
 #define PGNUM (1 << 15)

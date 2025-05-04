@@ -6,7 +6,7 @@
 #ifdef RISCV
 
 #ifndef __ASSEMBLER__
-#include "types.h"
+#include "types.hh"
 
 // which hart (core) is this?
 static inline uint64
@@ -335,11 +335,11 @@ r_ra()
   return x;
 }
 
-static uint64 rdtime() {
-  uint64 x;
-  asm volatile("rdtime %0" : "=r"(x));
-  return x;
-}
+// static uint64 rdtime() {
+//   uint64 x;
+//   asm volatile("rdtime %0" : "=r"(x));
+//   return x;
+// }
 
 // flush the TLB.
 static inline void
@@ -389,7 +389,7 @@ typedef uint64 *pagetable_t; // 512 PTEs
 #elif defined(LOONGARCH)
 
 #include <larchintrin.h>
-#include "types.h"
+#include "types.hh"
 #define  CSR_CRMD_IE_SHIFT		    2
 #define  CSR_CRMD_IE			        ( 0x1 << CSR_CRMD_IE_SHIFT )
 

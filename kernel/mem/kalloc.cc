@@ -31,6 +31,7 @@ int KAlloc::size_to_page_num(uint64 size) {
 }
 
 void KAlloc::init() {
+    //多核情况下应该加锁
     memlock.init("memlock");
     mem::BuddySystem::Initialize();
 }
