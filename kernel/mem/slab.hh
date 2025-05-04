@@ -1,21 +1,21 @@
 #pragma once
 
 #include "types.hh"
-
 #include "param.h"
-#include <EASTL/list.h>
+#include "libs/list.hh"  // 包含我们自定义的链表实现
 
-namespace mem{
+namespace mem {
 
 class Slab {
 public:
     void* pa_start;
     uint64 free_objs_count;
     uint64 max_objs_count;
-    eastl::list<Slab*> list;
+    LinkedList<Slab*> list;  // 替换为自定义链表
     uint64 first_obj;
     bool is_empty;
-
+    
+    Slab() = default; 
     Slab(uint32 obj_size);
     void init_free_objects(uint32 obj_size);
     void* alloc();
@@ -27,9 +27,9 @@ private:
     static constexpr uint32 DEFAULT_MAX_FREE_SLABS_ALLOWED = 5;
     uint32 obj_size_;
     uint32 free_slabs_count_;
-    eastl::list<Slab> free_slabs_;
-    eastl::list<Slab> partial_slabs_;
-    eastl::list<Slab> full_slabs_;
+    LinkedList<Slab> free_slabs_;    // 替换为自定义链表
+    LinkedList<Slab> partial_slabs_; // 替换为自定义链表
+    LinkedList<Slab> full_slabs_;    // 替换为自定义链表
 
     Slab* create_slab();
     void destroy_slab(Slab* slab);

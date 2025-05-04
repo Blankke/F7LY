@@ -12,7 +12,7 @@
 namespace mem {
 
 uint64 KAlloc::pa_start;
-class SpinLock KAlloc::memlock;
+SpinLock KAlloc::memlock;
 
 uint64 KAlloc::pa2pgnm(void* pa) {
     auto addr = reinterpret_cast<uint64>(pa);

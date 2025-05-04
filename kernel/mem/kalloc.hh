@@ -1,6 +1,6 @@
 #pragma once
-
-
+#include "types.hh"
+#include "devs/spinlock.hh"
 
 namespace mem {
 

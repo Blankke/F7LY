@@ -1,3 +1,4 @@
+#pragma once
 #include "console.hh"
 #include "../hal/riscv/sbi.hh"
 // enum OutputLevel
@@ -9,8 +10,7 @@
 // 		out_panic,
 // 	};
 
-#define my_panic(info,args...) k_printer.panic( __FILE__, __LINE__, info,##args )
-#define my_printf(info,args...) k_printer.printf(info,##args)
+
 class Printer
 {
     private:
@@ -66,3 +66,7 @@ class Printer
     
 };
 extern Printer k_printer;
+
+
+#define my_panic(info,args...) k_printer.panic( __FILE__, __LINE__, info,##args )
+#define my_printf(info,args...) k_printer.printf(info,##args)

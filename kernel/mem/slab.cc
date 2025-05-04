@@ -2,7 +2,7 @@
 #include "platform.h"
 #include "kalloc.hh"
 
-namespace mem{
+namespace mem {
 
 SlabCache* SlabAllocator::caches[5] = {nullptr};
 
@@ -53,8 +53,39 @@ SlabCache::SlabCache(uint32 size) : obj_size_(size), free_slabs_count_(0) {
 }
 
 Slab* SlabCache::create_slab() {
+    // 分配内存页
     void* page = KAlloc::alloc();
-    return new (page) Slab(obj_size_);
+    if (!page) return nullptr;
+    
+    // 手动初始化Slab对象
+    Slab* slab = static_cast<Slab*>(page);
+    
+    // 为metadata预留空间
+    int cnt = 1;
+    while (cnt * obj_size_ <= sizeof(Slab)) cnt++;
+    
+    // 初始化链表
+    slab->list = LinkedList<Slab*>();
+    
+    // 设置其他成员
+    slab->pa_start = reinterpret_cast<void*>(reinterpret_cast<uint64>(slab) + cnt * sizeof(Slab));
+    slab->free_objs_count = (PGSIZE - cnt * sizeof(Slab)) / obj_size_;
+    slab->first_obj = reinterpret_cast<uint64>(slab->pa_start);
+    slab->max_objs_count = slab->free_objs_count;
+    slab->is_empty = false;
+    
+    // 初始化空闲对象链表
+    uint64 current = slab->first_obj;
+    uint64 end = reinterpret_cast<uint64>(slab) + PGSIZE;
+    
+    while (current + obj_size_ < end) {
+        uint64 next = current + obj_size_;
+        *reinterpret_cast<uint64*>(current) = next;
+        current = next;
+    }
+    *reinterpret_cast<uint64*>(current) = 0;
+    
+    return slab;
 }
 
 void SlabCache::destroy_slab(Slab* slab) {
@@ -94,17 +125,23 @@ void SlabCache::dealloc(void* pa) {
     slab->free(pa);
     
     if (slab->free_objs_count == slab->max_objs_count) {
-        auto it = eastl::find(partial_slabs_.begin(), partial_slabs_.end(), *slab);
-        if (it != partial_slabs_.end()) {
-            partial_slabs_.erase(it);
-            free_slabs_.push_front(*slab);
-            free_slabs_count_++;
+        // 需要手动查找并移除
+        for (auto it = partial_slabs_.begin(); it != partial_slabs_.end(); ++it) {
+            if (&(*it) == slab) {
+                partial_slabs_.erase(it);
+                free_slabs_.push_front(*slab);
+                free_slabs_count_++;
+                break;
+            }
         }
     } else if (was_full) {
-        auto it = eastl::find(full_slabs_.begin(), full_slabs_.end(), *slab);
-        if (it != full_slabs_.end()) {
-            full_slabs_.erase(it);
-            partial_slabs_.push_front(*slab);
+        // 需要手动查找并移除
+        for (auto it = full_slabs_.begin(); it != full_slabs_.end(); ++it) {
+            if (&(*it) == slab) {
+                full_slabs_.erase(it);
+                partial_slabs_.push_front(*slab);
+                break;
+            }
         }
     }
     

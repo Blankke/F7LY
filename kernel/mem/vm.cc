@@ -6,7 +6,8 @@
 #include "platform.h"
 #include "klib.hh"
 #include "printer.hh"
-
+#include "kalloc.hh"
+#include "vm.hh"
 
 /*
  * the kernel's page table.
@@ -34,7 +35,7 @@ kvmmake(void)
 {
   pagetable_t kpgtbl;
 
-  kpgtbl = (pagetable_t) kalloc();
+  kpgtbl = (pagetable_t) mem::KAlloc::alloc();
   memset(kpgtbl, 0, PGSIZE);
 #ifdef RISCV
   // uart registers
@@ -61,7 +62,8 @@ kvmmake(void)
   kvmmap(kpgtbl, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
 
   // allocate and map a kernel stack for each process.
-  proc_mapstacks(kpgtbl);
+  // wait for zzy :proc_mapstacks
+  // proc_mapstacks(kpgtbl);
 #elif defined(LOONGARCH)
   // kvmmap(kpgtbl, DMWIN1_MASK | (0xfe00000000), DMWIN1_MASK | (0xfe00000000), PGSIZE, PTE_MAT |PTE_W |PTE_P);
   kvmmap(kpgtbl, ((uint64)etext) & (~(DMWIN_MASK)), (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
@@ -123,14 +125,14 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
 {
 #ifdef RISCV
   if(va >= MAXVA)
-    k_printer.my_panic("walk");
+    my_panic("walk");
 
   for(int level = 2; level > 0; level--) {
     pte_t *pte = &pagetable[PX(level, va)];
     if(*pte & PTE_V) {
       pagetable = (pagetable_t)PTE2PA(*pte);
     } else {
-      if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
+      if(!alloc || (pagetable = (pde_t*)mem::KAlloc::alloc()) == 0)
         return 0;
       memset(pagetable, 0, PGSIZE);
       *pte = PA2PTE(pagetable) | PTE_V;
@@ -138,14 +140,14 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
   }
 #elif defined(LOONGARCH)
   // if(va >= MAXVA)
-  //   k_printer.my_panic("walk");
+  //   my_panic("walk");
 
   for(int level = 3; level > 0; level--) {
     pte_t *pte = &pagetable[PX(level, va)];
     if(*pte & PTE_V) {
       pagetable = (pagetable_t)(PTE2PA(*pte) | DMWIN_MASK);
     } else {
-      if(!alloc || (pagetable = (pde_t*)kalloc()) == 0) {
+      if(!alloc || (pagetable = (pde_t*)mem::KAlloc::alloc()) == 0) {
         return 0;
       }
 
@@ -165,7 +167,7 @@ walk_device(pagetable_t pagetable, uint64 va, int alloc) {
     if(*pte & PTE_V) {
       pagetable = (pagetable_t)(PTE2PA(*pte) | DMWIN1_MASK);
     } else {
-      if(!alloc || (pagetable = (pde_t*)kalloc()) == 0) {
+      if(!alloc || (pagetable = (pde_t*)mem::KAlloc::alloc()) == 0) {
         return 0;
       }
 
@@ -175,6 +177,7 @@ walk_device(pagetable_t pagetable, uint64 va, int alloc) {
   }
   return &pagetable[PX(0, va)];
 #endif
+return nullptr;
 }
 
 int
@@ -184,7 +187,7 @@ mappages_device(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, uint64
   pte_t *pte;
 
   if(size == 0)
-    k_printer.my_panic("mappages: size");
+    my_panic("mappages: size");
 
   a = PGROUNDDOWN(va);
   last = PGROUNDDOWN(va + size - 1);
@@ -192,7 +195,7 @@ mappages_device(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, uint64
     if((pte = walk_device(pagetable, a, 1)) == 0)
       return -1;
     if(*pte & PTE_V)
-      k_printer.my_panic("mappages: remap");
+      my_panic("mappages: remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
     if(a == last)
       break;
@@ -233,9 +236,9 @@ kwalkaddr(uint64 va)
   pte = walk(kpt, va, 0);
 
   if(pte == 0)
-    k_printer.my_panic("kvmpa");
+    my_panic("kvmpa");
   if((*pte & PTE_V) == 0)
-    k_printer.my_panic("kvmpa");
+    my_panic("kvmpa");
   pa = PTE2PA(*pte);
   return pa+off;
 }
@@ -275,12 +278,12 @@ void
 kvmmap(pagetable_t kpgtbl, uint64 va, uint64 pa, uint64 sz, uint64 perm)
 {
   if(mappages(kpgtbl, va, sz, pa, perm) != 0)
-    k_printer.my_panic("kvmmap");
+    my_panic("kvmmap");
 }
 
 void kernelmap(uint64 va, uint64 pa, uint64 sz, uint64 perm) {
   if(mappages(kernel_pagetable, va, sz, pa, perm) != 0)
-    k_printer.my_panic("kvmmap");
+    my_panic("kvmmap");
 }
 
 // Create PTEs for virtual addresses starting at va that refer to
@@ -294,7 +297,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, uint64 perm)
   pte_t *pte;
 
   if(size == 0)
-    k_printer.my_panic("mappages: size");
+    my_panic("mappages: size");
   
   a = PGROUNDDOWN(va);
   last = PGROUNDDOWN(va + size - 1);
@@ -302,7 +305,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, uint64 perm)
     if((pte = walk(pagetable, a, 1)) == 0)
       return -1;
     if(*pte & PTE_V)
-      k_printer.my_panic("mappages: remap");
+      my_panic("mappages: remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
     if(a == last)
       break;
@@ -322,22 +325,22 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   pte_t *pte;
 
   if((va % PGSIZE) != 0)
-    k_printer.my_panic("uvmunmap: not aligned");
+    my_panic("uvmunmap: not aligned");
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
-      k_printer.my_panic("uvmunmap: walk");
+      my_panic("uvmunmap: walk");
     if((*pte & PTE_V) == 0)
       continue;
     if(PTE_FLAGS(*pte) == PTE_V)
-      k_printer.my_panic("uvmunmap: not a leaf");
+      my_panic("uvmunmap: not a leaf");
     if(do_free){
 #ifdef RISCV
       uint64 pa = PTE2PA(*pte);
 #elif defined(LOONGARCH)
       uint64 pa = PTE2PA(*pte) | DMWIN_MASK;
 #endif
-      kfree((void*)pa);
+      mem::KAlloc::free((void*)pa);
     }
     *pte = 0;
   }
@@ -350,7 +353,7 @@ pagetable_t
 uvmcreate()
 {
   pagetable_t pagetable;
-  pagetable = (pagetable_t) kalloc();
+  pagetable = (pagetable_t) mem::KAlloc::alloc();
   if(pagetable == 0)
     return 0;
   memset(pagetable, 0, PGSIZE);
@@ -365,22 +368,22 @@ uvmfirst(pagetable_t pagetable, uchar *src, uint sz)
 {
 #ifdef RISCV
   char *mem;
-  printf("sz: %d\n", sz);
+  k_printer.printf("sz: %d\n", sz);
   // if(sz >= PGSIZE)
-  //   k_printer.my_panic("uvmfirst: more than a page");
-  mem = kalloc();
+  //   my_panic("uvmfirst: more than a page");
+  mem = static_cast<char*>(mem::KAlloc::alloc());
   memset(mem, 0, PGSIZE);
   mappages(pagetable, 0, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_X|PTE_U);
   memmove(mem, src, MIN(sz, PGSIZE));
 
-  mem = kalloc();
+  mem = static_cast<char*>(mem::KAlloc::alloc());
   memset(mem, 0, PGSIZE);
   mappages(pagetable, PGSIZE, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_X|PTE_U);
   if (sz > PGSIZE) {
     memmove(mem, (uchar*)((uint64)src + PGSIZE), MIN(sz - PGSIZE, PGSIZE));
   }
 
-  mem = kalloc();
+  mem = static_cast<char*>(mem::KAlloc::alloc());
   memset(mem, 0, PGSIZE);
   mappages(pagetable, 2 * PGSIZE, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_X|PTE_U);
   if (sz > 2 * PGSIZE) {
@@ -388,22 +391,22 @@ uvmfirst(pagetable_t pagetable, uchar *src, uint sz)
   }
 #elif defined(LOONGARCH)
   char *mem;
-  printf("sz: %d\n", sz);
+  k_printer.printf("sz: %d\n", sz);
   // if(sz >= PGSIZE)
-  //   k_printer.my_panic("uvmfirst: more than a page");
-  mem = kalloc();
+  //   my_panic("uvmfirst: more than a page");
+  mem = static_cast<char*>(mem::KAlloc::alloc());
   memset(mem, 0, PGSIZE);
   mappages(pagetable, 0, PGSIZE, (uint64)mem, PTE_W | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
   memmove(mem, src, MIN(sz, PGSIZE));
 
-  mem = kalloc();
+  mem = static_cast<char*>(mem::KAlloc::alloc());
   memset(mem, 0, PGSIZE);
   mappages(pagetable, PGSIZE, PGSIZE, (uint64)mem, PTE_W | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
   if (sz > PGSIZE) {
     memmove(mem, (uchar*)((uint64)src + PGSIZE), MIN(sz - PGSIZE, PGSIZE));
   }
 
-  mem = kalloc();
+  mem = static_cast<char*>(mem::KAlloc::alloc());
   memset(mem, 0, PGSIZE);
   mappages(pagetable, 2 * PGSIZE, PGSIZE, (uint64)mem, PTE_W | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
   if (sz > 2 * PGSIZE) {
@@ -426,14 +429,14 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
 
   oldsz = PGROUNDUP(oldsz);
   for(a = oldsz; a < newsz; a += PGSIZE){
-    mem = kalloc();
+    mem = static_cast<char*>(mem::KAlloc::alloc());
     if(mem == 0){
       uvmdealloc(pagetable, a, oldsz);
       return 0;
     }
     memset(mem, 0, PGSIZE);
     if(mappages(pagetable, a, PGSIZE, (uint64)mem, PTE_R|PTE_U|xperm) != 0){
-      kfree(mem);
+      mem::KAlloc::free(mem);
       uvmdealloc(pagetable, a, oldsz);
       return 0;
     }
@@ -447,14 +450,14 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
 
   oldsz = PGROUNDUP(oldsz);
   for(a = oldsz; a < newsz; a += PGSIZE){
-    mem = kalloc();
+    mem = static_cast<char*>(mem::KAlloc::alloc());
     if(mem == 0){
       uvmdealloc(pagetable, a, oldsz);
       return 0;
     }
     memset(mem, 0, PGSIZE);
     if(mappages(pagetable, a, PGSIZE, (uint64)mem,  xperm) != 0){
-      kfree(mem);
+      mem::KAlloc::free(mem);
       uvmdealloc(pagetable, a, oldsz);
       return 0;
     }
@@ -500,11 +503,11 @@ freewalk(pagetable_t pagetable)
       freewalk((pagetable_t)child);
       pagetable[i] = 0;
     } else if(pte & PTE_V){
-      k_printer.my_panic("freewalk: leaf");
+      my_panic("freewalk: leaf");
     }
   }
 
-  kfree((void*)pagetable);
+  mem::KAlloc::free((void*)pagetable);
 }
 
 // Free user memory pages,
@@ -525,7 +528,7 @@ uvmfree(pagetable_t pagetable, uint64 sz)
 // returns 0 on success, -1 on failure.
 // frees any allocated pages on failure.
 int
-uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
+uvmcopy(pagetable_t old, pagetable_t new_pagetable, uint64 sz)
 {
   pte_t *pte;
   uint64 pa, i;
@@ -534,23 +537,23 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
-      k_printer.my_panic("uvmcopy: pte should exist");
+      my_panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       continue;
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
+    if((mem = static_cast<char*>(mem::KAlloc::alloc())) == 0)
       goto err;
     memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    if(mappages(new_pagetable, i, PGSIZE, (uint64)mem, flags) != 0){
+      mem::KAlloc::free(mem);
       goto err;
     }
   }
   return 0;
 
  err:
-  uvmunmap(new, 0, i / PGSIZE, 1);
+  uvmunmap(new_pagetable, 0, i / PGSIZE, 1);
   return -1;
 }
 
@@ -563,7 +566,7 @@ uvmclear(pagetable_t pagetable, uint64 va)
   
   pte = walk(pagetable, va, 0);
   if(pte == 0)
-    k_printer.my_panic("uvmclear");
+    my_panic("uvmclear");
   *pte &= ~PTE_U;
 }
 
