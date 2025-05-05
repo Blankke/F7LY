@@ -30,10 +30,7 @@ namespace loongarch
 			tlbrbadv = 0x89,
 			tlbrsave = 0x8b,
 		};
-    ;
-    ;
-    ;
-    ;
+
 
 		/// @brief	s: shift;
 		///			m: mask;
@@ -54,18 +51,11 @@ namespace loongarch
 			we_s = 0x9,
 			we_m = 0x1 << we_s,
 		};
-    ;
-    ;
-    ;
-    ;
+
 
 	};
-    ;
-    ;
-    ;
+
     // namespace csr
 };
-    ;
-    ;
-    ;
+
     // namespace loongarch

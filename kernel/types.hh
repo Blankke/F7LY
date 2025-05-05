@@ -19,8 +19,8 @@ typedef unsigned int  uint32;
 typedef unsigned long uint64;
 typedef unsigned int   uint;
 typedef long int64;
-typedef unsigned long uintptr_t;
-typedef long long loff_t;
+
+
 typedef int tid_t;
 typedef tid_t pid_t;
 typedef uint64 rlim_t;

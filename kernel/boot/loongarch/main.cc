@@ -1,6 +1,5 @@
 #include "uart.hh"
 #include "printer.hh"
-#include "../hal/riscv/sbi.hh"
 #include "param.h"
 #include "mem/kalloc.hh"
 #include "vm.hh"

@@ -20,15 +20,7 @@
         uint64 s10;  // x26
         uint64 s11;  // x27
     };
-    ;
-    ;
-    ;
-    ;
-
+ 
 	// Context k_proc_context_pool[ proc_pool_size ];
 
 	// Context * proc_context_pool() { return k_proc_context_pool; };
-    ;
-    ;
-    ;
-    

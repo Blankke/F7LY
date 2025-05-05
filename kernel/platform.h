@@ -644,17 +644,17 @@ r_csr_badv()
   return x;
 }
 
-static uint64 rdtime(void) {
-  int rID = 0;
-  uint64 val = 0;
+// static uint64 rdtime(void) {
+//   int rID = 0;
+//   uint64 val = 0;
 
-  asm volatile(
-    "rdtime.d %0, %1 \n\t"
-    : "=r" (val) , "=r" (rID)
-    :
-  );
-  return val;
-}
+//   asm volatile(
+//     "rdtime.d %0, %1 \n\t"
+//     : "=r" (val) , "=r" (rID)
+//     :
+//   );
+//   return val;
+// }
 
 /* IOCSR */
 static inline uint32 iocsr_readl(uint32 reg)
