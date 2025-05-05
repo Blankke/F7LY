@@ -8,7 +8,7 @@ ifeq ($(ARCH),riscv)
   QEMU_CMD := qemu-system-riscv64 -machine virt -m 128M -nographic -smp 1 -bios default -kernel
 else ifeq ($(ARCH),loongarch)
   CROSS_COMPILE := loongarch64-unknown-linux-gnu-
-  ARCH_CFLAGS := -DLOONGARCH -mcmodel=normal
+  ARCH_CFLAGS := -DLOONGARCH -mcmodel=normal -Wno-error=use-after-free
   OUTPUT_PREFIX := loongarch
   QEMU_CMD := qemu-system-loongarch64 -kernel
 else
@@ -101,17 +101,17 @@ run: build
 	@if [ "$(ARCH)" = "riscv" ]; then \
 		$(QEMU_CMD) $(KERNEL_ELF); \
 	elif [ "$(ARCH)" = "loongarch" ]; then \
-		$(QEMU_CMD) $(KERNEL_ELF) -m 128M -nographic -smp 1 \
-		# -drive file=rootfs.img,if=none,format=raw,id=x0 \
-		# -device virtio-blk-pci,drive=x0,bus=virtio-mmio-bus.0 \
-		# -no-reboot \
-		# -device virtio-net-pci,netdev=net0 \
-		# -netdev user,id=net0,hostfwd=tcp::5555-:5555,hostfwd=udp::5555-:5555 \
-		# -rtc base=utc \
-		# -drive file=disk-la.img,if=none,format=raw,id=x1 \
-		# -device virtio-blk-pci,drive=x1,bus=virtio-mmio-bus.1 \
-		; \
+		$(QEMU_CMD) $(KERNEL_ELF) -m 128M -nographic -smp 1; \
 	fi
+	# 以下是LoongArch可选参数（已注释）：
+	# -drive file=rootfs.img,if=none,format=raw,id=x0
+	# -device virtio-blk-pci,drive=x0,bus=virtio-mmio-bus.0
+	# -no-reboot
+	# -device virtio-net-pci,netdev=net0
+	# -netdev user,id=net0,hostfwd=tcp::5555-:5555,hostfwd=udp::5555-:5555
+	# -rtc base=utc
+	# -drive file=disk-la.img,if=none,format=raw,id=x1
+	# -device virtio-blk-pci,drive=x1,bus=virtio-mmio-bus.1
 
 debug: build
 	@if [ "$(ARCH)" = "riscv" ]; then \
