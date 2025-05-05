@@ -6,7 +6,7 @@
                 "${workspaceFolder}/**"
             ],
             "defines": ["RISCV"],
-            "compilerPath": "~/os-env/gcc-14.2.0-riscv64-linux-gnu/bin/riscv64-unknown-elf-gcc",
+            "compilerPath": "/usr/bin/gcc",
             "cStandard": "gnu17",
             "cppStandard": "gnu++14"
         },
@@ -16,7 +16,7 @@
                 "${workspaceFolder}/**"
             ],
             "defines": ["LOONGARCH"],
-            "compilerPath": "~/os-env/gcc-13.2.0-loongarch64-linux-gnu/bin/loongarch64-linux-gnu-gcc",
+            "compilerPath": "/usr/bin/gcc",
             "cStandard": "gnu17",
             "cppStandard": "gnu++14"
         }
