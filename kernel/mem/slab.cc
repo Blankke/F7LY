@@ -1,6 +1,7 @@
 #include "slab.hh"
 #include "platform.h"
 #include "kalloc.hh"
+#include "printer.hh"
 
 namespace mem {
 
@@ -163,6 +164,7 @@ void SlabAllocator::init() {
     caches[2] = new SlabCache(64);
     caches[3] = new SlabCache(128);
     caches[4] = new SlabCache(256);
+    printf("DEBUG:\ncache 1: %p\ncache 2: %p\ncache 3: %p\ncache 4: %p\ncache 5: %p",&caches[0],&caches[1],&caches[2],&caches[3],&caches[4]);
 }
 
 void* SlabAllocator::alloc(size_t size) {

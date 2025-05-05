@@ -23,7 +23,7 @@ public:
     void Free(int offset);
 
 private:
-    // explicit BuddySystem(uint64 base_addr);
+    explicit BuddySystem(uint64 base_addr);
     BuddySystem() = default;
     int IndexOffset(int index, int level, int max_level) const;
     void MarkParent(int index);

@@ -3,6 +3,7 @@
 #include "param.h"
 #include "mem/kalloc.hh"
 #include "vm.hh"
+#include "slab.hh"
 
 
 
@@ -16,5 +17,6 @@ extern "C" void main() {
     mem::KAlloc::init();// 伙伴分配器初始化
     kvminit(); // create kernel page table
 	kvminithart(); // turn on paging
+
 
 }

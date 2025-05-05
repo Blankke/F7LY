@@ -15,7 +15,7 @@ SpinLock KAlloc::memlock;
 uint64 KAlloc::pa2pgnm(void* pa) {
     auto addr = reinterpret_cast<uint64>(pa);
     if (addr % PGSIZE != 0) {
-        panic(__FILE__, __LINE__,"kfree!");
+        panic("kfree!");
     }
     return (addr - pa_start) / PGSIZE;
 }

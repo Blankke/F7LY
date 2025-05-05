@@ -11,13 +11,10 @@ namespace mem {
 
 BuddySystem* BuddySystem::instance = nullptr;
 
-// BuddySystem::BuddySystem(uint64 base_addr) 
-//     : base_ptr(reinterpret_cast<uint8*>(base_addr)) {
-//     memset(base_ptr, 0, BSSIZE * (1 << PAGE_ORDER));
-//     level = 0;
-//     while (!((1 << level) & PGNUM)) level++;
-//     tree = base_ptr + sizeof(BuddySystem);
-// }
+BuddySystem::BuddySystem(uint64 base_addr) : base_ptr(reinterpret_cast<uint8*>(base_addr)) 
+{
+    tree = base_ptr + sizeof(BuddySystem);
+}
 
 constexpr uint64 BuddySystem::AlignUp(uint64 addr, uint64 align) {
     return (addr + align - 1) & ~(align - 1);
