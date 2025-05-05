@@ -11,13 +11,13 @@ namespace mem {
 
 BuddySystem* BuddySystem::instance = nullptr;
 
-BuddySystem::BuddySystem(uint64 base_addr) 
-    : base_ptr(reinterpret_cast<uint8*>(base_addr)) {
-    memset(base_ptr, 0, BSSIZE * (1 << PAGE_ORDER));
-    level = 0;
-    while (!((1 << level) & PGNUM)) level++;
-    tree = base_ptr + sizeof(BuddySystem);
-}
+// BuddySystem::BuddySystem(uint64 base_addr) 
+//     : base_ptr(reinterpret_cast<uint8*>(base_addr)) {
+//     memset(base_ptr, 0, BSSIZE * (1 << PAGE_ORDER));
+//     level = 0;
+//     while (!((1 << level) & PGNUM)) level++;
+//     tree = base_ptr + sizeof(BuddySystem);
+// }
 
 constexpr uint64 BuddySystem::AlignUp(uint64 addr, uint64 align) {
     return (addr + align - 1) & ~(align - 1);
@@ -38,7 +38,7 @@ void BuddySystem::Initialize() {
 
     const uint64_t PGSIZE = 1 << PAGE_ORDER;
     uint64_t pa_start = reinterpret_cast<uint64_t>(end);
-    pa_start = (pa_start + PGSIZE - 1) & ~(PGSIZE - 1);
+    pa_start = (pa_start + PGSIZE - 1) & ~(PGSIZE - 1); //将pa_start向高地址对齐到PGSIZE的整数倍
 
     instance = reinterpret_cast<BuddySystem*>(pa_start);
     pa_start += BSSIZE * PGSIZE;

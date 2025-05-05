@@ -7,8 +7,6 @@
 #include "klib.hh"
 
 
-
-
 namespace mem {
 
 uint64 KAlloc::pa_start;

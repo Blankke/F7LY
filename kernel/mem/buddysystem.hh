@@ -3,7 +3,7 @@
 
 #define PAGE_ORDER 10
 #define PGNUM (1 << 15)
-#define BSSIZE 10
+#define BSSIZE 10 //最多支持 2^10 = 1024 页的分配粒度
 
 namespace mem {
 
@@ -23,7 +23,8 @@ public:
     void Free(int offset);
 
 private:
-    explicit BuddySystem(uint64 base_addr);
+    // explicit BuddySystem(uint64 base_addr);
+    BuddySystem() = default;
     int IndexOffset(int index, int level, int max_level) const;
     void MarkParent(int index);
     void Combine(int index);
