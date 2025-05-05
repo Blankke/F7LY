@@ -144,7 +144,7 @@ void BuddySystem::Free(int offset) {
                 Combine(index);
                 return;
             case NODE_UNUSED:
-                k_printer.printf("Freeing invalid page");
+                printf("Freeing invalid page");
             default:
                 length /= 2;
                 if (offset < left + length) {

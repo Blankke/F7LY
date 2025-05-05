@@ -66,7 +66,7 @@ void Printer::printptr( uint64 x )
         }
 }
 
-void Printer::printf( const char *fmt, ... )
+void Printer::print( const char *fmt, ... )
 {
  va_list ap;
   int i, c, tmp_locking;
@@ -77,18 +77,7 @@ void Printer::printf( const char *fmt, ... )
     _lock.acquire();
 
   if (fmt == 0)
-    panic(__FILE__, __LINE__, "null fmt");
-
-  // 确保控制台已初始化
-  if (_console == 0) {
-    // 直接使用SBI接口输出
-    for(i = 0; (c = fmt[i] & 0xff) != 0; i++) {
-      sbi_console_putchar(c);
-    }
-    if(tmp_locking)
-      _lock.release();
-    return;
-  }
+    k_panic(__FILE__, __LINE__, "null fmt");
 
   va_start(ap, fmt);
   for(i = 0; (c = fmt[i] & 0xff) != 0; i++){
@@ -131,13 +120,13 @@ void Printer::printf( const char *fmt, ... )
     _lock.release();
 }
 
-void Printer::panic( const char *f, uint l, const char *info, ... )
+void Printer::k_panic( const char *f, uint l, const char *info, ... )
 {
   va_list ap;
   va_start( ap, info );
-  k_printer.printf("panic: ");
-  k_printer.printf(f);
-  k_printer.printf("\n");
+  k_printer.print("panic: ");
+  k_printer.print(f);
+  k_printer.print("\n");
   va_end( ap );
   k_printer._panicked = 1; // freeze uart output from other CPUs
   sbi_shutdown();

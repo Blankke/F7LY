@@ -9,7 +9,24 @@
 // 		out_error,
 // 		out_panic,
 // 	};
+#ifndef COLOR_PRINT
+#define COLOR_PRINT
 
+#define printfRed(format, ...) k_printer.print("\33[1;31m" format "\33[0m", ##__VA_ARGS__)
+#define printfGreen(format, ...) k_printer.print("\33[1;32m" format "\33[0m", ##__VA_ARGS__)
+#define printfBlue(format, ...) k_printer.print("\33[1;34m" format "\33[0m", ##__VA_ARGS__)
+#define printfCYAN(format, ...) k_printer.print("\33[1;36m" format "\33[0m", ##__VA_ARGS__)
+#define printfYELLOW(format, ...) k_printer.print("\33[1;33m" format "\33[0m", ##__VA_ARGS__)
+#define printfBWhite(format, ...) k_printer.print("\33[1;37m" format "\33[0m", ##__VA_ARGS__)
+#define printfMAGENTA(format, ...) k_printer.print("\33[1;35m" format "\33[0m", ##__VA_ARGS__)
+// Info print macros
+#define Info(fmt, ...) printf("[INFO] " fmt "", ##__VA_ARGS__)
+#define Info_R(fmt, ...) printf("[INFO] " RED(fmt) "", ##__VA_ARGS__)
+
+// TODO macro
+#define TODO() 0
+
+#endif
 
 class Printer
 {
@@ -34,12 +51,12 @@ class Printer
 		void init();
         inline int is_panic() { return _panicked; }
     
-		void printf( const char *fmt, ... );
+		void print( const char *fmt, ... );
         void printint( int xx, int base, int sign );
 		void printbyte( uint8 x );
 		void printptr( uint64 x );
 
-		static void panic( const char *f, uint l, const char *info, ... );
+		static void k_panic( const char *f, uint l, const char *info, ... );
 		static void panic_va( const char *f, uint l, const char *info, va_list ap );
 		static void error( const char *f, uint l, const char *info, ... );
 		static void error_va( const char *f, uint l, const char *info, va_list ap );
@@ -68,5 +85,6 @@ class Printer
 extern Printer k_printer;
 
 
-#define my_panic(info,args...) k_printer.panic( __FILE__, __LINE__, info,##args )
-#define my_printf(info,args...) k_printer.printf(info,##args)
+#define panic(info,args...) k_printer.k_panic( __FILE__, __LINE__, info,##args )
+#define printf(info,args...) k_printer.print(info,##args)
+

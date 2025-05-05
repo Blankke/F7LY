@@ -125,7 +125,7 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
 {
 #ifdef RISCV
   if(va >= MAXVA)
-    my_panic("walk");
+    panic("walk");
 
   for(int level = 2; level > 0; level--) {
     pte_t *pte = &pagetable[PX(level, va)];
@@ -140,7 +140,7 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
   }
 #elif defined(LOONGARCH)
   // if(va >= MAXVA)
-  //   my_panic("walk");
+  //   panic("walk");
 
   for(int level = 3; level > 0; level--) {
     pte_t *pte = &pagetable[PX(level, va)];
@@ -187,7 +187,7 @@ mappages_device(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, uint64
   pte_t *pte;
 
   if(size == 0)
-    my_panic("mappages: size");
+    panic("mappages: size");
 
   a = PGROUNDDOWN(va);
   last = PGROUNDDOWN(va + size - 1);
@@ -195,7 +195,7 @@ mappages_device(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, uint64
     if((pte = walk_device(pagetable, a, 1)) == 0)
       return -1;
     if(*pte & PTE_V)
-      my_panic("mappages: remap");
+      panic("mappages: remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
     if(a == last)
       break;
@@ -236,9 +236,9 @@ kwalkaddr(uint64 va)
   pte = walk(kpt, va, 0);
 
   if(pte == 0)
-    my_panic("kvmpa");
+    panic("kvmpa");
   if((*pte & PTE_V) == 0)
-    my_panic("kvmpa");
+    panic("kvmpa");
   pa = PTE2PA(*pte);
   return pa+off;
 }
@@ -278,12 +278,12 @@ void
 kvmmap(pagetable_t kpgtbl, uint64 va, uint64 pa, uint64 sz, uint64 perm)
 {
   if(mappages(kpgtbl, va, sz, pa, perm) != 0)
-    my_panic("kvmmap");
+    panic("kvmmap");
 }
 
 void kernelmap(uint64 va, uint64 pa, uint64 sz, uint64 perm) {
   if(mappages(kernel_pagetable, va, sz, pa, perm) != 0)
-    my_panic("kvmmap");
+    panic("kvmmap");
 }
 
 // Create PTEs for virtual addresses starting at va that refer to
@@ -297,7 +297,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, uint64 perm)
   pte_t *pte;
 
   if(size == 0)
-    my_panic("mappages: size");
+    panic("mappages: size");
   
   a = PGROUNDDOWN(va);
   last = PGROUNDDOWN(va + size - 1);
@@ -305,7 +305,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, uint64 perm)
     if((pte = walk(pagetable, a, 1)) == 0)
       return -1;
     if(*pte & PTE_V)
-      my_panic("mappages: remap");
+      panic("mappages: remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
     if(a == last)
       break;
@@ -325,15 +325,15 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   pte_t *pte;
 
   if((va % PGSIZE) != 0)
-    my_panic("uvmunmap: not aligned");
+    panic("uvmunmap: not aligned");
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
-      my_panic("uvmunmap: walk");
+      panic("uvmunmap: walk");
     if((*pte & PTE_V) == 0)
       continue;
     if(PTE_FLAGS(*pte) == PTE_V)
-      my_panic("uvmunmap: not a leaf");
+      panic("uvmunmap: not a leaf");
     if(do_free){
 #ifdef RISCV
       uint64 pa = PTE2PA(*pte);
@@ -368,9 +368,9 @@ uvmfirst(pagetable_t pagetable, uchar *src, uint sz)
 {
 #ifdef RISCV
   char *mem;
-  k_printer.printf("sz: %d\n", sz);
+  printf("sz: %d\n", sz);
   // if(sz >= PGSIZE)
-  //   my_panic("uvmfirst: more than a page");
+  //   panic("uvmfirst: more than a page");
   mem = static_cast<char*>(mem::KAlloc::alloc());
   memset(mem, 0, PGSIZE);
   mappages(pagetable, 0, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_X|PTE_U);
@@ -393,7 +393,7 @@ uvmfirst(pagetable_t pagetable, uchar *src, uint sz)
   char *mem;
   k_printer.printf("sz: %d\n", sz);
   // if(sz >= PGSIZE)
-  //   my_panic("uvmfirst: more than a page");
+  //   panic("uvmfirst: more than a page");
   mem = static_cast<char*>(mem::KAlloc::alloc());
   memset(mem, 0, PGSIZE);
   mappages(pagetable, 0, PGSIZE, (uint64)mem, PTE_W | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
@@ -503,7 +503,7 @@ freewalk(pagetable_t pagetable)
       freewalk((pagetable_t)child);
       pagetable[i] = 0;
     } else if(pte & PTE_V){
-      my_panic("freewalk: leaf");
+      panic("freewalk: leaf");
     }
   }
 
@@ -537,7 +537,7 @@ uvmcopy(pagetable_t old, pagetable_t new_pagetable, uint64 sz)
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
-      my_panic("uvmcopy: pte should exist");
+      panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       continue;
     pa = PTE2PA(*pte);
@@ -566,7 +566,7 @@ uvmclear(pagetable_t pagetable, uint64 va)
   
   pte = walk(pagetable, va, 0);
   if(pte == 0)
-    my_panic("uvmclear");
+    panic("uvmclear");
   *pte &= ~PTE_U;
 }
 

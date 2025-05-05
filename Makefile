@@ -88,5 +88,5 @@ debug: all
 # ===== 清理规则 =====
 clean:
 	rm -rf $(BUILD_DIR)
-
+	find . -name "*.o" -exec rm -f {} \;
 -include $(DEPS)

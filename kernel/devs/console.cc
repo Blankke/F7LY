@@ -19,18 +19,13 @@ void Console::console_putc(int c)
         uart.putc_sync('\b');
         uart.putc_sync(' ');
         uart.putc_sync('\b');
-        sbi_console_putchar('\b');
-        sbi_console_putchar(' ');
-        sbi_console_putchar('\b');
     }
     else if (c == '\n' || c == '\r') {
     uart.putc('\n');
-    sbi_console_putchar('\n');
 }
     else
     {
         uart.putc_sync(c);
-        sbi_console_putchar(c);
     }
 }
 
