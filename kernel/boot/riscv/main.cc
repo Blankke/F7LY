@@ -4,7 +4,7 @@
 #include "mem/kalloc.hh"
 #include "vm.hh"
 #include "slab.hh"
-
+#include "pagetable.hh"
 
 
 extern "C" void main() {
@@ -13,7 +13,7 @@ extern "C" void main() {
     Info("Hello, World!\n");
     printfCYAN("Hello, World!\n");
     printfYELLOW("Hello, World!\n");
-    
+    mem::PageTable pt;
     mem::KAlloc::init();// 伙伴分配器初始化
     kvminit(); // create kernel page table
 	kvminithart(); // turn on paging

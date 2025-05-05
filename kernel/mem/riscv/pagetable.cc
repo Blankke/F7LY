@@ -20,16 +20,18 @@ namespace mem
             else
             {
                 PageTable pt;
-                if (!alloc || pt.setbase(KAlloc::alloc()) == 0)
+                pt.set_base((uint64)KAlloc::alloc());
+                if (!alloc || pt.get_base() == 0)
                 {
-                    return 0;
+                    return Pte(0);
                 }
                 memset((void *)pt.get_base(), 0, PGSIZE);
                 pte.set_data(PA2PTE(pt.get_base()));
                 pte.set_valid();
-                return get_pte(PX(0, va));
+                ((pte_t*)_base_addr)[PX(level,va)] = pte.get_data();
             }
         }
+        return get_pte(PX(0, va));
     }
     void *PageTable::walk_addr(uint64 va)
     {

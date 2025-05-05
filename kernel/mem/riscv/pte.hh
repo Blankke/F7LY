@@ -32,7 +32,7 @@ namespace mem
 		void set_user() { *_data_addr |= riscv::PteEnum::pte_user_m; }
 		void set_data(uint64 data) { *_data_addr |= data; }
 		uint64 get_flags() { return *_data_addr & 0x3FF; }
-		void *pa() { return PTE2PA(get_data()); }
+		void *pa() { return (void*)PTE2PA(get_data()); }
 
 		// 慎用！！！这个函数会使PTE的值清零！
 		void clear_data() { *_data_addr = 0; }

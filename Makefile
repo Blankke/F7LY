@@ -25,7 +25,7 @@ SIZE    := $(CROSS_COMPILE)size
 # ===== 路径定义 =====
 KERNEL_DIR := kernel
 BUILD_DIR := build/$(OUTPUT_PREFIX)
-ARCH_DIRS := boot/$(ARCH) hal/$(ARCH) link/$(ARCH)
+ARCH_DIRS := boot/$(ARCH) hal/$(ARCH) link/$(ARCH) mem/$(ARCH)
 COMMON_DIRS := mem libs devs
 SUBDIRS := $(ARCH_DIRS) $(COMMON_DIRS)
 
