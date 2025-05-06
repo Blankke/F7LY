@@ -6,17 +6,15 @@
 #include "slab.hh"
 #include "pagetable.hh"
 
+__attribute__ ((aligned (16))) char stack0[NCPU][4096*2];
 
 extern "C" void main() {
     k_printer.init();
-    printfRed("Hello, World!\n");
-    Info("Hello, World!\n");
-    printfCYAN("Hello, World!\n");
-    printfYELLOW("Hello, World!\n");
-    mem::PageTable pt;
-    mem::KAlloc::init();// 伙伴分配器初始化
-    kvminit(); // create kernel page table
+    printfRed("FUCK\n");
+    printfMagenta("YOU!\n");
 	kvminithart(); // turn on paging
-
-
+    printfRed("FUCK\n");
+    
+    mem::KAlloc::init();// 伙伴分配器初始化
+    printfRed("YOU!\n");
 }

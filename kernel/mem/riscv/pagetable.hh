@@ -7,6 +7,7 @@
 #include "printer.hh"
 namespace mem
 {
+
 	extern bool debug_trace_walk;
 	class PageTable
 	{
@@ -36,6 +37,7 @@ namespace mem
 		/// @brief 递归地释放页表中的所有页面
 		void freewalk();
 
+		Pte kwalkaddr(uint64 va);
         uint64 dir_num(int level, uint64 va );
 
 		uint64 get_pte_data( uint64 index ) { return ( uint64 ) ( ( pte_t * ) _base_addr )[ index ]; }

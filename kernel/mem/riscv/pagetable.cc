@@ -6,6 +6,7 @@
 #include "printer.hh"
 namespace mem
 {
+    PageTable k_pagetable;
     Pte PageTable::walk(uint64 va, bool alloc)
     {
         for (int level = 2; level > 0; level--)
@@ -72,6 +73,22 @@ namespace mem
             }
         }
         KAlloc::free((void *)(get_base()));
+    }
+
+    Pte PageTable::kwalkaddr(uint64 va)
+    {
+        // uint64 off = va % PGSIZE;
+        Pte pte;
+        // uint64 pa;
+
+        pte = k_pagetable.walk(va, false);
+
+        if(pte.get_data() == 0)
+        {
+            printfRed("try to walk-addr( k-pt, %p ). nullptr will be return.", va);
+            return Pte(0);
+        }
+        return pte;
     }
 
     uint64 PageTable::dir_num(int level, uint64 va)

@@ -77,6 +77,7 @@ kvmmake(void)
 void
 kvminit(void)
 {
+  printf("kvminit\n");
   kernel_pagetable = kvmmake();
 }
 
@@ -85,6 +86,7 @@ kvminit(void)
 void
 kvminithart()
 {
+  printf("kvminithart\n");
 #ifdef RISCV
   // wait for any previous writes to the page table memory to finish.
   sfence_vma();
