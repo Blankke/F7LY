@@ -1,7 +1,7 @@
 #pragma once
 #include "types.hh"
 #include "devs/spinlock.hh"
-
+#include "buddysystem.hh"
 namespace mem
 {
 
@@ -15,6 +15,7 @@ namespace mem
         static void *kcalloc(uint n, size_t size);
 
     private:
+        static BuddySystem *_buddy;
         static uint64 pa_start;
         static class SpinLock memlock;
 
@@ -22,5 +23,5 @@ namespace mem
         static void *pgnm2pa(int pgnm);
         static int size_to_page_num(uint64 size);
     };
-
+extern PhysicalMemoryManager k_pmm;
 }

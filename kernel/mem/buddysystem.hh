@@ -16,22 +16,21 @@ enum NodeState {
 
 class BuddySystem {
 public:
-    static BuddySystem* instance;
-
-    static void Initialize();
+    void Initialize(uint64 baseptr);
     int Alloc(int size);
     void Free(int offset);
-
+    void* alloc_pages(int count);
+    void free_pages(void* ptr);
 private:
-    explicit BuddySystem(uint64 base_addr);
+
     BuddySystem() = default;
     int IndexOffset(int index, int level, int max_level) const;
     void MarkParent(int index);
     void Combine(int index);
-    static uint32 NextPowerOfTwo(uint32 x);
+    uint32 NextPowerOfTwo(uint32 x);
 
     // 内存管理相关
-    static constexpr uint64 AlignUp(uint64 addr, uint64 align);
+    constexpr uint64 AlignUp(uint64 addr, uint64 align);
 
 
     int level;
@@ -39,4 +38,4 @@ private:
     uint8* base_ptr;
 };
 
-} // namespace mem
+} ;// namespace mem

@@ -1,30 +1,28 @@
-//
-// Created by Li Shuang ( pseudonym ) on 2024-04-29
-// --------------------------------------------------------------
-// | Note: This code file just for study, not for commercial use
-// | Contact Author: lishuang.mk@whu.edu.cn
-// --------------------------------------------------------------
-//
 
 #pragma once
 #include "spinlock.hh"
-
+#include "buddysystem.hh"
+#include "liballoc_allocator.hh"
 
 namespace mem
 {
-    class HeapMemoryManager
-    {
-    private:
-        SpinLock heap_lock;
+ 	class HeapMemoryManager
+	{
+	private:
+		SpinLock _lock;
 
-    public:
-        HeapMemoryManager() {};
-        void init(const char *lock_name);
+		BuddySystem* _k_allocator_coarse;
 
-        void *allocate(uint64 size);
+		L_Allocator _k_allocator_fine;
 
-        void free(void *p);
-    };
+	public:
+		HeapMemoryManager() {};
+		void init( const char *lock_name );
+
+		void *allocate( uint64 size );
+
+		void free( void *p );
+	};
 
     extern HeapMemoryManager k_hmm;
 } // namespace mem

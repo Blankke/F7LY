@@ -1,9 +1,9 @@
 #include "pagetable.hh"
 #include "memlayout.hh"
 #include "platform.hh"
-#include "kalloc.hh"
 #include "klib.hh"
 #include "printer.hh"
+#include "physical_memory_manager.hh"
 namespace mem
 {
     PageTable k_pagetable;
@@ -21,7 +21,7 @@ namespace mem
             else
             {
                 PageTable pt;
-                pt.set_base((uint64)KAlloc::alloc());
+                pt.set_base((uint64)k_pmm.alloc_page());
                 if (!alloc || pt.get_base() == 0)
                 {
                     return Pte(0);
@@ -72,7 +72,7 @@ namespace mem
                 panic("freewalk: leaf");
             }
         }
-        KAlloc::free((void *)(get_base()));
+        k_pmm.free_page((void *)(get_base()));
     }
 
     Pte PageTable::kwalkaddr(uint64 va)

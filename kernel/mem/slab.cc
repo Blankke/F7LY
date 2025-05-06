@@ -1,6 +1,6 @@
 #include "slab.hh"
 #include "platform.hh"
-#include "kalloc.hh"
+#include "physical_memory_manager.hh"
 #include "printer.hh"
 
 namespace mem {
@@ -55,7 +55,7 @@ SlabCache::SlabCache(uint32 size) : obj_size_(size), free_slabs_count_(0) {
 
 Slab* SlabCache::create_slab() {
     // 分配内存页
-    void* page = KAlloc::alloc();
+    void* page = k_pmm.alloc_page();
     if (!page) return nullptr;
     
     // 手动初始化Slab对象
@@ -91,7 +91,7 @@ Slab* SlabCache::create_slab() {
 
 void SlabCache::destroy_slab(Slab* slab) {
     slab->~Slab();
-    KAlloc::free(slab);
+    k_pmm.free_page(slab);
 }
 
 void* SlabCache::alloc() {

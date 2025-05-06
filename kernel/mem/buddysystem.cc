@@ -3,18 +3,13 @@
 #include "types.hh"
 #include "klib.hh"
 #include "printer.hh"
+#include "platform.hh"
 
-
-extern "C" char end[]; // 来自链接脚本
 
 namespace mem {
 
-BuddySystem* BuddySystem::instance = nullptr;
 
-BuddySystem::BuddySystem(uint64 base_addr) : base_ptr(reinterpret_cast<uint8*>(base_addr)) 
-{
-    tree = base_ptr + sizeof(BuddySystem);
-}
+
 
 constexpr uint64 BuddySystem::AlignUp(uint64 addr, uint64 align) {
     return (addr + align - 1) & ~(align - 1);
@@ -31,19 +26,14 @@ uint32 BuddySystem::NextPowerOfTwo(uint32 x) {
     return x + 1;
 }
 
-void BuddySystem::Initialize() {
-    printfRed("init buddy system\n");
-    const uint64_t PGSIZE = 1 << PAGE_ORDER;
-    uint64_t pa_start = reinterpret_cast<uint64_t>(end);
-    pa_start = (pa_start + PGSIZE - 1) & ~(PGSIZE - 1); //将pa_start向高地址对齐到PGSIZE的整数倍
-
-    instance = reinterpret_cast<BuddySystem*>(pa_start);
-    pa_start += BSSIZE * PGSIZE;
-    memset(instance, 0, BSSIZE * PGSIZE);
-
-    instance->level = 0;
-    while (!((1 << instance->level) & PGNUM)) {
-        instance->level++;
+void BuddySystem::Initialize(uint64 baseptr) {
+    printfRed("init buddy system\n");  
+    printf("[BuddySystem] base_ptr: %p\n", base_ptr);
+    base_ptr = reinterpret_cast<uint8*>(baseptr);
+    tree = base_ptr + sizeof(BuddySystem);
+    level = 0;
+    while (!((1 << level) & PGNUM)) {
+        level++;
     }
 }
 
@@ -155,4 +145,24 @@ void BuddySystem::Free(int offset) {
     }
 }
 
+void* BuddySystem::alloc_pages(int count) {
+    int offset = Alloc(count);
+    if (offset == -1)
+    {
+        printfRed("[BuddySystem]  request too many pages\n");
+        return nullptr;
+    }
+    void* pa =  reinterpret_cast<void *>(static_cast<uint64>(offset) * PGSIZE + base_ptr);
+    memset(pa, 0, count * PGSIZE);
+    return pa;
+}
+
+void BuddySystem::free_pages(void* ptr) {
+    auto addr = reinterpret_cast<uint64>(ptr);
+    if (addr % PGSIZE != 0)
+    {
+        panic("kfree!");
+    }
+    Free((addr - (uint64)base_ptr) / PGSIZE);
+}
 } // namespace mem

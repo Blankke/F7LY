@@ -383,7 +383,20 @@ typedef uint64 *pagetable_t; // 512 PTEs
 // Sv39, to avoid having to sign-extend virtual addresses
 // that have the high bit set.
 #define MAXVA (1L << (9 + 9 + 9 + 12 - 1)) // 128TB
+	enum vml : uint64
+	{
+		vm_page_cnt_shift = 15,
+		vm_start = 0x0,
+		vm_end = ( 0x1UL << PGSHIFT ) << vm_page_cnt_shift,	// 128 MiB
 
+		vm_kernel_start = vm_end >> 2,								// 32 MiB
+		vm_trap_frame = ( vm_end >> 1 ) - PGSIZE,					// 64 MiB - 1 page
+
+		// vm_kernel_heap_start = vm_kernel_start >> 1,
+		// vm_kernel_heap_start = _1M * 8,
+		vm_kernel_heap_start = vm_end >> 1,							// 64 MiB
+		vm_kernel_heap_size = _1M * 64,
+	};
 #elif defined(LOONGARCH)
 
 #include <larchintrin.h>
