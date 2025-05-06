@@ -133,3 +133,35 @@ void Printer::k_panic( const char *f, uint l, const char *info, ... )
   for(;;)
       ;
 }
+
+void Printer::assrt( const char *f, uint l, const char *expr, const char *detail, ... )
+	{
+		k_printer._locking = 0;
+#ifdef LINUX_BUILD
+		printf( "\033[91m[ assert ]=> " );
+#else 
+		printf( "[ assert ]=> " );
+#endif 
+		printf( f );
+		printf( " : " );
+		printf( "%d", l );
+		printf( " :\n\t     " );
+		_trace_flag = 1;
+		printf( "assert fail for '" );
+		printf( expr );
+		printf( "'\n[detail] " );
+		va_list ap;
+		va_start( ap, detail );
+		printf( detail, ap );
+		va_end( ap );
+		_trace_flag = 0;
+#ifdef LINUX_BUILD
+		printf( "\033[0m\n" );
+#else 
+		printf( "\n" );
+#endif 
+		k_printer._locking = 1;
+
+		panic( f, l, "assert fail for above reason." );
+	}
+

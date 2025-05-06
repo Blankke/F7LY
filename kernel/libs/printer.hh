@@ -25,7 +25,6 @@
 
 // TODO macro
 #define TODO() 0
-
 #endif
 
 class Printer

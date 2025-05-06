@@ -28,6 +28,12 @@ typedef uint64 pde_t;
 
 using size_t = uint64;
 using wchar = ushort;
+enum CommonSize : uint64
+{
+	_1K = 0x1UL << 10,
+	_1M = 0x1UL << 20,
+	_1G = 0x1UL << 30,
+};
 
 // 已存在
 // typedef tid_t uid_t;
