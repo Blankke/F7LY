@@ -45,11 +45,6 @@ namespace mem
 		uint64 get_pte_addr( uint64 index ) { return ( uint64 ) & ( ( pte_t * ) _base_addr )[ index ]; }
 		Pte get_pte( uint64 index ) { return Pte( &( ( pte_t * ) _base_addr )[ index ] ); }
 
-		uint64 get_pte_data(uint64 index) { return (uint64)((pte_t *)_base_addr)[index]; }
-		void reset_pte_data(uint64 index) { ((pte_t *)_base_addr)[index] = 0; }
-		uint64 get_pte_addr(uint64 index) { return (uint64) & ((pte_t *)_base_addr)[index]; }
-		Pte get_pte(uint64 index) { return Pte(&((pte_t *)_base_addr)[index]); }
-
 	private:
 		bool _walk_to_next_level(Pte pte, bool alloc, PageTable &pt);
 	};

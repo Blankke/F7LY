@@ -55,7 +55,7 @@
 
 // map the trampoline page to the highest address,
 // in both user and kernel space.
-#define TRAMPOLINE (MAXVA - PGSIZE)
+#define TRAMPOLINE (MAXVA>>1 - PGSIZE)
 
 // map kernel stacks beneath the trampoline,
 // each surrounded by invalid guard pages.
@@ -105,7 +105,7 @@
 #define PHYSBASE (0x90000000UL | DMWIN_MASK)
 #define PHYSTOP (PHYSBASE + 512*1024*1024)
 
-#define TRAPFRAME (MAXVA - PGSIZE)
+#define TRAPFRAME (MAXVA>>1 - PGSIZE) //64TB
 
 // map kernel stacks beneath the trampframe,
 // each surrounded by invalid guard pages.
