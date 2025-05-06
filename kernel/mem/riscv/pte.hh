@@ -1,6 +1,6 @@
 #include "types.hh"
 #include "memlayout.hh"
-#include "platform.h"
+#include "platform.hh"
 #include "rv_csr.hh"
 namespace mem
 {

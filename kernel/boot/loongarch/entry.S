@@ -1,4 +1,4 @@
-#include "asm.h"
+#include "asm.hh"
 
 .section .text
 .global _entry

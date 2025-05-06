@@ -1,6 +1,6 @@
 #include "kalloc.hh"
 #include "types.hh"
-#include "platform.h"
+#include "platform.hh"
 #include "devs/spinlock.hh"
 #include "buddysystem.hh"
 #include "printer.hh"

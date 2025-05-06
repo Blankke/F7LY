@@ -7,7 +7,7 @@
 #include "pagetable.hh"
 
 
-extern "C" void main() {
+void main() {
     k_printer.init();
     printfRed("Hello, World!\n");
     Info("Hello, World!\n");
