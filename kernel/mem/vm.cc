@@ -3,7 +3,7 @@
 #include "param.h"
 #include "types.hh"
 #include "mem/memlayout.hh"
-#include "platform.h"
+#include "platform.hh"
 #include "klib.hh"
 #include "printer.hh"
 #include "kalloc.hh"

@@ -1,5 +1,5 @@
 #include "slab.hh"
-#include "platform.h"
+#include "platform.hh"
 #include "kalloc.hh"
 #include "printer.hh"
 

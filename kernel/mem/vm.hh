@@ -1,6 +1,6 @@
 #pragma once
 #include "types.hh"
-#include "platform.h"
+#include "platform.hh"
 
 void            kvminit(void);
 void            kvminithart(void);

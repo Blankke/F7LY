@@ -8,7 +8,7 @@
 
 __attribute__ ((aligned (16))) char stack0[NCPU][4096*2];
 
-extern "C" void main() {
+void main() {
     k_printer.init();
     printfRed("FUCK\n");
     printfMagenta("YOU!\n");

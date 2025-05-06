@@ -1,6 +1,6 @@
 #include "physical_memory_manager.hh"
 #include "types.hh"
-#include "platform.h"
+#include "platform.hh"
 #include "devs/spinlock.hh"
 #include "buddysystem.hh"
 #include "printer.hh"

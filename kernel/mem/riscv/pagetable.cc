@@ -1,6 +1,6 @@
 #include "pagetable.hh"
 #include "memlayout.hh"
-#include "platform.h"
+#include "platform.hh"
 #include "kalloc.hh"
 #include "klib.hh"
 #include "printer.hh"
