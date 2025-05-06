@@ -38,6 +38,13 @@ namespace mem
     { 
         return ((*_data_addr & riscv::PteEnum::pte_user_m) != 0); 
     }
+
+    bool Pte::is_leaf() 
+    {
+        return get_flags() == riscv::PteEnum::pte_valid_m;
+    }
+
+
     
     void Pte::set_valid() 
     { 

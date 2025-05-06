@@ -27,9 +27,9 @@ namespace mem
 		/// @param pa physical address 
 		/// @param flags page table entry flags 
 		/// @return success if true 
-		bool map_pages( PageTable &pt, uint64 va, uint64 size, uint64 pa, flag_t flags );
+		bool map_pages( PageTable &pt, uint64 va, uint64 size, uint64 pa, uint64 flags );
 
-		uint64 vmalloc( PageTable &pt, uint64 old_sz, uint64 new_sz );
+		uint64 vmalloc(PageTable &pt, uint64 old_sz, uint64 new_sz, uint64 flags);
 
 		uint64 vmdealloc( PageTable &pt, uint64 old_sz, uint64 new_sz );
 
@@ -80,6 +80,7 @@ namespace mem
 		/// @param newshm newshm lower address 
 		/// @return oldshm if success
 		uint64 deallocshm(PageTable &pt, uint64 oldshm, uint64 newshm );
+
 		/// @brief copy from kernel to user
 		/// @param pt pagetable to use
 		/// @param va dest virtual address 
@@ -87,16 +88,19 @@ namespace mem
 		/// @param len length
 		/// @return 0 if success, -1 if failed
 		int copyout( PageTable &pt, uint64 va, const void *p, uint64 len );
+
 		/// @brief mark a PTE invalid for user access
 		/// @param pt 
 		/// @param va 
 		void uvmclear( PageTable &pt, uint64 va );
+
 		/// @brief allocate memory to grow process from oldsz to newsz
 		/// @param pt pagetable to use 
 		/// @param oldsz old size
 		/// @param newsz new size
 		/// @return 
 		uint64 uvmalloc( PageTable &pt, uint64 oldsz, uint64 newsz );
+
 		/// @brief deallocate memory to shrink process from oldsz to newsz
 		/// @param pt pagetable to use
 		/// @param oldsz old size

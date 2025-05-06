@@ -26,6 +26,8 @@ namespace mem
 		bool is_readable();
 		bool is_executable();
 		bool is_user();
+		bool is_leaf();
+		bool is_present(); 
 		void set_valid();
 		void set_writable();
 		void set_readable();
