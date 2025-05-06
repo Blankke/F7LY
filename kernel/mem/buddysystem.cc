@@ -32,7 +32,7 @@ uint32 BuddySystem::NextPowerOfTwo(uint32 x) {
 }
 
 void BuddySystem::Initialize() {
-
+    printfRed("init buddy system\n");
     const uint64_t PGSIZE = 1 << PAGE_ORDER;
     uint64_t pa_start = reinterpret_cast<uint64_t>(end);
     pa_start = (pa_start + PGSIZE - 1) & ~(PGSIZE - 1); //将pa_start向高地址对齐到PGSIZE的整数倍

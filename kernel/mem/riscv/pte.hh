@@ -1,3 +1,4 @@
+#pragma once
 #include "types.hh"
 #include "memlayout.hh"
 #include "platform.hh"
@@ -17,25 +18,25 @@ namespace mem
 	public:
 		Pte() = default;
 		Pte(pte_t *addr) : _data_addr(addr) {};
-		void set_addr(pte_t *addr) { _data_addr = addr; }
-		bool is_null() { return _data_addr == 0; }
+		void set_addr(pte_t *addr);
+		bool is_null();
 
-		bool is_valid() { return ((*_data_addr & riscv::PteEnum::pte_valid_m) != 0); }
-		bool is_writable() { return ((*_data_addr & riscv::PteEnum::pte_writable_m) != 0); }
-		bool is_readable() { return ((*_data_addr & riscv::PteEnum::pte_readable_m) != 0); }
-		bool is_executable() { return ((*_data_addr & riscv::PteEnum::pte_executable_m) != 0); }
-		bool is_user() { return ((*_data_addr & riscv::PteEnum::pte_user_m) != 0); }
-		void set_valid() { *_data_addr |= riscv::PteEnum::pte_valid_m; }
-		void set_writable() { *_data_addr |= riscv::PteEnum::pte_writable_m; }
-		void set_readable() { *_data_addr |= riscv::PteEnum::pte_readable_m; }
-		void set_executable() { *_data_addr |= riscv::PteEnum::pte_executable_m; }
-		void set_user() { *_data_addr |= riscv::PteEnum::pte_user_m; }
-		void set_data(uint64 data) { *_data_addr |= data; }
-		uint64 get_flags() { return *_data_addr & 0x3FF; }
-		void *pa() { return (void*)PTE2PA(get_data()); }
+		bool is_valid();
+		bool is_writable();
+		bool is_readable();
+		bool is_executable();
+		bool is_user();
+		void set_valid();
+		void set_writable();
+		void set_readable();
+		void set_executable();
+		void set_user();
+		void set_data(uint64 data);
+		uint64 get_flags();
+		void *pa();
 
 		// 慎用！！！这个函数会使PTE的值清零！
-		void clear_data() { *_data_addr = 0; }
-		uint64 get_data() { return *_data_addr; }
+		void clear_data();
+		uint64 get_data();
 	};
 }
