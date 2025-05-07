@@ -4,6 +4,9 @@
 #include "pagetable.hh"
 #include "memlayout.hh"
 #include "platform.hh"
+extern char etext[];  // kernel.ld sets this to end of kernel code.
+
+extern char trampoline[]; // trampoline.S
 
 namespace mem
 {
@@ -21,15 +24,8 @@ namespace mem
     {
 #ifdef RISCV
         _virt_mem_lock.init(lock_name);
-
-        k_pagetable.set_global();
-        
-        uint64 addr = (uint64)PhysicalMemoryManager::alloc_page();
-        if (addr == 0)
-            panic("vmm init failed");
-        k_pmm.clear_page((void *)addr);
-        k_pagetable.set_base(addr);
-
+        //创建内核页表
+        k_pagetable=kvmmake();
         //TODO
         // for (pm::Pcb &pcb : pm::k_proc_pool)
         // {
@@ -43,6 +39,7 @@ namespace mem
         w_satp(MAKE_SATP(k_pagetable.get_base()));
         sfence_vma();
 #endif 
+        printf("VirtualMemoryManager init success\n");
     }
 
     // 根据传入的 flags 标志，生成对应的页表权限（perm）值
@@ -420,6 +417,47 @@ namespace mem
                     (PGROUNDUP(oldsz) - PGROUNDUP(newsz)) / PGSIZE,
                     1);
         return newsz;
+    }
+    void VirtualMemoryManager::kvmmap(PageTable &pt, uint64 va, uint64 pa, uint64 sz, uint64 perms)
+    {
+        if(map_pages(pt, va, sz, pa, perms)!=0)
+        {
+            panic("[vmm] kvmmap failed");
+        }
+    }
+
+    PageTable VirtualMemoryManager::kvmmake()
+    {
+        PageTable pt;
+        pt.set_global();
+        pt.set_base((uint64)k_pmm.alloc_page());
+        memset((void *)pt.get_base(), 0, PGSIZE);
+        #ifdef RISCV
+        // uart registers
+        kvmmap(pt, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+         // virtio mmio disk interface
+        kvmmap(pt, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+        kvmmap(pt, VIRTIO1, VIRTIO1, PGSIZE, PTE_R | PTE_W);
+        // CLINT
+        kvmmap(pt, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+        // PLIC
+        kvmmap(pt, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+        // map kernel text executable and read-only.
+        kvmmap(pt, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+        // map kernel data and the physical RAM we'll make use of.
+        kvmmap(pt, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+        // map the trampoline for trap entry/exit to
+        // the highest virtual address in the kernel.
+        kvmmap(pt, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+        //我发现trapframe和kstack在xv6里面都没有初始化
+        //因为trampoline的位置在内核和用户页表都一样，
+        //所以他们访问的时候都是通过trampoline进行访问，没有进行映射也没有关系,
+        //所以这里不需要进行映射.
+        /*实际上，proc在创建的时候会有两个函数，proc_pagetable,proc_mapstacks,
+        这二者会分别映射trampoline和kstack ，我们内核的页表初始化的时候已经映射了trampoline
+        这里要映射的*/
+        #endif
+        return pt;
     }
 
 }

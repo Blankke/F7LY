@@ -1,6 +1,6 @@
 #pragma once
 #include "console.hh"
-#include "../hal/riscv/sbi.hh"
+
 // enum OutputLevel
 // 	{
 // 		out_trace,
