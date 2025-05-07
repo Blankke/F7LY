@@ -1,5 +1,5 @@
 // 每个字母的 ASCII 横向块（高度一致，5行）
-#define F_L1 "█████ "  // 第1行
+#define F_L1 "█████  "  // 第1行
 #define F_L2 "█      "
 #define F_L3 "████   "
 #define F_L4 "█      "

@@ -4,6 +4,7 @@
 #include "pagetable.hh"
 #include "memlayout.hh"
 #include "platform.hh"
+#include "proc.hh"
 extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
@@ -13,12 +14,12 @@ namespace mem
     VirtualMemoryManager k_vmm;
     
 
-    // uint64 VirtualMemoryManager::kstack_vm_from_gid(uint gid)
-    // {
-    //     if (gid >= pm::num_process)
-    //         panic("vmm: invalid gid");
-    //     return (vml::vm_trap_frame - (((gid + 1) * 2) << PGSIZE_shift));
-    // }
+    uint64 VirtualMemoryManager::kstack_vm_from_gid(uint gid)
+    {
+        if (gid >= proc::num_process)
+            panic("vmm: invalid gid");
+        return (TRAPFRAME - (((gid + 1) * 2) << PGSHIFT));
+    }
 
     void VirtualMemoryManager::init(const char *lock_name)
     {
@@ -64,7 +65,7 @@ namespace mem
                 return false;
             }
             if (pte.is_valid())
-                panic("mappages: remap");
+                panic("mappages: remap, va=0x%x, pa=0x%x, PteData:%x", a, pa, pte.get_data());
 
             pte.set_data(PGROUNDDOWN(
                                 riscv::virt_to_phy_address(pa)) |
