@@ -26,7 +26,7 @@ SIZE    := $(CROSS_COMPILE)size
 KERNEL_DIR := kernel
 BUILD_DIR := build/$(OUTPUT_PREFIX)
 ARCH_DIRS := boot/$(ARCH) hal/$(ARCH) link/$(ARCH) mem/$(ARCH)
-COMMON_DIRS := mem libs devs
+COMMON_DIRS := mem libs devs trap
 SUBDIRS := $(ARCH_DIRS) $(COMMON_DIRS)
 
 LINK_SCRIPT := $(KERNEL_DIR)/link/$(ARCH)/kernel.ld

@@ -51,5 +51,13 @@ namespace proc
 
 #endif
     }
+
+    int Pcb::get_priority()
+    {
+        _lock.acquire();
+        int priority = _priority;
+        _lock.release();
+        return priority;
+    }
 }
     

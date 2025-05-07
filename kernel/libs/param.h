@@ -11,3 +11,4 @@
 #define NBUF         (MAXOPBLOCKS*3)  // size of disk block cache
 #define FSSIZE       1000  // size of file system in blocks
 #define MAXPATH      128   // maximum file path name
+#define INTERVAL     (390000000 / 200) // 用于trap.cc中设定时钟响应间隔

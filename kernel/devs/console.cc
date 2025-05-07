@@ -1,6 +1,9 @@
 #include "console.hh"
 #include "../mem/memlayout.hh"
 #include "../hal/riscv/sbi.hh"
+
+Console kConsole; // 全局控制台对象
+
 Console::Console()
 {
 

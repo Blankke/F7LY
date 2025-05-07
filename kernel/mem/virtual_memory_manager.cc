@@ -4,7 +4,7 @@
 #include "pagetable.hh"
 #include "memlayout.hh"
 #include "platform.hh"
-#include "proc.hh"
+#include "proc/proc.hh"
 extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
@@ -55,10 +55,14 @@ namespace mem
             panic("mappages: size");
 
         a = PGROUNDDOWN(va);
+        printfRed("a: %p\n", a);
         last = PGROUNDDOWN(va + size - 1);
+        printfRed("PageTable: %p\n", pt.get_base());
+        printfRed("pa: %p\n", pa);
         for (;;)
         {
             pte = pt.walk(a, /*alloc*/ true);
+            printfRed("pte: %p\n", pte.pa());
             if (pte.is_null())
             {
                 printfRed("walk failed");

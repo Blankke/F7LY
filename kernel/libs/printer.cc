@@ -4,7 +4,6 @@
 
 // 全局打印器实例
 Printer k_printer;
-Console kConsole;
 
 int	 Printer::_trace_flag	  = 0;
 char Printer::_lower_digits[] = "0123456789abcdef";

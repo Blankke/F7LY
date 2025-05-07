@@ -25,4 +25,6 @@ class Console
         int console_intr(int c);
 };
 
+extern Console kConsole; // 全局控制台对象
+
 #endif
