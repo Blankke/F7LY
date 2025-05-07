@@ -9,7 +9,7 @@
 #include "printer.hh"
 
 // in kernelvec.S, calls kerneltrap().
-void kernelvec();
+extern "C" void kernelvec();
 
 // 创建一个静态对象
 trap_manager trap_mgr;
