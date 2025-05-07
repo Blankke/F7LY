@@ -393,7 +393,7 @@ namespace mem
 
         for (a = oldsz; a < newsz; a += PGSIZE)
         {
-            pa = k_pmm.alloc_page();
+            pa = (uint64)k_pmm.alloc_page();
             if (pa == 0)
             {
                 vmfree(pt, oldsz);
