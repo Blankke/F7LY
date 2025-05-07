@@ -27,6 +27,9 @@ uint32 BuddySystem::NextPowerOfTwo(uint32 x) {
 }
 
 void BuddySystem::Initialize(uint64 baseptr) {
+    //初始化buddy系统，baseptr是buddy系统的起始地址
+    //原本的buddy是用来管理物理内存的，所以并没有初始化它管理的内存的操作
+    //这里解耦合，buddy同时用于管理pm和hm，这里的buddy初始化时不用初始化内存
     printfRed("init buddy system\n");  
     printf("[BuddySystem] base_ptr: %p\n", base_ptr);
     base_ptr = reinterpret_cast<uint8*>(baseptr);
@@ -35,6 +38,7 @@ void BuddySystem::Initialize(uint64 baseptr) {
     while (!((1 << level) & PGNUM)) {
         level++;
     }
+
 }
 
 int BuddySystem::IndexOffset(int index, int level, int max_level) const {
@@ -54,6 +58,7 @@ void BuddySystem::MarkParent(int index) {
 }
 
 int BuddySystem::Alloc(int size) {
+    //buddy的单位是页，而不是页面大小，这个size的意思是页的数量
     int actual_size = size == 0 ? 1 : NextPowerOfTwo(size);
     int length = 1 << level;
 
@@ -121,6 +126,8 @@ void BuddySystem::Combine(int index) {
 }
 
 void BuddySystem::Free(int offset) {
+    //buddy的单位是页，而不是页面大小，这个offset的意思是页的数量的偏移量
+    //这里需要把offset转换为页的偏移量，也就是offset*PGSIZE+base_ptr才是实际的内存地址
     int left = 0;
     int length = 1 << level;
     int index = 0;
@@ -146,6 +153,9 @@ void BuddySystem::Free(int offset) {
 }
 
 void* BuddySystem::alloc_pages(int count) {
+        //这里base_ptr是buddy管理的内存的开始地址，alloc返回的是偏移量，
+    //这个偏移量就是相对基址的偏移量，所以这里需要加上基址才是实际的内存地址。
+    //我们包装的alloc_pages函数，返回的是实际的内存地址，
     int offset = Alloc(count);
     if (offset == -1)
     {

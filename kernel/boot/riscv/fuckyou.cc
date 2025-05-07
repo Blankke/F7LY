@@ -3,52 +3,52 @@
 void print_fuckyou_horizontal() {
     // 第1行（所有字母的第1行）
     printfRed(F_L1);      // F
-    printfMagenta(U_L1);  // U
-    printfCyan(C_L1);     // C
-    printfYellow(K_L1);   // K
-    printfGreen(Y_L1);    // Y
-    printfBlue(O_L1);     // O
-    printfWhite(U_L1);    // U
-    printfWhite("\n");    // 换行
+    printfRed(U_L1);  // U
+    printfRed(C_L1);     // C
+    printfRed(K_L1);   // K
+    printfRed(Y_L1);    // Y
+    printfRed(O_L1);     // O
+    printfRed(U_L1);    // U
+    printfRed("\n");    // 换行
 
     // 第2行
-    printfRed(F_L2);
+    printfMagenta(F_L2);
     printfMagenta(U_L2);
-    printfCyan(C_L2);
-    printfYellow(K_L2);
-    printfGreen(Y_L2);
-    printfBlue(O_L2);
-    printfWhite(U_L2);
-    printfWhite("\n");
+    printfMagenta(C_L2);
+    printfMagenta(K_L2);
+    printfMagenta(Y_L2);
+    printfMagenta(O_L2);
+    printfMagenta(U_L2);
+    printfMagenta("\n");
 
     // 第3行
-    printfRed(F_L3);
-    printfMagenta(U_L3);
+    printfCyan(F_L3);
+    printfCyan(U_L3);
     printfCyan(C_L3);
-    printfYellow(K_L3);
-    printfGreen(Y_L3);
-    printfBlue(O_L3);
-    printfWhite(U_L3);
-    printfWhite("\n");
+    printfCyan(K_L3);
+    printfCyan(Y_L3);
+    printfCyan(O_L3);
+    printfCyan(U_L3);
+    printfCyan("\n");
 
     // 第4行
-    printfRed(F_L4);
-    printfMagenta(U_L4);
-    printfCyan(C_L4);
+    printfYellow(F_L4);
+    printfYellow(U_L4);
+    printfYellow(C_L4);
     printfYellow(K_L4);
-    printfGreen(Y_L4);
-    printfBlue(O_L4);
-    printfWhite(U_L4);
-    printfWhite("\n");
+    printfYellow(Y_L4);
+    printfYellow(O_L4);
+    printfYellow(U_L4);
+    printfYellow("\n");
 
     // 第5行
-    printfRed(F_L5);
-    printfMagenta(U_L5);
-    printfCyan(C_L5);
-    printfYellow(K_L5);
+    printfGreen(F_L5);
+    printfGreen(U_L5);
+    printfGreen(C_L5);
+    printfGreen(K_L5);
     printfGreen(Y_L5);
-    printfBlue(O_L5);
-    printfWhite(U_L5);
-    printfWhite("\n");
+    printfGreen(O_L5);
+    printfGreen(U_L5);
+    printfGreen("\n");
 }
 

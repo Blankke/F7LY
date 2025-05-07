@@ -40,6 +40,11 @@ namespace mem
         // 多核情况下应该加锁
         memlock.init("memlock");
         //把原本Buddy的初始化放在这里，Buddy变成pmm的一个成员
+
+        /*pa_start是buddy系统在物理内存中的起始地址,加上一个Sizeof(BuddySystem)后后面存的东西是tree,
+        然后tree存完了之后才是buddy系统管理的那块内存。加上的BSSIZE是预留来放BuddySystem的大小和tree的大小，
+        在这之后才是buddy系统管理的那块内存，这时pa_start指向的就是buddy系统管理的那块内存的开始地址，
+        再被初始化为buddy的基址。*/
         pa_start = reinterpret_cast<uint64_t>(end);
         pa_start = (pa_start + PGSIZE - 1) & ~(PGSIZE - 1); //将pa_start向高地址对齐到PGSIZE的整数倍
 
@@ -47,11 +52,16 @@ namespace mem
         pa_start += BSSIZE * PGSIZE;
         memset(_buddy, 0, BSSIZE * PGSIZE);
         _buddy->Initialize(pa_start);
+        printf("PhysicalMemoryManager init success\n");
     }
 
     void *PhysicalMemoryManager::alloc_page()
     {
-        int x = _buddy->Alloc(0);
+        int x ;
+        if(x= _buddy->Alloc(0) == -1)
+        {
+            panic("[pmm] alloc_page failed");
+        }
         void *pa = pgnm2pa(x);
         memset(pa, 0, PGSIZE);
         return pa;
@@ -97,4 +107,6 @@ namespace mem
         memset(pa, 0, n * size);
         return pa;
     }
+
+    
 }

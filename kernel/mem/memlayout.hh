@@ -19,7 +19,7 @@
 // 80000000 -- entry.S, then kernel text and data
 // end -- start of kernel page allocation area
 // PHYSTOP -- end RAM used by the kernel
-
+//这里宏定义的都是物理地址，我们实际用到的都是虚拟地址，会在vmm里面进行映射
 // qemu puts UART registers here in physical memory.
 #define UART0 0x10000000L
 #define UART0_IRQ 10
