@@ -14,6 +14,7 @@ namespace mem
     PhysicalMemoryManager k_pmm;
     uint64 PhysicalMemoryManager::pa_start;
     SpinLock PhysicalMemoryManager::memlock;
+    BuddySystem* PhysicalMemoryManager::_buddy;
 
     uint64 PhysicalMemoryManager::pa2pgnm(void *pa)
     {
@@ -57,8 +58,8 @@ namespace mem
 
     void *PhysicalMemoryManager::alloc_page()
     {
-        int x ;
-        if(x= _buddy->Alloc(0) == -1)
+        int x = _buddy->Alloc(0);
+        if(x == -1)
         {
             panic("[pmm] alloc_page failed");
         }
