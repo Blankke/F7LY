@@ -2,6 +2,7 @@
 #include "types.hh"
 #include "devs/spinlock.hh"
 #include "buddysystem.hh"
+#include "platform.hh"
 namespace mem
 {
 
@@ -13,6 +14,7 @@ namespace mem
         static void free_page(void *pa);
         static void *kmalloc(size_t size); // 分配任意大小的内存块
         static void *kcalloc(uint n, size_t size);
+        void clear_page(void *pa);
 
     private:
         static BuddySystem *_buddy;

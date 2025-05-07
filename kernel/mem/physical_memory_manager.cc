@@ -62,6 +62,14 @@ namespace mem
         _buddy->Free(pa2pgnm(pa));
     }
 
+    void PhysicalMemoryManager::clear_page(void *pa)
+    {
+        uint64 *p = (uint64 *)pa;
+        const uint cnt = PGSIZE >> 3;
+        for (uint i = 0; i < cnt; i++)
+            p[i] = 0;
+    }
+
     void *PhysicalMemoryManager::kmalloc(size_t size)
     {
         if(size >= PGSIZE)

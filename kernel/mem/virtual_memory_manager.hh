@@ -51,7 +51,7 @@ namespace mem
 		/// @param sz shmsize
 		/// @param phyaddr 
 		/// @return newshm if success
-		uint64 allocshm( PageTable &pt, uint64 oldshm, uint64 newshm, uint64 sz, void *phyaddr[ pm::MAX_SHM_PGNUM ] );
+		// uint64 allocshm( PageTable &pt, uint64 oldshm, uint64 newshm, uint64 sz, void *phyaddr[ pm::MAX_SHM_PGNUM ] );
 		
 		/// @brief 
 		/// @param pt 
@@ -72,14 +72,14 @@ namespace mem
 		/// @param sz shmsize
 		/// @param phyaddr 
 		/// @return newshm if success
-		uint64 mapshm( PageTable &pt, uint64 oldshm, uint64 newshm, uint sz, void **phyaddr );
+		// uint64 mapshm( PageTable &pt, uint64 oldshm, uint64 newshm, uint sz, void **phyaddr );
 
 		/// @brief deallocate shm , when allocate shm failed
 		/// @param pt pagetable to use
 		/// @param oldshm oldshm lower address
 		/// @param newshm newshm lower address 
 		/// @return oldshm if success
-		uint64 deallocshm(PageTable &pt, uint64 oldshm, uint64 newshm );
+		// uint64 deallocshm(PageTable &pt, uint64 oldshm, uint64 newshm );
 
 		/// @brief copy from kernel to user
 		/// @param pt pagetable to use
@@ -98,8 +98,8 @@ namespace mem
 		/// @param pt pagetable to use 
 		/// @param oldsz old size
 		/// @param newsz new size
-		/// @return 
-		uint64 uvmalloc( PageTable &pt, uint64 oldsz, uint64 newsz );
+		/// @return
+		uint64 uvmalloc(PageTable &pt, uint64 oldsz, uint64 newsz, uint64 flags);
 
 		/// @brief deallocate memory to shrink process from oldsz to newsz
 		/// @param pt pagetable to use

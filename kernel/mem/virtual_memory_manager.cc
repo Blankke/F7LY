@@ -8,7 +8,7 @@
 namespace mem
 {
     VirtualMemoryManager k_vmm;
-    PageTable k_pagetable;
+    
 
     // uint64 VirtualMemoryManager::kstack_vm_from_gid(uint gid)
     // {
@@ -30,16 +30,17 @@ namespace mem
         k_pmm.clear_page((void *)addr);
         k_pagetable.set_base(addr);
 
-        for (pm::Pcb &pcb : pm::k_proc_pool)
-        {
-            pcb.map_kstack(k_pagetable);
-        }
+        //TODO
+        // for (pm::Pcb &pcb : pm::k_proc_pool)
+        // {
+        //     pcb.map_kstack(k_pagetable);
+        // }
 
         // 设置satp，对应龙芯应该设置pgdl，pgdh，stlbps，asid，tlbrehi，pwcl，pwch,
         // 并且invtlb 0x0,$zero,$zero;
         // question: 为什么xv6的MAKE_SATP没有设置asid
         sfence_vma();
-        w_satp(MAKE_SATP(k_pagetable));
+        w_satp(MAKE_SATP(k_pagetable.get_base()));
         sfence_vma();
 #endif 
     }
@@ -359,7 +360,7 @@ namespace mem
             memmove(mem, (const char *)pa, PGSIZE);
             if (map_pages(new_pt, va, PGSIZE, (uint64)mem, flags) == false)
             {
-                mm::k_pmm.free_page(mem);
+                k_pmm.free_page(mem);
                 vmunmap(new_pt, 0, va / PGSIZE, 1);
                 return -1;
             }
@@ -392,7 +393,7 @@ namespace mem
 
         for (a = oldsz; a < newsz; a += PGSIZE)
         {
-            pa = (uint64)mm::PhysicalMemoryManager::alloc_page();
+            pa = (uint64)PhysicalMemoryManager::alloc_page();
             if (pa == 0)
             {
                 vmfree(pt, oldsz);
