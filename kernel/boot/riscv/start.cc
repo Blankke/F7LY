@@ -20,10 +20,10 @@ void start(uint64 hartid, uint64 dtb_entry)
     // 不进行分页(使用物理内存)
     riscv::csr::_write_csr_(riscv::csr::satp, 0);
         
-    // 使能S态的外设中断和时钟中断 (暂时不使用软件中断)
-    uint64 sie_val = riscv::csr::_read_csr_(riscv::csr::sie);
-    sie_val |= riscv::csr::sie_seie | riscv::csr::sie_stie | riscv::csr::sie_ssie;
-    riscv::csr::_write_csr_(riscv::csr::sie, sie_val);
+    // // 使能S态的外设中断和时钟中断 (暂时不使用软件中断)
+    // uint64 sie_val = riscv::csr::_read_csr_(riscv::csr::sie);
+    // sie_val |= riscv::csr::sie_seie | riscv::csr::sie_stie | riscv::csr::sie_ssie;
+    // riscv::csr::_write_csr_(riscv::csr::sie, sie_val);
 
     // trap响应程序设为死循环
     riscv::csr::_write_csr_(riscv::csr::stvec, (uint64)trap_loop);

@@ -7,6 +7,8 @@
 #include "physical_memory_manager.hh"
 #include "virtual_memory_manager.hh"
 #include "heap_memory_manager.hh"
+#include "trap/trap.hh"
+#include "trap/plic.hh"
 
 __attribute__ ((aligned (16))) char stack0[NCPU][4096*2];
 
@@ -24,4 +26,14 @@ void main() {
     mem::k_hmm.init("heap_memory_manager");
     printfYellow("[hmm] HeapMemoryManager init success\n");
     
+    printfRed("FUCK\n");
+    printfMagenta("YOU!\n");
+
+    trap_mgr.init();// trap初始化
+    trap_mgr.inithart();// 初始化每个核上的csr
+    printfRed("trap YOU!\n");
+
+    plic_mgr.init();// plic初始化
+    plic_mgr.inithart();// 初始化每个核上的csr
+    printfRed("plic YOU!\n");
 }

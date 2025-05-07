@@ -79,6 +79,8 @@ void UartManager::start()
 		// maybe uartputc() is waiting for space in the buffer.
 		// pm::k_pm.wakeup( &tx_r );
 
+		
+
 		write_thr( c );
 	}
 }
