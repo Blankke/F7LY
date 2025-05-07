@@ -14,7 +14,8 @@ __attribute__ ((aligned (16))) char stack0[NCPU][4096*2];
 void main() {
     k_printer.init();
     printfWhite("\n\n");  // 留出顶部空白
-    print_fuckyou_horizontal();
+    print_f7ly();
+    print_fuckyou();
     printfWhite("\n\n");  // 底部空白
     mem::k_pmm.init();
     printfYellow("[pmm] PhysicalMemoryManager init success\n");

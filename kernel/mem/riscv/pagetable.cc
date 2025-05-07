@@ -7,6 +7,7 @@
 namespace mem
 {
     PageTable k_pagetable;
+    //walk函数用于在页表中查找一个虚拟地址对应的物理地址
     Pte PageTable::walk(uint64 va, bool alloc)
     {
         for (int level = 2; level > 0; level--)
