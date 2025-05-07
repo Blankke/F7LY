@@ -125,8 +125,9 @@ void Printer::k_panic( const char *f, uint l, const char *info, ... )
   va_list ap;
   va_start( ap, info );
   printf("panic: ");
-  printf(f);
-  k_printer.print("\n");
+  printf("%s:%d: ", f, l);
+  printf(info, ap);
+  printf("\n");
   va_end( ap );
   k_printer._panicked = 1; // freeze uart output from other CPUs
   sbi_shutdown();

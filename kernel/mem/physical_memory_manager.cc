@@ -48,12 +48,10 @@ namespace mem
         再被初始化为buddy的基址。*/
         pa_start = reinterpret_cast<uint64_t>(end);
         pa_start = (pa_start + PGSIZE - 1) & ~(PGSIZE - 1); //将pa_start向高地址对齐到PGSIZE的整数倍
-
         _buddy = reinterpret_cast<BuddySystem*>(pa_start);
         pa_start += BSSIZE * PGSIZE;
         memset(_buddy, 0, BSSIZE * PGSIZE);
         _buddy->Initialize(pa_start);
-        printf("PhysicalMemoryManager init success\n");
     }
 
     void *PhysicalMemoryManager::alloc_page()

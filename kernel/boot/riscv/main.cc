@@ -17,7 +17,10 @@ void main() {
     print_fuckyou_horizontal();
     printfWhite("\n\n");  // 底部空白
     mem::k_pmm.init();
+    printfYellow("[pmm] PhysicalMemoryManager init success\n");
     mem::k_vmm.init("virtual_memory_manager");
+    printfYellow("[vmm] VirtualMemoryManager init success\n");
     mem::k_hmm.init("heap_memory_manager");
+    printfYellow("[hmm] HeapMemoryManager init success\n");
     
 }

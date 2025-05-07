@@ -23,6 +23,7 @@ namespace mem
     void VirtualMemoryManager::init(const char *lock_name)
     {
 #ifdef RISCV
+        printfGreen("[vmm] VirtualMemoryManager init start\n");
         _virt_mem_lock.init(lock_name);
         //创建内核页表
         k_pagetable=kvmmake();
@@ -39,7 +40,7 @@ namespace mem
         w_satp(MAKE_SATP(k_pagetable.get_base()));
         sfence_vma();
 #endif 
-        printf("VirtualMemoryManager init success\n");
+        printfGreen("[vmm] VirtualMemoryManager init success\n");
     }
 
     // 根据传入的 flags 标志，生成对应的页表权限（perm）值
@@ -420,17 +421,22 @@ namespace mem
     }
     void VirtualMemoryManager::kvmmap(PageTable &pt, uint64 va, uint64 pa, uint64 sz, uint64 perms)
     {
-        if(map_pages(pt, va, sz, pa, perms)!=0)
+        printf("kvmmap start\n");
+        if(map_pages(pt, va, sz, pa, perms)==false)
         {
+            printf("kvmmap failed\n");
             panic("[vmm] kvmmap failed");
         }
+        printf("kvmmap success\n");
     }
 
     PageTable VirtualMemoryManager::kvmmake()
     {
+        printfGreen("[vmm] kvmmake start\n");
         PageTable pt;
         pt.set_global();
         pt.set_base((uint64)k_pmm.alloc_page());
+        printfGreen("[vmm] kvmmake alloc page success\n");
         memset((void *)pt.get_base(), 0, PGSIZE);
         #ifdef RISCV
         // uart registers

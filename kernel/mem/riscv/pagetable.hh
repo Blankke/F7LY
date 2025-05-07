@@ -16,7 +16,7 @@ namespace mem
 		bool _is_global = false;
 
 	public:
-		PageTable(){printfRed("PageTable()\n");};
+		PageTable(){};
 		void set_base( uint64 addr ) { _base_addr = addr; }
 		uint64 get_base() { return _base_addr; }
 		void set_global() { _is_global = true; }
