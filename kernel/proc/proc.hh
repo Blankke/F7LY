@@ -1,6 +1,7 @@
-#include"types.hh"
+#include "types.hh"
 #include "pagetable.hh"
-
+#include "trapframe.hh"
+#include "context.hh"
 namespace proc
 {
     enum ProcState
@@ -50,8 +51,8 @@ namespace proc
         mem::PageTable _pt;     // 用户空间的页表
         TrapFrame *_trapframe; // 保存用户态 TrapFrame 的地址 (用于系统调用和异常处理)
 
-        // TODO上下文切换
-        // Context _context; // 保存进程的上下文信息 (寄存器等)，用于进程切换
+        // 上下文切换
+        Context _context; // 保存进程的上下文信息 (寄存器等)，用于进程切换
 
         // 调度相关
         int _slot;     // 分配给进程的时间片剩余量
@@ -83,8 +84,7 @@ namespace proc
         int get_priority();
 
     public:
-        //TODO
-        // Context *get_context() { return &_context; }
+        Context *get_context() { return &_context; }
 
 
     public:
