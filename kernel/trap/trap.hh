@@ -24,7 +24,7 @@ private:
 
     SpinLock tickslock; // 保护ticks的自旋锁
     uint ticks;        // 时钟中断计数
-
+    uint timeslice;    // 时间片计数
 };
 
 extern trap_manager trap_mgr; // 创建一个静态的对象, 用于全局访问(其实相当于面向过程, 只是封装了一下)

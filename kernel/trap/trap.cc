@@ -18,6 +18,7 @@ trap_manager trap_mgr;
 void trap_manager::init()
 {
   ticks = 0;
+  timeslice = 0;
   tickslock.init("tickslock");
 }
 
@@ -211,7 +212,7 @@ void trap_manager::timertick(){
 // 处理内核态的中断
 // 支持嵌套中断
 void trap_manager::kerneltrap(){
-  printf("==kerneltrap==\n");
+  // printf("==kerneltrap==\n");
   int which_dev = 0;
 
   // 这些寄存器可能在yield时被修改
@@ -233,7 +234,7 @@ void trap_manager::kerneltrap(){
   }
 
   //!! 写完进程后修改
-  // // give up the CPU if this is a timer interrupt.
+  // give up the CPU if this is a timer interrupt.
   // if(which_dev == 2 && myproc() != 0 && myproc()->state == RUNNING) {
   //   timeslice++; //让一个进程连续执行若干时间片，printf线程不安全
   //   if(timeslice >= 5){
@@ -241,7 +242,14 @@ void trap_manager::kerneltrap(){
   //     yield();
   //   }
   // }
-
+  if(which_dev == 2) {
+    timeslice++; //让一个进程连续执行若干时间片，printf线程不安全
+    if(timeslice >= 5){
+      timeslice = 0;
+      printf("kerneltrap: yield\n");
+    }
+  }
+  
 
   // the yield() may have caused some traps to occur,
   // so restore trap registers for use by kernelvec.S's sepc instruction.
