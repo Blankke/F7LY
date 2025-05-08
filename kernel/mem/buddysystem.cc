@@ -8,9 +8,6 @@
 
 namespace mem {
 
-
-
-
 constexpr uint64 BuddySystem::AlignUp(uint64 addr, uint64 align) {
     return (addr + align - 1) & ~(align - 1);
 }
@@ -33,7 +30,7 @@ void BuddySystem::Initialize(uint64 baseptr) {
     base_ptr = reinterpret_cast<uint8*>(baseptr);
     printfRed("init buddy system\n");  
     printf("[BuddySystem] base_ptr: %p\n", base_ptr);
-    tree = base_ptr + sizeof(BuddySystem);
+    tree = base_ptr - BSSIZE*PGSIZE+ sizeof(BuddySystem);
     level = 0;
     while (!((1 << level) & PGNUM)) {
         level++;
@@ -68,6 +65,8 @@ int BuddySystem::Alloc(int size) {
     int current_level = 0;
 
     while (index >= 0) {
+        if(current_level > - 30)
+            printf("[BuddySystem] index: %d, level: %d, current_level: %d,length: %d\n", index, level, current_level,length);
         if (actual_size == length) {
             if (tree[index] == NODE_UNUSED) {
                 tree[index] = NODE_USED;
@@ -92,11 +91,15 @@ int BuddySystem::Alloc(int size) {
             }
         }
 
-        if (index % 2 == 0) {
+        // if (index % 2 == 0) {
+        //     ++index;
+        //     continue;
+        // }
+        if (index & 1)
+        {
             ++index;
             continue;
         }
-
         for (;;) {
             current_level--;
             length *= 2;

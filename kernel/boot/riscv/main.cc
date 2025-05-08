@@ -20,12 +20,12 @@ void main() {
     print_f7ly();
     print_fuckyou();
     printfWhite("\n\n");  // 底部空白
-    // mem::k_pmm.init();
-    // printfYellow("[pmm] PhysicalMemoryManager init success\n");
-    // mem::k_vmm.init("virtual_memory_manager");
-    // printfYellow("[vmm] VirtualMemoryManager init success\n");
-    // mem::k_hmm.init("heap_memory_manager");
-    // printfYellow("[hmm] HeapMemoryManager init success\n");
+    mem::k_pmm.init();
+    printfYellow("[pmm] PhysicalMemoryManager init success\n");
+    mem::k_vmm.init("virtual_memory_manager");
+    printfYellow("[vmm] VirtualMemoryManager init success\n");
+    mem::k_hmm.init("heap_memory_manager");
+    printfYellow("[hmm] HeapMemoryManager init success\n");
 
     proc::k_pm.init("next pid", "wait lock");
     printfMagenta("k_pm you\n");
@@ -40,4 +40,5 @@ void main() {
     plic_mgr.init();// plic初始化
     plic_mgr.inithart();// 初始化每个核上的csr
     printfRed("plic YOU!\n");
+
 }
