@@ -14,3 +14,4 @@ build/**
 copy_kernel_to_ext4.sh
 oscomp/*
 build/*
+os.out

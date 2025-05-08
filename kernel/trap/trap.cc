@@ -51,6 +51,7 @@ int trap_manager::devintr()
 
     if (irq == UART0_IRQ)
     {
+      printf("uart0 interrupt\n");
       int c = sbi_console_getchar();
       if (-1 != c)
       {
@@ -75,7 +76,6 @@ int trap_manager::devintr()
 
     return 1;
   }if(scause == 0x8000000000000005L){
-
     timertick();
     return 2;
   } else {
@@ -211,6 +211,7 @@ void trap_manager::timertick(){
 // 处理内核态的中断
 // 支持嵌套中断
 void trap_manager::kerneltrap(){
+  printf("==kerneltrap==\n");
   int which_dev = 0;
 
   // 这些寄存器可能在yield时被修改
