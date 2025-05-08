@@ -54,5 +54,5 @@ namespace math
 	uint64 power( uint64 x, uint64 y );
 } // namespace math
 
-#define assert(expr,detail,args...) ((expr)? (void)0 : k_printer.assrt( __FILE__, __LINE__, #expr, detail,##args ))
+// #define assert(expr,detail,args...) ((expr)? (void)0 : k_printer.assrt( __FILE__, __LINE__, #expr, detail,##args ))
 

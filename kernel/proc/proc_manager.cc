@@ -10,7 +10,7 @@ extern "C"
 
     void _wrp_fork_ret(void)
     {
-        proc::k_pm.fork_ret();
+        // proc::k_pm.fork_ret();
     }
 }
 
