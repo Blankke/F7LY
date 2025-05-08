@@ -62,7 +62,7 @@ namespace mem
         for (;;)
         {
             pte = pt.walk(a, /*alloc*/ true);
-            printfRed("pte: %p\n", pte.pa());
+            // printfRed("pte: %p\n", pte.pa());
             if (pte.is_null())
             {
                 printfRed("walk failed");
@@ -443,9 +443,11 @@ namespace mem
         pt.set_base((uint64)k_pmm.alloc_page());
         printfGreen("[vmm] kvmmake alloc page success\n");
         memset((void *)pt.get_base(), 0, PGSIZE);
-        #ifdef RISCV
+        // pt.print_page_table();
+#ifdef RISCV
         // uart registers
         kvmmap(pt, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+        printfRed("[vmm] kvmmake uart0 success\n");
          // virtio mmio disk interface
         kvmmap(pt, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
         kvmmap(pt, VIRTIO1, VIRTIO1, PGSIZE, PTE_R | PTE_W);
@@ -467,7 +469,7 @@ namespace mem
         /*实际上，proc在创建的时候会有两个函数，proc_pagetable,proc_mapstacks,
         这二者会分别映射trampoline和kstack ，我们内核的页表初始化的时候已经映射了trampoline
         这里要映射的*/
-        #endif
+#endif
         return pt;
     }
 

@@ -40,6 +40,7 @@ namespace mem
 		// 慎用！！！这个函数会使PTE的值清零！
 		void clear_data();
 		uint64 get_data();
+		uint64 *get_data_addr() { return (uint64 *)_data_addr; }
 
 		
 	};

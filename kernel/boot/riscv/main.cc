@@ -27,7 +27,7 @@ void main() {
     mem::k_hmm.init("heap_memory_manager");
     printfYellow("[hmm] HeapMemoryManager init success\n");
 
-    proc::k_pm.init("next pid", "wait lock");
+    // proc::k_pm.init("next pid", "wait lock");
     printfMagenta("k_pm you\n");
 
     printfRed("FUCK\n");
