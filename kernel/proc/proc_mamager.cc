@@ -1,5 +1,5 @@
 #include"proc_mamager.hh"
-
+#include "hal/cpu.hh"
 
 namespace proc
 {
@@ -20,10 +20,10 @@ namespace proc
 
     Pcb *ProcessManager::get_cur_pcb()
     {
-        loongarch::Cpu::push_intr_off();
-        loongarch::Cpu *c_cpu = loongarch::Cpu::get_cpu();
+        Cpu::push_intr_off();
+        Cpu *c_cpu = Cpu::get_cpu();
         proc::Pcb *pcb = c_cpu->get_cur_proc();
-        loongarch::Cpu::pop_intr_off();
+        Cpu::pop_intr_off();
         return pcb;
     }
 }

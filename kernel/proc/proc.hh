@@ -1,3 +1,4 @@
+#pragma once
 #include "types.hh"
 #include "pagetable.hh"
 #include "trapframe.hh"
