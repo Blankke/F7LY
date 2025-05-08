@@ -10,7 +10,7 @@
 #include "trap/trap.hh"
 #include "trap/plic.hh"
 #include "proc/proc.hh"
-#include "proc/proc_mamager.hh"
+#include "proc/proc_manager.hh"
 __attribute__ ((aligned (16))) char stack0[NCPU][4096*2];
 
 // 注意华科的main函数可能有问题

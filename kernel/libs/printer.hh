@@ -86,4 +86,4 @@ extern Printer k_printer;
 
 #define panic(info,args...) k_printer.k_panic( __FILE__, __LINE__, info,##args )
 #define printf(info,args...) k_printer.print(info,##args)
-
+#define assert(expr, detail, args...) ((expr) ? (void)0 : k_printer.assrt(__FILE__, __LINE__, #expr, detail, ##args))

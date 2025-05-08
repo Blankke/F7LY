@@ -65,7 +65,7 @@ int BuddySystem::Alloc(int size) {
     int current_level = 0;
 
     while (index >= 0) {
-        if(current_level > - 30)
+        // if(current_level > - 30)
             printf("[BuddySystem] index: %d, level: %d, current_level: %d,length: %d\n", index, level, current_level,length);
         if (actual_size == length) {
             if (tree[index] == NODE_UNUSED) {

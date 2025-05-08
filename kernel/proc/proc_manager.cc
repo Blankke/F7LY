@@ -1,4 +1,4 @@
-#include"proc_mamager.hh"
+#include"proc_manager.hh"
 #include "hal/cpu.hh"
 
 namespace proc
