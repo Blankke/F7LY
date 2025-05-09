@@ -7,7 +7,7 @@
 #include "physical_memory_manager.hh"
 #include "virtual_memory_manager.hh"
 #include "heap_memory_manager.hh"
-#include "trap/trap.hh"
+#include "trap.hh"
 #include "trap/plic.hh"
 #include "proc/proc.hh"
 #include "proc/proc_manager.hh"
