@@ -25,6 +25,7 @@ namespace proc
         void init(const char *pid_lock_name, const char *wait_lock_name); // 初始化进程管理器
         Pcb *get_cur_pcb(); // 获取当前进程控制块
         bool change_state(Pcb *p, ProcState state); // 改变进程状态
+        int get_cur_cpuid(); // 获取当前CPU ID
         void alloc_pid(Pcb *p); // 分配PID
         Pcb *alloc_proc(); // 分配新的进程控制块
         void set_slot(Pcb *p, int slot); // 设置进程槽位

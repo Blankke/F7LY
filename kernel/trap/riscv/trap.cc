@@ -1,5 +1,5 @@
 #include "types.hh"
-#include "trap/trap.hh"
+#include "trap.hh"
 #include "platform.hh"
 #include "hal/riscv/sbi.hh"
 #include "param.h"
@@ -11,6 +11,7 @@
 #include "proc/proc.hh"
 #include "proc/proc_manager.hh"
 #include "proc/scheduler.hh"
+#include "trap_func_wrapper.hh"
 // in kernelvec.S, calls kerneltrap().
 extern "C" void kernelvec();
 extern char trampoline[], uservec[], userret[];
@@ -313,11 +314,25 @@ void trap_manager::usertrap(){
 
 void trap_manager::usertrapret(){
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
+  // we're about to switch the destination of traps from
+  // kerneltrap() to usertrap(), so turn off interrupts until
+  // we're back in user space, where usertrap() is correct.
   intr_off();
   w_stvec(TRAMPOLINE + (uservec - trampoline));
+  // set up trapframe values that uservec will need when
+  // the process next re-enters the kernel.
   p->_trapframe->kernel_satp = r_satp();
   p->_trapframe->kernel_sp = p->_kstack + 1 * PGSIZE;
-  p->_trapframe->kernel_trap = reinterpret_cast<uint64>(usertrap);
+  p->_trapframe->kernel_trap = (uint64)wrap_usertrapret;
   p->_trapframe->kernel_hartid = r_tp();
-  
+  uint64 x = r_sstatus();
+  x &= ~riscv::csr::sstatus_spp_m;
+  x |= riscv::csr::sstatus_spie_m;
+  w_sstatus(x);
+  w_sepc(p->_trapframe->epc);
+    // tell trampoline.S the user page table to switch to.
+  // printf("[usertrapret]p->pagetable: %p\n", p->pagetable);
+  uint64 satp = MAKE_SATP(p->_pt.get_base());
+  uint64 fn = TRAMPOLINE + (userret - trampoline);
+  ((void (*)(uint64,uint64))fn)(TRAPFRAME + proc::k_pm.get_cur_cpuid() * sizeof(TrapFrame), satp);
 }

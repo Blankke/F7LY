@@ -1,5 +1,5 @@
 #include "types.hh"
-#include "proc.hh"
+#include "proc/proc.hh"
 #include "rv_csr.hh"
 
 #define NUMCPU 1

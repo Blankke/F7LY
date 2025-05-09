@@ -113,4 +113,16 @@ namespace proc
     {
         //TODO
     }
+    void ProcessManager::exit(int state)
+    {
+        //TODO
+    }
+    // int ProcessManager::wait(int child_pid, uint64 addr)
+    // {
+    //     //TODO
+    // }
+    int ProcessManager::get_cur_cpuid()
+    {
+        return r_tp();
+    }
 }
