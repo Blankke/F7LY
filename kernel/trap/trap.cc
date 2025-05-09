@@ -7,10 +7,13 @@
 #include "mem/memlayout.hh"
 #include "devs/console.hh"
 #include "printer.hh"
-
+#include "rv_csr.hh"
+#include "proc/proc.hh"
+#include "proc/proc_manager.hh"
+#include "proc/scheduler.hh"
 // in kernelvec.S, calls kerneltrap().
 extern "C" void kernelvec();
-
+extern char trampoline[], uservec[], userret[];
 // 创建一个静态对象
 trap_manager trap_mgr;
 
@@ -249,10 +252,64 @@ void trap_manager::kerneltrap(){
       printf("kerneltrap: yield\n");
     }
   }
-  
 
   // the yield() may have caused some traps to occur,
   // so restore trap registers for use by kernelvec.S's sepc instruction.
   w_sepc(sepc);
   w_sstatus(sstatus);
+}
+
+void trap_manager::usertrap(){
+  int which_dev = 0;
+  if((r_sstatus() & riscv::csr::sstatus_spp_m) != 0)
+    panic("usertrap: not from user mode");
+
+  if(intr_get() != 0)
+    panic("usertrap: interrupts enabled");
+  w_stvec((uint64)kernelvec);
+
+  proc::Pcb *p = proc::k_pm.get_cur_pcb();
+  p->_trapframe->epc = r_sepc();
+  uint64 cause = r_scause();
+  if(cause == 8){
+    if(p->is_killed())
+      proc::k_pm.exit(-1);
+    p->_trapframe->epc += 4;
+    intr_on();
+    TODO("syscall");// proc::k_pm.syscall();
+  } else if((which_dev = devintr() )!= 0){
+    // ok
+  } else if(cause == 13 || cause == 15){
+    // 缺页故障处理
+    TODO("pagefault_handler");
+  }
+  else {
+    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->_pid);
+    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+    p->kill();
+  }
+  
+  if(p->is_killed())
+    proc::k_pm.exit(-1);
+
+  // give up the CPU if this is a timer interrupt.
+  if(which_dev == 2) {
+    timeslice++; //让一个进程连续执行若干时间片，printf线程不安全
+    if(timeslice >= 5){
+      timeslice = 0;
+      proc::k_scheduler.yield();
+    }
+  }
+  usertrapret();
+}
+
+void trap_manager::usertrapret(){
+  proc::Pcb *p = proc::k_pm.get_cur_pcb();
+  intr_off();
+  w_stvec(TRAMPOLINE + (uservec - trampoline));
+  p->_trapframe->kernel_satp = r_satp();
+  p->_trapframe->kernel_sp = p->_kstack + 1 * PGSIZE;
+  p->_trapframe->kernel_trap = reinterpret_cast<uint64>(usertrap);
+  p->_trapframe->kernel_hartid = r_tp();
+  
 }

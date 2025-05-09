@@ -13,8 +13,8 @@ public:
 
     int devintr();// 处理外部中断和软件中断
 
-    // void usertrap();    // 用户态中断处理
-    // void usertrapret(); // 用户态返回处理
+    void usertrap();    // 用户态中断处理
+    void usertrapret(); // 用户态返回处理
 
     void kerneltrap();  // 内核态中断处理
 private:

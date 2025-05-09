@@ -31,8 +31,8 @@ void main() {
     printfYellow("[pmm] PhysicalMemoryManager init success\n");
     mem::k_vmm.init("virtual_memory_manager");
     printfYellow("[vmm] VirtualMemoryManager init success\n");
-    mem::k_hmm.init("heap_memory_manager");
-    printfYellow("[hmm] HeapMemoryManager init success\n");
+    // mem::k_hmm.init("heap_memory_manager");
+    // printfYellow("[hmm] HeapMemoryManager init success\n");
 
     // proc::k_pm.init("next pid", "wait lock");
     printfMagenta("k_pm you\n");

@@ -90,7 +90,11 @@ namespace proc
 
     public:
         // fs::Dentry *get_cwd() { return _cwd; }
-        void kill() { _killed = 1; }
+        void kill() { 
+            _lock.acquire();
+            _killed = 1; 
+            _lock.release();
+            }
         Pcb *get_parent() { return parent; }
         void set_state(ProcState state) { _state = state; }
         void set_xstate(int xstate) { _xstate = xstate; }
@@ -118,7 +122,13 @@ namespace proc
         void set_last_user_tick(uint64 tick) { _last_user_tick = tick; }
         void set_user_ticks(uint64 ticks) { _user_ticks = ticks; }
 
-        bool is_killed() { return _killed != 0; }
+        bool is_killed() { 
+            int k;
+            _lock.acquire();
+            k = _killed;
+            _lock.release();
+            return k;
+            }
     };
 
     extern Pcb k_proc_pool[num_process]; // 全局进程池

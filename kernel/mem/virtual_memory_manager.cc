@@ -72,10 +72,10 @@ namespace mem
 
             pte = pt.walk(a, /*alloc*/ true);
             //DEBUG:
-            if(va == KERNBASE)
-            {
-                pte = pt.walk(a, false);
-            }
+            // if(va == KERNBASE)
+            // {
+            //     pte = pt.walk(a, false);
+            // }
             
             if (pte.is_null())
             {
@@ -90,10 +90,10 @@ namespace mem
                                 riscv::PteEnum::pte_valid_m);
 
             // printfMagenta("由map_page设置的第三级pte: %p,pte_addr:%p，应该是：%p\n", pte.get_data(), pte.get_data_addr(), riscv::virt_to_phy_address(pa));
-            if (pte.get_data_addr() == (uint64*)a)
-            {
+            // if (pte.get_data_addr() == (uint64*)a)
+            // {
                 
-            }
+            // }
             if (a == last)
                 break;
             a += PGSIZE;
@@ -494,7 +494,7 @@ namespace mem
         /*实际上，proc在创建的时候会有两个函数，proc_pagetable,proc_mapstacks,
         这二者会分别映射trampoline和kstack ，我们内核的页表初始化的时候已经映射了trampoline
         这里要映射的*/
-
+        
         // DEBUG:虚拟化后所有代码卡死，检查所有内核代码映射，KERNBASE到etext
         printfBlue("etext: %p\n", etext);
         printfBlue("KERNBASE: %p\n", KERNBASE);

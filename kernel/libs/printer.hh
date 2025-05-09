@@ -24,7 +24,7 @@
 #define Info_R(fmt, ...) printf("[INFO] " RED(fmt) "", ##__VA_ARGS__)
 
 // TODO macro
-#define TODO() 0
+#define TODO(x) 
 #endif
 
 class Printer
