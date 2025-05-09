@@ -4,7 +4,6 @@
 extern "C"{
     void kerneltrap()
     {
-        sbi_console_putchar('a');
         trap_mgr.kerneltrap();
     }
 
