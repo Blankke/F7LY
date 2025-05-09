@@ -2,6 +2,7 @@
 #include "hal/cpu.hh"
 #include "physical_memory_manager.hh"
 #include "klib.hh"
+#include "virtual_memory_manager.hh"
 
 extern "C"
 {
@@ -103,5 +104,13 @@ namespace proc
         return nullptr;
     }
 
-    
+    void ProcessManager::_proc_create_vm(Pcb *p)
+    {
+        //TODO
+    }
+
+    void ProcessManager::freeproc(Pcb *p)
+    {
+        //TODO
+    }
 }
