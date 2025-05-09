@@ -111,7 +111,7 @@ namespace mem
 
         // 返回最终层级的PTE
         return_pte.set_addr((uint64*)(current_pt.get_base() + 8*PX(0, va)));
-        printf("return_pte_addr: %p, 对应的va为：%p\n", (uint64 *)(current_pt.get_base() + 8 * PX(0, va)), va);
+        // printf("return_pte_addr: %p, 对应的va为：%p\n", (uint64 *)(current_pt.get_base() + 8 * PX(0, va)), va);
         // return_pte.set_data(PTE2PA(current_pt.get_base()) | PTE_V);
 
         return return_pte;
@@ -130,11 +130,11 @@ namespace mem
             return nullptr;
         if (!pte.is_valid())
             return nullptr;
-        if (pte.is_user() == 0)
-        {
-            printfRed("try to walk-addr( k-pt, %p ). nullptr will be return.", va);
-            return nullptr;
-        }
+        // if (pte.is_user() == 0)
+        // {
+        //     printfRed("try to walk-addr( k-pt, %p ). nullptr will be return.\n", va);
+        //     return nullptr;
+        // }
         pa = (uint64)pte.pa();
         return (void *)pa;
     }

@@ -20,6 +20,7 @@ namespace mem
         _k_allocator_coarse = reinterpret_cast<BuddySystem*>(heap_start);
         heap_start += BSSIZE * PGSIZE;
         memset(_k_allocator_coarse, 0, BSSIZE * PGSIZE);
+
         _k_allocator_coarse->Initialize(heap_start);
 		/*在原本的hmm中初始化时，粗粒度的buddy是紧耦合在hmm上的，
 		它的初始化会把堆区域的内存全部初始化（也就是虚拟地址映射到物理地址上），

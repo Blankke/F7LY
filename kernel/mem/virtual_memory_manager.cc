@@ -28,6 +28,11 @@ namespace mem
         _virt_mem_lock.init(lock_name);
         //创建内核页表
         k_pagetable=kvmmake();
+        for(uint64 va = KERNBASE; va < (uint64)etext; va += PGSIZE)
+        {
+            uint64 ppp= (uint64)k_pagetable.walk_addr(va);
+            printfRed("va: %p, pa: %p\n", va, ppp);
+        }
         //TODO
         // for (pm::Pcb &pcb : pm::k_proc_pool)
         // {
@@ -40,7 +45,9 @@ namespace mem
 
        
         sfence_vma();
+        printfYellow("sfence\n");
         w_satp(MAKE_SATP(k_pagetable.get_base()));
+        printfYellow("sfence\n");
         sfence_vma();
 #endif 
         printfGreen("[vmm] VirtualMemoryManager init success\n");
@@ -82,7 +89,7 @@ namespace mem
                                 flags |
                                 riscv::PteEnum::pte_valid_m);
 
-            printfMagenta("由map_page设置的第三级pte: %p,pte_addr:%p，应该是：%p\n", pte.get_data(), pte.get_data_addr(), riscv::virt_to_phy_address(pa));
+            // printfMagenta("由map_page设置的第三级pte: %p,pte_addr:%p，应该是：%p\n", pte.get_data(), pte.get_data_addr(), riscv::virt_to_phy_address(pa));
             if (pte.get_data_addr() == (uint64*)a)
             {
                 
@@ -451,35 +458,35 @@ namespace mem
         PageTable pt;
         pt.set_global();
         pt.set_base((uint64)k_pmm.alloc_page());
-        printfGreen("[vmm] kvmmake alloc page success\n");
+        // printfGreen("[vmm] kvmmake alloc page success\n");
         memset((void *)pt.get_base(), 0, PGSIZE);
         // pt.print_page_table();
 #ifdef RISCV
         // uart registers
-        // kvmmap(pt, UART0, UART0, PGSIZE, PTE_R | PTE_W);
-        // printfRed("[vmm] kvmmake uart0 success\n");
-        // // uint64 ppp = (uint64)pt.walk_addr(UART0);
-        // // printfRed("va: %p, pa: %p\n", UART0, ppp);
+        kvmmap(pt, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+        printfGreen("[vmm] kvmmake uart0 success\n");
+        // uint64 ppp = (uint64)pt.walk_addr(UART0);
+        // printfGreen("va: %p, pa: %p\n", UART0, ppp);
         // // virtio mmio disk interface
-        // kvmmap(pt, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
-        // printfRed("[vmm] kvmmake virtio0 success\n");
-        // kvmmap(pt, VIRTIO1, VIRTIO1, PGSIZE, PTE_R | PTE_W);
-        // printfRed("[vmm] kvmmake virtio1 success\n");
+        kvmmap(pt, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+        printfGreen("[vmm] kvmmake virtio0 success\n");
+        kvmmap(pt, VIRTIO1, VIRTIO1, PGSIZE, PTE_R | PTE_W);
+        printfGreen("[vmm] kvmmake virtio1 success\n");
         // // CLINT
-        // kvmmap(pt, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
-        // printfRed("[vmm] kvmmake clint success\n");
+        kvmmap(pt, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+        printfGreen("[vmm] kvmmake clint success\n");
         // // PLIC
-        // kvmmap(pt, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
-        // printfRed("[vmm] kvmmake plic success\n");
+        kvmmap(pt, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+        printfGreen("[vmm] kvmmake plic success\n");
         // map kernel text executable and read-only.
         kvmmap(pt, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
-        printfRed("[vmm] kvmmake kernel text success\n");
+        printfGreen("[vmm] kvmmake kernel text success\n");
         // map kernel data and the physical RAM we'll make use of.
-        // kvmmap(pt, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
-        // printfRed("[vmm] kvmmake kernel data success\n");
+        kvmmap(pt, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+        printfRed("[vmm] kvmmake kernel data success\n");
         // // map the trampoline for trap entry/exit to
         // // the highest virtual address in the kernel.
-        // kvmmap(pt, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+        kvmmap(pt, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
         //我发现trapframe和kstack在xv6里面都没有初始化
         //因为trampoline的位置在内核和用户页表都一样，
         //所以他们访问的时候都是通过trampoline进行访问，没有进行映射也没有关系,
@@ -491,11 +498,11 @@ namespace mem
         // DEBUG:虚拟化后所有代码卡死，检查所有内核代码映射，KERNBASE到etext
         printfBlue("etext: %p\n", etext);
         printfBlue("KERNBASE: %p\n", KERNBASE);
-        for(uint64 va = KERNBASE; va < (uint64)etext; va += PGSIZE)
-        {
-            uint64 ppp= (uint64)pt.walk_addr(va);
-            printfRed("va: %p, pa: %p\n", va, ppp);
-        }
+        // for(uint64 va = KERNBASE; va < (uint64)etext; va += PGSIZE)
+        // {
+        //     uint64 ppp= (uint64)pt.walk_addr(va);
+        //     printfRed("va: %p, pa: %p\n", va, ppp);
+        // }
 #endif
         return pt;
     }

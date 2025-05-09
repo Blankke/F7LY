@@ -1,9 +1,10 @@
 #include "trap_func_wrapper.hh"
 #include "trap.hh"
-
+#include "sbi.hh"
 extern "C"{
     void kerneltrap()
     {
+        sbi_console_putchar('a');
         trap_mgr.kerneltrap();
     }
 

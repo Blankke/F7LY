@@ -20,6 +20,13 @@ void main() {
     print_f7ly();
     print_fuckyou();
     printfWhite("\n\n");  // 底部空白
+    trap_mgr.init();// trap初始化
+    trap_mgr.inithart();// 初始化每个核上的csr
+    printfRed("trap YOU!\n");
+
+    plic_mgr.init();// plic初始化
+    plic_mgr.inithart();// 初始化每个核上的csr
+    printfRed("plic YOU!\n");
     mem::k_pmm.init();
     printfYellow("[pmm] PhysicalMemoryManager init success\n");
     mem::k_vmm.init("virtual_memory_manager");
@@ -33,12 +40,6 @@ void main() {
     printfRed("FUCK\n");
     printfMagenta("YOU!\n");
 
-    trap_mgr.init();// trap初始化
-    trap_mgr.inithart();// 初始化每个核上的csr
-    printfRed("trap YOU!\n");
 
-    plic_mgr.init();// plic初始化
-    plic_mgr.inithart();// 初始化每个核上的csr
-    printfRed("plic YOU!\n");
 
 }
