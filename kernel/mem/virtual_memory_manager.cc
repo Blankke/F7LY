@@ -37,6 +37,8 @@ namespace mem
         // 设置satp，对应龙芯应该设置pgdl，pgdh，stlbps，asid，tlbrehi，pwcl，pwch,
         // 并且invtlb 0x0,$zero,$zero;
         // question: 为什么xv6的MAKE_SATP没有设置asid
+
+       
         sfence_vma();
         w_satp(MAKE_SATP(k_pagetable.get_base()));
         sfence_vma();
@@ -55,14 +57,19 @@ namespace mem
             panic("mappages: size");
 
         a = PGROUNDDOWN(va);
-        printfRed("a: %p\n", a);
+
         last = PGROUNDDOWN(va + size - 1);
-        printfRed("PageTable: %p\n", pt.get_base());
-        printfRed("pa: %p\n", pa);
+
         for (;;)
         {
+
             pte = pt.walk(a, /*alloc*/ true);
-            // printfRed("pte: %p\n", pte.pa());
+            //DEBUG:
+            if(va == KERNBASE)
+            {
+                pte = pt.walk(a, false);
+            }
+            
             if (pte.is_null())
             {
                 printfRed("walk failed");
@@ -71,10 +78,15 @@ namespace mem
             if (pte.is_valid())
                 panic("mappages: remap, va=0x%x, pa=0x%x, PteData:%x", a, pa, pte.get_data());
 
-            pte.set_data(PGROUNDDOWN(
-                                riscv::virt_to_phy_address(pa)) |
+            pte.set_data(PA2PTE(PGROUNDDOWN(riscv::virt_to_phy_address(pa))) |
                                 flags |
                                 riscv::PteEnum::pte_valid_m);
+
+            printfMagenta("由map_page设置的第三级pte: %p,pte_addr:%p，应该是：%p\n", pte.get_data(), pte.get_data_addr(), riscv::virt_to_phy_address(pa));
+            if (pte.get_data_addr() == (uint64*)a)
+            {
+                
+            }
             if (a == last)
                 break;
             a += PGSIZE;
@@ -426,13 +438,11 @@ namespace mem
     }
     void VirtualMemoryManager::kvmmap(PageTable &pt, uint64 va, uint64 pa, uint64 sz, uint64 perms)
     {
-        printf("kvmmap start\n");
         if(map_pages(pt, va, sz, pa, perms)==false)
         {
             printf("kvmmap failed\n");
             panic("[vmm] kvmmap failed");
         }
-        printf("kvmmap success\n");
     }
 
     PageTable VirtualMemoryManager::kvmmake()
@@ -446,22 +456,30 @@ namespace mem
         // pt.print_page_table();
 #ifdef RISCV
         // uart registers
-        kvmmap(pt, UART0, UART0, PGSIZE, PTE_R | PTE_W);
-        printfRed("[vmm] kvmmake uart0 success\n");
-         // virtio mmio disk interface
-        kvmmap(pt, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
-        kvmmap(pt, VIRTIO1, VIRTIO1, PGSIZE, PTE_R | PTE_W);
-        // CLINT
-        kvmmap(pt, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
-        // PLIC
-        kvmmap(pt, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+        // kvmmap(pt, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+        // printfRed("[vmm] kvmmake uart0 success\n");
+        // // uint64 ppp = (uint64)pt.walk_addr(UART0);
+        // // printfRed("va: %p, pa: %p\n", UART0, ppp);
+        // // virtio mmio disk interface
+        // kvmmap(pt, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+        // printfRed("[vmm] kvmmake virtio0 success\n");
+        // kvmmap(pt, VIRTIO1, VIRTIO1, PGSIZE, PTE_R | PTE_W);
+        // printfRed("[vmm] kvmmake virtio1 success\n");
+        // // CLINT
+        // kvmmap(pt, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+        // printfRed("[vmm] kvmmake clint success\n");
+        // // PLIC
+        // kvmmap(pt, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+        // printfRed("[vmm] kvmmake plic success\n");
         // map kernel text executable and read-only.
         kvmmap(pt, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+        printfRed("[vmm] kvmmake kernel text success\n");
         // map kernel data and the physical RAM we'll make use of.
-        kvmmap(pt, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
-        // map the trampoline for trap entry/exit to
-        // the highest virtual address in the kernel.
-        kvmmap(pt, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+        // kvmmap(pt, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+        // printfRed("[vmm] kvmmake kernel data success\n");
+        // // map the trampoline for trap entry/exit to
+        // // the highest virtual address in the kernel.
+        // kvmmap(pt, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
         //我发现trapframe和kstack在xv6里面都没有初始化
         //因为trampoline的位置在内核和用户页表都一样，
         //所以他们访问的时候都是通过trampoline进行访问，没有进行映射也没有关系,
@@ -469,6 +487,15 @@ namespace mem
         /*实际上，proc在创建的时候会有两个函数，proc_pagetable,proc_mapstacks,
         这二者会分别映射trampoline和kstack ，我们内核的页表初始化的时候已经映射了trampoline
         这里要映射的*/
+
+        // DEBUG:虚拟化后所有代码卡死，检查所有内核代码映射，KERNBASE到etext
+        printfBlue("etext: %p\n", etext);
+        printfBlue("KERNBASE: %p\n", KERNBASE);
+        for(uint64 va = KERNBASE; va < (uint64)etext; va += PGSIZE)
+        {
+            uint64 ppp= (uint64)pt.walk_addr(va);
+            printfRed("va: %p, pa: %p\n", va, ppp);
+        }
 #endif
         return pt;
     }

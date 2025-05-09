@@ -88,6 +88,9 @@ void Printer::print( const char *fmt, ... )
     if(c == 0)
       break;
     switch(c){
+    case 'b':
+      printint(va_arg(ap, int), 2, 1);
+      break;
     case 'd':
       printint(va_arg(ap, int), 10, 1);
       break;

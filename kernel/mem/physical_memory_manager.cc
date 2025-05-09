@@ -56,12 +56,14 @@ namespace mem
 
     void *PhysicalMemoryManager::alloc_page()
     {
+        
         int x = _buddy->Alloc(0);
         if(x == -1)
         {
             panic("[pmm] alloc_page failed");
         }
         void *pa = pgnm2pa(x);
+        printfCyan("分配物理页:  %p\n", pa);
         memset(pa, 0, PGSIZE);
         return pa;
     }

@@ -16,8 +16,9 @@ namespace mem
 		bool _is_global = false;
 
 	public:
-		PageTable(){};
-		void set_base( uint64 addr ) { _base_addr = addr; }
+		PageTable() {};
+		PageTable(uint64 addr) { _base_addr = addr; };
+		void set_base(uint64 addr) { _base_addr = addr; }
 		uint64 get_base() { return _base_addr; }
 		void set_global() { _is_global = true; }
 		void unset_global() { _is_global = false; }
@@ -38,18 +39,28 @@ namespace mem
 		void freewalk();
 
 		Pte kwalkaddr(uint64 va);
-        uint64 dir_num(int level, uint64 va );
+		uint64 dir_num(int level, uint64 va);
 
-		uint64 get_pte_data( uint64 index ) { return ( uint64 ) ( ( pte_t * ) _base_addr )[ index ]; }
-		void   reset_pte_data(uint64 index)   { ((pte_t *) _base_addr)[ index ] = 0; }
-		uint64 get_pte_addr( uint64 index ) { return ( uint64 ) & ( ( pte_t * ) _base_addr )[ index ]; }
-		Pte get_pte( uint64 index ) { return Pte( &( ( pte_t * ) _base_addr )[ index ] ); }
+		uint64 get_pte_data(uint64 index) { return (uint64)((pte_t *)_base_addr)[index]; }
+		void reset_pte_data(uint64 index) { ((pte_t *)_base_addr)[index] = 0; }
+		uint64 get_pte_addr(uint64 index) { return (uint64) & ((pte_t *)_base_addr)[index]; }
+		Pte get_pte(uint64 index) { return Pte(&((pte_t *)_base_addr)[index]); }
+		void set_pte(uint64 index, Pte pte) { ((pte_t *)_base_addr)[index] = pte.get_data(); }
+		// 新增的函数，返回 Pte 的引用
+		Pte &get_pte_ref(uint64 index)
+		{
+			// printfCyan("_base_addr)[index]: %d\n", (uint64 *) (_base_addr)[index]);
+			printfCyan("_base_addr)[index]: %p\n", ((pte_t *)_base_addr)[index] );
+			printfBlue("index: %d\n", index);
+			printfBlue("current_pt: %p\n", _base_addr);
+			return *(Pte *)&(((pte_t *)_base_addr)[index]);
+		}
 
 		void print_page_table();
 
 	private:
 		bool _walk_to_next_level(Pte pte, bool alloc, PageTable &pt);
-			};
+	};
 
 	extern PageTable k_pagetable;
 }

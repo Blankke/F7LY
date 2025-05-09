@@ -7,7 +7,7 @@
 namespace mem
 {
     PageTable k_pagetable;
-    //walk函数用于在页表中查找一个虚拟地址对应的物理地址
+    // walk函数用于在页表中查找一个虚拟地址对应的物理地址
     Pte PageTable::walk(uint64 va, bool alloc)
     {
         // printfRed("walk: %p\n", va);
@@ -41,7 +41,7 @@ namespace mem
         //     PageTable pagetable;
         //     if (*pte & PTE_V)
         //     {
-                
+
         //         pagetable.set_base((pagetable_t) PTE2PA(*pte));
         //     }
         //     else
@@ -55,11 +55,15 @@ namespace mem
         // return get_pte(PX(0, va));
 
         PageTable current_pt = *this; // 保存当前页表副本（不修改原对象）
+        Pte return_pte;
 
         for (int level = 2; level > 0; level--)
         {
             const uint64 index = PX(level, va);
             Pte pte = current_pt.get_pte(index);
+            //DEBUG:
+            // if(va == KERNBASE)
+            //     printfBlue("set前,level: %d, index: %d, pte: %p, pteaddr: %p, pte2pa:%p\n", level, index, pte.get_data(),pte.get_data_addr(), PTE2PA(pte.get_data()));
 
             if (pte.is_valid())
             {
@@ -67,6 +71,10 @@ namespace mem
                 PageTable next_level;
                 next_level.set_base(PTE2PA(pte.get_data()));
                 current_pt = next_level;
+
+                // // DEBUG:
+                // if (va == KERNBASE)
+                //     printfBlue
             }
             else
             {
@@ -82,9 +90,19 @@ namespace mem
                 PageTable new_pt;
                 new_pt.set_base(new_base);
                 memset((void *)new_base, 0, PGSIZE);
+                // printfBlue("下一级页表基地址：%p\n", new_base);
 
                 // 将新页表地址写入当前PTE（注意原子操作）
+                // printfBlue("准备set\n");
                 pte.set_data(PA2PTE(new_base) | PTE_V);
+                // printfBlue("set后,level: %d, index: %d, pte: %p, pteaddr: %p, pte2pa:%p\n", level, index, pte.get_data(), pte.get_data_addr(), PTE2PA(pte.get_data()));
+
+                if(level == 1)
+                {
+                    // current_pt.print_page_table();
+                    // printfBlue("new_pt: %p\n", new_pt.get_base());
+                    // new_pt.print_page_table();
+                }
 
                 // 更新当前页表指向新分配的层级
                 current_pt = new_pt;
@@ -92,9 +110,14 @@ namespace mem
         }
 
         // 返回最终层级的PTE
-        return current_pt.get_pte(PX(0, va));
+        return_pte.set_addr((uint64*)(current_pt.get_base() + 8*PX(0, va)));
+        printf("return_pte_addr: %p, 对应的va为：%p\n", (uint64 *)(current_pt.get_base() + 8 * PX(0, va)), va);
+        // return_pte.set_data(PTE2PA(current_pt.get_base()) | PTE_V);
+
+        return return_pte;
+        // return current_pt.get_pte(PX(0, va)).get_data_addr();
     }
-    
+
     void *PageTable::walk_addr(uint64 va)
     {
         uint64 pa;
@@ -144,7 +167,7 @@ namespace mem
 
         pte = k_pagetable.walk(va, false);
 
-        if(pte.get_data() == 0)
+        if (pte.get_data() == 0)
         {
             printfRed("try to walk-addr( k-pt, %p ). nullptr will be return.", va);
             return Pte(0);
@@ -163,7 +186,7 @@ namespace mem
         for (int i = 0; i < 512; i++)
         {
             Pte pte = get_pte(i);
-            printfRed("PTE[%d]: %p\n", i, pte.get_data());
+            printfRed("PTE[%d]: %p, pte2pa: %p\n", i, pte.get_data(), pte.pa());
         }
     }
 }
