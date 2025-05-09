@@ -11,11 +11,10 @@
 #include "trap/plic.hh"
 #include "proc/proc.hh"
 #include "proc/proc_manager.hh"
-__attribute__ ((aligned (16))) char stack0[NCPU][4096*2];
 
 // 注意华科的main函数可能有问题
 void main() {
-    k_printer.init();
+    k_printer.init(); // 这里也初始化了console
     printfWhite("\n\n");  // 留出顶部空白
     print_f7ly();
     print_fuckyou();
@@ -34,7 +33,7 @@ void main() {
     // mem::k_hmm.init("heap_memory_manager");
     // printfYellow("[hmm] HeapMemoryManager init success\n");
 
-    // proc::k_pm.init("next pid", "wait lock");
+    proc::k_pm.init("next pid", "wait lock");
     printfMagenta("k_pm you\n");
 
     printfRed("FUCK\n");

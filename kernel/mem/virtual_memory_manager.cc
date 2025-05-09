@@ -28,11 +28,11 @@ namespace mem
         _virt_mem_lock.init(lock_name);
         //创建内核页表
         k_pagetable=kvmmake();
-        for(uint64 va = KERNBASE; va < (uint64)etext; va += PGSIZE)
-        {
-            uint64 ppp= (uint64)k_pagetable.walk_addr(va);
-            printfRed("va: %p, pa: %p\n", va, ppp);
-        }
+        // for(uint64 va = KERNBASE; va < (uint64)etext; va += PGSIZE)
+        // {
+        //     uint64 ppp= (uint64)k_pagetable.walk_addr(va);
+        //     printfRed("va: %p, pa: %p\n", va, ppp);
+        // }
         //TODO
         // for (pm::Pcb &pcb : pm::k_proc_pool)
         // {
@@ -45,9 +45,9 @@ namespace mem
 
        
         sfence_vma();
-        printfYellow("sfence\n");
+        // printfYellow("sfence\n");
         w_satp(MAKE_SATP(k_pagetable.get_base()));
-        printfYellow("sfence\n");
+        // printfYellow("sfence\n");
         sfence_vma();
 #endif 
         printfGreen("[vmm] VirtualMemoryManager init success\n");
@@ -464,26 +464,26 @@ namespace mem
 #ifdef RISCV
         // uart registers
         kvmmap(pt, UART0, UART0, PGSIZE, PTE_R | PTE_W);
-        printfGreen("[vmm] kvmmake uart0 success\n");
+        // printfGreen("[vmm] kvmmake uart0 success\n");
         // uint64 ppp = (uint64)pt.walk_addr(UART0);
         // printfGreen("va: %p, pa: %p\n", UART0, ppp);
         // // virtio mmio disk interface
         kvmmap(pt, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
-        printfGreen("[vmm] kvmmake virtio0 success\n");
+        // printfGreen("[vmm] kvmmake virtio0 success\n");
         kvmmap(pt, VIRTIO1, VIRTIO1, PGSIZE, PTE_R | PTE_W);
-        printfGreen("[vmm] kvmmake virtio1 success\n");
+        // printfGreen("[vmm] kvmmake virtio1 success\n");
         // // CLINT
         kvmmap(pt, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
-        printfGreen("[vmm] kvmmake clint success\n");
+        // printfGreen("[vmm] kvmmake clint success\n");
         // // PLIC
         kvmmap(pt, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
-        printfGreen("[vmm] kvmmake plic success\n");
+        // printfGreen("[vmm] kvmmake plic success\n");
         // map kernel text executable and read-only.
         kvmmap(pt, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
-        printfGreen("[vmm] kvmmake kernel text success\n");
+        // printfGreen("[vmm] kvmmake kernel text success\n");
         // map kernel data and the physical RAM we'll make use of.
         kvmmap(pt, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
-        printfRed("[vmm] kvmmake kernel data success\n");
+        // printfRed("[vmm] kvmmake kernel data success\n");
         // // map the trampoline for trap entry/exit to
         // // the highest virtual address in the kernel.
         kvmmap(pt, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
@@ -496,8 +496,8 @@ namespace mem
         这里要映射的*/
         
         // DEBUG:虚拟化后所有代码卡死，检查所有内核代码映射，KERNBASE到etext
-        printfBlue("etext: %p\n", etext);
-        printfBlue("KERNBASE: %p\n", KERNBASE);
+        // printfBlue("etext: %p\n", etext);
+        // printfBlue("KERNBASE: %p\n", KERNBASE);
         // for(uint64 va = KERNBASE; va < (uint64)etext; va += PGSIZE)
         // {
         //     uint64 ppp= (uint64)pt.walk_addr(va);

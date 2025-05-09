@@ -63,7 +63,7 @@ namespace mem
             panic("[pmm] alloc_page failed");
         }
         void *pa = pgnm2pa(x);
-        printfCyan("分配物理页:  %p\n", pa);
+        // printfCyan("分配物理页:  %p\n", pa);
         memset(pa, 0, PGSIZE);
         return pa;
     }

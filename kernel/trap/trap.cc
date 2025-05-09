@@ -62,11 +62,15 @@ int trap_manager::devintr()
         kConsole.console_intr(c);
       }
       // !!写完磁盘后修改
-      // } else if(irq == VIRTIO0_IRQ){
-      //   virtio_disk_intr();
-      // } else if (irq == VIRTIO1_IRQ) {
-      //   virtio_disk_intr2();
     }
+    // else if (irq == VIRTIO0_IRQ)
+    // {
+    //   virtio_disk_intr();
+    // }
+    // else if (irq == VIRTIO1_IRQ)
+    // {
+    //   virtio_disk_intr2();
+    // }
     else if (irq)
     {
       printf("unexpected interrupt irq=%d\n", irq);
@@ -79,15 +83,20 @@ int trap_manager::devintr()
       plic_mgr.complete(irq);
 
     return 1;
-  }if(scause == 0x8000000000000005L){
+  }
+  if (scause == 0x8000000000000005L)
+  {
     timertick();
     return 2;
-  } else {
+  }
+  else
+  {
     return 0;
   }
 }
 
-void trap_manager::timertick(){
+void trap_manager::timertick()
+{
   // acquire the lock to protect ticks
   tickslock.acquire();
 
@@ -104,7 +113,6 @@ void trap_manager::timertick(){
   set_next_timeout();
 }
 
-
 // !!写完进程后修改
 // void trap_manager::usertrap(){
 //   if((r_sstatus() & SSTATUS_SPP) != 0)
@@ -114,9 +122,8 @@ void trap_manager::timertick(){
 //   // since we're now in the kernel.
 //   w_stvec((uint64)kernelvec);
 
-
 //   struct proc *p = myproc();
-  
+
 //   // save user program counter.
 //   p->trapframe->epc = r_sepc();
 //   uint64 cause = r_scause();
@@ -165,7 +172,6 @@ void trap_manager::timertick(){
 
 // }
 
-
 // !!写完进程后修改
 // return to user space
 //
@@ -211,10 +217,10 @@ void trap_manager::timertick(){
 //   ((void (*)(uint64,uint64))fn)(TRAPFRAME + cpuid() * sizeof(struct trapframe), satp);
 // }
 
-
 // 处理内核态的中断
 // 支持嵌套中断
-void trap_manager::kerneltrap(){
+void trap_manager::kerneltrap()
+{
   // printf("==kerneltrap==\n");
   int which_dev = 0;
 
@@ -222,15 +228,16 @@ void trap_manager::kerneltrap(){
   uint64 sepc = r_sepc();
   uint64 sstatus = r_sstatus();
   uint64 scause = r_scause();
-  
+
   // 检查中断是否来自内核态
-  if((sstatus & SSTATUS_SPP) == 0)
+  if ((sstatus & SSTATUS_SPP) == 0)
     panic("kerneltrap: not from supervisor mode");
   // 中断是否被屏蔽
-  if(intr_get() != 0)
+  if (intr_get() != 0)
     panic("kerneltrap: interrupts enabled");
 
-  if((which_dev = devintr()) == 0){
+  if ((which_dev = devintr()) == 0)
+  {
     printf("scause %p\n", scause);
     printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
     panic("kerneltrap");
@@ -245,11 +252,12 @@ void trap_manager::kerneltrap(){
   //     yield();
   //   }
   // }
-  if(which_dev == 2) {
-    timeslice++; //让一个进程连续执行若干时间片，printf线程不安全
-    if(timeslice >= 5){
+  if (which_dev == 2)
+  {
+    timeslice++; // 让一个进程连续执行若干时间片，printf线程不安全
+    if (timeslice >= 5)
+    {
       timeslice = 0;
-      printf("kerneltrap: yield\n");
     }
   }
 
