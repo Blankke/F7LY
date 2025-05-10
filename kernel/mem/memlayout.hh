@@ -1,5 +1,4 @@
 #pragma once
-
 #ifdef RISCV
 // Physical memory layout
 

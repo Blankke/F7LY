@@ -4,7 +4,8 @@
 #include "proc_manager.hh"
 #include "virtual_memory_manager.hh"
 #include "klib.hh"
-
+#include "list.hh"
+#include "param.h"
 namespace syscall{
 
 #define BIND_SYSCALL(sysname)                         \
@@ -15,7 +16,7 @@ namespace syscall{
     // 请确保在 SyscallHandler 类的头文件中声明此函数:
     // private: uint64 _default_syscall_impl();
     uint64 SyscallHandler::_default_syscall_impl() {
-        printf("Syscall not implemented\n");
+        printfYellow("Syscall not implemented\n");
         return 0;
     }
 
@@ -84,8 +85,8 @@ namespace syscall{
 		proc::Pcb		  *p  = (proc::Pcb *)proc::k_pm.get_cur_pcb();
 		// if ( addr >= p->get_size() || addr + sizeof( uint64 ) > p->get_size()
 		// ) 	return -1;
-		mem::PageTable* pt = &p->get_pagetable();
-		if ( mem::k_vmm.copy_in( *pt, &out_data, addr, sizeof( out_data ) ) < 0 )
+		mem::PageTable pt = p->get_pagetable();
+		if ( mem::k_vmm.copy_in( pt, &out_data, addr, sizeof( out_data ) ) < 0 )
 			return -1;
 		return 0;
 	}
@@ -93,8 +94,8 @@ namespace syscall{
 	int SyscallHandler::_fetch_str( uint64 addr, void *buf, uint64 max )
 	{
 		proc::Pcb		  *p   = (proc::Pcb *) proc::k_pm.get_cur_pcb();
-		mem::PageTable* pt  = &p->get_pagetable();
-		int			   err = mem::k_vmm.copy_str_in( *pt, buf, addr, max );
+		mem::PageTable pt  = p->get_pagetable();
+		int			   err = mem::k_vmm.copy_str_in( pt, buf, addr, max );
 		if ( err < 0 ) return err;
 		return strlen( (const char *) buf );
 	}
@@ -121,7 +122,7 @@ namespace syscall{
 	}
     int SyscallHandler::_arg_int(int arg_n,int &out_int){
         uint64 raw_val = _arg_raw(arg_n);
-        if(raw_val < INT_MIN || raw_val > INT_MAX){
+        if(raw_val < (uint64)INT_MIN || raw_val > (uint64)INT_MAX){
             printfRed("[SyscallHandler::_arg_int]arg_n is out of range");
             return -1;
         }
@@ -148,55 +149,64 @@ namespace syscall{
 
     // ---------------- syscall functions ----------------
     uint64 SyscallHandler::sys_exec(){
-         char path[MAXPATH], *argv[MAXARG];
-  int i;
-  uint64 uargv, uarg;
-
-  if(argstr(0, path, MAXPATH) < 0 || argaddr(1, &uargv) < 0){
-    return -1;
-  }
-  memset(argv, 0, sizeof(argv));
-  for(i=0;; i++){
-    if(i >= NELEM(argv)){
-      goto bad;
-    }
-    if(fetchaddr(uargv+sizeof(uint64)*i, (uint64*)&uarg) < 0){
-      goto bad;
-    }
-    if(uarg == 0){
-      argv[i] = 0;
-      break;
-    }
-    argv[i] = kalloc();
-    if(argv[i] == 0)
-      goto bad;
-    if(fetchstr(uarg, argv[i], PGSIZE) < 0)
-      goto bad;
-  }
-
-  int ret = exec(path, argv);
-
-  for(i = 0; i < NELEM(argv) && argv[i] != 0; i++)
-    kfree(argv[i]);
-
-  return ret;
-
- bad:
-  for(i = 0; i < NELEM(argv) && argv[i] != 0; i++)
-    kfree(argv[i]);
-  return -1;
+        TODO("sys_exec");
+        printfYellow("sys_exec\n");
+        return 0;
         }
     uint64 SyscallHandler::sys_fork(){
-        return proc::k_pm.fork();
+        TODO("sys_fork");
+        printfYellow("sys_fork\n");
+        return 0;
     }
     uint64 SyscallHandler::sys_exit(){
-
+        TODO("sys_exit");
+        printfYellow("sys_exit\n");
+        return 0;
     }
     uint64 SyscallHandler::sys_wait(){
-
+        TODO("sys_wait");
+        printfYellow("sys_wait\n");
+        return 0;
     }
     uint64 SyscallHandler::sys_wait4(){
-
+        TODO("sys_wait4");
+        printfYellow("sys_wait4\n");
+        return 0;
+    }
+    uint64 SyscallHandler::sys_getppid(){
+        TODO("sys_getppid");
+        printfYellow("sys_getppid\n");
+        return 0;
+    }
+    uint64 SyscallHandler::sys_getpid(){
+        TODO("sys_getpid");
+        printfYellow("sys_getpid\n");
+        return 0;
+    }
+    uint64 SyscallHandler::sys_pipe2(){
+        TODO("sys_pipe2");
+        printfYellow("sys_pipe2\n");
+        return 0;
+    }
+    uint64 SyscallHandler::sys_dup3(){
+        TODO("sys_dup3");
+        printfYellow("sys_dup3\n");
+        return 0;
+    }
+    uint64 SyscallHandler::sys_read(){
+        TODO("sys_read");
+        printfYellow("sys_read\n"); 
+        return 0;
+    }
+    uint64 SyscallHandler::sys_kill(){
+        TODO("sys_kill");
+        printfYellow("sys_kill\n");
+        return 0;
+    }   
+    uint64 SyscallHandler::sys_execve(){
+        TODO("sys_execve");
+        printfYellow("sys_execve\n");
+        return 0;
     }
     
 }//namespace syscall

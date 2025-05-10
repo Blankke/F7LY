@@ -8,13 +8,13 @@ namespace mem
 {
 	HeapMemoryManager k_hmm;
 
-	void HeapMemoryManager::init( const char *lock_name )
+	void HeapMemoryManager::init( const char *lock_name ,uint64_t heap_start)
 	{
 		_lock.init( lock_name );
 
 		// _k_allocator_coarse= (BuddySystem*)vm_kernel_heap_start;
 		// _k_allocator_coarse->Initialize();
-        uint64_t heap_start = (uint64_t)vm_kernel_heap_start;
+		//由于用户态可能会使用堆内存，所以需要把堆内存的起始地址传进来。
         heap_start = (heap_start + PGSIZE - 1) & ~(PGSIZE - 1); //将pa_start向高地址对齐到PGSIZE的整数倍
         //仿照pmm的初始化方式，将buddy系统初始化到heap_start处
         _k_allocator_coarse = reinterpret_cast<BuddySystem*>(heap_start);

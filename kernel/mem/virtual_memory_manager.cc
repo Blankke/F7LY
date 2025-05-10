@@ -503,6 +503,9 @@ namespace mem
         //     uint64 ppp= (uint64)pt.walk_addr(va);
         //     printfRed("va: %p, pa: %p\n", va, ppp);
         // }
+
+        // 初始化堆内存
+        kvmmap(pt,vm_kernel_heap_start,HEAP_START,vm_kernel_heap_size,PTE_R | PTE_W);
 #endif
         return pt;
     }

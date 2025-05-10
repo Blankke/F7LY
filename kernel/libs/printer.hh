@@ -20,8 +20,8 @@
 #define printfWhite(format, ...) k_printer.print("\33[1;37m" format "\33[0m", ##__VA_ARGS__)
 #define printfMagenta(format, ...) k_printer.print("\33[1;35m" format "\33[0m", ##__VA_ARGS__)
 // Info print macros
-#define Info(fmt, ...) printf("[INFO] " fmt "", ##__VA_ARGS__)
-#define Info_R(fmt, ...) printf("[INFO] " RED(fmt) "", ##__VA_ARGS__)
+#define Info(fmt, ...) printfYellow("[INFO] => " fmt "", ##__VA_ARGS__)
+#define Info_R(fmt, ...) printfRed("[INFO] => " fmt "", ##__VA_ARGS__)
 
 // TODO macro
 #define TODO(x) 

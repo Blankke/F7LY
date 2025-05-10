@@ -26,15 +26,10 @@ namespace syscall{
 		int _fetch_str( uint64 addr, void *buf, uint64 max );
 		uint64 _arg_raw( int arg_n );
 
-		int _arg_int( int arg_n, int &out_int ) { out_int = _arg_raw( arg_n ); return 0; }
-		int _arg_addr( int arg_n, uint64 &out_addr ) { out_addr = _arg_raw( arg_n ); return 0; }
-		int _arg_str( int arg_n, char *buf, int max )
-		{
-			uint64 addr;
-			if ( _arg_addr( arg_n, addr ) < 0 )
-				return -1;
-			return _fetch_str( addr, buf, max );
-		}
+		int _arg_int( int arg_n, int &out_int );
+		int _arg_addr( int arg_n, uint64 &out_addr );
+		int _arg_str( int arg_n, char *buf, int max );
+
 
 
 	private:	// ================ syscall functions ================

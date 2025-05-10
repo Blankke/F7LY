@@ -1,39 +1,39 @@
 
-
+#include "printer.hh"
 #include "global_operator.hh"
 #include "heap_memory_manager.hh"
 
 void * operator new ( uint64 size )
 {
-	// log_info( "new with size %d", size );
+	Info("new with size %d\n", size);
 	void *p = mem::k_hmm.allocate( size );
 	// log_trace( "new alloc %p", p );
 	return p;
 }
 void * operator new[] ( uint64 size )
 {
-	// log_info( "new[] with size %d", size );
+	Info("new[] with size %d\n", size);
 	void *p = mem::k_hmm.allocate( size );
 	// log_trace( "new[] alloc %p", p );
 	return p;
 }
 void operator delete ( void * p ) noexcept
 {
-	// log_info( "delete 0x%p", p );
+	Info("delete 0x%p\n", p);
 	mem::k_hmm.free( p );
 }
 void operator delete[] ( void * p ) noexcept
 {
-	// log_info( "delete[] 0x%p", p );
+	Info("delete[] 0x%p\n", p);
 	mem::k_hmm.free( p );
 }
 void operator delete( void * p, uint64 size ) noexcept
 {
-	// log_info( "delete 0x%p with size %d", p, size );
+	Info("delete 0x%p with size %d\n", p, size);
 	mem::k_hmm.free( p );
 }
 void operator delete[] ( void * p, uint64 size ) noexcept
 {
-	// log_info( "delete[] 0x%p with size %d", p, size );
+	Info("delete[] 0x%p with size %d\n", p, size);
 	mem::k_hmm.free( p );
 }

@@ -14,7 +14,9 @@
 
 // 注意华科的main函数可能有问题
 void main() {
+
     k_printer.init(); // 这里也初始化了console
+
     printfWhite("\n\n");  // 留出顶部空白
     print_f7ly();
     print_fuckyou();
@@ -30,15 +32,14 @@ void main() {
     printfYellow("[pmm] PhysicalMemoryManager init success\n");
     mem::k_vmm.init("virtual_memory_manager");
     printfYellow("[vmm] VirtualMemoryManager init success\n");
-    // mem::k_hmm.init("heap_memory_manager");
-    // printfYellow("[hmm] HeapMemoryManager init success\n");
+    mem::k_hmm.init("heap_memory_manager",HEAP_START);
+    printfYellow("[hmm] HeapMemoryManager init success,heap_start: %p\n",HEAP_START);
 
     proc::k_pm.init("next pid", "wait lock");
     printfMagenta("k_pm you\n");
 
-    printfRed("FUCK\n");
-    printfMagenta("YOU!\n");
-
-
-
+    mem::PageTable* pt = new mem::PageTable();
+    pt->set_base(0x80000000);
+    printfYellow("pt->addr: %p\n",pt);
+    delete pt;
 }

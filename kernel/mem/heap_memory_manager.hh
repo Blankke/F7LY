@@ -16,7 +16,7 @@ namespace mem
 
 	public:
 		HeapMemoryManager() {};
-		void init( const char *lock_name );
+		void init( const char *lock_name ,uint64_t heap_start);
 
 		void *allocate( uint64 size );
 

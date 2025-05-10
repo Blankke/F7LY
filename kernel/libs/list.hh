@@ -137,3 +137,72 @@ public:
         return Iterator(head);
     }
 };
+
+
+template <typename T>
+class Vector {
+private:
+    T* data;
+    size_t sz;
+    size_t cap;
+
+    void grow() {
+        size_t new_cap = cap == 0 ? 4 : cap * 2;
+        T* new_data = reinterpret_cast<T*>(new char[sizeof(T) * new_cap]);
+
+        for (size_t i = 0; i < sz; ++i) {
+            new (&new_data[i]) T(data[i]);
+            data[i].~T();
+        }
+
+        delete[] reinterpret_cast<char*>(data);
+        data = new_data;
+        cap = new_cap;
+    }
+
+public:
+    Vector() : data(nullptr), sz(0), cap(0) {}
+
+    ~Vector() {
+        clear();
+        delete[] reinterpret_cast<char*>(data);
+    }
+
+    void push_back(const T& value) {
+        if (sz == cap) grow();
+        new (&data[sz++]) T(value);
+    }
+
+    void pop_back() {
+        if (sz > 0) {
+            data[--sz].~T();
+        }
+    }
+
+    T& operator[](size_t index) {
+        return data[index];
+    }
+
+    const T& operator[](size_t index) const {
+        return data[index];
+    }
+
+    T& back() {
+        return data[sz - 1];
+    }
+
+    size_t size() const {
+        return sz;
+    }
+
+    bool empty() const {
+        return sz == 0;
+    }
+
+    void clear() {
+        for (size_t i = 0; i < sz; ++i) {
+            data[i].~T();
+        }
+        sz = 0;
+    }
+};
