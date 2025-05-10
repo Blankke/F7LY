@@ -12,6 +12,7 @@
 #include "proc/proc_manager.hh"
 #include "proc/scheduler.hh"
 #include "trap_func_wrapper.hh"
+#include "fuckyou.hh"
 // in kernelvec.S, calls kerneltrap().
 extern "C" void kernelvec();
 extern char trampoline[], uservec[], userret[];
@@ -256,9 +257,11 @@ void trap_manager::kerneltrap()
   if (which_dev == 2)
   {
     timeslice++; // 让一个进程连续执行若干时间片，printf线程不安全
+    printf("timeslice: %d\n", timeslice);
     if (timeslice >= 5)
     {
       timeslice = 0;
+      print_fuckyou();
     }
   }
 
