@@ -57,7 +57,7 @@ void BuddySystem::MarkParent(int index) {
 int BuddySystem::Alloc(int size) {
     //buddy的单位是页，而不是页面大小，这个size的意思是页的数量
     int actual_size = size == 0 ? 1 : NextPowerOfTwo(size);
-    int length = 1 << level;
+    int length = 1 << level;  //length变量表示当前结点对应的块的大小
 
     if (actual_size > length) return -1;
 
@@ -82,7 +82,7 @@ int BuddySystem::Alloc(int size) {
                     tree[index] = NODE_SPLIT;
                     tree[index * 2 + 1] = NODE_UNUSED;
                     tree[index * 2 + 2] = NODE_UNUSED;
-                    [[fallthrough]];
+                    [[fallthrough]]; // 默认行为是向下执行
                 default:
                     index = index * 2 + 1;
                     length /= 2;
@@ -95,7 +95,7 @@ int BuddySystem::Alloc(int size) {
         //     ++index;
         //     continue;
         // }
-        if (index & 1)
+        if (index & 1) //index是左孩子，变换到右孩子
         {
             ++index;
             continue;
@@ -103,9 +103,9 @@ int BuddySystem::Alloc(int size) {
         for (;;) {
             current_level--;
             length *= 2;
-            index = (index + 1) / 2 - 1;
-            if (index < 0) return -1;
-            if (index % 2 == 0) {
+            index = (index + 1) / 2 - 1;  //回溯到父节点
+            if (index < 0) return -1;    //遍历完了没有找到合适的块，失败
+            if (index % 2 == 0) { //当前是左孩子，变换到右孩子开始继续寻找。
                 ++index;
                 break;
             }
@@ -132,16 +132,19 @@ void BuddySystem::Free(int offset) {
     //buddy的单位是页，而不是页面大小，这个offset的意思是页的数量的偏移量
     //这里需要把offset转换为页的偏移量，也就是offset*PGSIZE+base_ptr才是实际的内存地址
     int left = 0;
-    int length = 1 << level;
-    int index = 0;
+    int length = 1 << level;  // 当前 index 所表示的块的大小（从整块开始）
+    int index = 0;  // 从根节点开始遍历 buddy 树
 
     while (true) {
+
+        printf("[BuddySystem] Freeing page at address: %p, left: %d, length: %d,offset :%d\n", base_ptr + index * PGSIZE, left, length,offset);
         switch (tree[index]) {
             case NODE_USED:
                 Combine(index);
                 return;
             case NODE_UNUSED:
-                printf("Freeing invalid page");
+                panic("[BuddySystem] Freeing invalid page\n");
+                return;
             default:
                 length /= 2;
                 if (offset < left + length) {

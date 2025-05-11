@@ -330,8 +330,8 @@ namespace mem
 			if ( maj->next )
 				maj->next->prev = maj->prev;
 
-			_cach_size -= maj->size;
-			_base_allocator->Free(maj->size);
+			_cach_size -= maj->size; //以字节为单位的
+			_base_allocator->free_pages(maj);//此处必须和alloc_pages成对使用
 		}
 
 		_lock.release();
