@@ -402,7 +402,7 @@ typedef uint64 *pagetable_t; // 512 PTEs
 #define HEAP_START PHYSTOP-vm_kernel_heap_size
 #elif defined(LOONGARCH)
 
-#include <larchintrin.h>
+// #include <larchintrin.h>
 #include "types.hh"
 #define  CSR_CRMD_IE_SHIFT		    2
 #define  CSR_CRMD_IE			        ( 0x1 << CSR_CRMD_IE_SHIFT )
@@ -670,26 +670,26 @@ r_csr_badv()
 //   return val;
 // }
 
-/* IOCSR */
-static inline uint32 iocsr_readl(uint32 reg)
-{
-	return __iocsrrd_w(reg);
-}
+// /* IOCSR */
+// static inline uint32 iocsr_readl(uint32 reg)
+// {
+// 	return __iocsrrd_w(reg);
+// }
 
-static inline uint64 iocsr_readq(uint32 reg)
-{
-	return __iocsrrd_d(reg);
-}
+// static inline uint64 iocsr_readq(uint32 reg)
+// {
+// 	return __iocsrrd_d(reg);
+// }
 
-static inline void iocsr_writel(uint32 val, uint32 reg)
-{
-	__iocsrwr_w(val, reg);
-}
+// static inline void iocsr_writel(uint32 val, uint32 reg)
+// {
+// 	__iocsrwr_w(val, reg);
+// }
 
-static inline void iocsr_writeq(uint64 val, uint32 reg)
-{
-	__iocsrwr_d(val, reg);
-}
+// static inline void iocsr_writeq(uint64 val, uint32 reg)
+// {
+// 	__iocsrwr_d(val, reg);
+// }
 
 static inline int
 intr_get()
@@ -749,4 +749,19 @@ intr_off()
 
 typedef uint64 pte_t;
 typedef uint64 *pagetable_t;
+
+
+		// vm_page_cnt_shift = 15,
+		// vm_start = 0x0,
+		// vm_end = ( 0x1UL << PGSHIFT ) << vm_page_cnt_shift,	// 128 MiB
+
+		// vm_kernel_start = vm_end >> 2,								// 32 MiB
+		// vm_trap_frame = ( vm_end >> 1 ) - PGSIZE,					// 64 MiB - 1 page
+
+		// vm_kernel_heap_start = vm_kernel_start >> 1,
+		// vm_kernel_heap_start = _1M * 8,
+	#define	vm_kernel_heap_start  MAXVA >> 1,							// 64 MiB
+	#define	vm_kernel_heap_size  _1M * 64,
+
+
 #endif

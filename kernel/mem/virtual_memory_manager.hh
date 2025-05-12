@@ -1,11 +1,14 @@
-
-
 #pragma once 
 
 #include "spinlock.hh"
-#include "pagetable.hh"
-#include "riscv/pagetable.hh"
 
+// 根据不同架构包含不同的页表实现
+#ifdef RISCV
+#include "riscv/pagetable.hh"
+#elif defined(LOONGARCH)
+#include "loongarch/pagetable.hh"
+
+#endif
 
 namespace mem
 {

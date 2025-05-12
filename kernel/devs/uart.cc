@@ -1,5 +1,6 @@
 #include "uart.hh"
 #include "printer.hh"
+#include "console.hh"
 void UartManager::init( uint64 u_addr )
 {
 	_uart_base = u_addr;
@@ -13,7 +14,7 @@ void UartManager::init( uint64 u_addr )
 	_write_reg( UartReg::IER, UartIER::rx_en );
 
 	_lock.init( "uart" );
-	tx_w = tx_r = 0;
+	_wr_idx = _rd_idx = 0;
 }
 
 void UartManager::putc_sync( int c )
@@ -38,7 +39,7 @@ void UartManager::putc( int c )
 
 	while ( 1 )
 	{
-		if ( tx_w == tx_r + _buf_size )
+		if ( _wr_idx == _rd_idx + _buf_size )
 		{
 			// buffer is full.
 			// wait for uartstart() to open up space in the buffer.
@@ -46,8 +47,8 @@ void UartManager::putc( int c )
 		}
 		else
 		{
-			_buf[ tx_w % _buf_size ] = c;
-			tx_w += 1;
+			_buf[ _wr_idx % _buf_size ] = c;
+			_wr_idx += 1;
 			start();
 			_lock.release();
 			return;
@@ -55,34 +56,52 @@ void UartManager::putc( int c )
 	}
 }
 
+int UartManager::getc_sync()
+{
+	volatile regLSR* lsr = (volatile regLSR*)(_uart_base + LSR);
+	while(lsr->data_ready == 0);
+
+	return _read_reg( UartReg::THR );
+}
+
+int UartManager::getc()
+{
+			if ( _read_buffer_empty() )
+			return -1;
+		else
+		{
+			return _read_buffer_get();
+		}
+}
+
 void UartManager::start()
 {
-	while ( 1 )
-	{
-		if ( tx_w == tx_r )
+		volatile regLSR * lsr = ( volatile  regLSR * ) ( _uart_base + LSR );
+		volatile char * thr = ( volatile char * ) ( _uart_base + THR );
+		while ( 1 )
 		{
-			// transmit buffer is empty.
-			return;
+			if ( _wr_idx == _rd_idx )
+			{
+				// transmit buffer is empty.
+				return;
+			}
+
+			if ( lsr->thr_empty == 0 )
+			{
+				// the UART transmit holding register is full,
+				// so we cannot give it another byte.
+				// it will interrupt when it's ready for a new byte.
+				return;
+			}
+
+			char c = _buf[ _rd_idx % _buf_size ];
+			_rd_idx += 1;
+
+			// maybe uartputc() is waiting for space in the buffer.
+			//TODO: wakeup_at( &_rd_idx );
+
+			*thr = c;
 		}
-
-		if ( ( read_lsr() & UartLSR::tx_idle ) == 0 )
-		{
-			// the UART transmit holding register is full,
-			// so we cannot give it another byte.
-			// it will interrupt when it's ready for a new byte.
-			return;
-		}
-
-		uint8 c = _buf[ tx_r % _buf_size ];
-		tx_r += 1;
-
-		// maybe uartputc() is waiting for space in the buffer.
-		// pm::k_pm.wakeup( &tx_r );
-
-		
-
-		write_thr( c );
-	}
 }
 
 void UartManager::_write_reg( uint32 reg, uint8 data )
@@ -109,4 +128,21 @@ uint8 UartManager::read_rhr()
 void UartManager::write_thr( uint8 data )
 {
 	_write_reg( UartReg::THR, data );
+}
+//=========================中断相关==========================
+int UartManager::uart_intr()
+{ //此处参考的是xv6的uartintr()，但是由于全局的接口，把getc()返回值作为参数传入
+//后续的调用在console_intr()中，此函数变为内部函数不再对外暴露
+	while(1){
+    int c = getc();
+    if(c == -1)
+      break;
+	  return c;
+  }
+
+  // send buffered characters.
+  _lock.acquire();
+  start();
+  _lock.release();
+  return 0;
 }

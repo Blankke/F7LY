@@ -44,7 +44,7 @@ kernelvec:
         sd t5, 232(sp)
         sd t6, 240(sp)
 
-	// call the C trap handler in trap.c
+	// call the C trap handler in trap_func_wrapper.cc
         call wrap_kerneltrap
 
         // restore registers.

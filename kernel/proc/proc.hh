@@ -3,6 +3,7 @@
 #include "pagetable.hh"
 #include "trapframe.hh"
 #include "context.hh"
+#include "spinlock.hh"
 namespace proc
 {
     enum ProcState

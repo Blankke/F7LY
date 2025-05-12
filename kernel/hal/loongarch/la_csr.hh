@@ -68,32 +68,38 @@ namespace loongarch
 	 */
 	enum PteEnum
 	{
-		// _build_pte_bit_(valid, 0x1, 0)		// valid
-		// _build_pte_bit_(readable, 0x1, 1)	// readable
-		// _build_pte_bit_(writable, 0x1, 2)	// writable
-		// _build_pte_bit_(executable, 0x1, 3) // executable
-		// _build_pte_bit_(user, 0x1, 4)		// user can access
+		pte_valid_s = 0,
+		pte_dirty_s = 1,
+		pte_plv_s = 2,
+		pte_mat_s = 4,
+		pte_b_global_s = 6,		// base pte global bit shift 
+		pte_h_huge_s = 6, 		// huge pte huge flag bit shift 
+		pte_presence_s = 7,
+		pte_writable_s = 8,
+		pte_b_pa_s = 12,		// base pte physical address shift 
+		pte_h_global_s = 12, 	// huge pte global bit shift 
+		pte_h_pa_s = 15, 		// huge pte physical address shift 
+		pte_nr_s = 61,
+		pte_nx_s = 62,
+		pte_rplv_s = 63,
 
-		_build_pte_bit_(valid, 0x1, 0)      // V: 有效位 (1 = 该PTE有效)
-		_build_pte_bit_(dirty, 0x1, 1)      // D: 脏位 (1 = 该页被修改过)
-		_build_pte_bit_(plv, 0x3, 2)      // D: 脏位 (1 = 该页被修改过)
-		_build_pte_bit_(user,3L,2)
-		_build_pte_bit_(mat,1L,4)   //Memory Access Type
-		_build_pte_bit_(phy,1L,7) //Physical page exists
-		_build_pte_bit_(write,1,8)  //W: 可写位 (1 = 该页可写)
-		_build_pte_bit_(NX,1UL,62) // NX: 不可执行位 (1 = 该页不可执行)
-		_build_pte_bit_(NR,1L,62) // NR: 不可读位 (1 = 该页不可读)
-		_build_pte_bit_(RPLV,1L,63) //restricted privilege level enable
-		_build_pte_bit_(read,0,0) //R
-		_build_pte_bit_(X,0,0) //X
+		pte_valid_m = 0x1UL << pte_valid_s,
+		pte_dirty_m = 0x1UL << pte_dirty_s,
+		pte_plv_m = 0x3UL << pte_plv_s,
+		pte_mat_m = 0x3UL << pte_mat_s,
+		pte_b_global_m = 0x1UL << pte_b_global_s,				// base pte global bit mask 
+		pte_h_huge_m = 0x1UL << pte_h_huge_s, 				// huge pte huge flag bit mask 
+		pte_presence_m = 0x1UL << pte_presence_s,
+		pte_writable_m = 0x1UL << pte_writable_s,
+		pte_b_pa_m = 0x1FFFFFFFFFFFFUL << pte_b_pa_s, 	// base pte pa mask [ 12...60 ]
+		pte_h_global_m = 0x1UL << pte_h_global_s, 			// huge pte global bit mask 
+		pte_h_pa_m = 0x3FFFFFFFFFFFUL << pte_h_pa_s, 	// huge pte pa mask [ 15..60 ]
+		pte_nr_m = 0x1UL << pte_nr_s,
+		pte_nx_m = 0x1UL << pte_nx_s,
+		pte_rplv_m = 0x1UL << pte_rplv_s,
 
-		// // 物理页号和标志掩码
-		// pte_ppn_s = 10,                     // PPN: 物理页号起始位
-		// pte_ppn_m = 0xFFFFFFFFFFFULL << pte_ppn_s, // 44位物理页号掩码
-
-		// // 标志位整体掩码
-		// pte_flags_m = pte_valid_m | pte_readable_m | pte_writable_m | pte_executable_m |
-		//              pte_user_m | pte_global_m | pte_accessed_m | pte_dirty_m | pte_rsw_m,
+		pte_b_flags_m = pte_valid_m | pte_dirty_m | pte_plv_m | pte_mat_m | pte_b_global_m | pte_presence_m
+			| pte_writable_m | pte_nr_m | pte_nx_m | pte_rplv_m, 
 	};
 #undef _build_pte_bit_
 };

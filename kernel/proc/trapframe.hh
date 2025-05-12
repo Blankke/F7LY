@@ -43,7 +43,7 @@ struct TrapFrame
   /* 280 */ uint64 t6;
 };
 #elif defined(LOONGARCH)
-struct trapframe {
+struct TrapFrame {
   /*   0 */ uint64 ra;
   /*   8 */ uint64 tp;
   /*  16 */ uint64 sp;

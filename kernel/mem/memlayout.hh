@@ -102,7 +102,7 @@
 // for use by user pages
 // from physical address 0x90000000 to PHYSTOP.
 #define PHYSBASE (0x90000000UL | DMWIN_MASK)
-#define PHYSTOP (PHYSBASE + 512*1024*1024)
+#define PHYSTOP (PHYSBASE + 512*1024*1024) //512MB physical memory
 
 #define TRAPFRAME (MAXVA>>1 - PGSIZE) //64TB
 

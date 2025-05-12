@@ -4,6 +4,7 @@
 #include "pagetable.hh"
 #include "memlayout.hh"
 #include "platform.hh"
+#include "printer.hh"
 #include "proc/proc.hh"
 extern char etext[];  // kernel.ld sets this to end of kernel code.
 
@@ -311,7 +312,7 @@ namespace mem
             n = PGSIZE - (va - a);
             if (n > len)
                 n = len;
-            memmove((void *)((pa + (va - a)) | loongarch::qemuls2k::dmwin::win_0), p, n);
+            memmove((void *)((pa + (va - a)) ), p, n);
 
             len -= n;
             p = (char *)p + n;
@@ -406,6 +407,7 @@ namespace mem
 
     uint64 VirtualMemoryManager::uvmalloc(PageTable &pt, uint64 oldsz, uint64 newsz,uint64 flags)
     {
+#ifdef RISCV
         uint64 a;
         uint64 pa;
 
@@ -430,6 +432,10 @@ namespace mem
             }
         }
         return newsz;
+#elif defined(LOONGARCH)
+        //TODO: uvmalloc 未实现
+        printfRed("loongarch 未实现uvmalloc\n");
+#endif
     }
 
     uint64 VirtualMemoryManager::uvmdealloc(PageTable &pt, uint64 oldsz, uint64 newsz)
@@ -506,6 +512,9 @@ namespace mem
 
         // 初始化堆内存
         kvmmap(pt,vm_kernel_heap_start,HEAP_START,vm_kernel_heap_size,PTE_R | PTE_W);
+#elif defined(LOONGARCH)
+        //TODO
+        printfRed("loongarch 虚拟化未实现\n");
 #endif
         return pt;
     }

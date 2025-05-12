@@ -3,7 +3,7 @@
 #include "pagetable.hh"
 #include "memlayout.hh"
 #include "klib.hh"
-
+#include "printer.hh"
 namespace mem
 {
 	HeapMemoryManager k_hmm;

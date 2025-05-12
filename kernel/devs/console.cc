@@ -45,6 +45,47 @@ int Console::console_read(int user_dst, uint64 dst, int n)
 int Console::console_intr(int c)
 {
 //TODO
+    lock.acquire();
+
+  switch(c){
+  case CTRL_('P'):  // Print process list.
+    // TODO:procdump();
+    break;
+  case CTRL_('U'):  // Kill line.
+    while(e_idx != w_idx &&
+          input_buf[(e_idx-1) % INPUT_BUF_SIZE] != '\n'){
+      e_idx--;
+      uart.putc_sync(BACKSPACE);
+    }
+    break;
+  case CTRL_('H'): // Backspace
+  case '\x7f': // Delete key
+    if(e_idx != w_idx){
+      e_idx--;
+      uart.putc_sync(BACKSPACE);
+    }
+    break;
+  default:
+    if(c != 0 && e_idx-r_idx < INPUT_BUF_SIZE){
+      c = (c == '\r') ? '\n' : c;
+
+      // echo back to the user.
+      uart.putc_sync(c);
+
+      // store for consumption by consoleread().
+      input_buf[e_idx++ % INPUT_BUF_SIZE] = c;
+
+      if(c == '\n' || c == CTRL_('D') || e_idx-r_idx == INPUT_BUF_SIZE){
+        // wake up consoleread() if a whole line (or end-of-file)
+        // has arrived.
+        w_idx = e_idx;
+        // wakeup(&r_idx);
+      }
+    }
+    break;
+  }
+  
+  lock.release();
     return 0;
 }
 

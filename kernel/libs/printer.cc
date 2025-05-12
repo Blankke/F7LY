@@ -1,6 +1,9 @@
 #include "printer.hh"
 #include <stdarg.h>
+
+#ifdef RISCV
 #include "../hal/riscv/sbi.hh"
+#endif
 
 // 全局打印器实例
 Printer k_printer;
@@ -132,7 +135,17 @@ void Printer::k_panic( const char *f, uint l, const char *info, ... )
   printf("\n");
   va_end( ap );
   k_printer._panicked = 1; // freeze uart output from other CPUs
+  
+  // 根据不同架构执行不同的关机代码
+#ifdef RISCV
   sbi_shutdown();
+#elif defined(LOONGARCH)
+  // 龙芯架构的关机方法
+  // 暂时使用无限循环，后续可实现具体的关机代码
+  // TODO: 实现龙芯架构的关机方法
+#endif
+
+  // 无论什么架构，最后都会进入无限循环
   for(;;)
       ;
 }
