@@ -15,7 +15,7 @@
 // 注意华科的main函数可能有问题
 void main() {
 
-    k_printer.init(); // 这里也初始化了console
+    k_printer.init(); // 这里也初始化了console和uart
 
     printfWhite("\n\n");  // 留出顶部空白
     print_f7ly();

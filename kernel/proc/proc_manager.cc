@@ -3,6 +3,8 @@
 #include "physical_memory_manager.hh"
 #include "klib.hh"
 #include "virtual_memory_manager.hh"
+#include "libs/klib.hh"
+
 
 extern "C"
 {
@@ -124,5 +126,18 @@ namespace proc
     int ProcessManager::get_cur_cpuid()
     {
         return r_tp();
+    }
+    
+    
+    void ProcessManager::user_init(){
+        Pcb *p = alloc_proc();
+        assert( p != nullptr, "pm: alloc proc fail while user init." );
+        _init_proc = p;
+        p->_lock.acquire();
+        safestrcpy(p->_name, "initcode", sizeof(p->_name));
+        
+
+
+
     }
 }

@@ -18,6 +18,7 @@ extern "C" {
 	size_t strlen( const char *s ) noexcept( true );
 	char  *strcat( char *dst, const char *src ) noexcept( true );
 	char  *strcpy( char *dst, const char *src ) noexcept( true );
+	char  *safestrcpy(char *s, const char *t, int n);
 	char  *strncpy( char *dst, const char *src, size_t n ) noexcept( true );
 	int    strcmp( const char *s1, const char *s2 ) noexcept( true );
 	int    strncmp( const char *s1, const char *s2, size_t n ) noexcept( true );

@@ -10,7 +10,7 @@
 class Console
 {
     private:
-        SpinLock lock;
+        SpinLock _lock;
         char input_buf[INPUT_BUF_SIZE];
         int r_idx;
         int w_idx;
