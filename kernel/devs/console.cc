@@ -35,14 +35,14 @@ void Console::console_putc(int c)
 
 int Console::console_write(int user_src, uint64 src, int n)
 {
-  for (int i = 0; i < n; i++)
+  TODO(for (int i = 0; i < n; i++)
   {
     char c;
     // either_copyin
-    TODO(if (either_copyin(&c, user_src, src + i, 1) == -1)
-      break;)
+    if (either_copyin(&c, user_src, src + i, 1) == -1)
+      break;
     sbi_console_putchar(c);
-  }
+  })
   return 0;
 }
 
