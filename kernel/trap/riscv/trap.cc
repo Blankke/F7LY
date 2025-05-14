@@ -57,14 +57,15 @@ int trap_manager::devintr()
 
     if (irq == UART0_IRQ)
     {
-      printf("uart0 interrupt\n");
+      // 现在只写了接收中断, 没有发送中断
+      // printf("uart0 interrupt\n");
       int c = sbi_console_getchar();
       if (-1 != c)
       {
         kConsole.console_intr(c);
       }
-      // !!写完磁盘后修改
     }
+    // !!写完磁盘后修改
     // else if (irq == VIRTIO0_IRQ)
     // {
     //   virtio_disk_intr();
@@ -271,43 +272,52 @@ void trap_manager::kerneltrap()
   w_sstatus(sstatus);
 }
 
-void trap_manager::usertrap(){
+void trap_manager::usertrap()
+{
   int which_dev = 0;
-  if((r_sstatus() & riscv::csr::sstatus_spp_m) != 0)
+  if ((r_sstatus() & riscv::csr::sstatus_spp_m) != 0)
     panic("usertrap: not from user mode");
 
-  if(intr_get() != 0)
+  if (intr_get() != 0)
     panic("usertrap: interrupts enabled");
   w_stvec((uint64)kernelvec);
 
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
   p->_trapframe->epc = r_sepc();
   uint64 cause = r_scause();
-  if(cause == 8){
-    if(p->is_killed())
+  if (cause == 8)
+  {
+    if (p->is_killed())
       proc::k_pm.exit(-1);
     p->_trapframe->epc += 4;
     intr_on();
-    TODO("syscall");// proc::k_pm.syscall();
-  } else if((which_dev = devintr() )!= 0){
+    TODO("syscall"); // proc::k_pm.syscall();
+  }
+  else if ((which_dev = devintr()) != 0)
+  {
     // ok
-  } else if(cause == 13 || cause == 15){
+  }
+  else if (cause == 13 || cause == 15)
+  {
     // 缺页故障处理
     TODO("pagefault_handler");
   }
-  else {
+  else
+  {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->_pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->kill();
   }
-  
-  if(p->is_killed())
+
+  if (p->is_killed())
     proc::k_pm.exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2) {
-    timeslice++; //让一个进程连续执行若干时间片，printf线程不安全
-    if(timeslice >= 5){
+  if (which_dev == 2)
+  {
+    timeslice++; // 让一个进程连续执行若干时间片，printf线程不安全
+    if (timeslice >= 5)
+    {
       timeslice = 0;
       proc::k_scheduler.yield();
     }
@@ -315,7 +325,8 @@ void trap_manager::usertrap(){
   usertrapret();
 }
 
-void trap_manager::usertrapret(){
+void trap_manager::usertrapret()
+{
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
   // we're about to switch the destination of traps from
   // kerneltrap() to usertrap(), so turn off interrupts until
@@ -333,9 +344,9 @@ void trap_manager::usertrapret(){
   x |= riscv::csr::sstatus_spie_m;
   w_sstatus(x);
   w_sepc(p->_trapframe->epc);
-    // tell trampoline.S the user page table to switch to.
+  // tell trampoline.S the user page table to switch to.
   // printf("[usertrapret]p->pagetable: %p\n", p->pagetable);
   uint64 satp = MAKE_SATP(p->_pt.get_base());
   uint64 fn = TRAMPOLINE + (userret - trampoline);
-  ((void (*)(uint64,uint64))fn)(TRAPFRAME + proc::k_pm.get_cur_cpuid() * sizeof(TrapFrame), satp);
+  ((void (*)(uint64, uint64))fn)(TRAPFRAME + proc::k_pm.get_cur_cpuid() * sizeof(TrapFrame), satp);
 }

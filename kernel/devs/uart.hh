@@ -4,7 +4,6 @@
 
 class UartManager
 {
-	friend class Console;
 private:
 	uint64 _uart_base;
 	SpinLock _lock;
@@ -29,10 +28,10 @@ public:
 	uint8 read_lsr();
 	uint8 read_rhr();
 	void write_thr( uint8 data );
+	int uart_intr();
 
 private:
 //=========================中断相关==========================
-	int uart_intr();
 	enum UartReg
 	{
 		RHR = 0,
