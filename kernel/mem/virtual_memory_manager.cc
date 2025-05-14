@@ -277,7 +277,7 @@ namespace mem
     //     return oldshm;
     // }
 
-    int VirtualMemoryManager::copyout(PageTable &pt, uint64 va, const void *p, uint64 len)
+    int VirtualMemoryManager::copy_out(PageTable &pt, uint64 va, const void *p, uint64 len)
     {
 #ifdef RISCV
         uint64 n, a, pa;
@@ -519,4 +519,34 @@ namespace mem
         return pt;
     }
 
+    void VirtualMemoryManager::uvmfirst(PageTable &pt, uint64 src, uint64 sz)
+    {
+        #ifdef RISCV
+        //来自xv6的uvmfirst函数
+            char *mem;
+            printf("sz: %d\n", sz);
+            // if(sz >= PGSIZE)
+            //   panic("uvmfirst: more than a page");
+            mem = (char *)k_pmm.alloc_page();
+            memset(mem, 0, PGSIZE);
+            map_pages(pt, 0, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_X|PTE_U);
+            memmove(mem, (void*)src, MIN(sz, PGSIZE));
+
+            mem = (char *)k_pmm.alloc_page();
+            memset(mem, 0, PGSIZE);
+            map_pages(pt, PGSIZE, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_X|PTE_U);
+            if (sz > PGSIZE) {
+              memmove(mem, (void*)((uint64)src + PGSIZE), MIN(sz - PGSIZE, PGSIZE));
+            }
+
+            mem = (char *)k_pmm.alloc_page();
+            memset(mem, 0, PGSIZE);
+            map_pages(pt, 2 * PGSIZE, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_X|PTE_U);
+            if (sz > 2 * PGSIZE) {
+              memmove(mem, (void*)((uint64)src + 2 * PGSIZE), MIN(sz - 2 * PGSIZE, PGSIZE));
+            }
+        #elif defined(LOONGARCH)
+        //TODO
+        #endif
+    }
 }

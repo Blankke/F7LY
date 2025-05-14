@@ -23,25 +23,39 @@ namespace proc
         ProcessManager() = default;
 
         void init(const char *pid_lock_name, const char *wait_lock_name); // 初始化进程管理器
-        Pcb *get_cur_pcb(); // 获取当前进程控制块
-        bool change_state(Pcb *p, ProcState state); // 改变进程状态
-        int get_cur_cpuid(); // 获取当前CPU ID
+        Pcb *get_cur_pcb(); // 获取当前进程控制块   xv6:myproc()
+
+        int get_cur_cpuid(); // 获取当前CPU ID    xv6:cpu_id()
         void alloc_pid(Pcb *p); // 分配PID
         Pcb *alloc_proc(); // 分配新的进程控制块
-        void set_slot(Pcb *p, int slot); // 设置进程槽位
-        void set_priority(Pcb *p, int priority); // 设置进程优先级
-        void set_shm(Pcb *p); // 设置共享内存
-        void set_vma(Pcb *p); // 设置虚拟内存区域
-        int set_trapframe(Pcb *p); // 设置陷阱帧
+        void freeproc(Pcb *p); // 释放进程
         mem::PageTable proc_pagetable(Pcb *p); // 创建进程页表
         void proc_freepagetable(mem::PageTable pt, uint64 sz); // 释放进程页表
-        void freeproc(Pcb *p); // 释放进程
-        void sche_proc(Pcb *p); // 调度进程
+        void user_init(); // 初始化用户进程
+
+        // 这些先不管，要用再写回来
+        // void set_slot(Pcb *p, int slot); // 设置进程槽位
+        // void set_priority(Pcb *p, int priority); // 设置进程优先级
+        // void set_shm(Pcb *p); // 设置共享内存
+        // void set_vma(Pcb *p); // 设置虚拟内存区域
+        // int set_trapframe(Pcb *p); // 设置陷阱帧
+        // bool change_state(Pcb *p, ProcState state); // 改变进程状态
+
+        int either_copy_in( void *dst, int user_src, uint64 src, uint64 len );
+        int either_copy_out( void *src, int user_dst, uint64 dst, uint64 len );
+
+        void procdump(); // 打印进程列表 debug
+
+
         int exec(const char *path, const char *argv[]); // 执行新程序
         int wait(int child_pid, uint64 addr); // 等待子进程
         // int load_seg(mem::PageTable &pt, uint64 va, fs::fat::Fat32DirEntry *de, uint offset, uint size); // 加载段到页表
         void sleep(void *chan, SpinLock *lock); // 进程睡眠
         void wakeup(void *chan); // 唤醒进程
+        int kill_proc(int pid); // 杀死进程
+        void set_killed(Pcb *p); // 设置进程被杀死
+
+
         void exit(int state); // 进程退出
         int fork(uint64 usp); // 创建子进程（带用户栈指针）
         int fork(); // 创建子进程
@@ -55,13 +69,11 @@ namespace proc
         int mmap(int fd, int map_size); // 内存映射
         int unlink(int fd, const char *path, int flags); // 删除文件
         int pipe(int *fd, int); // 管道
-        void user_init(); // 初始化用户进程
         // int alloc_fd(Pcb *p, fs::xv6_file *f); // 分配文件描述符
         // int alloc_fd(Pcb *p, fs::xv6_file *f, int fd); // 分配文件描述符
         // void get_cur_proc_tms(tmm::tms *tsv); // 获取当前进程时间信息
 
-    public:
-        void kill_proc(Pcb *p) { p->_killed = 1; } // 杀死进程
+
 
     private:
         void _proc_create_vm(Pcb *p); // 创建进程虚拟内存

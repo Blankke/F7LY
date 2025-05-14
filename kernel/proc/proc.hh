@@ -43,7 +43,7 @@ namespace proc
         int _killed;           // 进程是否被标记为kill (非零表示被kill)
         int _xstate;           // 进程退出状态，用于父进程wait()获取
         int _pid;              // 进程ID (Process ID)
-        Pcb *parent;           // 父进程的PCB指针
+        Pcb *_parent;           // 父进程的PCB指针
 
         char _name[16]; // 进程名称 (用于调试)
 
@@ -96,16 +96,16 @@ namespace proc
             _killed = 1; 
             _lock.release();
             }
-        Pcb *get_parent() { return parent; }
+        Pcb *get_parent() { return _parent; }
         void set_state(ProcState state) { _state = state; }
         void set_xstate(int xstate) { _xstate = xstate; }
         size_t get_sz() { return _sz; }
         // void set_chan(void *chan) { _chan = chan; }
         uint get_pid() { return _pid; }
-        uint get_ppid() { return parent ? parent->_pid : 0; }
+        uint get_ppid() { return _parent ? _parent->_pid : 0; }
         TrapFrame *get_trapframe() { return _trapframe; }
         uint64 get_kstack() { return _kstack; }
-        mem::PageTable get_pagetable() { return _pt; }
+        mem::PageTable& get_pagetable() { return _pt; }
         ProcState get_state() { return _state; }
         char *get_name() { return _name; }
         uint64 get_size() { return _sz; }

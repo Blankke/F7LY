@@ -85,7 +85,7 @@ namespace syscall{
 		proc::Pcb		  *p  = (proc::Pcb *)proc::k_pm.get_cur_pcb();
 		// if ( addr >= p->get_size() || addr + sizeof( uint64 ) > p->get_size()
 		// ) 	return -1;
-		mem::PageTable pt = p->get_pagetable();
+		mem::PageTable& pt = p->get_pagetable();
 		if ( mem::k_vmm.copy_in( pt, &out_data, addr, sizeof( out_data ) ) < 0 )
 			return -1;
 		return 0;
@@ -94,7 +94,7 @@ namespace syscall{
 	int SyscallHandler::_fetch_str( uint64 addr, void *buf, uint64 max )
 	{
 		proc::Pcb		  *p   = (proc::Pcb *) proc::k_pm.get_cur_pcb();
-		mem::PageTable pt  = p->get_pagetable();
+		mem::PageTable& pt  = p->get_pagetable();
 		int			   err = mem::k_vmm.copy_str_in( pt, buf, addr, max );
 		if ( err < 0 ) return err;
 		return strlen( (const char *) buf );

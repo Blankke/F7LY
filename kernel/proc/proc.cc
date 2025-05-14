@@ -13,7 +13,7 @@ namespace proc
         _killed = 0;
         _xstate = 0;
         _pid = 0;
-        parent = nullptr;
+        _parent = nullptr;
         _sz = 0;
         _trapframe = nullptr;
         _kstack = 0;

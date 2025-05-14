@@ -69,7 +69,7 @@ namespace mem
 		int copy_str_in( PageTable &pt, void *dst, uint64 src_va, uint64 max );
 		// int copy_str_in( PageTable &pt, eastl::string &dst, uint64 src_va, uint64 max );
 
-		int either_copy_in( void *dst, bool user_src, uint64 src, uint64 len );
+
 
 		/// @brief map shm pages to physical pages, it is similar with map_pages
 		/// @param pt pagetable to use
@@ -93,7 +93,7 @@ namespace mem
 		/// @param p source address
 		/// @param len length
 		/// @return 0 if success, -1 if failed
-		int copyout( PageTable &pt, uint64 va, const void *p, uint64 len );
+		int copy_out( PageTable &pt, uint64 va, const void *p, uint64 len );
 
 		/// @brief mark a PTE invalid for user access
 		/// @param pt 
@@ -113,6 +113,8 @@ namespace mem
 		/// @param newsz new size
 		/// @return 
 		uint64 uvmdealloc( PageTable &pt, uint64 oldsz, uint64 newsz );
+
+		void uvmfirst(PageTable &pt, uint64 src, uint64 sz);
 	private:
 
 	};
