@@ -18,7 +18,7 @@ namespace syscall{
 	public:
 		SyscallHandler() {};
 		void init();
-		uint64 invoke_syscaller( uint64 sys_num ); // 调用系统调用
+		void invoke_syscaller(); // 调用系统调用
 
 
 	private:

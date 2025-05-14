@@ -70,12 +70,17 @@ namespace syscall{
     BIND_SYSCALL(getdents64);
     BIND_SYSCALL(shutdown);
     }
-    uint64 SyscallHandler::invoke_syscaller(uint64 sys_num){
-        if (sys_num >= max_syscall_funcs_num || _syscall_funcs[sys_num] == nullptr) {
-            // 你也可以 throw 异常或返回错误码
-            return -1;
+    void SyscallHandler::invoke_syscaller(){
+        proc::Pcb* p = (proc::Pcb*)proc::k_pm.get_cur_pcb();
+        uint64 sys_num = p->get_trapframe()->a7; // 获取系统调用号
+        if (sys_num >= max_syscall_funcs_num || sys_num < 0 || _syscall_funcs[sys_num] == nullptr) {
+            printfRed("[SyscallHandler::invoke_syscaller]sys_num is out of range\n");
+            p->_trapframe->a0 = -1; // 设置返回值为-1
+        }else{
+            // 调用对应的系统调用函数
+            uint64 ret = (this->*_syscall_funcs[sys_num])();
+            p->_trapframe->a0 = ret; // 设置返回值
         }
-        return (this->*_syscall_funcs[sys_num])();
     }
 
 	// ---------------- private helper functions ----------------

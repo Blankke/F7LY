@@ -12,7 +12,7 @@
 #include "proc/proc.hh"
 #include "proc/proc_manager.hh"
 
-// 注意华科的main函数可能有问题
+// 注意华科的main函数可能有问题, 注意多核初始化
 void main() {
 
     k_printer.init(); // 这里也初始化了console和uart
@@ -28,6 +28,7 @@ void main() {
     plic_mgr.init();// plic初始化
     plic_mgr.inithart();// 初始化每个核上的csr
     printfRed("plic YOU!\n");
+    
     mem::k_pmm.init();
     printfYellow("[pmm] PhysicalMemoryManager init success\n");
     mem::k_vmm.init("virtual_memory_manager");

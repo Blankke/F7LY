@@ -12,6 +12,7 @@
 #include "proc/proc_manager.hh"
 #include "proc/scheduler.hh"
 #include "trap_func_wrapper.hh"
+#include "syscall_handler.hh"
 // #include "fuckyou.hh"
 // in kernelvec.S, calls kerneltrap().
 extern "C" void kernelvec();
@@ -116,109 +117,6 @@ void trap_manager::timertick()
   set_next_timeout();
 }
 
-// !!写完进程后修改
-// void trap_manager::usertrap(){
-//   if((r_sstatus() & SSTATUS_SPP) != 0)
-//     panic("usertrap: not from user mode");
-
-//   // send interrupts and exceptions to kerneltrap(),
-//   // since we're now in the kernel.
-//   w_stvec((uint64)kernelvec);
-
-//   struct proc *p = myproc();
-
-//   // save user program counter.
-//   p->trapframe->epc = r_sepc();
-//   uint64 cause = r_scause();
-//   if(cause == 8){
-//     // system call
-
-//     if(killed(p))
-//       exit(-1);
-
-//     // sepc points to the ecall instruction,
-//     // but we want to return to the next instruction.
-//     p->trapframe->epc += 4;
-
-//     // an interrupt will change sepc, scause, and sstatus,
-//     // so enable only now that we're done with those registers.
-//     intr_on();
-
-//     syscall();
-//   } else if((which_dev = devintr()) != 0){
-//     // ok
-//   } else if (cause == 13 || cause == 15) {
-//     //缺页故障处理
-//     uint64 fault_va = r_stval();
-//     if(PGROUNDUP(p->trapframe->sp) - 1 < fault_va && fault_va < p->sz) {
-//       if(pagefault_handler(fault_va, cause) != 0) {
-//         p->killed = 1;
-//       }
-//     } else
-//       p->killed = 1;
-//   } else {
-//     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-//     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-//     setkilled(p);
-//   }
-
-//   if(killed(p))
-//     exit(-1);
-
-//   // give up the CPU if this is a timer interrupt.
-//   if(which_dev == 2) {
-//     timeslice++; //让一个进程连续执行若干时间片，printf线程不安全
-//     if(timeslice >= 5){
-//       timeslice = 0;
-//       yield();
-//     }
-
-// }
-
-// !!写完进程后修改
-// return to user space
-//
-// void
-// usertrapret(void)
-// {
-//   struct proc *p = myproc();
-
-//   // we're about to switch the destination of traps from
-//   // kerneltrap() to usertrap(), so turn off interrupts until
-//   // we're back in user space, where usertrap() is correct.
-//   intr_off();
-
-//   w_stvec(TRAMPOLINE + (uservec - trampoline));
-
-//   // set up trapframe values that uservec will need when
-//   // the process next re-enters the kernel.
-//   p->trapframe->kernel_satp = r_satp();         // kernel page table
-//   p->trapframe->kernel_sp = p->kstack + 1 * PGSIZE; // process's kernel stack
-//   p->trapframe->kernel_trap = (uint64)usertrap;
-//   p->trapframe->kernel_hartid = r_tp();         // hartid for cpuid()
-
-//   // set up the registers that trampoline.S's sret will use
-//   // to get to user space.
-
-//   // set S Previous Privilege mode to User.
-//   unsigned long x = r_sstatus();
-//   x &= ~SSTATUS_SPP; // clear SPP to 0 for user mode
-//   x |= SSTATUS_SPIE; // enable interrupts in user mode
-//   w_sstatus(x);
-
-//   // set S Exception Program Counter to the saved user pc.
-//   w_sepc(p->trapframe->epc);
-
-//   // tell trampoline.S the user page table to switch to.
-//   // printf("[usertrapret]p->pagetable: %p\n", p->pagetable);
-//   uint64 satp = MAKE_SATP(p->pagetable);
-
-//   // jump to trampoline.S at the top of memory, which
-//   // switches to the user page table, restores user registers,
-//   // and switches to user mode with sret.
-//   uint64 fn = TRAMPOLINE + (userret - trampoline);
-//   ((void (*)(uint64,uint64))fn)(TRAPFRAME + cpuid() * sizeof(struct trapframe), satp);
-// }
 
 // 处理内核态的中断
 // 支持嵌套中断
@@ -291,7 +189,7 @@ void trap_manager::usertrap()
       proc::k_pm.exit(-1);
     p->_trapframe->epc += 4;
     intr_on();
-    TODO("syscall"); // proc::k_pm.syscall();
+    syscall::k_syscall_handler.invoke_syscaller();
   }
   else if ((which_dev = devintr()) != 0)
   {
