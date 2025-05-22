@@ -42,4 +42,6 @@ void main() {
     pt->set_base(0x80000000);
     printfYellow("pt->addr: %p\n",pt);
     delete pt;
+    string str("gkq全世界最帅");
+    k_printer<<str<<Printer::endl;
 }

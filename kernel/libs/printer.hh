@@ -1,6 +1,6 @@
 #pragma once
 #include "console.hh"
-
+#include "string.hh"
 // enum OutputLevel
 // 	{
 // 		out_trace,
@@ -84,7 +84,31 @@ class Printer
 		bool _is_number( char c ) { return (unsigned) ( c - '0' ) < 10; }
     
 		int	 _to_number( char c ) { return c - '0'; }
-    
+    public:
+		void print(const string& str) {
+		print("%s", str.c_str());
+		static Printer& endl(Printer& p) {
+		p.print("\n");
+		return p;
+	}
+
+	// 接收 endl 的 << 运算符
+	Printer& operator<<(Printer& (*func)(Printer&)) {
+		return func(*this);
+	}
+
+	// string 重载（你已有）
+	Printer& operator<<(const string& str) {
+		print("%s", str.c_str());
+		return *this;
+	}
+
+	// const char* 也顺带支持一下
+	Printer& operator<<(const char* str) {
+		print("%s", str);
+		return *this;
+	}
+	}
 };
 extern Printer k_printer;
 
