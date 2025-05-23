@@ -40,12 +40,6 @@ void main() {
     mem::k_hmm.init("heap_memory_manager",HEAP_START);
     printfYellow("[hmm] HeapMemoryManager init success,heap_start: %p\n",HEAP_START);
 
-
-    mem::PageTable* pt = new mem::PageTable();
-    pt->set_base(0x80000000);
-    printfYellow("pt->addr: %p\n",pt);
-    delete pt;
-
     proc::k_pm.user_init(); // 初始化用户进程
     printfMagenta("user init\n");
 

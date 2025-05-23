@@ -59,19 +59,18 @@ namespace proc
 				}
 
 				p->_lock.acquire();
-				p->print_context();
+				// p->print_context();
 				if (p->get_state() == ProcState::RUNNABLE)
 				{
 					p->_state = ProcState::RUNNING;
 					cpu->set_cur_proc( p );
 					proc::Context* cur_context = cpu->get_context();
-					print_context1( cur_context );
+					// print_context1( cur_context );
 
 					//Debug
-					uint64 sp = p->get_context()->sp; // 0x0000001ffffbf000;
-					uint64 pa = (uint64)PTE2PA(mem::k_pagetable.kwalkaddr(sp).get_data());
-					printf("sp: %p, pa: %p\n", sp, pa);
-
+					// uint64 sp = p->get_context()->sp; // 0x0000001ffffbf000;
+					// uint64 pa = (uint64)PTE2PA(mem::k_pagetable.kwalkaddr(sp).get_data());
+					// printf("sp: %p, kstack: %p,pa:%p\n", sp, p->_kstack,pa);
 
 					// printf( "sche proc %d, name: %s\n", p->_gid, p->_name );
 					swtch( cur_context, &p->_context );
