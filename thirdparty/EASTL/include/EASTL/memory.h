@@ -71,6 +71,7 @@
 #define EASTL_MEMORY_H
 
 
+#include "libs/klib.hh"
 #include <EASTL/internal/config.h>
 #include <EASTL/internal/memory_base.h>
 #include <EASTL/internal/generic_iterator.h>
@@ -84,7 +85,6 @@
 #include <EASTL/numeric_limits.h>
 
 EA_DISABLE_ALL_VC_WARNINGS()
-#include <stdlib.h>
 #include <new>
 EA_RESTORE_ALL_VC_WARNINGS()
 

@@ -41,7 +41,7 @@
 #include <EASTL/algorithm.h>
 #include <EASTL/initializer_list.h>
 #include <EASTL/tuple.h>
-#include <klib/string.h>
+#include "libs/klib.hh"
 
 EA_DISABLE_ALL_VC_WARNINGS()
 	#include <new>
