@@ -35,10 +35,10 @@ namespace mem
         //     printfRed("va: %p, pa: %p\n", va, ppp);
         // }
         //TODO
-        // for (pm::Pcb &pcb : pm::k_proc_pool)
-        // {
-        //     pcb.map_kstack(k_pagetable);
-        // }
+        for (proc::Pcb &pcb : proc::k_proc_pool)
+        {
+            pcb.map_kstack(k_pagetable);
+        }
 
         // 设置satp，对应龙芯应该设置pgdl，pgdh，stlbps，asid，tlbrehi，pwcl，pwch,
         // 并且invtlb 0x0,$zero,$zero;

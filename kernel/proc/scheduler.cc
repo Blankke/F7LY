@@ -68,8 +68,8 @@ namespace proc
 					print_context1( cur_context );
 
 					//Debug
-					uint64 sp = 0x0000001ffffbf000;
-					uint64 pa = (uint64)mem::k_pagetable.walk_addr(sp);
+					uint64 sp = p->get_context()->sp; // 0x0000001ffffbf000;
+					uint64 pa = (uint64)PTE2PA(mem::k_pagetable.kwalkaddr(sp).get_data());
 					printf("sp: %p, pa: %p\n", sp, pa);
 
 

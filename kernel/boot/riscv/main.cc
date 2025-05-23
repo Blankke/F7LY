@@ -29,7 +29,10 @@ void main() {
     plic_mgr.init();// plic初始化
     plic_mgr.inithart();// 初始化每个核上的csr
     printfRed("plic YOU!\n");
-    
+
+    proc::k_pm.init("next pid", "wait lock");
+    printfMagenta("k_pm you\n");
+
     mem::k_pmm.init();
     printfYellow("[pmm] PhysicalMemoryManager init success\n");
     mem::k_vmm.init("virtual_memory_manager");
@@ -37,8 +40,6 @@ void main() {
     mem::k_hmm.init("heap_memory_manager",HEAP_START);
     printfYellow("[hmm] HeapMemoryManager init success,heap_start: %p\n",HEAP_START);
 
-    proc::k_pm.init("next pid", "wait lock");
-    printfMagenta("k_pm you\n");
 
     mem::PageTable* pt = new mem::PageTable();
     pt->set_base(0x80000000);

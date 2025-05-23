@@ -42,7 +42,9 @@ namespace proc
         if (pa == 0)
             panic("pcb map kstack: no memory");
         mem::k_pmm.clear_page((void *)pa);
-        if (!mem::k_vmm.map_pages(pt, _kstack, PGSIZE, (uint64)pa,
+
+        printfBlue("map kstack: %p, end: %p\n", _kstack, PGROUNDDOWN(_kstack + PGSIZE));
+        if (!mem::k_vmm.map_pages(pt, _kstack, PGSIZE<<1, (uint64)pa,
                                   riscv::PteEnum::pte_readable_m |
                                       riscv::PteEnum::pte_writable_m))
             panic("kernel vm map failed");

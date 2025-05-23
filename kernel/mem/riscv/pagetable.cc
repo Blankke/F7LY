@@ -132,7 +132,7 @@ namespace mem
             return nullptr;
         if (pte.is_user() == 0)
         {
-            printfRed("try to walk-addr( k-pt, %p ). nullptr will be return.\n", va);
+            printfCyan("try to walk-addr( k-pt, %p ). nullptr will be return.\n", va);
             return nullptr;
         }
         pa = (uint64)pte.pa();
