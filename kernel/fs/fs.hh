@@ -1,13 +1,13 @@
 #pragma once
 #include "types.hh"
-#include "fs/fs_defs.hh"
-#include "fs/file/file_defs.hh"
+#include "fs_defs.hh"
+#include "file/file_defs.hh"
 
-#include <smp/spin_lock.hh>
+#include "spinlock.hh"
 
-#include <EASTL/string.h>
-#include <EASTL/vector.h>
-#include <EASTL/unordered_map.h>
+// #include <EASTL/string.h>
+// #include <EASTL/vector.h>
+// #include <EASTL/unordered_map.h>
 
 //#include <asm-generic/statfs.h>
 

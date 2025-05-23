@@ -1,13 +1,13 @@
 #include "types.hh"
 #include "fs/dentry.hh"
 
-#include <EASTL/string.h>
-#include <EASTL/list.h>
-#include <EASTL/vector.h>
-#include <EASTL/unique_ptr.h>
-#include <EASTL/tuple.h>
+// #include <EASTL/string.h>
+// #include <EASTL/list.h>
+// #include <EASTL/vector.h>
+// #include <EASTL/unique_ptr.h>
+// #include <EASTL/tuple.h>
 
-#include <smp/spin_lock.hh>
+#include "spinlock.hh"
 
 using eastl::tuple;
 using eastl::vector;

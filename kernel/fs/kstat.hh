@@ -10,11 +10,11 @@
 
 #include "types.hh"
 
-#include "fs/fs.hh"
-#include "fs/fs_defs.hh"
-#include "fs/file/file_defs.hh"
-#include "fs/dentry.hh"
-#include "fs/inode.hh"
+#include "fs.hh"
+#include "fs_defs.hh"
+#include "file/file_defs.hh"
+#include "dentry.hh"
+#include "inode.hh"
 
 namespace pm
 {

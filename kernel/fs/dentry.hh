@@ -10,11 +10,11 @@
 
 #include "types.hh"
 #include "printer.hh"
-#include "fs/file/file_defs.hh"
+#include "file/file_defs.hh"
 
 #include "string.hh"
-#include <EASTL/unordered_map.h>
-#include <EASTL/vector.h>
+// #include <EASTL/unordered_map.h>
+// #include <EASTL/vector.h>
 
 using eastl::vector;
 namespace fs

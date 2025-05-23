@@ -1,17 +1,11 @@
-//
-// Created by Li Shuang ( pseudonym ) on 2024-05-19 
-// --------------------------------------------------------------
-// | Note: This code file just for study, not for commercial use 
-// | Contact Author: lishuang.mk@whu.edu.cn 
-// --------------------------------------------------------------
-//
 
 #pragma once 
 
-#include "klib/common.hh"
-#include "fs/file/file_defs.hh"
+#include "printer.hh"
+#include "platform.hh"
+#include "file/file_defs.hh"
 
-#include <EASTL/string.h>
+// #include <EASTL/string.h>
 namespace fs
 {
 	class FileSystem;
