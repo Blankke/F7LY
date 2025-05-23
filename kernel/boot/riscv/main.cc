@@ -15,6 +15,10 @@
 
 // 注意华科的main函数可能有问题, 注意多核初始化
 void main() {
+    // riscv::r_mstatus();
+
+    uint64 x;
+    asm volatile("csrr %0, sstatus" : "=r"(x));
 
     k_printer.init(); // 这里也初始化了console和uart
 

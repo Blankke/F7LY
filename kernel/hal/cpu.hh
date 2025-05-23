@@ -68,11 +68,11 @@ public:
         static inline int get_intr_stat()
         {
 #ifdef RISCV
-                uint64 x = riscv::r_mstatus(); // 假设 crmd 对应 mstatus CSR
+                uint64 x = riscv::r_sstatus(); 
 #elif defined(LOONGARCH)
                 uint64 x = r_csr_crmd(); // 假设 crmd 对应 mstatus CSR
 #endif
-                return (x & (1 << 3)) != 0; // 假设 ie_m 位在 mstatus 的第 3 位 (MIE)
+                return (x & SSTATUS_SIE) != 0; 
         };
 
         static void push_intr_off();
