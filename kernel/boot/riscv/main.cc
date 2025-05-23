@@ -11,6 +11,7 @@
 #include "trap/plic.hh"
 #include "proc/proc.hh"
 #include "proc/proc_manager.hh"
+#include "proc/scheduler.hh"
 
 // 注意华科的main函数可能有问题, 注意多核初始化
 void main() {
@@ -43,4 +44,10 @@ void main() {
     pt->set_base(0x80000000);
     printfYellow("pt->addr: %p\n",pt);
     delete pt;
+
+    proc::k_pm.user_init(); // 初始化用户进程
+    printfMagenta("user init\n");
+
+    proc::k_scheduler.init("scheduler");
+    proc::k_scheduler.start_schedule(); // 启动调度器
 }

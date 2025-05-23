@@ -3,6 +3,7 @@
 #include "scheduler.hh"
 #include "proc_manager.hh"
 #include "printer.hh"
+#include "pagetable.hh"
 // #include "tm/timer_manager.hh"
 // #include "klib/common.hh"
 
@@ -40,38 +41,45 @@ namespace proc
 		Pcb *p;
 		Cpu *cpu = Cpu::get_cpu();
 		int priority;
-		int needed = 1;
 
 		cpu->set_cur_proc( nullptr );
 
 		for ( ;;)
 		{
+			
 			cpu->interrupt_on();
+
+			priority = get_highest_proirity();
 
 			for ( p = k_proc_pool; p < &k_proc_pool[ num_process ]; p++ )
 			{
-				if ( needed )
-				{
-					priority = get_highest_proirity();
-				}
-
-				needed = 0;
 				if (p->_state != ProcState::RUNNABLE || p->_priority > priority)
 				{
 					continue;
 				}
 
 				p->_lock.acquire();
+				p->print_context();
 				if (p->get_state() == ProcState::RUNNABLE)
 				{
 					p->_state = ProcState::RUNNING;
-					// printf( "sche proc %d\n", p->_gid );
 					cpu->set_cur_proc( p );
-					swtch( cpu->get_context(), &p->_context );
+					proc::Context* cur_context = cpu->get_context();
+					print_context1( cur_context );
+
+					//Debug
+					uint64 sp = 0x0000001ffffbf000;
+					uint64 pa = (uint64)mem::k_pagetable.walk_addr(sp);
+					printf("sp: %p, pa: %p\n", sp, pa);
+
+
+					// printf( "sche proc %d, name: %s\n", p->_gid, p->_name );
+					swtch( cur_context, &p->_context );
+					// printf( "return from %d, name: %s\n", p->_gid, p->_name );
 					cpu->set_cur_proc( nullptr );
 				}
 				p->_lock.release();
-				needed = 1;
+				break;
 			}
 		}
 	}

@@ -5,15 +5,20 @@
 #include "virtual_memory_manager.hh"
 #include "scheduler.hh"
 #include "libs/klib.hh"
+#include "trap.hh"
+#include "printer.hh"
 
 extern "C"
 {
+    extern uint64 initcode_start[];
+    extern uint64 initcode_end[];
 
     extern int init_main(void);
     extern char trampoline[]; // trampoline.S
     void _wrp_fork_ret(void)
     {
-        // proc::k_pm.fork_ret();
+        printf("into _wrapped_fork_ret\n");
+        proc::k_pm.fork_ret();
     }
 }
 
@@ -41,6 +46,8 @@ namespace proc
         Cpu *c_cpu = Cpu::get_cpu();
         proc::Pcb *pcb = c_cpu->get_cur_proc();
         Cpu::pop_intr_off();
+        if (pcb == nullptr)
+            panic("get_cur_pcb: no current process");
         return pcb;
     }
 
@@ -98,6 +105,10 @@ namespace proc
                 // 设置调度返回地址为 _wrp_fork_ret
                 // 当调度器切换回该进程时，将从这里开始执行
                 p->_context.ra = (uint64)_wrp_fork_ret;
+                printf("p->_context.ra: %p\n", p->_context.ra);
+                printf("wrp_fork_ret: %p\n", _wrp_fork_ret);
+                void (ProcessManager::*fptr)() = &ProcessManager::fork_ret;
+                printf("ProcessManager::fork_ret: %p\n", (void *)*(uintptr_t *)&fptr);
 
                 // 设置内核栈指针
                 p->_context.sp = p->_kstack + PGSIZE;
@@ -116,6 +127,24 @@ namespace proc
         }
         // 没有找到可用的进程控制块，分配失败
         return nullptr;
+    }
+
+    void ProcessManager::fork_ret()
+    {
+        static int first = 1;
+        get_cur_pcb()->_lock.release();
+
+        if (first)
+        {
+            first = 0;
+            TODO(
+                // printf("sp: %x\n", r_sp());
+                filesystem_init();
+                filesystem2_init(); // 启动init
+            )
+        }
+        printf("fork_ret\n");
+        trap_mgr.usertrapret();
     }
 
     void ProcessManager::_proc_create_vm(Pcb *p)
@@ -190,7 +219,23 @@ namespace proc
 #ifdef RISCV
         Pcb *p = alloc_proc();
         _init_proc = p;
-        mem::k_vmm.uvmfirst(p->_pt, 0, 0);
+        // 传入initcode的地址
+        mem::k_vmm.uvmfirst(p->_pt, (uint64)initcode_start, (uint64)(initcode_end - initcode_start));
+        printf("initcode start: %p, end: %p\n", initcode_start, initcode_end);
+        printf("initcode size: %d\n", (uint64)(initcode_end - initcode_start));
+        p->_sz = 3 * PGSIZE;
+
+        p->_trapframe->epc = 0;
+        p->_trapframe->sp = p->_sz;
+
+        safestrcpy(p->_name, "initcode", sizeof(p->_name));
+        p->_parent = p;
+        safestrcpy(p->_cwd_name, "/", sizeof(p->_cwd_name));
+
+        p->_state = ProcState::RUNNABLE;
+
+        p->_lock.release();
+
 #elif defined(LOONGARCH)
 // TODO
 #endif

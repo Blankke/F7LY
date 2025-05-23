@@ -30,7 +30,7 @@ COMMON_DIRS := mem libs devs trap hal proc sys
 SUBDIRS := $(ARCH_DIRS) $(COMMON_DIRS)
 
 LINK_SCRIPT := $(KERNEL_DIR)/link/$(ARCH)/kernel.ld
-CFLAGS := -Wall -Werror -ffreestanding -O2 -fno-builtin -g -fno-stack-protector $(ARCH_CFLAGS)
+CFLAGS := -Wall -Werror -ffreestanding -Og -fno-builtin -g -fno-stack-protector $(ARCH_CFLAGS)
 CXXFLAGS := $(CFLAGS) -fno-exceptions -fno-rtti
 LDFLAGS := -z max-page-size=4096 -nostdlib -T $(LINK_SCRIPT) --gc-sections
 INCLUDES := -I$(KERNEL_DIR) $(foreach dir,$(SUBDIRS),-I$(KERNEL_DIR)/$(dir))
@@ -54,7 +54,35 @@ DEPS := $(OBJS:.o=.d)
 KERNEL_ELF := $(BUILD_DIR)/kernel.elf
 KERNEL_BIN := $(BUILD_DIR)/kernel.bin
 
-.PHONY: all clean dirs build riscv loongarch run debug
+# ===== initcode 用户进程编译相关 =====
+# 支持 riscv 和 loongarch 架构，自动选择交叉工具链和参数
+
+ifeq ($(ARCH),riscv)
+  INITCODE_SRC := user/app/initcode-rv.cc
+else ifeq ($(ARCH),loongarch)
+  INITCODE_SRC := user/app/initcode-la.cc
+endif
+INITCODE_OBJ := build/$(OUTPUT_PREFIX)/initcode.o
+INITCODE_ELF := build/$(OUTPUT_PREFIX)/initcode.elf
+
+
+# 根据架构选择不同的输出文件名
+ifeq ($(ARCH),riscv)
+  INITCODE_BIN := user/initcode-rv
+else ifeq ($(ARCH),loongarch)
+  INITCODE_BIN := user/initcode-la
+endif
+
+# 新增 syscall 编译规则
+SYSCALL_SRC := user/syscall_lib/syscall.cc
+SYSCALL_OBJ := build/$(OUTPUT_PREFIX)/syscall.o
+
+# 编译参数
+INITCODE_CFLAGS := -Wall -O -fno-builtin -fno-exceptions -fno-rtti -fno-stack-protector -nostdlib -ffreestanding -mno-relax $(ARCH_CFLAGS) \
+                   -Iuser/deps -Iuser/syscall_lib -Iuser/syscall_lib/arch/$(ARCH)
+INITCODE_LDFLAGS := -Ttext=0x1000 -nostdlib
+
+.PHONY: all clean dirs build riscv loongarch run debug initcode
 
 all: riscv
 
@@ -64,7 +92,7 @@ riscv:
 loongarch:
 	@$(MAKE) ARCH=loongarch build
 
-build: dirs $(KERNEL_BIN)
+build: initcode dirs $(KERNEL_BIN) 
 
 dirs:
 	@mkdir -p $(BUILD_DIR)
@@ -120,8 +148,32 @@ debug: build
 		$(QEMU_CMD) $(KERNEL_ELF) -S -gdb tcp::1234; \
 	fi
 
+initcode: $(INITCODE_BIN)
+
+# 编译 initcode 源文件为目标文件
+$(INITCODE_OBJ): $(INITCODE_SRC)
+	@mkdir -p $(dir $@)
+	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
+
+# 编译 syscall.o
+$(SYSCALL_OBJ): $(SYSCALL_SRC)
+	@mkdir -p $(dir $@)
+	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
+
+# 链接生成 initcode.elf（同时链接 initcode.o 和 syscall.o）
+$(INITCODE_ELF): $(INITCODE_OBJ) $(SYSCALL_OBJ)
+	$(LD) $(INITCODE_LDFLAGS) -o $@ $^
+
+# 生成二进制 initcode 文件 + 反汇编
+$(INITCODE_BIN): $(INITCODE_ELF)
+	$(OBJCOPY) -S -O binary $< $@
+	riscv64-unknown-elf-objdump -D -b binary -m riscv:rv64 -EL --adjust-vma=0x80000000 $@ > user/disasm_initcode.asm
+
 clean:
 	rm -rf build
 	find . -name "*.o" -o -name "*.d" -exec rm -f {} \;
+	rm -f user/initcode-*
+	rm -f user/disasm_initcode.asm
+
 
 -include $(DEPS)

@@ -8,6 +8,7 @@
 
 #include "spinlock.hh"
 #include "../types.hh"
+#include "printer.hh"
 
 SpinLock::SpinLock() {}
 
@@ -19,8 +20,8 @@ void SpinLock::init( const char *name )
 
 void SpinLock::acquire()
 {
-	// if ( is_held() )
-		// log_panic( "SpinLock acquire: repeat" );
+	if ( is_held() )
+		panic( "SpinLock acquire: repeat" );
 	while ( __sync_lock_test_and_set( &_locked, 1 ) != 0 )
 		;
 	__sync_synchronize();
