@@ -35,6 +35,24 @@ enum CommonSize : uint64
 	_1G = 0x1UL << 30,
 };
 
+using u8 = uint8;
+using u16 = uint16;
+using u32 = uint32;
+using u64 = uint64;
+
+using int8 = char;
+using int16 = short;
+using int32 = int;
+using int64 = long;
+
+using i8 = int8;
+using i16 = int16;
+using i32 = int32;
+using i64 = int64;
+
+using flag_t = uint64;
+using pte_t = uint64; 
+using mode_t = uint32;
 // 已存在
 // typedef tid_t uid_t;
 // typedef tid_t gid_t;

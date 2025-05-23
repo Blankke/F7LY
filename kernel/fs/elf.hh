@@ -145,7 +145,7 @@ namespace elf
 
 		AT_MINSIGSTKSZ = 51, /* Stack needed for signal delivery  */
 	};
-	#define MAX_AT 51
+
 }
 
 

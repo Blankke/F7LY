@@ -1,3 +1,4 @@
+EASTL_DIR := thirdparty/EASTL
 # ===== 架构选择 =====
 ARCH ?= riscv
 
@@ -34,6 +35,7 @@ CFLAGS := -Wall -Werror -ffreestanding -O2 -fno-builtin -g -fno-stack-protector 
 CXXFLAGS := $(CFLAGS) -fno-exceptions -fno-rtti
 LDFLAGS := -z max-page-size=4096 -nostdlib -T $(LINK_SCRIPT) --gc-sections
 INCLUDES := -I$(KERNEL_DIR) $(foreach dir,$(SUBDIRS),-I$(KERNEL_DIR)/$(dir))
+INCLUDES += -I$(EASTL_DIR)/include -I$(EASTL_DIR)/include/EASTL
 
 # ===== 文件收集规则 =====
 SRCS := $(foreach dir,$(SUBDIRS),$(wildcard $(KERNEL_DIR)/$(dir)/*.[csS])) \
@@ -64,7 +66,7 @@ riscv:
 loongarch:
 	@$(MAKE) ARCH=loongarch build
 
-build: dirs $(KERNEL_BIN)
+build: dirs $(EASTL_DIR)/libeastl.a $(KERNEL_BIN)
 
 dirs:
 	@mkdir -p $(BUILD_DIR)
@@ -90,12 +92,16 @@ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.s
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
-$(KERNEL_ELF): $(ENTRY_OBJ) $(OBJS_NO_ENTRY)
-	$(LD) $(LDFLAGS) -o $@ $(ENTRY_OBJ) $(OBJS_NO_ENTRY)
+$(KERNEL_ELF): $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(EASTL_DIR)/libeastl.a
+	$(LD) $(LDFLAGS) -o $@ $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(EASTL_DIR)/libeastl.a
 	$(SIZE) $@
 
 $(KERNEL_BIN): $(KERNEL_ELF)
 	$(OBJCOPY) -O binary $< $@
+
+export BUILDPATH := $(BUILD_DIR)
+$(EASTL_DIR)/libeastl.a:
+	@$(MAKE) -C $(EASTL_DIR)
 
 run: build
 	@if [ "$(ARCH)" = "riscv" ]; then \
@@ -123,5 +129,6 @@ debug: build
 clean:
 	rm -rf build
 	find . -name "*.o" -o -name "*.d" -exec rm -f {} \;
+	$(MAKE) clean -C thirdparty/EASTL
 
 -include $(DEPS)

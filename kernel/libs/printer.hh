@@ -103,7 +103,7 @@ public:
 			return func(*this);
 		}
 
-		// string 重载（你已有）
+		// string 重载
 		Printer &operator<<(const string &str)
 		{
 			print("%s", str.c_str());
