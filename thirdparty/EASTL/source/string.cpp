@@ -4,7 +4,7 @@
 
 
 #include <EASTL/internal/config.h>
-#include "klib/string.h"
+#include "libs/klib.hh"
 #include <EASTL/string.h>
 #include <EABase/eabase.h>
 

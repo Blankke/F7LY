@@ -7,10 +7,10 @@
 #define GETTYPENAME_H
 
 
+#include "libs/klib.hh"
 #include <EABase/eabase.h>
 #include <EASTL/type_traits.h>
 #include <EASTL/string.h>
-#include <stdlib.h>
 #include <typeinfo>
 
 

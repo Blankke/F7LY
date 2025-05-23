@@ -90,6 +90,7 @@
 #ifndef EASTL_STRING_H
 #define EASTL_STRING_H
 
+#include "libs/klib.hh"
 #include <EASTL/internal/config.h>
 #include <EASTL/allocator.h>
 #include <EASTL/iterator.h>
@@ -102,7 +103,6 @@ EA_DISABLE_ALL_VC_WARNINGS()
 #include <stdarg.h>             // vararg functionality.
 
 #include "libs/klib.hh"             // malloc, free.
-//#include <stdio.h>              // snprintf, etc.
 #include <ctype.h>              // toupper, etc.
 
 EA_DISABLE_GCC_WARNING(-Wtype-limits)

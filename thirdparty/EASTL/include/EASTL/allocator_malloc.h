@@ -7,6 +7,7 @@
 #define EASTL_ALLOCATOR_MALLOC_H
 
 
+#include "libs/klib.hh"
 #include <EABase/eahave.h>
 #include <EASTL/allocator.h>
 #include <stddef.h>
@@ -29,7 +30,6 @@
 	#if defined(EA_PLATFORM_POSIX) && !defined(EA_PLATFORM_APPLE)
 		// memalign is more consistently available than posix_memalign, though its location isn't consistent across 
 		// platforms and compiler libraries. Typically it's declared in one of three headers: stdlib.h, malloc.h, or malloc/malloc.h
-		#include <stdlib.h> // memalign, posix_memalign. 
 		#define EASTL_ALIGNED_MALLOC_AVAILABLE 1
 
 		#if EA_HAS_INCLUDE_AVAILABLE

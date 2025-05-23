@@ -3,6 +3,7 @@
 /////////////////////////////////////////////////////////////////////////////
 
 
+#include "libs/klib.hh"
 #include "TestSet.h"
 #include "EASTLTest.h"
 #include <EASTL/map.h>
@@ -13,7 +14,6 @@
 
 
 EA_DISABLE_ALL_VC_WARNINGS()
-#include <stdio.h>
 
 #ifndef EA_COMPILER_NO_STANDARD_CPP_LIBRARY
 	#include <set>

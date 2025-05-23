@@ -3,6 +3,7 @@
 /////////////////////////////////////////////////////////////////////////////
 
 
+#include "libs/klib.hh"
 #include "EASTLBenchmark.h"
 #include "EASTLTest.h"
 #include <EAStdC/EAStopwatch.h>
@@ -16,8 +17,6 @@
 #endif
 #include <algorithm>
 #include <vector>
-#include <stdio.h>
-#include <stdlib.h>
 #ifdef _MSC_VER
 	#pragma warning(pop)
 #endif

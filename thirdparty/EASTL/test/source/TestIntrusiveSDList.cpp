@@ -3,6 +3,7 @@
 /////////////////////////////////////////////////////////////////////////////
 
 
+#include "libs/klib.hh"
 #include "EASTLTest.h"
 #include <EASTL/bonus/intrusive_sdlist.h>
 #include <EASTL/string.h>
@@ -13,7 +14,6 @@
 #endif
 
 #include <stdarg.h>
-#include <stdio.h>
 
 #if defined(_MSC_VER)
 	#pragma warning(pop)

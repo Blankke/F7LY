@@ -5,6 +5,7 @@
 /////////////////////////////////////////////////////////////////////////////
 
 
+#include "libs/klib.hh"
 #include "EASTLBenchmark.h"
 #include "EASTLTest.h"
 #include <EAStdC/EAStopwatch.h>
@@ -18,8 +19,6 @@
 #include <EASTL/random.h>
 
 EA_DISABLE_ALL_VC_WARNINGS()
-#include <stdio.h>
-#include <stdlib.h>
 #include <string>
 #include <vector>
 #include <list>

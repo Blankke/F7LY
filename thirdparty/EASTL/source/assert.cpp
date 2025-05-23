@@ -3,6 +3,7 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 
+#include "libs/klib.hh"
 #include <EASTL/internal/config.h>
 #include <EASTL/string.h>
 #include <EABase/eabase.h>
@@ -22,7 +23,6 @@
 #elif defined(EA_PLATFORM_ANDROID)
 	#include <android/log.h>
 #else
-	#include <stdio.h>
 #endif
 
 

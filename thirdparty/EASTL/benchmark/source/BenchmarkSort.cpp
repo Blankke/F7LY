@@ -3,6 +3,7 @@
 /////////////////////////////////////////////////////////////////////////////
 
 
+#include "libs/klib.hh"
 #include <EASTL/bonus/sort_extra.h>
 #include <EASTL/sort.h>
 #include <EASTL/vector.h>
@@ -11,7 +12,6 @@
 #include "EASTLTest.h"
 
 EA_DISABLE_ALL_VC_WARNINGS()
-#include <stdlib.h>
 #include <algorithm>
 #include <functional>
 #include <vector>

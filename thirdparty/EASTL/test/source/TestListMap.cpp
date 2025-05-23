@@ -3,6 +3,7 @@
 /////////////////////////////////////////////////////////////////////////////
 
 
+#include "libs/klib.hh"
 #include "EASTLTest.h"
 #include <EASTL/utility.h>
 #include <EASTL/bonus/list_map.h>
@@ -12,7 +13,6 @@
 	#pragma warning(push, 0)
 #endif
 
-#include <stdio.h>
 
 #if defined(_MSC_VER)
 	#pragma warning(pop)

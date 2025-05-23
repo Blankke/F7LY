@@ -3,6 +3,7 @@
 /////////////////////////////////////////////////////////////////////////////
 
 
+#include "libs/klib.hh"
 #include "EASTLBenchmark.h"
 #include "EASTLTest.h"
 #include <EASTL/string.h>
@@ -11,7 +12,6 @@
 #ifdef _MSC_VER
 	#pragma warning(push, 0)
 #endif
-#include <stdio.h>
 #include <math.h>
 #include <float.h>
 #ifdef _MSC_VER

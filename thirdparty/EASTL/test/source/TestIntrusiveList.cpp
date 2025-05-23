@@ -3,12 +3,12 @@
 /////////////////////////////////////////////////////////////////////////////
 
 
+#include "libs/klib.hh"
 #include "EASTLTest.h"
 #include <EASTL/intrusive_list.h>
 #include <EABase/eabase.h>
 
 EA_DISABLE_ALL_VC_WARNINGS()
-#include <stdio.h>
 #include <stdarg.h>
 #include <stddef.h>
 

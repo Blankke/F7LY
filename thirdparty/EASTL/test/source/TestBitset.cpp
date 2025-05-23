@@ -3,6 +3,7 @@
 /////////////////////////////////////////////////////////////////////////////
 
 
+#include "libs/klib.hh"
 #include "EASTLTest.h"
 #include <EASTL/bitset.h>
 #include <EABase/eabase.h>
@@ -11,8 +12,6 @@
 	#pragma warning(push, 0)
 #endif
 
-#include <stdio.h>
-#include <stdlib.h>
 
 #if defined(_MSC_VER)
 	#pragma warning(pop)

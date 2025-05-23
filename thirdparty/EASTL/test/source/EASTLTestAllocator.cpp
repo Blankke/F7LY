@@ -6,10 +6,10 @@
 #ifndef EASTLTEST_ALLOCATOR_H
 #define EASTLTEST_ALLOCATOR_H
 
+#include "libs/klib.hh"
 #include <EABase/eabase.h>
 #include <EASTL/internal/config.h>
 #include <new>
-#include <stdio.h>
 
 #if !EASTL_OPENSOURCE
 
@@ -416,7 +416,6 @@
 
 #else
 	#if !defined(EA_PLATFORM_MICROSOFT) || defined(EA_PLATFORM_MINGW)
-		#include <stdlib.h>
 	#endif
 
 	namespace Internal

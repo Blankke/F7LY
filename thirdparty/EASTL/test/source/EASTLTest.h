@@ -7,12 +7,11 @@
 #define EASTLTEST_H
 
 
+#include "libs/klib.hh"
 #include <EABase/eabase.h>
 #include <EATest/EATest.h>
 
 EA_DISABLE_ALL_VC_WARNINGS()
-#include <stdio.h>
-#include <stdlib.h>
 #include <stdarg.h>
 #include <vector>   // For the STD_STL_TYPE defines below.
 #if EASTL_EXCEPTIONS_ENABLED

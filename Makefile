@@ -66,7 +66,7 @@ riscv:
 loongarch:
 	@$(MAKE) ARCH=loongarch build
 
-build: dirs $(EASTL_DIR)/libeastl.a $(KERNEL_BIN)
+build: dirs $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a $(KERNEL_BIN)
 
 dirs:
 	@mkdir -p $(BUILD_DIR)
@@ -92,15 +92,15 @@ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.s
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
-$(KERNEL_ELF): $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(EASTL_DIR)/libeastl.a
-	$(LD) $(LDFLAGS) -o $@ $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(EASTL_DIR)/libeastl.a
+$(KERNEL_ELF): $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
+	$(LD) $(LDFLAGS) -o $@ $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
 	$(SIZE) $@
 
 $(KERNEL_BIN): $(KERNEL_ELF)
 	$(OBJCOPY) -O binary $< $@
 
 export BUILDPATH := $(BUILD_DIR)
-$(EASTL_DIR)/libeastl.a:
+$(BUILD_DIR)/$(EASTL_DIR)/libeastl.a:
 	@$(MAKE) -C $(EASTL_DIR)
 
 run: build

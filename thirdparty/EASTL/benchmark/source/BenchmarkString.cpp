@@ -3,6 +3,7 @@
 /////////////////////////////////////////////////////////////////////////////
 
 
+#include "libs/klib.hh"
 #include "EASTLBenchmark.h"
 #include "EASTLTest.h"
 #include <EAStdC/EAStopwatch.h>
@@ -13,8 +14,6 @@
 EA_DISABLE_ALL_VC_WARNINGS()
 #include <algorithm>
 #include <string>
-#include <stdio.h>
-#include <stdlib.h>
 EA_RESTORE_ALL_VC_WARNINGS()
 
 
