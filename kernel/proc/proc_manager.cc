@@ -89,7 +89,13 @@ namespace proc
                 }
 
                 // 创建进程自己的页表（空的页表）
+
+
+                //debug
+                printfCyan("[user pgtbl]==>into proc_pagetable\n");
                 _proc_create_vm(p);
+
+
                 if (p->_pt.get_base() == 0)
                 {
                     freeproc(p);
@@ -185,17 +191,23 @@ namespace proc
     mem::PageTable ProcessManager::proc_pagetable(Pcb *p)
     {
         mem::PageTable pt = mem::k_vmm.vm_create();
+        if (pt.is_null())
+            printfRed("proc_pagetable: vm_create failed\n");
         if (pt.get_base() == 0)
             return 0;
 #ifdef RISCV
-        if (mem::k_vmm.map_pages(pt, TRAMPOLINE, PGSIZE, (uint64)trampoline, riscv::PteEnum::pte_user_m) == 0)
+        if (mem::k_vmm.map_pages(pt, TRAMPOLINE, PGSIZE, (uint64)trampoline, riscv::PteEnum::pte_readable_m|riscv::pte_executable_m) == 0)
         {
             mem::k_vmm.vmfree(pt, 0);
+            printfRed("proc_pagetable: map trampoline failed\n");
             return 0;
         }
+        printfGreen("trampoline: %p\n", trampoline);
+        printfGreen("TRAMPOLINE: %p\n", TRAMPOLINE);
         if (mem::k_vmm.map_pages(pt, TRAPFRAME, PGSIZE, (uint64)(p->get_trapframe()), PTE_R | PTE_W) == 0)
         {
             mem::k_vmm.vmfree(pt, 0);
+            printfRed("proc_pagetable: map trapframe failed\n");
             return 0;
         }
 

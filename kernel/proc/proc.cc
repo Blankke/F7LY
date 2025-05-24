@@ -43,7 +43,7 @@ namespace proc
             panic("pcb map kstack: no memory");
         mem::k_pmm.clear_page((void *)pa);
 
-        printfBlue("map kstack: %p, end: %p\n", _kstack, _kstack + PGSIZE-1);
+        // printfBlue("map kstack: %p, end: %p\n", _kstack, _kstack + PGSIZE-1);
         if (!mem::k_vmm.map_pages(pt, _kstack, PGSIZE, (uint64)pa,
                                   riscv::PteEnum::pte_readable_m |
                                       riscv::PteEnum::pte_writable_m))
