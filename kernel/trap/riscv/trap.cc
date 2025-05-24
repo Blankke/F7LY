@@ -172,6 +172,7 @@ void trap_manager::kerneltrap()
 
 void trap_manager::usertrap()
 {
+  printfMagenta("into usertrap\n");
   int which_dev = 0;
   if ((r_sstatus() & riscv::csr::sstatus_spp_m) != 0)
     panic("usertrap: not from user mode");
@@ -220,14 +221,16 @@ void trap_manager::usertrap()
       proc::k_scheduler.yield();
     }
   }
+  printfMagenta("left usertrap\n");
   usertrapret();
 }
 
 void trap_manager::usertrapret()
 {
+  // printfMagenta("into usertrapret\n");
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
   //Debug
-  printfYellow("[usertrapret] trampoline addr %p\n", trampoline);
+  // printfYellow("[usertrapret] trampoline addr %p\n", trampoline);
   mem::Pte pte = p->_pt.walk(TRAMPOLINE, 0);
 if (pte.is_null()|| pte.is_valid() == 0){
     panic("trampoline not mapped in user pagetable!");
@@ -250,6 +253,8 @@ if (pte.is_null()|| pte.is_valid() == 0){
   x |= riscv::csr::sstatus_spie_m;
   w_sstatus(x);
   w_sepc(p->_trapframe->epc);
+  
+  // printfYellow("[usertrapret] sepc: %p,saved sepc:%p\n", p->_trapframe->epc,r_sepc());
   // tell trampoline.S the user page table to switch to.
 
   //debug
@@ -257,7 +262,7 @@ if (pte.is_null()|| pte.is_valid() == 0){
 
   uint64 satp = MAKE_SATP(p->_pt.get_base());
   //debug
-  printfYellow("[usertrapret]satp: %p\n", satp);
+
   uint64 fn = TRAMPOLINE + (userret - trampoline);
   ((void (*)(uint64, uint64))fn)(TRAPFRAME + proc::k_pm.get_cur_cpuid() * sizeof(TrapFrame), satp);
 }
