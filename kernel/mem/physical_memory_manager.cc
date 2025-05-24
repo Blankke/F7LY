@@ -52,6 +52,7 @@ namespace mem
         pa_start += BSSIZE * PGSIZE;
         memset(_buddy, 0, BSSIZE * PGSIZE);
         _buddy->Initialize(pa_start);
+        printfGreen("[pmm] buddy system initialized, pa_start: %p\n", pa_start);
     }
 
     void *PhysicalMemoryManager::alloc_page()

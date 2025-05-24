@@ -33,6 +33,7 @@ namespace proc
         }
         _cur_pid = 1;
         _last_alloc_proc_gid = num_process - 1;
+        printfGreen("ProcessManager init\n");
     }
 
     Pcb *ProcessManager::get_cur_pcb()

@@ -51,7 +51,7 @@ namespace mem
         // printfYellow("sfence\n");
         sfence_vma();
 #endif 
-        printfGreen("[vmm] VirtualMemoryManager init success\n");
+        printfGreen("[vmm] VirtualMemoryManager init\n");
     }
 
     // 根据传入的 flags 标志，生成对应的页表权限（perm）值
