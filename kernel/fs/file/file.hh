@@ -1,19 +1,13 @@
-//
-// Created by Li Shuang ( pseudonym ) on 2024-05-19 
-// --------------------------------------------------------------
-// | Note: This code file just for study, not for commercial use 
-// | Contact Author: lishuang.mk@whu.edu.cn 
-// --------------------------------------------------------------
-//
+
 
 #pragma once 
 
-#include "file_defs.hh"
-#include "kstat.hh"
+#include "fs/file/file_defs.hh"
+#include "fs/kstat.hh"
 
 #include "ipc/pipe.hh"
 
-// #include <EASTL/string.h>
+#include <EASTL/string.h>
 #include <asm-generic/errno-base.h>
 namespace proc
 {
@@ -81,7 +75,7 @@ namespace fs
 		File( FileTypes type_, FileOps ops_ = FileOp::fileop_none ) : ops( ops_ ), refcnt( 0 ), data( type_ ) {}
 		File( FileTypes type_, int flags_ ) : ops( flags_ ), refcnt( 0 ), data( type_ ) {}
 		File( dentry *de_, int flags_ ) : flags( flags_ ), ops( flags_ ), refcnt( 0 ), data( de_ ) {}
-		File( pm::ipc::Pipe *pipe, int flags_ ) : flags( flags_ ), ops( flags_ ), refcnt( 0 ), data( pipe ) {}
+		File( proc::ipc::Pipe *pipe, int flags_ ) : flags( flags_ ), ops( flags_ ), refcnt( 0 ), data( pipe ) {}
 		~File() = default;
 
 		int write( uint64 buf, size_t len ) { return 0; };
@@ -104,7 +98,7 @@ namespace fs
 		char readable;
 		char writable;
 		fs::dentry * dentry;
-		pm::ipc::Pipe *pipe; // FD_PIPE
+		proc::ipc::Pipe *pipe; // FD_PIPE
 		// struct inode *ip;  // FD_INODE and FD_DEVICE
 		uint off;          // FD_INODE
 		short major;       // FD_DEVICE
@@ -130,7 +124,6 @@ namespace fs
 		void dup( File * f );
 		File * find_file( eastl::string path );
 		int unlink( eastl::string path );
-		void remove( eastl::string path );
 		bool has_unlinked( eastl::string path ) { return eastl::find( _unlink_list.begin(), _unlink_list.end(), path ) != _unlink_list.end(); };
 	};
 

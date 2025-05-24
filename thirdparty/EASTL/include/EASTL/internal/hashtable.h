@@ -1047,7 +1047,7 @@ namespace eastl
 		// took over ownership of pNodeNew, else pNodeNew is still owned by the caller to free or to pass 
 		// to another call to insert. pNodeNew need not be assigned the value by the caller, as the insert
 		// function will assign value to pNodeNew upon insertion into the hash table. pNodeNew may be 
-		// created by the user with the allocate_uninitialized_node function, and freed by the free_uninitialized_node function.
+		// Copy from the user with the allocate_uninitialized_node function, and freed by the free_uninitialized_node function.
 		insert_return_type insert(hash_code_t c, node_type* pNodeNew, const value_type& value);
 
 		template <class M> eastl::pair<iterator, bool> insert_or_assign(const key_type& k, M&& obj);

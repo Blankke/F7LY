@@ -5,7 +5,7 @@
 #include "platform.hh"
 #include "file/file_defs.hh"
 
-// #include <EASTL/string.h>
+#include <EASTL/string.h>
 namespace fs
 {
 	class FileSystem;

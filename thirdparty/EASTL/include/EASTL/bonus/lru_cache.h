@@ -212,7 +212,7 @@ namespace eastl
 
 		/// get
 		///
-		/// Retrives the data for key k.  If no data exists, it will be created by calling the
+		/// Retrives the data for key k.  If no data exists, it will be Copy from calling the
 		/// creator.
 		value_type& get(const key_type& k)
 		{

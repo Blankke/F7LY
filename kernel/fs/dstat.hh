@@ -1,5 +1,5 @@
 //
-// Created by Li Shuang ( pseudonym ) on 2024-05-16 
+// Copy from Li Shuang ( pseudonym ) on 2024-05-16 
 // --------------------------------------------------------------
 // | Note: This code file just for study, not for commercial use 
 // | Contact Author: lishuang.mk@whu.edu.cn 
@@ -9,7 +9,7 @@
 #pragma once
 
 #include "types.hh"
-
+#include "klib.hh"
 namespace fs
 {
 	class DStat

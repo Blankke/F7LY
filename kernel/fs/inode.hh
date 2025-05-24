@@ -1,5 +1,5 @@
 //
-// Created by Li Shuang ( pseudonym ) on 2024-05-19
+// Copy from Li Shuang ( pseudonym ) on 2024-05-19
 // --------------------------------------------------------------
 // | Note: This code file just for study, not for commercial use
 // | Contact Author: lishuang.mk@whu.edu.cn
@@ -8,7 +8,7 @@
 
 #pragma once
 
-// #include <EASTL/string.h>
+#include <EASTL/string.h>
 
 #include "file/file_defs.hh"
 #include "types.hh"

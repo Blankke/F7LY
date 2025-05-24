@@ -342,4 +342,18 @@ namespace proc
         }
     }
 
+    	int ProcessManager::alloc_fd( Pcb *p, fs::file *f )
+	{
+		int fd;
+
+		for ( fd = 3; fd < (int) max_open_files; fd++ )
+		{
+			if ( p->_ofile[fd] == nullptr )
+			{
+				p->_ofile[fd] = f;
+				return fd;
+			}
+		}
+		return -1;
+	}
 }

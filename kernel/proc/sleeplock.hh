@@ -1,5 +1,5 @@
 //
-// Created by Li shuang ( pseudonym ) on 2024-04-23 
+// Copy from Li shuang ( pseudonym ) on 2024-04-23 
 // --------------------------------------------------------------
 // | Note: This code file just for study, not for commercial use 
 // | Contact Author: lishuang.mk@whu.edu.cn 
@@ -29,4 +29,4 @@ namespace proc
 		void release();
 		bool is_holding();
 	};
-} // namespace pm
+} // namespace proc

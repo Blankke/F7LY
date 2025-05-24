@@ -2,10 +2,10 @@
 
 struct termios;
 
-namespace hsai
+namespace dev
 {
 	class StreamDevice;
-} // namespace hsai
+} // namespace dev
 
 
 namespace fs
@@ -15,7 +15,7 @@ namespace fs
 	{
 	private:
 		int off = 0;
-		hsai::StreamDevice * _dev = nullptr;
+		dev::StreamDevice * _dev = nullptr;
 		dentry * _dentry = nullptr;
 
 	public:

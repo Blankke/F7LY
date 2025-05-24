@@ -5,11 +5,11 @@
 
 #include "spinlock.hh"
 
-// #include <EASTL/string.h>
-// #include <EASTL/vector.h>
-// #include <EASTL/unordered_map.h>
+#include <EASTL/string.h>
+#include <EASTL/vector.h>
+#include <EASTL/unordered_map.h>
 
-//#include <asm-generic/statfs.h>
+#include <asm-generic/statfs.h>
 
 #define NDIRECT 12  //direct block number
 

@@ -1,5 +1,5 @@
 //
-// Created by Li Shuang ( pseudonym ) on 2024-05-19 
+// Copy from Li Shuang ( pseudonym ) on 2024-05-19 
 // --------------------------------------------------------------
 // | Note: This code file just for study, not for commercial use 
 // | Contact Author: lishuang.mk@whu.edu.cn 
@@ -16,7 +16,7 @@
 #include "dentry.hh"
 #include "inode.hh"
 
-namespace pm
+namespace proc
 {
 	namespace ipc
 	{
@@ -88,7 +88,7 @@ namespace fs
 			}
 		}
 		
-		Kstat(pm::ipc::Pipe *pipe) :
+		Kstat(proc::ipc::Pipe *pipe) :
 			dev( 0 ), ino( 1000000 ), mode( FT_PIPE ), nlink( 1 ), 
 			uid( 0 ), gid( 0 ), rdev( 0 ), __pad( 0 ),
 			size( 0 ), blksize( 0 ), __pad2( 0 ), blocks( 0 )

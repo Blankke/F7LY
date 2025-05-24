@@ -1,7 +1,7 @@
 #include "fs/file/file.hh"
 #include "ipc/pipe.hh"
 
-using namespace pm::ipc;
+
 
 namespace fs
 {
@@ -9,7 +9,7 @@ namespace fs
 	{
 	private:
 		uint64 _off = 0;
-		Pipe *_pipe;
+		proc::ipc::Pipe *_pipe;
 	public:
 		pipe_file( FileAttrs attrs, Pipe *pipe_ ) : file( attrs ), _pipe( pipe_ ) { new ( &_stat ) Kstat( _pipe ); dup(); }
 		pipe_file( Pipe *pipe_ ) : file( FileAttrs( FileTypes::FT_PIPE, 0777 ) ), _pipe( pipe_ ) { new ( &_stat ) Kstat( _pipe ); dup(); }

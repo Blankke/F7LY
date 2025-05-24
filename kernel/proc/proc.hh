@@ -4,6 +4,12 @@
 #include "trapframe.hh"
 #include "context.hh"
 #include "spinlock.hh"
+
+namespace fs
+{
+	class dentry;
+	class file;
+} // namespace fs
 namespace proc
 {
     enum ProcState
@@ -33,9 +39,9 @@ namespace proc
         int _gid = num_process; // 全局ID，用于在进程池中唯一标识进程
 
         // TODO,文件系统相关
-        // fs::Dentry *_cwd;                     // 当前工作目录的目录项
+		fs::dentry	  *_cwd; // current working directory
         char _cwd_name[256];              // 当前工作目录的名称
-        // fs::xv6_file *_ofile[max_open_files]; // 进程打开的文件列表 (文件描述符 -> 文件结构)
+        fs::file *_ofile[max_open_files]; // 进程打开的文件列表 (文件描述符 -> 文件结构)
 
         // 进程状态信息
         enum ProcState _state; // 进程当前状态 (unused, used, sleeping, runnable, running, zombie)
@@ -82,7 +88,7 @@ namespace proc
         Pcb();
         void init(const char *lock_name, uint gid);
         void map_kstack(mem::PageTable &pt);
-
+		fs::dentry	  *get_cwd() { return _cwd; }
         int get_priority();
 
     public:

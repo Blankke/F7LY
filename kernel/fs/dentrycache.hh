@@ -1,11 +1,11 @@
 #include "types.hh"
 #include "fs/dentry.hh"
 
-// #include <EASTL/string.h>
-// #include <EASTL/list.h>
-// #include <EASTL/vector.h>
-// #include <EASTL/unique_ptr.h>
-// #include <EASTL/tuple.h>
+#include <EASTL/string.h>
+#include <EASTL/list.h>
+#include <EASTL/vector.h>
+#include <EASTL/unique_ptr.h>
+#include <EASTL/tuple.h>
 
 #include "spinlock.hh"
 
@@ -40,7 +40,7 @@ namespace fs
 
         class dentryCache
         {
-            hsai::SpinLock _lock;
+            SpinLock _lock;
             list<dentryCacheElement *> leafList_;  // leaf list
             list<dentryCacheElement *> intenalList_; // interal list
             list<dentryCacheElement *> freeList_; // free list

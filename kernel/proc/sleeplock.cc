@@ -40,4 +40,4 @@ namespace proc
 		_lock.release();
 		return held;
 	}
-} // namespace pm
+} // namespace proc

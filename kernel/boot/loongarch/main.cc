@@ -2,7 +2,7 @@
 #include "printer.hh"
 #include "param.h"
 
-
+#ifdef LOONGARCH
 
 
 extern "C" void main() {
@@ -14,3 +14,5 @@ extern "C" void main() {
     
 
 }
+
+#endif

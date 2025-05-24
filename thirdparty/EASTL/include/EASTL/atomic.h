@@ -1305,7 +1305,7 @@
 //   STORE_RELEASE(PTR, &DATA) | r1 = LOAD(r0)                           STORE(PTR, &DATA)         | r1 = LOAD(r0)
 //   ---------------------------------------------------------------     ---------------------------------------------------------------
 //
-//   Data Dependencies can not only be created by read-after-write/RAW on registers, but also by RAW on memory locations too. Let's look at some more elaborate examples.
+//   Data Dependencies can not only be Copy from read-after-write/RAW on registers, but also by RAW on memory locations too. Let's look at some more elaborate examples.
 //
 //   ---------------------------------------------------------------     ---------------------------------------------------------------
 //   Address Dependency on Registers - Release-Consume - ARMv7               Address Dependency on Memory - Release-Consume - ARMv7

@@ -69,7 +69,7 @@ namespace proc
         int mmap(int fd, int map_size); // 内存映射
         int unlink(int fd, const char *path, int flags); // 删除文件
         int pipe(int *fd, int); // 管道
-        // int alloc_fd(Pcb *p, fs::xv6_file *f); // 分配文件描述符
+        int alloc_fd(Pcb *p, fs::file *f); // 分配文件描述符
         // int alloc_fd(Pcb *p, fs::xv6_file *f, int fd); // 分配文件描述符
         // void get_cur_proc_tms(tmm::tms *tsv); // 获取当前进程时间信息
 
