@@ -5,7 +5,7 @@
 #include "fs/file/file_defs.hh"
 #include "fs/kstat.hh"
 
-#include "ipc/pipe.hh"
+#include "proc/pipe.hh"
 
 #include <EASTL/string.h>
 #include <asm-generic/errno-base.h>

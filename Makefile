@@ -3,7 +3,7 @@ EASTL_DIR := thirdparty/EASTL
 ARCH ?= riscv
 
 ifeq ($(ARCH),riscv)
-  CROSS_COMPILE := riscv64-unknown-elf-
+  CROSS_COMPILE := riscv64-linux-gnu-
   ARCH_CFLAGS := -DRISCV -mcmodel=medany
   OUTPUT_PREFIX := riscv
   QEMU_CMD := qemu-system-riscv64 -machine virt -m 128M -nographic -smp 1 -bios default -kernel
@@ -26,13 +26,13 @@ SIZE    := $(CROSS_COMPILE)size
 # ===== 路径定义 =====
 KERNEL_DIR := kernel
 BUILD_DIR := $(shell pwd)/build/$(OUTPUT_PREFIX)
-ARCH_DIRS := boot/$(ARCH) hal/$(ARCH) link/$(ARCH) mem/$(ARCH) proc/$(ARCH) trap/$(ARCH) sys/$(ARCH) devs/$(ARCH) 
+ARCH_DIRS := boot/$(ARCH) hal/$(ARCH) link/$(ARCH) mem/$(ARCH) proc/$(ARCH) trap/$(ARCH) sys/$(ARCH) devs/$(ARCH) fs/$(ARCH)
 COMMON_DIRS := mem libs devs trap hal proc sys 
 SUBDIRS := $(ARCH_DIRS) $(COMMON_DIRS)
 
 LINK_SCRIPT := $(KERNEL_DIR)/link/$(ARCH)/kernel.ld
 CFLAGS := -Wall -Werror -ffreestanding -O2 -fno-builtin -g -fno-stack-protector $(ARCH_CFLAGS)
-CXXFLAGS := $(CFLAGS) -std=c++17 \
+CXXFLAGS := $(CFLAGS) -std=c++17 \  
             -DEA_PLATFORM_LINUX -DEA_PLATFORM_POSIX \
             -DEA_PROCESSOR_RISCV -DEA_ENDIAN_LITTLE=1 \
             -Wno-deprecated-declarations -Wno-strict-aliasing \

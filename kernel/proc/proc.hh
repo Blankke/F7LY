@@ -5,10 +5,11 @@
 #include "context.hh"
 #include "spinlock.hh"
 #include <EASTL/string.h>
+#include "signal.hh"
 namespace fs
 {
-	class dentry;
-	class file;
+    class dentry;
+    class file;
 } // namespace fs
 namespace proc
 {
@@ -35,16 +36,14 @@ namespace proc
         // friend Scheduler;
 
     public:
-        SpinLock _lock;        // 进程控制块的锁，用于并发访问控制
+        SpinLock _lock;         // 进程控制块的锁，用于并发访问控制
         int _gid = num_process; // 全局ID，用于在进程池中唯一标识进程
 
         // TODO,文件系统相关
-		fs::dentry	  *_cwd; // current working directory
+        fs::dentry *_cwd;                 // current working directory
         char _cwd_name[256];              // 当前工作目录的名称
         fs::file *_ofile[max_open_files]; // 进程打开的文件列表 (文件描述符 -> 文件结构)
-        eastl::string  exe; // absolute path of the executable file
-
-
+        eastl::string exe;                // absolute path of the executable file
 
         // 进程状态信息
         enum ProcState _state; // 进程当前状态 (unused, used, sleeping, runnable, running, zombie)
@@ -52,14 +51,14 @@ namespace proc
         int _killed;           // 进程是否被标记为kill (非零表示被kill)
         int _xstate;           // 进程退出状态，用于父进程wait()获取
         int _pid;              // 进程ID (Process ID)
-        Pcb *_parent;           // 父进程的PCB指针
+        Pcb *_parent;          // 父进程的PCB指针
 
         char _name[16]; // 进程名称 (用于调试)
 
         // 内存管理相关
         uint64 _kstack = 0;    // 内核栈的虚拟地址
         uint64 _sz;            // 进程用户空间的内存大小 (字节)
-        mem::PageTable _pt;     // 用户空间的页表
+        mem::PageTable _pt;    // 用户空间的页表
         TrapFrame *_trapframe; // 保存用户态 TrapFrame 的地址 (用于系统调用和异常处理)
 
         // 上下文切换
@@ -87,24 +86,28 @@ namespace proc
         // 虚拟内存区域 (VMA) - 注释中提出了疑问，这里保留但需要进一步理解其用途
         struct vma *vm[10]; // 虚拟内存区域数组
 
+        // signal处理相关
+        proc::ipc::signal::sigaction *_sigactions[proc::ipc::signal::SIGRTMAX];
+        uint64 sigmask;
+
     public:
         Pcb();
         void init(const char *lock_name, uint gid);
         void map_kstack(mem::PageTable &pt);
-		fs::dentry	  *get_cwd() { return _cwd; }
+        fs::dentry *get_cwd() { return _cwd; }
         int get_priority();
 
     public:
         Context *get_context() { return &_context; }
 
-
     public:
         // fs::Dentry *get_cwd() { return _cwd; }
-        void kill() { 
+        void kill()
+        {
             _lock.acquire();
-            _killed = 1; 
+            _killed = 1;
             _lock.release();
-            }
+        }
         Pcb *get_parent() { return _parent; }
         void set_state(ProcState state) { _state = state; }
         void set_xstate(int xstate) { _xstate = xstate; }
@@ -114,7 +117,7 @@ namespace proc
         uint get_ppid() { return _parent ? _parent->_pid : 0; }
         TrapFrame *get_trapframe() { return _trapframe; }
         uint64 get_kstack() { return _kstack; }
-        mem::PageTable& get_pagetable() { return _pt; }
+        mem::PageTable &get_pagetable() { return _pt; }
         ProcState get_state() { return _state; }
         char *get_name() { return _name; }
         uint64 get_size() { return _sz; }
@@ -132,15 +135,15 @@ namespace proc
         void set_last_user_tick(uint64 tick) { _last_user_tick = tick; }
         void set_user_ticks(uint64 ticks) { _user_ticks = ticks; }
 
-        bool is_killed() { 
+        bool is_killed()
+        {
             int k;
             _lock.acquire();
             k = _killed;
             _lock.release();
             return k;
-            }
+        }
     };
 
     extern Pcb k_proc_pool[num_process]; // 全局进程池
 }
-
