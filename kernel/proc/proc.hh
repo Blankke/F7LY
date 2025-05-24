@@ -4,7 +4,7 @@
 #include "trapframe.hh"
 #include "context.hh"
 #include "spinlock.hh"
-
+#include <EASTL/string.h>
 namespace fs
 {
 	class dentry;
@@ -42,6 +42,9 @@ namespace proc
 		fs::dentry	  *_cwd; // current working directory
         char _cwd_name[256];              // 当前工作目录的名称
         fs::file *_ofile[max_open_files]; // 进程打开的文件列表 (文件描述符 -> 文件结构)
+        eastl::string  exe; // absolute path of the executable file
+
+
 
         // 进程状态信息
         enum ProcState _state; // 进程当前状态 (unused, used, sleeping, runnable, running, zombie)

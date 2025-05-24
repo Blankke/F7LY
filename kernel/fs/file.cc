@@ -20,10 +20,10 @@ namespace fs
 	// 	int RC = -1;
 	// 	if ( !ops.fields.w )
 	// 	{
-	// 		log_error( "File is not allowed to write!\n" );
+	// 		printfRed( "File is not allowed to write!\n" );
 	// 		return RC;
 	// 	}
-	// 	log_info( "write %d bytes...\n", len );
+	// 	Info( "write %d bytes...\n", len );
 
 	// 	switch ( type )
 	// 	{
@@ -56,17 +56,17 @@ namespace fs
 	// 			dev::StreamDevice * sdev = ( dev::StreamDevice * ) dev::k_devm.get_device( major );
 	// 			if ( sdev == nullptr )
 	// 			{
-	// 				log_error( "file write: null device for device number %d", major );
+	// 				printfRed( "file write: null device for device number %d", major );
 	// 				return -1;
 	// 			}
 	// 			if ( sdev->type() != dev::dev_char )
 	// 			{
-	// 				log_warn( "file write: device %d is not a char-dev", major );
+	// 				printfYellow( "file write: device %d is not a char-dev", major );
 	// 				return -2;
 	// 			}
 	// 			if ( !sdev->support_stream() )
 	// 			{
-	// 				log_warn( "file write: device %d is not a stream-dev", major );
+	// 				printfYellow( "file write: device %d is not a stream-dev", major );
 	// 				return -3;
 	// 			}
 
@@ -86,16 +86,16 @@ namespace fs
 	// 	int RC = -1;
 	// 	if ( !ops.fields.r )
 	// 	{
-	// 		log_error( "File is not allowed to read!\n" );
+	// 		printfRed( "File is not allowed to read!\n" );
 	// 		return RC;
 	// 	}
 	// 	switch ( data.get_Type() )
 	// 	{
 	// 		case FileTypes::FT_STDIN:
-	// 			log_error( "stdin is not allowed to read!\n" );
+	// 			printfRed( "stdin is not allowed to read!\n" );
 	// 			break;
 	// 		case FileTypes::FT_DEVICE:
-	// 			log_error( "Device is not allowed to read!\n" );
+	// 			printfRed( "Device is not allowed to read!\n" );
 	// 			break;
 	// 		case FileTypes::FT_PIPE:
 	// 		{
@@ -142,17 +142,17 @@ namespace fs
 				dev::StreamDevice * sdev = ( dev::StreamDevice * ) dev::k_devm.get_device( major );
 				if ( sdev == nullptr )
 				{
-					log_error( "file write: null device for device number %d", major );
+					printfRed( "file write: null device for device number %d", major );
 					return -1;
 				}
 				if ( sdev->type() != dev::dev_char )
 				{
-					log_warn( "file write: device %d is not a char-dev", major );
+					printfYellow( "file write: device %d is not a char-dev", major );
 					return -2;
 				}
 				if ( !sdev->support_stream() )
 				{
-					log_warn( "file write: device %d is not a stream-dev", major );
+					printfYellow( "file write: device %d is not a stream-dev", major );
 					return -3;
 				}
 
@@ -186,7 +186,7 @@ namespace fs
 
 			case FD_DEVICE:
 			{
-				log_panic( "file device read not implement" );
+				panic( "file device read not implement" );
 			} break;
 
 			case FD_INODE:
@@ -238,7 +238,7 @@ namespace fs
 		_lock.acquire();
 		if ( f->refcnt <= 0 )
 		{
-			log_error( "[file pool] free no-ref file" );
+			printfRed( "[file pool] free no-ref file" );
 			_lock.release();
 			return;
 		}

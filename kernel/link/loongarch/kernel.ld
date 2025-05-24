@@ -1,3 +1,4 @@
+
 OUTPUT_ARCH( "loongarch" )
 ENTRY( _entry )
 

@@ -1,6 +1,6 @@
 
 #pragma once 
-
+#ifdef LOONGARCH
 #include "types.hh"
 #include "pte.hh"
 
@@ -52,3 +52,5 @@ namespace mem
 
 	extern PageTable k_pagetable;
 }
+
+#endif // LOONGARCH

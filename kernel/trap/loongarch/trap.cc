@@ -1,3 +1,4 @@
+#ifdef LOONGARCH
 #include "types.hh"
 #include "trap.hh"
 #include "platform.hh"
@@ -274,3 +275,4 @@ void trap_manager::kerneltrap()
   w_csr_era(era);
   w_csr_prmd(prmd);
 }
+#endif

@@ -5,7 +5,7 @@
 // | Contact Author: lishuang.mk@whu.edu.cn 
 // --------------------------------------------------------------
 //
-
+#ifdef LOONGARCH
 #include "physical_memory_manager.hh"
 #include "pagetable.hh"
 #include "pte.hh"
@@ -176,3 +176,5 @@ namespace mem
 		return true;
 	}
 }
+
+#endif // LOONGARCH

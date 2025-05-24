@@ -13,7 +13,7 @@
 #include "file/file_defs.hh"
 #include "types.hh"
 
-namespace mm
+namespace mem
 {
 	class UserspaceStream;
 }
@@ -48,7 +48,7 @@ namespace fs
 		virtual size_t nodeRead( uint64 dst_, size_t off_, size_t len_ )  = 0;
 		virtual size_t nodeWrite( uint64 src_, size_t off_, size_t len_ ) = 0;
 
-		using ubuf = mm::UserspaceStream;
+		using ubuf = mem::UserspaceStream;
 		struct linux_dirent64
 		{
 			u64	 d_ino;	   /* 64-bit inode number */

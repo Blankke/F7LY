@@ -1,3 +1,4 @@
+#ifdef LOONGARCH
 .section merrentry
 .globl machine_trap
 .globl handle_merr
@@ -5,3 +6,4 @@
 handle_merr:
     bl machine_trap
     ertn
+#endif

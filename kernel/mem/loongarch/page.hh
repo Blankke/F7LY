@@ -7,7 +7,7 @@
 //
 
 #pragma once 
-
+#ifdef LOONGARCH
 #include "types.hh"
 #include "spinlock.hh"
 
@@ -86,3 +86,5 @@ namespace mem
 
 	// };
 }
+
+#endif // LOONGARCH

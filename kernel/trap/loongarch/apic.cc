@@ -1,3 +1,4 @@
+#ifdef LOONGARCH
 #include "types.hh"
 #include "param.h"
 #include "memlayout.hh"
@@ -30,3 +31,4 @@ apic_complete(uint64 irq)
 {
   *(volatile uint64*)(LS7A_INT_CLEAR_REG) = (irq);
 }
+#endif

@@ -168,4 +168,4 @@ uint64 pci_device_probe(uint16 vendor_id, uint16 device_id);
 void pci_set_msix(struct pci_msix *msix, uint32 pci_base, uint32 pos, trap_handler_fn *msix_isr);
 uint32 pci_alloc_irq_number(void);
 uint64 pci_alloc_mmio(uint64 sz);
-#endif
+#endif // LOONGARCH

@@ -3,6 +3,7 @@
 	# kernel.ld causes this to be aligned
         # to a page boundary.
         #
+        #ifdef LOONGARCH
 #include "asm.h"
 
 .section u_eentry
@@ -140,4 +141,4 @@ userret:
         # return to user mode and user pc.
         # usertrapret() set up prmd and era.
         ertn
-
+#endif

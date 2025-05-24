@@ -1,3 +1,4 @@
+#ifdef LOONGARCH
 #include "asm.h"
 
 .section tlbrentry
@@ -20,3 +21,4 @@ handle_tlbr:
 	csrrd	$t0, LOONGARCH_CSR_TLBRSAVE
 	ertn
 	
+#endif

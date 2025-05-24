@@ -60,7 +60,7 @@ namespace fs
 
 		// 	auto lam2 = [ & ] () -> void
 		// 	{
-		// 		log_trace( "buffer : read from disk. LBA : %x", lba );
+		// 		printfBlue( "buffer : read from disk. LBA : %x", lba );
 		// 		dma_finish = true;
 		// 	};
 
@@ -177,7 +177,7 @@ namespace fs
 		node = _buffer_pool[blk].search_buffer( dev, blk, tag );
 		if ( node != nullptr )
 		{ // 命中 buffer
-			// log_info( "BufferManager : 命中buffer ([%d][%d])", blk,
+			// Info( "BufferManager : 命中buffer ([%d][%d])", blk,
 			// node->_buf_index );
 
 			if ( _buf_is_disk_own( blk, node->_buf_index ) )

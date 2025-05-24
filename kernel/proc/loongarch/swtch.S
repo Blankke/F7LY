@@ -3,7 +3,7 @@
 #   void swtch(struct context *old, struct context *new);
 # # Save current registers in old. Load from new.	
 
-
+#ifdef LOONGARCH
 .globl swtch
 swtch:
         st.d $ra, $a0, 0
@@ -35,3 +35,4 @@ swtch:
         jirl $zero, $ra, 0
 
 	
+#endif

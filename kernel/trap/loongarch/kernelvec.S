@@ -2,6 +2,7 @@
         # interrupts and exceptions while in privilege0
         # push all registers, call kerneltrap(), restore, return.
         #
+        #ifdef LOONGARCH
 .section k_eentry
 .globl kerneltrap
 .globl kernelvec
@@ -83,3 +84,4 @@ kernelvec:
 
         // return to whatever we were doing in the kernel.
         ertn
+#endif

@@ -1,3 +1,4 @@
+#ifdef LOONGARCH
 #include "types.hh"
 #include "param.h"
 #include "mem/memlayout.hh"
@@ -29,3 +30,4 @@ void extioi_complete(uint64 irq)
 {
     // iocsr_writeq(irq, LOONGARCH_IOCSR_EXTIOI_ISR_BASE);
 }
+#endif

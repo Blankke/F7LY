@@ -1,4 +1,5 @@
 #pragma once
+#ifdef LOONGARCH
 #include "types.hh"
 #include "devs/spinlock.hh"
 
@@ -28,3 +29,4 @@ private:
 };
 
 extern trap_manager trap_mgr; // 创建一个静态的对象, 用于全局访问(其实相当于面向过程, 只是封装了一下)
+#endif

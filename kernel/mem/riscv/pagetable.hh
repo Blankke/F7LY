@@ -62,3 +62,9 @@ namespace mem
 
 	extern PageTable k_pagetable;
 }
+
+	constexpr bool is_page_align( uint64 addr )
+	{
+		ulong pg_sz =PGSIZE;
+		return ( addr & ( pg_sz - 1 ) ) == 0;
+	}

@@ -1,5 +1,5 @@
 #include "asm.hh"
-
+#ifdef LOONGARCH
 .section .text
 .global _entry
 _entry:
@@ -49,3 +49,4 @@ boot_stack:
     .space 4096 * 4 * 4  # 最多支持16核？
     .globl boot_stack_top
 boot_stack_top:
+#endif 

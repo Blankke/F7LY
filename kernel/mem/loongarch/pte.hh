@@ -7,7 +7,7 @@
 //
 
 #pragma once 
-
+#ifdef LOONGARCH
 #include "types.hh"
 #include "la_csr.hh"
 #include "platform.hh"
@@ -53,3 +53,4 @@ namespace mem
 
 	};
 }
+#endif // LOONGARCH

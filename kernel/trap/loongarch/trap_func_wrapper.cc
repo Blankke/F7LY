@@ -1,3 +1,4 @@
+#ifdef LOONGARCH
 #include "trap_func_wrapper.hh"
 #include "trap.hh"
 
@@ -18,3 +19,4 @@ extern "C"{
         trap_mgr.usertrapret();
     }
 }
+#endif

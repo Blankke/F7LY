@@ -40,21 +40,21 @@ namespace mem
 	{
 		// if ( size < pg_size )
 		// {
-		// 	log_warn(
+		// 	printfYellow(
 		// 		"dynamic memory allocation not implement.\n"
 		// 		"too small memory allocating will not success.\n"
 		// 		">> request size = %d bytes", size
 		// 	);
 		// 	return nullptr;
 		// }
-		// log_trace( "申请内存分配 %d bytes", size );
+		// printfBlue( "申请内存分配 %d bytes", size );
 		// return _k_allocator_coarse.allocate_pages( ( size + pg_size - 1 ) / pg_size );
 		return _k_allocator_fine.malloc( size );
 	}
 
 	void HeapMemoryManager::free( void *p )
 	{
-		// log_trace( "内存释放" );
+		// printfBlue( "内存释放" );
 		_k_allocator_fine.free( p );
 	}
-} // namespace mm
+} // namespace mem
