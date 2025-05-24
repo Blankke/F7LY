@@ -23,29 +23,14 @@ void main() {
     printfWhite("\n\n");  // 底部空白
     trap_mgr.init();// trap初始化
     trap_mgr.inithart();// 初始化每个核上的csr
-    printfRed("trap YOU!\n");
 
     plic_mgr.init();// plic初始化
     plic_mgr.inithart();// 初始化每个核上的csr
-    printfRed("plic YOU!\n");
-    
+   
     mem::k_pmm.init();
-    printfYellow("[pmm] PhysicalMemoryManager init success\n");
     mem::k_vmm.init("virtual_memory_manager");
-    printfYellow("[vmm] VirtualMemoryManager init success\n");
     mem::k_hmm.init("heap_memory_manager",HEAP_START);
-    printfYellow("[hmm] HeapMemoryManager init success,heap_start: %p\n",HEAP_START);
 
     proc::k_pm.init("next pid", "wait lock");
-    printfMagenta("k_pm you\n");
 
-    mem::PageTable* pt = new mem::PageTable();
-    pt->set_base(0x80000000);
-    printfYellow("pt->addr: %p\n",pt);
-    delete pt;
-    string str("gkq全世界最帅");
-    k_printer<<str<<Printer::endl;
-
-    eastl::string str1 = "Hello, EASTL!";
-    printf("String: %s\n", str1.c_str());
 }

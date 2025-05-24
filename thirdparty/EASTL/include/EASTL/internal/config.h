@@ -58,7 +58,7 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 #ifndef EASTL_EABASE_DISABLED
-	#include <EABase/eabase.h>
+#include <EABase/eabase.h>
 #endif
 #include <EABase/eahave.h>
 

@@ -26,6 +26,7 @@ void trap_manager::init()
   ticks = 0;
   timeslice = 0;
   tickslock.init("tickslock");
+  printfGreen("trap manager init\n");
 }
 
 // 架构相关, 设置csr
@@ -35,6 +36,7 @@ void trap_manager::inithart()
   w_sstatus(r_sstatus() | SSTATUS_SIE);
   w_sie(r_sie() | SIE_SEIE | SIE_STIE | SIE_SSIE);
   set_next_timeout();
+  printfGreen("trap manager inithart\n");
 }
 
 // 时钟到期后, 重新设置下次超时
