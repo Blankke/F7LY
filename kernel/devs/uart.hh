@@ -1,7 +1,7 @@
 #pragma once
 
 #include "spinlock.hh"
-
+#include "types.hh"
 class UartManager
 {
 private:

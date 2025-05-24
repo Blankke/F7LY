@@ -11,6 +11,7 @@ typedef void (*hook_t)(void);
 typedef xlen_t addr_t;
 typedef unsigned int   uint;
 typedef unsigned short ushort;
+typedef unsigned long ulong;
 typedef unsigned char  uchar;
 typedef unsigned short wchar;
 typedef unsigned char uint8;

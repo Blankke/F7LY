@@ -11,7 +11,7 @@
 #include "trap/plic.hh"
 #include "proc/proc.hh"
 #include "proc/proc_manager.hh"
-
+#include <EASTL/string.h>
 // 注意华科的main函数可能有问题, 注意多核初始化
 void main() {
 
@@ -45,4 +45,7 @@ void main() {
     delete pt;
     string str("gkq全世界最帅");
     k_printer<<str<<Printer::endl;
+
+    eastl::string str1 = "Hello, EASTL!";
+    printf("String: %s\n", str1.c_str());
 }

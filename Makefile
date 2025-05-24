@@ -32,10 +32,14 @@ SUBDIRS := $(ARCH_DIRS) $(COMMON_DIRS)
 
 LINK_SCRIPT := $(KERNEL_DIR)/link/$(ARCH)/kernel.ld
 CFLAGS := -Wall -Werror -ffreestanding -O2 -fno-builtin -g -fno-stack-protector $(ARCH_CFLAGS)
-CXXFLAGS := $(CFLAGS) -fno-exceptions -fno-rtti
+CXXFLAGS := $(CFLAGS) -std=c++17 \
+            -DEA_PLATFORM_LINUX -DEA_PLATFORM_POSIX \
+            -DEA_PROCESSOR_RISCV -DEA_ENDIAN_LITTLE=1 \
+            -Wno-deprecated-declarations -Wno-strict-aliasing \
+            -fno-exceptions -fno-rtti
 LDFLAGS := -z max-page-size=4096 -nostdlib -T $(LINK_SCRIPT) --gc-sections
 INCLUDES := -I$(KERNEL_DIR) $(foreach dir,$(SUBDIRS),-I$(KERNEL_DIR)/$(dir))
-INCLUDES += -I$(EASTL_DIR)/include -I$(EASTL_DIR)/include/EASTL
+INCLUDES += -I$(EASTL_DIR)/include -I$(EASTL_DIR)/include/EASTL -I$(EASTL_DIR)/test/packages/EABase/include/Common
 
 # ===== 文件收集规则 =====
 SRCS := $(foreach dir,$(SUBDIRS),$(wildcard $(KERNEL_DIR)/$(dir)/*.[csS])) \
