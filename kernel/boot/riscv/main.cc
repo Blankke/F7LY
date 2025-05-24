@@ -33,4 +33,12 @@ void main() {
 
     proc::k_pm.init("next pid", "wait lock");
 
+    printfMagenta("\n"
+    "╦ ╦╔═╗╦  ╔═╗╔═╗╔╦╗╔═╗\n"
+    "║║║║╣ ║  ║  ║ ║║║║║╣\n"
+    "╚╩╝╚═╝╩═╝╚═╝╚═╝╩ ╩╚═╝\n"
+    "\n"
+    "=== SYSTEM BOOT COMPLETE ===\n"
+    "Kernel space successfully initialized\n"
+);// ANSI Shadow 字体风格
 }

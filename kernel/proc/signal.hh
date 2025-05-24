@@ -21,7 +21,7 @@ namespace proc
             // 简化版 sigset_t，实际你可以用 bitset 或其他方式扩展
             typedef struct
             {
-                uint64_t sig[1]; // 最多 64 个信号
+                uint64 sig[1]; // 最多 64 个信号
             } sigset_t;
 
             // 简化版 sigaction
