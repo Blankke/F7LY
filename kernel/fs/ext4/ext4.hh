@@ -288,9 +288,9 @@ namespace fs
 
 		struct Ext4ExtentInternalNode
 		{
-			uint32 logical_block_start;		// the start logical block of the extent encompassed by this index node 
-			uint8 next_node_address [6];	// block addrees of the next lower level node that this node is pointing to
-			uint8 _unused [2];
+			uint32 logical_block_start;		// the start logical block of the extent encompassed by this index node
+			uint64 next_node_address : 48;	// block addrees of the next lower level node that this node is pointing to
+			uint64 _unused : 16;
 		}ATTR_PACK;
 		static_assert( sizeof( Ext4ExtentInternalNode ) == 12 );
 
