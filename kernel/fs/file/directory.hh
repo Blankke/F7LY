@@ -1,4 +1,4 @@
-// #include "fs/file/normal.hh"
+// #include "fs/file/normal_file.hh"
 // #include "klib/common.hh"
 
 // namespace fs

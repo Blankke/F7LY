@@ -12,7 +12,7 @@
 #include "virtual_memory_manager.hh"
 
 #include "fs/file/file.hh"
-#include "fs/file/pipe.hh"
+#include "fs/file/pipe_file.hh"
 #include "fs/fs_defs.hh"
 namespace proc
 {

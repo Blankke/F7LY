@@ -6,7 +6,7 @@
 // --------------------------------------------------------------
 //
 
-#include "fs/file/pipe.hh"
+#include "fs/file/pipe_file.hh"
 
 namespace fs
 {

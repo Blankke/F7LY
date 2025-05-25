@@ -9,7 +9,7 @@
 
 #include "fs/path.hh"
 #include "fs/file/file.hh"
-#include "fs/file/normal.hh"
+#include "fs/file/normal_file.hh"
 #include "fs/dentry.hh"
 #include "fs/fs_defs.hh"
 #include "fs/fat/fat32fs.hh"
