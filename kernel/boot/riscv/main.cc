@@ -12,6 +12,9 @@
 #include "proc/proc.hh"
 #include "proc/proc_manager.hh"
 #include <EASTL/string.h>
+#include "fs/vfs/buffer.hh"
+#include "fs/vfs/buffer_manager.hh"
+
 // 注意华科的main函数可能有问题, 注意多核初始化
 void main() {
 
@@ -33,12 +36,14 @@ void main() {
 
     proc::k_pm.init("next pid", "wait lock");
 
+    fs::k_bufm.init("buffer manager");
+
+
     printfMagenta("\n"
-    "╦ ╦╔═╗╦  ╔═╗╔═╗╔╦╗╔═╗\n"
-    "║║║║╣ ║  ║  ║ ║║║║║╣\n"
-    "╚╩╝╚═╝╩═╝╚═╝╚═╝╩ ╩╚═╝\n"
-    "\n"
-    "=== SYSTEM BOOT COMPLETE ===\n"
-    "Kernel space successfully initialized\n"
-);// ANSI Shadow 字体风格
+                  "╦ ╦╔═╗╦  ╔═╗╔═╗╔╦╗╔═╗\n"
+                  "║║║║╣ ║  ║  ║ ║║║║║╣\n"
+                  "╚╩╝╚═╝╩═╝╚═╝╚═╝╩ ╩╚═╝\n"
+                  "\n"
+                  "=== SYSTEM BOOT COMPLETE ===\n"
+                  "Kernel space successfully initialized\n"); // ANSI Shadow 字体风格
 }

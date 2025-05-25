@@ -128,7 +128,7 @@ namespace fs
 
 	int xv6_file::write( uint64 addr, int n )
 	{
-		int ret;
+		int ret = 0;
 		switch ( type )
 		{
 
@@ -175,7 +175,7 @@ namespace fs
 
 	int xv6_file::read( uint64 addr, int n )
 	{
-		int ret;
+		int ret = 0;
 		switch ( type )
 		{
 

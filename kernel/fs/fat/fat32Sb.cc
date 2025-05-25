@@ -1,7 +1,7 @@
 #include "fs/fat/fat32Sb.hh"
 #include "fs/fat/fat32inode.hh"
 #include "fs/fat/fat32fs.hh"
-#include "fs/dentry.hh"
+#include "fs/vfs/dentry.hh"
 
 namespace fs
 {

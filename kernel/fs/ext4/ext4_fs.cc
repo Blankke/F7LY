@@ -92,7 +92,7 @@ namespace fs
 			_bgs					   = new Ext4BlockGroup[_cache_group_count];
 			const int	desc_per_block = _sb.rBlockSize() / sizeof( Ext4GroupDesc );
 			long		blk_gdt_cnt	   = 0;
-			Ext4Buffer* pblk;
+			Ext4Buffer *pblk = nullptr;
 			for ( int i = 0; i < _cache_group_count; ++i )
 			{
 				int blk_gdt_off = i % desc_per_block;
@@ -161,7 +161,7 @@ namespace fs
 
 			u8*	 d	   = (u8*) dst; // 目标地址
 			long b_idx = 0;			// 数据块索引
-			u8*	 f;					// 数据源地址
+			u8*	 f = nullptr;					// 数据源地址
 			long b_off;				// 块内偏移
 
 			Ext4Buffer* blk_buf = nullptr;
@@ -173,7 +173,7 @@ namespace fs
 					_lock.release();
 					if ( blk_buf != nullptr ) blk_buf->unpin();		// unpin the buffer last read
 					blk_buf = read_block( block_no + b_idx, true ); // pin the buffer
-					f		= (u8*) blk_buf->get_data_ptr();
+					f = (u8*) blk_buf->get_data_ptr();
 					_lock.acquire();
 					b_idx++;
 				}

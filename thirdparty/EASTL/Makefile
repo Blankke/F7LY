@@ -1,3 +1,8 @@
+CROSS_COMPILE ?= 
+CXX = $(CROSS_COMPILE)g++
+AR = $(CROSS_COMPILE)ar
+
+
 CXXFLAGS += -I include -nostdlib
 CXXFLAGS += -I test/packages/EABase/include/Common 
 CXXFLAGS += -I ../../kernel/

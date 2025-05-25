@@ -421,7 +421,7 @@ namespace fs
 		{
 			dentry *mnt_ = _belong_fs->getRoot();
 			dentry *parent_ = mnt_->getParent();
-			dentry *root_;  // root filesystem's root
+			dentry *root_ = nullptr;  // root filesystem's root
 			if( parent_ != nullptr )
 			{
 				root_ = parent_;
@@ -952,8 +952,8 @@ namespace fs
 			using HashVer = Ext4DxRoot::_hash_version_enum;
 			u32 hash_seed[4];
 			_belong_fs->get_hash_seed( hash_seed );
-			u32		hmajor;
-			u32		hminor;
+			u32		hmajor = 0;
+			u32		hminor = 0;
 			HashVer hv = HashVer::half_md4;
 			ext4_htree_hash( dir_name.c_str(), dir_name.size(), hash_seed, (int) hv, &hmajor,
 							 &hminor );

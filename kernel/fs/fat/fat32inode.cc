@@ -1,8 +1,8 @@
 #include "fs/fat/fat32inode.hh"
 #include "fs/fat/fat32fs.hh"
-#include "fs/buffer.hh"
-#include "fs/buffer_manager.hh"
-#include "fs/inode.hh"
+#include "fs/vfs/buffer.hh"
+#include "fs/vfs/buffer_manager.hh"
+#include "fs/vfs/inode.hh"
 #include "common.hh"
 
 #include "device_manager.hh"

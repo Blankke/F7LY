@@ -36,7 +36,7 @@ CXXFLAGS := $(CFLAGS) -std=c++17 \
 			-DEA_PLATFORM_LINUX -DEA_PLATFORM_POSIX \
             -DEA_PROCESSOR_RISCV -DEA_ENDIAN_LITTLE=1 \
             -Wno-deprecated-declarations -Wno-strict-aliasing \
-            -fno-exceptions -fno-rtti
+            -fno-exceptions -fno-rtti -Wno-maybe-uninitialized
 LDFLAGS := -z max-page-size=4096 -nostdlib -T $(LINK_SCRIPT) --gc-sections
 INCLUDES := -I$(KERNEL_DIR) $(foreach dir,$(SUBDIRS),-I$(KERNEL_DIR)/$(dir))
 INCLUDES += -I$(EASTL_DIR)/include -I$(EASTL_DIR)/include/EASTL -I$(EASTL_DIR)/test/packages/EABase/include/Common
@@ -44,7 +44,10 @@ INCLUDES += -I$(EASTL_DIR)/include -I$(EASTL_DIR)/include/EASTL -I$(EASTL_DIR)/t
 # ===== 文件收集规则 =====
 SRCS := $(foreach dir,$(SUBDIRS),$(wildcard $(KERNEL_DIR)/$(dir)/*.[csS])) \
         $(foreach dir,$(SUBDIRS),$(wildcard $(KERNEL_DIR)/$(dir)/*.cpp)) \
-        $(foreach dir,$(SUBDIRS),$(wildcard $(KERNEL_DIR)/$(dir)/*.cc))
+        $(foreach dir,$(SUBDIRS),$(wildcard $(KERNEL_DIR)/$(dir)/*.cc)) \
+		$(wildcard $(KERNEL_DIR)/fs/**/*.[csS]) \
+        $(wildcard $(KERNEL_DIR)/fs/**/*.cpp) \
+        $(wildcard $(KERNEL_DIR)/fs/**/*.cc)
 
 OBJS := $(patsubst $(KERNEL_DIR)/%.c,   $(BUILD_DIR)/%.o, $(filter %.c,   $(SRCS)))
 OBJS += $(patsubst $(KERNEL_DIR)/%.cc,  $(BUILD_DIR)/%.o, $(filter %.cc,  $(SRCS)))
@@ -105,7 +108,8 @@ $(KERNEL_BIN): $(KERNEL_ELF)
 
 export BUILDPATH := $(BUILD_DIR)
 $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a:
-	@$(MAKE) -C $(EASTL_DIR)
+	@$(MAKE) -C $(EASTL_DIR) CROSS_COMPILE=$(CROSS_COMPILE)
+
 
 run: build
 	@if [ "$(ARCH)" = "riscv" ]; then \
