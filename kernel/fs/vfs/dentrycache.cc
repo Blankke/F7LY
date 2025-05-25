@@ -1,4 +1,4 @@
-#include "fs/dentrycache.hh"
+#include "fs/vfs/dentrycache.hh"
 #include "common.hh"
 
 #include <EASTL/string.h>

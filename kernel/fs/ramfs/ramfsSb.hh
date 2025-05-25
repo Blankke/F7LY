@@ -1,7 +1,7 @@
 #pragma once
 
 #include "types.hh"
-#include "fs/fs.hh"
+#include "fs/vfs/fs.hh"
 
 namespace fs{
     

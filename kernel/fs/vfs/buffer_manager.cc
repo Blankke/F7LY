@@ -6,7 +6,7 @@
 // --------------------------------------------------------------
 //
 
-#include "fs/buffer_manager.hh"
+#include "fs/vfs/buffer_manager.hh"
 
 #include <block_device.hh>
 #include <device_manager.hh>

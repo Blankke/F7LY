@@ -1,6 +1,6 @@
 #include "fs/ramfs/ramfsInode.hh"
 #include "fs/ramfs/ramfs.hh"
-#include "fs/path.hh"
+#include "fs/vfs/path.hh"
 #include "types.hh"
 
 #include "proc/proc_manager.hh"

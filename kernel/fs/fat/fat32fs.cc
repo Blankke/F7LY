@@ -1,11 +1,11 @@
 #include "fs/fat/fat32fs.hh"
 #include "fs/fat/fat32inode.hh"
-#include "fs/dentry.hh"
-#include "fs/buffer_manager.hh"
-#include "fs/buffer.hh"
-#include "fs/dentrycache.hh"
+#include "fs/vfs/dentry.hh"
+#include "fs/vfs/buffer_manager.hh"
+#include "fs/vfs/buffer.hh"
+#include "fs/vfs/dentrycache.hh"
 
-#include "fs/path.hh"
+#include "fs/vfs/path.hh"
 
 namespace fs
 {

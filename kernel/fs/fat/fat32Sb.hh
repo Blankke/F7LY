@@ -1,9 +1,8 @@
 #pragma once
 
-
 #include "fs/fat/fat32.hh"
-#include "fs/fs_defs.hh"
-#include "fs/fs.hh"
+#include "fs/vfs/fs_defs.hh"
+#include "fs/vfs/fs.hh"
 
 namespace fs{
 

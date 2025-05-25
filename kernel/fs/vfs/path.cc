@@ -7,11 +7,11 @@
 //
 #include "proc_manager.hh"
 
-#include "fs/path.hh"
-#include "fs/file/file.hh"
-#include "fs/file/normal_file.hh"
-#include "fs/dentry.hh"
-#include "fs/fs_defs.hh"
+#include "fs/vfs/path.hh"
+#include "fs/vfs/file/file.hh"
+#include "fs/vfs/file/normal_file.hh"
+#include "fs/vfs/dentry.hh"
+#include "fs/vfs/fs_defs.hh"
 #include "fs/fat/fat32fs.hh"
 #include "printer.hh"
 #include <EASTL/unordered_map.h>

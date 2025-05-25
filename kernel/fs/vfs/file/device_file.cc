@@ -1,8 +1,8 @@
-#include "fs/file/device_file.hh"
+#include "fs/vfs/file/device_file.hh"
 #include "common.hh"
 #include "device_manager.hh"
 #include "stream_device.hh"
-#include "fs/dentry.hh"
+#include "fs/vfs/dentry.hh"
 
 #include <termios.h>
 

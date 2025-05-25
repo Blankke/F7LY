@@ -12,9 +12,9 @@
 #include <device_manager.hh>
 // #include <hsai_global.hh>
 
-#include "fs/buffer_manager.hh"
-#include "fs/dentry.hh"
-#include "fs/dentrycache.hh"
+#include "fs/vfs/buffer_manager.hh"
+#include "fs/vfs/dentry.hh"
+#include "fs/vfs/dentrycache.hh"
 #include "common.hh"
 #include "printer.hh"
 namespace fs

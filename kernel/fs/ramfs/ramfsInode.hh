@@ -1,6 +1,6 @@
 #include "types.hh"
-#include "fs/inode.hh"
-#include "fs/kstat.hh"
+#include "fs/vfs/inode.hh"
+#include "fs/vfs/kstat.hh"
 
 #include <EASTL/vector.h>
 #include <EASTL/string.h>

@@ -1,5 +1,5 @@
 #include "types.hh"
-#include "fs/dentry.hh"
+#include "fs/vfs/dentry.hh"
 
 #include <EASTL/string.h>
 #include <EASTL/list.h>

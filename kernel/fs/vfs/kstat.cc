@@ -6,8 +6,8 @@
 // --------------------------------------------------------------
 //
 
-#include "fs/kstat.hh"
-#include "fs/fs.hh"
+#include "fs/vfs/kstat.hh"
+#include "fs/vfs/fs.hh"
 
 namespace fs
 {

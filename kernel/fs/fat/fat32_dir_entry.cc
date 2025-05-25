@@ -8,7 +8,7 @@
 #include "printer.hh"
 #include "fs/fat/fat32_dir_entry.hh"
 #include "fs/fat/fat32_file_system.hh"
-#include "fs/buffer_manager.hh"
+#include "fs/vfs/buffer_manager.hh"
 #include "common.hh"
 
 namespace fs

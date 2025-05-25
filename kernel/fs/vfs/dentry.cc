@@ -1,6 +1,6 @@
-#include "fs/dentrycache.hh"
-#include "fs/inode.hh"
-#include "fs/dstat.hh"
+#include "fs/vfs/dentrycache.hh"
+#include "fs/vfs/inode.hh"
+#include "fs/vfs/dstat.hh"
 
 #include "fs/fat/fat32inode.hh"
 

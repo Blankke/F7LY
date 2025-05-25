@@ -1,4 +1,4 @@
-#include "fs/file/normal_file.hh"
+#include "fs/vfs/file/normal_file.hh"
 
 #include "mem/userspace_stream.hh"
 namespace fs

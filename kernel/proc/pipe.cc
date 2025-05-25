@@ -11,9 +11,9 @@
 
 #include "virtual_memory_manager.hh"
 
-#include "fs/file/file.hh"
-#include "fs/file/pipe_file.hh"
-#include "fs/fs_defs.hh"
+#include "fs/vfs/file/file.hh"
+#include "fs/vfs/file/pipe_file.hh"
+#include "fs/vfs/fs_defs.hh"
 namespace proc
 {
 	namespace ipc

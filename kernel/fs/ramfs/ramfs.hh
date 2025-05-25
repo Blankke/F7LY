@@ -2,7 +2,7 @@
 
 #include "printer.hh"
 
-#include "fs/fs.hh"
+#include "fs/vfs/fs.hh"
 #include "fs/ramfs/ramfsSb.hh"
 
 

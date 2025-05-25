@@ -9,7 +9,7 @@
 #pragma once
 
 #include "fs/ext4/ext4.hh"
-#include "fs/fs_defs.hh"
+#include "fs/vfs/fs_defs.hh"
 
 namespace fs
 {

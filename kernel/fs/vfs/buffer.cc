@@ -6,7 +6,7 @@
 // --------------------------------------------------------------
 //
 #include "printer.hh"
-#include "fs/buffer.hh"
+#include "fs/vfs/buffer.hh"
 #include "physical_memory_manager.hh"
 
 namespace fs

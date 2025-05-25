@@ -1,4 +1,4 @@
-#include "fs/file/file.hh"
+#include "fs/vfs/file/file.hh"
 
 #include "proc.hh"
 #include "proc_manager.hh"

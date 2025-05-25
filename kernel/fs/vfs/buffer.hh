@@ -48,6 +48,7 @@ namespace fs
 			return ( const void * ) _buffer_base;
 		}
 
+		/// @brief 复制buffer数据到指定地址
 		void copy_data_to( void * dst )
 		{
 			long * _from = ( long* ) _buffer_base;
@@ -67,6 +68,7 @@ namespace fs
 		uint64 debug_get_buffer_base() { return ( uint64 ) _buffer_base; }
 	};
 
+	/// @brief buffer 链表节点
 	class BufferNode
 	{
 		friend BufferBlock;
@@ -79,8 +81,8 @@ namespace fs
 		BufferNode();
 	};
 
-	/// @brief 每个block拥有一个页面的空间
-	/// @details 每个buffer都是512byte，4K页面可以有8个buffer
+	/// @brief 缓冲区容器, 组织和管理一组相关的磁盘缓冲区
+	/// @details 每个block拥有一个页面的空间, 每个buffer都是512byte，4K页面可以有8个buffer
 	class BufferBlock
 	{
 		friend BufferManager;

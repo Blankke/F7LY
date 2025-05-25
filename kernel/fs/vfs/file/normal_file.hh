@@ -1,5 +1,5 @@
-#include "fs/file/file.hh"
-#include "fs/dentry.hh"
+#include "fs/vfs/file/file.hh"
+#include "fs/vfs/dentry.hh"
 
 namespace mem
 {

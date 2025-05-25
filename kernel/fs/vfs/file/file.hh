@@ -2,8 +2,8 @@
 
 #pragma once 
 
-#include "fs/file/file_defs.hh"
-#include "fs/kstat.hh"
+#include "fs/vfs/file/file_defs.hh"
+#include "fs/vfs/kstat.hh"
 
 #include "proc/pipe.hh"
 

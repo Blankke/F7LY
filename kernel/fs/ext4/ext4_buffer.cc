@@ -8,7 +8,7 @@
 
 #include "fs/ext4/ext4_buffer.hh"
 #include "fs/ext4/ext4_fs.hh"
-#include "fs/buffer_manager.hh"
+#include "fs/vfs/buffer_manager.hh"
 #include "printer.hh"
 namespace fs
 {

@@ -4,7 +4,7 @@
 #include <EASTL/vector.h>
 
 #include "fs/fat/fat32.hh"
-#include "fs/inode.hh"
+#include "fs/vfs/inode.hh"
 
 namespace fs
 {

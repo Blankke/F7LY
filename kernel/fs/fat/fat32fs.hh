@@ -1,7 +1,7 @@
 #include "types.hh"
 #include "fs/fat/fat32.hh"  
 #include "fs/fat/fat32Sb.hh"
-#include "fs/file/file.hh"
+#include "fs/vfs/file/file.hh"
 
 #include <EASTL/vector.h>
 #include <EASTL/string.h>
