@@ -20,7 +20,14 @@ namespace fs
 {
 	eastl::unordered_map<eastl::string, FileSystem *> mnt_table;
 
-
+	/**
+	 * @brief 构造一个路径对象，并基于提供的文件指针初始化路径结构。
+	 * 
+	 * @param path_ 路径字符串，例如 "/home/user/file.txt"
+	 * @param base_ 基础文件指针，要求为 normal_file 类型（含 dentry）
+	 * 
+	 * @note 若 base_ 不是 normal_file 类型，则会触发 panic。
+	 */
 	/// 这里的base_文件需要有dentry，目前只有normalfile有dentry
 	Path::Path( const eastl::string& path_, file *base_ )
 		: pathname( path_ )
@@ -55,6 +62,12 @@ namespace fs
 		pathbuild();
 	}
 
+	/**
+	 * @brief 将 pathname 字符串解析为路径段（dirname 向量），并确定路径基准（base）。
+	 * 
+	 * @note 会自动处理绝对路径（以 '/' 开头）和相对路径。若 base 为 nullptr，则默认使用进程当前工作目录。
+	 *       结果保存在成员变量 base 与 dirname 中。
+	 */
 	void Path::pathbuild()
 	{
 		//[[maybe_unused]]Dentry *root = mnt_table[ "/" ]->getRoot();
@@ -100,7 +113,13 @@ namespace fs
 		}
 		return;
 	}
-
+	/**
+	 * @brief 获取当前路径对象对应的绝对路径字符串。
+	 * 
+	 * @return eastl::string 表示该路径的绝对路径，例如 "/home/user/file.txt"
+	 * 
+	 * @note 会自动处理 "." 和 ".." 等路径段。
+	 */
 	eastl::string Path::AbsolutePath() const
 	{
 		eastl::vector<eastl::string> absname = dirname;
