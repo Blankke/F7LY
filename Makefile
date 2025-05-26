@@ -46,10 +46,11 @@ INCLUDES += -I$(EASTL_DIR)/include -I$(EASTL_DIR)/include/EASTL -I$(EASTL_DIR)/t
 # ===== 文件收集规则 =====
 SRCS := $(foreach dir,$(SUBDIRS),$(wildcard $(KERNEL_DIR)/$(dir)/*.[csS])) \
         $(foreach dir,$(SUBDIRS),$(wildcard $(KERNEL_DIR)/$(dir)/*.cpp)) \
-        $(foreach dir,$(SUBDIRS),$(wildcard $(KERNEL_DIR)/$(dir)/*.cc)) \
-		$(wildcard $(KERNEL_DIR)/fs/**/*.[csS]) \
-        $(wildcard $(KERNEL_DIR)/fs/**/*.cpp) \
-        $(wildcard $(KERNEL_DIR)/fs/**/*.cc)
+        $(foreach dir,$(SUBDIRS),$(wildcard $(KERNEL_DIR)/$(dir)/*.cc)) 
+SRCS += $(shell find $(KERNEL_DIR)/fs -type f \
+\( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
+$(info === SRCS collected ===)
+$(info $(SRCS))
 
 OBJS := $(patsubst $(KERNEL_DIR)/%.c,   $(BUILD_DIR)/%.o, $(filter %.c,   $(SRCS)))
 OBJS += $(patsubst $(KERNEL_DIR)/%.cc,  $(BUILD_DIR)/%.o, $(filter %.cc,  $(SRCS)))

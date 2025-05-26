@@ -1,4 +1,4 @@
-#include "file/file.hh"
+#include "fs/vfs/file/file.hh"
 
 struct termios;
 

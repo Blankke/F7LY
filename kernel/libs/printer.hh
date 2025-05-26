@@ -60,7 +60,7 @@ public:
 	void printbyte(uint8 x);
 	void printptr(uint64 x);
 
-	static void k_panic(const char *f, uint l, const char *info, ...);
+	static void k_panic(const char *f, uint l, const char *info, ...)__attribute__((noreturn));
 	static void panic_va(const char *f, uint l, const char *info, va_list ap);
 	static void error(const char *f, uint l, const char *info, ...);
 	static void error_va(const char *f, uint l, const char *info, va_list ap);
