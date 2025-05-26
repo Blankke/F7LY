@@ -6,6 +6,7 @@
 #include "klib.hh"
 #include "list.hh"
 #include "param.h"
+#include "sbi.hh"
 namespace syscall
 {
     // 创建全局的 SyscallHandler 实例
@@ -76,18 +77,38 @@ namespace syscall
         BIND_SYSCALL(getcwd);
         BIND_SYSCALL(getdents64);
         BIND_SYSCALL(shutdown);
+        // printfCyan("====================debug: syscall_num_list\n");
+        // for (uint64 i = 0; i < max_syscall_funcs_num; i++)
+        // {
+        //     if (_syscall_funcs[i] != nullptr && _syscall_name[i] != nullptr)
+        //     {
+        //         printfCyan("syscall_num: %d, syscall_name: %s\n", i, _syscall_name[i]);
+        //     }
+        // }
     }
     void SyscallHandler::invoke_syscaller()
     {
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
         uint64 sys_num = p->get_trapframe()->a7; // 获取系统调用号
+        // debug
+        // 打印所有系统调用号和名称, 检查是否正确
+        // printfCyan("debug: syscall_num_list\n");
+        // for (uint64 i = 0; i < max_syscall_funcs_num; i++)
+        // {
+        //     if (_syscall_funcs[i] != nullptr && _syscall_name[i] != nullptr)
+        //     {
+        //         printfCyan("syscall_num: %d, syscall_name: %s\n", i, _syscall_name[i]);
+        //     }
+        // }
         if (sys_num >= max_syscall_funcs_num || sys_num < 0 || _syscall_funcs[sys_num] == nullptr)
         {
             printfRed("[SyscallHandler::invoke_syscaller]sys_num is out of range\n");
+            printfRed("[SyscallHandler::invoke_syscaller]sys_num: %d\n", sys_num);
             p->_trapframe->a0 = -1; // 设置返回值为-1
         }
         else
         {
+            printfCyan("[SyscallHandler::invoke_syscaller]sys_num: %d, syscall_name: %s\n", sys_num, _syscall_name[sys_num]);
             // 调用对应的系统调用函数
             uint64 ret = (this->*_syscall_funcs[sys_num])();
             p->_trapframe->a0 = ret; // 设置返回值
@@ -402,7 +423,9 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_shutdown()
     {
-        TODO("sys_shutdown");
+        TODO(struct filesystem *fs = get_fs_from_path("/");
+        vfs_ext_umount(fs);)
+        sbi_shutdown();
         printfYellow("sys_shutdown\n");
         return 0;
     }

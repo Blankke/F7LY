@@ -1,6 +1,7 @@
 #pragma once
 #include "types.hh"
 #include "syscall_defs.hh"
+#include "printer.hh"
 
 namespace syscall{
     constexpr uint max_syscall_funcs_num = 2048;
@@ -15,11 +16,10 @@ namespace syscall{
 		SyscallFunc _syscall_funcs[ max_syscall_funcs_num ]; // 存储系统调用函数的指针数组
 		const char * _syscall_name[ max_syscall_funcs_num ]; // 存储系统调用名称的指针数组
 		uint64_t _default_syscall_impl(); // 默认的系统调用实现
+    public:
         void init();  // 使用构造函数进行init
-	public:
 		void invoke_syscaller(); // 调用系统调用
         SyscallHandler(){
-            init();
         }
 
 

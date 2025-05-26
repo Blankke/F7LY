@@ -12,6 +12,7 @@
 #include "proc/proc.hh"
 #include "proc/proc_manager.hh"
 #include "proc/scheduler.hh"
+#include "syscall_handler.hh"
 
 // 注意华科的main函数可能有问题, 注意多核初始化
 void main() {
@@ -43,6 +44,8 @@ void main() {
     printfYellow("[vmm] VirtualMemoryManager init success\n");
     mem::k_hmm.init("heap_memory_manager",HEAP_START);
     printfYellow("[hmm] HeapMemoryManager init success,heap_start: %p\n",HEAP_START);
+
+    syscall::k_syscall_handler.init(); // 初始化系统调用处理器
 
     proc::k_pm.user_init(); // 初始化用户进程
     printfMagenta("user init\n");

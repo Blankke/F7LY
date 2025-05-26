@@ -17,7 +17,7 @@ extern "C"
     extern char trampoline[]; // trampoline.S
     void _wrp_fork_ret(void)
     {
-        printf("into _wrapped_fork_ret\n");
+        // printf("into _wrapped_fork_ret\n");
         proc::k_pm.fork_ret();
     }
 }
@@ -149,7 +149,7 @@ namespace proc
                 filesystem2_init(); // 启动init
             )
         }
-        printf("fork_ret\n");
+        // printf("fork_ret\n");
         trap_mgr.usertrapret();
     }
 
@@ -204,7 +204,7 @@ namespace proc
         }
         printfGreen("trampoline: %p\n", trampoline);
         printfGreen("TRAMPOLINE: %p\n", TRAMPOLINE);
-        if (mem::k_vmm.map_pages(pt, TRAPFRAME, PGSIZE, (uint64)(p->get_trapframe()), PTE_R | PTE_W) == 0)
+        if (mem::k_vmm.map_pages(pt, TRAPFRAME, PGSIZE, (uint64)(p->get_trapframe()), riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_writable_m) == 0)
         {
             mem::k_vmm.vmfree(pt, 0);
             printfRed("proc_pagetable: map trapframe failed\n");
@@ -233,6 +233,14 @@ namespace proc
         _init_proc = p;
         // 传入initcode的地址
         mem::k_vmm.uvmfirst(p->_pt, (uint64)initcode_start, (uint64)(initcode_end - initcode_start));
+
+        //debug
+        uint64 pa = (uint64)p->_pt.walk_addr((uint64)0);
+        printfYellow("initcode start pa: %p\n",pa);
+        printfYellow("initcode start byte %u\n", *(uint64 *)pa);
+
+
+
         printf("initcode start: %p, end: %p\n", initcode_start, initcode_end);
         printf("initcode size: %d\n", (uint64)(initcode_end - initcode_start));
         p->_sz = 3 * PGSIZE;
