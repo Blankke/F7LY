@@ -15,6 +15,7 @@
 #include "fs/ext4/ext4_buffer.hh"
 
 #include "spinlock.hh"
+#include "function.hh"
 
 namespace fs
 {

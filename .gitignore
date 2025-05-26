@@ -15,3 +15,5 @@ copy_kernel_to_ext4.sh
 oscomp/*
 build/*
 os.out
+sdcard-rv.img
+sdcard-la.img

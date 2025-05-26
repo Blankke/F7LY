@@ -14,6 +14,12 @@
 #include <EASTL/string.h>
 #include "fs/vfs/buffer.hh"
 #include "fs/vfs/buffer_manager.hh"
+#include "hal/riscv/sbi.hh"
+#include "fs/vfs/path.hh"
+#include "fs/vfs/dentrycache.hh"
+#include "fs/ramfs/ramfs.hh"
+
+
 
 // 注意华科的main函数可能有问题, 注意多核初始化
 void main() {
@@ -37,7 +43,16 @@ void main() {
     proc::k_pm.init("next pid", "wait lock");
 
     fs::k_bufm.init("buffer manager");
-
+    new (&fs::dentrycache::k_dentryCache) fs::dentrycache::dentryCache;
+    fs::dentrycache::k_dentryCache.init();
+    new (&fs::mnt_table) eastl::unordered_map<eastl::string, fs::FileSystem *>;
+    fs::mnt_table.clear(); // clean mnt_Table
+    new (&fs::ramfs::k_ramfs) fs::ramfs::RamFS;
+    fs::ramfs::k_ramfs.initfd();
+    fs::mnt_table["/"] = &fs::ramfs::k_ramfs;
+    fs::Path mnt("/mnt");
+    fs::Path dev("/dev/hdb");
+    mnt.mount(dev, "ext4", 0, 0);
 
     printfMagenta("\n"
                   "╦ ╦╔═╗╦  ╔═╗╔═╗╔╦╗╔═╗\n"
@@ -46,4 +61,6 @@ void main() {
                   "\n"
                   "=== SYSTEM BOOT COMPLETE ===\n"
                   "Kernel space successfully initialized\n"); // ANSI Shadow 字体风格
+
+    sbi_shutdown();
 }
