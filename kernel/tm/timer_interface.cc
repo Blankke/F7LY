@@ -10,7 +10,7 @@
 
 #include "tm/timer_manager.hh"
 
-namespace hsai
+namespace tmm
 {
 	int handle_tick_intr()
 	{
@@ -21,4 +21,4 @@ namespace hsai
 	{
 		return tmm::k_tm.get_ticks();
 	}
-} // namespace hsai
+} // namespace tmm

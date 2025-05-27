@@ -6,6 +6,7 @@ AR = $(CROSS_COMPILE)ar
 CXXFLAGS += -I include -nostdlib
 CXXFLAGS += -I test/packages/EABase/include/Common 
 CXXFLAGS += -I ../../kernel/
+CXXFLAGS += -I ../../kernel/tm/
 CXXFLAGS += -Wno-deprecated-declarations
 
 #cc_src = $(filter-out source/thread_support.cpp, $(wildcard source/*.cpp))

@@ -335,7 +335,8 @@ r_ra()
   return x;
 }
 
-// static uint64 rdtime() {
+///@todo 以后记得打开注释，现在没用这个函数
+// static uint64 rdtime(); {
 //   uint64 x;
 //   asm volatile("rdtime %0" : "=r"(x));
 //   return x;

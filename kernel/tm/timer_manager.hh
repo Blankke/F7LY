@@ -14,6 +14,18 @@
 
 namespace tmm
 {
+	#ifdef __cplusplus
+	extern "C"
+	{
+#endif
+
+		int clock_gettime(clockid_t clk, struct timespec *tp);
+
+		int *__errno_location(void);
+
+#ifdef __cplusplus
+	}
+#endif
 	// 这个结构体来自Linux的定义 
 	struct timeval
 	{

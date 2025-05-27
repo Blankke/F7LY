@@ -10,6 +10,11 @@ Cpu *Cpu::get_cpu()
 	return &k_cpus[x];
 }
 
+uint64 Cpu::get_time()
+{
+	return r_time();
+}
+
 void Cpu::push_intr_off()
 {
 	int old = get_intr_stat();

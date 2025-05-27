@@ -162,20 +162,20 @@ namespace fs
 		{
 			[[maybe_unused]] tmm::tm tm_;
 			int rdbytes = 0;
-			///@todo 这tm是为什么调到这里clock_gettime()?无法识别
-			// uint32 off = off_;
 
-			// auto cur = eastl::chrono::system_clock::now();
-			// auto time = cur.time_since_epoch().count();
-			// auto bytes = sizeof( time );
-			// if( off < bytes )
-			// {
-			// 	memcpy( (void *)dst_, &time, bytes );
-			// 	dst_ += rdbytes;
-			// 	rdbytes += bytes;
-			// }
+			uint32 off = off_;
 
-			// if( off > 0 ) off -= bytes;
+			auto cur = eastl::chrono::system_clock::now();
+			auto time = cur.time_since_epoch().count();
+			auto bytes = sizeof( time );
+			if( off < bytes )
+			{
+				memcpy( (void *)dst_, &time, bytes );
+				dst_ += rdbytes;
+				rdbytes += bytes;
+			}
+
+			if( off > 0 ) off -= bytes;
 			return rdbytes;
 		}
 
