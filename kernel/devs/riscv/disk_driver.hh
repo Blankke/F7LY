@@ -2,7 +2,7 @@
 #include "spinlock.hh"
 #include "virtio.hh"
 #include <virtual_device.hh>
-
+#include "global_operator.hh"
 namespace riscv
 {
 	namespace qemu

@@ -37,3 +37,11 @@ void operator delete[] ( void * p, uint64 size ) noexcept
 	// Info("delete[] 0x%p with size %d\n", p, size);
 	mem::k_hmm.free( p );
 }
+void operator delete[](void* ptr, std::size_t size, std::align_val_t align) noexcept {
+    operator delete[](ptr, size);
+}
+
+void operator delete(void* ptr, std::size_t size, std::align_val_t align) noexcept {
+    // 如果你对齐分配用的是 aligned_alloc/free，就改成对应的 free_aligned(ptr)
+    operator delete(ptr, size);
+}

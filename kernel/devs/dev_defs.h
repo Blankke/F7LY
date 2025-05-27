@@ -8,7 +8,7 @@
 
 #ifndef _DEV_DEFS_H_
 #define _DEV_DEFS_H_
-
+#include "cpu.hh"
 #ifndef NUMCPU
 #define NUMCPU 2
 #endif

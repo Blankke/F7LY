@@ -88,7 +88,7 @@ namespace riscv
 
       // the address of virtio mmio register r.
       volatile uint64 virtio_addr;
-      #define R( r ) ( (volatile uint32 *) ( virtio_addr + ( r ) ) )
+      volatile uint32 * R( uint32 r ) {return (uint32*)( virtio_addr + ( r ) ); }
       static constexpr int _block_size = 512;
 
       private:

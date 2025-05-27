@@ -37,46 +37,46 @@ namespace riscv
 		//             -kernel loads the kernel here
 		// unused RAM after 80000000.
 
-		#define VIRT_OFFSET             0x3F00000000L
+		// #define VIRT_OFFSET             0x3F00000000L
 
-		// qemu puts UART registers here in physical memory.
-		#define UART                    0x10000000L
+		// // qemu puts UART registers here in physical memory.
+		// #define UART                    0x10000000L
 
-		#define UART_V                  (UART + VIRT_OFFSET)
+		// #define UART_V                  (UART + VIRT_OFFSET)
 
-		// virtio mmio interface
-		#define VIRTIO0                 0x10001000L
-		#define VIRTIO0_V               (VIRTIO0 + VIRT_OFFSET)
+		// // virtio mmio interface
+		// #define VIRTIO0                 0x10001000L
+		// #define VIRTIO0_V               (VIRTIO0 + VIRT_OFFSET)
 
-		// local interrupt controller, which contains the timer.
-		#define CLINT                   0x02000000L
-		#define CLINT_V                 (CLINT + VIRT_OFFSET)
+		// // local interrupt controller, which contains the timer.
+		// #define CLINT                   0x02000000L
+		// #define CLINT_V                 (CLINT + VIRT_OFFSET)
 
-		#define PLIC                    0x0c000000L
-		#define PLIC_V                  (PLIC + VIRT_OFFSET)
+		// #define PLIC                    0x0c000000L
+		// #define PLIC_V                  (PLIC + VIRT_OFFSET)
 
-		#define PLIC_PRIORITY           (PLIC_V + 0x0)
-		#define PLIC_PENDING            (PLIC_V + 0x1000)
-		#define PLIC_SENABLE(hart)      (PLIC_V + 0x2080 + (hart) * 0x100)
-		#define PLIC_SPRIORITY(hart)    (PLIC_V + 0x201000 + (hart) * 0x2000)
-		#define PLIC_SCLAIM(hart)       (PLIC_V + 0x201004 + (hart) * 0x2000)
+		// // #define PLIC_PRIORITY           (PLIC_V + 0x0)
+		// #define PLIC_PENDING            (PLIC_V + 0x1000)
+		// #define PLIC_SENABLE(hart)      (PLIC_V + 0x2080 + (hart) * 0x100)
+		// #define PLIC_SPRIORITY(hart)    (PLIC_V + 0x201000 + (hart) * 0x2000)
+		// #define PLIC_SCLAIM(hart)       (PLIC_V + 0x201004 + (hart) * 0x2000)
 
-		// the physical address of rustsbi
-		#define RUSTSBI_BASE            0x80000000L
+		// // the physical address of rustsbi
+		// #define RUSTSBI_BASE            0x80000000L
 
-		// the kernel expects there to be RAM
-		// for use by the kernel and user pages
-		// from physical address 0x80200000 to PHYSTOP.
-		#define KERNBASE                0x80200000L
+		// // the kernel expects there to be RAM
+		// // for use by the kernel and user pages
+		// // from physical address 0x80200000 to PHYSTOP.
+		// #define KERNBASE                0x80200000L
 
-		#define PHYSTOP                 0x88000000L
+		// #define PHYSTOP                 0x88000000L
 
-		// map kernel stacks beneath the trampoline,
-		// each surrounded by invalid guard pages.
-		// #define KSTACK(p)               (TRAMPOLINE - ((p) + 1) * 2 * PGSIZE)
-		#define VKSTACK                 0x3EC0000000L
+		// // map kernel stacks beneath the trampoline,
+		// // each surrounded by invalid guard pages.
+		// // #define KSTACK(p)               (TRAMPOLINE - ((p) + 1) * 2 * PGSIZE)
+		// #define VKSTACK                 0x3EC0000000L
 
-		#define MAXUVA                  RUSTSBI_BASE
+		// #define MAXUVA                  RUSTSBI_BASE
 
 	} // namespace qemu
 

@@ -269,6 +269,7 @@ namespace riscv
       disk.vdisk_lock.release();
       return 0;
     }
+    #undef R
 	} // namespace qemu
 
 } // namespace riscv
