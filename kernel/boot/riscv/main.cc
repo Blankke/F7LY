@@ -64,7 +64,7 @@ void main() {
     fs::ramfs::k_ramfs.initfd();
     fs::mnt_table["/"] = &fs::ramfs::k_ramfs;
     fs::Path mnt("/mnt");
-    fs::Path dev("/dev/hdb");
+    fs::Path dev("/dev/hda");
     mnt.mount(dev, "ext4", 0, 0);
 
     syscall::k_syscall_handler.init(); // 初始化系统调用处理器

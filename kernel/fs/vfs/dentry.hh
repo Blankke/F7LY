@@ -84,6 +84,6 @@ namespace fs
 		// >>> 难道每增加一种操作系统的支持就要再写一个init函数？
 
 		void printChildrenInfo();
-
+		void printAllChildrenInfo(const eastl::string &prefix = " ", bool isLast = true);
 	};
 } // namespace fs

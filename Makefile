@@ -151,20 +151,33 @@ $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a:
 
 
 run: build
-	@if [ "$(ARCH)" = "riscv" ]; then \
-		$(QEMU_CMD) $(KERNEL_ELF); \
-	elif [ "$(ARCH)" = "loongarch" ]; then \
-		$(QEMU_CMD) $(KERNEL_ELF) -m 128M -nographic -smp 1; \
-	fi
-	# 以下是LoongArch可选参数（已注释）：
-	# -drive file=rootfs.img,if=none,format=raw,id=x0
-	# -device virtio-blk-pci,drive=x0,bus=virtio-mmio-bus.0
-	# -no-reboot
-	# -device virtio-net-pci,netdev=net0
-	# -netdev user,id=net0,hostfwd=tcp::5555-:5555,hostfwd=udp::5555-:5555
-	# -rtc base=utc
-	# -drive file=disk-la.img,if=none,format=raw,id=x1
-	# -device virtio-blk-pci,drive=x1,bus=virtio-mmio-bus.1
+ifeq ($(ARCH),riscv)
+	$(MAKE) run-riscv
+else ifeq ($(ARCH),loongarch)
+	$(MAKE) run-loongarch
+else
+	$(error Unsupported ARCH=$(ARCH))
+endif
+
+run-riscv:
+	qemu-system-riscv64 \
+		-machine virt \
+		-kernel $(KERNEL_ELF) \
+		-m 1G \
+		-nographic \
+		-smp 1 \
+		-bios default \
+		-drive file=$(KERNEL_PREFIX)/sdcard-rv.img,if=none,format=raw,id=x0 \
+		-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 \
+		-no-reboot \
+		-device virtio-net-device,netdev=net \
+		-netdev user,id=net \
+		-rtc base=utc
+
+
+run-loongarch:
+	$(QEMU_CMD) $(KERNEL_ELF) -m 128M -nographic -smp 1
+
 
 debug: build
 	@if [ "$(ARCH)" = "riscv" ]; then \

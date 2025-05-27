@@ -12,10 +12,13 @@ namespace riscv
 	{
 
 		DiskDriver disk_driver;
-		DiskDriver::DiskDriver(const char *lock_name)
+		DiskDriver::DiskDriver(const char *lock_name) //: disk_((void *)VIRTIO0, 0)
 		{
 			_lock.init(lock_name);
-			new(&disk_)VirtioDriver((void *)VIRTIO0, 0);
+
+			new (&disk_)
+				VirtioDriver((void *)VIRTIO0, 0);
+
 			dev::k_devm.register_device(this, "Disk driver");
 		}
 
