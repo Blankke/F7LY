@@ -11,3 +11,13 @@ gkq@gkq:/mnt/sdcard-rv/glibc$ sudo apt install qemu-user-static
 
 gkq@gkq:/mnt/sdcard-rv/glibc$ qemu-riscv64-static busybox ash
 ```
+
+后来发现是忘了
+__attribute__(( section( ".user.init.data" ) )) const char	 ash[] = "ash";
+bb_sh[0] = "ash"是没有用的
+
+
+
+
+
+strace -e trace=process,file,desc sh -c "ls"
