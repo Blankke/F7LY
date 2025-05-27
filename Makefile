@@ -24,6 +24,7 @@ CXX     := $(CROSS_COMPILE)g++
 LD      := $(CROSS_COMPILE)ld
 OBJCOPY := $(CROSS_COMPILE)objcopy
 SIZE    := $(CROSS_COMPILE)size
+OBJDUMP := $(CROSS_COMPILE)objdump
 
 # ===== 路径定义 =====
 KERNEL_DIR := kernel
@@ -33,12 +34,14 @@ COMMON_DIRS := mem libs devs trap hal proc sys  tm
 SUBDIRS := $(ARCH_DIRS) $(COMMON_DIRS)
 
 LINK_SCRIPT := $(KERNEL_DIR)/link/$(ARCH)/kernel.ld
+
 CFLAGS := -Wall -Werror -ffreestanding -O2 -fno-builtin -g -fno-stack-protector $(ARCH_CFLAGS)
 CXXFLAGS := $(CFLAGS) -std=c++17 \
 			-DEA_PLATFORM_LINUX -DEA_PLATFORM_POSIX \
             -DEA_PROCESSOR_RISCV -DEA_ENDIAN_LITTLE=1 \
             -Wno-deprecated-declarations -Wno-strict-aliasing \
             -fno-exceptions -fno-rtti -Wno-maybe-uninitialized
+
 LDFLAGS := -z max-page-size=4096 -nostdlib -T $(LINK_SCRIPT) --gc-sections
 INCLUDES := -I$(KERNEL_DIR) $(foreach dir,$(SUBDIRS),-I$(KERNEL_DIR)/$(dir))
 INCLUDES += -I$(EASTL_DIR)/include -I$(EASTL_DIR)/include/EASTL -I$(EASTL_DIR)/test/packages/EABase/include/Common
@@ -87,12 +90,15 @@ endif
 
 # 新增 syscall 编译规则
 SYSCALL_SRC := user/syscall_lib/syscall.cc
-SYSCALL_OBJ := build/$(OUTPUT_PREFIX)/syscall.o
+SYSCALL_OBJ := build/$(OUTPUT_PREFIX)/syscall.o build/$(OUTPUT_PREFIX)/printf.o
+
+# 新增 printf 编译规则
+PRINTF_SRC := user/syscall_lib/printf.cc
+PRINTF_OBJ := build/$(OUTPUT_PREFIX)/printf.o
 
 # 编译参数
-INITCODE_CFLAGS := -Wall -O -fno-builtin -fno-exceptions -fno-rtti -fno-stack-protector -nostdlib -ffreestanding -mno-relax $(ARCH_CFLAGS) \
-                   -Iuser/deps -Iuser/syscall_lib -Iuser/syscall_lib/arch/$(ARCH)
-INITCODE_LDFLAGS := -Ttext=0x1000 -nostdlib
+INITCODE_CFLAGS := -Wall -O -fno-builtin -fno-exceptions -fno-rtti -fno-stack-protector -nostdlib -ffreestanding $(ARCH_CFLAGS) -Iuser/deps -Iuser/syscall_lib -Iuser/syscall_lib/arch/$(ARCH) -Ikernel
+INITCODE_LDFLAGS := -N -e start -Ttext 0
 
 .PHONY: all clean dirs build riscv loongarch run debug initcode
 
@@ -105,8 +111,7 @@ loongarch:
 	@$(MAKE) ARCH=loongarch build
 
 
-build: dirs $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a $(KERNEL_BIN)
-
+build: initcode dirs $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a $(KERNEL_BIN)
 
 dirs:
 	@mkdir -p $(BUILD_DIR)
@@ -135,6 +140,7 @@ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.s
 $(KERNEL_ELF): $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
 	$(LD) $(LDFLAGS) -o $@ $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
 	$(SIZE) $@
+	$(OBJDUMP) -D $@ > kernel.asm
 
 $(KERNEL_BIN): $(KERNEL_ELF)
 	$(OBJCOPY) -O binary $< $@
@@ -150,7 +156,15 @@ run: build
 	elif [ "$(ARCH)" = "loongarch" ]; then \
 		$(QEMU_CMD) $(KERNEL_ELF) -m 128M -nographic -smp 1; \
 	fi
-
+	# 以下是LoongArch可选参数（已注释）：
+	# -drive file=rootfs.img,if=none,format=raw,id=x0
+	# -device virtio-blk-pci,drive=x0,bus=virtio-mmio-bus.0
+	# -no-reboot
+	# -device virtio-net-pci,netdev=net0
+	# -netdev user,id=net0,hostfwd=tcp::5555-:5555,hostfwd=udp::5555-:5555
+	# -rtc base=utc
+	# -drive file=disk-la.img,if=none,format=raw,id=x1
+	# -device virtio-blk-pci,drive=x1,bus=virtio-mmio-bus.1
 
 debug: build
 	@if [ "$(ARCH)" = "riscv" ]; then \
@@ -171,21 +185,27 @@ $(SYSCALL_OBJ): $(SYSCALL_SRC)
 	@mkdir -p $(dir $@)
 	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
 
-# 链接生成 initcode.elf（同时链接 initcode.o 和 syscall.o）
-$(INITCODE_ELF): $(INITCODE_OBJ) $(SYSCALL_OBJ)
+# 编译 printf.o
+$(PRINTF_OBJ): $(PRINTF_SRC)
+	@mkdir -p $(dir $@)
+	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
+
+# 链接生成 initcode.elf
+$(INITCODE_ELF): $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ)
 	$(LD) $(INITCODE_LDFLAGS) -o $@ $^
 
 # 生成二进制 initcode 文件 + 反汇编
 $(INITCODE_BIN): $(INITCODE_ELF)
 	$(OBJCOPY) -S -O binary $< $@
-	riscv64-unknown-elf-objdump -D -b binary -m riscv:rv64 -EL --adjust-vma=0x80000000 $@ > user/disasm_initcode.asm
+	riscv64-unknown-elf-objdump -D -b binary -m riscv:rv64 -EL $@ > user/disasm_initcode.asm
 
 clean:
 	rm -rf build
 	find . -name "*.o" -o -name "*.d" -exec rm -f {} \;
 	$(MAKE) clean -C thirdparty/EASTL
 	rm -f user/initcode-*
-	rm -f user/disasm_initcode.asm
+	rm -f user/disasm_initcode.asm, kernel.asm
+
 
 
 -include $(DEPS)

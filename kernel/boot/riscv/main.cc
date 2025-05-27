@@ -61,11 +61,11 @@ void main() {
     fs::Path dev("/dev/hdb");
     mnt.mount(dev, "ext4", 0, 0);
 
-    // proc::k_pm.user_init(); // 初始化用户进程
-    // printfMagenta("user init\n");
+    proc::k_pm.user_init(); // 初始化用户进程
+    printfMagenta("user init\n");
 
-    // proc::k_scheduler.init("scheduler");
-    // proc::k_scheduler.start_schedule(); // 启动调度器
+    proc::k_scheduler.init("scheduler");
+    proc::k_scheduler.start_schedule(); // 启动调度器
 
     printfMagenta("\n"
                   "╦ ╦╔═╗╦  ╔═╗╔═╗╔╦╗╔═╗\n"
