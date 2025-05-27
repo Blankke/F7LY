@@ -1,5 +1,5 @@
 //
-// Copy from Li Shuang ( pseudonym ) on 2024-07-19 
+// Created by Li Shuang ( pseudonym ) on 2024-07-19 
 // --------------------------------------------------------------
 // | Note: This code file just for study, not for commercial use 
 // | Contact Author: lishuang.mk@whu.edu.cn 
@@ -29,4 +29,4 @@ namespace dev
 		virtual bool write_ready() = 0;
 	};
 
-} // namespace dev
+} // namespace hsai

@@ -22,7 +22,7 @@
 #include "tm/timer_manager.hh"
 #include "proc/scheduler.hh"
 #include "syscall_handler.hh"
-
+#include "devs/riscv/disk_driver.hh"
 
 // 注意华科的main函数可能有问题, 注意多核初始化
 void main() {
@@ -48,6 +48,10 @@ void main() {
     mem::k_pmm.init();
     mem::k_vmm.init("virtual_memory_manager");
     mem::k_hmm.init("heap_memory_manager",HEAP_START);
+
+    // hardware_secondary_init
+    //  2. Disk 初始化 (debug)
+    new (&riscv::qemu::disk_driver) riscv::qemu::DiskDriver("Disk");
 
     tmm::k_tm.init("timer manager");
     fs::k_bufm.init("buffer manager");
