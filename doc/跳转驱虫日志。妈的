@@ -1,0 +1,15 @@
+用户态的页表在userinit之后进行跳转，会有两次问题
+1. 在启动调度的时候start_schedu函数会执行swtch，在此之后会写入ra的地址是wrap_fork_ret，然后会因为没有映射地址而卡死。
+    - 此时发现map_stack函数没有调用，且调用顺序应该改为先k_pm.init()再k_vmm.init()从而将进程的kstack映射好。
+    - 映射之后发现k_stack位于Trampoline的下两个page的位置，p->context->sp的位置是k_stack往上的一个page（指向栈顶，栈向下生长）
+2. 再usertrapret的时候指向csrw satp的时候写入错误，当写入后马上爆炸。可以直接鉴定为没有映射好相应位置，因为gdb调试的时候写入的瞬间就无法再看见代码。
+    - 但是检查walkaddr后trampoline的地址是正确映射的
+    - 最后发现是标志位设置有误，并没有设置可读可执行，所以在这里无法跳转
+            if (mem::k_vmm.map_pages(pt, TRAMPOLINE, PGSIZE, (uint64)trampoline, riscv::PteEnum::pte_readable_m|riscv::pte_executable_m) == 0)
+        {
+            mem::k_vmm.vmfree(pt, 0);
+            printfRed("proc_pagetable: map trampoline failed\n");
+            return 0;
+        }
+
+3. 现在的问题是p->_trapframe->epc没有设置，这个值应该是用户空间的位置，从而正式跳转到用户空间，但是这里是0，也就是没有设置。

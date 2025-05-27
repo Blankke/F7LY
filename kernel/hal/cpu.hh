@@ -1,3 +1,4 @@
+#pragma once
 #include "types.hh"
 #include "proc/proc.hh"
 #ifdef RISCV
@@ -18,10 +19,13 @@ private:
 
 public:
         proc::Context *get_context() { return &_context; }
+
+
         int get_num_off() { return _num_off; }
         int get_int_ena() { return _int_ena; }
         void set_int_ena(int x) { _int_ena = x; }
         void set_cur_proc(proc::Pcb *p) { _cur_proc = p; }
+
         uint64 get_time();
 
         static inline uint64 read_sp()
@@ -64,11 +68,11 @@ public:
         static inline int get_intr_stat()
         {
 #ifdef RISCV
-                uint64 x = riscv::r_mstatus(); // 假设 crmd 对应 mstatus CSR
+                uint64 x = riscv::r_sstatus();
 #elif defined(LOONGARCH)
                 uint64 x = r_csr_crmd(); // 假设 crmd 对应 mstatus CSR
 #endif
-                return (x & (1 << 3)) != 0; // 假设 ie_m 位在 mstatus 的第 3 位 (MIE)
+                return (x & SSTATUS_SIE) != 0;
         };
 
         static void push_intr_off();

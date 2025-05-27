@@ -20,10 +20,15 @@
 #include "fs/vfs/dentrycache.hh"
 #include "fs/ramfs/ramfs.hh"
 #include "tm/timer_manager.hh"
+#include "proc/scheduler.hh"
 
 
 // 注意华科的main函数可能有问题, 注意多核初始化
 void main() {
+    // riscv::r_mstatus();
+
+    uint64 x;
+    asm volatile("csrr %0, sstatus" : "=r"(x));
 
     k_printer.init(); // 这里也初始化了console和uart
 
@@ -36,10 +41,11 @@ void main() {
 
     plic_mgr.init();// plic初始化
     plic_mgr.inithart();// 初始化每个核上的csr
-   
+
     mem::k_pmm.init();
     mem::k_vmm.init("virtual_memory_manager");
     mem::k_hmm.init("heap_memory_manager",HEAP_START);
+
 
     proc::k_pm.init("next pid", "wait lock");
     tmm::k_tm.init("timer manager");
@@ -54,6 +60,12 @@ void main() {
     fs::Path mnt("/mnt");
     fs::Path dev("/dev/hdb");
     mnt.mount(dev, "ext4", 0, 0);
+
+    // proc::k_pm.user_init(); // 初始化用户进程
+    // printfMagenta("user init\n");
+
+    // proc::k_scheduler.init("scheduler");
+    // proc::k_scheduler.start_schedule(); // 启动调度器
 
     printfMagenta("\n"
                   "╦ ╦╔═╗╦  ╔═╗╔═╗╔╦╗╔═╗\n"
