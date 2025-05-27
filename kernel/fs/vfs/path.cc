@@ -75,7 +75,7 @@ namespace fs
 		else if ( pathname[ 0 ] == '/' ) { base = mnt_table[ "/" ]->getRoot(); }
 		else if ( base == nullptr ) { base = proc::k_pm.get_cur_pcb()->get_cwd(); }
 
-		Info("base name is %s ", base->rName());
+		// Info("base name is %s ", base->rName());
 		size_t len = pathname.size();
 		if ( len > 0 )
 		{  // 保证数组长度不为0
@@ -188,10 +188,10 @@ namespace fs
 		
 		entry = base;
 		int dirsize = dirname.size();
-		printfBlue( "path search %d level", dirsize );
+		// printfBlue( "path search %d level", dirsize );
 		for ( int i = 0; i < dirsize; i++ )
 		{
-			printfBlue( "pathSearch: dirname[%d]: %s", i, dirname[i] );
+			// printfBlue( "pathSearch: dirname[%d]: %s", i, dirname[i] );
 			while(entry->isMntPoint()) 
 				panic("pathSearch: entry is a mount point"); 
 			/// @todo 这里随后检查 是否是目录，文件的结构不完善
@@ -201,7 +201,7 @@ namespace fs
 			if( dirname[i] == "." ) next = entry;
 			else if( dirname[i] == ".." ) next = entry->getParent();
 			else {
-				printfBlue( "dentry %s search sub-dir", entry->rName().c_str() );
+				// printfBlue( "dentry %s search sub-dir", entry->rName().c_str() );
 				if ( auto it = entry->EntrySearch( dirname[i] ); it != nullptr )
 					next = it;
 				else return nullptr;
