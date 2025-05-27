@@ -188,9 +188,9 @@ void trap_manager::usertrap()
   {
     if (p->is_killed())
       proc::k_pm.exit(-1);
-    printfYellow("p->_trapframe->epc: %p\n", p->_trapframe->epc);
+    // printfYellow("p->_trapframe->epc: %p\n", p->_trapframe->epc);
     p->_trapframe->epc += 4;
-    printfYellow("p->_trapframe->epc: %p\n", p->_trapframe->epc);
+    // printfYellow("p->_trapframe->epc: %p\n", p->_trapframe->epc);
     intr_on();
     syscall::k_syscall_handler.invoke_syscaller();
   }
@@ -256,7 +256,7 @@ if (pte.is_null()|| pte.is_valid() == 0){
   w_sstatus(x);
   w_sepc(p->_trapframe->epc);
   
-  printfYellow("[usertrapret] sepc: %p,saved sepc:%p\n", p->_trapframe->epc,r_sepc());
+  // printfYellow("[usertrapret] sepc: %p,saved sepc:%p\n", p->_trapframe->epc,r_sepc());
   // tell trampoline.S the user page table to switch to.
 
   //debug

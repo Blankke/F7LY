@@ -76,10 +76,14 @@ endif
 
 # 新增 syscall 编译规则
 SYSCALL_SRC := user/syscall_lib/syscall.cc
-SYSCALL_OBJ := build/$(OUTPUT_PREFIX)/syscall.o
+SYSCALL_OBJ := build/$(OUTPUT_PREFIX)/syscall.o build/$(OUTPUT_PREFIX)/printf.o
+
+# 新增 printf 编译规则
+PRINTF_SRC := user/syscall_lib/printf.cc
+PRINTF_OBJ := build/$(OUTPUT_PREFIX)/printf.o
 
 # 编译参数
-INITCODE_CFLAGS := -Wall -O -fno-builtin -fno-exceptions -fno-rtti -fno-stack-protector -nostdlib -ffreestanding $(ARCH_CFLAGS) -Iuser/deps -Iuser/syscall_lib -Iuser/syscall_lib/arch/$(ARCH)
+INITCODE_CFLAGS := -Wall -O -fno-builtin -fno-exceptions -fno-rtti -fno-stack-protector -nostdlib -ffreestanding $(ARCH_CFLAGS) -Iuser/deps -Iuser/syscall_lib -Iuser/syscall_lib/arch/$(ARCH) -Ikernel
 INITCODE_LDFLAGS := -N -e start -Ttext 0
 
 .PHONY: all clean dirs build riscv loongarch run debug initcode
@@ -161,8 +165,13 @@ $(SYSCALL_OBJ): $(SYSCALL_SRC)
 	@mkdir -p $(dir $@)
 	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
 
-# 链接生成 initcode.elf（同时链接 initcode.o 和 syscall.o）
-$(INITCODE_ELF): $(INITCODE_OBJ) $(SYSCALL_OBJ)
+# 编译 printf.o
+$(PRINTF_OBJ): $(PRINTF_SRC)
+	@mkdir -p $(dir $@)
+	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
+
+# 链接生成 initcode.elf
+$(INITCODE_ELF): $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ)
 	$(LD) $(INITCODE_LDFLAGS) -o $@ $^
 
 # 生成二进制 initcode 文件 + 反汇编
