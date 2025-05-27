@@ -18,3 +18,4 @@ os.out
 sdcard-rv.img
 sdcard-la.img
 user/disasm_initcode.asm
+user/initcode-rv
