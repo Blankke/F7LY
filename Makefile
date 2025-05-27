@@ -36,7 +36,7 @@ SUBDIRS := $(ARCH_DIRS) $(COMMON_DIRS)
 LINK_SCRIPT := $(KERNEL_DIR)/link/$(ARCH)/kernel.ld
 
 CFLAGS := -Wall -Werror -ffreestanding -O2 -fno-builtin -g -fno-stack-protector $(ARCH_CFLAGS)
-CXXFLAGS := $(CFLAGS) -std=c++17 \
+CXXFLAGS := $(CFLAGS) -std=c++23 -nostdlib \
 			-DEA_PLATFORM_LINUX -DEA_PLATFORM_POSIX \
             -DEA_PROCESSOR_RISCV -DEA_ENDIAN_LITTLE=1 \
             -Wno-deprecated-declarations -Wno-strict-aliasing \

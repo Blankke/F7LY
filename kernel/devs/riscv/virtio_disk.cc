@@ -20,8 +20,9 @@ namespace riscv
 {
 	namespace qemu
 	{
-    VirtioDriver::VirtioDriver( void *base_addr, int port_id)
+  VirtioDriver::VirtioDriver( void *base_addr, int port_id)
     {
+
       uint32 status = 0;
       _port_id = port_id;
       virtio_addr = (uint64) base_addr;

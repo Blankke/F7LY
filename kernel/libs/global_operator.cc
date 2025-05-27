@@ -45,3 +45,14 @@ void operator delete(void* ptr, std::size_t size, std::align_val_t align) noexce
     // 如果你对齐分配用的是 aligned_alloc/free，就改成对应的 free_aligned(ptr)
     operator delete(ptr, size);
 }
+
+
+void* operator new(std::size_t size, void* p) noexcept
+{
+    Info("placement new at %p\n", p);
+    return p;
+}
+void  operator delete(void*, void*) noexcept
+{
+    /* no-op */
+}

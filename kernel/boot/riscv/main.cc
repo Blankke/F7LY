@@ -56,6 +56,7 @@ void main() {
     tmm::k_tm.init("timer manager");
     fs::k_bufm.init("buffer manager");
     new (&fs::dentrycache::k_dentryCache) fs::dentrycache::dentryCache;
+
     fs::dentrycache::k_dentryCache.init();
     new (&fs::mnt_table) eastl::unordered_map<eastl::string, fs::FileSystem *>;
     fs::mnt_table.clear(); // clean mnt_Table

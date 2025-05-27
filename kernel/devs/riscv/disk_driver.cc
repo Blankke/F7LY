@@ -3,7 +3,7 @@
 #include <mbr.hh>
 #include "riscv/qemu.hh"
 #include "disk_driver.hh"
-#include "global_operator.hh"
+#include <new>
 #include "physical_memory_manager.hh"
 #include "printer.hh"
 namespace riscv
@@ -15,10 +15,7 @@ namespace riscv
 		DiskDriver::DiskDriver(const char *lock_name)
 		{
 			_lock.init(lock_name);
-
-			new (&disk_)
-				VirtioDriver((void *)VIRTIO0_V, 0);
-
+			new(&disk_)VirtioDriver((void *)VIRTIO0, 0);
 			dev::k_devm.register_device(this, "Disk driver");
 		}
 

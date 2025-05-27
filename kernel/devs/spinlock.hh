@@ -4,7 +4,7 @@
 
 #include "../types.hh"
 
-#include <atomic>
+#include <EASTL/atomic.h>
 
 class SpinLock
 {
