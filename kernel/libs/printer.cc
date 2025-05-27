@@ -97,6 +97,9 @@ void Printer::print( const char *fmt, ... )
     case 'd':
       printint(va_arg(ap, int), 10, 1);
       break;
+    case 'u':
+      printint(va_arg(ap, uint), 16, 0);
+      break;
     case 'x':
       printint(va_arg(ap, int), 16, 1);
       break;

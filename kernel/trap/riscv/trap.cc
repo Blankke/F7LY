@@ -174,7 +174,7 @@ void trap_manager::kerneltrap()
 
 void trap_manager::usertrap()
 {
-  printfMagenta("into usertrap\n");
+  // printfMagenta("into usertrap\n");
   int which_dev = 0;
   if ((r_sstatus() & riscv::csr::sstatus_spp_m) != 0)
     panic("usertrap: not from user mode");
@@ -190,7 +190,9 @@ void trap_manager::usertrap()
   {
     if (p->is_killed())
       proc::k_pm.exit(-1);
+    // printfYellow("p->_trapframe->epc: %p\n", p->_trapframe->epc);
     p->_trapframe->epc += 4;
+    // printfYellow("p->_trapframe->epc: %p\n", p->_trapframe->epc);
     intr_on();
     syscall::k_syscall_handler.invoke_syscaller();
   }
@@ -205,8 +207,8 @@ void trap_manager::usertrap()
   }
   else
   {
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->_pid);
-    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+    printfRed("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->_pid);
+    printfRed("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->kill();
   }
 
@@ -223,7 +225,7 @@ void trap_manager::usertrap()
       proc::k_scheduler.yield();
     }
   }
-  printfMagenta("left usertrap\n");
+  // printfMagenta("left usertrap\n");
   usertrapret();
 }
 
@@ -247,7 +249,7 @@ if (pte.is_null()|| pte.is_valid() == 0){
   // the process next re-enters the kernel.
   p->_trapframe->kernel_satp = r_satp();
   p->_trapframe->kernel_sp = p->_kstack + 1 * PGSIZE;
-  p->_trapframe->kernel_trap = (uint64)wrap_usertrapret;
+  p->_trapframe->kernel_trap = (uint64)wrap_usertrap;
   p->_trapframe->kernel_hartid = r_tp();
 
   uint64 x = r_sstatus();

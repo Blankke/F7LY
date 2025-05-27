@@ -110,8 +110,8 @@ riscv:
 loongarch:
 	@$(MAKE) ARCH=loongarch build
 
-
 build: initcode dirs $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a $(KERNEL_BIN)
+
 
 dirs:
 	@mkdir -p $(BUILD_DIR)
@@ -205,7 +205,6 @@ clean:
 	$(MAKE) clean -C thirdparty/EASTL
 	rm -f user/initcode-*
 	rm -f user/disasm_initcode.asm, kernel.asm
-
 
 
 -include $(DEPS)

@@ -244,3 +244,7 @@ int umount(const char *special)
 {
     return syscall(syscall::SYS_umount2, special, 0);
 }
+
+int shutdown(){
+    return syscall(syscall::SYS_shutdown);
+}

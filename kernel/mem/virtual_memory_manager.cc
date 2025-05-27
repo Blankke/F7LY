@@ -529,6 +529,11 @@ namespace mem
             mem = (char *)k_pmm.alloc_page();
             memset(mem, 0, PGSIZE);
             map_pages(pt, 0, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_X|PTE_U);
+            // debug
+            // printfYellow("预期映射的pa: %p\n", mem);
+            // uint64 pa= (uint64)pt.walk_addr(0);
+            // printfYellow("va: %p, pa: %p\n", 0, pa);
+            
             memmove(mem, (void*)src, MIN(sz, PGSIZE));
 
             mem = (char *)k_pmm.alloc_page();

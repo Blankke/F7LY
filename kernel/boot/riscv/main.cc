@@ -21,6 +21,7 @@
 #include "fs/ramfs/ramfs.hh"
 #include "tm/timer_manager.hh"
 #include "proc/scheduler.hh"
+#include "syscall_handler.hh"
 
 
 // 注意华科的main函数可能有问题, 注意多核初始化
@@ -60,6 +61,8 @@ void main() {
     fs::Path mnt("/mnt");
     fs::Path dev("/dev/hdb");
     mnt.mount(dev, "ext4", 0, 0);
+
+    syscall::k_syscall_handler.init(); // 初始化系统调用处理器
 
     proc::k_pm.user_init(); // 初始化用户进程
     printfMagenta("user init\n");
