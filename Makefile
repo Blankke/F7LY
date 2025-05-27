@@ -181,11 +181,26 @@ run-loongarch:
 
 debug: build
 	@if [ "$(ARCH)" = "riscv" ]; then \
-		$(QEMU_CMD) $(KERNEL_ELF) -S -gdb tcp::1234; \
+	$(MAKE) debug-riscv; \
 	elif [ "$(ARCH)" = "loongarch" ]; then \
 		$(QEMU_CMD) $(KERNEL_ELF) -S -gdb tcp::1234; \
 	fi
 
+debug-riscv:
+	qemu-system-riscv64 \
+		-machine virt \
+		-kernel $(KERNEL_ELF) \
+		-m 1G \
+		-nographic \
+		-smp 1 \
+		-bios default \
+		-drive file=$(KERNEL_PREFIX)/sdcard-rv.img,if=none,format=raw,id=x0 \
+		-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 \
+		-no-reboot \
+		-device virtio-net-device,netdev=net \
+		-netdev user,id=net \
+		-rtc base=utc \
+		-S -gdb tcp::1234;
 initcode: $(INITCODE_BIN)
 
 # 编译 initcode 源文件为目标文件

@@ -13,6 +13,8 @@
 #include "proc/scheduler.hh"
 #include "trap_func_wrapper.hh"
 #include "syscall_handler.hh"
+#include "devs/riscv/disk_driver.hh"
+
 // #include "fuckyou.hh"
 // in kernelvec.S, calls kerneltrap().
 extern "C" void kernelvec();
@@ -68,15 +70,15 @@ int trap_manager::devintr()
         kConsole.console_intr(c);
       }
     }
-    // !!写完磁盘后修改
-    // else if (irq == VIRTIO0_IRQ)
-    // {
-    //   virtio_disk_intr();
-    // }
-    // else if (irq == VIRTIO1_IRQ)
-    // {
-    //   virtio_disk_intr2();
-    // }
+    //!!写完磁盘后修改
+    else if (irq == VIRTIO0_IRQ)
+    {
+      riscv::qemu::disk_driver.handle_intr();
+    }
+    else if (irq == VIRTIO1_IRQ)
+    {
+        panic("virtio1 interrupt not handled yet");
+    }
     else if (irq)
     {
       printf("unexpected interrupt irq=%d\n", irq);
@@ -118,7 +120,6 @@ void trap_manager::timertick()
   // set the next timeout
   set_next_timeout();
 }
-
 
 // 处理内核态的中断
 // 支持嵌套中断
@@ -233,12 +234,13 @@ void trap_manager::usertrapret()
 {
   // printfMagenta("into usertrapret\n");
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
-  //Debug
-  // printfYellow("[usertrapret] trampoline addr %p\n", trampoline);
+  // Debug
+  //  printfYellow("[usertrapret] trampoline addr %p\n", trampoline);
   mem::Pte pte = p->_pt.walk(TRAMPOLINE, 0);
-if (pte.is_null()|| pte.is_valid() == 0){
+  if (pte.is_null() || pte.is_valid() == 0)
+  {
     panic("trampoline not mapped in user pagetable!");
-}
+  }
 
   // we're about to switch the destination of traps from
   // kerneltrap() to usertrap(), so turn off interrupts until
@@ -257,15 +259,15 @@ if (pte.is_null()|| pte.is_valid() == 0){
   x |= riscv::csr::sstatus_spie_m;
   w_sstatus(x);
   w_sepc(p->_trapframe->epc);
-  
+
   // printfYellow("[usertrapret] sepc: %p,saved sepc:%p\n", p->_trapframe->epc,r_sepc());
   // tell trampoline.S the user page table to switch to.
 
-  //debug
-  // printfYellow("[usertrapret]user pagetable addr: %p\n", p->_pt.get_base());
+  // debug
+  //  printfYellow("[usertrapret]user pagetable addr: %p\n", p->_pt.get_base());
 
   uint64 satp = MAKE_SATP(p->_pt.get_base());
-  //debug
+  // debug
 
   uint64 fn = TRAMPOLINE + (userret - trampoline);
   ((void (*)(uint64, uint64))fn)(TRAPFRAME + proc::k_pm.get_cur_cpuid() * sizeof(TrapFrame), satp);
