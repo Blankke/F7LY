@@ -79,7 +79,10 @@ namespace fs
 			for ( int i = 0; i < DEV_TBL_LEN; i++ )
 			{
 				if ( dev_table[ i ] == nullptr )
+				{
+					printfYellow( "RamFS::initfd: dev_table[%d] is nullptr\n", i );
 					break;
+				}
 				dentry *device_ = dev->EntryCreate( dev_table[ i ], _super_block->rDefaultMod(), dev_table[ i ] );
 				Device *dev_ = new Device( static_cast<RamFS*>(dev->getNode()->getFS()), alloc_ino(), FileAttrs( FT_DEVICE, 0666), i );
 				device_->setNode( dev_ );

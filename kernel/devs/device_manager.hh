@@ -75,6 +75,7 @@ namespace dev
 		{
 			if ( dev->type() != dev_char ) return -1;
 			_device_table[ DEV_STDIN_NUM ].device_ptr = dev;
+			_device_table[DEV_STDIN_NUM].device_name = "stdin";
 			return 0;
 		}
 
@@ -82,6 +83,7 @@ namespace dev
 		{
 			if ( dev->type() != dev_char ) return -1;
 			_device_table[ DEV_STDOUT_NUM ].device_ptr = dev;
+			_device_table[DEV_STDOUT_NUM].device_name = "stdout";
 			return 0;
 		}
 
@@ -89,6 +91,7 @@ namespace dev
 		{
 			if ( dev->type() != dev_char ) return -1;
 			_device_table[ DEV_STDERR_NUM ].device_ptr = dev;
+			_device_table[DEV_STDERR_NUM].device_name = "stderr";
 			return 0;
 		}
 

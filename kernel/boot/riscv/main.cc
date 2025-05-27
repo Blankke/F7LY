@@ -23,7 +23,9 @@
 #include "proc/scheduler.hh"
 #include "syscall_handler.hh"
 #include "devs/riscv/disk_driver.hh"
-
+#include "devs/device_manager.hh"
+#include "fs/vfs/file/device_file.hh"
+#include "devs/console1.hh"
 // 注意华科的main函数可能有问题, 注意多核初始化
 void main() {
     // riscv::r_mstatus();
@@ -49,6 +51,19 @@ void main() {
     mem::k_vmm.init("virtual_memory_manager");
     mem::k_hmm.init("heap_memory_manager",HEAP_START);
 
+    dev::ConsoleStdin k_stdin;
+    dev::ConsoleStdout k_stdout;
+    dev::ConsoleStderr k_stderr;
+    if (dev::k_devm.register_stdin(static_cast<dev::VirtualDevice *>(&k_stdin)) < 0)
+        while (1)
+            ;
+    if (dev::k_devm.register_stdout(static_cast<dev::VirtualDevice *>(&k_stdout)) < 0)
+        while (1)
+            ;
+    if (dev::k_devm.register_stderr(static_cast<dev::VirtualDevice *>(&k_stderr)) < 0)
+        while (1)
+            ;
+
     // hardware_secondary_init
     //  2. Disk 初始化 (debug)
     new (&riscv::qemu::disk_driver) riscv::qemu::DiskDriver("Disk");
@@ -56,6 +71,7 @@ void main() {
     tmm::k_tm.init("timer manager");
     fs::k_bufm.init("buffer manager");
     new (&fs::dentrycache::k_dentryCache) fs::dentrycache::dentryCache;
+
 
     fs::dentrycache::k_dentryCache.init();
     new (&fs::mnt_table) eastl::unordered_map<eastl::string, fs::FileSystem *>;
@@ -66,6 +82,25 @@ void main() {
     fs::Path mnt("/mnt");
     fs::Path dev("/dev/hda");
     mnt.mount(dev, "ext4", 0, 0);
+
+    fs::Path path("/dev/stdin");
+    fs::FileAttrs fAttrsin = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0444); // only read
+    fs::device_file *f_in = new fs::device_file(fAttrsin, DEV_STDIN_NUM, path.pathSearch());
+    assert(f_in != nullptr, "pm: alloc stdin file fail while user init.");
+
+    fs::Path pathout("/dev/stdout");
+    fs::FileAttrs fAttrsout = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0222); // only write
+    fs::device_file *f_out =
+        new fs::device_file(fAttrsout, DEV_STDOUT_NUM, pathout.pathSearch());
+    assert(f_out != nullptr, "pm: alloc stdout file fail while user init.");
+
+    fs::Path patherr("/dev/stderr");
+    fs::FileAttrs fAttrserr = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0222); // only write
+    fs::device_file *f_err =
+        new fs::device_file(fAttrserr, DEV_STDERR_NUM, patherr.pathSearch());
+    assert(f_err != nullptr, "pm: alloc stderr file fail while user init.");
+
+    // TODO记得给每个进程proc->_ofile[0] = f_in;/out/err
 
     syscall::k_syscall_handler.init(); // 初始化系统调用处理器
 
