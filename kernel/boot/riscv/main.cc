@@ -42,12 +42,12 @@ void main() {
     plic_mgr.init();// plic初始化
     plic_mgr.inithart();// 初始化每个核上的csr
 
+    proc::k_pm.init("next pid", "wait lock");
+
     mem::k_pmm.init();
     mem::k_vmm.init("virtual_memory_manager");
     mem::k_hmm.init("heap_memory_manager",HEAP_START);
 
-
-    proc::k_pm.init("next pid", "wait lock");
     tmm::k_tm.init("timer manager");
     fs::k_bufm.init("buffer manager");
     new (&fs::dentrycache::k_dentryCache) fs::dentrycache::dentryCache;
