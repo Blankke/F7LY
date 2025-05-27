@@ -28,7 +28,7 @@ void BuddySystem::Initialize(uint64 baseptr) {
     //原本的buddy是用来管理物理内存的，所以并没有初始化它管理的内存的操作
     //这里解耦合，buddy同时用于管理pm和hm，这里的buddy初始化时不用初始化内存
     base_ptr = reinterpret_cast<uint8*>(baseptr);
-    printfGreen("init buddy system\n");  
+    printfGreen("[mem] Buddy System Init\n");  
     // printf("[BuddySystem] base_ptr: %p\n", base_ptr);
     tree = base_ptr - BSSIZE*PGSIZE+ sizeof(BuddySystem);
     level = 0;

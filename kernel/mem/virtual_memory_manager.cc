@@ -25,7 +25,7 @@ namespace mem
     void VirtualMemoryManager::init(const char *lock_name)
     {
 #ifdef RISCV
-        printfGreen("[vmm] VirtualMemoryManager init start\n");
+
         _virt_mem_lock.init(lock_name);
         //创建内核页表
         k_pagetable=kvmmake();
@@ -51,7 +51,7 @@ namespace mem
         // printfYellow("sfence\n");
         sfence_vma();
 #endif 
-        printfGreen("[vmm] VirtualMemoryManager init\n");
+        printfGreen("[vmm] Virtual Memory Manager Init\n");
     }
 
     // 根据传入的 flags 标志，生成对应的页表权限（perm）值
@@ -460,7 +460,6 @@ namespace mem
 
     PageTable VirtualMemoryManager::kvmmake()
     {
-        printfGreen("[vmm] kvmmake start\n");
         PageTable pt;
         pt.set_global();
         pt.set_base((uint64)k_pmm.alloc_page());

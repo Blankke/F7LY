@@ -33,7 +33,7 @@ namespace mem
 		);
 		//这里细粒度的管理是依仗着粗粒度进行的，它每一次申请内存的时候都会调用粗粒度的buddy系统，分配一个页面
 		//再从这样分配的页面中，进行更细粒度的内存分配。
-		printfGreen("HeapMemoryManager init\n");
+		printfGreen("[hmm] Heap Memory Manager Init\n");
 	}
 
 	void * HeapMemoryManager::allocate( uint64 size )

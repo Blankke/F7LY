@@ -21,7 +21,7 @@ namespace tmm
 		_lock.init(lock_name);
 
 		_ticks = 0;
-
+		printfGreen("[TM] Timer Manager Init\n");
 		// close_ti_intr();
 	}
 

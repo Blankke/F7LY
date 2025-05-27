@@ -14,7 +14,7 @@ void plic_manager::init()
   *(uint32*)(PLIC + UART0_IRQ*4) = 1;
   *(uint32*)(PLIC + VIRTIO0_IRQ*4) = 1;
   *(uint32*)(PLIC + VIRTIO1_IRQ*4) = 1;
-  printfGreen("plic manager init\n");
+  printfGreen("[trap] Plic Manager Init\n");
 }
 
 void plic_manager::inithart()

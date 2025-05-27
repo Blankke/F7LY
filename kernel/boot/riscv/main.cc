@@ -19,7 +19,7 @@
 #include "fs/vfs/path.hh"
 #include "fs/vfs/dentrycache.hh"
 #include "fs/ramfs/ramfs.hh"
-
+#include "tm/timer_manager.hh"
 
 
 // 注意华科的main函数可能有问题, 注意多核初始化
@@ -42,7 +42,7 @@ void main() {
     mem::k_hmm.init("heap_memory_manager",HEAP_START);
 
     proc::k_pm.init("next pid", "wait lock");
-
+    tmm::k_tm.init("timer manager");
     fs::k_bufm.init("buffer manager");
     new (&fs::dentrycache::k_dentryCache) fs::dentrycache::dentryCache;
     fs::dentrycache::k_dentryCache.init();

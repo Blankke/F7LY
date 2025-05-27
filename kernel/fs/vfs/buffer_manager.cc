@@ -33,7 +33,7 @@ namespace fs
 			block = &_buffer_pool[i];
 			block->init( i );
 		}
-		printfGreen("buffer manager init\n");
+		printfGreen("[fs] Buffer Manager Init\n");
 	}
 
 	Buffer BufferManager::read( int dev, uint64 lba )
