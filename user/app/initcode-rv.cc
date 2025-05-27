@@ -3,9 +3,9 @@ extern "C"
 {
     int main()
     {
-        int a = 5;
-        while(a--);
         openat(1, "ddd", 3);
+        // while(1);
+        while(1);
         shutdown();
         return 0;
     }

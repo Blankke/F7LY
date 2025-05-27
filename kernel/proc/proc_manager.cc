@@ -232,17 +232,13 @@ namespace proc
         Pcb *p = alloc_proc();
         _init_proc = p;
         // 传入initcode的地址
-        mem::k_vmm.uvmfirst(p->_pt, (uint64)initcode_start, (uint64)(initcode_end - initcode_start));
-
+        mem::k_vmm.uvmfirst(p->_pt, (uint64)initcode_start, (uint64)initcode_end - (uint64)initcode_start);
         //debug
-        uint64 pa = (uint64)p->_pt.walk_addr((uint64)0);
-        printfYellow("initcode start pa: %p\n",pa);
-        printfYellow("initcode start byte %u\n", *(uint64 *)pa);
-
-
-
+        // uint64 pa = (uint64)p->_pt.walk_addr((uint64)0);
+        // printfYellow("initcode start pa: %p\n",pa);
+        // printfYellow("initcode start byte %u\n", *(uint64 *)pa);
         printf("initcode start: %p, end: %p\n", initcode_start, initcode_end);
-        printf("initcode size: %d\n", (uint64)(initcode_end - initcode_start));
+        printf("initcode size: %p\n", (uint64)(initcode_end - 0));
         p->_sz = 3 * PGSIZE;
 
         p->_trapframe->epc = 0;
