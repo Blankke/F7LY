@@ -123,6 +123,34 @@ namespace fs
             }
     }
 
+    void dentry::printAllChildrenInfo(const eastl::string &prefix, bool isLast)
+    {
+        // 打印当前节点
+        printf("%s", prefix.c_str());
+        if (!prefix.empty())
+        {
+            printf("%s", isLast ? "└── " : "├── ");
+        }
+
+        FileAttrs attrs = _node->rMode();
+        printf("%s [mode: %d, type: %d]\n", name.c_str(), attrs.transMode(), attrs.filetype);
+
+        // 准备新的前缀
+        eastl::string newPrefix = prefix;
+        if (!prefix.empty())
+        {
+            newPrefix += isLast ? "    " : "│   ";
+        }
+
+        size_t idx = 0;
+        size_t total = children.size();
+        for (auto it = children.begin(); it != children.end(); ++it, ++idx)
+        {
+            bool lastChild = (idx == total - 1);
+            it->second->printAllChildrenInfo(newPrefix, lastChild);
+        }
+    }
+
     void dentry::unlink()
     {
         /// @todo node->unlink(); linkcnt--;

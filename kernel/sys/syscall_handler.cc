@@ -108,11 +108,11 @@ namespace syscall
         }
         else
         {
-            printfCyan("[SyscallHandler::invoke_syscaller]sys_num: %d, syscall_name: %s\n", sys_num, _syscall_name[sys_num]);
+            // printfCyan("[SyscallHandler::invoke_syscaller]sys_num: %d, syscall_name: %s\n", sys_num, _syscall_name[sys_num]);
             // 打印寄存器中保存的值
-            printfCyan("[SyscallHandler::invoke_syscaller]a0: %p, a1: %p, a2: %p, a3: %p, a4: %p, a5: %p\n",
-                       p->_trapframe->a0, p->_trapframe->a1, p->_trapframe->a2,
-                       p->_trapframe->a3, p->_trapframe->a4, p->_trapframe->a5);
+            // printfCyan("[SyscallHandler::invoke_syscaller]a0: %p, a1: %p, a2: %p, a3: %p, a4: %p, a5: %p\n",
+                    //    p->_trapframe->a0, p->_trapframe->a1, p->_trapframe->a2,
+                    //    p->_trapframe->a3, p->_trapframe->a4, p->_trapframe->a5);
             // 调用对应的系统调用函数
             uint64 ret = (this->*_syscall_funcs[sys_num])();
             p->_trapframe->a0 = ret; // 设置返回值

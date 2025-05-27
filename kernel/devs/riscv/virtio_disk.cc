@@ -27,14 +27,19 @@ namespace riscv
       virtio_addr = (uint64) base_addr;
 
       disk.vdisk_lock.init("virtio_disk");
-
-      if(*R(VIRTIO_MMIO_MAGIC_VALUE) != 0x74726976 ||
-        *R(VIRTIO_MMIO_VERSION) != 1 ||
-        *R(VIRTIO_MMIO_DEVICE_ID) != 2 ||
-        *R(VIRTIO_MMIO_VENDOR_ID) != 0x554d4551){
-          panic("could not find virtio disk");
+      // printfYellow("virtio disk driver init, port_id: %d, virtio_addr: 0x%x\n", _port_id, virtio_addr);
+      if (*R(VIRTIO_MMIO_MAGIC_VALUE) != 0x74726976 ||
+          *R(VIRTIO_MMIO_VERSION) != 1 ||
+          *R(VIRTIO_MMIO_DEVICE_ID) != 2 ||
+          *R(VIRTIO_MMIO_VENDOR_ID) != 0x554d4551)
+      {
+        printfYellow("*R(VIRTIO_MMIO_MAGIC_VALUE): 0x%x\n", *R(VIRTIO_MMIO_MAGIC_VALUE));
+        printfYellow("*R(VIRTIO_MMIO_VERSION): 0x%x\n", *R(VIRTIO_MMIO_VERSION));
+        printfYellow("*R(VIRTIO_MMIO_DEVICE_ID): 0x%x\n", *R(VIRTIO_MMIO_DEVICE_ID));
+        printfYellow("*R(VIRTIO_MMIO_VENDOR_ID): 0x%x\n", *R(VIRTIO_MMIO_VENDOR_ID));
+        panic("could not find virtio disk");
       }
-      
+
       status |= VIRTIO_CONFIG_S_ACKNOWLEDGE;
       *R(VIRTIO_MMIO_STATUS) = status;
 
