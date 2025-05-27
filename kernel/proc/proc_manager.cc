@@ -47,7 +47,7 @@ namespace proc
         Cpu *c_cpu = Cpu::get_cpu();
         proc::Pcb *pcb = c_cpu->get_cur_proc();
         Cpu::pop_intr_off();
-        if (pcb == nullptr)
+        if (pcb == nullptr) //这里为nullptr是正常现象应该无需panic？学长未对此处作处理，而是判断为nullptr就sleep，参考virtio_disk.cc:218行
             panic("get_cur_pcb: no current process");
         return pcb;
     }
