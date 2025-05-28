@@ -7,6 +7,12 @@
 #include "libs/klib.hh"
 #include "trap.hh"
 #include "printer.hh"
+#include "devs/device_manager.hh"
+#include "devs/riscv/disk_driver.hh"
+#include "fs/vfs/dentrycache.hh"
+#include "fs/vfs/path.hh"
+#include "fs/ramfs/ramfs.hh"
+#include "fs/vfs/file/device_file.hh"
 
 extern "C"
 {
@@ -143,16 +149,60 @@ namespace proc
     void ProcessManager::fork_ret()
     {
         static int first = 1;
-        get_cur_pcb()->_lock.release();
+        proc::Pcb *proc = get_cur_pcb();
+        proc->_lock.release();
 
         if (first)
         {
             first = 0;
             TODO(
+                // 这个TODO已经完成如下
                 // printf("sp: %x\n", r_sp());
                 filesystem_init();
                 filesystem2_init(); // 启动init
             )
+
+            // 文件系统初始化必须在常规进程的上下文中运行（例如，因为它会调用 sleep），
+            // 因此不能从 main() 中运行。(copy form xv6)
+            
+            riscv::qemu::DiskDriver *disk = (riscv::qemu::DiskDriver *)dev::k_devm.get_device("Disk driver");
+            disk->identify_device();
+
+            new (&fs::dentrycache::k_dentryCache) fs::dentrycache::dentryCache;
+            fs::dentrycache::k_dentryCache.init();
+            new (&fs::mnt_table) eastl::unordered_map<eastl::string, fs::FileSystem *>;
+            fs::mnt_table.clear(); // clean mnt_Table
+            new (&fs::ramfs::k_ramfs) fs::ramfs::RamFS;
+            fs::ramfs::k_ramfs.initfd();
+            fs::mnt_table["/"] = &fs::ramfs::k_ramfs;
+            fs::Path mnt("/mnt");
+            fs::Path dev("/dev/hda");
+            mnt.mount(dev, "ext4", 0, 0);
+
+            fs::Path path("/dev/stdin");
+            fs::FileAttrs fAttrsin = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0444); // only read
+            fs::device_file *f_in = new fs::device_file(fAttrsin, DEV_STDIN_NUM, path.pathSearch());
+            assert(f_in != nullptr, "pm: alloc stdin file fail while user init.");
+
+            fs::Path pathout("/dev/stdout");
+            fs::FileAttrs fAttrsout = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0222); // only write
+            fs::device_file *f_out =
+                new fs::device_file(fAttrsout, DEV_STDOUT_NUM, pathout.pathSearch());
+            assert(f_out != nullptr, "pm: alloc stdout file fail while user init.");
+
+            fs::Path patherr("/dev/stderr");
+            fs::FileAttrs fAttrserr = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0222); // only write
+            fs::device_file *f_err =
+                new fs::device_file(fAttrserr, DEV_STDERR_NUM, patherr.pathSearch());
+            assert(f_err != nullptr, "pm: alloc stderr file fail while user init.");
+
+            fs::ramfs::k_ramfs.getRoot()->printAllChildrenInfo();
+            proc->_ofile[0] = f_in;
+            proc->_ofile[1] = f_out;
+            proc->_ofile[2] = f_err;
+            /// @todo 这里暂时修改进程的工作目录为fat的挂载点
+            proc->_cwd = fs::ramfs::k_ramfs.getRoot()->EntrySearch("mnt");
+            proc->_cwd_name = "/mnt/";
         }
         // printf("fork_ret\n");
         trap_mgr.usertrapret();
@@ -251,7 +301,8 @@ namespace proc
 
         safestrcpy(p->_name, "initcode", sizeof(p->_name));
         p->_parent = p;
-        safestrcpy(p->_cwd_name, "/", sizeof(p->_cwd_name));
+        // safestrcpy(p->_cwd_name, "/", sizeof(p->_cwd_name));
+        p->_cwd_name = "/";
 
         p->_state = ProcState::RUNNABLE;
 

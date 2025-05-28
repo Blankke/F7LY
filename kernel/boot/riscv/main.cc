@@ -70,68 +70,13 @@ void main() {
     //  2. Disk 初始化 (debug)
     new (&riscv::qemu::disk_driver) riscv::qemu::DiskDriver("Disk");
 
-    //我也不知道这是什么鬼
-    riscv::qemu::DiskDriver *disk = (riscv::qemu::DiskDriver *)dev::k_devm.get_device("Disk driver");
-    disk->identify_device();
-
     tmm::k_tm.init("timer manager");
     fs::k_bufm.init("buffer manager");
-    new (&fs::dentrycache::k_dentryCache) fs::dentrycache::dentryCache;
+    
 
-
-    fs::dentrycache::k_dentryCache.init();
-    new (&fs::mnt_table) eastl::unordered_map<eastl::string, fs::FileSystem *>;
-    fs::mnt_table.clear(); // clean mnt_Table
-    new (&fs::ramfs::k_ramfs) fs::ramfs::RamFS;
-    fs::ramfs::k_ramfs.initfd();
-    fs::mnt_table["/"] = &fs::ramfs::k_ramfs;
-    fs::Path mnt("/mnt");
-    fs::Path dev("/dev/hda");
-    fs::ramfs::k_ramfs.getRoot()->printAllChildrenInfo();
-    mnt.mount(dev, "ext4", 0, 0);
-    fs::ramfs::k_ramfs.getRoot()->printAllChildrenInfo();
-
-    fs::Path path("/dev/stdin");
-    fs::FileAttrs fAttrsin = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0444); // only read
-    fs::device_file *f_in = new fs::device_file(fAttrsin, DEV_STDIN_NUM, path.pathSearch());
-    assert(f_in != nullptr, "pm: alloc stdin file fail while user init.");
-
-    fs::Path pathout("/dev/stdout");
-    fs::FileAttrs fAttrsout = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0222); // only write
-    fs::device_file *f_out =
-        new fs::device_file(fAttrsout, DEV_STDOUT_NUM, pathout.pathSearch());
-    assert(f_out != nullptr, "pm: alloc stdout file fail while user init.");
-
-    fs::Path patherr("/dev/stderr");
-    fs::FileAttrs fAttrserr = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0222); // only write
-    fs::device_file *f_err =
-        new fs::device_file(fAttrserr, DEV_STDERR_NUM, patherr.pathSearch());
-    assert(f_err != nullptr, "pm: alloc stderr file fail while user init.");
 
     // TODO记得给每个进程proc->_ofile[0] = f_in;/out/err
 
-    
-    fs::Path mnt_path("/mnt");
-    fs::dentry *mnt_dentry = mnt_path.pathSearch();
-    if (mnt_dentry)
-    {
-        fs::Inode *mnt_inode = mnt_dentry->getNode();
-        if (mnt_inode)
-        {
-            mem::UserspaceStream dir_buf;
-            size_t read_len = mnt_inode->readSubDir(dir_buf, 0);
-            printf("Read %u bytes from /mnt directory\n", read_len);
-            // 你可以遍历dir_buf内容，解析并打印目录项
-        }
-        else
-        {
-            printfRed("Failed to get inode for /mnt\n");
-        }
-    }
-    else
-    {
-        printfRed("Failed to find dentry for /mnt\n");
-    }
 
     syscall::k_syscall_handler.init(); // 初始化系统调用处理器
 
