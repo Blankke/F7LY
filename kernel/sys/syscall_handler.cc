@@ -62,7 +62,7 @@ namespace syscall
         BIND_SYSCALL(linkat);
         BIND_SYSCALL(mkdirat);
         BIND_SYSCALL(close);
-        BIND_SYSCALL(mkn);
+        BIND_SYSCALL(mknod);
         BIND_SYSCALL(clone);
         BIND_SYSCALL(umount2);
         BIND_SYSCALL(mount);
@@ -111,8 +111,8 @@ namespace syscall
             // printfCyan("[SyscallHandler::invoke_syscaller]sys_num: %d, syscall_name: %s\n", sys_num, _syscall_name[sys_num]);
             // 打印寄存器中保存的值
             // printfCyan("[SyscallHandler::invoke_syscaller]a0: %p, a1: %p, a2: %p, a3: %p, a4: %p, a5: %p\n",
-                    //    p->_trapframe->a0, p->_trapframe->a1, p->_trapframe->a2,
-                    //    p->_trapframe->a3, p->_trapframe->a4, p->_trapframe->a5);
+            //    p->_trapframe->a0, p->_trapframe->a1, p->_trapframe->a2,
+            //    p->_trapframe->a3, p->_trapframe->a4, p->_trapframe->a5);
             // 调用对应的系统调用函数
             uint64 ret = (this->*_syscall_funcs[sys_num])();
             p->_trapframe->a0 = ret; // 设置返回值
@@ -126,8 +126,8 @@ namespace syscall
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
         // if ( addr >= p->get_size() || addr + sizeof( uint64 ) > p->get_size()
         // ) 	return -1;
-        mem::PageTable &pt = p->get_pagetable();
-        if (mem::k_vmm.copy_in(pt, &out_data, addr, sizeof(out_data)) < 0)
+        mem::PageTable* pt = p->get_pagetable();
+        if (mem::k_vmm.copy_in(*pt, &out_data, addr, sizeof(out_data)) < 0)
             return -1;
         return 0;
     }
@@ -135,8 +135,8 @@ namespace syscall
     int SyscallHandler::_fetch_str(uint64 addr, void *buf, uint64 max)
     {
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
-        mem::PageTable &pt = p->get_pagetable();
-        int err = mem::k_vmm.copy_str_in(pt, buf, addr, max);
+        mem::PageTable *pt = p->get_pagetable();
+        int err = mem::k_vmm.copy_str_in(*pt, buf, addr, max);
         if (err < 0)
             return err;
         return strlen((const char *)buf);
@@ -205,9 +205,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_fork()
     {
-        TODO("sys_fork");
-        printfYellow("sys_fork\n");
-        return 0;
+        return proc::k_pm.fork(); // 调用进程管理器的 fork 函数
     }
     uint64 SyscallHandler::sys_exit()
     {
@@ -341,7 +339,7 @@ namespace syscall
         printfYellow("sys_close\n");
         return 0;
     }
-    uint64 SyscallHandler::sys_mkn()
+    uint64 SyscallHandler::sys_mknod()
     {
         TODO("sys_mkn");
         printfYellow("sys_mkn\n");
@@ -431,6 +429,194 @@ namespace syscall
         vfs_ext_umount(fs);)
         sbi_shutdown();
         printfYellow("sys_shutdown\n");
+        sbi_shutdown();
+        return 0;
+    }
+
+    //====================================signal===================================================
+    uint64 sys_kill_signal()
+    {
+        ///@todo
+        return 0;
+    }
+    uint64 sys_tkill()
+    {
+        ///@todo
+        return 0;
+    }
+    uint64 sys_tgkill()
+    {
+        ///@todo
+        return 0;
+    }
+    uint64 sys_rt_sigaction()
+    {
+        ///@todo
+        return 0;
+    }
+    uint64 sys_rt_sigprocmask()
+    {
+        ///@todo
+        return 0;
+    }
+    uint64 sys_rt_sigtimedwait()
+    {
+        ///@todo
+        return 0;
+    }
+    uint64 sys_rt_sigreturn()
+    {
+        ///@todo
+        return 0;
+    }
+
+    //================================== busybox===================================================
+    uint64 sys_set_tid_address()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_getuid()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_getgid()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_setgid()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_setuid()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_fstatat()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_exit_group()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_set_robust_list()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_gettid()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_writev()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_prlimit64()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_readlinkat()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_getrandom()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_clock_gettime()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_ioctl()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_syslog()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_fcntl()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_faceessat()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_sysinfo()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_ppoll()
+    {
+        // TODO
+        return 0;
+    }
+
+    uint64 sys_sendfile()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_readv()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_geteuid()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_madvise()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_mremap()
+    {
+        // TODO
+        return 0;
+    }
+
+    uint64 sys_lseek()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_utimensat()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 sys_renameat2()
+    {
+        // TODO
+        return 0;
+    }
+
+    uint64 sys_clock_nanosleep()
+    {
+        // TODO
         return 0;
     }
 } // namespace syscall

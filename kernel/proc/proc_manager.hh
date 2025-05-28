@@ -60,7 +60,7 @@ namespace proc
         int fork(uint64 usp); // 创建子进程（带用户栈指针）
         int fork(); // 创建子进程
         void fork_ret(); // fork返回处理
-        int brk(int n); // 扩展/收缩数据段
+        long brk(long n); // 扩展/收缩数据段
         int open(int dir_fd, const char *path, uint flags); // 打开文件
         int close(int fd); // 关闭文件
         // int fstat(int fd, struct fs::Kstat *buf); // 获取文件状态

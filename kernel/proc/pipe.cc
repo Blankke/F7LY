@@ -47,11 +47,9 @@ namespace proc
 				{
 					char ch;
 
-					// ⚠️警告：此处存在潜在问题
-					// pr->get_pagetable() 返回的不是指针，因此取地址可能非法
-					TODO("此处有风险，get_pagetable()返回值不是指针，取地址操作可能会有误");
 
-					mem::PageTable *pt = &pr->get_pagetable(); // 获取页表对象的地址（风险点）
+
+					mem::PageTable *pt = pr->get_pagetable(); // 获取页表对象的地址（风险点）
 
 					// 从用户空间地址 addr + i 拷贝一个字节到内核空间的 ch 中
 					if (mem::k_vmm.copy_in(*pt, &ch, addr + i, 1) == -1)
