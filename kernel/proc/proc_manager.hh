@@ -9,7 +9,7 @@ namespace tmm
 } // namespace tmm
 namespace proc
 {
-    constexpr int default_proc_slot = 1; // 默认进程槽位
+    constexpr int default_proc_slot = 1; // 默认进程槽位 TODO:TBD
 
 #define MAXARG 32
 
@@ -58,11 +58,13 @@ namespace proc
 
         void procdump(); // 打印进程列表 debug
 
-        int growproc(int n); // 扩展进程内存
 
+        int exec(const char *path, const char *argv[]); // 执行新程序
+        int growproc(int n); // 扩展进程内存
         int execve(eastl::string path, eastl::vector<eastl::string> args, eastl::vector<eastl::string> envs);
         int wait(int child_pid, uint64 addr);
         int load_seg(mem::PageTable &pt, uint64 va, fs::dentry *de, uint offset, uint size);
+
 
         void sleep(void *chan, SpinLock *lock);
         void wakeup(void *chan);

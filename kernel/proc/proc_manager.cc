@@ -15,6 +15,7 @@
 #include "fs/vfs/file/device_file.hh"
 #include "param.h"
 #include "timer_manager.hh"
+#include "fs/vfs/elf.hh"
 #include "fs/vfs/file/normal_file.hh"
 extern "C"
 {

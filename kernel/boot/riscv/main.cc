@@ -29,7 +29,8 @@
 #include "fs/vfs/inode.hh"
 #include "mem/userspace_stream.hh"
 // 注意华科的main函数可能有问题, 注意多核初始化
-void main() {
+void main()
+{
     // riscv::r_mstatus();
 
     uint64 x;
@@ -37,21 +38,21 @@ void main() {
 
     k_printer.init(); // 这里也初始化了console和uart
 
-    printfWhite("\n\n");  // 留出顶部空白
+    printfWhite("\n\n"); // 留出顶部空白
     print_f7ly();
     print_fuckyou();
-    printfWhite("\n\n");  // 底部空白
-    trap_mgr.init();// trap初始化
-    trap_mgr.inithart();// 初始化每个核上的csr
+    printfWhite("\n\n"); // 底部空白
+    trap_mgr.init();     // trap初始化
+    trap_mgr.inithart(); // 初始化每个核上的csr
 
-    plic_mgr.init();// plic初始化
-    plic_mgr.inithart();// 初始化每个核上的csr
+    plic_mgr.init();     // plic初始化
+    plic_mgr.inithart(); // 初始化每个核上的csr
 
     proc::k_pm.init("next pid", "wait lock");
 
     mem::k_pmm.init();
     mem::k_vmm.init("virtual_memory_manager");
-    mem::k_hmm.init("heap_memory_manager",HEAP_START);
+    mem::k_hmm.init("heap_memory_manager", HEAP_START);
 
     dev::ConsoleStdin k_stdin;
     dev::ConsoleStdout k_stdout;
@@ -72,11 +73,6 @@ void main() {
 
     tmm::k_tm.init("timer manager");
     fs::k_bufm.init("buffer manager");
-    
-
-
-    // TODO记得给每个进程proc->_ofile[0] = f_in;/out/err
-
 
     syscall::k_syscall_handler.init(); // 初始化系统调用处理器
 
