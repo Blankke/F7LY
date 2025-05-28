@@ -30,4 +30,5 @@ namespace fs
         memcpy( (void *)buf, abs_path.c_str(), ret);
         return ret;
     }
+    
 }

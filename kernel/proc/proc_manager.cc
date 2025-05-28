@@ -15,7 +15,7 @@
 #include "fs/vfs/file/device_file.hh"
 #include "param.h"
 #include "timer_manager.hh"
-
+#include "fs/vfs/file/normal_file.hh"
 extern "C"
 {
     extern uint64 initcode_start[];
@@ -46,7 +46,7 @@ namespace proc
         }
         _cur_pid = 1;
         _last_alloc_proc_gid = num_process - 1;
-        printfGreen("[pm] Process Manager Init\n");
+        printfGreen("[proc] Process Manager Init\n");
     }
 
     Pcb *ProcessManager::get_cur_pcb()
@@ -182,19 +182,19 @@ namespace proc
             fs::Path path("/dev/stdin");
             fs::FileAttrs fAttrsin = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0444); // only read
             fs::device_file *f_in = new fs::device_file(fAttrsin, DEV_STDIN_NUM, path.pathSearch());
-            assert(f_in != nullptr, "pm: alloc stdin file fail while user init.");
+            assert(f_in != nullptr, "proc: alloc stdin file fail while user init.");
 
             fs::Path pathout("/dev/stdout");
             fs::FileAttrs fAttrsout = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0222); // only write
             fs::device_file *f_out =
                 new fs::device_file(fAttrsout, DEV_STDOUT_NUM, pathout.pathSearch());
-            assert(f_out != nullptr, "pm: alloc stdout file fail while user init.");
+            assert(f_out != nullptr, "proc: alloc stdout file fail while user init.");
 
             fs::Path patherr("/dev/stderr");
             fs::FileAttrs fAttrserr = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0222); // only write
             fs::device_file *f_err =
                 new fs::device_file(fAttrserr, DEV_STDERR_NUM, patherr.pathSearch());
-            assert(f_err != nullptr, "pm: alloc stderr file fail while user init.");
+            assert(f_err != nullptr, "proc: alloc stderr file fail while user init.");
 
             fs::ramfs::k_ramfs.getRoot()->printAllChildrenInfo();
             proc->_ofile[0] = f_in;
@@ -230,14 +230,7 @@ namespace proc
         p->_xstate = 0;
         p->_state = ProcState::UNUSED;
     }
-    void ProcessManager::exit(int state)
-    {
-        // TODO
-    }
-    // int ProcessManager::wait(int child_pid, uint64 addr)
-    // {
-    //     //TODO
-    // }
+
     int ProcessManager::get_cur_cpuid()
     {
         return r_tp();
@@ -315,45 +308,7 @@ namespace proc
 
     // Atomically release lock and sleep on chan.
     // Reacquires lock when awakened.
-    void ProcessManager::sleep(void *chan, SpinLock *lock)
-    {
-        Pcb *p = get_cur_pcb();
-        // Must acquire p->lock in order to
-        // change p->state and then call sched.
-        // Once we hold p->lock, we can be
-        // guaranteed that we won't miss any wakeup
-        // (wakeup locks p->lock),
-        // so it's okay to release lk.
-        p->_lock.acquire();
-        lock->release();
 
-        // go to sleep
-        p->_chan = chan;
-        p->_state = ProcState::SLEEPING;
-        k_scheduler.call_sched();
-
-        p->_chan = 0;
-
-        p->_lock.release();
-        lock->acquire();
-    }
-    void ProcessManager::wakeup(void *chan)
-    {
-        Pcb *p;
-
-        for (p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
-        {
-            if (p != k_pm.get_cur_pcb())
-            {
-                p->_lock.acquire();
-                if (p->_state == ProcState::SLEEPING && p->_chan == chan)
-                {
-                    p->_state = ProcState::RUNNABLE;
-                }
-                p->_lock.release();
-            }
-        }
-    }
     void ProcessManager::set_killed(Pcb *p)
     {
         p->_lock.acquire();
@@ -492,7 +447,7 @@ namespace proc
 
         np->_lock.acquire();
 
-        // Copy user memory from parent to child.
+        // Copy user memory from _parent to child.
 
         mem::PageTable *curpt, *newpt;
         curpt = p->get_pagetable();
@@ -540,11 +495,11 @@ namespace proc
         return pid;
     }
 
-    /// @brief 
+    /// @brief
     /// @param n n的意思是扩展的字节数，
     /// 如果 n > 0，则扩展到当前进程的内存大小 + n
-    /// 如果 n < 0，则收缩到当前进程的内存大小 + n 
-    /// @return 
+    /// 如果 n < 0，则收缩到当前进程的内存大小 + n
+    /// @return
     int
     ProcessManager::growproc(int n)
     {
@@ -569,18 +524,18 @@ namespace proc
         return 0;
     }
 
-    /// @brief 
+    /// @brief
     /// @param n 参数n是地址，意思是扩展到 n 地址
-    /// 如果 n == 0，则返回当前进程的内存大小 
-    /// @return 
-    long ProcessManager::brk(long n) 
+    /// 如果 n == 0，则返回当前进程的内存大小
+    /// @return
+    long ProcessManager::brk(long n)
     {
         uint64 addr = get_cur_pcb()->_sz;
         if (n == 0)
         {
             return addr;
         }
-        if(growproc(n-addr) < 0)
+        if (growproc(n - addr) < 0)
         {
             return -1;
         }
@@ -589,7 +544,397 @@ namespace proc
 
     int ProcessManager::wait(int child_pid, uint64 addr)
     {
-        return -1; // TODO: 实现等待子进程
+        // copy from RUOK-os
+        Pcb *p = k_pm.get_cur_pcb();
+        int havekids, pid;
+        Pcb *np = nullptr;
+        if (child_pid > 0)
+        {
+            // 如果指定了 child_pid（大于 0），说明只等待这个特定子进程
+            bool has_child = false;
+            // 遍历进程池，查找是否存在这个特定子进程，且它的父进程是当前进程
+            for (auto &tmp : k_proc_pool)
+            {
+                if (tmp._pid == child_pid && tmp._parent == p)
+                {
+                    has_child = true;
+                    break;
+                }
+            }
+            if (!has_child)
+                return -1;
+        }
+
+        _wait_lock.acquire();
+        for (;;)
+        {
+            havekids = 0;
+            for (np = k_proc_pool; np < &k_proc_pool[num_process]; np++)
+            {
+                if (child_pid > 0 && np->_pid != child_pid)
+                    continue;
+
+                if (np->_parent == p)
+                {
+                    np->_lock.acquire();
+                    havekids = 1;
+
+                    if (np->get_state() == ProcState::ZOMBIE)
+                    {
+                        pid = np->_pid;
+                        if (addr != 0 &&
+                            mem::k_vmm.copy_out(p->_pt, addr, (const char *)&np->_xstate,
+                                                sizeof(np->_xstate)) < 0)
+                        {
+                            np->_lock.release();
+                            _wait_lock.release();
+                            return -1;
+                        }
+                        /// @todo release shm
+
+                        k_pm.freeproc(np);
+                        np->_lock.release();
+                        _wait_lock.release();
+                        return pid;
+                    }
+                    np->_lock.release();
+                }
+            }
+
+            if (!havekids || p->_killed)
+            {
+                _wait_lock.release();
+                return -1;
+            }
+
+            // wait children to exit
+            sleep(p, &_wait_lock);
+        }
+    }
+    int ProcessManager::load_seg(mem::PageTable &pt, uint64 va, fs::dentry *de, uint offset, uint size)
+    { // 好像没有机会返回 -1, pa失败的话会panic，de的read也没有返回值
+        uint i, n;
+        uint64 pa;
+
+        i = 0;
+        if (!is_page_align(va)) // 如果va不是页对齐的，先读出开头不对齐的部分
+        {
+            pa = (uint64)pt.walk_addr(va);
+#ifdef RISCV
+            pa = (pa);
+#endif
+            n = PGROUNDUP(va) - va;
+            de->getNode()->nodeRead(pa, offset + i, n);
+            i += n;
+        }
+
+        for (; i < size; i += PGSIZE) // 此时 va + i 地址是页对齐的
+        {
+            pa = PTE2PA((uint64)pt.walk(va + i, 0).get_data()); // pte.to_pa() 得到的地址是页对齐的
+            if (pa == 0)
+                panic("load_seg: walk");
+            if (size - i < PGSIZE) // 如果是最后一页中的数据
+                n = size - i;
+            else
+                n = PGSIZE;
+#ifdef RISCV
+            pa = pa;
+#elif defined(LOONGARCH)
+// pa =hsai::k_mem->to_vir( pa )
+#endif
+
+            de->getNode()->nodeRead(pa, offset + i, n);
+        }
+        return 0;
+    }
+    /// @brief 真正执行退出的逻辑
+    /// @param p
+    /// @param state
+    void ProcessManager::exit_proc(Pcb *p, int state)
+    {
+        if (p == _init_proc)
+            panic("init exiting"); // 保护机制：init 进程不能退出
+        // log_info( "exit proc %d", p->_pid );
+
+        _wait_lock.acquire();
+        reparent(p); // 将 p 的所有子进程交给 init 进程收养
+
+        if (p->_parent)
+            wakeup(p->_parent); // 唤醒父进程（可能在 wait() 中阻塞）
+
+        p->_lock.acquire();
+        p->_xstate = state << 8;       // 存储退出状态（通常高字节存状态）
+        p->_state = ProcState::ZOMBIE; // 标记为 zombie，等待父进程回收
+
+        _wait_lock.release();
+
+        k_scheduler.call_sched(); // jump to schedular, never return
+        panic("zombie exit");
     }
 
+    /// @brief Pass p's abandoned children to init.
+    /// @param p The parent process whose children are to be reparented.
+    /// p是即将去世的父亲，他的儿子们马上要成为孤儿，我们要让init来收养他们。
+    void ProcessManager::reparent(Pcb *p)
+    {
+        Pcb *pp;
+        for (uint i = 0; i < num_process; i++)
+        {
+            pp = &k_proc_pool[(_last_alloc_proc_gid + i) % num_process];
+            if (pp->_parent == p)
+            {
+                pp->_lock.acquire();
+                pp->_parent = _init_proc;
+                pp->_lock.release();
+            }
+        }
+    }
+    /// @brief 当前进程或线程退出（只退出自己）
+    /// @param state   调用 exit_proc 处理退出逻辑
+    /// “一荣俱荣，一损俱损” commented by @gkq
+    void ProcessManager::exit(int state)
+    {
+        Pcb *p = get_cur_pcb();
+
+        exit_proc(p, state);
+    }
+
+    /// @brief 当前线程组（或进程组）全部退出
+    /// @param status
+    void ProcessManager::exit_group(int status)
+    {
+        void *stk[num_process + 10]; // 这里不使用stl库是因为 exit
+                                     // 后不会返回，无法调用析构函数，可能造成内存泄露
+        int stk_ptr = 0;
+
+        u8 visit[num_process];
+        memset((void *)visit, 0, sizeof visit);
+        proc::Pcb *cp = get_cur_pcb();
+
+        _wait_lock.acquire();
+
+        for (uint i = 0; i < num_process; i++)
+        {
+            if (k_proc_pool[i]._state == ProcState::UNUSED)
+                continue;
+            if (visit[i] != 0)
+                continue;
+
+            proc::Pcb *p = &k_proc_pool[i];
+            visit[i] = 1;
+            stk[stk_ptr] = (void *)p;
+            stk_ptr++;
+            bool need_chp = false;
+            // 向上查找父进程链，如果当前进程是其祖先，则标记它应退出
+            while (p->_parent != nullptr)
+            {
+                if (p->_parent == cp)
+                {
+                    need_chp = true;
+                    break;
+                }
+                p = p->_parent;
+                visit[p->_gid] = 1;
+                stk[stk_ptr] = (void *)p;
+                stk_ptr++;
+            }
+
+            // 释放应退出的子孙进程资源
+            while (stk_ptr > 0)
+            {
+                proc::Pcb *tp = (proc::Pcb *)stk[stk_ptr - 1];
+                stk_ptr--;
+                if (need_chp)
+                {
+                    freeproc(tp);
+                }
+            }
+        }
+
+        _wait_lock.release();
+        // 最后退出自己
+        exit_proc(cp, status);
+    }
+    void ProcessManager::sleep(void *chan, SpinLock *lock)
+    {
+        Pcb *p = get_cur_pcb();
+        // Must acquire p->lock in order to
+        // change p->state and then call sched.
+        // Once we hold p->lock, we can be
+        // guaranteed that we won't miss any wakeup
+        // (wakeup locks p->lock),
+        // so it's okay to release lk.
+        p->_lock.acquire();
+        lock->release();
+
+        // go to sleep
+        p->_chan = chan;
+        p->_state = ProcState::SLEEPING;
+        k_scheduler.call_sched();
+
+        p->_chan = 0;
+
+        p->_lock.release();
+        lock->acquire();
+    }
+    void ProcessManager::wakeup(void *chan)
+    {
+        Pcb *p;
+
+        for (p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
+        {
+            if (p != k_pm.get_cur_pcb())
+            {
+                p->_lock.acquire();
+                if (p->_state == ProcState::SLEEPING && p->_chan == chan)
+                {
+                    p->_state = ProcState::RUNNABLE;
+                }
+                p->_lock.release();
+            }
+        }
+    }
+
+    int ProcessManager::mkdir(int dir_fd, eastl::string path, uint flags)
+    {
+        Pcb *p = get_cur_pcb();
+        fs::file *file = nullptr;
+        fs::dentry *dentry;
+
+        if (dir_fd != AT_FDCWD)
+        {
+            file = p->get_open_file(dir_fd);
+        }
+
+        fs::Path path_(path, file);
+        dentry = path_.pathSearch();
+
+        if (dentry == nullptr)
+        {
+            fs::dentry *par_ = path_.pathSearch(true);
+            if (par_ == nullptr)
+                return -1;
+            fs::FileAttrs attrs;
+            attrs.filetype = fs::FileTypes::FT_DIRECT;
+            attrs._value = 0777;
+            if ((dentry = par_->EntryCreate(path_.rFileName(), attrs)) == nullptr)
+            {
+                printf("Error creating new dentry %s failed\n", path_.rFileName());
+                return -1;
+            }
+        }
+        if (dentry == nullptr)
+            return -1;
+        return 0;
+    }
+    /// @brief
+    /// @param dir_fd 指定相对路径的目录文件描述符（AT_FDCWD 表示当前工作目录）。
+    /// @param path 要打开的路径
+    /// @param flags 打开方式（如只读、只写、创建等）
+    /// @return
+    int ProcessManager::open(int dir_fd, eastl::string path, uint flags)
+    {
+        // enum OpenFlags : uint
+        // {
+        // 	O_RDONLY	= 0x000U,
+        // 	O_WRONLY	= 0x001U,
+        // 	O_RDWR		= 0x002U,
+        // 	O_CREATE	= 0x040U,
+        // 	O_DIRECTORY = 0x020'0000U
+        // };
+
+        Pcb *p = get_cur_pcb();
+        fs::file *file = nullptr;
+        fs::dentry *dentry;
+
+        // 果不是工作目录，则获取对应的 file 指针
+        if (dir_fd != AT_FDCWD)
+        {
+            file = p->get_open_file(dir_fd);
+        }
+
+        fs::Path path_(path, file);  // 创建路径对象（支持相对路径）
+        dentry = path_.pathSearch(); // 查找路径对应的 dentry（目录项）
+
+        if (path == "") // empty path
+            return -1;
+
+        if (path[0] == '.' && path[1] == '/')
+            path = path.substr(2); // 处理./xxxx的情况
+        // 如果 dentry 存在但处于“已删除但未关闭”状态
+        if (dentry != nullptr && fs::k_file_table.has_unlinked(path))
+        {
+            if (flags & O_CREAT)
+            {
+                fs::k_file_table.remove(path);
+            }
+            else
+            {
+                return -1;
+            }
+        }
+        // dentry 不存在但设置了 O_CREAT，尝试创建文件
+        if (dentry == nullptr && flags & O_CREAT)
+        {
+            // @todo: create file
+            // 查找父目录
+            fs::dentry *par_ = path_.pathSearch(true);
+            if (par_ == nullptr)
+                return -1;
+            fs::FileAttrs attrs;
+            if ((flags & __S_IFMT) == S_IFDIR)
+                attrs.filetype = fs::FileTypes::FT_DIRECT;
+            else
+                attrs.filetype = fs::FileTypes::FT_NORMAL;
+            attrs._value = 0777;// 默认权限
+            if ((dentry = par_->EntryCreate(path_.rFileName(), attrs)) == nullptr)  // 创建文件
+            {
+                printf("Error creating new dentry %s failed\n", path_.rFileName());
+                return -1;
+            }
+        }
+        if (dentry == nullptr)
+            return -1; // file is not found
+//获取设备信息和属性
+        int dev = dentry->getNode()->rDev();
+        fs::FileAttrs attrs = dentry->getNode()->rMode();
+//如果是设备文件，构造 device_file 对象并返回 fd
+        if (dev >= 0) // dentry is a device
+        {
+            fs::device_file *f = new fs::device_file(attrs, dev, dentry);
+            return alloc_fd(p, f);
+        } // else if( attrs.filetype == fs::FileTypes::FT_DIRECT)
+        // 	fs::directory *f = new fs::directory( attrs, dentry );
+        else // 否则为普通文件，创建 normal_file 对象
+        {
+            fs::normal_file *f = new fs::normal_file(attrs, dentry);
+            // log_info( "test normal file read" );
+            // {
+            // 	fs::file *ff = ( fs::file * ) f;
+            // 	char buf[ 8 ];
+            // 	ff->read( ( ulong ) buf, 8 );
+            // 	buf[ 8 ] = 0;
+            // 	printf( "%s\n", buf );
+            // }
+            if (flags & O_APPEND)
+                f->setAppend();
+            return alloc_fd(p, f);
+        } // because of open.c's fileattr defination is not clearly, so here we
+          // set flags = 7, which means O_RDWR | O_WRONLY | O_RDONLY
+
+        // return alloc_fd( p, f );
+    }
+
+    int ProcessManager::close(int fd)
+    {
+        if (fd < 0 || fd >= (int)max_open_files)
+            return -1;
+        Pcb *p = get_cur_pcb();
+        if (p->_ofile[fd] == nullptr)
+            return 0;
+        // fs::k_file_table.free_file( p->_ofile[ fd ] );
+        p->_ofile[fd]->free_file();
+        p->_ofile[fd] = nullptr;
+        return 0;
+    }
 }; // namespace proc

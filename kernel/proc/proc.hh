@@ -126,12 +126,12 @@ namespace proc
         uint64 get_size() { return _sz; }
         uint64 get_last_user_tick() { return _last_user_tick; }
         uint64 get_user_ticks() { return _user_ticks; }
-        // fs::xv6_file *get_open_file(int fd)
-        // {
-        //     if (fd < 0 || fd >= (int)max_open_files)
-        //         return nullptr;
-        //     return _ofile[fd];
-        // }
+        fs::file *get_open_file(int fd)
+        {
+            if (fd < 0 || fd >= (int)max_open_files)
+                return nullptr;
+            return _ofile[fd];
+        }
 
         void set_trapframe(TrapFrame *tf) { _trapframe = tf; }
 
