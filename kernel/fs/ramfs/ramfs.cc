@@ -59,7 +59,7 @@ namespace fs
 			dentry * conf_dent = etc_dent->EntryCreate( "busybox.conf", attrs );
 			( ( RamInode * ) conf_dent->getNode() )->readable = true;
 
-			_root->printAllChildrenInfo();
+			// _root->printAllChildrenInfo();
 
 			// init fat
 			dentry* dev = _root->EntrySearch( "dev" );
@@ -149,7 +149,7 @@ namespace fs
 			ls->setNode( ls_link_ );
 
 
-			_root->printAllChildrenInfo();
+			// _root->printAllChildrenInfo();
 			return;
 		}
 
@@ -245,7 +245,7 @@ namespace fs
 				printfRed( "RamFS::mount: unknown file system type" );
 				return -1;
 			}
-			_root->printAllChildrenInfo();
+			// _root->printAllChildrenInfo();
 			return 0;
 		}
 
@@ -264,7 +264,7 @@ namespace fs
 			dentry *parent = mount->getParent();
 			dentry *mnt = mount->getNode()->getFS()->getMntPoint();
 			parent->getChildren()[ mount->rName() ] = mnt;
-			_root->printAllChildrenInfo(); // 
+			// _root->printAllChildrenInfo(); // 
 			return 0; //卸载完成
 		}
 

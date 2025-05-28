@@ -43,6 +43,7 @@ namespace fs
 			virtual int	   readlinkat( char *buf, size_t len ) override { return 0; };
 
 			virtual size_t readSubDir( ubuf &dst, size_t off ) override;
+			void setAttr(FileAttrs attrs) { _attrs = attrs; }
 
 		public:
 

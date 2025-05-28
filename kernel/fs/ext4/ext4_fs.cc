@@ -85,7 +85,7 @@ namespace fs
 			);
 			_cache_group_count = ( _sb.rBlockNum() + _cache_blocks_per_group - 1 ) /
 								 _cache_blocks_per_group; // round up
-			Info( "ext4 block group count = %d", _cache_group_count );
+			Info( "ext4 block group count = %d\n", _cache_group_count );
 
 			// 初始化块组描述符表
 
@@ -131,7 +131,7 @@ namespace fs
 			// 初始化根节点
 
 			long root_ino = ino_root;
-			printfBlue( "ext4-fs : init inode %d as root", root_ino );
+			printfBlue( "ext4-fs : init inode %d as root\n", root_ino );
 			Ext4Inode node;
 			if ( read_inode( root_ino, node ) < 0 )
 			{
@@ -139,6 +139,7 @@ namespace fs
 				return;
 			}
 			_root_inode = new Ext4IndexNode( node, this );
+			_root_inode->setAttr(FileAttrs(fs::FileTypes::FT_DIRECT, 0777));
 
 			// 初始化根dentry
 
