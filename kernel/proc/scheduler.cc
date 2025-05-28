@@ -87,9 +87,11 @@ namespace proc
 	{
 		Pcb *p = Cpu::get_cpu()->get_cur_proc();
 		p->_lock.acquire();
+		Cpu::get_cpu()->interrupt_off();
 		p->_state = ProcState::RUNNABLE;
-		call_sched();
+		call_sched(); // 注意swtch的逻辑是函数调用, 所以重新调用就是视为从这个函数返回
 		p->_lock.release();
+		Cpu::get_cpu()->interrupt_on();
 
 	}
 
