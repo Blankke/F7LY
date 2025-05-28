@@ -6,6 +6,7 @@
 #include "spinlock.hh"
 #include <EASTL/string.h>
 #include "signal.hh"
+#include "fs/vfs/file/file.hh"
 namespace fs
 {
     class dentry;
@@ -39,7 +40,7 @@ namespace proc
         SpinLock _lock;         // 进程控制块的锁，用于并发访问控制
         int _gid = num_process; // 全局ID，用于在进程池中唯一标识进程
 
-        // TODO,文件系统相关
+        // 文件系统相关
         fs::dentry *_cwd;                 // current working directory
         eastl::string _cwd_name;
         fs::file *_ofile[max_open_files]; // 进程打开的文件列表 (文件描述符 -> 文件结构)
@@ -119,7 +120,7 @@ namespace proc
         uint get_ppid() { return _parent ? _parent->_pid : 0; }
         TrapFrame *get_trapframe() { return _trapframe; }
         uint64 get_kstack() { return _kstack; }
-        mem::PageTable &get_pagetable() { return _pt; }
+        mem::PageTable* get_pagetable() { return &_pt; }
         ProcState get_state() { return _state; }
         char *get_name() { return _name; }
         uint64 get_size() { return _sz; }

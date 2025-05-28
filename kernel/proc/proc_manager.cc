@@ -13,6 +13,8 @@
 #include "fs/vfs/path.hh"
 #include "fs/ramfs/ramfs.hh"
 #include "fs/vfs/file/device_file.hh"
+#include "param.h"
+#include "timer_manager.hh"
 
 extern "C"
 {
@@ -57,7 +59,7 @@ namespace proc
         // 学长未对此处作处理，而是判断为nullptr就sleep，参考virtio_disk.cc:218行
         // commented out by @gkq
         //
-        // if (pcb == nullptr) 
+        // if (pcb == nullptr)
         //     panic("get_cur_pcb: no current process");
         return pcb;
     }
@@ -101,11 +103,9 @@ namespace proc
 
                 // 创建进程自己的页表（空的页表）
 
-
-                //debug
+                // debug
                 printfCyan("[user pgtbl]==>into proc_pagetable\n");
                 _proc_create_vm(p);
-
 
                 if (p->_pt.get_base() == 0)
                 {
@@ -251,7 +251,7 @@ namespace proc
         if (pt.get_base() == 0)
             return 0;
 #ifdef RISCV
-        if (mem::k_vmm.map_pages(pt, TRAMPOLINE, PGSIZE, (uint64)trampoline, riscv::PteEnum::pte_readable_m|riscv::pte_executable_m) == 0)
+        if (mem::k_vmm.map_pages(pt, TRAMPOLINE, PGSIZE, (uint64)trampoline, riscv::PteEnum::pte_readable_m | riscv::pte_executable_m) == 0)
         {
             mem::k_vmm.vmfree(pt, 0);
             printfRed("proc_pagetable: map trampoline failed\n");
@@ -288,10 +288,10 @@ namespace proc
         _init_proc = p;
         // 传入initcode的地址
         mem::k_vmm.uvmfirst(p->_pt, (uint64)initcode_start, (uint64)initcode_end - (uint64)initcode_start);
-        //debug
-        // uint64 pa = (uint64)p->_pt.walk_addr((uint64)0);
-        // printfYellow("initcode start pa: %p\n",pa);
-        // printfYellow("initcode start byte %u\n", *(uint64 *)pa);
+        // debug
+        //  uint64 pa = (uint64)p->_pt.walk_addr((uint64)0);
+        //  printfYellow("initcode start pa: %p\n",pa);
+        //  printfYellow("initcode start byte %u\n", *(uint64 *)pa);
         printf("initcode start: %p, end: %p\n", initcode_start, initcode_end);
         printf("initcode size: %p\n", (uint64)(initcode_end - 0));
         p->_sz = 3 * PGSIZE;
@@ -459,18 +459,113 @@ namespace proc
         }
     }
 
-    	int ProcessManager::alloc_fd( Pcb *p, fs::file *f )
-	{
-		int fd;
+    int ProcessManager::alloc_fd(Pcb *p, fs::file *f)
+    {
+        int fd;
 
-		for ( fd = 3; fd < (int) max_open_files; fd++ )
-		{
-			if ( p->_ofile[fd] == nullptr )
-			{
-				p->_ofile[fd] = f;
-				return fd;
-			}
-		}
-		return -1;
-	}
-}
+        for (fd = 3; fd < (int)max_open_files; fd++)
+        {
+            if (p->_ofile[fd] == nullptr)
+            {
+                p->_ofile[fd] = f;
+                return fd;
+            }
+        }
+        return -1;
+    }
+    int ProcessManager::fork()
+    {
+        return fork(0); // 默认usp为0
+    }
+
+    int ProcessManager::fork(uint64 usp)
+    {
+        int i, pid;
+        Pcb *np;                // new proc
+        Pcb *p = get_cur_pcb(); // current proc
+
+        // Allocate process.
+        if ((np = alloc_proc()) == nullptr)
+        {
+            return -1;
+        }
+
+        np->_lock.acquire();
+
+        // Copy user memory from parent to child.
+
+        mem::PageTable *curpt, *newpt;
+        curpt = p->get_pagetable();
+        newpt = np->get_pagetable();
+
+        if (mem::k_vmm.vm_copy(*newpt, *curpt, p->_sz) < 0)
+        {
+            freeproc(np);
+            np->_lock.release();
+            return -1;
+        }
+
+        ///@todo 栈指针在哪里定义的？我们的sp应该设定到哪里
+        /// 学长的默认fork带参数是0，		tf->sp		  = usp;然后就是会把栈指针换位置。
+
+        np->_sz = p->_sz;
+        *np->_trapframe = *p->_trapframe; // 拷贝父进程的陷阱值，而不是直接指向
+        np->_trapframe->a0 = 0;           // fork 返回值为 0
+
+        _wait_lock.acquire();
+        np->_parent = p;
+        _wait_lock.release();
+
+        // increment reference counts on open file descriptors.
+        for (i = 0; i < (int)max_open_files; i++)
+            if (p->_ofile[i])
+            {
+                // fs::k_file_table.dup( p->_ofile[ i ] );
+                p->_ofile[i]->dup();
+                np->_ofile[i] = p->_ofile[i];
+            }
+        np->_cwd = p->_cwd;                                             // 继承当前工作目录
+        safestrcpy(np->_cwd_name, p->_cwd_name, sizeof(np->_cwd_name)); // 继承当前工作目录名称
+        strncpy(np->_name, p->_name, sizeof(p->_name));
+
+        pid = np->_pid;
+
+        np->_lock.release();
+
+        np->_lock.acquire();
+        np->_state = ProcState::RUNNABLE;
+        np->_start_tick = tmm::k_tm.get_ticks();
+        np->_user_ticks = 0;
+        np->_lock.release();
+
+        return pid;
+    }
+    long ProcessManager::brk(long n)
+    {
+	// Pcb *p = get_cur_pcb(); // 输入参数	：期望的堆大小
+
+	// 	if ( n <= 0 ) // get current heap size
+	// 		return p->_heap_ptr;
+
+	// 	// uint64 sz = p->_sz;		// 输出  	：实际的堆大小
+	// 	uint64		   oldhp  = p->_heap_ptr;
+	// 	uint64		   newhp  = n;
+	// 	mm::PageTable &pt	  = p->_pt;
+	// 	long		   differ = (long) newhp - (long) oldhp;
+
+
+	// 	if ( differ < 0 ) // shrink
+	// 	{
+	// 		if ( mm::k_vmm.vm_dealloc( pt, oldhp, newhp ) < 0 ) { return -1; }
+	// 	}
+	// 	else if ( differ > 0 )
+	// 	{
+	// 		if ( mm::k_vmm.vm_alloc( pt, oldhp, newhp ) == 0 ) return -1;
+	// 	}
+
+	// 	// log_info( "brk: newsize%d, oldsize%d", newhp, oldhp );
+	// 	p->_heap_ptr = newhp;
+	// 	return newhp; // 返回堆的大小
+    return 0;
+    }
+}; // namespace proc
