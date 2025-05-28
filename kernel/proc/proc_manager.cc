@@ -534,38 +534,62 @@ namespace proc
 
         np->_lock.acquire();
         np->_state = ProcState::RUNNABLE;
-        np->_start_tick = tmm::k_tm.get_ticks();
         np->_user_ticks = 0;
         np->_lock.release();
 
         return pid;
     }
+
+    /// @brief
+    /// @param n n的意思是扩展的字节数，
+    /// 如果 n > 0，则扩展到当前进程的内存大小 + n
+    /// 如果 n < 0，则收缩到当前进程的内存大小 + n
+    /// @return
+    int
+    ProcessManager::growproc(int n)
+    {
+        uint64 sz;
+        Pcb *p = get_cur_pcb();
+
+        sz = p->_sz;
+        if (n > 0)
+        {
+            if (sz + n >= MAXVA - PGSIZE)
+                return -1;
+            if ((sz = mem::k_vmm.uvmalloc(p->_pt, sz, sz + n, PTE_W)) == 0)
+            {
+                return -1;
+            }
+        }
+        else if (n < 0)
+        {
+            sz = mem::k_vmm.uvmdealloc(p->_pt, sz, sz + n);
+        }
+        p->_sz = sz;
+        return 0;
+    }
+
+    /// @brief
+    /// @param n 参数n是地址，意思是扩展到 n 地址
+    /// 如果 n == 0，则返回当前进程的内存大小
+    /// @return
     long ProcessManager::brk(long n)
     {
-        // Pcb *p = get_cur_pcb(); // 输入参数	：期望的堆大小
+        uint64 addr = get_cur_pcb()->_sz;
+        if (n == 0)
+        {
+            return addr;
+        }
+        if (growproc(n - addr) < 0)
+        {
+            return -1;
+        }
+        return n;
+    }
 
-        // 	if ( n <= 0 ) // get current heap size
-        // 		return p->_heap_ptr;
-
-        // 	// uint64 sz = p->_sz;		// 输出  	：实际的堆大小
-        // 	uint64		   oldhp  = p->_heap_ptr;
-        // 	uint64		   newhp  = n;
-        // 	mm::PageTable &pt	  = p->_pt;
-        // 	long		   differ = (long) newhp - (long) oldhp;
-
-        // 	if ( differ < 0 ) // shrink
-        // 	{
-        // 		if ( mm::k_vmm.vm_dealloc( pt, oldhp, newhp ) < 0 ) { return -1; }
-        // 	}
-        // 	else if ( differ > 0 )
-        // 	{
-        // 		if ( mm::k_vmm.vm_alloc( pt, oldhp, newhp ) == 0 ) return -1;
-        // 	}
-
-        // 	// log_info( "brk: newsize%d, oldsize%d", newhp, oldhp );
-        // 	p->_heap_ptr = newhp;
-        // 	return newhp; // 返回堆的大小
-        return 0;
+    int ProcessManager::wait(int child_pid, uint64 addr)
+    {
+        return -1; // TODO: 实现等待子进程
     }
 
     int ProcessManager::execve(eastl::string path, eastl::vector<eastl::string> argv,
