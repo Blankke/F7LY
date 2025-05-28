@@ -15,7 +15,7 @@
 #include "fs/vfs/file/device_file.hh"
 #include "param.h"
 #include "timer_manager.hh"
-
+#include "kernel/fs/vfs/elf.hh"
 extern "C"
 {
     extern uint64 initcode_start[];
@@ -164,7 +164,7 @@ namespace proc
 
             // 文件系统初始化必须在常规进程的上下文中运行（例如，因为它会调用 sleep），
             // 因此不能从 main() 中运行。(copy form xv6)
-            
+
             riscv::qemu::DiskDriver *disk = (riscv::qemu::DiskDriver *)dev::k_devm.get_device("Disk driver");
             disk->identify_device();
 
@@ -524,7 +524,7 @@ namespace proc
                 p->_ofile[i]->dup();
                 np->_ofile[i] = p->_ofile[i];
             }
-        np->_cwd = p->_cwd;                                             // 继承当前工作目录
+        np->_cwd = p->_cwd;           // 继承当前工作目录
         np->_cwd_name = p->_cwd_name; // 继承当前工作目录名称
         strncpy(np->_name, p->_name, sizeof(p->_name));
 
@@ -542,30 +542,549 @@ namespace proc
     }
     long ProcessManager::brk(long n)
     {
-	// Pcb *p = get_cur_pcb(); // 输入参数	：期望的堆大小
+        // Pcb *p = get_cur_pcb(); // 输入参数	：期望的堆大小
 
-	// 	if ( n <= 0 ) // get current heap size
-	// 		return p->_heap_ptr;
+        // 	if ( n <= 0 ) // get current heap size
+        // 		return p->_heap_ptr;
 
-	// 	// uint64 sz = p->_sz;		// 输出  	：实际的堆大小
-	// 	uint64		   oldhp  = p->_heap_ptr;
-	// 	uint64		   newhp  = n;
-	// 	mm::PageTable &pt	  = p->_pt;
-	// 	long		   differ = (long) newhp - (long) oldhp;
+        // 	// uint64 sz = p->_sz;		// 输出  	：实际的堆大小
+        // 	uint64		   oldhp  = p->_heap_ptr;
+        // 	uint64		   newhp  = n;
+        // 	mm::PageTable &pt	  = p->_pt;
+        // 	long		   differ = (long) newhp - (long) oldhp;
 
+        // 	if ( differ < 0 ) // shrink
+        // 	{
+        // 		if ( mm::k_vmm.vm_dealloc( pt, oldhp, newhp ) < 0 ) { return -1; }
+        // 	}
+        // 	else if ( differ > 0 )
+        // 	{
+        // 		if ( mm::k_vmm.vm_alloc( pt, oldhp, newhp ) == 0 ) return -1;
+        // 	}
 
-	// 	if ( differ < 0 ) // shrink
-	// 	{
-	// 		if ( mm::k_vmm.vm_dealloc( pt, oldhp, newhp ) < 0 ) { return -1; }
-	// 	}
-	// 	else if ( differ > 0 )
-	// 	{
-	// 		if ( mm::k_vmm.vm_alloc( pt, oldhp, newhp ) == 0 ) return -1;
-	// 	}
-
-	// 	// log_info( "brk: newsize%d, oldsize%d", newhp, oldhp );
-	// 	p->_heap_ptr = newhp;
-	// 	return newhp; // 返回堆的大小
-    return 0;
+        // 	// log_info( "brk: newsize%d, oldsize%d", newhp, oldhp );
+        // 	p->_heap_ptr = newhp;
+        // 	return newhp; // 返回堆的大小
+        return 0;
     }
+
+    int ProcessManager::execve(eastl::string path, eastl::vector<eastl::string> argv,
+                               eastl::vector<eastl::string> envs)
+    {
+        // Pcb *proc = get_cur_pcb();
+        // uint64 sp;
+        // uint64 stackbase;
+        // mem::PageTable pt;
+        // elf::elfhdr elf;
+        // elf::proghdr ph = {};
+        // // fs::fat::Fat32DirInfo dir_;
+        // fs::dentry *de;
+        // int i, off;
+
+        // // proc->_pt.freewalk();
+        // // mm::k_vmm.vmfree( proc->_pt, proc->_sz );
+
+        // // if ( ( de = fs::fat::k_fatfs.get_root_dir()->EntrySearch( path ) )
+        // // 							== nullptr )
+        // eastl::string ab_path;
+        // if (path[0] == '/')
+        //     ab_path = path;
+        // else
+        //     ab_path = proc->_cwd_name + path;
+
+        // Info("execve file : %s", ab_path.c_str());
+
+        // fs::Path path_resolver(ab_path);
+        // if ((de = path_resolver.pathSearch()) == nullptr)
+        // // if ( ( de = fs::ramfs::k_ramfs.getRoot()->EntrySearch( "mnt"
+        // // )->EntrySearch( path ) ) == nullptr )
+        // {
+        //     printfRed("execve: cannot find file");
+        //     return -1; // 拿到文件夹信息
+        // }
+
+        // /// @todo check ELF header
+        // de->getNode()->nodeRead(reinterpret_cast<uint64>(&elf), 0, sizeof(elf));
+
+        // if (elf.magic != elf::elfEnum::ELF_MAGIC) // check magicnum
+        // {
+        //     printfRed("execve: not a valid ELF file");
+        //     return -1;
+        // }
+
+        // /// @todo 这里有bug，如果后面的代码失败，
+        // ///       那么，原来的进程映像就全被释放掉了
+        // // proc->_pt.freewalk_mapped();
+        // // _proc_create_vm( proc );
+
+        // /// @todo 应当先创建一个新的
+        // mem::PageTable new_pt = mem::k_vmm.vm_create();
+        // u64 new_sz = 0;
+
+        // // create user pagetable for given process
+        // // if((pt = proc_pagetable(proc)).is_null()){
+        // // 	printfRed("execve: cannot create pagetable");
+        // // 	return -1;
+        // // }
+        // using psd_t = program_section_desc;
+        // int new_sec_cnt = 0;
+        // psd_t new_sec_desc[max_program_section_num];
+        // {
+        //     bool load_bad = false;
+
+        //     for (i = 0, off = elf.phoff; i < elf.phnum; i++, off += sizeof(ph))
+        //     {
+        //         de->getNode()->nodeRead(reinterpret_cast<uint64>(&ph), off, sizeof(ph));
+
+        //         if (ph.type != elf::elfEnum::ELF_PROG_LOAD)
+        //             continue;
+        //         if (ph.memsz < ph.filesz)
+        //         {
+        //             printfRed("execve: memsz < filesz");
+        //             load_bad = true;
+        //             break;
+        //         }
+        //         if (ph.vaddr + ph.memsz < ph.vaddr)
+        //         {
+        //             printfRed("execve: vaddr + memsz < vaddr");
+        //             load_bad = true;
+        //             break;
+        //         }
+        //         uint64 sz1;
+        //         bool executable = (ph.flags & 0x1); // 段是否可执行？
+        //         uint64 flag = executable ? riscv::PteEnum::pte_executable_m : 0;
+        //         ulong pva = PGROUNDDOWN(ph.vaddr);
+        //         if ((sz1 = mem::k_vmm.vmalloc(new_pt, pva, ph.vaddr + ph.memsz, flag)) ==
+        //             0)
+        //         {
+        //             printfRed("execve: uvmalloc");
+        //             load_bad = true;
+        //             break;
+        //         }
+        //         new_sz += PGROUNDUP(ph.vaddr + ph.memsz) - pva;
+        //         // if ( ( ph.vaddr % hsai::page_size ) != 0 )
+        //         // {
+        //         // 	printfRed( "execve: vaddr not aligned" );
+        //         // 	proc_freepagetable( proc->_pt, sz );
+        //         // 	return -1;
+        //         // }
+
+        //         if (load_seg(new_pt, ph.vaddr, de, ph.off, ph.filesz) < 0)
+        //         {
+        //             printfRed("execve: load_icode");
+        //             load_bad = true;
+        //             break;
+        //         }
+
+        //         // 记录程序段
+
+        //         new_sec_desc[new_sec_cnt]._sec_start = (void *)ph.vaddr;
+        //         new_sec_desc[new_sec_cnt]._sec_size = ph.memsz;
+        //         new_sec_desc[new_sec_cnt]._debug_name = "LOAD";
+        //         new_sec_cnt++;
+        //     }
+
+        //     if (load_bad) // load 阶段出错，释放页表
+        //     {
+        //         _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+        //         return -1;
+        //     }
+        // }
+
+        // // 为程序映像转储 elf 程序头
+
+        // // sz		 = hsai::page_round_up(sz);
+        // u64 phdr = 0; // for AT_PHDR
+        // {
+        //     ulong phsz = elf.phentsize * elf.phnum;
+        //     u64 sz1;
+        //     u64 load_end = 0;
+
+        //     for (auto &sec : new_sec_desc) // 搜索load段末尾地址
+        //     {
+        //         u64 end = (ulong)sec._sec_start + sec._sec_size;
+        //         if (end > load_end)
+        //             load_end = end;
+        //     }
+
+        //     load_end = PGROUNDUP(load_end);
+        //     if ((sz1 = mem::k_vmm.vm_alloc(new_pt, load_end, load_end + phsz)) == 0)
+        //     {
+        //         printfRed("execve: vaalloc");
+        //         _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+        //         return -1;
+        //     }
+
+        //     u8 *tmp = new u8[phsz + 8];
+        //     if (tmp == nullptr)
+        //     {
+        //         printfRed("execve: no mem");
+        //         _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+        //         return -1;
+        //     }
+
+        //     if (de->getNode()->nodeRead((ulong)tmp, elf.phoff, phsz) != phsz)
+        //     {
+        //         printfRed("execve: node read");
+        //         delete[] tmp;
+        //         _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+        //         return -1;
+        //     }
+
+        //     if (mm::k_vmm.copyout(new_pt, load_end, (void *)tmp, phsz) < 0)
+        //     {
+        //         printfRed("execve: copy out");
+        //         delete[] tmp;
+        //         _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+        //         return -1;
+        //     }
+
+        //     delete[] tmp;
+
+        //     phdr = load_end;
+
+        //     // 将该段作为程序段记录下来
+        //     psd_t &ph_psd = new_sec_desc[new_sec_cnt];
+        //     ph_psd._sec_start = (void *)phdr;
+        //     ph_psd._sec_size = phsz;
+        //     ph_psd._debug_name = "program headers";
+        //     new_sec_cnt++;
+
+        //     new_sz += hsai::page_round_up(phsz);
+        // }
+
+        // // allocate two pages , the second is used for the user stack
+
+        // // 此处分配栈空间遵循 memlayout
+        // // 进程的用户虚拟空间占用地址低 64GiB，内核虚拟空间从 0xFFF0_0000_0000
+        // // 开始 分配栈空间大小为 32 个页面，开头的 1 个页面用作保护页面
+
+        // int stack_page_cnt = default_proc_ustack_pages;
+        // stackbase = mm::vml::vm_ustack_end - stack_page_cnt * hsai::page_size;
+        // sp = mm::vml::vm_ustack_end;
+
+        // if (mm::k_vmm.vm_alloc(new_pt, stackbase - hsai::page_size, sp) == 0)
+        // {
+        //     printfRed("execve: vmalloc when allocating stack");
+        //     _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+        //     return -1;
+        // }
+
+        // log_trace("execve set stack-base = %p", new_pt.walk_addr(stackbase));
+        // log_trace("execve set page containing sp is %p",
+        //           new_pt.walk_addr(sp - hsai::page_size));
+
+        // if (mm::k_vmm.vm_set_super(new_pt, stackbase - hsai::page_size, 1) < 0)
+        // {
+        //     printfRed("execve: set stack protector fail");
+        //     _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+        //     return -1;
+        // }
+
+        // mm::k_vmm.vm_set(new_pt, (void *)stackbase, 0, stack_page_cnt);
+
+        // new_sz += (stack_page_cnt + 1) * hsai::page_size;
+
+        // // >>>> 此后的代码用于支持 glibc，包括将 auxv, envp, argv, argc
+        // // 压到用户栈中由glibc解析
+
+        // mm::UserstackStream ustack((void *)stackbase, stack_page_cnt * hsai::page_size, &new_pt);
+        // ustack.open();
+
+        // // 1. 使用0标记栈底，压入一个用于glibc的伪随机数，并以16字节对齐
+
+        // u64 rd_pos = 0;
+        // {
+        //     ulong data;
+        //     data = 0;
+        //     ustack << data;
+        //     data = -0x11'4514'FF11'4514UL;
+        //     ustack << data;
+        //     // data = 0x0050'4D4F'4353'4F43UL;
+        //     data = 0x2UL << 60;
+        //     ustack << data;
+        //     // data = 0x4249'4C47'4B43'5546UL; // "FUCKGLIBCOSCOMP\0"
+        //     data = 0x3UL << 60;
+        //     ustack << data;
+
+        //     rd_pos = ustack.sp(); // 伪随机数的位置
+        // }
+
+        // // 2. 压入 env string
+
+        // ulong uenvp[MAXARG];
+        // ulong envc;
+        // for (envc = 0; envc < envs.size(); envc++)
+        // {
+        //     if (envc >= MAXARG)
+        //     {
+        //         _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+        //         printfRed("execve: too many arguments");
+        //         return -1;
+        //     }
+
+        //     sp = ustack.sp();
+        //     ustack -= (sp - envs[envc].length() - 1) % 16;
+
+        //     if (sp < stackbase)
+        //     {
+        //         _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+        //         printfRed("execve: sp < stackbase");
+        //         return -1;
+        //     }
+        //     ustack << envs[envc].c_str();
+        //     if (ustack.errno() != ustack.rc_ok)
+        //     {
+        //         _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+        //         printfRed("execve: push into stack");
+        //         return -1;
+        //     }
+
+        //     uenvp[envc] = ustack.sp();
+        // }
+        // uenvp[envc] = 0; // envp[end] = nullptr
+
+        // // 3. 压入 arg string
+
+        // uint64 uargv[MAXARG];
+        // ulong argc = 0;
+        // for (; argc < argv.size(); argc++)
+        // {
+        //     if (argc >= MAXARG)
+        //     {
+        //         _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+        //         printfRed("execve: too many arguments");
+        //         return -1;
+        //     }
+
+        //     sp = ustack.sp();
+        //     ustack -= (sp - argv[argc].length() - 1) % 16;
+
+        //     if (sp < stackbase)
+        //     {
+        //         _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+        //         printfRed("execve: sp < stackbase");
+        //         return -1;
+        //     }
+
+        //     ustack << argv[argc].c_str();
+        //     if (ustack.errno() != ustack.rc_ok)
+        //     {
+        //         _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+        //         printfRed("execve: push into stack");
+        //         return -1;
+        //     }
+
+        //     uargv[argc] = ustack.sp();
+        // }
+        // uargv[argc] = 0; // argv[end] = nullptr
+
+        // sp = ustack.sp();
+        // ustack -= sp % 16;
+
+        // // 4. 压入 auxv
+        // {
+        //     elf::Elf64_auxv_t aux;
+        //     // auxv[end] = AT_NULL
+        //     aux.a_type = elf::AT_NULL;
+        //     aux.a_un.a_val = 0;
+        //     ustack << aux;
+        //     if (ustack.errno() != ustack.rc_ok)
+        //     {
+        //         _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+        //         printfRed("execve: push into stack");
+        //         return -1;
+        //     }
+
+        //     if (phdr != 0)
+        //     {
+        //         // auxy[4] = AT_PAGESZ
+        //         aux.a_type = elf::AT_PAGESZ;
+        //         aux.a_un.a_val = hsai::page_size;
+        //         ustack << aux;
+        //         if (ustack.errno() != ustack.rc_ok)
+        //         {
+        //             _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+        //             printfRed("execve: push into stack");
+        //             return -1;
+        //         }
+        //         // auxv[3] = AT_PHNUM
+        //         aux.a_type = elf::AT_PHNUM;
+        //         aux.a_un.a_val = elf.phnum;
+        //         ustack << aux;
+        //         if (ustack.errno() != ustack.rc_ok)
+        //         {
+        //             _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+        //             printfRed("execve: push into stack");
+        //             return -1;
+        //         }
+        //         // auxv[2] = AT_PHENT
+        //         aux.a_type = elf::AT_PHENT;
+        //         aux.a_un.a_val = elf.phentsize;
+        //         ustack << aux;
+        //         if (ustack.errno() != ustack.rc_ok)
+        //         {
+        //             _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+        //             printfRed("execve: push into stack");
+        //             return -1;
+        //         }
+        //         // auxv[1] = AT_PHDR
+        //         aux.a_type = elf::AT_PHDR;
+        //         aux.a_un.a_val = phdr;
+        //         ustack << aux;
+        //         if (ustack.errno() != ustack.rc_ok)
+        //         {
+        //             _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+        //             printfRed("execve: push into stack");
+        //             return -1;
+        //         }
+        //     }
+        //     // auxv[0] = AT_RANDOM
+        //     aux.a_type = elf::AT_RANDOM;
+        //     aux.a_un.a_val = rd_pos;
+        //     ustack << aux;
+        //     if (ustack.errno() != ustack.rc_ok)
+        //     {
+        //         _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+        //         printfRed("execve: push into stack");
+        //         return -1;
+        //     }
+        // }
+
+        // // 5. 压入 envp
+
+        // for (long i = envc; i >= 0; --i)
+        // {
+        //     ustack << uenvp[i];
+        //     if (ustack.errno() != ustack.rc_ok)
+        //     {
+        //         _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+        //         printfRed("execve: push into stack");
+        //         return -1;
+        //     }
+        // }
+
+        // // 6. 压入 argv
+
+        // for (long i = argc; i >= 0; --i)
+        // {
+        //     ustack << uargv[i];
+        //     if (ustack.errno() != ustack.rc_ok)
+        //     {
+        //         _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+        //         printfRed("execve: push into stack");
+        //         return -1;
+        //     }
+        // }
+
+        // // 7. 压入 argc
+
+        // ustack << argc;
+        // if (ustack.errno() != ustack.rc_ok)
+        // {
+        //     _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+        //     printfRed("execve: push into stack");
+        //     return -1;
+        // }
+
+        // // arguments to user main(argc, argv)
+        // // argc is returned via the system call return
+        // // value, which is in a0.
+        // // hsai::set_trap_frame_arg( proc->_trapframe, 1, sp );
+
+        // // 配置资源限制
+
+        // proc->_rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_cur =
+        //     proc->_rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_max = ustack.sp() - stackbase;
+
+        // // 处理 F_DUPFD_CLOEXEC 标志位
+        // for (auto &f : proc->_ofile)
+        // {
+        //     if (f != nullptr && f->_fl_cloexec)
+        //     {
+        //         f->free_file();
+        //         f = nullptr;
+        //     }
+        // }
+
+        // // save program name for debugging.
+        // for (uint i = 0; i < sizeof proc->_name; i++)
+        // {
+        //     if (i < path.size())
+        //         proc->_name[i] = path[i];
+        //     else
+        //         proc->_name[i] = 0;
+        // }
+
+        // // commit to the user image.
+        // proc->exe = ab_path;
+        // proc->_sz = new_sz;
+        // // unmap program sections
+        // for (int i = 0; i < proc->_prog_section_cnt; i++)
+        // {
+        //     auto &osc = proc->_prog_sections[i];
+        //     ulong sec_start, sec_end;
+        //     sec_start = hsai::page_round_down((ulong)osc._sec_start);
+        //     sec_end = hsai::page_round_up((ulong)osc._sec_start + osc._sec_size);
+        //     mm::k_vmm.vm_unmap(proc->_pt, sec_start, (sec_end - sec_start) / hsai::page_size,
+        //                        1);
+        // }
+        // { // unmap heap
+        //     ulong start = hsai::page_round_down(proc->_heap_start);
+        //     ulong end = hsai::page_round_up(proc->_heap_ptr);
+        //     mm::k_vmm.vm_unmap(proc->_pt, start, (end - start) / hsai::page_size, 1);
+        // }
+        // { // unmap stack
+        //     ulong pgs = default_proc_ustack_pages + 1;
+        //     ulong start = mm::vm_ustack_end - pgs * hsai::page_size;
+        //     mm::k_vmm.vm_unmap(proc->_pt, start, pgs, 1);
+        // }
+        // proc->_heap_start = 0;
+        // for (int i = 0; i < new_sec_cnt; ++i)
+        // {
+        //     auto &sec = new_sec_desc[i];
+        //     proc->_prog_sections[i] = sec;
+        //     ulong sec_end = hsai::page_round_up((ulong)sec._sec_start + sec._sec_size);
+        //     if (sec_end > proc->_heap_start)
+        //         proc->_heap_start = sec_end;
+        // }
+        // proc->_prog_section_cnt = new_sec_cnt;
+        // mm::k_vmm.vm_unmap(proc->_pt, mm::vml::vm_trap_frame, 1, 0);
+        // hsai::proc_free(proc);
+        // proc->_pt.freewalk();
+        // _proc_create_vm(proc, new_pt);
+        // hsai::proc_init(proc);
+
+        // // if(!proc->_kpt.is_null())
+        // // {
+        // // 	mm::PageTable kpt;
+        // // 	kpt = mm::k_vmm.vm_create();
+        // // 	memcpy( (void *) kpt.get_base(), (void *) mm::k_pagetable.get_base(),
+        // // 			hsai::page_size  );
+
+        // // 	ulong pgs	= default_proc_ustack_pages + 1;
+        // // 	ulong start = mm::vm_ustack_end - pgs * hsai::page_size;
+        // // 	mm::k_vmm.map_data_pages( kpt, start, pgs * hsai::page_size,
+        // // 		phy_stackbase, false );
+
+        // // 	hsai::VirtualCpu * cpu = hsai::get_cpu();
+        // // 	cpu->set_mmu( kpt );
+
+        // // 	mm::k_vmm.vm_unmap( proc->_kpt, start, pgs, 0 );
+        // // 	proc->_kpt.kfreewalk( stackbase - hsai::page_size );
+
+        // // 	proc->_kpt = kpt;
+        // // }
+
+        // proc->_heap_ptr = proc->_heap_start;
+
+        // hsai::set_trap_frame_entry(proc->_trapframe, (void *)elf.entry);
+        // hsai::set_trap_frame_user_sp(proc->_trapframe, ustack.sp());
+        // hsai::set_trap_frame_arg(proc->_trapframe, 1, ustack.sp());
+        // proc->_state = ProcState::runnable;
+
+        // /// @note 此处是为了兼容glibc的需要，详见 how_to_adapt_glibc.md
+        return 0x0; // rtld_fini
+    }
+
 }; // namespace proc

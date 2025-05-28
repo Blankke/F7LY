@@ -5,7 +5,7 @@
 
 namespace proc
 {
-    constexpr int default_proc_slot = 1; // 默认进程槽位
+    constexpr int default_proc_slot = 1; // 默认进程槽位 TODO:TBD
 
     #define MAXARG 32
 
@@ -46,7 +46,7 @@ namespace proc
 
         void procdump(); // 打印进程列表 debug
 
-
+        int execve(eastl::string path, eastl::vector<eastl::string> args, eastl::vector<eastl::string> envs);
         int exec(const char *path, const char *argv[]); // 执行新程序
         int wait(int child_pid, uint64 addr); // 等待子进程
         // int load_seg(mem::PageTable &pt, uint64 va, fs::fat::Fat32DirEntry *de, uint offset, uint size); // 加载段到页表

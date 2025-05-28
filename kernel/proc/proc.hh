@@ -30,6 +30,14 @@ namespace proc
     constexpr int highest_proc_prio = 0;  // 最高进程优先级
     constexpr uint max_open_files = 128;  // 每个进程最多可以打开的文件数量
 
+    struct program_section_desc
+    {
+        void *_sec_start = nullptr; // virtual address
+        ulong _sec_size = 0;
+        const char *_debug_name = nullptr;
+    };
+    constexpr int max_program_section_num = 16;
+    constexpr int max_vma_num = 10;
     class Pcb
     {
         // friend ProcessManager;
