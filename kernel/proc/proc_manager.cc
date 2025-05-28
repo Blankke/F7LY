@@ -525,7 +525,7 @@ namespace proc
                 np->_ofile[i] = p->_ofile[i];
             }
         np->_cwd = p->_cwd;                                             // 继承当前工作目录
-        safestrcpy(np->_cwd_name, p->_cwd_name, sizeof(np->_cwd_name)); // 继承当前工作目录名称
+        np->_cwd_name = p->_cwd_name; // 继承当前工作目录名称
         strncpy(np->_name, p->_name, sizeof(p->_name));
 
         pid = np->_pid;
