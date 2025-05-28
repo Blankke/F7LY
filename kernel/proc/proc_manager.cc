@@ -15,7 +15,7 @@
 #include "fs/vfs/file/device_file.hh"
 #include "param.h"
 #include "timer_manager.hh"
-#include "kernel/fs/vfs/elf.hh"
+#include "fs/vfs/elf.hh"
 extern "C"
 {
     extern uint64 initcode_start[];
