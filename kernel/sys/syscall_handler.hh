@@ -2,7 +2,7 @@
 #include "types.hh"
 #include "syscall_defs.hh"
 #include "printer.hh"
-
+#include "fs/vfs/file/file.hh"
 namespace syscall
 {
     constexpr uint max_syscall_funcs_num = 2048;
@@ -32,6 +32,7 @@ namespace syscall
         int _arg_int(int arg_n, int &out_int);
         int _arg_addr(int arg_n, uint64 &out_addr);
         int _arg_str(int arg_n, char *buf, int max);
+        int _arg_fd(int arg_n, int *out_fd, fs::file **out_f);
 
     private: // ================ syscall functions ================
         uint64 sys_exec();

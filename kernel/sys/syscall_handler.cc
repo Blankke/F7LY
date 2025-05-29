@@ -3,10 +3,12 @@
 #include "proc.hh"
 #include "proc_manager.hh"
 #include "virtual_memory_manager.hh"
+#include "userspace_stream.hh"
 #include "klib.hh"
 #include "list.hh"
 #include "param.h"
 #include "sbi.hh"
+#include "hal/cpu.hh"
 namespace syscall
 {
     // 创建全局的 SyscallHandler 实例
@@ -126,7 +128,7 @@ namespace syscall
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
         // if ( addr >= p->get_size() || addr + sizeof( uint64 ) > p->get_size()
         // ) 	return -1;
-        mem::PageTable* pt = p->get_pagetable();
+        mem::PageTable *pt = p->get_pagetable();
         if (mem::k_vmm.copy_in(*pt, &out_data, addr, sizeof(out_data)) < 0)
             return -1;
         return 0;
@@ -194,6 +196,25 @@ namespace syscall
             return -1;
         }
         return _fetch_str(addr, buf, max);
+    }
+
+    int SyscallHandler::_arg_fd(int arg_n, int *out_fd, fs::file **out_f)
+    {
+        int fd;
+        fs::file *f;
+
+        if (_arg_int(arg_n, fd) < 0)
+            return -1;
+        proc::Pcb *p = (proc::Pcb *)Cpu::get_cpu()->get_cur_proc();
+        f = p->get_open_file(fd);
+        if (f == nullptr)
+            return -1;
+        if (out_fd)
+            *out_fd = fd;
+        if (out_f)
+            *out_f = f;
+
+        return 0;
     }
 
     // ---------------- syscall functions ----------------
@@ -312,9 +333,48 @@ namespace syscall
     uint64 SyscallHandler::sys_write()
     {
         TODO("sys_write");
+
+        fs::file *f;
+        int n;
+        uint64 p;
+        [[maybe_unused]] int fd = 0;
+
+        if (_arg_fd(0, &fd, &f) < 0 || _arg_addr(1, p) < 0 ||
+            _arg_int(2, n) < 0)
+        {
+            return -1;
+        }
+
+        if (fd > 2)
+            printfRed("invoke sys_write\n");
+
+        proc::Pcb *proc = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = proc->get_pagetable();
+
+        char *buf = new char[n + 10];
+        {
+            mem::UserspaceStream uspace((void *)p, n + 1, pt);
+            uspace.open();
+            mem::UsRangeDesc urd = std::make_tuple((u8 *)buf, (ulong)n + 1);
+            uspace >> urd;
+            uspace.close();
+        }
+        // if ( mm::k_vmm.copy_in( *pt, (void *) buf, p, n ) < 0 ) return -1;
+
+        // if ( buf[0] == '#' && buf[1] == '#' && buf[2] == '#' && buf[3] == '#'
+        // )
+        // {
+        // 	printf( YELLOW_COLOR_PRINT "note : echo ####\n" CLEAR_COLOR_PRINT );
+        // }
+
+        long rc = f->write((ulong)buf, n, f->get_file_offset(), true);
+        delete[] buf;
+        return rc;
+
         printfYellow("sys_write\n");
         return 0;
     }
+
     uint64 SyscallHandler::sys_unlinkat()
     {
         TODO("sys_unlinkat");
@@ -426,7 +486,7 @@ namespace syscall
     uint64 SyscallHandler::sys_shutdown()
     {
         TODO(struct filesystem *fs = get_fs_from_path("/");
-        vfs_ext_umount(fs);)
+             vfs_ext_umount(fs);)
         sbi_shutdown();
         printfYellow("sys_shutdown\n");
         sbi_shutdown();
