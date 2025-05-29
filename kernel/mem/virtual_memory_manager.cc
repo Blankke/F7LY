@@ -6,14 +6,13 @@
 #include "platform.hh"
 #include "printer.hh"
 #include "proc/proc.hh"
-extern char etext[];  // kernel.ld sets this to end of kernel code.
+extern char etext[]; // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 
 namespace mem
 {
     VirtualMemoryManager k_vmm;
-    
 
     uint64 VirtualMemoryManager::kstack_vm_from_gid(uint gid)
     {
@@ -27,14 +26,14 @@ namespace mem
 #ifdef RISCV
 
         _virt_mem_lock.init(lock_name);
-        //创建内核页表
-        k_pagetable=kvmmake();
+        // 创建内核页表
+        k_pagetable = kvmmake();
         // for(uint64 va = KERNBASE; va < (uint64)etext; va += PGSIZE)
         // {
         //     uint64 ppp= (uint64)k_pagetable.walk_addr(va);
         //     printfRed("va: %p, pa: %p\n", va, ppp);
         // }
-        //TODO
+        // TODO
         for (proc::Pcb &pcb : proc::k_proc_pool)
         {
             pcb.map_kstack(k_pagetable);
@@ -44,13 +43,12 @@ namespace mem
         // 并且invtlb 0x0,$zero,$zero;
         // question: 为什么xv6的MAKE_SATP没有设置asid
 
-       
         sfence_vma();
         // printfYellow("sfence\n");
         w_satp(MAKE_SATP(k_pagetable.get_base()));
         // printfYellow("sfence\n");
         sfence_vma();
-#endif 
+#endif
         printfGreen("[vmm] Virtual Memory Manager Init\n");
     }
 
@@ -72,12 +70,12 @@ namespace mem
         {
 
             pte = pt.walk(a, /*alloc*/ true);
-            //DEBUG:
-            // if(va == KERNBASE)
-            // {
-            //     pte = pt.walk(a, false);
-            // }
-            
+            // DEBUG:
+            //  if(va == KERNBASE)
+            //  {
+            //      pte = pt.walk(a, false);
+            //  }
+
             if (pte.is_null())
             {
                 printfRed("walk failed");
@@ -87,13 +85,13 @@ namespace mem
                 panic("mappages: remap, va=0x%x, pa=0x%x, PteData:%x", a, pa, pte.get_data());
 
             pte.set_data(PA2PTE(PGROUNDDOWN(riscv::virt_to_phy_address(pa))) |
-                                flags |
-                                riscv::PteEnum::pte_valid_m);
+                         flags |
+                         riscv::PteEnum::pte_valid_m);
 
             // printfMagenta("由map_page设置的第三级pte: %p,pte_addr:%p，应该是：%p\n", pte.get_data(), pte.get_data_addr(), riscv::virt_to_phy_address(pa));
             // if (pte.get_data_addr() == (uint64*)a)
             // {
-                
+
             // }
             if (a == last)
                 break;
@@ -122,8 +120,8 @@ namespace mem
                 return 0;
             }
             k_pmm.clear_page(mem);
-            if (map_pages(pt, a, PGSIZE, (uint64)mem, 
-                            riscv::PteEnum::pte_readable_m | flags) == false)
+            if (map_pages(pt, a, PGSIZE, (uint64)mem,
+                          riscv::PteEnum::pte_readable_m | flags) == false)
             {
                 k_pmm.free_page(mem);
                 vmdealloc(pt, a, old_sz);
@@ -218,7 +216,6 @@ namespace mem
         }
     }
 
-
     // TODO
     // uint64 VirtualMemoryManager::allocshm(PageTable &pt, uint64 oldshm, uint64 newshm, uint64 sz, void *phyaddr[pm::MAX_SHM_PGNUM])
     // {
@@ -312,7 +309,7 @@ namespace mem
             n = PGSIZE - (va - a);
             if (n > len)
                 n = len;
-            memmove((void *)((pa + (va - a)) ), p, n);
+            memmove((void *)((pa + (va - a))), p, n);
 
             len -= n;
             p = (char *)p + n;
@@ -335,9 +332,10 @@ namespace mem
             if ((pte = pt.walk(a, 0)).is_null())
                 panic("vmunmap: walk");
             if (!pte.is_valid())
-                continue;  
-                ///@details 为了mmap的懒分配，所以确实可能出现了惰性页面调用
-                // panic("vmunmap: not mapped");
+                continue;
+            ///@brief 这里的逻辑是，如果pte无效，则不需要释放物理页
+            /// TODO: 为了mmap的懒分配，所以确实可能出现了惰性页面调用
+            // panic("vmunmap: not mapped");
             if (!pte.is_leaf())
                 panic("vmunmap: not a leaf");
             if (do_free)
@@ -373,9 +371,11 @@ namespace mem
         {
             if ((pte = old_pt.walk(va, 0)).is_null())
                 panic("uvmcopy: pte should exist");
-            if (pte.is_valid()==0)
+            if (pte.is_valid() == 0)
                 continue;
-                // panic("uvmcopy: page not valid");
+            ///@brief 这里的逻辑是，如果pte无效，则不需要释放物理页
+            /// TODO: 为了mmap的懒分配，所以确实可能出现了惰性页面调用
+            // panic("uvmcopy: page not valid");
             pa = (uint64)pte.pa();
             flags = pte.get_flags();
             if ((mem = mem::PhysicalMemoryManager::alloc_page()) == nullptr)
@@ -408,7 +408,7 @@ namespace mem
             pte.set_data(pte.get_data() & ~riscv::PteEnum::pte_user_m);
     }
 
-    uint64 VirtualMemoryManager::uvmalloc(PageTable &pt, uint64 oldsz, uint64 newsz,uint64 flags)
+    uint64 VirtualMemoryManager::uvmalloc(PageTable &pt, uint64 oldsz, uint64 newsz, uint64 flags)
     {
 #ifdef RISCV
         uint64 a;
@@ -436,7 +436,7 @@ namespace mem
         }
         return newsz;
 #elif defined(LOONGARCH)
-        //TODO: uvmalloc 未实现
+        // TODO: uvmalloc 未实现
         printfRed("loongarch 未实现uvmalloc\n");
 #endif
     }
@@ -454,7 +454,7 @@ namespace mem
     }
     void VirtualMemoryManager::kvmmap(PageTable &pt, uint64 va, uint64 pa, uint64 sz, uint64 perms)
     {
-        if(map_pages(pt, va, sz, pa, perms)==false)
+        if (map_pages(pt, va, sz, pa, perms) == false)
         {
             printf("kvmmap failed\n");
             panic("[vmm] kvmmap failed");
@@ -487,22 +487,22 @@ namespace mem
         kvmmap(pt, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
         // printfGreen("[vmm] kvmmake plic success\n");
         // map kernel text executable and read-only.
-        kvmmap(pt, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+        kvmmap(pt, KERNBASE, KERNBASE, (uint64)etext - KERNBASE, PTE_R | PTE_X);
         // printfGreen("[vmm] kvmmake kernel text success\n");
         // map kernel data and the physical RAM we'll make use of.
-        kvmmap(pt, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+        kvmmap(pt, (uint64)etext, (uint64)etext, PHYSTOP - (uint64)etext, PTE_R | PTE_W);
         // printfRed("[vmm] kvmmake kernel data success\n");
         // // map the trampoline for trap entry/exit to
         // // the highest virtual address in the kernel.
         kvmmap(pt, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
-        //我发现trapframe和kstack在xv6里面都没有初始化
-        //因为trampoline的位置在内核和用户页表都一样，
-        //所以他们访问的时候都是通过trampoline进行访问，没有进行映射也没有关系,
-        //所以这里不需要进行映射.
+        // 我发现trapframe和kstack在xv6里面都没有初始化
+        // 因为trampoline的位置在内核和用户页表都一样，
+        // 所以他们访问的时候都是通过trampoline进行访问，没有进行映射也没有关系,
+        // 所以这里不需要进行映射.
         /*实际上，proc在创建的时候会有两个函数，proc_pagetable,proc_mapstacks,
         这二者会分别映射trampoline和kstack ，我们内核的页表初始化的时候已经映射了trampoline
         这里要映射的*/
-        
+
         // DEBUG:虚拟化后所有代码卡死，检查所有内核代码映射，KERNBASE到etext
         // printfBlue("etext: %p\n", etext);
         // printfBlue("KERNBASE: %p\n", KERNBASE);
@@ -513,9 +513,9 @@ namespace mem
         // }
 
         // 初始化堆内存
-        kvmmap(pt,vm_kernel_heap_start,HEAP_START,vm_kernel_heap_size,PTE_R | PTE_W);
+        kvmmap(pt, vm_kernel_heap_start, HEAP_START, vm_kernel_heap_size, PTE_R | PTE_W);
 #elif defined(LOONGARCH)
-        //TODO
+        // TODO
         printfRed("loongarch 虚拟化未实现\n");
 #endif
         return pt;
@@ -523,37 +523,39 @@ namespace mem
 
     void VirtualMemoryManager::uvmfirst(PageTable &pt, uint64 src, uint64 sz)
     {
-        #ifdef RISCV
-        //来自xv6的uvmfirst函数
-            char *mem;
-            printf("sz: %d\n", sz);
-            // if(sz >= PGSIZE)
-            //   panic("uvmfirst: more than a page");
-            mem = (char *)k_pmm.alloc_page();
-            memset(mem, 0, PGSIZE);
-            map_pages(pt, 0, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_X|PTE_U);
-            // debug
-            // printfYellow("预期映射的pa: %p\n", mem);
-            // uint64 pa= (uint64)pt.walk_addr(0);
-            // printfYellow("va: %p, pa: %p\n", 0, pa);
-            
-            memmove(mem, (void*)src, MIN(sz, PGSIZE));
+#ifdef RISCV
+        // 来自xv6的uvmfirst函数
+        char *mem;
+        printf("sz: %d\n", sz);
+        // if(sz >= PGSIZE)
+        //   panic("uvmfirst: more than a page");
+        mem = (char *)k_pmm.alloc_page();
+        memset(mem, 0, PGSIZE);
+        map_pages(pt, 0, PGSIZE, (uint64)mem, PTE_W | PTE_R | PTE_X | PTE_U);
+        // debug
+        // printfYellow("预期映射的pa: %p\n", mem);
+        // uint64 pa= (uint64)pt.walk_addr(0);
+        // printfYellow("va: %p, pa: %p\n", 0, pa);
 
-            mem = (char *)k_pmm.alloc_page();
-            memset(mem, 0, PGSIZE);
-            map_pages(pt, PGSIZE, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_X|PTE_U);
-            if (sz > PGSIZE) {
-              memmove(mem, (void*)((uint64)src + PGSIZE), MIN(sz - PGSIZE, PGSIZE));
-            }
+        memmove(mem, (void *)src, MIN(sz, PGSIZE));
 
-            mem = (char *)k_pmm.alloc_page();
-            memset(mem, 0, PGSIZE);
-            map_pages(pt, 2 * PGSIZE, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_X|PTE_U);
-            if (sz > 2 * PGSIZE) {
-              memmove(mem, (void*)((uint64)src + 2 * PGSIZE), MIN(sz - 2 * PGSIZE, PGSIZE));
-            }
-        #elif defined(LOONGARCH)
-        //TODO
-        #endif
+        mem = (char *)k_pmm.alloc_page();
+        memset(mem, 0, PGSIZE);
+        map_pages(pt, PGSIZE, PGSIZE, (uint64)mem, PTE_W | PTE_R | PTE_X | PTE_U);
+        if (sz > PGSIZE)
+        {
+            memmove(mem, (void *)((uint64)src + PGSIZE), MIN(sz - PGSIZE, PGSIZE));
+        }
+
+        mem = (char *)k_pmm.alloc_page();
+        memset(mem, 0, PGSIZE);
+        map_pages(pt, 2 * PGSIZE, PGSIZE, (uint64)mem, PTE_W | PTE_R | PTE_X | PTE_U);
+        if (sz > 2 * PGSIZE)
+        {
+            memmove(mem, (void *)((uint64)src + 2 * PGSIZE), MIN(sz - 2 * PGSIZE, PGSIZE));
+        }
+#elif defined(LOONGARCH)
+// TODO
+#endif
     }
 }
