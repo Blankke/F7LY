@@ -21,7 +21,6 @@ private:
 public:
         proc::Context *get_context() { return &_context; }
 
-
         int get_num_off() { return _num_off; }
         int get_int_ena() { return _int_ena; }
         void set_int_ena(int x) { _int_ena = x; }
@@ -93,30 +92,10 @@ public:
                 return x;
         }
 
-        void interrupt_on() 
-        { 
-                if (_num_off > 0) {
-                        _num_off--;
-                        // printfCyan("[interrupt_on] _num_off decreased to %d\n", _num_off);
-                        if (_num_off == 0) {
-                                // printf("[interrupt_on] actually enabling interrupts\n");
-                                _intr_on();
-                        }
-                } else {
-                        printfRed("interrupt_on: warning - _num_off already 0\n");
-                }
-        }
-        
-        void interrupt_off() 
-        { 
-                if (_num_off == 0) {
-                        // printfCyan("[interrupt_off] actually disabling interrupts\n");
-                        _intr_off();
-                }
-                _num_off++;
-                // printfCyan("[interrupt_off]_num_off increased to %d\n", _num_off);
-        }
-        
+        static inline void interrupt_on() { _intr_on(); }
+
+        static inline void interrupt_off() { _intr_off(); }
+
         proc::Pcb *get_cur_proc() { return _cur_proc; }
 
 private:
