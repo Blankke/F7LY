@@ -1,39 +1,52 @@
-//
-// Copy from Li shuang ( pseudonym ) on 2024-03-26 
-// --------------------------------------------------------------
-// | Note: This code file just for study, not for commercial use 
-// | Contact Author: lishuang.mk@whu.edu.cn 
-// --------------------------------------------------------------
-//
+
 
 #include "spinlock.hh"
-#include "../types.hh"
+#include "cpu.hh"
 #include "printer.hh"
 
-SpinLock::SpinLock() {}
 
-void SpinLock::init( const char *name )
-{
-	this->_name = name;
-	this->_locked = 0;
-}
+	SpinLock::SpinLock()
+	{
 
-void SpinLock::acquire()
-{
-	if ( is_held() )
-		panic( "SpinLock acquire: repeat" );
-	while ( __sync_lock_test_and_set( &_locked, 1 ) != 0 )
-		;
-	__sync_synchronize();
+	}
 
-}
+	void SpinLock::init( const char * name )
+	{
+		_name = name;
+		_locked = nullptr;
+	}
 
-void SpinLock::release()
-{
-	// if ( !is_held() )
-	// 	log_panic("SpinLock release: not hold SpinLock"); 
+	void SpinLock::acquire()
+	{
+		Cpu * cpu = Cpu::get_cpu();
+		cpu->push_intr_off();
 
-	__sync_synchronize();
-	__sync_lock_release( &_locked );
+		if ( is_held() )
+			panic( "lock is already held." );
+		
+		eastl::atomic_thread_fence( eastl::memory_order_acq_rel );
 
-}
+		Cpu * expected = nullptr;
+		while ( _locked.compare_exchange_strong( expected, cpu, eastl::memory_order_acq_rel ) == false )
+			expected = nullptr;
+	}
+
+	void SpinLock::release()
+	{
+		if ( !is_held() )
+			panic( "lock is already released." );
+		// _locked.store( nullptr, eastl::memory_order_acq_rel );
+		Cpu * cpu = Cpu::get_cpu();
+		_locked.store( nullptr );
+
+		eastl::atomic_thread_fence( eastl::memory_order_acq_rel );
+
+		cpu->pop_intr_off();
+	}
+
+	bool SpinLock::is_held()
+	{
+		return ( _locked.load() == Cpu::get_cpu() );
+	}
+
+

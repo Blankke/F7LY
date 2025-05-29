@@ -6,12 +6,14 @@
 
 #include <EASTL/atomic.h>
 
+
+class Cpu;
+
 class SpinLock
 {
 private:
 	const char *_name = nullptr;
-	int _locked = 0;
-
+	eastl::atomic<Cpu *> _locked ;
 public:
 	SpinLock();
 
@@ -25,8 +27,6 @@ public:
 	/// @brief release spinlock
 	void release();
 
-	bool is_held()
-	{
-		return _locked;
-	};
+	bool is_held();
+
 };
