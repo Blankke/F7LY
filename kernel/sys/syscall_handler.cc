@@ -351,7 +351,6 @@ namespace syscall
             printfRed("invoke sys_write\n");
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = proc->get_pagetable();
-        printfYellow("sys_write\n");
         char *buf = new char[n + 10];
         {
             mem::UserspaceStream uspace((void *)p, n + 1, pt);
@@ -362,7 +361,6 @@ namespace syscall
         }
         long rc = f->write((ulong)buf, n, f->get_file_offset(), true);
         delete[] buf;
-        printfYellow("sys_write\n");
         return rc;
     }
 

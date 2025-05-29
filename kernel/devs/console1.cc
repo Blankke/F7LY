@@ -41,7 +41,7 @@ namespace dev
 	{
 		if ( _stream == nullptr )
 		{
-			printfYellow( "stream not be bound" );
+			printfYellow( "未绑定流" );
 			return 0;
 		}
 		u8 * ptr = ( u8 * ) src;
