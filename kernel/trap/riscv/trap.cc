@@ -14,13 +14,20 @@
 #include "trap_func_wrapper.hh"
 #include "syscall_handler.hh"
 #include "devs/riscv/disk_driver.hh"
-
+#include "proc.hh"
+#include "mem.hh"
+#include "physical_memory_manager.hh"
+#include "fs/vfs/file/normal_file.hh"
+#include "virtual_memory_manager.hh"
 // #include "fuckyou.hh"
 // in kernelvec.S, calls kerneltrap().
 extern "C" void kernelvec();
 extern char trampoline[], uservec[], userret[];
 // 创建一个静态对象
 trap_manager trap_mgr;
+
+//前置声明，内部函数只有这里使用。
+int mmap_handler(uint64 va, int cause);
 
 // 初始化锁
 void trap_manager::init()
@@ -205,6 +212,12 @@ void trap_manager::usertrap()
   {
     // 缺页故障处理
     TODO("pagefault_handler");
+    ///@brief 此处处理mmap的缺页异常
+        uint64 fault_va = r_stval();
+    if(PGROUNDUP(p->_trapframe->sp) - 1 < fault_va && fault_va < p->_sz) {
+      if(mmap_handler(r_stval(), cause) != 0) p->_killed = 1;
+    } else
+      p->_killed = 1;
   }
   else
   {
@@ -275,4 +288,83 @@ void trap_manager::usertrapret()
   ((void (*)(uint64, uint64))fn)(TRAPFRAME, satp); 
   // !! 这个地方应该是固定值, 如果上多核的时候出错的话, 就改回下面
   // ((void (*)(uint64, uint64))fn)(TRAPFRAME + proc::k_pm.get_cur_cpuid() * sizeof(TrapFrame), satp);
+}
+
+
+
+/**
+ * @brief mmap_handler 处理mmap惰性分配导致的页面错误
+ * @param va 页面故障虚拟地址
+ * @param cause 页面故障原因
+ * @return 0成功，-1失败
+ */
+int mmap_handler(uint64 va, int cause) {
+  int i;
+  proc::Pcb* p = proc::k_pm.get_cur_pcb();
+  // 根据地址查找属于哪一个VMA
+  for(i = 0; i < proc::NVMA; ++i) {
+    if(p->_vm[i].used && p->_vm[i].addr <= va && va <= p->_vm[i].addr + p->_vm[i].len - 1) {
+      break;
+    }
+  }
+  if(i == proc::NVMA)
+    return -1;
+
+  int pte_flags = PTE_U;
+  if(p->_vm[i].prot & PROT_READ) pte_flags |= PTE_R;
+  if(p->_vm[i].prot & PROT_WRITE) pte_flags |= PTE_W;
+  if(p->_vm[i].prot & PROT_EXEC) pte_flags |= PTE_X;
+
+
+  fs::normal_file* vf = p->_vm[i].vfile;
+  // 读导致的页面错误
+  if(cause == 13 && vf->read_ready() == 0) return -1;
+  // 写导致的页面错误
+  if(cause == 15 && vf->write_ready() == 0) return -1;
+
+  void* pa =mem::k_pmm.alloc_page();
+  if(pa == 0)
+    return -1;
+  memset(pa, 0, PGSIZE);
+
+  // 读取文件内容
+  fs::dentry* den = vf->getDentry();
+  if(den == nullptr) {
+    mem::k_pmm.free_page(pa);
+    printfRed("mmap_handler: dentry is null\n");
+    return -1; // dentry is null
+  }
+  fs::Inode* inode = den->getNode();
+  if(inode == nullptr) {
+    mem::k_pmm.free_page(pa);
+    printfRed("mmap_handler: inode is null\n");
+    return -1; // inode is null
+  }
+
+  inode->_lock.acquire(); // 锁定inode，防止其他线程修改
+
+
+  // 计算当前页面读取文件的偏移量，实验中p->_vm[i].offset总是0
+  // 要按顺序读读取，例如内存页面A,B和文件块a,b
+  // 则A读取a，B读取b，而不能A读取b，B读取a
+  int offset = p->_vm[i].offset + PGROUNDDOWN(va - p->_vm[i].addr);
+  ///@details 原本的xv6的readi函数有一个标志位来区分是否读到内核中，此处位于内核里
+  ///pa直接是物理地址，所以应该无所谓
+  int readbytes=inode->nodeRead((uint64)pa, offset, PGSIZE);
+
+  // 什么都没有读到
+  if(readbytes == 0) {
+    inode->_lock.release();
+    mem::k_pmm.free_page(pa);
+    return -1;
+  }
+  inode->_lock.release(); // 释放inode锁
+
+  // 添加页面映射
+  if(mem::k_vmm.map_pages(*p->get_pagetable(), PGROUNDDOWN(va), PGSIZE, (uint64)pa, pte_flags) != 0) {
+    mem::k_pmm.free_page(pa);
+    return -1;
+  }
+
+  return 0;
 }

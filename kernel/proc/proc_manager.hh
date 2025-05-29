@@ -5,7 +5,7 @@
 #include "futex.hh"
 namespace tmm
 {
-	struct tms;
+    struct tms;
 } // namespace tmm
 namespace proc
 {
@@ -58,13 +58,11 @@ namespace proc
 
         void procdump(); // 打印进程列表 debug
 
-
         int exec(const char *path, const char *argv[]); // 执行新程序
-        int growproc(int n); // 扩展进程内存
+        int growproc(int n);                            // 扩展进程内存
         int execve(eastl::string path, eastl::vector<eastl::string> args, eastl::vector<eastl::string> envs);
         int wait(int child_pid, uint64 addr);
         int load_seg(mem::PageTable &pt, uint64 va, fs::dentry *de, uint offset, uint size);
-
 
         void sleep(void *chan, SpinLock *lock);
         void wakeup(void *chan);
@@ -77,11 +75,11 @@ namespace proc
         int open(int dir_fd, eastl::string path, uint flags);
         int mkdir(int dir_fd, eastl::string path, uint flags);
         int close(int fd);
-        int fstat(int fd, struct fs::Kstat *buf);
+        int fstat(int fd, fs::Kstat *buf);
         int chdir(eastl::string &path);
         int getcwd(char *out_buf);
-        int mmap(int fd, int map_size);
-        int munmap(uint64 va, size_t len);
+        void *mmap(void *addr, int length, int prot, int flags, int fd, int offset);
+        int munmap(void *addr, int length);
         int unlink(int fd, eastl::string path, int flags);
         int pipe(int *fd, int);
         int set_tid_address(int *tidptr);
@@ -101,7 +99,6 @@ namespace proc
     public:
         void kill_proc(Pcb *p) { p->_killed = 1; }
         int kill_proc(int pid);
-        
 
     private:
         void _proc_create_vm(Pcb *p, mem::PageTable &pt);

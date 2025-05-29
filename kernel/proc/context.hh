@@ -1,6 +1,12 @@
 #pragma once
 
 #include "types.hh"
+namespace fs
+{
+    class dentry;
+    class file;
+    class normal_file;
+} // namespace fs
 
 namespace proc
 {
@@ -43,8 +49,14 @@ namespace proc
 
     struct vma
     {
-        uint64 address; // start of mem block
-        int length;     // length of mem block
-        int next;       // next block
+        int used;               // 是否已被使用
+        uint64 addr;            // 起始地址
+        int len;                // 长度
+        int prot;               // 权限
+        int flags;              // 标志位
+        int vfd;                // 对应的文件描述符
+        ///@todo 此处原本是normal_file *vfile; // 对应的文件，改为fs::file是因为normal_file继承自fs::file
+        fs::normal_file *vfile;      //  对应文件   
+        int offset;             // 文件偏移，本实验中一直为0
     };
 }
