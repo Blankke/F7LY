@@ -167,10 +167,12 @@ namespace syscall
     }
     int SyscallHandler::_arg_int(int arg_n, int &out_int)
     {
-        uint64 raw_val = _arg_raw(arg_n);
-        if (raw_val < (uint64)INT_MIN || raw_val > (uint64)INT_MAX)
+        int raw_val = _arg_raw(arg_n);
+        if (raw_val < INT_MIN || raw_val > INT_MAX)
         {
-            printfRed("[SyscallHandler::_arg_int]arg_n is out of range");
+            printfRed("[SyscallHandler::_arg_int]arg_n is out of range. "
+                      "raw_val: %d, INT_MIN: %d, INT_MAX: %d\n",
+                      raw_val, INT_MIN, INT_MAX);
             return -1;
         }
         out_int = (int)raw_val;
@@ -208,7 +210,10 @@ namespace syscall
         proc::Pcb *p = (proc::Pcb *)Cpu::get_cpu()->get_cur_proc();
         f = p->get_open_file(fd);
         if (f == nullptr)
+        {
+            printfRed("cannot get file from fd %d\n", fd);
             return -1;
+        }
         if (out_fd)
             *out_fd = fd;
         if (out_f)
@@ -338,16 +343,15 @@ namespace syscall
         int n;
         uint64 p;
         [[maybe_unused]] int fd = 0;
-
         if (_arg_fd(0, &fd, &f) < 0 || _arg_addr(1, p) < 0 ||
             _arg_int(2, n) < 0)
         {
+            panic("[SyscallHandler::sys_write] Error fetching arguments");
             return -1;
         }
-
         if (fd > 2)
             printfRed("invoke sys_write\n");
-
+        
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = proc->get_pagetable();
 
@@ -359,20 +363,10 @@ namespace syscall
             uspace >> urd;
             uspace.close();
         }
-        // if ( mm::k_vmm.copy_in( *pt, (void *) buf, p, n ) < 0 ) return -1;
-
-        // if ( buf[0] == '#' && buf[1] == '#' && buf[2] == '#' && buf[3] == '#'
-        // )
-        // {
-        // 	printf( YELLOW_COLOR_PRINT "note : echo ####\n" CLEAR_COLOR_PRINT );
-        // }
-
         long rc = f->write((ulong)buf, n, f->get_file_offset(), true);
         delete[] buf;
-        return rc;
-
         printfYellow("sys_write\n");
-        return 0;
+        return rc;
     }
 
     uint64 SyscallHandler::sys_unlinkat()
