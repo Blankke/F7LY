@@ -133,8 +133,6 @@ namespace proc
                 // 设置内核栈指针
                 p->_context.sp = p->_kstack + PGSIZE;
 
-                p->_lock.release();
-
                 // 更新上次分配的位置，轮转分配策略
                 _last_alloc_proc_gid = p->_gid;
 
@@ -151,63 +149,63 @@ namespace proc
 
     void ProcessManager::fork_ret()
     {
-        static int first = 1;
         proc::Pcb *proc = get_cur_pcb();
         proc->_lock.release();
-
+        
+        static int first = 1;
         if (first)
         {
-            // first = 0;
-            // TODO(
-            //     // 这个TODO已经完成如下
-            //     // printf("sp: %x\n", r_sp());
-            //     filesystem_init();
-            //     filesystem2_init(); // 启动init
-            // )
+            first = 0;
+            TODO(
+                // 这个TODO已经完成如下
+                // printf("sp: %x\n", r_sp());
+                filesystem_init();
+                filesystem2_init(); // 启动init
+            )
 
-            // // 文件系统初始化必须在常规进程的上下文中运行（例如，因为它会调用 sleep），
-            // // 因此不能从 main() 中运行。(copy form xv6)
+            // 文件系统初始化必须在常规进程的上下文中运行（例如，因为它会调用 sleep），
+            // 因此不能从 main() 中运行。(copy form xv6)
 
-            // riscv::qemu::DiskDriver *disk = (riscv::qemu::DiskDriver *)dev::k_devm.get_device("Disk driver");
-            // disk->identify_device();
+            riscv::qemu::DiskDriver *disk = (riscv::qemu::DiskDriver *)dev::k_devm.get_device("Disk driver");
+            disk->identify_device();
 
-            // new (&fs::dentrycache::k_dentryCache) fs::dentrycache::dentryCache;
-            // fs::dentrycache::k_dentryCache.init();
-            // new (&fs::mnt_table) eastl::unordered_map<eastl::string, fs::FileSystem *>;
-            // fs::mnt_table.clear(); // clean mnt_Table
-            // new (&fs::ramfs::k_ramfs) fs::ramfs::RamFS;
-            // fs::ramfs::k_ramfs.initfd();
-            // fs::mnt_table["/"] = &fs::ramfs::k_ramfs;
-            // fs::Path mnt("/mnt");
-            // fs::Path dev("/dev/hda");
-            // mnt.mount(dev, "ext4", 0, 0);
+            new (&fs::dentrycache::k_dentryCache) fs::dentrycache::dentryCache;
+            fs::dentrycache::k_dentryCache.init();
+            new (&fs::mnt_table) eastl::unordered_map<eastl::string, fs::FileSystem *>;
+            fs::mnt_table.clear(); // clean mnt_Table
+            new (&fs::ramfs::k_ramfs) fs::ramfs::RamFS;
+            fs::ramfs::k_ramfs.initfd();
+            fs::mnt_table["/"] = &fs::ramfs::k_ramfs;
+            fs::Path mnt("/mnt");
+            fs::Path dev("/dev/hda");
+            mnt.mount(dev, "ext4", 0, 0);
 
-            // fs::Path path("/dev/stdin");
-            // fs::FileAttrs fAttrsin = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0444); // only read
-            // fs::device_file *f_in = new fs::device_file(fAttrsin, DEV_STDIN_NUM, path.pathSearch());
-            // assert(f_in != nullptr, "proc: alloc stdin file fail while user init.");
+            fs::Path path("/dev/stdin");
+            fs::FileAttrs fAttrsin = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0444); // only read
+            fs::device_file *f_in = new fs::device_file(fAttrsin, DEV_STDIN_NUM, path.pathSearch());
+            assert(f_in != nullptr, "proc: alloc stdin file fail while user init.");
 
-            // fs::Path pathout("/dev/stdout");
-            // fs::FileAttrs fAttrsout = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0222); // only write
-            // fs::device_file *f_out =
-            //     new fs::device_file(fAttrsout, DEV_STDOUT_NUM, pathout.pathSearch());
-            // assert(f_out != nullptr, "proc: alloc stdout file fail while user init.");
+            fs::Path pathout("/dev/stdout");
+            fs::FileAttrs fAttrsout = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0222); // only write
+            fs::device_file *f_out =
+                new fs::device_file(fAttrsout, DEV_STDOUT_NUM, pathout.pathSearch());
+            assert(f_out != nullptr, "proc: alloc stdout file fail while user init.");
 
-            // fs::Path patherr("/dev/stderr");
-            // fs::FileAttrs fAttrserr = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0222); // only write
-            // fs::device_file *f_err =
-            //     new fs::device_file(fAttrserr, DEV_STDERR_NUM, patherr.pathSearch());
-            // assert(f_err != nullptr, "proc: alloc stderr file fail while user init.");
+            fs::Path patherr("/dev/stderr");
+            fs::FileAttrs fAttrserr = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0222); // only write
+            fs::device_file *f_err =
+                new fs::device_file(fAttrserr, DEV_STDERR_NUM, patherr.pathSearch());
+            assert(f_err != nullptr, "proc: alloc stderr file fail while user init.");
 
-            // fs::ramfs::k_ramfs.getRoot()->printAllChildrenInfo();
-            // proc->_ofile[0] = f_in;
-            // proc->_ofile[1] = f_out;
-            // proc->_ofile[2] = f_err;
-            // /// @todo 这里暂时修改进程的工作目录为fat的挂载点
-            // proc->_cwd = fs::ramfs::k_ramfs.getRoot()->EntrySearch("mnt");
-            // proc->_cwd_name = "/mnt/";
+            fs::ramfs::k_ramfs.getRoot()->printAllChildrenInfo();
+            proc->_ofile[0] = f_in;
+            proc->_ofile[1] = f_out;
+            proc->_ofile[2] = f_err;
+            /// @todo 这里暂时修改进程的工作目录为fat的挂载点
+            proc->_cwd = fs::ramfs::k_ramfs.getRoot()->EntrySearch("mnt");
+            proc->_cwd_name = "/mnt/";
         }
-        // printf("fork_ret\n");
+        printf("fork_ret\n");
         trap_mgr.usertrapret();
     }
 
