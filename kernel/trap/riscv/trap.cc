@@ -264,14 +264,14 @@ void trap_manager::usertrapret()
   // tell trampoline.S the user page table to switch to.
 
   // debug
-  printfYellow("[usertrapret]user pagetable addr: %p\n", p->_pt.get_base());
+  // printfYellow("[usertrapret]user pagetable addr: %p\n", p->_pt.get_base());
 
   uint64 satp = MAKE_SATP(p->_pt.get_base());
   // debug
 
   uint64 fn = TRAMPOLINE + (userret - trampoline);
-  printf("trapframe addr: %p\n", p->_trapframe);
-  printf("trapframe->epc: %p\n", p->_trapframe->epc);
+  // printf("trapframe addr: %p\n", p->_trapframe);
+  // printf("trapframe->epc: %p\n", p->_trapframe->epc);
   ((void (*)(uint64, uint64))fn)(TRAPFRAME, satp); 
   // !! 这个地方应该是固定值, 如果上多核的时候出错的话, 就改回下面
   // ((void (*)(uint64, uint64))fn)(TRAPFRAME + proc::k_pm.get_cur_cpuid() * sizeof(TrapFrame), satp);

@@ -124,6 +124,7 @@ namespace mem
 	TODO("此处有风险，参考了rv版本的学长代码，to_vir()函数因为返回本身，故删除，la版本的代码未实现");
 		int _update_cache(void *va)
 		{
+			// printfCyan("[UserspaceStream::_update_cache]va: %p\n", va);
 			u64 a = (u64)va;
 			if (is_page_align(a))
 			{
