@@ -335,7 +335,9 @@ namespace mem
             if ((pte = pt.walk(a, 0)).is_null())
                 panic("vmunmap: walk");
             if (!pte.is_valid())
-                panic("vmunmap: not mapped");
+                continue;  
+                ///@details 为了mmap的懒分配，所以确实可能出现了惰性页面调用
+                // panic("vmunmap: not mapped");
             if (!pte.is_leaf())
                 panic("vmunmap: not a leaf");
             if (do_free)
@@ -371,8 +373,9 @@ namespace mem
         {
             if ((pte = old_pt.walk(va, 0)).is_null())
                 panic("uvmcopy: pte should exist");
-            if (pte.is_valid())
-                panic("uvmcopy: page not valid");
+            if (pte.is_valid()==0)
+                continue;
+                // panic("uvmcopy: page not valid");
             pa = (uint64)pte.pa();
             flags = pte.get_flags();
             if ((mem = mem::PhysicalMemoryManager::alloc_page()) == nullptr)

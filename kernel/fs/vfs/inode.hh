@@ -12,7 +12,7 @@
 
 #include "file/file_defs.hh"
 #include "types.hh"
-
+#include "spinlock.hh"
 namespace mem
 {
 	class UserspaceStream;
@@ -27,7 +27,7 @@ namespace fs
 	class Inode
 	{
 	public:
-
+		SpinLock _lock; // inode lock, used for concurrent access control
 		Inode()						= default;
 		Inode( const Inode& inode ) = default;
 		virtual ~Inode()			= default;

@@ -6,6 +6,8 @@
 #include "spinlock.hh"
 #include <EASTL/string.h>
 #include "signal.hh"
+#include "prlimit.hh"
+#include "futex.hh"
 #include "fs/vfs/file/file.hh"
 namespace fs
 {
@@ -14,6 +16,7 @@ namespace fs
 } // namespace fs
 namespace proc
 {
+    constexpr int NVMA = 10; // 每个进程最多的虚拟内存区域数量
     enum ProcState
     {
         UNUSED,
@@ -93,7 +96,17 @@ namespace proc
         uint64 _hp; // 临时堆指针 (注释说明后续会删除)
 
         // 虚拟内存区域 (VMA) - 注释中提出了疑问，这里保留但需要进一步理解其用途
-        struct vma *vm[10]; // 虚拟内存区域数组
+        vma _vm[NVMA]; // 虚拟内存区域数组
+
+		// 线程/futex 相关
+
+		int *_set_child_tid	  = nullptr;
+		int *_clear_child_tid = nullptr;
+
+		robust_list_head *_robust_list = nullptr;
+
+		// for prlimit 进程资源相关
+		rlimit64					_rlim_vec[ResourceLimitId::RLIM_NLIMITS];
 
         // signal处理相关
         proc::ipc::signal::sigaction *_sigactions[proc::ipc::signal::SIGRTMAX];

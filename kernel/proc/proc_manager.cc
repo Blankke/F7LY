@@ -17,6 +17,8 @@
 #include "timer_manager.hh"
 #include "fs/vfs/elf.hh"
 #include "fs/vfs/file/normal_file.hh"
+#include "mem.hh"
+#include "fs/vfs/file/pipe_file.hh"
 extern "C"
 {
     extern uint64 initcode_start[];
@@ -221,7 +223,7 @@ namespace proc
         p->_trapframe = 0;
         if (p->_pt.get_base())
             proc_freepagetable(p->_pt, p->_sz);
-        p->_pt = 0;
+        p->_pt.set_base(0);
         p->_sz = 0;
         p->_pid = 0;
         p->_parent = 0;
@@ -230,6 +232,32 @@ namespace proc
         p->_killed = 0;
         p->_xstate = 0;
         p->_state = ProcState::UNUSED;
+        if (p->_ofile[1]->refcnt > 1)
+            p->_ofile[1]->refcnt--;
+        for (int i = 3; i < (int)max_open_files; ++i)
+        {
+            if (p->_ofile[i] != nullptr && p->_ofile[i]->refcnt > 0)
+            {
+                p->_ofile[i]->free_file();
+                p->_ofile[i] = nullptr;
+            }
+        }
+        /// TODO:检查这个对不对，这个本来应该在exit的时候解除映射，但是我看都只有
+        /// freeproc的时候解除了ofile的映射，所以也在这里接触
+        // 将进程的已映射区域取消映射
+        for (int i = 0; i < NVMA; ++i)
+        {
+            if (p->_vm[i].used)
+            {
+                if (p->_vm[i].flags == MAP_SHARED && (p->_vm[i].prot & PROT_WRITE) != 0)
+                {
+                    p->_vm[i].vfile->write(p->_vm[i].addr, p->_vm[i].len);
+                }
+                p->_vm[i].vfile->free_file();
+                mem::k_vmm.vmunmap(*p->get_pagetable(), p->_vm[i].addr, p->_vm[i].len / PGSIZE, 1);
+                p->_vm[i].used = 0;
+            }
+        }
     }
 
     int ProcessManager::get_cur_cpuid()
@@ -480,6 +508,15 @@ namespace proc
                 p->_ofile[i]->dup();
                 np->_ofile[i] = p->_ofile[i];
             }
+        for (i = 0; i < NVMA; ++i)
+        {
+            if (p->_vm[i].used)
+            {
+                memmove(&np->_vm[i], &p->_vm[i], sizeof(p->_vm[i]));
+                p->_vm[i].vfile->dup(); // 增加引用计数
+            }
+        }
+
         np->_cwd = p->_cwd;           // 继承当前工作目录
         np->_cwd_name = p->_cwd_name; // 继承当前工作目录名称
         strncpy(np->_name, p->_name, sizeof(p->_name));
@@ -887,8 +924,8 @@ namespace proc
                 attrs.filetype = fs::FileTypes::FT_DIRECT;
             else
                 attrs.filetype = fs::FileTypes::FT_NORMAL;
-            attrs._value = 0777;// 默认权限
-            if ((dentry = par_->EntryCreate(path_.rFileName(), attrs)) == nullptr)  // 创建文件
+            attrs._value = 0777;                                                   // 默认权限
+            if ((dentry = par_->EntryCreate(path_.rFileName(), attrs)) == nullptr) // 创建文件
             {
                 printf("Error creating new dentry %s failed\n", path_.rFileName());
                 return -1;
@@ -896,10 +933,10 @@ namespace proc
         }
         if (dentry == nullptr)
             return -1; // file is not found
-//获取设备信息和属性
+                       // 获取设备信息和属性
         int dev = dentry->getNode()->rDev();
         fs::FileAttrs attrs = dentry->getNode()->rMode();
-//如果是设备文件，构造 device_file 对象并返回 fd
+        // 如果是设备文件，构造 device_file 对象并返回 fd
         if (dev >= 0) // dentry is a device
         {
             fs::device_file *f = new fs::device_file(attrs, dev, dentry);
@@ -938,4 +975,238 @@ namespace proc
         p->_ofile[fd] = nullptr;
         return 0;
     }
+    /// @brief 获取指定文件描述符对应文件的状态信息。
+    /// @details 此函数会从当前进程的打开文件表中查找给定文件描述符 `fd`，
+    /// 如果合法且已打开，则将其对应的文件状态信息拷贝到 `buf` 指向的结构中。
+    /// @param fd 要查询的文件描述符，应在合法范围内并对应已打开文件。
+    /// @param buf 用于存放文件状态的结构体指针，函数将其填充为目标文件的元信息（如大小、权限等）。
+    /// @return 返回 0 表示成功；若 `fd` 非法或未打开，返回 -1。
+    int ProcessManager::fstat(int fd, fs::Kstat *buf)
+    {
+        if (fd < 0 || fd >= (int)max_open_files)
+            return -1;
+
+        Pcb *p = get_cur_pcb();
+        if (p->_ofile[fd] == nullptr)
+            return -1;
+        fs::file *f = p->_ofile[fd];
+        *buf = f->_stat;
+
+        return 0;
+    }
+    int ProcessManager::chdir(eastl::string &path)
+    {
+        Pcb *p = get_cur_pcb();
+
+        fs::dentry *dentry;
+
+        fs::Path pt(path);
+        dentry = pt.pathSearch();
+        // dentry = p->_cwd->EntrySearch( path );
+        if (dentry == nullptr)
+            return -1;
+        p->_cwd = dentry;
+        p->_cwd_name = pt.AbsolutePath();
+        if (p->_cwd_name.back() != '/')
+            p->_cwd_name += "/";
+        return 0;
+    }
+    /// @brief 获取当前进程的工作目录路径。get current working directory
+    /// @details 此函数将当前进程的工作目录路径复制到 `out_buf` 中。
+    /// 末尾会自动添加 `\0` 结束符，以构成合法的 C 风格字符串。
+    /// @param out_buf 用户提供的字符数组，用于接收当前进程的工作目录路径。
+    /// @return 返回写入缓冲区的字符数（包含结束符）
+    int ProcessManager::getcwd(char *out_buf)
+    {
+        Pcb *p = get_cur_pcb();
+
+        eastl::string cwd;
+        cwd = p->_cwd_name;
+        uint i = 0;
+        for (; i < cwd.size(); ++i)
+            out_buf[i] = cwd[i];
+        out_buf[i] = '\0';
+        return i + 1;
+    }
+    /// @brief
+    /// @param fd
+    /// @param map_size
+    /// @return
+    void *ProcessManager::mmap(void *addr, int length, int prot, int flags, int fd, int offset)
+    {
+        uint64 err = 0xffffffffffffffff;
+        fs::normal_file *vfile;
+        Pcb *p = get_cur_pcb();
+        if (p->_ofile[fd] == nullptr)
+            return (void *)err;
+        fs::file *f = p->_ofile[fd];
+        if (f->_attrs.filetype != fs::FileTypes::FT_NORMAL)
+            return (void *)err;                    // 只支持普通文件映射
+        vfile = static_cast<fs::normal_file *>(f); // 强制转换为普通文件类型
+
+        ///@details 学长代码是mmap时映射到内存，xv6lab的意思是懒分配，在缺页异常时判断分配。
+        /// 我们选择懒分配的方式，只有在访问时才分配物理页。
+        // get dentry from file
+        //  fs::dentry *de = vfile->getDentry();
+        //  if(de ==nullptr)   return (void *)err; // dentry is null
+        if (vfile->write_ready() == 0 && (prot & PROT_WRITE) != 0 && flags == MAP_SHARED)
+            return (void *)err;
+        if (p->_sz + length > MAXVA - PGSIZE) // 我写得maxva-pgsize是trampoline的地址
+            return (void *)err;               // 超出最大虚拟地址空间
+        for (int i = 0; i < NVMA; ++i)
+        {
+            if (p->_vm[i].used == 0) // 找到一个空闲的虚拟内存区域
+            {
+                p->_vm[i].used = 1;
+                p->_vm[i].addr = p->_sz;
+                p->_vm[i].len = length;
+                p->_vm[i].flags = flags;
+                p->_vm[i].prot = prot;
+                p->_vm[i].vfile = vfile;
+                p->_vm[i].vfd = fd;
+                p->_vm[i].offset = offset;
+
+                vfile->dup();                  // 增加文件引用计数
+                p->_sz += length;              // 扩展进程的虚拟内存空间
+                return (void *)p->_vm[i].addr; // 返回映射的虚拟地址
+            }
+        }
+        return (void *)err;
+    }
+    int ProcessManager::munmap(void *addr, int length)
+    {
+        int i;
+        Pcb *p = get_cur_pcb();
+        for (i = 0; i < NVMA; ++i)
+        {
+            if (p->_vm[i].used && p->_vm[i].len >= length)
+            {
+                // 根据提示，munmap的地址范围只能是
+                // 1. 起始位置
+                if (p->_vm[i].addr == (uint64)addr)
+                {
+                    p->_vm[i].addr += length;
+                    p->_vm[i].len -= length;
+                    break;
+                }
+                // 2. 结束位置
+                if ((uint64)(addr )+ length == p->_vm[i].addr + p->_vm[i].len)
+                {
+                    p->_vm[i].len -= length;
+                    break;
+                }
+            }
+        }
+        if (i == NVMA)
+            return -1;
+
+        // 将MAP_SHARED页面写回文件系统
+        if (p->_vm[i].flags == MAP_SHARED && (p->_vm[i].prot & PROT_WRITE) != 0)
+        {
+            p->_vm[i].vfile->write((uint64)addr, length);
+        }
+
+        // 判断此页面是否存在映射
+        mem::k_vmm.vmunmap(*p->get_pagetable(), (uint64)addr, length / PGSIZE, 1);
+
+        // 当前VMA中全部映射都被取消
+        if (p->_vm[i].len == 0)
+        {
+            /// TODO:此处我没找到对应xv6的fileclose，找了个最类似的函数用上
+            /// 也许这个free_file()是对的
+            /// commented by @gkq
+            p->_vm[i].vfile->free_file();
+            p->_vm[i].used = 0;
+        }
+
+        return 0;
+    }
+    int ProcessManager::unlink(int fd, eastl::string path, int flags)
+    {
+
+        if (fd == -100)
+        {                   // atcwd
+            if (path == "") // empty path
+                return -1;
+
+            if (path[0] == '.' && path[1] == '/')
+                path = path.substr(2);
+
+            return fs::k_file_table.unlink(path);
+        }
+        else
+        {
+            return -1; // current not support other dir, only for cwd
+        }
+    }
+    int ProcessManager::pipe(int *fd, int flags)
+    {
+        fs::pipe_file *rf, *wf;
+        rf = nullptr;
+        wf = nullptr;
+
+        int fd0, fd1;
+        Pcb *p = get_cur_pcb();
+
+        ipc::Pipe *pipe_ = new ipc::Pipe();
+        if (pipe_->alloc(rf, wf) < 0)
+            return -1;
+        fd0 = -1;
+        if (((fd0 = alloc_fd(p, rf)) < 0) || (fd1 = alloc_fd(p, wf)) < 0)
+        {
+            if (fd0 >= 0)
+                p->_ofile[fd0] = 0;
+            // fs::k_file_table.free_file( rf );
+            // fs::k_file_table.free_file( wf );
+            rf->free_file();
+            wf->free_file();
+            return -1;
+        }
+        p->_ofile[fd0] = rf;
+        p->_ofile[fd1] = wf;
+        fd[0] = fd0;
+        fd[1] = fd1;
+        return 0;
+    }
+ 	int ProcessManager::set_tid_address( int *tidptr )
+	{
+		Pcb *p				= get_cur_pcb();
+		p->_clear_child_tid = tidptr;
+		return p->_pid;
+	}
+
+	int ProcessManager::set_robust_list( robust_list_head *head, size_t len )
+	{
+		if ( len != sizeof( *head ) ) return -22;
+
+		Pcb *p			= get_cur_pcb();
+		p->_robust_list = head;
+
+		return 0;
+	}
+
+	int ProcessManager::prlimit64( int pid, int resource, rlimit64 *new_limit, rlimit64 *old_limit )
+	{
+		Pcb *proc = nullptr;
+		if ( pid == 0 )
+			proc = get_cur_pcb();
+		else
+			for ( Pcb &p : k_proc_pool )
+			{
+				if ( p._pid == pid )
+				{
+					proc = &p;
+					break;
+				}
+			}
+		if ( proc == nullptr ) return -10;
+
+		ResourceLimitId rsid = (ResourceLimitId) resource;
+		if ( rsid >= ResourceLimitId::RLIM_NLIMITS ) return -11;
+
+		if ( old_limit != nullptr ) *old_limit = proc->_rlim_vec[rsid];
+		if ( new_limit != nullptr ) proc->_rlim_vec[rsid] = *new_limit;
+
+		return 0;
+	}
 }; // namespace proc

@@ -145,7 +145,7 @@ namespace fs
 		virtual void free_file() { refcnt--; if ( refcnt == 0 ) delete this; };
 		virtual long read( uint64 buf, size_t len, long off, bool upgrade_off ) = 0;
 		virtual long write( uint64 buf, size_t len, long off, bool upgrade_off ) = 0;
-		virtual void dup() { refcnt++; };
+		virtual void dup() { refcnt++; };   //增加引用计数
 		virtual bool read_ready() = 0;
 		virtual bool write_ready() = 0;
 		virtual off_t lseek( off_t offset, int whence ) = 0;
