@@ -15,7 +15,9 @@
 namespace dev
 {
 	DeviceManager k_devm;
-
+	ConsoleStdin k_stdin;
+	ConsoleStdout k_stdout;
+	ConsoleStderr k_stderr;
 	const char *DeviceManager::_device_default_name = "(null device)";
 
 	DeviceManager::DeviceManager()

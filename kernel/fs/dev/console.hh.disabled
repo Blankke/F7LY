@@ -29,7 +29,7 @@ namespace dev
 	public:
 		Console() = default;
 		Console( const char *name );
-		void putc( char c );
+		void put_char( char c );
 
 		int write( int from_user, uint64 src, uint64 n );
 		int read( int to_user, uint64 dst, uint64 n );

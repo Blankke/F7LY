@@ -6,7 +6,8 @@
 #define INPUT_BUF_SIZE 128
 #define BACKSPACE 0x100
 #define CTRL_(x) ((x) - '@')
-
+namespace dev
+{
 class Console
 {
     private:
@@ -26,5 +27,6 @@ class Console
 };
 
 extern Console kConsole; // 全局控制台对象
+};
 
-#endif
+#endif // CONSOLE_HH

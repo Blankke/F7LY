@@ -54,19 +54,17 @@ void main()
     mem::k_vmm.init("virtual_memory_manager");
     mem::k_hmm.init("heap_memory_manager", HEAP_START);
 
-    dev::ConsoleStdin k_stdin;
-    dev::ConsoleStdout k_stdout;
-    dev::ConsoleStderr k_stderr;
-    if (dev::k_devm.register_stdin(static_cast<dev::VirtualDevice *>(&k_stdin)) < 0)
-        while (1)
-            ;
-    if (dev::k_devm.register_stdout(static_cast<dev::VirtualDevice *>(&k_stdout)) < 0)
-        while (1)
-            ;
-    if (dev::k_devm.register_stderr(static_cast<dev::VirtualDevice *>(&k_stderr)) < 0)
-        while (1)
-            ;
 
+    if (dev::k_devm.register_stdin(static_cast<dev::VirtualDevice *>(&dev::k_stdin)) < 0)
+        while (1)
+            ;
+    if (dev::k_devm.register_stdout(static_cast<dev::VirtualDevice *>(&dev::k_stdout)) < 0)
+        while (1)
+            ;
+    if (dev::k_devm.register_stderr(static_cast<dev::VirtualDevice *>(&dev::k_stderr)) < 0)
+        while (1)
+            ;
+    
     // hardware_secondary_init
     //  2. Disk 初始化 (debug)
     new (&riscv::qemu::disk_driver) riscv::qemu::DiskDriver("Disk");

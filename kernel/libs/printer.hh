@@ -41,7 +41,7 @@ private:
 		device,
 	};
 	out_type _type;
-	Console *_console;
+	dev::Console *_console;
 	SpinLock _lock;
 	int _locking = 1;
 	int _panicked = 0;

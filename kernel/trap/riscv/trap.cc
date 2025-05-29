@@ -74,7 +74,7 @@ int trap_manager::devintr()
       int c = sbi_console_getchar();
       if (-1 != c)
       {
-        kConsole.console_intr(c);
+        dev::kConsole.console_intr(c);
       }
     }
     //!!写完磁盘后修改

@@ -18,8 +18,8 @@ void Printer::init()
 	_locking = 1;
 	
 	// 初始化控制台并关联
-	kConsole.init();
-	_console = &kConsole;
+	dev::kConsole.init();
+	_console = &dev::kConsole;
 	_type = out_type::console;
 	printf("Printer::init end\n");
 

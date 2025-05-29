@@ -23,7 +23,7 @@ namespace dev
 		_debug_uart = ( hsai::VirtualUartController * ) hsai::k_devm.get_char_device( name );
 	}
 
-	void Console::putc( char c )
+	void Console::put_char( char c )
 	{
 		if ( _debug_uart )
 		{

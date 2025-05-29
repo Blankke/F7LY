@@ -205,6 +205,13 @@ namespace proc
             proc->_cwd = fs::ramfs::k_ramfs.getRoot()->EntrySearch("mnt");
             proc->_cwd_name = "/mnt/";
         }
+        /// 你好
+        ///这是重定向uart的代码
+        ///commented out by @gkq
+        new(&dev::k_uart) dev::UartManager(UART0);
+        dev::register_debug_uart(&dev::k_uart);
+
+
         printf("fork_ret\n");
         trap_mgr.usertrapret();
     }
