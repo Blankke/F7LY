@@ -131,8 +131,6 @@ namespace proc
                 // 设置内核栈指针
                 p->_context.sp = p->_kstack + PGSIZE;
 
-                p->_lock.release();
-
                 // 更新上次分配的位置，轮转分配策略
                 _last_alloc_proc_gid = p->_gid;
 
