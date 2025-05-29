@@ -218,7 +218,6 @@ namespace syscall
             *out_fd = fd;
         if (out_f)
             *out_f = f;
-
         return 0;
     }
 
@@ -351,10 +350,9 @@ namespace syscall
         }
         if (fd > 2)
             printfRed("invoke sys_write\n");
-        
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = proc->get_pagetable();
-
+        printfYellow("sys_write\n");
         char *buf = new char[n + 10];
         {
             mem::UserspaceStream uspace((void *)p, n + 1, pt);

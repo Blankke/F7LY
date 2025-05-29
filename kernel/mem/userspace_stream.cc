@@ -74,7 +74,7 @@ UserspaceStream &UserspaceStream::operator<<( UsRangeDesc &rd )
 
 UserspaceStream &UserspaceStream::operator>>( UsRangeDesc &rd )
 {
-	if ( _ptr == 0 )
+	if (_ptr == 0)
 	{
 		_errno = rc_not_open;
 		return *this;
