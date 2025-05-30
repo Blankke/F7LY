@@ -1,7 +1,7 @@
 #pragma once 
 
 #include "spinlock.hh"
-
+#include <EASTL/string.h>
 // 根据不同架构包含不同的页表实现
 #ifdef RISCV
 #include "riscv/pagetable.hh"

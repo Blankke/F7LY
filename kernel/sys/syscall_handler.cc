@@ -10,6 +10,7 @@
 #include "sbi.hh"
 #include "hal/cpu.hh"
 #include "timer_manager.hh"
+#include "fs/vfs/path.hh"
 namespace syscall
 {
     // 创建全局的 SyscallHandler 实例
@@ -286,8 +287,24 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_pipe2()
     {
-        TODO("sys_pipe2");
-        printfYellow("sys_pipe2\n");
+        //copy自学长的pipe，和pipe2有什么区别呢
+        int fd[2];
+        uint64 addr;
+
+        if (_arg_addr(0, addr) < 0)
+            return -1;
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        if (mem::k_vmm.copy_in(*pt, &fd, addr, 2 * sizeof(fd[0])) < 0)
+            return -1;
+
+        if (proc::k_pm.pipe(fd, 0) < 0)
+            return -1;
+
+        if (mem::k_vmm.copy_out(*pt, addr, &fd, 2 * sizeof(fd[0])) < 0)
+            return -1;
+
         return 0;
     }
     uint64 SyscallHandler::sys_dup3()
@@ -298,9 +315,35 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_read()
     {
-        TODO("sys_read");
-        printfYellow("sys_read\n");
-        return 0;
+        fs::file *f;
+        uint64 buf;
+        int n;
+        [[maybe_unused]] int fd = -1;
+
+        if (_arg_fd(0, &fd, &f) < 0)
+            return -1;
+        if (_arg_addr(1, buf) < 0)
+            return -2;
+        if (_arg_int(2, n) < 0)
+            return -3;
+
+        if (f == nullptr)
+            return -4;
+        if (n <= 0)
+            return -5;
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+
+        char *k_buf = new char[n + 1];
+        int ret = f->read((uint64)k_buf, n, f->get_file_offset(), true);
+        if (ret < 0)
+            return -6;
+        if (mem::k_vmm.copy_out(*pt, buf, k_buf, ret) < 0)
+            return -7;
+
+        delete[] k_buf;
+        return ret;
     }
     uint64 SyscallHandler::sys_kill()
     {
@@ -590,9 +633,41 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_mount()
     {
-        TODO("sys_mount");
-        printfYellow("sys_mount\n");
-        return 0;
+        uint64 dev_addr;
+        uint64 mnt_addr;
+        uint64 fstype_addr;
+        eastl::string dev;
+        eastl::string mnt;
+        eastl::string fstype;
+        int flags;
+        uint64 data;
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+
+        if (_arg_addr(0, dev_addr) < 0)
+            return -1;
+        if (_arg_addr(1, mnt_addr) < 0)
+            return -1;
+        if (_arg_addr(2, fstype_addr) < 0)
+            return -1;
+
+        if (mem::k_vmm.copy_str_in(*pt, dev, dev_addr, 100) < 0)
+            return -1;
+        if (mem::k_vmm.copy_str_in(*pt, mnt, mnt_addr, 100) < 0)
+            return -1;
+        if (mem::k_vmm.copy_str_in(*pt, fstype, fstype_addr, 100) < 0)
+            return -1;
+
+        if (_arg_int(3, flags) < 0)
+            return -1;
+        if (_arg_addr(4, data) < 0)
+            return -1;
+
+        // return proc::k_pm.mount( dev, mnt, fstype, flags, data );
+        fs::Path devpath(dev);
+        fs::Path mntpath(mnt);
+
+        return mntpath.mount(devpath, fstype, flags, data);
     }
     uint64 SyscallHandler::sys_brk()
     {
@@ -772,10 +847,49 @@ namespace syscall
         // TODO
         return 0;
     }
-    uint64 sys_readlinkat()
+    uint64 SyscallHandler::sys_readlinkat()
     {
-        // TODO
-        return 0;
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        int fd;
+        fs::Path filePath;
+        size_t ret;
+
+        if (_arg_int(0, fd) < 0)
+            return -1;
+
+        eastl::string path;
+        if (_arg_str(1, path, 256) < 0)
+            return -1;
+
+        uint64 buf;
+        if (_arg_addr(2, buf) < 0)
+            return -1;
+
+        size_t buf_size;
+        if (_arg_addr(3, buf_size) < 0)
+            return -1;
+
+        if (fd == AT_FDCWD)
+            new (&filePath) fs::Path(path, p->_cwd);
+        else
+            new (&filePath) fs::Path(path, p->_ofile[fd]);
+
+        fs::dentry *dent = filePath.pathSearch();
+        if (dent == nullptr)
+            return -1;
+
+        char *buffer = new char[buf_size];
+        ret = dent->getNode()->readlinkat(buffer, buf_size);
+
+        if (mem::k_vmm.copy_out(*pt, buf, (void *)buffer, ret) < 0)
+        {
+            delete[] buffer;
+            return -1;
+        }
+
+        delete[] buffer;
+        return ret;
     }
     uint64 sys_getrandom()
     {
