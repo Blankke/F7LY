@@ -52,7 +52,7 @@ namespace proc
         int _gid = num_process; // 全局ID，用于在进程池中唯一标识进程
 
         // 文件系统相关
-        fs::dentry *_cwd;                 // current working directory
+        fs::dentry *_cwd; // current working directory
         eastl::string _cwd_name;
         fs::file *_ofile[max_open_files]; // 进程打开的文件列表 (文件描述符 -> 文件结构)
         eastl::string exe;                // absolute path of the executable file
@@ -98,19 +98,24 @@ namespace proc
         // 虚拟内存区域 (VMA) - 注释中提出了疑问，这里保留但需要进一步理解其用途
         vma _vm[NVMA]; // 虚拟内存区域数组
 
-		// 线程/futex 相关
+        // 线程/futex 相关
 
-		int *_set_child_tid	  = nullptr;
-		int *_clear_child_tid = nullptr;
+        int *_set_child_tid = nullptr;
+        int *_clear_child_tid = nullptr;
 
-		robust_list_head *_robust_list = nullptr;
+        robust_list_head *_robust_list = nullptr;
 
-		// for prlimit 进程资源相关
-		rlimit64					_rlim_vec[ResourceLimitId::RLIM_NLIMITS];
+        // for prlimit 进程资源相关
+        rlimit64 _rlim_vec[ResourceLimitId::RLIM_NLIMITS];
 
         // signal处理相关
         proc::ipc::signal::sigaction *_sigactions[proc::ipc::signal::SIGRTMAX];
         uint64 sigmask;
+
+        // 程序段相关
+        TODO("TBF")
+        program_section_desc _prog_sections[max_program_section_num];
+        int _prog_section_cnt = 0;
 
     public:
         Pcb();
@@ -141,7 +146,7 @@ namespace proc
         uint get_ppid() { return _parent ? _parent->_pid : 0; }
         TrapFrame *get_trapframe() { return _trapframe; }
         uint64 get_kstack() { return _kstack; }
-        mem::PageTable* get_pagetable() { return &_pt; }
+        mem::PageTable *get_pagetable() { return &_pt; }
         ProcState get_state() { return _state; }
         char *get_name() { return _name; }
         uint64 get_size() { return _sz; }
@@ -170,5 +175,5 @@ namespace proc
     };
 
     extern Pcb k_proc_pool[num_process]; // 全局进程池
-    void print_context1(Context *ctx); // 打印进程上下文
+    void print_context1(Context *ctx);   // 打印进程上下文
 }

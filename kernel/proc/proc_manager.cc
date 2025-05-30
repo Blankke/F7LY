@@ -151,7 +151,7 @@ namespace proc
     {
         proc::Pcb *proc = get_cur_pcb();
         proc->_lock.release();
-        
+
         static int first = 1;
         if (first)
         {
@@ -206,11 +206,10 @@ namespace proc
             proc->_cwd_name = "/mnt/";
         }
         /// 你好
-        ///这是重定向uart的代码
-        ///commented out by @gkq
-        new(&dev::k_uart) dev::UartManager(UART0);
+        /// 这是重定向uart的代码
+        /// commented out by @gkq
+        new (&dev::k_uart) dev::UartManager(UART0);
         dev::register_debug_uart(&dev::k_uart);
-
 
         printf("fork_ret\n");
         trap_mgr.usertrapret();
@@ -480,28 +479,66 @@ namespace proc
         }
 
         // Copy user memory from _parent to child.
-
         mem::PageTable *curpt, *newpt;
         curpt = p->get_pagetable();
         newpt = np->get_pagetable();
 
-        if (mem::k_vmm.vm_copy(*newpt, *curpt, p->_sz) < 0)
+        // vm copy : 1. 拷贝LOAD程序段
+
         {
-            freeproc(np);
-            np->_lock.release();
-            return -1;
+            uint64 sec_start;
+            uint64 sec_size;
+            for (int j = 0; j < p->_prog_section_cnt; j++)
+            {
+                auto &pd = p->_prog_sections[j];
+                sec_start = PGROUNDDOWN((uint64)pd._sec_start);
+                sec_size = PGROUNDUP((uint64)pd._sec_start + pd._sec_size) - sec_start;
+                if (mem::k_vmm.vm_copy(*curpt, *newpt, sec_start, sec_size) < 0)
+                {
+                    freeproc(np);
+                    np->_lock.release();
+                    return -1;
+                }
+                np->_prog_sections[j] = pd;
+                np->_prog_section_cnt++;
+            }
         }
 
-        ///@todo 栈指针在哪里定义的？我们的sp应该设定到哪里
-        /// 学长的默认fork带参数是0，		tf->sp		  = usp;然后就是会把栈指针换位置。
+        TODO(// vm copy : 2. 拷贝堆内存
+
+        {
+            ulong heap_start = p->_heap_start;
+            ulong heap_size = hsai::page_round_up(p->_heap_ptr - heap_start);
+            if (mem::k_vmm.vm_copy(*curpt, *newpt, heap_start, heap_size) < 0)
+            {
+                freeproc(np);
+                np->_lock.release();
+                return -2;
+            }
+        })
+
+        TODO(		// vm copy : 3. 拷贝用户栈
+
+		{
+			// 多出的一页是保护页面，防止栈溢出
+			ulong stack_start =
+				mem::vml::vm_ustack_end - ( 1 + default_proc_ustack_pages ) * hsai::page_size;
+			if ( mem::k_vmm.vm_copy( *curpt, *newpt, stack_start,
+									( 1 + default_proc_ustack_pages ) * hsai::page_size ) < 0 )
+			{
+				freeproc( np );
+				np->_lock.release();
+				return -3;
+			}
+		})
 
         np->_sz = p->_sz;
         *np->_trapframe = *p->_trapframe; // 拷贝父进程的陷阱值，而不是直接指向
         np->_trapframe->a0 = 0;           // fork 返回值为 0
 
-        if(usp)
+        if (usp)
 
-        _wait_lock.acquire();
+            _wait_lock.acquire();
         np->_parent = p;
         _wait_lock.release();
 
@@ -654,19 +691,19 @@ namespace proc
             sleep(p, &_wait_lock);
         }
     }
-/// @brief 将指定文件中的一段内容加载到页表映射的虚拟内存中。
-/// 
-/// 此函数用于将文件 `de` 中从 `offset` 开始的 `size` 字节数据，
-/// 加载到进程的页表 `pt` 所映射的虚拟地址 `va` 开始的内存区域中。
-/// 支持起始地址非页对齐情况，内部自动处理跨页加载。
-/// 如果页表未正确建立或读取失败，将导致 panic。
-/// 
-/// @param pt  进程的页表，用于获取对应虚拟地址的物理地址。
-/// @param va  加载的起始虚拟地址，允许非页对齐。
-/// @param de  指向文件的目录项，用于读取文件数据。
-/// @param offset 文件中读取的起始偏移。
-/// @param size 要读取的总字节数。
-/// @return 总是返回 0，失败情况下内部直接 panic。
+    /// @brief 将指定文件中的一段内容加载到页表映射的虚拟内存中。
+    ///
+    /// 此函数用于将文件 `de` 中从 `offset` 开始的 `size` 字节数据，
+    /// 加载到进程的页表 `pt` 所映射的虚拟地址 `va` 开始的内存区域中。
+    /// 支持起始地址非页对齐情况，内部自动处理跨页加载。
+    /// 如果页表未正确建立或读取失败，将导致 panic。
+    ///
+    /// @param pt  进程的页表，用于获取对应虚拟地址的物理地址。
+    /// @param va  加载的起始虚拟地址，允许非页对齐。
+    /// @param de  指向文件的目录项，用于读取文件数据。
+    /// @param offset 文件中读取的起始偏移。
+    /// @param size 要读取的总字节数。
+    /// @return 总是返回 0，失败情况下内部直接 panic。
     int ProcessManager::load_seg(mem::PageTable &pt, uint64 va, fs::dentry *de, uint offset, uint size)
     { // 好像没有机会返回 -1, pa失败的话会panic，de的read也没有返回值
         uint i, n;
@@ -1053,7 +1090,7 @@ namespace proc
     void *ProcessManager::mmap(void *addr, int length, int prot, int flags, int fd, int offset)
     {
         uint64 err = 0xffffffffffffffff;
-        
+
         fs::normal_file *vfile;
         Pcb *p = get_cur_pcb();
         if (p->_ofile[fd] == nullptr)
@@ -1109,7 +1146,7 @@ namespace proc
                     break;
                 }
                 // 2. 结束位置
-                if ((uint64)(addr )+ length == p->_vm[i].addr + p->_vm[i].len)
+                if ((uint64)(addr) + length == p->_vm[i].addr + p->_vm[i].len)
                 {
                     p->_vm[i].len -= length;
                     break;
@@ -1187,77 +1224,83 @@ namespace proc
         fd[1] = fd1;
         return 0;
     }
- 	int ProcessManager::set_tid_address( int *tidptr )
-	{
-		Pcb *p				= get_cur_pcb();
-		p->_clear_child_tid = tidptr;
-		return p->_pid;
-	}
+    int ProcessManager::set_tid_address(int *tidptr)
+    {
+        Pcb *p = get_cur_pcb();
+        p->_clear_child_tid = tidptr;
+        return p->_pid;
+    }
 
-	int ProcessManager::set_robust_list( robust_list_head *head, size_t len )
-	{
-		if ( len != sizeof( *head ) ) return -22;
+    int ProcessManager::set_robust_list(robust_list_head *head, size_t len)
+    {
+        if (len != sizeof(*head))
+            return -22;
 
-		Pcb *p			= get_cur_pcb();
-		p->_robust_list = head;
+        Pcb *p = get_cur_pcb();
+        p->_robust_list = head;
 
-		return 0;
-	}
+        return 0;
+    }
 
-	int ProcessManager::prlimit64( int pid, int resource, rlimit64 *new_limit, rlimit64 *old_limit )
-	{
-		Pcb *proc = nullptr;
-		if ( pid == 0 )
-			proc = get_cur_pcb();
-		else
-			for ( Pcb &p : k_proc_pool )
-			{
-				if ( p._pid == pid )
-				{
-					proc = &p;
-					break;
-				}
-			}
-		if ( proc == nullptr ) return -10;
+    int ProcessManager::prlimit64(int pid, int resource, rlimit64 *new_limit, rlimit64 *old_limit)
+    {
+        Pcb *proc = nullptr;
+        if (pid == 0)
+            proc = get_cur_pcb();
+        else
+            for (Pcb &p : k_proc_pool)
+            {
+                if (p._pid == pid)
+                {
+                    proc = &p;
+                    break;
+                }
+            }
+        if (proc == nullptr)
+            return -10;
 
-		ResourceLimitId rsid = (ResourceLimitId) resource;
-		if ( rsid >= ResourceLimitId::RLIM_NLIMITS ) return -11;
+        ResourceLimitId rsid = (ResourceLimitId)resource;
+        if (rsid >= ResourceLimitId::RLIM_NLIMITS)
+            return -11;
 
-		if ( old_limit != nullptr ) *old_limit = proc->_rlim_vec[rsid];
-		if ( new_limit != nullptr ) proc->_rlim_vec[rsid] = *new_limit;
+        if (old_limit != nullptr)
+            *old_limit = proc->_rlim_vec[rsid];
+        if (new_limit != nullptr)
+            proc->_rlim_vec[rsid] = *new_limit;
 
-		return 0;
-	}
+        return 0;
+    }
 
-    int execve(eastl::string path, eastl::vector<eastl::string> args, eastl::vector<eastl::string> envs){
+    int execve(eastl::string path, eastl::vector<eastl::string> args, eastl::vector<eastl::string> envs)
+    {
         // // 获取当前进程控制块
-		// Pcb			 *proc = k_pm.get_cur_pcb();
-		// uint64		  sp;           // 栈指针
-		// uint64		  stackbase;    // 栈基地址
-		// mem::PageTable pt;           // 页表（暂未使用）
-		// elf::elfhdr	  elf;          // ELF 文件头
-		// elf::proghdr  ph = {};      // 程序头
-		// fs::dentry	 *de;           // 目录项
-		// int			  i, off;       // 循环变量和偏移量
+        // Pcb			 *proc = k_pm.get_cur_pcb();
+        // uint64		  sp;           // 栈指针
+        // uint64		  stackbase;    // 栈基地址
+        // mem::PageTable pt;           // 页表（暂未使用）
+        // elf::elfhdr	  elf;          // ELF 文件头
+        // elf::proghdr  ph = {};      // 程序头
+        // fs::dentry	 *de;           // 目录项
+        // int			  i, off;       // 循环变量和偏移量
 
-		// // ========== 第一阶段：路径解析和文件查找 ==========
-		
-		// // 构建绝对路径
-		// eastl::string ab_path;
-		// if ( path[0] == '/' )
-		// 	ab_path = path;           // 已经是绝对路径
-		// else
-		// 	ab_path = proc->_cwd_name + path;  // 相对路径，添加当前工作目录前缀
+        // // ========== 第一阶段：路径解析和文件查找 ==========
 
-		// printfCyan( "execve file : %s", ab_path.c_str() );
+        // // 构建绝对路径
+        // eastl::string ab_path;
+        // if ( path[0] == '/' )
+        // 	ab_path = path;           // 已经是绝对路径
+        // else
+        // 	ab_path = proc->_cwd_name + path;  // 相对路径，添加当前工作目录前缀
 
-		// // 解析路径并查找文件
-		// fs::Path path_resolver( ab_path );
-		// if ( ( de = path_resolver.pathSearch() ) == nullptr )
-		// {
-		// 	printfCyan( "execve: cannot find file" );
-		// 	return -1;
-		// }
+        // printfCyan( "execve file : %s", ab_path.c_str() );
+
+        // // 解析路径并查找文件
+        // fs::Path path_resolver( ab_path );
+        // if ( ( de = path_resolver.pathSearch() ) == nullptr )
+        // {
+        // 	printfCyan( "execve: cannot find file" );
+        // 	return -1;
+        // }
         return -1;
     }
 }; // namespace proc

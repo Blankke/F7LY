@@ -409,14 +409,25 @@ int VirtualMemoryManager::copy_str_in( PageTable &pt, eastl::string &dst,
         return pt;
     }
 
-    int VirtualMemoryManager::vm_copy(PageTable &old_pt, PageTable &new_pt, uint64 size)
+
+    int VirtualMemoryManager::vm_copy(PageTable &old_pt, PageTable &new_pt, uint64 start, uint64 size)
     {
         Pte pte;
         uint64 pa, va;
+        uint64 va_end;
         uint64 flags;
         void *mem;
 
-        for (va = 0; va < size; va += PGSIZE)
+        if(!is_page_align(start) || !is_page_align(size))
+        {
+            panic("uvmcopy: start or size not page aligned");
+            return -1;
+        }
+        
+        va_end = start + size;
+        
+
+        for (va = start; va < va_end; va += PGSIZE)
         {
             if ((pte = old_pt.walk(va, 0)).is_null())
                 panic("uvmcopy: pte should exist");
