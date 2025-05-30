@@ -1,5 +1,5 @@
-- [x] SYS_fork = 1,
-- [x] SYS_wait = 3,
+- [X] SYS_fork = 1,
+- [X] SYS_wait = 3,
 - [ ] SYS_kill = 6,
 - [x] SYS_sleep = 13,
 - [ ] SYS_uptime = 14,

@@ -236,13 +236,15 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_fork()
     {
-        uint64 usp;
-        if (_arg_addr(1, usp) < 0)
-        {
-            printfRed("[SyscallHandler::sys_fork] Error fetching usp argument\n");
-            return -1;
-        }
-        return proc::k_pm.fork(usp); // 调用进程管理器的 fork 函数
+        TODO(uint64 usp;
+             if (_arg_addr(1, usp) < 0) {
+                 printfRed("[SyscallHandler::sys_fork] Error fetching usp argument\n");
+                 return -1;
+             } return proc::k_pm.fork(usp); // 调用进程管理器的 fork 函数
+        )
+        TODO("sys_fork");
+        printfYellow("sys_fork\n");
+        return 0;
     }
     uint64 SyscallHandler::sys_exit()
     {
@@ -287,7 +289,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_pipe2()
     {
-        //copy自学长的pipe，和pipe2有什么区别呢
+        // copy自学长的pipe，和pipe2有什么区别呢
         int fd[2];
         uint64 addr;
 
@@ -353,8 +355,17 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_execve()
     {
+        uint64 uargv, uenvp;
+
+        eastl::string path;
+        if (_arg_str(0, path, PGSIZE) < 0 ||
+            _arg_addr(1, uargv) < 0 || _arg_addr(2, uenvp) < 0)
+            return -1;
+        printfCyan("execve fetch path=%s\n", path);
+        printfCyan("execve fetch argv=%p\n", uargv);
+        printfCyan("execve fetch envp=%p\n", uenvp);
+
         TODO("sys_execve");
-        printfYellow("sys_execve\n");
         return 0;
     }
     uint64 SyscallHandler::sys_fstat()
@@ -620,6 +631,13 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_clone()
     {
+        int flags;
+        uint64 stack, tls, ctid, ptid;
+        _arg_int(0, flags);
+        _arg_addr(1, stack);
+        _arg_addr(2, ptid);
+        _arg_addr(3, tls);
+        _arg_addr(4, ctid);
         TODO("sys_clone");
         printfYellow("sys_clone\n");
         return 0;
