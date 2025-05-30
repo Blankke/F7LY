@@ -87,16 +87,16 @@ namespace fs
 									default_sector_size * offset);
 		
 		/// debug
-		printfCyan("BufferManager : read_sync lba %u, offset %u\n", lba, offset);
-		printfCyan( "Physical disk offset: 0x%x\n", lba * default_sector_size ); // 打印物理偏移
-		uint8_t *data = static_cast<uint8_t *>(buf._buffer_base);
-		printf("Buffer content at LBA %u:\n", lba);
-		for (int i = 0; i < 64; ++i)
-		{
-			printf("%02x ", data[i]);
-			if ((i + 1) % 16 == 0)
-				printf("\n");
-		}
+		// printfCyan("BufferManager : read_sync lba %u, offset %u\n", lba, offset);
+		// printfCyan( "Physical disk offset: 0x%x\n", lba * default_sector_size ); // 打印物理偏移
+		// uint8_t *data = static_cast<uint8_t *>(buf._buffer_base);
+		// printf("Buffer content at LBA %u:\n", lba);
+		// for (int i = 0; i < 64; ++i)
+		// {
+		// 	printf("%02x ", data[i]);
+		// 	if ((i + 1) % 16 == 0)
+		// 		printf("\n");
+		// }
 
 		return buf;
 	}

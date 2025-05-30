@@ -193,7 +193,8 @@ namespace riscv
       buf0.sector = start_block;
 
       // 设置请求头描述符
-      disk.desc[idx[0]].addr = PTE2PA(mem::k_pagetable.kwalkaddr((uint64)&buf0).get_data());
+      // disk.desc[idx[0]].addr = PTE2PA(mem::k_pagetable.kwalkaddr((uint64)&buf0).get_data());
+      disk.desc[idx[0]].addr = mem::k_pagetable.kwalk_addr((uint64)&buf0);
       disk.desc[idx[0]].len = sizeof(buf0);
       disk.desc[idx[0]].flags = VRING_DESC_F_NEXT;
       disk.desc[idx[0]].next = idx[1];
@@ -238,7 +239,6 @@ namespace riscv
 
       free_chain(idx[0]);
       disk.vdisk_lock.release();
-
     }
 
     int VirtioDriver::read_blocks_sync(long start_block, long block_count, dev::BufferDescriptor *buf_list,

@@ -37,6 +37,7 @@ namespace mem
 		void freewalk();
 
 		Pte kwalkaddr(uint64 va);
+		ulong kwalk_addr( uint64 va );
 		uint64 dir_num(int level, uint64 va);
 
 		uint64 get_pte_data(uint64 index) { return (uint64)((pte_t *)_base_addr)[index]; }

@@ -176,6 +176,22 @@ namespace mem
         return pte;
     }
 
+	ulong PageTable::kwalk_addr( uint64 va )
+	{
+		uint64 pa;
+
+		// if ( va >= vml::vm_end )
+		// return 0;
+
+		Pte pte = k_pagetable.walk( va, false /* alloc */ );
+		if ( pte.is_null() ) return 0;
+		if ( !pte.is_valid() ) return 0;
+
+		pa	= PTE2PA(pte.get_data());
+		pa |= va & ( PGSIZE - 1 );
+		return pa;
+	}
+
     uint64 PageTable::dir_num(int level, uint64 va)
     {
         return PX(level, va);
