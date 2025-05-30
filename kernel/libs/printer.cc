@@ -70,27 +70,35 @@ void Printer::printptr( uint64 x )
 
 void Printer::print( const char *fmt, ... )
 {
- va_list ap;
+  va_list ap;
   int i, c, tmp_locking;
   const char *s;
 
-    tmp_locking=this->_locking;
-  if(tmp_locking)
+  tmp_locking = this->_locking;
+  if (tmp_locking)
     _lock.acquire();
 
   if (fmt == 0)
     k_panic(__FILE__, __LINE__, "null fmt");
 
   va_start(ap, fmt);
-  for(i = 0; (c = fmt[i] & 0xff) != 0; i++){
-    if(c != '%'){
+  for (i = 0; (c = fmt[i] & 0xff) != 0; ) {
+    if (c != '%') {
       _console->console_putc(c);
+      i++;
       continue;
     }
-    c = fmt[++i] & 0xff;
-    if(c == 0)
+    i++; // skip '%'
+    int width = 0;
+    // Parse width (e.g., %04x)
+    while (fmt[i] >= '0' && fmt[i] <= '9') {
+      width = width * 10 + (fmt[i] - '0');
+      i++;
+    }
+    c = fmt[i] & 0xff;
+    if (c == 0)
       break;
-    switch(c){
+    switch (c) {
     case 'b':
       printint(va_arg(ap, int), 2, 1);
       break;
@@ -100,16 +108,28 @@ void Printer::print( const char *fmt, ... )
     case 'u':
       printint(va_arg(ap, uint), 16, 0);
       break;
-    case 'x':
-      printint(va_arg(ap, int), 16, 1);
+    case 'x': {
+      int val = va_arg(ap, int);
+      char buf[16];
+      int j = 0;
+      unsigned int x = val;
+      do {
+        buf[j++] = _lower_digits[x % 16];
+      } while ((x /= 16) != 0);
+      // Padding with '0' if width > j
+      for (int k = j; k < width; k++)
+        _console->console_putc('0');
+      while (--j >= 0)
+        _console->console_putc(buf[j]);
       break;
+    }
     case 'p':
       printptr(va_arg(ap, uint64));
       break;
     case 's':
-      if((s = va_arg(ap, const char*)) == 0)
+      if ((s = va_arg(ap, const char *)) == 0)
         s = "(null)";
-      for(; *s; s++)
+      for (; *s; s++)
         _console->console_putc(*s);
       break;
     case '%':
@@ -121,10 +141,11 @@ void Printer::print( const char *fmt, ... )
       _console->console_putc(c);
       break;
     }
+    i++;
   }
   va_end(ap);
 
-  if(tmp_locking)
+  if (tmp_locking)
     _lock.release();
 }
 
