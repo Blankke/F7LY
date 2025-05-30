@@ -8,8 +8,8 @@
 - [ ] SYS_shutdown = 19,
 - [x] SYS_dup = 23,
 - [ ] SYS_dup3 = 24,
-- [ ] SYS_fcntl = 25,
-- [ ] SYS_ioctl = 29,
+- [x] SYS_fcntl = 25,
+- [x] SYS_ioctl = 29,
 - [ ] SYS_mkdirat = 34,
 - [ ] SYS_unlinkat = 35,
 - [ ] SYS_linkat = 37,
@@ -22,13 +22,13 @@
 - [x] SYS_close = 57,
 - [x] SYS_pipe2 = 59,
 - [ ] SYS_getdents64 = 61,
-- [ ] SYS_lseek = 62,
+- [x] SYS_lseek = 62,
 - [x] SYS_read = 63,
 - [x] SYS_write = 64,
 - [ ] SYS_readv = 65,
 - [ ] SYS_writev = 66,
 - [ ] SYS_sendfile = 71,
-- [ ] SYS_ppoll = 73,
+- [x] SYS_ppoll = 73,
 - [x] SYS_readlinkat = 78,
 - [ ] SYS_fstatat = 79,
 - [x] SYS_fstat = 80,
@@ -66,13 +66,13 @@
 - [ ] SYS_mremap = 216,
 - [ ] SYS_clone = 220,
 - [ ] SYS_execve = 221,
-- [x ] SYS_mmap = 222,
+- [x] SYS_mmap = 222,
 - [ ] SYS_madvise = 233,
 - [ ] SYS_wait4 = 260,
 - [x] SYS_prlimit64 = 261,
 - [ ] SYS_renameat2 = 276,
 - [ ] SYS_getrandom = 278,
-- [x ] SYS_statx = 291
+- [x] SYS_statx = 291
 
 
 

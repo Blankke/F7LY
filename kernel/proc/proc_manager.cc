@@ -204,12 +204,12 @@ namespace proc
             /// @todo 这里暂时修改进程的工作目录为fat的挂载点
             proc->_cwd = fs::ramfs::k_ramfs.getRoot()->EntrySearch("mnt");
             proc->_cwd_name = "/mnt/";
+            /// 你好
+            /// 这是重定向uart的代码
+            /// commented out by @gkq
+            new (&dev::k_uart) dev::UartManager(UART0);
+            dev::register_debug_uart(&dev::k_uart);
         }
-        /// 你好
-        ///这是重定向uart的代码
-        ///commented out by @gkq
-        new(&dev::k_uart) dev::UartManager(UART0);
-        dev::register_debug_uart(&dev::k_uart);
 
 
         printf("fork_ret\n");
@@ -461,6 +461,15 @@ namespace proc
             }
         }
         return -1;
+    }
+    int ProcessManager::alloc_fd(Pcb *p, fs::file *f, int fd)
+    {
+        // if ( fd <= 2 || fd >= ( int ) max_open_files )
+        // 	return -1;
+        // if ( p->_ofile[ fd ] != nullptr )
+        // 	return -1;
+        p->_ofile[fd] = f;
+        return fd;
     }
     int ProcessManager::fork()
     {
