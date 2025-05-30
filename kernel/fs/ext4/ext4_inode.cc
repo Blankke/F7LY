@@ -370,7 +370,10 @@ namespace fs
 
 		Inode *Ext4IndexNode::lookup( eastl::string dirname )
 		{
-			// printfBlue( "current inode mode=%#x", _inode.mode );
+			// printfBlue( "current inode mode=%x\n", _inode.mode );
+			//  if(!checkAttrConsistent())
+			//   printfRed( "ext4-inode: inode mode isnot consistent with attrs\n" );
+			// printfGreen( "ext4-inode: inode mode is consistent with attrs\n" );
 			if ( !( _inode.mode & ext4_imode_fdir ) ) // 当前inode不是目录
 			{
 				panic( "try to lookup an inode that's not dir (dirname='%s')",

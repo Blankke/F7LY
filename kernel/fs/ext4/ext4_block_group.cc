@@ -46,9 +46,10 @@ namespace fs
 				return -1;
 			}
 			Ext4InodeRecord *inode_ptr	= (Ext4InodeRecord *) blk_buf->get_data_ptr();
+
 			inode_ptr				   += block_idx;
 			node						= inode_ptr->inode_data;
-
+			// printfGreen( "ext4-blockgroup :mode: %d", node.mode );
 			// printfBlue( "read inode data: " );
 			// hsai_printf(
 			// 	BLUE_COLOR_PRINT

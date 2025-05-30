@@ -131,14 +131,16 @@ namespace fs
 			// 初始化根节点
 
 			long root_ino = ino_root;
-			printfBlue( "ext4-fs : init inode %d as root\n", root_ino );
+			// printfBlue( "ext4-fs : init inode %d as root\n", root_ino );
 			Ext4Inode node;
 			if ( read_inode( root_ino, node ) < 0 )
 			{
 				panic( "ext4-fs : read inode failure while init root" );
 				return;
 			}
+			printfYellow( "ext4-fs : read root inode %d, mode: %d\n", root_ino, node.mode );
 			_root_inode = new Ext4IndexNode( node, this );
+			printfGreen( "ext4-fs : init root inode mode:%d\n", _root_inode->_inode.mode );
 			_root_inode->setAttr(FileAttrs(fs::FileTypes::FT_DIRECT, 0777));
 
 			// 初始化根dentry

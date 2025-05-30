@@ -19,6 +19,7 @@ namespace fs
 		class Ext4Buffer;
 		class Ext4IndexNode : public Inode
 		{
+			friend Ext4FS;
 		private:
 
 			Ext4Inode _inode;
@@ -86,6 +87,26 @@ namespace fs
 		public: // debug
 
 			void debug_hash( eastl::string dir_name );
+
+		public:
+			/// 检查 _attrs 与 _inode.mode 的一致性
+			bool checkAttrConsistent() const {
+				// 检查权限位
+				if (_attrs._value != ((u16)_inode.mode & 0x1FF))
+					return false;
+				// 检查文件类型
+				Ext4InodeMode md = (Ext4InodeMode)((u16)_inode.mode & 0xF000);
+				FileTypes ft = FileTypes::FT_NONE;
+				switch (md) {
+					case ext4_imode_fdir: ft = FileTypes::FT_DIRECT; break;
+					case ext4_imode_fchr:
+					case ext4_imode_fblk: ft = FileTypes::FT_DEVICE; break;
+					case ext4_imode_fifo: ft = FileTypes::FT_PIPE; break;
+					case ext4_imode_freg: ft = FileTypes::FT_NORMAL; break;
+					default: ft = FileTypes::FT_NONE; break;
+				}
+				return _attrs.filetype == ft;
+			}
 		};
 
 	} // namespace ext4

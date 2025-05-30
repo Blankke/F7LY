@@ -9,7 +9,7 @@
 - [x] SYS_dup = 23,
 - [ ] SYS_dup3 = 24,
 - [ ] SYS_fcntl = 25,
-- [ ] SYS_ioctl = 29,
+- [x] SYS_ioctl = 29,
 - [ ] SYS_mkdirat = 34,
 - [ ] SYS_unlinkat = 35,
 - [ ] SYS_linkat = 37,
@@ -37,8 +37,8 @@
 - [x] SYS_exit_group = 94,
 - [ ] SYS_set_tid_address = 96,
 - [x] SYS_set_robust_list = 99,
-- [ ] SYS_nanosleep = 101,
-- [ ] SYS_clock_gettime = 113,
+- [x] SYS_nanosleep = 101,
+- [x] SYS_clock_gettime = 113,
 - [ ] SYS_clock_nanosleep = 115,
 - [ ] SYS_syslog = 116,
 - [ ] SYS_sched_yield = 124,
@@ -99,11 +99,11 @@
 - [ ] syscall getppid         
 - [ ] syscall uname           
 - [x] syscall getcwd          
-- [ ] syscall ioctl           
+- [x] syscall ioctl           
 - [ ] syscall openat          
 - [ ] syscall fcntl           
 - [ ] syscall getpgid         
 - [ ] syscall setpgid         
 - [ ] syscall geteuid         
 - [ ] syscall ppoll           
-- [ ] syscall read
+- [ X] syscall read

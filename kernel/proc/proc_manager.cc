@@ -447,7 +447,36 @@ namespace proc
             printf("\n");
         }
     }
+int ProcessManager::alloc_fd( Pcb *p, fs::file *f, int fd )
+	{
+		// 越界检查
+		if (fd < 0 || fd >= (int)max_open_files||f==nullptr)  
+        return -1;
+		// 不为空先释放资源
+		if ( p->_ofile[ fd ] != nullptr )
+		{
+			close(fd);
+		}
+		p->_ofile[fd] = f;
+		return fd;
+	}
 
+	void ProcessManager::get_cur_proc_tms( tmm::tms *tsv )
+	{
+		Pcb	  *p		= get_cur_pcb();
+		uint64 cur_tick = tmm::k_tm.get_ticks();
+
+		tsv->tms_utime	= p->_user_ticks;
+		tsv->tms_stime	= cur_tick - p->_start_tick - p->_user_ticks;
+		tsv->tms_cstime = tsv->tms_cutime = 0;
+
+		for ( auto &pp : k_proc_pool )
+		{
+			if ( pp._state == ProcState::UNUSED || pp._parent != p ) continue;
+			tsv->tms_cutime += pp._user_ticks;
+			tsv->tms_cstime += cur_tick - pp._start_tick - pp._user_ticks;
+		}
+	}
     int ProcessManager::alloc_fd(Pcb *p, fs::file *f)
     {
         int fd;
@@ -1019,6 +1048,7 @@ namespace proc
         fs::dentry *dentry;
 
         fs::Path pt(path);
+        // printfCyan("chdir: %s\n", pt.AbsolutePath().c_str());
         dentry = pt.pathSearch();
         // dentry = p->_cwd->EntrySearch( path );
         if (dentry == nullptr)

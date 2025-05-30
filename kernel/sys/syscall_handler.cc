@@ -11,6 +11,9 @@
 #include "hal/cpu.hh"
 #include "timer_manager.hh"
 #include "fs/vfs/path.hh"
+#include "fs/vfs/file/device_file.hh"
+#include <asm-generic/ioctls.h>
+#include <asm-generic/poll.h>
 namespace syscall
 {
     // 创建全局的 SyscallHandler 实例
@@ -753,8 +756,35 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_nanosleep()
     {
-        TODO("sys_nanosleep");
-        printfYellow("sys_nanosleep\n");
+        int clockid;
+        int flags;
+        timespec dur;
+        uint64 dur_addr;
+        timespec rem;
+        uint64 rem_addr;
+        if (_arg_int(0, clockid) < 0 || _arg_int(1, flags) < 0 ||
+            _arg_addr(2, dur_addr) < 0 || _arg_addr(3, rem_addr) < 0)
+        {
+            printfRed("[SyscallHandler::sys_nanosleep] Error fetching nanosleep arguments\n");
+            return -1;
+        }
+        proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = cur_proc->get_pagetable();
+
+        if (dur_addr != 0)
+            if (mem::k_vmm.copy_in(*pt, &dur, dur_addr, sizeof(dur)) < 0)
+                return -1;
+
+        if (rem_addr != 0)
+            if (mem::k_vmm.copy_in(*pt, &rem, rem_addr, sizeof(rem)) < 0)
+                return -1;
+
+        tmm::timeval tm_;
+        tm_.tv_sec = dur.tv_sec;
+        tm_.tv_usec = dur.tv_nsec / 1000;
+
+        tmm::k_tm.sleep_from_tv(tm_);
+
         return 0;
     }
     uint64 SyscallHandler::sys_getcwd()
@@ -1006,12 +1036,86 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_clock_gettime()
     {
-        // TODO
+        int clock_id;
+        u64 addr;
+        if (_arg_int(0, clock_id) < 0)
+        {
+            printfRed("[SyscallHandler::sys_clock_gettime] Error fetching clock_id argument\n");
+            return -1;
+        }
+        if (_arg_addr(1, addr) < 0)
+        {
+            printfRed("[SyscallHandler::sys_clock_gettime] Error fetching addr argument\n");
+            return -2;
+        }
+
+        tmm::timespec *tp = nullptr;
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        if (addr != 0)
+#ifdef RISCV
+            tp = (tmm::timespec *)pt->walk_addr(addr);
+#elif LOONGARCH
+            tp = (tmm::timespec *)hsai::k_mem->to_vir(pt->walk_addr(addr));
+#endif
+        tmm::SystemClockId cid = (tmm::SystemClockId)clock_id;
+
+        return tmm::k_tm.clock_gettime(cid, tp);
         return 0;
     }
     uint64 SyscallHandler::sys_ioctl()
     {
-        // TODO
+        int tmp;
+
+        fs::file *f = nullptr;
+        int fd;
+        if (_arg_fd(0, &fd, &f) < 0)
+            return -1;
+        if (f == nullptr)
+            return -1;
+        fd = fd;
+
+        if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+            return -1;
+
+        u32 cmd;
+        if (_arg_int(1, tmp) < 0)
+            return -2;
+        cmd = (u32)tmp;
+        cmd = cmd;
+
+        ulong arg;
+        if (_arg_addr(2, arg) < 0)
+            return -3;
+        arg = arg;
+
+        /// @todo not implement
+
+        if ((cmd & 0xFFFF) == TCGETS)
+        {
+            fs::device_file *df = (fs::device_file *)f;
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+#ifdef RISCV
+            termios *ts = (termios *)pt->walk_addr(arg);
+#elif defined(LOONGARCH)
+            termios *ts =
+                (termios *)hsai::k_mem->to_vir(pt->walk_addr(arg));
+#endif
+            return df->tcgetattr(ts);
+        }
+
+        if ((cmd & 0XFFFF) == TIOCGPGRP)
+        {
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+#ifdef RISCV
+            int *p_pgrp = (int *)pt->walk_addr(arg);
+#elif defined(LOONGARCH)
+            int *p_pgrp = (int *)hsai::k_mem->to_vir(pt->walk_addr(arg));
+#endif
+            *p_pgrp = 1;
+            return 0;
+        }
+
         return 0;
     }
     uint64 SyscallHandler::sys_syslog()
@@ -1021,8 +1125,58 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_fcntl()
     {
-        // TODO
-        return 0;
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        fs::file *f = nullptr;
+        int op;
+        ulong arg;
+        int retfd = -1;
+
+        if (_arg_fd(0, nullptr, &f) < 0)
+            return -1;
+        if (_arg_int(1, op) < 0)
+            return -2;
+
+        switch (op)
+        {
+        case F_SETFD:
+            if (_arg_addr(2, arg) < 0)
+                return -3;
+            if (arg & FD_CLOEXEC)
+                f->_fl_cloexec = true;
+            return 0;
+
+        case F_DUPFD:
+            if (_arg_addr(2, arg) < 0)
+                return -3;
+            for (int i = (int)arg; i < (int)proc::max_open_files; ++i)
+            {
+                if ((retfd = proc::k_pm.alloc_fd(p, f, i)) == i)
+                {
+                    f->refcnt++;
+                    break;
+                }
+            }
+            return retfd;
+
+        case F_DUPFD_CLOEXEC:
+            if (_arg_addr(2, arg) < 0)
+                return -3;
+            for (int i = (int)arg; i < (int)proc::max_open_files; ++i)
+            {
+                if ((retfd = proc::k_pm.alloc_fd(p, f, i)) == i)
+                {
+                    f->refcnt++;
+                    break;
+                }
+            }
+            p->get_open_file(retfd)->_fl_cloexec = true;
+            return retfd;
+
+        default:
+            break;
+        }
+
+        return retfd;
     }
     uint64 SyscallHandler::sys_faceessat()
     {
@@ -1036,8 +1190,113 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_ppoll()
     {
-        // TODO
-        return 0;
+	uint64					  fds_addr;
+		uint64					  timeout_addr;
+		uint64					  sigmask_addr;
+		pollfd					 *fds = nullptr;
+		int						  nfds;
+		[[maybe_unused]] timespec tm{ 0, 0 }; // 现在没用上
+		[[maybe_unused]] sigset_t sigmask;	  // 现在没用上
+		[[maybe_unused]] int	  timeout;	  // 现在没用上
+		int						  ret = 0;
+
+		proc::Pcb		  *proc = proc::k_pm.get_cur_pcb();
+		mem::PageTable *pt	= proc->get_pagetable();
+
+		if ( _arg_addr( 0, fds_addr ) < 0 ) return -1;
+
+		if ( _arg_int( 1, nfds ) < 0 ) return -1;
+
+		if ( _arg_addr( 2, timeout_addr ) < 0 ) return -1;
+
+		if ( _arg_addr( 3, sigmask_addr ) < 0 ) return -1;
+
+		fds = new pollfd[nfds];
+		if ( fds == nullptr ) return -2;
+		for ( int i = 0; i < nfds; i++ )
+		{
+			if ( mem::k_vmm.copy_in( *pt, &fds[i],
+									fds_addr + i * sizeof( pollfd ),
+									sizeof( pollfd ) ) < 0 )
+			{
+				delete[] fds;
+				return -1;
+			}
+		}
+
+		if ( timeout_addr != 0 )
+		{
+			if ( ( mem::k_vmm.copy_in( *pt, &tm, timeout_addr, sizeof( tm ) ) ) <
+				 0 )
+			{
+				delete[] fds;
+				return -1;
+			}
+			timeout = tm.tv_sec * 1000 + tm.tv_nsec / 1'000'000;
+		}
+		else
+			timeout = -1;
+
+		if ( sigmask_addr != 0 )
+			if ( mem::k_vmm.copy_in( *pt, &sigmask, sigmask_addr,
+									sizeof( sigset_t ) ) < 0 )
+			{
+				delete[] fds;
+				return -1;
+			}
+
+		while ( 1 )
+		{
+			for ( auto i = 0; i < nfds; i++ )
+			{
+				fds[i].revents = 0;
+				if ( fds[i].fd < 0 ) { continue; }
+
+				fs::file *f	   = nullptr;
+				int		  reti = 0;
+
+				if ( ( f = proc->get_open_file( fds[i].fd ) ) == nullptr )
+				{
+					fds[i].revents |= POLLNVAL;
+					reti			= 1;
+				}
+				else
+				{
+					if ( fds[i].events & POLLIN )
+					{
+						if ( f->read_ready() )
+						{
+							fds[i].revents |= POLLIN;
+							reti			= 1;
+						}
+					}
+					if ( fds[i].events & POLLOUT )
+					{
+						if ( f->write_ready() )
+						{
+							fds[i].revents |= POLLOUT;
+							reti			= 1;
+						}
+					}
+				}
+
+				ret += reti;
+			}
+			if ( ret != 0 ) break;
+			// else
+			// {
+			// 	/// @todo sleep
+			// }
+		}
+
+		if ( mem::k_vmm.copy_out( *pt, fds_addr, fds, nfds * sizeof( pollfd ) ) <0)
+		{
+			delete[] fds;
+			return -1;
+		}
+
+		delete[] fds;
+		return ret;
     }
 
     uint64 SyscallHandler::sys_sendfile()

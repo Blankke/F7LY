@@ -38,6 +38,9 @@ int shutdown();
 
 
 // add
+int sleep(unsigned int seconds);
+
+
 
 // 打印到指定文件描述符，支持%d, %x, %p, %s, %c, %%
 void vprintf(int fd, const char *fmt, va_list ap);
