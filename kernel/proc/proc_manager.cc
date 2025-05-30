@@ -479,8 +479,6 @@ namespace proc
             return -1;
         }
 
-        np->_lock.acquire();
-
         // Copy user memory from _parent to child.
 
         mem::PageTable *curpt, *newpt;
@@ -500,6 +498,8 @@ namespace proc
         np->_sz = p->_sz;
         *np->_trapframe = *p->_trapframe; // 拷贝父进程的陷阱值，而不是直接指向
         np->_trapframe->a0 = 0;           // fork 返回值为 0
+
+        if(usp)
 
         _wait_lock.acquire();
         np->_parent = p;
@@ -1227,4 +1227,36 @@ namespace proc
 
 		return 0;
 	}
+
+    int execve(eastl::string path, eastl::vector<eastl::string> args, eastl::vector<eastl::string> envs){
+        // // 获取当前进程控制块
+		// Pcb			 *proc = k_pm.get_cur_pcb();
+		// uint64		  sp;           // 栈指针
+		// uint64		  stackbase;    // 栈基地址
+		// mem::PageTable pt;           // 页表（暂未使用）
+		// elf::elfhdr	  elf;          // ELF 文件头
+		// elf::proghdr  ph = {};      // 程序头
+		// fs::dentry	 *de;           // 目录项
+		// int			  i, off;       // 循环变量和偏移量
+
+		// // ========== 第一阶段：路径解析和文件查找 ==========
+		
+		// // 构建绝对路径
+		// eastl::string ab_path;
+		// if ( path[0] == '/' )
+		// 	ab_path = path;           // 已经是绝对路径
+		// else
+		// 	ab_path = proc->_cwd_name + path;  // 相对路径，添加当前工作目录前缀
+
+		// printfCyan( "execve file : %s", ab_path.c_str() );
+
+		// // 解析路径并查找文件
+		// fs::Path path_resolver( ab_path );
+		// if ( ( de = path_resolver.pathSearch() ) == nullptr )
+		// {
+		// 	printfCyan( "execve: cannot find file" );
+		// 	return -1;
+		// }
+        return -1;
+    }
 }; // namespace proc

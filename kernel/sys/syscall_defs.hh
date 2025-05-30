@@ -81,4 +81,8 @@ namespace syscall
         SYS_statx = 291
     };
 
+    enum SYS_clone
+    {
+        SIGCHILD = 17
+    };
 }

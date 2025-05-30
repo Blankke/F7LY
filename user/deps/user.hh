@@ -31,6 +31,7 @@ int pipe(int fd[2]);
 int dup(int fd);
 int mount(const char *special, const char *dir, const char *fstype, unsigned long flags, const void *data);
 int umount(const char *special);
+int fork(void);
 
 // proc
 int shutdown();
