@@ -51,6 +51,7 @@ void trap_manager::inithart()
 // 时钟到期后, 重新设置下次超时
 void trap_manager::set_next_timeout()
 {
+
   sbi_set_timer(r_time() + INTERVAL);
 }
 

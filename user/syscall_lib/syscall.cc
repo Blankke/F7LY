@@ -102,13 +102,12 @@ clock_t times(void *mytimes)
 //     return syscall(syscall::SYS_gettimeofday, ts, tz);
 // }
 
-// int sleep(unsigned long long time)
-// {
-//     TimeVal tv = {.sec = time, .usec = 0};
-//     if (syscall(syscall::SYS_nanosleep, &tv, &tv))
-//         return tv.sec;
-//     return 0;
-// }
+int sleep(unsigned int time)
+{
+    if (syscall(syscall::SYS_sleep, time))
+        return time;
+    return 0;
+}
 
 // int set_priority(int prio)
 // {
@@ -137,10 +136,10 @@ int wait(int *code)
 // #else
 // // Based on https://github.com/kraj/musl/blob/kraj/master/src/stat/fstat.c#L10
 // #define AT_EMPTY_PATH 0x1000
-// #define makedev(x, y) (             \
-//     (((x) & 0xfffff000ULL) << 32) | \
-//     (((x) & 0x00000fffULL) << 8) |  \
-//     (((y) & 0xffffff00ULL) << 12) | \
+// #define makedev(x, y) (             
+//     (((x) & 0xfffff000ULL) << 32) | 
+//     (((x) & 0x00000fffULL) << 8) |  
+//     (((y) & 0xffffff00ULL) << 12) | 
 //     (((y) & 0x000000ffULL)))
 
 //     struct statx stx;

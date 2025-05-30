@@ -103,11 +103,14 @@ namespace tmm
 	/// @return 
 	int TimerManager::sleep_from_tv(timeval tv)
 	{
+
 		uint64 n = tv.tv_sec * tmm::get_main_frequence();
 		uint64 cpt = tmm::cycles_per_tick();
 		n += tmm::usec_to_time_stamp(tv.tv_usec);
 		n /= cpt;
-
+		printfBlue("sleep from tv: %d ticks", n);
+		if (n == 0)
+			return 0; // 如果转换结果为0，直接返回
 		return sleep_n_ticks(n);
 	}
 

@@ -166,6 +166,10 @@ namespace fs
 
 		int RamFS::mount( dentry *dev, dentry *mount, eastl::string fstype )
 		{
+			// if(fstype =="ext4")
+			// {
+			// 	printfMagenta( "RamFS::mount: ext4 is  supported in ramfs" );
+			// }
 			if ( mount == nullptr || dev == nullptr )
 			{
 				printfRed( "RamFS::mount: mount or dev is nullptr\n" );
@@ -215,6 +219,7 @@ namespace fs
 			}
 			else if ( fstype == "ext4" )
 			{
+				// printfGreen( "RamFS::mount: ext4 is  supported in ramfs\n" );
 				fs::ext4::Ext4FS * ext4fs = new fs::ext4::Ext4FS();
 				ext4fs->init( dev->getNode()->rDev(), 0, fstype, mount->rName() );
 

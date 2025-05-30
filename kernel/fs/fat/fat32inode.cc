@@ -170,6 +170,7 @@ namespace fs
 
 		Inode * Fat32Inode::lookup( eastl::string dirname )
 		{
+
 			if ( !is_dir() ) return nullptr;
 
 			fs::Buffer buf;
