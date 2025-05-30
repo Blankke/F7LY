@@ -490,15 +490,7 @@ int ProcessManager::alloc_fd( Pcb *p, fs::file *f, int fd )
         }
         return -1;
     }
-    int ProcessManager::alloc_fd(Pcb *p, fs::file *f, int fd)
-    {
-        // if ( fd <= 2 || fd >= ( int ) max_open_files )
-        // 	return -1;
-        // if ( p->_ofile[ fd ] != nullptr )
-        // 	return -1;
-        p->_ofile[fd] = f;
-        return fd;
-    }
+
     int ProcessManager::fork()
     {
         return fork(0); // 默认usp为0

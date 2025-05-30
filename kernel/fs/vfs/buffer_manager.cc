@@ -90,7 +90,7 @@ namespace fs
 		printf("Buffer content at LBA %u:\n", lba);
 		for (int i = 0; i < 64; ++i)
 		{
-			printf("%x", data[i]);
+			printf("%02x ", data[i]);
 			if ((i + 1) % 16 == 0)
 				printf("\n");
 		}

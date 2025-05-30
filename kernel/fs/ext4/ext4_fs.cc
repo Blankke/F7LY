@@ -60,6 +60,7 @@ namespace fs
 			// ext4 的 superblock 位于分区偏移 1024 bytes
 
 			Buffer buf;
+			//这个读了lba的头
 			buf = k_bufm.read_sync( dev, 2 );
 			new ( &_sb ) Ext4SB( (Ext4SuperBlock*) buf.get_data_ptr(), this );
 			k_bufm.release_buffer_sync( buf );
@@ -99,6 +100,7 @@ namespace fs
 				if ( blk_gdt_off == 0 ) // 遍历完一个sector中的desc后读取下一个sector
 				{
 					if ( pblk ) pblk->unpin();
+					//此处读了lba剩下的部分。
 					pblk = _blocks_cacher.request_block( 1 + blk_gdt_cnt, true );
 					blk_gdt_cnt++;
 				}
