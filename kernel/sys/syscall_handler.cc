@@ -792,57 +792,57 @@ namespace syscall
     }
 
     //================================== busybox===================================================
-    uint64 sys_set_tid_address()
+    uint64 SyscallHandler::sys_set_tid_address()
     {
         // TODO
         return 0;
     }
-    uint64 sys_getuid()
+    uint64 SyscallHandler::sys_getuid()
     {
         // TODO
         return 0;
     }
-    uint64 sys_getgid()
+    uint64 SyscallHandler::sys_getgid()
     {
         // TODO
         return 0;
     }
-    uint64 sys_setgid()
+    uint64 SyscallHandler::sys_setgid()
     {
         // TODO
         return 0;
     }
-    uint64 sys_setuid()
+    uint64 SyscallHandler::sys_setuid()
     {
         // TODO
         return 0;
     }
-    uint64 sys_fstatat()
+    uint64 SyscallHandler::sys_fstatat()
     {
         // TODO
         return 0;
     }
-    uint64 sys_exit_group()
+    uint64 SyscallHandler::sys_exit_group()
     {
         // TODO
         return 0;
     }
-    uint64 sys_set_robust_list()
+    uint64 SyscallHandler::sys_set_robust_list()
     {
         // TODO
         return 0;
     }
-    uint64 sys_gettid()
+    uint64 SyscallHandler::sys_gettid()
     {
         // TODO
         return 0;
     }
-    uint64 sys_writev()
+    uint64 SyscallHandler::sys_writev()
     {
         // TODO
         return 0;
     }
-    uint64 sys_prlimit64()
+    uint64 SyscallHandler::sys_prlimit64()
     {
         // TODO
         return 0;
@@ -891,92 +891,92 @@ namespace syscall
         delete[] buffer;
         return ret;
     }
-    uint64 sys_getrandom()
+    uint64 SyscallHandler::sys_getrandom()
     {
         // TODO
         return 0;
     }
-    uint64 sys_clock_gettime()
+    uint64 SyscallHandler::sys_clock_gettime()
     {
         // TODO
         return 0;
     }
-    uint64 sys_ioctl()
+    uint64 SyscallHandler::sys_ioctl()
     {
         // TODO
         return 0;
     }
-    uint64 sys_syslog()
+    uint64 SyscallHandler::sys_syslog()
     {
         // TODO
         return 0;
     }
-    uint64 sys_fcntl()
+    uint64 SyscallHandler::sys_fcntl()
     {
         // TODO
         return 0;
     }
-    uint64 sys_faceessat()
+    uint64 SyscallHandler::sys_faceessat()
     {
         // TODO
         return 0;
     }
-    uint64 sys_sysinfo()
+    uint64 SyscallHandler::sys_sysinfo()
     {
         // TODO
         return 0;
     }
-    uint64 sys_ppoll()
-    {
-        // TODO
-        return 0;
-    }
-
-    uint64 sys_sendfile()
-    {
-        // TODO
-        return 0;
-    }
-    uint64 sys_readv()
-    {
-        // TODO
-        return 0;
-    }
-    uint64 sys_geteuid()
-    {
-        // TODO
-        return 0;
-    }
-    uint64 sys_madvise()
-    {
-        // TODO
-        return 0;
-    }
-    uint64 sys_mremap()
+    uint64 SyscallHandler::sys_ppoll()
     {
         // TODO
         return 0;
     }
 
-    uint64 sys_lseek()
+    uint64 SyscallHandler::sys_sendfile()
     {
         // TODO
         return 0;
     }
-    uint64 sys_utimensat()
+    uint64 SyscallHandler::sys_readv()
     {
         // TODO
         return 0;
     }
-    uint64 sys_renameat2()
+    uint64 SyscallHandler::sys_geteuid()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 SyscallHandler::sys_madvise()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 SyscallHandler::sys_mremap()
     {
         // TODO
         return 0;
     }
 
-    uint64 sys_clock_nanosleep()
+    uint64 SyscallHandler::sys_lseek()
     {
         // TODO
         return 0;
     }
-} // namespace syscall
+    uint64 SyscallHandler::sys_utimensat()
+    {
+        // TODO
+        return 0;
+    }
+    uint64 SyscallHandler::sys_renameat2()
+    {
+        // TODO
+        return 0;
+    }
+
+    uint64 SyscallHandler::sys_clock_nanosleep()
+    {
+        // TODO
+        return 0;
+    }
+}

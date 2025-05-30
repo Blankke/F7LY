@@ -4,7 +4,7 @@
 - [x] SYS_sleep = 13,
 - [ ] SYS_uptime = 14,
 - [ ] SYS_mknod = 16,
-- [ ] SYS_getcwd = 17,
+- [x] SYS_getcwd = 17,
 - [ ] SYS_shutdown = 19,
 - [x] SYS_dup = 23,
 - [ ] SYS_dup3 = 24,
