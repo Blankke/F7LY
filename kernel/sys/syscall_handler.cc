@@ -336,7 +336,6 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_write()
     {
-        TODO("sys_write");
 
         fs::file *f;
         int n;
