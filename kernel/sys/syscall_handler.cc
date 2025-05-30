@@ -635,6 +635,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_clone()
     {
+        TODO("TBF")
         int flags;
         uint64 stack, tls, ctid, ptid;
         _arg_int(0, flags);
@@ -642,9 +643,10 @@ namespace syscall
         _arg_addr(2, ptid);
         _arg_addr(3, tls);
         _arg_addr(4, ctid);
-        TODO("sys_clone");
-        printfYellow("sys_clone\n");
-        return 0;
+        if(flags != SIGCHILD){
+            panic("[SyscallHandler::sys_clone] flags must be SIGCHILD");
+        }
+        return proc::k_pm.fork();
     }
     uint64 SyscallHandler::sys_umount2()
     {
