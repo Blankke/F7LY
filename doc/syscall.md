@@ -34,9 +34,9 @@
 - [x] SYS_fstat = 80,
 - [ ] SYS_utimensat = 88,
 - [x] SYS_exit = 93,
-- [ ] SYS_exit_group = 94,
+- [x] SYS_exit_group = 94,
 - [ ] SYS_set_tid_address = 96,
-- [ ] SYS_set_robust_list = 99,
+- [x] SYS_set_robust_list = 99,
 - [ ] SYS_nanosleep = 101,
 - [ ] SYS_clock_gettime = 113,
 - [ ] SYS_clock_nanosleep = 115,
@@ -61,15 +61,15 @@
 - [ ] SYS_getgid = 176,
 - [ ] SYS_gettid = 178,
 - [ ] SYS_sysinfo = 179,
-- [ ] SYS_brk = 214,
-- [ ] SYS_munmap = 215,
+- [x] SYS_brk = 214,
+- [x] SYS_munmap = 215,
 - [ ] SYS_mremap = 216,
 - [ ] SYS_clone = 220,
 - [ ] SYS_execve = 221,
-- [ ] SYS_mmap = 222,
+- [x ] SYS_mmap = 222,
 - [ ] SYS_madvise = 233,
 - [ ] SYS_wait4 = 260,
-- [ ] SYS_prlimit64 = 261,
+- [x] SYS_prlimit64 = 261,
 - [ ] SYS_renameat2 = 276,
 - [ ] SYS_getrandom = 278,
 - [x ] SYS_statx = 291
@@ -77,11 +77,11 @@
 
 
 优先实现的：
-- [ ] syscall fork            
-- [ ] syscall wait            
-- [ ] syscall chdir           
+- [x] syscall fork            
+- [x] syscall wait            
+- [x] syscall chdir           
 - [ ] syscall execve          
-- [ ] syscall brk             
+- [x] syscall brk             
 - [ ] syscall set_tid_address 
 - [ ] syscall set_robust_list 
 - [ ] syscall prlimit64       

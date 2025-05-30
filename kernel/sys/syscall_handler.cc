@@ -689,22 +689,44 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_brk()
     {
-        TODO("sys_brk");
-        printfYellow("sys_brk\n");
-        return 0;
+        uint64 n;
+        // 此处是内存扩展到n地址
+        if (_arg_addr(0, n) < 0)
+        {
+            printfRed("[SyscallHandler::sys_brk] Error fetching brk address\n");
+            return -1;
+        }
+        return proc::k_pm.brk(n); // 调用进程管理器的 brk 函数
     }
     uint64 SyscallHandler::sys_munmap()
     {
-        TODO("sys_munmap");
-        printfYellow("sys_munmap\n");
-        return 0;
+        u64 start;
+        size_t size;
+        if (_arg_addr(0, start) < 0 || _arg_addr(1, size) < 0)
+        {
+            printfRed("[SyscallHandler::sys_munmap] Error fetching munmap arguments\n");
+            return -1;
+        }
+        return proc::k_pm.munmap((void *)start, size); // 调用进程管理器的 munmap 函数
     }
+
     uint64 SyscallHandler::sys_mmap()
     {
-        TODO("sys_mmap");
-        printfYellow("sys_mmap\n");
-        return 0;
+        u64 addr;
+        size_t map_size;
+        int prot;
+        int flags;
+        int fd;
+        size_t offset;
+        if (_arg_addr(0, addr) < 0 || _arg_addr(1, map_size) < 0 || _arg_int(2, prot) < 0 ||
+            _arg_int(3, flags) < 0 || _arg_int(4, fd) < 0 || _arg_addr(5, offset) < 0)
+        {
+            printfRed("[SyscallHandler::sys_mmap] Error fetching mmap arguments\n");
+            return -1;
+        }
+        return (uint64)proc::k_pm.mmap((void *)addr, map_size, prot, flags, fd, offset); // 调用进程管理器的 mmap 函数
     }
+
     uint64 SyscallHandler::sys_times()
     {
         TODO("sys_times");
@@ -840,15 +862,40 @@ namespace syscall
         // TODO
         return 0;
     }
-    uint64 SyscallHandler::sys_exit_group()
+    uint64 SyscallHandler::SyscallHandler::sys_exit_group()
     {
-        // TODO
-        return 0;
+        int status;
+        if (_arg_int(0, status) < 0)
+        {
+            printfRed("[SyscallHandler::sys_exit_group] Error fetching exit status\n");
+            return -1;
+        }
+        proc::k_pm.exit_group(status); // 调用进程管理器的 exit_group 函数
+        return -1;                     // 退出后不应该返回
     }
+
     uint64 SyscallHandler::sys_set_robust_list()
     {
-        // TODO
-        return 0;
+        ulong addr;
+        proc::robust_list_head *head;
+        size_t len;
+        if (_arg_addr(0, addr) < 0 || _arg_addr(1, len) < 0)
+        {
+            printfRed("[SyscallHandler::sys_set_robust_list] Error fetching arguments\n");
+            return -1;
+        }
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+#ifdef RISCV
+        head = (proc::robust_list_head *)pt->walk_addr(addr);
+#elif defined(LOONGARCH)
+        head = (proc::robust_list_head *)hsai::k_mem->to_vir(
+            pt->walk_addr(addr));
+#endif
+        if (head == nullptr)
+            return -10;
+
+        return proc::k_pm.set_robust_list(head, len); // 调用进程管理器的 set_robust_list 函数
     }
     uint64 SyscallHandler::sys_gettid()
     {
@@ -860,10 +907,53 @@ namespace syscall
         // TODO
         return 0;
     }
-    uint64 SyscallHandler::sys_prlimit64()
+    uint64 SyscallHandler::SyscallHandler::sys_prlimit64()
     {
-        // TODO
-        return 0;
+        int pid;
+        if (_arg_int(0, pid) < 0)
+        {
+            printfRed("[SyscallHandler::sys_prlimit64] Error fetching pid argument\n");
+            return -1;
+        }
+        int rsrc;
+        if (_arg_int(1, rsrc) < 0)
+        {
+            printfRed("[SyscallHandler::sys_prlimit64] Error fetching resource argument\n");
+            return -2;
+        }
+        u64 new_limit;
+        u64 old_limit;
+        if (_arg_addr(2, new_limit) < 0)
+        {
+            printfRed("[SyscallHandler::sys_prlimit64] Error fetching new limit address\n");
+            return -3;
+        }
+        if (_arg_addr(3, old_limit) < 0)
+        {
+            printfRed("[SyscallHandler::sys_prlimit64] Error fetching old limit address\n");
+            return -4;
+        }
+
+        proc::rlimit64 *nlim = nullptr, *olim = nullptr;
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+#ifdef RISCV
+        if (new_limit != 0)
+            nlim = (proc::rlimit64 *)pt->walk_addr(new_limit);
+        if (old_limit != 0)
+            olim = (proc::rlimit64 *)pt->walk_addr(old_limit);
+
+#elif defined(LOONGARCH)
+        if (new_limit != 0)
+            nlim = (proc::rlimit64 *)hsai::k_mem->to_vir(
+                pt->walk_addr(new_limit));
+        if (old_limit != 0)
+            olim = (proc::rlimit64 *)hsai::k_mem->to_vir(
+                pt->walk_addr(old_limit));
+#endif
+
+        return proc::k_pm.prlimit64(pid, rsrc, nlim, olim);
+        ;
     }
     uint64 SyscallHandler::sys_readlinkat()
     {
