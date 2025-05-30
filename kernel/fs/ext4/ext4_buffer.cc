@@ -74,6 +74,7 @@ namespace fs
 				{
 					_lock.release();
 					Buffer buf = k_bufm.read_sync( _belong_fs->owned_device(), _belong_fs->start_lba() + block_lba + i );
+					
 					_lock.acquire();
 					buf.copy_data_to( ( void* ) buf_ptr );
 					k_bufm.release_buffer_sync( buf );

@@ -63,6 +63,7 @@ namespace fs
 			//这个读了lba的头
 			buf = k_bufm.read_sync( dev, 2 );
 			new ( &_sb ) Ext4SB( (Ext4SuperBlock*) buf.get_data_ptr(), this );
+
 			k_bufm.release_buffer_sync( buf );
 
 			if ( start_lba % ( _sb.rBlockSize() / 512 ) != 0 )

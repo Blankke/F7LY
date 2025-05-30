@@ -30,7 +30,7 @@ extern "C"
 {
     int main()
     {
-        printf("Hello, World!\n");
+        printf("Hello, World\n");
         int a = 7;
         printf("a = %d\n", a);
         while (a--)

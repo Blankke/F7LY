@@ -142,7 +142,9 @@ $(KERNEL_ELF): $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.
 	$(SIZE) $@
 	$(OBJDUMP) -D $@ > kernel.asm
 
-$(KERNEL_BIN): $(KERNEL_ELF)
+$(KERNEL_ELF): $(INITCODE_BIN)
+
+$(KERNEL_BIN): $(KERNEL_ELF) 
 	$(OBJCOPY) -O binary $< $@
 
 export BUILDPATH := $(BUILD_DIR)
@@ -207,6 +209,9 @@ initcode: $(INITCODE_BIN)
 $(INITCODE_OBJ): $(INITCODE_SRC)
 	@mkdir -p $(dir $@)
 	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
+	
+# initcode.o 显式依赖 initcode-rv 文件
+$(BUILD_DIR)/boot/$(ARCH)/initcode.o: $(INITCODE_BIN)
 
 # 编译 syscall.o
 $(SYSCALL_OBJ): $(SYSCALL_SRC)

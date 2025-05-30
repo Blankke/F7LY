@@ -85,7 +85,10 @@ namespace fs
 		uint offset = _offset_from_lba(lba);
 		buf._buffer_base = (void *)((uint64)buf._buffer_base +
 									default_sector_size * offset);
+		
 		/// debug
+		printfCyan("BufferManager : read_sync lba %u, offset %u\n", lba, offset);
+		printfCyan( "Physical disk offset: 0x%x\n", lba * default_sector_size ); // 打印物理偏移
 		uint8_t *data = static_cast<uint8_t *>(buf._buffer_base);
 		printf("Buffer content at LBA %u:\n", lba);
 		for (int i = 0; i < 64; ++i)
@@ -94,7 +97,7 @@ namespace fs
 			if ((i + 1) % 16 == 0)
 				printf("\n");
 		}
-		
+
 		return buf;
 	}
 
@@ -170,125 +173,117 @@ namespace fs
 		return bit_reset((void *)&_buffer_pool[blk]._disk_own_map, idx);
 	}
 
-	Buffer BufferManager::_get_buffer(int dev, uint64 lba,
-									  bool need_sleep_lock)
+	Buffer BufferManager::_get_buffer( int dev, uint64 lba, bool need_sleep_lock )
 	{
-		if (_check_block_device((uint)dev) < 0)
+		if ( _check_block_device( (uint) dev ) < 0 )
 		{
-			printfYellow("Buffer : invalid device number");
+			printfRed( "Buffer : invalid device number" );
 			return Buffer();
 		}
 
 		_lock.acquire();
 
-		uint blk = _blk_num_from_lba(lba);
-		uint tag = _tag_num_from_lba(lba);
-		lba = _lba_blk_align(lba);
-		BufferNode *node = nullptr;
-		uint64 buf_base;
+		uint blk		 = _blk_num_from_lba( lba );
+		uint tag		 = _tag_num_from_lba( lba );
+		lba				 = _lba_blk_align( lba );
+		BufferNode* node = nullptr;
+		uint64		buf_base;
 
-		node = _buffer_pool[blk].search_buffer(dev, blk, tag);
-		if (node != nullptr)
+		node = _buffer_pool[blk].search_buffer( dev, blk, tag );
+		if ( node != nullptr )
 		{ // 命中 buffer
-			// Info( "BufferManager : 命中buffer ([%d][%d])", blk,
+			// log_info( "BufferManager : 命中buffer ([%d][%d])", blk,
 			// node->_buf_index );
 
-			if (_buf_is_disk_own(blk, node->_buf_index))
+			if ( _buf_is_disk_own( blk, node->_buf_index ) )
 			{ // 虽然命中 buffer，但是这个 buffer
 			  // 被硬盘占用，应当等待硬盘解除占用
-				assert(need_sleep_lock == true,
-					   "synchronously get buffer but disk occupies this buffer\n"
-					   ">> maybe it is asynchronously getting buffer here?");
+				assert( need_sleep_lock == true,
+					"synchronously get buffer but disk occupies this buffer\n"
+					">> maybe it is asynchronously getting buffer here?"
+				);
 
 				panic(
 					"BufferManager : hit buffer but buffer is occupied by "
-					"disk\n"
-					">> it should sleep here but sleep not imlement");
+					"disk\n" ">> it should sleep here but sleep not imlement" );
 			}
 
 			_buffer_pool[blk]._ref_cnt[node->_buf_index]++;
 		}
 		else // 没有命中 buffer，需要分配新的buffer
 		{
-			node = _buffer_pool[blk].alloc_buffer(dev, blk, tag);
-			assert(node != nullptr,
-				   "BufferManager : try to get buffer fail\n"
-				   "  it shall sleep to wait buffer to use\n"
-				   "  but sleep not implement");
+			node = _buffer_pool[blk].alloc_buffer( dev, blk, tag );
+			assert( node != nullptr,
+				"BufferManager : try to get buffer fail\n"
+				"  it shall sleep to wait buffer to use\n"
+				"  but sleep not implement"
+			);
 
-			if (_buf_is_dirty(blk, node->_buf_index))
+			if ( _buf_is_dirty( blk, node->_buf_index ) )
 			{ // 这个buffer有脏数据，需要回写
 
-				uint dev_num =
-					(uint)_buffer_pool[blk]._device[node->_buf_index];
-				_check_block_device(dev_num);
-				dev::BlockDevice *bd =
-					(dev::BlockDevice *)dev::k_devm.get_device(dev_num);
+				uint dev_num = (uint) _buffer_pool[blk]._device[node->_buf_index];
+				_check_block_device( dev_num );
+				dev::BlockDevice* bd = (dev::BlockDevice*) dev::k_devm.get_device( dev_num );
 
-				buf_base =
-					(uint64)_buffer_pool[blk]._buffer_base[node->_buf_index];
-				dev::BufferDescriptor buf_des = {
-					.buf_addr = buf_base, .buf_size = default_buffer_size};
-				u64 lba_to_write = _lba_from_tag_blk_off(
-					_buffer_pool[blk]._tag_number[node->_buf_index], blk, 0);
+				buf_base = (uint64) _buffer_pool[blk]._buffer_base[node->_buf_index];
+				dev::BufferDescriptor buf_des		= { .buf_addr = buf_base,
+														.buf_size = default_buffer_size };
+				u64					   lba_to_write = _lba_from_tag_blk_off(
+					   _buffer_pool[blk]._tag_number[node->_buf_index], blk, 0 );
 
-				_buf_set_disk_own(blk, node->_buf_index);
-				if (need_sleep_lock)
-					panic("BufferManager : sleep not implement");
+				_buf_set_disk_own( blk, node->_buf_index );
+				if ( need_sleep_lock )
+					panic( "BufferManager : sleep not implement" );
 				else
 				{
 					_lock.release();
-					bd->write_blocks_sync(
-						lba_to_write,
-						default_buffer_size / bd->get_block_size(), &buf_des,
-						1);
+					bd->write_blocks_sync( lba_to_write, default_buffer_size / bd->get_block_size(),
+										   &buf_des, 1 );
 					_lock.acquire();
 				}
 
-				_buf_reset_dirty(blk, node->_buf_index);
-				_buf_reset_disk_own(blk, node->_buf_index);
+				_buf_reset_dirty( blk, node->_buf_index );
+				_buf_reset_disk_own( blk, node->_buf_index );
 			} // buffer is dirty
 
-			_buffer_pool[blk]._device[node->_buf_index] = dev;
+			_buffer_pool[blk]._device[node->_buf_index]		= dev;
 			_buffer_pool[blk]._tag_number[node->_buf_index] = tag;
-			_buffer_pool[blk]._ref_cnt[node->_buf_index] = 1;
-			_buf_reset_valid(blk, node->_buf_index);
+			_buffer_pool[blk]._ref_cnt[node->_buf_index]	= 1;
+			_buf_reset_valid( blk, node->_buf_index );
 
 		} // >> end if ( node == nullptr )
 
-		if (!_buf_is_valid(blk, node->_buf_index))
+		if ( !_buf_is_valid( blk, node->_buf_index ) )
 		{ // 这个块没有有效的数据，需要从硬盘读入
 
-			dev::BlockDevice *bd =
-				(dev::BlockDevice *)dev::k_devm.get_device((uint)dev);
+			dev::BlockDevice* bd = (dev::BlockDevice*) dev::k_devm.get_device( (uint) dev );
 
-			buf_base =
-				(uint64)_buffer_pool[blk]._buffer_base[node->_buf_index];
-			dev::BufferDescriptor buf_des = {
-				.buf_addr = buf_base, .buf_size = default_buffer_size};
+			buf_base = (uint64) _buffer_pool[blk]._buffer_base[node->_buf_index];
+			dev::BufferDescriptor buf_des = { .buf_addr = buf_base,
+											   .buf_size = default_buffer_size };
 
-			_buf_set_disk_own(blk, node->_buf_index);
-			if (need_sleep_lock)
-				panic("BufferManager : sleep not implement");
+			_buf_set_disk_own( blk, node->_buf_index );
+			if ( need_sleep_lock )
+				panic( "BufferManager : sleep not implement" );
 			else
 			{
 				_lock.release();
-				bd->read_blocks_sync(
-					lba, default_buffer_size / bd->get_block_size(), &buf_des,
-					1);
+				bd->read_blocks_sync( lba, default_buffer_size / bd->get_block_size(), &buf_des,
+									  1 );
 				_lock.acquire();
 			}
 
-			_buf_reset_disk_own(blk, node->_buf_index);
-			_buf_set_valid(blk, node->_buf_index);
+			_buf_reset_disk_own( blk, node->_buf_index );
+			_buf_set_valid( blk, node->_buf_index );
 		}
 
 		_lock.release();
-		if (need_sleep_lock)
-			_buffer_pool[blk]._sleep_lock[node->_buf_index].acquire();
-		return _buffer_pool[blk].get_buffer(node);
+		if ( need_sleep_lock ) _buffer_pool[blk]._sleep_lock[node->_buf_index].acquire();
+		return _buffer_pool[blk].get_buffer( node );
 		// return Buffer();
 	}
+
 
 	void BufferManager::_release_buffer(Buffer &buf, bool used_sleep_lock)
 	{
