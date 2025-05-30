@@ -1,5 +1,5 @@
-- [ 叉] SYS_fork = 1,
-- [ 叉] SYS_wait = 3,
+- [x] SYS_fork = 1,
+- [x] SYS_wait = 3,
 - [ ] SYS_kill = 6,
 - [x ] SYS_sleep = 13,
 - [ ] SYS_uptime = 14,
@@ -16,10 +16,10 @@
 - [ ] SYS_umount2 = 39,
 - [ ] SYS_mount = 40,
 - [ ] SYS_faccessat = 48,
-- [x ] SYS_chdir = 49,
+- [x] SYS_chdir = 49,
 - [ ] SYS_exec = 55,
-- [ ] SYS_openat = 56,
-- [ ] SYS_close = 57,
+- [x] SYS_openat = 56,
+- [x] SYS_close = 57,
 - [ ] SYS_pipe2 = 59,
 - [ ] SYS_getdents64 = 61,
 - [ ] SYS_lseek = 62,
@@ -33,7 +33,7 @@
 - [ ] SYS_fstatat = 79,
 - [x ] SYS_fstat = 80,
 - [ ] SYS_utimensat = 88,
-- [叉 ] SYS_exit = 93,
+- [x] SYS_exit = 93,
 - [ ] SYS_exit_group = 94,
 - [ ] SYS_set_tid_address = 96,
 - [ ] SYS_set_robust_list = 99,
@@ -98,7 +98,7 @@
 - [ ] syscall sigaction       
 - [ ] syscall getppid         
 - [ ] syscall uname           
-- [ ] syscall getcwd          
+- [x] syscall getcwd          
 - [ ] syscall ioctl           
 - [ ] syscall openat          
 - [ ] syscall fcntl           

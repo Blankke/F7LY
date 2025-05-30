@@ -495,9 +495,25 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_openat()
     {
-        TODO("sys_openat");
-        printfYellow("sys_openat\n");
-        return 0;
+        int dir_fd;
+        uint64 path_addr;
+        int flags;
+
+        if (_arg_int(0, dir_fd) < 0)
+            return -1;
+        if (_arg_addr(1, path_addr) < 0)
+            return -1;
+        if (_arg_int(2, flags) < 0)
+            return -1;
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        eastl::string path;
+        if (mem::k_vmm.copy_str_in(*pt, path, path_addr, 100) < 0)
+            return -1;
+        int res = proc::k_pm.open(dir_fd, path, flags);
+        printfBlue("openat return fd is %d", res);
+        return res;
     }
     uint64 SyscallHandler::sys_write()
     {
@@ -549,9 +565,10 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_close()
     {
-        TODO("sys_close");
-        printfYellow("sys_close\n");
-        return 0;
+        int fd;
+        if (_arg_int(0, fd) < 0)
+            return -1;
+        return proc::k_pm.close(fd);
     }
     uint64 SyscallHandler::sys_mknod()
     {
@@ -627,9 +644,24 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_getcwd()
     {
-        TODO("sys_getcwd");
-        printfYellow("sys_getcwd\n");
-        return 0;
+        char cwd[256];
+        uint64 buf;
+        int size;
+
+        if (_arg_addr(0, buf) < 0)
+            return -1;
+        if (_arg_int(1, size) < 0)
+            return -1;
+        if (size >= (int)sizeof(cwd))
+            return -1;
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        uint len = proc::k_pm.getcwd(cwd);
+        if (mem::k_vmm.copy_out(*pt, buf, (const void *)cwd, len) < 0)
+            return -1;
+
+        return buf;
     }
     uint64 SyscallHandler::sys_getdents64()
     {
