@@ -178,6 +178,10 @@ namespace syscall
         out_int = (int)raw_val;
         return 0;
     }
+    /// @brief  获取系统调用参数的地址
+    /// @param arg_n  参数的索引，从0开始
+    /// @param out_addr  输出参数的地址
+    /// @return 
     int SyscallHandler::_arg_addr(int arg_n, uint64 &out_addr)
     {
         uint64 raw_val = _arg_raw(arg_n);
@@ -230,19 +234,36 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_fork()
     {
-        return proc::k_pm.fork(); // 调用进程管理器的 fork 函数
+        uint64 usp;
+        if(_arg_addr(1, usp) < 0)
+        {
+            printfRed("[SyscallHandler::sys_fork] Error fetching usp argument\n");
+            return -1;
+        }
+        return proc::k_pm.fork(usp); // 调用进程管理器的 fork 函数
     }
     uint64 SyscallHandler::sys_exit()
     {
-        TODO("sys_exit");
-        printfYellow("sys_exit\n");
+        int n;
+        if(_arg_int(0, n) < 0)
+        {
+            printfRed("[SyscallHandler::sys_exit] Error fetching exit code argument\n");
+            return -1;
+        }
+        proc::k_pm.exit(n); // 调用进程管理器的 exit 函数
         return 0;
     }
     uint64 SyscallHandler::sys_wait()
     {
-        TODO("sys_wait");
-        printfYellow("sys_wait\n");
-        return 0;
+        int pid;
+        uint64 wstatus_addr;
+        if (_arg_int(0, pid) < 0 || _arg_addr(1, wstatus_addr) < 0)
+        {
+            printfRed("[SyscallHandler::sys_wait] Error fetching arguments\n");
+            return -1;
+        }
+        // 调用进程管理器的 wait 函数
+        return proc::k_pm.wait(pid, wstatus_addr);
     }
     uint64 SyscallHandler::sys_wait4()
     {

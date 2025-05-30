@@ -654,6 +654,19 @@ namespace proc
             sleep(p, &_wait_lock);
         }
     }
+/// @brief 将指定文件中的一段内容加载到页表映射的虚拟内存中。
+/// 
+/// 此函数用于将文件 `de` 中从 `offset` 开始的 `size` 字节数据，
+/// 加载到进程的页表 `pt` 所映射的虚拟地址 `va` 开始的内存区域中。
+/// 支持起始地址非页对齐情况，内部自动处理跨页加载。
+/// 如果页表未正确建立或读取失败，将导致 panic。
+/// 
+/// @param pt  进程的页表，用于获取对应虚拟地址的物理地址。
+/// @param va  加载的起始虚拟地址，允许非页对齐。
+/// @param de  指向文件的目录项，用于读取文件数据。
+/// @param offset 文件中读取的起始偏移。
+/// @param size 要读取的总字节数。
+/// @return 总是返回 0，失败情况下内部直接 panic。
     int ProcessManager::load_seg(mem::PageTable &pt, uint64 va, fs::dentry *de, uint offset, uint size)
     { // 好像没有机会返回 -1, pa失败的话会panic，de的read也没有返回值
         uint i, n;
