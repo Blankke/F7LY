@@ -67,7 +67,7 @@ namespace mem
 		int copy_in( PageTable &pt, void *dst, uint64 src_va, uint64 len );
 
 		int copy_str_in( PageTable &pt, void *dst, uint64 src_va, uint64 max );
-		// int copy_str_in( PageTable &pt, eastl::string &dst, uint64 src_va, uint64 max );
+		int copy_str_in( PageTable &pt, eastl::string &dst, uint64 src_va, uint64 max );
 
 
 

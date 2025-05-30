@@ -9,6 +9,7 @@
 #include "param.h"
 #include "sbi.hh"
 #include "hal/cpu.hh"
+#include "timer_manager.hh"
 namespace syscall
 {
     // 创建全局的 SyscallHandler 实例
@@ -134,14 +135,14 @@ namespace syscall
         return 0;
     }
 
-    int SyscallHandler::_fetch_str(uint64 addr, void *buf, uint64 max)
+    int SyscallHandler::_fetch_str(uint64 addr, eastl::string &buf, uint64 max)
     {
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
         int err = mem::k_vmm.copy_str_in(*pt, buf, addr, max);
         if (err < 0)
             return err;
-        return strlen((const char *)buf);
+        return buf.size();
     }
 
     uint64 SyscallHandler::_arg_raw(int arg_n)
@@ -181,7 +182,7 @@ namespace syscall
     /// @brief  获取系统调用参数的地址
     /// @param arg_n  参数的索引，从0开始
     /// @param out_addr  输出参数的地址
-    /// @return 
+    /// @return
     int SyscallHandler::_arg_addr(int arg_n, uint64 &out_addr)
     {
         uint64 raw_val = _arg_raw(arg_n);
@@ -193,7 +194,7 @@ namespace syscall
         out_addr = raw_val;
         return 0;
     }
-    int SyscallHandler::_arg_str(int arg_n, char *buf, int max)
+    int SyscallHandler::_arg_str(int arg_n, eastl::string buf, int max)
     {
         uint64 addr;
         if (_arg_addr(arg_n, addr) < 0)
@@ -235,7 +236,7 @@ namespace syscall
     uint64 SyscallHandler::sys_fork()
     {
         uint64 usp;
-        if(_arg_addr(1, usp) < 0)
+        if (_arg_addr(1, usp) < 0)
         {
             printfRed("[SyscallHandler::sys_fork] Error fetching usp argument\n");
             return -1;
@@ -245,7 +246,7 @@ namespace syscall
     uint64 SyscallHandler::sys_exit()
     {
         int n;
-        if(_arg_int(0, n) < 0)
+        if (_arg_int(0, n) < 0)
         {
             printfRed("[SyscallHandler::sys_exit] Error fetching exit code argument\n");
             return -1;
@@ -315,33 +316,176 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_fstat()
     {
-        TODO("sys_fstat");
-        printfYellow("sys_fstat\n");
+        int fd;
+        fs::Kstat kst;
+        uint64 kst_addr;
+        if (_arg_fd(0, &fd, nullptr) < 0 || _arg_addr(1, kst_addr) < 0)
+        {
+            printfRed("[SyscallHandler::sys_fstat] Error fetching arguments\n");
+            return -1;
+        }
+        proc::k_pm.fstat(fd, &kst);
+        mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+        // 检查 kst_addr 是否在用户空间
+        if (mem::k_vmm.copy_out(*pt, kst_addr, &kst, sizeof(kst)) < 0)
+        {
+            printfRed("[SyscallHandler::sys_fstat] Error copying out kstat\n");
+            return -1;
+        }
+        // 返回成功
         return 0;
     }
     uint64 SyscallHandler::sys_statx()
     {
-        TODO("sys_statx");
-        printfYellow("sys_statx\n");
-        return 0;
+        using __u16 = uint16;
+        using __u32 = uint32;
+        using __s64 = int64;
+        using __u64 = uint64;
+
+        struct statx_timestamp
+        {
+            __s64 tv_sec;  /* Seconds since the Epoch (UNIX time) */
+            __u32 tv_nsec; /* Nanoseconds since tv_sec */
+        };
+        struct statx
+        {
+            __u32 stx_mask;       /* Mask of bits indicating
+                                     filled fields */
+            __u32 stx_blksize;    /* Block size for filesystem I/O */
+            __u64 stx_attributes; /* Extra file attribute indicators */
+            __u32 stx_nlink;      /* Number of hard links */
+            __u32 stx_uid;        /* User ID of owner */
+            __u32 stx_gid;        /* Group ID of owner */
+            __u16 stx_mode;       /* File type and mode */
+            __u64 stx_ino;        /* Inode number */
+            __u64 stx_size;       /* Total size in bytes */
+            __u64 stx_blocks;     /* Number of 512B blocks allocated */
+            __u64 stx_attributes_mask;
+            /* Mask to show what's supported
+               in stx_attributes */
+
+            /* The following fields are file timestamps */
+            struct statx_timestamp stx_atime; /* Last access */
+            struct statx_timestamp stx_btime; /* Creation */
+            struct statx_timestamp stx_ctime; /* Last status change */
+            struct statx_timestamp stx_mtime; /* Last modification */
+
+            /* If this file represents a device, then the next two
+               fields contain the ID of the device */
+            __u32 stx_rdev_major; /* Major ID */
+            __u32 stx_rdev_minor; /* Minor ID */
+
+            /* The next two fields contain the ID of the device
+               containing the filesystem where the file resides */
+            __u32 stx_dev_major; /* Major ID */
+            __u32 stx_dev_minor; /* Minor ID */
+
+            __u64 stx_mnt_id; /* Mount ID */
+
+            /* Direct I/O alignment restrictions */
+            __u32 stx_dio_mem_align;
+            __u32 stx_dio_offset_align;
+        };
+
+        int fd;
+        eastl::string path_name;
+        fs::Kstat kst;
+        statx stx;
+        uint64 kst_addr;
+
+        if (_arg_int(0, fd) < 0)
+            return -1;
+
+        if (_arg_str(1, path_name, 128) < 0)
+            return -1;
+
+        if (_arg_addr(4, kst_addr) < 0)
+            return -1;
+        // 情况一：fd > 0，说明调用者提供了一个已打开的文件描述符
+        if (fd > 0)
+        {
+            proc::k_pm.fstat(fd, &kst);
+            stx.stx_mode = kst.mode;
+            stx.stx_size = kst.size;
+            stx.stx_dev_minor = (kst.dev) >> 32;
+            stx.stx_dev_major = (kst.dev) & (0xFFFFFFFF);
+            // dev=(int)(stx_dev_major<<8 | stx_dev_minor&0xff)
+            stx.stx_ino = kst.ino;
+            stx.stx_nlink = kst.nlink;
+            stx.stx_atime.tv_sec = kst.st_atime_sec;
+            stx.stx_atime.tv_nsec = kst.st_atime_nsec;
+            stx.stx_mtime.tv_sec = kst.st_mtime_sec;
+            stx.stx_mtime.tv_nsec = kst.st_mtime_nsec;
+            stx.stx_ctime.tv_sec = kst.st_ctime_sec;
+            stx.stx_ctime.tv_nsec = kst.st_ctime_nsec;
+            // 将 statx 结构体拷贝回用户地址空间
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+            if (mem::k_vmm.copy_out(*pt, kst_addr, &stx, sizeof(stx)) < 0)
+                return -1;
+            return 0;
+        }
+        else
+        {
+            // 情况二：fd <= 0，说明系统调用者提供的是路径名而非fd
+            // 使用 open + fstat + close 组合临时获取元数据
+            int ffd;
+            ffd = proc::k_pm.open(fd, path_name, 2);
+            if (ffd < 0)
+                return -1;
+            proc::k_pm.fstat(ffd, &kst);
+            proc::k_pm.close(ffd);
+            // 填充 statx（此处简化为只填 mode 和 size）
+            stx.stx_size = kst.size;
+            stx.stx_mode = kst.mode;
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+            if (mem::k_vmm.copy_out(*pt, kst_addr, &stx, sizeof(stx)) < 0)
+                return -1;
+            return 0;
+        }
     }
     uint64 SyscallHandler::sys_chdir()
     {
-        TODO("sys_chdir");
-        printfYellow("sys_chdir\n");
-        return 0;
+        eastl::string path;
+        if (_arg_str(0, path, path.max_size()) < 0)
+        {
+            printfRed("[SyscallHandler::sys_chdir] Error fetching path argument\n");
+            return -1;
+        }
+        // 调用进程管理器的 chdir 函数
+        return proc::k_pm.chdir(path);
     }
     uint64 SyscallHandler::sys_dup()
     {
-        TODO("sys_dup");
-        printfYellow("sys_dup\n");
-        return 0;
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        fs::file *f;
+        int fd;
+        [[maybe_unused]] int oldfd = 0;
+
+        if (_arg_fd(0, &oldfd, &f) < 0 || (fd = proc::k_pm.alloc_fd(p, f)) < 0)
+        {
+            printfRed("[SyscallHandler::sys_dup] Error fetching arguments or allocating fd\n");
+            return -1;
+        }
+        // fs::k_file_table.dup( f );
+        f->dup();
+        return fd;
     }
     uint64 SyscallHandler::sys_sleep()
     {
-        TODO("sys_sleep");
-        printfYellow("sys_sleep\n");
-        return 0;
+        tmm::timeval tv;
+        uint64 tv_addr;
+        if (_arg_addr(0, tv_addr) < 0)
+        {
+            printfRed("[SyscallHandler::sys_sleep] Error fetching timeval address\n");
+            return -1;
+        }
+        if (mem::k_vmm.copy_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), &tv, tv_addr, sizeof(tv)) < 0)
+        {
+            printfRed("[SyscallHandler::sys_sleep] Error copying timeval from userspace\n");
+            return -1;
+        }
+        return tmm::k_tm.sleep_from_tv(tv);
+
     }
     uint64 SyscallHandler::sys_uptime()
     {

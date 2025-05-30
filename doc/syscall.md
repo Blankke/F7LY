@@ -1,12 +1,12 @@
 - [ 叉] SYS_fork = 1,
 - [ 叉] SYS_wait = 3,
 - [ ] SYS_kill = 6,
-- [ ] SYS_sleep = 13,
+- [x ] SYS_sleep = 13,
 - [ ] SYS_uptime = 14,
 - [ ] SYS_mknod = 16,
 - [ ] SYS_getcwd = 17,
 - [ ] SYS_shutdown = 19,
-- [ ] SYS_dup = 23,
+- [x ] SYS_dup = 23,
 - [ ] SYS_dup3 = 24,
 - [ ] SYS_fcntl = 25,
 - [ ] SYS_ioctl = 29,
@@ -16,7 +16,7 @@
 - [ ] SYS_umount2 = 39,
 - [ ] SYS_mount = 40,
 - [ ] SYS_faccessat = 48,
-- [ ] SYS_chdir = 49,
+- [x ] SYS_chdir = 49,
 - [ ] SYS_exec = 55,
 - [ ] SYS_openat = 56,
 - [ ] SYS_close = 57,
@@ -31,7 +31,7 @@
 - [ ] SYS_ppoll = 73,
 - [ ] SYS_readlinkat = 78,
 - [ ] SYS_fstatat = 79,
-- [ ] SYS_fstat = 80,
+- [x ] SYS_fstat = 80,
 - [ ] SYS_utimensat = 88,
 - [叉 ] SYS_exit = 93,
 - [ ] SYS_exit_group = 94,
@@ -72,7 +72,7 @@
 - [ ] SYS_prlimit64 = 261,
 - [ ] SYS_renameat2 = 276,
 - [ ] SYS_getrandom = 278,
-- [ ] SYS_statx = 291
+- [x ] SYS_statx = 291
 
 
 

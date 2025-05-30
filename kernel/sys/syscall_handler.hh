@@ -26,12 +26,12 @@ namespace syscall
 
     private:
         int _fetch_addr(uint64 addr, uint64 &out_data);
-        int _fetch_str(uint64 addr, void *buf, uint64 max);
+        int _fetch_str(uint64 addr, eastl::string&buf, uint64 max);
         uint64 _arg_raw(int arg_n);
 
         int _arg_int(int arg_n, int &out_int);
         int _arg_addr(int arg_n, uint64 &out_addr);
-        int _arg_str(int arg_n, char *buf, int max);
+        int _arg_str(int arg_n, eastl::string buf, int max);
         int _arg_fd(int arg_n, int *out_fd, fs::file **out_f);
 
     private: // ================ syscall functions ================

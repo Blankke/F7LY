@@ -98,6 +98,9 @@ namespace tmm
 		return 0;
 	}
 
+	/// @brief  将 timeval 转换为系统时钟的睡眠时间
+	/// @param tv  timeval 结构体，包含秒和微秒
+	/// @return 
 	int TimerManager::sleep_from_tv(timeval tv)
 	{
 		uint64 n = tv.tv_sec * tmm::get_main_frequence();
