@@ -195,7 +195,7 @@ namespace syscall
         out_addr = raw_val;
         return 0;
     }
-    int SyscallHandler::_arg_str(int arg_n, eastl::string buf, int max)
+    int SyscallHandler::_arg_str(int arg_n, eastl::string &buf, int max)
     {
         uint64 addr;
         if (_arg_addr(arg_n, addr) < 0)
@@ -505,6 +505,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_chdir] Error fetching path argument\n");
             return -1;
         }
+        printfCyan("[SyscallHandler::sys_chdir] Changing directory to: %s\n", path.c_str());
         // 调用进程管理器的 chdir 函数
         return proc::k_pm.chdir(path);
     }
