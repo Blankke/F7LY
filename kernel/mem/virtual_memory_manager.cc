@@ -224,14 +224,14 @@ int VirtualMemoryManager::copy_str_in( PageTable &pt, eastl::string &dst,
 
 		while ( got_null == 0 && max > 0 )
 		{
-			va = PGROUNDUP(src_va );
+			va = PGROUNDDOWN(src_va );
 			pa = (uint64) pt.walk_addr( va );
+            if ( pa == 0 ) return -1;
 			#ifdef RISCV
 
 #elif defined(LOONGARCH)
             pa = hsai::k_mem->to_phy( pa );
 #endif
-			if ( pa == 0 ) return -1;
 			n = PGSIZE - ( src_va - va );
 			if ( n > max ) n = max;
 
