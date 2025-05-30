@@ -1,0 +1,109 @@
+- [ ] SYS_fork = 1,
+- [ ] SYS_wait = 3,
+- [ ] SYS_kill = 6,
+- [ ] SYS_sleep = 13,
+- [ ] SYS_uptime = 14,
+- [ ] SYS_mknod = 16,
+- [ ] SYS_getcwd = 17,
+- [ ] SYS_shutdown = 19,
+- [ ] SYS_dup = 23,
+- [ ] SYS_dup3 = 24,
+- [ ] SYS_fcntl = 25,
+- [ ] SYS_ioctl = 29,
+- [ ] SYS_mkdirat = 34,
+- [ ] SYS_unlinkat = 35,
+- [ ] SYS_linkat = 37,
+- [ ] SYS_umount2 = 39,
+- [ ] SYS_mount = 40,
+- [ ] SYS_faccessat = 48,
+- [ ] SYS_chdir = 49,
+- [ ] SYS_exec = 55,
+- [ ] SYS_openat = 56,
+- [ ] SYS_close = 57,
+- [ ] SYS_pipe2 = 59,
+- [ ] SYS_getdents64 = 61,
+- [ ] SYS_lseek = 62,
+- [ ] SYS_read = 63,
+- [x] SYS_write = 64,
+- [ ] SYS_readv = 65,
+- [ ] SYS_writev = 66,
+- [ ] SYS_sendfile = 71,
+- [ ] SYS_ppoll = 73,
+- [ ] SYS_readlinkat = 78,
+- [ ] SYS_fstatat = 79,
+- [ ] SYS_fstat = 80,
+- [ ] SYS_utimensat = 88,
+- [ ] SYS_exit = 93,
+- [ ] SYS_exit_group = 94,
+- [ ] SYS_set_tid_address = 96,
+- [ ] SYS_set_robust_list = 99,
+- [ ] SYS_nanosleep = 101,
+- [ ] SYS_clock_gettime = 113,
+- [ ] SYS_clock_nanosleep = 115,
+- [ ] SYS_syslog = 116,
+- [ ] SYS_sched_yield = 124,
+- [ ] SYS_kill_signal = 129,
+- [ ] SYS_tkill = 130,
+- [ ] SYS_tgkill = 131,
+- [ ] SYS_rt_sigaction = 134,
+- [ ] SYS_rt_sigprocmask = 135,
+- [ ] SYS_rt_sigtimedwait = 137,
+- [ ] SYS_rt_sigreturn = 139,
+- [ ] SYS_setgid = 144,
+- [ ] SYS_setuid = 146,
+- [ ] SYS_times = 153,
+- [ ] SYS_uname = 160,
+- [ ] SYS_gettimeofday = 169,
+- [ ] SYS_getpid = 172,
+- [ ] SYS_getppid = 173,
+- [ ] SYS_getuid = 174,
+- [ ] SYS_geteuid = 175,
+- [ ] SYS_getgid = 176,
+- [ ] SYS_gettid = 178,
+- [ ] SYS_sysinfo = 179,
+- [ ] SYS_brk = 214,
+- [ ] SYS_munmap = 215,
+- [ ] SYS_mremap = 216,
+- [ ] SYS_clone = 220,
+- [ ] SYS_execve = 221,
+- [ ] SYS_mmap = 222,
+- [ ] SYS_madvise = 233,
+- [ ] SYS_wait4 = 260,
+- [ ] SYS_prlimit64 = 261,
+- [ ] SYS_renameat2 = 276,
+- [ ] SYS_getrandom = 278,
+- [ ] SYS_statx = 291
+
+
+
+优先实现的：
+- [ ] syscall fork            
+- [ ] syscall wait            
+- [ ] syscall chdir           
+- [ ] syscall execve          
+- [ ] syscall brk             
+- [ ] syscall set_tid_address 
+- [ ] syscall set_robust_list 
+- [ ] syscall prlimit64       
+- [ ] syscall readlinkat      
+- [ ] syscall getrandom       
+- [ ] syscall clock_gettime         
+- [ ] syscall mprotect        
+- [ ] syscall getuid          
+- [ ] syscall statx           
+- [ ] syscall getgid          
+- [ ] syscall setgid          
+- [ ] syscall setuid          
+- [ ] syscall getpid          
+- [ ] syscall sigaction       
+- [ ] syscall getppid         
+- [ ] syscall uname           
+- [ ] syscall getcwd          
+- [ ] syscall ioctl           
+- [ ] syscall openat          
+- [ ] syscall fcntl           
+- [ ] syscall getpgid         
+- [ ] syscall setpgid         
+- [ ] syscall geteuid         
+- [ ] syscall ppoll           
+- [ ] syscall read
