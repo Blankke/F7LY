@@ -106,9 +106,11 @@ namespace tmm
 
 		uint64 n = tv.tv_sec * tmm::get_main_frequence();
 		uint64 cpt = tmm::cycles_per_tick();
+		// printfBlue("sleep from tv: %u ticks\n", n);
 		n += tmm::usec_to_time_stamp(tv.tv_usec);
+		// printfBlue("sleep from tv: %u ticks\n", n);
 		n /= cpt;
-		printfBlue("sleep from tv: %d ticks", n);
+		printfBlue("sleep from tv: %u ticks\n", n);
 		if (n == 0)
 			return 0; // 如果转换结果为0，直接返回
 		return sleep_n_ticks(n);

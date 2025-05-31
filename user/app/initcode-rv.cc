@@ -42,6 +42,12 @@ extern "C"
 
         basic_test();
         printf("#### OS COMP TEST GROUP END basic-glibc ####\n");
+        for (size_t i = 0; i < 50; i++)
+        {
+            sleep(1000);
+            printf("sleep %d ms\n", 1000);
+        }
+        
         // start_shell();
         shutdown();
         return 0;
