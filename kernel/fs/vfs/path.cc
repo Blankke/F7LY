@@ -205,7 +205,6 @@ namespace fs
 
 		if (pathname == "/")
 			return mnt_table["/"]->getSuperBlock()->getRoot();
-		printfMagenta("path base name is %s\n", base->rName().c_str());
 		dentry *entry, *next;
 		if (base == nullptr)
 		{
@@ -219,7 +218,6 @@ namespace fs
 		// printfBlue( "path search %d level", dirsize );
 		for (int i = 0; i < dirsize; i++)
 		{
-			printfCyan("pathSearch: dirname[%d]: %s\n", i, dirname[i]);
 			while (entry->isMntPoint())
 				panic("pathSearch: entry is a mount point");
 			/// @todo 这里随后检查 是否是目录，文件的结构不完善
@@ -236,7 +234,6 @@ namespace fs
 				// printfBlue("dentry %s search sub-dir\n", entry->rName().c_str());
 				if (auto it = entry->EntrySearch(dirname[i]); it != nullptr)
 				{
-					printfCyan("pathSearch: found %s\n", it->rName().c_str());
 					next = it;
 				}
 				else

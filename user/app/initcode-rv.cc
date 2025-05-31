@@ -1,31 +1,31 @@
 #include "user.hh"
 
-#define RUN_TESTS(test_list)                     \
-    do                                           \
-    {                                            \
-        pid = fork();                            \
-        if (pid < 0)                             \
-        {                                        \
-            printf("fork failed")                \
-        }                                        \
-        else if (pid == 0)                       \
-        {                                        \
-            if (execve(test_list, 0, 0) < 0)     \
-            {                                    \
-                printf("execve failed")          \
-            }                                    \
-            exit(0);                             \
-        }                                        \
-        else                                     \
-        {                                        \
-            int child_exit_state = -100;         \
-            if (wait(-1, &child_exit_state) < 0) \
-                printf("wait fail\n")            \
-        }                                        \
+#define RUN_TESTS(test_list)                 \
+    do                                       \
+    {                                        \
+        pid = fork();                        \
+        if (pid < 0)                         \
+        {                                    \
+            printf("fork failed")            \
+        }                                    \
+        else if (pid == 0)                   \
+        {                                    \
+            if (execve(test_list, 0, 0) < 0) \
+            {                                \
+                printf("execve failed")      \
+            }                                \
+            exit(0);                         \
+        }                                    \
+        else                                 \
+        {                                    \
+            int child_exit_state = -100;     \
+            if (wait(&child_exit_state) < 0) \
+                printf("wait fail\n")        \
+        }                                    \
     } while (0)
 
 int basic_test(void);
-
+int start_shell(void);
 extern "C"
 {
     int main()
@@ -41,6 +41,8 @@ extern "C"
         printf("#### OS COMP TEST GROUP START basic-glibc ####\n");
 
         basic_test();
+        printf("#### OS COMP TEST GROUP END basic-glibc ####\n");
+        // start_shell();
         shutdown();
         return 0;
     }
@@ -81,5 +83,35 @@ int basic_test(void)
     // RUN_TESTS("munmap");
     // RUN_TESTS("unlink");
     // RUN_TESTS("pipe");
+    return 0;
+}
+
+int start_shell(void)
+{
+    [[maybe_unused]] int pid;
+    pid = fork();
+    if (pid < 0)
+    {
+        printf("fork failed\n");
+        return -1;
+    }
+    else if (pid == 0)
+    {
+        chdir("/mnt/glibc/");
+        char *bb_sh[8] = {0};
+        bb_sh[0] = "ash";
+        if (execve("busybox", bb_sh, 0) < 0)
+        {
+            printf("execve failed\n");
+            exit(1);
+        }
+        exit(0);
+    }
+    else
+    {
+        int child_exit_state = -100;
+        if (wait(&child_exit_state) < 0)
+            printf("wait fail\n");
+    }
     return 0;
 }

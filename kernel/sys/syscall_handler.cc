@@ -274,9 +274,13 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_wait4()
     {
-        TODO("sys_wait4");
-        printfYellow("sys_wait4\n");
-        return 0;
+        int pid;
+        uint64 wstatus_addr;
+        if (_arg_int(0, pid) < 0)
+            return -1;
+        if (_arg_addr(1, wstatus_addr) < 0)
+            return -1;
+        return proc::k_pm.wait(pid, wstatus_addr);
     }
     uint64 SyscallHandler::sys_getppid()
     {
@@ -508,7 +512,6 @@ namespace syscall
             printfRed("[SyscallHandler::sys_chdir] Error fetching path argument\n");
             return -1;
         }
-        printfCyan("[SyscallHandler::sys_chdir] Changing directory to: %s\n", path.c_str());
         // 调用进程管理器的 chdir 函数
         return proc::k_pm.chdir(path);
     }

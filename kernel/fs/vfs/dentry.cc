@@ -26,7 +26,6 @@ namespace fs
             return it->second;
         if ( [[maybe_unused]] auto subnod = (_node->lookup(name)))
         {
-            printfBlue("dentry::EntrySearch: found inode");
             dentry *subdentry = fs::dentrycache::k_dentryCache.alloDentry();
             new ( subdentry ) dentry(name, (Inode *)subnod, this);
             //dentry *subdentry = new dentry(name , subnod, this);

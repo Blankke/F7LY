@@ -68,7 +68,7 @@
 - [ ] SYS_execve = 221,
 - [x] SYS_mmap = 222,
 - [ ] SYS_madvise = 233,
-- [ ] SYS_wait4 = 260,
+- [x] SYS_wait4 = 260,
 - [x] SYS_prlimit64 = 261,
 - [ ] SYS_renameat2 = 276,
 - [ ] SYS_getrandom = 278,
