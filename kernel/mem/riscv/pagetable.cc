@@ -61,9 +61,9 @@ namespace mem
         {
             const uint64 index = PX(level, va);
             Pte pte = current_pt.get_pte(index);
-            //DEBUG:
-            // if(va == KERNBASE)
-            //     printfBlue("set前,level: %d, index: %d, pte: %p, pteaddr: %p, pte2pa:%p\n", level, index, pte.get_data(),pte.get_data_addr(), PTE2PA(pte.get_data()));
+            // DEBUG:
+            //  if(va == KERNBASE)
+            //      printfBlue("set前,level: %d, index: %d, pte: %p, pteaddr: %p, pte2pa:%p\n", level, index, pte.get_data(),pte.get_data_addr(), PTE2PA(pte.get_data()));
 
             if (pte.is_valid())
             {
@@ -97,7 +97,7 @@ namespace mem
                 pte.set_data(PA2PTE(new_base) | PTE_V);
                 // printfBlue("set后,level: %d, index: %d, pte: %p, pteaddr: %p, pte2pa:%p\n", level, index, pte.get_data(), pte.get_data_addr(), PTE2PA(pte.get_data()));
 
-                if(level == 1)
+                if (level == 1)
                 {
                     // current_pt.print_page_table();
                     // printfBlue("new_pt: %p\n", new_pt.get_base());
@@ -110,7 +110,7 @@ namespace mem
         }
 
         // 返回最终层级的PTE
-        return_pte.set_addr((uint64*)(current_pt.get_base() + 8*PX(0, va)));
+        return_pte.set_addr((uint64 *)(current_pt.get_base() + 8 * PX(0, va)));
         // printf("return_pte_addr: %p, 对应的va为：%p\n", (uint64 *)(current_pt.get_base() + 8 * PX(0, va)), va);
         // return_pte.set_data(PTE2PA(current_pt.get_base()) | PTE_V);
 
@@ -145,7 +145,8 @@ namespace mem
         for (uint i = 0; i < 512; i++)
         {
             Pte pte = get_pte(i);
-            if (pte.is_valid() && pte.get_flags() != 0)
+            printfYellow("freewalk: pte[%d]: %p, pte2pa: %p\n", i, pte.get_data(), pte.pa());
+            if (pte.is_valid() && (!pte.is_leaf())) // 这也抄错了吧，原来写的pte.get_flags() != 0是什么鬼，comment by @gkq
             {
                 PageTable child;
                 child.set_base(PTE2PA(pte.get_data()));
@@ -176,21 +177,23 @@ namespace mem
         return pte;
     }
 
-	ulong PageTable::kwalk_addr( uint64 va )
-	{
-		uint64 pa;
+    ulong PageTable::kwalk_addr(uint64 va)
+    {
+        uint64 pa;
 
-		// if ( va >= vml::vm_end )
-		// return 0;
+        // if ( va >= vml::vm_end )
+        // return 0;
 
-		Pte pte = k_pagetable.walk( va, false /* alloc */ );
-		if ( pte.is_null() ) return 0;
-		if ( !pte.is_valid() ) return 0;
+        Pte pte = k_pagetable.walk(va, false /* alloc */);
+        if (pte.is_null())
+            return 0;
+        if (!pte.is_valid())
+            return 0;
 
-		pa	= PTE2PA(pte.get_data());
-		pa |= va & ( PGSIZE - 1 );
-		return pa;
-	}
+        pa = PTE2PA(pte.get_data());
+        pa |= va & (PGSIZE - 1);
+        return pa;
+    }
 
     uint64 PageTable::dir_num(int level, uint64 va)
     {
@@ -205,5 +208,52 @@ namespace mem
             Pte pte = get_pte(i);
             printfRed("PTE[%d]: %p, pte2pa: %p\n", i, pte.get_data(), pte.pa());
         }
+    }
+
+    void PageTable::freewalk_mapped()
+    {
+#ifdef RISCV
+        uint pte_cnt = PGSIZE / sizeof(pte_t);
+        for (uint i = 0; i < pte_cnt; i++)
+        {
+            Pte next_level = get_pte(i);
+            Pte _pte((pte_t *)next_level.pa());
+            bool pte_dir = !_pte.is_leaf();
+            if (pte_dir) // 如果pte指向一个页表，则递归释放
+            {
+                // this PTE is points to a lower-level page table
+                PageTable child;
+                child.set_base((uint64)_pte.pa());
+                child.freewalk();
+                reset_pte_data(i);
+            }
+            else if (_pte.is_valid()) // 如果pte指向一个有效的物理页面，则将页面释放
+            {
+                k_pmm.free_page((void *)_pte.pa());
+            }
+        }
+        k_pmm.free_page((void *)(get_base()));
+#elif defined(LOONGARCH)
+        uint pte_cnt = PGSIZE / sizeof(pte_t);
+        for (uint i = 0; i < pte_cnt; i++)
+        {
+            Pte next_level = get_pte(i);
+            Pte _pte((pte_t *)next_level.to_pa());
+            bool pte_dir = !_pte.is_leaf();
+            if (pte_dir) // 如果pte指向一个页表，则递归释放
+            {
+                // this PTE is points to a lower-level page table
+                PageTable child;
+                child.set_base(k_mem->to_vir(_pte.to_pa()));
+                child.freewalk();
+                reset_pte_data(i);
+            }
+            else if (_pte.is_valid()) // 如果pte指向一个有效的物理页面，则将页面释放
+            {
+                k_pmm.free_pages((void *)hsai::k_mem->to_vir(_pte.to_pa()));
+            }
+        }
+        k_pmm.free_page((void *)(get_base()));
+#endif
     }
 }

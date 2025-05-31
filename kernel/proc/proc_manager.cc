@@ -295,8 +295,9 @@ namespace proc
     void ProcessManager::proc_freepagetable(mem::PageTable pt, uint64 sz)
     {
 #ifdef RISCV
-        mem::k_vmm.vmunmap(pt, TRAMPOLINE, 1, 0);
-        mem::k_vmm.vmfree(pt, 0);
+        // mem::k_vmm.vmunmap(pt, TRAMPOLINE, 1, 0);
+        // mem::k_vmm.vmfree(pt, 0);
+        pt.freewalk_mapped();
 #elif defined(LOONGARCH)
 // TODO
 #endif
