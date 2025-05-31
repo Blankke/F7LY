@@ -50,6 +50,9 @@ extern "C"
                 printf("into child process\n");
                 exit(0);
             } else {
+                int child_exit_state = -100;
+                if (wait(&child_exit_state) < 0)
+                    printf("wait fail\n");
                 printf("into parent process\n");
             }
         }
