@@ -37,12 +37,27 @@ extern "C"
             ;
         printf("a = %d\n", a);
 
-        chdir("/mnt/glibc/basic/");
-        printf("#### OS COMP TEST GROUP START basic-glibc ####\n");
+        // chdir("/mnt/glibc/basic/");
+        // printf("#### OS COMP TEST GROUP START basic-glibc ####\n");
+
+        // basic_test();
+        int pid = fork();
+        printf("forked pid: %d\n", pid);
+        if (pid < 0){
+            printf("fork failed\n");
+        } else{
+            if (pid == 0) {
+                printf("into child process\n");
+                exit(0);
+            } else {
+                printf("into parent process\n");
+            }
+        }
 
         basic_test();
         printf("#### OS COMP TEST GROUP END basic-glibc ####\n");
         // start_shell();
+        while(1);
         shutdown();
         return 0;
     }

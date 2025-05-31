@@ -417,7 +417,7 @@ int VirtualMemoryManager::copy_str_in( PageTable &pt, eastl::string &dst,
         uint64 va_end;
         uint64 flags;
         void *mem;
-
+        
         if(!is_page_align(start) || !is_page_align(size))
         {
             panic("uvmcopy: start or size not page aligned");
@@ -429,8 +429,9 @@ int VirtualMemoryManager::copy_str_in( PageTable &pt, eastl::string &dst,
 
         for (va = start; va < va_end; va += PGSIZE)
         {
-            if ((pte = old_pt.walk(va, 0)).is_null())
-                panic("uvmcopy: pte should exist");
+            if ((pte = old_pt.walk(va, false)).is_null()){
+                panic("uvmcopy: pte should exist for va: %p", va);
+            }
             if (pte.is_valid() == 0)
                 continue;
             ///@brief 这里的逻辑是，如果pte无效，则不需要释放物理页

@@ -72,7 +72,7 @@ namespace proc
 					// uint64 pa = (uint64)PTE2PA(mem::k_pagetable.kwalkaddr(sp).get_data());
 					// printf("sp: %p, kstack: %p,pa:%p\n", sp, p->_kstack,pa);
 
-					// printf( "sche proc %d, name: %s\n", p->_gid, p->_name );
+					printf( "sche proc %d, name: %s\n", p->_gid, p->_name );
 					swtch( cur_context, &p->_context );
 					// printf( "return from %d, name: %s\n", p->_gid, p->_name );
 					cpu->set_cur_proc( nullptr );

@@ -133,13 +133,16 @@ void trap_manager::timertick()
 // 支持嵌套中断
 void trap_manager::kerneltrap()
 {
-  // printf("==kerneltrap==\n");
+  // printfMagenta("into kerneltrap\n");
   int which_dev = 0;
 
   // 这些寄存器可能在yield时被修改
   uint64 sepc = r_sepc();
   uint64 sstatus = r_sstatus();
   uint64 scause = r_scause();
+
+  // Debug
+  // printfYellow("kerneltrap: sepc=%p sstatus=%p scause=%p\n", sepc, sstatus, scause);
 
   // 检查中断是否来自内核态
   if ((sstatus & SSTATUS_SPP) == 0)
@@ -170,6 +173,8 @@ void trap_manager::kerneltrap()
     // printf("timeslice: %d\n", timeslice);
     if (timeslice >= 5)
     {
+      printf("yield in kerneltrap\n");
+      proc::k_scheduler.yield();
       timeslice = 0;
       // print_fuckyou();
     }
@@ -237,6 +242,7 @@ void trap_manager::usertrap()
     if (timeslice >= 5)
     {
       timeslice = 0;
+      printf("yield in usertrap\n");
       proc::k_scheduler.yield();
     }
   }

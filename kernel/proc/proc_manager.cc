@@ -107,7 +107,7 @@ namespace proc
                 // 创建进程自己的页表（空的页表）
 
                 // debug
-                printfCyan("[user pgtbl]==>into proc_pagetable\n");
+                // printfCyan("[user pgtbl]==>into proc_pagetable\n");
                 _proc_create_vm(p);
 
                 if (p->_pt.get_base() == 0)
@@ -125,10 +125,10 @@ namespace proc
                 // 设置调度返回地址为 _wrp_fork_ret
                 // 当调度器切换回该进程时，将从这里开始执行
                 p->_context.ra = (uint64)_wrp_fork_ret;
-                printf("p->_context.ra: %p\n", p->_context.ra);
-                printf("wrp_fork_ret: %p\n", _wrp_fork_ret);
-                void (ProcessManager::*fptr)() = &ProcessManager::fork_ret;
-                printf("ProcessManager::fork_ret: %p\n", (void *)*(uintptr_t *)&fptr);
+                // printf("p->_context.ra: %p\n", p->_context.ra);
+                // printf("wrp_fork_ret: %p\n", _wrp_fork_ret);
+                // void (ProcessManager::*fptr)() = &ProcessManager::fork_ret;
+                // printf("ProcessManager::fork_ret: %p\n", (void *)*(uintptr_t *)&fptr);
 
                 // 设置内核栈指针
                 p->_context.sp = p->_kstack + PGSIZE;
@@ -149,6 +149,7 @@ namespace proc
 
     void ProcessManager::fork_ret()
     {
+        printf("into fork_ret\n");
         proc::Pcb *proc = get_cur_pcb();
         proc->_lock.release();
 
@@ -156,12 +157,6 @@ namespace proc
         if (first)
         {
             first = 0;
-            TODO(
-                // 这个TODO已经完成如下
-                // printf("sp: %x\n", r_sp());
-                filesystem_init();
-                filesystem2_init(); // 启动init
-            )
 
             // 文件系统初始化必须在常规进程的上下文中运行（例如，因为它会调用 sleep），
             // 因此不能从 main() 中运行。(copy form xv6)
@@ -283,8 +278,8 @@ namespace proc
             printfRed("proc_pagetable: map trampoline failed\n");
             return 0;
         }
-        printfGreen("trampoline: %p\n", trampoline);
-        printfGreen("TRAMPOLINE: %p\n", TRAMPOLINE);
+        // printfGreen("trampoline: %p\n", trampoline);
+        // printfGreen("TRAMPOLINE: %p\n", TRAMPOLINE);
         if (mem::k_vmm.map_pages(pt, TRAPFRAME, PGSIZE, (uint64)(p->get_trapframe()), riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_writable_m) == 0)
         {
             mem::k_vmm.vmfree(pt, 0);
@@ -310,8 +305,23 @@ namespace proc
     void ProcessManager::user_init()
     {
 #ifdef RISCV
+        static int inited = 0;
+        // 防止重复初始化
+        if (inited != 0)
+        {
+            panic("re-init user.");
+            return;
+        }
+
         Pcb *p = alloc_proc();
+        if (p == nullptr)
+        {
+            panic("user_init: alloc_proc failed");
+            return;
+        }
+
         _init_proc = p;
+
         // 传入initcode的地址
         mem::k_vmm.uvmfirst(p->_pt, (uint64)initcode_start, (uint64)initcode_end - (uint64)initcode_start);
         // debug
@@ -446,36 +456,37 @@ namespace proc
             printf("\n");
         }
     }
-int ProcessManager::alloc_fd( Pcb *p, fs::file *f, int fd )
-	{
-		// 越界检查
-		if (fd < 0 || fd >= (int)max_open_files||f==nullptr)  
-        return -1;
-		// 不为空先释放资源
-		if ( p->_ofile[ fd ] != nullptr )
-		{
-			close(fd);
-		}
-		p->_ofile[fd] = f;
-		return fd;
-	}
+    int ProcessManager::alloc_fd(Pcb *p, fs::file *f, int fd)
+    {
+        // 越界检查
+        if (fd < 0 || fd >= (int)max_open_files || f == nullptr)
+            return -1;
+        // 不为空先释放资源
+        if (p->_ofile[fd] != nullptr)
+        {
+            close(fd);
+        }
+        p->_ofile[fd] = f;
+        return fd;
+    }
 
-	void ProcessManager::get_cur_proc_tms( tmm::tms *tsv )
-	{
-		Pcb	  *p		= get_cur_pcb();
-		uint64 cur_tick = tmm::k_tm.get_ticks();
+    void ProcessManager::get_cur_proc_tms(tmm::tms *tsv)
+    {
+        Pcb *p = get_cur_pcb();
+        uint64 cur_tick = tmm::k_tm.get_ticks();
 
-		tsv->tms_utime	= p->_user_ticks;
-		tsv->tms_stime	= cur_tick - p->_start_tick - p->_user_ticks;
-		tsv->tms_cstime = tsv->tms_cutime = 0;
+        tsv->tms_utime = p->_user_ticks;
+        tsv->tms_stime = cur_tick - p->_start_tick - p->_user_ticks;
+        tsv->tms_cstime = tsv->tms_cutime = 0;
 
-		for ( auto &pp : k_proc_pool )
-		{
-			if ( pp._state == ProcState::UNUSED || pp._parent != p ) continue;
-			tsv->tms_cutime += pp._user_ticks;
-			tsv->tms_cstime += cur_tick - pp._start_tick - pp._user_ticks;
-		}
-	}
+        for (auto &pp : k_proc_pool)
+        {
+            if (pp._state == ProcState::UNUSED || pp._parent != p)
+                continue;
+            tsv->tms_cutime += pp._user_ticks;
+            tsv->tms_cstime += cur_tick - pp._start_tick - pp._user_ticks;
+        }
+    }
     int ProcessManager::alloc_fd(Pcb *p, fs::file *f)
     {
         int fd;
@@ -498,6 +509,7 @@ int ProcessManager::alloc_fd( Pcb *p, fs::file *f, int fd )
 
     int ProcessManager::fork(uint64 usp)
     {
+        TODO("copy on write fork");
         int i, pid;
         Pcb *np;                // new proc
         Pcb *p = get_cur_pcb(); // current proc
@@ -513,62 +525,21 @@ int ProcessManager::alloc_fd( Pcb *p, fs::file *f, int fd )
         curpt = p->get_pagetable();
         newpt = np->get_pagetable();
 
-        // vm copy : 1. 拷贝LOAD程序段
-
+        if (mem::k_vmm.vm_copy(*curpt, *newpt, 0, p->_sz) < 0)
         {
-            uint64 sec_start;
-            uint64 sec_size;
-            for (int j = 0; j < p->_prog_section_cnt; j++)
-            {
-                auto &pd = p->_prog_sections[j];
-                sec_start = PGROUNDDOWN((uint64)pd._sec_start);
-                sec_size = PGROUNDUP((uint64)pd._sec_start + pd._sec_size) - sec_start;
-                if (mem::k_vmm.vm_copy(*curpt, *newpt, sec_start, sec_size) < 0)
-                {
-                    freeproc(np);
-                    np->_lock.release();
-                    return -1;
-                }
-                np->_prog_sections[j] = pd;
-                np->_prog_section_cnt++;
-            }
+            freeproc(np);
+            np->_lock.release();
+            return -1;
         }
-
-        TODO(// vm copy : 2. 拷贝堆内存
-
-        {
-            ulong heap_start = p->_heap_start;
-            ulong heap_size = hsai::page_round_up(p->_heap_ptr - heap_start);
-            if (mem::k_vmm.vm_copy(*curpt, *newpt, heap_start, heap_size) < 0)
-            {
-                freeproc(np);
-                np->_lock.release();
-                return -2;
-            }
-        })
-
-        TODO(		// vm copy : 3. 拷贝用户栈
-
-		{
-			// 多出的一页是保护页面，防止栈溢出
-			ulong stack_start =
-				mem::vml::vm_ustack_end - ( 1 + default_proc_ustack_pages ) * hsai::page_size;
-			if ( mem::k_vmm.vm_copy( *curpt, *newpt, stack_start,
-									( 1 + default_proc_ustack_pages ) * hsai::page_size ) < 0 )
-			{
-				freeproc( np );
-				np->_lock.release();
-				return -3;
-			}
-		})
 
         np->_sz = p->_sz;
         *np->_trapframe = *p->_trapframe; // 拷贝父进程的陷阱值，而不是直接指向
-        np->_trapframe->a0 = 0;           // fork 返回值为 0
+        if (usp != 0)
+            np->_trapframe->sp = usp; // 如果usp不为0，则设置子进程的用户栈指针
 
-        if (usp)
+        np->_trapframe->a0 = 0; // fork 返回值为 0
 
-            _wait_lock.acquire();
+        _wait_lock.acquire();
         np->_parent = p;
         _wait_lock.release();
 
@@ -591,13 +562,29 @@ int ProcessManager::alloc_fd( Pcb *p, fs::file *f, int fd )
 
         np->_cwd = p->_cwd;           // 继承当前工作目录
         np->_cwd_name = p->_cwd_name; // 继承当前工作目录名称
-        strncpy(np->_name, p->_name, sizeof(p->_name));
+
+        // 为子进程设置名称，添加子进程标识
+        const char child_name_suffix[] = "-child";
+        size_t parent_name_len = strlen(p->_name);
+        size_t suffix_len = strlen(child_name_suffix);
+
+        // 确保不超出缓冲区大小
+        if (parent_name_len + suffix_len < sizeof(np->_name))
+        {
+            strcpy(np->_name, p->_name);
+            strcat(np->_name, child_name_suffix);
+        }
+        else
+        {
+            // 父进程名称太长，需要截断
+            size_t max_parent_len = sizeof(np->_name) - suffix_len - 1;
+            strncpy(np->_name, p->_name, max_parent_len);
+            np->_name[max_parent_len] = '\0';
+            strcat(np->_name, child_name_suffix);
+        }
 
         pid = np->_pid;
 
-        np->_lock.release();
-
-        np->_lock.acquire();
         np->_state = ProcState::RUNNABLE;
         np->_user_ticks = 0;
         np->_lock.release();
@@ -887,6 +874,7 @@ int ProcessManager::alloc_fd( Pcb *p, fs::file *f, int fd )
         // guaranteed that we won't miss any wakeup
         // (wakeup locks p->lock),
         // so it's okay to release lk.
+        // printfCyan("[sleep]proc %s : sleep on chan: %p\n", p->_name, chan);
         p->_lock.acquire();
         lock->release();
 
