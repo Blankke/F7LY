@@ -145,7 +145,6 @@ namespace mem
         for (uint i = 0; i < 512; i++)
         {
             Pte pte = get_pte(i);
-            printfYellow("freewalk: pte[%d]: %p, pte2pa: %p\n", i, pte.get_data(), pte.pa());
             if (pte.is_valid() && (!pte.is_leaf())) // 这也抄错了吧，原来写的pte.get_flags() != 0是什么鬼，comment by @gkq
             {
                 PageTable child;
@@ -155,6 +154,7 @@ namespace mem
             }
             else if (pte.is_valid())
             {
+                printfRed("freewalk: leaf pte[%d]: %p, pte2pa: %p\n", i, pte.get_data(), pte.pa());
                 panic("freewalk: leaf");
             }
         }

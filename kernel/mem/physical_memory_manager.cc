@@ -71,6 +71,7 @@ namespace mem
 
     void PhysicalMemoryManager::free_page(void *pa)
     {
+        // printfCyan("释放物理页:  %p\n", pa);
         _buddy->Free(pa2pgnm(pa));
     }
 
