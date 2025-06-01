@@ -199,10 +199,10 @@ int brk(void *addr)
     return syscall(syscall::SYS_brk, addr);
 }
 
-// char *getcwd(char *buf, size_t size)
-// {
-//     return syscall(syscall::SYS_getcwd, buf, size);
-// }
+char *getcwd(char *buf, size_t size)
+{
+    return (char*)syscall(syscall::SYS_getcwd, buf, size);
+}
 
 int chdir(const char *path)
 {
