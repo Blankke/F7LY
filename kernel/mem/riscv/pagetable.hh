@@ -59,9 +59,11 @@ namespace mem
 		}
 
 		void print_page_table();
+		void print_all_map();
 
 	private:
 		bool _walk_to_next_level(Pte pte, bool alloc, PageTable &pt);
+		void _vmprint(int level, uint64 va_base);
 	};
 
 	extern PageTable k_pagetable;

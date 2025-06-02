@@ -14,6 +14,8 @@
 #include "fs/vfs/file/device_file.hh"
 #include <asm-generic/ioctls.h>
 #include <asm-generic/poll.h>
+#include <linux/sysinfo.h>
+#include "fs/vfs/file/normal_file.hh"
 namespace syscall
 {
     // 创建全局的 SyscallHandler 实例
@@ -95,6 +97,7 @@ namespace syscall
     }
     void SyscallHandler::invoke_syscaller()
     {
+        // printf("[SyscallHandler::invoke_syscaller]invoke syscall handler\n");
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
         uint64 sys_num = p->get_trapframe()->a7; // 获取系统调用号
         // debug
@@ -381,10 +384,46 @@ namespace syscall
         if (_arg_str(0, path, PGSIZE) < 0 ||
             _arg_addr(1, uargv) < 0 || _arg_addr(2, uenvp) < 0)
             return -1;
-        printfCyan("execve fetch path=%s\n", path);
-        printfCyan("execve fetch argv=%p\n", uargv);
-        printfCyan("execve fetch envp=%p\n", uenvp);
 
+        eastl::vector<eastl::string> argv;
+		uint64						 uarg;
+		if ( uargv != 0 )
+		{
+			for ( uint64 i = 0, puarg = uargv;; i++, puarg += sizeof( char * ) )
+			{
+				if ( i >= max_arg_num ) return -1;
+
+				if ( _fetch_addr( puarg, uarg ) < 0 ) return -1;
+
+				if ( uarg == 0 ) break;
+
+				// printfCyan( "execve get arga[%d] = %p\n", i, uarg );
+
+				argv.emplace_back( eastl::string() );
+				if ( _fetch_str( uarg, argv[i], PGSIZE ) < 0 ) return -1;
+                // printfCyan("execve get arga[%d] = %s\n", i, argv[i].c_str());
+			}
+		}
+
+        eastl::vector<eastl::string> envp;
+		ulong						 uenv;
+		if ( uenvp != 0 )
+		{
+			for ( ulong i = 0, puenv = uenvp;; i++, puenv += sizeof( char * ) )
+			{
+				if ( i >= max_arg_num ) return -2;
+
+				if ( _fetch_addr( puenv, uenv ) < 0 ) return -2;
+
+				if ( uenv == 0 ) break;
+
+				envp.emplace_back( eastl::string() );
+				if ( _fetch_str( uenv, envp[i], PGSIZE ) < 0 ) return -2;
+                // printfCyan("execve get envp[%d] = %s\n", i, envp[i].c_str());
+			}
+		}
+
+        return proc::k_pm.execve(path, argv, envp);
         TODO("sys_execve");
         return 0;
     }
@@ -656,6 +695,7 @@ namespace syscall
     uint64 SyscallHandler::sys_clone()
     {
         TODO("TBF")
+        printfYellow("sys_clone\n");
         int flags;
         uint64 stack, tls, ctid, ptid;
         _arg_int(0, flags);
@@ -755,14 +795,74 @@ namespace syscall
 
     uint64 SyscallHandler::sys_times()
     {
-        TODO("sys_times");
-        printfYellow("sys_times\n");
-        return 0;
+        //TODO: 检查一下有没有错
+        tmm::tms tms_val;
+        uint64 tms_addr;
+
+        if (_arg_addr(0, tms_addr) < 0)
+            return -1;
+
+        proc::k_pm.get_cur_proc_tms(&tms_val);
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        if (mem::k_vmm.copy_out(*pt, tms_addr, &tms_val, sizeof(tms_val)) <
+            0)
+            return -1;
+
+        return tmm::k_tm.get_ticks();
     }
+    struct _Utsname
+    {
+        char sysname[65];
+        char nodename[65];
+        char release[65];
+        char version[65];
+        char machine[65];
+        char domainname[65];
+    };
+    static const char _SYSINFO_sysname[] = "F7LY-OS";
+    static const char _SYSINFO_nodename[] = "(none-node)";
+    static const char _SYSINFO_release[] = "V1.0";
+    static const char _SYSINFO_version[] = "V1.0";
+    static const char _SYSINFO_machine[] = "virtual-machine";
+    static const char _SYSINFO_domainname[] = "(none-domain)";
     uint64 SyscallHandler::sys_uname()
     {
-        TODO("sys_uname");
-        printfYellow("sys_uname\n");
+        uint64 usta;
+        uint64 sysa, noda, rlsa, vsna, mcha, dmna;
+
+        if (_arg_addr(0, usta) < 0)
+            return -11;
+        sysa = (uint64)(((_Utsname *)usta)->sysname);
+        noda = (uint64)(((_Utsname *)usta)->nodename);
+        rlsa = (uint64)(((_Utsname *)usta)->release);
+        vsna = (uint64)(((_Utsname *)usta)->version);
+        mcha = (uint64)(((_Utsname *)usta)->machine);
+        dmna = (uint64)(((_Utsname *)usta)->domainname);
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+
+        if (mem::k_vmm.copy_out(*pt, sysa, _SYSINFO_sysname,
+                              sizeof(_SYSINFO_sysname)) < 0)
+            return -1;
+        if (mem::k_vmm.copy_out(*pt, noda, _SYSINFO_nodename,
+                              sizeof(_SYSINFO_nodename)) < 0)
+            return -1;
+        if (mem::k_vmm.copy_out(*pt, rlsa, _SYSINFO_release,
+                              sizeof(_SYSINFO_release)) < 0)
+            return -1;
+        if (mem::k_vmm.copy_out(*pt, vsna, _SYSINFO_version,
+                              sizeof(_SYSINFO_version)) < 0)
+            return -1;
+        if (mem::k_vmm.copy_out(*pt, mcha, _SYSINFO_machine,
+                              sizeof(_SYSINFO_machine)) < 0)
+            return -1;
+        if (mem::k_vmm.copy_out(*pt, dmna, _SYSINFO_domainname,
+                              sizeof(_SYSINFO_domainname)) < 0)
+            return -1;
+
         return 0;
     }
     uint64 SyscallHandler::sys_sched_yield()
@@ -773,8 +873,21 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_gettimeofday()
     {
-        TODO("sys_gettimeofday");
-        printfYellow("sys_gettimeofday\n");
+        //TODO: 检查一下这个
+        uint64 tv_addr;
+        tmm::timeval tv;
+
+        if (_arg_addr(0, tv_addr) < 0)
+            return -1;
+
+        tv = tmm::k_tm.get_time_val();
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        if (mem::k_vmm.copy_out(*pt, tv_addr, (const void *)&tv,
+                              sizeof(tv)) < 0)
+            return -1;
+
         return 0;
     }
     uint64 SyscallHandler::sys_nanosleep()
@@ -952,8 +1065,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_gettid()
     {
-        // TODO
-        return 0;
+        return proc::k_pm.get_cur_pcb()->get_pid();
     }
     uint64 SyscallHandler::sys_writev()
     {
@@ -1054,8 +1166,44 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_getrandom()
     {
-        // TODO
-        return 0;
+        uint64 bufaddr;
+        int buflen;
+        [[maybe_unused]] int flags;
+        proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = pcb->get_pagetable();
+
+        if (_arg_addr(0, bufaddr) < 0)
+            return -1;
+
+        if (_arg_int(1, buflen) < 0)
+            return -1;
+
+        if (_arg_int(2, buflen) < 0)
+            return -1;
+
+        if (bufaddr == 0 && buflen == 0)
+            return -1;
+
+        char *k_buf = new char[buflen];
+        if (!k_buf)
+            return -1;
+
+        ulong random = 0x4249'4C47'4B43'5546UL;
+        size_t random_size = sizeof(random);
+        for (size_t i = 0; i < static_cast<size_t>(buflen);
+             i += random_size)
+        {
+            size_t copy_size =
+                (i + random_size) <= static_cast<size_t>(buflen)
+                    ? random_size
+                    : buflen - i;
+            memcpy(k_buf + i, &random, copy_size);
+        }
+        if (mem::k_vmm.copy_out(*pt, bufaddr, k_buf, buflen) < 0)
+            return -1;
+
+        delete[] k_buf;
+        return buflen;
     }
     uint64 SyscallHandler::sys_clock_gettime()
     {
@@ -1247,7 +1395,36 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_sysinfo()
     {
-        // TODO
+        uint64 sysinfoaddr;
+        [[maybe_unused]] sysinfo sysinfo_;
+
+        if (_arg_addr(0, sysinfoaddr) < 0)
+            return -1;
+
+        proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = cur_proc->get_pagetable();
+
+        memset(&sysinfo_, 0, sizeof(sysinfo_));
+        sysinfo_.uptime = 0;
+        sysinfo_.loads[0] = 0; // 负载均值  1min 5min 15min
+        sysinfo_.loads[1] = 0;
+        sysinfo_.loads[2] = 0;
+        sysinfo_.totalram = 0; // 总内存
+        sysinfo_.freeram = 0;
+        sysinfo_.sharedram = 0;
+        sysinfo_.bufferram = 0;
+        sysinfo_.totalswap = 0;
+        sysinfo_.freeswap = 0;
+        sysinfo_.procs = 0;
+        sysinfo_.pad = 0;
+        sysinfo_.totalhigh = 0;
+        sysinfo_.freehigh = 0;
+        sysinfo_.mem_unit = 1; // 内存单位为 1 字节
+
+        if (mem::k_vmm.copy_out(*pt, sysinfoaddr, &sysinfo_,
+                              sizeof(sysinfo_)) < 0)
+            return -1;
+
         return 0;
     }
     uint64 SyscallHandler::sys_ppoll()
@@ -1382,13 +1559,11 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_geteuid()
     {
-        // TODO
-        return 0;
+        return 1;//抄的
     }
     uint64 SyscallHandler::sys_madvise()
     {
-        // TODO
-        return 0;
+        return 0; // 抄的
     }
     uint64 SyscallHandler::sys_mremap()
     {
@@ -1421,7 +1596,63 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_utimensat()
     {
-        // TODO
+        int dirfd;
+        uint64 pathaddr;
+        eastl::string pathname;
+        uint64 timespecaddr;
+        timespec atime;
+        timespec mtime;
+        int flags;
+
+        if (_arg_int(0, dirfd) < 0)
+            return -1;
+
+        if (_arg_addr(1, pathaddr) < 0)
+            return -1;
+
+        if (_arg_addr(2, timespecaddr) < 0)
+            return -1;
+
+        if (_arg_int(3, flags) < 0)
+            return -1;
+
+        proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = cur_proc->get_pagetable();
+        fs::dentry *base;
+
+        if (dirfd == AT_FDCWD)
+            base = cur_proc->_cwd;
+        else
+            base = static_cast<fs::normal_file *>(cur_proc->_ofile[dirfd])->getDentry();
+
+        if (mem::k_vmm.copy_str_in(*pt, pathname, pathaddr, 128) < 0)
+            return -1;
+
+        if (timespecaddr == 0)
+        {
+            // @todo: 设置为当前时间
+            // atime = NOW;
+            // mtime = NOw;
+        }
+        else
+        {
+            if (mem::k_vmm.copy_in(*pt, &atime, timespecaddr, sizeof(atime)) < 0)
+                return -1;
+
+            if (mem::k_vmm.copy_in(*pt, &mtime, timespecaddr + sizeof(atime), sizeof(mtime)) < 0)
+                return -1;
+        }
+
+        if (_arg_int(3, flags) < 0)
+            return -1;
+
+        fs::Path path(pathname, base);
+        fs::dentry *den = path.pathSearch();
+        if (den == nullptr)
+            return -ENOENT;
+
+        // int fd = path.open();
+
         return 0;
     }
     uint64 SyscallHandler::sys_renameat2()

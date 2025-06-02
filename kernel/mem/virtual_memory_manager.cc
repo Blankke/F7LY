@@ -55,6 +55,7 @@ namespace mem
     // 根据传入的 flags 标志，生成对应的页表权限（perm）值
     bool VirtualMemoryManager::map_pages(PageTable &pt, uint64 va, uint64 size, uint64 pa, uint64 flags)
     {
+        // printf("map_pages: va=0x%x, size=0x%x, pa=0x%x, flags=0x%x\n", va, size, pa, flags);
 #ifdef RISCV
         uint64 a, last;
         Pte pte;
@@ -391,7 +392,8 @@ int VirtualMemoryManager::copy_str_in( PageTable &pt, eastl::string &dst,
             {
                 k_pmm.free_page(pte.pa());
             }
-            pte.clear_data();
+            // printfMagenta("vmunmap: unmap va: %p, pa: %p\n", a, pte.pa());
+            pte.clear_data();      
         }
     }
 
@@ -457,6 +459,7 @@ int VirtualMemoryManager::copy_str_in( PageTable &pt, eastl::string &dst,
 
     void VirtualMemoryManager::vmfree(PageTable &pt, uint64 sz)
     {
+        // printfCyan("[vmm] vmfree: free %p bytes\n", sz);
         if (sz > 0)
             vmunmap(pt, 0, PGROUNDUP(sz) / PGSIZE, 1);
         pt.freewalk();
