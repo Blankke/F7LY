@@ -45,3 +45,8 @@ int sleep(unsigned int seconds);
 void vprintf(int fd, const char *fmt, va_list ap);
 void fprintf(int fd, const char *fmt, ...);
 void printf(const char *fmt, ...);
+
+// test函数
+int run_test(char *test_list);
+int basic_test(void);
+int start_shell(void);

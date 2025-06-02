@@ -96,6 +96,9 @@ SYSCALL_OBJ := build/$(OUTPUT_PREFIX)/syscall.o build/$(OUTPUT_PREFIX)/printf.o
 PRINTF_SRC := user/syscall_lib/printf.cc
 PRINTF_OBJ := build/$(OUTPUT_PREFIX)/printf.o
 
+USER_TEST_SRC := user/user_lib/user_test.cc
+USER_TEST_OBJ := build/$(OUTPUT_PREFIX)/user_test.o
+
 # 编译参数
 INITCODE_CFLAGS := -Wall -O -fno-builtin -fno-exceptions -fno-rtti -fno-stack-protector -nostdlib -ffreestanding $(ARCH_CFLAGS) -Iuser/deps -Iuser/syscall_lib -Iuser/syscall_lib/arch/$(ARCH) -Ikernel/sys -Ikernel
 INITCODE_LDFLAGS := -N -e start -Ttext 0
@@ -140,7 +143,7 @@ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.s
 $(KERNEL_ELF): $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
 	$(LD) $(LDFLAGS) -o $@ $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
 	$(SIZE) $@
-	$(OBJDUMP) -D $@ > kernel.asm
+	# $(OBJDUMP) -D $@ > kernel.asm
 
 $(KERNEL_ELF): $(INITCODE_BIN)
 
@@ -223,8 +226,13 @@ $(PRINTF_OBJ): $(PRINTF_SRC)
 	@mkdir -p $(dir $@)
 	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
 
+# 编译 user_test.o
+$(USER_TEST_OBJ): $(USER_TEST_SRC)
+	@mkdir -p $(dir $@)
+	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
+
 # 链接生成 initcode.elf
-$(INITCODE_ELF): $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ)
+$(INITCODE_ELF): $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(USER_TEST_OBJ)
 	$(LD) $(INITCODE_LDFLAGS) -o $@ $^
 
 # 生成二进制 initcode 文件 + 反汇编
