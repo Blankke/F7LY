@@ -97,6 +97,7 @@ namespace syscall
     }
     void SyscallHandler::invoke_syscaller()
     {
+        // printf("[SyscallHandler::invoke_syscaller]invoke syscall handler\n");
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
         uint64 sys_num = p->get_trapframe()->a7; // 获取系统调用号
         // debug
@@ -383,10 +384,46 @@ namespace syscall
         if (_arg_str(0, path, PGSIZE) < 0 ||
             _arg_addr(1, uargv) < 0 || _arg_addr(2, uenvp) < 0)
             return -1;
-        printfCyan("execve fetch path=%s\n", path);
-        printfCyan("execve fetch argv=%p\n", uargv);
-        printfCyan("execve fetch envp=%p\n", uenvp);
 
+        eastl::vector<eastl::string> argv;
+		uint64						 uarg;
+		if ( uargv != 0 )
+		{
+			for ( uint64 i = 0, puarg = uargv;; i++, puarg += sizeof( char * ) )
+			{
+				if ( i >= max_arg_num ) return -1;
+
+				if ( _fetch_addr( puarg, uarg ) < 0 ) return -1;
+
+				if ( uarg == 0 ) break;
+
+				// printfCyan( "execve get arga[%d] = %p\n", i, uarg );
+
+				argv.emplace_back( eastl::string() );
+				if ( _fetch_str( uarg, argv[i], PGSIZE ) < 0 ) return -1;
+                // printfCyan("execve get arga[%d] = %s\n", i, argv[i].c_str());
+			}
+		}
+
+        eastl::vector<eastl::string> envp;
+		ulong						 uenv;
+		if ( uenvp != 0 )
+		{
+			for ( ulong i = 0, puenv = uenvp;; i++, puenv += sizeof( char * ) )
+			{
+				if ( i >= max_arg_num ) return -2;
+
+				if ( _fetch_addr( puenv, uenv ) < 0 ) return -2;
+
+				if ( uenv == 0 ) break;
+
+				envp.emplace_back( eastl::string() );
+				if ( _fetch_str( uenv, envp[i], PGSIZE ) < 0 ) return -2;
+                // printfCyan("execve get envp[%d] = %s\n", i, envp[i].c_str());
+			}
+		}
+
+        return proc::k_pm.execve(path, argv, envp);
         TODO("sys_execve");
         return 0;
     }
@@ -658,6 +695,7 @@ namespace syscall
     uint64 SyscallHandler::sys_clone()
     {
         TODO("TBF")
+        printfYellow("sys_clone\n");
         int flags;
         uint64 stack, tls, ctid, ptid;
         _arg_int(0, flags);

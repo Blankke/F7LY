@@ -292,7 +292,7 @@ namespace proc
 #endif
         return pt;
     }
-    void ProcessManager::proc_freepagetable(mem::PageTable pt, uint64 sz)
+    void ProcessManager::proc_freepagetable(mem::PageTable &pt, uint64 sz)
     {
 #ifdef RISCV
         mem::k_vmm.vmunmap(pt, TRAMPOLINE, 1, 0);
@@ -324,6 +324,7 @@ namespace proc
         _init_proc = p;
 
         // 传入initcode的地址
+        printfCyan("initcode pagetable: %p\n", p->_pt.get_base());
         mem::k_vmm.uvmfirst(p->_pt, (uint64)initcode_start, (uint64)initcode_end - (uint64)initcode_start);
         // debug
         //  uint64 pa = (uint64)p->_pt.walk_addr((uint64)0);
@@ -1294,36 +1295,480 @@ namespace proc
         return 0;
     }
 
-    int execve(eastl::string path, eastl::vector<eastl::string> args, eastl::vector<eastl::string> envs)
+    int ProcessManager::execve(eastl::string path, eastl::vector<eastl::string> argv, eastl::vector<eastl::string> envs)
     {
-        // // 获取当前进程控制块
-        // Pcb			 *proc = k_pm.get_cur_pcb();
-        // uint64		  sp;           // 栈指针
-        // uint64		  stackbase;    // 栈基地址
-        // mem::PageTable pt;           // 页表（暂未使用）
-        // elf::elfhdr	  elf;          // ELF 文件头
-        // elf::proghdr  ph = {};      // 程序头
-        // fs::dentry	 *de;           // 目录项
-        // int			  i, off;       // 循环变量和偏移量
+        printfRed("execve: %s\n", path.c_str());
+        // 获取当前进程控制块
+        Pcb *proc = k_pm.get_cur_pcb();
 
-        // // ========== 第一阶段：路径解析和文件查找 ==========
+        proc->_pt.print_all_map();
 
-        // // 构建绝对路径
-        // eastl::string ab_path;
-        // if ( path[0] == '/' )
-        // 	ab_path = path;           // 已经是绝对路径
-        // else
-        // 	ab_path = proc->_cwd_name + path;  // 相对路径，添加当前工作目录前缀
+        uint64 old_sz = proc->_sz; // 保存原进程的内存大小
+        uint64 sp;                 // 栈指针
+        uint64 stackbase;          // 栈基地址
+        mem::PageTable new_pt;     // 暂存页表, 防止加载过程中破坏原进程映像
+        elf::elfhdr elf;           // ELF 文件头
+        elf::proghdr ph = {};      // 程序头
+        fs::dentry *de;            // 目录项
+        int i, off;                // 循环变量和偏移量
+        u64 new_sz = 0;            // 新进程映像的大小
 
-        // printfCyan( "execve file : %s", ab_path.c_str() );
+        // ========== 第一阶段：路径解析和文件查找 ==========
 
-        // // 解析路径并查找文件
-        // fs::Path path_resolver( ab_path );
-        // if ( ( de = path_resolver.pathSearch() ) == nullptr )
-        // {
-        // 	printfCyan( "execve: cannot find file" );
-        // 	return -1;
-        // }
-        return -1;
+        // 构建绝对路径
+        eastl::string ab_path;
+        if (path[0] == '/')
+            ab_path = path; // 已经是绝对路径
+        else
+            ab_path = proc->_cwd_name + path; // 相对路径，添加当前工作目录前缀
+
+        printfCyan("execve file : %s\n", ab_path.c_str());
+
+        // 解析路径并查找文件
+        fs::Path path_resolver(ab_path);
+        if ((de = path_resolver.pathSearch()) == nullptr)
+        {
+            printfCyan("execve: cannot find file");
+            return -1;
+        }
+
+        // 读取ELF文件头，验证文件格式
+        de->getNode()->nodeRead(reinterpret_cast<uint64>(&elf), 0, sizeof(elf));
+
+        if (elf.magic != elf::elfEnum::ELF_MAGIC) // 检查ELF魔数
+        {
+            panic("execve: not a valid ELF file");
+            return -1;
+        }
+        printf("execve: ELF file magic: %x\n", elf.magic);
+
+        // ========== 第二阶段：创建新的虚拟地址空间 ==========
+
+        // 创建新的页表，避免在加载过程中破坏原进程映像
+        new_pt = k_pm.proc_pagetable(proc);
+        TODO(if (new_pt == 0) {
+            printfRed("execve: proc_pagetable failed\n");
+            return -1;
+        })
+
+        // 这个地方不能按着学长的代码写, 因为学长的内存布局和我们的不同
+        // 而且他们的proc_pagetable函数是弃用的, 我们的是好的, 直接用这个函数就可以构建基础页表
+
+        // ========== 第三阶段：加载ELF程序段 ==========
+        {
+
+            bool load_bad = false; // 加载失败标志
+
+            // 遍历所有程序头，加载LOAD类型的段
+            for (i = 0, off = elf.phoff; i < elf.phnum; i++, off += sizeof(ph))
+            {
+                // 读取程序头
+                de->getNode()->nodeRead(reinterpret_cast<uint64>(&ph), off, sizeof(ph));
+                printf("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
+                       i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, ph.flags);
+                // 	// 只处理LOAD类型的程序段
+                if (ph.type != elf::elfEnum::ELF_PROG_LOAD)
+                    continue;
+
+                // 验证程序段的合法性
+                if (ph.memsz < ph.filesz)
+                {
+                    printfRed("execve: memsz < ph.filesz\n");
+                    load_bad = true;
+                    break;
+                }
+                if (ph.vaddr + ph.memsz < ph.vaddr) // 检查地址溢出
+                {
+                    printfRed("execve: vaddr + memsz < vaddr\n");
+                    load_bad = true;
+                    break;
+                }
+
+                // 分配虚拟内存空间
+                uint64 sz1;
+                uint64 seg_flag = 16;
+                if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC)
+                    seg_flag |= riscv::PteEnum::pte_executable_m;
+                if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
+                    seg_flag |= riscv::PteEnum::pte_writable_m;
+                if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ)
+                    seg_flag |= riscv::PteEnum::pte_readable_m;
+                printfRed("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
+                          i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, seg_flag);
+                if ((sz1 = mem::k_vmm.vmalloc(new_pt, new_sz, ph.vaddr + ph.memsz, seg_flag)) == 0)
+                {
+                    printfRed("execve: uvmalloc\n");
+                    load_bad = true;
+                    break;
+                }
+                new_sz = sz1; // 更新新进程映像的大小
+
+                // // 用于处理elf文件中给出的段起始地址没有对其到页面首地址的情况(弃用, 我们的load_seg函数已经处理了这个问题)
+                // uint margin_size = 0;
+                // if ((ph.vaddr % PGSIZE) != 0)
+                // {
+                //     margin_size = ph.vaddr % PGSIZE;
+                // }
+
+                // 从文件加载段内容到内存
+                if (load_seg(new_pt, ph.vaddr, de, ph.off, ph.filesz) < 0)
+                {
+                    printf("execve: load_icode\n");
+                    load_bad = true;
+                    break;
+                }
+            }
+            // 如果加载过程中出错，清理已分配的资源
+            if (load_bad)
+            {
+                printfRed("execve: load segment failed\n");
+                k_pm.proc_freepagetable(new_pt, new_sz);
+                return -1;
+            }
+        }
+
+        TODO(== == == == == 第四阶段：为glibc准备程序头信息 == == == == ==)
+        // ================    没写    ========================
+
+        // 将ELF程序头转储到用户空间，供glibc的动态链接器使用
+        TODO(u64 phdr = 0; // AT_PHDR辅助向量的值
+             {
+                 ulong phsz = elf.phentsize * elf.phnum; // 程序头表的总大小
+                 u64 sz1;
+                 u64 load_end = 0; // 所有LOAD段的结束地址
+
+                 // 找到所有LOAD段的最高结束地址
+                 for (auto &sec : new_sec_desc)
+                 {
+                     u64 end = (ulong)sec._sec_start + sec._sec_size;
+                     if (end > load_end)
+                         load_end = end;
+                 }
+
+                 // 在LOAD段之后分配空间存放程序头
+                 load_end = hsai::page_round_up(load_end);
+                 if ((sz1 = mm::k_vmm.vm_alloc(new_pt, load_end, load_end + phsz)) == 0)
+                 {
+                     log_error("execve: vaalloc");
+                     _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+                     return -1;
+                 }
+
+                 // 分配临时缓冲区读取程序头
+                 u8 *tmp = new u8[phsz + 8];
+                 if (tmp == nullptr)
+                 {
+                     log_error("execve: no mem");
+                     _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+                     return -1;
+                 }
+
+                 // 从文件读取程序头表
+                 if (de->getNode()->nodeRead((ulong)tmp, elf.phoff, phsz) != phsz)
+                 {
+                     log_error("execve: node read");
+                     delete[] tmp;
+                     _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+                     return -1;
+                 }
+
+                 // 将程序头表拷贝到用户空间
+                 if (mm::k_vmm.copyout(new_pt, load_end, (void *)tmp, phsz) < 0)
+                 {
+                     log_error("execve: copy out");
+                     delete[] tmp;
+                     _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+                     return -1;
+                 }
+
+                 delete[] tmp;
+
+                 phdr = load_end; // 记录程序头在用户空间的地址
+
+                 // 将程序头段作为一个程序段记录下来
+                 psd_t &ph_psd = new_sec_desc[new_sec_cnt];
+                 ph_psd._sec_start = (void *)phdr;
+                 ph_psd._sec_size = phsz;
+                 ph_psd._debug_name = "program headers";
+                 new_sec_cnt++;
+
+                 new_sz += hsai::page_round_up(phsz);
+             })
+
+        // ========== 第五阶段：分配用户栈空间 ==========
+
+        { // 按照内存布局分配用户栈空间
+            int stack_pgnum = 32;
+            new_sz = PGROUNDUP(new_sz); // 将大小对齐到页边界
+            uint64 sz1;
+            if ((sz1 = mem::k_vmm.uvmalloc(new_pt, new_sz, new_sz + stack_pgnum * PGSIZE, PTE_W | PTE_X | PTE_R | PTE_U)) == 0)
+            {
+                printfRed("execve: load user stack failed\n");
+                k_pm.proc_freepagetable(new_pt, new_sz);
+                return -1;
+            }
+            new_sz = sz1;                                                     // 更新新进程映像的大小
+            mem::k_vmm.uvmclear(new_pt, new_sz - (stack_pgnum - 1) * PGSIZE); // 设置guardpage
+            sp = new_sz;                                                      // 栈指针从顶部开始
+            stackbase = sp - (stack_pgnum - 1) * PGSIZE;                      // 计算栈底地址
+            sp -= sizeof(uint64);                                             // 为返回地址预留空间
+        }
+
+        // ========== 第六阶段：准备glibc所需的用户栈数据 ==========
+        // 为了兼容glibc，需要在用户栈中按照特定顺序压入：
+        // 栈顶 -> 栈底：argc, argv[], envp[], auxv[], 字符串数据, 随机数据
+        // TODO: 这里没写auxv
+
+        TODO(
+            mm::UserstackStream ustack((void *)stackbase, stack_page_cnt * hsai::page_size, &new_pt);
+            ustack.open();)
+        TODO(
+            // 1. 压入伪随机数据（glibc要求，用于安全性）
+            u64 rd_pos = 0;
+            {
+                ulong data;
+                data = 0; // 栈底标记
+                ustack << data;
+                data = -0x11'4514'FF11'4514UL; // 伪随机数1
+                ustack << data;
+                data = 0x2UL << 60; // 伪随机数2
+                ustack << data;
+                data = 0x3UL << 60; // 伪随机数3
+                ustack << data;
+
+                rd_pos = ustack.sp(); // 记录随机数据的位置，用于AT_RANDOM
+            })
+
+        // 2. 压入环境变量
+        uint64 uenvp[MAXARG];
+        uint64 envc;
+
+        for (envc = 0; envc < envs.size(); envc++)
+        {
+            if (envc >= MAXARG)
+            { // 检查环境变量数量限制
+                printfRed("execve: too many envs\n");
+                k_pm.proc_freepagetable(new_pt, new_sz);
+                return -1;
+            }
+            sp -= envs[envc].size() + 1; // 为环境变量字符串预留空间(包括null)
+            sp -= sp % 16;               // 对齐到16字节
+            if (sp < stackbase + PGSIZE)
+            {
+                printfRed("execve: stack overflow\n");
+                k_pm.proc_freepagetable(new_pt, new_sz);
+                return -1;
+            }
+            if (mem::k_vmm.copy_out(new_pt, sp, envs[envc].c_str(), envs[envc].size() + 1) < 0)
+            {
+                printfRed("execve: copy envs failed\n");
+                k_pm.proc_freepagetable(new_pt, new_sz);
+                return -1;
+            }
+            uenvp[envc] = sp; // 记录字符串地址
+        }
+        uenvp[envc] = 0; // envp数组以NULL结尾
+
+        // 3. 压入命令行参数字符串
+        uint64 uargv[MAXARG]; // 命令行参数指针数组
+        uint64 argc;          // 命令行参数数量
+        for (argc = 0; argc < argv.size(); argc++)
+        {
+            if (argc >= MAXARG)
+            { // 检查参数数量限制
+                printfRed("execve: too many args\n");
+                k_pm.proc_freepagetable(new_pt, new_sz);
+                return -1;
+            }
+            sp -= argv[argc].size() + 1; // 为参数字符串预留空间(包括null)
+            sp -= sp % 16;               // 对齐到16字节
+            if (sp < stackbase + PGSIZE)
+            {
+                printfRed("execve: stack overflow\n");
+                k_pm.proc_freepagetable(new_pt, new_sz);
+                return -1;
+            }
+            if (mem::k_vmm.copy_out(new_pt, sp, argv[argc].c_str(), argv[argc].size() + 1) < 0)
+            {
+                printfRed("execve: copy args failed\n");
+                k_pm.proc_freepagetable(new_pt, new_sz);
+                return -1;
+            }
+            uargv[argc] = sp; // 记录字符串地址
+        }
+        uargv[argc] = 0; // argv数组以NULL结尾
+
+        TODO(
+            // 4. 压入辅助向量（auxv），供动态链接器使用
+            {
+                elf::Elf64_auxv_t aux;
+
+                // auxv数组以AT_NULL结尾
+                aux.a_type = elf::AT_NULL;
+                aux.a_un.a_val = 0;
+                ustack << aux;
+                if (ustack.errno() != ustack.rc_ok)
+                {
+                    _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+                    log_error("execve: push into stack");
+                    return -1;
+                }
+
+                // 如果有程序头信息，添加相关的辅助向量
+                if (phdr != 0)
+                {
+                    // AT_PAGESZ：页面大小
+                    aux.a_type = elf::AT_PAGESZ;
+                    aux.a_un.a_val = hsai::page_size;
+                    ustack << aux;
+                    if (ustack.errno() != ustack.rc_ok)
+                    {
+                        _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+                        log_error("execve: push into stack");
+                        return -1;
+                    }
+
+                    // AT_PHNUM：程序头数量
+                    aux.a_type = elf::AT_PHNUM;
+                    aux.a_un.a_val = elf.phnum;
+                    ustack << aux;
+                    if (ustack.errno() != ustack.rc_ok)
+                    {
+                        _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+                        log_error("execve: push into stack");
+                        return -1;
+                    }
+
+                    // AT_PHENT：程序头条目大小
+                    aux.a_type = elf::AT_PHENT;
+                    aux.a_un.a_val = elf.phentsize;
+                    ustack << aux;
+                    if (ustack.errno() != ustack.rc_ok)
+                    {
+                        _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+                        log_error("execve: push into stack");
+                        return -1;
+                    }
+
+                    // AT_PHDR：程序头地址
+                    aux.a_type = elf::AT_PHDR;
+                    aux.a_un.a_val = phdr;
+                    ustack << aux;
+                    if (ustack.errno() != ustack.rc_ok)
+                    {
+                        _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+                        log_error("execve: push into stack");
+                        return -1;
+                    }
+                }
+
+                // AT_RANDOM：随机数据地址（安全性要求）
+                aux.a_type = elf::AT_RANDOM;
+                aux.a_un.a_val = rd_pos;
+                ustack << aux;
+                if (ustack.errno() != ustack.rc_ok)
+                {
+                    _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
+                    log_error("execve: push into stack");
+                    return -1;
+                }
+            })
+        // 5. 压入环境变量指针数组（envp）
+        if (uenvp[0])
+        {
+            sp -= (envc + 1) * sizeof(uint64); // 为envp数组预留空间
+            sp -= sp % 16;                     // 对齐到16字节
+            if (sp < stackbase + PGSIZE)
+            {
+                printfRed("execve: stack overflow\n");
+                k_pm.proc_freepagetable(new_pt, new_sz);
+                return -1;
+            }
+            if (mem::k_vmm.copy_out(new_pt, sp, uenvp, (envc + 1) * sizeof(uint64)) < 0)
+            {
+                printfRed("execve: copy envp failed\n");
+                k_pm.proc_freepagetable(new_pt, new_sz);
+                return -1;
+            }
+        }
+        proc->_trapframe->a2 = sp; // 设置栈指针到trapframe
+
+        // 6. 压入命令行参数指针数组（argv）
+        if (uargv[0])
+        {
+            sp -= (argc + 1) * sizeof(uint64); // 为argv数组预留空间
+            sp -= sp % 16;                     // 对齐到16字节
+            if (sp < stackbase + PGSIZE)
+            {
+                printfRed("execve: stack overflow\n");
+                k_pm.proc_freepagetable(new_pt, new_sz);
+                return -1;
+            }
+            if (mem::k_vmm.copy_out(new_pt, sp, uargv, (argc + 1) * sizeof(uint64)) < 0)
+            {
+                printfRed("execve: copy argv failed\n");
+                k_pm.proc_freepagetable(new_pt, new_sz);
+                return -1;
+            }
+        }
+        proc->_trapframe->a1 = sp; // 设置argv指针到trapframe
+
+        // 7. 压入参数个数（argc）
+        sp -= sizeof(uint64);
+        if (mem::k_vmm.copy_out(new_pt, sp, (char *)&argc, sizeof(uint64)) < 0)
+        {
+            printfRed("execve: copy argc failed\n");
+            k_pm.proc_freepagetable(new_pt, new_sz);
+            return -1;
+        }
+        proc->_trapframe->a0 = argc; // 设置参数个数到trapframe
+
+        // 步骤13: 保存程序名用于调试
+        // 从路径中提取文件名
+        size_t last_slash = ab_path.find_last_of('/');
+        eastl::string filename;
+        if (last_slash != eastl::string::npos)
+        {
+            filename = ab_path.substr(last_slash + 1); // 提取最后一个'/'之后的部分
+        }
+        else
+        {
+            filename = ab_path; // 如果没有'/'，整个路径就是文件名
+        }
+
+        // 使用safestrcpy将文件名安全地拷贝到进程的_name成员变量中
+        safestrcpy(proc->_name, filename.c_str(), sizeof(proc->_name));
+
+        printfGreen("execve: process name set to '%s'\n", proc->_name);
+
+        // ========== 第七阶段：配置进程资源限制 ==========
+        // 设置栈大小限制
+        proc->_rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_cur =
+            proc->_rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_max = sp - stackbase;
+        // 处理F_DUPFD_CLOEXEC标志位，关闭设置了该标志的文件描述符
+        for (auto &f : proc->_ofile)
+        {
+            if (f != nullptr && f->_fl_cloexec)
+            {
+                f->free_file();
+                f = nullptr;
+            }
+        }
+
+        // ========== 第八阶段：替换进程映像 ==========
+        mem::PageTable old_pt;
+        old_pt = *proc->get_pagetable(); // 获取当前进程的页表
+        proc->_sz = PGROUNDUP(new_sz);   // 更新进程大小
+        printf("execve: entry point: %p, new size: %d\n", elf.entry, proc->_sz);
+        proc->_trapframe->epc = elf.entry; // 设置程序计数器为入口点
+        proc->_pt = new_pt;                // 替换为新的页表
+        proc->_trapframe->sp = sp;         // 设置栈指针
+
+        printf("execve: new process size: %d, new pagetable: %p\n", proc->_sz, proc->_pt);
+        k_pm.proc_freepagetable(old_pt, old_sz);
+
+        printf("execve succeed, new process size: %d\n", proc->_sz);
+
+        return argc; // 返回参数个数，表示成功执行
     }
 }; // namespace proc

@@ -41,7 +41,7 @@ namespace proc
         void set_killed(Pcb *p);
 
         mem::PageTable proc_pagetable(Pcb *p);
-        void proc_freepagetable(mem::PageTable pt, uint64 sz);
+        void proc_freepagetable(mem::PageTable &pt, uint64 sz);
         void freeproc(Pcb *p);
         void sche_proc(Pcb *p);
 
@@ -60,7 +60,7 @@ namespace proc
 
         int exec(eastl::string path, eastl::vector<eastl::string> argv); // 执行新程序
         int growproc(int n);                            // 扩展进程内存
-        int execve(eastl::string path, eastl::vector<eastl::string> args, eastl::vector<eastl::string> envs);
+        int execve(eastl::string path, eastl::vector<eastl::string> argv, eastl::vector<eastl::string> envs);
         int wait(int child_pid, uint64 addr);
         int load_seg(mem::PageTable &pt, uint64 va, fs::dentry *de, uint offset, uint size);
 

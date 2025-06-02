@@ -47,6 +47,7 @@ int sched_yield(void)
 
 pid_t fork(void)
 {
+    printf("fork called\n");
     return syscall(syscall::SYS_clone, syscall::SIGCHILD, 0, 0, 0, 0);
 }
 

@@ -154,7 +154,9 @@ namespace mem
             }
             else if (pte.is_valid())
             {
-                printfRed("freewalk: leaf pte[%d]: %p, pte2pa: %p\n", i, pte.get_data(), pte.pa());
+                // printfRed("freewalk: leaf pte[%d]: %p, pte2pa: %p\n", i, pte.get_data(), pte.pa());
+                // 打印当前页表项va
+                printfRed("freewalk: leaf pte[%d]: %p, pte2pa: %p, va: %p\n", i, pte.get_data(), pte.pa(), (void *)(get_base() + 8 * i));
                 panic("freewalk: leaf");
             }
         }
@@ -255,5 +257,48 @@ namespace mem
         }
         k_pmm.free_page((void *)(get_base()));
 #endif
+    }
+
+
+    void PageTable::print_all_map()
+    {
+        printf("print pagetable %p\n", get_base());
+        _vmprint(1, 0);  // 从虚拟地址0开始
+    }
+
+    void PageTable::_vmprint(int level, uint64 va_base)
+    {
+        // there are 2^9 = 512 PTEs in a page table.
+    for (int i = 0; i < 512; i++)
+    {
+        Pte pte = get_pte(i);
+        // PTE_V is a flag for whether the page table is valid
+        if (pte.is_valid())
+        {
+            for (int j = 0; j < level; j++)
+            {
+                if (j) printf(" ");
+                printf("..");
+            }
+            uint64 child = (uint64)pte.pa();
+            
+            if (!pte.is_leaf())
+            {
+                printf("%d: pte %p pa %p\n", i, pte.get_data(), child);
+                // this PTE points to a lower-level page table.
+                PageTable child_pt;
+                child_pt.set_base(child);
+                // 计算下一级的虚拟地址基址
+                uint64 next_va_base = va_base | ((uint64)i << (12 + 9 * (2 - level)));
+                child_pt._vmprint(level + 1, next_va_base);
+            }
+            else
+            {
+                // 对于leaf页面，计算完整的虚拟地址
+                uint64 va = va_base | ((uint64)i << 12);
+                printf("%d: pte %p pa %p va %p\n", i, pte.get_data(), child, (void*)va);
+            }
+        }
+    }
     }
 }
