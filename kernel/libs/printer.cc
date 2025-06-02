@@ -106,17 +106,31 @@ void Printer::print( const char *fmt, ... )
       printint(va_arg(ap, int), 10, 1);
       break;
     case 'u':
-      printint(va_arg(ap, uint), 16, 0);
+      printint(va_arg(ap, uint), 10, 0);
       break;
     case 'x': {
-      int val = va_arg(ap, int);
+      // 打印无符号16进制
+      unsigned int val = va_arg(ap, unsigned int);
       char buf[16];
       int j = 0;
-      unsigned int x = val;
       do {
-        buf[j++] = _lower_digits[x % 16];
-      } while ((x /= 16) != 0);
+        buf[j++] = _lower_digits[val % 16];
+      } while ((val /= 16) != 0);
       // Padding with '0' if width > j
+      for (int k = j; k < width; k++)
+        _console->console_putc('0');
+      while (--j >= 0)
+        _console->console_putc(buf[j]);
+      break;
+    }
+    case 'X': {
+      // 打印大写无符号16进制
+      unsigned int val = va_arg(ap, unsigned int);
+      char buf[16];
+      int j = 0;
+      do {
+        buf[j++] = _upper_digits[val % 16];
+      } while ((val /= 16) != 0);
       for (int k = j; k < width; k++)
         _console->console_putc('0');
       while (--j >= 0)

@@ -1,10 +1,14 @@
 #pragma once
 #include "types.hh"
 #include "devs/spinlock.hh"
-
+namespace tmm
+{
+    class TimerManager;
+}
 
 class trap_manager
 {
+friend  class tmm::TimerManager;
 public:
     void init();
     void inithart();

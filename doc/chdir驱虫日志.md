@@ -171,7 +171,7 @@ Ramfs->mount()初始化会调用init，我们在inode结点从磁盘读取的地
 ```c
       disk.desc[idx[0]].addr = mem::k_pagetable.kwalk_addr((uint64) &buf0);
 ```
-- 就在这个时候，在官老师离去的20后，磁盘修好了，打出来的输出可以对上了：
+- 就在这个时候，在官老师离去的20s后，磁盘修好了，打出来的输出可以对上了：
 ```sh
 Buffer content at LBA 8:
 01 02 00 00 11 02 00 00 21 02 00 00 d8 00 74 13 

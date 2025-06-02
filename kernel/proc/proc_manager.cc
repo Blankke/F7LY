@@ -877,12 +877,10 @@ namespace proc
         // printfCyan("[sleep]proc %s : sleep on chan: %p\n", p->_name, chan);
         p->_lock.acquire();
         lock->release();
-
         // go to sleep
         p->_chan = chan;
         p->_state = ProcState::SLEEPING;
         k_scheduler.call_sched();
-
         p->_chan = 0;
 
         p->_lock.release();

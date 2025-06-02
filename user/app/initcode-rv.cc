@@ -30,7 +30,7 @@ extern "C"
 {
     int main()
     {
-        printf("Hello, World\n");
+        printf("Hello, World!\n");
         int a = 7;
         printf("a = %d\n", a);
         while (a--)
@@ -56,6 +56,13 @@ extern "C"
 
         basic_test();
         printf("#### OS COMP TEST GROUP END basic-glibc ####\n");
+        for (size_t i = 0; i < 50; i++)
+        {
+            printf("sleep %d ticks\n",100 );
+            sleep(10);
+            printf("It is %d\n",i);
+        }
+
         // start_shell();
         while(1);
         shutdown();

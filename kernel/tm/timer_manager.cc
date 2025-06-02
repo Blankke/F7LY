@@ -9,7 +9,7 @@
 #include "tm/timer_manager.hh"
 #include "proc/proc_manager.hh"
 #include "klib.hh"
-
+#include "trap/riscv/trap.hh"
 #include "timer_interface.hh"
 
 namespace tmm
@@ -20,7 +20,7 @@ namespace tmm
 	{
 		_lock.init(lock_name);
 
-		_ticks = 0;
+		trap_mgr.ticks = 0;
 		printfGreen("[TM] Timer Manager Init\n");
 		// close_ti_intr();
 	}
@@ -41,16 +41,16 @@ namespace tmm
 	// 	_lock.release();
 	// }
 
-	int TimerManager::handle_clock_intr()
-	{
-		_lock.acquire();
-		_ticks++;
-		// printf( "t" );
-		// loongarch::Cpu::write_csr( loongarch::csr::CsrAddr::tcfg, _tcfg_data );
-		proc::k_pm.wakeup(&_ticks);
-		_lock.release();
-		return 0;
-	}
+	// int TimerManager::handle_clock_intr()
+	// {
+	// 	_lock.acquire();
+	// 	trap_mgr.ticks++;
+	// 	// printf( "t" );
+	// 	// loongarch::Cpu::write_csr( loongarch::csr::CsrAddr::tcfg, _tcfg_data );
+	// 	proc::k_pm.wakeup(&trap_mgr.ticks);
+	// 	_lock.release();
+	// 	return 0;
+	// }
 
 	timeval TimerManager::get_time_val()
 	{
@@ -59,7 +59,7 @@ namespace tmm
 
 		_lock.acquire();
 		t_val = tmm::get_hw_time_stamp();
-		t_val += _ticks * cpt;
+		t_val += trap_mgr.ticks * cpt;
 		_lock.release();
 
 		timeval tv;
@@ -67,8 +67,8 @@ namespace tmm
 		tv.tv_usec = t_val % tmm::get_main_frequence();
 		tv.tv_usec = tmm::time_stamp_to_usec(tv.tv_usec);
 
-		// tv.tv_sec = _ticks * ms_per_tick / 1000;
-		// tv.tv_usec = ( ( _ticks * ms_per_tick ) % 1000 ) * 1000;
+		// tv.tv_sec = trap_mgr.trap_mgr.ticks * ms_per_tick / 1000;
+		// tv.tv_usec = ( ( trap_mgr.trap_mgr.ticks * ms_per_tick ) % 1000 ) * 1000;
 
 		Info("invoke get time = %d : %d", tv.tv_sec, tv.tv_usec);
 		return tv;
@@ -83,15 +83,16 @@ namespace tmm
 		proc::Pcb *p = proc::k_pm.get_cur_pcb();
 
 		_lock.acquire();
-		tick_tmp = _ticks;
-		while (_ticks - tick_tmp < (uint64)n)
+		tick_tmp = trap_mgr.ticks;
+		while ((int)trap_mgr.ticks - (int)tick_tmp < (int)n)
 		{
+			// printfGreen("ticks now:%d,ticks left:%d\n",(int)trap_mgr.ticks,(int)tick_tmp);
 			if (p->is_killed())
 			{
 				_lock.release();
 				return -2;
 			}
-			proc::k_pm.sleep(&_ticks, &_lock);
+			proc::k_pm.sleep(&trap_mgr.ticks, &_lock);
 		}
 		_lock.release();
 
@@ -106,9 +107,11 @@ namespace tmm
 
 		uint64 n = tv.tv_sec * tmm::get_main_frequence();
 		uint64 cpt = tmm::cycles_per_tick();
+		// printfBlue("sleep from tv: %u ticks\n", n);
 		n += tmm::usec_to_time_stamp(tv.tv_usec);
+		// printfBlue("sleep from tv: %u ticks\n", n);
 		n /= cpt;
-		printfBlue("sleep from tv: %d ticks", n);
+		printfBlue("sleep from tv: %u ticks\n", n);
 		if (n == 0)
 			return 0; // 如果转换结果为0，直接返回
 		return sleep_n_ticks(n);
@@ -125,7 +128,7 @@ namespace tmm
 
 		_lock.acquire();
 		t_val = tmm::get_hw_time_stamp();
-		t_val += _ticks * cpt;
+		t_val += trap_mgr.ticks * cpt;
 		_lock.release();
 
 		tp->tv_sec = (long)(t_val / freq);
@@ -137,7 +140,7 @@ namespace tmm
 
 		return 0;
 	}
-
+ uint64 TimerManager::get_ticks() { return trap_mgr.ticks; };
 	extern "C"
 	{
 
