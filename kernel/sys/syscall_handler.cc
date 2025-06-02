@@ -128,7 +128,7 @@ namespace syscall
 
     // ---------------- private helper functions ----------------
 
-    int SyscallHandler::_fetch_addr(uint64 addr, uint64 & out_data)
+    int SyscallHandler::_fetch_addr(uint64 addr, uint64 &out_data)
     {
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
         // if ( addr >= p->get_size() || addr + sizeof( uint64 ) > p->get_size()
@@ -139,7 +139,7 @@ namespace syscall
         return 0;
     }
 
-    int SyscallHandler::_fetch_str(uint64 addr, eastl::string & buf, uint64 max)
+    int SyscallHandler::_fetch_str(uint64 addr, eastl::string &buf, uint64 max)
     {
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
@@ -314,9 +314,22 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_dup3()
     {
-        TODO("sys_dup3");
-        printfYellow("sys_dup3\n");
-        return 0;
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        fs::file *f;
+        int fd;
+        [[maybe_unused]] int oldfd = 0;
+
+        if (_arg_fd(0, &oldfd, &f) < 0)
+            return -1;
+        if (_arg_int(1, fd) < 0)
+            return -1;
+        if (fd == oldfd)
+            return fd;
+        if (proc::k_pm.alloc_fd(p, f, fd) < 0)
+            return -1;
+        // fs::k_file_table.dup( f );
+        f->dup();
+        return fd;
     }
     uint64 SyscallHandler::sys_read()
     {
@@ -352,9 +365,13 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_kill()
     {
-        TODO("sys_kill");
-        printfYellow("sys_kill\n");
-        return 0;
+        int pid;
+        if(_arg_int(0,pid)<0)
+        {
+                        printfRed("[SyscallHandler::sys_wait] Error fetching arguments\n");
+                        return -1;
+        }
+        return proc::k_pm.kill_proc(pid);
     }
     uint64 SyscallHandler::sys_execve()
     {
@@ -535,15 +552,12 @@ namespace syscall
             printfRed("[SyscallHandler::sys_sleep] Error fetching n argument\n");
             return -1;
         }
-        printfGreen("炸飞机：%d\n",n);
-                n/=2;
+        n /= 2;
         return tmm::k_tm.sleep_n_ticks(n);
     }
     uint64 SyscallHandler::sys_uptime()
     {
-        TODO("sys_uptime");
-        printfYellow("sys_uptime\n");
-        return 0;
+        return tmm::k_tm.get_ticks();
     }
     uint64 SyscallHandler::sys_openat()
     {
@@ -599,9 +613,20 @@ namespace syscall
 
     uint64 SyscallHandler::sys_unlinkat()
     {
-        TODO("sys_unlinkat");
-        printfYellow("sys_unlinkat\n");
-        return 0;
+        //copy from Li
+		int	   fd, flags;
+		uint64 path_addr;
+
+		if ( _arg_int( 0, fd ) < 0 ) return -1;
+		if ( _arg_addr( 1, path_addr ) < 0 ) return -1;
+		if ( _arg_int( 2, flags ) < 0 ) return -1;
+		eastl::string  path;
+		proc::Pcb		  *p  = proc::k_pm.get_cur_pcb();
+		mem::PageTable *pt = p->get_pagetable();
+		if ( mem::k_vmm.copy_str_in( *pt, path, path_addr, 100 ) < 0 ) return -1;
+
+		int res = proc::k_pm.unlink( fd, path, flags );
+		return res;
     }
     uint64 SyscallHandler::sys_linkat()
     {
@@ -872,8 +897,8 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_getgid()
     {
-        // TODO 
-        return 1; //直接返回1，抄学长的
+        // TODO
+        return 1; // 直接返回1，抄学长的
     }
     uint64 SyscallHandler::sys_setgid()
     {
@@ -1140,7 +1165,7 @@ namespace syscall
         uint64 fmt_addr;
         eastl::string msg = "Spectre V2 : Update user space SMT mitigation: STIBP always-on\n"
                             "process_manager : execve set stack-base = 0x0000_0000_9194_5000\n"
-                            "pm/process_manager : execve set page containing sp is 0x0000_0000_9196_4000";
+                            "proc/process_manager : execve set page containing sp is 0x0000_0000_9196_4000";
         [[maybe_unused]] proc::Pcb *p = proc::k_pm.get_cur_pcb();
         [[maybe_unused]] mem::PageTable *pt = p->get_pagetable();
 

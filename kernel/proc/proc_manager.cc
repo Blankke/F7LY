@@ -1195,6 +1195,11 @@ namespace proc
 
         return 0;
     }
+/// @brief 从当前工作目录中删除指定路径的文件或目录项。
+/// @param fd 基准目录的文件描述符，若为 -100 表示以当前工作目录为基准（AT_FDCWD）。其他值暂不支持。
+/// @param path 要删除的文件或目录的相对路径，不能为空字符串，支持"./"开头的路径格式。
+/// @param flags 暂未使用的标志位参数，预留以支持 future 的 unlinkat 扩展。
+/// @return 成功返回 0，失败返回 -1。
     int ProcessManager::unlink(int fd, eastl::string path, int flags)
     {
 

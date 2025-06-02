@@ -59,13 +59,13 @@ extern "C"
 
         basic_test();
         printf("#### OS COMP TEST GROUP END basic-glibc ####\n");
-        for (size_t i = 0; i < 50; i++)
+        for (size_t i = 0; i < 25; i++)
         {
-            printf("sleep %d ticks\n",100 );
+            printf("sleep %d ticks\n",i );
             sleep(10);
             // printf("It is %d\n",i);
         }
-
+        printf("WAKE UP!");
         // start_shell();
         while(1);
         shutdown();

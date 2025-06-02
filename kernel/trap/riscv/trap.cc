@@ -105,7 +105,7 @@ int trap_manager::devintr()
   }
   if (scause == 0x8000000000000005L)
   {
-    printfBlue("1");
+    // printfBlue("zzZ");
     timertick();
 
     /// TODO: riscv可以用sbi的tick来实现时钟
@@ -129,9 +129,8 @@ void trap_manager::timertick()
   // increment the ticks count
   ticks++;
   proc::k_pm.wakeup(&ticks);
-  // !!写完进城后修改
-  // wakeup(&ticks);
-	printfCyan("[tm]  timertick here,p->addr:%x \n",Cpu::get_cpu()->get_cur_proc());
+
+	// printfCyan("[tm]  timertick here,p->addr:%x \n",Cpu::get_cpu()->get_cur_proc());
   // release the lock
   tickslock.release();
 
@@ -168,15 +167,7 @@ void trap_manager::kerneltrap()
     panic("kerneltrap");
   }
 
-  //!! 写完进程后修改
-  // give up the CPU if this is a timer interrupt.
-  // if(which_dev == 2 && myproc() != 0 && myproc()->state == RUNNING) {
-  //   timeslice++; //让一个进程连续执行若干时间片，printf线程不安全
-  //   if(timeslice >= 5){
-  //     timeslice = 0;
-  //     yield();
-  //   }
-  // }
+
   if (which_dev == 2&& Cpu::get_cpu()->get_cur_proc()!=nullptr&&Cpu::get_cpu()->get_cur_proc()->_state==proc::RUNNING)
   {
     timeslice++; // 让一个进程连续执行若干时间片，printf线程不安全
@@ -255,7 +246,7 @@ void trap_manager::usertrap()
     if (timeslice >= 5)
     {
       timeslice = 0;
-      printf("yield in usertrap\n");
+      // printf("yield in usertrap\n");
       proc::k_scheduler.yield();
     }
   }
