@@ -296,7 +296,8 @@ namespace proc
     {
 #ifdef RISCV
         mem::k_vmm.vmunmap(pt, TRAMPOLINE, 1, 0);
-        mem::k_vmm.vmfree(pt, 0);
+        mem::k_vmm.vmunmap(pt, TRAPFRAME, 1, 0);
+        mem::k_vmm.vmfree(pt, sz);
 #elif defined(LOONGARCH)
 // TODO
 #endif

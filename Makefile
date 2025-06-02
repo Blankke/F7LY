@@ -170,7 +170,7 @@ $(USER_BUILD_DIR)/%.o: user/%.cpp
 $(KERNEL_ELF): $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
 	$(LD) $(LDFLAGS) -o $@ $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
 	$(SIZE) $@
-	$(OBJDUMP) -D $@ > kernel.asm
+	# $(OBJDUMP) -D $@ > kernel.asm
 
 $(KERNEL_BIN): $(KERNEL_ELF)
 	$(OBJCOPY) -O binary $< $@

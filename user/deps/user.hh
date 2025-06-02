@@ -32,10 +32,9 @@ int dup(int fd);
 int mount(const char *special, const char *dir, const char *fstype, unsigned long flags, const void *data);
 int umount(const char *special);
 int fork(void);
-
+char *getcwd(char *buf, size_t size);
 // proc
 int shutdown();
-
 
 // add
 int sleep(unsigned int seconds);

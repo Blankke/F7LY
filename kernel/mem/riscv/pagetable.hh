@@ -36,6 +36,9 @@ namespace mem
 		/// @brief 递归地释放页表中的所有页面
 		void freewalk();
 
+		/// @brief 递归地释放页表及其映射的所有页
+		void freewalk_mapped();
+
 		Pte kwalkaddr(uint64 va);
 		ulong kwalk_addr( uint64 va );
 		uint64 dir_num(int level, uint64 va);
