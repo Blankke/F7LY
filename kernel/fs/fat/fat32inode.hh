@@ -2,7 +2,7 @@
 #include <EASTL/string.h>
 #include <EASTL/unordered_map.h>
 #include <EASTL/vector.h>
-
+#include"printer.hh"
 #include "fs/fat/fat32.hh"
 #include "fs/vfs/inode.hh"
 
@@ -80,6 +80,7 @@ namespace fs
 						   eastl::string dev_name = "" ) override;
 			size_t nodeRead( uint64 dst_, size_t off_, size_t len_ ) override
 			{
+							printfMagenta("it is a fat32 node\n");
 				read_content( (void *) dst_, len_, off_ );
 				return len_;
 			};

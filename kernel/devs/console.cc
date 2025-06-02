@@ -48,7 +48,7 @@ namespace dev
 
   int Console::console_read(int user_dst, uint64 dst, int n)
   {
-    // TODO
+    
     return 0;
   }
   int Console::console_intr(int c)

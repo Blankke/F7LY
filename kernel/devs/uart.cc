@@ -76,8 +76,8 @@ namespace dev
 		volatile regLSR *lsr = (volatile regLSR *)(_uart_base + LSR);
 		while (lsr->data_ready == 0)
 			;
-
-		return _read_reg(UartReg::THR);
+		*c = _read_reg( UartReg::THR );
+		return 0;
 	}
 
 	int UartManager::get_char(u8 *c)
@@ -86,7 +86,7 @@ namespace dev
 			return -1;
 		else
 		{
-						*c = _read_buffer_get();
+			*c = _read_buffer_get();
 			return 0;
 		}
 	}

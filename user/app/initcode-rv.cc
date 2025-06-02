@@ -39,7 +39,10 @@ extern "C"
 
         chdir("/mnt/glibc/basic/");
         printf("#### OS COMP TEST GROUP START basic-glibc ####\n");
-
+        printf("Try read\n");
+        char* x;
+        read(0,x,sizeof(char));
+        printf("\nx=%p\n",x);
         basic_test();
         int pid = fork();
         printf("forked pid: %d\n", pid);

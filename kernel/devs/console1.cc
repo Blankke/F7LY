@@ -27,9 +27,11 @@ namespace dev
 			return 0;
 		}
 		u8 * ptr = ( u8 * ) dst;
+				printfCyan("[consle]read before: %p",dst);
 		for ( long i = 0; i < nbytes; i++, ptr++ )
-			if ( _stream->get_char( ptr ) < 0 )
+			if ( _stream->get_char_sync( ptr ) < 0 )
 				return i;
+		printfCyan("[consle]read: %s",dst);
 		return nbytes;
 	}
 

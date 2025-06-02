@@ -446,6 +446,7 @@ namespace fs
 			// 		"\tnone to read out" );
 			// 	return 0;
 			// }
+						printfMagenta("it is a ext4 node\n");
 			if ( off >= (size_t) _has_size ) return 0;
 
 			long   b_siz	= _belong_fs->rBlockSize(); // 块大小

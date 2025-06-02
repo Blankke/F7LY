@@ -349,7 +349,7 @@ namespace syscall
             return -4;
         if (n <= 0)
             return -5;
-
+        printfCyan("[sys_read] Try read,f:%x,buf:%x",f,f);
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
 

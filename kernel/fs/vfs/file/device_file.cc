@@ -11,6 +11,7 @@ namespace fs
 
 	long device_file::read( uint64 buf, size_t len, long off, bool upgrade )
 	{
+		printfMagenta("[file] it is a device file\n");
 		int ret;
 
 		if ( _attrs.u_read != 1 )
@@ -28,6 +29,7 @@ namespace fs
 		}
 
 		ret = node->nodeRead( buf, off, len );
+
 
 		/// @note 对于流式设备而言，没有文件偏移的概念
 		// if ( ret >= 0 && upgrade )  // 这里 没有写sdev从指定位置读取的函数
