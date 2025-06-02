@@ -11,7 +11,6 @@
 #include "types.hh"
 #include "tm/time.hh"
 #include "spinlock.hh"
-
 namespace tmm
 {
 	#ifdef __cplusplus
@@ -68,16 +67,17 @@ namespace tmm
 	};
 	class TimerManager
 	{
+		friend class trap_manager;
 	private:
 		SpinLock _lock;
-		uint64 _ticks;
+		// uint64 _ticks;
 		// uint64 _tcfg_data;
 
 	public:
 		TimerManager() = default;
 		void init( const char *lock_name );
-		int handle_clock_intr();
-		void tick_increase() { _lock.acquire(); _ticks++; _lock.release(); }
+		// int handle_clock_intr();
+		// void tick_increase() { _lock.acquire(); _ticks++; _lock.release(); }
 
 		timeval get_time_val();
 
@@ -91,7 +91,7 @@ namespace tmm
 		// void close_ti_intr();
 
 	public:
-		uint64 get_ticks() { return _ticks; };
+		uint64 get_ticks() ;
 	};
 
 	extern TimerManager k_tm;

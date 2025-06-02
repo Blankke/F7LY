@@ -889,12 +889,10 @@ int ProcessManager::alloc_fd( Pcb *p, fs::file *f, int fd )
         // so it's okay to release lk.
         p->_lock.acquire();
         lock->release();
-
         // go to sleep
         p->_chan = chan;
         p->_state = ProcState::SLEEPING;
         k_scheduler.call_sched();
-
         p->_chan = 0;
 
         p->_lock.release();

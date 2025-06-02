@@ -533,19 +533,15 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_sleep()
     {
-        tmm::timeval tv;
-        uint64 tv_addr;
-        if (_arg_addr(0, tv_addr) < 0)
+        int n;
+        if (_arg_int(0, n) < 0)
         {
-            printfRed("[SyscallHandler::sys_sleep] Error fetching timeval address\n");
+            printfRed("[SyscallHandler::sys_sleep] Error fetching n argument\n");
             return -1;
         }
-        if (mem::k_vmm.copy_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), &tv, tv_addr, sizeof(tv)) < 0)
-        {
-            printfRed("[SyscallHandler::sys_sleep] Error copying timeval from userspace\n");
-            return -1;
-        }
-        return tmm::k_tm.sleep_from_tv(tv);
+        printfGreen("炸飞机：%d\n",n);
+                n/=2;
+        return tmm::k_tm.sleep_n_ticks(n);
     }
     uint64 SyscallHandler::sys_uptime()
     {
