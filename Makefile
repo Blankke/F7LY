@@ -153,7 +153,7 @@ $(BUILD_DIR)/boot/$(ARCH)/initcode.o: $(INITCODE_BIN)
 
 # 用户代码编译规则 - 支持所有文件类型
 $(USER_BUILD_DIR)/%.o: user/%.c
-	@mkdir -p $(dir $@)
+	@mkdir -p $(dir $@)F
 	@echo "Compiling user C file: $<"
 	$(CC) $(USER_CFLAGS) -MMD -MP -c $< -o $@
 

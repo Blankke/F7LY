@@ -131,7 +131,7 @@ void trap_manager::timertick()
   proc::k_pm.wakeup(&ticks);
   // !!写完进城后修改
   // wakeup(&ticks);
-
+	printfCyan("[tm]  timertick here,p->addr:%x \n",Cpu::get_cpu()->get_cur_proc());
   // release the lock
   tickslock.release();
 
@@ -177,13 +177,13 @@ void trap_manager::kerneltrap()
   //     yield();
   //   }
   // }
-  if (which_dev == 2)
+  if (which_dev == 2&& Cpu::get_cpu()->get_cur_proc()!=nullptr&&Cpu::get_cpu()->get_cur_proc()->_state==proc::RUNNING)
   {
     timeslice++; // 让一个进程连续执行若干时间片，printf线程不安全
     // printf("timeslice: %d\n", timeslice);
     if (timeslice >= 5)
     {
-      printf("yield in kerneltrap\n");
+      // printfCyan("[kerneltrap]  yield here,p->addr:%x \n",Cpu::get_cpu()->get_cur_proc());
       proc::k_scheduler.yield();
       timeslice = 0;
       // print_fuckyou();

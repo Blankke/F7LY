@@ -4,7 +4,7 @@
 #include "platform.hh"
 #include "plic.hh"
 #include "printer.hh"
-
+#include "cpu.hh"
 
 plic_manager plic_mgr;
 
@@ -35,7 +35,7 @@ int plic_manager::claim()
 {
     // !!后续修改
     // int hart = cpuid();
-    int hart = 0;
+    int hart =r_tp();
 
     int irq = *(uint32*)PLIC_SCLAIM(hart);
     return irq;

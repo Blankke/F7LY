@@ -37,10 +37,10 @@ extern "C"
             ;
         printf("a = %d\n", a);
 
-        // chdir("/mnt/glibc/basic/");
-        // printf("#### OS COMP TEST GROUP START basic-glibc ####\n");
+        chdir("/mnt/glibc/basic/");
+        printf("#### OS COMP TEST GROUP START basic-glibc ####\n");
 
-        // basic_test();
+        basic_test();
         int pid = fork();
         printf("forked pid: %d\n", pid);
         if (pid < 0){
@@ -63,7 +63,7 @@ extern "C"
         {
             printf("sleep %d ticks\n",100 );
             sleep(10);
-            printf("It is %d\n",i);
+            // printf("It is %d\n",i);
         }
 
         // start_shell();

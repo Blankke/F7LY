@@ -71,22 +71,28 @@ namespace proc
 					// uint64 sp = p->get_context()->sp; // 0x0000001ffffbf000;
 					// uint64 pa = (uint64)PTE2PA(mem::k_pagetable.kwalkaddr(sp).get_data());
 					// printf("sp: %p, kstack: %p,pa:%p\n", sp, p->_kstack,pa);
-
-					printf( "sche proc %d, name: %s\n", p->_gid, p->_name );
+					// printfCyan("[sche]  start_schedule here,p->addr:%x \n",Cpu::get_cpu()->get_cur_proc());
+					// printf( "sche proc %d, name: %s\n", p->_gid, p->_name );
 					swtch( cur_context, &p->_context );
 					// printf( "return from %d, name: %s\n", p->_gid, p->_name );
+					
 					cpu->set_cur_proc( nullptr );
 				}
 				p->_lock.release();
-				break;
+				// break;
 			}
 		}
 	}
 
 	void Scheduler::yield()
 	{
+		// printfCyan("[sche]  yield here \n");
+		Cpu::get_cpu()->push_intr_off();
 		Pcb *p = Cpu::get_cpu()->get_cur_proc();
+		Cpu::get_cpu()->pop_intr_off();
+		// printfCyan("[sche]  yield here,p->addr:%x \n",Cpu::get_cpu()->get_cur_proc());
 		p->_lock.acquire();
+		// printfCyan("[sche]  yield here \n");
 		p->_state = ProcState::RUNNABLE;
 		call_sched(); // 注意swtch的逻辑是函数调用, 所以重新调用就是视为从这个函数返回
 		p->_lock.release();
@@ -95,9 +101,12 @@ namespace proc
 
 	void Scheduler::call_sched()
 	{
+		// printfBlue("[sche]  call sched here \n");
 		int intena;
 		Cpu * cpu = Cpu::get_cpu();
-		Pcb *p = cpu->get_cur_proc();
+		Cpu::get_cpu()->push_intr_off();
+		Pcb *p = Cpu::get_cpu()->get_cur_proc();
+		Cpu::get_cpu()->pop_intr_off();
 
 		assert( p->_lock.is_held(), "sched: proc lock not held" );
 		assert( cpu->get_num_off() == 1, "sched: proc locks" );
