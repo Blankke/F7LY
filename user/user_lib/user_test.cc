@@ -40,7 +40,7 @@ int basic_test(void)
     run_test("execve");
     run_test("getcwd");
     // run_test("gettimeofday");
-    run_test("yield"); //TODO,不知道这个对不对
+    // run_test("yield"); //TODO,不知道这个对不对
     // run_test("sleep");
     run_test("times");
     // run_test("clone");

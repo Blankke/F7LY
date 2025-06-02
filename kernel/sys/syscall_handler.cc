@@ -636,8 +636,8 @@ namespace syscall
             panic("[SyscallHandler::sys_write] Error fetching arguments");
             return -1;
         }
-        if (fd > 2)
-            printfRed("invoke sys_write\n");
+        // if (fd > 2)
+        //     printfRed("invoke sys_write\n");
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = proc->get_pagetable();
         char *buf = new char[n + 10];
@@ -715,7 +715,7 @@ namespace syscall
     uint64 SyscallHandler::sys_clone()
     {
         TODO("TBF")
-        printfYellow("sys_clone\n");
+        // printfYellow("sys_clone\n");
         int flags;
         uint64 stack, tls, ctid, ptid;
         _arg_int(0, flags);

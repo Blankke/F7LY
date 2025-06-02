@@ -149,7 +149,7 @@ namespace proc
 
     void ProcessManager::fork_ret()
     {
-        printf("into fork_ret\n");
+        // printf("into fork_ret\n");
         proc::Pcb *proc = get_cur_pcb();
         proc->_lock.release();
 
@@ -206,7 +206,7 @@ namespace proc
             dev::register_debug_uart(&dev::k_uart);
         }
 
-        printf("fork_ret\n");
+        // printf("fork_ret\n");
         trap_mgr.usertrapret();
     }
 
@@ -1297,11 +1297,11 @@ namespace proc
 
     int ProcessManager::execve(eastl::string path, eastl::vector<eastl::string> argv, eastl::vector<eastl::string> envs)
     {
-        printfRed("execve: %s\n", path.c_str());
+        // printfRed("execve: %s\n", path.c_str());
         // 获取当前进程控制块
         Pcb *proc = k_pm.get_cur_pcb();
 
-        proc->_pt.print_all_map();
+        // proc->_pt.print_all_map();
 
         uint64 old_sz = proc->_sz; // 保存原进程的内存大小
         uint64 sp;                 // 栈指针
@@ -1322,13 +1322,13 @@ namespace proc
         else
             ab_path = proc->_cwd_name + path; // 相对路径，添加当前工作目录前缀
 
-        printfCyan("execve file : %s\n", ab_path.c_str());
+        // printfCyan("execve file : %s\n", ab_path.c_str());
 
         // 解析路径并查找文件
         fs::Path path_resolver(ab_path);
         if ((de = path_resolver.pathSearch()) == nullptr)
         {
-            printfCyan("execve: cannot find file");
+            printfRed("execve: cannot find file");
             return -1;
         }
 
@@ -1340,7 +1340,7 @@ namespace proc
             panic("execve: not a valid ELF file");
             return -1;
         }
-        printf("execve: ELF file magic: %x\n", elf.magic);
+        // printf("execve: ELF file magic: %x\n", elf.magic);
 
         // ========== 第二阶段：创建新的虚拟地址空间 ==========
 
@@ -1364,8 +1364,8 @@ namespace proc
             {
                 // 读取程序头
                 de->getNode()->nodeRead(reinterpret_cast<uint64>(&ph), off, sizeof(ph));
-                printf("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
-                       i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, ph.flags);
+                // printf("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
+                    //    i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, ph.flags);
                 // 	// 只处理LOAD类型的程序段
                 if (ph.type != elf::elfEnum::ELF_PROG_LOAD)
                     continue;
@@ -1393,8 +1393,8 @@ namespace proc
                     seg_flag |= riscv::PteEnum::pte_writable_m;
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ)
                     seg_flag |= riscv::PteEnum::pte_readable_m;
-                printfRed("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
-                          i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, seg_flag);
+                // printfRed("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
+                        //   i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, seg_flag);
                 if ((sz1 = mem::k_vmm.vmalloc(new_pt, new_sz, ph.vaddr + ph.memsz, seg_flag)) == 0)
                 {
                     printfRed("execve: uvmalloc\n");
@@ -1421,7 +1421,7 @@ namespace proc
             // 如果加载过程中出错，清理已分配的资源
             if (load_bad)
             {
-                printfRed("execve: load segment failed\n");
+                // printfRed("execve: load segment failed\n");
                 k_pm.proc_freepagetable(new_pt, new_sz);
                 return -1;
             }
@@ -1739,7 +1739,7 @@ namespace proc
         // 使用safestrcpy将文件名安全地拷贝到进程的_name成员变量中
         safestrcpy(proc->_name, filename.c_str(), sizeof(proc->_name));
 
-        printfGreen("execve: process name set to '%s'\n", proc->_name);
+        // printfGreen("execve: process name set to '%s'\n", proc->_name);
 
         // ========== 第七阶段：配置进程资源限制 ==========
         // 设置栈大小限制
@@ -1759,15 +1759,15 @@ namespace proc
         mem::PageTable old_pt;
         old_pt = *proc->get_pagetable(); // 获取当前进程的页表
         proc->_sz = PGROUNDUP(new_sz);   // 更新进程大小
-        printf("execve: entry point: %p, new size: %d\n", elf.entry, proc->_sz);
+        // printf("execve: entry point: %p, new size: %d\n", elf.entry, proc->_sz);
         proc->_trapframe->epc = elf.entry; // 设置程序计数器为入口点
         proc->_pt = new_pt;                // 替换为新的页表
         proc->_trapframe->sp = sp;         // 设置栈指针
 
-        printf("execve: new process size: %d, new pagetable: %p\n", proc->_sz, proc->_pt);
+        // printf("execve: new process size: %d, new pagetable: %p\n", proc->_sz, proc->_pt);
         k_pm.proc_freepagetable(old_pt, old_sz);
 
-        printf("execve succeed, new process size: %d\n", proc->_sz);
+        // printf("execve succeed, new process size: %d\n", proc->_sz);
 
         return argc; // 返回参数个数，表示成功执行
     }
