@@ -12,10 +12,10 @@
 
 namespace tmm
 {
-	int handle_tick_intr()
-	{
-		return tmm::k_tm.handle_clock_intr();
-	}
+	// int handle_tick_intr()
+	// {
+	// 	return tmm::k_tm.handle_clock_intr();
+	// }
 
 	ulong get_ticks()
 	{

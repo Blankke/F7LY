@@ -80,6 +80,7 @@ endif
 INITCODE_OBJ := build/$(OUTPUT_PREFIX)/initcode.o
 INITCODE_ELF := build/$(OUTPUT_PREFIX)/initcode.elf
 
+
 # 根据架构选择不同的输出文件名
 ifeq ($(ARCH),riscv)
   INITCODE_BIN := user/initcode-rv
@@ -87,27 +88,19 @@ else ifeq ($(ARCH),loongarch)
   INITCODE_BIN := user/initcode-la
 endif
 
+# 新增 syscall 编译规则
+SYSCALL_SRC := user/syscall_lib/syscall.cc
+SYSCALL_OBJ := build/$(OUTPUT_PREFIX)/syscall.o build/$(OUTPUT_PREFIX)/printf.o
+
+# 新增 printf 编译规则
+PRINTF_SRC := user/syscall_lib/printf.cc
+PRINTF_OBJ := build/$(OUTPUT_PREFIX)/printf.o
+
 # 编译参数
 INITCODE_CFLAGS := -Wall -O -fno-builtin -fno-exceptions -fno-rtti -fno-stack-protector -nostdlib -ffreestanding $(ARCH_CFLAGS) -Iuser/deps -Iuser/syscall_lib -Iuser/syscall_lib/arch/$(ARCH) -Ikernel/sys -Ikernel
 INITCODE_LDFLAGS := -N -e start -Ttext 0
 
-# ===== 用户态代码统一编译变量 =====
-USER_BUILD_DIR := build/$(OUTPUT_PREFIX)
-
-# 自动收集所有用户源文件
-USER_SRCS := $(shell find user -type f \( -name '*.c' -o -name '*.cc' -o -name '*.cpp' \))
-USER_OBJS := $(patsubst user/%.c,   $(USER_BUILD_DIR)/%.o, $(filter %.c,   $(USER_SRCS)))
-USER_OBJS += $(patsubst user/%.cc,  $(USER_BUILD_DIR)/%.o, $(filter %.cc,  $(USER_SRCS)))
-USER_OBJS += $(patsubst user/%.cpp, $(USER_BUILD_DIR)/%.o, $(filter %.cpp, $(USER_SRCS)))
-
-USER_DEPS := $(USER_OBJS:.o=.d)
-USER_INCLUDES := -Iuser/deps -Iuser/syscall_lib -Iuser/syscall_lib/arch/$(ARCH) -Ikernel/sys -Ikernel
-USER_CFLAGS := -Wall -O -fno-builtin -fno-exceptions -fno-rtti -fno-stack-protector -nostdlib -ffreestanding $(ARCH_CFLAGS) $(USER_INCLUDES)
-
-# 添加用户目录创建
-USER_DIRS := $(sort $(dir $(USER_OBJS)))
-
-.PHONY: all clean dirs build riscv loongarch run debug initcode user-dirs debug-user-files
+.PHONY: all clean dirs build riscv loongarch run debug initcode
 
 all: riscv
 
@@ -117,18 +110,13 @@ riscv:
 loongarch:
 	@$(MAKE) ARCH=loongarch build
 
-# 修改 build 依赖，确保用户代码在内核编译之前完成
-build: user-dirs initcode $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a $(KERNEL_BIN)
+build: initcode dirs $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a $(KERNEL_BIN)
 
-# 修改 dirs 目标，包含用户目录
-dirs: user-dirs
+
+dirs:
 	@mkdir -p $(BUILD_DIR)
 	@for dir in $(SUBDIRS); do mkdir -p $(BUILD_DIR)/$$dir; done
 
-user-dirs:
-	@mkdir -p $(USER_DIRS)
-
-# 内核编译规则
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
@@ -149,37 +137,22 @@ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.s
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
-$(BUILD_DIR)/boot/$(ARCH)/initcode.o: $(INITCODE_BIN)
-
-# 用户代码编译规则 - 支持所有文件类型
-$(USER_BUILD_DIR)/%.o: user/%.c
-	@mkdir -p $(dir $@)F
-	@echo "Compiling user C file: $<"
-	$(CC) $(USER_CFLAGS) -MMD -MP -c $< -o $@
-
-$(USER_BUILD_DIR)/%.o: user/%.cc
-	@mkdir -p $(dir $@)
-	@echo "Compiling user C++ file: $<"
-	$(CXX) $(USER_CFLAGS) -MMD -MP -c $< -o $@
-
-$(USER_BUILD_DIR)/%.o: user/%.cpp
-	@mkdir -p $(dir $@)
-	@echo "Compiling user C++ file: $<"
-	$(CXX) $(USER_CFLAGS) -MMD -MP -c $< -o $@
-
 $(KERNEL_ELF): $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
 	$(LD) $(LDFLAGS) -o $@ $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
 	$(SIZE) $@
-	# $(OBJDUMP) -D $@ > kernel.asm
+	$(OBJDUMP) -D $@ > kernel.asm
 
-$(KERNEL_BIN): $(KERNEL_ELF)
+$(KERNEL_ELF): $(INITCODE_BIN)
+
+$(KERNEL_BIN): $(KERNEL_ELF) 
 	$(OBJCOPY) -O binary $< $@
 
 export BUILDPATH := $(BUILD_DIR)
 $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a:
 	@$(MAKE) -C $(EASTL_DIR) CROSS_COMPILE=$(CROSS_COMPILE)
 
-run: build initcode
+
+run: build
 ifeq ($(ARCH),riscv)
 	$(MAKE) run-riscv
 else ifeq ($(ARCH),loongarch)
@@ -203,8 +176,10 @@ run-riscv:
 		-netdev user,id=net \
 		-rtc base=utc
 
+
 run-loongarch:
 	$(QEMU_CMD) $(KERNEL_ELF) -m 128M -nographic -smp 1
+
 
 debug: build
 	@if [ "$(ARCH)" = "riscv" ]; then \
@@ -228,14 +203,41 @@ debug-riscv:
 		-netdev user,id=net \
 		-rtc base=utc \
 		-S -gdb tcp::1234;
-
-# initcode 相关规则
 initcode: $(INITCODE_BIN)
 
-$(INITCODE_ELF): $(USER_OBJS)
-	@echo "Linking initcode with objects: $(USER_OBJS)"
+# 编译 initcode 源文件为目标文件
+$(INITCODE_OBJ): $(INITCODE_SRC)
+	@mkdir -p $(dir $@)
+	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
+	
+# initcode.o 显式依赖 initcode-rv 文件
+$(BUILD_DIR)/boot/$(ARCH)/initcode.o: $(INITCODE_BIN)
+
+# 编译 syscall.o
+$(SYSCALL_OBJ): $(SYSCALL_SRC)
+	@mkdir -p $(dir $@)
+	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
+
+# 编译 printf.o
+$(PRINTF_OBJ): $(PRINTF_SRC)
+	@mkdir -p $(dir $@)
+	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
+
+# 链接生成 initcode.elf
+$(INITCODE_ELF): $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ)
 	$(LD) $(INITCODE_LDFLAGS) -o $@ $^
 
+# 生成二进制 initcode 文件 + 反汇编
 $(INITCODE_BIN): $(INITCODE_ELF)
 	$(OBJCOPY) -S -O binary $< $@
 	riscv64-unknown-elf-objdump -D -b binary -m riscv:rv64 -EL $@ > user/disasm_initcode.asm
+
+clean:
+	rm -rf build
+	find . -name "*.o" -o -name "*.d" -exec rm -f {} \;
+	$(MAKE) clean -C thirdparty/EASTL
+	rm -f user/initcode-*
+	rm -f user/disasm_initcode.asm, kernel.asm
+
+
+-include $(DEPS)
