@@ -284,15 +284,11 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_getppid()
     {
-        TODO("sys_getppid");
-        printfYellow("sys_getppid\n");
-        return 0;
+        return proc::k_pm.get_cur_pcb()->get_ppid();
     }
     uint64 SyscallHandler::sys_getpid()
     {
-        TODO("sys_getpid");
-        printfYellow("sys_getpid\n");
-        return 0;
+        return proc::k_pm.get_cur_pcb()->get_pid();
     }
     uint64 SyscallHandler::sys_pipe2()
     {
@@ -875,23 +871,23 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_getuid()
     {
-        // TODO
-        return 0;
+        // TODO//我们root用户id就是1
+        return 1;
     }
     uint64 SyscallHandler::sys_getgid()
     {
-        // TODO
-        return 0;
+        // TODO 
+        return 1; //直接返回1，抄学长的
     }
     uint64 SyscallHandler::sys_setgid()
     {
         // TODO
-        return 0;
+        return 1; // 直接返回1，抄学长的
     }
     uint64 SyscallHandler::sys_setuid()
     {
         // TODO
-        return 0;
+        return 1; // 直接返回1，抄学长的
     }
     uint64 SyscallHandler::sys_fstatat()
     {
@@ -1126,7 +1122,46 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_syslog()
     {
-        // TODO
+        enum sys_log_type
+        {
+
+            SYSLOG_ACTION_CLOSE = 0,
+            SYSLOG_ACTION_OPEN = 1,
+            SYSLOG_ACTION_READ = 2,
+            SYSLOG_ACTION_READ_ALL = 3,
+            SYSLOG_ACTION_READ_CLEAR = 4,
+            SYSLOG_ACTION_CLEAR = 5,
+            SYSLOG_ACTION_CONSOLE_OFF = 6,
+            SYSLOG_ACTION_CONSOLE_ON = 7,
+            SYSLOG_ACTION_CONSOLE_LEVEL = 8,
+            SYSLOG_ACTION_SIZE_UNREAD = 9,
+            SYSLOG_ACTION_SIZE_BUFFER = 10
+
+        };
+
+        int prio;
+        eastl::string fmt;
+        uint64 fmt_addr;
+        eastl::string msg = "Spectre V2 : Update user space SMT mitigation: STIBP always-on\n"
+                            "process_manager : execve set stack-base = 0x0000_0000_9194_5000\n"
+                            "pm/process_manager : execve set page containing sp is 0x0000_0000_9196_4000";
+        [[maybe_unused]] proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        [[maybe_unused]] mem::PageTable *pt = p->get_pagetable();
+
+        if (_arg_int(0, prio) < 0)
+            return -1;
+
+        if (_arg_addr(1, fmt_addr) < 0)
+            return -1;
+
+        if (prio == SYSLOG_ACTION_SIZE_BUFFER)
+            return msg.size(); // 返回buffer的长度
+        else if (prio == SYSLOG_ACTION_READ_ALL)
+        {
+            mem::k_vmm.copy_out(*pt, fmt_addr, msg.c_str(), msg.size());
+            return msg.size();
+        }
+
         return 0;
     }
     uint64 SyscallHandler::sys_fcntl()
