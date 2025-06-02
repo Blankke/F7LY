@@ -16,6 +16,9 @@
 #include <asm-generic/poll.h>
 #include <linux/sysinfo.h>
 #include "fs/vfs/file/normal_file.hh"
+#include "fs/vfs/file/pipe_file.hh"
+#include "proc/pipe.hh"
+#include "proc/signal.hh"
 namespace syscall
 {
     // 创建全局的 SyscallHandler 实例
@@ -675,9 +678,26 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_mkdirat()
     {
-        TODO("sys_mkdirat");
-        printfYellow("sys_mkdirat\n");
-        return 0;
+        // 抄的学长的sys_mkdir
+        int dir_fd;
+        uint64 path_addr;
+        int flags;
+
+        if (_arg_int(0, dir_fd) < 0)
+            return -1;
+        if (_arg_addr(1, path_addr) < 0)
+            return -1;
+        if (_arg_int(2, flags) < 0)
+            return -1;
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        eastl::string path;
+        if (mem::k_vmm.copy_str_in(*pt, path, path_addr, 100) < 0)
+            return -1;
+
+        int res = proc::k_pm.mkdir(dir_fd, path, flags);
+        return res;
     }
     uint64 SyscallHandler::sys_close()
     {
@@ -961,37 +981,76 @@ namespace syscall
     }
 
     //====================================signal===================================================
-    uint64 sys_kill_signal()
+    uint64 SyscallHandler::sys_kill_signal()
     {
         ///@todo
         return 0;
     }
-    uint64 sys_tkill()
+    uint64 SyscallHandler::sys_tkill()
     {
         ///@todo
         return 0;
     }
-    uint64 sys_tgkill()
+    uint64 SyscallHandler::sys_tgkill()
     {
         ///@todo
         return 0;
     }
-    uint64 sys_rt_sigaction()
+    uint64 SyscallHandler::sys_rt_sigaction()
+    {
+        proc::Pcb *proc = proc::k_pm.get_cur_pcb();
+        [[maybe_unused]] mem::PageTable *pt = proc->get_pagetable();
+        [[maybe_unused]] proc::ipc::signal::sigaction a_newact, a_oldact;
+        // a_newact = nullptr;
+        // a_oldact = nullptr;
+        uint64 newactaddr, oldactaddr;
+        int flag;
+        int ret = -1;
+
+        if (_arg_int(0, flag) < 0)
+            return -1;
+
+        if (_arg_addr(1, newactaddr) < 0)
+            return -1;
+
+        if (_arg_addr(2, oldactaddr) < 0)
+            return -1;
+
+        if (oldactaddr != 0)
+            a_oldact = proc::ipc::signal::sigaction();
+
+        if (newactaddr != 0)
+        {
+            if (mem::k_vmm.copy_in(*pt, &a_newact, newactaddr,
+                                  sizeof(proc::ipc::signal::sigaction)) < 0)
+                return -1;
+            // a_newact = ( pm::ipc::signal::sigaction *)(hsai::k_mem->to_vir(
+            // pt->walk_addr( newactaddr ) ));
+            ret = proc::ipc::signal::sigAction(flag, &a_newact, nullptr);
+        }
+        else
+        {
+            ret = proc::ipc::signal::sigAction(flag, &a_newact, &a_oldact);
+        }
+        if (ret == 0 && oldactaddr != 0)
+        {
+            if (mem::k_vmm.copy_out(*pt, oldactaddr, &a_oldact,
+                                  sizeof(proc::ipc::signal::sigaction)) < 0)
+                return -1;
+        }
+        return ret;
+    }
+    uint64 SyscallHandler::sys_rt_sigprocmask()
     {
         ///@todo
         return 0;
     }
-    uint64 sys_rt_sigprocmask()
+    uint64 SyscallHandler::sys_rt_sigtimedwait()
     {
         ///@todo
         return 0;
     }
-    uint64 sys_rt_sigtimedwait()
-    {
-        ///@todo
-        return 0;
-    }
-    uint64 sys_rt_sigreturn()
+    uint64 SyscallHandler::sys_rt_sigreturn()
     {
         ///@todo
         return 0;
@@ -1549,8 +1608,52 @@ namespace syscall
 
     uint64 SyscallHandler::sys_sendfile()
     {
-        // TODO
-        return 0;
+        int in_fd, out_fd;
+        fs::file *in_f, *out_f;
+        if (_arg_fd(0, &out_fd, &out_f) < 0)
+            return -1;
+        if (_arg_fd(1, &in_fd, &in_f) < 0)
+            return -2;
+
+        ulong addr;
+        ulong *p_off = nullptr;
+        p_off = p_off;
+        if (_arg_addr(2, addr) < 0)
+            return -3;
+
+        mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+        if (addr != 0)
+            p_off = (ulong *)pt->walk_addr(addr); // TODO：TBD原来这里有to_vir
+
+        size_t count;
+        if (_arg_addr(3, count) < 0)
+            return -4;
+
+        /// @todo sendfile
+
+        ulong start_off = in_f->get_file_offset();
+        if (p_off != nullptr)
+            start_off = *p_off;
+
+        char *buf = new char[count + 1];
+        if (buf == nullptr)
+            return -5;
+
+        int readcnt = in_f->read((ulong)buf, count, start_off, true);
+        int writecnt = 0;
+        if (out_f->_attrs.filetype == fs::FileTypes::FT_PIPE)
+            writecnt = ((fs::pipe_file *)out_f)
+                           ->write_in_kernel((ulong)buf, readcnt);
+        else
+            writecnt = out_f->write((ulong)buf, readcnt,
+                                    out_f->get_file_offset(), true);
+
+        delete[] buf;
+
+        if (p_off != nullptr)
+            *p_off += writecnt;
+
+        return writecnt;
     }
     uint64 SyscallHandler::sys_readv()
     {

@@ -31,7 +31,7 @@ namespace proc
                 sigset_t sa_mask;        // 处理期间阻塞的信号
                 int sa_flags;            // 行为标志（未用）
             } sigaction;
-
+            int sigAction(int flag, sigaction *newact, sigaction *oldact);
         } // namespace signal
     } // namespace ipc
 } // namespace proc

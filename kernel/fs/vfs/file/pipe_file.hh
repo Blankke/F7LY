@@ -9,18 +9,16 @@ namespace fs
 	private:
 		uint64 _off = 0;
 		proc::ipc::Pipe *_pipe;
-
+		bool is_write;
 	public:
-		pipe_file(FileAttrs attrs, Pipe *pipe_) : file(attrs), _pipe(pipe_)
+		pipe_file(FileAttrs attrs, Pipe *pipe_, bool is_write) : file(attrs), _pipe(pipe_), is_write(is_write)
 		{
 			new (&_stat) Kstat(_pipe);
 			dup();
 		}
-		pipe_file(Pipe *pipe_) : file(FileAttrs(FileTypes::FT_PIPE, 0777)), _pipe(pipe_)
-		{
-			new (&_stat) Kstat(_pipe);
-			dup();
-		}
+		pipe_file( FileAttrs attrs, Pipe *pipe_ ) : file( attrs ), _pipe( pipe_ ) { new ( &_stat ) Kstat( _pipe ); dup(); }
+		pipe_file( Pipe *pipe_ ) : file( FileAttrs( FileTypes::FT_PIPE, 0777 ) ), _pipe( pipe_ ) { new ( &_stat ) Kstat( _pipe ); dup(); }
+
 		~pipe_file() = default;
 
 		/// @note pipe read 没有偏移的概念
