@@ -107,3 +107,7 @@
 - [ ] syscall geteuid         
 - [ ] syscall ppoll           
 - [ X] syscall read
+
+
+yield似乎是对的，sche_yield需要调用yield，后成功。
+sleep已成功，问题在于进入了nanosleep，nanosleep的参数获取有问题，测试只有两个参数，我们获取了四个参数导致错误。

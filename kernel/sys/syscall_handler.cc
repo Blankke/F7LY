@@ -19,6 +19,7 @@
 #include "fs/vfs/file/pipe_file.hh"
 #include "proc/pipe.hh"
 #include "proc/signal.hh"
+#include "scheduler.hh"
 namespace syscall
 {
     // 创建全局的 SyscallHandler 实例
@@ -355,7 +356,7 @@ namespace syscall
             return -4;
         if (n <= 0)
             return -5;
-        printfCyan("[sys_read] Try read,f:%x,buf:%x",f,f);
+        printfCyan("[sys_read] Try read,f:%x,buf:%x", f, f);
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
 
@@ -372,10 +373,10 @@ namespace syscall
     uint64 SyscallHandler::sys_kill()
     {
         int pid;
-        if(_arg_int(0,pid)<0)
+        if (_arg_int(0, pid) < 0)
         {
-                        printfRed("[SyscallHandler::sys_wait] Error fetching arguments\n");
-                        return -1;
+            printfRed("[SyscallHandler::sys_wait] Error fetching arguments\n");
+            return -1;
         }
         return proc::k_pm.kill_proc(pid);
     }
@@ -389,42 +390,50 @@ namespace syscall
             return -1;
 
         eastl::vector<eastl::string> argv;
-		uint64						 uarg;
-		if ( uargv != 0 )
-		{
-			for ( uint64 i = 0, puarg = uargv;; i++, puarg += sizeof( char * ) )
-			{
-				if ( i >= max_arg_num ) return -1;
+        uint64 uarg;
+        if (uargv != 0)
+        {
+            for (uint64 i = 0, puarg = uargv;; i++, puarg += sizeof(char *))
+            {
+                if (i >= max_arg_num)
+                    return -1;
 
-				if ( _fetch_addr( puarg, uarg ) < 0 ) return -1;
+                if (_fetch_addr(puarg, uarg) < 0)
+                    return -1;
 
-				if ( uarg == 0 ) break;
+                if (uarg == 0)
+                    break;
 
-				// printfCyan( "execve get arga[%d] = %p\n", i, uarg );
+                // printfCyan( "execve get arga[%d] = %p\n", i, uarg );
 
-				argv.emplace_back( eastl::string() );
-				if ( _fetch_str( uarg, argv[i], PGSIZE ) < 0 ) return -1;
+                argv.emplace_back(eastl::string());
+                if (_fetch_str(uarg, argv[i], PGSIZE) < 0)
+                    return -1;
                 // printfCyan("execve get arga[%d] = %s\n", i, argv[i].c_str());
-			}
-		}
+            }
+        }
 
         eastl::vector<eastl::string> envp;
-		ulong						 uenv;
-		if ( uenvp != 0 )
-		{
-			for ( ulong i = 0, puenv = uenvp;; i++, puenv += sizeof( char * ) )
-			{
-				if ( i >= max_arg_num ) return -2;
+        ulong uenv;
+        if (uenvp != 0)
+        {
+            for (ulong i = 0, puenv = uenvp;; i++, puenv += sizeof(char *))
+            {
+                if (i >= max_arg_num)
+                    return -2;
 
-				if ( _fetch_addr( puenv, uenv ) < 0 ) return -2;
+                if (_fetch_addr(puenv, uenv) < 0)
+                    return -2;
 
-				if ( uenv == 0 ) break;
+                if (uenv == 0)
+                    break;
 
-				envp.emplace_back( eastl::string() );
-				if ( _fetch_str( uenv, envp[i], PGSIZE ) < 0 ) return -2;
+                envp.emplace_back(eastl::string());
+                if (_fetch_str(uenv, envp[i], PGSIZE) < 0)
+                    return -2;
                 // printfCyan("execve get envp[%d] = %s\n", i, envp[i].c_str());
-			}
-		}
+            }
+        }
 
         return proc::k_pm.execve(path, argv, envp);
         TODO("sys_execve");
@@ -655,20 +664,24 @@ namespace syscall
 
     uint64 SyscallHandler::sys_unlinkat()
     {
-        //copy from Li
-		int	   fd, flags;
-		uint64 path_addr;
+        // copy from Li
+        int fd, flags;
+        uint64 path_addr;
 
-		if ( _arg_int( 0, fd ) < 0 ) return -1;
-		if ( _arg_addr( 1, path_addr ) < 0 ) return -1;
-		if ( _arg_int( 2, flags ) < 0 ) return -1;
-		eastl::string  path;
-		proc::Pcb		  *p  = proc::k_pm.get_cur_pcb();
-		mem::PageTable *pt = p->get_pagetable();
-		if ( mem::k_vmm.copy_str_in( *pt, path, path_addr, 100 ) < 0 ) return -1;
+        if (_arg_int(0, fd) < 0)
+            return -1;
+        if (_arg_addr(1, path_addr) < 0)
+            return -1;
+        if (_arg_int(2, flags) < 0)
+            return -1;
+        eastl::string path;
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        if (mem::k_vmm.copy_str_in(*pt, path, path_addr, 100) < 0)
+            return -1;
 
-		int res = proc::k_pm.unlink( fd, path, flags );
-		return res;
+        int res = proc::k_pm.unlink(fd, path, flags);
+        return res;
     }
     uint64 SyscallHandler::sys_linkat()
     {
@@ -815,7 +828,7 @@ namespace syscall
 
     uint64 SyscallHandler::sys_times()
     {
-        //TODO: 检查一下有没有错
+        // TODO: 检查一下有没有错
         tmm::tms tms_val;
         uint64 tms_addr;
 
@@ -865,35 +878,34 @@ namespace syscall
         mem::PageTable *pt = p->get_pagetable();
 
         if (mem::k_vmm.copy_out(*pt, sysa, _SYSINFO_sysname,
-                              sizeof(_SYSINFO_sysname)) < 0)
+                                sizeof(_SYSINFO_sysname)) < 0)
             return -1;
         if (mem::k_vmm.copy_out(*pt, noda, _SYSINFO_nodename,
-                              sizeof(_SYSINFO_nodename)) < 0)
+                                sizeof(_SYSINFO_nodename)) < 0)
             return -1;
         if (mem::k_vmm.copy_out(*pt, rlsa, _SYSINFO_release,
-                              sizeof(_SYSINFO_release)) < 0)
+                                sizeof(_SYSINFO_release)) < 0)
             return -1;
         if (mem::k_vmm.copy_out(*pt, vsna, _SYSINFO_version,
-                              sizeof(_SYSINFO_version)) < 0)
+                                sizeof(_SYSINFO_version)) < 0)
             return -1;
         if (mem::k_vmm.copy_out(*pt, mcha, _SYSINFO_machine,
-                              sizeof(_SYSINFO_machine)) < 0)
+                                sizeof(_SYSINFO_machine)) < 0)
             return -1;
         if (mem::k_vmm.copy_out(*pt, dmna, _SYSINFO_domainname,
-                              sizeof(_SYSINFO_domainname)) < 0)
+                                sizeof(_SYSINFO_domainname)) < 0)
             return -1;
 
         return 0;
     }
     uint64 SyscallHandler::sys_sched_yield()
     {
-        TODO("sys_sched_yield");
-        printfYellow("sys_sched_yield\n");
+        proc::k_scheduler.yield();
         return 0;
     }
     uint64 SyscallHandler::sys_gettimeofday()
     {
-        //TODO: 检查一下这个
+        // TODO: 检查一下这个
         uint64 tv_addr;
         tmm::timeval tv;
 
@@ -905,13 +917,14 @@ namespace syscall
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
         if (mem::k_vmm.copy_out(*pt, tv_addr, (const void *)&tv,
-                              sizeof(tv)) < 0)
+                                sizeof(tv)) < 0)
             return -1;
 
         return 0;
     }
     uint64 SyscallHandler::sys_nanosleep()
     {
+
         int clockid;
         int flags;
         timespec dur;
@@ -919,18 +932,19 @@ namespace syscall
         timespec rem;
         uint64 rem_addr;
         if (_arg_int(0, clockid) < 0 || _arg_int(1, flags) < 0 ||
-            _arg_addr(2, dur_addr) < 0 || _arg_addr(3, rem_addr) < 0)
+            _arg_addr(0, dur_addr) < 0 || _arg_addr(1, rem_addr) < 0)
         {
             printfRed("[SyscallHandler::sys_nanosleep] Error fetching nanosleep arguments\n");
             return -1;
         }
+
         proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = cur_proc->get_pagetable();
 
         if (dur_addr != 0)
             if (mem::k_vmm.copy_in(*pt, &dur, dur_addr, sizeof(dur)) < 0)
                 return -1;
-
+        // printfCyan("into nano sleep,dur_addr:%p.rem_addr:%p\n", dur_addr, rem_addr);
         if (rem_addr != 0)
             if (mem::k_vmm.copy_in(*pt, &rem, rem_addr, sizeof(rem)) < 0)
                 return -1;
@@ -1022,7 +1036,7 @@ namespace syscall
         if (newactaddr != 0)
         {
             if (mem::k_vmm.copy_in(*pt, &a_newact, newactaddr,
-                                  sizeof(proc::ipc::signal::sigaction)) < 0)
+                                   sizeof(proc::ipc::signal::sigaction)) < 0)
                 return -1;
             // a_newact = ( pm::ipc::signal::sigaction *)(hsai::k_mem->to_vir(
             // pt->walk_addr( newactaddr ) ));
@@ -1035,7 +1049,7 @@ namespace syscall
         if (ret == 0 && oldactaddr != 0)
         {
             if (mem::k_vmm.copy_out(*pt, oldactaddr, &a_oldact,
-                                  sizeof(proc::ipc::signal::sigaction)) < 0)
+                                    sizeof(proc::ipc::signal::sigaction)) < 0)
                 return -1;
         }
         return ret;
@@ -1481,7 +1495,7 @@ namespace syscall
         sysinfo_.mem_unit = 1; // 内存单位为 1 字节
 
         if (mem::k_vmm.copy_out(*pt, sysinfoaddr, &sysinfo_,
-                              sizeof(sysinfo_)) < 0)
+                                sizeof(sysinfo_)) < 0)
             return -1;
 
         return 0;
@@ -1662,7 +1676,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_geteuid()
     {
-        return 1;//抄的
+        return 1; // 抄的
     }
     uint64 SyscallHandler::sys_madvise()
     {

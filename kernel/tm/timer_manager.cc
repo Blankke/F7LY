@@ -70,7 +70,7 @@ namespace tmm
 		// tv.tv_sec = trap_mgr.trap_mgr.ticks * ms_per_tick / 1000;
 		// tv.tv_usec = ( ( trap_mgr.trap_mgr.ticks * ms_per_tick ) % 1000 ) * 1000;
 
-		Info("invoke get time = %d : %d", tv.tv_sec, tv.tv_usec);
+		// Info("invoke get time = %d : %d", tv.tv_sec, tv.tv_usec);
 		return tv;
 	}
 
@@ -111,7 +111,7 @@ namespace tmm
 		n += tmm::usec_to_time_stamp(tv.tv_usec);
 		// printfBlue("sleep from tv: %u ticks\n", n);
 		n /= cpt;
-		printfBlue("sleep from tv: %u ticks\n", n);
+		// printfBlue("sleep from tv: %u ticks\n", n);
 		if (n == 0)
 			return 0; // 如果转换结果为0，直接返回
 		return sleep_n_ticks(n);

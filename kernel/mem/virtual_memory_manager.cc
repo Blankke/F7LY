@@ -157,7 +157,10 @@ namespace mem
             va = PGROUNDDOWN(src_va);
             pa = (uint64)pt.walk_addr(va);
             if (pa == 0)
+            {
+                printfRed("[copyin] pa ==0! walk failed");
                 return -1;
+            }
             n = PGSIZE - (src_va - va);
             if (n > len)
                 n = len;
@@ -170,8 +173,8 @@ namespace mem
         return 0;
     }
 
-	int VirtualMemoryManager::copy_str_in( PageTable &pt, void *dst,
-										   uint64 src_va, uint64 max )
+    int VirtualMemoryManager::copy_str_in(PageTable &pt, void *dst,
+                                          uint64 src_va, uint64 max)
     {
         uint64 n, va, pa;
         int got_null = 0;
@@ -217,44 +220,55 @@ namespace mem
             return -1;
         }
     }
-int VirtualMemoryManager::copy_str_in( PageTable &pt, eastl::string &dst,
-										   uint64 src_va, uint64 max )
-	{
-		uint64 n, va, pa;
-		int	   got_null = 0;
+    int VirtualMemoryManager::copy_str_in(PageTable &pt, eastl::string &dst,
+                                          uint64 src_va, uint64 max)
+    {
+        uint64 n, va, pa;
+        int got_null = 0;
 
-		while ( got_null == 0 && max > 0 )
-		{
-			va = PGROUNDDOWN(src_va );
-			pa = (uint64) pt.walk_addr( va );
-            if ( pa == 0 ) return -1;
-			#ifdef RISCV
+        while (got_null == 0 && max > 0)
+        {
+            va = PGROUNDDOWN(src_va);
+            pa = (uint64)pt.walk_addr(va);
+            if (pa == 0)
+                return -1;
+#ifdef RISCV
 
 #elif defined(LOONGARCH)
-            pa = hsai::k_mem->to_phy( pa );
+            pa = hsai::k_mem->to_phy(pa);
 #endif
-			n = PGSIZE - ( src_va - va );
-			if ( n > max ) n = max;
+            n = PGSIZE - (src_va - va);
+            if (n > max)
+                n = max;
 
-			char *p = (char *) ( pa + ( src_va - va ) );
-			while ( n > 0 )
-			{
-				if ( *p == '\0' )
-				{
-					got_null = 1;
-					break;
-				}
-				else { dst.push_back( *p ); }
-				--n;
-				--max;
-				p++;
-			}
+            char *p = (char *)(pa + (src_va - va));
+            while (n > 0)
+            {
+                if (*p == '\0')
+                {
+                    got_null = 1;
+                    break;
+                }
+                else
+                {
+                    dst.push_back(*p);
+                }
+                --n;
+                --max;
+                p++;
+            }
 
-			src_va = va + PGSIZE;
-		}
-		if ( got_null ) { return 0; }
-		else { return -1; }
-	}
+            src_va = va + PGSIZE;
+        }
+        if (got_null)
+        {
+            return 0;
+        }
+        else
+        {
+            return -1;
+        }
+    }
     // TODO
     // uint64 VirtualMemoryManager::allocshm(PageTable &pt, uint64 oldshm, uint64 newshm, uint64 sz, void *phyaddr[pm::MAX_SHM_PGNUM])
     // {
@@ -313,17 +327,17 @@ int VirtualMemoryManager::copy_str_in( PageTable &pt, eastl::string &dst,
     //     return oldshm;
     // }
 
-/// @brief 从内核地址空间拷贝数据到用户页表映射的虚拟地址空间。
-///
-/// 将内核中的 `len` 字节数据从指针 `p` 拷贝到用户进程页表 `pt` 所映射的虚拟地址 `va` 起始处，
-/// 自动处理跨页情况。该函数假定目标页表 `pt` 中的虚拟地址 `va` 所需的所有页表项已经建立并映射有效物理页。
-/// 若某一虚拟地址未能映射有效物理页（即 walk 返回的页表项为无效），则返回 -1 表示失败。
-///
-/// @param pt  用户进程的页表，用于解析虚拟地址。
-/// @param va  拷贝的目标虚拟地址（用户空间），可跨页。
-/// @param p   拷贝的源地址（内核空间指针）。
-/// @param len 拷贝的字节数。
-/// @return 成功返回 0；若任意一页无效或未映射，返回 -1。
+    /// @brief 从内核地址空间拷贝数据到用户页表映射的虚拟地址空间。
+    ///
+    /// 将内核中的 `len` 字节数据从指针 `p` 拷贝到用户进程页表 `pt` 所映射的虚拟地址 `va` 起始处，
+    /// 自动处理跨页情况。该函数假定目标页表 `pt` 中的虚拟地址 `va` 所需的所有页表项已经建立并映射有效物理页。
+    /// 若某一虚拟地址未能映射有效物理页（即 walk 返回的页表项为无效），则返回 -1 表示失败。
+    ///
+    /// @param pt  用户进程的页表，用于解析虚拟地址。
+    /// @param va  拷贝的目标虚拟地址（用户空间），可跨页。
+    /// @param p   拷贝的源地址（内核空间指针）。
+    /// @param len 拷贝的字节数。
+    /// @return 成功返回 0；若任意一页无效或未映射，返回 -1。
     int VirtualMemoryManager::copy_out(PageTable &pt, uint64 va, const void *p, uint64 len)
     {
 #ifdef RISCV
@@ -393,7 +407,7 @@ int VirtualMemoryManager::copy_str_in( PageTable &pt, eastl::string &dst,
                 k_pmm.free_page(pte.pa());
             }
             // printfMagenta("vmunmap: unmap va: %p, pa: %p\n", a, pte.pa());
-            pte.clear_data();      
+            pte.clear_data();
         }
     }
 
@@ -411,7 +425,6 @@ int VirtualMemoryManager::copy_str_in( PageTable &pt, eastl::string &dst,
         return pt;
     }
 
-
     int VirtualMemoryManager::vm_copy(PageTable &old_pt, PageTable &new_pt, uint64 start, uint64 size)
     {
         Pte pte;
@@ -419,19 +432,19 @@ int VirtualMemoryManager::copy_str_in( PageTable &pt, eastl::string &dst,
         uint64 va_end;
         uint64 flags;
         void *mem;
-        
-        if(!is_page_align(start) || !is_page_align(size))
+
+        if (!is_page_align(start) || !is_page_align(size))
         {
             panic("uvmcopy: start or size not page aligned");
             return -1;
         }
-        
+
         va_end = start + size;
-        
 
         for (va = start; va < va_end; va += PGSIZE)
         {
-            if ((pte = old_pt.walk(va, false)).is_null()){
+            if ((pte = old_pt.walk(va, false)).is_null())
+            {
                 panic("uvmcopy: pte should exist for va: %p", va);
             }
             if (pte.is_valid() == 0)
