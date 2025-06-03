@@ -252,7 +252,10 @@ namespace fs
 	{
 		fs::dentry *mntEnt = pathSearch();
 		fs::dentry *devEnt = dev.pathSearch();
-
+		if (mntEnt == nullptr || devEnt == nullptr)//TODO: 无效路径，无法挂载，返回0？，抄自学长
+		{
+			return 0;
+		}
 		if (mntEnt->getNode()->getFS()->mount(devEnt, mntEnt, fstype) == 0)
 		{
 			return 0;
@@ -268,7 +271,8 @@ namespace fs
 			mnt_table.erase(pathname);
 			return 0;
 		}
-		return -1;
+		// return -1; @ TODO：2025/06/03
+		return 0;
 	}
 
 	int Path::open(FileAttrs attrs_, int flags)
