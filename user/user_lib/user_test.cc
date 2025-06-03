@@ -54,10 +54,10 @@ int basic_test(void)
     // run_test("close");          //X    data is   close error.
     // run_test("read");        
     // run_test("getdents");     
-    // run_test("mkdir_");
-    // run_test("chdir");
-    // run_test("mount");          //X  mount return: -1
-    // run_test("umount");          //X  mount return: -1
+    run_test("mkdir_");
+    run_test("chdir");
+    run_test("mount");          //X  mount return: -1
+    run_test("umount");          //X  mount return: -1
     // run_test("munmap");          //X
     // run_test("unlink");
     // run_test("pipe");            //X      卡死了最后
