@@ -3,6 +3,7 @@
 #include "proc.hh"
 #include "proc_manager.hh"
 #include "virtual_memory_manager.hh"
+#include "physical_memory_manager.hh"
 #include "userspace_stream.hh"
 #include "klib.hh"
 #include "list.hh"
@@ -356,7 +357,7 @@ namespace syscall
             return -4;
         if (n <= 0)
             return -5;
-        printfCyan("[sys_read] Try read,f:%x,buf:%x", f, f);
+        // printfCyan("[sys_read] Try read,f:%x,buf:%x", f, f);
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
 
@@ -629,7 +630,7 @@ namespace syscall
         if (mem::k_vmm.copy_str_in(*pt, path, path_addr, 100) < 0)
             return -1;
         int res = proc::k_pm.open(dir_fd, path, flags);
-        printfBlue("openat return fd is %d", res);
+        // printfBlue("openat return fd is %d", res);
         return res;
     }
     uint64 SyscallHandler::sys_write()
@@ -691,7 +692,8 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_mkdirat()
     {
-        // 抄的学长的sys_mkdir
+        // // 抄的学长的sys_mkdir
+        // printfBlue("mkdir!\n");
         int dir_fd;
         uint64 path_addr;
         int flags;
@@ -980,9 +982,34 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_getdents64()
     {
-        TODO("sys_getdents64");
-        printfYellow("sys_getdents64\n");
-        return 0;
+        fs::file *f;
+        uint64 buf_addr;
+        uint64 buf_len;
+        if (_arg_fd(0, nullptr, &f) < 0)
+            return -1;
+        if (_arg_addr(1, buf_addr) < 0)
+            return -1;
+        if (_arg_addr(2, buf_len) < 0)
+            return -1;
+
+        if (f->_attrs.filetype != fs::FileTypes::FT_NORMAL &&
+            f->_attrs.filetype != fs::FileTypes::FT_DIRECT)
+            return -1;
+        // eastl::string name = f->data.get_Entry()->rName();
+        fs::normal_file *normal_f = static_cast<fs::normal_file *>(f);
+
+        mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+
+        mem::UserspaceStream us((void *)buf_addr, buf_len, pt);
+
+        us.open();
+        u64 rlen = us.rest_space();
+        normal_f->read_sub_dir(us);
+        rlen -= us.rest_space();
+        us.close();
+
+        return rlen;
+
     }
     uint64 SyscallHandler::sys_shutdown()
     {

@@ -29,15 +29,19 @@ namespace fs
 	 * @note 若 base_ 不是 normal_file 类型，则会触发 panic。
 	 */
 	/// 这里的base_文件需要有dentry，目前只有normalfile有dentry
-	Path::Path(const eastl::string &path_, file *base_)
-		: pathname(path_)
+	Path::Path( const eastl::string& path_, file *base_ )
+		: pathname( path_ )
 	{
-
-		fs::normal_file *file = static_cast<fs::normal_file *>(base_);
-		if (file == nullptr)
-			panic("Path: base file is not a normalfile");
-
-		base = file->getDentry();
+		if(base_ == nullptr)
+		{
+			base = nullptr;
+		} else {
+			fs::normal_file *file = static_cast<fs::normal_file *>( base_ );
+			if( file == nullptr ) 
+				panic("Path: base file is not a normalfile");
+			
+			base = file->getDentry();
+		}
 		pathbuild();
 	}
 
