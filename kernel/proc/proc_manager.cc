@@ -521,7 +521,7 @@ namespace proc
         {
             return -1;
         }
-
+        
         // Copy user memory from _parent to child.
         mem::PageTable *curpt, *newpt;
         curpt = p->get_pagetable();
@@ -590,7 +590,7 @@ namespace proc
         np->_state = ProcState::RUNNABLE;
         np->_user_ticks = 0;
         np->_lock.release();
-
+        // printfCyan("blublublu");
         return pid;
     }
 
@@ -634,6 +634,7 @@ namespace proc
         {
             return addr;
         }
+        // printfCyan("[brk]  let's map to %d,now our size is%d\n",n,addr);
         if (growproc(n - addr) < 0)
         {
             return -1;

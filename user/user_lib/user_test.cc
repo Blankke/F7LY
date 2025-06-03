@@ -29,7 +29,7 @@ int basic_test(void)
 {
     [[maybe_unused]] int pid;
     chdir("/mnt/glibc/basic/");
-    // run_test("write");
+  // run_test("write");
     // run_test("fork");
     // run_test("exit");
     // run_test("wait");
@@ -44,26 +44,21 @@ int basic_test(void)
     // run_test("sleep");
     // run_test("times");
     // run_test("clone");       //X   usertrap scause==2,,illegal instruction
-    // run_test("brk");      //X   remap
+    // run_test("brk");      
     // run_test("waitpid");
-    run_test("mmap");    //X   normal file is not a directory or regular file.
+    // run_test("mmap");    
     // run_test("fstat");          
     // run_test("uname");
     // run_test("openat");          
     // run_test("open");           
-    // run_test("close");          //X    data is   close error.
+    // run_test("close");          
     // run_test("read");        
     // run_test("getdents");     
-    run_test("mkdir_");
-    run_test("chdir");
-    run_test("mount");          //X  mount return: -1
-    run_test("umount");          //X  mount return: -1
-    // run_test("munmap");          //X
     // run_test("mkdir_");
     // run_test("chdir");
-    // run_test("mount");          //X  mount return: -1
-    // run_test("umount");          //X  mount return: -1
-    run_test("munmap");          //X
+    // run_test("mount");         
+    // run_test("umount");          
+    // run_test("munmap");          
     // run_test("unlink");
     // run_test("pipe");            //X      卡死了最后
     return 0;

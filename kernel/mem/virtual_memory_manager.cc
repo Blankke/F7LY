@@ -499,9 +499,10 @@ namespace mem
 
         if (newsz < oldsz) // shrink, not here
             return oldsz;
-        a = PGROUNDUP(oldsz); // start from the next page
 
-        for (a = oldsz; a < newsz; a += PGSIZE)
+        a = PGROUNDUP(oldsz); // start from the next page
+        // printfBlue("[vmalloc]  another page :%p,walk:%p\n",a,pt.walk(a,0).get_data());
+        for (; a < newsz; a += PGSIZE)
         {
             pa = (uint64)k_pmm.alloc_page();
             if (pa == 0)
@@ -509,8 +510,7 @@ namespace mem
                 vmfree(pt, oldsz);
                 return 0;
             }
-            if (!map_pages(pt, a, PGSIZE, pa,
-                           riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_user_m | flags))
+            if (!map_pages(pt, a, PGSIZE, pa,riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_user_m | flags))
             {
                 k_pmm.free_page((void *)pa);
                 uvmdealloc(pt, a, oldsz);

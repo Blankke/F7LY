@@ -75,6 +75,7 @@ namespace mem
                 // // DEBUG:
                 // if (va == KERNBASE)
                 //     printfBlue
+
             }
             else
             {
@@ -103,7 +104,6 @@ namespace mem
                     // printfBlue("new_pt: %p\n", new_pt.get_base());
                     // new_pt.print_page_table();
                 }
-
                 // 更新当前页表指向新分配的层级
                 current_pt = new_pt;
             }

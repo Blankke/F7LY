@@ -71,13 +71,13 @@ namespace riscv
 			}
 
 			// display all partition
-			printf("打印 MBR 分区表");
-			for (int i = 0; i< 4; ++i)
-			{
-				dev::DiskPartTableEntry &part = copy_entrys[i];
-				printf("分区 %d : 分区状态=%#x 分区类型=%#x 起始LBA=%#x 分区总扇区数=%#x\n", i,
-					   part.drive_attribute, part.part_type, part.lba_addr_start, part.sector_count);
-			}
+			// printf("打印 MBR 分区表");
+			// for (int i = 0; i< 4; ++i)
+			// {
+			// 	dev::DiskPartTableEntry &part = copy_entrys[i];
+			// 	printf("分区 %d : 分区状态=%x 分区类型=%x 起始LBA=%x 分区总扇区数=%x\n", i,
+			// 		   part.drive_attribute, part.part_type, part.lba_addr_start, part.sector_count);
+			// }
 
 			for (int i = 0; i < 4; ++i)
 			{
