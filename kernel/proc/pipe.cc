@@ -169,13 +169,13 @@ namespace proc
 
 			// set file
 			fs::FileAttrs attrs = fs::FileAttrs(fs::FileTypes::FT_PIPE, 0771);
-			f0 = new fs::pipe_file(attrs, this);
+			f0 = new fs::pipe_file(attrs, this, false);
 			// f0->type = fs::FileTypes::FT_PIPE;
 			// new ( &f0->data ) fs::File::Data( this );
 			// new ( &f0->ops  ) fs::FileOps( 1 ); //readonly
 
 			attrs = fs::FileAttrs(fs::FileTypes::FT_PIPE, 0772);
-			f1 = new fs::pipe_file(attrs, this);
+			f1 = new fs::pipe_file(attrs, this, true);
 			// f1->type = fs::FileTypes::FT_PIPE;
 			// new ( &f1->data ) fs::File::Data( this );
 			// new ( &f1->ops ) fs::FileOps( 2 ); //writeonly

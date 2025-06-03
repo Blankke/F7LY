@@ -19,7 +19,10 @@ namespace fs
 		pipe_file( FileAttrs attrs, Pipe *pipe_ ) : file( attrs ), _pipe( pipe_ ) { new ( &_stat ) Kstat( _pipe ); dup(); }
 		pipe_file( Pipe *pipe_ ) : file( FileAttrs( FileTypes::FT_PIPE, 0777 ) ), _pipe( pipe_ ) { new ( &_stat ) Kstat( _pipe ); dup(); }
 
-		~pipe_file() = default;
+		~pipe_file()
+		{
+			_pipe->close(is_write);
+		};
 
 		/// @note pipe read 没有偏移的概念
 		long read(uint64 buf, size_t len, long off, bool upgrade) override

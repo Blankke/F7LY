@@ -21,3 +21,4 @@ user/disasm_initcode.asm
 user/initcode-rv
 output.txt
 out.txt
+disasm_busybox.asm
