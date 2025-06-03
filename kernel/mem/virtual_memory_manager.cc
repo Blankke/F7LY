@@ -147,6 +147,12 @@ namespace mem
         return new_sz;
     }
 
+/// @brief 从用户空间拷贝数据到内核空间。
+/// @param pt 当前进程的页表，用于地址转换。
+/// @param dst 目标地址（内核空间指针），拷贝到这里。
+/// @param src_va 源地址（用户虚拟地址），从这个地址读取数据。
+/// @param len 拷贝的数据长度（字节数）。
+/// @return 成功返回0，失败返回-1（如页表无法转换用户虚拟地址）。
     int VirtualMemoryManager::copy_in(PageTable &pt, void *dst, uint64 src_va, uint64 len)
     {
         uint64 n, va, pa;

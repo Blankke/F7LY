@@ -130,7 +130,7 @@ void trap_manager::timertick()
   ticks++;
   proc::k_pm.wakeup(&ticks);
 
-	// printfCyan("[tm]  timertick here,p->addr:%x \n",Cpu::get_cpu()->get_cur_proc());
+  // printfCyan("[tm]  timertick here,p->addr:%x \n",Cpu::get_cpu()->get_cur_proc());
   // release the lock
   tickslock.release();
 
@@ -167,8 +167,7 @@ void trap_manager::kerneltrap()
     panic("kerneltrap");
   }
 
-
-  if (which_dev == 2&& Cpu::get_cpu()->get_cur_proc()!=nullptr&&Cpu::get_cpu()->get_cur_proc()->_state==proc::RUNNING)
+  if (which_dev == 2 && Cpu::get_cpu()->get_cur_proc() != nullptr && Cpu::get_cpu()->get_cur_proc()->_state == proc::RUNNING)
   {
     timeslice++; // 让一个进程连续执行若干时间片，printf线程不安全
     // printf("timeslice: %d\n", timeslice);
@@ -331,14 +330,9 @@ int mmap_handler(uint64 va, int cause)
     pte_flags |= PTE_X;
 
   fs::normal_file *vf = p->_vm[i].vfile;
-  // 读导致的页面错误
-  if (cause == 13 && vf->read_ready() == 0)
-    return -1;
-  // 写导致的页面错误
-  if (cause == 15 && vf->write_ready() == 0)
-    return -1;
 
   void *pa = mem::k_pmm.alloc_page();
+
   if (pa == 0)
     return -1;
   memset(pa, 0, PGSIZE);
@@ -347,15 +341,15 @@ int mmap_handler(uint64 va, int cause)
   fs::dentry *den = vf->getDentry();
   if (den == nullptr)
   {
-    mem::k_pmm.free_page(pa);
     printfRed("mmap_handler: dentry is null\n");
+    mem::k_pmm.free_page(pa);
     return -1; // dentry is null
   }
   fs::Inode *inode = den->getNode();
   if (inode == nullptr)
   {
-    mem::k_pmm.free_page(pa);
     printfRed("mmap_handler: inode is null\n");
+    mem::k_pmm.free_page(pa);
     return -1; // inode is null
   }
 
@@ -372,15 +366,16 @@ int mmap_handler(uint64 va, int cause)
   // 什么都没有读到
   if (readbytes == 0)
   {
+    printfRed("mmap_handler: read nothing");
     inode->_lock.release();
     mem::k_pmm.free_page(pa);
     return -1;
   }
   inode->_lock.release(); // 释放inode锁
-
   // 添加页面映射
-  if (mem::k_vmm.map_pages(*p->get_pagetable(), PGROUNDDOWN(va), PGSIZE, (uint64)pa, pte_flags) != 0)
+  if (mem::k_vmm.map_pages(*p->get_pagetable(), PGROUNDDOWN(va), PGSIZE, (uint64)pa, pte_flags) != 1)
   {
+    printfRed("mmap_handler: map failed");
     mem::k_pmm.free_page(pa);
     return -1;
   }

@@ -267,9 +267,9 @@ namespace fs
 		size_t Normal::nodeWrite(uint64 src_, size_t off, size_t len)
 		{
 			size_t write_len = len;
-
 			char *writecontent = new char[len];
 			memset(writecontent, 0, len);
+			// printfRed("i try to print *src:%p,char:%s\n",src_,(char*)src_);
 			memcpy(writecontent, (void *)src_, len);
 			// printf("test.txt write: %s\n", writecontent);
 			for (size_t i = 0; i < write_len; ++i)

@@ -802,8 +802,8 @@ namespace syscall
     uint64 SyscallHandler::sys_munmap()
     {
         u64 start;
-        size_t size;
-        if (_arg_addr(0, start) < 0 || _arg_addr(1, size) < 0)
+        int size;
+        if (_arg_addr(0, start) < 0 || _arg_int(1, size) < 0)
         {
             printfRed("[SyscallHandler::sys_munmap] Error fetching munmap arguments\n");
             return -1;
