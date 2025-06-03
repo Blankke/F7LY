@@ -43,7 +43,7 @@ int basic_test(void)
     // run_test("yield"); 
     // run_test("sleep");
     // run_test("times");
-    // run_test("clone");       //X   usertrap scause==2,,illegal instruction
+    run_test("clone");       //X   usertrap scause==2,,illegal instruction
     // run_test("brk");      
     // run_test("waitpid");
     // run_test("mmap");    
@@ -60,7 +60,7 @@ int basic_test(void)
     // run_test("umount");          
     // run_test("munmap");          
     // run_test("unlink");
-    // run_test("pipe");            //X      卡死了最后
+    // run_test("pipe");            
     return 0;
 }
 

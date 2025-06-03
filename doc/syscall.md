@@ -113,3 +113,6 @@ yield似乎是对的，sche_yield需要调用yield，后成功。
 sleep已成功，问题在于进入了nanosleep，nanosleep的参数获取有问题，测试只有两个参数，我们获取了四个参数导致错误。
 
 path错误的问题已修复，增加一个判断条件。
+
+brk问题在于vmalloc的for循环，     a = PGROUNDUP(oldsz); // start from the next page  
+        for (; a < newsz; a += PGSIZE)

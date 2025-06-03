@@ -742,7 +742,7 @@ namespace syscall
         {
             panic("[SyscallHandler::sys_clone] flags must be SIGCHILD");
         }
-        return proc::k_pm.fork();
+        return proc::k_pm.fork(stack);
     }
     uint64 SyscallHandler::sys_umount2()
     {
