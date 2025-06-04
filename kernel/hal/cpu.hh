@@ -69,10 +69,11 @@ public:
         {
 #ifdef RISCV
                 uint64 x = riscv::r_sstatus();
+                return (x & SSTATUS_SIE) != 0;
 #elif defined(LOONGARCH)
                 uint64 x = r_csr_crmd(); // 假设 crmd 对应 mstatus CSR
+                return (x & loongarch::csr::crmd::ie_m) != 0;
 #endif
-                return (x & SSTATUS_SIE) != 0;
         };
 
         static void push_intr_off();

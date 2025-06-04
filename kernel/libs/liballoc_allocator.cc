@@ -3,7 +3,11 @@
 #include "liballoc_allocator.hh"
 #include "buddysystem.hh"
 #include "memlayout.hh"
-#include "pagetable.hh"
+#ifdef RISCV
+#include "mem/riscv/pagetable.hh"
+#elif defined (LOONGARCH)
+#include "mem/loongarch/pagetable.hh"
+#endif
 #include "common.hh"
 #include "printer.hh"
 #include "platform.hh"

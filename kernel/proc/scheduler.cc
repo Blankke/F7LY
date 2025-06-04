@@ -3,7 +3,11 @@
 #include "scheduler.hh"
 #include "proc_manager.hh"
 #include "printer.hh"
-#include "pagetable.hh"
+#ifdef RISCV
+#include "mem/riscv/pagetable.hh"
+#elif defined (LOONGARCH)
+#include "mem/loongarch/pagetable.hh"
+#endif
 // #include "tm/timer_manager.hh"
 // #include "klib/common.hh"
 

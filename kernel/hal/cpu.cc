@@ -12,7 +12,12 @@ Cpu *Cpu::get_cpu()
 
 uint64 Cpu::get_time()
 {
+	#ifdef RISCV
 	return r_time();
+	#elif defined (LOONGARCH)
+	return 0;
+	//loongarch 不需要这个函数
+	#endif
 }
 
 void Cpu::push_intr_off()
@@ -49,8 +54,8 @@ void Cpu::enable_fpu()
 	mstatus |= (0x3UL << 13); // FS 位在 mstatus[14:13]
 	w_mstatus(mstatus);
 #elif defined(LOONGARCH)
-	uint64 tmp = r_euen(csr::CsrAddr::euen);
-	w_euen(tmp | 1);
+	uint64 tmp = r_csr_euen();
+	w_csr_euen(tmp | 1);
 #endif
 }
 
@@ -71,8 +76,8 @@ void Cpu::_intr_on()
 #ifdef RISCV
 	w_sstatus(r_sstatus() | SSTATUS_SIE);
 #elif defined(LOONGARCH)
-	uint64 tmp = r_crmd();
-	w_crmd(tmp | csr::Crmd::ie_m);
+	uint64 tmp = r_csr_crmd();
+	w_csr_crmd(tmp | loongarch::csr::crmd::ie_m);
 #endif
 }
 
@@ -81,7 +86,7 @@ void Cpu::_intr_off()
 #ifdef RISCV
 	w_sstatus(r_sstatus() & ~SSTATUS_SIE);
 #elif defined(LOONGARCH)
-	uint64 tmp = r_crmd();
-	w_crmd(tmp & ~csr::Crmd::ie_m);
+	uint64 tmp = r_csr_crmd();
+	w_csr_crmd(tmp & ~loongarch::csr::crmd::ie_m);
 #endif
 }

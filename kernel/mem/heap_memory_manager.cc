@@ -1,6 +1,10 @@
 
 #include "heap_memory_manager.hh"
-#include "pagetable.hh"
+#ifdef RISCV
+#include "mem/riscv/pagetable.hh"
+#elif defined (LOONGARCH)
+#include "mem/loongarch/pagetable.hh"
+#endif
 #include "memlayout.hh"
 #include "klib.hh"
 #include "printer.hh"

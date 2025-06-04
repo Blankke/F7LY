@@ -1,8 +1,8 @@
 #pragma once
 #ifdef LOONGARCH
-#include "types.h"
-#include "dev/pci/pci.h"
-#include "dev/pci/virtio_ring.h"
+#include "types.hh"
+#include "devs/loongarch/pci.hh"
+#include "devs/loongarch/virtio_ring.hh"
 
 
 /* Common configuration */

@@ -1,6 +1,10 @@
 #pragma once
 #include "types.hh"
-#include "pagetable.hh"
+#ifdef RISCV
+#include "mem/riscv/pagetable.hh"
+#elif defined (LOONGARCH)
+#include "mem/loongarch/pagetable.hh"
+#endif
 #include "trapframe.hh"
 #include "context.hh"
 #include "spinlock.hh"

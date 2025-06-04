@@ -1,5 +1,5 @@
 //
-// Created by Li shuang ( pseudonym ) on 2024-08-07
+// Copied from Li shuang ( pseudonym ) on 2024-08-07
 // --------------------------------------------------------------
 // | Note: This code file just for study, not for commercial use
 // | Contact Author: lishuang.mk@whu.edu.cn
@@ -14,7 +14,11 @@
 #include <virtual_memory_manager.hh>
 #include <tuple>
 
-#include "pagetable.hh"
+#ifdef RISCV
+#include "mem/riscv/pagetable.hh"
+#elif defined (LOONGARCH)
+#include "mem/loongarch/pagetable.hh"
+#endif
 
 namespace mem
 {

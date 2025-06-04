@@ -659,6 +659,20 @@ r_csr_badv()
   return x;
 }
 
+static inline void
+w_csr_euen(uint32 x)
+{
+  asm volatile("csrwr %0, 0x2" : : "r" (x) );
+}
+
+static inline uint32
+r_csr_euen()
+{
+  uint32 x;
+  asm volatile("csrrd %0, 0x2" : "=r" (x) );
+  return x;
+}
+
 // static uint64 rdtime(void) {
 //   int rID = 0;
 //   uint64 val = 0;
@@ -763,6 +777,6 @@ typedef uint64 *pagetable_t;
 		// vm_kernel_heap_start = _1M * 8,
 	#define	vm_kernel_heap_start  MAXVA >> 1,							// 64 MiB
 	#define	vm_kernel_heap_size  _1M * 64,
-
+#define HEAP_START PHYSTOP-vm_kernel_heap_size
 
 #endif

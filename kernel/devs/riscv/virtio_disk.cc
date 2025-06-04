@@ -11,7 +11,11 @@
 #include "printer.hh"
 #include "klib.hh"
 #include "proc_manager.hh"
-#include "pagetable.hh"
+#ifdef RISCV
+#include "mem/riscv/pagetable.hh"
+#elif defined (LOONGARCH)
+#include "mem/loongarch/pagetable.hh"
+#endif
 #include "platform.hh"
 #include "pte.hh"
 #include "cpu.hh"

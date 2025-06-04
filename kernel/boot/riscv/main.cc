@@ -2,7 +2,7 @@
 #include "printer.hh"
 #include "param.h"
 #include "slab.hh"
-#include "pagetable.hh"
+#include "mem/riscv/pagetable.hh"
 #include "fuckyou.hh"
 #include "physical_memory_manager.hh"
 #include "virtual_memory_manager.hh"
@@ -28,6 +28,7 @@
 #include "devs/console1.hh"
 #include "fs/vfs/inode.hh"
 #include "mem/userspace_stream.hh"
+#include "fs/dev/acpi_controller.hh"
 // 注意华科的main函数可能有问题, 注意多核初始化
 void main()
 {

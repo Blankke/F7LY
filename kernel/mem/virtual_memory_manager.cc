@@ -1,7 +1,11 @@
 #include "klib.hh"
 #include "virtual_memory_manager.hh"
 #include "physical_memory_manager.hh"
-#include "pagetable.hh"
+#ifdef RISCV
+#include "mem/riscv/pagetable.hh"
+#elif defined (LOONGARCH)
+#include "mem/loongarch/pagetable.hh"
+#endif
 #include "memlayout.hh"
 #include "platform.hh"
 #include "printer.hh"
