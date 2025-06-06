@@ -1432,9 +1432,8 @@ namespace proc
                 return -1;
             }
         }
-
         TODO(== == == == == 第四阶段：为glibc准备程序头信息 == == == == ==)
-        // ================    没写    ========================
+        // ================    (已写, 我们抄华科的不用在这里初始化, 直接在下面把数据算出来就可以了)    ========================
 
         // 将ELF程序头转储到用户空间，供glibc的动态链接器使用
         TODO(u64 phdr = 0; // AT_PHDR辅助向量的值
@@ -1523,7 +1522,6 @@ namespace proc
         // ========== 第六阶段：准备glibc所需的用户栈数据 ==========
         // 为了兼容glibc，需要在用户栈中按照特定顺序压入：
         // 栈顶 -> 栈底：argc, argv[], envp[], auxv[], 字符串数据, 随机数据
-        // TODO: 这里没写auxv
 
         TODO(
             mm::UserstackStream ustack((void *)stackbase, stack_page_cnt * hsai::page_size, &new_pt);
@@ -1545,7 +1543,7 @@ namespace proc
                 rd_pos = ustack.sp(); // 记录随机数据的位置，用于AT_RANDOM
             })
 
-        // 2. 压入环境变量
+        // 2. 压入环境变量字符串
         uint64 uenvp[MAXARG];
         uint64 envc;
 
@@ -1604,81 +1602,37 @@ namespace proc
         }
         uargv[argc] = 0; // argv数组以NULL结尾
 
-        TODO(
-            // 4. 压入辅助向量（auxv），供动态链接器使用
+        // 4. 压入辅助向量（auxv），供动态链接器使用
+        {
+            // 在括号里面开命名空间防止变量名冲突
+            using namespace elf;
+            uint64 aux[AuxvEntryType::MAX_AT * 2];
+            int index = 0;
+
+            ADD_AUXV(AT_HWCAP, 0);             // 硬件功能标志
+            ADD_AUXV(AT_PAGESZ, PGSIZE);       // 页面大小
+            ADD_AUXV(AT_PHDR, elf.phoff);      // 程序头表偏移
+            ADD_AUXV(AT_PHENT, elf.phentsize); // 程序头表项大小
+            ADD_AUXV(AT_PHNUM, elf.phnum);     // 程序头表项数量
+            ADD_AUXV(AT_BASE, 0);              // 动态链接器基地址（保留）
+            ADD_AUXV(AT_ENTRY, elf.entry);     // 程序入口点地址
+            ADD_AUXV(AT_UID, 0);               // 用户ID
+            ADD_AUXV(AT_EUID, 0);              // 有效用户ID
+            ADD_AUXV(AT_GID, 0);               // 组ID
+            ADD_AUXV(AT_EGID, 0);              // 有效组ID
+            ADD_AUXV(AT_SECURE, 0);            // 安全模式标志
+            ADD_AUXV(AT_RANDOM, sp);           // 随机数地址
+            ADD_AUXV(AT_NULL, 0);              // 结束标记
+
+            // 将辅助向量复制到栈上
+            sp -= sizeof(aux);
+            if (mem::k_vmm.copy_out(new_pt, sp, (char *)aux, sizeof(aux)) < 0)
             {
-                elf::Elf64_auxv_t aux;
-
-                // auxv数组以AT_NULL结尾
-                aux.a_type = elf::AT_NULL;
-                aux.a_un.a_val = 0;
-                ustack << aux;
-                if (ustack.errno() != ustack.rc_ok)
-                {
-                    _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
-                    log_error("execve: push into stack");
-                    return -1;
-                }
-
-                // 如果有程序头信息，添加相关的辅助向量
-                if (phdr != 0)
-                {
-                    // AT_PAGESZ：页面大小
-                    aux.a_type = elf::AT_PAGESZ;
-                    aux.a_un.a_val = hsai::page_size;
-                    ustack << aux;
-                    if (ustack.errno() != ustack.rc_ok)
-                    {
-                        _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
-                        log_error("execve: push into stack");
-                        return -1;
-                    }
-
-                    // AT_PHNUM：程序头数量
-                    aux.a_type = elf::AT_PHNUM;
-                    aux.a_un.a_val = elf.phnum;
-                    ustack << aux;
-                    if (ustack.errno() != ustack.rc_ok)
-                    {
-                        _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
-                        log_error("execve: push into stack");
-                        return -1;
-                    }
-
-                    // AT_PHENT：程序头条目大小
-                    aux.a_type = elf::AT_PHENT;
-                    aux.a_un.a_val = elf.phentsize;
-                    ustack << aux;
-                    if (ustack.errno() != ustack.rc_ok)
-                    {
-                        _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
-                        log_error("execve: push into stack");
-                        return -1;
-                    }
-
-                    // AT_PHDR：程序头地址
-                    aux.a_type = elf::AT_PHDR;
-                    aux.a_un.a_val = phdr;
-                    ustack << aux;
-                    if (ustack.errno() != ustack.rc_ok)
-                    {
-                        _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
-                        log_error("execve: push into stack");
-                        return -1;
-                    }
-                }
-
-                // AT_RANDOM：随机数据地址（安全性要求）
-                aux.a_type = elf::AT_RANDOM;
-                aux.a_un.a_val = rd_pos;
-                ustack << aux;
-                if (ustack.errno() != ustack.rc_ok)
-                {
-                    _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
-                    log_error("execve: push into stack");
-                    return -1;
-                }
-            })
+                printfRed("execve: copy auxv failed\n");
+                k_pm.proc_freepagetable(new_pt, new_sz);
+                return -1;
+            }
+        }
         // 5. 压入环境变量指针数组（envp）
         if (uenvp[0])
         {
