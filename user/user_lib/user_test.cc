@@ -29,7 +29,7 @@ int basic_test(void)
 {
     [[maybe_unused]] int pid;
     chdir("/mnt/musl/basic/");
-  run_test("write");
+    run_test("write");
     run_test("fork");
     run_test("exit");
     run_test("wait");
@@ -40,27 +40,27 @@ int basic_test(void)
     run_test("execve");
     run_test("getcwd");
     run_test("gettimeofday");
-    run_test("yield"); 
+    run_test("yield");
     run_test("sleep");
     run_test("times");
-    run_test("clone");       
-    run_test("brk");      
+    run_test("clone");
+    run_test("brk");
     run_test("waitpid");
-    run_test("mmap");    
-    run_test("fstat");          
+    run_test("mmap");
+    run_test("fstat");
     run_test("uname");
-    run_test("openat");          
-    run_test("open");           
-    run_test("close");          
-    run_test("read");        
-    run_test("getdents");     
+    run_test("openat");
+    run_test("open");
+    run_test("close");
+    run_test("read");
+    run_test("getdents");
     run_test("mkdir_");
     run_test("chdir");
-    run_test("mount");         
-    run_test("umount");          
-    run_test("munmap");          
+    run_test("mount");
+    run_test("umount");
+    run_test("munmap");
     run_test("unlink");
-    run_test("pipe");            
+    run_test("pipe");
     return 0;
 }
 
@@ -77,7 +77,10 @@ int start_shell(void)
     {
         chdir("/mnt/glibc/");
         char *bb_sh[8] = {0};
-        bb_sh[0] = "ash";
+        bb_sh[0] = "busybox";
+        bb_sh[1] = "echo";
+        bb_sh[2] = "hello";
+        printf("execve busybox shell\n");
         if (execve("busybox", bb_sh, 0) < 0)
         {
             printf("execve failed\n");
@@ -87,9 +90,10 @@ int start_shell(void)
     }
     else
     {
-        int child_exit_state = -100;
+        int child_exit_state = 33;
         if (wait(&child_exit_state) < 0)
             printf("wait fail\n");
+        printf("shell exited with code %d\n", child_exit_state);
     }
     return 0;
 }

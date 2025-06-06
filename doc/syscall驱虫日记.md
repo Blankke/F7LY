@@ -198,3 +198,6 @@ Buffer content at LBA 8:
 - 学长的proc_pagetable函数是弃用的, 我们的是好的, 直接用这个函数就可以构建基础页表
 - 在从elf提取flag时, 需要进行一下映射, elf的flag和sv39的标志位不一样
 - 注意根页表, 我们pte的根页表是直接开出来空间的, 在释放的时候不用直接释放, 留着就行
+
+# wait4
+- xstatus的值有问题

@@ -4,7 +4,8 @@ extern "C"
 {
     int main()
     {
-        basic_test();
+        // basic_test();
+        start_shell();
         shutdown();
         return 0;
     }

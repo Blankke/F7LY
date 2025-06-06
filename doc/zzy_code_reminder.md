@@ -21,3 +21,6 @@
 - 没写辅助向量(auxv)
 
 # schedular函数可能有问题
+
+# wait4
+- 没有写flag的处理逻辑

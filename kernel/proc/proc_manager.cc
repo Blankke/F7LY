@@ -521,7 +521,7 @@ namespace proc
         {
             return -1;
         }
-        
+
         // Copy user memory from _parent to child.
         mem::PageTable *curpt, *newpt;
         curpt = p->get_pagetable();
@@ -642,7 +642,7 @@ namespace proc
         return n;
     }
 
-    int ProcessManager::wait(int child_pid, uint64 addr)
+    int ProcessManager::wait4(int child_pid, uint64 addr, int option)
     {
         // copy from RUOK-os
         Pcb *p = k_pm.get_cur_pcb();
@@ -678,10 +678,11 @@ namespace proc
                 {
                     np->_lock.acquire();
                     havekids = 1;
-
+                    printf("[wait4]: child %d state: %d name: %s\n", np->_pid, (int)np->_state, np->_name);
                     if (np->get_state() == ProcState::ZOMBIE)
                     {
                         pid = np->_pid;
+                        // printf("[wait4]: child->xstate: %d\n", np->_xstate);
                         if (addr != 0 &&
                             mem::k_vmm.copy_out(p->_pt, addr, (const char *)&np->_xstate,
                                                 sizeof(np->_xstate)) < 0)
@@ -765,6 +766,7 @@ namespace proc
     /// @param state
     void ProcessManager::exit_proc(Pcb *p, int state)
     {
+        printf("[exit_proc] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
         if (p == _init_proc)
             panic("init exiting"); // 保护机制：init 进程不能退出
         // log_info( "exit proc %d", p->_pid );
@@ -808,7 +810,7 @@ namespace proc
     void ProcessManager::exit(int state)
     {
         Pcb *p = get_cur_pcb();
-
+        printf("[exit] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
         exit_proc(p, state);
     }
 
@@ -1150,7 +1152,6 @@ namespace proc
     int ProcessManager::munmap(void *addr, int length)
     {
 
-            
         int i;
         Pcb *p = get_cur_pcb();
 
@@ -1201,11 +1202,11 @@ namespace proc
 
         return 0;
     }
-/// @brief 从当前工作目录中删除指定路径的文件或目录项。
-/// @param fd 基准目录的文件描述符，若为 -100 表示以当前工作目录为基准（AT_FDCWD）。其他值暂不支持。
-/// @param path 要删除的文件或目录的相对路径，不能为空字符串，支持"./"开头的路径格式。
-/// @param flags 暂未使用的标志位参数，预留以支持 future 的 unlinkat 扩展。
-/// @return 成功返回 0，失败返回 -1。
+    /// @brief 从当前工作目录中删除指定路径的文件或目录项。
+    /// @param fd 基准目录的文件描述符，若为 -100 表示以当前工作目录为基准（AT_FDCWD）。其他值暂不支持。
+    /// @param path 要删除的文件或目录的相对路径，不能为空字符串，支持"./"开头的路径格式。
+    /// @param flags 暂未使用的标志位参数，预留以支持 future 的 unlinkat 扩展。
+    /// @return 成功返回 0，失败返回 -1。
     int ProcessManager::unlink(int fd, eastl::string path, int flags)
     {
 
@@ -1369,8 +1370,8 @@ namespace proc
             {
                 // 读取程序头
                 de->getNode()->nodeRead(reinterpret_cast<uint64>(&ph), off, sizeof(ph));
-                // printf("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
-                    //    i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, ph.flags);
+                printf("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
+                       i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, ph.flags);
                 // 	// 只处理LOAD类型的程序段
                 if (ph.type != elf::elfEnum::ELF_PROG_LOAD)
                     continue;
@@ -1398,8 +1399,8 @@ namespace proc
                     seg_flag |= riscv::PteEnum::pte_writable_m;
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ)
                     seg_flag |= riscv::PteEnum::pte_readable_m;
-                // printfRed("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
-                        //   i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, seg_flag);
+                printfRed("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d, end_addr: %p\n",
+                          i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, seg_flag, (void *)(ph.vaddr + ph.memsz));
                 if ((sz1 = mem::k_vmm.vmalloc(new_pt, new_sz, ph.vaddr + ph.memsz, seg_flag)) == 0)
                 {
                     printfRed("execve: uvmalloc\n");
@@ -1764,7 +1765,7 @@ namespace proc
         mem::PageTable old_pt;
         old_pt = *proc->get_pagetable(); // 获取当前进程的页表
         proc->_sz = PGROUNDUP(new_sz);   // 更新进程大小
-        // printf("execve: entry point: %p, new size: %d\n", elf.entry, proc->_sz);
+        printf("execve: entry point: %p, new size: %d\n", elf.entry, proc->_sz);
         proc->_trapframe->epc = elf.entry; // 设置程序计数器为入口点
         proc->_pt = new_pt;                // 替换为新的页表
         proc->_trapframe->sp = sp;         // 设置栈指针
@@ -1772,7 +1773,7 @@ namespace proc
         // printf("execve: new process size: %d, new pagetable: %p\n", proc->_sz, proc->_pt);
         k_pm.proc_freepagetable(old_pt, old_sz);
 
-        // printf("execve succeed, new process size: %d\n", proc->_sz);
+        printf("execve succeed, new process size: %d\n", proc->_sz);
 
         return argc; // 返回参数个数，表示成功执行
     }

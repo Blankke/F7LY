@@ -54,7 +54,6 @@ namespace syscall
         BIND_SYSCALL(exit);
         BIND_SYSCALL(exec);
         BIND_SYSCALL(fork);
-        BIND_SYSCALL(exit);
         BIND_SYSCALL(wait);
         BIND_SYSCALL(wait4);
         BIND_SYSCALL(getppid);
@@ -105,6 +104,8 @@ namespace syscall
         // printf("[SyscallHandler::invoke_syscaller]invoke syscall handler\n");
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
         uint64 sys_num = p->get_trapframe()->a7; // 获取系统调用号
+        if (sys_num != 64)
+            printf("[invoke_syscaller]sys_num: %d sys_name: %s\n", sys_num, _syscall_name[sys_num]);
         // debug
         // 打印所有系统调用号和名称, 检查是否正确
         // printfCyan("debug: syscall_num_list\n");
@@ -277,18 +278,23 @@ namespace syscall
             printfRed("[SyscallHandler::sys_wait] Error fetching arguments\n");
             return -1;
         }
-        // 调用进程管理器的 wait 函数
-        return proc::k_pm.wait(pid, wstatus_addr);
+        int waitret = proc::k_pm.wait4(pid, wstatus_addr, 0);
+        printf("[SyscallHandler::sys_wait] waitret: %d",
+               waitret);
+        return waitret;
     }
     uint64 SyscallHandler::sys_wait4()
     {
         int pid;
         uint64 wstatus_addr;
+        int option;
         if (_arg_int(0, pid) < 0)
             return -1;
         if (_arg_addr(1, wstatus_addr) < 0)
             return -1;
-        return proc::k_pm.wait(pid, wstatus_addr);
+        if (_arg_int(2, option) < 0)
+            return -1;
+        return proc::k_pm.wait4(pid, wstatus_addr, 0);
     }
     uint64 SyscallHandler::sys_getppid()
     {
@@ -1023,7 +1029,6 @@ namespace syscall
         us.close();
 
         return rlen;
-
     }
     uint64 SyscallHandler::sys_shutdown()
     {

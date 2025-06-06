@@ -22,3 +22,5 @@ user/initcode-rv
 output.txt
 out.txt
 disasm_busybox.asm
+busybox.asm
+busyboxhead.asm
