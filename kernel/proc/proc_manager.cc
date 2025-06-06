@@ -850,8 +850,11 @@ namespace proc
                 }
                 p = p->_parent;
                 visit[p->_gid] = 1;
-                stk[stk_ptr] = (void *)p;
-                stk_ptr++;
+                // 修改于6.6，检测防止数组越界
+                if (stk_ptr < (int)num_process + 10)
+                    stk[stk_ptr++] = (void *)p;
+                else
+                    break; // 栈满，直接停止压栈
             }
 
             // 释放应退出的子孙进程资源
@@ -1114,16 +1117,26 @@ namespace proc
         uint64 err = 0xffffffffffffffff;
 
         fs::normal_file *vfile;
+        fs::file *f;
         Pcb *p = get_cur_pcb();
-        if (p->_ofile[fd] == nullptr)
+        if (fd == -1)
+        {
+            f = nullptr; // 添加匿名映射支持
+        }
+        else if (p->_ofile[fd] == nullptr)
+        {
             return (void *)err;
-        fs::file *f = p->_ofile[fd];
-        printf("[mmap] addr: %p, length: %d, prot: %d, flags: %d, fd: %d, offset: %d\n",
-               addr, length, prot, flags, fd, offset);
-        if (f->_attrs.filetype != fs::FileTypes::FT_NORMAL)
-            return (void *)err;                    // 只支持普通文件映射
-        vfile = static_cast<fs::normal_file *>(f); // 强制转换为普通文件类型
-
+        }
+        else
+        {
+            f = p->_ofile[fd];
+        }
+        if (f != NULL)
+        {
+            if (f->_attrs.filetype != fs::FileTypes::FT_NORMAL)
+                return (void *)err;                    // 只支持普通文件映射
+            vfile = static_cast<fs::normal_file *>(f); // 强制转换为普通文件类型
+        }
         ///@details 学长代码是mmap时映射到内存，xv6lab的意思是懒分配，在缺页异常时判断分配。
         /// 我们选择懒分配的方式，只有在访问时才分配物理页。
         // get dentry from file
@@ -1131,6 +1144,17 @@ namespace proc
         //  if(de ==nullptr)   return (void *)err; // dentry is null
         if (p->_sz + length > MAXVA - PGSIZE) // 我写得maxva-pgsize是trampoline的地址
             return (void *)err;               // 超出最大虚拟地址空间
+
+        if (length == 0)
+        {
+            length = 10 * PGSIZE; // 默认映射10页
+        }
+        if (f == NULL)
+        { // 匿名映射处理
+            uint64 new_addr = p->_sz;
+            growproc(length);
+            return (void *)new_addr;
+        }
         for (int i = 0; i < NVMA; ++i)
         {
             if (p->_vm[i].used == 0) // 找到一个空闲的虚拟内存区域
@@ -1534,7 +1558,7 @@ namespace proc
             return -1;
         }
 
-        [[maybe_unused]]uint64 rd_pos = sp;
+        [[maybe_unused]] uint64 rd_pos = sp;
 
         // 2. 压入环境变量字符串
         uint64 uenvp[MAXARG];
@@ -1600,7 +1624,7 @@ namespace proc
             // 在括号里面开命名空间防止变量名冲突
             using namespace elf;
             uint64 aux[AuxvEntryType::MAX_AT * 2];
-            [[maybe_unused]]int index = 0;
+            [[maybe_unused]] int index = 0;
 
             // ADD_AUXV(AT_HWCAP, 0);             // 硬件功能标志
             // ADD_AUXV(AT_PAGESZ, PGSIZE);       // 页面大小
