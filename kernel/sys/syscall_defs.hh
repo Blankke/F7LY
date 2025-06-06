@@ -21,7 +21,7 @@ namespace syscall
         SYS_linkat = 37,
         SYS_umount2 = 39,
         SYS_mount = 40,
-        SYS_faccessat = 48,
+        SYS_faceessat = 48,
         SYS_chdir = 49,
         SYS_exec = 55,
         SYS_openat = 56,
