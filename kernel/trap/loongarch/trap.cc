@@ -12,7 +12,7 @@
 #include "proc/scheduler.hh"
 #include "trap_func_wrapper.hh"
 #include "extioi.hh"
-#include "pci.hh"
+#include "pci.h"
 #include "apic.hh"
 // in kernelvec.S, calls kerneltrap().
 extern "C" void kernelvec();

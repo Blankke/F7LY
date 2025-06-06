@@ -10,7 +10,7 @@ ifeq ($(ARCH),riscv)
   OUTPUT_PREFIX := riscv
   QEMU_CMD := qemu-system-riscv64 -machine virt -m 128M -nographic -smp 1 -bios default -hdb ${KERNEL_PREFIX}/sdcard-rv.img -kernel
 else ifeq ($(ARCH),loongarch)
-  CROSS_COMPILE := loongarch64-unknown-linux-gnu-
+  CROSS_COMPILE := loongarch64-linux-gnu-
   ARCH_CFLAGS := -DLOONGARCH -mcmodel=normal -Wno-error=use-after-free
   OUTPUT_PREFIX := loongarch
   QEMU_CMD := qemu-system-loongarch64 -kernel
@@ -36,9 +36,14 @@ SUBDIRS := $(ARCH_DIRS) $(COMMON_DIRS)
 LINK_SCRIPT := $(KERNEL_DIR)/link/$(ARCH)/kernel.ld
 
 CFLAGS := -Wall -Werror -ffreestanding -O2 -fno-builtin -g -fno-stack-protector $(ARCH_CFLAGS)
+ifeq ($(ARCH),riscv)
+  EA_PLATFORM := -DEA_PROCESSOR_RISCV
+else ifeq ($(ARCH),loongarch)
+  EA_PLATFORM := -DEA_PROCESSOR_LOONGARCH64
+endif
 CXXFLAGS := $(CFLAGS) -std=c++23 -nostdlib \
 			-DEA_PLATFORM_LINUX -DEA_PLATFORM_POSIX \
-            -DEA_PROCESSOR_RISCV -DEA_ENDIAN_LITTLE=1 \
+            $(EA_PLATFORM) -DEA_ENDIAN_LITTLE=1 \
             -Wno-deprecated-declarations -Wno-strict-aliasing \
             -fno-exceptions -fno-rtti -Wno-maybe-uninitialized
 
@@ -103,7 +108,7 @@ USER_TEST_OBJ := build/$(OUTPUT_PREFIX)/user_test.o
 INITCODE_CFLAGS := -Wall -O -fno-builtin -fno-exceptions -fno-rtti -fno-stack-protector -nostdlib -ffreestanding $(ARCH_CFLAGS) -Iuser/deps -Iuser/syscall_lib -Iuser/syscall_lib/arch/$(ARCH) -Ikernel/sys -Ikernel
 INITCODE_LDFLAGS := -N -e start -Ttext 0
 
-.PHONY: all clean dirs build riscv loongarch run debug initcode
+.PHONY: all clean dirs build riscv loongarch run debug initcode build-la
 
 all: riscv
 
@@ -111,9 +116,10 @@ riscv:
 	@$(MAKE) ARCH=riscv build
 
 loongarch:
-	@$(MAKE) ARCH=loongarch build
+	@$(MAKE) ARCH=loongarch build-la
 
 build: initcode dirs $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a $(KERNEL_BIN)
+build-la: dirs $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a $(KERNEL_BIN)
 
 
 dirs:
@@ -235,10 +241,17 @@ $(USER_TEST_OBJ): $(USER_TEST_SRC)
 $(INITCODE_ELF): $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(USER_TEST_OBJ)
 	$(LD) $(INITCODE_LDFLAGS) -o $@ $^
 
+ifeq ($(ARCH),riscv)
+  OBJDUMP_INITCODE := riscv64-unknown-elf-objdump -D -b binary -m riscv:rv64 -EL
+else ifeq ($(ARCH),loongarch)
+  OBJDUMP_INITCODE := loongarch64-unknown-linux-gnu-objdump -D -b binary -m loongarch64
+endif
+
 # 生成二进制 initcode 文件 + 反汇编
 $(INITCODE_BIN): $(INITCODE_ELF)
 	$(OBJCOPY) -S -O binary $< $@
-	riscv64-unknown-elf-objdump -D -b binary -m riscv:rv64 -EL $@ > user/disasm_initcode.asm
+	$(OBJDUMP_INITCODE) $@ > user/disasm_initcode.asm
+
 
 clean:
 	rm -rf build

@@ -5,7 +5,7 @@
 #include "platform.hh"
 #include "apic.hh"
 
-#include "pci.hh"
+#include "pci.h"
 //
 // the loongarch 7A1000 I/O Interrupt Controller Registers.
 //

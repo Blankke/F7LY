@@ -31,7 +31,7 @@ namespace mem
 		/// @param va virtual address
 		/// @return physical address mapped from va
 		void * walk_addr( uint64 va );
-
+		ulong kwalk_addr( uint64 va ) ;
 		/// @brief 递归地释放页表中的所有页面
 		void freewalk();
 
