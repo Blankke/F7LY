@@ -6,7 +6,7 @@
 // --------------------------------------------------------------
 //
 #ifdef LOONGARCH
-#include "physical_memory_manager.hh"
+#include "proc/physical_memory_manager.hh"
 #ifdef RISCV
 #include "mem/riscv/pagetable.hh"
 #elif defined(LOONGARCH)
