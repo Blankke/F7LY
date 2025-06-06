@@ -121,6 +121,9 @@ namespace proc
         program_section_desc _prog_sections[max_program_section_num];
         int _prog_section_cnt = 0;
 
+        // 用于set_tid_address
+        uint64 clear_child_tid;
+
     public:
         Pcb();
         void init(const char *lock_name, uint gid);

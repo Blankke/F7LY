@@ -914,9 +914,9 @@ namespace syscall
     };
     static const char _SYSINFO_sysname[] = "F7LY-OS";
     static const char _SYSINFO_nodename[] = "(none-node)";
-    static const char _SYSINFO_release[] = "V1.0";
-    static const char _SYSINFO_version[] = "V1.0";
-    static const char _SYSINFO_machine[] = "virtual-machine";
+    static const char _SYSINFO_release[] = "4.15.0";
+    static const char _SYSINFO_version[] = "4.15.0";
+    static const char _SYSINFO_machine[] = "Riscv";
     static const char _SYSINFO_domainname[] = "(none-domain)";
     uint64 SyscallHandler::sys_uname()
     {
@@ -1155,8 +1155,15 @@ namespace syscall
     //================================== busybox===================================================
     uint64 SyscallHandler::sys_set_tid_address()
     {
-        // TODO
-        return 0;
+        uint64 tidptr;
+        if (_arg_addr(0, tidptr) < 0)
+        {
+            printfRed("[SyscallHandler::sys_set_tid_address] Error fetching tidptr argument\n");
+            return -1;
+        }
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        p->clear_child_tid = tidptr;
+        return p->get_pid();
     }
     uint64 SyscallHandler::sys_getuid()
     {
@@ -1224,8 +1231,60 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_writev()
     {
-        // TODO
-        return 0;
+        fs::file *f;
+        int fd = 0;
+        int iovcnt;
+        uint64 iov_ptr;
+
+        // 获取参数
+        if (_arg_fd(0, &fd, &f) < 0 ||
+            _arg_addr(1, iov_ptr) < 0 ||
+            _arg_int(2, iovcnt) < 0)
+        {
+            panic("[SyscallHandler::sys_writev] Error fetching arguments");
+            return -1;
+        }
+
+        proc::Pcb *proc = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = proc->get_pagetable();
+
+        uint64 writebytes = 0;
+
+        for (int i = 0; i < iovcnt; i++)
+        {
+            struct iovec iov;
+            uint64 iov_addr = iov_ptr + i * sizeof(struct iovec);
+
+            {
+                mem::UserspaceStream uspace((void *)iov_addr, sizeof(struct iovec), pt);
+                uspace.open();
+                mem::UsRangeDesc urd = std::make_tuple((u8 *)&iov, sizeof(struct iovec));
+                uspace >> urd;
+                uspace.close();
+            }
+
+            char *buf = new char[iov.iov_len + 10];
+            {
+                mem::UserspaceStream uspace((void *)iov.iov_base, iov.iov_len + 1, pt);
+                uspace.open();
+                mem::UsRangeDesc urd = std::make_tuple((u8 *)buf, (ulong)iov.iov_len + 1);
+                uspace >> urd;
+                uspace.close();
+            }
+
+            long rc = f->write((ulong)buf, iov.iov_len, f->get_file_offset(), true);
+            delete[] buf;
+
+            if (rc < 0)
+            {
+                printfRed("[SyscallHandler::sys_writev] 写入文件失败\n");
+                return -1;
+            }
+
+            writebytes += rc;
+        }
+
+        return writebytes;
     }
     uint64 SyscallHandler::SyscallHandler::sys_prlimit64()
     {
