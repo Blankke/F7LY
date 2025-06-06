@@ -144,7 +144,7 @@ namespace elf
 
 		AT_MINSIGSTKSZ = 51, /* Stack needed for signal delivery  */
 
-		MAX_AT = 33
+		MAX_AT = 38
 	};
 
 #define ADD_AUXV(id, val)   \

@@ -75,7 +75,7 @@ int start_shell(void)
     }
     else if (pid == 0)
     {
-        chdir("/mnt/glibc/");
+        chdir("/mnt/musl/");
         char *bb_sh[8] = {0};
         bb_sh[0] = "busybox";
         bb_sh[1] = "echo";

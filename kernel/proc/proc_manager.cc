@@ -1118,6 +1118,8 @@ namespace proc
         if (p->_ofile[fd] == nullptr)
             return (void *)err;
         fs::file *f = p->_ofile[fd];
+        printf("[mmap] addr: %p, length: %d, prot: %d, flags: %d, fd: %d, offset: %d\n",
+               addr, length, prot, flags, fd, offset);
         if (f->_attrs.filetype != fs::FileTypes::FT_NORMAL)
             return (void *)err;                    // 只支持普通文件映射
         vfile = static_cast<fs::normal_file *>(f); // 强制转换为普通文件类型
@@ -1523,25 +1525,16 @@ namespace proc
         // 为了兼容glibc，需要在用户栈中按照特定顺序压入：
         // 栈顶 -> 栈底：argc, argv[], envp[], auxv[], 字符串数据, 随机数据
 
-        TODO(
-            mm::UserstackStream ustack((void *)stackbase, stack_page_cnt * hsai::page_size, &new_pt);
-            ustack.open();)
-        TODO(
-            // 1. 压入伪随机数据（glibc要求，用于安全性）
-            u64 rd_pos = 0;
-            {
-                ulong data;
-                data = 0; // 栈底标记
-                ustack << data;
-                data = -0x11'4514'FF11'4514UL; // 伪随机数1
-                ustack << data;
-                data = 0x2UL << 60; // 伪随机数2
-                ustack << data;
-                data = 0x3UL << 60; // 伪随机数3
-                ustack << data;
+        sp -= 32;
+        uint64_t random[4] = {0x0, -0x114514FF114514UL, 0x2UL << 60, 0x3UL << 60};
+        if (sp < stackbase || mem::k_vmm.copy_out(new_pt, sp, (char *)random, 32) < 0)
+        {
+            printfRed("execve: copy random data failed\n");
+            k_pm.proc_freepagetable(new_pt, new_sz);
+            return -1;
+        }
 
-                rd_pos = ustack.sp(); // 记录随机数据的位置，用于AT_RANDOM
-            })
+        [[maybe_unused]]uint64 rd_pos = sp;
 
         // 2. 压入环境变量字符串
         uint64 uenvp[MAXARG];
@@ -1607,22 +1600,24 @@ namespace proc
             // 在括号里面开命名空间防止变量名冲突
             using namespace elf;
             uint64 aux[AuxvEntryType::MAX_AT * 2];
-            int index = 0;
+            [[maybe_unused]]int index = 0;
 
-            ADD_AUXV(AT_HWCAP, 0);             // 硬件功能标志
-            ADD_AUXV(AT_PAGESZ, PGSIZE);       // 页面大小
-            ADD_AUXV(AT_PHDR, elf.phoff);      // 程序头表偏移
-            ADD_AUXV(AT_PHENT, elf.phentsize); // 程序头表项大小
-            ADD_AUXV(AT_PHNUM, elf.phnum);     // 程序头表项数量
-            ADD_AUXV(AT_BASE, 0);              // 动态链接器基地址（保留）
-            ADD_AUXV(AT_ENTRY, elf.entry);     // 程序入口点地址
-            ADD_AUXV(AT_UID, 0);               // 用户ID
-            ADD_AUXV(AT_EUID, 0);              // 有效用户ID
-            ADD_AUXV(AT_GID, 0);               // 组ID
-            ADD_AUXV(AT_EGID, 0);              // 有效组ID
-            ADD_AUXV(AT_SECURE, 0);            // 安全模式标志
-            ADD_AUXV(AT_RANDOM, sp);           // 随机数地址
-            ADD_AUXV(AT_NULL, 0);              // 结束标记
+            // ADD_AUXV(AT_HWCAP, 0);             // 硬件功能标志
+            // ADD_AUXV(AT_PAGESZ, PGSIZE);       // 页面大小
+            // ADD_AUXV(AT_PHDR, elf.phoff);      // 程序头表偏移
+            // ADD_AUXV(AT_PHENT, elf.phentsize); // 程序头表项大小
+            // ADD_AUXV(AT_PHNUM, elf.phnum);     // 程序头表项数量
+            // ADD_AUXV(AT_BASE, 0);              // 动态链接器基地址（保留）
+            // ADD_AUXV(AT_ENTRY, elf.entry);     // 程序入口点地址
+            // ADD_AUXV(AT_UID, 0);               // 用户ID
+            // ADD_AUXV(AT_EUID, 0);              // 有效用户ID
+            // ADD_AUXV(AT_GID, 0);               // 组ID
+            // ADD_AUXV(AT_EGID, 0);              // 有效组ID
+            // ADD_AUXV(AT_SECURE, 0);            // 安全模式标志
+            // ADD_AUXV(AT_RANDOM, rd_pos);           // 随机数地址
+            // ADD_AUXV(AT_NULL, 0);              // 结束标记
+
+            // printf("index: %d\n", index);
 
             // 将辅助向量复制到栈上
             sp -= sizeof(aux);
