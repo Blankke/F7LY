@@ -28,8 +28,13 @@ namespace proc
         _gid = gid;
         _kstack = mem::VirtualMemoryManager::kstack_vm_from_gid(_gid);
         // TODO
-        //  for (auto &of : _ofile)
-        //      of = nullptr;
+        for (auto &of : _ofile)
+            of = nullptr;
+        //TODO: 资源限制
+        _rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_cur = NULL;
+        _rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_max = NULL;
+
+        sigmask = 0;
     }
 
     void Pcb::map_kstack(mem::PageTable &pt)
@@ -67,7 +72,7 @@ namespace proc
         print_context1(this->get_context());
     }
 
-    void print_context1(Context* ctx)
+    void print_context1(Context *ctx)
     {
         printf(" ra  = 0x%p\n", ctx->ra);
         printf(" sp  = 0x%p\n", ctx->sp);
