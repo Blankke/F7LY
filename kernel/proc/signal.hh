@@ -32,6 +32,7 @@ namespace proc
                 int sa_flags;            // 行为标志（未用）
             } sigaction;
             int sigAction(int flag, sigaction *newact, sigaction *oldact);
+            int sigprocmask(int how, sigset_t *newset, sigset_t *oldset, size_t sigsize);
         } // namespace signal
     } // namespace ipc
 } // namespace proc

@@ -81,7 +81,7 @@ int start_shell(void)
         bb_sh[1] = "echo";
         bb_sh[2] = "hello";
         printf("execve busybox shell\n");
-        if (execve("busybox", bb_sh, 0) < 0)
+        if (execve("busybox_unstripped", bb_sh, 0) < 0)
         {
             printf("execve failed\n");
             exit(1);
