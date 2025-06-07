@@ -27,3 +27,4 @@ busyboxhead.asm
 auxval_man.txt
 disasm_musl_busybox.asm
 busybox_musl_unstripped.asm
+temp.asm

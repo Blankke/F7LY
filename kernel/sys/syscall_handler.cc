@@ -1138,8 +1138,33 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_rt_sigprocmask()
     {
-        ///@todo
-        return 0;
+        int how;
+        signal::sigset_t set;
+        signal::sigset_t old_set;
+        uint64 setaddr;
+        uint64 oldsetaddr;
+        int sigsize;
+
+        if (_arg_int(0, how) < 0)
+            return -1;
+        if (_arg_addr(1, setaddr) < 0)
+            return -1;
+        if (_arg_addr(2, oldsetaddr) < 0)
+            return -1;
+        if (_arg_int(3, sigsize) < 0)
+            return -1;
+
+        proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = cur_proc->get_pagetable();
+
+        if (setaddr != 0)
+            if (mem::k_vmm.copy_in(*pt, &set, setaddr, sizeof(signal::sigset_t)) < 0)
+                return -1;
+        if (oldsetaddr != 0)
+            if (mem::k_vmm.copy_in(*pt, &old_set, oldsetaddr, sizeof(signal::sigset_t)) < 0)
+                return -1;
+
+        return signal::sigprocmask(how, &set, &old_set, sigsize);
     }
     uint64 SyscallHandler::sys_rt_sigtimedwait()
     {
