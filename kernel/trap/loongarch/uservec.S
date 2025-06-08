@@ -4,7 +4,7 @@
         # to a page boundary.
         #
         #ifdef LOONGARCH
-#include "asm.h"
+#include "asm.hh"
 
 .section u_eentry
 .globl uservec

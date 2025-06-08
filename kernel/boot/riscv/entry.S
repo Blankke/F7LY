@@ -1,4 +1,4 @@
-.section .text
+.section .text.entry
 .global _entry
 # sbi load the hartid in a0
 _entry:

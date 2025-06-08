@@ -1,6 +1,9 @@
 #include "cpu.hh"
+#ifdef RISCV
 #include "rv_csr.hh"
-
+#elif defined(LOONGARCH)
+#include "la_csr.hh"
+#endif
 Cpu k_cpus[NUMCPU];
 
 // ---- public:

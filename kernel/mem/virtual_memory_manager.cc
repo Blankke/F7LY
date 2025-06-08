@@ -3,13 +3,14 @@
 #include "physical_memory_manager.hh"
 #ifdef RISCV
 #include "mem/riscv/pagetable.hh"
-#elif defined (LOONGARCH)
+#elif defined(LOONGARCH)
 #include "mem/loongarch/pagetable.hh"
 #endif
 #include "memlayout.hh"
 #include "platform.hh"
 #include "printer.hh"
 #include "proc/proc.hh"
+#include "proc_manager.hh"
 extern char etext[]; // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
@@ -104,6 +105,35 @@ namespace mem
             pa += PGSIZE;
         }
         return true;
+#elif defined(LOONGARCH)
+        uint64 a, last;
+        Pte pte;
+
+        if (size == 0)
+            panic("mappages: size");
+
+        a = PGROUNDDOWN(va);
+        last = PGROUNDDOWN(va + size - 1);
+        for (;;)
+        {
+            pte = pt.walk(a, /*alloc*/ true);
+
+            if (pte.is_null())
+            {
+                printfYellow("walk failed");
+                return false;
+            }
+            if (pte.is_valid())
+                panic("mappages: remap");
+
+            pte.set_data(PGROUNDDOWN(to_phy(pa)) |
+                         flags);
+            if (a == last)
+                break;
+            a += PGSIZE;
+            pa += PGSIZE;
+        }
+        return true;
 #endif
     }
 
@@ -134,6 +164,32 @@ namespace mem
             }
         }
         return new_sz;
+#elif defined(LOONGARCH)
+        void *mem;
+
+        if (new_sz < old_sz)
+            return old_sz;
+
+        old_sz = PGROUNDUP(old_sz);
+        for (uint64 a = old_sz; a < new_sz; a += PGSIZE)
+        {
+            mem = PhysicalMemoryManager::alloc_page();
+            if (mem == nullptr)
+            {
+                vmdealloc(pt, a, old_sz);
+                return 0;
+            }
+            k_pmm.clear_page(mem);
+            if (map_pages(pt, a, PGSIZE, (uint64)mem,
+                          PTE_R | PTE_U | flags) == false)
+            {
+                k_pmm.free_page(mem);
+                vmdealloc(pt, a, old_sz);
+                return 0;
+            }
+        }
+        return new_sz;
+
 #endif
     }
 
@@ -151,12 +207,12 @@ namespace mem
         return new_sz;
     }
 
-/// @brief 从用户空间拷贝数据到内核空间。
-/// @param pt 当前进程的页表，用于地址转换。
-/// @param dst 目标地址（内核空间指针），拷贝到这里。
-/// @param src_va 源地址（用户虚拟地址），从这个地址读取数据。
-/// @param len 拷贝的数据长度（字节数）。
-/// @return 成功返回0，失败返回-1（如页表无法转换用户虚拟地址）。
+    /// @brief 从用户空间拷贝数据到内核空间。
+    /// @param pt 当前进程的页表，用于地址转换。
+    /// @param dst 目标地址（内核空间指针），拷贝到这里。
+    /// @param src_va 源地址（用户虚拟地址），从这个地址读取数据。
+    /// @param len 拷贝的数据长度（字节数）。
+    /// @return 成功返回0，失败返回-1（如页表无法转换用户虚拟地址）。
     int VirtualMemoryManager::copy_in(PageTable &pt, void *dst, uint64 src_va, uint64 len)
     {
         uint64 n, va, pa;
@@ -245,7 +301,7 @@ namespace mem
 #ifdef RISCV
 
 #elif defined(LOONGARCH)
-            pa = hsai::k_mem->to_phy(pa);
+            pa = to_phy(pa);
 #endif
             n = PGSIZE - (src_va - va);
             if (n > max)
@@ -491,8 +547,13 @@ namespace mem
     void VirtualMemoryManager::uvmclear(PageTable &pt, uint64 va)
     {
         Pte pte = pt.walk(va, 0);
+#ifdef RISCV
         if (pte.is_valid())
             pte.set_data(pte.get_data() & ~riscv::PteEnum::pte_user_m);
+#elif defined(LOONGARCH)
+        if (pte.is_valid())
+            pte.set_data(pte.get_data() & ~loongarch::PteEnum::pte_plv_m); // PTE_U
+#endif
     }
 
     uint64 VirtualMemoryManager::uvmalloc(PageTable &pt, uint64 oldsz, uint64 newsz, uint64 flags)
@@ -514,7 +575,7 @@ namespace mem
                 vmfree(pt, oldsz);
                 return 0;
             }
-            if (!map_pages(pt, a, PGSIZE, pa,riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_user_m | flags))
+            if (!map_pages(pt, a, PGSIZE, pa, riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_user_m | flags))
             {
                 k_pmm.free_page((void *)pa);
                 uvmdealloc(pt, a, oldsz);
@@ -523,8 +584,31 @@ namespace mem
         }
         return newsz;
 #elif defined(LOONGARCH)
-        // TODO: uvmalloc 未实现
-        printfRed("loongarch 未实现uvmalloc\n");
+        /// TODO:未测试正确性
+        void *mem;
+        uint64 a;
+
+        if (newsz < oldsz)
+            return oldsz;
+
+        oldsz = PGROUNDUP(oldsz);
+        for (a = oldsz; a < newsz; a += PGSIZE)
+        {
+            mem = k_pmm.alloc_page();
+            if (mem == 0)
+            {
+                uvmdealloc(pt, a, oldsz);
+                return 0;
+            }
+            memset(mem, 0, PGSIZE);
+            if (map_pages(pt, a, PGSIZE, (uint64)mem, flags) != 0)
+            {
+                k_pmm.free_page(mem);
+                uvmdealloc(pt, a, oldsz);
+                return 0;
+            }
+        }
+        return newsz;
 #endif
     }
 
@@ -603,6 +687,8 @@ namespace mem
         kvmmap(pt, vm_kernel_heap_start, HEAP_START, vm_kernel_heap_size, PTE_R | PTE_W);
 #elif defined(LOONGARCH)
         // TODO
+        kvmmap(k_pagetable, ((uint64)etext) & (~(DMWIN_MASK)), (uint64)etext, PHYSTOP - (uint64)etext, PTE_R | PTE_W);
+
         printfRed("loongarch 虚拟化未实现\n");
 #endif
         return pt;
@@ -642,7 +728,30 @@ namespace mem
             memmove(mem, (void *)((uint64)src + 2 * PGSIZE), MIN(sz - 2 * PGSIZE, PGSIZE));
         }
 #elif defined(LOONGARCH)
-// TODO
+        char *mem;
+        printf("sz: %d\n", sz);
+        // if(sz >= PGSIZE)
+        //   panic("uvmfirst: more than a page");
+        mem = (char *)k_pmm.alloc_page();
+        memset(mem, 0, PGSIZE);
+        map_pages(pt, 0, PGSIZE, (uint64)mem, PTE_W | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
+        memmove(mem,  (void *)src, MIN(sz, PGSIZE));
+
+        mem = (char *)k_pmm.alloc_page();
+        memset(mem, 0, PGSIZE);
+        map_pages(pt, PGSIZE, PGSIZE, (uint64)mem, PTE_W | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
+        if (sz > PGSIZE)
+        {
+            memmove(mem, (void *)((uint64)src + PGSIZE), MIN(sz - PGSIZE, PGSIZE));
+        }
+
+        mem = (char *)k_pmm.alloc_page();
+        memset(mem, 0, PGSIZE);
+        map_pages(pt, 2 * PGSIZE, PGSIZE, (uint64)mem, PTE_W | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
+        if (sz > 2 * PGSIZE)
+        {
+            memmove(mem, (void*)((uint64)src + 2 * PGSIZE), MIN(sz - 2 * PGSIZE, PGSIZE));
+        }
 #endif
     }
 }

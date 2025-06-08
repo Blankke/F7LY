@@ -34,7 +34,7 @@ namespace proc
 
     void Pcb::map_kstack(mem::PageTable &pt)
     {
-#ifdef RISCV
+
         if (_kstack == 0)
             panic("pcb was not init");
 
@@ -42,14 +42,18 @@ namespace proc
         if (pa == 0)
             panic("pcb map kstack: no memory");
         mem::k_pmm.clear_page((void *)pa);
-
+#ifdef RISCV
         // printfBlue("map kstack: %p, end: %p\n", _kstack, _kstack + PGSIZE-1);
         if (!mem::k_vmm.map_pages(pt, _kstack, PGSIZE, (uint64)pa,
                                   riscv::PteEnum::pte_readable_m |
                                       riscv::PteEnum::pte_writable_m))
             panic("kernel vm map failed");
 #elif defined(LOONGARCH)
-
+        /// TODO:未测试正确性
+        /// copy from 华科
+        if (!mem::k_vmm.map_pages(pt, _kstack, PGSIZE, (uint64)pa,
+                                  PTE_NX | PTE_P | PTE_W | PTE_MAT | PTE_D | PTE_PLV))
+            panic("kernel vm map failed");
 #endif
     }
 
@@ -67,7 +71,7 @@ namespace proc
         print_context1(this->get_context());
     }
 
-    void print_context1(Context* ctx)
+    void print_context1(Context *ctx)
     {
         printf(" ra  = 0x%p\n", ctx->ra);
         printf(" sp  = 0x%p\n", ctx->sp);
@@ -80,8 +84,10 @@ namespace proc
         printf(" s6  = 0x%d\n", ctx->s6);
         printf(" s7  = 0x%d\n", ctx->s7);
         printf(" s8  = 0x%d\n", ctx->s8);
+        #ifdef RISCV
         printf(" s9  = 0x%d\n", ctx->s9);
         printf(" s10 = 0x%d\n", ctx->s10);
         printf(" s11 = 0x%d\n", ctx->s11);
+        #endif
     }
 }

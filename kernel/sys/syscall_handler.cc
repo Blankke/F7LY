@@ -8,7 +8,10 @@
 #include "klib.hh"
 #include "list.hh"
 #include "param.h"
+#include "pagetable.hh"
+#ifdef RISCV
 #include "sbi.hh"
+#endif
 #include "hal/cpu.hh"
 #include "timer_manager.hh"
 #include "fs/vfs/path.hh"
@@ -1023,15 +1026,19 @@ namespace syscall
         us.close();
 
         return rlen;
-
     }
     uint64 SyscallHandler::sys_shutdown()
     {
+#ifdef RISCV
         TODO(struct filesystem *fs = get_fs_from_path("/");
              vfs_ext_umount(fs);)
         sbi_shutdown();
         printfYellow("sys_shutdown\n");
         sbi_shutdown();
+#elif defined(LOONGARCH)
+        *(volatile uint8 *)(0x8000000000000000 | 0x100E001C) = 0x34;
+// while (1);
+#endif
         return 0;
     }
 
@@ -1169,8 +1176,7 @@ namespace syscall
 #ifdef RISCV
         head = (proc::robust_list_head *)pt->walk_addr(addr);
 #elif defined(LOONGARCH)
-        head = (proc::robust_list_head *)hsai::k_mem->to_vir(
-            pt->walk_addr(addr));
+        head = (proc::robust_list_head *)to_vir((ulong)pt->walk_addr(addr));
 #endif
         if (head == nullptr)
             return -10;
@@ -1224,11 +1230,9 @@ namespace syscall
 
 #elif defined(LOONGARCH)
         if (new_limit != 0)
-            nlim = (proc::rlimit64 *)hsai::k_mem->to_vir(
-                pt->walk_addr(new_limit));
+            nlim = (proc::rlimit64 *)to_vir((ulong)pt->walk_addr(new_limit));
         if (old_limit != 0)
-            olim = (proc::rlimit64 *)hsai::k_mem->to_vir(
-                pt->walk_addr(old_limit));
+            olim = (proc::rlimit64 *)to_vir((ulong)pt->walk_addr(old_limit));
 #endif
 
         return proc::k_pm.prlimit64(pid, rsrc, nlim, olim);
@@ -1341,7 +1345,7 @@ namespace syscall
 #ifdef RISCV
             tp = (tmm::timespec *)pt->walk_addr(addr);
 #elif LOONGARCH
-            tp = (tmm::timespec *)hsai::k_mem->to_vir(pt->walk_addr(addr));
+            tp = (tmm::timespec *)to_vir((ulong)pt->walk_addr(addr));
 #endif
         tmm::SystemClockId cid = (tmm::SystemClockId)clock_id;
 
@@ -1384,7 +1388,7 @@ namespace syscall
             termios *ts = (termios *)pt->walk_addr(arg);
 #elif defined(LOONGARCH)
             termios *ts =
-                (termios *)hsai::k_mem->to_vir(pt->walk_addr(arg));
+                (termios *)to_vir((ulong)pt->walk_addr(arg));
 #endif
             return df->tcgetattr(ts);
         }
@@ -1395,7 +1399,7 @@ namespace syscall
 #ifdef RISCV
             int *p_pgrp = (int *)pt->walk_addr(arg);
 #elif defined(LOONGARCH)
-            int *p_pgrp = (int *)hsai::k_mem->to_vir(pt->walk_addr(arg));
+            int *p_pgrp = (int *)to_vir((uint64)pt->walk_addr(arg));
 #endif
             *p_pgrp = 1;
             return 0;

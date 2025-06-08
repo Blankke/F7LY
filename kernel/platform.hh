@@ -729,10 +729,10 @@ constexpr uint64 iodma_win_base = 0x0UL << 60;
 constexpr uint64 iodma_win_mask = ~(0x0UL) << 32;
 
 
-ulong to_phy(ulong addr) { return addr & ~dmwin_mask; }
-ulong to_vir(ulong addr) { return to_phy(addr) | DMWIN_MASK; }
-ulong to_io(ulong addr) { return to_phy(addr) | DMWIN1_MASK; }
-ulong to_dma(ulong addr) { return to_phy(addr) | iodma_win_base; }
+inline ulong to_phy(ulong addr) { return addr & ~dmwin_mask; }
+inline ulong to_vir(ulong addr) { return to_phy(addr) | DMWIN_MASK; }
+inline ulong to_io(ulong addr) { return to_phy(addr) | DMWIN1_MASK; }
+inline ulong to_dma(ulong addr) { return to_phy(addr) | iodma_win_base; }
 
 // enable device interrupts
 static inline void
@@ -794,8 +794,20 @@ typedef uint64 *pagetable_t;
 
 // vm_kernel_heap_start = vm_kernel_start >> 1,
 // vm_kernel_heap_start = _1M * 8,
-#define vm_kernel_heap_start MAXVA >> 1, // 64 MiB
-#define vm_kernel_heap_size _1M * 64,
+enum vml : uint64
+{
+  // vm_page_cnt_shift = 15,
+  // vm_start = 0x0,
+  // vm_end = ( 0x1UL << PGSHIFT ) << vm_page_cnt_shift,	// 128 MiB
+
+  // vm_kernel_start = vm_end >> 2,								// 32 MiB
+  // vm_trap_frame = ( vm_end >> 1 ) - PGSIZE,					// 64 MiB - 1 page
+
+  // vm_kernel_heap_start = vm_kernel_start >> 1,
+  // vm_kernel_heap_start = _1M * 8,
+  vm_kernel_heap_start = MAXVA >> 1, // 64 MiB
+  vm_kernel_heap_size = _1M * 64,
+};
 #define HEAP_START PHYSTOP - vm_kernel_heap_size
 
 #endif

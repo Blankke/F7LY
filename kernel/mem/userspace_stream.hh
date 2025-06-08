@@ -9,7 +9,7 @@
 #pragma once
 
 #include <EASTL/string.h>
-
+#include "printer.hh"
 #include <pagetable.hh>
 #include <virtual_memory_manager.hh>
 #include <tuple>
@@ -125,7 +125,7 @@ namespace mem
 		}
 
 	private:
-	TODO("此处有风险，参考了rv版本的学长代码，to_vir()函数因为返回本身，故删除，la版本的代码未实现");
+	//"此处有风险，参考了rv版本的学长代码，to_vir()函数因为返回本身，故删除，la版本的代码未实现"
 		int _update_cache(void *va)
 		{
 			// printfCyan("[UserspaceStream::_update_cache]va: %p\n", va);
@@ -136,6 +136,8 @@ namespace mem
 				_cache_ptr = (u8 *)_pt->walk_addr(a);
 				_cache_end = _cache_ptr + PGSIZE;
 #elif defined(LOONGARCH)
+				_cache_ptr = (u8 *)to_vir((ulong)_pt->walk_addr(a));
+				_cache_end = _cache_ptr + PGSIZE;
 #endif
 			}
 			else
@@ -144,10 +146,12 @@ namespace mem
 				_cache_ptr = (u8 *)_pt->walk_addr((u64)va);
 				_cache_end = (u8 *)PGROUNDUP((ulong)_cache_ptr);
 #elif defined(LOONGARCH)
+				_cache_ptr = (u8 *)to_vir((ulong)_pt->walk_addr((u64)va));
+				_cache_end = (u8 *)PGROUNDUP((ulong)_cache_ptr);
 #endif
 			}
 			return 0;
 		}
 	};
 
-} // namespace mm
+} // namespace mem

@@ -3,7 +3,7 @@
 #include "trap.hh"
 #include "platform.hh"
 #include "param.h"
-#include "plic.hh"
+// #include "plic.hh"
 #include "mem/memlayout.hh"
 #include "devs/console.hh"
 #include "printer.hh"

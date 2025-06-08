@@ -267,28 +267,49 @@ namespace proc
     mem::PageTable ProcessManager::proc_pagetable(Pcb *p)
     {
         mem::PageTable pt = mem::k_vmm.vm_create();
+        mem::PageTable empty_pt = mem::PageTable();
         if (pt.is_null())
             printfRed("proc_pagetable: vm_create failed\n");
-        if (pt.get_base() == 0)
-            return 0;
+        if( pt.get_base()== 0)
+        {
+            printfRed("proc_pagetable: pt already exists\n");
+            return empty_pt; // 如果已经有页表了，直接返回空页表
+        }
 #ifdef RISCV
         if (mem::k_vmm.map_pages(pt, TRAMPOLINE, PGSIZE, (uint64)trampoline, riscv::PteEnum::pte_readable_m | riscv::pte_executable_m) == 0)
         {
             mem::k_vmm.vmfree(pt, 0);
             printfRed("proc_pagetable: map trampoline failed\n");
-            return 0;
+            return empty_pt;
         }
         // printfGreen("trampoline: %p\n", trampoline);
         // printfGreen("TRAMPOLINE: %p\n", TRAMPOLINE);
         if (mem::k_vmm.map_pages(pt, TRAPFRAME, PGSIZE, (uint64)(p->get_trapframe()), riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_writable_m) == 0)
         {
             mem::k_vmm.vmfree(pt, 0);
+
             printfRed("proc_pagetable: map trapframe failed\n");
-            return 0;
+            return empty_pt;
         }
 
 #elif defined(LOONGARCH)
-// TODO
+  if(mem::k_vmm.map_pages(pt, TRAPFRAME, PGSIZE, (uint64)(p->_trapframe), PTE_NX | PTE_P | PTE_W | PTE_MAT | PTE_D) == 0)
+        {
+            mem::k_vmm.vmfree(pt, 0);
+            printfRed("proc_pagetable: map trapframe failed\n");
+            return empty_pt;
+        }
+///@todo  sig_tampoline
+        // 这里的 SIG_TRAMPOLINE 是一个特殊的地址，用于处理信号 trampoline
+        // 目前暂时注释掉，因为没有实现信号处理相关的逻辑
+        // 需要在后续实现信号处理时再启用
+//   if(mappages(pt, SIG_TRAMPOLINE, PGSIZE,
+//           (uint64)sig_trampoline, PTE_P | PTE_MAT | PTE_D) < 0) {
+//     printf("Fail to map sig_trampoline\n");
+//     uvmunmap(pagetable, TRAPFRAME, 1, 0);
+//     uvmfree(pagetable, 0);
+//     return 0;
+//           }
 #endif
         return pt;
     }
@@ -1391,13 +1412,23 @@ namespace proc
 
                 // 分配虚拟内存空间
                 uint64 sz1;
-                uint64 seg_flag = 16;
+                uint64 seg_flag = PTE_U;   //User可访问标志
+                #ifdef RISCV
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC)
                     seg_flag |= riscv::PteEnum::pte_executable_m;
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
                     seg_flag |= riscv::PteEnum::pte_writable_m;
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ)
                     seg_flag |= riscv::PteEnum::pte_readable_m;
+                #elif defined(LOONGARCH)
+                seg_flag |= PTE_P|PTE_D; // PTE_P: Present bit, segment is present in memory
+                // PTE_D: Dirty bit, segment is dirty (modified)
+                if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC)
+                    seg_flag |= loongarch::PteEnum::pte_mat_m;  // PTE_MAT: Memory Attribute, segment is executable
+                if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
+                    seg_flag |= loongarch::PteEnum::pte_writable_m;
+                if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ)
+                #endif
                 // printfRed("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
                         //   i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, seg_flag);
                 if ((sz1 = mem::k_vmm.vmalloc(new_pt, new_sz, ph.vaddr + ph.memsz, seg_flag)) == 0)
@@ -1765,7 +1796,11 @@ namespace proc
         old_pt = *proc->get_pagetable(); // 获取当前进程的页表
         proc->_sz = PGROUNDUP(new_sz);   // 更新进程大小
         // printf("execve: entry point: %p, new size: %d\n", elf.entry, proc->_sz);
+        #ifdef RISCV
         proc->_trapframe->epc = elf.entry; // 设置程序计数器为入口点
+        #elif defined(LOONGARCH)
+        proc->_trapframe->era = elf.entry; // 设置程序计数器为入口点
+        #endif
         proc->_pt = new_pt;                // 替换为新的页表
         proc->_trapframe->sp = sp;         // 设置栈指针
 

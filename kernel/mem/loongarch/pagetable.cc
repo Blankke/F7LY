@@ -6,7 +6,7 @@
 // --------------------------------------------------------------
 //
 #ifdef LOONGARCH
-#include "proc/physical_memory_manager.hh"
+#include "physical_memory_manager.hh"
 #ifdef RISCV
 #include "mem/riscv/pagetable.hh"
 #elif defined(LOONGARCH)
@@ -23,10 +23,6 @@ namespace mem
 
 	bool debug_trace_walk = false;
 
-	PageTable::PageTable()
-		: _base_addr(0)
-	{
-	}
 
 	Pte PageTable::walk(uint64 va, bool alloc)
 	{

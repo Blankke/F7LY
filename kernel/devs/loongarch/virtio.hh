@@ -6,7 +6,7 @@
 #include "platform.hh"
 #include <types.hh>
 #include "printer.hh"
-
+#include "pci.hh"
 //
 // virtio device definitions.
 // for both the mmio interface, and virtio descriptors.
