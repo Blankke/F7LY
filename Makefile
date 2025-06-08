@@ -21,7 +21,7 @@ endif
 # ===== 工具链配置 =====
 CC      := $(CROSS_COMPILE)gcc
 CXX     := $(CROSS_COMPILE)g++
-LD      := $(CROSS_COMPILE)ld
+LD      := $(CROSS_COMPILE)g++
 OBJCOPY := $(CROSS_COMPILE)objcopy
 SIZE    := $(CROSS_COMPILE)size
 OBJDUMP := $(CROSS_COMPILE)objdump
@@ -49,7 +49,8 @@ CXXFLAGS := $(CFLAGS) -std=c++23 -nostdlib \
             -Wno-deprecated-declarations -Wno-strict-aliasing \
             -fno-exceptions -fno-rtti -Wno-maybe-uninitialized
 
-LDFLAGS := -z max-page-size=4096 -nostdlib -T $(LINK_SCRIPT) --gc-sections
+LDFLAGS := -static -nostdlib -nostartfiles -nodefaultlibs -Wl,-z,max-page-size=4096 -Wl,-T,$(LINK_SCRIPT) -Wl,--gc-sections
+# 包含头文件路径：架构特定目录 + 通用目录 + 有架构子目录的文件夹根目录
 INCLUDES := -I$(KERNEL_DIR) $(foreach dir,$(SUBDIRS),-I$(KERNEL_DIR)/$(dir))
 INCLUDES += -I$(KERNEL_DIR)/mem -I$(KERNEL_DIR)/devs -I$(KERNEL_DIR)/trap -I$(KERNEL_DIR)/hal -I$(KERNEL_DIR)/proc -I$(KERNEL_DIR)/boot
 INCLUDES += -I$(KERNEL_DIR)/fs
@@ -117,19 +118,24 @@ endif
 
 # 新增 syscall 编译规则
 SYSCALL_SRC := user/syscall_lib/syscall.cc
-SYSCALL_OBJ := build/$(OUTPUT_PREFIX)/syscall.o build/$(OUTPUT_PREFIX)/printf.o
+SYSCALL_OBJ := build/$(OUTPUT_PREFIX)/syscall.o
 
 # 新增 printf 编译规则
 PRINTF_SRC := user/syscall_lib/printf.cc
 PRINTF_OBJ := build/$(OUTPUT_PREFIX)/printf.o
+
+
 
 USER_TEST_SRC := user/user_lib/user_test.cc
 USER_TEST_OBJ := build/$(OUTPUT_PREFIX)/user_test.o
 
 # 编译参数
 INITCODE_CFLAGS := -Wall -O -fno-builtin -fno-exceptions -fno-rtti -fno-stack-protector -nostdlib -ffreestanding $(ARCH_CFLAGS) -Iuser/deps -Iuser/syscall_lib -Iuser/syscall_lib/arch/$(ARCH) -Ikernel/sys -Ikernel
-INITCODE_LDFLAGS := -N -e start -Ttext 0
-
+ifeq ($(ARCH),riscv)
+INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dynamic-linker,-T,user/user.ld
+else ifeq ($(ARCH),loongarch)
+INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dynamic-linker,-T,user/user-loongarch.ld
+endif
 .PHONY: all clean dirs build riscv loongarch run debug initcode build-la
 
 all: riscv
@@ -173,7 +179,10 @@ $(KERNEL_ELF): $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.
 	$(SIZE) $@
 	# $(OBJDUMP) -D $@ > kernel.asm
 
+# 只有 riscv 架构需要依赖 initcode
+ifeq ($(ARCH),riscv)
 $(KERNEL_ELF): $(INITCODE_BIN)
+endif
 
 $(KERNEL_BIN): $(KERNEL_ELF) 
 	$(OBJCOPY) -O binary $< $@

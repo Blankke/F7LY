@@ -1,12 +1,20 @@
 OUTPUT_ARCH( "riscv" )
-ENTRY( _main )
+ENTRY( main )
 
 SECTIONS
 {
  . = 0x0;
  
   .text : {
+    *(.text.startup .text.startup.*)
     *(.text .text.*)
+  }
+  
+  /DISCARD/ : {
+    *(.note.gnu.build-id)
+    *(.note.GNU-stack)
+    *(.comment)
+    *(.riscv.attributes)
   }
 
   .rodata : {

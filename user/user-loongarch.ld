@@ -1,5 +1,5 @@
 OUTPUT_ARCH( "loongarch64" )
-ENTRY( _main )
+ENTRY( main )
 
 
 SECTIONS
