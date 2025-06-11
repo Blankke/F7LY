@@ -1,0 +1,34 @@
+{
+        "configurations": [
+            {
+                "name": "RISC-V",
+                "includePath": [
+                    "${workspaceFolder}/kernel/**",
+                    "${workspaceFolder}/kernel/boot/riscv",
+                    "${workspaceFolder}/kernel/hal/riscv",
+                    "${workspaceFolder}/kernel/link/riscv",
+                    "${workspaceFolder}/thirdparty/EASTL/**",
+                    "${workspaceFolder}/**"
+                    
+                ],
+                "defines": ["RISCV", "__ARCH_RISCV"],
+                "cStandard": "gnu17",
+                "cppStandard": "gnu++14"
+            },
+            {
+                "name": "LoongArch",
+                "includePath": [
+                    "${workspaceFolder}/kernel/**",
+                    "${workspaceFolder}/kernel/boot/loongarch",
+                    "${workspaceFolder}/kernel/hal/loongarch",
+                    "${workspaceFolder}/kernel/link/loongarch",
+                    "${workspaceFolder}/thirdparty/EASTL/**",
+                    "${workspaceFolder}/**"
+                ],
+                "defines": ["LOONGARCH", "__ARCH_LOONGARCH"],
+                "cStandard": "gnu17",
+                "cppStandard": "gnu++14"
+            }
+        ],
+        "version": 4
+    }

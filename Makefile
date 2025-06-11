@@ -1,6 +1,6 @@
 EASTL_DIR := thirdparty/EASTL
 # ===== 架构选择 =====
-ARCH ?= riscv
+ARCH ?= loongarch
 KERNEL_PREFIX=`pwd`
 
 
@@ -13,7 +13,7 @@ else ifeq ($(ARCH),loongarch)
   CROSS_COMPILE := loongarch64-linux-gnu-
   ARCH_CFLAGS := -DLOONGARCH -mcmodel=normal -Wno-error=use-after-free
   OUTPUT_PREFIX := loongarch
-  QEMU_CMD := qemu-system-loongarch64 -kernel
+  QEMU_CMD := qemu-system-loongarch64 -machine virt -cpu la464-loongarch-cpu
 else
   $(error 不支持的架构: $(ARCH)，请使用 make riscv 或 make loongarch)
 endif
@@ -180,9 +180,9 @@ $(KERNEL_ELF): $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.
 	# $(OBJDUMP) -D $@ > kernel.asm
 
 # 只有 riscv 架构需要依赖 initcode
-ifeq ($(ARCH),riscv)
+
 $(KERNEL_ELF): $(INITCODE_BIN)
-endif
+
 
 $(KERNEL_BIN): $(KERNEL_ELF) 
 	$(OBJCOPY) -O binary $< $@
@@ -218,14 +218,14 @@ run-riscv:
 
 
 run-loongarch:
-	$(QEMU_CMD) $(KERNEL_ELF) -m 128M -nographic -smp 1
+	$(QEMU_CMD) -kernel $(KERNEL_ELF) -m 128M -nographic -smp 1
 
 
 debug: build
 	@if [ "$(ARCH)" = "riscv" ]; then \
 	$(MAKE) debug-riscv; \
 	elif [ "$(ARCH)" = "loongarch" ]; then \
-		$(QEMU_CMD) $(KERNEL_ELF) -S -gdb tcp::1234; \
+		$(MAKE) debug-loongarch; \
 	fi
 
 debug-riscv:
@@ -243,6 +243,15 @@ debug-riscv:
 		-netdev user,id=net \
 		-rtc base=utc \
 		-S -gdb tcp::1234;
+
+debug-loongarch:
+	qemu-system-loongarch64 \
+		-cpu la464-loongarch-cpu \
+		-kernel $(KERNEL_ELF) \
+		-m 128M \
+		-nographic \
+		-smp 1 \
+		-S -gdb tcp::1234
 initcode: $(INITCODE_BIN)
 
 # 编译 initcode 源文件为目标文件

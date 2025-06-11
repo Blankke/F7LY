@@ -1,0 +1,21 @@
+{
+    "files.associations": {
+        "atomic": "cpp",
+        "new": "cpp",
+        "assert.h": "c",
+        "functional": "cpp",
+        "condition_variable": "cpp",
+        "thread": "cpp",
+        "cstddef": "cpp",
+        "cstdio": "cpp",
+        "semaphore": "cpp",
+        "stop_token": "cpp",
+        "memory": "cpp",
+        "array": "cpp",
+        "string": "cpp",
+        "string_view": "cpp",
+        "iosfwd": "cpp",
+        "limits": "cpp",
+        "streambuf": "cpp"
+    }
+}
