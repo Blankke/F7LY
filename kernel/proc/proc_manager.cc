@@ -8,7 +8,11 @@
 #include "trap.hh"
 #include "printer.hh"
 #include "devs/device_manager.hh"
+#ifdef RISCV
 #include "devs/riscv/disk_driver.hh"
+#elif defined(LOONGARCH)
+#include "devs/loongarch/disk_driver.hh"
+#endif
 #include "fs/vfs/dentrycache.hh"
 #include "fs/vfs/path.hh"
 #include "fs/ramfs/ramfs.hh"
@@ -160,10 +164,14 @@ namespace proc
 
             // 文件系统初始化必须在常规进程的上下文中运行（例如，因为它会调用 sleep），
             // 因此不能从 main() 中运行。(copy form xv6)
-
+#ifdef RISCV
             riscv::qemu::DiskDriver *disk = (riscv::qemu::DiskDriver *)dev::k_devm.get_device("Disk driver");
-            disk->identify_device();
 
+#elif defined(LOONGARCH)
+            loongarch::qemu::DiskDriver *disk =
+                (loongarch::qemu::DiskDriver *)dev::k_devm.get_device("Disk driver");
+#endif
+            disk->identify_device();
             new (&fs::dentrycache::k_dentryCache) fs::dentrycache::dentryCache;
             fs::dentrycache::k_dentryCache.init();
             new (&fs::mnt_table) eastl::unordered_map<eastl::string, fs::FileSystem *>;

@@ -102,6 +102,7 @@ namespace syscall
         //         printfCyan("syscall_num: %d, syscall_name: %s\n", i, _syscall_name[i]);
         //     }
         // }
+        printfGreen("[SyscallHandler::init]SyscallHandler initialized with %d syscall functions\n", max_syscall_funcs_num);
     }
     void SyscallHandler::invoke_syscaller()
     {

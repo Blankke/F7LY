@@ -218,7 +218,14 @@ run-riscv:
 
 
 run-loongarch:
-	$(QEMU_CMD) -kernel $(KERNEL_ELF) -m 128M -nographic -smp 1
+	qemu-system-loongarch64 \
+	    -machine virt \
+	    -kernel $(KERNEL_ELF) \
+	    -m 1G \
+	    -nographic \
+	    -smp 1 \
+
+
 
 
 debug: build

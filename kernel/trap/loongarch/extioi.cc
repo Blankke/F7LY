@@ -5,7 +5,7 @@
 #include "platform.hh"
 #include "extioi.hh"
 #include "pci.h"
-
+#include "printer.hh"
 void extioi_init(void)
 {
 			write_itr_cfg_64b(LOONGARCH_IOCSR_EXTIOI_EN_BASE, (0x1UL << UART0_IRQ)
@@ -17,6 +17,7 @@ void extioi_init(void)
 
 			// 7. 设置节点类型（HT 向量）
 			write_itr_cfg_64b(LOONGARCH_IOCSR_EXRIOI_NODETYPE_BASE, 0x1);
+			printfGreen("[extioi]  ExtIOI initialized.\n");
 }
 
 // ask the extioi what interrupt we should serve.

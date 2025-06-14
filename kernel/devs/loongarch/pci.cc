@@ -131,7 +131,7 @@ namespace loongarch
             return addr;
         }
 
-        int virtio_pci_read_caps(virtio_pci_hw_t* virtio_blk_hw, uint64 pci_base)
+       int virtio_pci_read_caps(virtio_pci_hw_t* virtio_blk_hw, uint64 pci_base)
         {
             struct virtio_pci_cap cap;
             uint64 pos = 0;
@@ -182,7 +182,6 @@ namespace loongarch
             }
             return 0;
         }
-
         void virtio_pci_set_status(virtio_pci_hw_t *hw, uint8 status)
         {
             virtio_pci_common_cfg *cfg = (virtio_pci_common_cfg *)hw->common_cfg;

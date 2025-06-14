@@ -4,6 +4,6 @@
 .globl handle_merr
 .align 0x4
 handle_merr:
-    bl machine_trap
+    bl wrap_machine_trap
     ertn
 #endif

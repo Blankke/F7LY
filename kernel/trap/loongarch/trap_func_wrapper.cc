@@ -18,5 +18,9 @@ extern "C"{
     {
         trap_mgr.usertrapret();
     }
+    void wrap_machine_trap()
+    {
+        trap_mgr.machine_trap();
+    }
 }
 #endif
