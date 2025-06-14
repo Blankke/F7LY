@@ -78,8 +78,8 @@ int start_shell(void)
         chdir("/mnt/musl/");
         char *bb_sh[8] = {0};
         bb_sh[0] = "busybox";
-        bb_sh[1] = "echo";
-        bb_sh[2] = "hello";
+        bb_sh[1] = "sh";
+        bb_sh[2] = "busybox_testcode.sh";
         printf("execve busybox shell\n");
         if (execve("busybox_unstripped", bb_sh, 0) < 0)
         {

@@ -31,8 +31,8 @@ namespace proc
         for (auto &of : _ofile)
             of = nullptr;
         //TODO: 资源限制
-        _rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_cur = NULL;
-        _rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_max = NULL;
+        _rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_cur = 0;
+        _rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_max = 0;
 
         sigmask = 0;
     }

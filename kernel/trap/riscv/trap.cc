@@ -226,7 +226,11 @@ void trap_manager::usertrap()
         p->_killed = 1;
     }
     else
+    {
+      printfRed("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->_pid);
+      printfRed("            sepc=%p stval=%p\n", r_sepc(), r_stval());
       p->_killed = 1;
+    }
   }
   else
   {

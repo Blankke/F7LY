@@ -1589,6 +1589,7 @@ namespace proc
             uenvp[envc] = sp; // 记录字符串地址
         }
         uenvp[envc] = 0; // envp数组以NULL结尾
+        printfBlue("sp: %p\n", sp);
 
         // 3. 压入命令行参数字符串
         uint64 uargv[MAXARG]; // 命令行参数指针数组
@@ -1618,7 +1619,7 @@ namespace proc
             uargv[argc] = sp; // 记录字符串地址
         }
         uargv[argc] = 0; // argv数组以NULL结尾
-
+        printfBlue("sp——argv: %p\n", sp);
         // 4. 压入辅助向量（auxv），供动态链接器使用
         {
             // 在括号里面开命名空间防止变量名冲突
@@ -1671,6 +1672,20 @@ namespace proc
             }
         }
         proc->_trapframe->a2 = sp; // 设置栈指针到trapframe
+        printfBlue("sp——envp: %p\n", sp);
+        // 打印uenvp
+        for (uint64 i = 0; i < envc + 10; i++)
+        {
+            printfRed("envp[%d]: %p\n", i, uenvp[i]);
+        }
+
+        const uint8_t *p_bytes = reinterpret_cast<const uint8_t *>(uenvp);
+        printf("[copy_out] bytes: ");
+        for (uint64 i = 0; i < 48; ++i)
+        {
+            printf("%02x ", p_bytes[i]);
+        }
+        printf("\n");
 
         // 6. 压入命令行参数指针数组（argv）
         if (uargv[0])
@@ -1691,7 +1706,7 @@ namespace proc
             }
         }
         proc->_trapframe->a1 = sp; // 设置argv指针到trapframe
-
+        printfBlue("sp——uargv: %p\n", sp);
         // 7. 压入参数个数（argc）
         sp -= sizeof(uint64);
         if (mem::k_vmm.copy_out(new_pt, sp, (char *)&argc, sizeof(uint64)) < 0)
