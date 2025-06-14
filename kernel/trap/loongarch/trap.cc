@@ -125,13 +125,13 @@ void trap_manager::timertick()
 // !!写完进程后修改
 void trap_manager::usertrap(){
  
-
+///@todo
 }
 
 void
 trap_manager::usertrapret(void)
 {
-
+///@todo
 }
 void
 trap_manager::machine_trap()
@@ -164,7 +164,7 @@ void trap_manager::kerneltrap()
     panic("kerneltrap");
   }
 
-  //!! 写完进程后修改
+  ///@todo!! 写完进程后修改
   // give up the CPU if this is a timer interrupt.
   // if(which_dev == 2 && myproc() != 0 && myproc()->state == RUNNING) {
   //   timeslice++; //让一个进程连续执行若干时间片，printf线程不安全

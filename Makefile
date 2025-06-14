@@ -1,6 +1,6 @@
 EASTL_DIR := thirdparty/EASTL
 # ===== 架构选择 =====
-ARCH ?= loongarch
+ARCH ?= riscv
 KERNEL_PREFIX=`pwd`
 
 
@@ -224,7 +224,12 @@ run-loongarch:
 	    -m 1G \
 	    -nographic \
 	    -smp 1 \
-
+		-drive file=$(KERNEL_PREFIX)/sdcard-la.img,if=none,format=raw,id=x0 \
+		-device virtio-blk-pci,drive=x0
+		-no-reboot \
+		-device virtio-net-pci,netdev=net0 \
+		-rtc base=utc \
+		-device virtio-blk-pci,drive=x1
 
 
 

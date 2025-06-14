@@ -44,7 +44,7 @@ extern "C" void main()
         while (1)
             ;
             ///@todo: 这里的 disk_driver 有问题
-                // new (&loongarch::qemu::disk_driver) loongarch::qemu::DiskDriver("Disk");
+                new (&loongarch::qemu::disk_driver) loongarch::qemu::DiskDriver("Disk");
     tmm::k_tm.init("timer manager");
     fs::k_bufm.init("buffer manager");
         syscall::k_syscall_handler.init(); // 初始化系统调用处理器
