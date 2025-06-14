@@ -678,7 +678,7 @@ namespace proc
                 {
                     np->_lock.acquire();
                     havekids = 1;
-                    printf("[wait4]: child %d state: %d name: %s\n", np->_pid, (int)np->_state, np->_name);
+                    // printfGreen("[wait4]: child %d state: %d name: %s\n", np->_pid, (int)np->_state, np->_name);
                     if (np->get_state() == ProcState::ZOMBIE)
                     {
                         pid = np->_pid;
@@ -766,7 +766,7 @@ namespace proc
     /// @param state
     void ProcessManager::exit_proc(Pcb *p, int state)
     {
-        printf("[exit_proc] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
+        // printf("[exit_proc] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
         if (p == _init_proc)
             panic("init exiting"); // 保护机制：init 进程不能退出
         // log_info( "exit proc %d", p->_pid );
@@ -1396,8 +1396,8 @@ namespace proc
             {
                 // 读取程序头
                 de->getNode()->nodeRead(reinterpret_cast<uint64>(&ph), off, sizeof(ph));
-                printf("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
-                       i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, ph.flags);
+                // printf("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
+                //        i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, ph.flags);
                 // 	// 只处理LOAD类型的程序段
                 if (ph.type != elf::elfEnum::ELF_PROG_LOAD)
                     continue;
@@ -1425,8 +1425,8 @@ namespace proc
                     seg_flag |= riscv::PteEnum::pte_writable_m;
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ)
                     seg_flag |= riscv::PteEnum::pte_readable_m;
-                printfRed("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d, end_addr: %p\n",
-                          i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, seg_flag, (void *)(ph.vaddr + ph.memsz));
+                // printfRed("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d, end_addr: %p\n",
+                //           i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, seg_flag, (void *)(ph.vaddr + ph.memsz));
                 if ((sz1 = mem::k_vmm.vmalloc(new_pt, new_sz, ph.vaddr + ph.memsz, seg_flag)) == 0)
                 {
                     printfRed("execve: uvmalloc\n");
@@ -1589,7 +1589,6 @@ namespace proc
             uenvp[envc] = sp; // 记录字符串地址
         }
         uenvp[envc] = 0; // envp数组以NULL结尾
-        printfBlue("sp: %p\n", sp);
 
         // 3. 压入命令行参数字符串
         uint64 uargv[MAXARG]; // 命令行参数指针数组
@@ -1619,12 +1618,12 @@ namespace proc
             uargv[argc] = sp; // 记录字符串地址
         }
         uargv[argc] = 0; // argv数组以NULL结尾
-        printfBlue("sp——argv: %p\n", sp);
+
         // 4. 压入辅助向量（auxv），供动态链接器使用
         {
             // 在括号里面开命名空间防止变量名冲突
             using namespace elf;
-            uint64 aux[AuxvEntryType::MAX_AT * 2];
+            uint64 aux[AuxvEntryType::MAX_AT * 2] = {0};
             [[maybe_unused]] int index = 0;
 
             // ADD_AUXV(AT_HWCAP, 0);             // 硬件功能标志
@@ -1654,8 +1653,8 @@ namespace proc
             }
         }
         // 5. 压入环境变量指针数组（envp）
-        if (uenvp[0])
-        {
+        // if (uenvp[0]) // 就算没有环境变量， 也要压入一个空指针
+        { 
             sp -= (envc + 1) * sizeof(uint64); // 为envp数组预留空间
             sp -= sp % 16;                     // 对齐到16字节
             if (sp < stackbase + PGSIZE)
@@ -1672,20 +1671,6 @@ namespace proc
             }
         }
         proc->_trapframe->a2 = sp; // 设置栈指针到trapframe
-        printfBlue("sp——envp: %p\n", sp);
-        // 打印uenvp
-        for (uint64 i = 0; i < envc + 10; i++)
-        {
-            printfRed("envp[%d]: %p\n", i, uenvp[i]);
-        }
-
-        const uint8_t *p_bytes = reinterpret_cast<const uint8_t *>(uenvp);
-        printf("[copy_out] bytes: ");
-        for (uint64 i = 0; i < 48; ++i)
-        {
-            printf("%02x ", p_bytes[i]);
-        }
-        printf("\n");
 
         // 6. 压入命令行参数指针数组（argv）
         if (uargv[0])
@@ -1706,7 +1691,7 @@ namespace proc
             }
         }
         proc->_trapframe->a1 = sp; // 设置argv指针到trapframe
-        printfBlue("sp——uargv: %p\n", sp);
+
         // 7. 压入参数个数（argc）
         sp -= sizeof(uint64);
         if (mem::k_vmm.copy_out(new_pt, sp, (char *)&argc, sizeof(uint64)) < 0)
@@ -1753,7 +1738,7 @@ namespace proc
         mem::PageTable old_pt;
         old_pt = *proc->get_pagetable(); // 获取当前进程的页表
         proc->_sz = PGROUNDUP(new_sz);   // 更新进程大小
-        printf("execve: entry point: %p, new size: %d\n", elf.entry, proc->_sz);
+        // printf("execve: entry point: %p, new size: %d\n", elf.entry, proc->_sz);
         proc->_trapframe->epc = elf.entry; // 设置程序计数器为入口点
         proc->_pt = new_pt;                // 替换为新的页表
         proc->_trapframe->sp = sp;         // 设置栈指针
@@ -1761,7 +1746,7 @@ namespace proc
         // printf("execve: new process size: %d, new pagetable: %p\n", proc->_sz, proc->_pt);
         k_pm.proc_freepagetable(old_pt, old_sz);
 
-        printf("execve succeed, new process size: %d\n", proc->_sz);
+        // printf("execve succeed, new process size: %d\n", proc->_sz);
 
         return argc; // 返回参数个数，表示成功执行
     }

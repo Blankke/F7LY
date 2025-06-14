@@ -352,14 +352,14 @@ namespace mem
     {
 #ifdef RISCV
         uint64 n, a, pa;
-        printf("[copy_out] va: %p, len: %d\n", va, len);
-        // 打印拷贝的所有字节
-        const uint8_t* p_bytes = reinterpret_cast<const uint8_t*>(p);
-        printf("[copy_out] bytes: ");
-        for (uint64 i = 0; i < len; ++i) {
-            printf("%02x ", p_bytes[i]);
-        }
-        printf("\n");
+        // printf("[copy_out] va: %p, len: %d\n", va, len);
+        // // 打印拷贝的所有字节
+        // const uint8_t* p_bytes = reinterpret_cast<const uint8_t*>(p);
+        // printf("[copy_out] bytes: ");
+        // for (uint64 i = 0; i < len; ++i) {
+        //     printf("%02x ", p_bytes[i]);
+        // }
+        // printf("\n");
 
         while (len > 0)
         {
