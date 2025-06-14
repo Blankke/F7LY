@@ -177,7 +177,7 @@ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.s
 $(KERNEL_ELF): $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
 	$(LD) $(LDFLAGS) -o $@ $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
 	$(SIZE) $@
-	# $(OBJDUMP) -D $@ > kernel.asm
+	$(OBJDUMP) -D $@ > kernel.asm
 
 # 只有 riscv 架构需要依赖 initcode
 
@@ -246,12 +246,14 @@ debug-riscv:
 
 debug-loongarch:
 	qemu-system-loongarch64 \
-		-cpu la464-loongarch-cpu \
-		-kernel $(KERNEL_ELF) \
-		-m 128M \
-		-nographic \
-		-smp 1 \
-		-S -gdb tcp::1234
+	    -machine virt \
+	    -kernel $(KERNEL_ELF) \
+	    -m 1G \
+	    -nographic \
+	    -smp 1 \
+	    -S -gdb tcp::1234;
+
+
 initcode: $(INITCODE_BIN)
 
 # 编译 initcode 源文件为目标文件
