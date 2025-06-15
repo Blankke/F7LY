@@ -1673,7 +1673,7 @@ namespace proc
         proc->_trapframe->a2 = sp; // 设置栈指针到trapframe
 
         // 6. 压入命令行参数指针数组（argv）
-        if (uargv[0])
+        // if (uargv[0])
         {
             sp -= (argc + 1) * sizeof(uint64); // 为argv数组预留空间
             sp -= sp % 16;                     // 对齐到16字节
