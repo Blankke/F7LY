@@ -181,7 +181,6 @@ int libc_musl_test(void)
     printf("libctest[0][0]: %s\n", libctest[0][0]);
     for (int i = 0; libctest[i][0] != NULL; i++)
     {
-        printf("");
         argv[3] = libctest[i][0];
         // printf("libctest[%d][0]: %d\n", i, libctest[i][0]);
         // printf("argv[3]: %s\n", argv[3]);

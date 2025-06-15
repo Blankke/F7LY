@@ -100,7 +100,7 @@ USER_TEST_SRC := user/user_lib/user_test.cc
 USER_TEST_OBJ := build/$(OUTPUT_PREFIX)/user_test.o
 
 # 编译参数
-INITCODE_CFLAGS := -Wall -O -g -fno-builtin -fno-exceptions -fno-rtti -fno-stack-protector -nostdlib -ffreestanding $(ARCH_CFLAGS) -Iuser/deps -Iuser/syscall_lib -Iuser/syscall_lib/arch/$(ARCH) -Ikernel/sys -Ikernel
+INITCODE_CFLAGS := -Wall -g -fno-builtin -fno-exceptions -fno-rtti -fno-stack-protector -nostdlib -ffreestanding $(ARCH_CFLAGS) -Iuser/deps -Iuser/syscall_lib -Iuser/syscall_lib/arch/$(ARCH) -Ikernel/sys -Ikernel
 INITCODE_LDFLAGS := -N -e start -Ttext 0
 
 .PHONY: all clean dirs build riscv loongarch run debug initcode
