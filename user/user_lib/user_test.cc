@@ -222,7 +222,7 @@ char *libctest[][2] = {
     {"env", NULL},
     // {"fdopen", NULL}, // fdopen failed
     {"fnmatch", NULL},
-    // {"fscanf", NULL}, //ioctl 爆了
+    {"fscanf", NULL}, //ioctl 爆了
     // {"fwscanf", NULL}, //死了
     {"iconv_open", NULL},
     {"inet_pton", NULL},

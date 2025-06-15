@@ -42,7 +42,25 @@ namespace fs{
                     Inode *lookup( eastl::string dirname ) override { return nullptr ; } ;
                     Inode *mknode( eastl::string dirname, FileAttrs attrs, eastl::string dev_name = "" ) override;
                     size_t nodeRead( uint64 dst_, size_t off_, size_t len_ ) override;
-                    size_t nodeWrite( uint64 src_, size_t off_, size_t len_ ) override { return  0; } ;
+                    size_t nodeWrite( uint64 src_, size_t off, size_t len ) override { 			size_t write_len = len;
+			char *writecontent = new char[len];
+			memset(writecontent, 0, len);
+			// printfRed("i try to print *src:%p,char:%s\n",src_,(char*)src_);
+			memcpy(writecontent, (void *)src_, len);
+			// printf("test.txt write: %s\n", writecontent);
+			for (size_t i = 0; i < write_len; ++i)
+			{
+				if (off + i < data.size())
+				{
+					data[off + i] = writecontent[i];
+				}
+				else
+				{
+					data.push_back(writecontent[i]);
+				}
+			}
+
+			return write_len; } ;
 
                     FileAttrs rMode() const override { return attrs; };
                     dev_t rDev() const override ;
