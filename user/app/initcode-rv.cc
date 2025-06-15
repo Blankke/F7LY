@@ -5,8 +5,9 @@ extern "C"
     int main()
     {
         // basic_test();
-        busybox_musl_test();
+        // busybox_musl_test();
         // start_shell();
+        libc_musl_test();
         shutdown();
         return 0;
     }

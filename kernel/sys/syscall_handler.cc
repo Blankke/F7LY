@@ -140,8 +140,8 @@ namespace syscall
         // printf("[SyscallHandler::invoke_syscaller]invoke syscall handler\n");
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
         uint64 sys_num = p->get_trapframe()->a7; // 获取系统调用号
-        // if (sys_num != 64)
-            // printfGreen("[invoke_syscaller]sys_num: %d sys_name: %s\n", sys_num, _syscall_name[sys_num]);
+        if (sys_num != 64 && sys_num != 66)
+            printfGreen("[invoke_syscaller]sys_num: %d sys_name: %s\n", sys_num, _syscall_name[sys_num]);
         // debug
         // 打印所有系统调用号和名称, 检查是否正确
         // printfCyan("debug: syscall_num_list\n");
@@ -1527,7 +1527,7 @@ namespace syscall
             *p_pgrp = 1;
             return 0;
         }
-
+        printfRed("[SyscallHandler::sys_ioctl] Unsupported ioctl command: 0x%X\n", cmd);
         return 0;
     }
     uint64 SyscallHandler::sys_syslog()

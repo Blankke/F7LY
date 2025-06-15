@@ -1369,7 +1369,7 @@ namespace proc
 
         if (elf.magic != elf::elfEnum::ELF_MAGIC) // 检查ELF魔数
         {
-            panic("execve: not a valid ELF file");
+            panic("execve: not a valid ELF file,\n magic number: %x, execve path: %s", elf.magic, path.c_str());
             return -1;
         }
         // printf("execve: ELF file magic: %x\n", elf.magic);

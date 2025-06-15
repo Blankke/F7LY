@@ -50,4 +50,5 @@ void printf(const char *fmt, ...);
 int run_test(char *test_list);
 int basic_test(void);
 int busybox_musl_test(void);
+int libc_musl_test(void);
 int start_shell(void);
