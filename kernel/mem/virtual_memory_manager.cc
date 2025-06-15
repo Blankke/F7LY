@@ -649,6 +649,22 @@ namespace mem
         {
             memmove(mem, (void *)((uint64)src + 2 * PGSIZE), MIN(sz - 2 * PGSIZE, PGSIZE));
         }
+
+        mem = (char *)k_pmm.alloc_page();
+        memset(mem, 0, PGSIZE);
+        map_pages(pt, 3 * PGSIZE, PGSIZE, (uint64)mem, PTE_W | PTE_R | PTE_X | PTE_U);
+        if (sz > 3 * PGSIZE)
+        {
+            memmove(mem, (void *)((uint64)src + 3 * PGSIZE), MIN(sz - 3 * PGSIZE, PGSIZE));
+        }
+
+        mem = (char *)k_pmm.alloc_page();
+        memset(mem, 0, PGSIZE);
+        map_pages(pt, 4 * PGSIZE, PGSIZE, (uint64)mem, PTE_W | PTE_R | PTE_X | PTE_U);
+        if (sz > 4 * PGSIZE)
+        {
+            memmove(mem, (void *)((uint64)src + 4 * PGSIZE), MIN(sz - 4 * PGSIZE, PGSIZE));
+        }
 #elif defined(LOONGARCH)
 // TODO
 #endif

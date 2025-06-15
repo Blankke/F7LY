@@ -332,7 +332,7 @@ namespace proc
         //  printfYellow("initcode start byte %u\n", *(uint64 *)pa);
         printf("initcode start: %p, end: %p\n", initcode_start, initcode_end);
         printf("initcode size: %p\n", (uint64)(initcode_end - 0));
-        p->_sz = 3 * PGSIZE;
+        p->_sz = 5 * PGSIZE;
 
         p->_trapframe->epc = 0;
         p->_trapframe->sp = p->_sz;
@@ -1616,6 +1616,8 @@ namespace proc
                 return -1;
             }
             uargv[argc] = sp; // 记录字符串地址
+
+            // printfRed("[execve] argv[%d] = \"%s\", user_stack_addr = 0x%p\n", argc, argv[argc].c_str(), sp);
         }
         uargv[argc] = 0; // argv数组以NULL结尾
 
@@ -1689,7 +1691,13 @@ namespace proc
                 k_pm.proc_freepagetable(new_pt, new_sz);
                 return -1;
             }
+            // // 新增：打印压入的 argv 指针及其内容
+            // for (uint64 i = 0; i <= argc; ++i)
+            // {
+            //     printf("[execve] argv_ptr[%d] = 0x%p -> \"%s\"\n", i, uargv[i], argv[i].c_str());
+            // }
         }
+        
         proc->_trapframe->a1 = sp; // 设置argv指针到trapframe
 
         // 7. 压入参数个数（argc）
