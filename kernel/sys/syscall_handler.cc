@@ -314,12 +314,14 @@ namespace syscall
     // ---------------- syscall functions ----------------
     uint64 SyscallHandler::sys_exec()
     {
+        panic("未实现该系统调用");
         TODO("sys_exec");
         printfYellow("sys_exec\n");
         return 0;
     }
     uint64 SyscallHandler::sys_fork()
     {
+        panic("未实现该系统调用");
         TODO(uint64 usp;
              if (_arg_addr(1, usp) < 0) {
                  printfRed("[SyscallHandler::sys_fork] Error fetching usp argument\n");
@@ -764,6 +766,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_linkat()
     {
+        panic("未实现该系统调用");
         TODO("sys_linkat");
         printfYellow("sys_linkat\n");
         return 0;
@@ -801,6 +804,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_mknod()
     {
+        panic("未实现该系统调用");
         TODO("sys_mkn");
         printfYellow("sys_mkn\n");
         return 0;
@@ -1115,18 +1119,15 @@ namespace syscall
     //====================================signal===================================================
     uint64 SyscallHandler::sys_kill_signal()
     {
-        ///@todo
-        return 0;
+        panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_tkill()
     {
-        ///@todo
-        return 0;
+        panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_tgkill()
     {
-        ///@todo
-        return 0;
+        panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_rt_sigaction()
     {
@@ -1206,13 +1207,11 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_rt_sigtimedwait()
     {
-        ///@todo
-        return 0;
+        panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_rt_sigreturn()
     {
-        ///@todo
-        return 0;
+        panic("未实现该系统调用");
     }
 
     //================================== busybox===================================================
