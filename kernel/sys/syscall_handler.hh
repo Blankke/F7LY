@@ -99,9 +99,8 @@ namespace syscall
         uint64 sys_getrandom();
         uint64 sys_clock_gettime();
         uint64 sys_ioctl();
-        uint64 sys_syslog();
         uint64 sys_fcntl();
-        uint64 sys_faceessat();
+        uint64 sys_faccessat();
         uint64 sys_sysinfo();
         uint64 sys_ppoll();
         uint64 sys_utimensat();
@@ -113,6 +112,45 @@ namespace syscall
         uint64 sys_renameat2();
         uint64 sys_readv();
         uint64 sys_clock_nanosleep();
+
+        // 补全的 todo 接口
+        uint64 sys_statfs();
+        uint64 sys_ftruncate();
+        uint64 sys_pread64();
+        uint64 sys_pwrite64();
+        uint64 sys_pselect6();
+        uint64 sys_sync();
+        uint64 sys_fsync();
+        uint64 sys_futex();
+        uint64 sys_get_robust_list();
+        uint64 sys_setitimer();
+        uint64 sys_sched_getaffinity();
+        uint64 sys_setpgid();
+        uint64 sys_getpgid();
+        uint64 sys_setsid();
+        uint64 sys_getrusge();
+        uint64 sys_getegid();
+        uint64 sys_shmget();
+        uint64 sys_shmctl();
+        uint64 sys_shmat();
+        uint64 sys_socket();
+        uint64 sys_socketpair();
+        uint64 sys_bind();
+        uint64 sys_listen();
+        uint64 sys_accept();
+        uint64 sys_connect();
+        uint64 sys_getsockname();
+        uint64 sys_getpeername();
+        uint64 sys_sendto();
+        uint64 sys_recvfrom();
+        uint64 sys_setsockopt();
+        uint64 sys_getsockopt();
+        uint64 sys_shutdown_socket();
+        uint64 sys_sendmsg();
+        uint64 sys_mprotect();
+        uint64 sys_membarrier();
+        uint64 sys_clone3();
+        uint64 sys_poweroff();
     };
 
     extern SyscallHandler k_syscall_handler;

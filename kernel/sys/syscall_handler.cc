@@ -68,7 +68,9 @@ namespace syscall
         BIND_SYSCALL(linkat);
         BIND_SYSCALL(umount2);
         BIND_SYSCALL(mount);
-        BIND_SYSCALL(faceessat);
+        BIND_SYSCALL(statfs);    // todo
+        BIND_SYSCALL(ftruncate); // todo
+        BIND_SYSCALL(faccessat); // todo
         BIND_SYSCALL(chdir);
         BIND_SYSCALL(exec);
         BIND_SYSCALL(openat);
@@ -80,20 +82,29 @@ namespace syscall
         BIND_SYSCALL(write);
         BIND_SYSCALL(readv);
         BIND_SYSCALL(writev);
+        BIND_SYSCALL(pread64);  // todo
+        BIND_SYSCALL(pwrite64); // todo
         BIND_SYSCALL(sendfile);
+        BIND_SYSCALL(pselect6); // todo
         BIND_SYSCALL(ppoll);
         BIND_SYSCALL(readlinkat);
         BIND_SYSCALL(fstatat);
         BIND_SYSCALL(fstat);
+        BIND_SYSCALL(sync);  // todo
+        BIND_SYSCALL(fsync); // todo
         BIND_SYSCALL(utimensat);
         BIND_SYSCALL(exit);
         BIND_SYSCALL(exit_group);
         BIND_SYSCALL(set_tid_address);
+        BIND_SYSCALL(futex); // todo
         BIND_SYSCALL(set_robust_list);
+        BIND_SYSCALL(get_robust_list); // todo
         BIND_SYSCALL(nanosleep);
+        BIND_SYSCALL(setitimer); // todo
         BIND_SYSCALL(clock_gettime);
         BIND_SYSCALL(clock_nanosleep);
         BIND_SYSCALL(syslog);
+        BIND_SYSCALL(sched_getaffinity); // todo
         BIND_SYSCALL(sched_yield);
         BIND_SYSCALL(kill_signal);
         BIND_SYSCALL(tkill);
@@ -105,27 +116,52 @@ namespace syscall
         BIND_SYSCALL(setgid);
         BIND_SYSCALL(setuid);
         BIND_SYSCALL(times);
+        BIND_SYSCALL(setpgid); // todo
+        BIND_SYSCALL(getpgid); // todo
+        BIND_SYSCALL(setsid);  // todo
         BIND_SYSCALL(uname);
+        BIND_SYSCALL(getrusge); // todo
         BIND_SYSCALL(gettimeofday);
         BIND_SYSCALL(getpid);
         BIND_SYSCALL(getppid);
         BIND_SYSCALL(getuid);
         BIND_SYSCALL(geteuid);
         BIND_SYSCALL(getgid);
+        BIND_SYSCALL(getegid); // todo
         BIND_SYSCALL(gettid);
         BIND_SYSCALL(sysinfo);
+        BIND_SYSCALL(shmget);      // todo
+        BIND_SYSCALL(shmctl);      // todo
+        BIND_SYSCALL(shmat);       // todo
+        BIND_SYSCALL(socket);      // todo
+        BIND_SYSCALL(socketpair);  // todo
+        BIND_SYSCALL(bind);        // todo
+        BIND_SYSCALL(listen);      // todo
+        BIND_SYSCALL(accept);      // todo
+        BIND_SYSCALL(connect);     // todo
+        BIND_SYSCALL(getsockname); // todo
+        BIND_SYSCALL(getpeername); // todo
+        BIND_SYSCALL(sendto);      // todo
+        BIND_SYSCALL(recvfrom);    // todo
+        BIND_SYSCALL(setsockopt);  // todo
+        BIND_SYSCALL(getsockopt);  // todo
+        BIND_SYSCALL(sendmsg);     // todo
         BIND_SYSCALL(brk);
         BIND_SYSCALL(munmap);
         BIND_SYSCALL(mremap);
         BIND_SYSCALL(clone);
         BIND_SYSCALL(execve);
         BIND_SYSCALL(mmap);
+        BIND_SYSCALL(mprotect); // todo
         BIND_SYSCALL(madvise);
+        BIND_SYSCALL(membarrier); // todo
         BIND_SYSCALL(wait4);
         BIND_SYSCALL(prlimit64);
         BIND_SYSCALL(renameat2);
         BIND_SYSCALL(getrandom);
         BIND_SYSCALL(statx);
+        BIND_SYSCALL(clone3);   // todo
+        BIND_SYSCALL(poweroff); // todo
         // printfCyan("====================debug: syscall_num_list\n");
         // for (uint64 i = 0; i < max_syscall_funcs_num; i++)
         // {
@@ -140,8 +176,8 @@ namespace syscall
         // printf("[SyscallHandler::invoke_syscaller]invoke syscall handler\n");
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
         uint64 sys_num = p->get_trapframe()->a7; // 获取系统调用号
-        // if (sys_num != 64 && sys_num != 66)
-            // printfGreen("[invoke_syscaller]sys_num: %d sys_name: %s\n", sys_num, _syscall_name[sys_num]);
+        if (sys_num != 64 && sys_num != 66)
+            printfGreen("[invoke_syscaller]sys_num: %d sys_name: %s\n", sys_num, _syscall_name[sys_num]);
         // debug
         // 打印所有系统调用号和名称, 检查是否正确
         // printfCyan("debug: syscall_num_list\n");
@@ -1214,8 +1250,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_fstatat()
     {
-        // TODO
-        return 0;
+        panic("未实现该系统调用");
     }
     uint64 SyscallHandler::SyscallHandler::sys_exit_group()
     {
@@ -1629,10 +1664,9 @@ namespace syscall
 
         return retfd;
     }
-    uint64 SyscallHandler::sys_faceessat()
+    uint64 SyscallHandler::SYS_faccessat()
     {
-        // TODO
-        return 0;
+        panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_sysinfo()
     {
@@ -1839,8 +1873,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_readv()
     {
-        // TODO
-        return 0;
+        panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_geteuid()
     {
@@ -1852,8 +1885,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_mremap()
     {
-        // TODO
-        return 0;
+        panic("未实现该系统调用");
     }
 
     uint64 SyscallHandler::sys_lseek()
@@ -1942,13 +1974,159 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_renameat2()
     {
-        // TODO
-        return 0;
+        panic("未实现该系统调用");
     }
 
     uint64 SyscallHandler::sys_clock_nanosleep()
     {
-        // TODO
-        return 0;
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_statfs()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_ftruncate()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_pread64()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_pwrite64()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_pselect6()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_sync()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_fsync()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_futex()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_get_robust_list()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_setitimer()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_sched_getaffinity()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_setpgid()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_getpgid()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_setsid()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_getrusge()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_getegid()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_shmget()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_shmctl()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_shmat()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_socket()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_socketpair()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_bind()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_listen()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_accept()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_connect()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_getsockname()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_getpeername()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_sendto()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_recvfrom()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_setsockopt()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_getsockopt()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_shutdown_socket()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_sendmsg()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_mprotect()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_membarrier()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_clone3()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_poweroff()
+    {
+        panic("未实现该系统调用");
     }
 }
