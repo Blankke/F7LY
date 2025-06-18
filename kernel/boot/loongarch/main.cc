@@ -31,7 +31,9 @@ extern "C" void main()
     trap_mgr.inithart();
     proc::k_pm.init("next pid", "wait lock");
     mem::k_pmm.init();
+
     mem::k_vmm.init("virtual_memory_manager");
+
     mem::k_hmm.init("heap_memory_manager", HEAP_START);
 
     if (dev::k_devm.register_stdin(static_cast<dev::VirtualDevice *>(&dev::k_stdin)) < 0)

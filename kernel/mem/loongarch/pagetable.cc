@@ -23,60 +23,79 @@ namespace mem
 
 	bool debug_trace_walk = false;
 
-
+    void PageTable::print_page_table()
+    {
+        printfRed("PageTable: %p\n", _base_addr);
+        for (int i = 0; i < 512; i++)
+        {
+            Pte pte = get_pte(i);
+            printfRed("PTE[%d]: %p, pte2pa: %p\n", i, pte.get_data(), pte.pa());
+        }
+    }
 	Pte PageTable::walk(uint64 va, bool alloc)
 	{
-		if (!_is_global)
+		// printfRed( "walk: va=0x%x, alloc=%d\n", va, alloc );
+		if ( !_is_global )
 		{
-			Info_R("walk: pagetable not global");
+			printfYellow( "walk: pagetable not global" );
 			return Pte();
 		}
-		if (va >= MAXVA)
-			panic("va out of bounds");
+		// if ( va >= vml::vm_end )
+		// log_panic( "va out of bounds" );
 
 		PageTable pt;
-		pt.set_base(_base_addr);
+		pt.set_base( _base_addr );
 		Pte pte;
 
-		if (debug_trace_walk)
-			printf("[walk trace] 0x%x : ", va);
+		if ( debug_trace_walk ) printf( "[walk trace] 0x%x : ", va );
 		uint64 pg_num;
 
+
 		// search in level-3
-		pg_num = pt.dir3_num(va);
-		pte = pt.get_pte(pg_num);
-		if (debug_trace_walk)
-			printf("0x%x->", pte.get_data());
-		if (!_walk_to_next_level(pte, alloc, pt))
+		// printfYellow( "walk: va=0x%x, pgd-base=0x%x, pud-base=0x%x, pmd-base=0x%x, pt-base=0x%x\n",
+		// 			   va, _base_addr, pt._base_addr, pt._base_addr, pt._base_addr );
+		pg_num = pgd_num( va );
+		pte	   = pt.get_pte( pg_num );
+		if ( debug_trace_walk ) printf( "0x%x->", pte.get_data() );
+		if ( !_walk_to_next_level( pte, alloc, pt ) )
 		{
-			Info_R("walk fail");
+			panic( "walk pgd to pud fail, va=%p, pgd-base=%p, pgd-base=%p", va, _base_addr,
+					   pt._base_addr );
 			return Pte();
 		}
+#endif
 		// search in level-2
-		pg_num = pt.dir2_num(va);
-		pte = pt.get_pte(pg_num);
-		if (debug_trace_walk)
-			printf("0x%x->", pte.get_data());
-		if (!_walk_to_next_level(pte, alloc, pt))
+		// printfGreen( "walk: va=0x%x, pgd-base=0x%x, pud-base=0x%x, pmd-base=0x%x, pt-base=0x%x\n",
+		// 			   va, _base_addr, pt._base_addr, pt._base_addr, pt._base_addr );
+		pg_num = pud_num( va );
+		pte	   = pt.get_pte( pg_num );
+		if ( debug_trace_walk ) printf( "0x%x->", pte.get_data() );
+		if ( !_walk_to_next_level( pte, alloc, pt ) )
 		{
-			Info_R("walk fail");
+			panic( "walk pud to pmd fail, va=%p, pgd-base=%p, pud-base=%p", va, _base_addr,
+					   pt._base_addr );
 			return Pte();
 		}
 		// search in level-1
-		pg_num = pt.dir1_num(va);
-		pte = pt.get_pte(pg_num);
-		if (debug_trace_walk)
-			printf("0x%x->", pte.get_data());
-		if (!_walk_to_next_level(pte, alloc, pt))
+		// printfCyan( "walk: va=0x%x, pgd-base=0x%x, pud-base=0x%x, pmd-base=0x%x, pt-base=0x%x\n",
+		// 			   va, _base_addr, pt._base_addr, pt._base_addr, pt._base_addr );
+		pg_num = pmd_num( va );
+		pte	   = pt.get_pte( pg_num );
+		if ( debug_trace_walk ) printf( "0x%x->", pte.get_data() );
+		if ( !_walk_to_next_level( pte, alloc, pt ) )
 		{
-			Info_R("walk fail");
+			panic( "walk pmd to pt fail, va=%p, pgd-base=%p, pmd-base=%p", va, _base_addr,
+					   pt._base_addr );
 			return Pte();
 		}
 
-		pg_num = pt.pt_num(va);
-		pte = pt.get_pte(pg_num);
-		if (debug_trace_walk)
-			printf("0x%x\n", pte.get_data());
+		// printfBlue( "walk: va=0x%x, pgd-base=0x%x, pud-base=0x%x, pmd-base=0x%x, pt-base=0x%x\n",
+		// 			   va, _base_addr, pt._base_addr, pt._base_addr, pt._base_addr );
+		pg_num = pt_num( va );
+		pte	   = pt.get_pte( pg_num );
+		if ( debug_trace_walk ) printf( "0x%x\n", pte.get_data() );
+		// printfMagenta( "walk: va=0x%x, pgd-base=0x%x, pud-base=0x%x, pmd-base=0x%x, pt-base=0x%x\n",
+		// 			   va, _base_addr, pt._base_addr, pt._base_addr, pt._base_addr );
 		return pte;
 	}
 
@@ -163,7 +182,7 @@ namespace mem
 	{
 		if (pte.is_valid())
 		{
-			pt.set_base((uint64)pte.pa());
+			pt.set_base(to_vir((uint64)pte.pa()));
 		}
 		else
 		{
@@ -180,12 +199,9 @@ namespace mem
 			}
 			k_pmm.clear_page(page_addr);
 			pt.set_base((uint64)page_addr);
-			pte.set_data(page_round_down(
-							 PA2VA((uint64)page_addr)) |
-						 loongarch::PteEnum::pte_valid_m);
+			pte.set_data( page_round_down( to_phy( (ulong) page_addr ) ) |
+						  Pte::map_dir_page_flags() );
 		}
 		return true;
 	}
-}
-
-#endif // LOONGARCH
+} // namespace mem
