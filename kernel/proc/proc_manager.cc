@@ -8,11 +8,13 @@
 #include "trap.hh"
 #include "printer.hh"
 #include "devs/device_manager.hh"
+
 #ifdef RISCV
 #include "devs/riscv/disk_driver.hh"
 #elif defined(LOONGARCH)
 #include "devs/loongarch/disk_driver.hh"
 #endif
+
 #include "fs/vfs/dentrycache.hh"
 #include "fs/vfs/path.hh"
 #include "fs/ramfs/ramfs.hh"
@@ -376,7 +378,45 @@ namespace proc
         p->_lock.release();
 
 #elif defined(LOONGARCH)
-// TODO
+        static int inited = 0;
+        // 防止重复初始化
+        if (inited != 0)
+        {
+            panic("re-init user.");
+            return;
+        }
+
+        Pcb *p = alloc_proc();
+        if (p == nullptr)
+        {
+            panic("user_init: alloc_proc failed");
+            return;
+        }
+
+        _init_proc = p;
+
+        // 传入initcode的地址
+        printfCyan("initcode pagetable: %p\n", p->_pt.get_base());
+        mem::k_vmm.uvmfirst(p->_pt, (uint64)initcode_start, (uint64)initcode_end - (uint64)initcode_start);
+        // debug
+        //  uint64 pa = (uint64)p->_pt.walk_addr((uint64)0);
+        //  printfYellow("initcode start pa: %p\n",pa);
+        //  printfYellow("initcode start byte %u\n", *(uint64 *)pa);
+        printf("initcode start: %p, end: %p\n", initcode_start, initcode_end);
+        printf("initcode size: %p\n", (uint64)(initcode_end - 0));
+        p->_sz = 3 * PGSIZE;
+
+        p->_trapframe->era = 0; // 设置程序计数器为0
+        p->_trapframe->sp = p->_sz; // 设置栈指针为3个页的大小
+
+        safestrcpy(p->_name, "initcode", sizeof(p->_name));
+        p->_parent = p;
+        // safestrcpy(p->_cwd_name, "/", sizeof(p->_cwd_name));
+        p->_cwd_name = "/";
+
+        p->_state = ProcState::RUNNABLE;
+
+        p->_lock.release();
 #endif
     }
 

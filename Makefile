@@ -1,6 +1,6 @@
 EASTL_DIR := thirdparty/EASTL
 # ===== 架构选择 =====
-ARCH ?= riscv
+ARCH ?= loongarch
 KERNEL_PREFIX=`pwd`
 
 
@@ -132,7 +132,7 @@ USER_TEST_OBJ := build/$(OUTPUT_PREFIX)/user_test.o
 # 编译参数
 INITCODE_CFLAGS := -Wall -O -fno-builtin -fno-exceptions -fno-rtti -fno-stack-protector -nostdlib -ffreestanding $(ARCH_CFLAGS) -Iuser/deps -Iuser/syscall_lib -Iuser/syscall_lib/arch/$(ARCH) -Ikernel/sys -Ikernel
 ifeq ($(ARCH),riscv)
-INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dynamic-linker,-T,user/user.ld
+INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dynamic-linker,-T,user/user-riscv.ld
 else ifeq ($(ARCH),loongarch)
 INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dynamic-linker,-T,user/user-loongarch.ld
 endif
@@ -298,7 +298,7 @@ $(INITCODE_ELF): $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(USER_TEST_OBJ)
 ifeq ($(ARCH),riscv)
   OBJDUMP_INITCODE := riscv64-unknown-elf-objdump -D -b binary -m riscv:rv64 -EL
 else ifeq ($(ARCH),loongarch)
-  OBJDUMP_INITCODE := loongarch64-unknown-linux-gnu-objdump -D -b binary -m loongarch64
+  OBJDUMP_INITCODE := loongarch64-linux-gnu-objdump -D -b binary -m loongarch64
 endif
 
 # 生成二进制 initcode 文件 + 反汇编

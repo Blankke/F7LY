@@ -24,7 +24,7 @@ extern "C" void main()
 {
     k_printer.init();
     printfYellow("Hello, World!\n");
-     dev::acpi::k_acpi_controller.init( "acpi", 0x100E001C | DMWIN1_MASK );
+    dev::acpi::k_acpi_controller.init("acpi", 0x100E001C | DMWIN1_MASK);
     apic_init();
     extioi_init();
     trap_mgr.init();
@@ -43,15 +43,15 @@ extern "C" void main()
     if (dev::k_devm.register_stderr(static_cast<dev::VirtualDevice *>(&dev::k_stderr)) < 0)
         while (1)
             ;
-            ///@todo: 这里的 disk_driver 有问题
-                new (&loongarch::qemu::disk_driver) loongarch::qemu::DiskDriver("Disk");
+    ///@todo: 这里的 disk_driver 有问题
+    new (&loongarch::qemu::disk_driver) loongarch::qemu::DiskDriver("Disk");
     tmm::k_tm.init("timer manager");
     fs::k_bufm.init("buffer manager");
-        syscall::k_syscall_handler.init(); // 初始化系统调用处理器
-        proc::k_pm.user_init(); // 初始化用户进程
+    syscall::k_syscall_handler.init(); // 初始化系统调用处理器
+    proc::k_pm.user_init();            // 初始化用户进程
     printfMagenta("user init\n");
-        proc::k_scheduler.init("scheduler");
-    proc::k_scheduler.start_schedule(); // 启动调度器
+    proc::k_scheduler.init("scheduler");
+    proc::k_scheduler.start_schedule();       // 启动调度器
     dev::acpi::k_acpi_controller.power_off(); // 关机
 }
 
