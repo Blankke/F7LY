@@ -1,6 +1,6 @@
 EASTL_DIR := thirdparty/EASTL
 # ===== 架构选择 =====
-ARCH ?= riscv
+ARCH ?= loongarch
 KERNEL_PREFIX=`pwd`
 
 

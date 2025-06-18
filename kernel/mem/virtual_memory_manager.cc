@@ -14,7 +14,16 @@
 extern char etext[]; // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
-
+#ifdef LOONGARCH
+void
+tlbinit(void)
+{
+  asm volatile("invtlb  0x0,$zero,$zero");
+  w_csr_stlbps(0xcU);
+  w_csr_asid(0x0U);
+  w_csr_tlbrehi(0xcU);
+}
+#endif
 namespace mem
 {
     VirtualMemoryManager k_vmm;
@@ -28,7 +37,6 @@ namespace mem
 
     void VirtualMemoryManager::init(const char *lock_name)
     {
-#ifdef RISCV
 
         _virt_mem_lock.init(lock_name);
         // 创建内核页表
@@ -43,7 +51,7 @@ namespace mem
         {
             pcb.map_kstack(k_pagetable);
         }
-
+#ifdef RISCV
         // 设置satp，对应龙芯应该设置pgdl，pgdh，stlbps，asid，tlbrehi，pwcl，pwch,
         // 并且invtlb 0x0,$zero,$zero;
         // question: 为什么xv6的MAKE_SATP没有设置asid
@@ -53,6 +61,19 @@ namespace mem
         w_satp(MAKE_SATP(k_pagetable.get_base()));
         // printfYellow("sfence\n");
         sfence_vma();
+#elif defined(LOONGARCH)
+
+//the "pgdl" is corresponding to "satp" in riscv
+  w_csr_pgdl((uint64)k_pagetable.get_base());
+  // flush the tlb(tlbinit)
+  tlbinit();
+
+  w_csr_pwcl((PTEWIDTH << 30)|(DIR2WIDTH << 25)|(DIR2BASE << 20)|(DIR1WIDTH << 15)|(DIR1BASE << 10)|(PTWIDTH << 5)|(PTBASE << 0));
+  w_csr_pwch((DIR4WIDTH << 18)|(DIR3WIDTH << 6)|(DIR3BASE << 0) |(PWCH_HPTW_EN << 24));
+
+  [[maybe_unused]]uint64 crmd = r_csr_crmd();
+
+
 #endif
         printfGreen("[vmm] Virtual Memory Manager Init\n");
     }
@@ -61,7 +82,7 @@ namespace mem
     bool VirtualMemoryManager::map_pages(PageTable &pt, uint64 va, uint64 size, uint64 pa, uint64 flags)
     {
         // printf("map_pages: va=0x%x, size=0x%x, pa=0x%x, flags=0x%x\n", va, size, pa, flags);
-#ifdef RISCV
+
         uint64 a, last;
         Pte pte;
 
@@ -74,8 +95,9 @@ namespace mem
 
         for (;;)
         {
-
+// printfMagenta("map_pages: va=0x%x, size=0x%x, pa=0x%x, flags=0x%x\n", a, size, pa, flags);
             pte = pt.walk(a, /*alloc*/ true);
+            // printfCyan("walk: va=0x%x, pte_addr=%p, pte_data=%p\n", a, pte.get_data(), pte.get_data());
             // DEBUG:
             //  if(va == KERNBASE)
             //  {
@@ -89,11 +111,15 @@ namespace mem
             }
             if (pte.is_valid())
                 panic("mappages: remap, va=0x%x, pa=0x%x, PteData:%x", a, pa, pte.get_data());
-
+#ifdef RISCV
             pte.set_data(PA2PTE(PGROUNDDOWN(riscv::virt_to_phy_address(pa))) |
                          flags |
                          riscv::PteEnum::pte_valid_m);
-
+#elif defined(LOONGARCH)
+            pte.set_data(PA2PTE(PGROUNDDOWN(pa)) |
+                         flags |
+                         loongarch::pte_valid_m);
+#endif
             // printfMagenta("由map_page设置的第三级pte: %p,pte_addr:%p，应该是：%p\n", pte.get_data(), pte.get_data_addr(), riscv::virt_to_phy_address(pa));
             // if (pte.get_data_addr() == (uint64*)a)
             // {
@@ -104,37 +130,8 @@ namespace mem
             a += PGSIZE;
             pa += PGSIZE;
         }
+        // printfMagenta("map finish for cycle\n");
         return true;
-#elif defined(LOONGARCH)
-        uint64 a, last;
-        Pte pte;
-
-        if (size == 0)
-            panic("mappages: size");
-
-        a = PGROUNDDOWN(va);
-        last = PGROUNDDOWN(va + size - 1);
-        for (;;)
-        {
-            pte = pt.walk(a, /*alloc*/ true);
-
-            if (pte.is_null())
-            {
-                printfYellow("walk failed");
-                return false;
-            }
-            if (pte.is_valid())
-                panic("mappages: remap");
-
-            pte.set_data(PGROUNDDOWN(to_phy(pa)) |
-                         flags);
-            if (a == last)
-                break;
-            a += PGSIZE;
-            pa += PGSIZE;
-        }
-        return true;
-#endif
     }
 
     uint64 VirtualMemoryManager::vmalloc(PageTable &pt, uint64 old_sz, uint64 new_sz, uint64 flags)
@@ -188,6 +185,7 @@ namespace mem
                 return 0;
             }
         }
+        // printfMagenta("vmalloc: old_sz: %p, new_sz: %p\n", old_sz, new_sz);
         return new_sz;
 
 #endif
@@ -686,10 +684,8 @@ namespace mem
         // 初始化堆内存
         kvmmap(pt, vm_kernel_heap_start, HEAP_START, vm_kernel_heap_size, PTE_R | PTE_W);
 #elif defined(LOONGARCH)
-        // TODO
-        kvmmap(k_pagetable, ((uint64)etext) & (~(DMWIN_MASK)), (uint64)etext, PHYSTOP - (uint64)etext, PTE_R | PTE_W);
+        kvmmap(pt, ((uint64)etext) & (~(DMWIN_MASK)), (uint64)etext, PHYSTOP - (uint64)etext, PTE_R | PTE_W);
 
-        printfRed("loongarch 虚拟化未实现\n");
 #endif
         return pt;
     }

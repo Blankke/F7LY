@@ -176,7 +176,7 @@ void trap_manager::kerneltrap()
   if (which_dev == 2)
   {
     timeslice++; // 让一个进程连续执行若干时间片，printf线程不安全
-    printf("timeslice: %d\n", timeslice);
+    // printf("timeslice: %d\n", timeslice);
     if (timeslice >= 5)
     {
       timeslice = 0;

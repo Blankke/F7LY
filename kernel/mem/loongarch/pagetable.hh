@@ -14,7 +14,7 @@ namespace mem
 		bool _is_global = false;
 
 	public:
-		PageTable(){};
+		PageTable() {};
 		PageTable(uint64 addr) { _base_addr = addr; };
 		void set_base(uint64 addr) { _base_addr = addr; }
 		uint64 get_base() { return _base_addr; }
@@ -45,6 +45,7 @@ namespace mem
 		void reset_pte_data(uint64 index) { ((pte_t *)_base_addr)[index] = 0; }
 		uint64 get_pte_addr(uint64 index) { return (uint64) & ((pte_t *)_base_addr)[index]; }
 		Pte get_pte(uint64 index) { return Pte(&((pte_t *)_base_addr)[index]); }
+		void print_page_table();
 
 	private:
 		bool _walk_to_next_level(Pte pte, bool alloc, PageTable &pt);
