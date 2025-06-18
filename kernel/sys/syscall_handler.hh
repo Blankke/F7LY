@@ -114,6 +114,7 @@ namespace syscall
         uint64 sys_clock_nanosleep();
 
         // 补全的 todo 接口
+        uint64 sys_syslog();
         uint64 sys_statfs();
         uint64 sys_ftruncate();
         uint64 sys_pread64();

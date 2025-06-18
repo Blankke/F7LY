@@ -98,7 +98,6 @@ namespace syscall
         SYS_recvfrom = 207, //todo
         SYS_setsockopt = 208, //todo
         SYS_getsockopt = 209, //todo
-        SYS_shutdown = 210, //todo
         SYS_sendmsg = 211, //todo
         SYS_brk = 214,
         SYS_munmap = 215,

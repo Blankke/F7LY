@@ -1664,7 +1664,7 @@ namespace syscall
 
         return retfd;
     }
-    uint64 SyscallHandler::SYS_faccessat()
+    uint64 SyscallHandler::sys_faccessat()
     {
         panic("未实现该系统调用");
     }
