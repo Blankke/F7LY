@@ -112,7 +112,7 @@ namespace syscall
     {
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
         uint64 sys_num = p->get_trapframe()->a7; // 获取系统调用号
-        printfCyan("[SyscallHandler::invoke_syscaller]sys_num: %d sys_name: %s\n", sys_num, _syscall_name[sys_num]);
+        // printfCyan("[SyscallHandler::invoke_syscaller]sys_num: %d sys_name: %s\n", sys_num, _syscall_name[sys_num]);
         if (sys_num >= max_syscall_funcs_num || sys_num < 0 || _syscall_funcs[sys_num] == nullptr)
         {
             printfRed("[SyscallHandler::invoke_syscaller]sys_num is out of range\n");
@@ -646,7 +646,7 @@ namespace syscall
         }
         // if (fd > 2)
         //     printfRed("invoke sys_write\n");
-        printf("syscall_write: fd: %d, p: %p, n: %d\n", fd, (void *)p, n);
+        // printf("syscall_write: fd: %d, p: %p, n: %d\n", fd, (void *)p, n);
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = proc->get_pagetable();
         char *buf = new char[n + 10];
@@ -655,7 +655,6 @@ namespace syscall
             uspace.open();
             mem::UsRangeDesc urd = std::make_tuple((u8 *)buf, (ulong)n + 1);
             uspace >> urd;
-            printf("pass here");
             uspace.close();
         }
         long rc = f->write((ulong)buf, n, f->get_file_offset(), true);

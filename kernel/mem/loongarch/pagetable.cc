@@ -111,7 +111,7 @@ namespace mem
 			return nullptr;
 		if (!pte.is_valid())
 			return nullptr;
-		if (pte.plv() == 0)
+		if ( pte.is_super_plv() )
 		{
 			Info_R("try to walk-addr( k-pt, %p ). nullptr will be return.", va);
 			return nullptr;

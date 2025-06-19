@@ -4,7 +4,7 @@ extern "C"
 {
     int main()
     {
-        // basic_test();
+        basic_test();
         printf("Hello, World!\n");
         shutdown();
         return 0;

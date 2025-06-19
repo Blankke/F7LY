@@ -128,7 +128,7 @@ namespace mem
 	//"此处有风险，参考了rv版本的学长代码，to_vir()函数因为返回本身，故删除，la版本的代码未实现"
 		int _update_cache(void *va)
 		{
-			// printfCyan("[UserspaceStream::_update_cache]va: %p\n", va);
+			// printfCyan("[UserspaceStream::_update_cache] va: %p\n", va);
 			u64 a = (u64)va;
 			if (is_page_align(a))
 			{
@@ -139,16 +139,23 @@ namespace mem
 				_cache_ptr = (u8 *)to_vir((ulong)_pt->walk_addr(a));
 				_cache_end = _cache_ptr + PGSIZE;
 #endif
+				// printfGreen("[_update_cache] page aligned: _cache_ptr=%p, _cache_end=%p\n", _cache_ptr, _cache_end);
 			}
 			else
 			{
 #ifdef RISCV
-				_cache_ptr = (u8 *)_pt->walk_addr((u64)va);
-				_cache_end = (u8 *)PGROUNDUP((ulong)_cache_ptr);
+				u64 page_start = PGROUNDDOWN(a);
+				u64 offset = a - page_start;
+				_cache_ptr = (u8 *)_pt->walk_addr(page_start) + offset;
+				_cache_end = (u8 *)_pt->walk_addr(page_start) + PGSIZE;
 #elif defined(LOONGARCH)
-				_cache_ptr = (u8 *)to_vir((ulong)_pt->walk_addr((u64)va));
-				_cache_end = (u8 *)PGROUNDUP((ulong)_cache_ptr);
+				u64 page_start = PGROUNDDOWN(a);
+				u64 offset = a - page_start;
+				_cache_ptr = (u8 *)to_vir((ulong)_pt->walk_addr(page_start)) + offset;
+				_cache_end = (u8 *)to_vir((ulong)_pt->walk_addr(page_start)) + PGSIZE;
 #endif
+				// printfYellow("[_update_cache] not page aligned: page_start=%p, offset=%lu, _cache_ptr=%p, _cache_end=%p\n", 
+				// 	(void*)page_start, offset, _cache_ptr, _cache_end);
 			}
 			return 0;
 		}

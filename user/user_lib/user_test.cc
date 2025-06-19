@@ -29,7 +29,7 @@ int basic_test(void)
 {
     [[maybe_unused]] int pid;
     chdir("/mnt/musl/basic/");
-//   run_test("write");
+  run_test("write");
 //     run_test("fork");
 //     run_test("exit");
 //     run_test("wait");

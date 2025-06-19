@@ -84,8 +84,8 @@
 // 0x90000000 -- RAM used by user pages
 
 
-#define DMWIN_MASK 0x9000000000000000
-#define DMWIN1_MASK 0x8000000000000000
+#define DMWIN_MASK 0x9UL << 60
+#define DMWIN1_MASK 0x8UL << 60
 
 // qemu puts UART registers here in virtual memory.
 #define UART0 (0x1fe001e0UL | DMWIN_MASK)

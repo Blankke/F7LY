@@ -133,7 +133,7 @@ void trap_manager::timertick()
 // !!写完进程后修改
 void trap_manager::usertrap()
 {
-  printfMagenta("==usertrap==\n");
+  // printfMagenta("==usertrap==\n");
 
   int which_dev = 0;
 
@@ -199,14 +199,14 @@ void trap_manager::usertrap()
     }
   }
   TODO(信号处理)
-  printfRed("信号处理未实现\n");
+  // printfRed("信号处理未实现\n");
   // handle_signal(); 
   usertrapret();
 }
 
 void trap_manager::usertrapret(void)
 {
-  printf("==usertrapret==\n");
+  // printf("==usertrapret==\n");
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
 
   intr_off();
