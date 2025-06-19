@@ -225,11 +225,10 @@ run-loongarch:
 	    -nographic \
 	    -smp 1 \
 		-drive file=$(KERNEL_PREFIX)/sdcard-la.img,if=none,format=raw,id=x0 \
-		-device virtio-blk-pci,drive=x0
+		-device virtio-blk-pci,drive=x0 \
 		-no-reboot \
-		-device virtio-net-pci,netdev=net0 \
 		-rtc base=utc \
-		-device virtio-blk-pci,drive=x1
+
 
 
 

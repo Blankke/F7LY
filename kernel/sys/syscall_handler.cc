@@ -8,7 +8,11 @@
 #include "klib.hh"
 #include "list.hh"
 #include "param.h"
-#include "pagetable.hh"
+#ifdef RISCV
+#include "riscv/pagetable.hh"
+#elif defined (LOONGARCH)
+#include "loongarch/pagetable.hh"
+#endif
 #ifdef RISCV
 #include "sbi.hh"
 #endif
@@ -651,6 +655,7 @@ namespace syscall
             uspace.open();
             mem::UsRangeDesc urd = std::make_tuple((u8 *)buf, (ulong)n + 1);
             uspace >> urd;
+            printf("pass here");
             uspace.close();
         }
         long rc = f->write((ulong)buf, n, f->get_file_offset(), true);
