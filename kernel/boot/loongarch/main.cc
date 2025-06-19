@@ -27,6 +27,7 @@ extern "C" void main()
     dev::acpi::k_acpi_controller.init("acpi", 0x100E001C | DMWIN1_MASK);
     apic_init();
     extioi_init();
+
     trap_mgr.init();
     trap_mgr.inithart();
     proc::k_pm.init("next pid", "wait lock");

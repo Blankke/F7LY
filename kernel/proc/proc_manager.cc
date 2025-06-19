@@ -303,7 +303,7 @@ namespace proc
         }
 
 #elif defined(LOONGARCH)
-  if(mem::k_vmm.map_pages(pt, TRAPFRAME, PGSIZE, (uint64)(p->_trapframe), PTE_NX | PTE_P | PTE_W | PTE_MAT | PTE_D) == 0)
+  if(mem::k_vmm.map_pages(pt, TRAPFRAME, PGSIZE, (uint64)(p->_trapframe), PTE_V | PTE_NX | PTE_P | PTE_W | PTE_R | PTE_MAT | PTE_D) == 0)
         {
             mem::k_vmm.vmfree(pt, 0);
             printfRed("proc_pagetable: map trapframe failed\n");

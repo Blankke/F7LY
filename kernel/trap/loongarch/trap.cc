@@ -47,7 +47,7 @@ void trap_manager::inithart()
   w_csr_tlbrentry((uint64)handle_tlbr);
   w_csr_merrentry((uint64)handle_merr);
   intr_on();
-  set_next_timeout();
+
 }
 
 // 处理外部中断和软件中断
@@ -227,6 +227,8 @@ void trap_manager::usertrapret(void)
   x |= PRMD_PIE;  // enable interrupts in user mode
   w_csr_prmd(x);
 
+
+
   // set S Exception Program Counter to the saved user pc.
   w_csr_era(p->_trapframe->era);
 
@@ -293,5 +295,6 @@ void trap_manager::kerneltrap()
   // so restore trap registers for use by kernelvec.S's sepc instruction.
   w_csr_era(era);
   w_csr_prmd(prmd);
+
 }
 #endif
