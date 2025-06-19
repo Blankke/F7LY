@@ -133,6 +133,7 @@ void trap_manager::timertick()
 // !!写完进程后修改
 void trap_manager::usertrap()
 {
+  printfMagenta("==usertrap==\n");
 
   int which_dev = 0;
 
@@ -193,6 +194,7 @@ void trap_manager::usertrap()
     if (timeslice >= 10)
     {
       timeslice = 0;
+      printf("yield in usertrap\n");
       proc::k_scheduler.yield();
     }
   }
@@ -204,6 +206,7 @@ void trap_manager::usertrap()
 
 void trap_manager::usertrapret(void)
 {
+  printf("==usertrapret==\n");
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
 
   intr_off();
@@ -248,7 +251,6 @@ void trap_manager::machine_trap()
 // 支持嵌套中断
 void trap_manager::kerneltrap()
 {
-  // printf("==kerneltrap==\n");
 
   // 这些寄存器可能在yield时被修改
   int which_dev = 0;
@@ -277,7 +279,7 @@ void trap_manager::kerneltrap()
     if (timeslice >= 5)
     {
       timeslice = 0;
-      // printf("yield in usertrap\n");
+      printf("yield in kerneltrap\n");
       proc::k_scheduler.yield();
     }
   }
