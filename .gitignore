@@ -23,3 +23,4 @@ output.txt
 out.txt
 disasm_busybox.asm
 disasm_initcode.asm
+user/initcode-la
