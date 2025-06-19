@@ -21,6 +21,7 @@ typedef unsigned long uint64;
 typedef unsigned long uint64_t;
 typedef unsigned int   uint;
 typedef long int64;
+typedef unsigned long uintptr_t;
 // typedef unsigned long clock_t;
 
 typedef int tid_t;
