@@ -52,3 +52,5 @@ int basic_test(void);
 int busybox_musl_test(void);
 int libc_musl_test(void);
 int start_shell(void);
+int libcbench_test(void);
+int iozone_test(void);

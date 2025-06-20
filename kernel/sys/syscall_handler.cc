@@ -13,7 +13,8 @@
 #include "timer_manager.hh"
 #include "fs/vfs/path.hh"
 #include "fs/vfs/file/device_file.hh"
-#include <asm-generic/ioctls.h>
+// #include <asm-generic/ioctls.h>
+#include "fs/ioctl.h"
 #include <asm-generic/poll.h>
 #include <linux/sysinfo.h>
 #include "fs/vfs/file/normal_file.hh"
@@ -1563,6 +1564,18 @@ namespace syscall
             *p_pgrp = 1;
             return 0;
         }
+
+        if ((cmd & 0xFFFF) == TIOCGWINSZ)
+        {
+            struct winsize ws;
+            ws.ws_col = 80;
+            ws.ws_row = 24;
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+            if (mem::k_vmm.copy_out(*pt, arg, (char *)&ws, sizeof(ws)) < 0)
+                return -1;
+            return 0;
+        }
+
         printfRed("[SyscallHandler::sys_ioctl] Unsupported ioctl command: 0x%X\n", cmd);
         return 0;
     }
