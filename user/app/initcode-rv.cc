@@ -7,7 +7,8 @@ extern "C"
         // basic_test();
         // busybox_musl_test();
         // start_shell();
-        libc_musl_test();
+        // libc_musl_test();
+        // libcbench_test();
         shutdown();
         return 0;
     }

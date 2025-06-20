@@ -133,9 +133,39 @@ int busybox_musl_test(void)
     return 0;
 }
 
-
-
-
+int libcbench_test(void)
+{
+    [[maybe_unused]] int pid;
+    pid = fork();
+    if (pid < 0)
+    {
+        printf("fork failed\n");
+        return -1;
+    }
+    else if (pid == 0)
+    {
+        chdir("/mnt/musl/");
+        char *bb_sh[8] = {0};
+        bb_sh[0] = "busybox";
+        bb_sh[1] = "sh";
+        bb_sh[2] = "libcbench_testcode.sh";
+        printf("execve busybox shell\n");
+        if (execve("busybox", bb_sh, 0) < 0)
+        {
+            printf("execve failed\n");
+            exit(1);
+        }
+        exit(0);
+    }
+    else
+    {
+        int child_exit_state = 33;
+        if (wait(&child_exit_state) < 0)
+            printf("wait fail\n");
+        printf("shell exited with code %d\n", child_exit_state);
+    }
+    return 0;
+}
 
 int libc_musl_test(void)
 {
