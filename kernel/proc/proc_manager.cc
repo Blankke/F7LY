@@ -802,17 +802,20 @@ namespace proc
         if (!is_page_align(va)) // 如果va不是页对齐的，先读出开头不对齐的部分
         {
             pa = (uint64)pt.walk_addr(va);
-#ifdef RISCV
-            pa = (pa);
-#endif
+
             n = PGROUNDUP(va) - va;
             de->getNode()->nodeRead(pa, offset + i, n);
             i += n;
         }
 
+        printfRed("[load_seg] load va: %p, size: %d\n", va, size);
+        printfRed("[load_seg] i: %d, offset: %d\n", i, offset);
+
         for (; i < size; i += PGSIZE) // 此时 va + i 地址是页对齐的
         {
+            printf("[load_seg] va + i: %p\n", va + i);
             pa = PTE2PA((uint64)pt.walk(va + i, 0).get_data()); // pte.to_pa() 得到的地址是页对齐的
+            printf("[load_seg] pa: %p\n", pa);
             if (pa == 0)
                 panic("load_seg: walk");
             if (size - i < PGSIZE) // 如果是最后一页中的数据
@@ -822,7 +825,7 @@ namespace proc
 #ifdef RISCV
             pa = pa;
 #elif defined(LOONGARCH)
-// pa =hsai::k_mem->to_vir( pa )
+            pa = pa;
 #endif
 
             de->getNode()->nodeRead(pa, offset + i, n);
@@ -1371,7 +1374,7 @@ namespace proc
 
     int ProcessManager::execve(eastl::string path, eastl::vector<eastl::string> argv, eastl::vector<eastl::string> envs)
     {
-        // printfRed("execve: %s\n", path.c_str());
+        printfRed("execve: %s\n", path.c_str());
         // 获取当前进程控制块
         Pcb *proc = k_pm.get_cur_pcb();
 
@@ -1415,16 +1418,16 @@ namespace proc
             return -1;
         }
         // printf("execve: ELF file magic: %x\n", elf.magic);
-
+        
         // ========== 第二阶段：创建新的虚拟地址空间 ==========
-
+        
         // 创建新的页表，避免在加载过程中破坏原进程映像
         new_pt = k_pm.proc_pagetable(proc);
         TODO(if (new_pt == 0) {
             printfRed("execve: proc_pagetable failed\n");
             return -1;
         })
-
+        
         // 这个地方不能按着学长的代码写, 因为学长的内存布局和我们的不同
         // 而且他们的proc_pagetable函数是弃用的, 我们的是好的, 直接用这个函数就可以构建基础页表
 
@@ -1469,13 +1472,14 @@ namespace proc
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ)
                     seg_flag |= riscv::PteEnum::pte_readable_m;
                 #elif defined(LOONGARCH)
-                seg_flag |= PTE_P|PTE_D; // PTE_P: Present bit, segment is present in memory
+                seg_flag |= PTE_P|PTE_D | PTE_PLV; // PTE_P: Present bit, segment is present in memory
                 // PTE_D: Dirty bit, segment is dirty (modified)
-                if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC)
-                    seg_flag |= loongarch::PteEnum::pte_mat_m;  // PTE_MAT: Memory Attribute, segment is executable
+                if (!(ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC))
+                    seg_flag |= PTE_NX;  // not executable
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
-                    seg_flag |= loongarch::PteEnum::pte_writable_m;
-                if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ)
+                    seg_flag |= PTE_W;
+                if (!(ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ))
+                    seg_flag |= PTE_NR; // not readable
                 #endif
                 // printfRed("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
                         //   i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, seg_flag);
@@ -1486,6 +1490,8 @@ namespace proc
                     break;
                 }
                 new_sz = sz1; // 更新新进程映像的大小
+
+                printfRed("checkpoint 1\n");
 
                 // // 用于处理elf文件中给出的段起始地址没有对其到页面首地址的情况(弃用, 我们的load_seg函数已经处理了这个问题)
                 // uint margin_size = 0;
@@ -1501,6 +1507,7 @@ namespace proc
                     load_bad = true;
                     break;
                 }
+                printfRed("checkpoint 2\n");
             }
             // 如果加载过程中出错，清理已分配的资源
             if (load_bad)
@@ -1578,19 +1585,29 @@ namespace proc
 
                  new_sz += hsai::page_round_up(phsz);
              })
-
+        
+        printfRed("checkpoint 3\n");
         // ========== 第五阶段：分配用户栈空间 ==========
 
         { // 按照内存布局分配用户栈空间
             int stack_pgnum = 32;
             new_sz = PGROUNDUP(new_sz); // 将大小对齐到页边界
             uint64 sz1;
+            # ifdef RISCV
             if ((sz1 = mem::k_vmm.uvmalloc(new_pt, new_sz, new_sz + stack_pgnum * PGSIZE, PTE_W | PTE_X | PTE_R | PTE_U)) == 0)
             {
                 printfRed("execve: load user stack failed\n");
                 k_pm.proc_freepagetable(new_pt, new_sz);
                 return -1;
             }
+            # elif defined(LOONGARCH)
+            if ((sz1 = mem::k_vmm.uvmalloc(new_pt, new_sz, new_sz + stack_pgnum * PGSIZE, PTE_P|PTE_W|PTE_PLV|PTE_MAT|PTE_D)) == 0)
+            {
+                printfRed("execve: load user stack failed\n");
+                k_pm.proc_freepagetable(new_pt, new_sz);
+                return -1;
+            }
+            # endif
             new_sz = sz1;                                                     // 更新新进程映像的大小
             mem::k_vmm.uvmclear(new_pt, new_sz - (stack_pgnum - 1) * PGSIZE); // 设置guardpage
             sp = new_sz;                                                      // 栈指针从顶部开始
@@ -1855,7 +1872,7 @@ namespace proc
         // printf("execve: new process size: %d, new pagetable: %p\n", proc->_sz, proc->_pt);
         k_pm.proc_freepagetable(old_pt, old_sz);
 
-        // printf("execve succeed, new process size: %d\n", proc->_sz);
+        printf("execve succeed, new process size: %d\n", proc->_sz);
 
         return argc; // 返回参数个数，表示成功执行
     }
