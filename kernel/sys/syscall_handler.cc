@@ -928,7 +928,7 @@ namespace syscall
             return -1;
 
         tv = tmm::k_tm.get_time_val();
-
+        printfCyan("[SyscallHandler::sys_gettimeofday]tv_sec: %d, tv_usec: %d\n", tv.tv_sec, tv.tv_usec);
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
         if (mem::k_vmm.copy_out(*pt, tv_addr, (const void *)&tv,

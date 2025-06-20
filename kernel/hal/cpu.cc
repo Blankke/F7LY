@@ -18,7 +18,7 @@ uint64 Cpu::get_time()
 	#ifdef RISCV
 	return r_time();
 	#elif defined (LOONGARCH)
-	return 0;
+	return r_csr_tval();
 	//loongarch 不需要这个函数
 	#endif
 }

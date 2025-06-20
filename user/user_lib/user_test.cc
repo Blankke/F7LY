@@ -28,39 +28,39 @@ int run_test(char *test_list)
 int basic_test(void)
 {
     [[maybe_unused]] int pid;
-    chdir("/mnt/musl/basic/");
-  run_test("write");
-    run_test("fork");
-    run_test("exit");
-    run_test("wait");
-    run_test("getpid");
-    run_test("getppid");
-    run_test("dup");
-    run_test("dup2");
-    run_test("execve");
-    run_test("getcwd");
-    // run_test("gettimeofday");  //error
-    run_test("yield"); 
+    chdir("/mnt/glibc/basic/");
+//   run_test("write");
+//     run_test("fork");
+//     run_test("exit");
+//     run_test("wait");
+//     run_test("getpid");
+//     run_test("getppid");
+//     run_test("dup");
+//     run_test("dup2");
+//     run_test("execve");
+//     run_test("getcwd");
+    run_test("gettimeofday");  //error
+    // run_test("yield"); 
     // run_test("sleep");
-    run_test("times");
-    run_test("clone");       //进测试之前报错ext4-inode : extents leaf binary search errorext4-inode : read logical block 3 fail
-    run_test("brk");      
-    run_test("waitpid");
-    run_test("mmap");    
-    run_test("fstat");          
-    run_test("uname");
-    run_test("openat");          
-    run_test("open");           
-    run_test("close");          
-    run_test("read");        
-    run_test("getdents");     
-    run_test("mkdir_");
-    run_test("chdir");
-    run_test("mount");         
-    run_test("umount");          
-    run_test("munmap");          
-    run_test("unlink");
-    run_test("pipe");            
+    // run_test("times");
+    // run_test("clone");       //进测试之前报错ext4-inode : extents leaf binary search errorext4-inode : read logical block 3 fail
+    // run_test("brk");      
+    // run_test("waitpid");
+    // run_test("mmap");    
+    // run_test("fstat");          
+    // run_test("uname");
+    // run_test("openat");          
+    // run_test("open");           
+    // run_test("close");          
+    // run_test("read");        
+    // run_test("getdents");     
+    // run_test("mkdir_");
+    // run_test("chdir");
+    // run_test("mount");         
+    // run_test("umount");          
+    // run_test("munmap");          
+    // run_test("unlink");
+    // run_test("pipe");            
     return 0;
 }
 

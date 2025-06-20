@@ -615,6 +615,16 @@ w_csr_pgdh(uint64 x)
   asm volatile("csrwr %0, 0x1a" : : "r"(x));
 }
 
+static inline uint64
+r_csr_tval( )
+{
+  uint64 x;
+  asm volatile("csrrd %0, 0x42" : "=r"(x));
+  return x;
+}
+
+
+
 #define PTBASE 12U
 #define PTWIDTH 9U
 #define DIR1BASE 21U
