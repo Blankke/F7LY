@@ -5,7 +5,7 @@ extern "C"
     int main()
     {
         basic_test();
-        printf("Hello, World!\n");
+        // printf("Hello, World!\n");
         shutdown();
         return 0;
     }

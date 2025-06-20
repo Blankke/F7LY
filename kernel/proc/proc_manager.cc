@@ -280,7 +280,7 @@ namespace proc
         mem::PageTable empty_pt = mem::PageTable();
         if (pt.is_null())
             printfRed("proc_pagetable: vm_create failed\n");
-        if( pt.get_base()== 0)
+        if (pt.get_base() == 0)
         {
             printfRed("proc_pagetable: pt already exists\n");
             return empty_pt; // 如果已经有页表了，直接返回空页表
@@ -303,16 +303,16 @@ namespace proc
         }
 
 #elif defined(LOONGARCH)
-  if(mem::k_vmm.map_pages(pt, TRAPFRAME, PGSIZE, (uint64)(p->_trapframe), PTE_V | PTE_NX | PTE_P | PTE_W | PTE_R | PTE_MAT | PTE_D) == 0)
+        if (mem::k_vmm.map_pages(pt, TRAPFRAME, PGSIZE, (uint64)(p->_trapframe), PTE_V | PTE_NX | PTE_P | PTE_W | PTE_R | PTE_MAT | PTE_D) == 0)
         {
             mem::k_vmm.vmfree(pt, 0);
             printfRed("proc_pagetable: map trapframe failed\n");
             return empty_pt;
         }
 ///@todo  sig_tampoline
-        // 这里的 SIG_TRAMPOLINE 是一个特殊的地址，用于处理信号 trampoline
-        // 目前暂时注释掉，因为没有实现信号处理相关的逻辑
-        // 需要在后续实现信号处理时再启用
+// 这里的 SIG_TRAMPOLINE 是一个特殊的地址，用于处理信号 trampoline
+// 目前暂时注释掉，因为没有实现信号处理相关的逻辑
+// 需要在后续实现信号处理时再启用
 //   if(mappages(pt, SIG_TRAMPOLINE, PGSIZE,
 //           (uint64)sig_trampoline, PTE_P | PTE_MAT | PTE_D) < 0) {
 //     printf("Fail to map sig_trampoline\n");
@@ -406,7 +406,7 @@ namespace proc
         printf("initcode size: %p\n", (uint64)(initcode_end - 0));
         p->_sz = 3 * PGSIZE;
 
-        p->_trapframe->era = 0; // 设置程序计数器为0
+        p->_trapframe->era = 0;     // 设置程序计数器为0
         p->_trapframe->sp = p->_sz; // 设置栈指针为3个页的大小
 
         safestrcpy(p->_name, "initcode", sizeof(p->_name));
@@ -590,7 +590,7 @@ namespace proc
         {
             return -1;
         }
-        
+
         // Copy user memory from _parent to child.
         mem::PageTable *curpt, *newpt;
         curpt = p->get_pagetable();
@@ -802,7 +802,9 @@ namespace proc
         if (!is_page_align(va)) // 如果va不是页对齐的，先读出开头不对齐的部分
         {
             pa = (uint64)pt.walk_addr(va);
-
+#ifdef LOONGARCH
+            pa = to_vir(pa);
+#endif
             n = PGROUNDUP(va) - va;
             de->getNode()->nodeRead(pa, offset + i, n);
             i += n;
@@ -825,7 +827,7 @@ namespace proc
 #ifdef RISCV
             pa = pa;
 #elif defined(LOONGARCH)
-            pa = pa;
+            pa = to_vir(pa);
 #endif
 
             de->getNode()->nodeRead(pa, offset + i, n);
@@ -1222,7 +1224,6 @@ namespace proc
     int ProcessManager::munmap(void *addr, int length)
     {
 
-            
         int i;
         Pcb *p = get_cur_pcb();
 
@@ -1273,11 +1274,11 @@ namespace proc
 
         return 0;
     }
-/// @brief 从当前工作目录中删除指定路径的文件或目录项。
-/// @param fd 基准目录的文件描述符，若为 -100 表示以当前工作目录为基准（AT_FDCWD）。其他值暂不支持。
-/// @param path 要删除的文件或目录的相对路径，不能为空字符串，支持"./"开头的路径格式。
-/// @param flags 暂未使用的标志位参数，预留以支持 future 的 unlinkat 扩展。
-/// @return 成功返回 0，失败返回 -1。
+    /// @brief 从当前工作目录中删除指定路径的文件或目录项。
+    /// @param fd 基准目录的文件描述符，若为 -100 表示以当前工作目录为基准（AT_FDCWD）。其他值暂不支持。
+    /// @param path 要删除的文件或目录的相对路径，不能为空字符串，支持"./"开头的路径格式。
+    /// @param flags 暂未使用的标志位参数，预留以支持 future 的 unlinkat 扩展。
+    /// @return 成功返回 0，失败返回 -1。
     int ProcessManager::unlink(int fd, eastl::string path, int flags)
     {
 
@@ -1418,16 +1419,16 @@ namespace proc
             return -1;
         }
         // printf("execve: ELF file magic: %x\n", elf.magic);
-        
+
         // ========== 第二阶段：创建新的虚拟地址空间 ==========
-        
+
         // 创建新的页表，避免在加载过程中破坏原进程映像
         new_pt = k_pm.proc_pagetable(proc);
         TODO(if (new_pt == 0) {
             printfRed("execve: proc_pagetable failed\n");
             return -1;
         })
-        
+
         // 这个地方不能按着学长的代码写, 因为学长的内存布局和我们的不同
         // 而且他们的proc_pagetable函数是弃用的, 我们的是好的, 直接用这个函数就可以构建基础页表
 
@@ -1442,7 +1443,7 @@ namespace proc
                 // 读取程序头
                 de->getNode()->nodeRead(reinterpret_cast<uint64>(&ph), off, sizeof(ph));
                 // printf("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
-                    //    i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, ph.flags);
+                //    i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, ph.flags);
                 // 	// 只处理LOAD类型的程序段
                 if (ph.type != elf::elfEnum::ELF_PROG_LOAD)
                     continue;
@@ -1463,26 +1464,26 @@ namespace proc
 
                 // 分配虚拟内存空间
                 uint64 sz1;
-                uint64 seg_flag = PTE_U;   //User可访问标志
-                #ifdef RISCV
+                uint64 seg_flag = PTE_U; // User可访问标志
+#ifdef RISCV
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC)
                     seg_flag |= riscv::PteEnum::pte_executable_m;
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
                     seg_flag |= riscv::PteEnum::pte_writable_m;
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ)
                     seg_flag |= riscv::PteEnum::pte_readable_m;
-                #elif defined(LOONGARCH)
-                seg_flag |= PTE_P|PTE_D | PTE_PLV; // PTE_P: Present bit, segment is present in memory
+#elif defined(LOONGARCH)
+                seg_flag |= PTE_P | PTE_D | PTE_PLV; // PTE_P: Present bit, segment is present in memory
                 // PTE_D: Dirty bit, segment is dirty (modified)
                 if (!(ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC))
-                    seg_flag |= PTE_NX;  // not executable
+                    seg_flag |= PTE_NX; // not executable
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
                     seg_flag |= PTE_W;
                 if (!(ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ))
                     seg_flag |= PTE_NR; // not readable
-                #endif
+#endif
                 // printfRed("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
-                        //   i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, seg_flag);
+                //   i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, seg_flag);
                 if ((sz1 = mem::k_vmm.vmalloc(new_pt, new_sz, ph.vaddr + ph.memsz, seg_flag)) == 0)
                 {
                     printfRed("execve: uvmalloc\n");
@@ -1585,7 +1586,7 @@ namespace proc
 
                  new_sz += hsai::page_round_up(phsz);
              })
-        
+
         printfRed("checkpoint 3\n");
         // ========== 第五阶段：分配用户栈空间 ==========
 
@@ -1593,21 +1594,21 @@ namespace proc
             int stack_pgnum = 32;
             new_sz = PGROUNDUP(new_sz); // 将大小对齐到页边界
             uint64 sz1;
-            # ifdef RISCV
+#ifdef RISCV
             if ((sz1 = mem::k_vmm.uvmalloc(new_pt, new_sz, new_sz + stack_pgnum * PGSIZE, PTE_W | PTE_X | PTE_R | PTE_U)) == 0)
             {
                 printfRed("execve: load user stack failed\n");
                 k_pm.proc_freepagetable(new_pt, new_sz);
                 return -1;
             }
-            # elif defined(LOONGARCH)
-            if ((sz1 = mem::k_vmm.uvmalloc(new_pt, new_sz, new_sz + stack_pgnum * PGSIZE, PTE_P|PTE_W|PTE_PLV|PTE_MAT|PTE_D)) == 0)
+#elif defined(LOONGARCH)
+            if ((sz1 = mem::k_vmm.uvmalloc(new_pt, new_sz, new_sz + stack_pgnum * PGSIZE, PTE_P | PTE_W | PTE_PLV | PTE_MAT | PTE_D)) == 0)
             {
                 printfRed("execve: load user stack failed\n");
                 k_pm.proc_freepagetable(new_pt, new_sz);
                 return -1;
             }
-            # endif
+#endif
             new_sz = sz1;                                                     // 更新新进程映像的大小
             mem::k_vmm.uvmclear(new_pt, new_sz - (stack_pgnum - 1) * PGSIZE); // 设置guardpage
             sp = new_sz;                                                      // 栈指针从顶部开始
@@ -1860,14 +1861,14 @@ namespace proc
         mem::PageTable old_pt;
         old_pt = *proc->get_pagetable(); // 获取当前进程的页表
         proc->_sz = PGROUNDUP(new_sz);   // 更新进程大小
-        // printf("execve: entry point: %p, new size: %d\n", elf.entry, proc->_sz);
-        #ifdef RISCV
+// printf("execve: entry point: %p, new size: %d\n", elf.entry, proc->_sz);
+#ifdef RISCV
         proc->_trapframe->epc = elf.entry; // 设置程序计数器为入口点
-        #elif defined(LOONGARCH)
+#elif defined(LOONGARCH)
         proc->_trapframe->era = elf.entry; // 设置程序计数器为入口点
-        #endif
-        proc->_pt = new_pt;                // 替换为新的页表
-        proc->_trapframe->sp = sp;         // 设置栈指针
+#endif
+        proc->_pt = new_pt;        // 替换为新的页表
+        proc->_trapframe->sp = sp; // 设置栈指针
 
         // printf("execve: new process size: %d, new pagetable: %p\n", proc->_sz, proc->_pt);
         k_pm.proc_freepagetable(old_pt, old_sz);
