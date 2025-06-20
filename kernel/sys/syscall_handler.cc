@@ -1139,7 +1139,6 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_rt_sigaction()
     {
-        return 0;
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
         [[maybe_unused]] mem::PageTable *pt = proc->get_pagetable();
         [[maybe_unused]] proc::ipc::signal::sigaction a_newact, a_oldact;
@@ -1158,21 +1157,16 @@ namespace syscall
         if (_arg_addr(2, oldactaddr) < 0)
             return -1;
 
-        if (oldactaddr != 0)
-            a_oldact = proc::ipc::signal::sigaction();
-
         if (newactaddr != 0)
         {
             if (mem::k_vmm.copy_in(*pt, &a_newact, newactaddr,
                                    sizeof(proc::ipc::signal::sigaction)) < 0)
                 return -1;
-            // a_newact = ( pm::ipc::signal::sigaction *)(hsai::k_mem->to_vir(
-            // pt->walk_addr( newactaddr ) ));
-            ret = proc::ipc::signal::sigAction(flag, &a_newact, nullptr);
+            ret = proc::ipc::signal::sigAction(flag, &a_newact, &a_oldact);
         }
         else
         {
-            ret = proc::ipc::signal::sigAction(flag, &a_newact, &a_oldact);
+            ret = proc::ipc::signal::sigAction(flag, nullptr, &a_oldact);
         }
         if (ret == 0 && oldactaddr != 0)
         {
@@ -1184,7 +1178,6 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_rt_sigprocmask()
     {
-        return 0;
         int how;
         signal::sigset_t set;
         signal::sigset_t old_set;

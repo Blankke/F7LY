@@ -34,6 +34,11 @@ namespace proc
         _rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_cur = 0;
         _rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_max = 0;
 
+
+        // 初始化信号处理函数指针
+        for (int i = 0; i < ipc::signal::SIGRTMAX; ++i) {
+            _sigactions[i] = nullptr;
+        }
         sigmask = 0;
     }
 
