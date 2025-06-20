@@ -251,22 +251,29 @@ namespace proc
                 p->_ofile[i] = nullptr;
             }
         }
-        /// TODO:检查这个对不对，这个本来应该在exit的时候解除映射，但是我看都只有
-        /// freeproc的时候解除了ofile的映射，所以也在这里接触
-        // 将进程的已映射区域取消映射
-        for (int i = 0; i < NVMA; ++i)
+        for (int i = 0; i < ipc::signal::SIGRTMAX; ++i)
         {
-            if (p->_vm[i].used)
-            {
-                if (p->_vm[i].flags == MAP_SHARED && (p->_vm[i].prot & PROT_WRITE) != 0)
-                {
-                    p->_vm[i].vfile->write(p->_vm[i].addr, p->_vm[i].len);
-                }
-                p->_vm[i].vfile->free_file();
-                mem::k_vmm.vmunmap(*p->get_pagetable(), p->_vm[i].addr, p->_vm[i].len / PGSIZE, 1);
-                p->_vm[i].used = 0;
+            if(p->_sigactions[i] != nullptr){
+                delete p->_sigactions[i];
+                p->_sigactions[i] = nullptr;
             }
         }
+            /// TODO:检查这个对不对，这个本来应该在exit的时候解除映射，但是我看都只有
+            /// freeproc的时候解除了ofile的映射，所以也在这里接触
+            // 将进程的已映射区域取消映射
+            for (int i = 0; i < NVMA; ++i)
+            {
+                if (p->_vm[i].used)
+                {
+                    if (p->_vm[i].flags == MAP_SHARED && (p->_vm[i].prot & PROT_WRITE) != 0)
+                    {
+                        p->_vm[i].vfile->write(p->_vm[i].addr, p->_vm[i].len);
+                    }
+                    p->_vm[i].vfile->free_file();
+                    mem::k_vmm.vmunmap(*p->get_pagetable(), p->_vm[i].addr, p->_vm[i].len / PGSIZE, 1);
+                    p->_vm[i].used = 0;
+                }
+            }
     }
 
     int ProcessManager::get_cur_cpuid()

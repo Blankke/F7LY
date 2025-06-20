@@ -13,10 +13,21 @@ namespace proc
                 if (flag <= 0 || flag >= SIGRTMAX || flag == SIGKILL || flag == SIGQUIT)
                     return -1;
                 proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
-                if (oldact != nullptr)
-                    *oldact = *(cur_proc->_sigactions[flag - 1]);
-                if (newact != nullptr)
-                    cur_proc->_sigactions[flag - 1] = newact;
+                if (oldact != nullptr){
+                    if (cur_proc->_sigactions[flag - 1])
+                        *oldact = *(cur_proc->_sigactions[flag - 1]);
+                    else
+                        *oldact = {nullptr, {0}, 0};
+                }
+                if (newact != nullptr){
+                    if(!cur_proc->_sigactions[flag - 1]){
+                        cur_proc->_sigactions[flag - 1] = new sigaction;
+                        if (cur_proc->_sigactions[flag - 1] == nullptr)
+                            return -1; // 内存分配失败
+                    }
+                    *(cur_proc->_sigactions[flag - 1]) = *newact;
+                }                
+                    
                 return 0;
             }
 
