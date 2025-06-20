@@ -929,7 +929,7 @@ namespace syscall
             return -1;
 
         tv = tmm::k_tm.get_time_val();
-        printf("[SyscallHandler::sys_gettimeofday] tv: %d.%d\n", tv.tv_sec, tv.tv_usec);
+        // printf("[SyscallHandler::sys_gettimeofday] tv: %d.%d\n", tv.tv_sec, tv.tv_usec);
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
