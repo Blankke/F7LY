@@ -112,7 +112,7 @@ namespace syscall
     {
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
         uint64 sys_num = p->get_trapframe()->a7; // 获取系统调用号
-        // printfCyan("[SyscallHandler::invoke_syscaller]sys_num: %d sys_name: %s\n", sys_num, _syscall_name[sys_num]);
+        printfCyan("[SyscallHandler::invoke_syscaller]sys_num: %d sys_name: %s\n", sys_num, _syscall_name[sys_num]);
         if (sys_num >= max_syscall_funcs_num || sys_num < 0 || _syscall_funcs[sys_num] == nullptr)
         {
             printfRed("[SyscallHandler::invoke_syscaller]sys_num is out of range\n");

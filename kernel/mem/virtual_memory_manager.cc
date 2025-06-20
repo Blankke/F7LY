@@ -439,6 +439,8 @@ namespace mem
             n = PGSIZE - (va - a);
             if (n > len)
                 n = len;
+            pa=to_vir(pa);
+            // printfMagenta("copy_out: va: %p, pa: %p, n: %p\n", va, pa, n);
             memmove((void *)((pa + (va - a))), p, n);
 
             len -= n;

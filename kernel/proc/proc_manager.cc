@@ -815,9 +815,9 @@ namespace proc
 
         for (; i < size; i += PGSIZE) // 此时 va + i 地址是页对齐的
         {
-            printf("[load_seg] va + i: %p\n", va + i);
+            // printf("[load_seg] va + i: %p\n", va + i);
             pa = PTE2PA((uint64)pt.walk(va + i, 0).get_data()); // pte.to_pa() 得到的地址是页对齐的
-            printf("[load_seg] pa: %p\n", pa);
+            // printf("[load_seg] pa: %p\n", pa);
             if (pa == 0)
                 panic("load_seg: walk");
             if (size - i < PGSIZE) // 如果是最后一页中的数据
@@ -1608,6 +1608,7 @@ namespace proc
                 return -1;
             }
 #endif
+
             new_sz = sz1;                                                     // 更新新进程映像的大小
             mem::k_vmm.uvmclear(new_pt, new_sz - (stack_pgnum - 1) * PGSIZE); // 设置guardpage
             sp = new_sz;                                                      // 栈指针从顶部开始
@@ -1643,7 +1644,7 @@ namespace proc
         // 2. 压入环境变量
         uint64 uenvp[MAXARG];
         uint64 envc;
-
+            // printfCyan("execve: envs size: %d\n", envs.size());
         for (envc = 0; envc < envs.size(); envc++)
         {
             if (envc >= MAXARG)
@@ -1816,12 +1817,14 @@ namespace proc
 
         // 7. 压入参数个数（argc）
         sp -= sizeof(uint64);
+        printfGreen("execve: argc: %d, sp: %p\n", argc, (void *)sp);
         if (mem::k_vmm.copy_out(new_pt, sp, (char *)&argc, sizeof(uint64)) < 0)
         {
             printfRed("execve: copy argc failed\n");
             k_pm.proc_freepagetable(new_pt, new_sz);
             return -1;
         }
+
         proc->_trapframe->a0 = argc; // 设置参数个数到trapframe
 
         // 步骤13: 保存程序名用于调试
