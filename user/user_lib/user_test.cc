@@ -3,6 +3,10 @@
 
 extern char *bb_cmds[][10];
 extern char *libctest[][2];
+
+const char musl_dir[] = "/mnt/musl/";
+const char glibc_dir[] = "/mnt/glibc/";
+
 int run_test(char *test_list)
 {
 
@@ -31,7 +35,8 @@ int run_test(char *test_list)
 int basic_test(void)
 {
     [[maybe_unused]] int pid;
-    chdir("/mnt/musl/basic/");
+    chdir(glibc_dir);
+    chdir("basic");
     run_test("write");
     run_test("fork");
     run_test("exit");
@@ -114,7 +119,7 @@ int busybox_musl_test(void)
         }
         else if (pid == 0)
         {
-            chdir("/mnt/musl/");
+            chdir(musl_dir);
             if (execve("busybox", bb_cmds[i], 0) < 0)
             {
                 printf("execve failed\n");
