@@ -4,6 +4,7 @@
 #include "platform.hh"
 #include "param.h"
 // #include "plic.hh"
+#include "mem.hh"
 #include "mem/memlayout.hh"
 #include "devs/console.hh"
 #include "printer.hh"
@@ -16,12 +17,16 @@
 #include "apic.hh"
 #include "syscall_handler.hh"
 #include "cpu.hh"
+#include "physical_memory_manager.hh"
+#include "virtual_memory_manager.hh"
+#include "vfs/file/normal_file.hh"
 // in kernelvec.S, calls kerneltrap().
 extern "C" void kernelvec();
 extern "C" void uservec();
 extern "C" void handle_tlbr();
 extern "C" void handle_merr();
 extern "C" void userret(uint64, uint64);
+int mmap_handler(uint64 va, int cause);
 // 创建一个静态对象
 trap_manager trap_mgr;
 
@@ -166,12 +171,18 @@ void trap_manager::usertrap()
 
     syscall::k_syscall_handler.invoke_syscaller();
   }
+
   else if (((r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x1 || (r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x2))
   {
-    // 缺页故障处理
-    //  printf("11\n");
-    TODO(page fault)
-    panic("usertrap: page fault not implemented yet");
+
+        uint64 fault_va = r_csr_badv();
+    if (PGROUNDUP(p->_trapframe->sp) - 1 < fault_va && fault_va < p->_sz)
+    {
+      if (mmap_handler(r_csr_badv(),  (r_csr_estat() & CSR_ESTAT_ECODE) >> 16) != 0)
+        p->_killed = 1;
+    }
+    else
+      p->_killed = 1;
   }
   else if ((which_dev = devintr()) != 0)
   {
@@ -298,5 +309,81 @@ void trap_manager::kerneltrap()
   w_csr_era(era);
   w_csr_prmd(prmd);
 
+}
+int mmap_handler(uint64 va, int cause)
+{
+  int i;
+  proc::Pcb *p = proc::k_pm.get_cur_pcb();
+  // 根据地址查找属于哪一个VMA
+  for (i = 0; i < proc::NVMA; ++i)
+  {
+    if (p->_vm[i].used && p->_vm[i].addr <= va && va <= p->_vm[i].addr + p->_vm[i].len - 1)
+    {
+      break;
+    }
+  }
+  if (i == proc::NVMA)
+    return -1;
+
+  int pte_flags = PTE_U;
+  if (!(p->_vm[i].prot & PROT_READ))
+    pte_flags |= PTE_NR;
+  if (p->_vm[i].prot & PROT_WRITE)
+    pte_flags |= PTE_W;
+  if (!(p->_vm[i].prot & PROT_EXEC))
+    pte_flags |= PTE_NX;
+  
+  fs::normal_file *vf = p->_vm[i].vfile;
+
+  void *pa = mem::k_pmm.alloc_page();
+
+  if (pa == 0)
+    return -1;
+  memset(pa, 0, PGSIZE);
+
+  // 读取文件内容
+  fs::dentry *den = vf->getDentry();
+  if (den == nullptr)
+  {
+    printfRed("mmap_handler: dentry is null\n");
+    mem::k_pmm.free_page(pa);
+    return -1; // dentry is null
+  }
+  fs::Inode *inode = den->getNode();
+  if (inode == nullptr)
+  {
+    printfRed("mmap_handler: inode is null\n");
+    mem::k_pmm.free_page(pa);
+    return -1; // inode is null
+  }
+
+  inode->_lock.acquire(); // 锁定inode，防止其他线程修改
+
+  // 计算当前页面读取文件的偏移量，实验中p->_vm[i].offset总是0
+  // 要按顺序读读取，例如内存页面A,B和文件块a,b
+  // 则A读取a，B读取b，而不能A读取b，B读取a
+  int offset = p->_vm[i].offset + PGROUNDDOWN(va - p->_vm[i].addr);
+  ///@details 原本的xv6的readi函数有一个标志位来区分是否读到内核中，此处位于内核里
+  /// pa直接是物理地址，所以应该无所谓
+  int readbytes = inode->nodeRead((uint64)pa, offset, PGSIZE);
+
+  // 什么都没有读到
+  if (readbytes == 0)
+  {
+    printfRed("mmap_handler: read nothing");
+    inode->_lock.release();
+    mem::k_pmm.free_page(pa);
+    return -1;
+  }
+  inode->_lock.release(); // 释放inode锁
+  // 添加页面映射
+  if (mem::k_vmm.map_pages(*p->get_pagetable(), PGROUNDDOWN(va), PGSIZE, (uint64)pa, pte_flags) != 1)
+  {
+    printfRed("mmap_handler: map failed");
+    mem::k_pmm.free_page(pa);
+    return -1;
+  }
+
+  return 0;
 }
 #endif

@@ -1817,7 +1817,7 @@ namespace proc
 
         // 7. 压入参数个数（argc）
         sp -= sizeof(uint64);
-        printfGreen("execve: argc: %d, sp: %p\n", argc, (void *)sp);
+        // printfGreen("execve: argc: %d, sp: %p\n", argc, (void *)sp);
         if (mem::k_vmm.copy_out(new_pt, sp, (char *)&argc, sizeof(uint64)) < 0)
         {
             printfRed("execve: copy argc failed\n");
