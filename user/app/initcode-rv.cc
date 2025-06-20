@@ -9,6 +9,7 @@ extern "C"
         // start_shell();
         // libc_musl_test();
         // libcbench_test();
+        // iozone_test();
         shutdown();
         return 0;
     }
