@@ -173,6 +173,7 @@ namespace mem
             mem = PhysicalMemoryManager::alloc_page();
             if (mem == nullptr)
             {
+                printfRed("vmalloc: alloc_page failed\n");
                 vmdealloc(pt, a, old_sz);
                 return 0;
             }
@@ -180,6 +181,7 @@ namespace mem
             if (map_pages(pt, a, PGSIZE, (uint64)mem,
                           PTE_R | PTE_U | flags) == false)
             {
+                printfRed("vmalloc: map_pages failed\n");
                 k_pmm.free_page(mem);
                 vmdealloc(pt, a, old_sz);
                 return 0;
@@ -585,7 +587,7 @@ namespace mem
         /// TODO:未测试正确性
         void *mem;
         uint64 a;
-
+        // printfCyan("[vmalloc] oldsz: %p, newsz: %p\n", oldsz, newsz);
         if (newsz < oldsz)
             return oldsz;
 
@@ -595,12 +597,14 @@ namespace mem
             mem = k_pmm.alloc_page();
             if (mem == 0)
             {
+                printfCyan("[vmalloc] alloc page failed, oldsz: %p, newsz: %p\n", oldsz, newsz);
                 uvmdealloc(pt, a, oldsz);
                 return 0;
             }
             memset(mem, 0, PGSIZE);
-            if (map_pages(pt, a, PGSIZE, (uint64)mem, flags) != 0)
+            if (map_pages(pt, a, PGSIZE, (uint64)mem, flags) == 0)
             {
+                printfCyan("[vmalloc] map page failed, oldsz: %p, newsz: %p\n", oldsz, newsz);
                 k_pmm.free_page(mem);
                 uvmdealloc(pt, a, oldsz);
                 return 0;

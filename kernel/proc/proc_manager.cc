@@ -810,8 +810,8 @@ namespace proc
             i += n;
         }
 
-        printfRed("[load_seg] load va: %p, size: %d\n", va, size);
-        printfRed("[load_seg] i: %d, offset: %d\n", i, offset);
+        // printfRed("[load_seg] load va: %p, size: %d\n", va, size);
+        // printfRed("[load_seg] i: %d, offset: %d\n", i, offset);
 
         for (; i < size; i += PGSIZE) // 此时 va + i 地址是页对齐的
         {
@@ -1375,7 +1375,7 @@ namespace proc
 
     int ProcessManager::execve(eastl::string path, eastl::vector<eastl::string> argv, eastl::vector<eastl::string> envs)
     {
-        printfRed("execve: %s\n", path.c_str());
+        // printfRed("execve: %s\n", path.c_str());
         // 获取当前进程控制块
         Pcb *proc = k_pm.get_cur_pcb();
 
@@ -1492,7 +1492,7 @@ namespace proc
                 }
                 new_sz = sz1; // 更新新进程映像的大小
 
-                printfRed("checkpoint 1\n");
+
 
                 // // 用于处理elf文件中给出的段起始地址没有对其到页面首地址的情况(弃用, 我们的load_seg函数已经处理了这个问题)
                 // uint margin_size = 0;
@@ -1508,7 +1508,7 @@ namespace proc
                     load_bad = true;
                     break;
                 }
-                printfRed("checkpoint 2\n");
+
             }
             // 如果加载过程中出错，清理已分配的资源
             if (load_bad)
@@ -1587,7 +1587,6 @@ namespace proc
                  new_sz += hsai::page_round_up(phsz);
              })
 
-        printfRed("checkpoint 3\n");
         // ========== 第五阶段：分配用户栈空间 ==========
 
         { // 按照内存布局分配用户栈空间
