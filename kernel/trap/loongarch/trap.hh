@@ -16,12 +16,11 @@ public:
 
     void usertrap();    // 用户态中断处理
     void usertrapret(); // 用户态返回处理
-
+    void machine_trap();
     void kerneltrap();  // 内核态中断处理
 private:
     // void syscall();     // 系统调用处理
     void timertick();   // 时钟中断处理
-    void set_next_timeout(); // 设置下次超时
 
     SpinLock tickslock; // 保护ticks的自旋锁
     uint ticks;        // 时钟中断计数

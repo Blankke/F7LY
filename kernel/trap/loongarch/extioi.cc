@@ -4,30 +4,32 @@
 #include "mem/memlayout.hh"
 #include "platform.hh"
 #include "extioi.hh"
-#include "pci.hh"
-
+#include "pci.h"
+#include "printer.hh"
 void extioi_init(void)
 {
-    // iocsr_writeq((0x1UL << UART0_IRQ) | (0x1UL << PCIE_IRQ), LOONGARCH_IOCSR_EXTIOI_EN_BASE);
+			write_itr_cfg_64b(LOONGARCH_IOCSR_EXTIOI_EN_BASE, (0x1UL << UART0_IRQ)
+					| (0x1UL << PCIE_IRQ));  
 
-    // iocsr_writeq(0x01UL,LOONGARCH_IOCSR_EXTIOI_MAP_BASE);
+			write_itr_cfg_64b(LOONGARCH_IOCSR_EXTIOI_MAP_BASE, 0x01UL);
 
-    // iocsr_writeq(0x10000UL,LOONGARCH_IOCSR_EXTIOI_ROUTE_BASE);
+			write_itr_cfg_64b(LOONGARCH_IOCSR_EXTIOI_ROUTE_BASE, 0x10000UL);
 
-
-    // iocsr_writeq(0x1,LOONGARCH_IOCSR_EXRIOI_NODETYPE_BASE);
+			// 7. 设置节点类型（HT 向量）
+			write_itr_cfg_64b(LOONGARCH_IOCSR_EXRIOI_NODETYPE_BASE, 0x1);
+			printfGreen("[extioi]  ExtIOI initialized.\n");
 }
 
 // ask the extioi what interrupt we should serve.
 uint64
 extioi_claim(void)
 {
-    // return iocsr_readq(LOONGARCH_IOCSR_EXTIOI_ISR_BASE);
-    return 0;
+    return read_itr_cfg_64b(LOONGARCH_IOCSR_EXTIOI_ISR_BASE);
+
 }
 
 void extioi_complete(uint64 irq)
 {
-    // iocsr_writeq(irq, LOONGARCH_IOCSR_EXTIOI_ISR_BASE);
+    write_itr_cfg_64b( LOONGARCH_IOCSR_EXTIOI_ISR_BASE,irq);
 }
 #endif

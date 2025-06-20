@@ -10,10 +10,10 @@ ifeq ($(ARCH),riscv)
   OUTPUT_PREFIX := riscv
   QEMU_CMD := qemu-system-riscv64 -machine virt -m 128M -nographic -smp 1 -bios default -hdb ${KERNEL_PREFIX}/sdcard-rv.img -kernel
 else ifeq ($(ARCH),loongarch)
-  CROSS_COMPILE := loongarch64-unknown-linux-gnu-
+  CROSS_COMPILE := loongarch64-linux-gnu-
   ARCH_CFLAGS := -DLOONGARCH -mcmodel=normal -Wno-error=use-after-free
   OUTPUT_PREFIX := loongarch
-  QEMU_CMD := qemu-system-loongarch64 -kernel
+  QEMU_CMD := qemu-system-loongarch64 -machine virt -cpu la464-loongarch-cpu
 else
   $(error 不支持的架构: $(ARCH)，请使用 make riscv 或 make loongarch)
 endif
@@ -21,7 +21,7 @@ endif
 # ===== 工具链配置 =====
 CC      := $(CROSS_COMPILE)gcc
 CXX     := $(CROSS_COMPILE)g++
-LD      := $(CROSS_COMPILE)ld
+LD      := $(CROSS_COMPILE)g++
 OBJCOPY := $(CROSS_COMPILE)objcopy
 SIZE    := $(CROSS_COMPILE)size
 OBJDUMP := $(CROSS_COMPILE)objdump
@@ -29,29 +29,57 @@ OBJDUMP := $(CROSS_COMPILE)objdump
 # ===== 路径定义 =====
 KERNEL_DIR := kernel
 BUILD_DIR := $(shell pwd)/build/$(OUTPUT_PREFIX)
-ARCH_DIRS := boot/$(ARCH) hal/$(ARCH) link/$(ARCH) mem/$(ARCH) proc/$(ARCH) trap/$(ARCH) sys/$(ARCH) devs/$(ARCH) fs/$(ARCH) 
-COMMON_DIRS := mem libs devs trap hal proc sys  tm
+# 有架构特定子目录的文件夹
+ARCH_DIRS := boot/$(ARCH) hal/$(ARCH) link/$(ARCH) mem/$(ARCH) proc/$(ARCH) trap/$(ARCH) devs/$(ARCH)
+# 只有通用文件的文件夹
+COMMON_DIRS := libs tm sys
 SUBDIRS := $(ARCH_DIRS) $(COMMON_DIRS)
 
 LINK_SCRIPT := $(KERNEL_DIR)/link/$(ARCH)/kernel.ld
 
 CFLAGS := -Wall -Werror -ffreestanding -O2 -fno-builtin -g -fno-stack-protector $(ARCH_CFLAGS)
+ifeq ($(ARCH),riscv)
+  EA_PLATFORM := -DEA_PROCESSOR_RISCV
+else ifeq ($(ARCH),loongarch)
+  EA_PLATFORM := -DEA_PROCESSOR_LOONGARCH64
+endif
 CXXFLAGS := $(CFLAGS) -std=c++23 -nostdlib \
 			-DEA_PLATFORM_LINUX -DEA_PLATFORM_POSIX \
-            -DEA_PROCESSOR_RISCV -DEA_ENDIAN_LITTLE=1 \
+            $(EA_PLATFORM) -DEA_ENDIAN_LITTLE=1 \
             -Wno-deprecated-declarations -Wno-strict-aliasing \
             -fno-exceptions -fno-rtti -Wno-maybe-uninitialized
 
-LDFLAGS := -z max-page-size=4096 -nostdlib -T $(LINK_SCRIPT) --gc-sections
+LDFLAGS := -static -nostdlib -nostartfiles -nodefaultlibs -Wl,-z,max-page-size=4096 -Wl,-T,$(LINK_SCRIPT) -Wl,--gc-sections
+# 包含头文件路径：架构特定目录 + 通用目录 + 有架构子目录的文件夹根目录
 INCLUDES := -I$(KERNEL_DIR) $(foreach dir,$(SUBDIRS),-I$(KERNEL_DIR)/$(dir))
+INCLUDES += -I$(KERNEL_DIR)/mem -I$(KERNEL_DIR)/devs -I$(KERNEL_DIR)/trap -I$(KERNEL_DIR)/hal -I$(KERNEL_DIR)/proc -I$(KERNEL_DIR)/boot
+INCLUDES += -I$(KERNEL_DIR)/fs
 INCLUDES += -I$(EASTL_DIR)/include -I$(EASTL_DIR)/include/EASTL -I$(EASTL_DIR)/test/packages/EABase/include/Common
 
 # ===== 文件收集规则 =====
+# 收集架构特定目录和通用目录的源文件
 SRCS := $(foreach dir,$(SUBDIRS),$(wildcard $(KERNEL_DIR)/$(dir)/*.[csS])) \
         $(foreach dir,$(SUBDIRS),$(wildcard $(KERNEL_DIR)/$(dir)/*.cpp)) \
-        $(foreach dir,$(SUBDIRS),$(wildcard $(KERNEL_DIR)/$(dir)/*.cc)) 
+        $(foreach dir,$(SUBDIRS),$(wildcard $(KERNEL_DIR)/$(dir)/*.cc))
+
+# 收集有架构子目录的文件夹中的通用文件（排除架构特定子目录）
+SRCS += $(shell find $(KERNEL_DIR)/mem -maxdepth 1 -type f \
+        \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
+SRCS += $(shell find $(KERNEL_DIR)/devs -maxdepth 1 -type f \
+        \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
+SRCS += $(shell find $(KERNEL_DIR)/trap -maxdepth 1 -type f \
+        \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
+SRCS += $(shell find $(KERNEL_DIR)/hal -maxdepth 1 -type f \
+        \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
+SRCS += $(shell find $(KERNEL_DIR)/proc -maxdepth 1 -type f \
+        \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
+SRCS += $(shell find $(KERNEL_DIR)/boot -maxdepth 1 -type f \
+        \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
+
+# 收集 fs 目录中的所有文件（fs 没有架构特定子目录）
 SRCS += $(shell find $(KERNEL_DIR)/fs -type f \
-\( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
+        \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
+
 $(info === SRCS collected ===)
 $(info $(SRCS))
 
@@ -90,20 +118,27 @@ endif
 
 # 新增 syscall 编译规则
 SYSCALL_SRC := user/syscall_lib/syscall.cc
-SYSCALL_OBJ := build/$(OUTPUT_PREFIX)/syscall.o build/$(OUTPUT_PREFIX)/printf.o
+SYSCALL_OBJ := build/$(OUTPUT_PREFIX)/syscall.o
 
 # 新增 printf 编译规则
 PRINTF_SRC := user/syscall_lib/printf.cc
 PRINTF_OBJ := build/$(OUTPUT_PREFIX)/printf.o
 
+
+
 USER_TEST_SRC := user/user_lib/user_test.cc
 USER_TEST_OBJ := build/$(OUTPUT_PREFIX)/user_test.o
 
 # 编译参数
-INITCODE_CFLAGS := -Wall -g -fno-builtin -fno-exceptions -fno-rtti -fno-stack-protector -nostdlib -ffreestanding $(ARCH_CFLAGS) -Iuser/deps -Iuser/syscall_lib -Iuser/syscall_lib/arch/$(ARCH) -Ikernel/sys -Ikernel
-INITCODE_LDFLAGS := -N -e start -Ttext 0
 
-.PHONY: all clean dirs build riscv loongarch run debug initcode
+INITCODE_CFLAGS := -Wall -O -fno-builtin -fno-exceptions -fno-rtti -fno-stack-protector -nostdlib -ffreestanding $(ARCH_CFLAGS) -Iuser/deps -Iuser/syscall_lib -Iuser/syscall_lib/arch/$(ARCH) -Ikernel/sys -Ikernel
+ifeq ($(ARCH),riscv)
+INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dynamic-linker,-T,user/user-riscv.ld
+else ifeq ($(ARCH),loongarch)
+INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dynamic-linker,-T,user/user-loongarch.ld
+endif
+.PHONY: all clean dirs build riscv loongarch run debug initcode build-la
+
 
 all: riscv
 
@@ -111,9 +146,10 @@ riscv:
 	@$(MAKE) ARCH=riscv build
 
 loongarch:
-	@$(MAKE) ARCH=loongarch build
+	@$(MAKE) ARCH=loongarch build-la
 
 build: initcode dirs $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a $(KERNEL_BIN)
+build-la: dirs $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a $(KERNEL_BIN)
 
 
 dirs:
@@ -143,9 +179,12 @@ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.s
 $(KERNEL_ELF): $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
 	$(LD) $(LDFLAGS) -o $@ $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
 	$(SIZE) $@
-	# $(OBJDUMP) -D $@ > kernel.asm
+	$(OBJDUMP) -D $@ > kernel.asm
+
+# 只有 riscv 架构需要依赖 initcode
 
 $(KERNEL_ELF): $(INITCODE_BIN)
+
 
 $(KERNEL_BIN): $(KERNEL_ELF) 
 	$(OBJCOPY) -O binary $< $@
@@ -181,14 +220,25 @@ run-riscv:
 
 
 run-loongarch:
-	$(QEMU_CMD) $(KERNEL_ELF) -m 128M -nographic -smp 1
+	qemu-system-loongarch64 \
+	    -machine virt \
+	    -kernel $(KERNEL_ELF) \
+	    -m 1G \
+	    -nographic \
+	    -smp 1 \
+		-drive file=$(KERNEL_PREFIX)/sdcard-la.img,if=none,format=raw,id=x0 \
+		-device virtio-blk-pci,drive=x0 \
+		-no-reboot \
+		-rtc base=utc \
+
+
 
 
 debug: build
 	@if [ "$(ARCH)" = "riscv" ]; then \
 	$(MAKE) debug-riscv; \
 	elif [ "$(ARCH)" = "loongarch" ]; then \
-		$(QEMU_CMD) $(KERNEL_ELF) -S -gdb tcp::1234; \
+		$(MAKE) debug-loongarch; \
 	fi
 
 debug-riscv:
@@ -206,6 +256,17 @@ debug-riscv:
 		-netdev user,id=net \
 		-rtc base=utc \
 		-S -gdb tcp::1234;
+
+debug-loongarch:
+	qemu-system-loongarch64 \
+	    -machine virt \
+	    -kernel $(KERNEL_ELF) \
+	    -m 1G \
+	    -nographic \
+	    -smp 1 \
+	    -S -gdb tcp::1234;
+
+
 initcode: $(INITCODE_BIN)
 
 # 编译 initcode 源文件为目标文件
@@ -235,10 +296,17 @@ $(USER_TEST_OBJ): $(USER_TEST_SRC)
 $(INITCODE_ELF): $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(USER_TEST_OBJ)
 	$(LD) $(INITCODE_LDFLAGS) -o $@ $^
 
+ifeq ($(ARCH),riscv)
+  OBJDUMP_INITCODE := riscv64-unknown-elf-objdump -D -b binary -m riscv:rv64 -EL
+else ifeq ($(ARCH),loongarch)
+  OBJDUMP_INITCODE := loongarch64-linux-gnu-objdump -D -b binary -m loongarch64
+endif
+
 # 生成二进制 initcode 文件 + 反汇编
 $(INITCODE_BIN): $(INITCODE_ELF)
 	$(OBJCOPY) -S -O binary $< $@
-	riscv64-unknown-elf-objdump -D -b binary -m riscv:rv64 -EL $@ > user/disasm_initcode.asm
+	$(OBJDUMP_INITCODE) $@ > user/disasm_initcode.asm
+
 
 clean:
 	rm -rf build

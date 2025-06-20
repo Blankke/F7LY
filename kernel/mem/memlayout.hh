@@ -71,7 +71,8 @@
 //   ...
 //   TRAPFRAME (p->trapframe, used by the trampoline)
 //   TRAMPOLINE (the same page as in the kernel)
-#define TRAPFRAME (TRAMPOLINE - PGSIZE)
+#define SIG_TRAMPOLINE   (TRAMPOLINE - PGSIZE)
+#define TRAPFRAME (SIG_TRAMPOLINE - PGSIZE)
 #elif defined(LOONGARCH)
 // Physical memory layout
 
@@ -83,8 +84,8 @@
 // 0x90000000 -- RAM used by user pages
 
 
-#define DMWIN_MASK 0x9000000000000000
-#define DMWIN1_MASK 0x8000000000000000
+#define DMWIN_MASK 0x9UL << 60
+#define DMWIN1_MASK 0x8UL << 60
 
 // qemu puts UART registers here in virtual memory.
 #define UART0 (0x1fe001e0UL | DMWIN_MASK)
@@ -106,12 +107,12 @@
 #define PHYSBASE (0x90000000UL | DMWIN_MASK)
 #define PHYSTOP (PHYSBASE + 512*1024*1024) //512MB physical memory
 
-#define TRAPFRAME (MAXVA>>1 - PGSIZE) //64TB
+#define TRAPFRAME ((MAXVA>>1 )- PGSIZE) //64TB
 
 // map kernel stacks beneath the trampframe,
 // each surrounded by invalid guard pages.
 #define KSTACK(p) (TRAPFRAME - ((p)+1)* 2*PGSIZE)
-
+#define SIG_TRAMPOLINE   (TRAPFRAME - PGSIZE)
 #define PA2VA(pa) ((pa) & (~(DMWIN_MASK)))
 
 

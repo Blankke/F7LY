@@ -1,5 +1,5 @@
 #include "asm.hh"
-#ifdef LOONGARCH
+
 .section .text
 .global _entry
 _entry:
@@ -19,7 +19,7 @@ _entry:
 	csrwr	    $t0, LOONGARCH_CSR_CRMD
         li.w        $t0, 0x00                 # PPLV=0, PIE=0, PWE=0
         csrwr       $t0, LOONGARCH_CSR_PRMD
-        li.w        $t0, 0x00                 # FPE=0, SXE=0, ASXE=0, BTE=0
+        li.w        $t0, 0x01                 # FPE=1, SXE=0, ASXE=0, BTE=0
         csrwr       $t0, LOONGARCH_CSR_EUEN
 
         // invtlb      0x0,$zero,$zero # 清除所有页表项
@@ -49,4 +49,3 @@ boot_stack:
     .space 4096 * 4 * 4  # 最多支持16核？
     .globl boot_stack_top
 boot_stack_top:
-#endif 

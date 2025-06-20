@@ -1,5 +1,5 @@
 #ifdef LOONGARCH
-#include "asm.h"
+#include "asm.hh"
 
 .section tlbrentry
 .globl handle_tlbr

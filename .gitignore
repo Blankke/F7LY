@@ -28,3 +28,5 @@ auxval_man.txt
 disasm_musl_busybox.asm
 busybox_musl_unstripped.asm
 temp.asm
+disasm_initcode.asm
+user/initcode-la

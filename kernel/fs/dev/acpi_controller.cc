@@ -19,6 +19,7 @@ namespace dev
 		{
 			_lock.init( lock_name );
 			_reg_base = ( void * ) acpi_reg_base;
+			printfGreen( "ACPI controller initialized at %p\n", _reg_base );
 		}
 
 		void AcpiController::power_off()

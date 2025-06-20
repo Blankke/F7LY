@@ -3,17 +3,27 @@
 #include "physical_memory_manager.hh"
 #ifdef RISCV
 #include "mem/riscv/pagetable.hh"
-#elif defined (LOONGARCH)
+#elif defined(LOONGARCH)
 #include "mem/loongarch/pagetable.hh"
 #endif
 #include "memlayout.hh"
 #include "platform.hh"
 #include "printer.hh"
 #include "proc/proc.hh"
+#include "proc_manager.hh"
 extern char etext[]; // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
-
+#ifdef LOONGARCH
+void
+tlbinit(void)
+{
+  asm volatile("invtlb  0x0,$zero,$zero");
+  w_csr_stlbps(0xcU);
+  w_csr_asid(0x0U);
+  w_csr_tlbrehi(0xcU);
+}
+#endif
 namespace mem
 {
     VirtualMemoryManager k_vmm;
@@ -27,7 +37,6 @@ namespace mem
 
     void VirtualMemoryManager::init(const char *lock_name)
     {
-#ifdef RISCV
 
         _virt_mem_lock.init(lock_name);
         // 创建内核页表
@@ -42,7 +51,7 @@ namespace mem
         {
             pcb.map_kstack(k_pagetable);
         }
-
+#ifdef RISCV
         // 设置satp，对应龙芯应该设置pgdl，pgdh，stlbps，asid，tlbrehi，pwcl，pwch,
         // 并且invtlb 0x0,$zero,$zero;
         // question: 为什么xv6的MAKE_SATP没有设置asid
@@ -52,6 +61,19 @@ namespace mem
         w_satp(MAKE_SATP(k_pagetable.get_base()));
         // printfYellow("sfence\n");
         sfence_vma();
+#elif defined(LOONGARCH)
+
+//the "pgdl" is corresponding to "satp" in riscv
+  w_csr_pgdl((uint64)k_pagetable.get_base());
+  // flush the tlb(tlbinit)
+  tlbinit();
+
+  w_csr_pwcl((PTEWIDTH << 30)|(DIR2WIDTH << 25)|(DIR2BASE << 20)|(DIR1WIDTH << 15)|(DIR1BASE << 10)|(PTWIDTH << 5)|(PTBASE << 0));
+  w_csr_pwch((DIR4WIDTH << 18)|(DIR3WIDTH << 6)|(DIR3BASE << 0) |(PWCH_HPTW_EN << 24));
+
+  [[maybe_unused]]uint64 crmd = r_csr_crmd();
+
+
 #endif
         printfGreen("[vmm] Virtual Memory Manager Init\n");
     }
@@ -60,7 +82,7 @@ namespace mem
     bool VirtualMemoryManager::map_pages(PageTable &pt, uint64 va, uint64 size, uint64 pa, uint64 flags)
     {
         // printf("map_pages: va=0x%x, size=0x%x, pa=0x%x, flags=0x%x\n", va, size, pa, flags);
-#ifdef RISCV
+
         uint64 a, last;
         Pte pte;
 
@@ -73,8 +95,9 @@ namespace mem
 
         for (;;)
         {
-
+// printfMagenta("map_pages: va=0x%x, size=0x%x, pa=0x%x, flags=0x%x\n", a, size, pa, flags);
             pte = pt.walk(a, /*alloc*/ true);
+            // printfCyan("walk: va=0x%x, pte_addr=%p, pte_data=%p\n", a, pte.get_data(), pte.get_data());
             // DEBUG:
             //  if(va == KERNBASE)
             //  {
@@ -88,11 +111,15 @@ namespace mem
             }
             if (pte.is_valid())
                 panic("mappages: remap, va=0x%x, pa=0x%x, PteData:%x", a, pa, pte.get_data());
-
+#ifdef RISCV
             pte.set_data(PA2PTE(PGROUNDDOWN(riscv::virt_to_phy_address(pa))) |
                          flags |
                          riscv::PteEnum::pte_valid_m);
-
+#elif defined(LOONGARCH)
+            pte.set_data(PA2PTE(PGROUNDDOWN(pa)) |
+                         flags |
+                         loongarch::pte_valid_m);
+#endif
             // printfMagenta("由map_page设置的第三级pte: %p,pte_addr:%p，应该是：%p\n", pte.get_data(), pte.get_data_addr(), riscv::virt_to_phy_address(pa));
             // if (pte.get_data_addr() == (uint64*)a)
             // {
@@ -103,8 +130,8 @@ namespace mem
             a += PGSIZE;
             pa += PGSIZE;
         }
+        // printfMagenta("map finish for cycle\n");
         return true;
-#endif
     }
 
     uint64 VirtualMemoryManager::vmalloc(PageTable &pt, uint64 old_sz, uint64 new_sz, uint64 flags)
@@ -134,6 +161,35 @@ namespace mem
             }
         }
         return new_sz;
+#elif defined(LOONGARCH)
+        void *mem;
+
+        if (new_sz < old_sz)
+            return old_sz;
+
+        old_sz = PGROUNDUP(old_sz);
+        for (uint64 a = old_sz; a < new_sz; a += PGSIZE)
+        {
+            mem = PhysicalMemoryManager::alloc_page();
+            if (mem == nullptr)
+            {
+                printfRed("vmalloc: alloc_page failed\n");
+                vmdealloc(pt, a, old_sz);
+                return 0;
+            }
+            k_pmm.clear_page(mem);
+            if (map_pages(pt, a, PGSIZE, (uint64)mem,
+                          PTE_R | PTE_U | flags) == false)
+            {
+                printfRed("vmalloc: map_pages failed\n");
+                k_pmm.free_page(mem);
+                vmdealloc(pt, a, old_sz);
+                return 0;
+            }
+        }
+        // printfMagenta("vmalloc: old_sz: %p, new_sz: %p\n", old_sz, new_sz);
+        return new_sz;
+
 #endif
     }
 
@@ -151,12 +207,12 @@ namespace mem
         return new_sz;
     }
 
-/// @brief 从用户空间拷贝数据到内核空间。
-/// @param pt 当前进程的页表，用于地址转换。
-/// @param dst 目标地址（内核空间指针），拷贝到这里。
-/// @param src_va 源地址（用户虚拟地址），从这个地址读取数据。
-/// @param len 拷贝的数据长度（字节数）。
-/// @return 成功返回0，失败返回-1（如页表无法转换用户虚拟地址）。
+    /// @brief 从用户空间拷贝数据到内核空间。
+    /// @param pt 当前进程的页表，用于地址转换。
+    /// @param dst 目标地址（内核空间指针），拷贝到这里。
+    /// @param src_va 源地址（用户虚拟地址），从这个地址读取数据。
+    /// @param len 拷贝的数据长度（字节数）。
+    /// @return 成功返回0，失败返回-1（如页表无法转换用户虚拟地址）。
     int VirtualMemoryManager::copy_in(PageTable &pt, void *dst, uint64 src_va, uint64 len)
     {
         uint64 n, va, pa;
@@ -245,7 +301,7 @@ namespace mem
 #ifdef RISCV
 
 #elif defined(LOONGARCH)
-            pa = hsai::k_mem->to_phy(pa);
+            pa = to_phy(pa);
 #endif
             n = PGSIZE - (src_va - va);
             if (n > max)
@@ -391,6 +447,8 @@ namespace mem
             n = PGSIZE - (va - a);
             if (n > len)
                 n = len;
+            pa=to_vir(pa);
+            // printfMagenta("copy_out: va: %p, pa: %p, n: %p\n", va, pa, n);
             memmove((void *)((pa + (va - a))), p, n);
 
             len -= n;
@@ -499,8 +557,13 @@ namespace mem
     void VirtualMemoryManager::uvmclear(PageTable &pt, uint64 va)
     {
         Pte pte = pt.walk(va, 0);
+#ifdef RISCV
         if (pte.is_valid())
             pte.set_data(pte.get_data() & ~riscv::PteEnum::pte_user_m);
+#elif defined(LOONGARCH)
+        if (pte.is_valid())
+            pte.set_data(pte.get_data() & ~loongarch::PteEnum::pte_plv_m); // PTE_U
+#endif
     }
 
     uint64 VirtualMemoryManager::uvmalloc(PageTable &pt, uint64 oldsz, uint64 newsz, uint64 flags)
@@ -522,7 +585,7 @@ namespace mem
                 vmfree(pt, oldsz);
                 return 0;
             }
-            if (!map_pages(pt, a, PGSIZE, pa,riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_user_m | flags))
+            if (!map_pages(pt, a, PGSIZE, pa, riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_user_m | flags))
             {
                 k_pmm.free_page((void *)pa);
                 uvmdealloc(pt, a, oldsz);
@@ -531,8 +594,33 @@ namespace mem
         }
         return newsz;
 #elif defined(LOONGARCH)
-        // TODO: uvmalloc 未实现
-        printfRed("loongarch 未实现uvmalloc\n");
+        /// TODO:未测试正确性
+        void *mem;
+        uint64 a;
+        // printfCyan("[vmalloc] oldsz: %p, newsz: %p\n", oldsz, newsz);
+        if (newsz < oldsz)
+            return oldsz;
+
+        oldsz = PGROUNDUP(oldsz);
+        for (a = oldsz; a < newsz; a += PGSIZE)
+        {
+            mem = k_pmm.alloc_page();
+            if (mem == 0)
+            {
+                printfCyan("[vmalloc] alloc page failed, oldsz: %p, newsz: %p\n", oldsz, newsz);
+                uvmdealloc(pt, a, oldsz);
+                return 0;
+            }
+            memset(mem, 0, PGSIZE);
+            if (map_pages(pt, a, PGSIZE, (uint64)mem, flags) == 0)
+            {
+                printfCyan("[vmalloc] map page failed, oldsz: %p, newsz: %p\n", oldsz, newsz);
+                k_pmm.free_page(mem);
+                uvmdealloc(pt, a, oldsz);
+                return 0;
+            }
+        }
+        return newsz;
 #endif
     }
 
@@ -610,8 +698,8 @@ namespace mem
         // 初始化堆内存
         kvmmap(pt, vm_kernel_heap_start, HEAP_START, vm_kernel_heap_size, PTE_R | PTE_W);
 #elif defined(LOONGARCH)
-        // TODO
-        printfRed("loongarch 虚拟化未实现\n");
+        kvmmap(pt, ((uint64)etext) & (~(DMWIN_MASK)), (uint64)etext, PHYSTOP - (uint64)etext, PTE_R | PTE_W);
+
 #endif
         return pt;
     }
@@ -666,7 +754,30 @@ namespace mem
             memmove(mem, (void *)((uint64)src + 4 * PGSIZE), MIN(sz - 4 * PGSIZE, PGSIZE));
         }
 #elif defined(LOONGARCH)
-// TODO
+        char *mem;
+        printf("sz: %d\n", sz);
+        // if(sz >= PGSIZE)
+        //   panic("uvmfirst: more than a page");
+        mem = (char *)k_pmm.alloc_page();
+        memset(mem, 0, PGSIZE);
+        map_pages(pt, 0, PGSIZE, (uint64)mem, PTE_V | PTE_W | PTE_R | PTE_X | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
+        memmove(mem,  (void *)src, MIN(sz, PGSIZE));
+
+        mem = (char *)k_pmm.alloc_page();
+        memset(mem, 0, PGSIZE);
+        map_pages(pt, PGSIZE, PGSIZE, (uint64)mem, PTE_V | PTE_W | PTE_R | PTE_X | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
+        if (sz > PGSIZE)
+        {
+            memmove(mem, (void *)((uint64)src + PGSIZE), MIN(sz - PGSIZE, PGSIZE));
+        }
+
+        mem = (char *)k_pmm.alloc_page();
+        memset(mem, 0, PGSIZE);
+        map_pages(pt, 2 * PGSIZE, PGSIZE, (uint64)mem, PTE_V | PTE_W | PTE_R | PTE_X | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
+        if (sz > 2 * PGSIZE)
+        {
+            memmove(mem, (void*)((uint64)src + 2 * PGSIZE), MIN(sz - 2 * PGSIZE, PGSIZE));
+        }
 #endif
     }
 }

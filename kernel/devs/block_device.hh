@@ -8,7 +8,11 @@
 
 #pragma once
 
+#ifdef RISCV
 #include "riscv/virtual_device.hh"
+#elif defined(LOONGARCH)
+#include "loongarch/virtual_device.hh"
+#endif
 #include "types.hh"
 namespace dev
 {

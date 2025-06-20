@@ -55,11 +55,11 @@ namespace tmm
 	timeval TimerManager::get_time_val()
 	{
 		uint64 t_val;
-		uint64 cpt = tmm::cycles_per_tick();
+		// uint64 cpt = tmm::cycles_per_tick();
 
 		_lock.acquire();
 		t_val = tmm::get_hw_time_stamp();
-		t_val += trap_mgr.ticks * cpt;
+		// t_val += trap_mgr.ticks * cpt;
 		_lock.release();
 
 		timeval tv;

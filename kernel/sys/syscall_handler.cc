@@ -8,7 +8,14 @@
 #include "klib.hh"
 #include "list.hh"
 #include "param.h"
+#ifdef RISCV
+#include "riscv/pagetable.hh"
+#elif defined (LOONGARCH)
+#include "loongarch/pagetable.hh"
+#endif
+#ifdef RISCV
 #include "sbi.hh"
+#endif
 #include "hal/cpu.hh"
 #include "timer_manager.hh"
 #include "fs/vfs/path.hh"
@@ -171,24 +178,16 @@ namespace syscall
         //         printfCyan("syscall_num: %d, syscall_name: %s\n", i, _syscall_name[i]);
         //     }
         // }
+        printfGreen("[SyscallHandler::init]SyscallHandler initialized with %d syscall functions\n", max_syscall_funcs_num);
     }
     void SyscallHandler::invoke_syscaller()
     {
-        // printf("[SyscallHandler::invoke_syscaller]invoke syscall handler\n");
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
         uint64 sys_num = p->get_trapframe()->a7; // 获取系统调用号
+
         if (sys_num != 64 && sys_num != 66)
             printfGreen("[invoke_syscaller]sys_num: %d sys_name: %s\n", sys_num, _syscall_name[sys_num]);
-        // debug
-        // 打印所有系统调用号和名称, 检查是否正确
-        // printfCyan("debug: syscall_num_list\n");
-        // for (uint64 i = 0; i < max_syscall_funcs_num; i++)
-        // {
-        //     if (_syscall_funcs[i] != nullptr && _syscall_name[i] != nullptr)
-        //     {
-        //         printfCyan("syscall_num: %d, syscall_name: %s\n", i, _syscall_name[i]);
-        //     }
-        // }
+
         if (sys_num >= max_syscall_funcs_num || sys_num < 0 || _syscall_funcs[sys_num] == nullptr)
         {
             printfRed("[SyscallHandler::invoke_syscaller]sys_num is out of range\n");
@@ -737,6 +736,7 @@ namespace syscall
         }
         // if (fd > 2)
         //     printfRed("invoke sys_write\n");
+        // printf("syscall_write: fd: %d, p: %p, n: %d\n", fd, (void *)p, n);
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = proc->get_pagetable();
         char *buf = new char[n + 10];
@@ -1020,6 +1020,7 @@ namespace syscall
             return -1;
 
         tv = tmm::k_tm.get_time_val();
+        // printf("[SyscallHandler::sys_gettimeofday] tv: %d.%d\n", tv.tv_sec, tv.tv_usec);
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
@@ -1117,11 +1118,16 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_shutdown()
     {
+#ifdef RISCV
         TODO(struct filesystem *fs = get_fs_from_path("/");
              vfs_ext_umount(fs);)
         sbi_shutdown();
         printfYellow("sys_shutdown\n");
         sbi_shutdown();
+#elif defined(LOONGARCH)
+        *(volatile uint8 *)(0x8000000000000000 | 0x100E001C) = 0x34;
+// while (1);
+#endif
         return 0;
     }
 
@@ -1281,8 +1287,7 @@ namespace syscall
 #ifdef RISCV
         head = (proc::robust_list_head *)pt->walk_addr(addr);
 #elif defined(LOONGARCH)
-        head = (proc::robust_list_head *)hsai::k_mem->to_vir(
-            pt->walk_addr(addr));
+        head = (proc::robust_list_head *)to_vir((ulong)pt->walk_addr(addr));
 #endif
         if (head == nullptr)
             return -10;
@@ -1388,11 +1393,9 @@ namespace syscall
 
 #elif defined(LOONGARCH)
         if (new_limit != 0)
-            nlim = (proc::rlimit64 *)hsai::k_mem->to_vir(
-                pt->walk_addr(new_limit));
+            nlim = (proc::rlimit64 *)to_vir((ulong)pt->walk_addr(new_limit));
         if (old_limit != 0)
-            olim = (proc::rlimit64 *)hsai::k_mem->to_vir(
-                pt->walk_addr(old_limit));
+            olim = (proc::rlimit64 *)to_vir((ulong)pt->walk_addr(old_limit));
 #endif
 
         return proc::k_pm.prlimit64(pid, rsrc, nlim, olim);
@@ -1505,7 +1508,7 @@ namespace syscall
 #ifdef RISCV
             tp = (tmm::timespec *)pt->walk_addr(addr);
 #elif LOONGARCH
-            tp = (tmm::timespec *)hsai::k_mem->to_vir(pt->walk_addr(addr));
+            tp = (tmm::timespec *)to_vir((ulong)pt->walk_addr(addr));
 #endif
         tmm::SystemClockId cid = (tmm::SystemClockId)clock_id;
 
@@ -1548,7 +1551,7 @@ namespace syscall
             termios *ts = (termios *)pt->walk_addr(arg);
 #elif defined(LOONGARCH)
             termios *ts =
-                (termios *)hsai::k_mem->to_vir(pt->walk_addr(arg));
+                (termios *)to_vir((ulong)pt->walk_addr(arg));
 #endif
             return df->tcgetattr(ts);
         }
@@ -1559,7 +1562,7 @@ namespace syscall
 #ifdef RISCV
             int *p_pgrp = (int *)pt->walk_addr(arg);
 #elif defined(LOONGARCH)
-            int *p_pgrp = (int *)hsai::k_mem->to_vir(pt->walk_addr(arg));
+            int *p_pgrp = (int *)to_vir((uint64)pt->walk_addr(arg));
 #endif
             *p_pgrp = 1;
             return 0;

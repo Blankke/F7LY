@@ -8,7 +8,13 @@
 #include "trap.hh"
 #include "printer.hh"
 #include "devs/device_manager.hh"
+
+#ifdef RISCV
 #include "devs/riscv/disk_driver.hh"
+#elif defined(LOONGARCH)
+#include "devs/loongarch/disk_driver.hh"
+#endif
+
 #include "fs/vfs/dentrycache.hh"
 #include "fs/vfs/path.hh"
 #include "fs/ramfs/ramfs.hh"
@@ -160,10 +166,14 @@ namespace proc
 
             // 文件系统初始化必须在常规进程的上下文中运行（例如，因为它会调用 sleep），
             // 因此不能从 main() 中运行。(copy form xv6)
-
+#ifdef RISCV
             riscv::qemu::DiskDriver *disk = (riscv::qemu::DiskDriver *)dev::k_devm.get_device("Disk driver");
-            disk->identify_device();
 
+#elif defined(LOONGARCH)
+            loongarch::qemu::DiskDriver *disk =
+                (loongarch::qemu::DiskDriver *)dev::k_devm.get_device("Disk driver");
+#endif
+            disk->identify_device();
             new (&fs::dentrycache::k_dentryCache) fs::dentrycache::dentryCache;
             fs::dentrycache::k_dentryCache.init();
             new (&fs::mnt_table) eastl::unordered_map<eastl::string, fs::FileSystem *>;
@@ -267,28 +277,49 @@ namespace proc
     mem::PageTable ProcessManager::proc_pagetable(Pcb *p)
     {
         mem::PageTable pt = mem::k_vmm.vm_create();
+        mem::PageTable empty_pt = mem::PageTable();
         if (pt.is_null())
             printfRed("proc_pagetable: vm_create failed\n");
         if (pt.get_base() == 0)
-            return 0;
+        {
+            printfRed("proc_pagetable: pt already exists\n");
+            return empty_pt; // 如果已经有页表了，直接返回空页表
+        }
 #ifdef RISCV
         if (mem::k_vmm.map_pages(pt, TRAMPOLINE, PGSIZE, (uint64)trampoline, riscv::PteEnum::pte_readable_m | riscv::pte_executable_m) == 0)
         {
             mem::k_vmm.vmfree(pt, 0);
             printfRed("proc_pagetable: map trampoline failed\n");
-            return 0;
+            return empty_pt;
         }
         // printfGreen("trampoline: %p\n", trampoline);
         // printfGreen("TRAMPOLINE: %p\n", TRAMPOLINE);
         if (mem::k_vmm.map_pages(pt, TRAPFRAME, PGSIZE, (uint64)(p->get_trapframe()), riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_writable_m) == 0)
         {
             mem::k_vmm.vmfree(pt, 0);
+
             printfRed("proc_pagetable: map trapframe failed\n");
-            return 0;
+            return empty_pt;
         }
 
 #elif defined(LOONGARCH)
-// TODO
+        if (mem::k_vmm.map_pages(pt, TRAPFRAME, PGSIZE, (uint64)(p->_trapframe), PTE_V | PTE_NX | PTE_P | PTE_W | PTE_R | PTE_MAT | PTE_D) == 0)
+        {
+            mem::k_vmm.vmfree(pt, 0);
+            printfRed("proc_pagetable: map trapframe failed\n");
+            return empty_pt;
+        }
+///@todo  sig_tampoline
+// 这里的 SIG_TRAMPOLINE 是一个特殊的地址，用于处理信号 trampoline
+// 目前暂时注释掉，因为没有实现信号处理相关的逻辑
+// 需要在后续实现信号处理时再启用
+//   if(mappages(pt, SIG_TRAMPOLINE, PGSIZE,
+//           (uint64)sig_trampoline, PTE_P | PTE_MAT | PTE_D) < 0) {
+//     printf("Fail to map sig_trampoline\n");
+//     uvmunmap(pagetable, TRAPFRAME, 1, 0);
+//     uvmfree(pagetable, 0);
+//     return 0;
+//           }
 #endif
         return pt;
     }
@@ -347,7 +378,45 @@ namespace proc
         p->_lock.release();
 
 #elif defined(LOONGARCH)
-// TODO
+        static int inited = 0;
+        // 防止重复初始化
+        if (inited != 0)
+        {
+            panic("re-init user.");
+            return;
+        }
+
+        Pcb *p = alloc_proc();
+        if (p == nullptr)
+        {
+            panic("user_init: alloc_proc failed");
+            return;
+        }
+
+        _init_proc = p;
+
+        // 传入initcode的地址
+        printfCyan("initcode pagetable: %p\n", p->_pt.get_base());
+        mem::k_vmm.uvmfirst(p->_pt, (uint64)initcode_start, (uint64)initcode_end - (uint64)initcode_start);
+        // debug
+        //  uint64 pa = (uint64)p->_pt.walk_addr((uint64)0);
+        //  printfYellow("initcode start pa: %p\n",pa);
+        //  printfYellow("initcode start byte %u\n", *(uint64 *)pa);
+        printf("initcode start: %p, end: %p\n", initcode_start, initcode_end);
+        printf("initcode size: %p\n", (uint64)(initcode_end - 0));
+        p->_sz = 3 * PGSIZE;
+
+        p->_trapframe->era = 0;     // 设置程序计数器为0
+        p->_trapframe->sp = p->_sz; // 设置栈指针为3个页的大小
+
+        safestrcpy(p->_name, "initcode", sizeof(p->_name));
+        p->_parent = p;
+        // safestrcpy(p->_cwd_name, "/", sizeof(p->_cwd_name));
+        p->_cwd_name = "/";
+
+        p->_state = ProcState::RUNNABLE;
+
+        p->_lock.release();
 #endif
     }
 
@@ -734,17 +803,22 @@ namespace proc
         if (!is_page_align(va)) // 如果va不是页对齐的，先读出开头不对齐的部分
         {
             pa = (uint64)pt.walk_addr(va);
-#ifdef RISCV
-            pa = (pa);
+#ifdef LOONGARCH
+            pa = to_vir(pa);
 #endif
             n = PGROUNDUP(va) - va;
             de->getNode()->nodeRead(pa, offset + i, n);
             i += n;
         }
 
+        // printfRed("[load_seg] load va: %p, size: %d\n", va, size);
+        // printfRed("[load_seg] i: %d, offset: %d\n", i, offset);
+
         for (; i < size; i += PGSIZE) // 此时 va + i 地址是页对齐的
         {
+            // printf("[load_seg] va + i: %p\n", va + i);
             pa = PTE2PA((uint64)pt.walk(va + i, 0).get_data()); // pte.to_pa() 得到的地址是页对齐的
+            // printf("[load_seg] pa: %p\n", pa);
             if (pa == 0)
                 panic("load_seg: walk");
             if (size - i < PGSIZE) // 如果是最后一页中的数据
@@ -754,7 +828,7 @@ namespace proc
 #ifdef RISCV
             pa = pa;
 #elif defined(LOONGARCH)
-// pa =hsai::k_mem->to_vir( pa )
+            pa = to_vir(pa);
 #endif
 
             de->getNode()->nodeRead(pa, offset + i, n);
@@ -1397,7 +1471,8 @@ namespace proc
                 // 读取程序头
                 de->getNode()->nodeRead(reinterpret_cast<uint64>(&ph), off, sizeof(ph));
                 // printf("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
-                //        i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, ph.flags);
+
+                //    i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, ph.flags);
                 // 	// 只处理LOAD类型的程序段
                 if (ph.type != elf::elfEnum::ELF_PROG_LOAD)
                     continue;
@@ -1418,15 +1493,26 @@ namespace proc
 
                 // 分配虚拟内存空间
                 uint64 sz1;
-                uint64 seg_flag = 16;
+                uint64 seg_flag = PTE_U; // User可访问标志
+#ifdef RISCV
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC)
                     seg_flag |= riscv::PteEnum::pte_executable_m;
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
                     seg_flag |= riscv::PteEnum::pte_writable_m;
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ)
                     seg_flag |= riscv::PteEnum::pte_readable_m;
-                // printfRed("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d, end_addr: %p\n",
-                //           i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, seg_flag, (void *)(ph.vaddr + ph.memsz));
+#elif defined(LOONGARCH)
+                seg_flag |= PTE_P | PTE_D | PTE_PLV; // PTE_P: Present bit, segment is present in memory
+                // PTE_D: Dirty bit, segment is dirty (modified)
+                if (!(ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC))
+                    seg_flag |= PTE_NX; // not executable
+                if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
+                    seg_flag |= PTE_W;
+                if (!(ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ))
+                    seg_flag |= PTE_NR; // not readable
+#endif
+                // printfRed("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
+                //   i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, seg_flag);
                 if ((sz1 = mem::k_vmm.vmalloc(new_pt, new_sz, ph.vaddr + ph.memsz, seg_flag)) == 0)
                 {
                     printfRed("execve: uvmalloc\n");
@@ -1434,6 +1520,8 @@ namespace proc
                     break;
                 }
                 new_sz = sz1; // 更新新进程映像的大小
+
+
 
                 // // 用于处理elf文件中给出的段起始地址没有对其到页面首地址的情况(弃用, 我们的load_seg函数已经处理了这个问题)
                 // uint margin_size = 0;
@@ -1449,6 +1537,7 @@ namespace proc
                     load_bad = true;
                     break;
                 }
+
             }
             // 如果加载过程中出错，清理已分配的资源
             if (load_bad)
@@ -1532,12 +1621,22 @@ namespace proc
             int stack_pgnum = 32;
             new_sz = PGROUNDUP(new_sz); // 将大小对齐到页边界
             uint64 sz1;
+#ifdef RISCV
             if ((sz1 = mem::k_vmm.uvmalloc(new_pt, new_sz, new_sz + stack_pgnum * PGSIZE, PTE_W | PTE_X | PTE_R | PTE_U)) == 0)
             {
                 printfRed("execve: load user stack failed\n");
                 k_pm.proc_freepagetable(new_pt, new_sz);
                 return -1;
             }
+#elif defined(LOONGARCH)
+            if ((sz1 = mem::k_vmm.uvmalloc(new_pt, new_sz, new_sz + stack_pgnum * PGSIZE, PTE_P | PTE_W | PTE_PLV | PTE_MAT | PTE_D)) == 0)
+            {
+                printfRed("execve: load user stack failed\n");
+                k_pm.proc_freepagetable(new_pt, new_sz);
+                return -1;
+            }
+#endif
+
             new_sz = sz1;                                                     // 更新新进程映像的大小
             mem::k_vmm.uvmclear(new_pt, new_sz - (stack_pgnum - 1) * PGSIZE); // 设置guardpage
             sp = new_sz;                                                      // 栈指针从顶部开始
@@ -1563,7 +1662,7 @@ namespace proc
         // 2. 压入环境变量字符串
         uint64 uenvp[MAXARG];
         uint64 envc;
-
+            // printfCyan("execve: envs size: %d\n", envs.size());
         for (envc = 0; envc < envs.size(); envc++)
         {
             if (envc >= MAXARG)
@@ -1702,12 +1801,14 @@ namespace proc
 
         // 7. 压入参数个数（argc）
         sp -= sizeof(uint64);
+        // printfGreen("execve: argc: %d, sp: %p\n", argc, (void *)sp);
         if (mem::k_vmm.copy_out(new_pt, sp, (char *)&argc, sizeof(uint64)) < 0)
         {
             printfRed("execve: copy argc failed\n");
             k_pm.proc_freepagetable(new_pt, new_sz);
             return -1;
         }
+
         proc->_trapframe->a0 = argc; // 设置参数个数到trapframe
 
         // 步骤13: 保存程序名用于调试
@@ -1746,15 +1847,19 @@ namespace proc
         mem::PageTable old_pt;
         old_pt = *proc->get_pagetable(); // 获取当前进程的页表
         proc->_sz = PGROUNDUP(new_sz);   // 更新进程大小
-        // printf("execve: entry point: %p, new size: %d\n", elf.entry, proc->_sz);
+// printf("execve: entry point: %p, new size: %d\n", elf.entry, proc->_sz);
+#ifdef RISCV
         proc->_trapframe->epc = elf.entry; // 设置程序计数器为入口点
-        proc->_pt = new_pt;                // 替换为新的页表
-        proc->_trapframe->sp = sp;         // 设置栈指针
+#elif defined(LOONGARCH)
+        proc->_trapframe->era = elf.entry; // 设置程序计数器为入口点
+#endif
+        proc->_pt = new_pt;        // 替换为新的页表
+        proc->_trapframe->sp = sp; // 设置栈指针
 
         // printf("execve: new process size: %d, new pagetable: %p\n", proc->_sz, proc->_pt);
         k_pm.proc_freepagetable(old_pt, old_sz);
 
-        // printf("execve succeed, new process size: %d\n", proc->_sz);
+        printf("execve succeed, new process size: %d\n", proc->_sz);
 
         return argc; // 返回参数个数，表示成功执行
     }

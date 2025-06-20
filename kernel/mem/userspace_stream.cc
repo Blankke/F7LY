@@ -74,19 +74,30 @@ UserspaceStream &UserspaceStream::operator<<( UsRangeDesc &rd )
 
 UserspaceStream &UserspaceStream::operator>>( UsRangeDesc &rd )
 {
+	// printfCyan("[UserspaceStream::operator>>] _ptr: %p, _end_addr: %p\n", _ptr, _end_addr);
 	if (_ptr == 0)
 	{
 		_errno = rc_not_open;
 		return *this;
 	}
-
+// printfCyan("[UserspaceStream::operator>>] _ptr: %p, _end_addr: %p\n", _ptr, _end_addr);
 	auto [buf, len] = rd;
 
 	len = ( _ptr + len > _end_addr ) ? ( _end_addr - _ptr ) : len;
 	while ( len > 0 )
 	{
+		// printfCyan("[UserspaceStream::operator>>] _cache_ptr: %p, _cache_end: %p, len: %u\n", _cache_ptr, _cache_end, len);
+		
+		// 检查缓存是否有效
+		if (_cache_ptr >= _cache_end) {
+			// printfRed("[UserspaceStream::operator>>] Invalid cache: _cache_ptr >= _cache_end\n");
+			_errno = rc_fail;
+			return *this;
+		}
+		
 		if ( _cache_ptr + len <= _cache_end )
 		{
+			// printfGreen("simple copy: len=%u\n", len);
 			memcpy( (void *) buf, (void *) _cache_ptr, len );
 			_cache_ptr += len;
 			_ptr	   += len;
@@ -95,7 +106,16 @@ UserspaceStream &UserspaceStream::operator>>( UsRangeDesc &rd )
 		else
 		{
 			u64 l = _cache_end - _cache_ptr;
-			memcpy( (void *) buf, (void *) _cache_ptr, len );
+			printfRed("split copy: l=%lu, len=%u\n", l, len);
+			
+			// 如果 l == 0，说明当前缓存已满，需要移动到下一个页面
+			if (l == 0) {
+				_ptr++;  // 移动到下一个字节
+				_update_cache( (void *) _ptr );
+				continue;
+			}
+			
+			memcpy( (void *) buf, (void *) _cache_ptr, l );
 			_cache_ptr += l;
 			_ptr	   += l;
 			buf		   += l;

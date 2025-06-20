@@ -3,7 +3,8 @@
 #include "trap.hh"
 #include "platform.hh"
 #include "param.h"
-#include "plic.hh"
+// #include "plic.hh"
+#include "mem.hh"
 #include "mem/memlayout.hh"
 #include "devs/console.hh"
 #include "printer.hh"
@@ -12,14 +13,20 @@
 #include "proc/scheduler.hh"
 #include "trap_func_wrapper.hh"
 #include "extioi.hh"
-#include "pci.hh"
+#include "pci.h"
 #include "apic.hh"
+#include "syscall_handler.hh"
+#include "cpu.hh"
+#include "physical_memory_manager.hh"
+#include "virtual_memory_manager.hh"
+#include "vfs/file/normal_file.hh"
 // in kernelvec.S, calls kerneltrap().
 extern "C" void kernelvec();
 extern "C" void uservec();
 extern "C" void handle_tlbr();
 extern "C" void handle_merr();
 extern "C" void userret(uint64, uint64);
+int mmap_handler(uint64 va, int cause);
 // 创建一个静态对象
 trap_manager trap_mgr;
 
@@ -29,12 +36,13 @@ void trap_manager::init()
   ticks = 0;
   timeslice = 0;
   tickslock.init("tickslock");
+  printfGreen("[trap] Trap Manager Init\n");
 }
 
 // 架构相关, 设置csr
 void trap_manager::inithart()
 {
-  uint32 ecfg = ( 0U << CSR_ECFG_VS_SHIFT ) | HWI_VEC | TI_VEC;
+  uint32 ecfg = (0U << CSR_ECFG_VS_SHIFT) | HWI_VEC | TI_VEC;
   uint64 tcfg = 0x1000000UL | CSR_TCFG_EN | CSR_TCFG_PER;
 
   w_csr_ecfg(ecfg);
@@ -44,13 +52,7 @@ void trap_manager::inithart()
   w_csr_tlbrentry((uint64)handle_tlbr);
   w_csr_merrentry((uint64)handle_merr);
   intr_on();
-  set_next_timeout();
-}
 
-// 时钟到期后, 重新设置下次超时
-void trap_manager::set_next_timeout()
-{
-  TODO("设置下次超时的龙芯做法");
 }
 
 // 处理外部中断和软件中断
@@ -60,37 +62,50 @@ int trap_manager::devintr()
   uint32 estat = r_csr_estat();
   uint32 ecfg = r_csr_ecfg();
 
-  if(estat & ecfg & HWI_VEC) {
+  if (estat & ecfg & HWI_VEC)
+  {
     // this is a hardware interrupt, via IOCR.
 
     // irq indicates which device interrupted.
     uint64 irq = extioi_claim();
     // printf("%d\n", irq);
     // 处理串口中断
-    if(irq & (1UL << UART0_IRQ)){
-      printfYellow("uart0 interrupt not implemented yet\n");
-      //TODO kConsole.console_intr();
+    if (irq & (1UL << UART0_IRQ))
+    {
+      TODO("处理串口中断");
+      panic("处理串口中断未实现");
+      // int c = sbi_console_getchar();
+      // if (-1 != c)
+      // {
+      //   dev::kConsole.console_intr(c);
+      // }
 
-
-    // tell the apic the device is
-    // now allowed to interrupt again.
+      // tell the apic the device is
+      // now allowed to interrupt again.
 
       extioi_complete(1UL << UART0_IRQ);
-    } else if (irq & (1UL << PCIE_IRQ)) {
-      //TODO: virtio_disk_intr();  
-    }else if(irq){
-       printf("unexpected interrupt irq=%d\n", irq);
+    }
+    else if (irq & (1UL << PCIE_IRQ))
+    {
+      // TODO: virtio_disk_intr();
+    }
+    else if (irq)
+    {
+      printf("unexpected interrupt irq=%d\n", irq);
 
       apic_complete(irq);
       extioi_complete(irq);
     }
 
     return 1;
-  } else if(estat & ecfg & TI_VEC){
-    //timer interrupt,
+  }
+  else if (estat & ecfg & TI_VEC)
+  {
+    // timer interrupt,
 
-    if(proc::k_pm.get_cur_cpuid() == 0){
-      //TODO: clockintr();
+    if (proc::k_pm.get_cur_cpuid() == 0)
+    {
+      timertick();
     }
 
     // acknowledge the timer interrupt by clearing
@@ -98,7 +113,9 @@ int trap_manager::devintr()
     w_csr_ticlr(r_csr_ticlr() | CSR_TICLR_CLR);
 
     return 2;
-  } else {
+  }
+  else
+  {
     return 0;
   }
 }
@@ -112,158 +129,175 @@ void trap_manager::timertick()
   ticks++;
 
   // !!写完进城后修改
-  // wakeup(&ticks);
+  proc::k_pm.wakeup(&ticks);
 
   // release the lock
   tickslock.release();
-
-  // set the next timeout
-  set_next_timeout();
 }
 
 // !!写完进程后修改
-// void trap_manager::usertrap(){
-//   if((r_sstatus() & SSTATUS_SPP) != 0)
-//     panic("usertrap: not from user mode");
+void trap_manager::usertrap()
+{
+  // printfMagenta("==usertrap==\n");
 
-//   // send interrupts and exceptions to kerneltrap(),
-//   // since we're now in the kernel.
-//   w_stvec((uint64)kernelvec);
+  int which_dev = 0;
 
-//   struct proc *p = myproc();
+  if ((r_csr_prmd() & PRMD_PPLV) == 0)
+    panic("usertrap: not from user mode");
 
-//   // save user program counter.
-//   p->trapframe->epc = r_sepc();
-//   uint64 cause = r_scause();
-//   if(cause == 8){
-//     // system call
+  // send interrupts and exceptions to kerneltrap(),
+  // since we're now in the kernel.
+  w_csr_eentry((uint64)kernelvec);
 
-//     if(killed(p))
-//       exit(-1);
+  proc::Pcb *p = proc::k_pm.get_cur_pcb();
 
-//     // sepc points to the ecall instruction,
-//     // but we want to return to the next instruction.
-//     p->trapframe->epc += 4;
+  // save user program counter.
+  p->_trapframe->era = r_csr_era();
 
-//     // an interrupt will change sepc, scause, and sstatus,
-//     // so enable only now that we're done with those registers.
-//     intr_on();
+  if (((r_csr_estat() & CSR_ESTAT_ECODE) >> 16) == 0xb)
+  {
+    // system call
 
-//     syscall();
-//   } else if((which_dev = devintr()) != 0){
-//     // ok
-//   } else if (cause == 13 || cause == 15) {
-//     //缺页故障处理
-//     uint64 fault_va = r_stval();
-//     if(PGROUNDUP(p->trapframe->sp) - 1 < fault_va && fault_va < p->sz) {
-//       if(pagefault_handler(fault_va, cause) != 0) {
-//         p->killed = 1;
-//       }
-//     } else
-//       p->killed = 1;
-//   } else {
-//     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-//     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-//     setkilled(p);
-//   }
+    if (p->_killed)
+      proc::k_pm.exit(-1);
 
-//   if(killed(p))
-//     exit(-1);
+    // sepc points to the ecall instruction,
+    // but we want to return to the next instruction.
+    p->_trapframe->era += 4;
 
-//   // give up the CPU if this is a timer interrupt.
-//   if(which_dev == 2) {
-//     timeslice++; //让一个进程连续执行若干时间片，printf线程不安全
-//     if(timeslice >= 5){
-//       timeslice = 0;
-//       yield();
-//     }
+    // an interrupt will change crmd & prmd registers,
+    // so don't enable until done with those registers.
+    intr_on();
 
-// }
+    syscall::k_syscall_handler.invoke_syscaller();
+  }
 
-// !!写完进程后修改
-// return to user space
-//
-// void
-// usertrapret(void)
-// {
-//   struct proc *p = myproc();
+  else if (((r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x1 || (r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x2))
+  {
 
-//   // we're about to switch the destination of traps from
-//   // kerneltrap() to usertrap(), so turn off interrupts until
-//   // we're back in user space, where usertrap() is correct.
-//   intr_off();
+        uint64 fault_va = r_csr_badv();
+    if (PGROUNDUP(p->_trapframe->sp) - 1 < fault_va && fault_va < p->_sz)
+    {
+      if (mmap_handler(r_csr_badv(),  (r_csr_estat() & CSR_ESTAT_ECODE) >> 16) != 0)
+        p->_killed = 1;
+    }
+    else
+      p->_killed = 1;
+  }
+  else if ((which_dev = devintr()) != 0)
+  {
+    // ok
+  }
+  else
+  {
+    printf("usertrap(): unexpected trapcause %x pid=%d\n", r_csr_estat(), p->_pid);
+    printf("            era=%p badi=%x\n", r_csr_era(), r_csr_badi());
+    p->_killed = 1;
+  }
 
-//   w_stvec(TRAMPOLINE + (uservec - trampoline));
+  if (p->_killed)
+    proc::k_pm.exit(-1);
 
-//   // set up trapframe values that uservec will need when
-//   // the process next re-enters the kernel.
-//   p->trapframe->kernel_satp = r_satp();         // kernel page table
-//   p->trapframe->kernel_sp = p->kstack + 1 * PGSIZE; // process's kernel stack
-//   p->trapframe->kernel_trap = (uint64)usertrap;
-//   p->trapframe->kernel_hartid = r_tp();         // hartid for cpuid()
+  // give up the CPU if this is a timer interrupt.
+  if (which_dev == 2)
+  {
+    timeslice++; // 让一个进程连续执行若干时间片，printf线程不安全
+    if (timeslice >= 10)
+    {
+      timeslice = 0;
+      printf("yield in usertrap\n");
+      proc::k_scheduler.yield();
+    }
+  }
+  TODO(信号处理)
+  // printfRed("信号处理未实现\n");
+  // handle_signal(); 
+  usertrapret();
+}
 
-//   // set up the registers that trampoline.S's sret will use
-//   // to get to user space.
+void trap_manager::usertrapret(void)
+{
+  // printf("==usertrapret==\n");
+  proc::Pcb *p = proc::k_pm.get_cur_pcb();
 
-//   // set S Previous Privilege mode to User.
-//   unsigned long x = r_sstatus();
-//   x &= ~SSTATUS_SPP; // clear SPP to 0 for user mode
-//   x |= SSTATUS_SPIE; // enable interrupts in user mode
-//   w_sstatus(x);
+  intr_off();
 
-//   // set S Exception Program Counter to the saved user pc.
-//   w_sepc(p->trapframe->epc);
+  // send syscalls, interrupts, and exceptions to uservec.S
+  w_csr_eentry((uint64)uservec); // maybe todo
 
-//   // tell trampoline.S the user page table to switch to.
-//   // printf("[usertrapret]p->pagetable: %p\n", p->pagetable);
-//   uint64 satp = MAKE_SATP(p->pagetable);
+  // set up trapframe values that uservec will need when
+  // the process next re-enters the kernel.
+  p->_trapframe->kernel_pgdl = r_csr_pgdl();      // kernel page table
+  p->_trapframe->kernel_sp = p->_kstack + PGSIZE; // process's kernel stack
+  p->_trapframe->kernel_trap = (uint64)wrap_usertrap;
+  p->_trapframe->kernel_hartid = r_tp(); // hartid for cpuid()
 
-//   // jump to trampoline.S at the top of memory, which
-//   // switches to the user page table, restores user registers,
-//   // and switches to user mode with sret.
-//   uint64 fn = TRAMPOLINE + (userret - trampoline);
-//   ((void (*)(uint64,uint64))fn)(TRAPFRAME + cpuid() * sizeof(struct trapframe), satp);
-// }
+  // set up the registers that uservec.S's ertn will use
+  // to get to user space.
 
+  // set Previous Privilege mode to User Privilege3.
+  uint32 x = r_csr_prmd();
+  x |= PRMD_PPLV; // set PPLV to 3 for user mode
+  x |= PRMD_PIE;  // enable interrupts in user mode
+  w_csr_prmd(x);
+
+
+
+  // set S Exception Program Counter to the saved user pc.
+  w_csr_era(p->_trapframe->era);
+
+  // tell uservec.S the user page table to switch to.
+  volatile uint64 pgdl = (p->_pt.get_base());
+
+  // jump to uservec.S at the top of memory, which
+  // switches to the user page table, restores user registers,
+  // and switches to user mode with ertn.
+  userret(TRAPFRAME, pgdl);
+}
+void trap_manager::machine_trap()
+{
+  panic("machine error");
+}
 // 处理内核态的中断
 // 支持嵌套中断
 void trap_manager::kerneltrap()
 {
-  // printf("==kerneltrap==\n");
-
 
   // 这些寄存器可能在yield时被修改
   int which_dev = 0;
   uint64 era = r_csr_era();
   uint64 prmd = r_csr_prmd();
 
-
   // 检查中断是否来自内核态
 
-  if((prmd & PRMD_PPLV) != 0)
+  if ((prmd & PRMD_PPLV) != 0)
     panic("kerneltrap: not from privilege0");
-  if(intr_get() != 0)
+  if (intr_get() != 0)
     panic("kerneltrap: interrupts enabled");
 
-  if((which_dev = devintr()) == 0){
+  if ((which_dev = devintr()) == 0)
+  {
     printf("estat %x\n", r_csr_estat());
     printf("era=%p eentry=%p\n", r_csr_era(), r_csr_eentry());
     panic("kerneltrap");
   }
 
-  //!! 写完进程后修改
+  ///@todo!! 写完进程后修改
   // give up the CPU if this is a timer interrupt.
-  // if(which_dev == 2 && myproc() != 0 && myproc()->state == RUNNING) {
-  //   timeslice++; //让一个进程连续执行若干时间片，printf线程不安全
-  //   if(timeslice >= 5){
-  //     timeslice = 0;
-  //     yield();
-  //   }
-  // }
+  if (which_dev == 2 && Cpu::get_cpu()->get_cur_proc() != nullptr && Cpu::get_cpu()->get_cur_proc()->_state == proc::RUNNING)
+  {
+    timeslice++; // 让一个进程连续执行若干时间片，printf线程不安全
+    if (timeslice >= 5)
+    {
+      timeslice = 0;
+      printf("yield in kerneltrap\n");
+      proc::k_scheduler.yield();
+    }
+  }
   if (which_dev == 2)
   {
     timeslice++; // 让一个进程连续执行若干时间片，printf线程不安全
-    printf("timeslice: %d\n", timeslice);
+    // printf("timeslice: %d\n", timeslice);
     if (timeslice >= 5)
     {
       timeslice = 0;
@@ -274,5 +308,82 @@ void trap_manager::kerneltrap()
   // so restore trap registers for use by kernelvec.S's sepc instruction.
   w_csr_era(era);
   w_csr_prmd(prmd);
+
+}
+int mmap_handler(uint64 va, int cause)
+{
+  int i;
+  proc::Pcb *p = proc::k_pm.get_cur_pcb();
+  // 根据地址查找属于哪一个VMA
+  for (i = 0; i < proc::NVMA; ++i)
+  {
+    if (p->_vm[i].used && p->_vm[i].addr <= va && va <= p->_vm[i].addr + p->_vm[i].len - 1)
+    {
+      break;
+    }
+  }
+  if (i == proc::NVMA)
+    return -1;
+
+  int pte_flags = PTE_U;
+  if (!(p->_vm[i].prot & PROT_READ))
+    pte_flags |= PTE_NR;
+  if (p->_vm[i].prot & PROT_WRITE)
+    pte_flags |= PTE_W;
+  if (!(p->_vm[i].prot & PROT_EXEC))
+    pte_flags |= PTE_NX;
+  
+  fs::normal_file *vf = p->_vm[i].vfile;
+
+  void *pa = mem::k_pmm.alloc_page();
+
+  if (pa == 0)
+    return -1;
+  memset(pa, 0, PGSIZE);
+
+  // 读取文件内容
+  fs::dentry *den = vf->getDentry();
+  if (den == nullptr)
+  {
+    printfRed("mmap_handler: dentry is null\n");
+    mem::k_pmm.free_page(pa);
+    return -1; // dentry is null
+  }
+  fs::Inode *inode = den->getNode();
+  if (inode == nullptr)
+  {
+    printfRed("mmap_handler: inode is null\n");
+    mem::k_pmm.free_page(pa);
+    return -1; // inode is null
+  }
+
+  inode->_lock.acquire(); // 锁定inode，防止其他线程修改
+
+  // 计算当前页面读取文件的偏移量，实验中p->_vm[i].offset总是0
+  // 要按顺序读读取，例如内存页面A,B和文件块a,b
+  // 则A读取a，B读取b，而不能A读取b，B读取a
+  int offset = p->_vm[i].offset + PGROUNDDOWN(va - p->_vm[i].addr);
+  ///@details 原本的xv6的readi函数有一个标志位来区分是否读到内核中，此处位于内核里
+  /// pa直接是物理地址，所以应该无所谓
+  int readbytes = inode->nodeRead((uint64)pa, offset, PGSIZE);
+
+  // 什么都没有读到
+  if (readbytes == 0)
+  {
+    printfRed("mmap_handler: read nothing");
+    inode->_lock.release();
+    mem::k_pmm.free_page(pa);
+    return -1;
+  }
+  inode->_lock.release(); // 释放inode锁
+  // 添加页面映射
+  if (mem::k_vmm.map_pages(*p->get_pagetable(), PGROUNDDOWN(va), PGSIZE, (uint64)pa, pte_flags) != 1)
+  {
+    printfRed("mmap_handler: map failed");
+    mem::k_pmm.free_page(pa);
+    return -1;
+  }
+
+  return 0;
 }
 #endif
