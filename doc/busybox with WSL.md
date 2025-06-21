@@ -1,6 +1,9 @@
 # 验证test-suit提供的busybox有ash
 sudo mkdir /mnt/sdcard-rv
 sudo mount -o loop sdcard-rv.img /mnt/sdcard-rv
+
+sudo mkdir /mnt/sdcard-la
+sudo mount -o loop sdcard-la.img /mnt/sdcard-la
 挂载到自己的文件系统上
 
 ```bash
