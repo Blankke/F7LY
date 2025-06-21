@@ -277,11 +277,13 @@ namespace fs
 
 	int Path::open(FileAttrs attrs_, int flags)
 	{
+		printf("flags is %d\n", flags);
 		dentry *den = pathSearch();
 
 		if (!den && flags & O_CREAT) // @todo 创建文件
 			return -1;
 		FileAttrs attrs = den->getNode()->rMode();
+
 		if (attrs.filetype != FileTypes::FT_DIRECT && attrs_.u_write && attrs_.o_write && attrs_.g_write)
 			printfRed(" try to open a directory with write mode");
 
@@ -291,6 +293,7 @@ namespace fs
 			attrs_.o_read > attrs.o_read &&
 			attrs_.o_exec > attrs.o_exec)
 			return -1; // 权限校验失败
+
 		fs::normal_file *f = new fs::normal_file(attrs_, den);
 		if (flags & O_APPEND)
 			f->setAppend();

@@ -96,6 +96,9 @@ namespace proc
         void get_cur_proc_tms(tmm::tms *tsv);
         int get_cur_cpuid();
 
+        // 信号相关
+        // int kill_signal(int pid, int sig);
+
     public:
         void kill_proc(Pcb *p) { p->_killed = 1; }
         int kill_proc(int pid);

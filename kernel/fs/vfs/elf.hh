@@ -7,6 +7,9 @@ namespace elf
 	{
 		ELF_MAGIC = 0x464C457FU, // "\x7FELF" in little endian
 		ELF_PROG_LOAD = 1,
+		ELF_PROG_DYNAMIC = 2,
+		ELF_PROG_INTERP = 3,
+		ELF_PROG_PHDR = 6,
 		ELF_PROG_FLAG_EXEC = 1,
 		ELF_PROG_FLAG_WRITE = 2,
 		ELF_PROG_FLAG_READ = 4,

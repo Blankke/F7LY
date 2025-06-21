@@ -1465,7 +1465,8 @@ namespace proc
         // printfRed("execve: %s\n", path.c_str());
         // 获取当前进程控制块
         Pcb *proc = k_pm.get_cur_pcb();
-
+        bool is_dynamic = false;
+        uint64 interp_entry = 0; // 动态链接器入口点
         // proc->_pt.print_all_map();
 
         uint64 old_sz = proc->_sz; // 保存原进程的内存大小
@@ -1506,6 +1507,7 @@ namespace proc
             return -1;
         }
         // printf("execve: ELF file magic: %x\n", elf.magic);
+        // **新增：检查是否需要动态链接**
 
         // ========== 第二阶段：创建新的虚拟地址空间 ==========
 
@@ -1522,8 +1524,28 @@ namespace proc
         // ========== 第三阶段：加载ELF程序段 ==========
         {
 
-            bool load_bad = false; // 加载失败标志
+        bool load_bad = false; // 加载失败标志
 
+        eastl::string interpreter_path;
+        fs::dentry *interp_de = nullptr;
+
+        // 检查程序头中是否有PT_INTERP段
+        for (i = 0, off = elf.phoff; i < elf.phnum; i++, off += sizeof(ph))
+        {
+            de->getNode()->nodeRead(reinterpret_cast<uint64>(&ph), off, sizeof(ph));
+            if (ph.type == elf::elfEnum::ELF_PROG_INTERP) // PT_INTERP = 3
+            {
+                is_dynamic = true;
+                // 读取解释器路径
+                char interp_buf[256];
+                de->getNode()->nodeRead(reinterpret_cast<uint64>(interp_buf), ph.off, ph.filesz);
+                interp_buf[ph.filesz] = '\0';
+                interpreter_path = interp_buf;
+                interp_de = de;
+                printfCyan("execve: found dynamic interpreter: %s\n", interpreter_path.c_str());
+                break;
+            }
+        }
             // 遍历所有程序头，加载LOAD类型的段
             for (i = 0, off = elf.phoff; i < elf.phnum; i++, off += sizeof(ph))
             {
@@ -1602,7 +1624,85 @@ namespace proc
                 k_pm.proc_freepagetable(new_pt, new_sz);
                 return -1;
             }
+
+
+        // 加载动态链接器**
+        elf::elfhdr interp_elf;
+        uint64 interp_base = 0;
+        if (is_dynamic)
+        {
+            if (interp_de == nullptr)
+            {
+                printfRed("execve: cannot find dynamic linker: %s\n", interpreter_path.c_str());
+                k_pm.proc_freepagetable(new_pt, new_sz);
+                return -1;
+            }
+
+            // 读取动态链接器的ELF头
+            interp_de->getNode()->nodeRead(reinterpret_cast<uint64>(&interp_elf), 0, sizeof(interp_elf));
+
+            if (interp_elf.magic != elf::elfEnum::ELF_MAGIC)
+            {
+                printfRed("execve: invalid dynamic linker ELF\n");
+                k_pm.proc_freepagetable(new_pt, new_sz);
+                return -1;
+            }
+
+            // 选择动态链接器的加载基址（通常在高地址）
+            interp_base = PGROUNDUP(new_sz); // 在新进程映像的末尾分配空间
+
+            // 加载动态链接器的程序段
+            elf::proghdr interp_ph;
+            for (int j = 0, interp_off = interp_elf.phoff; j < interp_elf.phnum; j++, interp_off += sizeof(interp_ph))
+            {
+                interp_de->getNode()->nodeRead(reinterpret_cast<uint64>(&interp_ph), interp_off, sizeof(interp_ph));
+
+                if (interp_ph.type != elf::elfEnum::ELF_PROG_LOAD)
+                    continue;
+
+                uint64 load_addr = interp_base + interp_ph.vaddr;
+                uint64 seg_flag = PTE_U;
+
+#ifdef RISCV
+                if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC)
+                    seg_flag |= riscv::PteEnum::pte_executable_m;
+                if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
+                    seg_flag |= riscv::PteEnum::pte_writable_m;
+                if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ)
+                    seg_flag |= riscv::PteEnum::pte_readable_m;
+#elif defined(LOONGARCH)
+                seg_flag |= PTE_P | PTE_D | PTE_PLV;
+                if (!(interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC))
+                    seg_flag |= PTE_NX;
+                if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
+                    seg_flag |= PTE_W;
+                if (!(interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ))
+                    seg_flag |= PTE_NR;
+#endif
+
+                uint64 sz1;
+                if ((sz1 = mem::k_vmm.vmalloc(new_pt, new_sz, load_addr + interp_ph.memsz, seg_flag)) == 0)
+                {
+                    printfRed("execve: load dynamic linker failed\n");
+                    k_pm.proc_freepagetable(new_pt, new_sz);
+                    return -1;
+                }
+                new_sz = sz1;
+
+                // 加载动态链接器段内容
+                if (load_seg(new_pt, load_addr, interp_de, interp_ph.off, interp_ph.filesz) < 0)
+                {
+                    printfRed("execve: load dynamic linker segment failed\n");
+                    k_pm.proc_freepagetable(new_pt, new_sz);
+                    return -1;
+                }
+            }
+
+            interp_entry = interp_base + interp_elf.entry;
+            printfCyan("execve: dynamic linker loaded at base: %p, entry: %p\n",
+                       (void *)interp_base, (void *)interp_entry);
         }
+    }
         TODO(== == == == == 第四阶段：为glibc准备程序头信息 == == == == ==)
         // ================    (已写, 我们抄华科的不用在这里初始化, 直接在下面把数据算出来就可以了)    ========================
 
@@ -1783,20 +1883,20 @@ namespace proc
             uint64 aux[AuxvEntryType::MAX_AT * 2] = {0};
             [[maybe_unused]] int index = 0;
 
-            // ADD_AUXV(AT_HWCAP, 0);             // 硬件功能标志
-            // ADD_AUXV(AT_PAGESZ, PGSIZE);       // 页面大小
-            // ADD_AUXV(AT_PHDR, elf.phoff);      // 程序头表偏移
-            // ADD_AUXV(AT_PHENT, elf.phentsize); // 程序头表项大小
-            // ADD_AUXV(AT_PHNUM, elf.phnum);     // 程序头表项数量
-            // ADD_AUXV(AT_BASE, 0);              // 动态链接器基地址（保留）
-            // ADD_AUXV(AT_ENTRY, elf.entry);     // 程序入口点地址
-            // ADD_AUXV(AT_UID, 0);               // 用户ID
-            // ADD_AUXV(AT_EUID, 0);              // 有效用户ID
-            // ADD_AUXV(AT_GID, 0);               // 组ID
-            // ADD_AUXV(AT_EGID, 0);              // 有效组ID
-            // ADD_AUXV(AT_SECURE, 0);            // 安全模式标志
-            // ADD_AUXV(AT_RANDOM, rd_pos);           // 随机数地址
-            // ADD_AUXV(AT_NULL, 0);              // 结束标记
+            ADD_AUXV(AT_HWCAP, 0);             // 硬件功能标志
+            ADD_AUXV(AT_PAGESZ, PGSIZE);       // 页面大小
+            ADD_AUXV(AT_PHDR, elf.phoff);      // 程序头表偏移
+            ADD_AUXV(AT_PHENT, elf.phentsize); // 程序头表项大小
+            ADD_AUXV(AT_PHNUM, elf.phnum);     // 程序头表项数量
+            ADD_AUXV(AT_BASE, 0);              // 动态链接器基地址（保留）
+            ADD_AUXV(AT_ENTRY, elf.entry);     // 程序入口点地址
+            ADD_AUXV(AT_UID, 0);               // 用户ID
+            ADD_AUXV(AT_EUID, 0);              // 有效用户ID
+            ADD_AUXV(AT_GID, 0);               // 组ID
+            ADD_AUXV(AT_EGID, 0);              // 有效组ID
+            ADD_AUXV(AT_SECURE, 0);            // 安全模式标志
+            ADD_AUXV(AT_RANDOM, rd_pos);       // 随机数地址
+            ADD_AUXV(AT_NULL, 0);              // 结束标记
 
             // printf("index: %d\n", index);
 
@@ -1903,11 +2003,22 @@ namespace proc
         mem::PageTable old_pt;
         old_pt = *proc->get_pagetable(); // 获取当前进程的页表
         proc->_sz = PGROUNDUP(new_sz);   // 更新进程大小
-// printf("execve: entry point: %p, new size: %d\n", elf.entry, proc->_sz);
+        uint64 entry_point;
+        if (is_dynamic)
+        {
+            entry_point = interp_entry; // 动态链接时从动态链接器开始执行
+            printfCyan("execve: starting from dynamic linker entry: %p\n", (void *)entry_point);
+        }
+        else
+        {
+            entry_point = elf.entry; // 静态链接时直接从程序入口开始
+            printfCyan("execve: starting from program entry: %p\n", (void *)entry_point);
+        }
+
 #ifdef RISCV
-        proc->_trapframe->epc = elf.entry; // 设置程序计数器为入口点
+        proc->_trapframe->epc = entry_point;
 #elif defined(LOONGARCH)
-        proc->_trapframe->era = elf.entry; // 设置程序计数器为入口点
+        proc->_trapframe->era = entry_point;
 #endif
         proc->_pt = new_pt;        // 替换为新的页表
         proc->_trapframe->sp = sp; // 设置栈指针

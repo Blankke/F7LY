@@ -10,7 +10,7 @@
 #include "param.h"
 #ifdef RISCV
 #include "riscv/pagetable.hh"
-#elif defined (LOONGARCH)
+#elif defined(LOONGARCH)
 #include "loongarch/pagetable.hh"
 #endif
 #ifdef RISCV
@@ -445,7 +445,7 @@ namespace syscall
         int ret = f->read((uint64)k_buf, n, f->get_file_offset(), true);
         if (ret < 0)
             return -6;
-        
+
         static int string_length = 0;
         string_length += strlen(k_buf);
         // printf("[sys_read] read %d characters in total\n", string_length);
@@ -1134,15 +1134,19 @@ namespace syscall
     //====================================signal===================================================
     uint64 SyscallHandler::sys_kill_signal()
     {
-        panic("未实现该系统调用");
+        int pid, sig;
+        _arg_int(0, pid);
+        _arg_int(1, sig);
+        // return proc::k_pm.kill_signal(pid, sig);
+        return 0;
     }
     uint64 SyscallHandler::sys_tkill()
     {
-        panic("未实现该系统调用");
+       return 0;
     }
     uint64 SyscallHandler::sys_tgkill()
     {
-        panic("未实现该系统调用");
+        return 0;
     }
     uint64 SyscallHandler::sys_rt_sigaction()
     {
@@ -1215,11 +1219,11 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_rt_sigtimedwait()
     {
-        panic("未实现该系统调用");
+        return 0;
     }
     uint64 SyscallHandler::sys_rt_sigreturn()
     {
-        panic("未实现该系统调用");
+        return 0;
     }
 
     //================================== busybox===================================================
@@ -1638,7 +1642,7 @@ namespace syscall
             return -1;
         if (_arg_int(1, op) < 0)
             return -2;
-
+        // printfYellow("file fd: %p, op: %d\n", f, op);
         switch (op)
         {
         case F_SETFD:
@@ -1683,7 +1687,75 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_faccessat()
     {
-        panic("未实现该系统调用");
+        int dirfd, mode, flags;
+        eastl::string path;
+        if (_arg_int(0, dirfd) < 0 || _arg_int(2, mode) < 0 || _arg_int(3, flags) < 0)
+        {
+            return -1;
+        }
+        if (_arg_str(1, path, MAXPATH) < 0)
+        {
+            return -1;
+        }
+
+        fs::dentry *pen;
+        fs::dentry *base_dentry = nullptr; // 保存原始的 dentry 用于路径解析
+        eastl::string pcb_path;
+        eastl::string dirpath;
+        if (dirfd == AT_FDCWD)
+        {
+            pen = proc::k_pm.get_cur_pcb()->_cwd;
+            base_dentry = pen; // 保存原始的工作目录 dentry
+            while (pen != nullptr)
+            {
+                pcb_path = pen->rName() + "/" + pcb_path;
+                pen = pen->getParent();
+            }
+            pcb_path = pcb_path.substr(1, pcb_path.size() - 1);
+        }
+        else
+        {
+            fs::file *ofile = proc::k_pm.get_cur_pcb()->_ofile[dirfd];
+            if (ofile->_attrs.filetype != fs::FileTypes::FT_NORMAL)
+            {
+                return -1; // 不是普通文件类型
+            }
+            pen = static_cast<fs::normal_file *>(ofile)->getDentry();
+            base_dentry = pen; // 保存原始的文件 dentry
+            while (pen != nullptr)
+            {
+                pcb_path = pen->rName() + "/" + pcb_path;
+                pen = pen->getParent();
+            }
+            pcb_path = pcb_path.substr(1, pcb_path.size() - 1);
+        }
+        dirpath = pcb_path;
+
+        // 使用 fs::Path 来生成绝对路径
+        fs::Path path_resolver(dirpath, base_dentry);
+
+        eastl::string absolute_path = path_resolver.AbsolutePath();
+
+        [[maybe_unused]] int _flags = 0;
+        // if( ( _mode & ( R_OK | X_OK )) && ( _mode & W_OK ) )
+        // 	flags = 6;    	//O_RDWR;
+        // else if( _mode & W_OK )
+        // 	flags = 2;		//O_WRONLY + 1;
+        // else if( _mode & ( R_OK | X_OK ))
+        // 	flags = 4		//O_RDONLY + 1;
+
+        if (mode & R_OK)
+            _flags |= 4;
+        if (mode & W_OK)
+            _flags |= 2;
+        if (mode & X_OK)
+            _flags |= 1;
+        int fd = path_resolver.open(fs::FileAttrs(_flags), _flags);
+        if (fd < 0)
+        {
+            return -1;
+        }
+        return 0;
     }
     uint64 SyscallHandler::sys_sysinfo()
     {
