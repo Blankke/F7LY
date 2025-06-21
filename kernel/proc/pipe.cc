@@ -174,7 +174,7 @@ namespace proc
 
 				ch = pop(); // 读取并弹出字符
 
-				printfYellow("Pipe read char: %c\n", ch); // 调试输出读取的字符
+				// printfYellow("Pipe read char: %c\n", ch); // 调试输出读取的字符
 				*(((char *)addr) + i) = ch;				  // 将读取的字符写入用户态缓冲区
 														  // ⚠️注意：这里是直接解引用写入，如果addr是用户态地址，
 														  // 需要确保这个函数运行在内核地址空间能访问用户地址。
