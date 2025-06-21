@@ -20,6 +20,7 @@
 #include "physical_memory_manager.hh"
 #include "virtual_memory_manager.hh"
 #include "vfs/file/normal_file.hh"
+#include "devs/loongarch/disk_driver.hh"
 // in kernelvec.S, calls kerneltrap().
 extern "C" void kernelvec();
 extern "C" void uservec();
@@ -86,7 +87,7 @@ int trap_manager::devintr()
     }
     else if (irq & (1UL << PCIE_IRQ))
     {
-      // TODO: virtio_disk_intr();
+      loongarch::qemu::disk_driver.handle_intr();
     }
     else if (irq)
     {
@@ -258,7 +259,7 @@ void trap_manager::machine_trap()
 // 支持嵌套中断
 void trap_manager::kerneltrap()
 {
-
+  // printf("==kerneltrap==\n");
   // 这些寄存器可能在yield时被修改
   int which_dev = 0;
   uint64 era = r_csr_era();
