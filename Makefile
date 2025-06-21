@@ -198,7 +198,7 @@ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.s
 $(KERNEL_ELF): $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
 	$(LD) $(LDFLAGS) -o $@ $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
 	$(SIZE) $@
-	$(OBJDUMP) -D $@ > kernel.asm
+	# $(OBJDUMP) -D $@ > kernel.asm
 
 # 只有 riscv 架构需要依赖 initcode
 
@@ -214,7 +214,6 @@ $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a:
 
 
 run: build
-	$(info [DEBUG] Starting run target, ARCH=$(ARCH))
 ifeq ($(ARCH),riscv)
 	$(MAKE) run-riscv ARCH=$(ARCH)
 else ifeq ($(ARCH),loongarch)
@@ -256,9 +255,9 @@ run-loongarch:
 
 debug: build
 	@if [ "$(ARCH)" = "riscv" ]; then \
-	$(MAKE) debug-riscv; \
+	$(MAKE) debug-riscv ARCH=$(ARCH);\
 	elif [ "$(ARCH)" = "loongarch" ]; then \
-		$(MAKE) debug-loongarch; \
+		$(MAKE) debug-loongarch ARCH=$(ARCH); \
 	fi
 
 debug-riscv:
