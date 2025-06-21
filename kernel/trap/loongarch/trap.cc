@@ -52,7 +52,6 @@ void trap_manager::inithart()
   w_csr_tlbrentry((uint64)handle_tlbr);
   w_csr_merrentry((uint64)handle_merr);
   intr_on();
-
 }
 
 // 处理外部中断和软件中断
@@ -174,11 +173,10 @@ void trap_manager::usertrap()
 
   else if (((r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x1 || (r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x2))
   {
-
-        uint64 fault_va = r_csr_badv();
+    uint64 fault_va = r_csr_badv();
     if (PGROUNDUP(p->_trapframe->sp) - 1 < fault_va && fault_va < p->_sz)
     {
-      if (mmap_handler(r_csr_badv(),  (r_csr_estat() & CSR_ESTAT_ECODE) >> 16) != 0)
+      if (mmap_handler(r_csr_badv(), (r_csr_estat() & CSR_ESTAT_ECODE) >> 16) != 0)
         p->_killed = 1;
     }
     else
@@ -211,7 +209,7 @@ void trap_manager::usertrap()
   }
   TODO(信号处理)
   // printfRed("信号处理未实现\n");
-  // handle_signal(); 
+  // handle_signal();
   usertrapret();
 }
 
@@ -240,8 +238,6 @@ void trap_manager::usertrapret(void)
   x |= PRMD_PPLV; // set PPLV to 3 for user mode
   x |= PRMD_PIE;  // enable interrupts in user mode
   w_csr_prmd(x);
-
-
 
   // set S Exception Program Counter to the saved user pc.
   w_csr_era(p->_trapframe->era);
@@ -308,7 +304,6 @@ void trap_manager::kerneltrap()
   // so restore trap registers for use by kernelvec.S's sepc instruction.
   w_csr_era(era);
   w_csr_prmd(prmd);
-
 }
 int mmap_handler(uint64 va, int cause)
 {
@@ -332,7 +327,7 @@ int mmap_handler(uint64 va, int cause)
     pte_flags |= PTE_W;
   if (!(p->_vm[i].prot & PROT_EXEC))
     pte_flags |= PTE_NX;
-  
+
   fs::normal_file *vf = p->_vm[i].vfile;
 
   void *pa = mem::k_pmm.alloc_page();
@@ -342,40 +337,48 @@ int mmap_handler(uint64 va, int cause)
   memset(pa, 0, PGSIZE);
 
   // 读取文件内容
-  fs::dentry *den = vf->getDentry();
-  if (den == nullptr)
+  if (vf == nullptr || p->_vm[i].vfd == -1)
   {
-    printfRed("mmap_handler: dentry is null\n");
-    mem::k_pmm.free_page(pa);
-    return -1; // dentry is null
+    // 匿名映射：页面已经初始化为0，直接映射即可
+    printfCyan("mmap_handler: handling anonymous mapping at %p\n", va);
   }
-  fs::Inode *inode = den->getNode();
-  if (inode == nullptr)
+  else
   {
-    printfRed("mmap_handler: inode is null\n");
-    mem::k_pmm.free_page(pa);
-    return -1; // inode is null
+    fs::dentry *den = vf->getDentry();
+    if (den == nullptr)
+    {
+      printfRed("mmap_handler: dentry is null\n");
+      mem::k_pmm.free_page(pa);
+      return -1; // dentry is null
+    }
+    fs::Inode *inode = den->getNode();
+    if (inode == nullptr)
+    {
+      printfRed("mmap_handler: inode is null\n");
+      mem::k_pmm.free_page(pa);
+      return -1; // inode is null
+    }
+
+    inode->_lock.acquire(); // 锁定inode，防止其他线程修改
+
+    // 计算当前页面读取文件的偏移量，实验中p->_vm[i].offset总是0
+    // 要按顺序读读取，例如内存页面A,B和文件块a,b
+    // 则A读取a，B读取b，而不能A读取b，B读取a
+    int offset = p->_vm[i].offset + PGROUNDDOWN(va - p->_vm[i].addr);
+    ///@details 原本的xv6的readi函数有一个标志位来区分是否读到内核中，此处位于内核里
+    /// pa直接是物理地址，所以应该无所谓
+    int readbytes = inode->nodeRead((uint64)pa, offset, PGSIZE);
+
+    // 什么都没有读到
+    if (readbytes == 0)
+    {
+      printfRed("mmap_handler: read nothing");
+      inode->_lock.release();
+      mem::k_pmm.free_page(pa);
+      return -1;
+    }
+    inode->_lock.release(); // 释放inode锁
   }
-
-  inode->_lock.acquire(); // 锁定inode，防止其他线程修改
-
-  // 计算当前页面读取文件的偏移量，实验中p->_vm[i].offset总是0
-  // 要按顺序读读取，例如内存页面A,B和文件块a,b
-  // 则A读取a，B读取b，而不能A读取b，B读取a
-  int offset = p->_vm[i].offset + PGROUNDDOWN(va - p->_vm[i].addr);
-  ///@details 原本的xv6的readi函数有一个标志位来区分是否读到内核中，此处位于内核里
-  /// pa直接是物理地址，所以应该无所谓
-  int readbytes = inode->nodeRead((uint64)pa, offset, PGSIZE);
-
-  // 什么都没有读到
-  if (readbytes == 0)
-  {
-    printfRed("mmap_handler: read nothing");
-    inode->_lock.release();
-    mem::k_pmm.free_page(pa);
-    return -1;
-  }
-  inode->_lock.release(); // 释放inode锁
   // 添加页面映射
   if (mem::k_vmm.map_pages(*p->get_pagetable(), PGROUNDDOWN(va), PGSIZE, (uint64)pa, pte_flags) != 1)
   {
