@@ -452,7 +452,7 @@ namespace syscall
         // 添加调试打印，显示读取到的内容
         k_buf[ret] = '\0'; // 确保字符串以null结尾
         printfCyan("[sys_read] fd=%d, read %d bytes: \"%s\"\n", fd, ret, k_buf);
-        
+
         if (mem::k_vmm.copy_out(*pt, buf, k_buf, ret) < 0)
             return -7;
 
@@ -2060,7 +2060,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_getegid()
     {
-        panic("未实现该系统调用");
+        return 1;
     }
     uint64 SyscallHandler::sys_shmget()
     {

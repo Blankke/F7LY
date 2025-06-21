@@ -179,7 +179,7 @@ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.s
 $(KERNEL_ELF): $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
 	$(LD) $(LDFLAGS) -o $@ $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
 	$(SIZE) $@
-	$(OBJDUMP) -D $@ > kernel.asm
+	# $(OBJDUMP) -D $@ > kernel.asm
 
 # 只有 riscv 架构需要依赖 initcode
 
@@ -305,7 +305,7 @@ endif
 # 生成二进制 initcode 文件 + 反汇编
 $(INITCODE_BIN): $(INITCODE_ELF)
 	$(OBJCOPY) -S -O binary $< $@
-	$(OBJDUMP_INITCODE) $@ > user/disasm_initcode.asm
+	# $(OBJDUMP_INITCODE) $@ > user/disasm_initcode.asm
 
 
 clean:

@@ -20,6 +20,7 @@ namespace proc
 	{
 		int Pipe::write(uint64 addr, int n)
 		{
+			printfRed("write pipe file\n");
 			int i = 0;
 			Pcb *pr = k_pm.get_cur_pcb(); // 获取当前进程的 PCB 指针
 
@@ -54,11 +55,18 @@ namespace proc
 					// 从用户空间地址 addr + i 拷贝一个字节到内核空间的 ch 中
 					if (mem::k_vmm.copy_in(*pt, &ch, addr + i, 1) == -1)
 						break; // 如果拷贝失败（例如地址非法），退出循环
-
+					// printfYellow("Pipe write char: %c\n", ch); // 调试输出写入的字符
 					_data.push(ch); // 将字符写入管道缓冲区
 					i++;			// 写入计数加一
 				}
 			}
+
+			// printf("Pipe buffer: ");
+			// for (auto q = _data; !q.empty(); q.pop())
+			// {
+			// 	printf("%c", q.front());
+			// }
+			// printf("\n");
 
 			// 写完后唤醒读者进程
 			k_pm.wakeup(&_read_sleep);
@@ -73,10 +81,13 @@ namespace proc
 
 			_lock.acquire(); // 获取锁，防止多进程并发写入管道缓冲区
 
+			printfBlue("write_in_kernel buf: %s\n", (char *)addr);
+			printfYellow("write_in_kernel n: %d\n", n);
 			while (i < n) // 写入 n 个字节
 			{
 				if (!_read_is_open || pr->is_killed())
 				{
+					printfRed("Pipe write failed: read end closed or process killed\n");
 					// 如果读端已关闭，或者当前进程被终止，提前退出
 					_lock.release();
 					return -1;
@@ -84,6 +95,7 @@ namespace proc
 
 				if (_data.size() >= pipe_size)
 				{
+					printfRed("Pipe buffer full, cannot write more data\n");
 					// 如果缓冲区已满，则不能继续写入
 					// 唤醒读端（可能已阻塞）
 					k_pm.wakeup(&_read_sleep);
@@ -99,10 +111,20 @@ namespace proc
 					ch = *(char *)(addr + i);
 
 					// 将该字节推入管道缓冲区
+					printfYellow("Pipe write char: %c\n", ch); // 调试输出写入的字符
 					_data.push(ch);
 					i++;
 				}
+				printfBlue(" i: %d\n", i);
+				printfBlue("Pipe buffer size: %d\n", _data.size());
+				printf("Pipe buffer: ");
+				for (auto q = _data; !q.empty(); q.pop())
+				{
+					printf("%c", q.front());
+				}
+				printf("\n");
 			}
+
 
 			// 写完后唤醒读者，防止其继续阻塞
 			k_pm.wakeup(&_read_sleep);
@@ -113,6 +135,12 @@ namespace proc
 
 		int Pipe::read(uint64 addr, int n)
 		{
+			printf("Pipe buffer: ");
+			for (auto q = _data; !q.empty(); q.pop())
+			{
+				printf("%c", q.front());
+			}
+			printf("\n");
 			// printfMagenta("it is a pipe file\n");
 			int i;
 			Pcb *pr = k_pm.get_cur_pcb(); // 获取当前运行进程的 PCB
@@ -142,6 +170,7 @@ namespace proc
 				ch = _data.front(); // 读取队首的字符
 				_data.pop();		// 弹出该字符（从缓冲区移除）
 
+				printfYellow("Pipe read char: %c\n", ch); // 调试输出读取的字符
 				*(((char *)addr) + i) = ch; // 将读取的字符写入用户态缓冲区
 				// ⚠️注意：这里是直接解引用写入，如果addr是用户态地址，
 				// 需要确保这个函数运行在内核地址空间能访问用户地址。
@@ -158,6 +187,7 @@ namespace proc
 
 		int Pipe::alloc(fs::pipe_file *&f0, fs::pipe_file *&f1)
 		{
+			printfRed("[Pipe::alloc] Allocating pipe files...\n");
 			// if ( ( f0 = fs::k_file_table.alloc_file() ) == nullptr
 			// 	|| ( f1 = fs::k_file_table.alloc_file() ) == nullptr )
 			// 	retur n -1; // allocate file failed

@@ -146,6 +146,11 @@ void Printer::print( const char *fmt, ... )
       for (; *s; s++)
         _console->console_putc(*s);
       break;
+    case 'c': {
+      int ch = va_arg(ap, int);
+      _console->console_putc(ch);
+      break;
+    }
     case '%':
       _console->console_putc('%');
       break;
