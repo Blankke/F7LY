@@ -174,7 +174,6 @@ namespace loongarch
         next:
                 pos = cap.cap_next;
             }
-
             if (virtio_blk_hw->common_cfg == nullptr || virtio_blk_hw->notify_cfg == nullptr ||
                 virtio_blk_hw->device_cfg == nullptr || virtio_blk_hw->isr_cfg == nullptr) {
                 panic("no modern virtio pci device found.\n");

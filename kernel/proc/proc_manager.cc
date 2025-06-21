@@ -301,6 +301,19 @@ namespace proc
         /// TODO:检查这个对不对，这个本来应该在exit的时候解除映射，但是我看都只有
         /// freeproc的时候解除了ofile的映射，所以也在这里接触
         // 将进程的已映射区域取消映射
+        for (int i = 0; i < NVMA; ++i)
+        {
+            if (p->_vm[i].used)
+            {
+                if (p->_vm[i].flags == MAP_SHARED && (p->_vm[i].prot & PROT_WRITE) != 0)
+                {
+                    p->_vm[i].vfile->write(p->_vm[i].addr, p->_vm[i].len);
+                }
+                p->_vm[i].vfile->free_file();
+                mem::k_vmm.vmunmap(*p->get_pagetable(), p->_vm[i].addr, p->_vm[i].len / PGSIZE, 1);
+                p->_vm[i].used = 0;
+            }
+        }
     }
 
     int ProcessManager::get_cur_cpuid()
@@ -841,8 +854,10 @@ namespace proc
         if (!is_page_align(va)) // 如果va不是页对齐的，先读出开头不对齐的部分
         {
             pa = (uint64)pt.walk_addr(va);
+            printf("[load_seg] pa: %p, va: %p\n", pa, va);
 #ifdef LOONGARCH
             pa = to_vir(pa);
+            printf("[load_seg] to vir pa: %p\n", pa);
 #endif
             n = PGROUNDUP(va) - va;
             de->getNode()->nodeRead(pa, offset + i, n);
@@ -1488,7 +1503,7 @@ namespace proc
         else
             ab_path = proc->_cwd_name + path; // 相对路径，添加当前工作目录前缀
 
-        // printfCyan("execve file : %s\n", ab_path.c_str());
+        printfCyan("execve file : %s\n", ab_path.c_str());
 
         // 解析路径并查找文件
         fs::Path path_resolver(ab_path);
@@ -1524,7 +1539,8 @@ namespace proc
         // ========== 第三阶段：加载ELF程序段 ==========
         {
 
-        bool load_bad = false; // 加载失败标志
+            bool load_bad = false;                   // 加载失败标志
+            [[maybe_unused]] uint64 start_vaddr = 0; // 用于记录第一个LOAD段的起始虚拟地址
 
         eastl::string interpreter_path;
         fs::dentry *interp_de = nullptr;
@@ -1551,10 +1567,9 @@ namespace proc
             {
                 // 读取程序头
                 de->getNode()->nodeRead(reinterpret_cast<uint64>(&ph), off, sizeof(ph));
-                // printf("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
-
-                //    i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, ph.flags);
-                // 	// 只处理LOAD类型的程序段
+                printf("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
+                       i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, ph.flags);
+                // 只处理LOAD类型的程序段
                 if (ph.type != elf::elfEnum::ELF_PROG_LOAD)
                     continue;
 
@@ -1592,8 +1607,8 @@ namespace proc
                 if (!(ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ))
                     seg_flag |= PTE_NR; // not readable
 #endif
-                // printfRed("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
-                //   i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, seg_flag);
+                printfRed("execve: loading segment %d, type: %d, startva: %p, endva: %p, memsz: %p, filesz: %p, flags: %d\n", i, ph.type, (void *)ph.vaddr, (void *)(ph.vaddr + ph.memsz), (void *)ph.memsz, (void *)ph.filesz, ph.flags);
+#ifdef RISCV
                 if ((sz1 = mem::k_vmm.vmalloc(new_pt, new_sz, ph.vaddr + ph.memsz, seg_flag)) == 0)
                 {
                     printfRed("execve: uvmalloc\n");
@@ -1601,6 +1616,24 @@ namespace proc
                     break;
                 }
                 new_sz = sz1; // 更新新进程映像的大小
+#elif defined(LOONGARCH)
+                if (start_vaddr == 0 || start_vaddr > ph.vaddr)
+                {
+                    start_vaddr = ph.vaddr;
+                    printf("execve: start_vaddr set to %p\n", (void *)start_vaddr);
+                }
+                // printfRed("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
+                //   i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, seg_flag);
+                if ((sz1 = mem::k_vmm.vmalloc(new_pt, start_vaddr, ph.vaddr + ph.memsz, seg_flag)) == 0)
+                {
+                    printfRed("execve: uvmalloc\n");
+                    load_bad = true;
+                    break;
+                }
+                start_vaddr = sz1;
+                if (sz1 > new_sz)
+                    new_sz = sz1; // 更新新进程映像的大小
+#endif
 
                 // // 用于处理elf文件中给出的段起始地址没有对其到页面首地址的情况(弃用, 我们的load_seg函数已经处理了这个问题)
                 // uint margin_size = 0;
@@ -2026,7 +2059,7 @@ namespace proc
         // printf("execve: new process size: %d, new pagetable: %p\n", proc->_sz, proc->_pt);
         k_pm.proc_freepagetable(old_pt, old_sz);
 
-        printf("execve succeed, new process size: %d\n", proc->_sz);
+        printf("execve succeed, new process size: %p\n", proc->_sz);
 
         return argc; // 返回参数个数，表示成功执行
     }

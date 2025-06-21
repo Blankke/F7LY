@@ -117,6 +117,7 @@ namespace mem
 			return nullptr;
 		}
 		pa = (uint64)pte.pa();
+		pa |= va & (PGSIZE - 1);
 		return (void *)pa;
 	}
 

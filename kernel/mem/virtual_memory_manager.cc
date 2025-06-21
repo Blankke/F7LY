@@ -119,6 +119,7 @@ namespace mem
             pte.set_data(PA2PTE(PGROUNDDOWN(pa)) |
                          flags |
                          loongarch::pte_valid_m);
+            // printfBlue("pa: %p, pte2pa: %p\n", pa, pte.pa());
 #endif
             // printfMagenta("由map_page设置的第三级pte: %p,pte_addr:%p，应该是：%p\n", pte.get_data(), pte.get_data_addr(), riscv::virt_to_phy_address(pa));
             // if (pte.get_data_addr() == (uint64*)a)
@@ -186,6 +187,8 @@ namespace mem
                 vmdealloc(pt, a, old_sz);
                 return 0;
             }
+            // printf("[vmalloc] pt mapping %p", pt.walk_addr(a));;
+            // printfCyan("[vmalloc] Successfully mapped VA: %p -> PA: %p\n", a, mem);
         }
         // printfMagenta("vmalloc: old_sz: %p, new_sz: %p\n", old_sz, new_sz);
         return new_sz;
@@ -607,14 +610,14 @@ namespace mem
             mem = k_pmm.alloc_page();
             if (mem == 0)
             {
-                printfCyan("[vmalloc] alloc page failed, oldsz: %p, newsz: %p\n", oldsz, newsz);
+                // printfCyan("[vmalloc] alloc page failed, oldsz: %p, newsz: %p\n", oldsz, newsz);
                 uvmdealloc(pt, a, oldsz);
                 return 0;
             }
             memset(mem, 0, PGSIZE);
             if (map_pages(pt, a, PGSIZE, (uint64)mem, flags) == 0)
             {
-                printfCyan("[vmalloc] map page failed, oldsz: %p, newsz: %p\n", oldsz, newsz);
+                // printfCyan("[vmalloc] map page failed, oldsz: %p, newsz: %p\n", oldsz, newsz);
                 k_pmm.free_page(mem);
                 uvmdealloc(pt, a, oldsz);
                 return 0;
