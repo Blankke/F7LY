@@ -2,6 +2,7 @@ EASTL_DIR := thirdparty/EASTL
 # ===== 架构选择 =====
 ARCH ?= riscv
 KERNEL_PREFIX=`pwd`
+DIS_PRINTF ?= 0
 
 # 检查是否通过目标名称指定架构
 ifneq (,$(filter l loongarch,$(MAKECMDGOALS)))
@@ -28,6 +29,10 @@ else ifeq ($(ARCH),loongarch)
   QEMU_CMD := qemu-system-loongarch64 -machine virt -cpu la464-loongarch-cpu
 else
   $(error 不支持的架构: $(ARCH)，请使用 make riscv 或 make loongarch)
+endif
+
+ifeq ($(DIS_PRINTF),1)
+  ARCH_CFLAGS += -DDIS_PRINTF
 endif
 
 # ===== 工具链配置 =====
@@ -198,7 +203,7 @@ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.s
 $(KERNEL_ELF): $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
 	$(LD) $(LDFLAGS) -o $@ $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
 	$(SIZE) $@
-	# $(OBJDUMP) -D $@ > kernel.asm
+	$(OBJDUMP) -D $@ > kernel.asm
 
 # 只有 riscv 架构需要依赖 initcode
 
@@ -283,6 +288,10 @@ debug-loongarch:
 	    -m 1G \
 	    -nographic \
 	    -smp 1 \
+		-drive file=$(KERNEL_PREFIX)/sdcard-la.img,if=none,format=raw,id=x0 \
+		-device virtio-blk-pci,drive=x0 \
+		-no-reboot \
+		-rtc base=utc \
 	    -S -gdb tcp::1234;
 
 
