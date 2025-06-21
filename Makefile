@@ -152,7 +152,14 @@ endif
 .PHONY: all clean dirs build riscv loongarch run debug initcode build-la
 
 
+# 根据 ARCH 变量选择默认目标
+ifeq ($(ARCH),riscv)
+all: build
+else ifeq ($(ARCH),loongarch)
+all: build-la
+else
 all: riscv
+endif
 
 riscv:
 	@$(MAKE) ARCH=riscv build
@@ -207,10 +214,11 @@ $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a:
 
 
 run: build
+	$(info [DEBUG] Starting run target, ARCH=$(ARCH))
 ifeq ($(ARCH),riscv)
-	$(MAKE) run-riscv
+	$(MAKE) run-riscv ARCH=$(ARCH)
 else ifeq ($(ARCH),loongarch)
-	$(MAKE) run-loongarch
+	$(MAKE) run-loongarch ARCH=$(ARCH)
 else
 	$(error Unsupported ARCH=$(ARCH))
 endif
