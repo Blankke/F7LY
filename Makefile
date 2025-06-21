@@ -3,6 +3,18 @@ EASTL_DIR := thirdparty/EASTL
 ARCH ?= riscv
 KERNEL_PREFIX=`pwd`
 
+# 检查是否通过目标名称指定架构
+ifneq (,$(filter l loongarch,$(MAKECMDGOALS)))
+  ARCH := loongarch
+endif
+ifneq (,$(filter r riscv,$(MAKECMDGOALS)))
+  ARCH := riscv
+endif
+
+# 架构别名目标（这些目标不执行任何操作，仅用于设置 ARCH 变量）
+r riscv l loongarch:
+    @:
+
 
 ifeq ($(ARCH),riscv)
   CROSS_COMPILE := riscv64-linux-gnu-
