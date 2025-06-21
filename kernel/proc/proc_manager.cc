@@ -227,6 +227,45 @@ namespace proc
 
     void ProcessManager::freeproc(Pcb *p)
     {
+        for (int i = 0; i < NVMA; ++i)
+        {
+            // printfBlue("freeproc: checking vma %d, addr: %p, len: %d,used:%d\n", i, p->_vm[i].addr, p->_vm[i].len,p->_vm[i].used);
+            if (p->_vm[i].used)
+            {
+
+                // 只对文件映射进行写回操作
+                if (p->_vm[i].vfile != nullptr && p->_vm[i].flags == MAP_SHARED && (p->_vm[i].prot & PROT_WRITE) != 0)
+                {
+                    p->_vm[i].vfile->write(p->_vm[i].addr, p->_vm[i].len);
+                }
+
+                // 只对文件映射释放文件引用
+                if (p->_vm[i].vfile != nullptr)
+                {
+                    p->_vm[i].vfile->free_file();
+                }
+                // 修复vmunmap调用：逐页检查并取消映射
+
+                uint64 va_start = PGROUNDDOWN(p->_vm[i].addr);
+                uint64 va_end = PGROUNDUP(p->_vm[i].addr + p->_vm[i].len);
+                // printfMagenta("freeproc: unmapping vma %d, addr: %p, len: %d\n", i, p->_vm[i].addr, p->_vm[i].len);
+                // uint64 npages = (va_end - va_start) / PGSIZE;
+
+                // 逐页检查并取消映射，避免对未映射的页面进行操作
+                for (uint64 va = va_start; va < va_end; va += PGSIZE)
+                {
+                    mem::Pte pte = p->_pt.walk(va, 0);
+                    // printfCyan("freeproc: checking pte for va %p, pte: %p\n", va, pte.get_data());
+                    if (!pte.is_null() && pte.is_valid())
+                    {
+                        // 只对实际映射的页面进行取消映射
+                        mem::k_vmm.vmunmap(*p->get_pagetable(), va, 1, 1);
+                    }
+                }
+                p->_vm[i].used = 0;
+            }
+        }
+
         if (p->_trapframe)
             mem::k_pmm.free_page(p->_trapframe);
         p->_trapframe = 0;
@@ -253,27 +292,15 @@ namespace proc
         }
         for (int i = 0; i < ipc::signal::SIGRTMAX; ++i)
         {
-            if(p->_sigactions[i] != nullptr){
+            if (p->_sigactions[i] != nullptr)
+            {
                 delete p->_sigactions[i];
                 p->_sigactions[i] = nullptr;
             }
         }
-            /// TODO:检查这个对不对，这个本来应该在exit的时候解除映射，但是我看都只有
-            /// freeproc的时候解除了ofile的映射，所以也在这里接触
-            // 将进程的已映射区域取消映射
-            for (int i = 0; i < NVMA; ++i)
-            {
-                if (p->_vm[i].used)
-                {
-                    if (p->_vm[i].flags == MAP_SHARED && (p->_vm[i].prot & PROT_WRITE) != 0)
-                    {
-                        p->_vm[i].vfile->write(p->_vm[i].addr, p->_vm[i].len);
-                    }
-                    p->_vm[i].vfile->free_file();
-                    mem::k_vmm.vmunmap(*p->get_pagetable(), p->_vm[i].addr, p->_vm[i].len / PGSIZE, 1);
-                    p->_vm[i].used = 0;
-                }
-            }
+        /// TODO:检查这个对不对，这个本来应该在exit的时候解除映射，但是我看都只有
+        /// freeproc的时候解除了ofile的映射，所以也在这里接触
+        // 将进程的已映射区域取消映射
     }
 
     int ProcessManager::get_cur_cpuid()
@@ -634,7 +661,11 @@ namespace proc
             if (p->_vm[i].used)
             {
                 memmove(&np->_vm[i], &p->_vm[i], sizeof(p->_vm[i]));
-                p->_vm[i].vfile->dup(); // 增加引用计数
+                // 只对文件映射增加引用计数
+                if (p->_vm[i].vfile != nullptr)
+                {
+                    p->_vm[i].vfile->dup(); // 增加引用计数
+                }
             }
         }
 
@@ -1196,13 +1227,15 @@ namespace proc
     void *ProcessManager::mmap(void *addr, int length, int prot, int flags, int fd, int offset)
     {
         uint64 err = 0xffffffffffffffff;
-
-        fs::normal_file *vfile;
+        fs::normal_file *vfile = nullptr;
         fs::file *f;
         Pcb *p = get_cur_pcb();
         if (fd == -1)
         {
-            f = nullptr; // 添加匿名映射支持
+            f = nullptr; // 匿名映射
+            // 对于匿名映射，创建一个特殊的vfile标记
+            // 我们可以使用nullptr，或者创建一个特殊的匿名文件对象
+            vfile = nullptr; // 匿名映射使用nullptr作为vfile
         }
         else if (p->_ofile[fd] == nullptr)
         {
@@ -1211,9 +1244,6 @@ namespace proc
         else
         {
             f = p->_ofile[fd];
-        }
-        if (f != NULL)
-        {
             if (f->_attrs.filetype != fs::FileTypes::FT_NORMAL)
                 return (void *)err;                    // 只支持普通文件映射
             vfile = static_cast<fs::normal_file *>(f); // 强制转换为普通文件类型
@@ -1223,6 +1253,7 @@ namespace proc
         // get dentry from file
         //  fs::dentry *de = vfile->getDentry();
         //  if(de ==nullptr)   return (void *)err; // dentry is null
+
         if (p->_sz + length > MAXVA - PGSIZE) // 我写得maxva-pgsize是trampoline的地址
             return (void *)err;               // 超出最大虚拟地址空间
 
@@ -1230,12 +1261,15 @@ namespace proc
         {
             length = 10 * PGSIZE; // 默认映射10页
         }
-        if (f == NULL)
-        { // 匿名映射处理
-            uint64 new_addr = p->_sz;
-            growproc(length);
-            return (void *)new_addr;
-        }
+
+        // if (f == NULL)
+        // { // 匿名映射处理
+
+        //     uint64 new_addr = p->_sz;
+        //     growproc(length);
+        //     printfYellow("[mmap] anonymous mapping at %p, length: %p\n", (void *)new_addr, length);
+        //     return (void *)new_addr;
+        // }
         for (int i = 0; i < NVMA; ++i)
         {
             if (p->_vm[i].used == 0) // 找到一个空闲的虚拟内存区域
@@ -1245,11 +1279,25 @@ namespace proc
                 p->_vm[i].len = length;
                 p->_vm[i].flags = flags;
                 p->_vm[i].prot = prot;
-                p->_vm[i].vfile = vfile;
-                p->_vm[i].vfd = fd;
+                p->_vm[i].vfile = vfile; // 对于匿名映射，这里是nullptr
+                p->_vm[i].vfd = fd;      // 对于匿名映射，这里是-1
                 p->_vm[i].offset = offset;
 
-                vfile->dup();                  // 增加文件引用计数
+                if (fd == -1)
+                {
+                    // 匿名映射
+                    growproc(length);
+                    // printfCyan("[mmap] anonymous mapping at %p, length: %d, prot: %d, flags: %d\n",
+                    //            (void *)p->_vm[i].addr, length, prot, flags);
+                }
+                else
+                {
+                    // 文件映射
+                    printfCyan("[mmap] file mapping at %p, length: %d, prot: %d, flags: %d, fd: %d\n",
+                               (void *)p->_vm[i].addr, length, prot, flags, fd);
+                    vfile->dup(); // 只对文件映射增加引用计数
+                }
+
                 p->_sz += length;              // 扩展进程的虚拟内存空间
                 return (void *)p->_vm[i].addr; // 返回映射的虚拟地址
             }
@@ -1303,7 +1351,11 @@ namespace proc
             /// TODO:此处我没找到对应xv6的fileclose，找了个最类似的函数用上
             /// 也许这个free_file()是对的
             /// commented by @gkq
-            p->_vm[i].vfile->free_file();
+            // 只对文件映射释放文件引用
+            if (p->_vm[i].vfile != nullptr)
+            {
+                p->_vm[i].vfile->free_file();
+            }
             p->_vm[i].used = 0;
         }
 
@@ -1528,8 +1580,6 @@ namespace proc
                 }
                 new_sz = sz1; // 更新新进程映像的大小
 
-
-
                 // // 用于处理elf文件中给出的段起始地址没有对其到页面首地址的情况(弃用, 我们的load_seg函数已经处理了这个问题)
                 // uint margin_size = 0;
                 // if ((ph.vaddr % PGSIZE) != 0)
@@ -1544,7 +1594,6 @@ namespace proc
                     load_bad = true;
                     break;
                 }
-
             }
             // 如果加载过程中出错，清理已分配的资源
             if (load_bad)
@@ -1669,7 +1718,7 @@ namespace proc
         // 2. 压入环境变量字符串
         uint64 uenvp[MAXARG];
         uint64 envc;
-            // printfCyan("execve: envs size: %d\n", envs.size());
+        // printfCyan("execve: envs size: %d\n", envs.size());
         for (envc = 0; envc < envs.size(); envc++)
         {
             if (envc >= MAXARG)
@@ -1762,7 +1811,7 @@ namespace proc
         }
         // 5. 压入环境变量指针数组（envp）
         // if (uenvp[0]) // 就算没有环境变量， 也要压入一个空指针
-        { 
+        {
             sp -= (envc + 1) * sizeof(uint64); // 为envp数组预留空间
             sp -= sp % 16;                     // 对齐到16字节
             if (sp < stackbase + PGSIZE)
@@ -1803,7 +1852,7 @@ namespace proc
             //     printf("[execve] argv_ptr[%d] = 0x%p -> \"%s\"\n", i, uargv[i], argv[i].c_str());
             // }
         }
-        
+
         proc->_trapframe->a1 = sp; // 设置argv指针到trapframe
 
         // 7. 压入参数个数（argc）

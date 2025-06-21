@@ -220,6 +220,7 @@ void trap_manager::usertrap()
     TODO("pagefault_handler");
     ///@brief 此处处理mmap的缺页异常
     uint64 fault_va = r_stval();
+    // printfRed("p->_trapframe->sp: %p,printf fault_va:%p, p->_sz:%p\n", PGROUNDUP(p->_trapframe->sp) - 1,fault_va,p->_sz);
     if (PGROUNDUP(p->_trapframe->sp) - 1 < fault_va && fault_va < p->_sz)
     {
       if (mmap_handler(r_stval(), cause) != 0)
@@ -341,41 +342,52 @@ int mmap_handler(uint64 va, int cause)
     return -1;
   memset(pa, 0, PGSIZE);
 
-  // 读取文件内容
-  fs::dentry *den = vf->getDentry();
-  if (den == nullptr)
+  // 检查是否为匿名映射
+  if (vf == nullptr || p->_vm[i].vfd == -1)
   {
-    printfRed("mmap_handler: dentry is null\n");
-    mem::k_pmm.free_page(pa);
-    return -1; // dentry is null
+    // 匿名映射：页面已经初始化为0，直接映射即可
+    printfCyan("mmap_handler: handling anonymous mapping at %p\n", va);
   }
-  fs::Inode *inode = den->getNode();
-  if (inode == nullptr)
+  else
   {
-    printfRed("mmap_handler: inode is null\n");
-    mem::k_pmm.free_page(pa);
-    return -1; // inode is null
+    // 文件映射：需要从文件读取内容
+    fs::dentry *den = vf->getDentry();
+    if (den == nullptr)
+    {
+      printfRed("mmap_handler: dentry is null\n");
+      mem::k_pmm.free_page(pa);
+      return -1; // dentry is null
+    }
+    fs::Inode *inode = den->getNode();
+    if (inode == nullptr)
+    {
+      printfRed("mmap_handler: inode is null\n");
+      mem::k_pmm.free_page(pa);
+      return -1; // inode is null
+    }
+
+    inode->_lock.acquire(); // 锁定inode，防止其他线程修改
+
+    // 计算当前页面读取文件的偏移量，实验中p->_vm[i].offset总是0
+    // 要按顺序读读取，例如内存页面A,B和文件块a,b
+    // 则A读取a，B读取b，而不能A读取b，B读取a
+    int offset = p->_vm[i].offset + PGROUNDDOWN(va - p->_vm[i].addr);
+    ///@details 原本的xv6的readi函数有一个标志位来区分是否读到内核中，此处位于内核里
+    /// pa直接是物理地址，所以应该无所谓
+    int readbytes = inode->nodeRead((uint64)pa, offset, PGSIZE);
+
+    // 什么都没有读到
+    if (readbytes == 0)
+    {
+      printfRed("mmap_handler: read nothing");
+      inode->_lock.release();
+      mem::k_pmm.free_page(pa);
+      return -1;
+    }
+    inode->_lock.release(); // 释放inode锁
+    printfCyan("mmap_handler: handling file mapping at %p, read %d bytes\n", va, readbytes);
   }
 
-  inode->_lock.acquire(); // 锁定inode，防止其他线程修改
-
-  // 计算当前页面读取文件的偏移量，实验中p->_vm[i].offset总是0
-  // 要按顺序读读取，例如内存页面A,B和文件块a,b
-  // 则A读取a，B读取b，而不能A读取b，B读取a
-  int offset = p->_vm[i].offset + PGROUNDDOWN(va - p->_vm[i].addr);
-  ///@details 原本的xv6的readi函数有一个标志位来区分是否读到内核中，此处位于内核里
-  /// pa直接是物理地址，所以应该无所谓
-  int readbytes = inode->nodeRead((uint64)pa, offset, PGSIZE);
-
-  // 什么都没有读到
-  if (readbytes == 0)
-  {
-    printfRed("mmap_handler: read nothing");
-    inode->_lock.release();
-    mem::k_pmm.free_page(pa);
-    return -1;
-  }
-  inode->_lock.release(); // 释放inode锁
   // 添加页面映射
   if (mem::k_vmm.map_pages(*p->get_pagetable(), PGROUNDDOWN(va), PGSIZE, (uint64)pa, pte_flags) != 1)
   {
