@@ -324,7 +324,7 @@ endif
 # 生成二进制 initcode 文件 + 反汇编
 $(INITCODE_BIN): $(INITCODE_ELF)
 	$(OBJCOPY) -S -O binary $< $@
-	$(OBJDUMP_INITCODE) $@ > user/disasm_initcode.asm
+	# $(OBJDUMP_INITCODE) $@ > user/disasm_initcode.asm
 
 
 clean:

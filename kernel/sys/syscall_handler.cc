@@ -448,11 +448,11 @@ namespace syscall
         
         static int string_length = 0;
         string_length += strlen(k_buf);
-        printf("[sys_read] read %d characters in total\n", string_length);
+        // printf("[sys_read] read %d characters in total\n", string_length);
         // 添加调试打印，显示读取到的内容
         k_buf[ret] = '\0'; // 确保字符串以null结尾
-        printfCyan("[sys_read] fd=%d, read %d bytes: \"%s\"\n", fd, ret, k_buf);
-        
+        // printfCyan("[sys_read] fd=%d, read %d bytes: \"%s\"\n", fd, ret, k_buf);
+
         if (mem::k_vmm.copy_out(*pt, buf, k_buf, ret) < 0)
             return -7;
 
@@ -2060,7 +2060,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_getegid()
     {
-        panic("未实现该系统调用");
+        return 1;
     }
     uint64 SyscallHandler::sys_shmget()
     {

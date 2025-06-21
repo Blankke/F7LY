@@ -83,11 +83,11 @@ int start_shell(void)
     }
     else if (pid == 0)
     {
-        chdir("/mnt/glibc/");
+        chdir("/mnt/musl/");
         char *bb_sh[8] = {0};
         bb_sh[0] = "busybox";
-        bb_sh[1] = "echo";
-        bb_sh[2] = "你好";
+        bb_sh[1] = "sh";
+        bb_sh[2] = "busybox_testcode.sh";
         printf("execve busybox shell\n");
         if (execve("busybox", bb_sh, 0) < 0)
         {

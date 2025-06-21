@@ -20,6 +20,7 @@ namespace proc
 	{
 		int Pipe::write(uint64 addr, int n)
 		{
+			// printfRed("write pipe file\n");
 			int i = 0;
 			Pcb *pr = k_pm.get_cur_pcb(); // 获取当前进程的 PCB 指针
 
@@ -34,7 +35,7 @@ namespace proc
 					return -1;
 				}
 
-				if (_data.size() >= pipe_size)
+				if (_count >= pipe_size)
 				{
 					// 如果管道缓冲区满了，不能继续写入
 					// 唤醒等待读取的进程，让其读走数据
@@ -47,18 +48,23 @@ namespace proc
 				{
 					char ch;
 
-
-
 					mem::PageTable *pt = pr->get_pagetable(); // 获取页表对象的地址（风险点）
 
 					// 从用户空间地址 addr + i 拷贝一个字节到内核空间的 ch 中
 					if (mem::k_vmm.copy_in(*pt, &ch, addr + i, 1) == -1)
 						break; // 如果拷贝失败（例如地址非法），退出循环
-
-					_data.push(ch); // 将字符写入管道缓冲区
+					// // printfYellow("Pipe write char: %c\n", ch); // 调试输出写入的字符
+					push((uint8)ch); // 将字符写入管道缓冲区
 					i++;			// 写入计数加一
 				}
 			}
+
+			// // printf("Pipe buffer: ");
+			// for (auto q = _data; !q.empty(); q.pop())
+			// {
+			// 	// printf("%c", q.front());
+			// }
+			// // printf("\n");
 
 			// 写完后唤醒读者进程
 			k_pm.wakeup(&_read_sleep);
@@ -73,17 +79,21 @@ namespace proc
 
 			_lock.acquire(); // 获取锁，防止多进程并发写入管道缓冲区
 
+			// printfBlue("write_in_kernel buf: %s\n", (char *)addr);
+			// printfYellow("write_in_kernel n: %d\n", n);
 			while (i < n) // 写入 n 个字节
 			{
 				if (!_read_is_open || pr->is_killed())
 				{
+					// printfRed("Pipe write failed: read end closed or process killed\n");
 					// 如果读端已关闭，或者当前进程被终止，提前退出
 					_lock.release();
 					return -1;
 				}
 
-				if (_data.size() >= pipe_size)
+				if (_count >= pipe_size)
 				{
+					// printfRed("Pipe buffer full, cannot write more data\n");
 					// 如果缓冲区已满，则不能继续写入
 					// 唤醒读端（可能已阻塞）
 					k_pm.wakeup(&_read_sleep);
@@ -99,9 +109,26 @@ namespace proc
 					ch = *(char *)(addr + i);
 
 					// 将该字节推入管道缓冲区
-					_data.push(ch);
+					// printf("Pipe write char: %c\n", ch); // 调试输出写入的字符
+
+					// for (auto q = _data; !q.empty(); q.pop())
+					// {
+					// 	// printf("%c", q.front());
+					// }
+					// printf("current queue\n"); // 调试输出写入的字符
+					// printf("pipe size:%d,pipe buffer size: %d\n",pipe_size, _count);
+					push((uint8)ch);
+					// printf("pipe size:%d,pipe buffer size: %d\n",pipe_size, _count);
 					i++;
 				}
+				Info(" i: %d\n", i);
+				Info("Pipe buffer size: %d\n", _count);
+				Info("Pipe buffer: ");
+				// for (auto q = _data; !q.empty(); q.pop())
+				// {
+				// 	// printf("%c", q.front());
+				// }
+				// // printf("\n");
 			}
 
 			// 写完后唤醒读者，防止其继续阻塞
@@ -113,7 +140,13 @@ namespace proc
 
 		int Pipe::read(uint64 addr, int n)
 		{
-			// printfMagenta("it is a pipe file\n");
+			// // printf("Pipe buffer: ");
+			// for (auto q = _data; !q.empty(); q.pop())
+			// {
+			// 	// printf("%c", q.front());
+			// }
+			// // printf("\n");
+			// // printfMagenta("it is a pipe file\n");
 			int i;
 			Pcb *pr = k_pm.get_cur_pcb(); // 获取当前运行进程的 PCB
 			char ch;
@@ -121,7 +154,7 @@ namespace proc
 			_lock.acquire(); // 加锁保护 _data 缓冲区
 
 			// 如果缓冲区为空，且写端还未关闭，当前读者进程必须等待
-			while (_data.size() == 0 && _write_is_open)
+			while (_count == 0 && _write_is_open)
 			{ // DOC: pipe-empty
 				if (pr->is_killed())
 				{
@@ -136,16 +169,16 @@ namespace proc
 			// 退出等待状态后，开始实际读取数据
 			for (i = 0; i < n; i++)
 			{ // DOC: piperead-copy
-				if (_data.size() == 0)
+				if (_count == 0)
 					break; // 如果缓冲区已经没有数据，则提前结束读取
 
-				ch = _data.front(); // 读取队首的字符
-				_data.pop();		// 弹出该字符（从缓冲区移除）
+				ch = pop(); // 读取并弹出字符
 
-				*(((char *)addr) + i) = ch; // 将读取的字符写入用户态缓冲区
-				// ⚠️注意：这里是直接解引用写入，如果addr是用户态地址，
-				// 需要确保这个函数运行在内核地址空间能访问用户地址。
-				// 否则应使用 copy_out 函数，这里可能有安全隐患
+				// printfYellow("Pipe read char: %c\n", ch); // 调试输出读取的字符
+				*(((char *)addr) + i) = ch;				  // 将读取的字符写入用户态缓冲区
+														  // ⚠️注意：这里是直接解引用写入，如果addr是用户态地址，
+														  // 需要确保这个函数运行在内核地址空间能访问用户地址。
+														  // 否则应使用 copy_out 函数，这里可能有安全隐患
 			}
 
 			// 唤醒阻塞在写端的进程，提示缓冲区已有空间
@@ -158,6 +191,7 @@ namespace proc
 
 		int Pipe::alloc(fs::pipe_file *&f0, fs::pipe_file *&f1)
 		{
+			// printfRed("[Pipe::alloc] Allocating pipe files...\n");
 			// if ( ( f0 = fs::k_file_table.alloc_file() ) == nullptr
 			// 	|| ( f1 = fs::k_file_table.alloc_file() ) == nullptr )
 			// 	retur n -1; // allocate file failed
@@ -165,7 +199,9 @@ namespace proc
 			// init pipe
 			_read_is_open = true;
 			_write_is_open = true;
-			_data = eastl::queue<uint8>();
+			_head = 0;
+			_tail = 0;
+			_count = 0;
 
 			// set file
 			fs::FileAttrs attrs = fs::FileAttrs(fs::FileTypes::FT_PIPE, 0771);
