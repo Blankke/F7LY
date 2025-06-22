@@ -340,15 +340,21 @@ int mmap_handler(uint64 va, int cause)
   }
   if (i == proc::NVMA)
     return -1;
-
   int pte_flags = PTE_U;
-  if (p->_vm[i].prot & PROT_READ)
-    pte_flags |= PTE_R;
-  if (p->_vm[i].prot & PROT_WRITE)
-    pte_flags |= PTE_W;
-  if (p->_vm[i].prot & PROT_EXEC)
-    pte_flags |= PTE_X;
-
+  if (p->_vm[i].prot == 0)
+  {
+    pte_flags |= PTE_R | PTE_X;
+    printfYellow("mmap_handler: prot=0 mapping, using minimal permissions\n");
+  }
+  else
+  {
+    if (p->_vm[i].prot & PROT_READ)
+      pte_flags |= PTE_R;
+    if (p->_vm[i].prot & PROT_WRITE)
+      pte_flags |= PTE_W;
+    if (p->_vm[i].prot & PROT_EXEC)
+      pte_flags |= PTE_X;
+  }
   fs::normal_file *vf = p->_vm[i].vfile;
 
   void *pa = mem::k_pmm.alloc_page();

@@ -215,7 +215,7 @@ void trap_manager::usertrap()
 
 void trap_manager::usertrapret(void)
 {
-  // printf("==usertrapret==\n");
+  printfCyan("==usertrapret== pid=%d\n", proc::k_pm.get_cur_pcb()->_pid);
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
 
   intr_off();
@@ -325,11 +325,13 @@ int mmap_handler(uint64 va, int cause)
                va < p->_vm[i].addr + p->_vm[i].max_len)
       {
         // 扩展当前VMA
+        uint64 old_len = p->_vm[i].len;
         uint64 new_len = PGROUNDUP(va - p->_vm[i].addr + PGSIZE);
         if (new_len <= p->_vm[i].max_len)
         {
           p->_vm[i].len = new_len;
-          p->_sz += (new_len - p->_vm[i].len);
+          p->_sz += (new_len - old_len);
+          printfCyan("VMA expanded from %d to %d bytes, p->_sz now %p\n", old_len, new_len, p->_sz);
           break;
         }
       }
@@ -348,13 +350,22 @@ int mmap_handler(uint64 va, int cause)
   //   return 0;
   // }
   // printfCyan("mmap_handler: handling mmap at %p, cause: %d\n", va, cause);
-  int pte_flags = PTE_U | PTE_V | PTE_P | PTE_D | PTE_MAT;
-  if (!(p->_vm[i].prot & PROT_READ))
-    pte_flags |= PTE_NR;
-  if (p->_vm[i].prot & PROT_WRITE)
-    pte_flags |= PTE_W;
-  if (!(p->_vm[i].prot & PROT_EXEC))
-    pte_flags |= PTE_NX;
+  int pte_flags = PTE_U |  PTE_P | PTE_D | PTE_MAT;
+  
+  // 特殊处理 prot=0 的情况
+  if (p->_vm[i].prot == 0) {
+    // 对于 prot=0 的映射，在 LoongArch 上只给予用户态访问权限
+    // 不设置 PTE_NR 和 PTE_NX，使其可读可执行但不可写
+    printfYellow("mmap_handler: prot=0 mapping, using minimal permissions\n");
+  } else {
+    // 正常的权限处理
+    if (!(p->_vm[i].prot & PROT_READ))
+      pte_flags |= PTE_NR;
+    if (p->_vm[i].prot & PROT_WRITE)
+      pte_flags |= PTE_W;
+    if (!(p->_vm[i].prot & PROT_EXEC))
+      pte_flags |= PTE_NX;
+  }
 
   fs::normal_file *vf = p->_vm[i].vfile;
 
@@ -409,13 +420,17 @@ int mmap_handler(uint64 va, int cause)
   }
   // 添加页面映射
   printfCyan("mmap_handler: mapping page at %p to %p with flags %p\n", va, pa, pte_flags);
-  if (mem::k_vmm.map_pages(*p->get_pagetable(), PGROUNDDOWN(va), PGSIZE, (uint64)pa, pte_flags | PTE_W) != 1)
+  if (mem::k_vmm.map_pages(*p->get_pagetable(), PGROUNDDOWN(va), PGSIZE, (uint64)pa, pte_flags) != 1)
   {
     printfRed("mmap_handler: map failed");
     mem::k_pmm.free_page(pa);
     return -1;
   }
 
+  // 在 LoongArch 上刷新 TLB
+  asm volatile("invtlb 0x5, $zero, %0" : : "r"(PGROUNDDOWN(va)) : "memory");
+  
+  // printfCyan("mmap_handler: successfully mapped and returning\n");
   return 0;
 }
 #endif

@@ -1244,6 +1244,8 @@ namespace proc
     /// @return
     void *ProcessManager::mmap(void *addr, int length, int prot, int flags, int fd, int offset)
     {
+        printfYellow("[mmap] addr: %p, length: %d, prot: %d, flags: %d, fd: %d, offset: %d\n",
+               addr, length, prot, flags, fd, offset);
         uint64 err = 0xffffffffffffffff;
         fs::normal_file *vfile = nullptr;
         fs::file *f;
@@ -1275,25 +1277,29 @@ namespace proc
         if (p->_sz + length > MAXVA - PGSIZE) // 我写得maxva-pgsize是trampoline的地址
             return (void *)err;               // 超出最大虚拟地址空间
 
-        if (length == 0)
-        {
-            length = 10 * PGSIZE; // 默认映射10页
-        }
-
-        // if (f == NULL)
-        // { // 匿名映射处理
-
-        //     uint64 new_addr = p->_sz;
-        //     growproc(length);
-        //     printfYellow("[mmap] anonymous mapping at %p, length: %p\n", (void *)new_addr, length);
-        //     return (void *)new_addr;
+        // if (length == 0)
+        // {
+        //     length = 10 * PGSIZE; // 默认映射10页
         // }
+
+        // MAP_FIXED 的处理应该在 VMA 分配中进行，而不是直接返回地址
+
         for (int i = 0; i < NVMA; ++i)
         {
             if (p->_vm[i].used == 0) // 找到一个空闲的虚拟内存区域
             {
                 p->_vm[i].used = 1;
-                p->_vm[i].addr = p->_sz;
+                
+                // 处理 MAP_FIXED 标志
+                if (flags & MAP_FIXED && addr != nullptr) {
+                    // MAP_FIXED 要求在指定地址进行映射
+                    p->_vm[i].addr = (uint64)addr;
+                    printfCyan("[mmap] MAP_FIXED mapping at specified address %p\n", addr);
+                } else {
+                    // 正常情况下，在进程当前大小之后分配
+                    p->_vm[i].addr = p->_sz;
+                }
+                
                 p->_vm[i].flags = flags;
                 p->_vm[i].prot = prot;
                 p->_vm[i].vfile = vfile; // 对于匿名映射，这里是nullptr
@@ -1307,7 +1313,16 @@ namespace proc
                            (void *)p->_vm[i].addr, length, prot, flags);
                     p->_vm[i].is_expandable = 1;             // 可扩展
                     p->_vm[i].len = MAX(length, 10 * PGSIZE); // 至少10页
-                    p->_vm[i].max_len = MAXVA - p->_sz;      // 设置最大可扩展大小
+                    
+                    if (flags & MAP_FIXED) {
+                        // MAP_FIXED 不扩展最大长度，只能使用指定区域
+                        p->_vm[i].len = length; // 使用指定长度
+                        p->_vm[i].addr =(uint64)addr; 
+                        p->_vm[i].max_len = p->_vm[i].len;
+                        p->_vm[i].is_expandable = 0; // MAP_FIXED 通常不可扩展
+                    } else {
+                        p->_vm[i].max_len = MAXVA - p->_sz;      // 设置最大可扩展大小
+                    }
                 }
                 else
                 {
@@ -1318,7 +1333,16 @@ namespace proc
                     vfile->dup(); // 只对文件映射增加引用计数
                 }
 
-                p->_sz += p->_vm[i].len;       // 扩展进程的虚拟内存空间
+                // 只有非 MAP_FIXED 的映射才更新 p->_sz
+                if (!(flags & MAP_FIXED)) {
+                    p->_sz += p->_vm[i].len;       // 扩展进程的虚拟内存空间
+                } else {
+                    // MAP_FIXED 可能需要更新 p->_sz 为更大的值
+                    uint64 end_addr = p->_vm[i].addr + p->_vm[i].len;
+                    if (end_addr > p->_sz) {
+                        p->_sz = end_addr;
+                    }
+                }
 
                 return (void *)p->_vm[i].addr; // 返回映射的虚拟地址
 
