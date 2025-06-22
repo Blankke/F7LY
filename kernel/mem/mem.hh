@@ -10,3 +10,5 @@
 #define MAP_FILE 0
 #define MAP_SHARED 0x01
 #define MAP_PRIVATE 0X02
+#define MAP_FIXED 0x10 /* Interpret addr exactly.  */
+#define MAP_ANONYMOUS 0x20 /* Don't use a file.  */
