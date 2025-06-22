@@ -783,4 +783,28 @@ namespace mem
         }
 #endif
     }
+
+    int VirtualMemoryManager::protectpages(PageTable &pt, uint64 va, uint64 size, int perm)
+    {
+        uint64 a, last;
+        Pte pte;
+
+        // printf("[protectpages] va: %p, size: %p, perm: %p\n", va, size, perm);
+
+        last = PGROUNDDOWN(va + size - 1);
+
+        for (a = PGROUNDDOWN(va); a != last + PGSIZE; a += PGSIZE)
+        {
+            pte = pt.walk(a, 1);
+            if (pte.is_null())
+                return -1;
+            if (pte.get_data() == 0)
+                break;
+            if (pte.get_data() & PTE_V)
+                pte.set_data(pte.get_data() | perm) ;
+            else
+                pte.set_data(pte.get_data() | PTE_U);
+        }
+        return 0;
+    }
 }

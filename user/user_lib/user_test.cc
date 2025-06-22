@@ -123,7 +123,7 @@ int start_shell(void)
     }
     else if (pid == 0)
     {
-        chdir(musl_dir);
+        chdir(glibc_dir);
         char *bb_sh[8] = {0};
         bb_sh[0] = "busybox";
         bb_sh[1] = "sh";
