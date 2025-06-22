@@ -10,11 +10,8 @@
 // 		out_panic,
 // 	};
 #define panic(info, args...) k_printer.k_panic(__FILE__, __LINE__, info, ##args)
-#ifndef DIS_PRINTF
+
 #define printf(info, args...) k_printer.print(info, ##args)
-#else
-#define printf(info, args...) 
-#endif
 #define assert(expr, detail, args...) ((expr) ? (void)0 : k_printer.assrt(__FILE__, __LINE__, #expr, detail, ##args))
 
 #ifndef COLOR_PRINT

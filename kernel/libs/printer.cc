@@ -70,6 +70,15 @@ void Printer::printptr( uint64 x )
 
 void Printer::print( const char *fmt, ... )
 {
+#ifdef DIS_PRINTF
+  // 当定义了 DIS_PRINTF 宏时，不产生任何输出
+  // 但仍需要处理可变参数以避免潜在问题
+  va_list ap1;
+  va_start(ap1, fmt);
+  va_end(ap1);
+  return;
+#endif
+
   va_list ap;
   int i, c, tmp_locking;
   const char *s;
