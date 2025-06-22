@@ -831,7 +831,7 @@ namespace syscall
         _arg_addr(3, tls);
         _arg_addr(4, ctid);
 
-        if (flags != SIGCHILD && stack != 0)
+        if (flags != SIGCHILD && stack != 0)//TODO: to be cheched
         {
             panic("[SyscallHandler::sys_clone] flags must be SIGCHILD， now flags is %x\n", flags);
         }
