@@ -32,7 +32,47 @@ int run_test(char *test_list)
     return 0;
 }
 
-int basic_test(void)
+int basic_musl_test(void)
+{
+    [[maybe_unused]] int pid;
+    chdir(musl_dir);
+    chdir("basic");
+    run_test("write");
+    run_test("fork");
+    run_test("exit");
+    run_test("wait");
+    run_test("getpid");
+    run_test("getppid");
+    run_test("dup");
+    run_test("dup2");
+    run_test("execve");
+    run_test("getcwd");
+    run_test("gettimeofday");
+    run_test("yield");
+    run_test("sleep");
+    run_test("times");
+    run_test("clone");
+    run_test("brk");
+    run_test("waitpid");
+    run_test("mmap");
+    run_test("fstat");
+    run_test("uname");
+    run_test("openat");
+    run_test("open");
+    run_test("close");
+    run_test("read");
+    run_test("getdents");
+    run_test("mkdir_");
+    run_test("chdir");
+    run_test("mount");
+    run_test("umount");
+    run_test("munmap");
+    run_test("unlink");
+    run_test("pipe");
+    return 0;
+}
+
+int basic_glibc_test(void)
 {
     [[maybe_unused]] int pid;
     chdir(glibc_dir);
@@ -83,7 +123,7 @@ int start_shell(void)
     }
     else if (pid == 0)
     {
-        chdir("/mnt/musl/");
+        chdir(musl_dir);
         char *bb_sh[8] = {0};
         bb_sh[0] = "busybox";
         bb_sh[1] = "sh";
@@ -120,6 +160,38 @@ int busybox_musl_test(void)
         else if (pid == 0)
         {
             chdir(musl_dir);
+            if (execve("busybox", bb_cmds[i], 0) < 0)
+            {
+                printf("execve failed\n");
+                exit(1);
+            }
+            exit(0);
+        }
+        else
+        {
+            int child_exit_state = 33;
+            if (wait(&child_exit_state) < 0)
+                printf("wait fail\n");
+            printf("shell exited with code %d\n", child_exit_state);
+        }
+    }
+    return 0;
+}
+
+int busybox_glibc_test(void)
+{
+    [[maybe_unused]] int pid;
+    for (int i = 0; bb_cmds[i][0] != NULL; i++)
+    {
+        pid = fork();
+        if (pid < 0)
+        {
+            printf("fork failed\n");
+            return -1;
+        }
+        else if (pid == 0)
+        {
+            chdir(glibc_dir);
             if (execve("busybox", bb_cmds[i], 0) < 0)
             {
                 printf("execve failed\n");
