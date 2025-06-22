@@ -662,10 +662,10 @@ r_csr_badi()
   return x;
 }
 
-static inline uint32
+static inline uint64
 r_csr_badv()
 {
-  uint32 x;
+  uint64 x;
   asm volatile("csrrd %0, 0x7" : "=r"(x));
   return x;
 }

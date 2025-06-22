@@ -1303,8 +1303,10 @@ namespace proc
                 if (fd == -1) // 匿名映射
                 {
                     // 设置初始大小为请求大小
+                    printfCyan("[mmap] anonymous mapping at %p, length: %d, prot: %d, flags: %d\n",
+                           (void *)p->_vm[i].addr, length, prot, flags);
                     p->_vm[i].is_expandable = 1;             // 可扩展
-                    p->_vm[i].len = MAX(length, 4 * PGSIZE); // 至少4页
+                    p->_vm[i].len = MAX(length, 10 * PGSIZE); // 至少10页
                     p->_vm[i].max_len = MAXVA - p->_sz;      // 设置最大可扩展大小
                 }
                 else
@@ -1317,7 +1319,9 @@ namespace proc
                 }
 
                 p->_sz += p->_vm[i].len;       // 扩展进程的虚拟内存空间
+
                 return (void *)p->_vm[i].addr; // 返回映射的虚拟地址
+
             }
         }
         return (void *)err;

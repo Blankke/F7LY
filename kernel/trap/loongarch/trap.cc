@@ -174,6 +174,7 @@ void trap_manager::usertrap()
 
   else if (((r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x1 || (r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x2))
   {
+    printfRed("p->_trapframe->sp: %p,fault_va: %p,p->sz:%p\n", p->_trapframe->sp, r_csr_badv(), p->_sz);
     if (mmap_handler(r_csr_badv(), (r_csr_estat() & CSR_ESTAT_ECODE) >> 16) != 0)
     {
       printf("usertrap(): unexpected trapcause %x pid=%d\n", r_csr_estat(), p->_pid);
@@ -188,7 +189,7 @@ void trap_manager::usertrap()
   else
   {
     printf("usertrap(): unexpected trapcause %x pid=%d\n", r_csr_estat(), p->_pid);
-    printf("            era=%p badi=%x\n", r_csr_era(), r_csr_badi());
+    printf("            era=%p badi=%x,badv=%p\n", r_csr_era(), r_csr_badi(), r_csr_badv());
     p->_killed = 1;
   }
 
@@ -315,9 +316,8 @@ int mmap_handler(uint64 va, int cause)
     {
 
       // 检查是否在当前VMA范围内
-      if (va < p->_vm[i].addr + p->_vm[i].len)
+      if (va >= p->_vm[i].addr && va < p->_vm[i].addr + p->_vm[i].len)
       {
-
         break; // 在当前VMA范围内
       }
       // 检查是否可以扩展
@@ -336,9 +336,19 @@ int mmap_handler(uint64 va, int cause)
     }
   }
   if (i == proc::NVMA)
+  {
+    printfRed("mmap_handler: no suitable VMA found for va %p\n", va);
     return -1;
-
-  int pte_flags = PTE_U;
+  }
+  // 检查该页面是否已经映射
+  // mem::Pte existing_pte = p->get_pagetable()->walk(va, false);
+  // if (!existing_pte.is_null() && existing_pte.is_valid())
+  // {
+  //   // 页面已经映射，不需要重复处理
+  //   return 0;
+  // }
+  // printfCyan("mmap_handler: handling mmap at %p, cause: %d\n", va, cause);
+  int pte_flags = PTE_U | PTE_V | PTE_P | PTE_D | PTE_MAT;
   if (!(p->_vm[i].prot & PROT_READ))
     pte_flags |= PTE_NR;
   if (p->_vm[i].prot & PROT_WRITE)
@@ -398,7 +408,8 @@ int mmap_handler(uint64 va, int cause)
     inode->_lock.release(); // 释放inode锁
   }
   // 添加页面映射
-  if (mem::k_vmm.map_pages(*p->get_pagetable(), PGROUNDDOWN(va), PGSIZE, (uint64)pa, pte_flags) != 1)
+  printfCyan("mmap_handler: mapping page at %p to %p with flags %p\n", va, pa, pte_flags);
+  if (mem::k_vmm.map_pages(*p->get_pagetable(), PGROUNDDOWN(va), PGSIZE, (uint64)pa, pte_flags | PTE_W) != 1)
   {
     printfRed("mmap_handler: map failed");
     mem::k_pmm.free_page(pa);

@@ -318,7 +318,7 @@ int mmap_handler(uint64 va, int cause)
     {
 
       // 检查是否在当前VMA范围内
-      if (va < p->_vm[i].addr + p->_vm[i].len)
+      if (va >= p->_vm[i].addr && va < p->_vm[i].addr + p->_vm[i].len)
       {
 
         break; // 在当前VMA范围内

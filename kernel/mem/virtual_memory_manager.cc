@@ -615,7 +615,7 @@ namespace mem
                 return 0;
             }
             memset(mem, 0, PGSIZE);
-            if (map_pages(pt, a, PGSIZE, (uint64)mem, flags) == 0)
+            if (map_pages(pt, a, PGSIZE, (uint64)mem, flags|PTE_U|PTE_D) == 0)
             {
                 // printfCyan("[vmalloc] map page failed, oldsz: %p, newsz: %p\n", oldsz, newsz);
                 k_pmm.free_page(mem);
