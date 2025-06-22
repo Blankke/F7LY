@@ -29,6 +29,7 @@
 #include "proc/pipe.hh"
 #include "proc/signal.hh"
 #include "scheduler.hh"
+#include "mem/mem.hh"
 namespace syscall
 {
     // 创建全局的 SyscallHandler 实例
@@ -2219,7 +2220,36 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_mprotect()
     {
-        panic("未实现该系统调用");
+        // printfRed("[SyscallHandler::sys_mprotect] 未实现该系统调用\n");
+        // return 0;
+        uint64 addr, len;
+        int prot;
+        if (_arg_addr(0, addr) < 0)
+            return -1;
+        if (_arg_addr(1, len) < 0)
+            return -1;
+        if (_arg_int(2, prot) < 0)
+            return -1;
+
+        int perm;
+
+        if (prot & PROT_READ)
+        {
+            perm |= PTE_R;
+        }
+        if (prot & PROT_WRITE)
+        {
+            perm |= PTE_W;
+        }
+        if (prot & PROT_EXEC)
+        {
+            perm |= PTE_X;
+        }
+        if (mem::k_vmm.protectpages(*proc::k_pm.get_cur_pcb()->get_pagetable(), addr, len, perm) < 0)
+        {
+            return -1;
+        }
+        return 0;
     }
     uint64 SyscallHandler::sys_membarrier()
     {

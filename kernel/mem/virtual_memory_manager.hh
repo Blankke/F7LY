@@ -115,8 +115,10 @@ namespace mem
 		uint64 uvmdealloc( PageTable &pt, uint64 oldsz, uint64 newsz );
 
 		void uvmfirst(PageTable &pt, uint64 src, uint64 sz);
-	private:
 
+		int protectpages(PageTable &pt, uint64 va, uint64 size, int perm);
+
+	private:
 	};
 
 	extern VirtualMemoryManager k_vmm;
