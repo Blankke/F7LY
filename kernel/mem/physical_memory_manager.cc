@@ -59,6 +59,7 @@ namespace mem
     {
         
         int x = _buddy->Alloc(0);
+
         if(x == -1)
         {
             panic("[pmm] alloc_page failed");

@@ -3,7 +3,7 @@
 
 #define PAGE_ORDER 10
 #define PGNUM (1 << 15)
-#define BSSIZE 10 //最多支持 2^10 = 1024 页的分配粒度
+#define BSSIZE 40 //最多支持 2^10 = 1024 页的分配粒度
 
 namespace mem {
 

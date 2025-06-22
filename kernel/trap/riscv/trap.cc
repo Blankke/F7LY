@@ -219,14 +219,9 @@ void trap_manager::usertrap()
     // 缺页故障处理
     TODO("pagefault_handler");
     ///@brief 此处处理mmap的缺页异常
-    uint64 fault_va = r_stval();
-    // printfRed("p->_trapframe->sp: %p,printf fault_va:%p, p->_sz:%p\n", PGROUNDUP(p->_trapframe->sp) - 1,fault_va,p->_sz);
-    if (PGROUNDUP(p->_trapframe->sp) - 1 < fault_va && fault_va < p->_sz)
-    {
-      if (mmap_handler(r_stval(), cause) != 0)
-        p->_killed = 1;
-    }
-    else
+    // printfRed("p->_trapframe->sp: %p,printf fault_va:%p, p->_sz:%p\n", PGROUNDUP(p->_trapframe->sp) - 1, fault_va, p->_sz);
+
+    if (mmap_handler(r_stval(), cause) != 0)
     {
       printfRed("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->_pid);
       printfRed("            sepc=%p stval=%p\n", r_sepc(), r_stval());
@@ -315,12 +310,32 @@ int mmap_handler(uint64 va, int cause)
 {
   int i;
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
+
   // 根据地址查找属于哪一个VMA
   for (i = 0; i < proc::NVMA; ++i)
   {
-    if (p->_vm[i].used && p->_vm[i].addr <= va && va <= p->_vm[i].addr + p->_vm[i].len - 1)
+    if (p->_vm[i].used)
     {
-      break;
+
+      // 检查是否在当前VMA范围内
+      if (va < p->_vm[i].addr + p->_vm[i].len)
+      {
+
+        break; // 在当前VMA范围内
+      }
+      // 检查是否可以扩展
+      else if (p->_vm[i].is_expandable &&
+               va < p->_vm[i].addr + p->_vm[i].max_len)
+      {
+        // 扩展当前VMA
+        uint64 new_len = PGROUNDUP(va - p->_vm[i].addr + PGSIZE);
+        if (new_len <= p->_vm[i].max_len)
+        {
+          p->_vm[i].len = new_len;
+          p->_sz += (new_len - p->_vm[i].len);
+          break;
+        }
+      }
     }
   }
   if (i == proc::NVMA)
@@ -337,7 +352,11 @@ int mmap_handler(uint64 va, int cause)
   fs::normal_file *vf = p->_vm[i].vfile;
 
   void *pa = mem::k_pmm.alloc_page();
-
+  if (pa == nullptr)
+  {
+    printfRed("mmap_handler: alloc_page failed\n");
+    return -1; // 分配页面失败
+  }
   if (pa == 0)
     return -1;
   memset(pa, 0, PGSIZE);
@@ -346,7 +365,7 @@ int mmap_handler(uint64 va, int cause)
   if (vf == nullptr || p->_vm[i].vfd == -1)
   {
     // 匿名映射：页面已经初始化为0，直接映射即可
-    printfCyan("mmap_handler: handling anonymous mapping at %p\n", va);
+    // printfCyan("mmap_handler: handling anonymous mapping at %p\n", va);
   }
   else
   {
@@ -385,7 +404,7 @@ int mmap_handler(uint64 va, int cause)
       return -1;
     }
     inode->_lock.release(); // 释放inode锁
-    printfCyan("mmap_handler: handling file mapping at %p, read %d bytes\n", va, readbytes);
+    // printfCyan("mmap_handler: handling file mapping at %p, read %d bytes\n", va, readbytes);
   }
 
   // 添加页面映射

@@ -269,8 +269,11 @@ namespace proc
         if (p->_trapframe)
             mem::k_pmm.free_page(p->_trapframe);
         p->_trapframe = 0;
+
         if (p->_pt.get_base())
+        {
             proc_freepagetable(p->_pt, p->_sz);
+        }
         p->_pt.set_base(0);
         p->_sz = 0;
         p->_pid = 0;
@@ -1291,29 +1294,29 @@ namespace proc
             {
                 p->_vm[i].used = 1;
                 p->_vm[i].addr = p->_sz;
-                p->_vm[i].len = length;
                 p->_vm[i].flags = flags;
                 p->_vm[i].prot = prot;
                 p->_vm[i].vfile = vfile; // 对于匿名映射，这里是nullptr
                 p->_vm[i].vfd = fd;      // 对于匿名映射，这里是-1
                 p->_vm[i].offset = offset;
 
-                if (fd == -1)
+                if (fd == -1) // 匿名映射
                 {
-                    // 匿名映射
-                    growproc(length);
-                    // printfCyan("[mmap] anonymous mapping at %p, length: %d, prot: %d, flags: %d\n",
-                    //            (void *)p->_vm[i].addr, length, prot, flags);
+                    // 设置初始大小为请求大小
+                    p->_vm[i].is_expandable = 1;             // 可扩展
+                    p->_vm[i].len = MAX(length, 4 * PGSIZE); // 至少4页
+                    p->_vm[i].max_len = MAXVA - p->_sz;      // 设置最大可扩展大小
                 }
                 else
                 {
-                    // 文件映射
+                    p->_vm[i].len = length; // 文件映射保持原样
+                    p->_vm[i].max_len = length;
                     printfCyan("[mmap] file mapping at %p, length: %d, prot: %d, flags: %d, fd: %d\n",
                                (void *)p->_vm[i].addr, length, prot, flags, fd);
                     vfile->dup(); // 只对文件映射增加引用计数
                 }
 
-                p->_sz += length;              // 扩展进程的虚拟内存空间
+                p->_sz += p->_vm[i].len;       // 扩展进程的虚拟内存空间
                 return (void *)p->_vm[i].addr; // 返回映射的虚拟地址
             }
         }
@@ -1542,26 +1545,26 @@ namespace proc
             bool load_bad = false;                   // 加载失败标志
             [[maybe_unused]] uint64 start_vaddr = 0; // 用于记录第一个LOAD段的起始虚拟地址
 
-        eastl::string interpreter_path;
-        fs::dentry *interp_de = nullptr;
+            eastl::string interpreter_path;
+            fs::dentry *interp_de = nullptr;
 
-        // 检查程序头中是否有PT_INTERP段
-        for (i = 0, off = elf.phoff; i < elf.phnum; i++, off += sizeof(ph))
-        {
-            de->getNode()->nodeRead(reinterpret_cast<uint64>(&ph), off, sizeof(ph));
-            if (ph.type == elf::elfEnum::ELF_PROG_INTERP) // PT_INTERP = 3
+            // 检查程序头中是否有PT_INTERP段
+            for (i = 0, off = elf.phoff; i < elf.phnum; i++, off += sizeof(ph))
             {
-                is_dynamic = true;
-                // 读取解释器路径
-                char interp_buf[256];
-                de->getNode()->nodeRead(reinterpret_cast<uint64>(interp_buf), ph.off, ph.filesz);
-                interp_buf[ph.filesz] = '\0';
-                interpreter_path = interp_buf;
-                interp_de = de;
-                printfCyan("execve: found dynamic interpreter: %s\n", interpreter_path.c_str());
-                break;
+                de->getNode()->nodeRead(reinterpret_cast<uint64>(&ph), off, sizeof(ph));
+                if (ph.type == elf::elfEnum::ELF_PROG_INTERP) // PT_INTERP = 3
+                {
+                    is_dynamic = true;
+                    // 读取解释器路径
+                    char interp_buf[256];
+                    de->getNode()->nodeRead(reinterpret_cast<uint64>(interp_buf), ph.off, ph.filesz);
+                    interp_buf[ph.filesz] = '\0';
+                    interpreter_path = interp_buf;
+                    interp_de = de;
+                    printfCyan("execve: found dynamic interpreter: %s\n", interpreter_path.c_str());
+                    break;
+                }
             }
-        }
             // 遍历所有程序头，加载LOAD类型的段
             for (i = 0, off = elf.phoff; i < elf.phnum; i++, off += sizeof(ph))
             {
@@ -1658,84 +1661,83 @@ namespace proc
                 return -1;
             }
 
-
-        // 加载动态链接器**
-        elf::elfhdr interp_elf;
-        uint64 interp_base = 0;
-        if (is_dynamic)
-        {
-            if (interp_de == nullptr)
+            // 加载动态链接器**
+            elf::elfhdr interp_elf;
+            uint64 interp_base = 0;
+            if (is_dynamic)
             {
-                printfRed("execve: cannot find dynamic linker: %s\n", interpreter_path.c_str());
-                k_pm.proc_freepagetable(new_pt, new_sz);
-                return -1;
-            }
+                if (interp_de == nullptr)
+                {
+                    printfRed("execve: cannot find dynamic linker: %s\n", interpreter_path.c_str());
+                    k_pm.proc_freepagetable(new_pt, new_sz);
+                    return -1;
+                }
 
-            // 读取动态链接器的ELF头
-            interp_de->getNode()->nodeRead(reinterpret_cast<uint64>(&interp_elf), 0, sizeof(interp_elf));
+                // 读取动态链接器的ELF头
+                interp_de->getNode()->nodeRead(reinterpret_cast<uint64>(&interp_elf), 0, sizeof(interp_elf));
 
-            if (interp_elf.magic != elf::elfEnum::ELF_MAGIC)
-            {
-                printfRed("execve: invalid dynamic linker ELF\n");
-                k_pm.proc_freepagetable(new_pt, new_sz);
-                return -1;
-            }
+                if (interp_elf.magic != elf::elfEnum::ELF_MAGIC)
+                {
+                    printfRed("execve: invalid dynamic linker ELF\n");
+                    k_pm.proc_freepagetable(new_pt, new_sz);
+                    return -1;
+                }
 
-            // 选择动态链接器的加载基址（通常在高地址）
-            interp_base = PGROUNDUP(new_sz); // 在新进程映像的末尾分配空间
+                // 选择动态链接器的加载基址（通常在高地址）
+                interp_base = PGROUNDUP(new_sz); // 在新进程映像的末尾分配空间
 
-            // 加载动态链接器的程序段
-            elf::proghdr interp_ph;
-            for (int j = 0, interp_off = interp_elf.phoff; j < interp_elf.phnum; j++, interp_off += sizeof(interp_ph))
-            {
-                interp_de->getNode()->nodeRead(reinterpret_cast<uint64>(&interp_ph), interp_off, sizeof(interp_ph));
+                // 加载动态链接器的程序段
+                elf::proghdr interp_ph;
+                for (int j = 0, interp_off = interp_elf.phoff; j < interp_elf.phnum; j++, interp_off += sizeof(interp_ph))
+                {
+                    interp_de->getNode()->nodeRead(reinterpret_cast<uint64>(&interp_ph), interp_off, sizeof(interp_ph));
 
-                if (interp_ph.type != elf::elfEnum::ELF_PROG_LOAD)
-                    continue;
+                    if (interp_ph.type != elf::elfEnum::ELF_PROG_LOAD)
+                        continue;
 
-                uint64 load_addr = interp_base + interp_ph.vaddr;
-                uint64 seg_flag = PTE_U;
+                    uint64 load_addr = interp_base + interp_ph.vaddr;
+                    uint64 seg_flag = PTE_U;
 
 #ifdef RISCV
-                if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC)
-                    seg_flag |= riscv::PteEnum::pte_executable_m;
-                if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
-                    seg_flag |= riscv::PteEnum::pte_writable_m;
-                if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ)
-                    seg_flag |= riscv::PteEnum::pte_readable_m;
+                    if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC)
+                        seg_flag |= riscv::PteEnum::pte_executable_m;
+                    if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
+                        seg_flag |= riscv::PteEnum::pte_writable_m;
+                    if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ)
+                        seg_flag |= riscv::PteEnum::pte_readable_m;
 #elif defined(LOONGARCH)
-                seg_flag |= PTE_P | PTE_D | PTE_PLV;
-                if (!(interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC))
-                    seg_flag |= PTE_NX;
-                if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
-                    seg_flag |= PTE_W;
-                if (!(interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ))
-                    seg_flag |= PTE_NR;
+                    seg_flag |= PTE_P | PTE_D | PTE_PLV;
+                    if (!(interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC))
+                        seg_flag |= PTE_NX;
+                    if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
+                        seg_flag |= PTE_W;
+                    if (!(interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ))
+                        seg_flag |= PTE_NR;
 #endif
 
-                uint64 sz1;
-                if ((sz1 = mem::k_vmm.vmalloc(new_pt, new_sz, load_addr + interp_ph.memsz, seg_flag)) == 0)
-                {
-                    printfRed("execve: load dynamic linker failed\n");
-                    k_pm.proc_freepagetable(new_pt, new_sz);
-                    return -1;
-                }
-                new_sz = sz1;
+                    uint64 sz1;
+                    if ((sz1 = mem::k_vmm.vmalloc(new_pt, new_sz, load_addr + interp_ph.memsz, seg_flag)) == 0)
+                    {
+                        printfRed("execve: load dynamic linker failed\n");
+                        k_pm.proc_freepagetable(new_pt, new_sz);
+                        return -1;
+                    }
+                    new_sz = sz1;
 
-                // 加载动态链接器段内容
-                if (load_seg(new_pt, load_addr, interp_de, interp_ph.off, interp_ph.filesz) < 0)
-                {
-                    printfRed("execve: load dynamic linker segment failed\n");
-                    k_pm.proc_freepagetable(new_pt, new_sz);
-                    return -1;
+                    // 加载动态链接器段内容
+                    if (load_seg(new_pt, load_addr, interp_de, interp_ph.off, interp_ph.filesz) < 0)
+                    {
+                        printfRed("execve: load dynamic linker segment failed\n");
+                        k_pm.proc_freepagetable(new_pt, new_sz);
+                        return -1;
+                    }
                 }
+
+                interp_entry = interp_base + interp_elf.entry;
+                printfCyan("execve: dynamic linker loaded at base: %p, entry: %p\n",
+                           (void *)interp_base, (void *)interp_entry);
             }
-
-            interp_entry = interp_base + interp_elf.entry;
-            printfCyan("execve: dynamic linker loaded at base: %p, entry: %p\n",
-                       (void *)interp_base, (void *)interp_entry);
         }
-    }
         TODO(== == == == == 第四阶段：为glibc准备程序头信息 == == == == ==)
         // ================    (已写, 我们抄华科的不用在这里初始化, 直接在下面把数据算出来就可以了)    ========================
 

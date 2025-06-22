@@ -49,14 +49,16 @@ namespace proc
 
     struct vma
     {
-        int used;               // 是否已被使用
-        uint64 addr;            // 起始地址
-        int len;                // 长度
-        int prot;               // 权限
-        int flags;              // 标志位
-        int vfd;                // 对应的文件描述符
+        int used;    // 是否已被使用
+        uint64 addr; // 起始地址
+        int len;     // 长度
+        int prot;    // 权限
+        int flags;   // 标志位
+        int vfd;     // 对应的文件描述符
         ///@todo 此处原本是normal_file *vfile; // 对应的文件，改为fs::file是因为normal_file继承自fs::file
-        fs::normal_file *vfile;      //  对应文件   
-        int offset;             // 文件偏移，本实验中一直为0
+        fs::normal_file *vfile; //  对应文件
+        int offset;             // 文件偏移
+        uint64 max_len;         // 新增：最大可扩展长度
+        bool is_expandable;     // 新增：是否可扩展
     };
 }
