@@ -1428,6 +1428,21 @@ namespace syscall
         if (_arg_addr(3, buf_size) < 0)
             return -1;
 
+        if (path == "/proc/self/exe")
+        {
+            // TODO,出问题再说
+            eastl::string exe_path = proc::k_pm.get_cur_pcb()->_cwd_name + "busybox";
+            char *buffer = (char *)exe_path.c_str();
+            ret = exe_path.size();
+            if (mem::k_vmm.copy_out(*pt, buf, buffer, ret) < 0)
+            {
+                delete[] buffer;
+                return -1;
+            }
+            // 不要 delete buffer，因为它不是 new 出来的
+            return ret;
+        }
+
         if (fd == AT_FDCWD)
             new (&filePath) fs::Path(path, p->_cwd);
         else

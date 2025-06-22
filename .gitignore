@@ -32,3 +32,4 @@ disasm_initcode.asm
 user/initcode-la
 output-la.txt
 output-rv.txt
+disasm_busybox_glibc.asm
