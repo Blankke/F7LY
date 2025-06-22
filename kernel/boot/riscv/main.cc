@@ -55,7 +55,6 @@ void main()
     mem::k_vmm.init("virtual_memory_manager");
     mem::k_hmm.init("heap_memory_manager", HEAP_START);
 
-
     if (dev::k_devm.register_stdin(static_cast<dev::VirtualDevice *>(&dev::k_stdin)) < 0)
         while (1)
             ;
@@ -65,7 +64,7 @@ void main()
     if (dev::k_devm.register_stderr(static_cast<dev::VirtualDevice *>(&dev::k_stderr)) < 0)
         while (1)
             ;
-    
+
     // hardware_secondary_init
     //  2. Disk 初始化 (debug)
     new (&riscv::qemu::disk_driver) riscv::qemu::DiskDriver("Disk");
@@ -78,9 +77,6 @@ void main()
     proc::k_pm.user_init(); // 初始化用户进程
     printfMagenta("user init\n");
 
-    proc::k_scheduler.init("scheduler");
-    proc::k_scheduler.start_schedule(); // 启动调度器
-
     printfMagenta("\n"
                   "╦ ╦╔═╗╦  ╔═╗╔═╗╔╦╗╔═╗\n"
                   "║║║║╣ ║  ║  ║ ║║║║║╣\n"
@@ -89,5 +85,7 @@ void main()
                   "=== SYSTEM BOOT COMPLETE ===\n"
                   "Kernel space successfully initialized\n"); // ANSI Shadow 字体风格
 
+    proc::k_scheduler.init("scheduler");
+    proc::k_scheduler.start_schedule(); // 启动调度器
     sbi_shutdown();
 }

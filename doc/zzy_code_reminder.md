@@ -24,3 +24,6 @@
 
 # wait4
 - 没有写flag的处理逻辑
+
+# open-sbi参考文档
+https://www.cnblogs.com/arnoldlu/p/18170952
