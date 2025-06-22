@@ -857,10 +857,10 @@ namespace proc
         if (!is_page_align(va)) // 如果va不是页对齐的，先读出开头不对齐的部分
         {
             pa = (uint64)pt.walk_addr(va);
-            printf("[load_seg] pa: %p, va: %p\n", pa, va);
+            // printf("[load_seg] pa: %p, va: %p\n", pa, va);
 #ifdef LOONGARCH
             pa = to_vir(pa);
-            printf("[load_seg] to vir pa: %p\n", pa);
+            // printf("[load_seg] to vir pa: %p\n", pa);
 #endif
             n = PGROUNDUP(va) - va;
             de->getNode()->nodeRead(pa, offset + i, n);
@@ -1510,7 +1510,7 @@ namespace proc
         else
             ab_path = proc->_cwd_name + path; // 相对路径，添加当前工作目录前缀
 
-        printfCyan("execve file : %s\n", ab_path.c_str());
+        // printfCyan("execve file : %s\n", ab_path.c_str());
 
         // 解析路径并查找文件
         fs::Path path_resolver(ab_path);
@@ -1574,8 +1574,8 @@ namespace proc
             {
                 // 读取程序头
                 de->getNode()->nodeRead(reinterpret_cast<uint64>(&ph), off, sizeof(ph));
-                printf("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
-                       i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, ph.flags);
+                // printf("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
+                //        i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, ph.flags);
                 // 只处理LOAD类型的程序段
                 if (ph.type != elf::elfEnum::ELF_PROG_LOAD)
                     continue;
@@ -1614,7 +1614,7 @@ namespace proc
                 if (!(ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ))
                     seg_flag |= PTE_NR; // not readable
 #endif
-                printfRed("execve: loading segment %d, type: %d, startva: %p, endva: %p, memsz: %p, filesz: %p, flags: %d\n", i, ph.type, (void *)ph.vaddr, (void *)(ph.vaddr + ph.memsz), (void *)ph.memsz, (void *)ph.filesz, ph.flags);
+                // printfRed("execve: loading segment %d, type: %d, startva: %p, endva: %p, memsz: %p, filesz: %p, flags: %d\n", i, ph.type, (void *)ph.vaddr, (void *)(ph.vaddr + ph.memsz), (void *)ph.memsz, (void *)ph.filesz, ph.flags);
 #ifdef RISCV
                 if ((sz1 = mem::k_vmm.vmalloc(new_pt, new_sz, ph.vaddr + ph.memsz, seg_flag)) == 0)
                 {
@@ -2065,7 +2065,7 @@ namespace proc
         // printf("execve: new process size: %d, new pagetable: %p\n", proc->_sz, proc->_pt);
         k_pm.proc_freepagetable(old_pt, old_sz);
 
-        printf("execve succeed, new process size: %p\n", proc->_sz);
+        // printf("execve succeed, new process size: %p\n", proc->_sz);
 
         return argc; // 返回参数个数，表示成功执行
     }

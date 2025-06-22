@@ -48,8 +48,10 @@ void printf(const char *fmt, ...);
 
 // test函数
 int run_test(char *test_list);
-int basic_test(void);
+int basic_musl_test(void);
+int basic_glibc_test(void);
 int busybox_musl_test(void);
+int busybox_glibc_test(void);
 int libc_musl_test(void);
 int start_shell(void);
 int libcbench_test(void);
