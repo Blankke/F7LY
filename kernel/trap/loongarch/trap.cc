@@ -174,14 +174,12 @@ void trap_manager::usertrap()
 
   else if (((r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x1 || (r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x2))
   {
-    uint64 fault_va = r_csr_badv();
-    if (PGROUNDUP(p->_trapframe->sp) - 1 < fault_va && fault_va < p->_sz)
+    if (mmap_handler(r_csr_badv(), (r_csr_estat() & CSR_ESTAT_ECODE) >> 16) != 0)
     {
-      if (mmap_handler(r_csr_badv(), (r_csr_estat() & CSR_ESTAT_ECODE) >> 16) != 0)
-        p->_killed = 1;
-    }
-    else
+      printf("usertrap(): unexpected trapcause %x pid=%d\n", r_csr_estat(), p->_pid);
+      printf("            era=%p badi=%x\n", r_csr_era(), r_csr_badi());
       p->_killed = 1;
+    }
   }
   else if ((which_dev = devintr()) != 0)
   {
@@ -313,9 +311,28 @@ int mmap_handler(uint64 va, int cause)
   // 根据地址查找属于哪一个VMA
   for (i = 0; i < proc::NVMA; ++i)
   {
-    if (p->_vm[i].used && p->_vm[i].addr <= va && va <= p->_vm[i].addr + p->_vm[i].len - 1)
+    if (p->_vm[i].used)
     {
-      break;
+
+      // 检查是否在当前VMA范围内
+      if (va < p->_vm[i].addr + p->_vm[i].len)
+      {
+
+        break; // 在当前VMA范围内
+      }
+      // 检查是否可以扩展
+      else if (p->_vm[i].is_expandable &&
+               va < p->_vm[i].addr + p->_vm[i].max_len)
+      {
+        // 扩展当前VMA
+        uint64 new_len = PGROUNDUP(va - p->_vm[i].addr + PGSIZE);
+        if (new_len <= p->_vm[i].max_len)
+        {
+          p->_vm[i].len = new_len;
+          p->_sz += (new_len - p->_vm[i].len);
+          break;
+        }
+      }
     }
   }
   if (i == proc::NVMA)
@@ -341,7 +358,7 @@ int mmap_handler(uint64 va, int cause)
   if (vf == nullptr || p->_vm[i].vfd == -1)
   {
     // 匿名映射：页面已经初始化为0，直接映射即可
-    printfCyan("mmap_handler: handling anonymous mapping at %p\n", va);
+    // printfCyan("mmap_handler: handling anonymous mapping at %p\n", va);
   }
   else
   {

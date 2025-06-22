@@ -302,7 +302,7 @@ namespace proc
             }
         }
         /// TODO:检查这个对不对，这个本来应该在exit的时候解除映射，但是我看都只有
-        /// freeproc的时候解除了ofile的映射，所以也在这里接触
+        /// freeproc的时候解除了ofile的映射，所以也在这里解除
         // 将进程的已映射区域取消映射
         for (int i = 0; i < NVMA; ++i)
         {
@@ -1311,8 +1311,8 @@ namespace proc
                 {
                     p->_vm[i].len = length; // 文件映射保持原样
                     p->_vm[i].max_len = length;
-                    printfCyan("[mmap] file mapping at %p, length: %d, prot: %d, flags: %d, fd: %d\n",
-                               (void *)p->_vm[i].addr, length, prot, flags, fd);
+                    // printfCyan("[mmap] file mapping at %p, length: %d, prot: %d, flags: %d, fd: %d\n",
+                    //            (void *)p->_vm[i].addr, length, prot, flags, fd);
                     vfile->dup(); // 只对文件映射增加引用计数
                 }
 
