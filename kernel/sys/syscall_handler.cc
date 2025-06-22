@@ -830,9 +830,10 @@ namespace syscall
         _arg_addr(2, ptid);
         _arg_addr(3, tls);
         _arg_addr(4, ctid);
-        if (flags != SIGCHILD)
+
+        if (flags != SIGCHILD && stack != 0)
         {
-            panic("[SyscallHandler::sys_clone] flags must be SIGCHILD");
+            panic("[SyscallHandler::sys_clone] flags must be SIGCHILD， now flags is %x\n", flags);
         }
         return proc::k_pm.fork(stack);
     }

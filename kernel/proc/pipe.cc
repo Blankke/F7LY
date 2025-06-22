@@ -121,9 +121,9 @@ namespace proc
 					// printf("pipe size:%d,pipe buffer size: %d\n",pipe_size, _count);
 					i++;
 				}
-				Info(" i: %d\n", i);
-				Info("Pipe buffer size: %d\n", _count);
-				Info("Pipe buffer: ");
+				// Info(" i: %d\n", i);
+				// Info("Pipe buffer size: %d\n", _count);
+				// Info("Pipe buffer: ");
 				// for (auto q = _data; !q.empty(); q.pop())
 				// {
 				// 	// printf("%c", q.front());
