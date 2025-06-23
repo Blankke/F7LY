@@ -2217,11 +2217,72 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_pread64()
     {
-        panic("未实现该系统调用");
+        int fd;
+        uint64 buf;
+        uint64 count;
+        int offset;
+        if (_arg_fd(0, &fd, nullptr) < 0 || _arg_addr(1, buf) < 0 ||
+        _arg_addr(2, count) < 0 || _arg_int(3, offset) < 0)
+            return -1;
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        fs::file *f = p->_ofile[fd];
+        if (!f)
+            return -1;
+
+        auto old_off = f->get_file_offset();
+        f->lseek(offset, SEEK_SET);
+
+        char *kbuf = new char[count];
+        long rc = f->read((ulong)kbuf, count, f->get_file_offset(), true);
+        if (rc < 0)
+        {
+            delete[] kbuf;
+            f->lseek(old_off, SEEK_SET);
+            return rc;
+        }
+
+        if (mem::k_vmm.copy_out(*p->get_pagetable(), buf, kbuf, rc) < 0)
+        {
+            delete[] kbuf;
+            f->lseek(old_off, SEEK_SET);
+            return -1;
+        }
+
+        f->lseek(old_off, SEEK_SET);
+        delete[] kbuf;
+        return rc;
     }
     uint64 SyscallHandler::sys_pwrite64()
     {
-        panic("未实现该系统调用");
+        int fd;
+        uint64 buf;
+        uint64 count;
+        int offset;
+        if (_arg_fd(0, &fd, nullptr) < 0 || _arg_addr(1, buf) < 0 ||
+        _arg_addr(2, count) < 0 || _arg_int(3, offset) < 0)
+            return -1;
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        fs::file *f = p->_ofile[fd];
+        if (!f)
+            return -1;
+
+        auto old_off = f->get_file_offset();
+        f->lseek(offset, SEEK_SET);
+
+        char *kbuf = new char[count];
+        if (mem::k_vmm.copy_in(*p->get_pagetable(), kbuf, buf, count) < 0)
+        {
+            delete[] kbuf;
+            f->lseek(old_off, SEEK_SET);
+            return -1;
+        }
+
+        long rc = f->write((ulong)kbuf, count, f->get_file_offset(), true);
+        delete[] kbuf;
+        f->lseek(old_off, SEEK_SET);
+        return rc < 0 ? rc : rc;
     }
     uint64 SyscallHandler::sys_pselect6()
     {
