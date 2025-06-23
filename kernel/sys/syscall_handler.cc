@@ -2015,7 +2015,68 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_readv()
     {
-        panic("未实现该系统调用");
+        fs::file *f;
+        int fd = -1;
+        uint64 iov_ptr;
+        int iovcnt;
+    
+        // 获取参数
+        if (_arg_fd(0, &fd, &f) < 0)
+            return -1;
+        if (_arg_addr(1, iov_ptr) < 0)
+            return -2;
+        if (_arg_int(2, iovcnt) < 0)
+            return -3;
+    
+        if (f == nullptr || iovcnt <= 0)
+            return -4;
+    
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+    
+        // 分配内核缓冲区存放iovec数组
+        struct iovec {
+            void *iov_base;
+            size_t iov_len;
+        };
+        size_t totsize = sizeof(iovec) * iovcnt;
+        iovec *vec = new iovec[iovcnt];
+        if (!vec)
+            return -5;
+    
+        // 从用户空间拷贝iovec数组
+        if (mem::k_vmm.copy_in(*pt, vec, iov_ptr, totsize) < 0) {
+            delete[] vec;
+            return -6;
+        }
+    
+        int nread = 0;
+        for (int i = 0; i < iovcnt; ++i) {
+            if (vec[i].iov_len == 0)
+                continue;
+            char *k_buf = new char[vec[i].iov_len];
+            if (!k_buf) {
+                delete[] vec;
+                return -7;
+            }
+            int ret = f->read((uint64)k_buf, vec[i].iov_len, f->get_file_offset(), true);
+            if (ret < 0) {
+                delete[] k_buf;
+                delete[] vec;
+                return -8;
+            }
+            if (mem::k_vmm.copy_out(*pt, (uint64)vec[i].iov_base, k_buf, ret) < 0) {
+                delete[] k_buf;
+                delete[] vec;
+                return -9;
+            }
+            nread += ret;
+            delete[] k_buf;
+            // 文件偏移量已在f->read内部更新
+        }
+    
+        delete[] vec;
+        return nread;
     }
     uint64 SyscallHandler::sys_geteuid()
     {
@@ -2116,7 +2177,48 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_renameat2()
     {
-        panic("未实现该系统调用");
+        int old_fd, new_fd, flags;
+        uint64 old_path_addr, new_path_addr;
+    
+        //TODO: 留待高人测试
+        if (_arg_int(0, old_fd) < 0)
+            return -1;
+        if (_arg_addr(1, old_path_addr) < 0)
+            return -1;
+        if (_arg_int(2, new_fd) < 0)
+            return -1;
+        if (_arg_addr(3, new_path_addr) < 0)
+            return -1;
+        if (_arg_int(4, flags) < 0)
+            return -1;
+    
+        // 拷贝路径字符串
+        eastl::string old_path, new_path;
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        if (mem::k_vmm.copy_str_in(*pt, old_path, old_path_addr, MAXPATH) < 0)
+            return -1;
+        if (mem::k_vmm.copy_str_in(*pt, new_path, new_path_addr, MAXPATH) < 0)
+            return -1;
+    
+        // 解析目录项
+        fs::dentry *old_base = (old_fd == AT_FDCWD) ? p->_cwd : static_cast<fs::normal_file *>(p->_ofile[old_fd])->getDentry();
+        fs::dentry *new_base = (new_fd == AT_FDCWD) ? p->_cwd : static_cast<fs::normal_file *>(p->_ofile[new_fd])->getDentry();
+    
+        // 构造绝对路径
+        // 先将 old_path 构造成绝对路径
+        fs::Path old_path_resolver(old_path, old_base);
+        eastl::string abs_old_path = old_path_resolver.AbsolutePath();
+
+        fs::Path new_path_resolver(new_path, new_base);
+        eastl::string abs_new_path = new_path_resolver.AbsolutePath();
+
+        // 执行重命名
+        fs::Path abs_old_path_obj(abs_old_path);
+        if (abs_old_path_obj.rename(abs_new_path, flags) < 0)
+            return -1;
+    
+        return 0;
     }
 
     uint64 SyscallHandler::sys_clock_nanosleep()
