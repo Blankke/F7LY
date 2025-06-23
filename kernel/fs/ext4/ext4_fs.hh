@@ -19,6 +19,7 @@
 
 namespace fs
 {
+	int ext4_do_rename(const char* old_path, const char* new_path);
 	namespace ext4
 	{
 		class Ext4FS : public FileSystem

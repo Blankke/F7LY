@@ -6,6 +6,7 @@
 // --------------------------------------------------------------
 //
 #include "proc_manager.hh"
+#include "fs/ext4/ext4_fs.hh" 
 
 #include "fs/vfs/path.hh"
 #include "fs/vfs/file/file.hh"
@@ -305,9 +306,19 @@ namespace fs
 		return fd;
 	}
 
-	int Path::rename(const eastl::string &new_name, int flags)
+	int Path::rename(const eastl::string &new_path, int /*flags*/)
 	{
-		//注意两个路径都要是绝对路径，注意检查
-		panic("sys_renameat2系统调用, 我不会写");
+		// 获取当前 Path 对象的绝对路径
+		eastl::string old_path_str = this->AbsolutePath();
+		const char* old_path = old_path_str.c_str();
+		const char* new_path_cstr = new_path.c_str();
+
+		// 调用底层 ext4_do_rename 进行重命名
+		int ret = ext4_do_rename(old_path, new_path_cstr);
+		if (ret != 0) {
+			// 返回底层错误码，便于上层处理
+			return ret;
+		}
+		return 0;
 	}
 } // namespace fs
