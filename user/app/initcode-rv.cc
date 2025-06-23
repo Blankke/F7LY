@@ -5,7 +5,7 @@ extern "C"
     __attribute__((section(".text.startup")))
     int main()
     {
-        start_shell();
+        // start_shell();
         // basic_musl_test();
         // basic_glibc_test();
         // busybox_musl_test();
@@ -14,6 +14,7 @@ extern "C"
         // libcbench_test();
         // iozone_test();
         // lmbench_test();
+        lua_test();
         shutdown();
         return 0;
     }

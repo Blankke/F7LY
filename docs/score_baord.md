@@ -4,9 +4,9 @@
 
 | Test/Target | riscv-musl | riscv-glibc | loongarch-musl | loongarch-glibc |
 |-------------|------------|-------------|----------------|-----------------|
-| basictest   | x          | x           | x              | x               |
+| basictest   | ×          | ×           | ×              | ×               |
 | busybox     | -6         | -5          |                |                 |
-| lua         |            |             |                |                 |
+| lua         | √          | √           |                |                 |
 | libctest    |            |             |                |                 |
 | iozone      |            |             |                |                 |
 | unixbench   |            |             |                |                 |

@@ -57,3 +57,4 @@ int start_shell(void);
 int libcbench_test(void);
 int iozone_test(void);
 int lmbench_test(void);
+int lua_test(void);
