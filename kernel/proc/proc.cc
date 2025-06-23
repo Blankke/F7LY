@@ -83,21 +83,21 @@ namespace proc
 
     void print_context1(Context *ctx)
     {
-        printf(" ra  = 0x%p\n", ctx->ra);
-        printf(" sp  = 0x%p\n", ctx->sp);
-        printf(" s0  = 0x%d\n", ctx->s0);
-        printf(" s1  = 0x%d\n", ctx->s1);
-        printf(" s2  = 0x%d\n", ctx->s2);
-        printf(" s3  = 0x%d\n", ctx->s3);
-        printf(" s4  = 0x%d\n", ctx->s4);
-        printf(" s5  = 0x%d\n", ctx->s5);
-        printf(" s6  = 0x%d\n", ctx->s6);
-        printf(" s7  = 0x%d\n", ctx->s7);
-        printf(" s8  = 0x%d\n", ctx->s8);
+        printf(" ra  = 0x%x\n", ctx->ra);
+        printf(" sp  = 0x%x\n", ctx->sp);
+        printf(" s0  = 0x%x\n", ctx->s0);
+        printf(" s1  = 0x%x\n", ctx->s1);
+        printf(" s2  = 0x%x\n", ctx->s2);
+        printf(" s3  = 0x%x\n", ctx->s3);
+        printf(" s4  = 0x%x\n", ctx->s4);
+        printf(" s5  = 0x%x\n", ctx->s5);
+        printf(" s6  = 0x%x\n", ctx->s6);
+        printf(" s7  = 0x%x\n", ctx->s7);
+        printf(" s8  = 0x%x\n", ctx->s8);
         #ifdef RISCV
-        printf(" s9  = 0x%d\n", ctx->s9);
-        printf(" s10 = 0x%d\n", ctx->s10);
-        printf(" s11 = 0x%d\n", ctx->s11);
+        printf(" s9  = 0x%x\n", ctx->s9);
+        printf(" s10 = 0x%x\n", ctx->s10);
+        printf(" s11 = 0x%x\n", ctx->s11);
         #endif
     }
 }

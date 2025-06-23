@@ -119,6 +119,7 @@ namespace proc
 		intena = cpu->get_int_ena();
 		swtch(&p->_context, cpu->get_context());
 		cpu->set_int_ena(intena);
+
 	}
 
 }

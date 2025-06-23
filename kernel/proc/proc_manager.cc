@@ -896,7 +896,7 @@ namespace proc
     /// @param state
     void ProcessManager::exit_proc(Pcb *p, int state)
     {
-        // printf("[exit_proc] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
+ 
         if (p == _init_proc)
             panic("init exiting"); // 保护机制：init 进程不能退出
         // log_info( "exit proc %d", p->_pid );
@@ -912,7 +912,7 @@ namespace proc
         p->_state = ProcState::ZOMBIE; // 标记为 zombie，等待父进程回收
 
         _wait_lock.release();
-
+    //    printf("[exit_proc] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
         k_scheduler.call_sched(); // jump to schedular, never return
         panic("zombie exit");
     }
@@ -1001,6 +1001,7 @@ namespace proc
 
         _wait_lock.release();
         // 最后退出自己
+        // printf("[exit_group] proc %s pid %d exiting with status %d\n", cp->_name, cp->_pid, status);
         exit_proc(cp, status);
     }
     void ProcessManager::sleep(void *chan, SpinLock *lock)

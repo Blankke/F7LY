@@ -684,7 +684,7 @@ r_csr_euen()
   return x;
 }
 
-static uint64 rdtime(void) {
+[[maybe_unused]]static uint64 rdtime(void) {
   int rID = 0;
   uint64 val = 0;
 
