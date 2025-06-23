@@ -336,11 +336,11 @@ r_ra()
 }
 
 ///@todo 以后记得打开注释，现在没用这个函数
-// static uint64 rdtime(); {
-//   uint64 x;
-//   asm volatile("rdtime %0" : "=r"(x));
-//   return x;
-// }
+[[maybe_unused]]static uint64 rdtime() {
+  uint64 x;
+  asm volatile("rdtime %0" : "=r"(x));
+  return x;
+}
 
 // flush the TLB.
 static inline void
@@ -684,6 +684,17 @@ r_csr_euen()
   return x;
 }
 
+static uint64 rdtime(void) {
+  int rID = 0;
+  uint64 val = 0;
+
+  asm volatile(
+    "rdtime.d %0, %1 \n\t"
+    : "=r" (val) , "=r" (rID)
+    :
+  );
+  return val;
+}
 // static uint64 rdtime(void) {
 //   int rID = 0;
 //   uint64 val = 0;

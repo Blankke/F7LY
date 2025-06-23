@@ -30,6 +30,7 @@
 #include "proc/signal.hh"
 #include "scheduler.hh"
 #include "mem/mem.hh"
+#include "futex.hh"
 namespace syscall
 {
     // 创建全局的 SyscallHandler 实例
@@ -831,9 +832,9 @@ namespace syscall
         _arg_addr(3, tls);
         _arg_addr(4, ctid);
 
-        if (flags != SIGCHILD && stack != 0)//TODO: to be cheched
+        if (flags != SIGCHILD && stack != 0) // TODO: to be cheched
         {
-            panic("[SyscallHandler::sys_clone] flags must be SIGCHILD， now flags is %x\n", flags);
+            // panic("[SyscallHandler::sys_clone] flags must be SIGCHILD， now flags is %x\n", flags);
         }
         return proc::k_pm.fork(stack);
     }
@@ -1144,7 +1145,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_tkill()
     {
-       return 0;
+        return 0;
     }
     uint64 SyscallHandler::sys_tgkill()
     {
@@ -2117,7 +2118,52 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_futex()
     {
-        panic("未实现该系统调用");
+        uint64 uaddr;
+        int op, val;
+        uint64 timeout_addr;
+        uint64 uaddr2;
+        int val3;
+        // printf("sys_futex\n");
+        _arg_addr(0, uaddr);
+        _arg_int(1, op);
+        _arg_int(2, val);
+        _arg_addr(3, timeout_addr);
+        _arg_addr(4, uaddr2);
+        _arg_int(5, val3);
+        op &= ~FUTEX_PRIVATE_FLAG;
+
+        tmm::timespec timeout;
+        tmm::timespec *timeout_ptr = NULL;
+
+        int val2;
+        int cmd = op & FUTEX_CMD_MASK;
+
+        if (timeout_addr && op == FUTEX_WAIT)
+        {
+            if (mem::k_vmm.copy_in(proc::k_pm.get_cur_pcb()->_pt, (char *)&timeout, timeout_addr, sizeof(timeout)) < 0)
+            {
+                return -1;
+            }
+            timeout_ptr = &timeout;
+        }
+
+        if (cmd == FUTEX_REQUEUE || cmd == FUTEX_CMP_REQUEUE || cmd == FUTEX_CMP_REQUEUE_PI || cmd == FUTEX_WAKE_OP)
+        {
+            _arg_int(3, val2);
+        }
+
+        // printf("sys_futex: uaddr=%p, op=%d, val=%d, timeout=%p, uaddr2=%p, val3=%d\n",  uaddr, op, val, timeout_ptr, uaddr2, val3);
+        switch (op)
+        {
+        case FUTEX_WAIT:
+            return proc::futex_wait(uaddr, val, timeout_ptr);
+        case FUTEX_WAKE:
+            return proc::futex_wakeup(uaddr, val, NULL, 0);
+        case FUTEX_REQUEUE:
+            return proc::futex_wakeup(uaddr, val, (void *)uaddr2, val3);
+        default:
+            return 0;
+        }
     }
     uint64 SyscallHandler::sys_get_robust_list()
     {

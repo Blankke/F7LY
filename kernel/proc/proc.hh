@@ -2,7 +2,7 @@
 #include "types.hh"
 #ifdef RISCV
 #include "mem/riscv/pagetable.hh"
-#elif defined (LOONGARCH)
+#elif defined(LOONGARCH)
 #include "mem/loongarch/pagetable.hh"
 #endif
 #include "trapframe.hh"
@@ -103,7 +103,7 @@ namespace proc
         vma _vm[NVMA]; // 虚拟内存区域数组
 
         // 线程/futex 相关
-
+        void *_futex_addr; // Used for futex
         int *_set_child_tid = nullptr;
         int *_clear_child_tid = nullptr;
 
@@ -115,7 +115,7 @@ namespace proc
         // signal处理相关
         proc::ipc::signal::sigaction *_sigactions[proc::ipc::signal::SIGRTMAX];
         uint64 sigmask;
-
+        int _signal; // 等待的信号
         // 程序段相关
         TODO("TBF")
         program_section_desc _prog_sections[max_program_section_num];

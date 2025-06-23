@@ -66,6 +66,7 @@ namespace proc
 
         void sleep(void *chan, SpinLock *lock);
         void wakeup(void *chan);
+        int wakeup2(uint64 uaddr, int val, void *uaddr2, int val2);
         void exit_proc(Pcb *p, int state);
         void exit(int state);
         int fork(uint64 usp);

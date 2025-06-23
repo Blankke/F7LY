@@ -1041,7 +1041,37 @@ namespace proc
             }
         }
     }
+    int ProcessManager::wakeup2(uint64 uaddr, int val, void *uaddr2, int val2)
+    {
+        Pcb *p;
+        int count1 = 0, count2 = 0;
+        for (p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
+        {
+            p->_lock.acquire();
+            if (p->_state == SLEEPING && (uint64)p->_futex_addr == uaddr)
+            {
+                if (count1 < val)
+                {
+                    p->_state = RUNNING;
+                    p->_futex_addr = 0;
+                    count1++;
+                }
+                else if (uaddr2 && count2 < val2)
+                {
+                    p->_futex_addr = uaddr2;
+                    count2++;
+                }
 
+                if (count1 >= val && count2 >= val2)
+                {
+                    p->_lock.release();
+                    break;
+                }
+            }
+            p->_lock.release();
+        }
+        return count1;
+    }
     int ProcessManager::mkdir(int dir_fd, eastl::string path, uint flags)
     {
         Pcb *p = get_cur_pcb();
@@ -1245,7 +1275,7 @@ namespace proc
     void *ProcessManager::mmap(void *addr, int length, int prot, int flags, int fd, int offset)
     {
         printfYellow("[mmap] addr: %p, length: %d, prot: %d, flags: %d, fd: %d, offset: %d\n",
-               addr, length, prot, flags, fd, offset);
+                     addr, length, prot, flags, fd, offset);
         uint64 err = 0xffffffffffffffff;
         fs::normal_file *vfile = nullptr;
         fs::file *f;
@@ -1289,17 +1319,20 @@ namespace proc
             if (p->_vm[i].used == 0) // 找到一个空闲的虚拟内存区域
             {
                 p->_vm[i].used = 1;
-                
+
                 // 处理 MAP_FIXED 标志
-                if (flags & MAP_FIXED && addr != nullptr) {
+                if (flags & MAP_FIXED && addr != nullptr)
+                {
                     // MAP_FIXED 要求在指定地址进行映射
                     p->_vm[i].addr = (uint64)addr;
                     printfCyan("[mmap] MAP_FIXED mapping at specified address %p\n", addr);
-                } else {
+                }
+                else
+                {
                     // 正常情况下，在进程当前大小之后分配
                     p->_vm[i].addr = p->_sz;
                 }
-                
+
                 p->_vm[i].flags = flags;
                 p->_vm[i].prot = prot;
                 p->_vm[i].vfile = vfile; // 对于匿名映射，这里是nullptr
@@ -1310,18 +1343,21 @@ namespace proc
                 {
                     // 设置初始大小为请求大小
                     printfCyan("[mmap] anonymous mapping at %p, length: %d, prot: %d, flags: %d\n",
-                           (void *)p->_vm[i].addr, length, prot, flags);
-                    p->_vm[i].is_expandable = 1;             // 可扩展
+                               (void *)p->_vm[i].addr, length, prot, flags);
+                    p->_vm[i].is_expandable = 1;              // 可扩展
                     p->_vm[i].len = MAX(length, 10 * PGSIZE); // 至少10页
-                    
-                    if (flags & MAP_FIXED) {
+
+                    if (flags & MAP_FIXED)
+                    {
                         // MAP_FIXED 不扩展最大长度，只能使用指定区域
                         p->_vm[i].len = length; // 使用指定长度
-                        p->_vm[i].addr =(uint64)addr; 
+                        p->_vm[i].addr = (uint64)addr;
                         p->_vm[i].max_len = p->_vm[i].len;
                         p->_vm[i].is_expandable = 0; // MAP_FIXED 通常不可扩展
-                    } else {
-                        p->_vm[i].max_len = MAXVA - p->_sz;      // 设置最大可扩展大小
+                    }
+                    else
+                    {
+                        p->_vm[i].max_len = MAXVA - p->_sz; // 设置最大可扩展大小
                     }
                 }
                 else
@@ -1334,18 +1370,21 @@ namespace proc
                 }
 
                 // 只有非 MAP_FIXED 的映射才更新 p->_sz
-                if (!(flags & MAP_FIXED)) {
-                    p->_sz += p->_vm[i].len;       // 扩展进程的虚拟内存空间
-                } else {
+                if (!(flags & MAP_FIXED))
+                {
+                    p->_sz += p->_vm[i].len; // 扩展进程的虚拟内存空间
+                }
+                else
+                {
                     // MAP_FIXED 可能需要更新 p->_sz 为更大的值
                     uint64 end_addr = p->_vm[i].addr + p->_vm[i].len;
-                    if (end_addr > p->_sz) {
+                    if (end_addr > p->_sz)
+                    {
                         p->_sz = end_addr;
                     }
                 }
 
                 return (void *)p->_vm[i].addr; // 返回映射的虚拟地址
-
             }
         }
         return (void *)err;
