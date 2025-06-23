@@ -30,6 +30,8 @@ namespace proc
         // TODO
         for (auto &of : _ofile)
             of = nullptr;
+        for (auto &cloexec : _fl_cloexec)
+            cloexec = false;
         //TODO: 资源限制
         _rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_cur = 0;
         _rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_max = 0;

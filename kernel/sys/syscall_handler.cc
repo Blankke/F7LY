@@ -188,7 +188,11 @@ namespace syscall
         uint64 sys_num = p->get_trapframe()->a7; // 获取系统调用号
 
         if (sys_num != 64 && sys_num != 66)
+        {
+            // printf("---------- start ------------\n");
+            // printfMagenta("[Pcb::get_open_file] pid: %d\n", p->_pid);
             printfGreen("[invoke_syscaller]sys_num: %d sys_name: %s\n", sys_num, _syscall_name[sys_num]);
+        }
 
         if (sys_num >= max_syscall_funcs_num || sys_num < 0 || _syscall_funcs[sys_num] == nullptr)
         {
@@ -207,6 +211,20 @@ namespace syscall
             uint64 ret = (this->*_syscall_funcs[sys_num])();
             p->_trapframe->a0 = ret; // 设置返回值
         }
+    //     if (sys_num != 64 && sys_num != 66)
+    //     {
+    //         proc::Pcb *cur_pcb = (proc::Pcb *)proc::k_pm.get_cur_pcb();
+    //         printfMagenta("[Pcb::get_open_file] pid: %d\n", cur_pcb->_pid);
+    //         for (int fd = 0; (uint64)fd < proc::max_open_files; fd++)
+    //         {
+    //             if (cur_pcb->_ofile[fd] != nullptr)
+    //             {
+    //                 printfBlue("[Pcb::get_open_file] fd: [%d], file: %p, _fl_cloexec: %d refcnt: %d\n",
+    //                            fd, cur_pcb->_ofile[fd], cur_pcb->_fl_cloexec[fd], cur_pcb->_ofile[fd]->refcnt);
+    //             }
+    //         }
+    //         printf("----------  end ------------\n");
+    //     }
     }
 
     // ---------------- private helper functions ----------------
@@ -720,7 +738,7 @@ namespace syscall
         if (mem::k_vmm.copy_str_in(*pt, path, path_addr, 100) < 0)
             return -1;
         int res = proc::k_pm.open(dir_fd, path, flags);
-        // printfBlue("openat return fd is %d", res);
+        // printfRed("openat filename %s return [fd] is %d file: %p refcnt: %d\n", path.c_str(), res, p->_ofile[res], p->_ofile[res]->refcnt);
         return res;
     }
     uint64 SyscallHandler::sys_write()
@@ -844,9 +862,11 @@ namespace syscall
 
         if (flags != SIGCHILD && stack != 0) // TODO: to be cheched
         {
-            // panic("[SyscallHandler::sys_clone] flags must be SIGCHILD， now flags is %x\n", flags);
+            panic("[SyscallHandler::sys_clone] flags must be SIGCHILD， now flags is %x, now stack is %p\n", flags, stack);
         }
-        return proc::k_pm.fork(stack);
+        uint64 clone_pid = proc::k_pm.fork(stack);
+        // printfRed("[SyscallHandler::sys_clone] pid: [%d] name: %s clone_pid: [%d]\n", proc::k_pm.get_cur_pcb()->_pid, proc::k_pm.get_cur_pcb()->_name, clone_pid);
+        return clone_pid;
     }
     uint64 SyscallHandler::sys_umount2()
     {
@@ -1662,22 +1682,25 @@ namespace syscall
     {
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         fs::file *f = nullptr;
+        int fd;
         int op;
         ulong arg;
         int retfd = -1;
 
-        if (_arg_fd(0, nullptr, &f) < 0)
+        if (_arg_fd(0, &fd, &f) < 0)
             return -1;
         if (_arg_int(1, op) < 0)
             return -2;
-        // printfYellow("file fd: %p, op: %d\n", f, op);
+        // printfYellow("file fd: %d, op: %d\n", fd, op);
         switch (op)
         {
         case F_SETFD:
             if (_arg_addr(2, arg) < 0)
                 return -3;
             if (arg & FD_CLOEXEC)
-                f->_fl_cloexec = true;
+                p->_fl_cloexec[fd] = true;
+            else
+                p->_fl_cloexec[fd] = false;
             return 0;
 
         case F_DUPFD:
@@ -1688,6 +1711,7 @@ namespace syscall
                 if ((retfd = proc::k_pm.alloc_fd(p, f, i)) == i)
                 {
                     f->refcnt++;
+                    p->_fl_cloexec[retfd] = false; // 新的文件描述符默认不设置 CLOEXEC
                     break;
                 }
             }
@@ -1701,10 +1725,10 @@ namespace syscall
                 if ((retfd = proc::k_pm.alloc_fd(p, f, i)) == i)
                 {
                     f->refcnt++;
+                    p->_fl_cloexec[retfd] = true; // 设置 CLOEXEC 标志
                     break;
                 }
             }
-            p->get_open_file(retfd)->_fl_cloexec = true;
             return retfd;
 
         default:
@@ -1991,7 +2015,68 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_readv()
     {
-        panic("未实现该系统调用");
+        fs::file *f;
+        int fd = -1;
+        uint64 iov_ptr;
+        int iovcnt;
+    
+        // 获取参数
+        if (_arg_fd(0, &fd, &f) < 0)
+            return -1;
+        if (_arg_addr(1, iov_ptr) < 0)
+            return -2;
+        if (_arg_int(2, iovcnt) < 0)
+            return -3;
+    
+        if (f == nullptr || iovcnt <= 0)
+            return -4;
+    
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+    
+        // 分配内核缓冲区存放iovec数组
+        struct iovec {
+            void *iov_base;
+            size_t iov_len;
+        };
+        size_t totsize = sizeof(iovec) * iovcnt;
+        iovec *vec = new iovec[iovcnt];
+        if (!vec)
+            return -5;
+    
+        // 从用户空间拷贝iovec数组
+        if (mem::k_vmm.copy_in(*pt, vec, iov_ptr, totsize) < 0) {
+            delete[] vec;
+            return -6;
+        }
+    
+        int nread = 0;
+        for (int i = 0; i < iovcnt; ++i) {
+            if (vec[i].iov_len == 0)
+                continue;
+            char *k_buf = new char[vec[i].iov_len];
+            if (!k_buf) {
+                delete[] vec;
+                return -7;
+            }
+            int ret = f->read((uint64)k_buf, vec[i].iov_len, f->get_file_offset(), true);
+            if (ret < 0) {
+                delete[] k_buf;
+                delete[] vec;
+                return -8;
+            }
+            if (mem::k_vmm.copy_out(*pt, (uint64)vec[i].iov_base, k_buf, ret) < 0) {
+                delete[] k_buf;
+                delete[] vec;
+                return -9;
+            }
+            nread += ret;
+            delete[] k_buf;
+            // 文件偏移量已在f->read内部更新
+        }
+    
+        delete[] vec;
+        return nread;
     }
     uint64 SyscallHandler::sys_geteuid()
     {
@@ -2092,7 +2177,48 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_renameat2()
     {
-        panic("未实现该系统调用");
+        int old_fd, new_fd, flags;
+        uint64 old_path_addr, new_path_addr;
+    
+        //TODO: 留待高人测试
+        if (_arg_int(0, old_fd) < 0)
+            return -1;
+        if (_arg_addr(1, old_path_addr) < 0)
+            return -1;
+        if (_arg_int(2, new_fd) < 0)
+            return -1;
+        if (_arg_addr(3, new_path_addr) < 0)
+            return -1;
+        if (_arg_int(4, flags) < 0)
+            return -1;
+    
+        // 拷贝路径字符串
+        eastl::string old_path, new_path;
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        if (mem::k_vmm.copy_str_in(*pt, old_path, old_path_addr, MAXPATH) < 0)
+            return -1;
+        if (mem::k_vmm.copy_str_in(*pt, new_path, new_path_addr, MAXPATH) < 0)
+            return -1;
+    
+        // 解析目录项
+        fs::dentry *old_base = (old_fd == AT_FDCWD) ? p->_cwd : static_cast<fs::normal_file *>(p->_ofile[old_fd])->getDentry();
+        fs::dentry *new_base = (new_fd == AT_FDCWD) ? p->_cwd : static_cast<fs::normal_file *>(p->_ofile[new_fd])->getDentry();
+    
+        // 构造绝对路径
+        // 先将 old_path 构造成绝对路径
+        fs::Path old_path_resolver(old_path, old_base);
+        eastl::string abs_old_path = old_path_resolver.AbsolutePath();
+
+        fs::Path new_path_resolver(new_path, new_base);
+        eastl::string abs_new_path = new_path_resolver.AbsolutePath();
+
+        // 执行重命名
+        fs::Path abs_old_path_obj(abs_old_path);
+        if (abs_old_path_obj.rename(abs_new_path, flags) < 0)
+            return -1;
+    
+        return 0;
     }
 
     uint64 SyscallHandler::sys_clock_nanosleep()

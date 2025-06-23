@@ -136,7 +136,6 @@ namespace fs
 		FileAttrs _attrs;
 		uint32 refcnt;
 		Kstat _stat;
-		bool _fl_cloexec = false;		// close when execve
 		long _file_ptr = 0;				// file read header's offset correponding to the start of the file
 	public:
 		file() = delete;

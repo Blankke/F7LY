@@ -59,6 +59,7 @@ namespace proc
         fs::dentry *_cwd; // current working directory
         eastl::string _cwd_name;
         fs::file *_ofile[max_open_files]; // 进程打开的文件列表 (文件描述符 -> 文件结构)
+        bool _fl_cloexec[max_open_files]; // 记录每个文件描述符的 close-on-exec 标志
         eastl::string exe;                // absolute path of the executable file
 
         // 进程状态信息

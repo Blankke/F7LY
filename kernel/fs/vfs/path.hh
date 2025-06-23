@@ -113,6 +113,8 @@ namespace fs
 		// 打开当前路径对应的文件，并返回 file 描述符（flags 指定打开方式）
 		int open( FileAttrs attrs, int flags );
 
+		int rename( const eastl::string &new_name, int flags );
+
 		// 返回原始路径字符串
 		eastl::string rPathName() { return pathname; }
 

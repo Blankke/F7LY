@@ -203,9 +203,13 @@ namespace proc
             assert(f_err != nullptr, "proc: alloc stderr file fail while user init.");
 
             fs::ramfs::k_ramfs.getRoot()->printAllChildrenInfo();
+
             proc->_ofile[0] = f_in;
+            proc->_ofile[0]->refcnt++;
             proc->_ofile[1] = f_out;
+            proc->_ofile[1]->refcnt++;
             proc->_ofile[2] = f_err;
+            proc->_ofile[2]->refcnt++;
             /// @todo 这里暂时修改进程的工作目录为fat的挂载点
             proc->_cwd = fs::ramfs::k_ramfs.getRoot()->EntrySearch("mnt");
             proc->_cwd_name = "/mnt/";
@@ -283,12 +287,18 @@ namespace proc
         p->_killed = 0;
         p->_xstate = 0;
         p->_state = ProcState::UNUSED;
-        if (p->_ofile[1]->refcnt > 1)
-            p->_ofile[1]->refcnt--;
-        for (int i = 3; i < (int)max_open_files; ++i)
+        // printf("freeproc: freeing process %d\n", p->_pid);
+        for (int i = 0; i < (int)max_open_files; ++i)
         {
-            if (p->_ofile[i] != nullptr && p->_ofile[i]->refcnt > 0)
+            if (p->_ofile[i] != nullptr /* && p->_ofile[i]->refcnt > 0*/)
             {
+                // printf("freeproc: checking ofile[%d]\n", i);
+                // printf("freeproc: ofile[%d] = %p\n", i, p->_ofile[i]);
+                // printf("freeproc: ofile[%d] refcnt: %d\n", i, p->_ofile[i]->refcnt);
+                if (p->_ofile[i]->refcnt <= 0)
+                {
+                    panic("freeproc: file refcnt is zero, but still in ofile");
+                }
                 p->_ofile[i]->free_file();
                 p->_ofile[i] = nullptr;
             }
@@ -588,6 +598,7 @@ namespace proc
             close(fd);
         }
         p->_ofile[fd] = f;
+        p->_fl_cloexec[fd] = false; // 默认不设置 CLOEXEC
         return fd;
     }
 
@@ -617,6 +628,7 @@ namespace proc
             if (p->_ofile[fd] == nullptr)
             {
                 p->_ofile[fd] = f;
+                p->_fl_cloexec[fd] = false; // 默认不设置 CLOEXEC
                 return fd;
             }
         }
@@ -671,6 +683,7 @@ namespace proc
                 // fs::k_file_table.dup( p->_ofile[ i ] );
                 p->_ofile[i]->dup();
                 np->_ofile[i] = p->_ofile[i];
+                np->_fl_cloexec[i] = p->_fl_cloexec[i]; // 继承 CLOEXEC 标志
             }
         for (i = 0; i < NVMA; ++i)
         {
@@ -1031,7 +1044,7 @@ namespace proc
 
         for (p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
         {
-            if (p != k_pm.get_cur_pcb())
+            if (p != k_pm.get_cur_pcb() && p->_state != ProcState::UNUSED)
             {
                 p->_lock.acquire();
                 if (p->_state == ProcState::SLEEPING && p->_chan == chan)
@@ -1208,11 +1221,13 @@ namespace proc
         if (fd < 0 || fd >= (int)max_open_files)
             return -1;
         Pcb *p = get_cur_pcb();
+        // printfRed("close [%d] file: %p refcnt: %d\n", fd, p->_ofile[fd], p->_ofile[fd]->refcnt);
         if (p->_ofile[fd] == nullptr)
             return 0;
         // fs::k_file_table.free_file( p->_ofile[ fd ] );
         p->_ofile[fd]->free_file();
         p->_ofile[fd] = nullptr;
+        p->_fl_cloexec[fd] = false; // 清理 CLOEXEC 标志
         return 0;
     }
     /// @brief 获取指定文件描述符对应文件的状态信息。
@@ -2092,12 +2107,13 @@ namespace proc
         proc->_rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_cur =
             proc->_rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_max = sp - stackbase;
         // 处理F_DUPFD_CLOEXEC标志位，关闭设置了该标志的文件描述符
-        for (auto &f : proc->_ofile)
+        for (int i = 0; i < (int)max_open_files; i++)
         {
-            if (f != nullptr && f->_fl_cloexec)
+            if (proc->_ofile[i] != nullptr && proc->_fl_cloexec[i])
             {
-                f->free_file();
-                f = nullptr;
+                proc->_ofile[i]->free_file();
+                proc->_ofile[i] = nullptr;
+                proc->_fl_cloexec[i] = false;
             }
         }
 

@@ -238,8 +238,10 @@ namespace proc
 				_lock.release();
 				delete this;
 			}
-			else
+			else{
+				
 				_lock.release();
+			}
 		}
 
 	} // namespace ips

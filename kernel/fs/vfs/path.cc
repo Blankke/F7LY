@@ -304,4 +304,10 @@ namespace fs
 			return -1;
 		return fd;
 	}
+
+	int Path::rename(const eastl::string &new_name, int flags)
+	{
+		//注意两个路径都要是绝对路径，注意检查
+		panic("sys_renameat2系统调用, 我不会写");
+	}
 } // namespace fs
