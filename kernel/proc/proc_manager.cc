@@ -2028,7 +2028,6 @@ namespace proc
             return -1;
         }
 
-        proc->_trapframe->a0 = argc; // 设置参数个数到trapframe
 
         // 步骤13: 保存程序名用于调试
         // 从路径中提取文件名
@@ -2091,6 +2090,7 @@ namespace proc
 
         // printf("execve succeed, new process size: %p\n", proc->_sz);
 
-        return argc; // 返回参数个数，表示成功执行
+        // 写成0为了适配glibc的rtld_fini需求
+        return 0; // 返回参数个数，表示成功执行
     }
 }; // namespace proc
