@@ -4,6 +4,7 @@
 
 namespace proc
 {
+        class Pcb;
     namespace ipc
     {
         namespace signal
@@ -17,7 +18,7 @@ namespace proc
             constexpr int SIG_BLOCK = 0;
             constexpr int SIG_UNBLOCK = 1;
             constexpr int SIG_SETMASK = 2;
-
+            constexpr int SIGCHLD = 17;
             // 简化版 sigset_t，实际你可以用 bitset 或其他方式扩展
             typedef struct
             {
@@ -33,6 +34,8 @@ namespace proc
             } sigaction;
             int sigAction(int flag, sigaction *newact, sigaction *oldact);
             int sigprocmask(int how, sigset_t *newset, sigset_t *oldset, size_t sigsize);
+            void handle_signal();
+            void default_handle(Pcb *p, int signum);
         } // namespace signal
     } // namespace ipc
 } // namespace proc

@@ -730,12 +730,22 @@ namespace syscall
         int n;
         uint64 p;
         [[maybe_unused]] int fd = 0;
-        if (_arg_fd(0, &fd, &f) < 0 || _arg_addr(1, p) < 0 ||
-            _arg_int(2, n) < 0)
+        if (_arg_fd(0, &fd, &f) < 0)
         {
-            panic("[SyscallHandler::sys_write] Error fetching arguments");
+            printfRed("[SyscallHandler::sys_write] Error fetching file descriptor\n");
             return -1;
         }
+        if (_arg_addr(1, p) < 0)
+        {
+            printfRed("[SyscallHandler::sys_write] Error fetching address argument\n");
+            return -1;
+        }
+        if (_arg_int(2, n) < 0)
+        {
+            printfRed("[SyscallHandler::sys_write] Error fetching n argument\n");
+            return -1;
+        }
+
         // if (fd > 2)
         //     printfRed("invoke sys_write\n");
         // printf("syscall_write: fd: %d, p: %p, n: %d\n", fd, (void *)p, n);
@@ -1872,6 +1882,7 @@ namespace syscall
             }
 
         while (1)
+
         {
             for (auto i = 0; i < nfds; i++)
             {
@@ -2086,11 +2097,119 @@ namespace syscall
 
     uint64 SyscallHandler::sys_clock_nanosleep()
     {
-        panic("未实现该系统调用");
+        int clock_id, flags;
+        uint64 req_addr, rem_addr;
+        if (_arg_int(0, clock_id) < 0 ||
+            _arg_int(1, flags) < 0 ||
+            _arg_addr(2, req_addr) < 0 ||
+            _arg_addr(3, rem_addr) < 0)
+        {
+            return -EINVAL;
+        }
+
+        // 仅示例支持 CLOCK_REALTIME 与 CLOCK_MONOTONIC
+        if (clock_id != tmm::CLOCK_REALTIME && clock_id != tmm::CLOCK_MONOTONIC)
+            return -EINVAL;
+
+        // 从用户空间复制 timespec
+        tmm::timespec req_ts;
+        if (req_addr != 0)
+        {
+            if (mem::k_vmm.copy_in(*proc::k_pm.get_cur_pcb()->get_pagetable(),
+                                   &req_ts, req_addr, sizeof(req_ts)) < 0)
+                return -EFAULT;
+        }
+        else
+        {
+            return 0;
+        }
+
+        // 计算目标时间（纳秒）
+        uint64 requested_ns = ((uint64)req_ts.tv_sec * 1000000000ULL) + req_ts.tv_nsec;
+        // 用 get_time_val() 替换 get_time_ns()
+        auto tv = tmm::k_tm.get_time_val();
+        uint64 current_ns = tv.tv_sec * 1000000000ULL + tv.tv_usec * 1000ULL;
+        uint64 total_ns = requested_ns;
+
+        // 如果是绝对时间模式并且请求时间小于当前时间则直接返回
+        if ((flags & TIMER_ABSTIME) != 0)
+        {
+            if (requested_ns <= current_ns)
+                return 0;
+            total_ns = requested_ns - current_ns;
+        }
+
+        auto start_tv = tmm::k_tm.get_time_val();
+        uint64 start_ns = start_tv.tv_sec * 1000000000ULL + start_tv.tv_usec * 1000ULL;
+        while (true)
+        {
+            // 信号相关代码已忽略
+            // if (proc::k_pm.has_pending_signal(proc::k_pm.get_cur_pcb()))
+            // {
+            //     if (rem_addr != 0)
+            //     {
+            //         tmm::timespec rem_ts;
+            //         uint64 used = tmm::k_tm.get_time_ns() - start_ns;
+            //         if (used >= total_ns)
+            //         {
+            //             rem_ts.tv_sec = 0;
+            //             rem_ts.tv_nsec = 0;
+            //         }
+            //         else
+            //         {
+            //             uint64 left = total_ns - used;
+            //             rem_ts.tv_sec = left / 1000000000ULL;
+            //             rem_ts.tv_nsec = left % 1000000000ULL;
+            //         }
+            //         mem::k_vmm.copy_out(*proc::k_pm.get_cur_pcb()->get_pagetable(),
+            //                             rem_addr, &rem_ts, sizeof(rem_ts));
+            //     }
+            //     return -EINTR;
+            // }
+
+            auto now_tv = tmm::k_tm.get_time_val();
+            uint64 now_ns = now_tv.tv_sec * 1000000000ULL + now_tv.tv_usec * 1000ULL;
+            if (now_ns - start_ns >= total_ns)
+                break;
+            // 暂时放弃 CPU
+            proc::k_scheduler.yield();
+        }
+
+        // 正常返回
+        if (rem_addr != 0)
+        {
+            tmm::timespec zero_ts{0, 0};
+            mem::k_vmm.copy_out(*proc::k_pm.get_cur_pcb()->get_pagetable(),
+                                rem_addr, &zero_ts, sizeof(zero_ts));
+        }
+        return 0;
     }
     uint64 SyscallHandler::sys_statfs()
     {
-        panic("未实现该系统调用");
+        uint64 path_addr, buf_addr;
+        // 尝试获取两个参数
+        if (_arg_addr(0, path_addr) < 0 || _arg_addr(1, buf_addr) < 0)
+            return -1;
+        statfs st;
+        // 根据需求填写字段
+        st.f_type = 0x2011BAB0;
+        st.f_bsize = PGSIZE; // 假设块大小
+        st.f_blocks = 1L << 27;
+        st.f_bfree = 1L << 26;
+        st.f_bavail = 1L << 20;
+        st.f_files = 1L << 10;
+        st.f_ffree = 1L << 9;
+        st.f_namelen = 1L << 8;
+        st.f_frsize = 1L << 9;
+        st.f_flags = 1L << 1;
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        // 将结果写回用户态
+        if (mem::k_vmm.copy_out(*pt, buf_addr, &st, sizeof(st)) < 0)
+            return -1;
+
+        return 0;
     }
     uint64 SyscallHandler::sys_ftruncate()
     {

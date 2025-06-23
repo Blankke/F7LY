@@ -10,24 +10,27 @@ namespace proc
 
             int sigAction(int flag, sigaction *newact, sigaction *oldact)
             {
-                if (flag <= 0 || flag >= SIGRTMAX || flag == SIGKILL || flag == SIGQUIT)
+                if (flag <= 0 || flag >= signal::SIGRTMAX || flag == signal::SIGKILL || flag == signal::SIGQUIT)
                     return -1;
                 proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
-                if (oldact != nullptr){
+                if (oldact != nullptr)
+                {
                     if (cur_proc->_sigactions[flag - 1])
                         *oldact = *(cur_proc->_sigactions[flag - 1]);
                     else
                         *oldact = {nullptr, {0}, 0};
                 }
-                if (newact != nullptr){
-                    if(!cur_proc->_sigactions[flag - 1]){
+                if (newact != nullptr)
+                {
+                    if (!cur_proc->_sigactions[flag - 1])
+                    {
                         cur_proc->_sigactions[flag - 1] = new sigaction;
                         if (cur_proc->_sigactions[flag - 1] == nullptr)
                             return -1; // 内存分配失败
                     }
                     *(cur_proc->_sigactions[flag - 1]) = *newact;
-                }                
-                    
+                }
+
                 return 0;
             }
 
@@ -44,13 +47,13 @@ namespace proc
 
                 switch (how)
                 {
-                case SIG_BLOCK:
+                case signal::SIG_BLOCK:
                     cur_proc->sigmask |= newset->sig[0];
                     break;
-                case SIG_UNBLOCK:
+                case signal::SIG_UNBLOCK:
                     cur_proc->sigmask &= ~(newset->sig[0]);
                     break;
-                case SIG_SETMASK:
+                case signal::SIG_SETMASK:
                     cur_proc->sigmask = newset->sig[0];
                     break;
                 default:
@@ -58,7 +61,7 @@ namespace proc
                 }
 
                 // 永远不能屏蔽这两个信号
-                cur_proc->sigmask &= ~((1UL << (SIGKILL - 1)) | (1UL << (SIGSTOP - 1)));
+                cur_proc->sigmask &= ~((1UL << (signal::SIGKILL - 1)) | (1UL << (signal::SIGSTOP - 1)));
                 return 0;
             }
 

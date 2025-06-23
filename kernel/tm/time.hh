@@ -10,6 +10,7 @@
 #include "types.hh"
 #include "hal/cpu.hh"
 #include "proc/proc_manager.hh"
+#define TIMER_ABSTIME 1
 namespace tmm
 {
 	// following code is from Linux (include/uapi/linux/time.h)

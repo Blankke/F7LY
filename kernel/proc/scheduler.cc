@@ -58,6 +58,7 @@ namespace proc
 
 			for (p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
 			{
+				// printfBlue("[sche]  start_schedule here,p->addr:%p \n", p);
 				if (p->_state != ProcState::RUNNABLE || p->_priority > priority)
 				{
 					// printf("p.gid: %d, p.state: %d, p.name:%s not runnable or priority too high \n", p->_gid, p->_state, p->_name);
