@@ -13,6 +13,7 @@ extern "C"
         // libc_musl_test();
         // libcbench_test();
         // iozone_test();
+        // lmbench_test();
         shutdown();
         return 0;
     }

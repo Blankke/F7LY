@@ -73,7 +73,7 @@ namespace syscall
         SYS_getpgid = 155, //todo
         SYS_setsid = 157, //todo
         SYS_uname = 160,
-        SYS_getrusge = 165, //todo
+        SYS_getrusage = 165, //todo
         SYS_gettimeofday = 169,
         SYS_getpid = 172,
         SYS_getppid = 173,
