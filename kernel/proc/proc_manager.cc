@@ -287,14 +287,14 @@ namespace proc
         p->_killed = 0;
         p->_xstate = 0;
         p->_state = ProcState::UNUSED;
-        printf("freeproc: freeing process %d\n", p->_pid);
+        // printf("freeproc: freeing process %d\n", p->_pid);
         for (int i = 0; i < (int)max_open_files; ++i)
         {
             if (p->_ofile[i] != nullptr /* && p->_ofile[i]->refcnt > 0*/)
             {
-                printf("freeproc: checking ofile[%d]\n", i);
-                printf("freeproc: ofile[%d] = %p\n", i, p->_ofile[i]);
-                printf("freeproc: ofile[%d] refcnt: %d\n", i, p->_ofile[i]->refcnt);
+                // printf("freeproc: checking ofile[%d]\n", i);
+                // printf("freeproc: ofile[%d] = %p\n", i, p->_ofile[i]);
+                // printf("freeproc: ofile[%d] refcnt: %d\n", i, p->_ofile[i]->refcnt);
                 if (p->_ofile[i]->refcnt <= 0)
                 {
                     panic("freeproc: file refcnt is zero, but still in ofile");
