@@ -55,4 +55,5 @@ int busybox_glibc_test(void);
 int libc_musl_test(void);
 int start_shell(void);
 int libcbench_test(void);
+int lmbench_test(void);
 int iozone_test(void);

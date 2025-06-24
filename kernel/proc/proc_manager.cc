@@ -900,7 +900,8 @@ namespace proc
             pa = to_vir(pa);
 #endif
 
-            de->getNode()->nodeRead(pa, offset + i, n);
+            if (de->getNode()->nodeRead(pa, offset + i, n) != n) // 读取文件内容到物理内存
+                return -1;
         }
         return 0;
     }
@@ -909,7 +910,7 @@ namespace proc
     /// @param state
     void ProcessManager::exit_proc(Pcb *p, int state)
     {
- 
+
         if (p == _init_proc)
             panic("init exiting"); // 保护机制：init 进程不能退出
         // log_info( "exit proc %d", p->_pid );
@@ -925,7 +926,7 @@ namespace proc
         p->_state = ProcState::ZOMBIE; // 标记为 zombie，等待父进程回收
 
         _wait_lock.release();
-    //    printf("[exit_proc] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
+        //    printf("[exit_proc] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
         k_scheduler.call_sched(); // jump to schedular, never return
         panic("zombie exit");
     }
@@ -1678,11 +1679,11 @@ namespace proc
                 uint64 seg_flag = PTE_U; // User可访问标志
 #ifdef RISCV
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC)
-                    seg_flag |= riscv::PteEnum::pte_executable_m;
+                seg_flag |= riscv::PteEnum::pte_executable_m;
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
-                    seg_flag |= riscv::PteEnum::pte_writable_m;
+                seg_flag |= riscv::PteEnum::pte_writable_m;
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ)
-                    seg_flag |= riscv::PteEnum::pte_readable_m;
+                seg_flag |= riscv::PteEnum::pte_readable_m;
 #elif defined(LOONGARCH)
                 seg_flag |= PTE_P | PTE_D | PTE_PLV; // PTE_P: Present bit, segment is present in memory
                 // PTE_D: Dirty bit, segment is dirty (modified)
@@ -1765,7 +1766,7 @@ namespace proc
                     k_pm.proc_freepagetable(new_pt, new_sz);
                     return -1;
                 }
-
+                printfCyan("execve: dynamic linker ELF magic: %x\n", interp_elf.magic);
                 // 选择动态链接器的加载基址（通常在高地址）
                 interp_base = PGROUNDUP(new_sz); // 在新进程映像的末尾分配空间
 
@@ -1782,12 +1783,13 @@ namespace proc
                     uint64 seg_flag = PTE_U;
 
 #ifdef RISCV
+                    /// 放开动态链接器权限
                     if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC)
-                        seg_flag |= riscv::PteEnum::pte_executable_m;
+                    seg_flag |= riscv::PteEnum::pte_executable_m;
                     if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
-                        seg_flag |= riscv::PteEnum::pte_writable_m;
+                    seg_flag |= riscv::PteEnum::pte_writable_m;
                     if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ)
-                        seg_flag |= riscv::PteEnum::pte_readable_m;
+                    seg_flag |= riscv::PteEnum::pte_readable_m;
 #elif defined(LOONGARCH)
                     seg_flag |= PTE_P | PTE_D | PTE_PLV;
                     if (!(interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC))
@@ -1799,7 +1801,7 @@ namespace proc
 #endif
 
                     uint64 sz1;
-                    if ((sz1 = mem::k_vmm.vmalloc(new_pt, new_sz, load_addr + interp_ph.memsz, seg_flag)) == 0)
+                    if ((sz1 = mem::k_vmm.uvmalloc(new_pt, PGROUNDUP(new_sz), load_addr + interp_ph.memsz, seg_flag)) == 0)
                     {
                         printfRed("execve: load dynamic linker failed\n");
                         k_pm.proc_freepagetable(new_pt, new_sz);
@@ -1808,7 +1810,9 @@ namespace proc
                     new_sz = sz1;
 
                     // 加载动态链接器段内容
-                    if (load_seg(new_pt, load_addr, interp_de, interp_ph.off, interp_ph.filesz) < 0)
+                    printfCyan("execve: loading dynamic linker segment %d, vaddr: %p, memsz: %p, offset: %p\n",
+                               j, (void *)interp_ph.vaddr, (void *)interp_ph.memsz, (void *)interp_ph.off);
+                    if (load_seg(new_pt, interp_base + PGROUNDDOWN(interp_ph.vaddr), interp_de, PGROUNDDOWN(interp_ph.off), interp_ph.filesz) < 0)
                     {
                         printfRed("execve: load dynamic linker segment failed\n");
                         k_pm.proc_freepagetable(new_pt, new_sz);
@@ -2083,7 +2087,6 @@ namespace proc
             return -1;
         }
 
-
         // 步骤13: 保存程序名用于调试
         // 从路径中提取文件名
         size_t last_slash = ab_path.find_last_of('/');
@@ -2144,7 +2147,7 @@ namespace proc
         // printf("execve: new process size: %d, new pagetable: %p\n", proc->_sz, proc->_pt);
         k_pm.proc_freepagetable(old_pt, old_sz);
 
-        // printf("execve succeed, new process size: %p\n", proc->_sz);
+        // printf("execve succeed, new process size: %p\n", pro->_sz);
 
         // 写成0为了适配glibc的rtld_fini需求
         return 0; // 返回参数个数，表示成功执行

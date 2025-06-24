@@ -31,6 +31,7 @@
 #include "scheduler.hh"
 #include "mem/mem.hh"
 #include "futex.hh"
+#include "rusage.hh"
 namespace syscall
 {
     // 创建全局的 SyscallHandler 实例
@@ -2495,9 +2496,45 @@ namespace syscall
     {
         panic("未实现该系统调用");
     }
-    uint64 SyscallHandler::sys_getrusge()
+  uint64 SyscallHandler::sys_getrusge()
     {
-        panic("未实现该系统调用");
+        ///@todo 错的
+        int who;
+        if (_arg_int(0, who) < 0) {
+            return -1;
+        }
+
+        uint64 usageaddr;
+        if (_arg_addr(1, usageaddr) < 0) {
+            return -2;
+        }
+
+        // 假设从进程信息获取 tms_utime/tms_stime
+        size_t tms_utime = 0; 
+        size_t tms_stime = 0; 
+
+        rusage usage;
+        usage.ru_utime.tv_sec  = tms_utime / 1000;
+        usage.ru_utime.tv_usec = (tms_utime % 1000) * 1000;
+        usage.ru_stime.tv_sec  = tms_stime / 1000;
+        usage.ru_stime.tv_usec = (tms_stime % 1000) * 1000;
+
+        // RUSAGE_SELF=0, RUSAGE_CHILDREN=-1, RUSAGE_THREAD=1
+        switch (who) {
+        case 0:   // RUSAGE_SELF
+        case -1:  // RUSAGE_CHILDREN
+        case 1:   // RUSAGE_THREAD
+            break;
+        default:
+            return -22; // EINVAL
+        }
+
+        if (mem::k_vmm.copy_out(*proc::k_pm.get_cur_pcb()->get_pagetable(),
+                                usageaddr, &usage, sizeof(usage)) < 0) {
+            return -1;
+        }
+
+        return 0;
     }
     uint64 SyscallHandler::sys_getegid()
     {
