@@ -19,22 +19,22 @@ void * operator new[] ( uint64 size )
 }
 void operator delete ( void * p ) noexcept
 {
-	// Info("delete 0x%p\n", p);
+	Info("delete 0x%p\n", p);
 	mem::k_hmm.free( p );
 }
 void operator delete[] ( void * p ) noexcept
 {
-	// Info("delete[] 0x%p\n", p);
+	Info("delete[] 0x%p\n", p);
 	mem::k_hmm.free( p );
 }
 void operator delete( void * p, uint64 size ) noexcept
 {
-	// Info("delete 0x%p with size %d\n", p, size);
+	Info("delete 0x%p with size %d\n", p, size);
 	mem::k_hmm.free( p );
 }
 void operator delete[] ( void * p, uint64 size ) noexcept
 {
-	// Info("delete[] 0x%p with size %d\n", p, size);
+	Info("delete[] 0x%p with size %d\n", p, size);
 	mem::k_hmm.free( p );
 }
 void operator delete[](void* ptr, std::size_t size, std::align_val_t align) noexcept {
