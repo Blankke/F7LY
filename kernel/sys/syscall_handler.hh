@@ -129,7 +129,7 @@ namespace syscall
         uint64 sys_setpgid();
         uint64 sys_getpgid();
         uint64 sys_setsid();
-        uint64 sys_getrusge();
+        uint64 sys_getrusage();
         uint64 sys_getegid();
         uint64 sys_shmget();
         uint64 sys_shmctl();

@@ -14,6 +14,8 @@ extern "C"
         // lmbench_test();
         // libcbench_test();
         // iozone_test();
+        // lmbench_test();
+        lua_test();
         shutdown();
         return 0;
     }

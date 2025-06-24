@@ -118,8 +118,8 @@ void Printer::print( const char *fmt, ... )
       printint(va_arg(ap, uint), 10, 0);
       break;
     case 'x': {
-      // 打印无符号16进制
-      unsigned int val = va_arg(ap, unsigned int);
+      // 打印无符号16进制（64位）
+      uint64 val = va_arg(ap, uint64);
       char buf[16];
       int j = 0;
       do {
@@ -133,8 +133,8 @@ void Printer::print( const char *fmt, ... )
       break;
     }
     case 'X': {
-      // 打印大写无符号16进制
-      unsigned int val = va_arg(ap, unsigned int);
+      // 打印大写无符号16进制（64位）
+      uint64 val = va_arg(ap, uint64);
       char buf[16];
       int j = 0;
       do {

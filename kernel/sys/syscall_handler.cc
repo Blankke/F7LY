@@ -131,7 +131,7 @@ namespace syscall
         BIND_SYSCALL(getpgid); // todo
         BIND_SYSCALL(setsid);  // todo
         BIND_SYSCALL(uname);
-        BIND_SYSCALL(getrusge); // todo
+        BIND_SYSCALL(getrusage); // todo
         BIND_SYSCALL(gettimeofday);
         BIND_SYSCALL(getpid);
         BIND_SYSCALL(getppid);
@@ -2496,44 +2496,99 @@ namespace syscall
     {
         panic("未实现该系统调用");
     }
-  uint64 SyscallHandler::sys_getrusge()
+    uint64 SyscallHandler::sys_getrusage()
     {
-        ///@todo 错的
+
+        // TODO: 感觉写的不一定对
         int who;
-        if (_arg_int(0, who) < 0) {
+        uint64 usage_addr;
+        
+        // 获取参数
+        if (_arg_int(0, who) < 0 || _arg_addr(1, usage_addr) < 0)
+        {
+            printfRed("[SyscallHandler::sys_getrusage] Error fetching arguments\n");
             return -1;
         }
-
-        uint64 usageaddr;
-        if (_arg_addr(1, usageaddr) < 0) {
-            return -2;
-        }
-
-        // 假设从进程信息获取 tms_utime/tms_stime
-        size_t tms_utime = 0; 
-        size_t tms_stime = 0; 
-
-        rusage usage;
-        usage.ru_utime.tv_sec  = tms_utime / 1000;
-        usage.ru_utime.tv_usec = (tms_utime % 1000) * 1000;
-        usage.ru_stime.tv_sec  = tms_stime / 1000;
-        usage.ru_stime.tv_usec = (tms_stime % 1000) * 1000;
-
-        // RUSAGE_SELF=0, RUSAGE_CHILDREN=-1, RUSAGE_THREAD=1
+        
+        // 定义常量
+        const int RUSAGE_SELF = 0;
+        const int RUSAGE_CHILDREN = -1;
+        const int RUSAGE_THREAD = 1;
+        
+        // 定义 rusage 结构体（根据 Linux 标准）
+        struct rusage {
+            tmm::timeval ru_utime;    // 用户态时间
+            tmm::timeval ru_stime;    // 内核态时间
+            long ru_maxrss;           // 最大常驻集大小
+            long ru_ixrss;            // 共享内存大小
+            long ru_idrss;            // 非共享数据大小
+            long ru_isrss;            // 非共享栈大小
+            long ru_minflt;           // 页面回收次数
+            long ru_majflt;           // 页面错误次数
+            long ru_nswap;            // 交换次数
+            long ru_inblock;          // 输入块数
+            long ru_oublock;          // 输出块数
+            long ru_msgsnd;           // 消息发送次数
+            long ru_msgrcv;           // 消息接收次数
+            long ru_nsignals;         // 信号接收次数
+            long ru_nvcsw;            // 自愿上下文切换次数
+            long ru_nivcsw;           // 非自愿上下文切换次数
+        };
+        
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        
+        // 获取当前进程的时间统计信息
+        tmm::tms tms_val;
+        proc::k_pm.get_cur_proc_tms(&tms_val);
+        
+        // 初始化 rusage 结构体
+        rusage ret;
+        memset(&ret, 0, sizeof(ret));
+        
+        // 计算用户态时间和内核态时间
+        // tms 中的时间单位通常是时钟滴答，需要转换为秒和微秒
+        tmm::timeval utimeval;
+        tmm::timeval stimeval;
+        
+        // 将时钟滴答转换为秒和微秒
+        utimeval.tv_sec = tms_val.tms_utime / 1000;
+        utimeval.tv_usec = (tms_val.tms_utime % 1000) * 1000;
+        
+        stimeval.tv_sec = tms_val.tms_stime / 1000;
+        stimeval.tv_usec = (tms_val.tms_stime % 1000) * 1000;
+        
         switch (who) {
-        case 0:   // RUSAGE_SELF
-        case -1:  // RUSAGE_CHILDREN
-        case 1:   // RUSAGE_THREAD
-            break;
-        default:
-            return -22; // EINVAL
+            case RUSAGE_SELF:
+                ret.ru_utime = utimeval;
+                ret.ru_stime = stimeval;
+                // 其他字段保持为0，因为当前实现不跟踪这些统计信息
+                break;
+                
+            case RUSAGE_CHILDREN:
+                // 对于子进程的资源使用，暂时使用当前进程的时间
+                // 实际实现中应该累计已结束子进程的时间
+                ret.ru_utime = utimeval;
+                ret.ru_stime = stimeval;
+                break;
+                
+            case RUSAGE_THREAD:
+                ret.ru_utime = utimeval;
+                ret.ru_stime = stimeval;
+                break;
+                
+            default:
+                printfRed("[SyscallHandler::sys_getrusage] Invalid who parameter: %d\n", who);
+                return -EINVAL;
         }
-
-        if (mem::k_vmm.copy_out(*proc::k_pm.get_cur_pcb()->get_pagetable(),
-                                usageaddr, &usage, sizeof(usage)) < 0) {
-            return -1;
+        
+        // 将结果拷贝到用户空间
+        if (mem::k_vmm.copy_out(*pt, usage_addr, &ret, sizeof(ret)) < 0)
+        {
+            printfRed("[SyscallHandler::sys_getrusage] Error copying rusage to user space\n");
+            return -EFAULT;
         }
-
+        
         return 0;
     }
     uint64 SyscallHandler::sys_getegid()
