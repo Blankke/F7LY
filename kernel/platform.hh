@@ -619,7 +619,7 @@ static inline uint64
 r_csr_tval( )
 {
   uint64 x;
-  asm volatile("csrrd %0, 0x42" : "=r"(x));
+  asm volatile("rdtime.d %0, $zero" : "=r"(x));
   return x;
 }
 
