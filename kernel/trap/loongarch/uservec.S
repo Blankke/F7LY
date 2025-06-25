@@ -75,16 +75,19 @@ uservec:
         csrwr  $t1, LOONGARCH_CSR_PGDL
         # invtlb 0x0,$zero,$zero
 
-        csrrd  $t3, 0x0
-        csrrd  $t3, 0x1
-        csrrd  $t3, 0x4
-        csrrd  $t3, 0x5
-        csrrd  $t3, 0x6
-        csrrd  $t3, 0x7
-        csrrd  $t3, 0x8
+	    li.d   $fp, 0
 
-        # jump to usertrap(), which does not return
-        jirl   $zero ,$t0, 0
+	    # csrrd  $t1, 0x0 
+	    # ori    $t1, $t1, 0x4 
+	    # csrwr  $t1, 0x0
+
+	    invtlb 0x0,$zero,$zero
+
+DBG_BREAK_READ_ESTAT:
+	    # csrrd  $a0, 0x5		# read estat 
+
+	    # jump to usertrap(), which does not return
+	    jirl   $zero ,$t0, 0
 
 .globl userret
 userret:
