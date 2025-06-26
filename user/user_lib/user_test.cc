@@ -215,13 +215,14 @@ int libc_test(const char *path = musl_dir)
     [[maybe_unused]] int pid;
 
     char *argv[8] = {0};
-    argv[0] = "-w";
-    argv[1] = "entry-static.exe";
+    argv[0] = "runtest.exe";
+    argv[1] = "-w";
+    argv[2] = "entry-static.exe";
     chdir(path);
     printf("#### OS COMP TEST GROUP START libctest-musl ####\n");
     for (int i = 0; libctest[i][0] != NULL; i++)
     {
-        argv[2] = libctest[i][0];
+        argv[3] = libctest[i][0];
         run_test("runtest.exe", argv, 0);
     }
     printf("#### OS COMP TEST GROUP END libctest-musl ####\n");
