@@ -20,7 +20,7 @@ namespace fs
 } // namespace fs
 namespace proc
 {
-    constexpr int NVMA = 10; // 每个进程最多的虚拟内存区域数量
+    constexpr int NVMA = 30; // 每个进程最多的虚拟内存区域数量
     enum ProcState
     {
         UNUSED,
