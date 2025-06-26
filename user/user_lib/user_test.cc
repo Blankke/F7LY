@@ -79,11 +79,11 @@ int basic_test(const char *path = musl_dir)
     run_test("pipe");
     if (path == musl_dir)
     {
-        printf("#### OS COMP TEST GROUP END basic-musl ####");
+        printf("#### OS COMP TEST GROUP END basic-musl ####\n");
     }
     else
     {
-        printf("#### OS COMP TEST GROUP END basic-glibc ####");
+        printf("#### OS COMP TEST GROUP END basic-glibc ####\n");
     }
     return 0;
 }
@@ -200,79 +200,21 @@ int iozone_test()
     return 0;
 }
 
-int libc_musl_test(void)
+int libc_test(const char *path = musl_dir)
 {
     [[maybe_unused]] int pid;
-    // pid = fork();
-    // if (pid < 0)
-    // {
-    //     printf("fork failed\n");
-    //     return -1;
-    // }
-    // else if (pid == 0)
-    // {
-    //     chdir("/mnt/musl/");
-    //     char *bb_sh[8] = {0};
-    //     bb_sh[0] = "busybox";
-    //     bb_sh[1] = "sh";
-    //     bb_sh[2] = "run-static.sh";
-    //     printf("execve busybox shell\n");
-    //     if (execve("busybox", bb_sh, 0) < 0)
-    //     {
-    //         printf("execve failed\n");
-    //         exit(1);
-    //     }
-    //     exit(0);
-    // }
-    // else
-    // {
-    //     int child_exit_state = 33;
-    //     if (wait(&child_exit_state) < 0)
-    //         printf("wait fail\n");
-    //     printf("exited with code %d\n", child_exit_state);
-    // }
 
     char *argv[8] = {0};
-    argv[0] = "runtest.exe";
-    argv[1] = "-w";
-    argv[2] = "entry-dynamic.exe";
-    // argv[0] = "-w";
-    // argv[1] = "entry-static.exe";
-    printf("libctest:%p\n", libctest);
-    printf("libctest:%p\n", *libctest);
-    printf("libctest:%p\n", **libctest);
-    printf("libctest[0][0]: %s\n", libctest[0][0]);
+    argv[0] = "-w";
+    argv[1] = "entry-static.exe";
+    chdir(path);
+    printf("#### OS COMP TEST GROUP START libctest-musl ####\n");
     for (int i = 0; libctest[i][0] != NULL; i++)
     {
-        argv[3] = libctest[i][0];
-        // printf("libctest[%d][0]: %d\n", i, libctest[i][0]);
-        // printf("argv[3]: %s\n", argv[3]);
-        pid = fork();
-        if (pid < 0)
-        {
-            printf("fork failed\n");
-            return -1;
-        }
-        else if (pid == 0)
-        {
-            chdir("/mnt/musl/");
-            printf("execve runtest.exe\n");
-            if (execve("runtest.exe", argv, 0) < 0)
-            {
-                printf("execve failed\n");
-                exit(1);
-            }
-            printf("ddddd\n");
-            exit(0);
-        }
-        else
-        {
-            int child_exit_state = 33;
-            if (wait(&child_exit_state) < 0)
-                printf("wait fail\n");
-            // printf("shell exited with code %d\n", child_exit_state);
-        }
+        argv[2] = libctest[i][0];
+        run_test("runtest.exe", argv, 0);
     }
+    printf("#### OS COMP TEST GROUP END libctest-musl ####\n");
     return 0;
 }
 
@@ -346,84 +288,84 @@ int lmbench_test()
 
 char *libctest[][2] = {
     {"argv", NULL},
-    // {"basename", NULL},
-    // {"clocale_mbfuncs", NULL},
-    // {"clock_gettime", NULL},
-    // {"dirname", NULL},
-    // {"env", NULL},
+    {"basename", NULL},
+    {"clocale_mbfuncs", NULL},
+    {"clock_gettime", NULL},
+    {"dirname", NULL},
+    {"env", NULL},
     // {"fdopen", NULL}, // fdopen failed
-    // {"fnmatch", NULL},
+    {"fnmatch", NULL},
     // {"fscanf", NULL}, //ioctl 爆了
     // {"fwscanf", NULL}, //死了
-    // {"iconv_open", NULL},
-    // {"inet_pton", NULL},
-    // {"mbc", NULL},
-    // {"memstream", NULL},
+    {"iconv_open", NULL},
+    {"inet_pton", NULL},
+    {"mbc", NULL},
+    {"memstream", NULL},
     // {"pthread_cancel_points", NULL}, //sig， fork高级用法
     // {"pthread_cancel", NULL}, // sig， fork高级用法
     // {"pthread_cond", NULL},   // sig， fork高级用法
     // {"pthread_tsd", NULL},    // sig， fork高级用法
-    // {"qsort", NULL},
-    // {"random", NULL},
+    {"qsort", NULL},
+    {"random", NULL},
     // {"search_hsearch", NULL}, //爆了
-    // {"search_insque", NULL},
-    // {"search_lsearch", NULL},
-    // {"search_tsearch", NULL},
+    {"search_insque", NULL},
+    {"search_lsearch", NULL},
+    {"search_tsearch", NULL},
     // {"setjmp", NULL}, // 爆了
-    // {"snprintf", NULL},
+    {"snprintf", NULL},
     // {"socket", NULL}, // 爆了
-    // {"sscanf", NULL},
+    {"sscanf", NULL},
     // {"sscanf_long", NULL}, // 爆了
     // {"stat", NULL}, //ioctl
-    // {"strftime", NULL},
-    // {"string", NULL},
-    // {"string_memcpy", NULL},
-    // {"string_memmem", NULL},
-    // {"string_memset", NULL},
-    // {"string_strchr", NULL},
-    // {"string_strcspn", NULL},
-    // {"string_strstr", NULL},
-    // {"strptime", NULL},
-    // {"strtod", NULL},
-    // {"strtod_simple", NULL},
-    // {"strtof", NULL},
-    // {"strtol", NULL},
-    // {"strtold", NULL},
-    // {"swprintf", NULL},
-    // {"tgmath", NULL},
-    // {"time", NULL},
-    // {"tls_align", NULL},
-    // {"udiv", NULL},
+    {"strftime", NULL},
+    {"string", NULL},
+    {"string_memcpy", NULL},
+    {"string_memmem", NULL},
+    {"string_memset", NULL},
+    {"string_strchr", NULL},
+    {"string_strcspn", NULL},
+    {"string_strstr", NULL},
+    {"strptime", NULL},
+    {"strtod", NULL},
+    {"strtod_simple", NULL},
+    {"strtof", NULL},
+    {"strtol", NULL},
+    {"strtold", NULL},
+    {"swprintf", NULL},
+    {"tgmath", NULL},
+    {"time", NULL},
+    {"tls_align", NULL},
+    {"udiv", NULL},
     // {"ungetc", NULL}, //iotcl爆了
     // {"utime", NULL}, //爆了
-    // {"wcsstr", NULL},
-    // {"wcstol", NULL},
+    {"wcsstr", NULL},
+    {"wcstol", NULL},
     // {"daemon_failure", NULL}, // 爆了
-    // {"dn_expand_empty", NULL},
-    // {"dn_expand_ptr_0", NULL},
+    {"dn_expand_empty", NULL},
+    {"dn_expand_ptr_0", NULL},
     // {"fflush_exit", NULL},//fd爆了
-    // {"fgets_eof", NULL},
-    // {"fgetwc_buffering", NULL},
-    // {"fpclassify_invalid_ld80", NULL},
+    {"fgets_eof", NULL},
+    {"fgetwc_buffering", NULL},
+    {"fpclassify_invalid_ld80", NULL},
     // {"ftello_unflushed_append", NULL}, // 爆了
-    // {"getpwnam_r_crash", NULL},
-    // {"getpwnam_r_errno", NULL},
-    // {"iconv_roundtrips", NULL},
-    // {"inet_ntop_v4mapped", NULL},
-    // {"inet_pton_empty_last_field", NULL},
-    // {"iswspace_null", NULL},
-    // {"lrand48_signextend", NULL},
+    {"getpwnam_r_crash", NULL},
+    {"getpwnam_r_errno", NULL},
+    {"iconv_roundtrips", NULL},
+    {"inet_ntop_v4mapped", NULL},
+    {"inet_pton_empty_last_field", NULL},
+    {"iswspace_null", NULL},
+    {"lrand48_signextend", NULL},
     // {"lseek_large", NULL}, // 爆了
-    // {"malloc_0", NULL},
-    // {"mbsrtowcs_overflow", NULL},
-    // {"memmem_oob_read", NULL},
-    // {"memmem_oob", NULL},
-    // {"mkdtemp_failure", NULL},
-    // {"mkstemp_failure", NULL},
-    // {"printf_1e9_oob", NULL},
-    // {"printf_fmt_g_round", NULL},
-    // {"printf_fmt_g_zeros", NULL},
-    // {"printf_fmt_n", NULL},
+    {"malloc_0", NULL},
+    {"mbsrtowcs_overflow", NULL},
+    {"memmem_oob_read", NULL},
+    {"memmem_oob", NULL},
+    {"mkdtemp_failure", NULL},
+    {"mkstemp_failure", NULL},
+    {"printf_1e9_oob", NULL},
+    {"printf_fmt_g_round", NULL},
+    {"printf_fmt_g_zeros", NULL},
+    {"printf_fmt_n", NULL},
     // {"pthread_robust_detach", NULL}, //爆了
     // {"pthread_cancel_sem_wait", NULL},   // sig， fork高级用法
     // {"pthread_cond_smasher", NULL},      // sig， fork高级用法
@@ -431,7 +373,7 @@ char *libctest[][2] = {
     // {"pthread_exit_cancel", NULL},       // sig， fork高级用法
     // {"pthread_once_deadlock", NULL},     // sig， fork高级用法
     // {"pthread_rwlock_ebusy", NULL},      // sig， fork高级用法
-    // {"putenv_doublefree", NULL},
+    {"putenv_doublefree", NULL},
     // {"regex_backref_0", NULL}, //爆了
     // {"regex_bracket_icase", NULL}, // 爆了
     // {"regex_ere_backref", NULL},       // 爆了
@@ -440,18 +382,18 @@ char *libctest[][2] = {
     // {"regexec_nosub", NULL},           // 爆了
     // {"rewind_clear_error", NULL}, // 爆了
     // {"rlimit_open_files", NULL}, // 爆了
-    // {"scanf_bytes_consumed", NULL},
-    // {"scanf_match_literal_eof", NULL},
-    // {"scanf_nullbyte_char", NULL},
-    // {"setvbuf_unget", NULL}, // streamdevice not support lseek currently!但是pass了
-    // {"sigprocmask_internal", NULL},
-    // {"sscanf_eof", NULL},
+    {"scanf_bytes_consumed", NULL},
+    {"scanf_match_literal_eof", NULL},
+    {"scanf_nullbyte_char", NULL},
+    {"setvbuf_unget", NULL}, // streamdevice not support lseek currently!但是pass了
+    {"sigprocmask_internal", NULL},
+    {"sscanf_eof", NULL},
     // {"statvfs", NULL}, //爆了
-    // {"strverscmp", NULL},
-    // {"syscall_sign_extend", NULL},
-    // {"uselocale_0", NULL},
-    // {"wcsncpy_read_overflow", NULL},
-    // {"wcsstr_false_negative", NULL},
+    {"strverscmp", NULL},
+    {"syscall_sign_extend", NULL},
+    {"uselocale_0", NULL},
+    {"wcsncpy_read_overflow", NULL},
+    {"wcsstr_false_negative", NULL},
     {NULL}
 };
 

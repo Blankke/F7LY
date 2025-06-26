@@ -2,7 +2,7 @@ EASTL_DIR := thirdparty/EASTL
 # ===== 架构选择 =====
 ARCH ?= riscv
 KERNEL_PREFIX=`pwd`
-DIS_PRINTF ?= 0
+DIS_PRINTF ?= 1
 
 # 检查是否通过目标名称指定架构
 ifneq (,$(filter l loongarch,$(MAKECMDGOALS)))
