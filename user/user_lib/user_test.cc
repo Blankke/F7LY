@@ -7,7 +7,7 @@ extern char *libctest[][2];
 const char musl_dir[] = "/mnt/musl/";
 const char glibc_dir[] = "/mnt/glibc/";
 
-int run_test(char *test_list)
+int run_test(const char *path, char *argv[] = 0, char *envp[] = 0)
 {
 
     int pid = fork();
@@ -17,7 +17,7 @@ int run_test(char *test_list)
     }
     else if (pid == 0)
     {
-        if (execve(test_list, 0, 0) < 0)
+        if (execve(path, argv, envp) < 0)
         {
             printf("execve failed\n");
         }
@@ -32,51 +32,19 @@ int run_test(char *test_list)
     return 0;
 }
 
-int basic_musl_test(void)
+int basic_test(const char *path = musl_dir)
 {
     [[maybe_unused]] int pid;
-    chdir(musl_dir);
+    chdir(path);
     chdir("basic");
-    // run_test("write");
-    // run_test("fork");
-    // run_test("exit");
-    // run_test("wait");
-    // run_test("getpid");
-    // run_test("getppid");
-    // run_test("dup");
-    // run_test("dup2");
-    // run_test("execve");
-    // run_test("getcwd");
-    run_test("gettimeofday");
-    // run_test("yield");
-    // run_test("sleep");
-    // run_test("times");
-    // run_test("clone");
-    // run_test("brk");
-    // run_test("waitpid");
-    // run_test("mmap");
-    // run_test("fstat");
-    // run_test("uname");
-    // run_test("openat");
-    // run_test("open");
-    // run_test("close");
-    // run_test("read");
-    // run_test("getdents");
-    // run_test("mkdir_");
-    // run_test("chdir");
-    // run_test("mount");
-    // run_test("umount");
-    // run_test("munmap");
-    // run_test("unlink");
-    // run_test("pipe");
-    return 0;
-}
-
-int basic_glibc_test(void)
-{
-    [[maybe_unused]] int pid;
-    chdir(glibc_dir);
-    chdir("basic");
+    if (path == musl_dir)
+    {
+        printf("#### OS COMP TEST GROUP START basic-musl ####\n");
+    }
+    else
+    {
+        printf("#### OS COMP TEST GROUP START basic-glibc ####\n");
+    }
     run_test("write");
     run_test("fork");
     run_test("exit");
@@ -109,73 +77,25 @@ int basic_glibc_test(void)
     run_test("munmap");
     run_test("unlink");
     run_test("pipe");
-    return 0;
-}
-
-int start_shell(void)
-{
-    [[maybe_unused]] int pid;
-    pid = fork();
-    if (pid < 0)
+    if (path == musl_dir)
     {
-        printf("fork failed\n");
-        return -1;
-    }
-    else if (pid == 0)
-    {
-        chdir(glibc_dir);
-        char *bb_sh[8] = {0};
-        bb_sh[0] = "busybox";
-        bb_sh[1] = "sh";
-        bb_sh[2] = "busybox_testcode.sh";
-        printf("execve busybox shell\n");
-        if (execve("busybox", bb_sh, 0) < 0)
-        {
-            printf("execve failed\n");
-            exit(1);
-        }
-        exit(0);
+        printf("#### OS COMP TEST GROUP END basic-musl ####");
     }
     else
     {
-        int child_exit_state = 33;
-        if (wait(&child_exit_state) < 0)
-            printf("wait fail\n");
-        printf("shell exited with code %d\n", child_exit_state);
+        printf("#### OS COMP TEST GROUP END basic-glibc ####");
     }
     return 0;
 }
 
-int busybox_musl_test(void)
+int busybox_test(const char *path = musl_dir)
 {
-    [[maybe_unused]] int pid;
-    for (int i = 0; bb_cmds[i][0] != NULL; i++)
-    {
-        pid = fork();
-        if (pid < 0)
-        {
-            printf("fork failed\n");
-            return -1;
-        }
-        else if (pid == 0)
-        {
-            chdir(musl_dir);
-            printf("execve busybox shell %s\n", bb_cmds[i][0]);
-            if (execve("busybox", bb_cmds[i], 0) < 0)
-            {
-                printf("execve failed\n");
-                exit(1);
-            }
-            exit(0);
-        }
-        else
-        {
-            int child_exit_state = 33;
-            if (wait(&child_exit_state) < 0)
-                printf("wait fail\n");
-            printf("shell exited with code %d\n", child_exit_state);
-        }
-    }
+    chdir(path);
+    char *bb_sh[8] = {0};
+    bb_sh[0] = "busybox";
+    bb_sh[1] = "sh";
+    bb_sh[2] = "busybox_testcode.sh";
+    run_test("busybox", bb_sh, 0);
     return 0;
 }
 

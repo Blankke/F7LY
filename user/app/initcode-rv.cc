@@ -15,7 +15,11 @@ extern "C"
         // libcbench_test();
         // iozone_test();
         // lmbench_test();
-        lua_test();
+        // lua_test();
+        basic_test("/mnt/musl/");
+        basic_test("/mnt/glibc/");
+        busybox_test("/mnt/musl/");
+        busybox_test("/mnt/glibc/");
         shutdown();
         return 0;
     }
