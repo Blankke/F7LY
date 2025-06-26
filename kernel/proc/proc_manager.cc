@@ -2007,17 +2007,17 @@ namespace proc
 
             ADD_AUXV(AT_HWCAP, 0);             // 硬件功能标志
             ADD_AUXV(AT_PAGESZ, PGSIZE);       // 页面大小
-            ADD_AUXV(AT_PHDR, elf.phoff);      // 程序头表偏移
-            ADD_AUXV(AT_PHENT, elf.phentsize); // 程序头表项大小
-            ADD_AUXV(AT_PHNUM, elf.phnum);     // 程序头表项数量
-            ADD_AUXV(AT_BASE, 0);              // 动态链接器基地址（保留）
-            ADD_AUXV(AT_ENTRY, elf.entry);     // 程序入口点地址
-            ADD_AUXV(AT_UID, 0);               // 用户ID
-            ADD_AUXV(AT_EUID, 0);              // 有效用户ID
-            ADD_AUXV(AT_GID, 0);               // 组ID
-            ADD_AUXV(AT_EGID, 0);              // 有效组ID
-            ADD_AUXV(AT_SECURE, 0);            // 安全模式标志
             ADD_AUXV(AT_RANDOM, rd_pos);       // 随机数地址
+            // ADD_AUXV(AT_PHDR, elf.phoff);      // 程序头表偏移
+            // ADD_AUXV(AT_PHENT, elf.phentsize); // 程序头表项大小
+            // ADD_AUXV(AT_PHNUM, elf.phnum);     // 程序头表项数量
+            // ADD_AUXV(AT_BASE, 0);              // 动态链接器基地址（保留）
+            // ADD_AUXV(AT_ENTRY, elf.entry);     // 程序入口点地址
+            // ADD_AUXV(AT_UID, 0);               // 用户ID
+            // ADD_AUXV(AT_EUID, 0);              // 有效用户ID
+            // ADD_AUXV(AT_GID, 0);               // 组ID
+            // ADD_AUXV(AT_EGID, 0);              // 有效组ID
+            // ADD_AUXV(AT_SECURE, 0);            // 安全模式标志
             ADD_AUXV(AT_NULL, 0);              // 结束标记
 
             // printf("index: %d\n", index);
@@ -2035,7 +2035,7 @@ namespace proc
         // if (uenvp[0]) // 就算没有环境变量， 也要压入一个空指针
         {
             sp -= (envc + 1) * sizeof(uint64); // 为envp数组预留空间
-            sp -= sp % 16;                     // 对齐到16字节
+            // sp -= sp % 16;                     // 对齐到16字节
             if (sp < stackbase + PGSIZE)
             {
                 printfRed("execve: stack overflow\n");
@@ -2055,7 +2055,7 @@ namespace proc
         // if (uargv[0])
         {
             sp -= (argc + 1) * sizeof(uint64); // 为argv数组预留空间
-            sp -= sp % 16;                     // 对齐到16字节
+            // sp -= sp % 16;                     // 对齐到16字节
             if (sp < stackbase + PGSIZE)
             {
                 printfRed("execve: stack overflow\n");
