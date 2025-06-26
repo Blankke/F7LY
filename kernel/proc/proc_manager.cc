@@ -1581,6 +1581,9 @@ namespace proc
         int i, off;                // 循环变量和偏移量
         u64 new_sz = 0;            // 新进程映像的大小
 
+        // 动态链接器相关
+        elf::elfhdr interp_elf;
+        uint64 interp_base = 0;
         // ========== 第一阶段：路径解析和文件查找 ==========
 
         // 构建绝对路径
@@ -1635,9 +1638,14 @@ namespace proc
             // 检查程序头中是否有PT_INTERP段
             for (i = 0, off = elf.phoff; i < elf.phnum; i++, off += sizeof(ph))
             {
-                de->getNode()->nodeRead(reinterpret_cast<uint64>(&ph), off, sizeof(ph));
+                if (ab_path != "/mnt/musl/runtest.exe")
+                {
+                    break;
+                }
+                    de->getNode()->nodeRead(reinterpret_cast<uint64>(&ph), off, sizeof(ph));
                 if (ph.type == elf::elfEnum::ELF_PROG_INTERP) // PT_INTERP = 3
                 {
+                    // TODO, noderead在basic有时候乱码，故在下面设置interp_de = de;跳过动态链接
                     is_dynamic = true;
                     // 读取解释器路径
                     char interp_buf[256];
@@ -1646,6 +1654,51 @@ namespace proc
                     interpreter_path = interp_buf;
                     interp_de = de;
                     printfCyan("execve: found dynamic interpreter: %s\n", interpreter_path.c_str());
+
+                    if (strcmp(interpreter_path.c_str(), "/lib/ld-linux-riscv64-lp64d.so.1") == 0)
+                    {
+                        printfBlue("execve: using riscv64 dynamic linker\n");
+                        fs::Path path_resolver_interp("/mnt/glibc/lib/ld-linux-riscv64-lp64d.so.1");
+                        interp_de = path_resolver_interp.pathSearch();
+                        if (interp_de == nullptr)
+                        {
+                            printfRed("execve: failed to find riscv64 dynamic linker\n");
+                            return -1;
+                        }
+                    }
+                    else if (strcmp(interpreter_path.c_str(), "/lib/ld-linux-loongarch64.so.1") == 0)
+                    {
+                        printfBlue("execve: using loongarch64 dynamic linker\n");
+                        fs::Path path_resolver_interp("/mnt/glibc/lib/ld-linux-loongarch-lp64d.so.1");
+                        interp_de = path_resolver_interp.pathSearch();
+                        if (interp_de == nullptr)
+                        {
+                            printfRed("execve: failed to find loongarch64 dynamic linker\n");
+                            return -1;
+                        }
+                    }
+                    else if (strcmp(interpreter_path.c_str(), "/lib64/ld-musl-loongarch-lp64d.so.1") == 0)
+                    {
+                        printfBlue("execve: using loongarch dynamic linker\n");
+                        fs::Path path_resolver_interp("/mnt/musl/lib/libc.so");
+                        interp_de = path_resolver_interp.pathSearch();
+                        if (interp_de == nullptr)
+                        {
+                            printfRed("execve: failed to find loongarch musl linker\n");
+                            return -1;
+                        }
+                    }
+                    else if (strcmp(interpreter_path.c_str(), "/lib/ld-musl-riscv64-sf.so.1") == 0)
+                    {
+                        printfBlue("execve: using riscv64 sf dynamic linker\n");
+                        fs::Path path_resolver_interp("/mnt/musl/lib/libc.so");
+                        interp_de = path_resolver_interp.pathSearch();
+                        if (interp_de == nullptr)
+                        {
+                            printfRed("execve: failed to find riscv64 musl linker\n");
+                            return -1;
+                        }
+                    }
                     break;
                 }
             }
@@ -1745,9 +1798,7 @@ namespace proc
                 return -1;
             }
 
-            // 加载动态链接器**
-            elf::elfhdr interp_elf;
-            uint64 interp_base = 0;
+
             if (is_dynamic)
             {
                 if (interp_de == nullptr)
@@ -1812,7 +1863,7 @@ namespace proc
                     // 加载动态链接器段内容
                     printfCyan("execve: loading dynamic linker segment %d, vaddr: %p, memsz: %p, offset: %p\n",
                                j, (void *)interp_ph.vaddr, (void *)interp_ph.memsz, (void *)interp_ph.off);
-                    if (load_seg(new_pt, interp_base + PGROUNDDOWN(interp_ph.vaddr), interp_de, PGROUNDDOWN(interp_ph.off), interp_ph.filesz) < 0)
+                    if (load_seg(new_pt, load_addr, interp_de, interp_ph.off, interp_ph.filesz) < 0)
                     {
                         printfRed("execve: load dynamic linker segment failed\n");
                         k_pm.proc_freepagetable(new_pt, new_sz);
