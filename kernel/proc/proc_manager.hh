@@ -69,6 +69,8 @@ namespace proc
         int wakeup2(uint64 uaddr, int val, void *uaddr2, int val2);
         void exit_proc(Pcb *p, int state);
         void exit(int state);
+        int clone(unsigned long flags, uint64 stack_ptr,
+                  uint64 ptid, uint64 tls, uint64 ctid);
         int fork(uint64 usp);
         int fork();
         void fork_ret();

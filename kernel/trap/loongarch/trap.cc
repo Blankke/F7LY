@@ -174,7 +174,7 @@ void trap_manager::usertrap()
 
   else if (((r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x1 || (r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x2))
   {
-    printfRed("p->_trapframe->sp: %p,fault_va: %p,p->sz:%p\n", p->_trapframe->sp, r_csr_badv(), p->_sz);
+    // printfRed("p->_trapframe->sp: %p,fault_va: %p,p->sz:%p\n", p->_trapframe->sp, r_csr_badv(), p->_sz);
     if (mmap_handler(r_csr_badv(), (r_csr_estat() & CSR_ESTAT_ECODE) >> 16) != 0)
     {
       printf("usertrap(): unexpected trapcause %x pid=%d\n", r_csr_estat(), p->_pid);
@@ -215,7 +215,7 @@ void trap_manager::usertrap()
 
 void trap_manager::usertrapret(void)
 {
-  printfCyan("==usertrapret== pid=%d\n", proc::k_pm.get_cur_pcb()->_pid);
+//   printfCyan("==usertrapret== pid=%d\n", proc::k_pm.get_cur_pcb()->_pid);
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
 
   intr_off();
@@ -228,6 +228,7 @@ void trap_manager::usertrapret(void)
   p->_trapframe->kernel_pgdl = r_csr_pgdl();      // kernel page table
   p->_trapframe->kernel_sp = p->_kstack + PGSIZE; // process's kernel stack
   p->_trapframe->kernel_trap = (uint64)wrap_usertrap;
+//   printf("usertrapret: p->_trapframe->kernel_trap: %p\n", p->_trapframe->kernel_trap);
   p->_trapframe->kernel_hartid = r_tp(); // hartid for cpuid()
 
   // set up the registers that uservec.S's ertn will use

@@ -15,13 +15,12 @@ extern char etext[]; // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 #ifdef LOONGARCH
-void
-tlbinit(void)
+void tlbinit(void)
 {
-  asm volatile("invtlb  0x0,$zero,$zero");
-  w_csr_stlbps(0xcU);
-  w_csr_asid(0x0U);
-  w_csr_tlbrehi(0xcU);
+    asm volatile("invtlb  0x0,$zero,$zero");
+    w_csr_stlbps(0xcU);
+    w_csr_asid(0x0U);
+    w_csr_tlbrehi(0xcU);
 }
 #endif
 namespace mem
@@ -63,16 +62,15 @@ namespace mem
         sfence_vma();
 #elif defined(LOONGARCH)
 
-//the "pgdl" is corresponding to "satp" in riscv
-  w_csr_pgdl((uint64)k_pagetable.get_base());
-  // flush the tlb(tlbinit)
-  tlbinit();
+        // the "pgdl" is corresponding to "satp" in riscv
+        w_csr_pgdl((uint64)k_pagetable.get_base());
+        // flush the tlb(tlbinit)
+        tlbinit();
 
-  w_csr_pwcl((PTEWIDTH << 30)|(DIR2WIDTH << 25)|(DIR2BASE << 20)|(DIR1WIDTH << 15)|(DIR1BASE << 10)|(PTWIDTH << 5)|(PTBASE << 0));
-  w_csr_pwch((DIR4WIDTH << 18)|(DIR3WIDTH << 6)|(DIR3BASE << 0) |(PWCH_HPTW_EN << 24));
+        w_csr_pwcl((PTEWIDTH << 30) | (DIR2WIDTH << 25) | (DIR2BASE << 20) | (DIR1WIDTH << 15) | (DIR1BASE << 10) | (PTWIDTH << 5) | (PTBASE << 0));
+        w_csr_pwch((DIR4WIDTH << 18) | (DIR3WIDTH << 6) | (DIR3BASE << 0) | (PWCH_HPTW_EN << 24));
 
-  [[maybe_unused]]uint64 crmd = r_csr_crmd();
-
+        [[maybe_unused]] uint64 crmd = r_csr_crmd();
 
 #endif
         printfGreen("[vmm] Virtual Memory Manager Init\n");
@@ -95,7 +93,7 @@ namespace mem
 
         for (;;)
         {
-// printfMagenta("map_pages: va=0x%x, size=0x%x, pa=0x%x, flags=0x%x\n", a, size, pa, flags);
+            // printfMagenta("map_pages: va=0x%x, size=0x%x, pa=0x%x, flags=0x%x\n", a, size, pa, flags);
             pte = pt.walk(a, /*alloc*/ true);
             // printfCyan("walk: va=0x%x, pte_addr=%p, pte_data=%p\n", a, pte.get_data(), pte.get_data());
             // DEBUG:
@@ -439,6 +437,14 @@ namespace mem
         return 0;
 #elif defined(LOONGARCH)
         uint64 n, a, pa;
+        // printf("[copy_out] va: %p, len: %d\n", va, len);
+        // // 打印拷贝的所有字节
+        // const uint8_t* p_bytes = reinterpret_cast<const uint8_t*>(p);
+        // printf("[copy_out] bytes: ");
+        // for (uint64 i = 0; i < len; ++i) {
+        //     printf("%02x ", p_bytes[i]);
+        // }
+        // printf("\n");
 
         while (len > 0)
         {
@@ -450,7 +456,7 @@ namespace mem
             n = PGSIZE - (va - a);
             if (n > len)
                 n = len;
-            pa=to_vir(pa);
+            pa = to_vir(pa);
             // printfMagenta("copy_out: va: %p, pa: %p, n: %p\n", va, pa, n);
             memmove((void *)((pa + (va - a))), p, n);
 
@@ -615,7 +621,7 @@ namespace mem
                 return 0;
             }
             memset(mem, 0, PGSIZE);
-            if (map_pages(pt, a, PGSIZE, (uint64)mem, flags|PTE_U|PTE_D) == 0)
+            if (map_pages(pt, a, PGSIZE, (uint64)mem, flags | PTE_U | PTE_D) == 0)
             {
                 // printfCyan("[vmalloc] map page failed, oldsz: %p, newsz: %p\n", oldsz, newsz);
                 k_pmm.free_page(mem);
@@ -764,7 +770,7 @@ namespace mem
         mem = (char *)k_pmm.alloc_page();
         memset(mem, 0, PGSIZE);
         map_pages(pt, 0, PGSIZE, (uint64)mem, PTE_V | PTE_W | PTE_R | PTE_X | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
-        memmove(mem,  (void *)src, MIN(sz, PGSIZE));
+        memmove(mem, (void *)src, MIN(sz, PGSIZE));
 
         mem = (char *)k_pmm.alloc_page();
         memset(mem, 0, PGSIZE);
@@ -779,7 +785,7 @@ namespace mem
         map_pages(pt, 2 * PGSIZE, PGSIZE, (uint64)mem, PTE_V | PTE_W | PTE_R | PTE_X | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
         if (sz > 2 * PGSIZE)
         {
-            memmove(mem, (void*)((uint64)src + 2 * PGSIZE), MIN(sz - 2 * PGSIZE, PGSIZE));
+            memmove(mem, (void *)((uint64)src + 2 * PGSIZE), MIN(sz - 2 * PGSIZE, PGSIZE));
         }
 #endif
     }
@@ -801,7 +807,7 @@ namespace mem
             if (pte.get_data() == 0)
                 break;
             if (pte.get_data() & PTE_V)
-                pte.set_data(pte.get_data() | perm) ;
+                pte.set_data(pte.get_data() | perm);
             else
                 pte.set_data(pte.get_data() | PTE_U);
         }

@@ -210,22 +210,23 @@ namespace syscall
             //    p->_trapframe->a3, p->_trapframe->a4, p->_trapframe->a5);
             // 调用对应的系统调用函数
             uint64 ret = (this->*_syscall_funcs[sys_num])();
+            // printfCyan("[SyscallHandler::invoke_syscaller]ret: %p\n", sys_num, ret);
             p->_trapframe->a0 = ret; // 设置返回值
         }
-    //     if (sys_num != 64 && sys_num != 66)
-    //     {
-    //         proc::Pcb *cur_pcb = (proc::Pcb *)proc::k_pm.get_cur_pcb();
-    //         printfMagenta("[Pcb::get_open_file] pid: %d\n", cur_pcb->_pid);
-    //         for (int fd = 0; (uint64)fd < proc::max_open_files; fd++)
-    //         {
-    //             if (cur_pcb->_ofile[fd] != nullptr)
-    //             {
-    //                 printfBlue("[Pcb::get_open_file] fd: [%d], file: %p, _fl_cloexec: %d refcnt: %d\n",
-    //                            fd, cur_pcb->_ofile[fd], cur_pcb->_fl_cloexec[fd], cur_pcb->_ofile[fd]->refcnt);
-    //             }
-    //         }
-    //         printf("----------  end ------------\n");
-    //     }
+        //     if (sys_num != 64 && sys_num != 66)
+        //     {
+        //         proc::Pcb *cur_pcb = (proc::Pcb *)proc::k_pm.get_cur_pcb();
+        //         printfMagenta("[Pcb::get_open_file] pid: %d\n", cur_pcb->_pid);
+        //         for (int fd = 0; (uint64)fd < proc::max_open_files; fd++)
+        //         {
+        //             if (cur_pcb->_ofile[fd] != nullptr)
+        //             {
+        //                 printfBlue("[Pcb::get_open_file] fd: [%d], file: %p, _fl_cloexec: %d refcnt: %d\n",
+        //                            fd, cur_pcb->_ofile[fd], cur_pcb->_fl_cloexec[fd], cur_pcb->_ofile[fd]->refcnt);
+        //             }
+        //         }
+        //         printf("----------  end ------------\n");
+        //     }
     }
 
     // ---------------- private helper functions ----------------
@@ -861,11 +862,25 @@ namespace syscall
         _arg_addr(3, tls);
         _arg_addr(4, ctid);
 
+        uint64 cgtls, cgctid; // change
+#ifdef RISCV
+        cgctid = ctid;
+        cgtls = tls;
+#elif LOONGARCH
+        cgctid = tls;
+        cgtls = ctid;
+#endif
+        ctid = cgctid;
+        tls = cgtls;
+
+        uint64 clone_pid;
+
         if (flags != SIGCHILD && stack != 0) // TODO: to be cheched
         {
             panic("[SyscallHandler::sys_clone] flags must be SIGCHILD， now flags is %x, now stack is %p\n", flags, stack);
+            clone_pid = proc::k_pm.clone(flags, stack, ptid, tls, ctid);
         }
-        uint64 clone_pid = proc::k_pm.fork(stack);
+        clone_pid = proc::k_pm.fork(stack);
         // printfRed("[SyscallHandler::sys_clone] pid: [%d] name: %s clone_pid: [%d]\n", proc::k_pm.get_cur_pcb()->_pid, proc::k_pm.get_cur_pcb()->_name, clone_pid);
         return clone_pid;
     }
@@ -2020,7 +2035,7 @@ namespace syscall
         int fd = -1;
         uint64 iov_ptr;
         int iovcnt;
-    
+
         // 获取参数
         if (_arg_fd(0, &fd, &f) < 0)
             return -1;
@@ -2028,15 +2043,16 @@ namespace syscall
             return -2;
         if (_arg_int(2, iovcnt) < 0)
             return -3;
-    
+
         if (f == nullptr || iovcnt <= 0)
             return -4;
-    
+
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
-    
+
         // 分配内核缓冲区存放iovec数组
-        struct iovec {
+        struct iovec
+        {
             void *iov_base;
             size_t iov_len;
         };
@@ -2044,29 +2060,34 @@ namespace syscall
         iovec *vec = new iovec[iovcnt];
         if (!vec)
             return -5;
-    
+
         // 从用户空间拷贝iovec数组
-        if (mem::k_vmm.copy_in(*pt, vec, iov_ptr, totsize) < 0) {
+        if (mem::k_vmm.copy_in(*pt, vec, iov_ptr, totsize) < 0)
+        {
             delete[] vec;
             return -6;
         }
-    
+
         int nread = 0;
-        for (int i = 0; i < iovcnt; ++i) {
+        for (int i = 0; i < iovcnt; ++i)
+        {
             if (vec[i].iov_len == 0)
                 continue;
             char *k_buf = new char[vec[i].iov_len];
-            if (!k_buf) {
+            if (!k_buf)
+            {
                 delete[] vec;
                 return -7;
             }
             int ret = f->read((uint64)k_buf, vec[i].iov_len, f->get_file_offset(), true);
-            if (ret < 0) {
+            if (ret < 0)
+            {
                 delete[] k_buf;
                 delete[] vec;
                 return -8;
             }
-            if (mem::k_vmm.copy_out(*pt, (uint64)vec[i].iov_base, k_buf, ret) < 0) {
+            if (mem::k_vmm.copy_out(*pt, (uint64)vec[i].iov_base, k_buf, ret) < 0)
+            {
                 delete[] k_buf;
                 delete[] vec;
                 return -9;
@@ -2075,7 +2096,7 @@ namespace syscall
             delete[] k_buf;
             // 文件偏移量已在f->read内部更新
         }
-    
+
         delete[] vec;
         return nread;
     }
@@ -2180,8 +2201,8 @@ namespace syscall
     {
         int old_fd, new_fd, flags;
         uint64 old_path_addr, new_path_addr;
-    
-        //TODO: 留待高人测试
+
+        // TODO: 留待高人测试
         if (_arg_int(0, old_fd) < 0)
             return -1;
         if (_arg_addr(1, old_path_addr) < 0)
@@ -2192,7 +2213,7 @@ namespace syscall
             return -1;
         if (_arg_int(4, flags) < 0)
             return -1;
-    
+
         // 拷贝路径字符串
         eastl::string old_path, new_path;
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
@@ -2201,11 +2222,11 @@ namespace syscall
             return -1;
         if (mem::k_vmm.copy_str_in(*pt, new_path, new_path_addr, MAXPATH) < 0)
             return -1;
-    
+
         // 解析目录项
         fs::dentry *old_base = (old_fd == AT_FDCWD) ? p->_cwd : static_cast<fs::normal_file *>(p->_ofile[old_fd])->getDentry();
         fs::dentry *new_base = (new_fd == AT_FDCWD) ? p->_cwd : static_cast<fs::normal_file *>(p->_ofile[new_fd])->getDentry();
-    
+
         // 构造绝对路径
         // 先将 old_path 构造成绝对路径
         fs::Path old_path_resolver(old_path, old_base);
@@ -2218,7 +2239,7 @@ namespace syscall
         fs::Path abs_old_path_obj(abs_old_path);
         if (abs_old_path_obj.rename(abs_new_path, flags) < 0)
             return -1;
-    
+
         return 0;
     }
 
@@ -2349,7 +2370,7 @@ namespace syscall
         uint64 count;
         int offset;
         if (_arg_fd(0, &fd, nullptr) < 0 || _arg_addr(1, buf) < 0 ||
-        _arg_addr(2, count) < 0 || _arg_int(3, offset) < 0)
+            _arg_addr(2, count) < 0 || _arg_int(3, offset) < 0)
             return -1;
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
@@ -2387,7 +2408,7 @@ namespace syscall
         uint64 count;
         int offset;
         if (_arg_fd(0, &fd, nullptr) < 0 || _arg_addr(1, buf) < 0 ||
-        _arg_addr(2, count) < 0 || _arg_int(3, offset) < 0)
+            _arg_addr(2, count) < 0 || _arg_int(3, offset) < 0)
             return -1;
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
@@ -2502,93 +2523,95 @@ namespace syscall
         // TODO: 感觉写的不一定对
         int who;
         uint64 usage_addr;
-        
+
         // 获取参数
         if (_arg_int(0, who) < 0 || _arg_addr(1, usage_addr) < 0)
         {
             printfRed("[SyscallHandler::sys_getrusage] Error fetching arguments\n");
             return -1;
         }
-        
+
         // 定义常量
         const int RUSAGE_SELF = 0;
         const int RUSAGE_CHILDREN = -1;
         const int RUSAGE_THREAD = 1;
-        
+
         // 定义 rusage 结构体（根据 Linux 标准）
-        struct rusage {
-            tmm::timeval ru_utime;    // 用户态时间
-            tmm::timeval ru_stime;    // 内核态时间
-            long ru_maxrss;           // 最大常驻集大小
-            long ru_ixrss;            // 共享内存大小
-            long ru_idrss;            // 非共享数据大小
-            long ru_isrss;            // 非共享栈大小
-            long ru_minflt;           // 页面回收次数
-            long ru_majflt;           // 页面错误次数
-            long ru_nswap;            // 交换次数
-            long ru_inblock;          // 输入块数
-            long ru_oublock;          // 输出块数
-            long ru_msgsnd;           // 消息发送次数
-            long ru_msgrcv;           // 消息接收次数
-            long ru_nsignals;         // 信号接收次数
-            long ru_nvcsw;            // 自愿上下文切换次数
-            long ru_nivcsw;           // 非自愿上下文切换次数
+        struct rusage
+        {
+            tmm::timeval ru_utime; // 用户态时间
+            tmm::timeval ru_stime; // 内核态时间
+            long ru_maxrss;        // 最大常驻集大小
+            long ru_ixrss;         // 共享内存大小
+            long ru_idrss;         // 非共享数据大小
+            long ru_isrss;         // 非共享栈大小
+            long ru_minflt;        // 页面回收次数
+            long ru_majflt;        // 页面错误次数
+            long ru_nswap;         // 交换次数
+            long ru_inblock;       // 输入块数
+            long ru_oublock;       // 输出块数
+            long ru_msgsnd;        // 消息发送次数
+            long ru_msgrcv;        // 消息接收次数
+            long ru_nsignals;      // 信号接收次数
+            long ru_nvcsw;         // 自愿上下文切换次数
+            long ru_nivcsw;        // 非自愿上下文切换次数
         };
-        
+
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
-        
+
         // 获取当前进程的时间统计信息
         tmm::tms tms_val;
         proc::k_pm.get_cur_proc_tms(&tms_val);
-        
+
         // 初始化 rusage 结构体
         rusage ret;
         memset(&ret, 0, sizeof(ret));
-        
+
         // 计算用户态时间和内核态时间
         // tms 中的时间单位通常是时钟滴答，需要转换为秒和微秒
         tmm::timeval utimeval;
         tmm::timeval stimeval;
-        
+
         // 将时钟滴答转换为秒和微秒
         utimeval.tv_sec = tms_val.tms_utime / 1000;
         utimeval.tv_usec = (tms_val.tms_utime % 1000) * 1000;
-        
+
         stimeval.tv_sec = tms_val.tms_stime / 1000;
         stimeval.tv_usec = (tms_val.tms_stime % 1000) * 1000;
-        
-        switch (who) {
-            case RUSAGE_SELF:
-                ret.ru_utime = utimeval;
-                ret.ru_stime = stimeval;
-                // 其他字段保持为0，因为当前实现不跟踪这些统计信息
-                break;
-                
-            case RUSAGE_CHILDREN:
-                // 对于子进程的资源使用，暂时使用当前进程的时间
-                // 实际实现中应该累计已结束子进程的时间
-                ret.ru_utime = utimeval;
-                ret.ru_stime = stimeval;
-                break;
-                
-            case RUSAGE_THREAD:
-                ret.ru_utime = utimeval;
-                ret.ru_stime = stimeval;
-                break;
-                
-            default:
-                printfRed("[SyscallHandler::sys_getrusage] Invalid who parameter: %d\n", who);
-                return -EINVAL;
+
+        switch (who)
+        {
+        case RUSAGE_SELF:
+            ret.ru_utime = utimeval;
+            ret.ru_stime = stimeval;
+            // 其他字段保持为0，因为当前实现不跟踪这些统计信息
+            break;
+
+        case RUSAGE_CHILDREN:
+            // 对于子进程的资源使用，暂时使用当前进程的时间
+            // 实际实现中应该累计已结束子进程的时间
+            ret.ru_utime = utimeval;
+            ret.ru_stime = stimeval;
+            break;
+
+        case RUSAGE_THREAD:
+            ret.ru_utime = utimeval;
+            ret.ru_stime = stimeval;
+            break;
+
+        default:
+            printfRed("[SyscallHandler::sys_getrusage] Invalid who parameter: %d\n", who);
+            return -EINVAL;
         }
-        
+
         // 将结果拷贝到用户空间
         if (mem::k_vmm.copy_out(*pt, usage_addr, &ret, sizeof(ret)) < 0)
         {
             printfRed("[SyscallHandler::sys_getrusage] Error copying rusage to user space\n");
             return -EFAULT;
         }
-        
+
         return 0;
     }
     uint64 SyscallHandler::sys_getegid()
