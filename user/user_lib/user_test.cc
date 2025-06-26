@@ -232,17 +232,35 @@ int libc_test(const char *path = musl_dir)
 int lua_test(const char *path = musl_dir)
 {
     chdir(path);
-    char *lua_sh = "./busybox echo \"#### OS COMP TEST GROUP START lua-musl ####\" \n"
-                   "./busybox sh ./test.sh date.lua\n"
-                   "./busybox sh ./test.sh file_io.lua\n"
-                   "./busybox sh ./test.sh max_min.lua\n"
-                   "./busybox sh ./test.sh random.lua\n"
-                   "./busybox sh ./test.sh remove.lua\n"
-                   "./busybox sh ./test.sh round_num.lua\n"
-                   "./busybox sh ./test.sh sin30.lua\n"
-                   "./busybox sh ./test.sh sort.lua\n"
-                   "./busybox sh ./test.sh strings.lua\n"
-                   "./busybox echo \"#### OS COMP TEST GROUP END lua-musl ####\" \n";
+    char *lua_sh;
+    if (strcmp(path, musl_dir) == 0)
+    {
+        lua_sh = "./busybox echo \"#### OS COMP TEST GROUP START lua-musl ####\" \n"
+                 "./busybox sh ./test.sh date.lua\n"
+                 "./busybox sh ./test.sh file_io.lua\n"
+                 "./busybox sh ./test.sh max_min.lua\n"
+                 "./busybox sh ./test.sh random.lua\n"
+                 "./busybox sh ./test.sh remove.lua\n"
+                 "./busybox sh ./test.sh round_num.lua\n"
+                 "./busybox sh ./test.sh sin30.lua\n"
+                 "./busybox sh ./test.sh sort.lua\n"
+                 "./busybox sh ./test.sh strings.lua\n"
+                 "./busybox echo \"#### OS COMP TEST GROUP END lua-musl ####\" \n";
+    }
+    else
+    {
+        lua_sh = "./busybox echo \"#### OS COMP TEST GROUP START lua-glibc ####\" \n"
+                 "./busybox sh ./test.sh date.lua\n"
+                 "./busybox sh ./test.sh file_io.lua\n"
+                 "./busybox sh ./test.sh max_min.lua\n"
+                 "./busybox sh ./test.sh random.lua\n"
+                 "./busybox sh ./test.sh remove.lua\n"
+                 "./busybox sh ./test.sh round_num.lua\n"
+                 "./busybox sh ./test.sh sin30.lua\n"
+                 "./busybox sh ./test.sh sort.lua\n"
+                 "./busybox sh ./test.sh strings.lua\n"
+                 "./busybox echo \"#### OS COMP TEST GROUP END lua-glibc ####\" \n";
+    }
 
     char *bb_sh[8] = {0};
     bb_sh[0] = "busybox";
