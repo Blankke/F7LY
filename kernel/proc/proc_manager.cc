@@ -2009,10 +2009,10 @@ namespace proc
             ADD_AUXV(AT_PAGESZ, PGSIZE);       // 页面大小
             ADD_AUXV(AT_RANDOM, rd_pos);       // 随机数地址
             // ADD_AUXV(AT_PHDR, elf.phoff);      // 程序头表偏移
-            // ADD_AUXV(AT_PHENT, elf.phentsize); // 程序头表项大小
-            // ADD_AUXV(AT_PHNUM, elf.phnum);     // 程序头表项数量
-            // ADD_AUXV(AT_BASE, 0);              // 动态链接器基地址（保留）
-            // ADD_AUXV(AT_ENTRY, elf.entry);     // 程序入口点地址
+            ADD_AUXV(AT_PHENT, elf.phentsize); // 程序头表项大小
+            // ADD_AUXV(AT_PHNUM, elf.phnum);     // 程序头表项数量 // 这个有问题
+            // ADD_AUXV(AT_BASE, interp_base);    // 动态链接器基地址（保留）
+            ADD_AUXV(AT_ENTRY, elf.entry);     // 程序入口点地址
             // ADD_AUXV(AT_UID, 0);               // 用户ID
             // ADD_AUXV(AT_EUID, 0);              // 有效用户ID
             // ADD_AUXV(AT_GID, 0);               // 组ID
