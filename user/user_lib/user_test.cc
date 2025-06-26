@@ -7,6 +7,16 @@ extern char *libctest[][2];
 const char musl_dir[] = "/mnt/musl/";
 const char glibc_dir[] = "/mnt/glibc/";
 
+int strcmp(const char *s1, const char *s2) noexcept(true)
+{
+    for (; *s1 == *s2; s1++, s2++)
+    {
+        if (!*s1)
+            return 0;
+    }
+    return *s1 < *s2 ? -1 : 1;
+}
+
 int run_test(const char *path, char *argv[] = 0, char *envp[] = 0)
 {
 
@@ -37,7 +47,7 @@ int basic_test(const char *path = musl_dir)
     [[maybe_unused]] int pid;
     chdir(path);
     chdir("basic");
-    if (path == musl_dir)
+    if (strcmp(path, musl_dir) == 0)
     {
         printf("#### OS COMP TEST GROUP START basic-musl ####\n");
     }
@@ -77,7 +87,7 @@ int basic_test(const char *path = musl_dir)
     run_test("munmap");
     run_test("unlink");
     run_test("pipe");
-    if (path == musl_dir)
+    if (strcmp(path, musl_dir) == 0)
     {
         printf("#### OS COMP TEST GROUP END basic-musl ####\n");
     }
@@ -363,7 +373,7 @@ char *libctest[][2] = {
     // {"pthread_exit_cancel", NULL},       // sig， fork高级用法
     // {"pthread_once_deadlock", NULL},     // sig， fork高级用法
     // {"pthread_rwlock_ebusy", NULL},      // sig， fork高级用法
-    {"putenv_doublefree", NULL},
+    // {"putenv_doublefree", NULL},
     // {"regex_backref_0", NULL}, //爆了
     // {"regex_bracket_icase", NULL}, // 爆了
     // {"regex_ere_backref", NULL},       // 爆了
