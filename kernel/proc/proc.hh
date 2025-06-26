@@ -75,6 +75,9 @@ namespace proc
         // 内存管理相关
         uint64 _kstack = 0;    // 内核栈的虚拟地址
         uint64 _sz;            // 进程用户空间的内存大小 (字节)
+        #ifdef LOONGARCH
+        uint64 elf_base = 0; // ELF 文件的基地址 (用于加载可执行文件)
+        #endif
         mem::PageTable _pt;    // 用户空间的页表
         TrapFrame *_trapframe; // 保存用户态 TrapFrame 的地址 (用于系统调用和异常处理)
 

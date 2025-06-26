@@ -15,6 +15,9 @@ namespace proc
         _pid = 0;
         _parent = nullptr;
         _sz = 0;
+#ifdef LOONGARCH
+        elf_base = 0; // 初始化 ELF 基地址为 0
+#endif
         _trapframe = nullptr;
         _kstack = 0;
         _slot = 0;
@@ -32,13 +35,13 @@ namespace proc
             of = nullptr;
         for (auto &cloexec : _fl_cloexec)
             cloexec = false;
-        //TODO: 资源限制
+        // TODO: 资源限制
         _rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_cur = 0;
         _rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_max = 0;
 
-
         // 初始化信号处理函数指针
-        for (int i = 0; i < ipc::signal::SIGRTMAX; ++i) {
+        for (int i = 0; i < ipc::signal::SIGRTMAX; ++i)
+        {
             _sigactions[i] = nullptr;
         }
         sigmask = 0;
@@ -96,10 +99,10 @@ namespace proc
         printf(" s6  = 0x%x\n", ctx->s6);
         printf(" s7  = 0x%x\n", ctx->s7);
         printf(" s8  = 0x%x\n", ctx->s8);
-        #ifdef RISCV
+#ifdef RISCV
         printf(" s9  = 0x%x\n", ctx->s9);
         printf(" s10 = 0x%x\n", ctx->s10);
         printf(" s11 = 0x%x\n", ctx->s11);
-        #endif
+#endif
     }
 }

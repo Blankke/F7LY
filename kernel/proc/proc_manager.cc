@@ -25,6 +25,7 @@
 #include "fs/vfs/file/normal_file.hh"
 #include "mem.hh"
 #include "fs/vfs/file/pipe_file.hh"
+#include "syscall_defs.hh"
 extern "C"
 {
     extern uint64 initcode_start[];
@@ -657,15 +658,26 @@ namespace proc
         mem::PageTable *curpt, *newpt;
         curpt = p->get_pagetable();
         newpt = np->get_pagetable();
-
+#ifdef RISCV
         if (mem::k_vmm.vm_copy(*curpt, *newpt, 0, p->_sz) < 0)
         {
             freeproc(np);
             np->_lock.release();
             return -1;
         }
+#elif LOONGARCH
+        if (mem::k_vmm.vm_copy(*curpt, *newpt, p->elf_base, p->_sz - p->elf_base) < 0)
+        {
+            freeproc(np);
+            np->_lock.release();
+            return -1;
+        }
+#endif
 
         np->_sz = p->_sz;
+#ifdef LOONGARCH
+        np->elf_base = p->elf_base; // 继承 ELF 基地址
+#endif
         *np->_trapframe = *p->_trapframe; // 拷贝父进程的陷阱值，而不是直接指向
         if (usp != 0)
             np->_trapframe->sp = usp; // 如果usp不为0，则设置子进程的用户栈指针
@@ -838,11 +850,19 @@ namespace proc
                 }
             }
 
+            // WNOHANG: 如果设置了 WNOHANG 选项，则不阻塞等待子进程退出
+            if (option & syscall::WNOHANG)
+            {
+                _wait_lock.release();
+                return 0; // 立即返回，不阻塞
+            }
+
             if (!havekids || p->_killed)
             {
                 _wait_lock.release();
                 return -1;
             }
+
 
             // wait children to exit
             sleep(p, &_wait_lock);
@@ -1580,6 +1600,9 @@ namespace proc
         fs::dentry *de;            // 目录项
         int i, off;                // 循环变量和偏移量
         u64 new_sz = 0;            // 新进程映像的大小
+#ifdef LOONGARCH
+        u64 elf_start = 0; // ELF 文件的起始地址
+#endif
 
         // 动态链接器相关
         elf::elfhdr interp_elf;
@@ -1593,7 +1616,7 @@ namespace proc
         else
             ab_path = proc->_cwd_name + path; // 相对路径，添加当前工作目录前缀
 
-        // printfCyan("execve file : %s\n", ab_path.c_str());
+        printfRed("execve file : %s\n", ab_path.c_str());
 
         // 解析路径并查找文件
         fs::Path path_resolver(ab_path);
@@ -1629,8 +1652,7 @@ namespace proc
         // ========== 第三阶段：加载ELF程序段 ==========
         {
 
-            bool load_bad = false;                   // 加载失败标志
-            [[maybe_unused]] uint64 start_vaddr = 0; // 用于记录第一个LOAD段的起始虚拟地址
+            bool load_bad = false; // 加载失败标志
 
             eastl::string interpreter_path;
             fs::dentry *interp_de = nullptr;
@@ -1727,6 +1749,20 @@ namespace proc
                     load_bad = true;
                     break;
                 }
+#ifdef LOONGARCH
+                // printf("elf_start: %p, ph.vaddr: %p, ph.memsz: %p\n", (void *)elf_start, (void *)ph.vaddr, (void *)ph.memsz);
+                if (elf_start == 0 || elf_start > ph.vaddr) // 记录第一个LOAD段的起始地址
+                {
+                    if (elf_start != 0)
+                    {
+                        // printf("eld_start: %p, ph.vaddr: %p\n", (void *)elf_start, (void *)ph.vaddr);
+                        panic("execve: this LOAD segment is below the first LOAD segment, which is not allowed");
+                    }
+                    elf_start = ph.vaddr; // 记录第一个LOAD段的起始地址
+                    new_sz = elf_start;
+                    printfGreen("execve: start_vaddr set to %p\n", (void *)elf_start);
+                }
+#endif
 
                 // 分配虚拟内存空间
                 uint64 sz1;
@@ -1758,22 +1794,15 @@ namespace proc
                 }
                 new_sz = sz1; // 更新新进程映像的大小
 #elif defined(LOONGARCH)
-                if (start_vaddr == 0 || start_vaddr > ph.vaddr)
-                {
-                    start_vaddr = ph.vaddr;
-                    printf("execve: start_vaddr set to %p\n", (void *)start_vaddr);
-                }
                 // printfRed("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
                 //   i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, seg_flag);
-                if ((sz1 = mem::k_vmm.vmalloc(new_pt, start_vaddr, ph.vaddr + ph.memsz, seg_flag)) == 0)
+                if ((sz1 = mem::k_vmm.vmalloc(new_pt, new_sz, ph.vaddr + ph.memsz, seg_flag)) == 0)
                 {
                     printfRed("execve: uvmalloc\n");
                     load_bad = true;
                     break;
                 }
-                start_vaddr = sz1;
-                if (sz1 > new_sz)
-                    new_sz = sz1; // 更新新进程映像的大小
+                new_sz = sz1; // 更新新进程映像的大小
 #endif
 
                 // // 用于处理elf文件中给出的段起始地址没有对其到页面首地址的情况(弃用, 我们的load_seg函数已经处理了这个问题)
@@ -2191,11 +2220,12 @@ namespace proc
         proc->_trapframe->epc = entry_point;
 #elif defined(LOONGARCH)
         proc->_trapframe->era = entry_point;
+        proc->elf_base = elf_start; // 保存ELF文件的起始地址
 #endif
         proc->_pt = new_pt;        // 替换为新的页表
         proc->_trapframe->sp = sp; // 设置栈指针
 
-        // printf("execve: new process size: %d, new pagetable: %p\n", proc->_sz, proc->_pt);
+        // printf("execve: new process size: %p, new pagetable: %p\n", proc->_sz, proc->_pt);
         k_pm.proc_freepagetable(old_pt, old_sz);
 
         // printf("execve succeed, new process size: %p\n", pro->_sz);

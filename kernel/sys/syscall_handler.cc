@@ -390,7 +390,12 @@ namespace syscall
             return -1;
         if (_arg_int(2, option) < 0)
             return -1;
-        return proc::k_pm.wait4(pid, wstatus_addr, 0);
+        // printf("[SyscallHandler::sys_wait4] pid: %d, wstatus_addr: %p, option: %d\n",
+            //    pid, wstatus_addr, option);
+        int waitret = proc::k_pm.wait4(pid, wstatus_addr, option);
+        // printf("[SyscallHandler::sys_wait4] waitret: %d\n",
+            //    waitret);
+        return waitret;
     }
     uint64 SyscallHandler::sys_getppid()
     {
