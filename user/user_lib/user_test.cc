@@ -218,37 +218,27 @@ int libc_test(const char *path = musl_dir)
     return 0;
 }
 
-int lua_test()
+int lua_test(const char *path = musl_dir)
 {
-    [[maybe_unused]] int pid;
-    pid = fork();
-    if (pid < 0)
-    {
-        printf("fork failed\n");
-        return -1;
-    }
-    else if (pid == 0)
-    {
-        chdir("/mnt/glibc/");
-        char *bb_sh[8] = {0};
-        bb_sh[0] = "busybox";
-        bb_sh[1] = "sh";
-        bb_sh[2] = "lua_testcode.sh";
-        printf("execve busybox shell\n");
-        if (execve("busybox", bb_sh, 0) < 0)
-        {
-            printf("execve failed\n");
-            exit(1);
-        }
-        exit(0);
-    }
-    else
-    {
-        int child_exit_state = 33;
-        if (wait(&child_exit_state) < 0)
-            printf("wait fail\n");
-        printf("shell exited with code %d\n", child_exit_state);
-    }
+    chdir(path);
+    char *lua_sh = "./busybox echo \"#### OS COMP TEST GROUP START lua-musl ####\" \n"
+                   "./busybox sh ./test.sh date.lua\n"
+                   "./busybox sh ./test.sh file_io.lua\n"
+                   "./busybox sh ./test.sh max_min.lua\n"
+                   "./busybox sh ./test.sh random.lua\n"
+                   "./busybox sh ./test.sh remove.lua\n"
+                   "./busybox sh ./test.sh round_num.lua\n"
+                   "./busybox sh ./test.sh sin30.lua\n"
+                   "./busybox sh ./test.sh sort.lua\n"
+                   "./busybox sh ./test.sh strings.lua\n"
+                   "./busybox echo \"#### OS COMP TEST GROUP END lua-musl ####\" \n";
+
+    char *bb_sh[8] = {0};
+    bb_sh[0] = "busybox";
+    bb_sh[1] = "sh";
+    bb_sh[2] = "-c";
+    bb_sh[3] = lua_sh;
+    run_test("busybox", bb_sh, 0);
     return 0;
 }
 
