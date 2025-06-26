@@ -1638,11 +1638,12 @@ namespace proc
             // 检查程序头中是否有PT_INTERP段
             for (i = 0, off = elf.phoff; i < elf.phnum; i++, off += sizeof(ph))
             {
-                if (ab_path != "/mnt/musl/runtest.exe")
+                if (strcmp(ab_path.c_str(), "/mnt/musl/entry-dynamic.exe") != 0)
                 {
+                    printfCyan("execve: checking program header %d at offset %d\n", i, off);
                     break;
                 }
-                    de->getNode()->nodeRead(reinterpret_cast<uint64>(&ph), off, sizeof(ph));
+                de->getNode()->nodeRead(reinterpret_cast<uint64>(&ph), off, sizeof(ph));
                 if (ph.type == elf::elfEnum::ELF_PROG_INTERP) // PT_INTERP = 3
                 {
                     // TODO, noderead在basic有时候乱码，故在下面设置interp_de = de;跳过动态链接
@@ -1732,11 +1733,11 @@ namespace proc
                 uint64 seg_flag = PTE_U; // User可访问标志
 #ifdef RISCV
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC)
-                seg_flag |= riscv::PteEnum::pte_executable_m;
+                    seg_flag |= riscv::PteEnum::pte_executable_m;
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
-                seg_flag |= riscv::PteEnum::pte_writable_m;
+                    seg_flag |= riscv::PteEnum::pte_writable_m;
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ)
-                seg_flag |= riscv::PteEnum::pte_readable_m;
+                    seg_flag |= riscv::PteEnum::pte_readable_m;
 #elif defined(LOONGARCH)
                 seg_flag |= PTE_P | PTE_D | PTE_PLV; // PTE_P: Present bit, segment is present in memory
                 // PTE_D: Dirty bit, segment is dirty (modified)
@@ -1798,7 +1799,6 @@ namespace proc
                 return -1;
             }
 
-
             if (is_dynamic)
             {
                 if (interp_de == nullptr)
@@ -1836,11 +1836,11 @@ namespace proc
 #ifdef RISCV
                     /// 放开动态链接器权限
                     if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC)
-                    seg_flag |= riscv::PteEnum::pte_executable_m;
+                        seg_flag |= riscv::PteEnum::pte_executable_m;
                     if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
-                    seg_flag |= riscv::PteEnum::pte_writable_m;
+                        seg_flag |= riscv::PteEnum::pte_writable_m;
                     if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ)
-                    seg_flag |= riscv::PteEnum::pte_readable_m;
+                        seg_flag |= riscv::PteEnum::pte_readable_m;
 #elif defined(LOONGARCH)
                     seg_flag |= PTE_P | PTE_D | PTE_PLV;
                     if (!(interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC))
@@ -2062,14 +2062,14 @@ namespace proc
             // ADD_AUXV(AT_PHDR, elf.phoff);      // 程序头表偏移
             ADD_AUXV(AT_PHENT, elf.phentsize); // 程序头表项大小
             // ADD_AUXV(AT_PHNUM, elf.phnum);     // 程序头表项数量 // 这个有问题
-            // ADD_AUXV(AT_BASE, interp_base);    // 动态链接器基地址（保留）
+            ADD_AUXV(AT_BASE, interp_base);    // 动态链接器基地址（保留）
             ADD_AUXV(AT_ENTRY, elf.entry);     // 程序入口点地址
             // ADD_AUXV(AT_UID, 0);               // 用户ID
             // ADD_AUXV(AT_EUID, 0);              // 有效用户ID
             // ADD_AUXV(AT_GID, 0);               // 组ID
             // ADD_AUXV(AT_EGID, 0);              // 有效组ID
             // ADD_AUXV(AT_SECURE, 0);            // 安全模式标志
-            ADD_AUXV(AT_NULL, 0);              // 结束标记
+            ADD_AUXV(AT_NULL, 0); // 结束标记
 
             // printf("index: %d\n", index);
 

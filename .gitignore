@@ -35,3 +35,4 @@ output-rv.txt
 disasm_busybox_glibc.asm
 disasm_la_busybox_musl.asm
 sdcard-la.img.bak
+disasm_rv_musl_libcso.asm
