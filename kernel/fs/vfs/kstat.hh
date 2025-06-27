@@ -70,8 +70,8 @@ namespace fs
 					ino = node->rIno();
 					mode = node->rMode().transMode(); // process mode 
 					nlink = 1;
-					uid = 0;
-					gid = 0;
+					uid = 1;
+					gid = 1;
 					rdev = 0;
 					size = node->rFileSize();
 					__pad = 0;

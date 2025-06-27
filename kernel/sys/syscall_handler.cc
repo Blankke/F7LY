@@ -188,7 +188,7 @@ namespace syscall
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
         uint64 sys_num = p->get_trapframe()->a7; // 获取系统调用号
 
-        if (sys_num != 64 && sys_num != 66)
+        if (!(sys_num == 64 && p->_trapframe->a0 == 1) && !(sys_num == 66 && p->_trapframe->a0 == 1))
         {
             // printf("---------- start ------------\n");
             // printfMagenta("[Pcb::get_open_file] pid: %d\n", p->_pid);
@@ -203,18 +203,18 @@ namespace syscall
         }
         else
         {
-            // if (sys_num != 64 && sys_num != 66)
-            // {
-            //     // 打印寄存器中保存的值
-            //     printfCyan("[SyscallHandler::invoke_syscaller]sys_num: %d, syscall_name: %s\n", sys_num, _syscall_name[sys_num]);
-            //     printfCyan("[SyscallHandler::invoke_syscaller]a0: %p, a1: %p, a2: %p, a3: %p, a4: %p, a5: %p\n",
-            //                p->_trapframe->a0, p->_trapframe->a1, p->_trapframe->a2,
-            //                p->_trapframe->a3, p->_trapframe->a4, p->_trapframe->a5);
-            // }
+            if (!(sys_num == 64 && p->_trapframe->a0 == 1) && !(sys_num == 66 && p->_trapframe->a0 == 1))
+            {
+                // 打印寄存器中保存的值
+                printfCyan("[SyscallHandler::invoke_syscaller]sys_num: %d, syscall_name: %s\n", sys_num, _syscall_name[sys_num]);
+                printfCyan("[SyscallHandler::invoke_syscaller]a0: %p, a1: %p, a2: %p, a3: %p, a4: %p, a5: %p\n",
+                           p->_trapframe->a0, p->_trapframe->a1, p->_trapframe->a2,
+                           p->_trapframe->a3, p->_trapframe->a4, p->_trapframe->a5);
+            }
             // 调用对应的系统调用函数
             uint64 ret = (this->*_syscall_funcs[sys_num])();
-            // if (sys_num != 64 && sys_num != 66)
-            //     printfCyan("[SyscallHandler::invoke_syscaller]ret: %p\n", sys_num, ret);
+            if (!(sys_num == 64 && p->_trapframe->a0 == 1) && !(sys_num == 66 && p->_trapframe->a0 == 1))
+                printfCyan("[SyscallHandler::invoke_syscaller]ret: %p\n", sys_num, ret);
             p->_trapframe->a0 = ret; // 设置返回值
         }
         //     if (sys_num != 64 && sys_num != 66)
@@ -1320,7 +1320,66 @@ namespace syscall
     uint64 SyscallHandler::sys_fstatat()
     {
         return 0;
-        panic("未实现该系统调用");
+        // TODO,这个系统调用关掉了
+        int dirfd;
+        eastl::string path;
+        uint64 kst_addr;
+        int flags;
+        fs::Kstat kst;
+
+        // 获取参数
+        if (_arg_int(0, dirfd) < 0)
+        {
+            printfRed("[SyscallHandler::sys_fstatat] Error fetching dirfd argument\n");
+            return -1;
+        }
+
+        if (_arg_str(1, path, 256) < 0)
+        {
+            printfRed("[SyscallHandler::sys_fstatat] Error fetching path argument\n");
+            return -1;
+        }
+
+        if (_arg_addr(2, kst_addr) < 0)
+        {
+            printfRed("[SyscallHandler::sys_fstatat] Error fetching kstat address\n");
+            return -1;
+        }
+
+        if (_arg_int(3, flags) < 0)
+        {
+            printfRed("[SyscallHandler::sys_fstatat] Error fetching flags argument\n");
+            return -1;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+
+        // 尝试打开文件以获取文件描述符，使用和 sys_openat 相同的方式
+        int fd = proc::k_pm.open(dirfd, path, O_RDONLY);
+        if (fd < 0)
+        {
+            printfRed("[SyscallHandler::sys_fstatat] Failed to open file: %s\n", path.c_str());
+            return -1;
+        }
+
+        // 获取文件状态信息
+        if (proc::k_pm.fstat(fd, &kst) < 0)
+        {
+            proc::k_pm.close(fd);
+            printfRed("[SyscallHandler::sys_fstatat] Failed to get file stat\n");
+            return -1;
+        }
+
+        // 关闭临时打开的文件描述符
+        proc::k_pm.close(fd);
+
+        // 将结果拷贝到用户空间
+        if (mem::k_vmm.copy_out(*pt, kst_addr, &kst, sizeof(kst)) < 0)
+        {
+            printfRed("[SyscallHandler::sys_fstatat] Error copying out kstat\n");
+            return -1;
+        }
     }
     uint64 SyscallHandler::SyscallHandler::sys_exit_group()
     {

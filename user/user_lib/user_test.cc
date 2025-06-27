@@ -312,7 +312,7 @@ char *libctest[][2] = {
     {"clock_gettime", NULL},
     {"dirname", NULL},
     {"env", NULL},
-    // {"fdopen", NULL}, // fdopen failed
+    // {"fdopen", NULL}, // fdopen failed 问题在于写入后读不出来，怀疑根本没写入成功
     {"fnmatch", NULL},
     // {"fscanf", NULL}, //ioctl 爆了
     // {"fwscanf", NULL}, //死了
@@ -326,16 +326,16 @@ char *libctest[][2] = {
     // {"pthread_tsd", NULL},    // sig， fork高级用法
     {"qsort", NULL},
     {"random", NULL},
-    // {"search_hsearch", NULL}, //爆了
+    {"search_hsearch", NULL},
     {"search_insque", NULL},
     {"search_lsearch", NULL},
     {"search_tsearch", NULL},
-    // {"setjmp", NULL}, // 爆了
+    // {"setjmp", NULL}, //信号相关，爆了
     {"snprintf", NULL},
-    // {"socket", NULL}, // 爆了
+    // {"socket", NULL}, // 网络相关，这个不测了
     {"sscanf", NULL},
-    // {"sscanf_long", NULL}, // 爆了
-    // {"stat", NULL}, //ioctl
+    {"sscanf_long", NULL},
+    // {"stat", NULL}, //sys_fstatat我关掉了，原来就是关的，开了basictest爆炸，应该没实现对
     {"strftime", NULL},
     {"string", NULL},
     {"string_memcpy", NULL},
@@ -355,18 +355,18 @@ char *libctest[][2] = {
     {"time", NULL},
     {"tls_align", NULL},
     {"udiv", NULL},
-    // {"ungetc", NULL}, //iotcl爆了
-    // {"utime", NULL}, //爆了
+    // {"ungetc", NULL}, //文件系统爆了
+    // {"utime", NULL}, // sys_utimensat实现不正确
     {"wcsstr", NULL},
     {"wcstol", NULL},
     // {"daemon_failure", NULL}, // 爆了
     {"dn_expand_empty", NULL},
     {"dn_expand_ptr_0", NULL},
-    // {"fflush_exit", NULL},//fd爆了
+    // {"fflush_exit", NULL},//fd爆了，标准输出不见了
     {"fgets_eof", NULL},
     {"fgetwc_buffering", NULL},
     {"fpclassify_invalid_ld80", NULL},
-    // {"ftello_unflushed_append", NULL}, // 爆了
+    {"ftello_unflushed_append", NULL},
     {"getpwnam_r_crash", NULL},
     {"getpwnam_r_errno", NULL},
     {"iconv_roundtrips", NULL},
@@ -392,13 +392,13 @@ char *libctest[][2] = {
     // {"pthread_exit_cancel", NULL},       // sig， fork高级用法
     // {"pthread_once_deadlock", NULL},     // sig， fork高级用法
     // {"pthread_rwlock_ebusy", NULL},      // sig， fork高级用法
-    // {"putenv_doublefree", NULL},
-    // {"regex_backref_0", NULL}, //爆了
-    // {"regex_bracket_icase", NULL}, // 爆了
-    // {"regex_ere_backref", NULL},       // 爆了
-    // {"regex_escaped_high_byte", NULL}, // 爆了
-    // {"regex_negated_range", NULL},     // 爆了
-    // {"regexec_nosub", NULL},           // 爆了
+    {"putenv_doublefree", NULL},
+    {"regex_backref_0", NULL},
+    {"regex_bracket_icase", NULL},
+    {"regex_ere_backref", NULL},
+    {"regex_escaped_high_byte", NULL},
+    {"regex_negated_range", NULL},
+    {"regexec_nosub", NULL},
     // {"rewind_clear_error", NULL}, // 爆了
     // {"rlimit_open_files", NULL}, // 爆了
     {"scanf_bytes_consumed", NULL},
@@ -407,14 +407,13 @@ char *libctest[][2] = {
     {"setvbuf_unget", NULL}, // streamdevice not support lseek currently!但是pass了
     {"sigprocmask_internal", NULL},
     {"sscanf_eof", NULL},
-    // {"statvfs", NULL}, //爆了
+    {"statvfs", NULL},
     {"strverscmp", NULL},
     {"syscall_sign_extend", NULL},
     {"uselocale_0", NULL},
     {"wcsncpy_read_overflow", NULL},
     {"wcsstr_false_negative", NULL},
-    {NULL}
-};
+    {NULL}};
 
 char *bb_cmds[][10] = {
     {"echo", "#### independent command test", NULL},
