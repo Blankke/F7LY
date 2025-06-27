@@ -489,7 +489,7 @@ namespace mem
                 panic("vmunmap: not a leaf");
             if (do_free)
             {
-                printfMagenta("vmunmap: free va: %p, pa: %p\n", a, pte.pa());
+                // printfMagenta("vmunmap: free va: %p, pa: %p\n", a, pte.pa());
                 k_pmm.free_page(pte.pa());
             }
             // printfMagenta("vmunmap: unmap va: %p, pa: %p\n", a, pte.pa());

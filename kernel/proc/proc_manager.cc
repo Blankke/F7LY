@@ -898,7 +898,6 @@ namespace proc
                 return -1;
             }
 
-
             // wait children to exit
             sleep(p, &_wait_lock);
         }
@@ -973,17 +972,20 @@ namespace proc
         _wait_lock.acquire();
         reparent(p); // 将 p 的所有子进程交给 init 进程收养
 
-        if (p->_parent){
+        if (p->_parent)
+        {
             wakeup(p->_parent); // 唤醒父进程（可能在 wait() 中阻塞）
         }
 
-        if(p->_parent){
+        if (p->_parent)
+        {
             p->_parent->_lock.acquire();
             p->_parent->add_signal(ipc::signal::SIGCHLD); // 通知父进程有子进程退出
             p->_parent->_lock.release();
         }
 
-        if (p->_parent){
+        if (p->_parent)
+        {
             wakeup(p->_parent); // 唤醒父进程（可能在 wait() 中阻塞）
         }
 
@@ -1951,73 +1953,71 @@ namespace proc
                            (void *)interp_base, (void *)interp_entry);
             }
         }
-        TODO(== == == == == 第四阶段：为glibc准备程序头信息 == == == == ==)
-        // ================    (已写, 我们抄华科的不用在这里初始化, 直接在下面把数据算出来就可以了)    ========================
-
+        // == == == == == 第四阶段：为glibc准备程序头信息 == == == == ==)
         // 将ELF程序头转储到用户空间，供glibc的动态链接器使用
-        TODO(u64 phdr = 0; // AT_PHDR辅助向量的值
-             {
-                 ulong phsz = elf.phentsize * elf.phnum; // 程序头表的总大小
-                 u64 sz1;
-                 u64 load_end = 0; // 所有LOAD段的结束地址
+        uint64 phdr = 0; // AT_PHDR辅助向量的值
+        {
+            ulong phsz = elf.phentsize * elf.phnum; // 程序头表的总大小
+            u64 sz1;
+            u64 load_end = 0; // 所有LOAD段的结束地址
 
-                 // 找到所有LOAD段的最高结束地址
-                 for (auto &sec : new_sec_desc)
-                 {
-                     u64 end = (ulong)sec._sec_start + sec._sec_size;
-                     if (end > load_end)
-                         load_end = end;
-                 }
+            load_end = PGROUNDUP(new_sz); // 将新进程映像的大小对齐到页边界
+#ifdef RISCV
+            if ((sz1 = mem::k_vmm.uvmalloc(new_pt, load_end, load_end + phsz, PTE_W | PTE_X | PTE_R | PTE_U)) == 0)
+            {
+                k_pm.proc_freepagetable(new_pt, new_sz);
+                panic("execve: vaalloc");
+                return -1;
+            }
+#elif LOONGARCH
+            if ((sz1 = mem::k_vmm.uvmalloc(new_pt, load_end, load_end + phsz, PTE_P | PTE_W | PTE_PLV | PTE_MAT | PTE_D)) == 0)
+            {
+                k_pm.proc_freepagetable(new_pt, new_sz);
+                panic("execve: vaalloc");
+                return -1;
+            }
+#endif
+            new_sz = sz1;
+            // 分配临时缓冲区读取程序头
+            uint8 *tmp = new uint8[phsz + 8];
+            if (tmp == nullptr)
+            {
+                k_pm.proc_freepagetable(new_pt, new_sz);
+                panic("execve: no mem");
+                return -1;
+            }
 
-                 // 在LOAD段之后分配空间存放程序头
-                 load_end = hsai::page_round_up(load_end);
-                 if ((sz1 = mm::k_vmm.vm_alloc(new_pt, load_end, load_end + phsz)) == 0)
-                 {
-                     log_error("execve: vaalloc");
-                     _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
-                     return -1;
-                 }
+            // 从文件读取程序头表
+            if (de->getNode()->nodeRead((ulong)tmp, elf.phoff, phsz) != phsz)
+            {
+                delete[] tmp;
+                k_pm.proc_freepagetable(new_pt, new_sz);
+                panic("execve: node read");
+                return -1;
+            }
 
-                 // 分配临时缓冲区读取程序头
-                 u8 *tmp = new u8[phsz + 8];
-                 if (tmp == nullptr)
-                 {
-                     log_error("execve: no mem");
-                     _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
-                     return -1;
-                 }
+            // 将程序头表拷贝到用户空间
+            if (mem::k_vmm.copy_out(new_pt, load_end, (void *)tmp, phsz) < 0)
+            {
+                delete[] tmp;
+                k_pm.proc_freepagetable(new_pt, new_sz);
+                panic("execve: copy out");
+                return -1;
+            }
 
-                 // 从文件读取程序头表
-                 if (de->getNode()->nodeRead((ulong)tmp, elf.phoff, phsz) != phsz)
-                 {
-                     log_error("execve: node read");
-                     delete[] tmp;
-                     _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
-                     return -1;
-                 }
+            delete[] tmp;
 
-                 // 将程序头表拷贝到用户空间
-                 if (mm::k_vmm.copyout(new_pt, load_end, (void *)tmp, phsz) < 0)
-                 {
-                     log_error("execve: copy out");
-                     delete[] tmp;
-                     _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
-                     return -1;
-                 }
+            phdr = load_end; // 记录程序头在用户空间的地址
 
-                 delete[] tmp;
+            printf("execve: program headers loaded at %p, size: %p\n", (void *)phdr, phsz);
 
-                 phdr = load_end; // 记录程序头在用户空间的地址
-
-                 // 将程序头段作为一个程序段记录下来
-                 psd_t &ph_psd = new_sec_desc[new_sec_cnt];
-                 ph_psd._sec_start = (void *)phdr;
-                 ph_psd._sec_size = phsz;
-                 ph_psd._debug_name = "program headers";
-                 new_sec_cnt++;
-
-                 new_sz += hsai::page_round_up(phsz);
-             })
+            // // 将程序头段作为一个程序段记录下来
+            // psd_t &ph_psd = new_sec_desc[new_sec_cnt];
+            // ph_psd._sec_start = (void *)phdr;
+            // ph_psd._sec_size = phsz;
+            // ph_psd._debug_name = "program headers";
+            // new_sec_cnt++;
+        }
 
         // ========== 第五阶段：分配用户栈空间 ==========
 
@@ -2131,14 +2131,14 @@ namespace proc
             uint64 aux[AuxvEntryType::MAX_AT * 2] = {0};
             [[maybe_unused]] int index = 0;
 
-            ADD_AUXV(AT_HWCAP, 0);             // 硬件功能标志
-            ADD_AUXV(AT_PAGESZ, PGSIZE);       // 页面大小
-            ADD_AUXV(AT_RANDOM, rd_pos);       // 随机数地址
-            // ADD_AUXV(AT_PHDR, elf.phoff);      // 程序头表偏移
+            ADD_AUXV(AT_HWCAP, 0);       // 硬件功能标志
+            ADD_AUXV(AT_PAGESZ, PGSIZE); // 页面大小
+            ADD_AUXV(AT_RANDOM, rd_pos); // 随机数地址
+            ADD_AUXV(AT_PHDR, phdr);      // 程序头表偏移
             ADD_AUXV(AT_PHENT, elf.phentsize); // 程序头表项大小
-            // ADD_AUXV(AT_PHNUM, elf.phnum);     // 程序头表项数量 // 这个有问题
-            ADD_AUXV(AT_BASE, interp_base);    // 动态链接器基地址（保留）
-            ADD_AUXV(AT_ENTRY, elf.entry);     // 程序入口点地址
+            ADD_AUXV(AT_PHNUM, elf.phnum);     // 程序头表项数量 // 这个有问题
+            ADD_AUXV(AT_BASE, interp_base); // 动态链接器基地址（保留）
+            ADD_AUXV(AT_ENTRY, elf.entry);  // 程序入口点地址
             // ADD_AUXV(AT_UID, 0);               // 用户ID
             // ADD_AUXV(AT_EUID, 0);              // 有效用户ID
             // ADD_AUXV(AT_GID, 0);               // 组ID
