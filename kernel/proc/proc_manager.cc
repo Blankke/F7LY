@@ -387,12 +387,14 @@ namespace proc
     }
     void ProcessManager::proc_freepagetable(mem::PageTable &pt, uint64 sz)
     {
+        printfCyan("proc_freepagetable: freeing pagetable %p, size %u\n", pt.get_base(), sz);
 #ifdef RISCV
         mem::k_vmm.vmunmap(pt, TRAMPOLINE, 1, 0);
         mem::k_vmm.vmunmap(pt, TRAPFRAME, 1, 0);
         mem::k_vmm.vmfree(pt, sz);
 #elif defined(LOONGARCH)
-// TODO
+        mem::k_vmm.vmunmap(pt, TRAPFRAME, 1, 0);
+        mem::k_vmm.vmfree(pt, sz);
 #endif
     }
 
