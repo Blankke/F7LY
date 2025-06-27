@@ -393,8 +393,17 @@ namespace proc
         mem::k_vmm.vmunmap(pt, TRAPFRAME, 1, 0);
         mem::k_vmm.vmfree(pt, sz);
 #elif defined(LOONGARCH)
+        Pcb *proc = get_cur_pcb();
+        printfYellow("proc name: %s,elf_entry:%p\n", proc->_name, proc->elf_base);
         mem::k_vmm.vmunmap(pt, TRAPFRAME, 1, 0);
-        mem::k_vmm.vmfree(pt, sz);
+        if (strcmp(proc->_name, "initcode") == 0)
+        {
+            printfGreen("initcode end\n");
+        }
+        else
+        {
+            mem::k_vmm.vmfree(pt, sz - proc->elf_base, proc->elf_base);
+        }
 #endif
     }
 

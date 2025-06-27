@@ -470,6 +470,7 @@ namespace mem
 
     void VirtualMemoryManager::vmunmap(PageTable &pt, uint64 va, uint64 npages, int do_free)
     {
+        printfCyan("vmunmap: va: %p, npages: %d, do_free: %d\n", va, npages, do_free);
         uint64 a;
         Pte pte;
 
@@ -489,7 +490,7 @@ namespace mem
                 panic("vmunmap: not a leaf");
             if (do_free)
             {
-                printfMagenta("vmunmap: free va: %p, pa: %p\n", a, pte.pa());
+                // printfMagenta("vmunmap: free va: %p, pa: %p\n", a, pte.pa());
                 k_pmm.free_page(pte.pa());
             }
             // printfMagenta("vmunmap: unmap va: %p, pa: %p\n", a, pte.pa());
@@ -556,11 +557,11 @@ namespace mem
         return 0;
     }
 
-    void VirtualMemoryManager::vmfree(PageTable &pt, uint64 sz)
+    void VirtualMemoryManager::vmfree(PageTable &pt, uint64 sz,uint64 base)
     {
         // printfCyan("[vmm] vmfree: free %p bytes\n", sz);
         if (sz > 0)
-            vmunmap(pt, 0, PGROUNDUP(sz) / PGSIZE, 1);
+            vmunmap(pt, base, PGROUNDUP(sz) / PGSIZE, 1);
         pt.freewalk();
     }
 

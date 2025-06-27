@@ -60,8 +60,8 @@ namespace mem
 			printf("0x%x->", pte.get_data());
 		if (!_walk_to_next_level(pte, alloc, pt))
 		{
-			printfRed("walk pgd to pud fail, va=%p, pgd-base=%p, pgd-base=%p\n", va, _base_addr,
-					  pt._base_addr);
+			// printfRed("walk pgd to pud fail, va=%p, pgd-base=%p, pgd-base=%p\n", va, _base_addr,
+			// 		  pt._base_addr);
 			return Pte();
 		}
 #endif
@@ -74,8 +74,8 @@ namespace mem
 			printf("0x%x->", pte.get_data());
 		if (!_walk_to_next_level(pte, alloc, pt))
 		{
-			printfRed("walk pud to pmd fail, va=%p, pgd-base=%p, pud-base=%p\n", va, _base_addr,
-					  pt._base_addr);
+			// printfRed("walk pud to pmd fail, va=%p, pgd-base=%p, pud-base=%p\n", va, _base_addr,
+			// 		  pt._base_addr);
 			return Pte();
 		}
 		// search in level-1
@@ -87,8 +87,8 @@ namespace mem
 			printf("0x%x->", pte.get_data());
 		if (!_walk_to_next_level(pte, alloc, pt))
 		{
-			printfRed("walk pmd to pt fail, va=%p, pgd-base=%p, pmd-base=%p\n", va, _base_addr,
-					  pt._base_addr);
+			// printfRed("walk pmd to pt fail, va=%p, pgd-base=%p, pmd-base=%p\n", va, _base_addr,
+			// 		  pt._base_addr);
 			return Pte();
 		}
 
@@ -127,12 +127,14 @@ namespace mem
 
 	void PageTable::freewalk()
 	{ // pte num is 4096 / 8 = 512 in pgtable
+
+		printfYellow("freewalk: freewalk page table %p\n", _base_addr);
 		for (uint i = 0; i < 512; i++)
 		{
 			Pte next_level = get_pte(i);
-			printfMagenta("freewalk: pte[%d]: %p, pte2pa: %p\n", i, next_level.get_data(), next_level.pa());
-			Pte _pte((pte_t *)next_level.pa());
-			printfRed("freewalk: pte[%d]: %p, pte2pa: %p\n", i, _pte.get_data(), _pte.pa());
+			// printfMagenta("freewalk: pte[%d]: %p, pte2pa: %p\n", i, next_level.get_data(), next_level.pa());
+			Pte _pte=next_level;
+			// printfRed("freewalk: pte[%d]: %p, pte2pa: %p\n", i, _pte.get_data(), _pte.pa());
 			bool pte_valid = _pte.is_valid();
 			bool pte_leaf = !_pte.is_dir_page();
 			// printfCyan("freewalk: pte[%d]: %p, pte2pa: %p\n", i, _pte.get_data(), _pte.pa());
@@ -148,7 +150,7 @@ namespace mem
 			}
 			else if (pte_valid)
 			{
-				panic("freewalk: leaf");
+				// panic("freewalk: leaf");
 			}
 		}
 		k_pmm.free_page((void *)_base_addr);
@@ -199,7 +201,7 @@ namespace mem
 		{
 			if (!alloc)
 			{
-				printfRed("try to walk to next level but next level page table is not alloced.\n");
+				// printfRed("try to walk to next level but next level page table is not alloced.\n");
 				return false;
 			}
 			void *page_addr = k_pmm.alloc_page();
