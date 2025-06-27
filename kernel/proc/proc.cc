@@ -40,11 +40,12 @@ namespace proc
         _rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_max = 0;
 
         // 初始化信号处理函数指针
-        for (int i = 0; i < ipc::signal::SIGRTMAX; ++i)
+        for (int i = 0; i <= ipc::signal::SIGRTMAX; ++i)
         {
             _sigactions[i] = nullptr;
         }
-        sigmask = 0;
+        _sigmask = 0;
+        _signal = 0;
     }
 
     void Pcb::map_kstack(mem::PageTable &pt)

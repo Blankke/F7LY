@@ -4,7 +4,7 @@
 
 namespace proc
 {
-        class Pcb;
+    class Pcb;
     namespace ipc
     {
         namespace signal
@@ -36,6 +36,15 @@ namespace proc
             int sigprocmask(int how, sigset_t *newset, sigset_t *oldset, size_t sigsize);
             void handle_signal();
             void default_handle(Pcb *p, int signum);
+            void add_signal(proc::Pcb *p, int sig);
+            void do_handle(proc::Pcb *p, int signum, sigaction *act);
+            void sig_return();
+
+            // tool
+            bool is_valid(int sig);
+            bool sig_is_member(const uint64 set, int n_sig);
+            bool is_ignored(Pcb *now_p, int sig);
+            void clear_signal(Pcb *now_p, int sig);
         } // namespace signal
     } // namespace ipc
 } // namespace proc

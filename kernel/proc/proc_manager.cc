@@ -305,7 +305,7 @@ namespace proc
                 p->_ofile[i] = nullptr;
             }
         }
-        for (int i = 0; i < ipc::signal::SIGRTMAX; ++i)
+        for (int i = 0; i <= ipc::signal::SIGRTMAX; ++i)
         {
             if (p->_sigactions[i] != nullptr)
             {
@@ -526,6 +526,40 @@ namespace proc
             p->_lock.release();
         }
         return -1; // 没找到对应 pid 的进程
+    }
+
+    int ProcessManager::kill_signal(int pid, int sig)
+    {
+        Pcb *p;
+        for (p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
+        {
+            p->_lock.acquire();
+            if (p->_pid == pid || (p->_parent != NULL && p->_parent->_pid == pid))
+            {
+                p->add_signal(sig);
+                p->_lock.release();
+                return 0;
+            }
+            p->_lock.release();
+        }
+        return -1;
+    }
+
+    int ProcessManager::tkill(int pid, int sig)
+    {
+        Pcb *p;
+        for (p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
+        {
+            p->_lock.acquire();
+            if (p->_pid == pid)
+            {
+                p->add_signal(sig);
+                p->_lock.release();
+                return 0;
+            }
+            p->_lock.release();
+        }
+        return -1;
     }
 
     // Copy from either a user address, or kernel address,
@@ -939,8 +973,19 @@ namespace proc
         _wait_lock.acquire();
         reparent(p); // 将 p 的所有子进程交给 init 进程收养
 
-        if (p->_parent)
+        if (p->_parent){
             wakeup(p->_parent); // 唤醒父进程（可能在 wait() 中阻塞）
+        }
+
+        if(p->_parent){
+            p->_parent->_lock.acquire();
+            p->_parent->add_signal(ipc::signal::SIGCHLD); // 通知父进程有子进程退出
+            p->_parent->_lock.release();
+        }
+
+        if (p->_parent){
+            wakeup(p->_parent); // 唤醒父进程（可能在 wait() 中阻塞）
+        }
 
         p->_lock.acquire();
         p->_xstate = state << 8;       // 存储退出状态（通常高字节存状态）

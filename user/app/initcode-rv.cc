@@ -12,12 +12,12 @@ extern "C"
         // busybox_glibc_test();
         // libc_musl_test();   // /lib/ld-musl-riscv64-sf.so.1
         // lmbench_test();
-        libcbench_test();
+        // libcbench_test();
         // iozone_test();
         // lmbench_test();
         // basic_test("/mnt/musl/");
         // basic_test("/mnt/glibc/");
-        // busybox_test("/mnt/musl/");
+        busybox_test("/mnt/musl/");
         // busybox_test("/mnt/glibc/");
         // libc_test("/mnt/musl/"); // 不测glibc, 不要求测
         // lua_test("/mnt/musl/");

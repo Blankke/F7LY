@@ -117,9 +117,12 @@ namespace proc
         rlimit64 _rlim_vec[ResourceLimitId::RLIM_NLIMITS];
 
         // signal处理相关
-        proc::ipc::signal::sigaction *_sigactions[proc::ipc::signal::SIGRTMAX];
-        uint64 sigmask;
-        int _signal; // 等待的信号
+        proc::ipc::signal::sigaction *_sigactions[proc::ipc::signal::SIGRTMAX + 1];
+
+        // 通过二进制运算计算
+        uint64 _sigmask;
+        uint64 _signal;
+        
         // 程序段相关
         TODO("TBF")
         program_section_desc _prog_sections[max_program_section_num];
@@ -168,6 +171,11 @@ namespace proc
             if (fd < 0 || fd >= (int)max_open_files)
                 return nullptr;
             return _ofile[fd];
+        }
+
+        void add_signal(int sig)
+        {
+            ipc::signal::add_signal(this, sig);
         }
 
         void set_trapframe(TrapFrame *tf) { _trapframe = tf; }
