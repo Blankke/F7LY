@@ -12,7 +12,9 @@ extern "C"
         // iozone_test();
         // basic_test("/mnt/musl/");
         // basic_test("/mnt/glibc/");
+        busybox_test("/mnt/glibc/");
         busybox_test("/mnt/musl/");
+
 
         shutdown();
         return 0;

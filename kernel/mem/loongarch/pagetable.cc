@@ -189,7 +189,7 @@ namespace mem
 		{
 			if (!alloc)
 			{
-				panic("try to walk to next level but next level page table is not alloced.");
+				printfRed("try to walk to next level but next level page table is not alloced.");
 				return false;
 			}
 			void *page_addr = k_pmm.alloc_page();

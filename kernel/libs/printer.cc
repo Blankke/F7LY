@@ -192,6 +192,7 @@ void Printer::k_panic( const char *f, uint l, const char *info, ... )
 #ifdef RISCV
   sbi_shutdown();
 #elif defined(LOONGARCH)
+        *(volatile uint8 *)(0x8000000000000000 | 0x100E001C) = 0x34;
   // 龙芯架构的关机方法
   // 暂时使用无限循环，后续可实现具体的关机代码
   // TODO: 实现龙芯架构的关机方法
