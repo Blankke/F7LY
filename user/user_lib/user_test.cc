@@ -176,37 +176,17 @@ int libcbench_test(void)
 }
 
 
-int iozone_test()
+int iozone_test(const char *path = musl_dir)
 {
-    [[maybe_unused]] int pid;
-    pid = fork();
-    if (pid < 0)
-    {
-        printf("fork failed\n");
-        return -1;
-    }
-    else if (pid == 0)
-    {
-        chdir("/mnt/musl/");
-        char *bb_sh[8] = {0};
-        bb_sh[0] = "busybox";
-        bb_sh[1] = "sh";
-        bb_sh[2] = "iozone_testcode.sh";
-        printf("execve busybox shell\n");
-        if (execve("busybox", bb_sh, 0) < 0)
-        {
-            printf("execve failed\n");
-            exit(1);
-        }
-        exit(0);
-    }
-    else
-    {
-        int child_exit_state = 33;
-        if (wait(&child_exit_state) < 0)
-            printf("wait fail\n");
-        printf("shell exited with code %d\n", child_exit_state);
-    }
+    chdir(path);
+    char *argv[8] = {0};
+    argv[0] = "iozone";
+    argv[1] = "-a"; 
+    argv[2] = "-r"; 
+    argv[3] = "1k";   
+    argv[4] = "-s";   
+    argv[5] = "4m";   
+    run_test("iozone", argv, 0); //测试第一个样例，重点在动态链接
     return 0;
 }
 

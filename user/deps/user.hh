@@ -55,7 +55,7 @@ int busybox_glibc_test(void);
 int libc_musl_test(void);
 int start_shell(void);
 int libcbench_test(void);
-int iozone_test(void);
+int iozone_test(const char *path);
 int lmbench_test(void);
 int lua_test(const char *path);
 int basic_test(const char *path);
