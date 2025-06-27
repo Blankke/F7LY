@@ -92,8 +92,10 @@ namespace mem
         int length = 1 << level; // length变量表示当前结点对应的块的大小
 
         if (actual_size > length)
+        {
+            printfRed("[BuddySystem] Alloc failed, request too many pages\n");
             return -1;
-
+        }
         int index = 0;
         int current_level = 0;
 
@@ -148,12 +150,14 @@ namespace mem
 
             for (;;)
             {
-                printfYellow("here");
                 current_level--;
                 length *= 2;
                 index = (index + 1) / 2 - 1; // 回溯到父节点
                 if (index < 0)
+                {
+                    printfRed("[BuddySystem] Alloc failed, no suitable block found\n");
                     return -1; // 遍历完了没有找到合适的块，失败
+                }
                 if (index % 2 == 0)
                 { // 当前是左孩子，变换到右孩子开始继续寻找。
                     ++index;
@@ -161,6 +165,7 @@ namespace mem
                 }
             }
         }
+        // printfRed("[BuddySystem] Alloc failed, no suitable block found\n");
         return -1;
     }
 

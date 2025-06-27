@@ -59,7 +59,7 @@ namespace mem
 		if ( debug_trace_walk ) printf( "0x%x->", pte.get_data() );
 		if ( !_walk_to_next_level( pte, alloc, pt ) )
 		{
-			panic( "walk pgd to pud fail, va=%p, pgd-base=%p, pgd-base=%p", va, _base_addr,
+			printfRed( "walk pgd to pud fail, va=%p, pgd-base=%p, pgd-base=%p", va, _base_addr,
 					   pt._base_addr );
 			return Pte();
 		}
@@ -72,7 +72,7 @@ namespace mem
 		if ( debug_trace_walk ) printf( "0x%x->", pte.get_data() );
 		if ( !_walk_to_next_level( pte, alloc, pt ) )
 		{
-			panic( "walk pud to pmd fail, va=%p, pgd-base=%p, pud-base=%p", va, _base_addr,
+			printfRed( "walk pud to pmd fail, va=%p, pgd-base=%p, pud-base=%p", va, _base_addr,
 					   pt._base_addr );
 			return Pte();
 		}
@@ -84,7 +84,7 @@ namespace mem
 		if ( debug_trace_walk ) printf( "0x%x->", pte.get_data() );
 		if ( !_walk_to_next_level( pte, alloc, pt ) )
 		{
-			panic( "walk pmd to pt fail, va=%p, pgd-base=%p, pmd-base=%p", va, _base_addr,
+			printfRed( "walk pmd to pt fail, va=%p, pgd-base=%p, pmd-base=%p", va, _base_addr,
 					   pt._base_addr );
 			return Pte();
 		}

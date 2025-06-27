@@ -335,7 +335,7 @@ char *libctest[][2] = {
     // {"socket", NULL}, // 网络相关，这个不测了
     {"sscanf", NULL},
     {"sscanf_long", NULL},
-    // {"stat", NULL}, //sys_fstatat我关掉了，原来就是关的，开了basictest爆炸，应该没实现对
+    {"stat", NULL}, //sys_fstatat我关掉了，原来就是关的，开了basictest爆炸，应该没实现对
     {"strftime", NULL},
     {"string", NULL},
     {"string_memcpy", NULL},

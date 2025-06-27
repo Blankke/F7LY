@@ -10,8 +10,10 @@ extern "C"
         // libc_musl_test();
         // libcbench_test();
         // iozone_test();
-        basic_test("/mnt/musl/");
-        basic_test("/mnt/glibc/");
+        // basic_test("/mnt/musl/");
+        // basic_test("/mnt/glibc/");
+        busybox_test("/mnt/musl/");
+
         shutdown();
         return 0;
     }

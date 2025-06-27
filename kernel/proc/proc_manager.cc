@@ -104,6 +104,7 @@ namespace proc
                 // k_pm.set_vma( p );
 
                 // 为该进程分配一页 trapframe 空间（用于中断时保存用户上下文）
+                // printfYellow("[user pgtbl]==>alloc trapframe for proc %d\n", p->_gid);
                 if ((p->_trapframe = (TrapFrame *)mem::k_pmm.alloc_page()) == nullptr)
                 {
                     freeproc(p);
@@ -1381,7 +1382,7 @@ namespace proc
                     // 设置初始大小为请求大小
                     printfCyan("[mmap] anonymous mapping at %p, length: %d, prot: %d, flags: %d\n",
                                (void *)p->_vm[i].addr, length, prot, flags);
-                    p->_vm[i].is_expandable = 1;              // 可扩展
+                    p->_vm[i].is_expandable = 0;              // 可扩展
                     p->_vm[i].len = MAX(length, 10 * PGSIZE); // 至少10页
 
                     if (flags & MAP_FIXED)

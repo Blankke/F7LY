@@ -206,15 +206,15 @@ namespace syscall
             if (!(sys_num == 64 && p->_trapframe->a0 == 1) && !(sys_num == 66 && p->_trapframe->a0 == 1))
             {
                 // 打印寄存器中保存的值
-                printfCyan("[SyscallHandler::invoke_syscaller]sys_num: %d, syscall_name: %s\n", sys_num, _syscall_name[sys_num]);
-                printfCyan("[SyscallHandler::invoke_syscaller]a0: %p, a1: %p, a2: %p, a3: %p, a4: %p, a5: %p\n",
-                           p->_trapframe->a0, p->_trapframe->a1, p->_trapframe->a2,
-                           p->_trapframe->a3, p->_trapframe->a4, p->_trapframe->a5);
+                // printfCyan("[SyscallHandler::invoke_syscaller]sys_num: %d, syscall_name: %s\n", sys_num, _syscall_name[sys_num]);
+                // printfCyan("[SyscallHandler::invoke_syscaller]a0: %p, a1: %p, a2: %p, a3: %p, a4: %p, a5: %p\n",
+                //            p->_trapframe->a0, p->_trapframe->a1, p->_trapframe->a2,
+                //            p->_trapframe->a3, p->_trapframe->a4, p->_trapframe->a5);
             }
             // 调用对应的系统调用函数
             uint64 ret = (this->*_syscall_funcs[sys_num])();
-            if (!(sys_num == 64 && p->_trapframe->a0 == 1) && !(sys_num == 66 && p->_trapframe->a0 == 1))
-                printfCyan("[SyscallHandler::invoke_syscaller]ret: %p\n", sys_num, ret);
+            // if (!(sys_num == 64 && p->_trapframe->a0 == 1) && !(sys_num == 66 && p->_trapframe->a0 == 1))
+            //     printfCyan("[SyscallHandler::invoke_syscaller]ret: %p\n", sys_num, ret);
             p->_trapframe->a0 = ret; // 设置返回值
         }
         //     if (sys_num != 64 && sys_num != 66)
@@ -960,7 +960,9 @@ namespace syscall
             printfRed("[SyscallHandler::sys_brk] Error fetching brk address\n");
             return -1;
         }
-        return proc::k_pm.brk(n); // 调用进程管理器的 brk 函数
+        uint64 ret= proc::k_pm.brk(n); // 调用进程管理器的 brk 函数
+        printf("[SyscallHandler::sys_brk] brk to %p, ret: %p\n", (void *)n, (void *)ret);
+        return ret;
     }
     uint64 SyscallHandler::sys_munmap()
     {
@@ -1319,7 +1321,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_fstatat()
     {
-        return 0;
+        // return 0;
         // TODO,这个系统调用关掉了
         int dirfd;
         eastl::string path;
@@ -1380,6 +1382,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_fstatat] Error copying out kstat\n");
             return -1;
         }
+        return 0;
     }
     uint64 SyscallHandler::SyscallHandler::sys_exit_group()
     {
