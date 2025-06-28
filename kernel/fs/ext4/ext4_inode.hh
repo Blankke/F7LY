@@ -64,8 +64,10 @@ namespace fs
 			/// @return 数据块的buffer
 			Ext4Buffer *read_logical_block( long block, bool pin = false );
 
-		private:
+			int truncate(uint64 length);
+			
 
+		private:
 			void _cal_size();
 			void _cal_blocks();
 
@@ -83,6 +85,7 @@ namespace fs
 
 			Inode *_htree_lookup( eastl::string &dir_name );
 			Inode *_linear_lookup( eastl::string &dir_name, void *block );
+			int _free_indirect_block(uint32 block_no, int level);
 
 		public: // debug
 

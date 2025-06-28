@@ -965,6 +965,154 @@ namespace fs
 					dir_name.c_str(), hmajor, hminor );
 		}
 
+		int Ext4IndexNode::truncate(uint64 length)
+		{
+			// 获取当前文件大小
+			uint64 current_size = _has_size;
+			
+			// 如果目标长度大于等于当前大小，无需截断
+			if (length >= current_size)
+			{
+				return 0;
+			}
+			
+			// 检查这是否为普通文件
+			if (!(_inode.mode & ext4_imode_freg))
+			{
+				printfRed("[Ext4IndexNode::truncate] Cannot truncate non-regular file\n");
+				return -1;
+			}
+			
+			// 计算需要保留的块数
+			long block_size = _belong_fs->rBlockSize();
+			long new_blocks = (length + block_size - 1) / block_size; // 向上取整
+			
+			// 如果使用 extents 方式索引
+			if (_inode.flags.fl.extents)
+			{
+				// TODO: 实现 extents 方式的截断
+				// 这需要遍历 extent 树并释放不需要的 extent
+				printfRed("[Ext4IndexNode::truncate] Extents truncation not implemented yet\n");
+				return -1;
+			}
+			else
+			{
+				// 使用经典的直接/间接索引方式
+				
+				// 释放超出部分的直接块
+				for (long i = new_blocks; i < 12 && i < _has_blocks; i++)
+				{
+					if (_inode.blocks.blocks_ptr[i] != 0)
+					{
+						// 释放块（这里需要调用文件系统的块释放函数）
+						// _belong_fs->free_block(_inode.blocks.blocks_ptr[i]);
+						_inode.blocks.blocks_ptr[i] = 0;
+					}
+				}
+				
+				// 如果需要释放间接块
+				if (new_blocks < _belong_fs->get_sind_block_start() && _has_blocks > 12)
+				{
+					// 释放一级间接块
+					if (_inode.blocks.blocks_ptr[sind_blocks_idx] != 0)
+					{
+						_free_indirect_block(_inode.blocks.blocks_ptr[sind_blocks_idx], 1);
+						_inode.blocks.blocks_ptr[sind_blocks_idx] = 0;
+					}
+				}
+				
+				// 如果需要释放二级间接块
+				if (new_blocks < _belong_fs->get_dind_block_start() && 
+					_has_blocks > _belong_fs->get_sind_block_start())
+				{
+					if (_inode.blocks.blocks_ptr[dind_blocks_idx] != 0)
+					{
+						_free_indirect_block(_inode.blocks.blocks_ptr[dind_blocks_idx], 2);
+						_inode.blocks.blocks_ptr[dind_blocks_idx] = 0;
+					}
+				}
+				
+				// 如果需要释放三级间接块
+				if (new_blocks < _belong_fs->get_tind_block_start() && 
+					_has_blocks > _belong_fs->get_dind_block_start())
+				{
+					if (_inode.blocks.blocks_ptr[tind_blocks_idx] != 0)
+					{
+						_free_indirect_block(_inode.blocks.blocks_ptr[tind_blocks_idx], 3);
+						_inode.blocks.blocks_ptr[tind_blocks_idx] = 0;
+					}
+				}
+			}
+			
+			// 更新 inode 信息
+			_inode.size_lo = (uint32)length;
+			if (_belong_fs->support64bit())
+			{
+				_inode.size_high = (uint32)(length >> 32);
+			}
+			
+			// 重新计算块数和大小
+			_cal_size();
+			_cal_blocks();
+			
+			// 将修改后的 inode 写回磁盘
+			// TODO: 需要实现 write_inode 函数
+			// if (_belong_fs->write_inode(_inode_no, _inode) < 0)
+			// {
+			//     printfRed("[Ext4IndexNode::truncate] Failed to write inode back to disk\n");
+			//     return -1;
+			// }
+			
+			return 0;
+		}
+		
+		// 辅助函数：释放间接块
+		int Ext4IndexNode::_free_indirect_block(uint32 block_no, int level)
+		{
+			if (block_no == 0) return 0;
+			
+			Ext4Buffer *buf = _belong_fs->read_block(block_no, true);
+			if (buf == nullptr)
+			{
+				printfRed("[Ext4IndexNode::_free_indirect_block] Failed to read block %u\n", block_no);
+				return -1;
+			}
+			
+			uint32 *block_ptrs = (uint32*)buf->get_data_ptr();
+			uint32 ptrs_per_block = _belong_fs->rBlockSize() / sizeof(uint32);
+			
+			// 递归释放子块
+			if (level > 1)
+			{
+				for (uint32 i = 0; i < ptrs_per_block; i++)
+				{
+					if (block_ptrs[i] != 0)
+					{
+						_free_indirect_block(block_ptrs[i], level - 1);
+					}
+				}
+			}
+			else
+			{
+				// level == 1，直接释放数据块
+				for (uint32 i = 0; i < ptrs_per_block; i++)
+				{
+					if (block_ptrs[i] != 0)
+					{
+						// 释放数据块
+						// _belong_fs->free_block(block_ptrs[i]);
+					}
+				}
+			}
+			
+			buf->unpin();
+			
+			// 释放当前间接块
+			// _belong_fs->free_block(block_no);
+			
+			return 0;
+		}
+
 	} // namespace ext4
 
 } // namespace fs

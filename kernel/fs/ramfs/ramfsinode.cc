@@ -266,6 +266,8 @@ namespace fs
 
 		size_t Normal::nodeWrite(uint64 src_, size_t off, size_t len)
 		{
+
+			//iozone在这里有问题，感觉会在for循环里爆掉
 			size_t write_len = len;
 			char *writecontent = new char[len];
 			memset(writecontent, 0, len);

@@ -2432,7 +2432,76 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_ftruncate()
     {
-        panic("未实现该系统调用");
+        int fd;
+        uint64 size;
+        
+        // 获取参数
+        if (_arg_int(0, fd) < 0)
+        {
+            printfRed("[SyscallHandler::sys_ftruncate] Error fetching fd argument\n");
+            return -1;
+        }
+        
+        if (_arg_addr(1, size) < 0)
+        {
+            printfRed("[SyscallHandler::sys_ftruncate] Error fetching size argument\n");
+            return -1;
+        }
+        
+        // 获取当前进程
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        
+        // 检查文件描述符是否有效
+        if (fd < 0 || fd >= (int)proc::max_open_files || p->_ofile[fd] == nullptr)
+        {
+            printfRed("[SyscallHandler::sys_ftruncate] Invalid file descriptor: %d\n", fd);
+            return -EBADF;
+        }
+        
+        // 获取文件对象
+        fs::file *f = p->_ofile[fd];
+        
+        // 检查文件类型是否为普通文件
+        if (f->_attrs.filetype != fs::FileTypes::FT_NORMAL)
+        {
+            printfRed("[SyscallHandler::sys_ftruncate] File is not a regular file\n");
+            return -EINVAL;
+        }
+        
+        // 检查文件是否可写
+        if (!(f->_attrs._value & O_WRONLY) && !(f->_attrs._value & O_RDWR))
+        {
+            printfRed("[SyscallHandler::sys_ftruncate] File not opened for writing\n");
+            return -EBADF;
+        }
+        
+        // 转换为普通文件对象
+        fs::normal_file *normal_f = static_cast<fs::normal_file *>(f);
+        
+        // 获取文件的 dentry 和 inode
+        fs::dentry *dent = normal_f->getDentry();
+        if (dent == nullptr)
+        {
+            printfRed("[SyscallHandler::sys_ftruncate] Failed to get dentry\n");
+            return -EIO;
+        }
+        
+        fs::Inode *inode = dent->getNode();
+        if (inode == nullptr)
+        {
+            printfRed("[SyscallHandler::sys_ftruncate] Failed to get inode\n");
+            return -EIO;
+        }
+        
+        // 执行截断操作
+        if (inode->truncate(size) < 0)
+        {
+            printfRed("[SyscallHandler::sys_ftruncate] Failed to truncate file to size %lu\n", size);
+            return -EIO;
+        }
+        
+        // 成功返回
+        return 0;
     }
     uint64 SyscallHandler::sys_pread64()
     {
@@ -2514,6 +2583,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_fsync()
     {
+        return 0; // copy from唐老师
         panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_futex()
