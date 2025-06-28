@@ -175,18 +175,23 @@ int libcbench_test(void)
     return 0;
 }
 
-
 int iozone_test(const char *path = musl_dir)
 {
     chdir(path);
-    char *argv[8] = {0};
-    argv[0] = "iozone";
-    argv[1] = "-a"; 
-    argv[2] = "-r"; 
-    argv[3] = "1k";   
-    argv[4] = "-s";   
-    argv[5] = "4m";   
-    run_test("iozone", argv, 0); //测试第一个样例，重点在动态链接
+    // char *argv[8] = {0};
+    // argv[0] = "iozone";
+    // argv[1] = "-a";
+    // argv[2] = "-r";
+    // argv[3] = "1k";
+    // argv[4] = "-s";
+    // argv[5] = "4m";
+    // run_test("iozone", argv, 0); // 测试第一个样例，重点在动态链接
+        char *bb_sh[8] = {0};
+    bb_sh[0] = "busybox";
+    bb_sh[1] = "sh";
+    bb_sh[2] = "iozone_testcode.sh";
+    run_test("busybox", bb_sh, 0);
+    return 0;
     return 0;
 }
 
@@ -197,9 +202,15 @@ int libc_test(const char *path = musl_dir)
     char *argv[8] = {0};
     argv[0] = "runtest.exe";
     argv[1] = "-w";
-    argv[2] = "entry-dynamic.exe";
+    argv[2] = "entry-static.exe";
     chdir(path);
     printf("#### OS COMP TEST GROUP START libctest-musl ####\n");
+    for (int i = 0; libctest[i][0] != NULL; i++)
+    {
+        argv[3] = libctest[i][0];
+        run_test("runtest.exe", argv, 0);
+    }
+    argv[2] = "entry-dynamic.exe";
     for (int i = 0; libctest[i][0] != NULL; i++)
     {
         argv[3] = libctest[i][0];
@@ -315,7 +326,7 @@ char *libctest[][2] = {
     // {"socket", NULL}, // 网络相关，这个不测了
     {"sscanf", NULL},
     {"sscanf_long", NULL},
-    {"stat", NULL}, //sys_fstatat我关掉了，原来就是关的，开了basictest爆炸，应该没实现对
+    {"stat", NULL}, // sys_fstatat我关掉了，原来就是关的，开了basictest爆炸，应该没实现对
     {"strftime", NULL},
     {"string", NULL},
     {"string_memcpy", NULL},
@@ -414,7 +425,7 @@ char *bb_cmds[][10] = {
     {"uname", NULL},
     {"uptime", NULL},
     {"printf", "abc\\n", NULL}, // 这个有问题
-    {"ps", NULL}, // 这个有问题
+    {"ps", NULL},               // 这个有问题
     {"pwd", NULL},
     {"free", NULL},
     {"hwclock", NULL},
@@ -423,7 +434,7 @@ char *bb_cmds[][10] = {
     {"sleep", "1", NULL},
     {"echo", "#### file operation test", NULL},
     {"touch", "test.txt", NULL},
-    {"echo \"hello world\" > test.txt", NULL}, //这个有问题
+    {"echo \"hello world\" > test.txt", NULL}, // 这个有问题
     {"cat", "test.txt", NULL},
     {"cut", "-c", "3", "test.txt", NULL},
     // {"od", "test.txt", NULL},
@@ -447,7 +458,7 @@ char *bb_cmds[][10] = {
     {"mkdir", "test_dir", NULL},
     {"mv", "test_dir", "test", NULL},
     {"rmdir", "test", NULL},
-    {"grep", "hello", "busybox_cmd.txt", NULL}, //这个有问题
+    {"grep", "hello", "busybox_cmd.txt", NULL},         // 这个有问题
     {"cp", "busybox_cmd.txt", "busybox_cmd.bak", NULL}, // 这个有问题
     {"rm", "busybox_cmd.bak", NULL},
     // {"find", ".", "-name", "busybox_cmd.txt", NULL},

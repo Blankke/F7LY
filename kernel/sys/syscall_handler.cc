@@ -395,10 +395,10 @@ namespace syscall
         if (_arg_int(2, option) < 0)
             return -1;
         // printf("[SyscallHandler::sys_wait4] pid: %d, wstatus_addr: %p, option: %d\n",
-            //    pid, wstatus_addr, option);
+        //    pid, wstatus_addr, option);
         int waitret = proc::k_pm.wait4(pid, wstatus_addr, option);
         // printf("[SyscallHandler::sys_wait4] waitret: %d\n",
-            //    waitret);
+        //    waitret);
         return waitret;
     }
     uint64 SyscallHandler::sys_getppid()
@@ -960,7 +960,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_brk] Error fetching brk address\n");
             return -1;
         }
-        uint64 ret= proc::k_pm.brk(n); // 调用进程管理器的 brk 函数
+        uint64 ret = proc::k_pm.brk(n); // 调用进程管理器的 brk 函数
         printf("[SyscallHandler::sys_brk] brk to %p, ret: %p\n", (void *)n, (void *)ret);
         return ret;
     }
@@ -2509,6 +2509,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_sync()
     {
+        return 0; // copy from唐老师
         panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_fsync()
