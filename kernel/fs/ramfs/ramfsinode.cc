@@ -283,8 +283,8 @@ namespace fs
 					data.push_back(writecontent[i]);
 				}
 			}
-			printf("data is %s\n", data.c_str());
-			printf("data size is %d\n", data.length());
+			// printf("data is %s\n", data.c_str());
+			// printf("data size is %d\n", data.length());
 			return write_len;
 		}
 	}

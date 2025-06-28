@@ -961,7 +961,7 @@ namespace syscall
             return -1;
         }
         uint64 ret= proc::k_pm.brk(n); // 调用进程管理器的 brk 函数
-        printf("[SyscallHandler::sys_brk] brk to %p, ret: %p\n", (void *)n, (void *)ret);
+        // printf("[SyscallHandler::sys_brk] brk to %p, ret: %p\n", (void *)n, (void *)ret);
         return ret;
     }
     uint64 SyscallHandler::sys_munmap()

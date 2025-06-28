@@ -591,6 +591,7 @@ namespace mem
         for (; a < newsz; a += PGSIZE)
         {
             pa = (uint64)k_pmm.alloc_page();
+            // printfCyan("[vmalloc] alloc page: %p\n", pa);
             if (pa == 0)
             {
                 vmfree(pt, oldsz);

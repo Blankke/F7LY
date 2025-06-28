@@ -51,7 +51,7 @@ namespace mem
 		// 	);
 		// 	return nullptr;
 		// }
-		// printfBlue( "申请内存分配 %d bytes", size );
+		printfBlue( "申请内存分配 %d bytes\n", size );
 		// return _k_allocator_coarse.allocate_pages( ( size + pg_size - 1 ) / pg_size );
 		return _k_allocator_fine.malloc( size );
 	}

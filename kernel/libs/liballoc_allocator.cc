@@ -246,7 +246,7 @@ namespace mem
 				maj->next = _allocate_new_chunk( size );
 				if ( maj->next == nullptr )
 				{
-					printfYellow( "L-allocator : no memory to allocate for the major chunk" );
+					printfYellow( "L-allocator : no memory to allocate for the major chunk\n" );
 					break;
 				}
 				maj->next->prev = maj;
@@ -347,7 +347,7 @@ namespace mem
 
 	L_TagMajor * L_Allocator::_allocate_new_chunk( uint64 size )
 	{
-		assert( _base_allocator != nullptr, "L-allocator : try to cache chunks while not inited!" );
+		assert( _base_allocator != nullptr, "L-allocator : try to cache chunks while not inited!\n" );
 
 		uint64 st;
 
@@ -365,7 +365,7 @@ namespace mem
 		L_TagMajor * maj = ( L_TagMajor* ) _base_allocator->alloc_pages(st);
 		if ( maj == nullptr )
 		{
-			printfYellow( "L-allocator : try to request %d pages but no memory to use.", st );
+			printfYellow( "L-allocator : try to request %d pages but no memory to use.\n", st );
 			return nullptr;
 		}
 
