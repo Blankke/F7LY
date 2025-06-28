@@ -8,6 +8,7 @@
 #include "memlayout.hh"
 #include "klib.hh"
 #include "printer.hh"
+
 namespace mem
 {
 	HeapMemoryManager k_hmm;
@@ -42,23 +43,27 @@ namespace mem
 
 	void * HeapMemoryManager::allocate( uint64 size )
 	{
-		// if ( size < pg_size )
-		// {
-		// 	printfYellow(
-		// 		"dynamic memory allocation not implement.\n"
-		// 		"too small memory allocating will not success.\n"
-		// 		">> request size = %d bytes", size
-		// 	);
-		// 	return nullptr;
-		// }
-		printfBlue( "申请内存分配 %d bytes\n", size );
-		// return _k_allocator_coarse.allocate_pages( ( size + pg_size - 1 ) / pg_size );
-		return _k_allocator_fine.malloc( size );
+        int x = _k_allocator_coarse->Alloc(0);
+
+        if(x == -1)
+        {
+            panic("[hmm] alloc_page failed");
+        }
+		void *pa = reinterpret_cast<void *>(static_cast<uint64>(x) * PGSIZE + reinterpret_cast<uint64>(_k_allocator_coarse->get_base_ptr()));
+        // printfCyan("分配物理页:  %p\n", pa);
+        memset(pa, 0, PGSIZE);
+        return pa;
+
 	}
 
 	void HeapMemoryManager::free( void *p )
 	{
-		// printfBlue( "内存释放" );
-		_k_allocator_fine.free( p );
+		        auto addr = reinterpret_cast<uint64>(p);
+        if (addr % PGSIZE != 0)
+        {
+            panic("kfree!");
+        }
+        int x=(addr - reinterpret_cast<uint64>(_k_allocator_coarse->get_base_ptr())) / PGSIZE;
+        _k_allocator_coarse->Free(x);
 	}
 } // namespace mem

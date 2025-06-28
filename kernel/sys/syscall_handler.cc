@@ -1321,7 +1321,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_fstatat()
     {
-        // return 0;
+        return 0;
         // TODO,这个系统调用关掉了
         int dirfd;
         eastl::string path;
