@@ -141,72 +141,25 @@ int busybox_glibc_test(void)
     return 0;
 }
 
-int libcbench_test(void)
+int libcbench_test(const char *path = musl_dir)
 {
-    [[maybe_unused]] int pid;
-    pid = fork();
-    if (pid < 0)
-    {
-        printf("fork failed\n");
-        return -1;
-    }
-    else if (pid == 0)
-    {
-        chdir("/mnt/musl/");
-        char *bb_sh[8] = {0};
-        bb_sh[0] = "busybox";
-        bb_sh[1] = "sh";
-        bb_sh[2] = "libcbench_testcode.sh";
-        printf("execve busybox shell\n");
-        if (execve("busybox", bb_sh, 0) < 0)
-        {
-            printf("execve failed\n");
-            exit(1);
-        }
-        exit(0);
-    }
-    else
-    {
-        int child_exit_state = 33;
-        if (wait(&child_exit_state) < 0)
-            printf("wait fail\n");
-        printf("shell exited with code %d\n", child_exit_state);
-    }
+    chdir(path);
+    char *bb_sh[8] = {0};
+    bb_sh[0] = "busybox";
+    bb_sh[1] = "sh";
+    bb_sh[2] = "libcbench_testcode.sh";
+    run_test("busybox", bb_sh, 0);
     return 0;
 }
 
-
-int iozone_test()
+int iozone_test(const char *path = musl_dir)
 {
-    [[maybe_unused]] int pid;
-    pid = fork();
-    if (pid < 0)
-    {
-        printf("fork failed\n");
-        return -1;
-    }
-    else if (pid == 0)
-    {
-        chdir("/mnt/musl/");
-        char *bb_sh[8] = {0};
-        bb_sh[0] = "busybox";
-        bb_sh[1] = "sh";
-        bb_sh[2] = "iozone_testcode.sh";
-        printf("execve busybox shell\n");
-        if (execve("busybox", bb_sh, 0) < 0)
-        {
-            printf("execve failed\n");
-            exit(1);
-        }
-        exit(0);
-    }
-    else
-    {
-        int child_exit_state = 33;
-        if (wait(&child_exit_state) < 0)
-            printf("wait fail\n");
-        printf("shell exited with code %d\n", child_exit_state);
-    }
+    chdir(path);
+    char *bb_sh[8] = {0};
+    bb_sh[0] = "busybox";
+    bb_sh[1] = "sh";
+    bb_sh[2] = "iozone_testcode.sh";
+    run_test("busybox", bb_sh, 0);
     return 0;
 }
 
@@ -225,7 +178,6 @@ int libc_test(const char *path = musl_dir)
         argv[3] = libctest[i][0];
         run_test("runtest.exe", argv, 0);
     }
-    printf("#### OS COMP TEST GROUP START libctest-musl ####\n");
     argv[2] = "entry-dynamic.exe";
     for (int i = 0; libctest[i][0] != NULL; i++)
     {
@@ -278,37 +230,14 @@ int lua_test(const char *path = musl_dir)
     return 0;
 }
 
-int lmbench_test()
+int lmbench_test(const char *path = musl_dir)
 {
-    [[maybe_unused]] int pid;
-    pid = fork();
-    if (pid < 0)
-    {
-        printf("fork failed\n");
-        return -1;
-    }
-    else if (pid == 0)
-    {
-        chdir("/mnt/musl/");
-        char *bb_sh[8] = {0};
-        bb_sh[0] = "busybox";
-        bb_sh[1] = "sh";
-        bb_sh[2] = "lmbench_testcode.sh";
-        printf("execve busybox shell\n");
-        if (execve("busybox", bb_sh, 0) < 0)
-        {
-            printf("execve failed\n");
-            exit(1);
-        }
-        exit(0);
-    }
-    else
-    {
-        int child_exit_state = 33;
-        if (wait(&child_exit_state) < 0)
-            printf("wait fail\n");
-        printf("shell exited with code %d\n", child_exit_state);
-    }
+    chdir(path);
+    char *bb_sh[8] = {0};
+    bb_sh[0] = "busybox";
+    bb_sh[1] = "sh";
+    bb_sh[2] = "lmbench_testcode.sh";
+    run_test("busybox", bb_sh, 0);
     return 0;
 }
 

@@ -2513,6 +2513,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_fsync()
     {
+        return 0; // copy from 唐老师
         panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_futex()
