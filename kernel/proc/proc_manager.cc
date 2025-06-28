@@ -1698,8 +1698,8 @@ namespace proc
         // 而且他们的proc_pagetable函数是弃用的, 我们的是好的, 直接用这个函数就可以构建基础页表
 
         // ========== 第三阶段：加载ELF程序段 ==========
+        uint64 phdr = 0;
         {
-
             bool load_bad = false; // 加载失败标志
 
             eastl::string interpreter_path;
@@ -1781,6 +1781,9 @@ namespace proc
                 // printf("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
                 //        i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, ph.flags);
                 // 只处理LOAD类型的程序段
+                if(ph.type == elf::elfEnum::ELF_PROG_PHDR){
+                    phdr = ph.vaddr; // 记录程序头的虚拟地址
+                }
                 if (ph.type != elf::elfEnum::ELF_PROG_LOAD)
                     continue;
 
@@ -1953,71 +1956,6 @@ namespace proc
                            (void *)interp_base, (void *)interp_entry);
             }
         }
-        // == == == == == 第四阶段：为glibc准备程序头信息 == == == == ==)
-        // 将ELF程序头转储到用户空间，供glibc的动态链接器使用
-        uint64 phdr = 0; // AT_PHDR辅助向量的值
-        {
-            ulong phsz = elf.phentsize * elf.phnum; // 程序头表的总大小
-            u64 sz1;
-            u64 load_end = 0; // 所有LOAD段的结束地址
-
-            load_end = PGROUNDUP(new_sz); // 将新进程映像的大小对齐到页边界
-#ifdef RISCV
-            if ((sz1 = mem::k_vmm.uvmalloc(new_pt, load_end, load_end + phsz, PTE_W | PTE_X | PTE_R | PTE_U)) == 0)
-            {
-                k_pm.proc_freepagetable(new_pt, new_sz);
-                panic("execve: vaalloc");
-                return -1;
-            }
-#elif LOONGARCH
-            if ((sz1 = mem::k_vmm.uvmalloc(new_pt, load_end, load_end + phsz, PTE_P | PTE_W | PTE_PLV | PTE_MAT | PTE_D)) == 0)
-            {
-                k_pm.proc_freepagetable(new_pt, new_sz);
-                panic("execve: vaalloc");
-                return -1;
-            }
-#endif
-            new_sz = sz1;
-            // 分配临时缓冲区读取程序头
-            uint8 *tmp = new uint8[phsz + 8];
-            if (tmp == nullptr)
-            {
-                k_pm.proc_freepagetable(new_pt, new_sz);
-                panic("execve: no mem");
-                return -1;
-            }
-
-            // 从文件读取程序头表
-            if (de->getNode()->nodeRead((ulong)tmp, elf.phoff, phsz) != phsz)
-            {
-                delete[] tmp;
-                k_pm.proc_freepagetable(new_pt, new_sz);
-                panic("execve: node read");
-                return -1;
-            }
-
-            // 将程序头表拷贝到用户空间
-            if (mem::k_vmm.copy_out(new_pt, load_end, (void *)tmp, phsz) < 0)
-            {
-                delete[] tmp;
-                k_pm.proc_freepagetable(new_pt, new_sz);
-                panic("execve: copy out");
-                return -1;
-            }
-
-            delete[] tmp;
-
-            phdr = load_end; // 记录程序头在用户空间的地址
-
-            printf("execve: program headers loaded at %p, size: %p\n", (void *)phdr, phsz);
-
-            // // 将程序头段作为一个程序段记录下来
-            // psd_t &ph_psd = new_sec_desc[new_sec_cnt];
-            // ph_psd._sec_start = (void *)phdr;
-            // ph_psd._sec_size = phsz;
-            // ph_psd._debug_name = "program headers";
-            // new_sec_cnt++;
-        }
 
         // ========== 第五阶段：分配用户栈空间 ==========
 
@@ -2139,6 +2077,7 @@ namespace proc
             ADD_AUXV(AT_PHNUM, elf.phnum);     // 程序头表项数量 // 这个有问题
             ADD_AUXV(AT_BASE, interp_base); // 动态链接器基地址（保留）
             ADD_AUXV(AT_ENTRY, elf.entry);  // 程序入口点地址
+            // ADD_AUXV(AT_SYSINFO_EHDR, 0); // 系统调用信息头（保留）
             // ADD_AUXV(AT_UID, 0);               // 用户ID
             // ADD_AUXV(AT_EUID, 0);              // 有效用户ID
             // ADD_AUXV(AT_GID, 0);               // 组ID
@@ -2147,6 +2086,7 @@ namespace proc
             ADD_AUXV(AT_NULL, 0); // 结束标记
 
             // printf("index: %d\n", index);
+            printfRed("[execve] base: %p, phdr: %p\n", (void *)interp_base, (void *)phdr);
 
             // 将辅助向量复制到栈上
             sp -= sizeof(aux);
