@@ -682,6 +682,10 @@ namespace proc
     // 这个函数主要用提供clone的底层支持
     Pcb *ProcessManager::fork(Pcb *p, uint64 flags, uint64 stack_ptr, uint64 ctid, bool is_clone)
     {
+        TODO("copy on write fork");
+        int i, pid;
+        Pcb *np; // new proc
+
         // Allocate process.
         if ((np = alloc_proc()) == nullptr)
         {
