@@ -1663,8 +1663,8 @@ namespace proc
         // 而且他们的proc_pagetable函数是弃用的, 我们的是好的, 直接用这个函数就可以构建基础页表
 
         // ========== 第三阶段：加载ELF程序段 ==========
+        uint64 phdr = 0;
         {
-
             bool load_bad = false; // 加载失败标志
 
             eastl::string interpreter_path;
@@ -1746,6 +1746,10 @@ namespace proc
                 // printf("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
                 //        i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, ph.flags);
                 // 只处理LOAD类型的程序段
+                if (ph.type == elf::elfEnum::ELF_PROG_PHDR)
+                {
+                    phdr = ph.vaddr; // 记录程序头的虚拟地址
+                }
                 if (ph.type != elf::elfEnum::ELF_PROG_LOAD)
                     continue;
 
@@ -1918,73 +1922,6 @@ namespace proc
                            (void *)interp_base, (void *)interp_entry);
             }
         }
-        TODO(== == == == == 第四阶段：为glibc准备程序头信息 == == == == ==)
-        // ================    (已写, 我们抄华科的不用在这里初始化, 直接在下面把数据算出来就可以了)    ========================
-
-        // 将ELF程序头转储到用户空间，供glibc的动态链接器使用
-        TODO(u64 phdr = 0; // AT_PHDR辅助向量的值
-             {
-                 ulong phsz = elf.phentsize * elf.phnum; // 程序头表的总大小
-                 u64 sz1;
-                 u64 load_end = 0; // 所有LOAD段的结束地址
-
-                 // 找到所有LOAD段的最高结束地址
-                 for (auto &sec : new_sec_desc)
-                 {
-                     u64 end = (ulong)sec._sec_start + sec._sec_size;
-                     if (end > load_end)
-                         load_end = end;
-                 }
-
-                 // 在LOAD段之后分配空间存放程序头
-                 load_end = hsai::page_round_up(load_end);
-                 if ((sz1 = mm::k_vmm.vm_alloc(new_pt, load_end, load_end + phsz)) == 0)
-                 {
-                     log_error("execve: vaalloc");
-                     _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
-                     return -1;
-                 }
-
-                 // 分配临时缓冲区读取程序头
-                 u8 *tmp = new u8[phsz + 8];
-                 if (tmp == nullptr)
-                 {
-                     log_error("execve: no mem");
-                     _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
-                     return -1;
-                 }
-
-                 // 从文件读取程序头表
-                 if (de->getNode()->nodeRead((ulong)tmp, elf.phoff, phsz) != phsz)
-                 {
-                     log_error("execve: node read");
-                     delete[] tmp;
-                     _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
-                     return -1;
-                 }
-
-                 // 将程序头表拷贝到用户空间
-                 if (mm::k_vmm.copyout(new_pt, load_end, (void *)tmp, phsz) < 0)
-                 {
-                     log_error("execve: copy out");
-                     delete[] tmp;
-                     _free_pt_with_sec(new_pt, new_sec_desc, new_sec_cnt);
-                     return -1;
-                 }
-
-                 delete[] tmp;
-
-                 phdr = load_end; // 记录程序头在用户空间的地址
-
-                 // 将程序头段作为一个程序段记录下来
-                 psd_t &ph_psd = new_sec_desc[new_sec_cnt];
-                 ph_psd._sec_start = (void *)phdr;
-                 ph_psd._sec_size = phsz;
-                 ph_psd._debug_name = "program headers";
-                 new_sec_cnt++;
-
-                 new_sz += hsai::page_round_up(phsz);
-             })
 
         // ========== 第五阶段：分配用户栈空间 ==========
 
@@ -2101,11 +2038,15 @@ namespace proc
             ADD_AUXV(AT_HWCAP, 0);             // 硬件功能标志
             ADD_AUXV(AT_PAGESZ, PGSIZE);       // 页面大小
             ADD_AUXV(AT_RANDOM, rd_pos);       // 随机数地址
-            // ADD_AUXV(AT_PHDR, elf.phoff);      // 程序头表偏移
+            ADD_AUXV(AT_PHDR, phdr);           // 程序头表偏移
             ADD_AUXV(AT_PHENT, elf.phentsize); // 程序头表项大小
-            // ADD_AUXV(AT_PHNUM, elf.phnum);     // 程序头表项数量 // 这个有问题
+            if(is_dynamic)
+            {
+                ADD_AUXV(AT_PHNUM, elf.phnum); // 程序头表项数量 // 这个有问题
+            }
             ADD_AUXV(AT_BASE, interp_base);    // 动态链接器基地址（保留）
             ADD_AUXV(AT_ENTRY, elf.entry);     // 程序入口点地址
+            // ADD_AUXV(AT_SYSINFO_EHDR, 0); // 系统调用信息头（保留）
             // ADD_AUXV(AT_UID, 0);               // 用户ID
             // ADD_AUXV(AT_EUID, 0);              // 有效用户ID
             // ADD_AUXV(AT_GID, 0);               // 组ID
@@ -2114,6 +2055,7 @@ namespace proc
             ADD_AUXV(AT_NULL, 0); // 结束标记
 
             // printf("index: %d\n", index);
+            printfRed("[execve] base: %p, phdr: %p\n", (void *)interp_base, (void *)phdr);
 
             // 将辅助向量复制到栈上
             sp -= sizeof(aux);

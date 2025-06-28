@@ -225,6 +225,13 @@ int libc_test(const char *path = musl_dir)
         argv[3] = libctest[i][0];
         run_test("runtest.exe", argv, 0);
     }
+    printf("#### OS COMP TEST GROUP START libctest-musl ####\n");
+    argv[2] = "entry-dynamic.exe";
+    for (int i = 0; libctest[i][0] != NULL; i++)
+    {
+        argv[3] = libctest[i][0];
+        run_test("runtest.exe", argv, 0);
+    }
     printf("#### OS COMP TEST GROUP END libctest-musl ####\n");
     return 0;
 }
