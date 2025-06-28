@@ -119,7 +119,33 @@ namespace syscall
 
     enum SYS_clone
     {
-        SIGCHILD = 17
+                // Cloning flags as enum class for type safety
+        CSIGNAL             = 0x000000ff, // Signal mask to be sent at exit.
+        CLONE_VM            = 0x00000100, // Set if VM shared between processes.
+        CLONE_FS            = 0x00000200, // Set if fs info shared between processes.
+        CLONE_FILES         = 0x00000400, // Set if open files shared between processes.
+        CLONE_SIGHAND       = 0x00000800, // Set if signal handlers shared.
+        CLONE_PIDFD         = 0x00001000, // Set if a pidfd should be placed in parent.
+        CLONE_PTRACE        = 0x00002000, // Set if tracing continues on the child.
+        CLONE_VFORK         = 0x00004000, // Set if the parent wants the child to wake it up on mm_release.
+        CLONE_PARENT        = 0x00008000, // Set if we want to have the same parent as the cloner.
+        CLONE_THREAD        = 0x00010000, // Set to add to same thread group.
+        CLONE_NEWNS         = 0x00020000, // Set to create new namespace.
+        CLONE_SYSVSEM       = 0x00040000, // Set to shared SVID SEM_UNDO semantics.
+        CLONE_SETTLS        = 0x00080000, // Set TLS info.
+        CLONE_PARENT_SETTID = 0x00100000, // Store TID in userlevel buffer before MM copy.
+        CLONE_CHILD_CLEARTID= 0x00200000, // Register exit futex and memory location to clear.
+        CLONE_DETACHED      = 0x00400000, // Create clone detached.
+        CLONE_UNTRACED      = 0x00800000, // Set if the tracing process can't force CLONE_PTRACE on this clone.
+        CLONE_CHILD_SETTID  = 0x01000000, // Store TID in userlevel buffer in the child.
+        CLONE_NEWCGROUP     = 0x02000000, // New cgroup namespace.
+        CLONE_NEWUTS        = 0x04000000, // New utsname group.
+        CLONE_NEWIPC        = 0x08000000, // New ipcs.
+        CLONE_NEWUSER       = 0x10000000, // New user namespace.
+        CLONE_NEWPID        = 0x20000000, // New pid namespace.
+        CLONE_NEWNET        = 0x40000000, // New network namespace.
+        CLONE_IO            = 0x80000000, // Clone I/O context.
+        CLONE_NEWTIME       = 0x00000080  // New time namespace
     };
     enum SYS_wait
     {

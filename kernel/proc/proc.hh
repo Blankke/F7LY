@@ -108,6 +108,7 @@ namespace proc
 
         // 线程/futex 相关
         void *_futex_addr; // Used for futex
+        int _tid = 0;
         int *_set_child_tid = nullptr;
         int *_clear_child_tid = nullptr;
 

@@ -59,7 +59,7 @@ namespace proc
         void procdump(); // 打印进程列表 debug
 
         int exec(eastl::string path, eastl::vector<eastl::string> argv); // 执行新程序
-        int growproc(int n);                            // 扩展进程内存
+        int growproc(int n);                                             // 扩展进程内存
         int execve(eastl::string path, eastl::vector<eastl::string> argv, eastl::vector<eastl::string> envs);
         int wait4(int child_pid, uint64 addr, int option);
         int load_seg(mem::PageTable &pt, uint64 va, fs::dentry *de, uint offset, uint size);
@@ -71,8 +71,7 @@ namespace proc
         void exit(int state);
         int clone(unsigned long flags, uint64 stack_ptr,
                   uint64 ptid, uint64 tls, uint64 ctid);
-        int fork(uint64 usp);
-        int fork();
+        Pcb *fork(Pcb *p, uint64 flags, uint64 stack_ptr, uint64 ctid, bool is_clone);
         void fork_ret();
         long brk(long n);
         int open(int dir_fd, eastl::string path, uint flags);
