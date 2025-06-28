@@ -1673,11 +1673,11 @@ namespace proc
             // 检查程序头中是否有PT_INTERP段
             for (i = 0, off = elf.phoff; i < elf.phnum; i++, off += sizeof(ph))
             {
-                if (strcmp(ab_path.c_str(), "/mnt/musl/entry-dynamic.exe") != 0)
-                {
-                    printfCyan("execve: checking program header %d at offset %d\n", i, off);
-                    break;
-                }
+                // if (strcmp(ab_path.c_str(), "/mnt/musl/entry-dynamic.exe") != 0)
+                // {
+                //     printfCyan("execve: checking program header %d at offset %d\n", i, off);
+                //     break;
+                // }
                 de->getNode()->nodeRead(reinterpret_cast<uint64>(&ph), off, sizeof(ph));
                 if (ph.type == elf::elfEnum::ELF_PROG_INTERP) // PT_INTERP = 3
                 {
