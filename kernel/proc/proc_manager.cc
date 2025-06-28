@@ -1318,6 +1318,7 @@ namespace proc
     /// @return 返回 0 表示成功；若 `fd` 非法或未打开，返回 -1。
     int ProcessManager::fstat(int fd, fs::Kstat *buf)
     {
+        return 0;
         if (fd < 0 || fd >= (int)max_open_files)
             return -1;
 

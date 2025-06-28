@@ -21,6 +21,7 @@ public:
     void Free(int offset);
     void* alloc_pages(int count);
     void free_pages(void* ptr);
+    void* get_base_ptr() const { return base_ptr; }
 private:
 
     BuddySystem() = default;
