@@ -289,6 +289,7 @@ namespace proc
         p->_killed = 0;
         p->_xstate = 0;
         p->_state = ProcState::UNUSED;
+        p->_tid = 0;
         // printf("freeproc: freeing process %d\n", p->_pid);
         for (int i = 0; i < (int)max_open_files; ++i)
         {
@@ -648,43 +649,87 @@ namespace proc
         return -1;
     }
 
-    int ProcessManager::fork()
+    int ProcessManager::clone(uint64 flags, uint64 stack_ptr, uint64 ptid, uint64 tls, uint64 ctid)
     {
-        return fork(0); // 默认usp为0
+        if (flags == 0)
+        {
+            return 22; // EINVAL: Invalid argument
+        }
+        Pcb *p = get_cur_pcb();
+        Pcb *np = fork(p, flags, stack_ptr, ctid, false);
+        if (np == nullptr)
+        {
+            return -1; // EAGAIN: Out of memory
+        }
+        uint64 new_tid = np->_tid;
+        if (flags & syscall::CLONE_SETTLS)
+        {
+            np->_trapframe->tp = tls; // 设置线程局部存储指针
+        }
+        if (flags & syscall::CLONE_PARENT_SETTID)
+        {
+            if (mem::k_vmm.copy_out(p->_pt, ptid, &new_tid, sizeof(new_tid)) < 0)
+            {
+                freeproc(np);
+                np->_lock.release();
+                return -1; // EFAULT: Bad address
+            }
+        }
+        np->_lock.release();
+        return new_tid;
     }
 
-    int ProcessManager::fork(uint64 usp)
+    // 这个函数主要用提供clone的底层支持
+    Pcb *ProcessManager::fork(Pcb *p, uint64 flags, uint64 stack_ptr, uint64 ctid, bool is_clone)
     {
-        TODO("copy on write fork");
-        int i, pid;
-        Pcb *np;                // new proc
-        Pcb *p = get_cur_pcb(); // current proc
-
         // Allocate process.
         if ((np = alloc_proc()) == nullptr)
         {
-            return -1;
+            return nullptr;
         }
-
-        // Copy user memory from _parent to child.
+        if (flags & syscall::CLONE_FILES)
+        {
+            panic("fork: CLONE_FILES not supported yet");
+        }
+        else
+        {
+            for (i = 0; i < (int)max_open_files; i++)
+            {
+                if (p->_ofile[i])
+                {
+                    // fs::k_file_table.dup( p->_ofile[ i ] );
+                    p->_ofile[i]->dup();
+                    np->_ofile[i] = p->_ofile[i];
+                    np->_fl_cloexec[i] = p->_fl_cloexec[i]; // 继承 CLOEXEC 标志
+                }
+            }
+        }
         mem::PageTable *curpt, *newpt;
         curpt = p->get_pagetable();
         newpt = np->get_pagetable();
+        if (flags & syscall::CLONE_VM)
+        {
+            // 因为在alloc_proc中已经创建了根页表项
+            // 如果要共享页表, 必须先把根页表项设置为相同的
+        }
+        else
+        {
 #ifdef RISCV
-        if (mem::k_vmm.vm_copy(*curpt, *newpt, 0, p->_sz) < 0)
-        {
-            freeproc(np);
-            np->_lock.release();
-            return -1;
-        }
+            if (mem::k_vmm.vm_copy(*curpt, *newpt, 0, p->_sz) < 0)
+            {
+                freeproc(np);
+                np->_lock.release();
+                return nullptr;
+            }
 #elif LOONGARCH
-        if (mem::k_vmm.vm_copy(*curpt, *newpt, p->elf_base, p->_sz - p->elf_base) < 0)
-        {
-            freeproc(np);
-            np->_lock.release();
-            return -1;
-        }
+            if (mem::k_vmm.vm_copy(*curpt, *newpt, p->elf_base, p->_sz - p->elf_base) < 0)
+            {
+                freeproc(np);
+                np->_lock.release();
+                return nullptr;
+            }
 #endif
+        }
 
         np->_sz = p->_sz;
 #ifdef LOONGARCH
@@ -749,7 +794,7 @@ namespace proc
 
         np->_state = ProcState::RUNNABLE;
         np->_user_ticks = 0;
-        np->_lock.release();
+        // np->_lock.release();
         // printfCyan("blublublu");
         return pid;
     }
@@ -874,7 +919,6 @@ namespace proc
                 _wait_lock.release();
                 return -1;
             }
-
 
             // wait children to exit
             sleep(p, &_wait_lock);
@@ -1662,6 +1706,12 @@ namespace proc
         // 这个地方不能按着学长的代码写, 因为学长的内存布局和我们的不同
         // 而且他们的proc_pagetable函数是弃用的, 我们的是好的, 直接用这个函数就可以构建基础页表
 
+        // ========== 预第三阶段：初始化程序段记录 ==========
+        // 程序段描述符，用于记录加载的程序段信息
+        // using psd_t = program_section_desc;
+        // int new_sec_cnt = 0;                         // 新程序段计数
+        // psd_t new_sec_desc[max_program_section_num]; // 新程序段描述符数组
+
         // ========== 第三阶段：加载ELF程序段 ==========
         uint64 phdr = 0;
         {
@@ -2040,12 +2090,12 @@ namespace proc
             ADD_AUXV(AT_RANDOM, rd_pos);       // 随机数地址
             ADD_AUXV(AT_PHDR, phdr);           // 程序头表偏移
             ADD_AUXV(AT_PHENT, elf.phentsize); // 程序头表项大小
-            if(is_dynamic)
+            if (is_dynamic)
             {
                 ADD_AUXV(AT_PHNUM, elf.phnum); // 程序头表项数量 // 这个有问题
             }
-            ADD_AUXV(AT_BASE, interp_base);    // 动态链接器基地址（保留）
-            ADD_AUXV(AT_ENTRY, elf.entry);     // 程序入口点地址
+            ADD_AUXV(AT_BASE, interp_base); // 动态链接器基地址（保留）
+            ADD_AUXV(AT_ENTRY, elf.entry);  // 程序入口点地址
             // ADD_AUXV(AT_SYSINFO_EHDR, 0); // 系统调用信息头（保留）
             // ADD_AUXV(AT_UID, 0);               // 用户ID
             // ADD_AUXV(AT_EUID, 0);              // 有效用户ID
