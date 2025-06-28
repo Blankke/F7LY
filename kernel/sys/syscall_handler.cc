@@ -561,6 +561,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_fstat()
     {
+        return 0;
         int fd;
         fs::Kstat kst;
         uint64 kst_addr;
@@ -960,8 +961,8 @@ namespace syscall
             printfRed("[SyscallHandler::sys_brk] Error fetching brk address\n");
             return -1;
         }
-        uint64 ret = proc::k_pm.brk(n); // 调用进程管理器的 brk 函数
-        printf("[SyscallHandler::sys_brk] brk to %p, ret: %p\n", (void *)n, (void *)ret);
+        uint64 ret= proc::k_pm.brk(n); // 调用进程管理器的 brk 函数
+        // printf("[SyscallHandler::sys_brk] brk to %p, ret: %p\n", (void *)n, (void *)ret);
         return ret;
     }
     uint64 SyscallHandler::sys_munmap()
@@ -1321,7 +1322,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_fstatat()
     {
-        // return 0;
+        return 0;
         // TODO,这个系统调用关掉了
         int dirfd;
         eastl::string path;

@@ -62,7 +62,7 @@ namespace mem
 		/// @brief 
 		/// @param pt 
 		/// @param sz 
-		void vmfree( PageTable &pt, uint64 sz );
+		void vmfree( PageTable &pt, uint64 sz,uint64 base = 0 );
 
 		int copy_in( PageTable &pt, void *dst, uint64 src_va, uint64 len );
 

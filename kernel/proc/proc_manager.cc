@@ -387,12 +387,23 @@ namespace proc
     }
     void ProcessManager::proc_freepagetable(mem::PageTable &pt, uint64 sz)
     {
+        printfCyan("proc_freepagetable: freeing pagetable %p, size %u\n", pt.get_base(), sz);
 #ifdef RISCV
         mem::k_vmm.vmunmap(pt, TRAMPOLINE, 1, 0);
         mem::k_vmm.vmunmap(pt, TRAPFRAME, 1, 0);
         mem::k_vmm.vmfree(pt, sz);
 #elif defined(LOONGARCH)
-// TODO
+        Pcb *proc = get_cur_pcb();
+        printfYellow("proc name: %s,elf_entry:%p\n", proc->_name, proc->elf_base);
+        mem::k_vmm.vmunmap(pt, TRAPFRAME, 1, 0);
+        if (strcmp(proc->_name, "initcode") == 0)
+        {
+            printfGreen("initcode end\n");
+        }
+        else
+        {
+            mem::k_vmm.vmfree(pt, sz - proc->elf_base, proc->elf_base);
+        }
 #endif
     }
 

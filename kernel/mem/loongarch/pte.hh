@@ -36,6 +36,7 @@ namespace mem
 		bool is_super_plv() { return ( *_data_addr & loongarch::pte_plv_m ) == plv_super; }
 		bool is_user_plv() { return ( *_data_addr & loongarch::pte_plv_m ) == plv_user; }
 		bool is_valid() { return ( ( *_data_addr & loongarch::pte_valid_m ) != 0 ); }
+		bool is_dir_page() { return ( *_data_addr & loongarch::pte_b_flags_m ) == map_dir_page_flags(); }
 		bool is_dirty() { return ( ( *_data_addr & loongarch::pte_dirty_m ) != 0 ); }
 		uint64 plv() { return ( ( *_data_addr & loongarch::pte_plv_m ) >> loongarch::pte_plv_s ); }
 		uint64 mat() { return ( ( *_data_addr & loongarch::pte_mat_m ) >> loongarch::pte_mat_s ); }
