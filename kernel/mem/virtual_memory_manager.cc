@@ -470,7 +470,7 @@ namespace mem
 
     void VirtualMemoryManager::vmunmap(PageTable &pt, uint64 va, uint64 npages, int do_free)
     {
-        printfCyan("vmunmap: va: %p, npages: %d, do_free: %d\n", va, npages, do_free);
+        // printfCyan("vmunmap: va: %p, npages: %d, do_free: %d\n", va, npages, do_free);
         uint64 a;
         Pte pte;
 

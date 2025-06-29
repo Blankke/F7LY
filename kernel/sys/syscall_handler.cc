@@ -2583,7 +2583,7 @@ namespace syscall
             _arg_int(3, val2);
         }
 
-        // printf("sys_futex: uaddr=%p, op=%d, val=%d, timeout=%p, uaddr2=%p, val3=%d\n",  uaddr, op, val, timeout_ptr, uaddr2, val3);
+        printf("sys_futex: uaddr=%p, op=%d, val=%d, timeout=%p, uaddr2=%p, val3=%d\n",  uaddr, op, val, timeout_ptr, uaddr2, val3);
         switch (op)
         {
         case FUTEX_WAIT:

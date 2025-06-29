@@ -82,6 +82,7 @@ namespace proc
         // 内存管理相关
         uint64 _kstack = 0; // 内核栈的虚拟地址
         uint64 _sz;         // 进程用户空间的内存大小 (字节)
+        bool _shared_vm = false; // 标记进程是否使用共享虚拟内存（与父进程共享页表）
 #ifdef LOONGARCH
         uint64 elf_base = 0; // ELF 文件的基地址 (用于加载可执行文件)
 #endif

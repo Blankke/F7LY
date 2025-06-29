@@ -260,51 +260,61 @@ namespace proc
 
     void ProcessManager::freeproc(Pcb *p)
     {
-
-        for (int i = 0; i < NVMA; ++i)
-        {
-            if (--p->_vma->_ref_cnt > 0)
-            {
+        // 处理VMA的引用计数
+        bool should_free_vma = false;
+        if (p->_vma != nullptr) {
+            if (--p->_vma->_ref_cnt <= 0) {
+                should_free_vma = true;
+            } else {
                 printfYellow("freeproc: vma ref count not zero, ref_cnt: %d\n", p->_vma->_ref_cnt);
-                break;
-            }
-            // printfBlue("freeproc: checking vma %d, addr: %p, len: %d,used:%d\n", i, p->_vm[i].addr, p->_vm[i].len,p->_vm[i].used);
-            if (p->_vma->_vm[i].used)
-            {
-
-                // 只对文件映射进行写回操作
-                if (p->_vma->_vm[i].vfile != nullptr && p->_vma->_vm[i].flags == MAP_SHARED && (p->_vma->_vm[i].prot & PROT_WRITE) != 0)
-                {
-                    p->_vma->_vm[i].vfile->write(p->_vma->_vm[i].addr, p->_vma->_vm[i].len);
-                }
-
-                // 只对文件映射释放文件引用
-                if (p->_vma->_vm[i].vfile != nullptr)
-                {
-                    p->_vma->_vm[i].vfile->free_file();
-                }
-                // 修复vmunmap调用：逐页检查并取消映射
-
-                uint64 va_start = PGROUNDDOWN(p->_vma->_vm[i].addr);
-                uint64 va_end = PGROUNDUP(p->_vma->_vm[i].addr + p->_vma->_vm[i].len);
-                // printfMagenta("freeproc: unmapping vma %d, addr: %p, len: %d\n", i, p->_vm[i].addr, p->_vm[i].len);
-                // uint64 npages = (va_end - va_start) / PGSIZE;
-
-                // 逐页检查并取消映射，避免对未映射的页面进行操作
-                for (uint64 va = va_start; va < va_end; va += PGSIZE)
-                {
-                    mem::Pte pte = p->_pt.walk(va, 0);
-                    // printfCyan("freeproc: checking pte for va %p, pte: %p\n", va, pte.get_data());
-                    if (!pte.is_null() && pte.is_valid())
-                    {
-                        // 只对实际映射的页面进行取消映射
-                        mem::k_vmm.vmunmap(*p->get_pagetable(), va, 1, 1);
-                    }
-                }
-                p->_vma->_vm[i].used = 0;
             }
         }
-        delete p->_vma; // 释放虚拟内存区域管理对象
+        
+        // 如果应该释放VMA，则处理所有VMA条目
+        if (should_free_vma && p->_vma != nullptr) {
+            for (int i = 0; i < NVMA; ++i)
+            {
+                // printfBlue("freeproc: checking vma %d, addr: %p, len: %d,used:%d\n", i, p->_vm[i].addr, p->_vm[i].len,p->_vm[i].used);
+                if (p->_vma->_vm[i].used)
+                {
+
+                    // 只对文件映射进行写回操作
+                    if (p->_vma->_vm[i].vfile != nullptr && p->_vma->_vm[i].flags == MAP_SHARED && (p->_vma->_vm[i].prot & PROT_WRITE) != 0)
+                    {
+                        p->_vma->_vm[i].vfile->write(p->_vma->_vm[i].addr, p->_vma->_vm[i].len);
+                    }
+
+                    // 只对文件映射释放文件引用
+                    if (p->_vma->_vm[i].vfile != nullptr)
+                    {
+                        p->_vma->_vm[i].vfile->free_file();
+                    }
+                    // 修复vmunmap调用：逐页检查并取消映射
+
+                    uint64 va_start = PGROUNDDOWN(p->_vma->_vm[i].addr);
+                    uint64 va_end = PGROUNDUP(p->_vma->_vm[i].addr + p->_vma->_vm[i].len);
+                    // printfMagenta("freeproc: unmapping vma %d, addr: %p, len: %d\n", i, p->_vm[i].addr, p->_vm[i].len);
+                    // uint64 npages = (va_end - va_start) / PGSIZE;
+
+                    // 逐页检查并取消映射，避免对未映射的页面进行操作
+                    for (uint64 va = va_start; va < va_end; va += PGSIZE)
+                    {
+                        mem::Pte pte = p->_pt.walk(va, 0);
+                        // printfCyan("freeproc: checking pte for va %p, pte: %p\n", va, pte.get_data());
+                        if (!pte.is_null() && pte.is_valid())
+                        {
+                            // 只对实际映射的页面进行取消映射
+                            mem::k_vmm.vmunmap(*p->get_pagetable(), va, 1, 1);
+                        }
+                    }
+                    p->_vma->_vm[i].used = 0;
+                }
+            }
+            // 只有当VMA引用计数为0时才删除VMA
+            delete p->_vma;
+        }
+        
+        // 重置VMA指针
         p->_vma = nullptr;
 
         if (p->_trapframe)
@@ -318,6 +328,7 @@ namespace proc
         // 不要手动设置base为0，让引用计数机制处理
         // p->_pt.set_base(0);
         p->_sz = 0;
+        p->_shared_vm = false; // 重置共享虚拟内存标志
         p->_pid = 0;
         p->_parent = 0;
         p->_name[0] = 0;
@@ -829,6 +840,14 @@ namespace proc
 
             np->_vma = p->_vma;  // 继承父进程的虚拟内存区域映射
             p->_vma->_ref_cnt++; // 增加父进程的虚拟内存区域映射引用计数
+
+            // 在共享页表的情况下，需要标记为共享虚拟内存
+            // 因为子进程有自己的trapframe，但共享父进程的页表
+            // 我们需要在usertrapret时动态映射正确的trapframe
+            np->_shared_vm = true;  // 标记为共享虚拟内存
+            
+            printfCyan("[clone] Using shared page table for process %d (parent %d), ref count: %d\n", 
+                       np->_pid, p->_pid, np->_pt.get_ref_count());
         }
         else
         {

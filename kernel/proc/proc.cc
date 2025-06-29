@@ -15,6 +15,7 @@ namespace proc
         _pid = 0;
         _parent = nullptr;
         _sz = 0;
+        _shared_vm = false;
 #ifdef LOONGARCH
         elf_base = 0; // 初始化 ELF 基地址为 0
 #endif

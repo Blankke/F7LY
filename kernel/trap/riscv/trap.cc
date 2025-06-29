@@ -173,7 +173,7 @@ void trap_manager::kerneltrap()
     // printf("timeslice: %d\n", timeslice);
     if (timeslice >= 5)
     {
-      // printfCyan("[kerneltrap]  yield here,p->addr:%x \n",Cpu::get_cpu()->get_cur_proc());
+      printfCyan("[kerneltrap]  yield here,p->addr:%x \n",Cpu::get_cpu()->get_cur_proc());
       proc::k_scheduler.yield();
       timeslice = 0;
       // print_fuckyou();
@@ -245,7 +245,7 @@ void trap_manager::usertrap()
     if (timeslice >= 5)
     {
       timeslice = 0;
-      // printf("yield in usertrap\n");
+      printf("yield in usertrap\n");
       proc::k_scheduler.yield();
     }
   }
@@ -263,6 +263,23 @@ void trap_manager::usertrapret()
   if (pte.is_null() || pte.is_valid() == 0)
   {
     panic("trampoline not mapped in user pagetable!");
+  }
+
+  // 检查进程是否使用共享虚拟内存，如果是则需要动态映射trapframe
+  if (p->_shared_vm || p->_pt.get_ref_count() > 1) {
+    // 页表被共享，需要动态重新映射trapframe
+    // printfCyan("[usertrapret] Page table shared (ref count: %d), dynamically mapping trapframe for pid %d\n", 
+            //    p->_pt.get_ref_count(), p->_pid);
+    
+    // 取消当前trapframe的映射
+    mem::k_vmm.vmunmap(p->_pt, TRAPFRAME, 1, 0);
+    
+    // 重新映射当前进程的trapframe
+    if (mem::k_vmm.map_pages(p->_pt, TRAPFRAME, PGSIZE, (uint64)(p->get_trapframe()), 
+                             riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_writable_m) == 0)
+    {
+      panic("usertrapret: failed to dynamically map trapframe");
+    }
   }
 
   // we're about to switch the destination of traps from
@@ -294,8 +311,8 @@ void trap_manager::usertrapret()
 
   uint64 fn = TRAMPOLINE + (userret - trampoline);
   // printf("trapframe addr: %p\n", p->_trapframe);
-  printf("trapframe->epc: %p\n", p->_trapframe->epc);
-  printf("[usertrapret] trapframe->a0: %p\n", p->_trapframe->a0);
+//   printf("trapframe->epc: %p\n", p->_trapframe->epc);
+//   printf("[usertrapret] trapframe->a0: %p\n", p->_trapframe->a0);
   
   ((void (*)(uint64, uint64))fn)(TRAPFRAME, satp);
   // !! 这个地方应该是固定值, 如果上多核的时候出错的话, 就改回下面
