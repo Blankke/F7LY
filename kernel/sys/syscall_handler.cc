@@ -1566,7 +1566,7 @@ namespace syscall
         if (fd == AT_FDCWD)
             new (&filePath) fs::Path(path, p->_cwd);
         else
-            new (&filePath) fs::Path(path, p->_ofile[fd]);
+            new (&filePath) fs::Path(path, p->get_open_file(fd));
 
         fs::dentry *dent = filePath.pathSearch();
         if (dent == nullptr)
@@ -1784,21 +1784,25 @@ namespace syscall
         case F_SETFD:
             if (_arg_addr(2, arg) < 0)
                 return -3;
+            if (p->_ofile == nullptr)
+                return -1;
             if (arg & FD_CLOEXEC)
-                p->_fl_cloexec[fd] = true;
+                p->_ofile->_fl_cloexec[fd] = true;
             else
-                p->_fl_cloexec[fd] = false;
+                p->_ofile->_fl_cloexec[fd] = false;
             return 0;
 
         case F_DUPFD:
             if (_arg_addr(2, arg) < 0)
                 return -3;
+            if (p->_ofile == nullptr)
+                return -1;
             for (int i = (int)arg; i < (int)proc::max_open_files; ++i)
             {
                 if ((retfd = proc::k_pm.alloc_fd(p, f, i)) == i)
                 {
                     f->refcnt++;
-                    p->_fl_cloexec[retfd] = false; // 新的文件描述符默认不设置 CLOEXEC
+                    p->_ofile->_fl_cloexec[retfd] = false; // 新的文件描述符默认不设置 CLOEXEC
                     break;
                 }
             }
@@ -1807,12 +1811,14 @@ namespace syscall
         case F_DUPFD_CLOEXEC:
             if (_arg_addr(2, arg) < 0)
                 return -3;
+            if (p->_ofile == nullptr)
+                return -1;
             for (int i = (int)arg; i < (int)proc::max_open_files; ++i)
             {
                 if ((retfd = proc::k_pm.alloc_fd(p, f, i)) == i)
                 {
                     f->refcnt++;
-                    p->_fl_cloexec[retfd] = true; // 设置 CLOEXEC 标志
+                    p->_ofile->_fl_cloexec[retfd] = true; // 设置 CLOEXEC 标志
                     break;
                 }
             }
@@ -1854,8 +1860,8 @@ namespace syscall
         }
         else
         {
-            fs::file *ofile = proc::k_pm.get_cur_pcb()->_ofile[dirfd];
-            if (ofile->_attrs.filetype != fs::FileTypes::FT_NORMAL)
+            fs::file *ofile = proc::k_pm.get_cur_pcb()->get_open_file(dirfd);
+            if (ofile == nullptr || ofile->_attrs.filetype != fs::FileTypes::FT_NORMAL)
             {
                 return -1; // 不是普通文件类型
             }
@@ -2200,7 +2206,7 @@ namespace syscall
             return -1;
 
         proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
-        fs::file *f = cur_proc->_ofile[fd];
+        fs::file *f = cur_proc->get_open_file(fd);
 
         if (f == nullptr)
             return -1;
@@ -2236,7 +2242,12 @@ namespace syscall
         if (dirfd == AT_FDCWD)
             base = cur_proc->_cwd;
         else
-            base = static_cast<fs::normal_file *>(cur_proc->_ofile[dirfd])->getDentry();
+        {
+            fs::file *ofile = cur_proc->get_open_file(dirfd);
+            if (ofile == nullptr || ofile->_attrs.filetype != fs::FileTypes::FT_NORMAL)
+                return -1;
+            base = static_cast<fs::normal_file *>(ofile)->getDentry();
+        }
 
         if (mem::k_vmm.copy_str_in(*pt, pathname, pathaddr, 128) < 0)
             return -1;
@@ -2295,8 +2306,24 @@ namespace syscall
             return -1;
 
         // 解析目录项
-        fs::dentry *old_base = (old_fd == AT_FDCWD) ? p->_cwd : static_cast<fs::normal_file *>(p->_ofile[old_fd])->getDentry();
-        fs::dentry *new_base = (new_fd == AT_FDCWD) ? p->_cwd : static_cast<fs::normal_file *>(p->_ofile[new_fd])->getDentry();
+        fs::dentry *old_base, *new_base;
+        if (old_fd == AT_FDCWD) {
+            old_base = p->_cwd;
+        } else {
+            fs::file *old_ofile = p->get_open_file(old_fd);
+            if (old_ofile == nullptr || old_ofile->_attrs.filetype != fs::FileTypes::FT_NORMAL)
+                return -1;
+            old_base = static_cast<fs::normal_file *>(old_ofile)->getDentry();
+        }
+        
+        if (new_fd == AT_FDCWD) {
+            new_base = p->_cwd;
+        } else {
+            fs::file *new_ofile = p->get_open_file(new_fd);
+            if (new_ofile == nullptr || new_ofile->_attrs.filetype != fs::FileTypes::FT_NORMAL)
+                return -1;
+            new_base = static_cast<fs::normal_file *>(new_ofile)->getDentry();
+        }
 
         // 构造绝对路径
         // 先将 old_path 构造成绝对路径
@@ -2445,7 +2472,7 @@ namespace syscall
             return -1;
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        fs::file *f = p->_ofile[fd];
+        fs::file *f = p->get_open_file(fd);
         if (!f)
             return -1;
 
@@ -2483,7 +2510,7 @@ namespace syscall
             return -1;
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        fs::file *f = p->_ofile[fd];
+        fs::file *f = p->get_open_file(fd);
         if (!f)
             return -1;
 

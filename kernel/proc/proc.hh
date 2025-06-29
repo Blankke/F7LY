@@ -36,7 +36,12 @@ namespace proc
     constexpr int lowest_proc_prio = 19;  // 最低进程优先级
     constexpr int highest_proc_prio = 0;  // 最高进程优先级
     constexpr uint max_open_files = 128;  // 每个进程最多可以打开的文件数量
-
+    struct ofile
+    {
+        fs::file *_ofile_ptr[max_open_files]; // 进程打开的文件列表 (文件描述符 -> 文件结构)
+        int _shared_ref_cnt;
+        bool _fl_cloexec[max_open_files]; // 记录每个文件描述符的 close-on-exec 标志
+    };
     struct program_section_desc
     {
         void *_sec_start = nullptr; // virtual address
@@ -58,9 +63,10 @@ namespace proc
         // 文件系统相关
         fs::dentry *_cwd; // current working directory
         eastl::string _cwd_name;
-        fs::file *_ofile[max_open_files]; // 进程打开的文件列表 (文件描述符 -> 文件结构)
-        bool _fl_cloexec[max_open_files]; // 记录每个文件描述符的 close-on-exec 标志
-        eastl::string exe;                // absolute path of the executable file
+        ofile *_ofile; // 打开的文件描述符表，包含文件指针和 close-on-exec 标志
+
+
+        eastl::string exe; // absolute path of the executable file
 
         // 进程状态信息
         enum ProcState _state; // 进程当前状态 (unused, used, sleeping, runnable, running, zombie)
@@ -73,11 +79,11 @@ namespace proc
         char _name[16]; // 进程名称 (用于调试)
 
         // 内存管理相关
-        uint64 _kstack = 0;    // 内核栈的虚拟地址
-        uint64 _sz;            // 进程用户空间的内存大小 (字节)
-        #ifdef LOONGARCH
+        uint64 _kstack = 0; // 内核栈的虚拟地址
+        uint64 _sz;         // 进程用户空间的内存大小 (字节)
+#ifdef LOONGARCH
         uint64 elf_base = 0; // ELF 文件的基地址 (用于加载可执行文件)
-        #endif
+#endif
         mem::PageTable _pt;    // 用户空间的页表
         TrapFrame *_trapframe; // 保存用户态 TrapFrame 的地址 (用于系统调用和异常处理)
 
@@ -132,6 +138,7 @@ namespace proc
     public:
         Pcb();
         void init(const char *lock_name, uint gid);
+        void cleanup_ofile(); // 释放ofile资源的方法
         void map_kstack(mem::PageTable &pt);
         fs::dentry *get_cwd() { return _cwd; }
         int get_priority();
@@ -166,9 +173,9 @@ namespace proc
         uint64 get_user_ticks() { return _user_ticks; }
         fs::file *get_open_file(int fd)
         {
-            if (fd < 0 || fd >= (int)max_open_files)
+            if (fd < 0 || fd >= (int)max_open_files || _ofile == nullptr)
                 return nullptr;
-            return _ofile[fd];
+            return _ofile->_ofile_ptr[fd];
         }
 
         void set_trapframe(TrapFrame *tf) { _trapframe = tf; }

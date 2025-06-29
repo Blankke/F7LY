@@ -22,6 +22,7 @@ namespace proc
         _kstack = 0;
         _slot = 0;
         _priority = default_proc_prio;
+        _ofile = nullptr;  // 初始化为nullptr，在init中分配
     }
 
     void Pcb::init(const char *lock_name, uint gid)
@@ -30,11 +31,7 @@ namespace proc
         _state = ProcState::UNUSED;
         _gid = gid;
         _kstack = mem::VirtualMemoryManager::kstack_vm_from_gid(_gid);
-        // TODO
-        for (auto &of : _ofile)
-            of = nullptr;
-        for (auto &cloexec : _fl_cloexec)
-            cloexec = false;
+               
         // TODO: 资源限制
         _rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_cur = 0;
         _rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_max = 0;
@@ -45,6 +42,28 @@ namespace proc
             _sigactions[i] = nullptr;
         }
         sigmask = 0;
+    }
+
+    void Pcb::cleanup_ofile()
+    {
+        if (_ofile != nullptr)
+        {
+            _ofile->_shared_ref_cnt--;
+            if (_ofile->_shared_ref_cnt <= 0)
+            {
+                // 引用计数为0，释放所有打开的文件
+                for (int i = 0; i < max_open_files; ++i)
+                {
+                    if (_ofile->_ofile_ptr[i] != nullptr)
+                    {
+                        _ofile->_ofile_ptr[i]->free_file();
+                        _ofile->_ofile_ptr[i] = nullptr;
+                    }
+                }
+                delete _ofile;
+            }
+            _ofile = nullptr;
+        }
     }
 
     void Pcb::map_kstack(mem::PageTable &pt)

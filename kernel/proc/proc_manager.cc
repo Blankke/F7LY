@@ -112,6 +112,15 @@ namespace proc
                     return nullptr;
                 }
 
+                // 初始化ofile结构体
+                p->_ofile = new ofile();
+                p->_ofile->_shared_ref_cnt = 1;
+                for (int i = 0; i < max_open_files; ++i)
+                {
+                    p->_ofile->_ofile_ptr[i] = nullptr;
+                    p->_ofile->_fl_cloexec[i] = false;
+                }
+
                 // 创建进程自己的页表（空的页表）
 
                 // debug
@@ -206,12 +215,12 @@ namespace proc
 
             fs::ramfs::k_ramfs.getRoot()->printAllChildrenInfo();
 
-            proc->_ofile[0] = f_in;
-            proc->_ofile[0]->refcnt++;
-            proc->_ofile[1] = f_out;
-            proc->_ofile[1]->refcnt++;
-            proc->_ofile[2] = f_err;
-            proc->_ofile[2]->refcnt++;
+            proc->_ofile->_ofile_ptr[0] = f_in;
+            proc->_ofile->_ofile_ptr[0]->refcnt++;
+            proc->_ofile->_ofile_ptr[1] = f_out;
+            proc->_ofile->_ofile_ptr[1]->refcnt++;
+            proc->_ofile->_ofile_ptr[2] = f_err;
+            proc->_ofile->_ofile_ptr[2]->refcnt++;
             /// @todo 这里暂时修改进程的工作目录为fat的挂载点
             proc->_cwd = fs::ramfs::k_ramfs.getRoot()->EntrySearch("mnt");
             proc->_cwd_name = "/mnt/";
@@ -291,21 +300,10 @@ namespace proc
         p->_state = ProcState::UNUSED;
         p->_tid = 0;
         // printf("freeproc: freeing process %d\n", p->_pid);
-        for (int i = 0; i < (int)max_open_files; ++i)
-        {
-            if (p->_ofile[i] != nullptr /* && p->_ofile[i]->refcnt > 0*/)
-            {
-                // printf("freeproc: checking ofile[%d]\n", i);
-                // printf("freeproc: ofile[%d] = %p\n", i, p->_ofile[i]);
-                // printf("freeproc: ofile[%d] refcnt: %d\n", i, p->_ofile[i]->refcnt);
-                if (p->_ofile[i]->refcnt <= 0)
-                {
-                    panic("freeproc: file refcnt is zero, but still in ofile");
-                }
-                p->_ofile[i]->free_file();
-                p->_ofile[i] = nullptr;
-            }
-        }
+        
+        // 使用新的cleanup_ofile方法处理文件描述符表
+        p->cleanup_ofile();
+        
         for (int i = 0; i < ipc::signal::SIGRTMAX; ++i)
         {
             if (p->_sigactions[i] != nullptr)
@@ -604,15 +602,15 @@ namespace proc
     int ProcessManager::alloc_fd(Pcb *p, fs::file *f, int fd)
     {
         // 越界检查
-        if (fd < 0 || fd >= (int)max_open_files || f == nullptr)
+        if (fd < 0 || fd >= (int)max_open_files || f == nullptr || p->_ofile == nullptr)
             return -1;
         // 不为空先释放资源
-        if (p->_ofile[fd] != nullptr)
+        if (p->_ofile->_ofile_ptr[fd] != nullptr)
         {
             close(fd);
         }
-        p->_ofile[fd] = f;
-        p->_fl_cloexec[fd] = false; // 默认不设置 CLOEXEC
+        p->_ofile->_ofile_ptr[fd] = f;
+        p->_ofile->_fl_cloexec[fd] = false; // 默认不设置 CLOEXEC
         return fd;
     }
 
@@ -637,12 +635,15 @@ namespace proc
     {
         int fd;
 
+        if (p->_ofile == nullptr)
+            return -1;
+            
         for (fd = 3; fd < (int)max_open_files; fd++)
         {
-            if (p->_ofile[fd] == nullptr)
+            if (p->_ofile->_ofile_ptr[fd] == nullptr)
             {
-                p->_ofile[fd] = f;
-                p->_fl_cloexec[fd] = false; // 默认不设置 CLOEXEC
+                p->_ofile->_ofile_ptr[fd] = f;
+                p->_ofile->_fl_cloexec[fd] = false; // 默认不设置 CLOEXEC
                 return fd;
             }
         }
@@ -693,18 +694,22 @@ namespace proc
         }
         if (flags & syscall::CLONE_FILES)
         {
-            panic("fork: CLONE_FILES not supported yet");
+            // 共享文件描述符表
+            np->cleanup_ofile();
+            np->_ofile = p->_ofile;
+            np->_ofile->_shared_ref_cnt++; // 增加引用计数
         }
         else
         {
+            // 深拷贝文件描述符表
             for (i = 0; i < (int)max_open_files; i++)
             {
-                if (p->_ofile[i])
+                if (p->_ofile->_ofile_ptr[i])
                 {
                     // fs::k_file_table.dup( p->_ofile[ i ] );
-                    p->_ofile[i]->dup();
-                    np->_ofile[i] = p->_ofile[i];
-                    np->_fl_cloexec[i] = p->_fl_cloexec[i]; // 继承 CLOEXEC 标志
+                    p->_ofile->_ofile_ptr[i]->dup();
+                    np->_ofile->_ofile_ptr[i] = p->_ofile->_ofile_ptr[i];
+                    np->_ofile->_fl_cloexec[i] = p->_ofile->_fl_cloexec[i]; // 继承 CLOEXEC 标志
                 }
             }
         }
@@ -749,15 +754,8 @@ namespace proc
         np->_parent = p;
         _wait_lock.release();
 
-        // increment reference counts on open file descriptors.
-        for (i = 0; i < (int)max_open_files; i++)
-            if (p->_ofile[i])
-            {
-                // fs::k_file_table.dup( p->_ofile[ i ] );
-                p->_ofile[i]->dup();
-                np->_ofile[i] = p->_ofile[i];
-                np->_fl_cloexec[i] = p->_fl_cloexec[i]; // 继承 CLOEXEC 标志
-            }
+        // 文件描述符的处理已经在前面的CLONE_FILES分支中完成
+        
         for (i = 0; i < NVMA; ++i)
         {
             if (p->_vm[i].used)
@@ -1302,13 +1300,12 @@ namespace proc
         if (fd < 0 || fd >= (int)max_open_files)
             return -1;
         Pcb *p = get_cur_pcb();
-        // printfRed("close [%d] file: %p refcnt: %d\n", fd, p->_ofile[fd], p->_ofile[fd]->refcnt);
-        if (p->_ofile[fd] == nullptr)
+        if (p->_ofile == nullptr || p->_ofile->_ofile_ptr[fd] == nullptr)
             return 0;
         // fs::k_file_table.free_file( p->_ofile[ fd ] );
-        p->_ofile[fd]->free_file();
-        p->_ofile[fd] = nullptr;
-        p->_fl_cloexec[fd] = false; // 清理 CLOEXEC 标志
+        p->_ofile->_ofile_ptr[fd]->free_file();
+        p->_ofile->_ofile_ptr[fd] = nullptr;
+        p->_ofile->_fl_cloexec[fd] = false; // 清理 CLOEXEC 标志
         return 0;
     }
     /// @brief 获取指定文件描述符对应文件的状态信息。
@@ -1324,9 +1321,9 @@ namespace proc
             return -1;
 
         Pcb *p = get_cur_pcb();
-        if (p->_ofile[fd] == nullptr)
+        if (p->_ofile == nullptr || p->_ofile->_ofile_ptr[fd] == nullptr)
             return -1;
-        fs::file *f = p->_ofile[fd];
+        fs::file *f = p->_ofile->_ofile_ptr[fd];
         *buf = f->_stat;
 
         return 0;
@@ -1385,13 +1382,13 @@ namespace proc
             // 我们可以使用nullptr，或者创建一个特殊的匿名文件对象
             vfile = nullptr; // 匿名映射使用nullptr作为vfile
         }
-        else if (p->_ofile[fd] == nullptr)
+        else if (p->_ofile == nullptr || p->_ofile->_ofile_ptr[fd] == nullptr)
         {
             return (void *)err;
         }
         else
         {
-            f = p->_ofile[fd];
+            f = p->_ofile->_ofile_ptr[fd];
             if (f->_attrs.filetype != fs::FileTypes::FT_NORMAL)
                 return (void *)err;                    // 只支持普通文件映射
             vfile = static_cast<fs::normal_file *>(f); // 强制转换为普通文件类型
@@ -1583,15 +1580,16 @@ namespace proc
         if (((fd0 = alloc_fd(p, rf)) < 0) || (fd1 = alloc_fd(p, wf)) < 0)
         {
             if (fd0 >= 0)
-                p->_ofile[fd0] = 0;
+                p->_ofile->_ofile_ptr[fd0] = nullptr;
             // fs::k_file_table.free_file( rf );
             // fs::k_file_table.free_file( wf );
             rf->free_file();
             wf->free_file();
             return -1;
         }
-        p->_ofile[fd0] = rf;
-        p->_ofile[fd1] = wf;
+        // 其实alloc_fd已经设置了_ofile_ptr，这里不需要再次设置了，但是再设一下无伤大雅
+        p->_ofile->_ofile_ptr[fd0] = rf;
+        p->_ofile->_ofile_ptr[fd1] = wf;
         fd[0] = fd0;
         fd[1] = fd1;
         return 0;
@@ -2201,11 +2199,11 @@ namespace proc
         // 处理F_DUPFD_CLOEXEC标志位，关闭设置了该标志的文件描述符
         for (int i = 0; i < (int)max_open_files; i++)
         {
-            if (proc->_ofile[i] != nullptr && proc->_fl_cloexec[i])
+            if (proc->_ofile != nullptr && proc->_ofile->_ofile_ptr[i] != nullptr && proc->_ofile->_fl_cloexec[i])
             {
-                proc->_ofile[i]->free_file();
-                proc->_ofile[i] = nullptr;
-                proc->_fl_cloexec[i] = false;
+                proc->_ofile->_ofile_ptr[i]->free_file();
+                proc->_ofile->_ofile_ptr[i] = nullptr;
+                proc->_ofile->_fl_cloexec[i] = false;
             }
         }
 
