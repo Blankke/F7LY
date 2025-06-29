@@ -11,6 +11,69 @@
 namespace mem
 {
     PageTable k_pagetable;
+
+    // 引用计数管理实现
+    void PageTable::init_ref() {
+        if (_ref == nullptr && _base_addr != 0) {
+            _ref = new int(1); // 初始引用计数为1
+            printfCyan("init_ref: initialized page table %p with ref count: 1\n", _base_addr);
+        } else if (_ref != nullptr) {
+            printfYellow("init_ref: page table %p already has ref count: %d\n", _base_addr, *_ref);
+        } else {
+            panic("init_ref: warning - page table has null base address\n");
+        }
+    }
+
+    void PageTable::inc_ref() {
+        if (_ref != nullptr) {
+            (*_ref)++;
+            printfCyan("inc_ref: page table %p, new ref count: %d\n", _base_addr, *_ref);
+        } else {
+            panic("inc_ref: warning - trying to increase ref count on page table %p with null ref pointer\n", _base_addr);
+        }
+    }
+
+    void PageTable::dec_ref() {
+        if (_ref != nullptr) {
+            (*_ref)--;
+            printfCyan("dec_ref: page table %p, ref count: %d\n", _base_addr, *_ref);
+            if (*_ref <= 0) {
+                printfYellow("dec_ref: releasing page table %p (ref count reached 0)\n", _base_addr);
+                // 引用计数为0，释放页表和引用计数
+                if (_base_addr != 0 && !_is_global) {
+                    freewalk();
+                    _base_addr = 0;
+                }
+                delete _ref;
+                _ref = nullptr;
+            }
+        } else {
+            panic("dec_ref: warning - trying to decrease ref count on page table %p with null ref pointer\n", _base_addr);
+        }
+    }
+
+    int PageTable::get_ref_count() {
+        return _ref ? *_ref : 0;
+    }
+
+    void PageTable::share_from(const PageTable& other) {
+        // 首先释放当前页表的引用
+        dec_ref();
+        
+        // 共享另一个页表
+        _base_addr = other._base_addr;
+        _ref = other._ref;
+        _is_global = other._is_global;
+        
+        // 增加共享页表的引用计数
+        if (_ref != nullptr) {
+            (*_ref)++;
+            printfCyan("share_from: sharing page table %p, new ref count: %d\n", _base_addr, *_ref);
+        } else {
+            panic("share_from: warning - sharing page table %p with null ref pointer\n", _base_addr);
+        }
+    }
+
     // walk函数用于在页表中查找一个虚拟地址对应的物理地址
     Pte PageTable::walk(uint64 va, bool alloc)
     {
@@ -146,6 +209,12 @@ namespace mem
 
     void PageTable::freewalk()
     {
+        // 检查引用计数，只有引用计数为0或1时才真正释放
+        if (_ref != nullptr && *_ref > 1) {
+            panic("freewalk: page table %p still has %d references, not freeing\n", _base_addr, *_ref);
+            return;
+        }
+
         for (uint i = 0; i < 512; i++)
         {
             Pte pte = get_pte(i);

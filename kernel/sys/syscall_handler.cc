@@ -883,14 +883,10 @@ namespace syscall
         tls = cgtls;
 
         uint64 clone_pid;
-
-        if (flags != SIGCHILD && stack != 0) // TODO: to be cheched
-        {
-            panic("[SyscallHandler::sys_clone] flags must be SIGCHILD， now flags is %x, now stack is %p\n", flags, stack);
-            clone_pid = proc::k_pm.clone(flags, stack, ptid, tls, ctid);
-        }
-        clone_pid = proc::k_pm.fork(stack);
-        // printfRed("[SyscallHandler::sys_clone] pid: [%d] name: %s clone_pid: [%d]\n", proc::k_pm.get_cur_pcb()->_pid, proc::k_pm.get_cur_pcb()->_name, clone_pid);
+        printfCyan("[SyscallHandler::sys_clone] flags: %d, stack: %p, ptid: %p, tls: %p, ctid: %p\n",
+               flags, (void *)stack, (void *)ptid, (void *)tls, (void *)ctid);
+        clone_pid = proc::k_pm.clone(flags, stack, ptid, tls, ctid);
+        printfRed("[SyscallHandler::sys_clone] pid: [%d] name: %s clone_pid: [%d]\n", proc::k_pm.get_cur_pcb()->_pid, proc::k_pm.get_cur_pcb()->_name, clone_pid);
         return clone_pid;
     }
     uint64 SyscallHandler::sys_umount2()
@@ -1296,8 +1292,8 @@ namespace syscall
             return -1;
         }
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        p->clear_child_tid = tidptr;
-        return p->get_pid();
+        p->_ctid = tidptr;
+        return p->get_tid();
     }
     uint64 SyscallHandler::sys_getuid()
     {
@@ -1420,7 +1416,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_gettid()
     {
-        return proc::k_pm.get_cur_pcb()->get_pid();
+        return proc::k_pm.get_cur_pcb()->get_tid();
     }
     uint64 SyscallHandler::sys_writev()
     {

@@ -44,10 +44,11 @@ namespace proc
 {
     ProcessManager k_pm;
 
-    void ProcessManager::init(const char *pid_lock_name, const char *wait_lock_name)
+    void ProcessManager::init(const char *pid_lock_name, const char *tid_lock_name,const char *wait_lock_name)
     {
         // initialize the proc table.
         _pid_lock.init(pid_lock_name);
+        _tid_lock.init(tid_lock_name);
         _wait_lock.init(wait_lock_name);
         for (uint i = 0; i < num_process; ++i)
         {
@@ -55,6 +56,7 @@ namespace proc
             p.init("pcb", i);
         }
         _cur_pid = 1;
+        _cur_tid = 1;
         _last_alloc_proc_gid = num_process - 1;
         printfGreen("[proc] Process Manager Init\n");
     }
@@ -82,6 +84,14 @@ namespace proc
         _pid_lock.release();
     }
 
+    void ProcessManager::alloc_tid(Pcb *p)
+    {
+        _tid_lock.acquire();
+        p->_tid = _cur_tid;
+        _cur_tid++;
+        _tid_lock.release();
+    }
+
     Pcb *ProcessManager::alloc_proc()
     {
         Pcb *p;
@@ -94,6 +104,7 @@ namespace proc
             if (p->_state == ProcState::UNUSED)
             {
                 k_pm.alloc_pid(p);
+                k_pm.alloc_tid(p);
                 p->_state = ProcState::USED;
                 // 设置调度相关字段：默认调度槽与优先级
                 p->_slot = default_proc_slot;
@@ -115,7 +126,7 @@ namespace proc
                 // 初始化ofile结构体
                 p->_ofile = new ofile();
                 p->_ofile->_shared_ref_cnt = 1;
-                for (int i = 0; i < max_open_files; ++i)
+                for (uint64 i = 0; i < max_open_files; ++i)
                 {
                     p->_ofile->_ofile_ptr[i] = nullptr;
                     p->_ofile->_fl_cloexec[i] = false;
@@ -300,7 +311,8 @@ namespace proc
         {
             proc_freepagetable(p->_pt, p->_sz);
         }
-        p->_pt.set_base(0);
+        // 不要手动设置base为0，让引用计数机制处理
+        // p->_pt.set_base(0);
         p->_sz = 0;
         p->_pid = 0;
         p->_parent = 0;
@@ -310,6 +322,7 @@ namespace proc
         p->_xstate = 0;
         p->_state = ProcState::UNUSED;
         p->_tid = 0;
+        p->_ctid = 0;
         // printf("freeproc: freeing process %d\n", p->_pid);
 
         // 使用新的cleanup_ofile方法处理文件描述符表
@@ -323,7 +336,6 @@ namespace proc
                 p->_sigactions[i] = nullptr;
             }
         }
-
     }
 
     int ProcessManager::get_cur_cpuid()
@@ -677,10 +689,10 @@ namespace proc
     }
 
     // 这个函数主要用提供clone的底层支持
-    Pcb *ProcessManager::fork(Pcb *p, uint64 flags, uint64 stack_ptr, uint64 ctid, bool is_clone)
+    Pcb *ProcessManager::fork(Pcb *p, uint64 flags, uint64 stack_ptr, uint64 ctid, bool is_clone3)
     {
         TODO("copy on write fork");
-        int i, pid;
+        uint64 i;
         Pcb *np; // new proc
 
         // Allocate process.
@@ -688,6 +700,42 @@ namespace proc
         {
             return nullptr;
         }
+        *np->_trapframe = *p->_trapframe; // 拷贝父进程的陷阱值，而不是直接指向
+        // 继承父进程的其他属性
+        np->_sz = p->_sz;
+#ifdef LOONGARCH
+        np->elf_base = p->elf_base; // 继承 ELF 基地址
+#endif
+
+        _wait_lock.acquire();
+        np->_parent = p;
+        _wait_lock.release();
+
+        np->_cwd = p->_cwd;           // 继承当前工作目录
+        np->_cwd_name = p->_cwd_name; // 继承当前工作目录名称
+
+        // 为子进程设置名称，添加子进程标识
+        const char child_name_suffix[] = "-child";
+        size_t parent_name_len = strlen(p->_name);
+        size_t suffix_len = strlen(child_name_suffix);
+
+        // 确保不超出缓冲区大小
+        if (parent_name_len + suffix_len < sizeof(np->_name))
+        {
+            strcpy(np->_name, p->_name);
+            strcat(np->_name, child_name_suffix);
+        }
+        else
+        {
+            // 父进程名称太长，需要截断
+            size_t max_parent_len = sizeof(np->_name) - suffix_len - 1;
+            strncpy(np->_name, p->_name, max_parent_len);
+            np->_name[max_parent_len] = '\0';
+            strcat(np->_name, child_name_suffix);
+        }
+
+        np->_user_ticks = 0;
+
         if (flags & syscall::CLONE_FILES)
         {
             // 共享文件描述符表
@@ -714,8 +762,23 @@ namespace proc
         newpt = np->get_pagetable();
         if (flags & syscall::CLONE_VM)
         {
-            // 因为在alloc_proc中已经创建了根页表项
-            // 如果要共享页表, 必须先把根页表项设置为相同的
+            // 共享虚拟内存：新进程共享父进程的页表
+            printfCyan("clone: sharing virtual memory (CLONE_VM)\n");
+
+            // 先释放新分配进程的页表引用计数，因为我们要共享父进程的页表
+            if (newpt->get_base() != 0)
+            {
+                printfCyan("clone: releasing new process page table before sharing\n");
+                newpt->dec_ref();
+            }
+            else
+            {
+                panic("clone: new process page table is null");
+            }
+
+            // 共享父进程的页表
+            np->_vma= p->_vma; // 继承父进程的虚拟内存区域映射
+            p->_vma->_ref_cnt++; // 增加父进程的虚拟内存区域映射引用计数
         }
         else
         {
@@ -734,70 +797,95 @@ namespace proc
                 return nullptr;
             }
 #endif
+            for (i = 0; i < NVMA; ++i)
+            {
+                if (p->_vma->_vm[i].used)
+                {
+                    memmove(&np->_vma->_vm[i], &p->_vma->_vm[i], sizeof(p->_vma->_vm[i]));
+                    // 只对文件映射增加引用计数
+                    if (p->_vma->_vm[i].vfile != nullptr)
+                    {
+                        p->_vma->_vm[i].vfile->dup(); // 增加引用计数
+                    }
+                }
+            }
         }
+        // TODO: 共享信号先不写
 
-        np->_sz = p->_sz;
-#ifdef LOONGARCH
-        np->elf_base = p->elf_base; // 继承 ELF 基地址
-#endif
-        *np->_trapframe = *p->_trapframe; // 拷贝父进程的陷阱值，而不是直接指向
-        if (usp != 0)
-            np->_trapframe->sp = usp; // 如果usp不为0，则设置子进程的用户栈指针
-
-        np->_trapframe->a0 = 0; // fork 返回值为 0
-
-        _wait_lock.acquire();
-        np->_parent = p;
-        _wait_lock.release();
-
-        // 文件描述符的处理已经在前面的CLONE_FILES分支中完成
-
-        ///@details 将vma的赋值改成指针，弃用这里的拷贝
-        // for (i = 0; i < NVMA; ++i)
-        // {
-        //     if (p->_vm[i].used)
-        //     {
-        //         memmove(&np->_vm[i], &p->_vm[i], sizeof(p->_vm[i]));
-        //         // 只对文件映射增加引用计数
-        //         if (p->_vm[i].vfile != nullptr)
-        //         {
-        //             p->_vm[i].vfile->dup(); // 增加引用计数
-        //         }
-        //     }
-        // }
-        np->_vma= p->_vma; // 继承父进程的虚拟内存区域映射
-        p->_vma->_ref_cnt++; // 增加父进程的虚拟内存区域映射引用计数
-
-        np->_cwd = p->_cwd;           // 继承当前工作目录
-        np->_cwd_name = p->_cwd_name; // 继承当前工作目录名称
-
-        // 为子进程设置名称，添加子进程标识
-        const char child_name_suffix[] = "-child";
-        size_t parent_name_len = strlen(p->_name);
-        size_t suffix_len = strlen(child_name_suffix);
-
-        // 确保不超出缓冲区大小
-        if (parent_name_len + suffix_len < sizeof(np->_name))
+        if (flags & syscall::CLONE_THREAD)
         {
-            strcpy(np->_name, p->_name);
-            strcat(np->_name, child_name_suffix);
+            // TODO: 清除信号掩码
+            np->_pid = p->_pid; // 线程共享 PID
+            // TODO: 共享定时器
         }
         else
         {
-            // 父进程名称太长，需要截断
-            size_t max_parent_len = sizeof(np->_name) - suffix_len - 1;
-            strncpy(np->_name, p->_name, max_parent_len);
-            np->_name[max_parent_len] = '\0';
-            strcat(np->_name, child_name_suffix);
+            // TODO: 共享信号掩码
+            np->_trapframe->a0 = 0; // fork 返回值为 0
+            // pid已经在 alloc_proc 中设置了
+            // 定时器已经设置过了
+        }
+        if (stack_ptr != 0)
+        {
+            // 如果指定了栈指针，则设置子进程的用户栈指针
+            np->_trapframe->sp = stack_ptr;
+            if (is_clone3)
+            {
+                // 如果是 clone3 调用，设置用户栈指针
+                np->_trapframe->a0 = 0;
+            }
+            else
+            {
+                uint64 entry_point = 0;
+                mem::k_vmm.copy_in(p->_pt, &entry_point, stack_ptr, sizeof(uint64));
+                if (entry_point == 0)
+                {
+                    panic("fork: copy_in failed for stack pointer");
+                    freeproc(np);
+                    np->_lock.release();
+                    return nullptr;
+                }
+                printf("fork: stack_ptr: %p, entry_point: %p\n", stack_ptr, entry_point);
+                uint64 arg = 0;
+                if(mem::k_vmm.copy_in(p->_pt, &arg, (stack_ptr + 8), sizeof(uint64)) != 0){
+                    panic("fork: copy_in failed for stack pointer arg");
+                    freeproc(np);
+                    np->_lock.release();
+                    return nullptr;
+                }
+#ifdef RISCV
+                np->_trapframe->epc = entry_point; // 设置程序计数器为栈顶地址
+#elif LOONGARCH
+                np->_trapframe->era = entry_point; // 设置程序计数器为栈顶地址
+#endif
+                np->_trapframe->a0 = arg; // 设置第一个参数为栈顶地址的下一个地址
+            }
         }
 
-        pid = np->_pid;
+        if (flags & syscall::CLONE_CHILD_SETTID)
+        {
+            // 如果设置了 CLONE_CHILD_SETTID，则设置子进程的线程 ID
+            if (ctid != 0)
+            {
+                if (mem::k_vmm.copy_out(p->_pt, ctid, &np->_tid, sizeof(np->_tid)) < 0)
+                {
+                    freeproc(np);
+                    np->_lock.release();
+                    return nullptr; // EFAULT: Bad address
+                }
+            }else{
+                printfRed("fork: ctid is 0, CLONE_CHILD_SETTID will not set tid\n");
+            }
+        }
+        if (flags & syscall::CLONE_CHILD_CLEARTID)
+        {
+            // 如果设置了 CLONE_CHILD_CLEARTID，则在子进程退出时清除线程 ID
+            np->_ctid = ctid;
+        }
 
         np->_state = ProcState::RUNNABLE;
-        np->_user_ticks = 0;
-        // np->_lock.release();
-        // printfCyan("blublublu");
-        return pid;
+
+        return np;
     }
 
     /// @brief
@@ -997,6 +1085,14 @@ namespace proc
 
         if (p->_parent)
             wakeup(p->_parent); // 唤醒父进程（可能在 wait() 中阻塞）
+
+        if(p->_ctid){
+            uint64 temp0 = 0;
+            if (mem::k_vmm.copy_out(p->_parent->_pt, p->_ctid, &temp0, sizeof(temp0)) < 0)
+            {
+                printfRed("exit_proc: copy out ctid failed\n");
+            }
+        }
 
         p->_lock.acquire();
         p->_xstate = state << 8;       // 存储退出状态（通常高字节存状态）

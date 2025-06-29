@@ -123,6 +123,8 @@ namespace proc
         int _tid = 0;
         int *_set_child_tid = nullptr;
         int *_clear_child_tid = nullptr;
+        // 用于set_tid_address
+        uint64 _ctid = 0; // CLONE_CHILD_SETTID 时设置的线程ID
 
         robust_list_head *_robust_list = nullptr;
 
@@ -138,8 +140,6 @@ namespace proc
         program_section_desc _prog_sections[max_program_section_num];
         int _prog_section_cnt = 0;
 
-        // 用于set_tid_address
-        uint64 clear_child_tid;
 
     public:
         Pcb();
@@ -168,6 +168,7 @@ namespace proc
         size_t get_sz() { return _sz; }
         // void set_chan(void *chan) { _chan = chan; }
         uint get_pid() { return _pid; }
+        uint get_tid() { return _tid; }
         uint get_ppid() { return _parent ? _parent->_pid : 0; }
         TrapFrame *get_trapframe() { return _trapframe; }
         uint64 get_kstack() { return _kstack; }

@@ -18,19 +18,22 @@ namespace proc
     {
     private:
         SpinLock _pid_lock;        // 进程ID锁
+        SpinLock _tid_lock;        // 线程ID锁
         SpinLock _wait_lock;       // 等待锁
         int _cur_pid;              // 当前分配的最大PID
+        int _cur_tid;              // 当前分配的最大TID
         Pcb *_init_proc;           // 用户init进程
         uint _last_alloc_proc_gid; // 上次分配的进程组ID
 
     public:
         ProcessManager() = default;
 
-        void init(const char *pid_lock_name, const char *wait_lock_name);
+        void init(const char *pid_lock_name, const char *tid_lock_name, const char *wait_lock_name);
 
         Pcb *get_cur_pcb();
         bool change_state(Pcb *p, ProcState state);
         void alloc_pid(Pcb *p);
+        void alloc_tid(Pcb *p);
         Pcb *alloc_proc();
 
         void set_slot(Pcb *p, int slot);
@@ -71,7 +74,7 @@ namespace proc
         void exit(int state);
         int clone(unsigned long flags, uint64 stack_ptr,
                   uint64 ptid, uint64 tls, uint64 ctid);
-        Pcb *fork(Pcb *p, uint64 flags, uint64 stack_ptr, uint64 ctid, bool is_clone);
+        Pcb *fork(Pcb *p, uint64 flags, uint64 stack_ptr, uint64 ctid, bool is_clone3);
         void fork_ret();
         long brk(long n);
         int open(int dir_fd, eastl::string path, uint flags);

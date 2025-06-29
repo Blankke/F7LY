@@ -508,6 +508,7 @@ namespace mem
             panic("vmm: no mem to crate vm space.");
         k_pmm.clear_page((void *)addr);
         pt.set_base(addr);
+        pt.init_ref(); // 初始化引用计数
 
         return pt;
     }
@@ -562,7 +563,10 @@ namespace mem
         // printfCyan("[vmm] vmfree: free %p bytes\n", sz);
         if (sz > 0)
             vmunmap(pt, base, PGROUNDUP(sz) / PGSIZE, 1);
-        pt.freewalk();
+        
+        // 使用引用计数机制安全释放页表
+        // 注意：这里不直接设置pt的_base_addr为0，让dec_ref来处理
+        pt.dec_ref();
     }
 
     void VirtualMemoryManager::uvmclear(PageTable &pt, uint64 va)
@@ -661,6 +665,7 @@ namespace mem
         PageTable pt;
         pt.set_global();
         pt.set_base((uint64)k_pmm.alloc_page());
+        // pt.init_ref(); // 初始化引用计数
         // printfGreen("[vmm] kvmmake alloc page success\n");
         memset((void *)pt.get_base(), 0, PGSIZE);
         // pt.print_page_table();

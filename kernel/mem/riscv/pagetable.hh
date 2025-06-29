@@ -11,16 +11,25 @@ namespace mem
 	{
 	private:
 		uint64 _base_addr;
+        int* _ref = nullptr; // 引用计数指针，用于支持clone CLONE_VM标志位
 		bool _is_global = false;
 
 	public:
 		PageTable() {};
 		PageTable(uint64 addr) { _base_addr = addr; };
+		~PageTable() { /* 注意：不在析构函数中调用dec_ref，而是显式调用 */ }
 		void set_base(uint64 addr) { _base_addr = addr; }
 		uint64 get_base() { return _base_addr; }
 		void set_global() { _is_global = true; }
 		void unset_global() { _is_global = false; }
 		bool is_null() { return _base_addr == 0; }
+
+		// 引用计数管理
+		void init_ref(); // 初始化引用计数
+		void inc_ref(); // 增加引用计数
+		void dec_ref(); // 减少引用计数
+		int get_ref_count(); // 获取引用计数
+		void share_from(const PageTable& other); // 从另一个页表共享（浅拷贝）
 
 		/// @brief 软件遍历页表，通常，只能由全局页目录调用
 		/// @param va virtual address

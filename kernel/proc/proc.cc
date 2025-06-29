@@ -52,7 +52,7 @@ namespace proc
             if (_ofile->_shared_ref_cnt <= 0)
             {
                 // 引用计数为0，释放所有打开的文件
-                for (int i = 0; i < max_open_files; ++i)
+                for (uint64 i = 0; i < max_open_files; ++i)
                 {
                     if (_ofile->_ofile_ptr[i] != nullptr)
                     {
