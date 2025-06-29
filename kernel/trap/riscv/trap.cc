@@ -343,7 +343,7 @@ int mmap_handler(uint64 va, int cause)
   int pte_flags = PTE_U;
   if (p->_vma->_vm[i].prot == 0)
   {
-    pte_flags |= PTE_R | PTE_X;
+    pte_flags |= PTE_R | PTE_X | PTE_W;
     printfYellow("mmap_handler: prot=0 mapping, using minimal permissions\n");
   }
   else

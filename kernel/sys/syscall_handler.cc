@@ -883,7 +883,7 @@ namespace syscall
         tls = cgtls;
 
         uint64 clone_pid;
-        printfCyan("[SyscallHandler::sys_clone] flags: %d, stack: %p, ptid: %p, tls: %p, ctid: %p\n",
+        printfCyan("[SyscallHandler::sys_clone] flags: %p, stack: %p, ptid: %p, tls: %p, ctid: %p\n",
                flags, (void *)stack, (void *)ptid, (void *)tls, (void *)ctid);
         clone_pid = proc::k_pm.clone(flags, stack, ptid, tls, ctid);
         printfRed("[SyscallHandler::sys_clone] pid: [%d] name: %s clone_pid: [%d]\n", proc::k_pm.get_cur_pcb()->_pid, proc::k_pm.get_cur_pcb()->_name, clone_pid);
@@ -1198,6 +1198,11 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_tkill()
     {
+        int tid, sig;
+        _arg_int(0, tid);
+        _arg_int(1, sig);
+        printfCyan("[SyscallHandler::sys_tkill] tid: %d, sig: %d\n", tid, sig);
+        // return proc::k_pm.tkill(tid, sig);
         return 0;
     }
     uint64 SyscallHandler::sys_tgkill()
@@ -1212,10 +1217,10 @@ namespace syscall
         // a_newact = nullptr;
         // a_oldact = nullptr;
         uint64 newactaddr, oldactaddr;
-        int flag;
+        int signum;
         int ret = -1;
 
-        if (_arg_int(0, flag) < 0)
+        if (_arg_int(0, signum) < 0)
             return -1;
 
         if (_arg_addr(1, newactaddr) < 0)
@@ -1223,17 +1228,19 @@ namespace syscall
 
         if (_arg_addr(2, oldactaddr) < 0)
             return -1;
+        printf("[SyscallHandler::sys_rt_sigaction] signum: %d, newactaddr: %p, oldactaddr: %p\n",
+               signum, (void *)newactaddr, (void *)oldactaddr);
 
         if (newactaddr != 0)
         {
             if (mem::k_vmm.copy_in(*pt, &a_newact, newactaddr,
                                    sizeof(proc::ipc::signal::sigaction)) < 0)
                 return -1;
-            ret = proc::ipc::signal::sigAction(flag, &a_newact, &a_oldact);
+            ret = proc::ipc::signal::sigAction(signum, &a_newact, &a_oldact);
         }
         else
         {
-            ret = proc::ipc::signal::sigAction(flag, nullptr, &a_oldact);
+            ret = proc::ipc::signal::sigAction(signum, nullptr, &a_oldact);
         }
         if (ret == 0 && oldactaddr != 0)
         {

@@ -256,10 +256,10 @@ char *libctest[][2] = {
     // {"inet_pton", NULL},
     // {"mbc", NULL},
     // {"memstream", NULL},
-    // // {"pthread_cancel_points", NULL}, //sig， fork高级用法
-    // // {"pthread_cancel", NULL}, // sig， fork高级用法
-    // // {"pthread_cond", NULL},   // sig， fork高级用法
-    // // {"pthread_tsd", NULL},    // sig， fork高级用法
+    {"pthread_cancel_points", NULL}, //sig， fork高级用法
+    {"pthread_cancel", NULL}, // sig， fork高级用法
+    {"pthread_cond", NULL},   // sig， fork高级用法
+    {"pthread_tsd", NULL},    // sig， fork高级用法
     // {"qsort", NULL},
     // {"random", NULL},
     // {"search_hsearch", NULL},
@@ -321,13 +321,13 @@ char *libctest[][2] = {
     // {"printf_fmt_g_round", NULL},
     // {"printf_fmt_g_zeros", NULL},
     // {"printf_fmt_n", NULL},
-    // // {"pthread_robust_detach", NULL}, //爆了
-    {"pthread_cancel_sem_wait", NULL},   // sig， fork高级用法
-    {"pthread_cond_smasher", NULL},      // sig， fork高级用法
-    {"pthread_condattr_setclock", NULL}, // sig， fork高级用法
-    {"pthread_exit_cancel", NULL},       // sig， fork高级用法
-    {"pthread_once_deadlock", NULL},     // sig， fork高级用法
-    {"pthread_rwlock_ebusy", NULL},      // sig， fork高级用法
+    // {"pthread_robust_detach", NULL}, //爆了
+    // {"pthread_cancel_sem_wait", NULL},   // sig， fork高级用法
+    // {"pthread_cond_smasher", NULL},      // sig， fork高级用法
+    // {"pthread_condattr_setclock", NULL}, // sig， fork高级用法
+    // {"pthread_exit_cancel", NULL},       // sig， fork高级用法
+    // {"pthread_once_deadlock", NULL},     // sig， fork高级用法
+    // {"pthread_rwlock_ebusy", NULL},      // sig， fork高级用法
     // {"putenv_doublefree", NULL},
     // {"regex_backref_0", NULL},
     // {"regex_bracket_icase", NULL},

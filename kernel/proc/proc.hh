@@ -76,7 +76,7 @@ namespace proc
         int _pid;              // 进程ID (Process ID)
         Pcb *_parent;          // 父进程的PCB指针
 
-        char _name[16]; // 进程名称 (用于调试)
+        char _name[30]; // 进程名称 (用于调试)
 
         // 内存管理相关
         uint64 _kstack = 0; // 内核栈的虚拟地址

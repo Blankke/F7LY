@@ -674,6 +674,7 @@ namespace proc
             return -1; // EAGAIN: Out of memory
         }
         uint64 new_tid = np->_tid;
+        uint64 new_pid = np->_pid;
         if (flags & syscall::CLONE_SETTLS)
         {
             np->_trapframe->tp = tls; // 设置线程局部存储指针
@@ -687,8 +688,20 @@ namespace proc
                 return -1; // EFAULT: Bad address
             }
         }
+        if (flags & syscall::CLONE_PARENT){
+            _wait_lock.acquire();
+            if (p->_parent != nullptr)
+            {
+                np->_parent = p->_parent; // 继承父进程
+            }
+            else
+            {
+                panic("clone: parent process is null");
+            }
+            _wait_lock.release();
+        }
         np->_lock.release();
-        return new_tid;
+        return new_pid;
     }
 
     // 这个函数主要用提供clone的底层支持
@@ -766,20 +779,8 @@ namespace proc
         if (flags & syscall::CLONE_VM)
         {
             // 共享虚拟内存：新进程共享父进程的页表
-            printfCyan("clone: sharing virtual memory (CLONE_VM)\n");
+            np->_pt.share_from(p->_pt); // 共享父进程的页表
 
-            // 先释放新分配进程的页表引用计数，因为我们要共享父进程的页表
-            if (newpt->get_base() != 0)
-            {
-                printfCyan("clone: releasing new process page table before sharing\n");
-                newpt->dec_ref();
-            }
-            else
-            {
-                panic("clone: new process page table is null");
-            }
-
-            // 共享父进程的页表
             np->_vma= p->_vma; // 继承父进程的虚拟内存区域映射
             p->_vma->_ref_cnt++; // 增加父进程的虚拟内存区域映射引用计数
         }
@@ -2332,7 +2333,7 @@ namespace proc
         // printf("execve: new process size: %p, new pagetable: %p\n", proc->_sz, proc->_pt);
         k_pm.proc_freepagetable(old_pt, old_sz);
 
-        // printf("execve succeed, new process size: %p\n", pro->_sz);
+        printf("execve succeed, new process size: %p\n", proc->_sz);
 
         // 写成0为了适配glibc的rtld_fini需求
         return 0; // 返回参数个数，表示成功执行
