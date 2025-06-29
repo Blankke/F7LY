@@ -314,25 +314,25 @@ int mmap_handler(uint64 va, int cause)
   // 根据地址查找属于哪一个VMA
   for (i = 0; i < proc::NVMA; ++i)
   {
-    if (p->_vm[i].used)
+    if (p->_vma->_vm[i].used)
     {
 
       // 检查是否在当前VMA范围内
-      if (va >= p->_vm[i].addr && va < p->_vm[i].addr + p->_vm[i].len)
+      if (va >= p->_vma->_vm[i].addr && va < p->_vma->_vm[i].addr + p->_vma->_vm[i].len)
       {
 
         break; // 在当前VMA范围内
       }
       // 检查是否可以扩展
-      else if (p->_vm[i].is_expandable &&
-               va < p->_vm[i].addr + p->_vm[i].max_len)
+      else if (p->_vma->_vm[i].is_expandable &&
+               va < p->_vma->_vm[i].addr + p->_vma->_vm[i].max_len)
       {
         // 扩展当前VMA
-        uint64 new_len = PGROUNDUP(va - p->_vm[i].addr + PGSIZE);
-        if (new_len <= p->_vm[i].max_len)
+        uint64 new_len = PGROUNDUP(va - p->_vma->_vm[i].addr + PGSIZE);
+        if (new_len <= p->_vma->_vm[i].max_len)
         {
-          p->_vm[i].len = new_len;
-          p->_sz += (new_len - p->_vm[i].len);
+          p->_vma->_vm[i].len = new_len;
+          p->_sz += (new_len - p->_vma->_vm[i].len);
           break;
         }
       }
@@ -341,21 +341,21 @@ int mmap_handler(uint64 va, int cause)
   if (i == proc::NVMA)
     return -1;
   int pte_flags = PTE_U;
-  if (p->_vm[i].prot == 0)
+  if (p->_vma->_vm[i].prot == 0)
   {
     pte_flags |= PTE_R | PTE_X;
     printfYellow("mmap_handler: prot=0 mapping, using minimal permissions\n");
   }
   else
   {
-    if (p->_vm[i].prot & PROT_READ)
+    if (p->_vma->_vm[i].prot & PROT_READ)
       pte_flags |= PTE_R;
-    if (p->_vm[i].prot & PROT_WRITE)
+    if (p->_vma->_vm[i].prot & PROT_WRITE)
       pte_flags |= PTE_W;
-    if (p->_vm[i].prot & PROT_EXEC)
+    if (p->_vma->_vm[i].prot & PROT_EXEC)
       pte_flags |= PTE_X;
   }
-  fs::normal_file *vf = p->_vm[i].vfile;
+  fs::normal_file *vf = p->_vma->_vm[i].vfile;
 
   void *pa = mem::k_pmm.alloc_page();
   if (pa == nullptr)
@@ -368,7 +368,7 @@ int mmap_handler(uint64 va, int cause)
   memset(pa, 0, PGSIZE);
 
   // 检查是否为匿名映射
-  if (vf == nullptr || p->_vm[i].vfd == -1)
+  if (vf == nullptr || p->_vma->_vm[i].vfd == -1)
   {
     // 匿名映射：页面已经初始化为0，直接映射即可
     // printfCyan("mmap_handler: handling anonymous mapping at %p\n", va);
@@ -393,10 +393,10 @@ int mmap_handler(uint64 va, int cause)
 
     inode->_lock.acquire(); // 锁定inode，防止其他线程修改
 
-    // 计算当前页面读取文件的偏移量，实验中p->_vm[i].offset总是0
+    // 计算当前页面读取文件的偏移量，实验中p->_vma->_vm[i].offset总是0
     // 要按顺序读读取，例如内存页面A,B和文件块a,b
     // 则A读取a，B读取b，而不能A读取b，B读取a
-    int offset = p->_vm[i].offset + PGROUNDDOWN(va - p->_vm[i].addr);
+    int offset = p->_vma->_vm[i].offset + PGROUNDDOWN(va - p->_vma->_vm[i].addr);
     ///@details 原本的xv6的readi函数有一个标志位来区分是否读到内核中，此处位于内核里
     /// pa直接是物理地址，所以应该无所谓
     int readbytes = inode->nodeRead((uint64)pa, offset, PGSIZE);

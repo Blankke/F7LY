@@ -109,8 +109,14 @@ namespace proc
 
         uint64 _hp; // 临时堆指针 (注释说明后续会删除)
 
+        struct VMA
+        {
+            vma     _vm[NVMA]; // 虚拟内存区域数组
+            int  _ref_cnt; // 虚拟内存区域的引用计数
+        };
+        VMA* _vma; // 虚拟内存区域管理 (VMA) - 用于管理进程的虚拟内存区域
         // 虚拟内存区域 (VMA) - 注释中提出了疑问，这里保留但需要进一步理解其用途
-        vma _vm[NVMA]; // 虚拟内存区域数组
+
 
         // 线程/futex 相关
         void *_futex_addr; // Used for futex
