@@ -1312,7 +1312,8 @@ namespace proc
             {
                 if (count1 < val)
                 {
-                    p->_state = RUNNING;
+                    // printf("[wakeup2] proc %s pid %d waking up on uaddr: %p\n", p->_name, p->_pid, uaddr);
+                    p->_state = RUNNABLE;
                     p->_futex_addr = 0;
                     count1++;
                 }

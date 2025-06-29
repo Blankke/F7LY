@@ -2584,6 +2584,7 @@ namespace syscall
         }
 
         printf("sys_futex: uaddr=%p, op=%d, val=%d, timeout=%p, uaddr2=%p, val3=%d\n",  uaddr, op, val, timeout_ptr, uaddr2, val3);
+        // printf("paddr: %p\n", proc::k_pm.get_cur_pcb()->_pt.walk_addr(uaddr));
         switch (op)
         {
         case FUTEX_WAIT:
