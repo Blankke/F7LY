@@ -294,7 +294,9 @@ void trap_manager::usertrapret()
 
   uint64 fn = TRAMPOLINE + (userret - trampoline);
   // printf("trapframe addr: %p\n", p->_trapframe);
-  // printf("trapframe->epc: %p\n", p->_trapframe->epc);
+  printf("trapframe->epc: %p\n", p->_trapframe->epc);
+  printf("[usertrapret] trapframe->a0: %p\n", p->_trapframe->a0);
+  
   ((void (*)(uint64, uint64))fn)(TRAPFRAME, satp);
   // !! 这个地方应该是固定值, 如果上多核的时候出错的话, 就改回下面
   // ((void (*)(uint64, uint64))fn)(TRAPFRAME + proc::k_pm.get_cur_cpuid() * sizeof(TrapFrame), satp);

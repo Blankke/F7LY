@@ -38,13 +38,14 @@ extern "C"
         // printf("into _wrapped_fork_ret\n");
         proc::k_pm.fork_ret();
     }
+    extern char sig_trampoline[]; // sig_trampoline.S
 }
 
 namespace proc
 {
     ProcessManager k_pm;
 
-    void ProcessManager::init(const char *pid_lock_name, const char *tid_lock_name,const char *wait_lock_name)
+    void ProcessManager::init(const char *pid_lock_name, const char *tid_lock_name, const char *wait_lock_name)
     {
         // initialize the proc table.
         _pid_lock.init(pid_lock_name);
@@ -324,6 +325,8 @@ namespace proc
         p->_killed = 0;
         p->_xstate = 0;
         p->_state = ProcState::UNUSED;
+
+        // 线程相关
         p->_tid = 0;
         p->_ctid = 0;
         // printf("freeproc: freeing process %d\n", p->_pid);
@@ -331,7 +334,17 @@ namespace proc
         // 使用新的cleanup_ofile方法处理文件描述符表
         p->cleanup_ofile();
 
-        for (int i = 0; i < ipc::signal::SIGRTMAX; ++i)
+        // 清空信号相关
+        while (p->sig_frame != nullptr)
+        {
+            ipc::signal::signal_frame *next_frame = p->sig_frame->next;
+            mem::k_pmm.free_page(p->sig_frame); // 释放当前信号处理帧
+            p->sig_frame = next_frame;          // 移动到下一个帧
+        }
+        p->sig_frame = nullptr; // 清空信号处理帧
+        p->_signal = 0;
+        p->_sigmask = 0;
+        for (int i = 0; i <= ipc::signal::SIGRTMAX; ++i)
         {
             if (p->_sigactions[i] != nullptr)
             {
@@ -373,6 +386,13 @@ namespace proc
             printfRed("proc_pagetable: map trapframe failed\n");
             return empty_pt;
         }
+        if (mem::k_vmm.map_pages(pt, SIG_TRAMPOLINE, PGSIZE, (uint64)sig_trampoline, riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_writable_m) == 0)
+        {
+            mem::k_vmm.vmfree(pt, 0);
+
+            printfRed("proc_pagetable: map sigtrapframe failed\n");
+            return empty_pt;
+        }
 
 #elif defined(LOONGARCH)
         if (mem::k_vmm.map_pages(pt, TRAPFRAME, PGSIZE, (uint64)(p->_trapframe), PTE_V | PTE_NX | PTE_P | PTE_W | PTE_R | PTE_MAT | PTE_D) == 0)
@@ -381,17 +401,12 @@ namespace proc
             printfRed("proc_pagetable: map trapframe failed\n");
             return empty_pt;
         }
-///@todo  sig_tampoline
-// 这里的 SIG_TRAMPOLINE 是一个特殊的地址，用于处理信号 trampoline
-// 目前暂时注释掉，因为没有实现信号处理相关的逻辑
-// 需要在后续实现信号处理时再启用
-//   if(mappages(pt, SIG_TRAMPOLINE, PGSIZE,
-//           (uint64)sig_trampoline, PTE_P | PTE_MAT | PTE_D) < 0) {
-//     printf("Fail to map sig_trampoline\n");
-//     uvmunmap(pagetable, TRAPFRAME, 1, 0);
-//     uvmfree(pagetable, 0);
-//     return 0;
-//           }
+        if (mem::k_vmm.map_pages(pt, SIG_TRAMPOLINE, PGSIZE, (uint64)sig_trampoline, PTE_V | PTE_NX | PTE_P | PTE_W | PTE_R | PTE_MAT | PTE_D) == 0)
+        {
+            printf("Fail to map sig_trampoline\n");
+            mem::k_vmm.vmfree(pt, 0);
+            return empty_pt;
+        }
 #endif
         return pt;
     }
@@ -399,21 +414,17 @@ namespace proc
     {
         printfCyan("proc_freepagetable: freeing pagetable %p, size %u\n", pt.get_base(), sz);
 #ifdef RISCV
+        // riscv还有 trampoline的映射
         mem::k_vmm.vmunmap(pt, TRAMPOLINE, 1, 0);
+#endif
         mem::k_vmm.vmunmap(pt, TRAPFRAME, 1, 0);
+        mem::k_vmm.vmunmap(pt, SIG_TRAMPOLINE, 1, 0);
+#ifdef RISCV
         mem::k_vmm.vmfree(pt, sz);
-#elif defined(LOONGARCH)
+#elif LOONGARCH
         Pcb *proc = get_cur_pcb();
-        printfYellow("proc name: %s,elf_entry:%p\n", proc->_name, proc->elf_base);
-        mem::k_vmm.vmunmap(pt, TRAPFRAME, 1, 0);
-        if (strcmp(proc->_name, "initcode") == 0)
-        {
-            printfGreen("initcode end\n");
-        }
-        else
-        {
-            mem::k_vmm.vmfree(pt, sz - proc->elf_base, proc->elf_base);
-        }
+        // loongarch不是从0开始的，所以不需要从0开始释放
+        mem::k_vmm.vmfree(pt, sz - proc->elf_base, proc->elf_base);
 #endif
     }
 
@@ -547,6 +558,40 @@ namespace proc
             p->_lock.release();
         }
         return -1; // 没找到对应 pid 的进程
+    }
+
+    int ProcessManager::kill_signal(int pid, int sig)
+    {
+        Pcb *p;
+        for (p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
+        {
+            p->_lock.acquire();
+            if (p->_pid == pid || (p->_parent != NULL && p->_parent->_pid == pid))
+            {
+                p->add_signal(sig);
+                p->_lock.release();
+                return 0;
+            }
+            p->_lock.release();
+        }
+        return -1;
+    }
+
+    int ProcessManager::tkill(int tid, int sig)
+    {
+        Pcb *p;
+        for (p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
+        {
+            p->_lock.acquire();
+            if (p->_tid == tid)
+            {
+                p->add_signal(sig);
+                p->_lock.release();
+                return 0;
+            }
+            p->_lock.release();
+        }
+        return -1;
     }
 
     // Copy from either a user address, or kernel address,
@@ -688,7 +733,8 @@ namespace proc
                 return -1; // EFAULT: Bad address
             }
         }
-        if (flags & syscall::CLONE_PARENT){
+        if (flags & syscall::CLONE_PARENT)
+        {
             _wait_lock.acquire();
             if (p->_parent != nullptr)
             {
@@ -781,7 +827,7 @@ namespace proc
             // 共享虚拟内存：新进程共享父进程的页表
             np->_pt.share_from(p->_pt); // 共享父进程的页表
 
-            np->_vma= p->_vma; // 继承父进程的虚拟内存区域映射
+            np->_vma = p->_vma;  // 继承父进程的虚拟内存区域映射
             p->_vma->_ref_cnt++; // 增加父进程的虚拟内存区域映射引用计数
         }
         else
@@ -849,14 +895,15 @@ namespace proc
                     np->_lock.release();
                     return nullptr;
                 }
-                printf("fork: stack_ptr: %p, entry_point: %p\n", stack_ptr, entry_point);
                 uint64 arg = 0;
-                if(mem::k_vmm.copy_in(p->_pt, &arg, (stack_ptr + 8), sizeof(uint64)) != 0){
+                if (mem::k_vmm.copy_in(p->_pt, &arg, (stack_ptr + 8), sizeof(uint64)) != 0)
+                {
                     panic("fork: copy_in failed for stack pointer arg");
                     freeproc(np);
                     np->_lock.release();
                     return nullptr;
                 }
+                printf("fork: stack_ptr: %p, entry_point: %p arg: %p\n", stack_ptr, entry_point, arg);
 #ifdef RISCV
                 np->_trapframe->epc = entry_point; // 设置程序计数器为栈顶地址
 #elif LOONGARCH
@@ -877,7 +924,9 @@ namespace proc
                     np->_lock.release();
                     return nullptr; // EFAULT: Bad address
                 }
-            }else{
+            }
+            else
+            {
                 printfRed("fork: ctid is 0, CLONE_CHILD_SETTID will not set tid\n");
             }
         }
@@ -1089,7 +1138,8 @@ namespace proc
 
         if (p->_parent)
             wakeup(p->_parent); // 唤醒父进程（可能在 wait() 中阻塞）)
-        if(p->_ctid){
+        if (p->_ctid)
+        {
             uint64 temp0 = 0;
             if (mem::k_vmm.copy_out(p->_pt, p->_ctid, &temp0, sizeof(temp0)) < 0)
             {

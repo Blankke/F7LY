@@ -48,7 +48,7 @@ int sched_yield(void)
 pid_t fork(void)
 {
 
-    return syscall(syscall::SYS_clone, syscall::SIGCHILD, 0, 0, 0, 0);
+    return syscall(syscall::SYS_clone, 17, 0, 0, 0, 0);
 }
 
 pid_t clone(int (*fn)(void *arg), void *arg, void *stack, size_t stack_size, unsigned long flags)

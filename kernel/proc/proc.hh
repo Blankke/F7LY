@@ -13,6 +13,7 @@
 #include "prlimit.hh"
 #include "futex.hh"
 #include "fs/vfs/file/file.hh"
+#include "signal.hh"
 namespace fs
 {
     class dentry;
@@ -132,9 +133,12 @@ namespace proc
         rlimit64 _rlim_vec[ResourceLimitId::RLIM_NLIMITS];
 
         // signal处理相关
-        proc::ipc::signal::sigaction *_sigactions[proc::ipc::signal::SIGRTMAX];
-        uint64 sigmask;
-        int _signal; // 等待的信号
+        proc::ipc::signal::sigaction *_sigactions[proc::ipc::signal::SIGRTMAX+1];
+        // 通过二进制运算计算
+        uint64 _sigmask = 0; // 信号掩码，用于阻塞信号
+        uint64 _signal = 0; // 信号掩码，用于阻塞信号
+        ipc::signal::signal_frame *sig_frame = nullptr; // 信号处理帧，用于保存信号处理的上下文
+
         // 程序段相关
         TODO("TBF")
         program_section_desc _prog_sections[max_program_section_num];
@@ -183,6 +187,11 @@ namespace proc
             if (fd < 0 || fd >= (int)max_open_files || _ofile == nullptr)
                 return nullptr;
             return _ofile->_ofile_ptr[fd];
+        }
+
+        void add_signal(int sig)
+        {
+            ipc::signal::add_signal(this, sig);
         }
 
         void set_trapframe(TrapFrame *tf) { _trapframe = tf; }

@@ -102,7 +102,8 @@ namespace proc
         int get_cur_cpuid();
 
         // 信号相关
-        // int kill_signal(int pid, int sig);
+        int kill_signal(int pid, int sig);
+        int tkill(int tid, int sig);
 
     public:
         void kill_proc(Pcb *p) { p->_killed = 1; }

@@ -16,6 +16,9 @@ SECTIONS
     _trampoline = .;
     *(trampsec)
     . = ALIGN(0x1000);
+    _sig_trampoline = .;
+    *(sigtrampsec)
+    . = ALIGN(0x1000);
 
     PROVIDE(etext = .);
   }

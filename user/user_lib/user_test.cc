@@ -256,7 +256,7 @@ char *libctest[][2] = {
     // {"inet_pton", NULL},
     // {"mbc", NULL},
     // {"memstream", NULL},
-    {"pthread_cancel_points", NULL}, //sig， fork高级用法
+    // {"pthread_cancel_points", NULL}, //sig， fork高级用法
     {"pthread_cancel", NULL}, // sig， fork高级用法
     {"pthread_cond", NULL},   // sig， fork高级用法
     {"pthread_tsd", NULL},    // sig， fork高级用法

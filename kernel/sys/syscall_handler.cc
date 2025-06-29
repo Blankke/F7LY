@@ -886,7 +886,7 @@ namespace syscall
         printfCyan("[SyscallHandler::sys_clone] flags: %p, stack: %p, ptid: %p, tls: %p, ctid: %p\n",
                flags, (void *)stack, (void *)ptid, (void *)tls, (void *)ctid);
         clone_pid = proc::k_pm.clone(flags, stack, ptid, tls, ctid);
-        printfRed("[SyscallHandler::sys_clone] pid: [%d] name: %s clone_pid: [%d]\n", proc::k_pm.get_cur_pcb()->_pid, proc::k_pm.get_cur_pcb()->_name, clone_pid);
+        printfRed("[SyscallHandler::sys_clone] pid: [%d] tid: [%d] name: %s clone_pid: [%d]\n", proc::k_pm.get_cur_pcb()->_pid, proc::k_pm.get_cur_pcb()->_tid, proc::k_pm.get_cur_pcb()->_name, clone_pid);
         return clone_pid;
     }
     uint64 SyscallHandler::sys_umount2()
@@ -1193,7 +1193,7 @@ namespace syscall
         int pid, sig;
         _arg_int(0, pid);
         _arg_int(1, sig);
-        // return proc::k_pm.kill_signal(pid, sig);
+        return proc::k_pm.kill_signal(pid, sig);
         return 0;
     }
     uint64 SyscallHandler::sys_tkill()
@@ -1202,7 +1202,7 @@ namespace syscall
         _arg_int(0, tid);
         _arg_int(1, sig);
         printfCyan("[SyscallHandler::sys_tkill] tid: %d, sig: %d\n", tid, sig);
-        // return proc::k_pm.tkill(tid, sig);
+        return proc::k_pm.tkill(tid, sig);
         return 0;
     }
     uint64 SyscallHandler::sys_tgkill()
