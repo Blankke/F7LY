@@ -36,14 +36,30 @@ namespace proc
         // TODO: 资源限制
         _rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_cur = 0;
         _rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_max = 0;
-
-        // 初始化信号处理函数指针
-        for (int i = 0; i <= ipc::signal::SIGRTMAX; ++i)
-        {
-            _sigactions[i] = nullptr;
-        }
         _sigmask = 0;
         _signal = 0;
+    }
+
+    void Pcb::cleanup_sighand()
+    {
+        if (_sigactions != nullptr)
+        {
+            _sigactions->refcnt--;
+            if (_sigactions->refcnt <= 0)
+            {
+                // 引用计数为0，释放所有信号处理函数
+                for (int i = 0; i <= ipc::signal::SIGRTMAX; ++i)
+                {
+                    if (_sigactions->actions[i] != nullptr)
+                    {
+                        delete _sigactions->actions[i];
+                        _sigactions->actions[i] = nullptr;
+                    }
+                }
+                delete _sigactions;
+            }
+            _sigactions = nullptr;
+        }
     }
 
     void Pcb::cleanup_ofile()

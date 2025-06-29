@@ -43,6 +43,11 @@ namespace proc
         int _shared_ref_cnt;
         bool _fl_cloexec[max_open_files]; // 记录每个文件描述符的 close-on-exec 标志
     };
+    struct sighand_struct
+    {
+        proc::ipc::signal::sigaction *actions[proc::ipc::signal::SIGRTMAX + 1];
+        int refcnt;
+    };
     struct program_section_desc
     {
         void *_sec_start = nullptr; // virtual address
@@ -66,7 +71,6 @@ namespace proc
         eastl::string _cwd_name;
         ofile *_ofile; // 打开的文件描述符表，包含文件指针和 close-on-exec 标志
 
-
         eastl::string exe; // absolute path of the executable file
 
         // 进程状态信息
@@ -80,8 +84,8 @@ namespace proc
         char _name[30]; // 进程名称 (用于调试)
 
         // 内存管理相关
-        uint64 _kstack = 0; // 内核栈的虚拟地址
-        uint64 _sz;         // 进程用户空间的内存大小 (字节)
+        uint64 _kstack = 0;      // 内核栈的虚拟地址
+        uint64 _sz;              // 进程用户空间的内存大小 (字节)
         bool _shared_vm = false; // 标记进程是否使用共享虚拟内存（与父进程共享页表）
 #ifdef LOONGARCH
         uint64 elf_base = 0; // ELF 文件的基地址 (用于加载可执行文件)
@@ -113,12 +117,11 @@ namespace proc
 
         struct VMA
         {
-            vma     _vm[NVMA]; // 虚拟内存区域数组
-            int  _ref_cnt; // 虚拟内存区域的引用计数
+            vma _vm[NVMA]; // 虚拟内存区域数组
+            int _ref_cnt;  // 虚拟内存区域的引用计数
         };
-        VMA* _vma; // 虚拟内存区域管理 (VMA) - 用于管理进程的虚拟内存区域
+        VMA *_vma; // 虚拟内存区域管理 (VMA) - 用于管理进程的虚拟内存区域
         // 虚拟内存区域 (VMA) - 注释中提出了疑问，这里保留但需要进一步理解其用途
-
 
         // 线程/futex 相关
         void *_futex_addr; // Used for futex
@@ -134,10 +137,10 @@ namespace proc
         rlimit64 _rlim_vec[ResourceLimitId::RLIM_NLIMITS];
 
         // signal处理相关
-        proc::ipc::signal::sigaction *_sigactions[proc::ipc::signal::SIGRTMAX+1];
+        sighand_struct *_sigactions = nullptr;
         // 通过二进制运算计算
-        uint64 _sigmask = 0; // 信号掩码，用于阻塞信号
-        uint64 _signal = 0; // 信号掩码，用于阻塞信号
+        uint64 _sigmask = 0;                            // 信号掩码，用于阻塞信号
+        uint64 _signal = 0;                             // 信号标志位，表示接收到的信号
         ipc::signal::signal_frame *sig_frame = nullptr; // 信号处理帧，用于保存信号处理的上下文
 
         // 程序段相关
@@ -145,11 +148,11 @@ namespace proc
         program_section_desc _prog_sections[max_program_section_num];
         int _prog_section_cnt = 0;
 
-
     public:
         Pcb();
         void init(const char *lock_name, uint gid);
-        void cleanup_ofile(); // 释放ofile资源的方法
+        void cleanup_ofile();   // 释放ofile资源的方法
+        void cleanup_sighand(); // 释放sighand_struct资源的方法
         void map_kstack(mem::PageTable &pt);
         fs::dentry *get_cwd() { return _cwd; }
         int get_priority();

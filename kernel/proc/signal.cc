@@ -21,22 +21,30 @@ namespace proc
                 if (flag <= 0 || flag > signal::SIGRTMAX || flag == signal::SIGKILL || flag == signal::SIGQUIT)
                     return -1;
                 proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
+                if (cur_proc->_sigactions == nullptr)
+                {
+                    panic("[sigAction] _sigactions is null");
+                    return -1;
+                }
                 if (oldact != nullptr)
                 {
-                    if (cur_proc->_sigactions[flag])
-                        *oldact = *(cur_proc->_sigactions[flag]);
+                    if (cur_proc->_sigactions->actions[flag])
+                        *oldact = *(cur_proc->_sigactions->actions[flag]);
                     else
                         *oldact = {nullptr, {0}, 0};
                 }
                 if (newact != nullptr)
                 {
-                    if (!cur_proc->_sigactions[flag])
+                    if (!cur_proc->_sigactions->actions[flag])
                     {
-                        cur_proc->_sigactions[flag] = new sigaction;
-                        if (cur_proc->_sigactions[flag] == nullptr)
+                        cur_proc->_sigactions->actions[flag] = new sigaction;
+                        if (cur_proc->_sigactions->actions[flag] == nullptr)
                             return -1; // 内存分配失败
+                    }else{
+                        // 如果已经存在，先释放旧的
+                        delete cur_proc->_sigactions->actions[flag];
                     }
-                    *(cur_proc->_sigactions[flag]) = *newact;
+                    *(cur_proc->_sigactions->actions[flag]) = *newact;
                 }
 
                 return 0;
@@ -110,8 +118,14 @@ namespace proc
                         printf("[handle_signal] Signal %d is ignored sigmask 0x%x\n", signum, p->_sigmask);
                         return;
                     }
-                    sigaction *act = p->_sigactions[signum];
-                    if (act->sa_handler == nullptr)
+                    
+                    sigaction *act = nullptr;
+                    if (p->_sigactions != nullptr && p->_sigactions->actions[signum] != nullptr)
+                    {
+                        act = p->_sigactions->actions[signum];
+                    }
+                    
+                    if (act == nullptr || act->sa_handler == nullptr)
                     {
                         printf("[handle_signal] Signal %d has no handler, using default handler\n", signum);
                         default_handle(p, signum);

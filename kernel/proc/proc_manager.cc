@@ -139,6 +139,14 @@ namespace proc
                 p->_vma = new Pcb::VMA();
                 p->_vma->_ref_cnt = 1; // 初始化虚拟内存区域
 
+                // 初始化信号处理结构体
+                p->_sigactions = new sighand_struct();
+                p->_sigactions->refcnt = 1;
+                for (int i = 0; i <= ipc::signal::SIGRTMAX; ++i)
+                {
+                    p->_sigactions->actions[i] = nullptr;
+                }
+
                 // 创建进程自己的页表（空的页表）
 
                 // debug
@@ -345,6 +353,9 @@ namespace proc
         // 使用新的cleanup_ofile方法处理文件描述符表
         p->cleanup_ofile();
 
+        // 使用新的cleanup_sighand方法处理信号处理结构
+        p->cleanup_sighand();
+
         // 清空信号相关
         while (p->sig_frame != nullptr)
         {
@@ -355,14 +366,6 @@ namespace proc
         p->sig_frame = nullptr; // 清空信号处理帧
         p->_signal = 0;
         p->_sigmask = 0;
-        for (int i = 0; i <= ipc::signal::SIGRTMAX; ++i)
-        {
-            if (p->_sigactions[i] != nullptr)
-            {
-                delete p->_sigactions[i];
-                p->_sigactions[i] = nullptr;
-            }
-        }
     }
 
     int ProcessManager::get_cur_cpuid()
@@ -773,7 +776,7 @@ namespace proc
         {
             return nullptr;
         }
-        *np->_trapframe = *p->_trapframe; // 拷贝父进程的陷阱值，而不是直接指向
+        *np->_trapframe = *p->_trapframe; // 拷贝父进程的陷阱值，而不是直接指向, 后面有可能会修改
         // 继承父进程的其他属性
         np->_sz = p->_sz;
 #ifdef LOONGARCH
@@ -879,7 +882,37 @@ namespace proc
                 }
             }
         }
-        // TODO: 共享信号先不写
+        
+        // 处理信号处理共享
+        if (flags & syscall::CLONE_SIGHAND)
+        {
+            // 共享信号处理结构
+            np->cleanup_sighand(); // 使用cleanup方法来正确处理引用计数
+            // 共享父进程的信号处理结构
+            np->_sigactions = p->_sigactions;
+            if (p->_sigactions != nullptr)
+            {
+                p->_sigactions->refcnt++; // 增加引用计数
+            }
+        }
+        else
+        {
+            // 不共享信号处理结构，需要深拷贝
+            if (p->_sigactions != nullptr && np->_sigactions != nullptr)
+            {
+                for (int i = 0; i <= ipc::signal::SIGRTMAX; ++i)
+                {
+                    if (p->_sigactions->actions[i] != nullptr)
+                    {
+                        np->_sigactions->actions[i] = new ipc::signal::sigaction;
+                        if (np->_sigactions->actions[i] != nullptr)
+                        {
+                            *(np->_sigactions->actions[i]) = *(p->_sigactions->actions[i]);
+                        }
+                    }
+                }
+            }
+        }
 
         if (flags & syscall::CLONE_THREAD)
         {
