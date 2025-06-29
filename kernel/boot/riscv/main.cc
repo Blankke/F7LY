@@ -52,9 +52,7 @@ void main()
     proc::k_pm.init("next pid", "next tid", "wait lock");
 
     mem::k_pmm.init();
-    printf("Physical memory manager initialized\n");
     mem::k_vmm.init("virtual_memory_manager");
-    printf("Virtual memory manager initialized\n");
     mem::k_hmm.init("heap_memory_manager", HEAP_START);
 
     if (dev::k_devm.register_stdin(static_cast<dev::VirtualDevice *>(&dev::k_stdin)) < 0)

@@ -104,6 +104,9 @@ namespace proc
             if (p->_state == ProcState::UNUSED)
             {
                 k_pm.alloc_pid(p);
+
+                // 线程相关
+                p->_ctid = 0;
                 k_pm.alloc_tid(p);
                 p->_state = ProcState::USED;
                 // 设置调度相关字段：默认调度槽与优先级
@@ -1084,11 +1087,10 @@ namespace proc
         reparent(p); // 将 p 的所有子进程交给 init 进程收养
 
         if (p->_parent)
-            wakeup(p->_parent); // 唤醒父进程（可能在 wait() 中阻塞）
-
+            wakeup(p->_parent); // 唤醒父进程（可能在 wait() 中阻塞）)
         if(p->_ctid){
             uint64 temp0 = 0;
-            if (mem::k_vmm.copy_out(p->_parent->_pt, p->_ctid, &temp0, sizeof(temp0)) < 0)
+            if (mem::k_vmm.copy_out(p->_pt, p->_ctid, &temp0, sizeof(temp0)) < 0)
             {
                 printfRed("exit_proc: copy out ctid failed\n");
             }

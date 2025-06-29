@@ -30,7 +30,7 @@ extern "C" void main()
 
     trap_mgr.init();
     trap_mgr.inithart();
-    proc::k_pm.init("next pid", "wait lock");
+    proc::k_pm.init("next pid", "next tid", "wait lock");
     mem::k_pmm.init();
 
     mem::k_vmm.init("virtual_memory_manager");
