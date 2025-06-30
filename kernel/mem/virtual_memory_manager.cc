@@ -336,63 +336,76 @@ namespace mem
             return -1;
         }
     }
+    uint64 VirtualMemoryManager::allocshm(PageTable &pt, uint64 oldshm,
+                                          uint64 newshm, uint64 sz,
+                                          void *phyaddr[proc::MAX_SHM_PGNUM])
+    {
+        void *mem;
+        uint64 a;
+
+        if (oldshm & 0xfff || newshm & 0xfff || newshm < sz ||
+            oldshm > (TRAPFRAME - 64 * 2 * PGSIZE))
+        {
+            printfRed("allocshm: bad parameters");
+            return 0;
+        }
+        a = newshm;
+        for (int i = 0; a < oldshm; a += PGSIZE, i++)
+        {
+            mem = k_pmm.alloc_page();
+            if (mem == nullptr)
+            {
+                printfRed("allocshm: no memory");
+                deallocshm(pt, newshm, a);
+                return 0;
+            }
+#ifdef RISCV
+            map_pages(pt, a, PGSIZE, uint64(phyaddr[i]),
+                           riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_writable_m | riscv::PteEnum::pte_user_m);
+#elif defined(LOONGARCH)
+            map_pages(pt, a, PGSIZE, uint64(phyaddr[i]),
+                           PTE_R | PTE_W | PTE_U | PTE_D | PTE_MAT);
+#endif
+            phyaddr[i] = mem;
+            printf("allocshm: %p => %p\n", a, phyaddr[i]);
+        }
+        return newshm;
+    }
     // TODO
-    // uint64 VirtualMemoryManager::allocshm(PageTable &pt, uint64 oldshm, uint64 newshm, uint64 sz, void *phyaddr[pm::MAX_SHM_PGNUM])
-    // {
-    //     void *mem;
-    //     uint64 a;
+    uint64 VirtualMemoryManager::mapshm(PageTable &pt, uint64 oldshm, uint64 newshm, uint sz, void **phyaddr)
+    {
+        uint64 a;
+        if (oldshm & 0xfff || newshm & 0xfff || newshm < sz || oldshm > (TRAPFRAME - 64 * 2 * PGSIZE))
+        {
+            panic("mapshm: bad parameters when shmmap");
+            return 0;
+        }
+        a = newshm;
+        for (int i = 0; a < oldshm; a += PGSIZE, i++)
+        {
+#ifdef RISCV
+            map_pages(pt, a, PGSIZE, uint64(phyaddr[i]),  PTE_W | PTE_U | PTE_R);
+#elif defined(LOONGARCH)
 
-    //     if (oldshm & 0xfff || newshm & 0xfff || newshm < sz || oldshm > (vm_trap_frame - 64 * 2 * PGSIZE))
-    //     {
-    //         panic("allocshm: bad parameters");
-    //         return 0;
-    //     }
-    //     a = newshm;
-    //     for (int i = 0; a < oldshm; a += PGSIZE, i++)
-    //     {
-    //         mem = PhysicalMemoryManager::alloc_page();
-    //         if (mem == nullptr)
-    //         {
-    //             panic("allocshm: no memory");
-    //             deallocshm(pt, newshm, a);
-    //             return 0;
-    //         }
-    //         map_pages(pt, a, PGSIZE, uint64(phyaddr[i]), loongarch::PteEnum::presence_m | loongarch::PteEnum::writable_m | loongarch::PteEnum::plv_m | loongarch::PteEnum::mat_m | loongarch::PteEnum::dirty_m);
-    //         phyaddr[i] = mem;
-    //         printf("allocshm: %p => %p\n", a, phyaddr[i]);
-    //     }
-    //     return newshm;
-    // }
-    // TODO
-    // uint64 VirtualMemoryManager::mapshm(PageTable &pt, uint64 oldshm, uint64 newshm, uint sz, void **phyaddr)
-    // {
-    //     uint64 a;
-    //     if (oldshm & 0xfff || newshm & 0xfff || newshm < sz || oldshm > (vm_trap_frame - 64 * 2 * PGSIZE))
-    //     {
-    //         panic("mapshm: bad parameters when shmmap");
-    //         return 0;
-    //     }
-    //     a = newshm;
-    //     for (int i = 0; a < oldshm; a += PGSIZE, i++)
-    //     {
-    //         map_pages(pt, a, PGSIZE, uint64(phyaddr[i]), loongarch::PteEnum::presence_m | loongarch::PteEnum::writable_m | loongarch::PteEnum::plv_m | loongarch::PteEnum::mat_m | loongarch::PteEnum::dirty_m);
-    //         printf("mapshm: %p => %p\n", a, phyaddr[i]);
-    //     }
-    //     return newshm;
-    // }
+            map_pages(pt, a, PGSIZE, uint64(phyaddr[i]), PTE_P | PTE_W | PTE_U | PTE_MAT | PTE_D);
+#endif
+            printf("mapshm: %p => %p\n", a, phyaddr[i]);
+        }
+        return newshm;
+    }
 
-    // uint64 VirtualMemoryManager::deallocshm(PageTable &pt, uint64 oldshm, uint64 newshm)
-    // {
-    //     if (newshm <= oldshm)
-    //         return oldshm;
+    uint64 VirtualMemoryManager::deallocshm(PageTable &pt, uint64 oldshm, uint64 newshm)
+    {
+        if (newshm <= oldshm)
+            return oldshm;
 
-    //     if (PGROUNDUP(newshm) > PGROUNDUP(oldshm))
-    //     {
-    //         int npages = PGROUNDUP(newshm) - PGROUNDUP(oldshm) / PGSIZE;
-    //         vmunmap(pt, PGROUNDUP(oldshm), npages, 0);
-    //     }
-    //     return oldshm;
-    // }
+        if (PGROUNDUP(newshm) > PGROUNDUP(oldshm))
+        {
+            int npages = PGROUNDUP(newshm) - PGROUNDUP(oldshm) / PGSIZE;
+            vmunmap(pt, PGROUNDUP(oldshm), npages, 0);
+        }
+        return oldshm;
+    }
 
     /// @brief 从内核地址空间拷贝数据到用户页表映射的虚拟地址空间。
     ///
@@ -470,7 +483,7 @@ namespace mem
 
     void VirtualMemoryManager::vmunmap(PageTable &pt, uint64 va, uint64 npages, int do_free)
     {
-        // printfCyan("vmunmap: va: %p, npages: %d, do_free: %d\n", va, npages, do_free);
+        printfCyan("vmunmap: va: %p, npages: %d, do_free: %d\n", va, npages, do_free);
         uint64 a;
         Pte pte;
 

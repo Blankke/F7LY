@@ -7,8 +7,10 @@
 #include "riscv/pagetable.hh"
 #elif defined(LOONGARCH)
 #include "loongarch/pagetable.hh"
-
 #endif
+
+#include "proc/sharemem.hh"
+#include "proc/shmmanager.hh"
 
 namespace mem
 {
@@ -57,7 +59,7 @@ namespace mem
 		/// @param sz shmsize
 		/// @param phyaddr 
 		/// @return newshm if success
-		// uint64 allocshm( PageTable &pt, uint64 oldshm, uint64 newshm, uint64 sz, void *phyaddr[ pm::MAX_SHM_PGNUM ] );
+		uint64 allocshm( PageTable &pt, uint64 oldshm, uint64 newshm, uint64 sz, void *phyaddr[ proc::MAX_SHM_PGNUM ] );
 		
 		/// @brief 
 		/// @param pt 
@@ -78,14 +80,14 @@ namespace mem
 		/// @param sz shmsize
 		/// @param phyaddr 
 		/// @return newshm if success
-		// uint64 mapshm( PageTable &pt, uint64 oldshm, uint64 newshm, uint sz, void **phyaddr );
+		uint64 mapshm( PageTable &pt, uint64 oldshm, uint64 newshm, uint sz, void **phyaddr );
 
 		/// @brief deallocate shm , when allocate shm failed
 		/// @param pt pagetable to use
 		/// @param oldshm oldshm lower address
 		/// @param newshm newshm lower address 
 		/// @return oldshm if success
-		// uint64 deallocshm(PageTable &pt, uint64 oldshm, uint64 newshm );
+		uint64 deallocshm(PageTable &pt, uint64 oldshm, uint64 newshm );
 
 		/// @brief copy from kernel to user
 		/// @param pt pagetable to use

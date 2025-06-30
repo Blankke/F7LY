@@ -32,6 +32,7 @@
 #include "mem/mem.hh"
 #include "futex.hh"
 #include "rusage.hh"
+#include "proc/shmmanager.hh"
 namespace syscall
 {
     // 创建全局的 SyscallHandler 实例
@@ -213,8 +214,8 @@ namespace syscall
             }
             // 调用对应的系统调用函数
             uint64 ret = (this->*_syscall_funcs[sys_num])();
-            // if (!(sys_num == 64 && p->_trapframe->a0 == 1) && !(sys_num == 66 && p->_trapframe->a0 == 1))
-            //     printfCyan("[SyscallHandler::invoke_syscaller]ret: %p\n", sys_num, ret);
+            if (!(sys_num == 64 && p->_trapframe->a0 == 1) && !(sys_num == 66 && p->_trapframe->a0 == 1))
+                printfCyan("[SyscallHandler::invoke_syscaller]ret: %p\n", sys_num, ret);
             p->_trapframe->a0 = ret; // 设置返回值
         }
         //     if (sys_num != 64 && sys_num != 66)
@@ -969,6 +970,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_munmap] Error fetching munmap arguments\n");
             return -1;
         }
+        printfYellow("[SyscallHandler::sys_munmap] start: %p, size: %d\n", (void *)start, size);
         return proc::k_pm.munmap((void *)start, size); // 调用进程管理器的 munmap 函数
     }
 
@@ -2724,15 +2726,118 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_shmget()
     {
-        panic("未实现该系统调用");
+        // return 0;
+        int key, size, shmflg;
+
+        if (_arg_int(0, key) < 0)
+            return -1;
+        if (_arg_int(1, size) < 0)
+            return -1;
+        if (_arg_int(2, shmflg) < 0)
+            return -1;
+
+        // IPC_PRIVATE 创建新的共享内存段
+        [[maybe_unused]] const int IPC_PRIVATE = 0;
+        const int IPC_CREAT = 01000;
+        const int IPC_EXCL = 02000;
+
+        // 简化实现：直接使用 key 作为共享内存 ID
+        // 检查参数合法性
+        if (key < 0 || key >= (int)proc::SHM_NUM)
+            return -EINVAL;
+
+        // 计算需要的页数
+        int pages_needed = (size + PGSIZE - 1) / PGSIZE;
+        if (pages_needed > (int)proc::MAX_SHM_PGNUM)
+            return -EINVAL;
+
+        // 检查是否已存在
+        int refcnt = proc::k_shmManager.shmrefcnt(key);
+        if (refcnt > 0) {
+            // 共享内存已存在
+            if (shmflg & IPC_CREAT && shmflg & IPC_EXCL)
+                return -EEXIST;
+            return key; // 返回已存在的 key
+        }
+        printfYellow("[SyscallHandler::sys_shmget] 创建共享内存段 key=%d, size=%d, shmflg=%d\n", key, size, shmflg);
+        // 如果不存在且没有 IPC_CREAT 标志
+        if (!(shmflg & IPC_CREAT))
+            return -ENOENT;
+
+        // 创建新的共享内存段会在 shmat 时进行
+        return key;
     }
+    
     uint64 SyscallHandler::sys_shmctl()
     {
-        panic("未实现该系统调用");
+        // return 0;
+        int shmid, cmd;
+        uint64 buf_addr;
+        
+        if (_arg_int(0, shmid) < 0)
+            return -1;
+        if (_arg_int(1, cmd) < 0)
+            return -1;
+        if (_arg_addr(2, buf_addr) < 0)
+            return -1;
+
+        // IPC 命令定义
+        const int IPC_RMID = 0;
+        const int IPC_STAT = 2;
+        const int IPC_SET = 1;
+
+        if (shmid < 0 || shmid >= (int)proc::SHM_NUM)
+            return -EINVAL;
+
+        switch (cmd) {
+            case IPC_RMID:
+                // 移除共享内存段
+                if (proc::k_shmManager.shmrefcnt(shmid) <= 0)
+                    return -EINVAL;
+                return proc::k_shmManager.shmrm(shmid);
+                
+            case IPC_STAT:
+                // 获取共享内存段状态 - 简化实现
+                return 0;
+                
+            case IPC_SET:
+                // 设置共享内存段属性 - 简化实现
+                return 0;
+                
+            default:
+                return -EINVAL;
+        }
     }
+    
     uint64 SyscallHandler::sys_shmat()
     {
-        panic("未实现该系统调用");
+        // return 0;
+        int shmid, shmflg;
+        uint64 shmaddr;
+        
+        if (_arg_int(0, shmid) < 0)
+            return -1;
+        if (_arg_addr(1, shmaddr) < 0)
+            return -1;
+        if (_arg_int(2, shmflg) < 0)
+            return -1;
+
+        // 检查参数合法性
+        if (shmid < 0 || shmid >= (int)proc::SHM_NUM)
+            return -EINVAL;
+
+        // 简化实现：忽略 shmaddr 参数，由系统分配地址
+        // 使用默认的页数 (可以根据需要调整)
+        int default_pages = 1;
+        
+        void *result = proc::k_shmManager.shmgetat(shmid, default_pages);
+        
+        if (result == nullptr)
+            return -ENOMEM;
+        if (result == (void*)-1)
+            return -EINVAL;
+        printfGreen("[SyscallHandler::sys_shmat] 成功附加共享内存段 shmid=%d, shmaddr=%p\n", shmid, result);
+        return (uint64)result;
     }
     uint64 SyscallHandler::sys_socket()
     {

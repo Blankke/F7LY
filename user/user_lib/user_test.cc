@@ -156,10 +156,24 @@ int iozone_test(const char *path = musl_dir)
 {
     chdir(path);
     char *bb_sh[8] = {0};
-    bb_sh[0] = "busybox";
-    bb_sh[1] = "sh";
-    bb_sh[2] = "iozone_testcode.sh";
-    run_test("busybox", bb_sh, 0);
+    // bb_sh[0] = "iozone";
+    // bb_sh[1] = "-a";
+    // bb_sh[2] = "-r";
+    // bb_sh[3] = "1k";
+    // bb_sh[4] = "-s";
+    // bb_sh[5] = "4m";
+    bb_sh[0] = "iozone";
+    bb_sh[1] = "-t";
+    bb_sh[2] = "4";
+    bb_sh[3] = "-i";
+    bb_sh[4] = "0";
+    bb_sh[5] = "-i";
+    bb_sh[6] = "1";
+    bb_sh[7] = "-r";
+    bb_sh[8] = "1k";
+    bb_sh[9] = "-s";
+    bb_sh[10] = "1m";
+    run_test("iozone", bb_sh, 0);
     return 0;
 }
 

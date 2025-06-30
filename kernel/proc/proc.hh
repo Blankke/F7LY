@@ -14,6 +14,7 @@
 #include "futex.hh"
 #include "fs/vfs/file/file.hh"
 #include "signal.hh"
+#include "proc/sharemem.hh"
 namespace fs
 {
     class dentry;
@@ -97,9 +98,9 @@ namespace proc
         int _priority; // 进程优先级 (0最高，19最低)
 
         // TODO:共享内存相关
-        // uint _shm;             // 共享内存的起始虚拟地址
-        // void *_shmva[SHM_NUM]; // 指向共享内存区域的虚拟地址数组
-        // uint _shmkeymask;      // 用于标记哪些共享物理内存页被该进程使用
+        uint _shm;             // 共享内存的起始虚拟地址
+        void *_shmva[SHM_NUM]; // 指向共享内存区域的虚拟地址数组
+        uint _shmkeymask;      // 用于标记哪些共享物理内存页被该进程使用
 
         // 消息队列相关
         uint _mqmask; // 用于标记进程使用的消息队列
