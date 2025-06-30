@@ -84,24 +84,24 @@ namespace fs
 
 	off_t normal_file::lseek(off_t offset, int whence)
 	{
-		off_t size = static_cast<off_t>(this->_stat.size);
+		// off_t size = static_cast<off_t>(this->_stat.size);
 		[[maybe_unused]] off_t new_off;
 		switch (whence)
 		{
 		case SEEK_SET:
-			if (offset < 0 || offset > size)
-				return -EINVAL;
+			// if (offset < 0 || offset > size)
+			// 	return -EINVAL;
 			_file_ptr = offset;
 			break;
 		case SEEK_CUR:
 			new_off = _file_ptr + offset;
-			if (new_off < 0 || new_off > size)
+			if (new_off < 0 )
 				return -EINVAL;
 			_file_ptr = new_off;
 			break;
 		case SEEK_END:
 			new_off = this->_stat.size + offset;
-			if (new_off < 0 || new_off > size)
+			if (new_off < 0 )
 				return -EINVAL;
 			_file_ptr = new_off;
 			break;

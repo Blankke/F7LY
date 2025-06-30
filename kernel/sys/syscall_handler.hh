@@ -30,6 +30,7 @@ namespace syscall
         uint64 _arg_raw(int arg_n);
 
         int _arg_int(int arg_n, int &out_int);
+        int _arg_long(int arg_n, long &out_int);
         int _arg_addr(int arg_n, uint64 &out_addr);
         int _arg_str(int arg_n, eastl::string &buf, int max);
         int _arg_fd(int arg_n, int *out_fd, fs::file **out_f);

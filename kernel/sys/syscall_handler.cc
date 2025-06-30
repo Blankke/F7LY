@@ -290,6 +290,19 @@ namespace syscall
         out_int = (int)raw_val;
         return 0;
     }
+        int SyscallHandler::_arg_long(int arg_n, long &out_int)
+    {
+        long raw_val = _arg_raw(arg_n);
+        if (raw_val < LONG_MIN || raw_val > LONG_MAX)
+        {
+            printfRed("[SyscallHandler::_arg_long]arg_n is out of range. "
+                      "raw_val: %ld, LONG_MIN: %ld, LONG_MAX: %ld\n",
+                      raw_val, LONG_MIN, LONG_MAX);
+            return -1;
+        }
+        out_int = (long)raw_val;
+        return 0;
+    }
     /// @brief  获取系统调用参数的地址
     /// @param arg_n  参数的索引，从0开始
     /// @param out_addr  输出参数的地址
@@ -2196,13 +2209,13 @@ namespace syscall
     uint64 SyscallHandler::sys_lseek()
     {
         int fd;
-        int offset;
+        long offset;
         int whence;
 
         if (_arg_int(0, fd) < 0)
             return -1;
 
-        if (_arg_int(1, offset) < 0)
+        if (_arg_long(1, offset) < 0)
             return -1;
 
         if (_arg_int(2, whence) < 0)

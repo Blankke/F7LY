@@ -267,9 +267,9 @@ char *libctest[][2] = {
     {"search_lsearch", NULL},
     {"search_tsearch", NULL},
     // // {"setjmp", NULL}, //信号相关，爆了
-    // {"snprintf", NULL},
+    {"snprintf", NULL},
     // // {"socket", NULL}, // 网络相关，这个不测了
-    // {"sscanf", NULL},
+    {"sscanf", NULL},
     // // {"sscanf_long", NULL}, //龙芯会爆，riscv正常
     // {"stat", NULL}, //sys_fstatat我关掉了，原来就是关的，开了basictest爆炸，应该没实现对
     {"strftime", NULL},
@@ -293,11 +293,11 @@ char *libctest[][2] = {
     {"udiv", NULL},
     // // {"ungetc", NULL}, //文件系统爆了
     // // {"utime", NULL}, // sys_utimensat实现不正确
-    // {"wcsstr", NULL},
-    // {"wcstol", NULL},
+    {"wcsstr", NULL},
+    {"wcstol", NULL},
     // // {"daemon_failure", NULL}, // 爆了
-    // {"dn_expand_empty", NULL},
-    // {"dn_expand_ptr_0", NULL},
+    {"dn_expand_empty", NULL},
+    {"dn_expand_ptr_0", NULL},
     // // {"fflush_exit", NULL},//fd爆了，标准输出不见了
     {"fgets_eof", NULL},
     {"fgetwc_buffering", NULL},
@@ -310,7 +310,7 @@ char *libctest[][2] = {
     {"inet_pton_empty_last_field", NULL},
     {"iswspace_null", NULL},
     {"lrand48_signextend", NULL},
-    // {"lseek_large", NULL}, // 爆了
+    {"lseek_large", NULL}, 
     {"malloc_0", NULL},
     {"mbsrtowcs_overflow", NULL},
     {"memmem_oob_read", NULL},
