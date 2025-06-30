@@ -44,7 +44,7 @@ namespace proc
 {
     ProcessManager k_pm;
 
-    void ProcessManager::init(const char *pid_lock_name, const char *tid_lock_name,const char *wait_lock_name)
+    void ProcessManager::init(const char *pid_lock_name, const char *tid_lock_name, const char *wait_lock_name)
     {
         // initialize the proc table.
         _pid_lock.init(pid_lock_name);
@@ -647,8 +647,10 @@ namespace proc
         int fd;
 
         if (p->_ofile == nullptr)
+        {
+            printfRed("alloc_fd: p->_ofile is null\n");
             return -1;
-
+        }
         for (fd = 3; fd < (int)max_open_files; fd++)
         {
             if (p->_ofile->_ofile_ptr[fd] == nullptr)
@@ -658,6 +660,7 @@ namespace proc
                 return fd;
             }
         }
+        printfRed("alloc_fd: no free fd\n");
         return -1;
     }
 
@@ -780,7 +783,7 @@ namespace proc
             }
 
             // 共享父进程的页表
-            np->_vma= p->_vma; // 继承父进程的虚拟内存区域映射
+            np->_vma = p->_vma;  // 继承父进程的虚拟内存区域映射
             p->_vma->_ref_cnt++; // 增加父进程的虚拟内存区域映射引用计数
         }
         else
@@ -850,7 +853,8 @@ namespace proc
                 }
                 printf("fork: stack_ptr: %p, entry_point: %p\n", stack_ptr, entry_point);
                 uint64 arg = 0;
-                if(mem::k_vmm.copy_in(p->_pt, &arg, (stack_ptr + 8), sizeof(uint64)) != 0){
+                if (mem::k_vmm.copy_in(p->_pt, &arg, (stack_ptr + 8), sizeof(uint64)) != 0)
+                {
                     panic("fork: copy_in failed for stack pointer arg");
                     freeproc(np);
                     np->_lock.release();
@@ -876,7 +880,9 @@ namespace proc
                     np->_lock.release();
                     return nullptr; // EFAULT: Bad address
                 }
-            }else{
+            }
+            else
+            {
                 printfRed("fork: ctid is 0, CLONE_CHILD_SETTID will not set tid\n");
             }
         }
@@ -1088,7 +1094,8 @@ namespace proc
 
         if (p->_parent)
             wakeup(p->_parent); // 唤醒父进程（可能在 wait() 中阻塞）)
-        if(p->_ctid){
+        if (p->_ctid)
+        {
             uint64 temp0 = 0;
             if (mem::k_vmm.copy_out(p->_pt, p->_ctid, &temp0, sizeof(temp0)) < 0)
             {
@@ -1413,6 +1420,7 @@ namespace proc
     /// @return 返回 0 表示成功；若 `fd` 非法或未打开，返回 -1。
     int ProcessManager::fstat(int fd, fs::Kstat *buf)
     {
+        // printfCyan("[fstat] fd: %d\n", fd);
         return 0;
         if (fd < 0 || fd >= (int)max_open_files)
             return -1;

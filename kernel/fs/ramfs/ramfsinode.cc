@@ -54,7 +54,7 @@ namespace fs
 
 		size_t RamInode::nodeRead(uint64 dst_, size_t off_, size_t len_)
 		{
-						printfMagenta("it is a ram node\n");
+						// printfMagenta("it is a ram node\n");
 			if (readable)
 			{
 				size_t read_len = (off_ + len_ > sizeof busybox_conf) ? ((sizeof busybox_conf) - off_) : len_;

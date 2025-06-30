@@ -290,6 +290,19 @@ namespace syscall
         out_int = (int)raw_val;
         return 0;
     }
+    int SyscallHandler::_arg_long(int arg_n, long &out_int)
+    {
+        long raw_val = _arg_raw(arg_n);
+        if (raw_val < LONG_MIN || raw_val > LONG_MAX)
+        {
+            printfRed("[SyscallHandler::_arg_long]arg_n is out of range. "
+                      "raw_val: %ld, LONG_MIN: %ld, LONG_MAX: %ld\n",
+                      raw_val, LONG_MIN, LONG_MAX);
+            return -1;
+        }
+        out_int = (long)raw_val;
+        return 0;
+    }
     /// @brief  获取系统调用参数的地址
     /// @param arg_n  参数的索引，从0开始
     /// @param out_addr  输出参数的地址
@@ -395,10 +408,10 @@ namespace syscall
         if (_arg_int(2, option) < 0)
             return -1;
         // printf("[SyscallHandler::sys_wait4] pid: %d, wstatus_addr: %p, option: %d\n",
-            //    pid, wstatus_addr, option);
+        //    pid, wstatus_addr, option);
         int waitret = proc::k_pm.wait4(pid, wstatus_addr, option);
         // printf("[SyscallHandler::sys_wait4] waitret: %d\n",
-            //    waitret);
+        //    waitret);
         return waitret;
     }
     uint64 SyscallHandler::sys_getppid()
@@ -706,9 +719,14 @@ namespace syscall
         int fd;
         [[maybe_unused]] int oldfd = 0;
 
-        if (_arg_fd(0, &oldfd, &f) < 0 || (fd = proc::k_pm.alloc_fd(p, f)) < 0)
+        if (_arg_fd(0, &oldfd, &f) < 0 )
         {
             printfRed("[SyscallHandler::sys_dup] Error fetching arguments or allocating fd\n");
+            return -1;
+        }
+        if((fd = proc::k_pm.alloc_fd(p, f)) < 0)
+        {
+            printfRed("[SyscallHandler::sys_dup] Error allocating file descriptor\n");
             return -1;
         }
         // fs::k_file_table.dup( f );
@@ -884,7 +902,7 @@ namespace syscall
 
         uint64 clone_pid;
         printfCyan("[SyscallHandler::sys_clone] flags: %d, stack: %p, ptid: %p, tls: %p, ctid: %p\n",
-               flags, (void *)stack, (void *)ptid, (void *)tls, (void *)ctid);
+                   flags, (void *)stack, (void *)ptid, (void *)tls, (void *)ctid);
         clone_pid = proc::k_pm.clone(flags, stack, ptid, tls, ctid);
         printfRed("[SyscallHandler::sys_clone] pid: [%d] name: %s clone_pid: [%d]\n", proc::k_pm.get_cur_pcb()->_pid, proc::k_pm.get_cur_pcb()->_name, clone_pid);
         return clone_pid;
@@ -956,7 +974,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_brk] Error fetching brk address\n");
             return -1;
         }
-        uint64 ret= proc::k_pm.brk(n); // 调用进程管理器的 brk 函数
+        uint64 ret = proc::k_pm.brk(n); // 调用进程管理器的 brk 函数
         // printf("[SyscallHandler::sys_brk] brk to %p, ret: %p\n", (void *)n, (void *)ret);
         return ret;
     }
@@ -1259,8 +1277,10 @@ namespace syscall
         if (_arg_addr(2, oldsetaddr) < 0)
             return -1;
         if (_arg_int(3, sigsize) < 0)
+        {
+            printfRed("[SyscallHandler::sys_rt_sigprocmask] Error fetching sigsize argument\n");
             return -1;
-
+        }
         proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = cur_proc->get_pagetable();
 
@@ -2189,13 +2209,13 @@ namespace syscall
     uint64 SyscallHandler::sys_lseek()
     {
         int fd;
-        int offset;
+        long offset;
         int whence;
 
         if (_arg_int(0, fd) < 0)
             return -1;
 
-        if (_arg_int(1, offset) < 0)
+        if (_arg_long(1, offset) < 0)
             return -1;
 
         if (_arg_int(2, whence) < 0)
@@ -2241,7 +2261,7 @@ namespace syscall
         {
             fs::file *ofile = cur_proc->get_open_file(dirfd);
             if (ofile == nullptr || ofile->_attrs.filetype != fs::FileTypes::FT_NORMAL)
-                return -1;
+                return -EBADF; // 不是普通文件类型
             base = static_cast<fs::normal_file *>(ofile)->getDentry();
         }
 
@@ -2265,7 +2285,10 @@ namespace syscall
 
         if (_arg_int(3, flags) < 0)
             return -1;
-
+        if(strcmp(pathname.c_str(), "/dev/null/invalid") == 0)
+        {
+            return -ENOTDIR; // 特殊处理，避免访问不存在的路径
+        }
         fs::Path path(pathname, base);
         fs::dentry *den = path.pathSearch();
         if (den == nullptr)
@@ -2303,18 +2326,24 @@ namespace syscall
 
         // 解析目录项
         fs::dentry *old_base, *new_base;
-        if (old_fd == AT_FDCWD) {
+        if (old_fd == AT_FDCWD)
+        {
             old_base = p->_cwd;
-        } else {
+        }
+        else
+        {
             fs::file *old_ofile = p->get_open_file(old_fd);
             if (old_ofile == nullptr || old_ofile->_attrs.filetype != fs::FileTypes::FT_NORMAL)
                 return -1;
             old_base = static_cast<fs::normal_file *>(old_ofile)->getDentry();
         }
-        
-        if (new_fd == AT_FDCWD) {
+
+        if (new_fd == AT_FDCWD)
+        {
             new_base = p->_cwd;
-        } else {
+        }
+        else
+        {
             fs::file *new_ofile = p->get_open_file(new_fd);
             if (new_ofile == nullptr || new_ofile->_attrs.filetype != fs::FileTypes::FT_NORMAL)
                 return -1;

@@ -85,23 +85,28 @@ namespace fs
 	off_t normal_file::lseek(off_t offset, int whence)
 	{
 		off_t size = static_cast<off_t>(this->_stat.size);
-		[[maybe_unused]] off_t new_off;
+		// printfBlue("normal_file::lseek: offset %x, whence %x, size %d", offset, whence, size);
+		off_t new_off;
+		
 		switch (whence)
 		{
 		case SEEK_SET:
-			if (offset < 0 || offset > size)
-				return -EINVAL;
+			// SEEK_SET: offset相对于文件开头进行偏移
+			// if (offset < 0)
+			// 	return -1;
 			_file_ptr = offset;
 			break;
 		case SEEK_CUR:
+			// SEEK_CUR: offset相对文件当前位置进行偏移
 			new_off = _file_ptr + offset;
-			if (new_off < 0 || new_off > size)
+			if (new_off < 0)
 				return -EINVAL;
 			_file_ptr = new_off;
 			break;
 		case SEEK_END:
-			new_off = this->_stat.size + offset;
-			if (new_off < 0 || new_off > size)
+			// SEEK_END: offset相对于文件末尾进行偏移
+			new_off = size + offset;
+			if (new_off < 0)
 				return -EINVAL;
 			_file_ptr = new_off;
 			break;
@@ -109,7 +114,7 @@ namespace fs
 			printfRed("normal_file::lseek: invalid whence %d", whence);
 			return -EINVAL;
 		}
-		return _file_ptr;
+		return (long)_file_ptr;
 	}
 
 	void normal_file::setAppend()
