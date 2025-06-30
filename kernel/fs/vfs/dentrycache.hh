@@ -23,7 +23,7 @@ namespace fs
 
         
 
-        constexpr uint MAX_DENTRY_NUM = 100;
+        constexpr uint MAX_DENTRY_NUM = 200;
         /**
          * @brief Dentry cache
          * @test dentryCacheTest

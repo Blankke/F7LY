@@ -262,16 +262,21 @@ namespace proc
     {
         // 处理VMA的引用计数
         bool should_free_vma = false;
-        if (p->_vma != nullptr) {
-            if (--p->_vma->_ref_cnt <= 0) {
+        if (p->_vma != nullptr)
+        {
+            if (--p->_vma->_ref_cnt <= 0)
+            {
                 should_free_vma = true;
-            } else {
+            }
+            else
+            {
                 printfYellow("freeproc: vma ref count not zero, ref_cnt: %d\n", p->_vma->_ref_cnt);
             }
         }
-        
+
         // 如果应该释放VMA，则处理所有VMA条目
-        if (should_free_vma && p->_vma != nullptr) {
+        if (should_free_vma && p->_vma != nullptr)
+        {
             for (int i = 0; i < NVMA; ++i)
             {
                 // printfBlue("freeproc: checking vma %d, addr: %p, len: %d,used:%d\n", i, p->_vm[i].addr, p->_vm[i].len,p->_vm[i].used);
@@ -313,7 +318,7 @@ namespace proc
             // 只有当VMA引用计数为0时才删除VMA
             delete p->_vma;
         }
-        
+
         // 重置VMA指针
         p->_vma = nullptr;
 
@@ -844,9 +849,9 @@ namespace proc
             // 在共享页表的情况下，需要标记为共享虚拟内存
             // 因为子进程有自己的trapframe，但共享父进程的页表
             // 我们需要在usertrapret时动态映射正确的trapframe
-            np->_shared_vm = true;  // 标记为共享虚拟内存
-            
-            printfCyan("[clone] Using shared page table for process %d (parent %d), ref count: %d\n", 
+            np->_shared_vm = true; // 标记为共享虚拟内存
+
+            printfCyan("[clone] Using shared page table for process %d (parent %d), ref count: %d\n",
                        np->_pid, p->_pid, np->_pt.get_ref_count());
         }
         else
@@ -1372,6 +1377,7 @@ namespace proc
     /// @return
     int ProcessManager::open(int dir_fd, eastl::string path, uint flags)
     {
+        printfCyan("[open] dir_fd: %d, path: %s, flags: %x\n", dir_fd, path.c_str(), flags);
         // enum OpenFlags : uint
         // {
         // 	O_RDONLY	= 0x000U,
@@ -1391,9 +1397,10 @@ namespace proc
             file = p->get_open_file(dir_fd);
         }
 
-        fs::Path path_(path, file);  // 创建路径对象（支持相对路径）
-        dentry = path_.pathSearch(); // 查找路径对应的 dentry（目录项）
+        fs::Path path_(path, file); // 创建路径对象（支持相对路径）
 
+        dentry = path_.pathSearch(); // 查找路径对应的 dentry（目录项）
+        // printfBlue("[open] path: %s, dentry: %p, flags: %x\n", path_.AbsolutePath().c_str(), dentry, flags);
         if (path == "") // empty path
             return -1;
 
@@ -1689,9 +1696,21 @@ namespace proc
         //     // printfRed("[munmap?]: walkaddr :%p\n",(p->_pt.walk_addr((uint64)addr)));
         //     p->_vma->_vm[i].vfile->write((uint64)addr, length);
         // }
-
+        uint64 va_start = PGROUNDDOWN((uint64)addr);
+        uint64 va_end = PGROUNDUP((uint64)addr + length);
+        // 逐页检查并取消映射，避免对未映射的页面进行操作
+        for (uint64 va = va_start; va < va_end; va += PGSIZE)
+        {
+            mem::Pte pte = p->_pt.walk(va, 0);
+            // printfCyan("freeproc: checking pte for va %p, pte: %p\n", va, pte.get_data());
+            if (!pte.is_null() && pte.is_valid())
+            {
+                // 只对实际映射的页面进行取消映射
+                mem::k_vmm.vmunmap(*p->get_pagetable(), va, 1, 1);
+            }
+        }
+        p->_vma->_vm[i].used = 0;
         // 判断此页面是否存在映射
-        mem::k_vmm.vmunmap(*p->get_pagetable(), (uint64)addr, length / PGSIZE, 1);
 
         // 当前VMA中全部映射都被取消
         if (p->_vma->_vm[i].len == 0)
@@ -2023,6 +2042,7 @@ namespace proc
 #endif
                 // printfRed("execve: loading segment %d, type: %d, startva: %p, endva: %p, memsz: %p, filesz: %p, flags: %d\n", i, ph.type, (void *)ph.vaddr, (void *)(ph.vaddr + ph.memsz), (void *)ph.memsz, (void *)ph.filesz, ph.flags);
 #ifdef RISCV
+                printf("[exec] map from %p to %p new_pt base %p\n", (void *)(new_sz), (void *)(ph.vaddr + ph.memsz), new_pt.get_base());
                 if ((sz1 = mem::k_vmm.vmalloc(new_pt, new_sz, ph.vaddr + ph.memsz, seg_flag)) == 0)
                 {
                     printfRed("execve: uvmalloc\n");

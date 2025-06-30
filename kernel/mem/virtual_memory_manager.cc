@@ -480,7 +480,8 @@ namespace mem
         for (a = va; a < va + npages * PGSIZE; a += PGSIZE)
         {
             if ((pte = pt.walk(a, 0)).is_null())
-                panic("vmunmap: walk");
+                continue;    
+            // panic("vmunmap: walk");
             if (!pte.is_valid())
                 continue;
             ///@brief 这里的逻辑是，如果pte无效，则不需要释放物理页

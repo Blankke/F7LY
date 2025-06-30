@@ -76,6 +76,7 @@ namespace fs
 	void Path::pathbuild()
 	{
 		//[[maybe_unused]]Dentry *root = mnt_table[ "/" ]->getRoot();
+		printfBlue("pathbuild: pathname = %s\n", pathname.c_str());
 		if (pathname.size() < 1)
 		{
 			base = proc::k_pm.get_cur_pcb()->get_cwd();
@@ -83,6 +84,12 @@ namespace fs
 		}
 		else if (pathname[0] == '/')
 		{
+			printfBlue("pathbuild: absolute path\n");
+			if(mnt_table.find("/") == mnt_table.end())
+			{
+
+				panic("Path: mnt_table does not contain root");
+			}
 			base = mnt_table["/"]->getRoot();
 		}
 		else if (base == nullptr)
@@ -90,7 +97,7 @@ namespace fs
 			base = proc::k_pm.get_cur_pcb()->get_cwd();
 		}
 
-		// Info("base name is %s ", base->rName());
+		Info("base name is %s ", base->rName());
 		size_t len = pathname.size();
 		if (len > 0)
 		{ // 保证数组长度不为0
