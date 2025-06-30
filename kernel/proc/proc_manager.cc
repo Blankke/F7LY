@@ -400,11 +400,11 @@ namespace proc
             printfRed("proc_pagetable: map trapframe failed\n");
             return empty_pt;
         }
-        if (mem::k_vmm.map_pages(pt, SIG_TRAMPOLINE, PGSIZE, (uint64)sig_trampoline, riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_writable_m) == 0)
+        if (mem::k_vmm.map_pages(pt, SIG_TRAMPOLINE, PGSIZE, (uint64)sig_trampoline, riscv::PteEnum::pte_readable_m | riscv::pte_executable_m | riscv::PteEnum::pte_user_m) == 0)
         {
             mem::k_vmm.vmfree(pt, 0);
 
-            printfRed("proc_pagetable: map sigtrapframe failed\n");
+            panic("proc_pagetable: map sigtrapframe failed\n");
             return empty_pt;
         }
 
@@ -415,7 +415,7 @@ namespace proc
             printfRed("proc_pagetable: map trapframe failed\n");
             return empty_pt;
         }
-        if (mem::k_vmm.map_pages(pt, SIG_TRAMPOLINE, PGSIZE, (uint64)sig_trampoline, PTE_V | PTE_NX | PTE_P | PTE_W | PTE_R | PTE_MAT | PTE_D) == 0)
+        if (mem::k_vmm.map_pages(pt, SIG_TRAMPOLINE, PGSIZE, (uint64)sig_trampoline, PTE_V | PTE_NX | PTE_P | PTE_W | PTE_R | PTE_MAT | PTE_D | PTE_U) == 0)
         {
             printf("Fail to map sig_trampoline\n");
             mem::k_vmm.vmfree(pt, 0);

@@ -207,9 +207,10 @@ void trap_manager::usertrap()
       proc::k_scheduler.yield();
     }
   }
-  TODO(信号处理)
-  // printfRed("信号处理未实现\n");
-  // handle_signal();
+
+  // 处理信号 - 在返回用户态之前检查并处理待处理的信号
+  proc::ipc::signal::handle_signal();
+  
   usertrapret();
 }
 

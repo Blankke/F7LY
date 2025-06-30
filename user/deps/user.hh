@@ -47,7 +47,7 @@ void fprintf(int fd, const char *fmt, ...);
 void printf(const char *fmt, ...);
 
 // test函数
-int run_test(char *test_list);
+int run_test(const char *path, char *argv[] = 0, char *envp[] = 0);
 int basic_musl_test(void);
 int basic_glibc_test(void);
 int busybox_musl_test(void);

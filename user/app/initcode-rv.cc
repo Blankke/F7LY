@@ -5,6 +5,7 @@ extern "C"
     __attribute__((section(".text.startup")))
     int main()
     {
+        // run_test("/mnt/sig_test_1", 0, 0);
         // basic_test("/mnt/musl/");
         // basic_test("/mnt/glibc/");
         // busybox_test("/mnt/musl/");

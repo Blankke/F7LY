@@ -1,3 +1,4 @@
+#ifdef LOONGARCH
 # Trampoline for signal handling
     .section sigtrampsec
 
@@ -6,3 +7,4 @@
 sig_trampoline:
     li.d $a7, 139
     syscall 0
+#endif

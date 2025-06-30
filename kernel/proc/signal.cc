@@ -44,6 +44,7 @@ namespace proc
                         // 如果已经存在，先释放旧的
                         delete cur_proc->_sigactions->actions[flag];
                     }
+                    printf("[sigAction] Setting handler for signal %d: %p\n", flag, newact->sa_handler);
                     *(cur_proc->_sigactions->actions[flag]) = *newact;
                 }
 
@@ -101,28 +102,36 @@ namespace proc
             void handle_signal()
             {
                 proc::Pcb *p = proc::k_pm.get_cur_pcb();
+                printf("[handle_signal] Entered, _signal=0x%x\n", p->_signal);
                 if (p->_signal == 0)
                 {
+                    printf("[handle_signal] No signals to handle\n");
                     return; // 没有信号需要处理
                 }
                 for (uint64 i = 1; i <= proc::ipc::signal::SIGRTMAX && (p->_signal != 0); i++)
                 {
-                    uint64 sigbit = (1UL << (i - 1));
-                    if (!sig_is_member(p->_signal, sigbit))
+                    if (!sig_is_member(p->_signal, i))
                     {
+                        // printf("[handle_signal] Signal %d not set, skipping\n", i);
                         continue; // 该信号未被设置
                     }
                     int signum = i;
-                    if (is_ignored(p, signum))
-                    {
-                        printf("[handle_signal] Signal %d is ignored sigmask 0x%x\n", signum, p->_sigmask);
-                        return;
-                    }
+                    printf("[handle_signal] Handling signal %d\n", signum);
+                    // if (is_ignored(p, signum))
+                    // {
+                    //     printf("[handle_signal] Signal %d is ignored, sigmask=0x%x\n", signum, p->_sigmask);
+                    //     return;
+                    // }
                     
                     sigaction *act = nullptr;
                     if (p->_sigactions != nullptr && p->_sigactions->actions[signum] != nullptr)
                     {
                         act = p->_sigactions->actions[signum];
+                        printf("[handle_signal] Found handler for signal %d: %p\n", signum, act->sa_handler);
+                    }
+                    else
+                    {
+                        printf("[handle_signal] No user handler for signal %d\n", signum);
                     }
                     
                     if (act == nullptr || act->sa_handler == nullptr)
@@ -132,10 +141,13 @@ namespace proc
                     }
                     else
                     {
+                        printf("[handle_signal] Calling do_handle for signal %d\n", signum);
                         do_handle(p, signum, act);
                     }
                     clear_signal(p, signum);
+                    printf("[handle_signal] Cleared signal %d, _signal now 0x%x\n", signum, p->_signal);
                 }
+                printf("[handle_signal] Finished handling signals\n");
             }
 
             void add_signal(proc::Pcb *p, int sig)
@@ -161,14 +173,20 @@ namespace proc
                     panic("[do_handle] act is NULL");
                     return;
                 }
-                if (is_ignored(p, signum))
-                {
-                    panic("[do_handle] Signal %d is ignored", signum);
-                    return;
-                }
+                // if (is_ignored(p, signum))
+                // {
+                //     panic("[do_handle] Signal %d is ignored", signum);
+                //     return;
+                // }
+                printf("[do_handle] Handling signal %d with handler %p\n", signum, act->sa_handler);
 
                 signal_frame *frame;
                 frame = (signal_frame *)mem::k_pmm.alloc_page();
+                if(frame == nullptr)
+                {
+                    panic("[do_handle] Failed to allocate memory for signal frame");
+                    return;
+                }
                 frame->mask.sig[0] = p->_sigmask; // 保存当前信号掩码
 
                 if (frame == nullptr)
@@ -179,6 +197,8 @@ namespace proc
                 frame->tf = *(p->_trapframe);
 #ifdef RISCV
                 p->_trapframe->ra = (uint64)(SIG_TRAMPOLINE + ((uint64)sig_handler - (uint64)sig_trampoline));
+                printfRed("[do_handle] sig trampoline: %p, sig handler: %p, sig trampoline: %p\n", SIG_TRAMPOLINE, sig_handler, sig_trampoline);
+                printf("[do handle] trampoline: %p\n", TRAMPOLINE);
 #elif LOONGARCH
                 panic("sig trampoline not implemented for loongarch");
                 p->_trapframe->ra = (uint64)SIG_TRAMPOLINE;
@@ -205,6 +225,7 @@ namespace proc
 
             void sig_return()
             {
+                printf("[sig_return] Entered sig_return\n");
                 Pcb *p = proc::k_pm.get_cur_pcb();
                 if (p->sig_frame == nullptr)
                 {

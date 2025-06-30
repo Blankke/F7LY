@@ -1286,6 +1286,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_rt_sigreturn()
     {
+        proc::ipc::signal::sig_return();
         return 0;
     }
 
