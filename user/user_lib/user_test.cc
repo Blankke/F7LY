@@ -17,7 +17,7 @@ int strcmp(const char *s1, const char *s2) noexcept(true)
     return *s1 < *s2 ? -1 : 1;
 }
 
-int run_test(const char *path, char *argv[] = 0, char *envp[] = 0)
+int run_test(const char *path, char *argv[], char *envp[])
 {
 
     int pid = fork();

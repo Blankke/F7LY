@@ -44,7 +44,7 @@ namespace proc
                         // 如果已经存在，先释放旧的
                         delete cur_proc->_sigactions->actions[flag];
                     }
-                    printf("[sigAction] Setting handler for signal %d: %p\n", flag, newact->sa_handler);
+                    printf("[sigAction] Setting handler for signal %d: enter %p flags: %p\n", flag, newact->sa_handler, newact->sa_flags);
                     *(cur_proc->_sigactions->actions[flag]) = *newact;
                 }
 
