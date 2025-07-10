@@ -50,25 +50,30 @@ namespace proc
             {
                 uint64 sp;
                 uint32 flags;
-                uint32 pad;
                 uint64 size;
+            };
+
+            struct generalregs{
+                uint64 x[23]; // 通用寄存器 x0-x31
+            };
+            struct floatregs{
+                uint64 f[23]; // 浮点寄存器 f0-f31
+                uint32 fcsr; // 浮点控制和状态寄存器
             };
 
             struct machinecontext
             {
-                TrapFrame gp; // gerneral purpose registers
-                // todo : 没有浮点型
+                generalregs gp; // gerneral purpose registers,  offset 0x00, size 0x100
+                floatregs fp;   // floating point registers,    offset 0x100, size 0x108
             };
-
             // ustack
-            struct ustack
+            struct usercontext
             {
                 uint64 flags;            // 0x00 标志位，用于描述信号处理相关的状态。
-                uint64 link;             // 0x08 链接到下一个信号栈的指针（如有嵌套信号处理）。
+                usercontext* link;            // 0x08 链接到下一个信号栈的指针（如有嵌套信号处理）。
                 signalstack stack;       // 0x10 信号处理时使用的备用栈信息结构体。
-                uint64 sigmask;          // 0x30 信号屏蔽字，指示当前被屏蔽的信号集合。
-                uint64 __pad[16];        // 0x38 填充字段，用于结构体对齐或将来扩展。
-                machinecontext mcontext; // 0xB8 保存信号发生时的机器上下文（寄存器等）
+                machinecontext mcontext; // 0x28 保存信号发生时的机器上下文（寄存器等），大小 0x208
+                uint64 sigmask;          // 0x230 信号屏蔽字，指示当前被屏蔽的信号集合。
             };
 
             // LinuxSigInfo
@@ -102,6 +107,8 @@ namespace proc
             bool sig_is_member(const uint64 set, int n_sig);
             bool is_ignored(Pcb *now_p, int sig);
             void clear_signal(Pcb *now_p, int sig);
+
+            const uint64 guard = 0x11451416;
         } // namespace signal
     } // namespace ipc
 } // namespace proc

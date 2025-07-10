@@ -246,15 +246,12 @@ void trap_manager::usertrap()
     if (timeslice >= 5)
     {
       timeslice = 0;
+      // 处理信号 - 在返回用户态之前检查并处理待处理的信号
+      proc::ipc::signal::handle_signal();
       printf("yield in usertrap\n");
       proc::k_scheduler.yield();
     }
   }
-  
-  // 处理信号 - 在返回用户态之前检查并处理待处理的信号
-  proc::ipc::signal::handle_signal();
-//   printfRed("sigtrampoline1: %p\n", p->_pt.walk_addr(SIG_TRAMPOLINE)); // 确保信号处理的trampoline地址被映射 
-
   // printfMagenta("left usertrap\n");
   usertrapret();
 }
@@ -266,12 +263,12 @@ void trap_manager::usertrapret()
   // Debug
   //  printfYellow("[usertrapret] trampoline addr %p\n", trampoline);
 
-  
+
   // 检查进程是否使用共享虚拟内存，如果是则需要动态映射trapframe
   if (p->_shared_vm || p->_pt.get_ref_count() > 1) {
     // 页表被共享，需要动态重新映射trapframe
     // printfCyan("[usertrapret] Page table shared (ref count: %d), dynamically mapping trapframe for pid %d\n", 
-    //    p->_pt.get_ref_count(), p->_pid);
+            //    p->_pt.get_ref_count(), p->_pid);
     
     // 取消当前trapframe的映射
     mem::k_vmm.vmunmap(p->_pt, TRAPFRAME, 1, 0);
@@ -288,7 +285,7 @@ void trap_manager::usertrapret()
   {
     panic("trampoline not mapped in user pagetable!");
   }
-  
+
   // we're about to switch the destination of traps from
   // kerneltrap() to usertrap(), so turn off interrupts until
   // we're back in user space, where usertrap() is correct.

@@ -27,6 +27,20 @@ namespace fs
         if ( [[maybe_unused]] auto subnod = (_node->lookup(name)))
         {
             dentry *subdentry = fs::dentrycache::k_dentryCache.alloDentry();
+            if(name.empty())
+            {
+                printfRed("dentry::EntrySearch: name is empty");
+                return nullptr;
+            }
+            if (subdentry == nullptr) {
+                printfRed("dentry::EntrySearch: Failed to create dentry");
+                return nullptr;
+            }
+            if(subnod == nullptr)
+            {
+                printfRed("dentry::EntrySearch: subnod is nullptr");
+                return nullptr;
+            }
             new ( subdentry ) dentry(name, (Inode *)subnod, this);
             //dentry *subdentry = new dentry(name , subnod, this);
             children[name] = subdentry;

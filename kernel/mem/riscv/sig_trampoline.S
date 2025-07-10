@@ -1,5 +1,5 @@
 # Trampoline for signal handling 
-#ifdef RISCV
+
 #define SYS_rt_sigreturn 139
 
 	.section sigtrampsec
@@ -12,4 +12,3 @@ sig_trampoline:
 sig_handler: 
 	li a7, SYS_rt_sigreturn 
 	ecall
-#endif

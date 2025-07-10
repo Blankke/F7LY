@@ -421,7 +421,36 @@ namespace mem
         while (len > 0)
         {
             a = PGROUNDDOWN(va);
+            bool alloc = false;
+            proc::Pcb *proc = proc::k_pm.get_cur_pcb();
+            for (int i = 0; i < proc::NVMA; ++i)
+            {
+                if (proc->_vma->_vm[i].used)
+                {
+
+                    // 检查是否在当前VMA范围内
+                    if (va >= proc->_vma->_vm[i].addr && va < proc->_vma->_vm[i].addr + proc->_vma->_vm[i].len)
+                    {
+                        alloc = true;
+                        // printfCyan("[copy_out] va: %p is in VMA[%d]: %p-%p\n", va, i, proc->_vma->_vm[i].addr, proc->_vma->_vm[i].addr + proc->_vma->_vm[i].len);
+                        break; // 在当前VMA范围内
+                    }
+                }
+            }
             Pte pte = pt.walk(a, 0);
+            if (pte.get_data() == 0 && alloc)
+            {
+                // 如果页表项无效且当前VMA范围内，则分配物理页
+                void *mem = k_pmm.alloc_page();
+                if (mem == 0)
+                {
+                    printfRed("[copy_out] alloc page failed for va: %p\n", va);
+                    return -1; // 分配失败
+                }
+                k_pmm.clear_page(mem);
+                map_pages(pt, a, PGSIZE, (uint64)mem,
+                          riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_writable_m | riscv::PteEnum::pte_user_m);
+            }
             pa = reinterpret_cast<uint64>(pte.pa());
             if (pa == 0)
                 return -1;
@@ -449,7 +478,36 @@ namespace mem
         while (len > 0)
         {
             a = PGROUNDDOWN(va);
+            bool alloc = false;
+            proc::Pcb *proc = proc::k_pm.get_cur_pcb();
+            for (int i = 0; i < proc::NVMA; ++i)
+            {
+                if (proc->_vma->_vm[i].used)
+                {
+
+                    // 检查是否在当前VMA范围内
+                    if (va >= proc->_vma->_vm[i].addr && va < proc->_vma->_vm[i].addr + proc->_vma->_vm[i].len)
+                    {
+                        alloc = true;
+                        // printfCyan("[copy_out] va: %p is in VMA[%d]: %p-%p\n", va, i, proc->_vma->_vm[i].addr, proc->_vma->_vm[i].addr + proc->_vma->_vm[i].len);
+                        break; // 在当前VMA范围内
+                    }
+                }
+            }
             Pte pte = pt.walk(a, 0);
+            if (pte.get_data() == 0 && alloc)
+            {
+                // 如果页表项无效且当前VMA范围内，则分配物理页
+                void *mem = k_pmm.alloc_page();
+                if (mem == 0)
+                {
+                    printfRed("[copy_out] alloc page failed for va: %p\n", va);
+                    return -1; // 分配失败
+                }
+                k_pmm.clear_page(mem);
+                map_pages(pt, a, PGSIZE, (uint64)mem,
+                          PTE_U | PTE_W | PTE_MAT | PTE_D);
+            }
             pa = reinterpret_cast<uint64>(pte.pa());
             if (pa == 0)
                 return -1;
@@ -480,7 +538,8 @@ namespace mem
         for (a = va; a < va + npages * PGSIZE; a += PGSIZE)
         {
             if ((pte = pt.walk(a, 0)).is_null())
-                panic("vmunmap: walk");
+                continue;
+            // panic("vmunmap: walk");
             if (!pte.is_valid())
                 continue;
             ///@brief 这里的逻辑是，如果pte无效，则不需要释放物理页
@@ -533,6 +592,7 @@ namespace mem
         {
             if ((pte = old_pt.walk(va, false)).is_null())
             {
+                continue;
                 panic("uvmcopy: pte should exist for va: %p", va);
             }
             if (pte.is_valid() == 0)
@@ -558,12 +618,12 @@ namespace mem
         return 0;
     }
 
-    void VirtualMemoryManager::vmfree(PageTable &pt, uint64 sz,uint64 base)
+    void VirtualMemoryManager::vmfree(PageTable &pt, uint64 sz, uint64 base)
     {
         // printfCyan("[vmm] vmfree: free %p bytes\n", sz);
         if (sz > 0)
             vmunmap(pt, base, PGROUNDUP(sz) / PGSIZE, 1);
-        
+
         // 使用引用计数机制安全释放页表
         // 注意：这里不直接设置pt的_base_addr为0，让dec_ref来处理
         pt.dec_ref();
@@ -770,6 +830,13 @@ namespace mem
         {
             memmove(mem, (void *)((uint64)src + 4 * PGSIZE), MIN(sz - 4 * PGSIZE, PGSIZE));
         }
+        mem = (char *)k_pmm.alloc_page();
+        memset(mem, 0, PGSIZE);
+        map_pages(pt, 5 * PGSIZE, PGSIZE, (uint64)mem, PTE_W | PTE_R | PTE_X | PTE_U);
+        if (sz > 5 * PGSIZE)
+        {
+            memmove(mem, (void *)((uint64)src +  5* PGSIZE), MIN(sz - 5 * PGSIZE, PGSIZE));
+        }
 #elif defined(LOONGARCH)
         char *mem;
         printf("sz: %d\n", sz);
@@ -795,6 +862,47 @@ namespace mem
         {
             memmove(mem, (void *)((uint64)src + 2 * PGSIZE), MIN(sz - 2 * PGSIZE, PGSIZE));
         }
+        mem = (char *)k_pmm.alloc_page();
+        memset(mem, 0, PGSIZE);
+        map_pages(pt, 3 * PGSIZE, PGSIZE, (uint64)mem, PTE_V | PTE_W | PTE_R | PTE_X | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
+        if (sz > 3 * PGSIZE)
+        {
+            memmove(mem, (void *)((uint64)src + 3 * PGSIZE), MIN(sz - 3 * PGSIZE, PGSIZE));
+        }
+        mem = (char *)k_pmm.alloc_page();
+        memset(mem, 0, PGSIZE);
+        map_pages(pt, 4 * PGSIZE, PGSIZE, (uint64)mem, PTE_V | PTE_W | PTE_R | PTE_X | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
+        if (sz > 4 * PGSIZE)
+        {
+            memmove(mem, (void *)((uint64)src + 4 * PGSIZE), MIN(sz - 4 * PGSIZE, PGSIZE));
+        }
+        mem = (char *)k_pmm.alloc_page();
+        memset(mem, 0, PGSIZE);
+        map_pages(pt, 5 * PGSIZE, PGSIZE, (uint64)mem, PTE_V | PTE_W | PTE_R | PTE_X | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
+        if (sz > 5 * PGSIZE)
+        {
+            memmove(mem, (void *)((uint64)src + 5 * PGSIZE), MIN(sz - 5 * PGSIZE, PGSIZE));
+        }
+        mem = (char *)k_pmm.alloc_page();
+        memset(mem, 0, PGSIZE);
+        map_pages(pt, 6 * PGSIZE, PGSIZE, (uint64)mem, PTE_V | PTE_W | PTE_R | PTE_X | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
+        if (sz > 6 * PGSIZE)
+        {
+            memmove(mem, (void *)((uint64)src + 6 * PGSIZE), MIN(sz - 6 * PGSIZE, PGSIZE));
+        }
+
+        mem = (char *)k_pmm.alloc_page();
+        memset(mem, 0, PGSIZE);
+        map_pages(pt, 7 * PGSIZE, PGSIZE, (uint64)mem, PTE_V | PTE_W | PTE_R | PTE_X | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
+        if (sz > 7 * PGSIZE)
+        {
+            memmove(mem, (void *)((uint64)src + 7 * PGSIZE), MIN(sz - 7 * PGSIZE, PGSIZE));
+        }
+        if (sz > 4 * PGSIZE)
+        {
+            panic("[vmm] uvmfirst: sz > 4*PGSIZE, this is not supported yet");
+        }
+
 #endif
     }
 

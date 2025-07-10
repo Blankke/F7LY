@@ -82,9 +82,17 @@ namespace proc
                     printfRed("[sche] -> proc gid: %d pid: %d tid: %d, name: %s\n", p->_gid, p->_pid, p->_tid, p->_name);
                     swtch(cur_context, &p->_context);
                     // printf( "return from %d, name: %s\n", p->_gid, p->_name );
-                    for (Pcb* np = k_proc_pool; np < &k_proc_pool[num_process]; np++)
+                    bool flag = false;
+                    for (Pcb *np = k_proc_pool; np < &k_proc_pool[num_process]; np++)
                     {
-                        printf("[sche]  proc gid: [%d], pid: [%d], parent: [%d], state: %d, name: %s\n", np->_gid, np->_pid,  np->get_ppid(), (int)np->_state, np->_name);
+                        if(np->_state == ProcState::UNUSED){
+                            flag = true;
+                            break;
+                        }
+                        // printf("[sche]  proc gid: [%d], pid: [%d], parent: [%d], state: %d, name: %s\n", np->_gid, np->_pid,  np->get_ppid(), (int)np->_state, np->_name);
+                    }
+                    if(flag == false){
+                        panic("no unused proc in pool, please check your code");
                     }
                     cpu->set_cur_proc(nullptr);
                 }

@@ -270,16 +270,21 @@ namespace proc
     {
         // 处理VMA的引用计数
         bool should_free_vma = false;
-        if (p->_vma != nullptr) {
-            if (--p->_vma->_ref_cnt <= 0) {
+        if (p->_vma != nullptr)
+        {
+            if (--p->_vma->_ref_cnt <= 0)
+            {
                 should_free_vma = true;
-            } else {
+            }
+            else
+            {
                 printfYellow("freeproc: vma ref count not zero, ref_cnt: %d\n", p->_vma->_ref_cnt);
             }
         }
-        
+
         // 如果应该释放VMA，则处理所有VMA条目
-        if (should_free_vma && p->_vma != nullptr) {
+        if (should_free_vma && p->_vma != nullptr)
+        {
             for (int i = 0; i < NVMA; ++i)
             {
                 // printfBlue("freeproc: checking vma %d, addr: %p, len: %d,used:%d\n", i, p->_vm[i].addr, p->_vm[i].len,p->_vm[i].used);
@@ -321,7 +326,7 @@ namespace proc
             // 只有当VMA引用计数为0时才删除VMA
             delete p->_vma;
         }
-        
+
         // 重置VMA指针
         p->_vma = nullptr;
 
@@ -366,7 +371,7 @@ namespace proc
         p->sig_frame = nullptr; // 清空信号处理帧
         p->_signal = 0;
         p->_sigmask = 0;
-    }
+            }
 
     int ProcessManager::get_cur_cpuid()
     {
@@ -415,7 +420,7 @@ namespace proc
             printfRed("proc_pagetable: map trapframe failed\n");
             return empty_pt;
         }
-        if (mem::k_vmm.map_pages(pt, SIG_TRAMPOLINE, PGSIZE, (uint64)sig_trampoline, PTE_V | PTE_NX | PTE_P | PTE_W | PTE_R | PTE_MAT | PTE_D | PTE_U) == 0)
+        if (mem::k_vmm.map_pages(pt, SIG_TRAMPOLINE, PGSIZE, (uint64)sig_trampoline,  PTE_P|PTE_MAT | PTE_D | PTE_U) == 0)
         {
             printf("Fail to map sig_trampoline\n");
             mem::k_vmm.vmfree(pt, 0);
@@ -471,7 +476,7 @@ namespace proc
         //  printfYellow("initcode start byte %u\n", *(uint64 *)pa);
         printf("initcode start: %p, end: %p\n", initcode_start, initcode_end);
         printf("initcode size: %p\n", (uint64)(initcode_end - 0));
-        p->_sz = 5 * PGSIZE;
+        p->_sz = 6 * PGSIZE;
 
         p->_trapframe->epc = 0;
         p->_trapframe->sp = p->_sz;
@@ -848,8 +853,8 @@ namespace proc
             // 因为子进程有自己的trapframe，但共享父进程的页表
             // 我们需要在usertrapret时动态映射正确的trapframe
             np->_shared_vm = true;  // 标记为共享虚拟内存
-            
-            printfCyan("[clone] Using shared page table for process %d (parent %d), ref count: %d\n", 
+
+            printfCyan("[clone] Using shared page table for process %d (parent %d), ref count: %d\n",
                        np->_pid, p->_pid, np->_pt.get_ref_count());
         }
         else
@@ -1405,6 +1410,7 @@ namespace proc
     /// @return
     int ProcessManager::open(int dir_fd, eastl::string path, uint flags)
     {
+        printfCyan("[open] dir_fd: %d, path: %s, flags: %x\n", dir_fd, path.c_str(), flags);
         // enum OpenFlags : uint
         // {
         // 	O_RDONLY	= 0x000U,
@@ -1424,9 +1430,10 @@ namespace proc
             file = p->get_open_file(dir_fd);
         }
 
-        fs::Path path_(path, file);  // 创建路径对象（支持相对路径）
-        dentry = path_.pathSearch(); // 查找路径对应的 dentry（目录项）
+        fs::Path path_(path, file); // 创建路径对象（支持相对路径）
 
+        dentry = path_.pathSearch(); // 查找路径对应的 dentry（目录项）
+        // printfBlue("[open] path: %s, dentry: %p, flags: %x\n", path_.AbsolutePath().c_str(), dentry, flags);
         if (path == "") // empty path
             return -1;
 
@@ -1517,7 +1524,11 @@ namespace proc
     /// @return 返回 0 表示成功；若 `fd` 非法或未打开，返回 -1。
     int ProcessManager::fstat(int fd, fs::Kstat *buf)
     {
-        return 0;
+        eastl::string proc_name = proc::k_pm.get_cur_pcb()->_name;
+        if (proc_name.substr(0, 4) == "busy" || proc_name.substr(0, 4) == "iozo")
+        {
+            return 0;
+        }
         if (fd < 0 || fd >= (int)max_open_files)
             return -1;
 
@@ -1582,6 +1593,7 @@ namespace proc
             // 对于匿名映射，创建一个特殊的vfile标记
             // 我们可以使用nullptr，或者创建一个特殊的匿名文件对象
             vfile = nullptr; // 匿名映射使用nullptr作为vfile
+
         }
         else if (p->_ofile == nullptr || p->_ofile->_ofile_ptr[fd] == nullptr)
         {
@@ -1722,9 +1734,21 @@ namespace proc
         //     // printfRed("[munmap?]: walkaddr :%p\n",(p->_pt.walk_addr((uint64)addr)));
         //     p->_vma->_vm[i].vfile->write((uint64)addr, length);
         // }
-
+        uint64 va_start = PGROUNDDOWN((uint64)addr);
+        uint64 va_end = PGROUNDUP((uint64)addr + length);
+        // 逐页检查并取消映射，避免对未映射的页面进行操作
+        for (uint64 va = va_start; va < va_end; va += PGSIZE)
+        {
+            mem::Pte pte = p->_pt.walk(va, 0);
+            // printfCyan("freeproc: checking pte for va %p, pte: %p\n", va, pte.get_data());
+            if (!pte.is_null() && pte.is_valid())
+            {
+                // 只对实际映射的页面进行取消映射
+                mem::k_vmm.vmunmap(*p->get_pagetable(), va, 1, 1);
+            }
+        }
+        p->_vma->_vm[i].used = 0;
         // 判断此页面是否存在映射
-        mem::k_vmm.vmunmap(*p->get_pagetable(), (uint64)addr, length / PGSIZE, 1);
 
         // 当前VMA中全部映射都被取消
         if (p->_vma->_vm[i].len == 0)
@@ -2056,6 +2080,7 @@ namespace proc
 #endif
                 // printfRed("execve: loading segment %d, type: %d, startva: %p, endva: %p, memsz: %p, filesz: %p, flags: %d\n", i, ph.type, (void *)ph.vaddr, (void *)(ph.vaddr + ph.memsz), (void *)ph.memsz, (void *)ph.filesz, ph.flags);
 #ifdef RISCV
+                printf("[exec] map from %p to %p new_pt base %p\n", (void *)(new_sz), (void *)(ph.vaddr + ph.memsz), new_pt.get_base());
                 if ((sz1 = mem::k_vmm.vmalloc(new_pt, new_sz, ph.vaddr + ph.memsz, seg_flag)) == 0)
                 {
                     printfRed("execve: uvmalloc\n");

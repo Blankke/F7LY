@@ -71,6 +71,7 @@ namespace proc
         eastl::string _cwd_name;
         ofile *_ofile; // 打开的文件描述符表，包含文件指针和 close-on-exec 标志
 
+
         eastl::string exe; // absolute path of the executable file
 
         // 进程状态信息
@@ -84,8 +85,8 @@ namespace proc
         char _name[30]; // 进程名称 (用于调试)
 
         // 内存管理相关
-        uint64 _kstack = 0;      // 内核栈的虚拟地址
-        uint64 _sz;              // 进程用户空间的内存大小 (字节)
+        uint64 _kstack = 0; // 内核栈的虚拟地址
+        uint64 _sz;         // 进程用户空间的内存大小 (字节)
         bool _shared_vm = false; // 标记进程是否使用共享虚拟内存（与父进程共享页表）
 #ifdef LOONGARCH
         uint64 elf_base = 0; // ELF 文件的基地址 (用于加载可执行文件)
@@ -117,11 +118,12 @@ namespace proc
 
         struct VMA
         {
-            vma _vm[NVMA]; // 虚拟内存区域数组
-            int _ref_cnt;  // 虚拟内存区域的引用计数
+            vma     _vm[NVMA]; // 虚拟内存区域数组
+            int  _ref_cnt; // 虚拟内存区域的引用计数
         };
-        VMA *_vma; // 虚拟内存区域管理 (VMA) - 用于管理进程的虚拟内存区域
+        VMA* _vma; // 虚拟内存区域管理 (VMA) - 用于管理进程的虚拟内存区域
         // 虚拟内存区域 (VMA) - 注释中提出了疑问，这里保留但需要进一步理解其用途
+
 
         // 线程/futex 相关
         void *_futex_addr; // Used for futex
@@ -147,6 +149,7 @@ namespace proc
         TODO("TBF")
         program_section_desc _prog_sections[max_program_section_num];
         int _prog_section_cnt = 0;
+
 
     public:
         Pcb();
