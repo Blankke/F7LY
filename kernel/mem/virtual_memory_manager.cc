@@ -421,8 +421,38 @@ namespace mem
         while (len > 0)
         {
             a = PGROUNDDOWN(va);
+            bool alloc = false;
+            proc::Pcb *proc = proc::k_pm.get_cur_pcb();
+            for (int i = 0; i < proc::NVMA; ++i)
+            {
+                if (proc->_vma->_vm[i].used)
+                {
+
+                    // 检查是否在当前VMA范围内
+                    if (va >= proc->_vma->_vm[i].addr && va < proc->_vma->_vm[i].addr + proc->_vma->_vm[i].len)
+                    {
+                        alloc = true;
+                        // printfCyan("[copy_out] va: %p is in VMA[%d]: %p-%p\n", va, i, proc->_vma->_vm[i].addr, proc->_vma->_vm[i].addr + proc->_vma->_vm[i].len);
+                        break; // 在当前VMA范围内
+                    }
+                }
+            }
             Pte pte = pt.walk(a, 0);
+            if (pte.get_data() == 0 && alloc)
+            {
+                // 如果页表项无效且当前VMA范围内，则分配物理页
+                void *mem = k_pmm.alloc_page();
+                if (mem == 0)
+                {
+                    printfRed("[copy_out] alloc page failed for va: %p\n", va);
+                    return -1; // 分配失败
+                }
+                k_pmm.clear_page(mem);
+                map_pages(pt, a, PGSIZE, (uint64)mem,
+                          riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_writable_m | riscv::PteEnum::pte_user_m);
+            }
             pa = reinterpret_cast<uint64>(pte.pa());
+            // printf("[copy_out] va: %p, pte: %p, pa: %p\n", va, pte.get_data(), pa);
             if (pa == 0)
                 return -1;
             n = PGSIZE - (va - a);
@@ -449,7 +479,36 @@ namespace mem
         while (len > 0)
         {
             a = PGROUNDDOWN(va);
+           bool alloc = false;
+            proc::Pcb *proc = proc::k_pm.get_cur_pcb();
+            for (int i = 0; i < proc::NVMA; ++i)
+            {
+                if (proc->_vma->_vm[i].used)
+                {
+
+                    // 检查是否在当前VMA范围内
+                    if (va >= proc->_vma->_vm[i].addr && va < proc->_vma->_vm[i].addr + proc->_vma->_vm[i].len)
+                    {
+                        alloc = true;
+                        // printfCyan("[copy_out] va: %p is in VMA[%d]: %p-%p\n", va, i, proc->_vma->_vm[i].addr, proc->_vma->_vm[i].addr + proc->_vma->_vm[i].len);
+                        break; // 在当前VMA范围内
+                    }
+                }
+            }
             Pte pte = pt.walk(a, 0);
+            if (pte.get_data() == 0 && alloc)
+            {
+                // 如果页表项无效且当前VMA范围内，则分配物理页
+                void *mem = k_pmm.alloc_page();
+                if (mem == 0)
+                {
+                    printfRed("[copy_out] alloc page failed for va: %p\n", va);
+                    return -1; // 分配失败
+                }
+                k_pmm.clear_page(mem);
+                map_pages(pt, a, PGSIZE, (uint64)mem,
+                          PTE_U | PTE_W | PTE_MAT |  PTE_D );
+            }
             pa = reinterpret_cast<uint64>(pte.pa());
             if (pa == 0)
                 return -1;
@@ -558,12 +617,12 @@ namespace mem
         return 0;
     }
 
-    void VirtualMemoryManager::vmfree(PageTable &pt, uint64 sz,uint64 base)
+    void VirtualMemoryManager::vmfree(PageTable &pt, uint64 sz, uint64 base)
     {
         // printfCyan("[vmm] vmfree: free %p bytes\n", sz);
         if (sz > 0)
             vmunmap(pt, base, PGROUNDUP(sz) / PGSIZE, 1);
-        
+
         // 使用引用计数机制安全释放页表
         // 注意：这里不直接设置pt的_base_addr为0，让dec_ref来处理
         pt.dec_ref();

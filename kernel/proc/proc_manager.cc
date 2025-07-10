@@ -415,7 +415,7 @@ namespace proc
             printfRed("proc_pagetable: map trapframe failed\n");
             return empty_pt;
         }
-        if (mem::k_vmm.map_pages(pt, SIG_TRAMPOLINE, PGSIZE, (uint64)sig_trampoline, PTE_V | PTE_NX | PTE_P | PTE_W | PTE_R | PTE_MAT | PTE_D | PTE_U) == 0)
+        if (mem::k_vmm.map_pages(pt, SIG_TRAMPOLINE, PGSIZE, (uint64)sig_trampoline,  PTE_P|PTE_MAT | PTE_D | PTE_U) == 0)
         {
             printf("Fail to map sig_trampoline\n");
             mem::k_vmm.vmfree(pt, 0);
@@ -2432,6 +2432,7 @@ namespace proc
 #endif
         proc->_pt = new_pt;        // 替换为新的页表
         proc->_trapframe->sp = sp; // 设置栈指针
+        printfCyan("execve: new process entry point: %p, sp: %p\n", (void *)entry_point, (void *)sp);
 
         // printf("execve: new process size: %p, new pagetable: %p\n", proc->_sz, proc->_pt);
         k_pm.proc_freepagetable(old_pt, old_sz);

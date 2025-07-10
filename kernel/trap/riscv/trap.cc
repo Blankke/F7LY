@@ -205,7 +205,7 @@ void trap_manager::usertrap()
   {
     if (p->is_killed())
       proc::k_pm.exit(-1);
-    // printfYellow("p->_trapframe->epc: %p\n", p->_trapframe->epc);
+    printfYellow("[usertrap]    sepc: %p,saved sepc:%p\n", p->_trapframe->epc,r_sepc());
     p->_trapframe->epc += 4;
     // printfYellow("p->_trapframe->epc: %p\n", p->_trapframe->epc);
     intr_on();
@@ -246,13 +246,14 @@ void trap_manager::usertrap()
     if (timeslice >= 5)
     {
       timeslice = 0;
+      // 处理信号 - 在返回用户态之前检查并处理待处理的信号
+      proc::ipc::signal::handle_signal();
       printf("yield in usertrap\n");
       proc::k_scheduler.yield();
     }
   }
   
-  // 处理信号 - 在返回用户态之前检查并处理待处理的信号
-  proc::ipc::signal::handle_signal();
+  
 //   printfRed("sigtrampoline1: %p\n", p->_pt.walk_addr(SIG_TRAMPOLINE)); // 确保信号处理的trampoline地址被映射 
 
   // printfMagenta("left usertrap\n");
@@ -307,7 +308,7 @@ void trap_manager::usertrapret()
   w_sstatus(x);
   w_sepc(p->_trapframe->epc);
 
-  // printfYellow("[usertrapret] sepc: %p,saved sepc:%p\n", p->_trapframe->epc,r_sepc());
+  printfYellow("[usertrapret] sepc: %p,saved sepc:%p\n", p->_trapframe->epc,r_sepc());
   // tell trampoline.S the user page table to switch to.
 
   // debug

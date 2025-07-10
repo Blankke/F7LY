@@ -2826,6 +2826,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_membarrier()
     {
+        return 0;
         panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_clone3()
