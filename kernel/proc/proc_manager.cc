@@ -2024,6 +2024,11 @@ namespace proc
                             return -1;
                         }
                     }
+                    else
+                    {
+                        panic("execve: unknown dynamic linker: %s\n", interpreter_path.c_str());
+                        return -1; // 不支持的动态链接器
+                    }
                     break;
                 }
             }
