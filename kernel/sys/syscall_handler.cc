@@ -1646,6 +1646,35 @@ namespace syscall
         delete[] k_buf;
         return buflen;
     }
+//     uint64 SyscallHandler::sys_clock_gettime()
+//     {
+//         int clock_id;
+//         u64 addr;
+//         if (_arg_int(0, clock_id) < 0)
+//         {
+//             printfRed("[SyscallHandler::sys_clock_gettime] Error fetching clock_id argument\n");
+//             return -1;
+//         }
+//         if (_arg_addr(1, addr) < 0)
+//         {
+//             printfRed("[SyscallHandler::sys_clock_gettime] Error fetching addr argument\n");
+//             return -2;
+//         }
+
+//         tmm::timespec *tp = nullptr;
+//         proc::Pcb *p = proc::k_pm.get_cur_pcb();
+//         mem::PageTable *pt = p->get_pagetable();
+//         if (addr != 0)
+// #ifdef RISCV
+//             tp = (tmm::timespec *)pt->walk_addr(addr);
+// #elif LOONGARCH
+//             tp = (tmm::timespec *)to_vir((ulong)pt->walk_addr(addr));
+// #endif
+//         tmm::SystemClockId cid = (tmm::SystemClockId)clock_id;
+
+//         return tmm::k_tm.clock_gettime(cid, tp);
+//         return 0;
+//     }
     uint64 SyscallHandler::sys_clock_gettime()
     {
         int clock_id;
@@ -1661,18 +1690,27 @@ namespace syscall
             return -2;
         }
 
-        tmm::timespec *tp = nullptr;
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        mem::PageTable *pt = p->get_pagetable();
-        if (addr != 0)
-#ifdef RISCV
-            tp = (tmm::timespec *)pt->walk_addr(addr);
-#elif LOONGARCH
-            tp = (tmm::timespec *)to_vir((ulong)pt->walk_addr(addr));
-#endif
+        if (addr == 0)
+            return -3;
+
+        tmm::timespec tp;
         tmm::SystemClockId cid = (tmm::SystemClockId)clock_id;
 
-        return tmm::k_tm.clock_gettime(cid, tp);
+        // 调用时间管理器获取时间，传递栈上的对象
+        int ret = tmm::k_tm.clock_gettime(cid, &tp);
+        if (ret < 0)
+            return ret;
+
+        printfYellow("[SyscallHandler::sys_clock_gettime] clock_id: %d, tp: %d.%09d\n", clock_id, tp.tv_sec, tp.tv_nsec);
+        // 使用 copy_out 将结果安全地拷贝到用户空间
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        if (mem::k_vmm.copy_out(*pt, addr, &tp, sizeof(tp)) < 0)
+        {
+            printfRed("[SyscallHandler::sys_clock_gettime] Error copying timespec to user space\n");
+            return -4;
+        }
+
         return 0;
     }
     uint64 SyscallHandler::sys_ioctl()
