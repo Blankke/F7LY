@@ -41,12 +41,12 @@
 #include <lwext4/ext4_types.hh>
 
 #include <lwext4/ext4_block_group.hh>
-#include <lwext4/ext4_dir.h>
-#include <lwext4/ext4_dir_idx.h>
+#include <lwext4/ext4_dir.hh>
+#include <lwext4/ext4_dir_idx.hh>
 #include <lwext4/ext4_fs.hh>
-#include <lwext4/ext4_ialloc.h>
+#include <lwext4/ext4_ialloc.hh>
 #include <lwext4/ext4_inode.hh>
-#include <lwext4/ext4_mkfs.h>
+#include <lwext4/ext4_mkfs.hh>
 #include <lwext4/ext4_super.hh>
 
 #include <inttypes.h>
@@ -159,11 +159,11 @@ static int create_fs_aux_info(struct fs_aux_info *aux_info, struct ext4_mkfs_inf
         aux_info->len_blocks -= last_group_size;
     }
 
-    aux_info->sb = ext4_calloc(1, EXT4_SUPERBLOCK_SIZE);
+    aux_info->sb = (ext4_sblock*)ext4_calloc(1, EXT4_SUPERBLOCK_SIZE);
     if (!aux_info->sb)
         return ENOMEM;
 
-    aux_info->bg_desc_blk = ext4_calloc(1, info->block_size);
+    aux_info->bg_desc_blk =(uint8_t *) ext4_calloc(1, info->block_size);
     if (!aux_info->bg_desc_blk)
         return ENOMEM;
 
@@ -320,7 +320,7 @@ static int write_bgroups(struct ext4_blockdev *bd, struct fs_aux_info *aux_info,
         uint64_t bg_start_block = aux_info->first_data_block + aux_info->first_data_block + i * info->blocks_per_group;
         uint32_t blk_off = 0;
 
-        bg_desc = (void *) (aux_info->bg_desc_blk + k * dsc_size);
+        bg_desc = (ext4_bgroup*) (aux_info->bg_desc_blk + k * dsc_size);
         bg_free_blk = info->blocks_per_group - aux_info->inode_table_blocks;
 
         bg_free_blk -= 2;
@@ -416,7 +416,7 @@ int ext4_mkfs_read_info(struct ext4_blockdev *bd, struct ext4_mkfs_info *info) {
     if (r != EOK)
         return r;
 
-    sb = ext4_malloc(EXT4_SUPERBLOCK_SIZE);
+    sb = (ext4_sblock*)ext4_malloc(EXT4_SUPERBLOCK_SIZE);
     if (!sb)
         goto Finish;
 

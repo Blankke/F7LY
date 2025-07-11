@@ -15,7 +15,7 @@
 
 #include <lwext4/ext4_types.hh>
 #include <lwext4/ext4_fs.hh>
-#include <lwext4/ext4_journal.h>
+#include <lwext4/ext4_journal.hh>
 
 #include <lwext4/ext4_blockdev.hh>
 

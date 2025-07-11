@@ -38,20 +38,20 @@
 
 #include <lwext4/ext4_errno.hh>
 #include <lwext4/ext4_misc.hh>
-#include <lwext4/ext4_oflags.h>
+#include <lwext4/ext4_oflags.hh>
 #include <lwext4/ext4_types.hh>
 
-#include <lwext4/ext4.h>
+#include <lwext4/ext4.hh>
 #include <lwext4/ext4_block_group.hh>
 #include <lwext4/ext4_blockdev.hh>
-#include <lwext4/ext4_dir.h>
-#include <lwext4/ext4_dir_idx.h>
+#include <lwext4/ext4_dir.hh>
+#include <lwext4/ext4_dir_idx.hh>
 #include <lwext4/ext4_fs.hh>
 #include <lwext4/ext4_inode.hh>
-#include <lwext4/ext4_journal.h>
+#include <lwext4/ext4_journal.hh>
 #include <lwext4/ext4_super.hh>
 #include <lwext4/ext4_trans.hh>
-#include <lwext4/ext4_xattr.h>
+#include <lwext4/ext4_xattr.hh>
 
 
 #include <libs/string.hh>
@@ -517,7 +517,7 @@ __unused static int __ext4_recover(const char *mount_point) {
 
     EXT4_MP_LOCK(mp);
     if (ext4_sb_feature_com(&mp->fs.sb, EXT4_FCOM_HAS_JOURNAL)) {
-        struct jbd_fs *jbd_fs = ext4_calloc(1, sizeof(struct jbd_fs));
+        struct jbd_fs *jbd_fs =(struct jbd_fs *) ext4_calloc(1, sizeof(struct jbd_fs));
         if (!jbd_fs) {
             r = ENOMEM;
             goto Finish;
@@ -1566,7 +1566,7 @@ int ext4_fread(ext4_file *file, void *buf, size_t size, size_t *rcnt) {
     ext4_fsblk_t fblock_start;
     uint32_t fblock_count;
 
-    uint8_t *u8_buf = buf;
+    uint8_t *u8_buf =(uint8_t *) buf;
     int r;
     struct ext4_inode_ref ref;
 
@@ -1721,7 +1721,7 @@ int ext4_fwrite(ext4_file *file, const void *buf, size_t size, size_t *wcnt) {
     ext4_fsblk_t fblock_start;
 
     struct ext4_inode_ref ref;
-    const uint8_t *u8_buf = buf;
+    const uint8_t *u8_buf =(uint8_t *) buf;
     int r, rr = EOK;
 
     ext4_assert(file && file->mp);
@@ -2602,7 +2602,7 @@ int ext4_listxattr(const char *path, char *list, size_t size, size_t *ret_size) 
 
     r = ext4_xattr_list(&inode_ref, NULL, &list_len);
     if (r == EOK && list_len) {
-        xattr_list = ext4_malloc(list_len);
+        xattr_list =(ext4_xattr_list_entry *) ext4_malloc(list_len);
         if (!xattr_list) {
             ext4_fs_put_inode_ref(&inode_ref);
             r = ENOMEM;

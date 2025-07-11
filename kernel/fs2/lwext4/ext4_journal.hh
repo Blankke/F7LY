@@ -11,6 +11,27 @@
 #include <lwext4/ext4_types.hh>
 #include <lwext4/misc/queue.hh>
 #include <lwext4/misc/tree.hh>
+
+// Forward declarations for global RB tree types
+RB_HEAD(jbd_revoke_tree_global, jbd_revoke_rec);
+RB_HEAD(jbd_block_tree_global, jbd_block_rec);
+RB_HEAD(jbd_revoke_tree_recover, revoke_entry);
+
+// Forward declarations for global TAILQ types  
+TAILQ_HEAD(jbd_buf_dirty_global, jbd_buf);
+TAILQ_HEAD(jbd_trans_buf_global, jbd_buf);
+TAILQ_HEAD(jbd_cp_queue_global, jbd_trans);
+
+// Forward declarations for comparison functions
+int jbd_revoke_rec_cmp(struct jbd_revoke_rec *a, struct jbd_revoke_rec *b);
+int jbd_block_rec_cmp(struct jbd_block_rec *a, struct jbd_block_rec *b);
+int jbd_revoke_entry_cmp(struct revoke_entry *a, struct revoke_entry *b);
+
+// RB tree function prototypes
+RB_PROTOTYPE(jbd_revoke_tree_global, jbd_revoke_rec, revoke_node, jbd_revoke_rec_cmp)
+RB_PROTOTYPE(jbd_block_tree_global, jbd_block_rec, block_rec_node, jbd_block_rec_cmp)
+RB_PROTOTYPE(jbd_revoke_tree_recover, revoke_entry, revoke_node, jbd_revoke_entry_cmp)
+
 #include "lwext4/ext4_fs.hh"
 
 struct jbd_fs {
@@ -40,7 +61,7 @@ struct jbd_block_rec {
     struct jbd_trans *trans;
     RB_ENTRY(jbd_block_rec) block_rec_node;
     LIST_ENTRY(jbd_block_rec) tbrec_node;
-    TAILQ_HEAD(jbd_buf_dirty, jbd_buf) dirty_buf_queue;
+    struct jbd_buf_dirty_global dirty_buf_queue;
 };
 
 struct jbd_trans {
@@ -55,8 +76,8 @@ struct jbd_trans {
 
     struct jbd_journal *journal;
 
-    TAILQ_HEAD(jbd_trans_buf, jbd_buf) buf_queue;
-    RB_HEAD(jbd_revoke_tree, jbd_revoke_rec) revoke_root;
+    struct jbd_trans_buf_global buf_queue;
+    struct jbd_revoke_tree_global revoke_root;
     LIST_HEAD(jbd_trans_block_rec, jbd_block_rec) tbrec_list;
     TAILQ_ENTRY(jbd_trans) trans_node;
 };
@@ -70,8 +91,8 @@ struct jbd_journal {
 
     uint32_t block_size;
 
-    TAILQ_HEAD(jbd_cp_queue, jbd_trans) cp_queue;
-    RB_HEAD(jbd_block, jbd_block_rec) block_rec_root;
+    struct jbd_cp_queue_global cp_queue;
+    struct jbd_block_tree_global block_rec_root;
 
     struct jbd_fs *jbd_fs;
 };

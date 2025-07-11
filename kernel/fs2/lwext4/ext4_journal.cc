@@ -79,7 +79,7 @@ struct recover_info {
     uint32_t trans_cnt;
 
     /**@brief  RB-Tree storing revoke entries.*/
-    RB_HEAD(jbd_revoke, revoke_entry) revoke_root;
+    struct jbd_revoke_tree_recover revoke_root;
 };
 
 /**@brief  Journal replay internal arguments.*/
@@ -106,7 +106,8 @@ static inline int32_t trans_id_diff(uint32_t x, uint32_t y) {
     return diff;
 }
 
-static int jbd_revoke_entry_cmp(struct revoke_entry *a, struct revoke_entry *b) {
+// Remove static from comparison functions and update RB_GENERATE calls
+int jbd_revoke_entry_cmp(struct revoke_entry *a, struct revoke_entry *b) {
     if (a->block > b->block)
         return 1;
     else if (a->block < b->block)
@@ -114,7 +115,7 @@ static int jbd_revoke_entry_cmp(struct revoke_entry *a, struct revoke_entry *b) 
     return 0;
 }
 
-static int jbd_block_rec_cmp(struct jbd_block_rec *a, struct jbd_block_rec *b) {
+int jbd_block_rec_cmp(struct jbd_block_rec *a, struct jbd_block_rec *b) {
     if (a->lba > b->lba)
         return 1;
     else if (a->lba < b->lba)
@@ -122,7 +123,7 @@ static int jbd_block_rec_cmp(struct jbd_block_rec *a, struct jbd_block_rec *b) {
     return 0;
 }
 
-static int jbd_revoke_rec_cmp(struct jbd_revoke_rec *a, struct jbd_revoke_rec *b) {
+int jbd_revoke_rec_cmp(struct jbd_revoke_rec *a, struct jbd_revoke_rec *b) {
     if (a->lba > b->lba)
         return 1;
     else if (a->lba < b->lba)
@@ -130,9 +131,9 @@ static int jbd_revoke_rec_cmp(struct jbd_revoke_rec *a, struct jbd_revoke_rec *b
     return 0;
 }
 
-RB_GENERATE_INTERNAL(jbd_revoke, revoke_entry, revoke_node, jbd_revoke_entry_cmp, static inline)
-RB_GENERATE_INTERNAL(jbd_block, jbd_block_rec, block_rec_node, jbd_block_rec_cmp, static inline)
-RB_GENERATE_INTERNAL(jbd_revoke_tree, jbd_revoke_rec, revoke_node, jbd_revoke_rec_cmp, static inline)
+RB_GENERATE(jbd_revoke_tree_recover, revoke_entry, revoke_node, jbd_revoke_entry_cmp)
+RB_GENERATE(jbd_block_tree_global, jbd_block_rec, block_rec_node, jbd_block_rec_cmp)
+RB_GENERATE(jbd_revoke_tree_global, jbd_revoke_rec, revoke_node, jbd_revoke_rec_cmp)
 
 #define jbd_alloc_revoke_entry() ext4_calloc(1, sizeof(struct revoke_entry))
 #define jbd_free_revoke_entry(addr) ext4_free(addr)
@@ -309,10 +310,10 @@ static void jbd_block_tag_csum_set(struct jbd_fs *jbd_fs, void *__tag, uint32_t 
         return;
 
     if (ver == 2) {
-        struct jbd_block_tag *tag = __tag;
+        struct jbd_block_tag *tag = (struct jbd_block_tag *)__tag;
         tag->checksum = (uint16_t) to_be32(checksum);
     } else {
-        struct jbd_block_tag3 *tag = __tag;
+        struct jbd_block_tag3 *tag = (struct jbd_block_tag3 *)__tag;
         tag->checksum = to_be32(checksum);
     }
 }
@@ -572,7 +573,7 @@ static int jbd_extract_block_tag(struct jbd_fs *jbd_fs, void *__tag, int tag_byt
         return EINVAL;
 
     if (JBD_HAS_INCOMPAT_FEATURE(&jbd_fs->sb, JBD_FEATURE_INCOMPAT_CSUM_V3)) {
-        struct jbd_block_tag3 *tag = __tag;
+        struct jbd_block_tag3 *tag = (struct jbd_block_tag3 *)__tag;
         tag_info->block = jbd_get32(tag, blocknr);
         if (JBD_HAS_INCOMPAT_FEATURE(&jbd_fs->sb, JBD_FEATURE_INCOMPAT_64BIT))
             tag_info->block |= (uint64_t) jbd_get32(tag, blocknr_high) << 32;
@@ -595,7 +596,7 @@ static int jbd_extract_block_tag(struct jbd_fs *jbd_fs, void *__tag, int tag_byt
             tag_info->last_tag = true;
 
     } else {
-        struct jbd_block_tag *tag = __tag;
+        struct jbd_block_tag *tag = (struct jbd_block_tag *)__tag;
         tag_info->block = jbd_get32(tag, blocknr);
         if (JBD_HAS_INCOMPAT_FEATURE(&jbd_fs->sb, JBD_FEATURE_INCOMPAT_64BIT))
             tag_info->block |= (uint64_t) jbd_get32(tag, blocknr_high) << 32;
@@ -636,7 +637,7 @@ static int jbd_write_block_tag(struct jbd_fs *jbd_fs, void *__tag, int32_t remai
         return EINVAL;
     printf("%p \n", __tag);
     if (JBD_HAS_INCOMPAT_FEATURE(&jbd_fs->sb, JBD_FEATURE_INCOMPAT_CSUM_V3)) {
-        struct jbd_block_tag3 *tag = __tag;
+        struct jbd_block_tag3 *tag = (struct jbd_block_tag3 *)__tag;
         memset(tag, 0, sizeof(struct jbd_block_tag3));
         jbd_set32(tag, blocknr, (uint32_t) tag_info->block);
         if (JBD_HAS_INCOMPAT_FEATURE(&jbd_fs->sb, JBD_FEATURE_INCOMPAT_64BIT))
@@ -662,7 +663,7 @@ static int jbd_write_block_tag(struct jbd_fs *jbd_fs, void *__tag, int32_t remai
             jbd_set32(tag, flags, jbd_get32(tag, flags) | JBD_FLAG_ESCAPE);
 
     } else {
-        struct jbd_block_tag *tag = __tag;
+        struct jbd_block_tag *tag = (struct jbd_block_tag *)__tag;
         memset(tag, 0, sizeof(struct jbd_block_tag));
         jbd_set32(tag, blocknr, (uint32_t) tag_info->block);
         if (JBD_HAS_INCOMPAT_FEATURE(&jbd_fs->sb, JBD_FEATURE_INCOMPAT_64BIT))
@@ -703,7 +704,7 @@ static void jbd_iterate_block_table(struct jbd_fs *jbd_fs, void *__tag_start, in
                                     void *arg) {
     char *tag_start, *tag_ptr;
     int tag_bytes = jbd_tag_bytes(jbd_fs);
-    tag_start = __tag_start;
+    tag_start = (char *)__tag_start;
     tag_ptr = tag_start;
 
     /* Cut off the size of block tail storing checksum. */
@@ -730,7 +731,7 @@ static void jbd_iterate_block_table(struct jbd_fs *jbd_fs, void *__tag_start, in
 }
 
 static void jbd_display_block_tags(struct jbd_fs *jbd_fs, struct tag_info *tag_info, void *arg) {
-    uint32_t *iblock = arg;
+    uint32_t *iblock = (uint32_t *)arg;
     ext4_dbg(DEBUG_JBD, "Block in block_tag: %" PRIu64 "\n", tag_info->block);
     (*iblock)++;
     wrap(&jbd_fs->sb, *iblock);
@@ -741,7 +742,7 @@ static void jbd_display_block_tags(struct jbd_fs *jbd_fs, struct tag_info *tag_i
 static struct revoke_entry *jbd_revoke_entry_lookup(struct recover_info *info, ext4_fsblk_t block) {
     struct revoke_entry tmp = {.block = block};
 
-    return RB_FIND(jbd_revoke, &info->revoke_root, &tmp);
+    return RB_FIND(jbd_revoke_tree_recover, &info->revoke_root, &tmp);
 }
 
 /**@brief  Replay a block in a transaction.
@@ -749,7 +750,7 @@ static struct revoke_entry *jbd_revoke_entry_lookup(struct recover_info *info, e
  * @param  tag_info tag_info of the logged block.*/
 static void jbd_replay_block_tags(struct jbd_fs *jbd_fs, struct tag_info *tag_info, void *__arg) {
     int r;
-    struct replay_arg *arg = __arg;
+    struct replay_arg *arg = (struct replay_arg *)__arg;
     struct recover_info *info = arg->info;
     uint32_t *this_block = arg->this_block;
     struct revoke_entry *revoke_entry;
@@ -824,20 +825,20 @@ static void jbd_add_revoke_block_tags(struct recover_info *info, ext4_fsblk_t bl
         return;
     }
 
-    revoke_entry = jbd_alloc_revoke_entry();
+    revoke_entry = (struct revoke_entry *)jbd_alloc_revoke_entry();
     ext4_assert(revoke_entry);
     revoke_entry->block = block;
     revoke_entry->trans_id = info->this_trans_id;
-    RB_INSERT(jbd_revoke, &info->revoke_root, revoke_entry);
+    RB_INSERT(jbd_revoke_tree_recover, &info->revoke_root, revoke_entry);
 
     return;
 }
 
 static void jbd_destroy_revoke_tree(struct recover_info *info) {
     while (!RB_EMPTY(&info->revoke_root)) {
-        struct revoke_entry *revoke_entry = RB_MIN(jbd_revoke, &info->revoke_root);
+        struct revoke_entry *revoke_entry = RB_MIN(jbd_revoke_tree_recover, &info->revoke_root);
         ext4_assert(revoke_entry);
-        RB_REMOVE(jbd_revoke, &info->revoke_root, revoke_entry);
+        RB_REMOVE(jbd_revoke_tree_recover, &info->revoke_root, revoke_entry);
         jbd_free_revoke_entry(revoke_entry);
     }
 }
@@ -1244,7 +1245,7 @@ static uint32_t jbd_journal_alloc_block(struct jbd_journal *journal, struct jbd_
 static struct jbd_block_rec *jbd_trans_block_rec_lookup(struct jbd_journal *journal, ext4_fsblk_t lba) {
     struct jbd_block_rec tmp = {.lba = lba};
 
-    return RB_FIND(jbd_block, &journal->block_rec_root, &tmp);
+    return RB_FIND(jbd_block_tree_global, &journal->block_rec_root, &tmp);
 }
 
 static void jbd_trans_change_ownership(struct jbd_block_rec *block_rec, struct jbd_trans *new_trans) {
@@ -1263,7 +1264,7 @@ static inline struct jbd_block_rec *jbd_trans_insert_block_rec(struct jbd_trans 
         jbd_trans_change_ownership(block_rec, trans);
         return block_rec;
     }
-    block_rec = ext4_calloc(1, sizeof(struct jbd_block_rec));
+    block_rec = (struct jbd_block_rec *)ext4_calloc(1, sizeof(struct jbd_block_rec));
     if (!block_rec)
         return NULL;
 
@@ -1271,7 +1272,7 @@ static inline struct jbd_block_rec *jbd_trans_insert_block_rec(struct jbd_trans 
     block_rec->trans = trans;
     TAILQ_INIT(&block_rec->dirty_buf_queue);
     LIST_INSERT_HEAD(&trans->tbrec_list, block_rec, tbrec_node);
-    RB_INSERT(jbd_block, &trans->journal->block_rec_root, block_rec);
+    RB_INSERT(jbd_block_tree_global, &trans->journal->block_rec_root, block_rec);
     return block_rec;
 }
 
@@ -1296,7 +1297,7 @@ static void jbd_trans_finish_callback(struct jbd_journal *journal, const struct 
          */
         struct jbd_buf *jbd_buf;
         struct ext4_block jbd_block = EXT4_BLOCK_ZERO(), block = EXT4_BLOCK_ZERO();
-        jbd_buf = TAILQ_LAST(&block_rec->dirty_buf_queue, jbd_buf_dirty);
+        jbd_buf = TAILQ_LAST(&block_rec->dirty_buf_queue, jbd_buf_dirty_global);
         if (jbd_buf) {
             if (!revoke) {
                 int r;
@@ -1331,7 +1332,7 @@ static inline void jbd_trans_remove_block_rec(struct jbd_journal *journal, struc
      * give up.*/
     if (block_rec->trans == trans) {
         LIST_REMOVE(block_rec, tbrec_node);
-        RB_REMOVE(jbd_block, &journal->block_rec_root, block_rec);
+        RB_REMOVE(jbd_block_tree_global, &journal->block_rec_root, block_rec);
         ext4_free(block_rec);
     }
 }
@@ -1346,11 +1347,11 @@ int jbd_trans_set_block_dirty(struct jbd_trans *trans, struct ext4_block *block)
     struct jbd_block_rec *block_rec;
 
     if (block->buf->end_write == jbd_trans_end_write) {
-        jbd_buf = block->buf->end_write_arg;
+        jbd_buf = (struct jbd_buf *)block->buf->end_write_arg;
         if (jbd_buf && jbd_buf->trans == trans)
             return EOK;
     }
-    jbd_buf = ext4_calloc(1, sizeof(struct jbd_buf));
+    jbd_buf = (struct jbd_buf *)ext4_calloc(1, sizeof(struct jbd_buf));
     if (!jbd_buf)
         return ENOMEM;
 
@@ -1375,9 +1376,9 @@ int jbd_trans_set_block_dirty(struct jbd_trans *trans, struct ext4_block *block)
     TAILQ_INSERT_HEAD(&trans->buf_queue, jbd_buf, buf_node);
 
     ext4_bcache_set_dirty(block->buf);
-    rec = RB_FIND(jbd_revoke_tree, &trans->revoke_root, &tmp_rec);
+    rec = RB_FIND(jbd_revoke_tree_global, &trans->revoke_root, &tmp_rec);
     if (rec) {
-        RB_REMOVE(jbd_revoke_tree, &trans->revoke_root, rec);
+        RB_REMOVE(jbd_revoke_tree_global, &trans->revoke_root, rec);
         ext4_free(rec);
     }
 
@@ -1390,16 +1391,16 @@ int jbd_trans_set_block_dirty(struct jbd_trans *trans, struct ext4_block *block)
  * @return standard error code*/
 int jbd_trans_revoke_block(struct jbd_trans *trans, ext4_fsblk_t lba) {
     struct jbd_revoke_rec tmp_rec = {.lba = lba}, *rec;
-    rec = RB_FIND(jbd_revoke_tree, &trans->revoke_root, &tmp_rec);
+    rec = RB_FIND(jbd_revoke_tree_global, &trans->revoke_root, &tmp_rec);
     if (rec)
         return EOK;
 
-    rec = ext4_calloc(1, sizeof(struct jbd_revoke_rec));
+    rec = (struct jbd_revoke_rec *)ext4_calloc(1, sizeof(struct jbd_revoke_rec));
     if (!rec)
         return ENOMEM;
 
     rec->lba = lba;
-    RB_INSERT(jbd_revoke_tree, &trans->revoke_root, rec);
+    RB_INSERT(jbd_revoke_tree_global, &trans->revoke_root, rec);
     return EOK;
 }
 
@@ -1415,7 +1416,7 @@ int jbd_trans_try_revoke_block(struct jbd_trans *trans, ext4_fsblk_t lba) {
 
     if (block_rec) {
         if (block_rec->trans == trans) {
-            struct jbd_buf *jbd_buf = TAILQ_LAST(&block_rec->dirty_buf_queue, jbd_buf_dirty);
+            struct jbd_buf *jbd_buf = TAILQ_LAST(&block_rec->dirty_buf_queue, jbd_buf_dirty_global);
             /* If there are still unwritten buffers. */
             if (TAILQ_FIRST(&block_rec->dirty_buf_queue) != jbd_buf)
                 jbd_trans_revoke_block(trans, lba);
@@ -1450,8 +1451,8 @@ void jbd_journal_free_trans(struct jbd_journal *journal, struct jbd_trans *trans
         TAILQ_REMOVE(&trans->buf_queue, jbd_buf, buf_node);
         ext4_free(jbd_buf);
     }
-    RB_FOREACH_SAFE(rec, jbd_revoke_tree, &trans->revoke_root, tmp2) {
-        RB_REMOVE(jbd_revoke_tree, &trans->revoke_root, rec);
+    RB_FOREACH_SAFE(rec, jbd_revoke_tree_global, &trans->revoke_root, tmp2) {
+        RB_REMOVE(jbd_revoke_tree_global, &trans->revoke_root, rec);
         ext4_free(rec);
     }
     LIST_FOREACH_SAFE(block_rec, &trans->tbrec_list, tbrec_node, tmp3) {
@@ -1513,7 +1514,7 @@ static int jbd_journal_prepare(struct jbd_journal *journal, struct jbd_trans *tr
 
     /* Try to remove any non-dirty buffers from the tail of
      * buf_queue. */
-    TAILQ_FOREACH_REVERSE_SAFE(jbd_buf, &trans->buf_queue, jbd_trans_buf, buf_node, tmp) {
+    TAILQ_FOREACH_REVERSE_SAFE(jbd_buf, &trans->buf_queue, jbd_trans_buf_global, buf_node, tmp) {
         struct jbd_revoke_rec tmp_rec = {.lba = jbd_buf->block_rec->lba};
         /* We stop the iteration when we find a dirty buffer. */
         if (ext4_bcache_test_flag(jbd_buf->block.buf, BC_DIRTY))
@@ -1524,7 +1525,7 @@ static int jbd_journal_prepare(struct jbd_journal *journal, struct jbd_trans *tr
         jbd_buf->block.buf->end_write = NULL;
         jbd_buf->block.buf->end_write_arg = NULL;
         jbd_trans_finish_callback(journal, trans, jbd_buf->block_rec, true,
-                                  (bool)(RB_FIND(jbd_revoke_tree, &trans->revoke_root, &tmp_rec)));
+                                  (bool)(RB_FIND(jbd_revoke_tree_global, &trans->revoke_root, &tmp_rec)));
         jbd_trans_remove_block_rec(journal, jbd_buf->block_rec, trans);
         trans->data_cnt--;
 
@@ -1547,7 +1548,7 @@ static int jbd_journal_prepare(struct jbd_journal *journal, struct jbd_trans *tr
             /* The buffer has not been modified, just release
              * that jbd_buf. */
             jbd_trans_finish_callback(journal, trans, jbd_buf->block_rec, true,
-                                      (bool)(RB_FIND(jbd_revoke_tree, &trans->revoke_root, &tmp_rec)));
+                                      (bool)(RB_FIND(jbd_revoke_tree_global, &trans->revoke_root, &tmp_rec)));
             jbd_trans_remove_block_rec(journal, jbd_buf->block_rec, trans);
             trans->data_cnt--;
 
@@ -1667,7 +1668,7 @@ static int jbd_journal_prepare_revoke(struct jbd_journal *journal, struct jbd_tr
     if (JBD_HAS_INCOMPAT_FEATURE(&journal->jbd_fs->sb, JBD_FEATURE_INCOMPAT_64BIT))
         record_len = 8;
 
-    RB_FOREACH_SAFE(rec, jbd_revoke_tree, &trans->revoke_root, tmp) {
+    RB_FOREACH_SAFE(rec, jbd_revoke_tree_global, &trans->revoke_root, tmp) {
     again:
         if (!desc_iblock) {
             desc_iblock = jbd_journal_alloc_block(journal, trans);
@@ -1744,7 +1745,7 @@ void jbd_journal_cp_trans(struct jbd_journal *journal, struct jbd_trans *trans) 
 /**@brief  Update the start block of the journal when
  *         all the contents in a transaction reach the disk.*/
 static void jbd_trans_end_write(struct ext4_bcache *bc __unused, struct ext4_buf *buf, int res, void *arg) {
-    struct jbd_buf *jbd_buf = arg;
+    struct jbd_buf *jbd_buf = (struct jbd_buf *)arg;
     struct jbd_trans *trans = jbd_buf->trans;
     struct jbd_block_rec *block_rec = jbd_buf->block_rec;
     struct jbd_journal *journal = trans->journal;
@@ -1818,11 +1819,11 @@ static int __jbd_journal_commit_trans(struct jbd_journal *journal, struct jbd_tr
     journal->alloc_trans_id++;
 
     /* Complete the checkpoint of buffers which are revoked. */
-    RB_FOREACH_SAFE(rec, jbd_revoke_tree, &trans->revoke_root, tmp) {
+    RB_FOREACH_SAFE(rec, jbd_revoke_tree_global, &trans->revoke_root, tmp) {
         struct jbd_block_rec *block_rec = jbd_trans_block_rec_lookup(journal, rec->lba);
         struct jbd_buf *jbd_buf = NULL;
         if (block_rec)
-            jbd_buf = TAILQ_LAST(&block_rec->dirty_buf_queue, jbd_buf_dirty);
+            jbd_buf = TAILQ_LAST(&block_rec->dirty_buf_queue, jbd_buf_dirty_global);
         if (jbd_buf) {
             struct ext4_buf *buf;
             struct ext4_block block = EXT4_BLOCK_ZERO();
@@ -1879,7 +1880,7 @@ Finish:
  * @return transaction allocated*/
 struct jbd_trans *jbd_journal_new_trans(struct jbd_journal *journal) {
     struct jbd_trans *trans = NULL;
-    trans = ext4_calloc(1, sizeof(struct jbd_trans));
+    trans = (struct jbd_trans *)ext4_calloc(1, sizeof(struct jbd_trans));
     if (!trans)
         return NULL;
 

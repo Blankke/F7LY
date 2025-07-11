@@ -30,7 +30,7 @@
 #include <lwext4/ext4_inode.hh>
 #include <lwext4/ext4_super.hh>
 #include <lwext4/ext4_trans.hh>
-#include <lwext4/ext4_xattr.h>
+#include <lwext4/ext4_xattr.hh>
 
 #include <libs/string.hh>
 #include <stdlib.h>

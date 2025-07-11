@@ -42,7 +42,7 @@
 #include <lwext4/ext4_types.hh>
 
 #include <lwext4/ext4_fs.hh>
-#include <lwext4/ext4_journal.h>
+#include <lwext4/ext4_journal.hh>
 
 int ext4_trans_set_block_dirty(struct ext4_buf *buf) {
     int r = EOK;
