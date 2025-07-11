@@ -88,26 +88,26 @@ namespace proc
                     return -22;
                 }
 
-                int debugsig = 33; // 你可以修改这个变量来指定要查看的信号号
-                if (debugsig > 0 && debugsig <= signal::SIGRTMAX) {
-                    uint64 mask = (1UL << (debugsig - 1));
-                    bool before = (cur_proc->_sigmask & mask);
-                    bool after = false;
-                    switch (how) {
-                        case signal::SIG_BLOCK:
-                            after = ((cur_proc->_sigmask & mask) != 0);
-                            printfCyan("[sigprocmask][DEBUG] SIG_BLOCK: signal %d, before=%d, after=%d\n", debugsig, before, after);
-                            break;
-                        case signal::SIG_UNBLOCK:
-                            after = ((cur_proc->_sigmask & mask) != 0);
-                            printfCyan("[sigprocmask][DEBUG] SIG_UNBLOCK: signal %d, before=%d, after=%d\n", debugsig, before, after);
-                            break;
-                        case signal::SIG_SETMASK:
-                            after = ((cur_proc->_sigmask & mask) != 0);
-                            printfCyan("[sigprocmask][DEBUG] SIG_SETMASK: signal %d, before=%d, after=%d\n", debugsig, before, after);
-                            break;
-                    }
-                }
+                // int debugsig = 33; // 你可以修改这个变量来指定要查看的信号号
+                // if (debugsig > 0 && debugsig <= signal::SIGRTMAX) {
+                //     uint64 mask = (1UL << (debugsig - 1));
+                //     bool before = (cur_proc->_sigmask & mask);
+                //     bool after = false;
+                //     switch (how) {
+                //         case signal::SIG_BLOCK:
+                //             after = ((cur_proc->_sigmask & mask) != 0);
+                //             printfCyan("[sigprocmask][DEBUG] SIG_BLOCK: signal %d, before=%d, after=%d\n", debugsig, before, after);
+                //             break;
+                //         case signal::SIG_UNBLOCK:
+                //             after = ((cur_proc->_sigmask & mask) != 0);
+                //             printfCyan("[sigprocmask][DEBUG] SIG_UNBLOCK: signal %d, before=%d, after=%d\n", debugsig, before, after);
+                //             break;
+                //         case signal::SIG_SETMASK:
+                //             after = ((cur_proc->_sigmask & mask) != 0);
+                //             printfCyan("[sigprocmask][DEBUG] SIG_SETMASK: signal %d, before=%d, after=%d\n", debugsig, before, after);
+                //             break;
+                //     }
+                // }
 
                 // 永远不能屏蔽这两个信号
                 cur_proc->_sigmask &= ~((1UL << (signal::SIGKILL - 1)) | (1UL << (signal::SIGSTOP - 1)));
