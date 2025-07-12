@@ -1,5 +1,6 @@
 
 
+#pragma once
 /**
  * @file  ext4_crc32.hh
  * @brief Crc32c routine. Taken from FreeBSD kernel.

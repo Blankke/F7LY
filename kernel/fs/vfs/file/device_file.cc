@@ -41,6 +41,7 @@ namespace fs
 
 	long device_file::write( uint64 buf, size_t len, long off, bool upgrade )
 	{
+		panic("stdin 的 write 要转发到uart上。今天不想修了。7.13。");
 		int ret;
 
 		if( _attrs.u_write != 1 )

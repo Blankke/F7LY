@@ -1,3 +1,4 @@
+#pragma once
 /**
  * @file  ext4_journal.h
  * @brief Journal handle functions

@@ -1,6 +1,7 @@
 
 
 
+#pragma once
 /**
  * @file  ext4_trans.hh
  * @brief Transaction handle functions

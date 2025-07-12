@@ -1,3 +1,4 @@
+#pragma once
 /**
  * @file  ext4_types.hh
  * @brief Ext4 data structure definitions.

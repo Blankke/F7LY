@@ -97,8 +97,6 @@ SRCS += $(shell find $(KERNEL_DIR)/boot -maxdepth 1 -type f \
 # 收集 fs 目录中的所有文件（fs 没有架构特定子目录）
 SRCS += $(shell find $(KERNEL_DIR)/fs -type f \
         \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
-SRCS += $(shell find $(KERNEL_DIR)/fs -type f \
-        \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
 
 $(info === SRCS collected ===)
 $(info $(SRCS))

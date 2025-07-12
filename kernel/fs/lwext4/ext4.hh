@@ -1,5 +1,6 @@
 
 
+#pragma once
 /**
  * @file  ext4.h
  * @brief Ext4 high level operations (files, directories, mount points...).

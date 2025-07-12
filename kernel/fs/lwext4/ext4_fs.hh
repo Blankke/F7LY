@@ -1,6 +1,7 @@
 
 
 
+#pragma once
 /**
  * @file  ext4_fs.c
  * @brief More complex filesystem functions.

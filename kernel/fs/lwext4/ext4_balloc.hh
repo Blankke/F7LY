@@ -1,4 +1,5 @@
 
+#pragma once
 /**
  * @file  ext4_balloc.hh
  * @brief Physical block allocator.

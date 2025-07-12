@@ -1,6 +1,7 @@
 
 
 
+#pragma once
 /**
  * @file  ext4_super.c
  * @brief Superblock operations.

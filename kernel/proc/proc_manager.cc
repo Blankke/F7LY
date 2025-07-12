@@ -254,8 +254,16 @@ namespace proc
             //             proc->_cwd_name = "/mnt/";
 
             filesystem_init();
-            filesystem2_init(); // 启动init
-
+            // filesystem2_init(); // 这个滚蛋
+            fs::device_file *f_in = new fs::device_file();
+            fs::device_file *f_out = new fs::device_file();
+            fs::device_file *f_err = new fs::device_file();
+            proc->_ofile->_ofile_ptr[0] = f_in;
+            proc->_ofile->_ofile_ptr[0]->refcnt++;
+            proc->_ofile->_ofile_ptr[1] = f_out;
+            proc->_ofile->_ofile_ptr[1]->refcnt++;
+            proc->_ofile->_ofile_ptr[2] = f_err;
+            proc->_ofile->_ofile_ptr[2]->refcnt++;
             /// 你好
             /// 这是重定向uart的代码
             /// commented out by @gkq

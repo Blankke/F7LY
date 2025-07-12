@@ -1,6 +1,7 @@
 
 
 
+#pragma once
 /**
  * @file  ext4_oflags.h
  * @brief File opening & seeking flags.

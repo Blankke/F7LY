@@ -1,6 +1,7 @@
 
 
 
+#pragma once
 /**
  * @file  ext4_xattr.h
  * @brief Extended Attribute manipulation.

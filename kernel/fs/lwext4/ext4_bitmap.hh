@@ -1,4 +1,5 @@
 
+#pragma once
 /**
  * @file  ext4_bitmap.hh
  * @brief Block/inode bitmap allocator.

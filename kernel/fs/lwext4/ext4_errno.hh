@@ -1,5 +1,6 @@
 
 
+#pragma once
 /**
  * @file  ext4_errno.hh
  * @brief Error codes.

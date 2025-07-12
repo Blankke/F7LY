@@ -1,5 +1,6 @@
 
 
+#pragma once
 /**
  * @file  ext4_config.hh
  * @brief Configuration file.

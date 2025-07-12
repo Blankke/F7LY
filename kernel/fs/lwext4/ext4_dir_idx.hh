@@ -1,6 +1,7 @@
 
 
 
+#pragma once
 /**
  * @file  ext4_dir_idx.h
  * @brief Directory indexing procedures.

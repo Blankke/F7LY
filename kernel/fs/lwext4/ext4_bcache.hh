@@ -1,3 +1,4 @@
+#pragma once
 /**
  * @file  ext4_bcache.h
  * @brief Block cache allocator.

@@ -1,5 +1,6 @@
 
 
+#pragma once
 /**
  * @file  ext4_blockdev.h
  * @brief Block device module.

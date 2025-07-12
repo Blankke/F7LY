@@ -114,7 +114,7 @@ namespace fs
 		Kstat _stat;
 		long _file_ptr = 0;				// file read header's offset correponding to the start of the file
 	public:
-		file() = delete;
+		file() = default;
 		file( FileAttrs attrs ) : _attrs( attrs ), refcnt( 0 ), _stat( _attrs.filetype ) {}
 		virtual ~file() = default;
 		virtual void free_file() { refcnt--; if ( refcnt == 0 ) delete this; };

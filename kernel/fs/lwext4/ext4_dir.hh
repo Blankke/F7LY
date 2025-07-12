@@ -1,6 +1,7 @@
 
 
 
+#pragma once
 /**
  * @file  ext4_dir.h
  * @brief Directory handle procedures.

@@ -1,5 +1,6 @@
 
 
+#pragma once
 /**
  * @file  ext4_block_group.hh
  * @brief Block group function set.

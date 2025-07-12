@@ -1,6 +1,7 @@
 
 
 
+#pragma once
 /**
  * @file  ext4_ialloc.c
  * @brief Inode allocation procedures.

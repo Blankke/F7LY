@@ -1,6 +1,7 @@
 
 
 
+#pragma once
 /**
  * @file  ext4_inode.hh
  * @brief Inode handle functions

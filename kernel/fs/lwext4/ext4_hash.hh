@@ -1,5 +1,6 @@
 
 
+#pragma once
 /**
  * @file  ext4_hash.h
  * @brief Directory indexing hash functions.

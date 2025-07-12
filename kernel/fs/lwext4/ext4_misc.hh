@@ -1,5 +1,6 @@
 
 
+#pragma once
 /**
  * @file  ext4_misc.hh
  * @brief Miscellaneous helpers.

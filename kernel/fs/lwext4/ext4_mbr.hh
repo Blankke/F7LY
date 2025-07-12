@@ -1,6 +1,7 @@
 
 
 
+#pragma once
 /**
  * @file  ext4_mbr.h
  * @brief Master boot record parser
