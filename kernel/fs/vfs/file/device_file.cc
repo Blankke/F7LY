@@ -2,7 +2,6 @@
 #include "common.hh"
 #include "device_manager.hh"
 #include "stream_device.hh"
-#include "fs/vfs/dentry.hh"
 
 #include <termios.h>
 
@@ -20,16 +19,18 @@ namespace fs
 			return -1;
 		}
 
-		Inode *node = _dentry->getNode();
+		// Inode *node = _dentry->getNode();
 		
-		if ( node == nullptr )
-		{
-			printfRed( "device_file:: null inode for dentry %s", _dentry->rName().c_str() );
-			return -1;
-		}
+		// if ( node == nullptr )
+		// {
+		// 	printfRed( "device_file:: null inode for dentry %s", _dentry->rName().c_str() );
+		// 	return -1;
+		// }
 
-		ret = node->nodeRead( buf, off, len );
+		// ret = node->nodeRead( buf, off, len );
 
+		panic("device_file::read: not implemented yet");
+		ret = 0;
 
 		/// @note 对于流式设备而言，没有文件偏移的概念
 		// if ( ret >= 0 && upgrade )  // 这里 没有写sdev从指定位置读取的函数
@@ -48,75 +49,82 @@ namespace fs
 			return -1;
 		}
 
-		Inode 	*node = _dentry->getNode();
+		// Inode 	*node = _dentry->getNode();
 		
-		if( node == nullptr )
-		{
-			printfRed( "device_file:: null inode for dentry %s", _dentry->rName().c_str() );
-			return -1;
-		}
+		// if( node == nullptr )
+		// {
+		// 	printfRed( "device_file:: null inode for dentry %s", _dentry->rName().c_str() );
+		// 	return -1;
+		// }
+		panic("device_file::write: not implemented yet");
+		ret = 0;
 
-		ret = node->nodeWrite( buf, off, len );
+
+
+
+		// ret = node->nodeWrite( buf, off, len );
 		//ret = _dev->write( ( void * ) buf, len );
 		return ret;
 	}
 
 	bool device_file::read_ready()
 	{
-		if( _dev == nullptr )
-		{
-			dev_t dev = _dentry->getNode()->rDev();
-			_dev = ( dev::StreamDevice * ) dev::k_devm.get_device( dev );
+		panic("device_file::read_ready: not implemented yet");
+		// if( _dev == nullptr )
+		// {
+		// 	dev_t dev = _dentry->getNode()->rDev();
+		// 	_dev = ( dev::StreamDevice * ) dev::k_devm.get_device( dev );
 			
-			if( _dev == nullptr )
-			{
-				printfRed( "device_file::read_ready: null device for device number %d", dev );
-				return false;
-			}
+		// 	if( _dev == nullptr )
+		// 	{
+		// 		printfRed( "device_file::read_ready: null device for device number %d", dev );
+		// 		return false;
+		// 	}
 
-			if( _dev->type() != dev::dev_char )
-			{
-				printfRed( "device_file::read_ready: device %d is not a char-dev", dev );
-				return false;
-			}
+		// 	if( _dev->type() != dev::dev_char )
+		// 	{
+		// 		printfRed( "device_file::read_ready: device %d is not a char-dev", dev );
+		// 		return false;
+		// 	}
 
-			if( !_dev->support_stream() )
-			{
-				printfRed( "device_file::read_ready: device %d is not a stream-dev", dev );
-				return false;
-			}
-		}
+		// 	if( !_dev->support_stream() )
+		// 	{
+		// 		printfRed( "device_file::read_ready: device %d is not a stream-dev", dev );
+		// 		return false;
+		// 	}
+		// }
 
-		return _dev->read_ready();
+		// return _dev->read_ready();
 	}
 
 	bool device_file::write_ready()
 	{
-		if( _dev == nullptr )
-		{
-			dev_t dev = _dentry->getNode()->rDev();
-			_dev = ( dev::StreamDevice * ) dev::k_devm.get_device( dev );
+		panic("device_file::write_ready: not implemented yet");
+		// if( _dev == nullptr )
+		// {
+		// 	dev_t dev = _dentry->getNode()->rDev();
+		// 	_dev = ( dev::StreamDevice * ) dev::k_devm.get_device( dev );
 			
-			if( _dev == nullptr )
-			{
-				printfRed( "device_file::read_ready: null device for device number %d", dev );
-				return false;
-			}
+		// 	if( _dev == nullptr )
+		// 	{
+		// 		printfRed( "device_file::read_ready: null device for device number %d", dev );
+		// 		return false;
+		// 	}
 
-			if( _dev->type() != dev::dev_char )
-			{
-				printfRed( "device_file::read_ready: device %d is not a char-dev", dev );
-				return false;
-			}
+		// 	if( _dev->type() != dev::dev_char )
+		// 	{
+		// 		printfRed( "device_file::read_ready: device %d is not a char-dev", dev );
+		// 		return false;
+		// 	}
 
-			if( !_dev->support_stream() )
-			{
-				printfRed( "device_file::read_ready: device %d is not a stream-dev", dev );
-				return false;
-			}
-		}
+		// 	if( !_dev->support_stream() )
+		// 	{
+		// 		printfRed( "device_file::read_ready: device %d is not a stream-dev", dev );
+		// 		return false;
+		// 	}
+		// }
 		
-		return _dev->write_ready();
+		// return _dev->write_ready();
 	}
 
 	int device_file::tcgetattr( termios * ts )

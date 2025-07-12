@@ -1,5 +1,5 @@
 #include "fs/vfs/file/file.hh"
-#include "fs/vfs/dentry.hh"
+// #include "fs/vfs/dentry.hh"
 
 namespace mem
 {
@@ -14,8 +14,8 @@ namespace fs
 		dentry *_den;
 	public:
 		normal_file() = default;
-		normal_file( FileAttrs attrs, dentry *den ) : file( attrs ), _den( den ) { dup(); new ( &_stat ) Kstat( den ); }
-		normal_file( dentry *den ) : file( den->getNode()->rMode() ), _den( den ) { dup(); new ( &_stat ) Kstat( den ); }
+		// normal_file( FileAttrs attrs, dentry *den ) : file( attrs ), _den( den ) { dup(); new ( &_stat ) Kstat( den ); }
+		// normal_file( dentry *den ) : file( den->getNode()->rMode() ), _den( den ) { dup(); new ( &_stat ) Kstat( den ); }
 		~normal_file() = default;
 
 		/// @brief 从文件中读取数据到指定缓冲区。

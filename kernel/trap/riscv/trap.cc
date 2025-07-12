@@ -398,6 +398,8 @@ int mmap_handler(uint64 va, int cause)
   }
   else
   {
+    panic("未实现");
+#ifdef FS_FIX_COMPLETELY
     // 文件映射：需要从文件读取内容
     fs::dentry *den = vf->getDentry();
     if (den == nullptr)
@@ -434,6 +436,7 @@ int mmap_handler(uint64 va, int cause)
     }
     inode->_lock.release(); // 释放inode锁
     // printfCyan("mmap_handler: handling file mapping at %p, read %d bytes\n", va, readbytes);
+#endif
   }
 
   // 添加页面映射

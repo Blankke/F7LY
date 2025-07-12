@@ -1,84 +1,111 @@
-//
-// Copy from Li Shuang ( pseudonym ) on 2024-05-19
-// --------------------------------------------------------------
-// | Note: This code file just for study, not for commercial use
-// | Contact Author: lishuang.mk@whu.edu.cn
-// --------------------------------------------------------------
-//
-
 #pragma once
 
-#include <EASTL/string.h>
+#include "libs/clist.h"
+#include "fs/vfs/inodehash.hh"
+#include "semaphore.hh"
+#include "sleeplock.hh"
+#include "param.h"
+#include "fs/stat.hh"
 
-#include "file/file_defs.hh"
-#include "types.hh"
-#include "spinlock.hh"
-namespace mem
-{
-	class UserspaceStream;
-}
+#include "fs/lwext4/ext4.hh"
 
-namespace fs
-{
-	class DStat;
-	class SuperBlock;
-	class FileSystem;
+struct superblock;
+struct inode;
 
-	class Inode
-	{
-	public:
-		SpinLock _lock; // inode lock, used for concurrent access control
-		Inode()						= default;
-		Inode( const Inode& inode ) = default;
-		virtual ~Inode()			= default;
-		Inode& operator=( const Inode& inode );
+struct super_operations {
 
-		// virtual void link(const char *name,InodeRef nod) = 0;
-		// virtual int nodeHardUnlink() = 0;
-		virtual Inode* lookup( eastl::string dirname )		 = 0;
-		virtual Inode* mknode( eastl::string name, FileAttrs attr,
-							   eastl::string dev_name = "" ) = 0;
-		// virtual int entSymLink( const eastl::string arget ) = 0;
+};
 
-		// virtual void nodeRemove() = 0;
-		// virtual int chMod( uint32 mode ) = 0;
-		// virtual int chOwn(uid_t uid, gid_t gid) = 0; //change group owner
-		// virtual void nodeTrunc() = 0;
+/*
+ *
+ *超级块
+ */
+struct superblock {
+    uint8 s_dev; //块设备标识符
+    uint32 s_blocksize; //数据块大小，字节单位
 
-		virtual size_t nodeRead( uint64 dst_, size_t off_, size_t len_ )  = 0;
-		virtual size_t nodeWrite( uint64 src_, size_t off_, size_t len_ ) = 0;
+    uint32 s_magic; //文件系统的魔数
+    uint32 s_maxbytes; //最大文件大小
+    struct inode *root; //指根目录
 
-		using ubuf = mem::UserspaceStream;
-		struct linux_dirent64
-		{
-			u64	 d_ino;	   /* 64-bit inode number */
-			u64	 d_off;	   /* Not an offset; see getdents() */
-			u16	 d_reclen; /* Size of this dirent */
-			u8	 d_type;   /* File type */
-			char d_name[]; /* Filename (null-terminated) */
-		} __attribute__( ( packed ) );
-		virtual size_t readSubDir( ubuf& dst, size_t off ) = 0;
+    struct super_operations *s_op;
 
-		// void readvec();
-		// void readPages();
+    SpinLock dirty_lock;
+    struct list_head s_dirty_inodes; //脏inode表
+};
 
-		// virtual int readLink( char *buf, uint64 len ) = 0;
-		virtual int readlinkat( char* buf, uint64 len ) = 0;
-		// virtual int readDir( DStat *buf, uint32 len, uint64 off_ ) = 0;
-		// virtual int ioctl( uint64 req, uint64 arg ) = 0;
+struct inode_operations {
+    void (*unlockput)(struct inode *self);
+    void (*unlock)(struct inode *self);
+    void (*put)(struct inode *self);
+    void (*lock)(struct inode *self);
+    void (*update)(struct inode *self);
 
-		virtual FileAttrs rMode() const		= 0; // get mode
-		virtual dev_t	  rDev() const		= 0; // get device number
-		virtual uint64	  rFileSize() const = 0; // get file size
-		virtual uint64	  rIno() const		= 0; // get inode number
+    ssize_t (*read)(struct inode *self, int user_dst, uint64 dst, uint off, uint n);
+    int (*write)(struct inode *self, int user_src, uint64 src, uint off, uint n);
 
-		// Ctime, Mtime, Atime temporarily not implemented
-		// virtual bool Empty() const = 0; // check if inode is empty
-		virtual SuperBlock* getSb() const = 0; // get super block
-		virtual FileSystem* getFS() const = 0; // get file system
-		// virtual int create( Inode *dir, Dentry *dentry, eastl::string name,
-		// uint32 mode ) = 0; virtual int mkdir( Inode *dir, Dentry *dentry,
-		// eastl::string name, uint32 mode ) = 0;
-	};
 
-} // namespace fs
+    int (*isdir)(struct inode *self); // 是否是directory
+
+    struct inode *(*dup)(struct inode *self);
+
+    //For directory
+    struct inode *(*dirlookup)(struct inode *self, const char *name, uint *poff);
+    ///TODO: delete是c语言关键词，这里改个名，后续遇到了记得处理
+    int (*deletei)(struct inode *self, struct inode *ip);            
+    int (*dir_empty)(struct inode *self);
+    //返回时要持有新ip的锁
+    struct inode *(*create)(struct inode *self, const char *name, uchar type, short major, short minor);
+
+    void (*stat)(struct inode *self, struct stat *st);
+};
+
+extern struct inode_operations inode_ops;
+
+#define EXT4_PATH_LONG_MAX 512
+
+struct vfs_ext4_inode_info {
+    char fname[EXT4_PATH_LONG_MAX];
+};
+
+/*
+ *索引节点
+ */
+struct inode {
+    uint8 i_dev;
+    uint16 i_mode; //类型 & 访问权限
+    uint16 i_type;
+    uint32 i_ino; //编号
+    uint32 i_valid; // 是否可用 0 -> 未使用
+
+    uint16 i_count; //引用计数
+    uint16 i_nlink; //硬链接数
+    uint i_uid; //拥有者编号
+    uint i_gid; //拥有者组编号
+    uint64 i_rdev; //当文件代表设备的时候，rdev代表这个设备的实际编号
+    uint64 i_size; //文件大小
+
+    long i_atime; //文件最后一次访问时间
+    long i_mtime; //文件最后一次修改时间
+    long i_ctime; //inode最后一次修改时间
+
+    uint64 i_blocks; //文件有多少块
+    uint64 i_blksize; //块大小 bytes
+    // struct semaphore i_sem; //同步信号量
+    SpinLock lock; //测试完成后再换成信号量
+    struct inode_operations *i_op; //inode操作函数
+
+    struct superblock *i_sb;
+
+    struct vfs_ext4_inode_info i_info; //EXT4 inode结构
+};
+
+
+void inodeinit();
+struct inode *get_inode();
+void free_inode(struct inode *inode);
+
+
+
+
+

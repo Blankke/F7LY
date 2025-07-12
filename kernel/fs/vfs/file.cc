@@ -1,296 +1,370 @@
-//
-// Copy from Li Shuang ( pseudonym ) on 2024-05-19 
-// --------------------------------------------------------------
-// | Note: This code file just for study, not for commercial use 
-// | Contact Author: lishuang.mk@whu.edu.cn 
-// --------------------------------------------------------------
-//
+#include "platform.hh"
+#include "param.h"
 
-#include "fs/vfs/file/file.hh"
-#include "fs/vfs/dentry.hh"
-#include "fs/vfs/inode.hh"
+#include "spinlock.hh"
+#include "sleeplock.hh"
+#include "../stat.hh"
+#include "fs/vfs/fs.hh"
+#include "fs/vfs/file.hh"
 
-#include <device_manager.hh>
-#include <stream_device.hh>
+#include <fs/lwext4/ext4_oflags.hh>
 
-namespace fs
+#include "proc/proc.hh"
+#include "vfs_ext4_ext.hh"
+#include "libs/string.hh"
+#include "proc_manager.hh"
+#include "virtual_memory_manager.hh"
+struct devsw devsw[NDEV];
+struct {
+    SpinLock lock;
+    struct file file[NFILE];
+} ftable;
+
+
+
+struct {
+    SpinLock lock;
+    struct ext4_dir dir[NFILE];
+    int valid[NFILE];
+} ext4_dir_table;
+
+struct {
+    SpinLock lock;
+    struct ext4_file file[NFILE];
+    int valid[NFILE];
+} ext4_file_table;
+
+
+// Allocate a file structure.
+struct file*
+filealloc(void)
 {
-	// int File::write( uint64 buf, size_t len )
-	// {
-	// 	int RC = -1;
-	// 	if ( !ops.fields.w )
-	// 	{
-	// 		printfRed( "File is not allowed to write!\n" );
-	// 		return RC;
-	// 	}
-	// 	Info( "write %d bytes...\n", len );
+    struct file *f;
 
-	// 	switch ( type )
-	// 	{
-	// 		case FileTypes::FT_STDOUT:
-	// 		case FileTypes::FT_STDERR:
-	// 			printf( "%s", ( char * ) buf );
-	// 			RC = len;
-	// 			break;
-	// 		case FileTypes::FT_PIPE:
-	// 		{
-	// 			if ( static_cast< size_t >( data.get_Pipe()->write( buf, len ) ) == len )
-	// 			{
-	// 				RC = len;
-	// 			}
-	// 			break;
-	// 		}
-	// 		case FileTypes::FT_ENTRY:
-	// 		{
-	// 			if ( data.get_Entry()->getNode()->nodeWrite( buf, data.get_off(), len ) == len )
-	// 			{
-	// 				data.get_off() += len;
-	// 				RC = len;
-	// 			}
-	// 			break;
-	// 		}
-	// 		case FileTypes::FT_DEVICE:
-	// 		{
-	// 			// log_panic( "file type device not implement" );
-	// 			uint major = 1;
-	// 			dev::StreamDevice * sdev = ( dev::StreamDevice * ) dev::k_devm.get_device( major );
-	// 			if ( sdev == nullptr )
-	// 			{
-	// 				printfRed( "file write: null device for device number %d", major );
-	// 				return -1;
-	// 			}
-	// 			if ( sdev->type() != dev::dev_char )
-	// 			{
-	// 				printfYellow( "file write: device %d is not a char-dev", major );
-	// 				return -2;
-	// 			}
-	// 			if ( !sdev->support_stream() )
-	// 			{
-	// 				printfYellow( "file write: device %d is not a stream-dev", major );
-	// 				return -3;
-	// 			}
+    ftable.lock.acquire();
+    for(f = ftable.file; f < ftable.file + NFILE; f++){
+        if(f->f_count == 0){
+            f->f_count = 1;
+            ftable.lock.release();
+            return f;
+        }
+    }
+    ftable.lock.release();
+    return 0;
+}
 
-	// 			RC = ( int ) sdev->write( ( void * ) buf, len );
+int 
+fdalloc(struct file *f){
+    int fd;
+proc::Pcb*p=proc::k_pm.get_cur_pcb();
+    for(fd = 0 ; fd < NOFILE && fd <(int) proc::k_pm.get_cur_pcb()->ofn.rlim_cur; fd++)
+    {
+        if(p->_ofile2->_ofile_ptr[fd] == 0){
+            p->_ofile2->_ofile_ptr[fd] = f;
+            return fd;
+        }
+    }
+    return -1;
+}
 
-	// 		} break;
-	// 		default:
-	// 			log_panic( "file::write(),Unknown File Type!\n" );
-	// 			break;
-	// 	}
+int fdalloc2(struct file *f,int begin)
+{
+    int fd;
+proc::Pcb*p=proc::k_pm.get_cur_pcb();
+    for(fd = begin; fd < NOFILE; fd++){
+        if(p->_ofile2->_ofile_ptr[fd] == 0){
+            p->_ofile2->_ofile_ptr[fd] = f;
+            return fd;
+        }
+    }
+    return -1;
+};
 
-	// 	return RC;
-	// }
+// Increment ref count for file f.
+struct file*
+filedup(struct file *f)
+{
+    ftable.lock.acquire();
+    if(f->f_count < 1)
+        panic("filedup");
+    f->f_count++;
+    ftable.lock.release();
+    return f;
+}
 
-	// int File::read( uint64 buf, size_t len, int off_, bool update )
-	// {
-	// 	int RC = -1;
-	// 	if ( !ops.fields.r )
-	// 	{
-	// 		printfRed( "File is not allowed to read!\n" );
-	// 		return RC;
-	// 	}
-	// 	switch ( data.get_Type() )
-	// 	{
-	// 		case FileTypes::FT_STDIN:
-	// 			printfRed( "stdin is not allowed to read!\n" );
-	// 			break;
-	// 		case FileTypes::FT_DEVICE:
-	// 			printfRed( "Device is not allowed to read!\n" );
-	// 			break;
-	// 		case FileTypes::FT_PIPE:
-	// 		{
-	// 			if ( auto read_len = data.get_Pipe()->read( buf, len ) )
-	// 			{
-	// 				RC = read_len;
-	// 			}
-	// 			break;
-	// 		}
-	// 		case FileTypes::FT_ENTRY:
-	// 		{
-	// 			if ( off_ < 0 )
-	// 				off_ = data.get_off();
-	// 			if ( auto read_len = data.get_Entry()->getNode()->nodeRead( buf, off_, len ) )
-	// 			{
-	// 				if ( update )
-	// 					data.get_off() += read_len;
-	// 				RC = read_len;
-	// 			}
-	// 			break;
-	// 		}
-	// 		default:
-	// 			log_panic( "file::read(),Unknown File Type!\n" );
-	// 			break;
-	// 	}
-	// 	return RC;
-	// }
+// Close file f.  (Decrement ref count, close when reaches 0.)
+void
+fileclose(struct file *f)
+{
+    struct file ff;
 
-// ================ xv6 file ================
+    ftable.lock.acquire();
+    if(f->f_count < 1)
+        panic("fileclose");
+    if(--f->f_count > 0){
+        ftable.lock.release();
+        return;
+    }
+    ff = *f;
+    f->f_count = 0;
+    f->f_type = file::FD_NONE;
+    ftable.lock.release();
 
-	int xv6_file::write( uint64 addr, int n )
-	{
-		int ret = 0;
-		switch ( type )
-		{
+    if(ff.f_type == file::FD_PIPE){
+        panic("fileclose: pipe");
+        // pipeclose(ff.f_pipe, get_fops()->writable(&ff));
+    } else if(ff.f_type == file::FD_REG || ff.f_type == file::FD_DEVICE){
+        /*
+         *file中需要得到filesystem的类型
+         *但是这里暂时只支持EXT4
+         */
+        if (vfs_ext_is_dir(ff.f_path) == 0) {
+            vfs_ext_dirclose(&ff);
+        } else {
+            vfs_ext_fclose(&ff);
+        }
+        if (ff.removed) {
+            vfs_ext_rm(ff.f_path);
+            ff.removed = 0;
+        }
+    }
+}
 
-			case FD_PIPE:
-			{
-				ret = pipe->write( addr, n );
-			} break;
+// Get metadata about file f.
+// addr is a user virtual address, pointing to a struct stat.
+int
+filestat(struct file *f, uint64 addr)
+{
+    panic("未实现");
+#ifdef FS_FIX_COMPLETELY
+    proc::Pcb*p = proc::k_pm.get_cur_pcb();
+    struct kstat st;
+    if(f->f_type == file::FD_REG || f->f_type == file::FD_DEVICE){
+        vfs_ext_fstat(f, &st);
+        // printf("fstat: dev: %d, inode: %d, mode: %d, nlink: %d, size: %d, atime: %d, mtime: %d, ctime: %d\n",
+        //   st.st_dev, st.st_ino, st.st_mode, st.st_nlink, st.st_size, st.st_atime_sec, st.st_mtime_sec, st.st_ctime_sec);
+        if(mem::k_vmm.copy_out(p->_pt, addr, (char *)(&st), sizeof(st)) < 0)
+            return -1;
+        return 0;
+    }
+    #endif
+    return -1;
+}
 
-			case FD_DEVICE:
-			{
-				dev::StreamDevice * sdev = ( dev::StreamDevice * ) dev::k_devm.get_device( major );
-				if ( sdev == nullptr )
-				{
-					printfRed( "file write: null device for device number %d", major );
-					return -1;
-				}
-				if ( sdev->type() != dev::dev_char )
-				{
-					printfYellow( "file write: device %d is not a char-dev", major );
-					return -2;
-				}
-				if ( !sdev->support_stream() )
-				{
-					printfYellow( "file write: device %d is not a stream-dev", major );
-					return -3;
-				}
+int filestatx(struct file *f, uint64 addr) {
+    proc::Pcb*p = proc::k_pm.get_cur_pcb();
+    struct statx st;
+    if(f->f_type == file::FD_REG || f->f_type == file::FD_DEVICE){
+        vfs_ext_statx(f, &st);
+        // printf("fstat: dev: %d, inode: %d, mode: %d, nlink: %d, size: %d, atime: %d, mtime: %d, ctime: %d\n",
+        //   st.st_dev, st.st_ino, st.st_mode, st.st_nlink, st.st_size, st.st_atime_sec, st.st_mtime_sec, st.st_ctime_sec);
+        if(mem::k_vmm.copy_out(p->_pt, addr, (char *)(&st), sizeof(st)) < 0)
+            return -1;
+        return 0;
+    }
+    return -1;
+}
 
-				ret = sdev->write( ( void * ) addr, n );
+// Read from file f.
+// addr is a user virtual address.
+int
+fileread(struct file *f, uint64 addr, int n)
+{
+    int r = 0;
 
-			} break;
+    if(get_fops()->readable(f) == 0)
+        return -1;
 
-			case FD_INODE:
-			{
-				// log_panic( "file inode write not implement" );
-				ret = n;
-			} break;
+    if(f->f_type == file::FD_PIPE){
+        // r = piperead(f->f_pipe, addr, n);
+        panic("fileread: pipe");
+    } else if(f->f_type == file::FD_DEVICE){
+        if(f->f_major < 0 || f->f_major >= NDEV || !devsw[f->f_major].read)
+            return -1;
+        r = devsw[f->f_major].read(1, addr, n);
+    } else if(f->f_type == file::FD_REG){
+        r = vfs_ext_read(f, 1, addr, n);
+    } else if (f->f_type == 9) {
+        char a = 0;
+        mem::k_vmm.copy_out(proc::k_pm.get_cur_pcb()->_pt, addr, (char*)&a, sizeof(char));
+        return 0;
+    } else if (f->f_type == 8) {
+        return 0;
+    } else{
+        panic("fileread");
+    }
 
-			default:
-				break;
-		}
+    return r;
+}
 
-		return ret;
-	}
+int filereadat(struct file *f, uint64 addr, int n, uint64 offset) {
+    int r = 0;
 
-	int xv6_file::read( uint64 addr, int n )
-	{
-		int ret = 0;
-		switch ( type )
-		{
+    if(get_fops()->readable(f) == 0)
+        return -1;
+    if (f->f_type == file::FD_REG) {
+        r = vfs_ext_readat(f, 0, addr, n, offset);
+    }
+    return r;
+}
 
-			case FD_PIPE:
-			{
-				ret = pipe->read( addr, n );
-			} break;
+// Write to file f.
+// addr is a user virtual address.
+int
+filewrite(struct file *f, uint64 addr, int n)
+{
+    [[maybe_unused]]int r, ret = 0;
 
-			case FD_DEVICE:
-			{
-				panic( "file device read not implement" );
-			} break;
+    if(get_fops()->writable(f) == 0)
+        return -1;
 
-			case FD_INODE:
-			{
-				uint64 len = dentry->getNode()->nodeRead( addr, off, n );
-				off += len;
-				ret = ( int ) len;
-			} break;
+    if(f->f_type == file::FD_PIPE){
+        // ret = pipewrite(f->f_pipe, addr, n);
+        panic("filewrite: pipe");
+    } else if(f->f_type == file::FD_DEVICE){
+        if(f->f_major < 0 || f->f_major >= NDEV || !devsw[f->f_major].write)
+            return -1;
+        ret = devsw[f->f_major].write(1, addr, n);
+    } else if(f->f_type == file::FD_REG){
+       ret = vfs_ext_write(f, 1, addr, n);
+    } else {
+        panic("filewrite");
+    }
 
-			default:
-				break;
-		}
+    return ret;
+}
 
-		return ret;
-	}
 
-// ================ xv6 file pool ================	
 
-	file_pool k_file_table;
+char filereadable(struct file *f) {
+    char readable = !(f->f_flags & O_WRONLY);
+    return readable;
+}
 
-	void file_pool::init()
-	{
-		_lock.init( "file pool" );
-		for ( auto &f : _files )
-		{	// refcnt 的初始化在构造参数中
-			// f.ref = 0;
-			f.type = fs::FileTypes::FT_NONE;
-		}
-	}
+char filewriteable(struct file *f) {
+    char writeable = (f->f_flags & O_WRONLY) || (f->f_flags & O_RDWR);
+    return writeable;
+}
 
-	File * file_pool::alloc_file()
-	{
-		_lock.acquire();
-		for ( auto &f : _files )
-		{
-			if ( f.refcnt == 0 && f.type == FileTypes::FT_NONE )
-			{
-				f.refcnt = 1;
-				_lock.release();
-				return &f;
-			}
-		}
-		_lock.release();
-		return nullptr;
-	}
+struct file_operations file_ops = {
+    .dup = &filedup,
+    .read = &fileread,
+    .readat = &filereadat,
+    .write = &filewrite,
+    .writable = &filewriteable,
+    .readable = &filereadable,
+    .close = &fileclose,
+    .fstat = &filestat,
+    .statx = &filestatx,
+};
 
-	void file_pool::free_file( File * f )
-	{
-		_lock.acquire();
-		if ( f->refcnt <= 0 )
-		{
-			printfRed( "[file pool] free no-ref file" );
-			_lock.release();
-			return;
-		}
-		--f->refcnt;
-		if ( f->refcnt == 0 )
-		{
-			if ( f->type == FileTypes::FT_PIPE )
-				//f->pipe->close( f->writable );
-				f->data.get_Pipe()->close( f->ops.fields.w );
-			f->type = FileTypes::FT_NONE;
-			f->flags = 0;
-			f->ops = FileOps( 0 );
-			//Placement new
-			new ( &f->data ) File::Data( FileTypes::FT_NONE );
-		}
-		_lock.release();
-	}
+struct file_operations *get_fops() {
+    return &file_ops;
+}
 
-	void file_pool::dup( File *f )
-	{
-		_lock.acquire();
-		assert( f->refcnt >= 1, "file: try to dup no reference file." );
-		f->refcnt++;
-		_lock.release();
-	}
+void fileinit(void) {
+    ftable.lock.init( "ftable");
+    ext4_dir_table.lock.init("ext4_dir_table");
+    ext4_file_table.lock.init( "ext4_file_table");
+	memset(ftable.file, 0, sizeof(ftable.file));
+}
 
-	File * file_pool::find_file( eastl::string path )
-	{
-		_lock.acquire();
-		for ( auto &f : _files )
-		{
-			dentry *den = f.data.get_Entry();
-			if ( den && den->rName() == path )
-			{
-				_lock.release();
-				return &f;
-			}
-		}
-		_lock.release();
-		return nullptr;
-	}
+struct ext4_dir *alloc_ext4_dir(void) {
+    int i;
+    ext4_dir_table.lock.acquire();
+    for (i = 0;i < NFILE;i++) {
+        if (ext4_dir_table.valid[i] == 0) {
+            ext4_dir_table.valid[i] = 1;
+            break;
+        }
+    }
+    ext4_dir_table.lock.release();
+    if (i == NFILE) {
+        return NULL;
+    }
+    return &ext4_dir_table.dir[i];
+}
 
-	int file_pool::unlink( eastl::string path )
-	{
-		_lock.acquire();
-		_unlink_list.push_back( path );
-		_lock.release();
-		return 0;
-	}
-	void file_pool::remove( eastl::string path )
-	{
-		_unlink_list.erase_first(path);
-	}
+struct ext4_file *alloc_ext4_file(void) {
+    int i;
+    ext4_file_table.lock.acquire();
+    for (i = 0;i < NFILE;i++) {
+        if (ext4_file_table.valid[i] == 0) {
+            ext4_file_table.valid[i] = 1;
+            break;
+        }
+    }
+    ext4_file_table.lock.release();
+    if (i == NFILE) {
+        return NULL;
+    }
+    return &ext4_file_table.file[i];
+}
 
-} // namespace fs
+void free_ext4_dir(struct ext4_dir *dir) {
+    int i;
+    ext4_dir_table.lock.acquire();
+    for (i = 0;i < NFILE;i++) {
+        if (dir == &ext4_dir_table.dir[i]) {
+            ext4_dir_table.valid[i] = 0;
+            ext4_dir_table.lock.release();
+            return;
+        }
+    }
+}
+
+void free_ext4_file(struct ext4_file *file) {
+    int i;
+    ext4_file_table.lock.acquire();
+    for (i = 0;i < NFILE;i++) {
+        if (file == &ext4_file_table.file[i]) {
+            ext4_file_table.valid[i] = 0;
+            ext4_file_table.lock.release();
+            return;
+        }
+    }
+}
+
+void file_set_exec_flags(struct file *f, int fd, int flag) {
+    if (flag) {
+        if (fd < 64) {
+            f->flagsslow |= (1 << fd);
+        } else {
+            f->flagshigh |= (1 << (fd % 64));
+        }
+    } else {
+        if (fd < 64) {
+            f->flagsslow &= ~(1 << fd);
+        } else {
+            f->flagshigh &= ~(1 << (fd % 64));
+        }
+    }
+}
+
+int file_get_exec_flags(struct file *f, int fd) {
+    if (fd < 64) {
+        return f->flagsslow & (1 << fd);
+    } else {
+        return f->flagshigh & (1 << (fd % 64));
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

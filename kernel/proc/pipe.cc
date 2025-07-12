@@ -13,7 +13,7 @@
 
 #include "fs/vfs/file/file.hh"
 #include "fs/vfs/file/pipe_file.hh"
-#include "fs/vfs/fs_defs.hh"
+// #include "fs/vfs/fs_defs.hh"
 namespace proc
 {
 	namespace ipc

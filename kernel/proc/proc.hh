@@ -13,7 +13,7 @@
 #include "prlimit.hh"
 #include "futex.hh"
 #include "fs/vfs/file/file.hh"
-#include "fs2/vfs/file.hh"
+#include "fs/vfs/file.hh"
 #include "signal.hh"
 namespace fs
 {

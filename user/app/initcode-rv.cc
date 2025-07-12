@@ -8,7 +8,7 @@ extern "C"
         // basic_test("/mnt/glibc/");
         // busybox_test("/mnt/musl/");
         // busybox_test("/mnt/glibc/");
-        libc_test("/mnt/musl/"); // 不测glibc, 不要求测
+        // libc_test("/mnt/musl/"); // 不测glibc, 不要求测
         // lua_test("/mnt/musl/");
         // lua_test("/mnt/glibc/");
 
@@ -20,6 +20,12 @@ extern "C"
         // bb_sh[2] = "libcbench_testcode.sh";
         // execve("busybox", bb_sh, 0);
         // // lmbench_test("/mnt/musl/");
+
+        // int fd = openat(-100, "/mnt/musl/basic_testcode.sh", 0);
+        // char *buf[100];
+        // read(fd, buf, 100);
+
+        printf("initcode-rv: init_main start\n");
         shutdown();
         return 0;
     }

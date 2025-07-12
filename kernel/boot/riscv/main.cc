@@ -13,12 +13,12 @@
 #include "proc/proc_manager.hh"
 #include <EASTL/string.h>
 #include <EASTL/unordered_map.h>
-#include "fs/vfs/buffer.hh"
-#include "fs/vfs/buffer_manager.hh"
+// #include "fs/vfs/buffer.hh"
+// #include "fs/vfs/buffer_manager.hh"
 #include "hal/riscv/sbi.hh"
-#include "fs/vfs/path.hh"
-#include "fs/vfs/dentrycache.hh"
-#include "fs/ramfs/ramfs.hh"
+// #include "fs/vfs/path.hh"
+// #include "fs/vfs/dentrycache.hh"
+// #include "fs/ramfs/ramfs.hh"
 #include "tm/timer_manager.hh"
 #include "proc/scheduler.hh"
 #include "syscall_handler.hh"
@@ -28,11 +28,11 @@
 #include "devs/console1.hh"
 #include "fs/vfs/inode.hh"
 #include "mem/userspace_stream.hh"
-#include "fs/dev/acpi_controller.hh"
-#include "fs2/drivers/riscv/virtio2.hh"
-#include "fs2/vfs/fs.hh"
-#include "fs2/buf.hh"
-#include "fs2/vfs/vfs_ext4_ext.hh"
+// #include "fs/dev/acpi_controller.hh"
+#include "fs/drivers/riscv/virtio2.hh"
+#include "fs/vfs/fs.hh"
+#include "fs/buf.hh"
+#include "fs/vfs/vfs_ext4_ext.hh"
 // 注意华科的main函数可能有问题, 注意多核初始化
 void main()
 {
@@ -71,7 +71,7 @@ void main()
     new (&riscv::qemu::disk_driver) riscv::qemu::DiskDriver("Disk");
 
     tmm::k_tm.init("timer manager");
-    fs::k_bufm.init("buffer manager");
+    // fs::k_bufm.init("buffer manager");
 
     syscall::k_syscall_handler.init(); // 初始化系统调用处理器
 

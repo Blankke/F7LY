@@ -3,7 +3,7 @@
 #include "syscall_defs.hh"
 #include "printer.hh"
 #include "fs/vfs/file/file.hh"
-#include "fs2/vfs/file.hh"
+#include "fs/vfs/file.hh"
 namespace syscall
 {
     constexpr uint max_syscall_funcs_num = 2048;

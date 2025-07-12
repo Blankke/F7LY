@@ -18,10 +18,11 @@
 #endif
 #include "hal/cpu.hh"
 #include "timer_manager.hh"
-#include "fs/vfs/path.hh"
+// #include "fs/vfs/path.hh"
 #include "fs/vfs/file/device_file.hh"
 // #include <asm-generic/ioctls.h>
-#include "fs/ioctl.h"
+#include <asm-generic/statfs.h>
+#include "fs/ioctl.hh"
 #include <asm-generic/poll.h>
 #include <linux/sysinfo.h>
 #include "fs/vfs/file/normal_file.hh"
@@ -32,10 +33,10 @@
 #include "mem/mem.hh"
 #include "futex.hh"
 #include "rusage.hh"
-#include "fs2/vfs/file.hh"
-#include "fs2/vfs/fs.hh"
-#include "fs2/vfs/vfs_ext4_ext.hh"
-#include "fs2/vfs/ops.hh"
+#include "fs/vfs/file.hh"
+#include "fs/vfs/fs.hh"
+#include "fs/vfs/vfs_ext4_ext.hh"
+#include "fs/vfs/ops.hh"
 
 namespace syscall
 {
@@ -1008,6 +1009,8 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_umount2()
     {
+        panic("未实现");
+#ifdef FS_FIX_COMPLETELY
         uint64 specialaddr;
         eastl::string special;
         int flags;
@@ -1025,9 +1028,13 @@ namespace syscall
 
         fs::Path specialpath(special);
         return specialpath.umount(flags);
+        #endif
+        return -1; // 未实现
     }
     uint64 SyscallHandler::sys_mount()
     {
+panic("未实现");
+#ifdef FS_FIX_COMPLETELY
         uint64 dev_addr;
         uint64 mnt_addr;
         uint64 fstype_addr;
@@ -1063,6 +1070,8 @@ namespace syscall
         fs::Path mntpath(mnt);
 
         return mntpath.mount(devpath, fstype, flags, data);
+        #endif
+        return -1; // 未实现
     }
     uint64 SyscallHandler::sys_brk()
     {
@@ -1652,6 +1661,8 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_readlinkat()
     {
+        panic("未实现");
+#ifdef FS_FIX_COMPLETELY
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
         int fd;
@@ -1708,6 +1719,8 @@ namespace syscall
 
         delete[] buffer;
         return ret;
+        #endif
+        return -1; // 未实现
     }
     uint64 SyscallHandler::sys_getrandom()
     {
@@ -1995,6 +2008,8 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_faccessat()
     {
+        panic("未实现");
+#ifdef FS_FIX_COMPLETELY
         int dirfd, mode, flags;
         eastl::string path;
         if (_arg_int(0, dirfd) < 0 || _arg_int(2, mode) < 0 || _arg_int(3, flags) < 0)
@@ -2063,6 +2078,7 @@ namespace syscall
         {
             return -1;
         }
+        #endif
         return 0;
     }
     uint64 SyscallHandler::sys_sysinfo()
@@ -2378,6 +2394,8 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_utimensat()
     {
+        panic("未实现");
+#ifdef FS_FIX_COMPLETELY
         int dirfd;
         uint64 pathaddr;
         eastl::string pathname;
@@ -2439,11 +2457,13 @@ namespace syscall
             return -ENOENT;
 
         // int fd = path.open();
-
+#endif
         return 0;
     }
     uint64 SyscallHandler::sys_renameat2()
     {
+        panic("未实现");
+#ifdef FS_FIX_COMPLETELY
         int old_fd, new_fd, flags;
         uint64 old_path_addr, new_path_addr;
 
@@ -2506,7 +2526,7 @@ namespace syscall
         fs::Path abs_old_path_obj(abs_old_path);
         if (abs_old_path_obj.rename(abs_new_path, flags) < 0)
             return -1;
-
+#endif
         return 0;
     }
 

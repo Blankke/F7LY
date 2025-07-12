@@ -3,10 +3,10 @@
 #pragma once 
 
 #include "fs/vfs/file/file_defs.hh"
-#include "fs/vfs/kstat.hh"
-
+// #include "fs/stat.hh"
+#include "fs/vfs/file/kstat.hh"
 #include "proc/pipe.hh"
-
+#include <EASTL/vector.h>
 #include <EASTL/string.h>
 #include <asm-generic/errno-base.h>
 namespace proc
@@ -47,7 +47,8 @@ namespace fs
 			inline bool ensurePipe() const { return pp_.type_ == FT_PIPE; };
 		public:
 			Data( FileTypes type ) : dv_( { type, type } ) { ensureDev(); }
-			Data( dentry *de_ ) : en_( { FT_NORMAL, de_, de_, 0 } ) { ensureEntry(); }
+			// Dentry构造Kstat不完全，先禁用
+			// Data( dentry *de_ ) : en_( { FT_NORMAL, de_, de_, 0 } ) { ensureEntry(); }
 			Data( Pipe *pipe_ ) : pp_( { FT_PIPE, pipe_, pipe_ } ) { ensurePipe(); }
 			~Data() = default;
 			inline dentry* get_Entry() const { ensureEntry(); return en_.dentry_; }
@@ -74,38 +75,13 @@ namespace fs
 		File( FileTypes type_ ) : refcnt( 0 ), data( type_ ) {}
 		File( FileTypes type_, FileOps ops_ = FileOp::fileop_none ) : ops( ops_ ), refcnt( 0 ), data( type_ ) {}
 		File( FileTypes type_, int flags_ ) : ops( flags_ ), refcnt( 0 ), data( type_ ) {}
-		File( dentry *de_, int flags_ ) : flags( flags_ ), ops( flags_ ), refcnt( 0 ), data( de_ ) {}
+		// dentry构造Kstat不完全，先禁用
+		// File( dentry *de_, int flags_ ) : flags( flags_ ), ops( flags_ ), refcnt( 0 ), data( de_ ) {}
 		File( proc::ipc::Pipe *pipe, int flags_ ) : flags( flags_ ), ops( flags_ ), refcnt( 0 ), data( pipe ) {}
 		~File() = default;
 
 		int write( uint64 buf, size_t len ) { return 0; };
 		int read( uint64 buf, size_t len, int off_ = 0, bool update = true ) { return 0; };
-
-	};
-
-
-	class xv6_file_pool;
-
-	/// TODO: 这是搬运自xv6的file，在将来使用vfs后将弃用
-	class xv6_file
-	{
-		friend xv6_file_pool;
-	public:
-		xv6_file() : ref( 0 ), readable( 0 ), writable( 0 ), dentry( nullptr ), off( 0 ), major( 0 ) {};
-
-		enum { FD_NONE, FD_PIPE, FD_INODE, FD_DEVICE } type;
-		int ref; // reference count
-		char readable;
-		char writable;
-		fs::dentry * dentry;
-		proc::ipc::Pipe *pipe; // FD_PIPE
-		// struct inode *ip;  // FD_INODE and FD_DEVICE
-		uint off;          // FD_INODE
-		short major;       // FD_DEVICE
-		fs::Kstat kst;
-
-		int write( uint64 addr, int n );
-		int read( uint64 addr, int n );
 
 	};
 
@@ -116,7 +92,7 @@ namespace fs
 	private:
 		SpinLock _lock;
 		File _files[ file_pool_max_size ];
-		eastl::vector <eastl::string> _unlink_list;
+		eastl::vector<eastl::string> _unlink_list;
 	public:
 		void init();
 		File * alloc_file();

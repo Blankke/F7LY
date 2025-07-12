@@ -73,7 +73,7 @@ INCLUDES := -I$(KERNEL_DIR) $(foreach dir,$(SUBDIRS),-I$(KERNEL_DIR)/$(dir))
 INCLUDES += -I$(KERNEL_DIR)/mem -I$(KERNEL_DIR)/devs -I$(KERNEL_DIR)/trap -I$(KERNEL_DIR)/hal -I$(KERNEL_DIR)/proc -I$(KERNEL_DIR)/boot
 INCLUDES += -I$(KERNEL_DIR)/fs
 INCLUDES += -I$(EASTL_DIR)/include -I$(EASTL_DIR)/include/EASTL -I$(EASTL_DIR)/test/packages/EABase/include/Common
-INCLUDES += -I$(KERNEL_DIR)/fs2
+INCLUDES += -I$(KERNEL_DIR)/fs
 # ===== 文件收集规则 =====
 # 收集架构特定目录和通用目录的源文件
 SRCS := $(foreach dir,$(SUBDIRS),$(wildcard $(KERNEL_DIR)/$(dir)/*.[csS])) \
@@ -97,7 +97,7 @@ SRCS += $(shell find $(KERNEL_DIR)/boot -maxdepth 1 -type f \
 # 收集 fs 目录中的所有文件（fs 没有架构特定子目录）
 SRCS += $(shell find $(KERNEL_DIR)/fs -type f \
         \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
-SRCS += $(shell find $(KERNEL_DIR)/fs2 -type f \
+SRCS += $(shell find $(KERNEL_DIR)/fs -type f \
         \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
 
 $(info === SRCS collected ===)

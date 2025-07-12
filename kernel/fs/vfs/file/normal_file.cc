@@ -11,18 +11,20 @@ namespace fs
 			printfRed("normal_file:: not allowed to read! ");
 			return -1;
 		}
-		Inode *node = _den->getNode();
-		if (node == nullptr)
-		{
-			printfRed("normal_file:: null inode for dentry %s",
-					  _den->rName().c_str());
-			return -1;
-		}
-		if (off < 0)
-			off = _file_ptr;
-		ret = node->nodeRead(buf, off, len);
-		if (ret >= 0 && upgrade)
-			_file_ptr += ret;
+		// Inode *node = _den->getNode();
+		// if (node == nullptr)
+		// {
+		// 	printfRed("normal_file:: null inode for dentry %s",
+		// 			  _den->rName().c_str());
+		// 	return -1;
+		// }
+		// if (off < 0)
+		// 	off = _file_ptr;
+		// ret = node->nodeRead(buf, off, len);
+		// if (ret >= 0 && upgrade)
+		// 	_file_ptr += ret;
+		panic("normal_file::read: not implemented yet");
+		ret = 0;
 		return ret;
 	}
 
@@ -34,23 +36,25 @@ namespace fs
 			printfRed("normal_file:: not allowed to write! ");
 			return -1;
 		}
-		Inode *node = _den->getNode();
-		if (node == nullptr)
-		{
-			printfRed("normal_file:: null inode for dentry %s",
-					  _den->rName().c_str());
-			return -1;
-		}
-		if (off < 0)
-			off = _file_ptr;
+		// Inode *node = _den->getNode();
+		// if (node == nullptr)
+		// {
+		// 	printfRed("normal_file:: null inode for dentry %s",
+		// 			  _den->rName().c_str());
+		// 	return -1;
+		// }
+		// if (off < 0)
+		// 	off = _file_ptr;
 
-		ret = node->nodeWrite(buf, off, len);
+		// ret = node->nodeWrite(buf, off, len);
 
-		if (ret >= 0 && upgrade)
-			_file_ptr += ret;
-		// upgrade filesize
-		this->_stat.size = this->_den->getNode()->rFileSize();
+		// if (ret >= 0 && upgrade)
+		// 	_file_ptr += ret;
+		// // upgrade filesize
+		// this->_stat.size = this->_den->getNode()->rFileSize();
 
+		panic("normal_file::write: not implemented yet");
+		ret = 0;
 		return ret;
 	}
 
@@ -76,9 +80,11 @@ namespace fs
 
 	size_t normal_file::read_sub_dir(ubuf &dst)
 	{
-		Inode *ind = _den->getNode();
-		size_t rlen = ind->readSubDir(dst, _file_ptr);
-		_file_ptr += rlen;
+		// Inode *ind = _den->getNode();
+		// size_t rlen = ind->readSubDir(dst, _file_ptr);
+		// _file_ptr += rlen;
+		panic("normal_file::read_sub_dir: not implemented yet");
+		size_t rlen = 0; // Placeholder for actual read length
 		return rlen;
 	}
 

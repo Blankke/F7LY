@@ -2,6 +2,8 @@
 #include "../mem/memlayout.hh"
 #include "../hal/riscv/sbi.hh"
 #include "printer.hh"
+#include "virtual_memory_manager.hh"
+#include "proc_manager.hh"
 namespace dev
 {
   Console kConsole; // 全局控制台对象
@@ -34,15 +36,16 @@ namespace dev
     }
   }
 
-  int Console::console_write(int user_src, uint64 src, int n)
+  int Console::console_write(uint64 src, int n)
   {
-    TODO(for (int i = 0; i < n; i++) {
+    for (int i = 0; i < n; i++) {
       char c;
       // either_copyin
-      if (either_copyin(&c, user_src, src + i, 1) == -1)
+      if (mem::k_vmm.copy_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), &c, src + i, 1) == -1)
         break;
-      sbi_console_putchar(c);
-    })
+      // sbi_console_putchar(c);
+      uart.put_char_sync(c);
+    }
     return 0;
   }
 

@@ -1,5 +1,5 @@
 #include "fs/vfs/file/file.hh"
-
+#include "printer.hh"
 struct termios;
 
 namespace dev
