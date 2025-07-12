@@ -120,7 +120,7 @@ namespace tmm
 	int TimerManager::clock_gettime(SystemClockId cid, timespec *tp)
 	{
 		if (tp == nullptr)
-			return 0;
+			return -1; // 应该返回错误而不是0
 
 		uint64 t_val;
 		uint64 cpt = tmm::cycles_per_tick();
@@ -132,11 +132,24 @@ namespace tmm
 		_lock.release();
 
 		tp->tv_sec = (long)(t_val / freq);
-
 		ulong rest_cyc = t_val % freq;
-		double rest = (double)rest_cyc * (double)_1G / (double)freq;
 
-		tp->tv_nsec = (long)rest;
+		// 使用整数运算: rest_cyc * 1,000,000,000 / freq
+		const int64 nsec_max = 1e9;
+
+		tp->tv_nsec = (long)((rest_cyc * nsec_max) / freq);
+
+		while (tp->tv_nsec >= (long)nsec_max)
+		{
+			tp->tv_sec++;
+			tp->tv_nsec -= (long)nsec_max;
+		}
+		printfBlue("tp->tv_sec: %d, tp->tv_nsec: %d\n", tp->tv_sec, tp->tv_nsec);
+		while (tp->tv_nsec < 0)
+		{
+			tp->tv_sec--;
+			tp->tv_nsec += nsec_max;
+		}
 
 		return 0;
 	}

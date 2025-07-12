@@ -2012,6 +2012,23 @@ namespace proc
                             return -1;
                         }
                     }
+                    else if (strcmp(interpreter_path.c_str(), "/lib/ld-musl-riscv64.so.1") == 0)
+                    {
+                        // TODO: 这个可不是sf了, 那怎么办呢
+                        printfBlue("execve: using riscv64 sf dynamic linker\n");
+                        fs::Path path_resolver_interp("/mnt/musl/lib/libc.so");
+                        interp_de = path_resolver_interp.pathSearch();
+                        if (interp_de == nullptr)
+                        {
+                            printfRed("execve: failed to find riscv64 musl linker\n");
+                            return -1;
+                        }
+                    }
+                    else
+                    {
+                        panic("execve: unknown dynamic linker: %s\n", interpreter_path.c_str());
+                        return -1; // 不支持的动态链接器
+                    }
                     break;
                 }
             }
