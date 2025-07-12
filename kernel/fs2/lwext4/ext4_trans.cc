@@ -35,14 +35,14 @@
  * @brief Ext4 transaction buffer operations.
  */
 
-#include <lwext4/ext4_config.hh>
+#include <fs2/lwext4/ext4_config.hh>
 
-#include <lwext4/ext4_errno.hh>
-#include <lwext4/ext4_misc.hh>
-#include <lwext4/ext4_types.hh>
+#include <fs2/lwext4/ext4_errno.hh>
+#include <fs2/lwext4/ext4_misc.hh>
+#include <fs2/lwext4/ext4_types.hh>
 
-#include <lwext4/ext4_fs.hh>
-#include <lwext4/ext4_journal.hh>
+#include <fs2/lwext4/ext4_fs.hh>
+#include <fs2/lwext4/ext4_journal.hh>
 
 int ext4_trans_set_block_dirty(struct ext4_buf *buf) {
     int r = EOK;

@@ -6,9 +6,9 @@
 // --------------------------------------------------------------
 //
 
-#include "fs/ext4/ext4_block_group.hh"
+#include "ext4_block_group.hh"
 #include "printer.hh"
-#include "fs/ext4/ext4_fs.hh"
+#include "ext4_fs.hh"
 #include "klib.hh"
 
 namespace fs

@@ -10,8 +10,8 @@
 #define EXT4_TRANS_H
 
 
-#include <lwext4/ext4_config.hh>
-#include <lwext4/ext4_types.hh>
+#include <fs2/lwext4/ext4_config.hh>
+#include <fs2/lwext4/ext4_types.hh>
 
 
 /**@brief   Mark a buffer dirty and add it to the current transaction.

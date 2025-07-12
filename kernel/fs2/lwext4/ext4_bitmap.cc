@@ -34,13 +34,13 @@
  * @brief Block/inode bitmap allocator.
  */
 
-#include <lwext4/ext4_config.hh>
+#include <fs2/lwext4/ext4_config.hh>
 
-#include <lwext4/ext4_errno.hh>
-#include <lwext4/ext4_misc.hh>
-#include <lwext4/ext4_types.hh>
+#include <fs2/lwext4/ext4_errno.hh>
+#include <fs2/lwext4/ext4_misc.hh>
+#include <fs2/lwext4/ext4_types.hh>
 
-#include <lwext4/ext4_bitmap.hh>
+#include <fs2/lwext4/ext4_bitmap.hh>
 
 void ext4_bmap_bits_free(uint8_t *bmap, uint32_t sbit, uint32_t bcnt) {
     uint32_t i = sbit;

@@ -34,15 +34,15 @@
  * @brief Block device module.
  */
 
-#include <lwext4/ext4_config.hh>
+#include <fs2/lwext4/ext4_config.hh>
 
-#include <lwext4/ext4_errno.hh>
-#include <lwext4/ext4_misc.hh>
-#include <lwext4/ext4_types.hh>
+#include <fs2/lwext4/ext4_errno.hh>
+#include <fs2/lwext4/ext4_misc.hh>
+#include <fs2/lwext4/ext4_types.hh>
 
-#include <lwext4/ext4_blockdev.hh>
-#include <lwext4/ext4_fs.hh>
-#include <lwext4/ext4_journal.hh>
+#include <fs2/lwext4/ext4_blockdev.hh>
+#include <fs2/lwext4/ext4_fs.hh>
+#include <fs2/lwext4/ext4_journal.hh>
 
 #include "libs/string.hh"
 

@@ -6,10 +6,10 @@
 #ifndef EXT4_BCACHE_H_
 #define EXT4_BCACHE_H_
 #include "types.hh"
-#include <ext4_config.hh>
+#include <fs2/lwext4/ext4_config.hh>
 
-#include <misc/queue.hh>
-#include <misc/tree.hh>
+#include <fs2/lwext4/misc/queue.hh>
+#include <fs2/lwext4/misc/tree.hh>
 
 // Forward declaration
 struct ext4_buf;

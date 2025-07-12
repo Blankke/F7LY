@@ -7,7 +7,7 @@
 #include "fs2/vfs/fs.hh"
 #include "fs2/vfs/file.hh"
 
-#include <lwext4/ext4_oflags.hh>
+#include <fs2/lwext4/ext4_oflags.hh>
 
 #include "proc/proc.hh"
 #include "vfs_ext4_ext.hh"

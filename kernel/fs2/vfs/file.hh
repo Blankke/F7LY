@@ -3,7 +3,7 @@
 #include "param.h"
 #include "types.hh"
 #include "spinlock.hh"
-#include "lwext4/ext4.hh"
+#include "fs2/lwext4/ext4.hh"
 
 struct file;
 

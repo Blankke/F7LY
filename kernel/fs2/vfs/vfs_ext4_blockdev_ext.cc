@@ -11,10 +11,10 @@
 #include "dev/virtio.h"
 #endif
 
-#include "lwext4/ext4.hh"
-#include "lwext4/ext4_blockdev.hh"
-#include "lwext4/ext4_errno.hh"
-#include "lwext4/misc/queue.hh"
+#include "fs2/lwext4/ext4.hh"
+#include "fs2/lwext4/ext4_blockdev.hh"
+#include "fs2/lwext4/ext4_errno.hh"
+#include "fs2/lwext4/misc/queue.hh"
 #include "libs/string.hh"
 
 static int blockdev_lock(struct ext4_blockdev *bdev);

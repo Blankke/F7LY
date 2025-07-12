@@ -8,7 +8,7 @@
 #define EXT4_ERRNO_H_
 
 
-#include <lwext4/ext4_config.hh>
+#include <fs2/lwext4/ext4_config.hh>
 
 #define EPERM 1 /* Operation not permitted */
 #define ENOENT 2 /* No such file or directory */

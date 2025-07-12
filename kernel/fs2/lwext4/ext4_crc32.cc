@@ -36,13 +36,13 @@
  * @brief Crc32c routine. Taken from FreeBSD kernel.
  */
 
-#include <lwext4/ext4_config.hh>
+#include <fs2/lwext4/ext4_config.hh>
 
-#include <lwext4/ext4_errno.hh>
-#include <lwext4/ext4_misc.hh>
-#include <lwext4/ext4_types.hh>
+#include <fs2/lwext4/ext4_errno.hh>
+#include <fs2/lwext4/ext4_misc.hh>
+#include <fs2/lwext4/ext4_types.hh>
 
-#include "lwext4/ext4_crc32.hh"
+#include "fs2/lwext4/ext4_crc32.hh"
 
 static const uint32_t crc32_tab[] = {
         0x00000000, 0x77073096, 0xee0e612c, 0x990951ba, 0x076dc419, 0x706af48f, 0xe963a535, 0x9e6495a3, 0x0edb8832,

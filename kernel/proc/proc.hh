@@ -13,6 +13,7 @@
 #include "prlimit.hh"
 #include "futex.hh"
 #include "fs/vfs/file/file.hh"
+#include "fs2/vfs/file.hh"
 #include "signal.hh"
 namespace fs
 {
@@ -67,6 +68,10 @@ namespace proc
         int _gid = num_process; // 全局ID，用于在进程池中唯一标识进程
 
         // 文件系统相关
+        ///@brief 这里是新增的，后面的老的记得删掉
+        /********************************************************************************* */
+        file_vnode cwd;    
+        /********************************************************************************* */
         fs::dentry *_cwd; // current working directory
         eastl::string _cwd_name;
         ofile *_ofile; // 打开的文件描述符表，包含文件指针和 close-on-exec 标志

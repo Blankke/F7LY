@@ -8,19 +8,19 @@
  * of the License, or (at your option) any later version.
  */
 
-#include <lwext4/ext4_config.hh>
+#include <fs2/lwext4/ext4_config.hh>
 
-#include <lwext4/ext4_errno.hh>
-#include <lwext4/ext4_misc.hh>
-#include <lwext4/ext4_types.hh>
+#include <fs2/lwext4/ext4_errno.hh>
+#include <fs2/lwext4/ext4_misc.hh>
+#include <fs2/lwext4/ext4_types.hh>
 
-#include <lwext4/ext4_balloc.hh>
-#include <lwext4/ext4_blockdev.hh>
-#include <lwext4/ext4_crc32.hh>
-#include <lwext4/ext4_extent.hh>
-#include <lwext4/ext4_fs.hh>
-#include <lwext4/ext4_super.hh>
-#include <lwext4/ext4_trans.hh>
+#include <fs2/lwext4/ext4_balloc.hh>
+#include <fs2/lwext4/ext4_blockdev.hh>
+#include <fs2/lwext4/ext4_crc32.hh>
+#include <fs2/lwext4/ext4_extent.hh>
+#include <fs2/lwext4/ext4_fs.hh>
+#include <fs2/lwext4/ext4_super.hh>
+#include <fs2/lwext4/ext4_trans.hh>
 
 #include <inttypes.h>
 #include <libs/string.hh>

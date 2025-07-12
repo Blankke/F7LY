@@ -7,10 +7,10 @@
 #define EXT4_JOURNAL_H_
 
 
-#include <lwext4/ext4_config.hh>
-#include <lwext4/ext4_types.hh>
-#include <lwext4/misc/queue.hh>
-#include <lwext4/misc/tree.hh>
+#include <fs2/lwext4/ext4_config.hh>
+#include <fs2/lwext4/ext4_types.hh>
+#include <fs2/lwext4/misc/queue.hh>
+#include <fs2/lwext4/misc/tree.hh>
 
 // Forward declarations for global RB tree types
 RB_HEAD(jbd_revoke_tree_global, jbd_revoke_rec);
@@ -32,7 +32,7 @@ RB_PROTOTYPE(jbd_revoke_tree_global, jbd_revoke_rec, revoke_node, jbd_revoke_rec
 RB_PROTOTYPE(jbd_block_tree_global, jbd_block_rec, block_rec_node, jbd_block_rec_cmp)
 RB_PROTOTYPE(jbd_revoke_tree_recover, revoke_entry, revoke_node, jbd_revoke_entry_cmp)
 
-#include "lwext4/ext4_fs.hh"
+#include "fs2/lwext4/ext4_fs.hh"
 
 struct jbd_fs {
     struct ext4_blockdev *bdev;

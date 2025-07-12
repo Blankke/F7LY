@@ -9,10 +9,10 @@
 #pragma once
 
 #include "fs/vfs/fs.hh"
-#include "fs/ext4/ext4_sb.hh"
-#include "fs/ext4/ext4_inode.hh"
-#include "fs/ext4/ext4_block_group.hh"
-#include "fs/ext4/ext4_buffer.hh"
+#include "ext4_sb.hh"
+#include "ext4_inode.hh"
+#include "ext4_block_group.hh"
+#include "ext4_buffer.hh"
 
 #include "spinlock.hh"
 #include "function.hh"

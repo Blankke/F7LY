@@ -6,7 +6,7 @@
 // --------------------------------------------------------------
 //
 
-#include "fs/ext4/ext4_fs.hh"
+#include "ext4_fs.hh"
 
 #include <block_device.hh>
 #include <device_manager.hh>

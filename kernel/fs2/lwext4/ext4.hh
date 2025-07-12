@@ -13,11 +13,11 @@
 #include "types.hh"
 
 
-#include <lwext4/ext4_types.hh>
-#include <lwext4/ext4_fs.hh>
-#include <lwext4/ext4_journal.hh>
+#include <fs2/lwext4/ext4_types.hh>
+#include <fs2/lwext4/ext4_fs.hh>
+#include <fs2/lwext4/ext4_journal.hh>
 
-#include <lwext4/ext4_blockdev.hh>
+#include <fs2/lwext4/ext4_blockdev.hh>
 
 /**@brief   Mount point descriptor.*/
 struct ext4_mountpoint {

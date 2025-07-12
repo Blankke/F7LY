@@ -6,9 +6,9 @@
 // --------------------------------------------------------------
 //
 
-#include "fs/ext4/ext4_inode.hh"
+#include "ext4_inode.hh"
 
-#include "fs/ext4/ext4_fs.hh"
+#include "ext4_fs.hh"
 #include "klib.hh"
 #include "template_algorithmn.hh"
 #include "fs/ramfs/ramfsInode.hh"

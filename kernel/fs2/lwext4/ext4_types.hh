@@ -2,14 +2,14 @@
  * @file  ext4_types.hh
  * @brief Ext4 data structure definitions.
  */
-
+#pragma once
 #ifndef EXT4_TYPES_H_
 #define EXT4_TYPES_H_
 
 
-#include <lwext4/ext4_blockdev.hh>
-#include <lwext4/ext4_config.hh>
-#include <lwext4/misc/tree.hh>
+#include <fs2/lwext4/ext4_blockdev.hh>
+#include <fs2/lwext4/ext4_config.hh>
+#include <fs2/lwext4/misc/tree.hh>
 
 #include <stddef.h>
 #include "types.hh"
@@ -884,10 +884,14 @@ uint32_t ext4_dmask_get(void);
 #define ext4_assert(_v) assert(_v, "ext4 assertion failed")
 #endif /* EXT4_DEBUG_H_ */
 
-static uint32_t debug_mask;
+// Use a function-local static to ensure single instance across all translation units
+inline uint32_t& get_debug_mask() {
+    static uint32_t debug_mask = 0;
+    return debug_mask;
+}
 
-void ext4_dmask_set(uint32_t m) { debug_mask |= m; }
+inline void ext4_dmask_set(uint32_t m) { get_debug_mask() |= m; }
 
-void ext4_dmask_clr(uint32_t m) { debug_mask &= ~m; }
+inline void ext4_dmask_clr(uint32_t m) { get_debug_mask() &= ~m; }
 
-uint32_t ext4_dmask_get(void) { return debug_mask; }
+inline uint32_t ext4_dmask_get(void) { return get_debug_mask(); }

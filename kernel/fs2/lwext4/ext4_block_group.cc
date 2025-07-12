@@ -39,13 +39,13 @@
  * @brief Block group function set.
  */
 
-#include <lwext4/ext4_config.hh>
+#include <fs2/lwext4/ext4_config.hh>
 
-#include <lwext4/ext4_errno.hh>
-#include <lwext4/ext4_misc.hh>
-#include <lwext4/ext4_types.hh>
+#include <fs2/lwext4/ext4_errno.hh>
+#include <fs2/lwext4/ext4_misc.hh>
+#include <fs2/lwext4/ext4_types.hh>
 
-#include <lwext4/ext4_block_group.hh>
+#include <fs2/lwext4/ext4_block_group.hh>
 
 /**@brief CRC-16 look up table*/
 static uint16_t const crc16_tab[256] = {

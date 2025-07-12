@@ -34,12 +34,12 @@
  * @brief Block cache allocator.
  */
 
-#include <lwext4/ext4_bcache.hh>
-#include <lwext4/ext4_blockdev.hh>
-#include <lwext4/ext4_config.hh>
+#include <fs2/lwext4/ext4_bcache.hh>
+#include <fs2/lwext4/ext4_blockdev.hh>
+#include <fs2/lwext4/ext4_config.hh>
 
-#include <lwext4/ext4_errno.hh>
-#include <lwext4/ext4_types.hh>
+#include <fs2/lwext4/ext4_errno.hh>
+#include <fs2/lwext4/ext4_types.hh>
 
 #include <stdlib.h>
 #include "libs/string.hh"

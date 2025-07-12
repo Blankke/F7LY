@@ -18,6 +18,9 @@ typedef unsigned char uint8;
 typedef unsigned short uint16;
 typedef unsigned int  uint32;
 typedef unsigned long uint64;
+typedef uint32 uint32_t;
+typedef uint16 uint16_t;
+typedef uint8 uint8_t;
 typedef unsigned long uint64_t;
 typedef unsigned int   uint;
 typedef long int64;
@@ -29,8 +32,8 @@ typedef tid_t pid_t;
 typedef uint64 rlim_t;
 typedef uint64 pde_t;
 
-using size_t = uint64;
-using wchar = ushort;
+typedef uint64 size_t;
+typedef wchar  ushort;
 enum CommonSize : uint64
 {
 	_1K = 0x1UL << 10,

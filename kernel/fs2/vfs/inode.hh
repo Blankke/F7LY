@@ -7,7 +7,7 @@
 #include "param.h"
 #include "fs2/stat.hh"
 
-#include "lwext4/ext4.hh"
+#include "fs2/lwext4/ext4.hh"
 
 struct superblock;
 struct inode;
@@ -51,7 +51,7 @@ struct inode_operations {
 
     //For directory
     struct inode *(*dirlookup)(struct inode *self, const char *name, uint *poff);
-    /// @todo delete是c语言关键词，这里改个名，后续遇到了记得处理
+    ///TODO: delete是c语言关键词，这里改个名，后续遇到了记得处理
     int (*deletei)(struct inode *self, struct inode *ip);            
     int (*dir_empty)(struct inode *self);
     //返回时要持有新ip的锁

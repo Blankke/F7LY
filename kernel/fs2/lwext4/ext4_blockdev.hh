@@ -8,8 +8,8 @@
 #ifndef EXT4_BLOCKDEV_H_
 #define EXT4_BLOCKDEV_H_
 
-#include <lwext4/ext4_bcache.hh>
-#include <lwext4/ext4_config.hh>
+#include <fs2/lwext4/ext4_bcache.hh>
+#include <fs2/lwext4/ext4_config.hh>
 
 #include "types.hh"
 

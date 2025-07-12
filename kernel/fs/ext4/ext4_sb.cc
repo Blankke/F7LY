@@ -6,9 +6,9 @@
 // --------------------------------------------------------------
 //
 
-#include "fs/ext4/ext4_sb.hh"
+#include "ext4_sb.hh"
 
-#include "fs/ext4/ext4_fs.hh"
+#include "ext4_fs.hh"
 #include "common.hh"
 
 namespace fs

@@ -11,14 +11,14 @@
 #include "vfs_ext4_ext.hh"
 #include "fs2/vfs/inode.hh"
 
-#include <lwext4/ext4_oflags.hh>
-#include "lwext4/ext4_errno.hh"
-#include "lwext4/ext4_fs.hh"
-#include "lwext4/ext4_inode.hh"
-#include "lwext4/ext4_super.hh"
-#include "lwext4/ext4_types.hh"
+#include <fs2/lwext4/ext4_oflags.hh>
+#include "fs2/lwext4/ext4_errno.hh"
+#include "fs2/lwext4/ext4_fs.hh"
+#include "fs2/lwext4/ext4_inode.hh"
+#include "fs2/lwext4/ext4_super.hh"
+#include "fs2/lwext4/ext4_types.hh"
 
-#include "lwext4/ext4.hh"
+#include "fs2/lwext4/ext4.hh"
 #include "fs/ioctl.h"
 #include "libs/string.hh"
 

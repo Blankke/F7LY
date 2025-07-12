@@ -9,9 +9,9 @@
 #define EXT4_EXTENT_H_
 
 
-#include <lwext4/ext4_config.hh>
-#include <lwext4/ext4_inode.hh>
-#include <lwext4/ext4_types.hh>
+#include <fs2/lwext4/ext4_config.hh>
+#include <fs2/lwext4/ext4_inode.hh>
+#include <fs2/lwext4/ext4_types.hh>
 
 void ext4_extent_tree_init(struct ext4_inode_ref *inode_ref);
 

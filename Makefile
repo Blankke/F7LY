@@ -64,7 +64,8 @@ CXXFLAGS := $(CFLAGS) -std=c++23 -nostdlib \
 			-DEA_PLATFORM_LINUX -DEA_PLATFORM_POSIX \
             $(EA_PLATFORM) -DEA_ENDIAN_LITTLE=1 \
             -Wno-deprecated-declarations -Wno-strict-aliasing \
-            -fno-exceptions -fno-rtti -Wno-maybe-uninitialized
+            -fno-exceptions -fno-rtti -Wno-maybe-uninitialized \
+			-Wno-volatile
 
 LDFLAGS := -static -nostdlib -nostartfiles -nodefaultlibs -Wl,-z,max-page-size=4096 -Wl,-T,$(LINK_SCRIPT) -Wl,--gc-sections
 # 包含头文件路径：架构特定目录 + 通用目录 + 有架构子目录的文件夹根目录

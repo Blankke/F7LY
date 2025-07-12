@@ -10,9 +10,9 @@
 #define EXT4_XATTR_H_
 
 
-#include <lwext4/ext4_config.hh>
-#include <lwext4/ext4_inode.hh>
-#include <lwext4/ext4_types.hh>
+#include <fs2/lwext4/ext4_config.hh>
+#include <fs2/lwext4/ext4_inode.hh>
+#include <fs2/lwext4/ext4_types.hh>
 
 struct ext4_xattr_info {
     uint8_t name_index;

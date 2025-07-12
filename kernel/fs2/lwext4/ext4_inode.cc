@@ -39,14 +39,14 @@
  * @brief Inode handle functions
  */
 
-#include <lwext4/ext4_config.hh>
+#include <fs2/lwext4/ext4_config.hh>
 
-#include <lwext4/ext4_errno.hh>
-#include <lwext4/ext4_misc.hh>
-#include <lwext4/ext4_types.hh>
+#include <fs2/lwext4/ext4_errno.hh>
+#include <fs2/lwext4/ext4_misc.hh>
+#include <fs2/lwext4/ext4_types.hh>
 
-#include <lwext4/ext4_inode.hh>
-#include <lwext4/ext4_super.hh>
+#include <fs2/lwext4/ext4_inode.hh>
+#include <fs2/lwext4/ext4_super.hh>
 
 /**@brief  Compute number of bits for block count.
  * @param block_size Filesystem block_size

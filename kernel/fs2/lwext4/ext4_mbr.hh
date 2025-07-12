@@ -10,8 +10,8 @@
 #define EXT4_MBR_H_
 
 
-#include <lwext4/ext4_blockdev.hh>
-#include <lwext4/ext4_config.hh>
+#include <fs2/lwext4/ext4_blockdev.hh>
+#include <fs2/lwext4/ext4_config.hh>
 
 /**@brief Master boot record block devices descriptor*/
 struct ext4_mbr_bdevs {

@@ -10,8 +10,8 @@
 #define EXT4_IALLOC_H_
 
 
-#include <lwext4/ext4_config.hh>
-#include <lwext4/ext4_types.hh>
+#include <fs2/lwext4/ext4_config.hh>
+#include <fs2/lwext4/ext4_types.hh>
 
 /**@brief Calculate and set checksum of inode bitmap.
  * @param sb superblock pointer.

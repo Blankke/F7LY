@@ -39,14 +39,14 @@
  * @brief Superblock operations.
  */
 
-#include <lwext4/ext4_config.hh>
+#include <fs2/lwext4/ext4_config.hh>
 
-#include <lwext4/ext4_errno.hh>
-#include <lwext4/ext4_misc.hh>
-#include <lwext4/ext4_types.hh>
+#include <fs2/lwext4/ext4_errno.hh>
+#include <fs2/lwext4/ext4_misc.hh>
+#include <fs2/lwext4/ext4_types.hh>
 
-#include <lwext4/ext4_crc32.hh>
-#include <lwext4/ext4_super.hh>
+#include <fs2/lwext4/ext4_crc32.hh>
+#include <fs2/lwext4/ext4_super.hh>
 
 uint32_t ext4_block_group_cnt(struct ext4_sblock *s) {
     uint64_t blocks_count = ext4_sb_get_blocks_cnt(s);

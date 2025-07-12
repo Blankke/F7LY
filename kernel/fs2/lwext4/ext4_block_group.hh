@@ -9,9 +9,9 @@
 #define EXT4_BLOCK_GROUP_H_
 
 
-#include <lwext4/ext4_config.hh>
-#include <lwext4/ext4_super.hh>
-#include <lwext4/ext4_types.hh>
+#include <fs2/lwext4/ext4_config.hh>
+#include <fs2/lwext4/ext4_super.hh>
+#include <fs2/lwext4/ext4_types.hh>
 
 #include "types.hh"
 

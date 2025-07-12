@@ -10,11 +10,11 @@
 #define EXT4_DIR_IDX_H_
 
 
-#include <lwext4/ext4_config.hh>
-#include <lwext4/ext4_types.hh>
+#include <fs2/lwext4/ext4_config.hh>
+#include <fs2/lwext4/ext4_types.hh>
 
-#include <lwext4/ext4_dir.hh>
-#include <lwext4/ext4_fs.hh>
+#include <fs2/lwext4/ext4_dir.hh>
+#include <fs2/lwext4/ext4_fs.hh>
 
 #include "types.hh"
 

@@ -39,18 +39,18 @@
  * @brief Directory handle procedures.
  */
 
-#include <lwext4/ext4_config.hh>
+#include <fs2/lwext4/ext4_config.hh>
 
-#include <lwext4/ext4_errno.hh>
-#include <lwext4/ext4_misc.hh>
-#include <lwext4/ext4_types.hh>
+#include <fs2/lwext4/ext4_errno.hh>
+#include <fs2/lwext4/ext4_misc.hh>
+#include <fs2/lwext4/ext4_types.hh>
 
-#include <lwext4/ext4_crc32.hh>
-#include <lwext4/ext4_dir.hh>
-#include <lwext4/ext4_dir_idx.hh>
-#include <lwext4/ext4_fs.hh>
-#include <lwext4/ext4_inode.hh>
-#include <lwext4/ext4_trans.hh>
+#include <fs2/lwext4/ext4_crc32.hh>
+#include <fs2/lwext4/ext4_dir.hh>
+#include <fs2/lwext4/ext4_dir_idx.hh>
+#include <fs2/lwext4/ext4_fs.hh>
+#include <fs2/lwext4/ext4_inode.hh>
+#include <fs2/lwext4/ext4_trans.hh>
 
 #include <libs/string.hh>
 

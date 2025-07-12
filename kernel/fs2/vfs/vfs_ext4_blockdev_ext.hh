@@ -1,6 +1,6 @@
 #pragma once
 
-#include "lwext4/ext4_blockdev.hh"
+#include "fs2/lwext4/ext4_blockdev.hh"
 
 struct vfs_ext4_blockdev {
   int dev;

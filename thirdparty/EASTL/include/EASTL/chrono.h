@@ -603,8 +603,8 @@ namespace chrono
 			return t;
 		#elif defined(EA_PLATFORM_POSIX) // Posix means Linux, Unix, and Macintosh OSX, among others (including Linux-based mobile platforms).
 			#if (defined(CLOCK_REALTIME) || defined(CLOCK_MONOTONIC))
-				timespec ts;
-				int result = clock_gettime(CLOCK_MONOTONIC, &ts);
+				tmm::timespec ts;
+				int result = tmm::clock_gettime(CLOCK_MONOTONIC, &ts);
 
 				if (result == -1 && errno == EINVAL)
 					result = clock_gettime(CLOCK_REALTIME, &ts);

@@ -9,7 +9,7 @@
 #define LWEXT4_EXT4_CRC32C_H_
 
 
-#include <lwext4/ext4_config.hh>
+#include <fs2/lwext4/ext4_config.hh>
 
 #include "types.hh"
 

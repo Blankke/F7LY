@@ -10,9 +10,9 @@
 #define EXT4_SUPER_H_
 
 
-#include <lwext4/ext4_config.hh>
-#include <lwext4/ext4_misc.hh>
-#include <lwext4/ext4_types.hh>
+#include <fs2/lwext4/ext4_config.hh>
+#include <fs2/lwext4/ext4_misc.hh>
+#include <fs2/lwext4/ext4_types.hh>
 
 /**@brief   Blocks count get stored in superblock.
  * @param   s superblock descriptor

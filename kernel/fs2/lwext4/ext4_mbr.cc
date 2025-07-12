@@ -34,13 +34,13 @@
  * @brief Master boot record parser
  */
 
-#include <lwext4/ext4_config.hh>
+#include <fs2/lwext4/ext4_config.hh>
 
-#include <lwext4/ext4_errno.hh>
-#include <lwext4/ext4_misc.hh>
-#include <lwext4/ext4_types.hh>
+#include <fs2/lwext4/ext4_errno.hh>
+#include <fs2/lwext4/ext4_misc.hh>
+#include <fs2/lwext4/ext4_types.hh>
 
-#include <lwext4/ext4_mbr.hh>
+#include <fs2/lwext4/ext4_mbr.hh>
 
 #include <inttypes.h>
 #include <libs/string.hh>
