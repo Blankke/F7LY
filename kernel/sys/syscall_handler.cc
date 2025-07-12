@@ -32,6 +32,11 @@
 #include "mem/mem.hh"
 #include "futex.hh"
 #include "rusage.hh"
+#include "fs2/vfs/file.hh"
+#include "fs2/vfs/fs.hh"
+#include "fs2/vfs/vfs_ext4_ext.hh"
+#include "fs2/vfs/ops.hh"
+
 namespace syscall
 {
     // 创建全局的 SyscallHandler 实例
@@ -290,7 +295,7 @@ namespace syscall
         out_int = (int)raw_val;
         return 0;
     }
-        int SyscallHandler::_arg_long(int arg_n, long &out_int)
+    int SyscallHandler::_arg_long(int arg_n, long &out_int)
     {
         long raw_val = _arg_raw(arg_n);
         if (raw_val < LONG_MIN || raw_val > LONG_MAX)
@@ -347,6 +352,20 @@ namespace syscall
             *out_fd = fd;
         if (out_f)
             *out_f = f;
+        return 0;
+    }
+    int SyscallHandler::argfd(int n, int *pfd, struct file **pf)
+    {
+        int fd;
+        struct file *f;
+
+        _arg_int(n, fd);
+        if (fd < 0 || fd >= NOFILE || (f = proc::k_pm.get_cur_pcb()->_ofile2->_ofile_ptr[fd]) == 0)
+            return -1;
+        if (pfd)
+            *pfd = fd;
+        if (pf)
+            *pf = f;
         return 0;
     }
 
@@ -408,10 +427,10 @@ namespace syscall
         if (_arg_int(2, option) < 0)
             return -1;
         // printf("[SyscallHandler::sys_wait4] pid: %d, wstatus_addr: %p, option: %d\n",
-            //    pid, wstatus_addr, option);
+        //    pid, wstatus_addr, option);
         int waitret = proc::k_pm.wait4(pid, wstatus_addr, option);
         // printf("[SyscallHandler::sys_wait4] waitret: %d\n",
-            //    waitret);
+        //    waitret);
         return waitret;
     }
     uint64 SyscallHandler::sys_getppid()
@@ -465,43 +484,45 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_read()
     {
-        fs::file *f;
+        // fs::file *f;
+        file *f;
         uint64 buf;
         int n;
         [[maybe_unused]] int fd = -1;
 
-        if (_arg_fd(0, &fd, &f) < 0)
+        if (argfd(0, &fd, &f) < 0)
             return -1;
         if (_arg_addr(1, buf) < 0)
             return -2;
         if (_arg_int(2, n) < 0)
             return -3;
 
-        if (f == nullptr)
-            return -4;
-        if (n <= 0)
-            return -5;
-        // printfCyan("[sys_read] Try read,f:%x,buf:%x", f, f);
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        mem::PageTable *pt = p->get_pagetable();
+        return get_fops()->read(f, buf, n);
+        // if (f == nullptr)
+        //     return -4;
+        // if (n <= 0)
+        //     return -5;
+        // // printfCyan("[sys_read] Try read,f:%x,buf:%x", f, f);
+        // proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        // mem::PageTable *pt = p->get_pagetable();
 
-        char *k_buf = new char[n + 1];
-        int ret = f->read((uint64)k_buf, n, f->get_file_offset(), true);
-        if (ret < 0)
-            return -6;
+        // char *k_buf = new char[n + 1];
+        // int ret = f->read((uint64)k_buf, n, f->get_file_offset(), true);
+        // if (ret < 0)
+        //     return -6;
 
-        static int string_length = 0;
-        string_length += strlen(k_buf);
-        // printf("[sys_read] read %d characters in total\n", string_length);
-        // 添加调试打印，显示读取到的内容
-        k_buf[ret] = '\0'; // 确保字符串以null结尾
-        // printfCyan("[sys_read] fd=%d, read %d bytes: \"%s\"\n", fd, ret, k_buf);
+        // static int string_length = 0;
+        // string_length += strlen(k_buf);
+        // // printf("[sys_read] read %d characters in total\n", string_length);
+        // // 添加调试打印，显示读取到的内容
+        // k_buf[ret] = '\0'; // 确保字符串以null结尾
+        // // printfCyan("[sys_read] fd=%d, read %d bytes: \"%s\"\n", fd, ret, k_buf);
 
-        if (mem::k_vmm.copy_out(*pt, buf, k_buf, ret) < 0)
-            return -7;
+        // if (mem::k_vmm.copy_out(*pt, buf, k_buf, ret) < 0)
+        //     return -7;
 
-        delete[] k_buf;
-        return ret;
+        // delete[] k_buf;
+        // return ret;
     }
     uint64 SyscallHandler::sys_kill()
     {
@@ -765,6 +786,89 @@ namespace syscall
         // printfRed("openat filename %s return [fd] is %d file: %p refcnt: %d\n", path.c_str(), res, p->_ofile[res], p->_ofile[res]->refcnt);
         return res;
     }
+
+    uint64 SyscallHandler::sys_openat2()
+    {
+        // int fd, const char *upath, int flags, uint16 mode
+        int fd;
+        uint64 upath;
+        int flags;
+        int mode = 0; // 默认模式为0
+        if (_arg_int(0, fd) < 0)
+            return -1;
+        if (_arg_addr(1, upath) < 0)
+            return -1;
+        if (_arg_int(2, flags) < 0)
+            return -1;
+        if (_arg_int(3, mode) < 0)
+            return -1;
+        if (fd != AT_FDCWD && (fd < 0 || fd >= NOFILE))
+            return -ENOENT;
+        char path[MAXPATH];
+        proc::Pcb*p = proc::k_pm.get_cur_pcb();
+        if (mem::k_vmm.copy_str_in(p->_pt, path, (uint64)upath, MAXPATH) == -1)
+        {
+            return -EFAULT;
+        }
+#if DEBUG
+        LOG("sys_openat fd:%d,path:%s,flags:%d,mode:%d\n", fd, path, flags, mode);
+#endif
+        struct filesystem *fs = get_fs_from_path(path); ///<  根据路径获取对应的文件系统
+        /* @todo 官方测例好像vfat和ext4一种方式打开 */
+        if (fs->type == EXT4 )
+        {
+            const char *dirpath = (fd == AT_FDCWD) ? proc::k_pm.get_cur_pcb()->cwd.path : proc::k_pm.get_cur_pcb()->_ofile2->_ofile_ptr[fd]->f_path;
+            char absolute_path[MAXPATH] = {0};
+            get_absolute_path(path, dirpath, absolute_path);
+            struct file *f;
+            f = filealloc();
+            if (!f)
+                return -ENFILE;
+            int fd = -1;
+            if ((fd = fdalloc(f)) < 0)
+            {
+                // DEBUG_LOG_LEVEL(LOG_WARNING, "OUT OF FD!\n");
+                return -EMFILE;
+            };
+
+            f->f_flags = flags | (strcmp(absolute_path, "/tmp") ? 0 : O_CREAT);
+            f->f_mode = mode;
+
+            strcpy(f->f_path, absolute_path);
+            int ret;
+
+            if ((ret = vfs_ext_openat(f)) < 0)
+            {
+                // printf("打开失败: %s (错误码: %d)\n", path, ret);
+                /*
+                 *   以防万一有什么没有释放的东西，先留着
+                 *   get_file_ops()->close(f);
+                 */
+                proc::k_pm.get_cur_pcb()->_ofile2->_ofile_ptr[fd] = 0;
+                // if(!strcmp(path, "./mnt")) {
+                //     return 2;
+                return -ENOENT;
+            }
+            /* @note 处理busybox的几个文件夹 */
+            if (!strcmp(absolute_path, "/proc/mounts") ||  ///< df
+                !strcmp(absolute_path, "/proc") ||         ///< ps
+                !strcmp(absolute_path, "/proc/meminfo") || ///< free
+                !strcmp(absolute_path, "/dev/misc/rtc")    ///< hwclock
+            )
+            {
+                if (vfs_ext_is_dir(absolute_path) == 0)
+                    vfs_ext_dirclose(f);
+                else
+                    vfs_ext_fclose(f);
+                f->f_type = file::FD_BUSYBOX;
+                f->f_pos = 0;
+            }
+            return fd;
+        }
+        else
+            panic("unsupport filesystem");
+        return 0;
+    };
     uint64 SyscallHandler::sys_write()
     {
 
@@ -897,7 +1001,7 @@ namespace syscall
 
         uint64 clone_pid;
         printfCyan("[SyscallHandler::sys_clone] flags: %p, stack: %p, ptid: %p, tls: %p, ctid: %p\n",
-               flags, (void *)stack, (void *)ptid, (void *)tls, (void *)ctid);
+                   flags, (void *)stack, (void *)ptid, (void *)tls, (void *)ctid);
         clone_pid = proc::k_pm.clone(flags, stack, ptid, tls, ctid);
         printfRed("[SyscallHandler::sys_clone] pid: [%d] tid: [%d] name: %s clone_pid: [%d]\n", proc::k_pm.get_cur_pcb()->_pid, proc::k_pm.get_cur_pcb()->_tid, proc::k_pm.get_cur_pcb()->_name, clone_pid);
         return clone_pid;
@@ -969,7 +1073,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_brk] Error fetching brk address\n");
             return -1;
         }
-        uint64 ret= proc::k_pm.brk(n); // 调用进程管理器的 brk 函数
+        uint64 ret = proc::k_pm.brk(n); // 调用进程管理器的 brk 函数
         // printf("[SyscallHandler::sys_brk] brk to %p, ret: %p\n", (void *)n, (void *)ret);
         return ret;
     }
@@ -1339,7 +1443,7 @@ namespace syscall
     uint64 SyscallHandler::sys_fstatat()
     {
         eastl::string proc_name = proc::k_pm.get_cur_pcb()->_name;
-        if(proc_name.substr(0, 4) == "busy")
+        if (proc_name.substr(0, 4) == "busy")
         {
             return 0;
         }
@@ -1646,35 +1750,35 @@ namespace syscall
         delete[] k_buf;
         return buflen;
     }
-//     uint64 SyscallHandler::sys_clock_gettime()
-//     {
-//         int clock_id;
-//         u64 addr;
-//         if (_arg_int(0, clock_id) < 0)
-//         {
-//             printfRed("[SyscallHandler::sys_clock_gettime] Error fetching clock_id argument\n");
-//             return -1;
-//         }
-//         if (_arg_addr(1, addr) < 0)
-//         {
-//             printfRed("[SyscallHandler::sys_clock_gettime] Error fetching addr argument\n");
-//             return -2;
-//         }
+    //     uint64 SyscallHandler::sys_clock_gettime()
+    //     {
+    //         int clock_id;
+    //         u64 addr;
+    //         if (_arg_int(0, clock_id) < 0)
+    //         {
+    //             printfRed("[SyscallHandler::sys_clock_gettime] Error fetching clock_id argument\n");
+    //             return -1;
+    //         }
+    //         if (_arg_addr(1, addr) < 0)
+    //         {
+    //             printfRed("[SyscallHandler::sys_clock_gettime] Error fetching addr argument\n");
+    //             return -2;
+    //         }
 
-//         tmm::timespec *tp = nullptr;
-//         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-//         mem::PageTable *pt = p->get_pagetable();
-//         if (addr != 0)
-// #ifdef RISCV
-//             tp = (tmm::timespec *)pt->walk_addr(addr);
-// #elif LOONGARCH
-//             tp = (tmm::timespec *)to_vir((ulong)pt->walk_addr(addr));
-// #endif
-//         tmm::SystemClockId cid = (tmm::SystemClockId)clock_id;
+    //         tmm::timespec *tp = nullptr;
+    //         proc::Pcb *p = proc::k_pm.get_cur_pcb();
+    //         mem::PageTable *pt = p->get_pagetable();
+    //         if (addr != 0)
+    // #ifdef RISCV
+    //             tp = (tmm::timespec *)pt->walk_addr(addr);
+    // #elif LOONGARCH
+    //             tp = (tmm::timespec *)to_vir((ulong)pt->walk_addr(addr));
+    // #endif
+    //         tmm::SystemClockId cid = (tmm::SystemClockId)clock_id;
 
-//         return tmm::k_tm.clock_gettime(cid, tp);
-//         return 0;
-//     }
+    //         return tmm::k_tm.clock_gettime(cid, tp);
+    //         return 0;
+    //     }
     uint64 SyscallHandler::sys_clock_gettime()
     {
         int clock_id;
@@ -2366,18 +2470,24 @@ namespace syscall
 
         // 解析目录项
         fs::dentry *old_base, *new_base;
-        if (old_fd == AT_FDCWD) {
+        if (old_fd == AT_FDCWD)
+        {
             old_base = p->_cwd;
-        } else {
+        }
+        else
+        {
             fs::file *old_ofile = p->get_open_file(old_fd);
             if (old_ofile == nullptr || old_ofile->_attrs.filetype != fs::FileTypes::FT_NORMAL)
                 return -1;
             old_base = static_cast<fs::normal_file *>(old_ofile)->getDentry();
         }
-        
-        if (new_fd == AT_FDCWD) {
+
+        if (new_fd == AT_FDCWD)
+        {
             new_base = p->_cwd;
-        } else {
+        }
+        else
+        {
             fs::file *new_ofile = p->get_open_file(new_fd);
             if (new_ofile == nullptr || new_ofile->_attrs.filetype != fs::FileTypes::FT_NORMAL)
                 return -1;
@@ -2413,7 +2523,7 @@ namespace syscall
         }
 
         // 仅示例支持 CLOCK_REALTIME 与 CLOCK_MONOTONIC
-        if (clock_id != tmm::CLOCK_REALTIME && clock_id != tmm::CLOCK_MONOTONIC)
+        if (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC)
             return -EINVAL;
 
         // 从用户空间复制 timespec
@@ -2639,7 +2749,7 @@ namespace syscall
             _arg_int(3, val2);
         }
 
-        printf("sys_futex: uaddr=%p, op=%d, val=%d, timeout=%p, uaddr2=%p, val3=%d\n",  uaddr, op, val, timeout_ptr, uaddr2, val3);
+        printf("sys_futex: uaddr=%p, op=%d, val=%d, timeout=%p, uaddr2=%p, val3=%d\n", uaddr, op, val, timeout_ptr, uaddr2, val3);
         // printf("paddr: %p\n", proc::k_pm.get_cur_pcb()->_pt.walk_addr(uaddr));
         switch (op)
         {

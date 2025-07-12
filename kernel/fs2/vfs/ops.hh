@@ -1,7 +1,7 @@
 #pragma once
 
-static char* skipelem(char *path, char *name);
-static struct inode* namex(char *path, int nameiparent, char *name);
+ char* skipelem(char *path, char *name);
+ struct inode* namex(char *path, int nameiparent, char *name);
 struct inode* namei(char *path);
 struct inode* nameiparent(char *path, char *name);
 

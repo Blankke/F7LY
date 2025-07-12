@@ -1,14 +1,14 @@
-#include "fs/vfs/fs.h"
+#include "fs2/vfs/fs.hh"
 
-#include <defs.h>
 
-#include "types.h"
-#include "platform.h"
+
+#include "types.hh"
+#include "platform.hh"
 #include "param.h"
-#include "vfs_ext4_ext.h"
-#include "lib/string.h"
-#include "defs.h"
-#include "fs/vfs/ops.h"
+#include "vfs_ext4_ext.hh"
+#include "libs/string.hh"
+#include "proc_manager.hh"
+#include "fs2/vfs/ops.hh"
 
 
 filesystem_t *fs_table[VFS_MAX_FS];
@@ -23,24 +23,28 @@ filesystem_t ext4_fs;
 
 filesystem_t root_fs; // 仅用来加载init程序
 
-struct spinlock fs_table_lock;
+SpinLock fs_table_lock;
 
 void init_fs_table(void) {
-    initlock(&fs_table_lock, "fs_table_lock");
+    fs_table_lock.init( "fs_table_lock");
     for (int i = 0; i < VFS_MAX_FS; i++) {
         fs_table[i] = NULL;
     }
+    fs_table[EXT4] = &ext4_fs;
     printf("init_fs_table finished\n");
 }
 
 void fs_init(filesystem_t *fs, int dev, fs_t fs_type, const char *path) {
-    acquire(&fs_table_lock);
+    fs_table_lock.acquire();
     fs_table[fs_type] = fs;
     fs->dev = dev;
     fs->type = fs_type;
-    fs->path = path; /* path should be a string literal */
+    printf("fs_init:%p ,path:%d, path: %s\n", fs->path, path);
+    char tmp[strlen(path) + 1];
+    fs->path=tmp; /* path should be a string literal */
+    strcpy(fs->path, path);
     fs->fs_op = fs_ops_table[fs_type];
-    release(&fs_table_lock);
+   fs_table_lock.release();
     printf("fs_init done\n");
 }
 
@@ -54,19 +58,19 @@ void filesystem_init(void) {
     //     panic("ext4_cache write back error!\n");
     // }
 
-    struct file_vnode *cwd = &(myproc()->cwd);
+    struct file_vnode *cwd = &(proc::k_pm.get_cur_pcb()->cwd);
     strcpy(cwd->path, "/");
     cwd->fs = &ext4_fs;
 }
 
 void filesystem2_init(void) {
-    acquire(&fs_table_lock);
+    fs_table_lock.acquire();
     fs_table[3] = &root_fs;
     root_fs.dev = 2;
     root_fs.type = EXT4;
     root_fs.fs_op = fs_ops_table[root_fs.type];
-    root_fs.path = "/";
-    release(&fs_table_lock);
+    strcpy(root_fs.path, "/");
+   fs_table_lock.release();
     int ret = vfs_ext_mount2(&root_fs, 0, NULL);
     printf("fs_mount done: %d\n", ret);
 

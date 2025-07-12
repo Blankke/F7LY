@@ -103,7 +103,7 @@ struct inode {
 
 void inodeinit();
 struct inode *get_inode();
-struct inode *free_inode(struct inode *inode);
+void free_inode(struct inode *inode);
 
 
 

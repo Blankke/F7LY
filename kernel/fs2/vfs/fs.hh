@@ -1,6 +1,6 @@
 #pragma once
 
-#include "fs/vfs/inode.hh"
+#include "fs2/vfs/inode.hh"
 #include "param.h"
 #include "spinlock.hh"
 
@@ -37,7 +37,7 @@ typedef struct filesystem filesystem_t;
 
 extern filesystem_t *fs_table[VFS_MAX_FS];
 extern filesystem_op_t *fs_ops_table[VFS_MAX_FS];
-extern struct spinlock fs_table_lock;
+extern SpinLock fs_table_lock;
 
 void filesystem_init(void);
 void filesystem2_init(void);

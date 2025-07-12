@@ -30,7 +30,7 @@ static int blockdev_write(struct ext4_blockdev *bdev, const void *buf, uint64_t 
 static int blockdev_close(struct ext4_blockdev *bdev);
 
 
-static int bdevice_lock = 0;
+[[maybe_unused]]static int bdevice_lock = 0;
 //只有一个vbd
 struct ext4_blockdev_iface biface;
 struct vfs_ext4_blockdev bvbdev;
@@ -182,7 +182,7 @@ static int blockdev_close(struct ext4_blockdev *bdev) { return EOK; }
 
 static int blockdev_read(struct ext4_blockdev *bdev, void *buf, uint64_t blk_id, uint32_t blk_cnt) {
     uint64 buf_ptr = (uint64)buf;
-    for(int i = 0; i < blk_cnt; i++) {
+    for(int i = 0; i <(int) blk_cnt; i++) {
         // printf("[blockdev_bread] blk_id: %d, blk_cnt: %d\n", blk_id + i, blk_cnt);
         struct buf *b = bread(0, blk_id + i);
         memmove((void*)buf_ptr, b->data, BSIZE);
@@ -194,7 +194,7 @@ static int blockdev_read(struct ext4_blockdev *bdev, void *buf, uint64_t blk_id,
 
 static int blockdev_write(struct ext4_blockdev *bdev, const void *buf, uint64_t blk_id, uint32_t blk_cnt) {
 	uint64 buf_ptr = (uint64)buf;
-	for(int i = 0; i < blk_cnt; i++) {
+	for(int i = 0; i <(int) blk_cnt; i++) {
 		// printf("[blockdev_bwrite] blk_id: %d, blk_cnt: %d\n", blk_id + i, blk_cnt);
 		struct buf *b = bget(0, blk_id + i);
 		memmove(b->data, (void*)buf_ptr, BSIZE);
@@ -206,9 +206,9 @@ static int blockdev_write(struct ext4_blockdev *bdev, const void *buf, uint64_t 
 }
 
 //For rootfs
-static int blockdev_read2(struct ext4_blockdev *bdev, void *buf, uint64_t blk_id, uint32_t blk_cnt) {
+ int blockdev_read2(struct ext4_blockdev *bdev, void *buf, uint64_t blk_id, uint32_t blk_cnt) {
     uint64 buf_ptr = (uint64)buf;
-    for(int i = 0; i < blk_cnt; i++) {
+    for(int i = 0; i < (int)blk_cnt; i++) {
         // printf("[blockdev_bread] blk_id: %d, blk_cnt: %d\n", blk_id + i, blk_cnt);
         struct buf *b = bread(1, blk_id + i);
         memmove((void*)buf_ptr, b->data, BSIZE);
@@ -218,9 +218,9 @@ static int blockdev_read2(struct ext4_blockdev *bdev, void *buf, uint64_t blk_id
     return EOK;
 }
 
-static int blockdev_write2(struct ext4_blockdev *bdev, const void *buf, uint64_t blk_id, uint32_t blk_cnt) {
+ int blockdev_write2(struct ext4_blockdev *bdev, const void *buf, uint64_t blk_id, uint32_t blk_cnt) {
     uint64 buf_ptr = (uint64)buf;
-    for(int i = 0; i < blk_cnt; i++) {
+    for(int i = 0; i < (int)blk_cnt; i++) {
         // printf("[blockdev_bwrite] blk_id: %d, blk_cnt: %d\n", blk_id + i, blk_cnt);
         struct buf *b = bget(1, blk_id + i);
         memmove(b->data, (void*)buf_ptr, BSIZE);

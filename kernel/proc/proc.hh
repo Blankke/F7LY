@@ -44,6 +44,12 @@ namespace proc
         int _shared_ref_cnt;
         bool _fl_cloexec[max_open_files]; // 记录每个文件描述符的 close-on-exec 标志
     };
+    struct ofile2
+    {
+        file *_ofile_ptr[max_open_files]; // 进程打开的文件列表 (文件描述符 -> 文件结构)
+        int _shared_ref_cnt;
+        bool _fl_cloexec[max_open_files]; // 记录每个文件描述符的 close-on-exec 标志
+    };
     struct sighand_struct
     {
         proc::ipc::signal::sigaction *actions[proc::ipc::signal::SIGRTMAX + 1];
@@ -55,6 +61,13 @@ namespace proc
         ulong _sec_size = 0;
         const char *_debug_name = nullptr;
     };
+    struct rlimit
+  {
+    /* The current (soft) limit.  */
+    rlim_t rlim_cur;
+    /* The hard limit.  */
+    rlim_t rlim_max;
+  };
     constexpr int max_program_section_num = 16;
     constexpr int max_vma_num = 10;
     class Pcb
@@ -71,6 +84,8 @@ namespace proc
         ///@brief 这里是新增的，后面的老的记得删掉
         /********************************************************************************* */
         file_vnode cwd;    
+        ofile2 *_ofile2;  // Open files
+            struct rlimit ofn;          ///< 打开文件数量限制
         /********************************************************************************* */
         fs::dentry *_cwd; // current working directory
         eastl::string _cwd_name;

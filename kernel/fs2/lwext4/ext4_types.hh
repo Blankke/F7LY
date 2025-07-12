@@ -872,7 +872,7 @@ uint32_t ext4_dmask_get(void);
 /**@brief   Debug printf.*/
 #define ext4_dbg(m, ...)                                                                                               \
     do {                                                                                                               \
-        if (ext4_dmask_get() & m) {                                                                                    \
+        if (ext4_dmask_get() & (m)) {                                                                                  \
             printf("%s", ext4_dmask_id2str(m));                                                                        \
             printf(__VA_ARGS__);                                                                                       \
         }                                                                                                              \

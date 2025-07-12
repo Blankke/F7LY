@@ -15,6 +15,6 @@ int vfs_ext4_blockdev_destroy(struct vfs_ext4_blockdev *bdev);
 struct vfs_ext4_blockdev *vfs_ext4_blockdev_from_bd(struct ext4_blockdev *bd);
 
 //For rootfs
-static int blockdev_write2(struct ext4_blockdev *bdev, const void *buf, uint64_t blk_id, uint32_t blk_cnt);
-static int blockdev_read2(struct ext4_blockdev *bdev, void *buf, uint64_t blk_id, uint32_t blk_cnt);
+[[maybe_unused]]  int blockdev_write2(struct ext4_blockdev *bdev, const void *buf, uint64_t blk_id, uint32_t blk_cnt);
+[[maybe_unused]]  int blockdev_read2(struct ext4_blockdev *bdev, void *buf, uint64_t blk_id, uint32_t blk_cnt);
 struct vfs_ext4_blockdev *vfs_ext4_blockdev_create2(int dev);

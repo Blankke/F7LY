@@ -29,13 +29,14 @@
 #include "fs/vfs/inode.hh"
 #include "mem/userspace_stream.hh"
 #include "fs/dev/acpi_controller.hh"
+#include "fs2/drivers/riscv/virtio2.hh"
+#include "fs2/vfs/fs.hh"
+#include "fs2/buf.hh"
+#include "fs2/vfs/vfs_ext4_ext.hh"
 // 注意华科的main函数可能有问题, 注意多核初始化
 void main()
 {
     // riscv::r_mstatus();
-
-    uint64 x;
-    asm volatile("csrr %0, sstatus" : "=r"(x));
 
     k_printer.init(); // 这里也初始化了console和uart
 
@@ -75,6 +76,19 @@ void main()
     syscall::k_syscall_handler.init(); // 初始化系统调用处理器
 
     proc::k_pm.user_init(); // 初始化用户进程
+
+    /*********************8888 */
+    // virtio_disk_init2(); // 初始化 rootfs的块设备
+    virtio_disk_init();  // emulated hard disk ps:如果使用SDCard需要修改
+    init_fs_table();     // fs_table init
+    binit();             // buffer cache
+    fileinit();          // file table
+    inodeinit();         // inode table
+
+    vfs_ext4_init(); // 初始化lwext4
+
+    /************************* */
+
     printfMagenta("user init\n");
 
     printfMagenta("\n"

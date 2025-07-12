@@ -37,7 +37,7 @@ struct file_vnode {
 
 
 struct file {
-    enum { FD_NONE, FD_PIPE, FD_REG, FD_DEVICE, FD_SOCKET } f_type;
+    enum { FD_NONE, FD_PIPE, FD_REG, FD_DEVICE, FD_SOCKET , FD_BUSYBOX} f_type;
     uint8 f_mode; // 访问模式
     uint8 f_flags; //进程打开的时候的标志
     uint64 f_pos; //偏移量
@@ -77,6 +77,9 @@ void free_ext4_dir(struct ext4_dir *dir);
 void free_ext4_file(struct ext4_file *file);
 struct file_operations *get_fops();
 struct file*filealloc(void);
+int fdalloc(struct file *f);
+int fdalloc2(struct file *f,int begin);
+
 void file_set_exec_flags(struct file *f, int fd, int flag);
 int file_get_exec_flags(struct file *f, int fd);
 

@@ -1,5 +1,5 @@
 #include "types.hh" 
-
+#pragma once
 class string
 {
 public:

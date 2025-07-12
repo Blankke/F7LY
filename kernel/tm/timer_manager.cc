@@ -101,7 +101,7 @@ namespace tmm
 
 	/// @brief  将 timeval 转换为系统时钟的睡眠时间
 	/// @param tv  timeval 结构体，包含秒和微秒
-	/// @return 
+	/// @return
 	int TimerManager::sleep_from_tv(timeval tv)
 	{
 
@@ -153,7 +153,7 @@ namespace tmm
 
 		return 0;
 	}
- uint64 TimerManager::get_ticks() { return trap_mgr.ticks; };
+	uint64 TimerManager::get_ticks() { return trap_mgr.ticks; };
 	extern "C"
 	{
 

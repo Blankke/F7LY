@@ -3,6 +3,7 @@
 #include "syscall_defs.hh"
 #include "printer.hh"
 #include "fs/vfs/file/file.hh"
+#include "fs2/vfs/file.hh"
 namespace syscall
 {
     constexpr uint max_syscall_funcs_num = 2048;
@@ -23,7 +24,9 @@ namespace syscall
         SyscallHandler()
         {
         }
-
+        /***********记得改********************** */
+                         uint64 sys_openat2();
+     /************************************ */
     private:
         int _fetch_addr(uint64 addr, uint64 &out_data);
         int _fetch_str(uint64 addr, eastl::string&buf, uint64 max);
@@ -34,7 +37,7 @@ namespace syscall
         int _arg_addr(int arg_n, uint64 &out_addr);
         int _arg_str(int arg_n, eastl::string &buf, int max);
         int _arg_fd(int arg_n, int *out_fd, fs::file **out_f);
-
+        int  argfd(int n, int *pfd, struct file **pf);
     private: // ================ syscall functions ================
         uint64 sys_exec();
         uint64 sys_fork();

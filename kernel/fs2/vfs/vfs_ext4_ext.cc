@@ -29,15 +29,15 @@
 
 //TODO：测试成功后替换为信号量
 struct semaphore extlock;
-static void ext4_lock(void);
-static void ext4_unlock(void);
+[[maybe_unused]] static void ext4_lock(void);
+[[maybe_unused]] static void ext4_unlock(void);
 
-static struct ext4_lock ext4_lock_ops = {ext4_lock, ext4_unlock};
+[[maybe_unused]] static struct ext4_lock ext4_lock_ops = {ext4_lock, ext4_unlock};
 
-static uint vfs_ext4_filetype(uint filetype);
+[[maybe_unused]] static uint vfs_ext4_filetype(uint filetype);
 
 int vfs_ext4_init(void) {
-    sem_init(&extlock, 1, "ext4_sem");
+    sem_init(&extlock, 1, const_cast<char*>("ext4_sem"));
     ext4_device_unregister_all();
     ext4_init_mountpoints();
     return 0;
@@ -51,9 +51,22 @@ static void ext4_unlock() {
     sem_v(&extlock);
 }
 
+[[maybe_unused]] static uint vfs_ext4_filetype(uint filetype) {
+    switch (filetype) {
+        case T_DIR:
+            return EXT4_DE_DIR;
+        case T_FILE:
+            return EXT4_DE_REG_FILE;
+        case T_CHR:
+            return EXT4_DE_CHRDEV;
+        default:
+            return EXT4_DE_UNKNOWN;
+    }
+}
+
 int vfs_ext_mount(struct filesystem *fs, uint64_t rwflag, void *data) {
     int r = 0;
-    struct ext4_blockdev *bdev = NULL;
+    [[maybe_unused]] struct ext4_blockdev *bdev = NULL;
     struct vfs_ext4_blockdev *vbdev = vfs_ext4_blockdev_create(fs->dev);
 
     if (vbdev == NULL) {
@@ -87,7 +100,7 @@ out:
 //For rootfs
 int vfs_ext_mount2(struct filesystem *fs, uint64_t rwflag, void *data) {
     int r = 0;
-    struct ext4_blockdev *bdev = NULL;
+    [[maybe_unused]] struct ext4_blockdev *bdev = NULL;
     struct vfs_ext4_blockdev *vbdev = vfs_ext4_blockdev_create2(fs->dev);
 
     if (vbdev == NULL) {
@@ -200,7 +213,7 @@ int vfs_ext_read(struct file *f, int user_addr, const uint64 addr, int n) {
     int r = 0;
     if (user_addr) {
         char *buf = (char*)mem::k_pmm.kmalloc(n + 1);
-        uint64 mread = 0;
+        [[maybe_unused]] uint64 mread = 0;
         if (buf == NULL) {
             panic("vfs_ext_read: kalloc failed\n");
         }
@@ -239,7 +252,7 @@ int vfs_ext_readat(struct file *f, int user_addr, const uint64 addr, int n, int 
     }
     if (user_addr) {
         char *buf =(char*) mem::k_pmm.kmalloc(n + 1);
-        uint64 mread = 0;
+        [[maybe_unused]] uint64 mread = 0;
         if (buf == NULL) {
             panic("vfs_ext_read: kalloc failed\n");
         }
@@ -277,7 +290,7 @@ int vfs_ext_write(struct file *f, int user_addr, const uint64 addr, int n) {
     int r = 0;
     if (user_addr) {
         char *buf = (char*)mem::k_pmm.kmalloc(n + 1);
-        uint64 mwrite = 0;
+        [[maybe_unused]] uint64 mwrite = 0;
         if (buf == NULL) {
             panic("vfs_ext_read: kalloc failed\n");
         }
@@ -460,14 +473,14 @@ int vfs_ext_rm(const char *path) {
 int vfs_ext_stat(const char *path, struct kstat *st) {
     struct ext4_inode inode;
     uint32 ino = 0;
-    uint32 dev = 0;
+    [[maybe_unused]] uint32 dev = 0;
 
-    union {
+    [[maybe_unused]] union {
         ext4_dir dir;
         ext4_file file;
     } var;
 
-    char *statpath;
+    char statpath[MAXPATH];
     strcpy(statpath, path);
 
     if (strcmp(statpath, "/mnt/musl/basic") == 0) {
@@ -578,7 +591,7 @@ int vfs_ext_statx(struct file *f, struct statx *st) {
  */
 int vfs_ext_getdents(struct file *f, struct linux_dirent64 *dirp, int count) {
     int index = 0;
-    int prev_reclen = -1;
+    [[maybe_unused]] int prev_reclen = -1;
     struct linux_dirent64 *d;
     const ext4_direntry *rentry;
     int totlen = 0;
@@ -603,7 +616,7 @@ int vfs_ext_getdents(struct file *f, struct linux_dirent64 *dirp, int count) {
 
         int namelen = strlen((const char *)rentry->name);
         int reclen = sizeof d->d_ino + sizeof d->d_off + sizeof d->d_reclen + sizeof d->d_type + namelen + 1;
-        if (reclen < sizeof(struct linux_dirent64)) {
+        if (reclen < (int)sizeof(struct linux_dirent64)) {
             reclen = sizeof(struct linux_dirent64);
         }
         if (totlen + reclen >= count) {
@@ -655,7 +668,7 @@ int vfs_ext_mkdir(const char *path, uint64_t mode) {
  *判断这个路径是否是目录
  */
 int vfs_ext_is_dir(const char *path) {
-    proc::Pcb *p = proc::k_pm.get_cur_pcb();
+    [[maybe_unused]] proc::Pcb *p = proc::k_pm.get_cur_pcb();
     struct ext4_dir *dir = alloc_ext4_dir();
     int r = ext4_dir_open(dir, path);
     if (r != EOK) {
@@ -803,7 +816,7 @@ struct inode *vfs_ext_namei(const char *name) {
 
 //通过inode读取
 ssize_t vfs_ext_readi(struct inode *self, int user_addr, uint64 addr, uint off, uint n) {
-    struct ext4_inode *ext4_i =(struct ext4_inode *)(&(self->i_info));
+    [[maybe_unused]] struct ext4_inode *ext4_i =(struct ext4_inode *)(&(self->i_info));
     struct ext4_file file;
     int r;
     size_t bytesread = 0;

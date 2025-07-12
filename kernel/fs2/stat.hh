@@ -7,13 +7,13 @@
 #define T_BLK     5
 #define T_UNKNOWN 6
 
-struct stat {
-  int dev;     // File system's disk device
-  uint ino;    // Inode number
-  short type;  // Type of file
-  short nlink; // Number of links to file
-  uint64 size; // Size of file in bytes
-};
+// struct stat {
+//   int dev;     // File system's disk device
+//   uint ino;    // Inode number
+//   short type;  // Type of file
+//   short nlink; // Number of links to file
+//   uint64 size; // Size of file in bytes
+// };
 
 //文件状态
 struct kstat {
@@ -65,32 +65,32 @@ struct statx
   uint64 spare[14];
 };
 
-typedef struct {
-  int val[2];
-} __kernel_fsid_t;
-typedef __kernel_fsid_t fsid_t;
+// typedef struct {
+//   int val[2];
+// } __kernel_fsid_t;
+// typedef __kernel_fsid_t fsid_t;
 
-struct statfs {
-  uint64 f_type; /* type of file system (see below) */
-  uint64 f_bsize; /* optimal transfer block size */
-  uint64 f_blocks; /* total data blocks in file system */
-  uint64 f_bfree; /* free blocks in fs */
-  uint64 f_bavail; /* free blocks available to
-                          unprivileged user */
-  uint64 f_files; /* total file nodes in file system */
-  uint64 f_ffree; /* free file nodes in fs */
-  fsid_t f_fsid; /* file system ID */
-  uint64 f_namelen; /* maximum length of filenames */
-  uint64 f_frsize; /* fragment size (since Linux 2.6) */
-  uint64 f_flags; /* mount flags of filesystem (since Linux 2.6.36) */
-  uint64 f_spare[4]; /* padding for future expansion */
-};
+// struct statfs {
+//   uint64 f_type; /* type of file system (see below) */
+//   uint64 f_bsize; /* optimal transfer block size */
+//   uint64 f_blocks; /* total data blocks in file system */
+//   uint64 f_bfree; /* free blocks in fs */
+//   uint64 f_bavail; /* free blocks available to
+//                           unprivileged user */
+//   uint64 f_files; /* total file nodes in file system */
+//   uint64 f_ffree; /* free file nodes in fs */
+//   fsid_t f_fsid; /* file system ID */
+//   uint64 f_namelen; /* maximum length of filenames */
+//   uint64 f_frsize; /* fragment size (since Linux 2.6) */
+//   uint64 f_flags; /* mount flags of filesystem (since Linux 2.6.36) */
+//   uint64 f_spare[4]; /* padding for future expansion */
+// };
 
 //For writev readv
-struct iovec {
-  void *iov_base;
-  int iov_len;
-};
+// struct iovec {
+//   void *iov_base;
+//   int iov_len;
+// };
 
 #define UTIME_NOW ((1l << 30) - 1l)
 #define UTIME_OMIT ((1l << 30) - 2l)

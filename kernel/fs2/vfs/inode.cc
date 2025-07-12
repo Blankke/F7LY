@@ -36,10 +36,11 @@ struct inode *get_inode() {
     }
     return &itable.inode[i];
 }
-struct inode *free_inode(struct inode *inode) {
+void free_inode(struct inode *inode) {
     itable.lock.acquire();
     inode->i_valid = 0;
     itable.lock.release();
+
 }
 
 
