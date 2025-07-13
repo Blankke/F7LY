@@ -29,8 +29,9 @@ extern "C"
         // int fd = openat(-100, "/dev/null", 0);
         int fd = openat(-100, "/glibc/basic_testcode.sh", 0);
         printf("initcode-rv: openat /glibc/basic_testcode.sh fd=%d\n", fd);
-        char buf[100];
-        read(fd, buf, 100);
+        char buf[1000];
+        read(fd, buf, 1000);
+        printf("initcode-rv: read fd=%d, buf=%s\n", fd, buf);
         shutdown();
         return 0;
     }

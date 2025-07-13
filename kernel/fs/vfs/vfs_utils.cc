@@ -100,10 +100,10 @@ int vfs_path2filetype(eastl::string &absolute_path)
             case EXT4_INODE_MODE_SOCKET:
                 return fs::FileTypes::FT_DEVICE;
             default:
-                panic("一直游到海水变蓝");
+                panic("一直游到海水变蓝.");
             }
         }
     }
-    panic("今天是个好日子");
+    panic("今天是个好日子.");
     return -1;
 }

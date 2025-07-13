@@ -1,11 +1,11 @@
 #include "fs/vfs/file/normal_file.hh"
-
+#include "fs/lwext4/ext4_errno.hh"
 #include "mem/userspace_stream.hh"
 namespace fs
 {
 	long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 	{
-		long ret;
+		ulong ret;
 		if (_attrs.u_read != 1)
 		{
 			printfRed("normal_file:: not allowed to read! ");
@@ -23,8 +23,12 @@ namespace fs
 		// ret = node->nodeRead(buf, off, len);
 		// if (ret >= 0 && upgrade)
 		// 	_file_ptr += ret;
-		panic("normal_file::read: not implemented yet");
-		ret = 0;
+		int status = ext4_fread(&lwext4_file_struct, (char *)buf, len, &ret);
+        if (status != EOK)
+            return 0;
+		///@todo 未判断是否用户地址，华科里面传的参数不一样，还不知道upgrade怎么用
+		// panic("normal_file::read: not implemented yet");
+		// ret = 0;
 		return ret;
 	}
 
@@ -101,13 +105,13 @@ namespace fs
 			break;
 		case SEEK_CUR:
 			new_off = _file_ptr + offset;
-			if (new_off < 0 )
+			if (new_off < 0)
 				return -EINVAL;
 			_file_ptr = new_off;
 			break;
 		case SEEK_END:
 			new_off = this->_stat.size + offset;
-			if (new_off < 0 )
+			if (new_off < 0)
 				return -EINVAL;
 			_file_ptr = new_off;
 			break;
