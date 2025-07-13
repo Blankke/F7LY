@@ -97,7 +97,7 @@ namespace mem
 
     void *PhysicalMemoryManager::kmalloc(size_t size)
     {
-        printfCyan("kmalloc: size = %u\n", size);
+        // printfCyan("kmalloc: size = %u\n", size);
         if(size >= PGSIZE)
         {
             int x = _buddy->Alloc(size_to_page_num(size));

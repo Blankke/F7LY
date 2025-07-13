@@ -729,7 +729,7 @@ static int __ext4_fs_get_inode_ref(struct ext4_fs *fs, uint32_t index, struct ex
     index -= 1;
     uint32_t block_group = index / inodes_per_group;
     uint32_t offset_in_group = index % inodes_per_group;
-    printfYellow("ext4_fs_get_inode_ref: index=%\n");
+
     /* Load block group, where i-node is located */
     struct ext4_block_group_ref bg_ref;
     int rc = ext4_fs_get_block_group_ref(fs, block_group, &bg_ref);
@@ -737,7 +737,7 @@ static int __ext4_fs_get_inode_ref(struct ext4_fs *fs, uint32_t index, struct ex
     {
         return rc;
     }
-    printfYellow("ext4\n");
+
     /* Load block address, where i-node table is located */
     ext4_fsblk_t inode_table_start = ext4_bg_get_inode_table_first_block(bg_ref.block_group, &fs->sb);
 

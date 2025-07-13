@@ -1953,7 +1953,7 @@ int ext4_extent_get_blocks(struct ext4_inode_ref *inode_ref, ext4_lblk_t iblock,
 
     /* find extent for this block */
     err = ext4_find_extent(inode_ref, iblock, &path, 0);
-    printfRed("[DEBUG]    path: %p\n", path);
+    // printfRed("[DEBUG]    path: %p\n", path);
     if (err != EOK)
     {
         path = NULL;
