@@ -452,8 +452,10 @@ namespace mem
                           riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_writable_m | riscv::PteEnum::pte_user_m);
             }
             pa = reinterpret_cast<uint64>(pte.pa());
-            if (pa == 0)
+            if (pa == 0){
+                printfRed("[copy_out] pa == 0! walk failed for va: %p\n", va);
                 return -1;
+            }
             n = PGSIZE - (va - a);
             if (n > len)
                 n = len;
