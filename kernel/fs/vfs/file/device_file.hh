@@ -15,8 +15,10 @@ namespace fs
 	{
 	private:
 		int off = 0;
-		dev::StreamDevice * _dev = nullptr;
-		dentry * _dentry = nullptr;
+		// dev::StreamDevice * _dev = nullptr;
+		// dentry * _dentry = nullptr;
+		eastl::string path_name;
+		uint _dev_num;
 
 	public:
 		device_file() = default;
@@ -24,11 +26,13 @@ namespace fs
 		/// @param attrs 文件属性，用于初始化基类 file。
 		/// @param dev 设备号（当前参数已废弃，实际设备号应从 node 中获取）。
 		/// @param den 指向目录项（dentry）的指针，用于标识该设备文件在文件系统中的位置。
-		device_file( FileAttrs attrs, uint dev, dentry *den ) : file( attrs), _dentry( den ) { dup(); };  // 这里 device 的 dev已经没有用了，应该去node里面找
+		// device_file( FileAttrs attrs, uint dev, dentry *den ) : file( attrs), _dentry( den ) { dup(); };  // 这里 device 的 dev已经没有用了，应该去node里面找
 		/// @brief 设备文件构造函数，初始化设备文件对象并增加引用计数。
 		/// @param dev 设备编号，用于标识具体的设备。
 		/// @param den 指向目录项（dentry）的指针，表示该设备文件在文件系统中的位置。
-		device_file( uint dev, dentry *den ) : device_file( FileAttrs( FileTypes::FT_DEVICE, 0777 ), dev, den ) { dup();};
+		// device_file( uint dev, dentry *den ) : device_file( FileAttrs( FileTypes::FT_DEVICE, 0777 ), dev, den ) { dup();};
+		device_file(FileAttrs attrs, eastl::string path) : file(attrs), path_name(path) { dup(); };
+		device_file(FileAttrs attrs, eastl::string path, uint dev_num) : file(attrs), path_name(path), _dev_num(dev_num) { dup(); };
 		~device_file() = default;
 
 		/// @brief 从设备文件中读取数据到指定缓冲区。

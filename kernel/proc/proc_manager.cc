@@ -256,8 +256,11 @@ namespace proc
             filesystem_init();
             // filesystem2_init(); // 这个滚蛋
             fs::device_file *f_in = new fs::device_file();
-            fs::device_file *f_out = new fs::device_file();
             fs::device_file *f_err = new fs::device_file();
+            eastl::string pathout("/dev/stdout");
+            fs::FileAttrs fAttrsout = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0222); // only write
+            fs::device_file *f_out =
+                new fs::device_file(fAttrsout, pathout, 1);
             proc->_ofile->_ofile_ptr[0] = f_in;
             proc->_ofile->_ofile_ptr[0]->refcnt++;
             proc->_ofile->_ofile_ptr[1] = f_out;

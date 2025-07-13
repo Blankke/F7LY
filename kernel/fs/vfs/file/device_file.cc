@@ -41,30 +41,30 @@ namespace fs
 
 	long device_file::write( uint64 buf, size_t len, long off, bool upgrade )
 	{
-		panic("stdin 的 write 要转发到uart上。今天不想修了。7.13。");
+		// panic("stdin 的 write 要转发到uart上。今天不想修了。7.13。");
 		int ret;
 
-		if( _attrs.u_write != 1 )
+		dev::StreamDevice *sdev = (dev::StreamDevice *)dev::k_devm.get_device(_dev_num);
+		if (sdev == nullptr)
 		{
-			printfRed( "device_file:: not allowed to write! " );
+			printfRed("file write: null device for device number %d", _dev_num);
 			return -1;
 		}
 
-		// Inode 	*node = _dentry->getNode();
-		
-		// if( node == nullptr )
-		// {
-		// 	printfRed( "device_file:: null inode for dentry %s", _dentry->rName().c_str() );
-		// 	return -1;
-		// }
-		panic("device_file::write: not implemented yet");
-		ret = 0;
+		if (sdev->type() != dev::dev_char)
+		{
+			printfRed("file write: device %d is not a char-dev", _dev_num);
+			return -1;
+		}
 
+		if (!sdev->support_stream())
+		{
+			printfRed("file write: device %d is not a stream-dev", _dev_num);
+			return -1;
+		}
 
+		ret = sdev->write((void*)buf, len);
 
-
-		// ret = node->nodeWrite( buf, off, len );
-		//ret = _dev->write( ( void * ) buf, len );
 		return ret;
 	}
 
