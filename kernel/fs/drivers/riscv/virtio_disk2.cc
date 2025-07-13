@@ -346,7 +346,8 @@ virtio_disk_rw(struct buf *b, int write)
 
   // buf0 is on a kernel stack, which is not direct mapped,
   // thus the call to kvmpa().
-  disk.desc[idx[0]].addr = (uint64)mem::k_pagetable.kwalkaddr((uint64) &buf0).get_data();
+  // disk.desc[idx[0]].addr = (uint64)mem::k_pagetable.kwalkaddr((uint64) &buf0).get_data();
+  disk.desc[idx[0]].addr = (uint64) mem::k_pagetable.kwalk_addr((uint64)&buf0);
   // disk.desc[idx[0]].addr = (uint64) &buf0;
   disk.desc[idx[0]].len = sizeof(buf0);
   disk.desc[idx[0]].flags = VRING_DESC_F_NEXT;
@@ -354,10 +355,7 @@ virtio_disk_rw(struct buf *b, int write)
 
   disk.desc[idx[1]].addr = (uint64)b->data;
   disk.desc[idx[1]].len = BSIZE;
-  if(write)
-    disk.desc[idx[1]].flags = 0; // device reads b->data
-  else
-    disk.desc[idx[1]].flags = VRING_DESC_F_WRITE; // device writes b->data
+  disk.desc[idx[1]].flags = write ? 0 : VRING_DESC_F_WRITE;
   disk.desc[idx[1]].flags |= VRING_DESC_F_NEXT;
   disk.desc[idx[1]].next = idx[2];
 
@@ -389,6 +387,11 @@ virtio_disk_rw(struct buf *b, int write)
   disk.info[idx[0]].b = 0;
   free_chain(idx[0]);
 
+  printf("b->data: %p, b->blockno: %d\n", b->data, b->blockno);
+  for (int i = 0; i < BSIZE; ++i) {
+    printfMagenta("%02x ", ((unsigned char*)b->data)[i]);
+    if ((i + 1) % 16 == 0) printf("\n");
+  }
   disk.vdisk_lock.release();
   // printf("[virtio_disk_rw] done, cpuid: %d\n", cpuid());
 }
