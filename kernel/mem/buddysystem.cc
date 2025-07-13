@@ -205,7 +205,7 @@ namespace mem
                 Combine(index);
                 return;
             case NODE_UNUSED:
-                panic("[BuddySystem] Freeing invalid page\n");
+                // panic("[BuddySystem] Freeing invalid page\n");
                 return;
             default:
                 length /= 2;

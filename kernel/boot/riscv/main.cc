@@ -53,9 +53,10 @@ void main()
     proc::k_pm.init("next pid", "next tid", "wait lock");
 
     mem::k_pmm.init();
+
     mem::k_vmm.init("virtual_memory_manager");
     mem::k_hmm.init("heap_memory_manager", HEAP_START);
-
+    mem::SlabAllocator::init(); // 初始化 SlabAllocator
     if (dev::k_devm.register_stdin(static_cast<dev::VirtualDevice *>(&dev::k_stdin)) < 0)
         while (1)
             ;
@@ -78,6 +79,7 @@ void main()
     proc::k_pm.user_init(); // 初始化用户进程
 
     /*********************8888 */
+
     // virtio_disk_init2(); // 初始化 rootfs的块设备
     virtio_disk_init();  // emulated hard disk ps:如果使用SDCard需要修改
     init_fs_table();     // fs_table init

@@ -14,7 +14,7 @@ private:
         Node() : next(nullptr), prev(nullptr) {}
         explicit Node(const T& value) : next(nullptr), prev(nullptr), data(value) {}
     };
-
+public:
     Node* head;
     size_t size;
 
