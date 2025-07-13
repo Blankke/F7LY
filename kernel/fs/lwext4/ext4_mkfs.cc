@@ -186,9 +186,9 @@ static int create_fs_aux_info(struct fs_aux_info *aux_info, struct ext4_mkfs_inf
 
 static void release_fs_aux_info(struct fs_aux_info *aux_info) {
     if (aux_info->sb)
-        ext4_free(aux_info->sb);
+        ext4_free(aux_info->sb, sizeof(struct ext4_sblock));
     if (aux_info->bg_desc_blk)
-        ext4_free(aux_info->bg_desc_blk);
+        ext4_free(aux_info->bg_desc_blk, aux_info->blocks_per_ind *sizeof(uint32_t));
 }
 
 
@@ -429,7 +429,7 @@ int ext4_mkfs_read_info(struct ext4_blockdev *bd, struct ext4_mkfs_info *info) {
 
 Finish:
     if (sb)
-        ext4_free(sb);
+        ext4_free(sb, EXT4_SUPERBLOCK_SIZE);
     ext4_block_fini(bd);
     return r;
 }

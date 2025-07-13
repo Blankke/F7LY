@@ -136,7 +136,7 @@ RB_GENERATE(jbd_block_tree_global, jbd_block_rec, block_rec_node, jbd_block_rec_
 RB_GENERATE(jbd_revoke_tree_global, jbd_revoke_rec, revoke_node, jbd_revoke_rec_cmp)
 
 #define jbd_alloc_revoke_entry() ext4_calloc(1, sizeof(struct revoke_entry))
-#define jbd_free_revoke_entry(addr) ext4_free(addr)
+#define jbd_free_revoke_entry(addr,size) ext4_free(addr,size)
 
 static int jbd_has_csum(struct jbd_sb *jbd_sb) {
     if (JBD_HAS_INCOMPAT_FEATURE(jbd_sb, JBD_FEATURE_INCOMPAT_CSUM_V2))
@@ -839,7 +839,7 @@ static void jbd_destroy_revoke_tree(struct recover_info *info) {
         struct revoke_entry *revoke_entry = RB_MIN(jbd_revoke_tree_recover, &info->revoke_root);
         ext4_assert(revoke_entry);
         RB_REMOVE(jbd_revoke_tree_recover, &info->revoke_root, revoke_entry);
-        jbd_free_revoke_entry(revoke_entry);
+        jbd_free_revoke_entry(revoke_entry,sizeof(struct revoke_entry));
     }
 }
 
@@ -1151,7 +1151,7 @@ static void jbd_journal_flush_trans(struct jbd_trans *trans) {
             ext4_block_set(fs->bdev, &block);
     }
 
-    ext4_free(tmp_data);
+    ext4_free(tmp_data, sizeof(journal->block_size));
 }
 
 static void jbd_journal_skip_pure_revoke(struct jbd_journal *journal, struct jbd_trans *trans) {
@@ -1333,7 +1333,7 @@ static inline void jbd_trans_remove_block_rec(struct jbd_journal *journal, struc
     if (block_rec->trans == trans) {
         LIST_REMOVE(block_rec, tbrec_node);
         RB_REMOVE(jbd_block_tree_global, &journal->block_rec_root, block_rec);
-        ext4_free(block_rec);
+        ext4_free(block_rec, sizeof(struct jbd_block_rec));
     }
 }
 
@@ -1356,7 +1356,7 @@ int jbd_trans_set_block_dirty(struct jbd_trans *trans, struct ext4_block *block)
         return ENOMEM;
 
     if ((block_rec = jbd_trans_insert_block_rec(trans, block->lb_id)) == NULL) {
-        ext4_free(jbd_buf);
+        ext4_free(jbd_buf,sizeof(struct jbd_buf));
         return ENOMEM;
     }
 
@@ -1379,7 +1379,7 @@ int jbd_trans_set_block_dirty(struct jbd_trans *trans, struct ext4_block *block)
     rec = RB_FIND(jbd_revoke_tree_global, &trans->revoke_root, &tmp_rec);
     if (rec) {
         RB_REMOVE(jbd_revoke_tree_global, &trans->revoke_root, rec);
-        ext4_free(rec);
+        ext4_free(rec,sizeof(struct jbd_revoke_rec));
     }
 
     return EOK;
@@ -1449,17 +1449,17 @@ void jbd_journal_free_trans(struct jbd_journal *journal, struct jbd_trans *trans
         TAILQ_REMOVE(&jbd_buf->block_rec->dirty_buf_queue, jbd_buf, dirty_buf_node);
         jbd_trans_finish_callback(journal, trans, block_rec, abort, false);
         TAILQ_REMOVE(&trans->buf_queue, jbd_buf, buf_node);
-        ext4_free(jbd_buf);
+        ext4_free(jbd_buf, sizeof(struct jbd_buf));
     }
     RB_FOREACH_SAFE(rec, jbd_revoke_tree_global, &trans->revoke_root, tmp2) {
         RB_REMOVE(jbd_revoke_tree_global, &trans->revoke_root, rec);
-        ext4_free(rec);
+        ext4_free(rec, sizeof(struct jbd_revoke_rec));
     }
     LIST_FOREACH_SAFE(block_rec, &trans->tbrec_list, tbrec_node, tmp3) {
         jbd_trans_remove_block_rec(journal, block_rec, trans);
     }
 
-    ext4_free(trans);
+    ext4_free(trans, sizeof(struct jbd_trans));
 }
 
 /**@brief  Write commit block for a transaction
@@ -1531,7 +1531,7 @@ static int jbd_journal_prepare(struct jbd_journal *journal, struct jbd_trans *tr
 
         ext4_block_set(fs->bdev, &jbd_buf->block);
         TAILQ_REMOVE(&trans->buf_queue, jbd_buf, buf_node);
-        ext4_free(jbd_buf);
+        ext4_free(jbd_buf, sizeof(struct jbd_buf));
     }
 
     TAILQ_FOREACH_SAFE(jbd_buf, &trans->buf_queue, buf_node, tmp) {
@@ -1554,7 +1554,7 @@ static int jbd_journal_prepare(struct jbd_journal *journal, struct jbd_trans *tr
 
             ext4_block_set(fs->bdev, &jbd_buf->block);
             TAILQ_REMOVE(&trans->buf_queue, jbd_buf, buf_node);
-            ext4_free(jbd_buf);
+            ext4_free(jbd_buf, sizeof(struct jbd_buf));
             continue;
         }
         checksum = jbd_block_csum(journal->jbd_fs, jbd_buf->block.data, checksum, trans->trans_id);
@@ -1763,7 +1763,7 @@ static void jbd_trans_end_write(struct ext4_bcache *bc __unused, struct ext4_buf
         buf->end_write_arg = NULL;
     }
 
-    ext4_free(jbd_buf);
+    ext4_free(jbd_buf, sizeof(struct jbd_buf));
 
     trans->written_cnt++;
     if (trans->written_cnt == trans->data_cnt) {

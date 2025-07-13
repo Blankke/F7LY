@@ -525,13 +525,13 @@ __unused static int __ext4_recover(const char *mount_point) {
 
         r = jbd_get_fs(&mp->fs, jbd_fs);
         if (r != EOK) {
-            ext4_free(jbd_fs);
+            ext4_free(jbd_fs, sizeof(struct jbd_fs));
             goto Finish;
         }
 
         r = jbd_recover(jbd_fs);
         jbd_put_fs(jbd_fs);
-        ext4_free(jbd_fs);
+        ext4_free(jbd_fs, sizeof(struct jbd_fs));
     }
     if (r == EOK && !mp->fs.read_only) {
         uint32_t bgid;
@@ -2645,7 +2645,7 @@ int ext4_listxattr(const char *path, char *list, size_t size, size_t *ret_size) 
 Finish:
     EXT4_MP_UNLOCK(mp);
     if (xattr_list)
-        ext4_free(xattr_list);
+        ext4_free(xattr_list, sizeof(struct ext4_xattr_list_entry) * list_len);
 
     return r;
 }

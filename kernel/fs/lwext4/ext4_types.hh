@@ -757,7 +757,7 @@ struct jbd_sb {
 #define ext4_malloc(size) mem::k_pmm.kmalloc(size)
 #define ext4_calloc(n, size) mem::k_pmm.kcalloc(n, size)
 // #define ext4_realloc ext4_user_realloc
-#define ext4_free(ptr,size) mem::k_pmm.free_page(ptr,size)
+#define ext4_free(ptr,size) mem::k_pmm.free_page1(ptr,size)
 
 
 #endif /* EXT4_TYPES_H_ */
@@ -770,7 +770,7 @@ struct jbd_sb {
 /*        ext4_dbg(DEBUG_BALLOC,
                  DBG_WARN "Bitmap checksum failed."
                           "Group: %" PRIu32 "\n",
-                 bg_ref.index);*/
+                 bg_ref.index); */
 
 #if !CONFIG_HAVE_OWN_ASSERT
 #include <assert.h>

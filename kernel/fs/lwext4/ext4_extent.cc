@@ -809,7 +809,7 @@ static int ext4_find_extent(struct ext4_inode_ref *inode_ref, ext4_lblk_t block,
         ext4_ext_drop_refs(inode_ref, path, 0);
         if (depth > path[0].maxdepth)
         {
-            ext4_free(path,sizeof(struct ext4_extent_path) * (path[0].maxdepth + 1));
+            ext4_free(path,sizeof(struct ext4_extent_path));
             *orig_path = path = NULL;
         }
     }
@@ -874,7 +874,7 @@ static int ext4_find_extent(struct ext4_inode_ref *inode_ref, ext4_lblk_t block,
 
 err:
     ext4_ext_drop_refs(inode_ref, path, 0);
-    ext4_free(path, sizeof(struct ext4_extent_path) * (path[0].maxdepth + 1));
+    ext4_free(path, sizeof(struct ext4_extent_path));
     if (orig_path)
         *orig_path = NULL;
     return ret;
@@ -1442,7 +1442,7 @@ out:
         }
     }
     if (npath)
-        ext4_free(npath, sizeof(struct ext4_extent_path) * (depth + 1));
+        ext4_free(npath, sizeof(struct ext4_extent_path) );
 
     return ret;
 }
@@ -1771,7 +1771,7 @@ int ext4_extent_remove_space(struct ext4_inode_ref *inode_ref, ext4_lblk_t from,
 
 out:
     ext4_ext_drop_refs(inode_ref, path, 0);
-    ext4_free(path, sizeof(struct ext4_extent_path) * (depth + 1));
+    ext4_free(path, sizeof(struct ext4_extent_path) );
     path = NULL;
     return ret;
 }
@@ -2060,7 +2060,7 @@ out2:
     if (path)
     {
         ext4_ext_drop_refs(inode_ref, path, 0);
-        ext4_free(path, sizeof(struct ext4_extent_path) * (depth + 1));
+        ext4_free(path, sizeof(struct ext4_extent_path) );
     }
 
     return err;

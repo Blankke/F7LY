@@ -70,16 +70,23 @@ namespace mem
         return pa;
     }
 
-    void PhysicalMemoryManager::free_page(void *pa,uint64 size)
+    void PhysicalMemoryManager::free_page1(void *pa,uint64 size)
     {
         // printfCyan("释放物理页:  %p\n", pa);
-        if(size < PGSIZE)
-        {
+               auto addr = reinterpret_cast<uint64>(pa);
+        if(addr%PGSIZE != 0)
+       {
            SlabAllocator::dealloc(pa, size);
+           return;
         }
         _buddy->Free(pa2pgnm(pa));
     }
 
+    void PhysicalMemoryManager::free_page(void *pa)
+    {
+        // printfCyan("释放物理页:  %p\n", pa);
+        _buddy->Free(pa2pgnm(pa));
+    }
     void PhysicalMemoryManager::clear_page(void *pa)
     {
         uint64 *p = (uint64 *)pa;
