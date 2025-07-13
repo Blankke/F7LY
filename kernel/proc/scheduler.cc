@@ -79,7 +79,7 @@ namespace proc
                     //  uint64 pa = (uint64)PTE2PA(mem::k_pagetable.kwalkaddr(sp).get_data());
                     //  printf("sp: %p, kstack: %p,pa:%p\n", sp, p->_kstack,pa);
                     //  printfCyan("[sche]  start_schedule here,p->addr:%x \n",Cpu::get_cpu()->get_cur_proc());
-                    printfRed("[sche] -> proc gid: %d pid: %d tid: %d, name: %s\n", p->_gid, p->_pid, p->_tid, p->_name);
+                    // printfRed("[sche] -> proc gid: %d pid: %d tid: %d, name: %s\n", p->_gid, p->_pid, p->_tid, p->_name);
                     swtch(cur_context, &p->_context);
                     // printf( "return from %d, name: %s\n", p->_gid, p->_name );
                     bool flag = false;

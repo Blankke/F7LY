@@ -17,7 +17,7 @@ namespace proc
 	{
 		_lock.acquire();
 		while ( _locked )
-			panic( "sleep not implement" );
+			proc::k_pm.sleep(this, &_lock);
 		_locked = true;
 		_pid = k_pm.get_cur_pcb()->get_pid();
 		_lock.release();
@@ -28,7 +28,7 @@ namespace proc
 		_lock.acquire();
 		_locked = 0;
 		_pid = 0;
-		printfRed( "wake up not implement" );
+		proc::k_pm.wakeup(this);
 		_lock.release();
 	}
 

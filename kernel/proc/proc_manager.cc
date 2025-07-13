@@ -1446,8 +1446,17 @@ namespace proc
         char absolute_path[MAXPATH] = {0};
         get_absolute_path(path.c_str(), dirpath, absolute_path);
         fs::file *file = nullptr;
-        int fd = vfs_openat(eastl::string(absolute_path), file, flags);
-        printfCyan("[open] vfs_openat returned fd: %d\n", fd);
+        int status = vfs_openat(eastl::string(absolute_path), file, flags);
+        if(status < 0)
+        {
+            printfRed("[open] vfs_openat failed with status: %d\n", status);
+            return -1; // 打开失败
+        }
+        else if(status == 0)
+        {
+            printfGreen("[open] vfs_openat success, file: %p\n", file);
+            return alloc_fd(p, file);
+        }
 
 
 

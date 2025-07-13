@@ -6,6 +6,7 @@
 // #include "fs/stat.hh"
 #include "fs/vfs/file/kstat.hh"
 #include "proc/pipe.hh"
+#include "fs/lwext4/ext4.hh"
 #include <EASTL/vector.h>
 #include <EASTL/string.h>
 #include <asm-generic/errno-base.h>
@@ -114,9 +115,12 @@ namespace fs
 		Kstat _stat;
 		long _file_ptr = 0;				// file read header's offset correponding to the start of the file
 		eastl::string _path_name;	// file's path, used for readlink
+		struct ext4_file lwext4_file_struct;
+
 	public:
 		file() = default;
 		file( FileAttrs attrs ) : _attrs( attrs ), refcnt( 0 ), _stat( _attrs.filetype ) {}
+		file( FileAttrs attrs, eastl::string path ) : _attrs( attrs ), refcnt( 0 ), _stat( _attrs.filetype ), _path_name( path ) {}
 		virtual ~file() = default;
 		virtual void free_file() { refcnt--; if ( refcnt == 0 ) delete this; };
 		virtual long read( uint64 buf, size_t len, long off, bool upgrade_off ) = 0;
