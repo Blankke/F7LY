@@ -118,7 +118,7 @@ static struct ext4_buf *ext4_buf_alloc(struct ext4_bcache *bc, uint64_t lba) {
 
     buf = (struct ext4_buf *)ext4_calloc(1, sizeof(struct ext4_buf));
     if (!buf) {
-        ext4_free(data);
+        ext4_free(data, bc->itemsize);
         return NULL;
     }
 
@@ -129,8 +129,8 @@ static struct ext4_buf *ext4_buf_alloc(struct ext4_bcache *bc, uint64_t lba) {
 }
 
 static void ext4_buf_free(struct ext4_buf *buf) {
-    ext4_free(buf->data);
-    ext4_free(buf);
+    ext4_free(buf->data, buf->bc->itemsize);
+    ext4_free(buf, sizeof(struct ext4_buf));
 }
 
 static struct ext4_buf *ext4_buf_lookup(struct ext4_bcache *bc, uint64_t lba) {

@@ -41,10 +41,11 @@ namespace mem
     void *Slab::alloc()
     {
         void *obj = reinterpret_cast<void *>(first_obj);
-        printf("DEBUG: Allocating object at %p from slab starting at %p\n", obj, pa_start);
         first_obj = *reinterpret_cast<uint64 *>(obj);
         free_objs_count--;
         is_empty = (free_objs_count == 0);
+        
+        // printf("DEBUG: Allocating object at %p from slab starting at %p\n", obj, pa_start);
         return obj;
     }
 
@@ -109,33 +110,34 @@ namespace mem
 
     void *SlabCache::alloc()
     {
-        printf("DEBUG: partial_slabs_.empty() = %s\n", partial_slabs_.empty() ? "true" : "false");
+
 
         if (!partial_slabs_.empty())
         {
             auto &slab = partial_slabs_.front();
-            printf("DEBUG: Allocating from partial slabs.\n");
             void *obj = slab.alloc();
+
             if (slab.free_objs_count == 0)
             {
                 partial_slabs_.pop_front();
                 full_slabs_.push_front(slab);
             }
+
             return obj;
         }
-        printf("DEBUG: No partial slabs available, creating a new slab.\n");
+
         if (free_slabs_.empty())
         {
             Slab *new_slab = create_slab();
             free_slabs_.push_front(*new_slab);
             free_slabs_count_++;
         }
-
         Slab &slab = free_slabs_.front();
         void *obj = slab.alloc();
         free_slabs_.pop_front();
         partial_slabs_.push_front(slab);
-
+        
+        // printfYellow("DEBUG: Allocating from free slabs.\n");
         return obj;
     }
 
@@ -204,7 +206,7 @@ namespace mem
         int index = get_cache_index(size);
         if (index >= 0 && index < 5)
         {
-            printf("DEBUG: Allocating from cache %d\n", index);
+            // printf("DEBUG: Allocating from cache %d\n", index);
             return caches[index]->alloc();
         }
         return nullptr;

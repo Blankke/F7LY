@@ -21,7 +21,7 @@ namespace mem
         auto addr = reinterpret_cast<uint64>(pa);
         if (addr % PGSIZE != 0)
         {
-            panic("kfree!");
+            panic("pa2pgnm: address is not page-aligned");
         }
         return (addr - pa_start) / PGSIZE;
     }
@@ -70,9 +70,13 @@ namespace mem
         return pa;
     }
 
-    void PhysicalMemoryManager::free_page(void *pa)
+    void PhysicalMemoryManager::free_page(void *pa,uint64 size)
     {
         // printfCyan("释放物理页:  %p\n", pa);
+        if(size < PGSIZE)
+        {
+           SlabAllocator::dealloc(pa, size);
+        }
         _buddy->Free(pa2pgnm(pa));
     }
 

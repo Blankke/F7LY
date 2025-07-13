@@ -757,7 +757,7 @@ struct jbd_sb {
 #define ext4_malloc(size) mem::k_pmm.kmalloc(size)
 #define ext4_calloc(n, size) mem::k_pmm.kcalloc(n, size)
 // #define ext4_realloc ext4_user_realloc
-#define ext4_free(ptr) mem::k_pmm.free_page(ptr)
+#define ext4_free(ptr,size) mem::k_pmm.free_page(ptr,size)
 
 
 #endif /* EXT4_TYPES_H_ */

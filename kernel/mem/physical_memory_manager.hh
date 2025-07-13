@@ -11,7 +11,7 @@ namespace mem
     public:
         static void init();
         static void *alloc_page(); // 分配单个物理页
-        static void free_page(void *pa);
+        static void free_page(void *pa, uint64 size); // 释放单个物理页
         static void *kmalloc(size_t size); // 分配任意大小的内存块
         static void *kcalloc(uint n, size_t size);
         void clear_page(void *pa);

@@ -387,11 +387,11 @@ virtio_disk_rw(struct buf *b, int write)
   disk.info[idx[0]].b = 0;
   free_chain(idx[0]);
 
-  printf("b->data: %p, b->blockno: %d\n", b->data, b->blockno);
-  for (int i = 0; i < BSIZE; ++i) {
-    printfMagenta("%02x ", ((unsigned char*)b->data)[i]);
-    if ((i + 1) % 16 == 0) printf("\n");
-  }
+  // printf("b->data: %p, b->blockno: %d\n", b->data, b->blockno);
+  // for (int i = 0; i < BSIZE; ++i) {
+  //   printfMagenta("%02x ", ((unsigned char*)b->data)[i]);
+  //   if ((i + 1) % 16 == 0) printf("\n");
+  // }
   disk.vdisk_lock.release();
   // printf("[virtio_disk_rw] done, cpuid: %d\n", cpuid());
 }
