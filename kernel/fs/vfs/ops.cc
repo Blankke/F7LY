@@ -199,7 +199,7 @@ struct inode*
 namei(char *path)
 {
     char name[EXT4_PATH_LONG_MAX];
-    get_absolute_path(path, proc::k_pm.get_cur_pcb()->cwd.path, name);
+    get_absolute_path(path, proc::k_pm.get_cur_pcb()->_cwd_name.c_str(), name);
     // printf("%s %s\n", name, myproc()->cwd.path);
     return vfs_ext_namei(name);
 }

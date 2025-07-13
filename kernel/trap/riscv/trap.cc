@@ -22,7 +22,7 @@
 #include "virtual_memory_manager.hh"
 #include "timer_interface.hh"
 #include "timer_manager.hh"
-
+#include "fs/drivers/riscv/virtio2.hh"
 // #include "fuckyou.hh"
 // in kernelvec.S, calls kerneltrap().
 extern "C" void kernelvec();
@@ -85,7 +85,8 @@ int trap_manager::devintr()
     //!!写完磁盘后修改
     else if (irq == VIRTIO0_IRQ)
     {
-      riscv::qemu::disk_driver.handle_intr();
+      // riscv::qemu::disk_driver.handle_intr();
+      virtio_disk_intr();
     }
     else if (irq == VIRTIO1_IRQ)
     {

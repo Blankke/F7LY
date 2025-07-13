@@ -13,7 +13,6 @@
 #include "prlimit.hh"
 #include "futex.hh"
 #include "fs/vfs/file/file.hh"
-#include "fs/vfs/file.hh"
 #include "signal.hh"
 namespace fs
 {
@@ -41,12 +40,6 @@ namespace proc
     struct ofile
     {
         fs::file *_ofile_ptr[max_open_files]; // 进程打开的文件列表 (文件描述符 -> 文件结构)
-        int _shared_ref_cnt;
-        bool _fl_cloexec[max_open_files]; // 记录每个文件描述符的 close-on-exec 标志
-    };
-    struct ofile2
-    {
-        file *_ofile_ptr[max_open_files]; // 进程打开的文件列表 (文件描述符 -> 文件结构)
         int _shared_ref_cnt;
         bool _fl_cloexec[max_open_files]; // 记录每个文件描述符的 close-on-exec 标志
     };
@@ -83,9 +76,8 @@ namespace proc
         // 文件系统相关
         ///@brief 这里是新增的，后面的老的记得删掉
         /********************************************************************************* */
-        file_vnode cwd;    
-        ofile2 *_ofile2;  // Open files
-            struct rlimit ofn;          ///< 打开文件数量限制
+
+        struct rlimit ofn;          ///< 打开文件数量限制
         /********************************************************************************* */
         fs::dentry *_cwd; // current working directory
         eastl::string _cwd_name;

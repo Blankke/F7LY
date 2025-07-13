@@ -26,6 +26,8 @@
 #include "mem.hh"
 #include "fs/vfs/file/pipe_file.hh"
 #include "syscall_defs.hh"
+#include "fs/vfs/ops.hh"
+#include "fs/vfs/vfs_utils.hh"
 
 #include "fs/vfs/fs.hh"
 extern "C"
@@ -1430,103 +1432,24 @@ namespace proc
     /// @param dir_fd 指定相对路径的目录文件描述符（AT_FDCWD 表示当前工作目录）。
     /// @param path 要打开的路径
     /// @param flags 打开方式（如只读、只写、创建等）
-    /// @return
+    /// @return fd
     int ProcessManager::open(int dir_fd, eastl::string path, uint flags)
     {
-        panic("未实现");
-#ifdef FS_FIX_COMPLETELY
         printfCyan("[open] dir_fd: %d, path: %s, flags: %x\n", dir_fd, path.c_str(), flags);
-        // enum OpenFlags : uint
-        // {
-        // 	O_RDONLY	= 0x000U,
-        // 	O_WRONLY	= 0x001U,
-        // 	O_RDWR		= 0x002U,
-        // 	O_CREATE	= 0x040U,
-        // 	O_DIRECTORY = 0x020'0000U
-        // };
 
         Pcb *p = get_cur_pcb();
+        // fs::file *file = nullptr;
+
+        // struct filesystem *fs = get_fs_from_path(path.c_str());
+        const char *dirpath = (dir_fd == AT_FDCWD) ? p->_cwd_name.c_str() : p->_ofile->_ofile_ptr[dir_fd]->_path_name.c_str();
+        char absolute_path[MAXPATH] = {0};
+        get_absolute_path(path.c_str(), dirpath, absolute_path);
         fs::file *file = nullptr;
-        fs::dentry *dentry;
+        int fd = vfs_openat(eastl::string(absolute_path), file, flags);
+        printfCyan("[open] vfs_openat returned fd: %d\n", fd);
 
-        // 果不是工作目录，则获取对应的 file 指针
-        if (dir_fd != AT_FDCWD)
-        {
-            file = p->get_open_file(dir_fd);
-        }
 
-        fs::Path path_(path, file); // 创建路径对象（支持相对路径）
 
-        dentry = path_.pathSearch(); // 查找路径对应的 dentry（目录项）
-        // printfBlue("[open] path: %s, dentry: %p, flags: %x\n", path_.AbsolutePath().c_str(), dentry, flags);
-        if (path == "") // empty path
-            return -1;
-
-        if (path[0] == '.' && path[1] == '/')
-            path = path.substr(2); // 处理./xxxx的情况
-        // 如果 dentry 存在但处于“已删除但未关闭”状态
-        if (dentry != nullptr && fs::k_file_table.has_unlinked(path))
-        {
-            if (flags & O_CREAT)
-            {
-                fs::k_file_table.remove(path);
-            }
-            else
-            {
-                return -1;
-            }
-        }
-        // dentry 不存在但设置了 O_CREAT，尝试创建文件
-        if (dentry == nullptr && flags & O_CREAT)
-        {
-            // @todo: create file
-            // 查找父目录
-            fs::dentry *par_ = path_.pathSearch(true);
-            if (par_ == nullptr)
-                return -1;
-            fs::FileAttrs attrs;
-            if ((flags & __S_IFMT) == S_IFDIR)
-                attrs.filetype = fs::FileTypes::FT_DIRECT;
-            else
-                attrs.filetype = fs::FileTypes::FT_NORMAL;
-            attrs._value = 0777;                                                   // 默认权限
-            if ((dentry = par_->EntryCreate(path_.rFileName(), attrs)) == nullptr) // 创建文件
-            {
-                printf("Error creating new dentry %s failed\n", path_.rFileName());
-                return -1;
-            }
-        }
-        if (dentry == nullptr)
-            return -1; // file is not found
-                       // 获取设备信息和属性
-        int dev = dentry->getNode()->rDev();
-        fs::FileAttrs attrs = dentry->getNode()->rMode();
-        // 如果是设备文件，构造 device_file 对象并返回 fd
-        if (dev >= 0) // dentry is a device
-        {
-            fs::device_file *f = new fs::device_file(attrs, dev, dentry);
-            return alloc_fd(p, f);
-        } // else if( attrs.filetype == fs::FileTypes::FT_DIRECT)
-        // 	fs::directory *f = new fs::directory( attrs, dentry );
-        else // 否则为普通文件，创建 normal_file 对象
-        {
-            fs::normal_file *f = new fs::normal_file(attrs, dentry);
-            // log_info( "test normal file read" );
-            // {
-            // 	fs::file *ff = ( fs::file * ) f;
-            // 	char buf[ 8 ];
-            // 	ff->read( ( ulong ) buf, 8 );
-            // 	buf[ 8 ] = 0;
-            // 	printf( "%s\n", buf );
-            // }
-            if (flags & O_APPEND)
-                f->setAppend();
-            return alloc_fd(p, f);
-        } // because of open.c's fileattr defination is not clearly, so here we
-          // set flags = 7, which means O_RDWR | O_WRONLY | O_RDONLY
-
-        // return alloc_fd( p, f );
-        #endif
         return 0;
     }
 

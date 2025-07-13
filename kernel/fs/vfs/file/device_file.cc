@@ -42,6 +42,11 @@ namespace fs
 	long device_file::write( uint64 buf, size_t len, long off, bool upgrade )
 	{
 		// panic("stdin 的 write 要转发到uart上。今天不想修了。7.13。");
+		if (_attrs.u_write != 1)
+		{
+			printfRed("device_file:: not allowed to write! ");
+			return -1;
+		}
 		int ret;
 
 		dev::StreamDevice *sdev = (dev::StreamDevice *)dev::k_devm.get_device(_dev_num);

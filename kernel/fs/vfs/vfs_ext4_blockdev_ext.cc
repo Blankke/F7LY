@@ -58,9 +58,8 @@ static int vfs_ext4_blockdev_init(struct vfs_ext4_blockdev *vbdev, int dev) {
         bd = &vbdev->bd;
         bd->bdif = iface;
         bd->part_offset = 0;
-#if defined(QEMU)
-        bd->part_size = 50 * 1024  * 1024 * 1024;
-#endif
+
+        bd->part_size = (uint64)(512ull * 8ull * 1024ull * 1024ull );
         ph_bbuf = &vbdev->ph_bbuf[0];
 
         iface->lock = blockdev_lock;
@@ -70,9 +69,9 @@ static int vfs_ext4_blockdev_init(struct vfs_ext4_blockdev *vbdev, int dev) {
         iface->bwrite = blockdev_write;
         iface->close = blockdev_close;
 
-#if defined(QEMU)
+
         iface -> ph_bsize = BSIZE;
-#endif
+
         iface->ph_bbuf = ph_bbuf;
         iface->ph_bcnt = bd->part_size / (uint64) bd->bdif->ph_bsize;
 
@@ -95,9 +94,9 @@ static int vfs_ext4_blockdev_init2(struct vfs_ext4_blockdev *vbdev, int dev) {
         bd = &vbdev->bd;
         bd->bdif = iface;
         bd->part_offset = 0;
-#if defined(QEMU)
+
         bd->part_size = 768 * 1024 * 1024;
-#endif
+
         ph_bbuf = &vbdev->ph_bbuf[0];
 
         iface->lock = blockdev_lock;
@@ -107,9 +106,9 @@ static int vfs_ext4_blockdev_init2(struct vfs_ext4_blockdev *vbdev, int dev) {
         iface->bwrite = blockdev_write2;
         iface->close = blockdev_close;
 
-#if defined(QEMU)
+
         iface -> ph_bsize = BSIZE;
-#endif
+
         iface->ph_bbuf = ph_bbuf;
         iface->ph_bcnt = bd->part_size / (uint64) bd->bdif->ph_bsize;
 

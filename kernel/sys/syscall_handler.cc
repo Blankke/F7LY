@@ -357,6 +357,8 @@ namespace syscall
     }
     int SyscallHandler::argfd(int n, int *pfd, struct file **pf)
     {
+        panic("未实现该系统调用");
+        #ifdef FIX_FS_COMPLETELY
         int fd;
         struct file *f;
 
@@ -367,6 +369,7 @@ namespace syscall
             *pfd = fd;
         if (pf)
             *pf = f;
+            #endif
         return 0;
     }
 
@@ -790,6 +793,8 @@ namespace syscall
 
     uint64 SyscallHandler::sys_openat2()
     {
+        panic("未实现该系统调用");
+        #ifdef FIX_FS_COMPLETELY
         // int fd, const char *upath, int flags, uint16 mode
         int fd;
         uint64 upath;
@@ -868,6 +873,7 @@ namespace syscall
         }
         else
             panic("unsupport filesystem");
+            #endif
         return 0;
     };
     uint64 SyscallHandler::sys_write()

@@ -113,6 +113,7 @@ namespace fs
 		uint32 refcnt;
 		Kstat _stat;
 		long _file_ptr = 0;				// file read header's offset correponding to the start of the file
+		eastl::string _path_name;	// file's path, used for readlink
 	public:
 		file() = default;
 		file( FileAttrs attrs ) : _attrs( attrs ), refcnt( 0 ), _stat( _attrs.filetype ) {}
