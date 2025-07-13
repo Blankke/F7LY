@@ -15,6 +15,7 @@ int vfs_openat(eastl::string absolute_path, fs::file* &file, uint flags)
     {
         fs::FileAttrs attrs;
         attrs.filetype = fs::FileTypes::FT_NORMAL;
+        attrs._value = 0777;
         fs::normal_file *temp_file = new fs::normal_file(attrs, absolute_path);
         status = ext4_fopen2(&temp_file->lwext4_file_struct, absolute_path.c_str(), flags);
         if (status != EOK)

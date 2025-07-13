@@ -489,45 +489,43 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_read()
     {
-        // fs::file *f;
-        file *f;
+        fs::file *f;
         uint64 buf;
         int n;
         [[maybe_unused]] int fd = -1;
 
-        if (argfd(0, &fd, &f) < 0)
+        if (_arg_fd(0, &fd, &f) < 0)
             return -1;
         if (_arg_addr(1, buf) < 0)
             return -2;
         if (_arg_int(2, n) < 0)
             return -3;
 
-        return get_fops()->read(f, buf, n);
-        // if (f == nullptr)
-        //     return -4;
-        // if (n <= 0)
-        //     return -5;
-        // // printfCyan("[sys_read] Try read,f:%x,buf:%x", f, f);
-        // proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        // mem::PageTable *pt = p->get_pagetable();
+        if (f == nullptr)
+            return -4;
+        if (n <= 0)
+            return -5;
+        // printfCyan("[sys_read] Try read,f:%x,buf:%x", f, f);
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
 
-        // char *k_buf = new char[n + 1];
-        // int ret = f->read((uint64)k_buf, n, f->get_file_offset(), true);
-        // if (ret < 0)
-        //     return -6;
+        char *k_buf = new char[n + 1];
+        int ret = f->read((uint64)k_buf, n, f->get_file_offset(), true);
+        if (ret < 0)
+            return -6;
 
-        // static int string_length = 0;
-        // string_length += strlen(k_buf);
-        // // printf("[sys_read] read %d characters in total\n", string_length);
-        // // 添加调试打印，显示读取到的内容
-        // k_buf[ret] = '\0'; // 确保字符串以null结尾
-        // // printfCyan("[sys_read] fd=%d, read %d bytes: \"%s\"\n", fd, ret, k_buf);
+        static int string_length = 0;
+        string_length += strlen(k_buf);
+        // printf("[sys_read] read %d characters in total\n", string_length);
+        // 添加调试打印，显示读取到的内容
+        k_buf[ret] = '\0'; // 确保字符串以null结尾
+        // printfCyan("[sys_read] fd=%d, read %d bytes: \"%s\"\n", fd, ret, k_buf);
 
-        // if (mem::k_vmm.copy_out(*pt, buf, k_buf, ret) < 0)
-        //     return -7;
+        if (mem::k_vmm.copy_out(*pt, buf, k_buf, ret) < 0)
+            return -7;
 
-        // delete[] k_buf;
-        // return ret;
+        delete[] k_buf;
+        return ret;
     }
     uint64 SyscallHandler::sys_kill()
     {
