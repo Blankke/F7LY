@@ -194,11 +194,11 @@ namespace syscall
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
         uint64 sys_num = p->get_trapframe()->a7; // 获取系统调用号
 
-        if (!(sys_num == 64 && p->_trapframe->a0 == 1) && !(sys_num == 66 && p->_trapframe->a0 == 1))
+        if (!(sys_num == 64) && !(sys_num == 66))
         {
             // printf("---------- start ------------\n");
             // printfMagenta("[Pcb::get_open_file] pid: %d\n", p->_pid);
-            printfGreen("[invoke_syscaller]sys_num: %d sys_name: %s\n", sys_num, _syscall_name[sys_num]);
+            printfGreen("[invoke_syscaller]sys_num: %d sys_name: \t%s\n", sys_num, _syscall_name[sys_num]);
         }
 
         if (sys_num >= max_syscall_funcs_num || sys_num < 0 || _syscall_funcs[sys_num] == nullptr)
@@ -220,7 +220,8 @@ namespace syscall
             // 调用对应的系统调用函数
             uint64 ret = (this->*_syscall_funcs[sys_num])();
             // if (!(sys_num == 64 && p->_trapframe->a0 == 1) && !(sys_num == 66 && p->_trapframe->a0 == 1))
-            //     printfCyan("[SyscallHandler::invoke_syscaller]ret: %p\n", sys_num, ret);
+            if (!(sys_num == 64) && !(sys_num == 66))
+                printfCyan("[SyscallHandler::invoke_syscaller]syscall name: %s ret: %p\n", _syscall_name[sys_num], ret);
             p->_trapframe->a0 = ret; // 设置返回值
         }
         //     if (sys_num != 64 && sys_num != 66)
@@ -1010,7 +1011,7 @@ namespace syscall
         printfCyan("[SyscallHandler::sys_clone] flags: %p, stack: %p, ptid: %p, tls: %p, ctid: %p\n",
                    flags, (void *)stack, (void *)ptid, (void *)tls, (void *)ctid);
         clone_pid = proc::k_pm.clone(flags, stack, ptid, tls, ctid);
-        printfRed("[SyscallHandler::sys_clone] pid: [%d] tid: [%d] name: %s clone_pid: [%d]\n", proc::k_pm.get_cur_pcb()->_pid, proc::k_pm.get_cur_pcb()->_tid, proc::k_pm.get_cur_pcb()->_name, clone_pid);
+        // printfRed("[SyscallHandler::sys_clone] pid: [%d] tid: [%d] name: %s clone_pid: [%d]\n", proc::k_pm.get_cur_pcb()->_pid, proc::k_pm.get_cur_pcb()->_tid, proc::k_pm.get_cur_pcb()->_name, clone_pid);
         return clone_pid;
     }
     uint64 SyscallHandler::sys_umount2()
@@ -1431,9 +1432,7 @@ panic("未实现");
             printfRed("[SyscallHandler::sys_set_tid_address] Error fetching tidptr argument\n");
             return -1;
         }
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        p->_ctid = tidptr;
-        return p->get_tid();
+        return proc::k_pm.set_tid_address(tidptr); // 调用进程管理器的 set_tid_address 函数
     }
     uint64 SyscallHandler::sys_getuid()
     {

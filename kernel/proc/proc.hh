@@ -141,7 +141,6 @@ namespace proc
         void *_futex_addr; // Used for futex
         int _tid = 0;
         int *_set_child_tid = nullptr;
-        int *_clear_child_tid = nullptr;
         // 用于set_tid_address
         uint64 _ctid = 0; // CLONE_CHILD_SETTID 时设置的线程ID
 

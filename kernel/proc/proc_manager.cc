@@ -1259,7 +1259,7 @@ namespace proc
     void ProcessManager::exit(int state)
     {
         Pcb *p = get_cur_pcb();
-        printf("[exit] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
+        printf("[exit] proc %s pid %d tid %d exiting with state %d\n", p->_name, p->_pid, p->_tid, state);
         exit_proc(p, state);
     }
 
@@ -1267,6 +1267,7 @@ namespace proc
     /// @param status
     void ProcessManager::exit_group(int status)
     {
+        TODO("rm /temp")
         void *stk[num_process + 10]; // 这里不使用stl库是因为 exit
                                      // 后不会返回，无法调用析构函数，可能造成内存泄露
         int stk_ptr = 0;
@@ -1300,7 +1301,7 @@ namespace proc
                 p = p->_parent;
                 visit[p->_gid] = 1;
                 // 修改于6.6，检测防止数组越界
-                if (stk_ptr < (int)num_process + 10)
+                if (stk_ptr < (int)num_process)
                     stk[stk_ptr++] = (void *)p;
                 else
                     break; // 栈满，直接停止压栈
@@ -1475,10 +1476,6 @@ namespace proc
     int ProcessManager::fstat(int fd, fs::Kstat *buf)
     {
         eastl::string proc_name = proc::k_pm.get_cur_pcb()->_name;
-        if (proc_name.substr(0, 4) == "busy" || proc_name.substr(0, 4) == "iozo")
-        {
-            return 0;
-        }
         if (fd < 0 || fd >= (int)max_open_files)
             return -1;
 
@@ -1771,11 +1768,11 @@ namespace proc
         fd[1] = fd1;
         return 0;
     }
-    int ProcessManager::set_tid_address(int *tidptr)
+    int ProcessManager::set_tid_address(uint64 tidptr)
     {
         Pcb *p = get_cur_pcb();
-        p->_clear_child_tid = tidptr;
-        return p->_pid;
+        p->_ctid = tidptr;
+        return p->_tid;
     }
 
     int ProcessManager::set_robust_list(robust_list_head *head, size_t len)
@@ -1854,7 +1851,7 @@ namespace proc
         else
             ab_path = proc->_cwd_name + path; // 相对路径，添加当前工作目录前缀
 
-        printfRed("execve file : %s\n", ab_path.c_str());
+        printfCyan("execve file : %s\n", ab_path.c_str());
 
         // 解析路径并查找文件
         fs::Path path_resolver(ab_path);
@@ -2051,7 +2048,7 @@ namespace proc
 #endif
                 // printfRed("execve: loading segment %d, type: %d, startva: %p, endva: %p, memsz: %p, filesz: %p, flags: %d\n", i, ph.type, (void *)ph.vaddr, (void *)(ph.vaddr + ph.memsz), (void *)ph.memsz, (void *)ph.filesz, ph.flags);
 #ifdef RISCV
-                printf("[exec] map from %p to %p new_pt base %p\n", (void *)(new_sz), (void *)(ph.vaddr + ph.memsz), new_pt.get_base());
+                // printf("[exec] map from %p to %p new_pt base %p\n", (void *)(new_sz), (void *)(ph.vaddr + ph.memsz), new_pt.get_base());
                 if ((sz1 = mem::k_vmm.vmalloc(new_pt, new_sz, ph.vaddr + ph.memsz, seg_flag)) == 0)
                 {
                     printfRed("execve: uvmalloc\n");
@@ -2304,7 +2301,7 @@ namespace proc
             ADD_AUXV(AT_NULL, 0); // 结束标记
 
             // printf("index: %d\n", index);
-            printfRed("[execve] base: %p, phdr: %p\n", (void *)interp_base, (void *)phdr);
+            printfCyan("[execve] base: %p, phdr: %p\n", (void *)interp_base, (void *)phdr);
 
             // 将辅助向量复制到栈上
             sp -= sizeof(aux);
