@@ -2012,8 +2012,8 @@ panic("未实现");
     }
     uint64 SyscallHandler::sys_faccessat()
     {
-        panic("未实现");
-#ifdef FS_FIX_COMPLETELY
+        // panic("未实现");
+// #ifdef FS_FIX_COMPLETELY
         int dirfd, mode, flags;
         eastl::string path;
         if (_arg_int(0, dirfd) < 0 || _arg_int(2, mode) < 0 || _arg_int(3, flags) < 0)
@@ -2025,43 +2025,26 @@ panic("未实现");
             return -1;
         }
 
-        fs::dentry *pen;
-        fs::dentry *base_dentry = nullptr; // 保存原始的 dentry 用于路径解析
-        eastl::string pcb_path;
-        eastl::string dirpath;
-        if (dirfd == AT_FDCWD)
-        {
-            pen = proc::k_pm.get_cur_pcb()->_cwd;
-            base_dentry = pen; // 保存原始的工作目录 dentry
-            while (pen != nullptr)
-            {
-                pcb_path = pen->rName() + "/" + pcb_path;
-                pen = pen->getParent();
-            }
-            pcb_path = pcb_path.substr(1, pcb_path.size() - 1);
-        }
-        else
-        {
-            fs::file *ofile = proc::k_pm.get_cur_pcb()->get_open_file(dirfd);
-            if (ofile == nullptr || ofile->_attrs.filetype != fs::FileTypes::FT_NORMAL)
-            {
-                return -1; // 不是普通文件类型
-            }
-            pen = static_cast<fs::normal_file *>(ofile)->getDentry();
-            base_dentry = pen; // 保存原始的文件 dentry
-            while (pen != nullptr)
-            {
-                pcb_path = pen->rName() + "/" + pcb_path;
-                pen = pen->getParent();
-            }
-            pcb_path = pcb_path.substr(1, pcb_path.size() - 1);
-        }
-        dirpath = pcb_path;
+        // fs::dentry *pen;
+        // fs::dentry *base_dentry = nullptr; // 保存原始的 dentry 用于路径解析
+        // eastl::string pcb_path;
+        // eastl::string dirpath;
+        // char abs_path[EXT4_PATH_LONG_MAX];
+        // if (dirfd == AT_FDCWD)
+        // {
+        //     //获取CWD的绝对路径
+        //     panic("[SyscallHandler::sys_faccessat] AT_FDCWD is not supported yet");
+        // }
+        // else
+        // {
+        //     fs::file *ofile = proc::k_pm.get_cur_pcb()->get_open_file(dirfd);
+        //     if (ofile == nullptr || ofile->_attrs.filetype != fs::FileTypes::FT_NORMAL)
+        //     {
+        //         return -1; // 不是普通文件类型
+        //     }
+        //     get_absolute_path(path.c_str(), proc::k_pm.get_cur_pcb()->_cwd_name.c_str(), abs_path);
 
-        // 使用 fs::Path 来生成绝对路径
-        fs::Path path_resolver(dirpath, base_dentry);
-
-        eastl::string absolute_path = path_resolver.AbsolutePath();
+        // }
 
         [[maybe_unused]] int _flags = 0;
         // if( ( _mode & ( R_OK | X_OK )) && ( _mode & W_OK ) )
@@ -2077,12 +2060,12 @@ panic("未实现");
             _flags |= 2;
         if (mode & X_OK)
             _flags |= 1;
-        int fd = path_resolver.open(fs::FileAttrs(_flags), _flags);
+        int fd = proc::k_pm.open(dirfd, path, _flags);
         if (fd < 0)
         {
             return -1;
         }
-        #endif
+        // #endif
         return 0;
     }
     uint64 SyscallHandler::sys_sysinfo()

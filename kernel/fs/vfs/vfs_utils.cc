@@ -6,9 +6,12 @@
 #include "fs/vfs/file/device_file.hh"
 int vfs_openat(eastl::string absolute_path, fs::file* &file, uint flags)
 {
-    // [[maybe_unused]] struct ext4_file *temp_file = &file->lwext4_file_struct;
-    // [[maybe_unused]] int status = -100;
-
+    if(is_file_exist(absolute_path.c_str()) != 1)
+    {
+        return -ENOENT; // 文件不存在
+    }
+    //TODO: 这里flag之类的都没处理，瞎jb open
+    printfCyan("[vfs_openat] absolute_path: %s, flags: %x\n", absolute_path.c_str(), flags);
     int type = vfs_path2filetype(absolute_path);
     int status = -100;
     if (type == fs::FileTypes::FT_NORMAL)
@@ -104,7 +107,7 @@ int vfs_path2filetype(eastl::string &absolute_path)
             }
         }
     }
-    panic("今天是个好日子：%s", absolute_path.c_str());
+    printfMagenta("path2filetype: %s not found\n", absolute_path.c_str());
     return -1;
 }
 

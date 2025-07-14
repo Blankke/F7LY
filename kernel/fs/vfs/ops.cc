@@ -115,6 +115,11 @@ void get_absolute_path(const char *path, const char *cwd, char *absolute_path) {
     }
 }
 
+// eastl::string get_absolute_path(const char *path, const char *cwd)
+// {
+//     panic("get_absolute_path is not implemented yet");
+// }
+
 // Paths
 
 // Copy the next path element from path into name.
