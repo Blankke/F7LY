@@ -1,5 +1,6 @@
 #include "fs/vfs/file/normal_file.hh"
 #include "fs/lwext4/ext4_errno.hh"
+#include "fs/lwext4/ext4.hh"
 #include "mem/userspace_stream.hh"
 namespace fs
 {
@@ -11,24 +12,40 @@ namespace fs
 			printfRed("normal_file:: not allowed to read! ");
 			return -1;
 		}
-		// Inode *node = _den->getNode();
-		// if (node == nullptr)
-		// {
-		// 	printfRed("normal_file:: null inode for dentry %s",
-		// 			  _den->rName().c_str());
-		// 	return -1;
-		// }
-		// if (off < 0)
-		// 	off = _file_ptr;
-		// ret = node->nodeRead(buf, off, len);
-		// if (ret >= 0 && upgrade)
-		// 	_file_ptr += ret;
+		
+		// 处理偏移量参数
+		if (off < 0)
+			off = _file_ptr;
+		
+		// 保存当前文件位置，用于之后恢复
+		long current_pos = _file_ptr;
+		
+		// 如果指定的偏移量与当前文件指针不同，需要设置文件位置
+		if (off != _file_ptr) {
+			int seek_status = ext4_fseek(&lwext4_file_struct, off, SEEK_SET);
+			if (seek_status != EOK) {
+				printfRed("normal_file::read: ext4_fseek failed with status %d", seek_status);
+				return -1;
+			}
+		}
+		
+		// 执行读取操作
 		int status = ext4_fread(&lwext4_file_struct, (char *)buf, len, &ret);
-        if (status != EOK)
-            return 0;
-		///@todo 未判断是否用户地址，华科里面传的参数不一样，还不知道upgrade怎么用
-		// panic("normal_file::read: not implemented yet");
-		// ret = 0;
+		if (status != EOK) {
+			printfRed("normal_file::read: ext4_fread failed with status %d", status);
+			// 恢复原来的文件位置
+			ext4_fseek(&lwext4_file_struct, current_pos, SEEK_SET);
+			return 0;
+		}
+		
+		// 如果upgrade为true，更新文件指针
+		if (ret >= 0 && upgrade) {
+			_file_ptr = off + ret;
+		} else {
+			// 如果不升级指针，恢复到原来的位置
+			ext4_fseek(&lwext4_file_struct, current_pos, SEEK_SET);
+		}
+		
 		return ret;
 	}
 
