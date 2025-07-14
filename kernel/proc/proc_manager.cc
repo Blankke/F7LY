@@ -1499,23 +1499,20 @@ namespace proc
     }
     int ProcessManager::chdir(eastl::string &path)
     {
-        panic("未实现");
-#ifdef FS_FIX_COMPLETELY
+        // panic("未实现");
+// #ifdef FS_FIX_COMPLETELY
         Pcb *p = get_cur_pcb();
+        char temp_path[EXT4_PATH_LONG_MAX];
+        get_absolute_path(path.c_str(), p->_cwd_name.c_str(), temp_path);
 
-        fs::dentry *dentry;
-
-        fs::Path pt(path);
-        // printfCyan("chdir: %s\n", pt.AbsolutePath().c_str());
-        dentry = pt.pathSearch();
-        // dentry = p->_cwd->EntrySearch( path );
-        if (dentry == nullptr)
-            return -1;
-        p->_cwd = dentry;
-        p->_cwd_name = pt.AbsolutePath();
+        p->_cwd_name = temp_path;
         if (p->_cwd_name.back() != '/')
+        {
+            printf("cwd:%s",p->_cwd_name);
             p->_cwd_name += "/";
-#endif
+
+        }
+// #endif
         return 0;
     }
     /// @brief 获取当前进程的工作目录路径。get current working directory
@@ -1858,6 +1855,7 @@ namespace proc
         // ========== 第一阶段：路径解析和文件查找 ==========
 
         // 构建绝对路径
+        //TODO :这个解析路径写的太狗屎了，换以下
         eastl::string ab_path;
         if (path[0] == '/')
             ab_path = path; // 已经是绝对路径
