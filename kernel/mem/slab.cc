@@ -105,6 +105,8 @@ namespace mem
     void SlabCache::destroy_slab(Slab *slab)
     {
         slab->~Slab();
+                // printfYellow("释放物理页\n");
+                // slab= reinterpret_cast<Slab *>(PGROUNDDOWN(reinterpret_cast<uint64>(slab)));
         k_pmm.free_page(slab);
     }
 

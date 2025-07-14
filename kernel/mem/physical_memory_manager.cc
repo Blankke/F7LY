@@ -72,11 +72,13 @@ namespace mem
 
     void PhysicalMemoryManager::free_page1(void *pa,uint64 size)
     {
-        // printfCyan("释放物理页:  %p\n", pa);
-               auto addr = reinterpret_cast<uint64>(pa);
+
+        auto addr = reinterpret_cast<uint64>(pa);
         if(addr%PGSIZE != 0)
        {
+
            SlabAllocator::dealloc(pa, size);
+
            return;
         }
         _buddy->Free(pa2pgnm(pa));

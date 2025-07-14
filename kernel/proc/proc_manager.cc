@@ -1502,15 +1502,17 @@ namespace proc
 // #ifdef FS_FIX_COMPLETELY
         Pcb *p = get_cur_pcb();
         char temp_path[EXT4_PATH_LONG_MAX];
+
         get_absolute_path(path.c_str(), p->_cwd_name.c_str(), temp_path);
 
         p->_cwd_name = temp_path;
+
         if (p->_cwd_name.back() != '/')
         {
-            printf("cwd:%s",p->_cwd_name);
             p->_cwd_name += "/";
 
         }
+
 // #endif
         return 0;
     }
@@ -1864,17 +1866,17 @@ namespace proc
         printfCyan("execve file : %s\n", ab_path.c_str());
 
         // 解析路径并查找文件
-        if(is_file_exist(path.c_str()) != 1)
+        if(is_file_exist(ab_path.c_str()) != 1)
         {
             printfRed("execve: cannot find file");
             return -1;
         }
 
         // 读取ELF文件头，验证文件格式
-        vfs_read_file(path.c_str(), reinterpret_cast<uint64>(&elf), 0, sizeof(elf));
+        vfs_read_file(ab_path.c_str(), reinterpret_cast<uint64>(&elf), 0, sizeof(elf));
         if (elf.magic != elf::elfEnum::ELF_MAGIC) // 检查ELF魔数
         {
-            panic("execve: not a valid ELF file,\n magic number: %x, execve path: %s", elf.magic, path.c_str());
+            panic("execve: not a valid ELF file,\n magic number: %x, execve path: %s", elf.magic, ab_path.c_str());
             return -1;
         }
         // printf("execve: ELF file magic: %x\n", elf.magic);
@@ -1914,14 +1916,14 @@ namespace proc
                 //     printfCyan("execve: checking program header %d at offset %d\n", i, off);
                 //     break;
                 // }
-                vfs_read_file(path.c_str(), reinterpret_cast<uint64>(&ph), off, sizeof(ph));
+                vfs_read_file(ab_path.c_str(), reinterpret_cast<uint64>(&ph), off, sizeof(ph));
                 if (ph.type == elf::elfEnum::ELF_PROG_INTERP) // PT_INTERP = 3
                 {
                     // TODO, noderead在basic有时候乱码，故在下面设置interp_de = de;跳过动态链接
                     is_dynamic = true;
                     // 读取解释器路径
                     char interp_buf[256];
-                    vfs_read_file(path.c_str(), reinterpret_cast<uint64>(interp_buf), ph.off, ph.filesz);
+                    vfs_read_file(ab_path.c_str(), reinterpret_cast<uint64>(interp_buf), ph.off, ph.filesz);
                     // de->getNode()->nodeRead(reinterpret_cast<uint64>(interp_buf), ph.off, ph.filesz);
                     interp_buf[ph.filesz] = '\0';
                     interpreter_path = interp_buf;
@@ -1991,7 +1993,7 @@ namespace proc
             for (i = 0, off = elf.phoff; i < elf.phnum; i++, off += sizeof(ph))
             {
                 // 读取程序头
-                vfs_read_file(path.c_str(), reinterpret_cast<uint64>(&ph), off, sizeof(ph));
+                vfs_read_file(ab_path.c_str(), reinterpret_cast<uint64>(&ph), off, sizeof(ph));
                 // printf("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
                 //        i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, ph.flags);
                 // 只处理LOAD类型的程序段
@@ -2080,7 +2082,7 @@ namespace proc
                 // }
 
                 // 从文件加载段内容到内存
-                if (load_seg(new_pt, ph.vaddr, path, ph.off, ph.filesz) < 0)
+                if (load_seg(new_pt, ph.vaddr, ab_path, ph.off, ph.filesz) < 0)
                 {
                     printf("execve: load_icode\n");
                     load_bad = true;

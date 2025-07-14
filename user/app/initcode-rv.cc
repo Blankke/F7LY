@@ -25,16 +25,16 @@ extern "C"
         // char *buf[100];
         // read(fd, buf, 100);
 
-        printf("initcode-rv: init_main start\n");
-        int fd = openat(-100, "/proc/meminfo", 0);
-        // int fd = openat(-100, "/glibc/basic_testcode.sh", 0);
-        printf("initcode-rv: openat /glibc/basic_testcode.sh fd=%d\n", fd);
-        char buf[1000];
-        read(fd, buf, 1000);
-        printf("initcode-rv: read fd=%d, buf=%s\n", fd, buf);
+        // printf("initcode-rv: init_main start\n");
+        // int fd = openat(-100, "/proc/meminfo", 0);
+        // // int fd = openat(-100, "/glibc/basic_testcode.sh", 0);
+        // printf("initcode-rv: openat /glibc/basic_testcode.sh fd=%d\n", fd);
+        // char buf[1000];
+        // read(fd, buf, 1000);
+        // printf("initcode-rv: read fd=%d, buf=%s\n", fd, buf);
 
-        execve("/musl/basic/uname", 0, 0);
-
+        // execve("/musl/basic/fork", 0, 0);
+        basic_test("/musl");
         shutdown();
         return 0;
     }

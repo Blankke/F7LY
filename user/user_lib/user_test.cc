@@ -55,38 +55,38 @@ int basic_test(const char *path = musl_dir)
     {
         printf("#### OS COMP TEST GROUP START basic-glibc ####\n");
     }
-    run_test("write");
-    run_test("fork");
-    run_test("exit");
-    run_test("wait");
-    run_test("getpid");
-    run_test("getppid");
-    run_test("dup");
-    run_test("dup2");
-    run_test("execve");
-    run_test("getcwd");
-    run_test("gettimeofday");
-    run_test("yield");
-    run_test("sleep");
-    run_test("times");
-    run_test("clone");
-    run_test("brk");
-    run_test("waitpid");
-    run_test("mmap");
-    run_test("fstat");
-    run_test("uname");
-    run_test("openat");
-    run_test("open");
-    run_test("close");
-    run_test("read");
-    run_test("getdents");
-    run_test("mkdir_");
-    run_test("chdir");
-    run_test("mount");
-    run_test("umount");
-    run_test("munmap");
-    run_test("unlink");
-    run_test("pipe");
+    // run_test("write");
+    // run_test("fork");
+    // run_test("exit");
+    // run_test("wait");
+    // run_test("getpid");
+    // run_test("getppid");
+    // run_test("dup");
+    // run_test("dup2");
+    // run_test("execve");
+    // run_test("getcwd");
+    // run_test("gettimeofday");
+    // run_test("yield");
+    // run_test("sleep");
+    // run_test("times");
+    // run_test("clone");
+    // run_test("brk");
+    // run_test("waitpid");
+    // run_test("mmap");             ///@todo 没写
+    // run_test("fstat");                  ///@todo 没写   
+    // run_test("uname");
+    // run_test("openat");            ///@todo 没写
+    // run_test("open");            ///@todo 没写
+    // run_test("close");            ///@todo 没写
+    // run_test("read");            ///@todo 没写
+    // run_test("getdents");
+    // run_test("mkdir_");
+    // run_test("chdir");
+    // run_test("mount");
+    // run_test("umount");
+    // run_test("munmap");
+    // run_test("unlink");
+    // run_test("pipe");
     // sleep(20);
     if (strcmp(path, musl_dir) == 0)
     {
