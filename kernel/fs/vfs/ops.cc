@@ -92,7 +92,6 @@ void get_absolute_path(const char *path, const char *cwd, char *absolute_path) {
         }
     }
 
-
     while (absolute_path[0] == '/' && absolute_path[1] == '/') {
         strcpy(absolute_path, absolute_path + 1);
     }
@@ -115,10 +114,13 @@ void get_absolute_path(const char *path, const char *cwd, char *absolute_path) {
     }
 }
 
-// eastl::string get_absolute_path(const char *path, const char *cwd)
-// {
-//     panic("get_absolute_path is not implemented yet");
-// }
+eastl::string get_absolute_path(const char *path, const char *cwd)
+{
+    // panic("not implemented yet");
+    get_absolute_path(path, cwd, (char *)path);
+    eastl::string absolute_path(path);
+    return absolute_path;
+}
 
 // Paths
 

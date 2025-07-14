@@ -1444,10 +1444,9 @@ namespace proc
 
         // struct filesystem *fs = get_fs_from_path(path.c_str());
         const char *dirpath = (dir_fd == AT_FDCWD) ? p->_cwd_name.c_str() : p->_ofile->_ofile_ptr[dir_fd]->_path_name.c_str();
-        char absolute_path[MAXPATH] = {0};
-        get_absolute_path(path.c_str(), dirpath, absolute_path);
+        eastl::string absolute_path=get_absolute_path(path.c_str(), dirpath);
         fs::file *file = nullptr;
-        int status = vfs_openat(eastl::string(absolute_path), file, flags);
+        int status = vfs_openat(absolute_path, file, flags);
         if(status < 0)
         {
             printfRed("[open] vfs_openat failed with status: %d\n", status);
