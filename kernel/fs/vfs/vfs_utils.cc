@@ -104,6 +104,126 @@ int vfs_path2filetype(eastl::string &absolute_path)
             }
         }
     }
-    panic("今天是个好日子.");
+    panic("今天是个好日子：%s", absolute_path.c_str());
     return -1;
+}
+
+
+
+
+int create_and_write_file(const char *path, const char *data)
+{
+    int res;
+    ext4_file file;
+
+    // 检查文件是否已存在
+    if (is_file_exist(path) == 1)
+    {
+        printf("File already exists: %s\n", path);
+        ext4_fclose(&file);
+        return EEXIST;
+    }
+
+    // 创建并打开文件
+    res = ext4_fopen(&file, path, "wb+");
+    if (res != EOK)
+    {
+        printf("Failed to open file: %d\n", res);
+        return res;
+    }
+
+    // 写入数据
+    size_t data_len = strlen(data);
+    size_t written;
+    res = ext4_fwrite(&file, data, data_len, &written);
+    if (res != EOK || written != data_len)
+    {
+        printf("Failed to write file: %d, written: %zu\n", res, written);
+        ext4_fclose(&file);
+        return res;
+    }
+
+    // 关闭文件
+    res = ext4_fclose(&file);
+    if (res != EOK)
+    {
+        printf("Failed to close file: %d\n", res);
+        return res;
+    }
+
+    return EOK;
+}
+
+int is_file_exist(const char *path)
+{
+    struct ext4_inode inode;
+    uint32_t ino;
+    printfYellow("check file existence: %s\n", path);
+    // 尝试获取文件的inode信息
+    int res = ext4_raw_inode_fill(path, &ino, &inode);
+    //TODO : 这里有个特别诡异的现象，加了print下面这行会爆炸
+    // printf("res:%p\n", res);
+
+    if (res == EOK) {
+        // 文件存在
+        return 1;
+    } else if (res == ENOENT) {
+        // 文件不存在
+        return 0;
+    } else {
+        // 其他错误（如权限问题、路径错误等）
+        return -res;  // 返回负的错误码
+    }
+}
+uint vfs_read_file(const char *path, uint64 buffer_addr, size_t offset, size_t size)
+{
+    // if (is_file_exist(path) != 1)
+    // {
+    //     printfRed("文件不存在\n");
+    //     return -ENOENT;
+    // }
+    
+    int res;
+    ext4_file file;
+    
+    // 打开文件（只读模式）
+    res = ext4_fopen(&file, path, "rb");
+    if (res != EOK)
+    {
+        printfRed("Failed to open file: %d\n", res);
+        return res;
+    }
+    
+    // 如果有偏移，设置文件指针位置
+    if (offset > 0)
+    {
+        res = ext4_fseek(&file, offset, SEEK_SET);
+        if (res != EOK)
+        {
+            printfRed("Failed to seek file: %d\n", res);
+            ext4_fclose(&file);
+            return res;
+        }
+    }
+    
+    // 读取数据
+    size_t bytes_read;
+    res = ext4_fread(&file, (void*)buffer_addr, size, &bytes_read);
+    if (res != EOK)
+    {
+        printfRed("Failed to read file: %d\n", res);
+        ext4_fclose(&file);
+        return res;
+    }
+    
+    // 关闭文件
+    res = ext4_fclose(&file);
+    if (res != EOK)
+    {
+        printfRed("Failed to close file: %d\n", res);
+        return res;
+    }
+    
+    // 返回实际读取的字节数
+    return bytes_read;
 }

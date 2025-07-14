@@ -792,6 +792,7 @@ namespace syscall
 
     uint64 SyscallHandler::sys_openat2()
     {
+        //这个可以滚蛋了，用openat就行
         panic("未实现该系统调用");
         #ifdef FIX_FS_COMPLETELY
         // int fd, const char *upath, int flags, uint16 mode

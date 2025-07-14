@@ -65,7 +65,7 @@ namespace proc
         int growproc(int n);                                             // 扩展进程内存
         int execve(eastl::string path, eastl::vector<eastl::string> argv, eastl::vector<eastl::string> envs);
         int wait4(int child_pid, uint64 addr, int option);
-        int load_seg(mem::PageTable &pt, uint64 va, fs::dentry *de, uint offset, uint size);
+        int load_seg(mem::PageTable &pt, uint64 va, eastl::string &path, uint offset, uint size);
 
         void sleep(void *chan, SpinLock *lock);
         void wakeup(void *chan);

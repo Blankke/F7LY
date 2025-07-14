@@ -1155,10 +1155,10 @@ namespace proc
     /// @param offset 文件中读取的起始偏移。
     /// @param size 要读取的总字节数。
     /// @return 总是返回 0，失败情况下内部直接 panic。
-    int ProcessManager::load_seg(mem::PageTable &pt, uint64 va, fs::dentry *de, uint offset, uint size)
+    int ProcessManager::load_seg(mem::PageTable &pt, uint64 va, eastl::string &path, uint offset, uint size)
     { // 好像没有机会返回 -1, pa失败的话会panic，de的read也没有返回值
-        panic("未实现");
-#ifdef FS_FIX_COMPLETELY
+        // panic("未实现");
+// #ifdef FS_FIX_COMPLETELY
         uint i, n;
         uint64 pa;
 
@@ -1172,7 +1172,8 @@ namespace proc
             // printf("[load_seg] to vir pa: %p\n", pa);
 #endif
             n = PGROUNDUP(va) - va;
-            de->getNode()->nodeRead(pa, offset + i, n);
+            vfs_read_file(path.c_str(), pa, offset + i, n);
+
             i += n;
         }
 
@@ -1196,10 +1197,10 @@ namespace proc
             pa = to_vir(pa);
 #endif
 
-            if (de->getNode()->nodeRead(pa, offset + i, n) != n) // 读取文件内容到物理内存
+            if (vfs_read_file(path.c_str(), pa, offset + i, n) != n) // 读取文件内容到物理内存
                 return -1;
         }
-#endif
+
         return 0;
     }
     /// @brief 真正执行退出的逻辑
@@ -1826,8 +1827,11 @@ namespace proc
 
     int ProcessManager::execve(eastl::string path, eastl::vector<eastl::string> argv, eastl::vector<eastl::string> envs)
     {
-        panic("未实现");
-#ifdef FS_FIX_COMPLETELY
+        // char buf[1000];
+        // vfs_read_file("/musl/basic_testcode.sh", (uint64)buf, 32, sizeof(buf));
+        // printf("execve buf=%s\n", buf);
+        // panic("未实现");
+        // #ifdef FS_FIX_COMPLETELY
         // printfRed("execve: %s\n", path.c_str());
         // 获取当前进程控制块
         Pcb *proc = k_pm.get_cur_pcb();
@@ -1841,7 +1845,7 @@ namespace proc
         mem::PageTable new_pt;     // 暂存页表, 防止加载过程中破坏原进程映像
         elf::elfhdr elf;           // ELF 文件头
         elf::proghdr ph = {};      // 程序头
-        fs::dentry *de;            // 目录项
+        // fs::dentry *de;            // 目录项
         int i, off;                // 循环变量和偏移量
         u64 new_sz = 0;            // 新进程映像的大小
 #ifdef LOONGARCH
@@ -1863,16 +1867,14 @@ namespace proc
         printfCyan("execve file : %s\n", ab_path.c_str());
 
         // 解析路径并查找文件
-        fs::Path path_resolver(ab_path);
-        if ((de = path_resolver.pathSearch()) == nullptr)
+        if(is_file_exist(path.c_str()) != 1)
         {
             printfRed("execve: cannot find file");
             return -1;
         }
 
         // 读取ELF文件头，验证文件格式
-        de->getNode()->nodeRead(reinterpret_cast<uint64>(&elf), 0, sizeof(elf));
-
+        vfs_read_file(path.c_str(), reinterpret_cast<uint64>(&elf), 0, sizeof(elf));
         if (elf.magic != elf::elfEnum::ELF_MAGIC) // 检查ELF魔数
         {
             panic("execve: not a valid ELF file,\n magic number: %x, execve path: %s", elf.magic, path.c_str());
@@ -1905,7 +1907,7 @@ namespace proc
             bool load_bad = false; // 加载失败标志
 
             eastl::string interpreter_path;
-            fs::dentry *interp_de = nullptr;
+            // fs::dentry *interp_de = nullptr;
 
             // 检查程序头中是否有PT_INTERP段
             for (i = 0, off = elf.phoff; i < elf.phnum; i++, off += sizeof(ph))
@@ -1915,74 +1917,70 @@ namespace proc
                 //     printfCyan("execve: checking program header %d at offset %d\n", i, off);
                 //     break;
                 // }
-                de->getNode()->nodeRead(reinterpret_cast<uint64>(&ph), off, sizeof(ph));
+                vfs_read_file(path.c_str(), reinterpret_cast<uint64>(&ph), off, sizeof(ph));
                 if (ph.type == elf::elfEnum::ELF_PROG_INTERP) // PT_INTERP = 3
                 {
                     // TODO, noderead在basic有时候乱码，故在下面设置interp_de = de;跳过动态链接
                     is_dynamic = true;
                     // 读取解释器路径
                     char interp_buf[256];
-                    de->getNode()->nodeRead(reinterpret_cast<uint64>(interp_buf), ph.off, ph.filesz);
+                    vfs_read_file(path.c_str(), reinterpret_cast<uint64>(interp_buf), ph.off, ph.filesz);
+                    // de->getNode()->nodeRead(reinterpret_cast<uint64>(interp_buf), ph.off, ph.filesz);
                     interp_buf[ph.filesz] = '\0';
                     interpreter_path = interp_buf;
-                    interp_de = de;
+                    // interp_de = de;
                     printfCyan("execve: found dynamic interpreter: %s\n", interpreter_path.c_str());
 
                     if (strcmp(interpreter_path.c_str(), "/lib/ld-linux-riscv64-lp64d.so.1") == 0)
                     {
                         printfBlue("execve: using riscv64 dynamic linker\n");
-                        fs::Path path_resolver_interp("/mnt/glibc/lib/ld-linux-riscv64-lp64d.so.1");
-                        interp_de = path_resolver_interp.pathSearch();
-                        if (interp_de == nullptr)
+                        if (is_file_exist("/glibc/lib/ld-linux-riscv64-lp64d.so.1") != 1)
                         {
                             printfRed("execve: failed to find riscv64 dynamic linker\n");
                             return -1;
                         }
+                        interpreter_path = "/glibc/lib/ld-linux-riscv64-lp64d.so.1";
                     }
                     else if (strcmp(interpreter_path.c_str(), "/lib/ld-linux-loongarch64.so.1") == 0)
                     {
                         printfBlue("execve: using loongarch64 dynamic linker\n");
-                        fs::Path path_resolver_interp("/mnt/glibc/lib/ld-linux-loongarch-lp64d.so.1");
-                        interp_de = path_resolver_interp.pathSearch();
-                        if (interp_de == nullptr)
+                        if (is_file_exist("/glibc/lib/ld-linux-loongarch-lp64d.so.1") != 1)
                         {
                             printfRed("execve: failed to find loongarch64 dynamic linker\n");
                             return -1;
                         }
+                        interpreter_path = "/glibc/lib/ld-linux-loongarch-lp64d.so.1";
                     }
                     else if (strcmp(interpreter_path.c_str(), "/lib64/ld-musl-loongarch-lp64d.so.1") == 0)
                     {
                         printfBlue("execve: using loongarch dynamic linker\n");
-                        fs::Path path_resolver_interp("/mnt/musl/lib/libc.so");
-                        interp_de = path_resolver_interp.pathSearch();
-                        if (interp_de == nullptr)
+                        if (is_file_exist("/musl/lib/libc.so") != 1)
                         {
                             printfRed("execve: failed to find loongarch musl linker\n");
                             return -1;
                         }
+                        interpreter_path = "/musl/lib/libc.so";
                     }
                     else if (strcmp(interpreter_path.c_str(), "/lib/ld-musl-riscv64-sf.so.1") == 0)
                     {
                         printfBlue("execve: using riscv64 sf dynamic linker\n");
-                        fs::Path path_resolver_interp("/mnt/musl/lib/libc.so");
-                        interp_de = path_resolver_interp.pathSearch();
-                        if (interp_de == nullptr)
+                        if (is_file_exist("/musl/lib/libc.so") != 1)
                         {
                             printfRed("execve: failed to find riscv64 musl linker\n");
                             return -1;
                         }
+                        interpreter_path = "/musl/lib/libc.so";
                     }
                     else if (strcmp(interpreter_path.c_str(), "/lib/ld-musl-riscv64.so.1") == 0)
                     {
                         // TODO: 这个可不是sf了, 那怎么办呢
                         printfBlue("execve: using riscv64 sf dynamic linker\n");
-                        fs::Path path_resolver_interp("/mnt/musl/lib/libc.so");
-                        interp_de = path_resolver_interp.pathSearch();
-                        if (interp_de == nullptr)
+                        if (is_file_exist("/musl/lib/libc.so") != 1)
                         {
                             printfRed("execve: failed to find riscv64 musl linker\n");
                             return -1;
                         }
+                        interpreter_path = "/musl/lib/libc.so";
                     }
                     else
                     {
@@ -1996,7 +1994,7 @@ namespace proc
             for (i = 0, off = elf.phoff; i < elf.phnum; i++, off += sizeof(ph))
             {
                 // 读取程序头
-                de->getNode()->nodeRead(reinterpret_cast<uint64>(&ph), off, sizeof(ph));
+                vfs_read_file(path.c_str(), reinterpret_cast<uint64>(&ph), off, sizeof(ph));
                 // printf("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
                 //        i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, ph.flags);
                 // 只处理LOAD类型的程序段
@@ -2085,7 +2083,7 @@ namespace proc
                 // }
 
                 // 从文件加载段内容到内存
-                if (load_seg(new_pt, ph.vaddr, de, ph.off, ph.filesz) < 0)
+                if (load_seg(new_pt, ph.vaddr, path, ph.off, ph.filesz) < 0)
                 {
                     printf("execve: load_icode\n");
                     load_bad = true;
@@ -2102,7 +2100,7 @@ namespace proc
 
             if (is_dynamic)
             {
-                if (interp_de == nullptr)
+                if (interpreter_path.length() == 0)
                 {
                     printfRed("execve: cannot find dynamic linker: %s\n", interpreter_path.c_str());
                     k_pm.proc_freepagetable(new_pt, new_sz);
@@ -2110,7 +2108,7 @@ namespace proc
                 }
 
                 // 读取动态链接器的ELF头
-                interp_de->getNode()->nodeRead(reinterpret_cast<uint64>(&interp_elf), 0, sizeof(interp_elf));
+                vfs_read_file(interpreter_path.c_str(), reinterpret_cast<uint64>(&interp_elf), 0, sizeof(interp_elf));
 
                 if (interp_elf.magic != elf::elfEnum::ELF_MAGIC)
                 {
@@ -2126,7 +2124,7 @@ namespace proc
                 elf::proghdr interp_ph;
                 for (int j = 0, interp_off = interp_elf.phoff; j < interp_elf.phnum; j++, interp_off += sizeof(interp_ph))
                 {
-                    interp_de->getNode()->nodeRead(reinterpret_cast<uint64>(&interp_ph), interp_off, sizeof(interp_ph));
+                    vfs_read_file(interpreter_path.c_str(), reinterpret_cast<uint64>(&interp_ph), interp_off, sizeof(interp_ph));
 
                     if (interp_ph.type != elf::elfEnum::ELF_PROG_LOAD)
                         continue;
@@ -2164,7 +2162,7 @@ namespace proc
                     // 加载动态链接器段内容
                     printfCyan("execve: loading dynamic linker segment %d, vaddr: %p, memsz: %p, offset: %p\n",
                                j, (void *)interp_ph.vaddr, (void *)interp_ph.memsz, (void *)interp_ph.off);
-                    if (load_seg(new_pt, load_addr, interp_de, interp_ph.off, interp_ph.filesz) < 0)
+                    if (load_seg(new_pt, load_addr, interpreter_path, interp_ph.off, interp_ph.filesz) < 0)
                     {
                         printfRed("execve: load dynamic linker segment failed\n");
                         k_pm.proc_freepagetable(new_pt, new_sz);
@@ -2439,7 +2437,7 @@ namespace proc
         k_pm.proc_freepagetable(old_pt, old_sz);
 
         printf("execve succeed, new process size: %p\n", proc->_sz);
-#endif
+
         // 写成0为了适配glibc的rtld_fini需求
         return 0; // 返回参数个数，表示成功执行
     }
