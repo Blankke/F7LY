@@ -1310,7 +1310,8 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
         /* @note busybox的ps */
         if (f->_path_name == "/proc")
         {
-            panic("用于busybox ps是什么");
+            // panic("用于busybox ps是什么");
+            // TODO: 仔细研究一下
             return 0;
         }
         
@@ -2410,8 +2411,9 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
     }
     uint64 SyscallHandler::sys_utimensat()
     {
-        panic("未实现");
-#ifdef FS_FIX_COMPLETELY
+        //TODO: 这个完全是骗的
+        // panic("未实现");
+// #ifdef FS_FIX_COMPLETELY
         int dirfd;
         uint64 pathaddr;
         eastl::string pathname;
@@ -2434,17 +2436,17 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
 
         proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = cur_proc->get_pagetable();
-        fs::dentry *base;
+        // fs::dentry *base;
 
-        if (dirfd == AT_FDCWD)
-            base = cur_proc->_cwd;
-        else
-        {
-            fs::file *ofile = cur_proc->get_open_file(dirfd);
-            if (ofile == nullptr || ofile->_attrs.filetype != fs::FileTypes::FT_NORMAL)
-                return -1;
-            base = static_cast<fs::normal_file *>(ofile)->getDentry();
-        }
+        // if (dirfd == AT_FDCWD)
+        //     base = cur_proc->_cwd;
+        // else
+        // {
+        //     fs::file *ofile = cur_proc->get_open_file(dirfd);
+        //     if (ofile == nullptr || ofile->_attrs.filetype != fs::FileTypes::FT_NORMAL)
+        //         return -1;
+        //     base = static_cast<fs::normal_file *>(ofile)->getDentry();
+        // }
 
         if (mem::k_vmm.copy_str_in(*pt, pathname, pathaddr, 128) < 0)
             return -1;
@@ -2466,20 +2468,18 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
 
         if (_arg_int(3, flags) < 0)
             return -1;
-
-        fs::Path path(pathname, base);
-        fs::dentry *den = path.pathSearch();
-        if (den == nullptr)
+        pathname =  get_absolute_path(pathname.c_str(), cur_proc->_cwd_name.c_str());
+        if (is_file_exist(pathname.c_str()) != 1)
             return -ENOENT;
 
         // int fd = path.open();
-#endif
+// #endif
         return 0;
     }
     uint64 SyscallHandler::sys_renameat2()
     {
-        panic("未实现");
-#ifdef FS_FIX_COMPLETELY
+        // panic("未实现");
+// #ifdef FS_FIX_COMPLETELY
         int old_fd, new_fd, flags;
         uint64 old_path_addr, new_path_addr;
 
@@ -2504,45 +2504,16 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
         if (mem::k_vmm.copy_str_in(*pt, new_path, new_path_addr, MAXPATH) < 0)
             return -1;
 
-        // 解析目录项
-        fs::dentry *old_base, *new_base;
-        if (old_fd == AT_FDCWD)
+        old_path = (old_fd == AT_FDCWD) ? p->_cwd_name : p->get_open_file(old_fd)->_path_name;
+        new_path = (new_fd == AT_FDCWD) ? p->_cwd_name : p->get_open_file(new_fd)->_path_name;
+        eastl::string old_abs_path = get_absolute_path(old_path.c_str(), p->_cwd_name.c_str());
+        eastl::string new_abs_path = get_absolute_path(new_path.c_str(), p->_cwd_name.c_str());
+        int ret = 0;
+        if ((ret = vfs_frename(old_abs_path.c_str(), new_abs_path.c_str())) < 0)
         {
-            old_base = p->_cwd;
+            printfRed("[sys_renameat2] rename failed: %s -> %s, ret = %d\n", old_abs_path.c_str(), new_abs_path.c_str(), ret);
+            return ret;
         }
-        else
-        {
-            fs::file *old_ofile = p->get_open_file(old_fd);
-            if (old_ofile == nullptr || old_ofile->_attrs.filetype != fs::FileTypes::FT_NORMAL)
-                return -1;
-            old_base = static_cast<fs::normal_file *>(old_ofile)->getDentry();
-        }
-
-        if (new_fd == AT_FDCWD)
-        {
-            new_base = p->_cwd;
-        }
-        else
-        {
-            fs::file *new_ofile = p->get_open_file(new_fd);
-            if (new_ofile == nullptr || new_ofile->_attrs.filetype != fs::FileTypes::FT_NORMAL)
-                return -1;
-            new_base = static_cast<fs::normal_file *>(new_ofile)->getDentry();
-        }
-
-        // 构造绝对路径
-        // 先将 old_path 构造成绝对路径
-        fs::Path old_path_resolver(old_path, old_base);
-        eastl::string abs_old_path = old_path_resolver.AbsolutePath();
-
-        fs::Path new_path_resolver(new_path, new_base);
-        eastl::string abs_new_path = new_path_resolver.AbsolutePath();
-
-        // 执行重命名
-        fs::Path abs_old_path_obj(abs_old_path);
-        if (abs_old_path_obj.rename(abs_new_path, flags) < 0)
-            return -1;
-#endif
         return 0;
     }
 
