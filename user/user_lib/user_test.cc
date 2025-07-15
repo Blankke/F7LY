@@ -419,3 +419,9 @@ char *bb_cmds[][10] = {
     // {"find", ".", "-name", "busybox_cmd.txt", NULL},
     {"echo", "hello", NULL},
     {NULL}};
+
+char* ltp_testcases[] = {
+    "abort01",
+
+    NULL
+};
