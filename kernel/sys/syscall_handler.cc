@@ -180,6 +180,65 @@ namespace syscall
         BIND_SYSCALL(statx);
         BIND_SYSCALL(clone3);   // todo
         BIND_SYSCALL(poweroff); // todo
+
+
+
+        // rocket syscalls
+        BIND_SYSCALL(fgetxattr);          // from rocket
+        BIND_SYSCALL(mknodat);            // from rocket
+        BIND_SYSCALL(symlinkat);          // from rocket
+        BIND_SYSCALL(fstatfs);            // from rocket
+        BIND_SYSCALL(truncate);           // from rocket
+        BIND_SYSCALL(fallocate);          // from rocket
+        BIND_SYSCALL(fchdir);             // from rocket
+        BIND_SYSCALL(chroot);             // from rocket
+        BIND_SYSCALL(fchmod);             // from rocket
+        BIND_SYSCALL(fchmodat);           // from rocket
+        BIND_SYSCALL(fchownat);           // from rocket
+        BIND_SYSCALL(fchown);             // from rocket
+        BIND_SYSCALL(preadv);             // from rocket
+        BIND_SYSCALL(pwritev);            // from rocket
+        BIND_SYSCALL(sync_file_range);    // from rocket
+        BIND_SYSCALL(acct);               // from rocket
+        BIND_SYSCALL(clock_settime);      // from rocket
+        BIND_SYSCALL(clock_getres);       // from rocket
+        BIND_SYSCALL(sched_setscheduler); // from rocket
+        BIND_SYSCALL(sched_getscheduler); // from rocket
+        BIND_SYSCALL(sched_getparam);     // from rocket
+        BIND_SYSCALL(sched_setaffinity);  // from rocket
+        BIND_SYSCALL(sigaltstack);        // from rocket
+        BIND_SYSCALL(rt_sigsuspend);      // from rocket
+        BIND_SYSCALL(rt_sigpending);      // from rocket
+        BIND_SYSCALL(rt_sigqueueinfo);    // from rocket
+        BIND_SYSCALL(setregrid);          // from rocket
+        BIND_SYSCALL(setreuid);           // from rocket
+        BIND_SYSCALL(setresuid);          // from rocket
+        BIND_SYSCALL(getresuid);          // from rocket
+        BIND_SYSCALL(setresgid);          // from rocket
+        BIND_SYSCALL(getresgid);          // from rocket
+        BIND_SYSCALL(setfsuid);           // from rocket
+        BIND_SYSCALL(setfsgid);           // from rocket
+        BIND_SYSCALL(getgroups);          // from rocket
+        BIND_SYSCALL(setgroups);          // from rocket
+        BIND_SYSCALL(sethostname);        // from rocket
+        BIND_SYSCALL(setdomainname);      // from rocket
+        BIND_SYSCALL(umask);              // from rocket
+        BIND_SYSCALL(adjtimex);           // from rocket
+        BIND_SYSCALL(shmdt);              // from rocket
+        BIND_SYSCALL(recvmsg);            // from rocket
+        BIND_SYSCALL(fadvise64);          // from rocket
+        BIND_SYSCALL(msync);              // from rocket
+        BIND_SYSCALL(mlock);              // from rocket
+        BIND_SYSCALL(get_mempolicy);      // from rocket
+        BIND_SYSCALL(accept4);            // from rocket
+        BIND_SYSCALL(clockadjtime);       // from rocket
+        BIND_SYSCALL(copy_file_range);    // from rocket
+        BIND_SYSCALL(strerror);           // from rocket
+        BIND_SYSCALL(perror);             // from rocket
+        BIND_SYSCALL(close_range);        // from rocket
+        BIND_SYSCALL(openat2);            // from rocket
+        BIND_SYSCALL(faccessat2);         // from rocket
+        // ...existing code...    
         // printfCyan("====================debug: syscall_num_list\n");
         // for (uint64 i = 0; i < max_syscall_funcs_num; i++)
         // {
@@ -791,92 +850,6 @@ namespace syscall
         return res;
     }
 
-    uint64 SyscallHandler::sys_openat2()
-    {
-        //这个可以滚蛋了，用openat就行
-        panic("未实现该系统调用");
-        #ifdef FIX_FS_COMPLETELY
-        // int fd, const char *upath, int flags, uint16 mode
-        int fd;
-        uint64 upath;
-        int flags;
-        int mode = 0; // 默认模式为0
-        if (_arg_int(0, fd) < 0)
-            return -1;
-        if (_arg_addr(1, upath) < 0)
-            return -1;
-        if (_arg_int(2, flags) < 0)
-            return -1;
-        if (_arg_int(3, mode) < 0)
-            return -1;
-        if (fd != AT_FDCWD && (fd < 0 || fd >= NOFILE))
-            return -ENOENT;
-        char path[MAXPATH];
-        proc::Pcb*p = proc::k_pm.get_cur_pcb();
-        if (mem::k_vmm.copy_str_in(p->_pt, path, (uint64)upath, MAXPATH) == -1)
-        {
-            return -EFAULT;
-        }
-#if DEBUG
-        LOG("sys_openat fd:%d,path:%s,flags:%d,mode:%d\n", fd, path, flags, mode);
-#endif
-        struct filesystem *fs = get_fs_from_path(path); ///<  根据路径获取对应的文件系统
-        /* @todo 官方测例好像vfat和ext4一种方式打开 */
-        if (fs->type == EXT4 )
-        {
-            const char *dirpath = (fd == AT_FDCWD) ? proc::k_pm.get_cur_pcb()->cwd.path : proc::k_pm.get_cur_pcb()->_ofile2->_ofile_ptr[fd]->f_path;
-            char absolute_path[MAXPATH] = {0};
-            get_absolute_path(path, dirpath, absolute_path);
-            struct file *f;
-            f = filealloc();
-            if (!f)
-                return -ENFILE;
-            int fd = -1;
-            if ((fd = fdalloc(f)) < 0)
-            {
-                // DEBUG_LOG_LEVEL(LOG_WARNING, "OUT OF FD!\n");
-                return -EMFILE;
-            };
-
-            f->f_flags = flags | (strcmp(absolute_path, "/tmp") ? 0 : O_CREAT);
-            f->f_mode = mode;
-
-            strcpy(f->f_path, absolute_path);
-            int ret;
-
-            if ((ret = vfs_ext_openat(f)) < 0)
-            {
-                // printf("打开失败: %s (错误码: %d)\n", path, ret);
-                /*
-                 *   以防万一有什么没有释放的东西，先留着
-                 *   get_file_ops()->close(f);
-                 */
-                proc::k_pm.get_cur_pcb()->_ofile2->_ofile_ptr[fd] = 0;
-                // if(!strcmp(path, "./mnt")) {
-                //     return 2;
-                return -ENOENT;
-            }
-            /* @note 处理busybox的几个文件夹 */
-            if (!strcmp(absolute_path, "/proc/mounts") ||  ///< df
-                !strcmp(absolute_path, "/proc") ||         ///< ps
-                !strcmp(absolute_path, "/proc/meminfo") || ///< free
-                !strcmp(absolute_path, "/dev/misc/rtc")    ///< hwclock
-            )
-            {
-                if (vfs_ext_is_dir(absolute_path) == 0)
-                    vfs_ext_dirclose(f);
-                else
-                    vfs_ext_fclose(f);
-                f->f_type = file::FD_BUSYBOX;
-                f->f_pos = 0;
-            }
-            return fd;
-        }
-        else
-            panic("unsupport filesystem");
-            #endif
-        return 0;
-    };
     uint64 SyscallHandler::sys_write()
     {
 
@@ -1315,7 +1288,8 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
         /* @note busybox的ps */
         if (f->_path_name == "/proc")
         {
-            panic("用于busybox ps是什么");
+            // panic("用于busybox ps是什么");
+            // TODO: 仔细研究一下
             return 0;
         }
         
@@ -2415,8 +2389,9 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
     }
     uint64 SyscallHandler::sys_utimensat()
     {
-        panic("未实现");
-#ifdef FS_FIX_COMPLETELY
+        //TODO: 这个完全是骗的
+        // panic("未实现");
+// #ifdef FS_FIX_COMPLETELY
         int dirfd;
         uint64 pathaddr;
         eastl::string pathname;
@@ -2439,17 +2414,17 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
 
         proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = cur_proc->get_pagetable();
-        fs::dentry *base;
+        // fs::dentry *base;
 
-        if (dirfd == AT_FDCWD)
-            base = cur_proc->_cwd;
-        else
-        {
-            fs::file *ofile = cur_proc->get_open_file(dirfd);
-            if (ofile == nullptr || ofile->_attrs.filetype != fs::FileTypes::FT_NORMAL)
-                return -1;
-            base = static_cast<fs::normal_file *>(ofile)->getDentry();
-        }
+        // if (dirfd == AT_FDCWD)
+        //     base = cur_proc->_cwd;
+        // else
+        // {
+        //     fs::file *ofile = cur_proc->get_open_file(dirfd);
+        //     if (ofile == nullptr || ofile->_attrs.filetype != fs::FileTypes::FT_NORMAL)
+        //         return -1;
+        //     base = static_cast<fs::normal_file *>(ofile)->getDentry();
+        // }
 
         if (mem::k_vmm.copy_str_in(*pt, pathname, pathaddr, 128) < 0)
             return -1;
@@ -2471,20 +2446,18 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
 
         if (_arg_int(3, flags) < 0)
             return -1;
-
-        fs::Path path(pathname, base);
-        fs::dentry *den = path.pathSearch();
-        if (den == nullptr)
+        pathname =  get_absolute_path(pathname.c_str(), cur_proc->_cwd_name.c_str());
+        if (is_file_exist(pathname.c_str()) != 1)
             return -ENOENT;
 
         // int fd = path.open();
-#endif
+// #endif
         return 0;
     }
     uint64 SyscallHandler::sys_renameat2()
     {
-        panic("未实现");
-#ifdef FS_FIX_COMPLETELY
+        // panic("未实现");
+// #ifdef FS_FIX_COMPLETELY
         int old_fd, new_fd, flags;
         uint64 old_path_addr, new_path_addr;
 
@@ -2509,45 +2482,16 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
         if (mem::k_vmm.copy_str_in(*pt, new_path, new_path_addr, MAXPATH) < 0)
             return -1;
 
-        // 解析目录项
-        fs::dentry *old_base, *new_base;
-        if (old_fd == AT_FDCWD)
+        old_path = (old_fd == AT_FDCWD) ? p->_cwd_name : p->get_open_file(old_fd)->_path_name;
+        new_path = (new_fd == AT_FDCWD) ? p->_cwd_name : p->get_open_file(new_fd)->_path_name;
+        eastl::string old_abs_path = get_absolute_path(old_path.c_str(), p->_cwd_name.c_str());
+        eastl::string new_abs_path = get_absolute_path(new_path.c_str(), p->_cwd_name.c_str());
+        int ret = 0;
+        if ((ret = vfs_frename(old_abs_path.c_str(), new_abs_path.c_str())) < 0)
         {
-            old_base = p->_cwd;
+            printfRed("[sys_renameat2] rename failed: %s -> %s, ret = %d\n", old_abs_path.c_str(), new_abs_path.c_str(), ret);
+            return ret;
         }
-        else
-        {
-            fs::file *old_ofile = p->get_open_file(old_fd);
-            if (old_ofile == nullptr || old_ofile->_attrs.filetype != fs::FileTypes::FT_NORMAL)
-                return -1;
-            old_base = static_cast<fs::normal_file *>(old_ofile)->getDentry();
-        }
-
-        if (new_fd == AT_FDCWD)
-        {
-            new_base = p->_cwd;
-        }
-        else
-        {
-            fs::file *new_ofile = p->get_open_file(new_fd);
-            if (new_ofile == nullptr || new_ofile->_attrs.filetype != fs::FileTypes::FT_NORMAL)
-                return -1;
-            new_base = static_cast<fs::normal_file *>(new_ofile)->getDentry();
-        }
-
-        // 构造绝对路径
-        // 先将 old_path 构造成绝对路径
-        fs::Path old_path_resolver(old_path, old_base);
-        eastl::string abs_old_path = old_path_resolver.AbsolutePath();
-
-        fs::Path new_path_resolver(new_path, new_base);
-        eastl::string abs_new_path = new_path_resolver.AbsolutePath();
-
-        // 执行重命名
-        fs::Path abs_old_path_obj(abs_old_path);
-        if (abs_old_path_obj.rename(abs_new_path, flags) < 0)
-            return -1;
-#endif
         return 0;
     }
 
@@ -2814,6 +2758,7 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
     }
     uint64 SyscallHandler::sys_sched_getaffinity()
     {
+        return 0;
         panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_setpgid()
@@ -3040,6 +2985,224 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
         panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_poweroff()
+    {
+        panic("未实现该系统调用");
+    }
+
+        //================================== rocket syscalls ===================================
+    uint64 SyscallHandler::sys_fgetxattr()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_mknodat()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_symlinkat()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_fstatfs()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_truncate()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_fallocate()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_fchdir()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_chroot()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_fchmod()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_fchmodat()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_fchownat()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_fchown()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_preadv()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_pwritev()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_sync_file_range()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_acct()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_clock_settime()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_clock_getres()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_sched_setscheduler()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_sched_getscheduler()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_sched_getparam()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_sched_setaffinity()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_sigaltstack()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_rt_sigsuspend()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_rt_sigpending()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_rt_sigqueueinfo()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_setregrid()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_setreuid()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_setresuid()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_getresuid()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_setresgid()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_getresgid()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_setfsuid()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_setfsgid()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_getgroups()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_setgroups()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_sethostname()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_setdomainname()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_umask()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_adjtimex()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_shmdt()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_recvmsg()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_fadvise64()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_msync()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_mlock()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_get_mempolicy()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_accept4()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_clockadjtime()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_copy_file_range()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_strerror()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_perror()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_close_range()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_faccessat2()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_openat2()
     {
         panic("未实现该系统调用");
     }

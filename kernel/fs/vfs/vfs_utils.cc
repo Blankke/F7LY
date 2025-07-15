@@ -33,7 +33,8 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags)
     }
     else if (type == fs::FileTypes::FT_DEVICE)
     {
-        panic("FT_DEVICE is not supported yet"); // 下面写的是错的
+        //TODO: 我真感觉这个device是瞎jb写的
+        // panic("FT_DEVICE is not supported yet"); // 下面写的是错的
         fs::FileAttrs attrs;
         attrs.filetype = fs::FileTypes::FT_DEVICE;
         fs::device_file *temp_file = new fs::device_file(attrs, absolute_path);
@@ -356,4 +357,13 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
     st->st_mtime_sec = ext4_inode_get_modif_time(&inode);
     st->st_mtime_nsec = (inode.mtime_extra >> 2) & 0x3FFFFFFF; //< 30 bits for nanoseconds
     return EOK;
+}
+
+int vfs_frename(const char *oldpath, const char *newpath)
+{
+    int status = ext4_frename(oldpath, newpath);
+    if (status != EOK)
+        return -status;
+
+    return -status;
 }

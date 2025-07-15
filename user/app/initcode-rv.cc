@@ -6,7 +6,7 @@ extern "C"
     {
         // basic_test("/mnt/musl/");
         // basic_test("/mnt/glibc/");
-        // busybox_test("/mnt/musl/");
+        busybox_test("/musl/");
         // busybox_test("/mnt/glibc/");
         // libc_test("/mnt/musl/"); // 不测glibc, 不要求测
         // lua_test("/mnt/musl/");
@@ -34,7 +34,9 @@ extern "C"
         // printf("initcode-rv: read fd=%d, buf=%s\n", fd, buf);
 
         // execve("/musl/basic/fork", 0, 0);
-        basic_test("/musl");
+        // basic_test("/musl");
+        // execve("musl/ltp/testcases/bin/abort01", 0, 0);
+        
         shutdown();
         return 0;
     }
