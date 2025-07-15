@@ -363,7 +363,10 @@ int mmap_handler(uint64 va, int cause)
     }
   }
   if (i == proc::NVMA)
+  {
+    printfRed("mmap_handler: no VMA found for va %p\n", va);
     return -1;
+  }
   int pte_flags = PTE_U;
   if (p->_vma->_vm[i].prot == 0)
   {
@@ -404,7 +407,7 @@ int mmap_handler(uint64 va, int cause)
     ///@details 原本的xv6的readi函数有一个标志位来区分是否读到内核中，此处位于内核里
     /// pa直接是物理地址，所以应该无所谓
     //	long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
-    int readbytes = vf->read((uint64)pa, PGSIZE,offset, false);
+    int readbytes = vf->read((uint64)pa, PGSIZE, offset, false);
     // 什么都没有读到
     if (readbytes == 0)
     {
@@ -412,7 +415,6 @@ int mmap_handler(uint64 va, int cause)
       mem::k_pmm.free_page(pa);
       return -1;
     }
-
   }
 
   // 添加页面映射

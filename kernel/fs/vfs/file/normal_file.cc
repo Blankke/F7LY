@@ -2,10 +2,13 @@
 #include "fs/lwext4/ext4_errno.hh"
 #include "fs/lwext4/ext4.hh"
 #include "mem/userspace_stream.hh"
+#include "proc_manager.hh"
+#define min(a, b) ((a) < (b) ? (a) : (b))
 namespace fs
 {
-	long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
+long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 	{
+		// printfGreen("normal_file::read called with buf: %p, len: %zu, off: %ld, upgrade: %d\n", (void *)buf, len, off, upgrade);
 		ulong ret;
 		if (_attrs.u_read != 1)
 		{
@@ -48,34 +51,45 @@ namespace fs
 		
 		return ret;
 	}
-
 	long normal_file::write(uint64 buf, size_t len, long off, bool upgrade)
 	{
-		long ret;
+		uint64 ret;
+		// 处理偏移量参数
+		if (off < 0)
+			off = _file_ptr;
+
+		// 保存当前文件位置，用于之后恢复
+		long current_pos = _file_ptr;
 		if (_attrs.u_write != 1)
 		{
 			printfRed("normal_file:: not allowed to write! ");
 			return -1;
 		}
-		// Inode *node = _den->getNode();
-		// if (node == nullptr)
-		// {
-		// 	printfRed("normal_file:: null inode for dentry %s",
-		// 			  _den->rName().c_str());
-		// 	return -1;
-		// }
-		// if (off < 0)
-		// 	off = _file_ptr;
+		if (off != _file_ptr)
+		{
+			int seek_status = ext4_fseek(&lwext4_file_struct, off, SEEK_SET);
+			if (seek_status != EOK)
+			{
+				printfRed("normal_file::write: ext4_fseek failed with status %d", seek_status);
+				return -1;
+			}
+		}
 
-		// ret = node->nodeWrite(buf, off, len);
+		struct ext4_file *ext4_f = (struct ext4_file *)&lwext4_file_struct;
+		        char *kbuf = (char *) buf;
+        int status = ext4_fwrite(ext4_f, kbuf, len, &ret);
+        if (status != EOK) 
+            return 0;   
+		if (ret >= 0 && upgrade)
+		{
+			_file_ptr = off + ret;
+		}
+		else
+		{
+			// 如果不升级指针，恢复到原来的位置
+			ext4_fseek(&lwext4_file_struct, current_pos, SEEK_SET);
+		}
 
-		// if (ret >= 0 && upgrade)
-		// 	_file_ptr += ret;
-		// // upgrade filesize
-		// this->_stat.size = this->_den->getNode()->rFileSize();
-
-		panic("normal_file::write: not implemented yet");
-		ret = 0;
 		return ret;
 	}
 
