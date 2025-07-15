@@ -238,8 +238,9 @@ void get_absolute_path(const char *path, const char *cwd, char *absolute_path) {
 eastl::string get_absolute_path(const char *path, const char *cwd)
 {
     // panic("not implemented yet");
-    get_absolute_path(path, cwd, (char *)path);
-    eastl::string absolute_path(path);
+    char temp_path[EXT4_PATH_LONG_MAX];
+    get_absolute_path(path, cwd, temp_path);
+    eastl::string absolute_path(temp_path);
     return absolute_path;
 }
 

@@ -4,6 +4,7 @@
 #include "fs/lwext4/ext4_inode.hh"
 #include "fs/vfs/file/normal_file.hh"
 #include "fs/vfs/file/device_file.hh"
+#include "fs/vfs/file/directory_file.hh"
 int vfs_openat(eastl::string absolute_path, fs::file* &file, uint flags)
 {
     if(is_file_exist(absolute_path.c_str()) != 1)
@@ -40,16 +41,24 @@ int vfs_openat(eastl::string absolute_path, fs::file* &file, uint flags)
     }
     else if (type == fs::FileTypes::FT_DIRECT)
     {
-        panic("FT_DIRECT is not supported yet");
-        // 目录
-        // struct ext4_dir dir_obj;
-        // struct ext4_dir *dir = &dir_obj;
-        // status = ext4_dir_open(dir, absolute_path.c_str());
-        // if (status < 0)
-        // {
-        //     return status;
-        // }
-        // file = dir; // 将目录对象赋值给 file
+        // 创建目录文件对象
+        fs::FileAttrs attrs;
+        attrs.filetype = fs::FileTypes::FT_DIRECT;
+        attrs._value = 0755; // 目录权限
+        
+        // 假设你有一个 directory_file 类
+        fs::directory_file *temp_dir = new fs::directory_file(attrs, absolute_path);
+        
+        // 使用 ext4_dir_open 打开目录
+        status = ext4_dir_open(&temp_dir->lwext4_dir_struct, absolute_path.c_str());
+        if (status != EOK)
+        {
+            delete temp_dir;
+            printfRed("Failed to open directory: %d\n", status);
+            return status;
+        }
+        
+        file = temp_dir;
     }
     else
     {
