@@ -24,9 +24,7 @@ namespace syscall
         SyscallHandler()
         {
         }
-        /***********记得改********************** */
-                         uint64 sys_openat2();
-     /************************************ */
+
     private:
         int _fetch_addr(uint64 addr, uint64 &out_data);
         int _fetch_str(uint64 addr, eastl::string&buf, uint64 max);
@@ -156,6 +154,63 @@ namespace syscall
         uint64 sys_membarrier();
         uint64 sys_clone3();
         uint64 sys_poweroff();
+
+
+        //rocket
+        uint64 sys_fgetxattr();
+        uint64 sys_mknodat();
+        uint64 sys_symlinkat();
+        uint64 sys_fstatfs();
+        uint64 sys_truncate();
+        uint64 sys_fallocate();
+        uint64 sys_fchdir();
+        uint64 sys_chroot();
+        uint64 sys_fchmod();
+        uint64 sys_fchmodat();
+        uint64 sys_fchownat();
+        uint64 sys_fchown();
+        uint64 sys_preadv();
+        uint64 sys_pwritev();
+        uint64 sys_sync_file_range();
+        uint64 sys_acct();
+        uint64 sys_clock_settime();
+        uint64 sys_clock_getres();
+        uint64 sys_sched_setscheduler();
+        uint64 sys_sched_getscheduler();
+        uint64 sys_sched_getparam();
+        uint64 sys_sched_setaffinity();
+        uint64 sys_sigaltstack();
+        uint64 sys_rt_sigsuspend();
+        uint64 sys_rt_sigpending();
+        uint64 sys_rt_sigqueueinfo();
+        uint64 sys_setregrid();
+        uint64 sys_setreuid();
+        uint64 sys_setresuid();
+        uint64 sys_getresuid();
+        uint64 sys_setresgid();
+        uint64 sys_getresgid();
+        uint64 sys_setfsuid();
+        uint64 sys_setfsgid();
+        uint64 sys_getgroups();
+        uint64 sys_setgroups();
+        uint64 sys_sethostname();
+        uint64 sys_setdomainname();
+        uint64 sys_umask();
+        uint64 sys_adjtimex();
+        uint64 sys_shmdt();
+        uint64 sys_recvmsg();
+        uint64 sys_fadvise64();
+        uint64 sys_msync();
+        uint64 sys_mlock();
+        uint64 sys_get_mempolicy();
+        uint64 sys_accept4();
+        uint64 sys_clockadjtime();
+        uint64 sys_copy_file_range();
+        uint64 sys_strerror();
+        uint64 sys_perror();
+        uint64 sys_close_range();
+        uint64 sys_openat2();
+        uint64 sys_faccessat2();
     };
 
     extern SyscallHandler k_syscall_handler;
