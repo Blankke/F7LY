@@ -1476,7 +1476,7 @@ namespace proc
         if (p->_ofile == nullptr || p->_ofile->_ofile_ptr[fd] == nullptr)
             return -1;
         fs::file *f = p->_ofile->_ofile_ptr[fd];
-        *buf = f->_stat;
+        vfs_fstat(f, buf);
 
         return 0;
     }
@@ -1612,7 +1612,7 @@ namespace proc
                 else
                 {
                     ///@todo 一定记得写完fstat之后改!!!!!!!!fstat会让传入的length变成文件大小
-                    p->_vma->_vm[i].len = PGSIZE; // 文件映射保持原样
+                    p->_vma->_vm[i].len =length; // 文件映射保持原样
                     p->_vma->_vm[i].max_len = length;
                     // printfCyan("[mmap] file mapping at %p, length: %d, prot: %d, flags: %d, fd: %d\n",
                     //            (void *)p->_vma->_vm[i].addr, length, prot, flags, fd);

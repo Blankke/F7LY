@@ -324,3 +324,36 @@ int vfs_mkdir(const char *path, uint64_t mode)
 
     return -status;
 }
+
+int vfs_fstat(fs::file *f, fs::Kstat *st)
+{
+        struct ext4_inode inode;
+    uint32 inode_num = 0;
+    const char* file_path = f->_path_name.c_str();
+    
+    int status = ext4_raw_inode_fill(file_path, &inode_num, &inode);
+    if (status != EOK) return -status;
+    
+    struct ext4_sblock *sb = NULL;
+    status = ext4_get_sblock(file_path, &sb);
+    if (status != EOK) return -status;
+    
+    st->dev = 0;
+    st->ino = inode_num;
+    st->mode = ext4_inode_get_mode(sb, &inode);
+    st->nlink = ext4_inode_get_links_cnt(&inode);
+    st->uid = ext4_inode_get_uid(&inode);
+    st->gid = ext4_inode_get_gid(&inode);
+    st->rdev = ext4_inode_get_dev(&inode);
+    st->size = inode.size_lo;
+    st->blksize = inode.size_lo / inode.blocks_count_lo;
+    st->blocks = (uint64) inode.blocks_count_lo;
+
+    st->st_atime_sec = ext4_inode_get_access_time(&inode);
+    st->st_atime_nsec = (inode.atime_extra >> 2) & 0x3FFFFFFF; //< 30 bits for nanoseconds
+    st->st_ctime_sec = ext4_inode_get_change_inode_time(&inode);
+    st->st_ctime_nsec = (inode.ctime_extra >> 2) & 0x3FFFFFFF; //< 30 bits for nanoseconds
+    st->st_mtime_sec = ext4_inode_get_modif_time(&inode);
+    st->st_mtime_nsec = (inode.mtime_extra >> 2) & 0x3FFFFFFF; //< 30 bits for nanoseconds
+    return EOK;
+}
