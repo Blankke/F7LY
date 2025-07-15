@@ -38,5 +38,9 @@ namespace fs
 		virtual bool read_ready() override { return _pipe->read_is_open(); }
 		virtual bool write_ready() override { return _pipe->write_is_open(); }
 		virtual off_t lseek(off_t offset, int whence) override { return -ESPIPE; }
+		/// @brief 读取目录中的子目录项。
+		/// @param dst 目标用户空间流对象。
+		/// @return 实际读取的字节数。
+		size_t read_sub_dir(ubuf &dst) override {panic("pipe_file::read_sub_dir: not implemented yet"); return 0; };
 	};
 }
