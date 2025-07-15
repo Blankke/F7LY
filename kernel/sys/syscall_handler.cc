@@ -1118,6 +1118,8 @@ panic("未实现");
             printfRed("[SyscallHandler::sys_mmap] Error fetching mmap arguments\n");
             return -1;
         }
+        printfYellow("[SyscallHandler::sys_mmap] addr: %p, map_size: %u, prot: %d, flags: %d, fd: %d, offset: %u\n",
+               (void *)addr, map_size, prot, flags, fd, offset);
         return (uint64)proc::k_pm.mmap((void *)addr, map_size, prot, flags, fd, offset); // 调用进程管理器的 mmap 函数
     }
 

@@ -175,7 +175,7 @@ void trap_manager::kerneltrap()
     // printf("timeslice: %d\n", timeslice);
     if (timeslice >= 5)
     {
-      printfCyan("[kerneltrap]  yield here,p->addr:%x \n",Cpu::get_cpu()->get_cur_proc());
+      printfCyan("[kerneltrap]  yield here,p->addr:%x \n", Cpu::get_cpu()->get_cur_proc());
       proc::k_scheduler.yield();
       timeslice = 0;
       // print_fuckyou();
@@ -264,18 +264,18 @@ void trap_manager::usertrapret()
   // Debug
   //  printfYellow("[usertrapret] trampoline addr %p\n", trampoline);
 
-
   // 检查进程是否使用共享虚拟内存，如果是则需要动态映射trapframe
-  if (p->_shared_vm || p->_pt.get_ref_count() > 1) {
+  if (p->_shared_vm || p->_pt.get_ref_count() > 1)
+  {
     // 页表被共享，需要动态重新映射trapframe
-    // printfCyan("[usertrapret] Page table shared (ref count: %d), dynamically mapping trapframe for pid %d\n", 
-            //    p->_pt.get_ref_count(), p->_pid);
-    
+    // printfCyan("[usertrapret] Page table shared (ref count: %d), dynamically mapping trapframe for pid %d\n",
+    //    p->_pt.get_ref_count(), p->_pid);
+
     // 取消当前trapframe的映射
     mem::k_vmm.vmunmap(p->_pt, TRAPFRAME, 1, 0);
-    
+
     // 重新映射当前进程的trapframe
-    if (mem::k_vmm.map_pages(p->_pt, TRAPFRAME, PGSIZE, (uint64)(p->get_trapframe()), 
+    if (mem::k_vmm.map_pages(p->_pt, TRAPFRAME, PGSIZE, (uint64)(p->get_trapframe()),
                              riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_writable_m) == 0)
     {
       panic("usertrapret: failed to dynamically map trapframe");
@@ -316,9 +316,9 @@ void trap_manager::usertrapret()
 
   uint64 fn = TRAMPOLINE + (userret - trampoline);
   // printf("trapframe addr: %p\n", p->_trapframe);
-//   printf("trapframe->epc: %p\n", p->_trapframe->epc);
-//   printf("[usertrapret] trapframe->a0: %p\n", p->_trapframe->a0);
-  
+  //   printf("trapframe->epc: %p\n", p->_trapframe->epc);
+  //   printf("[usertrapret] trapframe->a0: %p\n", p->_trapframe->a0);
+
   ((void (*)(uint64, uint64))fn)(TRAPFRAME, satp);
   // !! 这个地方应该是固定值, 如果上多核的时候出错的话, 就改回下面
   // ((void (*)(uint64, uint64))fn)(TRAPFRAME + proc::k_pm.get_cur_cpuid() * sizeof(TrapFrame), satp);
@@ -399,45 +399,20 @@ int mmap_handler(uint64 va, int cause)
   }
   else
   {
-    panic("未实现");
-#ifdef FS_FIX_COMPLETELY
-    // 文件映射：需要从文件读取内容
-    fs::dentry *den = vf->getDentry();
-    if (den == nullptr)
-    {
-      printfRed("mmap_handler: dentry is null\n");
-      mem::k_pmm.free_page(pa);
-      return -1; // dentry is null
-    }
-    fs::Inode *inode = den->getNode();
-    if (inode == nullptr)
-    {
-      printfRed("mmap_handler: inode is null\n");
-      mem::k_pmm.free_page(pa);
-      return -1; // inode is null
-    }
 
-    inode->_lock.acquire(); // 锁定inode，防止其他线程修改
-
-    // 计算当前页面读取文件的偏移量，实验中p->_vma->_vm[i].offset总是0
-    // 要按顺序读读取，例如内存页面A,B和文件块a,b
-    // 则A读取a，B读取b，而不能A读取b，B读取a
     int offset = p->_vma->_vm[i].offset + PGROUNDDOWN(va - p->_vma->_vm[i].addr);
     ///@details 原本的xv6的readi函数有一个标志位来区分是否读到内核中，此处位于内核里
     /// pa直接是物理地址，所以应该无所谓
-    int readbytes = inode->nodeRead((uint64)pa, offset, PGSIZE);
-
+    //	long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
+    int readbytes = vf->read((uint64)pa, PGSIZE,offset, false);
     // 什么都没有读到
     if (readbytes == 0)
     {
       printfRed("mmap_handler: read nothing");
-      inode->_lock.release();
       mem::k_pmm.free_page(pa);
       return -1;
     }
-    inode->_lock.release(); // 释放inode锁
-    // printfCyan("mmap_handler: handling file mapping at %p, read %d bytes\n", va, readbytes);
-#endif
+
   }
 
   // 添加页面映射
