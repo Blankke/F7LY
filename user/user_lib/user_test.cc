@@ -72,18 +72,18 @@ int basic_test(const char *path = musl_dir)
     // run_test("clone");
     // run_test("brk");
     // run_test("waitpid");
-    run_test("mmap");             ///@todo 没写
-    // run_test("fstat");                  ///@todo 没写   
+    // run_test("mmap");
+    // run_test("fstat");
     // run_test("uname");
-    // run_test("openat");            ///@todo 没写
-    // run_test("open");            ///@todo 没写
-    // run_test("close");            ///@todo 没写
-    // run_test("read");            ///@todo 没写
+    // run_test("openat");
+    // run_test("open");
+    // run_test("close");
+    // run_test("read");
     // run_test("getdents");
     // run_test("mkdir_");
     // run_test("chdir");
-    // run_test("mount");
-    // run_test("umount");
+    // run_test("mount");       //todo
+    // run_test("umount");      //todo
     // run_test("munmap");
     // run_test("unlink");
     // run_test("pipe");
@@ -190,9 +190,9 @@ int libc_test(const char *path = musl_dir)
     {
         argv[3] = libctest[i][0];
         run_test("runtest.exe", argv, 0);
-        #ifdef LOONGARCH
+#ifdef LOONGARCH
         sleep(10);
-        #endif
+#endif
     }
     printf("#### OS COMP TEST GROUP END libctest-musl ####\n");
     return 0;
@@ -320,7 +320,7 @@ char *libctest[][2] = {
     // {"inet_pton_empty_last_field", NULL},
     // {"iswspace_null", NULL},
     // {"lrand48_signextend", NULL},
-    // {"lseek_large", NULL}, 
+    // {"lseek_large", NULL},
     // {"malloc_0", NULL},
     // {"mbsrtowcs_overflow", NULL},
     // {"memmem_oob_read", NULL},
@@ -380,7 +380,7 @@ char *bb_cmds[][10] = {
     {"uname", NULL},
     {"uptime", NULL},
     {"printf", "abc\\n", NULL}, // 这个有问题
-    {"ps", NULL}, // 这个有问题
+    {"ps", NULL},               // 这个有问题
     {"pwd", NULL},
     {"free", NULL},
     {"hwclock", NULL},
@@ -389,7 +389,7 @@ char *bb_cmds[][10] = {
     {"sleep", "1", NULL},
     {"echo", "#### file operation test", NULL},
     {"touch", "test.txt", NULL},
-    {"echo \"hello world\" > test.txt", NULL}, //这个有问题
+    {"echo \"hello world\" > test.txt", NULL}, // 这个有问题
     {"cat", "test.txt", NULL},
     {"cut", "-c", "3", "test.txt", NULL},
     // {"od", "test.txt", NULL},
@@ -413,7 +413,7 @@ char *bb_cmds[][10] = {
     {"mkdir", "test_dir", NULL},
     {"mv", "test_dir", "test", NULL},
     {"rmdir", "test", NULL},
-    {"grep", "hello", "busybox_cmd.txt", NULL}, //这个有问题
+    {"grep", "hello", "busybox_cmd.txt", NULL},         // 这个有问题
     {"cp", "busybox_cmd.txt", "busybox_cmd.bak", NULL}, // 这个有问题
     {"rm", "busybox_cmd.bak", NULL},
     // {"find", ".", "-name", "busybox_cmd.txt", NULL},

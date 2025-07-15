@@ -53,7 +53,7 @@ namespace syscall
     // private: uint64 _default_syscall_impl();
     uint64 SyscallHandler::_default_syscall_impl()
     {
-        printfYellow("Syscall not implemented\n");
+        panic("Syscall not implemented\n");
         return 0;
     }
 
