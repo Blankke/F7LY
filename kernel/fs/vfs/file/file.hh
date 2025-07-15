@@ -117,6 +117,7 @@ namespace fs
 		long _file_ptr = 0;				// file read header's offset correponding to the start of the file
 		eastl::string _path_name;	// file's path, used for readlink
 		struct ext4_file lwext4_file_struct;
+		struct ext4_dir lwext4_dir_struct;
 
 	public:
 		file() = default;

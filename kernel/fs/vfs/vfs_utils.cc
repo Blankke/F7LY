@@ -241,6 +241,76 @@ uint vfs_read_file(const char *path, uint64 buffer_addr, size_t offset, size_t s
     return bytes_read;
 }
 
+int vfs_getdents(fs::file *&file, struct linux_dirent64 *dirp, uint count)
+{
+    int index = 0;
+    struct linux_dirent64 *d;
+    const ext4_direntry *rentry;
+    int totlen = 0;
+    uint64 current_offset = 0;
+
+    /* make integer count */
+    if (count == 0)
+    {
+        return -EINVAL;
+    }
+    ext4_dir_entry_next(&file->lwext4_dir_struct);
+    ext4_dir_entry_next(&file->lwext4_dir_struct); //< 跳过/.和/..
+    d = dirp;
+    while (1)
+    {
+        rentry = ext4_dir_entry_next(&file->lwext4_dir_struct);
+        if (rentry == NULL)
+            break;
+
+        int namelen = strlen((const char *)rentry->name);
+        /*
+         * 长度是前四项的19加上namelen(字符串长度包括结尾的\0)
+         * reclen是namelen+2,如果是+1会错误。原因是没考虑name[]开头的'\'
+         */
+        uint reclen = sizeof d->d_ino + sizeof d->d_off + sizeof d->d_reclen + sizeof d->d_type + namelen + 1;
+        if (reclen % 8)
+            reclen = reclen - reclen % 8 + 8; //<对齐
+        if (reclen < sizeof(struct linux_dirent64))
+            reclen = sizeof(struct linux_dirent64);
+
+        if (totlen + reclen >= count)
+            break;
+
+        char name[MAXPATH] = {0};
+        // name[0] = '/';
+        strcat(name, (const char *)rentry->name); //< 追加，二者应该都以'/'开头
+        strncpy(d->d_name, name, MAXPATH);
+
+        if (rentry->inode_type == EXT4_DE_DIR)
+        {
+            d->d_type = T_DIR;
+        }
+        else if (rentry->inode_type == EXT4_DE_REG_FILE)
+        {
+            d->d_type = T_FILE;
+        }
+        else if (rentry->inode_type == EXT4_DE_CHRDEV)
+        {
+            d->d_type = T_CHR;
+        }
+        else
+        {
+            d->d_type = T_UNKNOWN;
+        }
+        d->d_ino = rentry->inode;
+        d->d_off = current_offset + reclen; // start from 1
+        d->d_reclen = reclen;
+        ++index;
+        totlen += d->d_reclen;
+        current_offset += reclen;
+        d = (struct linux_dirent64 *)((char *)d + d->d_reclen);
+    }
+
+    return totlen;
+}
+
+
 int vfs_fstat(fs::file *f, fs::Kstat *st)
 {
         struct ext4_inode inode;
