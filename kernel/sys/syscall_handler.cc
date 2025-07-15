@@ -1292,7 +1292,7 @@ panic("未实现");
             f->_attrs.filetype != fs::FileTypes::FT_DIRECT)
             return -1;
         // eastl::string name = f->data.get_Entry()->rName();
-        fs::normal_file *normal_f = static_cast<fs::normal_file *>(f);
+        // fs::normal_file *normal_f = static_cast<fs::normal_file *>(f);
 
         mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
 
@@ -1300,7 +1300,7 @@ panic("未实现");
 
         us.open();
         u64 rlen = us.rest_space();
-        normal_f->read_sub_dir(us);
+        f->read_sub_dir(us);
         rlen -= us.rest_space();
         us.close();
 

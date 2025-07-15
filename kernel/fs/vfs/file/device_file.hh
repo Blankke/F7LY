@@ -62,5 +62,11 @@ namespace fs
 		/// @return 返回新的文件指针位置（成功时），或返回负值（如 -EINVAL）表示不支持该操作。
 		virtual off_t lseek( off_t offset, int whence ) override { printfRed( "streamdevice not support lseek currently!" );return -EINVAL; };
 		int tcgetattr( termios * ts );
+
+		size_t read_sub_dir(ubuf &dst) override
+		{
+			panic("file::read_sub_dir: not implemented yet");
+			return 0;
+		};
 	};
 }

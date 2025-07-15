@@ -10,6 +10,7 @@
 #include <EASTL/vector.h>
 #include <EASTL/string.h>
 #include <asm-generic/errno-base.h>
+#include "mem/userspace_stream.hh"
 namespace proc
 {
 	namespace ipc	
@@ -129,6 +130,8 @@ namespace fs
 		virtual bool read_ready() = 0;
 		virtual bool write_ready() = 0;
 		virtual off_t lseek( off_t offset, int whence ) = 0;
+		using ubuf = mem::UserspaceStream;
+		virtual size_t read_sub_dir(ubuf &dst) = 0;
 
 		long get_file_offset() { return _file_ptr; }
 
