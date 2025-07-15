@@ -7,20 +7,21 @@
 #include "fs/vfs/file/directory_file.hh"
 int vfs_openat(eastl::string absolute_path, fs::file* &file, uint flags)
 {
-    if(is_file_exist(absolute_path.c_str()) != 1)
+    if(is_file_exist(absolute_path.c_str()) != 1 && (flags & O_CREAT) == 0)
     {
+        printfRed("vfs_openat: file %s does not exist, flags: %d\n", absolute_path.c_str(), flags);
         return -ENOENT; // 文件不存在
     }
     //TODO: 这里flag之类的都没处理，瞎jb open
-    printfCyan("[vfs_openat] absolute_path: %s, flags: %x\n", absolute_path.c_str(), flags);
     int type = vfs_path2filetype(absolute_path);
     int status = -100;
-    if (type == fs::FileTypes::FT_NORMAL)
+    if (type == fs::FileTypes::FT_NORMAL || (flags & O_CREAT) != 0)
     {
         fs::FileAttrs attrs;
         attrs.filetype = fs::FileTypes::FT_NORMAL;
         attrs._value = 0777;
         fs::normal_file *temp_file = new fs::normal_file(attrs, absolute_path);
+        printfYellow("flags: %x\n", flags);
         status = ext4_fopen2(&temp_file->lwext4_file_struct, absolute_path.c_str(), flags);
         if (status != EOK)
         {
