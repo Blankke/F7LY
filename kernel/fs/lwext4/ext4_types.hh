@@ -755,7 +755,7 @@ struct jbd_sb {
 #include "mem/physical_memory_manager.hh"
 /*****************************************************************************/
 #define ext4_malloc(size) mem::k_pmm.kmalloc(size)
-#define ext4_calloc(n, size) mem::k_pmm.kcalloc(n, size)
+#define ext4_calloc(n, size) mem::k_pmm.alloc_page()
 // #define ext4_realloc ext4_user_realloc
 #define ext4_free(ptr,size) mem::k_pmm.free_page1(ptr,size)
 

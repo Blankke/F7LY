@@ -104,16 +104,23 @@ namespace mem
 
     void SlabCache::destroy_slab(Slab *slab)
     {
+        // 确保Slab完全空闲才能销毁
+        if (slab->free_objs_count != slab->max_objs_count) {
+            panic("Attempting to destroy non-empty slab at %p", slab);
+        }
+        
+        // 调用析构函数
         slab->~Slab();
-                // printfYellow("释放物理页\n");
-                // slab= reinterpret_cast<Slab *>(PGROUNDDOWN(reinterpret_cast<uint64>(slab)));
-        k_pmm.free_page(slab);
+        
+        // 确保地址页面对齐 - Slab对象应该位于页面开始
+        void *page_start = reinterpret_cast<void *>(PGROUNDDOWN(reinterpret_cast<uint64>(slab)));
+
+        // 释放整个页面
+        k_pmm.free_page(page_start);
     }
 
     void *SlabCache::alloc()
     {
-
-
         if (!partial_slabs_.empty())
         {
             auto &slab = partial_slabs_.front();
@@ -183,12 +190,26 @@ namespace mem
 
     void SlabCache::memory_recycle()
     {
+        int destroyed_count = 0;
         while (free_slabs_count_ > DEFAULT_MAX_FREE_SLABS_ALLOWED)
         {
             Slab &slab = free_slabs_.front();
             free_slabs_.pop_front();
+            
+            // 验证这个slab确实是完全空闲的
+            if (slab.free_objs_count != slab.max_objs_count) {
+                panic("Free slab list contains non-empty slab: free=%lu, max=%lu", 
+                      slab.free_objs_count, slab.max_objs_count);
+            }
+            
             destroy_slab(&slab);
             free_slabs_count_--;
+            destroyed_count++;
+        }
+        
+        if (destroyed_count > 0) {
+            printfYellow("[SlabCache] Recycled %d empty slabs, obj_size=%u, remaining_free=%u\n", 
+                        destroyed_count, obj_size_, free_slabs_count_);
         }
     }
 

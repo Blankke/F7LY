@@ -55,22 +55,22 @@ int basic_test(const char *path = musl_dir)
     {
         printf("#### OS COMP TEST GROUP START basic-glibc ####\n");
     }
-    // run_test("write");
-    // run_test("fork");
-    // run_test("exit");
-    // run_test("wait");
-    // run_test("getpid");
-    // run_test("getppid");
-    // run_test("dup");
-    // run_test("dup2");
-    // run_test("execve");
-    // run_test("getcwd");
-    // run_test("gettimeofday");
-    // run_test("yield");
-    // run_test("sleep");
-    // run_test("times");
-    // run_test("clone");
-    // run_test("brk");
+    run_test("write");
+    run_test("fork");
+    run_test("exit");
+    run_test("wait");
+    run_test("getpid");
+    run_test("getppid");
+    run_test("dup");
+    run_test("dup2");
+    run_test("execve");
+    run_test("getcwd");
+    run_test("gettimeofday");
+    run_test("yield");
+    run_test("sleep");
+    run_test("times");
+    run_test("clone");
+    run_test("brk");
     // run_test("waitpid");
     // run_test("mmap");             ///@todo 没写
     // run_test("fstat");                  ///@todo 没写   
