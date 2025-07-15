@@ -27,9 +27,9 @@ private:
     static constexpr uint32 DEFAULT_MAX_FREE_SLABS_ALLOWED = 5;
     uint32 obj_size_;
     uint32 free_slabs_count_;
-    LinkedList<Slab> free_slabs_;    // 替换为自定义链表
-    LinkedList<Slab> partial_slabs_; // 替换为自定义链表
-    LinkedList<Slab> full_slabs_;    // 替换为自定义链表
+    LinkedList<Slab> free_slabs_;       //完全空闲的slab列表
+    LinkedList<Slab> partial_slabs_;    //部分空闲的slab列表
+    LinkedList<Slab> full_slabs_;        //完全满的slab列表
 
     Slab* create_slab();
     void destroy_slab(Slab* slab);

@@ -71,7 +71,7 @@ int basic_test(const char *path = musl_dir)
     run_test("times");
     run_test("clone");
     run_test("brk");
-    // run_test("waitpid");
+    run_test("waitpid");
     // run_test("mmap");             ///@todo 没写
     // run_test("fstat");                  ///@todo 没写   
     // run_test("uname");

@@ -20,7 +20,8 @@ namespace mem
         max_objs_count = free_objs_count;
         first_obj = reinterpret_cast<uint64>(pa_start);
         is_empty = false;
-
+        // printfMagenta("first_obj: %p, pa_start: %p, free_objs_count: %u, max_objs_count: %u\n",
+        //               reinterpret_cast<void *>(first_obj), pa_start, free_objs_count, max_objs_count);
         init_free_objects(obj_size);
     }
 
@@ -51,6 +52,7 @@ namespace mem
 
     void Slab::free(void *obj)
     {
+        //将链表头更新为当前释放的对象
         *reinterpret_cast<uint64 *>(obj) = first_obj;
         first_obj = reinterpret_cast<uint64>(obj);
         free_objs_count++;
@@ -73,19 +75,23 @@ namespace mem
             return nullptr;
 
         // 使用 placement new 在分配的页面上构造 Slab 对象
-        Slab *slab = new (page) Slab();
+        Slab *slab = new (page) Slab(obj_size_); // 使用 placement new 在分配的页面上构造 Slab 对象
 
+        /***************************此部分代码在构造函数中完成 ************************/
+        /***************************************************************************** */
         // 为metadata预留空间
-        int cnt = 1;
-        while (cnt * obj_size_ <= sizeof(Slab))
-            cnt++;
+        // int cnt = 1;
+        // while (cnt * obj_size_ <= sizeof(Slab))
+        //     cnt++;
 
-        // 设置成员变量
-        slab->pa_start = reinterpret_cast<void *>(reinterpret_cast<uint64>(slab) + cnt * sizeof(Slab));
-        slab->free_objs_count = (PGSIZE - cnt * sizeof(Slab)) / obj_size_;
-        slab->first_obj = reinterpret_cast<uint64>(slab->pa_start);
-        slab->max_objs_count = slab->free_objs_count;
-        slab->is_empty = false;
+        // // 设置成员变量
+        // slab->pa_start = reinterpret_cast<void *>(reinterpret_cast<uint64>(slab) + cnt * sizeof(Slab));
+        // slab->free_objs_count = (PGSIZE - cnt * sizeof(Slab)) / obj_size_;
+        // slab->first_obj = reinterpret_cast<uint64>(slab->pa_start);
+        // slab->max_objs_count = slab->free_objs_count;
+        // slab->is_empty = false;
+        /***************************************************************************** */
+        /***************************************************************************** */
 
         // 初始化空闲对象链表
         uint64 current = slab->first_obj;
@@ -94,27 +100,19 @@ namespace mem
         while (current + obj_size_ < end)
         {
             uint64 next = current + obj_size_;
-            *reinterpret_cast<uint64 *>(current) = next;
+            *reinterpret_cast<uint64 *>(current) = next; //每个对象的起始地址存储了指向下一个对象的地址
             current = next;
         }
-        *reinterpret_cast<uint64 *>(current) = 0;
+        *reinterpret_cast<uint64 *>(current) = 0;//最后一个对象的指针被设置为 0，表示链表的结束。
 
         return slab;
     }
 
     void SlabCache::destroy_slab(Slab *slab)
     {
-        // 确保Slab完全空闲才能销毁
-        if (slab->free_objs_count != slab->max_objs_count) {
-            panic("Attempting to destroy non-empty slab at %p", slab);
-        }
-        
-        // 调用析构函数
-        slab->~Slab();
-        
         // 确保地址页面对齐 - Slab对象应该位于页面开始
         void *page_start = reinterpret_cast<void *>(PGROUNDDOWN(reinterpret_cast<uint64>(slab)));
-
+        printfMagenta("[SlabCache] Destroying slab at %p, page start: %p\n", slab, page_start);
         // 释放整个页面
         k_pmm.free_page(page_start);
     }
@@ -123,11 +121,12 @@ namespace mem
     {
         if (!partial_slabs_.empty())
         {
-            auto &slab = partial_slabs_.front();
+            Slab &slab = partial_slabs_.front();
             void *obj = slab.alloc();
 
             if (slab.free_objs_count == 0)
             {
+                printfMagenta("[SlabCache] Slab %p is now full, moving to full slabs.\n", &slab);
                 partial_slabs_.pop_front();
                 full_slabs_.push_front(slab);
             }
@@ -141,6 +140,8 @@ namespace mem
             free_slabs_.push_front(*new_slab);
             free_slabs_count_++;
         }
+
+
         Slab &slab = free_slabs_.front();
         void *obj = slab.alloc();
         free_slabs_.pop_front();
@@ -152,14 +153,15 @@ namespace mem
 
     void SlabCache::dealloc(void *pa)
     {
+        //找到原本分配的slab的页面对齐基地址
         Slab *slab = reinterpret_cast<Slab *>(PGROUNDDOWN(reinterpret_cast<uint64>(pa)));
         const bool was_full = (slab->free_objs_count == 0);
 
         slab->free(pa);
 
-        if (slab->free_objs_count == slab->max_objs_count)
+        if (slab->is_empty)
         {
-            // 需要手动查找并移除
+            // 需要手动查找并移除,加入到空闲链表中
             for (auto it = partial_slabs_.begin(); it != partial_slabs_.end(); ++it)
             {
                 if (&(*it) == slab)
@@ -213,6 +215,7 @@ namespace mem
         }
     }
 
+    /// @brief SlabCache会管理obj_size大小的空闲区
     void SlabAllocator::init()
     {
         caches[0] = new SlabCache(16);
