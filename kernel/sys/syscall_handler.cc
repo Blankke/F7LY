@@ -38,7 +38,7 @@
 #include "fs/vfs/vfs_ext4_ext.hh"
 #include "fs/vfs/ops.hh"
 #include "fs/vfs/vfs_utils.hh"
-
+#include "fs/fs_defs.hh"
 namespace syscall
 {
     // 创建全局的 SyscallHandler 实例
@@ -1017,7 +1017,7 @@ namespace syscall
     uint64 SyscallHandler::sys_umount2()
     {
         panic("未实现");
-#ifdef FS_FIX_COMPLETELY
+// #ifdef FS_FIX_COMPLETELY
         uint64 specialaddr;
         eastl::string special;
         int flags;
@@ -1033,15 +1033,18 @@ namespace syscall
         if (mem::k_vmm.copy_str_in(*pt, special, specialaddr, 100) < 0)
             return -1;
 
-        fs::Path specialpath(special);
-        return specialpath.umount(flags);
-        #endif
+        // fs::Path specialpath(special);
+        // return specialpath.umount(flags);
         return -1; // 未实现
     }
     uint64 SyscallHandler::sys_mount()
     {
-panic("未实现");
-#ifdef FS_FIX_COMPLETELY
+        // panic("未实现");
+        // #ifdef FS_FIX_COMPLETELY
+        // TODO: basic mount有问题
+        // dev/vda2偷鸡
+
+
         uint64 dev_addr;
         uint64 mnt_addr;
         uint64 fstype_addr;
@@ -1072,12 +1075,21 @@ panic("未实现");
         if (_arg_addr(4, data) < 0)
             return -1;
 
-        // return proc::k_pm.mount( dev, mnt, fstype, flags, data );
-        fs::Path devpath(dev);
-        fs::Path mntpath(mnt);
+        if(dev == "/dev/vda2")
+        {
+            panic("look in my eyes：你为什么要挂vda2？");
+            return 0;
+        }
 
-        return mntpath.mount(devpath, fstype, flags, data);
-        #endif
+        eastl::string abs_path =  get_absolute_path(mnt.c_str(), p->_cwd_name.c_str()); //< 获取绝对路径
+
+        int ret = fs_mount(TMPDEV, EXT4, (char*)abs_path.c_str(), flags, (void*)data); //< 挂载
+        return ret;
+
+
+
+
+        // #endif
         return -1; // 未实现
     }
     uint64 SyscallHandler::sys_brk()

@@ -16,3 +16,4 @@
 #define MAXPATH      260   // maximum file path name
 #define VFS_MAX_FS   4     // VFS 中最多的fs个数
 #define INTERVAL     (390000000 / 200)
+#define TMPDEV 2    // NOTE 用于挂载的临时设备号

@@ -1397,37 +1397,21 @@ namespace proc
     }
     int ProcessManager::mkdir(int dir_fd, eastl::string path, uint flags)
     {
-        panic("未实现");
-#ifdef FS_FIX_COMPLETELY
+        // panic("未实现");
+// #ifdef FS_FIX_COMPLETELY
         Pcb *p = get_cur_pcb();
-        fs::file *file = nullptr;
-        fs::dentry *dentry;
+        [[maybe_unused]] fs::file *file = nullptr;
 
         if (dir_fd != AT_FDCWD)
         {
+            panic("mkdir: dir_fd != AT_FDCWD not implemented");
             file = p->get_open_file(dir_fd);
         }
 
-        fs::Path path_(path, file);
-        dentry = path_.pathSearch();
+        const char *dirpath = (dir_fd == AT_FDCWD) ? p->_cwd_name.c_str() : p->_ofile->_ofile_ptr[dir_fd]->_path_name.c_str();
+        eastl::string absolute_path = get_absolute_path(path.c_str(), dirpath);
+        vfs_mkdir(absolute_path.c_str(), 0777); //< 传入绝对路径，权限777表示所有人都可RWX
 
-        if (dentry == nullptr)
-        {
-            fs::dentry *par_ = path_.pathSearch(true);
-            if (par_ == nullptr)
-                return -1;
-            fs::FileAttrs attrs;
-            attrs.filetype = fs::FileTypes::FT_DIRECT;
-            attrs._value = 0777;
-            if ((dentry = par_->EntryCreate(path_.rFileName(), attrs)) == nullptr)
-            {
-                printf("Error creating new dentry %s failed\n", path_.rFileName());
-                return -1;
-            }
-        }
-        if (dentry == nullptr)
-            return -1;
-#endif
         return 0;
     }
     /// @brief

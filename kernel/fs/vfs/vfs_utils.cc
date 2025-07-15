@@ -5,14 +5,14 @@
 #include "fs/vfs/file/normal_file.hh"
 #include "fs/vfs/file/device_file.hh"
 #include "fs/vfs/file/directory_file.hh"
-int vfs_openat(eastl::string absolute_path, fs::file* &file, uint flags)
+int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags)
 {
-    if(is_file_exist(absolute_path.c_str()) != 1 && (flags & O_CREAT) == 0)
+    if (is_file_exist(absolute_path.c_str()) != 1 && (flags & O_CREAT) == 0)
     {
         printfRed("vfs_openat: file %s does not exist, flags: %d\n", absolute_path.c_str(), flags);
         return -ENOENT; // 文件不存在
     }
-    //TODO: 这里flag之类的都没处理，瞎jb open
+    // TODO: 这里flag之类的都没处理，瞎jb open
     int type = vfs_path2filetype(absolute_path);
     int status = -100;
     if (type == fs::FileTypes::FT_NORMAL || (flags & O_CREAT) != 0)
@@ -33,7 +33,7 @@ int vfs_openat(eastl::string absolute_path, fs::file* &file, uint flags)
     }
     else if (type == fs::FileTypes::FT_DEVICE)
     {
-        panic("FT_DEVICE is not supported yet"); //下面写的是错的
+        panic("FT_DEVICE is not supported yet"); // 下面写的是错的
         fs::FileAttrs attrs;
         attrs.filetype = fs::FileTypes::FT_DEVICE;
         fs::device_file *temp_file = new fs::device_file(attrs, absolute_path);
@@ -46,10 +46,10 @@ int vfs_openat(eastl::string absolute_path, fs::file* &file, uint flags)
         fs::FileAttrs attrs;
         attrs.filetype = fs::FileTypes::FT_DIRECT;
         attrs._value = 0755; // 目录权限
-        
+
         // 假设你有一个 directory_file 类
         fs::directory_file *temp_dir = new fs::directory_file(attrs, absolute_path);
-        
+
         // 使用 ext4_dir_open 打开目录
         status = ext4_dir_open(&temp_dir->lwext4_dir_struct, absolute_path.c_str());
         if (status != EOK)
@@ -58,7 +58,7 @@ int vfs_openat(eastl::string absolute_path, fs::file* &file, uint flags)
             printfRed("Failed to open directory: %d\n", status);
             return status;
         }
-        
+
         file = temp_dir;
     }
     else
@@ -72,7 +72,7 @@ int vfs_openat(eastl::string absolute_path, fs::file* &file, uint flags)
 
 int vfs_is_dir(eastl::string &absolute_path)
 {
-    //这个函数可以滚蛋了，以后弃用
+    // 这个函数可以滚蛋了，以后弃用
     struct ext4_dir dir_obj;
     struct ext4_dir *dir = &dir_obj;
     printfRed("dir: %p\n", dir);
@@ -120,9 +120,6 @@ int vfs_path2filetype(eastl::string &absolute_path)
     printfMagenta("path2filetype: %s not found\n", absolute_path.c_str());
     return -1;
 }
-
-
-
 
 int create_and_write_file(const char *path, const char *data)
 {
@@ -174,18 +171,23 @@ int is_file_exist(const char *path)
     printfYellow("check file existence: %s\n", path);
     // 尝试获取文件的inode信息
     int res = ext4_raw_inode_fill(path, &ino, &inode);
-    //TODO : 这里有个特别诡异的现象，加了print下面这行会爆炸
-    // printf("res:%p\n", res);
+    // TODO : 这里有个特别诡异的现象，加了print下面这行会爆炸
+    //  printf("res:%p\n", res);
 
-    if (res == EOK) {
+    if (res == EOK)
+    {
         // 文件存在
         return 1;
-    } else if (res == ENOENT) {
+    }
+    else if (res == ENOENT)
+    {
         // 文件不存在
         return 0;
-    } else {
+    }
+    else
+    {
         // 其他错误（如权限问题、路径错误等）
-        return -res;  // 返回负的错误码
+        return -res; // 返回负的错误码
     }
 }
 uint vfs_read_file(const char *path, uint64 buffer_addr, size_t offset, size_t size)
@@ -195,10 +197,10 @@ uint vfs_read_file(const char *path, uint64 buffer_addr, size_t offset, size_t s
     //     printfRed("文件不存在\n");
     //     return -ENOENT;
     // }
-    
+
     int res;
     ext4_file file;
-    
+
     // 打开文件（只读模式）
     res = ext4_fopen(&file, path, "rb");
     if (res != EOK)
@@ -206,7 +208,7 @@ uint vfs_read_file(const char *path, uint64 buffer_addr, size_t offset, size_t s
         printfRed("Failed to open file: %d\n", res);
         return res;
     }
-    
+
     // 如果有偏移，设置文件指针位置
     if (offset > 0)
     {
@@ -218,17 +220,17 @@ uint vfs_read_file(const char *path, uint64 buffer_addr, size_t offset, size_t s
             return res;
         }
     }
-    
+
     // 读取数据
     size_t bytes_read;
-    res = ext4_fread(&file, (void*)buffer_addr, size, &bytes_read);
+    res = ext4_fread(&file, (void *)buffer_addr, size, &bytes_read);
     if (res != EOK)
     {
         printfRed("Failed to read file: %d\n", res);
         ext4_fclose(&file);
         return res;
     }
-    
+
     // 关闭文件
     res = ext4_fclose(&file);
     if (res != EOK)
@@ -236,7 +238,7 @@ uint vfs_read_file(const char *path, uint64 buffer_addr, size_t offset, size_t s
         printfRed("Failed to close file: %d\n", res);
         return res;
     }
-    
+
     // 返回实际读取的字节数
     return bytes_read;
 }
@@ -308,4 +310,17 @@ int vfs_getdents(fs::file *&file, struct linux_dirent64 *dirp, uint count)
     }
 
     return totlen;
+}
+
+int vfs_mkdir(const char *path, uint64_t mode)
+{
+    /* Create the directory. */
+    int status = ext4_dir_mk(path);
+    if (status != EOK)
+        return -status;
+
+    /* Set mode. */
+    status = ext4_mode_set(path, mode);
+
+    return -status;
 }
