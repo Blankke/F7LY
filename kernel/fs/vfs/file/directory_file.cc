@@ -3,12 +3,13 @@
 #include "fs/lwext4/ext4.hh"
 #include "fs/vfs/vfs_ext4_ext.hh"
 #include "mem/userspace_stream.hh"
+#include "fs/vfs/vfs_utils.hh"
 
 namespace fs
 {
 	long directory_file::read(uint64 buf, size_t len, long off, bool upgrade)
 	{
-        panic("directory_file::read: not implemented yet");
+        // panic("directory_file::read: not implemented yet");
 		// 目录文件的read操作主要是读取目录项
 		if (_attrs.u_read != 1)
 		{
@@ -58,24 +59,24 @@ namespace fs
 
 	long directory_file::getdents64(struct linux_dirent64 *dirp, int count)
 	{
-        panic("directory_file::getdents64: not implemented yet");
-		// // 使用ext4文件系统的getdents功能
-		// // 这里需要一个临时的file结构来调用vfs_ext_getdents
-		// // 实际实现需要根据具体的文件系统接口调整
+        // panic("directory_file::getdents64: not implemented yet");
+		// 使用ext4文件系统的getdents功能
+		// 这里需要一个临时的file结构来调用vfs_ext_getdents
+		// 实际实现需要根据具体的文件系统接口调整
 		
-		// // 临时实现，需要根据实际的文件系统接口进行调整
+		// 临时实现，需要根据实际的文件系统接口进行调整
 		// struct file temp_file;
-		// // 设置temp_file的相关字段...
+		// 设置temp_file的相关字段...
 		
-		// // 调用底层的getdents实现
-		// int result = vfs_ext_getdents(&temp_file, dirp, count);
+		// 调用底层的getdents实现
+		int result = vfs_getdents(this, dirp, count);
 		
-		// if (result > 0) {
-		// 	// 更新文件指针
-		// 	_file_ptr += result;
-		// }
+		if (result > 0) {
+			// 更新文件指针
+			_file_ptr += result;
+		}
 		
-		// return result;
+		return result;
 	}
 
 	off_t directory_file::lseek(off_t offset, int whence)

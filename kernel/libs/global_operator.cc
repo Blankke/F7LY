@@ -49,7 +49,7 @@ void operator delete(void* ptr, std::size_t size, std::align_val_t align) noexce
 
 void* operator new(std::size_t size, void* p) noexcept
 {
-    Info("placement new at %p\n", p);
+    // Info("placement new at %p\n", p);
     return p;
 }
 void  operator delete(void*, void*) noexcept

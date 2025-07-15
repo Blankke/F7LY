@@ -61,7 +61,7 @@ namespace mem
 
     SlabCache::SlabCache(uint32 size) : obj_size_(size), free_slabs_count_(0)
     {
-        printfGreen("[SlabCache] Created cache for object size: %u\n", size);
+        // printfGreen("[SlabCache] Created cache for object size: %u\n", size);
         free_slabs_.clear();
         partial_slabs_.clear();
         full_slabs_.clear();
@@ -112,7 +112,7 @@ namespace mem
     {
         // 确保地址页面对齐 - Slab对象应该位于页面开始
         void *page_start = reinterpret_cast<void *>(PGROUNDDOWN(reinterpret_cast<uint64>(slab)));
-        printfMagenta("[SlabCache] Destroying slab at %p, page start: %p\n", slab, page_start);
+        // printfMagenta("[SlabCache] Destroying slab at %p, page start: %p\n", slab, page_start);
         // 释放整个页面
         k_pmm.free_page(page_start);
     }
@@ -126,7 +126,7 @@ namespace mem
 
             if (slab.free_objs_count == 0)
             {
-                printfMagenta("[SlabCache] Slab %p is now full, moving to full slabs.\n", &slab);
+                // printfMagenta("[SlabCache] Slab %p is now full, moving to full slabs.\n", &slab);
                 partial_slabs_.pop_front();
                 full_slabs_.push_front(slab);
             }
@@ -210,8 +210,8 @@ namespace mem
         }
         
         if (destroyed_count > 0) {
-            printfYellow("[SlabCache] Recycled %d empty slabs, obj_size=%u, remaining_free=%u\n", 
-                        destroyed_count, obj_size_, free_slabs_count_);
+            // printfYellow("[SlabCache] Recycled %d empty slabs, obj_size=%u, remaining_free=%u\n", 
+                        // destroyed_count, obj_size_, free_slabs_count_);
         }
     }
 
