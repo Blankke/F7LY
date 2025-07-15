@@ -84,7 +84,7 @@ int basic_test(const char *path = musl_dir)
     // run_test("chdir");
     // run_test("mount");
     // run_test("umount");
-    // run_test("munmap");
+    run_test("munmap");
     // run_test("unlink");
     // run_test("pipe");
     // sleep(20);
