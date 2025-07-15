@@ -2758,7 +2758,7 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
     }
     uint64 SyscallHandler::sys_sched_getaffinity()
     {
-        return 0;
+        // return 0;
         panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_setpgid()
