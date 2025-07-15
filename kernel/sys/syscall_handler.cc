@@ -37,6 +37,7 @@
 #include "fs/vfs/fs.hh"
 #include "fs/vfs/vfs_ext4_ext.hh"
 #include "fs/vfs/ops.hh"
+#include "fs/vfs/vfs_utils.hh"
 
 namespace syscall
 {
@@ -1276,6 +1277,8 @@ panic("未实现");
 
         return buf;
     }
+#define GETDENTS64_BUF_SIZE 4 * 4096              //< 似乎用不了这么多
+char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
     uint64 SyscallHandler::sys_getdents64()
     {
         fs::file *f;
@@ -1291,20 +1294,32 @@ panic("未实现");
         if (f->_attrs.filetype != fs::FileTypes::FT_NORMAL &&
             f->_attrs.filetype != fs::FileTypes::FT_DIRECT)
             return -1;
-        // eastl::string name = f->data.get_Entry()->rName();
-        // fs::normal_file *normal_f = static_cast<fs::normal_file *>(f);
 
+        /* @note busybox的ps */
+        if (f->_path_name == "/proc")
+        {
+            panic("用于busybox ps是什么");
+            return 0;
+        }
+        
+        memset((void *)sys_getdents64_buf, 0, GETDENTS64_BUF_SIZE);
+        int count = vfs_getdents(f, (struct linux_dirent64 *)sys_getdents64_buf, buf_len);
         mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+        mem::k_vmm.copy_out(*pt, (uint64)buf_addr, (char *)sys_getdents64_buf, count);
+        return count;
 
-        mem::UserspaceStream us((void *)buf_addr, buf_len, pt);
+        //下面是蒙老师的userspacestream版本，看不懂
+        // mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
 
-        us.open();
-        u64 rlen = us.rest_space();
-        f->read_sub_dir(us);
-        rlen -= us.rest_space();
-        us.close();
+        // mem::UserspaceStream us((void *)buf_addr, buf_len, pt);
 
-        return rlen;
+        // us.open();
+        // u64 rlen = us.rest_space();
+        // f->read_sub_dir(us);
+        // rlen -= us.rest_space();
+        // us.close();
+
+        // return rlen;
     }
     uint64 SyscallHandler::sys_shutdown()
     {

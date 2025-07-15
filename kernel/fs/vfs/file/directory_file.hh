@@ -12,7 +12,6 @@ namespace fs
 	{
 	public:
 		dentry *_den;
-        ext4_dir lwext4_dir_struct;
 
         public : directory_file() = default;
         directory_file(FileAttrs attrs, eastl::string path) : file(attrs, path)
