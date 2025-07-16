@@ -20,6 +20,7 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags)
         fs::FileAttrs attrs;
         attrs.filetype = fs::FileTypes::FT_NORMAL;
         attrs._value = 0777;
+
         fs::normal_file *temp_file = new fs::normal_file(attrs, absolute_path);
         printfYellow("flags: %x\n", flags);
         status = ext4_fopen2(&temp_file->lwext4_file_struct, absolute_path.c_str(), flags);
@@ -386,6 +387,25 @@ int vfs_truncate(fs::file *f, size_t length)
 
     // 更新文件大小
     f->_stat.size = length;
+
+    return EOK;
+}
+int vfs_chmod(eastl::string pathname, mode_t mode)
+{
+    
+    if (is_file_exist(pathname.c_str()) != 1)
+    {
+        printfRed("[vfs_chmod] 文件不存在: %s\n", pathname.c_str());
+        return -ENOENT; // 文件不存在
+    }
+
+    // 调用ext4的模式设置函数
+    int status = ext4_mode_set(pathname.c_str(), mode);
+    if (status != EOK)
+    {
+        printfRed("[vfs_chmod] 设置文件权限失败: %s, 错误码: %d\n", pathname.c_str(), status);
+        return -EACCES; // 访问被拒绝
+    }
 
     return EOK;
 }

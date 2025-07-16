@@ -386,16 +386,19 @@ int mmap_handler(uint64 va, int cause)
     if (!(p->_vma->_vm[i].prot & PROT_EXEC))
       pte_flags |= PTE_NX;
   }
-
   fs::normal_file *vf = p->_vma->_vm[i].vfile;
 
   void *pa = mem::k_pmm.alloc_page();
-
+  if (pa == nullptr)
+  {
+    printfRed("mmap_handler: alloc_page failed\n");
+    return -1; // 分配页面失败
+  }
   if (pa == 0)
     return -1;
   memset(pa, 0, PGSIZE);
 
-  // 读取文件内容
+  // 检查是否为匿名映射
   if (vf == nullptr || p->_vma->_vm[i].vfd == -1)
   {
     // 匿名映射：页面已经初始化为0，直接映射即可
@@ -403,43 +406,22 @@ int mmap_handler(uint64 va, int cause)
   }
   else
   {
-    fs::dentry *den = vf->getDentry();
-    if (den == nullptr)
-    {
-      printfRed("mmap_handler: dentry is null\n");
-      mem::k_pmm.free_page(pa);
-      return -1; // dentry is null
-    }
-    fs::Inode *inode = den->getNode();
-    if (inode == nullptr)
-    {
-      printfRed("mmap_handler: inode is null\n");
-      mem::k_pmm.free_page(pa);
-      return -1; // inode is null
-    }
 
-    inode->_lock.acquire(); // 锁定inode，防止其他线程修改
-
-    // 计算当前页面读取文件的偏移量，实验中p->_vma->_vm[i].offset总是0
-    // 要按顺序读读取，例如内存页面A,B和文件块a,b
-    // 则A读取a，B读取b，而不能A读取b，B读取a
     int offset = p->_vma->_vm[i].offset + PGROUNDDOWN(va - p->_vma->_vm[i].addr);
     ///@details 原本的xv6的readi函数有一个标志位来区分是否读到内核中，此处位于内核里
     /// pa直接是物理地址，所以应该无所谓
-    int readbytes = inode->nodeRead((uint64)pa, offset, PGSIZE);
-
+    //	long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
+    int readbytes = vf->read((uint64)pa, PGSIZE, offset, false);
     // 什么都没有读到
     if (readbytes == 0)
     {
       printfRed("mmap_handler: read nothing");
-      inode->_lock.release();
       mem::k_pmm.free_page(pa);
       return -1;
     }
-    inode->_lock.release(); // 释放inode锁
   }
+
   // 添加页面映射
-  printfCyan("mmap_handler: mapping page at %p to %p with flags %p\n", va, pa, pte_flags);
   if (mem::k_vmm.map_pages(*p->get_pagetable(), PGROUNDDOWN(va), PGSIZE, (uint64)pa, pte_flags) != 1)
   {
     printfRed("mmap_handler: map failed");
@@ -447,10 +429,6 @@ int mmap_handler(uint64 va, int cause)
     return -1;
   }
 
-  // 在 LoongArch 上刷新 TLB
-  asm volatile("invtlb 0x5, $zero, %0" : : "r"(PGROUNDDOWN(va)) : "memory");
-  
-  // printfCyan("mmap_handler: successfully mapped and returning\n");
   return 0;
 }
 #endif

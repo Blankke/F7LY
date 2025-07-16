@@ -1162,7 +1162,7 @@ namespace proc
     int ProcessManager::load_seg(mem::PageTable &pt, uint64 va, eastl::string &path, uint offset, uint size)
     { // 好像没有机会返回 -1, pa失败的话会panic，de的read也没有返回值
         // panic("未实现");
-// #ifdef FS_FIX_COMPLETELY
+        // #ifdef FS_FIX_COMPLETELY
         uint i, n;
         uint64 pa;
 
@@ -1402,7 +1402,7 @@ namespace proc
     int ProcessManager::mkdir(int dir_fd, eastl::string path, uint flags)
     {
         // panic("未实现");
-// #ifdef FS_FIX_COMPLETELY
+        // #ifdef FS_FIX_COMPLETELY
         Pcb *p = get_cur_pcb();
         [[maybe_unused]] fs::file *file = nullptr;
 
@@ -1432,21 +1432,19 @@ namespace proc
 
         // struct filesystem *fs = get_fs_from_path(path.c_str());
         const char *dirpath = (dir_fd == AT_FDCWD) ? p->_cwd_name.c_str() : p->_ofile->_ofile_ptr[dir_fd]->_path_name.c_str();
-        eastl::string absolute_path=get_absolute_path(path.c_str(), dirpath);
+        eastl::string absolute_path = get_absolute_path(path.c_str(), dirpath);
         fs::file *file = nullptr;
         int status = vfs_openat(absolute_path, file, flags);
-        if(status < 0)
+        if (status < 0)
         {
             printfRed("[open] vfs_openat failed with status: %d\n", status);
             return -1; // 打开失败
         }
-        else if(status == 0)
+        else if (status == 0)
         {
-            printfGreen("[open] vfs_openat success, file: %p\n", file);
+            printfGreen("[open] vfs_openat success, file: %p,name:%s\n", file,file->_path_name.c_str());
             return alloc_fd(p, file);
         }
-
-
 
         return 0;
     }
@@ -1487,7 +1485,7 @@ namespace proc
     int ProcessManager::chdir(eastl::string &path)
     {
         // panic("未实现");
-// #ifdef FS_FIX_COMPLETELY
+        // #ifdef FS_FIX_COMPLETELY
         Pcb *p = get_cur_pcb();
         char temp_path[EXT4_PATH_LONG_MAX];
 
@@ -1498,10 +1496,9 @@ namespace proc
         if (p->_cwd_name.back() != '/')
         {
             p->_cwd_name += "/";
-
         }
 
-// #endif
+        // #endif
         return 0;
     }
     /// @brief 获取当前进程的工作目录路径。get current working directory
@@ -1546,9 +1543,10 @@ namespace proc
         }
         else
         {
-            f = p->_ofile->_ofile_ptr[fd];
+            f = p->get_open_file(fd);
             if (f->_attrs.filetype != fs::FileTypes::FT_NORMAL)
-                return (void *)err;                    // 只支持普通文件映射
+                return (void *)err; // 只支持普通文件映射
+            printfYellow("vfile name : %s\n", f ? f->_path_name.c_str() : "nullptr");
             vfile = static_cast<fs::normal_file *>(f); // 强制转换为普通文件类型
         }
         ///@details 学长代码是mmap时映射到内存，xv6lab的意思是懒分配，在缺页异常时判断分配。
@@ -1616,7 +1614,7 @@ namespace proc
                 else
                 {
                     ///@todo 一定记得写完fstat之后改!!!!!!!!fstat会让传入的length变成文件大小
-                    p->_vma->_vm[i].len =length; // 文件映射保持原样
+                    p->_vma->_vm[i].len = length; // 文件映射保持原样
                     p->_vma->_vm[i].max_len = length;
                     // printfCyan("[mmap] file mapping at %p, length: %d, prot: %d, flags: %d, fd: %d\n",
                     //            (void *)p->_vma->_vm[i].addr, length, prot, flags, fd);
@@ -1833,8 +1831,8 @@ namespace proc
         elf::elfhdr elf;           // ELF 文件头
         elf::proghdr ph = {};      // 程序头
         // fs::dentry *de;            // 目录项
-        int i, off;                // 循环变量和偏移量
-        u64 new_sz = 0;            // 新进程映像的大小
+        int i, off;     // 循环变量和偏移量
+        u64 new_sz = 0; // 新进程映像的大小
 #ifdef LOONGARCH
         u64 elf_start = 0; // ELF 文件的起始地址
 #endif
@@ -1845,7 +1843,7 @@ namespace proc
         // ========== 第一阶段：路径解析和文件查找 ==========
 
         // 构建绝对路径
-        //TODO :这个解析路径写的太狗屎了，换以下
+        // TODO :这个解析路径写的太狗屎了，换以下
         eastl::string ab_path;
         if (path[0] == '/')
             ab_path = path; // 已经是绝对路径
@@ -1855,7 +1853,7 @@ namespace proc
         printfCyan("execve file : %s\n", ab_path.c_str());
 
         // 解析路径并查找文件
-        if(is_file_exist(ab_path.c_str()) != 1)
+        if (is_file_exist(ab_path.c_str()) != 1)
         {
             printfRed("execve: cannot find file");
             return -1;

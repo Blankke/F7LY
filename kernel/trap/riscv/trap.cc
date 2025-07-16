@@ -407,20 +407,21 @@ int mmap_handler(uint64 va, int cause)
     ///@details 原本的xv6的readi函数有一个标志位来区分是否读到内核中，此处位于内核里
     /// pa直接是物理地址，所以应该无所谓
     //	long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
+    printfCyan("mmap_handler: reading from file %s at offset %d\n", vf->_path_name.c_str(), offset);
     int readbytes = vf->read((uint64)pa, PGSIZE, offset, false);
     // 什么都没有读到
     if (readbytes == 0)
     {
-      printfRed("mmap_handler: read nothing");
-      mem::k_pmm.free_page(pa);
-      return -1;
+      printfRed("mmap_handler: read nothing\n");
+      // mem::k_pmm.free_page(pa);
+      // return -1;
     }
   }
 
   // 添加页面映射
   if (mem::k_vmm.map_pages(*p->get_pagetable(), PGROUNDDOWN(va), PGSIZE, (uint64)pa, pte_flags) != 1)
   {
-    printfRed("mmap_handler: map failed");
+    printfRed("mmap_handler: map failed\n");
     mem::k_pmm.free_page(pa);
     return -1;
   }

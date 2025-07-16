@@ -182,8 +182,6 @@ namespace syscall
         BIND_SYSCALL(clone3);   // todo
         BIND_SYSCALL(poweroff); // todo
 
-
-
         // rocket syscalls
         BIND_SYSCALL(fgetxattr);          // from rocket
         BIND_SYSCALL(mknodat);            // from rocket
@@ -239,7 +237,7 @@ namespace syscall
         BIND_SYSCALL(close_range);        // from rocket
         BIND_SYSCALL(openat2);            // from rocket
         BIND_SYSCALL(faccessat2);         // from rocket
-        // ...existing code...    
+        // ...existing code...
         // printfCyan("====================debug: syscall_num_list\n");
         // for (uint64 i = 0; i < max_syscall_funcs_num; i++)
         // {
@@ -420,7 +418,7 @@ namespace syscall
     int SyscallHandler::argfd(int n, int *pfd, struct file **pf)
     {
         panic("未实现该系统调用");
-        #ifdef FIX_FS_COMPLETELY
+#ifdef FIX_FS_COMPLETELY
         int fd;
         struct file *f;
 
@@ -431,7 +429,7 @@ namespace syscall
             *pfd = fd;
         if (pf)
             *pf = f;
-            #endif
+#endif
         return 0;
     }
 
@@ -991,7 +989,7 @@ namespace syscall
     uint64 SyscallHandler::sys_umount2()
     {
         // panic("未实现");
-// #ifdef FS_FIX_COMPLETELY
+        // #ifdef FS_FIX_COMPLETELY
         uint64 specialaddr;
         eastl::string special;
         int flags;
@@ -1018,7 +1016,6 @@ namespace syscall
         // #ifdef FS_FIX_COMPLETELY
         // TODO: basic mount有问题
         // dev/vda2偷鸡
-
 
         uint64 dev_addr;
         uint64 mnt_addr;
@@ -1056,7 +1053,7 @@ namespace syscall
         //     return 0;
         // }
 
-        eastl::string abs_path =  get_absolute_path(mnt.c_str(), p->_cwd_name.c_str()); //< 获取绝对路径
+        eastl::string abs_path = get_absolute_path(mnt.c_str(), p->_cwd_name.c_str()); //< 获取绝对路径
 
         // int ret = fs_mount(TMPDEV, EXT4, (char*)abs_path.c_str(), flags, (void*)data); //< 挂载
         ///@todo 没修好，直接return 0
@@ -1064,9 +1061,6 @@ namespace syscall
         ，叫做virtio_disk，这样的话再次调用fs_mount就会爆重复注册EEXIST错误。华科用了两个virt来解决，
         有点麻烦，不如先偷一手。*/
         return 0;
-
-
-
 
         // #endif
         return -1; // 未实现
@@ -1111,7 +1105,7 @@ namespace syscall
             return -1;
         }
         printfYellow("[SyscallHandler::sys_mmap] addr: %p, map_size: %u, prot: %d, flags: %d, fd: %d, offset: %u\n",
-               (void *)addr, map_size, prot, flags, fd, offset);
+                     (void *)addr, map_size, prot, flags, fd, offset);
         return (uint64)proc::k_pm.mmap((void *)addr, map_size, prot, flags, fd, offset); // 调用进程管理器的 mmap 函数
     }
 
@@ -1269,7 +1263,7 @@ namespace syscall
         return buf;
     }
 #define GETDENTS64_BUF_SIZE 4 * 4096              //< 似乎用不了这么多
-char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
+    char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
     uint64 SyscallHandler::sys_getdents64()
     {
         fs::file *f;
@@ -1293,15 +1287,15 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
             // TODO: 仔细研究一下
             return 0;
         }
-        
+
         memset((void *)sys_getdents64_buf, 0, GETDENTS64_BUF_SIZE);
         int count = vfs_getdents(f, (struct linux_dirent64 *)sys_getdents64_buf, buf_len);
         mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
         mem::k_vmm.copy_out(*pt, (uint64)buf_addr, (char *)sys_getdents64_buf, count);
         return count;
 
-        //下面是蒙老师的userspacestream版本，看不懂
-        // mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+        // 下面是蒙老师的userspacestream版本，看不懂
+        //  mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
 
         // mem::UserspaceStream us((void *)buf_addr, buf_len, pt);
 
@@ -1674,8 +1668,8 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
     }
     uint64 SyscallHandler::sys_readlinkat()
     {
-//         panic("未实现");
-// #ifdef FS_FIX_COMPLETELY
+        //         panic("未实现");
+        // #ifdef FS_FIX_COMPLETELY
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
         int fd;
@@ -2022,7 +2016,7 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
     uint64 SyscallHandler::sys_faccessat()
     {
         // panic("未实现");
-// #ifdef FS_FIX_COMPLETELY
+        // #ifdef FS_FIX_COMPLETELY
         int dirfd, mode, flags;
         eastl::string path;
         if (_arg_int(0, dirfd) < 0 || _arg_int(2, mode) < 0 || _arg_int(3, flags) < 0)
@@ -2390,9 +2384,9 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
     }
     uint64 SyscallHandler::sys_utimensat()
     {
-        //TODO: 这个完全是骗的
-        // panic("未实现");
-// #ifdef FS_FIX_COMPLETELY
+        // TODO: 这个完全是骗的
+        //  panic("未实现");
+        // #ifdef FS_FIX_COMPLETELY
         int dirfd;
         uint64 pathaddr;
         eastl::string pathname;
@@ -2447,18 +2441,18 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
 
         if (_arg_int(3, flags) < 0)
             return -1;
-        pathname =  get_absolute_path(pathname.c_str(), cur_proc->_cwd_name.c_str());
+        pathname = get_absolute_path(pathname.c_str(), cur_proc->_cwd_name.c_str());
         if (is_file_exist(pathname.c_str()) != 1)
-            return -ENOENT;
+            return SYS_ENOENT;
 
         // int fd = path.open();
-// #endif
+        // #endif
         return 0;
     }
     uint64 SyscallHandler::sys_renameat2()
     {
         // panic("未实现");
-// #ifdef FS_FIX_COMPLETELY
+        // #ifdef FS_FIX_COMPLETELY
         int old_fd, new_fd, flags;
         uint64 old_path_addr, new_path_addr;
 
@@ -2505,12 +2499,12 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
             _arg_addr(2, req_addr) < 0 ||
             _arg_addr(3, rem_addr) < 0)
         {
-            return -EINVAL;
+            return SYS_EINVAL;
         }
 
         // 仅示例支持 CLOCK_REALTIME 与 CLOCK_MONOTONIC
         if (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC)
-            return -EINVAL;
+            return SYS_EINVAL;
 
         // 从用户空间复制 timespec
         tmm::timespec req_ts;
@@ -2518,7 +2512,7 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
         {
             if (mem::k_vmm.copy_in(*proc::k_pm.get_cur_pcb()->get_pagetable(),
                                    &req_ts, req_addr, sizeof(req_ts)) < 0)
-                return -EFAULT;
+                return SYS_EFAULT;
         }
         else
         {
@@ -2565,7 +2559,7 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
             //         mem::k_vmm.copy_out(*proc::k_pm.get_cur_pcb()->get_pagetable(),
             //                             rem_addr, &rem_ts, sizeof(rem_ts));
             //     }
-            //     return -EINTR;
+            //     return SYS_EINTR;
             // }
 
             auto now_tv = tmm::k_tm.get_time_val();
@@ -2616,26 +2610,26 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
     {
         int fd;
         off_t length;
-        if(_arg_int(0,fd)<0||_arg_long(1,length)<0)
+        if (_arg_int(0, fd) < 0 || _arg_long(1, length) < 0)
         {
             printfRed("[sys_ftruncate] 参数错误\n");
-            return -EINVAL; // 参数错误
+            return SYS_EINVAL; // 参数错误
         }
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         fs::file *f = p->get_open_file(fd);
-        
+
         // 检查文件描述符是否有效
         if (!f)
         {
             printfRed("[sys_ftruncate] 文件描述符无效: %d\n", fd);
-            return -EBADF; // 无效的文件描述符
+            return SYS_EBADF; // 无效的文件描述符
         }
-                // 检查文件是否以写入模式打开
+        // 检查文件是否以写入模式打开
         // 使用FileAttrs中的u_write字段检查用户写权限
         if (!(f->_attrs.u_write))
         {
             printfRed("[sys_ftruncate] 文件未以写入模式打开: %d\n", fd);
-            return -EINVAL; // 参数无效，文件未以写入模式打开
+            return SYS_EINVAL; // 参数无效，文件未以写入模式打开
         }
         return vfs_truncate(f, length); // 调用vfs_truncate函数进行截断操作
         // TODO: 实现真正的truncate功能
@@ -2884,14 +2878,14 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
 
         default:
             printfRed("[SyscallHandler::sys_getrusage] Invalid who parameter: %d\n", who);
-            return -EINVAL;
+            return SYS_EINVAL;
         }
 
         // 将结果拷贝到用户空间
         if (mem::k_vmm.copy_out(*pt, usage_addr, &ret, sizeof(ret)) < 0)
         {
             printfRed("[SyscallHandler::sys_getrusage] Error copying rusage to user space\n");
-            return -EFAULT;
+            return SYS_EFAULT;
         }
 
         return 0;
@@ -3015,7 +3009,7 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
         panic("未实现该系统调用");
     }
 
-        //================================== rocket syscalls ===================================
+    //================================== rocket syscalls ===================================
     uint64 SyscallHandler::sys_fgetxattr()
     {
         panic("未实现该系统调用");
@@ -3040,45 +3034,45 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
         if (_arg_addr(0, addr) < 0 || _arg_long(1, length) < 0)
         {
             printfRed("[SyscallHandler::sys_truncate] 参数错误\n");
-            return -EINVAL; // 参数错误
+            return SYS_EINVAL; // 参数错误
         }
-        if(mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), pathname, addr, MAXPATH) < 0)
+        if (mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), pathname, addr, MAXPATH) < 0)
         {
             printfRed("[SyscallHandler::sys_truncate] 路径名拷贝失败\n");
-            return -EFAULT; // 路径名拷贝失败
+            return SYS_EFAULT; // 路径名拷贝失败
         }
         pathname = get_absolute_path(pathname.c_str(), proc::k_pm.get_cur_pcb()->_cwd_name.c_str());
         if (is_file_exist(pathname.c_str()) != 1)
         {
             printfRed("[SyscallHandler::sys_truncate] 文件不存在: %s\n", pathname.c_str());
-            return -ENOENT; // 文件不存在
+            return SYS_ENOENT; // 文件不存在
         }
-        
+
         // 打开文件，需要使用写入模式
-        fs::file* file = nullptr;
+        fs::file *file = nullptr;
         int flags = O_WRONLY; // 以写入模式打开
         int status = vfs_openat(pathname, file, flags);
-        
+
         if (status != EOK || !file)
         {
             printfRed("[SyscallHandler::sys_truncate] 无法打开文件: %s, 错误码: %d\n", pathname.c_str(), status);
-            return -EACCES; // 访问被拒绝
+            return SYS_EACCES; // 访问被拒绝
         }
-        
+
         // 检查是否具有写权限
         if (!(file->_attrs.u_write))
         {
             printfRed("[SyscallHandler::sys_truncate] 文件没有写权限: %s\n", pathname.c_str());
             file->free_file(); // 释放文件对象
-            return -EACCES; // 访问被拒绝
+            return SYS_EACCES;    // 访问被拒绝
         }
-        
+
         // 调用vfs_truncate执行截断操作
         status = vfs_truncate(file, length);
-        
+
         // 释放文件对象
         file->free_file();
-        
+
         return status;
     }
     uint64 SyscallHandler::sys_fallocate()
@@ -3095,12 +3089,82 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
     }
     uint64 SyscallHandler::sys_fchmod()
     {
-        panic("未实现该系统调用");
+        eastl::string pathname;
+        long mode_long;
+        if (_arg_str(0, pathname, MAXPATH) < 0 || _arg_long(1, mode_long) < 0)
+        {
+            printfRed("[SyscallHandler::sys_fchmod] 参数错误\n");
+            return SYS_EINVAL; // 参数错误
+        }
+        mode_t mode = (mode_t)mode_long;
+        pathname = get_absolute_path(pathname.c_str(), proc::k_pm.get_cur_pcb()->_cwd_name.c_str());
+        if (is_file_exist(pathname.c_str()) != 1)
+        {
+            printfRed("[SyscallHandler::sys_fchmod] 文件不存在: %s\n", pathname.c_str());
+            return SYS_ENOENT; // 文件不存在
+        }
+        return vfs_chmod(pathname, mode);
     }
+
     uint64 SyscallHandler::sys_fchmodat()
     {
-        
-        panic("未实现该系统调用");
+        int dirfd;
+        eastl::string pathname;
+        long mode_long;
+        int flags;
+        if (_arg_int(0, dirfd) < 0 ||
+            _arg_str(1, pathname, MAXPATH) < 0 ||
+            _arg_long(2, mode_long) < 0 ||
+            _arg_int(3, flags) < 0)
+        {
+            printfRed("[SyscallHandler::sys_fchmodat] 参数错误\n");
+            return SYS_EINVAL; // 参数错误
+        }
+        mode_t mode = (mode_t)mode_long;
+        printfCyan("[SyscallHandler::sys_fchmodat] dirfd=%d, pathname=%s, mode=%d, flags=%d\n", dirfd, pathname.c_str(), mode, flags);
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+
+        // 处理dirfd和路径
+        eastl::string abs_pathname;
+
+        // 检查是否为绝对路径
+        if (pathname[0] == '/')
+        {
+            // 绝对路径，忽略dirfd
+            abs_pathname = pathname;
+        }
+        else
+        {
+            // 相对路径，需要处理dirfd
+            if (dirfd == AT_FDCWD)
+            {
+                // 使用当前工作目录
+                abs_pathname = get_absolute_path(pathname.c_str(), p->_cwd_name.c_str());
+            }
+            else
+            {
+                // 使用dirfd指向的目录
+                fs::file *dir_file = p->get_open_file(dirfd);
+                if (!dir_file)
+                {
+                    printfRed("[SyscallHandler::sys_fchmodat] 无效的dirfd: %d\n", dirfd);
+                    return SYS_EBADF; // 无效的文件描述符
+                }
+
+                // 使用dirfd对应的路径作为基准目录
+                abs_pathname = get_absolute_path(pathname.c_str(), dir_file->_path_name.c_str());
+            }
+        }
+
+        printfCyan("[SyscallHandler::sys_fchmodat] 绝对路径: %s\n", abs_pathname.c_str());
+
+        if (is_file_exist(abs_pathname.c_str()) != 1)
+        {
+            printfRed("[SyscallHandler::sys_fchmodat] 文件不存在: %s\n", abs_pathname.c_str());
+            return SYS_ENOENT; // 文件不存在
+        }
+        return vfs_chmod(abs_pathname, mode);
     }
     uint64 SyscallHandler::sys_fchownat()
     {
