@@ -1673,12 +1673,12 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
     }
     uint64 SyscallHandler::sys_readlinkat()
     {
-        panic("未实现");
-#ifdef FS_FIX_COMPLETELY
+//         panic("未实现");
+// #ifdef FS_FIX_COMPLETELY
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
         int fd;
-        fs::Path filePath;
+        // fs::Path filePath;
         size_t ret;
 
         if (_arg_int(0, fd) < 0)
@@ -1710,28 +1710,28 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
             // 不要 delete buffer，因为它不是 new 出来的
             return ret;
         }
+        panic("未实现 sys_readlinkat");
+        // if (fd == AT_FDCWD)
+        //     new (&filePath) fs::Path(path, p->_cwd);
+        // else
+        //     new (&filePath) fs::Path(path, p->get_open_file(fd));
 
-        if (fd == AT_FDCWD)
-            new (&filePath) fs::Path(path, p->_cwd);
-        else
-            new (&filePath) fs::Path(path, p->get_open_file(fd));
+        // fs::dentry *dent = filePath.pathSearch();
+        // if (dent == nullptr)
+        //     return -1;
 
-        fs::dentry *dent = filePath.pathSearch();
-        if (dent == nullptr)
-            return -1;
+        // char *buffer = new char[buf_size];
+        // ret = dent->getNode()->readlinkat(buffer, buf_size);
 
-        char *buffer = new char[buf_size];
-        ret = dent->getNode()->readlinkat(buffer, buf_size);
+        // if (mem::k_vmm.copy_out(*pt, buf, (void *)buffer, ret) < 0)
+        // {
+        //     delete[] buffer;
+        //     return -1;
+        // }
 
-        if (mem::k_vmm.copy_out(*pt, buf, (void *)buffer, ret) < 0)
-        {
-            delete[] buffer;
-            return -1;
-        }
-
-        delete[] buffer;
-        return ret;
-        #endif
+        // delete[] buffer;
+        // return ret;
+        // #endif
         return -1; // 未实现
     }
     uint64 SyscallHandler::sys_getrandom()
