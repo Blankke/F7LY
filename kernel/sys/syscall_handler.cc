@@ -2353,7 +2353,7 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
     }
     uint64 SyscallHandler::sys_geteuid()
     {
-        return 1; // 抄的
+        return 0; // 抄的
     }
     uint64 SyscallHandler::sys_madvise()
     {

@@ -13,30 +13,7 @@ extern "C"
         // lua_test("/mnt/glibc/");
 
         // libcbench_test("/mnt/glibc/");
-        // chdir("/mnt/musl/");
-        // char *bb_sh[8] = {0};
-        // bb_sh[0] = "busybox";
-        // bb_sh[1] = "sh";
-        // bb_sh[2] = "libcbench_testcode.sh";
-        // execve("busybox", bb_sh, 0);
-        // // lmbench_test("/mnt/musl/");
-
-        // int fd = openat(-100, "/mnt/musl/basic_testcode.sh", 0);
-        // char *buf[100];
-        // read(fd, buf, 100);
-
-        // printf("initcode-rv: init_main start\n");
-        // int fd = openat(-100, "/proc/meminfo", 0);
-        // // int fd = openat(-100, "/glibc/basic_testcode.sh", 0);
-        // printf("initcode-rv: openat /glibc/basic_testcode.sh fd=%d\n", fd);
-        // char buf[1000];
-        // read(fd, buf, 1000);
-        // printf("initcode-rv: read fd=%d, buf=%s\n", fd, buf);
-
-        // execve("/musl/basic/fork", 0, 0);
-        // basic_test("/musl");
-        execve("musl/ltp/testcases/bin/abort01", 0, 0);
-        // ltp_test("/musl/ltp/testcases/bin/");
+        ltp_test("/musl/ltp/testcases/bin/");
         shutdown();
         return 0;
     }
