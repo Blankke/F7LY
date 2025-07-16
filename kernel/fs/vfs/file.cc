@@ -58,7 +58,7 @@ fdalloc(struct file *f){
     panic("fdalloc: not implemented");
 //     int fd;
 // proc::Pcb*p=proc::k_pm.get_cur_pcb();
-//     for(fd = 0 ; fd < NOFILE && fd <(int) proc::k_pm.get_cur_pcb()->ofn.rlim_cur; fd++)
+//     for(fd = 0 ; fd < NOFILE && fd < (int)proc::k_pm.get_cur_pcb()->get_nofile_limit(); fd++)
 //     {
 //         if(p->_ofile2->_ofile_ptr[fd] == 0){
 //             p->_ofile2->_ofile_ptr[fd] = f;
