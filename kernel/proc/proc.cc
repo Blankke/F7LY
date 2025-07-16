@@ -24,18 +24,40 @@ namespace proc
         _slot = 0;
         _priority = default_proc_prio;
         _ofile = nullptr;  // 初始化为nullptr，在init中分配
+        
+        // 初始化新增字段
+        _ppid = 0;
+        _pgid = 0;
+        _sid = 0;
+        _uid = 0;
+        _euid = 0;
+        _gid = 0;
+        _egid = 0;
+        _start_tick = 0;      // 初始化进程开始时间
+        _user_ticks = 0;      // 初始化用户态时间
+        _last_user_tick = 0;  // 初始化上次用户态时间
+        _kernel_entry_tick = 0; // 初始化内核态进入时间
+        _stime = 0;
+        _cutime = 0;
+        _cstime = 0;
+        _start_time = 0;
+        _start_boottime = 0;
     }
 
     void Pcb::init(const char *lock_name, uint gid)
     {
         _lock.init(lock_name);
         _state = ProcState::UNUSED;
-        _gid = gid;
-        _kstack = mem::VirtualMemoryManager::kstack_vm_from_gid(_gid);
+        _global_id = gid;
+        _kstack = mem::VirtualMemoryManager::kstack_vm_from_global_id(_global_id);
                
         // TODO: 资源限制
         _rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_cur = 0;
         _rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_max = 0;
+        
+        // 设置打开文件数量限制
+        _rlim_vec[ResourceLimitId::RLIMIT_NOFILE].rlim_cur = max_open_files;
+        _rlim_vec[ResourceLimitId::RLIMIT_NOFILE].rlim_max = max_open_files;
         _sigmask = 0;
         _signal = 0;
     }

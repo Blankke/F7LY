@@ -61,10 +61,10 @@ namespace proc
                 // printfBlue("[sche]  start_schedule here,p->addr:%p \n", p);
                 if (p->_state != ProcState::RUNNABLE || p->_priority > priority)
                 {
-                    // printf("p.gid: %d, p.state: %d, p.name:%s not runnable or priority too high \n", p->_gid, p->_state, p->_name);
+                    // printf("p.global_id: %d, p.state: %d, p.name:%s not runnable or priority too high \n", p->_global_id, p->_state, p->_name);
                     continue;
                 }
-                // printf("p.gid: %d, p.state: %d, p.name:%s \n", p->_gid, p->_state, p->_name);
+                // printf("p.global_id: %d, p.state: %d, p.name:%s \n", p->_global_id, p->_state, p->_name);
                 p->_lock.acquire();
                 // p->print_context();
                 if (p->get_state() == ProcState::RUNNABLE)
@@ -79,9 +79,9 @@ namespace proc
                     //  uint64 pa = (uint64)PTE2PA(mem::k_pagetable.kwalkaddr(sp).get_data());
                     //  printf("sp: %p, kstack: %p,pa:%p\n", sp, p->_kstack,pa);
                     //  printfCyan("[sche]  start_schedule here,p->addr:%x \n",Cpu::get_cpu()->get_cur_proc());
-                    // printfRed("[sche] -> proc gid: %d pid: %d tid: %d, name: %s\n", p->_gid, p->_pid, p->_tid, p->_name);
+                    // printfRed("[sche] -> proc global_id: %d pid: %d tid: %d, name: %s\n", p->_global_id, p->_pid, p->_tid, p->_name);
                     swtch(cur_context, &p->_context);
-                    // printf( "return from %d, name: %s\n", p->_gid, p->_name );
+                    // printf( "return from %d, name: %s\n", p->_global_id, p->_name );
                     bool flag = false;
                     for (Pcb *np = k_proc_pool; np < &k_proc_pool[num_process]; np++)
                     {
@@ -89,7 +89,7 @@ namespace proc
                             flag = true;
                             break;
                         }
-                        // printf("[sche]  proc gid: [%d], pid: [%d], parent: [%d], state: %d, name: %s\n", np->_gid, np->_pid,  np->get_ppid(), (int)np->_state, np->_name);
+                        // printf("[sche]  proc global_id: [%d], pid: [%d], parent: [%d], state: %d, name: %s\n", np->_global_id, np->_pid,  np->get_ppid(), (int)np->_state, np->_name);
                     }
                     if(flag == false){
                         panic("no unused proc in pool, please check your code");

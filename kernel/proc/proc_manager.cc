@@ -21,6 +21,7 @@
 #include "fs/vfs/file/device_file.hh"
 #include "param.h"
 #include "timer_manager.hh"
+#include "timer_interface.hh"
 #include "fs/vfs/elf.hh"
 #include "fs/vfs/file/normal_file.hh"
 #include "mem.hh"
@@ -111,7 +112,7 @@ namespace proc
                 k_pm.alloc_pid(p);
 
                 // 线程相关
-                p->_ctid = 0;
+                p->_clear_tid_addr = 0;
                 k_pm.alloc_tid(p);
                 p->_state = ProcState::USED;
                 // 设置调度相关字段：默认调度槽与优先级
@@ -123,7 +124,7 @@ namespace proc
                 // k_pm.set_vma( p );
 
                 // 为该进程分配一页 trapframe 空间（用于中断时保存用户上下文）
-                // printfYellow("[user pgtbl]==>alloc trapframe for proc %d\n", p->_gid);
+                // printfYellow("[user pgtbl]==>alloc trapframe for proc %d\n", p->_global_id);
                 if ((p->_trapframe = (TrapFrame *)mem::k_pmm.alloc_page()) == nullptr)
                 {
                     freeproc(p);
@@ -163,8 +164,6 @@ namespace proc
                     p->_lock.release();
                     return nullptr;
                 }
-                // 清空消息队列掩码
-                p->_mqmask = 0;
 
                 // 初始化上下文结构体
                 memset(&p->_context, 0, sizeof(p->_context));
@@ -180,8 +179,20 @@ namespace proc
                 // 设置内核栈指针
                 p->_context.sp = p->_kstack + PGSIZE;
 
+                // 初始化时间统计信息
+                uint64 cur_tick = tmm::get_ticks();
+                p->_start_tick = cur_tick;
+                p->_start_time = cur_tick;
+                p->_start_boottime = cur_tick;
+                p->_user_ticks = 0;
+                p->_last_user_tick = 0;
+                p->_kernel_entry_tick = 0;
+                p->_stime = 0;
+                p->_cutime = 0;
+                p->_cstime = 0;
+
                 // 更新上次分配的位置，轮转分配策略
-                _last_alloc_proc_gid = p->_gid;
+                _last_alloc_proc_gid = p->_global_id;
 
                 return p;
             }
@@ -280,6 +291,14 @@ namespace proc
             dev::register_debug_uart(&dev::k_uart);
         }
 
+        // 设置进程开始运行的时间点
+        if (proc->_start_tick == 0)
+        {
+            proc->_start_tick = tmm::get_ticks();
+            proc->_start_time = tmm::get_ticks(); // 同时设置启动时间
+            proc->_start_boottime = tmm::get_ticks(); // 系统启动以来的时间
+        }
+
         // printf("fork_ret\n");
         trap_mgr.usertrapret();
     }
@@ -375,7 +394,7 @@ namespace proc
 
         // 线程相关
         p->_tid = 0;
-        p->_ctid = 0;
+        p->_clear_tid_addr = 0;
         // printf("freeproc: freeing process %d\n", p->_pid);
 
         // 使用新的cleanup_ofile方法处理文件描述符表
@@ -715,19 +734,11 @@ namespace proc
     void ProcessManager::get_cur_proc_tms(tmm::tms *tsv)
     {
         Pcb *p = get_cur_pcb();
-        uint64 cur_tick = tmm::k_tm.get_ticks();
 
         tsv->tms_utime = p->_user_ticks;
-        tsv->tms_stime = cur_tick - p->_start_tick - p->_user_ticks;
-        tsv->tms_cstime = tsv->tms_cutime = 0;
-
-        for (auto &pp : k_proc_pool)
-        {
-            if (pp._state == ProcState::UNUSED || pp._parent != p)
-                continue;
-            tsv->tms_cutime += pp._user_ticks;
-            tsv->tms_cstime += cur_tick - pp._start_tick - pp._user_ticks;
-        }
+        tsv->tms_stime = p->_stime;  // 使用累计的系统态时间
+        tsv->tms_cutime = p->_cutime; // 使用累计的子进程用户态时间
+        tsv->tms_cstime = p->_cstime; // 使用累计的子进程系统态时间
     }
     int ProcessManager::alloc_fd(Pcb *p, fs::file *f)
     {
@@ -817,6 +828,27 @@ namespace proc
 
         np->_cwd = p->_cwd;           // 继承当前工作目录
         np->_cwd_name = p->_cwd_name; // 继承当前工作目录名称
+
+        // 继承父进程的身份信息
+        np->_ppid = p->_pid;
+        np->_pgid = p->_pgid;
+        np->_sid = p->_sid;
+        np->_uid = p->_uid;
+        np->_euid = p->_euid;
+        np->_gid = p->_gid;
+        np->_egid = p->_egid;
+
+        // 重置子进程的时间统计（alloc_proc已经初始化，但这里明确重置）
+        uint64 cur_tick = tmm::get_ticks();
+        np->_start_tick = cur_tick;
+        np->_start_time = cur_tick;
+        np->_start_boottime = cur_tick;
+        np->_user_ticks = 0;
+        np->_last_user_tick = 0;
+        np->_kernel_entry_tick = 0;
+        np->_stime = 0;
+        np->_cutime = 0;
+        np->_cstime = 0;
 
         // 为子进程设置名称，添加子进程标识
         const char child_name_suffix[] = "-child";
@@ -1013,7 +1045,7 @@ namespace proc
         if (flags & syscall::CLONE_CHILD_CLEARTID)
         {
             // 如果设置了 CLONE_CHILD_CLEARTID，则在子进程退出时清除线程 ID
-            np->_ctid = ctid;
+            np->_clear_tid_addr = ctid;
         }
 
         np->_state = ProcState::RUNNABLE;
@@ -1222,10 +1254,10 @@ namespace proc
 
         if (p->_parent)
             wakeup(p->_parent); // 唤醒父进程（可能在 wait() 中阻塞）)
-        if (p->_ctid)
+        if (p->_clear_tid_addr)
         {
             uint64 temp0 = 0;
-            if (mem::k_vmm.copy_out(p->_pt, p->_ctid, &temp0, sizeof(temp0)) < 0)
+            if (mem::k_vmm.copy_out(p->_pt, p->_clear_tid_addr, &temp0, sizeof(temp0)) < 0)
             {
                 printfRed("exit_proc: copy out ctid failed\n");
             }
@@ -1234,6 +1266,14 @@ namespace proc
         p->_lock.acquire();
         p->_xstate = state << 8;       // 存储退出状态（通常高字节存状态）
         p->_state = ProcState::ZOMBIE; // 标记为 zombie，等待父进程回收
+
+        // 如果有父进程，将当前进程的时间累计到父进程中
+        if (p->_parent != nullptr) {
+            p->_parent->_lock.acquire();
+            p->_parent->_cutime += p->_user_ticks + p->_cutime;
+            p->_parent->_cstime += p->_stime + p->_cstime;
+            p->_parent->_lock.release();
+        }
 
         _wait_lock.release();
         //    printf("[exit_proc] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
@@ -1304,7 +1344,7 @@ namespace proc
                     break;
                 }
                 p = p->_parent;
-                visit[p->_gid] = 1;
+                visit[p->_global_id] = 1;
                 // 修改于6.6，检测防止数组越界
                 if (stk_ptr < (int)num_process)
                     stk[stk_ptr++] = (void *)p;
@@ -1766,7 +1806,7 @@ namespace proc
     int ProcessManager::set_tid_address(uint64 tidptr)
     {
         Pcb *p = get_cur_pcb();
-        p->_ctid = tidptr;
+        p->_clear_tid_addr = tidptr;
         return p->_tid;
     }
 
