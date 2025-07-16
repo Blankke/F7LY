@@ -367,3 +367,25 @@ int vfs_frename(const char *oldpath, const char *newpath)
 
     return -status;
 }
+
+int vfs_truncate(fs::file *f, size_t length)
+{
+    if (f == nullptr)
+    {
+        printfRed("vfs_truncate: file is null\n");
+        return -EINVAL;
+    }
+
+    // 直接调用ext4的truncate函数
+    int status = ext4_ftruncate(&f->lwext4_file_struct, length);
+    if (status != EOK)
+    {
+        printfRed("vfs_truncate: failed to truncate file %s, error: %d\n", f->_path_name.c_str(), status);
+        return -status;
+    }
+
+    // 更新文件大小
+    f->_stat.size = length;
+
+    return EOK;
+}

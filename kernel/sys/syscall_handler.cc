@@ -39,6 +39,7 @@
 #include "fs/vfs/ops.hh"
 #include "fs/vfs/vfs_utils.hh"
 #include "fs/fs_defs.hh"
+#include "fs/lwext4/ext4_errno.hh"
 namespace syscall
 {
     // 创建全局的 SyscallHandler 实例
@@ -2613,6 +2614,31 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
     }
     uint64 SyscallHandler::sys_ftruncate()
     {
+        int fd;
+        off_t length;
+        if(_arg_int(0,fd)<0||_arg_long(1,length)<0)
+        {
+            printfRed("[sys_ftruncate] 参数错误\n");
+            return -EINVAL; // 参数错误
+        }
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        fs::file *f = p->get_open_file(fd);
+        
+        // 检查文件描述符是否有效
+        if (!f)
+        {
+            printfRed("[sys_ftruncate] 文件描述符无效: %d\n", fd);
+            return -EBADF; // 无效的文件描述符
+        }
+                // 检查文件是否以写入模式打开
+        // 使用FileAttrs中的u_write字段检查用户写权限
+        if (!(f->_attrs.u_write))
+        {
+            printfRed("[sys_ftruncate] 文件未以写入模式打开: %d\n", fd);
+            return -EINVAL; // 参数无效，文件未以写入模式打开
+        }
+        return vfs_truncate(f, length); // 调用vfs_truncate函数进行截断操作
+        // TODO: 实现真正的truncate功能
         panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_pread64()
@@ -2758,7 +2784,7 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
     }
     uint64 SyscallHandler::sys_sched_getaffinity()
     {
-        // return 0;
+        return 0;
         panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_setpgid()
@@ -3008,7 +3034,52 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
     }
     uint64 SyscallHandler::sys_truncate()
     {
-        panic("未实现该系统调用");
+        uint64 addr;
+        eastl::string pathname;
+        off_t length;
+        if (_arg_addr(0, addr) < 0 || _arg_long(1, length) < 0)
+        {
+            printfRed("[SyscallHandler::sys_truncate] 参数错误\n");
+            return -EINVAL; // 参数错误
+        }
+        if(mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), pathname, addr, MAXPATH) < 0)
+        {
+            printfRed("[SyscallHandler::sys_truncate] 路径名拷贝失败\n");
+            return -EFAULT; // 路径名拷贝失败
+        }
+        pathname = get_absolute_path(pathname.c_str(), proc::k_pm.get_cur_pcb()->_cwd_name.c_str());
+        if (is_file_exist(pathname.c_str()) != 1)
+        {
+            printfRed("[SyscallHandler::sys_truncate] 文件不存在: %s\n", pathname.c_str());
+            return -ENOENT; // 文件不存在
+        }
+        
+        // 打开文件，需要使用写入模式
+        fs::file* file = nullptr;
+        int flags = O_WRONLY; // 以写入模式打开
+        int status = vfs_openat(pathname, file, flags);
+        
+        if (status != EOK || !file)
+        {
+            printfRed("[SyscallHandler::sys_truncate] 无法打开文件: %s, 错误码: %d\n", pathname.c_str(), status);
+            return -EACCES; // 访问被拒绝
+        }
+        
+        // 检查是否具有写权限
+        if (!(file->_attrs.u_write))
+        {
+            printfRed("[SyscallHandler::sys_truncate] 文件没有写权限: %s\n", pathname.c_str());
+            file->free_file(); // 释放文件对象
+            return -EACCES; // 访问被拒绝
+        }
+        
+        // 调用vfs_truncate执行截断操作
+        status = vfs_truncate(file, length);
+        
+        // 释放文件对象
+        file->free_file();
+        
+        return status;
     }
     uint64 SyscallHandler::sys_fallocate()
     {
@@ -3028,14 +3099,17 @@ char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
     }
     uint64 SyscallHandler::sys_fchmodat()
     {
+        
         panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_fchownat()
     {
+        return 0; // 抄的
         panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_fchown()
     {
+        return 0;
         panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_preadv()
