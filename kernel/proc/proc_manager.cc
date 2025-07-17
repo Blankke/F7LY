@@ -1628,6 +1628,7 @@ namespace proc
             printfRed("[open] vfs_openat failed for path: %s\n", path.c_str());
             return -ENOENT; // 文件不存在或打开失败
         }
+        printf("[qwer] f->mode=%x", p->_ofile->_ofile_ptr[fd]->_attrs);
         return fd; // 返回分配的文件描述符
     }
 

@@ -39,14 +39,18 @@ static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file
         mode = 0644; // 默认权限
         break;
     }
-    if (flags & O_RDONLY)
+    
+    // 正确处理文件访问模式：检查低两位来确定读写权限
+    int access_mode = flags & 0x3; // 取低两位
+    if (access_mode == O_RDONLY) // 0x00 - 只读
     {
         mode &= ~0222; // 清除写权限
     }
-    if (flags & O_WRONLY)
+    else if (access_mode == O_WRONLY) // 0x01 - 只写
     {
         mode &= ~0444; // 清除读权限
     }
+    // O_RDWR (0x02) 保持读写权限不变
 
     return mode;
 }
@@ -82,7 +86,7 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags)
         attrs._value = file_mode;
 
         fs::normal_file *temp_file = new fs::normal_file(attrs, absolute_path);
-        printfYellow("vfs_openat: flags: %x, mode: %b\n", flags, file_mode);
+        printfYellow("vfs_openat: flags: %x, mode: %b\n", flags, temp_file->_attrs.transMode());
 
         // ext4库会自动处理 O_TRUNC, O_RDONLY, O_WRONLY, O_RDWR 等标志
         //真是前人栽树，后人乘凉啊！
@@ -515,7 +519,11 @@ int vfs_fallocate(fs::file *f, off_t offset, size_t length)
     // 获取当前文件大小
     uint64_t current_size = ext4_fsize(&f->lwext4_file_struct);
     uint64_t target_size = offset + length;
-
+    if(target_size>EXT4_MAX_FILE_SIZE)
+    {
+        printfRed("vfs_fallocate: target size exceeds maximum file size\n");
+        return -EFBIG; // 文件过大
+    }
     // 如果目标大小小于等于当前大小，不需要分配空间
     if (target_size <= current_size)
     {
@@ -535,7 +543,7 @@ int vfs_fallocate(fs::file *f, off_t offset, size_t length)
     // 更新文件大小信息
     f->_stat.size = target_size;
 
-    printfGreen("vfs_fallocate: successfully allocated space for file %s, new size: %lu\n",
+    printfGreen("vfs_fallocate: successfully allocated space for file %s, new size: %u\n",
                 f->_path_name.c_str(), target_size);
 
     return EOK;

@@ -296,7 +296,7 @@ struct ext4_bgroup {
     uint32_t reserved; /* Padding */
 };
 
-
+#define EXT4_MAX_FILE_SIZE  0x1000000000000
 #define EXT4_MIN_BLOCK_GROUP_DESCRIPTOR_SIZE 32
 #define EXT4_MAX_BLOCK_GROUP_DESCRIPTOR_SIZE 64
 
@@ -755,7 +755,7 @@ struct jbd_sb {
 #include "mem/physical_memory_manager.hh"
 /*****************************************************************************/
 #define ext4_malloc(size) mem::k_pmm.kmalloc(size)
-#define ext4_calloc(n, size) mem::k_pmm.kcalloc(n, size)
+#define ext4_calloc(n, size) mem::k_pmm.alloc_page()
 // #define ext4_realloc ext4_user_realloc
 #define ext4_free(ptr,size) mem::k_pmm.free_page1(ptr,size)
 

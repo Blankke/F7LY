@@ -3153,12 +3153,24 @@ namespace syscall
             printfRed("[SyscallHandler::sys_fallocate] 参数错误\n");
             return SYS_EINVAL; // 参数错误
         }
-        printfCyan("[SyscallHandler::sys_fallocate] fd=%d, mode=%d, offset=%d, len=%x\n", fd, mode, offset, len);
-        if (!f)
+        if (fd < 0 || fd >= NOFILE)
         {
             printfRed("[SyscallHandler::sys_fallocate] 无效的文件描述符: %d\n", fd);
             return SYS_EBADF; // 无效的文件描述符
         }
+        printfCyan("[SyscallHandler::sys_fallocate] fd=%d, mode=%d, offset=%d, len=%x\n", fd, mode, offset, len);
+        printf("[SyscallHandler::sys_fallocate] f.mode=%b\n", f->_attrs.transMode());
+        if (!f||!f->_attrs.u_write)
+        {
+            printfRed("[SyscallHandler::sys_fallocate] 无效的文件描述符: %d\n", fd);
+            return SYS_EBADF; // 无效的文件描述符
+        }
+        if(offset<0||len<0)
+        {
+            printfRed("[SyscallHandler::sys_fallocate] offset或len不能为负数: offset=%d, len=%d\n", offset, len);
+            return SYS_EINVAL; // 参数错误
+        }
+
         return vfs_fallocate(f, offset, len);
     }
     uint64 SyscallHandler::sys_fchdir()

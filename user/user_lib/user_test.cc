@@ -802,8 +802,8 @@ char *ltp_testcases[] = {
     // "faccessat02",
     // "faccessat201",
     // "faccessat202",
-    // "fallocate01",
-    // "fallocate02",
+    // "fallocate01",    //卡死了
+    "fallocate02",
     // "fallocate03",
     // "fallocate04",
     // "fallocate05",
