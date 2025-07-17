@@ -18,7 +18,7 @@ namespace mem
 		SpinLock _virt_mem_lock;
 
 	public:
-		static uint64 kstack_vm_from_gid( uint gid );
+		static uint64 kstack_vm_from_global_id( uint global_id );
 
 	public:
 		VirtualMemoryManager() {};

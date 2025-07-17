@@ -200,6 +200,17 @@ void trap_manager::usertrap()
   w_stvec((uint64)kernelvec);
 
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
+  
+  // 时间统计：从用户态切换到内核态
+  uint64 cur_tick = tmm::get_ticks();
+  if (p->_last_user_tick > 0) {
+    // 累加用户态运行时间
+    uint64 user_time = cur_tick - p->_last_user_tick;
+    p->_user_ticks += user_time;
+  }
+  // 记录进入内核态的时间点
+  p->_kernel_entry_tick = cur_tick;
+  
   p->_trapframe->epc = r_sepc();
   uint64 cause = r_scause();
   if (cause == 8)
@@ -261,6 +272,17 @@ void trap_manager::usertrapret()
 {
   // printfMagenta("into usertrapret\n");
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
+  
+  // 时间统计：从内核态切换到用户态
+  uint64 cur_tick = tmm::get_ticks();
+  if (p->_kernel_entry_tick > 0) {
+    // 累加内核态运行时间
+    uint64 kernel_time = cur_tick - p->_kernel_entry_tick;
+    p->_stime += kernel_time;
+  }
+  // 记录进入用户态的时间点
+  p->_last_user_tick = cur_tick;
+  
   // Debug
   //  printfYellow("[usertrapret] trampoline addr %p\n", trampoline);
 

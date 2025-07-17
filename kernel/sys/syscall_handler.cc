@@ -1251,14 +1251,19 @@ namespace syscall
             return -1;
         if (_arg_int(1, size) < 0)
             return -1;
-        if (size >= (int)sizeof(cwd))
-            return -1;
+        
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
         uint len = proc::k_pm.getcwd(cwd);
+        if((uint)size < len)
+        {
+            printfRed("[SyscallHandler::sys_getcwd] Buffer size too small for current working directory\n");
+            printfRed("size: %d, len: %u\n", size, len);
+            return SYS_ERANGE;
+        }
         if (mem::k_vmm.copy_out(*pt, buf, (const void *)cwd, len) < 0)
-            return -1;
+            return SYS_EFAULT;
 
         return buf;
     }

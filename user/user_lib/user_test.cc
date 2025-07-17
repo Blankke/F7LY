@@ -432,8 +432,8 @@ char *bb_cmds[][10] = {
     {NULL}};
 
 char *ltp_testcases[] = {
-    "abort01",
-    // "abs01",
+    // "abort01",
+    // "abs01",             // 完全PASS
     // "accept01",
     // "accept02",
     // "accept03",
@@ -476,13 +476,13 @@ char *ltp_testcases[] = {
     // "ar01.sh",
     // "arch_prctl01",
     // "arping01.sh",
-    // "asapi_01",
+    // "asapi_01",              // PASS一部分
     // "asapi_02",
     // "asapi_03",
     // "ask_password.sh",
     // "aslr01",
     // "assign_password.sh",
-    // "atof01",
+    // "atof01",                   // PASS一部分
     // "autogroup01",
     // "bbr01.sh",
     // "bbr02.sh",

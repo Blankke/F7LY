@@ -27,11 +27,11 @@ namespace mem
 {
     VirtualMemoryManager k_vmm;
 
-    uint64 VirtualMemoryManager::kstack_vm_from_gid(uint gid)
+    uint64 VirtualMemoryManager::kstack_vm_from_global_id(uint global_id)
     {
-        if (gid >= proc::num_process)
-            panic("vmm: invalid gid");
-        return (TRAPFRAME - (((gid + 1) * 2) << PGSHIFT));
+        if (global_id >= proc::num_process)
+            panic("vmm: invalid global_id");
+        return (TRAPFRAME - (((global_id + 1) * 2) << PGSHIFT));
     }
 
     void VirtualMemoryManager::init(const char *lock_name)
