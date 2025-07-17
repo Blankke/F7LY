@@ -1961,9 +1961,9 @@ char *ltp_testcases[] = {
     // "pids_task2",
     // "ping01.sh",
     // "ping02.sh",
-    // "pipe01",
+    // "pipe01",// 完全PASS
     // "pipe02",
-    // "pipe03",
+    // "pipe03", // 完全PASS
     // "pipe04",
     // "pipe05",
     // "pipe06",

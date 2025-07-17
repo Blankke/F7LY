@@ -278,8 +278,8 @@ namespace syscall
             }
             // 调用对应的系统调用函数
             uint64 ret = (this->*_syscall_funcs[sys_num])();
-            // if (!(sys_num == 64 && p->_trapframe->a0 == 1) && !(sys_num == 66 && p->_trapframe->a0 == 1))
-            if (!(sys_num == 64) && !(sys_num == 66))
+            if (!(sys_num == 64 && p->_trapframe->a0 == 1) && !(sys_num == 66 && p->_trapframe->a0 == 1))
+            // if (!(sys_num == 64) && !(sys_num == 66))
                 printfCyan("[SyscallHandler::invoke_syscaller]syscall name: %s ret: %p\n", _syscall_name[sys_num], ret);
             p->_trapframe->a0 = ret; // 设置返回值
         }
@@ -571,7 +571,7 @@ namespace syscall
         char *k_buf = new char[n + 1];
         int ret = f->read((uint64)k_buf, n, f->get_file_offset(), true);
         if (ret < 0)
-            return -6;
+            return ret;
 
         static int string_length = 0;
         string_length += strlen(k_buf);

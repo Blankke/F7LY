@@ -14,6 +14,7 @@
 #include "fs/vfs/file/file.hh"
 #include "fs/vfs/file/pipe_file.hh"
 // #include "fs/vfs/fs_defs.hh"
+#include "sys/syscall_defs.hh"
 namespace proc
 {
 	namespace ipc
@@ -88,7 +89,7 @@ namespace proc
 					// printfRed("Pipe write failed: read end closed or process killed\n");
 					// 如果读端已关闭，或者当前进程被终止，提前退出
 					_lock.release();
-					return -1;
+					return syscall::SYS_EPIPE; 
 				}
 
 				if (_count >= pipe_size)
