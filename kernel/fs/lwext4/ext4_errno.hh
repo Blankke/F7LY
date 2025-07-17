@@ -32,6 +32,9 @@
 #define ENOTEMPTY 39 /* Directory not empty */
 #define ENODATA 61 /* No data available */
 #define ENOTSUP 95 /* Not supported */
+#define EOVERFLOW 75 /* Value too large for defined data type */
+#define EOK 0 /* No error */
+#define ELOOP 40 /* Too many symbolic links encountered */
 
 #ifndef ENODATA
 #ifdef ENOATTR

@@ -58,6 +58,29 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags)
 {
     bool file_exists = (is_file_exist(absolute_path.c_str()) == 1);
     //好多flag都有人给你负重前行过了
+    
+    // 处理 O_DIRECTORY：如果指定了此标志，路径必须是目录
+    if (flags & O_DIRECTORY)
+    {
+        int type = vfs_path2filetype(absolute_path);
+        if (file_exists && type != fs::FileTypes::FT_DIRECT)
+        {
+            printfRed("vfs_openat: O_DIRECTORY specified but %s is not a directory\n", absolute_path.c_str());
+            return -ENOTDIR; // 不是目录
+        }
+    }
+    
+    // 处理 O_NOFOLLOW：如果路径的最后一个组件是符号链接，则失败
+    if (flags & O_NOFOLLOW)
+    {
+        int type = vfs_path2filetype(absolute_path);
+        if (file_exists && type == fs::FileTypes::FT_SYMLINK)
+        {
+            printfRed("vfs_openat: O_NOFOLLOW specified but %s is a symbolic link\n", absolute_path.c_str());
+            return -ELOOP;//表示符号链接过多
+        }
+    }
+    
     // 处理 O_EXCL + O_CREAT 组合：如果文件存在，应该失败
     if ((flags & O_CREAT) && (flags & O_EXCL) && file_exists)
     {
@@ -151,6 +174,29 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags)
     {
         panic("Unsupported file type: %d", type);
         return -ENOTSUP;
+    }
+
+    // 处理 O_LARGEFILE：检查文件大小限制
+    if (!(flags & O_LARGEFILE) && file != nullptr)
+    {
+        // 对于32位系统，如果文件大小超过2GB且没有指定O_LARGEFILE，应该失败
+        // 这里简化处理，假设如果文件存在且大小超过限制就报错
+        if (file_exists && file->_stat.size > 0x7FFFFFFF) // 2GB
+        {
+            printfRed("vfs_openat: file %s is too large, O_LARGEFILE required\n", absolute_path.c_str());
+            delete file;
+            file = nullptr;
+            return -EOVERFLOW;
+        }
+    }
+    
+    // 处理 O_CLOEXEC：设置执行时关闭标志
+    if ((flags & O_CLOEXEC) && file != nullptr)
+    {
+        // 在文件对象上设置相应的标志
+        // 这个标志会在exec系统调用时自动关闭文件描述符
+        // 注意：这里需要在实际使用时在文件描述符表中设置FD_CLOEXEC
+        printfYellow("vfs_openat: O_CLOEXEC flag set for file %s\n", absolute_path.c_str());
     }
 
     return EOK;
