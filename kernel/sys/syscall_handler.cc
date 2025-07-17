@@ -1289,6 +1289,7 @@ namespace syscall
         }
 
         memset((void *)sys_getdents64_buf, 0, GETDENTS64_BUF_SIZE);
+                printfMagenta("[SyscallHandler::sys_getdents64] \n");
         int count = vfs_getdents(f, (struct linux_dirent64 *)sys_getdents64_buf, buf_len);
         mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
         mem::k_vmm.copy_out(*pt, (uint64)buf_addr, (char *)sys_getdents64_buf, count);
@@ -3064,7 +3065,7 @@ namespace syscall
         {
             printfRed("[SyscallHandler::sys_truncate] 文件没有写权限: %s\n", pathname.c_str());
             file->free_file(); // 释放文件对象
-            return SYS_EACCES;    // 访问被拒绝
+            return SYS_EACCES; // 访问被拒绝
         }
 
         // 调用vfs_truncate执行截断操作
@@ -3077,7 +3078,26 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_fallocate()
     {
-        panic("未实现该系统调用");
+        int fd;
+        fs::file *f;
+        int mode = 0; 
+        off_t offset;
+        off_t len;
+        if (_arg_fd(0, &fd, &f) < 0 ||
+            _arg_int(1, mode) < 0 ||
+            _arg_long(2, offset) < 0 ||
+            _arg_long(3, len) < 0)
+        {
+            printfRed("[SyscallHandler::sys_fallocate] 参数错误\n");
+            return SYS_EINVAL; // 参数错误
+        }
+        printfCyan("[SyscallHandler::sys_fallocate] fd=%d, mode=%d, offset=%d, len=%x\n", fd, mode, offset, len);
+        if (!f)
+        {
+            printfRed("[SyscallHandler::sys_fallocate] 无效的文件描述符: %d\n", fd);
+            return SYS_EBADF; // 无效的文件描述符
+        }
+        return vfs_fallocate(f, offset, len);
     }
     uint64 SyscallHandler::sys_fchdir()
     {

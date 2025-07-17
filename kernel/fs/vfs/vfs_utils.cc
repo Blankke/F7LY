@@ -256,7 +256,12 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
     /* make integer count */
     if (count == 0)
     {
-        return -EINVAL;
+        return EINVAL;
+    }
+    if( file == nullptr || file->lwext4_dir_struct.f.mp == nullptr)
+    {
+        printfRed("[vfs_getdents] file is null or mount point is null\n");
+        return EINVAL;
     }
     ext4_dir_entry_next(&file->lwext4_dir_struct);
     ext4_dir_entry_next(&file->lwext4_dir_struct); //< 跳过/.和/..
@@ -406,6 +411,50 @@ int vfs_chmod(eastl::string pathname, mode_t mode)
         printfRed("[vfs_chmod] 设置文件权限失败: %s, 错误码: %d\n", pathname.c_str(), status);
         return -EACCES; // 访问被拒绝
     }
+
+    return EOK;
+}
+
+int vfs_fallocate(fs::file *f,off_t offset, size_t length)
+{
+    if (f == nullptr)
+    {
+        printfRed("vfs_fallocate: file is null\n");
+        return -EINVAL;
+    }
+
+    // 检查参数合法性
+    if (offset < 0 || length <= 0)
+    {
+        printfRed("vfs_fallocate: invalid offset or length\n");
+        return -EINVAL;
+    }
+
+    // 获取当前文件大小
+    uint64_t current_size = ext4_fsize(&f->lwext4_file_struct); 
+    uint64_t target_size = offset + length;
+
+    // 如果目标大小小于等于当前大小，不需要分配空间
+    if (target_size <= current_size)
+    {
+        return EOK;
+    }
+
+    // 使用 ext4_ftruncate 来扩展文件大小
+    // 这会自动分配必要的磁盘块
+    int status = ext4_ftruncate(&f->lwext4_file_struct, target_size);
+    if (status != EOK)
+    {
+        printfRed("vfs_fallocate: failed to allocate space for file %s, error: %d\n", 
+                  f->_path_name.c_str(), status);
+        return status;
+    }
+
+    // 更新文件大小信息
+    f->_stat.size = target_size;
+
+    printfGreen("vfs_fallocate: successfully allocated space for file %s, new size: %lu\n", 
+                f->_path_name.c_str(), target_size);
 
     return EOK;
 }
