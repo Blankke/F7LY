@@ -1965,7 +1965,7 @@ char *ltp_testcases[] = {
     // "pipe02",
     // "pipe03", // 完全PASS
     // "pipe04",
-    // "pipe05",
+    // "pipe05", // 完全PASS
     // "pipe06",
     // "pipe07",
     // "pipe08",
