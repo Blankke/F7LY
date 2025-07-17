@@ -1246,11 +1246,11 @@ char *ltp_testcases[] = {
     // "getppid02",
     // "getpriority01",
     // "getpriority02",
-    // "getrandom01",
-    // "getrandom02",
-    // "getrandom03",
-    // "getrandom04",
-    // "getrandom05",
+    // "getrandom01",// 完全PASS
+    // "getrandom02", // 完全PASS
+    // "getrandom03", // 完全PASS
+    // "getrandom04", // 完全PASS
+    // "getrandom05",// 完全PASS
     // "getresgid01",
     // "getresgid01_16",
     // "getresgid02",

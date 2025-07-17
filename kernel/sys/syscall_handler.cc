@@ -1755,12 +1755,11 @@ namespace syscall
         if (_arg_int(1, buflen) < 0)
             return -1;
 
-        if (_arg_int(2, buflen) < 0)
+        if (_arg_int(2, flags) < 0)
             return -1;
 
         if (bufaddr == 0 && buflen == 0)
             return -1;
-
         char *k_buf = new char[buflen];
         if (!k_buf)
             return -1;
@@ -1777,7 +1776,7 @@ namespace syscall
             memcpy(k_buf + i, &random, copy_size);
         }
         if (mem::k_vmm.copy_out(*pt, bufaddr, k_buf, buflen) < 0)
-            return -1;
+            return SYS_EFAULT;
 
         delete[] k_buf;
         return buflen;
