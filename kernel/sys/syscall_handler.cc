@@ -1354,7 +1354,12 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_tgkill()
     {
-        return 0;
+        int tgid, tid, sig;
+        _arg_int(0, tgid);
+        _arg_int(1, tid);
+        _arg_int(2, sig);
+        printfCyan("[SyscallHandler::sys_tgkill] tgid: %d, tid: %d, sig: %d\n", tgid, tid, sig);
+        return proc::k_pm.tgkill(tgid, tid, sig);
     }
     uint64 SyscallHandler::sys_rt_sigaction()
     {
@@ -2785,6 +2790,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_setitimer()
     {
+        return 0;
         panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_sched_getaffinity()
@@ -2794,6 +2800,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_setpgid()
     {
+        return 0;
         panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_getpgid()

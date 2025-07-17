@@ -39,6 +39,7 @@ namespace proc
         // Linux标准进程标识符
         _ppid = 0;                // 父进程PID
         _pgid = 0;                // 进程组ID
+        _tgid = 0;                // 线程组ID
         _sid = 0;                 // 会话ID
         _uid = 0;                 // 真实用户ID
         _euid = 0;                // 有效用户ID
