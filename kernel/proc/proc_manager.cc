@@ -29,7 +29,7 @@
 #include "syscall_defs.hh"
 #include "fs/vfs/ops.hh"
 #include "fs/vfs/vfs_utils.hh"
-
+#include "sys/syscall_defs.hh"
 #include "fs/vfs/fs.hh"
 extern "C"
 {
@@ -915,7 +915,7 @@ namespace proc
                 return fd;
             }
         }
-        return -1;
+        return syscall::SYS_EMFILE;
     }
 
     int ProcessManager::clone(uint64 flags, uint64 stack_ptr, uint64 ptid, uint64 tls, uint64 ctid)

@@ -776,10 +776,10 @@ char *ltp_testcases[] = {
     // "execle01_child",
     // "execlp01",
     // "execlp01_child",
-    // "execv01",
+    // "execv01",               // 完全PASS
     // "execv01_child",
     // "execve_child",
-    // "execve01",
+    // "execve01",              // 完全PASS
     // "execve01_child",
     // "execve02",
     // "execve03",
@@ -1894,8 +1894,8 @@ char *ltp_testcases[] = {
     // "open_tree02",
     // "open01",
     // "open02",
-    // "open03",
-    // "open04",
+    // "open03", // 完全PASS
+    // "open04",    //完全PASS
     // "open06",
     // "open07",
     // "open08",
@@ -1906,7 +1906,7 @@ char *ltp_testcases[] = {
     // "open12_child",
     // "open13",
     // "open14",
-    // "openat01",
+    // "openat01", // 完全PASS
     // "openat02",
     // "openat02_child",
     // "openat03",
