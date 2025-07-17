@@ -1200,7 +1200,7 @@ namespace syscall
         tmm::timeval tv;
 
         if (_arg_addr(0, tv_addr) < 0)
-            return -1;
+            return SYS_EFAULT;
 
         tv = tmm::k_tm.get_time_val();
         // printf("[SyscallHandler::sys_gettimeofday] tv: %d.%d\n", tv.tv_sec, tv.tv_usec);
@@ -1209,7 +1209,7 @@ namespace syscall
         mem::PageTable *pt = p->get_pagetable();
         if (mem::k_vmm.copy_out(*pt, tv_addr, (const void *)&tv,
                                 sizeof(tv)) < 0)
-            return -1;
+            return SYS_EFAULT;
 
         return 0;
     }

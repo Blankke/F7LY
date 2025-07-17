@@ -1206,7 +1206,7 @@ char *ltp_testcases[] = {
     // "getaddrinfo_01",
     // "getcontext01",
     // "getcpu01",
-    // "getcwd01",
+    // "getcwd01",//完全PASS
     // "getcwd02",
     // "getcwd03",
     // "getcwd04",
@@ -1278,7 +1278,7 @@ char *ltp_testcases[] = {
     // "getsockopt02",
     // "gettid01",
     // "gettid02",
-    // "gettimeofday01",
+    // "gettimeofday01",//PASS
     // "gettimeofday02",
     // "getuid01",
     // "getuid01_16",
@@ -2099,10 +2099,10 @@ char *ltp_testcases[] = {
     // "quotactl09",
     // "rcu_torture.sh",
     // "read_all",
-    // "read01",
+    // "read01", //貌似可以PASS
     // "read02",
     // "read03",
-    // "read04",
+    // "read04", // 完全PASS
     // "readahead01",
     // "readahead02",
     // "readdir01",
