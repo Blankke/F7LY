@@ -112,31 +112,31 @@ namespace proc
                 /****************************************************************************************
                  * 基本进程标识和状态管理初始化
                  ****************************************************************************************/
-                k_pm.alloc_pid(p);          // 分配全局唯一的进程ID
-                k_pm.alloc_tid(p);          // 分配线程ID（单线程进程中等于PID）
+                k_pm.alloc_pid(p);           // 分配全局唯一的进程ID
+                k_pm.alloc_tid(p);           // 分配线程ID（单线程进程中等于PID）
                 p->_state = ProcState::USED; // 标记进程控制块为已使用
-                
+
                 // 初始化父进程关系（在fork时会重新设置）
                 p->_parent = nullptr;
-                p->_name[0] = '\0';         // 清空进程名称
-                p->exe.clear();             // 清空可执行文件路径
+                p->_name[0] = '\0'; // 清空进程名称
+                p->exe.clear();     // 清空可执行文件路径
 
                 // 初始化标准Linux进程标识符
-                p->_ppid = 0;               // 父进程PID（在fork时设置）
-                p->_pgid = p->_pid;         // 进程组ID（初始化为自身PID）
-                p->_sid = p->_pid;          // 会话ID（初始化为自身PID）
-                p->_uid = 0;                // 真实用户ID（root）
-                p->_euid = 0;               // 有效用户ID（root）
-                p->_gid = 0;                // 真实组ID（root）
-                p->_egid = 0;               // 有效组ID（root）
+                p->_ppid = 0;       // 父进程PID（在fork时设置）
+                p->_pgid = p->_pid; // 进程组ID（初始化为自身PID）
+                p->_sid = p->_pid;  // 会话ID（初始化为自身PID）
+                p->_uid = 0;        // 真实用户ID（root）
+                p->_euid = 0;       // 有效用户ID（root）
+                p->_gid = 0;        // 真实组ID（root）
+                p->_egid = 0;       // 有效组ID（root）
 
                 /****************************************************************************************
                  * 进程状态和调度信息初始化
                  ****************************************************************************************/
-                p->_chan = nullptr;         // 清空睡眠等待通道
-                p->_killed = 0;             // 清除终止标志
-                p->_xstate = 0;             // 清除退出状态码
-                
+                p->_chan = nullptr; // 清空睡眠等待通道
+                p->_killed = 0;     // 清除终止标志
+                p->_xstate = 0;     // 清除退出状态码
+
                 // 设置调度相关字段：默认调度槽与优先级
                 p->_slot = default_proc_slot;
                 p->_priority = default_proc_prio;
@@ -153,8 +153,8 @@ namespace proc
                     return nullptr;
                 }
 
-                p->_sz = 0;                 // 初始化用户空间内存大小为0
-                p->_shared_vm = false;      // 不共享虚拟内存
+                p->_sz = 0;            // 初始化用户空间内存大小为0
+                p->_shared_vm = false; // 不共享虚拟内存
 
                 // 初始化虚拟内存区域管理
                 p->_vma = new Pcb::VMA();
@@ -165,7 +165,7 @@ namespace proc
                 }
 
 #ifdef LOONGARCH
-                p->elf_base = 0;            // 初始化ELF加载基地址
+                p->elf_base = 0; // 初始化ELF加载基地址
 #endif
 
                 /****************************************************************************************
@@ -173,19 +173,19 @@ namespace proc
                  ****************************************************************************************/
                 // 初始化上下文结构体
                 memset(&p->_context, 0, sizeof(p->_context));
-                
+
                 // 设置调度返回地址为 _wrp_fork_ret
                 // 当调度器切换回该进程时，将从这里开始执行
                 p->_context.ra = (uint64)_wrp_fork_ret;
-                
+
                 // 设置内核栈指针
                 p->_context.sp = p->_kstack + PGSIZE;
 
                 /****************************************************************************************
                  * 文件系统和I/O管理初始化
                  ****************************************************************************************/
-                p->_cwd = nullptr;          // 当前工作目录（在具体使用时设置）
-                p->_cwd_name.clear();       // 清空当前工作目录路径
+                p->_cwd = nullptr;    // 当前工作目录（在具体使用时设置）
+                p->_cwd_name.clear(); // 清空当前工作目录路径
 
                 // 初始化文件描述符表
                 p->_ofile = new ofile();
@@ -199,9 +199,9 @@ namespace proc
                 /****************************************************************************************
                  * 线程和同步原语初始化
                  ****************************************************************************************/
-                p->_futex_addr = nullptr;   // 清空futex等待地址
-                p->_clear_tid_addr = 0;     // 清空线程退出时需要清理的地址
-                p->_robust_list = nullptr;  // 清空健壮futex链表
+                p->_futex_addr = nullptr;  // 清空futex等待地址
+                p->_clear_tid_addr = 0;    // 清空线程退出时需要清理的地址
+                p->_robust_list = nullptr; // 清空健壮futex链表
 
                 /****************************************************************************************
                  * 信号处理初始化
@@ -213,10 +213,10 @@ namespace proc
                 {
                     p->_sigactions->actions[i] = nullptr;
                 }
-                
-                p->_sigmask = 0;            // 清空信号屏蔽掩码
-                p->_signal = 0;             // 清空待处理信号掩码
-                p->sig_frame = nullptr;     // 清空信号处理栈帧
+
+                p->_sigmask = 0;        // 清空信号屏蔽掩码
+                p->_signal = 0;         // 清空待处理信号掩码
+                p->sig_frame = nullptr; // 清空信号处理栈帧
 
                 /****************************************************************************************
                  * 资源限制初始化
@@ -224,8 +224,8 @@ namespace proc
                 // 初始化进程资源限制为默认值
                 for (uint i = 0; i < ResourceLimitId::RLIM_NLIMITS; ++i)
                 {
-                    p->_rlim_vec[i].rlim_cur = RLIM_INFINITY;  // 软限制设为无限
-                    p->_rlim_vec[i].rlim_max = RLIM_INFINITY;  // 硬限制设为无限
+                    p->_rlim_vec[i].rlim_cur = RLIM_INFINITY; // 软限制设为无限
+                    p->_rlim_vec[i].rlim_max = RLIM_INFINITY; // 硬限制设为无限
                 }
                 // 设置文件描述符数量限制为合理值
                 p->_rlim_vec[ResourceLimitId::RLIMIT_NOFILE].rlim_cur = max_open_files;
@@ -235,20 +235,20 @@ namespace proc
                  * 时间统计和会计信息初始化
                  ****************************************************************************************/
                 uint64 cur_tick = tmm::get_ticks();
-                p->_start_tick = cur_tick;      // 进程开始运行时的时钟节拍数
-                p->_user_ticks = 0;             // 用户态累计时钟节拍数
-                p->_last_user_tick = 0;         // 上次进入用户态的时钟节拍数
-                p->_kernel_entry_tick = 0;      // 进入内核态的时钟节拍数
-                p->_stime = 0;                  // 系统态时间
-                p->_cutime = 0;                 // 子进程用户态时间累计
-                p->_cstime = 0;                 // 子进程系统态时间累计
-                p->_start_time = cur_tick;      // 进程启动时间
-                p->_start_boottime = cur_tick;  // 自系统启动以来的启动时间
+                p->_start_tick = cur_tick;     // 进程开始运行时的时钟节拍数
+                p->_user_ticks = 0;            // 用户态累计时钟节拍数
+                p->_last_user_tick = 0;        // 上次进入用户态的时钟节拍数
+                p->_kernel_entry_tick = 0;     // 进入内核态的时钟节拍数
+                p->_stime = 0;                 // 系统态时间
+                p->_cutime = 0;                // 子进程用户态时间累计
+                p->_cstime = 0;                // 子进程系统态时间累计
+                p->_start_time = cur_tick;     // 进程启动时间
+                p->_start_boottime = cur_tick; // 自系统启动以来的启动时间
 
                 /****************************************************************************************
                  * 程序段描述初始化
                  ****************************************************************************************/
-                p->_prog_section_cnt = 0;       // 清空程序段计数
+                p->_prog_section_cnt = 0; // 清空程序段计数
                 for (int i = 0; i < max_program_section_num; ++i)
                 {
                     p->_prog_sections[i]._sec_start = nullptr;
@@ -372,7 +372,7 @@ namespace proc
         if (proc->_start_tick == 0)
         {
             proc->_start_tick = tmm::get_ticks();
-            proc->_start_time = tmm::get_ticks(); // 同时设置启动时间
+            proc->_start_time = tmm::get_ticks();     // 同时设置启动时间
             proc->_start_boottime = tmm::get_ticks(); // 系统启动以来的时间
         }
 
@@ -447,7 +447,7 @@ namespace proc
 
         // 重置VMA指针
         p->_vma = nullptr;
-        p->_shared_vm = false;          // 重置共享虚拟内存标志
+        p->_shared_vm = false; // 重置共享虚拟内存标志
 
         /****************************************************************************************
          * 内存管理清理
@@ -464,48 +464,47 @@ namespace proc
         {
             proc_freepagetable(p->_pt, p->_sz);
         }
-        
-        p->_sz = 0;                     // 重置用户空间内存大小
 
+        p->_sz = 0; // 重置用户空间内存大小
 
 #ifdef LOONGARCH
-        p->elf_base = 0;                // 重置ELF基地址
+        p->elf_base = 0; // 重置ELF基地址
 #endif
 
         /****************************************************************************************
          * 基本进程标识和状态管理清理
          ****************************************************************************************/
-        p->_pid = 0;                    // 清除进程ID
-        p->_tid = 0;                    // 清除线程ID
-        p->_parent = nullptr;           // 清除父进程指针
-        p->_name[0] = '\0';             // 清空进程名称
-        p->exe.clear();                 // 清空可执行文件路径
+        p->_pid = 0;          // 清除进程ID
+        p->_tid = 0;          // 清除线程ID
+        p->_parent = nullptr; // 清除父进程指针
+        p->_name[0] = '\0';   // 清空进程名称
+        p->exe.clear();       // 清空可执行文件路径
 
         // 清除标准Linux进程标识符
-        p->_ppid = 0;                   // 清除父进程PID
-        p->_pgid = 0;                   // 清除进程组ID
-        p->_sid = 0;                    // 清除会话ID
-        p->_uid = 0;                    // 清除真实用户ID
-        p->_euid = 0;                   // 清除有效用户ID
-        p->_gid = 0;                    // 清除真实组ID
-        p->_egid = 0;                   // 清除有效组ID
+        p->_ppid = 0; // 清除父进程PID
+        p->_pgid = 0; // 清除进程组ID
+        p->_sid = 0;  // 清除会话ID
+        p->_uid = 0;  // 清除真实用户ID
+        p->_euid = 0; // 清除有效用户ID
+        p->_gid = 0;  // 清除真实组ID
+        p->_egid = 0; // 清除有效组ID
 
         /****************************************************************************************
          * 进程状态和调度信息清理
          ****************************************************************************************/
-        p->_chan = nullptr;             // 清空睡眠等待通道
-        p->_killed = 0;                 // 清除终止标志
-        p->_xstate = 0;                 // 清除退出状态码
-        p->_state = ProcState::UNUSED;  // 标记进程控制块为未使用
-        
-        p->_slot = 0;                   // 重置时间片
-        p->_priority = 0;               // 重置优先级
+        p->_chan = nullptr;            // 清空睡眠等待通道
+        p->_killed = 0;                // 清除终止标志
+        p->_xstate = 0;                // 清除退出状态码
+        p->_state = ProcState::UNUSED; // 标记进程控制块为未使用
+
+        p->_slot = 0;     // 重置时间片
+        p->_priority = 0; // 重置优先级
 
         /****************************************************************************************
          * 文件系统和I/O管理清理
          ****************************************************************************************/
-        p->_cwd = nullptr;              // 清空当前工作目录
-        p->_cwd_name.clear();           // 清空当前工作目录路径
+        p->_cwd = nullptr;    // 清空当前工作目录
+        p->_cwd_name.clear(); // 清空当前工作目录路径
 
         // 使用cleanup_ofile方法处理文件描述符表
         p->cleanup_ofile();
@@ -513,9 +512,9 @@ namespace proc
         /****************************************************************************************
          * 线程和同步原语清理
          ****************************************************************************************/
-        p->_futex_addr = nullptr;       // 清空futex等待地址
-        p->_clear_tid_addr = 0;         // 清空线程退出时需要清理的地址
-        p->_robust_list = nullptr;      // 清空健壮futex链表
+        p->_futex_addr = nullptr;  // 清空futex等待地址
+        p->_clear_tid_addr = 0;    // 清空线程退出时需要清理的地址
+        p->_robust_list = nullptr; // 清空健壮futex链表
 
         /****************************************************************************************
          * 信号处理清理
@@ -530,9 +529,9 @@ namespace proc
             mem::k_pmm.free_page(p->sig_frame); // 释放当前信号处理帧
             p->sig_frame = next_frame;          // 移动到下一个帧
         }
-        p->sig_frame = nullptr;         // 清空信号处理帧指针
-        p->_signal = 0;                 // 清空待处理信号掩码
-        p->_sigmask = 0;                // 清空信号屏蔽掩码
+        p->sig_frame = nullptr; // 清空信号处理帧指针
+        p->_signal = 0;         // 清空待处理信号掩码
+        p->_sigmask = 0;        // 清空信号屏蔽掩码
 
         /****************************************************************************************
          * 资源限制清理
@@ -547,20 +546,20 @@ namespace proc
         /****************************************************************************************
          * 时间统计和会计信息清理
          ****************************************************************************************/
-        p->_start_tick = 0;             // 清零进程开始运行时间
-        p->_user_ticks = 0;             // 清零用户态累计时间
-        p->_last_user_tick = 0;         // 清零上次进入用户态时间
-        p->_kernel_entry_tick = 0;      // 清零进入内核态时间
-        p->_stime = 0;                  // 清零系统态时间
-        p->_cutime = 0;                 // 清零子进程用户态时间累计
-        p->_cstime = 0;                 // 清零子进程系统态时间累计
-        p->_start_time = 0;             // 清零进程启动时间
-        p->_start_boottime = 0;         // 清零自系统启动以来的启动时间
+        p->_start_tick = 0;        // 清零进程开始运行时间
+        p->_user_ticks = 0;        // 清零用户态累计时间
+        p->_last_user_tick = 0;    // 清零上次进入用户态时间
+        p->_kernel_entry_tick = 0; // 清零进入内核态时间
+        p->_stime = 0;             // 清零系统态时间
+        p->_cutime = 0;            // 清零子进程用户态时间累计
+        p->_cstime = 0;            // 清零子进程系统态时间累计
+        p->_start_time = 0;        // 清零进程启动时间
+        p->_start_boottime = 0;    // 清零自系统启动以来的启动时间
 
         /****************************************************************************************
          * 程序段描述清理
          ****************************************************************************************/
-        p->_prog_section_cnt = 0;       // 清零程序段计数
+        p->_prog_section_cnt = 0; // 清零程序段计数
         for (int i = 0; i < max_program_section_num; ++i)
         {
             p->_prog_sections[i]._sec_start = nullptr;
@@ -895,7 +894,7 @@ namespace proc
         Pcb *p = get_cur_pcb();
 
         tsv->tms_utime = p->_user_ticks;
-        tsv->tms_stime = p->_stime;  // 使用累计的系统态时间
+        tsv->tms_stime = p->_stime;   // 使用累计的系统态时间
         tsv->tms_cutime = p->_cutime; // 使用累计的子进程用户态时间
         tsv->tms_cstime = p->_cstime; // 使用累计的子进程系统态时间
     }
@@ -1427,7 +1426,8 @@ namespace proc
         p->_state = ProcState::ZOMBIE; // 标记为 zombie，等待父进程回收
 
         // 如果有父进程，将当前进程的时间累计到父进程中
-        if (p->_parent != nullptr) {
+        if (p->_parent != nullptr)
+        {
             p->_parent->_lock.acquire();
             p->_parent->_cutime += p->_user_ticks + p->_cutime;
             p->_parent->_cstime += p->_stime + p->_cstime;
@@ -1630,22 +1630,20 @@ namespace proc
         // fs::file *file = nullptr;
 
         // struct filesystem *fs = get_fs_from_path(path.c_str());
-        const char *dirpath = (dir_fd == AT_FDCWD) ? p->_cwd_name.c_str() : p->_ofile->_ofile_ptr[dir_fd]->_path_name.c_str();
-        eastl::string absolute_path = get_absolute_path(path.c_str(), dirpath);
         fs::file *file = nullptr;
-        int status = vfs_openat(absolute_path, file, flags);
-        if (status < 0)
+        int fd =alloc_fd(p, file) ;
+        if (fd< 0)
         {
-            printfRed("[open] vfs_openat failed with status: %d\n", status);
-            return -1; // 打开失败
+            printfRed("[open] alloc_fd failed for path: %s\n", path.c_str());
+            return -EMFILE; // 分配文件描述符失败
         }
-        else if (status == 0)
+        //下面这个就是套的第二层，这一层的意义似乎只在于分配文件描述符
+        if(vfs_openat(path.c_str(), p->_ofile->_ofile_ptr[fd], flags)<0)
         {
-            printfGreen("[open] vfs_openat success, file: %p,name:%s\n", file,file->_path_name.c_str());
-            return alloc_fd(p, file);
+            printfRed("[open] vfs_openat failed for path: %s\n", path.c_str());
+            return -ENOENT; // 文件不存在或打开失败
         }
-
-        return 0;
+        return fd; // 返回分配的文件描述符
     }
 
     int ProcessManager::close(int fd)

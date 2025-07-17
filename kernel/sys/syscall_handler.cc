@@ -838,15 +838,59 @@ namespace syscall
             return -1;
         if (_arg_int(2, flags) < 0)
             return -1;
-
+            //仿照后面的fallacate和fallocateat函数写的处理
+            //就是这里可以处理当前工作目录和相对路径
+        if(dir_fd!=AT_FDCWD &&(dir_fd<0 || dir_fd>=NOFILE))
+        {
+            printfRed("[SyscallHandler::sys_openat] Error fetching dir_fd argument\n");
+            return SYS_ENOENT;
+        }
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
-        eastl::string path;
-        if (mem::k_vmm.copy_str_in(*pt, path, path_addr, 100) < 0)
-            return -1;
-        int res = proc::k_pm.open(dir_fd, path, flags);
+        eastl::string pathname;
+        if (mem::k_vmm.copy_str_in(*pt, pathname, path_addr, 100) < 0)
+            return SYS_EFAULT;
+
+            
+        // 处理dirfd和路径
+        eastl::string abs_pathname;
+
+        // 检查是否为绝对路径
+        if (pathname[0] == '/')
+        {
+            // 绝对路径，忽略dirfd
+            abs_pathname = pathname;
+        }
+        else
+        {
+            // 相对路径，需要处理dirfd
+            if (dir_fd == AT_FDCWD)
+            {
+                // 使用当前工作目录
+                abs_pathname = get_absolute_path(pathname.c_str(), p->_cwd_name.c_str());
+            }
+            else
+            {
+                // 使用dirfd指向的目录
+                fs::file *dir_file = p->get_open_file(dir_fd);
+                if (!dir_file)
+                {
+                    printfRed("[SyscallHandler::sys_openat] 无效的dirfd: %d\n", dir_fd);
+                    return SYS_EBADF; // 无效的文件描述符
+                }
+
+                // 使用dirfd对应的路径作为基准目录
+                abs_pathname = get_absolute_path(pathname.c_str(), dir_file->_path_name.c_str());
+            }
+        }
+
+        printfCyan("[SyscallHandler::sys_openat] 绝对路径: %s\n", abs_pathname.c_str());
+        //不知道什么套娃设计，这个b函数套了两层
+        return proc::k_pm.open(dir_fd, abs_pathname, flags);
+
+        // int res = proc::k_pm.open(dir_fd, path, flags);
         // printfRed("openat filename %s return [fd] is %d file: %p refcnt: %d\n", path.c_str(), res, p->_ofile[res], p->_ofile[res]->refcnt);
-        return res;
+        // return res;
     }
 
     uint64 SyscallHandler::sys_write()
@@ -2780,6 +2824,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_setitimer()
     {
+        return 0;
         panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_sched_getaffinity()

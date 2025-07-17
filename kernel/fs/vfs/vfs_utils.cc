@@ -2,54 +2,134 @@
 #include "fs/vfs/fs.hh"
 #include "fs/lwext4/ext4_errno.hh"
 #include "fs/lwext4/ext4_inode.hh"
+#include "fs/lwext4/ext4_oflags.hh"
 #include "fs/vfs/file/normal_file.hh"
 #include "fs/vfs/file/device_file.hh"
 #include "fs/vfs/file/directory_file.hh"
+
+// 辅助函数：根据flags和文件类型确定文件权限
+static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file_exists)
+{
+    mode_t mode;
+
+    switch (file_type)
+    {
+    case fs::FileTypes::FT_NORMAL:
+        if (!file_exists && (flags & O_CREAT))
+        {
+            // 新创建的普通文件
+            mode = 0644; // rw-r--r--
+        }
+        else
+        {
+            // 现有的普通文件，保持当前权限（这里给默认值）
+            mode = 0644;
+        }
+        break;
+
+    case fs::FileTypes::FT_DEVICE:
+        mode = 0666; // rw-rw-rw-
+        break;
+
+    case fs::FileTypes::FT_DIRECT:
+        mode = 0755; // rwxr-xr-x
+        break;
+
+    default:
+        mode = 0644; // 默认权限
+        break;
+    }
+    if (flags & O_RDONLY)
+    {
+        mode &= ~0222; // 清除写权限
+    }
+    if (flags & O_WRONLY)
+    {
+        mode &= ~0444; // 清除读权限
+    }
+
+    return mode;
+}
 int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags)
 {
-    if (is_file_exist(absolute_path.c_str()) != 1 && (flags & O_CREAT) == 0)
+    bool file_exists = (is_file_exist(absolute_path.c_str()) == 1);
+    //好多flag都有人给你负重前行过了
+    // 处理 O_EXCL + O_CREAT 组合：如果文件存在，应该失败
+    if ((flags & O_CREAT) && (flags & O_EXCL) && file_exists)
+    {
+        printfRed("vfs_openat: file %s already exists with O_CREAT|O_EXCL\n", absolute_path.c_str());
+        return -EEXIST;
+    }
+
+    // 如果文件不存在且没有O_CREAT标志，返回错误
+    if (!file_exists && (flags & O_CREAT) == 0)
     {
         printfRed("vfs_openat: file %s does not exist, flags: %d\n", absolute_path.c_str(), flags);
         return -ENOENT; // 文件不存在
     }
-    // TODO: 这里flag之类的都没处理，瞎jb open
+
     int type = vfs_path2filetype(absolute_path);
     int status = -100;
+
     if (type == fs::FileTypes::FT_NORMAL || (flags & O_CREAT) != 0)
     {
+        // 根据flags和文件类型确定适当的权限
+        //专门重写了个函数来确定这个权限
+        mode_t file_mode = determine_file_mode(flags, fs::FileTypes::FT_NORMAL, file_exists);
+
         fs::FileAttrs attrs;
         attrs.filetype = fs::FileTypes::FT_NORMAL;
-        attrs._value = 0777;
+        attrs._value = file_mode;
 
         fs::normal_file *temp_file = new fs::normal_file(attrs, absolute_path);
-        printfYellow("flags: %x\n", flags);
+        printfYellow("vfs_openat: flags: %x, mode: %b\n", flags, file_mode);
+
+        // ext4库会自动处理 O_TRUNC, O_RDONLY, O_WRONLY, O_RDWR 等标志
+        //真是前人栽树，后人乘凉啊！
         status = ext4_fopen2(&temp_file->lwext4_file_struct, absolute_path.c_str(), flags);
         if (status != EOK)
         {
-            // vfs_free_file(&temp_file->lwext4_file_struct);
-            panic("没写free逻辑");
+            delete temp_file;
+            printfRed("ext4_fopen2 failed with status: %d\n", status);
             return -ENOMEM;
         }
+
+        // 处理 O_APPEND：将文件指针设置到文件末尾
+        if (flags & O_APPEND)
+        {
+            //这是纯sb设计，后面有机会把这个删了
+            temp_file->setAppend();
+        }
+
         file = temp_file;
     }
     else if (type == fs::FileTypes::FT_DEVICE)
     {
-        //TODO: 我真感觉这个device是瞎jb写的
-        // panic("FT_DEVICE is not supported yet"); // 下面写的是错的
+        mode_t file_mode = determine_file_mode(flags, fs::FileTypes::FT_DEVICE, file_exists);
+
         fs::FileAttrs attrs;
         attrs.filetype = fs::FileTypes::FT_DEVICE;
+        attrs._value = file_mode;
+
         fs::device_file *temp_file = new fs::device_file(attrs, absolute_path);
         status = ext4_fopen2(&temp_file->lwext4_file_struct, absolute_path.c_str(), flags);
+        if (status != EOK)
+        {
+            delete temp_file;
+            printfRed("Failed to open device file: %d\n", status);
+            return status;
+        }
         file = temp_file;
     }
     else if (type == fs::FileTypes::FT_DIRECT)
     {
+        mode_t file_mode = determine_file_mode(flags, fs::FileTypes::FT_DIRECT, file_exists);
+
         // 创建目录文件对象
         fs::FileAttrs attrs;
         attrs.filetype = fs::FileTypes::FT_DIRECT;
-        attrs._value = 0755; // 目录权限
+        attrs._value = file_mode;
 
-        // 假设你有一个 directory_file 类
         fs::directory_file *temp_dir = new fs::directory_file(attrs, absolute_path);
 
         // 使用 ext4_dir_open 打开目录
@@ -119,7 +199,7 @@ int vfs_path2filetype(eastl::string &absolute_path)
             }
         }
     }
-    printfMagenta("path2filetype: %s not found\n", absolute_path.c_str());
+    // printfMagenta("path2filetype: %s not found\n", absolute_path.c_str());
     return -1;
 }
 
@@ -258,7 +338,7 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
     {
         return EINVAL;
     }
-    if( file == nullptr || file->lwext4_dir_struct.f.mp == nullptr)
+    if (file == nullptr || file->lwext4_dir_struct.f.mp == nullptr)
     {
         printfRed("[vfs_getdents] file is null or mount point is null\n");
         return EINVAL;
@@ -334,17 +414,19 @@ int vfs_mkdir(const char *path, uint64_t mode)
 
 int vfs_fstat(fs::file *f, fs::Kstat *st)
 {
-        struct ext4_inode inode;
+    struct ext4_inode inode;
     uint32 inode_num = 0;
-    const char* file_path = f->_path_name.c_str();
-    
+    const char *file_path = f->_path_name.c_str();
+
     int status = ext4_raw_inode_fill(file_path, &inode_num, &inode);
-    if (status != EOK) return -status;
-    
+    if (status != EOK)
+        return -status;
+
     struct ext4_sblock *sb = NULL;
     status = ext4_get_sblock(file_path, &sb);
-    if (status != EOK) return -status;
-    
+    if (status != EOK)
+        return -status;
+
     st->dev = 0;
     st->ino = inode_num;
     st->mode = ext4_inode_get_mode(sb, &inode);
@@ -354,7 +436,7 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
     st->rdev = ext4_inode_get_dev(&inode);
     st->size = inode.size_lo;
     st->blksize = inode.size_lo / inode.blocks_count_lo;
-    st->blocks = (uint64) inode.blocks_count_lo;
+    st->blocks = (uint64)inode.blocks_count_lo;
 
     st->st_atime_sec = ext4_inode_get_access_time(&inode);
     st->st_atime_nsec = (inode.atime_extra >> 2) & 0x3FFFFFFF; //< 30 bits for nanoseconds
@@ -397,7 +479,7 @@ int vfs_truncate(fs::file *f, size_t length)
 }
 int vfs_chmod(eastl::string pathname, mode_t mode)
 {
-    
+
     if (is_file_exist(pathname.c_str()) != 1)
     {
         printfRed("[vfs_chmod] 文件不存在: %s\n", pathname.c_str());
@@ -415,7 +497,7 @@ int vfs_chmod(eastl::string pathname, mode_t mode)
     return EOK;
 }
 
-int vfs_fallocate(fs::file *f,off_t offset, size_t length)
+int vfs_fallocate(fs::file *f, off_t offset, size_t length)
 {
     if (f == nullptr)
     {
@@ -431,7 +513,7 @@ int vfs_fallocate(fs::file *f,off_t offset, size_t length)
     }
 
     // 获取当前文件大小
-    uint64_t current_size = ext4_fsize(&f->lwext4_file_struct); 
+    uint64_t current_size = ext4_fsize(&f->lwext4_file_struct);
     uint64_t target_size = offset + length;
 
     // 如果目标大小小于等于当前大小，不需要分配空间
@@ -445,7 +527,7 @@ int vfs_fallocate(fs::file *f,off_t offset, size_t length)
     int status = ext4_ftruncate(&f->lwext4_file_struct, target_size);
     if (status != EOK)
     {
-        printfRed("vfs_fallocate: failed to allocate space for file %s, error: %d\n", 
+        printfRed("vfs_fallocate: failed to allocate space for file %s, error: %d\n",
                   f->_path_name.c_str(), status);
         return status;
     }
@@ -453,8 +535,15 @@ int vfs_fallocate(fs::file *f,off_t offset, size_t length)
     // 更新文件大小信息
     f->_stat.size = target_size;
 
-    printfGreen("vfs_fallocate: successfully allocated space for file %s, new size: %lu\n", 
+    printfGreen("vfs_fallocate: successfully allocated space for file %s, new size: %lu\n",
                 f->_path_name.c_str(), target_size);
 
     return EOK;
+}
+
+int vfs_free_file(fs::file *file)
+{
+    ///@todo 锁
+    delete file;
+    return 0;
 }

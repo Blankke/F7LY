@@ -41,7 +41,13 @@ namespace mem
 
     void *Slab::alloc()
     {
+
         void *obj = reinterpret_cast<void *>(first_obj);
+        if(obj == nullptr || free_objs_count == 0)
+        {
+            printfRed("Slab alloc failed: no free objects\n");
+            return nullptr; 
+        }
         first_obj = *reinterpret_cast<uint64 *>(obj);
         free_objs_count--;
         is_empty = (free_objs_count == 0);
@@ -53,6 +59,7 @@ namespace mem
     void Slab::free(void *obj)
     {
         //将链表头更新为当前释放的对象
+        // printf("DEBUG: Freeing object at %p back to slab starting at %p\n", obj, pa_start);
         *reinterpret_cast<uint64 *>(obj) = first_obj;
         first_obj = reinterpret_cast<uint64>(obj);
         free_objs_count++;
@@ -123,6 +130,11 @@ namespace mem
         {
             Slab &slab = partial_slabs_.front();
             void *obj = slab.alloc();
+            
+            if (obj == nullptr) {
+                // Slab报告没有可用对象，这不应该发生在partial_slabs中
+                panic("partial slab returned nullptr in alloc");
+            }
 
             if (slab.free_objs_count == 0)
             {
@@ -137,6 +149,9 @@ namespace mem
         if (free_slabs_.empty())
         {
             Slab *new_slab = create_slab();
+            if (new_slab == nullptr) {
+                return nullptr;  // 内存分配失败
+            }
             free_slabs_.push_front(*new_slab);
             free_slabs_count_++;
         }
@@ -144,6 +159,12 @@ namespace mem
 
         Slab &slab = free_slabs_.front();
         void *obj = slab.alloc();
+        
+        if (obj == nullptr) {
+            // 新创建的slab不应该返回nullptr
+            panic("free slab returned nullptr in alloc");
+        }
+        
         free_slabs_.pop_front();
         partial_slabs_.push_front(slab);
         
@@ -200,7 +221,7 @@ namespace mem
             
             // 验证这个slab确实是完全空闲的
             if (slab.free_objs_count != slab.max_objs_count) {
-                panic("Free slab list contains non-empty slab: free=%lu, max=%lu", 
+                panic("Free slab list contains non-empty slab: free=%u, max=%u", 
                       slab.free_objs_count, slab.max_objs_count);
             }
             
