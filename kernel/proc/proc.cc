@@ -19,7 +19,6 @@
 #include "context.hh"
 #include "virtual_memory_manager.hh"
 #include "physical_memory_manager.hh"
-#include <cstring>  // for memset
 
 namespace proc
 {
@@ -99,7 +98,7 @@ namespace proc
          * 资源限制
          ****************************************************************************************/
         // 初始化所有资源限制为0，在init()中设置具体值
-        for (int i = 0; i < ResourceLimitId::RLIM_NLIMITS; i++) {
+        for (uint i = 0; i < ResourceLimitId::RLIM_NLIMITS; i++) {
             _rlim_vec[i].rlim_cur = 0;
             _rlim_vec[i].rlim_max = 0;
         }
@@ -247,11 +246,6 @@ namespace proc
         return priority;
     }
 
-    void Pcb::print_context()
-    {
-        // 打印进程上下文信息，用于调试
-        printf("Context register values for process %d (%s):\n", this->_pid, this->_name);
-        print_context1(this->get_context());
-    }
+}
 
 

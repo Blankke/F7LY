@@ -66,13 +66,11 @@ namespace proc
                 }
                 // printf("p.global_id: %d, p.state: %d, p.name:%s \n", p->_global_id, p->_state, p->_name);
                 p->_lock.acquire();
-                // p->print_context();
                 if (p->get_state() == ProcState::RUNNABLE)
                 {
                     p->_state = ProcState::RUNNING;
                     cpu->set_cur_proc(p);
                     proc::Context *cur_context = cpu->get_context();
-                    // print_context1( cur_context );
 
                     // Debug
                     //  uint64 sp = p->get_context()->sp; // 0x0000001ffffbf000;
