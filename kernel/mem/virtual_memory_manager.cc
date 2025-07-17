@@ -11,6 +11,7 @@
 #include "printer.hh"
 #include "proc/proc.hh"
 #include "proc_manager.hh"
+#include "sys/syscall_defs.hh"
 extern char etext[]; // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
@@ -438,7 +439,7 @@ namespace mem
                 }
             }
             Pte pte = pt.walk(a, 0);
-            if (pte.get_data() == 0 && alloc)
+            if ((pte.is_null() || pte.get_data() == 0) && alloc)
             {
                 // 如果页表项无效且当前VMA范围内，则分配物理页
                 void *mem = k_pmm.alloc_page();
@@ -450,6 +451,12 @@ namespace mem
                 k_pmm.clear_page(mem);
                 map_pages(pt, a, PGSIZE, (uint64)mem,
                           riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_writable_m | riscv::PteEnum::pte_user_m);
+            }
+            else if (pte.is_null() || pte.get_data() == 0)
+            {
+                // 如果页表项无效且不在当前VMA范围内，则返回错误
+                printfRed("[copy_out] walk failed for va: %p\n", va);
+                return -1; // 页表项无效
             }
             pa = reinterpret_cast<uint64>(pte.pa());
             if (pa == 0){
@@ -497,7 +504,7 @@ namespace mem
                 }
             }
             Pte pte = pt.walk(a, 0);
-            if (pte.get_data() == 0 && alloc)
+            if ((pte.is_null() || pte.get_data() == 0) && alloc)
             {
                 // 如果页表项无效且当前VMA范围内，则分配物理页
                 void *mem = k_pmm.alloc_page();

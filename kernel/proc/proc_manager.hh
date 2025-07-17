@@ -103,6 +103,7 @@ namespace proc
         // 信号相关
         int kill_signal(int pid, int sig);
         int tkill(int tid, int sig);
+        int tgkill(int tgid, int tid, int sig);  // 发送信号给指定线程组中的指定线程
 
     public:
         void kill_proc(Pcb *p) { p->_killed = 1; }

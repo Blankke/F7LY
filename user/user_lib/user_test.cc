@@ -776,10 +776,10 @@ char *ltp_testcases[] = {
     // "execle01_child",
     // "execlp01",
     // "execlp01_child",
-    // "execv01",
+    // "execv01",               // 完全PASS
     // "execv01_child",
     // "execve_child",
-    // "execve01",
+    // "execve01",              // 完全PASS
     // "execve01_child",
     // "execve02",
     // "execve03",
@@ -1206,7 +1206,7 @@ char *ltp_testcases[] = {
     // "getaddrinfo_01",
     // "getcontext01",
     // "getcpu01",
-    // "getcwd01",
+    // "getcwd01",//完全PASS
     // "getcwd02",
     // "getcwd03",
     // "getcwd04",
@@ -1246,11 +1246,11 @@ char *ltp_testcases[] = {
     // "getppid02",
     // "getpriority01",
     // "getpriority02",
-    // "getrandom01",
-    // "getrandom02",
-    // "getrandom03",
-    // "getrandom04",
-    // "getrandom05",
+    // "getrandom01",// 完全PASS
+    // "getrandom02", // 完全PASS
+    // "getrandom03", // 完全PASS
+    // "getrandom04", // 完全PASS
+    // "getrandom05",// 完全PASS
     // "getresgid01",
     // "getresgid01_16",
     // "getresgid02",
@@ -1278,7 +1278,7 @@ char *ltp_testcases[] = {
     // "getsockopt02",
     // "gettid01",
     // "gettid02",
-    // "gettimeofday01",
+    // "gettimeofday01",//PASS
     // "gettimeofday02",
     // "getuid01",
     // "getuid01_16",
@@ -1894,8 +1894,8 @@ char *ltp_testcases[] = {
     // "open_tree02",
     // "open01",
     // "open02",
-    // "open03",
-    // "open04",
+    // "open03", // 完全PASS
+    // "open04",    //完全PASS
     // "open06",
     // "open07",
     // "open08",
@@ -1906,7 +1906,7 @@ char *ltp_testcases[] = {
     // "open12_child",
     // "open13",
     // "open14",
-    // "openat01",
+    // "openat01", // 完全PASS
     // "openat02",
     // "openat02_child",
     // "openat03",
@@ -1961,20 +1961,20 @@ char *ltp_testcases[] = {
     // "pids_task2",
     // "ping01.sh",
     // "ping02.sh",
-    // "pipe01",
+    // "pipe01",// 完全PASS
     // "pipe02",
-    // "pipe03",
+    // "pipe03", // 完全PASS
     // "pipe04",
-    // "pipe05",
-    // "pipe06",
-    // "pipe07",
+    // "pipe05", // 完全PASS
+    // "pipe06",    // 完全PASS
+    // "pipe07", //proc/self/fd没写
     // "pipe08",
-    // "pipe09",
-    // "pipe10",
+    // "pipe09", // 完全PASS
+    // "pipe10", // 完全PASS
     // "pipe11",
     // "pipe12",
-    // "pipe13",
-    // "pipe14",
+    // "pipe13", // proc/4/stat没写
+    // "pipe14", // 完全PASS
     // "pipe15",
     // "pipe2_01",
     // "pipe2_02",
@@ -2099,10 +2099,10 @@ char *ltp_testcases[] = {
     // "quotactl09",
     // "rcu_torture.sh",
     // "read_all",
-    // "read01",
+    // "read01", //貌似可以PASS
     // "read02",
     // "read03",
-    // "read04",
+    // "read04", // 完全PASS
     // "readahead01",
     // "readahead02",
     // "readdir01",

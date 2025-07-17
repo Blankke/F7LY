@@ -29,7 +29,7 @@
 #include "syscall_defs.hh"
 #include "fs/vfs/ops.hh"
 #include "fs/vfs/vfs_utils.hh"
-
+#include "sys/syscall_defs.hh"
 #include "fs/vfs/fs.hh"
 extern "C"
 {
@@ -122,13 +122,14 @@ namespace proc
                 p->exe.clear();     // 清空可执行文件路径
 
                 // 初始化标准Linux进程标识符
-                p->_ppid = 0;       // 父进程PID（在fork时设置）
-                p->_pgid = p->_pid; // 进程组ID（初始化为自身PID）
-                p->_sid = p->_pid;  // 会话ID（初始化为自身PID）
-                p->_uid = 0;        // 真实用户ID（root）
-                p->_euid = 0;       // 有效用户ID（root）
-                p->_gid = 0;        // 真实组ID（root）
-                p->_egid = 0;       // 有效组ID（root）
+                p->_ppid = 0;               // 父进程PID（在fork时设置）
+                p->_pgid = p->_pid;         // 进程组ID（初始化为自身PID）
+                p->_tgid = p->_pid;         // 线程组ID（初始化为自身PID）
+                p->_sid = p->_pid;          // 会话ID（初始化为自身PID）
+                p->_uid = 0;                // 真实用户ID（root）
+                p->_euid = 0;               // 有效用户ID（root）
+                p->_gid = 0;                // 真实组ID（root）
+                p->_egid = 0;               // 有效组ID（root）
 
                 /****************************************************************************************
                  * 进程状态和调度信息初始化
@@ -481,13 +482,14 @@ namespace proc
         p->exe.clear();       // 清空可执行文件路径
 
         // 清除标准Linux进程标识符
-        p->_ppid = 0; // 清除父进程PID
-        p->_pgid = 0; // 清除进程组ID
-        p->_sid = 0;  // 清除会话ID
-        p->_uid = 0;  // 清除真实用户ID
-        p->_euid = 0; // 清除有效用户ID
-        p->_gid = 0;  // 清除真实组ID
-        p->_egid = 0; // 清除有效组ID
+        p->_ppid = 0;                   // 清除父进程PID
+        p->_pgid = 0;                   // 清除进程组ID
+        p->_tgid = 0;                   // 清除线程组ID
+        p->_sid = 0;                    // 清除会话ID
+        p->_uid = 0;                    // 清除真实用户ID
+        p->_euid = 0;                   // 清除有效用户ID
+        p->_gid = 0;                    // 清除真实组ID
+        p->_egid = 0;                   // 清除有效组ID
 
         /****************************************************************************************
          * 进程状态和调度信息清理
@@ -813,6 +815,23 @@ namespace proc
         return -1;
     }
 
+    int ProcessManager::tgkill(int tgid, int tid, int sig)
+    {
+        Pcb *p;
+        for (p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
+        {
+            p->_lock.acquire();
+            if (p->_tid == tid && p->_tgid == tgid)
+            {
+                p->add_signal(sig);
+                p->_lock.release();
+                return 0;
+            }
+            p->_lock.release();
+        }
+        return -1; // 未找到匹配的线程
+    }
+
     // Copy from either a user address, or kernel address,
     // depending on usr_src.
     // Returns 0 on success, -1 on error.
@@ -914,7 +933,7 @@ namespace proc
                 return fd;
             }
         }
-        return -1;
+        return syscall::SYS_EMFILE;
     }
 
     int ProcessManager::clone(uint64 flags, uint64 stack_ptr, uint64 ptid, uint64 tls, uint64 ctid)
@@ -1135,12 +1154,14 @@ namespace proc
         if (flags & syscall::CLONE_THREAD)
         {
             // TODO: 清除信号掩码
+            np->_tgid = p->_tgid; // 线程共享线程组 ID
             np->_pid = p->_pid; // 线程共享 PID
             // TODO: 共享定时器
         }
         else
         {
             // TODO: 共享信号掩码
+            np->_tgid = np->_pid; // 新进程的线程组 ID 等于自己的 PID
             np->_trapframe->a0 = 0; // fork 返回值为 0
             // pid已经在 alloc_proc 中设置了
             // 定时器已经设置过了
@@ -1467,65 +1488,29 @@ namespace proc
         exit_proc(p, state);
     }
 
-    /// @brief 当前线程组（或进程组）全部退出
+    /// @brief 当前线程组全部退出
     /// @param status
+    /// https://man7.org/linux/man-pages/man2/exit_group.2.html
     void ProcessManager::exit_group(int status)
     {
         TODO("rm /temp")
-        void *stk[num_process + 10]; // 这里不使用stl库是因为 exit
-                                     // 后不会返回，无法调用析构函数，可能造成内存泄露
-        int stk_ptr = 0;
-
-        u8 visit[num_process];
-        memset((void *)visit, 0, sizeof visit);
         proc::Pcb *cp = get_cur_pcb();
-
+        
         _wait_lock.acquire();
 
         for (uint i = 0; i < num_process; i++)
         {
             if (k_proc_pool[i]._state == ProcState::UNUSED)
                 continue;
-            if (visit[i] != 0)
-                continue;
-
             proc::Pcb *p = &k_proc_pool[i];
-            visit[i] = 1;
-            stk[stk_ptr] = (void *)p;
-            stk_ptr++;
-            bool need_chp = false;
-            // 向上查找父进程链，如果当前进程是其祖先，则标记它应退出
-            while (p->_parent != nullptr)
+            // 释放同一线程组中其他线程的资源
+            if(p != cp && p->_tgid == cp->_tgid)
             {
-                if (p->_parent == cp)
-                {
-                    need_chp = true;
-                    break;
-                }
-                p = p->_parent;
-                visit[p->_global_id] = 1;
-                // 修改于6.6，检测防止数组越界
-                if (stk_ptr < (int)num_process)
-                    stk[stk_ptr++] = (void *)p;
-                else
-                    break; // 栈满，直接停止压栈
-            }
-
-            // 释放应退出的子孙进程资源
-            while (stk_ptr > 0)
-            {
-                proc::Pcb *tp = (proc::Pcb *)stk[stk_ptr - 1];
-                stk_ptr--;
-                if (need_chp)
-                {
-                    freeproc(tp);
-                }
+                // 退出同一线程组的其他线程
+                exit_proc(p, status);
             }
         }
-
         _wait_lock.release();
-        // 最后退出自己
-        // printf("[exit_group] proc %s pid %d exiting with status %d\n", cp->_name, cp->_pid, status);
         exit_proc(cp, status);
     }
     void ProcessManager::sleep(void *chan, SpinLock *lock)
@@ -1941,7 +1926,7 @@ namespace proc
 
         ipc::Pipe *pipe_ = new ipc::Pipe();
         if (pipe_->alloc(rf, wf) < 0)
-            return -1;
+            return syscall::SYS_ENOMEM;
         fd0 = -1;
         if (((fd0 = alloc_fd(p, rf)) < 0) || (fd1 = alloc_fd(p, wf)) < 0)
         {
@@ -1951,7 +1936,7 @@ namespace proc
             // fs::k_file_table.free_file( wf );
             rf->free_file();
             wf->free_file();
-            return -1;
+            return syscall::SYS_EMFILE;
         }
         // 其实alloc_fd已经设置了_ofile_ptr，这里不需要再次设置了，但是再设一下无伤大雅
         p->_ofile->_ofile_ptr[fd0] = rf;

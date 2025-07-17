@@ -245,7 +245,7 @@ namespace mem
 
         pte = k_pagetable.walk(va, false);
 
-        if (pte.get_data() == 0)
+        if (pte.is_null() || pte.get_data() == 0)
         {
             printfRed("try to walk-addr( k-pt, %p ). nullptr will be return.", va);
             return Pte(0);

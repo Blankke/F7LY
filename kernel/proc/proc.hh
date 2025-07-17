@@ -81,6 +81,8 @@ namespace proc
         // 新增：标准Linux进程标识符
         int _ppid;    // 父进程PID，用于快速访问，避免通过_parent指针获取
         int _pgid;    // 进程组ID，用于作业控制
+        int _tgid;    // 线程组ID，同一进程的所有线程共享同一个TGID，主线程的TGID等于PID
+        
         int _sid;     // 会话ID，用于终端管理
         uint32 _uid;  // 真实用户ID
         uint32 _euid; // 有效用户ID
@@ -103,8 +105,11 @@ namespace proc
          * 内存管理
          ****************************************************************************************/
         uint64 _kstack = 0;      // 内核栈的虚拟地址
-        uint64 _sz;              // 进程用户空间内存大小(字节)，等同于Linux的mm->total_vm
         bool _shared_vm = false; // 标记是否与父进程共享虚拟内存(CLONE_VM标志)
+        uint64 _sz;              // 进程用户空间内存大小(字节)，等同于Linux的mm->total_vm
+        #ifdef LOONGARCH
+                uint64 elf_base = 0; // ELF文件加载基地址，用于动态链接
+        #endif
         mem::PageTable _pt;      // 用户空间页表，等同于Linux的mm->pgd
         TrapFrame *_trapframe;   // 用户态寄存器保存区，用于系统调用和异常处理
 
@@ -116,9 +121,6 @@ namespace proc
         };
         VMA *_vma; // VMA管理结构指针
 
-#ifdef LOONGARCH
-        uint64 elf_base = 0; // ELF文件加载基地址，用于动态链接
-#endif
 
         /****************************************************************************************
          * 上下文切换
@@ -214,6 +216,7 @@ namespace proc
         uint get_global_id() { return _global_id; }
         uint get_ppid() { return _parent ? _parent->_pid : _ppid; } // 优先使用_parent，回退到_ppid
         uint get_pgid() { return _pgid; }
+        uint get_tgid() { return _tgid; }
         uint get_sid() { return _sid; }
         uint32 get_uid() { return _uid; }
         uint32 get_euid() { return _euid; }
@@ -259,6 +262,7 @@ namespace proc
         // 新增的设置器方法
         void set_ppid(int ppid) { _ppid = ppid; }
         void set_pgid(int pgid) { _pgid = pgid; }
+        void set_tgid(int tgid) { _tgid = tgid; }
         void set_sid(int sid) { _sid = sid; }
         void set_uid(uint32 uid) { _uid = uid; }
         void set_euid(uint32 euid) { _euid = euid; }
