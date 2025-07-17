@@ -193,8 +193,6 @@ namespace proc
         fs::dentry *get_cwd() { return _cwd; }
         int get_priority();
 
-        void print_context();
-
     public:
         Context *get_context() { return &_context; }
 
@@ -278,5 +276,4 @@ namespace proc
     };
 
     extern Pcb k_proc_pool[num_process]; // 全局进程池
-    void print_context1(Context *ctx);   // 打印进程上下文
 }
