@@ -525,8 +525,9 @@ namespace syscall
         if (mem::k_vmm.copy_in(*pt, &fd, addr, 2 * sizeof(fd[0])) < 0)
             return -1;
 
-        if (proc::k_pm.pipe(fd, 0) < 0)
-            return -1;
+        int ret = proc::k_pm.pipe(fd, 0);
+        if (ret < 0)
+            return ret;
 
         if (mem::k_vmm.copy_out(*pt, addr, &fd, 2 * sizeof(fd[0])) < 0)
             return -1;

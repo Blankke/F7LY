@@ -1966,15 +1966,15 @@ char *ltp_testcases[] = {
     // "pipe03", // 完全PASS
     // "pipe04",
     // "pipe05", // 完全PASS
-    // "pipe06",
-    // "pipe07",
+    // "pipe06",    // 完全PASS
+    // "pipe07", //proc/self/fd没写
     // "pipe08",
-    // "pipe09",
-    // "pipe10",
+    // "pipe09", // 完全PASS
+    // "pipe10", // 完全PASS
     // "pipe11",
     // "pipe12",
-    // "pipe13",
-    // "pipe14",
+    // "pipe13", // proc/4/stat没写
+    // "pipe14", // 完全PASS
     // "pipe15",
     // "pipe2_01",
     // "pipe2_02",

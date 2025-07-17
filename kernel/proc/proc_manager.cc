@@ -1943,7 +1943,7 @@ namespace proc
 
         ipc::Pipe *pipe_ = new ipc::Pipe();
         if (pipe_->alloc(rf, wf) < 0)
-            return -1;
+            return syscall::SYS_ENOMEM;
         fd0 = -1;
         if (((fd0 = alloc_fd(p, rf)) < 0) || (fd1 = alloc_fd(p, wf)) < 0)
         {
@@ -1953,7 +1953,7 @@ namespace proc
             // fs::k_file_table.free_file( wf );
             rf->free_file();
             wf->free_file();
-            return -1;
+            return syscall::SYS_EMFILE;
         }
         // 其实alloc_fd已经设置了_ofile_ptr，这里不需要再次设置了，但是再设一下无伤大雅
         p->_ofile->_ofile_ptr[fd0] = rf;
