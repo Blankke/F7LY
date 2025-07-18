@@ -123,14 +123,14 @@ namespace proc
                 p->exe.clear();     // 清空可执行文件路径
 
                 // 初始化标准Linux进程标识符
-                p->_ppid = 0;               // 父进程PID（在fork时设置）
-                p->_pgid = p->_pid;         // 进程组ID（初始化为自身PID）
-                p->_tgid = p->_pid;         // 线程组ID（初始化为自身PID）
-                p->_sid = p->_pid;          // 会话ID（初始化为自身PID）
-                p->_uid = 0;                // 真实用户ID（root）
-                p->_euid = 0;               // 有效用户ID（root）
-                p->_gid = 0;                // 真实组ID（root）
-                p->_egid = 0;               // 有效组ID（root）
+                p->_ppid = 0;       // 父进程PID（在fork时设置）
+                p->_pgid = p->_pid; // 进程组ID（初始化为自身PID）
+                p->_tgid = p->_pid; // 线程组ID（初始化为自身PID）
+                p->_sid = p->_pid;  // 会话ID（初始化为自身PID）
+                p->_uid = 0;        // 真实用户ID（root）
+                p->_euid = 0;       // 有效用户ID（root）
+                p->_gid = 0;        // 真实组ID（root）
+                p->_egid = 0;       // 有效组ID（root）
 
                 /****************************************************************************************
                  * 进程状态和调度信息初始化
@@ -483,14 +483,14 @@ namespace proc
         p->exe.clear();       // 清空可执行文件路径
 
         // 清除标准Linux进程标识符
-        p->_ppid = 0;                   // 清除父进程PID
-        p->_pgid = 0;                   // 清除进程组ID
-        p->_tgid = 0;                   // 清除线程组ID
-        p->_sid = 0;                    // 清除会话ID
-        p->_uid = 0;                    // 清除真实用户ID
-        p->_euid = 0;                   // 清除有效用户ID
-        p->_gid = 0;                    // 清除真实组ID
-        p->_egid = 0;                   // 清除有效组ID
+        p->_ppid = 0; // 清除父进程PID
+        p->_pgid = 0; // 清除进程组ID
+        p->_tgid = 0; // 清除线程组ID
+        p->_sid = 0;  // 清除会话ID
+        p->_uid = 0;  // 清除真实用户ID
+        p->_euid = 0; // 清除有效用户ID
+        p->_gid = 0;  // 清除真实组ID
+        p->_egid = 0; // 清除有效组ID
 
         /****************************************************************************************
          * 进程状态和调度信息清理
@@ -1156,13 +1156,13 @@ namespace proc
         {
             // TODO: 清除信号掩码
             np->_tgid = p->_tgid; // 线程共享线程组 ID
-            np->_pid = p->_pid; // 线程共享 PID
+            np->_pid = p->_pid;   // 线程共享 PID
             // TODO: 共享定时器
         }
         else
         {
             // TODO: 共享信号掩码
-            np->_tgid = np->_pid; // 新进程的线程组 ID 等于自己的 PID
+            np->_tgid = np->_pid;   // 新进程的线程组 ID 等于自己的 PID
             np->_trapframe->a0 = 0; // fork 返回值为 0
             // pid已经在 alloc_proc 中设置了
             // 定时器已经设置过了
@@ -1317,7 +1317,7 @@ namespace proc
                 {
                     np->_lock.acquire();
                     havekids = 1;
-                    // printfGreen("[wait4]: child %d state: %d name: %s\n", np->_pid, (int)np->_state, np->_name);
+                    printfGreen("[wait4]: child %d state: %d name: %s\n", np->_pid, (int)np->_state, np->_name);
                     if (np->get_state() == ProcState::ZOMBIE)
                     {
                         pid = np->_pid;
@@ -1457,7 +1457,7 @@ namespace proc
         }
 
         _wait_lock.release();
-        //    printf("[exit_proc] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
+        // printf("[exit_proc] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
         k_scheduler.call_sched(); // jump to schedular, never return
         panic("zombie exit");
     }
@@ -1468,6 +1468,7 @@ namespace proc
     void ProcessManager::reparent(Pcb *p)
     {
         Pcb *pp;
+        _wait_lock.acquire();
         for (uint i = 0; i < num_process; i++)
         {
             pp = &k_proc_pool[(_last_alloc_proc_gid + i) % num_process];
@@ -1478,6 +1479,7 @@ namespace proc
                 pp->_lock.release();
             }
         }
+        _wait_lock.release();
     }
     /// @brief 当前进程或线程退出（只退出自己）
     /// @param state   调用 exit_proc 处理退出逻辑
@@ -1496,7 +1498,7 @@ namespace proc
     {
         TODO("rm /temp")
         proc::Pcb *cp = get_cur_pcb();
-        
+
         _wait_lock.acquire();
 
         for (uint i = 0; i < num_process; i++)
@@ -1505,13 +1507,14 @@ namespace proc
                 continue;
             proc::Pcb *p = &k_proc_pool[i];
             // 释放同一线程组中其他线程的资源
-            if(p != cp && p->_tgid == cp->_tgid)
+            if (p != cp && p->_tgid == cp->_tgid)
             {
                 // 退出同一线程组的其他线程
-                exit_proc(p, status);
+                freeproc(p);
             }
         }
         _wait_lock.release();
+
         exit_proc(cp, status);
     }
     void ProcessManager::sleep(void *chan, SpinLock *lock)
@@ -1524,8 +1527,8 @@ namespace proc
         // (wakeup locks p->lock),
         // so it's okay to release lk.
         // printfCyan("[sleep]proc %s : sleep on chan: %p\n", p->_name, chan);
-        p->_lock.acquire();
         lock->release();
+        p->_lock.acquire();
         // go to sleep
         p->_chan = chan;
         p->_state = ProcState::SLEEPING;
@@ -1617,15 +1620,15 @@ namespace proc
 
         // struct filesystem *fs = get_fs_from_path(path.c_str());
         fs::file *file = nullptr;
-        int fd =alloc_fd(p, file) ;
-        if (fd< 0)
+        int fd = alloc_fd(p, file);
+        if (fd < 0)
         {
             printfRed("[open] alloc_fd failed for path: %s\n", path.c_str());
             return -EMFILE; // 分配文件描述符失败
         }
-        //下面这个就是套的第二层，这一层的意义似乎只在于分配文件描述符
-        int err=vfs_openat(path.c_str(), p->_ofile->_ofile_ptr[fd], flags);
-        if(err<0)
+        // 下面这个就是套的第二层，这一层的意义似乎只在于分配文件描述符
+        int err = vfs_openat(path.c_str(), p->_ofile->_ofile_ptr[fd], flags);
+        if (err < 0)
         {
             printfRed("[open] vfs_openat failed for path: %s\n", path.c_str());
             return err; // 文件不存在或打开失败

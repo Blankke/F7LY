@@ -498,8 +498,7 @@ namespace syscall
         // printf("[SyscallHandler::sys_wait4] pid: %d, wstatus_addr: %p, option: %d\n",
         //    pid, wstatus_addr, option);
         int waitret = proc::k_pm.wait4(pid, wstatus_addr, option);
-        // printf("[SyscallHandler::sys_wait4] waitret: %d\n",
-        //    waitret);
+        // printf("[SyscallHandler::sys_wait4] waitret: %d\n",waitret);
         return waitret;
     }
     uint64 SyscallHandler::sys_getppid()

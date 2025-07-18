@@ -70,19 +70,20 @@ namespace proc
         /****************************************************************************************
          * 基本进程标识和状态管理
          ****************************************************************************************/
-        SpinLock _lock;    // 进程控制块的锁，用于并发访问控制
-        int _global_id;    // 全局ID，用于在进程池中唯一标识进程
-        int _pid;          // 进程ID (Process ID)
-        int _tid = 0;      // 线程ID，在单线程进程中等于PID @todo: 多线程支持
+        SpinLock _lock; // 进程控制块的锁，用于并发访问控制
+        int _global_id; // 全局ID，用于在进程池中唯一标识进程
+        int _pid;       // 进程ID (Process ID)
+        int _tid = 0;   // 线程ID，在单线程进程中等于PID @todo: 多线程支持
+
         Pcb *_parent;      // 父进程的PCB指针
         char _name[30];    // 进程名称，用于调试和识别
         eastl::string exe; // 可执行文件的绝对路径
 
         // 新增：标准Linux进程标识符
-        int _ppid;    // 父进程PID，用于快速访问，避免通过_parent指针获取
-        int _pgid;    // 进程组ID，用于作业控制
-        int _tgid;    // 线程组ID，同一进程的所有线程共享同一个TGID，主线程的TGID等于PID
-        
+        int _ppid; // 父进程PID，用于快速访问，避免通过_parent指针获取
+        int _pgid; // 进程组ID，用于作业控制
+        int _tgid; // 线程组ID，同一进程的所有线程共享同一个TGID，主线程的TGID等于PID
+
         int _sid;     // 会话ID，用于终端管理
         uint32 _uid;  // 真实用户ID
         uint32 _euid; // 有效用户ID
@@ -120,7 +121,6 @@ namespace proc
             int _ref_cnt;  // VMA引用计数，用于copy-on-write机制
         };
         VMA *_vma; // VMA管理结构指针
-
 
         /****************************************************************************************
          * 上下文切换
@@ -167,9 +167,9 @@ namespace proc
         /****************************************************************************************
          * 时间统计和会计信息
          ****************************************************************************************/
-        uint64 _start_tick;     // 进程开始运行时的时钟节拍数
-        uint64 _user_ticks;     // 进程在用户态累计运行时钟节拍数
-        uint64 _last_user_tick; // 进程上次进入用户态的时钟节拍数
+        uint64 _start_tick;        // 进程开始运行时的时钟节拍数
+        uint64 _user_ticks;        // 进程在用户态累计运行时钟节拍数
+        uint64 _last_user_tick;    // 进程上次进入用户态的时钟节拍数
         uint64 _kernel_entry_tick; // 进程进入内核态的时钟节拍数
 
         // 新增：详细时间统计
@@ -268,6 +268,10 @@ namespace proc
         void set_euid(uint32 euid) { _euid = euid; }
         void set_gid(uint32 gid) { _gid = gid; }
         void set_egid(uint32 egid) { _egid = egid; }
+        bool is_process()
+        {
+            return _tid == _tgid; // 线程ID等于线程组ID表示是主线程
+        }
 
         bool is_killed()
         {
