@@ -99,6 +99,10 @@ namespace fs
             }
             return eastl::make_unique<ProcSelfFdProvider>(fd_num);
         }
+        else
+        {
+            panic("VirtualFileSystem::create_provider: Unsupported virtual file path: %s", path.c_str());
+        }
         return nullptr;
     }
 
