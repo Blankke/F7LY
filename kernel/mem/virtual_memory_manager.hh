@@ -114,7 +114,12 @@ namespace mem
 		/// @return 
 		uint64 uvmdealloc( PageTable &pt, uint64 oldsz, uint64 newsz );
 
-		void uvmfirst(PageTable &pt, uint64 src, uint64 sz);
+		/// @brief Initialize first user process virtual memory
+		/// @param pt pagetable to use
+		/// @param src source address of program code
+		/// @param sz size of program code
+		/// @return total allocated virtual memory size
+		uint64 uvmfirst(PageTable &pt, uint64 src, uint64 sz);
 
 		int protectpages(PageTable &pt, uint64 va, uint64 size, int perm);
 

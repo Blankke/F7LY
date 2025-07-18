@@ -790,127 +790,86 @@ namespace mem
         return pt;
     }
 
-    void VirtualMemoryManager::uvmfirst(PageTable &pt, uint64 src, uint64 sz)
+    uint64 VirtualMemoryManager::uvmfirst(PageTable &pt, uint64 src, uint64 sz)
     {
 #ifdef RISCV
-        // 来自xv6的uvmfirst函数
+        // 动态计算需要分配的空间
         char *mem;
         printf("sz: %d\n", sz);
-        // if(sz >= PGSIZE)
-        //   panic("uvmfirst: more than a page");
-        mem = (char *)k_pmm.alloc_page();
-        memset(mem, 0, PGSIZE);
-        map_pages(pt, 0, PGSIZE, (uint64)mem, PTE_W | PTE_R | PTE_X | PTE_U);
-        // debug
-        // printfYellow("预期映射的pa: %p\n", mem);
-        // uint64 pa= (uint64)pt.walk_addr(0);
-        // printfYellow("va: %p, pa: %p\n", 0, pa);
-
-        memmove(mem, (void *)src, MIN(sz, PGSIZE));
-
-        mem = (char *)k_pmm.alloc_page();
-        memset(mem, 0, PGSIZE);
-        map_pages(pt, PGSIZE, PGSIZE, (uint64)mem, PTE_W | PTE_R | PTE_X | PTE_U);
-        if (sz > PGSIZE)
+        
+        // 计算程序段需要的页面数量（向上取整）
+        uint64 prog_pages = PGROUNDUP(sz) / PGSIZE;
+        // 总共分配两倍的页面数，低地址存程序段，高地址作栈内存
+        uint64 total_pages = prog_pages * 2;
+        uint64 total_size = total_pages * PGSIZE;
+        
+        printf("prog_pages: %d, total_pages: %d, total_size: %d\n", prog_pages, total_pages, total_size);
+        
+        // 分配程序段页面
+        for (uint64 i = 0; i < prog_pages; i++)
         {
-            memmove(mem, (void *)((uint64)src + PGSIZE), MIN(sz - PGSIZE, PGSIZE));
+            mem = (char *)k_pmm.alloc_page();
+            memset(mem, 0, PGSIZE);
+            map_pages(pt, i * PGSIZE, PGSIZE, (uint64)mem, PTE_W | PTE_R | PTE_X | PTE_U);
+            
+            // 复制程序内容
+            uint64 src_offset = i * PGSIZE;
+            uint64 copy_size = MIN(sz - src_offset, PGSIZE);
+            if (copy_size > 0 && src_offset < sz)
+            {
+                memmove(mem, (void *)((uint64)src + src_offset), copy_size);
+            }
         }
-
-        mem = (char *)k_pmm.alloc_page();
-        memset(mem, 0, PGSIZE);
-        map_pages(pt, 2 * PGSIZE, PGSIZE, (uint64)mem, PTE_W | PTE_R | PTE_X | PTE_U);
-        if (sz > 2 * PGSIZE)
+        
+        // 分配栈内存页面
+        for (uint64 i = prog_pages; i < total_pages; i++)
         {
-            memmove(mem, (void *)((uint64)src + 2 * PGSIZE), MIN(sz - 2 * PGSIZE, PGSIZE));
+            mem = (char *)k_pmm.alloc_page();
+            memset(mem, 0, PGSIZE);
+            // 栈内存只需要读写权限，不需要执行权限
+            map_pages(pt, i * PGSIZE, PGSIZE, (uint64)mem, PTE_W | PTE_R | PTE_U);
         }
-
-        mem = (char *)k_pmm.alloc_page();
-        memset(mem, 0, PGSIZE);
-        map_pages(pt, 3 * PGSIZE, PGSIZE, (uint64)mem, PTE_W | PTE_R | PTE_X | PTE_U);
-        if (sz > 3 * PGSIZE)
-        {
-            memmove(mem, (void *)((uint64)src + 3 * PGSIZE), MIN(sz - 3 * PGSIZE, PGSIZE));
-        }
-
-        mem = (char *)k_pmm.alloc_page();
-        memset(mem, 0, PGSIZE);
-        map_pages(pt, 4 * PGSIZE, PGSIZE, (uint64)mem, PTE_W | PTE_R | PTE_X | PTE_U);
-        if (sz > 4 * PGSIZE)
-        {
-            memmove(mem, (void *)((uint64)src + 4 * PGSIZE), MIN(sz - 4 * PGSIZE, PGSIZE));
-        }
-        mem = (char *)k_pmm.alloc_page();
-        memset(mem, 0, PGSIZE);
-        map_pages(pt, 5 * PGSIZE, PGSIZE, (uint64)mem, PTE_W | PTE_R | PTE_X | PTE_U);
-        if (sz > 5 * PGSIZE)
-        {
-            memmove(mem, (void *)((uint64)src +  5* PGSIZE), MIN(sz - 5 * PGSIZE, PGSIZE));
-        }
+        
+        return total_size;
 #elif defined(LOONGARCH)
+        // 动态计算需要分配的空间
         char *mem;
         printf("sz: %d\n", sz);
-        // if(sz >= PGSIZE)
-        //   panic("uvmfirst: more than a page");
-        mem = (char *)k_pmm.alloc_page();
-        memset(mem, 0, PGSIZE);
-        map_pages(pt, 0, PGSIZE, (uint64)mem, PTE_V | PTE_W | PTE_R | PTE_X | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
-        memmove(mem, (void *)src, MIN(sz, PGSIZE));
-
-        mem = (char *)k_pmm.alloc_page();
-        memset(mem, 0, PGSIZE);
-        map_pages(pt, PGSIZE, PGSIZE, (uint64)mem, PTE_V | PTE_W | PTE_R | PTE_X | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
-        if (sz > PGSIZE)
+        
+        // 计算程序段需要的页面数量（向上取整）
+        uint64 prog_pages = PGROUNDUP(sz) / PGSIZE;
+        // 总共分配两倍的页面数，低地址存程序段，高地址作栈内存
+        uint64 total_pages = prog_pages * 2;
+        uint64 total_size = total_pages * PGSIZE;
+        
+        printf("prog_pages: %d, total_pages: %d, total_size: %d\n", prog_pages, total_pages, total_size);
+        
+        // 分配程序段页面
+        for (uint64 i = 0; i < prog_pages; i++)
         {
-            memmove(mem, (void *)((uint64)src + PGSIZE), MIN(sz - PGSIZE, PGSIZE));
+            mem = (char *)k_pmm.alloc_page();
+            memset(mem, 0, PGSIZE);
+            map_pages(pt, i * PGSIZE, PGSIZE, (uint64)mem, PTE_V | PTE_W | PTE_R | PTE_X | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
+            
+            // 复制程序内容
+            uint64 src_offset = i * PGSIZE;
+            uint64 copy_size = MIN(sz - src_offset, PGSIZE);
+            if (copy_size > 0 && src_offset < sz)
+            {
+                memmove(mem, (void *)((uint64)src + src_offset), copy_size);
+            }
         }
-
-        mem = (char *)k_pmm.alloc_page();
-        memset(mem, 0, PGSIZE);
-        map_pages(pt, 2 * PGSIZE, PGSIZE, (uint64)mem, PTE_V | PTE_W | PTE_R | PTE_X | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
-        if (sz > 2 * PGSIZE)
+        
+        // 分配栈内存页面
+        for (uint64 i = prog_pages; i < total_pages; i++)
         {
-            memmove(mem, (void *)((uint64)src + 2 * PGSIZE), MIN(sz - 2 * PGSIZE, PGSIZE));
+            mem = (char *)k_pmm.alloc_page();
+            memset(mem, 0, PGSIZE);
+            // 栈内存只需要读写权限，不需要执行权限
+            map_pages(pt, i * PGSIZE, PGSIZE, (uint64)mem, PTE_V | PTE_W | PTE_R | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
         }
-        mem = (char *)k_pmm.alloc_page();
-        memset(mem, 0, PGSIZE);
-        map_pages(pt, 3 * PGSIZE, PGSIZE, (uint64)mem, PTE_V | PTE_W | PTE_R | PTE_X | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
-        if (sz > 3 * PGSIZE)
-        {
-            memmove(mem, (void *)((uint64)src + 3 * PGSIZE), MIN(sz - 3 * PGSIZE, PGSIZE));
-        }
-        mem = (char *)k_pmm.alloc_page();
-        memset(mem, 0, PGSIZE);
-        map_pages(pt, 4 * PGSIZE, PGSIZE, (uint64)mem, PTE_V | PTE_W | PTE_R | PTE_X | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
-        if (sz > 4 * PGSIZE)
-        {
-            memmove(mem, (void *)((uint64)src + 4 * PGSIZE), MIN(sz - 4 * PGSIZE, PGSIZE));
-        }
-        mem = (char *)k_pmm.alloc_page();
-        memset(mem, 0, PGSIZE);
-        map_pages(pt, 5 * PGSIZE, PGSIZE, (uint64)mem, PTE_V | PTE_W | PTE_R | PTE_X | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
-        if (sz > 5 * PGSIZE)
-        {
-            memmove(mem, (void *)((uint64)src + 5 * PGSIZE), MIN(sz - 5 * PGSIZE, PGSIZE));
-        }
-        mem = (char *)k_pmm.alloc_page();
-        memset(mem, 0, PGSIZE);
-        map_pages(pt, 6 * PGSIZE, PGSIZE, (uint64)mem, PTE_V | PTE_W | PTE_R | PTE_X | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
-        if (sz > 6 * PGSIZE)
-        {
-            memmove(mem, (void *)((uint64)src + 6 * PGSIZE), MIN(sz - 6 * PGSIZE, PGSIZE));
-        }
-
-        mem = (char *)k_pmm.alloc_page();
-        memset(mem, 0, PGSIZE);
-        map_pages(pt, 7 * PGSIZE, PGSIZE, (uint64)mem, PTE_V | PTE_W | PTE_R | PTE_X | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
-        if (sz > 7 * PGSIZE)
-        {
-            memmove(mem, (void *)((uint64)src + 7 * PGSIZE), MIN(sz - 7 * PGSIZE, PGSIZE));
-        }
-        if (sz > 4 * PGSIZE)
-        {
-            panic("[vmm] uvmfirst: sz > 4*PGSIZE, this is not supported yet");
-        }
+        
+        return total_size;
 
 #endif
     }

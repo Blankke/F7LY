@@ -672,14 +672,11 @@ namespace proc
 
         // 传入initcode的地址
         printfCyan("initcode pagetable: %p\n", p->_pt.get_base());
-        mem::k_vmm.uvmfirst(p->_pt, (uint64)initcode_start, (uint64)initcode_end - (uint64)initcode_start);
-        // debug
-        //  uint64 pa = (uint64)p->_pt.walk_addr((uint64)0);
-        //  printfYellow("initcode start pa: %p\n",pa);
-        //  printfYellow("initcode start byte %u\n", *(uint64 *)pa);
+        uint64 initcode_sz = (uint64)initcode_end - (uint64)initcode_start;
+        p->_sz = mem::k_vmm.uvmfirst(p->_pt, (uint64)initcode_start, initcode_sz);
+        
         printf("initcode start: %p, end: %p\n", initcode_start, initcode_end);
-        printf("initcode size: %p\n", (uint64)(initcode_end - 0));
-        p->_sz = 6 * PGSIZE;
+        printf("initcode size: %p, total allocated space: %p\n", initcode_sz, p->_sz);
 
         p->_trapframe->epc = 0;
         p->_trapframe->sp = p->_sz;
@@ -713,17 +710,14 @@ namespace proc
 
         // 传入initcode的地址
         printfCyan("initcode pagetable: %p\n", p->_pt.get_base());
-        mem::k_vmm.uvmfirst(p->_pt, (uint64)initcode_start, (uint64)initcode_end - (uint64)initcode_start);
-        // debug
-        //  uint64 pa = (uint64)p->_pt.walk_addr((uint64)0);
-        //  printfYellow("initcode start pa: %p\n",pa);
-        //  printfYellow("initcode start byte %u\n", *(uint64 *)pa);
+        uint64 initcode_sz = (uint64)initcode_end - (uint64)initcode_start;
+        p->_sz = mem::k_vmm.uvmfirst(p->_pt, (uint64)initcode_start, initcode_sz);
+        
         printf("initcode start: %p, end: %p\n", initcode_start, initcode_end);
-        printf("initcode size: %p\n", (uint64)(initcode_end - 0));
-        p->_sz = 3 * PGSIZE;
+        printf("initcode size: %p, total allocated space: %p\n", initcode_sz, p->_sz);
 
         p->_trapframe->era = 0;     // 设置程序计数器为0
-        p->_trapframe->sp = p->_sz; // 设置栈指针为3个页的大小
+        p->_trapframe->sp = p->_sz; // 设置栈指针为总空间大小
 
         safestrcpy(p->_name, "initcode", sizeof(p->_name));
         p->_parent = p;
