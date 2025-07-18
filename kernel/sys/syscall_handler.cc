@@ -279,7 +279,7 @@ namespace syscall
             // 调用对应的系统调用函数
             uint64 ret = (this->*_syscall_funcs[sys_num])();
             if (!(sys_num == 64 && p->_trapframe->a0 == 1) && !(sys_num == 66 && p->_trapframe->a0 == 1))
-            // if (!(sys_num == 64) && !(sys_num == 66))
+                // if (!(sys_num == 64) && !(sys_num == 66))
                 printfCyan("[SyscallHandler::invoke_syscaller]syscall name: %s ret: %p\n", _syscall_name[sys_num], ret);
             p->_trapframe->a0 = ret; // 设置返回值
         }
@@ -520,7 +520,7 @@ namespace syscall
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
 
-        if(addr == 0)
+        if (addr == 0)
         {
             // TODO: 这里addr==0则是未初始化的，应该返回SYS_EFAULT,但是下面的copy_in竟然成功了
             // 为了通过pipe05，作此权宜之计
@@ -905,9 +905,9 @@ namespace syscall
             return -1;
         if (_arg_int(2, flags) < 0)
             return -1;
-            //仿照后面的fallacate和fallocateat函数写的处理
-            //就是这里可以处理当前工作目录和相对路径
-        if(dir_fd!=AT_FDCWD &&(dir_fd<0 || dir_fd>=NOFILE))
+        // 仿照后面的fallacate和fallocateat函数写的处理
+        // 就是这里可以处理当前工作目录和相对路径
+        if (dir_fd != AT_FDCWD && (dir_fd < 0 || dir_fd >= NOFILE))
         {
             printfRed("[SyscallHandler::sys_openat] Error fetching dir_fd argument\n");
             return SYS_ENOENT;
@@ -918,7 +918,6 @@ namespace syscall
         if (mem::k_vmm.copy_str_in(*pt, pathname, path_addr, 100) < 0)
             return SYS_EFAULT;
 
-            
         // 处理dirfd和路径
         eastl::string abs_pathname;
 
@@ -952,7 +951,7 @@ namespace syscall
         }
 
         printfCyan("[SyscallHandler::sys_openat] 绝对路径: %s\n", abs_pathname.c_str());
-        //不知道什么套娃设计，这个b函数套了两层
+        // 不知道什么套娃设计，这个b函数套了两层
         return proc::k_pm.open(dir_fd, abs_pathname, flags);
 
         // int res = proc::k_pm.open(dir_fd, path, flags);
@@ -1362,12 +1361,11 @@ namespace syscall
             return -1;
         if (_arg_int(1, size) < 0)
             return -1;
-        
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
         uint len = proc::k_pm.getcwd(cwd);
-        if((uint)size < len)
+        if ((uint)size < len)
         {
             printfRed("[SyscallHandler::sys_getcwd] Buffer size too small for current working directory\n");
             printfRed("size: %d, len: %u\n", size, len);
@@ -1405,7 +1403,7 @@ namespace syscall
         }
 
         memset((void *)sys_getdents64_buf, 0, GETDENTS64_BUF_SIZE);
-                printfMagenta("[SyscallHandler::sys_getdents64] \n");
+        printfMagenta("[SyscallHandler::sys_getdents64] \n");
         int count = vfs_getdents(f, (struct linux_dirent64 *)sys_getdents64_buf, buf_len);
         mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
         mem::k_vmm.copy_out(*pt, (uint64)buf_addr, (char *)sys_getdents64_buf, count);
@@ -1585,9 +1583,9 @@ namespace syscall
         {
             return 0;
         }
-        // TODO,这个系统调用关掉了
+
         int dirfd;
-        eastl::string path;
+        eastl::string pathname;
         uint64 kst_addr;
         int flags;
         fs::Kstat kst;
@@ -1599,7 +1597,7 @@ namespace syscall
             return -1;
         }
 
-        if (_arg_str(1, path, 256) < 0)
+        if (_arg_str(1, pathname, 256) < 0)
         {
             printfRed("[SyscallHandler::sys_fstatat] Error fetching path argument\n");
             return -1;
@@ -1620,11 +1618,88 @@ namespace syscall
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
 
+        // 处理dirfd和路径
+        eastl::string abs_pathname;
+
+        // 检查是否为绝对路径
+        if (pathname[0] == '/')
+        {
+            // 绝对路径，忽略dirfd
+            abs_pathname = pathname;
+        }
+        else
+        {
+            // 相对路径，需要处理dirfd
+            if (dirfd == AT_FDCWD)
+            {
+                // 使用当前工作目录
+                abs_pathname = get_absolute_path(pathname.c_str(), p->_cwd_name.c_str());
+            }
+            else
+            {
+                // 使用dirfd指向的目录
+                fs::file *dir_file = p->get_open_file(dirfd);
+                if (!dir_file)
+                {
+                    printfRed("[SyscallHandler::sys_fstatat] 无效的dirfd: %d\n", dirfd);
+                    return SYS_EBADF; // 无效的文件描述符
+                }
+
+                // 使用dirfd对应的路径作为基准目录
+                abs_pathname = get_absolute_path(pathname.c_str(), dir_file->_path_name.c_str());
+            }
+        }
+
+        printfCyan("[SyscallHandler::sys_fstatat] 绝对路径: %s\n", abs_pathname.c_str());
+
+        // 首先验证路径中的每个父目录都是目录
+        eastl::string path_to_check = abs_pathname;
+        size_t last_slash = path_to_check.find_last_of('/');
+        if (last_slash != eastl::string::npos && last_slash > 0)
+        {
+            eastl::string parent_path = path_to_check.substr(0, last_slash);
+            eastl::string current_path = "";
+
+            // 逐段检查路径
+            size_t start = 1; // 跳过第一个 '/'
+            while (start < parent_path.length())
+            {
+                size_t end = parent_path.find('/', start);
+                if (end == eastl::string::npos)
+                    end = parent_path.length();
+
+                current_path += "/" + parent_path.substr(start, end - start);
+
+                if (is_file_exist(current_path.c_str()) == 1)
+                {
+                    int file_type = vfs_path2filetype(current_path);
+                    if (file_type != fs::FileTypes::FT_DIRECT)
+                    {
+                        printfRed("[SyscallHandler::sys_fstatat] 路径中的组件不是目录: %s\n", current_path.c_str());
+                        return SYS_ENOTDIR; // 不是目录
+                    }
+                }
+                else if (is_file_exist(current_path.c_str()) == 0)
+                {
+                    printfRed("[SyscallHandler::sys_fstatat] 路径中的目录不存在: %s\n", current_path.c_str());
+                    return SYS_ENOENT; // 目录不存在
+                }
+
+                start = end + 1;
+            }
+        }
+
+        // 现在检查目标文件是否存在
+        if (is_file_exist(abs_pathname.c_str()) != 1)
+        {
+            printfRed("[SyscallHandler::sys_fstatat] 文件不存在: %s\n", abs_pathname.c_str());
+            return SYS_ENOENT; // 文件不存在
+        }
         // 尝试打开文件以获取文件描述符，使用和 sys_openat 相同的方式
-        int fd = proc::k_pm.open(dirfd, path, O_RDONLY);
+        int fd = proc::k_pm.open(dirfd, abs_pathname, O_RDONLY);
         if (fd < 0)
         {
-            printfRed("[SyscallHandler::sys_fstatat] Failed to open file: %s\n", path.c_str());
+            printfRed("[SyscallHandler::sys_fstatat] Failed to open file: %s\n", abs_pathname.c_str());
             return -1;
         }
 
@@ -1700,7 +1775,8 @@ namespace syscall
             panic("[SyscallHandler::sys_writev] Error fetching arguments");
             return -1;
         }
-
+        printfGreen("[SyscallHandler::sys_writev] fd: %d, iov_ptr: %p, iovcnt: %d\n",
+                    fd, (void *)iov_ptr, iovcnt);
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = proc->get_pagetable();
 
@@ -1794,22 +1870,22 @@ namespace syscall
         mem::PageTable *pt = p->get_pagetable();
         int fd;
         size_t ret;
-    
+
         if (_arg_int(0, fd) < 0)
             return -1;
-    
+
         eastl::string path;
         if (_arg_str(1, path, 256) < 0)
             return -1;
-    
+
         uint64 buf;
         if (_arg_addr(2, buf) < 0)
             return -1;
-    
+
         size_t buf_size;
         if (_arg_addr(3, buf_size) < 0)
             return -1;
-    
+
         if (buf_size <= 0)
         {
             printfRed("[sys_readlinkat] bufsiz must be greater than 0");
@@ -1820,7 +1896,7 @@ namespace syscall
             printfRed("[sys_readlinkat] path length exceeds PATH_MAX");
             return SYS_ENAMETOOLONG;
         }
-    
+
         // 特殊路径处理
         if (path == "/proc/self/exe")
         {
@@ -1842,14 +1918,14 @@ namespace syscall
                 printfRed("[sys_readlinkat] Invalid dirfd: %d", fd);
                 return SYS_EBADF;
             }
-    
+
             fs::file *file = p->get_open_file(fd);
             if (!file)
             {
                 printfRed("[sys_readlinkat] Cannot get file from dirfd: %d", fd);
                 return SYS_EBADF;
             }
-    
+
             if (file->_attrs.filetype != fs::FileTypes::FT_SYMLINK)
             {
                 printfRed("[sys_readlinkat] File is not a symlink");
@@ -1864,18 +1940,18 @@ namespace syscall
                 printfRed("[sys_readlinkat] Link path too long for buffer");
                 return SYS_ENAMETOOLONG;
             }
-    
+
             if (mem::k_vmm.copy_out(*pt, buf, link_path.c_str(), link_path.length()) < 0)
             {
                 return SYS_EFAULT;
             }
-    
+
             return link_path.length();
         }
-    
+
         // 处理非空路径
         eastl::string abs_path;
-        
+
         if (path[0] == '/')
         {
             abs_path = path;
@@ -1900,24 +1976,24 @@ namespace syscall
                 abs_path = get_absolute_path(path.c_str(), dir_file->_path_name.c_str());
             }
         }
-    
+
         // 检查文件是否存在
         if (is_file_exist(abs_path.c_str()) != 1)
         {
             printfRed("[sys_readlinkat] File does not exist: %s", abs_path.c_str());
             return SYS_ENOENT;
         }
-    
+
         // 打开文件检查是否为符号链接
         fs::file *target_file = nullptr;
         int open_result = vfs_openat(abs_path, target_file, O_RDONLY | O_NOFOLLOW); // O_NOFOLLOW确保不跟随符号链接
-        
+
         if (open_result < 0 || !target_file)
         {
             printfRed("[sys_readlinkat] Failed to open file: %s", abs_path.c_str());
             return SYS_ENOENT;
         }
-    
+
         // 检查是否为符号链接
         if (target_file->_attrs.filetype != fs::FileTypes::FT_SYMLINK)
         {
@@ -1925,29 +2001,29 @@ namespace syscall
             printfRed("[sys_readlinkat] File is not a symlink: %s", abs_path.c_str());
             return SYS_EINVAL;
         }
-    
+
         // 读取符号链接的目标路径
         eastl::string link_target;
         // TODO: 实现从符号链接文件读取目标路径的功能
         // 这可能需要调用特定的VFS函数或直接读取inode数据
         panic("TODO");
         // link_target = target_file->read_symlink_target();
-    
+
         target_file->free_file();
-    
+
         if (link_target.length() > buf_size)
         {
             printfRed("[sys_readlinkat] Link target too long for buffer");
             return SYS_ENAMETOOLONG;
         }
-    
+
         // 将结果拷贝到用户空间
         if (mem::k_vmm.copy_out(*pt, buf, link_target.c_str(), link_target.length()) < 0)
         {
             printfRed("[sys_readlinkat] Failed to copy result to user space");
             return SYS_EFAULT;
         }
-    
+
         printfCyan("[sys_readlinkat] Successfully read symlink: %s -> %s", abs_path.c_str(), link_target.c_str());
         return link_target.length();
     }
@@ -2065,23 +2141,34 @@ namespace syscall
         fs::file *f = nullptr;
         int fd;
         if (_arg_fd(0, &fd, &f) < 0)
-            return -1;
+        {
+            printfRed("[SyscallHandler::sys_ioctl] Error fetching file descriptor\n");
+            return SYS_EINVAL;
+        }
         if (f == nullptr)
-            return -1;
+            return SYS_EBADF;
         fd = fd;
 
         if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
-            return -1;
-
+        {
+            printfRed("[SyscallHandler::sys_ioctl] File is not a device file\n");
+            return SYS_ENOTTY; // 不是设备文件
+        }
         u32 cmd;
         if (_arg_int(1, tmp) < 0)
-            return -2;
+        {
+            printfRed("[SyscallHandler::sys_ioctl] Error fetching ioctl command\n");
+            return SYS_EINVAL;
+        }
         cmd = (u32)tmp;
         cmd = cmd;
 
         ulong arg;
         if (_arg_addr(2, arg) < 0)
-            return -3;
+        {
+            printfRed("[SyscallHandler::sys_ioctl] Error fetching ioctl argument address\n");
+            return SYS_EINVAL;
+        }
         arg = arg;
 
         /// @todo not implement
@@ -2118,7 +2205,10 @@ namespace syscall
             ws.ws_row = 24;
             mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
             if (mem::k_vmm.copy_out(*pt, arg, (char *)&ws, sizeof(ws)) < 0)
-                return -1;
+            {
+                printfRed("[SyscallHandler::sys_ioctl] Error copying winsize to user space\n");
+                return SYS_EFAULT;
+            }
             return 0;
         }
 
@@ -2177,30 +2267,23 @@ namespace syscall
         int op;
         ulong arg;
         int retfd = -1;
-        int ret = -100;
-        if ((ret = _arg_fd(0, &fd, &f)) < 0)
-            return ret;
+
+        if (_arg_fd(0, &fd, &f) < 0)
+            return SYS_EBADF;
         if (_arg_int(1, op) < 0)
-            return -2;
-        // printfYellow("file fd: %d, op: %d\n", fd, op);
+            return SYS_EINVAL;
+        
+        printfYellow("file fd: %d, op: %d\n", fd, op);
         switch (op)
         {
-        case F_SETFD:
-            if (_arg_addr(2, arg) < 0)
-                return -3;
-            if (p->_ofile == nullptr)
-                return -1;
-            if (arg & FD_CLOEXEC)
-                p->_ofile->_fl_cloexec[fd] = true;
-            else
-                p->_ofile->_fl_cloexec[fd] = false;
-            return 0;
-
+            //   Duplicating a file descriptor (已支持)
         case F_DUPFD:
             if (_arg_addr(2, arg) < 0)
-                return -3;
+                return SYS_EFAULT;
             if (p->_ofile == nullptr)
-                return -1;
+                return SYS_EBADF;
+            if ((int)arg < 0 || (int)arg >= (int)proc::max_open_files)
+                return SYS_EINVAL;
             for (int i = (int)arg; i < (int)proc::max_open_files; ++i)
             {
                 if ((retfd = proc::k_pm.alloc_fd(p, f, i)) == i)
@@ -2210,13 +2293,17 @@ namespace syscall
                     break;
                 }
             }
+            if (retfd == -1)
+                return SYS_EMFILE; // 达到进程文件描述符限制
             return retfd;
 
         case F_DUPFD_CLOEXEC:
             if (_arg_addr(2, arg) < 0)
-                return -3;
+                return SYS_EFAULT;
             if (p->_ofile == nullptr)
-                return -1;
+                return SYS_EBADF;
+            if ((int)arg < 0 || (int)arg >= (int)proc::max_open_files)
+                return SYS_EINVAL;
             for (int i = (int)arg; i < (int)proc::max_open_files; ++i)
             {
                 if ((retfd = proc::k_pm.alloc_fd(p, f, i)) == i)
@@ -2226,11 +2313,133 @@ namespace syscall
                     break;
                 }
             }
+            if (retfd == -1)
+                return SYS_EMFILE; // 达到进程文件描述符限制
             return retfd;
 
+            //   File descriptor flags (部分支持)
+        case F_GETFD:
+            if (p->_ofile == nullptr)
+                return SYS_EBADF;
+            return p->_ofile->_fl_cloexec[fd] ? FD_CLOEXEC : 0;
+
+        case F_SETFD:
+            if (_arg_addr(2, arg) < 0)
+                return SYS_EFAULT;
+            if (p->_ofile == nullptr)
+                return SYS_EBADF;
+            if (arg & FD_CLOEXEC)
+                p->_ofile->_fl_cloexec[fd] = true;
+            else
+                p->_ofile->_fl_cloexec[fd] = false;
+            return 0;
+
+        //   File status flags (已支持)
+        case F_GETFL:
+            // 返回文件访问模式和状态标志
+            return f->lwext4_file_struct.flags;
+
+        case F_SETFL:
+        {
+            if (_arg_addr(2, arg) < 0)
+                return SYS_EFAULT;
+            
+            // 只允许修改特定的状态标志，忽略访问模式和创建标志
+            uint32_t modifiable_flags = O_APPEND | O_ASYNC | O_DIRECT | O_NOATIME | O_NONBLOCK;
+            uint32_t old_flags = f->lwext4_file_struct.flags;
+            uint32_t new_flags = (old_flags & ~modifiable_flags) | (arg & modifiable_flags);
+            
+            // 保留访问模式 (O_RDONLY, O_WRONLY, O_RDWR)
+            new_flags = (new_flags & ~0x03) | (old_flags & 0x03);
+            
+            // 同步设置 lwext4_file_struct 和 _attrs (根据用户说明，二者需要同步)
+            f->lwext4_file_struct.flags = new_flags;
+            // 这里可能需要根据具体的 _attrs 结构来同步相关字段
+            // 暂时假设 _attrs 中有相应的字段需要更新
+            
+            return 0;
+        }
+
+        //   Advisory record locking (暂不支持)
+        case F_SETLK:
+        case F_SETLKW:
+        case F_GETLK:
+            // 检查参数是否有效
+            if (_arg_addr(2, arg) < 0)
+                return SYS_EFAULT;
+            printfRed("[SyscallHandler::sys_fcntl] File locking operations not implemented: F_SETLK/F_SETLKW/F_GETLK\n");
+            return SYS_EACCES; // 操作被其他进程持有的锁禁止
+
+        //   Open file description locks (暂不支持)
+        case F_OFD_SETLK:
+        case F_OFD_SETLKW:
+        case F_OFD_GETLK:
+            if (_arg_addr(2, arg) < 0)
+                return SYS_EFAULT;
+            printfRed("[SyscallHandler::sys_fcntl] OFD locking operations not implemented: F_OFD_SETLK/F_OFD_SETLKW/F_OFD_GETLK\n");
+            return SYS_EACCES; // 操作被其他进程持有的锁禁止
+
+        //   Managing signals (暂不支持)
+        case F_SETOWN:
+        case F_GETOWN:
+        case F_SETOWN_EX:
+        case F_GETOWN_EX:
+            printfRed("[SyscallHandler::sys_fcntl] Signal management operations not implemented: F_SETOWN/F_GETOWN\n");
+            return SYS_ENOSYS;
+
+        case F_SETSIG:
+            if (_arg_addr(2, arg) < 0)
+                return SYS_EFAULT;
+            printfRed("[SyscallHandler::sys_fcntl] F_SETSIG not implemented\n");
+            return SYS_EINVAL; // arg 不是允许的信号号
+
+        case F_GETSIG:
+            printfRed("[SyscallHandler::sys_fcntl] F_GETSIG not implemented\n");
+            return SYS_ENOSYS;
+
+        //   Leases (暂不支持)
+        case F_SETLEASE:
+        case F_GETLEASE:
+            printfRed("[SyscallHandler::sys_fcntl] Lease operations not implemented: F_SETLEASE/F_GETLEASE\n");
+            return SYS_ENOSYS;
+
+        // File and directory change notification (dnotify) (暂不支持)
+        case F_NOTIFY:
+            printfRed("[SyscallHandler::sys_fcntl] F_NOTIFY not implemented\n");
+            return SYS_ENOTDIR; // fd 不指向目录
+
+        // Changing the capacity of a pipe (暂不支持)
+        case F_SETPIPE_SZ:
+            if (_arg_addr(2, arg) < 0)
+                return SYS_EFAULT;
+            if (f->_attrs.filetype != fs::FileTypes::FT_PIPE)
+                return SYS_EBADF; // fd 不是管道
+            if (arg <= 0)
+                return SYS_EINVAL;
+            printfRed("[SyscallHandler::sys_fcntl] F_SETPIPE_SZ not implemented yet\n");
+            return SYS_EBUSY; // 新的管道容量小于当前用于存储数据的缓冲区空间
+
+        case F_GETPIPE_SZ:
+            if (f->_attrs.filetype != fs::FileTypes::FT_PIPE)
+                return SYS_EBADF; // fd 不是管道
+            printfRed("[SyscallHandler::sys_fcntl] F_GETPIPE_SZ not implemented yet\n");
+            return SYS_ENOSYS;
+
+        //   File Sealing (暂不支持)
+        case F_ADD_SEALS:
+            if (_arg_addr(2, arg) < 0)
+                return SYS_EFAULT;
+            printfRed("[SyscallHandler::sys_fcntl] F_ADD_SEALS not implemented\n");
+            return SYS_EINVAL; // arg 包含未识别的密封位
+
+        case F_GET_SEALS:
+            printfRed("[SyscallHandler::sys_fcntl] F_GET_SEALS not implemented\n");
+            return SYS_EINVAL; // 文件系统不支持密封
+
         default:
-            panic("[SyscallHandler::sys_fcntl] Unsupported fcntl operation: %d", op);
-            break;
+            printfRed("[SyscallHandler::sys_fcntl] Unrecognized fcntl operation: %d\n", op);
+            return SYS_EINVAL; // op 中指定的值未被此内核识别
+            //太jb多了(╯‵□′)╯︵┻━┻
         }
 
         return retfd;
@@ -2250,7 +2459,7 @@ namespace syscall
             return -EINVAL; // 参数错误
         }
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-  // 处理dirfd和路径
+        // 处理dirfd和路径
         eastl::string abs_pathname;
 
         // 检查是否为绝对路径
@@ -2283,7 +2492,7 @@ namespace syscall
         }
 
         printfCyan("[SyscallHandler::sys_faccessat] 绝对路径: %s\n", abs_pathname.c_str());
-        
+
         // 首先验证路径中的每个父目录都是目录
         eastl::string path_to_check = abs_pathname;
         size_t last_slash = path_to_check.find_last_of('/');
@@ -2291,7 +2500,7 @@ namespace syscall
         {
             eastl::string parent_path = path_to_check.substr(0, last_slash);
             eastl::string current_path = "";
-            
+
             // 逐段检查路径
             size_t start = 1; // 跳过第一个 '/'
             while (start < parent_path.length())
@@ -2299,9 +2508,9 @@ namespace syscall
                 size_t end = parent_path.find('/', start);
                 if (end == eastl::string::npos)
                     end = parent_path.length();
-                
+
                 current_path += "/" + parent_path.substr(start, end - start);
-                
+
                 if (is_file_exist(current_path.c_str()) == 1)
                 {
                     int file_type = vfs_path2filetype(current_path);
@@ -2316,11 +2525,11 @@ namespace syscall
                     printfRed("[SyscallHandler::sys_faccessat] 路径中的目录不存在: %s\n", current_path.c_str());
                     return SYS_ENOENT; // 目录不存在
                 }
-                
+
                 start = end + 1;
             }
         }
-        
+
         // 现在检查目标文件是否存在
         if (is_file_exist(abs_pathname.c_str()) != 1)
         {
@@ -2911,7 +3120,6 @@ namespace syscall
             return SYS_EINVAL; // 参数无效，文件未以写入模式打开
         }
         return vfs_truncate(f, length); // 调用vfs_truncate函数进行截断操作
-
     }
     uint64 SyscallHandler::sys_pread64()
     {
@@ -3359,7 +3567,7 @@ namespace syscall
     {
         int fd;
         fs::file *f;
-        int mode = 0; 
+        int mode = 0;
         off_t offset;
         off_t len;
         if (_arg_fd(0, &fd, &f) < 0 ||
@@ -3377,12 +3585,12 @@ namespace syscall
         }
         printfCyan("[SyscallHandler::sys_fallocate] fd=%d, mode=%d, offset=%d, len=%x\n", fd, mode, offset, len);
         printf("[SyscallHandler::sys_fallocate] f.mode=%b\n", f->_attrs.transMode());
-        if (!f||!f->_attrs.u_write)
+        if (!f || !f->_attrs.u_write)
         {
             printfRed("[SyscallHandler::sys_fallocate] 无效的文件描述符: %d\n", fd);
             return SYS_EBADF; // 无效的文件描述符
         }
-        if(offset<0||len<0)
+        if (offset < 0 || len < 0)
         {
             printfRed("[SyscallHandler::sys_fallocate] offset或len不能为负数: offset=%d, len=%d\n", offset, len);
             return SYS_EINVAL; // 参数错误
@@ -3407,7 +3615,6 @@ namespace syscall
         }
         path = f->_path_name;
         return proc::k_pm.chdir(path);
-
     }
     uint64 SyscallHandler::sys_chroot()
     {

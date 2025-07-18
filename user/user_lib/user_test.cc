@@ -719,16 +719,16 @@ char *ltp_testcases[] = {
     // "dup03",// 完全PASS
     // "dup04",// 完全PASS
     // "dup05",
-    // "dup06",
+    // "dup06", //完全PASS
     // "dup07",//完全PASS
     // "dup201",//完全PASS
     // "dup202",
-    // "dup203",
+    // "dup203",  //完全PASS
     // "dup204",// 完全PASS
     // "dup205",//完全PASS
-    // "dup206",
+    // "dup206", //完全PASS
     // "dup207",
-    // "dup3_01",
+    // "dup3_01",// 完全PASS
     // "dup3_02",// 完全PASS
     // "dynamic_debug01.sh",
     // "ebizzy",
@@ -798,7 +798,7 @@ char *ltp_testcases[] = {
     // "exit01",
     // "exit02",
     // "f00f",
-    "faccessat01",
+    // "faccessat01",
     // "faccessat02",
     // "faccessat201",
     // "faccessat202",

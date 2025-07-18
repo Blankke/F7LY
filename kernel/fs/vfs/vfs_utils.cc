@@ -118,10 +118,12 @@ static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file
     if (access_mode == O_RDONLY)   // 0x00 - 只读
     {
         mode &= ~0222; // 清除写权限
+        mode |= 0444;  // 设置读权限
     }
     else if (access_mode == O_WRONLY) // 0x01 - 只写
     {
         mode &= ~0444; // 清除读权限
+        mode |= 0222; // 设置写权限
     }
     // O_RDWR (0x02) 保持读写权限不变
 
