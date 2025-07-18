@@ -798,12 +798,12 @@ char *ltp_testcases[] = {
     // "exit01",
     // "exit02",
     // "f00f",
-    // "faccessat01",
+    "faccessat01",
     // "faccessat02",
     // "faccessat201",
     // "faccessat202",
     // "fallocate01",    //卡死了
-    "fallocate02",
+    // "fallocate02",   //完全通过
     // "fallocate03",
     // "fallocate04",
     // "fallocate05",

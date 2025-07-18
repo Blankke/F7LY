@@ -7,6 +7,79 @@
 #include "fs/vfs/file/device_file.hh"
 #include "fs/vfs/file/directory_file.hh"
 
+// 将flags转换为可读的字符串表示
+eastl::string flags_to_string(uint flags)
+{
+    eastl::string result;
+
+    // 处理访问模式（互斥的，只能是其中一个）
+    int access_mode = flags & 0x3;
+    switch (access_mode)
+    {
+    case O_RDONLY:
+        result += "O_RDONLY";
+        break;
+    case O_WRONLY:
+        result += "O_WRONLY";
+        break;
+    case O_RDWR:
+        result += "O_RDWR";
+        break;
+    default:
+        result += "UNKNOWN_ACCESS";
+        break;
+    }
+
+    // 处理其他标志（可以组合）
+    if (flags & O_CREAT)
+        result += "|O_CREAT";
+    if (flags & O_EXCL)
+        result += "|O_EXCL";
+    if (flags & O_NOCTTY)
+        result += "|O_NOCTTY";
+    if (flags & O_TRUNC)
+        result += "|O_TRUNC";
+    if (flags & O_APPEND)
+        result += "|O_APPEND";
+    if (flags & O_NONBLOCK)
+        result += "|O_NONBLOCK";
+    if (flags & O_DSYNC)
+        result += "|O_DSYNC";
+    if (flags & O_ASYNC)
+        result += "|O_ASYNC";
+    if (flags & O_DIRECT)
+        result += "|O_DIRECT";
+    if (flags & O_LARGEFILE)
+        result += "|O_LARGEFILE";
+    if (flags & O_DIRECTORY)
+        result += "|O_DIRECTORY";
+    if (flags & O_NOFOLLOW)
+        result += "|O_NOFOLLOW";
+    if (flags & O_NOATIME)
+        result += "|O_NOATIME";
+    if (flags & O_CLOEXEC)
+        result += "|O_CLOEXEC";
+    if (flags & O_SYNC)
+        result += "|O_SYNC";
+    if (flags & O_PATH)
+        result += "|O_PATH";
+    if (flags & O_TMPFILE)
+        result += "|O_TMPFILE";
+
+    // 如果有未识别的标志，显示原始十六进制值
+    uint known_flags = O_RDWR | O_CREAT | O_EXCL | O_NOCTTY | O_TRUNC | O_APPEND |
+                       O_NONBLOCK | O_DSYNC | O_ASYNC | O_DIRECT | O_LARGEFILE |
+                       O_DIRECTORY | O_NOFOLLOW | O_NOATIME | O_CLOEXEC | O_SYNC |
+                       O_PATH | O_TMPFILE;
+    uint unknown_flags = flags & ~known_flags;
+    if (unknown_flags)
+    {
+        printfRed("Unknown flags: 0x%x\n", unknown_flags);
+    }
+
+    return result;
+}
+
 // 辅助函数：根据flags和文件类型确定文件权限
 static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file_exists)
 {
@@ -39,10 +112,10 @@ static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file
         mode = 0644; // 默认权限
         break;
     }
-    
+
     // 正确处理文件访问模式：检查低两位来确定读写权限
     int access_mode = flags & 0x3; // 取低两位
-    if (access_mode == O_RDONLY) // 0x00 - 只读
+    if (access_mode == O_RDONLY)   // 0x00 - 只读
     {
         mode &= ~0222; // 清除写权限
     }
@@ -57,8 +130,8 @@ static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file
 int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags)
 {
     bool file_exists = (is_file_exist(absolute_path.c_str()) == 1);
-    //好多flag都有人给你负重前行过了
-    
+    // 好多flag都有人给你负重前行过了
+
     // 处理 O_DIRECTORY：如果指定了此标志，路径必须是目录
     if (flags & O_DIRECTORY)
     {
@@ -69,7 +142,7 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags)
             return -ENOTDIR; // 不是目录
         }
     }
-    
+
     // 处理 O_NOFOLLOW：如果路径的最后一个组件是符号链接，则失败
     if (flags & O_NOFOLLOW)
     {
@@ -77,10 +150,10 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags)
         if (file_exists && type == fs::FileTypes::FT_SYMLINK)
         {
             printfRed("vfs_openat: O_NOFOLLOW specified but %s is a symbolic link\n", absolute_path.c_str());
-            return -ELOOP;//表示符号链接过多
+            return -ELOOP; // 表示符号链接过多
         }
     }
-    
+
     // 处理 O_EXCL + O_CREAT 组合：如果文件存在，应该失败
     if ((flags & O_CREAT) && (flags & O_EXCL) && file_exists)
     {
@@ -101,7 +174,7 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags)
     if (type == fs::FileTypes::FT_NORMAL || (flags & O_CREAT) != 0)
     {
         // 根据flags和文件类型确定适当的权限
-        //专门重写了个函数来确定这个权限
+        // 专门重写了个函数来确定这个权限
         mode_t file_mode = determine_file_mode(flags, fs::FileTypes::FT_NORMAL, file_exists);
 
         fs::FileAttrs attrs;
@@ -112,7 +185,7 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags)
         printfYellow("vfs_openat: flags: %x, mode: %b\n", flags, temp_file->_attrs.transMode());
 
         // ext4库会自动处理 O_TRUNC, O_RDONLY, O_WRONLY, O_RDWR 等标志
-        //真是前人栽树，后人乘凉啊！
+        // 真是前人栽树，后人乘凉啊！
         status = ext4_fopen2(&temp_file->lwext4_file_struct, absolute_path.c_str(), flags);
         if (status != EOK)
         {
@@ -124,7 +197,7 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags)
         // 处理 O_APPEND：将文件指针设置到文件末尾
         if (flags & O_APPEND)
         {
-            //这是纯sb设计，后面有机会把这个删了
+            // 这是纯sb设计，后面有机会把这个删了
             temp_file->setAppend();
         }
 
@@ -189,7 +262,7 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags)
             return -EOVERFLOW;
         }
     }
-    
+
     // 处理 O_CLOEXEC：设置执行时关闭标志
     if ((flags & O_CLOEXEC) && file != nullptr)
     {
@@ -565,7 +638,7 @@ int vfs_fallocate(fs::file *f, off_t offset, size_t length)
     // 获取当前文件大小
     uint64_t current_size = ext4_fsize(&f->lwext4_file_struct);
     uint64_t target_size = offset + length;
-    if(target_size>EXT4_MAX_FILE_SIZE)
+    if (target_size > EXT4_MAX_FILE_SIZE)
     {
         printfRed("vfs_fallocate: target size exceeds maximum file size\n");
         return -EFBIG; // 文件过大

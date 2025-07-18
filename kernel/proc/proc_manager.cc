@@ -28,6 +28,7 @@
 #include "fs/vfs/file/pipe_file.hh"
 #include "syscall_defs.hh"
 #include "fs/vfs/ops.hh"
+
 #include "fs/vfs/vfs_utils.hh"
 #include "sys/syscall_defs.hh"
 #include "fs/vfs/fs.hh"
@@ -1609,7 +1610,7 @@ namespace proc
     /// @return fd
     int ProcessManager::open(int dir_fd, eastl::string path, uint flags)
     {
-        printfCyan("[open] dir_fd: %d, path: %s, flags: %x\n", dir_fd, path.c_str(), flags);
+        printfCyan("[open] dir_fd: %d, path: %s, flags: %s\n", dir_fd, path.c_str(), flags_to_string(flags).c_str());
 
         Pcb *p = get_cur_pcb();
         // fs::file *file = nullptr;
@@ -1623,12 +1624,12 @@ namespace proc
             return -EMFILE; // 分配文件描述符失败
         }
         //下面这个就是套的第二层，这一层的意义似乎只在于分配文件描述符
-        if(vfs_openat(path.c_str(), p->_ofile->_ofile_ptr[fd], flags)<0)
+        int err=vfs_openat(path.c_str(), p->_ofile->_ofile_ptr[fd], flags);
+        if(err<0)
         {
             printfRed("[open] vfs_openat failed for path: %s\n", path.c_str());
-            return -ENOENT; // 文件不存在或打开失败
+            return err; // 文件不存在或打开失败
         }
-        printf("[qwer] f->mode=%x", p->_ofile->_ofile_ptr[fd]->_attrs);
         return fd; // 返回分配的文件描述符
     }
 
