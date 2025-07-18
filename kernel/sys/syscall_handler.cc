@@ -88,8 +88,8 @@ namespace syscall
         BIND_SYSCALL(umount2);
         BIND_SYSCALL(mount);
         BIND_SYSCALL(statfs);    // todo
-        BIND_SYSCALL(ftruncate); // todo
-        BIND_SYSCALL(faccessat); // todo
+        BIND_SYSCALL(ftruncate); // tsh
+        BIND_SYSCALL(faccessat); // tsh
         BIND_SYSCALL(chdir);
         BIND_SYSCALL(exec);
         BIND_SYSCALL(openat);
@@ -2080,37 +2080,93 @@ namespace syscall
         // panic("未实现");
         // #ifdef FS_FIX_COMPLETELY
         int dirfd, mode, flags;
-        eastl::string path;
+        eastl::string pathname;
         if (_arg_int(0, dirfd) < 0 || _arg_int(2, mode) < 0 || _arg_int(3, flags) < 0)
         {
-            return -1;
+            return -EINVAL; // 参数错误
         }
-        if (_arg_str(1, path, MAXPATH) < 0)
+        if (_arg_str(1, pathname, MAXPATH) < 0)
         {
-            return -1;
+            return -EINVAL; // 参数错误
+        }
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+  // 处理dirfd和路径
+        eastl::string abs_pathname;
+
+        // 检查是否为绝对路径
+        if (pathname[0] == '/')
+        {
+            // 绝对路径，忽略dirfd
+            abs_pathname = pathname;
+        }
+        else
+        {
+            // 相对路径，需要处理dirfd
+            if (dirfd == AT_FDCWD)
+            {
+                // 使用当前工作目录
+                abs_pathname = get_absolute_path(pathname.c_str(), p->_cwd_name.c_str());
+            }
+            else
+            {
+                // 使用dirfd指向的目录
+                fs::file *dir_file = p->get_open_file(dirfd);
+                if (!dir_file)
+                {
+                    printfRed("[SyscallHandler::sys_fchmodat] 无效的dirfd: %d\n", dirfd);
+                    return SYS_EBADF; // 无效的文件描述符
+                }
+
+                // 使用dirfd对应的路径作为基准目录
+                abs_pathname = get_absolute_path(pathname.c_str(), dir_file->_path_name.c_str());
+            }
         }
 
-        // fs::dentry *pen;
-        // fs::dentry *base_dentry = nullptr; // 保存原始的 dentry 用于路径解析
-        // eastl::string pcb_path;
-        // eastl::string dirpath;
-        // char abs_path[EXT4_PATH_LONG_MAX];
-        // if (dirfd == AT_FDCWD)
-        // {
-        //     //获取CWD的绝对路径
-        //     panic("[SyscallHandler::sys_faccessat] AT_FDCWD is not supported yet");
-        // }
-        // else
-        // {
-        //     fs::file *ofile = proc::k_pm.get_cur_pcb()->get_open_file(dirfd);
-        //     if (ofile == nullptr || ofile->_attrs.filetype != fs::FileTypes::FT_NORMAL)
-        //     {
-        //         return -1; // 不是普通文件类型
-        //     }
-        //     get_absolute_path(path.c_str(), proc::k_pm.get_cur_pcb()->_cwd_name.c_str(), abs_path);
-
-        // }
-
+        printfCyan("[SyscallHandler::sys_faccessat] 绝对路径: %s\n", abs_pathname.c_str());
+        
+        // 首先验证路径中的每个父目录都是目录
+        eastl::string path_to_check = abs_pathname;
+        size_t last_slash = path_to_check.find_last_of('/');
+        if (last_slash != eastl::string::npos && last_slash > 0)
+        {
+            eastl::string parent_path = path_to_check.substr(0, last_slash);
+            eastl::string current_path = "";
+            
+            // 逐段检查路径
+            size_t start = 1; // 跳过第一个 '/'
+            while (start < parent_path.length())
+            {
+                size_t end = parent_path.find('/', start);
+                if (end == eastl::string::npos)
+                    end = parent_path.length();
+                
+                current_path += "/" + parent_path.substr(start, end - start);
+                
+                if (is_file_exist(current_path.c_str()) == 1)
+                {
+                    int file_type = vfs_path2filetype(current_path);
+                    if (file_type != fs::FileTypes::FT_DIRECT)
+                    {
+                        printfRed("[SyscallHandler::sys_faccessat] 路径中的组件不是目录: %s\n", current_path.c_str());
+                        return SYS_ENOTDIR; // 不是目录
+                    }
+                }
+                else if (is_file_exist(current_path.c_str()) == 0)
+                {
+                    printfRed("[SyscallHandler::sys_faccessat] 路径中的目录不存在: %s\n", current_path.c_str());
+                    return SYS_ENOENT; // 目录不存在
+                }
+                
+                start = end + 1;
+            }
+        }
+        
+        // 现在检查目标文件是否存在
+        if (is_file_exist(abs_pathname.c_str()) != 1)
+        {
+            printfRed("[SyscallHandler::sys_faccessat] 文件不存在: %s\n", abs_pathname.c_str());
+            return SYS_ENOENT; // 文件不存在
+        }
         [[maybe_unused]] int _flags = 0;
         // if( ( _mode & ( R_OK | X_OK )) && ( _mode & W_OK ) )
         // 	flags = 6;    	//O_RDWR;
@@ -2125,10 +2181,10 @@ namespace syscall
             _flags |= 2;
         if (mode & X_OK)
             _flags |= 1;
-        int fd = proc::k_pm.open(dirfd, path, _flags);
+        int fd = proc::k_pm.open(dirfd, abs_pathname, _flags);
         if (fd < 0)
         {
-            return -1;
+            return fd; // 返回错误码
         }
         // #endif
         return 0;
@@ -2677,6 +2733,7 @@ namespace syscall
             printfRed("[sys_ftruncate] 参数错误\n");
             return SYS_EINVAL; // 参数错误
         }
+        printfGreen("[sys_ftruncate] fd: %d, length: %d\n", fd, length);
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         fs::file *f = p->get_open_file(fd);
 
@@ -2694,8 +2751,7 @@ namespace syscall
             return SYS_EINVAL; // 参数无效，文件未以写入模式打开
         }
         return vfs_truncate(f, length); // 调用vfs_truncate函数进行截断操作
-        // TODO: 实现真正的truncate功能
-        panic("未实现该系统调用");
+
     }
     uint64 SyscallHandler::sys_pread64()
     {
