@@ -412,7 +412,7 @@ namespace syscall
         if (f == nullptr)
         {
             printfRed("cannot get file from fd %d\n", fd);
-            return -1;
+            return SYS_EBADF;
         }
         if (out_fd)
             *out_fd = fd;
@@ -542,21 +542,71 @@ namespace syscall
     uint64 SyscallHandler::sys_dup3()
     {
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        fs::file *f;
-        int fd;
-        [[maybe_unused]] int oldfd = 0;
+        
+        int oldfd, newfd, flags;
+        if (_arg_int(0, oldfd) < 0 || _arg_int(1, newfd) < 0 || _arg_int(2, flags) < 0)
+            return -1;
 
-        if (_arg_fd(0, &oldfd, &f) < 0)
-            return -1;
-        if (_arg_int(1, fd) < 0)
-            return -1;
-        if (fd == oldfd)
-            return fd;
-        if (proc::k_pm.alloc_fd(p, f, fd) < 0)
-            return -1;
-        // fs::k_file_table.dup( f );
-        f->dup();
-        return fd;
+        printfCyan("[sys_dup3] oldfd: %d, newfd: %d, flags: %d", oldfd, newfd, flags);
+
+        // 检查flags是否有效，只允许O_CLOEXEC标志
+        if ((flags & ~O_CLOEXEC) != 0)
+        {
+            printfRed("[sys_dup3] Invalid flags: %d", flags);
+            return SYS_EINVAL;
+        }
+
+        // dup3要求oldfd和newfd不能相同
+        if (oldfd == newfd)
+        {
+            printfRed("[sys_dup3] oldfd and newfd are the same, return EINVAL");
+            return SYS_EINVAL;
+        }
+
+        // 检查oldfd是否有效
+        if (oldfd < 0 || oldfd >= NOFILE || !p->get_open_file(oldfd))
+        {
+            printfRed("[sys_dup3] Invalid oldfd: %d", oldfd);
+            return SYS_EBADF;
+        }
+
+        // 检查newfd范围是否有效
+        if (newfd < 0 || newfd >= NOFILE)
+        {
+            printfRed("[sys_dup3] Invalid newfd: %d", newfd);
+            return SYS_EBADF;
+        }
+
+        // 获取要复制的文件
+        fs::file *old_file = p->get_open_file(oldfd);
+
+        // 如果newfd已经打开，先关闭它
+        if (p->get_open_file(newfd))
+        {
+            p->get_open_file(newfd)->free_file();
+        }
+
+        // 使用proc_manager的alloc_fd方法来分配指定的fd
+        if (proc::k_pm.alloc_fd(p, old_file, newfd) < 0)
+        {
+            printfRed("[sys_dup3] Failed to allocate fd %d", newfd);
+            return SYS_EMFILE;
+        }
+
+        // 增加文件引用计数
+        old_file->dup();
+
+        // 处理O_CLOEXEC标志
+        // 注意：在这个实现中，我们假设O_CLOEXEC标志会在exec时由内核处理
+        // 如果需要存储FD_CLOEXEC标志，需要扩展ofile结构
+        if (flags & O_CLOEXEC)
+        {
+            // TODO: 设置FD_CLOEXEC标志，需要在ofile结构中添加支持
+            printfCyan("[sys_dup3] O_CLOEXEC flag set for fd %d", newfd);
+        }
+
+        printfCyan("[sys_dup3] Successfully duplicated fd %d to %d", oldfd, newfd);
+        return newfd;
     }
     uint64 SyscallHandler::sys_read()
     {
@@ -2128,9 +2178,9 @@ namespace syscall
         int op;
         ulong arg;
         int retfd = -1;
-
-        if (_arg_fd(0, &fd, &f) < 0)
-            return -1;
+        int ret = -100;
+        if ((ret = _arg_fd(0, &fd, &f)) < 0)
+            return ret;
         if (_arg_int(1, op) < 0)
             return -2;
         // printfYellow("file fd: %d, op: %d\n", fd, op);
@@ -2180,6 +2230,7 @@ namespace syscall
             return retfd;
 
         default:
+            panic("[SyscallHandler::sys_fcntl] Unsupported fcntl operation: %d", op);
             break;
         }
 
