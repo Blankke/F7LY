@@ -714,10 +714,10 @@ char *ltp_testcases[] = {
     // "dns-stress-lib.sh",
     // "doio",
     // "du01.sh",
-    // "dup01",
-    // "dup02",
-    // "dup03",
-    // "dup04",
+    // "dup01",//完全PASS
+    // "dup02",// 完全PASS
+    // "dup03",// 完全PASS
+    // "dup04",// 完全PASS
     // "dup05",
     // "dup06",
     // "dup07",

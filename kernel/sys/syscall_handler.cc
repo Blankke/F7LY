@@ -402,6 +402,11 @@ namespace syscall
 
         if (_arg_int(arg_n, fd) < 0)
             return -1;
+        if (fd < 0 || (uint)fd >= proc::max_open_files)
+        {
+            printfRed("[SyscallHandler::_arg_fd]fd is out of range: %d\n", fd);
+            return SYS_EBADF; 
+        }
         proc::Pcb *p = (proc::Pcb *)Cpu::get_cpu()->get_cur_proc();
         f = p->get_open_file(fd);
         if (f == nullptr)
@@ -809,13 +814,18 @@ namespace syscall
         fs::file *f;
         int fd;
         [[maybe_unused]] int oldfd = 0;
-
-        if (_arg_fd(0, &oldfd, &f) < 0 || (fd = proc::k_pm.alloc_fd(p, f)) < 0)
+        int ret = -100;
+        if ((ret = _arg_fd(0, &oldfd, &f)) < 0)
         {
-            printfRed("[SyscallHandler::sys_dup] Error fetching arguments or allocating fd\n");
-            return -1;
+            printfRed("[SyscallHandler::sys_dup] Error fetching file descriptor\n");
+            return ret;
         }
-        // fs::k_file_table.dup( f );
+        if ((fd = proc::k_pm.alloc_fd(p, f)) < 0)
+        {
+            printfRed("[SyscallHandler::sys_dup] Error allocating fd\n");
+            return SYS_EMFILE;
+        }
+
         f->dup();
         return fd;
     }
