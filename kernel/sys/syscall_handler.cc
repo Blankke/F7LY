@@ -1731,66 +1731,166 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_readlinkat()
     {
-        //         panic("未实现");
-        // #ifdef FS_FIX_COMPLETELY
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
         int fd;
-        // fs::Path filePath;
         size_t ret;
-
+    
         if (_arg_int(0, fd) < 0)
             return -1;
-
+    
         eastl::string path;
         if (_arg_str(1, path, 256) < 0)
             return -1;
-
+    
         uint64 buf;
         if (_arg_addr(2, buf) < 0)
             return -1;
-
+    
         size_t buf_size;
         if (_arg_addr(3, buf_size) < 0)
             return -1;
-
+    
+        if (buf_size <= 0)
+        {
+            printfRed("[sys_readlinkat] bufsiz must be greater than 0");
+            return SYS_EINVAL;
+        }
+        if (path.length() > PATH_MAX)
+        {
+            printfRed("[sys_readlinkat] path length exceeds PATH_MAX");
+            return SYS_ENAMETOOLONG;
+        }
+    
+        // 特殊路径处理
         if (path == "/proc/self/exe")
         {
-            // TODO,出问题再说
             eastl::string exe_path = proc::k_pm.get_cur_pcb()->_cwd_name + "busybox";
             char *buffer = (char *)exe_path.c_str();
             ret = exe_path.size();
             if (mem::k_vmm.copy_out(*pt, buf, buffer, ret) < 0)
             {
-                delete[] buffer;
                 return -1;
             }
-            // 不要 delete buffer，因为它不是 new 出来的
             return ret;
         }
-        panic("未实现 sys_readlinkat");
-        // if (fd == AT_FDCWD)
-        //     new (&filePath) fs::Path(path, p->_cwd);
-        // else
-        //     new (&filePath) fs::Path(path, p->get_open_file(fd));
+        printfCyan("[sys_readlinkat] fd: %d, path: %s, buf: %p, buf_size: %zu", fd, path.c_str(), (void *)buf, buf_size);
+        // 如果路径为空，获取dirfd对应的符号链接
+        if (path.empty())
+        {
+            if (fd < 0 || (uint)fd >= proc::max_open_files)
+            {
+                printfRed("[sys_readlinkat] Invalid dirfd: %d", fd);
+                return SYS_EBADF;
+            }
+    
+            fs::file *file = p->get_open_file(fd);
+            if (!file)
+            {
+                printfRed("[sys_readlinkat] Cannot get file from dirfd: %d", fd);
+                return SYS_EBADF;
+            }
+    
+            if (file->_attrs.filetype != fs::FileTypes::FT_SYMLINK)
+            {
+                printfRed("[sys_readlinkat] File is not a symlink");
+                return SYS_EINVAL;
+            }
+            eastl::string link_path;
+            panic("TODO");
+            // link_path = file->get_symlink_target(); // 需要实现这个函数
 
-        // fs::dentry *dent = filePath.pathSearch();
-        // if (dent == nullptr)
-        //     return -1;
-
-        // char *buffer = new char[buf_size];
-        // ret = dent->getNode()->readlinkat(buffer, buf_size);
-
-        // if (mem::k_vmm.copy_out(*pt, buf, (void *)buffer, ret) < 0)
-        // {
-        //     delete[] buffer;
-        //     return -1;
-        // }
-
-        // delete[] buffer;
-        // return ret;
-        // #endif
-        return -1; // 未实现
+            if (link_path.length() > buf_size)
+            {
+                printfRed("[sys_readlinkat] Link path too long for buffer");
+                return SYS_ENAMETOOLONG;
+            }
+    
+            if (mem::k_vmm.copy_out(*pt, buf, link_path.c_str(), link_path.length()) < 0)
+            {
+                return SYS_EFAULT;
+            }
+    
+            return link_path.length();
+        }
+    
+        // 处理非空路径
+        eastl::string abs_path;
+        
+        if (path[0] == '/')
+        {
+            abs_path = path;
+        }
+        else
+        {
+            // 相对路径，需要处理dirfd
+            if (fd == AT_FDCWD)
+            {
+                // 使用当前工作目录
+                abs_path = get_absolute_path(path.c_str(), p->_cwd_name.c_str());
+            }
+            else
+            {
+                // 使用dirfd指向的目录
+                fs::file *dir_file = p->get_open_file(fd);
+                if (!dir_file)
+                {
+                    printfRed("[sys_readlinkat] Invalid dirfd: %d", fd);
+                    return SYS_EBADF;
+                }
+                abs_path = get_absolute_path(path.c_str(), dir_file->_path_name.c_str());
+            }
+        }
+    
+        // 检查文件是否存在
+        if (is_file_exist(abs_path.c_str()) != 1)
+        {
+            printfRed("[sys_readlinkat] File does not exist: %s", abs_path.c_str());
+            return SYS_ENOENT;
+        }
+    
+        // 打开文件检查是否为符号链接
+        fs::file *target_file = nullptr;
+        int open_result = vfs_openat(abs_path, target_file, O_RDONLY | O_NOFOLLOW); // O_NOFOLLOW确保不跟随符号链接
+        
+        if (open_result < 0 || !target_file)
+        {
+            printfRed("[sys_readlinkat] Failed to open file: %s", abs_path.c_str());
+            return SYS_ENOENT;
+        }
+    
+        // 检查是否为符号链接
+        if (target_file->_attrs.filetype != fs::FileTypes::FT_SYMLINK)
+        {
+            target_file->free_file();
+            printfRed("[sys_readlinkat] File is not a symlink: %s", abs_path.c_str());
+            return SYS_EINVAL;
+        }
+    
+        // 读取符号链接的目标路径
+        eastl::string link_target;
+        // TODO: 实现从符号链接文件读取目标路径的功能
+        // 这可能需要调用特定的VFS函数或直接读取inode数据
+        panic("TODO");
+        // link_target = target_file->read_symlink_target();
+    
+        target_file->free_file();
+    
+        if (link_target.length() > buf_size)
+        {
+            printfRed("[sys_readlinkat] Link target too long for buffer");
+            return SYS_ENAMETOOLONG;
+        }
+    
+        // 将结果拷贝到用户空间
+        if (mem::k_vmm.copy_out(*pt, buf, link_target.c_str(), link_target.length()) < 0)
+        {
+            printfRed("[sys_readlinkat] Failed to copy result to user space");
+            return SYS_EFAULT;
+        }
+    
+        printfCyan("[sys_readlinkat] Successfully read symlink: %s -> %s", abs_path.c_str(), link_target.c_str());
+        return link_target.length();
     }
     uint64 SyscallHandler::sys_getrandom()
     {
@@ -3232,7 +3332,22 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_fchdir()
     {
-        panic("未实现该系统调用");
+        int fd;
+        if (_arg_int(0, fd) < 0)
+        {
+            printfRed("[SyscallHandler::sys_fchdir] 参数错误\n");
+            return SYS_EINVAL; // 参数错误
+        }
+        fs::file *f = proc::k_pm.get_cur_pcb()->get_open_file(fd);
+        eastl::string path;
+        if (!f || !f->_attrs.u_read)
+        {
+            printfRed("[SyscallHandler::sys_fchdir] 无效的文件描述符: %d\n", fd);
+            return SYS_EBADF; // 无效的文件描述符
+        }
+        path = f->_path_name;
+        return proc::k_pm.chdir(path);
+
     }
     uint64 SyscallHandler::sys_chroot()
     {
