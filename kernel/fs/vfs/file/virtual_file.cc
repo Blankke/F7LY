@@ -1,0 +1,220 @@
+#include "fs/vfs/file/virtual_file.hh"
+// #include "fs/lwext4/ext4_errno.hh"
+// #include "fs/lwext4/ext4.hh"
+// #include "mem/userspace_stream.hh"
+#include "proc_manager.hh"
+#include "proc/meminfo.hh"
+#include "proc/cpuinfo.hh"
+#include "printer.hh"
+
+#define min(a, b) ((a) < (b) ? (a) : (b))
+
+namespace fs
+{
+    // ======================== 具体内容提供者的实现 ========================
+    
+    eastl::string ProcSelfExeProvider::generate_content()
+    {
+        // /proc/self/exe 返回当前进程的可执行文件路径
+        eastl::string exe_path = proc::k_pm.get_cur_pcb()->_cwd_name + "busybox";
+        return exe_path;
+    }
+
+    eastl::string ProcMeminfoProvider::generate_content()
+    {
+        // panic("TODO");
+        // return 0;
+        return get_meminfo();
+    }
+
+    eastl::string ProcCpuinfoProvider::generate_content()
+    {
+        // panic("TODO");
+        // return 0;
+        return get_cpuinfo();
+    }
+
+    eastl::string ProcVersionProvider::generate_content()
+    {
+        return "Linux version 5.15.0-F7LY (F7LY) (gcc version 11.2.0) #1 SMP PREEMPT\n";
+    }
+
+    eastl::string ProcMountsProvider::generate_content()
+    {
+        eastl::string result;
+        result += "/dev/sda1 / ext4 rw,relatime 0 0\n";
+        result += "proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0\n";
+        result += "tmpfs /tmp tmpfs rw,nosuid,nodev 0 0\n";
+        return result;
+    }
+
+    eastl::string ProcSelfFdProvider::generate_content()
+    {
+        if (_fd_num < 0) {
+            return "";
+        }
+        // 返回文件描述符对应的文件路径
+        // 这里需要根据实际的文件描述符表来获取路径
+        // 简化实现，返回一个占位符
+        return "/dev/pts/0";
+    }
+
+
+    // ======================== virtual_file 实现 ========================
+
+    void virtual_file::ensure_content_cached()
+    {
+        if (!_content_cached) {
+            if (_content_provider->is_dynamic() || !_content_cached) {
+                _cached_content = _content_provider->generate_content();
+            }
+            _content_cached = true;
+            // 更新文件统计信息
+            _stat.size = _cached_content.size();
+        }
+    }
+
+    bool virtual_file::is_virtual_path(const eastl::string& path)
+    {
+        return path.find("/proc/") == 0;
+    }
+
+    long virtual_file::read(uint64 buf, size_t len, long off, bool upgrade)
+    {
+        // printfGreen("virtual_file::read called with buf: %p, len: %zu, off: %ld, upgrade: %d\n", (void *)buf, len, off, upgrade);
+        
+        if (_attrs.u_read != 1) {
+            printfRed("virtual_file:: not allowed to read!");
+            return -1;
+        }
+
+        // 对于动态内容，每次都重新生成
+        if (_content_provider->is_dynamic()) {
+            _cached_content = _content_provider->generate_content();
+            _stat.size = _cached_content.size();
+        } else {
+            // 确保内容已缓存
+            ensure_content_cached();
+        }
+
+        // 处理偏移量参数
+        if (off < 0) {
+            off = _file_ptr;
+        }
+
+        // 检查偏移量是否有效
+        if (off >= (long)_cached_content.size()) {
+            return 0; // EOF
+        }
+
+        // 计算实际要读取的字节数
+        size_t available = _cached_content.size() - off;
+        size_t to_read = min(len, available);
+
+        // 复制数据到用户缓冲区
+        const char* src_data = _cached_content.c_str() + off;
+        
+        // 这里应该使用适当的内存复制函数，类似于 copy_to_user
+        // 临时使用简单的内存复制
+        char* dst_buf = (char*)buf;
+        for (size_t i = 0; i < to_read; i++) {
+            dst_buf[i] = src_data[i];
+        }
+
+        // 如果upgrade为true，更新文件指针
+        if (upgrade) {
+            _file_ptr = off + to_read;
+        }
+
+        return to_read;
+    }
+
+    long virtual_file::write(uint64 buf, size_t len, long off, bool upgrade)
+    {
+        if (!_content_provider->is_writable()) {
+            printfRed("virtual_file::write: this virtual file is read-only");
+            return -1;
+        }
+
+        if (_attrs.u_write != 1) {
+            printfRed("virtual_file:: not allowed to write!");
+            return -1;
+        }
+
+        // 处理偏移量参数
+        if (off < 0) {
+            off = _file_ptr;
+        }
+
+        // 委托给内容提供者处理写入
+        long result = _content_provider->handle_write(buf, len, off);
+
+        // 如果upgrade为true且写入成功，更新文件指针
+        if (result > 0 && upgrade) {
+            _file_ptr = off + result;
+        }
+
+        return result;
+    }
+
+    bool virtual_file::read_ready()
+    {
+        // 虚拟文件总是可读的
+        return true;
+    }
+
+    bool virtual_file::write_ready()
+    {
+        // 根据内容提供者的能力决定是否可写
+        return _content_provider->is_writable();
+    }
+
+    off_t virtual_file::lseek(off_t offset, int whence)
+    {
+        // 对于动态内容，确保获得最新的文件大小
+        if (_content_provider->is_dynamic()) {
+            _cached_content = _content_provider->generate_content();
+            _stat.size = _cached_content.size();
+        } else {
+            // 确保内容已缓存以获得正确的文件大小
+            ensure_content_cached();
+        }
+        
+        off_t new_off;
+        switch (whence) {
+            case SEEK_SET:
+                if (offset < 0) {
+                    return -EINVAL;
+                }
+                _file_ptr = offset;
+                break;
+            case SEEK_CUR:
+                new_off = _file_ptr + offset;
+                if (new_off < 0) {
+                    return -EINVAL;
+                }
+                _file_ptr = new_off;
+                break;
+            case SEEK_END:
+                new_off = _cached_content.size() + offset;
+                if (new_off < 0) {
+                    return -EINVAL;
+                }
+                _file_ptr = new_off;
+                break;
+            default:
+                printfRed("virtual_file::lseek: invalid whence %d", whence);
+                return -EINVAL;
+        }
+        
+        return _file_ptr;
+    }
+
+    size_t virtual_file::read_sub_dir(mem::UserspaceStream &dst)
+    {
+        // 虚拟文件通常不是目录，不支持读取子目录
+        panic("virtual_file::read_sub_dir: virtual files are not directories");
+        return 0;
+    }
+
+} // namespace fs

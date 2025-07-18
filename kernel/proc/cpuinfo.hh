@@ -1,3 +1,5 @@
+#pragma once
+
 #include <EASTL/string.h>
 
 struct cpuinfo
@@ -31,7 +33,7 @@ struct cpuinfo
     eastl::string power_management = "";
 };
 
-eastl::string get_cpuinfo()
+inline eastl::string get_cpuinfo()
 {
     cpuinfo info;
     eastl::string result;

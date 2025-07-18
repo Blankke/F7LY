@@ -1,3 +1,4 @@
+#pragma once
 #include <EASTL/string.h>
 
 struct meminfo
@@ -14,7 +15,7 @@ struct meminfo
     eastl::string Slab = "0 kB";
 };
 
-eastl::string get_meminfo()
+inline eastl::string get_meminfo()
 {
     meminfo info;
     eastl::string result;
