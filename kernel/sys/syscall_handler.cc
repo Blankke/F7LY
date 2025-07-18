@@ -3175,7 +3175,22 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_fchdir()
     {
-        panic("未实现该系统调用");
+        int fd;
+        if (_arg_int(0, fd) < 0)
+        {
+            printfRed("[SyscallHandler::sys_fchdir] 参数错误\n");
+            return SYS_EINVAL; // 参数错误
+        }
+        fs::file *f = proc::k_pm.get_cur_pcb()->get_open_file(fd);
+        eastl::string path;
+        if (!f || !f->_attrs.u_read)
+        {
+            printfRed("[SyscallHandler::sys_fchdir] 无效的文件描述符: %d\n", fd);
+            return SYS_EBADF; // 无效的文件描述符
+        }
+        path = f->_path_name;
+        return proc::k_pm.chdir(path);
+
     }
     uint64 SyscallHandler::sys_chroot()
     {
