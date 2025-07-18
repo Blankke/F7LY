@@ -727,7 +727,7 @@ char *ltp_testcases[] = {
     // "dup204",// 完全PASS
     // "dup205",//完全PASS
     // "dup206", //完全PASS
-    // "dup207",
+    // "dup207", //完全PASS
     // "dup3_01",// 完全PASS
     // "dup3_02",// 完全PASS
     // "dynamic_debug01.sh",

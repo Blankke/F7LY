@@ -105,6 +105,13 @@ namespace fs
 			printfRed("directory_file::lseek: invalid whence %d", whence);
 			return -EINVAL;
 		}
+		panic("不知道哪里有ext4_dir_lseek, 下面用fseek感觉不对");
+		// int seek_status = ext4_fseek(&lwext4_file_struct, _file_ptr, SEEK_SET);
+		// if (seek_status != EOK)
+		// {
+		// 	printfRed("normal_file::read: ext4_fseek failed with status %d", seek_status);
+		// 	return -1;
+		// }
 		return _file_ptr;
 	}
 
