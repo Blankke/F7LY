@@ -253,7 +253,7 @@ namespace syscall
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
         uint64 sys_num = p->get_trapframe()->a7; // 获取系统调用号
 
-        if (!(sys_num == 64) && !(sys_num == 66))
+        if (!(sys_num == 64 && p->_trapframe->a0 == 1) && !(sys_num == 66 && p->_trapframe->a0 == 1))
         {
             // printf("---------- start ------------\n");
             // printfMagenta("[Pcb::get_open_file] pid: %d\n", p->_pid);
