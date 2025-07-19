@@ -36,7 +36,7 @@ namespace proc
 					return -1;
 				}
 
-				if (_count >= pipe_size)
+				if (_count >= _pipe_size)
 				{
 					// 如果管道缓冲区满了，不能继续写入
 					// 唤醒等待读取的进程，让其读走数据
@@ -92,7 +92,7 @@ namespace proc
 					return syscall::SYS_EPIPE; 
 				}
 
-				if (_count >= pipe_size)
+				if (_count >= _pipe_size)
 				{
 					// printfRed("Pipe buffer full, cannot write more data\n");
 					// 如果缓冲区已满，则不能继续写入
@@ -243,6 +243,58 @@ namespace proc
 				
 				_lock.release();
 			}
+		}
+
+		int Pipe::set_pipe_size(uint32 new_size)
+		{
+			_lock.acquire();
+
+			// 检查新大小是否在合理范围内
+			if (new_size < min_pipe_size || new_size > max_pipe_size) {
+				_lock.release();
+				return -1; // 大小超出范围
+			}
+
+			// 如果新大小小于当前数据量，不允许缩小
+			if (new_size < _count) {
+				_lock.release();
+				return -1; // 新大小太小，无法容纳当前数据
+			}
+
+			// 分配新缓冲区
+			uint8 *new_buffer = new uint8[new_size];
+			if (!new_buffer) {
+				_lock.release();
+				return -1; // 内存分配失败
+			}
+
+			// 如果有数据，需要复制到新缓冲区
+			if (_count > 0) {
+				uint32 copied = 0;
+				uint32 temp_head = _head;
+				
+				// 按顺序复制数据，保持数据的逻辑顺序
+				while (copied < _count) {
+					new_buffer[copied] = _buffer[temp_head];
+					temp_head = (temp_head + 1) % _pipe_size;
+					copied++;
+				}
+				
+				// 重置头尾指针
+				_head = 0;
+				_tail = _count;
+			} else {
+				_head = 0;
+				_tail = 0;
+			}
+
+			// 释放旧缓冲区，更新指针和大小
+			delete[] _buffer;
+			_buffer = new_buffer;
+			_pipe_size = new_size;
+
+			_lock.release();
+			return new_size; // 返回实际设置的大小
 		}
 
 	} // namespace ips

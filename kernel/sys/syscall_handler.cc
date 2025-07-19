@@ -2408,7 +2408,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_fcntl] F_NOTIFY not implemented\n");
             return SYS_ENOTDIR; // fd 不指向目录
 
-        // Changing the capacity of a pipe (暂不支持)
+        // Changing the capacity of a pipe
         case F_SETPIPE_SZ:
             if (_arg_addr(2, arg) < 0)
                 return SYS_EFAULT;
@@ -2416,14 +2416,23 @@ namespace syscall
                 return SYS_EBADF; // fd 不是管道
             if (arg <= 0)
                 return SYS_EINVAL;
-            printfRed("[SyscallHandler::sys_fcntl] F_SETPIPE_SZ not implemented yet\n");
-            return SYS_EBUSY; // 新的管道容量小于当前用于存储数据的缓冲区空间
+            {
+                fs::pipe_file* pf = static_cast<fs::pipe_file*>(f);
+                int result = pf->set_pipe_size(arg);
+                if (result < 0) {
+                    // 设置失败，可能是大小超出范围或当前有数据无法缩小
+                    return SYS_EBUSY;
+                }
+                return result; // 返回实际设置的大小
+            }
 
         case F_GETPIPE_SZ:
             if (f->_attrs.filetype != fs::FileTypes::FT_PIPE)
                 return SYS_EBADF; // fd 不是管道
-            printfRed("[SyscallHandler::sys_fcntl] F_GETPIPE_SZ not implemented yet\n");
-            return SYS_ENOSYS;
+            {
+                fs::pipe_file* pf = static_cast<fs::pipe_file*>(f);
+                return pf->get_pipe_size();
+            }
 
         //   File Sealing (暂不支持)
         case F_ADD_SEALS:

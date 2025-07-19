@@ -57,6 +57,13 @@ namespace fs
 		virtual bool read_ready() override { return _pipe->read_is_open(); }
 		virtual bool write_ready() override { return _pipe->write_is_open(); }
 		virtual off_t lseek(off_t offset, int whence) override { return -ESPIPE; }
+		
+		// 获取管道大小
+		uint32 get_pipe_size() const { return _pipe->get_pipe_size(); }
+		
+		// 设置管道大小，返回实际设置的大小，失败返回-1
+		int set_pipe_size(uint32 new_size) { return _pipe->set_pipe_size(new_size); }
+		
 		/// @brief 读取目录中的子目录项。
 		/// @param dst 目标用户空间流对象。
 		/// @return 实际读取的字节数。
