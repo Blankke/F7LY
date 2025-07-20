@@ -31,6 +31,14 @@ namespace fs
         memcpy( (void *)buf, abs_path.c_str(), ret);
         return ret;
     }
+
+    eastl::string file::read_symlink_target()
+    {
+        panic("虚类占位实现");
+        // 默认实现：返回文件路径
+        return _path_name;
+    }
+
     file_pool k_file_table;
 
     void file_pool::init()

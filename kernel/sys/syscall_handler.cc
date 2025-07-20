@@ -40,6 +40,7 @@
 #include "fs/vfs/vfs_utils.hh"
 #include "fs/fs_defs.hh"
 #include "fs/lwext4/ext4_errno.hh"
+#include "fs/vfs/virtual_fs.hh"
 namespace syscall
 {
     // 创建全局的 SyscallHandler 实例
@@ -1976,17 +1977,26 @@ namespace syscall
                 abs_path = get_absolute_path(path.c_str(), dir_file->_path_name.c_str());
             }
         }
-
+        
+        fs::file *target_file = nullptr;
+        int open_result = -100;
         // 检查文件是否存在
-        if (is_file_exist(abs_path.c_str()) != 1)
+        if(fs::k_vfs.is_filepath_virtual_smart(abs_path.c_str()))
         {
-            printfRed("[sys_readlinkat] File does not exist: %s", abs_path.c_str());
-            return SYS_ENOENT;
+            // 这里可以添加对虚拟文件路径的特殊处理
+            open_result = fs::k_vfs.openat(abs_path, target_file, O_RDONLY | O_NOFOLLOW);
+        }
+        else
+        {
+            if (is_file_exist(abs_path.c_str()) != 1)
+            {
+                printfRed("[sys_readlinkat] File does not exist: %s", abs_path.c_str());
+                return SYS_ENOENT;
+            }
+
+            open_result = vfs_openat(abs_path, target_file, O_RDONLY | O_NOFOLLOW); // O_NOFOLLOW确保不跟随符号链接
         }
 
-        // 打开文件检查是否为符号链接
-        fs::file *target_file = nullptr;
-        int open_result = vfs_openat(abs_path, target_file, O_RDONLY | O_NOFOLLOW); // O_NOFOLLOW确保不跟随符号链接
 
         if (open_result < 0 || !target_file)
         {
@@ -2006,8 +2016,7 @@ namespace syscall
         eastl::string link_target;
         // TODO: 实现从符号链接文件读取目标路径的功能
         // 这可能需要调用特定的VFS函数或直接读取inode数据
-        panic("TODO");
-        // link_target = target_file->read_symlink_target();
+        link_target = target_file->read_symlink_target();
 
         target_file->free_file();
 
@@ -2024,7 +2033,7 @@ namespace syscall
             return SYS_EFAULT;
         }
 
-        printfCyan("[sys_readlinkat] Successfully read symlink: %s -> %s", abs_path.c_str(), link_target.c_str());
+        printfCyan("[sys_readlinkat] Successfully read symlink: %s -> %s\n", abs_path.c_str(), link_target.c_str());
         return link_target.length();
     }
     uint64 SyscallHandler::sys_getrandom()

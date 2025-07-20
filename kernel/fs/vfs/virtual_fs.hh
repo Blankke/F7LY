@@ -22,6 +22,8 @@ namespace fs
         void dir_init();
         static eastl::unique_ptr<VirtualContentProvider> create_provider(const eastl::string &path);
         int openat(eastl::string absolute_path, fs::file *&file, uint flags);
+        int path2filetype(eastl::string &absolute_path);
+        eastl::vector<eastl::string> path_split(const eastl::string &path) const;
     };
 
     extern VirtualFileSystem k_vfs;

@@ -6,11 +6,20 @@
 #include "proc/meminfo.hh"
 #include "proc/cpuinfo.hh"
 #include "printer.hh"
-
+#include "proc/proc.hh"
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
 namespace fs
 {
+    // ======================== VirtualContentProvider 基类实现 ========================
+    
+    eastl::string VirtualContentProvider::read_symlink_target()
+    {
+        panic("虚类占位实现");
+        // 默认实现：不支持符号链接
+        return "";
+    }
+
     // ======================== 具体内容提供者的实现 ========================
     
     eastl::string ProcSelfExeProvider::generate_content()
@@ -59,6 +68,13 @@ namespace fs
         return "/dev/pts/0";
     }
 
+    eastl::string ProcSelfFdProvider::read_symlink_target()
+    {
+        // panic("ProcSelfFdProvider::read_symlink_target: not implemented");
+        proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
+        fs::file *file = pcb->get_open_file(_fd_num);
+        return file ? file->_path_name : "";
+    }
 
     // ======================== virtual_file 实现 ========================
 
@@ -129,6 +145,14 @@ namespace fs
         return to_read;
     }
 
+
+    eastl::string virtual_file::read_symlink_target()
+    {
+        if (_content_provider) {
+            return _content_provider->read_symlink_target();
+        }
+        return "";
+    }
     long virtual_file::write(uint64 buf, size_t len, long off, bool upgrade)
     {
         if (!_content_provider->is_writable()) {

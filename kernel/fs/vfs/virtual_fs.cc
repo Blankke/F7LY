@@ -7,7 +7,9 @@ namespace fs
         // Check if the path starts with a virtual prefix
         // 这个函数弃用了，以后用smart版本
         // 使用 vector 线性查找替代 set
-        for (const auto& virtual_path : virtual_file_path_list) {
+        panic("已弃用");
+        for (const auto &virtual_path : virtual_file_path_list)
+        {
             if (virtual_path == path) {
                 return true;
             }
@@ -115,10 +117,50 @@ namespace fs
         }
 
         fs::FileAttrs attrs;
-        attrs.filetype = fs::FileTypes::FT_NORMAL;
+        attrs.filetype = (fs::FileTypes)path2filetype(absolute_path);
         attrs._value = 0644;
         file = new virtual_file(attrs, absolute_path, eastl::move(provider));
         return 0;
+    }
+    int VirtualFileSystem::path2filetype(eastl::string &absolute_path)
+    {
+        eastl::vector<eastl::string> split_path = path_split(absolute_path);
+        if (split_path.size() > 1 && split_path[0] == "proc" && split_path[1] == "self" && split_path[2] == "exe")
+            return fs::FileTypes::FT_SYMLINK;
+        else if (split_path.size() > 1 && split_path[0] == "proc" && split_path[1] == "self" && split_path[2] == "fd")
+            return fs::FileTypes::FT_SYMLINK; // /proc/self/fd/X 是符号链接
+        else if (absolute_path == "/proc/meminfo" || absolute_path == "/proc/cpuinfo" || absolute_path == "/proc/version" || absolute_path == "/proc/mounts")
+            return fs::FileTypes::FT_NORMAL; // 这些是普通文件
+        else if (absolute_path == "/proc/self/cmdline" || absolute_path == "/proc/stat" || absolute_path == "/proc/uptime")
+            return fs::FileTypes::FT_NORMAL; // 这些也是普通文件
+        else
+        {
+            panic("万紫千红总是春: Unsupported virtual file path: %s", absolute_path.c_str());
+        }
+
+
+
+    }
+    eastl::vector<eastl::string> VirtualFileSystem::path_split(const eastl::string &path) const
+    {
+        eastl::vector<eastl::string> parts;
+        size_t start = 0;
+        size_t end = path.find('/');
+
+        while (end != eastl::string::npos) {
+            if (end > start) { // 忽略空部分
+                parts.push_back(path.substr(start, end - start));
+            }
+            start = end + 1; // 跳过 '/'
+            end = path.find('/', start);
+        }
+
+        if (start < path.length()) { // 添加最后一部分
+            parts.push_back(path.substr(start));
+        }
+      
+
+        return parts;
     }
 
     VirtualFileSystem k_vfs;
