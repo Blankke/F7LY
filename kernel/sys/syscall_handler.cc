@@ -1979,24 +1979,8 @@ namespace syscall
         }
         
         fs::file *target_file = nullptr;
-        int open_result = -100;
         // 检查文件是否存在
-        if(fs::k_vfs.is_filepath_virtual_smart(abs_path.c_str()))
-        {
-            // 这里可以添加对虚拟文件路径的特殊处理
-            open_result = fs::k_vfs.openat(abs_path, target_file, O_RDONLY | O_NOFOLLOW);
-        }
-        else
-        {
-            if (is_file_exist(abs_path.c_str()) != 1)
-            {
-                printfRed("[sys_readlinkat] File does not exist: %s", abs_path.c_str());
-                return SYS_ENOENT;
-            }
-
-            open_result = vfs_openat(abs_path, target_file, O_RDONLY | O_NOFOLLOW); // O_NOFOLLOW确保不跟随符号链接
-        }
-
+        int open_result = fs::k_vfs.openat(abs_path, target_file, O_RDONLY | O_NOFOLLOW);
 
         if (open_result < 0 || !target_file)
         {
@@ -3561,7 +3545,7 @@ namespace syscall
         // 打开文件，需要使用写入模式
         fs::file *file = nullptr;
         int flags = O_WRONLY; // 以写入模式打开
-        int status = vfs_openat(pathname, file, flags);
+        int status = fs::k_vfs.openat(pathname, file, flags);
 
         if (status != EOK || !file)
         {

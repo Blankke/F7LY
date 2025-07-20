@@ -6,6 +6,14 @@
 #include "fs/vfs/file/virtual_file.hh"
 namespace fs
 {
+    struct vfile_msg
+    {
+        bool is_virtual;
+        int file_type;  // FileTypes 枚举值
+        eastl::unique_ptr<VirtualContentProvider> provider;
+        
+        vfile_msg() : is_virtual(false), file_type(0), provider(nullptr) {}
+    };
     class VirtualFileSystem
     {
     public:
@@ -13,16 +21,10 @@ namespace fs
         ~VirtualFileSystem() = default;
         eastl::vector<eastl::string> virtual_file_path_list;
         bool is_filepath_virtual(const eastl::string &path) const;
-        bool is_filepath_virtual_smart(const eastl::string &path) const;
-        // void init()
-        // {
-        //     virtual_file_path_list.reserve(10); // 预分配空间
-        //     dir_init();
-        // }
+        vfile_msg get_vfile_msg(const eastl::string &absolute_path) const;
         void dir_init();
-        static eastl::unique_ptr<VirtualContentProvider> create_provider(const eastl::string &path);
         int openat(eastl::string absolute_path, fs::file *&file, uint flags);
-        int path2filetype(eastl::string &absolute_path);
+        int vfile_openat(eastl::string absolute_path, fs::file *&file, uint flags);
         eastl::vector<eastl::string> path_split(const eastl::string &path) const;
     };
 

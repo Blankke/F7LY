@@ -1556,7 +1556,7 @@ char *ltp_testcases[] = {
     // "locktests",
     // "logrotate_tests.sh",
     // "lremovexattr01",
-    // "lseek01",
+    // "lseek01", //完全PASS
     // "lseek02",
     // "lseek07",
     // "lseek11",

@@ -1622,19 +1622,10 @@ namespace proc
             return -EMFILE; // 分配文件描述符失败
         }
         // 下面这个就是套的第二层，这一层的意义似乎只在于分配文件描述符
-        int err;
-        if (fs::k_vfs.is_filepath_virtual_smart(path))
-        {
-            printfCyan("[open] using virtual file system for path: %s\n", path.c_str());
-            err = fs::k_vfs.openat(path.c_str(), p->_ofile->_ofile_ptr[fd], flags);
-        }
-        else
-        {
-            err = vfs_openat(path.c_str(), p->_ofile->_ofile_ptr[fd], flags);
-        }
+        int err = fs::k_vfs.openat(path, p->_ofile->_ofile_ptr[fd], flags);
         if (err < 0)
         {
-            printfRed("[open] vfs_openat failed for path: %s\n", path.c_str());
+            printfRed("[open] failed for path: %s\n", path.c_str());
             return err; // 文件不存在或打开失败
         }
         return fd; // 返回分配的文件描述符

@@ -1,5 +1,6 @@
 #include "virtual_fs.hh"
 #include "fs/vfs/file/virtual_file.hh"
+#include "fs/vfs/vfs_utils.hh"
 namespace fs
 {
     bool VirtualFileSystem::is_filepath_virtual(const eastl::string &path) const
@@ -34,112 +35,151 @@ namespace fs
         // 可以考虑使用前缀匹配或者在 is_filepath_virtual 中特殊处理
     }
 
-    bool VirtualFileSystem::is_filepath_virtual_smart(const eastl::string &path) const
+    vfile_msg VirtualFileSystem::get_vfile_msg(const eastl::string &absolute_path) const
     {
-        // 首先检查精确匹配
-        for (const auto& virtual_path : virtual_file_path_list) {
-            if (virtual_path == path) {
-                return true;
-            }
-        }
+        vfile_msg result;
+        result.is_virtual = false;
+        result.provider = nullptr;
         
-        // 检查动态路径
-        if (path.find("/proc/self/fd/") == 0) {
-            // 验证 fd 后面是否为数字
-            eastl::string fd_part = path.substr(14); // "/proc/self/fd/" 长度为 14
-            if (!fd_part.empty()) {
-                for (char c : fd_part) {
-                    if (c < '0' || c > '9') {
-                        return false;
+        eastl::vector<eastl::string> split_path = path_split(absolute_path);
+        
+        // /proc下的虚拟文件
+        if (split_path.size() >= 1 && split_path[0] == "proc") {
+            // /proc/self/exe
+            if (split_path.size() == 3 && split_path[1] == "self" && split_path[2] == "exe") {
+                result.is_virtual = true;
+                result.file_type = fs::FileTypes::FT_SYMLINK;
+                result.provider = eastl::make_unique<ProcSelfExeProvider>();
+            }
+            // /proc/self/fd/X
+            else if (split_path.size() == 4 && split_path[1] == "self" && split_path[2] == "fd") {
+                result.is_virtual = true;
+                result.file_type = fs::FileTypes::FT_SYMLINK;
+                
+                // 提取文件描述符号
+                const eastl::string& fd_str = split_path[3];
+                int fd_num = 0;
+                for (char c : fd_str) {
+                    if (c >= '0' && c <= '9') {
+                        fd_num = fd_num * 10 + (c - '0');
+                    } else {
+                        break;
                     }
                 }
-                return true;
+                result.provider = eastl::make_unique<ProcSelfFdProvider>(fd_num);
+            }
+            // /proc/self/cmdline
+            else if (split_path.size() == 3 && split_path[1] == "self" && split_path[2] == "cmdline") {
+                result.is_virtual = true;
+                result.file_type = fs::FileTypes::FT_NORMAL;
+                // TODO: 需要创建 ProcSelfCmdlineProvider
+                result.provider = nullptr;
+            }
+            // /proc/pid/stat (pid是数字)
+            else if (split_path.size() == 3 && split_path[2] == "stat") {
+                // 检查 split_path[1] 是否为数字（pid）
+                bool is_pid = true;
+                for (char c : split_path[1]) {
+                    if (c < '0' || c > '9') {
+                        is_pid = false;
+                        break;
+                    }
+                }
+                if (is_pid) {
+                    result.is_virtual = true;
+                    result.file_type = fs::FileTypes::FT_NORMAL;
+                    // TODO: 需要创建 ProcPidStatProvider
+                    result.provider = nullptr;
+                }
+            }
+            // /proc/meminfo
+            else if (split_path.size() == 2 && split_path[1] == "meminfo") {
+                result.is_virtual = true;
+                result.file_type = fs::FileTypes::FT_NORMAL;
+                result.provider = eastl::make_unique<ProcMeminfoProvider>();
+            }
+            // /proc/cpuinfo
+            else if (split_path.size() == 2 && split_path[1] == "cpuinfo") {
+                result.is_virtual = true;
+                result.file_type = fs::FileTypes::FT_NORMAL;
+                result.provider = eastl::make_unique<ProcCpuinfoProvider>();
+            }
+            // /proc/version
+            else if (split_path.size() == 2 && split_path[1] == "version") {
+                result.is_virtual = true;
+                result.file_type = fs::FileTypes::FT_NORMAL;
+                result.provider = eastl::make_unique<ProcVersionProvider>();
+            }
+            // /proc/mounts
+            else if (split_path.size() == 2 && split_path[1] == "mounts") {
+                result.is_virtual = true;
+                result.file_type = fs::FileTypes::FT_NORMAL;
+                result.provider = eastl::make_unique<ProcMountsProvider>();
+            }
+            // /proc/stat
+            else if (split_path.size() == 2 && split_path[1] == "stat") {
+                result.is_virtual = true;
+                result.file_type = fs::FileTypes::FT_NORMAL;
+                // TODO: 需要创建 ProcStatProvider
+                result.provider = nullptr;
+            }
+            // /proc/uptime
+            else if (split_path.size() == 2 && split_path[1] == "uptime") {
+                result.is_virtual = true;
+                result.file_type = fs::FileTypes::FT_NORMAL;
+                // TODO: 需要创建 ProcUptimeProvider
+                result.provider = nullptr;
+            }
+        }
+
+        // /dev下的虚拟文件， 比如/dev/shm
+        if (split_path.size() >= 1 && split_path[0] == "dev") 
+        {
+            panic("dev下的虚拟文件,未实现");
+            // /dev/shm
+            if (split_path.size() == 2 && split_path[1] == "shm") 
+            {
+                
+                result.is_virtual = true;
+                result.file_type = 0;
+                result.provider = nullptr;
             }
         }
         
-        return false;
-    }
 
-    eastl::unique_ptr<VirtualContentProvider> VirtualFileSystem::create_provider(const eastl::string &path)
-    {
-        if (path == "/proc/self/exe")
-        {
-            return eastl::make_unique<ProcSelfExeProvider>();
-        }
-        else if (path == "/proc/meminfo")
-        {
-            return eastl::make_unique<ProcMeminfoProvider>();
-        }
-        else if (path == "/proc/cpuinfo")
-        {
-            return eastl::make_unique<ProcCpuinfoProvider>();
-        }
-        else if (path == "/proc/version")
-        {
-            return eastl::make_unique<ProcVersionProvider>();
-        }
-        else if (path == "/proc/mounts")
-        {
-            return eastl::make_unique<ProcMountsProvider>();
-        }
-        else if (path.find("/proc/self/fd/") == 0)
-        {
-            // 提取文件描述符号
-            eastl::string fd_str = path.substr(14); // "/proc/self/fd/" 的长度是 14
-            int fd_num = 0;
-            // 简单的字符串转整数
-            for (char c : fd_str)
-            {
-                if (c >= '0' && c <= '9')
-                {
-                    fd_num = fd_num * 10 + (c - '0');
-                }
-                else
-                {
-                    break;
-                }
-            }
-            return eastl::make_unique<ProcSelfFdProvider>(fd_num);
-        }
-        else
-        {
-            panic("VirtualFileSystem::create_provider: Unsupported virtual file path: %s", path.c_str());
-        }
-        return nullptr;
+        
+        return result;
     }
 
     int VirtualFileSystem::openat(eastl::string absolute_path, fs::file *&file, uint flags)
     {
+        int err;
+        vfile_msg vf_msg = get_vfile_msg(absolute_path);
+        if (vf_msg.is_virtual)
+        {
+            printfCyan("[open] using virtual file system for path: %s\n", absolute_path.c_str());
+            err = vfile_openat(absolute_path, file, flags);
+        }
+        else
+        {
+            err = vfs_openat(absolute_path.c_str(), file, flags);
+        }
+        return err;
+    }
 
-        auto provider = create_provider(absolute_path);
-        if (!provider) {
-            return -1; 
+    int VirtualFileSystem::vfile_openat(eastl::string absolute_path, fs::file *&file, uint flags)
+    {
+        vfile_msg vf_msg = get_vfile_msg(absolute_path);
+        if (!vf_msg.is_virtual || !vf_msg.provider)
+        {
+            return -1;
         }
 
         fs::FileAttrs attrs;
-        attrs.filetype = (fs::FileTypes)path2filetype(absolute_path);
+        attrs.filetype = (fs::FileTypes)vf_msg.file_type;
         attrs._value = 0644;
-        file = new virtual_file(attrs, absolute_path, eastl::move(provider));
+        file = new virtual_file(attrs, absolute_path, eastl::move(vf_msg.provider));
         return 0;
-    }
-    int VirtualFileSystem::path2filetype(eastl::string &absolute_path)
-    {
-        eastl::vector<eastl::string> split_path = path_split(absolute_path);
-        if (split_path.size() > 1 && split_path[0] == "proc" && split_path[1] == "self" && split_path[2] == "exe")
-            return fs::FileTypes::FT_SYMLINK;
-        else if (split_path.size() > 1 && split_path[0] == "proc" && split_path[1] == "self" && split_path[2] == "fd")
-            return fs::FileTypes::FT_SYMLINK; // /proc/self/fd/X 是符号链接
-        else if (absolute_path == "/proc/meminfo" || absolute_path == "/proc/cpuinfo" || absolute_path == "/proc/version" || absolute_path == "/proc/mounts")
-            return fs::FileTypes::FT_NORMAL; // 这些是普通文件
-        else if (absolute_path == "/proc/self/cmdline" || absolute_path == "/proc/stat" || absolute_path == "/proc/uptime")
-            return fs::FileTypes::FT_NORMAL; // 这些也是普通文件
-        else
-        {
-            panic("万紫千红总是春: Unsupported virtual file path: %s", absolute_path.c_str());
-        }
-
-
-
     }
     eastl::vector<eastl::string> VirtualFileSystem::path_split(const eastl::string &path) const
     {
