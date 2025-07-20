@@ -1703,6 +1703,10 @@ namespace proc
 
         eastl::string cwd;
         cwd = p->_cwd_name;
+        if (!cwd.empty() && cwd.back() == '/')
+        {
+            cwd.pop_back();
+        }
         uint i = 0;
         for (; i < cwd.size(); ++i)
             out_buf[i] = cwd[i];
