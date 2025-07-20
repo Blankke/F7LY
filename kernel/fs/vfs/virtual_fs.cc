@@ -1,38 +1,290 @@
 #include "virtual_fs.hh"
 #include "fs/vfs/file/virtual_file.hh"
 #include "fs/vfs/vfs_utils.hh"
+#include "proc/proc.hh"
 namespace fs
 {
-    bool VirtualFileSystem::is_filepath_virtual(const eastl::string &path) const
+    // 构造函数
+    VirtualFileSystem::VirtualFileSystem()
     {
-        // Check if the path starts with a virtual prefix
-        // 这个函数弃用了，以后用smart版本
-        // 使用 vector 线性查找替代 set
-        panic("已弃用");
-        for (const auto &virtual_path : virtual_file_path_list)
+
+    }
+
+    // 析构函数
+    VirtualFileSystem::~VirtualFileSystem()
+    {
+        destroy_tree(root);
+    }
+
+    // 销毁树结构
+    void VirtualFileSystem::destroy_tree(vfile_tree_node *node)
+    {
+        if (node)
         {
-            if (virtual_path == path) {
-                return true;
+            delete node; // node的析构函数会递归删除所有子节点
+        }
+    }
+
+    // 根据路径查找节点
+    vfile_tree_node *VirtualFileSystem::find_node_by_path(const eastl::string &path) const
+    {
+        if (path.empty() || path == "/")
+        {
+            return root;
+        }
+
+        eastl::vector<eastl::string> path_parts = path_split(path);
+        vfile_tree_node *current = root;
+
+        for (const auto &part : path_parts)
+        {
+            current = current->find_child(part);
+            if (!current)
+            {
+                return nullptr;
             }
         }
-        return false;
+
+        return current;
+    }
+
+    // 创建路径上的所有节点
+    vfile_tree_node *VirtualFileSystem::create_path_nodes(const eastl::string &path)
+    {
+        if (path.empty() || path == "/")
+        {
+            return root;
+        }
+
+        eastl::vector<eastl::string> path_parts = path_split(path);
+        vfile_tree_node *current = root;
+
+        for (size_t i = 0; i < path_parts.size(); i++)
+        {
+            const auto &part = path_parts[i];
+            vfile_tree_node *child = current->find_child(part);
+            if (!child)
+            {
+                // 创建新节点
+                child = new vfile_tree_node(part);
+
+                // 如果不是最后一个部分，则设置为目录类型
+                // 只有最后一个部分会在 add_virtual_file 中设置具体的文件类型
+                if (i < path_parts.size() - 1)
+                {
+                    child->file_type = fs::FileTypes::FT_DIRECT; // 目录类型
+                    child->provider = nullptr;                   // 目录不需要provider
+                }
+
+                if (!current->add_child(child))
+                {
+                    delete child;
+                    return nullptr; // 添加失败，可能超过了最大子节点数
+                }
+            }
+            else
+            {
+                // 如果节点已存在且不是最后一个部分，确保它是目录类型
+                if (i < path_parts.size() - 1 && child->file_type == 0)
+                {
+                    child->file_type = fs::FileTypes::FT_DIRECT; // 确保中间节点是目录类型
+                }
+            }
+            current = child;
+        }
+
+        return current;
+    }
+
+    // 添加虚拟文件
+    bool VirtualFileSystem::add_virtual_file(const eastl::string &path, int file_type,
+                                             eastl::unique_ptr<VirtualContentProvider> provider)
+    {
+        printf("Adding virtual file: %s\n", path.c_str());
+        vfile_tree_node *node = create_path_nodes(path);
+        if (!node)
+        {
+            return false;
+        }
+
+        node->file_type = file_type;
+        node->provider = eastl::move(provider);
+        return true;
+    }
+
+    // 删除虚拟文件
+    bool VirtualFileSystem::remove_virtual_file(const eastl::string &path)
+    {
+        if (path.empty() || path == "/")
+        {
+            return false; // 不能删除根节点
+        }
+
+        // 找到父节点和要删除的节点名称
+        size_t last_slash = path.rfind('/');
+        if (last_slash == eastl::string::npos)
+        {
+            return false;
+        }
+
+        eastl::string parent_path = path.substr(0, last_slash);
+        eastl::string node_name = path.substr(last_slash + 1);
+
+        if (parent_path.empty())
+        {
+            parent_path = "/";
+        }
+
+        vfile_tree_node *parent = find_node_by_path(parent_path);
+        if (!parent)
+        {
+            return false;
+        }
+
+        return parent->remove_child(node_name);
+    }
+
+    // 检查路径是否为虚拟路径
+    bool VirtualFileSystem::is_virtual_path(const eastl::string &path) const
+    {
+        vfile_tree_node *node = find_node_by_path(path);
+        return node && node->provider != nullptr;
+    }
+
+    // 获取虚拟节点
+    vfile_tree_node *VirtualFileSystem::get_virtual_node(const eastl::string &path) const
+    {
+        return find_node_by_path(path);
+    }
+
+    // 列出目录下的虚拟文件
+    void VirtualFileSystem::list_virtual_files(const eastl::string &dir_path,
+                                               eastl::vector<eastl::string> &file_list) const
+    {
+        vfile_tree_node *dir_node = find_node_by_path(dir_path);
+        if (!dir_node)
+        {
+            return;
+        }
+
+        file_list.clear();
+        for (int i = 0; i < dir_node->children_count; i++)
+        {
+            if (dir_node->children[i])
+            {
+                file_list.push_back(dir_node->children[i]->name);
+            }
+        }
+    }
+
+    // 打印树结构（调试用）
+    void VirtualFileSystem::print_tree(vfile_tree_node *node, int depth) const
+    {
+        if (!node)
+        {
+            node = root;
+        }
+
+        for (int i = 0; i < depth; i++)
+        {
+            printf("  ");
+        }
+
+        if (node == root)
+        {
+            printf("/\n");
+        }
+        else
+        {
+            printf("%s", node->name.c_str());
+
+            // 显示文件类型
+            if (node->file_type == fs::FileTypes::FT_DIRECT)
+            {
+                printf(" [DIR]");
+            }
+            else if (node->file_type == fs::FileTypes::FT_NORMAL)
+            {
+                printf(" [FILE]");
+            }
+            else if (node->file_type == fs::FileTypes::FT_SYMLINK)
+            {
+                printf(" [LINK]");
+            }
+            else if (node->file_type == fs::FileTypes::FT_DEVICE)
+            {
+                printf(" [DEV]");
+            }
+            else if (node->file_type == fs::FileTypes::FT_PIPE)
+            {
+                printf(" [PIPE]");
+            }
+
+            // 显示是否有provider
+            if (node->provider)
+            {
+                printf(" [virtual]");
+            }
+            printf("\n");
+        }
+
+        for (int i = 0; i < node->children_count; i++)
+        {
+            if (node->children[i])
+            {
+                print_tree(node->children[i], depth + 1);
+            }
+        }
+    }
+    bool VirtualFileSystem::is_filepath_virtual(const eastl::string &path) const
+    {
+        // 使用新的树形结构方法
+        return is_virtual_path(path);
     }
 
     void VirtualFileSystem::dir_init()
     {
-        printf("path_list:%p\n", &virtual_file_path_list);
-        // 初始化支持的虚拟文件路径
-        virtual_file_path_list.push_back("/proc/self/exe");
-        virtual_file_path_list.push_back("/proc/meminfo");
-        virtual_file_path_list.push_back("/proc/cpuinfo");
-        virtual_file_path_list.push_back("/proc/version");
-        virtual_file_path_list.push_back("/proc/mounts");
-        virtual_file_path_list.push_back("/proc/self/cmdline");
-        virtual_file_path_list.push_back("/proc/stat");
-        virtual_file_path_list.push_back("/proc/uptime");
+        printf("Initializing virtual file system tree structure\n");
+        root = new vfile_tree_node("");             // 根节点名称为空
+        root->file_type = fs::FileTypes::FT_DIRECT; // 根节点是目录
+        // 使用新的树形结构初始化虚拟文件
+        // /proc/self/exe
+        add_virtual_file("/proc/self/exe", fs::FileTypes::FT_SYMLINK,
+                         eastl::make_unique<ProcSelfExeProvider>());
+
+        // /proc/meminfo
+        add_virtual_file("/proc/meminfo", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcMeminfoProvider>());
+
+        // /proc/cpuinfo
+        add_virtual_file("/proc/cpuinfo", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcCpuinfoProvider>());
+
+        // /proc/version
+        add_virtual_file("/proc/version", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcVersionProvider>());
+
+        // /proc/mounts
+        add_virtual_file("/proc/mounts", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcMountsProvider>());
         
-        // 对于 /proc/self/fd/X 这种动态路径，需要特殊处理
-        // 可以考虑使用前缀匹配或者在 is_filepath_virtual 中特殊处理
+        // /proc/self/fd/X
+        // for (uint i = 0; i < proc::max_open_files; i++) // 假设最多支持1024个文件描述符
+        // {
+        //     eastl::string i_str = eastl::to_string(i);
+        //     add_virtual_file("/proc/self/fd/" + i_str, fs::FileTypes::FT_SYMLINK,
+        //                      eastl::make_unique<ProcSelfFdProvider>(i));
+        // }
+
+        // 注意：/proc/self/cmdline, /proc/stat, /proc/uptime 等需要相应的 Provider 实现
+        // 这里先创建节点，但 provider 为 nullptr，可以后续添加
+        add_virtual_file("/proc/self/cmdline", fs::FileTypes::FT_NORMAL, nullptr);
+        add_virtual_file("/proc/stat", fs::FileTypes::FT_NORMAL, nullptr);
+        add_virtual_file("/proc/uptime", fs::FileTypes::FT_NORMAL, nullptr);
+
+        // 打印树结构（调试用）
+        printf("Virtual file system tree:\n");
+        print_tree();
     }
 
     vfile_msg VirtualFileSystem::get_vfile_msg(const eastl::string &absolute_path) const
@@ -40,114 +292,18 @@ namespace fs
         vfile_msg result;
         result.is_virtual = false;
         result.provider = nullptr;
-        
-        eastl::vector<eastl::string> split_path = path_split(absolute_path);
-        
-        // /proc下的虚拟文件
-        if (split_path.size() >= 1 && split_path[0] == "proc") {
-            // /proc/self/exe
-            if (split_path.size() == 3 && split_path[1] == "self" && split_path[2] == "exe") {
-                result.is_virtual = true;
-                result.file_type = fs::FileTypes::FT_SYMLINK;
-                result.provider = eastl::make_unique<ProcSelfExeProvider>();
-            }
-            // /proc/self/fd/X
-            else if (split_path.size() == 4 && split_path[1] == "self" && split_path[2] == "fd") {
-                result.is_virtual = true;
-                result.file_type = fs::FileTypes::FT_SYMLINK;
-                
-                // 提取文件描述符号
-                const eastl::string& fd_str = split_path[3];
-                int fd_num = 0;
-                for (char c : fd_str) {
-                    if (c >= '0' && c <= '9') {
-                        fd_num = fd_num * 10 + (c - '0');
-                    } else {
-                        break;
-                    }
-                }
-                result.provider = eastl::make_unique<ProcSelfFdProvider>(fd_num);
-            }
-            // /proc/self/cmdline
-            else if (split_path.size() == 3 && split_path[1] == "self" && split_path[2] == "cmdline") {
-                result.is_virtual = true;
-                result.file_type = fs::FileTypes::FT_NORMAL;
-                // TODO: 需要创建 ProcSelfCmdlineProvider
-                result.provider = nullptr;
-            }
-            // /proc/pid/stat (pid是数字)
-            else if (split_path.size() == 3 && split_path[2] == "stat") {
-                // 检查 split_path[1] 是否为数字（pid）
-                bool is_pid = true;
-                for (char c : split_path[1]) {
-                    if (c < '0' || c > '9') {
-                        is_pid = false;
-                        break;
-                    }
-                }
-                if (is_pid) {
-                    result.is_virtual = true;
-                    result.file_type = fs::FileTypes::FT_NORMAL;
-                    // TODO: 需要创建 ProcPidStatProvider
-                    result.provider = nullptr;
-                }
-            }
-            // /proc/meminfo
-            else if (split_path.size() == 2 && split_path[1] == "meminfo") {
-                result.is_virtual = true;
-                result.file_type = fs::FileTypes::FT_NORMAL;
-                result.provider = eastl::make_unique<ProcMeminfoProvider>();
-            }
-            // /proc/cpuinfo
-            else if (split_path.size() == 2 && split_path[1] == "cpuinfo") {
-                result.is_virtual = true;
-                result.file_type = fs::FileTypes::FT_NORMAL;
-                result.provider = eastl::make_unique<ProcCpuinfoProvider>();
-            }
-            // /proc/version
-            else if (split_path.size() == 2 && split_path[1] == "version") {
-                result.is_virtual = true;
-                result.file_type = fs::FileTypes::FT_NORMAL;
-                result.provider = eastl::make_unique<ProcVersionProvider>();
-            }
-            // /proc/mounts
-            else if (split_path.size() == 2 && split_path[1] == "mounts") {
-                result.is_virtual = true;
-                result.file_type = fs::FileTypes::FT_NORMAL;
-                result.provider = eastl::make_unique<ProcMountsProvider>();
-            }
-            // /proc/stat
-            else if (split_path.size() == 2 && split_path[1] == "stat") {
-                result.is_virtual = true;
-                result.file_type = fs::FileTypes::FT_NORMAL;
-                // TODO: 需要创建 ProcStatProvider
-                result.provider = nullptr;
-            }
-            // /proc/uptime
-            else if (split_path.size() == 2 && split_path[1] == "uptime") {
-                result.is_virtual = true;
-                result.file_type = fs::FileTypes::FT_NORMAL;
-                // TODO: 需要创建 ProcUptimeProvider
-                result.provider = nullptr;
-            }
-        }
 
-        // /dev下的虚拟文件， 比如/dev/shm
-        if (split_path.size() >= 1 && split_path[0] == "dev") 
+        // 首先尝试从树形结构中查找
+        vfile_tree_node *node = find_node_by_path(absolute_path);
+        if (node && node->provider)
         {
-            panic("dev下的虚拟文件,未实现");
-            // /dev/shm
-            if (split_path.size() == 2 && split_path[1] == "shm") 
-            {
-                
-                result.is_virtual = true;
-                result.file_type = 0;
-                result.provider = nullptr;
-            }
+            result.is_virtual = true;
+            result.file_type = node->file_type;
+            result.provider = node->provider->clone();
+            return result; // 找到有效的provider，直接返回
+            // 注意：这里我们需要克隆provider，因为原provider在树中
         }
-        
-
-        
+       
         return result;
     }
 
@@ -187,18 +343,20 @@ namespace fs
         size_t start = 0;
         size_t end = path.find('/');
 
-        while (end != eastl::string::npos) {
-            if (end > start) { // 忽略空部分
+        while (end != eastl::string::npos)
+        {
+            if (end > start)
+            { // 忽略空部分
                 parts.push_back(path.substr(start, end - start));
             }
             start = end + 1; // 跳过 '/'
             end = path.find('/', start);
         }
 
-        if (start < path.length()) { // 添加最后一部分
+        if (start < path.length())
+        { // 添加最后一部分
             parts.push_back(path.substr(start));
         }
-      
 
         return parts;
     }
