@@ -269,12 +269,27 @@ namespace fs
                          eastl::make_unique<ProcMountsProvider>());
         
         // /proc/self/fd/X
-        // for (uint i = 0; i < proc::max_open_files; i++) // 假设最多支持1024个文件描述符
-        // {
-        //     eastl::string i_str = eastl::to_string(i);
-        //     add_virtual_file("/proc/self/fd/" + i_str, fs::FileTypes::FT_SYMLINK,
-        //                      eastl::make_unique<ProcSelfFdProvider>(i));
-        // }
+        auto int_to_string = [](uint num) -> eastl::string {
+            if (num == 0) return "0";
+            
+            char buffer[16];
+            int pos = 15;
+            buffer[pos] = '\0';
+            
+            while (num > 0) {
+                buffer[--pos] = '0' + (num % 10);
+                num /= 10;
+            }
+            
+            return eastl::string(&buffer[pos]);
+        };
+
+        for (uint i = 0; i < proc::max_open_files; i++)
+        {
+            eastl::string i_str = int_to_string(i);
+            add_virtual_file("/proc/self/fd/" + i_str, fs::FileTypes::FT_SYMLINK,
+                             eastl::make_unique<ProcSelfFdProvider>(i));
+        }
 
         // 注意：/proc/self/cmdline, /proc/stat, /proc/uptime 等需要相应的 Provider 实现
         // 这里先创建节点，但 provider 为 nullptr，可以后续添加
