@@ -1671,7 +1671,7 @@ namespace syscall
 
                 current_path += "/" + parent_path.substr(start, end - start);
 
-                if (is_file_exist(current_path.c_str()) == 1)
+                if (fs::k_vfs.is_file_exist(current_path.c_str()) == 1)
                 {
                     int file_type = vfs_path2filetype(current_path);
                     if (file_type != fs::FileTypes::FT_DIRECT)
@@ -1680,7 +1680,7 @@ namespace syscall
                         return SYS_ENOTDIR; // 不是目录
                     }
                 }
-                else if (is_file_exist(current_path.c_str()) == 0)
+                else if (fs::k_vfs.is_file_exist(current_path.c_str()) == 0)
                 {
                     printfRed("[SyscallHandler::sys_fstatat] 路径中的目录不存在: %s\n", current_path.c_str());
                     return SYS_ENOENT; // 目录不存在
@@ -1691,7 +1691,7 @@ namespace syscall
         }
 
         // 现在检查目标文件是否存在
-        if (is_file_exist(abs_pathname.c_str()) != 1)
+        if (fs::k_vfs.is_file_exist(abs_pathname.c_str()) != 1)
         {
             printfRed("[SyscallHandler::sys_fstatat] 文件不存在: %s\n", abs_pathname.c_str());
             return SYS_ENOENT; // 文件不存在
@@ -2513,7 +2513,7 @@ namespace syscall
 
                 current_path += "/" + parent_path.substr(start, end - start);
 
-                if (is_file_exist(current_path.c_str()) == 1)
+                if (fs::k_vfs.is_file_exist(current_path.c_str()) == 1)
                 {
                     int file_type = vfs_path2filetype(current_path);
                     if (file_type != fs::FileTypes::FT_DIRECT)
@@ -2522,7 +2522,7 @@ namespace syscall
                         return SYS_ENOTDIR; // 不是目录
                     }
                 }
-                else if (is_file_exist(current_path.c_str()) == 0)
+                else if (fs::k_vfs.is_file_exist(current_path.c_str()) == 0)
                 {
                     printfRed("[SyscallHandler::sys_faccessat] 路径中的目录不存在: %s\n", current_path.c_str());
                     return SYS_ENOENT; // 目录不存在
@@ -2533,7 +2533,7 @@ namespace syscall
         }
 
         // 现在检查目标文件是否存在
-        if (is_file_exist(abs_pathname.c_str()) != 1)
+        if (fs::k_vfs.is_file_exist(abs_pathname.c_str()) != 1)
         {
             printfRed("[SyscallHandler::sys_faccessat] 文件不存在: %s\n", abs_pathname.c_str());
             return SYS_ENOENT; // 文件不存在
@@ -2931,7 +2931,7 @@ namespace syscall
         if (_arg_int(3, flags) < 0)
             return -1;
         pathname = get_absolute_path(pathname.c_str(), cur_proc->_cwd_name.c_str());
-        if (is_file_exist(pathname.c_str()) != 1)
+        if (fs::k_vfs.is_file_exist(pathname.c_str()) != 1)
             return SYS_ENOENT;
 
         // int fd = path.open();
@@ -3536,7 +3536,7 @@ namespace syscall
             return SYS_EFAULT; // 路径名拷贝失败
         }
         pathname = get_absolute_path(pathname.c_str(), proc::k_pm.get_cur_pcb()->_cwd_name.c_str());
-        if (is_file_exist(pathname.c_str()) != 1)
+        if (fs::k_vfs.is_file_exist(pathname.c_str()) != 1)
         {
             printfRed("[SyscallHandler::sys_truncate] 文件不存在: %s\n", pathname.c_str());
             return SYS_ENOENT; // 文件不存在
@@ -3637,7 +3637,7 @@ namespace syscall
         }
         mode_t mode = (mode_t)mode_long;
         pathname = get_absolute_path(pathname.c_str(), proc::k_pm.get_cur_pcb()->_cwd_name.c_str());
-        if (is_file_exist(pathname.c_str()) != 1)
+        if (fs::k_vfs.is_file_exist(pathname.c_str()) != 1)
         {
             printfRed("[SyscallHandler::sys_fchmod] 文件不存在: %s\n", pathname.c_str());
             return SYS_ENOENT; // 文件不存在
@@ -3698,7 +3698,7 @@ namespace syscall
 
         printfCyan("[SyscallHandler::sys_fchmodat] 绝对路径: %s\n", abs_pathname.c_str());
 
-        if (is_file_exist(abs_pathname.c_str()) != 1)
+        if (fs::k_vfs.is_file_exist(abs_pathname.c_str()) != 1)
         {
             printfRed("[SyscallHandler::sys_fchmodat] 文件不存在: %s\n", abs_pathname.c_str());
             return SYS_ENOENT; // 文件不存在

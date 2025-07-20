@@ -2039,7 +2039,7 @@ namespace proc
         printfCyan("execve file : %s\n", ab_path.c_str());
 
         // 解析路径并查找文件
-        if (is_file_exist(ab_path.c_str()) != 1)
+        if (vfs_is_file_exist(ab_path.c_str()) != 1)
         {
             printfRed("execve: cannot find file");
             return -1;
@@ -2106,7 +2106,7 @@ namespace proc
                     if (strcmp(interpreter_path.c_str(), "/lib/ld-linux-riscv64-lp64d.so.1") == 0)
                     {
                         printfBlue("execve: using riscv64 dynamic linker\n");
-                        if (is_file_exist("/glibc/lib/ld-linux-riscv64-lp64d.so.1") != 1)
+                        if (vfs_is_file_exist("/glibc/lib/ld-linux-riscv64-lp64d.so.1") != 1)
                         {
                             printfRed("execve: failed to find riscv64 dynamic linker\n");
                             return -1;
@@ -2116,7 +2116,7 @@ namespace proc
                     else if (strcmp(interpreter_path.c_str(), "/lib/ld-linux-loongarch64.so.1") == 0)
                     {
                         printfBlue("execve: using loongarch64 dynamic linker\n");
-                        if (is_file_exist("/glibc/lib/ld-linux-loongarch-lp64d.so.1") != 1)
+                        if (vfs_is_file_exist("/glibc/lib/ld-linux-loongarch-lp64d.so.1") != 1)
                         {
                             printfRed("execve: failed to find loongarch64 dynamic linker\n");
                             return -1;
@@ -2126,7 +2126,7 @@ namespace proc
                     else if (strcmp(interpreter_path.c_str(), "/lib64/ld-musl-loongarch-lp64d.so.1") == 0)
                     {
                         printfBlue("execve: using loongarch dynamic linker\n");
-                        if (is_file_exist("/musl/lib/libc.so") != 1)
+                        if (vfs_is_file_exist("/musl/lib/libc.so") != 1)
                         {
                             printfRed("execve: failed to find loongarch musl linker\n");
                             return -1;
@@ -2136,7 +2136,7 @@ namespace proc
                     else if (strcmp(interpreter_path.c_str(), "/lib/ld-musl-riscv64-sf.so.1") == 0)
                     {
                         printfBlue("execve: using riscv64 sf dynamic linker\n");
-                        if (is_file_exist("/musl/lib/libc.so") != 1)
+                        if (vfs_is_file_exist("/musl/lib/libc.so") != 1)
                         {
                             printfRed("execve: failed to find riscv64 musl linker\n");
                             return -1;
@@ -2147,7 +2147,7 @@ namespace proc
                     {
                         // TODO: 这个可不是sf了, 那怎么办呢
                         printfBlue("execve: using riscv64 sf dynamic linker\n");
-                        if (is_file_exist("/musl/lib/libc.so") != 1)
+                        if (vfs_is_file_exist("/musl/lib/libc.so") != 1)
                         {
                             printfRed("execve: failed to find riscv64 musl linker\n");
                             return -1;

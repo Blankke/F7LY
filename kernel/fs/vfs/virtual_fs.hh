@@ -4,7 +4,7 @@
 #include <EASTL/vector.h>
 #include "fs/vfs/file.hh"
 #include "fs/vfs/file/virtual_file.hh"
-
+#include "fs/vfs/vfs_utils.hh"
 #define MAX_CHILDREN_NUM 128
 
 namespace fs
@@ -150,6 +150,12 @@ namespace fs
         void list_virtual_files(const eastl::string& dir_path, 
                                eastl::vector<eastl::string>& file_list) const;
         void print_tree(vfile_tree_node* node = nullptr, int depth = 0) const;
+        bool is_file_exist(const eastl::string &path) const
+        {
+            vfile_tree_node *node = find_node_by_path(path);
+
+            return (node != nullptr && node->file_type != 0) || vfs_is_file_exist(path.c_str()); // 0表示不存在或不是文件
+        }
     };
 
     extern VirtualFileSystem k_vfs;

@@ -131,7 +131,7 @@ static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file
 }
 int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags)
 {
-    bool file_exists = (is_file_exist(absolute_path.c_str()) == 1);
+    bool file_exists = (vfs_is_file_exist(absolute_path.c_str()) == 1);
     // 好多flag都有人给你负重前行过了
 
     // 处理 O_DIRECTORY：如果指定了此标志，路径必须是目录
@@ -334,7 +334,7 @@ int create_and_write_file(const char *path, const char *data)
     ext4_file file;
 
     // 检查文件是否已存在
-    if (is_file_exist(path) == 1)
+    if (vfs_is_file_exist(path) == 1)
     {
         printf("File already exists: %s\n", path);
         ext4_fclose(&file);
@@ -371,7 +371,7 @@ int create_and_write_file(const char *path, const char *data)
     return EOK;
 }
 
-int is_file_exist(const char *path)
+int vfs_is_file_exist(const char *path)
 {
     struct ext4_inode inode;
     uint32_t ino;
@@ -399,7 +399,7 @@ int is_file_exist(const char *path)
 }
 uint vfs_read_file(const char *path, uint64 buffer_addr, size_t offset, size_t size)
 {
-    // if (is_file_exist(path) != 1)
+    // if (vfs_is_file_exist(path) != 1)
     // {
     //     printfRed("文件不存在\n");
     //     return -ENOENT;
@@ -605,7 +605,7 @@ int vfs_truncate(fs::file *f, size_t length)
 int vfs_chmod(eastl::string pathname, mode_t mode)
 {
 
-    if (is_file_exist(pathname.c_str()) != 1)
+    if (vfs_is_file_exist(pathname.c_str()) != 1)
     {
         printfRed("[vfs_chmod] 文件不存在: %s\n", pathname.c_str());
         return -ENOENT; // 文件不存在
