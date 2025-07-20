@@ -156,6 +156,18 @@ namespace fs
 
             return (node != nullptr && node->file_type != 0) || vfs_is_file_exist(path.c_str()); // 0表示不存在或不是文件
         }
+        int path2filetype(eastl::string &absolute_path) const
+        {
+            vfile_tree_node *node = find_node_by_path(absolute_path);
+            if (node)
+            {
+                return node->file_type;
+            }
+            else
+            {
+                return vfs_path2filetype(absolute_path);
+            }
+        }
     };
 
     extern VirtualFileSystem k_vfs;

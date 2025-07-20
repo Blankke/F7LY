@@ -1673,7 +1673,7 @@ namespace syscall
 
                 if (fs::k_vfs.is_file_exist(current_path.c_str()) == 1)
                 {
-                    int file_type = vfs_path2filetype(current_path);
+                    int file_type = fs::k_vfs.path2filetype(current_path);
                     if (file_type != fs::FileTypes::FT_DIRECT)
                     {
                         printfRed("[SyscallHandler::sys_fstatat] 路径中的组件不是目录: %s\n", current_path.c_str());
@@ -2515,7 +2515,8 @@ namespace syscall
 
                 if (fs::k_vfs.is_file_exist(current_path.c_str()) == 1)
                 {
-                    int file_type = vfs_path2filetype(current_path);
+                    // int file_type = vfs_path2filetype(current_path);
+                    int file_type = fs::k_vfs.path2filetype(current_path);
                     if (file_type != fs::FileTypes::FT_DIRECT)
                     {
                         printfRed("[SyscallHandler::sys_faccessat] 路径中的组件不是目录: %s\n", current_path.c_str());
