@@ -3526,6 +3526,10 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_symlinkat()
     {
+        // 注意是否涉及虚拟文件比如 /proc/self/fd/ 等
+        // 对虚拟文件的处理参考readlinkat
+        // 通过 fs::k_vfs.is_filepath_virtual_smart 判断
+        // 非虚拟文件则使用lwext4
         panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_fstatfs()

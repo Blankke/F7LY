@@ -1209,7 +1209,7 @@ char *ltp_testcases[] = {
     // "getcwd01",//完全PASS
     // "getcwd02", // 完全PASS
     // "getcwd03",
-    // "getcwd04",
+    // "getcwd04", // Test needs at least 2 CPUs online 这个是因为 sched_getaffinity返回0，说不定它不用两个CPU
     // "getdents01",
     // "getdents02",
     // "getdomainname01",
