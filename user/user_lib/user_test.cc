@@ -1964,7 +1964,7 @@ char *ltp_testcases[] = {
     // "pipe01",// 完全PASS
     // "pipe02",
     // "pipe03", // 完全PASS
-    // "pipe04",
+    // "pipe04", //管道给写爆了，感觉是时间片太长了
     // "pipe05", // 完全PASS
     // "pipe06",    // 完全PASS
     // "pipe07", //proc/self/fd没写
@@ -1972,7 +1972,7 @@ char *ltp_testcases[] = {
     // "pipe09", // 完全PASS
     // "pipe10", // 完全PASS
     // "pipe11",
-    // "pipe12",
+    // "pipe12", // 完全PASS
     // "pipe13", // proc/4/stat没写
     // "pipe14", // 完全PASS
     // "pipe15",
