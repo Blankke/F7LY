@@ -300,6 +300,14 @@ namespace fs
         // /etc/passwd
         add_virtual_file("/etc/passwd", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<EtcPasswdProvider>());
+                         
+        // /dev/loop
+        add_virtual_file("/dev/loop-control", fs::FileTypes::FT_DEVICE,
+                         eastl::make_unique<DevLoopProvider>());
+
+        // /dev/block/8:0 (块设备文件)
+        add_virtual_file("/dev/block/8:0", fs::FileTypes::FT_DEVICE,
+                         eastl::make_unique<DevBlockProvider>(8, 0));
 
         // 打印树结构（调试用）
         printf("Virtual file system tree:\n");

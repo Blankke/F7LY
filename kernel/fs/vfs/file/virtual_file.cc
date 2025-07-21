@@ -87,6 +87,26 @@ namespace fs
         return result;
     }
 
+    eastl::string DevBlockProvider::generate_content()
+    {
+        // 块设备文件通常不包含文本内容，但可以返回设备信息
+        eastl::string result;
+        result += "Block device ";
+        result += "8";
+        result += ":";
+        result += "0";
+        result += "\n";
+        return result;
+    }
+
+    eastl::string DevLoopProvider::generate_content()
+    {
+        // Loop设备是一种特殊的块设备，可以将文件挂载为块设备
+        eastl::string result;
+        result += "Loop device ready for mounting\n";
+        return result;
+    }
+
     // ======================== virtual_file 实现 ========================
 
     void virtual_file::ensure_content_cached()
