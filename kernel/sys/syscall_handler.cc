@@ -2149,7 +2149,7 @@ namespace syscall
             return SYS_EBADF;
         fd = fd;
 
-        if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+        if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE&&f->_attrs.filetype != fs::FileTypes::FT_PIPE)
         {
             printfRed("[SyscallHandler::sys_ioctl] File is not a device file\n");
             return SYS_ENOTTY; // 不是设备文件
@@ -2212,9 +2212,124 @@ namespace syscall
             return 0;
         }
 
-        printfRed("[SyscallHandler::sys_ioctl] Unsupported ioctl command: 0x%X\n", cmd);
+        if((cmd & 0xFFFF) == FIONREAD || (cmd & 0xFFFF) == TIOCINQ)
+        {
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+#ifdef RISCV
+            int *bytes_available = (int *)pt->walk_addr(arg);
+#elif defined(LOONGARCH)
+            int *bytes_available = (int *)to_vir((uint64)pt->walk_addr(arg));
+#endif
+            
+            if (f->_attrs.filetype == fs::FileTypes::FT_PIPE)
+            {
+                // 对于管道文件，获取管道中可读的字节数
+                fs::pipe_file *pf = (fs::pipe_file *)f;
+                *bytes_available = pf->get_available_bytes();
+            }
+            else if (f->_attrs.filetype == fs::FileTypes::FT_DEVICE)
+            {
+                // 对于设备文件（如终端），获取输入缓冲区中的字节数
+                fs::device_file *df = (fs::device_file *)f;
+                int result = df->get_input_buffer_bytes();
+                *bytes_available = (result < 0) ? 0 : result;
+            }
+            else
+            {
+                *bytes_available = 0;
+            }
+            return 0;
+        }
+
+        if((cmd & 0xFFFF) == TIOCOUTQ)
+        {
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+#ifdef RISCV
+            int *bytes_in_output = (int *)pt->walk_addr(arg);
+#elif defined(LOONGARCH)
+            int *bytes_in_output = (int *)to_vir((uint64)pt->walk_addr(arg));
+#endif
+            
+            if (f->_attrs.filetype == fs::FileTypes::FT_PIPE)
+            {
+                // 对于管道文件，输出缓冲区概念不适用，返回0
+                *bytes_in_output = 0;
+            }
+            else if (f->_attrs.filetype == fs::FileTypes::FT_DEVICE)
+            {
+                // 对于设备文件（如终端），获取输出缓冲区中的字节数
+                fs::device_file *df = (fs::device_file *)f;
+                int result = df->get_output_buffer_bytes();
+                *bytes_in_output = (result < 0) ? 0 : result;
+            }
+            else
+            {
+                *bytes_in_output = 0;
+            }
+            return 0;
+        }
+
+        if((cmd & 0xFFFF) == TCFLSH)
+        {
+            int queue = (int)arg; // TCFLSH 的参数直接是整数值，不是指针
+            
+            if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+            {
+                return SYS_ENOTTY; // 只有终端设备支持刷新操作
+            }
+            
+            // tcflush 操作：
+            // TCIFLUSH: 刷新接收到但未读取的数据
+            // TCOFLUSH: 刷新已写入但未传输的数据  
+            // TCIOFLUSH: 刷新接收和传输数据
+            switch(queue)
+            {
+                case TCIFLUSH: // 刷新输入缓冲区
+                case TCOFLUSH: // 刷新输出缓冲区
+                case TCIOFLUSH: // 刷新输入和输出缓冲区
+                {
+                    fs::device_file *df = (fs::device_file *)f;
+                    int result = df->flush_buffer(queue);
+                    if (result < 0) {
+                        return SYS_EIO; // I/O 错误
+                    }
+                    break;
+                }
+                default:
+                    return SYS_EINVAL;
+            }
+            return 0;
+        }
+
+        if((cmd & 0xFFFF) == TIOCSERGETLSR)
+        {
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+#ifdef RISCV
+            int *lsr_status = (int *)pt->walk_addr(arg);
+#elif defined(LOONGARCH)
+            int *lsr_status = (int *)to_vir((uint64)pt->walk_addr(arg));
+#endif
+            
+            if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+            {
+                return SYS_ENOTTY; // 只有串行设备支持此操作
+            }
+            
+            // 获取线路状态寄存器
+            fs::device_file *df = (fs::device_file *)f;
+            int lsr_value = df->get_line_status();
+            if (lsr_value < 0) {
+                return SYS_EIO; // I/O 错误
+            }
+            *lsr_status = lsr_value;
+            
+            return 0;
+        }
+
+        panic("[SyscallHandler::sys_ioctl] Unsupported ioctl command: 0x%X\n", cmd);
         return 0;
-    }
+
+}
     uint64 SyscallHandler::sys_syslog()
     {
         enum sys_log_type

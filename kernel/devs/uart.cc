@@ -163,4 +163,71 @@ namespace dev
 		_lock.release();
 		return 0;
 	}
+	
+	int UartManager::get_input_buffer_size()
+	{
+		_lock.acquire();
+		// 计算读缓冲区中的字节数
+		int bytes_available;
+		if (_read_front >= _read_tail) {
+			bytes_available = _read_front - _read_tail;
+		} else {
+			// 循环缓冲区情况
+			bytes_available = (_buf_size - _read_tail) + _read_front;
+		}
+		_lock.release();
+		return bytes_available;
+	}
+	
+	int UartManager::get_output_buffer_size()
+	{
+		_lock.acquire();
+		// 计算写缓冲区中的字节数
+		int bytes_buffered;
+		if (_wr_idx >= _rd_idx) {
+			bytes_buffered = _wr_idx - _rd_idx;
+		} else {
+			// 循环缓冲区情况
+			bytes_buffered = (_buf_size - _rd_idx) + _wr_idx;
+		}
+		_lock.release();
+		return bytes_buffered;
+	}
+	
+	int UartManager::flush_buffer(int queue)
+	{
+		_lock.acquire();
+		
+		switch(queue) {
+			case 0: // TCIFLUSH - 清空输入缓冲区
+				_read_front = _read_tail = 0;
+				break;
+			case 1: // TCOFLUSH - 清空输出缓冲区  
+				_wr_idx = _rd_idx = 0;
+				break;
+			case 2: // TCIOFLUSH - 清空输入和输出缓冲区
+				_read_front = _read_tail = 0;
+				_wr_idx = _rd_idx = 0;
+				break;
+			default:
+				_lock.release();
+				return -1;
+		}
+		
+		_lock.release();
+		return 0;
+	}
+	
+	int UartManager::get_line_status()
+	{
+		uint8 lsr = read_lsr();
+		int status = 0;
+		
+		// 检查发送器是否为空 (THR empty 和 TSR empty)
+		if (lsr & UartLSR::tx_idle) {
+			status |= 0x01; // TIOCSER_TEMT - 发送器物理为空
+		}
+		
+		return status;
+	}
 };

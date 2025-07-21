@@ -36,6 +36,12 @@ namespace dev
 		uint8 read_rhr();
 		void write_thr(uint8 data);
 		int handle_intr();
+		
+		// 实现 StreamDevice 的缓冲区查询接口
+		virtual int get_input_buffer_size() override;
+		virtual int get_output_buffer_size() override; 
+		virtual int flush_buffer(int queue) override;
+		virtual int get_line_status() override;
 
 	private:
 		//=========================中断相关==========================

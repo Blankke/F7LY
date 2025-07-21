@@ -115,6 +115,11 @@
 
 #define TIOCSER_TEMT 0x01 /* Transmitter physically empty */
 
+/* tcflush() argument values */
+#define TCIFLUSH 0     /* Flush pending input */
+#define TCOFLUSH 1     /* Flush pending output */ 
+#define TCIOFLUSH 2    /* Flush both pending input and output */
+
 struct winsize {
     uint16 ws_row;        /* rows， in character */
     uint16 ws_col;        /* columns, in characters */

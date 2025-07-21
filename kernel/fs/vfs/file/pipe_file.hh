@@ -61,6 +61,9 @@ namespace fs
 		// 获取管道大小
 		uint32 get_pipe_size() const { return _pipe->get_pipe_size(); }
 		
+		// 获取管道中可读的字节数
+		uint32 get_available_bytes() const { return _pipe->size(); }
+		
 		// 设置管道大小，返回实际设置的大小，失败返回-1
 		int set_pipe_size(uint32 new_size) { return _pipe->set_pipe_size(new_size); }
 		

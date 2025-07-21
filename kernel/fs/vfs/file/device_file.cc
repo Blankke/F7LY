@@ -139,4 +139,68 @@ namespace fs
 
 		return 0;
 	}
+	
+	int device_file::get_input_buffer_bytes()
+	{
+		dev::CharDevice *cdev = (dev::CharDevice *)dev::k_devm.get_device(_dev_num);
+		if (cdev == nullptr)
+		{
+			return -1;
+		}
+		
+		if (cdev->type() != dev::dev_char)
+		{
+			return -1;
+		}
+		
+		return cdev->get_input_buffer_size();
+	}
+	
+	int device_file::get_output_buffer_bytes()  
+	{
+		dev::CharDevice *cdev = (dev::CharDevice *)dev::k_devm.get_device(_dev_num);
+		if (cdev == nullptr)
+		{
+			return -1;
+		}
+		
+		if (cdev->type() != dev::dev_char)
+		{
+			return -1;
+		}
+		
+		return cdev->get_output_buffer_size();
+	}
+	
+	int device_file::flush_buffer(int queue)
+	{
+		dev::CharDevice *cdev = (dev::CharDevice *)dev::k_devm.get_device(_dev_num);
+		if (cdev == nullptr)
+		{
+			return -1;
+		}
+		
+		if (cdev->type() != dev::dev_char)
+		{
+			return -1;
+		}
+		
+		return cdev->flush_buffer(queue);
+	}
+	
+	int device_file::get_line_status()
+	{
+		dev::CharDevice *cdev = (dev::CharDevice *)dev::k_devm.get_device(_dev_num);
+		if (cdev == nullptr)
+		{
+			return -1;
+		}
+		
+		if (cdev->type() != dev::dev_char)
+		{
+			return -1;
+		}
+		
+		return cdev->get_line_status();
+	}
 }

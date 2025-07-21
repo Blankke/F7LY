@@ -66,6 +66,7 @@ namespace proc
 			bool read_is_open() { return _read_is_open; }
 			bool write_is_open() { return _write_is_open; }
 			uint32 get_pipe_size() const { return _pipe_size; }
+			uint32 size() const { return _count; } // 获取管道中当前数据量
 
 			// 设置管道大小，返回实际设置的大小，失败返回-1
 			int set_pipe_size(uint32 new_size);
@@ -83,7 +84,6 @@ namespace proc
 			// 循环缓冲区辅助方法
 			bool is_full() const { return _count >= _pipe_size; }
 			bool is_empty() const { return _count == 0; }
-			uint32 size() const { return _count; }
 			
 			void push(uint8 data) {
 				if (!is_full()) {

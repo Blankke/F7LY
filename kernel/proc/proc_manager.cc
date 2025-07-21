@@ -1522,8 +1522,9 @@ namespace proc
         // (wakeup locks p->lock),
         // so it's okay to release lk.
         // printfCyan("[sleep]proc %s : sleep on chan: %p\n", p->_name, chan);
-        lock->release();
+
         p->_lock.acquire();
+                lock->release();
         // go to sleep
         p->_chan = chan;
         p->_state = ProcState::SLEEPING;

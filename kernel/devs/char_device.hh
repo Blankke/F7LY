@@ -23,6 +23,12 @@ namespace dev
 		virtual int put_char_sync( u8 c ) = 0;
 		virtual int put_char( u8 c ) = 0;
 		virtual int handle_intr() = 0;
+		
+		// 缓冲区管理接口 - 提供默认实现
+		virtual int get_input_buffer_size() { return 0; }
+		virtual int get_output_buffer_size() { return 0; }  
+		virtual int flush_buffer(int queue) { return 0; }
+		virtual int get_line_status() { return 0x01; } // 默认返回 TIOCSER_TEMT
 	};
 
 } // namespace dev

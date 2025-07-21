@@ -62,6 +62,23 @@ namespace fs
 		/// @return 返回新的文件指针位置（成功时），或返回负值（如 -EINVAL）表示不支持该操作。
 		virtual off_t lseek( off_t offset, int whence ) override { printfRed( "streamdevice not support lseek currently!" );return -EINVAL; };
 		int tcgetattr( termios * ts );
+		
+		/// @brief 获取设备输入缓冲区中的字节数
+		/// @return 输入缓冲区中的字节数，出错返回-1  
+		int get_input_buffer_bytes();
+		
+		/// @brief 获取设备输出缓冲区中的字节数
+		/// @return 输出缓冲区中的字节数，出错返回-1
+		int get_output_buffer_bytes();
+		
+		/// @brief 刷新设备缓冲区
+		/// @param queue 指定要刷新的缓冲区类型 (TCIFLUSH/TCOFLUSH/TCIOFLUSH)
+		/// @return 成功返回0，失败返回负的错误码
+		int flush_buffer(int queue);
+		
+		/// @brief 获取线路状态寄存器
+		/// @return LSR状态值，失败返回-1
+		int get_line_status();
 
 		size_t read_sub_dir(ubuf &dst) override
 		{
