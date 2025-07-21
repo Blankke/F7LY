@@ -310,11 +310,11 @@ namespace fs
 
         // 首先尝试从树形结构中查找
         vfile_tree_node *node = find_node_by_path(absolute_path);
-        if (node && node->provider)
+        if (node)
         {
             result.is_virtual = true;
             result.file_type = node->file_type;
-            result.provider = node->provider->clone();
+            result.provider = node->provider ? node->provider->clone() : nullptr;
             return result; // 找到有效的provider，直接返回
             // 注意：这里我们需要克隆provider，因为原provider在树中
         }
@@ -325,8 +325,8 @@ namespace fs
     int VirtualFileSystem::openat(eastl::string absolute_path, fs::file *&file, uint flags)
     {
         int err;
-        vfile_msg vf_msg = get_vfile_msg(absolute_path);
-        if (vf_msg.is_virtual)
+        vfile_tree_node *node = find_node_by_path(absolute_path);
+        if (node)
         {
             printfCyan("[open] using virtual file system for path: %s\n", absolute_path.c_str());
             err = vfile_openat(absolute_path, file, flags);
@@ -341,10 +341,7 @@ namespace fs
     int VirtualFileSystem::vfile_openat(eastl::string absolute_path, fs::file *&file, uint flags)
     {
         vfile_msg vf_msg = get_vfile_msg(absolute_path);
-        if (!vf_msg.is_virtual || !vf_msg.provider)
-        {
-            return -1;
-        }
+
 
         fs::FileAttrs attrs;
         attrs.filetype = (fs::FileTypes)vf_msg.file_type;
