@@ -562,7 +562,7 @@ char *ltp_testcases[] = {
     // "check_pe",
     // "check_setkey",
     // "check_simple_capset",
-    // "chmod01",
+    // "chmod01", // 完全PASS
     // "chmod03",
     // "chmod05",
     // "chmod06",
@@ -1976,7 +1976,7 @@ char *ltp_testcases[] = {
     // "pipe13", // proc/4/stat没写
     // "pipe14", // 完全PASS
     // "pipe15",
-    // "pipe2_01",
+    // "pipe2_01", //完全PASS
     // "pipe2_02",
     // "pipe2_02_child",
     // "pipe2_04",
@@ -2191,9 +2191,9 @@ char *ltp_testcases[] = {
     // "runpwtests05.sh",
     // "runpwtests06.sh",
     // "rwtest",
-    // "sbrk01",
-    // "sbrk02",
-    // "sbrk03",
+    // "sbrk01", // 完全PASS
+    // "sbrk02", // 完全PASS
+    // "sbrk03", // Arch需要是S390
     // "sched_datafile",
     // "sched_driver",
     // "sched_get_priority_max01",
@@ -3130,9 +3130,9 @@ char *ltp_testcases[] = {
     // "umount03",
     // "umount2_01",
     // "umount2_02",
-    // "uname01",
+    // "uname01", // 完全PASS
     // "uname02",
-    // "uname04",
+    // "uname04", // 完全PASS
     // "unlink05",
     // "unlink07",
     // "unlink08",
