@@ -271,5 +271,28 @@ namespace fs
         panic("virtual_file::read_sub_dir: virtual files are not directories");
         return 0;
     }
+    
+    // 实现 /proc/sys/fs/pipe-user-pages-soft 的内容生成
+    eastl::string ProcSysFsPipeUserPagesSoftProvider::generate_content()
+    {
+        auto int_to_string = [](uint num) -> eastl::string
+        {
+            if (num == 0)
+                return "0";
+
+            char buffer[16];
+            int pos = 15;
+            buffer[pos] = '\0';
+
+            while (num > 0)
+            {
+                buffer[--pos] = '0' + (num % 10);
+                num /= 10;
+            }
+
+            return eastl::string(&buffer[pos]);
+        };
+        return int_to_string(max_pipe_size);
+    }
 
 } // namespace fs

@@ -835,7 +835,7 @@ char *ltp_testcases[] = {
     // "fanout01",
     // "fchdir01", //完全PASS
     // "fchdir02", // 完全PASS
-    // "fchdir03", 
+    // "fchdir03",
     // "fchmod01",
     // "fchmod02",
     // "fchmod03",
@@ -1975,7 +1975,7 @@ char *ltp_testcases[] = {
     // "pipe12", // 完全PASS
     // "pipe13", // proc/4/stat没写
     // "pipe14", // 完全PASS
-    // "pipe15",
+    // "pipe15", //NOFILE limit max too low: 128 < 65536
     // "pipe2_01", //完全PASS
     // "pipe2_02",
     // "pipe2_02_child",
@@ -3235,7 +3235,7 @@ char *ltp_testcases[] = {
     // "wqueue08",
     // "wqueue09",
     // "write_freezing.sh",
-    // "write01",
+    // "write01", // 完全PASS
     // "write02",
     // "write03",
     // "write04",

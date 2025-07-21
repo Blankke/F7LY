@@ -298,6 +298,10 @@ namespace fs
         add_virtual_file("/etc/passwd", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<EtcPasswdProvider>());
                          
+        // /proc/sys/fs/pipe-user-pages-soft
+        add_virtual_file("/proc/sys/fs/pipe-user-pages-soft", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcSysFsPipeUserPagesSoftProvider>());
+
         // /dev/loop
         add_virtual_file("/dev/loop-control", fs::FileTypes::FT_DEVICE,
                          eastl::make_unique<DevLoopProvider>());
