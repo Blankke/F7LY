@@ -293,6 +293,10 @@ namespace fs
         add_virtual_file("/proc/self/cmdline", fs::FileTypes::FT_NORMAL, nullptr);
         add_virtual_file("/proc/stat", fs::FileTypes::FT_NORMAL, nullptr);
         add_virtual_file("/proc/uptime", fs::FileTypes::FT_NORMAL, nullptr);
+        
+        // 添加 /proc/self/stat 文件及其提供者
+        add_virtual_file("/proc/self/stat", fs::FileTypes::FT_NORMAL,
+                        eastl::make_unique<ProcSelfStatProvider>());
 
         // /etc/passwd
         add_virtual_file("/etc/passwd", fs::FileTypes::FT_NORMAL,

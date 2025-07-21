@@ -174,6 +174,7 @@ namespace proc
 
         // 新增：详细时间统计
         uint64 _stime;          // 系统态时间 (内核态运行时间)
+        uint64 _utime;         // 用户态时间 (用户态运行时间)
         uint64 _cutime;         // 子进程用户态时间累计
         uint64 _cstime;         // 子进程系统态时间累计
         uint64 _start_time;     // 进程启动时间 (绝对时间戳)

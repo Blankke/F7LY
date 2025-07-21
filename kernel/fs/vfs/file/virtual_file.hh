@@ -200,5 +200,16 @@ namespace fs
             return eastl::make_unique<ProcSysFsPipeUserPagesSoftProvider>();
         }
     };
+    
+    // /proc/self/stat 内容提供者
+    class ProcSelfStatProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_dynamic() const override { return true; } // 进程状态需要实时更新
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcSelfStatProvider>();
+        }
+    };
 
 }
