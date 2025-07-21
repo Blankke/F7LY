@@ -798,8 +798,8 @@ char *ltp_testcases[] = {
     // "exit01",
     // "exit02",
     // "f00f",
-    // "faccessat01",
-    // "faccessat02",
+    // "faccessat01", //完全PASS
+    // "faccessat02", // 完全PASS
     // "faccessat201",
     // "faccessat202",
     // "fallocate01",    //卡死了
@@ -1207,9 +1207,9 @@ char *ltp_testcases[] = {
     // "getcontext01",
     // "getcpu01",
     // "getcwd01",//完全PASS
-    // "getcwd02",
+    // "getcwd02", // 完全PASS
     // "getcwd03",
-    // "getcwd04",
+    // "getcwd04", // Test needs at least 2 CPUs online 这个是因为 sched_getaffinity返回0，说不定它不用两个CPU
     // "getdents01",
     // "getdents02",
     // "getdomainname01",
@@ -1556,7 +1556,7 @@ char *ltp_testcases[] = {
     // "locktests",
     // "logrotate_tests.sh",
     // "lremovexattr01",
-    // "lseek01",
+    // "lseek01", //完全PASS
     // "lseek02",
     // "lseek07",
     // "lseek11",

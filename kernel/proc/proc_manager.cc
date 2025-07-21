@@ -1623,19 +1623,10 @@ namespace proc
             return -EMFILE; // 分配文件描述符失败
         }
         // 下面这个就是套的第二层，这一层的意义似乎只在于分配文件描述符
-        int err;
-        if (fs::k_vfs.is_filepath_virtual_smart(path))
-        {
-            printfCyan("[open] using virtual file system for path: %s\n", path.c_str());
-            err = fs::k_vfs.openat(path.c_str(), p->_ofile->_ofile_ptr[fd], flags);
-        }
-        else
-        {
-            err = vfs_openat(path.c_str(), p->_ofile->_ofile_ptr[fd], flags);
-        }
+        int err = fs::k_vfs.openat(path, p->_ofile->_ofile_ptr[fd], flags);
         if (err < 0)
         {
-            printfRed("[open] vfs_openat failed for path: %s\n", path.c_str());
+            printfRed("[open] failed for path: %s\n", path.c_str());
             return err; // 文件不存在或打开失败
         }
         return fd; // 返回分配的文件描述符
@@ -1704,6 +1695,10 @@ namespace proc
 
         eastl::string cwd;
         cwd = p->_cwd_name;
+        if (!cwd.empty() && cwd.back() == '/')
+        {
+            cwd.pop_back();
+        }
         uint i = 0;
         for (; i < cwd.size(); ++i)
             out_buf[i] = cwd[i];
@@ -2045,7 +2040,7 @@ namespace proc
         printfCyan("execve file : %s\n", ab_path.c_str());
 
         // 解析路径并查找文件
-        if (is_file_exist(ab_path.c_str()) != 1)
+        if (vfs_is_file_exist(ab_path.c_str()) != 1)
         {
             printfRed("execve: cannot find file");
             return -1;
@@ -2112,7 +2107,7 @@ namespace proc
                     if (strcmp(interpreter_path.c_str(), "/lib/ld-linux-riscv64-lp64d.so.1") == 0)
                     {
                         printfBlue("execve: using riscv64 dynamic linker\n");
-                        if (is_file_exist("/glibc/lib/ld-linux-riscv64-lp64d.so.1") != 1)
+                        if (vfs_is_file_exist("/glibc/lib/ld-linux-riscv64-lp64d.so.1") != 1)
                         {
                             printfRed("execve: failed to find riscv64 dynamic linker\n");
                             return -1;
@@ -2122,7 +2117,7 @@ namespace proc
                     else if (strcmp(interpreter_path.c_str(), "/lib/ld-linux-loongarch64.so.1") == 0)
                     {
                         printfBlue("execve: using loongarch64 dynamic linker\n");
-                        if (is_file_exist("/glibc/lib/ld-linux-loongarch-lp64d.so.1") != 1)
+                        if (vfs_is_file_exist("/glibc/lib/ld-linux-loongarch-lp64d.so.1") != 1)
                         {
                             printfRed("execve: failed to find loongarch64 dynamic linker\n");
                             return -1;
@@ -2132,7 +2127,7 @@ namespace proc
                     else if (strcmp(interpreter_path.c_str(), "/lib64/ld-musl-loongarch-lp64d.so.1") == 0)
                     {
                         printfBlue("execve: using loongarch dynamic linker\n");
-                        if (is_file_exist("/musl/lib/libc.so") != 1)
+                        if (vfs_is_file_exist("/musl/lib/libc.so") != 1)
                         {
                             printfRed("execve: failed to find loongarch musl linker\n");
                             return -1;
@@ -2142,7 +2137,7 @@ namespace proc
                     else if (strcmp(interpreter_path.c_str(), "/lib/ld-musl-riscv64-sf.so.1") == 0)
                     {
                         printfBlue("execve: using riscv64 sf dynamic linker\n");
-                        if (is_file_exist("/musl/lib/libc.so") != 1)
+                        if (vfs_is_file_exist("/musl/lib/libc.so") != 1)
                         {
                             printfRed("execve: failed to find riscv64 musl linker\n");
                             return -1;
@@ -2153,7 +2148,7 @@ namespace proc
                     {
                         // TODO: 这个可不是sf了, 那怎么办呢
                         printfBlue("execve: using riscv64 sf dynamic linker\n");
-                        if (is_file_exist("/musl/lib/libc.so") != 1)
+                        if (vfs_is_file_exist("/musl/lib/libc.so") != 1)
                         {
                             printfRed("execve: failed to find riscv64 musl linker\n");
                             return -1;

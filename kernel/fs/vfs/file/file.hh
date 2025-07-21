@@ -131,6 +131,7 @@ namespace fs
 		virtual bool read_ready() = 0;
 		virtual bool write_ready() = 0;
 		virtual off_t lseek( off_t offset, int whence ) = 0;
+		virtual eastl::string read_symlink_target();
 		using ubuf = mem::UserspaceStream;
 		virtual size_t read_sub_dir(ubuf &dst) = 0;
 		long get_file_offset() { return _file_ptr; }

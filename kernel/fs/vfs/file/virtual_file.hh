@@ -19,7 +19,11 @@ namespace fs
         
         // 生成虚拟文件内容
         virtual eastl::string generate_content() = 0;
-        
+        virtual eastl::string read_symlink_target();
+
+        // 克隆方法，用于创建当前provider的副本
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const = 0;
+
         // 是否支持写入
         virtual bool is_writable() const { return false; }
         
@@ -72,6 +76,7 @@ namespace fs
         virtual bool read_ready() override;
         virtual bool write_ready() override;
         virtual off_t lseek(off_t offset, int whence) override;
+        virtual eastl::string read_symlink_target() override;
 
         using ubuf = mem::UserspaceStream;
         virtual size_t read_sub_dir(ubuf &dst) override;
@@ -90,6 +95,9 @@ namespace fs
     {
     public:
         virtual eastl::string generate_content() override;
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcSelfExeProvider>();
+        }
     };
 
     // /proc/meminfo 内容提供者
@@ -98,6 +106,9 @@ namespace fs
     public:
         virtual eastl::string generate_content() override;
         virtual bool is_dynamic() const override { return true; } // 内存信息需要实时更新
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcMeminfoProvider>();
+        }
     };
 
     // /proc/cpuinfo 内容提供者
@@ -105,6 +116,9 @@ namespace fs
     {
     public:
         virtual eastl::string generate_content() override;
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcCpuinfoProvider>();
+        }
     };
 
     // /proc/version 内容提供者
@@ -112,6 +126,9 @@ namespace fs
     {
     public:
         virtual eastl::string generate_content() override;
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcVersionProvider>();
+        }
     };
 
     // /proc/mounts 内容提供者
@@ -120,6 +137,9 @@ namespace fs
     public:
         virtual eastl::string generate_content() override;
         virtual bool is_dynamic() const override { return true; } // 挂载信息可能变化
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcMountsProvider>();
+        }
     };
 
     // /proc/self/fd/X 内容提供者
@@ -130,6 +150,10 @@ namespace fs
     public:
         ProcSelfFdProvider(int fd_num) : _fd_num(fd_num) {}
         virtual eastl::string generate_content() override;
+        virtual eastl::string read_symlink_target() override;
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcSelfFdProvider>(_fd_num);
+        }
     };
 
 }
