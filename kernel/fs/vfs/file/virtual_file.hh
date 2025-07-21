@@ -156,4 +156,14 @@ namespace fs
         }
     };
 
+    // /etc/passwd 内容提供者
+    class EtcPasswdProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<EtcPasswdProvider>();
+        }
+    };
+
 }

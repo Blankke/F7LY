@@ -835,7 +835,7 @@ char *ltp_testcases[] = {
     // "fanout01",
     // "fchdir01", //完全PASS
     // "fchdir02", // 完全PASS
-    // "fchdir03", /etc/passwd
+    // "fchdir03", 
     // "fchmod01",
     // "fchmod02",
     // "fchmod03",

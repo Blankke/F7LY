@@ -76,6 +76,17 @@ namespace fs
         return file ? file->_path_name : "";
     }
 
+    eastl::string EtcPasswdProvider::generate_content()
+    {
+        eastl::string result;
+        result += "root:x:0:0:root:/root:/bin/sh\n";
+        result += "daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n";
+        result += "bin:x:2:2:bin:/bin:/usr/sbin/nologin\n";
+        result += "sys:x:3:3:sys:/dev:/usr/sbin/nologin\n";
+        result += "sync:x:4:65534:sync:/bin:/bin/sync\n";
+        return result;
+    }
+
     // ======================== virtual_file 实现 ========================
 
     void virtual_file::ensure_content_cached()

@@ -297,6 +297,10 @@ namespace fs
         add_virtual_file("/proc/stat", fs::FileTypes::FT_NORMAL, nullptr);
         add_virtual_file("/proc/uptime", fs::FileTypes::FT_NORMAL, nullptr);
 
+        // /etc/passwd
+        add_virtual_file("/etc/passwd", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<EtcPasswdProvider>());
+
         // 打印树结构（调试用）
         printf("Virtual file system tree:\n");
         print_tree();
