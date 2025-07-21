@@ -149,7 +149,7 @@ namespace fs
         
         void list_virtual_files(const eastl::string& dir_path, 
                                eastl::vector<eastl::string>& file_list) const;
-        void print_tree(vfile_tree_node* node = nullptr, int depth = 0) const;
+        void print_tree(vfile_tree_node *node, int depth, const eastl::string &prefix) const;
         bool is_file_exist(const eastl::string &path) const
         {
             vfile_tree_node *node = find_node_by_path(path);
