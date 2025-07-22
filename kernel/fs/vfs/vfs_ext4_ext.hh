@@ -57,6 +57,7 @@ void vfs_ext_unlock_puti(struct inode *self);
 extern struct inode_operations ext4_inode_op;
 struct inode_operations *get_ext4_inode_op(void);
 int vfs_ext_mknod(const char *path, uint32 mode, uint32 dev);
+int vfs_ext_symlink(const char *target, const char *path);
 
 
 

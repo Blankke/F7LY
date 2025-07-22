@@ -712,6 +712,11 @@ int vfs_ext_mknod(const char *path, uint32 mode, uint32 dev) {
     return -r;
 }
 
+int vfs_ext_symlink(const char *target, const char *path) {
+    int r = ext4_fsymlink(target, path);
+    return -r;
+}
+
 
 int vfs_ext_get_filesize(const char *path, uint64_t *size) {
     struct ext4_inode inode;

@@ -8,7 +8,7 @@
 #include "trap.hh"
 #include "printer.hh"
 #include "devs/device_manager.hh"
-
+#include "fs/lwext4/ext4_errno.hh"
 #ifdef RISCV
 #include "devs/riscv/disk_driver.hh"
 #elif defined(LOONGARCH)
@@ -28,6 +28,8 @@
 #include "fs/vfs/file/pipe_file.hh"
 #include "syscall_defs.hh"
 #include "fs/vfs/ops.hh"
+#include "fs/vfs/vfs_ext4_ext.hh"
+#include "fs/lwext4/ext4.hh"
 
 #include "fs/vfs/vfs_utils.hh"
 #include "sys/syscall_defs.hh"
@@ -1674,13 +1676,91 @@ namespace proc
 
         get_absolute_path(path.c_str(), p->_cwd_name.c_str(), temp_path);
 
-        p->_cwd_name = temp_path;
+        // 解析符号链接
+        eastl::string resolved_path = temp_path;
+        int symlink_depth = 0;
+        const int MAX_SYMLINK_DEPTH = 40; // 防止无限循环
+        
+        while (symlink_depth < MAX_SYMLINK_DEPTH)
+        {
+            // 检查当前路径是否是符号链接
+            if (!fs::k_vfs.is_file_exist(resolved_path))
+            {
+                printfRed("[chdir] Path does not exist: %s", resolved_path.c_str());
+                return -ENOENT;
+            }
+            
+            int file_type = fs::k_vfs.path2filetype(resolved_path);
+            if (file_type != fs::FileTypes::FT_SYMLINK)
+            {
+                // 不是符号链接，检查是否是目录
+                if (file_type != fs::FileTypes::FT_DIRECT)
+                {
+                    printfRed("[chdir] Path is not a directory: %s", resolved_path.c_str());
+                    return -ENOTDIR;
+                }
+                break; // 找到最终目录
+            }
+            
+            // 是符号链接，读取其目标
+            // 使用 ext4_readlink 直接读取符号链接内容
+            char link_target_buf[256];
+            size_t readbytes = 0;
+            int readlink_result = ext4_readlink(resolved_path.c_str(), link_target_buf, sizeof(link_target_buf) - 1, &readbytes);
+            if (readlink_result != EOK)
+            {
+                printfRed("[chdir] Failed to read symlink: %s, error: %d", resolved_path.c_str(), readlink_result);
+                return -EIO;
+            }
+            
+            link_target_buf[readbytes] = '\0'; // 确保字符串结尾
+            eastl::string link_target = link_target_buf;
+            
+            if (link_target.empty())
+            {
+                printfRed("[chdir] Empty symlink target: %s", resolved_path.c_str());
+                return -EIO;
+            }
+            
+            // 解析符号链接目标路径
+            if (link_target[0] == '/')
+            {
+                // 绝对路径
+                resolved_path = link_target;
+            }
+            else
+            {
+                // 相对路径，相对于符号链接所在目录
+                size_t last_slash = resolved_path.find_last_of('/');
+                if (last_slash != eastl::string::npos)
+                {
+                    eastl::string symlink_dir = resolved_path.substr(0, last_slash + 1);
+                    resolved_path = get_absolute_path(link_target.c_str(), symlink_dir.c_str());
+                }
+                else
+                {
+                    // 不应该发生，因为 resolved_path 应该是绝对路径
+                    resolved_path = get_absolute_path(link_target.c_str(), p->_cwd_name.c_str());
+                }
+            }
+            
+            symlink_depth++;
+        }
+        
+        if (symlink_depth >= MAX_SYMLINK_DEPTH)
+        {
+            printfRed("[chdir] Too many symbolic links: %s", path.c_str());
+            return -ELOOP;
+        }
+
+        p->_cwd_name = resolved_path;
 
         if (p->_cwd_name.back() != '/')
         {
             p->_cwd_name += "/";
         }
 
+        printfCyan("[chdir] Changed directory to: %s", p->_cwd_name.c_str());
         // #endif
         return 0;
     }

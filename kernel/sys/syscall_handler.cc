@@ -40,6 +40,7 @@
 #include "fs/vfs/vfs_utils.hh"
 #include "fs/fs_defs.hh"
 #include "fs/lwext4/ext4_errno.hh"
+#include "fs/lwext4/ext4.hh"
 #include "fs/vfs/virtual_fs.hh"
 #include "shm/shm_manager.hh"
 namespace syscall
@@ -187,6 +188,7 @@ namespace syscall
         // rocket syscalls
         BIND_SYSCALL(fgetxattr);          // from rocket
         BIND_SYSCALL(mknodat);            // from rocket
+        BIND_SYSCALL(symlink);            // symlink syscall
         BIND_SYSCALL(symlinkat);          // from rocket
         BIND_SYSCALL(fstatfs);            // from rocket
         BIND_SYSCALL(truncate);           // from rocket
@@ -2018,47 +2020,45 @@ namespace syscall
             }
         }
 
-        fs::file *target_file = nullptr;
-        // 检查文件是否存在
-        int open_result = fs::k_vfs.openat(abs_path, target_file, O_RDONLY | O_NOFOLLOW);
-
-        if (open_result < 0 || !target_file)
+        // 检查文件是否存在和是否为符号链接
+        if (!fs::k_vfs.is_file_exist(abs_path))
         {
-            printfRed("[sys_readlinkat] Failed to open file: %s", abs_path.c_str());
+            printfRed("[sys_readlinkat] File does not exist: %s", abs_path.c_str());
             return SYS_ENOENT;
         }
 
-        // 检查是否为符号链接
-        if (target_file->_attrs.filetype != fs::FileTypes::FT_SYMLINK)
+        int file_type = fs::k_vfs.path2filetype(abs_path);
+        if (file_type != fs::FileTypes::FT_SYMLINK)
         {
-            target_file->free_file();
             printfRed("[sys_readlinkat] File is not a symlink: %s", abs_path.c_str());
             return SYS_EINVAL;
         }
 
         // 读取符号链接的目标路径
-        eastl::string link_target;
-        // TODO: 实现从符号链接文件读取目标路径的功能
-        // 这可能需要调用特定的VFS函数或直接读取inode数据
-        link_target = target_file->read_symlink_target();
+        char link_target_buf[256];
+        size_t readbytes = 0;
+        int readlink_result = ext4_readlink(abs_path.c_str(), link_target_buf, sizeof(link_target_buf) - 1, &readbytes);
+        if (readlink_result != EOK)
+        {
+            printfRed("[sys_readlinkat] Failed to read symlink: %s, error: %d", abs_path.c_str(), readlink_result);
+            return SYS_EIO;
+        }
 
-        target_file->free_file();
-
-        if (link_target.length() > buf_size)
+        if (readbytes > buf_size)
         {
             printfRed("[sys_readlinkat] Link target too long for buffer");
             return SYS_ENAMETOOLONG;
         }
 
         // 将结果拷贝到用户空间
-        if (mem::k_vmm.copy_out(*pt, buf, link_target.c_str(), link_target.length()) < 0)
+        if (mem::k_vmm.copy_out(*pt, buf, link_target_buf, readbytes) < 0)
         {
             printfRed("[sys_readlinkat] Failed to copy result to user space");
             return SYS_EFAULT;
         }
 
-        printfCyan("[sys_readlinkat] Successfully read symlink: %s -> %s\n", abs_path.c_str(), link_target.c_str());
-        return link_target.length();
+        printfCyan("[sys_readlinkat] Successfully read symlink: %s -> %.*s\n", abs_path.c_str(), (int)readbytes, link_target_buf);
+        return readbytes;
     }
     uint64 SyscallHandler::sys_getrandom()
     {
@@ -3751,13 +3751,178 @@ namespace syscall
     {
         panic("未实现该系统调用");
     }
+    uint64 SyscallHandler::sys_symlink()
+    {
+        uint64 target_addr;
+        uint64 linkpath_addr;
+
+        // 获取参数
+        if (_arg_addr(0, target_addr) < 0)
+            return SYS_EFAULT;
+        if (_arg_addr(1, linkpath_addr) < 0)
+            return SYS_EFAULT;
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        
+        eastl::string target;
+        eastl::string linkpath;
+        
+        // 从用户空间复制字符串
+        if (mem::k_vmm.copy_str_in(*pt, target, target_addr, 256) < 0)
+        {
+            printfRed("[sys_symlink] Failed to copy target string from user space\n");
+            return SYS_EFAULT;
+        }
+        
+        if (mem::k_vmm.copy_str_in(*pt, linkpath, linkpath_addr, 256) < 0)
+        {
+            printfRed("[sys_symlink] Failed to copy linkpath string from user space\n");
+            return SYS_EFAULT;
+        }
+
+        // symlink 总是使用当前工作目录作为基础路径
+        eastl::string abs_linkpath = get_absolute_path(linkpath.c_str(), p->_cwd_name.c_str());
+
+        printfCyan("[sys_symlink] Creating symlink: %s -> %s\n", abs_linkpath.c_str(), target.c_str());
+
+        // 检查linkpath是否已经存在
+        if (fs::k_vfs.is_file_exist(abs_linkpath))
+        {
+            printfRed("[sys_symlink] File already exists: %s", abs_linkpath.c_str());
+            return SYS_EEXIST;
+        }
+
+        // 检查是否为虚拟文件系统路径
+        if (fs::k_vfs.is_filepath_virtual(abs_linkpath))
+        {
+            printfRed("[sys_symlink] Cannot create symlink in virtual filesystem: %s", abs_linkpath.c_str());
+            return SYS_EPERM;
+        }
+
+        // 创建符号链接
+        int result = vfs_ext_symlink(target.c_str(), abs_linkpath.c_str());
+        if (result < 0)
+        {
+            printfRed("[sys_symlink] Failed to create symlink: %s -> %s, error: %d", 
+                      abs_linkpath.c_str(), target.c_str(), result);
+            
+            // 将ext4错误码转换为系统错误码
+            switch (-result)
+            {
+                case ENOENT:
+                    return SYS_ENOENT;
+                case EEXIST:
+                    return SYS_EEXIST;
+                case EACCES:
+                    return SYS_EACCES;
+                case ENOMEM:
+                    return SYS_ENOMEM;
+                case ENOSPC:
+                    return SYS_ENOSPC;
+                case EROFS:
+                    return SYS_EROFS;
+                case ENOTDIR:
+                    return SYS_ENOTDIR;
+                default:
+                    return SYS_EIO;
+            }
+        }
+
+        printfCyan("[sys_symlink] Successfully created symlink: %s -> %s\n", abs_linkpath.c_str(), target.c_str());
+        return 0;
+    }
     uint64 SyscallHandler::sys_symlinkat()
     {
-        // 注意是否涉及虚拟文件比如 /proc/self/fd/ 等
-        // 对虚拟文件的处理参考readlinkat
-        // 通过 fs::k_vfs.is_filepath_virtual_smart 判断
-        // 非虚拟文件则使用lwext4
-        panic("未实现该系统调用");
+        uint64 target_addr;
+        int newdirfd;
+        uint64 linkpath_addr;
+
+        // 获取参数
+        if (_arg_addr(0, target_addr) < 0)
+            return SYS_EFAULT;
+        if (_arg_int(1, newdirfd) < 0)
+            return SYS_EFAULT;
+        if (_arg_addr(2, linkpath_addr) < 0)
+            return SYS_EFAULT;
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        
+        eastl::string target;
+        eastl::string linkpath;
+        
+        // 从用户空间复制字符串
+        if (mem::k_vmm.copy_str_in(*pt, target, target_addr, 256) < 0)
+        {
+            printfRed("[sys_symlinkat] Failed to copy target string from user space\n");
+            return SYS_EFAULT;
+        }
+        
+        if (mem::k_vmm.copy_str_in(*pt, linkpath, linkpath_addr, 256) < 0)
+        {
+            printfRed("[sys_symlinkat] Failed to copy linkpath string from user space\n");
+            return SYS_EFAULT;
+        }
+
+        eastl::string abs_linkpath;
+        
+        // 处理linkpath：如果是绝对路径，忽略newdirfd；如果是相对路径，需要处理newdirfd
+        if (linkpath[0] == '/')
+        {
+            // 绝对路径
+            abs_linkpath = linkpath;
+        }
+        else
+        {
+            // 相对路径，需要处理newdirfd
+            if (newdirfd == AT_FDCWD)
+            {
+                // 使用当前工作目录
+                abs_linkpath = get_absolute_path(linkpath.c_str(), p->_cwd_name.c_str());
+            }
+            else
+            {
+                // 使用newdirfd指向的目录
+                fs::file *dir_file = p->get_open_file(newdirfd);
+                if (!dir_file)
+                {
+                    printfRed("[sys_symlinkat] Invalid newdirfd: %d\n", newdirfd);
+                    return SYS_EBADF;
+                }
+                abs_linkpath = get_absolute_path(linkpath.c_str(), dir_file->_path_name.c_str());
+            }
+        }
+
+        printfCyan("[sys_symlinkat] Creating symlink: %s -> %s\n", abs_linkpath.c_str(), target.c_str());
+
+        // 检查linkpath是否已经存在
+        if (fs::k_vfs.is_file_exist(abs_linkpath))
+        {
+            printfRed("[sys_symlinkat] File already exists: %s\n", abs_linkpath.c_str());
+            return SYS_EEXIST;
+        }
+
+        // 检查是否为虚拟文件系统路径
+        if (fs::k_vfs.is_filepath_virtual(abs_linkpath))
+        {
+            printfRed("[sys_symlinkat] Cannot create symlink in virtual filesystem: %s\n", abs_linkpath.c_str());
+            return SYS_EPERM;
+        }
+
+        // 创建符号链接
+        int result = vfs_ext_symlink(target.c_str(), abs_linkpath.c_str());
+        if (result < 0)
+        {
+            printfRed("[sys_symlinkat] Failed to create symlink: %s -> %s, error: %d\n", 
+                      abs_linkpath.c_str(), target.c_str(), result);
+            
+            // 将ext4错误码转换为系统错误码
+            return result;
+        }
+
+        printfCyan("[sys_symlinkat] Successfully created symlink: %s -> %s\n", abs_linkpath.c_str(), target.c_str());
+        return 0;
     }
     uint64 SyscallHandler::sys_fstatfs()
     {

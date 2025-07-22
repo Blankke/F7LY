@@ -20,6 +20,7 @@ namespace syscall
         SYS_mknodat = 33,            // from rocket
         SYS_mkdirat = 34,
         SYS_unlinkat = 35,
+        SYS_symlink = 88,            // symlink syscall
         SYS_symlinkat = 36,          // from rocket
         SYS_linkat = 37,
         SYS_umount2 = 39,

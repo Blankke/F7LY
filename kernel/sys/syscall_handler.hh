@@ -159,6 +159,7 @@ namespace syscall
         //rocket
         uint64 sys_fgetxattr();
         uint64 sys_mknodat();
+        uint64 sys_symlink();
         uint64 sys_symlinkat();
         uint64 sys_fstatfs();
         uint64 sys_truncate();
