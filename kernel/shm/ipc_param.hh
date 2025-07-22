@@ -56,6 +56,9 @@ struct shm_info
 #define IPC_EXCL	02000		/* Fail if key exists.  */
 #define IPC_NOWAIT	04000		/* Return error on wait.  */
 
+/* Special key values */
+#define IPC_PRIVATE	((__key_t) 0)	/* Private key */
+
 /* Control commands for `msgctl', `semctl', and `shmctl'.  */
 #define IPC_RMID	0		/* Remove identifier.  */
 #define IPC_SET		1		/* Set `ipc_perm' options.  */

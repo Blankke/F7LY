@@ -1,6 +1,7 @@
 #include "ipc_param.hh"
 #include <EASTL/unordered_map.h>
 #include <EASTL/vector.h>
+#include "proc.hh"
 namespace shm
 {
     struct shm_segment
@@ -81,6 +82,16 @@ namespace shm
         uint64 allocate_memory(size_t size);  // 从空闲块中分配内存
         void deallocate_memory(uint64 addr, size_t size);  // 回收内存到空闲块
         void merge_adjacent_blocks();  // 合并相邻的空闲块
+        
+        // 私有辅助方法
+        int create_new_segment(key_t key, size_t size, int shmflg);  // 创建新的共享内存段
+        eastl::unordered_map<int, shm_segment>::iterator find_segment_by_key(key_t key);  // 根据key查找段
+        bool check_segment_permission(const shm_segment& seg, uid_t uid, gid_t gid, mode_t requested_mode);  // 检查权限
+        bool check_segment_read_permission(const shm_segment& seg, uid_t uid, gid_t gid);  // 检查读权限
+        bool check_segment_attach_permission(const shm_segment& seg, uid_t uid, gid_t gid, bool need_write);  // 检查附加权限
+        uint64 find_available_address(proc::Pcb* proc, size_t size);  // 查找可用地址
+        bool is_valid_attach_address(uint64 addr, size_t size, bool rounded);  // 验证地址合法性
+        bool has_address_conflict(proc::Pcb* proc, uint64 addr, size_t size);  // 检查地址冲突
         
     public:
         void init(uint64 base, uint64 size) ;

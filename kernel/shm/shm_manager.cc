@@ -6,8 +6,10 @@
 #include <EASTL/sort.h>
 #include "virtual_memory_manager.hh"
 #include "memlayout.hh" // 为了获取PGSIZE等定义
+#include "fs/lwext4/ext4_errno.hh"  // 为了获取错误码定义
 namespace shm
 {
+    ShmManager k_smm; // 全局共享内存管理器实例
     void ShmManager::init(uint64 base, uint64 size)
     {
         shm_base = base;
@@ -19,7 +21,7 @@ namespace shm
         free_blocks.push_back({base, size});
         segments.clear(); // 清空共享内存段容器
 
-        printfGreen("[ShmManager] Initialized with base=0x%lx, size=0x%lx\n", base, size);
+        printfGreen("[ShmManager] Initialized with base=0x%x, size=0x%x\n", base, size);
     }
 
     uint64 ShmManager::allocate_memory(size_t size)
@@ -96,50 +98,295 @@ namespace shm
         free_blocks.resize(write_it - free_blocks.begin());
     }
 
+    eastl::unordered_map<int, shm_segment>::iterator ShmManager::find_segment_by_key(key_t key)
+    {
+        for (auto it = segments.begin(); it != segments.end(); ++it) {
+            if (it->second.key == key) {
+                return it;
+            }
+        }
+        return segments.end();
+    }
+
+    bool ShmManager::check_segment_read_permission(const shm_segment& seg, uid_t uid, gid_t gid)
+    {
+        // 简化的读权限检查：root用户总是有权限
+        if (uid == 0) {
+            return true;
+        }
+        
+        // 所有者权限检查
+        if (uid == seg.owner_uid) {
+            return (seg.mode & 0400) != 0;  // 检查所有者读权限位
+        }
+        
+        // 组权限检查
+        if (gid == seg.owner_gid) {
+            return (seg.mode & 0040) != 0;  // 检查组读权限位
+        }
+        
+        // 其他用户权限检查
+        return (seg.mode & 0004) != 0;  // 检查其他用户读权限位
+    }
+
+    bool ShmManager::check_segment_attach_permission(const shm_segment& seg, uid_t uid, gid_t gid, bool need_write)
+    {
+        // 简化的附加权限检查：root用户总是有权限
+        if (uid == 0) {
+            return true;
+        }
+        
+        // 所有者权限检查
+        if (uid == seg.owner_uid) {
+            if (need_write) {
+                return (seg.mode & 0600) == 0600;  // 需要读写权限
+            } else {
+                return (seg.mode & 0400) != 0;     // 只需要读权限
+            }
+        }
+        
+        // 组权限检查
+        if (gid == seg.owner_gid) {
+            if (need_write) {
+                return (seg.mode & 0060) == 0060;  // 需要读写权限
+            } else {
+                return (seg.mode & 0040) != 0;     // 只需要读权限
+            }
+        }
+        
+        // 其他用户权限检查
+        if (need_write) {
+            return (seg.mode & 0006) == 0006;  // 需要读写权限
+        } else {
+            return (seg.mode & 0004) != 0;     // 只需要读权限
+        }
+    }
+
+    uint64 ShmManager::find_available_address(proc::Pcb* proc, size_t size)
+    {
+        // 简化实现：从进程当前大小之后开始查找
+        uint64 start_addr = PGROUNDUP(proc->_sz);
+        
+        // 确保地址对齐到SHMLBA
+        start_addr = PGROUNDUP(start_addr);
+        if (start_addr % SHMLBA != 0) {
+            start_addr = ((start_addr / SHMLBA) + 1) * SHMLBA;
+        }
+        
+        // 检查地址范围合法性（简化：假设用户空间上限为0x40000000）
+        const uint64 USER_SPACE_LIMIT = 0x40000000ULL;
+        if (start_addr + size > USER_SPACE_LIMIT) {
+            printfRed("[ShmManager] Address 0x%x + size 0x%x exceeds user space limit\n", 
+                     start_addr, size);
+            return 0;
+        }
+        
+        // TODO: 应该检查与现有VMA的冲突，这里简化处理
+        return start_addr;
+    }
+
+    bool ShmManager::is_valid_attach_address(uint64 addr, size_t size, bool rounded)
+    {
+        // 检查地址是否为空指针
+        if (addr == 0) {
+            return false;
+        }
+        
+        // 检查地址是否页对齐（如果没有进行舍入）
+        if (!rounded && (addr % PGSIZE != 0)) {
+            printfRed("[ShmManager] Address 0x%x is not page-aligned\n", addr);
+            return false;
+        }
+        
+        // 检查地址是否SHMLBA对齐（舍入后必须对齐）
+        if (rounded && (addr % SHMLBA != 0)) {
+            printfRed("[ShmManager] Rounded address 0x%x is not SHMLBA-aligned\n", addr);
+            return false;
+        }
+        
+        // 检查地址范围是否在用户空间内
+        const uint64 USER_SPACE_START = 0x1000ULL;     // 用户空间起始地址
+        const uint64 USER_SPACE_LIMIT = 0x40000000ULL; // 用户空间限制
+        
+        if (addr < USER_SPACE_START) {
+            printfRed("[ShmManager] Address 0x%x is below user space start\n", addr);
+            return false;
+        }
+        
+        if (addr + size > USER_SPACE_LIMIT) {
+            printfRed("[ShmManager] Address range [0x%x, 0x%x] exceeds user space limit\n", 
+                     addr, addr + size);
+            return false;
+        }
+        
+        // 检查地址范围是否会溢出
+        if (addr + size < addr) {
+            printfRed("[ShmManager] Address range wraps around\n");
+            return false;
+        }
+        
+        return true;
+    }
+
+    bool ShmManager::has_address_conflict(proc::Pcb* proc, uint64 addr, size_t size)
+    {
+        // 简化实现：检查是否与进程当前大小冲突
+        uint64 end_addr = addr + size;
+        
+        // 检查是否与现有进程空间重叠
+        if (addr < proc->_sz && end_addr > 0x1000) {  // 0x1000是用户空间起始地址
+            // 更详细的冲突检查应该遍历进程的VMA列表
+            // 这里简化为检查基本的地址范围
+            if (end_addr > addr && addr < proc->_sz) {
+                printfRed("[ShmManager] Address range [0x%x, 0x%x] conflicts with process space [0x1000, 0x%x]\n",
+                         addr, end_addr, proc->_sz);
+                return true;
+            }
+        }
+        
+        // TODO: 应该检查与其他共享内存段的冲突
+        // TODO: 应该检查与进程VMA列表的冲突
+        
+        return false;  // 简化：假设没有冲突
+    }
+
+    bool ShmManager::check_segment_permission(const shm_segment& seg, uid_t uid, gid_t gid, mode_t requested_mode)
+    {
+        // 简化的权限检查：root用户总是有权限
+        if (uid == 0) {
+            return true;
+        }
+        
+        // 所有者权限检查
+        if (uid == seg.owner_uid) {
+            return (seg.mode & 0700) != 0;  // 检查所有者权限位
+        }
+        
+        // 组权限检查
+        if (gid == seg.owner_gid) {
+            return (seg.mode & 0070) != 0;  // 检查组权限位
+        }
+        
+        // 其他用户权限检查
+        return (seg.mode & 0007) != 0;  // 检查其他用户权限位
+    }
+
     int ShmManager::create_seg(key_t key, size_t size, int shmflg)
     {
+        // 处理 IPC_PRIVATE 情况 - 总是创建新段
+        if (key == IPC_PRIVATE) {
+            return create_new_segment(key, size, shmflg);
+        }
+        
+        // 查找是否已存在相同key的段
+        auto existing_seg = find_segment_by_key(key);
+        
+        if (existing_seg != segments.end()) {
+            // 段已存在的情况
+            shm_segment& seg = existing_seg->second;
+            
+            // 检查 IPC_CREAT | IPC_EXCL 组合
+            if ((shmflg & IPC_CREAT) && (shmflg & IPC_EXCL)) {
+                printfRed("[ShmManager] Segment with key=0x%x already exists (IPC_EXCL specified)\n", key);
+                return -EEXIST;  // 段已存在且指定了 IPC_EXCL
+            }
+            
+            // 验证大小是否匹配
+            if (size > seg.size) {
+                printfRed("[ShmManager] Requested size 0x%x exceeds existing segment size 0x%x\n", 
+                         size, seg.size);
+                return -EINVAL;  // 请求的大小超过现有段大小
+            }
+            
+            // TODO: 检查访问权限
+            proc::Pcb* current_proc = proc::k_pm.get_cur_pcb();
+            if (!check_segment_permission(seg, current_proc->_uid, current_proc->_gid, shmflg & 0777)) {
+                printfRed("[ShmManager] Permission denied for existing segment key=0x%x\n", key);
+                return -EACCES;  // 权限不足
+            }
+            
+            printfCyan("[ShmManager] Found existing segment shmid=%d for key=0x%x\n", seg.shmid, key);
+            return seg.shmid;  // 返回现有段的ID
+        } 
+        else {
+            // 段不存在的情况
+            if (!(shmflg & IPC_CREAT)) {
+                printfRed("[ShmManager] No segment exists for key=0x%x and IPC_CREAT not specified\n", key);
+                return -ENOENT;  // 段不存在且未指定 IPC_CREAT
+            }
+            
+            // 创建新段
+            return create_new_segment(key, size, shmflg);
+        }
+    }
+    
+    int ShmManager::create_new_segment(key_t key, size_t size, int shmflg)
+    {
+        // 验证大小限制
+        const size_t SHMMIN = PGSIZE;        // 最小段大小为一页
+        const size_t SHMMAX = 32 * 1024 * 1024;  // 最大段大小为32MB (可配置)
+        
+        if (size < SHMMIN) {
+            printfRed("[ShmManager] Size 0x%x is less than SHMMIN (0x%x)\n", size, SHMMIN);
+            return -EINVAL;
+        }
+        
+        if (size > SHMMAX) {
+            printfRed("[ShmManager] Size 0x%x exceeds SHMMAX (0x%x)\n", size, SHMMAX);
+            return -EINVAL;
+        }
+        
+        // 检查系统限制 - 最大段数量
+        const int SHMMNI = 4096;  // 最大共享内存标识符数量
+        if (segments.size() >= SHMMNI) {
+            printfRed("[ShmManager] Maximum number of segments reached (%d)\n", SHMMNI);
+            return -ENOSPC;
+        }
+        
         // 使用新的内存分配方法
         uint64 allocated_addr = allocate_memory(size);
-        if (allocated_addr == 0)
-        {
-            printfRed("[ShmManager] Failed to allocate memory for size=0x%lx\n", size);
-            return ; // 内存不足
+        if (allocated_addr == 0) {
+            printfRed("[ShmManager] Failed to allocate memory for size=0x%x\n", size);
+            return -ENOMEM; // 内存不足
         }
 
         // 创建新的共享内存段
-        shm_segment new_seg;
+        shm_segment new_seg = {};
         new_seg.shmid = next_shmid++;
         new_seg.key = key;
         new_seg.size = PGROUNDUP(size);
         new_seg.shmflg = shmflg;
-        new_seg.phy_addrs = allocated_addr;                   // 设置分配得到的物理地址
-        new_seg.addr = nullptr;                               // 初始时未映射到进程地址空间
+        new_seg.phy_addrs = allocated_addr;   // 设置分配得到的物理地址
+        new_seg.addr = nullptr;               // 初始时未映射到进程地址空间
         
-        // 初始化时间信息
-        new_seg.atime = 0;                                    // 初始化访问时间
-        new_seg.dtime = 0;                                    // 初始化分离时间
-        new_seg.ctime = rdtime();                             // 设置创建时间为当前时间
+        // 初始化时间信息 (按照标准)
+        new_seg.atime = 0;                    // shm_atime 设为 0
+        new_seg.dtime = 0;                    // shm_dtime 设为 0  
+        new_seg.ctime = rdtime();             // shm_ctime 设为当前时间
         
         // 初始化进程信息
         proc::Pcb* current_proc = proc::k_pm.get_cur_pcb();
-        new_seg.creator_pid = current_proc->_pid;             // 设置创建者进程ID
-        new_seg.last_pid = current_proc->_pid;                // 最后操作进程ID
+        new_seg.creator_pid = current_proc->_pid;     // shm_cpid
+        new_seg.last_pid = 0;                         // shm_lpid 设为 0
         
-        // 初始化权限信息 (从当前进程获取)
-        new_seg.owner_uid = current_proc->_uid;               // 所有者用户ID
-        new_seg.owner_gid = current_proc->_gid;               // 所有者组ID
-        new_seg.creator_uid = current_proc->_uid;             // 创建者用户ID
-        new_seg.creator_gid = current_proc->_gid;             // 创建者组ID
-        new_seg.mode = shmflg & 0777;                         // 从shmflg提取权限位
+        // 初始化权限信息 (按照标准)
+        new_seg.owner_uid = current_proc->_euid;      // shm_perm.uid = effective user ID
+        new_seg.owner_gid = current_proc->_egid;      // shm_perm.gid = effective group ID  
+        new_seg.creator_uid = current_proc->_euid;    // shm_perm.cuid = effective user ID
+        new_seg.creator_gid = current_proc->_egid;    // shm_perm.cgid = effective group ID
+        new_seg.mode = shmflg & 0777;                 // 权限位为 shmflg 的低9位
         
-        // 初始化状态信息
-        new_seg.nattch = 0;                                   // 初始附加数为0
-        new_seg.seq = 0;                                      // 初始序列号
-
+        // 初始化状态信息 (按照标准)
+        new_seg.nattch = 0;                           // shm_nattch 设为 0
+        new_seg.seq = 0;                              // 初始序列号
+        
+        // 清零段内容 (按照标准要求)
+        memset((void *)allocated_addr, 0, new_seg.size); // 清零物理内存
+        
         segments.insert({new_seg.shmid, new_seg}); // 插入到容器中
 
-        printfGreen("[ShmManager] Created segment shmid=%d, size=0x%lx at addr=0x%lx\n",
-                    new_seg.shmid, new_seg.size, allocated_addr);
+        printfGreen("[ShmManager] Created new segment shmid=%d, key=0x%x, size=0x%x at addr=0x%x\n",
+                    new_seg.shmid, key, new_seg.size, allocated_addr);
 
         return new_seg.shmid; // 返回新创建的共享内存段ID
     }
@@ -170,22 +417,48 @@ namespace shm
         if (it == segments.end())
         {
             printfRed("[ShmManager] Segment with shmid=%d not found\n", shmid);
-            return (void *)-1; // 段不存在
+            return (void *)-EINVAL; // 无效的共享内存标识符
         }
 
         shm_segment &seg = it->second;
+        proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+
+        // 权限检查
+        bool need_write = !(shmflg & SHM_RDONLY);
+        if (!check_segment_attach_permission(seg, current_proc->_uid, current_proc->_gid, need_write)) {
+            printfRed("[ShmManager] Permission denied for shmid=%d (uid=%d, need_write=%d)\n", 
+                     shmid, current_proc->_uid, need_write);
+            return (void *)-EACCES;
+        }
+
+        // 检查进程附加段数量限制
+        const int SHMSEG_MAX = 128;  // 每个进程最大附加段数量
+        int current_attachments = 0;
+        for (const auto& pair : segments) {
+            if (pair.second.addr != nullptr) {  // 检查是否已附加到当前进程
+                // TODO：这里简化检查，实际应该维护每个进程的附加列表
+                current_attachments++;
+            }
+        }
+        if (current_attachments >= SHMSEG_MAX) {
+            printfRed("[ShmManager] Process attachment limit exceeded (%d/%d)\n", 
+                     current_attachments, SHMSEG_MAX);
+            return (void *)-EMFILE;
+        }
 
         // 确定映射地址
         uint64 attach_addr = 0;
 
         if (shmaddr == nullptr)
         {
-            // 情况1：shmaddr为NULL，内核自动选择一个地址
-            // 这里我们可以在进程的堆区域后面分配
-            proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
-            attach_addr = PGROUNDUP(current_proc->_sz); // 在进程空间末尾分配
-
-            printfCyan("[ShmManager] Kernel auto-selected address: 0x%lx\n", attach_addr);
+            // 情况1：shmaddr为NULL，系统选择第一个可用地址
+            // 在进程的堆区域后面分配，确保不与现有内存重叠
+            attach_addr = find_available_address(current_proc, seg.size);
+            if (attach_addr == 0) {
+                printfRed("[ShmManager] No available address space for segment size=0x%x\n", seg.size);
+                return (void *)-ENOMEM;
+            }
+            printfCyan("[ShmManager] System selected address: 0x%x\n", attach_addr);
         }
         else
         {
@@ -194,23 +467,28 @@ namespace shm
 
             if (shmflg & SHM_RND)
             {
-                // 情况3：设置了SHM_RND标记，向下调整到SHMLBA的整数倍
+                // 情况2：设置了SHM_RND标记，向下调整到SHMLBA的整数倍
                 attach_addr = requested_addr - (requested_addr % SHMLBA);
-                printfCyan("[ShmManager] Address rounded down from 0x%lx to 0x%lx (SHMLBA=%d)\n",
+                printfCyan("[ShmManager] Address rounded down from 0x%x to 0x%x (SHMLBA=%d)\n",
                            requested_addr, attach_addr, SHMLBA);
             }
             else
             {
-                // 情况2：使用指定的地址
+                // 情况3：使用指定的地址，必须精确匹配
                 attach_addr = requested_addr;
-                printfCyan("[ShmManager] Using specified address: 0x%lx\n", attach_addr);
+                printfCyan("[ShmManager] Using exact specified address: 0x%x\n", attach_addr);
             }
 
-            // 检查地址是否页对齐（如果没有SHM_RND标志）
-            if (!(shmflg & SHM_RND) && (attach_addr % PGSIZE != 0))
-            {
-                printfRed("[ShmManager] Address 0x%lx is not page-aligned\n", attach_addr);
-                return (void *)-1;
+            // 验证地址的合法性
+            if (!is_valid_attach_address(attach_addr, seg.size, shmflg & SHM_RND)) {
+                printfRed("[ShmManager] Illegal address 0x%x for attaching shared memory\n", attach_addr);
+                return (void *)-EINVAL;
+            }
+
+            // 检查地址是否与现有映射冲突
+            if (has_address_conflict(current_proc, attach_addr, seg.size)) {
+                printfRed("[ShmManager] Address 0x%x conflicts with existing mappings\n", attach_addr);
+                return (void *)-EINVAL;
             }
         }
 
@@ -222,7 +500,7 @@ namespace shm
         flags |= PTE_MAT | PTE_PLV | PTE_D | PTE_P; // 用户可访问
 #endif
 
-        // 根据shmflg设置读写权限
+        // 根据shmflg和权限设置读写权限
         if (shmflg & SHM_RDONLY)
         {
             flags |= PTE_R; // 只读权限
@@ -236,27 +514,26 @@ namespace shm
 
         // 建立物理内存和虚拟内存的映射
         bool map_result = mem::k_vmm.map_pages(
-            proc::k_pm.get_cur_pcb()->_pt, // 当前进程页表
-            attach_addr,                   // 虚拟地址
-            seg.size,                      // 映射大小
-            seg.phy_addrs,                 // 物理地址
-            flags                          // 权限标志
+            current_proc->_pt,     // 当前进程页表
+            attach_addr,           // 虚拟地址
+            seg.size,              // 映射大小
+            seg.phy_addrs,         // 物理地址
+            flags                  // 权限标志
         );
 
         if (!map_result)
         {
-            printfRed("[ShmManager] Failed to map pages for shmid=%d\n", shmid);
-            return (void *)-1;
+            printfRed("[ShmManager] Failed to map pages for shmid=%d at addr=0x%x\n", shmid, attach_addr);
+            return (void *)-ENOMEM;  // 数据空间不足
         }
 
-        // 更新段信息
-        seg.addr = (void *)attach_addr; // 记录映射的虚拟地址
-        seg.atime = rdtime();           // 更新访问时间
-        seg.last_pid = proc::k_pm.get_cur_pcb()->_pid; // 更新最后操作进程ID
-        seg.nattch++;                   // 增加附加计数
+        // 按标准更新段信息
+        seg.addr = (void *)attach_addr;        // 记录映射的虚拟地址
+        seg.atime = rdtime();                  // 设置shm_atime为当前时间
+        seg.last_pid = current_proc->_pid;     // 更新最后操作进程ID (shm_lpid)
+        seg.nattch++;                          // 增加附加计数 (shm_nattch)
 
         // 更新进程大小（如果映射地址超出当前进程大小）
-        proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
         uint64 end_addr = attach_addr + seg.size;
         if (end_addr > current_proc->_sz)
         {
@@ -266,7 +543,7 @@ namespace shm
         printfGreen("[ShmManager] Successfully attached segment shmid=%d at address 0x%x, size=0x%x\n",
                     shmid, attach_addr, seg.size);
 
-        return (void *)attach_addr; // 返回映射的虚拟地址
+        return (void *)attach_addr; // 返回段的起始地址
     }
 
     int ShmManager::detach_seg(void *addr)
@@ -282,48 +559,92 @@ namespace shm
         if (it == segments.end())
         {
             printfRed("[ShmManager] Segment with address %p not found\n", addr);
-            return -1; // 未找到共享内存段
+            return -EINVAL; // 地址无效
         }
+        
         shm_segment &seg = it->second;
+        proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+        
         // 解除映射
         mem::k_vmm.vmunmap(
-            proc::k_pm.get_cur_pcb()->_pt, // 当前进程页表
+            current_proc->_pt,             // 当前进程页表
             (uint64)addr,                  // 虚拟地址
             PGROUNDUP(seg.size) / PGSIZE,  // 页数
             0                              // 不释放物理页
         );
-        // 更新分离时间
-        seg.dtime = rdtime();
-        seg.last_pid = proc::k_pm.get_cur_pcb()->_pid; // 更新最后操作进程ID
-        seg.nattch--;                   // 减少附加计数
-        // 清除映射地址
-        seg.addr = nullptr;
-        //注意，此处detach_seg只是解除映射，并不删除共享内存段
-        // 如果需要删除共享内存段，请调用delete_seg方法
-        printfCyan("[ShmManager] Detached segment at addr=%p\n", addr);
+        
+        // 按标准更新段信息
+        seg.dtime = rdtime();                    // 设置shm_dtime为当前时间
+        seg.last_pid = current_proc->_pid;       // 更新最后操作进程ID (shm_lpid)
+        seg.nattch--;                            // 减少附加计数 (shm_nattch)
+        seg.addr = nullptr;                      // 清除映射地址
+
+        printfCyan("[ShmManager] Detached segment shmid=%d at addr=%p (nattch now %d)\n", 
+                  seg.shmid, addr, seg.nattch);
+
+        // 检查段是否被标记为删除且无进程附加
+        if ((seg.mode & SHM_DEST) && seg.nattch == 0) {
+            int shmid = seg.shmid;  // 保存shmid用于日志
+            int result = delete_seg(shmid);
+            if (result == 0) {
+                printfGreen("[ShmManager] Auto-destroyed marked segment shmid=%d after last detach\n", shmid);
+            } else {
+                printfRed("[ShmManager] Failed to auto-destroy marked segment shmid=%d\n", shmid);
+            }
+        }
 
         return 0;
     }
 
     int ShmManager::shmctl(int shmid, int cmd, struct shmid_ds *buf)
     {
-        // 查找共享内存段
-        auto it = segments.find(shmid);
-        if (it == segments.end()) {
-            printfRed("[ShmManager] Segment with shmid=%d not found for shmctl\n", shmid);
-            return -1;
-        }
-
-        shm_segment& seg = it->second;
         proc::Pcb* current_proc = proc::k_pm.get_cur_pcb();
 
         switch (cmd) {
             case IPC_STAT:
+            case SHM_STAT:
+            case SHM_STAT_ANY:
             {
-                // 获取共享内存段信息到用户提供的缓冲区
+                // 查找共享内存段
+                auto it = segments.end();
+                if (cmd == SHM_STAT || cmd == SHM_STAT_ANY) {
+                    // SHM_STAT 系列: shmid 是索引而不是标识符
+                    if (shmid < 0 || (size_t)shmid >= segments.size()) {
+                        printfRed("[ShmManager] Invalid index %d for SHM_STAT\n", shmid);
+                        return -EINVAL;
+                    }
+                    // 找到第shmid个段
+                    int index = 0;
+                    for (auto iter = segments.begin(); iter != segments.end(); ++iter, ++index) {
+                        if (index == shmid) {
+                            it = iter;
+                            break;
+                        }
+                    }
+                } else {
+                    // IPC_STAT: shmid 是段标识符
+                    it = segments.find(shmid);
+                }
+
+                if (it == segments.end()) {
+                    printfRed("[ShmManager] Segment not found for cmd=%d, shmid=%d\n", cmd, shmid);
+                    return -EINVAL;
+                }
+
+                shm_segment& seg = it->second;
+
+                // 权限检查 (SHM_STAT_ANY 不需要权限检查)
+                if (cmd != SHM_STAT_ANY) {
+                    if (!check_segment_read_permission(seg, current_proc->_uid, current_proc->_gid)) {
+                        printfRed("[ShmManager] Read permission denied for shmid=%d\n", 
+                                 cmd == SHM_STAT ? it->second.shmid : shmid);
+                        return -EACCES;
+                    }
+                }
+
                 if (buf == nullptr) {
                     printfRed("[ShmManager] buf is null for IPC_STAT\n");
-                    return -1;
+                    return -EFAULT;
                 }
 
                 // 创建内核空间的 shmid_ds 结构体
@@ -349,41 +670,52 @@ namespace shm
                 // 复制到用户空间
                 if (mem::k_vmm.copy_out(current_proc->_pt, (uint64)buf, &kernel_buf, sizeof(kernel_buf)) < 0) {
                     printfRed("[ShmManager] Failed to copy shmid_ds to user space\n");
-                    return -1;
+                    return -EFAULT;
                 }
 
-                printfCyan("[ShmManager] IPC_STAT: shmid=%d, size=0x%lx, nattch=%d\n", 
-                          shmid, seg.size, seg.nattch);
-                break;
+                printfCyan("[ShmManager] IPC_STAT: shmid=%d, size=0x%x, nattch=%d\n", 
+                          seg.shmid, seg.size, seg.nattch);
+
+                // SHM_STAT 返回实际的段标识符
+                return (cmd == SHM_STAT) ? seg.shmid : 0;
             }
 
             case IPC_SET:
             {
-                // 设置共享内存段信息
+                // 查找共享内存段
+                auto it = segments.find(shmid);
+                if (it == segments.end()) {
+                    printfRed("[ShmManager] Segment with shmid=%d not found for IPC_SET\n", shmid);
+                    return -EINVAL;
+                }
+
+                shm_segment& seg = it->second;
+
                 if (buf == nullptr) {
                     printfRed("[ShmManager] buf is null for IPC_SET\n");
-                    return -1;
+                    return -EFAULT;
                 }
 
                 // 检查权限：只有所有者或创建者可以修改
-                if (current_proc->_uid != seg.owner_uid && 
-                    current_proc->_uid != seg.creator_uid &&
-                    current_proc->_uid != 0) {  // root用户
-                    printfRed("[ShmManager] Permission denied for IPC_SET\n");
-                    return -1;
+                if (current_proc->_euid != seg.owner_uid && 
+                    current_proc->_euid != seg.creator_uid &&
+                    current_proc->_euid != 0) {  // root用户
+                    printfRed("[ShmManager] Permission denied for IPC_SET (uid=%d, owner=%d, creator=%d)\n",
+                             current_proc->_euid, seg.owner_uid, seg.creator_uid);
+                    return -EPERM;
                 }
 
                 // 从用户空间复制数据
                 struct shmid_ds user_buf;
                 if (mem::k_vmm.copy_in(current_proc->_pt, &user_buf, (uint64)buf, sizeof(user_buf)) < 0) {
                     printfRed("[ShmManager] Failed to copy shmid_ds from user space\n");
-                    return -1;
+                    return -EFAULT;
                 }
 
-                // 更新可修改的字段
+                // 按标准更新可修改的字段
                 seg.owner_uid = user_buf.shm_perm.uid;
                 seg.owner_gid = user_buf.shm_perm.gid;
-                seg.mode = user_buf.shm_perm.mode & 0777;  // 只保留权限位
+                seg.mode = (seg.mode & ~0777) | (user_buf.shm_perm.mode & 0777);  // 只更新低9位权限
                 seg.ctime = rdtime();  // 更新修改时间
                 seg.last_pid = current_proc->_pid;
 
@@ -394,36 +726,152 @@ namespace shm
 
             case IPC_RMID:
             {
-                // 标记共享内存段待删除
+                // 查找共享内存段
+                auto it = segments.find(shmid);
+                if (it == segments.end()) {
+                    printfRed("[ShmManager] Segment with shmid=%d not found for IPC_RMID\n", shmid);
+                    return -EINVAL;
+                }
+
+                shm_segment& seg = it->second;
+
                 // 检查权限：只有所有者或创建者可以删除
-                if (current_proc->_uid != seg.owner_uid && 
-                    current_proc->_uid != seg.creator_uid &&
-                    current_proc->_uid != 0) {  // root用户
+                if (current_proc->_euid != seg.owner_uid && 
+                    current_proc->_euid != seg.creator_uid &&
+                    current_proc->_euid != 0) {  // root用户
                     printfRed("[ShmManager] Permission denied for IPC_RMID\n");
-                    return -1;
+                    return -EPERM;
                 }
 
-                // 如果还有进程附加到这个段，暂时不删除，只标记
+                // 标记段为待删除 - 设置 SHM_DEST 标志
+                seg.mode |= SHM_DEST;
+                
+                // 如果还有进程附加到这个段，暂时不删除
                 if (seg.nattch > 0) {
-                    printfYellow("[ShmManager] IPC_RMID: shmid=%d marked for deletion, %d attachments remain\n", 
+                    printfYellow("[ShmManager] IPC_RMID: shmid=%d marked for destruction, %d attachments remain\n", 
                                 shmid, seg.nattch);
-                    // 在实际系统中应该设置一个删除标记，当nattch变为0时自动删除
-                    // 这里简化处理，直接删除
+                    return 0;  // 成功标记，但暂不删除
                 }
 
-                // 立即删除共享内存段
+                // 没有进程附加，立即删除
                 int result = delete_seg(shmid);
                 if (result == 0) {
-                    printfGreen("[ShmManager] IPC_RMID: shmid=%d successfully removed\n", shmid);
+                    printfGreen("[ShmManager] IPC_RMID: shmid=%d immediately destroyed\n", shmid);
                 } else {
-                    printfRed("[ShmManager] IPC_RMID: failed to remove shmid=%d\n", shmid);
+                    printfRed("[ShmManager] IPC_RMID: failed to destroy shmid=%d\n", shmid);
                 }
                 return result;
             }
 
+            case IPC_INFO:
+            {
+                if (buf == nullptr) {
+                    printfRed("[ShmManager] buf is null for IPC_INFO\n");
+                    return -EFAULT;
+                }
+
+                // 创建系统限制信息
+                struct shminfo sys_info = {};
+                sys_info.shmmax = 32 * 1024 * 1024;  // 最大段大小 32MB
+                sys_info.shmmin = PGSIZE;             // 最小段大小
+                sys_info.shmmni = 4096;               // 最大段数量
+                sys_info.shmseg = 128;                // 每进程最大段数(未使用)
+                sys_info.shmall = (shm_size / PGSIZE); // 系统总页数
+
+                // 复制到用户空间
+                if (mem::k_vmm.copy_out(current_proc->_pt, (uint64)buf, &sys_info, sizeof(sys_info)) < 0) {
+                    printfRed("[ShmManager] Failed to copy shminfo to user space\n");
+                    return -EFAULT;
+                }
+
+                printfCyan("[ShmManager] IPC_INFO: returned system limits\n");
+                
+                // 计算最高使用的索引
+                int max_index = -1;
+                for (const auto& pair : segments) {
+                    if (pair.first > max_index) {
+                        max_index = pair.first;
+                    }
+                }
+                return max_index;
+            }
+
+            case SHM_INFO:
+            {
+                if (buf == nullptr) {
+                    printfRed("[ShmManager] buf is null for SHM_INFO\n");
+                    return -EFAULT;
+                }
+
+                // 创建系统资源使用信息
+                struct shm_info usage_info = {};
+                usage_info.used_ids = segments.size();
+                
+                size_t total_pages = 0;
+                for (const auto& pair : segments) {
+                    total_pages += PGROUNDUP(pair.second.size) / PGSIZE;
+                }
+                
+                usage_info.shm_tot = total_pages;
+                usage_info.shm_rss = total_pages;  // 简化：假设都在内存中
+                usage_info.shm_swp = 0;            // 简化：没有交换
+                usage_info.swap_attempts = 0;      // 未使用
+                usage_info.swap_successes = 0;     // 未使用
+
+                // 复制到用户空间
+                if (mem::k_vmm.copy_out(current_proc->_pt, (uint64)buf, &usage_info, sizeof(usage_info)) < 0) {
+                    printfRed("[ShmManager] Failed to copy shm_info to user space\n");
+                    return -EFAULT;
+                }
+
+                printfCyan("[ShmManager] SHM_INFO: used_ids=%d, total_pages=%lu\n", 
+                          usage_info.used_ids, usage_info.shm_tot);
+                
+                // 计算最高使用的索引
+                int max_index = -1;
+                for (const auto& pair : segments) {
+                    if (pair.first > max_index) {
+                        max_index = pair.first;
+                    }
+                }
+                return max_index;
+            }
+
+            case SHM_LOCK:
+            case SHM_UNLOCK:
+            {
+                // 查找共享内存段
+                auto it = segments.find(shmid);
+                if (it == segments.end()) {
+                    printfRed("[ShmManager] Segment with shmid=%d not found for SHM_LOCK/UNLOCK\n", shmid);
+                    return -EINVAL;
+                }
+
+                shm_segment& seg = it->second;
+
+                // 检查权限：所有者、创建者或root
+                if (current_proc->_euid != seg.owner_uid && 
+                    current_proc->_euid != seg.creator_uid &&
+                    current_proc->_euid != 0) {
+                    printfRed("[ShmManager] Permission denied for SHM_LOCK/UNLOCK\n");
+                    return -EPERM;
+                }
+
+                // 简化实现：只设置/清除标志
+                if (cmd == SHM_LOCK) {
+                    seg.mode |= SHM_LOCKED;
+                    printfCyan("[ShmManager] SHM_LOCK: shmid=%d locked\n", shmid);
+                } else {
+                    seg.mode &= ~SHM_LOCKED;
+                    printfCyan("[ShmManager] SHM_UNLOCK: shmid=%d unlocked\n", shmid);
+                }
+                
+                return 0;
+            }
+
             default:
                 printfRed("[ShmManager] Unknown shmctl command: %d\n", cmd);
-                return -1;
+                return -EINVAL;
         }
 
         return 0;
@@ -470,17 +918,17 @@ namespace shm
     void ShmManager::print_memory_status() const
     {
         printfYellow("[ShmManager] Memory Status:\n");
-        printfYellow("  Total memory: 0x%lx bytes\n", shm_size);
+        printfYellow("  Total memory: 0x%x bytes\n", shm_size);
         printfYellow("  Active segments: %zu\n", segments.size());
         printfYellow("  Free blocks: %zu\n", free_blocks.size());
 
         size_t total_free = 0;
         for (const auto &block : free_blocks)
         {
-            printfYellow("    Free block: addr=0x%lx, size=0x%lx\n", block.addr, block.size);
+            printfYellow("    Free block: addr=0x%x, size=0x%x\n", block.addr, block.size);
             total_free += block.size;
         }
-        printfYellow("  Total free memory: 0x%lx bytes\n", total_free);
+        printfYellow("  Total free memory: 0x%x bytes\n", total_free);
         printfYellow("  Memory utilization: %.1f%%\n",
                      (double)(shm_size - total_free) * 100.0 / shm_size);
     }

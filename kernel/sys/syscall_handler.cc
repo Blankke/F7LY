@@ -3520,11 +3520,42 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_shmctl()
     {
-        panic("未实现该系统调用");
+        int shmid;
+        int cmd;
+        uint64 buf_addr;
+        struct shmid_ds buf;
+
+        if (_arg_int(0, shmid) < 0 ||
+            _arg_int(1, cmd) < 0 ||
+            _arg_addr(2, buf_addr) < 0)
+        {
+            printfRed("[SyscallHandler::sys_shmctl] 参数错误\n");
+            return SYS_EINVAL; // 参数错误
+        }
+        // 从用户空间拷贝 shmid_ds 结构体
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        if (mem::k_vmm.copy_in(*pt, &buf, buf_addr, sizeof(buf)) < 0)
+        {
+            printfRed("[SyscallHandler::sys_shmctl] 拷贝 shmid_ds 结构体失败\n");
+            return SYS_EFAULT; // 拷贝失败
+        }
+        return shm::k_smm.shmctl(shmid, cmd, &buf);
     }
     uint64 SyscallHandler::sys_shmat()
     {
-        panic("未实现该系统调用");
+        int shmid;
+        uint64 shmaddr;
+        int shmflg;
+
+        if (_arg_int(0, shmid) < 0 ||
+            _arg_addr(1, shmaddr) < 0 ||
+            _arg_int(2, shmflg) < 0)
+        {
+            printfRed("[SyscallHandler::sys_shmat] 参数错误\n");
+            return SYS_EINVAL; // 参数错误
+        }
+        return (uint64)shm::k_smm.attach_seg(shmid, (void*)shmaddr, shmflg);
     }
     uint64 SyscallHandler::sys_socket()
     {
