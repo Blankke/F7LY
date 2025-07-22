@@ -2269,7 +2269,7 @@ namespace syscall
             }
         }
 
-        printfYellow("[SyscallHandler::sys_clock_gettime] clock_id: %d, tp: %ld.%09ld\n", clock_id, tp.tv_sec, tp.tv_nsec);
+        // printfYellow("[SyscallHandler::sys_clock_gettime] clock_id: %d, tp: %ld.%09ld\n", clock_id, tp.tv_sec, tp.tv_nsec);
         
         // 使用 copy_out 将结果安全地拷贝到用户空间
         proc::Pcb *p = proc::k_pm.get_cur_pcb();

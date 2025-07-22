@@ -3131,7 +3131,7 @@ char *ltp_testcases[] = {
     // "umount2_01",
     // "umount2_02",
     // "uname01", // 完全PASS
-    // "uname02",
+    // "uname02",// 完全PASS
     // "uname04", // 完全PASS
     // "unlink05",
     // "unlink07",
