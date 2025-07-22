@@ -100,7 +100,7 @@ namespace fs
     bool VirtualFileSystem::add_virtual_file(const eastl::string &path, int file_type,
                                              eastl::unique_ptr<VirtualContentProvider> provider)
     {
-        printf("Adding virtual file: %s\n", path.c_str());
+        // printf("Adding virtual file: %s\n", path.c_str());
         vfile_tree_node *node = create_path_nodes(path);
         if (!node)
         {
@@ -178,61 +178,58 @@ namespace fs
     }
 
     // 打印树结构（调试用）
-    void VirtualFileSystem::print_tree(vfile_tree_node *node, int depth) const
+    void VirtualFileSystem::print_tree(vfile_tree_node *node, int depth, const eastl::string &prefix) const
     {
         if (!node)
         {
             node = root;
-        }
-
-        for (int i = 0; i < depth; i++)
-        {
-            printf("  ");
-        }
-
-        if (node == root)
-        {
             printf("/\n");
-        }
-        else
-        {
-            printf("%s", node->name.c_str());
-
-            // 显示文件类型
-            if (node->file_type == fs::FileTypes::FT_DIRECT)
-            {
-                printf(" [DIR]");
-            }
-            else if (node->file_type == fs::FileTypes::FT_NORMAL)
-            {
-                printf(" [FILE]");
-            }
-            else if (node->file_type == fs::FileTypes::FT_SYMLINK)
-            {
-                printf(" [LINK]");
-            }
-            else if (node->file_type == fs::FileTypes::FT_DEVICE)
-            {
-                printf(" [DEV]");
-            }
-            else if (node->file_type == fs::FileTypes::FT_PIPE)
-            {
-                printf(" [PIPE]");
-            }
-
-            // 显示是否有provider
-            if (node->provider)
-            {
-                printf(" [virtual]");
-            }
-            printf("\n");
         }
 
         for (int i = 0; i < node->children_count; i++)
         {
             if (node->children[i])
             {
-                print_tree(node->children[i], depth + 1);
+                // 判断是否是最后一个子节点
+                bool is_last = (i == node->children_count - 1);
+
+                // 打印当前节点的前缀和名称
+                printf("%s", prefix.c_str());
+                printf(is_last ? "└── " : "├── ");
+                printf("%s", node->children[i]->name.c_str());
+
+                // 显示文件类型
+                if (node->children[i]->file_type == fs::FileTypes::FT_DIRECT)
+                {
+                    printf(" [DIR]");
+                }
+                else if (node->children[i]->file_type == fs::FileTypes::FT_NORMAL)
+                {
+                    printf(" [FILE]");
+                }
+                else if (node->children[i]->file_type == fs::FileTypes::FT_SYMLINK)
+                {
+                    printf(" [LINK]");
+                }
+                else if (node->children[i]->file_type == fs::FileTypes::FT_DEVICE)
+                {
+                    printf(" [DEV]");
+                }
+                else if (node->children[i]->file_type == fs::FileTypes::FT_PIPE)
+                {
+                    printf(" [PIPE]");
+                }
+
+                // 显示是否有provider
+                if (node->children[i]->provider)
+                {
+                    printf(" [provider]");
+                }
+                printf("\n");
+
+                // 递归打印子节点
+                eastl::string new_prefix = prefix + (is_last ? "    " : "│   ");
+                print_tree(node->children[i], depth + 1, new_prefix);
             }
         }
     }
@@ -296,10 +293,30 @@ namespace fs
         add_virtual_file("/proc/self/cmdline", fs::FileTypes::FT_NORMAL, nullptr);
         add_virtual_file("/proc/stat", fs::FileTypes::FT_NORMAL, nullptr);
         add_virtual_file("/proc/uptime", fs::FileTypes::FT_NORMAL, nullptr);
+        
+        // 添加 /proc/self/stat 文件及其提供者
+        add_virtual_file("/proc/self/stat", fs::FileTypes::FT_NORMAL,
+                        eastl::make_unique<ProcSelfStatProvider>());
+
+        // /etc/passwd
+        add_virtual_file("/etc/passwd", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<EtcPasswdProvider>());
+                         
+        // /proc/sys/fs/pipe-user-pages-soft
+        add_virtual_file("/proc/sys/fs/pipe-user-pages-soft", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcSysFsPipeUserPagesSoftProvider>());
+
+        // /dev/loop
+        add_virtual_file("/dev/loop-control", fs::FileTypes::FT_DEVICE,
+                         eastl::make_unique<DevLoopProvider>());
+
+        // /dev/block/8:0 (块设备文件)
+        add_virtual_file("/dev/block/8:0", fs::FileTypes::FT_DEVICE,
+                         eastl::make_unique<DevBlockProvider>(8, 0));
 
         // 打印树结构（调试用）
         printf("Virtual file system tree:\n");
-        print_tree();
+        print_tree(root, 0, "");
     }
 
     vfile_msg VirtualFileSystem::get_vfile_msg(const eastl::string &absolute_path) const

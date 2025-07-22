@@ -562,7 +562,7 @@ char *ltp_testcases[] = {
     // "check_pe",
     // "check_setkey",
     // "check_simple_capset",
-    // "chmod01",
+    // "chmod01", // 完全PASS
     // "chmod03",
     // "chmod05",
     // "chmod06",
@@ -835,7 +835,7 @@ char *ltp_testcases[] = {
     // "fanout01",
     // "fchdir01", //完全PASS
     // "fchdir02", // 完全PASS
-    // "fchdir03", /etc/passwd
+    // "fchdir03",
     // "fchmod01",
     // "fchmod02",
     // "fchmod03",
@@ -1964,7 +1964,7 @@ char *ltp_testcases[] = {
     // "pipe01",// 完全PASS
     // "pipe02",
     // "pipe03", // 完全PASS
-    // "pipe04",
+    // "pipe04", //管道给写爆了，感觉是时间片太长了
     // "pipe05", // 完全PASS
     // "pipe06",    // 完全PASS
     // "pipe07", //proc/self/fd没写
@@ -1972,11 +1972,11 @@ char *ltp_testcases[] = {
     // "pipe09", // 完全PASS
     // "pipe10", // 完全PASS
     // "pipe11",
-    // "pipe12",
+    // "pipe12", // 完全PASS
     // "pipe13", // proc/4/stat没写
     // "pipe14", // 完全PASS
-    // "pipe15",
-    // "pipe2_01",
+    // "pipe15", //NOFILE limit max too low: 128 < 65536
+    // "pipe2_01", //完全PASS
     // "pipe2_02",
     // "pipe2_02_child",
     // "pipe2_04",
@@ -2191,9 +2191,9 @@ char *ltp_testcases[] = {
     // "runpwtests05.sh",
     // "runpwtests06.sh",
     // "rwtest",
-    // "sbrk01",
-    // "sbrk02",
-    // "sbrk03",
+    // "sbrk01", // 完全PASS
+    // "sbrk02", // 完全PASS
+    // "sbrk03", // Arch需要是S390
     // "sched_datafile",
     // "sched_driver",
     // "sched_get_priority_max01",
@@ -3130,9 +3130,9 @@ char *ltp_testcases[] = {
     // "umount03",
     // "umount2_01",
     // "umount2_02",
-    // "uname01",
+    // "uname01", // 完全PASS
     // "uname02",
-    // "uname04",
+    // "uname04", // 完全PASS
     // "unlink05",
     // "unlink07",
     // "unlink08",
@@ -3235,7 +3235,7 @@ char *ltp_testcases[] = {
     // "wqueue08",
     // "wqueue09",
     // "write_freezing.sh",
-    // "write01",
+    // "write01", // 完全PASS
     // "write02",
     // "write03",
     // "write04",

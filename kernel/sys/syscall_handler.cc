@@ -1249,7 +1249,7 @@ namespace syscall
         char machine[65];
         char domainname[65];
     };
-    static const char _SYSINFO_sysname[] = "F7LY-OS";
+    static const char _SYSINFO_sysname[] = "Linux";
     static const char _SYSINFO_nodename[] = "(none-node)";
     static const char _SYSINFO_release[] = "4.15.0";
     static const char _SYSINFO_version[] = "4.15.0";

@@ -156,4 +156,60 @@ namespace fs
         }
     };
 
+    // /etc/passwd 内容提供者
+    class EtcPasswdProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<EtcPasswdProvider>();
+        }
+    };
+
+    // /dev/block/X:Y 内容提供者
+    class DevBlockProvider : public VirtualContentProvider
+    {
+    private:
+        int _major;
+        int _minor;
+    public:
+        DevBlockProvider(int major, int minor) : _major(major), _minor(minor) {}
+        virtual eastl::string generate_content() override;
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<DevBlockProvider>(_major, _minor);
+        }
+    };
+
+    // /dev/loop 内容提供者
+    class DevLoopProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<DevLoopProvider>();
+        }
+    };
+    
+    // /proc/sys/fs/pipe-user-pages-soft 内容提供者
+    class ProcSysFsPipeUserPagesSoftProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_writable() const override { return true; } // 允许写入
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcSysFsPipeUserPagesSoftProvider>();
+        }
+    };
+    
+    // /proc/self/stat 内容提供者
+    class ProcSelfStatProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_dynamic() const override { return true; } // 进程状态需要实时更新
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcSelfStatProvider>();
+        }
+    };
+
 }

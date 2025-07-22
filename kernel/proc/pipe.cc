@@ -39,6 +39,7 @@ namespace proc
 				if (_count >= _pipe_size)
 				{
 					printfRed("Pipe buffer full, cannot write more data\n");
+					_lock.release();
 					return syscall::SYS_EAGAIN; // 管道已满，返回 EAGAIN 错误
 					// 如果管道缓冲区满了，不能继续写入
 					// 唤醒等待读取的进程，让其读走数据
@@ -97,6 +98,7 @@ namespace proc
 				if (_count >= _pipe_size)
 				{
 					printfRed("Pipe buffer full, cannot write more data\n");
+					_lock.release();
 					return syscall::SYS_EAGAIN; // 管道已满，返回 EAGAIN 错误
 					// // 如果缓冲区已满，则不能继续写入
 					// // 唤醒读端（可能已阻塞）

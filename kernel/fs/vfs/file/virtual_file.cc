@@ -76,6 +76,37 @@ namespace fs
         return file ? file->_path_name : "";
     }
 
+    eastl::string EtcPasswdProvider::generate_content()
+    {
+        eastl::string result;
+        result += "root:x:0:0:root:/root:/bin/sh\n";
+        result += "daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n";
+        result += "bin:x:2:2:bin:/bin:/usr/sbin/nologin\n";
+        result += "sys:x:3:3:sys:/dev:/usr/sbin/nologin\n";
+        result += "sync:x:4:65534:sync:/bin:/bin/sync\n";
+        return result;
+    }
+
+    eastl::string DevBlockProvider::generate_content()
+    {
+        // 块设备文件通常不包含文本内容，但可以返回设备信息
+        eastl::string result;
+        result += "Block device ";
+        result += "8";
+        result += ":";
+        result += "0";
+        result += "\n";
+        return result;
+    }
+
+    eastl::string DevLoopProvider::generate_content()
+    {
+        // Loop设备是一种特殊的块设备，可以将文件挂载为块设备
+        eastl::string result;
+        result += "Loop device ready for mounting\n";
+        return result;
+    }
+
     // ======================== virtual_file 实现 ========================
 
     void virtual_file::ensure_content_cached()
@@ -239,6 +270,176 @@ namespace fs
         // 虚拟文件通常不是目录，不支持读取子目录
         panic("virtual_file::read_sub_dir: virtual files are not directories");
         return 0;
+    }
+    
+    // 实现 /proc/sys/fs/pipe-user-pages-soft 的内容生成
+    eastl::string ProcSysFsPipeUserPagesSoftProvider::generate_content()
+    {
+        auto int_to_string = [](uint num) -> eastl::string
+        {
+            if (num == 0)
+                return "0";
+
+            char buffer[16];
+            int pos = 15;
+            buffer[pos] = '\0';
+
+            while (num > 0)
+            {
+                buffer[--pos] = '0' + (num % 10);
+                num /= 10;
+            }
+
+            return eastl::string(&buffer[pos]);
+        };
+        return int_to_string(max_pipe_size);
+    }
+    
+    // 实现 /proc/self/stat 的内容生成
+    // 参考Linux的/proc/[pid]/stat格式
+    eastl::string ProcSelfStatProvider::generate_content()
+    {
+        proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
+        if (!pcb) {
+            return "0 (unknown) R 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n";
+        }
+        
+        // 辅助函数：转换整数为字符串
+        auto int_to_string = [](long num) -> eastl::string {
+            if (num == 0) return "0";
+            
+            char buffer[32];
+            int pos = 31;
+            buffer[pos] = '\0';
+            bool negative = num < 0;
+            
+            if (negative) {
+                num = -num;
+            }
+            
+            while (num > 0) {
+                buffer[--pos] = '0' + (num % 10);
+                num /= 10;
+            }
+            
+            if (negative) {
+                buffer[--pos] = '-';
+            }
+            
+            return eastl::string(&buffer[pos]);
+        };
+        
+        eastl::string result;
+        
+        // pid
+        result += int_to_string(pcb->_pid) + " ";
+        
+        // comm (进程名，带括号)
+        result += "(" + eastl::string(pcb->_name) + ") ";
+        
+        // state (进程状态: R=running, S=sleeping, Z=zombie, etc.)
+        result += "R ";  // 假设进程处于运行状态
+        
+        // ppid (父进程ID)
+        result += int_to_string(pcb->_ppid) + " ";
+
+        // pgrp (进程组ID)
+        result += int_to_string(pcb->_pid) + " ";
+        
+        // session
+        result += int_to_string(pcb->_pid) + " ";
+        
+        // tty_nr (控制终端)
+        result += "0 ";
+        
+        // tpgid (控制终端的前台进程组)
+        result += "0 ";
+        
+        // flags
+        result += "0 ";
+        
+        // minflt (次缺页错误数)
+        result += "0 ";
+        
+        // cminflt (子进程次缺页错误数)
+        result += "0 ";
+        
+        // majflt (主缺页错误数)
+        result += "0 ";
+        
+        // cmajflt (子进程主缺页错误数)
+        result += "0 ";
+        
+        // utime (用户态CPU时间)
+        result += int_to_string(pcb->_utime) + " ";
+        
+        // stime (内核态CPU时间)
+        result += int_to_string(pcb->_stime) + " ";
+        
+        // cutime (子进程用户态CPU时间)
+        result += "0 ";
+        
+        // cstime (子进程内核态CPU时间)
+        result += "0 ";
+        
+        // priority (进程优先级)
+        result += "0 ";
+        
+        // nice (nice值)
+        result += "0 ";
+        
+        // num_threads (线程数)
+        result += "1 ";
+        
+        // itrealvalue (SIGALRM倒计时值)
+        result += "0 ";
+        
+        // starttime (启动时间，自系统启动后的节拍数)
+        result += int_to_string(pcb->_start_time) + " ";
+        
+        // vsize (虚拟内存大小，字节)
+        result += "4194304 ";  // 假设4MB虚拟内存
+        
+        // rss (常驻内存大小，页)
+        result += "1024 ";  // 假设1024页
+        
+        // rsslim (常驻内存限制)
+        result += "4294967295 ";  // 无限制
+        
+        // startcode (代码段起始地址)
+        result += "0 ";
+        
+        // endcode (代码段结束地址)
+        result += "0 ";
+        
+        // startstack (堆栈起始地址)
+        result += "0 ";
+        
+        // kstkesp (ESP寄存器值)
+        result += "0 ";
+        
+        // kstkeip (EIP寄存器值)
+        result += "0 ";
+        
+        // signal (待处理信号位图)
+        result += "0 ";
+        
+        // blocked (阻塞信号位图)
+        result += "0 ";
+        
+        // sigignore (忽略信号位图)
+        result += "0 ";
+        
+        // sigcatch (捕获信号位图)
+        result += "0 ";
+        
+        // wchan (进程休眠内核函数地址)
+        result += "0 ";
+        
+        // 添加换行符结束
+        result += "\n";
+        
+        return result;
     }
 
 } // namespace fs
