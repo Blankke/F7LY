@@ -1429,8 +1429,6 @@ namespace proc
         reparent(p); // 将 p 的所有子进程交给 init 进程收养
         _wait_lock.acquire();
 
-        reparent(p); // 将 p 的所有子进程交给 init 进程收养
-        _wait_lock.acquire();
         if (p->_parent)
             wakeup(p->_parent); // 唤醒父进程（可能在 wait() 中阻塞）)
         if (p->_clear_tid_addr)

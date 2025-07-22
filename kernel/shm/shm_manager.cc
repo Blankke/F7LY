@@ -338,13 +338,13 @@ namespace shm
     int ShmManager::create_new_segment(key_t key, size_t size, int shmflg)
     {
         // 验证大小限制
-        const size_t SHMMIN = PGSIZE;        // 最小段大小为一页
+        // const size_t SHMMIN = PGSIZE;        // 最小段大小为一页
         const size_t SHMMAX = 32 * 1024 * 1024;  // 最大段大小为32MB (可配置)
         
-        if (size < SHMMIN) {
-            printfRed("[ShmManager] Size 0x%x is less than SHMMIN (0x%x)\n", size, SHMMIN);
-            size = SHMMIN; // 如果小于最小值，则调整为最小值
-        }
+        // if (size < SHMMIN) {
+        //     printfRed("[ShmManager] Size 0x%x is less than SHMMIN (0x%x)\n", size, SHMMIN);
+        //     size = SHMMIN; // 如果小于最小值，则调整为最小值
+        // }
         
         if (size > SHMMAX) {
             printfRed("[ShmManager] Size 0x%x exceeds SHMMAX (0x%x)\n", size, SHMMAX);
@@ -369,10 +369,11 @@ namespace shm
         shm_segment new_seg = {};
         new_seg.shmid = next_shmid++;
         new_seg.key = key;
-        new_seg.size = PGROUNDUP(size);
+        new_seg.size = size;                      // 保存用户请求的原始大小
+        new_seg.real_size = PGROUNDUP(size);      // 页对齐的实际分配大小
         new_seg.shmflg = shmflg;
-        new_seg.phy_addrs = allocated_addr;   // 设置分配得到的物理地址
-        new_seg.addr = nullptr;               // 初始时未映射到进程地址空间
+        new_seg.phy_addrs = allocated_addr;       // 设置分配得到的物理地址
+        new_seg.addr = nullptr;                   // 初始时未映射到进程地址空间
         
         // 初始化时间信息 (按照标准)
         new_seg.atime = 0;                    // shm_atime 设为 0
@@ -395,8 +396,8 @@ namespace shm
         new_seg.nattch = 0;                           // shm_nattch 设为 0
         new_seg.seq = 0;                              // 初始序列号
         
-        // 清零段内容 (按照标准要求)
-        memset((void *)allocated_addr, 0, new_seg.size); // 清零物理内存
+        // 清零段内容 (按照标准要求) - 使用实际分配的大小
+        memset((void *)allocated_addr, 0, new_seg.real_size); // 清零物理内存
 
         segments->insert({new_seg.shmid, new_seg});
         
@@ -416,8 +417,8 @@ namespace shm
 
         shm_segment &seg = it->second;
 
-        // 回收内存到空闲块
-        deallocate_memory(seg.phy_addrs, seg.size);
+        // 回收内存到空闲块 - 使用实际分配的大小
+        deallocate_memory(seg.phy_addrs, seg.real_size);
 
         // printfYellow("[ShmManager] Deleted segment shmid=%d, freed addr=0x%x, size=0x%x\n",
         //             shmid, seg.phy_addrs, seg.size);
@@ -468,7 +469,7 @@ namespace shm
         {
             // 情况1：shmaddr为NULL，系统选择第一个可用地址
             // 在进程的堆区域后面分配，确保不与现有内存重叠
-            attach_addr = find_available_address(current_proc, seg.size);
+            attach_addr = find_available_address(current_proc, seg.real_size);
             if (attach_addr == 0) {
                 printfRed("[ShmManager] No available address space for segment size=0x%x\n", seg.size);
                 return (void *)-ENOMEM;
@@ -494,14 +495,14 @@ namespace shm
                 printfCyan("[ShmManager] Using exact specified address: 0x%x\n", attach_addr);
             }
 
-            // 验证地址的合法性
-            if (!is_valid_attach_address(attach_addr, seg.size, shmflg & SHM_RND)) {
+            // 验证地址的合法性 - 使用实际映射大小
+            if (!is_valid_attach_address(attach_addr, seg.real_size, shmflg & SHM_RND)) {
                 printfRed("[ShmManager] Illegal address 0x%x for attaching shared memory\n", attach_addr);
                 return (void *)-EINVAL;
             }
 
-            // 检查地址是否与现有映射冲突
-            if (has_address_conflict(current_proc, attach_addr, seg.size)) {
+            // 检查地址是否与现有映射冲突 - 使用实际映射大小
+            if (has_address_conflict(current_proc, attach_addr, seg.real_size)) {
                 printfRed("[ShmManager] Address 0x%x conflicts with existing mappings\n", attach_addr);
                 return (void *)-EINVAL;
             }
@@ -527,11 +528,11 @@ namespace shm
             printfCyan("[ShmManager] Attaching with READ-WRITE permissions\n");
         }
 
-        // 建立物理内存和虚拟内存的映射
+        // 建立物理内存和虚拟内存的映射 - 使用实际分配的页对齐大小
         bool map_result = mem::k_vmm.map_pages(
             current_proc->_pt,     // 当前进程页表
             attach_addr,           // 虚拟地址
-            seg.size,              // 映射大小
+            seg.real_size,         // 映射大小（页对齐）
             seg.phy_addrs,         // 物理地址
             flags                  // 权限标志
         );
@@ -548,15 +549,15 @@ namespace shm
         seg.last_pid = current_proc->_pid;     // 更新最后操作进程ID (shm_lpid)
         seg.nattch++;                          // 增加附加计数 (shm_nattch)
 
-        // 更新进程大小（如果映射地址超出当前进程大小）
-        uint64 end_addr = attach_addr + seg.size;
+        // 更新进程大小（如果映射地址超出当前进程大小）- 使用实际映射大小
+        uint64 end_addr = attach_addr + seg.real_size;
         if (end_addr > current_proc->_sz)
         {
             current_proc->_sz = end_addr;
         }
 
-        printfGreen("[ShmManager] Successfully attached segment shmid=%d at address 0x%x, size=0x%x\n",
-                    shmid, attach_addr, seg.size);
+        printfGreen("[ShmManager] Successfully attached segment shmid=%d at address 0x%x, user_size=0x%x, real_size=0x%x\n",
+                    shmid, attach_addr, seg.size, seg.real_size);
 
         return (void *)attach_addr; // 返回段的起始地址
     }
@@ -580,12 +581,12 @@ namespace shm
         shm_segment &seg = it->second;
         proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
         
-        // 解除映射
+        // 解除映射 - 使用实际分配的页对齐大小
         mem::k_vmm.vmunmap(
-            current_proc->_pt,             // 当前进程页表
-            (uint64)addr,                  // 虚拟地址
-            PGROUNDUP(seg.size) / PGSIZE,  // 页数
-            0                              // 不释放物理页
+            current_proc->_pt,               // 当前进程页表
+            (uint64)addr,                    // 虚拟地址
+            seg.real_size / PGSIZE,          // 页数（使用实际分配大小）
+            0                                // 不释放物理页
         );
         
         // 按标准更新段信息
@@ -611,7 +612,7 @@ namespace shm
         return 0;
     }
 
-    int ShmManager::shmctl(int shmid, int cmd, struct shmid_ds *buf)
+    int ShmManager::shmctl(int shmid, int cmd, struct shmid_ds *buf,uint64 buf_addr)
     {
         proc::Pcb* current_proc = proc::k_pm.get_cur_pcb();
 
@@ -683,7 +684,9 @@ namespace shm
                 kernel_buf.shm_nattch = seg.nattch;
 
                 // 复制到用户空间
-                if (mem::k_vmm.copy_out(current_proc->_pt, (uint64)buf, &kernel_buf, sizeof(kernel_buf)) < 0) {
+                printfCyan("[ShmManager] copy_out pt:%p,va:0x%x, kernel_buf:%p, size:%u\n",
+                          current_proc->_pt, buf_addr, &kernel_buf, sizeof(kernel_buf));
+                if (mem::k_vmm.copy_out(current_proc->_pt, buf_addr, &kernel_buf, sizeof(kernel_buf)) < 0) {
                     printfRed("[ShmManager] Failed to copy shmid_ds to user space\n");
                     return -EFAULT;
                 }
@@ -794,7 +797,7 @@ namespace shm
                 sys_info.shmall = (shm_size / PGSIZE); // 系统总页数
 
                 // 复制到用户空间
-                if (mem::k_vmm.copy_out(current_proc->_pt, (uint64)buf, &sys_info, sizeof(sys_info)) < 0) {
+                if (mem::k_vmm.copy_out(current_proc->_pt, buf_addr, &sys_info, sizeof(sys_info)) < 0) {
                     printfRed("[ShmManager] Failed to copy shminfo to user space\n");
                     return -EFAULT;
                 }
@@ -824,7 +827,7 @@ namespace shm
                 
                 size_t total_pages = 0;
                 for (const auto& pair : *segments) {
-                    total_pages += PGROUNDUP(pair.second.size) / PGSIZE;
+                    total_pages += pair.second.real_size / PGSIZE;  // 使用实际分配大小
                 }
                 
                 usage_info.shm_tot = total_pages;
@@ -834,7 +837,7 @@ namespace shm
                 usage_info.swap_successes = 0;     // 未使用
 
                 // 复制到用户空间
-                if (mem::k_vmm.copy_out(current_proc->_pt, (uint64)buf, &usage_info, sizeof(usage_info)) < 0) {
+                if (mem::k_vmm.copy_out(current_proc->_pt, buf_addr, &usage_info, sizeof(usage_info)) < 0) {
                     printfRed("[ShmManager] Failed to copy shm_info to user space\n");
                     return -EFAULT;
                 }

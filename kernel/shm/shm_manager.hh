@@ -8,7 +8,8 @@ namespace shm
     {
         int shmid;         // 共享内存段ID
         key_t key;         // 共享内存段键值
-        size_t size;       // 共享内存段大小
+        size_t size;       // 用户请求的原始大小（POSIX标准要求）
+        size_t real_size;  // 实际分配的页对齐大小（用于内存管理）
 		union
 		{
 			u16 shmflg;
@@ -120,7 +121,7 @@ namespace shm
         //   shmctl(shmid, IPC_STAT, &shm_info);  // 获取信息
         //   shmctl(shmid, IPC_SET, &shm_info);   // 设置信息  
         //   shmctl(shmid, IPC_RMID, nullptr);    // 删除段
-        int shmctl(int shmid, int cmd, struct shmid_ds *buf);
+        int shmctl(int shmid, int cmd, struct shmid_ds *buf,uint64 buf_addr = 0);
 
         // 获取共享内存段信息
         shm_segment get_seg_info(int shmid);

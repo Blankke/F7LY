@@ -1967,7 +1967,7 @@ char *ltp_testcases[] = {
     // "pipe04", //管道给写爆了，感觉是时间片太长了
     // "pipe05", // 完全PASS
     // "pipe06",    // 完全PASS
-    "pipe07", //proc/self/fd没写
+    // "pipe07", //proc/self/fd没写
     // "pipe08",
     // "pipe09", // 完全PASS
     // "pipe10", // 完全PASS
@@ -2416,12 +2416,12 @@ char *ltp_testcases[] = {
     // "shm_test",
     // "shmat01",
     // "shmat02",
-    // "shmat03",
-    // "shmat04",
+    // "shmat03",     //pass?
+    // "shmat04",     //pass
     // "shmat1",
-    // "shmctl01",
+    // "shmctl01",     //时钟的没过
     // "shmctl02",
-    // "shmctl03",
+    "shmctl03",
     // "shmctl04",
     // "shmctl05",
     // "shmctl06",
