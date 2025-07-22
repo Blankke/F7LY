@@ -20,7 +20,8 @@ namespace fs
 		FT_DEVICE,
 		FT_DIRECT,
 		FT_NORMAL,
-		FT_SYMLINK
+		FT_SYMLINK,
+		FT_SOCKET
 	};
 
 	enum FileOp : uint16
@@ -96,6 +97,8 @@ namespace fs
 				mode = S_IFIFO;
 			else if( filetype == FT_DEVICE )  // 应该区分字符设备和块设备
 				mode = S_IFCHR;
+			else if( filetype == FT_SOCKET )
+				mode = S_IFSOCK;
 			else
 				mode = 0;
 			return mode |= ( _value & 0x1ff );

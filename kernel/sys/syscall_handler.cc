@@ -27,6 +27,7 @@
 #include <linux/sysinfo.h>
 #include "fs/vfs/file/normal_file.hh"
 #include "fs/vfs/file/pipe_file.hh"
+#include "fs/vfs/file/socket_file.hh"
 #include "proc/pipe.hh"
 #include "proc/signal.hh"
 #include "scheduler.hh"
@@ -3807,7 +3808,55 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_socket()
     {
-        panic("未实现该系统调用");
+        printfRed("这个是乱写的，用了就寄");
+        int domain, type, protocol;
+        
+        if (_arg_int(0, domain) < 0) {
+            printfRed("[SyscallHandler::sys_socket] 参数错误: domain\n");
+            return SYS_EINVAL;
+        }
+        
+        if (_arg_int(1, type) < 0) {
+            printfRed("[SyscallHandler::sys_socket] 参数错误: type\n");
+            return SYS_EINVAL;
+        }
+        
+        if (_arg_int(2, protocol) < 0) {
+            printfRed("[SyscallHandler::sys_socket] 参数错误: protocol\n");
+            return SYS_EINVAL;
+        }
+
+        // 检查参数有效性
+        if (domain != AF_INET && domain != AF_INET6 && domain != AF_UNIX) {
+            printfRed("[SyscallHandler::sys_socket] 不支持的协议族: %d\n", domain);
+            return SYS_EAFNOSUPPORT;
+        }
+
+        if (type != SOCK_STREAM && type != SOCK_DGRAM && type != SOCK_RAW) {
+            printfRed("[SyscallHandler::sys_socket] 不支持的socket类型: %d\n", type);
+            return SYS_EINVAL;
+        }
+
+        // 创建socket文件对象
+        fs::socket_file *socket_f = new fs::socket_file(domain, type, protocol);
+        if (!socket_f) {
+            printfRed("[SyscallHandler::sys_socket] 创建socket失败\n");
+            return SYS_ENOMEM;
+        }
+
+        // 分配文件描述符
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        int fd = proc::k_pm.alloc_fd(p, socket_f);
+        if (fd < 0) {
+            delete socket_f;
+            printfRed("[SyscallHandler::sys_socket] 分配文件描述符失败\n");
+            return SYS_EMFILE;
+        }
+
+        printfCyan("[SyscallHandler::sys_socket] socket创建成功, fd=%d, domain=%d, type=%d, protocol=%d\n", 
+                    fd, domain, type, protocol);
+        return fd;
+
     }
     uint64 SyscallHandler::sys_socketpair()
     {
@@ -3815,27 +3864,275 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_bind()
     {
-        panic("未实现该系统调用");
+        printfRed("这个是乱写的，用了就寄");
+        int sockfd;
+        uint64 addr;
+        int addrlen;
+        
+        if (_arg_int(0, sockfd) < 0) {
+            printfRed("[SyscallHandler::sys_bind] 参数错误: sockfd\n");
+            return SYS_EINVAL;
+        }
+        
+        if (_arg_addr(1, addr) < 0) {
+            printfRed("[SyscallHandler::sys_bind] 参数错误: addr\n");
+            return SYS_EINVAL;
+        }
+        
+        if (_arg_int(2, addrlen) < 0) {
+            printfRed("[SyscallHandler::sys_bind] 参数错误: addrlen\n");
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        fs::file *f = p->get_open_file(sockfd);
+        if (!f) {
+            printfRed("[SyscallHandler::sys_bind] 无效的文件描述符: %d\n", sockfd);
+            return SYS_EBADF;
+        }
+
+        // 检查是否为socket文件
+        fs::socket_file *socket_f = static_cast<fs::socket_file*>(f);
+        if (!socket_f) {
+            printfRed("[SyscallHandler::sys_bind] 文件描述符不是socket: %d\n", sockfd);
+            return SYS_ENOTSOCK;
+        }
+
+        int result = socket_f->bind((const struct sockaddr*)addr, addrlen);
+        if (result < 0) {
+            printfRed("[SyscallHandler::sys_bind] bind失败: %d\n", result);
+            return result;
+        }
+
+        printfCyan("[SyscallHandler::sys_bind] bind成功, sockfd=%d\n", sockfd);
+        return 0;
     }
     uint64 SyscallHandler::sys_listen()
     {
-        panic("未实现该系统调用");
+        printfRed("这个是乱写的，用了就寄");
+        int sockfd;
+        int backlog;
+        
+        if (_arg_int(0, sockfd) < 0) {
+            printfRed("[SyscallHandler::sys_listen] 参数错误: sockfd\n");
+            return SYS_EINVAL;
+        }
+        
+        if (_arg_int(1, backlog) < 0) {
+            printfRed("[SyscallHandler::sys_listen] 参数错误: backlog\n");
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        fs::file *f = p->get_open_file(sockfd);
+        if (!f) {
+            printfRed("[SyscallHandler::sys_listen] 无效的文件描述符: %d\n", sockfd);
+            return SYS_EBADF;
+        }
+
+        // 检查是否为socket文件
+        fs::socket_file *socket_f = static_cast<fs::socket_file*>(f);
+        if (!socket_f) {
+            printfRed("[SyscallHandler::sys_listen] 文件描述符不是socket: %d\n", sockfd);
+            return SYS_ENOTSOCK;
+        }
+
+        int result = socket_f->listen(backlog);
+        if (result < 0) {
+            printfRed("[SyscallHandler::sys_listen] listen失败: %d\n", result);
+            return result;
+        }
+
+        printfCyan("[SyscallHandler::sys_listen] listen成功, sockfd=%d, backlog=%d\n", sockfd, backlog);
+        return 0;
     }
     uint64 SyscallHandler::sys_accept()
     {
-        panic("未实现该系统调用");
+        printfRed("这个是乱写的，用了就寄");
+        int sockfd;
+        uint64 addr;
+        uint64 addrlen_ptr;
+        
+        if (_arg_int(0, sockfd) < 0) {
+            printfRed("[SyscallHandler::sys_accept] 参数错误: sockfd\n");
+            return SYS_EINVAL;
+        }
+        
+        if (_arg_addr(1, addr) < 0) {
+            printfRed("[SyscallHandler::sys_accept] 参数错误: addr\n");
+            return SYS_EINVAL;
+        }
+        
+        if (_arg_addr(2, addrlen_ptr) < 0) {
+            printfRed("[SyscallHandler::sys_accept] 参数错误: addrlen\n");
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        fs::file *f = p->get_open_file(sockfd);
+        if (!f) {
+            printfRed("[SyscallHandler::sys_accept] 无效的文件描述符: %d\n", sockfd);
+            return SYS_EBADF;
+        }
+
+        // 检查是否为socket文件
+        fs::socket_file *socket_f = static_cast<fs::socket_file*>(f);
+        if (!socket_f) {
+            printfRed("[SyscallHandler::sys_accept] 文件描述符不是socket: %d\n", sockfd);
+            return SYS_ENOTSOCK;
+        }
+
+        fs::socket_file *client_socket = socket_f->accept((struct sockaddr*)addr, (socklen_t*)addrlen_ptr);
+        if (!client_socket) {
+            printfRed("[SyscallHandler::sys_accept] accept失败\n");
+            return SYS_EAGAIN; // 或者根据具体情况返回其他错误码
+        }
+
+        // 为新的客户端socket分配文件描述符
+        int client_fd = proc::k_pm.alloc_fd(p, client_socket);
+        if (client_fd < 0) {
+            delete client_socket;
+            printfRed("[SyscallHandler::sys_accept] 分配客户端文件描述符失败\n");
+            return SYS_EMFILE;
+        }
+
+        printfCyan("[SyscallHandler::sys_accept] accept成功, sockfd=%d, client_fd=%d\n", sockfd, client_fd);
+        return client_fd;
     }
     uint64 SyscallHandler::sys_connect()
     {
-        panic("未实现该系统调用");
+        printfRed("这个是乱写的，用了就寄");
+        int sockfd;
+        uint64 addr;
+        int addrlen;
+        
+        if (_arg_int(0, sockfd) < 0) {
+            printfRed("[SyscallHandler::sys_connect] 参数错误: sockfd\n");
+            return SYS_EINVAL;
+        }
+        
+        if (_arg_addr(1, addr) < 0) {
+            printfRed("[SyscallHandler::sys_connect] 参数错误: addr\n");
+            return SYS_EINVAL;
+        }
+        
+        if (_arg_int(2, addrlen) < 0) {
+            printfRed("[SyscallHandler::sys_connect] 参数错误: addrlen\n");
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        fs::file *f = p->get_open_file(sockfd);
+        if (!f) {
+            printfRed("[SyscallHandler::sys_connect] 无效的文件描述符: %d\n", sockfd);
+            return SYS_EBADF;
+        }
+
+        // 检查是否为socket文件
+        fs::socket_file *socket_f = static_cast<fs::socket_file*>(f);
+        if (!socket_f) {
+            printfRed("[SyscallHandler::sys_connect] 文件描述符不是socket: %d\n", sockfd);
+            return SYS_ENOTSOCK;
+        }
+
+        int result = socket_f->connect((const struct sockaddr*)addr, addrlen);
+        if (result < 0) {
+            printfRed("[SyscallHandler::sys_connect] connect失败: %d\n", result);
+            return result;
+        }
+
+        printfCyan("[SyscallHandler::sys_connect] connect成功, sockfd=%d\n", sockfd);
+        return 0;
     }
     uint64 SyscallHandler::sys_getsockname()
     {
-        panic("未实现该系统调用");
+        printfRed("这个是乱写的，用了就寄");
+        int sockfd;
+        uint64 addr;
+        uint64 addrlen_ptr;
+        
+        if (_arg_int(0, sockfd) < 0) {
+            printfRed("[SyscallHandler::sys_getsockname] 参数错误: sockfd\n");
+            return SYS_EINVAL;
+        }
+        
+        if (_arg_addr(1, addr) < 0) {
+            printfRed("[SyscallHandler::sys_getsockname] 参数错误: addr\n");
+            return SYS_EINVAL;
+        }
+        
+        if (_arg_addr(2, addrlen_ptr) < 0) {
+            printfRed("[SyscallHandler::sys_getsockname] 参数错误: addrlen\n");
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        fs::file *f = p->get_open_file(sockfd);
+        if (!f) {
+            printfRed("[SyscallHandler::sys_getsockname] 无效的文件描述符: %d\n", sockfd);
+            return SYS_EBADF;
+        }
+
+        // 检查是否为socket文件
+        fs::socket_file *socket_f = static_cast<fs::socket_file*>(f);
+        if (!socket_f) {
+            printfRed("[SyscallHandler::sys_getsockname] 文件描述符不是socket: %d\n", sockfd);
+            return SYS_ENOTSOCK;
+        }
+
+        int result = socket_f->getsockname((struct sockaddr*)addr, (socklen_t*)addrlen_ptr);
+        if (result < 0) {
+            printfRed("[SyscallHandler::sys_getsockname] getsockname失败: %d\n", result);
+            return result;
+        }
+
+        printfCyan("[SyscallHandler::sys_getsockname] getsockname成功, sockfd=%d\n", sockfd);
+        return 0;
     }
     uint64 SyscallHandler::sys_getpeername()
     {
-        panic("未实现该系统调用");
+        printfRed("这个是乱写的，用了就寄");
+        int sockfd;
+        uint64 addr;
+        uint64 addrlen_ptr;
+        
+        if (_arg_int(0, sockfd) < 0) {
+            printfRed("[SyscallHandler::sys_getpeername] 参数错误: sockfd\n");
+            return SYS_EINVAL;
+        }
+        
+        if (_arg_addr(1, addr) < 0) {
+            printfRed("[SyscallHandler::sys_getpeername] 参数错误: addr\n");
+            return SYS_EINVAL;
+        }
+        
+        if (_arg_addr(2, addrlen_ptr) < 0) {
+            printfRed("[SyscallHandler::sys_getpeername] 参数错误: addrlen\n");
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        fs::file *f = p->get_open_file(sockfd);
+        if (!f) {
+            printfRed("[SyscallHandler::sys_getpeername] 无效的文件描述符: %d\n", sockfd);
+            return SYS_EBADF;
+        }
+
+        // 检查是否为socket文件
+        fs::socket_file *socket_f = static_cast<fs::socket_file*>(f);
+        if (!socket_f) {
+            printfRed("[SyscallHandler::sys_getpeername] 文件描述符不是socket: %d\n", sockfd);
+            return SYS_ENOTSOCK;
+        }
+
+        int result = socket_f->getpeername((struct sockaddr*)addr, (socklen_t*)addrlen_ptr);
+        if (result < 0) {
+            printfRed("[SyscallHandler::sys_getpeername] getpeername失败: %d\n", result);
+            return result;
+        }
+
+        printfCyan("[SyscallHandler::sys_getpeername] getpeername成功, sockfd=%d\n", sockfd);
+        return 0;
     }
     uint64 SyscallHandler::sys_sendto()
     {
