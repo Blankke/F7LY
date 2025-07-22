@@ -1426,6 +1426,8 @@ namespace proc
             panic("init exiting"); // 保护机制：init 进程不能退出
         // log_info( "exit proc %d", p->_pid );
 
+        reparent(p); // 将 p 的所有子进程交给 init 进程收养
+        _wait_lock.acquire();
 
         reparent(p); // 将 p 的所有子进程交给 init 进程收养
         _wait_lock.acquire();

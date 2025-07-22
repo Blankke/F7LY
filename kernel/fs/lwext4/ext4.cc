@@ -1897,9 +1897,11 @@ Finish:
 int ext4_fseek(ext4_file *file, int64_t offset, uint32_t origin) {
     switch (origin) {
         case SEEK_SET:
-            if (offset < 0 || (uint64_t) offset > file->fsize)
+            if (offset < 0)
                 return EINVAL;
-
+            // 允许seek到文件末尾之后以支持稀疏文件（sparse files）
+            // Unix/Linux系统允许通过lseek()将文件指针移动到超出当前文件末尾的位置
+            // 如果随后写入数据，系统会扩展文件并在中间填充零（holes），形成稀疏文件
             file->fpos = offset;
             return EOK;
         case SEEK_CUR:

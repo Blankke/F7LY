@@ -441,7 +441,14 @@ namespace syscall
 #endif
         return 0;
     }
-
+    bool SyscallHandler::is_bad_addr(uint64 addr)
+    {
+        if(addr == 0)
+            return true; // 0地址通常被视为无效地址
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        return !pt->walk_addr(addr);
+    }
     // ---------------- syscall functions ----------------
     uint64 SyscallHandler::sys_exec()
     {
@@ -1264,6 +1271,13 @@ namespace syscall
 
         if (_arg_addr(0, usta) < 0)
             return SYS_EFAULT;
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        // bad_addr
+        if (is_bad_addr(usta))
+        {
+            return SYS_EFAULT;
+        }
         sysa = (uint64)(((_Utsname *)usta)->sysname);
         noda = (uint64)(((_Utsname *)usta)->nodename);
         rlsa = (uint64)(((_Utsname *)usta)->release);
@@ -1271,8 +1285,6 @@ namespace syscall
         mcha = (uint64)(((_Utsname *)usta)->machine);
         dmna = (uint64)(((_Utsname *)usta)->domainname);
 
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        mem::PageTable *pt = p->get_pagetable();
 
         if (mem::k_vmm.copy_out(*pt, sysa, _SYSINFO_sysname,
                                 sizeof(_SYSINFO_sysname)) < 0)
@@ -2129,8 +2141,24 @@ namespace syscall
     //         return tmm::k_tm.clock_gettime(cid, tp);
     //         return 0;
     //     }
+     const uint SYS_SUPPORT_CLOCK= 2;
+    /// 一个可设置的系统级实时时钟，用于测量真实（即墙上时钟）时间
+     const uint SYS_CLOCK_REALTIME = 0;
+     /// 一个不可设置的系统级时钟，代表自某个未指定的过去时间点以来的单调时间
+     const uint SYS_CLOCK_MONOTONIC = 1;
+     /// 用于测量调用进程消耗的CPU时间
+     const uint SYS_CLOCK_PROCESS_CPUTIME_ID = 2;
+     /// 用于测量调用线程消耗的CPU时间
+     const uint SYS_CLOCK_THREAD_CPUTIME_ID = 3;
+     /// 一个不可设置的系统级时钟，代表自某个未指定的过去时间点以来的单调时间
+     const uint SYS_CLOCK_MONOTONIC_RAW = 4;
+     /// 一个不可设置的系统级实时时钟，用于测量真实（即墙上时钟）时间
+     const uint SYS_CLOCK_REALTIME_COARSE = 5;
+     const uint SYS_CLOCK_MONOTONIC_COARSE = 6;
+     const uint SYS_CLOCK_BOOTTIME = 7;
     uint64 SyscallHandler::sys_clock_gettime()
     {
+        // rocket
         int clock_id;
         u64 addr;
         if (_arg_int(0, clock_id) < 0)
@@ -2144,25 +2172,112 @@ namespace syscall
             return -2;
         }
 
+        // 如果timespec指针是NULL，函数不会存储时间值，但仍然会执行其他检查（如 clockid 是否有效）
         if (addr == 0)
-            return -3;
+        {
+            // 检查clock_id是否有效
+            switch (clock_id)
+            {
+                case SYS_CLOCK_REALTIME:
+                case SYS_CLOCK_REALTIME_COARSE:
+                case SYS_CLOCK_MONOTONIC:
+                case SYS_CLOCK_MONOTONIC_RAW:
+                case SYS_CLOCK_MONOTONIC_COARSE:
+                case SYS_CLOCK_BOOTTIME:
+                case SYS_CLOCK_PROCESS_CPUTIME_ID:
+                case SYS_CLOCK_THREAD_CPUTIME_ID:
+                    return 0;  // 有效的clock_id
+                default:
+                    return SYS_EINVAL;  // 无效的clock_id
+            }
+        }
+
+        if (is_bad_addr(addr))
+        {
+            return SYS_EFAULT;
+        }
 
         tmm::timespec tp;
-        tmm::SystemClockId cid = (tmm::SystemClockId)clock_id;
+        
+        // 根据不同的clock_id获取相应的时间
+        switch (clock_id)
+        {
+            case SYS_CLOCK_REALTIME:
+            case SYS_CLOCK_REALTIME_COARSE:
+            {
+                // 获取墙上时钟时间 - 调用原有的时间管理器方法
+                tmm::SystemClockId cid = (tmm::SystemClockId)clock_id;
+                int ret = tmm::k_tm.clock_gettime(cid, &tp);
+                if (ret < 0)
+                    return ret;
+                break;
+            }
+            case SYS_CLOCK_MONOTONIC:
+            case SYS_CLOCK_MONOTONIC_RAW:
+            case SYS_CLOCK_MONOTONIC_COARSE:
+            case SYS_CLOCK_BOOTTIME:
+            {
+                // 获取单调时间 - 基于系统tick计数
+                uint64 ticks = tmm::k_tm.get_ticks();
+                uint64 freq = tmm::get_main_frequence();
+                uint64 cpt = tmm::cycles_per_tick();
+                
+                uint64 total_cycles = ticks * cpt;
+                tp.tv_sec = (long)(total_cycles / freq);
+                ulong rest_cyc = total_cycles % freq;
+                const int64 nsec_max = 1000000000L;
+                tp.tv_nsec = (long)((rest_cyc * nsec_max) / freq);
+                break;
+            }
+            case SYS_CLOCK_PROCESS_CPUTIME_ID:
+            case SYS_CLOCK_THREAD_CPUTIME_ID:
+            {
+                // 获取进程/线程CPU时间
+                proc::Pcb *p = proc::k_pm.get_cur_pcb();
+                // 使用用户态ticks和系统态时间，注意单位转换
+                uint64 user_ticks = p->get_user_ticks();
+                uint64 stime = p->get_stime();
+                
+                // 将ticks转换为时间 (假设每个tick对应的时间)
+                uint64 freq = tmm::get_main_frequence();
+                uint64 cpt = tmm::cycles_per_tick();
+                
+                // 用户态时间转换
+                uint64 user_time_cycles = user_ticks * cpt;
+                uint64 user_time_sec = user_time_cycles / freq;
+                uint64 user_time_nsec = ((user_time_cycles % freq) * 1000000000L) / freq;
+                
+                // 系统态时间已经是时间单位，直接使用
+                uint64 total_sec = user_time_sec + (stime / 1000000);
+                uint64 total_nsec = user_time_nsec + ((stime % 1000000) * 1000);
+                
+                // 处理纳秒溢出
+                if (total_nsec >= 1000000000L)
+                {
+                    total_sec += total_nsec / 1000000000L;
+                    total_nsec %= 1000000000L;
+                }
+                
+                tp.tv_sec = (long)total_sec;
+                tp.tv_nsec = (long)total_nsec;
+                break;
+            }
+            default:
+            {
+                printfRed("[SyscallHandler::sys_clock_gettime] Unsupported clock_id: %d\n", clock_id);
+                return SYS_EINVAL;
+            }
+        }
 
-        // 调用时间管理器获取时间，传递栈上的对象
-        int ret = tmm::k_tm.clock_gettime(cid, &tp);
-        if (ret < 0)
-            return ret;
-
-        printfYellow("[SyscallHandler::sys_clock_gettime] clock_id: %d, tp: %d.%09d\n", clock_id, tp.tv_sec, tp.tv_nsec);
+        // printfYellow("[SyscallHandler::sys_clock_gettime] clock_id: %d, tp: %ld.%09ld\n", clock_id, tp.tv_sec, tp.tv_nsec);
+        
         // 使用 copy_out 将结果安全地拷贝到用户空间
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
         if (mem::k_vmm.copy_out(*pt, addr, &tp, sizeof(tp)) < 0)
         {
             printfRed("[SyscallHandler::sys_clock_gettime] Error copying timespec to user space\n");
-            return -4;
+            return SYS_EFAULT;
         }
 
         return 0;

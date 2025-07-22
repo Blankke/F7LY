@@ -125,13 +125,16 @@ long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 
 	off_t normal_file::lseek(off_t offset, int whence)
 	{
-		// off_t size = static_cast<off_t>(this->_stat.size);
+		printfYellow("normal_file::lseek called with offset: %ld, whence: %d\n", offset, whence);
 		[[maybe_unused]] off_t new_off;
 		switch (whence)
 		{
 		case SEEK_SET:
-			// if (offset < 0 || offset > size)
-			// 	return -EINVAL;
+			// 支持稀疏文件：允许seek到文件末尾之后
+			// 这使得可以通过lseek()将文件指针移动到超出文件末尾的位置
+			// 后续写入将创建稀疏文件（中间的空洞会被自动用0填充）
+			if (offset < 0)
+				return -EINVAL;
 			_file_ptr = offset;
 			break;
 		case SEEK_CUR:
@@ -141,6 +144,7 @@ long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 			_file_ptr = new_off;
 			break;
 		case SEEK_END:
+			// 支持稀疏文件：允许从文件末尾向后seek
 			new_off = this->_stat.size + offset;
 			if (new_off < 0)
 				return -EINVAL;
@@ -153,7 +157,7 @@ long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 		int seek_status = ext4_fseek(&lwext4_file_struct, _file_ptr, SEEK_SET);
 		if (seek_status != EOK)
 		{
-			printfRed("normal_file::read: ext4_fseek failed with status %d", seek_status);
+			printfRed("normal_file::lseek: ext4_fseek failed with status %d", seek_status);
 			return -1;
 		}
 		return _file_ptr;
