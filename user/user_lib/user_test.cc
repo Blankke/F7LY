@@ -2112,7 +2112,7 @@ char *ltp_testcases[] = {
     // "readlinkat01",
     // "readlinkat02",
     // "readv01",
-    // "readv02",
+    // "readv02",   //pass
     // "realpath01",
     // "reboot01",
     // "reboot02",

@@ -1261,7 +1261,7 @@ namespace syscall
         uint64 sysa, noda, rlsa, vsna, mcha, dmna;
 
         if (_arg_addr(0, usta) < 0)
-            return -11;
+            return SYS_EFAULT;
         sysa = (uint64)(((_Utsname *)usta)->sysname);
         noda = (uint64)(((_Utsname *)usta)->nodename);
         rlsa = (uint64)(((_Utsname *)usta)->release);
@@ -1289,9 +1289,9 @@ namespace syscall
             return -1;
         if (mem::k_vmm.copy_out(*pt, dmna, _SYSINFO_domainname,
                                 sizeof(_SYSINFO_domainname)) < 0)
-            return -1;
+            return SYS_EFAULT;
 
-        return 0;
+        return 0;  // Success
     }
     uint64 SyscallHandler::sys_sched_yield()
     {
@@ -1770,17 +1770,49 @@ namespace syscall
         uint64 iov_ptr;
 
         // 获取参数
-        if (_arg_fd(0, &fd, &f) < 0 ||
-            _arg_addr(1, iov_ptr) < 0 ||
-            _arg_int(2, iovcnt) < 0)
-        {
-            panic("[SyscallHandler::sys_writev] Error fetching arguments");
-            return -1;
+        if (_arg_fd(0, &fd, &f) < 0) {
+            return SYS_EBADF;  // Bad file descriptor
         }
+        if (_arg_addr(1, iov_ptr) < 0) {
+            return SYS_EFAULT;  // Bad address
+        }
+        if (_arg_int(2, iovcnt) < 0) {
+            return SYS_EINVAL;  // Invalid argument
+        }
+
+        if (f == nullptr) {
+            return SYS_EBADF;  // Bad file descriptor
+        }
+        if (iovcnt < 0 || iovcnt > 1024) {  // Standard IOV_MAX is typically 1024
+            return SYS_EINVAL;  // Invalid vector count
+        }
+        if (iovcnt == 0) {
+            return 0;  // No buffers to write
+        }
+
         printfGreen("[SyscallHandler::sys_writev] fd: %d, iov_ptr: %p, iovcnt: %d\n",
                     fd, (void *)iov_ptr, iovcnt);
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = proc->get_pagetable();
+
+        // Check for overflow in total length and validate iovec entries
+        size_t total_len = 0;
+        for (int i = 0; i < iovcnt; i++)
+        {
+            struct iovec iov;
+            uint64 iov_addr = iov_ptr + i * sizeof(struct iovec);
+
+            // Read iovec structure from user space
+            if (mem::k_vmm.copy_in(*pt, &iov, iov_addr, sizeof(struct iovec)) < 0) {
+                return SYS_EFAULT;  // Bad address
+            }
+
+            // Check for overflow in total length
+            if (iov.iov_len > (size_t)0x7FFFFFFF - total_len) {
+                return SYS_EINVAL;  // Total length would overflow
+            }
+            total_len += iov.iov_len;
+        }
 
         uint64 writebytes = 0;
 
@@ -1789,21 +1821,23 @@ namespace syscall
             struct iovec iov;
             uint64 iov_addr = iov_ptr + i * sizeof(struct iovec);
 
-            {
-                mem::UserspaceStream uspace((void *)iov_addr, sizeof(struct iovec), pt);
-                uspace.open();
-                mem::UsRangeDesc urd = std::make_tuple((u8 *)&iov, sizeof(struct iovec));
-                uspace >> urd;
-                uspace.close();
+            // Read iovec structure from user space (again, but this time for actual processing)
+            if (mem::k_vmm.copy_in(*pt, &iov, iov_addr, sizeof(struct iovec)) < 0) {
+                return SYS_EFAULT;  // Bad address
             }
 
-            char *buf = new char[iov.iov_len + 10];
-            {
-                mem::UserspaceStream uspace((void *)iov.iov_base, iov.iov_len + 1, pt);
-                uspace.open();
-                mem::UsRangeDesc urd = std::make_tuple((u8 *)buf, (ulong)iov.iov_len + 1);
-                uspace >> urd;
-                uspace.close();
+            if (iov.iov_len == 0)
+                continue;
+
+            char *buf = new char[iov.iov_len];
+            if (!buf) {
+                return SYS_ENOMEM;  // Out of memory
+            }
+
+            // Copy data from user space
+            if (mem::k_vmm.copy_in(*pt, buf, (uint64)iov.iov_base, iov.iov_len) < 0) {
+                delete[] buf;
+                return SYS_EFAULT;  // Bad address
             }
 
             long rc = f->write((ulong)buf, iov.iov_len, f->get_file_offset(), true);
@@ -1812,10 +1846,15 @@ namespace syscall
             if (rc < 0)
             {
                 printfRed("[SyscallHandler::sys_writev] 写入文件失败\n");
-                return -1;
+                return rc;  // Return the actual error from file write
             }
 
             writebytes += rc;
+
+            // If we wrote less than requested, stop processing remaining buffers
+            if (rc < (long)iov.iov_len) {
+                break;
+            }
         }
 
         return writebytes;
@@ -2891,15 +2930,25 @@ namespace syscall
         int iovcnt;
 
         // 获取参数
-        if (_arg_fd(0, &fd, &f) < 0)
-            return -1;
-        if (_arg_addr(1, iov_ptr) < 0)
-            return -2;
-        if (_arg_int(2, iovcnt) < 0)
-            return -3;
+        if (_arg_fd(0, &fd, &f) < 0) {
+            return SYS_EBADF;  // Bad file descriptor
+        }
+        if (_arg_addr(1, iov_ptr) < 0) {
+            return SYS_EFAULT;  // Bad address
+        }
+        if (_arg_int(2, iovcnt) < 0) {
+            return SYS_EINVAL;  // Invalid argument
+        }
 
-        if (f == nullptr || iovcnt <= 0)
-            return -4;
+        if (f == nullptr) {
+            return SYS_EBADF;  // Bad file descriptor
+        }
+        if (iovcnt < 0 || iovcnt > 1024) {  // Standard IOV_MAX is typically 1024
+            return SYS_EINVAL;  // Invalid vector count
+        }
+        if (iovcnt == 0) {
+            return 0;  // No buffers to read into
+        }
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
@@ -2913,13 +2962,23 @@ namespace syscall
         size_t totsize = sizeof(iovec) * iovcnt;
         iovec *vec = new iovec[iovcnt];
         if (!vec)
-            return -5;
+            return SYS_ENOMEM;  // Out of memory
 
         // 从用户空间拷贝iovec数组
         if (mem::k_vmm.copy_in(*pt, vec, iov_ptr, totsize) < 0)
         {
             delete[] vec;
-            return -6;
+            return SYS_EFAULT;  // Bad address
+        }
+
+        // Check for overflow in total length
+        size_t total_len = 0;
+        for (int i = 0; i < iovcnt; ++i) {
+            if (vec[i].iov_len > (size_t)0x7FFFFFFF - total_len) {  // SSIZE_MAX equivalent
+                delete[] vec;
+                return SYS_EINVAL;  // Total length would overflow
+            }
+            total_len += vec[i].iov_len;
         }
 
         int nread = 0;
@@ -2931,23 +2990,31 @@ namespace syscall
             if (!k_buf)
             {
                 delete[] vec;
-                return -7;
+                return SYS_ENOMEM;  // Out of memory
             }
             int ret = f->read((uint64)k_buf, vec[i].iov_len, f->get_file_offset(), true);
             if (ret < 0)
             {
                 delete[] k_buf;
                 delete[] vec;
-                return -8;
+                return ret;  // Return the actual error from file read
             }
-            if (mem::k_vmm.copy_out(*pt, (uint64)vec[i].iov_base, k_buf, ret) < 0)
-            {
-                delete[] k_buf;
-                delete[] vec;
-                return -9;
+            if (ret > 0) {  // Only copy if we actually read something
+                if (mem::k_vmm.copy_out(*pt, (uint64)vec[i].iov_base, k_buf, ret) < 0)
+                {
+                    delete[] k_buf;
+                    delete[] vec;
+                    return SYS_EFAULT;  // Bad address
+                }
             }
             nread += ret;
             delete[] k_buf;
+            
+            // If we read less than requested, we've likely hit EOF or an error,
+            // so stop processing remaining buffers
+            if (ret < (int)vec[i].iov_len) {
+                break;
+            }
             // 文件偏移量已在f->read内部更新
         }
 

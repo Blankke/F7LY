@@ -1977,7 +1977,7 @@ namespace proc
         uint64 unmap_end = unmap_start + length;
         uint64 aligned_length = PGROUNDUP(length);
 
-        printfYellow("[munmap] addr=%p, length=%d (aligned=%lu)\n", addr, length, aligned_length);
+        printfYellow("[munmap] addr=%p, length=%d (aligned=%u)\n", addr, length, aligned_length);
 
         // 查找覆盖此地址范围的所有VMA
         for (int i = 0; i < NVMA; ++i) {
