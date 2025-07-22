@@ -355,7 +355,7 @@ int create_and_write_file(const char *path, const char *data)
     res = ext4_fwrite(&file, data, data_len, &written);
     if (res != EOK || written != data_len)
     {
-        printf("Failed to write file: %d, written: %zu\n", res, written);
+        printf("Failed to write file: %d, written: %u\n", res, written);
         ext4_fclose(&file);
         return res;
     }

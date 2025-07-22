@@ -366,7 +366,7 @@ namespace syscall
         if (raw_val < LONG_MIN || raw_val > LONG_MAX)
         {
             printfRed("[SyscallHandler::_arg_long]arg_n is out of range. "
-                      "raw_val: %ld, LONG_MIN: %ld, LONG_MAX: %ld\n",
+                      "raw_val: %d, LONG_MIN: %d, LONG_MAX: %d\n",
                       raw_val, LONG_MIN, LONG_MAX);
             return -1;
         }
@@ -1964,7 +1964,7 @@ namespace syscall
             }
             return ret;
         }
-        printfCyan("[sys_readlinkat] fd: %d, path: %s, buf: %p, buf_size: %zu", fd, path.c_str(), (void *)buf, buf_size);
+        printfCyan("[sys_readlinkat] fd: %d, path: %s, buf: %p, buf_size: %u", fd, path.c_str(), (void *)buf, buf_size);
         // 如果路径为空，获取dirfd对应的符号链接
         if (path.empty())
         {
@@ -3146,7 +3146,59 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_mremap()
     {
-        panic("未实现该系统调用");
+        uint64 old_address;
+        long old_size, new_size;
+        int flags;
+        uint64 new_address = 0;
+
+        // 获取参数
+        if (_arg_addr(0, old_address) < 0) {
+            printfRed("[sys_mremap] Error fetching old_address argument\n");
+            return SYS_EFAULT;
+        }
+
+        if (_arg_long(1, old_size) < 0) {
+            printfRed("[sys_mremap] Error fetching old_size argument\n");
+            return SYS_EFAULT;
+        }
+
+        if (_arg_long(2, new_size) < 0) {
+            printfRed("[sys_mremap] Error fetching new_size argument\n");
+            return SYS_EFAULT;
+        }
+
+        if (_arg_int(3, flags) < 0) {
+            printfRed("[sys_mremap] Error fetching flags argument\n");
+            return SYS_EFAULT;
+        }
+
+        // 如果指定了 MREMAP_FIXED，获取第五个参数
+        if (flags & MREMAP_FIXED) {
+            if (_arg_addr(4, new_address) < 0) {
+                printfRed("[sys_mremap] Error fetching new_address argument\n");
+                return SYS_EFAULT;
+            }
+        }
+
+        printfYellow("[sys_mremap] old_address=%p, old_size=%x, new_size=%x, flags=0x%x, new_address=%p\n", 
+                    (void*)old_address, old_size, new_size, flags, (void*)new_address);
+
+        // 调用进程管理器的 mremap 函数
+        void *result_addr;
+        int error_code = proc::k_pm.mremap((void*)old_address, 
+                                         (size_t)old_size, 
+                                         (size_t)new_size, 
+                                         flags, 
+                                         (void*)new_address,
+                                         &result_addr);
+
+        if (error_code != 0) {
+            printfRed("[sys_mremap] mremap failed with error code %d\n", error_code);
+            return error_code;  // 返回负的错误码
+        }
+
+        printfGreen("[sys_mremap] Success: returned address %p\n", result_addr);
+        return (uint64)result_addr;
     }
 
     uint64 SyscallHandler::sys_lseek()

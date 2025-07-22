@@ -6,7 +6,7 @@ define va2pa
   set $off  = $va & 0xFFF
 
   printf "VA  = 0x%016lx\n", $va
-  printf "VPN = {%ld, %ld, %ld}, offset = 0x%lx\n", $vpn2, $vpn1, $vpn0, $off
+  printf "VPN = {%d, %d, %d}, offset = 0x%lx\n", $vpn2, $vpn1, $vpn0, $off
 
   # 读取 satp，提取根页表 PPN
   set $satp = $satp

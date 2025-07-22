@@ -85,6 +85,7 @@ namespace proc
         int validate_mmap_params(void *addr, int length, int prot, int flags, int fd, int offset);
         void *mmap(void *addr, int length, int prot, int flags, int fd, int offset);
         int munmap(void *addr, int length);
+        int mremap(void *old_address, size_t old_size, size_t new_size, int flags, void *new_address, void **result_addr);
         int unlink(int fd, eastl::string path, int flags);
         int pipe(int *fd, int);
         int set_tid_address(uint64 tidptr);

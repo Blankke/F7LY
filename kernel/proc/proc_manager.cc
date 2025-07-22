@@ -1429,6 +1429,8 @@ namespace proc
         reparent(p); // 将 p 的所有子进程交给 init 进程收养
         _wait_lock.acquire();
 
+        reparent(p); // 将 p 的所有子进程交给 init 进程收养
+        _wait_lock.acquire();
         if (p->_parent)
             wakeup(p->_parent); // 唤醒父进程（可能在 wait() 中阻塞）)
         if (p->_clear_tid_addr)
@@ -2141,6 +2143,381 @@ namespace proc
         printfGreen("[munmap] Successfully unmapped range [%p, %p)\n", addr, (void*)unmap_end);
         return 0;
     }
+
+    /// @brief 调整现有内存映射的大小，可能移动映射位置
+    /// @param old_address 旧映射的起始地址，必须页对齐
+    /// @param old_size 旧映射的大小
+    /// @param new_size 新映射的大小
+    /// @brief 重映射或调整现有内存映射的大小，符合POSIX标准的mremap实现
+    /// @param old_address 要重映射的起始地址，必须页对齐
+    /// @param old_size 原映射的大小（字节）
+    /// @param new_size 新映射的大小（字节）
+    /// @param flags 控制标志位（MREMAP_MAYMOVE、MREMAP_FIXED、MREMAP_DONTUNMAP）
+    /// @param new_address 当使用 MREMAP_FIXED 时指定的新地址
+    /// @return 成功返回新映射的地址，失败返回 MAP_FAILED 并设置errno
+    int ProcessManager::mremap(void *old_address, size_t old_size, size_t new_size, int flags, void *new_address, void **result_addr)
+    {
+        *result_addr = MAP_FAILED;
+
+        // EINVAL: 基本参数验证
+        if (!old_address) {
+            printfRed("[mremap] EINVAL: old_address is NULL\n");
+            return syscall::SYS_EINVAL;
+        }
+
+        if (old_size == 0) {
+            // 特殊情况：old_size为0时，old_address必须引用共享映射且必须指定MREMAP_MAYMOVE
+            if (!(flags & MREMAP_MAYMOVE)) {
+                printfRed("[mremap] EINVAL: old_size is 0 but MREMAP_MAYMOVE not specified\n");
+                return syscall::SYS_EINVAL;
+            }
+            // 这里应该检查old_address是否引用共享映射，暂时简化处理
+            printfYellow("[mremap] WARNING: old_size=0 case not fully implemented\n");
+        }
+
+        if (new_size == 0) {
+            printfRed("[mremap] EINVAL: new_size is zero\n");
+            return syscall::SYS_EINVAL;
+        }
+
+        // EINVAL: 检查地址是否页对齐
+        if ((uintptr_t)old_address & (PGSIZE - 1)) {
+            printfRed("[mremap] EINVAL: old_address not page aligned: %p\n", old_address);
+            return syscall::SYS_EINVAL;
+        }
+
+        // EINVAL: 验证标志位
+        if (flags & ~(MREMAP_MAYMOVE | MREMAP_FIXED | MREMAP_DONTUNMAP)) {
+            printfRed("[mremap] EINVAL: Invalid flags: 0x%x\n", flags);
+            return syscall::SYS_EINVAL;
+        }
+
+        // EINVAL: MREMAP_FIXED 必须与 MREMAP_MAYMOVE 一起使用
+        if ((flags & MREMAP_FIXED) && !(flags & MREMAP_MAYMOVE)) {
+            printfRed("[mremap] EINVAL: MREMAP_FIXED requires MREMAP_MAYMOVE\n");
+            return syscall::SYS_EINVAL;
+        }
+
+        // EINVAL: MREMAP_DONTUNMAP 必须与 MREMAP_MAYMOVE 一起使用
+        if ((flags & MREMAP_DONTUNMAP) && !(flags & MREMAP_MAYMOVE)) {
+            printfRed("[mremap] EINVAL: MREMAP_DONTUNMAP requires MREMAP_MAYMOVE\n");
+            return syscall::SYS_EINVAL;
+        }
+
+        // EINVAL: MREMAP_FIXED 时需要提供新地址且必须页对齐
+        if (flags & MREMAP_FIXED) {
+            if (!new_address) {
+                printfRed("[mremap] EINVAL: MREMAP_FIXED requires new_address\n");
+                return syscall::SYS_EINVAL;
+            }
+            if ((uintptr_t)new_address & (PGSIZE - 1)) {
+                printfRed("[mremap] EINVAL: new_address not page aligned: %p\n", new_address);
+                return syscall::SYS_EINVAL;
+            }
+        }
+
+        // EINVAL: 检查地址范围重叠（当指定了MREMAP_FIXED时）
+        if (flags & MREMAP_FIXED) {
+            uint64 old_start = (uint64)old_address;
+            uint64 old_end = old_start + old_size;
+            uint64 new_start = (uint64)new_address;
+            uint64 new_end = new_start + new_size;
+            
+            if (!(new_end <= old_start || new_start >= old_end)) {
+                printfRed("[mremap] EINVAL: new and old address ranges overlap\n");
+                return syscall::SYS_EINVAL;
+            }
+        }
+
+        // EINVAL: MREMAP_DONTUNMAP 要求 old_size == new_size
+        if ((flags & MREMAP_DONTUNMAP) && (old_size != new_size)) {
+            printfRed("[mremap] EINVAL: MREMAP_DONTUNMAP requires old_size == new_size\n");
+            return syscall::SYS_EINVAL;
+        }
+
+        proc::Pcb *pcb = get_cur_pcb();
+        if (!pcb) {
+            printfRed("[mremap] Internal error: No current process\n");
+            return syscall::SYS_EFAULT;
+        }
+
+        uint64 old_start = (uint64)old_address;
+        uint64 old_end = old_start + old_size;
+        [[maybe_unused]]uint64 new_len = new_size;
+
+        // EFAULT: 查找包含旧地址的VMA
+        int vma_index = -1;
+        printfYellow("[mremap] Searching for VMA containing range [%p, %p), size=%u\n", 
+                     (void*)old_start, (void*)old_end, old_size);
+        
+        printfYellow("[mremap] NVMA=%d, pcb=%p, pcb->_vma=%p\n", NVMA, pcb, pcb->_vma);
+        
+        for (int i = 0; i < NVMA; i++) {
+            printfYellow("[mremap] Checking VMA[%d]: used=%d\n", i, pcb->_vma->_vm[i].used);
+            
+            if (!pcb->_vma->_vm[i].used) continue;
+            
+            uint64 vma_start = pcb->_vma->_vm[i].addr;
+            uint64 vma_end = vma_start + pcb->_vma->_vm[i].len;
+            
+            printfYellow("[mremap] VMA[%d]: [%p, %p), len=%d, used=%d\n", 
+                         i, (void*)vma_start, (void*)vma_end, pcb->_vma->_vm[i].len, pcb->_vma->_vm[i].used);
+            
+            if (old_start >= vma_start && old_end <= vma_end) {
+                vma_index = i;
+                printfGreen("[mremap] Found matching VMA[%d]: [%p, %p)\n", i, (void*)vma_start, (void*)vma_end);
+                break;
+            }
+        }
+
+        // EFAULT: 地址范围未映射或无效
+        if (vma_index == -1) {
+            printfRed("[mremap] EFAULT: Address range [%p, %p) not found in valid mappings\n", 
+                     (void*)old_start, (void*)old_end);
+            return syscall::SYS_EFAULT;
+        }
+
+        proc::vma &vma = pcb->_vma->_vm[vma_index];
+        printfCyan("[mremap] Found VMA[%d]: addr=%p, len=%d, prot=%d, flags=%d\n", 
+                   vma_index, (void*)vma.addr, vma.len, vma.prot, vma.flags);
+
+        // EINVAL: 检查MREMAP_DONTUNMAP的限制（只能用于私有匿名映射）
+        if (flags & MREMAP_DONTUNMAP) {
+            if (!(vma.flags & MAP_ANONYMOUS) || (vma.flags & MAP_SHARED)) {
+                printfRed("[mremap] EINVAL: MREMAP_DONTUNMAP can only be used with private anonymous mappings\n");
+                return syscall::SYS_EINVAL;
+            }
+        }
+
+        // 情况1：缩小映射
+        if (new_size < old_size) {
+            // 释放多余的页面
+            uint64 pages_to_unmap = (old_size - new_size + PGSIZE - 1) / PGSIZE;
+            uint64 unmap_start = old_start + new_size;
+            
+            mem::k_vmm.vmunmap(*pcb->get_pagetable(), unmap_start, pages_to_unmap, 1);
+            
+            // 更新VMA大小
+            if (old_start == vma.addr && (int)old_size == vma.len) {
+                // 整个VMA被调整
+                vma.len = new_size;
+            } else {
+                // 部分调整，这里简化处理
+                printfYellow("[mremap] Partial VMA resize not fully supported\n");
+            }
+            
+            printfGreen("[mremap] Shrunk mapping from %u to %u bytes at %p\n", 
+                       old_size, new_size, old_address);
+            *result_addr = old_address;
+            return 0;
+        }
+
+        // 情况2：扩大映射
+        if (new_size > old_size) {
+            uint64 additional_size = new_size - old_size;
+            uint64 expand_start = old_start + old_size;
+
+            // 检查是否可以就地扩展
+            bool can_expand_in_place = true;
+            if (!(flags & MREMAP_MAYMOVE)) {
+                // 检查扩展区域是否可用
+                for (int i = 0; i < NVMA; i++) {
+                    if (i == vma_index || !pcb->_vma->_vm[i].used) continue;
+                    
+                    uint64 other_start = pcb->_vma->_vm[i].addr;
+                    uint64 other_end = other_start + pcb->_vma->_vm[i].len;
+                    
+                    if (!(expand_start >= other_end || expand_start + additional_size <= other_start)) {
+                        can_expand_in_place = false;
+                        break;
+                    }
+                }
+
+                // ENOMEM: 不能就地扩展且未指定MREMAP_MAYMOVE
+                if (!can_expand_in_place) {
+                    printfRed("[mremap] ENOMEM: Cannot expand in place and MREMAP_MAYMOVE not set\n");
+                    return syscall::SYS_ENOMEM;
+                }
+            }
+
+            // 如果可以就地扩展
+            if (can_expand_in_place && !(flags & MREMAP_FIXED)) {
+                // 分配新的页面
+                uint64 prot_flags = 0;
+                if (vma.prot & PROT_READ) prot_flags |= PTE_R;
+                if (vma.prot & PROT_WRITE) prot_flags |= PTE_W;
+                if (vma.prot & PROT_EXEC) prot_flags |= PTE_X;
+                prot_flags |= PTE_U;
+
+                uint64 result = mem::k_vmm.uvmalloc(*pcb->get_pagetable(), 
+                                                   old_start + old_size, 
+                                                   old_start + new_size, 
+                                                   prot_flags);
+                if (result != old_start + new_size) {
+                    // ENOMEM: 内存分配失败
+                    printfRed("[mremap] ENOMEM: Failed to allocate additional memory\n");
+                    return syscall::SYS_ENOMEM;
+                }
+
+                // 更新VMA - 确保类型安全
+                if (old_start == vma.addr) {
+                    // 总是更新VMA长度，因为我们已经成功分配了内存
+                    int old_vma_len = vma.len;
+                    
+                    // 检查new_size是否超出int范围 (2^31 - 1 = 2147483647)
+                    if (new_size > 2147483647U) {
+                        printfRed("[mremap] ERROR: new_size %u exceeds INT_MAX, cannot store in VMA.len\n", (uint)new_size);
+                        return syscall::SYS_ENOMEM;
+                    }
+                    
+                    vma.len = (int)new_size;
+                    printfCyan("[mremap] Updated VMA[%d] length from %d to %d (old_size=%u)\n", 
+                               vma_index, old_vma_len, vma.len, (uint)old_size);
+                } else {
+                    // 即使是部分VMA扩展，我们也需要更新VMA长度
+                    int old_vma_len = vma.len;  // 确保在修改前保存
+                    printfYellow("[mremap] DEBUG: Before update - VMA[%d].len=%d, new_size=%u\n", 
+                                vma_index, old_vma_len, (uint)new_size);
+                    
+                    // 检查new_size是否超出int范围 (2^31 - 1 = 2147483647)
+                    if (new_size > 2147483647U) {
+                        printfRed("[mremap] ERROR: new_size %u exceeds INT_MAX, cannot store in VMA.len\n", (uint)new_size);
+                        return syscall::SYS_ENOMEM;
+                    }
+                    
+                    vma.len = (int)new_size;
+                    printfYellow("[mremap] Partial VMA expansion: Updated VMA[%d] length from %d to %d\n", 
+                                vma_index, old_vma_len, vma.len);
+                    printfYellow("[mremap] DEBUG: After update - VMA[%d].len=%d\n", vma_index, vma.len);
+                }
+
+                printfGreen("[mremap] Expanded mapping from %u to %u bytes at %p\n", 
+                           old_size, new_size, old_address);
+                *result_addr = old_address;
+                return 0;
+            }
+
+            // 需要移动映射
+            if (flags & MREMAP_MAYMOVE) {
+                void *target_addr = new_address;
+                
+                if (!(flags & MREMAP_FIXED)) {
+                    // 寻找合适的地址
+                    target_addr = mmap(nullptr, new_size, vma.prot, vma.flags, vma.vfd, vma.offset);
+                    if (target_addr == MAP_FAILED) {
+                        // ENOMEM: 找不到合适的地址
+                        printfRed("[mremap] ENOMEM: Failed to find suitable address for new mapping\n");
+                        return syscall::SYS_ENOMEM;
+                    }
+                } else {
+                    // 使用指定的地址
+                    // 先取消映射目标区域（如果已映射）
+                    munmap(target_addr, new_size);
+                    
+                    // 在指定地址创建新映射
+                    void *mapped_addr = mmap(target_addr, new_size, vma.prot, 
+                                           vma.flags | MAP_FIXED, vma.vfd, vma.offset);
+                    if (mapped_addr != target_addr) {
+                        // ENOMEM: 无法在指定地址映射
+                        printfRed("[mremap] ENOMEM: Failed to map at fixed address %p\n", target_addr);
+                        return syscall::SYS_ENOMEM;
+                    }
+                }
+
+                // 复制旧数据到新位置
+                // 创建临时缓冲区来中转数据
+                void *temp_buffer = new char[old_size];
+                if (!temp_buffer) {
+                    // ENOMEM: 临时缓冲区分配失败
+                    printfRed("[mremap] ENOMEM: Failed to allocate temporary buffer\n");
+                    munmap(target_addr, new_size);
+                    return syscall::SYS_ENOMEM;
+                }
+
+                // 从旧地址读取数据到临时缓冲区
+                if (mem::k_vmm.copy_in(*pcb->get_pagetable(), temp_buffer, old_start, old_size) < 0) {
+                    // EFAULT: 无法读取旧数据
+                    printfRed("[mremap] EFAULT: Failed to read data from old location\n");
+                    delete[] (char*)temp_buffer;
+                    munmap(target_addr, new_size);
+                    return syscall::SYS_EFAULT;
+                }
+
+                // 从临时缓冲区写入数据到新地址
+                if (mem::k_vmm.copy_out(*pcb->get_pagetable(), (uint64)target_addr, temp_buffer, old_size) < 0) {
+                    // EFAULT: 无法写入新数据
+                    printfRed("[mremap] EFAULT: Failed to write data to new location\n");
+                    delete[] (char*)temp_buffer;
+                    munmap(target_addr, new_size);
+                    return syscall::SYS_EFAULT;
+                }
+
+                delete[] (char*)temp_buffer;
+
+                // 如果不是 MREMAP_DONTUNMAP，则释放旧映射
+                if (!(flags & MREMAP_DONTUNMAP)) {
+                    munmap(old_address, old_size);
+                }
+
+                printfGreen("[mremap] Moved and resized mapping from %p (%u bytes) to %p (%u bytes)\n", 
+                           old_address, old_size, target_addr, new_size);
+                *result_addr = target_addr;
+                return 0;
+            }
+        }
+
+        // 情况3：大小不变
+        if (new_size == old_size) {
+            if (flags & MREMAP_FIXED) {
+                // 移动到新地址
+                if (flags & MREMAP_MAYMOVE) {
+                    // 类似上面的移动逻辑
+                    munmap(new_address, new_size);
+                    void *mapped_addr = mmap(new_address, new_size, vma.prot, 
+                                           vma.flags | MAP_FIXED, vma.vfd, vma.offset);
+                    if (mapped_addr != new_address) {
+                        // ENOMEM: 无法在指定地址映射
+                        return syscall::SYS_ENOMEM;
+                    }
+                    // 创建临时缓冲区用于数据转移
+                    void *temp_buffer = new char[old_size];
+                    if (!temp_buffer) {
+                        munmap(new_address, new_size);
+                        return syscall::SYS_ENOMEM;
+                    }
+                    
+                    if (mem::k_vmm.copy_in(*pcb->get_pagetable(), temp_buffer, old_start, old_size) < 0) {
+                        delete[] (char*)temp_buffer;
+                        munmap(new_address, new_size);
+                        return syscall::SYS_EFAULT;
+                    }
+                    
+                    if (mem::k_vmm.copy_out(*pcb->get_pagetable(), (uint64)new_address, temp_buffer, old_size) < 0) {
+                        delete[] (char*)temp_buffer;
+                        munmap(new_address, new_size);
+                        return syscall::SYS_EFAULT;
+                    }
+                    
+                    delete[] (char*)temp_buffer;
+
+                    if (!(flags & MREMAP_DONTUNMAP)) {
+                        munmap(old_address, old_size);
+                    }
+
+                    *result_addr = new_address;
+                    return 0;
+                }
+            }
+            
+            // 大小不变且无需移动
+            *result_addr = old_address;
+            return 0;
+        }
+
+        printfRed("[mremap] Unexpected condition\n");
+        return syscall::SYS_EINVAL;
+    }
+
     /// @brief 从当前工作目录中删除指定路径的文件或目录项。
     /// @param fd 基准目录的文件描述符，若为 -100 表示以当前工作目录为基准（AT_FDCWD）。其他值暂不支持。
     /// @param path 要删除的文件或目录的相对路径，不能为空字符串，支持"./"开头的路径格式。

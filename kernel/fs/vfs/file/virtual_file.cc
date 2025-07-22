@@ -128,7 +128,7 @@ namespace fs
 
     long virtual_file::read(uint64 buf, size_t len, long off, bool upgrade)
     {
-        // printfGreen("virtual_file::read called with buf: %p, len: %zu, off: %ld, upgrade: %d\n", (void *)buf, len, off, upgrade);
+        // printfGreen("virtual_file::read called with buf: %p, len: %u, off: %d, upgrade: %d\n", (void *)buf, len, off, upgrade);
         
         if (_attrs.u_read != 1) {
             printfRed("virtual_file:: not allowed to read!");

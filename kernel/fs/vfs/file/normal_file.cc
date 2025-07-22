@@ -8,7 +8,7 @@ namespace fs
 {
 long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 	{
-		// printfGreen("normal_file::read called with buf: %p, len: %zu, off: %ld, upgrade: %d\n", (void *)buf, len, off, upgrade);
+		// printfGreen("normal_file::read called with buf: %p, len: %u, off: %d, upgrade: %d\n", (void *)buf, len, off, upgrade);
 		ulong ret;
 		if (_attrs.u_read != 1)
 		{
