@@ -2421,8 +2421,8 @@ char *ltp_testcases[] = {
     // "shmat1",
     // "shmctl01",     //时钟的没过
     // "shmctl02",
-    "shmctl03",
-    // "shmctl04",
+    // "shmctl03",
+    "shmctl04",
     // "shmctl05",
     // "shmctl06",
     // "shmctl07",
