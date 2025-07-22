@@ -1705,196 +1705,360 @@ namespace proc
         out_buf[i] = '\0';
         return i + 1;
     }
-    /// @brief
-    /// @param fd
-    /// @param map_size
-    /// @return
+
+    /// @brief 验证mmap参数的有效性
+    /// @param addr 映射地址
+    /// @param length 映射长度 
+    /// @param prot 保护标志
+    /// @param flags 映射标志
+    /// @param fd 文件描述符
+    /// @param offset 偏移量
+    /// @return 0表示有效，负数表示错误码
+    int ProcessManager::validate_mmap_params(void *addr, int length, int prot, int flags, int fd, int offset)
+    {
+        // 长度检查
+        if (length <= 0) {
+            return syscall::SYS_EINVAL;
+        }
+
+        // 检查必须的共享标志 - 必须指定MAP_SHARED或MAP_PRIVATE之一
+        bool has_shared = flags & MAP_SHARED;
+        bool has_private = flags & MAP_PRIVATE;
+        
+        if (!has_shared && !has_private) {
+            return syscall::SYS_EINVAL; // 必须指定共享类型
+        }
+        
+        if (has_shared && has_private) {
+            return syscall::SYS_EINVAL; // 不能同时指定
+        }
+
+        // 检查保护标志的合理性
+        if (prot & ~(PROT_READ | PROT_WRITE | PROT_EXEC | PROT_NONE)) {
+            return syscall::SYS_EINVAL; // 无效的保护标志
+        }
+
+        // 检查匿名映射
+        bool is_anonymous = (flags & MAP_ANONYMOUS) || (fd == -1);
+        
+        if (is_anonymous) {
+            if (offset != 0) {
+                return syscall::SYS_EINVAL; // 匿名映射offset必须为0
+            }
+            // 匿名映射通常要求fd为-1
+            if (!(flags & MAP_ANONYMOUS) && fd != -1) {
+                return syscall::SYS_EBADF; // 不一致的匿名映射设置
+            }
+        } else {
+            // 文件映射的fd验证在主函数中进行，因为需要访问进程状态
+            if (fd < 0) {
+                return syscall::SYS_EBADF;
+            }
+        }
+
+        // MAP_FIXED相关检查
+        if (flags & MAP_FIXED) {
+            if (addr == nullptr) {
+                return syscall::SYS_EINVAL; // MAP_FIXED需要指定地址
+            }
+            // 检查地址对齐（大多数架构要求页对齐）
+            if ((uint64)addr % PGSIZE != 0) {
+                return syscall::SYS_EINVAL;
+            }
+            
+            // MAP_FIXED_NOREPLACE不能与MAP_FIXED同时使用（Linux实现中）
+            if ((flags & MAP_FIXED_NOREPLACE) && !(flags & MAP_FIXED)) {
+                return syscall::SYS_EINVAL;
+            }
+        }
+
+        return 0; // 参数有效
+    }
+
+    /// @brief 内存映射函数，根据POSIX标准实现mmap系统调用
+    /// @param addr 期望的映射地址，可以为nullptr让系统选择
+    /// @param length 映射长度（字节）
+    /// @param prot 内存保护标志(PROT_READ|PROT_WRITE|PROT_EXEC|PROT_NONE)
+    /// @param flags 映射标志(MAP_SHARED|MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS等)
+    /// @param fd 文件描述符，匿名映射时为-1
+    /// @param offset 文件偏移量
+    /// @return 成功返回映射地址，失败返回MAP_FAILED
     void *ProcessManager::mmap(void *addr, int length, int prot, int flags, int fd, int offset)
     {
         printfYellow("[mmap] addr: %p, length: %d, prot: %d, flags: %d, fd: %d, offset: %d\n",
                      addr, length, prot, flags, fd, offset);
-        uint64 err = 0xffffffffffffffff;
-        fs::normal_file *vfile = nullptr;
-        fs::file *f;
+
+        // 参数验证
+        int validation_result = validate_mmap_params(addr, length, prot, flags, fd, offset);
+        if (validation_result != 0) {
+            printfRed("[mmap] Parameter validation failed: %d\n", validation_result);
+            return MAP_FAILED;
+        }
+
         Pcb *p = get_cur_pcb();
-        if (fd == -1)
-        {
-            f = nullptr; // 匿名映射
-            // 对于匿名映射，创建一个特殊的vfile标记
-            // 我们可以使用nullptr，或者创建一个特殊的匿名文件对象
-            vfile = nullptr; // 匿名映射使用nullptr作为vfile
-        }
-        else if (p->_ofile == nullptr || p->_ofile->_ofile_ptr[fd] == nullptr)
-        {
-            return (void *)err;
-        }
-        else
-        {
-            f = p->get_open_file(fd);
-            if (f->_attrs.filetype != fs::FileTypes::FT_NORMAL)
-                return (void *)err; // 只支持普通文件映射
-            printfYellow("vfile name : %s\n", f ? f->_path_name.c_str() : "nullptr");
-            vfile = static_cast<fs::normal_file *>(f); // 强制转换为普通文件类型
-        }
-        ///@details 学长代码是mmap时映射到内存，xv6lab的意思是懒分配，在缺页异常时判断分配。
-        /// 我们选择懒分配的方式，只有在访问时才分配物理页。
-        // get dentry from file
-        //  fs::dentry *de = vfile->getDentry();
-        //  if(de ==nullptr)   return (void *)err; // dentry is null
 
-        if (p->_sz + length > MAXVA - PGSIZE) // 我写得maxva-pgsize是trampoline的地址
-            return (void *)err;               // 超出最大虚拟地址空间
-
-        // if (length == 0)
-        // {
-        //     length = 10 * PGSIZE; // 默认映射10页
-        // }
-
-        // MAP_FIXED 的处理应该在 VMA 分配中进行，而不是直接返回地址
-
-        for (int i = 0; i < NVMA; ++i)
-        {
-            if (p->_vma->_vm[i].used == 0) // 找到一个空闲的虚拟内存区域
-            {
-                p->_vma->_vm[i].used = 1;
-
-                // 处理 MAP_FIXED 标志
-                if (flags & MAP_FIXED && addr != nullptr)
-                {
-                    // MAP_FIXED 要求在指定地址进行映射
-                    p->_vma->_vm[i].addr = (uint64)addr;
-                    printfCyan("[mmap] MAP_FIXED mapping at specified address %p\n", addr);
-                }
-                else
-                {
-                    // 正常情况下，在进程当前大小之后分配
-                    p->_vma->_vm[i].addr = p->_sz;
-                }
-
-                p->_vma->_vm[i].flags = flags;
-                p->_vma->_vm[i].prot = prot;
-                p->_vma->_vm[i].vfile = vfile; // 对于匿名映射，这里是nullptr
-                p->_vma->_vm[i].vfd = fd;      // 对于匿名映射，这里是-1
-                p->_vma->_vm[i].offset = offset;
-
-                if (fd == -1) // 匿名映射
-                {
-                    // 设置初始大小为请求大小
-                    printfCyan("[mmap] anonymous mapping at %p, length: %d, prot: %d, flags: %d\n",
-                               (void *)p->_vma->_vm[i].addr, length, prot, flags);
-                    p->_vma->_vm[i].is_expandable = 0;              // 可扩展
-                    p->_vma->_vm[i].len = MAX(length, 10 * PGSIZE); // 至少10页
-
-                    if (flags & MAP_FIXED)
-                    {
-                        // MAP_FIXED 不扩展最大长度，只能使用指定区域
-                        p->_vma->_vm[i].len = length; // 使用指定长度
-                        p->_vma->_vm[i].addr = (uint64)addr;
-                        p->_vma->_vm[i].max_len = p->_vma->_vm[i].len;
-                        p->_vma->_vm[i].is_expandable = 0; // MAP_FIXED 通常不可扩展
-                    }
-                    else
-                    {
-                        p->_vma->_vm[i].max_len = MAXVA - p->_sz; // 设置最大可扩展大小
-                    }
-                }
-                else
-                {
-                    ///@todo 一定记得写完fstat之后改!!!!!!!!fstat会让传入的length变成文件大小
-                    p->_vma->_vm[i].len = length; // 文件映射保持原样
-                    p->_vma->_vm[i].max_len = length;
-                    // printfCyan("[mmap] file mapping at %p, length: %d, prot: %d, flags: %d, fd: %d\n",
-                    //            (void *)p->_vma->_vm[i].addr, length, prot, flags, fd);
-                    vfile->dup(); // 只对文件映射增加引用计数
-                }
-
-                // 只有非 MAP_FIXED 的映射才更新 p->_sz
-                if (!(flags & MAP_FIXED))
-                {
-                    p->_sz += p->_vma->_vm[i].len; // 扩展进程的虚拟内存空间
-                }
-                else
-                {
-                    // MAP_FIXED 可能需要更新 p->_sz 为更大的值
-                    uint64 end_addr = p->_vma->_vm[i].addr + p->_vma->_vm[i].len;
-                    if (end_addr > p->_sz)
-                    {
-                        p->_sz = end_addr;
-                    }
-                }
-
-                return (void *)p->_vma->_vm[i].addr; // 返回映射的虚拟地址
+        // 检查是否为匿名映射
+        bool is_anonymous = (flags & MAP_ANONYMOUS) || (fd == -1);
+        
+        // 匿名映射验证
+        if (is_anonymous) {
+            if (fd != -1 && !(flags & MAP_ANONYMOUS)) {
+                printfRed("[mmap] Anonymous mapping but fd != -1\n");
+                return MAP_FAILED;
+            }
+            if (offset != 0) {
+                printfRed("[mmap] Anonymous mapping with non-zero offset\n");
+                return MAP_FAILED;
             }
         }
-        return (void *)err;
+
+        // 文件映射验证
+        fs::normal_file *vfile = nullptr;
+        fs::file *f = nullptr;
+        if (!is_anonymous) {
+            if (p->_ofile == nullptr || fd < 0 || fd >= (int)max_open_files || 
+                p->_ofile->_ofile_ptr[fd] == nullptr) {
+                printfRed("[mmap] Invalid file descriptor: %d\n", fd);
+                return MAP_FAILED;
+            }
+            
+            f = p->get_open_file(fd);
+            if (f->_attrs.filetype != fs::FileTypes::FT_NORMAL) {
+                printfRed("[mmap] File descriptor does not refer to regular file\n");
+                return MAP_FAILED;
+            }
+            
+            // 检查文件访问权限
+            if (prot & PROT_READ) {
+                // 文件必须可读
+                // TODO: 检查文件打开模式是否支持读取
+            }
+            if ((prot & PROT_WRITE) && (flags & MAP_SHARED)) {
+                // 共享写映射要求文件以读写模式打开
+                // TODO: 检查文件打开模式是否支持写入
+            }
+            
+            vfile = static_cast<fs::normal_file *>(f);
+            printfCyan("[mmap] File mapping: %s\n", f->_path_name.c_str());
+        } else {
+            printfCyan("[mmap] Anonymous mapping\n");
+        }
+
+        // 地址对齐
+        uint64 aligned_length = PGROUNDUP(length);
+        if (aligned_length + p->_sz > MAXVA - PGSIZE) {
+            printfRed("[mmap] Would exceed virtual address space\n");
+            return MAP_FAILED;
+        }
+
+        // 查找空闲VMA
+        int vma_idx = -1;
+        for (int i = 0; i < NVMA; ++i) {
+            if (!p->_vma->_vm[i].used) {
+                vma_idx = i;
+                break;
+            }
+        }
+        
+        if (vma_idx == -1) {
+            printfRed("[mmap] No available VMA slots\n");
+            return MAP_FAILED;
+        }
+
+        // 确定映射地址
+        uint64 map_addr;
+        if (flags & MAP_FIXED) {
+            if (addr == nullptr) {
+                printfRed("[mmap] MAP_FIXED requires non-null addr\n");
+                return MAP_FAILED;
+            }
+            
+            if(is_page_align((uint64)addr) == false) {
+                printfRed("[mmap] MAP_FIXED address must be page aligned\n");
+                return MAP_FAILED;
+            }
+            map_addr = (uint64)addr;
+            
+            if (flags & MAP_FIXED_NOREPLACE) {
+                // 检查是否与现有映射冲突
+                for (int i = 0; i < NVMA; ++i) {
+                    if (p->_vma->_vm[i].used) {
+                        uint64 existing_start = p->_vma->_vm[i].addr;
+                        uint64 existing_end = existing_start + p->_vma->_vm[i].len;
+                        uint64 new_end = map_addr + aligned_length;
+                        
+                        if (!(new_end <= existing_start || map_addr >= existing_end)) {
+                            printfRed("[mmap] MAP_FIXED_NOREPLACE: address range conflicts\n");
+                            return MAP_FAILED;
+                        }
+                    }
+                }
+            } else {
+                // MAP_FIXED 可以覆盖现有映射
+                // TODO: 取消映射冲突区域
+
+            }
+        } else {
+            // 系统选择地址
+            if (addr != nullptr) {
+                // 作为提示使用
+                map_addr = PGROUNDUP((uint64)addr);
+            } else {
+                map_addr = p->_sz;
+            }
+        }
+
+        // 初始化VMA
+        struct vma *vm = &p->_vma->_vm[vma_idx];
+        vm->used = 1;
+        vm->addr = map_addr;
+        vm->len = aligned_length;
+        vm->prot = prot;
+        vm->flags = flags;
+        vm->vfd = is_anonymous ? -1 : fd;
+        vm->vfile = vfile;
+        vm->offset = offset;
+        
+        // 设置扩展属性
+        if (is_anonymous) {
+            vm->is_expandable = !(flags & MAP_FIXED);
+            vm->max_len = (flags & MAP_FIXED) ? aligned_length : (MAXVA - map_addr);
+        } else {
+            vm->is_expandable = false;
+            vm->max_len = aligned_length;
+            vfile->dup(); // 增加文件引用计数
+        }
+
+        // 更新进程大小
+        if (!(flags & MAP_FIXED)) {
+            p->_sz += aligned_length;
+        } else {
+            uint64 end_addr = map_addr + aligned_length;
+            if (end_addr > p->_sz) {
+                p->_sz = end_addr;
+            }
+        }
+
+        // 特殊标志处理
+        if (flags & MAP_POPULATE) {
+            // TODO: 预分配页面
+            printfCyan("[mmap] MAP_POPULATE: will prefault pages\n");
+        }
+        
+        if (flags & MAP_LOCKED) {
+            // TODO: 锁定页面在内存中
+            printfCyan("[mmap] MAP_LOCKED: pages will be locked in memory\n");
+        }
+
+        printfGreen("[mmap] Success: addr=%p, len=%d, prot=%d, flags=%d\n", 
+                   (void*)map_addr, aligned_length, prot, flags);
+        
+        return (void *)map_addr;
     }
+    /// @brief 取消内存映射，符合POSIX标准的munmap实现
+    /// @param addr 要取消映射的起始地址，必须页对齐
+    /// @param length 要取消映射的长度（字节）
+    /// @return 成功返回0，失败返回-1
     int ProcessManager::munmap(void *addr, int length)
     {
-
-        int i;
-        Pcb *p = get_cur_pcb();
-
-        for (i = 0; i < NVMA; ++i)
-        {
-            if (p->_vma->_vm[i].used && p->_vma->_vm[i].len >= length)
-            {
-                // 根据提示，munmap的地址范围只能是
-                // 1. 起始位置
-                if (p->_vma->_vm[i].addr == (uint64)addr)
-                {
-                    p->_vma->_vm[i].addr += length;
-                    p->_vma->_vm[i].len -= length;
-                    break;
-                }
-                // 2. 结束位置
-                if ((uint64)(addr) + length == p->_vma->_vm[i].addr + p->_vma->_vm[i].len)
-                {
-                    p->_vma->_vm[i].len -= length;
-                    break;
-                }
-            }
-        }
-        if (i == NVMA)
+        if (addr == nullptr || length <= 0) {
+            printfRed("[munmap] Invalid parameters: addr=%p, length=%d\n", addr, length);
             return -1;
-
-        ///@TODO: 此处注释了就能过，但是supposed to 写回的，暂时处理不了那个write
-        ///@details 所以其实不用管，munmap和mmap两个点都能过。
-        // // 将MAP_SHARED页面写回文件系统
-        // if (p->_vma->_vm[i].flags == MAP_SHARED && (p->_vma->_vm[i].prot & PROT_WRITE) != 0)
-        // {
-        //     // printfRed("[munmap?]: walkaddr :%p\n",(p->_pt.walk_addr((uint64)addr)));
-        //     p->_vma->_vm[i].vfile->write((uint64)addr, length);
-        // }
-        uint64 va_start = PGROUNDDOWN((uint64)addr);
-        uint64 va_end = PGROUNDUP((uint64)addr + length);
-        // 逐页检查并取消映射，避免对未映射的页面进行操作
-        for (uint64 va = va_start; va < va_end; va += PGSIZE)
-        {
-            mem::Pte pte = p->_pt.walk(va, 0);
-            // printfCyan("freeproc: checking pte for va %p, pte: %p\n", va, pte.get_data());
-            if (!pte.is_null() && pte.is_valid())
-            {
-                // 只对实际映射的页面进行取消映射
-                mem::k_vmm.vmunmap(*p->get_pagetable(), va, 1, 1);
-            }
-        }
-        p->_vma->_vm[i].used = 0;
-        // 判断此页面是否存在映射
-
-        // 当前VMA中全部映射都被取消
-        if (p->_vma->_vm[i].len == 0)
-        {
-            /// TODO:此处我没找到对应xv6的fileclose，找了个最类似的函数用上
-            /// 也许这个free_file()是对的
-            /// commented by @gkq
-            // 只对文件映射释放文件引用
-            if (p->_vma->_vm[i].vfile != nullptr)
-            {
-                p->_vma->_vm[i].vfile->free_file();
-            }
-            p->_vma->_vm[i].used = 0;
         }
 
+        // 地址必须页对齐
+        if ((uint64)addr % PGSIZE != 0) {
+            printfRed("[munmap] Address not page aligned: %p\n", addr);
+            return -1;
+        }
+
+        Pcb *p = get_cur_pcb();
+        uint64 unmap_start = (uint64)addr;
+        uint64 unmap_end = unmap_start + length;
+        uint64 aligned_length = PGROUNDUP(length);
+
+        printfYellow("[munmap] addr=%p, length=%d (aligned=%lu)\n", addr, length, aligned_length);
+
+        // 查找覆盖此地址范围的所有VMA
+        for (int i = 0; i < NVMA; ++i) {
+            if (!p->_vma->_vm[i].used) continue;
+
+            struct vma *vm = &p->_vma->_vm[i];
+            uint64 vma_start = vm->addr;
+            uint64 vma_end = vma_start + vm->len;
+
+            // 检查是否有重叠
+            if (unmap_end <= vma_start || unmap_start >= vma_end) {
+                continue; // 没有重叠
+            }
+
+            printfCyan("[munmap] Found overlapping VMA %d: [%p, %p)\n", i, (void*)vma_start, (void*)vma_end);
+
+            // 计算重叠区域
+            uint64 overlap_start = MAX(unmap_start, vma_start);
+            uint64 overlap_end = MIN(unmap_end, vma_end);
+
+            // 处理MAP_SHARED文件映射的写回
+            if ((vm->flags & MAP_SHARED) && (vm->prot & PROT_WRITE) && vm->vfile != nullptr) {
+                // TODO: 实现脏页写回
+                printfCyan("[munmap] Should write back MAP_SHARED pages for file %s\n", 
+                          vm->vfile->_path_name.c_str());
+                // 对于现在，我们跳过写回，因为文件系统接口还不完整
+            }
+
+            // 取消物理页面映射
+            uint64 va_start = PGROUNDDOWN(overlap_start);
+            uint64 va_end = PGROUNDUP(overlap_end);
+            
+            for (uint64 va = va_start; va < va_end; va += PGSIZE) {
+                mem::Pte pte = p->_pt.walk(va, 0);
+                if (!pte.is_null() && pte.is_valid()) {
+                    // 取消映射并释放物理页面
+                    mem::k_vmm.vmunmap(*p->get_pagetable(), va, 1, 1);
+                    printfCyan("[munmap] Unmapped page at va=%p\n", (void*)va);
+                }
+            }
+
+            // 更新VMA结构
+            if (overlap_start == vma_start && overlap_end == vma_end) {
+                // 完全取消映射整个VMA
+                printfCyan("[munmap] Completely unmapping VMA %d\n", i);
+                
+                if (vm->vfile != nullptr) {
+                    vm->vfile->free_file(); // 减少文件引用计数
+                }
+                
+                vm->used = 0;
+                vm->addr = 0;
+                vm->len = 0;
+                vm->vfile = nullptr;
+                vm->vfd = -1;
+                
+            } else if (overlap_start == vma_start) {
+                // 从头部开始取消映射
+                printfCyan("[munmap] Unmapping from start of VMA %d\n", i);
+                
+                uint64 remaining_len = vma_end - overlap_end;
+                vm->addr = overlap_end;
+                vm->len = remaining_len;
+                vm->offset += (overlap_end - vma_start);
+                
+            } else if (overlap_end == vma_end) {
+                // 从尾部开始取消映射
+                printfCyan("[munmap] Unmapping from end of VMA %d\n", i);
+                
+                vm->len = overlap_start - vma_start;
+                
+            } else {
+                // 从中间取消映射，需要分割VMA
+                printfRed("[munmap] Middle unmapping not fully supported yet\n");
+                // TODO: 实现VMA分割，需要找到空闲VMA槽位来创建第二个VMA
+                // 目前简单处理：截断到取消映射的起始位置
+                vm->len = overlap_start - vma_start;
+            }
+        }
+
+        printfGreen("[munmap] Successfully unmapped range [%p, %p)\n", addr, (void*)unmap_end);
         return 0;
     }
     /// @brief 从当前工作目录中删除指定路径的文件或目录项。

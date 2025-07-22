@@ -343,7 +343,7 @@ namespace shm
         
         if (size < SHMMIN) {
             printfRed("[ShmManager] Size 0x%x is less than SHMMIN (0x%x)\n", size, SHMMIN);
-            return -EINVAL;
+            size = SHMMIN; // 如果小于最小值，则调整为最小值
         }
         
         if (size > SHMMAX) {
@@ -398,12 +398,9 @@ namespace shm
         // 清零段内容 (按照标准要求)
         memset((void *)allocated_addr, 0, new_seg.size); // 清零物理内存
 
-        // 确保容器已经可以安全使用 - 先检查容器状态
-        printfCyan("[ShmManager] About to insert segment, current segments count: %u\n", segments->size());
-        // 使用最简单的下标操作插入
         segments->insert({new_seg.shmid, new_seg});
         
-        printfGreen("[ShmManager] Created new segment shmid=%d, key=0x%x, size=0x%x at addr=0x%x\n",
+        printfGreen("[ShmManager] Created new segment shmid=%d, key=0x%x, size=0x%x at phy_addr=0x%x\n",
                     new_seg.shmid, key, new_seg.size, allocated_addr);
 
         return new_seg.shmid; // 返回新创建的共享内存段ID

@@ -82,6 +82,7 @@ namespace proc
         int fstat(int fd, fs::Kstat *buf);
         int chdir(eastl::string &path);
         int getcwd(char *out_buf);
+        int validate_mmap_params(void *addr, int length, int prot, int flags, int fd, int offset);
         void *mmap(void *addr, int length, int prot, int flags, int fd, int offset);
         int munmap(void *addr, int length);
         int unlink(int fd, eastl::string path, int flags);

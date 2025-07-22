@@ -349,7 +349,7 @@ void trap_manager::usertrapret()
 /**
  * @brief mmap_handler 处理mmap惰性分配导致的页面错误
  * @param va 页面故障虚拟地址
- * @param cause 页面故障原因
+ * @param cause 页面故障原因 (13=load fault, 15=store fault)
  * @return 0成功，-1失败
  */
 int mmap_handler(uint64 va, int cause)
@@ -362,91 +362,122 @@ int mmap_handler(uint64 va, int cause)
   {
     if (p->_vma->_vm[i].used)
     {
-
       // 检查是否在当前VMA范围内
       if (va >= p->_vma->_vm[i].addr && va < p->_vma->_vm[i].addr + p->_vma->_vm[i].len)
       {
-
+        printfGreen("mmap_handler: found VMA %d for va %p\n", i, va);
         break; // 在当前VMA范围内
       }
-      // 检查是否可以扩展
-      else if (p->_vma->_vm[i].is_expandable &&
-               va < p->_vma->_vm[i].addr + p->_vma->_vm[i].max_len)
-      {
-        // 扩展当前VMA
-        uint64 new_len = PGROUNDUP(va - p->_vma->_vm[i].addr + PGSIZE);
-        if (new_len <= p->_vma->_vm[i].max_len)
-        {
-          p->_vma->_vm[i].len = new_len;
-          p->_sz += (new_len - p->_vma->_vm[i].len);
-          break;
-        }
-      }
+      // 检查是否可以扩展(主要用于栈和动态内存)
+      // else if (p->_vma->_vm[i].is_expandable &&
+      //          va >= p->_vma->_vm[i].addr && 
+      //          va < p->_vma->_vm[i].addr + p->_vma->_vm[i].max_len)
+      // {
+      //   // 扩展当前VMA
+      //   uint64 new_len = PGROUNDUP(va - p->_vma->_vm[i].addr + PGSIZE);
+      //   if (new_len <= p->_vma->_vm[i].max_len)
+      //   {
+      //     uint64 old_len = p->_vma->_vm[i].len;
+      //     p->_vma->_vm[i].len = new_len;
+      //     p->_sz += (new_len - old_len);
+      //     printfCyan("mmap_handler: expanded VMA %d from %lu to %lu bytes\n", i, old_len, new_len);
+      //     break;
+      //   }
+      // }
     }
   }
+  
   if (i == proc::NVMA)
   {
     printfRed("mmap_handler: no VMA found for va %p\n", va);
     return -1;
   }
-  int pte_flags = PTE_U;
-  if (p->_vma->_vm[i].prot == 0)
-  {
-    pte_flags |= PTE_R | PTE_X | PTE_W;
-    printfYellow("mmap_handler: prot=0 mapping, using minimal permissions\n");
-  }
-  else
-  {
-    if (p->_vma->_vm[i].prot & PROT_READ)
-      pte_flags |= PTE_R;
-    if (p->_vma->_vm[i].prot & PROT_WRITE)
-      pte_flags |= PTE_W;
-    if (p->_vma->_vm[i].prot & PROT_EXEC)
-      pte_flags |= PTE_X;
-  }
-  fs::normal_file *vf = p->_vma->_vm[i].vfile;
 
+  // 检查权限
+  struct proc::vma *vm = &p->_vma->_vm[i];
+  
+  // PROT_NONE 不允许任何访问
+  if (vm->prot == PROT_NONE) {
+    printfRed("mmap_handler: access to PROT_NONE page at %p\n", va);
+    return -1;
+  }
+
+  // 检查访问类型是否符合权限
+  if (cause == 13) { // Load page fault
+    if (!(vm->prot & PROT_READ)) {
+      printfRed("mmap_handler: read access to non-readable page at %p\n", va);
+      return -1;
+    }
+  } else if (cause == 15) { // Store page fault  
+    if (!(vm->prot & PROT_WRITE)) {
+      printfRed("mmap_handler: write access to non-writable page at %p\n", va);
+      return -1;
+    }
+  }
+
+  // 构建页表项权限
+  int pte_flags = PTE_U; // 用户可访问
+  
+  if (vm->prot & PROT_READ)
+    pte_flags |= PTE_R;
+  if (vm->prot & PROT_WRITE)
+    pte_flags |= PTE_W;
+  if (vm->prot & PROT_EXEC)
+    pte_flags |= PTE_X;
+
+  // 分配物理页面
   void *pa = mem::k_pmm.alloc_page();
   if (pa == nullptr)
   {
     printfRed("mmap_handler: alloc_page failed\n");
-    return -1; // 分配页面失败
-  }
-  if (pa == 0)
     return -1;
+  }
+
+  // 初始化页面内容
   memset(pa, 0, PGSIZE);
 
   // 检查是否为匿名映射
-  if (vf == nullptr || p->_vma->_vm[i].vfd == -1)
+  fs::normal_file *vf = vm->vfile;
+  if (vf == nullptr || vm->vfd == -1)
   {
     // 匿名映射：页面已经初始化为0，直接映射即可
-    // printfCyan("mmap_handler: handling anonymous mapping at %p\n", va);
+    printfCyan("mmap_handler: handling anonymous mapping at %p (flags=0x%x)\n", va, vm->flags);
+    
+    // MAP_UNINITIALIZED 标志允许不清零页面，但为了安全我们还是清零
+    if (!(vm->flags & MAP_UNINITIALIZED)) {
+      // 页面已经通过memset清零了
+    }
   }
   else
   {
-
-    int offset = p->_vma->_vm[i].offset + PGROUNDDOWN(va - p->_vma->_vm[i].addr);
-    ///@details 原本的xv6的readi函数有一个标志位来区分是否读到内核中，此处位于内核里
-    /// pa直接是物理地址，所以应该无所谓
-    //	long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
+    // 文件映射：从文件读取数据
+    int offset = vm->offset + PGROUNDDOWN(va - vm->addr);
+    
     printfCyan("mmap_handler: reading from file %s at offset %d\n", vf->_path_name.c_str(), offset);
     int readbytes = vf->read((uint64)pa, PGSIZE, offset, false);
-    // 什么都没有读到
-    if (readbytes == 0)
-    {
-      printfRed("mmap_handler: read nothing\n");
-      // mem::k_pmm.free_page(pa);
-      // return -1;
+    
+    if (readbytes < 0) {
+      printfRed("mmap_handler: file read failed\n");
+      mem::k_pmm.free_page(pa);
+      return -1;
+    }
+    
+    // 如果读取的字节数少于一页，剩余部分保持为0
+    if (readbytes < PGSIZE) {
+      printfYellow("mmap_handler: partial page read (%d bytes)\n", readbytes);
     }
   }
 
   // 添加页面映射
   if (mem::k_vmm.map_pages(*p->get_pagetable(), PGROUNDDOWN(va), PGSIZE, (uint64)pa, pte_flags) != 1)
   {
-    printfRed("mmap_handler: map failed\n");
+    printfRed("mmap_handler: map_pages failed\n");
     mem::k_pmm.free_page(pa);
     return -1;
   }
+
+  printfGreen("mmap_handler: successfully mapped page at va=%p, pa=%p, pte_flags=0x%x\n", 
+             PGROUNDDOWN(va), pa, pte_flags);
 
   return 0;
 }

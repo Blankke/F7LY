@@ -12,7 +12,7 @@ extern "C"
         // lua_test("/mnt/musl/");
         // lua_test("/mnt/glibc/");
 
-        // libcbench_test("/mnt/glibc/");
+        // libcbench_test("/glibc");
         ltp_test("/musl/ltp/testcases/bin/");
         shutdown();
         return 0;

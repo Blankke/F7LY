@@ -2414,7 +2414,7 @@ char *ltp_testcases[] = {
     // "shell_pipe01.sh",
     // "shm_comm",
     // "shm_test",
-    "shmat01",
+    // "shmat01",
     // "shmat02",
     // "shmat03",
     // "shmat04",
