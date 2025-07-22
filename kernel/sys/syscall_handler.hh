@@ -36,6 +36,7 @@ namespace syscall
         int _arg_str(int arg_n, eastl::string &buf, int max);
         int _arg_fd(int arg_n, int *out_fd, fs::file **out_f);
         int  argfd(int n, int *pfd, struct file **pf);
+        bool is_bad_addr(uint64 addr);
     private: // ================ syscall functions ================
         uint64 sys_exec();
         uint64 sys_fork();
