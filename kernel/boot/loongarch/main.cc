@@ -34,7 +34,7 @@ extern "C" void main()
     mem::k_pmm.init();
 
     mem::k_vmm.init("virtual_memory_manager");
-
+    shm::k_smm.init(SHM_START, SHM_SIZE); // 初始化共享内存管理器
     mem::k_hmm.init("heap_memory_manager", HEAP_START);
 
     if (dev::k_devm.register_stdin(static_cast<dev::VirtualDevice *>(&dev::k_stdin)) < 0)

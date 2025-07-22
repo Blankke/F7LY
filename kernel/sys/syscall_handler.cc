@@ -41,6 +41,7 @@
 #include "fs/fs_defs.hh"
 #include "fs/lwext4/ext4_errno.hh"
 #include "fs/vfs/virtual_fs.hh"
+#include "shm/shm_manager.hh"
 namespace syscall
 {
     // 创建全局的 SyscallHandler 实例
@@ -406,7 +407,7 @@ namespace syscall
         if (fd < 0 || (uint)fd >= proc::max_open_files)
         {
             printfRed("[SyscallHandler::_arg_fd]fd is out of range: %d\n", fd);
-            return SYS_EBADF; 
+            return SYS_EBADF;
         }
         proc::Pcb *p = (proc::Pcb *)Cpu::get_cpu()->get_cur_proc();
         f = p->get_open_file(fd);
@@ -542,7 +543,7 @@ namespace syscall
     uint64 SyscallHandler::sys_dup3()
     {
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        
+
         int oldfd, newfd, flags;
         if (_arg_int(0, oldfd) < 0 || _arg_int(1, newfd) < 0 || _arg_int(2, flags) < 0)
             return -1;
@@ -1977,7 +1978,7 @@ namespace syscall
                 abs_path = get_absolute_path(path.c_str(), dir_file->_path_name.c_str());
             }
         }
-        
+
         fs::file *target_file = nullptr;
         // 检查文件是否存在
         int open_result = fs::k_vfs.openat(abs_path, target_file, O_RDONLY | O_NOFOLLOW);
@@ -2142,7 +2143,7 @@ namespace syscall
             return SYS_EBADF;
         fd = fd;
 
-        if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE&&f->_attrs.filetype != fs::FileTypes::FT_PIPE)
+        if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE && f->_attrs.filetype != fs::FileTypes::FT_PIPE)
         {
             printfRed("[SyscallHandler::sys_ioctl] File is not a device file\n");
             return SYS_ENOTTY; // 不是设备文件
@@ -2205,7 +2206,7 @@ namespace syscall
             return 0;
         }
 
-        if((cmd & 0xFFFF) == FIONREAD || (cmd & 0xFFFF) == TIOCINQ)
+        if ((cmd & 0xFFFF) == FIONREAD || (cmd & 0xFFFF) == TIOCINQ)
         {
             mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
 #ifdef RISCV
@@ -2213,7 +2214,7 @@ namespace syscall
 #elif defined(LOONGARCH)
             int *bytes_available = (int *)to_vir((uint64)pt->walk_addr(arg));
 #endif
-            
+
             if (f->_attrs.filetype == fs::FileTypes::FT_PIPE)
             {
                 // 对于管道文件，获取管道中可读的字节数
@@ -2234,7 +2235,7 @@ namespace syscall
             return 0;
         }
 
-        if((cmd & 0xFFFF) == TIOCOUTQ)
+        if ((cmd & 0xFFFF) == TIOCOUTQ)
         {
             mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
 #ifdef RISCV
@@ -2242,7 +2243,7 @@ namespace syscall
 #elif defined(LOONGARCH)
             int *bytes_in_output = (int *)to_vir((uint64)pt->walk_addr(arg));
 #endif
-            
+
             if (f->_attrs.filetype == fs::FileTypes::FT_PIPE)
             {
                 // 对于管道文件，输出缓冲区概念不适用，返回0
@@ -2262,39 +2263,40 @@ namespace syscall
             return 0;
         }
 
-        if((cmd & 0xFFFF) == TCFLSH)
+        if ((cmd & 0xFFFF) == TCFLSH)
         {
             int queue = (int)arg; // TCFLSH 的参数直接是整数值，不是指针
-            
+
             if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
             {
                 return SYS_ENOTTY; // 只有终端设备支持刷新操作
             }
-            
+
             // tcflush 操作：
             // TCIFLUSH: 刷新接收到但未读取的数据
-            // TCOFLUSH: 刷新已写入但未传输的数据  
+            // TCOFLUSH: 刷新已写入但未传输的数据
             // TCIOFLUSH: 刷新接收和传输数据
-            switch(queue)
+            switch (queue)
             {
-                case TCIFLUSH: // 刷新输入缓冲区
-                case TCOFLUSH: // 刷新输出缓冲区
-                case TCIOFLUSH: // 刷新输入和输出缓冲区
+            case TCIFLUSH:  // 刷新输入缓冲区
+            case TCOFLUSH:  // 刷新输出缓冲区
+            case TCIOFLUSH: // 刷新输入和输出缓冲区
+            {
+                fs::device_file *df = (fs::device_file *)f;
+                int result = df->flush_buffer(queue);
+                if (result < 0)
                 {
-                    fs::device_file *df = (fs::device_file *)f;
-                    int result = df->flush_buffer(queue);
-                    if (result < 0) {
-                        return SYS_EIO; // I/O 错误
-                    }
-                    break;
+                    return SYS_EIO; // I/O 错误
                 }
-                default:
-                    return SYS_EINVAL;
+                break;
+            }
+            default:
+                return SYS_EINVAL;
             }
             return 0;
         }
 
-        if((cmd & 0xFFFF) == TIOCSERGETLSR)
+        if ((cmd & 0xFFFF) == TIOCSERGETLSR)
         {
             mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
 #ifdef RISCV
@@ -2302,27 +2304,27 @@ namespace syscall
 #elif defined(LOONGARCH)
             int *lsr_status = (int *)to_vir((uint64)pt->walk_addr(arg));
 #endif
-            
+
             if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
             {
                 return SYS_ENOTTY; // 只有串行设备支持此操作
             }
-            
+
             // 获取线路状态寄存器
             fs::device_file *df = (fs::device_file *)f;
             int lsr_value = df->get_line_status();
-            if (lsr_value < 0) {
+            if (lsr_value < 0)
+            {
                 return SYS_EIO; // I/O 错误
             }
             *lsr_status = lsr_value;
-            
+
             return 0;
         }
 
         panic("[SyscallHandler::sys_ioctl] Unsupported ioctl command: 0x%X\n", cmd);
         return 0;
-
-}
+    }
     uint64 SyscallHandler::sys_syslog()
     {
         enum sys_log_type
@@ -2380,7 +2382,7 @@ namespace syscall
             return SYS_EBADF;
         if (_arg_int(1, op) < 0)
             return SYS_EINVAL;
-        
+
         printfYellow("file fd: %d, op: %d\n", fd, op);
         switch (op)
         {
@@ -2451,20 +2453,20 @@ namespace syscall
         {
             if (_arg_addr(2, arg) < 0)
                 return SYS_EFAULT;
-            
+
             // 只允许修改特定的状态标志，忽略访问模式和创建标志
             uint32_t modifiable_flags = O_APPEND | O_ASYNC | O_DIRECT | O_NOATIME | O_NONBLOCK;
             uint32_t old_flags = f->lwext4_file_struct.flags;
             uint32_t new_flags = (old_flags & ~modifiable_flags) | (arg & modifiable_flags);
-            
+
             // 保留访问模式 (O_RDONLY, O_WRONLY, O_RDWR)
             new_flags = (new_flags & ~0x03) | (old_flags & 0x03);
-            
+
             // 同步设置 lwext4_file_struct 和 _attrs (根据用户说明，二者需要同步)
             f->lwext4_file_struct.flags = new_flags;
             // 这里可能需要根据具体的 _attrs 结构来同步相关字段
             // 暂时假设 _attrs 中有相应的字段需要更新
-            
+
             return 0;
         }
 
@@ -2525,9 +2527,10 @@ namespace syscall
             if (arg <= 0)
                 return SYS_EINVAL;
             {
-                fs::pipe_file* pf = static_cast<fs::pipe_file*>(f);
+                fs::pipe_file *pf = static_cast<fs::pipe_file *>(f);
                 int result = pf->set_pipe_size(arg);
-                if (result < 0) {
+                if (result < 0)
+                {
                     // 设置失败，可能是大小超出范围或当前有数据无法缩小
                     return SYS_EBUSY;
                 }
@@ -2538,7 +2541,7 @@ namespace syscall
             if (f->_attrs.filetype != fs::FileTypes::FT_PIPE)
                 return SYS_EBADF; // fd 不是管道
             {
-                fs::pipe_file* pf = static_cast<fs::pipe_file*>(f);
+                fs::pipe_file *pf = static_cast<fs::pipe_file *>(f);
                 return pf->get_pipe_size();
             }
 
@@ -2556,7 +2559,7 @@ namespace syscall
         default:
             printfRed("[SyscallHandler::sys_fcntl] Unrecognized fcntl operation: %d\n", op);
             return SYS_EINVAL; // op 中指定的值未被此内核识别
-            //太jb多了(╯‵□′)╯︵┻━┻
+            // 太jb多了(╯‵□′)╯︵┻━┻
         }
 
         return retfd;
@@ -3498,12 +3501,22 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_getegid()
     {
-        
         return 1;
     }
     uint64 SyscallHandler::sys_shmget()
     {
-        panic("未实现该系统调用");
+        key_t key;
+        long ssize;
+        int shmflg;
+        if (_arg_int(0, key) < 0 ||
+            _arg_long(1, ssize) < 0 ||
+            _arg_int(2, shmflg) < 0)
+        {
+            printfRed("[SyscallHandler::sys_shmget] 参数错误\n");
+            return SYS_EINVAL; // 参数错误
+        }
+        size_t size = ssize;
+        return shm::k_smm.create_seg(key, size, shmflg);
     }
     uint64 SyscallHandler::sys_shmctl()
     {

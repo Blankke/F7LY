@@ -1,5 +1,7 @@
 #include "types.hh"
-
+typedef unsigned long shmatt_t;
+/* Shared memory attach boundary - typically page size */
+#define SHMLBA		PGSIZE		/* segment attach address boundary */
 
 /* Permission flag for shmget.  */
 #define SHM_R		0400		/* or S_IRUGO from <linux/stat.h> */
@@ -60,3 +62,33 @@ struct shm_info
 #define IPC_STAT	2		/* Get `ipc_perm' options.  */
 
 # define IPC_INFO	3		/* See ipcs.  */
+
+struct ipc_perm
+{
+  __key_t __key;				/* Key.  */
+  __uid_t uid;					/* Owner's user ID.  */
+  __gid_t gid;					/* Owner's group ID.  */
+  __uid_t cuid;					/* Creator's user ID.  */
+  __gid_t cgid;					/* Creator's group ID.  */
+  __mode_t mode;				/* Read/write permission.  */
+  unsigned short int __seq;			/* Sequence number.  */
+  unsigned short int __pad2;
+  __syscall_ulong_t __glibc_reserved1;
+  __syscall_ulong_t __glibc_reserved2;
+};
+
+struct shmid_ds
+  {
+    struct ipc_perm shm_perm;		/* operation permission struct */
+    size_t shm_segsz;			/* size of segment in bytes */
+
+    __time_t shm_atime;			/* time of last shmat() */
+    __time_t shm_dtime;			/* time of last shmdt() */
+    __time_t shm_ctime;			/* time of last change by shmctl() */
+
+    __pid_t shm_cpid;			/* pid of creator */
+    __pid_t shm_lpid;			/* pid of last shmop */
+    shmatt_t shm_nattch;		/* number of current attaches */
+    __syscall_ulong_t __glibc_reserved5;
+    __syscall_ulong_t __glibc_reserved6;
+  };

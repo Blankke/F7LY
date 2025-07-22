@@ -401,7 +401,8 @@ enum vml : uint64
   vm_kernel_heap_size = _1M*320
 };
 #define HEAP_START PHYSTOP - vm_kernel_heap_size
-#define SHM_START (HEAP_START - _1M*64) // 64 MiB for shm
+constexpr uint64 SHM_SIZE = _1M * 64; // 64 MiB for shm
+#define SHM_START (HEAP_START - SHM_SIZE) // 64 MiB for shm
 #elif defined(LOONGARCH)
 
 #define DISK_IRQ 1
@@ -831,5 +832,6 @@ enum vml : uint64
   vm_kernel_heap_size = _1M * 320,
 };
 #define HEAP_START PHYSTOP - vm_kernel_heap_size
-#define SHM_START (HEAP_START - _1M*64) // 64 MiB for shm
+constexpr uint64 SHM_SIZE = _1M * 64; // 64 MiB for shm
+#define SHM_START (HEAP_START - SHM_SIZE) // 64 MiB for shm
 #endif

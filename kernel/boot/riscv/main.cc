@@ -34,6 +34,7 @@
 #include "fs/buf.hh"
 #include "fs/vfs/vfs_ext4_ext.hh"
 #include "fs/vfs/virtual_fs.hh"
+#include "shm/shm_manager.hh"
 // 注意华科的main函数可能有问题, 注意多核初始化
 void main()
 {
@@ -57,6 +58,7 @@ void main()
 
     mem::k_vmm.init("virtual_memory_manager");
     mem::k_hmm.init("heap_memory_manager", HEAP_START);
+    shm::k_smm.init(SHM_START, SHM_SIZE); // 初始化共享内存管理器
     mem::SlabAllocator::init(); // 初始化 SlabAllocator
     if (dev::k_devm.register_stdin(static_cast<dev::VirtualDevice *>(&dev::k_stdin)) < 0)
         while (1)

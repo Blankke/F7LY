@@ -49,7 +49,7 @@ BUILD_DIR := $(shell pwd)/build/$(OUTPUT_PREFIX)
 # 有架构特定子目录的文件夹
 ARCH_DIRS := boot/$(ARCH) hal/$(ARCH) link/$(ARCH) mem/$(ARCH) proc/$(ARCH) trap/$(ARCH) devs/$(ARCH)
 # 只有通用文件的文件夹
-COMMON_DIRS := libs tm sys 
+COMMON_DIRS := libs tm sys shm
 SUBDIRS := $(ARCH_DIRS) $(COMMON_DIRS)
 
 LINK_SCRIPT := $(KERNEL_DIR)/link/$(ARCH)/kernel.ld
