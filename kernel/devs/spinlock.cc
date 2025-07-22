@@ -19,9 +19,6 @@
 	void SpinLock::acquire()
 	{
 		Cpu * cpu = Cpu::get_cpu();
-		// if( _name != nullptr )
-		// 	strcpy(cpu->_lock_name[cpu->_lock_count], _name);
-		// cpu->_lock_count++;
 		cpu->push_intr_off();
 
 		if ( is_held() )
@@ -43,7 +40,6 @@
 		_locked.store( nullptr );
 
 		eastl::atomic_thread_fence( eastl::memory_order_acq_rel );
-		// cpu->_lock_count--;
 		cpu->pop_intr_off();
 	}
 
