@@ -3990,7 +3990,17 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_shmdt()
     {
-        panic("未实现该系统调用");
+        int shmid;
+        uint64 shmaddr;
+
+        if (_arg_int(0, shmid) < 0 || _arg_addr(1, shmaddr) < 0)
+        {
+            printfRed("[SyscallHandler::sys_shmdt] 参数错误\n");
+            return SYS_EINVAL; // 参数错误
+        }
+
+        // 调用共享内存管理器的分离函数
+        return shm::k_smm.detach_seg((void*)shmaddr);
     }
     uint64 SyscallHandler::sys_recvmsg()
     {

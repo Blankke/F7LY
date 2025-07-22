@@ -70,7 +70,7 @@ namespace shm
     private:
         // 管理共享内存段的容器
         // 使用unordered_map来存储共享内存段信息，key为shmid
-        eastl::unordered_map<int, shm_segment> segments;
+        eastl::unordered_map<int, shm_segment>* segments;
         int next_shmid; // 下一个可用的shmid,分配后更新这个值
         uint64 shm_base;
         uint64 shm_size;

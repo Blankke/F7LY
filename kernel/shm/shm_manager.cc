@@ -19,8 +19,11 @@ namespace shm
         // 初始化时整个内存区域都是空闲的
         free_blocks.clear();
         free_blocks.push_back({base, size});
-        segments.clear(); // 清空共享内存段容器
+        segments =new eastl::unordered_map<int, shm_segment>();
+        // 显式初始化 segments 容器
 
+        // 注意：不进行预分配，避免在内核环境中的内存分配问题
+        
         printfGreen("[ShmManager] Initialized with base=0x%x, size=0x%x\n", base, size);
     }
 
@@ -100,12 +103,13 @@ namespace shm
 
     eastl::unordered_map<int, shm_segment>::iterator ShmManager::find_segment_by_key(key_t key)
     {
-        for (auto it = segments.begin(); it != segments.end(); ++it) {
+
+        for (auto it = segments->begin(); it != segments->end(); ++it) {
             if (it->second.key == key) {
                 return it;
             }
         }
-        return segments.end();
+        return segments->end();
     }
 
     bool ShmManager::check_segment_read_permission(const shm_segment& seg, uid_t uid, gid_t gid)
@@ -277,11 +281,22 @@ namespace shm
         if (key == IPC_PRIVATE) {
             return create_new_segment(key, size, shmflg);
         }
+
+        // 查找是否已存在相同key的段 - 先检查容器是否为空
+        if (segments->empty()) {
+            // 容器为空，直接跳到创建新段的逻辑
+            if (!(shmflg & IPC_CREAT)) {
+                printfRed("[ShmManager] No segment exists for key=0x%x and IPC_CREAT not specified\n", key);
+                return -ENOENT;  // 段不存在且未指定 IPC_CREAT
+            }
+            // 创建新段
+            return create_new_segment(key, size, shmflg);
+        }
         
-        // 查找是否已存在相同key的段
+        // 容器不为空，安全地查找
         auto existing_seg = find_segment_by_key(key);
-        
-        if (existing_seg != segments.end()) {
+
+        if (existing_seg != segments->end()) {
             // 段已存在的情况
             shm_segment& seg = existing_seg->second;
             
@@ -338,7 +353,7 @@ namespace shm
         
         // 检查系统限制 - 最大段数量
         const int SHMMNI = 4096;  // 最大共享内存标识符数量
-        if (segments.size() >= SHMMNI) {
+        if (segments->size() >= SHMMNI) {
             printfRed("[ShmManager] Maximum number of segments reached (%d)\n", SHMMNI);
             return -ENOSPC;
         }
@@ -382,9 +397,12 @@ namespace shm
         
         // 清零段内容 (按照标准要求)
         memset((void *)allocated_addr, 0, new_seg.size); // 清零物理内存
-        
-        segments.insert({new_seg.shmid, new_seg}); // 插入到容器中
 
+        // 确保容器已经可以安全使用 - 先检查容器状态
+        printfCyan("[ShmManager] About to insert segment, current segments count: %u\n", segments->size());
+        // 使用最简单的下标操作插入
+        segments->insert({new_seg.shmid, new_seg});
+        
         printfGreen("[ShmManager] Created new segment shmid=%d, key=0x%x, size=0x%x at addr=0x%x\n",
                     new_seg.shmid, key, new_seg.size, allocated_addr);
 
@@ -392,8 +410,8 @@ namespace shm
     }
     int ShmManager::delete_seg(int shmid)
     {
-        auto it = segments.find(shmid);
-        if (it == segments.end())
+        auto it = segments->find(shmid);
+        if (it == segments->end())
         {
             printfRed("[ShmManager] Segment with shmid=%d not found\n", shmid);
             return -1; // 未找到共享内存段
@@ -407,14 +425,14 @@ namespace shm
         // printfYellow("[ShmManager] Deleted segment shmid=%d, freed addr=0x%x, size=0x%x\n",
         //             shmid, seg.phy_addrs, seg.size);
 
-        segments.erase(it); // 从容器中删除共享内存段
+        segments->erase(it); // 从容器中删除共享内存段
         return 0;
     }
     void *ShmManager::attach_seg(int shmid, void *shmaddr, int shmflg)
     {
         // 查找共享内存段
-        auto it = segments.find(shmid);
-        if (it == segments.end())
+        auto it = segments->find(shmid);
+        if (it == segments->end())
         {
             printfRed("[ShmManager] Segment with shmid=%d not found\n", shmid);
             return (void *)-EINVAL; // 无效的共享内存标识符
@@ -434,7 +452,7 @@ namespace shm
         // 检查进程附加段数量限制
         const int SHMSEG_MAX = 128;  // 每个进程最大附加段数量
         int current_attachments = 0;
-        for (const auto& pair : segments) {
+        for (const auto& pair : *segments) {
             if (pair.second.addr != nullptr) {  // 检查是否已附加到当前进程
                 // TODO：这里简化检查，实际应该维护每个进程的附加列表
                 current_attachments++;
@@ -548,15 +566,15 @@ namespace shm
 
     int ShmManager::detach_seg(void *addr)
     {
-        auto it = segments.begin();
+        auto it = segments->begin();
         // 查找包含该地址的共享内存段
-        for (; it != segments.end(); ++it)
+        for (; it != segments->end(); ++it)
         {
             shm_segment &seg = it->second;
             if (seg.addr == addr)
                 break;
         }
-        if (it == segments.end())
+        if (it == segments->end())
         {
             printfRed("[ShmManager] Segment with address %p not found\n", addr);
             return -EINVAL; // 地址无效
@@ -606,16 +624,16 @@ namespace shm
             case SHM_STAT_ANY:
             {
                 // 查找共享内存段
-                auto it = segments.end();
+                auto it = segments->end();
                 if (cmd == SHM_STAT || cmd == SHM_STAT_ANY) {
                     // SHM_STAT 系列: shmid 是索引而不是标识符
-                    if (shmid < 0 || (size_t)shmid >= segments.size()) {
+                    if (shmid < 0 || (size_t)shmid >= segments->size()) {
                         printfRed("[ShmManager] Invalid index %d for SHM_STAT\n", shmid);
                         return -EINVAL;
                     }
                     // 找到第shmid个段
                     int index = 0;
-                    for (auto iter = segments.begin(); iter != segments.end(); ++iter, ++index) {
+                    for (auto iter = segments->begin(); iter != segments->end(); ++iter, ++index) {
                         if (index == shmid) {
                             it = iter;
                             break;
@@ -623,10 +641,10 @@ namespace shm
                     }
                 } else {
                     // IPC_STAT: shmid 是段标识符
-                    it = segments.find(shmid);
+                    it = segments->find(shmid);
                 }
 
-                if (it == segments.end()) {
+                if (it == segments->end()) {
                     printfRed("[ShmManager] Segment not found for cmd=%d, shmid=%d\n", cmd, shmid);
                     return -EINVAL;
                 }
@@ -683,8 +701,8 @@ namespace shm
             case IPC_SET:
             {
                 // 查找共享内存段
-                auto it = segments.find(shmid);
-                if (it == segments.end()) {
+                auto it = segments->find(shmid);
+                if (it == segments->end()) {
                     printfRed("[ShmManager] Segment with shmid=%d not found for IPC_SET\n", shmid);
                     return -EINVAL;
                 }
@@ -727,8 +745,8 @@ namespace shm
             case IPC_RMID:
             {
                 // 查找共享内存段
-                auto it = segments.find(shmid);
-                if (it == segments.end()) {
+                auto it = segments->find(shmid);
+                if (it == segments->end()) {
                     printfRed("[ShmManager] Segment with shmid=%d not found for IPC_RMID\n", shmid);
                     return -EINVAL;
                 }
@@ -788,7 +806,7 @@ namespace shm
                 
                 // 计算最高使用的索引
                 int max_index = -1;
-                for (const auto& pair : segments) {
+                for (const auto& pair : *segments) {
                     if (pair.first > max_index) {
                         max_index = pair.first;
                     }
@@ -805,10 +823,10 @@ namespace shm
 
                 // 创建系统资源使用信息
                 struct shm_info usage_info = {};
-                usage_info.used_ids = segments.size();
+                usage_info.used_ids = segments->size();
                 
                 size_t total_pages = 0;
-                for (const auto& pair : segments) {
+                for (const auto& pair : *segments) {
                     total_pages += PGROUNDUP(pair.second.size) / PGSIZE;
                 }
                 
@@ -829,7 +847,7 @@ namespace shm
                 
                 // 计算最高使用的索引
                 int max_index = -1;
-                for (const auto& pair : segments) {
+                for (const auto& pair : *segments) {
                     if (pair.first > max_index) {
                         max_index = pair.first;
                     }
@@ -841,8 +859,8 @@ namespace shm
             case SHM_UNLOCK:
             {
                 // 查找共享内存段
-                auto it = segments.find(shmid);
-                if (it == segments.end()) {
+                auto it = segments->find(shmid);
+                if (it == segments->end()) {
                     printfRed("[ShmManager] Segment with shmid=%d not found for SHM_LOCK/UNLOCK\n", shmid);
                     return -EINVAL;
                 }
@@ -879,8 +897,8 @@ namespace shm
 
     shm_segment ShmManager::get_seg_info(int shmid)
     {
-        auto it = segments.find(shmid);
-        if (it != segments.end())
+        auto it = segments->find(shmid);
+        if (it != segments->end())
         {
             return it->second;
         }
@@ -893,8 +911,8 @@ namespace shm
 
     int ShmManager::set_seg_info(int shmid, const shm_segment &seg_info)
     {
-        auto it = segments.find(shmid);
-        if (it == segments.end())
+        auto it = segments->find(shmid);
+        if (it == segments->end())
         {
             return -1; // 段不存在
         }
@@ -919,7 +937,7 @@ namespace shm
     {
         printfYellow("[ShmManager] Memory Status:\n");
         printfYellow("  Total memory: 0x%x bytes\n", shm_size);
-        printfYellow("  Active segments: %zu\n", segments.size());
+        printfYellow("  Active segments: %zu\n", segments->size());
         printfYellow("  Free blocks: %zu\n", free_blocks.size());
 
         size_t total_free = 0;
