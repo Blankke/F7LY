@@ -1967,7 +1967,7 @@ char *ltp_testcases[] = {
     // "pipe04", //管道给写爆了，感觉是时间片太长了
     // "pipe05", // 完全PASS
     // "pipe06",    // 完全PASS
-    // "pipe07", //proc/self/fd没写
+    "pipe07", //proc/self/fd没写
     // "pipe08",
     // "pipe09", // 完全PASS
     // "pipe10", // 完全PASS

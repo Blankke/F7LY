@@ -29,5 +29,10 @@
 #define MAP_SHARED_VALIDATE 0x03 /* Share this mapping, validate flags */
 #define MAP_UNINITIALIZED 0x4000000 /* Don't clear anonymous pages */
 
+// Flags for mremap
+#define MREMAP_MAYMOVE 1    /* Kernel is permitted to relocate the mapping */
+#define MREMAP_FIXED 2      /* Map at exact address, must be page-aligned */
+#define MREMAP_DONTUNMAP 4  /* Don't unmap the old mapping */
+
 // Error codes for mmap
 #define MAP_FAILED ((void *)-1)

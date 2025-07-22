@@ -934,8 +934,8 @@ namespace shm
     {
         printfYellow("[ShmManager] Memory Status:\n");
         printfYellow("  Total memory: 0x%x bytes\n", shm_size);
-        printfYellow("  Active segments: %zu\n", segments->size());
-        printfYellow("  Free blocks: %zu\n", free_blocks.size());
+        printfYellow("  Active segments: %u\n", segments->size());
+        printfYellow("  Free blocks: %u\n", free_blocks.size());
 
         size_t total_free = 0;
         for (const auto &block : free_blocks)
