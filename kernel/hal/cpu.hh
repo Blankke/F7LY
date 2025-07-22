@@ -17,7 +17,7 @@ private:
         proc::Context _context; // 进程上下文
         int _num_off;           // 关闭中断层数
         int _int_ena;           // 关中断前中断开关状态
-
+        
 public:
         proc::Context *get_context() { return &_context; }
 

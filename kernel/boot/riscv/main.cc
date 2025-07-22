@@ -89,8 +89,8 @@ void main()
     binit();             // buffer cache
     fileinit();          // file table
     inodeinit();         // inode table
-
-    vfs_ext4_init(); // 初始化lwext4
+    fs::k_file_table.init(); // 初始化文件池
+    vfs_ext4_init();      // 初始化lwext4
     fs::k_vfs.dir_init(); // 初始化虚拟文件系统目录
         /************************* */
 

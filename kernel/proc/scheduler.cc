@@ -124,6 +124,10 @@ namespace proc
 
         assert(p->_lock.is_held(), "sched: proc lock not held");
         assert(cpu->get_num_off() == 1, "sched: proc locks");
+        // for(int i = 0; i < cpu->_lock_count; i++)
+        // {
+        //     printfRed("[sche]  lock name: %s\n", cpu->_lock_name[i]);
+        // }
         assert(p->_state != ProcState::RUNNING, "sched: proc is running");
         assert(cpu->get_intr_stat() == false, "sched: interruptible");
 

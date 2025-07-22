@@ -40,7 +40,6 @@
 		_locked.store( nullptr );
 
 		eastl::atomic_thread_fence( eastl::memory_order_acq_rel );
-
 		cpu->pop_intr_off();
 	}
 
