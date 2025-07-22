@@ -1264,6 +1264,13 @@ namespace syscall
 
         if (_arg_addr(0, usta) < 0)
             return SYS_EFAULT;
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        // bad_addr
+        if(!pt->walk_addr(usta))
+        {
+            return SYS_EFAULT;
+        }
         sysa = (uint64)(((_Utsname *)usta)->sysname);
         noda = (uint64)(((_Utsname *)usta)->nodename);
         rlsa = (uint64)(((_Utsname *)usta)->release);
@@ -1271,8 +1278,6 @@ namespace syscall
         mcha = (uint64)(((_Utsname *)usta)->machine);
         dmna = (uint64)(((_Utsname *)usta)->domainname);
 
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        mem::PageTable *pt = p->get_pagetable();
 
         if (mem::k_vmm.copy_out(*pt, sysa, _SYSINFO_sysname,
                                 sizeof(_SYSINFO_sysname)) < 0)
