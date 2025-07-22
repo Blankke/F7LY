@@ -398,9 +398,10 @@ enum vml : uint64
   // vm_kernel_heap_start = vm_kernel_start >> 1,
   // vm_kernel_heap_start = _1M * 8,
   vm_kernel_heap_start = MAXVA >> 1, // 64 MiB
-  vm_kernel_heap_size = _1M*384
+  vm_kernel_heap_size = _1M*320
 };
 #define HEAP_START PHYSTOP - vm_kernel_heap_size
+#define SHM_START (HEAP_START - _1M*64) // 64 MiB for shm
 #elif defined(LOONGARCH)
 
 #define DISK_IRQ 1
@@ -827,8 +828,8 @@ enum vml : uint64
   // vm_kernel_heap_start = vm_kernel_start >> 1,
   // vm_kernel_heap_start = _1M * 8,
   vm_kernel_heap_start = MAXVA >> 1, // 64 MiB
-  vm_kernel_heap_size = _1M * 384,
+  vm_kernel_heap_size = _1M * 320,
 };
 #define HEAP_START PHYSTOP - vm_kernel_heap_size
-
+#define SHM_START (HEAP_START - _1M*64) // 64 MiB for shm
 #endif

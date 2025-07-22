@@ -3498,6 +3498,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_getegid()
     {
+        
         return 1;
     }
     uint64 SyscallHandler::sys_shmget()
