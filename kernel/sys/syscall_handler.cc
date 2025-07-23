@@ -4588,11 +4588,115 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_setresuid()
     {
-        panic("未实现该系统调用");
+        int ruid, euid, suid;
+        
+        // 获取参数
+        if (_arg_int(0, ruid) < 0 || _arg_int(1, euid) < 0 || _arg_int(2, suid) < 0)
+        {
+            printfRed("[SyscallHandler::sys_setresuid] 参数错误\n");
+            return SYS_EINVAL;
+        }
+
+        printfCyan("[SyscallHandler::sys_setresuid] ruid: %d, euid: %d, suid: %d\n", ruid, euid, suid);
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        
+        // 获取当前的用户ID
+        uint32 origin_uid = p->get_uid();
+        uint32 origin_euid = p->get_euid();
+        uint32 origin_suid = p->get_suid();
+
+        // 检查是否为特权进程（root用户，euid == 0）
+        if (p->get_euid() == 0)
+        {
+            printfCyan("[SyscallHandler::sys_setresuid] 特权进程，可以设置任意值\n");
+            
+            // 特权进程可以设置任意值
+            if (ruid != -1)
+            {
+                p->set_uid(ruid);
+            }
+            if (euid != -1)
+            {
+                p->set_euid(euid);
+                p->set_fsuid(euid);  // 同时设置文件系统用户ID
+            }
+            if (suid != -1)
+            {
+                p->set_suid(suid);
+            }
+        }
+        else
+        {
+            // 非特权进程，需要检查权限
+            if (ruid != -1)
+            {
+                if (ruid != (int)origin_uid && ruid != (int)origin_euid && ruid != (int)origin_suid)
+                {
+                    printfRed("[SyscallHandler::sys_setresuid] 非特权进程无权设置 ruid: %d\n", ruid);
+                    return SYS_EPERM;
+                }
+                printfCyan("[SyscallHandler::sys_setresuid] 非特权进程设置 ruid: %d\n", ruid);
+                p->set_uid(ruid);
+            }
+            
+            if (euid != -1)
+            {
+                if (euid != (int)origin_uid && euid != (int)origin_euid && euid != (int)origin_suid)
+                {
+                    printfRed("[SyscallHandler::sys_setresuid] 非特权进程无权设置 euid: %d\n", euid);
+                    return SYS_EPERM;
+                }
+                printfCyan("[SyscallHandler::sys_setresuid] 非特权进程设置 euid: %d\n", euid);
+                p->set_euid(euid);
+                p->set_fsuid(euid);  // 同时设置文件系统用户ID
+            }
+            
+            if (suid != -1)
+            {
+                if (suid != (int)origin_uid && suid != (int)origin_euid && suid != (int)origin_suid)
+                {
+                    printfRed("[SyscallHandler::sys_setresuid] 非特权进程无权设置 suid: %d\n", suid);
+                    return SYS_EPERM;
+                }
+                printfCyan("[SyscallHandler::sys_setresuid] 非特权进程设置 suid: %d\n", suid);
+                p->set_suid(suid);
+            }
+        }
+
+        return 0;
     }
     uint64 SyscallHandler::sys_getresuid()
     {
-        panic("未实现该系统调用");
+        uint64 ruid_addr, euid_addr, suid_addr;
+        
+        // 获取参数
+        if (_arg_addr(0, ruid_addr) < 0 || _arg_addr(1, euid_addr) < 0 || _arg_addr(2, suid_addr) < 0)
+        {
+            printfRed("[SyscallHandler::sys_getresuid] 参数错误\n");
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        
+        // 获取当前的用户ID
+        uint32 ruid = p->get_uid();
+        uint32 euid = p->get_euid();
+        uint32 suid = p->get_suid();
+
+        printfCyan("[SyscallHandler::sys_getresuid] ruid: %u, euid: %u, suid: %u\n", ruid, euid, suid);
+
+        // 将结果拷贝到用户空间
+        if (mem::k_vmm.copy_out(*pt, ruid_addr, &ruid, sizeof(ruid)) < 0 ||
+            mem::k_vmm.copy_out(*pt, euid_addr, &euid, sizeof(euid)) < 0 ||
+            mem::k_vmm.copy_out(*pt, suid_addr, &suid, sizeof(suid)) < 0)
+        {
+            printfRed("[SyscallHandler::sys_getresuid] 拷贝到用户空间失败\n");
+            return SYS_EFAULT;
+        }
+
+        return 0;
     }
     uint64 SyscallHandler::sys_setresgid()
     {

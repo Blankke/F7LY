@@ -43,6 +43,8 @@ namespace proc
         _sid = 0;                 // 会话ID
         _uid = 0;                 // 真实用户ID
         _euid = 0;                // 有效用户ID
+        _suid = 0;                // 保存的设置用户ID
+        _fsuid = 0;               // 文件系统用户ID
         _gid = 0;                 // 真实组ID
         _egid = 0;                // 有效组ID
 
