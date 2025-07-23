@@ -1,6 +1,7 @@
 #ifndef __IOCTL_H__
 #define __IOCTL_H__
 #include "types.hh"
+
 /*
  * These are the most common definitions for tty ioctl numbers.
  * Most of them do not use the recommended _IOC(), but there is
@@ -115,6 +116,8 @@
 
 #define TIOCSER_TEMT 0x01 /* Transmitter physically empty */
 
+
+
 /* tcflush() argument values */
 #define TCIFLUSH 0     /* Flush pending input */
 #define TCOFLUSH 1     /* Flush pending output */ 
@@ -127,5 +130,20 @@ struct winsize {
     uint16 ws_ypixel;	    /* vertical size, pixels (unused) */
 };
 
+#define LOOP_SET_FD		0x4C00
+#define LOOP_CLR_FD		0x4C01
+#define LOOP_SET_STATUS		0x4C02
+#define LOOP_GET_STATUS		0x4C03
+#define LOOP_SET_STATUS64	0x4C04
+#define LOOP_GET_STATUS64	0x4C05
+#define LOOP_CHANGE_FD		0x4C06
+#define LOOP_SET_CAPACITY	0x4C07
+#define LOOP_SET_DIRECT_IO	0x4C08
+#define LOOP_SET_BLOCK_SIZE	0x4C09
+#define LOOP_CONFIGURE		0x4C0A
 
+/* /dev/loop-control interface */
+#define LOOP_CTL_ADD		0x4C80
+#define LOOP_CTL_REMOVE		0x4C81
+#define LOOP_CTL_GET_FREE	0x4C82
 #endif // __IOCTL_H__

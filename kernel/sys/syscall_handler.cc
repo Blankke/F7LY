@@ -2464,7 +2464,24 @@ namespace syscall
 
             return 0;
         }
-
+        if ((cmd & 0xFFFF) == LOOP_CTL_GET_FREE)
+        {
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+#ifdef RISCV
+            int *free_loops = (int *)pt->walk_addr(arg);
+#elif defined(LOONGARCH)
+            int *free_loops = (int *)to_vir((uint64)pt->walk_addr(arg));
+#endif
+            if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+            {
+                return SYS_ENOTTY; // 只有设备文件支持此操作
+            }
+            free_loops = 0; // 假设没有可用的loop设备
+            if(free_loops==0)
+            panic("我不知道怎么搞loop设备，官老师会不会？");
+            return 0;
+        }
+        
         panic("[SyscallHandler::sys_ioctl] Unsupported ioctl command: 0x%X\n", cmd);
         return 0;
     }
