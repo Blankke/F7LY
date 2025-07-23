@@ -143,6 +143,7 @@ namespace syscall
         SYS_shutdown_socket = 210,   // from rocket
         SYS_sendmsg = 211,     // form tsh 
         SYS_recvmsg = 212,           // from rocket
+        SYS_sbrk = 213,
         SYS_brk = 214,
         SYS_munmap = 215,
         SYS_mremap = 216,

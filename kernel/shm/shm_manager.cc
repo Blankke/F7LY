@@ -543,7 +543,7 @@ namespace shm
         }
 
         // 按标准更新段信息
-        seg.addr = (void *)attach_addr;        // 记录映射的虚拟地址
+        seg.attached_addrs.push_back((void *)attach_addr);        // 记录映射的虚拟地址
         seg.atime = tmm::k_tm.clock_gettime_sec(tmm::CLOCK_REALTIME); // 设置shm_atime为当前时间
         seg.last_pid = current_proc->_pid;     // 更新最后操作进程ID (shm_lpid)
         seg.nattch++;                          // 增加附加计数 (shm_nattch)

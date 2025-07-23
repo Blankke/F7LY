@@ -200,6 +200,11 @@ int brk(void *addr)
     return syscall(syscall::SYS_brk, addr);
 }
 
+int sbrk(void *addr)
+{
+    return syscall(syscall::SYS_sbrk, addr);
+}
+
 char *getcwd(char *buf, size_t size)
 {
     return (char*)syscall(syscall::SYS_getcwd, buf, size);

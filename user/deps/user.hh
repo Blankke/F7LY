@@ -25,6 +25,7 @@ int sys_linkat(int olddirfd, char *oldpath, int newdirfd, char *newpath, unsigne
 int sys_unlinkat(int dirfd, char *path, unsigned int flags);
 int uname(void *buf);
 int brk(void *addr);
+int sbrk(void *addr);
 int chdir(const char *path);
 int getdents64(int fd, struct linux_dirent64 *dirp64, unsigned long len);
 int pipe(int fd[2]);

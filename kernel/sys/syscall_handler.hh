@@ -67,6 +67,7 @@ namespace syscall
         uint64 sys_umount2();
         uint64 sys_mount();
         uint64 sys_brk();
+        uint64 sys_sbrk();
         uint64 sys_munmap();
         uint64 sys_mmap();
         uint64 sys_times();

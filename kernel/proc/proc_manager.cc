@@ -1266,16 +1266,42 @@ namespace proc
     long ProcessManager::brk(long n)
     {
         uint64 addr = get_cur_pcb()->_sz;
-        if (n == 0)
-        {
-            return addr;
-        }
-        // printfCyan("[brk]  let's map to %d,now our size is%d\n",n,addr);
+        
+        // 如果 n 为 0，返回当前的 program break
+        // 如果请求的地址小于当前地址，缩减内存
+        // 如果请求的地址大于当前地址，扩展内存
+        // printfCyan("[brk] current addr: %p, requested: %p\n", (void*)addr, (void*)n);
+        
         if (growproc(n - addr) < 0)
         {
+            // 失败时返回 -1 并设置 errno
             return -1;
         }
-        return n;
+        
+        // 成功时返回 0
+        return 0;
+    }
+
+    long ProcessManager::sbrk(long increment)
+    {
+        Pcb *p = get_cur_pcb();
+        uint64 old_addr = p->_sz;
+        
+        // 如果 increment 为 0，返回当前的 program break
+        if (increment == 0)
+        {
+            return old_addr;
+        }
+        
+        // 尝试扩展或缩减内存
+        if (growproc(increment) < 0)
+        {
+            // 失败时返回 (void *) -1
+            return -1;
+        }
+        
+        // 成功时返回之前的 program break
+        return old_addr;
     }
 
     int ProcessManager::wait4(int child_pid, uint64 addr, int option)

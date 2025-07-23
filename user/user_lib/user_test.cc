@@ -505,7 +505,7 @@ char *ltp_testcases[] = {
     // "bpf_prog05",
     // "bpf_prog06",
     // "bpf_prog07",
-    // "brk01",
+    "brk01",
     // "brk02",
     // "broken_ip-checksum.sh",
     // "broken_ip-dstaddr.sh",
@@ -2419,14 +2419,14 @@ char *ltp_testcases[] = {
     // "shmat03",     //pass?
     // "shmat04",     //pass
     // "shmat1",
-    // "shmctl01",     //时钟的没过
+    // "shmctl01",     //pass
     // "shmctl02",
     // "shmctl03",
     // "shmctl04",
-    // "shmctl05",   //未知调用
+    // "shmctl05",   //remap_file_pages
     // "shmctl06",    //test requires struct shmid64_ds to have the time_high fields
     // "shmctl07",    //pass
-    // "shmctl08",     //时钟的没过
+    // "shmctl08",     //pass
     // "shmdt01",      //信号
     // "shmdt02",      //pass
     // "shmem_2nstest", //看不懂
@@ -2435,7 +2435,7 @@ char *ltp_testcases[] = {
     // "shmget04",
     // "shmget05",
     // "shmget06",
-    // "shmnstest",
+    // "shmnstest",   //pass
     // "shmt02",     //pass
     // "shmt03",      //pass
     // "shmt04",      //pass

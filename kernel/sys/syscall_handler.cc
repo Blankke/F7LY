@@ -170,6 +170,7 @@ namespace syscall
         BIND_SYSCALL(getsockopt);  // todo
         BIND_SYSCALL(sendmsg);     // todo
         BIND_SYSCALL(brk);
+        BIND_SYSCALL(sbrk);
         BIND_SYSCALL(munmap);
         BIND_SYSCALL(mremap);
         BIND_SYSCALL(clone);
@@ -920,7 +921,8 @@ namespace syscall
         if (_arg_int(2, flags) < 0)
             return SYS_EINVAL;
         // 如果使用了O_CREAT标志，需要获取mode参数
-        if (flags & O_CREAT) {
+        if (flags & O_CREAT)
+        {
             if (_arg_int(3, mode) < 0)
                 return SYS_EINVAL;
         }
@@ -1203,9 +1205,40 @@ namespace syscall
             printfRed("[SyscallHandler::sys_brk] Error fetching brk address\n");
             return -1;
         }
-        uint64 ret = proc::k_pm.brk(n); // 调用进程管理器的 brk 函数
-        // printf("[SyscallHandler::sys_brk] brk to %p, ret: %p\n", (void *)n, (void *)ret);
-        return ret;
+
+        // 如果参数为 0，返回当前的 program break（查询模式）
+        // if (n == 0)
+        // {
+        //     uint64 current_brk = proc::k_pm.get_cur_pcb()->_sz;
+        //     printf("[SyscallHandler::sys_brk] brk(0) = 0x%x (query current break)\n", current_brk);
+        //     return current_brk;
+        // }
+
+        // 设置新的 program break
+        long result = proc::k_pm.brk(n);
+        return result;
+    }
+    uint64 SyscallHandler::sys_sbrk()
+    {
+        uint64 n;
+        // 此处是内存扩展到n地址
+        if (_arg_addr(0, n) < 0)
+        {
+            printfRed("[SyscallHandler::sys_brk] Error fetching brk address\n");
+            return -1;
+        }
+
+        // 如果参数为 0，返回当前的 program break（查询模式）
+        if (n == 0)
+        {
+            uint64 current_brk = proc::k_pm.get_cur_pcb()->_sz;
+            printf("[SyscallHandler::sys_brk] brk(0) = 0x%x (query current break)\n", current_brk);
+            return current_brk;
+        }
+
+        // 设置新的 program break
+        long result = proc::k_pm.sbrk(n);
+        return result;
     }
     uint64 SyscallHandler::sys_munmap()
     {
@@ -2217,7 +2250,7 @@ namespace syscall
         }
 
         tmm::timespec tp;
-        
+
         // 统一调用定时器管理器的clock_gettime方法处理所有时钟类型
         tmm::SystemClockId cid = (tmm::SystemClockId)clock_id;
         int ret = tmm::k_tm.clock_gettime(cid, &tp);
@@ -3767,7 +3800,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_shmdt()
     {
-        
+
         uint64 shmaddr;
 
         if (_arg_addr(0, shmaddr) < 0)
