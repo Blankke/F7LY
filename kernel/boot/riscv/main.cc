@@ -28,6 +28,7 @@
 #include "devs/console1.hh"
 #include "fs/vfs/inode.hh"
 #include "mem/userspace_stream.hh"
+#include "trap/interrupt_stats.hh"
 // #include "fs/dev/acpi_controller.hh"
 #include "fs/drivers/riscv/virtio2.hh"
 #include "fs/vfs/fs.hh"
@@ -48,6 +49,9 @@ void main()
     printfWhite("\n\n"); // 底部空白
     trap_mgr.init();     // trap初始化
     trap_mgr.inithart(); // 初始化每个核上的csr
+
+    // 初始化中断统计管理器
+    intr_stats::k_intr_stats.init();
 
     plic_mgr.init();     // plic初始化
     plic_mgr.inithart(); // 初始化每个核上的csr

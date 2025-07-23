@@ -18,6 +18,7 @@
 #include "syscall_handler.hh"
 #include "scheduler.hh"
 #include "fs/dev/acpi_controller.hh"
+#include "trap/interrupt_stats.hh"
 #ifdef LOONGARCH
 
 extern "C" void main()
@@ -30,6 +31,10 @@ extern "C" void main()
 
     trap_mgr.init();
     trap_mgr.inithart();
+    
+    // 初始化中断统计管理器
+    intr_stats::k_intr_stats.init();
+    
     proc::k_pm.init("next pid", "next tid", "wait lock");
     mem::k_pmm.init();
 

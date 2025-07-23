@@ -23,6 +23,7 @@
 #include "timer_interface.hh"
 #include "timer_manager.hh"
 #include "fs/drivers/riscv/virtio2.hh"
+#include "trap/interrupt_stats.hh"
 // #include "fuckyou.hh"
 // in kernelvec.S, calls kerneltrap().
 extern "C" void kernelvec();
@@ -76,6 +77,7 @@ int trap_manager::devintr()
     {
       // 现在只写了接收中断, 没有发送中断
       // printf("uart0 interrupt\n");
+      intr_stats::k_intr_stats.record_interrupt(irq);
       int c = sbi_console_getchar();
       if (-1 != c)
       {
@@ -86,6 +88,7 @@ int trap_manager::devintr()
     else if (irq == VIRTIO0_IRQ)
     {
       // riscv::qemu::disk_driver.handle_intr();
+      intr_stats::k_intr_stats.record_interrupt(irq);
       virtio_disk_intr();
     }
     else if (irq == VIRTIO1_IRQ)
@@ -108,6 +111,8 @@ int trap_manager::devintr()
   if (scause == 0x8000000000000005L)
   {
     // printfBlue("zzZ");
+    // TODO
+    // intr_stats::k_intr_stats.record_interrupt();
     timertick();
 
     /// TODO: riscv可以用sbi的tick来实现时钟

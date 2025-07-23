@@ -7,6 +7,7 @@
 #include "proc/cpuinfo.hh"
 #include "printer.hh"
 #include "proc/proc.hh"
+#include "trap/interrupt_stats.hh"
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
 namespace fs
@@ -440,6 +441,13 @@ namespace fs
         result += "\n";
         
         return result;
+    }
+
+    eastl::string ProcInterruptsProvider::generate_content()
+    {
+        // 生成 /proc/interrupts 的内容
+        // 格式：中断号:        计数\n
+        return intr_stats::k_intr_stats.get_interrupts_info();
     }
 
 } // namespace fs
