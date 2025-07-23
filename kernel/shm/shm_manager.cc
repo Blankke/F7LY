@@ -4,6 +4,7 @@
 #include "klib.hh"
 #include "printer.hh"
 #include <EASTL/sort.h>
+#include <EASTL/algorithm.h>
 #include "virtual_memory_manager.hh"
 #include "memlayout.hh" // 为了获取PGSIZE等定义
 #include "fs/lwext4/ext4_errno.hh"  // 为了获取错误码定义
@@ -373,7 +374,7 @@ namespace shm
         new_seg.real_size = PGROUNDUP(size);      // 页对齐的实际分配大小
         new_seg.shmflg = shmflg;
         new_seg.phy_addrs = allocated_addr;       // 设置分配得到的物理地址
-        new_seg.addr = nullptr;                   // 初始时未映射到进程地址空间
+        new_seg.attached_addrs.clear();          // 初始化附加地址列表为空
         
         // 初始化时间信息 (按照标准)
         new_seg.atime = 0;                    // shm_atime 设为 0
@@ -451,10 +452,7 @@ namespace shm
         const int SHMSEG_MAX = 128;  // 每个进程最大附加段数量
         int current_attachments = 0;
         for (const auto& pair : *segments) {
-            if (pair.second.addr != nullptr) {  // 检查是否已附加到当前进程
-                // TODO：这里简化检查，实际应该维护每个进程的附加列表
-                current_attachments++;
-            }
+            current_attachments += pair.second.attached_addrs.size();  // 统计所有附加地址
         }
         if (current_attachments >= SHMSEG_MAX) {
             printfRed("[ShmManager] Process attachment limit exceeded (%d/%d)\n", 
@@ -544,7 +542,7 @@ namespace shm
         }
 
         // 按标准更新段信息
-        seg.addr = (void *)attach_addr;        // 记录映射的虚拟地址
+        seg.attached_addrs.push_back((void *)attach_addr);  // 添加到附加地址列表
         seg.atime = rdtime();                  // 设置shm_atime为当前时间
         seg.last_pid = current_proc->_pid;     // 更新最后操作进程ID (shm_lpid)
         seg.nattch++;                          // 增加附加计数 (shm_nattch)
@@ -564,22 +562,45 @@ namespace shm
 
     int ShmManager::detach_seg(void *addr)
     {
+        printfCyan("[ShmManager::detach_seg] Looking for address: %p\n", addr);
+        
         auto it = segments->begin();
         // 查找包含该地址的共享内存段
         for (; it != segments->end(); ++it)
         {
             shm_segment &seg = it->second;
-            if (seg.addr == addr)
+            printfCyan("[ShmManager::detach_seg] Checking segment shmid=%d\n", seg.shmid);
+            
+            // 在附加地址列表中查找
+            auto addr_it = eastl::find(seg.attached_addrs.begin(), seg.attached_addrs.end(), addr);
+            if (addr_it != seg.attached_addrs.end()) {
+                printfCyan("[ShmManager::detach_seg] Found address in segment shmid=%d\n", seg.shmid);
                 break;
+            }
         }
+        
         if (it == segments->end())
         {
             printfRed("[ShmManager] Segment with address %p not found\n", addr);
+            printfYellow("[ShmManager] Available segments:\n");
+            for (const auto& pair : *segments) {
+                printfYellow("  shmid=%d, attached addresses: ", pair.second.shmid);
+                for (void* attached_addr : pair.second.attached_addrs) {
+                    printfYellow("%p ", attached_addr);
+                }
+                printfYellow("\n");
+            }
             return -EINVAL; // 地址无效
         }
         
         shm_segment &seg = it->second;
         proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+        
+        // 从附加地址列表中移除这个地址
+        auto addr_it = eastl::find(seg.attached_addrs.begin(), seg.attached_addrs.end(), addr);
+        if (addr_it != seg.attached_addrs.end()) {
+            seg.attached_addrs.erase(addr_it);
+        }
         
         // 解除映射 - 使用实际分配的页对齐大小
         mem::k_vmm.vmunmap(
@@ -593,7 +614,6 @@ namespace shm
         seg.dtime = rdtime();                    // 设置shm_dtime为当前时间
         seg.last_pid = current_proc->_pid;       // 更新最后操作进程ID (shm_lpid)
         seg.nattch--;                            // 减少附加计数 (shm_nattch)
-        seg.addr = nullptr;                      // 清除映射地址
 
         printfCyan("[ShmManager] Detached segment shmid=%d at addr=%p (nattch now %d)\n", 
                   seg.shmid, addr, seg.nattch);
@@ -725,7 +745,7 @@ namespace shm
 
                 // 从用户空间复制数据
                 struct shmid_ds user_buf;
-                if (mem::k_vmm.copy_in(current_proc->_pt, &user_buf, (uint64)buf, sizeof(user_buf)) < 0) {
+                if (mem::k_vmm.copy_in(current_proc->_pt, &user_buf, buf_addr, sizeof(user_buf)) < 0) {
                     printfRed("[ShmManager] Failed to copy shmid_ds from user space\n");
                     return -EFAULT;
                 }
@@ -737,7 +757,7 @@ namespace shm
                 seg.ctime = rdtime();  // 更新修改时间
                 seg.last_pid = current_proc->_pid;
 
-                printfCyan("[ShmManager] IPC_SET: shmid=%d, new mode=0%o, new uid=%d\n", 
+                printfCyan("[ShmManager] IPC_SET: shmid=%d, new mode=0%x, new uid=%d\n", 
                           shmid, seg.mode, seg.owner_uid);
                 break;
             }

@@ -1892,7 +1892,7 @@ char *ltp_testcases[] = {
     // "open_by_handle_at02",
     // "open_tree01",
     // "open_tree02",
-    // "open01",
+    // "open01",    //pass
     // "open02",
     // "open03", // 完全PASS
     // "open04",    //完全PASS
@@ -2414,7 +2414,7 @@ char *ltp_testcases[] = {
     // "shell_pipe01.sh",
     // "shm_comm",
     // "shm_test",
-    // "shmat01",
+    // "shmat01",    //屎掉了
     // "shmat02",
     // "shmat03",     //pass?
     // "shmat04",     //pass
@@ -2422,29 +2422,29 @@ char *ltp_testcases[] = {
     // "shmctl01",     //时钟的没过
     // "shmctl02",
     // "shmctl03",
-    "shmctl04",
-    // "shmctl05",
-    // "shmctl06",
-    // "shmctl07",
-    // "shmctl08",
-    // "shmdt01",
-    // "shmdt02",
-    // "shmem_2nstest",
+    // "shmctl04",
+    // "shmctl05",   //未知调用
+    // "shmctl06",    //test requires struct shmid64_ds to have the time_high fields
+    // "shmctl07",    //pass
+    // "shmctl08",     //时钟的没过
+    // "shmdt01",      //信号
+    // "shmdt02",      //pass
+    // "shmem_2nstest", //看不懂
     // "shmget02",
     // "shmget03",
     // "shmget04",
     // "shmget05",
     // "shmget06",
     // "shmnstest",
-    // "shmt02",
-    // "shmt03",
-    // "shmt04",
-    // "shmt05",
-    // "shmt06",
-    // "shmt07",
-    // "shmt08",
-    // "shmt09",
-    // "shmt10",
+    // "shmt02",     //pass
+    // "shmt03",      //pass
+    // "shmt04",      //pass
+    // "shmt05",          //pass
+    // "shmt06",        //pass
+    // "shmt07",       //pass
+    // "shmt08",      //pass
+    // "shmt09",   
+    // "shmt10",       //pass
     // "sigaction01",
     // "sigaction02",
     // "sigaltstack01",

@@ -154,6 +154,7 @@ namespace syscall
         SYS_msync = 227,             // from rocket
         SYS_mlock = 228,             // from rocket
         SYS_madvise = 233,
+        SYS_remap_file_pages = 234, // from rocket
         SYS_get_mempolicy = 236,     // from rocket
         SYS_accept4 = 242,           // from rocket
         SYS_wait4 = 260,

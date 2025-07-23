@@ -27,7 +27,7 @@ namespace shm
 				u16 _rsv : 7;
 			}__attribute__((__packed__));
 		}__attribute__((__packed__));
-        void *addr;        // 映射地址
+        eastl::vector<void*> attached_addrs;  // 所有附加的虚拟地址列表
         uint64 phy_addrs;  // 物理地址
         
         // 时间信息
