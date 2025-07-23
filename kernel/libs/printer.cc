@@ -147,6 +147,20 @@ void Printer::print( const char *fmt, ... )
         _console->console_putc(buf[j]);
       break;
     }
+        case 'o': {
+      // 打印大写无符号8进制（64位）
+      uint64 val = va_arg(ap, uint64);
+      char buf[16];
+      int j = 0;
+      do {
+        buf[j++] = _upper_digits[val % 8];
+      } while ((val /= 8) != 0);
+      for (int k = j; k < width; k++)
+        _console->console_putc('0');
+      while (--j >= 0)
+        _console->console_putc(buf[j]);
+      break;
+    }
     case 'p':
       printptr(va_arg(ap, uint64));
       break;
