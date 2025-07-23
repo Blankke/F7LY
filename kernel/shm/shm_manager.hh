@@ -30,10 +30,10 @@ namespace shm
         void *addr;        // 映射地址
         uint64 phy_addrs;  // 物理地址
         
-        // 时间信息
-        time_t atime;      // 最后访问时间 (shmat)
-        time_t dtime;      // 最后分离时间 (shmdt) 
-        time_t ctime;      // 创建/最后修改时间 (shmget/shmctl)
+        // 时间信息（POSIX标准：自Unix纪元以来的秒数）
+        time_t atime;      // 最后访问时间 (shmat) - 使用timer_manager获取REALTIME
+        time_t dtime;      // 最后分离时间 (shmdt) - 使用timer_manager获取REALTIME
+        time_t ctime;      // 创建/最后修改时间 (shmget/shmctl) - 使用timer_manager获取REALTIME
         
         // 进程信息
         pid_t creator_pid; // 创建者进程ID (shm_cpid)

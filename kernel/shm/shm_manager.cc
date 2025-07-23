@@ -7,6 +7,7 @@
 #include "virtual_memory_manager.hh"
 #include "memlayout.hh" // 为了获取PGSIZE等定义
 #include "fs/lwext4/ext4_errno.hh"  // 为了获取错误码定义
+#include "tm/timer_manager.hh"
 namespace shm
 {
     ShmManager k_smm; // 全局共享内存管理器实例
@@ -378,7 +379,7 @@ namespace shm
         // 初始化时间信息 (按照标准)
         new_seg.atime = 0;                    // shm_atime 设为 0
         new_seg.dtime = 0;                    // shm_dtime 设为 0  
-        new_seg.ctime = rdtime();             // shm_ctime 设为当前时间
+        new_seg.ctime = tmm::k_tm.clock_gettime_sec(tmm::CLOCK_REALTIME);             // shm_ctime 设为当前时间
         
         // 初始化进程信息
         proc::Pcb* current_proc = proc::k_pm.get_cur_pcb();
@@ -545,7 +546,7 @@ namespace shm
 
         // 按标准更新段信息
         seg.addr = (void *)attach_addr;        // 记录映射的虚拟地址
-        seg.atime = rdtime();                  // 设置shm_atime为当前时间
+        seg.atime = tmm::k_tm.clock_gettime_sec(tmm::CLOCK_REALTIME); // 设置shm_atime为当前时间
         seg.last_pid = current_proc->_pid;     // 更新最后操作进程ID (shm_lpid)
         seg.nattch++;                          // 增加附加计数 (shm_nattch)
 
@@ -590,7 +591,7 @@ namespace shm
         );
         
         // 按标准更新段信息
-        seg.dtime = rdtime();                    // 设置shm_dtime为当前时间
+        seg.dtime = tmm::k_tm.clock_gettime_sec(tmm::CLOCK_REALTIME);                    // 设置shm_dtime为当前时间
         seg.last_pid = current_proc->_pid;       // 更新最后操作进程ID (shm_lpid)
         seg.nattch--;                            // 减少附加计数 (shm_nattch)
         seg.addr = nullptr;                      // 清除映射地址
@@ -734,7 +735,7 @@ namespace shm
                 seg.owner_uid = user_buf.shm_perm.uid;
                 seg.owner_gid = user_buf.shm_perm.gid;
                 seg.mode = (seg.mode & ~0777) | (user_buf.shm_perm.mode & 0777);  // 只更新低9位权限
-                seg.ctime = rdtime();  // 更新修改时间
+                seg.ctime = tmm::k_tm.clock_gettime_sec(tmm::CLOCK_REALTIME);  // 更新修改时间
                 seg.last_pid = current_proc->_pid;
 
                 printfCyan("[ShmManager] IPC_SET: shmid=%d, new mode=0%o, new uid=%d\n", 

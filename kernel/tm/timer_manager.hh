@@ -151,6 +151,18 @@ namespace tmm
 		/// @note 支持多种POSIX时钟类型
 		int clock_gettime( SystemClockId clockid, timespec * tp );
 
+		/// @brief 获取指定时钟的当前时间（仅秒数部分）
+		/// @param clockid 时钟类型ID
+		/// @return 成功返回秒数，失败返回-1
+		/// @note 便于需要整数秒时间戳的场景，如文件时间戳、IPC时间戳等
+		int clock_gettime_sec(SystemClockId clockid);
+
+		/// @brief 获取指定时钟的当前时间（仅纳秒数部分）
+		/// @param clockid 时钟类型ID
+		/// @return 成功返回纳秒数，失败返回-1
+		/// @note 返回当前秒内的纳秒偏移量 [0, 999999999]，用于高精度时间测量
+		int clock_gettime_nsec(SystemClockId clockid);
+
 		/// @brief 获取当前系统tick计数
 		/// @return 从系统启动以来的tick数
 		/// @note tick是系统时间的基本单位

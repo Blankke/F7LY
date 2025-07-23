@@ -252,7 +252,7 @@ namespace tmm
 		}
 
 		// 调试输出时间值
-		printfBlue("clock_gettime: cid=%d, tp->tv_sec=%ld, tp->tv_nsec=%ld\n", 
+		printfYellow("clock_gettime: cid=%d, tp->tv_sec=%d, tp->tv_nsec=%d\n", 
 				  (int)cid, tp->tv_sec, tp->tv_nsec);
 
 		return 0;
@@ -261,6 +261,34 @@ namespace tmm
 	/// @return 返回从系统启动以来的tick数
 	/// @note tick是系统时间的基本单位，由定时器中断驱动递增
 	uint64 TimerManager::get_ticks() { return trap_mgr.ticks; };
+
+	/// @brief 获取指定时钟的当前时间（仅秒数部分）
+	/// @param clockid 时钟类型ID
+	/// @return 成功返回秒数，失败返回-1
+	/// @note 便于需要整数秒时间戳的场景，如文件时间戳
+	int TimerManager::clock_gettime_sec(SystemClockId clockid)
+	{
+		timespec ts;
+		int ret = clock_gettime(clockid, &ts);
+		if (ret == 0) {
+			return (int)ts.tv_sec;  // 返回秒数部分
+		}
+		return -1;  // 错误时返回-1
+	}
+
+	/// @brief 获取指定时钟的当前时间（仅纳秒数部分）
+	/// @param clockid 时钟类型ID  
+	/// @return 成功返回纳秒数，失败返回-1
+	/// @note 返回当前秒内的纳秒偏移量 [0, 999999999]
+	int TimerManager::clock_gettime_nsec(SystemClockId clockid)
+	{
+		timespec ts;
+		int ret = clock_gettime(clockid, &ts);
+		if (ret == 0) {
+			return (int)ts.tv_nsec;  // 返回纳秒数部分
+		}
+		return -1;  // 错误时返回-1
+	}
 	
 	// 导出的C接口函数，供C代码调用
 	extern "C"
