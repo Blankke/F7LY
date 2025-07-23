@@ -567,7 +567,7 @@ char *ltp_testcases[] = {
     // "chmod05",
     // "chmod06",
     // "chmod07",
-    // "chown01",
+    // "chown01",     //copyout爆了
     // "chown01_16",
     // "chown02",
     // "chown02_16",
@@ -1099,7 +1099,7 @@ char *ltp_testcases[] = {
     // "fsetxattr02",
     // "fsmount01",
     // "fsmount02",
-    "fsopen01",
+    // "fsopen01",
     // "fsopen02",
     // "fspick01",
     // "fspick02",

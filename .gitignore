@@ -17,6 +17,8 @@ build/*
 os.out
 sdcard-rv.img
 sdcard-la.img
+sdcard-rv-final.img
+sdcard-la-final.img
 user/disasm_initcode.asm
 user/initcode-rv
 output.txt
