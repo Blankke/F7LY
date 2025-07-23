@@ -87,6 +87,8 @@ namespace proc
         int _sid;     // 会话ID，用于终端管理
         uint32 _uid;  // 真实用户ID
         uint32 _euid; // 有效用户ID
+        uint32 _suid; // 保存的设置用户ID
+        uint32 _fsuid; // 文件系统用户ID
         uint32 _gid;  // 真实组ID
         uint32 _egid; // 有效组ID
 
@@ -221,6 +223,8 @@ namespace proc
         uint get_sid() { return _sid; }
         uint32 get_uid() { return _uid; }
         uint32 get_euid() { return _euid; }
+        uint32 get_suid() { return _suid; }
+        uint32 get_fsuid() { return _fsuid; }
         uint32 get_gid() { return _gid; }
         uint32 get_egid() { return _egid; }
         TrapFrame *get_trapframe() { return _trapframe; }
@@ -267,6 +271,8 @@ namespace proc
         void set_sid(int sid) { _sid = sid; }
         void set_uid(uint32 uid) { _uid = uid; }
         void set_euid(uint32 euid) { _euid = euid; }
+        void set_suid(uint32 suid) { _suid = suid; }
+        void set_fsuid(uint32 fsuid) { _fsuid = fsuid; }
         void set_gid(uint32 gid) { _gid = gid; }
         void set_egid(uint32 egid) { _egid = egid; }
         bool is_process()
