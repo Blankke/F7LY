@@ -339,7 +339,7 @@ namespace fs
         return result;
     }
 
-    int VirtualFileSystem::openat(eastl::string absolute_path, fs::file *&file, uint flags)
+    int VirtualFileSystem::openat(eastl::string absolute_path, fs::file *&file, uint flags, int mode)
     {
         int err;
         vfile_tree_node *node = find_node_by_path(absolute_path);
@@ -350,7 +350,7 @@ namespace fs
         }
         else
         {
-            err = vfs_openat(absolute_path.c_str(), file, flags);
+            err = vfs_openat(absolute_path.c_str(), file, flags, mode);
         }
         return err;
     }

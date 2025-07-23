@@ -226,7 +226,7 @@ namespace mem
             pa = (uint64)pt.walk_addr(va);
             if (pa == 0)
             {
-                printfRed("[copyin] pa ==0! walk failed");
+                printfRed("[copyin] pa ==0! walk failed\n");
                 return -1;
             }
             n = PGSIZE - (src_va - va);

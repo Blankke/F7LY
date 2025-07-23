@@ -137,7 +137,7 @@ namespace fs
         bool is_filepath_virtual(const eastl::string &path) const;
         vfile_msg get_vfile_msg(const eastl::string &absolute_path) const;
         void dir_init();
-        int openat(eastl::string absolute_path, fs::file *&file, uint flags);
+        int openat(eastl::string absolute_path, fs::file *&file, uint flags, int mode = 0644);
         int vfile_openat(eastl::string absolute_path, fs::file *&file, uint flags);
         eastl::vector<eastl::string> path_split(const eastl::string &path) const;
         
