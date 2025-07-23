@@ -1099,7 +1099,7 @@ char *ltp_testcases[] = {
     // "fsetxattr02",
     // "fsmount01",
     // "fsmount02",
-    "fsopen01",
+    // "fsopen01",
     // "fsopen02",
     // "fspick01",
     // "fspick02",

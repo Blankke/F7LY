@@ -412,5 +412,42 @@ namespace fs
         return parts;
     }
 
+    int VirtualFileSystem::fstat(fs::file *f, fs::Kstat *st)
+    {
+        if(f->is_virtual)
+        {
+            // 如果是虚拟文件，使用虚拟文件系统的fstat处理
+            return vfile_fstat(f, st);
+        }
+        else
+        {
+            // 调用常规的fstat处理
+            return vfs_fstat(f, st);
+        }
+    }
+
+    int VirtualFileSystem::vfile_fstat(fs::file *f, fs::Kstat *st)
+    {
+        st->dev = f->_stat.dev;
+        st->ino = f->_stat.ino;
+        st->mode = 0660;
+        // st->mode = f->_stat.mode;
+        st->nlink = f->_stat.nlink;
+        st->uid = f->_stat.uid;
+        st->gid = f->_stat.gid;
+        st->rdev = f->_stat.rdev;
+        st->size = f->_stat.size;
+        st->blksize = f->_stat.blksize;
+        st->blocks = f->_stat.blocks;
+
+        st->st_atime_sec = f->_stat.st_atime_sec;
+        st->st_atime_nsec = f->_stat.st_atime_nsec;
+        st->st_ctime_sec = f->_stat.st_ctime_sec;
+        st->st_ctime_nsec = f->_stat.st_ctime_nsec;
+        st->st_mtime_sec = f->_stat.st_mtime_sec;
+        st->st_mtime_nsec = f->_stat.st_mtime_nsec;
+        return 0;
+    }
+
     VirtualFileSystem k_vfs;
 }

@@ -1673,6 +1673,9 @@ namespace syscall
             return -1;
         }
 
+        printfCyan("[SyscallHandler::sys_fstatat] dirfd: %d, pathname: %s, kst_addr: %p, flags: %d\n",
+               dirfd, pathname.c_str(), (void *)kst_addr, flags);
+
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
 

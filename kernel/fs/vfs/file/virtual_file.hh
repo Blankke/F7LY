@@ -53,6 +53,7 @@ namespace fs
         {
             dup();
             new(&_stat) Kstat(attrs.filetype);
+            is_virtual = true;
         }
         
         ~virtual_file() = default;
