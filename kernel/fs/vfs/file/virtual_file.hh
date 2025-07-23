@@ -53,6 +53,7 @@ namespace fs
         {
             dup();
             new(&_stat) Kstat(attrs.filetype);
+            is_virtual = true;
         }
         
         ~virtual_file() = default;
@@ -180,13 +181,28 @@ namespace fs
         }
     };
 
-    // /dev/loop 内容提供者
+    // /dev/loop 设备提供者（具体的 loop 设备，如 loop0, loop1 等）
     class DevLoopProvider : public VirtualContentProvider
+    {
+    private:
+        int _loop_number;
+        
+    public:
+        DevLoopProvider(int loop_number) : _loop_number(loop_number) {}
+        virtual eastl::string generate_content() override;
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<DevLoopProvider>(_loop_number);
+        }
+    };
+
+    // /dev/loop-control 控制设备提供者
+    class DevLoopControlProvider : public VirtualContentProvider
     {
     public:
         virtual eastl::string generate_content() override;
+        virtual bool is_writable() const override { return true; } // 支持 ioctl 操作
         virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
-            return eastl::make_unique<DevLoopProvider>();
+            return eastl::make_unique<DevLoopControlProvider>();
         }
     };
     

@@ -73,11 +73,11 @@ int trap_manager::devintr()
     // irq indicates which device interrupted.
     int irq = plic_mgr.claim();
 
+    intr_stats::k_intr_stats.record_interrupt(irq);
     if (irq == UART0_IRQ)
     {
       // 现在只写了接收中断, 没有发送中断
       // printf("uart0 interrupt\n");
-      intr_stats::k_intr_stats.record_interrupt(irq);
       int c = sbi_console_getchar();
       if (-1 != c)
       {
@@ -87,8 +87,6 @@ int trap_manager::devintr()
     //!!写完磁盘后修改
     else if (irq == VIRTIO0_IRQ)
     {
-      // riscv::qemu::disk_driver.handle_intr();
-      intr_stats::k_intr_stats.record_interrupt(irq);
       virtio_disk_intr();
     }
     else if (irq == VIRTIO1_IRQ)

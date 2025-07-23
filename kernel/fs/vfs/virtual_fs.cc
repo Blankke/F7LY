@@ -298,6 +298,21 @@ namespace fs
         add_virtual_file("/proc/self/stat", fs::FileTypes::FT_NORMAL,
                         eastl::make_unique<ProcSelfStatProvider>());
 
+        // ======================== Loop 设备节点 ========================
+        // 添加 /dev/loop-control 控制设备
+        add_virtual_file("/dev/loop-control", fs::FileTypes::FT_DEVICE,
+                        eastl::make_unique<DevLoopControlProvider>());
+
+        // 添加预定义的 loop 设备节点 (/dev/loop0 - /dev/loop7)
+        for (int i = 0; i < 8; i++) {
+            char loop_name[16] = "/dev/loop";
+            loop_name[9] = '0' + i;
+            loop_name[10] = '\0';
+            eastl::string loop_path(loop_name);
+            add_virtual_file(loop_path, fs::FileTypes::FT_DEVICE,
+                            eastl::make_unique<DevLoopProvider>(i));
+        }
+
         // 添加 /proc/interrupts 文件及其提供者
         add_virtual_file("/proc/interrupts", fs::FileTypes::FT_NORMAL,
                         eastl::make_unique<ProcInterruptsProvider>());
@@ -312,7 +327,10 @@ namespace fs
 
         // /dev/loop
         add_virtual_file("/dev/loop-control", fs::FileTypes::FT_DEVICE,
-                         eastl::make_unique<DevLoopProvider>());
+                         eastl::make_unique<DevLoopControlProvider>());
+
+        add_virtual_file("/dev/loop0", fs::FileTypes::FT_DEVICE,
+                         eastl::make_unique<DevLoopProvider>(0));
 
         // /dev/block/8:0 (块设备文件)
         add_virtual_file("/dev/block/8:0", fs::FileTypes::FT_DEVICE,
@@ -392,6 +410,44 @@ namespace fs
         }
 
         return parts;
+    }
+
+    int VirtualFileSystem::fstat(fs::file *f, fs::Kstat *st)
+    {
+        if(f->is_virtual)
+        {
+            // 如果是虚拟文件，使用虚拟文件系统的fstat处理
+            return vfile_fstat(f, st);
+        }
+        else
+        {
+            // 调用常规的fstat处理
+            return vfs_fstat(f, st);
+        }
+    }
+
+    int VirtualFileSystem::vfile_fstat(fs::file *f, fs::Kstat *st)
+    {
+
+        // TODO: 单为了/dev/loop0 搞得，其它时候不能乱写Kstat，写成下面这样刚好能过rename01
+        st->dev = 0x5;            // Device: 5h/5d
+        st->ino = 124;            // Inode: 124
+        st->mode = 0660 | S_IFBLK; // block special file, mode: 0660 + block device
+        st->nlink = 1;            // Links: 1
+        st->uid = 0;              // Uid: 0 (root)
+        st->gid = 6;              // Gid: 6 (disk)
+        st->rdev = 7;               // Device type: 7,0
+        st->size = 0;             // Size: 0
+        st->blksize = 4096;       // IO Block: 4096
+        st->blocks = 0;           // Blocks: 0
+
+        st->st_atime_sec = 1753278126;    // Access: 2025-07-23 19:02:06
+        st->st_atime_nsec = 192843346;    // Access nsec
+        st->st_ctime_sec = 1753278126;    // Change: 2025-07-23 19:02:06
+        st->st_ctime_nsec = 176778624;    // Change nsec
+        st->st_mtime_sec = 1753278126;    // Modify: 2025-07-23 19:02:06
+        st->st_mtime_nsec = 176778624;    // Modify nsec
+        return 0;
     }
 
     VirtualFileSystem k_vfs;

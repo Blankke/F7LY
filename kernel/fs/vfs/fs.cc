@@ -113,16 +113,6 @@ void dir_init(void)
         vfs_ext_mkdir((char *)"/usr/lib", 0777);
     else
         free_inode(ip);
-
-    if (create_and_write_file("/proc/meminfo", get_meminfo().c_str()) == EEXIST)
-    {
-        printfRed("proc/meminfo已存在磁盘中，无需二次初始化\n");
-    }
-
-    if (create_and_write_file("/proc/cpuinfo", get_cpuinfo().c_str()) == EEXIST)
-    {
-        printfRed("proc/cpuinfo已存在磁盘中，无需二次初始化\n");
-    }
 }
 
 void filesystem2_init(void)

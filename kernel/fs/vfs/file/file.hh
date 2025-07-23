@@ -111,6 +111,7 @@ namespace fs
 	class file
 	{
 	public:
+		bool is_virtual;
 		FileAttrs _attrs;
 		uint32 refcnt;
 		Kstat _stat;

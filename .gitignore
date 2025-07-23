@@ -39,3 +39,5 @@ disasm_la_busybox_musl.asm
 sdcard-la.img.bak
 disasm_rv_musl_libcso.asm
 outputverbose.txt
+sdcard-la-final.img
+sdcard-rv-final.img
