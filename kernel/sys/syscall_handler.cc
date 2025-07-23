@@ -244,6 +244,7 @@ namespace syscall
         BIND_SYSCALL(openat2);            // from rocket
         BIND_SYSCALL(faccessat2);         // from rocket
         BIND_SYSCALL(remap_file_pages);   // from rocket
+        BIND_SYSCALL(splice);
         // ...existing code...
         // printfCyan("====================debug: syscall_num_list\n");
         // for (uint64 i = 0; i < max_syscall_funcs_num; i++)
@@ -4901,7 +4902,39 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_copy_file_range()
     {
-        panic("未实现该系统调用");
+        int fd_in, fd_out;
+        off_t offset_in, offset_out;
+        size_t size;
+        long isize;
+        int iflag;
+        uint flags;
+        if (_arg_int(0, fd_in) < 0 || _arg_long(1,offset_in)
+        || _arg_int(2, fd_out) < 0 ||
+            _arg_long(3, offset_out) < 0 || _arg_long(4, isize) < 0 || _arg_int(5, iflag) < 0)
+        {
+            printfRed("[SyscallHandler::sys_copy_file_range] 参数错误\n");
+            return SYS_EINVAL; // 参数错误
+        }
+flags=iflag;
+size = (size_t)isize;
+        if (fd_in < 0 || fd_out < 0 || fd_in >= NOFILE || fd_out >= NOFILE)
+        {
+            printfRed("[SyscallHandler::sys_copy_file_range] 无效的文件描述符: fd_in=%d, fd_out=%d\n", fd_in, fd_out);
+            return SYS_EBADF; // 无效的文件描述符
+        }
+        fs::file *f_in = proc::k_pm.get_cur_pcb()->get_open_file(fd_in);
+        fs::file *f_out = proc::k_pm.get_cur_pcb()->get_open_file(fd_out);
+        if (!f_in || !f_out)
+        {
+            printfRed("[SyscallHandler::sys_copy_file_range] 无效的文件描述符: fd_in=%d, fd_out=%d\n", fd_in, fd_out);
+            return SYS_EBADF; // 无效的文件描述符
+        }
+        if (!f_in->_attrs.u_read || !f_out->_attrs.u_write)
+        {
+            printfRed("[SyscallHandler::sys_copy_file_range] 文件没有读/写权限: fd_in=%d, fd_out=%d\n", fd_in, fd_out);
+            return SYS_EACCES; // 访问被拒绝
+        }
+        return vfs_copy_file_range(f_in, offset_in, f_out, offset_out, size, flags);
     }
     uint64 SyscallHandler::sys_strerror()
     {
@@ -4924,6 +4957,10 @@ namespace syscall
         panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_remap_file_pages()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_splice()
     {
         panic("未实现该系统调用");
     }

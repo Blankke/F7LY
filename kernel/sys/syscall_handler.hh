@@ -215,6 +215,7 @@ namespace syscall
         uint64 sys_openat2();
         uint64 sys_faccessat2();
         uint64 sys_remap_file_pages();
+        uint64 sys_splice();
     };
 
     extern SyscallHandler k_syscall_handler;

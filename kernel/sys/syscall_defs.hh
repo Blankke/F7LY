@@ -172,6 +172,7 @@ namespace syscall
         SYS_close_range = 436,       // from rocket
         SYS_openat2 = 437,           // from rocket
         SYS_faccessat2 = 439,        // from rocket
+        SYS_splice = 440,           // from rocket
         SYS_poweroff = 2025
     };
 
