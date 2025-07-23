@@ -135,6 +135,7 @@ namespace proc
         fs::dentry *_cwd;        // 当前工作目录的dentry指针
         eastl::string _cwd_name; // 当前工作目录的路径字符串 @todo: 与_cwd冗余，需要统一
         ofile *_ofile;           // 打开文件描述符表，包含文件指针和close-on-exec标志
+        mode_t _umask;           // 文件模式创建掩码，用于屏蔽新创建文件的权限位
 
         /****************************************************************************************
          * 线程和同步原语
@@ -227,6 +228,8 @@ namespace proc
         uint32 get_fsuid() { return _fsuid; }
         uint32 get_gid() { return _gid; }
         uint32 get_egid() { return _egid; }
+        mode_t get_umask() { return _umask; }  // 获取文件模式创建掩码
+        void set_umask(mode_t umask) { _umask = umask & 0777; }  // 设置umask，只保留权限位
         TrapFrame *get_trapframe() { return _trapframe; }
         uint64 get_kstack() { return _kstack; }
         mem::PageTable *get_pagetable() { return &_pt; }

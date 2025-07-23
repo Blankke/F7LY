@@ -505,7 +505,7 @@ char *ltp_testcases[] = {
     // "bpf_prog05",
     // "bpf_prog06",
     // "bpf_prog07",
-    "brk01",
+    // "brk01",
     // "brk02",
     // "broken_ip-checksum.sh",
     // "broken_ip-dstaddr.sh",
@@ -722,7 +722,7 @@ char *ltp_testcases[] = {
     // "dup06", //完全PASS
     // "dup07",//完全PASS
     // "dup201",//完全PASS
-    // "dup202",
+    // "dup202",//完全PASS
     // "dup203",  //完全PASS
     // "dup204",// 完全PASS
     // "dup205",//完全PASS
@@ -2127,7 +2127,7 @@ char *ltp_testcases[] = {
     // "remove_password.sh",
     // "removexattr01",
     // "removexattr02",
-    // "rename01",
+    "rename01",
     // "rename03",
     // "rename04",
     // "rename05",

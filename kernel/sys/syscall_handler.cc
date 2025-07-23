@@ -1055,13 +1055,13 @@ namespace syscall
         // printfBlue("mkdir!\n");
         int dir_fd;
         uint64 path_addr;
-        int flags;
+        int mode;  // 权限模式，不是flags
 
         if (_arg_int(0, dir_fd) < 0)
             return -1;
         if (_arg_addr(1, path_addr) < 0)
             return -1;
-        if (_arg_int(2, flags) < 0)
+        if (_arg_int(2, mode) < 0)  // 这是mode参数，不是flags
             return -1;
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
@@ -1070,7 +1070,7 @@ namespace syscall
         if (mem::k_vmm.copy_str_in(*pt, path, path_addr, 100) < 0)
             return -1;
 
-        int res = proc::k_pm.mkdir(dir_fd, path, flags);
+        int res = proc::k_pm.mkdir(dir_fd, path, mode);  // 传递mode而不是flags
         return res;
     }
     uint64 SyscallHandler::sys_close()
@@ -4844,7 +4844,27 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_umask()
     {
-        panic("未实现该系统调用");
+        // 获取新的 umask 值
+        int new_mask;
+        if (_arg_int(0, new_mask) < 0)
+            return -1;
+        
+        // 只取低9位，确保是有效的权限位
+        mode_t new_umask = (mode_t)(new_mask & 0777);
+        
+        // 获取当前进程
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (p == nullptr)
+            return -1;
+        
+        // 获取旧的 umask 值
+        mode_t old_umask = p->_umask;
+        
+        // 设置新的 umask 值
+        p->_umask = new_umask;
+        
+        // 返回旧的 umask 值
+        return (uint64)old_umask;
     }
     uint64 SyscallHandler::sys_adjtimex()
     {

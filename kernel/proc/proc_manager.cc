@@ -511,6 +511,7 @@ namespace proc
          ****************************************************************************************/
         p->_cwd = nullptr;    // 清空当前工作目录
         p->_cwd_name.clear(); // 清空当前工作目录路径
+        p->_umask = 0022;     // 重置umask为默认值
 
         // 使用cleanup_ofile方法处理文件描述符表
         p->cleanup_ofile();
@@ -1003,6 +1004,7 @@ namespace proc
 
         np->_cwd = p->_cwd;           // 继承当前工作目录
         np->_cwd_name = p->_cwd_name; // 继承当前工作目录名称
+        np->_umask = p->_umask;       // 继承文件模式创建掩码
 
         // 继承父进程的身份信息
         np->_ppid = p->_pid;
@@ -1611,7 +1613,7 @@ namespace proc
         }
         return count1;
     }
-    int ProcessManager::mkdir(int dir_fd, eastl::string path, uint flags)
+    int ProcessManager::mkdir(int dir_fd, eastl::string path, uint mode)
     {
         // panic("未实现");
         // #ifdef FS_FIX_COMPLETELY
@@ -1626,7 +1628,9 @@ namespace proc
 
         const char *dirpath = (dir_fd == AT_FDCWD) ? p->_cwd_name.c_str() : p->_ofile->_ofile_ptr[dir_fd]->_path_name.c_str();
         eastl::string absolute_path = get_absolute_path(path.c_str(), dirpath);
-        vfs_mkdir(absolute_path.c_str(), 0777); //< 传入绝对路径，权限777表示所有人都可RWX
+        
+        // 传入原始权限，umask将在vfs_mkdir中应用
+        vfs_mkdir(absolute_path.c_str(), mode & 0777); //< 传入绝对路径和权限（umask在vfs_mkdir中应用）
 
         return 0;
     }

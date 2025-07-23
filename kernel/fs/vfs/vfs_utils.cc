@@ -6,6 +6,7 @@
 #include "fs/vfs/file/normal_file.hh"
 #include "fs/vfs/file/device_file.hh"
 #include "fs/vfs/file/directory_file.hh"
+#include "proc_manager.hh"  // 用于访问当前进程的umask
 
 
 // 将flags转换为可读的字符串表示
@@ -81,6 +82,20 @@ eastl::string flags_to_string(uint flags)
     return result;
 }
 
+// 辅助函数：应用进程的umask到权限模式
+static mode_t apply_umask(mode_t mode)
+{
+    proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+    if (current_proc == nullptr)
+    {
+        // 如果无法获取当前进程，使用默认umask 022
+        return mode & ~0022;
+    }
+    
+    // 应用当前进程的umask：从mode中清除umask中设置的权限位
+    return mode & ~(current_proc->_umask);
+}
+
 // 辅助函数：根据flags和文件类型确定文件权限
 static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file_exists, int requested_mode)
 {
@@ -91,8 +106,8 @@ static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file
     case fs::FileTypes::FT_NORMAL:
         if (!file_exists && (flags & O_CREAT))
         {
-            // 新创建的普通文件，使用请求的权限模式
-            mode = requested_mode;
+            // 新创建的普通文件，使用请求的权限模式并应用umask
+            mode = apply_umask(requested_mode);
         }
         else
         {
@@ -102,15 +117,23 @@ static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file
         break;
 
     case fs::FileTypes::FT_DEVICE:
-        mode = 0666; // rw-rw-rw-
+        mode = 0666; // rw-rw-rw-，设备文件通常不应用umask
         break;
 
     case fs::FileTypes::FT_DIRECT:
-        mode = 0755; // rwxr-xr-x
+        if (!file_exists)
+        {
+            // 新创建的目录，应用umask
+            mode = apply_umask(0755); // rwxr-xr-x
+        }
+        else
+        {
+            mode = 0755; // 现有目录保持原权限
+        }
         break;
 
     default:
-        mode = 0644; // 默认权限
+        mode = apply_umask(0644); // 默认权限并应用umask
         break;
     }
 
@@ -554,8 +577,9 @@ int vfs_mkdir(const char *path, uint64_t mode)
     if (status != EOK)
         return -status;
 
-    /* Set mode. */
-    status = ext4_mode_set(path, mode);
+    /* Apply umask to the mode and set directory permissions. */
+    mode_t final_mode = apply_umask(mode);
+    status = ext4_mode_set(path, final_mode);
 
     return -status;
 }
