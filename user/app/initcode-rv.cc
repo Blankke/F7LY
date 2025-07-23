@@ -13,7 +13,12 @@ extern "C"
         // lua_test("/mnt/glibc/");
 
         // libcbench_test("/glibc");
-        ltp_test("/musl/ltp/testcases/bin/");
+        // ltp_test("/musl/ltp/testcases/bin/");
+
+
+        // 决赛测例
+        // run_test("/musl/interrupts-test-1");
+        // run_test("/musl/interrupts-test-2");
         shutdown();
         return 0;
     }
