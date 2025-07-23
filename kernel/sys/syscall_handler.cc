@@ -4934,7 +4934,7 @@ size = (size_t)isize;
             printfRed("[SyscallHandler::sys_copy_file_range] 文件没有读/写权限: fd_in=%d, fd_out=%d\n", fd_in, fd_out);
             return SYS_EACCES; // 访问被拒绝
         }
-        return vfs_copy_file_range(f_in, offset_in, f_out, offset_out, size, flags);
+        return vfs_copy_file_range(fd_in, offset_in, fd_out, offset_out, size, flags);
     }
     uint64 SyscallHandler::sys_strerror()
     {
