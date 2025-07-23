@@ -2200,75 +2200,11 @@ namespace syscall
 
         tmm::timespec tp;
         
-        // 根据不同的clock_id获取相应的时间
-        switch (clock_id)
-        {
-            case SYS_CLOCK_REALTIME:
-            case SYS_CLOCK_REALTIME_COARSE:
-            {
-                // 获取墙上时钟时间 - 调用原有的时间管理器方法
-                tmm::SystemClockId cid = (tmm::SystemClockId)clock_id;
-                int ret = tmm::k_tm.clock_gettime(cid, &tp);
-                if (ret < 0)
-                    return ret;
-                break;
-            }
-            case SYS_CLOCK_MONOTONIC:
-            case SYS_CLOCK_MONOTONIC_RAW:
-            case SYS_CLOCK_MONOTONIC_COARSE:
-            case SYS_CLOCK_BOOTTIME:
-            {
-                // 获取单调时间 - 基于系统tick计数
-                uint64 ticks = tmm::k_tm.get_ticks();
-                uint64 freq = tmm::get_main_frequence();
-                uint64 cpt = tmm::cycles_per_tick();
-                
-                uint64 total_cycles = ticks * cpt;
-                tp.tv_sec = (long)(total_cycles / freq);
-                ulong rest_cyc = total_cycles % freq;
-                const int64 nsec_max = 1000000000L;
-                tp.tv_nsec = (long)((rest_cyc * nsec_max) / freq);
-                break;
-            }
-            case SYS_CLOCK_PROCESS_CPUTIME_ID:
-            case SYS_CLOCK_THREAD_CPUTIME_ID:
-            {
-                // 获取进程/线程CPU时间
-                proc::Pcb *p = proc::k_pm.get_cur_pcb();
-                // 使用用户态ticks和系统态时间，注意单位转换
-                uint64 user_ticks = p->get_user_ticks();
-                uint64 stime = p->get_stime();
-                
-                // 将ticks转换为时间 (假设每个tick对应的时间)
-                uint64 freq = tmm::get_main_frequence();
-                uint64 cpt = tmm::cycles_per_tick();
-                
-                // 用户态时间转换
-                uint64 user_time_cycles = user_ticks * cpt;
-                uint64 user_time_sec = user_time_cycles / freq;
-                uint64 user_time_nsec = ((user_time_cycles % freq) * 1000000000L) / freq;
-                
-                // 系统态时间已经是时间单位，直接使用
-                uint64 total_sec = user_time_sec + (stime / 1000000);
-                uint64 total_nsec = user_time_nsec + ((stime % 1000000) * 1000);
-                
-                // 处理纳秒溢出
-                if (total_nsec >= 1000000000L)
-                {
-                    total_sec += total_nsec / 1000000000L;
-                    total_nsec %= 1000000000L;
-                }
-                
-                tp.tv_sec = (long)total_sec;
-                tp.tv_nsec = (long)total_nsec;
-                break;
-            }
-            default:
-            {
-                printfRed("[SyscallHandler::sys_clock_gettime] Unsupported clock_id: %d\n", clock_id);
-                return SYS_EINVAL;
-            }
-        }
+        // 统一调用定时器管理器的clock_gettime方法处理所有时钟类型
+        tmm::SystemClockId cid = (tmm::SystemClockId)clock_id;
+        int ret = tmm::k_tm.clock_gettime(cid, &tp);
+        if (ret < 0)
+            return ret;
 
         // printfYellow("[SyscallHandler::sys_clock_gettime] clock_id: %d, tp: %ld.%09ld\n", clock_id, tp.tv_sec, tp.tv_nsec);
         
