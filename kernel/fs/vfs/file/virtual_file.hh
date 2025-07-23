@@ -212,4 +212,16 @@ namespace fs
         }
     };
 
+    // /proc/interrupts 内容提供者
+    class ProcInterruptsProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_dynamic() const override { return true; } // 中断统计需要实时更新
+        virtual bool is_writable() const override { return false; } // 只读文件
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcInterruptsProvider>();
+        }
+    };
+
 }

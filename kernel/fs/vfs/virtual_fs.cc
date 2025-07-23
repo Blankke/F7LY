@@ -298,6 +298,10 @@ namespace fs
         add_virtual_file("/proc/self/stat", fs::FileTypes::FT_NORMAL,
                         eastl::make_unique<ProcSelfStatProvider>());
 
+        // 添加 /proc/interrupts 文件及其提供者
+        add_virtual_file("/proc/interrupts", fs::FileTypes::FT_NORMAL,
+                        eastl::make_unique<ProcInterruptsProvider>());
+
         // /etc/passwd
         add_virtual_file("/etc/passwd", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<EtcPasswdProvider>());
