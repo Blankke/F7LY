@@ -109,8 +109,9 @@ int trap_manager::devintr()
   if (scause == 0x8000000000000005L)
   {
     // printfBlue("zzZ");
-    // TODO
-    // intr_stats::k_intr_stats.record_interrupt();
+    // TODO, 这个5是瞎写的
+    // 假设5是时钟中断
+    intr_stats::k_intr_stats.record_interrupt(5);
     timertick();
 
     /// TODO: riscv可以用sbi的tick来实现时钟
