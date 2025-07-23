@@ -76,7 +76,7 @@ namespace proc
         Pcb *fork(Pcb *p, uint64 flags, uint64 stack_ptr, uint64 ctid, bool is_clone3);
         void fork_ret();
         long brk(long n);
-        int open(int dir_fd, eastl::string path, uint flags);
+        int open(int dir_fd, eastl::string path, uint flags, int mode = 0644);
         int mkdir(int dir_fd, eastl::string path, uint flags);
         int close(int fd);
         int fstat(int fd, fs::Kstat *buf);

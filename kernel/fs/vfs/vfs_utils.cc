@@ -7,6 +7,7 @@
 #include "fs/vfs/file/device_file.hh"
 #include "fs/vfs/file/directory_file.hh"
 
+
 // 将flags转换为可读的字符串表示
 eastl::string flags_to_string(uint flags)
 {
@@ -81,7 +82,7 @@ eastl::string flags_to_string(uint flags)
 }
 
 // 辅助函数：根据flags和文件类型确定文件权限
-static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file_exists)
+static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file_exists, int requested_mode)
 {
     mode_t mode;
 
@@ -90,8 +91,8 @@ static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file
     case fs::FileTypes::FT_NORMAL:
         if (!file_exists && (flags & O_CREAT))
         {
-            // 新创建的普通文件
-            mode = 0644; // rw-r--r--
+            // 新创建的普通文件，使用请求的权限模式
+            mode = requested_mode;
         }
         else
         {
@@ -114,22 +115,29 @@ static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file
     }
 
     // 正确处理文件访问模式：检查低两位来确定读写权限
+    // 注意：只修改基本权限位（低9位），保留特殊权限位（sticky bit, setuid, setgid）
+    mode_t special_bits = mode & 07000;  // 保存特殊权限位（sticky, setuid, setgid）
+    mode_t basic_perms = mode & 0777;    // 获取基本权限位
+    
     int access_mode = flags & 0x3; // 取低两位
     if (access_mode == O_RDONLY)   // 0x00 - 只读
     {
-        mode &= ~0222; // 清除写权限
-        mode |= 0444;  // 设置读权限
+        basic_perms &= ~0222; // 清除写权限
+        basic_perms |= 0444;  // 设置读权限
     }
     else if (access_mode == O_WRONLY) // 0x01 - 只写
     {
-        mode &= ~0444; // 清除读权限
-        mode |= 0222; // 设置写权限
+        basic_perms &= ~0444; // 清除读权限
+        basic_perms |= 0222; // 设置写权限
     }
     // O_RDWR (0x02) 保持读写权限不变
+    
+    // 合并特殊权限位和基本权限位
+    mode = special_bits | basic_perms;
 
     return mode;
 }
-int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags)
+int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mode)
 {
     bool file_exists = (vfs_is_file_exist(absolute_path.c_str()) == 1);
     // 好多flag都有人给你负重前行过了
@@ -177,7 +185,7 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags)
     {
         // 根据flags和文件类型确定适当的权限
         // 专门重写了个函数来确定这个权限
-        mode_t file_mode = determine_file_mode(flags, fs::FileTypes::FT_NORMAL, file_exists);
+        mode_t file_mode = determine_file_mode(flags, fs::FileTypes::FT_NORMAL, file_exists, mode);
 
         fs::FileAttrs attrs;
         attrs.filetype = fs::FileTypes::FT_NORMAL;
@@ -196,6 +204,21 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags)
             return -ENOMEM;
         }
 
+        // 如果是新创建的文件，设置文件权限到 ext4 inode
+        if (!file_exists && (flags & O_CREAT))
+        {
+            status = ext4_mode_set(absolute_path.c_str(), file_mode);
+            if (status != EOK)
+            {
+                printfRed("ext4_mode_set failed for %s, status: %d\n", absolute_path.c_str(), status);
+                // 不返回错误，因为文件已经创建成功了
+            }
+            else
+            {
+                printfGreen("ext4_mode_set success for %s, mode: %o\n", absolute_path.c_str(), file_mode);
+            }
+        }
+
         // 处理 O_APPEND：将文件指针设置到文件末尾
         if (flags & O_APPEND)
         {
@@ -207,7 +230,7 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags)
     }
     else if (type == fs::FileTypes::FT_DEVICE)
     {
-        mode_t file_mode = determine_file_mode(flags, fs::FileTypes::FT_DEVICE, file_exists);
+        mode_t file_mode = determine_file_mode(flags, fs::FileTypes::FT_DEVICE, file_exists, mode);
 
         fs::FileAttrs attrs;
         attrs.filetype = fs::FileTypes::FT_DEVICE;
@@ -225,7 +248,7 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags)
     }
     else if (type == fs::FileTypes::FT_DIRECT)
     {
-        mode_t file_mode = determine_file_mode(flags, fs::FileTypes::FT_DIRECT, file_exists);
+        mode_t file_mode = determine_file_mode(flags, fs::FileTypes::FT_DIRECT, file_exists, mode);
 
         // 创建目录文件对象
         fs::FileAttrs attrs;

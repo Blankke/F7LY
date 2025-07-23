@@ -1608,10 +1608,11 @@ namespace proc
     /// @param dir_fd 指定相对路径的目录文件描述符（AT_FDCWD 表示当前工作目录）。
     /// @param path 要打开的路径
     /// @param flags 打开方式（如只读、只写、创建等）
+    /// @param mode 文件权限模式（当使用O_CREAT时）
     /// @return fd
-    int ProcessManager::open(int dir_fd, eastl::string path, uint flags)
+    int ProcessManager::open(int dir_fd, eastl::string path, uint flags, int mode)
     {
-        printfCyan("[open] dir_fd: %d, path: %s, flags: %s\n", dir_fd, path.c_str(), flags_to_string(flags).c_str());
+        printfCyan("[open] dir_fd: %d, path: %s, flags: %s, mode: %x\n", dir_fd, path.c_str(), flags_to_string(flags).c_str(), mode);
 
         Pcb *p = get_cur_pcb();
         // fs::file *file = nullptr;
@@ -1625,7 +1626,7 @@ namespace proc
             return -EMFILE; // 分配文件描述符失败
         }
         // 下面这个就是套的第二层，这一层的意义似乎只在于分配文件描述符
-        int err = fs::k_vfs.openat(path, p->_ofile->_ofile_ptr[fd], flags);
+        int err = fs::k_vfs.openat(path, p->_ofile->_ofile_ptr[fd], flags, mode);
         if (err < 0)
         {
             printfRed("[open] failed for path: %s\n", path.c_str());
