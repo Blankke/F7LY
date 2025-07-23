@@ -24,6 +24,7 @@
 #include "syscall_handler.hh"
 #include "devs/riscv/disk_driver.hh"
 #include "devs/device_manager.hh"
+#include "devs/loop_device.hh"
 #include "fs/vfs/file/device_file.hh"
 #include "devs/console1.hh"
 #include "fs/vfs/inode.hh"
@@ -96,6 +97,9 @@ void main()
     fs::k_file_table.init(); // 初始化文件池
     vfs_ext4_init();      // 初始化lwext4
     fs::k_vfs.dir_init(); // 初始化虚拟文件系统目录
+    
+    // 初始化 loop 设备控制器
+    dev::LoopControlDevice::init_loop_control();
         /************************* */
 
         printfMagenta("user init\n");

@@ -102,9 +102,45 @@ namespace fs
 
     eastl::string DevLoopProvider::generate_content()
     {
-        // Loop设备是一种特殊的块设备，可以将文件挂载为块设备
+        // 具体的 loop 设备节点，这里返回设备信息
         eastl::string result;
-        result += "Loop device ready for mounting\n";
+        result += "Loop device #";
+        
+        // 手动转换数字到字符串
+        char num_str[16];
+        int temp = _loop_number;
+        int pos = 0;
+        if (temp == 0) {
+            num_str[pos++] = '0';
+        } else {
+            char temp_str[16];
+            int temp_pos = 0;
+            while (temp > 0) {
+                temp_str[temp_pos++] = '0' + (temp % 10);
+                temp /= 10;
+            }
+            // 反转字符串
+            for (int i = temp_pos - 1; i >= 0; i--) {
+                num_str[pos++] = temp_str[i];
+            }
+        }
+        num_str[pos] = '\0';
+        
+        result += num_str;
+        result += "\n";
+        result += "Device path: /dev/loop";
+        result += num_str;
+        result += "\n";
+        return result;
+    }
+
+    eastl::string DevLoopControlProvider::generate_content()
+    {
+        // Loop 控制设备，用于管理 loop 设备的创建和删除
+        eastl::string result;
+        result += "Loop control device\n";
+        result += "Use ioctl() to manage loop devices\n";
+        result += "Supported operations: LOOP_CTL_GET_FREE, LOOP_CTL_ADD, LOOP_CTL_REMOVE\n";
         return result;
     }
 

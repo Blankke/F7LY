@@ -44,6 +44,7 @@
 #include "fs/lwext4/ext4.hh"
 #include "fs/vfs/virtual_fs.hh"
 #include "shm/shm_manager.hh"
+#include "devs/loop_device.hh"
 namespace syscall
 {
     // 创建全局的 SyscallHandler 实例
@@ -2464,22 +2465,184 @@ namespace syscall
 
             return 0;
         }
+        // Loop device control operations
+        // https://www.man7.org/linux/man-pages/man4/loop.4.html
+        // https://blog.csdn.net/zhongbeida_xue/article/details/109657639
+        
+        // Handle /dev/loop-control device operations
         if ((cmd & 0xFFFF) == LOOP_CTL_GET_FREE)
         {
-            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
-#ifdef RISCV
-            int *free_loops = (int *)pt->walk_addr(arg);
-#elif defined(LOONGARCH)
-            int *free_loops = (int *)to_vir((uint64)pt->walk_addr(arg));
-#endif
             if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
             {
                 return SYS_ENOTTY; // 只有设备文件支持此操作
             }
-            free_loops = 0; // 假设没有可用的loop设备
-            if(free_loops==0)
-            panic("我不知道怎么搞loop设备，官老师会不会？");
+
+            // 获取一个空闲的 loop 设备编号
+            int free_loop = dev::LoopControlDevice::get_free_loop_device();
+            if (free_loop < 0) {
+                return SYS_ENOSPC; // 没有可用的 loop 设备
+            }
+
+            // 自动创建 loop 设备
+            int result = dev::LoopControlDevice::add_loop_device(free_loop);
+            if (result < 0) {
+                return SYS_EIO; // 创建失败
+            }
+
+            return free_loop; // 返回分配的 loop 设备编号
+        }
+
+        if ((cmd & 0xFFFF) == LOOP_CTL_ADD)
+        {
+            if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+            {
+                return SYS_ENOTTY;
+            }
+
+            int loop_num = (int)arg;
+            int result = dev::LoopControlDevice::add_loop_device(loop_num);
+            if (result < 0) {
+                return SYS_EEXIST; // 设备已存在或创建失败
+            }
+
+            return loop_num;
+        }
+
+        if ((cmd & 0xFFFF) == LOOP_CTL_REMOVE)
+        {
+            if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+            {
+                return SYS_ENOTTY;
+            }
+
+            int loop_num = (int)arg;
+            int result = dev::LoopControlDevice::remove_loop_device(loop_num);
+            if (result < 0) {
+                return SYS_ENOENT; // 设备不存在或正在使用
+            }
+
             return 0;
+        }
+
+        // Handle individual loop device operations
+        if ((cmd & 0xFF00) == 0x4C00) // Loop device ioctl commands
+        {
+            if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+            {
+                return SYS_ENOTTY;
+            }
+
+            // 从设备文件获取 loop 设备
+            // 解析设备文件路径来获取 loop 设备编号
+            dev::LoopDevice* loop_dev = nullptr;
+            
+            // 检查是否是 device_file 类型，并从路径名解析 loop 设备编号
+            if (f->_attrs.filetype == fs::FileTypes::FT_DEVICE) {
+                fs::device_file* device_f = static_cast<fs::device_file*>(f);
+                eastl::string path = device_f->_path_name;
+                
+                // 解析 "/dev/loopN" 格式的路径
+                if (path.find("/dev/loop") == 0) {
+                    eastl::string loop_num_str = path.substr(9); // 跳过 "/dev/loop"
+                    int loop_num = 0;
+                    bool valid_num = true;
+                    
+                    // 手动解析数字
+                    for (char c : loop_num_str) {
+                        if (c >= '0' && c <= '9') {
+                            loop_num = loop_num * 10 + (c - '0');
+                        } else {
+                            valid_num = false;
+                            break;
+                        }
+                    }
+                    
+                    if (valid_num && !loop_num_str.empty()) {
+                        loop_dev = dev::LoopControlDevice::get_loop_device(loop_num);
+                    }
+                }
+            }
+            
+            if (!loop_dev) {
+                return SYS_ENODEV; // 设备不存在
+            }
+
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+
+            switch (cmd & 0xFFFF)
+            {
+                case LOOP_SET_FD:
+                {
+                    int fd = (int)arg;
+                    int result = loop_dev->set_fd(fd);
+                    return (result == 0) ? 0 : SYS_EIO;
+                }
+
+                case LOOP_CLR_FD:
+                {
+                    int result = loop_dev->clear_fd();
+                    return (result == 0) ? 0 : SYS_EIO;
+                }
+
+                case LOOP_SET_STATUS64:
+                {
+#ifdef RISCV
+                    dev::LoopInfo64 *info = (dev::LoopInfo64 *)pt->walk_addr(arg);
+#elif defined(LOONGARCH)
+                    dev::LoopInfo64 *info = (dev::LoopInfo64 *)to_vir((uint64)pt->walk_addr(arg));
+#endif
+                    if (!info) {
+                        return SYS_EFAULT;
+                    }
+                    int result = loop_dev->set_status(info);
+                    return (result == 0) ? 0 : SYS_EIO;
+                }
+
+                case LOOP_GET_STATUS64:
+                {
+#ifdef RISCV
+                    dev::LoopInfo64 *info = (dev::LoopInfo64 *)pt->walk_addr(arg);
+#elif defined(LOONGARCH)
+                    dev::LoopInfo64 *info = (dev::LoopInfo64 *)to_vir((uint64)pt->walk_addr(arg));
+#endif
+                    if (!info) {
+                        return SYS_EFAULT;
+                    }
+                    int result = loop_dev->get_status(info);
+                    return (result == 0) ? 0 : SYS_EIO;
+                }
+
+                case LOOP_CONFIGURE:
+                {
+#ifdef RISCV
+                    dev::LoopConfig *config = (dev::LoopConfig *)pt->walk_addr(arg);
+#elif defined(LOONGARCH)
+                    dev::LoopConfig *config = (dev::LoopConfig *)to_vir((uint64)pt->walk_addr(arg));
+#endif
+                    if (!config) {
+                        return SYS_EFAULT;
+                    }
+                    int result = loop_dev->configure(config);
+                    return (result == 0) ? 0 : SYS_EIO;
+                }
+
+                case LOOP_SET_CAPACITY:
+                {
+                    uint64_t capacity = arg;
+                    int result = loop_dev->set_capacity(capacity);
+                    return (result == 0) ? 0 : SYS_EIO;
+                }
+
+                case LOOP_SET_BLOCK_SIZE:
+                {
+                    uint32_t block_size = (uint32_t)arg;
+                    int result = loop_dev->set_block_size(block_size);
+                    return (result == 0) ? 0 : SYS_EINVAL;
+                }
+
+                default:
+                    return SYS_ENOTTY; // 不支持的 ioctl 命令
+            }
         }
         
         panic("[SyscallHandler::sys_ioctl] Unsupported ioctl command: 0x%X\n", cmd);
