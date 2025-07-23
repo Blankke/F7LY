@@ -86,6 +86,29 @@ namespace dev
         return 0;
     }
 
+    int LoopDevice::set_status(const LoopInfo* info)
+    {
+        if (!info) {
+            return -1;
+        }
+
+        _offset = info->lo_offset;
+        _size_limit = info->lo_sizelimit;
+        _flags = info->lo_flags;
+        
+        // 复制文件名
+        if (info->lo_file_name[0] != 0) {
+            size_t name_len = 0;
+            // 手动计算字符串长度，最大63个字符
+            for (size_t i = 0; i < 63 && info->lo_file_name[i] != 0; i++) {
+                name_len++;
+            }
+            _file_name = eastl::string((const char*)info->lo_file_name, name_len);
+        }
+
+        return 0;
+    }
+
     int LoopDevice::set_status(const LoopInfo64* info)
     {
         if (!info) {
@@ -104,6 +127,29 @@ namespace dev
                 name_len++;
             }
             _file_name = eastl::string((const char*)info->lo_file_name, name_len);
+        }
+
+        return 0;
+    }
+
+    int LoopDevice::get_status(LoopInfo* info)
+    {
+        if (!info) {
+            return -1;
+        }
+
+        memset(info, 0, sizeof(LoopInfo));
+        
+        info->lo_number = _loop_number;
+        info->lo_offset = (uint32_t)_offset;
+        info->lo_sizelimit = (uint32_t)_size_limit;
+        info->lo_flags = _flags;
+        
+        // 复制文件名
+        if (!_file_name.empty()) {
+            size_t name_len = eastl::min(_file_name.length(), size_t(63));
+            memcpy(info->lo_file_name, _file_name.c_str(), name_len);
+            info->lo_file_name[name_len] = 0;
         }
 
         return 0;

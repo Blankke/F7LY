@@ -12,7 +12,25 @@
 
 namespace dev
 {
-    // Loop 设备状态结构
+    // Loop 设备状态结构 (32位版本，用于LOOP_SET_STATUS)
+    struct LoopInfo
+    {
+        uint32_t lo_device;        // 关联的设备号
+        uint32_t lo_inode;         // 关联的 inode 号  
+        uint32_t lo_rdevice;       // 真实设备号
+        uint32_t lo_offset;        // 偏移量
+        uint32_t lo_sizelimit;     // 大小限制
+        uint32_t lo_number;        // loop 设备编号
+        uint32_t lo_encrypt_type;  // 加密类型
+        uint32_t lo_encrypt_key_size; // 加密密钥大小
+        uint32_t lo_flags;         // 标志位
+        uint8_t  lo_file_name[64]; // 文件名
+        uint8_t  lo_crypt_name[64];// 加密名
+        uint8_t  lo_encrypt_key[32]; // 加密密钥
+        uint32_t lo_init[2];       // 初始化数据
+    };
+
+    // Loop 设备状态结构 (64位版本，用于LOOP_SET_STATUS64)
     struct LoopInfo64
     {
         uint64_t lo_device;        // 关联的设备号
@@ -70,8 +88,10 @@ namespace dev
         // Loop 设备特有方法
         int set_fd(int fd);                  // 绑定文件描述符
         int clear_fd();                      // 清除绑定
-        int set_status(const LoopInfo64* info); // 设置状态
-        int get_status(LoopInfo64* info);    // 获取状态
+        int set_status(const LoopInfo* info); // 设置状态 (32位版本)
+        int get_status(LoopInfo* info);      // 获取状态 (32位版本)
+        int set_status(const LoopInfo64* info); // 设置状态 (64位版本)
+        int get_status(LoopInfo64* info);    // 获取状态 (64位版本)
         int configure(const LoopConfig* config); // 配置设备
         int set_capacity(uint64_t capacity); // 设置容量
         int set_block_size(uint32_t block_size); // 设置块大小

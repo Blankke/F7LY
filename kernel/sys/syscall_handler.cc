@@ -289,7 +289,7 @@ namespace syscall
             uint64 ret = (this->*_syscall_funcs[sys_num])();
             if (!(sys_num == 64 && p->_trapframe->a0 == 1) && !(sys_num == 66 && p->_trapframe->a0 == 1))
                 // if (!(sys_num == 64) && !(sys_num == 66))
-                printfCyan("[SyscallHandler::invoke_syscaller]syscall name: %s ret: %p\n", _syscall_name[sys_num], ret);
+                printfCyan("[SyscallHandler::invoke_syscaller]syscall name: %s ret: %d\n", _syscall_name[sys_num], ret);
             p->_trapframe->a0 = ret; // 设置返回值
         }
         //     if (sys_num != 64 && sys_num != 66)
@@ -2526,7 +2526,7 @@ namespace syscall
 
             return 0;
         }
-
+        printfYellow("[SyscallHandler::sys_ioctl] cmd: 0x%X, arg: %u\n", cmd, arg);
         // Handle individual loop device operations
         if ((cmd & 0xFF00) == 0x4C00) // Loop device ioctl commands
         {
@@ -2587,6 +2587,34 @@ namespace syscall
                     return (result == 0) ? 0 : SYS_EIO;
                 }
 
+                case LOOP_SET_STATUS:
+                {
+#ifdef RISCV
+                    dev::LoopInfo *info = (dev::LoopInfo *)pt->walk_addr(arg);
+#elif defined(LOONGARCH)
+                    dev::LoopInfo *info = (dev::LoopInfo *)to_vir((uint64)pt->walk_addr(arg));
+#endif
+                    if (!info) {
+                        return SYS_EFAULT;
+                    }
+                    int result = loop_dev->set_status(info);
+                    return (result == 0) ? 0 : SYS_EIO;
+                }
+
+                case LOOP_GET_STATUS:
+                {
+#ifdef RISCV
+                    dev::LoopInfo *info = (dev::LoopInfo *)pt->walk_addr(arg);
+#elif defined(LOONGARCH)
+                    dev::LoopInfo *info = (dev::LoopInfo *)to_vir((uint64)pt->walk_addr(arg));
+#endif
+                    if (!info) {
+                        return SYS_EFAULT;
+                    }
+                    int result = loop_dev->get_status(info);
+                    return (result == 0) ? 0 : SYS_EIO;
+                }
+
                 case LOOP_SET_STATUS64:
                 {
 #ifdef RISCV
@@ -2644,6 +2672,7 @@ namespace syscall
                 }
 
                 default:
+                    printfRed("[SyscallHandler::sys_ioctl] Unsupported loop device ioctl command: 0x%X\n", cmd);
                     return SYS_ENOTTY; // 不支持的 ioctl 命令
             }
         }
