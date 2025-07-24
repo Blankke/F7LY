@@ -1893,7 +1893,7 @@ char *ltp_testcases[] = {
     // "open_tree01",
     // "open_tree02",
     // "open01",    //pass
-    // "open02",
+    "open02",
     // "open03", // 完全PASS
     // "open04",    //完全PASS
     // "open06",   pass
@@ -2011,8 +2011,8 @@ char *ltp_testcases[] = {
     // "prctl08",
     // "prctl09",
     // "prctl10",
-    // "pread01",
-    // "pread01_64",
+    // "pread01",    //pass
+    // "pread01_64",  //pass
     // "pread02",
     // "pread02_64",
     // "preadv01",
@@ -2127,7 +2127,7 @@ char *ltp_testcases[] = {
     // "remove_password.sh",
     // "removexattr01",
     // "removexattr02",
-    "rename01",
+    // "rename01",
     // "rename03",
     // "rename04",
     // "rename05",

@@ -46,6 +46,7 @@
 #include "fs/vfs/virtual_fs.hh"
 #include "shm/shm_manager.hh"
 #include "devs/loop_device.hh"
+#include "devs/block_device.hh"
 
 namespace syscall
 {
@@ -1089,7 +1090,7 @@ namespace syscall
         eastl::string pathname;
         int imode;
         long idev;
-        
+
         // 获取参数
         if (_arg_str(0, pathname, MAXPATH) < 0)
             return SYS_EFAULT;
@@ -1097,10 +1098,10 @@ namespace syscall
             return SYS_EFAULT;
         if (_arg_long(2, idev) < 0)
             return SYS_EFAULT;
-        
+
         mode_t mode = imode;
         dev_t dev = idev;
-        
+
         // 调用进程管理器的 mknod 函数，使用 AT_FDCWD 表示当前工作目录
         int result = proc::k_pm.mknod(AT_FDCWD, pathname, mode, dev);
         return result;
@@ -2546,7 +2547,7 @@ namespace syscall
 
             return 0;
         }
-        printfYellow("[SyscallHandler::sys_ioctl] cmd: 0x%X, arg: %u\n",(cmd & 0xFFFF), arg);
+        printfYellow("[SyscallHandler::sys_ioctl] cmd: 0x%X, arg: %u\n", (cmd & 0xFFFF), arg);
         // Handle individual loop device operations
         if ((cmd & 0xFF00) == 0x4C00) // Loop device ioctl commands
         {
@@ -2710,13 +2711,19 @@ namespace syscall
             }
         }
 
-        if((cmd & 0xFFFF) == BLKGETSIZE64)
+        if ((cmd & 0xFFFF) == 0x1272) // BLKGETSIZE64
         {
-            // 获取块设备的大小
+            // 获取块设备的大小（以字节为单位）
+            if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+            {
+                printfRed("[SyscallHandler::sys_ioctl] BLKGETSIZE64 can only be used on block devices\n");
+                return SYS_ENOTTY;
+            }
+
             mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
 #ifdef RISCV
             uint64 *size = (uint64 *)pt->walk_addr(arg);
-#elif defined(LOONGARCH)    
+#elif defined(LOONGARCH)
             uint64 *size = (uint64 *)to_vir((uint64)pt->walk_addr(arg));
 #endif
             if (!size)
@@ -2724,6 +2731,91 @@ namespace syscall
                 printfRed("[SyscallHandler::sys_ioctl] Error fetching size address\n");
                 return SYS_EFAULT;
             }
+
+            // 获取块设备的大小
+            uint64 device_size = 0;
+
+            // 检查是否是 loop 设备
+            eastl::string path;
+            if (f->_attrs.filetype == fs::FileTypes::FT_DEVICE)
+            {
+                fs::device_file *df = (fs::device_file *)f;
+                path = df->_path_name;
+            }
+            else
+            {
+                printfRed("[SyscallHandler::sys_ioctl] Not a device file\n");
+                return SYS_ENOTTY;
+            }
+
+            if (path.find("/dev/loop") != eastl::string::npos)
+            {
+                // 解析 loop 设备编号
+                size_t pos = path.rfind("loop");
+                if (pos != eastl::string::npos)
+                {
+                    eastl::string number_part = path.substr(pos + 4);
+                    int loop_num = -1;
+                    bool valid_num = true;
+
+                    if (!number_part.empty())
+                    {
+                        // 手动解析数字
+                        loop_num = 0;
+                        for (char c : number_part)
+                        {
+                            if (c >= '0' && c <= '9')
+                            {
+                                loop_num = loop_num * 10 + (c - '0');
+                            }
+                            else
+                            {
+                                valid_num = false;
+                                break;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        valid_num = false;
+                    }
+
+                    if (valid_num && loop_num >= 0)
+                    {
+                        dev::LoopDevice *loop_dev = dev::LoopControlDevice::get_loop_device(loop_num);
+                        if (loop_dev && loop_dev->is_bound())
+                        {
+                            device_size = loop_dev->get_size();
+                        }
+                        else
+                        {
+                            printfRed("[SyscallHandler::sys_ioctl] Loop device not bound\n");
+                            return SYS_ENXIO;
+                        }
+                    }
+                    else
+                    {
+                        printfRed("[SyscallHandler::sys_ioctl] Invalid loop device number\n");
+                        return SYS_ENODEV;
+                    }
+                }
+                else
+                {
+                    printfRed("[SyscallHandler::sys_ioctl] Invalid loop device path\n");
+                    return SYS_ENODEV;
+                }
+            }
+            else
+            {
+                // 不知道其他还有什么块设备，遇到再说
+                printfRed("[SyscallHandler::sys_ioctl] Block device size query not implemented for this device type\n");
+                return SYS_ENOTTY;
+            }
+
+            // 将设备大小写入用户空间
+            *size = device_size;
+            printf("[SyscallHandler::sys_ioctl] Block device size: %u bytes\n", device_size);
+            return 0;
         }
         printfRed("[SyscallHandler::sys_ioctl] Unsupported ioctl command: 0x%X\n", cmd);
 
@@ -4558,7 +4650,7 @@ namespace syscall
 
         eastl::string target;
         eastl::string linkpath;
-
+        printfCyan("[sys_symlink] target_addr: %p, linkpath_addr: %p\n", (void *)target_addr, (void *)linkpath_addr);
         // 从用户空间复制字符串
         if (mem::k_vmm.copy_str_in(*pt, target, target_addr, 256) < 0)
         {
@@ -5175,14 +5267,14 @@ namespace syscall
         // 参数验证
         if (addr == 0 || length == 0)
         {
-            printfRed("[SyscallHandler::sys_msync] Invalid parameters: addr=%p, length=%zu\n", (void*)addr, length);
+            printfRed("[SyscallHandler::sys_msync] Invalid parameters: addr=%p, length=%zu\n", (void *)addr, length);
             return -EINVAL;
         }
 
         // 地址必须页对齐
         if (addr % PGSIZE != 0)
         {
-            printfRed("[SyscallHandler::sys_msync] Address not page aligned: %p\n", (void*)addr);
+            printfRed("[SyscallHandler::sys_msync] Address not page aligned: %p\n", (void *)addr);
             return -EINVAL;
         }
 
@@ -5197,13 +5289,13 @@ namespace syscall
         // MS_ASYNC 和 MS_SYNC 不能同时设置，且必须设置其中一个
         bool has_async = (flags & MS_ASYNC) != 0;
         bool has_sync = (flags & MS_SYNC) != 0;
-        
+
         if (has_async && has_sync)
         {
             printfRed("[SyscallHandler::sys_msync] MS_ASYNC and MS_SYNC cannot be used together\n");
             return -EINVAL;
         }
-        
+
         if (!has_async && !has_sync)
         {
             printfRed("[SyscallHandler::sys_msync] Either MS_ASYNC or MS_SYNC must be specified\n");
@@ -5213,9 +5305,9 @@ namespace syscall
         bool invalidate = (flags & MS_INVALIDATE) != 0;
 
         printfCyan("[SyscallHandler::sys_msync] addr=%p, length=%u, flags=0x%x (async=%s, sync=%s, invalidate=%s)\n",
-                   (void*)addr, length, flags,
+                   (void *)addr, length, flags,
                    has_async ? "true" : "false",
-                   has_sync ? "true" : "false", 
+                   has_sync ? "true" : "false",
                    invalidate ? "true" : "false");
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
@@ -5227,7 +5319,8 @@ namespace syscall
         bool found_mapping = false;
         for (int i = 0; i < proc::NVMA; ++i)
         {
-            if (!p->_vma->_vm[i].used) continue;
+            if (!p->_vma->_vm[i].used)
+                continue;
 
             struct proc::vma *vm = &p->_vma->_vm[i];
             uint64 vma_start = vm->addr;
@@ -5241,7 +5334,7 @@ namespace syscall
 
             found_mapping = true;
             printfCyan("[SyscallHandler::sys_msync] Found overlapping VMA %d: [%p, %p), prot=0x%x, flags=0x%x\n",
-                       i, (void*)vma_start, (void*)vma_end, vm->prot, vm->flags);
+                       i, (void *)vma_start, (void *)vma_end, vm->prot, vm->flags);
 
             // 计算重叠区域
             uint64 overlap_start = MAX(sync_start, vma_start);
@@ -5251,7 +5344,7 @@ namespace syscall
             if ((vm->flags & MAP_SHARED) && vm->vfile != nullptr)
             {
                 printfCyan("[SyscallHandler::sys_msync] Syncing MAP_SHARED file mapping: %s\n",
-                          vm->vfile->_path_name.c_str());
+                           vm->vfile->_path_name.c_str());
 
                 // 遍历重叠区域内的所有页面
                 uint64 page_start = PGROUNDDOWN(overlap_start);
@@ -5268,13 +5361,13 @@ namespace syscall
                         int file_offset = vm->offset + (va - vma_start);
 
                         printfCyan("[SyscallHandler::sys_msync] Writing back page at va=%p, file_offset=%d\n",
-                                  (void*)va, file_offset);
+                                   (void *)va, file_offset);
 
                         // 写回数据到文件
                         int write_result = vm->vfile->write(pa, PGSIZE, file_offset, false);
                         if (write_result < 0)
                         {
-                            printfRed("[SyscallHandler::sys_msync] Failed to write back page at va=%p\n", (void*)va);
+                            printfRed("[SyscallHandler::sys_msync] Failed to write back page at va=%p\n", (void *)va);
                             return -EIO;
                         }
 
@@ -5310,12 +5403,12 @@ namespace syscall
         if (!found_mapping)
         {
             printfRed("[SyscallHandler::sys_msync] No memory mapping found for range [%p, %p)\n",
-                     (void*)sync_start, (void*)sync_end);
+                      (void *)sync_start, (void *)sync_end);
             return -ENOMEM;
         }
 
         printfGreen("[SyscallHandler::sys_msync] Successfully synced range [%p, %p)\n",
-                   (void*)sync_start, (void*)sync_end);
+                    (void *)sync_start, (void *)sync_end);
         return 0;
     }
     uint64 SyscallHandler::sys_mlock()

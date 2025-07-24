@@ -299,7 +299,10 @@ namespace mem
             va = PGROUNDDOWN(src_va);
             pa = (uint64)pt.walk_addr(va);
             if (pa == 0)
+            {
+                printfRed("[copy_str_in] pa ==0! walk failed\n");
                 return -1;
+            }
 #ifdef RISCV
 
 #elif defined(LOONGARCH)
@@ -459,7 +462,8 @@ namespace mem
                 return -1; // 页表项无效
             }
             pa = reinterpret_cast<uint64>(pte.pa());
-            if (pa == 0){
+            if (pa == 0)
+            {
                 printfRed("[copy_out] pa == 0! walk failed for va: %p\n", va);
                 return -1;
             }
@@ -796,22 +800,22 @@ namespace mem
         // 动态计算需要分配的空间
         char *mem;
         printf("sz: %d\n", sz);
-        
+
         // 计算程序段需要的页面数量（向上取整）
         uint64 prog_pages = PGROUNDUP(sz) / PGSIZE;
         // 总共分配两倍的页面数，低地址存程序段，高地址作栈内存
         uint64 total_pages = prog_pages * 2;
         uint64 total_size = total_pages * PGSIZE;
-        
+
         printf("prog_pages: %d, total_pages: %d, total_size: %d\n", prog_pages, total_pages, total_size);
-        
+
         // 分配程序段页面
         for (uint64 i = 0; i < prog_pages; i++)
         {
             mem = (char *)k_pmm.alloc_page();
             memset(mem, 0, PGSIZE);
             map_pages(pt, i * PGSIZE, PGSIZE, (uint64)mem, PTE_W | PTE_R | PTE_X | PTE_U);
-            
+
             // 复制程序内容
             uint64 src_offset = i * PGSIZE;
             uint64 copy_size = MIN(sz - src_offset, PGSIZE);
@@ -820,7 +824,7 @@ namespace mem
                 memmove(mem, (void *)((uint64)src + src_offset), copy_size);
             }
         }
-        
+
         // 分配栈内存页面
         for (uint64 i = prog_pages; i < total_pages; i++)
         {
@@ -829,28 +833,28 @@ namespace mem
             // 栈内存只需要读写权限，不需要执行权限
             map_pages(pt, i * PGSIZE, PGSIZE, (uint64)mem, PTE_W | PTE_R | PTE_U);
         }
-        
+
         return total_size;
 #elif defined(LOONGARCH)
         // 动态计算需要分配的空间
         char *mem;
         printf("sz: %d\n", sz);
-        
+
         // 计算程序段需要的页面数量（向上取整）
         uint64 prog_pages = PGROUNDUP(sz) / PGSIZE;
         // 总共分配两倍的页面数，低地址存程序段，高地址作栈内存
         uint64 total_pages = prog_pages * 2;
         uint64 total_size = total_pages * PGSIZE;
-        
+
         printf("prog_pages: %d, total_pages: %d, total_size: %d\n", prog_pages, total_pages, total_size);
-        
+
         // 分配程序段页面
         for (uint64 i = 0; i < prog_pages; i++)
         {
             mem = (char *)k_pmm.alloc_page();
             memset(mem, 0, PGSIZE);
             map_pages(pt, i * PGSIZE, PGSIZE, (uint64)mem, PTE_V | PTE_W | PTE_R | PTE_X | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
-            
+
             // 复制程序内容
             uint64 src_offset = i * PGSIZE;
             uint64 copy_size = MIN(sz - src_offset, PGSIZE);
@@ -859,7 +863,7 @@ namespace mem
                 memmove(mem, (void *)((uint64)src + src_offset), copy_size);
             }
         }
-        
+
         // 分配栈内存页面
         for (uint64 i = prog_pages; i < total_pages; i++)
         {
@@ -868,7 +872,7 @@ namespace mem
             // 栈内存只需要读写权限，不需要执行权限
             map_pages(pt, i * PGSIZE, PGSIZE, (uint64)mem, PTE_V | PTE_W | PTE_R | PTE_MAT | PTE_PLV | PTE_D | PTE_P);
         }
-        
+
         return total_size;
 
 #endif
