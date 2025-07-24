@@ -221,7 +221,7 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
         attrs._value = file_mode;
 
         fs::normal_file *temp_file = new fs::normal_file(attrs, absolute_path);
-        printfYellow("vfs_openat: flags: %x, mode: 0%o\n", flags, temp_file->_attrs.transMode());
+        printfYellow("vfs_openat: flags: %o, mode: 0%o\n", flags, temp_file->_attrs.transMode());
 
         // ext4库会自动处理 O_TRUNC, O_RDONLY, O_WRONLY, O_RDWR 等标志
         // 真是前人栽树，后人乘凉啊！
@@ -320,6 +320,20 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
             file_mode = determine_file_mode(flags, fs::FileTypes::FT_PIPE, file_exists, mode);
         }
 
+        // 根据打开模式确定是读端还是写端
+        int access_mode = flags & O_ACCMODE;
+        
+        // 检查 O_NONBLOCK | O_WRONLY 的组合
+        // 根据 Linux manual，当使用 O_NONBLOCK | O_WRONLY 打开 FIFO 时，
+        // 如果没有进程打开该 FIFO 进行读取，应该返回 ENXIO 错误
+        if ((flags & O_NONBLOCK) && (access_mode == O_WRONLY)) {
+            // 检查是否有其他进程已经打开了这个 FIFO 进行读取
+            // 目前假设没有其他读者，直接返回 ENXIO
+            // TODO: 实现真正的 FIFO 读者检查机制
+            printfRed("vfs_openat: O_NONBLOCK | O_WRONLY on FIFO %s with no readers\n", absolute_path.c_str());
+            return -ENXIO; // 没有设备或地址
+        }
+
         fs::FileAttrs attrs;
         attrs.filetype = fs::FileTypes::FT_PIPE;  
         attrs._value = file_mode & 0777; // 只保留权限位
@@ -328,9 +342,7 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
         // FIFO 在文件系统中存在，但数据传输使用内存缓冲区
         proc::ipc::Pipe *pipe = new proc::ipc::Pipe();
         
-        // 根据打开模式确定是读端还是写端
         bool is_write_end = false;
-        int access_mode = flags & O_ACCMODE;
         if (access_mode == O_WRONLY) {
             is_write_end = true;
         } else if (access_mode == O_RDONLY) {

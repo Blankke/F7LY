@@ -1896,7 +1896,7 @@ char *ltp_testcases[] = {
     // "open02",
     // "open03", // 完全PASS
     // "open04",    //完全PASS
-    // "open06",
+    // "open06",   pass
     // "open07",
     // "open08",
     // "open09",
@@ -2100,8 +2100,8 @@ char *ltp_testcases[] = {
     // "rcu_torture.sh",
     // "read_all",
     // "read01", //貌似可以PASS
-    // "read02",
-    "read03",
+    // "read02",   //pass
+    // "read03",
     // "read04", // 完全PASS
     // "readahead01",
     // "readahead02",
@@ -2127,7 +2127,7 @@ char *ltp_testcases[] = {
     // "remove_password.sh",
     // "removexattr01",
     // "removexattr02",
-    // "rename01",
+    "rename01",
     // "rename03",
     // "rename04",
     // "rename05",

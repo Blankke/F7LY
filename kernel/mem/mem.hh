@@ -34,5 +34,10 @@
 #define MREMAP_FIXED 2      /* Map at exact address, must be page-aligned */
 #define MREMAP_DONTUNMAP 4  /* Don't unmap the old mapping */
 
+// Flags for msync
+#define MS_ASYNC 1      /* Asynchronous sync */
+#define MS_SYNC 4       /* Synchronous sync */
+#define MS_INVALIDATE 2 /* Invalidate other mappings */
+
 // Error codes for mmap
 #define MAP_FAILED ((void *)-1)

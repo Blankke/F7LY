@@ -25,6 +25,7 @@
 #include "fs/ioctl.hh"
 #include <asm-generic/poll.h>
 #include <linux/sysinfo.h>
+#include <linux/fs.h>
 #include "fs/vfs/file/normal_file.hh"
 #include "fs/vfs/file/pipe_file.hh"
 #include "fs/vfs/file/socket_file.hh"
@@ -45,6 +46,7 @@
 #include "fs/vfs/virtual_fs.hh"
 #include "shm/shm_manager.hh"
 #include "devs/loop_device.hh"
+
 namespace syscall
 {
     // 创建全局的 SyscallHandler 实例
@@ -631,16 +633,16 @@ namespace syscall
         [[maybe_unused]] int fd = -1;
 
         if (_arg_fd(0, &fd, &f) < 0)
-            return -1;
+            return -EBADF;
         if (_arg_addr(1, buf) < 0)
-            return -2;
+            return -EINVAL;
         if (_arg_int(2, n) < 0)
-            return -3;
+            return -EINVAL;
 
         if (f == nullptr)
-            return -4;
+            return -EBADF;
         if (n <= 0)
-            return -5;
+            return -EINVAL;
         // printfGreen("[sys_read] fd: %d, n: %d, buf: %p\n", fd, n, buf);
         // printfCyan("[sys_read] Try read,f:%x,buf:%x", f, f);
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
@@ -659,7 +661,7 @@ namespace syscall
         // printfCyan("[sys_read] fd=%d, read %d bytes: \"%s\"\n", fd, ret, k_buf);
 
         if (mem::k_vmm.copy_out(*pt, buf, k_buf, ret) < 0)
-            return -7;
+            return -EFAULT;
 
         delete[] k_buf;
         return ret;
@@ -2544,7 +2546,7 @@ namespace syscall
 
             return 0;
         }
-        printfYellow("[SyscallHandler::sys_ioctl] cmd: 0x%X, arg: %u\n", cmd, arg);
+        printfYellow("[SyscallHandler::sys_ioctl] cmd: 0x%X, arg: %u\n",(cmd & 0xFFFF), arg);
         // Handle individual loop device operations
         if ((cmd & 0xFF00) == 0x4C00) // Loop device ioctl commands
         {
@@ -2708,8 +2710,24 @@ namespace syscall
             }
         }
 
-        panic("[SyscallHandler::sys_ioctl] Unsupported ioctl command: 0x%X\n", cmd);
-        return 0;
+        if((cmd & 0xFFFF) == BLKGETSIZE64)
+        {
+            // 获取块设备的大小
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+#ifdef RISCV
+            uint64 *size = (uint64 *)pt->walk_addr(arg);
+#elif defined(LOONGARCH)    
+            uint64 *size = (uint64 *)to_vir((uint64)pt->walk_addr(arg));
+#endif
+            if (!size)
+            {
+                printfRed("[SyscallHandler::sys_ioctl] Error fetching size address\n");
+                return SYS_EFAULT;
+            }
+        }
+        printfRed("[SyscallHandler::sys_ioctl] Unsupported ioctl command: 0x%X\n", cmd);
+
+        return -EINVAL;
     }
     uint64 SyscallHandler::sys_syslog()
     {
@@ -5143,7 +5161,162 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_msync()
     {
-        panic("未实现该系统调用");
+        uint64 addr;
+        size_t length;
+        int flags;
+
+        // 获取系统调用参数
+        if (_arg_addr(0, addr) < 0 || _arg_addr(1, length) < 0 || _arg_int(2, flags) < 0)
+        {
+            printfRed("[SyscallHandler::sys_msync] Error fetching msync arguments\n");
+            return -EFAULT;
+        }
+
+        // 参数验证
+        if (addr == 0 || length == 0)
+        {
+            printfRed("[SyscallHandler::sys_msync] Invalid parameters: addr=%p, length=%zu\n", (void*)addr, length);
+            return -EINVAL;
+        }
+
+        // 地址必须页对齐
+        if (addr % PGSIZE != 0)
+        {
+            printfRed("[SyscallHandler::sys_msync] Address not page aligned: %p\n", (void*)addr);
+            return -EINVAL;
+        }
+
+        // 检查 flags 参数的有效性
+        int valid_flags = MS_ASYNC | MS_SYNC | MS_INVALIDATE;
+        if ((flags & ~valid_flags) != 0)
+        {
+            printfRed("[SyscallHandler::sys_msync] Invalid flags: 0x%x\n", flags);
+            return -EINVAL;
+        }
+
+        // MS_ASYNC 和 MS_SYNC 不能同时设置，且必须设置其中一个
+        bool has_async = (flags & MS_ASYNC) != 0;
+        bool has_sync = (flags & MS_SYNC) != 0;
+        
+        if (has_async && has_sync)
+        {
+            printfRed("[SyscallHandler::sys_msync] MS_ASYNC and MS_SYNC cannot be used together\n");
+            return -EINVAL;
+        }
+        
+        if (!has_async && !has_sync)
+        {
+            printfRed("[SyscallHandler::sys_msync] Either MS_ASYNC or MS_SYNC must be specified\n");
+            return -EINVAL;
+        }
+
+        bool invalidate = (flags & MS_INVALIDATE) != 0;
+
+        printfCyan("[SyscallHandler::sys_msync] addr=%p, length=%u, flags=0x%x (async=%s, sync=%s, invalidate=%s)\n",
+                   (void*)addr, length, flags,
+                   has_async ? "true" : "false",
+                   has_sync ? "true" : "false", 
+                   invalidate ? "true" : "false");
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        uint64 sync_start = addr;
+        uint64 sync_end = addr + length;
+        // uint64 aligned_length = PGROUNDUP(length);
+
+        // 查找覆盖此地址范围的所有VMA
+        bool found_mapping = false;
+        for (int i = 0; i < proc::NVMA; ++i)
+        {
+            if (!p->_vma->_vm[i].used) continue;
+
+            struct proc::vma *vm = &p->_vma->_vm[i];
+            uint64 vma_start = vm->addr;
+            uint64 vma_end = vma_start + vm->len;
+
+            // 检查是否有重叠
+            if (sync_end <= vma_start || sync_start >= vma_end)
+            {
+                continue; // 没有重叠
+            }
+
+            found_mapping = true;
+            printfCyan("[SyscallHandler::sys_msync] Found overlapping VMA %d: [%p, %p), prot=0x%x, flags=0x%x\n",
+                       i, (void*)vma_start, (void*)vma_end, vm->prot, vm->flags);
+
+            // 计算重叠区域
+            uint64 overlap_start = MAX(sync_start, vma_start);
+            uint64 overlap_end = MIN(sync_end, vma_end);
+
+            // 处理MAP_SHARED文件映射的同步
+            if ((vm->flags & MAP_SHARED) && vm->vfile != nullptr)
+            {
+                printfCyan("[SyscallHandler::sys_msync] Syncing MAP_SHARED file mapping: %s\n",
+                          vm->vfile->_path_name.c_str());
+
+                // 遍历重叠区域内的所有页面
+                uint64 page_start = PGROUNDDOWN(overlap_start);
+                uint64 page_end = PGROUNDUP(overlap_end);
+
+                for (uint64 va = page_start; va < page_end; va += PGSIZE)
+                {
+                    // 检查页面是否已经分配（通过页表查询）
+                    mem::Pte pte = p->_pt.walk(va, 0);
+                    if (!pte.is_null() && pte.is_valid())
+                    {
+                        // 页面已分配，需要写回到文件
+                        uint64 pa = (uint64)pte.pa();
+                        int file_offset = vm->offset + (va - vma_start);
+
+                        printfCyan("[SyscallHandler::sys_msync] Writing back page at va=%p, file_offset=%d\n",
+                                  (void*)va, file_offset);
+
+                        // 写回数据到文件
+                        int write_result = vm->vfile->write(pa, PGSIZE, file_offset, false);
+                        if (write_result < 0)
+                        {
+                            printfRed("[SyscallHandler::sys_msync] Failed to write back page at va=%p\n", (void*)va);
+                            return -EIO;
+                        }
+
+                        // 如果是同步模式，确保数据已写入磁盘
+                        if (has_sync)
+                        {
+                            // TODO: 调用文件系统的 fsync 或 sync 操作
+                            // 目前简单地假设 write 操作是同步的
+                        }
+
+                        // 处理 MS_INVALIDATE 标志
+                        if (invalidate)
+                        {
+                            // TODO: 使其他进程的相同映射失效
+                            // 这需要系统级的页面缓存管理，目前先跳过
+                            printfYellow("[SyscallHandler::sys_msync] MS_INVALIDATE flag noted but not fully implemented\n");
+                        }
+                    }
+                }
+            }
+            else if (vm->flags & MAP_SHARED)
+            {
+                // 匿名共享映射，目前不需要特殊处理
+                printfCyan("[SyscallHandler::sys_msync] Anonymous shared mapping, no file sync needed\n");
+            }
+            else
+            {
+                // 私有映射不需要同步
+                printfCyan("[SyscallHandler::sys_msync] Private mapping, no sync needed\n");
+            }
+        }
+
+        if (!found_mapping)
+        {
+            printfRed("[SyscallHandler::sys_msync] No memory mapping found for range [%p, %p)\n",
+                     (void*)sync_start, (void*)sync_end);
+            return -ENOMEM;
+        }
+
+        printfGreen("[SyscallHandler::sys_msync] Successfully synced range [%p, %p)\n",
+                   (void*)sync_start, (void*)sync_end);
+        return 0;
     }
     uint64 SyscallHandler::sys_mlock()
     {
