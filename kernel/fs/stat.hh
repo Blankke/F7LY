@@ -4,8 +4,10 @@
 #define T_FILE    2   // File
 #define T_DEVICE  3   // Device
 #define T_CHR     4   // 字符设备
-#define T_BLK     5
-#define T_UNKNOWN 6
+#define T_BLK     5   // 块设备
+#define T_FIFO    6   // FIFO/命名管道
+#define T_SOCK    7   // Socket
+#define T_UNKNOWN 8
 
 // struct stat {
 //   int dev;     // File system's disk device

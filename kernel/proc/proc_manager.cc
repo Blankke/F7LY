@@ -1642,7 +1642,7 @@ namespace proc
 
         if (dir_fd != AT_FDCWD)
         {
-            panic("mknod: dir_fd != AT_FDCWD not implemented");
+            // panic("mknod: dir_fd != AT_FDCWD not implemented");
             file = p->get_open_file(dir_fd);
         }
 
@@ -1654,22 +1654,22 @@ namespace proc
         mode_t file_type = mode & S_IFMT;  // 提取文件类型部分
         
         if (file_type == S_IFREG || file_type == 0) {
+            printfMagenta("reg please\n");
             internal_mode = T_FILE;
         } else if (file_type == S_IFCHR) {
             internal_mode = T_CHR;
         } else if (file_type == S_IFBLK) {
             internal_mode = T_BLK;
         } else if (file_type == S_IFIFO) {
-            // FIFO 暂时使用文件类型
-            internal_mode = T_FILE;
+            internal_mode = T_FIFO;
         } else if (file_type == S_IFSOCK) {
-            // Socket 暂时使用文件类型
-            internal_mode = T_FILE;
+            internal_mode = T_SOCK;
         } else {
             // 不支持的文件类型
+            printfRed("[mknod] Unsupported file type: %o\n", file_type);
             return -22; // SYS_EINVAL
         }
-
+        printfCyan("[mknod] dir_fd: %d, path: %s, mode: 0%o, dev: %d\n", dir_fd, absolute_path.c_str(), mode, dev);
         int result = vfs_ext_mknod(absolute_path.c_str(), internal_mode, dev);
         return result;
     }

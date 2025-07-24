@@ -702,6 +702,12 @@ static uint32 vfs_ext4_filetype_from_vfs_filetype(uint32 filetype) {
             return EXT4_DE_REG_FILE;
         case T_CHR:
             return EXT4_DE_CHRDEV;
+        case T_BLK:
+            return EXT4_DE_BLKDEV;
+        case T_FIFO:
+            return EXT4_DE_FIFO;
+        case T_SOCK:
+            return EXT4_DE_SOCK;
         default:
             return EXT4_DE_UNKNOWN;
     }

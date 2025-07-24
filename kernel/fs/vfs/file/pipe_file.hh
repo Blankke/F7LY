@@ -14,10 +14,20 @@ namespace fs
 		pipe_file(FileAttrs attrs, Pipe *pipe_, bool is_write) : file(attrs), _pipe(pipe_), is_write(is_write)
 		{
 			new (&_stat) Kstat(_pipe);
+			// 设置正确的文件模式：FIFO 类型 + 权限位
+			_stat.mode = S_IFIFO | (attrs._value & 0777);
 			dup();
 		}
-		pipe_file( FileAttrs attrs, Pipe *pipe_ ) : file( attrs ), _pipe( pipe_ ) { new ( &_stat ) Kstat( _pipe ); dup(); }
-		pipe_file( Pipe *pipe_ ) : file( FileAttrs( FileTypes::FT_PIPE, 0777 ) ), _pipe( pipe_ ) { new ( &_stat ) Kstat( _pipe ); dup(); }
+		pipe_file( FileAttrs attrs, Pipe *pipe_ ) : file( attrs ), _pipe( pipe_ ) { 
+			new ( &_stat ) Kstat( _pipe ); 
+			_stat.mode = S_IFIFO | (attrs._value & 0777);
+			dup(); 
+		}
+		pipe_file( Pipe *pipe_ ) : file( FileAttrs( FileTypes::FT_PIPE, 0777 ) ), _pipe( pipe_ ) { 
+			new ( &_stat ) Kstat( _pipe ); 
+			_stat.mode = S_IFIFO | 0777;
+			dup(); 
+		}
 
 		~pipe_file()
 		{

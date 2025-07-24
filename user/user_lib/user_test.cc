@@ -718,7 +718,7 @@ char *ltp_testcases[] = {
     // "dup02",// 完全PASS
     // "dup03",// 完全PASS
     // "dup04",// 完全PASS
-    "dup05",
+    // "dup05",  //pass
     // "dup06", //完全PASS
     // "dup07",//完全PASS
     // "dup201",//完全PASS
@@ -2101,7 +2101,7 @@ char *ltp_testcases[] = {
     // "read_all",
     // "read01", //貌似可以PASS
     // "read02",
-    // "read03",
+    "read03",
     // "read04", // 完全PASS
     // "readahead01",
     // "readahead02",

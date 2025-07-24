@@ -5,6 +5,7 @@
 #include "fs/lwext4/ext4_oflags.hh"
 #include "fs/vfs/file/normal_file.hh"
 #include "fs/vfs/file/device_file.hh"
+#include "fs/vfs/file/pipe_file.hh"
 #include "fs/vfs/file/directory_file.hh"
 #include "proc_manager.hh"  // 用于访问当前进程的umask
 
@@ -118,6 +119,11 @@ static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file
 
     case fs::FileTypes::FT_DEVICE:
         mode = 0666; // rw-rw-rw-，设备文件通常不应用umask
+        break;
+
+    case fs::FileTypes::FT_PIPE:
+        // FIFO/管道文件，使用默认权限并应用umask
+        mode = apply_umask(0644); // rw-r--r--
         break;
 
     case fs::FileTypes::FT_DIRECT:
@@ -291,8 +297,72 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
 
         file = temp_dir;
     }
+    else if(type == fs::FileTypes::FT_PIPE)
+    {
+        mode_t file_mode;
+        
+        if (file_exists) {
+            // 如果文件已存在，从文件系统读取权限
+            struct ext4_inode inode;
+            uint32 ino;
+            if (ext4_raw_inode_fill(absolute_path.c_str(), &ino, &inode) == EOK) {
+                struct ext4_sblock *sb = NULL;
+                ext4_get_sblock(absolute_path.c_str(), &sb);
+                if (sb != NULL) {
+                    file_mode = ext4_inode_get_mode(sb, &inode);
+                } else {
+                    file_mode = 0644; // 默认权限
+                }
+            } else {
+                file_mode = 0644; // 默认权限
+            }
+        } else {
+            file_mode = determine_file_mode(flags, fs::FileTypes::FT_PIPE, file_exists, mode);
+        }
+
+        fs::FileAttrs attrs;
+        attrs.filetype = fs::FileTypes::FT_PIPE;  
+        attrs._value = file_mode & 0777; // 只保留权限位
+
+        // 对于 FIFO，需要创建一个 Pipe 对象
+        // FIFO 在文件系统中存在，但数据传输使用内存缓冲区
+        proc::ipc::Pipe *pipe = new proc::ipc::Pipe();
+        
+        // 根据打开模式确定是读端还是写端
+        bool is_write_end = false;
+        int access_mode = flags & O_ACCMODE;
+        if (access_mode == O_WRONLY) {
+            is_write_end = true;
+        } else if (access_mode == O_RDONLY) {
+            is_write_end = false;
+        } else {
+            // O_RDWR - 这种情况下我们默认创建读端，实际应用中可能需要特殊处理
+            is_write_end = false;
+        }
+        
+        fs::pipe_file *temp_file = new fs::pipe_file(attrs, pipe, is_write_end);
+        
+        printfCyan("vfs_openat: Created FIFO/pipe file: %s, write_end: %d, mode: 0%o\n", 
+                   absolute_path.c_str(), is_write_end, temp_file->_stat.mode);
+        status = EOK;  // 直接设置为成功
+        
+        file = temp_file;
+    }
+    else if(type == fs::FileTypes::FT_SYMLINK)
+    {
+        // 符号链接文件暂时不支持
+        printfRed("vfs_openat: O_SYMLINK not supported yet\n");
+        return -ENOSYS; // 符号链接文件暂时不支持
+    }
+    else if(type == fs::FileTypes::FT_SOCKET)
+    {
+        // Socket文件暂时不支持
+        printfRed("vfs_openat: O_SOCKET not supported yet\n");
+        return -ENOSYS; // Socket文件暂时不支持
+    }
     else
     {
+        printfRed("Unsupported file type: %d\n", type);
         panic("Unsupported file type: %d", type);
         return -ENOTSUP;
     }
@@ -586,6 +656,13 @@ int vfs_mkdir(const char *path, uint64_t mode)
 
 int vfs_fstat(fs::file *f, fs::Kstat *st)
 {
+    // 检查是否是 pipe_file，如果是，直接使用其内部的 _stat
+    if (f->_attrs.filetype == fs::FileTypes::FT_PIPE) {
+        *st = f->_stat;
+        printfCyan("vfs_fstat: pipe file, mode: 0%o\n", st->mode);
+        return EOK;
+    }
+    
     struct ext4_inode inode;
     uint32 inode_num = 0;
     const char *file_path = f->_path_name.c_str();
