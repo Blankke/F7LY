@@ -1281,7 +1281,7 @@ namespace proc
         }
         
         // 成功时返回 0
-        return 0;
+        return n;
     }
 
     long ProcessManager::sbrk(long increment)
@@ -1634,6 +1634,46 @@ namespace proc
 
         return 0;
     }
+
+    int ProcessManager::mknod(int dir_fd, eastl::string path, mode_t mode, dev_t dev)
+    {
+        Pcb *p = get_cur_pcb();
+        [[maybe_unused]] fs::file *file = nullptr;
+
+        if (dir_fd != AT_FDCWD)
+        {
+            panic("mknod: dir_fd != AT_FDCWD not implemented");
+            file = p->get_open_file(dir_fd);
+        }
+
+        const char *dirpath = (dir_fd == AT_FDCWD) ? p->_cwd_name.c_str() : p->_ofile->_ofile_ptr[dir_fd]->_path_name.c_str();
+        eastl::string absolute_path = get_absolute_path(path.c_str(), dirpath);
+        
+        // 将 mode 转换为内部文件类型
+        uint32 internal_mode;
+        mode_t file_type = mode & S_IFMT;  // 提取文件类型部分
+        
+        if (file_type == S_IFREG || file_type == 0) {
+            internal_mode = T_FILE;
+        } else if (file_type == S_IFCHR) {
+            internal_mode = T_CHR;
+        } else if (file_type == S_IFBLK) {
+            internal_mode = T_BLK;
+        } else if (file_type == S_IFIFO) {
+            // FIFO 暂时使用文件类型
+            internal_mode = T_FILE;
+        } else if (file_type == S_IFSOCK) {
+            // Socket 暂时使用文件类型
+            internal_mode = T_FILE;
+        } else {
+            // 不支持的文件类型
+            return -22; // SYS_EINVAL
+        }
+
+        int result = vfs_ext_mknod(absolute_path.c_str(), internal_mode, dev);
+        return result;
+    }
+
     /// @brief
     /// @param dir_fd 指定相对路径的目录文件描述符（AT_FDCWD 表示当前工作目录）。
     /// @param path 要打开的路径
@@ -1642,7 +1682,7 @@ namespace proc
     /// @return fd
     int ProcessManager::open(int dir_fd, eastl::string path, uint flags, int mode)
     {
-        printfCyan("[open] dir_fd: %d, path: %s, flags: %s, mode: %x\n", dir_fd, path.c_str(), flags_to_string(flags).c_str(), mode);
+        printfCyan("[open] dir_fd: %d, path: %s, flags: %s, mode: 0%o\n", dir_fd, path.c_str(), flags_to_string(flags).c_str(), mode);
 
         Pcb *p = get_cur_pcb();
         // fs::file *file = nullptr;

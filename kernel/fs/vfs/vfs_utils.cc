@@ -215,7 +215,7 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
         attrs._value = file_mode;
 
         fs::normal_file *temp_file = new fs::normal_file(attrs, absolute_path);
-        printfYellow("vfs_openat: flags: %x, mode: %b\n", flags, temp_file->_attrs.transMode());
+        printfYellow("vfs_openat: flags: %x, mode: 0%o\n", flags, temp_file->_attrs.transMode());
 
         // ext4库会自动处理 O_TRUNC, O_RDONLY, O_WRONLY, O_RDWR 等标志
         // 真是前人栽树，后人乘凉啊！
@@ -238,7 +238,7 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
             }
             else
             {
-                printfGreen("ext4_mode_set success for %s, mode: %o\n", absolute_path.c_str(), file_mode);
+                printfGreen("ext4_mode_set success for %s, mode: 0%o\n", absolute_path.c_str(), file_mode);
             }
         }
 
@@ -743,7 +743,7 @@ int vfs_copy_file_range(int f_in, off_t offset_in, int f_out, off_t offset_out, 
     
     // 检查offset参数
     if (offset_in < 0 || offset_out < 0) {
-        printfRed("vfs_copy_file_range: negative offset: in=%ld, out=%ld\n", offset_in, offset_out);
+        printfRed("vfs_copy_file_range: negative offset: in=%d, out=%d\n", offset_in, offset_out);
         return -EINVAL;
     }
     
@@ -806,7 +806,7 @@ int vfs_copy_file_range(int f_in, off_t offset_in, int f_out, off_t offset_out, 
     
     // 获取输入文件大小
     uint64_t input_file_size = ext4_fsize(&file_in->lwext4_file_struct);
-    
+    printfMagenta("vfs_copy_file_range: input file size: %u\n", input_file_size);
     // 检查输入文件偏移量是否超过文件大小
     if (offset_in >= (off_t)input_file_size) {
         return 0; // 在文件末尾或之后，没有数据可复制
@@ -849,21 +849,21 @@ int vfs_copy_file_range(int f_in, off_t offset_in, int f_out, off_t offset_out, 
         }
         
         // 从输入文件读取数据
-        long bytes_read = file_in->read((uint64)buffer, bytes_to_copy, current_in_offset, false);
+        long bytes_read = file_in->read((uint64)buffer, bytes_to_copy, current_in_offset, true);
         if (bytes_read <= 0) {
             if (bytes_read < 0) {
-                printfRed("vfs_copy_file_range: read error: %ld\n", bytes_read);
+                printfRed("vfs_copy_file_range: read error: %d\n", bytes_read);
             }
             break;
         }
         
         // 写入到输出文件
-        long bytes_written = file_out->write((uint64)buffer, bytes_read, current_out_offset, false);
+        long bytes_written = file_out->write((uint64)buffer, bytes_read, current_out_offset, true);
         if (bytes_written != bytes_read) {
             if (bytes_written < 0) {
-                printfRed("vfs_copy_file_range: write error: %ld\n", bytes_written);
+                printfRed("vfs_copy_file_range: write error: %d\n", bytes_written);
             } else {
-                printfRed("vfs_copy_file_range: partial write: %ld/%ld\n", bytes_written, bytes_read);
+                printfRed("vfs_copy_file_range: partial write: %d/%d\n", bytes_written, bytes_read);
             }
             break;
         }
@@ -875,8 +875,15 @@ int vfs_copy_file_range(int f_in, off_t offset_in, int f_out, off_t offset_out, 
     
     delete[] buffer;
     
+    // copy_file_range 的语义：
+    // 当 offset 参数为 NULL 时使用并更新文件偏移量
+    // 当 offset 参数非 NULL 时使用指定偏移量但不更新文件偏移量
+    // 在当前实现中，我们总是接收到明确的偏移量值，所以不更新文件偏移量
+    // 这与Linux标准行为一致
+    
     if (total_copied > 0) {
-        printfGreen("vfs_copy_file_range: successfully copied %zu bytes\n", total_copied);
+        printfGreen("vfs_copy_file_range: successfully copied %u bytes\n", total_copied);
+        printfCyan("vfs_copy_file_range: file offsets not updated (using explicit offsets)\n");
     }
     
     return (int)total_copied;

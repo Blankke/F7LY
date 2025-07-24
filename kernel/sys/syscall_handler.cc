@@ -973,7 +973,7 @@ namespace syscall
             }
         }
 
-        printfCyan("[SyscallHandler::sys_openat] 绝对路径: %s, mode: %x\n", abs_pathname.c_str(), mode);
+        printfCyan("[SyscallHandler::sys_openat] 绝对路径: %s, mode: 0%o\n", abs_pathname.c_str(), mode);
         // 不知道什么套娃设计，这个b函数套了两层
         return proc::k_pm.open(dir_fd, abs_pathname, flags, mode);
 
@@ -1057,13 +1057,13 @@ namespace syscall
         // printfBlue("mkdir!\n");
         int dir_fd;
         uint64 path_addr;
-        int mode;  // 权限模式，不是flags
+        int mode; // 权限模式，不是flags
 
         if (_arg_int(0, dir_fd) < 0)
             return -1;
         if (_arg_addr(1, path_addr) < 0)
             return -1;
-        if (_arg_int(2, mode) < 0)  // 这是mode参数，不是flags
+        if (_arg_int(2, mode) < 0) // 这是mode参数，不是flags
             return -1;
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
@@ -1072,7 +1072,7 @@ namespace syscall
         if (mem::k_vmm.copy_str_in(*pt, path, path_addr, 100) < 0)
             return -1;
 
-        int res = proc::k_pm.mkdir(dir_fd, path, mode);  // 传递mode而不是flags
+        int res = proc::k_pm.mkdir(dir_fd, path, mode); // 传递mode而不是flags
         return res;
     }
     uint64 SyscallHandler::sys_close()
@@ -1084,10 +1084,24 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_mknod()
     {
-        panic("未实现该系统调用");
-        TODO("sys_mkn");
-        printfYellow("sys_mkn\n");
-        return 0;
+        eastl::string pathname;
+        int imode;
+        long idev;
+        
+        // 获取参数
+        if (_arg_str(0, pathname, MAXPATH) < 0)
+            return SYS_EFAULT;
+        if (_arg_int(1, imode) < 0)
+            return SYS_EFAULT;
+        if (_arg_long(2, idev) < 0)
+            return SYS_EFAULT;
+        
+        mode_t mode = imode;
+        dev_t dev = idev;
+        
+        // 调用进程管理器的 mknod 函数，使用 AT_FDCWD 表示当前工作目录
+        int result = proc::k_pm.mknod(AT_FDCWD, pathname, mode, dev);
+        return result;
     }
     uint64 SyscallHandler::sys_clone()
     {
@@ -1209,12 +1223,12 @@ namespace syscall
         }
 
         // 如果参数为 0，返回当前的 program break（查询模式）
-        // if (n == 0)
-        // {
-        //     uint64 current_brk = proc::k_pm.get_cur_pcb()->_sz;
-        //     printf("[SyscallHandler::sys_brk] brk(0) = 0x%x (query current break)\n", current_brk);
-        //     return current_brk;
-        // }
+        if (n == 0)
+        {
+            uint64 current_brk = proc::k_pm.get_cur_pcb()->_sz;
+            printf("[SyscallHandler::sys_brk] brk(0) = 0x%x (query current break)\n", current_brk);
+            return current_brk;
+        }
 
         // 设置新的 program break
         long result = proc::k_pm.brk(n);
@@ -1674,7 +1688,7 @@ namespace syscall
         }
 
         printfCyan("[SyscallHandler::sys_fstatat] dirfd: %d, pathname: %s, kst_addr: %p, flags: %d\n",
-               dirfd, pathname.c_str(), (void *)kst_addr, flags);
+                   dirfd, pathname.c_str(), (void *)kst_addr, flags);
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
@@ -2262,7 +2276,7 @@ namespace syscall
         if (ret < 0)
             return ret;
 
-        // printfYellow("[SyscallHandler::sys_clock_gettime] clock_id: %d, tp: %ld.%09ld\n", clock_id, tp.tv_sec, tp.tv_nsec);
+        // printfYellow("[SyscallHandler::sys_clock_gettime] clock_id: %d, tp: %d.%09ld\n", clock_id, tp.tv_sec, tp.tv_nsec);
 
         // 使用 copy_out 将结果安全地拷贝到用户空间
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
@@ -2471,7 +2485,7 @@ namespace syscall
         // Loop device control operations
         // https://www.man7.org/linux/man-pages/man4/loop.4.html
         // https://blog.csdn.net/zhongbeida_xue/article/details/109657639
-        
+
         // Handle /dev/loop-control device operations
         if ((cmd & 0xFFFF) == LOOP_CTL_GET_FREE)
         {
@@ -2482,13 +2496,15 @@ namespace syscall
 
             // 获取一个空闲的 loop 设备编号
             int free_loop = dev::LoopControlDevice::get_free_loop_device();
-            if (free_loop < 0) {
+            if (free_loop < 0)
+            {
                 return SYS_ENOSPC; // 没有可用的 loop 设备
             }
 
             // 自动创建 loop 设备
             int result = dev::LoopControlDevice::add_loop_device(free_loop);
-            if (result < 0) {
+            if (result < 0)
+            {
                 return SYS_EIO; // 创建失败
             }
 
@@ -2504,7 +2520,8 @@ namespace syscall
 
             int loop_num = (int)arg;
             int result = dev::LoopControlDevice::add_loop_device(loop_num);
-            if (result < 0) {
+            if (result < 0)
+            {
                 return SYS_EEXIST; // 设备已存在或创建失败
             }
 
@@ -2520,7 +2537,8 @@ namespace syscall
 
             int loop_num = (int)arg;
             int result = dev::LoopControlDevice::remove_loop_device(loop_num);
-            if (result < 0) {
+            if (result < 0)
+            {
                 return SYS_ENOENT; // 设备不存在或正在使用
             }
 
@@ -2537,36 +2555,44 @@ namespace syscall
 
             // 从设备文件获取 loop 设备
             // 解析设备文件路径来获取 loop 设备编号
-            dev::LoopDevice* loop_dev = nullptr;
-            
+            dev::LoopDevice *loop_dev = nullptr;
+
             // 检查是否是 device_file 类型，并从路径名解析 loop 设备编号
-            if (f->_attrs.filetype == fs::FileTypes::FT_DEVICE) {
-                fs::device_file* device_f = static_cast<fs::device_file*>(f);
+            if (f->_attrs.filetype == fs::FileTypes::FT_DEVICE)
+            {
+                fs::device_file *device_f = static_cast<fs::device_file *>(f);
                 eastl::string path = device_f->_path_name;
-                
+
                 // 解析 "/dev/loopN" 格式的路径
-                if (path.find("/dev/loop") == 0) {
+                if (path.find("/dev/loop") == 0)
+                {
                     eastl::string loop_num_str = path.substr(9); // 跳过 "/dev/loop"
                     int loop_num = 0;
                     bool valid_num = true;
-                    
+
                     // 手动解析数字
-                    for (char c : loop_num_str) {
-                        if (c >= '0' && c <= '9') {
+                    for (char c : loop_num_str)
+                    {
+                        if (c >= '0' && c <= '9')
+                        {
                             loop_num = loop_num * 10 + (c - '0');
-                        } else {
+                        }
+                        else
+                        {
                             valid_num = false;
                             break;
                         }
                     }
-                    
-                    if (valid_num && !loop_num_str.empty()) {
+
+                    if (valid_num && !loop_num_str.empty())
+                    {
                         loop_dev = dev::LoopControlDevice::get_loop_device(loop_num);
                     }
                 }
             }
-            
-            if (!loop_dev) {
+
+            if (!loop_dev)
+            {
                 return SYS_ENODEV; // 设备不存在
             }
 
@@ -2574,109 +2600,114 @@ namespace syscall
 
             switch (cmd & 0xFFFF)
             {
-                case LOOP_SET_FD:
-                {
-                    int fd = (int)arg;
-                    int result = loop_dev->set_fd(fd);
-                    return (result == 0) ? 0 : SYS_EIO;
-                }
+            case LOOP_SET_FD:
+            {
+                int fd = (int)arg;
+                int result = loop_dev->set_fd(fd);
+                return (result == 0) ? 0 : SYS_EIO;
+            }
 
-                case LOOP_CLR_FD:
-                {
-                    int result = loop_dev->clear_fd();
-                    return (result == 0) ? 0 : SYS_EIO;
-                }
+            case LOOP_CLR_FD:
+            {
+                int result = loop_dev->clear_fd();
+                return (result == 0) ? 0 : SYS_EIO;
+            }
 
-                case LOOP_SET_STATUS:
-                {
+            case LOOP_SET_STATUS:
+            {
 #ifdef RISCV
-                    dev::LoopInfo *info = (dev::LoopInfo *)pt->walk_addr(arg);
+                dev::LoopInfo *info = (dev::LoopInfo *)pt->walk_addr(arg);
 #elif defined(LOONGARCH)
-                    dev::LoopInfo *info = (dev::LoopInfo *)to_vir((uint64)pt->walk_addr(arg));
+                dev::LoopInfo *info = (dev::LoopInfo *)to_vir((uint64)pt->walk_addr(arg));
 #endif
-                    if (!info) {
-                        return SYS_EFAULT;
-                    }
-                    int result = loop_dev->set_status(info);
-                    return (result == 0) ? 0 : SYS_EIO;
-                }
-
-                case LOOP_GET_STATUS:
+                if (!info)
                 {
+                    return SYS_EFAULT;
+                }
+                int result = loop_dev->set_status(info);
+                return (result == 0) ? 0 : SYS_EIO;
+            }
+
+            case LOOP_GET_STATUS:
+            {
 #ifdef RISCV
-                    dev::LoopInfo *info = (dev::LoopInfo *)pt->walk_addr(arg);
+                dev::LoopInfo *info = (dev::LoopInfo *)pt->walk_addr(arg);
 #elif defined(LOONGARCH)
-                    dev::LoopInfo *info = (dev::LoopInfo *)to_vir((uint64)pt->walk_addr(arg));
+                dev::LoopInfo *info = (dev::LoopInfo *)to_vir((uint64)pt->walk_addr(arg));
 #endif
-                    if (!info) {
-                        return SYS_EFAULT;
-                    }
-                    int result = loop_dev->get_status(info);
-                    return (result == 0) ? 0 : SYS_EIO;
-                }
-
-                case LOOP_SET_STATUS64:
+                if (!info)
                 {
+                    return SYS_EFAULT;
+                }
+                int result = loop_dev->get_status(info);
+                return (result == 0) ? 0 : SYS_EIO;
+            }
+
+            case LOOP_SET_STATUS64:
+            {
 #ifdef RISCV
-                    dev::LoopInfo64 *info = (dev::LoopInfo64 *)pt->walk_addr(arg);
+                dev::LoopInfo64 *info = (dev::LoopInfo64 *)pt->walk_addr(arg);
 #elif defined(LOONGARCH)
-                    dev::LoopInfo64 *info = (dev::LoopInfo64 *)to_vir((uint64)pt->walk_addr(arg));
+                dev::LoopInfo64 *info = (dev::LoopInfo64 *)to_vir((uint64)pt->walk_addr(arg));
 #endif
-                    if (!info) {
-                        return SYS_EFAULT;
-                    }
-                    int result = loop_dev->set_status(info);
-                    return (result == 0) ? 0 : SYS_EIO;
-                }
-
-                case LOOP_GET_STATUS64:
+                if (!info)
                 {
+                    return SYS_EFAULT;
+                }
+                int result = loop_dev->set_status(info);
+                return (result == 0) ? 0 : SYS_EIO;
+            }
+
+            case LOOP_GET_STATUS64:
+            {
 #ifdef RISCV
-                    dev::LoopInfo64 *info = (dev::LoopInfo64 *)pt->walk_addr(arg);
+                dev::LoopInfo64 *info = (dev::LoopInfo64 *)pt->walk_addr(arg);
 #elif defined(LOONGARCH)
-                    dev::LoopInfo64 *info = (dev::LoopInfo64 *)to_vir((uint64)pt->walk_addr(arg));
+                dev::LoopInfo64 *info = (dev::LoopInfo64 *)to_vir((uint64)pt->walk_addr(arg));
 #endif
-                    if (!info) {
-                        return SYS_EFAULT;
-                    }
-                    int result = loop_dev->get_status(info);
-                    return (result == 0) ? 0 : SYS_EIO;
-                }
-
-                case LOOP_CONFIGURE:
+                if (!info)
                 {
+                    return SYS_EFAULT;
+                }
+                int result = loop_dev->get_status(info);
+                return (result == 0) ? 0 : SYS_EIO;
+            }
+
+            case LOOP_CONFIGURE:
+            {
 #ifdef RISCV
-                    dev::LoopConfig *config = (dev::LoopConfig *)pt->walk_addr(arg);
+                dev::LoopConfig *config = (dev::LoopConfig *)pt->walk_addr(arg);
 #elif defined(LOONGARCH)
-                    dev::LoopConfig *config = (dev::LoopConfig *)to_vir((uint64)pt->walk_addr(arg));
+                dev::LoopConfig *config = (dev::LoopConfig *)to_vir((uint64)pt->walk_addr(arg));
 #endif
-                    if (!config) {
-                        return SYS_EFAULT;
-                    }
-                    int result = loop_dev->configure(config);
-                    return (result == 0) ? 0 : SYS_EIO;
-                }
-
-                case LOOP_SET_CAPACITY:
+                if (!config)
                 {
-                    uint64_t capacity = arg;
-                    int result = loop_dev->set_capacity(capacity);
-                    return (result == 0) ? 0 : SYS_EIO;
+                    return SYS_EFAULT;
                 }
+                int result = loop_dev->configure(config);
+                return (result == 0) ? 0 : SYS_EIO;
+            }
 
-                case LOOP_SET_BLOCK_SIZE:
-                {
-                    uint32_t block_size = (uint32_t)arg;
-                    int result = loop_dev->set_block_size(block_size);
-                    return (result == 0) ? 0 : SYS_EINVAL;
-                }
+            case LOOP_SET_CAPACITY:
+            {
+                uint64_t capacity = arg;
+                int result = loop_dev->set_capacity(capacity);
+                return (result == 0) ? 0 : SYS_EIO;
+            }
 
-                default:
-                    printfRed("[SyscallHandler::sys_ioctl] Unsupported loop device ioctl command: 0x%X\n", cmd);
-                    return SYS_ENOTTY; // 不支持的 ioctl 命令
+            case LOOP_SET_BLOCK_SIZE:
+            {
+                uint32_t block_size = (uint32_t)arg;
+                int result = loop_dev->set_block_size(block_size);
+                return (result == 0) ? 0 : SYS_EINVAL;
+            }
+
+            default:
+                printfRed("[SyscallHandler::sys_ioctl] Unsupported loop device ioctl command: 0x%X\n", cmd);
+                return SYS_ENOTTY; // 不支持的 ioctl 命令
             }
         }
-        
+
         panic("[SyscallHandler::sys_ioctl] Unsupported ioctl command: 0x%X\n", cmd);
         return 0;
     }
@@ -4473,7 +4504,25 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_mknodat()
     {
-        panic("未实现该系统调用");
+        int dirfd;
+        eastl::string pathname;
+        int imode;
+        long idev;
+        // 获取参数
+        if (_arg_int(0, dirfd) < 0)
+            return SYS_EFAULT;
+        if (_arg_str(1, pathname, MAXPATH) < 0)
+            return SYS_EFAULT;
+        if (_arg_int(2, imode) < 0)
+            return SYS_EFAULT;
+        if (_arg_long(3, idev) < 0)
+            return SYS_EFAULT;
+        mode_t mode = imode;
+        dev_t dev = idev;
+
+        // 调用进程管理器的 mknod 函数
+        int result = proc::k_pm.mknod(dirfd, pathname, mode, dev);
+        return result;
     }
     uint64 SyscallHandler::sys_symlink()
     {
@@ -4914,7 +4963,7 @@ namespace syscall
     uint64 SyscallHandler::sys_setresuid()
     {
         int ruid, euid, suid;
-        
+
         // 获取参数
         if (_arg_int(0, ruid) < 0 || _arg_int(1, euid) < 0 || _arg_int(2, suid) < 0)
         {
@@ -4925,7 +4974,7 @@ namespace syscall
         printfCyan("[SyscallHandler::sys_setresuid] ruid: %d, euid: %d, suid: %d\n", ruid, euid, suid);
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        
+
         // 获取当前的用户ID
         uint32 origin_uid = p->get_uid();
         uint32 origin_euid = p->get_euid();
@@ -4935,7 +4984,7 @@ namespace syscall
         if (p->get_euid() == 0)
         {
             printfCyan("[SyscallHandler::sys_setresuid] 特权进程，可以设置任意值\n");
-            
+
             // 特权进程可以设置任意值
             if (ruid != -1)
             {
@@ -4944,7 +4993,7 @@ namespace syscall
             if (euid != -1)
             {
                 p->set_euid(euid);
-                p->set_fsuid(euid);  // 同时设置文件系统用户ID
+                p->set_fsuid(euid); // 同时设置文件系统用户ID
             }
             if (suid != -1)
             {
@@ -4964,7 +5013,7 @@ namespace syscall
                 printfCyan("[SyscallHandler::sys_setresuid] 非特权进程设置 ruid: %d\n", ruid);
                 p->set_uid(ruid);
             }
-            
+
             if (euid != -1)
             {
                 if (euid != (int)origin_uid && euid != (int)origin_euid && euid != (int)origin_suid)
@@ -4974,9 +5023,9 @@ namespace syscall
                 }
                 printfCyan("[SyscallHandler::sys_setresuid] 非特权进程设置 euid: %d\n", euid);
                 p->set_euid(euid);
-                p->set_fsuid(euid);  // 同时设置文件系统用户ID
+                p->set_fsuid(euid); // 同时设置文件系统用户ID
             }
-            
+
             if (suid != -1)
             {
                 if (suid != (int)origin_uid && suid != (int)origin_euid && suid != (int)origin_suid)
@@ -4994,7 +5043,7 @@ namespace syscall
     uint64 SyscallHandler::sys_getresuid()
     {
         uint64 ruid_addr, euid_addr, suid_addr;
-        
+
         // 获取参数
         if (_arg_addr(0, ruid_addr) < 0 || _arg_addr(1, euid_addr) < 0 || _arg_addr(2, suid_addr) < 0)
         {
@@ -5004,7 +5053,7 @@ namespace syscall
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
-        
+
         // 获取当前的用户ID
         uint32 ruid = p->get_uid();
         uint32 euid = p->get_euid();
@@ -5061,21 +5110,21 @@ namespace syscall
         int new_mask;
         if (_arg_int(0, new_mask) < 0)
             return -1;
-        
+
         // 只取低9位，确保是有效的权限位
         mode_t new_umask = (mode_t)(new_mask & 0777);
-        
+
         // 获取当前进程
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         if (p == nullptr)
             return -1;
-        
+
         // 获取旧的 umask 值
         mode_t old_umask = p->_umask;
-        
+
         // 设置新的 umask 值
         p->_umask = new_umask;
-        
+
         // 返回旧的 umask 值
         return (uint64)old_umask;
     }
@@ -5115,38 +5164,90 @@ namespace syscall
     uint64 SyscallHandler::sys_copy_file_range()
     {
         int fd_in, fd_out;
-        off_t offset_in, offset_out;
+        uint64 offset_in_ptr, offset_out_ptr;
         size_t size;
         long isize;
         int iflag;
         uint flags;
-        if (_arg_int(0, fd_in) < 0 || _arg_long(1,offset_in)
-        || _arg_int(2, fd_out) < 0 ||
-            _arg_long(3, offset_out) < 0 || _arg_long(4, isize) < 0 || _arg_int(5, iflag) < 0)
+
+        // 读取系统调用参数
+        if (_arg_int(0, fd_in) < 0 || _arg_long(1, (long &)offset_in_ptr) < 0 ||
+            _arg_int(2, fd_out) < 0 || _arg_long(3, (long &)offset_out_ptr) < 0 ||
+            _arg_long(4, isize) < 0 || _arg_int(5, iflag) < 0)
         {
             printfRed("[SyscallHandler::sys_copy_file_range] 参数错误\n");
-            return SYS_EINVAL; // 参数错误
+            return SYS_EINVAL;
         }
-flags=iflag;
-size = (size_t)isize;
+
+        flags = iflag;
+        size = (size_t)isize;
+
         if (fd_in < 0 || fd_out < 0 || fd_in >= NOFILE || fd_out >= NOFILE)
         {
             printfRed("[SyscallHandler::sys_copy_file_range] 无效的文件描述符: fd_in=%d, fd_out=%d\n", fd_in, fd_out);
-            return SYS_EBADF; // 无效的文件描述符
+            return SYS_EBADF;
         }
+
         fs::file *f_in = proc::k_pm.get_cur_pcb()->get_open_file(fd_in);
         fs::file *f_out = proc::k_pm.get_cur_pcb()->get_open_file(fd_out);
         if (!f_in || !f_out)
         {
             printfRed("[SyscallHandler::sys_copy_file_range] 无效的文件描述符: fd_in=%d, fd_out=%d\n", fd_in, fd_out);
-            return SYS_EBADF; // 无效的文件描述符
+            return SYS_EBADF;
         }
         if (!f_in->_attrs.u_read || !f_out->_attrs.u_write)
         {
             printfRed("[SyscallHandler::sys_copy_file_range] 文件没有读/写权限: fd_in=%d, fd_out=%d\n", fd_in, fd_out);
-            return SYS_EACCES; // 访问被拒绝
+            return SYS_EACCES;
         }
-        return vfs_copy_file_range(fd_in, offset_in, fd_out, offset_out, size, flags);
+
+        // 处理偏移量参数
+        off_t offset_in, offset_out;
+        bool use_current_in = false, use_current_out = false;
+
+        if (offset_in_ptr == 0)
+        {
+            // NULL指针，使用当前文件偏移量
+            offset_in = f_in->_file_ptr;
+            use_current_in = true;
+        }
+        else
+        {
+            // 非NULL指针，从用户空间读取偏移量值
+            if (mem::k_vmm.copy_in(*proc::k_pm.get_cur_pcb()->get_pagetable(),
+                                   &offset_in, offset_in_ptr, sizeof(off_t)) < 0)
+            {
+                printfRed("[SyscallHandler::sys_copy_file_range] 无法读取offset_in\n");
+                return SYS_EFAULT;
+            }
+        }
+
+        if (offset_out_ptr == 0)
+        {
+            // NULL指针，使用当前文件偏移量
+            offset_out = f_out->_file_ptr;
+            use_current_out = true;
+        }
+        else
+        {
+            // 非NULL指针，从用户空间读取偏移量值
+            if (mem::k_vmm.copy_in(*proc::k_pm.get_cur_pcb()->get_pagetable(),
+                                   &offset_out, offset_out_ptr, sizeof(off_t)) < 0)
+            {
+                printfRed("[SyscallHandler::sys_copy_file_range] 无法读取offset_out\n");
+                return SYS_EFAULT;
+            }
+        }
+
+        printfCyan("[SyscallHandler::sys_copy_file_range] fd_in=%d, offset_in=%d, fd_out=%d, offset_out=%d, size=%zu, flags=%d\n",
+                   fd_in, offset_in, fd_out, offset_out, size, flags);
+        printfCyan("[SyscallHandler::sys_copy_file_range] use_current: in=%s, out=%s\n",
+                   use_current_in ? "true" : "false", use_current_out ? "true" : "false");
+
+        // 调用VFS层实现
+        int result = vfs_copy_file_range(fd_in, offset_in, fd_out, offset_out, size, flags);
+
+        return result;
     }
     uint64 SyscallHandler::sys_strerror()
     {

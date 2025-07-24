@@ -4167,7 +4167,7 @@ namespace eastl
 	inline string to_string(int value)
 		{ return string(string::CtorSprintf(), "%d", value); }
 	inline string to_string(long value)
-		{ return string(string::CtorSprintf(), "%ld", value); }
+		{ return string(string::CtorSprintf(), "%d", value); }
 	inline string to_string(long long value)
 		{ return string(string::CtorSprintf(), "%lld", value); }
 	inline string to_string(unsigned value)
@@ -4195,7 +4195,7 @@ namespace eastl
 	inline wstring to_wstring(int value)
 		{ return wstring(wstring::CtorSprintf(), L"%d", value); }
 	inline wstring to_wstring(long value)
-		{ return wstring(wstring::CtorSprintf(), L"%ld", value); }
+		{ return wstring(wstring::CtorSprintf(), L"%d", value); }
 	inline wstring to_wstring(long long value)
 		{ return wstring(wstring::CtorSprintf(), L"%lld", value); }
 	inline wstring to_wstring(unsigned value)

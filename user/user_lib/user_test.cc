@@ -567,7 +567,7 @@ char *ltp_testcases[] = {
     // "chmod05",
     // "chmod06",
     // "chmod07",
-    // "chown01",     //copyout爆了
+    // "chown01",     //pass但是结束的时候copyout爆了
     // "chown01_16",
     // "chown02",
     // "chown02_16",
@@ -718,7 +718,7 @@ char *ltp_testcases[] = {
     // "dup02",// 完全PASS
     // "dup03",// 完全PASS
     // "dup04",// 完全PASS
-    // "dup05",
+    "dup05",
     // "dup06", //完全PASS
     // "dup07",//完全PASS
     // "dup201",//完全PASS
@@ -3242,11 +3242,11 @@ char *ltp_testcases[] = {
     // "write05",
     // "write06",
     // "writetest",
-    // "writev01",
+    // "writev01",   //pass
     // "writev02",
     // "writev03",
-    // "writev05",
-    // "writev06",
+    // "writev05",      //pass
+    // "writev06",      //pass
     // "writev07",
     // "zram_lib.sh",
     // "zram01.sh",

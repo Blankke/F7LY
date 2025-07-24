@@ -82,6 +82,7 @@ long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
             return -1;   
 		if (ret >= 0 && upgrade)
 		{
+			printfGreen("normal_file::write: ext4_fwrite success, ret: %d\n", ret);
 			_file_ptr = off + ret;
 		}
 		else
@@ -125,7 +126,7 @@ long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 
 	off_t normal_file::lseek(off_t offset, int whence)
 	{
-		printfYellow("normal_file::lseek called with offset: %ld, whence: %d\n", offset, whence);
+		printfYellow("normal_file::lseek called with offset: %d, whence: %d\n", offset, whence);
 		[[maybe_unused]] off_t new_off;
 		switch (whence)
 		{

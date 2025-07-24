@@ -79,6 +79,7 @@ namespace proc
         long sbrk(long increment);
         int open(int dir_fd, eastl::string path, uint flags, int mode = 0644);
         int mkdir(int dir_fd, eastl::string path, uint mode);
+        int mknod(int dir_fd, eastl::string path, mode_t mode, dev_t dev);
         int close(int fd);
         int fstat(int fd, fs::Kstat *buf);
         int chdir(eastl::string &path);
