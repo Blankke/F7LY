@@ -53,7 +53,7 @@ long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 	}
 	long normal_file::write(uint64 buf, size_t len, long off, bool upgrade)
 	{
-		uint64 ret;
+		uint64 ret = 0;
 		// 处理偏移量参数
 		if (off < 0)
 			off = _file_ptr;
@@ -79,7 +79,7 @@ long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 		        char *kbuf = (char *) buf;
         int status = ext4_fwrite(ext4_f, kbuf, len, &ret);
         if (status != EOK) 
-            return 0;   
+            return -1;   
 		if (ret >= 0 && upgrade)
 		{
 			_file_ptr = off + ret;

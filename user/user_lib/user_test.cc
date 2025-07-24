@@ -3236,7 +3236,7 @@ char *ltp_testcases[] = {
     // "wqueue09",
     // "write_freezing.sh",
     // "write01", // 完全PASS
-    // "write02",
+    // "write02", // 完全PASS·
     // "write03",
     // "write04",
     // "write05",
