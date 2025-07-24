@@ -63,7 +63,7 @@ long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 		if (_attrs.u_write != 1)
 		{
 			printfRed("normal_file:: not allowed to write! ");
-			return -1;
+			return -EBADF;
 		}
 		if (off != _file_ptr)
 		{
@@ -71,7 +71,7 @@ long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 			if (seek_status != EOK)
 			{
 				printfRed("normal_file::write: ext4_fseek failed with status %d", seek_status);
-				return -1;
+				return -EFAULT;
 			}
 		}
 
@@ -79,7 +79,7 @@ long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 		        char *kbuf = (char *) buf;
         int status = ext4_fwrite(ext4_f, kbuf, len, &ret);
         if (status != EOK) 
-            return -1;   
+            return -EFAULT;   
 		if (ret >= 0 && upgrade)
 		{
 			printfGreen("normal_file::write: ext4_fwrite success, ret: %d\n", ret);

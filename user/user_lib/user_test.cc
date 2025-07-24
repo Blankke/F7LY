@@ -1893,18 +1893,18 @@ char *ltp_testcases[] = {
     // "open_tree01",
     // "open_tree02",
     // "open01",    //pass
-    "open02",
+    // "open02",    //symlink?
     // "open03", // 完全PASS
     // "open04",    //完全PASS
-    // "open06",   pass
-    // "open07",
+    // "open06",   //pass
+    // "open07",   //pass
     // "open08",
-    // "open09",
+    // "open09", //pass
     // "open10",
-    // "open11",
+    // "open11",    //symlink?
     // "open12",
     // "open12_child",
-    // "open13",
+    // "open13",    //symlink?
     // "open14",
     // "openat01", // 完全PASS
     // "openat02",
@@ -2101,7 +2101,7 @@ char *ltp_testcases[] = {
     // "read_all",
     // "read01", //貌似可以PASS
     // "read02",   //pass
-    // "read03",
+    "read03",
     // "read04", // 完全PASS
     // "readahead01",
     // "readahead02",

@@ -8,7 +8,88 @@
 #include "fs/vfs/file/pipe_file.hh"
 #include "fs/vfs/file/directory_file.hh"
 #include "proc_manager.hh"  // 用于访问当前进程的umask
+#include "fs/lwext4/ext4.hh"
+#include <EASTL/vector.h>
 
+// 解析符号链接路径
+static int resolve_symlinks(const eastl::string& input_path, eastl::string& resolved_path, int max_depth = 8)
+{
+    if (max_depth <= 0) {
+        return -ELOOP; // 符号链接嵌套太深
+    }
+    
+    resolved_path = input_path;
+    
+    // 按 '/' 分割路径
+    eastl::vector<eastl::string> path_parts;
+    eastl::string current_part;
+    
+    for (size_t i = 0; i < input_path.length(); i++) {
+        if (input_path[i] == '/') {
+            if (!current_part.empty()) {
+                path_parts.push_back(current_part);
+                current_part.clear();
+            }
+        } else {
+            current_part += input_path[i];
+        }
+    }
+    if (!current_part.empty()) {
+        path_parts.push_back(current_part);
+    }
+    
+    // 重新构建路径，逐步检查每个组件是否为符号链接
+    eastl::string current_path = "/";
+    
+    for (size_t i = 0; i < path_parts.size(); i++) {
+        if (current_path.back() != '/') {
+            current_path += "/";
+        }
+        current_path += path_parts[i];
+        
+        // 检查当前路径是否为符号链接
+        int type = vfs_path2filetype(current_path);
+        if (type == fs::FileTypes::FT_SYMLINK) {
+            // 读取符号链接内容
+            char link_target[256];
+            size_t link_len;
+            int r = ext4_readlink(current_path.c_str(), link_target, sizeof(link_target) - 1, &link_len);
+            if (r != EOK) {
+                return -ENOENT;
+            }
+            link_target[link_len] = '\0';
+            
+            eastl::string link_path(link_target);
+            
+            // 如果符号链接是绝对路径，重新开始
+            if (link_path[0] == '/') {
+                current_path = link_path;
+            } else {
+                // 相对路径：替换当前组件
+                size_t last_slash = current_path.find_last_of('/', current_path.length() - path_parts[i].length() - 2);
+                if (last_slash == eastl::string::npos) {
+                    current_path = "/" + link_path;
+                } else {
+                    current_path = current_path.substr(0, last_slash + 1) + link_path;
+                }
+            }
+            
+            // 添加剩余的路径组件
+            for (size_t j = i + 1; j < path_parts.size(); j++) {
+                if (current_path.back() != '/') {
+                    current_path += "/";
+                }
+                current_path += path_parts[j];
+            }
+            
+            // 递归解析剩余的符号链接
+            return resolve_symlinks(current_path, resolved_path, max_depth - 1);
+        }
+    }
+    
+    resolved_path = current_path;
+    return 0;
+}
 
 // 将flags转换为可读的字符串表示
 eastl::string flags_to_string(uint flags)
@@ -212,6 +293,17 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
 
     if (type == fs::FileTypes::FT_NORMAL || (flags & O_CREAT) != 0)
     {
+            // 首先解析符号链接（除非指定了 O_NOFOLLOW 且是最后一个组件）
+    eastl::string resolved_path;
+    if (!(flags & O_NOFOLLOW)) {
+        int r = resolve_symlinks(absolute_path, resolved_path);
+        if (r < 0) {
+            return r;
+        }
+        absolute_path = resolved_path;
+        printfYellow("vfs_openat: resolved path: %s\n", absolute_path.c_str());
+    }
+    
         // 根据flags和文件类型确定适当的权限
         // 专门重写了个函数来确定这个权限
         mode_t file_mode = determine_file_mode(flags, fs::FileTypes::FT_NORMAL, file_exists, mode);
