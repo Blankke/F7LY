@@ -339,6 +339,30 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
             {
                 printfGreen("ext4_mode_set success for %s, mode: 0%o\n", absolute_path.c_str(), file_mode);
             }
+            
+            // 设置文件所有者和组
+            // 获取当前进程的 uid 和 gid
+            proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+            uint32_t current_uid = 0;  // 默认 root
+            uint32_t current_gid = 1;  // 默认使用有效组ID 1（与getegid一致）
+            
+            if (current_proc != nullptr) {
+                current_uid = current_proc->_uid;
+                // 使用有效组ID，与 sys_getegid() 返回值保持一致
+                current_gid = 1;  // 硬编码为1，与getegid系统调用一致
+            }
+            
+            // 设置文件的 uid 和 gid
+            status = ext4_owner_set(absolute_path.c_str(), current_uid, current_gid);
+            if (status != EOK)
+            {
+                printfRed("ext4_owner_set failed for %s, status: %d\n", absolute_path.c_str(), status);
+            }
+            else
+            {
+                printfGreen("ext4_owner_set success for %s, uid: %u, gid: %u\n", 
+                           absolute_path.c_str(), current_uid, current_gid);
+            }
         }
 
         // 处理 O_APPEND：将文件指针设置到文件末尾
@@ -788,12 +812,53 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
     st->ino = inode_num;
     st->mode = ext4_inode_get_mode(sb, &inode);
     st->nlink = ext4_inode_get_links_cnt(&inode);
-    st->uid = ext4_inode_get_uid(&inode);
-    st->gid = ext4_inode_get_gid(&inode);
+    
+    // 获取原始 uid 和 gid，进行范围检查
+    uint32_t raw_uid = ext4_inode_get_uid(&inode);
+    uint32_t raw_gid = ext4_inode_get_gid(&inode);
+    
+    // 检查是否有异常值，如果有则使用默认值
+    if (raw_uid > 65535) {  // 超出合理范围
+        st->uid = 0;  // 默认 root
+        printfRed("vfs_fstat: invalid uid %u, using 0\n", raw_uid);
+    } else {
+        st->uid = raw_uid;
+    }
+    
+    if (raw_gid > 65535) {  // 超出合理范围
+        st->gid = 0;  // 默认 root group
+        printfRed("vfs_fstat: invalid gid %u, using 0\n", raw_gid);
+    } else {
+        st->gid = raw_gid;
+    }
+    
     st->rdev = ext4_inode_get_dev(&inode);
     st->size = inode.size_lo;
-    st->blksize = inode.size_lo / inode.blocks_count_lo;
-    st->blocks = (uint64)inode.blocks_count_lo;
+    
+    // 修复 blksize 计算：避免除零错误，使用标准块大小
+    st->blksize = 4096; // 使用标准 4KB 块大小
+    
+    // 修复 blocks 计算：根据文件大小计算所需的512字节块数
+    // Linux stat 中的 blocks 字段表示分配给文件的512字节块数
+    // 对于小文件，通常文件大小决定块数
+    if (st->size == 0) {
+        st->blocks = 0;
+    } else {
+        // 计算所需的512字节块数，向上取整
+        st->blocks = (st->size + 511) / 512;
+        
+        // 但是要考虑文件系统的实际分配情况
+        // 如果 ext4 报告的块数更小且合理，使用它
+        uint64 ext4_blocks_512 = ((uint64)inode.blocks_count_lo * 4096) / 512;
+        if (ext4_blocks_512 > 0 && ext4_blocks_512 < st->blocks) {
+            st->blocks = ext4_blocks_512;
+        }
+        
+        // 确保至少有1个块（对于非空文件）
+        if (st->blocks == 0 && st->size > 0) {
+            st->blocks = 1;
+        }
+    }
 
     st->st_atime_sec = ext4_inode_get_access_time(&inode);
     st->st_atime_nsec = (inode.atime_extra >> 2) & 0x3FFFFFFF; //< 30 bits for nanoseconds

@@ -2520,13 +2520,13 @@ char *ltp_testcases[] = {
     // "statfs03_64",
     // "statvfs01",
     // "statvfs02", //symlink?
-    "statx01",
-    // "statx02",
-    // "statx03",
+    // "statx01",  //pass
+    // "statx02",  //pass
+    // "statx03",// pass
     // "statx04",
     // "statx05",
     // "statx06",
-    // "statx07",
+    // "statx07",  
     // "statx08",
     // "statx09",
     // "statx10",
@@ -2536,13 +2536,13 @@ char *ltp_testcases[] = {
     // "stime02",
     // "stop_freeze_sleep_thaw_cont.sh",
     // "stop_freeze_thaw_cont.sh",
-    // "stream01",
-    // "stream02",
-    // "stream03",
-    // "stream04",
-    // "stream05",
+    // "stream01",   //pass
+    // "stream02",   //pass
+    // "stream03", // stream03.c:249: strlen(junk)=26: file pointer descrepancy 5 (opos=0)
+    // "stream04",  //pass
+    // "stream05", //pass
     // "stress",
-    // "string01",
+    // "string01", //pass
     // "support_numa",
     // "swapoff01",
     // "swapoff02",
@@ -2550,7 +2550,7 @@ char *ltp_testcases[] = {
     // "swapon02",
     // "swapon03",
     // "swapping01",
-    // "symlink01",
+    "symlink01",
     // "symlink02",
     // "symlink03",
     // "symlink04",

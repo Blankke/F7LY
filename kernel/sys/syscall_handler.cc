@@ -751,7 +751,7 @@ namespace syscall
         if (_arg_fd(0, &fd, nullptr) < 0 || _arg_addr(1, kst_addr) < 0)
         {
             printfRed("[SyscallHandler::sys_fstat] Error fetching arguments\n");
-            return -1;
+            return -EINVAL;
         }
         proc::k_pm.fstat(fd, &kst);
         mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
@@ -759,7 +759,7 @@ namespace syscall
         if (mem::k_vmm.copy_out(*pt, kst_addr, &kst, sizeof(kst)) < 0)
         {
             printfRed("[SyscallHandler::sys_fstat] Error copying out kstat\n");
-            return -1;
+            return -EFAULT;
         }
         // 返回成功
         return 0;
@@ -816,67 +816,191 @@ namespace syscall
             __u32 stx_dio_offset_align;
         };
 
-        int fd;
-        eastl::string path_name;
+        int dirfd;
+        eastl::string pathname;
+        int flags;
+        unsigned int mask;
+        uint64 statxbuf_addr;
         fs::Kstat kst;
         statx stx;
-        uint64 kst_addr;
 
-        if (_arg_int(0, fd) < 0)
-            return -1;
+        // 获取参数
+        if (_arg_int(0, dirfd) < 0)
+            return -EINVAL;
 
-        if (_arg_str(1, path_name, 128) < 0)
-            return -1;
+        if (_arg_str(1, pathname, 4096) < 0)  // PATH_MAX 通常是 4096
+            return -EINVAL;
 
-        if (_arg_addr(4, kst_addr) < 0)
-            return -1;
-        // 情况一：fd > 0，说明调用者提供了一个已打开的文件描述符
-        if (fd > 0)
-        {
-            proc::k_pm.fstat(fd, &kst);
-            stx.stx_mode = kst.mode;
-            stx.stx_size = kst.size;
-            stx.stx_dev_minor = (kst.dev) >> 32;
-            stx.stx_dev_major = (kst.dev) & (0xFFFFFFFF);
-            stx.stx_blocks = kst.blocks;
-            stx.stx_uid = kst.uid;
-            stx.stx_gid = kst.gid;
-            // dev=(int)(stx_dev_major<<8 | stx_dev_minor&0xff)
-            stx.stx_ino = kst.ino;
-            stx.stx_nlink = kst.nlink;
-            stx.stx_atime.tv_sec = kst.st_atime_sec;
-            stx.stx_atime.tv_nsec = kst.st_atime_nsec;
-            stx.stx_mtime.tv_sec = kst.st_mtime_sec;
-            stx.stx_mtime.tv_nsec = kst.st_mtime_nsec;
-            stx.stx_ctime.tv_sec = kst.st_ctime_sec;
-            stx.stx_ctime.tv_nsec = kst.st_ctime_nsec;
-            stx.stx_blksize = kst.blksize;
-            stx.stx_mnt_id = kst.mnt_id;
-            // 将 statx 结构体拷贝回用户地址空间
-            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
-            if (mem::k_vmm.copy_out(*pt, kst_addr, &stx, sizeof(stx)) < 0)
-                return -1;
-            return 0;
+        if (_arg_int(2, flags) < 0)
+            return -EINVAL;
+
+        if (_arg_int(3, (int&)mask) < 0)
+            return -EINVAL;
+
+        if (_arg_addr(4, statxbuf_addr) < 0)
+            return -EINVAL;
+
+        // 参数有效性检查
+        
+        // 检查 statxbuf 指针是否为空或无效
+        if (statxbuf_addr == 0) {
+            return -EFAULT;
         }
-        else
-        {
-            // 情况二：fd <= 0，说明系统调用者提供的是路径名而非fd
-            // 使用 open + fstat + close 组合临时获取元数据
-            int ffd;
-            path_name = get_absolute_path(path_name.c_str(), proc::k_pm.get_cur_pcb()->_cwd_name.c_str());
-            ffd = proc::k_pm.open(fd, path_name, 2);
-            if (ffd < 0)
-                return -1;
-            proc::k_pm.fstat(ffd, &kst);
-            proc::k_pm.close(ffd);
-            // 填充 statx（此处简化为只填 mode 和 size）
-            stx.stx_size = kst.size;
-            stx.stx_mode = kst.mode;
-            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
-            if (mem::k_vmm.copy_out(*pt, kst_addr, &stx, sizeof(stx)) < 0)
-                return -1;
-            return 0;
+
+        // 检查 flags 参数的有效性
+        const int VALID_FLAGS = AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | 
+                               AT_EMPTY_PATH | AT_SYMLINK_FOLLOW | AT_STATX_SYNC_TYPE;
+        if (flags & ~VALID_FLAGS) {
+            return -EINVAL;
         }
+
+        // 检查 mask 参数中的保留位
+        const unsigned int STATX__RESERVED = 0x80000000U;
+        if (mask & STATX__RESERVED) {
+            return -EINVAL;
+        }
+
+        // 检查路径名长度
+        if (pathname.length() >= 4096) {  // PATH_MAX
+            return SYS_ENAMETOOLONG;
+        }
+
+        // 处理空路径的情况
+        if (pathname.empty()) {
+            if (!(flags & AT_EMPTY_PATH)) {
+                return -ENOENT;
+            }
+            // AT_EMPTY_PATH 要求 dirfd 是一个有效的文件描述符
+            if (dirfd < 0) {
+                return -EBADF;
+            }
+        }
+
+        // 检查内存访问权限
+        mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+        if (statxbuf_addr == 0 || statxbuf_addr >= 0x1000000000000000UL) {
+            return -EFAULT;
+        }
+
+        // 初始化 statx 结构体
+        memset(&stx, 0, sizeof(stx));
+
+        int result = 0;
+
+        // 根据不同情况处理路径
+        if (pathname.empty() && (flags & AT_EMPTY_PATH)) {
+            // 使用 dirfd 指向的文件
+            if (dirfd == AT_FDCWD) {
+                return -EBADF;
+            }
+            
+            result = proc::k_pm.fstat(dirfd, &kst);
+            if (result < 0) {
+                return -EBADF;
+            }
+        } else {
+            // 使用路径名
+            eastl::string absolute_path;
+            
+            if (pathname[0] == '/') {
+                // 绝对路径
+                absolute_path = pathname;
+            } else {
+                // 相对路径
+                if (dirfd == AT_FDCWD) {
+                    // 相对于当前工作目录
+                    absolute_path = get_absolute_path(pathname.c_str(), 
+                                                    proc::k_pm.get_cur_pcb()->_cwd_name.c_str());
+                } else {
+                    // 相对于 dirfd 指向的目录
+                    if (dirfd < 0) {
+                        return -EBADF;
+                    }
+                    
+                    // 获取 dirfd 对应的路径
+                    fs::file *dir_file = proc::k_pm.get_cur_pcb()->get_open_file(dirfd);
+                    if (!dir_file) {
+                        return -EBADF;
+                    }
+                    
+                    if (dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT) {
+                        return -ENOTDIR;
+                    }
+                    
+                    absolute_path = get_absolute_path(pathname.c_str(), dir_file->_path_name.c_str());
+                }
+            }
+
+            // 使用临时文件描述符获取文件信息
+            int temp_fd = proc::k_pm.open(AT_FDCWD, absolute_path, O_RDONLY);
+            if (temp_fd < 0) {
+                // 根据不同的错误返回相应的错误码
+                switch (-temp_fd) {
+                    case ENOENT:
+                        return -ENOENT;
+                    case EACCES:
+                        return -EACCES;
+                    case ELOOP:
+                        return -ELOOP;
+                    case ENOMEM:
+                        return -ENOMEM;
+                    case ENOTDIR:
+                        return -ENOTDIR;
+                    default:
+                        return -ENOENT;
+                }
+            }
+
+            result = proc::k_pm.fstat(temp_fd, &kst);
+            proc::k_pm.close(temp_fd);
+            
+            if (result < 0) {
+                return result;
+            }
+        }
+
+        // 填充 statx 结构体
+        stx.stx_mask = mask;  // 根据请求的 mask 设置
+        stx.stx_blksize = kst.blksize;
+        stx.stx_attributes = 0;  // 扩展属性，暂不支持
+        stx.stx_nlink = kst.nlink;
+        stx.stx_uid = kst.uid;
+        stx.stx_gid = kst.gid;
+        stx.stx_mode = kst.mode;
+        stx.stx_ino = kst.ino;
+        stx.stx_size = kst.size;
+        stx.stx_blocks = kst.blocks;
+        stx.stx_attributes_mask = 0;  // 支持的属性掩码
+
+        // 时间戳
+        stx.stx_atime.tv_sec = kst.st_atime_sec;
+        stx.stx_atime.tv_nsec = kst.st_atime_nsec;
+        stx.stx_btime.tv_sec = 0;     // 创建时间，ext4 不直接支持
+        stx.stx_btime.tv_nsec = 0;
+        stx.stx_ctime.tv_sec = kst.st_ctime_sec;
+        stx.stx_ctime.tv_nsec = kst.st_ctime_nsec;
+        stx.stx_mtime.tv_sec = kst.st_mtime_sec;
+        stx.stx_mtime.tv_nsec = kst.st_mtime_nsec;
+
+        // 设备信息
+        stx.stx_rdev_major = (kst.rdev >> 8) & 0xFF;
+        stx.stx_rdev_minor = kst.rdev & 0xFF;
+        stx.stx_dev_major = (kst.dev >> 8) & 0xFF;
+        stx.stx_dev_minor = kst.dev & 0xFF;
+
+        // 挂载点ID
+        stx.stx_mnt_id = kst.mnt_id;
+
+        // Direct I/O 对齐（暂不支持）
+        stx.stx_dio_mem_align = 0;
+        stx.stx_dio_offset_align = 0;
+
+        // 将结果拷贝到用户空间
+        if (mem::k_vmm.copy_out(*pt, statxbuf_addr, &stx, sizeof(stx)) < 0) {
+            return -EFAULT;
+        }
+
+        return 0;
     }
     uint64 SyscallHandler::sys_chdir()
     {
@@ -1315,8 +1439,8 @@ namespace syscall
     };
     static const char _SYSINFO_sysname[] = "Linux";
     static const char _SYSINFO_nodename[] = "(none-node)";
-    static const char _SYSINFO_release[] = "4.15.0";
-    static const char _SYSINFO_version[] = "4.15.0";
+    static const char _SYSINFO_release[] = "4.16.0";
+    static const char _SYSINFO_version[] = "4.16.0";
     static const char _SYSINFO_machine[] = "Riscv";
     static const char _SYSINFO_domainname[] = "(none-domain)";
     uint64 SyscallHandler::sys_uname()
