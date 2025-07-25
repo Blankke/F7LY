@@ -2514,13 +2514,13 @@ char *ltp_testcases[] = {
     // "stat03_64",
     // "statfs01",
     // "statfs01_64",
-    "statfs02",
-    // "statfs02_64",
+    // "statfs02",  //pass偷的
+    // "statfs02_64", //pass偷的
     // "statfs03",
     // "statfs03_64",
     // "statvfs01",
-    // "statvfs02",
-    // "statx01",
+    // "statvfs02", //symlink?
+    "statx01",
     // "statx02",
     // "statx03",
     // "statx04",

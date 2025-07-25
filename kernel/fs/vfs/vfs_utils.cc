@@ -801,6 +801,7 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
     st->st_ctime_nsec = (inode.ctime_extra >> 2) & 0x3FFFFFFF; //< 30 bits for nanoseconds
     st->st_mtime_sec = ext4_inode_get_modif_time(&inode);
     st->st_mtime_nsec = (inode.mtime_extra >> 2) & 0x3FFFFFFF; //< 30 bits for nanoseconds
+    st->mnt_id = 0; // ext4暂时不支持挂载点ID
     return EOK;
 }
 

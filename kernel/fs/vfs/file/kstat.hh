@@ -48,7 +48,7 @@ namespace fs
 		long st_mtime_nsec;
 		long st_ctime_sec;
 		long st_ctime_nsec;
-
+		uint32 mnt_id; // mount id, for statx
 		Kstat() = default;
 		Kstat( const Kstat& ks_ ) :
 			dev( ks_.dev ), ino( ks_.ino ), mode( ks_.mode ),nlink( ks_.nlink ), 

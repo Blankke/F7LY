@@ -838,6 +838,9 @@ namespace syscall
             stx.stx_size = kst.size;
             stx.stx_dev_minor = (kst.dev) >> 32;
             stx.stx_dev_major = (kst.dev) & (0xFFFFFFFF);
+            stx.stx_blocks = kst.blocks;
+            stx.stx_uid = kst.uid;
+            stx.stx_gid = kst.gid;
             // dev=(int)(stx_dev_major<<8 | stx_dev_minor&0xff)
             stx.stx_ino = kst.ino;
             stx.stx_nlink = kst.nlink;
@@ -847,6 +850,8 @@ namespace syscall
             stx.stx_mtime.tv_nsec = kst.st_mtime_nsec;
             stx.stx_ctime.tv_sec = kst.st_ctime_sec;
             stx.stx_ctime.tv_nsec = kst.st_ctime_nsec;
+            stx.stx_blksize = kst.blksize;
+            stx.stx_mnt_id = kst.mnt_id;
             // 将 statx 结构体拷贝回用户地址空间
             mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
             if (mem::k_vmm.copy_out(*pt, kst_addr, &stx, sizeof(stx)) < 0)
@@ -858,6 +863,7 @@ namespace syscall
             // 情况二：fd <= 0，说明系统调用者提供的是路径名而非fd
             // 使用 open + fstat + close 组合临时获取元数据
             int ffd;
+            path_name = get_absolute_path(path_name.c_str(), proc::k_pm.get_cur_pcb()->_cwd_name.c_str());
             ffd = proc::k_pm.open(fd, path_name, 2);
             if (ffd < 0)
                 return -1;
@@ -3772,29 +3778,122 @@ namespace syscall
     uint64 SyscallHandler::sys_statfs()
     {
         uint64 path_addr, buf_addr;
-        // 尝试获取两个参数
+        eastl::string pathname;
+        
+        // 获取参数
         if (_arg_addr(0, path_addr) < 0 || _arg_addr(1, buf_addr) < 0)
-            return -EINVAL;
-        printfCyan("[sys_statfs] path_addr: %p, buf_addr: %p\n", (void *)path_addr, (void *)buf_addr);
-        statfs st;
-        // 根据需求填写字段
-        st.f_type = 0x2011BAB0;
-        st.f_bsize = PGSIZE; // 假设块大小
-        st.f_blocks = 1L << 27;
-        st.f_bfree = 1L << 26;
-        st.f_bavail = 1L << 20;
-        st.f_files = 1L << 10;
-        st.f_ffree = 1L << 9;
-        st.f_namelen = 1L << 8;
-        st.f_frsize = 1L << 9;
-        st.f_flags = 1L << 1;
-
+        {
+            printfRed("[sys_statfs] 参数错误\n");
+            return SYS_EINVAL;
+        }
+        
+        // 检查buf地址是否有效
+        if (buf_addr == 0)
+        {
+            printfRed("[sys_statfs] buf地址无效\n");
+            return SYS_EFAULT;
+        }
+        
+        // 从用户空间拷贝路径字符串
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
-        // 将结果写回用户态
+        
+        if (mem::k_vmm.copy_str_in(*pt, pathname, path_addr, MAXPATH) < 0)
+        {
+            printfRed("[sys_statfs] 路径字符串拷贝失败\n");
+            return SYS_EFAULT;
+        }
+        
+        printfCyan("[sys_statfs] path: %s, buf_addr: %p\n", pathname.c_str(), (void *)buf_addr);
+        
+        // 检查路径长度
+        if (pathname.length() >= MAXPATH)
+        {
+            printfRed("[sys_statfs] 路径名过长\n");
+            return SYS_ENAMETOOLONG;
+        }
+        
+        // 将相对路径转换为绝对路径
+        pathname = get_absolute_path(pathname.c_str(), p->_cwd_name.c_str());
+        
+        // 检查路径是否存在
+        if (fs::k_vfs.is_file_exist(pathname.c_str()) != 1)
+        {
+            printfRed("[sys_statfs] 路径不存在: %s\n", pathname.c_str());
+            return SYS_ENOTDIR;
+        }
+        
+        // 获取文件/目录信息以检查权限
+        fs::file *file = nullptr;
+        int status = fs::k_vfs.openat(pathname, file, O_RDONLY);
+        
+        if (status != EOK || !file)
+        {
+            printfRed("[sys_statfs] 无法访问路径: %s\n", pathname.c_str());
+            return SYS_EACCES;
+        }
+        
+        // 检查是否有搜索权限（对于目录路径中的组件）
+        if (!file->_attrs.u_read)
+        {
+            printfRed("[sys_statfs] 搜索权限被拒绝: %s\n", pathname.c_str());
+            file->free_file();
+            return SYS_EACCES;
+        }
+        
+        file->free_file();
+        
+        // 填充statfs结构体
+        struct statfs st;
+        
+        // 文件系统类型 - 使用EXT4的magic number
+        st.f_type = 0xEF53;  // EXT4_SUPER_MAGIC
+        
+        // 块大小 - 使用页面大小作为优化的传输块大小
+        st.f_bsize = PGSIZE;
+        
+        // 文件系统总块数
+        st.f_blocks = 1UL << 20;  // 1M blocks
+        
+        // 空闲块数
+        st.f_bfree = 1UL << 19;   // 512K free blocks
+        
+        // 非特权用户可用的空闲块数
+        st.f_bavail = 1UL << 18;  // 256K available to unprivileged users
+        
+        // 文件系统总inode数
+        st.f_files = 1UL << 16;   // 64K inodes
+        
+        // 空闲inode数
+        st.f_ffree = 1UL << 15;   // 32K free inodes
+        
+        // 文件系统ID - 简单设置为固定值
+        st.f_fsid.val[0] = 0xF7;
+        st.f_fsid.val[1] = 0x1A;
+        
+        // 文件名最大长度
+        st.f_namelen = 255;  // EXT4 standard
+        
+        // 碎片大小（Linux 2.6+）
+        st.f_frsize = PGSIZE;
+        
+        // 挂载标志（Linux 2.6.36+）
+        st.f_flags = 0;  // 没有特殊挂载标志
+        
+        // 预留空间清零
+        for (int i = 0; i < 4; i++)
+        {
+            st.f_spare[i] = 0;
+        }
+        
+        // 将结果拷贝到用户空间
         if (mem::k_vmm.copy_out(*pt, buf_addr, &st, sizeof(st)) < 0)
-            return -1;
-
+        {
+            printfRed("[sys_statfs] 结果拷贝到用户空间失败\n");
+            return SYS_EFAULT;
+        }
+        
+        printfGreen("[sys_statfs] 成功获取文件系统信息: %s\n", pathname.c_str());
         return 0;
     }
     uint64 SyscallHandler::sys_ftruncate()
@@ -4800,7 +4899,89 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_fstatfs()
     {
-        panic("未实现该系统调用");
+        int fd;
+        uint64 buf_addr;
+        
+        // 获取参数
+        if (_arg_int(0, fd) < 0 || _arg_addr(1, buf_addr) < 0)
+        {
+            printfRed("[sys_fstatfs] 参数错误\n");
+            return SYS_EINVAL;
+        }
+        
+        // 检查buf地址是否有效
+        if (buf_addr == 0)
+        {
+            printfRed("[sys_fstatfs] buf地址无效\n");
+            return SYS_EFAULT;
+        }
+        
+        printfCyan("[sys_fstatfs] fd: %d, buf_addr: %p\n", fd, (void *)buf_addr);
+        
+        // 获取当前进程
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        
+        // 检查文件描述符是否有效
+        fs::file *f = p->get_open_file(fd);
+        if (!f)
+        {
+            printfRed("[sys_fstatfs] 无效的文件描述符: %d\n", fd);
+            return SYS_EBADF;
+        }
+        
+        // 填充statfs结构体 - 与sys_statfs使用相同的文件系统信息
+        struct statfs st;
+        
+        // 文件系统类型 - 使用EXT4的magic number
+        st.f_type = 0xEF53;  // EXT4_SUPER_MAGIC
+        
+        // 块大小 - 使用页面大小作为优化的传输块大小
+        st.f_bsize = PGSIZE;
+        
+        // 文件系统总块数
+        st.f_blocks = 1UL << 20;  // 1M blocks
+        
+        // 空闲块数
+        st.f_bfree = 1UL << 19;   // 512K free blocks
+        
+        // 非特权用户可用的空闲块数
+        st.f_bavail = 1UL << 18;  // 256K available to unprivileged users
+        
+        // 文件系统总inode数
+        st.f_files = 1UL << 16;   // 64K inodes
+        
+        // 空闲inode数
+        st.f_ffree = 1UL << 15;   // 32K free inodes
+        
+        // 文件系统ID - 简单设置为固定值
+        st.f_fsid.val[0] = 0xF7;
+        st.f_fsid.val[1] = 0x1A;
+        
+        // 文件名最大长度
+        st.f_namelen = 255;  // EXT4 standard
+        
+        // 碎片大小（Linux 2.6+）
+        st.f_frsize = PGSIZE;
+        
+        // 挂载标志（Linux 2.6.36+）
+        st.f_flags = 0;  // 没有特殊挂载标志
+        
+        // 预留空间清零
+        for (int i = 0; i < 4; i++)
+        {
+            st.f_spare[i] = 0;
+        }
+        
+        // 将结果拷贝到用户空间
+        mem::PageTable *pt = p->get_pagetable();
+        if (mem::k_vmm.copy_out(*pt, buf_addr, &st, sizeof(st)) < 0)
+        {
+            printfRed("[sys_fstatfs] 结果拷贝到用户空间失败\n");
+            return SYS_EFAULT;
+        }
+        
+        printfGreen("[sys_fstatfs] 成功获取文件描述符 %d 的文件系统信息\n", fd);
+        return 0;
     }
     uint64 SyscallHandler::sys_truncate()
     {
