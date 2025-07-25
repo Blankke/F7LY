@@ -41,13 +41,13 @@ static int resolve_symlinks(const eastl::string& input_path, eastl::string& reso
     
     // 重新构建路径，逐步检查每个组件是否为符号链接
     eastl::string current_path = "/";
-    
+
     for (size_t i = 0; i < path_parts.size(); i++) {
         if (current_path.back() != '/') {
             current_path += "/";
         }
         current_path += path_parts[i];
-        
+        printfYellow("Checking path component: %s\n", current_path.c_str());
         // 检查当前路径是否为符号链接
         int type = vfs_path2filetype(current_path);
         if (type == fs::FileTypes::FT_SYMLINK) {
@@ -62,29 +62,34 @@ static int resolve_symlinks(const eastl::string& input_path, eastl::string& reso
             
             eastl::string link_path(link_target);
             
+            eastl::string new_path;
+            
             // 如果符号链接是绝对路径，重新开始
             if (link_path[0] == '/') {
-                current_path = link_path;
+                new_path = link_path;
             } else {
-                // 相对路径：替换当前组件
-                size_t last_slash = current_path.find_last_of('/', current_path.length() - path_parts[i].length() - 2);
-                if (last_slash == eastl::string::npos) {
-                    current_path = "/" + link_path;
+                // 相对路径：需要相对于当前组件的父目录
+                size_t last_slash = current_path.find_last_of('/');
+                if (last_slash == eastl::string::npos || last_slash == 0) {
+                    new_path = "/" + link_path;
                 } else {
-                    current_path = current_path.substr(0, last_slash + 1) + link_path;
+                    new_path = current_path.substr(0, last_slash + 1) + link_path;
                 }
             }
             
             // 添加剩余的路径组件
             for (size_t j = i + 1; j < path_parts.size(); j++) {
-                if (current_path.back() != '/') {
-                    current_path += "/";
+                if (new_path.back() != '/') {
+                    new_path += "/";
                 }
-                current_path += path_parts[j];
+                new_path += path_parts[j];
             }
-            
+
+            printfYellow("Resolving symlink %s -> %s, final path: %s\n", 
+                        current_path.c_str(), link_path.c_str(), new_path.c_str());
+
             // 递归解析剩余的符号链接
-            return resolve_symlinks(current_path, resolved_path, max_depth - 1);
+            return resolve_symlinks(new_path, resolved_path, max_depth - 1);
         }
     }
     
@@ -250,31 +255,10 @@ static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file
 }
 int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mode)
 {
+    printfYellow("[vfs_openat] : absolute_path=%s, flags=%o, mode=0%o\n", absolute_path.c_str(), flags, mode);
+    
     bool file_exists = (vfs_is_file_exist(absolute_path.c_str()) == 1);
-    // 好多flag都有人给你负重前行过了
-
-    // 处理 O_DIRECTORY：如果指定了此标志，路径必须是目录
-    if (flags & O_DIRECTORY)
-    {
-        int type = vfs_path2filetype(absolute_path);
-        if (file_exists && type != fs::FileTypes::FT_DIRECT)
-        {
-            printfRed("vfs_openat: O_DIRECTORY specified but %s is not a directory\n", absolute_path.c_str());
-            return -ENOTDIR; // 不是目录
-        }
-    }
-
-    // 处理 O_NOFOLLOW：如果路径的最后一个组件是符号链接，则失败
-    if (flags & O_NOFOLLOW)
-    {
-        int type = vfs_path2filetype(absolute_path);
-        if (file_exists && type == fs::FileTypes::FT_SYMLINK)
-        {
-            printfRed("vfs_openat: O_NOFOLLOW specified but %s is a symbolic link\n", absolute_path.c_str());
-            return -ELOOP; // 表示符号链接过多
-        }
-    }
-
+    
     // 处理 O_EXCL + O_CREAT 组合：如果文件存在，应该失败
     if ((flags & O_CREAT) && (flags & O_EXCL) && file_exists)
     {
@@ -289,22 +273,75 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
         return -ENOENT; // 文件不存在
     }
 
-    int type = vfs_path2filetype(absolute_path);
+    // 确定要使用的实际路径和文件类型
+    eastl::string actual_path = absolute_path;
+    int type = -1;
+    
+    if (file_exists) {
+        type = vfs_path2filetype(absolute_path);
+    } else {
+        type = fs::FileTypes::FT_NORMAL; // 新文件默认为普通文件
+    }
+    
+    // 处理 O_DIRECTORY：如果指定了此标志，路径必须是目录
+    if (flags & O_DIRECTORY)
+    {
+        if (file_exists && type != fs::FileTypes::FT_DIRECT)
+        {
+            printfRed("vfs_openat: O_DIRECTORY specified but %s is not a directory\n", absolute_path.c_str());
+            return -ENOTDIR; // 不是目录
+        }
+    }
+    
+    // 处理符号链接
+    if (type == fs::FileTypes::FT_SYMLINK)
+    {
+        
+        if (flags & O_NOFOLLOW)
+        {
+            // 如果指定了 O_NOFOLLOW，我们需要创建一个符号链接文件对象
+            // 这样 fstat 可以获取符号链接本身的属性
+            printfYellow("vfs_openat: O_NOFOLLOW specified, creating symlink file object for %s\n", absolute_path.c_str());
+
+            // 创建一个普通文件对象来表示符号链接
+            // 但是文件类型标记为符号链接
+            fs::FileAttrs attrs;
+            attrs.filetype = fs::FileTypes::FT_SYMLINK;
+            attrs._value = 0777; // 符号链接通常有全权限
+
+            fs::normal_file *temp_file = new fs::normal_file(attrs, absolute_path);
+            // 不需要调用 ext4_fopen2，因为我们只是要获取符号链接的属性
+            // 直接设置状态即可
+            file = temp_file;
+            return EOK;
+        }
+        else
+        {
+            // 如果没有指定 O_NOFOLLOW，解析符号链接
+            eastl::string resolved_path;
+            int r = resolve_symlinks(absolute_path, resolved_path);
+            if (r < 0)
+            {
+                printfRed("vfs_openat: failed to resolve symlink %s, error: %d\n", absolute_path.c_str(), r);
+                return r;
+            }
+            
+            actual_path = resolved_path;
+            printfYellow("vfs_openat: resolved symlink %s -> %s\n", absolute_path.c_str(), resolved_path.c_str());
+            
+            // 重新检查解析后路径的存在性和类型
+            file_exists = (vfs_is_file_exist(actual_path.c_str()) == 1);
+            if (file_exists) {
+                type = vfs_path2filetype(actual_path);
+            } else {
+                type = fs::FileTypes::FT_NORMAL; // 默认为普通文件（可能需要创建）
+            }
+        }
+    }
     int status = -100;
 
     if (type == fs::FileTypes::FT_NORMAL || (flags & O_CREAT) != 0)
     {
-            // 首先解析符号链接（除非指定了 O_NOFOLLOW 且是最后一个组件）
-    eastl::string resolved_path;
-    if (!(flags & O_NOFOLLOW)) {
-        int r = resolve_symlinks(absolute_path, resolved_path);
-        if (r < 0) {
-            return r;
-        }
-        absolute_path = resolved_path;
-        printfYellow("vfs_openat: resolved path: %s\n", absolute_path.c_str());
-    }
-    
         // 根据flags和文件类型确定适当的权限
         // 专门重写了个函数来确定这个权限
         mode_t file_mode = determine_file_mode(flags, fs::FileTypes::FT_NORMAL, file_exists, mode);
@@ -313,31 +350,32 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
         attrs.filetype = fs::FileTypes::FT_NORMAL;
         attrs._value = file_mode;
 
-        fs::normal_file *temp_file = new fs::normal_file(attrs, absolute_path);
-        printfYellow("vfs_openat: flags: %o, mode: 0%o\n", flags, temp_file->_attrs.transMode());
+        fs::normal_file *temp_file = new fs::normal_file(attrs, actual_path);
+        printfYellow("vfs_openat: flags: %o, mode: 0%o, actual_path: %s\n", flags, temp_file->_attrs.transMode(), actual_path.c_str());
 
         // ext4库会自动处理 O_TRUNC, O_RDONLY, O_WRONLY, O_RDWR 等标志
         // 真是前人栽树，后人乘凉啊！
-        status = ext4_fopen2(&temp_file->lwext4_file_struct, absolute_path.c_str(), flags);
+        status = ext4_fopen2(&temp_file->lwext4_file_struct, actual_path.c_str(), flags);
         if (status != EOK)
         {
             delete temp_file;
-            printfRed("ext4_fopen2 failed with status: %d\n", status);
+            printfRed("ext4_fopen2 failed with status: %d for path: %s\n", status, actual_path.c_str());
             return -ENOMEM;
         }
 
         // 如果是新创建的文件，设置文件权限到 ext4 inode
-        if (!file_exists && (flags & O_CREAT))
+        bool is_newly_created = !file_exists && (flags & O_CREAT);
+        if (is_newly_created)
         {
-            status = ext4_mode_set(absolute_path.c_str(), file_mode);
+            status = ext4_mode_set(actual_path.c_str(), file_mode);
             if (status != EOK)
             {
-                printfRed("ext4_mode_set failed for %s, status: %d\n", absolute_path.c_str(), status);
+                printfRed("ext4_mode_set failed for %s, status: %d\n", actual_path.c_str(), status);
                 // 不返回错误，因为文件已经创建成功了
             }
             else
             {
-                printfGreen("ext4_mode_set success for %s, mode: 0%o\n", absolute_path.c_str(), file_mode);
+                printfGreen("ext4_mode_set success for %s, mode: 0%o\n", actual_path.c_str(), file_mode);
             }
             
             // 设置文件所有者和组
@@ -353,15 +391,15 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
             }
             
             // 设置文件的 uid 和 gid
-            status = ext4_owner_set(absolute_path.c_str(), current_uid, current_gid);
+            status = ext4_owner_set(actual_path.c_str(), current_uid, current_gid);
             if (status != EOK)
             {
-                printfRed("ext4_owner_set failed for %s, status: %d\n", absolute_path.c_str(), status);
+                printfRed("ext4_owner_set failed for %s, status: %d\n", actual_path.c_str(), status);
             }
             else
             {
                 printfGreen("ext4_owner_set success for %s, uid: %u, gid: %u\n", 
-                           absolute_path.c_str(), current_uid, current_gid);
+                           actual_path.c_str(), current_uid, current_gid);
             }
         }
 
@@ -382,8 +420,8 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
         attrs.filetype = fs::FileTypes::FT_DEVICE;
         attrs._value = file_mode;
 
-        fs::device_file *temp_file = new fs::device_file(attrs, absolute_path);
-        status = ext4_fopen2(&temp_file->lwext4_file_struct, absolute_path.c_str(), flags);
+        fs::device_file *temp_file = new fs::device_file(attrs, actual_path);
+        status = ext4_fopen2(&temp_file->lwext4_file_struct, actual_path.c_str(), flags);
         if (status != EOK)
         {
             delete temp_file;
@@ -401,10 +439,10 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
         attrs.filetype = fs::FileTypes::FT_DIRECT;
         attrs._value = file_mode;
 
-        fs::directory_file *temp_dir = new fs::directory_file(attrs, absolute_path);
+        fs::directory_file *temp_dir = new fs::directory_file(attrs, actual_path);
 
         // 使用 ext4_dir_open 打开目录
-        status = ext4_dir_open(&temp_dir->lwext4_dir_struct, absolute_path.c_str());
+        status = ext4_dir_open(&temp_dir->lwext4_dir_struct, actual_path.c_str());
         if (status != EOK)
         {
             delete temp_dir;
@@ -479,31 +517,6 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
         status = EOK;  // 直接设置为成功
         
         file = temp_file;
-    }
-    else if(type == fs::FileTypes::FT_SYMLINK)
-    {
-     // 对于符号链接，我们需要特殊处理
-        // 如果指定了 O_NOFOLLOW，不应该到达这里（前面已经处理过）
-        // 如果没有指定 O_NOFOLLOW，应该解析符号链接
-        
-        if (flags & O_NOFOLLOW) {
-            // 这种情况前面应该已经处理过，但以防万一
-            printfRed("vfs_openat: O_NOFOLLOW specified but trying to follow symlink %s\n", absolute_path.c_str());
-            return -ELOOP;
-        }
-        
-        // 解析符号链接
-        eastl::string resolved_path;
-        int r = resolve_symlinks(absolute_path, resolved_path);
-        if (r < 0) {
-            printfRed("vfs_openat: failed to resolve symlink %s, error: %d\n", absolute_path.c_str(), r);
-            return r;
-        }
-        
-        printfYellow("vfs_openat: resolved symlink %s -> %s\n", absolute_path.c_str(), resolved_path.c_str());
-        
-        // 递归调用 vfs_openat 来打开解析后的路径
-        return vfs_openat(resolved_path, file, flags, mode);
     }
     else if(type == fs::FileTypes::FT_SOCKET)
     {
@@ -811,6 +824,49 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
     if (f->_attrs.filetype == fs::FileTypes::FT_PIPE) {
         *st = f->_stat;
         printfCyan("vfs_fstat: pipe file, mode: 0%o\n", st->mode);
+        return EOK;
+    }
+
+    // 检查是否是符号链接文件
+    if (f->_attrs.filetype == fs::FileTypes::FT_SYMLINK) {
+        printfCyan("vfs_fstat: symlink file, getting symlink attributes\n");
+
+        struct ext4_inode inode;
+        uint32 inode_num = 0;
+        const char *file_path = f->_path_name.c_str();
+
+        int status = ext4_raw_inode_fill(file_path, &inode_num, &inode);
+        if (status != EOK)
+            return -status;
+
+        struct ext4_sblock *sb = NULL;
+        status = ext4_get_sblock(file_path, &sb);
+        if (status != EOK)
+            return -status;
+
+        st->dev = 0;
+        st->ino = inode_num;
+        st->mode = ext4_inode_get_mode(sb, &inode);
+        st->nlink = ext4_inode_get_links_cnt(&inode);
+
+        // 获取原始 uid 和 gid
+        st->uid = ext4_inode_get_uid(&inode);
+        st->gid = ext4_inode_get_gid(&inode);
+
+        st->rdev = ext4_inode_get_dev(&inode);
+        st->size = inode.size_lo; // 符号链接的大小是目标路径的长度
+        st->blksize = 4096;
+        st->blocks = (st->size + 511) / 512;
+
+        st->st_atime_sec = ext4_inode_get_access_time(&inode);
+        st->st_atime_nsec = (inode.atime_extra >> 2) & 0x3FFFFFFF;
+        st->st_ctime_sec = ext4_inode_get_change_inode_time(&inode);
+        st->st_ctime_nsec = (inode.ctime_extra >> 2) & 0x3FFFFFFF;
+        st->st_mtime_sec = ext4_inode_get_modif_time(&inode);
+        st->st_mtime_nsec = (inode.mtime_extra >> 2) & 0x3FFFFFFF;
+        st->mnt_id = 0;
+
+        printfCyan("vfs_fstat: symlink mode: 0%o, size: %u\n", st->mode, st->size);
         return EOK;
     }
     

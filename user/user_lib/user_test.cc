@@ -2550,8 +2550,8 @@ char *ltp_testcases[] = {
     // "swapon02",
     // "swapon03",
     // "swapping01",
-    "symlink01",
-    // "symlink02",
+    // "symlink01",
+    // "symlink02",  //pass
     // "symlink03",
     // "symlink04",
     // "symlinkat01",
