@@ -29,6 +29,7 @@
 #define EROFS 30 /* Read-only file system */
 #define EMLINK 31 /* Too many links */
 #define ERANGE 34 /* Math result not representable */
+#define ENAMETOOLONG 36 /* File name too long */
 #define ENOSYS          38
 #define ENOTEMPTY 39 /* Directory not empty */
 #define ENODATA 61 /* No data available */

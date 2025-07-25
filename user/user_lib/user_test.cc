@@ -800,8 +800,8 @@ char *ltp_testcases[] = {
     // "f00f",
     // "faccessat01", //完全PASS
     // "faccessat02", // 完全PASS
-    // "faccessat201",
-    // "faccessat202",
+    // "faccessat201",   //symlink?
+    // "faccessat202", //symlink?
     // "fallocate01",    //卡死了
     // "fallocate02",   //完全通过
     // "fallocate03",
@@ -844,7 +844,7 @@ char *ltp_testcases[] = {
     // "fchmod06",
     // "fchmodat01",
     // "fchmodat02",
-    // "fchown01",
+    // "fchown01",//pass
     // "fchown01_16",
     // "fchown02",
     // "fchown02_16",
@@ -858,28 +858,28 @@ char *ltp_testcases[] = {
     // "fchownat02",
     // "fcntl01",
     // "fcntl01_64",
-    // "fcntl02",
-    // "fcntl02_64",
-    // "fcntl03",
-    // "fcntl03_64",
-    // "fcntl04",
-    // "fcntl04_64",
-    // "fcntl05",
+    // "fcntl02", //pass
+    // "fcntl02_64",//pass
+    // "fcntl03",//pass
+    // "fcntl03_64", //pass
+    // "fcntl04", //pass
+    // "fcntl04_64", //pass
+    // "fcntl05",   //pass
     // "fcntl05_64",
     // "fcntl07",
     // "fcntl07_64",
-    // "fcntl08",
-    // "fcntl08_64",
-    // "fcntl09",
+    // "fcntl08",   //pass
+    // "fcntl08_64", //pass
+    "fcntl09",
     // "fcntl09_64",
     // "fcntl10",
     // "fcntl10_64",
     // "fcntl11",
     // "fcntl11_64",
-    // "fcntl12",
-    // "fcntl12_64",
-    // "fcntl13",
-    // "fcntl13_64",
+    // "fcntl12", //pass
+    // "fcntl12_64",//pass
+    // "fcntl13",  //pass
+    // "fcntl13_64", //pass
     // "fcntl14",
     // "fcntl14_64",
     // "fcntl15",

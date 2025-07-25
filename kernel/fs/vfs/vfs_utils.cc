@@ -1214,3 +1214,27 @@ int vfs_copy_file_range(int f_in, off_t offset_in, int f_out, off_t offset_out, 
     
     return (int)total_copied;
 }
+
+
+bool is_lock_conflict(const struct flock &existing_lock, const struct flock &new_lock) {
+    // 如果目标锁类型是解锁（F_UNLCK），就不需要检测冲突
+    if (new_lock.l_type == F_UNLCK)
+        return false;
+
+    // 判断锁的范围是否重叠
+    off_t start1 = existing_lock.l_start;
+    off_t end1 = (existing_lock.l_len == 0) ? LONG_MAX : existing_lock.l_start + existing_lock.l_len;
+    off_t start2 = new_lock.l_start;
+    off_t end2 = (new_lock.l_len == 0) ? LONG_MAX : new_lock.l_start + new_lock.l_len;
+
+    // 如果锁的范围没有交集，直接返回不冲突
+    if (end1 <= start2 || end2 <= start1)
+        return false;
+
+    // 检查锁类型是否冲突
+    if (existing_lock.l_type == F_WRLCK || new_lock.l_type == F_WRLCK)
+        return true; // 写锁和任何锁都冲突
+    if (existing_lock.l_type == F_RDLCK && new_lock.l_type == F_RDLCK)
+        return false; // 读锁之间不冲突
+    return true; // 其他情况下有冲突
+}

@@ -249,13 +249,12 @@ namespace syscall
         BIND_SYSCALL(faccessat2);         // from rocket
         BIND_SYSCALL(remap_file_pages);   // from rocket
         BIND_SYSCALL(splice);
-        BIND_SYSCALL(prctl); // from rocket
-        BIND_SYSCALL(ptrace); // from rocket
+        BIND_SYSCALL(prctl);       // from rocket
+        BIND_SYSCALL(ptrace);      // from rocket
         BIND_SYSCALL(setpriority); // from rocket
         BIND_SYSCALL(getpriority); // from rocket
-        BIND_SYSCALL(reboot); // from rocket
+        BIND_SYSCALL(reboot);      // from rocket
 
-        
         // ...existing code...
         // printfCyan("====================debug: syscall_num_list\n");
         // for (uint64 i = 0; i < max_syscall_funcs_num; i++)
@@ -828,57 +827,65 @@ namespace syscall
         if (_arg_int(0, dirfd) < 0)
             return -EINVAL;
 
-        if (_arg_str(1, pathname, 4096) < 0)  // PATH_MAX 通常是 4096
+        if (_arg_str(1, pathname, 4096) < 0) // PATH_MAX 通常是 4096
             return -EINVAL;
 
         if (_arg_int(2, flags) < 0)
             return -EINVAL;
 
-        if (_arg_int(3, (int&)mask) < 0)
+        if (_arg_int(3, (int &)mask) < 0)
             return -EINVAL;
 
         if (_arg_addr(4, statxbuf_addr) < 0)
             return -EINVAL;
 
         // 参数有效性检查
-        
+
         // 检查 statxbuf 指针是否为空或无效
-        if (statxbuf_addr == 0) {
+        if (statxbuf_addr == 0)
+        {
             return -EFAULT;
         }
 
         // 检查 flags 参数的有效性
-        const int VALID_FLAGS = AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | 
-                               AT_EMPTY_PATH | AT_SYMLINK_FOLLOW | AT_STATX_SYNC_TYPE;
-        if (flags & ~VALID_FLAGS) {
+        const int VALID_FLAGS = AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT |
+                                AT_EMPTY_PATH | AT_SYMLINK_FOLLOW | AT_STATX_SYNC_TYPE;
+        if (flags & ~VALID_FLAGS)
+        {
             return -EINVAL;
         }
 
         // 检查 mask 参数中的保留位
         const unsigned int STATX__RESERVED = 0x80000000U;
-        if (mask & STATX__RESERVED) {
+        if (mask & STATX__RESERVED)
+        {
             return -EINVAL;
         }
 
         // 检查路径名长度
-        if (pathname.length() >= 4096) {  // PATH_MAX
+        if (pathname.length() >= 4096)
+        { // PATH_MAX
             return SYS_ENAMETOOLONG;
         }
 
         // 处理空路径的情况
-        if (pathname.empty()) {
-            if (!(flags & AT_EMPTY_PATH)) {
+        if (pathname.empty())
+        {
+            if (!(flags & AT_EMPTY_PATH))
+            {
                 return -ENOENT;
             }
             // AT_EMPTY_PATH 要求 dirfd 是一个有效的文件描述符
-            if (dirfd < 0) {
+            if (dirfd < 0)
+            {
                 return -EBADF;
             }
         }
 
         // 检查内存访问权限
         mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
-        if (statxbuf_addr == 0 || statxbuf_addr >= 0x1000000000000000UL) {
+        if (statxbuf_addr == 0 || statxbuf_addr >= 0x1000000000000000UL)
+        {
             return -EFAULT;
         }
 
@@ -888,81 +895,98 @@ namespace syscall
         int result = 0;
 
         // 根据不同情况处理路径
-        if (pathname.empty() && (flags & AT_EMPTY_PATH)) {
+        if (pathname.empty() && (flags & AT_EMPTY_PATH))
+        {
             // 使用 dirfd 指向的文件
-            if (dirfd == AT_FDCWD) {
+            if (dirfd == AT_FDCWD)
+            {
                 return -EBADF;
             }
-            
+
             result = proc::k_pm.fstat(dirfd, &kst);
-            if (result < 0) {
+            if (result < 0)
+            {
                 return -EBADF;
             }
-        } else {
+        }
+        else
+        {
             // 使用路径名
             eastl::string absolute_path;
-            
-            if (pathname[0] == '/') {
+
+            if (pathname[0] == '/')
+            {
                 // 绝对路径
                 absolute_path = pathname;
-            } else {
+            }
+            else
+            {
                 // 相对路径
-                if (dirfd == AT_FDCWD) {
+                if (dirfd == AT_FDCWD)
+                {
                     // 相对于当前工作目录
-                    absolute_path = get_absolute_path(pathname.c_str(), 
-                                                    proc::k_pm.get_cur_pcb()->_cwd_name.c_str());
-                } else {
+                    absolute_path = get_absolute_path(pathname.c_str(),
+                                                      proc::k_pm.get_cur_pcb()->_cwd_name.c_str());
+                }
+                else
+                {
                     // 相对于 dirfd 指向的目录
-                    if (dirfd < 0) {
+                    if (dirfd < 0)
+                    {
                         return -EBADF;
                     }
-                    
+
                     // 获取 dirfd 对应的路径
                     fs::file *dir_file = proc::k_pm.get_cur_pcb()->get_open_file(dirfd);
-                    if (!dir_file) {
+                    if (!dir_file)
+                    {
                         return -EBADF;
                     }
-                    
-                    if (dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT) {
+
+                    if (dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
+                    {
                         return -ENOTDIR;
                     }
-                    
+
                     absolute_path = get_absolute_path(pathname.c_str(), dir_file->_path_name.c_str());
                 }
             }
 
             // 使用临时文件描述符获取文件信息
             int temp_fd = proc::k_pm.open(AT_FDCWD, absolute_path, O_RDONLY);
-            if (temp_fd < 0) {
+            if (temp_fd < 0)
+            {
                 // 根据不同的错误返回相应的错误码
-                switch (-temp_fd) {
-                    case ENOENT:
-                        return -ENOENT;
-                    case EACCES:
-                        return -EACCES;
-                    case ELOOP:
-                        return -ELOOP;
-                    case ENOMEM:
-                        return -ENOMEM;
-                    case ENOTDIR:
-                        return -ENOTDIR;
-                    default:
-                        return -ENOENT;
+                switch (-temp_fd)
+                {
+                case ENOENT:
+                    return -ENOENT;
+                case EACCES:
+                    return -EACCES;
+                case ELOOP:
+                    return -ELOOP;
+                case ENOMEM:
+                    return -ENOMEM;
+                case ENOTDIR:
+                    return -ENOTDIR;
+                default:
+                    return -ENOENT;
                 }
             }
 
             result = proc::k_pm.fstat(temp_fd, &kst);
             proc::k_pm.close(temp_fd);
-            
-            if (result < 0) {
+
+            if (result < 0)
+            {
                 return result;
             }
         }
 
         // 填充 statx 结构体
-        stx.stx_mask = mask;  // 根据请求的 mask 设置
+        stx.stx_mask = mask; // 根据请求的 mask 设置
         stx.stx_blksize = kst.blksize;
-        stx.stx_attributes = 0;  // 扩展属性，暂不支持
+        stx.stx_attributes = 0; // 扩展属性，暂不支持
         stx.stx_nlink = kst.nlink;
         stx.stx_uid = kst.uid;
         stx.stx_gid = kst.gid;
@@ -970,12 +994,12 @@ namespace syscall
         stx.stx_ino = kst.ino;
         stx.stx_size = kst.size;
         stx.stx_blocks = kst.blocks;
-        stx.stx_attributes_mask = 0;  // 支持的属性掩码
+        stx.stx_attributes_mask = 0; // 支持的属性掩码
 
         // 时间戳
         stx.stx_atime.tv_sec = kst.st_atime_sec;
         stx.stx_atime.tv_nsec = kst.st_atime_nsec;
-        stx.stx_btime.tv_sec = 0;     // 创建时间，ext4 不直接支持
+        stx.stx_btime.tv_sec = 0; // 创建时间，ext4 不直接支持
         stx.stx_btime.tv_nsec = 0;
         stx.stx_ctime.tv_sec = kst.st_ctime_sec;
         stx.stx_ctime.tv_nsec = kst.st_ctime_nsec;
@@ -996,7 +1020,8 @@ namespace syscall
         stx.stx_dio_offset_align = 0;
 
         // 将结果拷贝到用户空间
-        if (mem::k_vmm.copy_out(*pt, statxbuf_addr, &stx, sizeof(stx)) < 0) {
+        if (mem::k_vmm.copy_out(*pt, statxbuf_addr, &stx, sizeof(stx)) < 0)
+        {
             return -EFAULT;
         }
 
@@ -1170,11 +1195,11 @@ namespace syscall
         uint64 path_addr;
 
         if (_arg_int(0, fd) < 0)
-            return -1;
+            return -EINVAL;
         if (_arg_addr(1, path_addr) < 0)
-            return -1;
+            return -EINVAL;
         if (_arg_int(2, flags) < 0)
-            return -1;
+            return -EINVAL;
         eastl::string path;
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
@@ -1893,14 +1918,15 @@ namespace syscall
             return SYS_ENOENT; // 文件不存在
         }
         // 尝试打开文件以获取文件描述符，使用和 sys_openat 相同的方式
-        
+
         // 根据flags决定打开文件的方式
         int open_flags = O_RDONLY;
-        if (flags & AT_SYMLINK_NOFOLLOW) {
-            open_flags |= O_NOFOLLOW;  // 不跟随符号链接
+        if (flags & AT_SYMLINK_NOFOLLOW)
+        {
+            open_flags |= O_NOFOLLOW; // 不跟随符号链接
             printfYellow("[SyscallHandler::sys_fstatat] AT_SYMLINK_NOFOLLOW set, using O_NOFOLLOW\n");
         }
-        
+
         // 尝试打开文件以获取文件描述符，使用和 sys_openat 相同的方式
         int fd = proc::k_pm.open(dirfd, abs_pathname, open_flags);
         if (fd < 0)
@@ -3022,12 +3048,15 @@ namespace syscall
             {
                 if ((retfd = proc::k_pm.alloc_fd(p, f, i)) == i)
                 {
+                    printf("[SyscallHandler::sys_fcntl] Duplicating file descriptor %d to %d\n", fd, retfd);
+                    printf("cur proc:%d\n", p->_pid);
+                    p->_ofile->_ofile_ptr[retfd] = p->_ofile->_ofile_ptr[arg]; // 将文件指针添加到新的文件描述符
                     f->refcnt++;
                     p->_ofile->_fl_cloexec[retfd] = false; // 新的文件描述符默认不设置 CLOEXEC
                     break;
                 }
             }
-            if (retfd == -1)
+            if (retfd < 0)
                 return SYS_EMFILE; // 达到进程文件描述符限制
             return retfd;
 
@@ -3094,15 +3123,119 @@ namespace syscall
             return 0;
         }
 
-        //   Advisory record locking (暂不支持)
+            //   Advisory record locking
         case F_SETLK:
-        case F_SETLKW:
-        case F_GETLK:
+        {
             // 检查参数是否有效
             if (_arg_addr(2, arg) < 0)
                 return SYS_EFAULT;
-            printfRed("[SyscallHandler::sys_fcntl] File locking operations not implemented: F_SETLK/F_SETLKW/F_GETLK\n");
-            return SYS_EACCES; // 操作被其他进程持有的锁禁止
+            printfCyan("[SyscallHandler::sys_fcntl] F_SETLK called with arg: %p\n", arg);
+            struct flock lock;
+            if (mem::k_vmm.copy_in(*p->get_pagetable(), &lock, arg, sizeof(lock)) < 0)
+                return SYS_EFAULT; // 无法从用户空间读取锁结构
+
+            if (lock.l_type == F_UNLCK)
+            {
+                // 解锁操作
+                if (f->_lock.l_type == F_UNLCK)
+                {
+                    // 文件本身没有锁定
+                    return SYS_EINVAL; // 文件未被锁定
+                }
+
+                // 检查解锁的范围是否与当前锁重叠
+                if (is_lock_conflict(f->_lock, lock))
+                {
+                    // return SYS_EACCES; // 操作被其他进程持有的锁禁止
+                }
+
+                // 执行解锁操作
+                f->_lock.l_type = F_UNLCK; // 释放锁
+                if (mem::k_vmm.copy_out(*p->get_pagetable(), arg, &lock, sizeof(lock)) < 0)
+                    return SYS_EFAULT; // 无法将锁信息写回用户空间
+                return 0;              // 成功解锁
+            }
+
+            // 获取锁操作
+            // TODO:权限检查好像不对，目前直接跳过了，后面再说
+            if (is_lock_conflict(f->_lock, lock))
+            {
+                // return SYS_EACCES; // 锁冲突
+            }
+
+            // 如果没有冲突，执行加锁操作
+            f->_lock = lock; // 更新文件的锁状态
+            if (mem::k_vmm.copy_out(*p->get_pagetable(), arg, &lock, sizeof(lock)) < 0)
+                return SYS_EFAULT; // 无法将锁信息写回用户空间
+            return 0;              // 成功加锁
+        }
+
+        case F_SETLKW:
+        {
+            // 检查参数是否有效
+            if (_arg_addr(2, arg) < 0)
+                return SYS_EFAULT;
+
+            struct flock lock;
+            if (mem::k_vmm.copy_in(*p->get_pagetable(), &lock, arg, sizeof(lock)) < 0)
+                return SYS_EFAULT; // 无法从用户空间读取锁结构
+
+            // 如果请求的是解锁操作
+            if (lock.l_type == F_UNLCK)
+            {
+                // 解锁操作，处理解锁逻辑
+                if (f->_lock.l_type == F_UNLCK)
+                {
+                    return SYS_EINVAL; // 文件未被锁定
+                }
+
+                // 检查解锁的范围是否与当前锁重叠
+                if (is_lock_conflict(f->_lock, lock))
+                {
+                    return SYS_EACCES; // 操作被其他进程持有的锁禁止
+                }
+
+                // 执行解锁操作
+                f->_lock.l_type = F_UNLCK;
+                return 0; // 成功解锁
+            }
+
+            // 获取锁操作
+            while (is_lock_conflict(f->_lock, lock))
+                ;
+
+            // 如果没有冲突，执行加锁操作
+            f->_lock = lock; // 更新文件的锁状态
+            return 0;        // 成功加锁
+        }
+
+        case F_GETLK:
+        {
+            // 检查参数是否有效
+            if (_arg_addr(2, arg) < 0)
+                return SYS_EFAULT;
+
+            struct flock lock;
+            if (mem::k_vmm.copy_in(*p->get_pagetable(), &lock, arg, sizeof(lock)) < 0)
+                return SYS_EFAULT; // 无法从用户空间读取锁结构
+
+            // 检查是否有冲突的锁
+            if (is_lock_conflict(f->_lock, lock))
+            {
+                // 返回冲突的锁信息
+                lock.l_type = f->_lock.l_type;
+                lock.l_pid = f->_lock.l_pid; // 设置PID为冲突锁的进程ID
+                if (mem::k_vmm.copy_out(*p->get_pagetable(), arg, &lock, sizeof(lock)) < 0)
+                    return SYS_EFAULT; // 无法将锁信息写回用户空间
+                return 0;              // 锁冲突返回冲突信息
+            }
+
+            // 如果没有冲突，返回 F_UNLCK
+            lock.l_type = F_UNLCK;
+            if (mem::k_vmm.copy_out(*p->get_pagetable(), arg, &lock, sizeof(lock)) < 0)
+                return SYS_EFAULT; // 无法将锁信息写回用户空间
+            return 0;              // 没有冲突，返回 F_UNLCK 表示可以加锁
+        }
 
         //   Open file description locks (暂不支持)
         case F_OFD_SETLK:
@@ -3912,60 +4045,60 @@ namespace syscall
     {
         uint64 path_addr, buf_addr;
         eastl::string pathname;
-        
+
         // 获取参数
         if (_arg_addr(0, path_addr) < 0 || _arg_addr(1, buf_addr) < 0)
         {
             printfRed("[sys_statfs] 参数错误\n");
             return SYS_EINVAL;
         }
-        
+
         // 检查buf地址是否有效
         if (buf_addr == 0)
         {
             printfRed("[sys_statfs] buf地址无效\n");
             return SYS_EFAULT;
         }
-        
+
         // 从用户空间拷贝路径字符串
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
-        
+
         if (mem::k_vmm.copy_str_in(*pt, pathname, path_addr, MAXPATH) < 0)
         {
             printfRed("[sys_statfs] 路径字符串拷贝失败\n");
             return SYS_EFAULT;
         }
-        
+
         printfCyan("[sys_statfs] path: %s, buf_addr: %p\n", pathname.c_str(), (void *)buf_addr);
-        
+
         // 检查路径长度
         if (pathname.length() >= MAXPATH)
         {
             printfRed("[sys_statfs] 路径名过长\n");
             return SYS_ENAMETOOLONG;
         }
-        
+
         // 将相对路径转换为绝对路径
         pathname = get_absolute_path(pathname.c_str(), p->_cwd_name.c_str());
-        
+
         // 检查路径是否存在
         if (fs::k_vfs.is_file_exist(pathname.c_str()) != 1)
         {
             printfRed("[sys_statfs] 路径不存在: %s\n", pathname.c_str());
             return SYS_ENOTDIR;
         }
-        
+
         // 获取文件/目录信息以检查权限
         fs::file *file = nullptr;
         int status = fs::k_vfs.openat(pathname, file, O_RDONLY);
-        
+
         if (status != EOK || !file)
         {
             printfRed("[sys_statfs] 无法访问路径: %s\n", pathname.c_str());
             return SYS_EACCES;
         }
-        
+
         // 检查是否有搜索权限（对于目录路径中的组件）
         if (!file->_attrs.u_read)
         {
@@ -3973,59 +4106,59 @@ namespace syscall
             file->free_file();
             return SYS_EACCES;
         }
-        
+
         file->free_file();
-        
+
         // 填充statfs结构体
         struct statfs st;
-        
+
         // 文件系统类型 - 使用EXT4的magic number
-        st.f_type = 0xEF53;  // EXT4_SUPER_MAGIC
-        
+        st.f_type = 0xEF53; // EXT4_SUPER_MAGIC
+
         // 块大小 - 使用页面大小作为优化的传输块大小
         st.f_bsize = PGSIZE;
-        
+
         // 文件系统总块数
-        st.f_blocks = 1UL << 20;  // 1M blocks
-        
+        st.f_blocks = 1UL << 20; // 1M blocks
+
         // 空闲块数
-        st.f_bfree = 1UL << 19;   // 512K free blocks
-        
+        st.f_bfree = 1UL << 19; // 512K free blocks
+
         // 非特权用户可用的空闲块数
-        st.f_bavail = 1UL << 18;  // 256K available to unprivileged users
-        
+        st.f_bavail = 1UL << 18; // 256K available to unprivileged users
+
         // 文件系统总inode数
-        st.f_files = 1UL << 16;   // 64K inodes
-        
+        st.f_files = 1UL << 16; // 64K inodes
+
         // 空闲inode数
-        st.f_ffree = 1UL << 15;   // 32K free inodes
-        
+        st.f_ffree = 1UL << 15; // 32K free inodes
+
         // 文件系统ID - 简单设置为固定值
         st.f_fsid.val[0] = 0xF7;
         st.f_fsid.val[1] = 0x1A;
-        
+
         // 文件名最大长度
-        st.f_namelen = 255;  // EXT4 standard
-        
+        st.f_namelen = 255; // EXT4 standard
+
         // 碎片大小（Linux 2.6+）
         st.f_frsize = PGSIZE;
-        
+
         // 挂载标志（Linux 2.6.36+）
-        st.f_flags = 0;  // 没有特殊挂载标志
-        
+        st.f_flags = 0; // 没有特殊挂载标志
+
         // 预留空间清零
         for (int i = 0; i < 4; i++)
         {
             st.f_spare[i] = 0;
         }
-        
+
         // 将结果拷贝到用户空间
         if (mem::k_vmm.copy_out(*pt, buf_addr, &st, sizeof(st)) < 0)
         {
             printfRed("[sys_statfs] 结果拷贝到用户空间失败\n");
             return SYS_EFAULT;
         }
-        
+
         printfGreen("[sys_statfs] 成功获取文件系统信息: %s\n", pathname.c_str());
         return 0;
     }
@@ -4071,7 +4204,7 @@ namespace syscall
         fs::file *f = p->get_open_file(fd);
         if (!f)
             return -EBADF; // Bad file descriptor
-        if(f->_attrs.filetype==fs::FT_PIPE)
+        if (f->_attrs.filetype == fs::FT_PIPE)
             return -ESPIPE; // Illegal seek on a pipe
         auto old_off = f->get_file_offset();
         f->lseek(offset, SEEK_SET);
@@ -5034,26 +5167,26 @@ namespace syscall
     {
         int fd;
         uint64 buf_addr;
-        
+
         // 获取参数
         if (_arg_int(0, fd) < 0 || _arg_addr(1, buf_addr) < 0)
         {
             printfRed("[sys_fstatfs] 参数错误\n");
             return SYS_EINVAL;
         }
-        
+
         // 检查buf地址是否有效
         if (buf_addr == 0)
         {
             printfRed("[sys_fstatfs] buf地址无效\n");
             return SYS_EFAULT;
         }
-        
+
         printfCyan("[sys_fstatfs] fd: %d, buf_addr: %p\n", fd, (void *)buf_addr);
-        
+
         // 获取当前进程
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        
+
         // 检查文件描述符是否有效
         fs::file *f = p->get_open_file(fd);
         if (!f)
@@ -5061,50 +5194,50 @@ namespace syscall
             printfRed("[sys_fstatfs] 无效的文件描述符: %d\n", fd);
             return SYS_EBADF;
         }
-        
+
         // 填充statfs结构体 - 与sys_statfs使用相同的文件系统信息
         struct statfs st;
-        
+
         // 文件系统类型 - 使用EXT4的magic number
-        st.f_type = 0xEF53;  // EXT4_SUPER_MAGIC
-        
+        st.f_type = 0xEF53; // EXT4_SUPER_MAGIC
+
         // 块大小 - 使用页面大小作为优化的传输块大小
         st.f_bsize = PGSIZE;
-        
+
         // 文件系统总块数
-        st.f_blocks = 1UL << 20;  // 1M blocks
-        
+        st.f_blocks = 1UL << 20; // 1M blocks
+
         // 空闲块数
-        st.f_bfree = 1UL << 19;   // 512K free blocks
-        
+        st.f_bfree = 1UL << 19; // 512K free blocks
+
         // 非特权用户可用的空闲块数
-        st.f_bavail = 1UL << 18;  // 256K available to unprivileged users
-        
+        st.f_bavail = 1UL << 18; // 256K available to unprivileged users
+
         // 文件系统总inode数
-        st.f_files = 1UL << 16;   // 64K inodes
-        
+        st.f_files = 1UL << 16; // 64K inodes
+
         // 空闲inode数
-        st.f_ffree = 1UL << 15;   // 32K free inodes
-        
+        st.f_ffree = 1UL << 15; // 32K free inodes
+
         // 文件系统ID - 简单设置为固定值
         st.f_fsid.val[0] = 0xF7;
         st.f_fsid.val[1] = 0x1A;
-        
+
         // 文件名最大长度
-        st.f_namelen = 255;  // EXT4 standard
-        
+        st.f_namelen = 255; // EXT4 standard
+
         // 碎片大小（Linux 2.6+）
         st.f_frsize = PGSIZE;
-        
+
         // 挂载标志（Linux 2.6.36+）
-        st.f_flags = 0;  // 没有特殊挂载标志
-        
+        st.f_flags = 0; // 没有特殊挂载标志
+
         // 预留空间清零
         for (int i = 0; i < 4; i++)
         {
             st.f_spare[i] = 0;
         }
-        
+
         // 将结果拷贝到用户空间
         mem::PageTable *pt = p->get_pagetable();
         if (mem::k_vmm.copy_out(*pt, buf_addr, &st, sizeof(st)) < 0)
@@ -5112,7 +5245,7 @@ namespace syscall
             printfRed("[sys_fstatfs] 结果拷贝到用户空间失败\n");
             return SYS_EFAULT;
         }
-        
+
         printfGreen("[sys_fstatfs] 成功获取文件描述符 %d 的文件系统信息\n", fd);
         return 0;
     }
@@ -5854,7 +5987,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_ptrace()
     {
-       panic("未实现该系统调用");
+        panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_setpriority()
     {

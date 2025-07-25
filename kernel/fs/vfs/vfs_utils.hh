@@ -20,3 +20,4 @@ int vfs_chmod(eastl::string pathname, mode_t mode);
 int vfs_fallocate(fs::file *f,off_t offset, size_t length);
 int vfs_free_file(struct fs::file *file);
 int vfs_copy_file_range(int f_in,off_t offset_in, int f_out,off_t offset_out,size_t size,uint flags);
+bool is_lock_conflict(const struct flock &existing_lock, const struct flock &new_lock);
