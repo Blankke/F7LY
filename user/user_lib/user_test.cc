@@ -1840,7 +1840,7 @@ char *ltp_testcases[] = {
     // "netns_sysfs.sh",
     // "netstat01.sh",
     // "netstress",
-    // "newuname01",
+    // "newuname01", //pass
     // "nextafter01",
     // "nfs_flock",
     // "nfs_flock_dgen",
@@ -3133,7 +3133,7 @@ char *ltp_testcases[] = {
     // "uname01", // 完全PASS
     // "uname02",// 完全PASS
     // "uname04", // 完全PASS
-    // "unlink05",
+    // "unlink05", //symlink?
     // "unlink07",
     // "unlink08",
     // "unlink09",

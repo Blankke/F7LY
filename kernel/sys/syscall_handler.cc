@@ -5997,14 +5997,14 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_setpriority()
     {
-        return uint64();
+        panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_getpriority()
     {
-        return uint64();
+       panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_reboot()
     {
-        return uint64();
+       panic("未实现该系统调用");
     }
 }
