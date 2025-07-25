@@ -482,9 +482,28 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
     }
     else if(type == fs::FileTypes::FT_SYMLINK)
     {
-        // 符号链接文件暂时不支持
-        printfRed("vfs_openat: O_SYMLINK not supported yet\n");
-        return -ENOSYS; // 符号链接文件暂时不支持
+     // 对于符号链接，我们需要特殊处理
+        // 如果指定了 O_NOFOLLOW，不应该到达这里（前面已经处理过）
+        // 如果没有指定 O_NOFOLLOW，应该解析符号链接
+        
+        if (flags & O_NOFOLLOW) {
+            // 这种情况前面应该已经处理过，但以防万一
+            printfRed("vfs_openat: O_NOFOLLOW specified but trying to follow symlink %s\n", absolute_path.c_str());
+            return -ELOOP;
+        }
+        
+        // 解析符号链接
+        eastl::string resolved_path;
+        int r = resolve_symlinks(absolute_path, resolved_path);
+        if (r < 0) {
+            printfRed("vfs_openat: failed to resolve symlink %s, error: %d\n", absolute_path.c_str(), r);
+            return r;
+        }
+        
+        printfYellow("vfs_openat: resolved symlink %s -> %s\n", absolute_path.c_str(), resolved_path.c_str());
+        
+        // 递归调用 vfs_openat 来打开解析后的路径
+        return vfs_openat(resolved_path, file, flags, mode);
     }
     else if(type == fs::FileTypes::FT_SOCKET)
     {

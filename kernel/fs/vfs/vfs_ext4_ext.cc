@@ -474,6 +474,53 @@ int vfs_ext_rm(const char *path) {
     return -r;
 }
 
+int vfs_ext_unlink(const char *path) {
+    if (!path) {
+        return -EFAULT;
+    }
+    
+    int r = 0;
+    union {
+        ext4_dir dir;
+        ext4_file file;
+    } var;
+    
+    // Check if it's a directory
+    r = ext4_dir_open(&(var.dir), path);
+    if (r == 0) {
+        (void) ext4_dir_close(&(var.dir));
+        // According to POSIX, unlink should return EISDIR for directories
+        return -EISDIR;
+    }
+    
+    // Try to remove as a file
+    r = ext4_fremove(path);
+    return -r;
+}
+
+int vfs_ext_rmdir(const char *path) {
+    if (!path) {
+        return -EFAULT;
+    }
+    
+    int r = 0;
+    union {
+        ext4_dir dir;
+        ext4_file file;
+    } var;
+    
+    // Check if it's a directory
+    r = ext4_dir_open(&(var.dir), path);
+    if (r == 0) {
+        (void) ext4_dir_close(&(var.dir));
+        r = ext4_dir_rm(path);
+        return -r;
+    } else {
+        // According to POSIX, rmdir should return ENOTDIR for non-directories
+        return -ENOTDIR;
+    }
+}
+
 int vfs_ext_stat(const char *path, struct kstat *st) {
     panic("未实现");
 #ifdef FS_FIX_COMPLETELY

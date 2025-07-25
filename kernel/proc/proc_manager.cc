@@ -2587,28 +2587,87 @@ namespace proc
         return syscall::SYS_EINVAL;
     }
 
-    /// @brief 从当前工作目录中删除指定路径的文件或目录项。
-    /// @param fd 基准目录的文件描述符，若为 -100 表示以当前工作目录为基准（AT_FDCWD）。其他值暂不支持。
-    /// @param path 要删除的文件或目录的相对路径，不能为空字符串，支持"./"开头的路径格式。
-    /// @param flags 暂未使用的标志位参数，预留以支持 future 的 unlinkat 扩展。
-    /// @return 成功返回 0，失败返回 -1。
-    int ProcessManager::unlink(int fd, eastl::string path, int flags)
+    /// @brief 实现unlinkat系统调用，从文件系统中删除指定路径的文件或目录项。
+    /// @param dirfd 基准目录的文件描述符，AT_FDCWD表示以当前工作目录为基准。
+    /// @param path 要删除的文件或目录的路径，可以是相对路径或绝对路径。
+    /// @param flags 控制操作的标志位，AT_REMOVEDIR表示删除目录。
+    /// @return 成功返回 0，失败返回负的错误码。
+    int ProcessManager::unlink(int dirfd, eastl::string path, int flags)
     {
-
-        if (fd == -100)
-        {                   // atcwd
-            if (path == "") // empty path
-                return -1;
-
-            if (path[0] == '.' && path[1] == '/')
-                path = path.substr(2);
-
-            return fs::k_file_table.unlink(path);
+        // 参数验证
+        if (path.empty()) {
+            return -ENOENT;
         }
-        else
-        {
-            return -1; // current not support other dir, only for cwd
+
+        Pcb *p = get_cur_pcb();
+        if (!p) {
+            return -EFAULT;
         }
+
+        // 处理dirfd参数
+        eastl::string base_dir;
+        if (dirfd == AT_FDCWD) {
+            base_dir = p->_cwd_name;
+        } else {
+            // 验证文件描述符
+            if (dirfd < 0 || dirfd >= NOFILE) {
+                return -EBADF;
+            }
+            
+            auto file = p->get_open_file(dirfd);
+            if (!file) {
+                return -EBADF;
+            }
+            
+            // 确保dirfd指向一个目录
+            // TODO: 添加检查file是否为目录的逻辑
+            // if (!file->is_directory()) {
+            //     return -ENOTDIR;
+            // }
+            
+            base_dir = file->_path_name;
+        }
+
+        // 构造完整路径
+        eastl::string full_path;
+        if (path[0] == '/') {
+            // 绝对路径，忽略base_dir
+            full_path = path;
+        } else {
+            // 相对路径
+            full_path = base_dir;
+            if (full_path.back() != '/') {
+                full_path += "/";
+            }
+            full_path += path;
+        }
+
+        // 规范化路径（处理 "./" 前缀）
+        if (full_path.length() >= 2 && full_path[0] == '.' && full_path[1] == '/') {
+            full_path = full_path.substr(2);
+        }
+
+        // 验证flags参数
+        if (flags & ~AT_REMOVEDIR) {
+            return -EINVAL;
+        }
+
+        // 调用VFS层的相应函数
+        int result;
+        if (flags & AT_REMOVEDIR) {
+            // 删除目录
+            result = vfs_ext_rmdir(full_path.c_str());
+        } else {
+            // 删除文件或符号链接
+            result = vfs_ext_unlink(full_path.c_str());
+        }
+
+        // 如果成功，从文件表中移除
+        if (result == 0) {
+            fs::k_file_table.remove(full_path);
+        }
+
+        return result;
     }
     int ProcessManager::pipe(int *fd, int flags)
     {

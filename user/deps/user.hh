@@ -6,6 +6,11 @@
 #include <stdarg.h>
 #include "types.hh"
 
+// AT_* constants for *at system calls
+#define AT_FDCWD -100
+#define AT_REMOVEDIR 0x200
+#define AT_SYMLINK_NOFOLLOW 0x100
+
 int openat(int dirfd, const char *path, int flags);
 int close(int fd);
 ssize_t read(int fd, void *buf, size_t len);
@@ -23,6 +28,7 @@ int munmap(void *start, size_t len);
 int wait(int *code);
 int sys_linkat(int olddirfd, char *oldpath, int newdirfd, char *newpath, unsigned int flags);
 int sys_unlinkat(int dirfd, char *path, unsigned int flags);
+int unlink(char *path);
 int uname(void *buf);
 int brk(void *addr);
 int sbrk(void *addr);

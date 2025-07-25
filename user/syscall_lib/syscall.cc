@@ -185,10 +185,10 @@ int sys_unlinkat(int dirfd, char *path, unsigned int flags)
 //     return sys_linkat(AT_FDCWD, old_path, AT_FDCWD, new_path, 0);
 // }
 
-// int unlink(char *path)
-// {
-//     return sys_unlinkat(AT_FDCWD, path, 0);
-// }
+int unlink(char *path)
+{
+    return sys_unlinkat(AT_FDCWD, path, 0);
+}
 
 int uname(void *buf)
 {

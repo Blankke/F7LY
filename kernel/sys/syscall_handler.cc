@@ -1893,7 +1893,16 @@ namespace syscall
             return SYS_ENOENT; // 文件不存在
         }
         // 尝试打开文件以获取文件描述符，使用和 sys_openat 相同的方式
-        int fd = proc::k_pm.open(dirfd, abs_pathname, O_RDONLY);
+        
+        // 根据flags决定打开文件的方式
+        int open_flags = O_RDONLY;
+        if (flags & AT_SYMLINK_NOFOLLOW) {
+            open_flags |= O_NOFOLLOW;  // 不跟随符号链接
+            printfYellow("[SyscallHandler::sys_fstatat] AT_SYMLINK_NOFOLLOW set, using O_NOFOLLOW\n");
+        }
+        
+        // 尝试打开文件以获取文件描述符，使用和 sys_openat 相同的方式
+        int fd = proc::k_pm.open(dirfd, abs_pathname, open_flags);
         if (fd < 0)
         {
             printfRed("[SyscallHandler::sys_fstatat] Failed to open file: %s\n", abs_pathname.c_str());
