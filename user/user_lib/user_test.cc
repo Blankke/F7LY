@@ -1989,7 +1989,7 @@ char *ltp_testcases[] = {
     // "pm_include.sh",
     // "pm_sched_domain.py",
     // "pm_sched_mc.py",
-    // "poll01",
+    // "poll01",  //pass
     // "poll02",
     // "posix_fadvise01",
     // "posix_fadvise01_64",
@@ -2013,8 +2013,8 @@ char *ltp_testcases[] = {
     // "prctl10",
     // "pread01",    //pass
     // "pread01_64",  //pass
-    // "pread02",
-    // "pread02_64",
+    // "pread02",           //pass
+    // "pread02_64",    //pass
     // "preadv01",
     // "preadv01_64",
     // "preadv02",
@@ -2030,7 +2030,7 @@ char *ltp_testcases[] = {
     // "prepare_lvm.sh",
     // "print_caps",
     // "proc_sched_rt01",
-    // "proc01",
+    // "proc01",    //pass
     // "process_madvise01",
     // "process_vm_readv02",
     // "process_vm_readv03",
@@ -2069,8 +2069,8 @@ char *ltp_testcases[] = {
     // "pty05",
     // "pty06",
     // "pty07",
-    // "pwrite01",
-    // "pwrite01_64",
+    // "pwrite01",    //pass
+    // "pwrite01_64",    //pass
     // "pwrite02",
     // "pwrite02_64",
     // "pwrite03",
@@ -2101,7 +2101,7 @@ char *ltp_testcases[] = {
     // "read_all",
     // "read01", //貌似可以PASS
     // "read02",   //pass
-    "read03",
+    // "read03",
     // "read04", // 完全PASS
     // "readahead01",
     // "readahead02",
@@ -2111,7 +2111,7 @@ char *ltp_testcases[] = {
     // "readlink03",
     // "readlinkat01",
     // "readlinkat02",
-    // "readv01",
+    // "readv01", //pass
     // "readv02",   //pass
     // "realpath01",
     // "reboot01",
@@ -2229,7 +2229,7 @@ char *ltp_testcases[] = {
     // "sched_tc4",
     // "sched_tc5",
     // "sched_tc6",
-    // "sched_yield01",
+    // "sched_yield01", //pass
     // "sctp_big_chunk",
     // "sctp_ipsec.sh",
     // "sctp_ipsec_vti.sh",
@@ -2514,7 +2514,7 @@ char *ltp_testcases[] = {
     // "stat03_64",
     // "statfs01",
     // "statfs01_64",
-    // "statfs02",
+    "statfs02",
     // "statfs02_64",
     // "statfs03",
     // "statfs03_64",

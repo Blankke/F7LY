@@ -174,7 +174,7 @@ namespace syscall
         BIND_SYSCALL(getsockopt);  // todo
         BIND_SYSCALL(sendmsg);     // todo
         BIND_SYSCALL(brk);
-        BIND_SYSCALL(sbrk);
+        BIND_SYSCALL(readahead); // todo
         BIND_SYSCALL(munmap);
         BIND_SYSCALL(mremap);
         BIND_SYSCALL(clone);
@@ -249,6 +249,13 @@ namespace syscall
         BIND_SYSCALL(faccessat2);         // from rocket
         BIND_SYSCALL(remap_file_pages);   // from rocket
         BIND_SYSCALL(splice);
+        BIND_SYSCALL(prctl); // from rocket
+        BIND_SYSCALL(ptrace); // from rocket
+        BIND_SYSCALL(setpriority); // from rocket
+        BIND_SYSCALL(getpriority); // from rocket
+        BIND_SYSCALL(reboot); // from rocket
+
+        
         // ...existing code...
         // printfCyan("====================debug: syscall_num_list\n");
         // for (uint64 i = 0; i < max_syscall_funcs_num; i++)
@@ -1237,27 +1244,9 @@ namespace syscall
         long result = proc::k_pm.brk(n);
         return result;
     }
-    uint64 SyscallHandler::sys_sbrk()
+    uint64 SyscallHandler::sys_readahead()
     {
-        uint64 n;
-        // 此处是内存扩展到n地址
-        if (_arg_addr(0, n) < 0)
-        {
-            printfRed("[SyscallHandler::sys_brk] Error fetching brk address\n");
-            return -1;
-        }
-
-        // 如果参数为 0，返回当前的 program break（查询模式）
-        if (n == 0)
-        {
-            uint64 current_brk = proc::k_pm.get_cur_pcb()->_sz;
-            printf("[SyscallHandler::sys_brk] brk(0) = 0x%x (query current break)\n", current_brk);
-            return current_brk;
-        }
-
-        // 设置新的 program break
-        long result = proc::k_pm.sbrk(n);
-        return result;
+        panic("未实现");
     }
     uint64 SyscallHandler::sys_munmap()
     {
@@ -3785,7 +3774,8 @@ namespace syscall
         uint64 path_addr, buf_addr;
         // 尝试获取两个参数
         if (_arg_addr(0, path_addr) < 0 || _arg_addr(1, buf_addr) < 0)
-            return -1;
+            return -EINVAL;
+        printfCyan("[sys_statfs] path_addr: %p, buf_addr: %p\n", (void *)path_addr, (void *)buf_addr);
         statfs st;
         // 根据需求填写字段
         st.f_type = 0x2011BAB0;
@@ -3843,13 +3833,14 @@ namespace syscall
         int offset;
         if (_arg_fd(0, &fd, nullptr) < 0 || _arg_addr(1, buf) < 0 ||
             _arg_addr(2, count) < 0 || _arg_int(3, offset) < 0)
-            return -1;
+            return -EINVAL;
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         fs::file *f = p->get_open_file(fd);
         if (!f)
-            return -1;
-
+            return -EBADF; // Bad file descriptor
+        if(f->_attrs.filetype==fs::FT_PIPE)
+            return -ESPIPE; // Illegal seek on a pipe
         auto old_off = f->get_file_offset();
         f->lseek(offset, SEEK_SET);
 
@@ -5542,5 +5533,25 @@ namespace syscall
     uint64 SyscallHandler::sys_splice()
     {
         panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_prctl()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_ptrace()
+    {
+       panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_setpriority()
+    {
+        return uint64();
+    }
+    uint64 SyscallHandler::sys_getpriority()
+    {
+        return uint64();
+    }
+    uint64 SyscallHandler::sys_reboot()
+    {
+        return uint64();
     }
 }

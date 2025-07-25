@@ -152,7 +152,7 @@ namespace proc
 			// 	// printf("%c", q.front());
 			// }
 			// // printf("\n");
-			// // printfMagenta("it is a pipe file\n");
+			// printfMagenta("it is a pipe file\n");
 			int i;
 			Pcb *pr = k_pm.get_cur_pcb(); // 获取当前运行进程的 PCB
 			char ch;

@@ -14,6 +14,7 @@ namespace fs{
 
 	class File;
 	class pipe_file;
+	class FifoManager;
 	
 }
 namespace proc
@@ -29,6 +30,7 @@ namespace proc
 		class Pipe
 		{
 			friend ProcessManager;
+			friend class fs::FifoManager; // 允许 FifoManager 访问私有成员
 		private:
 			SpinLock _lock;
 			// 使用动态分配的循环缓冲区

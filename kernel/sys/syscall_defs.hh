@@ -55,6 +55,7 @@ namespace syscall
         SYS_sendfile = 71,
         SYS_pselect6 = 72, // form tsh 
         SYS_ppoll = 73,
+        SYS_splice =76,
         SYS_readlinkat = 78,
         SYS_fstatat = 79,
         SYS_fstat = 80,
@@ -76,6 +77,7 @@ namespace syscall
         SYS_clock_getres = 114,      // from rocket
         SYS_clock_nanosleep = 115,
         SYS_syslog = 116,
+        SYS_ptrace =117, // from rocket
         SYS_sched_setscheduler = 119, // from rocket
         SYS_sched_getscheduler = 120, // from rocket
         SYS_sched_getparam = 121,    // from rocket
@@ -93,6 +95,9 @@ namespace syscall
         SYS_rt_sigtimedwait = 137,
         SYS_rt_sigqueueinfo = 138,   // from rocket
         SYS_rt_sigreturn = 139,
+        SYS_setpriority= 140,
+        SYS_getpriority= 141,
+        SYS_reboot=142,
         SYS_setregrid = 143,         // from rocket
         SYS_setgid = 144,
         SYS_setreuid = 145,          // from rocket
@@ -114,6 +119,7 @@ namespace syscall
         SYS_setdomainname = 162,     // from rocket
         SYS_getrusage = 165, // form tsh 
         SYS_umask = 166,             // from rocket
+        SYS_prctl = 167,            // from rocket
         SYS_gettimeofday = 169,
         SYS_adjtimex = 171,          // from rocket
         SYS_getpid = 172,
@@ -143,7 +149,7 @@ namespace syscall
         SYS_shutdown_socket = 210,   // from rocket
         SYS_sendmsg = 211,     // form tsh 
         SYS_recvmsg = 212,           // from rocket
-        SYS_sbrk = 213,
+        SYS_readahead = 213,
         SYS_brk = 214,
         SYS_munmap = 215,
         SYS_mremap = 216,
@@ -172,7 +178,6 @@ namespace syscall
         SYS_close_range = 436,       // from rocket
         SYS_openat2 = 437,           // from rocket
         SYS_faccessat2 = 439,        // from rocket
-        SYS_splice = 440,           // from rocket
         SYS_poweroff = 2025
     };
 

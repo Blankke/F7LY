@@ -7,6 +7,7 @@
 #include "fs/vfs/file/device_file.hh"
 #include "fs/vfs/file/pipe_file.hh"
 #include "fs/vfs/file/directory_file.hh"
+#include "fs/vfs/fifo_manager.hh"
 #include "proc_manager.hh"  // 用于访问当前进程的umask
 #include "fs/lwext4/ext4.hh"
 #include <EASTL/vector.h>
@@ -420,19 +421,18 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
         // 如果没有进程打开该 FIFO 进行读取，应该返回 ENXIO 错误
         if ((flags & O_NONBLOCK) && (access_mode == O_WRONLY)) {
             // 检查是否有其他进程已经打开了这个 FIFO 进行读取
-            // 目前假设没有其他读者，直接返回 ENXIO
-            // TODO: 实现真正的 FIFO 读者检查机制
-            printfRed("vfs_openat: O_NONBLOCK | O_WRONLY on FIFO %s with no readers\n", absolute_path.c_str());
-            return -ENXIO; // 没有设备或地址
+            if (!fs::k_fifo_manager.has_readers(absolute_path)) {
+                printfRed("vfs_openat: O_NONBLOCK | O_WRONLY on FIFO %s with no readers\n", absolute_path.c_str());
+                return -ENXIO; // 没有设备或地址
+            }
         }
 
         fs::FileAttrs attrs;
         attrs.filetype = fs::FileTypes::FT_PIPE;  
         attrs._value = file_mode & 0777; // 只保留权限位
 
-        // 对于 FIFO，需要创建一个 Pipe 对象
-        // FIFO 在文件系统中存在，但数据传输使用内存缓冲区
-        proc::ipc::Pipe *pipe = new proc::ipc::Pipe();
+        // 对于 FIFO，使用全局管理器获取或创建 Pipe 对象
+        proc::ipc::Pipe *pipe = fs::k_fifo_manager.get_or_create_fifo(absolute_path);
         
         bool is_write_end = false;
         if (access_mode == O_WRONLY) {
@@ -444,7 +444,11 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
             is_write_end = false;
         }
         
-        fs::pipe_file *temp_file = new fs::pipe_file(attrs, pipe, is_write_end);
+        // 创建带有路径信息的 pipe_file
+        fs::pipe_file *temp_file = new fs::pipe_file(attrs, pipe, is_write_end, absolute_path);
+        
+        // 注册到全局管理器
+        fs::k_fifo_manager.open_fifo(absolute_path, is_write_end);
         
         printfCyan("vfs_openat: Created FIFO/pipe file: %s, write_end: %d, mode: 0%o\n", 
                    absolute_path.c_str(), is_write_end, temp_file->_stat.mode);

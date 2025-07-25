@@ -37,6 +37,7 @@
 #include "fs/vfs/vfs_ext4_ext.hh"
 #include "fs/vfs/virtual_fs.hh"
 #include "shm/shm_manager.hh"
+#include "fs/vfs/fifo_manager.hh"
 // 注意华科的main函数可能有问题, 注意多核初始化
 void main()
 {
@@ -97,7 +98,7 @@ void main()
     fs::k_file_table.init(); // 初始化文件池
     vfs_ext4_init();      // 初始化lwext4
     fs::k_vfs.dir_init(); // 初始化虚拟文件系统目录
-    
+    fs::k_fifo_manager.init(); // 初始化 FIFO 管理器
     // 初始化 loop 设备控制器
     dev::LoopControlDevice::init_loop_control();
         /************************* */

@@ -2,6 +2,7 @@
 #include "proc/pipe.hh"
 #include "printer.hh"
 #include "sys/syscall_defs.hh"
+#include <EASTL/string.h>
 namespace fs
 {
 	class pipe_file : public file
@@ -10,8 +11,10 @@ namespace fs
 		uint64 _off = 0;
 		proc::ipc::Pipe *_pipe;
 		bool is_write = false;//读端还是写端
+		eastl::string _fifo_path; // 用于 FIFO 文件的路径跟踪
 	public:
-		pipe_file(FileAttrs attrs, Pipe *pipe_, bool is_write) : file(attrs), _pipe(pipe_), is_write(is_write)
+		pipe_file(FileAttrs attrs, Pipe *pipe_, bool is_write, const eastl::string& fifo_path = "") : 
+			file(attrs), _pipe(pipe_), is_write(is_write), _fifo_path(fifo_path)
 		{
 			new (&_stat) Kstat(_pipe);
 			// 设置正确的文件模式：FIFO 类型 + 权限位
@@ -29,10 +32,10 @@ namespace fs
 			dup(); 
 		}
 
-		~pipe_file()
-		{
-			_pipe->close(is_write);
-		};
+		~pipe_file();
+
+		// 设置 FIFO 路径
+		void set_fifo_path(const eastl::string& path) { _fifo_path = path; }
 
 		/// @note pipe read 没有偏移的概念
 		long read(uint64 buf, size_t len, long off, bool upgrade) override

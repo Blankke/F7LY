@@ -67,7 +67,7 @@ namespace syscall
         uint64 sys_umount2();
         uint64 sys_mount();
         uint64 sys_brk();
-        uint64 sys_sbrk();
+        uint64 sys_readahead();
         uint64 sys_munmap();
         uint64 sys_mmap();
         uint64 sys_times();
@@ -216,6 +216,11 @@ namespace syscall
         uint64 sys_faccessat2();
         uint64 sys_remap_file_pages();
         uint64 sys_splice();
+        uint64 sys_prctl();
+        uint64 sys_ptrace();
+        uint64 sys_setpriority();
+        uint64 sys_getpriority();
+        uint64 sys_reboot();
     };
 
     extern SyscallHandler k_syscall_handler;
