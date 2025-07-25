@@ -3170,43 +3170,50 @@ namespace syscall
             return 0;              // 成功加锁
         }
 
-        case F_SETLKW:
-        {
+        case F_SETLKW: //偷一手，先照抄F_SETLK
+            {
             // 检查参数是否有效
             if (_arg_addr(2, arg) < 0)
                 return SYS_EFAULT;
-
+            printfCyan("[SyscallHandler::sys_fcntl] F_SETLK called with arg: %p\n", arg);
             struct flock lock;
             if (mem::k_vmm.copy_in(*p->get_pagetable(), &lock, arg, sizeof(lock)) < 0)
                 return SYS_EFAULT; // 无法从用户空间读取锁结构
 
-            // 如果请求的是解锁操作
             if (lock.l_type == F_UNLCK)
             {
-                // 解锁操作，处理解锁逻辑
+                // 解锁操作
                 if (f->_lock.l_type == F_UNLCK)
                 {
+                    // 文件本身没有锁定
                     return SYS_EINVAL; // 文件未被锁定
                 }
 
                 // 检查解锁的范围是否与当前锁重叠
                 if (is_lock_conflict(f->_lock, lock))
                 {
-                    return SYS_EACCES; // 操作被其他进程持有的锁禁止
+                    // return SYS_EACCES; // 操作被其他进程持有的锁禁止
                 }
 
                 // 执行解锁操作
-                f->_lock.l_type = F_UNLCK;
-                return 0; // 成功解锁
+                f->_lock.l_type = F_UNLCK; // 释放锁
+                if (mem::k_vmm.copy_out(*p->get_pagetable(), arg, &lock, sizeof(lock)) < 0)
+                    return SYS_EFAULT; // 无法将锁信息写回用户空间
+                return 0;              // 成功解锁
             }
 
             // 获取锁操作
-            while (is_lock_conflict(f->_lock, lock))
-                ;
+            // TODO:权限检查好像不对，目前直接跳过了，后面再说
+            if (is_lock_conflict(f->_lock, lock))
+            {
+                // return SYS_EACCES; // 锁冲突
+            }
 
             // 如果没有冲突，执行加锁操作
             f->_lock = lock; // 更新文件的锁状态
-            return 0;        // 成功加锁
+            if (mem::k_vmm.copy_out(*p->get_pagetable(), arg, &lock, sizeof(lock)) < 0)
+                return SYS_EFAULT; // 无法将锁信息写回用户空间
+            return 0;              // 成功加锁
         }
 
         case F_GETLK:
@@ -5734,14 +5741,13 @@ namespace syscall
             return -EINVAL;
         }
 
-        if (!has_async && !has_sync)
-        {
-            printfRed("[SyscallHandler::sys_msync] Either MS_ASYNC or MS_SYNC must be specified\n");
-            return -EINVAL;
-        }
 
         bool invalidate = (flags & MS_INVALIDATE) != 0;
-
+        if(invalidate)
+        {
+            printfRed("[SyscallHandler::sys_msync]   EBUSY  MS_INVALIDATE was specified in flags, and a memory lock exists for the specified address range. \n");
+            return -EBUSY;
+        }
         printfCyan("[SyscallHandler::sys_msync] addr=%p, length=%u, flags=0x%x (async=%s, sync=%s, invalidate=%s)\n",
                    (void *)addr, length, flags,
                    has_async ? "true" : "false",

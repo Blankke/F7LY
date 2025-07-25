@@ -870,10 +870,10 @@ char *ltp_testcases[] = {
     // "fcntl07_64",
     // "fcntl08",   //pass
     // "fcntl08_64", //pass
-    "fcntl09",
-    // "fcntl09_64",
-    // "fcntl10",
-    // "fcntl10_64",
+    // "fcntl09",   //pass
+    // "fcntl09_64",   //pass
+    // "fcntl10",   //pass
+    // "fcntl10_64", //pass
     // "fcntl11",
     // "fcntl11_64",
     // "fcntl12", //pass
@@ -969,7 +969,7 @@ char *ltp_testcases[] = {
     // "fork13",
     // "fork14",
     // "fou01.sh",
-    // "fpathconf01",
+    // "fpathconf01",  //pass
     // "fptest01",
     // "fptest02",
     // "frag",
@@ -1106,9 +1106,9 @@ char *ltp_testcases[] = {
     // "fsstress",
     // "fstat02",
     // "fstat02_64",
-    // "fstat03",
-    // "fstat03_64",
-    // "fstatat01",
+    // "fstat03", //pass
+    // "fstat03_64",//pass
+    // "fstatat01",  //pass
     // "fstatfs01",
     // "fstatfs01_64",
     // "fstatfs02",
@@ -1814,9 +1814,9 @@ char *ltp_testcases[] = {
     // "msgsnd05",
     // "msgsnd06",
     // "msgstress01",
-    // "msync01",
-    // "msync02",
-    // "msync03",
+    // "msync01",  //pass
+    // "msync02",  //pass
+    // "msync03",   //pass
     // "msync04",
     // "mtest01",
     // "munlock01",
