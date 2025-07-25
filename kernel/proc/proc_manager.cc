@@ -892,11 +892,11 @@ namespace proc
             printf("\n");
         }
     }
-    /// @brief 
-    /// @param p 
-    /// @param f 
-    /// @param fd 
-    /// @return 
+    /// @brief
+    /// @param p
+    /// @param f
+    /// @param fd
+    /// @return
     int ProcessManager::alloc_fd(Pcb *p, fs::file *f, int fd)
     {
         // 越界检查
@@ -909,7 +909,7 @@ namespace proc
         }
         p->_ofile->_ofile_ptr[fd] = f;
         p->_ofile->_fl_cloexec[fd] = false; // 默认不设置 CLOEXEC
-        
+
         return fd;
     }
 
@@ -1709,7 +1709,7 @@ namespace proc
         int fd = alloc_fd(p, file);
         if (fd < 0)
         {
-            printfRed("[open] alloc_fd failed for path: %s,pid:%d\n", path.c_str(),p->_pid);
+            printfRed("[open] alloc_fd failed for path: %s,pid:%d\n", path.c_str(), p->_pid);
             return -EMFILE; // 分配文件描述符失败
         }
         // 下面这个就是套的第二层，这一层的意义似乎只在于分配文件描述符
@@ -1719,8 +1719,8 @@ namespace proc
             printfRed("[open] failed for path: %s\n", path.c_str());
             return err; // 文件不存在或打开失败
         }
-        p->_ofile->_ofile_ptr[fd]->_lock.l_pid= p->_pid; // 设置文件描述符的锁定进程 ID
-        return fd; // 返回分配的文件描述符
+        p->_ofile->_ofile_ptr[fd]->_lock.l_pid = p->_pid; // 设置文件描述符的锁定进程 ID
+        return fd;                                        // 返回分配的文件描述符
     }
 
     int ProcessManager::close(int fd)
@@ -2749,11 +2749,16 @@ namespace proc
         Pcb *p = get_cur_pcb();
         if (!p)
         {
+            printfRed("[unlink] No current process found\n");
             return -EFAULT;
         }
-
         // 处理dirfd参数
         eastl::string base_dir;
+        if (path[0] == '.')
+        {
+            base_dir = p->_cwd_name;
+            path = path.substr(2); // 去掉"./"前缀
+        }
         if (dirfd == AT_FDCWD)
         {
             base_dir = p->_cwd_name;

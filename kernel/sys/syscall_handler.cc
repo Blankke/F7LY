@@ -1204,8 +1204,8 @@ namespace syscall
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
         if (mem::k_vmm.copy_str_in(*pt, path, path_addr, 100) < 0)
-            return -1;
-
+            return -EFAULT;
+        printfCyan("[sys_unlinkat] : fd: %d, path: %s, flags: %d\n", fd, path.c_str(), flags);
         int res = proc::k_pm.unlink(fd, path, flags);
         return res;
     }
