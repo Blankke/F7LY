@@ -1699,11 +1699,11 @@ char *ltp_testcases[] = {
     // "mlockall03",
     // "mmap001",   //pass
     // "mmap01",
-    // "mmap02",
+    // "mmap02",   //mmapfile->F?
     // "mmap03",
     // "mmap04",
     // "mmap05",
-    // "mmap06",
+    "mmap06",
     // "mmap08",
     // "mmap09",
     // "mmap1",

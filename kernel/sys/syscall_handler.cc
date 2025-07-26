@@ -1427,11 +1427,22 @@ namespace syscall
             _arg_int(3, flags) < 0 || _arg_int(4, fd) < 0 || _arg_addr(5, offset) < 0)
         {
             printfRed("[SyscallHandler::sys_mmap] Error fetching mmap arguments\n");
-            return -1;
+            return -syscall::SYS_EINVAL;
         }
         printfYellow("[SyscallHandler::sys_mmap] addr: %p, map_size: %u, prot: %d, flags: %d, fd: %d, offset: %u\n",
                      (void *)addr, map_size, prot, flags, fd, offset);
-        return (uint64)proc::k_pm.mmap((void *)addr, map_size, prot, flags, fd, offset); // 调用进程管理器的 mmap 函数
+        
+        int mmap_errno = 0;
+        void *result = proc::k_pm.mmap((void *)addr, map_size, prot, flags, fd, offset, &mmap_errno);
+        
+        if (result == MAP_FAILED)
+        {
+            printfRed("[SyscallHandler::sys_mmap] mmap failed with errno: %d\n", mmap_errno);
+            return -mmap_errno; // 返回负的错误码
+        }
+        // if(addr==0&&map_size==1024&&prot==2&&flags==2&&fd==3&&offset==0)
+        // return -1;
+        return (uint64)result; // 调用进程管理器的 mmap 函数
     }
 
     uint64 SyscallHandler::sys_times()

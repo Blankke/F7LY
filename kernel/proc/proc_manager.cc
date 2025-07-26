@@ -1916,6 +1916,23 @@ namespace proc
             return syscall::SYS_EINVAL; // 无效的保护标志
         }
 
+        // 检查地址和长度的合理性
+        if (addr != nullptr && (uint64)addr >= MAXVA)
+        {
+            return syscall::SYS_ENOMEM; // 地址超出虚拟地址空间
+        }
+
+        // 检查在32位架构下是否会发生溢出（针对EOVERFLOW错误）
+        if (sizeof(void *) == 4) // 32位架构
+        {
+            uint64 pages_for_length = (length + PGSIZE - 1) / PGSIZE;
+            uint64 pages_for_offset = offset / PGSIZE;
+            if (pages_for_length + pages_for_offset > UINT32_MAX / PGSIZE)
+            {
+                return syscall::SYS_EOVERFLOW;
+            }
+        }
+
         // 检查匿名映射
         bool is_anonymous = (flags & MAP_ANONYMOUS) || (fd == -1);
 
@@ -1970,17 +1987,28 @@ namespace proc
     /// @param flags 映射标志(MAP_SHARED|MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS等)
     /// @param fd 文件描述符，匿名映射时为-1
     /// @param offset 文件偏移量
+    /// @param errno 错误码输出参数
     /// @return 成功返回映射地址，失败返回MAP_FAILED
-    void *ProcessManager::mmap(void *addr, int length, int prot, int flags, int fd, int offset)
+    void *ProcessManager::mmap(void *addr, int length, int prot, int flags, int fd, int offset, int *errno)
     {
         printfYellow("[mmap] addr: %p, length: %d, prot: %d, flags: %d, fd: %d, offset: %d\n",
                      addr, length, prot, flags, fd, offset);
+
+        // 初始化错误码
+        if (errno != nullptr)
+        {
+            *errno = 0;
+        }
 
         // 参数验证
         int validation_result = validate_mmap_params(addr, length, prot, flags, fd, offset);
         if (validation_result != 0)
         {
             printfRed("[mmap] Parameter validation failed: %d\n", validation_result);
+            if (errno != nullptr)
+            {
+                *errno = -validation_result; // 转换为正数错误码
+            }
             return MAP_FAILED;
         }
 
@@ -2013,6 +2041,10 @@ namespace proc
                 p->_ofile->_ofile_ptr[fd] == nullptr)
             {
                 printfRed("[mmap] Invalid file descriptor: %d\n", fd);
+                if (errno != nullptr)
+                {
+                    *errno = syscall::SYS_EBADF;
+                }
                 return MAP_FAILED;
             }
 
@@ -2020,19 +2052,51 @@ namespace proc
             if (f->_attrs.filetype != fs::FileTypes::FT_NORMAL)
             {
                 printfRed("[mmap] File descriptor does not refer to regular file\n");
+                if (errno != nullptr)
+                {
+                    *errno = syscall::SYS_EACCES;
+                }
                 return MAP_FAILED;
             }
 
             // 检查文件访问权限
             if (prot & PROT_READ)
             {
-                // 文件必须可读
-                // TODO: 检查文件打开模式是否支持读取
+                // TODO: 检查文件是否以可读模式打开
+                // 如果文件未以读模式打开，应返回EACCES
             }
-            if ((prot & PROT_WRITE) && (flags & MAP_SHARED))
+
+            if ((prot & PROT_WRITE))
             {
-                // 共享写映射要求文件以读写模式打开
-                // TODO: 检查文件打开模式是否支持写入
+                // TODO: 检查文件是否以可写模式打开
+                // 如果文件未以写模式打开，应返回EACCES
+            }
+
+            // 检查文件是否被锁定
+            // TODO: 如果文件被锁定，应返回EAGAIN
+            // if (file_is_locked(vfile)) {
+            //     if (errno != nullptr) {
+            //         *errno = syscall::SYS_EAGAIN;
+            //     }
+            //     return MAP_FAILED;
+            // }
+
+            // 检查文件系统是否支持内存映射
+            // TODO: 如果底层文件系统不支持内存映射，应返回ENODEV
+
+            // 检查系统文件描述符限制
+            // TODO: 如果系统达到文件描述符限制，应返回ENFILE
+
+            // 检查是否请求了PROT_EXEC但文件系统挂载时使用了noexec
+            if (prot & PROT_EXEC)
+            {
+                // TODO: 检查文件系统挂载选项
+                // if (filesystem_mounted_noexec(vfile)) {
+                //     if (errno != nullptr) {
+                //         *errno = syscall::SYS_EPERM;
+                //     }
+                //     return MAP_FAILED;
+                // }
             }
 
             vfile = static_cast<fs::normal_file *>(f);
@@ -2048,8 +2112,30 @@ namespace proc
         if (aligned_length + p->_sz > MAXVA - PGSIZE)
         {
             printfRed("[mmap] Would exceed virtual address space\n");
+            if (errno != nullptr)
+            {
+                *errno = syscall::SYS_ENOMEM;
+            }
             return MAP_FAILED;
         }
+
+        // 检查是否有足够的内存可用
+        // TODO: 检查系统是否有足够的物理内存
+        // if (!enough_memory_available(aligned_length)) {
+        //     if (errno != nullptr) {
+        //         *errno = syscall::SYS_ENOMEM;
+        //     }
+        //     return MAP_FAILED;
+        // }
+
+        // 检查进程的RLIMIT_DATA限制
+        // TODO: 检查进程数据段大小限制
+        // if (would_exceed_data_limit(p, aligned_length)) {
+        //     if (errno != nullptr) {
+        //         *errno = syscall::SYS_ENOMEM;
+        //     }
+        //     return MAP_FAILED;
+        // }
 
         // 查找空闲VMA
         int vma_idx = -1;
@@ -2065,6 +2151,10 @@ namespace proc
         if (vma_idx == -1)
         {
             printfRed("[mmap] No available VMA slots\n");
+            if (errno != nullptr)
+            {
+                *errno = syscall::SYS_ENOMEM; // 进程映射数量超出限制
+            }
             return MAP_FAILED;
         }
 
@@ -2075,12 +2165,20 @@ namespace proc
             if (addr == nullptr)
             {
                 printfRed("[mmap] MAP_FIXED requires non-null addr\n");
+                if (errno != nullptr)
+                {
+                    *errno = syscall::SYS_EINVAL;
+                }
                 return MAP_FAILED;
             }
 
             if (is_page_align((uint64)addr) == false)
             {
                 printfRed("[mmap] MAP_FIXED address must be page aligned\n");
+                if (errno != nullptr)
+                {
+                    *errno = syscall::SYS_EINVAL;
+                }
                 return MAP_FAILED;
             }
             map_addr = (uint64)addr;
@@ -2099,6 +2197,10 @@ namespace proc
                         if (!(new_end <= existing_start || map_addr >= existing_end))
                         {
                             printfRed("[mmap] MAP_FIXED_NOREPLACE: address range conflicts\n");
+                            if (errno != nullptr)
+                            {
+                                *errno = syscall::SYS_EEXIST;
+                            }
                             return MAP_FAILED;
                         }
                     }
@@ -2602,7 +2704,8 @@ namespace proc
                 if (!(flags & MREMAP_FIXED))
                 {
                     // 寻找合适的地址
-                    target_addr = mmap(nullptr, new_size, vma.prot, vma.flags, vma.vfd, vma.offset);
+                    int mmap_errno = 0;
+                    target_addr = mmap(nullptr, new_size, vma.prot, vma.flags, vma.vfd, vma.offset, &mmap_errno);
                     if (target_addr == MAP_FAILED)
                     {
                         // ENOMEM: 找不到合适的地址
@@ -2617,8 +2720,9 @@ namespace proc
                     munmap(target_addr, new_size);
 
                     // 在指定地址创建新映射
+                    int mmap_errno2 = 0;
                     void *mapped_addr = mmap(target_addr, new_size, vma.prot,
-                                             vma.flags | MAP_FIXED, vma.vfd, vma.offset);
+                                             vma.flags | MAP_FIXED, vma.vfd, vma.offset, &mmap_errno2);
                     if (mapped_addr != target_addr)
                     {
                         // ENOMEM: 无法在指定地址映射
@@ -2683,8 +2787,9 @@ namespace proc
                 {
                     // 类似上面的移动逻辑
                     munmap(new_address, new_size);
+                    int mmap_errno3 = 0;
                     void *mapped_addr = mmap(new_address, new_size, vma.prot,
-                                             vma.flags | MAP_FIXED, vma.vfd, vma.offset);
+                                             vma.flags | MAP_FIXED, vma.vfd, vma.offset, &mmap_errno3);
                     if (mapped_addr != new_address)
                     {
                         // ENOMEM: 无法在指定地址映射

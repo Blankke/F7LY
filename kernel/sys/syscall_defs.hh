@@ -255,6 +255,7 @@ namespace syscall
     constexpr int SYS_ERANGE = -34;         // 数学结果不可表示（如溢出）
     constexpr int SYS_EDEADLK = -35;        // 资源死锁可能发生（如线程锁顺序问题）
     constexpr int SYS_ENAMETOOLONG = -36;   // 文件名过长（超出文件系统限制）
+    constexpr int SYS_EOVERFLOW = -75;      // 值过大导致溢出
     constexpr int SYS_ENOLCK = -37;         // 无可用记录锁（文件锁资源耗尽）
     constexpr int SYS_ENOSYS = -38;         // 无效的系统调用号（如不存在的 syscall）
     constexpr int SYS_ENOTEMPTY = -39;      // 目录非空（如删除非空目录）
