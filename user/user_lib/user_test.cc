@@ -1703,11 +1703,11 @@ char *ltp_testcases[] = {
     // "mmap03",
     // "mmap04",
     // "mmap05",
-    "mmap06",
-    // "mmap08",
-    // "mmap09",
+    // "mmap06",
+    // "mmap08", //pass
+    // "mmap09",  //pass
     // "mmap1",
-    // "mmap10",
+    "mmap10",
     // "mmap11",
     // "mmap12",
     // "mmap13",

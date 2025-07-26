@@ -1406,13 +1406,20 @@ namespace syscall
     uint64 SyscallHandler::sys_munmap()
     {
         u64 start;
-        int size;
-        if (_arg_addr(0, start) < 0 || _arg_int(1, size) < 0)
+        size_t size;
+        if (_arg_addr(0, start) < 0 || _arg_addr(1, size) < 0)
         {
             printfRed("[SyscallHandler::sys_munmap] Error fetching munmap arguments\n");
-            return -1;
+            return -EINVAL;
         }
-        return proc::k_pm.munmap((void *)start, size); // 调用进程管理器的 munmap 函数
+        
+        int result = proc::k_pm.munmap((void *)start, size);
+        if (result < 0)
+        {
+            // 转换内核错误码为系统调用错误码
+            return result; // 已经是负数形式的错误码
+        }
+        return 0; // 成功
     }
 
     uint64 SyscallHandler::sys_mmap()

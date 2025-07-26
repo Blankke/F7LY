@@ -1888,53 +1888,11 @@ namespace proc
     /// @param fd 文件描述符
     /// @param offset 偏移量
     /// @return 0表示有效，负数表示错误码
-    int ProcessManager::validate_mmap_params(void *addr, int length, int prot, int flags, int fd, int offset)
+    int ProcessManager::validate_mmap_params(void *addr, size_t length, int prot, int flags, int fd, int offset)
     {
-        // 长度检查
-        if (length <= 0)
-        {
-            return syscall::SYS_EINVAL;
-        }
-
-        // 检查必须的共享标志 - 必须指定MAP_SHARED或MAP_PRIVATE之一
-        bool has_shared = flags & MAP_SHARED;
-        bool has_private = flags & MAP_PRIVATE;
-
-        if (!has_shared && !has_private)
-        {
-            return syscall::SYS_EINVAL; // 必须指定共享类型
-        }
-
-        if (has_shared && has_private)
-        {
-            return syscall::SYS_EINVAL; // 不能同时指定
-        }
-
-        // 检查保护标志的合理性
-        if (prot & ~(PROT_READ | PROT_WRITE | PROT_EXEC | PROT_NONE))
-        {
-            return syscall::SYS_EINVAL; // 无效的保护标志
-        }
-
-        // 检查地址和长度的合理性
-        if (addr != nullptr && (uint64)addr >= MAXVA)
-        {
-            return syscall::SYS_ENOMEM; // 地址超出虚拟地址空间
-        }
-
-        // 检查在32位架构下是否会发生溢出（针对EOVERFLOW错误）
-        if (sizeof(void *) == 4) // 32位架构
-        {
-            uint64 pages_for_length = (length + PGSIZE - 1) / PGSIZE;
-            uint64 pages_for_offset = offset / PGSIZE;
-            if (pages_for_length + pages_for_offset > UINT32_MAX / PGSIZE)
-            {
-                return syscall::SYS_EOVERFLOW;
-            }
-        }
-
+        
         // 检查匿名映射
-        bool is_anonymous = (flags & MAP_ANONYMOUS) || (fd == -1);
+        bool is_anonymous = (flags & MAP_ANONYMOUS);
 
         if (is_anonymous)
         {
@@ -1945,6 +1903,7 @@ namespace proc
             // 匿名映射通常要求fd为-1
             if (!(flags & MAP_ANONYMOUS) && fd != -1)
             {
+                printfRed("[mmap] Anonymous mapping but fd != -1\n");
                 return syscall::SYS_EBADF; // 不一致的匿名映射设置
             }
         }
@@ -1953,26 +1912,79 @@ namespace proc
             // 文件映射的fd验证在主函数中进行，因为需要访问进程状态
             if (fd < 0)
             {
+                printfRed("[mmap] Invalid file descriptor: %d\n", fd);
                 return syscall::SYS_EBADF;
             }
         }
+        // 长度检查
+        if (length <= 0)
+        {
+            printfRed("[mmap] Invalid length: %d\n", length);
+            return syscall::SYS_EINVAL;
+        }
+
+        // 检查必须的共享标志 - 必须指定MAP_SHARED或MAP_PRIVATE之一
+        bool has_shared = flags & MAP_SHARED;
+        bool has_private = flags & MAP_PRIVATE;
+
+        if (!has_shared && !has_private)
+        {
+            printfRed("[mmap] Must specify MAP_SHARED or MAP_PRIVATE\n");
+            return syscall::SYS_EINVAL; // 必须指定共享类型
+        }
+
+        if (has_shared && has_private)
+        {
+            printfRed("[mmap] Cannot specify both MAP_SHARED and MAP_PRIVATE\n");
+            return syscall::SYS_EINVAL; // 不能同时指定
+        }
+
+        // 检查保护标志的合理性
+        if (prot & ~(PROT_READ | PROT_WRITE | PROT_EXEC | PROT_NONE))
+        {
+            printfRed("[mmap] Invalid protection flags: %d\n", prot);
+            return syscall::SYS_EINVAL; // 无效的保护标志
+        }
+
+        // 检查地址和长度的合理性
+        if (addr != nullptr && (uint64)addr >= MAXVA)
+        {
+            printfRed("[mmap] Address out of range: %p\n", addr);
+            return syscall::SYS_ENOMEM; // 地址超出虚拟地址空间
+        }
+
+        // 检查在32位架构下是否会发生溢出（针对EOVERFLOW错误）
+        if (sizeof(void *) == 4) // 32位架构
+        {
+            uint64 pages_for_length = (length + PGSIZE - 1) / PGSIZE;
+            uint64 pages_for_offset = offset / PGSIZE;
+            if (pages_for_length + pages_for_offset > UINT32_MAX / PGSIZE)
+            {
+                printfRed("[mmap] Length and offset overflow: length=%d, offset=%d\n", length, offset);
+                return syscall::SYS_EOVERFLOW;
+            }
+        }
+
 
         // MAP_FIXED相关检查
         if (flags & MAP_FIXED)
         {
             if (addr == nullptr)
             {
+                printfRed("[mmap] MAP_FIXED requires a specific address\n");
                 return syscall::SYS_EINVAL; // MAP_FIXED需要指定地址
             }
             // 检查地址对齐（大多数架构要求页对齐）
             if ((uint64)addr % PGSIZE != 0)
             {
+                printfRed("[mmap] MAP_FIXED address must be page-aligned: %p\n", addr);
                 return syscall::SYS_EINVAL;
             }
 
             // MAP_FIXED_NOREPLACE不能与MAP_FIXED同时使用（Linux实现中）
             if ((flags & MAP_FIXED_NOREPLACE) && !(flags & MAP_FIXED))
             {
+                printfRed("[mmap] MAP_FIXED_NOREPLACE requires MAP_FIXED\n");
                 return syscall::SYS_EINVAL;
             }
         }
@@ -1989,9 +2001,9 @@ namespace proc
     /// @param offset 文件偏移量
     /// @param errno 错误码输出参数
     /// @return 成功返回映射地址，失败返回MAP_FAILED
-    void *ProcessManager::mmap(void *addr, int length, int prot, int flags, int fd, int offset, int *errno)
+    void *ProcessManager::mmap(void *addr, size_t length, int prot, int flags, int fd, int offset, int *errno)
     {
-        printfYellow("[mmap] addr: %p, length: %d, prot: %d, flags: %d, fd: %d, offset: %d\n",
+        printfYellow("[mmap] addr: %p, length: %u, prot: %d, flags: %d, fd: %d, offset: %d\n",
                      addr, length, prot, flags, fd, offset);
 
         // 初始化错误码
@@ -2286,27 +2298,51 @@ namespace proc
     /// @param addr 要取消映射的起始地址，必须页对齐
     /// @param length 要取消映射的长度（字节）
     /// @return 成功返回0，失败返回-1
-    int ProcessManager::munmap(void *addr, int length)
+    int ProcessManager::munmap(void *addr, size_t length)
     {
-        if (addr == nullptr || length <= 0)
+        // 参数验证
+        if (addr == nullptr)
         {
-            printfRed("[munmap] Invalid parameters: addr=%p, length=%d\n", addr, length);
-            return -1;
+            printfRed("[munmap] Invalid parameters: addr is null\n");
+            return -EINVAL;
+        }
+
+        if (length == 0)
+        {
+            printfRed("[munmap] Invalid parameters: length is zero\n");
+            return -EINVAL;
         }
 
         // 地址必须页对齐
         if ((uint64)addr % PGSIZE != 0)
         {
             printfRed("[munmap] Address not page aligned: %p\n", addr);
-            return -1;
+            return -EINVAL;
         }
 
         Pcb *p = get_cur_pcb();
+        if (p == nullptr)
+        {
+            printfRed("[munmap] Cannot get current process\n");
+            return -ESRCH;
+        }
+
         uint64 unmap_start = (uint64)addr;
         uint64 unmap_end = unmap_start + length;
         uint64 aligned_length = PGROUNDUP(length);
 
-        printfYellow("[munmap] addr=%p, length=%d (aligned=%u)\n", addr, length, aligned_length);
+        // 使用%zu格式符正确显示size_t
+        printfYellow("[munmap] addr=%p, length=%u (aligned=%u)\n", addr, length, aligned_length);
+
+        // 检查地址范围是否合理
+        if (unmap_end < unmap_start) // 溢出检查
+        {
+            printfRed("[munmap] Address range overflow: start=%p, end=%p\n", 
+                     (void*)unmap_start, (void*)unmap_end);
+            return -EINVAL;
+        }
+
+        bool found_vma = false;
 
         // 查找覆盖此地址范围的所有VMA
         for (int i = 0; i < NVMA; ++i)
@@ -2324,6 +2360,7 @@ namespace proc
                 continue; // 没有重叠
             }
 
+            found_vma = true;
             printfCyan("[munmap] Found overlapping VMA %d: [%p, %p)\n", i, (void *)vma_start, (void *)vma_end);
 
             // 计算重叠区域
@@ -2339,7 +2376,7 @@ namespace proc
                 // 对于现在，我们跳过写回，因为文件系统接口还不完整
             }
 
-            // 取消物理页面映射
+            // 取消物理页面映射（只处理已经分配的页面）
             uint64 va_start = PGROUNDDOWN(overlap_start);
             uint64 va_end = PGROUNDUP(overlap_end);
 
