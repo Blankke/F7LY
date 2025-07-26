@@ -422,8 +422,8 @@ int mmap_handler(uint64 va, int cause)
   // 构建页表项权限
   int pte_flags = PTE_U; // 用户可访问
   
-  if (vm->prot & PROT_READ)
-    pte_flags |= PTE_R;
+  // if (vm->prot & PROT_READ)
+    pte_flags |= PTE_R;   //默认必须有读
   if (vm->prot & PROT_WRITE)
     pte_flags |= PTE_W;
   if (vm->prot & PROT_EXEC)
@@ -480,7 +480,7 @@ int mmap_handler(uint64 va, int cause)
     return -1;
   }
 
-  printfGreen("mmap_handler: successfully mapped page at va=%p, pa=%p, pte_flags=0x%x\n", 
+  printfGreen("mmap_handler: successfully mapped page at va=%p, pa=%p, pte_flags=0x%b\n", 
              PGROUNDDOWN(va), pa, pte_flags);
 
   return 0;
