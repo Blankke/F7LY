@@ -1936,7 +1936,7 @@ namespace proc
         if (has_shared && has_private)
         {
             printfRed("[mmap] Cannot specify both MAP_SHARED and MAP_PRIVATE\n");
-            return syscall::SYS_EINVAL; // 不能同时指定
+            return syscall::SYS_EOPNOTSUPP; // 不能同时指定
         }
 
         // 检查保护标志的合理性
@@ -1980,13 +1980,20 @@ namespace proc
                 printfRed("[mmap] MAP_FIXED address must be page-aligned: %p\n", addr);
                 return syscall::SYS_EINVAL;
             }
-
-            // MAP_FIXED_NOREPLACE不能与MAP_FIXED同时使用（Linux实现中）
-            if ((flags & MAP_FIXED_NOREPLACE) && !(flags & MAP_FIXED))
-            {
-                printfRed("[mmap] MAP_FIXED_NOREPLACE requires MAP_FIXED\n");
-                return syscall::SYS_EINVAL;
-            }
+        }
+        
+        // MAP_FIXED_NOREPLACE 需要指定地址
+        if ((flags & MAP_FIXED_NOREPLACE) && addr == nullptr)
+        {
+            printfRed("[mmap] MAP_FIXED_NOREPLACE requires non-null address\n");
+            return syscall::SYS_EINVAL;
+        }
+        
+        // MAP_FIXED_NOREPLACE 需要地址页对齐
+        if ((flags & MAP_FIXED_NOREPLACE) && ((uint64)addr % PGSIZE != 0))
+        {
+            printfRed("[mmap] MAP_FIXED_NOREPLACE address must be page-aligned: %p\n", addr);
+            return syscall::SYS_EINVAL;
         }
 
         return 0; // 参数有效
@@ -2055,21 +2062,23 @@ namespace proc
                 printfRed("[mmap] Invalid file descriptor: %d\n", fd);
                 if (errno != nullptr)
                 {
-                    *errno = syscall::SYS_EBADF;
+                    *errno =EBADF;
                 }
                 return MAP_FAILED;
             }
 
             f = p->get_open_file(fd);
-            if (f->_attrs.filetype != fs::FileTypes::FT_NORMAL)
-            {
-                printfRed("[mmap] File descriptor does not refer to regular file\n");
-                if (errno != nullptr)
-                {
-                    *errno = syscall::SYS_EACCES;
-                }
-                return MAP_FAILED;
-            }
+            //支持不同类型的文件映射
+            // if (f->_attrs.filetype != fs::FileTypes::FT_NORMAL||
+            //     f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+            // {
+            //     printfRed("[mmap] File descriptor does not refer to regular file\n");
+            //     if (errno != nullptr)
+            //     {
+            //         *errno =EACCES;
+            //     }
+            //     return MAP_FAILED;
+            // }
 
             // 检查文件访问权限
             if (prot & PROT_READ)
@@ -2088,7 +2097,7 @@ namespace proc
             // TODO: 如果文件被锁定，应返回EAGAIN
             // if (file_is_locked(vfile)) {
             //     if (errno != nullptr) {
-            //         *errno = syscall::SYS_EAGAIN;
+            //         *errno =EAGAIN;
             //     }
             //     return MAP_FAILED;
             // }
@@ -2105,7 +2114,7 @@ namespace proc
                 // TODO: 检查文件系统挂载选项
                 // if (filesystem_mounted_noexec(vfile)) {
                 //     if (errno != nullptr) {
-                //         *errno = syscall::SYS_EPERM;
+                //         *errno =EPERM;
                 //     }
                 //     return MAP_FAILED;
                 // }
@@ -2126,7 +2135,7 @@ namespace proc
             printfRed("[mmap] Would exceed virtual address space\n");
             if (errno != nullptr)
             {
-                *errno = syscall::SYS_ENOMEM;
+                *errno =ENOMEM;
             }
             return MAP_FAILED;
         }
@@ -2135,7 +2144,7 @@ namespace proc
         // TODO: 检查系统是否有足够的物理内存
         // if (!enough_memory_available(aligned_length)) {
         //     if (errno != nullptr) {
-        //         *errno = syscall::SYS_ENOMEM;
+        //         *errno =ENOMEM;
         //     }
         //     return MAP_FAILED;
         // }
@@ -2144,7 +2153,7 @@ namespace proc
         // TODO: 检查进程数据段大小限制
         // if (would_exceed_data_limit(p, aligned_length)) {
         //     if (errno != nullptr) {
-        //         *errno = syscall::SYS_ENOMEM;
+        //         *errno =ENOMEM;
         //     }
         //     return MAP_FAILED;
         // }
@@ -2165,39 +2174,40 @@ namespace proc
             printfRed("[mmap] No available VMA slots\n");
             if (errno != nullptr)
             {
-                *errno = syscall::SYS_ENOMEM; // 进程映射数量超出限制
+                *errno =ENOMEM; // 进程映射数量超出限制
             }
             return MAP_FAILED;
         }
 
         // 确定映射地址
         uint64 map_addr;
-        if (flags & MAP_FIXED)
+        if ((flags & MAP_FIXED) || (flags & MAP_FIXED_NOREPLACE))
         {
             if (addr == nullptr)
             {
-                printfRed("[mmap] MAP_FIXED requires non-null addr\n");
+                printfRed("[mmap] MAP_FIXED/MAP_FIXED_NOREPLACE requires non-null addr\n");
                 if (errno != nullptr)
                 {
-                    *errno = syscall::SYS_EINVAL;
+                    *errno =EINVAL;
                 }
                 return MAP_FAILED;
             }
 
             if (is_page_align((uint64)addr) == false)
             {
-                printfRed("[mmap] MAP_FIXED address must be page aligned\n");
+                printfRed("[mmap] Fixed address must be page aligned\n");
                 if (errno != nullptr)
                 {
-                    *errno = syscall::SYS_EINVAL;
+                    *errno =EINVAL;
                 }
                 return MAP_FAILED;
             }
             map_addr = (uint64)addr;
 
+            // 检查地址冲突
             if (flags & MAP_FIXED_NOREPLACE)
             {
-                // 检查是否与现有映射冲突
+                // MAP_FIXED_NOREPLACE: 如果地址范围与现有映射冲突则失败
                 for (int i = 0; i < NVMA; ++i)
                 {
                     if (p->_vma->_vm[i].used)
@@ -2208,19 +2218,21 @@ namespace proc
 
                         if (!(new_end <= existing_start || map_addr >= existing_end))
                         {
-                            printfRed("[mmap] MAP_FIXED_NOREPLACE: address range conflicts\n");
+                            printfRed("[mmap] MAP_FIXED_NOREPLACE: address range [%p, %p) conflicts with existing [%p, %p)\n",
+                                     (void*)map_addr, (void*)new_end, (void*)existing_start, (void*)existing_end);
                             if (errno != nullptr)
                             {
-                                *errno = syscall::SYS_EEXIST;
+                                *errno = EEXIST;
                             }
                             return MAP_FAILED;
                         }
                     }
                 }
             }
-            else
+            else if (flags & MAP_FIXED)
             {
-                // MAP_FIXED 可以覆盖现有映射
+                // MAP_FIXED: 可以覆盖现有映射
+                printfYellow("[mmap] MAP_FIXED: may override existing mappings\n");
                 // TODO: 取消映射冲突区域
             }
         }
@@ -2342,7 +2354,7 @@ namespace proc
             return -EINVAL;
         }
 
-        bool found_vma = false;
+
 
         // 查找覆盖此地址范围的所有VMA
         for (int i = 0; i < NVMA; ++i)
@@ -2360,7 +2372,7 @@ namespace proc
                 continue; // 没有重叠
             }
 
-            found_vma = true;
+
             printfCyan("[munmap] Found overlapping VMA %d: [%p, %p)\n", i, (void *)vma_start, (void *)vma_end);
 
             // 计算重叠区域

@@ -1707,18 +1707,18 @@ char *ltp_testcases[] = {
     // "mmap08", //pass
     // "mmap09",  //pass
     // "mmap1",
-    "mmap10",
-    // "mmap11",
+    // "mmap10",
+    // "mmap11",   //pass
     // "mmap12",
     // "mmap13",
     // "mmap14",
-    // "mmap15",
+    // "mmap15",  //pass
     // "mmap16",
-    // "mmap17",
+    // "mmap17",   //pass 但是退出爆了
     // "mmap18",
-    // "mmap19",
-    // "mmap2",
-    // "mmap20",
+    // "mmap19",  //pass
+    // "mmap2", 
+    // "mmap20",   //pass
     // "mmap3",
     // "mmap-corruption01",
     // "mmapstress01",

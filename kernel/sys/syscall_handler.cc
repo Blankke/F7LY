@@ -1482,8 +1482,8 @@ namespace syscall
     };
     static const char _SYSINFO_sysname[] = "Linux";
     static const char _SYSINFO_nodename[] = "(none-node)";
-    static const char _SYSINFO_release[] = "4.16.0";
-    static const char _SYSINFO_version[] = "4.16.0";
+    static const char _SYSINFO_release[] = "4.17.0";
+    static const char _SYSINFO_version[] = "4.17.0";
     static const char _SYSINFO_machine[] = "Riscv";
     static const char _SYSINFO_domainname[] = "(none-domain)";
     uint64 SyscallHandler::sys_uname()
