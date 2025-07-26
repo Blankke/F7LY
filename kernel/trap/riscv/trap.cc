@@ -1,3 +1,4 @@
+#ifdef RISCV
 #include "types.hh"
 #include "trap.hh"
 #include "platform.hh"
@@ -486,3 +487,4 @@ int mmap_handler(uint64 va, int cause)
 
   return 0;
 }
+#endif

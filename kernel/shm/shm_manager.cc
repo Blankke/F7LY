@@ -170,8 +170,8 @@ namespace shm
 
     uint64 ShmManager::find_available_address(proc::Pcb* proc, size_t size)
     {
-        // 简化实现：从进程当前大小之后开始查找
-        uint64 start_addr = PGROUNDUP(proc->_sz);
+        // 从堆结束位置之后开始查找，避免与程序段和堆冲突
+        uint64 start_addr = PGROUNDUP(proc->get_heap_end());
         
         // 确保地址对齐到SHMLBA
         start_addr = PGROUNDUP(start_addr);

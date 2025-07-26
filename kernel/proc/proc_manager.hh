@@ -122,6 +122,11 @@ namespace proc
         void stringtest();
         void maptest();
         void hashtest();
+        
+    public: // ================ 调试函数 ================
+        void print_current_process_memory_info();
+        void print_process_memory_info(int pid);
+        void print_all_process_memory_info();
     };
 
     extern ProcessManager k_pm; // 全局进程管理器实例

@@ -84,13 +84,13 @@ namespace proc
         int _pgid; // 进程组ID，用于作业控制
         int _tgid; // 线程组ID，同一进程的所有线程共享同一个TGID，主线程的TGID等于PID
 
-        int _sid;     // 会话ID，用于终端管理
-        uint32 _uid;  // 真实用户ID
-        uint32 _euid; // 有效用户ID
-        uint32 _suid; // 保存的设置用户ID
+        int _sid;      // 会话ID，用于终端管理
+        uint32 _uid;   // 真实用户ID
+        uint32 _euid;  // 有效用户ID
+        uint32 _suid;  // 保存的设置用户ID
         uint32 _fsuid; // 文件系统用户ID
-        uint32 _gid;  // 真实组ID
-        uint32 _egid; // 有效组ID
+        uint32 _gid;   // 真实组ID
+        uint32 _egid;  // 有效组ID
 
         /****************************************************************************************
          * 进程状态和调度信息
@@ -109,12 +109,22 @@ namespace proc
          ****************************************************************************************/
         uint64 _kstack = 0;      // 内核栈的虚拟地址
         bool _shared_vm = false; // 标记是否与父进程共享虚拟内存(CLONE_VM标志)
-        uint64 _sz;              // 进程用户空间内存大小(字节)，等同于Linux的mm->total_vm
-        #ifdef LOONGARCH
-                uint64 elf_base = 0; // ELF文件加载基地址，用于动态链接
-        #endif
-        mem::PageTable _pt;      // 用户空间页表，等同于Linux的mm->pgd
-        TrapFrame *_trapframe;   // 用户态寄存器保存区，用于系统调用和异常处理
+        
+        // 程序段管理
+        program_section_desc _prog_sections[max_program_section_num]; // 程序段描述数组
+        int _prog_section_cnt = 0;                                    // 已记录的程序段数量
+        
+        // 堆内存管理
+        uint64 _heap_start = 0;  // 堆的起始地址
+        uint64 _heap_end = 0;    // 堆的结束地址
+        
+        mem::PageTable _pt;                                           // 用户空间页表，等同于Linux的mm->pgd
+        TrapFrame *_trapframe;                                        // 用户态寄存器保存区，用于系统调用和异常处理
+
+    private:
+        uint64 _sz;              // 进程占用的总内存空间大小(字节)，包含所有程序段的总和，由内部自动管理
+
+    public:
 
         // 虚拟内存区域管理
         struct VMA
@@ -177,18 +187,13 @@ namespace proc
 
         // 新增：详细时间统计
         uint64 _stime;          // 系统态时间 (内核态运行时间)
-        uint64 _utime;         // 用户态时间 (用户态运行时间)
+        uint64 _utime;          // 用户态时间 (用户态运行时间)
         uint64 _cutime;         // 子进程用户态时间累计
         uint64 _cstime;         // 子进程系统态时间累计
         uint64 _start_time;     // 进程启动时间 (绝对时间戳)
         uint64 _start_boottime; // 自系统启动以来的启动时间
 
-        /****************************************************************************************
-         * 程序段描述(调试和分析用)
-         ****************************************************************************************/
-        TODO("TBF")
-        program_section_desc _prog_sections[max_program_section_num]; // 程序段描述数组
-        int _prog_section_cnt = 0;                                    // 已记录的程序段数量
+
 
     public:
         Pcb();
@@ -198,6 +203,33 @@ namespace proc
         void map_kstack(mem::PageTable &pt);
         fs::dentry *get_cwd() { return _cwd; }
         int get_priority();
+        
+        // 程序段管理方法
+        int add_program_section(void *start, ulong size, const char *name = nullptr);
+        void remove_program_section(int index);
+        void clear_all_program_sections();
+        void reset_memory_sections(); // 重置所有内存管理信息
+        uint64 get_total_program_memory() const;
+        void copy_program_sections(const Pcb *src);
+        void free_program_sections();
+        
+        // 堆内存管理方法
+        void init_heap(uint64 start_addr);
+        uint64 grow_heap(uint64 new_end);
+        uint64 shrink_heap(uint64 new_end);
+        uint64 get_heap_size() const { return _heap_end > _heap_start ? _heap_end - _heap_start : 0; }
+        void set_heap_start(uint64 start_addr) { _heap_start = start_addr; }
+        void set_heap_end(uint64 end_addr) { _heap_end = end_addr; }
+        
+        // 内存大小计算方法
+        void update_total_memory_size();
+        uint64 calculate_total_memory_size() const;
+        
+        // 调试和信息打印方法
+        void print_memory_info() const;
+        
+        // 内存一致性检查方法
+        bool verify_memory_consistency() const;
 
     public:
         Context *get_context() { return &_context; }
@@ -210,40 +242,43 @@ namespace proc
             _killed = 1;
             _lock.release();
         }
-        Pcb *get_parent() { return _parent; }
+        Pcb *get_parent() const { return _parent; }
         void set_state(ProcState state) { _state = state; }
         void set_xstate(int xstate) { _xstate = xstate; }
-        size_t get_sz() { return _sz; }
         // void set_chan(void *chan) { _chan = chan; }
-        uint get_pid() { return _pid; }
-        uint get_tid() { return _tid; }
-        uint get_global_id() { return _global_id; }
-        uint get_ppid() { return _parent ? _parent->_pid : _ppid; } // 优先使用_parent，回退到_ppid
-        uint get_pgid() { return _pgid; }
-        uint get_tgid() { return _tgid; }
-        uint get_sid() { return _sid; }
-        uint32 get_uid() { return _uid; }
-        uint32 get_euid() { return _euid; }
-        uint32 get_suid() { return _suid; }
-        uint32 get_fsuid() { return _fsuid; }
-        uint32 get_gid() { return _gid; }
-        uint32 get_egid() { return _egid; }
-        mode_t get_umask() { return _umask; }  // 获取文件模式创建掩码
-        void set_umask(mode_t umask) { _umask = umask & 0777; }  // 设置umask，只保留权限位
+        uint get_pid() const { return _pid; }
+        uint get_tid() const { return _tid; }
+        uint get_global_id() const { return _global_id; }
+        uint get_ppid() const { return _parent ? _parent->_pid : _ppid; } // 优先使用_parent，回退到_ppid
+        uint get_pgid() const { return _pgid; }
+        uint get_tgid() const { return _tgid; }
+        uint get_sid() const { return _sid; }
+        uint32 get_uid() const { return _uid; }
+        uint32 get_euid() const { return _euid; }
+        uint32 get_suid() const { return _suid; }
+        uint32 get_fsuid() const { return _fsuid; }
+        uint32 get_gid() const { return _gid; }
+        uint32 get_egid() const { return _egid; }
+        mode_t get_umask() const { return _umask; }                   // 获取文件模式创建掩码
+        void set_umask(mode_t umask) { _umask = umask & 0777; } // 设置umask，只保留权限位
         TrapFrame *get_trapframe() { return _trapframe; }
-        uint64 get_kstack() { return _kstack; }
+        uint64 get_kstack() const { return _kstack; }
         mem::PageTable *get_pagetable() { return &_pt; }
-        ProcState get_state() { return _state; }
+        ProcState get_state() const { return _state; }
         char *get_name() { return _name; }
-        uint64 get_size() { return _sz; }
-        uint64 get_last_user_tick() { return _last_user_tick; }
-        uint64 get_user_ticks() { return _user_ticks; }
-        uint64 get_stime() { return _stime; }
-        uint64 get_cutime() { return _cutime; }
-        uint64 get_cstime() { return _cstime; }
-        uint64 get_start_tick() { return _start_tick; }
-        uint64 get_start_time() { return _start_time; }
-        uint64 get_start_boottime() { return _start_boottime; }
+        uint64 get_size() const { return _sz; }
+        uint64 get_heap_start() const { return _heap_start; }
+        uint64 get_heap_end() const { return _heap_end; }
+        int get_prog_section_count() const { return _prog_section_cnt; }
+        const program_section_desc* get_prog_sections() const { return _prog_sections; }
+        uint64 get_last_user_tick() const { return _last_user_tick; }
+        uint64 get_user_ticks() const { return _user_ticks; }
+        uint64 get_stime() const { return _stime; }
+        uint64 get_cutime() const { return _cutime; }
+        uint64 get_cstime() const { return _cstime; }
+        uint64 get_start_tick() const { return _start_tick; }
+        uint64 get_start_time() const { return _start_time; }
+        uint64 get_start_boottime() const { return _start_boottime; }
         fs::file *get_open_file(int fd)
         {
             if (fd < 0 || fd >= (int)max_open_files || _ofile == nullptr)
@@ -284,7 +319,7 @@ namespace proc
         void set_fsuid(uint32 fsuid) { _fsuid = fsuid; }
         void set_gid(uint32 gid) { _gid = gid; }
         void set_egid(uint32 egid) { _egid = egid; }
-        bool is_process()
+        bool is_process() const
         {
             return _tid == _tgid; // 线程ID等于线程组ID表示是主线程
         }

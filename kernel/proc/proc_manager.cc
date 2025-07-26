@@ -158,7 +158,8 @@ namespace proc
                     return nullptr;
                 }
 
-                p->_sz = 0;            // 初始化用户空间内存大小为0
+                // 初始化内存管理信息（_sz现在由内部自动管理）
+                p->reset_memory_sections();
                 p->_shared_vm = false; // 不共享虚拟内存
 
                 // 初始化虚拟内存区域管理
@@ -467,14 +468,20 @@ namespace proc
         // 释放页表
         if (p->_pt.get_base())
         {
-            proc_freepagetable(p->_pt, p->_sz);
+            // 释放所有程序段
+            p->free_program_sections();
+            
+            // 释放堆内存
+            if (p->get_heap_size() > 0) {
+                p->shrink_heap(p->get_heap_start());
+            }
+            
+            // 释放页表本身
+            proc_freepagetable(p->_pt, 0); // 传入0因为内存已经通过程序段管理释放
         }
 
-        p->_sz = 0; // 重置用户空间内存大小
-
-#ifdef LOONGARCH
-        p->elf_base = 0; // 重置ELF基地址
-#endif
+        // 重置内存相关字段（_sz现在由内部自动管理）
+        p->reset_memory_sections();
 
         /****************************************************************************************
          * 基本进程标识和状态管理清理
@@ -648,9 +655,11 @@ namespace proc
 #ifdef RISCV
         mem::k_vmm.vmfree(pt, sz);
 #elif LOONGARCH
-        Pcb *proc = get_cur_pcb();
-        // loongarch不是从0开始的，所以不需要从0开始释放
-        mem::k_vmm.vmfree(pt, sz - proc->elf_base, proc->elf_base);
+        // LoongArch不是从0开始的，使用程序段信息释放内存
+        // 注意：这个函数主要在proc_freepagetable中使用，应该由调用方负责正确的内存释放
+        if (sz > 0) {
+            mem::k_vmm.vmfree(pt, sz);
+        }
 #endif
     }
 
@@ -677,13 +686,19 @@ namespace proc
         // 传入initcode的地址
         printfCyan("initcode pagetable: %p\n", p->_pt.get_base());
         uint64 initcode_sz = (uint64)initcode_end - (uint64)initcode_start;
-        p->_sz = mem::k_vmm.uvmfirst(p->_pt, (uint64)initcode_start, initcode_sz);
+        uint64 allocated_sz = mem::k_vmm.uvmfirst(p->_pt, (uint64)initcode_start, initcode_sz);
 
         printf("initcode start: %p, end: %p\n", initcode_start, initcode_end);
-        printf("initcode size: %p, total allocated space: %p\n", initcode_sz, p->_sz);
+        printf("initcode size: %p, total allocated space: %p\n", initcode_sz, allocated_sz);
+
+        // 使用新的程序段管理
+        p->add_program_section((void*)0, allocated_sz, "initcode");
+        
+        // 初始化堆在代码段后面
+        p->init_heap(allocated_sz);
 
         p->_trapframe->epc = 0;
-        p->_trapframe->sp = p->_sz;
+        p->_trapframe->sp = allocated_sz;
 
         safestrcpy(p->_name, "initcode", sizeof(p->_name));
         p->_parent = p;
@@ -715,13 +730,19 @@ namespace proc
         // 传入initcode的地址
         printfCyan("initcode pagetable: %p\n", p->_pt.get_base());
         uint64 initcode_sz = (uint64)initcode_end - (uint64)initcode_start;
-        p->_sz = mem::k_vmm.uvmfirst(p->_pt, (uint64)initcode_start, initcode_sz);
+        uint64 allocated_sz = mem::k_vmm.uvmfirst(p->_pt, (uint64)initcode_start, initcode_sz);
 
         printf("initcode start: %p, end: %p\n", initcode_start, initcode_end);
-        printf("initcode size: %p, total allocated space: %p\n", initcode_sz, p->_sz);
+        printf("initcode size: %p, total allocated space: %p\n", initcode_sz, allocated_sz);
 
-        p->_trapframe->era = 0;     // 设置程序计数器为0
-        p->_trapframe->sp = p->_sz; // 设置栈指针为总空间大小
+        // 使用新的程序段管理
+        p->add_program_section((void*)0, allocated_sz, "initcode");
+        
+        // 初始化堆在代码段后面
+        p->init_heap(allocated_sz);
+
+        p->_trapframe->era = 0;         // 设置程序计数器为0
+        p->_trapframe->sp = allocated_sz; // 设置栈指针
 
         safestrcpy(p->_name, "initcode", sizeof(p->_name));
         p->_parent = p;
@@ -999,11 +1020,16 @@ namespace proc
             return nullptr;
         }
         *np->_trapframe = *p->_trapframe; // 拷贝父进程的陷阱值，而不是直接指向, 后面有可能会修改
-        // 继承父进程的其他属性
-        np->_sz = p->_sz;
-#ifdef LOONGARCH
-        np->elf_base = p->elf_base; // 继承 ELF 基地址
-#endif
+        
+        // 复制程序段信息
+        np->copy_program_sections(p);
+        
+        // 复制堆信息
+        np->_heap_start = p->_heap_start;
+        np->_heap_end = p->_heap_end;
+        
+        // _sz现在由程序段管理自动计算，确保正确更新
+        np->update_total_memory_size();
 
         _wait_lock.acquire();
         np->_parent = p;
@@ -1098,21 +1124,34 @@ namespace proc
         }
         else
         {
-#ifdef RISCV
-            if (mem::k_vmm.vm_copy(*curpt, *newpt, 0, p->_sz) < 0)
-            {
+            // 复制进程的所有内存段
+            bool copy_success = true;
+            
+            // 复制程序段
+            for (int i = 0; i < p->get_prog_section_count(); i++) {
+                const program_section_desc* sections = p->get_prog_sections();
+                uint64 start = (uint64)sections[i]._sec_start;
+                uint64 size = sections[i]._sec_size;
+                
+                if (mem::k_vmm.vm_copy(*curpt, *newpt, start, size) < 0) {
+                    copy_success = false;
+                    break;
+                }
+            }
+            
+            // 复制堆
+            if (copy_success && p->get_heap_size() > 0) {
+                if (mem::k_vmm.vm_copy(*curpt, *newpt, p->get_heap_start(), p->get_heap_size()) < 0) {
+                    copy_success = false;
+                }
+            }
+            
+            if (!copy_success) {
                 freeproc(np);
                 np->_lock.release();
+                panic("fork failed");
                 return nullptr;
             }
-#elif LOONGARCH
-            if (mem::k_vmm.vm_copy(*curpt, *newpt, p->elf_base, p->_sz - p->elf_base) < 0)
-            {
-                freeproc(np);
-                np->_lock.release();
-                return nullptr;
-            }
-#endif
             for (i = 0; i < NVMA; ++i)
             {
                 if (p->_vma->_vm[i].used)
@@ -1247,24 +1286,39 @@ namespace proc
     int
     ProcessManager::growproc(int n)
     {
-        uint64 sz;
         Pcb *p = get_cur_pcb();
-
-        sz = p->_sz;
-        if (n > 0)
-        {
-            if (sz + n >= MAXVA - PGSIZE)
-                return -1;
-            if ((sz = mem::k_vmm.uvmalloc(p->_pt, sz, sz + n, PTE_W)) == 0)
-            {
+        
+        if (n == 0) {
+            return 0; // 无需改变
+        }
+        
+        if (n > 0) {
+            // 扩展堆
+            uint64 current_end = p->get_heap_end();
+            uint64 new_end = current_end + n;
+            
+            // 检查是否超出地址空间限制
+            if (new_end >= MAXVA - PGSIZE) {
                 return -1;
             }
+            
+            uint64 result = p->grow_heap(new_end);
+            if (result < new_end) {
+                return -1; // 扩展失败
+            }
+        } else {
+            // 缩减堆 (n < 0)
+            uint64 current_end = p->get_heap_end();
+            uint64 new_end = current_end + n; // n是负数
+            
+            // 确保不会缩减到堆起始地址之前
+            if (new_end < p->get_heap_start()) {
+                new_end = p->get_heap_start();
+            }
+            
+            p->shrink_heap(new_end);
         }
-        else if (n < 0)
-        {
-            sz = mem::k_vmm.uvmdealloc(p->_pt, sz, sz + n);
-        }
-        p->_sz = sz;
+        
         return 0;
     }
 
@@ -1274,43 +1328,67 @@ namespace proc
     /// @return
     long ProcessManager::brk(long n)
     {
-        uint64 addr = get_cur_pcb()->_sz;
-
-        // 如果 n 为 0，返回当前的 program break
-        // 如果请求的地址小于当前地址，缩减内存
-        // 如果请求的地址大于当前地址，扩展内存
-        // printfCyan("[brk] current addr: %p, requested: %p\n", (void*)addr, (void*)n);
-
-        if (growproc(n - addr) < 0)
-        {
-            // 失败时返回 -1 并设置 errno
-            return -1;
+        Pcb *p = get_cur_pcb();
+        
+        // 如果 n 为 0，返回当前堆的结束地址
+        if (n == 0) {
+            return p->get_heap_end();
         }
 
-        // 成功时返回 0
+        // 检查请求的地址是否合理
+        if ((uint64)n < p->get_heap_start()) {
+            return -1; // 不能设置到堆起始地址之前
+        }
+
+        // 如果请求缩减堆
+        if ((uint64)n < p->get_heap_end()) {
+            uint64 new_end = p->shrink_heap((uint64)n);
+            return new_end;
+        }
+        // 如果请求扩展堆
+        else if ((uint64)n > p->get_heap_end()) {
+            uint64 new_end = p->grow_heap((uint64)n);
+            if (new_end < (uint64)n) {
+                return -1; // 扩展失败
+            }
+            return new_end;
+        }
+
+        // 如果地址相同，直接返回
         return n;
     }
 
     long ProcessManager::sbrk(long increment)
     {
         Pcb *p = get_cur_pcb();
-        uint64 old_addr = p->_sz;
+        uint64 old_end = p->get_heap_end();
 
-        // 如果 increment 为 0，返回当前的 program break
-        if (increment == 0)
-        {
-            return old_addr;
+        // 如果 increment 为 0，返回当前堆结束地址
+        if (increment == 0) {
+            return old_end;
         }
 
-        // 尝试扩展或缩减内存
-        if (growproc(increment) < 0)
-        {
-            // 失败时返回 (void *) -1
-            return -1;
+        uint64 new_end = old_end + increment;
+        
+        // 如果是缩减堆
+        if (increment < 0) {
+            if (new_end < p->get_heap_start()) {
+                return -1; // 不能缩减到堆起始地址之前
+            }
+            uint64 result = p->shrink_heap(new_end);
+            if (result != new_end) {
+                return -1;
+            }
+        }
+        // 如果是扩展堆
+        else {
+            uint64 result = p->grow_heap(new_end);
+            if (result < new_end) {
+                return -1; // 扩展失败
+            }
         }
 
-        // 成功时返回之前的 program break
-        return old_addr;
+        return old_end; // 返回原来的堆结束地址
     }
 
     int ProcessManager::wait4(int child_pid, uint64 addr, int option)
@@ -2131,9 +2209,11 @@ namespace proc
 
         // 地址对齐
         uint64 aligned_length = PGROUNDUP(length);
-        if (aligned_length + p->_sz > MAXVA - PGSIZE)
+        
+        // 检查映射大小是否超过虚拟地址空间限制
+        if (aligned_length > MAXVA - PGSIZE)
         {
-            printfRed("[mmap] Would exceed virtual address space\n");
+            printfRed("[mmap] Mapping size %lu exceeds virtual address space\n", aligned_length);
             if (errno != nullptr)
             {
                 *errno = ENOMEM;
@@ -2205,6 +2285,18 @@ namespace proc
             }
             map_addr = (uint64)addr;
 
+            // 检查MAP_FIXED地址边界
+            if (map_addr < PGSIZE || map_addr + aligned_length > MAXVA - PGSIZE)
+            {
+                printfRed("[mmap] MAP_FIXED address out of bounds: addr=%p, len=%lu\n", 
+                         (void*)map_addr, aligned_length);
+                if (errno != nullptr)
+                {
+                    *errno = ENOMEM;
+                }
+                return MAP_FAILED;
+            }
+
             // 检查地址冲突
             if (flags & MAP_FIXED_NOREPLACE)
             {
@@ -2247,7 +2339,10 @@ namespace proc
             }
             else
             {
-                map_addr = p->_sz;
+                map_addr = PGROUNDUP(p->get_heap_end());
+                p->set_heap_end(map_addr + aligned_length);
+                printfYellow("[mmap] Updated heap_end to %p for anonymous mapping\n", 
+                           (void*)(map_addr + aligned_length));
             }
         }
 
@@ -2275,20 +2370,9 @@ namespace proc
             vfile->dup(); // 增加文件引用计数
         }
 
-        // 更新进程大小
-        if (!(flags & MAP_FIXED))
-        {
-            p->_sz += aligned_length;
-        }
-        else
-        {
-            uint64 end_addr = map_addr + aligned_length;
-            if (end_addr > p->_sz)
-            {
-                p->_sz = end_addr;
-            }
-        }
-
+        // VMA内存映射不计入_sz，因为_sz现在只管理程序段和堆
+        // VMA有独立的内存管理生命周期
+        
         // 特殊标志处理
         if (flags & MAP_POPULATE)
         {
@@ -2442,6 +2526,40 @@ namespace proc
                 // TODO: 实现VMA分割，需要找到空闲VMA槽位来创建第二个VMA
                 // 目前简单处理：截断到取消映射的起始位置
                 vm->len = overlap_start - vma_start;
+            }
+        }
+
+        // 检查是否需要收缩heap_end
+        // 如果munmap的区域包含当前heap_end，需要收缩heap_end
+        proc::Pcb *p = get_cur_pcb();
+        if (p != nullptr) {
+            uint64 current_heap_end = p->get_heap_end();
+            uint64 unmap_start = (uint64)addr;
+            uint64 unmap_end = unmap_start + aligned_length;
+            
+            if (unmap_start <= current_heap_end && unmap_end >= current_heap_end)
+            {
+                // 需要收缩heap_end，找到最大的有效VMA结束地址
+                uint64 max_vma_end = p->get_heap_start(); // 至少应该是堆的起始位置
+                
+                for (int i = 0; i < NVMA; i++)
+                {
+                    struct vma *vm = &p->_vma->_vm[i];
+                    if (vm->used && vm->vfd == -1) // 只考虑匿名映射
+                    {
+                        uint64 vma_end = vm->addr + vm->len;
+                        if (vma_end > max_vma_end)
+                        {
+                            max_vma_end = vma_end;
+                        }
+                    }
+                }
+                
+                if (max_vma_end < current_heap_end)
+                {
+                    p->set_heap_end(max_vma_end);
+                    printfYellow("[munmap] Shrunk heap_end to %p\n", (void*)max_vma_end);
+                }
             }
         }
 
@@ -3080,7 +3198,7 @@ namespace proc
         uint64 interp_entry = 0; // 动态链接器入口点
         // proc->_pt.print_all_map();
 
-        uint64 old_sz = proc->_sz; // 保存原进程的内存大小
+        uint64 old_sz = proc->get_size(); // 保存原进程的内存大小
         uint64 sp;                 // 栈指针
         uint64 stackbase;          // 栈基地址
         mem::PageTable new_pt;     // 暂存页表, 防止加载过程中破坏原进程映像
@@ -3089,9 +3207,6 @@ namespace proc
         // fs::dentry *de;            // 目录项
         int i, off;     // 循环变量和偏移量
         u64 new_sz = 0; // 新进程映像的大小
-#ifdef LOONGARCH
-        u64 elf_start = 0; // ELF 文件的起始地址
-#endif
 
         // 动态链接器相关
         elf::elfhdr interp_elf;
@@ -3653,7 +3768,58 @@ namespace proc
         // ========== 第八阶段：替换进程映像 ==========
         mem::PageTable old_pt;
         old_pt = *proc->get_pagetable(); // 获取当前进程的页表
-        proc->_sz = PGROUNDUP(new_sz);   // 更新进程大小
+        
+        // 清理旧的程序段
+        proc->free_program_sections();
+        
+        // 清理旧的VMA映射（execve应该清除大部分内存映射）
+        if (proc->_vma != nullptr) {
+            for (int i = 0; i < NVMA; ++i) {
+                if (proc->_vma->_vm[i].used) {
+                    // execve时清除所有私有映射，保留某些特殊的共享映射
+                    bool should_preserve = false;
+                    
+                    // TODO: 根据需要保留特定的共享映射
+                    // 例如：共享库映射、特殊的设备映射等
+                    // if (proc->_vma->_vm[i].flags == MAP_SHARED && 
+                    //     is_special_mapping(&proc->_vma->_vm[i])) {
+                    //     should_preserve = true;
+                    // }
+                    
+                    if (!should_preserve) {
+                        // 释放VMA映射的内存
+                        uint64 va_start = PGROUNDDOWN(proc->_vma->_vm[i].addr);
+                        uint64 va_end = PGROUNDUP(proc->_vma->_vm[i].addr + proc->_vma->_vm[i].len);
+                        
+                        for (uint64 va = va_start; va < va_end; va += PGSIZE) {
+                            mem::Pte pte = proc->_pt.walk(va, 0);
+                            if (!pte.is_null() && pte.is_valid()) {
+                                mem::k_vmm.vmunmap(proc->_pt, va, 1, 1);
+                            }
+                        }
+                        
+                        // 释放文件引用
+                        if (proc->_vma->_vm[i].vfile != nullptr) {
+                            proc->_vma->_vm[i].vfile->free_file();
+                        }
+                        
+                        // 清除VMA条目
+                        proc->_vma->_vm[i].used = 0;
+                        proc->_vma->_vm[i].addr = 0;
+                        proc->_vma->_vm[i].len = 0;
+                        proc->_vma->_vm[i].vfile = nullptr;
+                    }
+                }
+            }
+        }
+        
+        // TODO: 这里需要根据ELF加载的各个段来添加程序段
+        // 暂时使用总大小作为一个程序段 
+        proc->add_program_section((void*)0, PGROUNDUP(new_sz), "main_program");
+        
+        // 初始化堆在程序段后面
+        proc->init_heap(PGROUNDUP(new_sz));
+        
         uint64 entry_point;
         if (is_dynamic)
         {
@@ -3670,17 +3836,60 @@ namespace proc
         proc->_trapframe->epc = entry_point;
 #elif defined(LOONGARCH)
         proc->_trapframe->era = entry_point;
-        proc->elf_base = elf_start; // 保存ELF文件的起始地址
 #endif
         proc->_pt = new_pt;        // 替换为新的页表
         proc->_trapframe->sp = sp; // 设置栈指针
 
-        // printf("execve: new process size: %p, new pagetable: %p\n", proc->_sz, proc->_pt);
+        // printf("execve: new process size: %p, new pagetable: %p\n", proc->get_size(), proc->_pt);
         k_pm.proc_freepagetable(old_pt, old_sz);
 
-        printf("execve succeed, new process size: %p\n", proc->_sz);
+        printf("execve succeed, new process size: %p\n", proc->get_size());
 
         // 写成0为了适配glibc的rtld_fini需求
         return 0; // 返回参数个数，表示成功执行
     }
+
+    /****************************************************************************************
+     * 调试函数实现
+     ****************************************************************************************/
+    void ProcessManager::print_current_process_memory_info()
+    {
+        Pcb *current = get_cur_pcb();
+        if (current) {
+            current->print_memory_info();
+        } else {
+            printfRed("No current process\n");
+        }
+    }
+
+    void ProcessManager::print_process_memory_info(int pid)
+    {
+        for (int i = 0; i < num_process; i++) {
+            if (k_proc_pool[i]._pid == pid && k_proc_pool[i]._state != UNUSED) {
+                k_proc_pool[i].print_memory_info();
+                return;
+            }
+        }
+        printfRed("Process with PID %d not found\n", pid);
+    }
+
+    void ProcessManager::print_all_process_memory_info()
+    {
+        printfMagenta("=== All Process Memory Information ===\n");
+        int count = 0;
+        for (int i = 0; i < num_process; i++) {
+            if (k_proc_pool[i]._state != UNUSED) {
+                k_proc_pool[i].print_memory_info();
+                count++;
+                printfMagenta("---\n");
+            }
+        }
+        if (count == 0) {
+            printfMagenta("No active processes\n");
+        } else {
+            printfMagenta("Total active processes: %d\n", count);
+        }
+        printfMagenta("=== End All Process Memory Information ===\n");
+    }
+
 }; // namespace proc

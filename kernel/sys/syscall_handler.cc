@@ -1827,16 +1827,10 @@ namespace syscall
             return -1;
         }
 
-        // 如果参数为 0，返回当前的 program break（查询模式）
-        if (n == 0)
-        {
-            uint64 current_brk = proc::k_pm.get_cur_pcb()->_sz;
-            printf("[SyscallHandler::sys_brk] brk(0) = 0x%x (query current break)\n", current_brk);
-            return current_brk;
-        }
-
-        // 设置新的 program break
         long result = proc::k_pm.brk(n);
+        if (n == 0) {
+            printf("[SyscallHandler::sys_brk] brk(0) = 0x%x (query current break)\n", result);
+        }
         return result;
     }
     uint64 SyscallHandler::sys_readahead()
