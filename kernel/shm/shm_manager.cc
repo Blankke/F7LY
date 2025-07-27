@@ -25,7 +25,7 @@ namespace shm
         // 显式初始化 segments 容器
 
         // 注意：不进行预分配，避免在内核环境中的内存分配问题
-        
+         
         printfGreen("[ShmManager] Initialized with base=0x%x, size=0x%x\n", base, size);
     }
 
@@ -863,7 +863,7 @@ namespace shm
                     return -EFAULT;
                 }
 
-                printfCyan("[ShmManager] SHM_INFO: used_ids=%d, total_pages=%lu\n", 
+                printfCyan("[ShmManager] SHM_INFO: used_ids=%d, total_pages=%u\n", 
                           usage_info.used_ids, usage_info.shm_tot);
                 
                 // 计算最高使用的索引

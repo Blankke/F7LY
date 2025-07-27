@@ -9,6 +9,7 @@
 #include "printer.hh"
 #include "devs/device_manager.hh"
 #include "fs/lwext4/ext4_errno.hh"
+#include "process_memory_manager.hh"  // 新增：进程内存管理器
 #ifdef RISCV
 #include "devs/riscv/disk_driver.hh"
 #elif defined(LOONGARCH)
@@ -394,94 +395,18 @@ namespace proc
     void ProcessManager::freeproc(Pcb *p)
     {
         /****************************************************************************************
-         * 虚拟内存区域管理清理
+         * 统一内存管理清理 - 使用ProcessMemoryManager
          ****************************************************************************************/
-        // 处理VMA的引用计数
-        bool should_free_vma = false;
-        if (p->_vma != nullptr)
-        {
-            if (--p->_vma->_ref_cnt <= 0)
-            {
-                should_free_vma = true;
-            }
-            else
-            {
-                printfYellow("freeproc: vma ref count not zero, ref_cnt: %d\n", p->_vma->_ref_cnt);
-            }
-        }
-
-        // 如果应该释放VMA，则处理所有VMA条目
-        if (should_free_vma && p->_vma != nullptr)
-        {
-            for (int i = 0; i < NVMA; ++i)
-            {
-                // printfBlue("freeproc: checking vma %d, addr: %p, len: %d,used:%d\n", i, p->_vm[i].addr, p->_vm[i].len,p->_vm[i].used);
-                if (p->_vma->_vm[i].used)
-                {
-                    // 只对文件映射进行写回操作
-                    if (p->_vma->_vm[i].vfile != nullptr && p->_vma->_vm[i].flags == MAP_SHARED && (p->_vma->_vm[i].prot & PROT_WRITE) != 0)
-                    {
-                        p->_vma->_vm[i].vfile->write(p->_vma->_vm[i].addr, p->_vma->_vm[i].len);
-                    }
-
-                    // 只对文件映射释放文件引用
-                    if (p->_vma->_vm[i].vfile != nullptr)
-                    {
-                        p->_vma->_vm[i].vfile->free_file();
-                    }
-
-                    // 修复vmunmap调用：逐页检查并取消映射
-                    uint64 va_start = PGROUNDDOWN(p->_vma->_vm[i].addr);
-                    uint64 va_end = PGROUNDUP(p->_vma->_vm[i].addr + p->_vma->_vm[i].len);
-
-                    // 逐页检查并取消映射，避免对未映射的页面进行操作
-                    for (uint64 va = va_start; va < va_end; va += PGSIZE)
-                    {
-                        mem::Pte pte = p->_pt.walk(va, 0);
-                        if (!pte.is_null() && pte.is_valid())
-                        {
-                            // 只对实际映射的页面进行取消映射
-                            mem::k_vmm.vmunmap(*p->get_pagetable(), va, 1, 1);
-                        }
-                    }
-                    p->_vma->_vm[i].used = 0;
-                }
-            }
-            // 只有当VMA引用计数为0时才删除VMA
-            delete p->_vma;
-        }
-
-        // 重置VMA指针
-        p->_vma = nullptr;
-        p->_shared_vm = false; // 重置共享虚拟内存标志
-
-        /****************************************************************************************
-         * 内存管理清理
-         ****************************************************************************************/
-        // 释放trapframe页面
-        if (p->_trapframe)
-        {
-            mem::k_pmm.free_page(p->_trapframe);
-            p->_trapframe = nullptr;
-        }
-
-        // 释放页表
-        if (p->_pt.get_base())
-        {
-            // 释放所有程序段
-            p->free_program_sections();
-            
-            // 释放堆内存
-            if (p->get_heap_size() > 0) {
-                p->shrink_heap(p->get_heap_start());
-            }
-            
-            // 释放页表本身
-            proc_freepagetable(p->_pt, 0); // 传入0因为内存已经通过程序段管理释放
-        }
-
-        // 重置内存相关字段（_sz现在由内部自动管理）
-        p->reset_memory_sections();
+        // 创建内存管理器实例来处理所有内存相关的释放操作
+        ProcessMemoryManager memory_mgr(p);
+        
+        // 执行完整的内存清理，包括：
+        // - VMA管理（引用计数、文件写回、映射取消）
+        // - 程序段释放
+        // - 堆内存释放  
+        // - 页表清理
+        // - trapframe释放
+        memory_mgr.free_all_memory();
 
         /****************************************************************************************
          * 基本进程标识和状态管理清理
@@ -606,7 +531,7 @@ namespace proc
 #ifdef RISCV
         if (mem::k_vmm.map_pages(pt, TRAMPOLINE, PGSIZE, (uint64)trampoline, riscv::PteEnum::pte_readable_m | riscv::pte_executable_m) == 0)
         {
-            mem::k_vmm.vmfree(pt, 0);
+            pt.dec_ref();
             printfRed("proc_pagetable: map trampoline failed\n");
             return empty_pt;
         }
@@ -614,14 +539,14 @@ namespace proc
         // printfGreen("TRAMPOLINE: %p\n", TRAMPOLINE);
         if (mem::k_vmm.map_pages(pt, TRAPFRAME, PGSIZE, (uint64)(p->get_trapframe()), riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_writable_m) == 0)
         {
-            mem::k_vmm.vmfree(pt, 0);
+            pt.dec_ref();
 
             printfRed("proc_pagetable: map trapframe failed\n");
             return empty_pt;
         }
         if (mem::k_vmm.map_pages(pt, SIG_TRAMPOLINE, PGSIZE, (uint64)sig_trampoline, riscv::PteEnum::pte_readable_m | riscv::pte_executable_m | riscv::PteEnum::pte_user_m) == 0)
         {
-            mem::k_vmm.vmfree(pt, 0);
+            pt.dec_ref();
 
             panic("proc_pagetable: map sigtrapframe failed\n");
             return empty_pt;
@@ -630,14 +555,14 @@ namespace proc
 #elif defined(LOONGARCH)
         if (mem::k_vmm.map_pages(pt, TRAPFRAME, PGSIZE, (uint64)(p->_trapframe), PTE_V | PTE_NX | PTE_P | PTE_W | PTE_R | PTE_MAT | PTE_D) == 0)
         {
-            mem::k_vmm.vmfree(pt, 0);
+            pt.dec_ref();
             printfRed("proc_pagetable: map trapframe failed\n");
             return empty_pt;
         }
         if (mem::k_vmm.map_pages(pt, SIG_TRAMPOLINE, PGSIZE, (uint64)sig_trampoline, PTE_P | PTE_MAT | PTE_D | PTE_U) == 0)
         {
             printf("Fail to map sig_trampoline\n");
-            mem::k_vmm.vmfree(pt, 0);
+            pt.dec_ref();
             return empty_pt;
         }
 #endif
@@ -645,22 +570,18 @@ namespace proc
     }
     void ProcessManager::proc_freepagetable(mem::PageTable &pt, uint64 sz)
     {
-        printfCyan("proc_freepagetable: freeing pagetable %p, size %u\n", pt.get_base(), sz);
+        // 注意：sz参数已经废弃，现在内存释放通过ProcessMemoryManager管理
+        printfCyan("proc_freepagetable: freeing pagetable %p\n", pt.get_base());
+        
 #ifdef RISCV
         // riscv还有 trampoline的映射
         mem::k_vmm.vmunmap(pt, TRAMPOLINE, 1, 0);
 #endif
         mem::k_vmm.vmunmap(pt, TRAPFRAME, 1, 0);
         mem::k_vmm.vmunmap(pt, SIG_TRAMPOLINE, 1, 0);
-#ifdef RISCV
-        mem::k_vmm.vmfree(pt, sz);
-#elif LOONGARCH
-        // LoongArch不是从0开始的，使用程序段信息释放内存
-        // 注意：这个函数主要在proc_freepagetable中使用，应该由调用方负责正确的内存释放
-        if (sz > 0) {
-            mem::k_vmm.vmfree(pt, sz);
-        }
-#endif
+        
+        // 减少页表引用计数，让页表自己管理生命周期
+        pt.dec_ref();
     }
 
     void ProcessManager::user_init()
@@ -2213,7 +2134,7 @@ namespace proc
         // 检查映射大小是否超过虚拟地址空间限制
         if (aligned_length > MAXVA - PGSIZE)
         {
-            printfRed("[mmap] Mapping size %lu exceeds virtual address space\n", aligned_length);
+            printfRed("[mmap] Mapping size %u exceeds virtual address space\n", aligned_length);
             if (errno != nullptr)
             {
                 *errno = ENOMEM;
@@ -2288,7 +2209,7 @@ namespace proc
             // 检查MAP_FIXED地址边界
             if (map_addr < PGSIZE || map_addr + aligned_length > MAXVA - PGSIZE)
             {
-                printfRed("[mmap] MAP_FIXED address out of bounds: addr=%p, len=%lu\n", 
+                printfRed("[mmap] MAP_FIXED address out of bounds: addr=%p, len=%u\n", 
                          (void*)map_addr, aligned_length);
                 if (errno != nullptr)
                 {
@@ -2424,147 +2345,22 @@ namespace proc
             return -ESRCH;
         }
 
-        uint64 unmap_start = (uint64)addr;
-        uint64 unmap_end = unmap_start + length;
-        uint64 aligned_length = PGROUNDUP(length);
+        printfYellow("[munmap] Process %s (PID: %d) unmapping addr=%p, length=%u\n", 
+                     p->get_name(), p->get_pid(), addr, length);
 
-        // 使用%zu格式符正确显示size_t
-        printfYellow("[munmap] addr=%p, length=%u (aligned=%u)\n", addr, length, aligned_length);
+        // 使用ProcessMemoryManager进行统一的内存管理
+        ProcessMemoryManager memory_mgr(p);
+        int result = memory_mgr.unmap_memory_range(addr, length);
 
-        // 检查地址范围是否合理
-        if (unmap_end < unmap_start) // 溢出检查
-        {
-            printfRed("[munmap] Address range overflow: start=%p, end=%p\n",
-                      (void *)unmap_start, (void *)unmap_end);
-            return -EINVAL;
+        if (result == 0) {
+            printfGreen("[munmap] Successfully unmapped range [%p, %p)\n", 
+                       addr, (void*)((uint64)addr + PGROUNDUP(length)));
+        } else {
+            printfRed("[munmap] Failed to unmap range [%p, %p)\n", 
+                     addr, (void*)((uint64)addr + PGROUNDUP(length)));
         }
 
-        // 查找覆盖此地址范围的所有VMA
-        for (int i = 0; i < NVMA; ++i)
-        {
-            if (!p->_vma->_vm[i].used)
-                continue;
-
-            struct vma *vm = &p->_vma->_vm[i];
-            uint64 vma_start = vm->addr;
-            uint64 vma_end = vma_start + vm->len;
-
-            // 检查是否有重叠
-            if (unmap_end <= vma_start || unmap_start >= vma_end)
-            {
-                continue; // 没有重叠
-            }
-
-            printfCyan("[munmap] Found overlapping VMA %d: [%p, %p)\n", i, (void *)vma_start, (void *)vma_end);
-
-            // 计算重叠区域
-            uint64 overlap_start = MAX(unmap_start, vma_start);
-            uint64 overlap_end = MIN(unmap_end, vma_end);
-
-            // 处理MAP_SHARED文件映射的写回
-            if ((vm->flags & MAP_SHARED) && (vm->prot & PROT_WRITE) && vm->vfile != nullptr)
-            {
-                // TODO: 实现脏页写回
-                printfCyan("[munmap] Should write back MAP_SHARED pages for file %s\n",
-                           vm->vfile->_path_name.c_str());
-                // 对于现在，我们跳过写回，因为文件系统接口还不完整
-            }
-
-            // 取消物理页面映射（只处理已经分配的页面）
-            uint64 va_start = PGROUNDDOWN(overlap_start);
-            uint64 va_end = PGROUNDUP(overlap_end);
-
-            for (uint64 va = va_start; va < va_end; va += PGSIZE)
-            {
-                mem::Pte pte = p->_pt.walk(va, 0);
-                if (!pte.is_null() && pte.is_valid())
-                {
-                    // 取消映射并释放物理页面
-                    mem::k_vmm.vmunmap(*p->get_pagetable(), va, 1, 1);
-                    printfCyan("[munmap] Unmapped page at va=%p\n", (void *)va);
-                }
-            }
-
-            // 更新VMA结构
-            if (overlap_start == vma_start && overlap_end == vma_end)
-            {
-                // 完全取消映射整个VMA
-                printfCyan("[munmap] Completely unmapping VMA %d\n", i);
-
-                if (vm->vfile != nullptr)
-                {
-                    vm->vfile->free_file(); // 减少文件引用计数
-                }
-
-                vm->used = 0;
-                vm->addr = 0;
-                vm->len = 0;
-                vm->vfile = nullptr;
-                vm->vfd = -1;
-            }
-            else if (overlap_start == vma_start)
-            {
-                // 从头部开始取消映射
-                printfCyan("[munmap] Unmapping from start of VMA %d\n", i);
-
-                uint64 remaining_len = vma_end - overlap_end;
-                vm->addr = overlap_end;
-                vm->len = remaining_len;
-                vm->offset += (overlap_end - vma_start);
-            }
-            else if (overlap_end == vma_end)
-            {
-                // 从尾部开始取消映射
-                printfCyan("[munmap] Unmapping from end of VMA %d\n", i);
-
-                vm->len = overlap_start - vma_start;
-            }
-            else
-            {
-                // 从中间取消映射，需要分割VMA
-                printfRed("[munmap] Middle unmapping not fully supported yet\n");
-                // TODO: 实现VMA分割，需要找到空闲VMA槽位来创建第二个VMA
-                // 目前简单处理：截断到取消映射的起始位置
-                vm->len = overlap_start - vma_start;
-            }
-        }
-
-        // 检查是否需要收缩heap_end
-        // 如果munmap的区域包含当前heap_end，需要收缩heap_end
-        proc::Pcb *p = get_cur_pcb();
-        if (p != nullptr) {
-            uint64 current_heap_end = p->get_heap_end();
-            uint64 unmap_start = (uint64)addr;
-            uint64 unmap_end = unmap_start + aligned_length;
-            
-            if (unmap_start <= current_heap_end && unmap_end >= current_heap_end)
-            {
-                // 需要收缩heap_end，找到最大的有效VMA结束地址
-                uint64 max_vma_end = p->get_heap_start(); // 至少应该是堆的起始位置
-                
-                for (int i = 0; i < NVMA; i++)
-                {
-                    struct vma *vm = &p->_vma->_vm[i];
-                    if (vm->used && vm->vfd == -1) // 只考虑匿名映射
-                    {
-                        uint64 vma_end = vm->addr + vm->len;
-                        if (vma_end > max_vma_end)
-                        {
-                            max_vma_end = vma_end;
-                        }
-                    }
-                }
-                
-                if (max_vma_end < current_heap_end)
-                {
-                    p->set_heap_end(max_vma_end);
-                    printfYellow("[munmap] Shrunk heap_end to %p\n", (void*)max_vma_end);
-                }
-            }
-        }
-
-        printfGreen("[munmap] Successfully unmapped range [%p, %p)\n", addr, (void *)unmap_end);
-        return 0;
+        return result;
     }
 
     /// @brief 调整现有内存映射的大小，可能移动映射位置
@@ -3769,49 +3565,28 @@ namespace proc
         mem::PageTable old_pt;
         old_pt = *proc->get_pagetable(); // 获取当前进程的页表
         
-        // 清理旧的程序段
-        proc->free_program_sections();
+        // 使用ProcessMemoryManager进行完整的内存清理
+        ProcessMemoryManager memory_mgr(proc);
         
-        // 清理旧的VMA映射（execve应该清除大部分内存映射）
-        if (proc->_vma != nullptr) {
-            for (int i = 0; i < NVMA; ++i) {
-                if (proc->_vma->_vm[i].used) {
-                    // execve时清除所有私有映射，保留某些特殊的共享映射
-                    bool should_preserve = false;
-                    
-                    // TODO: 根据需要保留特定的共享映射
-                    // 例如：共享库映射、特殊的设备映射等
-                    // if (proc->_vma->_vm[i].flags == MAP_SHARED && 
-                    //     is_special_mapping(&proc->_vma->_vm[i])) {
-                    //     should_preserve = true;
-                    // }
-                    
-                    if (!should_preserve) {
-                        // 释放VMA映射的内存
-                        uint64 va_start = PGROUNDDOWN(proc->_vma->_vm[i].addr);
-                        uint64 va_end = PGROUNDUP(proc->_vma->_vm[i].addr + proc->_vma->_vm[i].len);
-                        
-                        for (uint64 va = va_start; va < va_end; va += PGSIZE) {
-                            mem::Pte pte = proc->_pt.walk(va, 0);
-                            if (!pte.is_null() && pte.is_valid()) {
-                                mem::k_vmm.vmunmap(proc->_pt, va, 1, 1);
-                            }
-                        }
-                        
-                        // 释放文件引用
-                        if (proc->_vma->_vm[i].vfile != nullptr) {
-                            proc->_vma->_vm[i].vfile->free_file();
-                        }
-                        
-                        // 清除VMA条目
-                        proc->_vma->_vm[i].used = 0;
-                        proc->_vma->_vm[i].addr = 0;
-                        proc->_vma->_vm[i].len = 0;
-                        proc->_vma->_vm[i].vfile = nullptr;
-                    }
-                }
-            }
-        }
+        // execve需要清理原进程的所有内存空间，包括：
+        // 1. 程序段（代码段、数据段等）
+        // 2. 堆内存（malloc/brk分配的内存）
+        // 3. VMA映射（mmap创建的映射）
+        // 注意：不释放trapframe和页表结构，因为新程序还需要使用
+        
+        printfBlue("execve: cleaning up old process memory space\n");
+        
+        // 清理程序段
+        memory_mgr.free_all_program_sections();
+        
+        // 清理堆内存 - 这是之前遗漏的重要步骤
+        memory_mgr.free_heap_memory();
+        
+        // 清理VMA映射 - 使用统一的VMA管理接口
+        // execve应该清除所有VMA映射，因为新程序有自己的内存布局
+        memory_mgr.free_all_vma();
+        
+        printfGreen("execve: old process memory space cleaned up\n");
         
         // TODO: 这里需要根据ELF加载的各个段来添加程序段
         // 暂时使用总大小作为一个程序段 
@@ -3856,7 +3631,7 @@ namespace proc
     {
         Pcb *current = get_cur_pcb();
         if (current) {
-            current->print_memory_info();
+            current->print_detailed_memory_info();
         } else {
             printfRed("No current process\n");
         }
@@ -3866,7 +3641,7 @@ namespace proc
     {
         for (int i = 0; i < num_process; i++) {
             if (k_proc_pool[i]._pid == pid && k_proc_pool[i]._state != UNUSED) {
-                k_proc_pool[i].print_memory_info();
+                k_proc_pool[i].print_detailed_memory_info();
                 return;
             }
         }
@@ -3879,7 +3654,7 @@ namespace proc
         int count = 0;
         for (int i = 0; i < num_process; i++) {
             if (k_proc_pool[i]._state != UNUSED) {
-                k_proc_pool[i].print_memory_info();
+                k_proc_pool[i].print_detailed_memory_info();
                 count++;
                 printfMagenta("---\n");
             }

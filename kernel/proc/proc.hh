@@ -211,7 +211,6 @@ namespace proc
         void reset_memory_sections(); // 重置所有内存管理信息
         uint64 get_total_program_memory() const;
         void copy_program_sections(const Pcb *src);
-        void free_program_sections();
         
         // 堆内存管理方法
         void init_heap(uint64 start_addr);
@@ -221,15 +220,18 @@ namespace proc
         void set_heap_start(uint64 start_addr) { _heap_start = start_addr; }
         void set_heap_end(uint64 end_addr) { _heap_end = end_addr; }
         
-        // 内存大小计算方法
+        // 内存大小计算方法（内部使用）
         void update_total_memory_size();
         uint64 calculate_total_memory_size() const;
         
-        // 调试和信息打印方法
-        void print_memory_info() const;
-        
-        // 内存一致性检查方法
+        // 内存一致性检查方法（内部使用）
         bool verify_memory_consistency() const;
+        
+        // 内存管理接口
+        void free_all_memory_resources();       // 释放所有内存资源
+        void emergency_memory_cleanup();        // 紧急内存清理
+        bool check_memory_leaks() const;        // 检查内存泄漏
+        void print_detailed_memory_info() const; // 打印详细内存信息
 
     public:
         Context *get_context() { return &_context; }

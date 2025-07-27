@@ -19,6 +19,7 @@
 #include "context.hh"
 #include "virtual_memory_manager.hh"
 #include "physical_memory_manager.hh"
+#include "process_memory_manager.hh"  // 新增：进程内存管理器
 
 namespace proc
 {
@@ -357,100 +358,38 @@ namespace proc
         update_total_memory_size();
     }
 
-    void Pcb::free_program_sections()
-    {
-        // 释放程序段占用的内存
-        for (int i = 0; i < _prog_section_cnt; i++)
-        {
-            if (_prog_sections[i]._sec_start && _prog_sections[i]._sec_size > 0)
-            {
-                uint64 va_start = PGROUNDDOWN((uint64)_prog_sections[i]._sec_start);
-                uint64 va_end = PGROUNDUP((uint64)_prog_sections[i]._sec_start + _prog_sections[i]._sec_size);
-
-                // 释放该段的所有页面
-                for (uint64 va = va_start; va < va_end; va += PGSIZE)
-                {
-                    mem::Pte pte = _pt.walk(va, 0);
-                    if (pte.is_null())
-                    {
-                        panic("free_program_sections: PTE is null for va %p, this should not happen", (void *)va);
-                    }
-                    if (!pte.is_valid())
-                    {
-                        panic("free_program_sections: PTE is invalid for va %p, this should not happen", (void *)va);
-                    }
-                    mem::k_vmm.vmunmap(_pt, va, 1, 1);
-                }
-            }
-        }
-        clear_all_program_sections();
-    }
-
     /****************************************************************************************
      * 堆内存管理方法实现
      ****************************************************************************************/
     void Pcb::init_heap(uint64 start_addr)
     {
-        _heap_start = start_addr;
-        _heap_end = start_addr;
-
+        ProcessMemoryManager memory_mgr(this);
+        memory_mgr.init_heap(start_addr);
+        
         // 更新总内存大小
         update_total_memory_size();
     }
 
     uint64 Pcb::grow_heap(uint64 new_end)
     {
-        if (new_end <= _heap_end)
-        {
-            return _heap_end;
-        }
-
-        // 分配新的堆内存，使用适当的页表项标志
-#ifdef RISCV
-        uint64 result = mem::k_vmm.vmalloc(_pt, _heap_end, new_end, PTE_W | PTE_R | PTE_U);
-#elif defined(LOONGARCH)
-        uint64 result = mem::k_vmm.vmalloc(_pt, _heap_end, new_end, PTE_P | PTE_W | PTE_PLV | PTE_MAT | PTE_D);
-#endif
-
-        if (result < new_end)
-        {
-            // 分配失败
-            return _heap_end;
-        }
-
-        // 更新堆结束地址和总内存大小
-        _heap_end = new_end;
+        ProcessMemoryManager memory_mgr(this);
+        uint64 result = memory_mgr.grow_heap(new_end);
+        
+        // 更新总内存大小
         update_total_memory_size();
-
-        return _heap_end;
+        
+        return result;
     }
 
     uint64 Pcb::shrink_heap(uint64 new_end)
     {
-        if (new_end >= _heap_end || new_end < _heap_start)
-        {
-            return _heap_end;
-        }
-
-        // 释放多余的堆内存
-        uint64 va_start = PGROUNDUP(new_end);
-        uint64 va_end = PGROUNDUP(_heap_end);
-
-        for (uint64 va = va_start; va < va_end; va += PGSIZE)
-        {
-            mem::Pte pte = _pt.walk(va, 0);
-            if (!pte.is_null() && pte.is_valid())
-            {
-                mem::k_vmm.vmunmap(_pt, va, 1, 1);
-            }
-        }
-
-        _heap_end = new_end;
-
+        ProcessMemoryManager memory_mgr(this);
+        uint64 result = memory_mgr.shrink_heap(new_end);
+        
         // 更新总内存大小
         update_total_memory_size();
-
-        return _heap_end;
+        
+        return result;
     }
 
     /****************************************************************************************
@@ -477,98 +416,7 @@ namespace proc
         return total;
     }
 
-    /****************************************************************************************
-     * 调试和信息打印方法实现
-     ****************************************************************************************/
-    void Pcb::print_memory_info() const
-    {
-        printfCyan("=== Process Memory Information ===\n");
-        printfCyan("Process: %s (PID: %d)\n", _name, _pid);
-        printfCyan("Total Memory Size: %lu bytes (%.2f KB)\n", _sz, (double)_sz / 1024.0);
-
-        printfBlue("--- Program Sections ---\n");
-        if (_prog_section_cnt == 0)
-        {
-            printfBlue("No program sections\n");
-        }
-        else
-        {
-            uint64 total_prog_memory = 0;
-            for (int i = 0; i < _prog_section_cnt; i++)
-            {
-                printfBlue("  Section %d: %s\n", i, _prog_sections[i]._debug_name ? _prog_sections[i]._debug_name : "unnamed");
-                printfBlue("    Start: %p, Size: %lu bytes (%.2f KB)\n",
-                           _prog_sections[i]._sec_start,
-                           _prog_sections[i]._sec_size,
-                           (double)_prog_sections[i]._sec_size / 1024.0);
-                total_prog_memory += _prog_sections[i]._sec_size;
-            }
-            printfBlue("  Total Program Memory: %lu bytes (%.2f KB)\n",
-                       total_prog_memory, (double)total_prog_memory / 1024.0);
-        }
-
-        printfGreen("--- Heap Information ---\n");
-        if (_heap_start == _heap_end)
-        {
-            printfGreen("Heap not initialized or empty\n");
-        }
-        else
-        {
-            uint64 heap_size = get_heap_size();
-            printfGreen("  Heap Start: %p\n", (void *)_heap_start);
-            printfGreen("  Heap End: %p\n", (void *)_heap_end);
-            printfGreen("  Heap Size: %lu bytes (%.2f KB)\n", heap_size, (double)heap_size / 1024.0);
-        }
-        
-        printfMagenta("--- VMA Information (not counted in _sz) ---\n");
-        if (_vma == nullptr) {
-            printfMagenta("No VMA structure\n");
-        } else {
-            uint64 total_vma_memory = 0;
-            int active_vmas = 0;
-            for (int i = 0; i < NVMA; i++) {
-                if (_vma->_vm[i].used) {
-                    printfMagenta("  VMA %d:\n", i);
-                    printfMagenta("    Address: %p, Length: %lu bytes (%.2f KB)\n", 
-                                 (void*)_vma->_vm[i].addr, 
-                                 _vma->_vm[i].len,
-                                 (double)_vma->_vm[i].len / 1024.0);
-                    printfMagenta("    Prot: %d, Flags: %d\n", _vma->_vm[i].prot, _vma->_vm[i].flags);
-                    if (_vma->_vm[i].vfile) {
-                        printfMagenta("    File: mapped\n");
-                    } else {
-                        printfMagenta("    File: anonymous\n");
-                    }
-                    total_vma_memory += _vma->_vm[i].len;
-                    active_vmas++;
-                }
-            }
-            if (active_vmas == 0) {
-                printfMagenta("No active VMAs\n");
-            } else {
-                printfMagenta("  Total VMA Memory: %lu bytes (%.2f KB)\n", 
-                             total_vma_memory, (double)total_vma_memory / 1024.0);
-                printfMagenta("  Active VMAs: %d\n", active_vmas);
-            }
-        }
-
-        printfYellow("--- Memory Summary ---\n");
-        uint64 prog_total = get_total_program_memory();
-        uint64 heap_total = get_heap_size();
-        printfYellow("  Program Sections: %lu bytes (%.2f KB)\n", prog_total, (double)prog_total / 1024.0);
-        printfYellow("  Heap: %lu bytes (%.2f KB)\n", heap_total, (double)heap_total / 1024.0);
-        printfYellow("  Total (_sz): %lu bytes (%.2f KB)\n", _sz, (double)_sz / 1024.0);
-        printfYellow("  Calculated Total: %lu bytes (%.2f KB)\n",
-                     prog_total + heap_total, (double)(prog_total + heap_total) / 1024.0);
-
-        if (_sz != (prog_total + heap_total))
-        {
-            printfRed("  WARNING: _sz does not match calculated total!\n");
-        }
-
-        printfCyan("=== End Memory Information ===\n");
-    }
-
+    
     bool Pcb::verify_memory_consistency() const
     {
         uint64 calculated_total = calculate_total_memory_size();
@@ -577,12 +425,37 @@ namespace proc
         if (!consistent)
         {
             printfRed("Memory inconsistency detected in process %s (PID: %d)\n", _name, _pid);
-            printfRed("  _sz: %lu, calculated: %lu\n", _sz, calculated_total);
+            printfRed("  _sz: %u, calculated: %u\n", _sz, calculated_total);
             printfRed("  Note: VMA regions are managed separately and not counted in _sz\n");
             panic("proc verify_memory_consistency failed\n");
         }
 
         return consistent;
+    }
+
+    
+    void Pcb::free_all_memory_resources()
+    {
+        ProcessMemoryManager memory_mgr(this);
+        memory_mgr.free_all_memory();
+    }
+
+    void Pcb::emergency_memory_cleanup()
+    {
+        ProcessMemoryManager memory_mgr(this);
+        memory_mgr.emergency_cleanup();
+    }
+
+    bool Pcb::check_memory_leaks() const
+    {
+        ProcessMemoryManager memory_mgr(const_cast<Pcb*>(this));
+        return memory_mgr.check_memory_leaks();
+    }
+
+    void Pcb::print_detailed_memory_info() const
+    {
+        ProcessMemoryManager memory_mgr(const_cast<Pcb*>(this));
+        memory_mgr.print_memory_usage();
     }
 
 }

@@ -106,7 +106,7 @@ UserspaceStream &UserspaceStream::operator>>( UsRangeDesc &rd )
 		else
 		{
 			u64 l = _cache_end - _cache_ptr;
-			// printfRed("split copy: l=%lu, len=%u\n", l, len);
+			// printfRed("split copy: l=%u, len=%u\n", l, len);
 			
 			// 如果 l == 0，说明当前缓存已满，需要移动到下一个页面
 			if (l == 0) {

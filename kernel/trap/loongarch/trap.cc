@@ -384,7 +384,7 @@ int mmap_handler(uint64 va, int cause)
       //     uint64 old_len = p->_vma->_vm[i].len;
       //     p->_vma->_vm[i].len = new_len;
       //     p->_sz += (new_len - old_len);
-      //     printfCyan("mmap_handler: expanded VMA %d from %lu to %lu bytes\n", i, old_len, new_len);
+      //     printfCyan("mmap_handler: expanded VMA %d from %u to %u bytes\n", i, old_len, new_len);
       //     break;
       //   }
       // }
