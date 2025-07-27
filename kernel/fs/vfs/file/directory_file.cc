@@ -31,9 +31,10 @@ namespace fs
 
 	long directory_file::write(uint64 buf, size_t len, long off, bool upgrade)
 	{
-		// 目录文件不支持直接写操作
-		printfRed("directory_file:: write operation not supported for directories! ");
-		return -1;
+		// 目录文件不支持直接写操作，这是标准行为
+		// 返回 EISDIR (Is a directory) 错误码，符合 POSIX 标准
+		printfRed("directory_file:: write operation not supported for directories (EISDIR)");
+		return -EISDIR;
 	}
 
 	bool directory_file::read_ready()

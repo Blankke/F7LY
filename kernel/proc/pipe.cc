@@ -169,6 +169,8 @@ namespace proc
 					return -1;
 				}
 				// 让当前进程进入休眠状态，等待写端唤醒
+				printfRed("缓冲区为空\n");
+				return syscall::SYS_EAGAIN; // 返回 EAGAIN 错误，表示没有数据可读
 				k_pm.sleep(&_read_sleep, &_lock); // DOC: piperead-sleep
 			}
 

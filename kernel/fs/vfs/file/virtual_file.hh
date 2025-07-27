@@ -11,6 +11,16 @@ namespace mem
 
 namespace fs
 {
+    // 虚拟文件提供者类型枚举
+    enum class VirtualProviderType
+    {
+        GENERIC,
+        DEV_ZERO,
+        PROC_SELF_EXE,
+        PROC_MEMINFO,
+        // 可以根据需要添加更多类型
+    };
+
     // 虚拟文件内容提供者的抽象基类
     class VirtualContentProvider
     {
@@ -32,6 +42,9 @@ namespace fs
         
         // 处理写入操作（对于支持写入的虚拟文件）
         virtual long handle_write(uint64 buf, size_t len, long off) { return -1; }
+
+        // 获取提供者类型
+        virtual VirtualProviderType get_provider_type() const { return VirtualProviderType::GENERIC; }
     };
 
     class virtual_file : public file
@@ -237,6 +250,20 @@ namespace fs
         virtual bool is_writable() const override { return false; } // 只读文件
         virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
             return eastl::make_unique<ProcInterruptsProvider>();
+        }
+    };
+
+    // /dev/zero 内容提供者
+    class DevZeroProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_dynamic() const override { return true; } // 每次读取都生成新内容
+        virtual bool is_writable() const override { return true; } // 支持写入（丢弃所有数据）
+        virtual long handle_write(uint64 buf, size_t len, long off) override; // 处理写入操作
+        virtual VirtualProviderType get_provider_type() const override { return VirtualProviderType::DEV_ZERO; }
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<DevZeroProvider>();
         }
     };
 

@@ -336,6 +336,10 @@ namespace fs
         add_virtual_file("/dev/block/8:0", fs::FileTypes::FT_DEVICE,
                          eastl::make_unique<DevBlockProvider>(8, 0));
 
+        // /dev/zero (零设备)
+        add_virtual_file("/dev/zero", fs::FileTypes::FT_DEVICE,
+                         eastl::make_unique<DevZeroProvider>());
+
         // 打印树结构（调试用）
         printf("Virtual file system tree:\n");
         print_tree(root, 0, "");

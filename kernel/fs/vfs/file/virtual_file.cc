@@ -172,6 +172,27 @@ namespace fs
             return -1;
         }
 
+        // 特殊处理 /dev/zero 设备
+        if (_content_provider && _content_provider->get_provider_type() == VirtualProviderType::DEV_ZERO) {
+            // 处理偏移量参数
+            if (off < 0) {
+                off = _file_ptr;
+            }
+
+            // /dev/zero 可以读取任意数量的零字节
+            char* dst_buf = (char*)buf;
+            for (size_t i = 0; i < len; i++) {
+                dst_buf[i] = 0;
+            }
+
+            // 如果upgrade为true，更新文件指针
+            if (upgrade) {
+                _file_ptr = off + len;
+            }
+
+            return len;
+        }
+
         // 对于动态内容，每次都重新生成
         if (_content_provider->is_dynamic()) {
             _cached_content = _content_provider->generate_content();
@@ -484,6 +505,23 @@ namespace fs
         // 生成 /proc/interrupts 的内容
         // 格式：中断号:        计数\n
         return intr_stats::k_intr_stats.get_interrupts_info();
+    }
+
+    // ======================== DevZeroProvider 实现 ========================
+    
+    eastl::string DevZeroProvider::generate_content()
+    {
+        // /dev/zero 不需要预先生成内容，因为它产生无限的零字节
+        // 这个方法不应该被调用，因为我们会重写读取逻辑
+        return "";
+    }
+
+    long DevZeroProvider::handle_write(uint64 buf, size_t len, long off)
+    {
+        // /dev/zero 设备丢弃所有写入的数据，总是返回写入的长度
+        (void)buf;  // 忽略缓冲区内容
+        (void)off;  // 忽略偏移量
+        return len; // 假装写入了所有数据
     }
 
 } // namespace fs

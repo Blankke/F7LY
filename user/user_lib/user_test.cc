@@ -1725,7 +1725,7 @@ char *ltp_testcases[] = {
     // "mmap08", //pass
     // "mmap09",  //pass
     // "mmap1",
-    // "mmap10",
+    // "mmap10", //pass
     // "mmap11",   //pass
     // "mmap12",
     // "mmap13",
@@ -2119,7 +2119,7 @@ char *ltp_testcases[] = {
     // "read_all",
     // "read01", //貌似可以PASS
     // "read02",   //pass
-    // "read03",
+    // "read03", //pass
     // "read04", // 完全PASS
     // "readahead01",
     // "readahead02",
@@ -2146,7 +2146,7 @@ char *ltp_testcases[] = {
     // "remove_password.sh",
     // "removexattr01",
     // "removexattr02",
-    "rename01",
+    // "rename01",
     // "rename03",
     // "rename04",
     // "rename05",
