@@ -267,4 +267,37 @@ namespace fs
         }
     };
 
+    // /proc/self/maps 内容提供者
+    class ProcSelfMapsProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_dynamic() const override { return true; } // 内存映射信息需要实时更新
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcSelfMapsProvider>();
+        }
+    };
+
+    // /proc/self/pagemap 内容提供者  
+    class ProcSelfPagemapProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_dynamic() const override { return true; } // 页面映射信息需要实时更新
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcSelfPagemapProvider>();
+        }
+    };
+
+    // /proc/self/status 内容提供者
+    class ProcSelfStatusProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_dynamic() const override { return true; } // 进程状态信息需要实时更新
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcSelfStatusProvider>();
+        }
+    };
+
 }

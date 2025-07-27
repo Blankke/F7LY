@@ -8,6 +8,7 @@
 #include "printer.hh"
 #include "proc/proc.hh"
 #include "trap/interrupt_stats.hh"
+#include "fs/vfs/file/normal_file.hh"
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
 namespace fs
@@ -208,14 +209,15 @@ namespace fs
         }
 
         // 检查偏移量是否有效
-        if (off >= (long)_cached_content.size()) {
+        if (off >= (long)_cached_content.size()) 
+        {
+            printfRed("virtual_file::read: off=%d is out of bounds, size=%u\n", off, _cached_content.size());
             return 0; // EOF
         }
 
         // 计算实际要读取的字节数
         size_t available = _cached_content.size() - off;
         size_t to_read = min(len, available);
-
         // 复制数据到用户缓冲区
         const char* src_data = _cached_content.c_str() + off;
         
@@ -522,6 +524,238 @@ namespace fs
         (void)buf;  // 忽略缓冲区内容
         (void)off;  // 忽略偏移量
         return len; // 假装写入了所有数据
+    }
+
+    // ======================== ProcSelfMapsProvider 实现 ========================
+    
+    eastl::string ProcSelfMapsProvider::generate_content()
+    {
+        // TODO: 不懂mmap，等曹老师写
+        printfRed("需要曹老师实现，下面写的格式不对，内容也不对，只是个示例\n");
+        proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
+        if (!pcb || !pcb->_vma) {
+            return "";
+        }
+
+        eastl::string result;
+        
+        // 遍历所有VMA区域
+        for (int i = 0; i < proc::NVMA; i++) {
+            proc::vma &vm = pcb->_vma->_vm[i];
+            if (!vm.used) {
+                continue;
+            }
+
+            // 格式：address perms offset dev inode pathname
+            // 例如：00400000-0040c000 r-xp 00000000 08:01 1234567 /bin/cat
+            
+            // 地址范围 (start-end)
+            char addr_buf[64];
+            // sprintf(addr_buf, "%016lx-%016lx ", vm.addr, vm.addr + vm.len);
+            result += addr_buf;
+            
+            // 权限 (rwxp/rwxs)
+            char perms[5] = "----";
+            if (vm.prot & 0x1) perms[0] = 'r';  // PROT_READ
+            if (vm.prot & 0x2) perms[1] = 'w';  // PROT_WRITE  
+            if (vm.prot & 0x4) perms[2] = 'x';  // PROT_EXEC
+            if (vm.flags & 0x1) perms[3] = 's'; // MAP_SHARED
+            else perms[3] = 'p';                // MAP_PRIVATE
+            perms[4] = '\0';
+            result += perms;
+            result += " ";
+            
+            // 文件偏移
+            char offset_buf[16];
+            // sprintf(offset_buf, "%08x ", vm.offset);
+            result += offset_buf;
+            
+            // 设备号 (major:minor)
+            result += "00:00 ";
+            
+            // inode号
+            result += "0 ";
+            
+            // 路径名
+            if (vm.vfile && !vm.vfile->_path_name.empty()) {
+                result += vm.vfile->_path_name;
+            } else if (vm.addr <= 0x400000) {
+                result += "[heap]";
+            } else if (vm.addr >= 0x7fff0000) {
+                result += "[stack]";
+            }
+            
+            result += "\n";
+        }
+        
+        return result;
+    }
+
+    // ======================== ProcSelfPagemapProvider 实现 ========================
+    
+    eastl::string ProcSelfPagemapProvider::generate_content()
+    {
+        // TODO: 等曹老师写
+        printfRed("需要曹老师实现，只是个示例\n");
+
+        // /proc/self/pagemap 是二进制文件，每个虚拟页面对应8字节
+        // 由于这是一个文本实现，我们返回空内容或简化的表示
+        // 在真实实现中，这应该生成二进制数据
+        proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
+        if (!pcb) {
+            return "";
+        }
+        
+        eastl::string result;
+        result += "# Pagemap entries (simplified text representation)\n";
+        result += "# Format: virtual_addr -> physical_addr [flags]\n";
+        
+        //关于二进制数据，可以用二进制表示进一段内存中，转成char*再转eastl::string
+        
+        return result;
+    }
+
+    // ======================== ProcSelfStatusProvider 实现 ========================
+    
+    eastl::string ProcSelfStatusProvider::generate_content()
+    {
+        proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
+        if (!pcb) {
+            return "";
+        }
+
+        eastl::string result;
+        
+        // Name: 进程名
+        result += "Name:\t";
+        result += eastl::string(pcb->_name);
+        result += "\n";
+        
+        // State: 进程状态
+        result += "State:\t";
+        switch (pcb->_state) {
+            case proc::ProcState::UNUSED: result += "unused"; break;
+            case proc::ProcState::USED: result += "used"; break;
+            case proc::ProcState::SLEEPING: result += "S (sleeping)"; break;
+            case proc::ProcState::RUNNABLE: result += "R (running)"; break;
+            case proc::ProcState::RUNNING: result += "R (running)"; break;
+            case proc::ProcState::ZOMBIE: result += "Z (zombie)"; break;
+            default: result += "unknown"; break;
+        }
+        result += "\n";
+        
+        // Tgid, Ngid, Pid, PPid
+        auto int_to_string = [](int num) -> eastl::string {
+            if (num == 0) return "0";
+            
+            char buffer[16];
+            int pos = 15;
+            buffer[pos] = '\0';
+            
+            while (num > 0) {
+                buffer[--pos] = '0' + (num % 10);
+                num /= 10;
+            }
+            
+            return eastl::string(&buffer[pos]);
+        };
+        
+        result += "Tgid:\t" + int_to_string(pcb->_tgid) + "\n";
+        result += "Ngid:\t0\n";  // 命名空间组ID，暂时为0
+        result += "Pid:\t" + int_to_string(pcb->_pid) + "\n";
+        result += "PPid:\t" + int_to_string(pcb->_ppid) + "\n";
+        
+        // TracerPid
+        result += "TracerPid:\t0\n";
+        
+        // Uid 信息
+        result += "Uid:\t" + int_to_string(pcb->_uid) + "\t" + 
+                  int_to_string(pcb->_euid) + "\t" + 
+                  int_to_string(pcb->_suid) + "\t" + 
+                  int_to_string(pcb->_fsuid) + "\n";
+                  
+        // Gid 信息  
+        result += "Gid:\t" + int_to_string(pcb->_gid) + "\t" + 
+                  int_to_string(pcb->_egid) + "\t0\t0\n";
+        
+        // FDSize: 文件描述符表大小
+        result += "FDSize:\t" + int_to_string(proc::max_open_files) + "\n";
+        
+        // Groups: 附加组ID列表（暂时为空）
+        result += "Groups:\t\n";
+        
+        // NStgid, NSpid, NSpgid, NSsid（命名空间相关，暂时等于对应的全局ID）
+        result += "NStgid:\t" + int_to_string(pcb->_tgid) + "\n";
+        result += "NSpid:\t" + int_to_string(pcb->_pid) + "\n";  
+        result += "NSpgid:\t" + int_to_string(pcb->_pgid) + "\n";
+        result += "NSsid:\t" + int_to_string(pcb->_sid) + "\n";
+        
+        // VmPeak, VmSize: 虚拟内存大小（KB）
+        uint64 vm_size_kb = pcb->_sz / 1024;
+        result += "VmPeak:\t" + int_to_string(vm_size_kb) + " kB\n";
+        result += "VmSize:\t" + int_to_string(vm_size_kb) + " kB\n";
+        
+        // VmLck, VmPin, VmHWM, VmRSS（暂时设为0或简化值）
+        result += "VmLck:\t0 kB\n";
+        result += "VmPin:\t0 kB\n"; 
+        result += "VmHWM:\t" + int_to_string(vm_size_kb) + " kB\n";
+        result += "VmRSS:\t" + int_to_string(vm_size_kb) + " kB\n";
+        
+        // VmData, VmStk, VmExe, VmLib（内存段信息，简化实现）
+        result += "VmData:\t" + int_to_string(vm_size_kb / 4) + " kB\n";
+        result += "VmStk:\t132 kB\n";
+        result += "VmExe:\t" + int_to_string(vm_size_kb / 8) + " kB\n";
+        result += "VmLib:\t0 kB\n";
+        result += "VmPTE:\t" + int_to_string(vm_size_kb / 1024) + " kB\n";
+        result += "VmSwap:\t0 kB\n";
+        
+        // Threads: 线程数
+        result += "Threads:\t1\n";
+        
+        // SigQ: 排队信号数
+        result += "SigQ:\t0/1024\n";
+        
+        // SigPnd, ShdPnd: 待处理信号掩码
+        char sig_buf[32];
+        // sprintf(sig_buf, "%016lx", pcb->_signal);
+        result += "SigPnd:\t" + eastl::string(sig_buf) + "\n";
+        result += "ShdPnd:\t0000000000000000\n";
+        
+        // SigBlk: 阻塞信号掩码
+        // sprintf(sig_buf, "%016lx", pcb->_sigmask);
+        result += "SigBlk:\t" + eastl::string(sig_buf) + "\n";
+        result += "SigIgn:\t0000000000000000\n";
+        result += "SigCgt:\t0000000000000000\n";
+        
+        // CapInh, CapPrm, CapEff, CapBnd, CapAmb: 能力集（暂时全为0）
+        result += "CapInh:\t0000000000000000\n";
+        result += "CapPrm:\t0000000000000000\n";
+        result += "CapEff:\t0000000000000000\n";
+        result += "CapBnd:\t0000000000000000\n";
+        result += "CapAmb:\t0000000000000000\n";
+        
+        // NoNewPrivs: 禁止获取新特权
+        result += "NoNewPrivs:\t0\n";
+        
+        // Seccomp: seccomp模式
+        result += "Seccomp:\t0\n";
+        
+        // Speculation_Store_Bypass: 推测执行相关
+        result += "Speculation_Store_Bypass:\tnot vulnerable\n";
+        
+        // Cpus_allowed: 允许运行的CPU掩码
+        result += "Cpus_allowed:\tffffffff\n";
+        result += "Cpus_allowed_list:\t0-31\n";
+        
+        // Mems_allowed: 允许的内存节点
+        result += "Mems_allowed:\t1\n";
+        result += "Mems_allowed_list:\t0\n";
+        
+        // voluntary_ctxt_switches, nonvoluntary_ctxt_switches: 上下文切换次数
+        result += "voluntary_ctxt_switches:\t0\n";
+        result += "nonvoluntary_ctxt_switches:\t0\n";
+        
+        return result;
     }
 
 } // namespace fs

@@ -298,6 +298,18 @@ namespace fs
         add_virtual_file("/proc/self/stat", fs::FileTypes::FT_NORMAL,
                         eastl::make_unique<ProcSelfStatProvider>());
 
+        // 添加 /proc/self/maps 文件及其提供者
+        add_virtual_file("/proc/self/maps", fs::FileTypes::FT_NORMAL,
+                        eastl::make_unique<ProcSelfMapsProvider>());
+
+        // 添加 /proc/self/pagemap 文件及其提供者  
+        add_virtual_file("/proc/self/pagemap", fs::FileTypes::FT_NORMAL,
+                        eastl::make_unique<ProcSelfPagemapProvider>());
+
+        // 添加 /proc/self/status 文件及其提供者
+        add_virtual_file("/proc/self/status", fs::FileTypes::FT_NORMAL,
+                        eastl::make_unique<ProcSelfStatusProvider>());
+
         // ======================== Loop 设备节点 ========================
         // 添加 /dev/loop-control 控制设备
         add_virtual_file("/dev/loop-control", fs::FileTypes::FT_DEVICE,
