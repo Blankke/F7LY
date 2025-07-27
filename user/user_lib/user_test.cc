@@ -16,7 +16,13 @@ int strcmp(const char *s1, const char *s2) noexcept(true)
     }
     return *s1 < *s2 ? -1 : 1;
 }
-
+size_t strlen(const char *s) noexcept(true)
+{
+    size_t len = 0;
+    while (*s)
+        s++, len++;
+    return len;
+}
 int run_test(const char *path, char *argv[], char *envp[])
 {
 
@@ -255,9 +261,21 @@ int ltp_test(const char *path = musl_dir)
 {
     chdir("/musl/ltp/testcases/bin");
     printf("#### OS COMP TEST GROUP START ltp-musl ####\n");
+    char *bb_sh[8] = {0};
     for (int i = 0; ltp_testcases[i] != NULL; i++)
     {
-        run_test(ltp_testcases[i], 0, 0);
+        int len = strlen(ltp_testcases[i]);
+        if (len >= 3 && strcmp(ltp_testcases[i] + len - 3, ".sh") == 0)
+        {
+            bb_sh[0] = "busybox";
+            bb_sh[1] = "sh";
+            bb_sh[2] = ltp_testcases[i];
+            run_test("/musl/busybox", bb_sh, 0);
+        }
+        else
+        {
+            run_test(ltp_testcases[i], 0, 0);
+        }
     }
     return 0;
 }
@@ -2112,6 +2130,7 @@ char *ltp_testcases[] = {
     // "readlinkat01",
     // "readlinkat02",
     // "readv01", //pass
+    // "readv01", // pass
     // "readv02",   //pass
     // "realpath01",
     // "reboot01",
@@ -2127,7 +2146,7 @@ char *ltp_testcases[] = {
     // "remove_password.sh",
     // "removexattr01",
     // "removexattr02",
-    // "rename01",
+    "rename01",
     // "rename03",
     // "rename04",
     // "rename05",
@@ -2443,7 +2462,7 @@ char *ltp_testcases[] = {
     // "shmt06",        //pass
     // "shmt07",       //pass
     // "shmt08",      //pass
-    // "shmt09",   
+    // "shmt09",
     // "shmt10",       //pass
     // "sigaction01",
     // "sigaction02",
@@ -3237,16 +3256,16 @@ char *ltp_testcases[] = {
     // "write_freezing.sh",
     // "write01", // 完全PASS
     // "write02", // 完全PASS·
-    // "write03",
+    // "write03", // 完全PASS
     // "write04",
-    // "write05",
+    // "write05", // 完全PASS
     // "write06",
     // "writetest",
-    // "writev01",   //pass
+    // "writev01", // 完全PASS
     // "writev02",
     // "writev03",
-    // "writev05",      //pass
-    // "writev06",      //pass
+    // "writev05", // 完全PASS
+    // "writev06", // 完全PASS
     // "writev07",
     // "zram_lib.sh",
     // "zram01.sh",

@@ -216,17 +216,63 @@ namespace dev
 
     uint64_t LoopDevice::get_size() const
     {
-        panic("LoopDevice::get_size() not implemented yet");
+        if (!_is_bound || !_backing_file) {
+            return 0;
+        }
+
+        // 如果设置了大小限制，使用大小限制
+        if (_size_limit > 0) {
+            return _size_limit;
+        }
+
+        // 否则使用文件大小减去偏移量
+        uint64_t file_size = _backing_file->_stat.size;
+        if (file_size <= _offset) {
+            return 0;
+        }
+
+        return file_size - _offset;
     }
 
     int LoopDevice::_read_write_file(uint64_t offset, void* buffer, size_t size, bool is_write)
     {
-        panic("LoopDevice::_read_write_file() not implemented yet");
+        if (!_backing_file || !buffer) {
+            return -1;
+        }
+
+        // 计算在文件中的实际偏移量
+        uint64_t file_offset = _offset + offset;
+        
+        // 检查是否超出文件大小
+        uint64_t file_size = _backing_file->_stat.size;
+        if (file_offset >= file_size) {
+            return 0; // 已到文件末尾
+        }
+
+        // 限制读写大小，不能超出文件末尾
+        size_t actual_size = size;
+        if (file_offset + actual_size > file_size) {
+            actual_size = file_size - file_offset;
+        }
+
+        // 执行读写操作
+        long result;
+        if (is_write) {
+            result = _backing_file->write(reinterpret_cast<uint64_t>(buffer), actual_size, file_offset, true);
+        } else {
+            result = _backing_file->read(reinterpret_cast<uint64_t>(buffer), actual_size, file_offset, true);
+        }
+
+        return result < 0 ? -1 : static_cast<int>(result);
     }
 
     uint64_t LoopDevice::_get_file_size()
     {
-        panic("LoopDevice::_get_file_size() not implemented yet");
+        if (!_backing_file) {
+            return 0;
+        }
+        
+        return _backing_file->_stat.size;
     }
 
     // LoopControlDevice 实现

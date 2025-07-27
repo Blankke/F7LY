@@ -655,7 +655,7 @@ int vfs_is_file_exist(const char *path)
 {
     struct ext4_inode inode;
     uint32_t ino;
-    printfYellow("check file existence: %s\n", path);
+    // printfYellow("check file existence: %s\n", path);
     // 尝试获取文件的inode信息
     int res = ext4_raw_inode_fill(path, &ino, &inode);
     // TODO : 这里有个特别诡异的现象，加了print下面这行会爆炸

@@ -394,12 +394,12 @@ namespace syscall
     int SyscallHandler::_arg_addr(int arg_n, uint64 &out_addr)
     {
         uint64 raw_val = _arg_raw(arg_n);
-        if (raw_val < 0 || raw_val > UINT64_MAX)
-        {
-            printfRed("[SyscallHandler::_arg_addr]arg_n is out of range");
-            return -1;
-        }
         out_addr = raw_val;
+        // if(is_bad_addr(raw_val))
+        // {
+        //     printfRed("Bad address in _arg_addr:  %p\n", (void *)raw_val);
+        //     return -1;
+        // }
         return 0;
     }
     int SyscallHandler::_arg_str(int arg_n, eastl::string &buf, int max)
@@ -665,7 +665,7 @@ namespace syscall
         // printf("[sys_read] read %d characters in total\n", string_length);
         // 添加调试打印，显示读取到的内容
         k_buf[ret] = '\0'; // 确保字符串以null结尾
-        // printfCyan("[sys_read] fd=%d, read %d bytes: \"%s\"\n", fd, ret, k_buf);
+        printfYellow("[sys_read] fd=%d, read %d bytes: \"%s\"\n", fd, ret, k_buf);
 
         if (mem::k_vmm.copy_out(*pt, buf, k_buf, ret) < 0)
             return -EFAULT;
@@ -1157,31 +1157,42 @@ namespace syscall
         if (_arg_fd(0, &fd, &f) < 0)
         {
             printfRed("[SyscallHandler::sys_write] Error fetching file descriptor\n");
-            return -1;
+            return SYS_EBADF;
         }
         if (_arg_addr(1, p) < 0)
         {
             printfRed("[SyscallHandler::sys_write] Error fetching address argument\n");
-            return -1;
+            return SYS_EFAULT;
         }
         if (_arg_int(2, n) < 0)
         {
             printfRed("[SyscallHandler::sys_write] Error fetching n argument\n");
-            return -1;
+            return SYS_EFAULT;
         }
-
+        if(is_bad_addr(p))
+        {
+            printfRed("[SyscallHandler::sys_write] Invalid address: %p\n", (void *)p);
+            return SYS_EFAULT;
+        }
         // if (fd > 2)
         //     printfRed("invoke sys_write\n");
         // printf("syscall_write: fd: %d, p: %p, n: %d\n", fd, (void *)p, n);
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = proc->get_pagetable();
         char *buf = new char[n + 10];
+        // {
+        //     mem::UserspaceStream uspace((void *)p, n + 1, pt);
+        //     uspace.open();
+        //     mem::UsRangeDesc urd = std::make_tuple((u8 *)buf, (ulong)n + 1);
+        //     uspace >> urd;
+        //     uspace.close();
+        // }
+        // 这个实现也可以
+        if (mem::k_vmm.copy_in(*pt, buf, p, n) < 0)
         {
-            mem::UserspaceStream uspace((void *)p, n + 1, pt);
-            uspace.open();
-            mem::UsRangeDesc urd = std::make_tuple((u8 *)buf, (ulong)n + 1);
-            uspace >> urd;
-            uspace.close();
+            printfRed("[SyscallHandler::sys_write] Error copying data from user space\n");
+            delete[] buf;
+            return -1;
         }
         long rc = f->write((ulong)buf, n, f->get_file_offset(), true);
         delete[] buf;

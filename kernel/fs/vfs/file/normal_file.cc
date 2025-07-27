@@ -145,8 +145,7 @@ long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 			_file_ptr = new_off;
 			break;
 		case SEEK_END:
-			// 支持稀疏文件：允许从文件末尾向后seek
-			new_off = this->_stat.size + offset;
+			new_off = this->_stat.size - offset;
 			if (new_off < 0)
 				return -EINVAL;
 			_file_ptr = new_off;
