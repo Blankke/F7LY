@@ -3190,6 +3190,7 @@ namespace proc
                 // 为当前段分配虚拟内存空间，从段的虚拟地址开始
                 uint64 segment_start = PGROUNDDOWN(ph.vaddr);
                 uint64 segment_end = PGROUNDUP(ph.vaddr + ph.memsz);
+                // printfCyan("segment_start: %p, segment_end: %p\n", segment_start, segment_end);
 
                 if (mem::k_vmm.uvmalloc(new_pt, segment_start, segment_end, seg_flag) == 0)
                 {
@@ -3222,9 +3223,11 @@ namespace proc
                     break;
                 }
 
-                // 记录段信息到临时数组
-                new_sec_desc[new_sec_cnt]._sec_start = (void *)ph.vaddr;
-                new_sec_desc[new_sec_cnt]._sec_size = ph.memsz; // 使用内存大小而不是文件大小
+                // 记录段信息到临时数组，确保页对齐
+                uint64 aligned_start = PGROUNDDOWN(ph.vaddr);
+                uint64 aligned_end = PGROUNDUP(ph.vaddr + ph.memsz);
+                new_sec_desc[new_sec_cnt]._sec_start = (void *)aligned_start;
+                new_sec_desc[new_sec_cnt]._sec_size = aligned_end - aligned_start; // 页对齐的大小
 
                 // 根据段的标志位设置调试名称
                 const char *section_name = nullptr;
@@ -3251,8 +3254,11 @@ namespace proc
                 new_sec_desc[new_sec_cnt]._debug_name = section_name;
                 new_sec_cnt++;
 
-                printfGreen("execve: recorded program section[%d]: %s at %p, size %p\n",
-                            new_sec_cnt - 1, section_name, (void *)ph.vaddr, (void *)ph.memsz);
+                printfGreen("execve: recorded program section[%d]: %s at %p, size %p (page-aligned from %p, %p)\n",
+                            new_sec_cnt - 1, section_name, 
+                            new_sec_desc[new_sec_cnt - 1]._sec_start, 
+                            (void *)new_sec_desc[new_sec_cnt - 1]._sec_size,
+                            (void *)ph.vaddr, (void *)ph.memsz);
             }
             // 如果加载过程中出错，清理已分配的资源
             if (load_bad)
@@ -3354,9 +3360,11 @@ namespace proc
                         return -1;
                     }
 
-                    // 记录动态链接器段信息
-                    new_sec_desc[new_sec_cnt]._sec_start = (void *)load_addr;
-                    new_sec_desc[new_sec_cnt]._sec_size = interp_ph.memsz;
+                    // 记录动态链接器段信息，确保页对齐
+                    uint64 linker_aligned_start = PGROUNDDOWN(load_addr);
+                    uint64 linker_aligned_end = PGROUNDUP(load_addr + interp_ph.memsz);
+                    new_sec_desc[new_sec_cnt]._sec_start = (void *)linker_aligned_start;
+                    new_sec_desc[new_sec_cnt]._sec_size = linker_aligned_end - linker_aligned_start;
 
                     // 为动态链接器段设置调试名称
                     const char *linker_section_name = nullptr;
@@ -3376,8 +3384,11 @@ namespace proc
                     new_sec_desc[new_sec_cnt]._debug_name = linker_section_name;
                     new_sec_cnt++;
 
-                    printfGreen("execve: recorded linker section[%d]: %s at %p, size %p\n",
-                                new_sec_cnt - 1, linker_section_name, (void *)load_addr, (void *)interp_ph.memsz);
+                    printfGreen("execve: recorded linker section[%d]: %s at %p, size %p (page-aligned from %p, %p)\n",
+                                new_sec_cnt - 1, linker_section_name,
+                                new_sec_desc[new_sec_cnt - 1]._sec_start,
+                                (void *)new_sec_desc[new_sec_cnt - 1]._sec_size,
+                                (void *)load_addr, (void *)interp_ph.memsz);
                 }
 
                 interp_entry = interp_base + interp_elf.entry;
@@ -3747,59 +3758,6 @@ namespace proc
 
         // 写成0为了适配glibc的rtld_fini需求
         return 0; // 返回参数个数，表示成功执行
-    }
-
-    /****************************************************************************************
-     * 调试函数实现
-     ****************************************************************************************/
-    void ProcessManager::print_current_process_memory_info()
-    {
-        Pcb *current = get_cur_pcb();
-        if (current)
-        {
-            current->print_detailed_memory_info();
-        }
-        else
-        {
-            printfRed("No current process\n");
-        }
-    }
-
-    void ProcessManager::print_process_memory_info(int pid)
-    {
-        for (int i = 0; i < num_process; i++)
-        {
-            if (k_proc_pool[i]._pid == pid && k_proc_pool[i]._state != UNUSED)
-            {
-                k_proc_pool[i].print_detailed_memory_info();
-                return;
-            }
-        }
-        printfRed("Process with PID %d not found\n", pid);
-    }
-
-    void ProcessManager::print_all_process_memory_info()
-    {
-        printfMagenta("=== All Process Memory Information ===\n");
-        int count = 0;
-        for (int i = 0; i < num_process; i++)
-        {
-            if (k_proc_pool[i]._state != UNUSED)
-            {
-                k_proc_pool[i].print_detailed_memory_info();
-                count++;
-                printfMagenta("---\n");
-            }
-        }
-        if (count == 0)
-        {
-            printfMagenta("No active processes\n");
-        }
-        else
-        {
-            printfMagenta("Total active processes: %d\n", count);
-        }
-        printfMagenta("=== End All Process Memory Information ===\n");
     }
 
 }; // namespace proc

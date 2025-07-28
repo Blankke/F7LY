@@ -454,8 +454,88 @@ namespace proc
 
     void Pcb::print_detailed_memory_info() const
     {
-        ProcessMemoryManager memory_mgr(const_cast<Pcb*>(this));
-        memory_mgr.print_memory_usage();
+        printfCyan("=== PCB Memory Information ===\n");
+        printfCyan("Process: %s (PID: %d)\n", _name, _pid);
+        printfCyan("Total process size: %u bytes\n", _sz);
+        
+        // 程序段信息
+        printfCyan("Program sections (%d):\n", _prog_section_cnt);
+        uint64 sections_total = 0;
+        for (int i = 0; i < _prog_section_cnt; i++)
+        {
+            printfCyan("  Section %d (%s): %p - %p (%u bytes)\n",
+                      i,
+                      _prog_sections[i]._debug_name ? _prog_sections[i]._debug_name : "unnamed",
+                      _prog_sections[i]._sec_start,
+                      (void*)((uint64)_prog_sections[i]._sec_start + _prog_sections[i]._sec_size),
+                      _prog_sections[i]._sec_size);
+            sections_total += _prog_sections[i]._sec_size;
+        }
+        printfCyan("Total program sections: %u bytes\n", sections_total);
+        
+        // 堆信息
+        uint64 heap_size = get_heap_size();
+        if (heap_size > 0)
+        {
+            printfCyan("Heap: %p - %p (%u bytes)\n", 
+                      (void*)_heap_start,
+                      (void*)_heap_end,
+                      heap_size);
+        }
+        else
+        {
+            printfCyan("Heap: not allocated\n");
+        }
+
+        // VMA信息
+        if (_vma)
+        {
+            printfCyan("VMA structure: present (ref_cnt: %d)\n", _vma->_ref_cnt);
+            uint64 vma_total = 0;
+            int active_vmas = 0;
+            for (int i = 0; i < NVMA; i++)
+            {
+                if (_vma->_vm[i].used)
+                {
+                    printfCyan("  VMA %d: %p - %p (%u bytes, prot=%d, flags=%d)\n",
+                              i,
+                              (void*)_vma->_vm[i].addr,
+                              (void*)(_vma->_vm[i].addr + _vma->_vm[i].len),
+                              _vma->_vm[i].len,
+                              _vma->_vm[i].prot,
+                              _vma->_vm[i].flags);
+                    vma_total += _vma->_vm[i].len;
+                    active_vmas++;
+                }
+            }
+            printfCyan("Total VMA usage: %u bytes (%d active VMAs)\n", vma_total, active_vmas);
+        }
+        else
+        {
+            printfCyan("VMA structure: not present\n");
+        }
+
+        // 页表信息
+        if (_pt.get_base())
+        {
+            printfCyan("Page table: present (%p)\n", _pt.get_base());
+        }
+        else
+        {
+            printfCyan("Page table: not present\n");
+        }
+
+        // TrapFrame信息
+        if (_trapframe)
+        {
+            printfCyan("TrapFrame: present (%p)\n", _trapframe);
+        }
+        else
+        {
+            printfCyan("TrapFrame: not present\n");
+        }
+
+        printfCyan("=== End PCB Memory Information ===\n");
     }
 
 }

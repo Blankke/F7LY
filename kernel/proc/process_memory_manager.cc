@@ -774,34 +774,8 @@ namespace proc
     {
         if (!_pcb)
             return;
-
-        printfCyan("=== ProcessMemoryManager Memory Report ===\n");
-        printfCyan("Process: %s (PID: %d)\n", _pcb->get_name(), _pcb->get_pid());
-
         // 调用PCB的详细内存信息打印函数
         _pcb->print_detailed_memory_info();
-
-        // 添加额外的管理器级别信息
-        printfCyan("--- Memory Manager Status ---\n");
-        if (_pcb->_vma)
-        {
-            printfCyan("VMA structure: present (ref_cnt: %d)\n", _pcb->_vma->_ref_cnt);
-        }
-        else
-        {
-            printfCyan("VMA structure: not present\n");
-        }
-
-        if (_pcb->get_pagetable()->get_base())
-        {
-            printfCyan("Page table: present (%p)\n", _pcb->get_pagetable()->get_base());
-        }
-        else
-        {
-            printfCyan("Page table: not present\n");
-        }
-
-        printfCyan("=== End Memory Report ===\n");
     }
 
     bool ProcessMemoryManager::verify_all_memory_consistency() const
