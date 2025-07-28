@@ -62,7 +62,7 @@ struct inode_operations {
 
 extern struct inode_operations inode_ops;
 
-#define EXT4_PATH_LONG_MAX 512
+#define EXT4_PATH_LONG_MAX 1024
 
 struct vfs_ext4_inode_info {
     char fname[EXT4_PATH_LONG_MAX];

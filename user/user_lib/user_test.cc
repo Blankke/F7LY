@@ -1920,10 +1920,10 @@ char *ltp_testcases[] = {
     // "open09", //pass
     // "open10",
     // "open11",    //pass
-    "open12",
+    // "open12",    //过了一个
     // "open12_child",
     // "open13",    // pass
-    // "open14",
+    // "open14",    //pass这个测例要跑一年，别急着掐死，多等会
     // "openat01", // 完全PASS
     // "openat02",
     // "openat02_child",

@@ -12,8 +12,16 @@ long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 		ulong ret;
 		if (_attrs.u_read != 1)
 		{
-			printfRed("normal_file:: not allowed to read! ");
-			return -1;
+			// 对于 O_TMPFILE 创建的文件，即使权限是 0，也允许文件所有者读取
+			if (lwext4_file_struct.flags & O_TMPFILE)
+			{
+				printfYellow("normal_file::read: allowing read from O_TMPFILE despite permissions\n");
+			}
+			else
+			{
+				printfRed("normal_file:: not allowed to read! ");
+				return -1;
+			}
 		}
 		
 		// 处理偏移量参数
@@ -62,8 +70,16 @@ long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 		long current_pos = _file_ptr;
 		if (_attrs.u_write != 1)
 		{
-			printfRed("normal_file:: not allowed to write! ");
-			return -EBADF;
+			// 对于 O_TMPFILE 创建的文件，即使权限是 0，也允许文件所有者写入
+			if (lwext4_file_struct.flags & O_TMPFILE)
+			{
+				printfYellow("normal_file::write: allowing write to O_TMPFILE despite permissions\n");
+			}
+			else
+			{
+				printfRed("normal_file:: not allowed to write! ");
+				return -EBADF;
+			}
 		}
 		if (off != _file_ptr)
 		{

@@ -356,6 +356,9 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
                 return -status; // 返回正确的错误码
             }
 
+            // 重要：恢复 O_TMPFILE 标志，以便权限检查时能识别这是一个临时文件
+            temp_file->lwext4_file_struct.flags |= O_TMPFILE;
+
             // // 立即从目录中删除文件条目，使其成为匿名文件
             // // 这样文件就只能通过文件描述符访问，实现真正的O_TMPFILE语义
             // int unlink_status = ext4_fremove(tmp_path.c_str());

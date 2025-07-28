@@ -1088,7 +1088,7 @@ namespace syscall
         int dir_fd;
         uint64 path_addr;
         int flags;
-        int mode = 0644; // 默认权限
+        int mode = 0; // 默认权限，只有在O_CREAT或O_TMPFILE时才会被设置
 
         if (_arg_int(0, dir_fd) < 0)
             return SYS_EINVAL;
@@ -1096,8 +1096,8 @@ namespace syscall
             return SYS_EINVAL;
         if (_arg_int(2, flags) < 0)
             return SYS_EINVAL;
-        // 如果使用了O_CREAT标志，需要获取mode参数
-        if (flags & O_CREAT)
+        // 如果使用了O_CREAT或O_TMPFILE标志，需要获取mode参数
+        if ((flags & O_CREAT) || (flags & O_TMPFILE))
         {
             if (_arg_int(3, mode) < 0)
                 return SYS_EINVAL;
@@ -1381,6 +1381,30 @@ namespace syscall
             abs_oldpath = oldpath;
         }
 
+        // 检查是否是 /proc/self/fd/ 路径
+        if (abs_oldpath.find("/proc/self/fd/") == 0)
+        {
+            // 解析文件描述符
+            eastl::string fd_str = abs_oldpath.substr(14); // 跳过 "/proc/self/fd/"
+            int target_fd = 0;
+            for (size_t i = 0; i < fd_str.size(); ++i) {
+                if (fd_str[i] < '0' || fd_str[i] > '9') break;
+                target_fd = target_fd * 10 + (fd_str[i] - '0');
+            }
+            
+            fs::file *target_file = p->get_open_file(target_fd);
+            if (!target_file)
+            {
+                printfRed("sys_linkat: 无效的文件描述符: %d\n", target_fd);
+                return -EBADF;
+            }
+            
+            // 对于 linkat，如果源文件以 O_PATH 打开，仍然可以创建硬链接
+            // 这是 Linux 的行为
+            abs_oldpath = target_file->_path_name;
+            printfYellow("sys_linkat: resolved /proc/self/fd/%d to %s\n", target_fd, abs_oldpath.c_str());
+        }
+
         // 处理目标路径
         if (newpath.empty() || newpath[0] != '/')
         {
@@ -1469,9 +1493,15 @@ namespace syscall
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
         eastl::string path;
-        if (mem::k_vmm.copy_str_in(*pt, path, path_addr, 100) < 0)
+        if (mem::k_vmm.copy_str_in(*pt, path, path_addr, MAXPATH) < 0)
             return -1;
 
+        // 检查路径长度，防止栈溢出
+        if (path.length() >= MAXPATH) {
+            printfRed("[sys_mkdirat] Path too long: %zu\n", path.length());
+            return SYS_ENAMETOOLONG;
+        }
+        printfMagenta("[SyscallHandler::sys_mkdirat] dir_fd: %d, path: %s, mode: 0%o\n", dir_fd, path.c_str(), mode);
         int res = proc::k_pm.mkdir(dir_fd, path, mode); // 传递mode而不是flags
         return res;
     }
@@ -2069,7 +2099,7 @@ namespace syscall
             return -1;
         }
 
-        if (_arg_str(1, pathname, 256) < 0)
+        if (_arg_str(1, pathname, MAXPATH) < 0)
         {
             printfRed("[SyscallHandler::sys_fstatat] Error fetching path argument\n");
             return -1;
@@ -2417,7 +2447,7 @@ namespace syscall
             return -1;
 
         eastl::string path;
-        if (_arg_str(1, path, 256) < 0)
+        if (_arg_str(1, path, MAXPATH) < 0)
             return -1;
 
         uint64 buf;
@@ -2451,7 +2481,44 @@ namespace syscall
             }
             return ret;
         }
-        printfCyan("[sys_readlinkat] fd: %d, path: %s, buf: %p, buf_size: %u", fd, path.c_str(), (void *)buf, buf_size);
+        
+        if (path.find("/proc/self/fd/") == 0)
+        {
+            // 解析文件描述符
+            eastl::string fd_str = path.substr(14); // 跳过 "/proc/self/fd/"
+            int target_fd = 0;
+            for (size_t i = 0; i < fd_str.size(); ++i) {
+                if (fd_str[i] < '0' || fd_str[i] > '9') break;
+                target_fd = target_fd * 10 + (fd_str[i] - '0');
+            }
+            
+            fs::file *target_file = p->get_open_file(target_fd);
+            if (!target_file)
+            {
+                printfRed("[sys_readlinkat] 无效的文件描述符: %d\n", target_fd);
+                return SYS_EBADF;
+            }
+            
+            // 对于 /proc/self/fd/ 路径，直接返回目标文件的路径
+            // 这相当于读取符号链接的目标
+            eastl::string target_path = target_file->_path_name;
+            
+            if (target_path.length() > buf_size)
+            {
+                printfRed("[sys_readlinkat] Target path too long for buffer");
+                return SYS_ENAMETOOLONG;
+            }
+            
+            // 将结果拷贝到用户空间
+            if (mem::k_vmm.copy_out(*pt, buf, target_path.c_str(), target_path.length()) < 0)
+            {
+                printfRed("[sys_readlinkat] Failed to copy result to user space");
+                return SYS_EFAULT;
+            }
+            
+            printfCyan("[sys_readlinkat] Successfully read proc fd symlink: /proc/self/fd/%d -> %s\n", target_fd, target_path.c_str());
+            return target_path.length();
+        }printfCyan("[sys_readlinkat] fd: %d, path: %s, buf: %p, buf_size: %u", fd, path.c_str(), (void *)buf, buf_size);
         // 如果路径为空，获取dirfd对应的符号链接
         if (path.empty())
         {
