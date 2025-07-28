@@ -1911,7 +1911,7 @@ char *ltp_testcases[] = {
     // "open_tree01",
     // "open_tree02",
     // "open01",    //pass
-    // "open02",    //symlink?
+    // "open02",    
     // "open03", // 完全PASS
     // "open04",    //完全PASS
     // "open06",   //pass
@@ -1919,11 +1919,11 @@ char *ltp_testcases[] = {
     // "open08",
     // "open09", //pass
     // "open10",
-    // "open11",    //symlink?
+    // "open11",    //pass
     // "open12",
     // "open12_child",
-    // "open13",    //symlink?
-    "open14",
+    "open13",    //half pass
+    // "open14",
     // "openat01", // 完全PASS
     // "openat02",
     // "openat02_child",

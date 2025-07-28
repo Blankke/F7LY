@@ -792,25 +792,29 @@ int vfs_is_file_exist(const char *path)
 {
     struct ext4_inode inode;
     uint32_t ino;
-    // printfYellow("check file existence: %s\n", path);
+    printfYellow("vfs_is_file_exist: checking path: %s\n", path);
     // 尝试获取文件的inode信息
     int res = ext4_raw_inode_fill(path, &ino, &inode);
+    printfYellow("vfs_is_file_exist: ext4_raw_inode_fill returned: %d for path: %s\n", res, path);
     // TODO : 这里有个特别诡异的现象，加了print下面这行会爆炸
     //  printf("res:%p\n", res);
 
     if (res == EOK)
     {
         // 文件存在
+        printfGreen("vfs_is_file_exist: file exists: %s\n", path);
         return 1;
     }
     else if (res == ENOENT)
     {
         // 文件不存在
+        printfRed("vfs_is_file_exist: file not found: %s\n", path);
         return 0;
     }
     else
     {
         // 其他错误（如权限问题、路径错误等）
+        printfRed("vfs_is_file_exist: error %d for path: %s\n", res, path);
         return -res; // 返回负的错误码
     }
 }
@@ -1113,8 +1117,13 @@ int vfs_frename(const char *oldpath, const char *newpath)
 
 int vfs_link(const char *oldpath, const char *newpath)
 {
+    printfYellow("vfs_link: checking source file existence: %s\n", oldpath);
+    
     // 检查源文件是否存在
-    if (vfs_is_file_exist(oldpath) != 1)
+    int file_exists = vfs_is_file_exist(oldpath);
+    printfYellow("vfs_link: vfs_is_file_exist returned: %d for path: %s\n", file_exists, oldpath);
+    
+    if (file_exists != 1)
     {
         printfRed("vfs_link: source file %s does not exist\n", oldpath);
         return -ENOENT;
