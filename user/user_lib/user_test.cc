@@ -581,10 +581,10 @@ char *ltp_testcases[] = {
     // "check_setkey",
     // "check_simple_capset",
     // "chmod01", // 完全PASS
-    // "chmod03",
-    // "chmod05",
-    // "chmod06",
-    // "chmod07",
+    // "chmod03",   //sendmsg
+    // "chmod05", //sendmsg
+    // "chmod06", //sendmsg
+    // "chmod07", //sendmsg
     // "chown01",     //pass但是结束的时候copyout爆了
     // "chown01_16",
     // "chown02",
@@ -820,9 +820,9 @@ char *ltp_testcases[] = {
     // "faccessat02", // 完全PASS
     // "faccessat201",   
     // "faccessat202",
-    // "fallocate01",    //卡死了
+    // "fallocate01",    //过了一半
     // "fallocate02",   //完全通过
-    // "fallocate03",
+    // "fallocate03", //卡死了
     // "fallocate04",
     // "fallocate05",
     // "fallocate06",
@@ -853,14 +853,14 @@ char *ltp_testcases[] = {
     // "fanout01",
     // "fchdir01", //完全PASS
     // "fchdir02", // 完全PASS
-    // "fchdir03",
-    // "fchmod01",
-    // "fchmod02",
-    // "fchmod03",
-    // "fchmod04",
-    // "fchmod05",
-    // "fchmod06",
-    // "fchmodat01",
+    // "fchdir03",  //sendmsg
+    // "fchmod01",   //pass
+    // "fchmod02",  //sendmsg
+    // "fchmod03",//sendmsg
+    // "fchmod04",//sendmsg
+    // "fchmod05",//sendmsg
+    // "fchmod06",//sendmsg
+    // "fchmodat01",  //pass
     // "fchmodat02",
     // "fchown01",//pass
     // "fchown01_16",
@@ -900,7 +900,7 @@ char *ltp_testcases[] = {
     // "fcntl13_64", //pass
     // "fcntl14",
     // "fcntl14_64",
-    // "fcntl15",
+    // "fcntl15", 
     // "fcntl15_64",
     // "fcntl16",
     // "fcntl16_64",
@@ -1727,7 +1727,7 @@ char *ltp_testcases[] = {
     // "mmap1",
     // "mmap10", //pass
     // "mmap11",   //pass
-    "mmap12",
+    // "mmap12",
     // "mmap13",
     // "mmap14",
     // "mmap15",  //pass
@@ -1922,7 +1922,7 @@ char *ltp_testcases[] = {
     // "open11",    //pass
     // "open12",
     // "open12_child",
-    // "open13",    //half pass
+    // "open13",    // pass
     // "open14",
     // "openat01", // 完全PASS
     // "openat02",

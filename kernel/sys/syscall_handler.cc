@@ -5703,6 +5703,36 @@ namespace syscall
         }
 
         printfCyan("[SyscallHandler::sys_fchmodat] 绝对路径: %s\n", abs_pathname.c_str());
+        
+        // 检查是否是 /proc/self/fd/ 路径
+        if (abs_pathname.find("/proc/self/fd/") == 0)
+        {
+            // 解析文件描述符
+            eastl::string fd_str = abs_pathname.substr(14); // 跳过 "/proc/self/fd/"
+            int fd = 0;
+            for (size_t i = 0; i < fd_str.size(); ++i) {
+                if (fd_str[i] < '0' || fd_str[i] > '9') break;
+                fd = fd * 10 + (fd_str[i] - '0');
+            }
+            
+            fs::file *target_file = p->get_open_file(fd);
+            if (!target_file)
+            {
+                printfRed("[SyscallHandler::sys_fchmodat] 无效的文件描述符: %d\n", fd);
+                return SYS_EBADF;
+            }
+            
+            // 检查是否以 O_PATH 标志打开，如果是则返回 EBADF
+            if (target_file->lwext4_file_struct.flags & O_PATH)
+            {
+                printfRed("[SyscallHandler::sys_fchmodat] O_PATH标志打开的文件不允许修改权限\n");
+                return SYS_EBADF;
+            }
+            
+            // 使用实际文件路径
+            abs_pathname = target_file->_path_name;
+        }
+        
         fs::file *file = nullptr;
         fs::k_vfs.openat(abs_pathname, file, O_RDONLY);
         if (file->lwext4_file_struct.flags & O_PATH)
@@ -5778,6 +5808,37 @@ namespace syscall
                 abs_pathname = get_absolute_path(pathname.c_str(), dir_file->_path_name.c_str());
             }
         }
+        
+        // 检查是否是 /proc/self/fd/ 路径
+        if (abs_pathname.find("/proc/self/fd/") == 0)
+        {
+            // 解析文件描述符
+            eastl::string fd_str = abs_pathname.substr(14); // 跳过 "/proc/self/fd/"
+            int fd = 0;
+            for (size_t i = 0; i < fd_str.size(); ++i) {
+                if (fd_str[i] < '0' || fd_str[i] > '9') break;
+                fd = fd * 10 + (fd_str[i] - '0');
+            }
+            
+            fs::file *target_file = p->get_open_file(fd);
+            if (!target_file)
+            {
+                printfRed("[SyscallHandler::sys_fchmodat] 无效的文件描述符: %d\n", fd);
+                return SYS_EBADF;
+            }
+            
+            // 检查是否以 O_PATH 标志打开，如果是则返回 EBADF
+            if (target_file->lwext4_file_struct.flags & O_PATH)
+            {
+                printfRed("[SyscallHandler::sys_fchmodat] O_PATH标志打开的文件不允许修改权限\n");
+                return SYS_EBADF;
+            }
+            
+            // 使用实际文件路径
+            abs_pathname = target_file->_path_name;
+        }
+
+        //没有实现实际功能，只有错误检查
         return 0;
     }
     uint64 SyscallHandler::sys_fchown()
@@ -5809,9 +5870,7 @@ namespace syscall
             return -EBADF;
         }
 
-        // 当前实现简化处理，直接返回成功
-        // 在实际系统中需要检查权限并更新文件的所有者信息
-        printfCyan("[SyscallHandler::sys_fchown] fd=%d, uid=%d, gid=%d (简化实现)\n", fd, uid, gid);
+        //没实现实际功能，只有错误检查
         return 0;
     }
     uint64 SyscallHandler::sys_preadv()
