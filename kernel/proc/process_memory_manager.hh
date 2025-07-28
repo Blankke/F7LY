@@ -220,6 +220,20 @@ public:
      */
     void emergency_cleanup();
 
+    /**
+     * @brief 专门用于execve失败时的页表清理
+     * 
+     * 在execve加载过程中出现错误时，安全地清理已分配的页表和内存。
+     * 这个函数不依赖PCB状态，直接操作页表进行清理。
+     * 
+     * @param pagetable 要清理的页表
+     * @param section_descs 已分配的程序段描述数组
+     * @param section_count 程序段数量
+     */
+    static void cleanup_execve_pagetable(mem::PageTable& pagetable, 
+                                       const program_section_desc* section_descs, 
+                                       int section_count);
+
     /****************************************************************************************
      * 内存调试和监控接口
      ****************************************************************************************/

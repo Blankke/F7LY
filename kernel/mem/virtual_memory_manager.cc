@@ -664,6 +664,7 @@ namespace mem
                 uvmdealloc(pt, a, oldsz);
                 return 0;
             }
+            k_pmm.clear_page((void*) pa);
             if (!map_pages(pt, a, PGSIZE, pa, riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_user_m | flags))
             {
                 k_pmm.free_page((void *)pa);

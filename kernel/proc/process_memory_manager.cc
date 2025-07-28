@@ -722,6 +722,50 @@ namespace proc
         printfRed("ProcessMemoryManager: emergency cleanup completed\n");
     }
 
+    void ProcessMemoryManager::cleanup_execve_pagetable(mem::PageTable& pagetable, 
+                                                       const program_section_desc* section_descs, 
+                                                       int section_count)
+    {
+        if (!pagetable.get_base()) {
+            printfYellow("cleanup_execve_pagetable: invalid pagetable, skipping cleanup\n");
+            return;
+        }
+
+        printfRed("cleanup_execve_pagetable: cleaning up %d allocated sections\n", section_count);
+
+        // 遍历所有已记录的程序段，释放其占用的内存
+        for (int i = 0; i < section_count; i++) {
+            if (section_descs[i]._sec_start && section_descs[i]._sec_size > 0) {
+                uint64 va_start = PGROUNDDOWN((uint64)section_descs[i]._sec_start);
+                uint64 va_end = PGROUNDUP((uint64)section_descs[i]._sec_start + section_descs[i]._sec_size);
+
+                printfRed("  Cleaning section %d (%s): %p - %p (%u bytes)\n",
+                         i,
+                         section_descs[i]._debug_name ? section_descs[i]._debug_name : "unnamed",
+                         (void*)va_start,
+                         (void*)va_end,
+                         section_descs[i]._sec_size);
+
+                // 直接使用vmunmap清理，不检查页面有效性以提高错误处理的鲁棒性
+                for (uint64 va = va_start; va < va_end; va += PGSIZE) {
+                    mem::k_vmm.vmunmap(pagetable, va, 1, 1);
+                }
+            }
+        }
+
+        // 清理页表的特殊映射（trampoline、trapframe等）
+#ifdef RISCV
+        mem::k_vmm.vmunmap(pagetable, TRAMPOLINE, 1, 0);
+#endif
+        mem::k_vmm.vmunmap(pagetable, TRAPFRAME, 1, 0);
+        mem::k_vmm.vmunmap(pagetable, SIG_TRAMPOLINE, 1, 0);
+
+        // 减少页表引用计数
+        pagetable.dec_ref();
+
+        printfGreen("cleanup_execve_pagetable: cleanup completed\n");
+    }
+
     /****************************************************************************************
      * 内存调试和监控接口实现
      ****************************************************************************************/
