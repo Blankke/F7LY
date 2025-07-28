@@ -1920,7 +1920,7 @@ char *ltp_testcases[] = {
     // "open09", //pass
     // "open10",
     // "open11",    //pass
-    // "open12",
+    "open12",
     // "open12_child",
     // "open13",    // pass
     // "open14",
