@@ -586,7 +586,6 @@ namespace proc
 
     void ProcessManager::user_init()
     {
-#ifdef RISCV
         static int inited = 0;
         // 防止重复初始化
         if (inited != 0)
@@ -618,7 +617,12 @@ namespace proc
         // 初始化堆在代码段后面
         p->init_heap(allocated_sz);
 
+        // 设置程序计数器和栈指针 - 架构相关的部分
+#ifdef RISCV
         p->_trapframe->epc = 0;
+#elif defined(LOONGARCH)
+        p->_trapframe->era = 0;
+#endif
         p->_trapframe->sp = allocated_sz;
 
         safestrcpy(p->_name, "initcode", sizeof(p->_name));
@@ -629,51 +633,6 @@ namespace proc
         p->_state = ProcState::RUNNABLE;
 
         p->_lock.release();
-
-#elif defined(LOONGARCH)
-        static int inited = 0;
-        // 防止重复初始化
-        if (inited != 0)
-        {
-            panic("re-init user.");
-            return;
-        }
-
-        Pcb *p = alloc_proc();
-        if (p == nullptr)
-        {
-            panic("user_init: alloc_proc failed");
-            return;
-        }
-
-        _init_proc = p;
-
-        // 传入initcode的地址
-        printfCyan("initcode pagetable: %p\n", p->_pt.get_base());
-        uint64 initcode_sz = (uint64)initcode_end - (uint64)initcode_start;
-        uint64 allocated_sz = mem::k_vmm.uvmfirst(p->_pt, (uint64)initcode_start, initcode_sz);
-
-        printf("initcode start: %p, end: %p\n", initcode_start, initcode_end);
-        printf("initcode size: %p, total allocated space: %p\n", initcode_sz, allocated_sz);
-
-        // 使用新的程序段管理
-        p->add_program_section((void *)0, allocated_sz, "initcode");
-
-        // 初始化堆在代码段后面
-        p->init_heap(allocated_sz);
-
-        p->_trapframe->era = 0;           // 设置程序计数器为0
-        p->_trapframe->sp = allocated_sz; // 设置栈指针
-
-        safestrcpy(p->_name, "initcode", sizeof(p->_name));
-        p->_parent = p;
-        // safestrcpy(p->_cwd_name, "/", sizeof(p->_cwd_name));
-        p->_cwd_name = "/";
-
-        p->_state = ProcState::RUNNABLE;
-
-        p->_lock.release();
-#endif
     }
 
     // Atomically release lock and sleep on chan.
