@@ -220,6 +220,7 @@ namespace syscall
         uint64 sys_setpriority();
         uint64 sys_getpriority();
         uint64 sys_reboot();
+        uint64 sys_timer_create();
     };
 
     extern SyscallHandler k_syscall_handler;

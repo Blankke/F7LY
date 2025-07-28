@@ -254,7 +254,7 @@ namespace syscall
         BIND_SYSCALL(setpriority); // from rocket
         BIND_SYSCALL(getpriority); // from rocket
         BIND_SYSCALL(reboot);      // from rocket
-
+        BIND_SYSCALL(timer_create); // from rocket
         // ...existing code...
         // printfCyan("====================debug: syscall_num_list\n");
         // for (uint64 i = 0; i < max_syscall_funcs_num; i++)
@@ -2730,7 +2730,7 @@ namespace syscall
         if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE && f->_attrs.filetype != fs::FileTypes::FT_PIPE)
         {
             printfRed("[SyscallHandler::sys_ioctl] File is not a device file\n");
-            return SYS_ENOTTY; // 不是设备文件
+            // return SYS_ENOTTY; // 不是设备文件
         }
         u32 cmd;
         if (_arg_int(1, tmp) < 0)
@@ -2748,7 +2748,8 @@ namespace syscall
             return SYS_EINVAL;
         }
         arg = arg;
-
+        printfCyan("[SyscallHandler::sys_ioctl] fd: %d, cmd: 0x%X, arg: %p\n",
+                   fd, cmd, (void *)arg);
         /// @todo not implement
 
         if ((cmd & 0xFFFF) == TCGETS)
@@ -3237,6 +3238,16 @@ namespace syscall
             printf("[SyscallHandler::sys_ioctl] Block device size: %u bytes\n", device_size);
             return 0;
         }
+      
+        if((cmd & 0xFFFF) == FS_IOC_GETFLAGS) 
+        {
+            panic("FS_IOC_GETFLAGS not implemented yet");   
+        }
+        if ((cmd & 0xFFFF) == FS_IOC_SETFLAGS) 
+        {
+            panic("FS_IOC_SETFLAGS not implemented yet");
+        }
+        
         printfRed("[SyscallHandler::sys_ioctl] Unsupported ioctl command: 0x%X\n", cmd);
 
         return -EINVAL;
@@ -6355,6 +6366,10 @@ namespace syscall
         panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_reboot()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_timer_create()
     {
         panic("未实现该系统调用");
     }

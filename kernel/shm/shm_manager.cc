@@ -812,7 +812,7 @@ namespace shm
                 // 创建系统限制信息
                 struct shminfo sys_info = {};
                 sys_info.shmmax = 32 * 1024 * 1024;  // 最大段大小 32MB
-                sys_info.shmmin = PGSIZE;             // 最小段大小
+                sys_info.shmmin = 1;             // 最小段大小
                 sys_info.shmmni = 4096;               // 最大段数量
                 sys_info.shmseg = 128;                // 每进程最大段数(未使用)
                 sys_info.shmall = (shm_size / PGSIZE); // 系统总页数
@@ -832,7 +832,7 @@ namespace shm
                         max_index = pair.first;
                     }
                 }
-                return max_index;
+                return 0;
             }
 
             case SHM_INFO:

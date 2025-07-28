@@ -818,8 +818,8 @@ char *ltp_testcases[] = {
     // "f00f",
     // "faccessat01", //完全PASS
     // "faccessat02", // 完全PASS
-    // "faccessat201",   //symlink?
-    // "faccessat202", //symlink?
+    // "faccessat201",   
+    // "faccessat202",
     // "fallocate01",    //卡死了
     // "fallocate02",   //完全通过
     // "fallocate03",
@@ -1727,7 +1727,7 @@ char *ltp_testcases[] = {
     // "mmap1",
     // "mmap10", //pass
     // "mmap11",   //pass
-    // "mmap12",
+    "mmap12",
     // "mmap13",
     // "mmap14",
     // "mmap15",  //pass
@@ -1922,7 +1922,7 @@ char *ltp_testcases[] = {
     // "open11",    //pass
     // "open12",
     // "open12_child",
-    "open13",    //half pass
+    // "open13",    //half pass
     // "open14",
     // "openat01", // 完全PASS
     // "openat02",
@@ -2127,8 +2127,8 @@ char *ltp_testcases[] = {
     // "readdir21",
     // "readlink01",
     // "readlink03",
-    // "readlinkat01",
-    // "readlinkat02",
+    // "readlinkat01", //pass
+    // "readlinkat02", //pass
     // "readv01", //pass
     // "readv01", // pass
     // "readv02",   //pass
@@ -2439,9 +2439,9 @@ char *ltp_testcases[] = {
     // "shmat04",     //pass
     // "shmat1",
     // "shmctl01",     //pass
-    // "shmctl02",
+    // "shmctl02",    //sendmsg
     // "shmctl03",
-    // "shmctl04",
+    // "shmctl04",   //sendmsg
     // "shmctl05",   //remap_file_pages
     // "shmctl06",    //test requires struct shmid64_ds to have the time_high fields
     // "shmctl07",    //pass
@@ -2451,9 +2451,9 @@ char *ltp_testcases[] = {
     // "shmem_2nstest", //看不懂
     // "shmget02",
     // "shmget03",
-    // "shmget04",
-    // "shmget05",
-    // "shmget06",
+    // "shmget04",   //sendmsg
+    // "shmget05",    //.config
+    // "shmget06", //.config
     // "shmnstest",   //pass
     // "shmt02",     //pass
     // "shmt03",      //pass
@@ -2462,7 +2462,7 @@ char *ltp_testcases[] = {
     // "shmt06",        //pass
     // "shmt07",       //pass
     // "shmt08",      //pass
-    // "shmt09",
+    // "shmt09",      //sbrk
     // "shmt10",       //pass
     // "sigaction01",
     // "sigaction02",
@@ -2525,20 +2525,20 @@ char *ltp_testcases[] = {
     // "stack_clash",
     // "stack_space",
     // "starvation",
-    // "stat01",
+    // "stat01",      //sendmsg
     // "stat01_64",
-    // "stat02",
-    // "stat02_64",
-    // "stat03",
+    // "stat02",    //pass
+    // "stat02_64",   //pass
+    // "stat03",   //sendmsg
     // "stat03_64",
-    // "statfs01",
+    // "statfs01",   //clone?
     // "statfs01_64",
     // "statfs02",  //pass偷的
     // "statfs02_64", //pass偷的
     // "statfs03",
     // "statfs03_64",
     // "statvfs01",
-    // "statvfs02", //symlink?
+    // "statvfs02", //pass
     // "statx01",  //pass
     // "statx02",  //pass
     // "statx03",// pass
@@ -2547,7 +2547,7 @@ char *ltp_testcases[] = {
     // "statx06",
     // "statx07",  
     // "statx08",
-    // "statx09",
+    // "statx09",   //.config
     // "statx10",
     // "statx11",
     // "statx12",
@@ -2578,8 +2578,8 @@ char *ltp_testcases[] = {
     // "sync_file_range02",
     // "sync01",
     // "syncfs01",
-    // "syscall01",
-    // "sysconf01",
+    // "syscall01",  //pass
+    // "sysconf01", //过了很多，很多没过
     // "sysctl01",
     // "sysctl01.sh",
     // "sysctl02.sh",
@@ -2970,9 +2970,9 @@ char *ltp_testcases[] = {
     // "thp02",
     // "thp03",
     // "thp04",
-    // "time01",
+    // "time01",   //pass
     // "timed_forkbomb",
-    // "timens01",
+    // "timens01", //.config
     // "timer_delete01",
     // "timer_delete02",
     // "timer_getoverrun01",
@@ -3152,11 +3152,11 @@ char *ltp_testcases[] = {
     // "uname01", // 完全PASS
     // "uname02",// 完全PASS
     // "uname04", // 完全PASS
-    // "unlink05", //symlink?
-    // "unlink07",
-    // "unlink08",
-    // "unlink09",
-    // "unlinkat01",
+    // "unlink05", //pass
+    // "unlink07",  //pass
+    // "unlink08",   //sendmsg
+    // "unlink09",   
+    // "unlinkat01", //pass (unlink failed)
     // "unshare01",
     // "unshare01.sh",
     // "unshare02",
