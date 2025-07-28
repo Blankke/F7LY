@@ -192,6 +192,154 @@ void Printer::print( const char *fmt, ... )
     _lock.release();
 }
 
+int Printer::snprint(char *buffer, size_t size, const char *fmt, ...)
+{
+  if (buffer == nullptr || size == 0 || fmt == nullptr)
+    return -1;
+
+  va_list ap;
+  int i, c;
+  const char *s;
+  char *buf_ptr = buffer;
+  char *buf_end = buffer + size - 1; // 为 '\0' 留一个位置
+  int total_written = 0;
+
+  // 内部函数：向缓冲区写入一个字符
+  auto write_char = [&](char ch) -> bool {
+    if (buf_ptr < buf_end) {
+      *buf_ptr++ = ch;
+      total_written++;
+      return true;
+    }
+    total_written++;  // 仍然计数，即使没有写入
+    return false;
+  };
+
+  // 内部函数：向缓冲区写入整数
+  auto write_int = [&](int xx, int base, int sign) {
+    char int_buf[16];
+    int idx = 0;
+    uint x;
+
+    if (sign && (sign = xx < 0))
+      x = -xx;
+    else
+      x = xx;
+
+    do {
+      int_buf[idx++] = _lower_digits[x % base];
+    } while ((x /= base) != 0);
+
+    if (sign) int_buf[idx++] = '-';
+
+    while (--idx >= 0) {
+      write_char(int_buf[idx]);
+    }
+  };
+
+  // 内部函数：向缓冲区写入十六进制数
+  auto write_hex = [&](uint64 val, int width, bool uppercase) {
+    char hex_buf[16];
+    int j = 0;
+    char *digits = uppercase ? _upper_digits : _lower_digits;
+    
+    do {
+      hex_buf[j++] = digits[val % 16];
+    } while ((val /= 16) != 0);
+    
+    // Padding with '0' if width > j
+    for (int k = j; k < width; k++)
+      write_char('0');
+    
+    while (--j >= 0)
+      write_char(hex_buf[j]);
+  };
+
+  va_start(ap, fmt);
+  for (i = 0; (c = fmt[i] & 0xff) != 0; ) {
+    if (c != '%') {
+      write_char(c);
+      i++;
+      continue;
+    }
+    i++; // skip '%'
+    int width = 0;
+    // Parse width (e.g., %04x)
+    while (fmt[i] >= '0' && fmt[i] <= '9') {
+      width = width * 10 + (fmt[i] - '0');
+      i++;
+    }
+    c = fmt[i] & 0xff;
+    if (c == 0)
+      break;
+    switch (c) {
+    case 'b':
+      write_int(va_arg(ap, int), 2, 1);
+      break;
+    case 'd':
+      write_int(va_arg(ap, int), 10, 1);
+      break;
+    case 'u':
+      write_int(va_arg(ap, uint), 10, 0);
+      break;
+    case 'x':
+      write_hex(va_arg(ap, uint64), width, false);
+      break;
+    case 'X':
+      write_hex(va_arg(ap, uint64), width, true);
+      break;
+    case 'o': {
+      uint64 val = va_arg(ap, uint64);
+      char oct_buf[16];
+      int j = 0;
+      do {
+        oct_buf[j++] = _upper_digits[val % 8];
+      } while ((val /= 8) != 0);
+      for (int k = j; k < width; k++)
+        write_char('0');
+      while (--j >= 0)
+        write_char(oct_buf[j]);
+      break;
+    }
+    case 'p': {
+      write_char('0');
+      write_char('x');
+      uint64 val = va_arg(ap, uint64);
+      for (int k = 0; (uint)k < (sizeof(uint64) * 2); k++, val <<= 4) {
+        write_char(_lower_digits[val >> 60]);
+      }
+      break;
+    }
+    case 's':
+      if ((s = va_arg(ap, const char *)) == 0)
+        s = "(null)";
+      for (; *s; s++)
+        write_char(*s);
+      break;
+    case 'c': {
+      int ch = va_arg(ap, int);
+      write_char(ch);
+      break;
+    }
+    case '%':
+      write_char('%');
+      break;
+    default:
+      // Print unknown % sequence to draw attention.
+      write_char('%');
+      write_char(c);
+      break;
+    }
+    i++;
+  }
+  va_end(ap);
+
+  // 添加字符串结束符
+  *buf_ptr = '\0';
+
+  return total_written;
+}
+
 void Printer::k_panic( const char *f, uint l, const char *info, ... )
 {
   va_list ap;

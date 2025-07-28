@@ -438,6 +438,7 @@ namespace fs
         else
         {
             // 调用常规的fstat处理
+            printfCyan("[VirtualFileSystem] ::fstat: calling vfs_fstat for non-virtual file\n");
             return vfs_fstat(f, st);
         }
     }

@@ -1923,7 +1923,7 @@ char *ltp_testcases[] = {
     // "open12",
     // "open12_child",
     // "open13",    //symlink?
-    // "open14",
+    "open14",
     // "openat01", // 完全PASS
     // "openat02",
     // "openat02_child",

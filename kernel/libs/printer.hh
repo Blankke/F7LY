@@ -12,6 +12,7 @@
 #define panic(info, args...) k_printer.k_panic(__FILE__, __LINE__, info, ##args)
 
 #define printf(info, args...) k_printer.print(info, ##args)
+#define snprintf(buffer, size, fmt, args...) k_printer.snprint(buffer, size, fmt, ##args)
 #define assert(expr, detail, args...) ((expr) ? (void)0 : k_printer.assrt(__FILE__, __LINE__, #expr, detail, ##args))
 
 #ifndef COLOR_PRINT
@@ -57,6 +58,7 @@ public:
 	inline int is_panic() { return _panicked; }
 
 	void print(const char *fmt, ...);
+	int snprint(char *buffer, size_t size, const char *fmt, ...);
 	void printint(int xx, int base, int sign);
 	void printbyte(uint8 x);
 	void printptr(uint64 x);

@@ -15,6 +15,7 @@ int vfs_fstat(fs::file *f, fs::Kstat *st);
 int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count);
 int vfs_mkdir(const char *path, uint64_t mode);
 int vfs_frename(const char *oldpath, const char *newpath);
+int vfs_link(const char *oldpath, const char *newpath);
 int vfs_truncate(fs::file *f, size_t length);
 int vfs_chmod(eastl::string pathname, mode_t mode);
 int vfs_fallocate(fs::file *f,off_t offset, size_t length);

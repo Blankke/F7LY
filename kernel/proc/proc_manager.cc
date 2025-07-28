@@ -1752,9 +1752,8 @@ namespace proc
         if (p->_ofile == nullptr || p->_ofile->_ofile_ptr[fd] == nullptr)
             return -1;
         fs::file *f = p->_ofile->_ofile_ptr[fd];
-        fs::k_vfs.fstat(f, buf);
+        return   fs::k_vfs.fstat(f, buf);
 
-        return 0;
     }
     int ProcessManager::chdir(eastl::string &path)
     {

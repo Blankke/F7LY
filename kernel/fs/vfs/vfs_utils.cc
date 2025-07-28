@@ -8,91 +8,110 @@
 #include "fs/vfs/file/pipe_file.hh"
 #include "fs/vfs/file/directory_file.hh"
 #include "fs/vfs/fifo_manager.hh"
-#include "proc_manager.hh"  // 用于访问当前进程的umask
+#include "proc_manager.hh" // 用于访问当前进程的umask
 #include "fs/lwext4/ext4.hh"
 #include <EASTL/vector.h>
 
 // 解析符号链接路径
-static int resolve_symlinks(const eastl::string& input_path, eastl::string& resolved_path, int max_depth = 8)
+static int resolve_symlinks(const eastl::string &input_path, eastl::string &resolved_path, int max_depth = 8)
 {
-    if (max_depth <= 0) {
+    if (max_depth <= 0)
+    {
         return -ELOOP; // 符号链接嵌套太深
     }
-    
+
     resolved_path = input_path;
-    
+
     // 按 '/' 分割路径
     eastl::vector<eastl::string> path_parts;
     eastl::string current_part;
-    
-    for (size_t i = 0; i < input_path.length(); i++) {
-        if (input_path[i] == '/') {
-            if (!current_part.empty()) {
+
+    for (size_t i = 0; i < input_path.length(); i++)
+    {
+        if (input_path[i] == '/')
+        {
+            if (!current_part.empty())
+            {
                 path_parts.push_back(current_part);
                 current_part.clear();
             }
-        } else {
+        }
+        else
+        {
             current_part += input_path[i];
         }
     }
-    if (!current_part.empty()) {
+    if (!current_part.empty())
+    {
         path_parts.push_back(current_part);
     }
-    
+
     // 重新构建路径，逐步检查每个组件是否为符号链接
     eastl::string current_path = "/";
 
-    for (size_t i = 0; i < path_parts.size(); i++) {
-        if (current_path.back() != '/') {
+    for (size_t i = 0; i < path_parts.size(); i++)
+    {
+        if (current_path.back() != '/')
+        {
             current_path += "/";
         }
         current_path += path_parts[i];
         printfYellow("Checking path component: %s\n", current_path.c_str());
         // 检查当前路径是否为符号链接
         int type = vfs_path2filetype(current_path);
-        if (type == fs::FileTypes::FT_SYMLINK) {
+        if (type == fs::FileTypes::FT_SYMLINK)
+        {
             // 读取符号链接内容
             char link_target[256];
             size_t link_len;
             int r = ext4_readlink(current_path.c_str(), link_target, sizeof(link_target) - 1, &link_len);
-            if (r != EOK) {
+            if (r != EOK)
+            {
                 return -ENOENT;
             }
             link_target[link_len] = '\0';
-            
+
             eastl::string link_path(link_target);
-            
+
             eastl::string new_path;
-            
+
             // 如果符号链接是绝对路径，重新开始
-            if (link_path[0] == '/') {
+            if (link_path[0] == '/')
+            {
                 new_path = link_path;
-            } else {
+            }
+            else
+            {
                 // 相对路径：需要相对于当前组件的父目录
                 size_t last_slash = current_path.find_last_of('/');
-                if (last_slash == eastl::string::npos || last_slash == 0) {
+                if (last_slash == eastl::string::npos || last_slash == 0)
+                {
                     new_path = "/" + link_path;
-                } else {
+                }
+                else
+                {
                     new_path = current_path.substr(0, last_slash + 1) + link_path;
                 }
             }
-            
+
             // 添加剩余的路径组件
-            for (size_t j = i + 1; j < path_parts.size(); j++) {
-                if (new_path.back() != '/') {
+            for (size_t j = i + 1; j < path_parts.size(); j++)
+            {
+                if (new_path.back() != '/')
+                {
                     new_path += "/";
                 }
                 new_path += path_parts[j];
             }
 
-            printfYellow("Resolving symlink %s -> %s, final path: %s\n", 
-                        current_path.c_str(), link_path.c_str(), new_path.c_str());
+            printfYellow("Resolving symlink %s -> %s, final path: %s\n",
+                         current_path.c_str(), link_path.c_str(), new_path.c_str());
 
             // 递归解析剩余的符号链接
             return resolve_symlinks(new_path, resolved_path, max_depth - 1);
         }
     }
-    
+
     resolved_path = current_path;
     return 0;
 }
@@ -179,7 +198,7 @@ static mode_t apply_umask(mode_t mode)
         // 如果无法获取当前进程，使用默认umask 022
         return mode & ~0022;
     }
-    
+
     // 应用当前进程的umask：从mode中清除umask中设置的权限位
     return mode & ~(current_proc->_umask);
 }
@@ -232,9 +251,9 @@ static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file
 
     // 正确处理文件访问模式：检查低两位来确定读写权限
     // 注意：只修改基本权限位（低9位），保留特殊权限位（sticky bit, setuid, setgid）
-    mode_t special_bits = mode & 07000;  // 保存特殊权限位（sticky, setuid, setgid）
-    mode_t basic_perms = mode & 0777;    // 获取基本权限位
-    
+    mode_t special_bits = mode & 07000; // 保存特殊权限位（sticky, setuid, setgid）
+    mode_t basic_perms = mode & 0777;   // 获取基本权限位
+
     int access_mode = flags & 0x3; // 取低两位
     if (access_mode == O_RDONLY)   // 0x00 - 只读
     {
@@ -244,10 +263,10 @@ static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file
     else if (access_mode == O_WRONLY) // 0x01 - 只写
     {
         basic_perms &= ~0444; // 清除读权限
-        basic_perms |= 0222; // 设置写权限
+        basic_perms |= 0222;  // 设置写权限
     }
     // O_RDWR (0x02) 保持读写权限不变
-    
+
     // 合并特殊权限位和基本权限位
     mode = special_bits | basic_perms;
 
@@ -256,14 +275,109 @@ static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file
 int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mode)
 {
     printfYellow("[vfs_openat] : absolute_path=%s, flags=%o, mode=0%o\n", absolute_path.c_str(), flags, mode);
-    
+
     bool file_exists = (vfs_is_file_exist(absolute_path.c_str()) == 1);
-    
+
     // 处理 O_EXCL + O_CREAT 组合：如果文件存在，应该失败
     if ((flags & O_CREAT) && (flags & O_EXCL) && file_exists)
     {
         printfRed("vfs_openat: file %s already exists with O_CREAT|O_EXCL\n", absolute_path.c_str());
         return -EEXIST;
+    }
+
+    // 处理 O_TMPFILE：创建匿名临时文件
+    if (flags & O_TMPFILE)
+    {
+        // 去除末尾斜杠
+        eastl::string dir_path = absolute_path;
+        if (!dir_path.empty() && dir_path.back() == '/')
+            dir_path.pop_back();
+
+        // O_TMPFILE 要求路径必须是一个存在的目录
+        if (!file_exists)
+        {
+            printfRed("vfs_openat: O_TMPFILE specified but directory %s does not exist\n", dir_path.c_str());
+            return -ENOENT;
+        }
+
+        int dir_type = vfs_path2filetype(dir_path);
+        if (dir_type != fs::FileTypes::FT_DIRECT)
+        {
+            printfRed("vfs_openat: O_TMPFILE specified but %s is not a directory\n", dir_path.c_str());
+            return -ENOTDIR;
+        }
+
+        // O_TMPFILE 的两种情况处理
+        int access_mode = flags & O_ACCMODE;
+        if (access_mode == O_RDONLY)
+        {
+            // O_TMPFILE | O_RDONLY：打开目录进行读取，而不是创建临时文件
+            printfGreen("vfs_openat: O_TMPFILE|O_RDONLY - opening directory %s for reading\n", dir_path.c_str());
+            
+            // 移除 O_TMPFILE 标志，按普通目录打开处理
+            flags &= ~O_TMPFILE;
+            absolute_path = dir_path; // 使用处理过的路径（去除末尾斜杠）
+            // 继续执行下面的普通文件处理逻辑
+        }
+        else
+        {
+            // O_TMPFILE | O_RDWR/O_WRONLY：创建匿名临时文件
+            printfGreen("vfs_openat: O_TMPFILE with write access - creating anonymous temporary file\n");
+            
+            // 创建匿名临时文件 - 使用静态计数器和进程地址生成唯一路径
+            static uint64_t tmp_counter = 0;
+            proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+            uint64_t unique_id = ++tmp_counter + (uint64_t)current_proc;
+
+            char tmp_name[256];
+            snprintf(tmp_name, sizeof(tmp_name), "%s/.tmpfile_%x",
+                     dir_path.c_str(), unique_id);
+
+            eastl::string tmp_path(tmp_name);
+
+            // 创建临时文件（移除 O_DIRECTORY 和 O_TMPFILE 标志）
+            uint temp_flags = flags & ~(O_DIRECTORY | O_TMPFILE);
+            temp_flags |= O_CREAT | O_EXCL; // 确保创建新文件
+
+            mode_t file_mode = determine_file_mode(temp_flags, fs::FileTypes::FT_NORMAL, false, mode);
+
+            fs::FileAttrs attrs;
+            attrs.filetype = fs::FileTypes::FT_NORMAL;
+            attrs._value = file_mode;
+
+            fs::normal_file *temp_file = new fs::normal_file(attrs, tmp_path);
+
+            // 创建临时文件
+            int status = ext4_fopen2(&temp_file->lwext4_file_struct, tmp_path.c_str(), temp_flags);
+            if (status != EOK)
+            {
+                delete temp_file;
+                printfRed("vfs_openat: failed to create O_TMPFILE: %d\n", status);
+                return -status; // 返回正确的错误码
+            }
+
+            // // 立即从目录中删除文件条目，使其成为匿名文件
+            // // 这样文件就只能通过文件描述符访问，实现真正的O_TMPFILE语义
+            // int unlink_status = ext4_fremove(tmp_path.c_str());
+            // if (unlink_status != EOK)
+            // {
+            //     printfRed("vfs_openat: warning - failed to unlink O_TMPFILE: %d\n", unlink_status);
+            //     // 不返回错误，因为文件已经创建成功
+            // }
+
+            // 设置文件权限
+            status = ext4_mode_set(tmp_path.c_str(), file_mode);
+            if (status != EOK)
+            {
+                printfGreen("vfs_openat: ext4_mode_set skipped for O_TMPFILE\n");
+                // 对于临时文件，这是正常的
+            }
+
+            printfGreen("vfs_openat: created O_TMPFILE file, mode: 0%o\n", file_mode);
+
+            file = temp_file;
+            return EOK;
+        }
     }
 
     // 如果文件不存在且没有O_CREAT标志，返回错误
@@ -276,15 +390,18 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
     // 确定要使用的实际路径和文件类型
     eastl::string actual_path = absolute_path;
     int type = -1;
-    
-    if (file_exists) {
+
+    if (file_exists)
+    {
         type = vfs_path2filetype(absolute_path);
-    } else {
+    }
+    else
+    {
         type = fs::FileTypes::FT_NORMAL; // 新文件默认为普通文件
     }
-    
+
     // 处理 O_DIRECTORY：如果指定了此标志，路径必须是目录
-    if (flags & O_DIRECTORY)
+    if ((flags & O_DIRECTORY))
     {
         if (file_exists && type != fs::FileTypes::FT_DIRECT)
         {
@@ -292,11 +409,11 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
             return -ENOTDIR; // 不是目录
         }
     }
-    
+
     // 处理符号链接
     if (type == fs::FileTypes::FT_SYMLINK)
     {
-        
+
         if (flags & O_NOFOLLOW)
         {
             // 如果指定了 O_NOFOLLOW，我们需要创建一个符号链接文件对象
@@ -325,15 +442,18 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
                 printfRed("vfs_openat: failed to resolve symlink %s, error: %d\n", absolute_path.c_str(), r);
                 return r;
             }
-            
+
             actual_path = resolved_path;
             printfYellow("vfs_openat: resolved symlink %s -> %s\n", absolute_path.c_str(), resolved_path.c_str());
-            
+
             // 重新检查解析后路径的存在性和类型
             file_exists = (vfs_is_file_exist(actual_path.c_str()) == 1);
-            if (file_exists) {
+            if (file_exists)
+            {
                 type = vfs_path2filetype(actual_path);
-            } else {
+            }
+            else
+            {
                 type = fs::FileTypes::FT_NORMAL; // 默认为普通文件（可能需要创建）
             }
         }
@@ -377,19 +497,20 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
             {
                 printfGreen("ext4_mode_set success for %s, mode: 0%o\n", actual_path.c_str(), file_mode);
             }
-            
+
             // 设置文件所有者和组
             // 获取当前进程的 uid 和 gid
             proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
-            uint32_t current_uid = 0;  // 默认 root
-            uint32_t current_gid = 1;  // 默认使用有效组ID 1（与getegid一致）
-            
-            if (current_proc != nullptr) {
+            uint32_t current_uid = 0; // 默认 root
+            uint32_t current_gid = 1; // 默认使用有效组ID 1（与getegid一致）
+
+            if (current_proc != nullptr)
+            {
                 current_uid = current_proc->_uid;
                 // 使用有效组ID，与 sys_getegid() 返回值保持一致
-                current_gid = 1;  // 硬编码为1，与getegid系统调用一致
+                current_gid = 1; // 硬编码为1，与getegid系统调用一致
             }
-            
+
             // 设置文件的 uid 和 gid
             status = ext4_owner_set(actual_path.c_str(), current_uid, current_gid);
             if (status != EOK)
@@ -398,8 +519,8 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
             }
             else
             {
-                printfGreen("ext4_owner_set success for %s, uid: %u, gid: %u\n", 
-                           actual_path.c_str(), current_uid, current_gid);
+                printfGreen("ext4_owner_set success for %s, uid: %u, gid: %u\n",
+                            actual_path.c_str(), current_uid, current_gid);
             }
         }
 
@@ -452,73 +573,89 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
 
         file = temp_dir;
     }
-    else if(type == fs::FileTypes::FT_PIPE)
+    else if (type == fs::FileTypes::FT_PIPE)
     {
         mode_t file_mode;
-        
-        if (file_exists) {
+
+        if (file_exists)
+        {
             // 如果文件已存在，从文件系统读取权限
             struct ext4_inode inode;
             uint32 ino;
-            if (ext4_raw_inode_fill(absolute_path.c_str(), &ino, &inode) == EOK) {
+            if (ext4_raw_inode_fill(absolute_path.c_str(), &ino, &inode) == EOK)
+            {
                 struct ext4_sblock *sb = NULL;
                 ext4_get_sblock(absolute_path.c_str(), &sb);
-                if (sb != NULL) {
+                if (sb != NULL)
+                {
                     file_mode = ext4_inode_get_mode(sb, &inode);
-                } else {
+                }
+                else
+                {
                     file_mode = 0644; // 默认权限
                 }
-            } else {
+            }
+            else
+            {
                 file_mode = 0644; // 默认权限
             }
-        } else {
+        }
+        else
+        {
             file_mode = determine_file_mode(flags, fs::FileTypes::FT_PIPE, file_exists, mode);
         }
 
         // 根据打开模式确定是读端还是写端
         int access_mode = flags & O_ACCMODE;
-        
+
         // 检查 O_NONBLOCK | O_WRONLY 的组合
         // 根据 Linux manual，当使用 O_NONBLOCK | O_WRONLY 打开 FIFO 时，
         // 如果没有进程打开该 FIFO 进行读取，应该返回 ENXIO 错误
-        if ((flags & O_NONBLOCK) && (access_mode == O_WRONLY)) {
+        if ((flags & O_NONBLOCK) && (access_mode == O_WRONLY))
+        {
             // 检查是否有其他进程已经打开了这个 FIFO 进行读取
-            if (!fs::k_fifo_manager.has_readers(absolute_path)) {
+            if (!fs::k_fifo_manager.has_readers(absolute_path))
+            {
                 printfRed("vfs_openat: O_NONBLOCK | O_WRONLY on FIFO %s with no readers\n", absolute_path.c_str());
                 return -ENXIO; // 没有设备或地址
             }
         }
 
         fs::FileAttrs attrs;
-        attrs.filetype = fs::FileTypes::FT_PIPE;  
+        attrs.filetype = fs::FileTypes::FT_PIPE;
         attrs._value = file_mode & 0777; // 只保留权限位
 
         // 对于 FIFO，使用全局管理器获取或创建 Pipe 对象
         proc::ipc::Pipe *pipe = fs::k_fifo_manager.get_or_create_fifo(absolute_path);
-        
+
         bool is_write_end = false;
-        if (access_mode == O_WRONLY) {
+        if (access_mode == O_WRONLY)
+        {
             is_write_end = true;
-        } else if (access_mode == O_RDONLY) {
+        }
+        else if (access_mode == O_RDONLY)
+        {
             is_write_end = false;
-        } else {
+        }
+        else
+        {
             // O_RDWR - 这种情况下我们默认创建读端，实际应用中可能需要特殊处理
             is_write_end = false;
         }
-        
+
         // 创建带有路径信息的 pipe_file
         fs::pipe_file *temp_file = new fs::pipe_file(attrs, pipe, is_write_end, absolute_path);
-        
+
         // 注册到全局管理器
         fs::k_fifo_manager.open_fifo(absolute_path, is_write_end);
-        
-        printfCyan("vfs_openat: Created FIFO/pipe file: %s, write_end: %d, mode: 0%o\n", 
+
+        printfCyan("vfs_openat: Created FIFO/pipe file: %s, write_end: %d, mode: 0%o\n",
                    absolute_path.c_str(), is_write_end, temp_file->_stat.mode);
-        status = EOK;  // 直接设置为成功
-        
+        status = EOK; // 直接设置为成功
+
         file = temp_file;
     }
-    else if(type == fs::FileTypes::FT_SOCKET)
+    else if (type == fs::FileTypes::FT_SOCKET)
     {
         // Socket文件暂时不支持
         printfRed("vfs_openat: O_SOCKET not supported yet\n");
@@ -774,6 +911,13 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
         char name[MAXPATH] = {0};
         // name[0] = '/';
         strcat(name, (const char *)rentry->name); //< 追加，二者应该都以'/'开头
+        
+        // 过滤掉 O_TMPFILE 创建的临时文件，让它们在目录遍历时不可见
+        if (strncmp(name, ".tmpfile_", 9) == 0) {
+            printfYellow("vfs_getdents: filtering out O_TMPFILE: %s\n", name);
+            continue; // 跳过这个条目，不返回给用户空间
+        }
+        
         strncpy(d->d_name, name, MAXPATH);
 
         if (rentry->inode_type == EXT4_DE_DIR)
@@ -821,14 +965,16 @@ int vfs_mkdir(const char *path, uint64_t mode)
 int vfs_fstat(fs::file *f, fs::Kstat *st)
 {
     // 检查是否是 pipe_file，如果是，直接使用其内部的 _stat
-    if (f->_attrs.filetype == fs::FileTypes::FT_PIPE) {
+    if (f->_attrs.filetype == fs::FileTypes::FT_PIPE)
+    {
         *st = f->_stat;
         printfCyan("vfs_fstat: pipe file, mode: 0%o\n", st->mode);
         return EOK;
     }
 
     // 检查是否是符号链接文件
-    if (f->_attrs.filetype == fs::FileTypes::FT_SYMLINK) {
+    if (f->_attrs.filetype == fs::FileTypes::FT_SYMLINK)
+    {
         printfCyan("vfs_fstat: symlink file, getting symlink attributes\n");
 
         struct ext4_inode inode;
@@ -869,15 +1015,15 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
         printfCyan("vfs_fstat: symlink mode: 0%o, size: %u\n", st->mode, st->size);
         return EOK;
     }
-    
     struct ext4_inode inode;
     uint32 inode_num = 0;
     const char *file_path = f->_path_name.c_str();
-
     int status = ext4_raw_inode_fill(file_path, &inode_num, &inode);
     if (status != EOK)
+    {
+        printfRed("vfs_fstat: ext4_raw_inode_fill failed for %s, error: %d\n", file_path, status);
         return -status;
-
+    }
     struct ext4_sblock *sb = NULL;
     status = ext4_get_sblock(file_path, &sb);
     if (status != EOK)
@@ -887,50 +1033,61 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
     st->ino = inode_num;
     st->mode = ext4_inode_get_mode(sb, &inode);
     st->nlink = ext4_inode_get_links_cnt(&inode);
-    
+
     // 获取原始 uid 和 gid，进行范围检查
     uint32_t raw_uid = ext4_inode_get_uid(&inode);
     uint32_t raw_gid = ext4_inode_get_gid(&inode);
-    
+
     // 检查是否有异常值，如果有则使用默认值
-    if (raw_uid > 65535) {  // 超出合理范围
-        st->uid = 0;  // 默认 root
+    if (raw_uid > 65535)
+    {                // 超出合理范围
+        st->uid = 0; // 默认 root
         printfRed("vfs_fstat: invalid uid %u, using 0\n", raw_uid);
-    } else {
+    }
+    else
+    {
         st->uid = raw_uid;
     }
-    
-    if (raw_gid > 65535) {  // 超出合理范围
-        st->gid = 0;  // 默认 root group
+
+    if (raw_gid > 65535)
+    {                // 超出合理范围
+        st->gid = 0; // 默认 root group
         printfRed("vfs_fstat: invalid gid %u, using 0\n", raw_gid);
-    } else {
+    }
+    else
+    {
         st->gid = raw_gid;
     }
-    
+
     st->rdev = ext4_inode_get_dev(&inode);
     st->size = inode.size_lo;
-    
+    printfCyan("vfs_fstat: file size: %u bytes\n", st->size);
     // 修复 blksize 计算：避免除零错误，使用标准块大小
     st->blksize = 4096; // 使用标准 4KB 块大小
-    
+
     // 修复 blocks 计算：根据文件大小计算所需的512字节块数
     // Linux stat 中的 blocks 字段表示分配给文件的512字节块数
     // 对于小文件，通常文件大小决定块数
-    if (st->size == 0) {
+    if (st->size == 0)
+    {
         st->blocks = 0;
-    } else {
+    }
+    else
+    {
         // 计算所需的512字节块数，向上取整
         st->blocks = (st->size + 511) / 512;
-        
+
         // 但是要考虑文件系统的实际分配情况
         // 如果 ext4 报告的块数更小且合理，使用它
         uint64 ext4_blocks_512 = ((uint64)inode.blocks_count_lo * 4096) / 512;
-        if (ext4_blocks_512 > 0 && ext4_blocks_512 < st->blocks) {
+        if (ext4_blocks_512 > 0 && ext4_blocks_512 < st->blocks)
+        {
             st->blocks = ext4_blocks_512;
         }
-        
+
         // 确保至少有1个块（对于非空文件）
-        if (st->blocks == 0 && st->size > 0) {
+        if (st->blocks == 0 && st->size > 0)
+        {
             st->blocks = 1;
         }
     }
@@ -941,7 +1098,7 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
     st->st_ctime_nsec = (inode.ctime_extra >> 2) & 0x3FFFFFFF; //< 30 bits for nanoseconds
     st->st_mtime_sec = ext4_inode_get_modif_time(&inode);
     st->st_mtime_nsec = (inode.mtime_extra >> 2) & 0x3FFFFFFF; //< 30 bits for nanoseconds
-    st->mnt_id = 0; // ext4暂时不支持挂载点ID
+    st->mnt_id = 0;                                            // ext4暂时不支持挂载点ID
     return EOK;
 }
 
@@ -952,6 +1109,44 @@ int vfs_frename(const char *oldpath, const char *newpath)
         return -status;
 
     return -status;
+}
+
+int vfs_link(const char *oldpath, const char *newpath)
+{
+    // 检查源文件是否存在
+    if (vfs_is_file_exist(oldpath) != 1)
+    {
+        printfRed("vfs_link: source file %s does not exist\n", oldpath);
+        return -ENOENT;
+    }
+
+    // 检查目标文件是否已存在
+    if (vfs_is_file_exist(newpath) == 1)
+    {
+        printfRed("vfs_link: target file %s already exists\n", newpath);
+        return -EEXIST;
+    }
+
+    // 检查源文件是否为目录
+    eastl::string old_path_str(oldpath);
+    int source_type = vfs_path2filetype(old_path_str);
+    if (source_type == fs::FileTypes::FT_DIRECT)
+    {
+        printfRed("vfs_link: cannot create hard link to directory %s\n", oldpath);
+        return -EPERM;
+    }
+
+    // 使用 ext4_flink 创建硬链接
+    int status = ext4_flink(oldpath, newpath);
+    if (status != EOK)
+    {
+        printfRed("vfs_link: ext4_flink failed for %s -> %s, error: %d\n",
+                  oldpath, newpath, status);
+        return -status;
+    }
+
+    printfGreen("vfs_link: successfully created hard link %s -> %s\n", newpath, oldpath);
+    return EOK;
 }
 
 int vfs_truncate(fs::file *f, size_t length)
@@ -1053,170 +1248,197 @@ int vfs_free_file(fs::file *file)
 int vfs_copy_file_range(int f_in, off_t offset_in, int f_out, off_t offset_out, size_t size, uint flags)
 {
     // 检查flags参数，目前必须为0
-    if (flags != 0) {
+    if (flags != 0)
+    {
         printfRed("vfs_copy_file_range: flags must be 0, got: %u\n", flags);
         return -EINVAL;
     }
-    
+
     // 检查size参数
-    if (size == 0) {
+    if (size == 0)
+    {
         return 0; // 没有字节需要复制
     }
-    if (size > SSIZE_MAX) {
+    if (size > SSIZE_MAX)
+    {
         printfRed("vfs_copy_file_range: size too large: %zu\n", size);
         return -EOVERFLOW;
     }
-    
+
     // 检查offset参数
-    if (offset_in < 0 || offset_out < 0) {
+    if (offset_in < 0 || offset_out < 0)
+    {
         printfRed("vfs_copy_file_range: negative offset: in=%d, out=%d\n", offset_in, offset_out);
         return -EINVAL;
     }
-    
+
     // 获取当前进程
     proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
-    if (current_proc == nullptr) {
+    if (current_proc == nullptr)
+    {
         printfRed("vfs_copy_file_range: cannot get current process\n");
         return -EINVAL;
     }
-    
+
     // 验证文件描述符并获取文件对象
-    if (f_in < 0 || f_in >= (int)proc::max_open_files || 
-        f_out < 0 || f_out >= (int)proc::max_open_files) {
+    if (f_in < 0 || f_in >= (int)proc::max_open_files ||
+        f_out < 0 || f_out >= (int)proc::max_open_files)
+    {
         printfRed("vfs_copy_file_range: invalid file descriptor: in=%d, out=%d\n", f_in, f_out);
         return -EBADF;
     }
-    
+
     fs::file *file_in = current_proc->get_open_file(f_in);
     fs::file *file_out = current_proc->get_open_file(f_out);
-    
-    if (file_in == nullptr || file_out == nullptr) {
+
+    if (file_in == nullptr || file_out == nullptr)
+    {
         printfRed("vfs_copy_file_range: null file object: in=%p, out=%p\n", file_in, file_out);
         return -EBADF;
     }
-    
+
     // 检查文件权限
-    if (!file_in->_attrs.u_read) {
+    if (!file_in->_attrs.u_read)
+    {
         printfRed("vfs_copy_file_range: input file not open for reading\n");
         return -EBADF;
     }
-    if (!file_out->_attrs.u_write) {
+    if (!file_out->_attrs.u_write)
+    {
         printfRed("vfs_copy_file_range: output file not open for writing\n");
         return -EBADF;
     }
-    
+
     // 检查是否为普通文件
-    if (file_in->_attrs.filetype != fs::FileTypes::FT_NORMAL || 
-        file_out->_attrs.filetype != fs::FileTypes::FT_NORMAL) {
+    if (file_in->_attrs.filetype != fs::FileTypes::FT_NORMAL ||
+        file_out->_attrs.filetype != fs::FileTypes::FT_NORMAL)
+    {
         printfRed("vfs_copy_file_range: both files must be regular files\n");
         return -EINVAL;
     }
-    
+
     // 检查O_APPEND标志
-    if (file_out->lwext4_file_struct.flags & O_APPEND) {
+    if (file_out->lwext4_file_struct.flags & O_APPEND)
+    {
         printfRed("vfs_copy_file_range: output file opened with O_APPEND\n");
         return -EBADF;
     }
-    
+
     // 检查同一文件的重叠范围
-    if (f_in == f_out) {
+    if (f_in == f_out)
+    {
         off_t in_end = offset_in + size;
         off_t out_end = offset_out + size;
-        
+
         // 检查范围是否重叠
-        if (!(offset_in >= out_end || offset_out >= in_end)) {
+        if (!(offset_in >= out_end || offset_out >= in_end))
+        {
             printfRed("vfs_copy_file_range: overlapping ranges in same file\n");
             return -EINVAL;
         }
     }
-    
+
     // 获取输入文件大小
     uint64_t input_file_size = ext4_fsize(&file_in->lwext4_file_struct);
     printfMagenta("vfs_copy_file_range: input file size: %u\n", input_file_size);
     // 检查输入文件偏移量是否超过文件大小
-    if (offset_in >= (off_t)input_file_size) {
+    if (offset_in >= (off_t)input_file_size)
+    {
         return 0; // 在文件末尾或之后，没有数据可复制
     }
-    
+
     // 调整复制大小，避免超过输入文件
     size_t actual_size = size;
-    if (offset_in + (off_t)actual_size > (off_t)input_file_size) {
+    if (offset_in + (off_t)actual_size > (off_t)input_file_size)
+    {
         actual_size = input_file_size - offset_in;
     }
-    if (actual_size == 0) {
+    if (actual_size == 0)
+    {
         return 0;
     }
-    
+
     // 检查输出文件大小限制
     uint64_t target_size = offset_out + actual_size;
-    if (target_size > EXT4_MAX_FILE_SIZE) {
+    if (target_size > EXT4_MAX_FILE_SIZE)
+    {
         printfRed("vfs_copy_file_range: target size exceeds maximum file size\n");
         return -EFBIG;
     }
-    
+
     // 分配缓冲区进行数据复制
     const size_t COPY_BUFFER_SIZE = 64 * 1024; // 64KB缓冲区
     size_t buffer_size = (actual_size < COPY_BUFFER_SIZE) ? actual_size : COPY_BUFFER_SIZE;
-    
+
     char *buffer = new char[buffer_size];
-    if (buffer == nullptr) {
+    if (buffer == nullptr)
+    {
         printfRed("vfs_copy_file_range: failed to allocate buffer\n");
         return -ENOMEM;
     }
-    
+
     size_t total_copied = 0;
     off_t current_in_offset = offset_in;
     off_t current_out_offset = offset_out;
-    
-    while (total_copied < actual_size) {
+
+    while (total_copied < actual_size)
+    {
         size_t bytes_to_copy = actual_size - total_copied;
-        if (bytes_to_copy > buffer_size) {
+        if (bytes_to_copy > buffer_size)
+        {
             bytes_to_copy = buffer_size;
         }
-        
+
         // 从输入文件读取数据
         long bytes_read = file_in->read((uint64)buffer, bytes_to_copy, current_in_offset, true);
-        if (bytes_read <= 0) {
-            if (bytes_read < 0) {
+        if (bytes_read <= 0)
+        {
+            if (bytes_read < 0)
+            {
                 printfRed("vfs_copy_file_range: read error: %d\n", bytes_read);
             }
             break;
         }
-        
+
         // 写入到输出文件
         long bytes_written = file_out->write((uint64)buffer, bytes_read, current_out_offset, true);
-        if (bytes_written != bytes_read) {
-            if (bytes_written < 0) {
+        if (bytes_written != bytes_read)
+        {
+            if (bytes_written < 0)
+            {
                 printfRed("vfs_copy_file_range: write error: %d\n", bytes_written);
-            } else {
+            }
+            else
+            {
                 printfRed("vfs_copy_file_range: partial write: %d/%d\n", bytes_written, bytes_read);
             }
             break;
         }
-        
+
         total_copied += bytes_written;
         current_in_offset += bytes_written;
         current_out_offset += bytes_written;
     }
-    
+
     delete[] buffer;
-    
+
     // copy_file_range 的语义：
     // 当 offset 参数为 NULL 时使用并更新文件偏移量
     // 当 offset 参数非 NULL 时使用指定偏移量但不更新文件偏移量
     // 在当前实现中，我们总是接收到明确的偏移量值，所以不更新文件偏移量
     // 这与Linux标准行为一致
-    
-    if (total_copied > 0) {
+
+    if (total_copied > 0)
+    {
         printfGreen("vfs_copy_file_range: successfully copied %u bytes\n", total_copied);
         printfCyan("vfs_copy_file_range: file offsets not updated (using explicit offsets)\n");
     }
-    
+
     return (int)total_copied;
 }
 
-
-bool is_lock_conflict(const struct flock &existing_lock, const struct flock &new_lock) {
+bool is_lock_conflict(const struct flock &existing_lock, const struct flock &new_lock)
+{
     // 如果目标锁类型是解锁（F_UNLCK），就不需要检测冲突
     if (new_lock.l_type == F_UNLCK)
         return false;
@@ -1236,5 +1458,5 @@ bool is_lock_conflict(const struct flock &existing_lock, const struct flock &new
         return true; // 写锁和任何锁都冲突
     if (existing_lock.l_type == F_RDLCK && new_lock.l_type == F_RDLCK)
         return false; // 读锁之间不冲突
-    return true; // 其他情况下有冲突
+    return true;      // 其他情况下有冲突
 }

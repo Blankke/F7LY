@@ -41,6 +41,7 @@
 #include "fs/vfs/ops.hh"
 #include "fs/vfs/vfs_utils.hh"
 #include "fs/fs_defs.hh"
+#include "fs/fcntl.hh"
 #include "fs/lwext4/ext4_errno.hh"
 #include "fs/lwext4/ext4.hh"
 #include "fs/vfs/virtual_fs.hh"
@@ -752,7 +753,12 @@ namespace syscall
             printfRed("[SyscallHandler::sys_fstat] Error fetching arguments\n");
             return -EINVAL;
         }
-        proc::k_pm.fstat(fd, &kst);
+       int  status=proc::k_pm.fstat(fd, &kst);
+        if (status < 0)
+        {
+            printfRed("[SyscallHandler::sys_fstat] Error fetching file status\n");
+            return status;
+        }
         mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
         // 检查 kst_addr 是否在用户空间
         if (mem::k_vmm.copy_out(*pt, kst_addr, &kst, sizeof(kst)) < 0)
@@ -1222,10 +1228,188 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_linkat()
     {
-        panic("未实现该系统调用");
-        TODO("sys_linkat");
-        printfYellow("sys_linkat\n");
-        return 0;
+        int olddirfd, newdirfd;
+        uint64 oldpath_addr, newpath_addr;
+        int flags;
+
+        // 获取参数
+        if (_arg_int(0, olddirfd) < 0)
+            return -EINVAL;
+        if (_arg_addr(1, oldpath_addr) < 0)
+            return -EINVAL;
+        if (_arg_int(2, newdirfd) < 0)
+            return -EINVAL;
+        if (_arg_addr(3, newpath_addr) < 0)
+            return -EINVAL;
+        if (_arg_int(4, flags) < 0)
+            return -EINVAL;
+
+        // 检查 flags 参数的有效性
+        uint valid_flags = AT_EMPTY_PATH | AT_SYMLINK_FOLLOW;
+        if (flags & ~valid_flags)
+        {
+            printfRed("sys_linkat: invalid flags: 0x%x\n", flags);
+            return -EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        
+        eastl::string oldpath, newpath;
+        
+        // 复制路径字符串
+        if (mem::k_vmm.copy_str_in(*pt, oldpath, oldpath_addr, MAXPATH) < 0)
+            return -EFAULT;
+        if (mem::k_vmm.copy_str_in(*pt, newpath, newpath_addr, MAXPATH) < 0)
+            return -EFAULT;
+
+        printfCyan("sys_linkat: olddirfd=%d, oldpath=%s, newdirfd=%d, newpath=%s, flags=0x%x\n",
+                   olddirfd, oldpath.c_str(), newdirfd, newpath.c_str(), flags);
+
+        // 处理 AT_EMPTY_PATH 标志
+        if (flags & AT_EMPTY_PATH)
+        {
+            if (!oldpath.empty())
+            {
+                printfRed("sys_linkat: AT_EMPTY_PATH specified but oldpath is not empty\n");
+                return -EINVAL;
+            }
+            
+            // AT_EMPTY_PATH 要求 olddirfd 是一个有效的文件描述符
+            if (olddirfd == AT_FDCWD)
+            {
+                printfRed("sys_linkat: AT_EMPTY_PATH requires valid olddirfd\n");
+                return -EINVAL;
+            }
+            
+            // 检查文件描述符的有效性
+            if (olddirfd < 0 || olddirfd >= NOFILE)
+            {
+                printfRed("sys_linkat: invalid olddirfd: %d\n", olddirfd);
+                return -EBADF;
+            }
+            
+            fs::file *old_file = p->get_open_file(olddirfd);
+            if (old_file == nullptr)
+            {
+                printfRed("sys_linkat: olddirfd %d does not refer to an open file\n", olddirfd);
+                return -EBADF;
+            }
+            
+            // 不能对目录创建硬链接
+            if (old_file->_attrs.filetype == fs::FileTypes::FT_DIRECT)
+            {
+                printfRed("sys_linkat: cannot link to directory via AT_EMPTY_PATH\n");
+                return -EPERM;
+            }
+            
+            // 使用文件描述符对应的路径作为源路径
+            oldpath = old_file->_path_name;
+            printfYellow("sys_linkat: AT_EMPTY_PATH resolved to %s\n", oldpath.c_str());
+        }
+
+        // 解析绝对路径
+        eastl::string abs_oldpath, abs_newpath;
+        
+        // 处理源路径
+        if (oldpath.empty() || oldpath[0] != '/')
+        {
+            // 相对路径，需要基于 olddirfd
+            if (olddirfd == AT_FDCWD)
+            {
+                abs_oldpath = p->_cwd_name + "/" + oldpath;
+            }
+            else
+            {
+                if (olddirfd < 0 || olddirfd >= NOFILE)
+                {
+                    printfRed("sys_linkat: invalid olddirfd: %d\n", olddirfd);
+                    return -EBADF;
+                }
+                fs::file *dir_file = p->get_open_file(olddirfd);
+                if (dir_file == nullptr)
+                {
+                    printfRed("sys_linkat: olddirfd %d does not refer to an open file\n", olddirfd);
+                    return -EBADF;
+                }
+                abs_oldpath = dir_file->_path_name + "/" + oldpath;
+            }
+        }
+        else
+        {
+            // 绝对路径
+            abs_oldpath = oldpath;
+        }
+        
+        // 处理目标路径
+        if (newpath.empty() || newpath[0] != '/')
+        {
+            // 相对路径，需要基于 newdirfd
+            if (newdirfd == AT_FDCWD)
+            {
+                abs_newpath = p->_cwd_name + "/" + newpath;
+            }
+            else
+            {
+                if (newdirfd < 0 || newdirfd >= NOFILE)
+                {
+                    printfRed("sys_linkat: invalid newdirfd: %d\n", newdirfd);
+                    return -EBADF;
+                }
+                fs::file *dir_file = p->get_open_file(newdirfd);
+                if (dir_file == nullptr)
+                {
+                    printfRed("sys_linkat: newdirfd %d does not refer to an open file\n", newdirfd);
+                    return -EBADF;
+                }
+                abs_newpath = dir_file->_path_name + "/" + newpath;
+            }
+        }
+        else
+        {
+            // 绝对路径
+            abs_newpath = newpath;
+        }
+
+        // 处理 AT_SYMLINK_FOLLOW 标志
+        if (flags & AT_SYMLINK_FOLLOW)
+        {
+            // 如果源文件是符号链接，需要解析到最终目标
+            eastl::string old_path_for_check = abs_oldpath;
+            int source_type = vfs_path2filetype(old_path_for_check);
+            if (source_type == fs::FileTypes::FT_SYMLINK)
+            {
+                // 解析符号链接
+                char link_target[MAXPATH];
+                size_t link_len;
+                int r = ext4_readlink(abs_oldpath.c_str(), link_target, sizeof(link_target) - 1, &link_len);
+                if (r == EOK)
+                {
+                    link_target[link_len] = '\0';
+                    if (link_target[0] == '/')
+                    {
+                        abs_oldpath = link_target;
+                    }
+                    else
+                    {
+                        // 相对路径，相对于符号链接所在目录
+                        size_t last_slash = abs_oldpath.find_last_of('/');
+                        if (last_slash != eastl::string::npos)
+                        {
+                            abs_oldpath = abs_oldpath.substr(0, last_slash + 1) + link_target;
+                        }
+                    }
+                    printfYellow("sys_linkat: AT_SYMLINK_FOLLOW resolved symlink to %s\n", abs_oldpath.c_str());
+                }
+            }
+        }
+
+        printfGreen("sys_linkat: final paths: %s -> %s\n", abs_oldpath.c_str(), abs_newpath.c_str());
+
+        // 调用 VFS 层的链接函数
+        int result = vfs_link(abs_oldpath.c_str(), abs_newpath.c_str());
+        
+        return result;
     }
     uint64 SyscallHandler::sys_mkdirat()
     {
