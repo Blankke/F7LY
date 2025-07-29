@@ -5,7 +5,11 @@
 #include "virtual_memory_manager.hh"
 #include "scheduler.hh"
 #include "libs/klib.hh"
-#include "trap.hh"
+#ifdef RISCV
+#include "riscv/trap.hh"
+#elif defined(LOONGARCH)
+#include "loongarch/trap.hh"
+#endif
 #include "printer.hh"
 #include "devs/device_manager.hh"
 #include "fs/lwext4/ext4_errno.hh"
