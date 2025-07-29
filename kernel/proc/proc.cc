@@ -142,6 +142,10 @@ namespace proc
         // 设置打开文件数量限制
         _rlim_vec[ResourceLimitId::RLIMIT_NOFILE].rlim_cur = max_open_files;
         _rlim_vec[ResourceLimitId::RLIMIT_NOFILE].rlim_max = max_open_files;
+        
+        // 设置文件大小限制 (默认无限制)
+        _rlim_vec[ResourceLimitId::RLIMIT_FSIZE].rlim_cur = ResourceLimitId::RLIM_INFINITY;
+        _rlim_vec[ResourceLimitId::RLIMIT_FSIZE].rlim_max = ResourceLimitId::RLIM_INFINITY;
     }
 
     void Pcb::init(const char *lock_name, uint gid)

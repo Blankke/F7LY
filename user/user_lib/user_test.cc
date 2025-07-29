@@ -1556,8 +1556,8 @@ char *ltp_testcases[] = {
     // "link04",//pass
     // "link05", //pass,这个也是逆天数量
     // "link08", //pass
-    "linkat01",  //还有两个没有过
-    // "linkat02",
+    // "linkat01",  //还有一个没有过
+    // "linkat02",//sendmsg
     // "linktest.sh",
     // "listen01",
     // "listxattr01",
@@ -1566,9 +1566,9 @@ char *ltp_testcases[] = {
     // "llistxattr01",
     // "llistxattr02",
     // "llistxattr03",
-    // "llseek01",
-    // "llseek02",
-    // "llseek03",
+    // "llseek01",  //pass
+    // "llseek02",  //pass wait后面还有
+    // "llseek03",//pass wait后面还有
     // "ln_tests.sh",
     // "lock_torture.sh",
     // "locktests",

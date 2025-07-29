@@ -15,7 +15,7 @@ namespace proc
             constexpr int SIGSTOP = 19;
             constexpr int SIGQUIT = 3;
             constexpr int SIGRTMAX = 64;
-
+            constexpr int SIGXFSZ =25;  // File size limit exceeded signal
             constexpr int SIG_BLOCK = 0;
             constexpr int SIG_UNBLOCK = 1;
             constexpr int SIG_SETMASK = 2;

@@ -6,6 +6,10 @@
 #include "fs/lwext4/ext4_types.hh"
 #include "mem/userspace_stream.hh"
 #include "proc_manager.hh"
+#include "proc/signal.hh"
+#include "proc/prlimit.hh"
+
+
 #define min(a, b) ((a) < (b) ? (a) : (b))
 namespace fs
 {
@@ -71,6 +75,21 @@ long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 
 		// 保存当前文件位置，用于之后恢复
 		long current_pos = _file_ptr;
+		
+		// 检查文件大小限制 (RLIMIT_FSIZE)
+		proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+		uint64 fsize_limit = current_proc->get_fsize_limit();
+		if (fsize_limit != proc::ResourceLimitId::RLIM_INFINITY) {
+			// 检查写入是否会超过文件大小限制
+			if ((uint64)off + len > fsize_limit) {
+				printfRed("normal_file::write: Write would exceed file size limit (offset: %ld, len: %zu, limit: %lu)\n", 
+						  off, len, fsize_limit);
+				// 发送 SIGXFSZ 信号给进程
+				current_proc->add_signal(proc::ipc::signal::SIGXFSZ);
+				return -EFBIG;
+			}
+		}
+		
 		if (_attrs.u_write != 1)
 		{
 			// 对于 O_TMPFILE 创建的文件，即使权限是 0，也允许文件所有者写入

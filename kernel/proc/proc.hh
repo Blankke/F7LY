@@ -256,6 +256,12 @@ namespace proc
         {
             return _rlim_vec[ResourceLimitId::RLIMIT_NOFILE].rlim_cur;
         }
+        
+        // 获取文件大小限制
+        uint64 get_fsize_limit() const
+        {
+            return _rlim_vec[ResourceLimitId::RLIMIT_FSIZE].rlim_cur;
+        }
 
         void add_signal(int sig)
         {
