@@ -149,7 +149,7 @@ void trap_manager::timertick()
 // 支持嵌套中断
 void trap_manager::kerneltrap()
 {
-  // printfMagenta("into kerneltrap\n");
+//   printfMagenta("into kerneltrap\n");
   int which_dev = 0;
 
   // 这些寄存器可能在yield时被修改

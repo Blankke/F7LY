@@ -204,7 +204,8 @@ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.s
 $(KERNEL_ELF): $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
 	$(LD) $(LDFLAGS) -o $@ $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
 	$(SIZE) $@
-	# $(OBJDUMP) -D $@ > kernel.asm
+# 	$(OBJDUMP) -D $@ > kernel.asm
+# 	riscv64-linux-gnu-objdump -D build/riscv/kernel.elf > kernel.asm
 
 # 只有 riscv 架构需要依赖 initcode
 

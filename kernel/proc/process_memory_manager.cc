@@ -258,8 +258,10 @@ namespace proc
 
     void ProcessMemoryManager::free_all_vma()
     {
-        if (!_pcb || !_pcb->_vma)
+        if (!_pcb || !_pcb->_vma){
+            panic("ProcessMemoryManager: PCB or VMA is null");
             return;
+        }
 
         printfBlue("ProcessMemoryManager: freeing all VMA for process %s (PID: %d)\n",
                    _pcb->get_name(), _pcb->get_pid());

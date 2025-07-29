@@ -154,7 +154,7 @@ namespace proc
                 // printfYellow("[user pgtbl]==>alloc trapframe for proc %d\n", p->_global_id);
                 if ((p->_trapframe = (TrapFrame *)mem::k_pmm.alloc_page()) == nullptr)
                 {
-                    freeproc(p);
+                    freeproc_creation_failed(p); // 使用专门的创建失败清理函数
                     p->_lock.release();
                     return nullptr;
                 }
@@ -270,7 +270,7 @@ namespace proc
                 _proc_create_vm(p);
                 if (p->_pt.get_base() == 0)
                 {
-                    freeproc(p);
+                    freeproc_creation_failed(p); // 使用专门的创建失败清理函数
                     p->_lock.release();
                     return nullptr;
                 }
@@ -395,18 +395,17 @@ namespace proc
     void ProcessManager::freeproc(Pcb *p)
     {
         /****************************************************************************************
-         * 统一内存管理清理 - 使用ProcessMemoryManager
+         内存资源已在 exit_proc() 中释放，这里只清理PCB字段
          ****************************************************************************************/
-        // 创建内存管理器实例来处理所有内存相关的释放操作
-        ProcessMemoryManager memory_mgr(p);
 
-        // 执行完整的内存清理，包括：
-        // - VMA管理（引用计数、文件写回、映射取消）
-        // - 程序段释放
-        // - 堆内存释放
-        // - 页表清理
-        // - trapframe释放
-        memory_mgr.free_all_memory();
+        // 验证进程状态：ZOMBIE（正常退出）、UNUSED（初始状态）、USED（创建失败清理）状态的进程才能被freeproc
+        // if (p->_state != ProcState::ZOMBIE && p->_state != ProcState::UNUSED && p->_state != ProcState::USED)
+        if (p->_state != ProcState::ZOMBIE)
+        {
+            panic("freeproc: process not in valid state for cleanup, current state: %d", (int)p->_state);
+        }
+
+        printf("[freeproc] Reclaiming PCB for process %s pid %d\n", p->_name, p->_pid);
 
         /****************************************************************************************
          * 基本进程标识和状态管理清理
@@ -445,8 +444,10 @@ namespace proc
         p->_cwd_name.clear(); // 清空当前工作目录路径
         p->_umask = 0022;     // 重置umask为默认值
 
-        // 使用cleanup_ofile方法处理文件描述符表
-        p->cleanup_ofile();
+        // 注意：文件描述符表已在exit_proc中清理，这里只重置指针
+        if (p->_ofile != nullptr) {
+            panic("freeproc: ofile should be cleaned in exit_proc, but found non-null pointer");
+        }
 
         /****************************************************************************************
          * 线程和同步原语清理
@@ -458,19 +459,11 @@ namespace proc
         /****************************************************************************************
          * 信号处理清理
          ****************************************************************************************/
-        // 使用cleanup_sighand方法处理信号处理结构
-        p->cleanup_sighand();
-
-        // 清空信号处理栈帧链表
-        while (p->sig_frame != nullptr)
-        {
-            ipc::signal::signal_frame *next_frame = p->sig_frame->next;
-            mem::k_pmm.free_page(p->sig_frame); // 释放当前信号处理帧
-            p->sig_frame = next_frame;          // 移动到下一个帧
-        }
-        p->sig_frame = nullptr; // 清空信号处理帧指针
-        p->_signal = 0;         // 清空待处理信号掩码
-        p->_sigmask = 0;        // 清空信号屏蔽掩码
+        // 注意：信号处理结构和栈帧已在exit_proc中清理，这里只重置指针
+        p->_sigactions = nullptr; // 清空信号处理结构指针
+        p->sig_frame = nullptr;   // 清空信号处理帧指针
+        p->_signal = 0;           // 清空待处理信号掩码
+        p->_sigmask = 0;          // 清空信号屏蔽掩码
 
         /****************************************************************************************
          * 资源限制清理
@@ -510,6 +503,122 @@ namespace proc
          * 上下文清理
          ****************************************************************************************/
         memset(&p->_context, 0, sizeof(p->_context)); // 清空上下文信息
+
+        printf("[freeproc] PCB for process pid %d successfully reclaimed\n", p->_pid);
+    }
+
+    void ProcessManager::freeproc_creation_failed(Pcb *p)
+    {
+        /****************************************************************************************
+         * 专门处理进程创建失败时的清理
+         * 此时进程可能已经分配了部分资源但还没有真正运行
+         ****************************************************************************************/
+
+        printf("[freeproc_creation_failed] Cleaning up failed process creation for pid %d\n", p->_pid);
+
+        // 如果已经分配了trapframe，需要释放
+        if (p->_trapframe != nullptr)
+        {
+            mem::k_pmm.free_page(p->_trapframe);
+            p->_trapframe = nullptr;
+        }
+
+        // 如果已经创建了页表，需要释放
+        if (p->_pt.get_base() != 0)
+        {
+            p->_pt.dec_ref(); // 减少引用计数，如果为0会自动释放
+        }
+
+        // 如果已经分配了其他资源，也需要释放
+        if (p->_vma != nullptr && p->_vma->_ref_cnt > 0)
+        {
+            p->_vma->_ref_cnt--;
+            if (p->_vma->_ref_cnt == 0)
+            {
+                delete p->_vma;
+            }
+            p->_vma = nullptr;
+        }
+
+        // 调用标准的PCB清理
+        freeproc(p);
+    }
+
+    void ProcessManager::debug_process_states()
+    {
+        /****************************************************************************************
+         * 调试函数：打印所有进程的状态信息
+         ****************************************************************************************/
+        printf("\n========== Process State Debug Info ==========\n");
+
+        int zombie_count = 0;
+        int running_count = 0;
+        int sleeping_count = 0;
+        int unused_count = 0;
+        int used_count = 0;
+
+        for (uint i = 0; i < num_process; i++)
+        {
+            Pcb &p = k_proc_pool[i];
+            if (p._state == ProcState::UNUSED)
+            {
+                unused_count++;
+                continue;
+            }
+
+            printf("Process[%d]: pid=%d tid=%d name='%s' state=%d parent_pid=%d\n",
+                   i, p._pid, p._tid, p._name, (int)p._state,
+                   p._parent ? p._parent->_pid : -1);
+
+            switch (p._state)
+            {
+            case ProcState::ZOMBIE:
+                zombie_count++;
+                printf("  -> ZOMBIE: xstate=%d, waiting for parent to collect\n", p._xstate);
+                break;
+            case ProcState::RUNNABLE:
+                running_count++;
+                printf("  -> RUNNABLE\n");
+                break;
+            case ProcState::RUNNING:
+                running_count++;
+                printf("  -> RUNNING\n");
+                break;
+            case ProcState::SLEEPING:
+                sleeping_count++;
+                printf("  -> SLEEPING: chan=%p\n", p._chan);
+                break;
+            case ProcState::USED:
+                used_count++;
+                break;
+            default:
+                printf("  -> UNKNOWN STATE: %d\n", (int)p._state);
+                break;
+            }
+        }
+
+        printf("Summary: UNUSED=%d, USED=%d, RUNNABLE=%d, SLEEPING=%d, ZOMBIE=%d\n",
+               unused_count, used_count, running_count, sleeping_count, zombie_count);
+        printf("===============================================\n\n");
+    }
+
+    bool ProcessManager::verify_process_cleanup(int pid)
+    {
+        /****************************************************************************************
+         * 验证函数：检查指定PID的进程是否正确清理
+         ****************************************************************************************/
+        for (uint i = 0; i < num_process; i++)
+        {
+            Pcb &p = k_proc_pool[i];
+            if (p._pid == pid && p._state != ProcState::UNUSED)
+            {
+                printf("[ERROR] Process pid %d still exists in state %d after cleanup\n",
+                       pid, (int)p._state);
+                return false;
+            }
+        }
+        printf("[OK] Process pid %d successfully cleaned up\n", pid);
+        return true;
     }
 
     int ProcessManager::get_cur_cpuid()
@@ -865,7 +974,7 @@ namespace proc
         {
             if (mem::k_vmm.copy_out(p->_pt, ptid, &new_tid, sizeof(new_tid)) < 0)
             {
-                freeproc(np);
+                freeproc_creation_failed(np); // 使用专门的创建失败清理函数
                 np->_lock.release();
                 return -1; // EFAULT: Bad address
             }
@@ -1032,7 +1141,7 @@ namespace proc
 
             if (!copy_success)
             {
-                freeproc(np);
+                freeproc_creation_failed(np); // 使用专门的创建失败清理函数
                 np->_lock.release();
                 panic("fork failed");
                 return nullptr;
@@ -1113,7 +1222,7 @@ namespace proc
                 if (entry_point == 0)
                 {
                     panic("fork: copy_in failed for stack pointer");
-                    freeproc(np);
+                    freeproc_creation_failed(np); // 使用专门的创建失败清理函数
                     np->_lock.release();
                     return nullptr;
                 }
@@ -1121,7 +1230,7 @@ namespace proc
                 if (mem::k_vmm.copy_in(p->_pt, &arg, (stack_ptr + 8), sizeof(uint64)) != 0)
                 {
                     panic("fork: copy_in failed for stack pointer arg");
-                    freeproc(np);
+                    freeproc_creation_failed(np); // 使用专门的创建失败清理函数
                     np->_lock.release();
                     return nullptr;
                 }
@@ -1142,7 +1251,7 @@ namespace proc
             {
                 if (mem::k_vmm.copy_out(p->_pt, ctid, &np->_tid, sizeof(np->_tid)) < 0)
                 {
-                    freeproc(np);
+                    freeproc_creation_failed(np); // 使用专门的创建失败清理函数
                     np->_lock.release();
                     return nullptr; // EFAULT: Bad address
                 }
@@ -1437,16 +1546,47 @@ namespace proc
     /// @param state
     void ProcessManager::exit_proc(Pcb *p, int state)
     {
-
         if (p == _init_proc)
             panic("init exiting"); // 保护机制：init 进程不能退出
-        // log_info( "exit proc %d", p->_pid );
+
+        printf("[exit_proc] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
+
+        /****************************************************************************************
+         * Phase 1: 释放进程内存和资源 - 立即释放，不等父进程回收
+         ****************************************************************************************/
+
+        // 使用ProcessMemoryManager统一处理内存释放
+        ProcessMemoryManager memory_mgr(p);
+        memory_mgr.free_all_memory(); // 释放所有内存资源（VMA、程序段、堆、页表、trapframe等）
+
+        // 关闭文件描述符表，释放文件资源
+        p->cleanup_ofile();
+
+        // 清理信号处理结构和信号栈帧
+        p->cleanup_sighand();
+
+        // 释放信号栈帧链表
+        while (p->sig_frame != nullptr)
+        {
+            ipc::signal::signal_frame *next_frame = p->sig_frame->next;
+            mem::k_pmm.free_page(p->sig_frame); // 释放当前信号处理帧
+            p->sig_frame = next_frame;          // 移动到下一个帧
+        }
+        p->sig_frame = nullptr; // 清空信号处理帧指针
+
+        // 清理线程相关资源
+        p->_futex_addr = nullptr;  // 清空futex等待地址
+        p->_robust_list = nullptr; // 清空健壮futex链表
+
+        /****************************************************************************************
+         * Phase 2: 处理父子进程关系和进程状态
+         ****************************************************************************************/
 
         reparent(p); // 将 p 的所有子进程交给 init 进程收养
+
         _wait_lock.acquire();
 
-        if (p->_parent)
-            wakeup(p->_parent); // 唤醒父进程（可能在 wait() 中阻塞）)
+        // 处理线程退出时的清理地址
         if (p->_clear_tid_addr)
         {
             uint64 temp0 = 0;
@@ -1457,6 +1597,8 @@ namespace proc
         }
 
         p->_lock.acquire();
+
+        // 设置退出状态和ZOMBIE状态
         p->_xstate = state << 8;       // 存储退出状态（通常高字节存状态）
         p->_state = ProcState::ZOMBIE; // 标记为 zombie，等待父进程回收
 
@@ -1467,10 +1609,15 @@ namespace proc
             p->_parent->_cutime += p->_user_ticks + p->_cutime;
             p->_parent->_cstime += p->_stime + p->_cstime;
             p->_parent->_lock.release();
+
+            // 唤醒父进程（可能在 wait() 中阻塞）
+            wakeup(p->_parent);
         }
 
         _wait_lock.release();
-        // printf("[exit_proc] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
+
+        printfYellow("[exit_proc] proc %s pid %d became zombie, memory freed\n", p->_name, p->_pid);
+
         k_scheduler.call_sched(); // jump to schedular, never return
         panic("zombie exit");
     }
@@ -1509,25 +1656,56 @@ namespace proc
     /// https://man7.org/linux/man-pages/man2/exit_group.2.html
     void ProcessManager::exit_group(int status)
     {
-        TODO("rm /temp")
+        debug_process_states();
         proc::Pcb *cp = get_cur_pcb();
+
+        printf("[exit_group] Thread group %d (leader pid %d) exiting with status %d\n",
+               cp->_tgid, cp->_pid, status);
+
+        /****************************************************************************************
+         * Phase 3: 安全的多线程退出处理
+         * 先标记所有同线程组线程为killed，让它们自然退出，避免竞态条件
+         ****************************************************************************************/
 
         _wait_lock.acquire();
 
+        // 遍历所有进程，找到同一线程组的其他线程
         for (uint i = 0; i < num_process; i++)
         {
             if (k_proc_pool[i]._state == ProcState::UNUSED)
                 continue;
+
             proc::Pcb *p = &k_proc_pool[i];
-            // 释放同一线程组中其他线程的资源
+
+            // 处理同一线程组的其他线程（不包括当前线程）
             if (p != cp && p->_tgid == cp->_tgid)
             {
-                // 退出同一线程组的其他线程
-                freeproc(p);
+                p->_lock.acquire();
+
+                if (p->_state != ProcState::ZOMBIE && p->_state != ProcState::UNUSED)
+                {
+                    printf("[exit_group] Marking thread pid %d tid %d as killed\n", p->_pid, p->_tid);
+
+                    // 标记线程为被杀死状态
+                    p->_killed = 1;
+
+                    // 如果线程在睡眠，唤醒它让其检查killed标志
+                    if (p->_state == ProcState::SLEEPING)
+                    {
+                        p->_state = ProcState::RUNNABLE;
+                        printf("[exit_group] Waking up sleeping thread pid %d\n", p->_pid);
+                    }
+                }
+
+                p->_lock.release();
             }
         }
+
         _wait_lock.release();
 
+        printf("[exit_group] Current thread pid %d exiting normally\n", cp->_pid);
+
+        // 当前线程正常退出，其他线程会在调度时检查killed标志并自行退出
         exit_proc(cp, status);
     }
     void ProcessManager::sleep(void *chan, SpinLock *lock)
@@ -3255,8 +3433,8 @@ namespace proc
                 new_sec_cnt++;
 
                 printfGreen("execve: recorded program section[%d]: %s at %p, size %p (page-aligned from %p, %p)\n",
-                            new_sec_cnt - 1, section_name, 
-                            new_sec_desc[new_sec_cnt - 1]._sec_start, 
+                            new_sec_cnt - 1, section_name,
+                            new_sec_desc[new_sec_cnt - 1]._sec_start,
                             (void *)new_sec_desc[new_sec_cnt - 1]._sec_size,
                             (void *)ph.vaddr, (void *)ph.memsz);
             }
@@ -3758,6 +3936,5 @@ namespace proc
 
         // 写成0为了适配glibc的rtld_fini需求
         return 0; // 返回参数个数，表示成功执行
-    }
-
-}; // namespace proc
+    }; 
+}// namespace proc
