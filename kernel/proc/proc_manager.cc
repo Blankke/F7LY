@@ -1383,7 +1383,7 @@ namespace proc
             if (!havekids || p->_killed)
             {
                 _wait_lock.release();
-                return -1;
+                return -ECHILD;
             }
 
             // wait children to exit
