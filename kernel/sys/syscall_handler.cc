@@ -1374,6 +1374,97 @@ namespace syscall
             }
         };
 
+        // 路径规范化函数：处理 . 和 .. 
+        auto normalize_path = [](const eastl::string &path) -> eastl::string
+        {
+            if (path.empty())
+                return path;
+
+            eastl::vector<eastl::string> components;
+            eastl::string current_component;
+            bool is_absolute = (path[0] == '/');
+
+            // 分割路径组件
+            for (size_t i = 0; i < path.size(); ++i)
+            {
+                if (path[i] == '/')
+                {
+                    if (!current_component.empty())
+                    {
+                        components.push_back(current_component);
+                        current_component.clear();
+                    }
+                }
+                else
+                {
+                    current_component += path[i];
+                }
+            }
+            if (!current_component.empty())
+            {
+                components.push_back(current_component);
+            }
+
+            // 处理 . 和 ..
+            eastl::vector<eastl::string> normalized;
+            for (const auto &comp : components)
+            {
+                if (comp == ".")
+                {
+                    // 忽略当前目录
+                    continue;
+                }
+                else if (comp == "..")
+                {
+                    // 上级目录
+                    if (!normalized.empty() && normalized.back() != "..")
+                    {
+                        normalized.pop_back();
+                    }
+                    else if (!is_absolute)
+                    {
+                        // 对于相对路径，保留 ..
+                        normalized.push_back(comp);
+                    }
+                    // 对于绝对路径，根目录的上级还是根目录，所以忽略
+                }
+                else
+                {
+                    normalized.push_back(comp);
+                }
+            }
+
+            // 重建路径
+            eastl::string result;
+            if (is_absolute)
+            {
+                result = "/";
+            }
+
+            for (size_t i = 0; i < normalized.size(); ++i)
+            {
+                if (i > 0 || is_absolute)
+                {
+                    if (result.back() != '/')
+                        result += "/";
+                }
+                result += normalized[i];
+            }
+
+            // 如果结果为空且是绝对路径，返回根目录
+            if (result.empty() && is_absolute)
+            {
+                result = "/";
+            }
+            // 如果结果为空且是相对路径，返回当前目录
+            else if (result.empty())
+            {
+                result = ".";
+            }
+
+            return result;
+        };
+
         // 解析绝对路径
         eastl::string abs_oldpath, abs_newpath;
 
@@ -1507,6 +1598,10 @@ namespace syscall
                 }
             }
         }
+
+        // 规范化路径（处理 . 和 .. 等）
+        abs_oldpath = normalize_path(abs_oldpath);
+        abs_newpath = normalize_path(abs_newpath);
 
         printfGreen("sys_linkat: final paths: %s -> %s\n", abs_oldpath.c_str(), abs_newpath.c_str());
 

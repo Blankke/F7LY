@@ -1556,7 +1556,7 @@ char *ltp_testcases[] = {
     // "link04",//pass
     // "link05", //pass,这个也是逆天数量
     // "link08", //pass
-    // "linkat01",  //还有两个没有过
+    "linkat01",  //还有两个没有过
     // "linkat02",
     // "linktest.sh",
     // "listen01",

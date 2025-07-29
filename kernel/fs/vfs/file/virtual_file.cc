@@ -691,7 +691,7 @@ namespace fs
         result += "NSsid:\t" + int_to_string(pcb->_sid) + "\n";
         
         // VmPeak, VmSize: 虚拟内存大小（KB）
-        uint64 vm_size_kb = pcb->_sz / 1024;
+        uint64 vm_size_kb = pcb->get_size() / 1024;
         result += "VmPeak:\t" + int_to_string(vm_size_kb) + " kB\n";
         result += "VmSize:\t" + int_to_string(vm_size_kb) + " kB\n";
         

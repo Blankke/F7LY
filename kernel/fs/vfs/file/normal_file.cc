@@ -126,6 +126,8 @@ long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 
 		struct ext4_file *ext4_f = (struct ext4_file *)&lwext4_file_struct;
 		        char *kbuf = (char *) buf;
+		printfBgGreen("normal_file::write: calling ext4_fwrite with buf: %p, len: %zu, off: %ld\n", kbuf, len, off);
+		printfBgGreen("normal_file::write: current file path: %s\n", _path_name.c_str());
         int status = ext4_fwrite(ext4_f, kbuf, len, &ret);
         if (status != EOK) 
             return -EFAULT;   
