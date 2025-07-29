@@ -5,6 +5,7 @@
 #include "virtual_memory_manager.hh"
 #include "scheduler.hh"
 #include "libs/klib.hh"
+#include "mem/memlayout.hh"          // 内核栈配置常量
 #ifdef RISCV
 #include "riscv/trap.hh"
 #elif defined(LOONGARCH)
@@ -189,8 +190,8 @@ namespace proc
                 // 当调度器切换回该进程时，将从这里开始执行
                 p->_context.ra = (uint64)_wrp_fork_ret;
 
-                // 设置内核栈指针
-                p->_context.sp = p->_kstack + PGSIZE;
+                // 设置内核栈指针 - 指向栈顶（高地址）
+                p->_context.sp = p->_kstack + KSTACK_SIZE;
 
                 /****************************************************************************************
                  * 文件系统和I/O管理初始化
@@ -3321,6 +3322,7 @@ namespace proc
                     break;
                 }
             }
+            printfPink("checkpoint 1\n");
             // 遍历所有程序头，加载LOAD类型的段
             for (i = 0, off = elf.phoff; i < elf.phnum; i++, off += sizeof(ph))
             {
@@ -3374,6 +3376,7 @@ namespace proc
                 uint64 segment_start = PGROUNDDOWN(ph.vaddr);
                 uint64 segment_end = PGROUNDUP(ph.vaddr + ph.memsz);
                 // printfCyan("segment_start: %p, segment_end: %p\n", segment_start, segment_end);
+                printfPink("checkpoint 2.1 %d\n", i);
 
                 if (mem::k_vmm.uvmalloc(new_pt, segment_start, segment_end, seg_flag) == 0)
                 {
@@ -3397,6 +3400,8 @@ namespace proc
                     load_bad = true;
                     break;
                 }
+
+                printfPink("checkpoint 2.2 %d\n", i);
 
                 // **新增：记录加载的程序段信息**
                 if (new_sec_cnt >= max_program_section_num)
@@ -3436,12 +3441,14 @@ namespace proc
 
                 new_sec_desc[new_sec_cnt]._debug_name = section_name;
                 new_sec_cnt++;
+                printf("checkpoint 2.3 %d\n", i);
 
                 printfGreen("execve: recorded program section[%d]: %s at %p, size %p (page-aligned from %p, %p)\n",
                             new_sec_cnt - 1, section_name,
                             new_sec_desc[new_sec_cnt - 1]._sec_start,
                             (void *)new_sec_desc[new_sec_cnt - 1]._sec_size,
                             (void *)ph.vaddr, (void *)ph.memsz);
+                printfPink("checkpoint 2.4 %d\n", i);
             }
             // 如果加载过程中出错，清理已分配的资源
             if (load_bad)
@@ -3452,6 +3459,8 @@ namespace proc
                 ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
+
+            printfPink("checkpoint 3\n");
 
             if (is_dynamic)
             {
@@ -3579,6 +3588,8 @@ namespace proc
                            (void *)interp_base, (void *)interp_entry);
             }
 
+
+
             // **新增：段加载完成后的统计信息**
             printfBlue("execve: segment loading completed. Total sections recorded: %d\n", new_sec_cnt);
             for (int i = 0; i < new_sec_cnt; i++)
@@ -3590,7 +3601,7 @@ namespace proc
                            (void *)new_sec_desc[i]._sec_size);
             }
         }
-
+        printfPink("checkpoint 8\n");
         // ========== 第五阶段：分配用户栈空间 ==========
 
         { // **重构：基于最高地址分配用户栈空间**

@@ -20,6 +20,7 @@
 #include "virtual_memory_manager.hh"
 #include "physical_memory_manager.hh"
 #include "process_memory_manager.hh"  // 新增：进程内存管理器
+#include "mem/memlayout.hh"          // 内核栈配置常量
 
 namespace proc
 {
@@ -219,32 +220,36 @@ namespace proc
 
     void Pcb::map_kstack(mem::PageTable &pt)
     {
+        printf("map_kstack: pcb: global_id: %d, kstack start: %p end: %p\n", _global_id, _kstack, _kstack + KSTACK_SIZE);
         // 检查内核栈地址是否已经初始化
         if (_kstack == 0)
             panic("pcb was not init");
 
-        // 分配一个物理页作为内核栈
-        char *pa = (char *)mem::k_pmm.alloc_page();
-        if (pa == 0)
-            panic("pcb map kstack: no memory");
+        // 为内核栈分配多个物理页
+        for (uint i = 0; i < KSTACK_PAGES; i++)
+        {
+            char *pa = (char *)mem::k_pmm.alloc_page();
+            if (pa == 0)
+                panic("pcb map kstack: no memory");
 
-        // 清零分配的物理页
-        mem::k_pmm.clear_page((void *)pa);
+            // 清零分配的物理页
+            mem::k_pmm.clear_page((void *)pa);
+
+            uint64 va = _kstack + i * PGSIZE;
 
 #ifdef RISCV
-        // RISC-V架构：映射内核栈页面，设置可读可写权限
-        // printfBlue("map kstack: %p, end: %p\n", _kstack, _kstack + PGSIZE-1);
-        if (!mem::k_vmm.map_pages(pt, _kstack, PGSIZE, (uint64)pa,
-                                  riscv::PteEnum::pte_readable_m |
-                                      riscv::PteEnum::pte_writable_m))
-            panic("kernel vm map failed");
+            // RISC-V架构：映射内核栈页面，设置可读可写权限
+            if (!mem::k_vmm.map_pages(pt, va, PGSIZE, (uint64)pa,
+                                      riscv::PteEnum::pte_readable_m |
+                                          riscv::PteEnum::pte_writable_m))
+                panic("kernel vm map failed");
 #elif defined(LOONGARCH)
-        // LoongArch架构：映射内核栈页面，设置相应的页表项权限
-        // TODO: 未测试正确性 (参考自华科实现)
-        if (!mem::k_vmm.map_pages(pt, _kstack, PGSIZE, (uint64)pa,
-                                  PTE_NX | PTE_P | PTE_W | PTE_MAT | PTE_D | PTE_PLV))
-            panic("kernel vm map failed");
+            // LoongArch架构：映射内核栈页面，设置相应的页表项权限
+            if (!mem::k_vmm.map_pages(pt, va, PGSIZE, (uint64)pa,
+                                      PTE_NX | PTE_P | PTE_W | PTE_MAT | PTE_D | PTE_PLV))
+                panic("kernel vm map failed");
 #endif
+        }
     }
 
     int Pcb::get_priority()

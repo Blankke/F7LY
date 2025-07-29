@@ -1,4 +1,12 @@
 #pragma once
+
+// Kernel stack configuration
+// 内核栈配置常量
+#define KSTACK_PAGES 2          // 内核栈使用的页面数 (8KB)
+#define KSTACK_SIZE (KSTACK_PAGES * PGSIZE)  // 内核栈总大小
+#define KSTACK_GUARD_PAGES 1    // guard page 数量
+#define KSTACK_TOTAL_PAGES (KSTACK_PAGES + KSTACK_GUARD_PAGES)  // 总分配页面数
+
 #ifdef RISCV
 // Physical memory layout
 
@@ -60,7 +68,6 @@
 
 // map kernel stacks beneath the trampoline,
 // each surrounded by invalid guard pages.
-#define KSTACK(p) (TRAMPOLINE - ((p)+1)* 2*PGSIZE)
 
 // User memory layout.
 // Address zero first:
@@ -73,6 +80,7 @@
 //   TRAMPOLINE (the same page as in the kernel)
 #define SIG_TRAMPOLINE   (TRAMPOLINE - PGSIZE)
 #define TRAPFRAME (SIG_TRAMPOLINE - PGSIZE)
+#define KSTACK(p) (TRAPFRAME - (((p)+1)* KSTACK_TOTAL_PAGES - KSTACK_GUARD_PAGES )*PGSIZE) // 内核栈栈底
 #elif defined(LOONGARCH)
 // Physical memory layout
 
@@ -111,8 +119,8 @@
 
 // map kernel stacks beneath the trampframe,
 // each surrounded by invalid guard pages.
-#define KSTACK(p) (TRAPFRAME - ((p)+1)* 2*PGSIZE)
 #define SIG_TRAMPOLINE   (TRAPFRAME - PGSIZE)
+#define KSTACK(p) (SIG_TRAMPOLINE - (((p)+1)* KSTACK_TOTAL_PAGES - KSTACK_GUARD_PAGES )*PGSIZE)
 #define PA2VA(pa) ((pa) & (~(DMWIN_MASK)))
 
 

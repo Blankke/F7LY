@@ -32,7 +32,7 @@ namespace mem
     {
         if (global_id >= proc::num_process)
             panic("vmm: invalid global_id");
-        return (TRAPFRAME - (((global_id + 1) * 2) << PGSHIFT));
+        return KSTACK(global_id);
     }
 
     void VirtualMemoryManager::init(const char *lock_name)

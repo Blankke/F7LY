@@ -270,7 +270,7 @@ void trap_manager::usertrapret(void)
   // set up trapframe values that uservec will need when
   // the process next re-enters the kernel.
   p->_trapframe->kernel_pgdl = r_csr_pgdl();      // kernel page table
-  p->_trapframe->kernel_sp = p->_kstack + PGSIZE; // process's kernel stack
+  p->_trapframe->kernel_sp = p->_kstack + KSTACK_SIZE; // process's kernel stack
   p->_trapframe->kernel_trap = (uint64)wrap_usertrap;
 //   printf("usertrapret: p->_trapframe->kernel_trap: %p\n", p->_trapframe->kernel_trap);
   p->_trapframe->kernel_hartid = r_tp(); // hartid for cpuid()
