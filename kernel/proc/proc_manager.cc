@@ -1411,6 +1411,7 @@ namespace proc
     {
         // copy from RUOK-os
         Pcb *p = k_pm.get_cur_pcb();
+        // printf("[wait4] pid: %d child_pid: %d, addr: %p, option: %d\n", p->_pid, child_pid, (void *)addr, option);
         int havekids, pid;
         Pcb *np = nullptr;
         if (child_pid > 0)
@@ -1477,7 +1478,7 @@ namespace proc
             if (!havekids || p->_killed)
             {
                 _wait_lock.release();
-                return -ECHILD;
+                return -ECHILD; // 无子进程
             }
 
             // wait children to exit
