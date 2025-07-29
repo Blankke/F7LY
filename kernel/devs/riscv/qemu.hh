@@ -71,11 +71,6 @@ namespace riscv
 
 		// #define PHYSTOP                 0x88000000L
 
-		// // map kernel stacks beneath the trampoline,
-		// // each surrounded by invalid guard pages.
-		// // #define KSTACK(p)               (TRAMPOLINE - ((p) + 1) * 2 * PGSIZE)
-		// #define VKSTACK                 0x3EC0000000L
-
 		// #define MAXUVA                  RUSTSBI_BASE
 
 	} // namespace qemu
