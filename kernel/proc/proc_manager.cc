@@ -1637,9 +1637,7 @@ namespace proc
         eastl::string absolute_path = get_absolute_path(path.c_str(), dirpath);
 
         // 传入原始权限，umask将在vfs_mkdir中应用
-        vfs_mkdir(absolute_path.c_str(), mode & 0777); //< 传入绝对路径和权限（umask在vfs_mkdir中应用）
-
-        return 0;
+        return vfs_mkdir(absolute_path.c_str(), mode & 0777); //< 传入绝对路径和权限（umask在vfs_mkdir中应用）
     }
 
     int ProcessManager::mknod(int dir_fd, eastl::string path, mode_t mode, dev_t dev)
@@ -1731,11 +1729,11 @@ namespace proc
         Pcb *p = get_cur_pcb();
         if (p->_ofile == nullptr || p->_ofile->_ofile_ptr[fd] == nullptr)
             return 0;
-        
+
         fs::file *f = p->_ofile->_ofile_ptr[fd];
-        printfBlue("[ProcessManager::close] Closing fd=%d, file type=%d, refcnt=%d\n", 
+        printfBlue("[ProcessManager::close] Closing fd=%d, file type=%d, refcnt=%d\n",
                    fd, (int)f->_attrs.filetype, f->refcnt);
-        
+
         // fs::k_file_table.free_file( p->_ofile[ fd ] );
         f->free_file();
         p->_ofile->_ofile_ptr[fd] = nullptr;
@@ -1758,8 +1756,7 @@ namespace proc
         if (p->_ofile == nullptr || p->_ofile->_ofile_ptr[fd] == nullptr)
             return -1;
         fs::file *f = p->_ofile->_ofile_ptr[fd];
-        return   fs::k_vfs.fstat(f, buf);
-
+        return fs::k_vfs.fstat(f, buf);
     }
     int ProcessManager::chdir(eastl::string &path)
     {
@@ -1895,7 +1892,7 @@ namespace proc
     /// @return 0表示有效，负数表示错误码
     int ProcessManager::validate_mmap_params(void *addr, size_t length, int prot, int flags, int fd, int offset)
     {
-        
+
         // 检查匿名映射
         bool is_anonymous = (flags & MAP_ANONYMOUS);
 
@@ -1970,7 +1967,6 @@ namespace proc
             }
         }
 
-
         // MAP_FIXED相关检查
         if (flags & MAP_FIXED)
         {
@@ -1986,14 +1982,14 @@ namespace proc
                 return syscall::SYS_EINVAL;
             }
         }
-        
+
         // MAP_FIXED_NOREPLACE 需要指定地址
         if ((flags & MAP_FIXED_NOREPLACE) && addr == nullptr)
         {
             printfRed("[mmap] MAP_FIXED_NOREPLACE requires non-null address\n");
             return syscall::SYS_EINVAL;
         }
-        
+
         // MAP_FIXED_NOREPLACE 需要地址页对齐
         if ((flags & MAP_FIXED_NOREPLACE) && ((uint64)addr % PGSIZE != 0))
         {
@@ -2067,23 +2063,23 @@ namespace proc
                 printfRed("[mmap] Invalid file descriptor: %d\n", fd);
                 if (errno != nullptr)
                 {
-                    *errno =EBADF;
+                    *errno = EBADF;
                 }
                 return MAP_FAILED;
             }
 
             f = p->get_open_file(fd);
-            //支持不同类型的文件映射
-            // if (f->_attrs.filetype != fs::FileTypes::FT_NORMAL||
-            //     f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
-            // {
-            //     printfRed("[mmap] File descriptor does not refer to regular file\n");
-            //     if (errno != nullptr)
-            //     {
-            //         *errno =EACCES;
-            //     }
-            //     return MAP_FAILED;
-            // }
+            // 支持不同类型的文件映射
+            //  if (f->_attrs.filetype != fs::FileTypes::FT_NORMAL||
+            //      f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+            //  {
+            //      printfRed("[mmap] File descriptor does not refer to regular file\n");
+            //      if (errno != nullptr)
+            //      {
+            //          *errno =EACCES;
+            //      }
+            //      return MAP_FAILED;
+            //  }
 
             // 检查文件访问权限
             if (prot & PROT_READ)
@@ -2140,7 +2136,7 @@ namespace proc
             printfRed("[mmap] Would exceed virtual address space\n");
             if (errno != nullptr)
             {
-                *errno =ENOMEM;
+                *errno = ENOMEM;
             }
             return MAP_FAILED;
         }
@@ -2179,7 +2175,7 @@ namespace proc
             printfRed("[mmap] No available VMA slots\n");
             if (errno != nullptr)
             {
-                *errno =ENOMEM; // 进程映射数量超出限制
+                *errno = ENOMEM; // 进程映射数量超出限制
             }
             return MAP_FAILED;
         }
@@ -2193,7 +2189,7 @@ namespace proc
                 printfRed("[mmap] MAP_FIXED/MAP_FIXED_NOREPLACE requires non-null addr\n");
                 if (errno != nullptr)
                 {
-                    *errno =EINVAL;
+                    *errno = EINVAL;
                 }
                 return MAP_FAILED;
             }
@@ -2203,7 +2199,7 @@ namespace proc
                 printfRed("[mmap] Fixed address must be page aligned\n");
                 if (errno != nullptr)
                 {
-                    *errno =EINVAL;
+                    *errno = EINVAL;
                 }
                 return MAP_FAILED;
             }
@@ -2224,7 +2220,7 @@ namespace proc
                         if (!(new_end <= existing_start || map_addr >= existing_end))
                         {
                             printfRed("[mmap] MAP_FIXED_NOREPLACE: address range [%p, %p) conflicts with existing [%p, %p)\n",
-                                     (void*)map_addr, (void*)new_end, (void*)existing_start, (void*)existing_end);
+                                      (void *)map_addr, (void *)new_end, (void *)existing_start, (void *)existing_end);
                             if (errno != nullptr)
                             {
                                 *errno = EEXIST;
@@ -2354,12 +2350,10 @@ namespace proc
         // 检查地址范围是否合理
         if (unmap_end < unmap_start) // 溢出检查
         {
-            printfRed("[munmap] Address range overflow: start=%p, end=%p\n", 
-                     (void*)unmap_start, (void*)unmap_end);
+            printfRed("[munmap] Address range overflow: start=%p, end=%p\n",
+                      (void *)unmap_start, (void *)unmap_end);
             return -EINVAL;
         }
-
-
 
         // 查找覆盖此地址范围的所有VMA
         for (int i = 0; i < NVMA; ++i)
@@ -2376,7 +2370,6 @@ namespace proc
             {
                 continue; // 没有重叠
             }
-
 
             printfCyan("[munmap] Found overlapping VMA %d: [%p, %p)\n", i, (void *)vma_start, (void *)vma_end);
 

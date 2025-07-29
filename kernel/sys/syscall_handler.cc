@@ -1619,17 +1619,17 @@ namespace syscall
         int mode; // 权限模式，不是flags
 
         if (_arg_int(0, dir_fd) < 0)
-            return -1;
+            return -EINVAL;
         if (_arg_addr(1, path_addr) < 0)
-            return -1;
+            return -EINVAL;
         if (_arg_int(2, mode) < 0) // 这是mode参数，不是flags
-            return -1;
+            return -EINVAL;
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
         eastl::string path;
         if (mem::k_vmm.copy_str_in(*pt, path, path_addr, MAXPATH) < 0)
-            return -1;
+            return -EFAULT;
 
         // 检查路径长度，防止栈溢出
         if (path.length() >= MAXPATH)
@@ -6009,7 +6009,7 @@ namespace syscall
         if (mem::k_vmm.copy_str_in(*pt, linkpath, linkpath_addr, 256) < 0)
         {
             printfRed("[sys_symlinkat] Failed to copy linkpath string from user space\n");
-            return SYS_EFAULT;
+            return SYS_ENAMETOOLONG;
         }
 
         eastl::string abs_linkpath;

@@ -1593,7 +1593,7 @@ char *ltp_testcases[] = {
     // "macsec03.sh",
     // "macvlan01.sh",
     // "macvtap01.sh",
-    // "madvise01",
+    // "madvise01",  //这个要wait后面
     // "madvise02",
     // "madvise03",
     // "madvise05",
@@ -1684,12 +1684,12 @@ char *ltp_testcases[] = {
     // "mincore03",
     // "mincore04",
     // "mkdir_tests.sh",
-    // "mkdir02",
-    // "mkdir03",
+    // "mkdir02", //sendmsg
+    // "mkdir03",  //pass wait后面还有
     // "mkdir04",
-    // "mkdir05",
+    // "mkdir05",  //sendmsg
     // "mkdir09",
-    // "mkdirat01",
+    // "mkdirat01",   
     // "mkdirat02",
     // "mkfs01.sh",
     // "mknod01",
@@ -2569,11 +2569,11 @@ char *ltp_testcases[] = {
     // "swapon02",
     // "swapon03",
     // "swapping01",
-    // "symlink01",
+    // "symlink01",  //pass
     // "symlink02",  //pass
-    // "symlink03",
-    // "symlink04",
-    // "symlinkat01",
+    // "symlink03",   //sendmsg
+    // "symlink04", //pass
+    "symlinkat01",
     // "sync_file_range01",
     // "sync_file_range02",
     // "sync01",

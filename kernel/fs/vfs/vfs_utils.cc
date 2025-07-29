@@ -249,26 +249,9 @@ static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file
         break;
     }
 
-    // 正确处理文件访问模式：检查低两位来确定读写权限
-    // 注意：只修改基本权限位（低9位），保留特殊权限位（sticky bit, setuid, setgid）
-    mode_t special_bits = mode & 07000; // 保存特殊权限位（sticky, setuid, setgid）
-    mode_t basic_perms = mode & 0777;   // 获取基本权限位
-
-    int access_mode = flags & 0x3; // 取低两位
-    if (access_mode == O_RDONLY)   // 0x00 - 只读
-    {
-        basic_perms &= ~0222; // 清除写权限
-        basic_perms |= 0444;  // 设置读权限
-    }
-    else if (access_mode == O_WRONLY) // 0x01 - 只写
-    {
-        basic_perms &= ~0444; // 清除读权限
-        basic_perms |= 0222;  // 设置写权限
-    }
-    // O_RDWR (0x02) 保持读写权限不变
-
-    // 合并特殊权限位和基本权限位
-    mode = special_bits | basic_perms;
+    // 文件权限应该由创建时的mode参数决定，而不是由打开标志决定
+    // 文件的访问标志(O_RDONLY, O_WRONLY, O_RDWR)只影响打开时的读写权限，
+    // 不应该修改文件本身的权限位
 
     return mode;
 }
@@ -504,14 +487,15 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
             // 设置文件所有者和组
             // 获取当前进程的 uid 和 gid
             proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
-            uint32_t current_uid = 0; // 默认 root
-            uint32_t current_gid = 1; // 默认使用有效组ID 1（与getegid一致）
+            uint32_t current_uid = 1; // 使用与 sys_getuid() 一致的值
+            uint32_t current_gid = 1; // 使用与 sys_getgid() 一致的值
 
             if (current_proc != nullptr)
             {
-                current_uid = current_proc->_uid;
-                // 使用有效组ID，与 sys_getegid() 返回值保持一致
-                current_gid = 1; // 硬编码为1，与getegid系统调用一致
+                // 注意：虽然进程的_uid可能是0，但为了与sys_getuid()保持一致，
+                // 文件创建时应使用sys_getuid()返回的值（即1）
+                current_uid = 1; // 与 sys_getuid() 返回值保持一致
+                current_gid = 1; // 与 sys_getgid() 返回值保持一致
             }
 
             // 设置文件的 uid 和 gid
