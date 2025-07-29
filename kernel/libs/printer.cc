@@ -105,6 +105,18 @@ void Printer::print( const char *fmt, ... )
       width = width * 10 + (fmt[i] - '0');
       i++;
     }
+    
+    // Parse length modifiers
+    bool is_long = false;
+    bool is_size_t = false;
+    if (fmt[i] == 'l') {
+      is_long = true;
+      i++;
+    } else if (fmt[i] == 'z') {
+      is_size_t = true;
+      i++;
+    }
+    
     c = fmt[i] & 0xff;
     if (c == 0)
       break;
@@ -113,14 +125,71 @@ void Printer::print( const char *fmt, ... )
       printint(va_arg(ap, int), 2, 1);
       break;
     case 'd':
-      printint(va_arg(ap, int), 10, 1);
+      if (is_long) {
+        // %ld - long int
+        long val = va_arg(ap, long);
+        char buf[32];
+        int j = 0;
+        int sign = 0;
+        unsigned long uval;
+        
+        if (val < 0) {
+          sign = 1;
+          uval = -val;
+        } else {
+          uval = val;
+        }
+        
+        do {
+          buf[j++] = _lower_digits[uval % 10];
+        } while ((uval /= 10) != 0);
+        
+        if (sign) buf[j++] = '-';
+        
+        while (--j >= 0)
+          _console->console_putc(buf[j]);
+      } else {
+        printint(va_arg(ap, int), 10, 1);
+      }
       break;
     case 'u':
-      printint(va_arg(ap, uint), 10, 0);
+      if (is_long) {
+        // %lu - unsigned long
+        unsigned long val = va_arg(ap, unsigned long);
+        char buf[32];
+        int j = 0;
+        
+        do {
+          buf[j++] = _lower_digits[val % 10];
+        } while ((val /= 10) != 0);
+        
+        while (--j >= 0)
+          _console->console_putc(buf[j]);
+      } else if (is_size_t) {
+        // %zu - size_t
+        size_t val = va_arg(ap, size_t);
+        char buf[32];
+        int j = 0;
+        
+        do {
+          buf[j++] = _lower_digits[val % 10];
+        } while ((val /= 10) != 0);
+        
+        while (--j >= 0)
+          _console->console_putc(buf[j]);
+      } else {
+        printint(va_arg(ap, uint), 10, 0);
+      }
       break;
     case 'x': {
-      // 打印无符号16进制（64位）
-      uint64 val = va_arg(ap, uint64);
+      // 打印无符号16进制
+      uint64 val;
+      if (is_long) {
+        // %lx - unsigned long hex
+        val = va_arg(ap, unsigned long);
+      } else {
+        val = va_arg(ap, uint64);
+      }
       char buf[16];
       int j = 0;
       do {
@@ -134,8 +203,14 @@ void Printer::print( const char *fmt, ... )
       break;
     }
     case 'X': {
-      // 打印大写无符号16进制（64位）
-      uint64 val = va_arg(ap, uint64);
+      // 打印大写无符号16进制
+      uint64 val;
+      if (is_long) {
+        // %lX - unsigned long hex (uppercase)
+        val = va_arg(ap, unsigned long);
+      } else {
+        val = va_arg(ap, uint64);
+      }
       char buf[16];
       int j = 0;
       do {
@@ -237,6 +312,56 @@ int Printer::snprint(char *buffer, size_t size, const char *fmt, ...)
     }
   };
 
+  // 内部函数：向缓冲区写入长整数
+  auto write_long = [&](long xx, int base, int sign) {
+    char long_buf[32];
+    int idx = 0;
+    unsigned long x;
+
+    if (sign && (sign = xx < 0))
+      x = -xx;
+    else
+      x = xx;
+
+    do {
+      long_buf[idx++] = _lower_digits[x % base];
+    } while ((x /= base) != 0);
+
+    if (sign) long_buf[idx++] = '-';
+
+    while (--idx >= 0) {
+      write_char(long_buf[idx]);
+    }
+  };
+
+  // 内部函数：向缓冲区写入无符号长整数
+  auto write_ulong = [&](unsigned long val, int base) {
+    char ulong_buf[32];
+    int idx = 0;
+
+    do {
+      ulong_buf[idx++] = _lower_digits[val % base];
+    } while ((val /= base) != 0);
+
+    while (--idx >= 0) {
+      write_char(ulong_buf[idx]);
+    }
+  };
+
+  // 内部函数：向缓冲区写入size_t
+  auto write_size_t = [&](size_t val, int base) {
+    char size_buf[32];
+    int idx = 0;
+
+    do {
+      size_buf[idx++] = _lower_digits[val % base];
+    } while ((val /= base) != 0);
+
+    while (--idx >= 0) {
+      write_char(size_buf[idx]);
+    }
+  };
+
   // 内部函数：向缓冲区写入十六进制数
   auto write_hex = [&](uint64 val, int width, bool uppercase) {
     char hex_buf[16];
@@ -269,6 +394,18 @@ int Printer::snprint(char *buffer, size_t size, const char *fmt, ...)
       width = width * 10 + (fmt[i] - '0');
       i++;
     }
+    
+    // Parse length modifiers
+    bool is_long = false;
+    bool is_size_t = false;
+    if (fmt[i] == 'l') {
+      is_long = true;
+      i++;
+    } else if (fmt[i] == 'z') {
+      is_size_t = true;
+      i++;
+    }
+    
     c = fmt[i] & 0xff;
     if (c == 0)
       break;
@@ -277,16 +414,34 @@ int Printer::snprint(char *buffer, size_t size, const char *fmt, ...)
       write_int(va_arg(ap, int), 2, 1);
       break;
     case 'd':
-      write_int(va_arg(ap, int), 10, 1);
+      if (is_long) {
+        write_long(va_arg(ap, long), 10, 1);
+      } else {
+        write_int(va_arg(ap, int), 10, 1);
+      }
       break;
     case 'u':
-      write_int(va_arg(ap, uint), 10, 0);
+      if (is_long) {
+        write_ulong(va_arg(ap, unsigned long), 10);
+      } else if (is_size_t) {
+        write_size_t(va_arg(ap, size_t), 10);
+      } else {
+        write_int(va_arg(ap, uint), 10, 0);
+      }
       break;
     case 'x':
-      write_hex(va_arg(ap, uint64), width, false);
+      if (is_long) {
+        write_hex(va_arg(ap, unsigned long), width, false);
+      } else {
+        write_hex(va_arg(ap, uint64), width, false);
+      }
       break;
     case 'X':
-      write_hex(va_arg(ap, uint64), width, true);
+      if (is_long) {
+        write_hex(va_arg(ap, unsigned long), width, true);
+      } else {
+        write_hex(va_arg(ap, uint64), width, true);
+      }
       break;
     case 'o': {
       uint64 val = va_arg(ap, uint64);

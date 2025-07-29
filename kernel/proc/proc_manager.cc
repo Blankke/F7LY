@@ -935,6 +935,7 @@ namespace proc
             {
                 p->_ofile->_ofile_ptr[fd] = f;
                 p->_ofile->_fl_cloexec[fd] = false; // 默认不设置 CLOEXEC
+                // 注意：这里不调用 f->dup()，因为调用者通常已经为新分配的文件描述符准备了正确的引用计数
                 return fd;
             }
         }
@@ -1730,8 +1731,13 @@ namespace proc
         Pcb *p = get_cur_pcb();
         if (p->_ofile == nullptr || p->_ofile->_ofile_ptr[fd] == nullptr)
             return 0;
+        
+        fs::file *f = p->_ofile->_ofile_ptr[fd];
+        printfBlue("[ProcessManager::close] Closing fd=%d, file type=%d, refcnt=%d\n", 
+                   fd, (int)f->_attrs.filetype, f->refcnt);
+        
         // fs::k_file_table.free_file( p->_ofile[ fd ] );
-        p->_ofile->_ofile_ptr[fd]->free_file();
+        f->free_file();
         p->_ofile->_ofile_ptr[fd] = nullptr;
         p->_ofile->_fl_cloexec[fd] = false; // 清理 CLOEXEC 标志
         return 0;

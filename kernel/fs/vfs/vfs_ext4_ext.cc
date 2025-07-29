@@ -493,6 +493,27 @@ int vfs_ext_unlink(const char *path) {
         return -EISDIR;
     }
     
+    // Check file permissions and flags before deletion
+    struct ext4_inode inode;
+    uint32_t ino;
+    r = ext4_raw_inode_fill(path, &ino, &inode);
+    if (r != EOK) {
+        return -r;
+    }
+    
+    // Check if file has immutable flag
+    uint32_t inode_flags = ext4_inode_get_flags(&inode);
+    if (inode_flags & EXT4_INODE_FLAG_IMMUTABLE) {
+        printfRed("[vfs_ext_unlink] File %s is immutable, cannot delete\n", path);
+        return -EPERM;
+    }
+    
+    // Check if file has append-only flag (also prevents deletion)
+    if (inode_flags & EXT4_INODE_FLAG_APPEND) {
+        printfRed("[vfs_ext_unlink] File %s is append-only, cannot delete\n", path);
+        return -EPERM;
+    }
+    
     // Try to remove as a file
     r = ext4_fremove(path);
     return -r;
@@ -703,7 +724,32 @@ int vfs_ext_getdents(struct file *f, struct linux_dirent64 *dirp, int count) {
 }
 
 int vfs_ext_frename(const char *oldpath, const char *newpath) {
-    int r = ext4_frename(oldpath, newpath);
+    if (!oldpath || !newpath) {
+        return -EFAULT;
+    }
+    
+    // Check if source file has immutable flag
+    struct ext4_inode inode;
+    uint32_t ino;
+    int r = ext4_raw_inode_fill(oldpath, &ino, &inode);
+    if (r != EOK) {
+        return -r;
+    }
+    
+    // Check if source file has immutable flag (cannot be renamed)
+    uint32_t inode_flags = ext4_inode_get_flags(&inode);
+    if (inode_flags & EXT4_INODE_FLAG_IMMUTABLE) {
+        printfRed("[vfs_ext_frename] Source file %s is immutable, cannot rename\n", oldpath);
+        return -EPERM;
+    }
+    
+    // Check if source file has append-only flag (also prevents renaming)
+    if (inode_flags & EXT4_INODE_FLAG_APPEND) {
+        printfRed("[vfs_ext_frename] Source file %s is append-only, cannot rename\n", oldpath);
+        return -EPERM;
+    }
+    
+    r = ext4_frename(oldpath, newpath);
     if (r != EOK) {
         return -r;
     }

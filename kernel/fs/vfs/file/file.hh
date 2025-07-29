@@ -161,8 +161,11 @@ namespace fs
 		virtual void free_file()
 		{
 			refcnt--;
-			if (refcnt == 0)
+			printfGreen("[file::free_file] refcnt decreased to %d\n", refcnt);
+			if (refcnt == 0) {
+				printfGreen("[file::free_file] refcnt is 0, calling delete this\n");
 				delete this;
+			}
 		};
 		virtual long read(uint64 buf, size_t len, long off, bool upgrade_off) = 0;
 		virtual long write(uint64 buf, size_t len, long off, bool upgrade_off) = 0;

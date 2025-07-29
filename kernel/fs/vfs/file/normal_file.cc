@@ -1,6 +1,9 @@
 #include "fs/vfs/file/normal_file.hh"
 #include "fs/lwext4/ext4_errno.hh"
 #include "fs/lwext4/ext4.hh"
+#include "fs/lwext4/ext4_inode.hh"
+#include "fs/lwext4/ext4_fs.hh"
+#include "fs/lwext4/ext4_types.hh"
 #include "mem/userspace_stream.hh"
 #include "proc_manager.hh"
 #define min(a, b) ((a) < (b) ? (a) : (b))
@@ -81,6 +84,36 @@ long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 				return -EBADF;
 			}
 		}
+		
+		// Check if file has immutable or append-only flags
+		if (lwext4_file_struct.mp && lwext4_file_struct.inode > 0)
+		{
+			struct ext4_inode_ref inode_ref;
+			int result = ext4_fs_get_inode_ref(&lwext4_file_struct.mp->fs, 
+											   lwext4_file_struct.inode, 
+											   &inode_ref);
+			if (result == EOK)
+			{
+				uint32_t inode_flags = ext4_inode_get_flags(inode_ref.inode);
+				ext4_fs_put_inode_ref(&inode_ref);
+				
+				// Check immutable flag
+				if (inode_flags & EXT4_INODE_FLAG_IMMUTABLE) {
+					printfRed("normal_file::write: File is immutable, cannot write\n");
+					return -EPERM;
+				}
+				
+				// Check append-only flag - only allow writes at end of file
+				if (inode_flags & EXT4_INODE_FLAG_APPEND) {
+					uint64_t file_size = lwext4_file_struct.fsize;
+					if (off != (long)file_size) {
+						printfRed("normal_file::write: File is append-only, can only write at end\n");
+						return -EPERM;
+					}
+				}
+			}
+		}
+		
 		if (off != _file_ptr)
 		{
 			int seek_status = ext4_fseek(&lwext4_file_struct, off, SEEK_SET);

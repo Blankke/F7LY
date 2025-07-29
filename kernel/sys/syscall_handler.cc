@@ -28,6 +28,8 @@
 #include <linux/fs.h>
 #include "fs/vfs/file/normal_file.hh"
 #include "fs/vfs/file/pipe_file.hh"
+#include "fs/lwext4/ext4_inode.hh"
+#include "fs/lwext4/ext4_fs.hh"
 #include "fs/vfs/file/socket_file.hh"
 #include "proc/pipe.hh"
 #include "proc/signal.hh"
@@ -2794,10 +2796,13 @@ namespace syscall
             return SYS_EBADF;
         fd = fd;
 
-        if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE && f->_attrs.filetype != fs::FileTypes::FT_PIPE)
+        // FS_IOC_GETFLAGS 和 FS_IOC_SETFLAGS 可以用于普通文件
+        if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE && 
+            f->_attrs.filetype != fs::FileTypes::FT_PIPE &&
+            f->_attrs.filetype != fs::FileTypes::FT_NORMAL)
         {
-            printfRed("[SyscallHandler::sys_ioctl] File is not a device file\n");
-            // return SYS_ENOTTY; // 不是设备文件
+            printfRed("[SyscallHandler::sys_ioctl] File type not supported for ioctl\n");
+            // return SYS_ENOTTY; // 不支持的文件类型
         }
         u32 cmd;
         if (_arg_int(1, tmp) < 0)
@@ -3306,13 +3311,115 @@ namespace syscall
             return 0;
         }
       
-        if((cmd & 0xFFFF) == FS_IOC_GETFLAGS) 
+        if((cmd & 0xFFFF) == 0x6601)// FS_IOC_GETFLAGS) 
         {
-            panic("FS_IOC_GETFLAGS not implemented yet");   
+            // 获取文件标志
+            if (f->_attrs.filetype != fs::FileTypes::FT_NORMAL)
+            {
+                printfRed("[SyscallHandler::sys_ioctl] FS_IOC_GETFLAGS only supports regular files\n");
+                return SYS_ENOTTY;
+            }
+            
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+#ifdef RISCV
+            uint32_t *flags_ptr = (uint32_t *)pt->walk_addr(arg);
+#elif defined(LOONGARCH)
+            uint32_t *flags_ptr = (uint32_t *)to_vir((uint64)pt->walk_addr(arg));
+#endif
+            if (!flags_ptr)
+            {
+                printfRed("[SyscallHandler::sys_ioctl] Error fetching flags address\n");
+                return SYS_EFAULT;
+            }
+            
+            // 通过文件的 ext4_file 结构获取 inode 标志
+            uint32_t inode_flags = 0;
+            if (f->lwext4_file_struct.mp && f->lwext4_file_struct.inode > 0)
+            {
+                // 从 ext4_file 获取标志
+                struct ext4_inode_ref inode_ref;
+                int result = ext4_fs_get_inode_ref(&f->lwext4_file_struct.mp->fs, 
+                                                   f->lwext4_file_struct.inode, 
+                                                   &inode_ref);
+                if (result == EOK)
+                {
+                    inode_flags = ext4_inode_get_flags(inode_ref.inode);
+                    ext4_fs_put_inode_ref(&inode_ref);
+                }
+                else
+                {
+                    printfRed("[SyscallHandler::sys_ioctl] Failed to get inode ref: %d\n", result);
+                    return SYS_EIO;
+                }
+            }
+            else
+            {
+                printfRed("[SyscallHandler::sys_ioctl] File not opened with ext4 or invalid inode\n");
+                return SYS_EIO;
+            }
+            
+            *flags_ptr = inode_flags;
+            printf("[SyscallHandler::sys_ioctl] FS_IOC_GETFLAGS: file flags = 0x%X\n", inode_flags);
+            return 0;
         }
-        if ((cmd & 0xFFFF) == FS_IOC_SETFLAGS) 
+        if ((cmd & 0xFFFF) == 0x6602) //FS_IOC_SETFLAGS)
         {
-            panic("FS_IOC_SETFLAGS not implemented yet");
+            // 设置文件标志
+            if (f->_attrs.filetype != fs::FileTypes::FT_NORMAL)
+            {
+                printfRed("[SyscallHandler::sys_ioctl] FS_IOC_SETFLAGS only supports regular files\n");
+                return SYS_ENOTTY;
+            }
+            
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+#ifdef RISCV
+            uint32_t *flags_ptr = (uint32_t *)pt->walk_addr(arg);
+#elif defined(LOONGARCH)
+            uint32_t *flags_ptr = (uint32_t *)to_vir((uint64)pt->walk_addr(arg));
+#endif
+            if (!flags_ptr)
+            {
+                printfRed("[SyscallHandler::sys_ioctl] Error fetching flags address\n");
+                return SYS_EFAULT;
+            }
+            
+            uint32_t new_flags = *flags_ptr;
+            printf("[SyscallHandler::sys_ioctl] FS_IOC_SETFLAGS: setting flags to 0x%X\n", new_flags);
+            
+            // 通过文件的 ext4_file 结构设置 inode 标志
+            if (f->lwext4_file_struct.mp && f->lwext4_file_struct.inode > 0)
+            {
+                // 从 ext4_file 设置标志
+                struct ext4_inode_ref inode_ref;
+                int result = ext4_fs_get_inode_ref(&f->lwext4_file_struct.mp->fs, 
+                                                   f->lwext4_file_struct.inode, 
+                                                   &inode_ref);
+                if (result == EOK)
+                {
+                    ext4_inode_set_flags(inode_ref.inode, new_flags);
+                    
+                    // 标记 inode 为脏，需要写回
+                    inode_ref.dirty = true;
+                    result = ext4_fs_put_inode_ref(&inode_ref);
+                    if (result != EOK)
+                    {
+                        printfRed("[SyscallHandler::sys_ioctl] Failed to write back inode: %d\n", result);
+                        return SYS_EIO;
+                    }
+                }
+                else
+                {
+                    printfRed("[SyscallHandler::sys_ioctl] Failed to get inode ref: %d\n", result);
+                    return SYS_EIO;
+                }
+            }
+            else
+            {
+                printfRed("[SyscallHandler::sys_ioctl] File not opened with ext4 or invalid inode\n");
+                return SYS_EIO;
+            }
+            
+            return 0;
         }
         
         printfRed("[SyscallHandler::sys_ioctl] Unsupported ioctl command: 0x%X\n", cmd);

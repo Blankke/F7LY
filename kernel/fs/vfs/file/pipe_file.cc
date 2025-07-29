@@ -13,11 +13,14 @@ namespace fs
 {
 	pipe_file::~pipe_file() 
 	{
+		printfYellow("[pipe_file::~pipe_file] Destructor called, is_write=%d\n", is_write);
 		if (!_fifo_path.empty()) {
 			// 对于 FIFO 文件，使用全局管理器进行清理
+			printfYellow("[pipe_file::~pipe_file] Closing FIFO: %s\n", _fifo_path.c_str());
 			fs::k_fifo_manager.close_fifo(_fifo_path, is_write);
 		} else {
 			// 对于普通管道，直接关闭
+			printfYellow("[pipe_file::~pipe_file] Closing pipe\n");
 			_pipe->close(is_write);
 		}
 	}

@@ -169,8 +169,7 @@ namespace proc
 					return -1;
 				}
 				// 让当前进程进入休眠状态，等待写端唤醒
-				printfRed("缓冲区为空\n");
-				return syscall::SYS_EAGAIN; // 返回 EAGAIN 错误，表示没有数据可读
+				printfRed("缓冲区为空，进程休眠等待\n");
 				k_pm.sleep(&_read_sleep, &_lock); // DOC: piperead-sleep
 			}
 
@@ -229,25 +228,29 @@ namespace proc
 
 		void Pipe::close(bool is_write)
 		{
+			printfCyan("[Pipe::close] Closing pipe, is_write=%d\n", is_write);
 			_lock.acquire();
 			if (is_write)
 			{
+				printfCyan("[Pipe::close] Closing write end\n");
 				_write_is_open = false;
 				k_pm.wakeup(&_read_sleep);
 			}
 			else
 			{
+				printfCyan("[Pipe::close] Closing read end\n");
 				_read_is_open = false;
 				k_pm.wakeup(&_write_sleep);
 			}
 
+			printfCyan("[Pipe::close] Pipe state: read_open=%d, write_open=%d\n", _read_is_open, _write_is_open);
 			if (!_read_is_open && !_write_is_open)
 			{
+				printfCyan("[Pipe::close] Both ends closed, deleting pipe\n");
 				_lock.release();
 				delete this;
 			}
 			else{
-				
 				_lock.release();
 			}
 		}

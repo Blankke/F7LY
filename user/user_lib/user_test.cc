@@ -2531,7 +2531,7 @@ char *ltp_testcases[] = {
     // "stat02_64",   //pass
     // "stat03",   //sendmsg
     // "stat03_64",
-    // "statfs01",   //clone?
+    "statfs01",   
     // "statfs01_64",
     // "statfs02",  //pass偷的
     // "statfs02_64", //pass偷的
@@ -3155,7 +3155,7 @@ char *ltp_testcases[] = {
     // "unlink05", //pass
     // "unlink07",  //pass
     // "unlink08",   //sendmsg
-    // "unlink09",   
+    // "unlink09",    pass,EPERM修好之后还有测例
     // "unlinkat01", //pass (unlink failed)
     // "unshare01",
     // "unshare01.sh",

@@ -3,6 +3,7 @@
 #include "printer.hh"
 #include "sys/syscall_defs.hh"
 #include <EASTL/string.h>
+#include "fs/vfs/fifo_manager.hh"
 namespace fs
 {
 	class pipe_file : public file
@@ -85,5 +86,16 @@ namespace fs
 		/// @return 实际读取的字节数。
 		size_t read_sub_dir(ubuf &dst) override {panic("pipe_file::read_sub_dir: not implemented yet"); return 0; };
 		void set_is_write(bool is_write_) { is_write = is_write_; }
+		
+		/// @brief 手动关闭管道，用于在文件描述符关闭时调用
+		void close_pipe() { 
+			if (!_fifo_path.empty()) {
+				// 对于 FIFO 文件，使用全局管理器进行清理
+				fs::k_fifo_manager.close_fifo(_fifo_path, is_write);
+			} else {
+				// 对于普通管道，直接关闭
+				_pipe->close(is_write);
+			}
+		}
 	};
 }
