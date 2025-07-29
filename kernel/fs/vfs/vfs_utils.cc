@@ -1451,9 +1451,17 @@ int vfs_copy_file_range(int f_in, off_t offset_in, int f_out, off_t offset_out, 
 
 bool is_lock_conflict(const struct flock &existing_lock, const struct flock &new_lock)
 {
-    // 如果目标锁类型是解锁（F_UNLCK），就不需要检测冲突
-    if (new_lock.l_type == F_UNLCK)
+    printfCyan("[is_lock_conflict] Existing: type=%d, start=%ld, len=%ld, pid=%d\n", 
+              existing_lock.l_type, existing_lock.l_start, existing_lock.l_len, existing_lock.l_pid);
+    printfCyan("[is_lock_conflict] New: type=%d, start=%ld, len=%ld, pid=%d\n", 
+              new_lock.l_type, new_lock.l_start, new_lock.l_len, new_lock.l_pid);
+
+    // 如果现有锁类型是F_UNLCK或目标锁类型是解锁（F_UNLCK），就不需要检测冲突
+    if (existing_lock.l_type == 0 || new_lock.l_type == 0) // F_UNLCK = 0
+    {
+        printfCyan("[is_lock_conflict] One lock is F_UNLCK, no conflict\n");
         return false;
+    }
 
     // 判断锁的范围是否重叠
     off_t start1 = existing_lock.l_start;
@@ -1461,14 +1469,63 @@ bool is_lock_conflict(const struct flock &existing_lock, const struct flock &new
     off_t start2 = new_lock.l_start;
     off_t end2 = (new_lock.l_len == 0) ? LONG_MAX : new_lock.l_start + new_lock.l_len;
 
+    printfCyan("[is_lock_conflict] Range check: [%ld,%ld] vs [%ld,%ld]\n", start1, end1, start2, end2);
+
     // 如果锁的范围没有交集，直接返回不冲突
     if (end1 <= start2 || end2 <= start1)
+    {
+        printfCyan("[is_lock_conflict] No range overlap, no conflict\n");
         return false;
+    }
+
+    // 如果是同一个进程的锁，不冲突（进程可以修改自己的锁）
+    if (existing_lock.l_pid == new_lock.l_pid && existing_lock.l_pid != 0)
+    {
+        printfCyan("[is_lock_conflict] Same process, no conflict\n");
+        return false;
+    }
 
     // 检查锁类型是否冲突
-    if (existing_lock.l_type == F_WRLCK || new_lock.l_type == F_WRLCK)
+    if (existing_lock.l_type == 2 || new_lock.l_type == 2) // F_WRLCK = 2
+    {
+        printfCyan("[is_lock_conflict] Write lock involved, conflict!\n");
         return true; // 写锁和任何锁都冲突
-    if (existing_lock.l_type == F_RDLCK && new_lock.l_type == F_RDLCK)
+    }
+    if (existing_lock.l_type == 1 && new_lock.l_type == 1) // F_RDLCK = 1
+    {
+        printfCyan("[is_lock_conflict] Both read locks, no conflict\n");
         return false; // 读锁之间不冲突
+    }
+    
+    printfCyan("[is_lock_conflict] Other case, conflict!\n");
     return true;      // 其他情况下有冲突
+}
+
+// 检查文件锁是否允许指定的读写操作
+bool check_file_lock_access(const struct flock &file_lock, off_t offset, size_t size, bool is_write)
+{
+    // 如果文件没有锁，允许任何操作
+    if (file_lock.l_type == F_UNLCK)
+        return true;
+
+    // 计算操作的范围
+    off_t op_start = offset;
+    off_t op_end = offset + size;
+
+    // 计算锁的范围
+    off_t lock_start = file_lock.l_start;
+    off_t lock_end = (file_lock.l_len == 0) ? LONG_MAX : file_lock.l_start + file_lock.l_len;
+
+    // 如果操作范围与锁范围没有交集，允许操作
+    if (op_end <= lock_start || lock_end <= op_start)
+        return true;
+
+    // 如果有交集，检查锁类型
+    if (file_lock.l_type == F_WRLCK)
+        return false; // 写锁阻止任何操作
+
+    if (file_lock.l_type == F_RDLCK && is_write)
+        return false; // 读锁阻止写操作
+
+    return true; // 读锁允许读操作
 }

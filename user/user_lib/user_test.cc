@@ -883,7 +883,7 @@ char *ltp_testcases[] = {
     // "fcntl04", //pass
     // "fcntl04_64", //pass
     // "fcntl05",   //pass
-    // "fcntl05_64",
+    // "fcntl05_64",  //pass
     // "fcntl07",
     // "fcntl07_64",
     // "fcntl08",   //pass
@@ -892,7 +892,7 @@ char *ltp_testcases[] = {
     // "fcntl09_64",   //pass
     // "fcntl10",   //pass
     // "fcntl10_64", //pass
-    // "fcntl11",
+    "fcntl11",
     // "fcntl11_64",
     // "fcntl12", //pass
     // "fcntl12_64",//pass
@@ -952,7 +952,7 @@ char *ltp_testcases[] = {
     // "fdatasync02",
     // "fdatasync03",
     // "fgetxattr01",   //bin/sh
-    "fgetxattr02",
+    // "fgetxattr02",
     // "fgetxattr03",
     // "file01.sh",
     // "filecapstest.sh",

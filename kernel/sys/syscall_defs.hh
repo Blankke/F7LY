@@ -22,6 +22,7 @@ namespace syscall
         SYS_dup3 = 24,
         SYS_fcntl = 25,
         SYS_ioctl = 29,
+        SYS_flock =32,
         SYS_mknodat = 33,            // from rocket
         SYS_mkdirat = 34,
         SYS_unlinkat = 35,

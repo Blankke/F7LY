@@ -149,6 +149,7 @@ namespace fs
 			_lock.l_start = 0;
 			_lock.l_whence = SEEK_SET;
 			_lock.l_type = F_UNLCK; // 默认没有锁
+			_lock.l_pid = 0;        // 默认没有进程ID
 		}
 		file(FileAttrs attrs, eastl::string path) : _attrs(attrs), refcnt(0), _stat(_attrs.filetype), _path_name(path)
 		{
@@ -156,6 +157,7 @@ namespace fs
 			_lock.l_start = 0;
 			_lock.l_whence = SEEK_SET;
 			_lock.l_type = F_UNLCK; // 默认没有锁
+			_lock.l_pid = 0;        // 默认没有进程ID
 		}
 		virtual ~file() = default;
 		virtual void free_file()
