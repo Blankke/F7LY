@@ -741,12 +741,12 @@ char *ltp_testcases[] = {
     // "dup07",//完全PASS
     // "dup201",//完全PASS
     // "dup202",//完全PASS
-    // "dup203",  //完全PASS
+    // "dup203",  
     // "dup204",// 完全PASS
     // "dup205",//完全PASS
     // "dup206", //完全PASS
-    // "dup207", //完全PASS
-    // "dup3_01",// 完全PASS
+    // "dup207", //
+    // "dup3_01",// 
     // "dup3_02",// 完全PASS
     // "dynamic_debug01.sh",
     // "ebizzy",
@@ -882,8 +882,8 @@ char *ltp_testcases[] = {
     // "fcntl03_64", //pass
     // "fcntl04", //pass
     // "fcntl04_64", //pass
-    // "fcntl05",   //pass
-    // "fcntl05_64",  //pass
+    // "fcntl05",   //还有没过的
+    // "fcntl05_64",  //
     // "fcntl07",
     // "fcntl07_64",
     // "fcntl08",   //pass
@@ -896,8 +896,8 @@ char *ltp_testcases[] = {
     // "fcntl11_64",
     // "fcntl12", //pass
     // "fcntl12_64",//pass
-    // "fcntl13",  //pass
-    // "fcntl13_64", //pass
+    // "fcntl13",  //过了一半
+    // "fcntl13_64", //过了一半
     // "fcntl14",
     // "fcntl14_64",
     // "fcntl15", 
@@ -1126,7 +1126,7 @@ char *ltp_testcases[] = {
     // "fstat02_64",
     // "fstat03", //pass
     // "fstat03_64",//pass
-    // "fstatat01",  //pass
+    // "fstatat01",  //
     // "fstatfs01",
     // "fstatfs01_64",
     // "fstatfs02",
@@ -1224,7 +1224,7 @@ char *ltp_testcases[] = {
     // "getaddrinfo_01",
     // "getcontext01",
     // "getcpu01",
-    // "getcwd01",//完全PASS
+    // "getcwd01",//过了一半
     // "getcwd02", // 完全PASS
     // "getcwd03",     //pass
     // "getcwd04", // Test needs at least 2 CPUs online 这个是因为 sched_getaffinity返回0，说不定它不用两个CPU
@@ -1264,11 +1264,11 @@ char *ltp_testcases[] = {
     // "getppid02",
     // "getpriority01",
     // "getpriority02",
-    // "getrandom01",// 完全PASS
+    // "getrandom01",// 炸了
     // "getrandom02", // 完全PASS
     // "getrandom03", // 完全PASS
     // "getrandom04", // 完全PASS
-    // "getrandom05",// 完全PASS
+    // "getrandom05",// 一半
     // "getresgid01",
     // "getresgid01_16",
     // "getresgid02",
@@ -1296,7 +1296,7 @@ char *ltp_testcases[] = {
     // "getsockopt02",
     // "gettid01",
     // "gettid02",
-    // "gettimeofday01",//PASS
+    // "gettimeofday01",//一半
     // "gettimeofday02",
     // "getuid01",
     // "getuid01_16",
@@ -1553,9 +1553,9 @@ char *ltp_testcases[] = {
     // "lgetxattr02",
     // "libcgroup_freezer",
     // "link02",  //pass
-    // "link04",//pass
+    // "link04",//
     // "link05", //pass,这个也是逆天数量
-    // "link08", //pass
+    // "link08", //爆了
     // "linkat01",  //还有一个没有过
     // "linkat02",//sendmsg
     // "linktest.sh",
@@ -1567,16 +1567,16 @@ char *ltp_testcases[] = {
     // "llistxattr02",
     // "llistxattr03",
     // "llseek01",  //pass
-    // "llseek02",  //pass wait后面还有
-    // "llseek03",//pass wait后面还有
+    // "llseek02",  // TFAIL: lseek(4, 1, 0) failed unexpectedly, expected EBADF: EPERM (1)
+    // "llseek03",//爆了
     // "ln_tests.sh",
     // "lock_torture.sh",
     // "locktests",
     // "logrotate_tests.sh",
     // "lremovexattr01",
-    // "lseek01", //完全PASS
-    // "lseek02",
-    // "lseek07",
+    // "lseek01", //爆了
+    // "lseek02",  //过了一半
+    // "lseek07", //pass
     // "lseek11",
     // "lsmod01.sh",
     // "lstat01",
@@ -1593,7 +1593,7 @@ char *ltp_testcases[] = {
     // "macsec03.sh",
     // "macvlan01.sh",
     // "macvtap01.sh",
-    // "madvise01",  //这个要wait后面
+    // "madvise01",  //pass
     // "madvise02",
     // "madvise03",
     // "madvise05",
@@ -1685,7 +1685,7 @@ char *ltp_testcases[] = {
     // "mincore04",
     // "mkdir_tests.sh",
     // "mkdir02", //sendmsg
-    // "mkdir03",  //pass wait后面还有
+    // "mkdir03",  //爆了
     // "mkdir04",
     // "mkdir05",  //sendmsg
     // "mkdir09",
@@ -1717,7 +1717,7 @@ char *ltp_testcases[] = {
     // "mlockall03",
     // "mmap001",   //pass
     // "mmap01",
-    // "mmap02",   //mmapfile->F?
+    // "mmap02",   //pass
     // "mmap03",
     // "mmap04",
     // "mmap05",
@@ -1725,7 +1725,7 @@ char *ltp_testcases[] = {
     // "mmap08", //pass
     // "mmap09",  //pass
     // "mmap1",
-    // "mmap10", //pass
+    // "mmap10", //爆了
     // "mmap11",   //pass
     // "mmap12",
     // "mmap13",
@@ -1833,7 +1833,7 @@ char *ltp_testcases[] = {
     // "msgsnd06",
     // "msgstress01",
     // "msync01",  //pass
-    // "msync02",  //pass
+    // "msync02",  //爆了
     // "msync03",   //pass
     // "msync04",
     // "mtest01",
@@ -1842,7 +1842,7 @@ char *ltp_testcases[] = {
     // "munlockall01",
     // "munmap01",
     // "munmap02",
-    // "munmap03",
+    // "munmap03",  //pass
     // "mv_tests.sh",
     // "myfunctions.sh",
     // "name_to_handle_at01",
@@ -1915,19 +1915,19 @@ char *ltp_testcases[] = {
     // "open03", // 完全PASS
     // "open04",    //完全PASS
     // "open06",   //pass
-    // "open07",   //pass
+    // "open07",   //爆了
     // "open08",
-    // "open09", //pass
+    // "open09", //爆了
     // "open10",
-    // "open11",    //pass
+    // "open11",    //爆了
     // "open12",    //过了一个
     // "open12_child",
     // "open13",    // pass
     // "open14",    //pass这个测例要跑一年，别急着掐死，多等会
-    // "openat01", // 完全PASS
-    // "openat02",
+    // "openat01", // 爆了
+    // "openat02",   //爆了
     // "openat02_child",
-    // "openat03",
+    // "openat03",   //pass这个和那个一年是同一个
     // "openat04",
     // "openat201",
     // "openat202",
@@ -1990,11 +1990,11 @@ char *ltp_testcases[] = {
     // "pipe09", // 完全PASS
     // "pipe10", // 完全PASS
     // "pipe11",
-    // "pipe12", // 完全PASS
+    // "pipe12", // 爆了
     // "pipe13", // proc/4/stat没写
     // "pipe14", // 完全PASS
     // "pipe15", //NOFILE limit max too low: 128 < 65536
-    // "pipe2_01", //完全PASS
+    // "pipe2_01", //爆了
     // "pipe2_02",
     // "pipe2_02_child",
     // "pipe2_04",
@@ -2031,8 +2031,8 @@ char *ltp_testcases[] = {
     // "prctl10",
     // "pread01",    //pass
     // "pread01_64",  //pass
-    // "pread02",           //pass
-    // "pread02_64",    //pass
+    // "pread02",           //爆了
+    // "pread02_64",    
     // "preadv01",
     // "preadv01_64",
     // "preadv02",
@@ -2118,7 +2118,7 @@ char *ltp_testcases[] = {
     // "rcu_torture.sh",
     // "read_all",
     // "read01", //貌似可以PASS
-    // "read02",   //pass
+    // "read02",   //爆了
     // "read03", //pass
     // "read04", // 完全PASS
     // "readahead01",
@@ -2128,10 +2128,9 @@ char *ltp_testcases[] = {
     // "readlink01",
     // "readlink03",
     // "readlinkat01", //pass
-    // "readlinkat02", //pass
+    // "readlinkat02", //爆了
     // "readv01", //pass
-    // "readv01", // pass
-    // "readv02",   //pass
+    // "readv02",   //爆了
     // "realpath01",
     // "reboot01",
     // "reboot02",
@@ -2210,8 +2209,8 @@ char *ltp_testcases[] = {
     // "runpwtests05.sh",
     // "runpwtests06.sh",
     // "rwtest",
-    // "sbrk01", // 完全PASS
-    // "sbrk02", // 完全PASS
+    // "sbrk01", // 爆了
+    // "sbrk02", // pass
     // "sbrk03", // Arch需要是S390
     // "sched_datafile",
     // "sched_driver",
@@ -2539,9 +2538,9 @@ char *ltp_testcases[] = {
     // "statfs03_64",
     // "statvfs01",
     // "statvfs02", //pass
-    // "statx01",  //pass
-    // "statx02",  //pass
-    // "statx03",// pass
+    // "statx01",  //uid
+    // "statx02",  //symlink
+    // "statx03",// 爆了
     // "statx04",   //bin/sh
     // "statx05",
     // "statx06",
@@ -2555,7 +2554,7 @@ char *ltp_testcases[] = {
     // "stime02",
     // "stop_freeze_sleep_thaw_cont.sh",
     // "stop_freeze_thaw_cont.sh",
-    // "stream01",   //pass
+    // "stream01",   //爆了
     // "stream02",   //pass
     // "stream03", // stream03.c:249: strlen(junk)=26: file pointer descrepancy 5 (opos=0)
     // "stream04",  //pass
@@ -2573,7 +2572,7 @@ char *ltp_testcases[] = {
     // "symlink02",  //pass
     // "symlink03",   //sendmsg
     // "symlink04", //pass
-    "symlinkat01",
+    // "symlinkat01",
     // "sync_file_range01",
     // "sync_file_range02",
     // "sync01",
@@ -3153,10 +3152,10 @@ char *ltp_testcases[] = {
     // "uname02",// 完全PASS
     // "uname04", // 完全PASS
     // "unlink05", //pass
-    // "unlink07",  //pass
+    // "unlink07",  //爆了
     // "unlink08",   //sendmsg
-    // "unlink09",    pass,EPERM修好之后还有测例
-    // "unlinkat01", //pass (unlink failed)
+    // "unlink09",   ///
+    // "unlinkat01", //nlink failed)
     // "unshare01",
     // "unshare01.sh",
     // "unshare02",
@@ -3255,10 +3254,10 @@ char *ltp_testcases[] = {
     // "wqueue09",
     // "write_freezing.sh",
     // "write01", // 完全PASS
-    // "write02", // 完全PASS·
+    // "write02", //爆了
     // "write03", // 完全PASS
     // "write04",
-    // "write05", // 完全PASS
+    // "write05", // 有没过的
     // "write06",
     // "writetest",
     // "writev01", // 完全PASS
