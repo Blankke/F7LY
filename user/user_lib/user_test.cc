@@ -892,7 +892,7 @@ char *ltp_testcases[] = {
     // "fcntl09_64",   //pass
     // "fcntl10",   //pass
     // "fcntl10_64", //pass
-    "fcntl11",
+    // "fcntl11",
     // "fcntl11_64",
     // "fcntl12", //pass
     // "fcntl12_64",//pass
@@ -1552,11 +1552,11 @@ char *ltp_testcases[] = {
     // "lgetxattr01",
     // "lgetxattr02",
     // "libcgroup_freezer",
-    // "link02",
-    // "link04",
-    // "link05",
-    // "link08",
-    // "linkat01",
+    // "link02",  //pass
+    // "link04",//pass
+    // "link05", //pass,这个也是逆天数量
+    // "link08", //pass
+    // "linkat01",  //还有两个没有过
     // "linkat02",
     // "linktest.sh",
     // "listen01",

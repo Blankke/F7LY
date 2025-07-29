@@ -1398,6 +1398,12 @@ namespace syscall
                     printfRed("sys_linkat: olddirfd %d does not refer to an open file\n", olddirfd);
                     return -EBADF;
                 }
+                // 检查 olddirfd 是否指向目录
+                if (dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
+                {
+                    printfRed("sys_linkat: olddirfd %d does not refer to a directory\n", olddirfd);
+                    return -ENOTDIR;
+                }
                 abs_oldpath = join_path(dir_file->_path_name, oldpath);
             }
         }
@@ -1453,6 +1459,12 @@ namespace syscall
                 {
                     printfRed("sys_linkat: newdirfd %d does not refer to an open file\n", newdirfd);
                     return -EBADF;
+                }
+                // 检查 newdirfd 是否指向目录
+                if (dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
+                {
+                    printfRed("sys_linkat: newdirfd %d does not refer to a directory\n", newdirfd);
+                    return -ENOTDIR;
                 }
                 abs_newpath = join_path(dir_file->_path_name, newpath);
             }
