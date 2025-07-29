@@ -25,6 +25,28 @@
 #define printfYellow(format, ...) k_printer.print("\33[1;33m" format "\33[0m", ##__VA_ARGS__)
 #define printfWhite(format, ...) k_printer.print("\33[1;37m" format "\33[0m", ##__VA_ARGS__)
 #define printfMagenta(format, ...) k_printer.print("\33[1;35m" format "\33[0m", ##__VA_ARGS__)
+
+// 颜色太少了，我给你加几个
+#define printfBlack(format, ...) k_printer.print("\33[1;30m" format "\33[0m", ##__VA_ARGS__)
+#define printfOrange(format, ...) k_printer.print("\33[1;38;5;208m" format "\33[0m", ##__VA_ARGS__)
+#define printfPurple(format, ...) k_printer.print("\33[1;38;5;129m" format "\33[0m", ##__VA_ARGS__)
+#define printfPink(format, ...) k_printer.print("\33[1;38;5;205m" format "\33[0m", ##__VA_ARGS__)
+#define printfBrown(format, ...) k_printer.print("\33[1;38;5;94m" format "\33[0m", ##__VA_ARGS__)
+#define printfGray(format, ...) k_printer.print("\33[1;90m" format "\33[0m", ##__VA_ARGS__)
+#define printfLightRed(format, ...) k_printer.print("\33[0;91m" format "\33[0m", ##__VA_ARGS__)
+#define printfLightGreen(format, ...) k_printer.print("\33[0;92m" format "\33[0m", ##__VA_ARGS__)
+#define printfLightBlue(format, ...) k_printer.print("\33[0;94m" format "\33[0m", ##__VA_ARGS__)
+#define printfLightCyan(format, ...) k_printer.print("\33[0;96m" format "\33[0m", ##__VA_ARGS__)
+#define printfLightYellow(format, ...) k_printer.print("\33[0;93m" format "\33[0m", ##__VA_ARGS__)
+#define printfLightMagenta(format, ...) k_printer.print("\33[0;95m" format "\33[0m", ##__VA_ARGS__)
+
+// Background colors
+#define printfBgRed(format, ...) k_printer.print("\33[1;41m" format "\33[0m", ##__VA_ARGS__)
+#define printfBgGreen(format, ...) k_printer.print("\33[1;42m" format "\33[0m", ##__VA_ARGS__)
+#define printfBgBlue(format, ...) k_printer.print("\33[1;44m" format "\33[0m", ##__VA_ARGS__)
+#define printfBgYellow(format, ...) k_printer.print("\33[1;43m" format "\33[0m", ##__VA_ARGS__)
+#define printfBgCyan(format, ...) k_printer.print("\33[1;46m" format "\33[0m", ##__VA_ARGS__)
+#define printfBgMagenta(format, ...) k_printer.print("\33[1;45m" format "\33[0m", ##__VA_ARGS__)
 // Info print macros
 #define Info(fmt, ...) printf("[INFO] => " fmt "", ##__VA_ARGS__)
 #define Info_R(fmt, ...) printfRed("[INFO] => " fmt "", ##__VA_ARGS__)

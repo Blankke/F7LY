@@ -951,8 +951,8 @@ char *ltp_testcases[] = {
     // "fdatasync01",
     // "fdatasync02",
     // "fdatasync03",
-    // "fgetxattr01",
-    // "fgetxattr02",
+    // "fgetxattr01",   //bin/sh
+    "fgetxattr02",
     // "fgetxattr03",
     // "file01.sh",
     // "filecapstest.sh",
@@ -2531,24 +2531,24 @@ char *ltp_testcases[] = {
     // "stat02_64",   //pass
     // "stat03",   //sendmsg
     // "stat03_64",
-    "statfs01",   
+    // "statfs01",   
     // "statfs01_64",
     // "statfs02",  //pass偷的
     // "statfs02_64", //pass偷的
-    // "statfs03",
+    // "statfs03",    //sendmsg
     // "statfs03_64",
     // "statvfs01",
     // "statvfs02", //pass
     // "statx01",  //pass
     // "statx02",  //pass
     // "statx03",// pass
-    // "statx04",
+    // "statx04",   //bin/sh
     // "statx05",
     // "statx06",
     // "statx07",  
     // "statx08",
     // "statx09",   //.config
-    // "statx10",
+    // "statx10",  //bin/sh
     // "statx11",
     // "statx12",
     // "stime01",

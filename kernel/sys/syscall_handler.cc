@@ -8,6 +8,10 @@
 #include "klib.hh"
 #include "list.hh"
 #include "param.h"
+
+// Extended attributes flags
+#define XATTR_CREATE  0x1  // set value, fail if attr already exists
+#define XATTR_REPLACE 0x2  // set value, fail if attr does not exist
 #ifdef RISCV
 #include "riscv/pagetable.hh"
 #elif defined(LOONGARCH)
@@ -195,6 +199,11 @@ namespace syscall
         BIND_SYSCALL(poweroff); // todo
 
         // rocket syscalls
+        BIND_SYSCALL(setxattr);           // from rocket
+        BIND_SYSCALL(lsetxattr);          // from rocket
+        BIND_SYSCALL(fsetxattr);          // from rocket
+        BIND_SYSCALL(getxattr);           // from rocket
+        BIND_SYSCALL(lgetxattr);          // from rocket
         BIND_SYSCALL(fgetxattr);          // from rocket
         BIND_SYSCALL(mknodat);            // from rocket
         BIND_SYSCALL(symlinkat);          // from rocket
@@ -251,11 +260,11 @@ namespace syscall
         BIND_SYSCALL(faccessat2);         // from rocket
         BIND_SYSCALL(remap_file_pages);   // from rocket
         BIND_SYSCALL(splice);
-        BIND_SYSCALL(prctl);       // from rocket
-        BIND_SYSCALL(ptrace);      // from rocket
-        BIND_SYSCALL(setpriority); // from rocket
-        BIND_SYSCALL(getpriority); // from rocket
-        BIND_SYSCALL(reboot);      // from rocket
+        BIND_SYSCALL(prctl);        // from rocket
+        BIND_SYSCALL(ptrace);       // from rocket
+        BIND_SYSCALL(setpriority);  // from rocket
+        BIND_SYSCALL(getpriority);  // from rocket
+        BIND_SYSCALL(reboot);       // from rocket
         BIND_SYSCALL(timer_create); // from rocket
         // ...existing code...
         // printfCyan("====================debug: syscall_num_list\n");
@@ -1389,18 +1398,20 @@ namespace syscall
             // 解析文件描述符
             eastl::string fd_str = abs_oldpath.substr(14); // 跳过 "/proc/self/fd/"
             int target_fd = 0;
-            for (size_t i = 0; i < fd_str.size(); ++i) {
-                if (fd_str[i] < '0' || fd_str[i] > '9') break;
+            for (size_t i = 0; i < fd_str.size(); ++i)
+            {
+                if (fd_str[i] < '0' || fd_str[i] > '9')
+                    break;
                 target_fd = target_fd * 10 + (fd_str[i] - '0');
             }
-            
+
             fs::file *target_file = p->get_open_file(target_fd);
             if (!target_file)
             {
                 printfRed("sys_linkat: 无效的文件描述符: %d\n", target_fd);
                 return -EBADF;
             }
-            
+
             // 对于 linkat，如果源文件以 O_PATH 打开，仍然可以创建硬链接
             // 这是 Linux 的行为
             abs_oldpath = target_file->_path_name;
@@ -1499,7 +1510,8 @@ namespace syscall
             return -1;
 
         // 检查路径长度，防止栈溢出
-        if (path.length() >= MAXPATH) {
+        if (path.length() >= MAXPATH)
+        {
             printfRed("[sys_mkdirat] Path too long: %zu\n", path.length());
             return SYS_ENAMETOOLONG;
         }
@@ -2483,44 +2495,47 @@ namespace syscall
             }
             return ret;
         }
-        
+
         if (path.find("/proc/self/fd/") == 0)
         {
             // 解析文件描述符
             eastl::string fd_str = path.substr(14); // 跳过 "/proc/self/fd/"
             int target_fd = 0;
-            for (size_t i = 0; i < fd_str.size(); ++i) {
-                if (fd_str[i] < '0' || fd_str[i] > '9') break;
+            for (size_t i = 0; i < fd_str.size(); ++i)
+            {
+                if (fd_str[i] < '0' || fd_str[i] > '9')
+                    break;
                 target_fd = target_fd * 10 + (fd_str[i] - '0');
             }
-            
+
             fs::file *target_file = p->get_open_file(target_fd);
             if (!target_file)
             {
                 printfRed("[sys_readlinkat] 无效的文件描述符: %d\n", target_fd);
                 return SYS_EBADF;
             }
-            
+
             // 对于 /proc/self/fd/ 路径，直接返回目标文件的路径
             // 这相当于读取符号链接的目标
             eastl::string target_path = target_file->_path_name;
-            
+
             if (target_path.length() > buf_size)
             {
                 printfRed("[sys_readlinkat] Target path too long for buffer");
                 return SYS_ENAMETOOLONG;
             }
-            
+
             // 将结果拷贝到用户空间
             if (mem::k_vmm.copy_out(*pt, buf, target_path.c_str(), target_path.length()) < 0)
             {
                 printfRed("[sys_readlinkat] Failed to copy result to user space");
                 return SYS_EFAULT;
             }
-            
+
             printfCyan("[sys_readlinkat] Successfully read proc fd symlink: /proc/self/fd/%d -> %s\n", target_fd, target_path.c_str());
             return target_path.length();
-        }printfCyan("[sys_readlinkat] fd: %d, path: %s, buf: %p, buf_size: %u", fd, path.c_str(), (void *)buf, buf_size);
+        }
+        printfCyan("[sys_readlinkat] fd: %d, path: %s, buf: %p, buf_size: %u", fd, path.c_str(), (void *)buf, buf_size);
         // 如果路径为空，获取dirfd对应的符号链接
         if (path.empty())
         {
@@ -2797,7 +2812,7 @@ namespace syscall
         fd = fd;
 
         // FS_IOC_GETFLAGS 和 FS_IOC_SETFLAGS 可以用于普通文件
-        if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE && 
+        if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE &&
             f->_attrs.filetype != fs::FileTypes::FT_PIPE &&
             f->_attrs.filetype != fs::FileTypes::FT_NORMAL)
         {
@@ -3310,8 +3325,8 @@ namespace syscall
             printf("[SyscallHandler::sys_ioctl] Block device size: %u bytes\n", device_size);
             return 0;
         }
-      
-        if((cmd & 0xFFFF) == 0x6601)// FS_IOC_GETFLAGS) 
+
+        if ((cmd & 0xFFFF) == 0x6601) // FS_IOC_GETFLAGS)
         {
             // 获取文件标志
             if (f->_attrs.filetype != fs::FileTypes::FT_NORMAL)
@@ -3319,7 +3334,7 @@ namespace syscall
                 printfRed("[SyscallHandler::sys_ioctl] FS_IOC_GETFLAGS only supports regular files\n");
                 return SYS_ENOTTY;
             }
-            
+
             mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
 #ifdef RISCV
             uint32_t *flags_ptr = (uint32_t *)pt->walk_addr(arg);
@@ -3331,15 +3346,15 @@ namespace syscall
                 printfRed("[SyscallHandler::sys_ioctl] Error fetching flags address\n");
                 return SYS_EFAULT;
             }
-            
+
             // 通过文件的 ext4_file 结构获取 inode 标志
             uint32_t inode_flags = 0;
             if (f->lwext4_file_struct.mp && f->lwext4_file_struct.inode > 0)
             {
                 // 从 ext4_file 获取标志
                 struct ext4_inode_ref inode_ref;
-                int result = ext4_fs_get_inode_ref(&f->lwext4_file_struct.mp->fs, 
-                                                   f->lwext4_file_struct.inode, 
+                int result = ext4_fs_get_inode_ref(&f->lwext4_file_struct.mp->fs,
+                                                   f->lwext4_file_struct.inode,
                                                    &inode_ref);
                 if (result == EOK)
                 {
@@ -3357,12 +3372,12 @@ namespace syscall
                 printfRed("[SyscallHandler::sys_ioctl] File not opened with ext4 or invalid inode\n");
                 return SYS_EIO;
             }
-            
+
             *flags_ptr = inode_flags;
             printf("[SyscallHandler::sys_ioctl] FS_IOC_GETFLAGS: file flags = 0x%X\n", inode_flags);
             return 0;
         }
-        if ((cmd & 0xFFFF) == 0x6602) //FS_IOC_SETFLAGS)
+        if ((cmd & 0xFFFF) == 0x6602) // FS_IOC_SETFLAGS)
         {
             // 设置文件标志
             if (f->_attrs.filetype != fs::FileTypes::FT_NORMAL)
@@ -3370,7 +3385,7 @@ namespace syscall
                 printfRed("[SyscallHandler::sys_ioctl] FS_IOC_SETFLAGS only supports regular files\n");
                 return SYS_ENOTTY;
             }
-            
+
             mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
 #ifdef RISCV
             uint32_t *flags_ptr = (uint32_t *)pt->walk_addr(arg);
@@ -3382,22 +3397,22 @@ namespace syscall
                 printfRed("[SyscallHandler::sys_ioctl] Error fetching flags address\n");
                 return SYS_EFAULT;
             }
-            
+
             uint32_t new_flags = *flags_ptr;
             printf("[SyscallHandler::sys_ioctl] FS_IOC_SETFLAGS: setting flags to 0x%X\n", new_flags);
-            
+
             // 通过文件的 ext4_file 结构设置 inode 标志
             if (f->lwext4_file_struct.mp && f->lwext4_file_struct.inode > 0)
             {
                 // 从 ext4_file 设置标志
                 struct ext4_inode_ref inode_ref;
-                int result = ext4_fs_get_inode_ref(&f->lwext4_file_struct.mp->fs, 
-                                                   f->lwext4_file_struct.inode, 
+                int result = ext4_fs_get_inode_ref(&f->lwext4_file_struct.mp->fs,
+                                                   f->lwext4_file_struct.inode,
                                                    &inode_ref);
                 if (result == EOK)
                 {
                     ext4_inode_set_flags(inode_ref.inode, new_flags);
-                    
+
                     // 标记 inode 为脏，需要写回
                     inode_ref.dirty = true;
                     result = ext4_fs_put_inode_ref(&inode_ref);
@@ -3418,10 +3433,10 @@ namespace syscall
                 printfRed("[SyscallHandler::sys_ioctl] File not opened with ext4 or invalid inode\n");
                 return SYS_EIO;
             }
-            
+
             return 0;
         }
-        
+
         printfRed("[SyscallHandler::sys_ioctl] Unsupported ioctl command: 0x%X\n", cmd);
 
         return -EINVAL;
@@ -5427,7 +5442,76 @@ namespace syscall
         panic("未实现该系统调用");
     }
 
+
+
     //================================== rocket syscalls ===================================
+    uint64 SyscallHandler::sys_fsetxattr()
+    {
+        int fd;
+        fs::file *f;
+        eastl::string name;
+        uint64 value_addr;
+        long isize;
+        size_t size;
+        int flags;
+
+        // 获取参数
+        if (_arg_fd(0, &fd, &f) < 0) {
+            printfRed("[SyscallHandler::sys_fsetxattr] 无效的文件描述符\n");
+            return -EBADF;
+        }
+        if (_arg_str(1, name, MAXPATH) < 0) {
+            printfRed("[SyscallHandler::sys_fsetxattr] 获取属性名失败\n");
+            return -EINVAL;
+        }
+        if (_arg_addr(2, value_addr) < 0) {
+            printfRed("[SyscallHandler::sys_fsetxattr] 获取值地址失败\n");
+            return -EINVAL;
+        }
+        if (_arg_long(3, isize) < 0) {
+            printfRed("[SyscallHandler::sys_fsetxattr] 获取大小参数失败\n");
+            return -EINVAL;
+        }
+        if (_arg_int(4, flags) < 0) {
+            printfRed("[SyscallHandler::sys_fsetxattr] 获取标志参数失败\n");
+            return -EINVAL;
+        }
+        
+        size = isize;
+        
+        if (f == nullptr) {
+            printfRed("[SyscallHandler::sys_fsetxattr] 文件指针为空\n");
+            return -EBADF;
+        }
+
+        if (f->lwext4_file_struct.flags & O_PATH) {
+            return -EBADF;
+        }
+
+        // 检查属性名是否为空或过长
+        if (name.empty() || name.length() > 255) {
+            return -ERANGE;
+        }
+
+        // 检查值大小是否合理
+        if (size > 65536) { // 64KB limit
+            return -ERANGE;
+        }
+
+        // 验证标志
+        if (flags != 0 && flags != XATTR_CREATE && flags != XATTR_REPLACE && 
+            flags != (XATTR_CREATE | XATTR_REPLACE)) {
+            return -EINVAL;
+        }
+
+        printfCyan("[SyscallHandler::sys_fsetxattr] fd=%d, name=%s, value=%p, size=%zu, flags=%d\n",
+                   fd, name.c_str(), (void *)value_addr, size, flags);
+
+        // 简化实现：由于我们还没有完整的文件系统扩展属性支持，
+        // 这里返回 ENOTSUP 表示不支持扩展属性
+        // 在真实的实现中，需要将属性存储到文件系统的inode中
+        return -ENOTSUP;
+    }
     uint64 SyscallHandler::sys_fgetxattr()
     {
         fs::file *f;
@@ -5436,6 +5520,7 @@ namespace syscall
         uint64 value_addr;
         long isize;
         size_t size;
+        
         if (_arg_fd(0, &fd, &f) < 0)
         {
             printfRed("[SyscallHandler::sys_fgetxattr] 无效的文件描述符\n");
@@ -5457,20 +5542,278 @@ namespace syscall
             return -EINVAL;
         }
         size = isize;
+        
         if (f == nullptr)
         {
             printfRed("[SyscallHandler::sys_fgetxattr] 文件指针为空\n");
             return -EBADF;
         }
 
-        printfCyan("[SyscallHandler::sys_fgetxattr] fd=%d, name=%s, value=%p, size=%u\n",
+        printfCyan("[SyscallHandler::sys_fgetxattr] fd=%d, name=%s, value=%p, size=%zu\n",
                    fd, name.c_str(), (void *)value_addr, size);
+                   
         if (f->lwext4_file_struct.flags & O_PATH)
             return -EBADF;
-        // 返回 ENODATA
-        //  表示请求的扩展属性不存在
+
+        // 检查属性名是否为空或过长
+        if (name.empty() || name.length() > 255) {
+            return -ERANGE;
+        }
+
+        // 如果size为0，应该返回属性值的大小（如果存在）
+        if (size == 0) {
+            // 在真实实现中，这里应该查询属性的大小
+            // 现在返回 ENODATA 表示属性不存在
+            return -ENODATA;
+        }
+
+        // 检查缓冲区大小是否足够
+        if (size > 65536) { // 64KB limit
+            return -ERANGE;
+        }
+
+        // 简化实现：由于我们还没有完整的文件系统扩展属性支持，
+        // 返回 ENODATA 表示请求的扩展属性不存在
+        // 在真实的实现中，需要从文件系统的inode中读取属性
         return -ENODATA;
     }
+
+    uint64 SyscallHandler::sys_setxattr()
+    {
+        eastl::string path;
+        eastl::string name;
+        uint64 value_addr;
+        long isize;
+        size_t size;
+        int flags;
+
+        // 获取参数
+        if (_arg_str(0, path, MAXPATH) < 0) {
+            printfRed("[SyscallHandler::sys_setxattr] 获取路径失败\n");
+            return -EINVAL;
+        }
+        if (_arg_str(1, name, MAXPATH) < 0) {
+            printfRed("[SyscallHandler::sys_setxattr] 获取属性名失败\n");
+            return -EINVAL;
+        }
+        if (_arg_addr(2, value_addr) < 0) {
+            printfRed("[SyscallHandler::sys_setxattr] 获取值地址失败\n");
+            return -EINVAL;
+        }
+        if (_arg_long(3, isize) < 0) {
+            printfRed("[SyscallHandler::sys_setxattr] 获取大小参数失败\n");
+            return -EINVAL;
+        }
+        if (_arg_int(4, flags) < 0) {
+            printfRed("[SyscallHandler::sys_setxattr] 获取标志参数失败\n");
+            return -EINVAL;
+        }
+        
+        size = isize;
+
+        // 检查路径
+        if (path.empty()) {
+            return -EINVAL;
+        }
+
+        // 检查属性名是否为空或过长
+        if (name.empty() || name.length() > 255) {
+            return -ERANGE;
+        }
+
+        // 检查值大小是否合理
+        if (size > 65536) { // 64KB limit
+            return -ERANGE;
+        }
+
+        // 验证标志
+        if (flags != 0 && flags != XATTR_CREATE && flags != XATTR_REPLACE) {
+            return -EINVAL;
+        }
+
+        printfCyan("[SyscallHandler::sys_setxattr] path=%s, name=%s, value=%p, size=%zu, flags=%d\n",
+                   path.c_str(), name.c_str(), (void *)value_addr, size, flags);
+
+        // 简化实现：返回 ENOTSUP 表示不支持扩展属性
+        return -ENOTSUP;
+    }
+
+    uint64 SyscallHandler::sys_lsetxattr()
+    {
+        eastl::string path;
+        eastl::string name;
+        uint64 value_addr;
+        long isize;
+        size_t size;
+        int flags;
+
+        // 获取参数 - 与setxattr相同
+        if (_arg_str(0, path, MAXPATH) < 0) {
+            printfRed("[SyscallHandler::sys_lsetxattr] 获取路径失败\n");
+            return -EINVAL;
+        }
+        if (_arg_str(1, name, MAXPATH) < 0) {
+            printfRed("[SyscallHandler::sys_lsetxattr] 获取属性名失败\n");
+            return -EINVAL;
+        }
+        if (_arg_addr(2, value_addr) < 0) {
+            printfRed("[SyscallHandler::sys_lsetxattr] 获取值地址失败\n");
+            return -EINVAL;
+        }
+        if (_arg_long(3, isize) < 0) {
+            printfRed("[SyscallHandler::sys_lsetxattr] 获取大小参数失败\n");
+            return -EINVAL;
+        }
+        if (_arg_int(4, flags) < 0) {
+            printfRed("[SyscallHandler::sys_lsetxattr] 获取标志参数失败\n");
+            return -EINVAL;
+        }
+        
+        size = isize;
+
+        // 检查路径
+        if (path.empty()) {
+            return -EINVAL;
+        }
+
+        // 检查属性名是否为空或过长
+        if (name.empty() || name.length() > 255) {
+            return -ERANGE;
+        }
+
+        // 检查值大小是否合理
+        if (size > 65536) { // 64KB limit
+            return -ERANGE;
+        }
+
+        // 验证标志
+        if (flags != 0 && flags != XATTR_CREATE && flags != XATTR_REPLACE) {
+            return -EINVAL;
+        }
+
+        printfCyan("[SyscallHandler::sys_lsetxattr] path=%s, name=%s, value=%p, size=%zu, flags=%d\n",
+                   path.c_str(), name.c_str(), (void *)value_addr, size, flags);
+
+        // lsetxattr与setxattr的区别在于对符号链接的处理
+        // 简化实现：返回 ENOTSUP 表示不支持扩展属性
+        return -ENOTSUP;
+    }
+
+    uint64 SyscallHandler::sys_getxattr()
+    {
+        eastl::string path;
+        eastl::string name;
+        uint64 value_addr;
+        long isize;
+        size_t size;
+
+        // 获取参数
+        if (_arg_str(0, path, MAXPATH) < 0) {
+            printfRed("[SyscallHandler::sys_getxattr] 获取路径失败\n");
+            return -EINVAL;
+        }
+        if (_arg_str(1, name, MAXPATH) < 0) {
+            printfRed("[SyscallHandler::sys_getxattr] 获取属性名失败\n");
+            return -EINVAL;
+        }
+        if (_arg_addr(2, value_addr) < 0) {
+            printfRed("[SyscallHandler::sys_getxattr] 获取值地址失败\n");
+            return -EINVAL;
+        }
+        if (_arg_long(3, isize) < 0) {
+            printfRed("[SyscallHandler::sys_getxattr] 获取大小参数失败\n");
+            return -EINVAL;
+        }
+        
+        size = isize;
+
+        // 检查路径
+        if (path.empty()) {
+            return -EINVAL;
+        }
+
+        // 检查属性名是否为空或过长
+        if (name.empty() || name.length() > 255) {
+            return -ERANGE;
+        }
+
+        // 如果size为0，应该返回属性值的大小（如果存在）
+        if (size == 0) {
+            // 在真实实现中，这里应该查询属性的大小
+            // 现在返回 ENODATA 表示属性不存在
+            return -ENODATA;
+        }
+
+        // 检查缓冲区大小是否足够
+        if (size > 65536) { // 64KB limit
+            return -ERANGE;
+        }
+
+        printfCyan("[SyscallHandler::sys_getxattr] path=%s, name=%s, value=%p, size=%zu\n",
+                   path.c_str(), name.c_str(), (void *)value_addr, size);
+
+        // 简化实现：返回 ENODATA 表示属性不存在
+        return -ENODATA;
+    }
+
+    uint64 SyscallHandler::sys_lgetxattr()
+    {
+        eastl::string path;
+        eastl::string name;
+        uint64 value_addr;
+        long isize;
+        size_t size;
+
+        // 获取参数 - 与getxattr相同
+        if (_arg_str(0, path, MAXPATH) < 0) {
+            printfRed("[SyscallHandler::sys_lgetxattr] 获取路径失败\n");
+            return -EINVAL;
+        }
+        if (_arg_str(1, name, MAXPATH) < 0) {
+            printfRed("[SyscallHandler::sys_lgetxattr] 获取属性名失败\n");
+            return -EINVAL;
+        }
+        if (_arg_addr(2, value_addr) < 0) {
+            printfRed("[SyscallHandler::sys_lgetxattr] 获取值地址失败\n");
+            return -EINVAL;
+        }
+        if (_arg_long(3, isize) < 0) {
+            printfRed("[SyscallHandler::sys_lgetxattr] 获取大小参数失败\n");
+            return -EINVAL;
+        }
+        
+        size = isize;
+
+        // 检查路径
+        if (path.empty()) {
+            return -EINVAL;
+        }
+
+        // 检查属性名是否为空或过长
+        if (name.empty() || name.length() > 255) {
+            return -ERANGE;
+        }
+
+        // 如果size为0，应该返回属性值的大小（如果存在）
+        if (size == 0) {
+            // 在真实实现中，这里应该查询属性的大小
+            // 现在返回 ENODATA 表示属性不存在
+            return -ENODATA;
+        }
+
+        // 检查缓冲区大小是否足够
+        if (size > 65536) { // 64KB limit
+            return -ERANGE;
+        }
+
+        printfCyan("[SyscallHandler::sys_lgetxattr] path=%s, name=%s, value=%p, size=%zu\n",
+                   path.c_str(), name.c_str(), (void *)value_addr, size);
+
+        // lgetxattr与getxattr的区别在于对符号链接的处理
+        // 简化实现：返回 ENODATA 表示属性不存在
+        return -ENODATA;
+    }
+
     uint64 SyscallHandler::sys_mknodat()
     {
         int dirfd;
@@ -5877,36 +6220,38 @@ namespace syscall
         }
 
         printfCyan("[SyscallHandler::sys_fchmodat] 绝对路径: %s\n", abs_pathname.c_str());
-        
+
         // 检查是否是 /proc/self/fd/ 路径
         if (abs_pathname.find("/proc/self/fd/") == 0)
         {
             // 解析文件描述符
             eastl::string fd_str = abs_pathname.substr(14); // 跳过 "/proc/self/fd/"
             int fd = 0;
-            for (size_t i = 0; i < fd_str.size(); ++i) {
-                if (fd_str[i] < '0' || fd_str[i] > '9') break;
+            for (size_t i = 0; i < fd_str.size(); ++i)
+            {
+                if (fd_str[i] < '0' || fd_str[i] > '9')
+                    break;
                 fd = fd * 10 + (fd_str[i] - '0');
             }
-            
+
             fs::file *target_file = p->get_open_file(fd);
             if (!target_file)
             {
                 printfRed("[SyscallHandler::sys_fchmodat] 无效的文件描述符: %d\n", fd);
                 return SYS_EBADF;
             }
-            
+
             // 检查是否以 O_PATH 标志打开，如果是则返回 EBADF
             if (target_file->lwext4_file_struct.flags & O_PATH)
             {
                 printfRed("[SyscallHandler::sys_fchmodat] O_PATH标志打开的文件不允许修改权限\n");
                 return SYS_EBADF;
             }
-            
+
             // 使用实际文件路径
             abs_pathname = target_file->_path_name;
         }
-        
+
         fs::file *file = nullptr;
         fs::k_vfs.openat(abs_pathname, file, O_RDONLY);
         if (file->lwext4_file_struct.flags & O_PATH)
@@ -5982,37 +6327,39 @@ namespace syscall
                 abs_pathname = get_absolute_path(pathname.c_str(), dir_file->_path_name.c_str());
             }
         }
-        
+
         // 检查是否是 /proc/self/fd/ 路径
         if (abs_pathname.find("/proc/self/fd/") == 0)
         {
             // 解析文件描述符
             eastl::string fd_str = abs_pathname.substr(14); // 跳过 "/proc/self/fd/"
             int fd = 0;
-            for (size_t i = 0; i < fd_str.size(); ++i) {
-                if (fd_str[i] < '0' || fd_str[i] > '9') break;
+            for (size_t i = 0; i < fd_str.size(); ++i)
+            {
+                if (fd_str[i] < '0' || fd_str[i] > '9')
+                    break;
                 fd = fd * 10 + (fd_str[i] - '0');
             }
-            
+
             fs::file *target_file = p->get_open_file(fd);
             if (!target_file)
             {
                 printfRed("[SyscallHandler::sys_fchmodat] 无效的文件描述符: %d\n", fd);
                 return SYS_EBADF;
             }
-            
+
             // 检查是否以 O_PATH 标志打开，如果是则返回 EBADF
             if (target_file->lwext4_file_struct.flags & O_PATH)
             {
                 printfRed("[SyscallHandler::sys_fchmodat] O_PATH标志打开的文件不允许修改权限\n");
                 return SYS_EBADF;
             }
-            
+
             // 使用实际文件路径
             abs_pathname = target_file->_path_name;
         }
 
-        //没有实现实际功能，只有错误检查
+        // 没有实现实际功能，只有错误检查
         return 0;
     }
     uint64 SyscallHandler::sys_fchown()
@@ -6044,7 +6391,7 @@ namespace syscall
             return -EBADF;
         }
 
-        //没实现实际功能，只有错误检查
+        // 没实现实际功能，只有错误检查
         return 0;
     }
     uint64 SyscallHandler::sys_preadv()

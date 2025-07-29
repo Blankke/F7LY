@@ -7,6 +7,11 @@ namespace syscall
         SYS_fork = 1,
         SYS_wait = 3,
         SYS_kill = 6,
+        SYS_setxattr = 5,            // from rocket
+        SYS_lsetxattr = 6,           // from rocket
+        SYS_fsetxattr =8,
+        SYS_getxattr = 9,            // from rocket
+        SYS_lgetxattr = 7,           // from rocket
         SYS_fgetxattr = 10,          // from rocket
         SYS_sleep = 13,
         SYS_uptime = 14,
