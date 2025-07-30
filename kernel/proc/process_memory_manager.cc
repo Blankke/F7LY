@@ -272,8 +272,18 @@ namespace proc
         {
             if (_pcb->_vma->_vm[i].used)
             {
-                printfBlue("  Processing VMA %d: addr=%p, len=%u\n",
-                           i, (void *)_pcb->_vma->_vm[i].addr, _pcb->_vma->_vm[i].len);
+                printfBlue("  Processing VMA %d: addr=%p, len=%u, vfd=%d, flags=0x%x, prot=0x%x\n",
+                           i, (void *)_pcb->_vma->_vm[i].addr, _pcb->_vma->_vm[i].len,
+                           _pcb->_vma->_vm[i].vfd, _pcb->_vma->_vm[i].flags, _pcb->_vma->_vm[i].prot);
+                
+                if (_pcb->_vma->_vm[i].vfile)
+                {
+                    printfBlue("    File mapping: %s\n", _pcb->_vma->_vm[i].vfile->_path_name.c_str());
+                }
+                else
+                {
+                    printfBlue("    Anonymous mapping (vfd=%d)\n", _pcb->_vma->_vm[i].vfd);
+                }
 
                 // 对文件映射进行写回操作
                 if (!writeback_vma(i))
@@ -341,9 +351,22 @@ namespace proc
             return false;
         }
 
+        printf("checkpoint: 0\n");
+
         const vma &vm_entry = _pcb->_vma->_vm[vma_index];
+        printf("checkpoint: 0.5\n");
+        
+        // 检查是否是匿名映射（没有关联文件）
+        if (vm_entry.vfile == nullptr)
+        {
+            printf("ProcessMemoryManager: VMA %d is anonymous mapping (no file), skipping writeback\n", vma_index);
+            return true;
+        }
+        
         printf("ProcessMemoryManager: writeback VMA %d to file %s\n",
                vma_index, vm_entry.vfile->_path_name.c_str());
+
+        printf("checkpoint: 1\n");
 
         // 跳过temp文件
         if (vm_entry.vfile->_path_name.substr(0, 5) == "/tmp/")
@@ -352,9 +375,10 @@ namespace proc
             return false;
         }
 
+        printf("checkpoint: 2\n");
+
         // 只对文件映射且为共享且可写的VMA进行写回
-        if (vm_entry.vfile != nullptr &&
-            vm_entry.flags == MAP_SHARED &&
+        if (vm_entry.flags == MAP_SHARED &&
             (vm_entry.prot & PROT_WRITE) != 0)
         {
 

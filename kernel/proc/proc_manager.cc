@@ -3322,7 +3322,7 @@ namespace proc
                     break;
                 }
             }
-            printfPink("checkpoint 1\n");
+            // printfPink("checkpoint 1\n");
             // 遍历所有程序头，加载LOAD类型的段
             for (i = 0, off = elf.phoff; i < elf.phnum; i++, off += sizeof(ph))
             {
@@ -3376,7 +3376,7 @@ namespace proc
                 uint64 segment_start = PGROUNDDOWN(ph.vaddr);
                 uint64 segment_end = PGROUNDUP(ph.vaddr + ph.memsz);
                 // printfCyan("segment_start: %p, segment_end: %p\n", segment_start, segment_end);
-                printfPink("checkpoint 2.1 %d\n", i);
+                // printfPink("checkpoint 2.1 %d\n", i);
 
                 if (mem::k_vmm.uvmalloc(new_pt, segment_start, segment_end, seg_flag) == 0)
                 {
@@ -3401,7 +3401,7 @@ namespace proc
                     break;
                 }
 
-                printfPink("checkpoint 2.2 %d\n", i);
+                // printfPink("checkpoint 2.2 %d\n", i);
 
                 // **新增：记录加载的程序段信息**
                 if (new_sec_cnt >= max_program_section_num)
@@ -3441,14 +3441,14 @@ namespace proc
 
                 new_sec_desc[new_sec_cnt]._debug_name = section_name;
                 new_sec_cnt++;
-                printf("checkpoint 2.3 %d\n", i);
+                // printf("checkpoint 2.3 %d\n", i);
 
                 printfGreen("execve: recorded program section[%d]: %s at %p, size %p (page-aligned from %p, %p)\n",
                             new_sec_cnt - 1, section_name,
                             new_sec_desc[new_sec_cnt - 1]._sec_start,
                             (void *)new_sec_desc[new_sec_cnt - 1]._sec_size,
                             (void *)ph.vaddr, (void *)ph.memsz);
-                printfPink("checkpoint 2.4 %d\n", i);
+                // printfPink("checkpoint 2.4 %d\n", i);
             }
             // 如果加载过程中出错，清理已分配的资源
             if (load_bad)
@@ -3460,7 +3460,7 @@ namespace proc
                 return -1;
             }
 
-            printfPink("checkpoint 3\n");
+            // printfPink("checkpoint 3\n");
 
             if (is_dynamic)
             {
@@ -3601,7 +3601,7 @@ namespace proc
                            (void *)new_sec_desc[i]._sec_size);
             }
         }
-        printfPink("checkpoint 8\n");
+        // printfPink("checkpoint 8\n");
         // ========== 第五阶段：分配用户栈空间 ==========
 
         { // **重构：基于最高地址分配用户栈空间**
