@@ -427,6 +427,12 @@ namespace mem
             a = PGROUNDDOWN(va);
             bool alloc = false;
             proc::Pcb *proc = proc::k_pm.get_cur_pcb();
+            // 之前vma如果被free了这里会直接炸, 添加一个判断
+            if (!proc || !proc->_vma)
+            {
+                printfRed("[copy_out] VMA not present, skip copy\n");
+                return -1;
+            }
             for (int i = 0; i < proc::NVMA; ++i)
             {
                 if (proc->_vma->_vm[i].used)
@@ -631,7 +637,6 @@ namespace mem
         return 0;
     }
 
-
     void VirtualMemoryManager::uvmclear(PageTable &pt, uint64 va)
     {
         Pte pte = pt.walk(va, 0);
@@ -664,7 +669,7 @@ namespace mem
                 uvmdealloc(pt, a, oldsz);
                 return 0;
             }
-            k_pmm.clear_page((void*) pa);
+            k_pmm.clear_page((void *)pa);
             if (!map_pages(pt, a, PGSIZE, pa, riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_user_m | flags))
             {
                 k_pmm.free_page((void *)pa);
