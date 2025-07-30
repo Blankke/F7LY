@@ -25,7 +25,7 @@ namespace shm
         // 显式初始化 segments 容器
 
         // 注意：不进行预分配，避免在内核环境中的内存分配问题
-        
+         
         printfGreen("[ShmManager] Initialized with base=0x%x, size=0x%x\n", base, size);
     }
 
@@ -170,8 +170,8 @@ namespace shm
 
     uint64 ShmManager::find_available_address(proc::Pcb* proc, size_t size)
     {
-        // 简化实现：从进程当前大小之后开始查找
-        uint64 start_addr = PGROUNDUP(proc->_sz);
+        // 从堆结束位置之后开始查找，避免与程序段和堆冲突
+        uint64 start_addr = PGROUNDUP(proc->get_heap_end());
         
         // 确保地址对齐到SHMLBA
         start_addr = PGROUNDUP(start_addr);
@@ -236,24 +236,62 @@ namespace shm
 
     bool ShmManager::has_address_conflict(proc::Pcb* proc, uint64 addr, size_t size)
     {
-        // 简化实现：检查是否与进程当前大小冲突
         uint64 end_addr = addr + size;
         
-        // 检查是否与现有进程空间重叠
-        if (addr < proc->_sz && end_addr > 0x1000) {  // 0x1000是用户空间起始地址
-            // 更详细的冲突检查应该遍历进程的VMA列表
-            // 这里简化为检查基本的地址范围
-            if (end_addr > addr && addr < proc->_sz) {
-                printfRed("[ShmManager] Address range [0x%x, 0x%x] conflicts with process space [0x1000, 0x%x]\n",
-                         addr, end_addr, proc->_sz);
+        // 检查是否与程序段冲突
+        for (int i = 0; i < proc->get_prog_section_count(); i++) {
+            const auto* sections = proc->get_prog_sections();
+            uint64 section_start = (uint64)sections[i]._sec_start;
+            uint64 section_end = section_start + sections[i]._sec_size;
+            
+            if (addr < section_end && end_addr > section_start) {
+                printfRed("[ShmManager] Address range [0x%x, 0x%x] conflicts with program section %d [0x%x, 0x%x]\n",
+                         addr, end_addr, i, section_start, section_end);
                 return true;
             }
         }
         
-        // TODO: 应该检查与其他共享内存段的冲突
-        // TODO: 应该检查与进程VMA列表的冲突
+        // 检查是否与堆冲突
+        uint64 heap_start = proc->get_heap_start();
+        uint64 heap_end = proc->get_heap_end();
+        if (heap_start < heap_end && addr < heap_end && end_addr > heap_start) {
+            printfRed("[ShmManager] Address range [0x%x, 0x%x] conflicts with heap [0x%x, 0x%x]\n",
+                     addr, end_addr, heap_start, heap_end);
+            return true;
+        }
         
-        return false;  // 简化：假设没有冲突
+        // 检查是否与现有VMA冲突
+        if (proc->_vma != nullptr) {
+            for (int i = 0; i < proc::NVMA; i++) {
+                if (proc->_vma->_vm[i].used) {
+                    uint64 vma_start = proc->_vma->_vm[i].addr;
+                    uint64 vma_end = vma_start + proc->_vma->_vm[i].len;
+                    
+                    if (addr < vma_end && end_addr > vma_start) {
+                        printfRed("[ShmManager] Address range [0x%x, 0x%x] conflicts with VMA %d [0x%x, 0x%x]\n",
+                                 addr, end_addr, i, vma_start, vma_end);
+                        return true;
+                    }
+                }
+            }
+        }
+        
+        // 检查是否与其他共享内存段冲突
+        for (const auto& pair : *segments) {
+            const shm_segment& seg = pair.second;
+            for (void* attached_addr : seg.attached_addrs) {
+                uint64 shm_start = (uint64)attached_addr;
+                uint64 shm_end = shm_start + seg.real_size;
+                
+                if (addr < shm_end && end_addr > shm_start) {
+                    printfRed("[ShmManager] Address range [0x%x, 0x%x] conflicts with existing shared memory [0x%x, 0x%x]\n",
+                             addr, end_addr, shm_start, shm_end);
+                    return true;
+                }
+            }
+        }
+        
+        return false;  // 没有冲突
     }
 
     bool ShmManager::check_segment_permission(const shm_segment& seg, uid_t uid, gid_t gid, mode_t requested_mode)
@@ -548,12 +586,9 @@ namespace shm
         seg.last_pid = current_proc->_pid;     // 更新最后操作进程ID (shm_lpid)
         seg.nattch++;                          // 增加附加计数 (shm_nattch)
 
-        // 更新进程大小（如果映射地址超出当前进程大小）- 使用实际映射大小
-        uint64 end_addr = attach_addr + seg.real_size;
-        if (end_addr > current_proc->_sz)
-        {
-            current_proc->_sz = end_addr;
-        }
+        // 注意：在新的内存管理体系中，共享内存不直接计入进程的_sz
+        // _sz现在由程序段和堆的总和自动计算，共享内存有独立的生命周期管理
+        // 如果需要更新总内存大小，应该调用进程的update_total_memory_size()方法
 
         printfGreen("[ShmManager] Successfully attached segment shmid=%d at address 0x%x, user_size=0x%x, real_size=0x%x\n",
                     shmid, attach_addr, seg.size, seg.real_size);
@@ -863,7 +898,7 @@ namespace shm
                     return -EFAULT;
                 }
 
-                printfCyan("[ShmManager] SHM_INFO: used_ids=%d, total_pages=%lu\n", 
+                printfCyan("[ShmManager] SHM_INFO: used_ids=%d, total_pages=%u\n", 
                           usage_info.used_ids, usage_info.shm_tot);
                 
                 // 计算最高使用的索引

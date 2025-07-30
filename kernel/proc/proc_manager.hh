@@ -46,6 +46,7 @@ namespace proc
         mem::PageTable proc_pagetable(Pcb *p);
         void proc_freepagetable(mem::PageTable &pt, uint64 sz);
         void freeproc(Pcb *p);
+        void freeproc_creation_failed(Pcb *p);  // 专门处理进程创建失败时的清理
         void sche_proc(Pcb *p);
 
         // 这些先不管，要用再写回来
@@ -60,6 +61,10 @@ namespace proc
         int either_copy_out(void *src, int user_dst, uint64 dst, uint64 len);
 
         void procdump(); // 打印进程列表 debug
+        
+        // 重构后添加的调试和验证函数
+        void debug_process_states();          // 调试：打印所有进程状态
+        bool verify_process_cleanup(int pid); // 验证：检查进程是否正确清理
 
         int exec(eastl::string path, eastl::vector<eastl::string> argv); // 执行新程序
         int growproc(int n);                                             // 扩展进程内存
@@ -116,12 +121,6 @@ namespace proc
     private:
         void _proc_create_vm(Pcb *p, mem::PageTable &pt);
         void _proc_create_vm(Pcb *p);
-
-    public: // ================ 测试函数 ================
-        void vectortest();
-        void stringtest();
-        void maptest();
-        void hashtest();
     };
 
     extern ProcessManager k_pm; // 全局进程管理器实例

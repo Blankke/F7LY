@@ -274,7 +274,8 @@ int ltp_test(const char *path = musl_dir)
         }
         else
         {
-            run_test(ltp_testcases[i], 0, 0);
+            bb_sh[0] = ltp_testcases[i];
+            run_test(ltp_testcases[i], bb_sh, 0);
         }
     }
     return 0;
@@ -580,7 +581,7 @@ char *ltp_testcases[] = {
     // "check_pe",
     // "check_setkey",
     // "check_simple_capset",
-    // "chmod01", // 完全PASS
+    "chmod01", // 完全PASS
     // "chmod03",   //sendmsg
     // "chmod05", //sendmsg
     // "chmod06", //sendmsg

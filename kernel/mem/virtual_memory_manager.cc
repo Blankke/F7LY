@@ -32,7 +32,7 @@ namespace mem
     {
         if (global_id >= proc::num_process)
             panic("vmm: invalid global_id");
-        return (TRAPFRAME - (((global_id + 1) * 2) << PGSHIFT));
+        return KSTACK(global_id);
     }
 
     void VirtualMemoryManager::init(const char *lock_name)
@@ -427,6 +427,12 @@ namespace mem
             a = PGROUNDDOWN(va);
             bool alloc = false;
             proc::Pcb *proc = proc::k_pm.get_cur_pcb();
+            // 之前vma如果被free了这里会直接炸, 添加一个判断
+            if (!proc || !proc->_vma)
+            {
+                printfRed("[copy_out] VMA not present, skip copy\n");
+                return -1;
+            }
             for (int i = 0; i < proc::NVMA; ++i)
             {
                 if (proc->_vma->_vm[i].used)
@@ -631,17 +637,6 @@ namespace mem
         return 0;
     }
 
-    void VirtualMemoryManager::vmfree(PageTable &pt, uint64 sz, uint64 base)
-    {
-        // printfCyan("[vmm] vmfree: free %p bytes\n", sz);
-        if (sz > 0)
-            vmunmap(pt, base, PGROUNDUP(sz) / PGSIZE, 1);
-
-        // 使用引用计数机制安全释放页表
-        // 注意：这里不直接设置pt的_base_addr为0，让dec_ref来处理
-        pt.dec_ref();
-    }
-
     void VirtualMemoryManager::uvmclear(PageTable &pt, uint64 va)
     {
         Pte pte = pt.walk(va, 0);
@@ -671,9 +666,10 @@ namespace mem
             // printfCyan("[vmalloc] alloc page: %p\n", pa);
             if (pa == 0)
             {
-                vmfree(pt, oldsz);
+                uvmdealloc(pt, a, oldsz);
                 return 0;
             }
+            k_pmm.clear_page((void *)pa);
             if (!map_pages(pt, a, PGSIZE, pa, riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_user_m | flags))
             {
                 k_pmm.free_page((void *)pa);

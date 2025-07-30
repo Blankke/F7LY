@@ -154,7 +154,7 @@ namespace mem
 				_cache_ptr = (u8 *)to_vir((ulong)_pt->walk_addr(page_start)) + offset;
 				_cache_end = (u8 *)to_vir((ulong)_pt->walk_addr(page_start)) + PGSIZE;
 #endif
-				// printfYellow("[_update_cache] not page aligned: page_start=%p, offset=%lu, _cache_ptr=%p, _cache_end=%p\n", 
+				// printfYellow("[_update_cache] not page aligned: page_start=%p, offset=%u, _cache_ptr=%p, _cache_end=%p\n", 
 				// 	(void*)page_start, offset, _cache_ptr, _cache_end);
 			}
 			return 0;

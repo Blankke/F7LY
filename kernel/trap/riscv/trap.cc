@@ -1,3 +1,4 @@
+#ifdef RISCV
 #include "types.hh"
 #include "trap.hh"
 #include "platform.hh"
@@ -148,7 +149,7 @@ void trap_manager::timertick()
 // 支持嵌套中断
 void trap_manager::kerneltrap()
 {
-  // printfMagenta("into kerneltrap\n");
+//   printfMagenta("into kerneltrap\n");
   int which_dev = 0;
 
   // 这些寄存器可能在yield时被修改
@@ -321,7 +322,7 @@ void trap_manager::usertrapret()
   // set up trapframe values that uservec will need when
   // the process next re-enters the kernel.
   p->_trapframe->kernel_satp = r_satp();
-  p->_trapframe->kernel_sp = p->_kstack + 1 * PGSIZE;
+  p->_trapframe->kernel_sp = p->_kstack + KSTACK_SIZE;
   p->_trapframe->kernel_trap = (uint64)wrap_usertrap;
   p->_trapframe->kernel_hartid = r_tp();
 
@@ -384,7 +385,7 @@ int mmap_handler(uint64 va, int cause)
       //     uint64 old_len = p->_vma->_vm[i].len;
       //     p->_vma->_vm[i].len = new_len;
       //     p->_sz += (new_len - old_len);
-      //     printfCyan("mmap_handler: expanded VMA %d from %lu to %lu bytes\n", i, old_len, new_len);
+      //     printfCyan("mmap_handler: expanded VMA %d from %u to %u bytes\n", i, old_len, new_len);
       //     break;
       //   }
       // }
@@ -486,3 +487,4 @@ int mmap_handler(uint64 va, int cause)
 
   return 0;
 }
+#endif

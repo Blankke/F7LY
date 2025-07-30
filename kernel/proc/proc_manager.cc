@@ -5,10 +5,16 @@
 #include "virtual_memory_manager.hh"
 #include "scheduler.hh"
 #include "libs/klib.hh"
-#include "trap.hh"
+#include "mem/memlayout.hh"          // 内核栈配置常量
+#ifdef RISCV
+#include "riscv/trap.hh"
+#elif defined(LOONGARCH)
+#include "loongarch/trap.hh"
+#endif
 #include "printer.hh"
 #include "devs/device_manager.hh"
 #include "fs/lwext4/ext4_errno.hh"
+#include "process_memory_manager.hh" // 新增：进程内存管理器
 #ifdef RISCV
 #include "devs/riscv/disk_driver.hh"
 #elif defined(LOONGARCH)
@@ -153,12 +159,13 @@ namespace proc
                 // printfYellow("[user pgtbl]==>alloc trapframe for proc %d\n", p->_global_id);
                 if ((p->_trapframe = (TrapFrame *)mem::k_pmm.alloc_page()) == nullptr)
                 {
-                    freeproc(p);
+                    freeproc_creation_failed(p); // 使用专门的创建失败清理函数
                     p->_lock.release();
                     return nullptr;
                 }
 
-                p->_sz = 0;            // 初始化用户空间内存大小为0
+                // 初始化内存管理信息（_sz现在由内部自动管理）
+                p->reset_memory_sections();
                 p->_shared_vm = false; // 不共享虚拟内存
 
                 // 初始化虚拟内存区域管理
@@ -183,8 +190,8 @@ namespace proc
                 // 当调度器切换回该进程时，将从这里开始执行
                 p->_context.ra = (uint64)_wrp_fork_ret;
 
-                // 设置内核栈指针
-                p->_context.sp = p->_kstack + PGSIZE;
+                // 设置内核栈指针 - 指向栈顶（高地址）
+                p->_context.sp = p->_kstack + KSTACK_SIZE;
 
                 /****************************************************************************************
                  * 文件系统和I/O管理初始化
@@ -268,7 +275,7 @@ namespace proc
                 _proc_create_vm(p);
                 if (p->_pt.get_base() == 0)
                 {
-                    freeproc(p);
+                    freeproc_creation_failed(p); // 使用专门的创建失败清理函数
                     p->_lock.release();
                     return nullptr;
                 }
@@ -393,88 +400,17 @@ namespace proc
     void ProcessManager::freeproc(Pcb *p)
     {
         /****************************************************************************************
-         * 虚拟内存区域管理清理
+         内存资源已在 exit_proc() 中释放，这里只清理PCB字段
          ****************************************************************************************/
-        // 处理VMA的引用计数
-        bool should_free_vma = false;
-        if (p->_vma != nullptr)
+
+        // 验证进程状态：ZOMBIE（正常退出）、UNUSED（初始状态）、USED（创建失败清理）状态的进程才能被freeproc
+        // if (p->_state != ProcState::ZOMBIE && p->_state != ProcState::UNUSED && p->_state != ProcState::USED)
+        if (p->_state != ProcState::ZOMBIE)
         {
-            if (--p->_vma->_ref_cnt <= 0)
-            {
-                should_free_vma = true;
-            }
-            else
-            {
-                printfYellow("freeproc: vma ref count not zero, ref_cnt: %d\n", p->_vma->_ref_cnt);
-            }
+            panic("freeproc: process not in valid state for cleanup, current state: %d", (int)p->_state);
         }
 
-        // 如果应该释放VMA，则处理所有VMA条目
-        if (should_free_vma && p->_vma != nullptr)
-        {
-            for (int i = 0; i < NVMA; ++i)
-            {
-                // printfBlue("freeproc: checking vma %d, addr: %p, len: %d,used:%d\n", i, p->_vm[i].addr, p->_vm[i].len,p->_vm[i].used);
-                if (p->_vma->_vm[i].used)
-                {
-                    // 只对文件映射进行写回操作
-                    if (p->_vma->_vm[i].vfile != nullptr && p->_vma->_vm[i].flags == MAP_SHARED && (p->_vma->_vm[i].prot & PROT_WRITE) != 0)
-                    {
-                        p->_vma->_vm[i].vfile->write(p->_vma->_vm[i].addr, p->_vma->_vm[i].len);
-                    }
-
-                    // 只对文件映射释放文件引用
-                    if (p->_vma->_vm[i].vfile != nullptr)
-                    {
-                        p->_vma->_vm[i].vfile->free_file();
-                    }
-
-                    // 修复vmunmap调用：逐页检查并取消映射
-                    uint64 va_start = PGROUNDDOWN(p->_vma->_vm[i].addr);
-                    uint64 va_end = PGROUNDUP(p->_vma->_vm[i].addr + p->_vma->_vm[i].len);
-
-                    // 逐页检查并取消映射，避免对未映射的页面进行操作
-                    for (uint64 va = va_start; va < va_end; va += PGSIZE)
-                    {
-                        mem::Pte pte = p->_pt.walk(va, 0);
-                        if (!pte.is_null() && pte.is_valid())
-                        {
-                            // 只对实际映射的页面进行取消映射
-                            mem::k_vmm.vmunmap(*p->get_pagetable(), va, 1, 1);
-                        }
-                    }
-                    p->_vma->_vm[i].used = 0;
-                }
-            }
-            // 只有当VMA引用计数为0时才删除VMA
-            delete p->_vma;
-        }
-
-        // 重置VMA指针
-        p->_vma = nullptr;
-        p->_shared_vm = false; // 重置共享虚拟内存标志
-
-        /****************************************************************************************
-         * 内存管理清理
-         ****************************************************************************************/
-        // 释放trapframe页面
-        if (p->_trapframe)
-        {
-            mem::k_pmm.free_page(p->_trapframe);
-            p->_trapframe = nullptr;
-        }
-
-        // 释放页表
-        if (p->_pt.get_base())
-        {
-            proc_freepagetable(p->_pt, p->_sz);
-        }
-
-        p->_sz = 0; // 重置用户空间内存大小
-
-#ifdef LOONGARCH
-        p->elf_base = 0; // 重置ELF基地址
-#endif
+        printf("[freeproc] Reclaiming PCB for process %s pid %d\n", p->_name, p->_pid);
 
         /****************************************************************************************
          * 基本进程标识和状态管理清理
@@ -513,8 +449,10 @@ namespace proc
         p->_cwd_name.clear(); // 清空当前工作目录路径
         p->_umask = 0022;     // 重置umask为默认值
 
-        // 使用cleanup_ofile方法处理文件描述符表
-        p->cleanup_ofile();
+        // 注意：文件描述符表已在exit_proc中清理，这里只重置指针
+        if (p->_ofile != nullptr) {
+            panic("freeproc: ofile should be cleaned in exit_proc, but found non-null pointer");
+        }
 
         /****************************************************************************************
          * 线程和同步原语清理
@@ -526,19 +464,11 @@ namespace proc
         /****************************************************************************************
          * 信号处理清理
          ****************************************************************************************/
-        // 使用cleanup_sighand方法处理信号处理结构
-        p->cleanup_sighand();
-
-        // 清空信号处理栈帧链表
-        while (p->sig_frame != nullptr)
-        {
-            ipc::signal::signal_frame *next_frame = p->sig_frame->next;
-            mem::k_pmm.free_page(p->sig_frame); // 释放当前信号处理帧
-            p->sig_frame = next_frame;          // 移动到下一个帧
-        }
-        p->sig_frame = nullptr; // 清空信号处理帧指针
-        p->_signal = 0;         // 清空待处理信号掩码
-        p->_sigmask = 0;        // 清空信号屏蔽掩码
+        // 注意：信号处理结构和栈帧已在exit_proc中清理，这里只重置指针
+        p->_sigactions = nullptr; // 清空信号处理结构指针
+        p->sig_frame = nullptr;   // 清空信号处理帧指针
+        p->_signal = 0;           // 清空待处理信号掩码
+        p->_sigmask = 0;          // 清空信号屏蔽掩码
 
         /****************************************************************************************
          * 资源限制清理
@@ -578,6 +508,122 @@ namespace proc
          * 上下文清理
          ****************************************************************************************/
         memset(&p->_context, 0, sizeof(p->_context)); // 清空上下文信息
+
+        printf("[freeproc] PCB for process pid %d successfully reclaimed\n", p->_pid);
+    }
+
+    void ProcessManager::freeproc_creation_failed(Pcb *p)
+    {
+        /****************************************************************************************
+         * 专门处理进程创建失败时的清理
+         * 此时进程可能已经分配了部分资源但还没有真正运行
+         ****************************************************************************************/
+
+        printf("[freeproc_creation_failed] Cleaning up failed process creation for pid %d\n", p->_pid);
+
+        // 如果已经分配了trapframe，需要释放
+        if (p->_trapframe != nullptr)
+        {
+            mem::k_pmm.free_page(p->_trapframe);
+            p->_trapframe = nullptr;
+        }
+
+        // 如果已经创建了页表，需要释放
+        if (p->_pt.get_base() != 0)
+        {
+            p->_pt.dec_ref(); // 减少引用计数，如果为0会自动释放
+        }
+
+        // 如果已经分配了其他资源，也需要释放
+        if (p->_vma != nullptr && p->_vma->_ref_cnt > 0)
+        {
+            p->_vma->_ref_cnt--;
+            if (p->_vma->_ref_cnt == 0)
+            {
+                delete p->_vma;
+            }
+            p->_vma = nullptr;
+        }
+
+        // 调用标准的PCB清理
+        freeproc(p);
+    }
+
+    void ProcessManager::debug_process_states()
+    {
+        /****************************************************************************************
+         * 调试函数：打印所有进程的状态信息
+         ****************************************************************************************/
+        printf("\n========== Process State Debug Info ==========\n");
+
+        int zombie_count = 0;
+        int running_count = 0;
+        int sleeping_count = 0;
+        int unused_count = 0;
+        int used_count = 0;
+
+        for (uint i = 0; i < num_process; i++)
+        {
+            Pcb &p = k_proc_pool[i];
+            if (p._state == ProcState::UNUSED)
+            {
+                unused_count++;
+                continue;
+            }
+
+            printf("Process[%d]: pid=%d tid=%d name='%s' state=%d parent_pid=%d\n",
+                   i, p._pid, p._tid, p._name, (int)p._state,
+                   p._parent ? p._parent->_pid : -1);
+
+            switch (p._state)
+            {
+            case ProcState::ZOMBIE:
+                zombie_count++;
+                printf("  -> ZOMBIE: xstate=%d, waiting for parent to collect\n", p._xstate);
+                break;
+            case ProcState::RUNNABLE:
+                running_count++;
+                printf("  -> RUNNABLE\n");
+                break;
+            case ProcState::RUNNING:
+                running_count++;
+                printf("  -> RUNNING\n");
+                break;
+            case ProcState::SLEEPING:
+                sleeping_count++;
+                printf("  -> SLEEPING: chan=%p\n", p._chan);
+                break;
+            case ProcState::USED:
+                used_count++;
+                break;
+            default:
+                printf("  -> UNKNOWN STATE: %d\n", (int)p._state);
+                break;
+            }
+        }
+
+        printf("Summary: UNUSED=%d, USED=%d, RUNNABLE=%d, SLEEPING=%d, ZOMBIE=%d\n",
+               unused_count, used_count, running_count, sleeping_count, zombie_count);
+        printf("===============================================\n\n");
+    }
+
+    bool ProcessManager::verify_process_cleanup(int pid)
+    {
+        /****************************************************************************************
+         * 验证函数：检查指定PID的进程是否正确清理
+         ****************************************************************************************/
+        for (uint i = 0; i < num_process; i++)
+        {
+            Pcb &p = k_proc_pool[i];
+            if (p._pid == pid && p._state != ProcState::UNUSED)
+            {
+                printf("[ERROR] Process pid %d still exists in state %d after cleanup\n",
+                       pid, (int)p._state);
+                return false;
+            }
+        }
+        printf("[OK] Process pid %d successfully cleaned up\n", pid);
+        return true;
     }
 
     int ProcessManager::get_cur_cpuid()
@@ -599,7 +645,7 @@ namespace proc
 #ifdef RISCV
         if (mem::k_vmm.map_pages(pt, TRAMPOLINE, PGSIZE, (uint64)trampoline, riscv::PteEnum::pte_readable_m | riscv::pte_executable_m) == 0)
         {
-            mem::k_vmm.vmfree(pt, 0);
+            pt.dec_ref();
             printfRed("proc_pagetable: map trampoline failed\n");
             return empty_pt;
         }
@@ -607,14 +653,14 @@ namespace proc
         // printfGreen("TRAMPOLINE: %p\n", TRAMPOLINE);
         if (mem::k_vmm.map_pages(pt, TRAPFRAME, PGSIZE, (uint64)(p->get_trapframe()), riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_writable_m) == 0)
         {
-            mem::k_vmm.vmfree(pt, 0);
+            pt.dec_ref();
 
             printfRed("proc_pagetable: map trapframe failed\n");
             return empty_pt;
         }
         if (mem::k_vmm.map_pages(pt, SIG_TRAMPOLINE, PGSIZE, (uint64)sig_trampoline, riscv::PteEnum::pte_readable_m | riscv::pte_executable_m | riscv::PteEnum::pte_user_m) == 0)
         {
-            mem::k_vmm.vmfree(pt, 0);
+            pt.dec_ref();
 
             panic("proc_pagetable: map sigtrapframe failed\n");
             return empty_pt;
@@ -623,14 +669,14 @@ namespace proc
 #elif defined(LOONGARCH)
         if (mem::k_vmm.map_pages(pt, TRAPFRAME, PGSIZE, (uint64)(p->_trapframe), PTE_V | PTE_NX | PTE_P | PTE_W | PTE_R | PTE_MAT | PTE_D) == 0)
         {
-            mem::k_vmm.vmfree(pt, 0);
+            pt.dec_ref();
             printfRed("proc_pagetable: map trapframe failed\n");
             return empty_pt;
         }
         if (mem::k_vmm.map_pages(pt, SIG_TRAMPOLINE, PGSIZE, (uint64)sig_trampoline, PTE_P | PTE_MAT | PTE_D | PTE_U) == 0)
         {
             printf("Fail to map sig_trampoline\n");
-            mem::k_vmm.vmfree(pt, 0);
+            pt.dec_ref();
             return empty_pt;
         }
 #endif
@@ -638,90 +684,60 @@ namespace proc
     }
     void ProcessManager::proc_freepagetable(mem::PageTable &pt, uint64 sz)
     {
-        printfCyan("proc_freepagetable: freeing pagetable %p, size %u\n", pt.get_base(), sz);
+        // 注意：sz参数已经废弃，现在内存释放通过ProcessMemoryManager管理
+        printfCyan("proc_freepagetable: freeing pagetable %p\n", pt.get_base());
+
 #ifdef RISCV
         // riscv还有 trampoline的映射
         mem::k_vmm.vmunmap(pt, TRAMPOLINE, 1, 0);
 #endif
         mem::k_vmm.vmunmap(pt, TRAPFRAME, 1, 0);
         mem::k_vmm.vmunmap(pt, SIG_TRAMPOLINE, 1, 0);
-#ifdef RISCV
-        mem::k_vmm.vmfree(pt, sz);
-#elif LOONGARCH
-        Pcb *proc = get_cur_pcb();
-        // loongarch不是从0开始的，所以不需要从0开始释放
-        mem::k_vmm.vmfree(pt, sz - proc->elf_base, proc->elf_base);
-#endif
+
+        // 减少页表引用计数，让页表自己管理生命周期
+        pt.dec_ref();
     }
 
     void ProcessManager::user_init()
     {
+        static int inited = 0;
+        // 防止重复初始化
+        if (inited != 0)
+        {
+            panic("re-init user.");
+            return;
+        }
+
+        Pcb *p = alloc_proc();
+        if (p == nullptr)
+        {
+            panic("user_init: alloc_proc failed");
+            return;
+        }
+
+        _init_proc = p;
+
+        // 传入initcode的地址
+        printfCyan("initcode pagetable: %p\n", p->_pt.get_base());
+        uint64 initcode_sz = (uint64)initcode_end - (uint64)initcode_start;
+        uint64 allocated_sz = mem::k_vmm.uvmfirst(p->_pt, (uint64)initcode_start, initcode_sz);
+
+        printf("initcode start: %p, end: %p\n", initcode_start, initcode_end);
+        printf("initcode size: %p, total allocated space: %p\n", initcode_sz, allocated_sz);
+
+        // 使用新的程序段管理
+        p->add_program_section((void *)0, allocated_sz, "initcode");
+
+        // 初始化堆在代码段后面
+        p->init_heap(allocated_sz);
+
+        // 设置程序计数器和栈指针 - 架构相关的部分
 #ifdef RISCV
-        static int inited = 0;
-        // 防止重复初始化
-        if (inited != 0)
-        {
-            panic("re-init user.");
-            return;
-        }
-
-        Pcb *p = alloc_proc();
-        if (p == nullptr)
-        {
-            panic("user_init: alloc_proc failed");
-            return;
-        }
-
-        _init_proc = p;
-
-        // 传入initcode的地址
-        printfCyan("initcode pagetable: %p\n", p->_pt.get_base());
-        uint64 initcode_sz = (uint64)initcode_end - (uint64)initcode_start;
-        p->_sz = mem::k_vmm.uvmfirst(p->_pt, (uint64)initcode_start, initcode_sz);
-
-        printf("initcode start: %p, end: %p\n", initcode_start, initcode_end);
-        printf("initcode size: %p, total allocated space: %p\n", initcode_sz, p->_sz);
-
         p->_trapframe->epc = 0;
-        p->_trapframe->sp = p->_sz;
-
-        safestrcpy(p->_name, "initcode", sizeof(p->_name));
-        p->_parent = p;
-        // safestrcpy(p->_cwd_name, "/", sizeof(p->_cwd_name));
-        p->_cwd_name = "/";
-
-        p->_state = ProcState::RUNNABLE;
-
-        p->_lock.release();
-
 #elif defined(LOONGARCH)
-        static int inited = 0;
-        // 防止重复初始化
-        if (inited != 0)
-        {
-            panic("re-init user.");
-            return;
-        }
-
-        Pcb *p = alloc_proc();
-        if (p == nullptr)
-        {
-            panic("user_init: alloc_proc failed");
-            return;
-        }
-
-        _init_proc = p;
-
-        // 传入initcode的地址
-        printfCyan("initcode pagetable: %p\n", p->_pt.get_base());
-        uint64 initcode_sz = (uint64)initcode_end - (uint64)initcode_start;
-        p->_sz = mem::k_vmm.uvmfirst(p->_pt, (uint64)initcode_start, initcode_sz);
-
-        printf("initcode start: %p, end: %p\n", initcode_start, initcode_end);
-        printf("initcode size: %p, total allocated space: %p\n", initcode_sz, p->_sz);
-
-        p->_trapframe->era = 0;     // 设置程序计数器为0
-        p->_trapframe->sp = p->_sz; // 设置栈指针为总空间大小
+        p->_trapframe->era = 0;
+#endif
+        p->_trapframe->sp = allocated_sz;
 
         safestrcpy(p->_name, "initcode", sizeof(p->_name));
         p->_parent = p;
@@ -731,7 +747,6 @@ namespace proc
         p->_state = ProcState::RUNNABLE;
 
         p->_lock.release();
-#endif
     }
 
     // Atomically release lock and sleep on chan.
@@ -964,7 +979,7 @@ namespace proc
         {
             if (mem::k_vmm.copy_out(p->_pt, ptid, &new_tid, sizeof(new_tid)) < 0)
             {
-                freeproc(np);
+                freeproc_creation_failed(np); // 使用专门的创建失败清理函数
                 np->_lock.release();
                 return -1; // EFAULT: Bad address
             }
@@ -999,11 +1014,16 @@ namespace proc
             return nullptr;
         }
         *np->_trapframe = *p->_trapframe; // 拷贝父进程的陷阱值，而不是直接指向, 后面有可能会修改
-        // 继承父进程的其他属性
-        np->_sz = p->_sz;
-#ifdef LOONGARCH
-        np->elf_base = p->elf_base; // 继承 ELF 基地址
-#endif
+
+        // 复制程序段信息
+        np->copy_program_sections(p);
+
+        // 复制堆信息
+        np->_heap_start = p->_heap_start;
+        np->_heap_end = p->_heap_end;
+
+        // _sz现在由程序段管理自动计算，确保正确更新
+        np->update_total_memory_size();
 
         _wait_lock.acquire();
         np->_parent = p;
@@ -1098,21 +1118,39 @@ namespace proc
         }
         else
         {
-#ifdef RISCV
-            if (mem::k_vmm.vm_copy(*curpt, *newpt, 0, p->_sz) < 0)
+            // 复制进程的所有内存段
+            bool copy_success = true;
+
+            // 复制程序段
+            for (int i = 0; i < p->get_prog_section_count(); i++)
             {
-                freeproc(np);
+                const program_section_desc *sections = p->get_prog_sections();
+                uint64 start = (uint64)sections[i]._sec_start;
+                uint64 size = sections[i]._sec_size;
+
+                if (mem::k_vmm.vm_copy(*curpt, *newpt, start, size) < 0)
+                {
+                    copy_success = false;
+                    break;
+                }
+            }
+
+            // 复制堆
+            if (copy_success && p->get_heap_size() > 0)
+            {
+                if (mem::k_vmm.vm_copy(*curpt, *newpt, p->get_heap_start(), p->get_heap_size()) < 0)
+                {
+                    copy_success = false;
+                }
+            }
+
+            if (!copy_success)
+            {
+                freeproc_creation_failed(np); // 使用专门的创建失败清理函数
                 np->_lock.release();
+                panic("fork failed");
                 return nullptr;
             }
-#elif LOONGARCH
-            if (mem::k_vmm.vm_copy(*curpt, *newpt, p->elf_base, p->_sz - p->elf_base) < 0)
-            {
-                freeproc(np);
-                np->_lock.release();
-                return nullptr;
-            }
-#endif
             for (i = 0; i < NVMA; ++i)
             {
                 if (p->_vma->_vm[i].used)
@@ -1189,7 +1227,7 @@ namespace proc
                 if (entry_point == 0)
                 {
                     panic("fork: copy_in failed for stack pointer");
-                    freeproc(np);
+                    freeproc_creation_failed(np); // 使用专门的创建失败清理函数
                     np->_lock.release();
                     return nullptr;
                 }
@@ -1197,7 +1235,7 @@ namespace proc
                 if (mem::k_vmm.copy_in(p->_pt, &arg, (stack_ptr + 8), sizeof(uint64)) != 0)
                 {
                     panic("fork: copy_in failed for stack pointer arg");
-                    freeproc(np);
+                    freeproc_creation_failed(np); // 使用专门的创建失败清理函数
                     np->_lock.release();
                     return nullptr;
                 }
@@ -1218,7 +1256,7 @@ namespace proc
             {
                 if (mem::k_vmm.copy_out(p->_pt, ctid, &np->_tid, sizeof(np->_tid)) < 0)
                 {
-                    freeproc(np);
+                    freeproc_creation_failed(np); // 使用专门的创建失败清理函数
                     np->_lock.release();
                     return nullptr; // EFAULT: Bad address
                 }
@@ -1247,24 +1285,46 @@ namespace proc
     int
     ProcessManager::growproc(int n)
     {
-        uint64 sz;
         Pcb *p = get_cur_pcb();
 
-        sz = p->_sz;
+        if (n == 0)
+        {
+            return 0; // 无需改变
+        }
+
         if (n > 0)
         {
-            if (sz + n >= MAXVA - PGSIZE)
-                return -1;
-            if ((sz = mem::k_vmm.uvmalloc(p->_pt, sz, sz + n, PTE_W)) == 0)
+            // 扩展堆
+            uint64 current_end = p->get_heap_end();
+            uint64 new_end = current_end + n;
+
+            // 检查是否超出地址空间限制
+            if (new_end >= MAXVA - PGSIZE)
             {
                 return -1;
             }
+
+            uint64 result = p->grow_heap(new_end);
+            if (result < new_end)
+            {
+                return -1; // 扩展失败
+            }
         }
-        else if (n < 0)
+        else
         {
-            sz = mem::k_vmm.uvmdealloc(p->_pt, sz, sz + n);
+            // 缩减堆 (n < 0)
+            uint64 current_end = p->get_heap_end();
+            uint64 new_end = current_end + n; // n是负数
+
+            // 确保不会缩减到堆起始地址之前
+            if (new_end < p->get_heap_start())
+            {
+                new_end = p->get_heap_start();
+            }
+
+            p->shrink_heap(new_end);
         }
-        p->_sz = sz;
+
         return 0;
     }
 
@@ -1274,49 +1334,85 @@ namespace proc
     /// @return
     long ProcessManager::brk(long n)
     {
-        uint64 addr = get_cur_pcb()->_sz;
+        Pcb *p = get_cur_pcb();
 
-        // 如果 n 为 0，返回当前的 program break
-        // 如果请求的地址小于当前地址，缩减内存
-        // 如果请求的地址大于当前地址，扩展内存
-        // printfCyan("[brk] current addr: %p, requested: %p\n", (void*)addr, (void*)n);
-
-        if (growproc(n - addr) < 0)
+        // 如果 n 为 0，返回当前堆的结束地址
+        if (n == 0)
         {
-            // 失败时返回 -1 并设置 errno
-            return -1;
+            return p->get_heap_end();
         }
 
-        // 成功时返回 0
+        // 检查请求的地址是否合理
+        if ((uint64)n < p->get_heap_start())
+        {
+            return -1; // 不能设置到堆起始地址之前
+        }
+
+        // 如果请求缩减堆
+        if ((uint64)n < p->get_heap_end())
+        {
+            uint64 new_end = p->shrink_heap((uint64)n);
+            return new_end;
+        }
+        // 如果请求扩展堆
+        else if ((uint64)n > p->get_heap_end())
+        {
+            uint64 new_end = p->grow_heap((uint64)n);
+            if (new_end < (uint64)n)
+            {
+                return -1; // 扩展失败
+            }
+            return new_end;
+        }
+
+        // 如果地址相同，直接返回
         return n;
     }
 
     long ProcessManager::sbrk(long increment)
     {
         Pcb *p = get_cur_pcb();
-        uint64 old_addr = p->_sz;
+        uint64 old_end = p->get_heap_end();
 
-        // 如果 increment 为 0，返回当前的 program break
+        // 如果 increment 为 0，返回当前堆结束地址
         if (increment == 0)
         {
-            return old_addr;
+            return old_end;
         }
 
-        // 尝试扩展或缩减内存
-        if (growproc(increment) < 0)
+        uint64 new_end = old_end + increment;
+
+        // 如果是缩减堆
+        if (increment < 0)
         {
-            // 失败时返回 (void *) -1
-            return -1;
+            if (new_end < p->get_heap_start())
+            {
+                return -1; // 不能缩减到堆起始地址之前
+            }
+            uint64 result = p->shrink_heap(new_end);
+            if (result != new_end)
+            {
+                return -1;
+            }
+        }
+        // 如果是扩展堆
+        else
+        {
+            uint64 result = p->grow_heap(new_end);
+            if (result < new_end)
+            {
+                return -1; // 扩展失败
+            }
         }
 
-        // 成功时返回之前的 program break
-        return old_addr;
+        return old_end; // 返回原来的堆结束地址
     }
 
     int ProcessManager::wait4(int child_pid, uint64 addr, int option)
     {
         // copy from RUOK-os
         Pcb *p = k_pm.get_cur_pcb();
+        // printf("[wait4] pid: %d child_pid: %d, addr: %p, option: %d\n", p->_pid, child_pid, (void *)addr, option);
         int havekids, pid;
         Pcb *np = nullptr;
         if (child_pid > 0)
@@ -1383,7 +1479,7 @@ namespace proc
             if (!havekids || p->_killed)
             {
                 _wait_lock.release();
-                return -ECHILD;
+                return -ECHILD; // 无子进程
             }
 
             // wait children to exit
@@ -1456,16 +1552,47 @@ namespace proc
     /// @param state
     void ProcessManager::exit_proc(Pcb *p, int state)
     {
-
         if (p == _init_proc)
             panic("init exiting"); // 保护机制：init 进程不能退出
-        // log_info( "exit proc %d", p->_pid );
+
+        printf("[exit_proc] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
+
+        /****************************************************************************************
+         * Phase 1: 释放进程内存和资源
+         ****************************************************************************************/
+
+        // 使用ProcessMemoryManager统一处理内存释放
+        ProcessMemoryManager memory_mgr(p);
+        memory_mgr.free_all_memory(); // 释放所有内存资源（VMA、程序段、堆、页表、trapframe等）
+
+        // 关闭文件描述符表，释放文件资源
+        p->cleanup_ofile();
+
+        // 清理信号处理结构和信号栈帧
+        p->cleanup_sighand();
+
+        // 释放信号栈帧链表
+        while (p->sig_frame != nullptr)
+        {
+            ipc::signal::signal_frame *next_frame = p->sig_frame->next;
+            mem::k_pmm.free_page(p->sig_frame); // 释放当前信号处理帧
+            p->sig_frame = next_frame;          // 移动到下一个帧
+        }
+        p->sig_frame = nullptr; // 清空信号处理帧指针
+
+        // 清理线程相关资源
+        p->_futex_addr = nullptr;  // 清空futex等待地址
+        p->_robust_list = nullptr; // 清空健壮futex链表
+
+        /****************************************************************************************
+         * Phase 2: 处理父子进程关系和进程状态
+         ****************************************************************************************/
 
         reparent(p); // 将 p 的所有子进程交给 init 进程收养
+
         _wait_lock.acquire();
 
-        if (p->_parent)
-            wakeup(p->_parent); // 唤醒父进程（可能在 wait() 中阻塞）)
+        // 处理线程退出时的清理地址
         if (p->_clear_tid_addr)
         {
             uint64 temp0 = 0;
@@ -1476,6 +1603,8 @@ namespace proc
         }
 
         p->_lock.acquire();
+
+        // 设置退出状态和ZOMBIE状态
         p->_xstate = state << 8;       // 存储退出状态（通常高字节存状态）
         p->_state = ProcState::ZOMBIE; // 标记为 zombie，等待父进程回收
 
@@ -1486,10 +1615,15 @@ namespace proc
             p->_parent->_cutime += p->_user_ticks + p->_cutime;
             p->_parent->_cstime += p->_stime + p->_cstime;
             p->_parent->_lock.release();
+
+            // 唤醒父进程（可能在 wait() 中阻塞）
+            wakeup(p->_parent);
         }
 
         _wait_lock.release();
-        // printf("[exit_proc] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
+
+        printfYellow("[exit_proc] proc %s pid %d became zombie, memory freed\n", p->_name, p->_pid);
+
         k_scheduler.call_sched(); // jump to schedular, never return
         panic("zombie exit");
     }
@@ -1528,25 +1662,56 @@ namespace proc
     /// https://man7.org/linux/man-pages/man2/exit_group.2.html
     void ProcessManager::exit_group(int status)
     {
-        TODO("rm /temp")
+        debug_process_states();
         proc::Pcb *cp = get_cur_pcb();
+
+        printf("[exit_group] Thread group %d (leader pid %d) exiting with status %d\n",
+               cp->_tgid, cp->_pid, status);
+
+        /****************************************************************************************
+         * Phase 3: 安全的多线程退出处理
+         * 先标记所有同线程组线程为killed，让它们自然退出，避免竞态条件
+         ****************************************************************************************/
 
         _wait_lock.acquire();
 
+        // 遍历所有进程，找到同一线程组的其他线程
         for (uint i = 0; i < num_process; i++)
         {
             if (k_proc_pool[i]._state == ProcState::UNUSED)
                 continue;
+
             proc::Pcb *p = &k_proc_pool[i];
-            // 释放同一线程组中其他线程的资源
+
+            // 处理同一线程组的其他线程（不包括当前线程）
             if (p != cp && p->_tgid == cp->_tgid)
             {
-                // 退出同一线程组的其他线程
-                freeproc(p);
+                p->_lock.acquire();
+
+                if (p->_state != ProcState::ZOMBIE && p->_state != ProcState::UNUSED)
+                {
+                    printf("[exit_group] Marking thread pid %d tid %d as killed\n", p->_pid, p->_tid);
+
+                    // 标记线程为被杀死状态
+                    p->_killed = 1;
+
+                    // 如果线程在睡眠，唤醒它让其检查killed标志
+                    if (p->_state == ProcState::SLEEPING)
+                    {
+                        p->_state = ProcState::RUNNABLE;
+                        printf("[exit_group] Waking up sleeping thread pid %d\n", p->_pid);
+                    }
+                }
+
+                p->_lock.release();
             }
         }
+
         _wait_lock.release();
 
+        printf("[exit_group] Current thread pid %d exiting normally\n", cp->_pid);
+
+        // 当前线程正常退出，其他线程会在调度时检查killed标志并自行退出
         exit_proc(cp, status);
     }
     void ProcessManager::sleep(void *chan, SpinLock *lock)
@@ -2131,9 +2296,11 @@ namespace proc
 
         // 地址对齐
         uint64 aligned_length = PGROUNDUP(length);
-        if (aligned_length + p->_sz > MAXVA - PGSIZE)
+
+        // 检查映射大小是否超过虚拟地址空间限制
+        if (aligned_length > MAXVA - PGSIZE)
         {
-            printfRed("[mmap] Would exceed virtual address space\n");
+            printfRed("[mmap] Mapping size %u exceeds virtual address space\n", aligned_length);
             if (errno != nullptr)
             {
                 *errno = ENOMEM;
@@ -2205,6 +2372,18 @@ namespace proc
             }
             map_addr = (uint64)addr;
 
+            // 检查MAP_FIXED地址边界
+            if (map_addr < PGSIZE || map_addr + aligned_length > MAXVA - PGSIZE)
+            {
+                printfRed("[mmap] MAP_FIXED address out of bounds: addr=%p, len=%u\n",
+                          (void *)map_addr, aligned_length);
+                if (errno != nullptr)
+                {
+                    *errno = ENOMEM;
+                }
+                return MAP_FAILED;
+            }
+
             // 检查地址冲突
             if (flags & MAP_FIXED_NOREPLACE)
             {
@@ -2247,7 +2426,10 @@ namespace proc
             }
             else
             {
-                map_addr = p->_sz;
+                map_addr = PGROUNDUP(p->get_heap_end());
+                p->set_heap_end(map_addr + aligned_length);
+                printfYellow("[mmap] Updated heap_end to %p for anonymous mapping\n",
+                             (void *)(map_addr + aligned_length));
             }
         }
 
@@ -2275,19 +2457,8 @@ namespace proc
             vfile->dup(); // 增加文件引用计数
         }
 
-        // 更新进程大小
-        if (!(flags & MAP_FIXED))
-        {
-            p->_sz += aligned_length;
-        }
-        else
-        {
-            uint64 end_addr = map_addr + aligned_length;
-            if (end_addr > p->_sz)
-            {
-                p->_sz = end_addr;
-            }
-        }
+        // VMA内存映射不计入_sz，因为_sz现在只管理程序段和堆
+        // VMA有独立的内存管理生命周期
 
         // 特殊标志处理
         if (flags & MAP_POPULATE)
@@ -2340,113 +2511,25 @@ namespace proc
             return -ESRCH;
         }
 
-        uint64 unmap_start = (uint64)addr;
-        uint64 unmap_end = unmap_start + length;
-        uint64 aligned_length = PGROUNDUP(length);
+        printfYellow("[munmap] Process %s (PID: %d) unmapping addr=%p, length=%u\n",
+                     p->get_name(), p->get_pid(), addr, length);
 
-        // 使用%zu格式符正确显示size_t
-        printfYellow("[munmap] addr=%p, length=%u (aligned=%u)\n", addr, length, aligned_length);
+        // 使用ProcessMemoryManager进行统一的内存管理
+        ProcessMemoryManager memory_mgr(p);
+        int result = memory_mgr.unmap_memory_range(addr, length);
 
-        // 检查地址范围是否合理
-        if (unmap_end < unmap_start) // 溢出检查
+        if (result == 0)
         {
-            printfRed("[munmap] Address range overflow: start=%p, end=%p\n",
-                      (void *)unmap_start, (void *)unmap_end);
-            return -EINVAL;
+            printfGreen("[munmap] Successfully unmapped range [%p, %p)\n",
+                        addr, (void *)((uint64)addr + PGROUNDUP(length)));
+        }
+        else
+        {
+            printfRed("[munmap] Failed to unmap range [%p, %p)\n",
+                      addr, (void *)((uint64)addr + PGROUNDUP(length)));
         }
 
-        // 查找覆盖此地址范围的所有VMA
-        for (int i = 0; i < NVMA; ++i)
-        {
-            if (!p->_vma->_vm[i].used)
-                continue;
-
-            struct vma *vm = &p->_vma->_vm[i];
-            uint64 vma_start = vm->addr;
-            uint64 vma_end = vma_start + vm->len;
-
-            // 检查是否有重叠
-            if (unmap_end <= vma_start || unmap_start >= vma_end)
-            {
-                continue; // 没有重叠
-            }
-
-            printfCyan("[munmap] Found overlapping VMA %d: [%p, %p)\n", i, (void *)vma_start, (void *)vma_end);
-
-            // 计算重叠区域
-            uint64 overlap_start = MAX(unmap_start, vma_start);
-            uint64 overlap_end = MIN(unmap_end, vma_end);
-
-            // 处理MAP_SHARED文件映射的写回
-            if ((vm->flags & MAP_SHARED) && (vm->prot & PROT_WRITE) && vm->vfile != nullptr)
-            {
-                // TODO: 实现脏页写回
-                printfCyan("[munmap] Should write back MAP_SHARED pages for file %s\n",
-                           vm->vfile->_path_name.c_str());
-                // 对于现在，我们跳过写回，因为文件系统接口还不完整
-            }
-
-            // 取消物理页面映射（只处理已经分配的页面）
-            uint64 va_start = PGROUNDDOWN(overlap_start);
-            uint64 va_end = PGROUNDUP(overlap_end);
-
-            for (uint64 va = va_start; va < va_end; va += PGSIZE)
-            {
-                mem::Pte pte = p->_pt.walk(va, 0);
-                if (!pte.is_null() && pte.is_valid())
-                {
-                    // 取消映射并释放物理页面
-                    mem::k_vmm.vmunmap(*p->get_pagetable(), va, 1, 1);
-                    printfCyan("[munmap] Unmapped page at va=%p\n", (void *)va);
-                }
-            }
-
-            // 更新VMA结构
-            if (overlap_start == vma_start && overlap_end == vma_end)
-            {
-                // 完全取消映射整个VMA
-                printfCyan("[munmap] Completely unmapping VMA %d\n", i);
-
-                if (vm->vfile != nullptr)
-                {
-                    vm->vfile->free_file(); // 减少文件引用计数
-                }
-
-                vm->used = 0;
-                vm->addr = 0;
-                vm->len = 0;
-                vm->vfile = nullptr;
-                vm->vfd = -1;
-            }
-            else if (overlap_start == vma_start)
-            {
-                // 从头部开始取消映射
-                printfCyan("[munmap] Unmapping from start of VMA %d\n", i);
-
-                uint64 remaining_len = vma_end - overlap_end;
-                vm->addr = overlap_end;
-                vm->len = remaining_len;
-                vm->offset += (overlap_end - vma_start);
-            }
-            else if (overlap_end == vma_end)
-            {
-                // 从尾部开始取消映射
-                printfCyan("[munmap] Unmapping from end of VMA %d\n", i);
-
-                vm->len = overlap_start - vma_start;
-            }
-            else
-            {
-                // 从中间取消映射，需要分割VMA
-                printfRed("[munmap] Middle unmapping not fully supported yet\n");
-                // TODO: 实现VMA分割，需要找到空闲VMA槽位来创建第二个VMA
-                // 目前简单处理：截断到取消映射的起始位置
-                vm->len = overlap_start - vma_start;
-            }
-        }
-
-        printfGreen("[munmap] Successfully unmapped range [%p, %p)\n", addr, (void *)unmap_end);
-        return 0;
+        return result;
     }
 
     /// @brief 调整现有内存映射的大小，可能移动映射位置
@@ -3080,26 +3163,23 @@ namespace proc
         uint64 interp_entry = 0; // 动态链接器入口点
         // proc->_pt.print_all_map();
 
-        uint64 old_sz = proc->_sz; // 保存原进程的内存大小
-        uint64 sp;                 // 栈指针
-        uint64 stackbase;          // 栈基地址
-        mem::PageTable new_pt;     // 暂存页表, 防止加载过程中破坏原进程映像
-        elf::elfhdr elf;           // ELF 文件头
-        elf::proghdr ph = {};      // 程序头
+        uint64 old_sz = proc->get_size(); // 保存原进程的内存大小
+        uint64 sp;                        // 栈指针
+        uint64 stackbase;                 // 栈基地址
+        mem::PageTable new_pt;            // 暂存页表, 防止加载过程中破坏原进程映像
+        elf::elfhdr elf;                  // ELF 文件头
+        elf::proghdr ph = {};             // 程序头
         // fs::dentry *de;            // 目录项
-        int i, off;     // 循环变量和偏移量
-        u64 new_sz = 0; // 新进程映像的大小
-#ifdef LOONGARCH
-        u64 elf_start = 0; // ELF 文件的起始地址
-#endif
+        int i, off; // 循环变量和偏移量
 
         // 动态链接器相关
         elf::elfhdr interp_elf;
         uint64 interp_base = 0;
+        uint64 highest_addr = 0; // 记录最高地址，用于堆初始化
         // ========== 第一阶段：路径解析和文件查找 ==========
 
         // 构建绝对路径
-        // TODO :这个解析路径写的太狗屎了，换以下
+        // TODO: 这个解析路径写的太狗屎了，换一下
         eastl::string ab_path;
         if (path[0] == '/')
             ab_path = path; // 已经是绝对路径
@@ -3139,9 +3219,19 @@ namespace proc
 
         // ========== 预第三阶段：初始化程序段记录 ==========
         // 程序段描述符，用于记录加载的程序段信息
-        // using psd_t = program_section_desc;
-        // int new_sec_cnt = 0;                         // 新程序段计数
-        // psd_t new_sec_desc[max_program_section_num]; // 新程序段描述符数组
+        using psd_t = program_section_desc;
+        int new_sec_cnt = 0;                         // 新程序段计数
+        psd_t new_sec_desc[max_program_section_num]; // 新程序段描述符数组
+
+        // 初始化段记录数组
+        for (int i = 0; i < max_program_section_num; i++)
+        {
+            new_sec_desc[i]._sec_start = nullptr;
+            new_sec_desc[i]._sec_size = 0;
+            new_sec_desc[i]._debug_name = nullptr;
+        }
+
+        printfBlue("execve: initialized program section tracking for %s\n", ab_path.c_str());
 
         // ========== 第三阶段：加载ELF程序段 ==========
         uint64 phdr = 0;
@@ -3232,6 +3322,7 @@ namespace proc
                     break;
                 }
             }
+            // printfPink("checkpoint 1\n");
             // 遍历所有程序头，加载LOAD类型的段
             for (i = 0, off = elf.phoff; i < elf.phnum; i++, off += sizeof(ph))
             {
@@ -3260,23 +3351,7 @@ namespace proc
                     load_bad = true;
                     break;
                 }
-#ifdef LOONGARCH
-                // printf("elf_start: %p, ph.vaddr: %p, ph.memsz: %p\n", (void *)elf_start, (void *)ph.vaddr, (void *)ph.memsz);
-                if (elf_start == 0 || elf_start > ph.vaddr) // 记录第一个LOAD段的起始地址
-                {
-                    if (elf_start != 0)
-                    {
-                        // printf("eld_start: %p, ph.vaddr: %p\n", (void *)elf_start, (void *)ph.vaddr);
-                        panic("execve: this LOAD segment is below the first LOAD segment, which is not allowed");
-                    }
-                    elf_start = ph.vaddr; // 记录第一个LOAD段的起始地址
-                    new_sz = elf_start;
-                    printfGreen("execve: start_vaddr set to %p\n", (void *)elf_start);
-                }
-#endif
-
-                // 分配虚拟内存空间
-                uint64 sz1;
+                // 分配虚拟内存空间 - 只为当前段分配内存
                 uint64 seg_flag = PTE_U; // User可访问标志
 #ifdef RISCV
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC)
@@ -3296,32 +3371,26 @@ namespace proc
                     seg_flag |= PTE_NR; // not readable
 #endif
                 // printfRed("execve: loading segment %d, type: %d, startva: %p, endva: %p, memsz: %p, filesz: %p, flags: %d\n", i, ph.type, (void *)ph.vaddr, (void *)(ph.vaddr + ph.memsz), (void *)ph.memsz, (void *)ph.filesz, ph.flags);
-#ifdef RISCV
-                // printf("[exec] map from %p to %p new_pt base %p\n", (void *)(new_sz), (void *)(ph.vaddr + ph.memsz), new_pt.get_base());
-                if ((sz1 = mem::k_vmm.vmalloc(new_pt, new_sz, ph.vaddr + ph.memsz, seg_flag)) == 0)
-                {
-                    printfRed("execve: uvmalloc\n");
-                    load_bad = true;
-                    break;
-                }
-                new_sz = sz1; // 更新新进程映像的大小
-#elif defined(LOONGARCH)
-                // printfRed("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
-                //   i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, seg_flag);
-                if ((sz1 = mem::k_vmm.vmalloc(new_pt, new_sz, ph.vaddr + ph.memsz, seg_flag)) == 0)
-                {
-                    printfRed("execve: uvmalloc\n");
-                    load_bad = true;
-                    break;
-                }
-                new_sz = sz1; // 更新新进程映像的大小
-#endif
 
-                // // 用于处理elf文件中给出的段起始地址没有对其到页面首地址的情况(弃用, 我们的load_seg函数已经处理了这个问题)
-                // uint margin_size = 0;
-                // if ((ph.vaddr % PGSIZE) != 0)
-                // {
-                //     margin_size = ph.vaddr % PGSIZE;
+                // 为当前段分配虚拟内存空间，从段的虚拟地址开始
+                uint64 segment_start = PGROUNDDOWN(ph.vaddr);
+                uint64 segment_end = PGROUNDUP(ph.vaddr + ph.memsz);
+                // printfCyan("segment_start: %p, segment_end: %p\n", segment_start, segment_end);
+                // printfPink("checkpoint 2.1 %d\n", i);
+
+                if (mem::k_vmm.uvmalloc(new_pt, segment_start, segment_end, seg_flag) == 0)
+                {
+                    printfRed("execve: vmalloc failed for segment at %p-%p\n",
+                              (void *)segment_start, (void *)segment_end);
+                    load_bad = true;
+                    break;
+                }
+
+                // 更新最高地址，用于后续堆初始化
+                if (segment_end > highest_addr)
+                {
+                    highest_addr = segment_end;
+                }
                 // }
 
                 // 从文件加载段内容到内存
@@ -3331,21 +3400,74 @@ namespace proc
                     load_bad = true;
                     break;
                 }
+
+                // printfPink("checkpoint 2.2 %d\n", i);
+
+                // **新增：记录加载的程序段信息**
+                if (new_sec_cnt >= max_program_section_num)
+                {
+                    printfRed("execve: too many program sections\n");
+                    load_bad = true;
+                    break;
+                }
+
+                // 记录段信息到临时数组，确保页对齐
+                uint64 aligned_start = PGROUNDDOWN(ph.vaddr);
+                uint64 aligned_end = PGROUNDUP(ph.vaddr + ph.memsz);
+                new_sec_desc[new_sec_cnt]._sec_start = (void *)aligned_start;
+                new_sec_desc[new_sec_cnt]._sec_size = aligned_end - aligned_start; // 页对齐的大小
+
+                // 根据段的标志位设置调试名称
+                const char *section_name = nullptr;
+                if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC)
+                {
+                    if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ)
+                        section_name = "text"; // 代码段：可执行+可读
+                    else
+                        section_name = "exec_only"; // 纯执行段
+                }
+                else if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
+                {
+                    section_name = "data"; // 数据段：可写
+                }
+                else if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ)
+                {
+                    section_name = "rodata"; // 只读数据段
+                }
+                else
+                {
+                    section_name = "unknown"; // 未知段类型
+                }
+
+                new_sec_desc[new_sec_cnt]._debug_name = section_name;
+                new_sec_cnt++;
+                // printf("checkpoint 2.3 %d\n", i);
+
+                printfGreen("execve: recorded program section[%d]: %s at %p, size %p (page-aligned from %p, %p)\n",
+                            new_sec_cnt - 1, section_name,
+                            new_sec_desc[new_sec_cnt - 1]._sec_start,
+                            (void *)new_sec_desc[new_sec_cnt - 1]._sec_size,
+                            (void *)ph.vaddr, (void *)ph.memsz);
+                // printfPink("checkpoint 2.4 %d\n", i);
             }
             // 如果加载过程中出错，清理已分配的资源
             if (load_bad)
             {
-                // printfRed("execve: load segment failed\n");
-                k_pm.proc_freepagetable(new_pt, new_sz);
+                printfRed("execve: load segment failed, cleaning up allocated memory\n");
+
+                // 使用ProcessMemoryManager的专门函数进行清理
+                ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
+
+            // printfPink("checkpoint 3\n");
 
             if (is_dynamic)
             {
                 if (interpreter_path.length() == 0)
                 {
                     printfRed("execve: cannot find dynamic linker: %s\n", interpreter_path.c_str());
-                    k_pm.proc_freepagetable(new_pt, new_sz);
+                    ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                     return -1;
                 }
 
@@ -3355,12 +3477,14 @@ namespace proc
                 if (interp_elf.magic != elf::elfEnum::ELF_MAGIC)
                 {
                     printfRed("execve: invalid dynamic linker ELF\n");
-                    k_pm.proc_freepagetable(new_pt, new_sz);
+                    ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                     return -1;
                 }
                 printfCyan("execve: dynamic linker ELF magic: %x\n", interp_elf.magic);
-                // 选择动态链接器的加载基址（通常在高地址）
-                interp_base = PGROUNDUP(new_sz); // 在新进程映像的末尾分配空间
+
+                // **重构：动态链接器基址选择不再依赖new_sz**
+                // 选择动态链接器的加载基址，使用最高地址
+                interp_base = PGROUNDUP(highest_addr);
 
                 // 加载动态链接器的程序段
                 elf::proghdr interp_ph;
@@ -3392,14 +3516,23 @@ namespace proc
                         seg_flag |= PTE_NR;
 #endif
 
-                    uint64 sz1;
-                    if ((sz1 = mem::k_vmm.uvmalloc(new_pt, PGROUNDUP(new_sz), load_addr + interp_ph.memsz, seg_flag)) == 0)
+                    // **重构：为动态链接器段分配独立的虚拟内存**
+                    uint64 linker_segment_start = PGROUNDDOWN(load_addr);
+                    uint64 linker_segment_end = PGROUNDUP(load_addr + interp_ph.memsz);
+
+                    if (mem::k_vmm.vmalloc(new_pt, linker_segment_start, linker_segment_end, seg_flag) == 0)
                     {
-                        printfRed("execve: load dynamic linker failed\n");
-                        k_pm.proc_freepagetable(new_pt, new_sz);
+                        printfRed("execve: load dynamic linker failed at %p-%p\n",
+                                  (void *)linker_segment_start, (void *)linker_segment_end);
+                        ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                         return -1;
                     }
-                    new_sz = sz1;
+
+                    // 更新最高地址
+                    if (linker_segment_end > highest_addr)
+                    {
+                        highest_addr = linker_segment_end;
+                    }
 
                     // 加载动态链接器段内容
                     printfCyan("execve: loading dynamic linker segment %d, vaddr: %p, memsz: %p, offset: %p\n",
@@ -3407,44 +3540,116 @@ namespace proc
                     if (load_seg(new_pt, load_addr, interpreter_path, interp_ph.off, interp_ph.filesz) < 0)
                     {
                         printfRed("execve: load dynamic linker segment failed\n");
-                        k_pm.proc_freepagetable(new_pt, new_sz);
+                        ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                         return -1;
                     }
+
+                    // **新增：记录动态链接器段信息**
+                    if (new_sec_cnt >= max_program_section_num)
+                    {
+                        printfRed("execve: too many program sections (including linker)\n");
+                        ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
+                        return -1;
+                    }
+
+                    // 记录动态链接器段信息，确保页对齐
+                    uint64 linker_aligned_start = PGROUNDDOWN(load_addr);
+                    uint64 linker_aligned_end = PGROUNDUP(load_addr + interp_ph.memsz);
+                    new_sec_desc[new_sec_cnt]._sec_start = (void *)linker_aligned_start;
+                    new_sec_desc[new_sec_cnt]._sec_size = linker_aligned_end - linker_aligned_start;
+
+                    // 为动态链接器段设置调试名称
+                    const char *linker_section_name = nullptr;
+                    if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC)
+                    {
+                        linker_section_name = "linker_text";
+                    }
+                    else if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
+                    {
+                        linker_section_name = "linker_data";
+                    }
+                    else
+                    {
+                        linker_section_name = "linker_rodata";
+                    }
+
+                    new_sec_desc[new_sec_cnt]._debug_name = linker_section_name;
+                    new_sec_cnt++;
+
+                    printfGreen("execve: recorded linker section[%d]: %s at %p, size %p (page-aligned from %p, %p)\n",
+                                new_sec_cnt - 1, linker_section_name,
+                                new_sec_desc[new_sec_cnt - 1]._sec_start,
+                                (void *)new_sec_desc[new_sec_cnt - 1]._sec_size,
+                                (void *)load_addr, (void *)interp_ph.memsz);
                 }
 
                 interp_entry = interp_base + interp_elf.entry;
                 printfCyan("execve: dynamic linker loaded at base: %p, entry: %p\n",
                            (void *)interp_base, (void *)interp_entry);
             }
-        }
 
+
+
+            // **新增：段加载完成后的统计信息**
+            printfBlue("execve: segment loading completed. Total sections recorded: %d\n", new_sec_cnt);
+            for (int i = 0; i < new_sec_cnt; i++)
+            {
+                printfCyan("  [%d] %s: %p - %p (size: %p)\n",
+                           i, new_sec_desc[i]._debug_name ? new_sec_desc[i]._debug_name : "unnamed",
+                           new_sec_desc[i]._sec_start,
+                           (void *)((uint64)new_sec_desc[i]._sec_start + new_sec_desc[i]._sec_size),
+                           (void *)new_sec_desc[i]._sec_size);
+            }
+        }
+        // printfPink("checkpoint 8\n");
         // ========== 第五阶段：分配用户栈空间 ==========
 
-        { // 按照内存布局分配用户栈空间
+        { // **重构：基于最高地址分配用户栈空间**
             int stack_pgnum = 32;
-            new_sz = PGROUNDUP(new_sz); // 将大小对齐到页边界
-            uint64 sz1;
+            uint64 stack_start = PGROUNDUP(highest_addr); // 在最高地址之上分配栈
+            uint64 stack_end = stack_start + stack_pgnum * PGSIZE;
+
 #ifdef RISCV
-            if ((sz1 = mem::k_vmm.uvmalloc(new_pt, new_sz, new_sz + stack_pgnum * PGSIZE, PTE_W | PTE_X | PTE_R | PTE_U)) == 0)
+            if (mem::k_vmm.uvmalloc(new_pt, stack_start, stack_end, PTE_W | PTE_X | PTE_R | PTE_U) == 0)
             {
-                printfRed("execve: load user stack failed\n");
-                k_pm.proc_freepagetable(new_pt, new_sz);
+                printfRed("execve: load user stack failed at %p-%p\n",
+                          (void *)stack_start, (void *)stack_end);
+                ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
 #elif defined(LOONGARCH)
-            if ((sz1 = mem::k_vmm.uvmalloc(new_pt, new_sz, new_sz + stack_pgnum * PGSIZE, PTE_P | PTE_W | PTE_PLV | PTE_MAT | PTE_D)) == 0)
+            if (mem::k_vmm.uvmalloc(new_pt, stack_start, stack_end, PTE_P | PTE_W | PTE_PLV | PTE_MAT | PTE_D) == 0)
             {
-                printfRed("execve: load user stack failed\n");
-                k_pm.proc_freepagetable(new_pt, new_sz);
+                printfRed("execve: load user stack failed at %p-%p\n",
+                          (void *)stack_start, (void *)stack_end);
+                ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
 #endif
 
-            new_sz = sz1;                                                     // 更新新进程映像的大小
-            mem::k_vmm.uvmclear(new_pt, new_sz - (stack_pgnum - 1) * PGSIZE); // 设置guardpage
-            sp = new_sz;                                                      // 栈指针从顶部开始
-            stackbase = sp - (stack_pgnum - 1) * PGSIZE;                      // 计算栈底地址
-            sp -= sizeof(uint64);                                             // 为返回地址预留空间
+            // 更新最高地址
+            highest_addr = stack_end;
+
+            mem::k_vmm.uvmclear(new_pt, stack_start); // 设置guardpage
+            sp = stack_end;                           // 栈指针从顶部开始
+            stackbase = stack_start + PGSIZE;         // 计算栈底地址(跳过guard page)
+            sp -= sizeof(uint64);                     // 为返回地址预留空间
+
+            // 记录用户栈段信息
+            if (new_sec_cnt < max_program_section_num)
+            {
+                new_sec_desc[new_sec_cnt]._sec_start = (void *)stackbase;
+                new_sec_desc[new_sec_cnt]._sec_size = stack_end - stackbase; // 实际可用栈大小
+                new_sec_desc[new_sec_cnt]._debug_name = "user_stack";
+                new_sec_cnt++;
+
+                printfGreen("execve: recorded user stack section at %p, size %p\n",
+                            (void *)stackbase, (void *)(stack_end - stackbase));
+            }
+            else
+            {
+                panic("execve: warning - cannot record user stack, too many sections\n");
+            }
         }
 
         // ========== 第六阶段：准备glibc所需的用户栈数据 ==========
@@ -3456,7 +3661,7 @@ namespace proc
         if (sp < stackbase || mem::k_vmm.copy_out(new_pt, sp, (char *)random, 32) < 0)
         {
             printfRed("execve: copy random data failed\n");
-            k_pm.proc_freepagetable(new_pt, new_sz);
+            ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
             return -1;
         }
 
@@ -3471,7 +3676,7 @@ namespace proc
             if (envc >= MAXARG)
             { // 检查环境变量数量限制
                 printfRed("execve: too many envs\n");
-                k_pm.proc_freepagetable(new_pt, new_sz);
+                ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
             sp -= envs[envc].size() + 1; // 为环境变量字符串预留空间(包括null)
@@ -3479,13 +3684,13 @@ namespace proc
             if (sp < stackbase + PGSIZE)
             {
                 printfRed("execve: stack overflow\n");
-                k_pm.proc_freepagetable(new_pt, new_sz);
+                ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
             if (mem::k_vmm.copy_out(new_pt, sp, envs[envc].c_str(), envs[envc].size() + 1) < 0)
             {
                 printfRed("execve: copy envs failed\n");
-                k_pm.proc_freepagetable(new_pt, new_sz);
+                ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
             uenvp[envc] = sp; // 记录字符串地址
@@ -3500,7 +3705,7 @@ namespace proc
             if (argc >= MAXARG)
             { // 检查参数数量限制
                 printfRed("execve: too many args\n");
-                k_pm.proc_freepagetable(new_pt, new_sz);
+                ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
             sp -= argv[argc].size() + 1; // 为参数字符串预留空间(包括null)
@@ -3508,13 +3713,13 @@ namespace proc
             if (sp < stackbase + PGSIZE)
             {
                 printfRed("execve: stack overflow\n");
-                k_pm.proc_freepagetable(new_pt, new_sz);
+                ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
             if (mem::k_vmm.copy_out(new_pt, sp, argv[argc].c_str(), argv[argc].size() + 1) < 0)
             {
                 printfRed("execve: copy args failed\n");
-                k_pm.proc_freepagetable(new_pt, new_sz);
+                ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
             uargv[argc] = sp; // 记录字符串地址
@@ -3557,7 +3762,7 @@ namespace proc
             if (mem::k_vmm.copy_out(new_pt, sp, (char *)aux, sizeof(aux)) < 0)
             {
                 printfRed("execve: copy auxv failed\n");
-                k_pm.proc_freepagetable(new_pt, new_sz);
+                ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
         }
@@ -3569,17 +3774,17 @@ namespace proc
             if (sp < stackbase + PGSIZE)
             {
                 printfRed("execve: stack overflow\n");
-                k_pm.proc_freepagetable(new_pt, new_sz);
+                ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
             if (mem::k_vmm.copy_out(new_pt, sp, uenvp, (envc + 1) * sizeof(uint64)) < 0)
             {
                 printfRed("execve: copy envp failed\n");
-                k_pm.proc_freepagetable(new_pt, new_sz);
+                ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
         }
-        proc->_trapframe->a2 = sp; // 设置栈指针到trapframe
+        proc->get_trapframe()->a2 = sp; // 设置栈指针到trapframe
 
         // 6. 压入命令行参数指针数组（argv）
         // if (uargv[0])
@@ -3589,13 +3794,13 @@ namespace proc
             if (sp < stackbase + PGSIZE)
             {
                 printfRed("execve: stack overflow\n");
-                k_pm.proc_freepagetable(new_pt, new_sz);
+                ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
             if (mem::k_vmm.copy_out(new_pt, sp, uargv, (argc + 1) * sizeof(uint64)) < 0)
             {
                 printfRed("execve: copy argv failed\n");
-                k_pm.proc_freepagetable(new_pt, new_sz);
+                ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
             // // 新增：打印压入的 argv 指针及其内容
@@ -3605,7 +3810,7 @@ namespace proc
             // }
         }
 
-        proc->_trapframe->a1 = sp; // 设置argv指针到trapframe
+        proc->get_trapframe()->a1 = sp; // 设置argv指针到trapframe
 
         // 7. 压入参数个数（argc）
         sp -= sizeof(uint64);
@@ -3613,7 +3818,7 @@ namespace proc
         if (mem::k_vmm.copy_out(new_pt, sp, (char *)&argc, sizeof(uint64)) < 0)
         {
             printfRed("execve: copy argc failed\n");
-            k_pm.proc_freepagetable(new_pt, new_sz);
+            ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
             return -1;
         }
 
@@ -3630,16 +3835,19 @@ namespace proc
             filename = ab_path; // 如果没有'/'，整个路径就是文件名
         }
 
-        // 使用safestrcpy将文件名安全地拷贝到进程的_name成员变量中
+        // 使用safestrcpy将文件名安全地拷贝到进程名称中
+        // 注意：由于Pcb类没有提供set_name()函数，这里直接访问_name成员
         safestrcpy(proc->_name, filename.c_str(), sizeof(proc->_name));
 
-        // printfGreen("execve: process name set to '%s'\n", proc->_name);
+        // printfGreen("execve: process name set to '%s'\n", proc->get_name());
 
         // ========== 第七阶段：配置进程资源限制 ==========
         // 设置栈大小限制
+        // 注意：由于Pcb类没有提供通用的set_rlimit()函数，这里直接访问_rlim_vec
         proc->_rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_cur =
             proc->_rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_max = sp - stackbase;
         // 处理F_DUPFD_CLOEXEC标志位，关闭设置了该标志的文件描述符
+        // 注意：这里直接访问_ofile结构是因为这是execve的特定操作
         for (int i = 0; i < (int)max_open_files; i++)
         {
             if (proc->_ofile != nullptr && proc->_ofile->_ofile_ptr[i] != nullptr && proc->_ofile->_fl_cloexec[i])
@@ -3653,7 +3861,67 @@ namespace proc
         // ========== 第八阶段：替换进程映像 ==========
         mem::PageTable old_pt;
         old_pt = *proc->get_pagetable(); // 获取当前进程的页表
-        proc->_sz = PGROUNDUP(new_sz);   // 更新进程大小
+
+        // 使用ProcessMemoryManager进行完整的内存清理
+        ProcessMemoryManager memory_mgr(proc);
+
+        // execve需要清理原进程的所有内存空间，包括：
+        // 1. 程序段（代码段、数据段等）
+        // 2. 堆内存（malloc/brk分配的内存）
+        // 3. VMA映射（mmap创建的映射）
+        // 注意：不释放trapframe和页表结构，因为新程序还需要使用
+
+        printfBlue("execve: cleaning up old process memory space\n");
+
+        // 清理程序段
+        memory_mgr.free_all_program_sections();
+
+        // 清理堆内存
+        memory_mgr.free_heap_memory();
+
+        // 清理VMA映射 - 使用统一的VMA管理接口
+        // execve应该清除所有VMA映射，因为新程序有自己的内存布局
+        memory_mgr.free_all_vma();
+
+        printfGreen("execve: old process memory space cleaned up\n");
+
+        printfBlue("execve: adding %d program sections to process\n", new_sec_cnt);
+
+        // 首先清空所有旧的程序段记录
+        proc->clear_all_program_sections();
+
+        // 将所有记录的段添加到进程中，使用Pcb的add_program_section方法
+        for (int i = 0; i < new_sec_cnt; i++)
+        {
+            int section_index = proc->add_program_section(
+                new_sec_desc[i]._sec_start,
+                new_sec_desc[i]._sec_size,
+                new_sec_desc[i]._debug_name);
+
+            if (section_index < 0)
+            {
+                printfRed("execve: failed to add program section %d\n", i);
+                ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
+                return -1;
+            }
+
+            printfGreen("execve: added section[%d]: %s at %p, size %p\n",
+                        section_index, new_sec_desc[i]._debug_name,
+                        new_sec_desc[i]._sec_start, (void *)new_sec_desc[i]._sec_size);
+        }
+
+        // 检查是否有段被记录
+        if (new_sec_cnt == 0)
+        {
+            printfYellow("execve: warning - no program sections were recorded\n");
+            // 为兼容性添加一个总段，使用highest_addr作为大小参考
+            proc->add_program_section((void *)0, PGROUNDUP(highest_addr), "fallback_program");
+        }
+
+        // **重构：使用highest_addr初始化堆**
+        // 在所有已分配的内存区域之后初始化堆
+        proc->init_heap(PGROUNDUP(highest_addr));
+
         uint64 entry_point;
         if (is_dynamic)
         {
@@ -3667,20 +3935,22 @@ namespace proc
         }
 
 #ifdef RISCV
-        proc->_trapframe->epc = entry_point;
+        proc->get_trapframe()->epc = entry_point;
 #elif defined(LOONGARCH)
-        proc->_trapframe->era = entry_point;
-        proc->elf_base = elf_start; // 保存ELF文件的起始地址
+        proc->get_trapframe()->era = entry_point;
 #endif
-        proc->_pt = new_pt;        // 替换为新的页表
-        proc->_trapframe->sp = sp; // 设置栈指针
+        // 注意：由于Pcb类没有提供set_pagetable()函数，这里直接替换页表
+        proc->_pt = new_pt;             // 替换为新的页表
+        proc->get_trapframe()->sp = sp; // 设置栈指针
 
-        // printf("execve: new process size: %p, new pagetable: %p\n", proc->_sz, proc->_pt);
+        // printf("execve: new process size: %p, new pagetable: %p\n", proc->get_size(), proc->_pt);
         k_pm.proc_freepagetable(old_pt, old_sz);
 
-        printf("execve succeed, new process size: %p\n", proc->_sz);
+        printfGreen("execve succeed, new process size: %p\n", proc->get_size());
+        printfGreen("execve: process '%s' loaded with %d program sections\n",
+                    proc->get_name(), proc->get_prog_section_count());
 
         // 写成0为了适配glibc的rtld_fini需求
         return 0; // 返回参数个数，表示成功执行
-    }
-}; // namespace proc
+    }; 
+}// namespace proc
