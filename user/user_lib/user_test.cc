@@ -882,8 +882,8 @@ char *ltp_testcases[] = {
     // "fcntl03_64", //pass
     // "fcntl04", //pass
     // "fcntl04_64", //pass
-    // "fcntl05",   //还有没过的
-    // "fcntl05_64",  //
+    // "fcntl05",   //pass
+    // "fcntl05_64",  //pass
     // "fcntl07",
     // "fcntl07_64",
     // "fcntl08",   //pass
@@ -896,8 +896,8 @@ char *ltp_testcases[] = {
     // "fcntl11_64",
     // "fcntl12", //pass
     // "fcntl12_64",//pass
-    // "fcntl13",  //过了一半
-    // "fcntl13_64", //过了一半
+    // "fcntl13",  //pass
+    // "fcntl13_64", //pass
     // "fcntl14",
     // "fcntl14_64",
     // "fcntl15", 

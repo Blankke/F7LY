@@ -1441,7 +1441,7 @@ bool is_lock_conflict(const struct flock &existing_lock, const struct flock &new
               new_lock.l_type, new_lock.l_start, new_lock.l_len, new_lock.l_pid);
 
     // 如果现有锁类型是F_UNLCK或目标锁类型是解锁（F_UNLCK），就不需要检测冲突
-    if (existing_lock.l_type == 0 || new_lock.l_type == 0) // F_UNLCK = 0
+    if (existing_lock.l_type == 2 || new_lock.l_type == 2) // F_UNLCK = 2
     {
         printfCyan("[is_lock_conflict] One lock is F_UNLCK, no conflict\n");
         return false;
@@ -1470,12 +1470,12 @@ bool is_lock_conflict(const struct flock &existing_lock, const struct flock &new
     }
 
     // 检查锁类型是否冲突
-    if (existing_lock.l_type == 2 || new_lock.l_type == 2) // F_WRLCK = 2
+    if (existing_lock.l_type == 1 || new_lock.l_type == 1) // F_WRLCK = 1
     {
         printfCyan("[is_lock_conflict] Write lock involved, conflict!\n");
         return true; // 写锁和任何锁都冲突
     }
-    if (existing_lock.l_type == 1 && new_lock.l_type == 1) // F_RDLCK = 1
+    if (existing_lock.l_type == 0 && new_lock.l_type == 0) // F_RDLCK = 0
     {
         printfCyan("[is_lock_conflict] Both read locks, no conflict\n");
         return false; // 读锁之间不冲突

@@ -3764,10 +3764,24 @@ namespace syscall
             printfCyan("[F_SETLK] Request: type=%d, start=%ld, len=%ld, whence=%d, pid=%d\n",
                        lock.l_type, lock.l_start, lock.l_len, lock.l_whence, lock.l_pid);
 
-            if (lock.l_type == 0) // F_UNLCK
+            // 验证锁类型参数
+            if (lock.l_type != F_RDLCK && lock.l_type != F_WRLCK && lock.l_type != F_UNLCK)
+            {
+                printfRed("[F_SETLK] Invalid lock type: %d\n", lock.l_type);
+                return SYS_EINVAL;
+            }
+
+            // 验证whence参数
+            if (lock.l_whence != SEEK_SET && lock.l_whence != SEEK_CUR && lock.l_whence != SEEK_END)
+            {
+                printfRed("[F_SETLK] Invalid whence: %d\n", lock.l_whence);
+                return SYS_EINVAL;
+            }
+
+            if (lock.l_type == 2) // F_UNLCK
             {
                 // 解锁操作
-                if (f->_lock.l_type == 0) // F_UNLCK
+                if (f->_lock.l_type == 2) // F_UNLCK
                 {
                     // 文件本身没有锁定
                     return SYS_EINVAL; // 文件未被锁定
@@ -3780,7 +3794,7 @@ namespace syscall
                 }
 
                 // 执行解锁操作
-                f->_lock.l_type = F_UNLCK; // 释放锁
+                f->_lock.l_type = 2; // F_UNLCK 释放锁
                 if (mem::k_vmm.copy_out(*p->get_pagetable(), arg, &lock, sizeof(lock)) < 0)
                     return SYS_EFAULT; // 无法将锁信息写回用户空间
                 return 0;              // 成功解锁
@@ -3808,15 +3822,32 @@ namespace syscall
             // 检查参数是否有效
             if (_arg_addr(2, arg) < 0)
                 return SYS_EFAULT;
-            printfCyan("[SyscallHandler::sys_fcntl] F_SETLK called with arg: %p\n", arg);
+            printfCyan("[SyscallHandler::sys_fcntl] F_SETLKW called with arg: %p\n", arg);
             struct flock lock;
             if (mem::k_vmm.copy_in(*p->get_pagetable(), &lock, arg, sizeof(lock)) < 0)
                 return SYS_EFAULT; // 无法从用户空间读取锁结构
 
-            if (lock.l_type == F_UNLCK)
+            printfCyan("[F_SETLKW] Request: type=%d, start=%ld, len=%ld, whence=%d, pid=%d\n",
+                       lock.l_type, lock.l_start, lock.l_len, lock.l_whence, lock.l_pid);
+
+            // 验证锁类型参数
+            if (lock.l_type != F_RDLCK && lock.l_type != F_WRLCK && lock.l_type != F_UNLCK)
+            {
+                printfRed("[F_SETLKW] Invalid lock type: %d\n", lock.l_type);
+                return SYS_EINVAL;
+            }
+
+            // 验证whence参数
+            if (lock.l_whence != SEEK_SET && lock.l_whence != SEEK_CUR && lock.l_whence != SEEK_END)
+            {
+                printfRed("[F_SETLKW] Invalid whence: %d\n", lock.l_whence);
+                return SYS_EINVAL;
+            }
+
+            if (lock.l_type == 2) // F_UNLCK
             {
                 // 解锁操作
-                if (f->_lock.l_type == F_UNLCK)
+                if (f->_lock.l_type == 2) // F_UNLCK
                 {
                     // 文件本身没有锁定
                     return SYS_EINVAL; // 文件未被锁定
@@ -3829,7 +3860,7 @@ namespace syscall
                 }
 
                 // 执行解锁操作
-                f->_lock.l_type = F_UNLCK; // 释放锁
+                f->_lock.l_type = 2; // F_UNLCK 释放锁
                 if (mem::k_vmm.copy_out(*p->get_pagetable(), arg, &lock, sizeof(lock)) < 0)
                     return SYS_EFAULT; // 无法将锁信息写回用户空间
                 return 0;              // 成功解锁
@@ -3864,28 +3895,58 @@ namespace syscall
 
             printfCyan("[F_GETLK] Request: type=%d, start=%ld, len=%ld, whence=%d, pid=%d\n",
                        lock.l_type, lock.l_start, lock.l_len, lock.l_whence, lock.l_pid);
+
+            // 验证锁类型参数
+            if (lock.l_type != F_RDLCK && lock.l_type != F_WRLCK && lock.l_type != F_UNLCK)
+            {
+                printfRed("[F_GETLK] Invalid lock type: %d\n", lock.l_type);
+                return SYS_EINVAL;
+            }
+
+            // 验证whence参数
+            if (lock.l_whence != SEEK_SET && lock.l_whence != SEEK_CUR && lock.l_whence != SEEK_END)
+            {
+                printfRed("[F_GETLK] Invalid whence: %d\n", lock.l_whence);
+                return SYS_EINVAL;
+            }
+
             printfCyan("[F_GETLK] File lock: type=%d, start=%ld, len=%ld, whence=%d, pid=%d\n",
                        f->_lock.l_type, f->_lock.l_start, f->_lock.l_len, f->_lock.l_whence, f->_lock.l_pid);
 
             // F_GETLK检查如果要设置请求的锁，是否会与现有锁冲突
-            // 根据测试期望，如果文件有锁就返回锁信息，否则返回F_UNLCK
-            if (f->_lock.l_type != 0) // 如果文件有锁
+            // 如果没有现有锁，或者请求是释放锁，则没有冲突
+            if (f->_lock.l_type == 2 || lock.l_type == 2) // F_UNLCK = 2
             {
-                printfCyan("[F_GETLK] File has lock, returning existing lock info\n");
-                // 返回现有锁的信息
-                lock.l_type = f->_lock.l_type;
-                lock.l_start = f->_lock.l_start;
-                lock.l_len = f->_lock.l_len;
-                lock.l_whence = f->_lock.l_whence;
-                lock.l_pid = f->_lock.l_pid;
-                if (mem::k_vmm.copy_out(*p->get_pagetable(), arg, &lock, sizeof(lock)) < 0)
-                    return SYS_EFAULT;
-                return 0;
+                printfCyan("[F_GETLK] No conflict, returning F_UNLCK\n");
+                // 如果没有冲突，只设置锁类型为F_UNLCK，保持其他字段不变
+                lock.l_type = 2; // F_UNLCK
             }
-
-            printfCyan("[F_GETLK] No conflict, returning F_UNLCK\n");
-            // 如果没有冲突，设置锁类型为F_UNLCK表示可以加锁
-            lock.l_type = F_UNLCK;
+            else
+            {
+                // 检查锁冲突：写锁与任何锁冲突，读锁与写锁冲突
+                bool has_conflict = false;
+                if (f->_lock.l_type == 1 || lock.l_type == 1) // F_WRLCK = 1
+                {
+                    has_conflict = true;
+                }
+                
+                if (has_conflict)
+                {
+                    printfCyan("[F_GETLK] File has conflicting lock, returning existing lock info\n");
+                    // 返回现有锁的信息
+                    lock.l_type = f->_lock.l_type;
+                    lock.l_start = f->_lock.l_start;
+                    lock.l_len = f->_lock.l_len;
+                    lock.l_whence = f->_lock.l_whence;
+                    lock.l_pid = f->_lock.l_pid;
+                }
+                else
+                {
+                    printfCyan("[F_GETLK] No conflict, returning F_UNLCK\n");
+                    // 如果没有冲突，只设置锁类型为F_UNLCK，保持其他字段不变
+                    lock.l_type = 2; // F_UNLCK
+                }
+            }
             if (mem::k_vmm.copy_out(*p->get_pagetable(), arg, &lock, sizeof(lock)) < 0)
                 return SYS_EFAULT;
             return 0;
