@@ -41,3 +41,4 @@ disasm_rv_musl_libcso.asm
 outputverbose.txt
 sdcard-la-final.img
 sdcard-rv-final.img
+cfr.c

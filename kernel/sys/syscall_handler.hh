@@ -37,6 +37,10 @@ namespace syscall
         int _arg_fd(int arg_n, int *out_fd, fs::file **out_f);
         int  argfd(int n, int *pfd, struct file **pf);
         bool is_bad_addr(uint64 addr);
+        
+        // splice 辅助函数
+        ssize_t _splice_pipe_to_file(fs::file *pipe_file, fs::file *regular_file, off_t file_offset, size_t len);
+        ssize_t _splice_file_to_pipe(fs::file *regular_file, off_t file_offset, fs::file *pipe_file, size_t len);
     private: // ================ syscall functions ================
         uint64 sys_exec();
         uint64 sys_fork();

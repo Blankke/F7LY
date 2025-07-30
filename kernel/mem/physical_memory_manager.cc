@@ -100,23 +100,23 @@ namespace mem
     void *PhysicalMemoryManager::kmalloc(size_t size)
     {
         // printfCyan("kmalloc: size = %u\n", size);
-        if(size >= PGSIZE)
-        {
+        // if(size >= PGSIZE)
+        // {
             int x = _buddy->Alloc(size_to_page_num(size));
             void *pa = pgnm2pa(x);
             memset(pa, 0, PGSIZE);
             return pa;
-        }
-        else if(size < PGSIZE)
-        {
-            //there maybe some bugs to be fixed
-            return SlabAllocator::alloc(size);
-        }
-        else
-        {
-            panic("kmalloc: size is too large");
-            return nullptr; // 永远不会执行到这里，但必须有返回值
-        }
+        // }
+        // else if(size < PGSIZE)
+        // {
+        //     //there maybe some bugs to be fixed
+        //     return SlabAllocator::alloc(size);
+        // }
+        // else
+        // {
+        //     panic("kmalloc: size is too large");
+        //     return nullptr; // 永远不会执行到这里，但必须有返回值
+        // }
     }
 
     void *PhysicalMemoryManager::kcalloc(uint n, size_t size)

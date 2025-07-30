@@ -7103,90 +7103,228 @@ namespace syscall
     uint64 SyscallHandler::sys_copy_file_range()
     {
         int fd_in, fd_out;
-        uint64 offset_in_ptr, offset_out_ptr;
-        size_t size;
-        long isize;
-        int iflag;
-        uint flags;
-
-        // 读取系统调用参数
-        if (_arg_int(0, fd_in) < 0 || _arg_long(1, (long &)offset_in_ptr) < 0 ||
-            _arg_int(2, fd_out) < 0 || _arg_long(3, (long &)offset_out_ptr) < 0 ||
-            _arg_long(4, isize) < 0 || _arg_int(5, iflag) < 0)
+        uint64 off_in_addr, off_out_addr;
+        size_t len;
+        unsigned int flags;
+        fs::file *f_in, *f_out;
+        
+        // 解析参数
+        if (_arg_fd(0, &fd_in, &f_in) < 0)
         {
-            printfRed("[SyscallHandler::sys_copy_file_range] 参数错误\n");
-            return SYS_EINVAL;
+            printfRed("[sys_copy_file_range] Invalid fd_in\n");
+            return -EBADF;
+        }
+        if (_arg_addr(1, off_in_addr) < 0)
+        {
+            printfRed("[sys_copy_file_range] Invalid off_in address\n");
+            return -EFAULT;
+        }
+        if (_arg_fd(2, &fd_out, &f_out) < 0)
+        {
+            printfRed("[sys_copy_file_range] Invalid fd_out\n");
+            return -EBADF;
+        }
+        if (_arg_addr(3, off_out_addr) < 0)
+        {
+            printfRed("[sys_copy_file_range] Invalid off_out address\n");
+            return -EFAULT;
+        }
+        if (_arg_addr(4, (uint64&)len) < 0)
+        {
+            printfRed("[sys_copy_file_range] Invalid len\n");
+            return -EINVAL;
+        }
+        if (_arg_int(5, (int&)flags) < 0)
+        {
+            printfRed("[sys_copy_file_range] Invalid flags\n");
+            return -EINVAL;
+        }
+        printfBgCyan("[sys_copy_file_range] fd_in=%d, off_in_addr=%p, fd_out=%d, off_out_addr=%p, len=%zu, flags=%u\n",
+               fd_in, (void *)off_in_addr, fd_out, (void *)off_out_addr, len, flags);
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+
+        // 检查 flags 参数，必须为 0
+        if (flags != 0)
+        {
+            printfRed("[sys_copy_file_range] flags must be 0\n");
+            return -EINVAL;
         }
 
-        flags = iflag;
-        size = (size_t)isize;
-
-        if (fd_in < 0 || fd_out < 0 || fd_in >= NOFILE || fd_out >= NOFILE)
-        {
-            printfRed("[SyscallHandler::sys_copy_file_range] 无效的文件描述符: fd_in=%d, fd_out=%d\n", fd_in, fd_out);
-            return SYS_EBADF;
-        }
-
-        fs::file *f_in = proc::k_pm.get_cur_pcb()->get_open_file(fd_in);
-        fs::file *f_out = proc::k_pm.get_cur_pcb()->get_open_file(fd_out);
+        // 检查文件描述符有效性
         if (!f_in || !f_out)
         {
-            printfRed("[SyscallHandler::sys_copy_file_range] 无效的文件描述符: fd_in=%d, fd_out=%d\n", fd_in, fd_out);
-            return SYS_EBADF;
-        }
-        if (!f_in->_attrs.u_read || !f_out->_attrs.u_write)
-        {
-            printfRed("[SyscallHandler::sys_copy_file_range] 文件没有读/写权限: fd_in=%d, fd_out=%d\n", fd_in, fd_out);
-            return SYS_EACCES;
+            printfRed("[sys_copy_file_range] Invalid file descriptors\n");
+            return -EBADF;
         }
 
-        // 处理偏移量参数
-        off_t offset_in, offset_out;
-        bool use_current_in = false, use_current_out = false;
-
-        if (offset_in_ptr == 0)
+        // 检查文件类型：必须是普通文件
+        if (f_in->_attrs.filetype != fs::FileTypes::FT_NORMAL ||
+            f_out->_attrs.filetype != fs::FileTypes::FT_NORMAL)
         {
-            // NULL指针，使用当前文件偏移量
-            offset_in = f_in->_file_ptr;
-            use_current_in = true;
+            printfRed("[sys_copy_file_range] Not regular files\n");
+            return -EINVAL;
+        }
+
+        // 检查是否是目录
+        if (f_in->_attrs.filetype == fs::FileTypes::FT_DIRECT ||
+            f_out->_attrs.filetype == fs::FileTypes::FT_DIRECT)
+        {
+            printfRed("[sys_copy_file_range] Cannot copy from/to directory\n");
+            return -EISDIR;
+        }
+
+        // 检查文件访问权限
+        // fd_in 必须可读 (不能只是 O_WRONLY)
+        int access_mode_in = f_in->lwext4_file_struct.flags & 03; // 提取访问模式位
+        if (access_mode_in == O_WRONLY)
+        {
+            printfRed("[sys_copy_file_range] fd_in not open for reading\n");
+            return -EBADF;
+        }
+
+        // fd_out 必须可写 (不能是 O_RDONLY)
+        int access_mode_out = f_out->lwext4_file_struct.flags & 03; // 提取访问模式位
+        if (access_mode_out == O_RDONLY)
+        {
+            printfRed("[sys_copy_file_range] fd_out not open for writing\n");
+            return -EBADF;
+        }
+
+        // 检查 O_APPEND 标志
+        if (f_out->lwext4_file_struct.flags & O_APPEND)
+        {
+            printfRed("[sys_copy_file_range] fd_out has O_APPEND flag\n");
+            return -EBADF;
+        }
+
+        // 检查 O_PATH 标志
+        if ((f_in->lwext4_file_struct.flags & O_PATH) ||
+            (f_out->lwext4_file_struct.flags & O_PATH))
+        {
+            printfRed("[sys_copy_file_range] Cannot copy with O_PATH files\n");
+            return -EBADF;
+        }
+        if(len==0)
+        {
+            printfOrange("[sys_copy_file_range] len is 0, nothing to copy\n");
+            return 0;
+        }
+        // 分配内核缓冲区 - 使用物理内存管理器
+        char *buf = (char*)mem::k_pmm.kmalloc(len);
+        if (!buf)
+        {
+            printfRed("[sys_copy_file_range] Failed to allocate buffer of size %zu\n", len);
+            return -ENOMEM;
+        }
+        
+        // 初始化缓冲区以便调试
+        memset(buf, 0, len);
+        
+        printfBgCyan("[sys_copy_file_range] Allocated buffer at %p, size %zu\n", buf, len);
+
+        ssize_t read_len = 0;
+        ssize_t ret = 0;
+
+        // 处理输入偏移
+        if (off_in_addr == 0)  // NULL pointer
+        {
+            // 使用文件自身的偏移
+            printfBgCyan("[sys_copy_file_range] Reading from current file position\n");
+            read_len = f_in->read((uint64)buf, len, -1, true);
         }
         else
         {
-            // 非NULL指针，从用户空间读取偏移量值
-            if (mem::k_vmm.copy_in(*proc::k_pm.get_cur_pcb()->get_pagetable(),
-                                   &offset_in, offset_in_ptr, sizeof(off_t)) < 0)
+            // 从用户空间读取偏移值
+            off_t in_off;
+            if (mem::k_vmm.copy_in(*pt, &in_off, off_in_addr, sizeof(off_t)) < 0)
             {
-                printfRed("[SyscallHandler::sys_copy_file_range] 无法读取offset_in\n");
-                return SYS_EFAULT;
+                mem::k_pmm.free_page(buf);
+                return -EFAULT;
+            }
+
+            printfBgCyan("[sys_copy_file_range] Reading from offset %ld\n", in_off);
+
+            // 检查偏移是否超过文件大小
+            if ((uint64)in_off > f_in->_stat.size)
+            {
+                mem::k_pmm.free_page(buf);
+                return 0;  // 偏移超过文件大小，直接返回0
+            }
+
+            // 从指定偏移读取，不更新文件指针
+            read_len = f_in->read((uint64)buf, len, in_off, false);
+            if (read_len > 0)
+            {
+                // 更新用户空间的偏移值
+                in_off += read_len;
+                if (mem::k_vmm.copy_out(*pt, off_in_addr, &in_off, sizeof(off_t)) < 0)
+                {
+                    mem::k_pmm.free_page(buf);
+                    return -EFAULT;
+                }
             }
         }
 
-        if (offset_out_ptr == 0)
+        printfBgCyan("[sys_copy_file_range] Read %ld bytes\n", read_len);
+
+        if (read_len <= 0)
         {
-            // NULL指针，使用当前文件偏移量
-            offset_out = f_out->_file_ptr;
-            use_current_out = true;
+            if (read_len < 0)
+            {
+                printfRed("[sys_copy_file_range] Read failed with error: %ld\n", read_len);
+            }
+            mem::k_pmm.free_page(buf);
+            return read_len < 0 ? read_len : 0;
+        }
+
+        // 添加数据验证 - 打印前几个字节用于调试
+        if (read_len > 0) 
+        {
+            printfBgCyan("[sys_copy_file_range] First 16 bytes: ");
+            for (int i = 0; i < (read_len > 16 ? 16 : read_len); i++) 
+            {
+                printfBgCyan("%02x ", (unsigned char)buf[i]);
+            }
+            printfBgCyan("\n");
+        }
+
+        // 处理输出偏移
+        if (off_out_addr == 0)  // NULL pointer
+        {
+            // 使用文件自身的偏移
+            printfBgCyan("[sys_copy_file_range] Writing to current file position\n");
+            ret = f_out->write((uint64)buf, read_len, -1, true);
         }
         else
         {
-            // 非NULL指针，从用户空间读取偏移量值
-            if (mem::k_vmm.copy_in(*proc::k_pm.get_cur_pcb()->get_pagetable(),
-                                   &offset_out, offset_out_ptr, sizeof(off_t)) < 0)
+            // 从用户空间读取偏移值
+            off_t out_off;
+            if (mem::k_vmm.copy_in(*pt, &out_off, off_out_addr, sizeof(off_t)) < 0)
             {
-                printfRed("[SyscallHandler::sys_copy_file_range] 无法读取offset_out\n");
-                return SYS_EFAULT;
+                mem::k_pmm.free_page(buf);
+                return -EFAULT;
+            }
+
+            printfBgCyan("[sys_copy_file_range] Writing to offset %ld\n", out_off);
+            // 从指定偏移写入，不更新文件指针
+            ret = f_out->write((uint64)buf, read_len, out_off, false);
+            if (ret > 0)
+            {
+                // 更新用户空间的偏移值
+                out_off += ret;
+                if (mem::k_vmm.copy_out(*pt, off_out_addr, &out_off, sizeof(off_t)) < 0)
+                {
+                    mem::k_pmm.free_page(buf);
+                    return -EFAULT;
+                }
             }
         }
 
-        printfCyan("[SyscallHandler::sys_copy_file_range] fd_in=%d, offset_in=%d, fd_out=%d, offset_out=%d, size=%zu, flags=%d\n",
-                   fd_in, offset_in, fd_out, offset_out, size, flags);
-        printfCyan("[SyscallHandler::sys_copy_file_range] use_current: in=%s, out=%s\n",
-                   use_current_in ? "true" : "false", use_current_out ? "true" : "false");
+        printfBgCyan("[sys_copy_file_range] Wrote %ld bytes\n", ret);
 
-        // 调用VFS层实现
-        int result = vfs_copy_file_range(fd_in, offset_in, fd_out, offset_out, size, flags);
-
-        return result;
+        mem::k_pmm.free_page(buf);
+        return ret ;
     }
     uint64 SyscallHandler::sys_strerror()
     {
@@ -7214,7 +7352,184 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_splice()
     {
-        panic("未实现该系统调用");
+        int fd_in, fd_out;
+        uint64 off_in_ptr, off_out_ptr;
+        size_t len;
+        unsigned int flags;
+        
+        // 获取参数
+        if (_arg_int(0, fd_in) < 0)
+        {
+            printfRed("[SyscallHandler::sys_splice] Error fetching fd_in\n");
+            return SYS_EINVAL;
+        }
+        if (_arg_addr(1, off_in_ptr) < 0)
+        {
+            printfRed("[SyscallHandler::sys_splice] Error fetching off_in\n");
+            return SYS_EINVAL;
+        }
+        if (_arg_int(2, fd_out) < 0)
+        {
+            printfRed("[SyscallHandler::sys_splice] Error fetching fd_out\n");
+            return SYS_EINVAL;
+        }
+        if (_arg_addr(3, off_out_ptr) < 0)
+        {
+            printfRed("[SyscallHandler::sys_splice] Error fetching off_out\n");
+            return SYS_EINVAL;
+        }
+        if (_arg_int(4, (int&)len) < 0)
+        {
+            printfRed("[SyscallHandler::sys_splice] Error fetching len\n");
+            return SYS_EINVAL;
+        }
+        if (_arg_int(5, (int&)flags) < 0)
+        {
+            printfRed("[SyscallHandler::sys_splice] Error fetching flags\n");
+            return SYS_EINVAL;
+        }
+
+        // 获取文件对象
+        fs::file *f_in = nullptr, *f_out = nullptr;
+        if (_arg_fd(0, nullptr, &f_in) < 0 || f_in == nullptr)
+        {
+            printfRed("[SyscallHandler::sys_splice] Invalid fd_in\n");
+            return SYS_EBADF;
+        }
+        if (_arg_fd(2, nullptr, &f_out) < 0 || f_out == nullptr)
+        {
+            printfRed("[SyscallHandler::sys_splice] Invalid fd_out\n");
+            return SYS_EBADF;
+        }
+
+        // 判断文件类型
+        bool fd_in_is_pipe = (f_in->_attrs.filetype == fs::FileTypes::FT_PIPE);
+        bool fd_out_is_pipe = (f_out->_attrs.filetype == fs::FileTypes::FT_PIPE);
+        
+        // 检查参数约束：其中一个必须是管道，另一个必须是普通文件
+        if (fd_in_is_pipe == fd_out_is_pipe)
+        {
+            printfRed("[SyscallHandler::sys_splice] Exactly one fd must be a pipe\n");
+            return SYS_EINVAL;
+        }
+
+        // 获取当前进程和页表
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+
+        // 检查偏移量参数的约束
+        off_t off_in = 0, off_out = 0;
+        
+        if (fd_in_is_pipe)
+        {
+            // 如果fd_in是管道，off_in必须是NULL
+            if (off_in_ptr != 0)
+            {
+                printfRed("[SyscallHandler::sys_splice] off_in must be NULL for pipe\n");
+                return SYS_EINVAL;
+            }
+        }
+        else
+        {
+            // 如果fd_in不是管道，off_in不能是NULL
+            if (off_in_ptr == 0)
+            {
+                printfRed("[SyscallHandler::sys_splice] off_in cannot be NULL for regular file\n");
+                return SYS_EINVAL;
+            }
+            // 从用户空间读取偏移量
+            if (mem::k_vmm.copy_in(*pt, &off_in, off_in_ptr, sizeof(off_t)) < 0)
+            {
+                printfRed("[SyscallHandler::sys_splice] Failed to read off_in from user space\n");
+                return SYS_EFAULT;
+            }
+            // 检查偏移量是否为负
+            if (off_in < 0)
+            {
+                printfRed("[SyscallHandler::sys_splice] off_in cannot be negative\n");
+                return SYS_EINVAL;
+            }
+        }
+
+        if (fd_out_is_pipe)
+        {
+            // 如果fd_out是管道，off_out必须是NULL
+            if (off_out_ptr != 0)
+            {
+                printfRed("[SyscallHandler::sys_splice] off_out must be NULL for pipe\n");
+                return SYS_EINVAL;
+            }
+        }
+        else
+        {
+            // 如果fd_out不是管道，off_out不能是NULL
+            if (off_out_ptr == 0)
+            {
+                printfRed("[SyscallHandler::sys_splice] off_out cannot be NULL for regular file\n");
+                return SYS_EINVAL;
+            }
+            // 从用户空间读取偏移量
+            if (mem::k_vmm.copy_in(*pt, &off_out, off_out_ptr, sizeof(off_t)) < 0)
+            {
+                printfRed("[SyscallHandler::sys_splice] Failed to read off_out from user space\n");
+                return SYS_EFAULT;
+            }
+            // 检查偏移量是否为负
+            if (off_out < 0)
+            {
+                printfRed("[SyscallHandler::sys_splice] off_out cannot be negative\n");
+                return SYS_EINVAL;
+            }
+        }
+
+        if (len == 0)
+        {
+            return 0; // 长度为0，直接返回0
+        }
+
+        ssize_t bytes_transferred = 0;
+        
+        if (fd_in_is_pipe)
+        {
+            // 从管道读取到普通文件
+            bytes_transferred = _splice_pipe_to_file(f_in, f_out, off_out, len);
+            
+            // 如果成功传输，更新off_out
+            if (bytes_transferred > 0 && off_out_ptr != 0)
+            {
+                off_out += bytes_transferred;
+                if (mem::k_vmm.copy_out(*pt, off_out_ptr, &off_out, sizeof(off_t)) < 0)
+                {
+                    printfRed("[SyscallHandler::sys_splice] Failed to update off_out\n");
+                    // 即使更新失败，也返回已传输的字节数
+                }
+            }
+        }
+        else
+        {
+            // 从普通文件读取到管道
+            
+            // 检查off_in是否超过文件大小
+            if ((uint64)off_in >= f_in->_stat.size)
+            {
+                return 0; // 偏移量超过文件大小，返回0
+            }
+            
+            bytes_transferred = _splice_file_to_pipe(f_in, off_in, f_out, len);
+            
+            // 如果成功传输，更新off_in
+            if (bytes_transferred > 0 && off_in_ptr != 0)
+            {
+                off_in += bytes_transferred;
+                if (mem::k_vmm.copy_out(*pt, off_in_ptr, &off_in, sizeof(off_t)) < 0)
+                {
+                    printfRed("[SyscallHandler::sys_splice] Failed to update off_in\n");
+                    // 即使更新失败，也返回已传输的字节数
+                }
+            }
+        }
+
+        return bytes_transferred;
     }
     uint64 SyscallHandler::sys_prctl()
     {
@@ -7243,5 +7558,115 @@ namespace syscall
     uint64 SyscallHandler::sys_flock()
     {
         return uint64();
+    }
+
+    // splice 辅助函数实现
+    ssize_t SyscallHandler::_splice_pipe_to_file(fs::file *pipe_file, fs::file *regular_file, off_t file_offset, size_t len)
+    {
+        if (!pipe_file || !regular_file)
+        {
+            return SYS_EBADF;
+        }
+
+        // 分配内核缓冲区
+        char *buffer = (char*)mem::k_pmm.kmalloc(len);
+        if (!buffer)
+        {
+            printfRed("[_splice_pipe_to_file] Failed to allocate kernel buffer\n");
+            return SYS_ENOMEM;
+        }
+
+        ssize_t total_transferred = 0;
+        ssize_t remaining = len;
+
+        while (remaining > 0)
+        {
+            // 从管道读取数据到内核缓冲区
+            ssize_t bytes_read = pipe_file->read((uint64)(buffer + total_transferred), remaining, 0, false);
+            if (bytes_read <= 0)
+            {
+                // 管道没有数据了，或者出错
+                break;
+            }
+
+            // 将数据写入普通文件
+            ssize_t bytes_written = regular_file->write((uint64)(buffer + total_transferred), bytes_read, file_offset + total_transferred, false);
+            if (bytes_written <= 0)
+            {
+                printfRed("[_splice_pipe_to_file] Failed to write to regular file\n");
+                break;
+            }
+
+            total_transferred += bytes_written;
+            remaining -= bytes_written;
+
+            // 如果写入的字节数少于读取的字节数，说明出现了问题
+            if (bytes_written < bytes_read)
+            {
+                break;
+            }
+        }
+
+        mem::k_pmm.free_page(buffer);
+        return total_transferred > 0 ? total_transferred : (total_transferred == 0 ? 0 : SYS_EIO);
+    }
+
+    ssize_t SyscallHandler::_splice_file_to_pipe(fs::file *regular_file, off_t file_offset, fs::file *pipe_file, size_t len)
+    {
+        if (!regular_file || !pipe_file)
+        {
+            return SYS_EBADF;
+        }
+
+        // 计算实际可读取的长度
+        ssize_t file_remaining = regular_file->_stat.size - file_offset;
+        if (file_remaining <= 0)
+        {
+            return 0; // 文件已经读取完毕
+        }
+
+        size_t actual_len = (len > (size_t)file_remaining) ? file_remaining : len;
+
+        // 分配内核缓冲区
+        char *buffer = (char*)mem::k_pmm.kmalloc(actual_len);
+        if (!buffer)
+        {
+            printfRed("[_splice_file_to_pipe] Failed to allocate kernel buffer\n");
+            return SYS_ENOMEM;
+        }
+
+        ssize_t total_transferred = 0;
+        ssize_t remaining = actual_len;
+
+        while (remaining > 0)
+        {
+            // 从普通文件读取数据到内核缓冲区
+            ssize_t bytes_read = regular_file->read((uint64)(buffer + total_transferred), remaining, file_offset + total_transferred, false);
+            if (bytes_read <= 0)
+            {
+                // 文件读取完毕或出错
+                break;
+            }
+
+            // 将数据写入管道
+            ssize_t bytes_written = pipe_file->write((uint64)(buffer + total_transferred), bytes_read, 0, false);
+            if (bytes_written <= 0)
+            {
+                printfRed("[_splice_file_to_pipe] Failed to write to pipe\n");
+                break;
+            }
+
+            total_transferred += bytes_written;
+            remaining -= bytes_written;
+
+            // 如果写入的字节数少于读取的字节数，说明管道满了，等待或者退出
+            if (bytes_written < bytes_read)
+            {
+                break;
+            }
+        }
+
+        mem::k_pmm.free_page(buffer);
+        return total_transferred > 0 ? total_transferred : (total_transferred == 0 ? 0 : SYS_EIO);
     }
 }
