@@ -197,6 +197,9 @@ long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 	off_t normal_file::lseek(off_t offset, int whence)
 	{
 		printfYellow("normal_file::lseek called with offset: %d, whence: %d\n", offset, whence);
+		printfYellow("normal_file::lseek: _stat.size=%ld, lwext4_file_struct.fsize=%ld\n", 
+			_stat.size, (long)lwext4_file_struct.fsize);
+		
 		[[maybe_unused]] off_t new_off;
 		switch (whence)
 		{
@@ -215,7 +218,8 @@ long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 			_file_ptr = new_off;
 			break;
 		case SEEK_END:
-			new_off = this->_stat.size - offset;
+			// 使用实际的文件大小而不是_stat.size
+			new_off = (off_t)lwext4_file_struct.fsize + offset;
 			if (new_off < 0)
 				return -EINVAL;
 			_file_ptr = new_off;
@@ -230,6 +234,7 @@ long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 			printfRed("normal_file::lseek: ext4_fseek failed with status %d", seek_status);
 			return -1;
 		}
+		printfYellow("normal_file::lseek: returning new position: %ld\n", _file_ptr);
 		return _file_ptr;
 	}
 

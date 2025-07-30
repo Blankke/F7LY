@@ -652,20 +652,40 @@ namespace syscall
         [[maybe_unused]] int fd = -1;
 
         if (_arg_fd(0, &fd, &f) < 0)
+        {
+            printfRed("[SyscallHandler::sys_read] Error fetching file descriptor\n");
             return -EBADF;
+        }
         if (_arg_addr(1, buf) < 0)
+        {
+            printfRed("[SyscallHandler::sys_read] Error fetching buffer address\n");
             return -EINVAL;
+        }
         if (_arg_int(2, n) < 0)
+        {
+            printfRed("[SyscallHandler::sys_read] Error fetching read size\n");
             return -EINVAL;
-
+        }
         if (f == nullptr)
+        {
+            printfRed("[SyscallHandler::sys_read] File descriptor %d is not open\n", fd);
             return -EBADF;
+        }
         if (n <= 0)
+        {
+            if(n== 0)
+            {
+                printfCyan("[SyscallHandler::sys_read] Read size is zero, returning 0\n");
+                return 0; // 如果读取大小为0，直接返回0
+            }
+            printfRed("[SyscallHandler::sys_read] Invalid read size: %d\n", n);
             return -EINVAL;
-
+        }
         // 检查文件是否以 O_PATH 标志打开，O_PATH 文件不允许读取
         if (f->lwext4_file_struct.flags & O_PATH)
+        {
             return -EBADF;
+        }
 
         // 检查文件锁是否允许读操作
         if (!check_file_lock_access(f->_lock, f->get_file_offset(), n, false))
@@ -1309,14 +1329,14 @@ namespace syscall
 
         printfCyan("sys_linkat: olddirfd=%d, oldpath=%s, newdirfd=%d, newpath=%s, flags=0x%x\n",
                    olddirfd, oldpath.c_str(), newdirfd, newpath.c_str(), flags);
-        
+
         // 检查特定情况：两个路径不位于同一种文件系统中，应返回EXDEV错误
         if (olddirfd == -100 && oldpath == "mntpoint/file" && newdirfd == -100 && newpath == "testfile" && flags == 0x0)
         {
             printfRed("sys_linkat: Cannot create hard link across different filesystems\n");
             return -EXDEV;
         }
-        
+
         // 检查特定情况：源文件路径位于RDONLY的文件系统中，应返回EROFS错误
         if (olddirfd == -100 && oldpath == "mntpoint/file" && newdirfd == -100 && newpath == "mntpoint/testfile4" && flags == 0x0)
         {
@@ -4468,19 +4488,19 @@ namespace syscall
         int whence;
 
         if (_arg_int(0, fd) < 0)
-            return -1;
+            return -EINVAL;
 
         if (_arg_long(1, offset) < 0)
-            return -1;
+            return -EINVAL;
 
         if (_arg_int(2, whence) < 0)
-            return -1;
-
+            return -EINVAL;
+        printfCyan("[SyscallHandler::sys_lseek] fd: %d, offset: %ld, whence: %d\n", fd, offset, whence);
         proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
         fs::file *f = cur_proc->get_open_file(fd);
 
         if (f == nullptr)
-            return -1;
+            return -EBADF;
 
         return f->lseek(offset, whence);
     }

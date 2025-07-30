@@ -1555,7 +1555,7 @@ char *ltp_testcases[] = {
     // "link02",  //pass
     // "link04",//
     // "link05", //pass,这个也是逆天数量
-    "link08", //偷了pass
+    // "link08", //偷了pass
     // "linkat01",  //还有一个没有过
     // "linkat02",//sendmsg
     // "linktest.sh",
@@ -1567,8 +1567,8 @@ char *ltp_testcases[] = {
     // "llistxattr02",
     // "llistxattr03",
     // "llseek01",  //pass
-    // "llseek02",  // TFAIL: lseek(4, 1, 0) failed unexpectedly, expected EBADF: EPERM (1)
-    // "llseek03",//爆了
+    // "llseek02",  //pass
+    // "llseek03",//pass
     // "ln_tests.sh",
     // "lock_torture.sh",
     // "locktests",
