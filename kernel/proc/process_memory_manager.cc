@@ -258,7 +258,8 @@ namespace proc
 
     void ProcessMemoryManager::free_all_vma()
     {
-        if (!_pcb || !_pcb->_vma){
+        if (!_pcb || !_pcb->_vma)
+        {
             panic("ProcessMemoryManager: PCB or VMA is null");
             return;
         }
@@ -341,6 +342,15 @@ namespace proc
         }
 
         const vma &vm_entry = _pcb->_vma->_vm[vma_index];
+        printf("ProcessMemoryManager: writeback VMA %d to file %s\n",
+               vma_index, vm_entry.vfile->_path_name.c_str());
+
+        // 跳过temp文件
+        if (vm_entry.vfile->_path_name.substr(0, 5) == "/tmp/")
+        {
+            printfOrange("[freeproc] skipping tmp writeback");
+            return false;
+        }
 
         // 只对文件映射且为共享且可写的VMA进行写回
         if (vm_entry.vfile != nullptr &&
@@ -724,11 +734,12 @@ namespace proc
         printfRed("ProcessMemoryManager: emergency cleanup completed\n");
     }
 
-    void ProcessMemoryManager::cleanup_execve_pagetable(mem::PageTable& pagetable, 
-                                                       const program_section_desc* section_descs, 
-                                                       int section_count)
+    void ProcessMemoryManager::cleanup_execve_pagetable(mem::PageTable &pagetable,
+                                                        const program_section_desc *section_descs,
+                                                        int section_count)
     {
-        if (!pagetable.get_base()) {
+        if (!pagetable.get_base())
+        {
             printfYellow("cleanup_execve_pagetable: invalid pagetable, skipping cleanup\n");
             return;
         }
@@ -736,20 +747,23 @@ namespace proc
         printfRed("cleanup_execve_pagetable: cleaning up %d allocated sections\n", section_count);
 
         // 遍历所有已记录的程序段，释放其占用的内存
-        for (int i = 0; i < section_count; i++) {
-            if (section_descs[i]._sec_start && section_descs[i]._sec_size > 0) {
+        for (int i = 0; i < section_count; i++)
+        {
+            if (section_descs[i]._sec_start && section_descs[i]._sec_size > 0)
+            {
                 uint64 va_start = PGROUNDDOWN((uint64)section_descs[i]._sec_start);
                 uint64 va_end = PGROUNDUP((uint64)section_descs[i]._sec_start + section_descs[i]._sec_size);
 
                 printfRed("  Cleaning section %d (%s): %p - %p (%u bytes)\n",
-                         i,
-                         section_descs[i]._debug_name ? section_descs[i]._debug_name : "unnamed",
-                         (void*)va_start,
-                         (void*)va_end,
-                         section_descs[i]._sec_size);
+                          i,
+                          section_descs[i]._debug_name ? section_descs[i]._debug_name : "unnamed",
+                          (void *)va_start,
+                          (void *)va_end,
+                          section_descs[i]._sec_size);
 
                 // 直接使用vmunmap清理，不检查页面有效性以提高错误处理的鲁棒性
-                for (uint64 va = va_start; va < va_end; va += PGSIZE) {
+                for (uint64 va = va_start; va < va_end; va += PGSIZE)
+                {
                     mem::k_vmm.vmunmap(pagetable, va, 1, 1);
                 }
             }
