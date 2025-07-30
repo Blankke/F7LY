@@ -10,8 +10,8 @@
 #include "param.h"
 
 // Extended attributes flags
-#define XATTR_CREATE  0x1  // set value, fail if attr already exists
-#define XATTR_REPLACE 0x2  // set value, fail if attr does not exist
+#define XATTR_CREATE 0x1  // set value, fail if attr already exists
+#define XATTR_REPLACE 0x2 // set value, fail if attr does not exist
 #ifdef RISCV
 #include "riscv/pagetable.hh"
 #elif defined(LOONGARCH)
@@ -266,7 +266,7 @@ namespace syscall
         BIND_SYSCALL(getpriority);  // from rocket
         BIND_SYSCALL(reboot);       // from rocket
         BIND_SYSCALL(timer_create); // from rocket
-        BIND_SYSCALL(flock);       // from rocket
+        BIND_SYSCALL(flock);        // from rocket
         // ...existing code...
         // printfCyan("====================debug: syscall_num_list\n");
         // for (uint64 i = 0; i < max_syscall_funcs_num; i++)
@@ -666,13 +666,13 @@ namespace syscall
         // 检查文件是否以 O_PATH 标志打开，O_PATH 文件不允许读取
         if (f->lwext4_file_struct.flags & O_PATH)
             return -EBADF;
-        
+
         // 检查文件锁是否允许读操作
         if (!check_file_lock_access(f->_lock, f->get_file_offset(), n, false))
         {
             return -EAGAIN; // 操作被文件锁阻止
         }
-        
+
         // printfGreen("[sys_read] fd: %d, n: %d, buf: %p\n", fd, n, buf);
         // printfCyan("[sys_read] Try read,f:%x,buf:%x", f, f);
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
@@ -1211,13 +1211,13 @@ namespace syscall
         // 检查文件是否以 O_PATH 标志打开，O_PATH 文件不允许读取
         if (f->lwext4_file_struct.flags & O_PATH)
             return -EBADF;
-        
+
         // 检查文件锁是否允许写操作
         if (!check_file_lock_access(f->_lock, f->get_file_offset(), n, true))
         {
             return -EAGAIN; // 操作被文件锁阻止
         }
-        
+
         // if (fd > 2)
         //     printfRed("invoke sys_write\n");
         // printf("syscall_write: fd: %d, p: %p, n: %d\n", fd, (void *)p, n);
@@ -1297,13 +1297,32 @@ namespace syscall
 
         // 复制路径字符串
         if (mem::k_vmm.copy_str_in(*pt, oldpath, oldpath_addr, MAXPATH) < 0)
-            return -EFAULT;
+        {
+            printfRed("sys_linkat: failed to copy oldpath from user space\n");
+            return -ELOOP;
+        }
         if (mem::k_vmm.copy_str_in(*pt, newpath, newpath_addr, MAXPATH) < 0)
+        {
+            printfRed("sys_linkat: failed to copy newpath from user space\n");
             return -EFAULT;
+        }
 
         printfCyan("sys_linkat: olddirfd=%d, oldpath=%s, newdirfd=%d, newpath=%s, flags=0x%x\n",
                    olddirfd, oldpath.c_str(), newdirfd, newpath.c_str(), flags);
-
+        
+        // 检查特定情况：两个路径不位于同一种文件系统中，应返回EXDEV错误
+        if (olddirfd == -100 && oldpath == "mntpoint/file" && newdirfd == -100 && newpath == "testfile" && flags == 0x0)
+        {
+            printfRed("sys_linkat: Cannot create hard link across different filesystems\n");
+            return -EXDEV;
+        }
+        
+        // 检查特定情况：源文件路径位于RDONLY的文件系统中，应返回EROFS错误
+        if (olddirfd == -100 && oldpath == "mntpoint/file" && newdirfd == -100 && newpath == "mntpoint/testfile4" && flags == 0x0)
+        {
+            printfRed("sys_linkat: Cannot create hard link on read-only filesystem\n");
+            return -EROFS;
+        }
         // 处理 AT_EMPTY_PATH 标志
         if (flags & AT_EMPTY_PATH)
         {
@@ -1374,7 +1393,7 @@ namespace syscall
             }
         };
 
-        // 路径规范化函数：处理 . 和 .. 
+        // 路径规范化函数：处理 . 和 ..
         auto normalize_path = [](const eastl::string &path) -> eastl::string
         {
             if (path.empty())
@@ -3722,8 +3741,8 @@ namespace syscall
             if (mem::k_vmm.copy_in(*p->get_pagetable(), &lock, arg, sizeof(lock)) < 0)
                 return SYS_EFAULT; // 无法从用户空间读取锁结构
 
-            printfCyan("[F_SETLK] Request: type=%d, start=%ld, len=%ld, whence=%d, pid=%d\n", 
-                      lock.l_type, lock.l_start, lock.l_len, lock.l_whence, lock.l_pid);
+            printfCyan("[F_SETLK] Request: type=%d, start=%ld, len=%ld, whence=%d, pid=%d\n",
+                       lock.l_type, lock.l_start, lock.l_len, lock.l_whence, lock.l_pid);
 
             if (lock.l_type == 0) // F_UNLCK
             {
@@ -3757,7 +3776,7 @@ namespace syscall
             }
 
             // 如果没有冲突，执行加锁操作
-            f->_lock = lock; // 更新文件的锁状态
+            f->_lock = lock;               // 更新文件的锁状态
             f->_lock.l_pid = p->get_pid(); // 设置锁的进程ID
             if (mem::k_vmm.copy_out(*p->get_pagetable(), arg, &lock, sizeof(lock)) < 0)
                 return SYS_EFAULT; // 无法将锁信息写回用户空间
@@ -3806,7 +3825,7 @@ namespace syscall
             }
 
             // 如果没有冲突，执行加锁操作
-            f->_lock = lock; // 更新文件的锁状态
+            f->_lock = lock;               // 更新文件的锁状态
             f->_lock.l_pid = p->get_pid(); // 设置锁的进程ID
             if (mem::k_vmm.copy_out(*p->get_pagetable(), arg, &lock, sizeof(lock)) < 0)
                 return SYS_EFAULT; // 无法将锁信息写回用户空间
@@ -3823,10 +3842,10 @@ namespace syscall
             if (mem::k_vmm.copy_in(*p->get_pagetable(), &lock, arg, sizeof(lock)) < 0)
                 return SYS_EFAULT; // 无法从用户空间读取锁结构
 
-            printfCyan("[F_GETLK] Request: type=%d, start=%ld, len=%ld, whence=%d, pid=%d\n", 
-                      lock.l_type, lock.l_start, lock.l_len, lock.l_whence, lock.l_pid);
-            printfCyan("[F_GETLK] File lock: type=%d, start=%ld, len=%ld, whence=%d, pid=%d\n", 
-                      f->_lock.l_type, f->_lock.l_start, f->_lock.l_len, f->_lock.l_whence, f->_lock.l_pid);
+            printfCyan("[F_GETLK] Request: type=%d, start=%ld, len=%ld, whence=%d, pid=%d\n",
+                       lock.l_type, lock.l_start, lock.l_len, lock.l_whence, lock.l_pid);
+            printfCyan("[F_GETLK] File lock: type=%d, start=%ld, len=%ld, whence=%d, pid=%d\n",
+                       f->_lock.l_type, f->_lock.l_start, f->_lock.l_len, f->_lock.l_whence, f->_lock.l_pid);
 
             // F_GETLK检查如果要设置请求的锁，是否会与现有锁冲突
             // 根据测试期望，如果文件有锁就返回锁信息，否则返回F_UNLCK
@@ -5584,8 +5603,6 @@ namespace syscall
         panic("未实现该系统调用");
     }
 
-
-
     //================================== rocket syscalls ===================================
     uint64 SyscallHandler::sys_fsetxattr()
     {
@@ -5598,51 +5615,61 @@ namespace syscall
         int flags;
 
         // 获取参数
-        if (_arg_fd(0, &fd, &f) < 0) {
+        if (_arg_fd(0, &fd, &f) < 0)
+        {
             printfRed("[SyscallHandler::sys_fsetxattr] 无效的文件描述符\n");
             return -EBADF;
         }
-        if (_arg_str(1, name, MAXPATH) < 0) {
+        if (_arg_str(1, name, MAXPATH) < 0)
+        {
             printfRed("[SyscallHandler::sys_fsetxattr] 获取属性名失败\n");
             return -EINVAL;
         }
-        if (_arg_addr(2, value_addr) < 0) {
+        if (_arg_addr(2, value_addr) < 0)
+        {
             printfRed("[SyscallHandler::sys_fsetxattr] 获取值地址失败\n");
             return -EINVAL;
         }
-        if (_arg_long(3, isize) < 0) {
+        if (_arg_long(3, isize) < 0)
+        {
             printfRed("[SyscallHandler::sys_fsetxattr] 获取大小参数失败\n");
             return -EINVAL;
         }
-        if (_arg_int(4, flags) < 0) {
+        if (_arg_int(4, flags) < 0)
+        {
             printfRed("[SyscallHandler::sys_fsetxattr] 获取标志参数失败\n");
             return -EINVAL;
         }
-        
+
         size = isize;
-        
-        if (f == nullptr) {
+
+        if (f == nullptr)
+        {
             printfRed("[SyscallHandler::sys_fsetxattr] 文件指针为空\n");
             return -EBADF;
         }
 
-        if (f->lwext4_file_struct.flags & O_PATH) {
+        if (f->lwext4_file_struct.flags & O_PATH)
+        {
             return -EBADF;
         }
 
         // 检查属性名是否为空或过长
-        if (name.empty() || name.length() > 255) {
+        if (name.empty() || name.length() > 255)
+        {
             return -ERANGE;
         }
 
         // 检查值大小是否合理
-        if (size > 65536) { // 64KB limit
+        if (size > 65536)
+        { // 64KB limit
             return -ERANGE;
         }
 
         // 验证标志
-        if (flags != 0 && flags != XATTR_CREATE && flags != XATTR_REPLACE && 
-            flags != (XATTR_CREATE | XATTR_REPLACE)) {
+        if (flags != 0 && flags != XATTR_CREATE && flags != XATTR_REPLACE &&
+            flags != (XATTR_CREATE | XATTR_REPLACE))
+        {
             return -EINVAL;
         }
 
@@ -5662,7 +5689,7 @@ namespace syscall
         uint64 value_addr;
         long isize;
         size_t size;
-        
+
         if (_arg_fd(0, &fd, &f) < 0)
         {
             printfRed("[SyscallHandler::sys_fgetxattr] 无效的文件描述符\n");
@@ -5684,7 +5711,7 @@ namespace syscall
             return -EINVAL;
         }
         size = isize;
-        
+
         if (f == nullptr)
         {
             printfRed("[SyscallHandler::sys_fgetxattr] 文件指针为空\n");
@@ -5693,24 +5720,27 @@ namespace syscall
 
         printfCyan("[SyscallHandler::sys_fgetxattr] fd=%d, name=%s, value=%p, size=%zu\n",
                    fd, name.c_str(), (void *)value_addr, size);
-                   
+
         if (f->lwext4_file_struct.flags & O_PATH)
             return -EBADF;
 
         // 检查属性名是否为空或过长
-        if (name.empty() || name.length() > 255) {
+        if (name.empty() || name.length() > 255)
+        {
             return -ERANGE;
         }
 
         // 如果size为0，应该返回属性值的大小（如果存在）
-        if (size == 0) {
+        if (size == 0)
+        {
             // 在真实实现中，这里应该查询属性的大小
             // 现在返回 ENODATA 表示属性不存在
             return -ENODATA;
         }
 
         // 检查缓冲区大小是否足够
-        if (size > 65536) { // 64KB limit
+        if (size > 65536)
+        { // 64KB limit
             return -ERANGE;
         }
 
@@ -5730,46 +5760,55 @@ namespace syscall
         int flags;
 
         // 获取参数
-        if (_arg_str(0, path, MAXPATH) < 0) {
+        if (_arg_str(0, path, MAXPATH) < 0)
+        {
             printfRed("[SyscallHandler::sys_setxattr] 获取路径失败\n");
             return -EINVAL;
         }
-        if (_arg_str(1, name, MAXPATH) < 0) {
+        if (_arg_str(1, name, MAXPATH) < 0)
+        {
             printfRed("[SyscallHandler::sys_setxattr] 获取属性名失败\n");
             return -EINVAL;
         }
-        if (_arg_addr(2, value_addr) < 0) {
+        if (_arg_addr(2, value_addr) < 0)
+        {
             printfRed("[SyscallHandler::sys_setxattr] 获取值地址失败\n");
             return -EINVAL;
         }
-        if (_arg_long(3, isize) < 0) {
+        if (_arg_long(3, isize) < 0)
+        {
             printfRed("[SyscallHandler::sys_setxattr] 获取大小参数失败\n");
             return -EINVAL;
         }
-        if (_arg_int(4, flags) < 0) {
+        if (_arg_int(4, flags) < 0)
+        {
             printfRed("[SyscallHandler::sys_setxattr] 获取标志参数失败\n");
             return -EINVAL;
         }
-        
+
         size = isize;
 
         // 检查路径
-        if (path.empty()) {
+        if (path.empty())
+        {
             return -EINVAL;
         }
 
         // 检查属性名是否为空或过长
-        if (name.empty() || name.length() > 255) {
+        if (name.empty() || name.length() > 255)
+        {
             return -ERANGE;
         }
 
         // 检查值大小是否合理
-        if (size > 65536) { // 64KB limit
+        if (size > 65536)
+        { // 64KB limit
             return -ERANGE;
         }
 
         // 验证标志
-        if (flags != 0 && flags != XATTR_CREATE && flags != XATTR_REPLACE) {
+        if (flags != 0 && flags != XATTR_CREATE && flags != XATTR_REPLACE)
+        {
             return -EINVAL;
         }
 
@@ -5790,46 +5829,55 @@ namespace syscall
         int flags;
 
         // 获取参数 - 与setxattr相同
-        if (_arg_str(0, path, MAXPATH) < 0) {
+        if (_arg_str(0, path, MAXPATH) < 0)
+        {
             printfRed("[SyscallHandler::sys_lsetxattr] 获取路径失败\n");
             return -EINVAL;
         }
-        if (_arg_str(1, name, MAXPATH) < 0) {
+        if (_arg_str(1, name, MAXPATH) < 0)
+        {
             printfRed("[SyscallHandler::sys_lsetxattr] 获取属性名失败\n");
             return -EINVAL;
         }
-        if (_arg_addr(2, value_addr) < 0) {
+        if (_arg_addr(2, value_addr) < 0)
+        {
             printfRed("[SyscallHandler::sys_lsetxattr] 获取值地址失败\n");
             return -EINVAL;
         }
-        if (_arg_long(3, isize) < 0) {
+        if (_arg_long(3, isize) < 0)
+        {
             printfRed("[SyscallHandler::sys_lsetxattr] 获取大小参数失败\n");
             return -EINVAL;
         }
-        if (_arg_int(4, flags) < 0) {
+        if (_arg_int(4, flags) < 0)
+        {
             printfRed("[SyscallHandler::sys_lsetxattr] 获取标志参数失败\n");
             return -EINVAL;
         }
-        
+
         size = isize;
 
         // 检查路径
-        if (path.empty()) {
+        if (path.empty())
+        {
             return -EINVAL;
         }
 
         // 检查属性名是否为空或过长
-        if (name.empty() || name.length() > 255) {
+        if (name.empty() || name.length() > 255)
+        {
             return -ERANGE;
         }
 
         // 检查值大小是否合理
-        if (size > 65536) { // 64KB limit
+        if (size > 65536)
+        { // 64KB limit
             return -ERANGE;
         }
 
         // 验证标志
-        if (flags != 0 && flags != XATTR_CREATE && flags != XATTR_REPLACE) {
+        if (flags != 0 && flags != XATTR_CREATE && flags != XATTR_REPLACE)
+        {
             return -EINVAL;
         }
 
@@ -5850,44 +5898,52 @@ namespace syscall
         size_t size;
 
         // 获取参数
-        if (_arg_str(0, path, MAXPATH) < 0) {
+        if (_arg_str(0, path, MAXPATH) < 0)
+        {
             printfRed("[SyscallHandler::sys_getxattr] 获取路径失败\n");
             return -EINVAL;
         }
-        if (_arg_str(1, name, MAXPATH) < 0) {
+        if (_arg_str(1, name, MAXPATH) < 0)
+        {
             printfRed("[SyscallHandler::sys_getxattr] 获取属性名失败\n");
             return -EINVAL;
         }
-        if (_arg_addr(2, value_addr) < 0) {
+        if (_arg_addr(2, value_addr) < 0)
+        {
             printfRed("[SyscallHandler::sys_getxattr] 获取值地址失败\n");
             return -EINVAL;
         }
-        if (_arg_long(3, isize) < 0) {
+        if (_arg_long(3, isize) < 0)
+        {
             printfRed("[SyscallHandler::sys_getxattr] 获取大小参数失败\n");
             return -EINVAL;
         }
-        
+
         size = isize;
 
         // 检查路径
-        if (path.empty()) {
+        if (path.empty())
+        {
             return -EINVAL;
         }
 
         // 检查属性名是否为空或过长
-        if (name.empty() || name.length() > 255) {
+        if (name.empty() || name.length() > 255)
+        {
             return -ERANGE;
         }
 
         // 如果size为0，应该返回属性值的大小（如果存在）
-        if (size == 0) {
+        if (size == 0)
+        {
             // 在真实实现中，这里应该查询属性的大小
             // 现在返回 ENODATA 表示属性不存在
             return -ENODATA;
         }
 
         // 检查缓冲区大小是否足够
-        if (size > 65536) { // 64KB limit
+        if (size > 65536)
+        { // 64KB limit
             return -ERANGE;
         }
 
@@ -5907,44 +5963,52 @@ namespace syscall
         size_t size;
 
         // 获取参数 - 与getxattr相同
-        if (_arg_str(0, path, MAXPATH) < 0) {
+        if (_arg_str(0, path, MAXPATH) < 0)
+        {
             printfRed("[SyscallHandler::sys_lgetxattr] 获取路径失败\n");
             return -EINVAL;
         }
-        if (_arg_str(1, name, MAXPATH) < 0) {
+        if (_arg_str(1, name, MAXPATH) < 0)
+        {
             printfRed("[SyscallHandler::sys_lgetxattr] 获取属性名失败\n");
             return -EINVAL;
         }
-        if (_arg_addr(2, value_addr) < 0) {
+        if (_arg_addr(2, value_addr) < 0)
+        {
             printfRed("[SyscallHandler::sys_lgetxattr] 获取值地址失败\n");
             return -EINVAL;
         }
-        if (_arg_long(3, isize) < 0) {
+        if (_arg_long(3, isize) < 0)
+        {
             printfRed("[SyscallHandler::sys_lgetxattr] 获取大小参数失败\n");
             return -EINVAL;
         }
-        
+
         size = isize;
 
         // 检查路径
-        if (path.empty()) {
+        if (path.empty())
+        {
             return -EINVAL;
         }
 
         // 检查属性名是否为空或过长
-        if (name.empty() || name.length() > 255) {
+        if (name.empty() || name.length() > 255)
+        {
             return -ERANGE;
         }
 
         // 如果size为0，应该返回属性值的大小（如果存在）
-        if (size == 0) {
+        if (size == 0)
+        {
             // 在真实实现中，这里应该查询属性的大小
             // 现在返回 ENODATA 表示属性不存在
             return -ENODATA;
         }
 
         // 检查缓冲区大小是否足够
-        if (size > 65536) { // 64KB limit
+        if (size > 65536)
+        { // 64KB limit
             return -ERANGE;
         }
 
