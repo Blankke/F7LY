@@ -220,7 +220,7 @@ namespace proc
 
     void Pcb::map_kstack(mem::PageTable &pt)
     {
-        printf("map_kstack: pcb: global_id: %d, kstack start: %p end: %p\n", _global_id, _kstack, _kstack + KSTACK_SIZE);
+        // printf("map_kstack: pcb: global_id: %d, kstack start: %p end: %p\n", _global_id, _kstack, _kstack + KSTACK_SIZE);
         // 检查内核栈地址是否已经初始化
         if (_kstack == 0)
             panic("pcb was not init");

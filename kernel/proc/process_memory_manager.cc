@@ -348,7 +348,7 @@ namespace proc
         // 跳过temp文件
         if (vm_entry.vfile->_path_name.substr(0, 5) == "/tmp/")
         {
-            printfOrange("[freeproc] skipping tmp writeback");
+            printfOrange("[freeproc] skipping tmp writeback\n");
             return false;
         }
 
