@@ -49,7 +49,7 @@ namespace mem
 			(*_ref)--;
 			printfCyan("dec_ref: page table %p, ref count: %d\n", _base_addr, *_ref);
 			if (*_ref <= 0) {
-				printfYellow("dec_ref: releasing page table %p (ref count reached 0)\n", _base_addr);
+				// printfYellow("dec_ref: releasing page table %p (ref count reached 0)\n", _base_addr);
 				// 引用计数为0，释放页表和引用计数
 				if (_base_addr != 0 && !_is_global) {
 					freewalk();

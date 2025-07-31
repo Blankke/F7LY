@@ -252,8 +252,8 @@ namespace tmm
 		}
 
 		// 调试输出时间值
-		printfYellow("clock_gettime: cid=%d, tp->tv_sec=%d, tp->tv_nsec=%d\n", 
-				  (int)cid, tp->tv_sec, tp->tv_nsec);
+		// printfYellow("clock_gettime: cid=%d, tp->tv_sec=%d, tp->tv_nsec=%d\n", 
+		// 		  (int)cid, tp->tv_sec, tp->tv_nsec);
 
 		return 0;
 	}

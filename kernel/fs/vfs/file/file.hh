@@ -163,9 +163,9 @@ namespace fs
 		virtual void free_file()
 		{
 			refcnt--;
-			printfGreen("[file::free_file] refcnt decreased to %d\n", refcnt);
+			// printfGreen("[file::free_file] refcnt decreased to %d\n", refcnt);
 			if (refcnt == 0) {
-				printfGreen("[file::free_file] refcnt is 0, calling delete this\n");
+				// printfGreen("[file::free_file] refcnt is 0, calling delete this\n");
 				delete this;
 			}
 		};

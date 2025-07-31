@@ -56,7 +56,7 @@ static int resolve_symlinks(const eastl::string &input_path, eastl::string &reso
             current_path += "/";
         }
         current_path += path_parts[i];
-        printfYellow("Checking path component: %s\n", current_path.c_str());
+        // printfYellow("Checking path component: %s\n", current_path.c_str());
         // 检查当前路径是否为符号链接
         int type = vfs_path2filetype(current_path);
         if (type == fs::FileTypes::FT_SYMLINK)
@@ -257,7 +257,7 @@ static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file
 }
 int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mode)
 {
-    printfYellow("[vfs_openat] : absolute_path=%s, flags=%o, mode=0%o\n", absolute_path.c_str(), flags, mode);
+    // printfYellow("[vfs_openat] : absolute_path=%s, flags=%o, mode=0%o\n", absolute_path.c_str(), flags, mode);
 
     bool file_exists = (vfs_is_file_exist(absolute_path.c_str()) == 1);
 
@@ -457,7 +457,7 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
         attrs._value = file_mode;
 
         fs::normal_file *temp_file = new fs::normal_file(attrs, actual_path);
-        printfYellow("vfs_openat: flags: %o, mode: 0%o, actual_path: %s\n", flags, temp_file->_attrs.transMode(), actual_path.c_str());
+        // printfYellow("vfs_openat: flags: %o, mode: 0%o, actual_path: %s\n", flags, temp_file->_attrs.transMode(), actual_path.c_str());
 
         // ext4库会自动处理 O_TRUNC, O_RDONLY, O_WRONLY, O_RDWR 等标志
         // 真是前人栽树，后人乘凉啊！
@@ -779,17 +779,17 @@ int vfs_is_file_exist(const char *path)
 {
     struct ext4_inode inode;
     uint32_t ino;
-    printfYellow("vfs_is_file_exist: checking path: %s\n", path);
+    // printfYellow("vfs_is_file_exist: checking path: %s\n", path);
     // 尝试获取文件的inode信息
     int res = ext4_raw_inode_fill(path, &ino, &inode);
-    printfYellow("vfs_is_file_exist: ext4_raw_inode_fill returned: %d for path: %s\n", res, path);
+    // printfYellow("vfs_is_file_exist: ext4_raw_inode_fill returned: %d for path: %s\n", res, path);
     // TODO : 这里有个特别诡异的现象，加了print下面这行会爆炸
     //  printf("res:%p\n", res);
 
     if (res == EOK)
     {
         // 文件存在
-        printfGreen("vfs_is_file_exist: file exists: %s\n", path);
+        // printfGreen("vfs_is_file_exist: file exists: %s\n", path);
         return 1;
     }
     else if (res == ENOENT)

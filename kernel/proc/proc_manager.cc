@@ -410,7 +410,7 @@ namespace proc
             panic("freeproc: process not in valid state for cleanup, current state: %d", (int)p->_state);
         }
 
-        printf("[freeproc] Reclaiming PCB for process %s pid %d\n", p->_name, p->_pid);
+        // printf("[freeproc] Reclaiming PCB for process %s pid %d\n", p->_name, p->_pid);
 
         /****************************************************************************************
          * 基本进程标识和状态管理清理
@@ -1555,7 +1555,7 @@ namespace proc
         if (p == _init_proc)
             panic("init exiting"); // 保护机制：init 进程不能退出
 
-        printf("[exit_proc] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
+        // printf("[exit_proc] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
 
         /****************************************************************************************
          * Phase 1: 释放进程内存和资源
@@ -1622,7 +1622,7 @@ namespace proc
 
         _wait_lock.release();
 
-        printfYellow("[exit_proc] proc %s pid %d became zombie, memory freed\n", p->_name, p->_pid);
+        // printfYellow("[exit_proc] proc %s pid %d became zombie, memory freed\n", p->_name, p->_pid);
 
         k_scheduler.call_sched(); // jump to schedular, never return
         panic("zombie exit");
@@ -1662,11 +1662,11 @@ namespace proc
     /// https://man7.org/linux/man-pages/man2/exit_group.2.html
     void ProcessManager::exit_group(int status)
     {
-        debug_process_states();
+        // debug_process_states();
         proc::Pcb *cp = get_cur_pcb();
 
-        printf("[exit_group] Thread group %d (leader pid %d) exiting with status %d\n",
-               cp->_tgid, cp->_pid, status);
+        // printf("[exit_group] Thread group %d (leader pid %d) exiting with status %d\n",
+        //        cp->_tgid, cp->_pid, status);
 
         /****************************************************************************************
          * Phase 3: 安全的多线程退出处理
@@ -1709,7 +1709,7 @@ namespace proc
 
         _wait_lock.release();
 
-        printf("[exit_group] Current thread pid %d exiting normally\n", cp->_pid);
+        // printf("[exit_group] Current thread pid %d exiting normally\n", cp->_pid);
 
         // 当前线程正常退出，其他线程会在调度时检查killed标志并自行退出
         exit_proc(cp, status);
@@ -1896,8 +1896,8 @@ namespace proc
             return 0;
 
         fs::file *f = p->_ofile->_ofile_ptr[fd];
-        printfBlue("[ProcessManager::close] Closing fd=%d, file type=%d, refcnt=%d\n",
-                   fd, (int)f->_attrs.filetype, f->refcnt);
+        // printfBlue("[ProcessManager::close] Closing fd=%d, file type=%d, refcnt=%d\n",
+        //            fd, (int)f->_attrs.filetype, f->refcnt);
 
         // fs::k_file_table.free_file( p->_ofile[ fd ] );
         f->free_file();
@@ -2511,8 +2511,8 @@ namespace proc
             return -ESRCH;
         }
 
-        printfYellow("[munmap] Process %s (PID: %d) unmapping addr=%p, length=%u\n",
-                     p->get_name(), p->get_pid(), addr, length);
+        // printfYellow("[munmap] Process %s (PID: %d) unmapping addr=%p, length=%u\n",
+        //              p->get_name(), p->get_pid(), addr, length);
 
         // 使用ProcessMemoryManager进行统一的内存管理
         ProcessMemoryManager memory_mgr(p);

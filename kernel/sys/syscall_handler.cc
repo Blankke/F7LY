@@ -285,7 +285,7 @@ namespace syscall
 
         if (!(sys_num == 64 && p->_trapframe->a0 == 1) && !(sys_num == 66 && p->_trapframe->a0 == 1))
         {
-            // printf("---------- start ------------\n");
+            printf("------------------------------------------------------------------------------------------------------------------------------------\n");
             // printfMagenta("[Pcb::get_open_file] pid: %d\n", p->_pid);
             printfGreen("[invoke_syscaller]sys_num: %d sys_name: \t%s\n", sys_num, _syscall_name[sys_num]);
         }
@@ -2083,7 +2083,7 @@ namespace syscall
         }
 
         memset((void *)sys_getdents64_buf, 0, GETDENTS64_BUF_SIZE);
-        printfMagenta("[SyscallHandler::sys_getdents64] \n");
+        // printfMagenta("[SyscallHandler::sys_getdents64] \n");
         int count = vfs_getdents(f, (struct linux_dirent64 *)sys_getdents64_buf, buf_len);
         mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
         mem::k_vmm.copy_out(*pt, (uint64)buf_addr, (char *)sys_getdents64_buf, count);
@@ -2163,8 +2163,8 @@ namespace syscall
 
         if (_arg_addr(2, oldactaddr) < 0)
             return -1;
-        printf("[SyscallHandler::sys_rt_sigaction] signum: %d, newactaddr: %p, oldactaddr: %p\n",
-               signum, (void *)newactaddr, (void *)oldactaddr);
+        // printf("[SyscallHandler::sys_rt_sigaction] signum: %d, newactaddr: %p, oldactaddr: %p\n",
+        //        signum, (void *)newactaddr, (void *)oldactaddr);
 
         if (newactaddr != 0)
         {
@@ -2339,7 +2339,7 @@ namespace syscall
             }
         }
 
-        printfCyan("[SyscallHandler::sys_fstatat] 绝对路径: %s\n", abs_pathname.c_str());
+        // printfCyan("[SyscallHandler::sys_fstatat] 绝对路径: %s\n", abs_pathname.c_str());
 
         // 首先验证路径中的每个父目录都是目录
         eastl::string path_to_check = abs_pathname;
@@ -6980,11 +6980,11 @@ namespace syscall
             printfRed("[SyscallHandler::sys_msync]   EBUSY  MS_INVALIDATE was specified in flags, and a memory lock exists for the specified address range. \n");
             return -EBUSY;
         }
-        printfCyan("[SyscallHandler::sys_msync] addr=%p, length=%u, flags=0x%x (async=%s, sync=%s, invalidate=%s)\n",
-                   (void *)addr, length, flags,
-                   has_async ? "true" : "false",
-                   has_sync ? "true" : "false",
-                   invalidate ? "true" : "false");
+        // printfCyan("[SyscallHandler::sys_msync] addr=%p, length=%u, flags=0x%x (async=%s, sync=%s, invalidate=%s)\n",
+        //            (void *)addr, length, flags,
+        //            has_async ? "true" : "false",
+        //            has_sync ? "true" : "false",
+        //            invalidate ? "true" : "false");
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         uint64 sync_start = addr;
@@ -7009,8 +7009,8 @@ namespace syscall
             }
 
             found_mapping = true;
-            printfCyan("[SyscallHandler::sys_msync] Found overlapping VMA %d: [%p, %p), prot=0x%x, flags=0x%x\n",
-                       i, (void *)vma_start, (void *)vma_end, vm->prot, vm->flags);
+            // printfCyan("[SyscallHandler::sys_msync] Found overlapping VMA %d: [%p, %p), prot=0x%x, flags=0x%x\n",
+            //            i, (void *)vma_start, (void *)vma_end, vm->prot, vm->flags);
 
             // 计算重叠区域
             uint64 overlap_start = MAX(sync_start, vma_start);
@@ -7019,8 +7019,8 @@ namespace syscall
             // 处理MAP_SHARED文件映射的同步
             if ((vm->flags & MAP_SHARED) && vm->vfile != nullptr)
             {
-                printfCyan("[SyscallHandler::sys_msync] Syncing MAP_SHARED file mapping: %s\n",
-                           vm->vfile->_path_name.c_str());
+                // printfCyan("[SyscallHandler::sys_msync] Syncing MAP_SHARED file mapping: %s\n",
+                //            vm->vfile->_path_name.c_str());
 
                 // 遍历重叠区域内的所有页面
                 uint64 page_start = PGROUNDDOWN(overlap_start);
@@ -7036,8 +7036,8 @@ namespace syscall
                         uint64 pa = (uint64)pte.pa();
                         int file_offset = vm->offset + (va - vma_start);
 
-                        printfCyan("[SyscallHandler::sys_msync] Writing back page at va=%p, file_offset=%d\n",
-                                   (void *)va, file_offset);
+                        // printfCyan("[SyscallHandler::sys_msync] Writing back page at va=%p, file_offset=%d\n",
+                        //            (void *)va, file_offset);
 
                         // 写回数据到文件
                         int write_result = vm->vfile->write(pa, PGSIZE, file_offset, false);
@@ -7067,12 +7067,12 @@ namespace syscall
             else if (vm->flags & MAP_SHARED)
             {
                 // 匿名共享映射，目前不需要特殊处理
-                printfCyan("[SyscallHandler::sys_msync] Anonymous shared mapping, no file sync needed\n");
+                // printfCyan("[SyscallHandler::sys_msync] Anonymous shared mapping, no file sync needed\n");
             }
             else
             {
                 // 私有映射不需要同步
-                printfCyan("[SyscallHandler::sys_msync] Private mapping, no sync needed\n");
+                // printfCyan("[SyscallHandler::sys_msync] Private mapping, no sync needed\n");
             }
         }
 
@@ -7083,8 +7083,8 @@ namespace syscall
             return -ENOMEM;
         }
 
-        printfGreen("[SyscallHandler::sys_msync] Successfully synced range [%p, %p)\n",
-                    (void *)sync_start, (void *)sync_end);
+        // printfGreen("[SyscallHandler::sys_msync] Successfully synced range [%p, %p)\n",
+        //             (void *)sync_start, (void *)sync_end);
         return 0;
     }
     uint64 SyscallHandler::sys_mlock()
@@ -7343,7 +7343,155 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_faccessat2()
     {
-        panic("未实现该系统调用");
+        // https://www.man7.org/linux/man-pages/man2/faccessat.2.html
+        // faccessat2 syscall: int faccessat2(int dirfd, const char *pathname, int mode, int flags);
+        
+        int dirfd, mode, flags;
+        eastl::string pathname;
+        if (_arg_int(0, dirfd) < 0 || _arg_int(2, mode) < 0 || _arg_int(3, flags) < 0)
+        {
+            return -EINVAL; // 参数错误
+        }
+        if (_arg_str(1, pathname, MAXPATH) < 0)
+        {
+            return -EINVAL; // 参数错误
+        }
+
+        // 检查 flags 参数的有效性
+        #define AT_EACCESS 0x200  // Use effective user and group IDs for access checks
+        #define AT_SYMLINK_NOFOLLOW_FAT2 0x100  // Do not follow symbolic links (avoid conflict)
+        int valid_flags = AT_EACCESS | AT_SYMLINK_NOFOLLOW_FAT2;
+        if (flags & ~valid_flags)
+        {
+            printfRed("[SyscallHandler::sys_faccessat2] 无效的flags: %d\n", flags);
+            return -EINVAL; // 无效的flags参数
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        // 处理dirfd和路径
+        eastl::string abs_pathname;
+
+        // 检查是否为绝对路径
+        if (pathname[0] == '/')
+        {
+            // 绝对路径，忽略dirfd
+            abs_pathname = pathname;
+        }
+        else
+        {
+            // 相对路径，需要处理dirfd
+            if (dirfd == AT_FDCWD)
+            {
+                // 使用当前工作目录
+                abs_pathname = get_absolute_path(pathname.c_str(), p->_cwd_name.c_str());
+            }
+            else
+            {
+                // 使用dirfd指向的目录
+                fs::file *dir_file = p->get_open_file(dirfd);
+                if (!dir_file)
+                {
+                    printfRed("[SyscallHandler::sys_faccessat2] 无效的dirfd: %d\n", dirfd);
+                    return SYS_EBADF; // 无效的文件描述符
+                }
+
+                // 检查dirfd是否以 O_PATH 标志打开
+                if (dir_file->lwext4_file_struct.flags & O_PATH)
+                {
+                    return -EBADF;
+                }
+
+                // 使用dirfd对应的路径作为基准目录
+                abs_pathname = get_absolute_path(pathname.c_str(), dir_file->_path_name.c_str());
+            }
+        }
+
+        // printfCyan("[SyscallHandler::sys_faccessat2] 绝对路径: %s, flags: %d\n", abs_pathname.c_str(), flags);
+
+        // 处理 AT_SYMLINK_NOFOLLOW 标志
+        // 如果设置了此标志，我们需要检查文件本身而不是它指向的目标
+        // 当前实现中，我们暂时不处理符号链接，所以这个标志的影响有限
+        
+        // 首先验证路径中的每个父目录都是目录
+        eastl::string path_to_check = abs_pathname;
+        size_t last_slash = path_to_check.find_last_of('/');
+        if (last_slash != eastl::string::npos && last_slash > 0)
+        {
+            eastl::string parent_path = path_to_check.substr(0, last_slash);
+            eastl::string current_path = "";
+
+            // 逐段检查路径
+            size_t start = 1; // 跳过第一个 '/'
+            while (start < parent_path.length())
+            {
+                size_t end = parent_path.find('/', start);
+                if (end == eastl::string::npos)
+                    end = parent_path.length();
+
+                current_path += "/" + parent_path.substr(start, end - start);
+
+                if (fs::k_vfs.is_file_exist(current_path.c_str()) == 1)
+                {
+                    // int file_type = vfs_path2filetype(current_path);
+                    int file_type = fs::k_vfs.path2filetype(current_path);
+                    if (file_type != fs::FileTypes::FT_DIRECT)
+                    {
+                        printfRed("[SyscallHandler::sys_faccessat2] 路径中的组件不是目录: %s\n", current_path.c_str());
+                        return SYS_ENOTDIR; // 不是目录
+                    }
+                }
+                else if (fs::k_vfs.is_file_exist(current_path.c_str()) == 0)
+                {
+                    printfRed("[SyscallHandler::sys_faccessat2] 路径中的目录不存在: %s\n", current_path.c_str());
+                    return SYS_ENOENT; // 目录不存在
+                }
+
+                start = end + 1;
+            }
+        }
+
+        // 现在检查目标文件是否存在
+        if (fs::k_vfs.is_file_exist(abs_pathname.c_str()) != 1)
+        {
+            printfRed("[SyscallHandler::sys_faccessat2] 文件不存在: %s\n", abs_pathname.c_str());
+            return SYS_ENOENT; // 文件不存在
+        }
+
+        // 处理访问权限检查
+        [[maybe_unused]] int _flags = 0;
+        
+        // 如果设置了 AT_EACCESS 标志，使用有效用户和组ID进行检查
+        // 否则使用实际用户和组ID进行检查
+        // 在当前简化的实现中，我们暂时不区分这两种情况
+        if (flags & AT_EACCESS)
+        {
+            // TODO
+            // printfCyan("[SyscallHandler::sys_faccessat2] 使用有效用户ID进行访问检查\n");
+            // 这里应该使用有效用户ID (euid) 和有效组ID (egid) 进行权限检查
+        }
+        else
+        {
+            // TODO
+            // printfCyan("[SyscallHandler::sys_faccessat2] 使用实际用户ID进行访问检查\n");
+            // 这里应该使用实际用户ID (uid) 和实际组ID (gid) 进行权限检查
+        }
+
+        if (mode & R_OK)
+            _flags |= 4;
+        if (mode & W_OK)
+            _flags |= 2;
+        if (mode & X_OK)
+            _flags |= 1;
+        int fd = proc::k_pm.open(dirfd, abs_pathname, _flags);
+        if (fd < 0)
+        {
+            return fd; // 返回错误码
+        }
+        
+        // 关闭刚打开的文件描述符，因为 faccessat2 只是检查访问权限
+        proc::k_pm.close(fd);
+        
+        return 0;
     }
     uint64 SyscallHandler::sys_openat2()
     {

@@ -40,8 +40,8 @@ namespace proc
         if (!_pcb)
             return;
 
-        printfBlue("ProcessMemoryManager: freeing all program sections for process %s (PID: %d)\n",
-                   _pcb->get_name(), _pcb->get_pid());
+        // printfBlue("ProcessMemoryManager: freeing all program sections for process %s (PID: %d)\n",
+        //            _pcb->get_name(), _pcb->get_pid());
 
         // 释放程序段占用的内存
         for (int i = 0; i < _pcb->get_prog_section_count(); i++)
@@ -52,12 +52,12 @@ namespace proc
                 uint64 va_start = PGROUNDDOWN((uint64)sections[i]._sec_start);
                 uint64 va_end = PGROUNDUP((uint64)sections[i]._sec_start + sections[i]._sec_size);
 
-                printfBlue("  Freeing section %d (%s): %p - %p (%u bytes)\n",
-                           i,
-                           sections[i]._debug_name ? sections[i]._debug_name : "unnamed",
-                           (void *)va_start,
-                           (void *)va_end,
-                           sections[i]._sec_size);
+                // printfBlue("  Freeing section %d (%s): %p - %p (%u bytes)\n",
+                //            i,
+                //            sections[i]._debug_name ? sections[i]._debug_name : "unnamed",
+                //            (void *)va_start,
+                //            (void *)va_end,
+                //            sections[i]._sec_size);
 
                 safe_vmunmap(va_start, va_end, true);
             }
@@ -66,7 +66,7 @@ namespace proc
         // 清理程序段描述信息
         _pcb->clear_all_program_sections();
 
-        printfGreen("ProcessMemoryManager: program sections freed successfully\n");
+        // printfGreen("ProcessMemoryManager: program sections freed successfully\n");
     }
 
     bool ProcessMemoryManager::free_program_section(int section_index)
@@ -221,17 +221,17 @@ namespace proc
         uint64 heap_size = _pcb->get_heap_size();
         if (heap_size > 0)
         {
-            printfBlue("ProcessMemoryManager: freeing heap memory for process %s (PID: %d)\n",
-                       _pcb->get_name(), _pcb->get_pid());
-            printfBlue("  Heap range: %p - %p (%u bytes)\n",
-                       (void *)_pcb->get_heap_start(),
-                       (void *)_pcb->get_heap_end(),
-                       heap_size);
+            // printfBlue("ProcessMemoryManager: freeing heap memory for process %s (PID: %d)\n",
+            //            _pcb->get_name(), _pcb->get_pid());
+            // printfBlue("  Heap range: %p - %p (%u bytes)\n",
+            //            (void *)_pcb->get_heap_start(),
+            //            (void *)_pcb->get_heap_end(),
+            //            heap_size);
 
             // 将堆收缩到起始位置，实际释放所有堆内存
             shrink_heap(_pcb->get_heap_start());
 
-            printfGreen("ProcessMemoryManager: heap memory freed successfully\n");
+            // printfGreen("ProcessMemoryManager: heap memory freed successfully\n");
         }
     }
 
@@ -264,31 +264,31 @@ namespace proc
             return;
         }
 
-        printfBlue("ProcessMemoryManager: freeing all VMA for process %s (PID: %d)\n",
-                   _pcb->get_name(), _pcb->get_pid());
+        // printfBlue("ProcessMemoryManager: freeing all VMA for process %s (PID: %d)\n",
+        //            _pcb->get_name(), _pcb->get_pid());
 
         // 遍历所有VMA条目
         for (int i = 0; i < NVMA; ++i)
         {
             if (_pcb->_vma->_vm[i].used)
             {
-                printfBlue("  Processing VMA %d: addr=%p, len=%u, vfd=%d, flags=0x%x, prot=0x%x\n",
-                           i, (void *)_pcb->_vma->_vm[i].addr, _pcb->_vma->_vm[i].len,
-                           _pcb->_vma->_vm[i].vfd, _pcb->_vma->_vm[i].flags, _pcb->_vma->_vm[i].prot);
+                // printfBlue("  Processing VMA %d: addr=%p, len=%u, vfd=%d, flags=0x%x, prot=0x%x\n",
+                //            i, (void *)_pcb->_vma->_vm[i].addr, _pcb->_vma->_vm[i].len,
+                //            _pcb->_vma->_vm[i].vfd, _pcb->_vma->_vm[i].flags, _pcb->_vma->_vm[i].prot);
 
                 if (_pcb->_vma->_vm[i].vfile)
                 {
-                    printfBlue("    File mapping: %s\n", _pcb->_vma->_vm[i].vfile->_path_name.c_str());
+                    // printfBlue("    File mapping: %s\n", _pcb->_vma->_vm[i].vfile->_path_name.c_str());
                 }
                 else
                 {
-                    printfBlue("    Anonymous mapping (vfd=%d)\n", _pcb->_vma->_vm[i].vfd);
+                    // printfBlue("    Anonymous mapping (vfd=%d)\n", _pcb->_vma->_vm[i].vfd);
                 }
 
                 // 对文件映射进行写回操作
                 if (!writeback_vma(i))
                 {
-                    printfYellow("  Warning: VMA %d writeback failed\n", i);
+                    printfRed("  Warning: VMA %d writeback failed\n", i);
                 }
 
                 // 释放文件引用
@@ -308,7 +308,7 @@ namespace proc
             }
         }
 
-        printfGreen("ProcessMemoryManager: all VMA freed successfully\n");
+        // printfGreen("ProcessMemoryManager: all VMA freed successfully\n");
     }
 
     bool ProcessMemoryManager::free_vma(int vma_index)
@@ -323,7 +323,7 @@ namespace proc
         // 写回文件映射
         if (!writeback_vma(vma_index))
         {
-            printfYellow("ProcessMemoryManager: VMA %d writeback failed\n", vma_index);
+            printfRed("ProcessMemoryManager: VMA %d writeback failed\n", vma_index);
         }
 
         // 释放文件引用
@@ -351,22 +351,22 @@ namespace proc
             return false;
         }
 
-        printf("checkpoint: 0\n");
+        // printf("checkpoint: 0\n");
 
         const vma &vm_entry = _pcb->_vma->_vm[vma_index];
-        printf("checkpoint: 0.5\n");
+        // printf("checkpoint: 0.5\n");
 
         // 检查是否是匿名映射（没有关联文件）
         if (vm_entry.vfile == nullptr)
         {
-            printf("ProcessMemoryManager: VMA %d is anonymous mapping (no file), skipping writeback\n", vma_index);
+            // printfBlue("ProcessMemoryManager: VMA %d is anonymous mapping (no file), skipping writeback\n", vma_index);
             return true;
         }
 
-        printf("ProcessMemoryManager: writeback VMA %d to file %s\n",
-               vma_index, vm_entry.vfile->_path_name.c_str());
+        // printf("ProcessMemoryManager: writeback VMA %d to file %s\n",
+        //        vma_index, vm_entry.vfile->_path_name.c_str());
 
-        printf("checkpoint: 1\n");
+        // printf("checkpoint: 1\n");
 
         // 跳过temp文件
         // if (vm_entry.vfile->_path_name.substr(0, 5) == "/tmp/")
@@ -375,14 +375,14 @@ namespace proc
         //     return false;
         // }
 
-        printf("checkpoint: 2\n");
+        // printf("checkpoint: 2\n");
 
         // 只对文件映射且为共享且可写的VMA进行写回
         if (vm_entry.flags == MAP_SHARED &&
             (vm_entry.prot & PROT_WRITE) != 0)
         {
             Pcb* p=k_pm.get_cur_pcb();
-            printfBlue("  Writing back VMA %d to file\n", vma_index);
+            // printfBlue("  Writing back VMA %d to file\n", vma_index);
             uint64 vma_start = PGROUNDDOWN(vm_entry.addr);
             uint64 vma_end = PGROUNDUP(vma_start + vm_entry.len);
             for (uint64 va = vma_start; va < vma_end; va += PGSIZE)
@@ -394,8 +394,8 @@ namespace proc
                     uint64 pa = (uint64)pte.pa();
                     int file_offset = vm_entry.offset + (va - vma_start);
 
-                    printfCyan("[SyscallHandler::sys_msync] Writing back page at va=%p, file_offset=%d\n",
-                               (void *)va, file_offset);
+                    // printfCyan("[SyscallHandler::sys_msync] Writing back page at va=%p, file_offset=%d\n",
+                    //            (void *)va, file_offset);
 
                     // 写回数据到文件
                     int write_result = vm_entry.vfile->write(pa, PGSIZE, file_offset, false);
@@ -417,7 +417,7 @@ namespace proc
             // 减少引用计数
             --_pcb->_vma->_ref_cnt;
 
-            printfBlue("ProcessMemoryManager: VMA ref count decreased to %d\n", _pcb->_vma->_ref_cnt);
+            // printfBlue("ProcessMemoryManager: VMA ref count decreased to %d\n", _pcb->_vma->_ref_cnt);
 
             // 如果引用计数为0，则释放VMA
             if (_pcb->_vma->_ref_cnt <= 0)
@@ -427,12 +427,12 @@ namespace proc
                 _pcb->_vma = nullptr;
                 _pcb->_shared_vm = false;
 
-                printfGreen("ProcessMemoryManager: VMA structure freed\n");
+                // printfGreen("ProcessMemoryManager: VMA structure freed\n");
                 return true;
             }
             else
             {
-                printfYellow("ProcessMemoryManager: VMA still referenced, not freeing\n");
+                // printfYellow("ProcessMemoryManager: VMA still referenced, not freeing\n");
                 return false;
             }
         }
@@ -462,8 +462,8 @@ namespace proc
                 return -1;
             }
 
-            printfYellow("ProcessMemoryManager: unmapping range [%p, %p) length=%u\n",
-                         addr, (void *)end_addr, aligned_length);
+            // printfYellow("ProcessMemoryManager: unmapping range [%p, %p) length=%u\n",
+            //              addr, (void *)end_addr, aligned_length);
 
             // 查找重叠的VMA
             int overlapping_vmas[NVMA];
@@ -486,8 +486,8 @@ namespace proc
                 uint64 vma_start = vm_entry.addr;
                 uint64 vma_end = vm_entry.addr + vm_entry.len;
 
-                printfCyan("ProcessMemoryManager: processing overlapping VMA %d: [%p, %p)\n",
-                           vma_idx, (void *)vma_start, (void *)vma_end);
+                // printfCyan("ProcessMemoryManager: processing overlapping VMA %d: [%p, %p)\n",
+                //            vma_idx, (void *)vma_start, (void *)vma_end);
 
                 // 计算需要取消映射的区域
                 uint64 unmap_start = start_addr > vma_start ? start_addr : vma_start;
@@ -509,7 +509,7 @@ namespace proc
                 if (unmap_start == vma_start && unmap_end == vma_end)
                 {
                     // 完全取消映射
-                    printfCyan("ProcessMemoryManager: completely unmapping VMA %d\n", vma_idx);
+                    // printfCyan("ProcessMemoryManager: completely unmapping VMA %d\n", vma_idx);
                     if (vm_entry.vfile)
                     {
                         vm_entry.vfile->free_file();
@@ -538,13 +538,13 @@ namespace proc
                 {
                     // 从堆开始位置或更早开始取消映射
                     _pcb->set_heap_end(heap_start);
-                    printfYellow("ProcessMemoryManager: reset heap_end to heap_start\n");
+                    // printfYellow("ProcessMemoryManager: reset heap_end to heap_start\n");
                 }
                 else if (start_addr < heap_end)
                 {
                     // 从堆中间开始取消映射
                     _pcb->set_heap_end(start_addr);
-                    printfYellow("ProcessMemoryManager: shrunk heap_end to %p\n", (void *)start_addr);
+                    // printfYellow("ProcessMemoryManager: shrunk heap_end to %p\n", (void *)start_addr);
                 }
             }
 
@@ -592,7 +592,7 @@ namespace proc
             if (unmap_start == vma_start && unmap_end < vma_end)
             {
                 // 从VMA开始处取消映射
-                printfCyan("ProcessMemoryManager: unmapping from start of VMA %d\n", vma_index);
+                // printfCyan("ProcessMemoryManager: unmapping from start of VMA %d\n", vma_index);
                 vm_entry.addr = unmap_end;
                 vm_entry.len = vma_end - unmap_end;
                 if (vm_entry.vfile)
@@ -604,7 +604,7 @@ namespace proc
             else if (unmap_start > vma_start && unmap_end == vma_end)
             {
                 // 从VMA末尾取消映射
-                printfCyan("ProcessMemoryManager: unmapping from end of VMA %d\n", vma_index);
+                // printfCyan("ProcessMemoryManager: unmapping from end of VMA %d\n", vma_index);
                 vm_entry.len = unmap_start - vma_start;
                 return true;
             }
@@ -686,8 +686,8 @@ namespace proc
             if (!_pcb)
                 return;
 
-            printfCyan("ProcessMemoryManager: starting complete memory cleanup for process %s (PID: %d)\n",
-                       _pcb->get_name(), _pcb->get_pid());
+            // printfCyan("ProcessMemoryManager: starting complete memory cleanup for process %s (PID: %d)\n",
+            //            _pcb->get_name(), _pcb->get_pid());
 
             // 1. 处理VMA引用计数并释放（如果计数为0）
             if (_pcb->_vma != nullptr)
@@ -700,7 +700,7 @@ namespace proc
             {
                 mem::k_pmm.free_page(_pcb->_trapframe);
                 _pcb->_trapframe = nullptr;
-                printfGreen("ProcessMemoryManager: trapframe freed\n");
+                // printfGreen("ProcessMemoryManager: trapframe freed\n");
             }
 
             // 3. 如果页表存在，释放程序段和堆内存
@@ -714,7 +714,7 @@ namespace proc
             // 4. 重置内存相关状态
             _pcb->reset_memory_sections();
 
-            printfCyan("ProcessMemoryManager: complete memory cleanup finished\n");
+            // printfCyan("ProcessMemoryManager: complete memory cleanup finished\n");
         }
 
         void ProcessMemoryManager::emergency_cleanup()

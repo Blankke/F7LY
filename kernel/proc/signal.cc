@@ -51,7 +51,7 @@ namespace proc
                         if (cur_proc->_sigactions->actions[flag] == nullptr)
                             return -1; // 内存分配失败
                     }
-                    printf("[sigAction] Setting handler for signal %d: enter %p flags: %p mask: %p\n", flag, newact->sa_handler, newact->sa_flags, newact->sa_mask.sig[0]);
+                    // printf("[sigAction] Setting handler for signal %d: enter %p flags: %p mask: %p\n", flag, newact->sa_handler, newact->sa_flags, newact->sa_mask.sig[0]);
                     *(cur_proc->_sigactions->actions[flag]) = *newact;
                 }
 

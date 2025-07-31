@@ -581,7 +581,7 @@ char *ltp_testcases[] = {
     // "check_pe",
     // "check_setkey",
     // "check_simple_capset",
-    "chmod01", // 完全PASS
+    // "chmod01", // 完全PASS
     // "chmod03",   //sendmsg
     // "chmod05", //sendmsg
     // "chmod06", //sendmsg
@@ -742,12 +742,12 @@ char *ltp_testcases[] = {
     // "dup07",//完全PASS
     // "dup201",//完全PASS
     // "dup202",//完全PASS
-    // "dup203",  
+    // "dup203",
     // "dup204",// 完全PASS
     // "dup205",//完全PASS
     // "dup206", //完全PASS
     // "dup207", //
-    // "dup3_01",// 
+    // "dup3_01",//
     // "dup3_02",// 完全PASS
     // "dynamic_debug01.sh",
     // "ebizzy",
@@ -819,8 +819,8 @@ char *ltp_testcases[] = {
     // "f00f",
     // "faccessat01", //完全PASS
     // "faccessat02", // 完全PASS
-    // "faccessat201",   
-    // "faccessat202",
+    // "faccessat201",  //pass
+    // "faccessat202", //涉及网络😭😭😭
     // "fallocate01",    //过了一半
     // "fallocate02",   //完全通过
     // "fallocate03", //卡死了
@@ -901,7 +901,7 @@ char *ltp_testcases[] = {
     // "fcntl13_64", //pass
     // "fcntl14",
     // "fcntl14_64",
-    // "fcntl15", 
+    // "fcntl15",
     // "fcntl15_64",
     // "fcntl16",
     // "fcntl16_64",
@@ -1690,7 +1690,7 @@ char *ltp_testcases[] = {
     // "mkdir04",
     // "mkdir05",  //sendmsg
     // "mkdir09",
-    // "mkdirat01",   
+    // "mkdirat01",
     // "mkdirat02",
     // "mkfs01.sh",
     // "mknod01",
@@ -1736,7 +1736,7 @@ char *ltp_testcases[] = {
     // "mmap17",   //pass 但是退出爆了
     // "mmap18",
     // "mmap19",  //pass
-    // "mmap2", 
+    // "mmap2",
     // "mmap20",   //pass
     // "mmap3",
     // "mmap-corruption01",
@@ -1912,7 +1912,7 @@ char *ltp_testcases[] = {
     // "open_tree01",
     // "open_tree02",
     // "open01",    //pass
-    // "open02",    
+    // "open02",
     // "open03", // 完全PASS
     // "open04",    //完全PASS
     // "open06",   //pass
@@ -2033,7 +2033,7 @@ char *ltp_testcases[] = {
     // "pread01",    //pass
     // "pread01_64",  //pass
     // "pread02",           //爆了
-    // "pread02_64",    
+    // "pread02_64",
     // "preadv01",
     // "preadv01_64",
     // "preadv02",
@@ -2531,7 +2531,7 @@ char *ltp_testcases[] = {
     // "stat02_64",   //pass
     // "stat03",   //sendmsg
     // "stat03_64",
-    // "statfs01",   
+    // "statfs01",
     // "statfs01_64",
     // "statfs02",  //pass偷的
     // "statfs02_64", //pass偷的
@@ -2545,7 +2545,7 @@ char *ltp_testcases[] = {
     // "statx04",   //bin/sh
     // "statx05",
     // "statx06",
-    // "statx07",  
+    // "statx07",
     // "statx08",
     // "statx09",   //.config
     // "statx10",  //bin/sh
