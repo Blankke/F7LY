@@ -14,6 +14,22 @@
 #include "futex.hh"
 #include "fs/vfs/file/file.hh"
 #include "signal.hh"
+
+// CPU掩码定义，兼容Linux的cpu_set_t
+struct CpuMask
+{
+    uint64 bits;
+    
+    CpuMask() : bits(0) {}
+    CpuMask(uint64 mask) : bits(mask) {}
+    
+    void set(int cpu) { bits |= (1ULL << cpu); }
+    void clear(int cpu) { bits &= ~(1ULL << cpu); }
+    bool is_set(int cpu) const { return (bits & (1ULL << cpu)) != 0; }
+    void zero() { bits = 0; }
+    void fill() { bits = ~0ULL; }
+    bool empty() const { return bits == 0; }
+};
 namespace fs
 {
     class dentry;
@@ -103,6 +119,9 @@ namespace proc
         // 调度相关字段
         int _slot;     // 当前时间片剩余量 @todo: 应使用更精确的时间单位
         int _priority; // 进程优先级 (0最高，19最低)，符合Linux nice值规范
+        
+        // CPU亲和性字段
+        CpuMask _cpu_mask; // CPU亲和性掩码，每个位表示一个CPU核心
 
         /****************************************************************************************
          * 内存管理
@@ -321,6 +340,11 @@ namespace proc
         void set_fsuid(uint32 fsuid) { _fsuid = fsuid; }
         void set_gid(uint32 gid) { _gid = gid; }
         void set_egid(uint32 egid) { _egid = egid; }
+        
+        // CPU亲和性相关方法
+        const CpuMask& get_cpu_mask() const { return _cpu_mask; }
+        void set_cpu_mask(const CpuMask& mask) { _cpu_mask = mask; }
+        
         bool is_process() const
         {
             return _tid == _tgid; // 线程ID等于线程组ID表示是主线程

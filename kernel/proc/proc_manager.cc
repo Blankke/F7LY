@@ -845,6 +845,18 @@ namespace proc
         }
         return -1; // 未找到匹配的线程
     }
+    
+    Pcb* ProcessManager::find_proc_by_pid(int pid)
+    {
+        for (Pcb *p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
+        {
+            if (p->_pid == pid && p->_state != ProcState::UNUSED)
+            {
+                return p;
+            }
+        }
+        return nullptr; // 未找到对应PID的进程
+    }
 
     // Copy from either a user address, or kernel address,
     // depending on usr_src.

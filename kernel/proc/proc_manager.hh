@@ -113,6 +113,9 @@ namespace proc
         int kill_signal(int pid, int sig);
         int tkill(int tid, int sig);
         int tgkill(int tgid, int tid, int sig);  // 发送信号给指定线程组中的指定线程
+        
+        // 进程查找
+        Pcb* find_proc_by_pid(int pid);  // 根据PID查找进程
 
     public:
         void kill_proc(Pcb *p) { p->_killed = 1; }

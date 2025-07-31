@@ -21,6 +21,7 @@
 #include "physical_memory_manager.hh"
 #include "process_memory_manager.hh"  // 新增：进程内存管理器
 #include "mem/memlayout.hh"          // 内核栈配置常量
+#include "hal/cpu.hh"                // 引入NUMCPU定义
 
 namespace proc
 {
@@ -61,6 +62,9 @@ namespace proc
         // 调度相关字段
         _slot = 0;                     // 时间片剩余量
         _priority = default_proc_prio; // 默认进程优先级
+        
+        // CPU亲和性初始化：默认可以在任何CPU上运行
+        _cpu_mask = CpuMask((1ULL << NUMCPU) - 1); // 设置所有可用CPU位
 
         /****************************************************************************************
          * 内存管理

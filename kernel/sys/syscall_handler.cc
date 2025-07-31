@@ -5059,8 +5059,67 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_sched_getaffinity()
     {
-        return 0;
-        panic("未实现该系统调用");
+        int pid;
+        ulong cpusetsize;
+        uint64 mask_addr;
+        
+        // 获取系统调用参数
+        if (_arg_int(0, pid) < 0 || _arg_addr(1, cpusetsize) < 0 || _arg_addr(2, mask_addr) < 0)
+        {
+            return SYS_EFAULT;
+        }
+        
+        printfCyan("[sys_sched_getaffinity] pid: %d, cpusetsize: %lu, mask_addr: %p\n", 
+                   pid, cpusetsize, (void*)mask_addr);
+        
+        // 检查cpusetsize的大小
+        if (cpusetsize < sizeof(CpuMask))
+        {
+            printfRed("[sys_sched_getaffinity] cpusetsize %lu too small, need at least %lu\n", 
+                      cpusetsize, sizeof(CpuMask));
+            return SYS_EINVAL;
+        }
+        
+        proc::Pcb *target_proc;
+        
+        // 如果pid为0，获取当前进程
+        if (pid == 0)
+        {
+            target_proc = proc::k_pm.get_cur_pcb();
+            if (!target_proc)
+            {
+                printfRed("[sys_sched_getaffinity] current process is null\n");
+                return SYS_ESRCH;
+            }
+        }
+        else
+        {
+            // 根据pid查找进程
+            target_proc = proc::k_pm.find_proc_by_pid(pid);
+            if (!target_proc)
+            {
+                printfRed("[sys_sched_getaffinity] process with pid %d not found\n", pid);
+                return SYS_ESRCH;
+            }
+        }
+        
+        // 获取CPU亲和性掩码
+        const CpuMask& cpu_mask = target_proc->get_cpu_mask();
+        
+        printfCyan("[sys_sched_getaffinity] cpu_mask bits: %lx\n", cpu_mask.bits);
+        
+        // 将CPU掩码拷贝到用户空间
+        proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = current_proc->get_pagetable();
+        
+        if (mem::k_vmm.copy_out(*pt, mask_addr, &cpu_mask, sizeof(CpuMask)) < 0)
+        {
+            printfRed("[sys_sched_getaffinity] failed to copy cpu mask to user space\n");
+            return SYS_EFAULT;
+        }
+        
+        // 成功时返回实际拷贝的字节数
+        return sizeof(CpuMask);
     }
     uint64 SyscallHandler::sys_setpgid()
     {
