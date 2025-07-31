@@ -21,6 +21,7 @@ namespace proc
 	{
 		int Pipe::write(uint64 addr, int n)
 		{
+			panic("不是哥们为什么有两个write，貌似现在用的是write_in_kernel");
 			// printfRed("write pipe file\n");
 			int i = 0;
 			Pcb *pr = k_pm.get_cur_pcb(); // 获取当前进程的 PCB 指针
@@ -40,7 +41,11 @@ namespace proc
 				{
 					printfRed("Pipe buffer full, cannot write more data\n");
 					_lock.release();
-					return syscall::SYS_EAGAIN; // 管道已满，返回 EAGAIN 错误
+					if(i > 0)
+					{
+						return i; // 返回已写入的字节数, 虽然满了，但是部分写入成功，返回成功写入的字节数
+					}
+					return syscall::SYS_EAGAIN; // 管道已满，完全无法写入，返回 EAGAIN 错误
 					// 如果管道缓冲区满了，不能继续写入
 					// 唤醒等待读取的进程，让其读走数据
 					k_pm.wakeup(&_read_sleep);
@@ -99,6 +104,10 @@ namespace proc
 				{
 					printfRed("Pipe buffer full, cannot write more data\n");
 					_lock.release();
+					if (i > 0)
+					{
+						return i; // 返回已写入的字节数, 虽然满了，但是部分写入成功，返回成功写入的字节数
+					}
 					return syscall::SYS_EAGAIN; // 管道已满，返回 EAGAIN 错误
 					// // 如果缓冲区已满，则不能继续写入
 					// // 唤醒读端（可能已阻塞）

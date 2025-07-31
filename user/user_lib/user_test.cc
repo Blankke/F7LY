@@ -3257,7 +3257,7 @@ char *ltp_testcases[] = {
     // "write01", // 完全PASS
     // "write02", //爆了
     // "write03", // 完全PASS
-    // "write04",
+    // "write04", /pass
     // "write05", // 有没过的
     // "write06",
     // "writetest",
