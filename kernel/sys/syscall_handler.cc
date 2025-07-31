@@ -673,7 +673,7 @@ namespace syscall
         }
         if (n <= 0)
         {
-            if(n== 0)
+            if (n == 0)
             {
                 printfCyan("[SyscallHandler::sys_read] Read size is zero, returning 0\n");
                 return 0; // 如果读取大小为0，直接返回0
@@ -1281,6 +1281,14 @@ namespace syscall
         if (mem::k_vmm.copy_str_in(*pt, path, path_addr, 100) < 0)
             return -EFAULT;
         printfCyan("[sys_unlinkat] : fd: %d, path: %s, flags: %d\n", fd, path.c_str(), flags);
+        // for (int i = 0; i < proc::NVMA; i++)
+        // {
+        //     if (p->_vma[i]._vm->vfile->_path_name == path)
+        //     {
+        //         printfOrange("skip\n");
+        //         return 0;
+        //     }
+        // }
         int res = proc::k_pm.unlink(fd, path, flags);
         return res;
     }
@@ -1828,7 +1836,8 @@ namespace syscall
         }
 
         long result = proc::k_pm.brk(n);
-        if (n == 0) {
+        if (n == 0)
+        {
             printf("[SyscallHandler::sys_brk] brk(0) = 0x%x (query current break)\n", result);
         }
         return result;
@@ -3923,7 +3932,7 @@ namespace syscall
                 {
                     has_conflict = true;
                 }
-                
+
                 if (has_conflict)
                 {
                     printfCyan("[F_GETLK] File has conflicting lock, returning existing lock info\n");
@@ -7101,7 +7110,7 @@ namespace syscall
         size_t len;
         unsigned int flags;
         fs::file *f_in, *f_out;
-        
+
         // 解析参数
         if (_arg_fd(0, &fd_in, &f_in) < 0)
         {
@@ -7123,18 +7132,18 @@ namespace syscall
             printfRed("[sys_copy_file_range] Invalid off_out address\n");
             return -EFAULT;
         }
-        if (_arg_addr(4, (uint64&)len) < 0)
+        if (_arg_addr(4, (uint64 &)len) < 0)
         {
             printfRed("[sys_copy_file_range] Invalid len\n");
             return -EINVAL;
         }
-        if (_arg_int(5, (int&)flags) < 0)
+        if (_arg_int(5, (int &)flags) < 0)
         {
             printfRed("[sys_copy_file_range] Invalid flags\n");
             return -EINVAL;
         }
         printfBgCyan("[sys_copy_file_range] fd_in=%d, off_in_addr=%p, fd_out=%d, off_out_addr=%p, len=%zu, flags=%u\n",
-               fd_in, (void *)off_in_addr, fd_out, (void *)off_out_addr, len, flags);
+                     fd_in, (void *)off_in_addr, fd_out, (void *)off_out_addr, len, flags);
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
 
@@ -7199,29 +7208,29 @@ namespace syscall
             printfRed("[sys_copy_file_range] Cannot copy with O_PATH files\n");
             return -EBADF;
         }
-        if(len==0)
+        if (len == 0)
         {
             printfOrange("[sys_copy_file_range] len is 0, nothing to copy\n");
             return 0;
         }
         // 分配内核缓冲区 - 使用物理内存管理器
-        char *buf = (char*)mem::k_pmm.kmalloc(len);
+        char *buf = (char *)mem::k_pmm.kmalloc(len);
         if (!buf)
         {
             printfRed("[sys_copy_file_range] Failed to allocate buffer of size %zu\n", len);
             return -ENOMEM;
         }
-        
+
         // 初始化缓冲区以便调试
         memset(buf, 0, len);
-        
+
         printfBgCyan("[sys_copy_file_range] Allocated buffer at %p, size %zu\n", buf, len);
 
         ssize_t read_len = 0;
         ssize_t ret = 0;
 
         // 处理输入偏移
-        if (off_in_addr == 0)  // NULL pointer
+        if (off_in_addr == 0) // NULL pointer
         {
             // 使用文件自身的偏移
             printfBgCyan("[sys_copy_file_range] Reading from current file position\n");
@@ -7243,7 +7252,7 @@ namespace syscall
             if ((uint64)in_off > f_in->_stat.size)
             {
                 mem::k_pmm.free_page(buf);
-                return 0;  // 偏移超过文件大小，直接返回0
+                return 0; // 偏移超过文件大小，直接返回0
             }
 
             // 从指定偏移读取，不更新文件指针
@@ -7273,10 +7282,10 @@ namespace syscall
         }
 
         // 添加数据验证 - 打印前几个字节用于调试
-        if (read_len > 0) 
+        if (read_len > 0)
         {
             printfBgCyan("[sys_copy_file_range] First 16 bytes: ");
-            for (int i = 0; i < (read_len > 16 ? 16 : read_len); i++) 
+            for (int i = 0; i < (read_len > 16 ? 16 : read_len); i++)
             {
                 printfBgCyan("%02x ", (unsigned char)buf[i]);
             }
@@ -7284,7 +7293,7 @@ namespace syscall
         }
 
         // 处理输出偏移
-        if (off_out_addr == 0)  // NULL pointer
+        if (off_out_addr == 0) // NULL pointer
         {
             // 使用文件自身的偏移
             printfBgCyan("[sys_copy_file_range] Writing to current file position\n");
@@ -7318,7 +7327,7 @@ namespace syscall
         printfBgCyan("[sys_copy_file_range] Wrote %ld bytes\n", ret);
 
         mem::k_pmm.free_page(buf);
-        return ret ;
+        return ret;
     }
     uint64 SyscallHandler::sys_strerror()
     {
@@ -7350,7 +7359,7 @@ namespace syscall
         uint64 off_in_ptr, off_out_ptr;
         size_t len;
         unsigned int flags;
-        
+
         // 获取参数
         if (_arg_int(0, fd_in) < 0)
         {
@@ -7372,12 +7381,12 @@ namespace syscall
             printfRed("[SyscallHandler::sys_splice] Error fetching off_out\n");
             return SYS_EINVAL;
         }
-        if (_arg_int(4, (int&)len) < 0)
+        if (_arg_int(4, (int &)len) < 0)
         {
             printfRed("[SyscallHandler::sys_splice] Error fetching len\n");
             return SYS_EINVAL;
         }
-        if (_arg_int(5, (int&)flags) < 0)
+        if (_arg_int(5, (int &)flags) < 0)
         {
             printfRed("[SyscallHandler::sys_splice] Error fetching flags\n");
             return SYS_EINVAL;
@@ -7399,7 +7408,7 @@ namespace syscall
         // 判断文件类型
         bool fd_in_is_pipe = (f_in->_attrs.filetype == fs::FileTypes::FT_PIPE);
         bool fd_out_is_pipe = (f_out->_attrs.filetype == fs::FileTypes::FT_PIPE);
-        
+
         // 检查参数约束：其中一个必须是管道，另一个必须是普通文件
         if (fd_in_is_pipe == fd_out_is_pipe)
         {
@@ -7413,7 +7422,7 @@ namespace syscall
 
         // 检查偏移量参数的约束
         off_t off_in = 0, off_out = 0;
-        
+
         if (fd_in_is_pipe)
         {
             // 如果fd_in是管道，off_in必须是NULL
@@ -7482,12 +7491,12 @@ namespace syscall
         }
 
         ssize_t bytes_transferred = 0;
-        
+
         if (fd_in_is_pipe)
         {
             // 从管道读取到普通文件
             bytes_transferred = _splice_pipe_to_file(f_in, f_out, off_out, len);
-            
+
             // 如果成功传输，更新off_out
             if (bytes_transferred > 0 && off_out_ptr != 0)
             {
@@ -7502,15 +7511,15 @@ namespace syscall
         else
         {
             // 从普通文件读取到管道
-            
+
             // 检查off_in是否超过文件大小
             if ((uint64)off_in >= f_in->_stat.size)
             {
                 return 0; // 偏移量超过文件大小，返回0
             }
-            
+
             bytes_transferred = _splice_file_to_pipe(f_in, off_in, f_out, len);
-            
+
             // 如果成功传输，更新off_in
             if (bytes_transferred > 0 && off_in_ptr != 0)
             {
@@ -7563,7 +7572,7 @@ namespace syscall
         }
 
         // 分配内核缓冲区
-        char *buffer = (char*)mem::k_pmm.kmalloc(len);
+        char *buffer = (char *)mem::k_pmm.kmalloc(len);
         if (!buffer)
         {
             printfRed("[_splice_pipe_to_file] Failed to allocate kernel buffer\n");
@@ -7622,7 +7631,7 @@ namespace syscall
         size_t actual_len = (len > (size_t)file_remaining) ? file_remaining : len;
 
         // 分配内核缓冲区
-        char *buffer = (char*)mem::k_pmm.kmalloc(actual_len);
+        char *buffer = (char *)mem::k_pmm.kmalloc(actual_len);
         if (!buffer)
         {
             printfRed("[_splice_file_to_pipe] Failed to allocate kernel buffer\n");
