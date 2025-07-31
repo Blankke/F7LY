@@ -1225,7 +1225,7 @@ char *ltp_testcases[] = {
     // "getaddrinfo_01",
     // "getcontext01",
     // "getcpu01",
-    // "getcwd01",//过了一半
+    // "getcwd01",//pass
     // "getcwd02", // 完全PASS
     // "getcwd03",     //pass
     // "getcwd04", // Test needs at least 2 CPUs online 这个是因为 sched_getaffinity返回0，说不定它不用两个CPU
@@ -1265,11 +1265,11 @@ char *ltp_testcases[] = {
     // "getppid02",
     // "getpriority01",
     // "getpriority02",
-    // "getrandom01",// 炸了
+    // "getrandom01",// pass
     // "getrandom02", // 完全PASS
     // "getrandom03", // 完全PASS
     // "getrandom04", // 完全PASS
-    // "getrandom05",// 一半
+    "getrandom05",// pass
     // "getresgid01",
     // "getresgid01_16",
     // "getresgid02",
@@ -1297,7 +1297,7 @@ char *ltp_testcases[] = {
     // "getsockopt02",
     // "gettid01",
     // "gettid02",
-    // "gettimeofday01",//一半
+    // "gettimeofday01",//pass
     // "gettimeofday02",
     // "getuid01",
     // "getuid01_16",

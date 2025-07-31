@@ -225,6 +225,14 @@ namespace syscall
         WUNTRACED = 2 /* Report status of stopped children.  */
     };
 
+    // getrandom flags
+    enum SYS_getrandom_flags
+    {
+        GRND_NONBLOCK = 0x0001,  /* Don't block waiting for entropy */
+        GRND_RANDOM   = 0x0002,  /* Use /dev/random source instead of /dev/urandom */
+        GRND_INSECURE = 0x0004   /* Allow use of uninitialized entropy pool */
+    };
+
     // // Use constexpr int SYS_for negative error codes instead of enum
     constexpr int SYS_EPERM = -1;           // 操作不允许（无权限）
     constexpr int SYS_ENOENT = -2;          // 文件或目录不存在

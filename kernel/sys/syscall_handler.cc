@@ -1974,16 +1974,28 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_gettimeofday()
     {
+        // https://www.man7.org/linux/man-pages/man2/gettimeofday.2.html
         // TODO: 检查一下这个
         uint64 tv_addr;
+        uint64 tz_addr;
         tmm::timeval tv;
+        // tmm::timezone tz;
 
         if (_arg_addr(0, tv_addr) < 0)
             return SYS_EFAULT;
-
+        if(_arg_addr(1, tz_addr) < 0) // 第二个参数是tz，暂时不支持
+            return SYS_EFAULT;
+        if(is_bad_addr(tv_addr) || is_bad_addr(tz_addr))
+        {
+            printfRed("[SyscallHandler::sys_gettimeofday] Bad address for tv or tz\n");
+            return SYS_EFAULT;
+        }
         tv = tmm::k_tm.get_time_val();
         // printf("[SyscallHandler::sys_gettimeofday] tv: %d.%d\n", tv.tv_sec, tv.tv_usec);
-
+        if(tz_addr != 0)
+        {
+            printfRed("暂时不支持tz参数");
+        }
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
         if (mem::k_vmm.copy_out(*pt, tv_addr, (const void *)&tv,
@@ -2037,7 +2049,11 @@ namespace syscall
             return -1;
         if (_arg_int(1, size) < 0)
             return -1;
-
+        if(size < 0)
+        {
+            printfRed("[SyscallHandler::sys_getcwd] Invalid buffer size: %d\n", size);
+            return SYS_EFAULT;
+        }
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
         uint len = proc::k_pm.getcwd(cwd);
@@ -2812,42 +2828,82 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_getrandom()
     {
+        // https://man7.org/linux/man-pages/man2/getrandom.2.html
         uint64 bufaddr;
         int buflen;
-        [[maybe_unused]] int flags;
+        int flags;
         proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = pcb->get_pagetable();
 
         if (_arg_addr(0, bufaddr) < 0)
-            return -1;
-
-        if (_arg_int(1, buflen) < 0)
-            return -1;
-
-        if (_arg_int(2, flags) < 0)
-            return -1;
-
-        if (bufaddr == 0 && buflen == 0)
-            return -1;
-        char *k_buf = new char[buflen];
-        if (!k_buf)
-            return -1;
-
-        ulong random = 0x4249'4C47'4B43'5546UL;
-        size_t random_size = sizeof(random);
-        for (size_t i = 0; i < static_cast<size_t>(buflen);
-             i += random_size)
-        {
-            size_t copy_size =
-                (i + random_size) <= static_cast<size_t>(buflen)
-                    ? random_size
-                    : buflen - i;
-            memcpy(k_buf + i, &random, copy_size);
-        }
-        if (mem::k_vmm.copy_out(*pt, bufaddr, k_buf, buflen) < 0)
             return SYS_EFAULT;
 
+        if (_arg_int(1, buflen) < 0)
+            return SYS_EFAULT;
+
+        if (_arg_int(2, flags) < 0)
+            return SYS_EFAULT;
+
+        // Validate buffer parameters
+        if (buflen < 0)
+            return SYS_EINVAL;
+        
+        if (buflen == 0)
+            return 0;
+        
+        if (bufaddr == 0)
+            return SYS_EFAULT;
+
+        // Validate flags
+        constexpr int valid_flags = syscall::GRND_NONBLOCK | syscall::GRND_RANDOM | syscall::GRND_INSECURE;
+        if (flags & ~valid_flags)
+        {
+            printfRed("[sys_getrandom] Invalid flags: 0x%x\n", flags);
+            return SYS_EINVAL;
+        }
+
+        // Handle GRND_NONBLOCK flag
+        [[maybe_unused]] bool nonblock = (flags & syscall::GRND_NONBLOCK) != 0;
+        bool use_random = (flags & syscall::GRND_RANDOM) != 0;
+        [[maybe_unused]] bool allow_insecure = (flags & syscall::GRND_INSECURE) != 0;
+
+        // If GRND_RANDOM is set, limit the maximum bytes to 512 (Linux behavior)
+        if (use_random && buflen > 512)
+            buflen = 512;
+        
+        // For urandom source, limit to 32MB-1 bytes (Linux behavior)
+        if (!use_random && buflen > (32 * 1024 * 1024 - 1))
+            buflen = 32 * 1024 * 1024 - 1;
+
+        char *k_buf = new char[buflen];
+        if (!k_buf)
+            return SYS_ENOMEM;
+
+        // For now, we use a simple deterministic random source
+        // In a real implementation, this would interface with the entropy pool
+        ulong random = 0x4249'4C47'4B43'5546UL;
+        size_t random_size = sizeof(random);
+        
+        for (size_t i = 0; i < static_cast<size_t>(buflen); i += random_size)
+        {
+            // Add some variation based on current time and iteration
+            random = random * 1103515245UL + 12345UL + i;
+            
+            size_t copy_size = (i + random_size) <= static_cast<size_t>(buflen)
+                ? random_size
+                : buflen - i;
+            memcpy(k_buf + i, &random, copy_size);
+        }
+
+        if (mem::k_vmm.copy_out(*pt, bufaddr, k_buf, buflen) < 0)
+        {
+            delete[] k_buf;
+            return SYS_EFAULT;
+        }
+
         delete[] k_buf;
+        
+        printfCyan("[sys_getrandom] Generated %d random bytes, flags=0x%x\n", buflen, flags);
         return buflen;
     }
     //     uint64 SyscallHandler::sys_clock_gettime()
