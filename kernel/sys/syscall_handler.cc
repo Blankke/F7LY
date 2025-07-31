@@ -616,11 +616,7 @@ namespace syscall
         // 获取要复制的文件
         fs::file *old_file = p->get_open_file(oldfd);
 
-        // 如果newfd已经打开，先关闭它
-        if (p->get_open_file(newfd))
-        {
-            p->get_open_file(newfd)->free_file();
-        }
+
 
         // 使用proc_manager的alloc_fd方法来分配指定的fd
         if (proc::k_pm.alloc_fd(p, old_file, newfd) < 0)

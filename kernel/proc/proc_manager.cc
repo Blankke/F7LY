@@ -932,8 +932,14 @@ namespace proc
         // 不为空先释放资源
         if (p->_ofile->_ofile_ptr[fd] != nullptr)
         {
-            return -1; // 如果fd已经被占用，返回错误
+            // 如果newfd已经打开，先关闭它，再打开
+            if (p->_ofile->_ofile_ptr[fd] != f)
+            {
+                p->_ofile->_ofile_ptr[fd]->free_file(); // 释放旧的文件描述符
+                p->_ofile->_ofile_ptr[fd] = nullptr; // 释放旧的文件描述符
+            }
         }
+        
         p->_ofile->_ofile_ptr[fd] = f;
         p->_ofile->_fl_cloexec[fd] = false; // 默认不设置 CLOEXEC
 

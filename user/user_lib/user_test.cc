@@ -742,7 +742,7 @@ char *ltp_testcases[] = {
     // "dup07",//完全PASS
     // "dup201",//完全PASS
     // "dup202",//完全PASS
-    // "dup203",
+    // "dup203", //pass
     // "dup204",// 完全PASS
     // "dup205",//完全PASS
     // "dup206", //完全PASS
