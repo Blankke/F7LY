@@ -114,6 +114,9 @@ namespace shm
         // 解除映射共享内存段
         int detach_seg(void *addr);
 
+        // 检查地址是否属于共享内存区域
+        bool is_shared_memory_address(void *addr);
+
         // 控制共享内存段 (标准shmctl接口)
         // cmd可以是: IPC_STAT, IPC_SET, IPC_RMID
         // 用法示例:

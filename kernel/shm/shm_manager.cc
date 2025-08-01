@@ -589,7 +589,10 @@ namespace shm
         // 注意：在新的内存管理体系中，共享内存不直接计入进程的_sz
         // _sz现在由程序段和堆的总和自动计算，共享内存有独立的生命周期管理
         // 如果需要更新总内存大小，应该调用进程的update_total_memory_size()方法
-
+            // printfCyan("[ShmManager::detach_seg] Attached addresses: ");
+            // for (void* attached_addr : seg.attached_addrs) {
+            //     printfCyan("%p ", attached_addr);
+            // }
         printfGreen("[ShmManager] Successfully attached segment shmid=%d at address 0x%x, user_size=0x%x, real_size=0x%x\n",
                     shmid, attach_addr, seg.size, seg.real_size);
 
@@ -605,12 +608,17 @@ namespace shm
         for (; it != segments->end(); ++it)
         {
             shm_segment &seg = it->second;
-            printfCyan("[ShmManager::detach_seg] Checking segment shmid=%d\n", seg.shmid);
-            
+            // printfCyan("[ShmManager::detach_seg] Checking segment shmid=%d\n", seg.shmid);
+            // //打印地址列表
+            // printfCyan("[ShmManager::detach_seg] Attached addresses: ");
+            // for (void* attached_addr : seg.attached_addrs) {
+            //     printfCyan("%p ", attached_addr);
+            // }
+            printfCyan("\n");
             // 在附加地址列表中查找
             auto addr_it = eastl::find(seg.attached_addrs.begin(), seg.attached_addrs.end(), addr);
             if (addr_it != seg.attached_addrs.end()) {
-                printfCyan("[ShmManager::detach_seg] Found address in segment shmid=%d\n", seg.shmid);
+                // printfCyan("[ShmManager::detach_seg] Found address in segment shmid=%d\n", seg.shmid);
                 break;
             }
         }
@@ -666,6 +674,28 @@ namespace shm
         }
 
         return 0;
+    }
+
+    bool ShmManager::is_shared_memory_address(void *addr)
+    {
+        if (!addr) {
+            return false;
+        }
+
+        // 遍历所有共享内存段
+        auto it = segments->begin();
+        for (; it != segments->end(); ++it)
+        {
+            shm_segment &seg = it->second;
+            
+            // 在附加地址列表中查找
+            auto addr_it = eastl::find(seg.attached_addrs.begin(), seg.attached_addrs.end(), addr);
+            if (addr_it != seg.attached_addrs.end()) {
+                return true;
+            }
+        }
+        
+        return false;
     }
 
     int ShmManager::shmctl(int shmid, int cmd, struct shmid_ds *buf,uint64 buf_addr)

@@ -400,7 +400,6 @@ int mmap_handler(uint64 va, int cause)
 
   // 检查权限
   struct proc::vma *vm = &p->_vma->_vm[i];
-  
   // PROT_NONE 不允许任何访问
   if (vm->prot == PROT_NONE) {
     printfRed("mmap_handler: access to PROT_NONE page at %p\n", va);

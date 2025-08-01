@@ -1,6 +1,6 @@
 #include "fs/vfs/file/file.hh"
 // #include "fs/vfs/dentry.hh"
-
+#pragma once
 namespace mem
 {
 	class UserspaceStream;

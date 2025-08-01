@@ -3,6 +3,7 @@
 #include "spinlock.hh"
 #include "prlimit.hh"
 #include "futex.hh"
+#include "fs/vfs/file/normal_file.hh"
 namespace tmm
 {
     struct tms;
@@ -128,4 +129,28 @@ namespace proc
 
     extern ProcessManager k_pm; // 全局进程管理器实例
 
+}
+
+inline void printRESULT()
+{
+    struct results
+    {
+        int passed;
+        int skipped;
+        int failed;
+        int warnings;
+        int broken;
+        unsigned int timeout;
+        int max_runtime;
+    };
+    proc::Pcb *_pcb = proc::k_pm.get_cur_pcb();
+    for (int i = 0; i < proc::max_vma_num; i++)
+        if (_pcb->_vma->_vm[i].vfile && _pcb->_vma->_vm[i].vfile->_path_name.substr(0, 5) == "/tmp/")
+        {
+            void *pa = proc::k_pm.get_cur_pcb()->_pt.walk_addr(_pcb->_vma->_vm[i].addr);
+            results *r = (results *)pa;
+            printf("pid:%d\n",_pcb->_pid);
+            printf("pa:%p\n", pa);
+            printf("result: \n pass:%d\n skipped:%d\n failed:%d\n warnings:%d\n broken:%d\n timeout:%u\n", r->passed, r->skipped, r->failed, r->warnings, r->broken, r->timeout);
+        }
 }

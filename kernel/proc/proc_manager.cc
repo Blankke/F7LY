@@ -5,7 +5,7 @@
 #include "virtual_memory_manager.hh"
 #include "scheduler.hh"
 #include "libs/klib.hh"
-#include "mem/memlayout.hh"          // 内核栈配置常量
+#include "mem/memlayout.hh" // 内核栈配置常量
 #ifdef RISCV
 #include "riscv/trap.hh"
 #elif defined(LOONGARCH)
@@ -15,6 +15,7 @@
 #include "devs/device_manager.hh"
 #include "fs/lwext4/ext4_errno.hh"
 #include "process_memory_manager.hh" // 新增：进程内存管理器
+#include "shm_manager.hh"
 #ifdef RISCV
 #include "devs/riscv/disk_driver.hh"
 #elif defined(LOONGARCH)
@@ -450,7 +451,8 @@ namespace proc
         p->_umask = 0022;     // 重置umask为默认值
 
         // 注意：文件描述符表已在exit_proc中清理，这里只重置指针
-        if (p->_ofile != nullptr) {
+        if (p->_ofile != nullptr)
+        {
             panic("freeproc: ofile should be cleaned in exit_proc, but found non-null pointer");
         }
 
@@ -845,8 +847,8 @@ namespace proc
         }
         return -1; // 未找到匹配的线程
     }
-    
-    Pcb* ProcessManager::find_proc_by_pid(int pid)
+
+    Pcb *ProcessManager::find_proc_by_pid(int pid)
     {
         for (Pcb *p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
         {
@@ -2439,6 +2441,31 @@ namespace proc
             else
             {
                 map_addr = PGROUNDUP(p->get_heap_end());
+                if (flags & MAP_SHARED)
+                {
+                    key_t key = shm::k_smm.ftok(f->_path_name.c_str(), 0);
+                    if (key == -1)
+                    {
+                        printfRed("[mmap] Failed to generate key for shared memory\n");
+                        if (errno != nullptr)
+                        {
+                            *errno = EINVAL;
+                        }
+                        return MAP_FAILED;
+                    }
+                    int shmid = shm::k_smm.create_seg(key, aligned_length, IPC_CREAT);
+                    if (shmid < 0)
+                    {
+                        printfRed("[mmap] Failed to create shared memory segment\n");
+                        if (errno != nullptr)
+                        {
+                            *errno = -shmid;
+                        }
+                        return MAP_FAILED;
+                    }
+                    shm::k_smm.attach_seg(shmid, (void *)map_addr);
+                    printfCyan("[mmap] Created shared memory segment with key %d at addr %p\n", key, (void *)map_addr);
+                }
                 p->set_heap_end(map_addr + aligned_length);
                 printfYellow("[mmap] Updated heap_end to %p for anonymous mapping\n",
                              (void *)(map_addr + aligned_length));
@@ -3600,8 +3627,6 @@ namespace proc
                            (void *)interp_base, (void *)interp_entry);
             }
 
-
-
             // **新增：段加载完成后的统计信息**
             printfBlue("execve: segment loading completed. Total sections recorded: %d\n", new_sec_cnt);
             for (int i = 0; i < new_sec_cnt; i++)
@@ -3964,5 +3989,5 @@ namespace proc
 
         // 写成0为了适配glibc的rtld_fini需求
         return 0; // 返回参数个数，表示成功执行
-    }; 
-}// namespace proc
+    };
+} // namespace proc

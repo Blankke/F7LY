@@ -12,6 +12,7 @@
 #include "proc/proc.hh"
 #include "proc_manager.hh"
 #include "sys/syscall_defs.hh"
+#include "shm/shm_manager.hh"
 extern char etext[]; // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
@@ -621,17 +622,33 @@ namespace mem
             // panic("uvmcopy: page not valid");
             pa = (uint64)pte.pa();
             flags = pte.get_flags();
-            if ((mem = mem::PhysicalMemoryManager::alloc_page()) == nullptr)
-            {
-                vmunmap(new_pt, 0, va / PGSIZE, 1);
-                return -1;
-            }
-            memmove(mem, (const char *)pa, PGSIZE);
-            if (map_pages(new_pt, va, PGSIZE, (uint64)mem, flags) == false)
-            {
-                k_pmm.free_page(mem);
-                vmunmap(new_pt, 0, va / PGSIZE, 1);
-                return -1;
+            
+            // 检查当前虚拟地址是否属于共享内存区域
+            bool is_shared = shm::k_smm.is_shared_memory_address((void*)va);
+            
+            if (is_shared) {
+                // 对于共享内存，直接复用原物理地址，不分配新页面
+                printfCyan("[vm_copy] Sharing memory for VA=%p -> PA=%p (shared memory)\n", va, pa);
+                if (map_pages(new_pt, va, PGSIZE, pa, flags) == false)
+                {
+                    vmunmap(new_pt, 0, va / PGSIZE, 1);
+                    return -1;
+                }
+            } else {
+                // 对于普通内存，分配新页面并复制内容
+                if ((mem = mem::PhysicalMemoryManager::alloc_page()) == nullptr)
+                {
+                    vmunmap(new_pt, 0, va / PGSIZE, 1);
+                    return -1;
+                }
+                memmove(mem, (const char *)pa, PGSIZE);
+                printfYellow("[vm_copy] Copying memory for VA=%p -> new PA=%p (private memory)\n", va, (uint64)mem);
+                if (map_pages(new_pt, va, PGSIZE, (uint64)mem, flags) == false)
+                {
+                    k_pmm.free_page(mem);
+                    vmunmap(new_pt, 0, va / PGSIZE, 1);
+                    return -1;
+                }
             }
         }
         return 0;
