@@ -1916,16 +1916,16 @@ char *ltp_testcases[] = {
     // "open03", // 完全PASS
     // "open04",    //完全PASS
     // "open06",   //pass
-    "open07",   //爆了
+    // "open07",   //pass
     // "open08", // socket
     // "open09", //pass
     // "open10", // socket
-    // "open11",    //爆了
-    // "open12",    //过了一个
-    // "open12_child",
+    // "open11",    //pass
+    // "open12",    //别跑！会爆
+    // "open12_child",//这个不是测例
     // "open13",    // pass
     // "open14",    //pass这个测例要跑一年，别急着掐死，多等会
-    // "openat01", // 爆了
+    // "openat01", // pass
     // "openat02",   //爆了
     // "openat02_child",
     // "openat03",   //pass这个和那个一年是同一个
@@ -2433,7 +2433,7 @@ char *ltp_testcases[] = {
     // "shell_pipe01.sh",
     // "shm_comm",
     // "shm_test",
-    // "shmat01",    //屎掉了
+    // "shmat01",    //没屎了
     // "shmat02",
     // "shmat03",     //pass?
     // "shmat04",     //pass

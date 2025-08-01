@@ -1201,6 +1201,13 @@ namespace syscall
                     return -EBADF;
                 }
 
+                // 检查dirfd是否指向一个目录
+                if (dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
+                {
+                    printfRed("[SyscallHandler::sys_openat] dirfd %d不是目录，文件类型: %d\n", dir_fd, (int)dir_file->_attrs.filetype);
+                    return SYS_ENOTDIR; // 不是目录
+                }
+
                 // 使用dirfd对应的路径作为基准目录
                 abs_pathname = get_absolute_path(pathname.c_str(), dir_file->_path_name.c_str());
             }
@@ -2377,6 +2384,13 @@ namespace syscall
                 if (dir_file->lwext4_file_struct.flags & O_PATH)
                 {
                     return -EBADF;
+                }
+
+                // 检查dirfd是否指向一个目录
+                if (dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
+                {
+                    printfRed("[SyscallHandler::sys_fstatat] dirfd %d不是目录，文件类型: %d\n", dirfd, (int)dir_file->_attrs.filetype);
+                    return SYS_ENOTDIR; // 不是目录
                 }
 
                 // 使用dirfd对应的路径作为基准目录

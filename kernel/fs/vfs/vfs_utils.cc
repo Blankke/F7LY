@@ -265,8 +265,12 @@ static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file
         basic_perms &= ~0444; // 清除读权限
         basic_perms |= 0222; // 设置写权限
     }
-    // O_RDWR (0x02) 保持读写权限不变
-    
+    else if (access_mode == O_RDWR) // 0x02 - 读写
+    {
+        basic_perms |= 0444;  // 设置读权限
+        basic_perms |= 0222; // 设置写权限
+    }
+        
     // 合并特殊权限位和基本权限位
     mode = special_bits | basic_perms;
 
@@ -277,12 +281,65 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
 {
     // printfYellow("[vfs_openat] : absolute_path=%s, flags=%o, mode=0%o\n", absolute_path.c_str(), flags, mode);
 
-    bool file_exists = (vfs_is_file_exist(absolute_path.c_str()) == 1);
+    // 解析路径中的符号链接
+    eastl::string resolved_path = absolute_path;
+    
+    // 分离父目录和文件名
+    eastl::string parent_dir;
+    eastl::string filename;
+    
+    size_t last_slash = absolute_path.find_last_of('/');
+    if (last_slash != eastl::string::npos && last_slash > 0)
+    {
+        parent_dir = absolute_path.substr(0, last_slash);
+        filename = absolute_path.substr(last_slash + 1);
+    }
+    else
+    {
+        parent_dir = "/";
+        if (last_slash == 0 && absolute_path.length() > 1)
+            filename = absolute_path.substr(1);
+        else
+            filename = absolute_path;
+    }
+
+    // 总是解析父目录中的符号链接
+    eastl::string resolved_parent;
+    int r = resolve_symlinks(parent_dir, resolved_parent);
+    if (r < 0)
+    {
+        printfRed("vfs_openat: failed to resolve parent path %s, error: %d\n", parent_dir.c_str(), r);
+        // 只有在严重错误时才返回，否则继续使用原路径
+        if (r == -ELOOP)
+            return r;
+        resolved_parent = parent_dir; // 使用原路径
+    }
+
+    // 重新构建路径
+    resolved_path = resolved_parent;
+    if (resolved_path.back() != '/')
+        resolved_path += "/";
+    resolved_path += filename;
+
+    // 如果没有 O_NOFOLLOW 标志，还要解析最终的文件名（如果它是符号链接）
+    if (!(flags & O_NOFOLLOW))
+    {
+        r = resolve_symlinks(resolved_path, resolved_path);
+        if (r < 0)
+        {
+            printfRed("vfs_openat: failed to resolve final path %s, error: %d\n", resolved_path.c_str(), r);
+            if (r == -ELOOP)
+                return r;
+            // 对于其他错误，继续使用当前路径
+        }
+    }
+
+    bool file_exists = (vfs_is_file_exist(resolved_path.c_str()) == 1);
 
     // 处理 O_EXCL + O_CREAT 组合：如果文件存在，应该失败
     if ((flags & O_CREAT) && (flags & O_EXCL) && file_exists)
     {
-        printfRed("vfs_openat: file %s already exists with O_CREAT|O_EXCL\n", absolute_path.c_str());
+        printfRed("vfs_openat: file %s already exists with O_CREAT|O_EXCL\n", resolved_path.c_str());
         return -EEXIST;
     }
 
@@ -290,7 +347,7 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
     if (flags & O_TMPFILE)
     {
         // 去除末尾斜杠
-        eastl::string dir_path = absolute_path;
+        eastl::string dir_path = resolved_path;
         if (!dir_path.empty() && dir_path.back() == '/')
             dir_path.pop_back();
 
@@ -317,7 +374,7 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
             
             // 移除 O_TMPFILE 标志，按普通目录打开处理
             flags &= ~O_TMPFILE;
-            absolute_path = dir_path; // 使用处理过的路径（去除末尾斜杠）
+            resolved_path = dir_path; // 使用处理过的路径（去除末尾斜杠）
             // 继续执行下面的普通文件处理逻辑
         }
         else
@@ -387,21 +444,28 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
     // 如果文件不存在且没有O_CREAT标志，返回错误
     if (!file_exists && (flags & O_CREAT) == 0)
     {
-        printfRed("vfs_openat: file %s does not exist, flags: %d\n", absolute_path.c_str(), flags);
+        printfRed("vfs_openat: file %s does not exist, flags: %d\n", resolved_path.c_str(), flags);
         return -ENOENT; // 文件不存在
     }
 
     // 确定要使用的实际路径和文件类型
-    eastl::string actual_path = absolute_path;
+    eastl::string actual_path = resolved_path;
     int type = -1;
 
     if (file_exists)
     {
-        type = vfs_path2filetype(absolute_path);
+        type = vfs_path2filetype(resolved_path);
     }
     else
     {
         type = fs::FileTypes::FT_NORMAL; // 新文件默认为普通文件
+    }
+
+    // 处理 O_NOFOLLOW：如果最终路径是符号链接，应该返回错误
+    if ((flags & O_NOFOLLOW) && file_exists && type == fs::FileTypes::FT_SYMLINK)
+    {
+        printfRed("vfs_openat: O_NOFOLLOW specified but %s is a symlink\n", resolved_path.c_str());
+        return -ELOOP; // 符号链接循环错误
     }
 
     // 处理 O_DIRECTORY：如果指定了此标志，路径必须是目录
@@ -409,59 +473,36 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
     {
         if (file_exists && type != fs::FileTypes::FT_DIRECT)
         {
-            printfRed("vfs_openat: O_DIRECTORY specified but %s is not a directory\n", absolute_path.c_str());
+            printfRed("vfs_openat: O_DIRECTORY specified but %s is not a directory\n", resolved_path.c_str());
             return -ENOTDIR; // 不是目录
         }
     }
 
-    // 处理符号链接
-    if (type == fs::FileTypes::FT_SYMLINK)
+    // 处理目录的特殊限制
+    if (file_exists && type == fs::FileTypes::FT_DIRECT)
     {
-
-        if (flags & O_NOFOLLOW)
+        int access_mode = flags & O_ACCMODE;
+        
+        // 目录只能用 O_RDONLY 打开
+        if (access_mode != O_RDONLY)
         {
-            // 如果指定了 O_NOFOLLOW，我们需要创建一个符号链接文件对象
-            // 这样 fstat 可以获取符号链接本身的属性
-            printfYellow("vfs_openat: O_NOFOLLOW specified, creating symlink file object for %s\n", absolute_path.c_str());
-
-            // 创建一个普通文件对象来表示符号链接
-            // 但是文件类型标记为符号链接
-            fs::FileAttrs attrs;
-            attrs.filetype = fs::FileTypes::FT_SYMLINK;
-            attrs._value = 0777; // 符号链接通常有全权限
-
-            fs::normal_file *temp_file = new fs::normal_file(attrs, absolute_path);
-            // 不需要调用 ext4_fopen2，因为我们只是要获取符号链接的属性
-            // 直接设置状态即可
-            file = temp_file;
-            return EOK;
+            printfRed("vfs_openat: cannot open directory %s with write access (flags: %s)\n", 
+                     resolved_path.c_str(), flags_to_string(flags).c_str());
+            return -EISDIR; // 是目录错误
         }
-        else
+        
+        // 不能对已存在的目录使用 O_CREAT
+        if (flags & O_CREAT)
         {
-            // 如果没有指定 O_NOFOLLOW，解析符号链接
-            eastl::string resolved_path;
-            int r = resolve_symlinks(absolute_path, resolved_path);
-            if (r < 0)
-            {
-                printfRed("vfs_openat: failed to resolve symlink %s, error: %d\n", absolute_path.c_str(), r);
-                return r;
-            }
-
-            actual_path = resolved_path;
-            printfYellow("vfs_openat: resolved symlink %s -> %s\n", absolute_path.c_str(), resolved_path.c_str());
-
-            // 重新检查解析后路径的存在性和类型
-            file_exists = (vfs_is_file_exist(actual_path.c_str()) == 1);
-            if (file_exists)
-            {
-                type = vfs_path2filetype(actual_path);
-            }
-            else
-            {
-                type = fs::FileTypes::FT_NORMAL; // 默认为普通文件（可能需要创建）
-            }
+            printfRed("vfs_openat: cannot use O_CREAT on existing directory %s\n", resolved_path.c_str());
+            return -EISDIR; // 是目录错误
         }
     }
+
+    // 注意：符号链接处理已经在函数开头完成
+    // 如果到这里 type 还是 FT_SYMLINK，说明有 O_NOFOLLOW 标志
+    // 但我们已经在上面检查过了，所以这里不应该再有符号链接
+    
     int status = -100;
 
     if (type == fs::FileTypes::FT_NORMAL || (flags & O_CREAT) != 0)
