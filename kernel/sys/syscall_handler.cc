@@ -554,14 +554,14 @@ namespace syscall
         int flags = 0;
         if (_arg_addr(0, addr) < 0)
             return -1;
-        if(_arg_int(1, flags) < 0)
+        if (_arg_int(1, flags) < 0)
             return -1;
-        
+
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
 
         // 验证flags参数，pipe2支持O_CLOEXEC、O_NONBLOCK和O_DIRECT
-        if (flags & ~(O_CLOEXEC | O_NONBLOCK | O_DIRECT)) 
+        if (flags & ~(O_CLOEXEC | O_NONBLOCK | O_DIRECT))
         {
             printfRed("[sys_pipe2] Invalid flags: 0x%x\n", flags);
             return SYS_EINVAL;
@@ -626,8 +626,6 @@ namespace syscall
 
         // 获取要复制的文件
         fs::file *old_file = p->get_open_file(oldfd);
-
-
 
         // 使用proc_manager的alloc_fd方法来分配指定的fd
         if (proc::k_pm.alloc_fd(p, old_file, newfd) < 0)
@@ -1230,7 +1228,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_write] Error fetching n argument\n");
             return SYS_EFAULT;
         }
-        if(n == 0)
+        if (n == 0)
         {
             printfYellow("[SyscallHandler::sys_write] Write size is zero, returning 0\n");
             return 0;
@@ -2000,16 +1998,16 @@ namespace syscall
 
         if (_arg_addr(0, tv_addr) < 0)
             return SYS_EFAULT;
-        if(_arg_addr(1, tz_addr) < 0) // 第二个参数是tz，暂时不支持
+        if (_arg_addr(1, tz_addr) < 0) // 第二个参数是tz，暂时不支持
             return SYS_EFAULT;
-        if(is_bad_addr(tv_addr) || is_bad_addr(tz_addr))
+        if (is_bad_addr(tv_addr) || is_bad_addr(tz_addr))
         {
             printfRed("[SyscallHandler::sys_gettimeofday] Bad address for tv or tz\n");
             return SYS_EFAULT;
         }
         tv = tmm::k_tm.get_time_val();
         // printf("[SyscallHandler::sys_gettimeofday] tv: %d.%d\n", tv.tv_sec, tv.tv_usec);
-        if(tz_addr != 0)
+        if (tz_addr != 0)
         {
             printfRed("暂时不支持tz参数");
         }
@@ -2066,7 +2064,7 @@ namespace syscall
             return -1;
         if (_arg_int(1, size) < 0)
             return -1;
-        if(size < 0)
+        if (size < 0)
         {
             printfRed("[SyscallHandler::sys_getcwd] Invalid buffer size: %d\n", size);
             return SYS_EFAULT;
@@ -2864,10 +2862,10 @@ namespace syscall
         // Validate buffer parameters
         if (buflen < 0)
             return SYS_EINVAL;
-        
+
         if (buflen == 0)
             return 0;
-        
+
         if (bufaddr == 0)
             return SYS_EFAULT;
 
@@ -2887,7 +2885,7 @@ namespace syscall
         // If GRND_RANDOM is set, limit the maximum bytes to 512 (Linux behavior)
         if (use_random && buflen > 512)
             buflen = 512;
-        
+
         // For urandom source, limit to 32MB-1 bytes (Linux behavior)
         if (!use_random && buflen > (32 * 1024 * 1024 - 1))
             buflen = 32 * 1024 * 1024 - 1;
@@ -2900,15 +2898,15 @@ namespace syscall
         // In a real implementation, this would interface with the entropy pool
         ulong random = 0x4249'4C47'4B43'5546UL;
         size_t random_size = sizeof(random);
-        
+
         for (size_t i = 0; i < static_cast<size_t>(buflen); i += random_size)
         {
             // Add some variation based on current time and iteration
             random = random * 1103515245UL + 12345UL + i;
-            
+
             size_t copy_size = (i + random_size) <= static_cast<size_t>(buflen)
-                ? random_size
-                : buflen - i;
+                                   ? random_size
+                                   : buflen - i;
             memcpy(k_buf + i, &random, copy_size);
         }
 
@@ -2919,7 +2917,7 @@ namespace syscall
         }
 
         delete[] k_buf;
-        
+
         printfCyan("[sys_getrandom] Generated %d random bytes, flags=0x%x\n", buflen, flags);
         return buflen;
     }
@@ -3813,7 +3811,7 @@ namespace syscall
                 {
                     flags &= ~O_NONBLOCK;
                 }
-                
+
                 return flags;
             }
             // 返回文件访问模式和状态标志
@@ -5158,26 +5156,26 @@ namespace syscall
         int pid;
         ulong cpusetsize;
         uint64 mask_addr;
-        
+
         // 获取系统调用参数
         if (_arg_int(0, pid) < 0 || _arg_addr(1, cpusetsize) < 0 || _arg_addr(2, mask_addr) < 0)
         {
             return SYS_EFAULT;
         }
-        
-        printfCyan("[sys_sched_getaffinity] pid: %d, cpusetsize: %lu, mask_addr: %p\n", 
-                   pid, cpusetsize, (void*)mask_addr);
-        
+
+        printfCyan("[sys_sched_getaffinity] pid: %d, cpusetsize: %lu, mask_addr: %p\n",
+                   pid, cpusetsize, (void *)mask_addr);
+
         // 检查cpusetsize的大小
         if (cpusetsize < sizeof(CpuMask))
         {
-            printfRed("[sys_sched_getaffinity] cpusetsize %lu too small, need at least %lu\n", 
+            printfRed("[sys_sched_getaffinity] cpusetsize %lu too small, need at least %lu\n",
                       cpusetsize, sizeof(CpuMask));
             return SYS_EINVAL;
         }
-        
+
         proc::Pcb *target_proc;
-        
+
         // 如果pid为0，获取当前进程
         if (pid == 0)
         {
@@ -5198,33 +5196,136 @@ namespace syscall
                 return SYS_ESRCH;
             }
         }
-        
+
         // 获取CPU亲和性掩码
-        const CpuMask& cpu_mask = target_proc->get_cpu_mask();
-        
-        printfCyan("[sys_sched_getaffinity] cpu_mask bits: %lx\n", cpu_mask.bits);
-        
+        const CpuMask &cpu_mask = target_proc->get_cpu_mask();
+
+        // printfCyan("[sys_sched_getaffinity] cpu_mask bits: %lx\n", cpu_mask.bits);
+        // printfCyan("[sys_sched_getaffinity] sizeof(CpuMask): %lu\n", sizeof(CpuMask));
+
         // 将CPU掩码拷贝到用户空间
         proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = current_proc->get_pagetable();
-        
+
+        current_proc->print_detailed_memory_info();
+
+        printfGreen("[sys_sched_getaffinity] Copying CPU mask to user space at address %p\n", (void *)mask_addr);
         if (mem::k_vmm.copy_out(*pt, mask_addr, &cpu_mask, sizeof(CpuMask)) < 0)
         {
             printfRed("[sys_sched_getaffinity] failed to copy cpu mask to user space\n");
             return SYS_EFAULT;
         }
-        
+
         // 成功时返回实际拷贝的字节数
         return sizeof(CpuMask);
     }
     uint64 SyscallHandler::sys_setpgid()
     {
+        int pid, pgid;
+
+        // 获取参数
+        if (_arg_int(0, pid) < 0)
+        {
+            printfRed("[SyscallHandler::sys_setpgid] Error fetching pid argument\n");
+            return SYS_EINVAL;
+        }
+
+        if (_arg_int(1, pgid) < 0)
+        {
+            printfRed("[SyscallHandler::sys_setpgid] Error fetching pgid argument\n");
+            return SYS_EINVAL;
+        }
+
+        printfCyan("[SyscallHandler::sys_setpgid] pid: %d, pgid: %d\n", pid, pgid);
+
+        // 确定目标进程
+        proc::Pcb *target_proc;
+        if (pid == 0)
+        {
+            // pid 为 0，使用当前进程
+            target_proc = proc::k_pm.get_cur_pcb();
+            if (target_proc == nullptr)
+            {
+                printfRed("[SyscallHandler::sys_setpgid] Current process is null\n");
+                return SYS_ESRCH;
+            }
+        }
+        else
+        {
+            // 根据 pid 查找对应的进程
+            target_proc = proc::k_pm.find_proc_by_pid(pid);
+            if (target_proc == nullptr)
+            {
+                printfRed("[SyscallHandler::sys_setpgid] Process with pid %d not found\n", pid);
+                return SYS_ESRCH; // 进程不存在
+            }
+        }
+
+        // 确定要设置的进程组ID
+        uint32 set_pgid;
+        if (pgid == 0)
+        {
+            // pgid 为 0，使用目标进程的 PID 作为进程组ID
+            set_pgid = target_proc->get_pid();
+        }
+        else
+        {
+            // 使用指定的 pgid
+            set_pgid = (uint32)pgid;
+
+            // 检查 pgid 是否为负数
+            if (pgid < 0)
+            {
+                printfRed("[SyscallHandler::sys_setpgid] Invalid pgid: %d\n", pgid);
+                return SYS_EINVAL;
+            }
+        }
+
+        // 设置进程组ID
+        target_proc->set_pgid(set_pgid);
+
+        printfGreen("[SyscallHandler::sys_setpgid] Successfully set pgid %u for process %d\n",
+                    set_pgid, target_proc->get_pid());
+
         return 0;
-        panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_getpgid()
     {
-        panic("未实现该系统调用");
+        int pid;
+
+        // 获取参数
+        if (_arg_int(0, pid) < 0)
+        {
+            printfRed("[SyscallHandler::sys_getpgid] Error fetching pid argument\n");
+            return SYS_EINVAL;
+        }
+
+        printfCyan("[SyscallHandler::sys_getpgid] pid: %d\n", pid);
+
+        // 如果 pid 为 0，返回当前进程的进程组ID
+        if (pid == 0)
+        {
+            proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+            if (current_proc == nullptr)
+            {
+                panic("[SyscallHandler::sys_getpgid] Current process is null\n");
+                return SYS_ESRCH;
+            }
+
+            // 假设 Pcb 中有 pgid 字段，如果没有，可能需要添加或使用其他方式获取
+            return current_proc->get_pgid();
+        }
+
+        // 根据 pid 查找对应的进程
+        proc::Pcb *target_proc = proc::k_pm.find_proc_by_pid(pid);
+        if (target_proc == nullptr)
+        {
+            printfRed("[SyscallHandler::sys_getpgid] Process with pid %d not found\n", pid);
+            return SYS_ESRCH; // 进程不存在
+        }
+
+        // 返回目标进程的进程组ID
+        return target_proc->get_pgid();
     }
     uint64 SyscallHandler::sys_setsid()
     {
@@ -7500,7 +7601,7 @@ namespace syscall
     {
         // https://www.man7.org/linux/man-pages/man2/faccessat.2.html
         // faccessat2 syscall: int faccessat2(int dirfd, const char *pathname, int mode, int flags);
-        
+
         int dirfd, mode, flags;
         eastl::string pathname;
         if (_arg_int(0, dirfd) < 0 || _arg_int(2, mode) < 0 || _arg_int(3, flags) < 0)
@@ -7513,8 +7614,8 @@ namespace syscall
         }
 
         // 检查 flags 参数的有效性
-        #define AT_EACCESS 0x200  // Use effective user and group IDs for access checks
-        #define AT_SYMLINK_NOFOLLOW_FAT2 0x100  // Do not follow symbolic links (avoid conflict)
+#define AT_EACCESS 0x200               // Use effective user and group IDs for access checks
+#define AT_SYMLINK_NOFOLLOW_FAT2 0x100 // Do not follow symbolic links (avoid conflict)
         int valid_flags = AT_EACCESS | AT_SYMLINK_NOFOLLOW_FAT2;
         if (flags & ~valid_flags)
         {
@@ -7566,7 +7667,7 @@ namespace syscall
         // 处理 AT_SYMLINK_NOFOLLOW 标志
         // 如果设置了此标志，我们需要检查文件本身而不是它指向的目标
         // 当前实现中，我们暂时不处理符号链接，所以这个标志的影响有限
-        
+
         // 首先验证路径中的每个父目录都是目录
         eastl::string path_to_check = abs_pathname;
         size_t last_slash = path_to_check.find_last_of('/');
@@ -7614,7 +7715,7 @@ namespace syscall
 
         // 处理访问权限检查
         [[maybe_unused]] int _flags = 0;
-        
+
         // 如果设置了 AT_EACCESS 标志，使用有效用户和组ID进行检查
         // 否则使用实际用户和组ID进行检查
         // 在当前简化的实现中，我们暂时不区分这两种情况
@@ -7642,10 +7743,10 @@ namespace syscall
         {
             return fd; // 返回错误码
         }
-        
+
         // 关闭刚打开的文件描述符，因为 faccessat2 只是检查访问权限
         proc::k_pm.close(fd);
-        
+
         return 0;
     }
     uint64 SyscallHandler::sys_openat2()
