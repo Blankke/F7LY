@@ -1912,14 +1912,14 @@ char *ltp_testcases[] = {
     // "open_tree01",
     // "open_tree02",
     // "open01",    //pass
-    // "open02",
+    // "open02", //socket
     // "open03", // 完全PASS
     // "open04",    //完全PASS
     // "open06",   //pass
     // "open07",   //爆了
-    // "open08",
+    // "open08", // socket
     // "open09", //爆了
-    // "open10",
+    // "open10", // socket
     // "open11",    //爆了
     // "open12",    //过了一个
     // "open12_child",
