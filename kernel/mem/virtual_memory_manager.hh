@@ -10,6 +10,11 @@
 
 #endif
 
+// 前向声明
+namespace proc {
+    struct vma;
+}
+
 namespace mem
 {
 	class VirtualMemoryManager
@@ -90,6 +95,14 @@ namespace mem
 		/// @param len length
 		/// @return 0 if success, -1 if failed
 		int copy_out( PageTable &pt, uint64 va, const void *p, uint64 len );
+
+		/// @brief 为VMA惰性分配页面，统一处理mmap的各种标志和权限
+		/// @param pt 页表
+		/// @param va 虚拟地址
+		/// @param vm VMA结构指针
+		/// @param access_type 访问类型：0=读取, 1=写入, 2=执行
+		/// @return 成功返回0，失败返回-1
+		int allocate_vma_page(PageTable &pt, uint64 va, struct proc::vma *vm, int access_type);
 
 		/// @brief mark a PTE invalid for user access
 		/// @param pt 

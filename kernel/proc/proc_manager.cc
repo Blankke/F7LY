@@ -153,6 +153,9 @@ namespace proc
                 p->_slot = default_proc_slot;
                 p->_priority = default_proc_prio;
 
+                // 初始化CPU亲和性掩码：默认可以在任何CPU上运行
+                p->_cpu_mask = CpuMask((1ULL << NUMCPU) - 1);
+
                 /****************************************************************************************
                  * 内存管理初始化
                  ****************************************************************************************/
@@ -443,6 +446,9 @@ namespace proc
         p->_slot = 0;     // 重置时间片
         p->_priority = 0; // 重置优先级
 
+        // 重新初始化CPU亲和性掩码：默认可以在任何CPU上运行
+        p->_cpu_mask = CpuMask((1ULL << NUMCPU) - 1);
+
         /****************************************************************************************
          * 文件系统和I/O管理清理
          ****************************************************************************************/
@@ -573,9 +579,9 @@ namespace proc
                 continue;
             }
 
-            printf("Process[%d]: pid=%d tid=%d name='%s' state=%d parent_pid=%d\n",
+            printf("Process[%d]: pid=%d tid=%d name='%s' state=%d parent_pid=%d pgid=%d sid=%d\n",
                    i, p._pid, p._tid, p._name, (int)p._state,
-                   p._parent ? p._parent->_pid : -1);
+                   p._parent ? p._parent->_pid : -1, p._pgid, p._sid);
 
             switch (p._state)
             {
@@ -742,9 +748,15 @@ namespace proc
         p->_trapframe->sp = allocated_sz;
 
         safestrcpy(p->_name, "initcode", sizeof(p->_name));
-        p->_parent = p;
+        p->_parent = p;  // init进程是自己的父进程
         // safestrcpy(p->_cwd_name, "/", sizeof(p->_cwd_name));
         p->_cwd_name = "/";
+
+        // init进程的特殊属性（在alloc_proc中已设置）：
+        // - PID = 1
+        // - PGID = 1（成为进程组1的领导者）
+        // - SID = 1（成为会话1的领导者）
+        // - 所有其他进程最终都成为init进程的子进程
 
         p->_state = ProcState::RUNNABLE;
 
@@ -800,18 +812,79 @@ namespace proc
     int ProcessManager::kill_signal(int pid, int sig)
     {
         Pcb *p;
-        for (p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
-        {
-            p->_lock.acquire();
-            if (p->_pid == pid || (p->_parent != NULL && p->_parent->_pid == pid))
+        int count = 0;  // 记录发送信号的进程数量
+        
+        if (pid > 0) {
+            // 发送信号给特定PID的进程
+            for (p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
             {
-                p->add_signal(sig);
+                p->_lock.acquire();
+                if (p->_pid == pid && p->_state != ProcState::UNUSED)
+                {
+                    p->add_signal(sig);
+                    p->_lock.release();
+                    return 0;
+                }
                 p->_lock.release();
-                return 0;
             }
-            p->_lock.release();
+            return -1;  // 没找到指定PID的进程
         }
-        return -1;
+        else if (pid == 0) {
+            // 发送信号给当前进程组的所有进程
+            Pcb *current = get_cur_pcb();
+            if (current == nullptr) return -1;
+            
+            int target_pgid = current->_pgid;
+            for (p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
+            {
+                p->_lock.acquire();
+                if (p->_pgid == target_pgid && p->_state != ProcState::UNUSED)
+                {
+                    p->add_signal(sig);
+                    count++;
+                }
+                p->_lock.release();
+            }
+            return count > 0 ? 0 : -1;
+        }
+        else if (pid == -1) {
+            panic("kill_signal: pid == -1 is not implemented");
+            // 发送信号给当前进程有权限发送的所有进程（除了init进程）
+            Pcb *current = get_cur_pcb();
+            if (current == nullptr) return -1;
+            
+            for (p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
+            {
+                p->_lock.acquire();
+                if (p->_pid > 1 && p->_state != ProcState::UNUSED &&  // 跳过init进程
+                    (p->_uid == current->_euid || current->_euid == 0))  // 权限检查
+                {
+                    p->add_signal(sig);
+                    count++;
+                }
+                p->_lock.release();
+            }
+            return count > 0 ? 0 : -1;
+        }
+        else {
+            // pid < -1: 发送信号给进程组ID为-pid的所有进程
+            int target_pgid = -pid;
+            Pcb *current = get_cur_pcb();
+            if (current == nullptr) return -1;
+            
+            for (p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
+            {
+                p->_lock.acquire();
+                if (p->_pgid == target_pgid && p->_state != ProcState::UNUSED &&
+                    (p->_uid == current->_euid || current->_euid == 0))  // 权限检查
+                {
+                    p->add_signal(sig);
+                    count++;
+                }
+                p->_lock.release();
+            }
+            return count > 0 ? 0 : -1;
+        }
     }
 
     int ProcessManager::tkill(int tid, int sig)
@@ -917,7 +990,7 @@ namespace proc
                 state = (char *)states[(int)p->_state];
             else
                 state = (char *)"???";
-            printf("%d %s %s", p->_pid, state, p->_name);
+            printf("%d %s %s pgid=%d sid=%d", p->_pid, state, p->_name, p->_pgid, p->_sid);
             printf("\n");
         }
     }
@@ -934,8 +1007,14 @@ namespace proc
         // 不为空先释放资源
         if (p->_ofile->_ofile_ptr[fd] != nullptr)
         {
-            return -1; // 如果fd已经被占用，返回错误
+            // 如果newfd已经打开，先关闭它，再打开
+            if (p->_ofile->_ofile_ptr[fd] != f)
+            {
+                p->_ofile->_ofile_ptr[fd]->free_file(); // 释放旧的文件描述符
+                p->_ofile->_ofile_ptr[fd] = nullptr; // 释放旧的文件描述符
+            }
         }
+        
         p->_ofile->_ofile_ptr[fd] = f;
         p->_ofile->_fl_cloexec[fd] = false; // 默认不设置 CLOEXEC
 
@@ -1049,8 +1128,23 @@ namespace proc
 
         // 继承父进程的身份信息
         np->_ppid = p->_pid;
-        np->_pgid = p->_pgid;
-        np->_sid = p->_sid;
+        
+        // 进程组ID继承逻辑：
+        // 1. 对于普通fork()，子进程继承父进程的进程组
+        // 2. 对于线程创建(CLONE_THREAD)，共享进程组
+        // 3. 对于会话领导者，需要特殊处理
+        if (flags & syscall::CLONE_THREAD) {
+            // 线程共享进程组和会话
+            np->_pgid = p->_pgid;
+            np->_tgid = p->_tgid;  // 线程组ID保持一致
+            np->_sid = p->_sid;
+        } else {
+            // 普通进程创建，继承进程组但获得新的线程组ID
+            np->_pgid = p->_pgid;
+            np->_tgid = np->_pid;  // 新进程成为自己线程组的领导者
+            np->_sid = p->_sid;
+        }
+        
         np->_uid = p->_uid;
         np->_euid = p->_euid;
         np->_gid = p->_gid;
@@ -1424,14 +1518,15 @@ namespace proc
 
     int ProcessManager::wait4(int child_pid, uint64 addr, int option)
     {
-        // copy from RUOK-os
         Pcb *p = k_pm.get_cur_pcb();
         // printf("[wait4] pid: %d child_pid: %d, addr: %p, option: %d\n", p->_pid, child_pid, (void *)addr, option);
         int havekids, pid;
         Pcb *np = nullptr;
+        
+        // 根据child_pid的不同值确定等待策略
         if (child_pid > 0)
         {
-            // 如果指定了 child_pid（大于 0），说明只等待这个特定子进程
+            // 等待特定PID的子进程
             bool has_child = false;
             // 遍历进程池，查找是否存在这个特定子进程，且它的父进程是当前进程
             for (auto &tmp : k_proc_pool)
@@ -1445,6 +1540,28 @@ namespace proc
             if (!has_child)
                 return -1;
         }
+        else if (child_pid == 0)
+        {
+            // 等待同一进程组的任何子进程
+            // child_pid == 0 表示等待与调用进程同一进程组的任何子进程
+        }
+        else if (child_pid < -1)
+        {
+            // 等待进程组ID为-child_pid的任何子进程
+            int target_pgid = -child_pid;
+            bool has_child = false;
+            for (auto &tmp : k_proc_pool)
+            {
+                if (tmp._pgid == target_pgid && tmp._parent == p)
+                {
+                    has_child = true;
+                    break;
+                }
+            }
+            if (!has_child)
+                return -1;
+        }
+        // child_pid == -1 表示等待任何子进程（原有逻辑）
 
         _wait_lock.acquire();
         for (;;)
@@ -1452,14 +1569,33 @@ namespace proc
             havekids = 0;
             for (np = k_proc_pool; np < &k_proc_pool[num_process]; np++)
             {
-                if (child_pid > 0 && np->_pid != child_pid)
+                // 根据child_pid值决定是否检查这个进程
+                bool should_check = false;
+                
+                if (child_pid > 0) {
+                    // 只检查特定PID
+                    should_check = (np->_pid == child_pid);
+                } else if (child_pid == 0) {
+                    // 检查同一进程组的子进程
+                    should_check = (np->_pgid == p->_pgid);
+                } else if (child_pid < -1) {
+                    // 检查特定进程组的子进程
+                    int target_pgid = -child_pid;
+                    should_check = (np->_pgid == target_pgid);
+                } else {
+                    // child_pid == -1，检查所有子进程
+                    should_check = true;
+                }
+                
+                if (!should_check)
                     continue;
 
                 if (np->_parent == p)
                 {
                     np->_lock.acquire();
                     havekids = 1;
-                    printfGreen("[wait4]: child %d state: %d name: %s\n", np->_pid, (int)np->_state, np->_name);
+                    printfGreen("[wait4]: child %d state: %d name: %s pgid: %d\n", 
+                                np->_pid, (int)np->_state, np->_name, np->_pgid);
                     if (np->get_state() == ProcState::ZOMBIE)
                     {
                         pid = np->_pid;
@@ -1601,6 +1737,36 @@ namespace proc
         /****************************************************************************************
          * Phase 2: 处理父子进程关系和进程状态
          ****************************************************************************************/
+
+        // 检查进程组生命周期管理
+        if (p->_pgid == p->_pid) {
+            // 当前进程是进程组领导者，检查是否有其他进程在同一进程组
+            bool has_other_processes = false;
+            for (uint i = 0; i < num_process; i++) {
+                Pcb &other = k_proc_pool[i];
+                if (other._pgid == p->_pgid && other._pid != p->_pid && 
+                    other._state != ProcState::UNUSED && other._state != ProcState::ZOMBIE) {
+                    has_other_processes = true;
+                    break;
+                }
+            }
+            
+            if (has_other_processes) {
+                // 如果进程组还有其他活跃进程，向它们发送SIGHUP和SIGCONT信号
+                // 这是孤儿进程组的标准处理
+                printf("[exit_proc] Process group leader %d exiting, signaling remaining processes\n", p->_pid);
+                for (uint i = 0; i < num_process; i++) {
+                    Pcb &other = k_proc_pool[i];
+                    if (other._pgid == p->_pgid && other._pid != p->_pid && 
+                        other._state != ProcState::UNUSED && other._state != ProcState::ZOMBIE) {
+                        other._lock.acquire();
+                        other.add_signal(1);  // SIGHUP
+                        other.add_signal(18); // SIGCONT
+                        other._lock.release();
+                    }
+                }
+            }
+        }
 
         reparent(p); // 将 p 的所有子进程交给 init 进程收养
 
@@ -3121,8 +3287,21 @@ namespace proc
         Pcb *p = get_cur_pcb();
 
         ipc::Pipe *pipe_ = new ipc::Pipe();
+        pipe_->set_pipe_flags(flags);
+        // 处理O_NONBLOCK标志 - 设置管道的非阻塞属性
+        if (flags & O_NONBLOCK) 
+        {
+            pipe_->set_nonblock(true);
+        }
+        
         if (pipe_->alloc(rf, wf) < 0)
             return syscall::SYS_ENOMEM;
+            
+        // 处理O_DIRECT标志 - 设置文件的直接I/O标志
+        if (flags & O_DIRECT) 
+        {
+            printfYellow("未实现O_DIRECT标志的处理\n");
+        }
         fd0 = -1;
         if (((fd0 = alloc_fd(p, rf)) < 0) || (fd1 = alloc_fd(p, wf)) < 0)
         {
@@ -3134,6 +3313,14 @@ namespace proc
             wf->free_file();
             return syscall::SYS_EMFILE;
         }
+        
+        // 处理O_CLOEXEC标志 - 设置文件描述符的close-on-exec属性
+        if (flags & O_CLOEXEC) 
+        {
+            p->_ofile->_fl_cloexec[fd0] = true;  // 读端设置CLOEXEC
+            p->_ofile->_fl_cloexec[fd1] = true;  // 写端设置CLOEXEC
+        }
+        
         // 其实alloc_fd已经设置了_ofile_ptr，这里不需要再次设置了，但是再设一下无伤大雅
         p->_ofile->_ofile_ptr[fd0] = rf;
         p->_ofile->_ofile_ptr[fd1] = wf;
@@ -3896,6 +4083,9 @@ namespace proc
         }
 
         // ========== 第八阶段：替换进程映像 ==========
+        // 注意：execve保持进程的身份信息不变，包括PID、PGID、SID、UID/GID等
+        // 这符合POSIX标准：execve只替换进程的内存映像，不改变进程的身份标识
+        
         mem::PageTable old_pt;
         old_pt = *proc->get_pagetable(); // 获取当前进程的页表
 

@@ -78,7 +78,7 @@ namespace syscall
         SYS_get_robust_list = 100, // form tsh 
         SYS_nanosleep = 101,
         SYS_setitimer = 103, // form tsh 
-        SYS_timer_create=107,
+        SYS_timer_create = 107,
         SYS_clock_settime = 112,     // from rocket
         SYS_clock_gettime = 113,
         SYS_clock_getres = 114,      // from rocket
@@ -223,6 +223,14 @@ namespace syscall
         /* Bits in the third argument to `waitpid'.  */
         WNOHANG = 1,  /* Don't block waiting.  */
         WUNTRACED = 2 /* Report status of stopped children.  */
+    };
+
+    // getrandom flags
+    enum SYS_getrandom_flags
+    {
+        GRND_NONBLOCK = 0x0001,  /* Don't block waiting for entropy */
+        GRND_RANDOM   = 0x0002,  /* Use /dev/random source instead of /dev/urandom */
+        GRND_INSECURE = 0x0004   /* Allow use of uninitialized entropy pool */
     };
 
     // // Use constexpr int SYS_for negative error codes instead of enum

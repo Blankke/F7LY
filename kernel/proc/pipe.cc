@@ -21,6 +21,7 @@ namespace proc
 	{
 		int Pipe::write(uint64 addr, int n)
 		{
+			panic("不是哥们为什么有两个write，貌似现在用的是write_in_kernel");
 			// printfRed("write pipe file\n");
 			int i = 0;
 			Pcb *pr = k_pm.get_cur_pcb(); // 获取当前进程的 PCB 指针
@@ -40,7 +41,11 @@ namespace proc
 				{
 					printfRed("Pipe buffer full, cannot write more data\n");
 					_lock.release();
-					return syscall::SYS_EAGAIN; // 管道已满，返回 EAGAIN 错误
+					if(i > 0)
+					{
+						return i; // 返回已写入的字节数, 虽然满了，但是部分写入成功，返回成功写入的字节数
+					}
+					return syscall::SYS_EAGAIN; // 管道已满，完全无法写入，返回 EAGAIN 错误
 					// 如果管道缓冲区满了，不能继续写入
 					// 唤醒等待读取的进程，让其读走数据
 					k_pm.wakeup(&_read_sleep);
@@ -97,15 +102,23 @@ namespace proc
 
 				if (_count >= _pipe_size)
 				{
-					printfRed("Pipe buffer full, cannot write more data\n");
-					_lock.release();
-					return syscall::SYS_EAGAIN; // 管道已满，返回 EAGAIN 错误
-					// // 如果缓冲区已满，则不能继续写入
-					// // 唤醒读端（可能已阻塞）
-					// k_pm.wakeup(&_read_sleep);
-
-					// // 当前写入进程挂起，等待读端消费数据后唤醒
-					// k_pm.sleep(&_write_sleep, &_lock);
+					// 非阻塞模式：如果管道已满，立即返回
+					if (_nonblock)
+					{
+						printfRed("Pipe buffer full, 非阻塞模式\n");
+						_lock.release();
+						if (i > 0)
+						{
+							return i; // 返回已写入的字节数
+						}
+						return syscall::SYS_EAGAIN; // 管道已满，返回 EAGAIN 错误
+					}
+					
+					// 阻塞模式：等待读端消费数据
+					// 唤醒读端（可能已阻塞）
+					k_pm.wakeup(&_read_sleep);
+					// 当前写入进程挂起，等待读端消费数据后唤醒
+					k_pm.sleep(&_write_sleep, &_lock);
 				}
 				else
 				{
@@ -168,8 +181,16 @@ namespace proc
 					_lock.release();
 					return -1;
 				}
-				// 让当前进程进入休眠状态，等待写端唤醒
-				printfRed("缓冲区为空，进程休眠等待\n");
+				
+				// 非阻塞模式：如果没有数据可读，立即返回EAGAIN
+				if (_nonblock)
+				{
+					printfRed("pipe 缓冲区为空，非阻塞模式\n");
+					_lock.release();
+					return syscall::SYS_EAGAIN; // 返回 EAGAIN 错误，表示没有数据可读
+				}
+				
+				// 阻塞模式：让当前进程进入休眠状态，等待写端唤醒
 				k_pm.sleep(&_read_sleep, &_lock); // DOC: piperead-sleep
 			}
 

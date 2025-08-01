@@ -742,7 +742,7 @@ char *ltp_testcases[] = {
     "dup07",//完全PASS
     // "dup201",//完全PASS
     // "dup202",//完全PASS
-    // "dup203",
+    // "dup203", //pass
     // "dup204",// 完全PASS
     // "dup205",//完全PASS
     // "dup206", //完全PASS
@@ -1225,7 +1225,7 @@ char *ltp_testcases[] = {
     // "getaddrinfo_01",
     // "getcontext01",
     // "getcpu01",
-    // "getcwd01",//过了一半
+    // "getcwd01",//pass
     // "getcwd02", // 完全PASS
     // "getcwd03",     //pass
     // "getcwd04", // Test needs at least 2 CPUs online 这个是因为 sched_getaffinity返回0，说不定它不用两个CPU
@@ -1265,11 +1265,11 @@ char *ltp_testcases[] = {
     // "getppid02",
     // "getpriority01",
     // "getpriority02",
-    // "getrandom01",// 炸了
+    // "getrandom01",// pass
     // "getrandom02", // 完全PASS
     // "getrandom03", // 完全PASS
     // "getrandom04", // 完全PASS
-    // "getrandom05",// 一半
+    // "getrandom05",// pass
     // "getresgid01",
     // "getresgid01_16",
     // "getresgid02",
@@ -1297,7 +1297,7 @@ char *ltp_testcases[] = {
     // "getsockopt02",
     // "gettid01",
     // "gettid02",
-    // "gettimeofday01",//一半
+    // "gettimeofday01",//pass
     // "gettimeofday02",
     // "getuid01",
     // "getuid01_16",
@@ -1912,14 +1912,14 @@ char *ltp_testcases[] = {
     // "open_tree01",
     // "open_tree02",
     // "open01",    //pass
-    // "open02",
+    // "open02", //socket
     // "open03", // 完全PASS
     // "open04",    //完全PASS
     // "open06",   //pass
     // "open07",   //爆了
-    // "open08",
+    // "open08", // socket
     // "open09", //爆了
-    // "open10",
+    // "open10", // socket
     // "open11",    //爆了
     // "open12",    //过了一个
     // "open12_child",
@@ -1991,11 +1991,11 @@ char *ltp_testcases[] = {
     // "pipe09", // 完全PASS
     // "pipe10", // 完全PASS
     // "pipe11",
-    // "pipe12", // 爆了
+    // "pipe12", // pass
     // "pipe13", // proc/4/stat没写
     // "pipe14", // 完全PASS
     // "pipe15", //NOFILE limit max too low: 128 < 65536
-    // "pipe2_01", //爆了
+    // "pipe2_01", //pass
     // "pipe2_02",
     // "pipe2_02_child",
     // "pipe2_04",
@@ -3255,9 +3255,9 @@ char *ltp_testcases[] = {
     // "wqueue09",
     // "write_freezing.sh",
     // "write01", // 完全PASS
-    // "write02", //爆了
+    // "write02", //pass
     // "write03", // 完全PASS
-    // "write04",
+    // "write04", /pass
     // "write05", // 有没过的
     // "write06",
     // "writetest",

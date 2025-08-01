@@ -16,7 +16,7 @@ namespace fs
 long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 	{
 		// printfGreen("normal_file::read called with buf: %p, len: %u, off: %d, upgrade: %d\n", (void *)buf, len, off, upgrade);
-		ulong ret;
+		ulong cnt = -1;
 		if (_attrs.u_read != 1)
 		{
 			// 对于 O_TMPFILE 创建的文件，即使权限是 0，也允许文件所有者读取
@@ -48,23 +48,26 @@ long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 		}
 		
 		// 执行读取操作
-		int status = ext4_fread(&lwext4_file_struct, (char *)buf, len, &ret);
+		int status = ext4_fread(&lwext4_file_struct, (char *)buf, len, &cnt);
 		if (status != EOK) {
 			printfRed("normal_file::read: ext4_fread failed with status %d", status);
 			// 恢复原来的文件位置
 			ext4_fseek(&lwext4_file_struct, current_pos, SEEK_SET);
-			return 0;
+			return -status;
 		}
 		
 		// 如果upgrade为true，更新文件指针
-		if (ret >= 0 && upgrade) {
-			_file_ptr = off + ret;
-		} else {
+		if (cnt >= 0 && upgrade)
+		{
+			_file_ptr = off + cnt;
+		}
+		else
+		{
 			// 如果不升级指针，恢复到原来的位置
 			ext4_fseek(&lwext4_file_struct, current_pos, SEEK_SET);
 		}
-		
-		return ret;
+
+		return cnt;
 	}
 	long normal_file::write(uint64 buf, size_t len, long off, bool upgrade)
 	{
