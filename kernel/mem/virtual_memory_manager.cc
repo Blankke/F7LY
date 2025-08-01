@@ -996,12 +996,12 @@ namespace mem
 #endif
     }
 
-    int VirtualMemoryManager::protectpages(PageTable &pt, uint64 va, uint64 size, int perm)
+    int VirtualMemoryManager::protectpages(PageTable &pt, uint64 va, uint64 size, int perm, bool is_vma)
     {
         uint64 a, last;
         Pte pte;
 
-        // printf("[protectpages] va: %p, size: %p, perm: %p\n", va, size, perm);
+        // printf("[protectpages] va: %p, size: %p, perm: %p, is_vma: %d\n", va, size, perm, is_vma);
 
         last = PGROUNDDOWN(va + size - 1);
 
@@ -1010,10 +1010,29 @@ namespace mem
             pte = pt.walk(a, 1);
             if (pte.is_null())
                 return -1;
+            
+            // 如果页表项为空
             if (pte.get_data() == 0)
-                break;
+            {
+                if (is_vma)
+                {
+                    // VMA 上下文：懒分配情况，忽略空页表项
+                    continue;
+                }
+                else
+                {
+                    // 非 VMA 上下文：页表项为空是错误
+                    return -1;
+                }
+            }
+            
             if (pte.get_data() & PTE_V)
-                pte.set_data(pte.get_data() | perm);
+            {
+                // 清除旧的权限位，保留其他标志位，然后设置新的权限
+                uint64 old_data = pte.get_data();
+                uint64 new_data = (old_data & ~(PTE_R | PTE_W | PTE_X)) | perm | PTE_V | PTE_U;
+                pte.set_data(new_data);
+            }
             else
                 pte.set_data(pte.get_data() | PTE_U);
         }

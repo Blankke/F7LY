@@ -5961,35 +5961,141 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_mprotect()
     {
-        // printfRed("[SyscallHandler::sys_mprotect] 未实现该系统调用\n");
-        // return 0;
         uint64 addr, len;
         int prot;
         if (_arg_addr(0, addr) < 0)
-            return -1;
+            return syscall::SYS_EFAULT;
         if (_arg_addr(1, len) < 0)
-            return -1;
+            return syscall::SYS_EFAULT;
         if (_arg_int(2, prot) < 0)
-            return -1;
+            return syscall::SYS_EFAULT;
 
-        int perm;
+        printfBlue("[SyscallHandler::sys_mprotect] addr: %p, len: %p, prot: %d\n",
+                   (void *)addr, len, prot);
 
+        // 参数验证
+        if (len == 0)
+        {
+            printfRed("[sys_mprotect] EINVAL: length is zero\n");
+            return syscall::SYS_EINVAL;
+        }
+
+        // 检查地址对齐
+        if ((addr & (PGSIZE - 1)) != 0)
+        {
+            printfRed("[sys_mprotect] EINVAL: address not page aligned: %p\n", (void *)addr);
+            return syscall::SYS_EINVAL;
+        }
+
+        // 检查权限标志的合理性
+        if (prot & ~(PROT_READ | PROT_WRITE | PROT_EXEC | PROT_NONE))
+        {
+            printfRed("[sys_mprotect] EINVAL: invalid protection flags: %d\n", prot);
+            return syscall::SYS_EINVAL;
+        }
+
+        // 检查地址范围是否超出虚拟地址空间
+        if (addr >= MAXVA || addr + len > MAXVA || addr + len < addr)
+        {
+            printfRed("[sys_mprotect] ENOMEM: address range out of bounds\n");
+            return syscall::SYS_ENOMEM;
+        }
+
+        proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
+        if (!pcb || !pcb->_vma)
+        {
+            panic("[sys_mprotect] Current process or VMA is null");
+        }
+
+        // 页对齐的长度
+        uint64 aligned_len = PGROUNDUP(len);
+        uint64 end_addr = addr + aligned_len;
+
+        // 查找包含该地址的VMA
+        int vma_index = -1;
+        for (int i = 0; i < proc::NVMA; i++)
+        {
+            if (pcb->_vma->_vm[i].used)
+            {
+                uint64 vma_start = pcb->_vma->_vm[i].addr;
+                uint64 vma_end = vma_start + pcb->_vma->_vm[i].len;
+
+                // 检查地址范围是否完全在VMA内
+                if (addr >= vma_start && end_addr <= vma_end)
+                {
+                    vma_index = i;
+                    printfGreen("[sys_mprotect] Found VMA[%d]: [%p, %p) for range [%p, %p)\n",
+                                i, (void *)vma_start, (void *)vma_end, (void *)addr, (void *)end_addr);
+                    break;
+                }
+            }
+        }
+
+        // 构建页表权限标志
+        int perm = 0;
         if (prot & PROT_READ)
-        {
             perm |= PTE_R;
-        }
         if (prot & PROT_WRITE)
-        {
             perm |= PTE_W;
-        }
         if (prot & PROT_EXEC)
-        {
             perm |= PTE_X;
-        }
-        if (mem::k_vmm.protectpages(*proc::k_pm.get_cur_pcb()->get_pagetable(), addr, len, perm) < 0)
+
+        if (vma_index == -1)
         {
-            return -1;
+            // 地址不在任何VMA中，直接调用protectpages修改页表权限
+            printfYellow("[sys_mprotect] Address range [%p, %p) not found in any VMA, using protectpages\n",
+                         (void *)addr, (void *)end_addr);
+
+            // 直接调用protectpages修改页表权限（非VMA上下文）
+            if (mem::k_vmm.protectpages(*pcb->get_pagetable(), addr, aligned_len, perm, false) < 0)
+            {
+                printfRed("[sys_mprotect] protectpages failed for range [%p, %p)\n",
+                          (void *)addr, (void *)end_addr);
+                return syscall::SYS_EFAULT;
+            }
+
+            // 刷新TLB以确保权限更改生效
+#ifdef RISCV
+            sfence_vma();
+#elif defined(LOONGARCH)
+            asm volatile("invtlb 0x0,$zero,$zero");
+#endif
+
+            printfGreen("[sys_mprotect] Success: changed protection for range [%p, %p) to %d using protectpages\n",
+                        (void *)addr, (void *)end_addr, prot);
+            return 0;
         }
+
+        // 找到了对应的VMA，现在修改权限
+        proc::vma *vm = &pcb->_vma->_vm[vma_index];
+        int old_prot = vm->prot;
+
+        printfYellow("[sys_mprotect] Changing VMA[%d] protection from %d to %d\n",
+                     vma_index, old_prot, prot);
+
+        // 修改VMA的权限
+        vm->prot = prot;
+
+        // 同时更新页表权限（VMA上下文，考虑懒分配）
+        if (mem::k_vmm.protectpages(*pcb->get_pagetable(), addr, aligned_len, perm, true) < 0)
+        {
+            printfRed("[sys_mprotect] protectpages failed for VMA range [%p, %p)\n",
+                      (void *)addr, (void *)end_addr);
+            // 恢复VMA权限
+            vm->prot = old_prot;
+            return syscall::SYS_EFAULT;
+        }
+
+        // 刷新TLB以确保权限更改生效
+#ifdef RISCV
+        sfence_vma();
+#elif defined(LOONGARCH)
+        asm volatile("invtlb 0x0,$zero,$zero");
+#endif
+
+        printfGreen("[sys_mprotect] Success: changed VMA[%d] protection for range [%p, %p) to %d\n",
+                    vma_index, (void *)addr, (void *)end_addr, prot);
+
         return 0;
     }
     uint64 SyscallHandler::sys_membarrier()
@@ -6504,14 +6610,14 @@ namespace syscall
                     printfRed("[sys_symlinkat] Invalid newdirfd: %d\n", newdirfd);
                     return SYS_EBADF;
                 }
-                
+
                 // 检查newdirfd是否指向一个目录
                 if (dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
                 {
                     printfRed("[sys_symlinkat] newdirfd %d不是目录，文件类型: %d\n", newdirfd, (int)dir_file->_attrs.filetype);
                     return SYS_ENOTDIR; // 不是目录
                 }
-                
+
                 abs_linkpath = get_absolute_path(linkpath.c_str(), dir_file->_path_name.c_str());
             }
         }
