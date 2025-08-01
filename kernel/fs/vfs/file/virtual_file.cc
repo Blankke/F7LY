@@ -358,7 +358,34 @@ namespace fs
     // 实现 /proc/sys/kernel/pid_max 的内容生成
     eastl::string ProcSysKernelPidMaxProvider::generate_content()
     {
-        return "1000\n";
+        // 将常量转换为字符串
+        auto int_to_string = [](uint num) -> eastl::string
+        {
+            if (num == 0)
+                return "0";
+
+            char buffer[16];
+            int pos = 15;
+            buffer[pos] = '\0';
+
+            while (num > 0)
+            {
+                buffer[--pos] = '0' + (num % 10);
+                num /= 10;
+            }
+
+            return eastl::string(&buffer[pos]);
+        };
+        
+        return int_to_string(proc::pid_max) + "\n";
+    }
+
+    // 实现 /proc/1/stat 的内容生成
+    eastl::string Proc1StatProvider::generate_content()
+    {
+        // Linux标准/proc/1/stat格式 (init进程)
+        // 格式: pid comm state ppid pgrp session tty_nr tpgid flags minflt cminflt majflt cmajflt utime stime cutime cstime priority nice num_threads itrealvalue starttime vsize rss rsslim startcode endcode startstack kstkesp kstkeip signal blocked sigignore sigcatch wchan nswap cnswap exit_signal processor rt_priority policy delayacct_blkio_ticks guest_time cguest_time start_data end_data start_brk arg_start arg_end env_start env_end exit_code
+        return "1 (init) S 0 1 1 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n";
     }
     
     // 实现 /proc/self/stat 的内容生成

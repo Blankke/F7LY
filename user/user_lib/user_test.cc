@@ -1256,8 +1256,8 @@ char *ltp_testcases[] = {
     // "getitimer02",
     // "getpagesize01",
     // "getpeername01",
-    // "getpgid01",
-    // "getpgid02",
+    // "getpgid01", // PASS
+    // "getpgid02", // PASS
     // "getpgrp01",
     // "getpid01",
     // "getpid02",
@@ -2219,7 +2219,7 @@ char *ltp_testcases[] = {
     // "sched_get_priority_max02",
     // "sched_get_priority_min01",
     // "sched_get_priority_min02",
-    // "sched_getaffinity01",
+    // "sched_getaffinity01", // PASS
     // "sched_getattr01",
     // "sched_getattr02",
     // "sched_getparam01",
@@ -2353,9 +2353,9 @@ char *ltp_testcases[] = {
     // "setitimer02",
     // "setns01",
     // "setns02",
-    // "setpgid01",
-    // "setpgid02",
-    // "setpgid03",
+    // "setpgid01", // pass
+    // "setpgid02", // pass
+    // "setpgid03", // 要完善sid逻辑, 而且现在退不出去, 先不修
     // "setpgid03_child",
     // "setpgrp01",
     // "setpgrp02",
