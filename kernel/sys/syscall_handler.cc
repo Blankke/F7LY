@@ -548,14 +548,24 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_pipe2()
     {
-        // copy自学长的pipe，和pipe2有什么区别呢
+        // https://www.man7.org/linux/man-pages/man2/pipe.2.html
         int fd[2];
         uint64 addr;
-
+        int flags = 0;
         if (_arg_addr(0, addr) < 0)
             return -1;
+        if(_arg_int(1, flags) < 0)
+            return -1;
+        
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
+
+        // 验证flags参数，pipe2支持O_CLOEXEC、O_NONBLOCK和O_DIRECT
+        if (flags & ~(O_CLOEXEC | O_NONBLOCK | O_DIRECT)) 
+        {
+            printfRed("[sys_pipe2] Invalid flags: 0x%x\n", flags);
+            return SYS_EINVAL;
+        }
 
         if (addr == 0)
         {
@@ -566,7 +576,8 @@ namespace syscall
         if (mem::k_vmm.copy_in(*pt, &fd, addr, 2 * sizeof(fd[0])) < 0)
             return -1;
 
-        int ret = proc::k_pm.pipe(fd, 0);
+        // 创建管道，传递flags参数
+        int ret = proc::k_pm.pipe(fd, flags);
         if (ret < 0)
             return ret;
 
@@ -1219,11 +1230,17 @@ namespace syscall
             printfRed("[SyscallHandler::sys_write] Error fetching n argument\n");
             return SYS_EFAULT;
         }
+        if(n == 0)
+        {
+            printfYellow("[SyscallHandler::sys_write] Write size is zero, returning 0\n");
+            return 0;
+        }
         if (is_bad_addr(p))
         {
             printfRed("[SyscallHandler::sys_write] Invalid address: %p\n", (void *)p);
             return SYS_EFAULT;
         }
+
         // 检查文件是否以 O_PATH 标志打开，O_PATH 文件不允许读取
         if (f->lwext4_file_struct.flags & O_PATH)
             return -EBADF;
@@ -3781,6 +3798,24 @@ namespace syscall
 
         //   File status flags (已支持)
         case F_GETFL:
+            // 对于管道文件，需要从管道对象中获取当前的标志状态
+            if (f->_attrs.filetype == fs::FileTypes::FT_PIPE)
+            {
+                fs::pipe_file *pf = static_cast<fs::pipe_file *>(f);
+                uint32_t flags = pf->get_pipe_flags();
+
+                // 更新O_NONBLOCK标志状态
+                if (pf->get_nonblock())
+                {
+                    flags |= O_NONBLOCK;
+                }
+                else
+                {
+                    flags &= ~O_NONBLOCK;
+                }
+                
+                return flags;
+            }
             // 返回文件访问模式和状态标志
             return f->lwext4_file_struct.flags;
 
@@ -3796,6 +3831,15 @@ namespace syscall
 
             // 保留访问模式 (O_RDONLY, O_WRONLY, O_RDWR)
             new_flags = (new_flags & ~0x03) | (old_flags & 0x03);
+
+            // 对于管道文件，需要特殊处理O_NONBLOCK标志
+            if (f->_attrs.filetype == fs::FileTypes::FT_PIPE)
+            {
+                fs::pipe_file *pf = static_cast<fs::pipe_file *>(f);
+                bool nonblock = (new_flags & O_NONBLOCK) != 0;
+                pf->set_nonblock(nonblock);
+                printfCyan("[F_SETFL] Set pipe nonblock mode: %s\n", nonblock ? "true" : "false");
+            }
 
             // 同步设置 lwext4_file_struct 和 _attrs (根据用户说明，二者需要同步)
             f->lwext4_file_struct.flags = new_flags;

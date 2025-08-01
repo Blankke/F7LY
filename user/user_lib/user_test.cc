@@ -1269,7 +1269,7 @@ char *ltp_testcases[] = {
     // "getrandom02", // 完全PASS
     // "getrandom03", // 完全PASS
     // "getrandom04", // 完全PASS
-    "getrandom05",// pass
+    // "getrandom05",// pass
     // "getresgid01",
     // "getresgid01_16",
     // "getresgid02",
@@ -1991,11 +1991,11 @@ char *ltp_testcases[] = {
     // "pipe09", // 完全PASS
     // "pipe10", // 完全PASS
     // "pipe11",
-    // "pipe12", // 爆了
+    // "pipe12", // pass
     // "pipe13", // proc/4/stat没写
     // "pipe14", // 完全PASS
     // "pipe15", //NOFILE limit max too low: 128 < 65536
-    // "pipe2_01", //爆了
+    // "pipe2_01", //pass
     // "pipe2_02",
     // "pipe2_02_child",
     // "pipe2_04",
@@ -3255,7 +3255,7 @@ char *ltp_testcases[] = {
     // "wqueue09",
     // "write_freezing.sh",
     // "write01", // 完全PASS
-    // "write02", //爆了
+    // "write02", //pass
     // "write03", // 完全PASS
     // "write04", /pass
     // "write05", // 有没过的

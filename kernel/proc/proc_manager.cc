@@ -3100,8 +3100,21 @@ namespace proc
         Pcb *p = get_cur_pcb();
 
         ipc::Pipe *pipe_ = new ipc::Pipe();
+        pipe_->set_pipe_flags(flags);
+        // 处理O_NONBLOCK标志 - 设置管道的非阻塞属性
+        if (flags & O_NONBLOCK) 
+        {
+            pipe_->set_nonblock(true);
+        }
+        
         if (pipe_->alloc(rf, wf) < 0)
             return syscall::SYS_ENOMEM;
+            
+        // 处理O_DIRECT标志 - 设置文件的直接I/O标志
+        if (flags & O_DIRECT) 
+        {
+            printfYellow("未实现O_DIRECT标志的处理\n");
+        }
         fd0 = -1;
         if (((fd0 = alloc_fd(p, rf)) < 0) || (fd1 = alloc_fd(p, wf)) < 0)
         {
@@ -3113,6 +3126,14 @@ namespace proc
             wf->free_file();
             return syscall::SYS_EMFILE;
         }
+        
+        // 处理O_CLOEXEC标志 - 设置文件描述符的close-on-exec属性
+        if (flags & O_CLOEXEC) 
+        {
+            p->_ofile->_fl_cloexec[fd0] = true;  // 读端设置CLOEXEC
+            p->_ofile->_fl_cloexec[fd1] = true;  // 写端设置CLOEXEC
+        }
+        
         // 其实alloc_fd已经设置了_ofile_ptr，这里不需要再次设置了，但是再设一下无伤大雅
         p->_ofile->_ofile_ptr[fd0] = rf;
         p->_ofile->_ofile_ptr[fd1] = wf;

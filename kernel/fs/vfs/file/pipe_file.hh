@@ -13,6 +13,7 @@ namespace fs
 		proc::ipc::Pipe *_pipe;
 		bool is_write = false;//读端还是写端
 		eastl::string _fifo_path; // 用于 FIFO 文件的路径跟踪
+		int _pipe_flags = 0; // 管道标志，默认为0
 	public:
 		pipe_file(FileAttrs attrs, Pipe *pipe_, bool is_write, const eastl::string& fifo_path = "") : 
 			file(attrs), _pipe(pipe_), is_write(is_write), _fifo_path(fifo_path)
@@ -78,6 +79,12 @@ namespace fs
 		// 获取管道中可读的字节数
 		uint32 get_available_bytes() const { return _pipe->size(); }
 		
+		// 设置和获取非阻塞模式
+		void set_nonblock(bool nonblock) { _pipe->set_nonblock(nonblock); }
+		bool get_nonblock() const { return _pipe->get_nonblock(); }
+		
+		int get_pipe_flags() const { return _pipe->get_pipe_flags(); }
+		void set_pipe_flags(int flags) { _pipe->set_pipe_flags(flags); }
 		// 设置管道大小，返回实际设置的大小，失败返回-1
 		int set_pipe_size(uint32 new_size) { return _pipe->set_pipe_size(new_size); }
 		

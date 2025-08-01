@@ -41,8 +41,10 @@ namespace proc
 			uint32 _count; // 当前数据量
 			bool _read_is_open;
 			bool _write_is_open;
+			bool _nonblock; // 非阻塞模式标志
 			uint8 _read_sleep;
 			uint8 _write_sleep;
+			int pipe_flags; // 管道标志
 
 		public:
 			Pipe()
@@ -53,6 +55,8 @@ namespace proc
 				, _count(0)
 				, _read_is_open( false )
 				, _write_is_open( false )
+				, _nonblock( false )
+				, pipe_flags( 0 )
 			{
 				_lock.init( "pipe" );
 				_buffer = new uint8[_pipe_size];
@@ -69,6 +73,12 @@ namespace proc
 			bool write_is_open() { return _write_is_open; }
 			uint32 get_pipe_size() const { return _pipe_size; }
 			uint32 size() const { return _count; } // 获取管道中当前数据量
+
+			// 设置和获取非阻塞模式
+			void set_nonblock(bool nonblock) { _nonblock = nonblock; }
+			bool get_nonblock() const { return _nonblock; }
+			int get_pipe_flags() const { return pipe_flags; }
+			void set_pipe_flags(int flags) { pipe_flags = flags; }
 
 			// 设置管道大小，返回实际设置的大小，失败返回-1
 			int set_pipe_size(uint32 new_size);
