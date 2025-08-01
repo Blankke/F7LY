@@ -1259,8 +1259,8 @@ char *ltp_testcases[] = {
     // "getpgid01", // PASS
     // "getpgid02", // PASS
     // "getpgrp01",
-    // "getpid01",
-    "getpid02",
+    // "getpid01", // PASS
+    // "getpid02", // PASS
     // "getppid01",
     // "getppid02",
     // "getpriority01",
