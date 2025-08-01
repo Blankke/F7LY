@@ -249,10 +249,28 @@ static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file
         break;
     }
 
-    // 文件权限应该由创建时的mode参数决定，而不是由打开标志决定
-    // 文件的访问标志(O_RDONLY, O_WRONLY, O_RDWR)只影响打开时的读写权限，
-    // 不应该修改文件本身的权限位
+    // 正确处理文件访问模式：检查低两位来确定读写权限
+    // 注意：只修改基本权限位（低9位），保留特殊权限位（sticky bit, setuid, setgid）
+    mode_t special_bits = mode & 07000;  // 保存特殊权限位（sticky, setuid, setgid）
+    mode_t basic_perms = mode & 0777;    // 获取基本权限位
+    
+    int access_mode = flags & 0x3; // 取低两位
+    if (access_mode == O_RDONLY)   // 0x00 - 只读
+    {
+        basic_perms &= ~0222; // 清除写权限
+        basic_perms |= 0444;  // 设置读权限
+    }
+    else if (access_mode == O_WRONLY) // 0x01 - 只写
+    {
+        basic_perms &= ~0444; // 清除读权限
+        basic_perms |= 0222; // 设置写权限
+    }
+    // O_RDWR (0x02) 保持读写权限不变
+    
+    // 合并特殊权限位和基本权限位
+    mode = special_bits | basic_perms;
 
+    
     return mode;
 }
 int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mode)

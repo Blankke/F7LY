@@ -739,7 +739,7 @@ char *ltp_testcases[] = {
     // "dup04",// 完全PASS
     // "dup05",  //pass
     // "dup06", //完全PASS
-    "dup07",//完全PASS
+    // "dup07",//完全PASS
     // "dup201",//完全PASS
     // "dup202",//完全PASS
     // "dup203", //pass
@@ -1916,9 +1916,9 @@ char *ltp_testcases[] = {
     // "open03", // 完全PASS
     // "open04",    //完全PASS
     // "open06",   //pass
-    // "open07",   //爆了
+    "open07",   //爆了
     // "open08", // socket
-    // "open09", //爆了
+    // "open09", //pass
     // "open10", // socket
     // "open11",    //爆了
     // "open12",    //过了一个

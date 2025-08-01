@@ -747,7 +747,7 @@ namespace mem
                     return -1;
                 }
                 memmove(mem, (const char *)pa, PGSIZE);
-                printfYellow("[vm_copy] Copying memory for VA=%p -> new PA=%p (private memory)\n", va, (uint64)mem);
+                // printfYellow("[vm_copy] Copying memory for VA=%p -> new PA=%p (private memory)\n", va, (uint64)mem);
                 if (map_pages(new_pt, va, PGSIZE, (uint64)mem, flags) == false)
                 {
                     k_pmm.free_page(mem);
