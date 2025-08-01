@@ -354,6 +354,12 @@ namespace fs
         };
         return int_to_string(max_pipe_size);
     }
+
+    // 实现 /proc/sys/kernel/pid_max 的内容生成
+    eastl::string ProcSysKernelPidMaxProvider::generate_content()
+    {
+        return "1000\n";
+    }
     
     // 实现 /proc/self/stat 的内容生成
     // 参考Linux的/proc/[pid]/stat格式
