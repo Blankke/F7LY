@@ -291,12 +291,14 @@ void trap_manager::usertrapret()
   // Debug
   //  printfYellow("[usertrapret] trampoline addr %p\n", trampoline);
 
+  // printf("p->_shared_vm: %d, p->_pt.ref_count: %d\n", p->_shared_vm, p->_pt.get_ref_count());
+
   // 检查进程是否使用共享虚拟内存，如果是则需要动态映射trapframe
   if (p->_shared_vm || p->_pt.get_ref_count() > 1)
   {
     // 页表被共享，需要动态重新映射trapframe
     // printfCyan("[usertrapret] Page table shared (ref count: %d), dynamically mapping trapframe for pid %d\n",
-    //    p->_pt.get_ref_count(), p->_pid);
+      //  p->_pt.get_ref_count(), p->_pid);
 
     // 取消当前trapframe的映射
     mem::k_vmm.vmunmap(p->_pt, TRAPFRAME, 1, 0);

@@ -130,7 +130,7 @@ namespace mem
 		/// @return total allocated virtual memory size
 		uint64 uvmfirst(PageTable &pt, uint64 src, uint64 sz);
 
-		int protectpages(PageTable &pt, uint64 va, uint64 size, int perm);
+		int protectpages(PageTable &pt, uint64 va, uint64 size, int perm, bool is_vma = false);
 
 	private:
 	};

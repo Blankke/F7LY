@@ -1796,7 +1796,7 @@ namespace proc
         _wait_lock.acquire();
 
         // 处理线程退出时的清理地址
-        if (p->_clear_tid_addr)
+        if (p->_pt.get_base() != 0 && p->_clear_tid_addr)
         {
             uint64 temp0 = 0;
             if (mem::k_vmm.copy_out(p->_pt, p->_clear_tid_addr, &temp0, sizeof(temp0)) < 0)

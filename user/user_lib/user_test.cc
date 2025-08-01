@@ -1295,8 +1295,8 @@ char *ltp_testcases[] = {
     // "getsockname01",
     // "getsockopt01",
     // "getsockopt02",
-    // "gettid01",
-    // "gettid02",
+    // "gettid01", // PASS
+    // "gettid02", // PASS一个, 线程修好了再来看
     // "gettimeofday01",//pass
     // "gettimeofday02",
     // "getuid01",
