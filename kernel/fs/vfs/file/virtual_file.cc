@@ -358,7 +358,26 @@ namespace fs
     // 实现 /proc/sys/kernel/pid_max 的内容生成
     eastl::string ProcSysKernelPidMaxProvider::generate_content()
     {
-        return "1000\n";
+        // 将常量转换为字符串
+        auto int_to_string = [](uint num) -> eastl::string
+        {
+            if (num == 0)
+                return "0";
+
+            char buffer[16];
+            int pos = 15;
+            buffer[pos] = '\0';
+
+            while (num > 0)
+            {
+                buffer[--pos] = '0' + (num % 10);
+                num /= 10;
+            }
+
+            return eastl::string(&buffer[pos]);
+        };
+        
+        return int_to_string(proc::pid_max) + "\n";
     }
 
     // 实现 /proc/1/stat 的内容生成

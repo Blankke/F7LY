@@ -53,6 +53,7 @@ namespace proc
     constexpr int lowest_proc_prio = 19;  // 最低进程优先级
     constexpr int highest_proc_prio = 0;  // 最高进程优先级
     constexpr uint max_open_files = 128;  // 每个进程最多可以打开的文件数量
+    constexpr uint pid_max = 1000;        // 系统最大PID值
     struct ofile
     {
         fs::file *_ofile_ptr[max_open_files]; // 进程打开的文件列表 (文件描述符 -> 文件结构)

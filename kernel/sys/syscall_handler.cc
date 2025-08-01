@@ -5254,17 +5254,20 @@ namespace syscall
 
         printfCyan("[SyscallHandler::sys_setpgid] pid: %d, pgid: %d\n", pid, pgid);
 
+        // 获取当前进程
+        proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+        if (current_proc == nullptr)
+        {
+            panic("[SyscallHandler::sys_setpgid] Current process is null\n");
+            return SYS_ESRCH;
+        }
+
         // 确定目标进程
         proc::Pcb *target_proc;
         if (pid == 0)
         {
             // pid 为 0，使用当前进程
-            target_proc = proc::k_pm.get_cur_pcb();
-            if (target_proc == nullptr)
-            {
-                printfRed("[SyscallHandler::sys_setpgid] Current process is null\n");
-                return SYS_ESRCH;
-            }
+            target_proc = current_proc;
         }
         else
         {
@@ -5274,6 +5277,13 @@ namespace syscall
             {
                 printfRed("[SyscallHandler::sys_setpgid] Process with pid %d not found\n", pid);
                 return SYS_ESRCH; // 进程不存在
+            }
+
+            // 权限检查：目标进程必须是调用进程本身或调用进程的子进程
+            if (target_proc != current_proc && target_proc->get_parent() != current_proc)
+            {
+                printfRed("[SyscallHandler::sys_setpgid] Permission denied: process %d is not the calling process or its child\n", pid);
+                return SYS_ESRCH; // 权限不足，按POSIX标准返回ESRCH
             }
         }
 
@@ -5295,6 +5305,12 @@ namespace syscall
                 printfRed("[SyscallHandler::sys_setpgid] Invalid pgid: %d\n", pgid);
                 return SYS_EINVAL;
             }
+
+            if ((uint)pgid >= proc::pid_max)
+            {
+                printfRed("[SyscallHandler::sys_setpgid] Invalid pgid: %d\n", pgid);
+                return SYS_EPERM;
+            }
         }
 
         // 设置进程组ID
@@ -5307,6 +5323,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_getpgid()
     {
+        // proc::k_pm.debug_process_states();
         int pid;
 
         // 获取参数
