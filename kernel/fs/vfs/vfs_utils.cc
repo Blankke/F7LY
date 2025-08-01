@@ -1000,6 +1000,12 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
 
 int vfs_mkdir(const char *path, uint64_t mode)
 {
+    /* Check if the directory already exists */
+    if (vfs_is_file_exist(path) == 1) {
+        printfRed("vfs_mkdir: directory already exists: %s\n", path);
+        return -EEXIST;
+    }
+
     /* Create the directory. */
     int status = ext4_dir_mk(path);
     if (status != EOK)
@@ -1008,7 +1014,6 @@ int vfs_mkdir(const char *path, uint64_t mode)
     /* Apply umask to the mode and set directory permissions. */
     mode_t final_mode = apply_umask(mode);
     status = ext4_mode_set(path, final_mode);
-
     return -status;
 }
 

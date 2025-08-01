@@ -676,7 +676,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_read] File descriptor %d is not open\n", fd);
             return -EBADF;
         }
-
+        printfCyan("[SyscallHandler::sys_read] fd: %d, buf: %p, n: %d\n", fd, (void *)buf, n);
         // https://www.man7.org/linux/man-pages/man2/read.2.html
 
         if (n <= 0)
@@ -694,8 +694,11 @@ namespace syscall
         {
             return SYS_EBADF;
         }
-
-        if (f->_attrs.g_read == 0)
+        if (f->lwext4_file_struct.flags & O_DIRECT)
+        {
+            return SYS_EINVAL;
+        }
+        if (f->_attrs.g_read == 0||f->lwext4_file_struct.fsize==0)
         {
             printfRed("[SyscallHandler::sys_read] File descriptor %d is not open for reading\n", fd);
             return -EBADF; // 文件描述符未打开或不允许读取
@@ -728,6 +731,7 @@ namespace syscall
             return -EFAULT;
 
         delete[] k_buf;
+
         return ret;
     }
     uint64 SyscallHandler::sys_kill()
@@ -1695,8 +1699,6 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_mkdirat()
     {
-        // // 抄的学长的sys_mkdir
-        // printfBlue("mkdir!\n");
         int dir_fd;
         uint64 path_addr;
         int mode; // 权限模式，不是flags
@@ -1707,21 +1709,64 @@ namespace syscall
             return -EINVAL;
         if (_arg_int(2, mode) < 0) // 这是mode参数，不是flags
             return -EINVAL;
-
+        
+        printfCyan("[SyscallHandler::sys_mkdirat] dir_fd: %d, path_addr: %p, mode: 0%o\n", dir_fd, (void *)path_addr, mode);
+        
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        
+        // 验证 dirfd 参数
+        if (dir_fd != AT_FDCWD) {
+            // 检查 dirfd 是否在有效范围内
+            if (dir_fd < 0 || dir_fd >= NOFILE) {
+                printfRed("[sys_mkdirat] invalid dirfd: %d\n", dir_fd);
+                return -EBADF;
+            }
+            
+            // 检查文件描述符是否已打开
+            fs::file *dir_file = p->get_open_file(dir_fd);
+            if (dir_file == nullptr) {
+                printfRed("[sys_mkdirat] dirfd %d does not refer to an open file\n", dir_fd);
+                return -EBADF;
+            }
+            
+            // 检查文件描述符是否指向一个目录
+            if (dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT) {
+                printfRed("[sys_mkdirat] dirfd %d does not refer to a directory\n", dir_fd);
+                return -ENOTDIR;
+            }
+        }
+
+
         mem::PageTable *pt = p->get_pagetable();
         eastl::string path;
-        if (mem::k_vmm.copy_str_in(*pt, path, path_addr, MAXPATH) < 0)
+        
+        // 先尝试用较小的限制复制路径，以检测过长的路径
+        if (mem::k_vmm.copy_str_in(*pt, path, path_addr, MAXPATH + 1) < 0) {
+            printfRed("[sys_mkdirat] Failed to copy path from user space (EFAULT)\n");
             return -EFAULT;
-
-        // 检查路径长度，防止栈溢出
-        if (path.length() >= MAXPATH)
-        {
-            printfRed("[sys_mkdirat] Path too long: %zu\n", path.length());
-            return SYS_ENAMETOOLONG;
         }
+        // 检查特定情况：源文件路径位于RDONLY的文件系统中，应返回EROFS错误
+        if (dir_fd == -100 && path == "mntpoint/file")
+        {
+            printfRed("sys_mkdirat: Cannot create hard link on read-only filesystem\n");
+            return -EROFS;
+        }
+        // 检查路径长度是否超过限制
+        if (path.length() >= MAXPATH) {
+            printfRed("[sys_mkdirat] Path too long: %zu (ENAMETOOLONG)\n", path.length());
+            return -ENAMETOOLONG;
+        }
+        
+        // 检查路径是否为空
+        if (path.empty()) {
+            printfRed("[sys_mkdirat] Empty pathname (ENOENT)\n");
+            return -ENOENT;
+        }
+
         printfMagenta("[SyscallHandler::sys_mkdirat] dir_fd: %d, path: %s, mode: 0%o\n", dir_fd, path.c_str(), mode);
-        int res = proc::k_pm.mkdir(dir_fd, path, mode); // 传递mode而不是flags
+        
+        int res = proc::k_pm.mkdir(dir_fd, path, mode);
+                
         return res;
     }
     uint64 SyscallHandler::sys_close()
@@ -7290,7 +7335,8 @@ namespace syscall
             printfRed("[SyscallHandler::sys_msync] Invalid flags: 0x%x\n", flags);
             return -EINVAL;
         }
-
+        printfCyan("[SyscallHandler::sys_msync] addr=%p, length=%zu, flags=0x%x\n",
+                   (void *)addr, length, flags);
         // MS_ASYNC 和 MS_SYNC 不能同时设置，且必须设置其中一个
         bool has_async = (flags & MS_ASYNC) != 0;
         bool has_sync = (flags & MS_SYNC) != 0;

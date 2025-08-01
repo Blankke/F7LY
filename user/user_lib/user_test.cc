@@ -1686,7 +1686,7 @@ char *ltp_testcases[] = {
     // "mincore04",
     // "mkdir_tests.sh",
     // "mkdir02", //sendmsg
-    // "mkdir03",  //爆了
+    // "mkdir03",  //只能过5个
     // "mkdir04",
     // "mkdir05",  //sendmsg
     // "mkdir09",
@@ -2433,7 +2433,7 @@ char *ltp_testcases[] = {
     // "shell_pipe01.sh",
     // "shm_comm",
     // "shm_test",
-    // "shmat01",    //没屎了
+    // "shmat01",    //pass一个没过
     // "shmat02",
     // "shmat03",     //pass?
     // "shmat04",     //pass
