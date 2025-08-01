@@ -17,6 +17,6 @@ if [ ! -f "$program_path" ]; then
 fi
 
 # 使用 qemu-riscv64-static 的 strace 模式执行程序
-qemu-riscv64-static "$program_path"
-echo -------------------------------------------------------- >&2
-qemu-riscv64-static -strace "$program_path"
+qemu-riscv64-static "$program_path" 2>&1
+echo --------------------------------------------------------
+qemu-riscv64-static -strace "$program_path" 2>&1
