@@ -1260,7 +1260,7 @@ char *ltp_testcases[] = {
     // "getpgid02", // PASS
     // "getpgrp01",
     // "getpid01",
-    // "getpid02",
+    "getpid02",
     // "getppid01",
     // "getppid02",
     // "getpriority01",
@@ -1925,7 +1925,7 @@ char *ltp_testcases[] = {
     // "open12_child",//这个不是测例
     // "open13",    // pass
     // "open14",    //pass这个测例要跑一年，别急着掐死，多等会
-    "openat01", // pass
+    // "openat01", // pass
     // "openat02",   //爆了
     // "openat02_child",
     // "openat03",   //pass这个和那个一年是同一个
