@@ -2353,9 +2353,9 @@ char *ltp_testcases[] = {
     // "setitimer02",
     // "setns01",
     // "setns02",
-    // "setpgid01",
-    // "setpgid02",
-    // "setpgid03",
+    // "setpgid01", // pass
+    // "setpgid02", // pass
+    // "setpgid03", // 要完善sid逻辑, 而且现在退不出去, 先不修
     // "setpgid03_child",
     // "setpgrp01",
     // "setpgrp02",
