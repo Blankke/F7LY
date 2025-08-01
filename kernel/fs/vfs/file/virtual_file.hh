@@ -229,6 +229,17 @@ namespace fs
             return eastl::make_unique<ProcSysFsPipeUserPagesSoftProvider>();
         }
     };
+
+    // /proc/sys/kernel/pid_max 内容提供者
+    class ProcSysKernelPidMaxProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_dynamic() const override { return false; } // 静态内容
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcSysKernelPidMaxProvider>();
+        }
+    };
     
     // /proc/self/stat 内容提供者
     class ProcSelfStatProvider : public VirtualContentProvider
