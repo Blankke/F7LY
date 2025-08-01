@@ -2829,6 +2829,13 @@ namespace syscall
                     return -EBADF;
                 }
 
+                // 检查dirfd是否指向一个目录
+                if (dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
+                {
+                    printfRed("[sys_readlinkat] dirfd %d不是目录，文件类型: %d\n", fd, (int)dir_file->_attrs.filetype);
+                    return SYS_ENOTDIR; // 不是目录
+                }
+
                 abs_path = get_absolute_path(path.c_str(), dir_file->_path_name.c_str());
             }
         }
@@ -4211,6 +4218,13 @@ namespace syscall
                 if (dir_file->lwext4_file_struct.flags & O_PATH)
                 {
                     return -EBADF;
+                }
+
+                // 检查dirfd是否指向一个目录
+                if (dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
+                {
+                    printfRed("[SyscallHandler::sys_faccessat] dirfd %d不是目录，文件类型: %d\n", dirfd, (int)dir_file->_attrs.filetype);
+                    return SYS_ENOTDIR; // 不是目录
                 }
 
                 // 使用dirfd对应的路径作为基准目录
@@ -6473,6 +6487,14 @@ namespace syscall
                     printfRed("[sys_symlinkat] Invalid newdirfd: %d\n", newdirfd);
                     return SYS_EBADF;
                 }
+                
+                // 检查newdirfd是否指向一个目录
+                if (dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
+                {
+                    printfRed("[sys_symlinkat] newdirfd %d不是目录，文件类型: %d\n", newdirfd, (int)dir_file->_attrs.filetype);
+                    return SYS_ENOTDIR; // 不是目录
+                }
+                
                 abs_linkpath = get_absolute_path(linkpath.c_str(), dir_file->_path_name.c_str());
             }
         }

@@ -1925,7 +1925,7 @@ char *ltp_testcases[] = {
     // "open12_child",//这个不是测例
     // "open13",    // pass
     // "open14",    //pass这个测例要跑一年，别急着掐死，多等会
-    // "openat01", // pass
+    "openat01", // pass
     // "openat02",   //爆了
     // "openat02_child",
     // "openat03",   //pass这个和那个一年是同一个
@@ -2126,10 +2126,10 @@ char *ltp_testcases[] = {
     // "readahead02",
     // "readdir01",
     // "readdir21",
-    // "readlink01",
-    // "readlink03",
+    // "readlink01", //sendmsg
+    // "readlink03",//sendmsg
     // "readlinkat01", //pass
-    // "readlinkat02", //爆了
+    // "readlinkat02", //pass五个
     // "readv01", //pass
     // "readv02",   //爆了
     // "realpath01",
