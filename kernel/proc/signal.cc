@@ -20,7 +20,7 @@ namespace proc
 
             int sigAction(int flag, sigaction *newact, sigaction *oldact)
             {
-                if (flag <= 0 || flag > signal::SIGRTMAX || flag == signal::SIGKILL || flag == signal::SIGQUIT)
+                if (flag <= 0 || flag > signal::SIGRTMAX || flag == signal::SIGKILL || flag == signal::SIGSTOP)
                     return -1;
                 proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
                 if (cur_proc->_sigactions == nullptr)
