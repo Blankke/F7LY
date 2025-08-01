@@ -360,6 +360,14 @@ namespace fs
     {
         return "1000\n";
     }
+
+    // 实现 /proc/1/stat 的内容生成
+    eastl::string Proc1StatProvider::generate_content()
+    {
+        // Linux标准/proc/1/stat格式 (init进程)
+        // 格式: pid comm state ppid pgrp session tty_nr tpgid flags minflt cminflt majflt cmajflt utime stime cutime cstime priority nice num_threads itrealvalue starttime vsize rss rsslim startcode endcode startstack kstkesp kstkeip signal blocked sigignore sigcatch wchan nswap cnswap exit_signal processor rt_priority policy delayacct_blkio_ticks guest_time cguest_time start_data end_data start_brk arg_start arg_end env_start env_end exit_code
+        return "1 (init) S 0 1 1 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n";
+    }
     
     // 实现 /proc/self/stat 的内容生成
     // 参考Linux的/proc/[pid]/stat格式

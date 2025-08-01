@@ -739,7 +739,7 @@ char *ltp_testcases[] = {
     // "dup04",// 完全PASS
     // "dup05",  //pass
     // "dup06", //完全PASS
-    "dup07",//完全PASS
+    // "dup07",//完全PASS
     // "dup201",//完全PASS
     // "dup202",//完全PASS
     // "dup203", //pass
@@ -1256,8 +1256,8 @@ char *ltp_testcases[] = {
     // "getitimer02",
     // "getpagesize01",
     // "getpeername01",
-    // "getpgid01",
-    // "getpgid02",
+    // "getpgid01", // PASS
+    // "getpgid02", // PASS
     // "getpgrp01",
     // "getpid01",
     // "getpid02",
@@ -2219,7 +2219,7 @@ char *ltp_testcases[] = {
     // "sched_get_priority_max02",
     // "sched_get_priority_min01",
     // "sched_get_priority_min02",
-    // "sched_getaffinity01",
+    // "sched_getaffinity01", // PASS
     // "sched_getattr01",
     // "sched_getattr02",
     // "sched_getparam01",

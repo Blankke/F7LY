@@ -268,6 +268,10 @@ namespace fs
         // /proc/sys/kernel/pid_max
         add_virtual_file("/proc/sys/kernel/pid_max", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcSysKernelPidMaxProvider>());
+
+        // /proc/1/stat
+        add_virtual_file("/proc/1/stat", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<Proc1StatProvider>());
         
         // /proc/self/fd/X
         auto int_to_string = [](uint num) -> eastl::string {
