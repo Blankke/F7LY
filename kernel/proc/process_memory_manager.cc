@@ -15,7 +15,6 @@
 #include "fs/vfs/file/normal_file.hh"
 #include "shm/shm_manager.hh"
 
-
 namespace proc
 {
 
@@ -628,6 +627,7 @@ namespace proc
     {
         if (!_pcb || !_pcb->get_pagetable()->get_base())
         {
+            panic("ProcessMemoryManager: PCB or pagetable is null");
             return;
         }
 
@@ -636,12 +636,16 @@ namespace proc
 
         mem::PageTable &pt = *_pcb->get_pagetable();
 
+        // 确保页表引用计数为1，防止双重释放
+        if (pt.get_ref_count() == 1)
+        {
 // 取消特殊页面的映射
 #ifdef RISCV
-        mem::k_vmm.vmunmap(pt, TRAMPOLINE, 1, 0);
+            mem::k_vmm.vmunmap(pt, TRAMPOLINE, 1, 0);
 #endif
-        mem::k_vmm.vmunmap(pt, TRAPFRAME, 1, 0);
-        mem::k_vmm.vmunmap(pt, SIG_TRAMPOLINE, 1, 0);
+            mem::k_vmm.vmunmap(pt, TRAPFRAME, 1, 0);
+            mem::k_vmm.vmunmap(pt, SIG_TRAMPOLINE, 1, 0);
+        }
 
         // 释放页表结构
         pt.dec_ref();

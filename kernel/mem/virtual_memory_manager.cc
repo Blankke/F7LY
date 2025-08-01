@@ -564,7 +564,7 @@ namespace mem
             else if (pte.is_null() || pte.get_data() == 0)
             {
                 // 如果页表项无效且不在VMA范围内，则返回错误
-                printfRed("[copy_out] walk failed for va: %p (not in any VMA)\n", va);
+                printfRed("[copy_out] walk failed for va: %p\n", va);
                 return -1;
             }
             
