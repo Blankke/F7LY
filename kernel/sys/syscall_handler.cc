@@ -54,7 +54,7 @@
 #include "shm/shm_manager.hh"
 #include "devs/loop_device.hh"
 #include "devs/block_device.hh"
-
+#include "fs/debug.hh"
 namespace syscall
 {
     // 创建全局的 SyscallHandler 实例
@@ -311,6 +311,7 @@ namespace syscall
             if (!(sys_num == 64 && p->_trapframe->a0 == 1) && !(sys_num == 66 && p->_trapframe->a0 == 1))
                 // if (!(sys_num == 64) && !(sys_num == 66))
                 printfCyan("[SyscallHandler::invoke_syscaller]syscall name: %s ret: %d\n", _syscall_name[sys_num], ret);
+            debug_fd_4();
             p->_trapframe->a0 = ret; // 设置返回值
         }
         //     if (sys_num != 64 && sys_num != 66)
@@ -721,7 +722,15 @@ namespace syscall
         // printf("[sys_read] read %d characters in total\n", string_length);
         // 添加调试打印，显示读取到的内容
         k_buf[ret] = '\0'; // 确保字符串以null结尾
-        printfYellow("[sys_read] fd=%d, read %d bytes: \"%s\"\n", fd, ret, k_buf);
+        // printfYellow("[sys_read] fd=%d, read %d bytes: \"%s\"\n", fd, ret, k_buf);
+
+        // 打印前64个字节（或实际读取的字节数）
+        int print_len = ret < 64 ? ret : 64;
+        printfYellow("just for [copy file range] test, fd=%d, read %d bytes, first %d bytes: \"", fd, ret, print_len);
+        for (int i = 0; i < print_len; ++i) {
+            printf("%2x ", (unsigned char)k_buf[i]);
+        }
+        printf("\"\n");
 
         if (mem::k_vmm.copy_out(*pt, buf, k_buf, ret) < 0)
             return -EFAULT;
@@ -1285,6 +1294,14 @@ namespace syscall
             delete[] buf;
             return -1;
         }
+        // 打印前64个字节（或实际写入的字节数）
+        int print_len = n < 64 ? n : 64;
+        printfYellow("[sys_write] fd=%d, write %d bytes, first %d bytes: \"", fd, n, print_len);
+        for (int i = 0; i < print_len; ++i) {
+            printf("%02x ", (unsigned char)buf[i]);
+        }
+        printf("\"\n");
+
         long rc = f->write((ulong)buf, n, f->get_file_offset(), true);
         delete[] buf;
         return rc;
@@ -7414,7 +7431,7 @@ namespace syscall
             printfRed("[sys_copy_file_range] Invalid flags\n");
             return -EINVAL;
         }
-        printfBgCyan("[sys_copy_file_range] fd_in=%d, off_in_addr=%p, fd_out=%d, off_out_addr=%p, len=%zu, flags=%u\n",
+        printfBlue("[sys_copy_file_range] fd_in=%d, off_in_addr=%p, fd_out=%d, off_out_addr=%p, len=%zu, flags=%u\n",
                      fd_in, (void *)off_in_addr, fd_out, (void *)off_out_addr, len, flags);
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
@@ -7496,7 +7513,7 @@ namespace syscall
         // 初始化缓冲区以便调试
         memset(buf, 0, len);
 
-        printfBgCyan("[sys_copy_file_range] Allocated buffer at %p, size %zu\n", buf, len);
+        printfBlue("[sys_copy_file_range] Allocated buffer at %p, size %zu\n", buf, len);
 
         ssize_t read_len = 0;
         ssize_t ret = 0;
@@ -7505,7 +7522,7 @@ namespace syscall
         if (off_in_addr == 0) // NULL pointer
         {
             // 使用文件自身的偏移
-            printfBgCyan("[sys_copy_file_range] Reading from current file position\n");
+            printfBlue("[sys_copy_file_range] Reading from current file position\n");
             read_len = f_in->read((uint64)buf, len, -1, true);
         }
         else
@@ -7518,7 +7535,7 @@ namespace syscall
                 return -EFAULT;
             }
 
-            printfBgCyan("[sys_copy_file_range] Reading from offset %ld\n", in_off);
+            printfBlue("[sys_copy_file_range] Reading from offset %ld\n", in_off);
 
             // 检查偏移是否超过文件大小
             if ((uint64)in_off > f_in->_stat.size)
@@ -7541,7 +7558,7 @@ namespace syscall
             }
         }
 
-        printfBgCyan("[sys_copy_file_range] Read %ld bytes\n", read_len);
+        printfBlue("[sys_copy_file_range] Read %ld bytes\n", read_len);
 
         if (read_len <= 0)
         {
@@ -7556,19 +7573,19 @@ namespace syscall
         // 添加数据验证 - 打印前几个字节用于调试
         if (read_len > 0)
         {
-            printfBgCyan("[sys_copy_file_range] First 16 bytes: ");
+            printfBlue("[sys_copy_file_range] First 16 bytes: ");
             for (int i = 0; i < (read_len > 16 ? 16 : read_len); i++)
             {
-                printfBgCyan("%02x ", (unsigned char)buf[i]);
+                printfBlue("%02x ", (unsigned char)buf[i]);
             }
-            printfBgCyan("\n");
+            printfBlue("\n");
         }
 
         // 处理输出偏移
         if (off_out_addr == 0) // NULL pointer
         {
             // 使用文件自身的偏移
-            printfBgCyan("[sys_copy_file_range] Writing to current file position\n");
+            printfBlue("[sys_copy_file_range] Writing to current file position\n");
             ret = f_out->write((uint64)buf, read_len, -1, true);
         }
         else
@@ -7581,7 +7598,7 @@ namespace syscall
                 return -EFAULT;
             }
 
-            printfBgCyan("[sys_copy_file_range] Writing to offset %ld\n", out_off);
+            printfBlue("[sys_copy_file_range] Writing to offset %ld\n", out_off);
             // 从指定偏移写入，不更新文件指针
             ret = f_out->write((uint64)buf, read_len, out_off, false);
             if (ret > 0)
@@ -7596,7 +7613,7 @@ namespace syscall
             }
         }
 
-        printfBgCyan("[sys_copy_file_range] Wrote %ld bytes\n", ret);
+        printfBlue("[sys_copy_file_range] Wrote %ld bytes\n", ret);
 
         mem::k_pmm.free_page(buf);
         return ret;

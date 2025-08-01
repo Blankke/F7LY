@@ -237,7 +237,7 @@ run-riscv:
 		-nographic \
 		-smp 1 \
 		-bios default \
-		-drive file=$(KERNEL_PREFIX)/sdcard-rv.img,if=none,format=raw,id=x0 \
+		-drive file=$(KERNEL_PREFIX)/sdcard-rv-final.img,if=none,format=raw,id=x0 \
 		-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 \
 		-no-reboot \
 		-device virtio-net-device,netdev=net \

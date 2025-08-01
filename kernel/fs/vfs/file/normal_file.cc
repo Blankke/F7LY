@@ -37,7 +37,7 @@ long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 		
 		// 保存当前文件位置，用于之后恢复
 		long current_pos = _file_ptr;
-		
+		printfYellow("normal file offset: %d, requested offset: %d\n", current_pos, off);
 		// 如果指定的偏移量与当前文件指针不同，需要设置文件位置
 		if (off != _file_ptr) {
 			int seek_status = ext4_fseek(&lwext4_file_struct, off, SEEK_SET);
@@ -78,7 +78,7 @@ long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 
 		// 保存当前文件位置，用于之后恢复
 		long current_pos = _file_ptr;
-		
+		printfYellow("normal file offset: %d, requested offset: %d\n", current_pos, off);
 		// 检查文件大小限制 (RLIMIT_FSIZE)
 		proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
 		uint64 fsize_limit = current_proc->get_fsize_limit();
@@ -231,7 +231,9 @@ long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 			printfRed("normal_file::lseek: invalid whence %d", whence);
 			return -EINVAL;
 		}
+
 		int seek_status = ext4_fseek(&lwext4_file_struct, _file_ptr, SEEK_SET);
+
 		if (seek_status != EOK)
 		{
 			printfRed("normal_file::lseek: ext4_fseek failed with status %d", seek_status);
