@@ -39,7 +39,6 @@ namespace fs
 } // namespace fs
 namespace proc
 {
-    constexpr int NVMA = 30; // 每个进程最多的虚拟内存区域数量
     enum ProcState
     {
         UNUSED,
@@ -67,24 +66,12 @@ namespace proc
         proc::ipc::signal::sigaction *actions[proc::ipc::signal::SIGRTMAX + 1];
         int refcnt;
     };
-    struct program_section_desc
-    {
-        void *_sec_start = nullptr; // virtual address
-        ulong _sec_size = 0;
-        const char *_debug_name = nullptr;
-    };
     struct rlimit
     {
         /* The current (soft) limit.  */
         rlim_t rlim_cur;
         /* The hard limit.  */
         rlim_t rlim_max;
-    };
-    // 虚拟内存区域管理
-    struct VMA
-    {
-        vma _vm[NVMA]; // 虚拟内存区域数组，类似Linux的vm_area_struct
-        // int _ref_cnt;  // VMA引用计数，用于copy-on-write机制
     };
     class Pcb
     {
@@ -134,7 +121,7 @@ namespace proc
          * 内存管理
          ****************************************************************************************/
         uint64 _kstack = 0;    // 内核栈的虚拟地址
-        TrapFrame *_trapframe; // 用户态寄存器保存区，用于系统调用和异常处理
+        TrapFrame *_trapframe; // 用户态寄存器保存区，用于系统调用和异常处理, 在usertrapret时映射
     private:
         // 阶段1：统一内存管理器（替代分散的内存字段）
         class ProcessMemoryManager* _memory_manager;

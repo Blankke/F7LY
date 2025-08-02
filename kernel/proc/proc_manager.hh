@@ -4,20 +4,21 @@
 #include "prlimit.hh"
 #include "futex.hh"
 #include "fs/vfs/file/normal_file.hh"
+
 namespace tmm
 {
     struct tms;
-} // namespace tmm
+}
+
 namespace proc
 {
-    constexpr int default_proc_slot = 1; // 默认进程槽位 TODO:TBD
+    constexpr int default_proc_slot = 1; // 默认进程槽位
+    constexpr int MAXARG = 32;
 
-#define MAXARG 32
-
-    // TODO: 文件系统相关
     class ProcessManager
     {
     private:
+        // 核心成员变量
         SpinLock _pid_lock;        // 进程ID锁
         SpinLock _tid_lock;        // 线程ID锁
         SpinLock _wait_lock;       // 等待锁
@@ -28,129 +29,102 @@ namespace proc
 
     public:
         ProcessManager() = default;
-
+        
+        // ==================== 初始化 ====================
         void init(const char *pid_lock_name, const char *tid_lock_name, const char *wait_lock_name);
+        void user_init();
 
+        // ==================== 进程基础管理 ====================
         Pcb *get_cur_pcb();
         bool change_state(Pcb *p, ProcState state);
         void alloc_pid(Pcb *p);
         void alloc_tid(Pcb *p);
         Pcb *alloc_proc();
+        void freeproc(Pcb *p);
+        void freeproc_creation_failed(Pcb *p);
+        void sche_proc(Pcb *p);
+        Pcb *find_proc_by_pid(int pid);
 
+        // ==================== 进程属性设置 ====================
         void set_slot(Pcb *p, int slot);
         void set_priority(Pcb *p, int priority);
         void set_shm(Pcb *p);
-        // void set_vma( Pcb *p );
         int set_trapframe(Pcb *p);
         void set_killed(Pcb *p);
 
+        // ==================== 内存管理 ====================
         mem::PageTable proc_pagetable(Pcb *p);
         void proc_freepagetable(mem::PageTable &pt, uint64 sz);
-        void freeproc(Pcb *p);
-        void freeproc_creation_failed(Pcb *p);  // 专门处理进程创建失败时的清理
-        void sche_proc(Pcb *p);
-
-        // 这些先不管，要用再写回来
-        // void set_slot(Pcb *p, int slot); // 设置进程槽位
-        // void set_priority(Pcb *p, int priority); // 设置进程优先级
-        // void set_shm(Pcb *p); // 设置共享内存
-        // void set_vma(Pcb *p); // 设置虚拟内存区域
-        // int set_trapframe(Pcb *p); // 设置陷阱帧
-        // bool change_state(Pcb *p, ProcState state); // 改变进程状态
-
-        int either_copy_in(void *dst, int user_src, uint64 src, uint64 len);
-        int either_copy_out(void *src, int user_dst, uint64 dst, uint64 len);
-
-        void procdump(); // 打印进程列表 debug
-        
-        // 重构后添加的调试和验证函数
-        void debug_process_states();          // 调试：打印所有进程状态
-        bool verify_process_cleanup(int pid); // 验证：检查进程是否正确清理
-
-        int exec(eastl::string path, eastl::vector<eastl::string> argv); // 执行新程序
-        int growproc(int n);                                             // 扩展进程内存
-        int execve(eastl::string path, eastl::vector<eastl::string> argv, eastl::vector<eastl::string> envs);
-        int wait4(int child_pid, uint64 addr, int option);
-        int load_seg(mem::PageTable &pt, uint64 va, eastl::string &path, uint offset, uint size);
-
-        void sleep(void *chan, SpinLock *lock);
-        void wakeup(void *chan);
-        int wakeup2(uint64 uaddr, int val, void *uaddr2, int val2);
-        void exit_proc(Pcb *p, int state);
-        void exit(int state);
-        int clone(uint64 flags, uint64 stack_ptr, uint64 ptid, uint64 tls, uint64 ctid);
-        Pcb *fork(Pcb *p, uint64 flags, uint64 stack_ptr, uint64 ctid, bool is_clone3);
-        void fork_ret();
+        int growproc(int n);
         long brk(long n);
         long sbrk(long increment);
-        int open(int dir_fd, eastl::string path, uint flags, int mode = 0644);
-        int mkdir(int dir_fd, eastl::string path, uint mode);
-        int mknod(int dir_fd, eastl::string path, mode_t mode, dev_t dev);
-        int close(int fd);
-        int fstat(int fd, fs::Kstat *buf);
-        int chdir(eastl::string &path);
-        int getcwd(char *out_buf);
+        
+        // 内存映射相关
         int validate_mmap_params(void *addr, size_t length, int prot, int flags, int fd, int offset);
         void *mmap(void *addr, size_t length, int prot, int flags, int fd, int offset, int *errno);
         int munmap(void *addr, size_t length);
         int mremap(void *old_address, size_t old_size, size_t new_size, int flags, void *new_address, void **result_addr);
-        int unlink(int fd, eastl::string path, int flags);
-        int pipe(int *fd, int);
-        int set_tid_address(uint64 tidptr);
-        int set_robust_list(robust_list_head *head, size_t len);
-        int prlimit64(int pid, int resource, rlimit64 *new_limit, rlimit64 *old_limit);
+
+        // ==================== 进程生命周期 ====================
+        int exec(eastl::string path, eastl::vector<eastl::string> argv);
+        int execve(eastl::string path, eastl::vector<eastl::string> argv, eastl::vector<eastl::string> envs);
+        int load_seg(mem::PageTable &pt, uint64 va, eastl::string &path, uint offset, uint size);
+        int clone(uint64 flags, uint64 stack_ptr, uint64 ptid, uint64 tls, uint64 ctid);
+        Pcb *fork(Pcb *p, uint64 flags, uint64 stack_ptr, uint64 ctid, bool is_clone3);
+        void fork_ret();
+        void exit_proc(Pcb *p, int state);
+        void exit(int state);
         void exit_group(int status);
+        int wait4(int child_pid, uint64 addr, int option);
         void reparent(Pcb *p);
 
-        void user_init();
+        // ==================== 进程调度与同步 ====================
+        void sleep(void *chan, SpinLock *lock);
+        void wakeup(void *chan);
+        int wakeup2(uint64 uaddr, int val, void *uaddr2, int val2);
 
+        // ==================== 文件系统相关 ====================
+        int open(int dir_fd, eastl::string path, uint flags, int mode = 0644);
+        int close(int fd);
+        int fstat(int fd, fs::Kstat *buf);
+        int mkdir(int dir_fd, eastl::string path, uint mode);
+        int mknod(int dir_fd, eastl::string path, mode_t mode, dev_t dev);
+        int unlink(int fd, eastl::string path, int flags);
+        int chdir(eastl::string &path);
+        int getcwd(char *out_buf);
+        int pipe(int *fd, int);
         int alloc_fd(Pcb *p, fs::file *f);
         int alloc_fd(Pcb *p, fs::file *f, int fd);
 
-        void get_cur_proc_tms(tmm::tms *tsv);
-        int get_cur_cpuid();
-
-        // 信号相关
+        // ==================== 信号处理 ====================
         int kill_signal(int pid, int sig);
         int tkill(int tid, int sig);
-        int tgkill(int tgid, int tid, int sig);  // 发送信号给指定线程组中的指定线程
-        
-        // 进程查找
-        Pcb* find_proc_by_pid(int pid);  // 根据PID查找进程
-
-    public:
+        int tgkill(int tgid, int tid, int sig);
         void kill_proc(Pcb *p) { p->_killed = 1; }
         int kill_proc(int pid);
 
+        // ==================== 系统调用支持 ====================
+        int set_tid_address(uint64 tidptr);
+        int set_robust_list(robust_list_head *head, size_t len);
+        int prlimit64(int pid, int resource, rlimit64 *new_limit, rlimit64 *old_limit);
+        
+        // ==================== 工具函数 ====================
+        int either_copy_in(void *dst, int user_src, uint64 src, uint64 len);
+        int either_copy_out(void *src, int user_dst, uint64 dst, uint64 len);
+        void get_cur_proc_tms(tmm::tms *tsv);
+        int get_cur_cpuid();
+
+        // ==================== 调试与验证 ====================
+        void procdump();
+        void debug_process_states();
+        bool verify_process_cleanup(int pid);
+
     private:
+        // 私有辅助函数
         void _proc_create_vm(Pcb *p, mem::PageTable &pt);
         void _proc_create_vm(Pcb *p);
     };
 
     extern ProcessManager k_pm; // 全局进程管理器实例
 
-}
-
-inline void printRESULT()
-{
-    struct results
-    {
-        int passed;
-        int skipped;
-        int failed;
-        int warnings;
-        int broken;
-        unsigned int timeout;
-        int max_runtime;
-    };
-    proc::Pcb *_pcb = proc::k_pm.get_cur_pcb();
-    for (int i = 0; i < proc::max_vma_num; i++)
-        if (_pcb->get_vma()->_vm[i].vfile && _pcb->get_vma()->_vm[i].vfile->_path_name.substr(0, 5) == "/tmp/")
-        {
-            void *pa = proc::k_pm.get_cur_pcb()->get_pagetable()->walk_addr(_pcb->get_vma()->_vm[i].addr);
-            results *r = (results *)pa;
-            printf("pid:%d\n",_pcb->_pid);
-            printf("pa:%p\n", pa);
-            printf("result: \n pass:%d\n skipped:%d\n failed:%d\n warnings:%d\n broken:%d\n timeout:%u\n", r->passed, r->skipped, r->failed, r->warnings, r->broken, r->timeout);
-        }
 }
