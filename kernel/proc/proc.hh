@@ -14,6 +14,8 @@
 #include "futex.hh"
 #include "fs/vfs/file/file.hh"
 #include "signal.hh"
+#include "process_memory_manager.hh"
+#include "cpu.hh"
 
 // CPU掩码定义，兼容Linux的cpu_set_t
 struct CpuMask
@@ -27,7 +29,7 @@ struct CpuMask
     void clear(int cpu) { bits &= ~(1ULL << cpu); }
     bool is_set(int cpu) const { return (bits & (1ULL << cpu)) != 0; }
     void zero() { bits = 0; }
-    void fill() { bits = ~0ULL; }
+    void fill() { bits = (1ULL << NUMCPU) - 1 }
     bool empty() const { return bits == 0; }
 };
 namespace fs
@@ -82,10 +84,8 @@ namespace proc
     struct VMA
     {
         vma _vm[NVMA]; // 虚拟内存区域数组，类似Linux的vm_area_struct
-        int _ref_cnt;  // VMA引用计数，用于copy-on-write机制
+        // int _ref_cnt;  // VMA引用计数，用于copy-on-write机制
     };
-    constexpr int max_program_section_num = 16;
-    constexpr int max_vma_num = 10;
     class Pcb
     {
 
@@ -136,20 +136,8 @@ namespace proc
         uint64 _kstack = 0;    // 内核栈的虚拟地址
         TrapFrame *_trapframe; // 用户态寄存器保存区，用于系统调用和异常处理
     private:
-        bool _shared_vm = false; // 标记是否与父进程共享虚拟内存(CLONE_VM标志)
-
-        // 程序段管理
-        program_section_desc _prog_sections[max_program_section_num]; // 程序段描述数组
-        int _prog_section_cnt = 0;                                    // 已记录的程序段数量
-
-        // 堆内存管理
-        uint64 _heap_start = 0; // 堆的起始地址
-        uint64 _heap_end = 0;   // 堆的结束地址
-
-        mem::PageTable _pt; // 用户空间页表，等同于Linux的mm->pgd
-        uint64 _sz;         // 进程占用的总内存空间大小(字节)，包含所有程序段的总和，由内部自动管理
-
-        VMA *_vma; // VMA管理结构指针
+        // 阶段1：统一内存管理器（替代分散的内存字段）
+        class ProcessMemoryManager* _memory_manager;
 
     public:
         /****************************************************************************************
@@ -216,6 +204,7 @@ namespace proc
         void init(const char *lock_name, uint gid);
         void cleanup_ofile();   // 释放ofile资源的方法
         void cleanup_sighand(); // 释放sighand_struct资源的方法
+        void cleanup_memory_manager(); // 释放ProcessMemoryManager资源
         void map_kstack(mem::PageTable &pt);
         fs::dentry *get_cwd() { return _cwd; }
         int get_priority();
@@ -232,14 +221,13 @@ namespace proc
         void init_heap(uint64 start_addr);
         uint64 grow_heap(uint64 new_end);
         uint64 shrink_heap(uint64 new_end);
-        uint64 get_heap_size() const { return _heap_end > _heap_start ? _heap_end - _heap_start : 0; }
 
         // 内存大小计算方法（内部使用）
         void update_total_memory_size();
         uint64 calculate_total_memory_size() const;
 
         // 内存一致性检查方法（内部使用）
-        bool verify_memory_consistency() const;
+        bool verify_memory_consistency();
 
         // 内存管理接口
         void free_all_memory_resources();        // 释放所有内存资源
@@ -278,7 +266,6 @@ namespace proc
         mode_t get_umask() const { return _umask; }             // 获取文件模式创建掩码
         void set_umask(mode_t umask) { _umask = umask & 0777; } // 设置umask，只保留权限位
 
-        // 阶段0.5新增：内存相关字段的访问方法
         TrapFrame *get_trapframe() { return _trapframe; }
         const TrapFrame *get_trapframe() const { return _trapframe; }
         void set_trapframe(TrapFrame *tf) { _trapframe = tf; }
@@ -286,32 +273,103 @@ namespace proc
         uint64 get_kstack() const { return _kstack; }
         void set_kstack(uint64 kstack) { _kstack = kstack; }
 
-        mem::PageTable *get_pagetable() { return &_pt; }
-        const mem::PageTable *get_pagetable() const { return &_pt; }
-        void set_pagetable(const mem::PageTable &pt) { _pt = pt; }
+        // 页表访问：通过ProcessMemoryManager
+        mem::PageTable *get_pagetable() 
+        { 
+            return _memory_manager ? &_memory_manager->pagetable : nullptr;
+        }
+        const mem::PageTable *get_pagetable() const 
+        { 
+            return _memory_manager ? &_memory_manager->pagetable : nullptr;
+        }
+        void set_pagetable(const mem::PageTable &pt) 
+        { 
+            if (_memory_manager) {
+                _memory_manager->pagetable = pt;
+            }
+        }
 
-        bool get_shared_vm() const { return _shared_vm; }
-        void set_shared_vm(bool shared) { _shared_vm = shared; }
+        // 共享VM标志：通过ProcessMemoryManager
+        bool get_shared_vm() const 
+        { 
+            return _memory_manager ? _memory_manager->shared_vm : false;
+        }
+        void set_shared_vm(bool shared) 
+        { 
+            if (_memory_manager) {
+                _memory_manager->shared_vm = shared;
+            }
+        }
 
-        VMA *get_vma() { return _vma; }
-        const VMA *get_vma() const { return _vma; }
-        void set_vma(VMA *vma) { _vma = vma; }
+        // VMA访问：通过ProcessMemoryManager
+        VMA *get_vma() 
+        { 
+            return _memory_manager ? &_memory_manager->vma_data : nullptr;
+        }
+        const VMA *get_vma() const 
+        { 
+            return _memory_manager ? &_memory_manager->vma_data : nullptr;
+        }
+        void set_vma(VMA *vma) 
+        { 
+            if (vma && _memory_manager) {
+                _memory_manager->vma_data = *vma;
+            }
+        }
 
-        // 程序段访问方法
-        int get_prog_section_count() const { return _prog_section_cnt; }
-        const program_section_desc *get_prog_sections() const { return _prog_sections; }
-        program_section_desc *get_prog_sections() { return _prog_sections; }
-        void set_prog_section_count(int count) { _prog_section_cnt = count; }
+        // 程序段访问方法：通过ProcessMemoryManager
+        int get_prog_section_count() const 
+        { 
+            return _memory_manager ? _memory_manager->prog_section_count : 0;
+        }
+        const program_section_desc *get_prog_sections() const 
+        { 
+            return _memory_manager ? _memory_manager->prog_sections : nullptr;
+        }
+        program_section_desc *get_prog_sections() 
+        { 
+            return _memory_manager ? _memory_manager->prog_sections : nullptr;
+        }
+        void set_prog_section_count(int count) 
+        { 
+            if (_memory_manager) {
+                _memory_manager->prog_section_count = count;
+            }
+        }
 
-        // 堆内存访问方法
-        uint64 get_heap_start() const { return _heap_start; }
-        uint64 get_heap_end() const { return _heap_end; }
-        void set_heap_start(uint64 start_addr) { _heap_start = start_addr; }
-        void set_heap_end(uint64 end_addr) { _heap_end = end_addr; }
+        // 堆内存访问方法：通过ProcessMemoryManager
+        uint64 get_heap_start() const 
+        { 
+            return _memory_manager ? _memory_manager->heap_start : 0;
+        }
+        uint64 get_heap_end() const 
+        { 
+            return _memory_manager ? _memory_manager->heap_end : 0;
+        }
+        void set_heap_start(uint64 start_addr) 
+        { 
+            if (_memory_manager) {
+                _memory_manager->heap_start = start_addr;
+            }
+        }
+        void set_heap_end(uint64 end_addr) 
+        { 
+            if (_memory_manager) {
+                _memory_manager->heap_end = end_addr;
+            }
+        }
 
-        // 内存大小访问方法
-        uint64 get_size() const { return _sz; }
-        void set_size(uint64 sz) { _sz = sz; }
+        // 内存大小访问方法：通过ProcessMemoryManager
+        uint64 get_size() const 
+        { 
+            return _memory_manager ? _memory_manager->total_memory_size : 0;
+        }
+        void set_size(uint64 sz) 
+        { 
+            if (_memory_manager) {
+                _memory_manager->total_memory_size = sz;
+            }
+        }
 
         ProcState get_state() const { return _state; }
         char *get_name() { return _name; }

@@ -16,12 +16,11 @@
  */
 
 #include "proc.hh"
-#include "context.hh"
-#include "virtual_memory_manager.hh"
-#include "physical_memory_manager.hh"
-#include "process_memory_manager.hh"  // 新增：进程内存管理器
-#include "mem/memlayout.hh"          // 内核栈配置常量
-#include "hal/cpu.hh"                // 引入NUMCPU定义
+#include "proc_manager.hh"
+#include "process_memory_manager.hh"
+#include "klib.hh"
+#include "printer.hh"
+#include "prlimit.hh"
 
 namespace proc
 {
@@ -64,22 +63,16 @@ namespace proc
         _priority = default_proc_prio; // 默认进程优先级
         
         // CPU亲和性初始化：默认可以在任何CPU上运行
-        _cpu_mask = CpuMask((1ULL << NUMCPU) - 1); // 设置所有可用CPU位
+        _cpu_mask.fill(); // 设置所有可用CPU位
 
         /****************************************************************************************
          * 内存管理
          ****************************************************************************************/
         _kstack = 0;          // 内核栈虚拟地址
-        _sz = 0;              // 进程占用的总内存空间大小
-        _shared_vm = false;   // 是否与父进程共享虚拟内存
         _trapframe = nullptr; // 用户态寄存器保存区
-
-        // 堆内存管理初始化
-        _heap_start = 0; // 堆的起始地址
-        _heap_end = 0;   // 堆的结束地址
-
-        // 虚拟内存区域管理
-        _vma = nullptr; // VMA管理结构指针
+        
+        // 阶段1：创建统一内存管理器
+        _memory_manager = nullptr; // 延迟到init()中创建，避免在构造函数中panic
 
         /****************************************************************************************
          * 文件系统和I/O管理
@@ -130,17 +123,6 @@ namespace proc
         _start_boottime = 0; // 自系统启动以来的启动时间
 
         /****************************************************************************************
-         * 程序段描述(调试和分析用)
-         ****************************************************************************************/
-        _prog_section_cnt = 0; // 已记录的程序段数量
-        for (int i = 0; i < max_program_section_num; i++)
-        {
-            _prog_sections[i]._sec_start = nullptr;
-            _prog_sections[i]._sec_size = 0;
-            _prog_sections[i]._debug_name = nullptr;
-        }
-
-        /****************************************************************************************
          * 资源限制初始化
          ****************************************************************************************/
         // 设置栈大小限制 (TODO: 需要根据实际需求设置)
@@ -165,6 +147,12 @@ namespace proc
         _state = ProcState::UNUSED;
         _global_id = gid;
         _kstack = mem::VirtualMemoryManager::kstack_vm_from_global_id(_global_id);
+        
+        // 阶段1：创建统一内存管理器
+        if (_memory_manager == nullptr)
+        {
+            _memory_manager = new ProcessMemoryManager();
+        }
     }
 
     void Pcb::cleanup_sighand()
@@ -191,6 +179,22 @@ namespace proc
             }
             // 清空当前进程的信号处理指针
             _sigactions = nullptr;
+        }
+    }
+
+    // 阶段1新增：清理ProcessMemoryManager
+    void Pcb::cleanup_memory_manager()
+    {
+        if (_memory_manager != nullptr)
+        {
+            // 检查引用计数，如果需要释放则释放资源
+            if (_memory_manager->put())
+            {
+                // 引用计数降至0，需要释放
+                _memory_manager->free_all_memory();
+                delete _memory_manager;
+            }
+            _memory_manager = nullptr;
         }
     }
 
@@ -266,285 +270,188 @@ namespace proc
     }
 
     /****************************************************************************************
-     * 程序段管理方法实现
+     * 程序段管理方法实现 - 封装ProcessMemoryManager
      ****************************************************************************************/
     int Pcb::add_program_section(void *start, ulong size, const char *name)
     {
-        if (_prog_section_cnt >= max_program_section_num)
+        if (_memory_manager)
         {
-            panic("add_program_section: too many program sections\n");
+            return _memory_manager->add_program_section(start, size, name);
+        }
+        else
+        {
+            printfRed("add_program_section: _memory_manager is null\n");
             return -1;
         }
-
-        int index = _prog_section_cnt++;
-        _prog_sections[index]._sec_start = start;
-        _prog_sections[index]._sec_size = size;
-        _prog_sections[index]._debug_name = name;
-
-        // 更新总内存大小
-        update_total_memory_size();
-
-        verify_memory_consistency();
-
-        return index;
     }
 
     void Pcb::remove_program_section(int index)
     {
-        if (index < 0 || index >= _prog_section_cnt)
+        if (_memory_manager)
         {
-            printfRed("remove_program_section: invalid index %d\n", index);
-            return;
+            _memory_manager->remove_program_section(index);
         }
-
-        // 移动后续段到前面
-        for (int i = index; i < _prog_section_cnt - 1; i++)
+        else
         {
-            _prog_sections[i] = _prog_sections[i + 1];
+            printfRed("remove_program_section: _memory_manager is null\n");
         }
-
-        _prog_section_cnt--;
-
-        // 清理最后一个位置
-        _prog_sections[_prog_section_cnt]._sec_start = nullptr;
-        _prog_sections[_prog_section_cnt]._sec_size = 0;
-        _prog_sections[_prog_section_cnt]._debug_name = nullptr;
-
-        // 更新总内存大小
-        update_total_memory_size();
-
-        verify_memory_consistency();
     }
 
     void Pcb::clear_all_program_sections()
     {
-        for (int i = 0; i < _prog_section_cnt; i++)
+        if (_memory_manager)
         {
-            _prog_sections[i]._sec_start = nullptr;
-            _prog_sections[i]._sec_size = 0;
-            _prog_sections[i]._debug_name = nullptr;
+            _memory_manager->clear_all_program_sections_data();
         }
-        _prog_section_cnt = 0;
-
-        // 重新计算总内存大小：只包含堆空间
-        update_total_memory_size();
-
-        verify_memory_consistency();
+        else
+        {
+            printfRed("clear_all_program_sections: _memory_manager is null\n");
+        }
     }
 
     void Pcb::reset_memory_sections()
     {
-        // 清空所有程序段
-        clear_all_program_sections();
-        
-        // 重置堆信息
-        _heap_start = 0;
-        _heap_end = 0;
-        
-        // 重置总内存大小
-        _sz = 0;
+        if (_memory_manager)
+        {
+            _memory_manager->reset_memory_sections();
+        }
+        else
+        {
+            printfRed("reset_memory_sections: _memory_manager is null\n");
+        }
     }
 
     uint64 Pcb::get_total_program_memory() const
     {
-        uint64 total = 0;
-        for (int i = 0; i < _prog_section_cnt; i++)
+        if (_memory_manager)
         {
-            total += _prog_sections[i]._sec_size;
+            return _memory_manager->get_total_program_memory();
         }
-        return total;
+        return 0;
     }
 
     void Pcb::copy_program_sections(const Pcb *src)
     {
-        _prog_section_cnt = src->_prog_section_cnt;
-        for (int i = 0; i < _prog_section_cnt; i++)
+        if (_memory_manager && src->_memory_manager)
         {
-            _prog_sections[i] = src->_prog_sections[i];
+            _memory_manager->copy_program_sections(*src->_memory_manager);
         }
-
-        // 更新总内存大小
-        update_total_memory_size();
+        else
+        {
+            printfRed("copy_program_sections: _memory_manager is null\n");
+        }
     }
 
     /****************************************************************************************
-     * 堆内存管理方法实现
+     * 堆内存管理方法实现 - 封装ProcessMemoryManager
      ****************************************************************************************/
     void Pcb::init_heap(uint64 start_addr)
     {
-        ProcessMemoryManager memory_mgr(this);
-        memory_mgr.init_heap(start_addr);
-        
-        // 更新总内存大小
-        update_total_memory_size();
+        if (_memory_manager)
+        {
+            _memory_manager->init_heap(start_addr);
+        }
+        else
+        {
+            printfRed("init_heap: _memory_manager is null\n");
+        }
     }
 
     uint64 Pcb::grow_heap(uint64 new_end)
     {
-        ProcessMemoryManager memory_mgr(this);
-        uint64 result = memory_mgr.grow_heap(new_end);
-        
-        // 更新总内存大小
-        update_total_memory_size();
-        
-        return result;
+        if (_memory_manager)
+        {
+            return _memory_manager->grow_heap(new_end);
+        }
+        else
+        {
+            printfRed("grow_heap: _memory_manager is null\n");
+            return 0;
+        }
     }
 
     uint64 Pcb::shrink_heap(uint64 new_end)
     {
-        ProcessMemoryManager memory_mgr(this);
-        uint64 result = memory_mgr.shrink_heap(new_end);
-        
-        // 更新总内存大小
-        update_total_memory_size();
-        
-        return result;
+        if (_memory_manager)
+        {
+            return _memory_manager->shrink_heap(new_end);
+        }
+        else
+        {
+            printfRed("shrink_heap: _memory_manager is null\n");
+            return 0;
+        }
     }
 
     /****************************************************************************************
-     * 内存大小计算方法实现
+     * 内存大小计算方法实现 - 封装ProcessMemoryManager
      ****************************************************************************************/
     void Pcb::update_total_memory_size()
     {
-        _sz = calculate_total_memory_size();
+        if (_memory_manager)
+        {
+            _memory_manager->update_total_memory_size();
+        }
     }
 
     uint64 Pcb::calculate_total_memory_size() const
     {
-        uint64 total = 0;
-
-        // 计算所有程序段的大小
-        for (int i = 0; i < _prog_section_cnt; i++)
+        if (_memory_manager)
         {
-            total += _prog_sections[i]._sec_size;
+            return _memory_manager->calculate_total_memory_size();
         }
-
-        // 加上堆的大小
-        total += get_heap_size();
-
-        return total;
+        return 0;
     }
 
     
-    bool Pcb::verify_memory_consistency() const
+    bool Pcb::verify_memory_consistency()
     {
-        uint64 calculated_total = calculate_total_memory_size();
-        bool consistent = (_sz == calculated_total);
-
-        if (!consistent)
+        if (_memory_manager)
         {
-            printfRed("Memory inconsistency detected in process %s (PID: %d)\n", _name, _pid);
-            printfRed("  _sz: %u, calculated: %u\n", _sz, calculated_total);
-            printfRed("  Note: VMA regions are managed separately and not counted in _sz\n");
-            panic("proc verify_memory_consistency failed\n");
+            return _memory_manager->verify_memory_consistency();
         }
-
-        return consistent;
+        return true; // 没有内存管理器时认为是一致的
     }
 
     
     void Pcb::free_all_memory_resources()
     {
-        ProcessMemoryManager memory_mgr(this);
-        memory_mgr.free_all_memory();
+        if (_memory_manager)
+        {
+            _memory_manager->free_all_memory();
+        }
     }
 
     void Pcb::emergency_memory_cleanup()
     {
-        ProcessMemoryManager memory_mgr(this);
-        memory_mgr.emergency_cleanup();
+        if (_memory_manager)
+        {
+            _memory_manager->emergency_cleanup();
+        }
     }
 
     bool Pcb::check_memory_leaks() const
     {
-        ProcessMemoryManager memory_mgr(const_cast<Pcb*>(this));
-        return memory_mgr.check_memory_leaks();
+        if (_memory_manager)
+        {
+            return _memory_manager->check_memory_leaks();
+        }
+        return false;
     }
 
     void Pcb::print_detailed_memory_info() const
     {
-        printfCyan("=== PCB Memory Information ===\n");
-        printfCyan("Process: %s (PID: %d)\n", _name, _pid);
-        printfCyan("Total process size: %u bytes\n", _sz);
-        
-        // 程序段信息
-        printfCyan("Program sections (%d):\n", _prog_section_cnt);
-        uint64 sections_total = 0;
-        for (int i = 0; i < _prog_section_cnt; i++)
+        if (_memory_manager)
         {
-            printfCyan("  Section %d (%s): %p - %p (%u bytes)\n",
-                      i,
-                      _prog_sections[i]._debug_name ? _prog_sections[i]._debug_name : "unnamed",
-                      _prog_sections[i]._sec_start,
-                      (void*)((uint64)_prog_sections[i]._sec_start + _prog_sections[i]._sec_size),
-                      _prog_sections[i]._sec_size);
-            sections_total += _prog_sections[i]._sec_size;
-        }
-        printfCyan("Total program sections: %u bytes\n", sections_total);
-        
-        // 堆信息
-        uint64 heap_size = get_heap_size();
-        if (heap_size > 0)
-        {
-            printfCyan("Heap: %p - %p (%u bytes)\n", 
-                      (void*)_heap_start,
-                      (void*)_heap_end,
-                      heap_size);
+            _memory_manager->print_memory_usage();
         }
         else
         {
-            printfCyan("Heap: not allocated\n");
+            printfCyan("=== PCB Memory Information ===\n");
+            printfCyan("Process: %s (PID: %d)\n", _name, _pid);
+            printfCyan("ProcessMemoryManager: not present\n");
+            printfCyan("=== End PCB Memory Information ===\n");
         }
-
-        // VMA信息
-        if (_vma)
-        {
-            printfCyan("VMA structure: present (ref_cnt: %d)\n", _vma->_ref_cnt);
-            uint64 vma_total = 0;
-            int active_vmas = 0;
-            for (int i = 0; i < NVMA; i++)
-            {
-                if (_vma->_vm[i].used)
-                {
-                    printfCyan("  VMA %d: %p - %p (%u bytes, prot=%d, flags=%d)\n",
-                              i,
-                              (void*)_vma->_vm[i].addr,
-                              (void*)(_vma->_vm[i].addr + _vma->_vm[i].len),
-                              _vma->_vm[i].len,
-                              _vma->_vm[i].prot,
-                              _vma->_vm[i].flags);
-                    vma_total += _vma->_vm[i].len;
-                    active_vmas++;
-                }
-            }
-            printfCyan("Total VMA usage: %u bytes (%d active VMAs)\n", vma_total, active_vmas);
-        }
-        else
-        {
-            printfCyan("VMA structure: not present\n");
-        }
-
-        // 页表信息
-        if (_pt.get_base())
-        {
-            printfCyan("Page table: present (%p)\n", _pt.get_base());
-        }
-        else
-        {
-            printfCyan("Page table: not present\n");
-        }
-
-        // TrapFrame信息
-        if (_trapframe)
-        {
-            printfCyan("TrapFrame: present (%p)\n", _trapframe);
-        }
-        else
-        {
-            printfCyan("TrapFrame: not present\n");
-        }
-
-        printfCyan("=== End PCB Memory Information ===\n");
     }
 
 }

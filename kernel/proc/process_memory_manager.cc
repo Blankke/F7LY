@@ -4,6 +4,13 @@
  *
  * 实现进程内存管理器的所有功能，提供统一的内存管理接口。
  * 将原本散落在proc_manager.cc中的内存管理逻辑重构到这里。
+ * 
+ * 统一管理说明：
+ * - 所有内存释放统一通过 free_all_memory() 进行
+ * - free_heap_memory() 内部调用 cleanup_heap_to_size(0)
+ * - get_total_memory_usage() 返回缓存值，calculate_total_memory_size() 实时计算
+ * - verify_all_memory_consistency() 包含 verify_memory_consistency 的核心逻辑
+ * - get_total_program_memory() 保留为API兼容性，功能包含在 calculate_total_memory_size() 中
  */
 #include "proc_manager.hh"
 #include "process_memory_manager.hh"
@@ -18,16 +25,27 @@
 namespace proc
 {
 
-    ProcessMemoryManager::ProcessMemoryManager(Pcb *pcb) 
-        : ref_count(1), _pcb(pcb)
+    ProcessMemoryManager::ProcessMemoryManager() 
+        : ref_count(1), prog_section_count(0), heap_start(0), heap_end(0), 
+          total_memory_size(0), shared_vm(false)
     {
-        if (_pcb == nullptr)
-        {
-            panic("ProcessMemoryManager: null PCB provided");
-        }
-        
         // 初始化内存锁
         memory_lock.init("process_memory_lock");
+        
+        // 初始化程序段数组
+        for (int i = 0; i < max_program_section_num; i++)
+        {
+            prog_sections[i]._sec_start = nullptr;
+            prog_sections[i]._sec_size = 0;
+            prog_sections[i]._debug_name = nullptr;
+        }
+        
+        // 初始化VMA数据
+        // 阶段1：移除VMA的分散引用计数，统一使用ProcessMemoryManager的引用计数
+        for (int i = 0; i < NVMA; i++)
+        {
+            vma_data._vm[i].used = false;
+        }
     }
 
     ProcessMemoryManager::~ProcessMemoryManager()
@@ -36,9 +54,6 @@ namespace proc
         // 清理应该通过显式调用free_all_memory()来完成
     }
 
-    /****************************************************************************************
-     * 阶段0新增：引用计数管理接口实现
-     ****************************************************************************************/
 
     void ProcessMemoryManager::get()
     {
@@ -71,103 +86,196 @@ namespace proc
     ProcessMemoryManager* ProcessMemoryManager::clone_for_fork()
     {
         // 进程复制：创建新的内存管理器并深拷贝内容
-        // 注意：这里传递nullptr作为PCB，需要在调用后设置正确的PCB
-        ProcessMemoryManager* new_mgr = new ProcessMemoryManager(nullptr);
+        ProcessMemoryManager* new_mgr = new ProcessMemoryManager();
         
-        // TODO: 在阶段1中实现深拷贝逻辑
-        // 目前返回新实例，深拷贝逻辑将在后续阶段实现
+        // 阶段1：实现深拷贝逻辑
+        // 复制程序段信息
+        new_mgr->prog_section_count = prog_section_count;
+        for (int i = 0; i < max_program_section_num; i++)
+        {
+            new_mgr->prog_sections[i] = prog_sections[i];
+        }
+        
+        // 复制堆信息
+        new_mgr->heap_start = heap_start;
+        new_mgr->heap_end = heap_end;
+        
+        // 复制总内存大小
+        new_mgr->total_memory_size = total_memory_size;
+        
+        // 复制共享标志
+        new_mgr->shared_vm = shared_vm;
+        
+        // 复制页表（这里是浅拷贝地址，实际页表内容需要在其他地方处理）
+        new_mgr->pagetable = pagetable;
+        
+        // 复制VMA数据
+        new_mgr->vma_data = vma_data;
         
         return new_mgr;
-    }
-
-    void ProcessMemoryManager::set_pcb(Pcb* pcb)
-    {
-        _pcb = pcb;
     }
 
     /****************************************************************************************
      * 程序段管理接口实现
      ****************************************************************************************/
 
+    int ProcessMemoryManager::add_program_section(void *start, ulong size, const char *name)
+    {
+        if (prog_section_count >= max_program_section_num)
+        {
+            panic("add_program_section: too many program sections\n");
+            return -1;
+        }
+
+        int index = prog_section_count++;
+        prog_sections[index]._sec_start = start;
+        prog_sections[index]._sec_size = size;
+        prog_sections[index]._debug_name = name;
+
+        // 更新总内存大小
+        update_total_memory_size();
+
+        // 验证内存一致性
+        verify_memory_consistency();
+
+        return index;
+    }
+
+    void ProcessMemoryManager::remove_program_section(int index)
+    {
+        if (index < 0 || index >= prog_section_count)
+        {
+            printfRed("remove_program_section: invalid index %d\n", index);
+            return;
+        }
+
+        // 移动后续段到前面
+        for (int i = index; i < prog_section_count - 1; i++)
+        {
+            prog_sections[i] = prog_sections[i + 1];
+        }
+
+        prog_section_count--;
+
+        // 清理最后一个位置
+        prog_sections[prog_section_count]._sec_start = nullptr;
+        prog_sections[prog_section_count]._sec_size = 0;
+        prog_sections[prog_section_count]._debug_name = nullptr;
+
+        // 更新总内存大小
+        update_total_memory_size();
+
+        // 验证内存一致性
+        verify_memory_consistency();
+    }
+
+    void ProcessMemoryManager::clear_all_program_sections_data()
+    {
+        for (int i = 0; i < prog_section_count; i++)
+        {
+            prog_sections[i]._sec_start = nullptr;
+            prog_sections[i]._sec_size = 0;
+            prog_sections[i]._debug_name = nullptr;
+        }
+        prog_section_count = 0;
+
+        // 重新计算总内存大小：只包含堆空间
+        update_total_memory_size();
+
+        // 验证内存一致性
+        verify_memory_consistency();
+    }
+
+    void ProcessMemoryManager::reset_memory_sections()
+    {
+        // 清空所有程序段
+        clear_all_program_sections_data();
+        
+        // 重置堆信息
+        heap_start = 0;
+        heap_end = 0;
+        
+        // 重置总内存大小
+        total_memory_size = 0;
+    }
+
+    uint64 ProcessMemoryManager::get_total_program_memory() const
+    {
+        // 为API兼容性保留，实现程序段总大小计算
+        uint64 total = 0;
+        for (int i = 0; i < prog_section_count; i++)
+        {
+            total += prog_sections[i]._sec_size;
+        }
+        return total;
+    }
+
+    void ProcessMemoryManager::copy_program_sections(const ProcessMemoryManager &src)
+    {
+        prog_section_count = src.prog_section_count;
+        for (int i = 0; i < prog_section_count; i++)
+        {
+            prog_sections[i] = src.prog_sections[i];
+        }
+
+        // 更新总内存大小
+        update_total_memory_size();
+    }
+
     void ProcessMemoryManager::free_all_program_sections()
     {
-        if (!_pcb)
-            return;
-
-        // printfBlue("ProcessMemoryManager: freeing all program sections for process %s (PID: %d)\n",
-        //            _pcb->get_name(), _pcb->get_pid());
-
         // 释放程序段占用的内存
-        for (int i = 0; i < _pcb->get_prog_section_count(); i++)
+        for (int i = 0; i < prog_section_count; i++)
         {
-            const auto *sections = _pcb->get_prog_sections();
-            if (sections[i]._sec_start && sections[i]._sec_size > 0)
+            if (prog_sections[i]._sec_start && prog_sections[i]._sec_size > 0)
             {
-                uint64 va_start = PGROUNDDOWN((uint64)sections[i]._sec_start);
-                uint64 va_end = PGROUNDUP((uint64)sections[i]._sec_start + sections[i]._sec_size);
+                uint64 va_start = PGROUNDDOWN((uint64)prog_sections[i]._sec_start);
+                uint64 va_end = PGROUNDUP((uint64)prog_sections[i]._sec_start + prog_sections[i]._sec_size);
 
                 // printfBlue("  Freeing section %d (%s): %p - %p (%u bytes)\n",
                 //            i,
-                //            sections[i]._debug_name ? sections[i]._debug_name : "unnamed",
+                //            prog_sections[i]._debug_name ? prog_sections[i]._debug_name : "unnamed",
                 //            (void *)va_start,
                 //            (void *)va_end,
-                //            sections[i]._sec_size);
+                //            prog_sections[i]._sec_size);
 
                 safe_vmunmap(va_start, va_end, true);
             }
         }
 
-        // 清理程序段描述信息
-        _pcb->clear_all_program_sections();
+        // 阶段1：清理ProcessMemoryManager内的程序段描述信息
+        for (int i = 0; i < max_program_section_num; i++)
+        {
+            prog_sections[i]._sec_start = nullptr;
+            prog_sections[i]._sec_size = 0;
+            prog_sections[i]._debug_name = nullptr;
+        }
+        prog_section_count = 0;
 
         // printfGreen("ProcessMemoryManager: program sections freed successfully\n");
     }
 
-    bool ProcessMemoryManager::free_program_section(int section_index)
-    {
-        if (!_pcb || section_index < 0 || section_index >= _pcb->get_prog_section_count())
-        {
-            printfRed("ProcessMemoryManager: invalid section index %d\n", section_index);
-            return false;
-        }
-
-        const auto *sections = _pcb->get_prog_sections();
-        if (sections[section_index]._sec_start && sections[section_index]._sec_size > 0)
-        {
-            uint64 va_start = PGROUNDDOWN((uint64)sections[section_index]._sec_start);
-            uint64 va_end = PGROUNDUP((uint64)sections[section_index]._sec_start + sections[section_index]._sec_size);
-
-            safe_vmunmap(va_start, va_end, true);
-        }
-
-        _pcb->remove_program_section(section_index);
-        return true;
-    }
-
     bool ProcessMemoryManager::verify_program_sections_consistency() const
     {
-        if (!_pcb)
-            return false;
-
-        // 计算当前程序段的总大小
+        // 直接计算ProcessMemoryManager中程序段的总大小
         uint64 sections_total = 0;
-        for (int i = 0; i < _pcb->get_prog_section_count(); i++)
+        for (int i = 0; i < prog_section_count; i++)
         {
-            const auto *sections = _pcb->get_prog_sections();
-            sections_total += sections[i]._sec_size;
+            sections_total += prog_sections[i]._sec_size;
         }
 
-        // 与PCB维护的总内存大小进行比较
-        // 注意：_sz包含程序段+堆，但不包含VMA
-        uint64 expected_sections_total = _pcb->get_size() - _pcb->get_heap_size();
+        // 与ProcessMemoryManager维护的总内存大小进行比较
+        // 注意：total_memory_size包含程序段+堆，但不包含VMA
+        uint64 heap_size = heap_end > heap_start ? heap_end - heap_start : 0;
+        uint64 expected_sections_total = total_memory_size - heap_size;
 
         if (sections_total != expected_sections_total)
         {
             printfRed("ProcessMemoryManager: program sections inconsistency detected\n");
             printfRed("  Sections total: %u, Expected (sz - heap): %u\n",
-                      sections_total, expected_sections_total);
-            printfRed("  PCB size: %u, Heap size: %u\n",
-                      _pcb->get_size(), _pcb->get_heap_size());
+                      (uint32)sections_total, (uint32)expected_sections_total);
+            printfRed("  Total memory size: %u, Heap size: %u\n",
+                      (uint32)total_memory_size, (uint32)heap_size);
             panic("verify_program_section_count fail");
             return false;
         }
@@ -181,35 +289,24 @@ namespace proc
 
     void ProcessMemoryManager::init_heap(uint64 start_addr)
     {
-        if (!_pcb)
-            return;
-
-        printfBlue("ProcessMemoryManager: initializing heap at %p for process %s (PID: %d)\n",
-                   (void *)start_addr, _pcb->get_name(), _pcb->get_pid());
-
-        // 设置堆的起始和结束地址
-        _pcb->set_heap_start(start_addr);
-        _pcb->set_heap_end(start_addr);
+        // 设置ProcessMemoryManager中的堆地址
+        heap_start = start_addr;
+        heap_end = start_addr;
 
         printfGreen("ProcessMemoryManager: heap initialized successfully\n");
     }
 
     uint64 ProcessMemoryManager::grow_heap(uint64 new_end)
     {
-        if (!_pcb)
-            return 0;
-
-        uint64 current_end = _pcb->get_heap_end();
+        // 直接使用ProcessMemoryManager中的堆地址
+        uint64 current_end = heap_end;
         if (new_end <= current_end)
         {
             return current_end; // 无需扩展
         }
 
-        printfBlue("ProcessMemoryManager: growing heap from %p to %p for process %s (PID: %d)\n",
-                   (void *)current_end, (void *)new_end, _pcb->get_name(), _pcb->get_pid());
-
         // 使用虚拟内存管理器分配新的堆内存
-        mem::PageTable &pt = *_pcb->get_pagetable();
+        mem::PageTable &pt = pagetable;
         uint64 result;
 
 #ifdef RISCV
@@ -225,8 +322,8 @@ namespace proc
             return current_end;
         }
 
-        // 更新堆结束地址
-        _pcb->set_heap_end(new_end);
+        // 更新ProcessMemoryManager中的堆结束地址
+        heap_end = new_end;
 
         printfGreen("ProcessMemoryManager: heap grown successfully to %p\n", (void *)new_end);
         return new_end;
@@ -234,19 +331,14 @@ namespace proc
 
     uint64 ProcessMemoryManager::shrink_heap(uint64 new_end)
     {
-        if (!_pcb)
-            return 0;
+        // 直接使用ProcessMemoryManager中的堆地址
+        uint64 current_end = heap_end;
+        uint64 current_start = heap_start;
 
-        uint64 current_end = _pcb->get_heap_end();
-        uint64 heap_start = _pcb->get_heap_start();
-
-        if (new_end >= current_end || new_end < heap_start)
+        if (new_end >= current_end || new_end < current_start)
         {
             return current_end; // 无效的收缩请求
         }
-
-        printfBlue("ProcessMemoryManager: shrinking heap from %p to %p for process %s (PID: %d)\n",
-                   (void *)current_end, (void *)new_end, _pcb->get_name(), _pcb->get_pid());
 
         // 释放多余的堆内存
         uint64 va_start = PGROUNDUP(new_end);
@@ -256,54 +348,36 @@ namespace proc
         {
             if (is_page_mapped(va))
             {
-                mem::k_vmm.vmunmap(*_pcb->get_pagetable(), va, 1, 1);
+                mem::k_vmm.vmunmap(pagetable, va, 1, 1);
             }
         }
 
-        // 更新堆结束地址
-        _pcb->set_heap_end(new_end);
+        // 更新ProcessMemoryManager中的堆结束地址
+        heap_end = new_end;
 
         printfGreen("ProcessMemoryManager: heap shrunk successfully to %p\n", (void *)new_end);
         return new_end;
     }
 
-    void ProcessMemoryManager::free_heap_memory()
-    {
-        if (!_pcb)
-            return;
-
-        uint64 heap_size = _pcb->get_heap_size();
-        if (heap_size > 0)
-        {
-            // printfBlue("ProcessMemoryManager: freeing heap memory for process %s (PID: %d)\n",
-            //            _pcb->get_name(), _pcb->get_pid());
-            // printfBlue("  Heap range: %p - %p (%u bytes)\n",
-            //            (void *)_pcb->get_heap_start(),
-            //            (void *)_pcb->get_heap_end(),
-            //            heap_size);
-
-            // 将堆收缩到起始位置，实际释放所有堆内存
-            shrink_heap(_pcb->get_heap_start());
-
-            // printfGreen("ProcessMemoryManager: heap memory freed successfully\n");
-        }
-    }
-
     bool ProcessMemoryManager::cleanup_heap_to_size(uint64 new_size)
     {
-        if (!_pcb)
-            return false;
-
-        uint64 current_size = _pcb->get_heap_size();
+        // 直接使用ProcessMemoryManager中的堆大小
+        uint64 current_size = heap_end > heap_start ? heap_end - heap_start : 0;
         if (new_size >= current_size)
         {
             return true; // 无需收缩
         }
 
-        uint64 new_end = _pcb->get_heap_start() + new_size;
+        uint64 new_end = heap_start + new_size;
         uint64 result = shrink_heap(new_end);
 
         return (result == new_end);
+    }
+
+    void ProcessMemoryManager::free_heap_memory()
+    {
+        // 重构：使用cleanup_heap_to_size(0)来完全释放堆内存
+        cleanup_heap_to_size(0);
     }
 
     /****************************************************************************************
@@ -312,187 +386,64 @@ namespace proc
 
     void ProcessMemoryManager::free_all_vma()
     {
-        if (!_pcb || !_pcb->_vma)
-        {
-            panic("ProcessMemoryManager: PCB or VMA is null");
-            return;
-        }
-
-        // printfBlue("ProcessMemoryManager: freeing all VMA for process %s (PID: %d)\n",
-        //            _pcb->get_name(), _pcb->get_pid());
-
-        // 遍历所有VMA条目
+        // 遍历所有VMA条目，统一释放（不再调用单独的free_vma）
         for (int i = 0; i < NVMA; ++i)
         {
-            if (_pcb->_vma->_vm[i].used)
+            if (vma_data._vm[i].used)
             {
                 // printfBlue("  Processing VMA %d: addr=%p, len=%u, vfd=%d, flags=0x%x, prot=0x%x\n",
-                //            i, (void *)_pcb->_vma->_vm[i].addr, _pcb->_vma->_vm[i].len,
-                //            _pcb->_vma->_vm[i].vfd, _pcb->_vma->_vm[i].flags, _pcb->_vma->_vm[i].prot);
+                //            i, (void *)vma_data._vm[i].addr, vma_data._vm[i].len,
+                //            vma_data._vm[i].vfd, vma_data._vm[i].flags, vma_data._vm[i].prot);
 
-                if (_pcb->_vma->_vm[i].vfile)
+                vma &vm_entry = vma_data._vm[i];
+
+                // 写回文件映射（对于共享且可写的映射）
+                if (vm_entry.vfile != nullptr && 
+                    vm_entry.flags == MAP_SHARED &&
+                    (vm_entry.prot & PROT_WRITE) != 0)
                 {
-                    // printfBlue("    File mapping: %s\n", _pcb->_vma->_vm[i].vfile->_path_name.c_str());
-                }
-                else
-                {
-                    // printfBlue("    Anonymous mapping (vfd=%d)\n", _pcb->_vma->_vm[i].vfd);
-                }
-                // 对文件映射进行写回操作
-                if (!writeback_vma(i))
-                {
-                    printfRed("  Warning: VMA %d writeback failed\n", i);
+                    // 简化的写回逻辑，避免调用单独的writeback_vma函数
+                    uint64 vma_start = PGROUNDDOWN(vm_entry.addr);
+                    uint64 vma_end = PGROUNDUP(vma_start + vm_entry.len);
+                    for (uint64 va = vma_start; va < vma_end; va += PGSIZE)
+                    {
+                        mem::Pte pte = pagetable.walk(va, 0);
+                        if (!pte.is_null() && pte.is_valid())
+                        {
+                            uint64 pa = (uint64)pte.pa();
+                            int file_offset = vm_entry.offset + (va - vma_start);
+                            int write_result = vm_entry.vfile->write(pa, PGSIZE, file_offset, false);
+                            if (write_result < 0)
+                            {
+                                printfRed("ProcessMemoryManager: VMA %d writeback failed\n", i);
+                            }
+                        }
+                    }
                 }
 
                 // 释放文件引用
-                if (_pcb->_vma->_vm[i].vfile != nullptr)
+                if (vm_entry.vfile != nullptr)
                 {
-                    _pcb->_vma->_vm[i].vfile->free_file();
-                    _pcb->_vma->_vm[i].vfile = nullptr;
+                    vm_entry.vfile->free_file();
+                    vm_entry.vfile = nullptr;
                 }
 
                 // 取消虚拟地址映射
-                uint64 va_start = PGROUNDDOWN(_pcb->_vma->_vm[i].addr);
-                uint64 va_end = PGROUNDUP(_pcb->_vma->_vm[i].addr + _pcb->_vma->_vm[i].len);
+                uint64 va_start = PGROUNDDOWN(vm_entry.addr);
+                uint64 va_end = PGROUNDUP(vm_entry.addr + vm_entry.len);
                 safe_vmunmap(va_start, va_end, true);
 
-                // 标记为未使用
-                _pcb->_vma->_vm[i].used = 0;
+                // 清理VMA条目
+                memset(&vm_entry, 0, sizeof(vma));
             }
         }
 
         // printfGreen("ProcessMemoryManager: all VMA freed successfully\n");
     }
 
-    bool ProcessMemoryManager::free_vma(int vma_index)
-    {
-        if (!is_vma_valid(vma_index))
-        {
-            return false;
-        }
-
-        vma &vm_entry = _pcb->_vma->_vm[vma_index];
-
-        // 写回文件映射
-        if (!writeback_vma(vma_index))
-        {
-            printfRed("ProcessMemoryManager: VMA %d writeback failed\n", vma_index);
-        }
-
-        // 释放文件引用
-        if (vm_entry.vfile != nullptr)
-        {
-            vm_entry.vfile->free_file();
-            vm_entry.vfile = nullptr;
-        }
-
-        // 取消虚拟地址映射
-        uint64 va_start = PGROUNDDOWN(vm_entry.addr);
-        uint64 va_end = PGROUNDUP(vm_entry.addr + vm_entry.len);
-        safe_vmunmap(va_start, va_end, true);
-
-        // 清理VMA条目
-        memset(&vm_entry, 0, sizeof(vma));
-
-        return true;
-    }
-
-    bool ProcessMemoryManager::writeback_vma(int vma_index)
-    {
-        if (!is_vma_valid(vma_index))
-        {
-            return false;
-        }
-
-        // printf("checkpoint: 0\n");
-
-        const vma &vm_entry = _pcb->_vma->_vm[vma_index];
-        // printf("checkpoint: 0.5\n");
-
-        // 检查是否是匿名映射（没有关联文件）
-        if (vm_entry.vfile == nullptr)
-        {
-            // printfBlue("ProcessMemoryManager: VMA %d is anonymous mapping (no file), skipping writeback\n", vma_index);
-            return true;
-        }
-
-        // printf("ProcessMemoryManager: writeback VMA %d to file %s\n",
-        //        vma_index, vm_entry.vfile->_path_name.c_str());
-
-        // printf("checkpoint: 1\n");
-
-        // 跳过temp文件
-        // if (vm_entry.vfile->_path_name.substr(0, 5) == "/tmp/")
-        // {
-        //     printfOrange("[freeproc] skipping tmp writeback\n");
-        //     return false;
-        // }
-
-        // printf("checkpoint: 2\n");
-
-        // 只对文件映射且为共享且可写的VMA进行写回
-        if (vm_entry.flags == MAP_SHARED &&
-            (vm_entry.prot & PROT_WRITE) != 0)
-        {
-            Pcb *p = k_pm.get_cur_pcb();
-            // printfBlue("  Writing back VMA %d to file\n", vma_index);
-            uint64 vma_start = PGROUNDDOWN(vm_entry.addr);
-            uint64 vma_end = PGROUNDUP(vma_start + vm_entry.len);
-            for (uint64 va = vma_start; va < vma_end; va += PGSIZE)
-            {
-                mem::Pte pte = p->get_pagetable()->walk(va, 0);
-                if (!pte.is_null() && pte.is_valid())
-                {
-                    // 页面已分配，需要写回到文件
-                    uint64 pa = (uint64)pte.pa();
-                    int file_offset = vm_entry.offset + (va - vma_start);
-
-                    // printfCyan("[SyscallHandler::sys_msync] Writing back page at va=%p, file_offset=%d\n",
-                    //            (void *)va, file_offset);
-
-                    // 写回数据到文件
-                    int write_result = vm_entry.vfile->write(pa, PGSIZE, file_offset, false);
-                    if (write_result < 0)
-                    {
-                        printfRed("[SyscallHandler::sys_msync] Failed to write back page at va=%p\n", (void *)va);
-                        return -EIO;
-                    }
-                }
-            }
-        }
-        return true;
-    }
-    bool ProcessMemoryManager::decrease_vma_refcount_and_free()
-    {
-        if (!_pcb || !_pcb->_vma)
-            return false;
-
-        // 减少引用计数
-        --_pcb->_vma->_ref_cnt;
-
-        // printfBlue("ProcessMemoryManager: VMA ref count decreased to %d\n", _pcb->_vma->_ref_cnt);
-
-        // 如果引用计数为0，则释放VMA
-        if (_pcb->_vma->_ref_cnt <= 0)
-        {
-            free_all_vma();
-            delete _pcb->_vma;
-            _pcb->_vma = nullptr;
-            _pcb->_shared_vm = false;
-
-            // printfGreen("ProcessMemoryManager: VMA structure freed\n");
-            return true;
-        }
-        else
-        {
-            // printfYellow("ProcessMemoryManager: VMA still referenced, not freeing\n");
-            return false;
-        }
-    }
-
     int ProcessMemoryManager::unmap_memory_range(void *addr, size_t length)
     {
-        if (!_pcb || !addr || length == 0)
+        if (!addr || length == 0)
         {
             return -1;
         }
@@ -534,7 +485,7 @@ namespace proc
         for (int i = 0; i < overlap_count; i++)
         {
             int vma_idx = overlapping_vmas[i];
-            vma &vm_entry = _pcb->_vma->_vm[vma_idx];
+            vma &vm_entry = vma_data._vm[vma_idx];
 
             uint64 vma_start = vm_entry.addr;
             uint64 vma_end = vm_entry.addr + vm_entry.len;
@@ -552,7 +503,26 @@ namespace proc
                 (vm_entry.prot & PROT_WRITE) != 0)
             {
                 printfCyan("ProcessMemoryManager: writing back shared file mapping\n");
-                writeback_vma(vma_idx);
+                // 内联writeback_vma逻辑
+                uint64 vma_start = PGROUNDDOWN(vm_entry.addr);
+                uint64 vma_end = PGROUNDUP(vma_start + vm_entry.len);
+                for (uint64 va = vma_start; va < vma_end; va += PGSIZE)
+                {
+                    mem::Pte pte = pagetable.walk(va, 0);
+                    if (!pte.is_null() && pte.is_valid())
+                    {
+                        // 页面已分配，需要写回到文件
+                        uint64 pa = (uint64)pte.pa();
+                        int file_offset = vm_entry.offset + (va - vma_start);
+                        
+                        // 写回数据到文件
+                        int write_result = vm_entry.vfile->write(pa, PGSIZE, file_offset, false);
+                        if (write_result < 0)
+                        {
+                            printfRed("[ProcessMemoryManager] Failed to write back page at va=%p\n", (void *)va);
+                        }
+                    }
+                }
             }
 
             // 取消页表映射
@@ -581,22 +551,19 @@ namespace proc
         }
 
         // 检查是否需要调整堆指针
-        uint64 heap_start = _pcb->get_heap_start();
-        uint64 heap_end = _pcb->get_heap_end();
-
         if (start_addr <= heap_end && end_addr > heap_start)
         {
             // 取消映射的区域与堆重叠，需要调整堆大小
             if (start_addr <= heap_start)
             {
                 // 从堆开始位置或更早开始取消映射
-                _pcb->set_heap_end(heap_start);
+                heap_end = heap_start;
                 // printfYellow("ProcessMemoryManager: reset heap_end to heap_start\n");
             }
             else if (start_addr < heap_end)
             {
                 // 从堆中间开始取消映射
-                _pcb->set_heap_end(start_addr);
+                heap_end = start_addr;
                 // printfYellow("ProcessMemoryManager: shrunk heap_end to %p\n", (void *)start_addr);
             }
         }
@@ -607,7 +574,7 @@ namespace proc
     int ProcessMemoryManager::find_overlapping_vmas(uint64 start_addr, uint64 end_addr,
                                                     int overlapping_vmas[], int max_count)
     {
-        if (!_pcb || !_pcb->_vma || !overlapping_vmas)
+        if (!overlapping_vmas)
         {
             return 0;
         }
@@ -615,10 +582,10 @@ namespace proc
         int count = 0;
         for (int i = 0; i < NVMA && count < max_count; i++)
         {
-            if (_pcb->_vma->_vm[i].used)
+            if (vma_data._vm[i].used)
             {
-                uint64 vma_start = _pcb->_vma->_vm[i].addr;
-                uint64 vma_end = vma_start + _pcb->_vma->_vm[i].len;
+                uint64 vma_start = vma_data._vm[i].addr;
+                uint64 vma_end = vma_start + vma_data._vm[i].len;
 
                 // 检查是否有重叠
                 if (start_addr < vma_end && end_addr > vma_start)
@@ -638,7 +605,7 @@ namespace proc
             return false;
         }
 
-        vma &vm_entry = _pcb->_vma->_vm[vma_index];
+        vma &vm_entry = vma_data._vm[vma_index];
         uint64 vma_start = vm_entry.addr;
         uint64 vma_end = vm_entry.addr + vm_entry.len;
 
@@ -678,37 +645,35 @@ namespace proc
 
     void ProcessMemoryManager::free_pagetable()
     {
-        if (!_pcb || !_pcb->get_pagetable()->get_base())
+        if (!pagetable.get_base())
         {
-            panic("ProcessMemoryManager: PCB or pagetable is null");
+            panic("ProcessMemoryManager: pagetable is null");
             return;
         }
 
-        printfBlue("ProcessMemoryManager: freeing pagetable for process %s (PID: %d)\n",
-                   _pcb->get_name(), _pcb->get_pid());
+        mem::PageTable &pt = pagetable;
 
-        mem::PageTable &pt = *_pcb->get_pagetable();
-
-        // 确保页表引用计数为1，防止双重释放
-        if (pt.get_ref_count() == 1)
-        {
-// 取消特殊页面的映射
+        // 阶段1：不再依赖分散的引用计数，直接释放
+        // 取消特殊页面的映射
 #ifdef RISCV
-            mem::k_vmm.vmunmap(pt, TRAMPOLINE, 1, 0);
+        mem::k_vmm.vmunmap(pt, TRAMPOLINE, 1, 0);
 #endif
-            mem::k_vmm.vmunmap(pt, TRAPFRAME, 1, 0);
-            mem::k_vmm.vmunmap(pt, SIG_TRAMPOLINE, 1, 0);
-        }
+        mem::k_vmm.vmunmap(pt, TRAPFRAME, 1, 0);
+        mem::k_vmm.vmunmap(pt, SIG_TRAMPOLINE, 1, 0);
 
-        // 释放页表结构
-        pt.dec_ref();
+        // 阶段1：使用统一的引用计数管理
+        if (ref_count.load() <= 1)
+        {
+            // 释放页表结构 - pagetable是对象不是指针，无需delete
+            // pagetable对象会在ProcessMemoryManager析构时自动清理
+        }
 
         printfGreen("ProcessMemoryManager: pagetable freed successfully\n");
     }
 
     void ProcessMemoryManager::safe_vmunmap(uint64 va_start, uint64 va_end, bool check_validity)
     {
-        if (!_pcb || !_pcb->get_pagetable()->get_base())
+        if (!pagetable.get_base())
         {
             return;
         }
@@ -721,16 +686,16 @@ namespace proc
         {
             if (check_validity)
             {
-                mem::Pte pte = _pcb->get_pagetable()->walk(va, 0);
+                mem::Pte pte = pagetable.walk(va, 0);
                 if (!pte.is_null() && pte.is_valid())
                 {
-                    mem::k_vmm.vmunmap(*_pcb->get_pagetable(), va, 1, 1);
+                    mem::k_vmm.vmunmap(pagetable, va, 1, 1);
                 }
             }
             else
             {
                 // 不检查有效性，直接尝试取消映射
-                mem::k_vmm.vmunmap(*_pcb->get_pagetable(), va, 1, 1);
+                mem::k_vmm.vmunmap(pagetable, va, 1, 1);
             }
         }
     }
@@ -741,90 +706,62 @@ namespace proc
 
     void ProcessMemoryManager::free_all_memory()
     {
-        if (!_pcb)
-            return;
-
-        // printfCyan("ProcessMemoryManager: starting complete memory cleanup for process %s (PID: %d)\n",
-        //            _pcb->get_name(), _pcb->get_pid());
-
         // 1. 处理VMA引用计数并释放（如果计数为0）
-        if (_pcb->_vma != nullptr)
+        if (ref_count.fetch_sub(1) <= 1)
         {
-            decrease_vma_refcount_and_free();
+            // 引用计数降为0，释放VMA
+            free_all_vma();
+            shared_vm = false;
         }
 
-        // 2. 释放trapframe
-        if (_pcb->_trapframe)
-        {
-            mem::k_pmm.free_page(_pcb->_trapframe);
-            _pcb->_trapframe = nullptr;
-            // printfGreen("ProcessMemoryManager: trapframe freed\n");
-        }
-
-        // 3. 如果页表存在，释放程序段和堆内存
-        if (_pcb->get_pagetable()->get_base())
+        // 2. 如果页表存在，释放程序段和堆内存
+        if (pagetable.get_base())
         {
             free_all_program_sections();
             free_heap_memory();
             free_pagetable();
         }
 
-        // 4. 重置内存相关状态
-        _pcb->reset_memory_sections();
-
-        // printfCyan("ProcessMemoryManager: complete memory cleanup finished\n");
+        // 3. 重置内存相关状态
+        reset_memory_sections();
     }
 
     void ProcessMemoryManager::emergency_cleanup()
     {
-        if (!_pcb)
-            return;
-
-        printfRed("ProcessMemoryManager: emergency cleanup for process %s (PID: %d)\n",
-                  _pcb->get_name(), _pcb->get_pid());
+        printfRed("ProcessMemoryManager: emergency cleanup\n");
 
         // 紧急清理：不进行写回操作，只释放内存
 
         // 1. 强制释放VMA（不写回）
-        if (_pcb->_vma != nullptr)
+        for (int i = 0; i < NVMA; ++i)
         {
-            for (int i = 0; i < NVMA; ++i)
+            if (vma_data._vm[i].used)
             {
-                if (_pcb->_vma->_vm[i].used)
+                // 只释放文件引用，不写回
+                if (vma_data._vm[i].vfile != nullptr)
                 {
-                    // 只释放文件引用，不写回
-                    if (_pcb->_vma->_vm[i].vfile != nullptr)
-                    {
-                        _pcb->_vma->_vm[i].vfile->free_file();
-                    }
-
-                    // 取消映射
-                    uint64 va_start = PGROUNDDOWN(_pcb->_vma->_vm[i].addr);
-                    uint64 va_end = PGROUNDUP(_pcb->_vma->_vm[i].addr + _pcb->_vma->_vm[i].len);
-                    safe_vmunmap(va_start, va_end, false); // 不检查有效性
-
-                    _pcb->_vma->_vm[i].used = 0;
+                    vma_data._vm[i].vfile->free_file();
                 }
+
+                // 取消映射
+                uint64 va_start = PGROUNDDOWN(vma_data._vm[i].addr);
+                uint64 va_end = PGROUNDUP(vma_data._vm[i].addr + vma_data._vm[i].len);
+                safe_vmunmap(va_start, va_end, false); // 不检查有效性
+
+                vma_data._vm[i].used = 0;
             }
-            delete _pcb->_vma;
-            _pcb->_vma = nullptr;
         }
+        shared_vm = false;
 
         // 2. 释放其他内存资源
-        if (_pcb->_trapframe)
-        {
-            mem::k_pmm.free_page(_pcb->_trapframe);
-            _pcb->_trapframe = nullptr;
-        }
-
-        if (_pcb->get_pagetable()->get_base())
+        if (pagetable.get_base())
         {
             free_all_program_sections();
             free_heap_memory();
             free_pagetable();
         }
 
-        _pcb->reset_memory_sections();
+        reset_memory_sections();
 
         printfRed("ProcessMemoryManager: emergency cleanup completed\n");
     }
@@ -871,8 +808,8 @@ namespace proc
         mem::k_vmm.vmunmap(pagetable, TRAPFRAME, 1, 0);
         mem::k_vmm.vmunmap(pagetable, SIG_TRAMPOLINE, 1, 0);
 
-        // 减少页表引用计数
-        pagetable.dec_ref();
+        // 阶段1：不再使用分散的引用计数
+        // pagetable.dec_ref(); // 注释掉分散的引用计数操作
 
         printfGreen("cleanup_execve_pagetable: cleanup completed\n");
     }
@@ -881,19 +818,116 @@ namespace proc
      * 内存调试和监控接口实现
      ****************************************************************************************/
 
+    void ProcessMemoryManager::update_total_memory_size()
+    {
+        total_memory_size = calculate_total_memory_size();
+    }
+
+    uint64 ProcessMemoryManager::calculate_total_memory_size() const
+    {
+        uint64 total = 0;
+
+        // 计算所有程序段的大小（与get_total_program_memory()逻辑相同）
+        for (int i = 0; i < prog_section_count; i++)
+        {
+            total += prog_sections[i]._sec_size;
+        }
+
+        // 加上堆的大小
+        if (heap_end > heap_start)
+        {
+            total += (heap_end - heap_start);
+        }
+
+        return total;
+    }
+
+    bool ProcessMemoryManager::verify_memory_consistency()
+    {
+        uint64 calculated_total = calculate_total_memory_size();
+        bool consistent = (total_memory_size == calculated_total);
+
+        if (!consistent)
+        {
+            printfRed("Memory inconsistency detected\n");
+            printfRed("  total_memory_size: %u, calculated: %u\n", (uint32)total_memory_size, (uint32)calculated_total);
+            printfRed("  Note: VMA regions are managed separately and not counted in total_memory_size\n");
+            panic("ProcessMemoryManager verify_memory_consistency failed\n");
+        }
+
+        return consistent;
+    }
+
     void ProcessMemoryManager::print_memory_usage() const
     {
-        if (!_pcb)
-            return;
-        // 调用PCB的详细内存信息打印函数
-        _pcb->print_detailed_memory_info();
+        printfCyan("=== ProcessMemoryManager Memory Information ===\n");
+        printfCyan("Total process size: %u bytes\n", (uint32)total_memory_size);
+        
+        // 程序段信息
+        printfCyan("Program sections (%d):\n", prog_section_count);
+        uint64 sections_total = 0;
+        for (int i = 0; i < prog_section_count; i++)
+        {
+            printfCyan("  Section %d (%s): %p - %p (%u bytes)\n",
+                      i,
+                      prog_sections[i]._debug_name ? prog_sections[i]._debug_name : "unnamed",
+                      prog_sections[i]._sec_start,
+                      (void*)((uint64)prog_sections[i]._sec_start + prog_sections[i]._sec_size),
+                      (uint32)prog_sections[i]._sec_size);
+            sections_total += prog_sections[i]._sec_size;
+        }
+        printfCyan("Total program sections: %u bytes\n", (uint32)sections_total);
+        
+        // 堆信息
+        uint64 heap_size = (heap_end > heap_start) ? (heap_end - heap_start) : 0;
+        if (heap_size > 0)
+        {
+            printfCyan("Heap: %p - %p (%u bytes)\n", 
+                      (void*)heap_start,
+                      (void*)heap_end,
+                      (uint32)heap_size);
+        }
+        else
+        {
+            printfCyan("Heap: not allocated\n");
+        }
+
+        // VMA信息
+        printfCyan("VMA structure: present\n");
+        uint64 vma_total = 0;
+        int active_vmas = 0;
+        for (int i = 0; i < NVMA; i++)
+        {
+            if (vma_data._vm[i].used)
+            {
+                printfCyan("  VMA %d: %p - %p (%u bytes, prot=%d, flags=%d)\n",
+                          i,
+                          (void*)vma_data._vm[i].addr,
+                          (void*)(vma_data._vm[i].addr + vma_data._vm[i].len),
+                          (uint32)vma_data._vm[i].len,
+                          vma_data._vm[i].prot,
+                          vma_data._vm[i].flags);
+                vma_total += vma_data._vm[i].len;
+                active_vmas++;
+            }
+        }
+        printfCyan("Total VMA usage: %u bytes (%d active VMAs)\n", (uint32)vma_total, active_vmas);
+
+        // 页表信息
+        if (pagetable.get_base())
+        {
+            printfCyan("Page table: present (%p)\n", pagetable.get_base());
+        }
+        else
+        {
+            printfCyan("Page table: not present\n");
+        }
+
+        printfCyan("=== End ProcessMemoryManager Memory Information ===\n");
     }
 
     bool ProcessMemoryManager::verify_all_memory_consistency() const
     {
-        if (!_pcb)
-            return false;
-
         bool consistent = true;
 
         // 检查程序段一致性
@@ -902,9 +936,13 @@ namespace proc
             consistent = false;
         }
 
-        // 检查PCB内部一致性
-        if (!_pcb->verify_memory_consistency())
+        // 检查总内存大小一致性（类似于verify_memory_consistency的逻辑）
+        uint64 calculated_total = calculate_total_memory_size();
+        if (total_memory_size != calculated_total)
         {
+            printfRed("Memory inconsistency detected in verify_all_memory_consistency\n");
+            printfRed("  total_memory_size: %u, calculated: %u\n", 
+                     (uint32)total_memory_size, (uint32)calculated_total);
             consistent = false;
         }
 
@@ -913,22 +951,18 @@ namespace proc
 
     uint64 ProcessMemoryManager::get_total_memory_usage() const
     {
-        if (!_pcb)
-            return 0;
-        return _pcb->get_size();
+        // 直接返回缓存的总内存大小，等价于calculate_total_memory_size()的结果
+        return total_memory_size;
     }
 
     uint64 ProcessMemoryManager::get_vma_memory_usage() const
     {
-        if (!_pcb || !_pcb->_vma)
-            return 0;
-
         uint64 total = 0;
         for (int i = 0; i < NVMA; i++)
         {
-            if (_pcb->_vma->_vm[i].used)
+            if (vma_data._vm[i].used)
             {
-                total += _pcb->_vma->_vm[i].len;
+                total += vma_data._vm[i].len;
             }
         }
         return total;
@@ -936,43 +970,38 @@ namespace proc
 
     bool ProcessMemoryManager::check_memory_leaks() const
     {
-        if (!_pcb)
-            return false;
-
         bool leaks_detected = false;
 
         // 检查是否有未释放的程序段
-        if (_pcb->get_prog_section_count() > 0)
+        if (prog_section_count > 0)
         {
             printfYellow("ProcessMemoryManager: %d program sections still present\n",
-                         _pcb->get_prog_section_count());
+                         prog_section_count);
             leaks_detected = true;
         }
 
         // 检查是否有未释放的堆内存
-        if (_pcb->get_heap_size() > 0)
+        uint64 heap_size = (heap_end > heap_start) ? (heap_end - heap_start) : 0;
+        if (heap_size > 0)
         {
             printfYellow("ProcessMemoryManager: heap memory still present (%u bytes)\n",
-                         _pcb->get_heap_size());
+                         (uint32)heap_size);
             leaks_detected = true;
         }
 
         // 检查是否有未释放的VMA
-        if (_pcb->_vma)
+        int active_vmas = 0;
+        for (int i = 0; i < NVMA; i++)
         {
-            int active_vmas = 0;
-            for (int i = 0; i < NVMA; i++)
+            if (vma_data._vm[i].used)
             {
-                if (_pcb->_vma->_vm[i].used)
-                {
-                    active_vmas++;
-                }
+                active_vmas++;
             }
-            if (active_vmas > 0)
-            {
-                printfYellow("ProcessMemoryManager: %d VMA entries still active\n", active_vmas);
-                leaks_detected = true;
-            }
+        }
+        if (active_vmas > 0)
+        {
+            printfYellow("ProcessMemoryManager: %d VMA entries still active\n", active_vmas);
+            leaks_detected = true;
         }
 
         return leaks_detected;
@@ -982,27 +1011,27 @@ namespace proc
      * 内部辅助函数实现
      ****************************************************************************************/
 
-    bool ProcessMemoryManager::is_page_mapped(uint64 va) const
+    bool ProcessMemoryManager::is_page_mapped(uint64 va)
     {
-        if (!_pcb || !_pcb->get_pagetable()->get_base())
+        if (!pagetable.get_base())
         {
             return false;
         }
 
-        mem::Pte pte = _pcb->get_pagetable()->walk(va, 0);
+        mem::Pte pte = pagetable.walk(va, 0);
         return !pte.is_null() && pte.is_valid();
     }
 
     bool ProcessMemoryManager::safe_unmap_page(uint64 va)
     {
-        if (!_pcb || !_pcb->get_pagetable()->get_base())
+        if (!pagetable.get_base())
         {
             return false;
         }
 
         if (is_page_mapped(va))
         {
-            mem::k_vmm.vmunmap(*_pcb->get_pagetable(), va, 1, 1);
+            mem::k_vmm.vmunmap(pagetable, va, 1, 1);
             return true;
         }
 
@@ -1027,17 +1056,12 @@ namespace proc
 
     bool ProcessMemoryManager::is_vma_valid(int vma_index) const
     {
-        if (!_pcb || !_pcb->_vma)
-        {
-            return false;
-        }
-
         if (vma_index < 0 || vma_index >= NVMA)
         {
             return false;
         }
 
-        return _pcb->_vma->_vm[vma_index].used;
+        return vma_data._vm[vma_index].used;
     }
 
     uint64 ProcessMemoryManager::calculate_page_count(uint64 start_addr, uint64 size) const

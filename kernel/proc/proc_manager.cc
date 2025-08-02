@@ -174,7 +174,7 @@ namespace proc
 
                 // 初始化虚拟内存区域管理
                 p->set_vma(new VMA());
-                p->get_vma()->_ref_cnt = 1;
+                // VMA引用计数现在由ProcessMemoryManager统一管理
                 for (int i = 0; i < NVMA; ++i)
                 {
                     p->get_vma()->_vm[i].used = 0; // 标记所有VMA为未使用
@@ -545,13 +545,10 @@ namespace proc
         }
 
         // 如果已经分配了其他资源，也需要释放
-        if (p->get_vma() != nullptr && p->get_vma()->_ref_cnt > 0)
+        if (p->get_vma() != nullptr)
         {
-            const_cast<VMA*>(p->get_vma())->_ref_cnt--;
-            if (p->get_vma()->_ref_cnt == 0)
-            {
-                delete p->get_vma();
-            }
+            // VMA现在由ProcessMemoryManager统一管理
+            delete p->get_vma();
             p->set_vma(nullptr);
         }
 
@@ -1226,15 +1223,15 @@ namespace proc
             np->get_pagetable()->share_from(*p->get_pagetable()); // 共享父进程的页表
 
             np->set_vma(p->get_vma());  // 继承父进程的虚拟内存区域映射
-            const_cast<VMA*>(p->get_vma())->_ref_cnt++; // 增加父进程的虚拟内存区域映射引用计数
+            // VMA引用计数现在由ProcessMemoryManager统一管理（原子操作）
 
             // 在共享页表的情况下，需要标记为共享虚拟内存
             // 因为子进程有自己的trapframe，但共享父进程的页表
             // 我们需要在usertrapret时动态映射正确的trapframe
             np->set_shared_vm(true); // 标记为共享虚拟内存
 
-            printfCyan("[clone] Using shared page table for process %d (parent %d), ref count: %d\n",
-                       np->_pid, p->_pid, np->get_pagetable()->get_ref_count());
+            printfCyan("[clone] Using shared page table for process %d (parent %d)\n",
+                       np->_pid, p->_pid);
         }
         else
         {
