@@ -145,7 +145,7 @@ filestat(struct file *f, uint64 addr)
         vfs_ext_fstat(f, &st);
         // printf("fstat: dev: %d, inode: %d, mode: %d, nlink: %d, size: %d, atime: %d, mtime: %d, ctime: %d\n",
         //   st.st_dev, st.st_ino, st.st_mode, st.st_nlink, st.st_size, st.st_atime_sec, st.st_mtime_sec, st.st_ctime_sec);
-        if(mem::k_vmm.copy_out(p->_pt, addr, (char *)(&st), sizeof(st)) < 0)
+        if(mem::k_vmm.copy_out(*p->get_pagetable(), addr, (char *)(&st), sizeof(st)) < 0)
             return -1;
         return 0;
     }
@@ -160,7 +160,7 @@ int filestatx(struct file *f, uint64 addr) {
         vfs_ext_statx(f, &st);
         // printf("fstat: dev: %d, inode: %d, mode: %d, nlink: %d, size: %d, atime: %d, mtime: %d, ctime: %d\n",
         //   st.st_dev, st.st_ino, st.st_mode, st.st_nlink, st.st_size, st.st_atime_sec, st.st_mtime_sec, st.st_ctime_sec);
-        if(mem::k_vmm.copy_out(p->_pt, addr, (char *)(&st), sizeof(st)) < 0)
+        if(mem::k_vmm.copy_out(*p->get_pagetable(), addr, (char *)(&st), sizeof(st)) < 0)
             return -1;
         return 0;
     }
@@ -188,7 +188,7 @@ fileread(struct file *f, uint64 addr, int n)
         r = vfs_ext_read(f, 1, addr, n);
     } else if (f->f_type == 9) {
         char a = 0;
-        mem::k_vmm.copy_out(proc::k_pm.get_cur_pcb()->_pt, addr, (char*)&a, sizeof(char));
+        mem::k_vmm.copy_out(*proc::k_pm.get_cur_pcb()->get_pagetable(), addr, (char*)&a, sizeof(char));
         return 0;
     } else if (f->f_type == 8) {
         return 0;

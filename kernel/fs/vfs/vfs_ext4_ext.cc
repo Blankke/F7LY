@@ -226,7 +226,7 @@ int vfs_ext_read(struct file *f, int user_addr, const uint64 addr, int n) {
             mem::k_pmm.free_page(buf);
             return 0;
         }
-        if (mem::k_vmm.copy_out(proc::k_pm.get_cur_pcb()->_pt, addr, buf, byteread) != 0) {
+        if (mem::k_vmm.copy_out(*proc::k_pm.get_cur_pcb()->get_pagetable(), addr, buf, byteread) != 0) {
             mem::k_pmm.free_page(buf);
             return 0;
         }
@@ -265,7 +265,7 @@ int vfs_ext_readat(struct file *f, int user_addr, const uint64 addr, int n, int 
             mem::k_pmm.free_page(buf);
             return 0;
         }
-        if (mem::k_vmm.copy_out(proc::k_pm.get_cur_pcb()->_pt, addr, buf, byteread) != 0) {
+        if (mem::k_vmm.copy_out(*proc::k_pm.get_cur_pcb()->get_pagetable(), addr, buf, byteread) != 0) {
             mem::k_pmm.free_page(buf);
             return 0;
         }
@@ -298,7 +298,7 @@ int vfs_ext_write(struct file *f, int user_addr, const uint64 addr, int n) {
         if (buf == NULL) {
             panic("vfs_ext_read: kalloc failed\n");
         }
-        if (mem::k_vmm.copy_in(proc::k_pm.get_cur_pcb()->_pt, buf, addr, n) != 0) {
+        if (mem::k_vmm.copy_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), buf, addr, n) != 0) {
             mem::k_pmm.free_page(buf);
             return 0;
         }
@@ -452,7 +452,7 @@ int vfs_ext_readlink(const char *path, uint64 ubuf, size_t bufsize) {
     if (r != EOK) {
         return -r;
     }
-    if (mem::k_vmm.copy_out(proc::k_pm.get_cur_pcb()->_pt, ubuf, linkpath, readbytes) != 0) {
+    if (mem::k_vmm.copy_out(*proc::k_pm.get_cur_pcb()->get_pagetable(), ubuf, linkpath, readbytes) != 0) {
         return -1;
     }
     return EOK;
@@ -961,7 +961,7 @@ ssize_t vfs_ext_readi(struct inode *self, int user_addr, uint64 addr, uint off, 
             ext4_fclose(&file);
             return 0;
         }
-        if (mem::k_vmm.copy_out(proc::k_pm.get_cur_pcb()->_pt, addr, buf, bytesread) != 0) {
+        if (mem::k_vmm.copy_out(*proc::k_pm.get_cur_pcb()->get_pagetable(), addr, buf, bytesread) != 0) {
             mem::k_pmm.free_page(buf);
             ext4_fclose(&file);
             return 0;

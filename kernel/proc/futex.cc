@@ -32,7 +32,7 @@ namespace proc
         int current_val;
 
         p->_lock.acquire();
-        if (mem::k_vmm.copy_in(p->_pt, (char *)&current_val, uaddr, sizeof(int)))
+        if (mem::k_vmm.copy_in(*p->get_pagetable(), (char *)&current_val, uaddr, sizeof(int)))
         {
                 p->_lock.release();
                 return -1;

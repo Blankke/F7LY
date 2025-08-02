@@ -170,14 +170,14 @@ namespace proc
 
                 // 初始化内存管理信息（_sz现在由内部自动管理）
                 p->reset_memory_sections();
-                p->_shared_vm = false; // 不共享虚拟内存
+                p->set_shared_vm(false); // 不共享虚拟内存
 
                 // 初始化虚拟内存区域管理
-                p->_vma = new Pcb::VMA();
-                p->_vma->_ref_cnt = 1;
+                p->set_vma(new VMA());
+                p->get_vma()->_ref_cnt = 1;
                 for (int i = 0; i < NVMA; ++i)
                 {
-                    p->_vma->_vm[i].used = 0; // 标记所有VMA为未使用
+                    p->get_vma()->_vm[i].used = 0; // 标记所有VMA为未使用
                 }
 
 #ifdef LOONGARCH
@@ -264,12 +264,13 @@ namespace proc
                 /****************************************************************************************
                  * 程序段描述初始化
                  ****************************************************************************************/
-                p->_prog_section_cnt = 0; // 清空程序段计数
+                p->set_prog_section_count(0); // 清空程序段计数
+                program_section_desc* sections = p->get_prog_sections();
                 for (int i = 0; i < max_program_section_num; ++i)
                 {
-                    p->_prog_sections[i]._sec_start = nullptr;
-                    p->_prog_sections[i]._sec_size = 0;
-                    p->_prog_sections[i]._debug_name = nullptr;
+                    sections[i]._sec_start = nullptr;
+                    sections[i]._sec_size = 0;
+                    sections[i]._debug_name = nullptr;
                 }
 
                 /****************************************************************************************
@@ -277,7 +278,7 @@ namespace proc
                  ****************************************************************************************/
                 // 创建进程自己的页表（空的页表）
                 _proc_create_vm(p);
-                if (p->_pt.get_base() == 0)
+                if (p->get_pagetable()->get_base() == 0)
                 {
                     freeproc_creation_failed(p); // 使用专门的创建失败清理函数
                     p->_lock.release();
@@ -398,7 +399,7 @@ namespace proc
 
     void ProcessManager::_proc_create_vm(Pcb *p)
     {
-        p->_pt = proc_pagetable(p);
+        *p->get_pagetable() = proc_pagetable(p);
     }
 
     void ProcessManager::freeproc(Pcb *p)
@@ -504,12 +505,13 @@ namespace proc
         /****************************************************************************************
          * 程序段描述清理
          ****************************************************************************************/
-        p->_prog_section_cnt = 0; // 清零程序段计数
+        p->set_prog_section_count(0); // 清零程序段计数
+        program_section_desc* sections = p->get_prog_sections();
         for (int i = 0; i < max_program_section_num; ++i)
         {
-            p->_prog_sections[i]._sec_start = nullptr;
-            p->_prog_sections[i]._sec_size = 0;
-            p->_prog_sections[i]._debug_name = nullptr;
+            sections[i]._sec_start = nullptr;
+            sections[i]._sec_size = 0;
+            sections[i]._debug_name = nullptr;
         }
 
         /****************************************************************************************
@@ -530,27 +532,27 @@ namespace proc
         printf("[freeproc_creation_failed] Cleaning up failed process creation for pid %d\n", p->_pid);
 
         // 如果已经分配了trapframe，需要释放
-        if (p->_trapframe != nullptr)
+        if (p->get_trapframe() != nullptr)
         {
-            mem::k_pmm.free_page(p->_trapframe);
-            p->_trapframe = nullptr;
+            mem::k_pmm.free_page(p->get_trapframe());
+            p->set_trapframe(nullptr);
         }
 
         // 如果已经创建了页表，需要释放
-        if (p->_pt.get_base() != 0)
+        if (p->get_pagetable()->get_base() != 0)
         {
-            p->_pt.dec_ref(); // 减少引用计数，如果为0会自动释放
+            p->get_pagetable()->dec_ref(); // 减少引用计数，如果为0会自动释放
         }
 
         // 如果已经分配了其他资源，也需要释放
-        if (p->_vma != nullptr && p->_vma->_ref_cnt > 0)
+        if (p->get_vma() != nullptr && p->get_vma()->_ref_cnt > 0)
         {
-            p->_vma->_ref_cnt--;
-            if (p->_vma->_ref_cnt == 0)
+            const_cast<VMA*>(p->get_vma())->_ref_cnt--;
+            if (p->get_vma()->_ref_cnt == 0)
             {
-                delete p->_vma;
+                delete p->get_vma();
             }
-            p->_vma = nullptr;
+            p->set_vma(nullptr);
         }
 
         // 调用标准的PCB清理
@@ -726,9 +728,9 @@ namespace proc
         _init_proc = p;
 
         // 传入initcode的地址
-        printfCyan("initcode pagetable: %p\n", p->_pt.get_base());
+        printfCyan("initcode pagetable: %p\n", p->get_pagetable()->get_base());
         uint64 initcode_sz = (uint64)initcode_end - (uint64)initcode_start;
-        uint64 allocated_sz = mem::k_vmm.uvmfirst(p->_pt, (uint64)initcode_start, initcode_sz);
+        uint64 allocated_sz = mem::k_vmm.uvmfirst(*p->get_pagetable(), (uint64)initcode_start, initcode_sz);
 
         printf("initcode start: %p, end: %p\n", initcode_start, initcode_end);
         printf("initcode size: %p, total allocated space: %p\n", initcode_sz, allocated_sz);
@@ -948,7 +950,7 @@ namespace proc
         Pcb *p = get_cur_pcb();
         if (user_src)
         {
-            return mem::k_vmm.copy_in(p->_pt, dst, src, len);
+            return mem::k_vmm.copy_in(*p->get_pagetable(), dst, src, len);
         }
         else
         {
@@ -964,7 +966,7 @@ namespace proc
         Pcb *p = get_cur_pcb();
         if (user_dst)
         {
-            return mem::k_vmm.copy_out(p->_pt, dst, src, len);
+            return mem::k_vmm.copy_out(*p->get_pagetable(), dst, src, len);
         }
         else
         {
@@ -1077,7 +1079,7 @@ namespace proc
         }
         if (flags & syscall::CLONE_PARENT_SETTID)
         {
-            if (mem::k_vmm.copy_out(p->_pt, ptid, &new_tid, sizeof(new_tid)) < 0)
+            if (mem::k_vmm.copy_out(*p->get_pagetable(), ptid, &new_tid, sizeof(new_tid)) < 0)
             {
                 freeproc_creation_failed(np); // 使用专门的创建失败清理函数
                 np->_lock.release();
@@ -1119,8 +1121,8 @@ namespace proc
         np->copy_program_sections(p);
 
         // 复制堆信息
-        np->_heap_start = p->_heap_start;
-        np->_heap_end = p->_heap_end;
+        np->set_heap_start(p->get_heap_start());
+        np->set_heap_end(p->get_heap_end());
 
         // _sz现在由程序段管理自动计算，确保正确更新
         np->update_total_memory_size();
@@ -1221,18 +1223,18 @@ namespace proc
         if (flags & syscall::CLONE_VM)
         {
             // 共享虚拟内存：新进程共享父进程的页表
-            np->_pt.share_from(p->_pt); // 共享父进程的页表
+            np->get_pagetable()->share_from(*p->get_pagetable()); // 共享父进程的页表
 
-            np->_vma = p->_vma;  // 继承父进程的虚拟内存区域映射
-            p->_vma->_ref_cnt++; // 增加父进程的虚拟内存区域映射引用计数
+            np->set_vma(p->get_vma());  // 继承父进程的虚拟内存区域映射
+            const_cast<VMA*>(p->get_vma())->_ref_cnt++; // 增加父进程的虚拟内存区域映射引用计数
 
             // 在共享页表的情况下，需要标记为共享虚拟内存
             // 因为子进程有自己的trapframe，但共享父进程的页表
             // 我们需要在usertrapret时动态映射正确的trapframe
-            np->_shared_vm = true; // 标记为共享虚拟内存
+            np->set_shared_vm(true); // 标记为共享虚拟内存
 
             printfCyan("[clone] Using shared page table for process %d (parent %d), ref count: %d\n",
-                       np->_pid, p->_pid, np->_pt.get_ref_count());
+                       np->_pid, p->_pid, np->get_pagetable()->get_ref_count());
         }
         else
         {
@@ -1271,13 +1273,13 @@ namespace proc
             }
             for (i = 0; i < NVMA; ++i)
             {
-                if (p->_vma->_vm[i].used)
+                if (p->get_vma()->_vm[i].used)
                 {
-                    memmove(&np->_vma->_vm[i], &p->_vma->_vm[i], sizeof(p->_vma->_vm[i]));
+                    memmove(&np->get_vma()->_vm[i], &p->get_vma()->_vm[i], sizeof(p->get_vma()->_vm[i]));
                     // 只对文件映射增加引用计数
-                    if (p->_vma->_vm[i].vfile != nullptr)
+                    if (p->get_vma()->_vm[i].vfile != nullptr)
                     {
-                        p->_vma->_vm[i].vfile->dup(); // 增加引用计数
+                        p->get_vma()->_vm[i].vfile->dup(); // 增加引用计数
                     }
                 }
             }
@@ -1341,7 +1343,7 @@ namespace proc
             else
             {
                 uint64 entry_point = 0;
-                mem::k_vmm.copy_in(p->_pt, &entry_point, stack_ptr, sizeof(uint64));
+                mem::k_vmm.copy_in(*p->get_pagetable(), &entry_point, stack_ptr, sizeof(uint64));
                 if (entry_point == 0)
                 {
                     panic("fork: copy_in failed for stack pointer");
@@ -1350,7 +1352,7 @@ namespace proc
                     return nullptr;
                 }
                 uint64 arg = 0;
-                if (mem::k_vmm.copy_in(p->_pt, &arg, (stack_ptr + 8), sizeof(uint64)) != 0)
+                if (mem::k_vmm.copy_in(*p->get_pagetable(), &arg, (stack_ptr + 8), sizeof(uint64)) != 0)
                 {
                     panic("fork: copy_in failed for stack pointer arg");
                     freeproc_creation_failed(np); // 使用专门的创建失败清理函数
@@ -1372,7 +1374,7 @@ namespace proc
             // 如果设置了 CLONE_CHILD_SETTID，则设置子进程的线程 ID
             if (ctid != 0)
             {
-                if (mem::k_vmm.copy_out(p->_pt, ctid, &np->_tid, sizeof(np->_tid)) < 0)
+                if (mem::k_vmm.copy_out(*p->get_pagetable(), ctid, &np->_tid, sizeof(np->_tid)) < 0)
                 {
                     freeproc_creation_failed(np); // 使用专门的创建失败清理函数
                     np->_lock.release();
@@ -1618,7 +1620,7 @@ namespace proc
                         pid = np->_pid;
                         // printf("[wait4]: child->xstate: %d\n", np->_xstate);
                         if (addr != 0 &&
-                            mem::k_vmm.copy_out(p->_pt, addr, (const char *)&np->_xstate,
+                            mem::k_vmm.copy_out(*p->get_pagetable(), addr, (const char *)&np->_xstate,
                                                 sizeof(np->_xstate)) < 0)
                         {
                             np->_lock.release();
@@ -1796,10 +1798,10 @@ namespace proc
         _wait_lock.acquire();
 
         // 处理线程退出时的清理地址
-        if (p->_pt.get_base() != 0 && p->_clear_tid_addr)
+        if (p->get_pagetable()->get_base() != 0 && p->_clear_tid_addr)
         {
             uint64 temp0 = 0;
-            if (mem::k_vmm.copy_out(p->_pt, p->_clear_tid_addr, &temp0, sizeof(temp0)) < 0)
+            if (mem::k_vmm.copy_out(*p->get_pagetable(), p->_clear_tid_addr, &temp0, sizeof(temp0)) < 0)
             {
                 printfRed("exit_proc: copy out ctid failed\n");
             }
@@ -2533,7 +2535,7 @@ namespace proc
         int vma_idx = -1;
         for (int i = 0; i < NVMA; ++i)
         {
-            if (!p->_vma->_vm[i].used)
+            if (!p->get_vma()->_vm[i].used)
             {
                 vma_idx = i;
                 break;
@@ -2593,10 +2595,10 @@ namespace proc
                 // MAP_FIXED_NOREPLACE: 如果地址范围与现有映射冲突则失败
                 for (int i = 0; i < NVMA; ++i)
                 {
-                    if (p->_vma->_vm[i].used)
+                    if (p->get_vma()->_vm[i].used)
                     {
-                        uint64 existing_start = p->_vma->_vm[i].addr;
-                        uint64 existing_end = existing_start + p->_vma->_vm[i].len;
+                        uint64 existing_start = p->get_vma()->_vm[i].addr;
+                        uint64 existing_end = existing_start + p->get_vma()->_vm[i].len;
                         uint64 new_end = map_addr + aligned_length;
 
                         if (!(new_end <= existing_start || map_addr >= existing_end))
@@ -2670,7 +2672,7 @@ namespace proc
         }
 
         // 初始化VMA
-        struct vma *vm = &p->_vma->_vm[vma_idx];
+        struct vma *vm = &p->get_vma()->_vm[vma_idx];
         vm->used = 1;
         vm->addr = map_addr;
         vm->len = aligned_length;
@@ -2889,20 +2891,20 @@ namespace proc
         printfYellow("[mremap] Searching for VMA containing range [%p, %p), size=%u\n",
                      (void *)old_start, (void *)old_end, old_size);
 
-        printfYellow("[mremap] NVMA=%d, pcb=%p, pcb->_vma=%p\n", NVMA, pcb, pcb->_vma);
+        printfYellow("[mremap] NVMA=%d, pcb=%p, pcb->get_vma()=%p\n", NVMA, pcb, pcb->get_vma());
 
         for (int i = 0; i < NVMA; i++)
         {
-            printfYellow("[mremap] Checking VMA[%d]: used=%d\n", i, pcb->_vma->_vm[i].used);
+            printfYellow("[mremap] Checking VMA[%d]: used=%d\n", i, pcb->get_vma()->_vm[i].used);
 
-            if (!pcb->_vma->_vm[i].used)
+            if (!pcb->get_vma()->_vm[i].used)
                 continue;
 
-            uint64 vma_start = pcb->_vma->_vm[i].addr;
-            uint64 vma_end = vma_start + pcb->_vma->_vm[i].len;
+            uint64 vma_start = pcb->get_vma()->_vm[i].addr;
+            uint64 vma_end = vma_start + pcb->get_vma()->_vm[i].len;
 
             printfYellow("[mremap] VMA[%d]: [%p, %p), len=%d, used=%d\n",
-                         i, (void *)vma_start, (void *)vma_end, pcb->_vma->_vm[i].len, pcb->_vma->_vm[i].used);
+                         i, (void *)vma_start, (void *)vma_end, pcb->get_vma()->_vm[i].len, pcb->get_vma()->_vm[i].used);
 
             if (old_start >= vma_start && old_end <= vma_end)
             {
@@ -2920,7 +2922,7 @@ namespace proc
             return syscall::SYS_EFAULT;
         }
 
-        proc::vma &vma = pcb->_vma->_vm[vma_index];
+        proc::vma &vma = pcb->get_vma()->_vm[vma_index];
         printfCyan("[mremap] Found VMA[%d]: addr=%p, len=%d, prot=%d, flags=%d\n",
                    vma_index, (void *)vma.addr, vma.len, vma.prot, vma.flags);
 
@@ -2974,11 +2976,11 @@ namespace proc
                 // 检查扩展区域是否可用
                 for (int i = 0; i < NVMA; i++)
                 {
-                    if (i == vma_index || !pcb->_vma->_vm[i].used)
+                    if (i == vma_index || !pcb->get_vma()->_vm[i].used)
                         continue;
 
-                    uint64 other_start = pcb->_vma->_vm[i].addr;
-                    uint64 other_end = other_start + pcb->_vma->_vm[i].len;
+                    uint64 other_start = pcb->get_vma()->_vm[i].addr;
+                    uint64 other_end = other_start + pcb->get_vma()->_vm[i].len;
 
                     if (!(expand_start >= other_end || expand_start + additional_size <= other_start))
                     {
@@ -4197,8 +4199,8 @@ namespace proc
 #elif defined(LOONGARCH)
         proc->get_trapframe()->era = entry_point;
 #endif
-        // 注意：由于Pcb类没有提供set_pagetable()函数，这里直接替换页表
-        proc->_pt = new_pt;             // 替换为新的页表
+        // 注意：使用setter方法替换页表
+        proc->set_pagetable(new_pt);             // 替换为新的页表
         proc->get_trapframe()->sp = sp; // 设置栈指针
 
         // printf("execve: new process size: %p, new pagetable: %p\n", proc->get_size(), proc->_pt);

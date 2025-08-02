@@ -261,7 +261,7 @@ namespace proc
                     uint64 va, a, pa;
                     va = p->_trapframe->sp;
                     a = PGROUNDDOWN(va);
-                    mem::Pte pte = p->_pt.walk(a, 0);
+                    mem::Pte pte = p->get_pagetable()->walk(a, 0);
                     pa = reinterpret_cast<uint64>(pte.pa());
                     printf("[copy_out] va: %p, pte: %p, pa: %p\n", va, pte.get_data(), pa);
 
@@ -304,13 +304,13 @@ namespace proc
                     printf("[do_handle] LinuxSigInfo constructed: sp: %p usercontext_sp=%p, linuxinfo_sp=%p\n",
                            p->_trapframe->sp, usercontext_sp, linuxinfo_sp);
                     // 将结构写入用户空间
-                    if (mem::k_vmm.copy_out(p->_pt, usercontext_sp, &uctx, sizeof(usercontext)) < 0)
+                    if (mem::k_vmm.copy_out(*p->get_pagetable(), usercontext_sp, &uctx, sizeof(usercontext)) < 0)
                     {
                         panic("[do_handle] Failed to copy ustack to user space");
                         return;
                     }
 
-                    if (mem::k_vmm.copy_out(p->_pt, linuxinfo_sp, &siginfo, sizeof(LinuxSigInfo)) < 0)
+                    if (mem::k_vmm.copy_out(*p->get_pagetable(), linuxinfo_sp, &siginfo, sizeof(LinuxSigInfo)) < 0)
                     {
                         panic("[do_handle] Failed to copy LinuxSigInfo to user space");
                         return;
@@ -327,7 +327,7 @@ namespace proc
 
                     // 在栈顶写入返回地址标记
                     uint64 ret_marker = UINT64_MAX;
-                    if (mem::k_vmm.copy_out(p->_pt, p->_trapframe->sp, &ret_marker, sizeof(uint64)) < 0)
+                    if (mem::k_vmm.copy_out(*p->get_pagetable(), p->get_trapframe()->sp, &ret_marker, sizeof(uint64)) < 0)
                     {
                         panic("[do_handle] Failed to write return marker to user stack");
                         return;
@@ -351,7 +351,7 @@ namespace proc
                 // 哨兵
                 p->_trapframe->sp -= sizeof(uint64); // 为返回地址预留空间
 
-                if (mem::k_vmm.copy_out(p->_pt, p->_trapframe->sp, &guard, sizeof(guard)) < 0)
+                if (mem::k_vmm.copy_out(*p->get_pagetable(), p->get_trapframe()->sp, &guard, sizeof(guard)) < 0)
                 {
                     panic("[do_handle] Failed to write return marker to user stack");
                     return;
@@ -373,7 +373,7 @@ namespace proc
                 Pcb *p = proc::k_pm.get_cur_pcb();
                 uint64 user_sp = p->_trapframe->sp;
                 uint64 guardcheck;
-                if (mem::k_vmm.copy_in(p->_pt, &guardcheck, user_sp, sizeof(guardcheck)) < 0)
+                if (mem::k_vmm.copy_in(*p->get_pagetable(), &guardcheck, user_sp, sizeof(guardcheck)) < 0)
                 {
                     panic("[sig_return] Failed to read return marker from user stack");
                     return;
@@ -385,7 +385,7 @@ namespace proc
                 }
                 user_sp += sizeof(guard); // 跳过返回地址标记
                 uint64 has_siginfo;
-                if (mem::k_vmm.copy_in(p->_pt, &has_siginfo, user_sp, sizeof(has_siginfo)) < 0)
+                if (mem::k_vmm.copy_in(*p->get_pagetable(), &has_siginfo, user_sp, sizeof(has_siginfo)) < 0)
                 {
                     panic("[sig_return] Failed to read has_siginfo from user stack");
                     return;
@@ -409,7 +409,7 @@ namespace proc
                     user_sp += sizeof(uint64);       // 跳过 has_siginfo
                     user_sp += sizeof(LinuxSigInfo); // 跳过 LinuxSigInfo
                     usercontext uctx;
-                    if (mem::k_vmm.copy_in(p->_pt, &uctx, user_sp, sizeof(uctx)) < 0)
+                    if (mem::k_vmm.copy_in(*p->get_pagetable(), &uctx, user_sp, sizeof(uctx)) < 0)
                     {
                         panic("[sig_return] Failed to read has_siginfo from user stack");
                         return;

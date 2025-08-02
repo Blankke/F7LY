@@ -1323,7 +1323,7 @@ namespace syscall
         printfCyan("[sys_unlinkat] : fd: %d, path: %s, flags: %d\n", fd, path.c_str(), flags);
         // for (int i = 0; i < proc::NVMA; i++)
         // {
-        //     if (p->_vma[i]._vm->vfile->_path_name == path)
+        //     if (p->get_vma()[i]._vm->vfile->_path_name == path)
         //     {
         //         printfOrange("skip\n");
         //         return 0;
@@ -5207,7 +5207,7 @@ namespace syscall
 
         if (timeout_addr && op == FUTEX_WAIT)
         {
-            if (mem::k_vmm.copy_in(proc::k_pm.get_cur_pcb()->_pt, (char *)&timeout, timeout_addr, sizeof(timeout)) < 0)
+            if (mem::k_vmm.copy_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), (char *)&timeout, timeout_addr, sizeof(timeout)) < 0)
             {
                 return -1;
             }
@@ -6047,7 +6047,7 @@ namespace syscall
         }
 
         proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
-        if (!pcb || !pcb->_vma)
+        if (!pcb || !pcb->get_vma())
         {
             panic("[sys_mprotect] Current process or VMA is null");
         }
@@ -6060,10 +6060,10 @@ namespace syscall
         int vma_index = -1;
         for (int i = 0; i < proc::NVMA; i++)
         {
-            if (pcb->_vma->_vm[i].used)
+            if (pcb->get_vma()->_vm[i].used)
             {
-                uint64 vma_start = pcb->_vma->_vm[i].addr;
-                uint64 vma_end = vma_start + pcb->_vma->_vm[i].len;
+                uint64 vma_start = pcb->get_vma()->_vm[i].addr;
+                uint64 vma_end = vma_start + pcb->get_vma()->_vm[i].len;
 
                 // 检查地址范围是否完全在VMA内
                 if (addr >= vma_start && end_addr <= vma_end)
@@ -6112,7 +6112,7 @@ namespace syscall
         }
 
         // 找到了对应的VMA，现在修改权限
-        proc::vma *vm = &pcb->_vma->_vm[vma_index];
+        proc::vma *vm = &pcb->get_vma()->_vm[vma_index];
         int old_prot = vm->prot;
 
         printfYellow("[sys_mprotect] Changing VMA[%d] protection from %d to %d\n",
@@ -7474,10 +7474,10 @@ namespace syscall
         bool found_mapping = false;
         for (int i = 0; i < proc::NVMA; ++i)
         {
-            if (!p->_vma->_vm[i].used)
+            if (!p->get_vma()->_vm[i].used)
                 continue;
 
-            struct proc::vma *vm = &p->_vma->_vm[i];
+            struct proc::vma *vm = &p->get_vma()->_vm[i];
             uint64 vma_start = vm->addr;
             uint64 vma_end = vma_start + vm->len;
 
@@ -7508,7 +7508,7 @@ namespace syscall
                 for (uint64 va = page_start; va < page_end; va += PGSIZE)
                 {
                     // 检查页面是否已经分配（通过页表查询）
-                    mem::Pte pte = p->_pt.walk(va, 0);
+                    mem::Pte pte = p->get_pagetable()->walk(va, 0);
                     if (!pte.is_null() && pte.is_valid())
                     {
                         // 页面已分配，需要写回到文件

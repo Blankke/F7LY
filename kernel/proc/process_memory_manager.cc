@@ -18,18 +18,71 @@
 namespace proc
 {
 
-    ProcessMemoryManager::ProcessMemoryManager(Pcb *pcb) : _pcb(pcb)
+    ProcessMemoryManager::ProcessMemoryManager(Pcb *pcb) 
+        : ref_count(1), _pcb(pcb)
     {
         if (_pcb == nullptr)
         {
             panic("ProcessMemoryManager: null PCB provided");
         }
+        
+        // 初始化内存锁
+        memory_lock.init("process_memory_lock");
     }
 
     ProcessMemoryManager::~ProcessMemoryManager()
     {
         // 析构函数中不执行清理操作，避免双重释放
         // 清理应该通过显式调用free_all_memory()来完成
+    }
+
+    /****************************************************************************************
+     * 阶段0新增：引用计数管理接口实现
+     ****************************************************************************************/
+
+    void ProcessMemoryManager::get()
+    {
+        ref_count.fetch_add(1, eastl::memory_order_relaxed);
+    }
+
+    bool ProcessMemoryManager::put()
+    {
+        int old_count = ref_count.fetch_sub(1, eastl::memory_order_acq_rel);
+        if (old_count <= 1)
+        {
+            // 引用计数降至0或以下，需要清理
+            return true;
+        }
+        return false;
+    }
+
+    int ProcessMemoryManager::get_ref_count() const
+    {
+        return ref_count.load(eastl::memory_order_acquire);
+    }
+
+    ProcessMemoryManager* ProcessMemoryManager::share_for_thread()
+    {
+        // 线程共享：增加引用计数并返回当前对象
+        get();
+        return this;
+    }
+
+    ProcessMemoryManager* ProcessMemoryManager::clone_for_fork()
+    {
+        // 进程复制：创建新的内存管理器并深拷贝内容
+        // 注意：这里传递nullptr作为PCB，需要在调用后设置正确的PCB
+        ProcessMemoryManager* new_mgr = new ProcessMemoryManager(nullptr);
+        
+        // TODO: 在阶段1中实现深拷贝逻辑
+        // 目前返回新实例，深拷贝逻辑将在后续阶段实现
+        
+        return new_mgr;
+    }
+
+    void ProcessMemoryManager::set_pcb(Pcb* pcb)
+    {
+        _pcb = pcb;
     }
 
     /****************************************************************************************
@@ -387,7 +440,7 @@ namespace proc
             uint64 vma_end = PGROUNDUP(vma_start + vm_entry.len);
             for (uint64 va = vma_start; va < vma_end; va += PGSIZE)
             {
-                mem::Pte pte = p->_pt.walk(va, 0);
+                mem::Pte pte = p->get_pagetable()->walk(va, 0);
                 if (!pte.is_null() && pte.is_valid())
                 {
                     // 页面已分配，需要写回到文件

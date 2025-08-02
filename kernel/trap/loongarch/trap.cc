@@ -246,16 +246,16 @@ void trap_manager::usertrapret(void)
   p->_last_user_tick = cur_tick;
 
   // 检查进程是否使用共享虚拟内存，如果是则需要动态映射trapframe
-  if (p->_shared_vm || p->_pt.get_ref_count() > 1) {
+  if (p->get_shared_vm() || p->get_pagetable()->get_ref_count() > 1) {
     // 页表被共享，需要动态重新映射trapframe
     printfCyan("[usertrapret] Page table shared (ref count: %d), dynamically mapping trapframe for pid %d\n", 
-               p->_pt.get_ref_count(), p->_pid);
+               p->get_pagetable()->get_ref_count(), p->_pid);
     
     // 取消当前trapframe的映射
-    mem::k_vmm.vmunmap(p->_pt, TRAPFRAME, 1, 0);
+    mem::k_vmm.vmunmap(*p->get_pagetable(), TRAPFRAME, 1, 0);
     
     // 重新映射当前进程的trapframe
-    if (mem::k_vmm.map_pages(p->_pt, TRAPFRAME, PGSIZE, (uint64)(p->_trapframe), 
+    if (mem::k_vmm.map_pages(*p->get_pagetable(), TRAPFRAME, PGSIZE, (uint64)(p->get_trapframe()), 
                              PTE_V | PTE_NX | PTE_P | PTE_W | PTE_R | PTE_MAT | PTE_D) == 0)
     {
       panic("usertrapret: failed to dynamically map trapframe");
@@ -269,11 +269,11 @@ void trap_manager::usertrapret(void)
 
   // set up trapframe values that uservec will need when
   // the process next re-enters the kernel.
-  p->_trapframe->kernel_pgdl = r_csr_pgdl();      // kernel page table
-  p->_trapframe->kernel_sp = p->_kstack + KSTACK_SIZE; // process's kernel stack
-  p->_trapframe->kernel_trap = (uint64)wrap_usertrap;
-//   printf("usertrapret: p->_trapframe->kernel_trap: %p\n", p->_trapframe->kernel_trap);
-  p->_trapframe->kernel_hartid = r_tp(); // hartid for cpuid()
+  p->get_trapframe()->kernel_pgdl = r_csr_pgdl();      // kernel page table
+  p->get_trapframe()->kernel_sp = p->get_kstack() + KSTACK_SIZE; // process's kernel stack
+  p->get_trapframe()->kernel_trap = (uint64)wrap_usertrap;
+//   printf("usertrapret: p->get_trapframe()->kernel_trap: %p\n", p->get_trapframe()->kernel_trap);
+  p->get_trapframe()->kernel_hartid = r_tp(); // hartid for cpuid()
 
   // set up the registers that uservec.S's ertn will use
   // to get to user space.
@@ -285,10 +285,10 @@ void trap_manager::usertrapret(void)
   w_csr_prmd(x);
 
   // set S Exception Program Counter to the saved user pc.
-  w_csr_era(p->_trapframe->era);
+  w_csr_era(p->get_trapframe()->era);
 
   // tell uservec.S the user page table to switch to.
-  volatile uint64 pgdl = (p->_pt.get_base());
+  volatile uint64 pgdl = (p->get_pagetable()->get_base());
 
   // jump to uservec.S at the top of memory, which
   // switches to the user page table, restores user registers,
@@ -364,10 +364,10 @@ int mmap_handler(uint64 va, int cause)
   // 根据地址查找属于哪一个VMA
   for (i = 0; i < proc::NVMA; ++i)
   {
-    if (p->_vma->_vm[i].used)
+    if (p->get_vma()->_vm[i].used)
     {
       // 检查是否在当前VMA范围内
-      if (va >= p->_vma->_vm[i].addr && va < p->_vma->_vm[i].addr + p->_vma->_vm[i].len)
+      if (va >= p->get_vma()->_vm[i].addr && va < p->get_vma()->_vm[i].addr + p->get_vma()->_vm[i].len)
       {
         printfGreen("mmap_handler: found VMA %d for va %p\n", i, va);
         break; // 在当前VMA范围内
@@ -382,7 +382,7 @@ int mmap_handler(uint64 va, int cause)
   }
 
   // 获取VMA结构
-  struct proc::vma *vm = &p->_vma->_vm[i];
+  struct proc::vma *vm = &p->get_vma()->_vm[i];
   
   // 确定访问类型 (LoongArch的异常码)
   int access_type = 0; // 默认读取

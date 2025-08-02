@@ -19,10 +19,10 @@
 struct CpuMask
 {
     uint64 bits;
-    
+
     CpuMask() : bits(0) {}
     CpuMask(uint64 mask) : bits(mask) {}
-    
+
     void set(int cpu) { bits |= (1ULL << cpu); }
     void clear(int cpu) { bits &= ~(1ULL << cpu); }
     bool is_set(int cpu) const { return (bits & (1ULL << cpu)) != 0; }
@@ -78,6 +78,12 @@ namespace proc
         /* The hard limit.  */
         rlim_t rlim_max;
     };
+    // 虚拟内存区域管理
+    struct VMA
+    {
+        vma _vm[NVMA]; // 虚拟内存区域数组，类似Linux的vm_area_struct
+        int _ref_cnt;  // VMA引用计数，用于copy-on-write机制
+    };
     constexpr int max_program_section_num = 16;
     constexpr int max_vma_num = 10;
     class Pcb
@@ -120,40 +126,32 @@ namespace proc
         // 调度相关字段
         int _slot;     // 当前时间片剩余量 @todo: 应使用更精确的时间单位
         int _priority; // 进程优先级 (0最高，19最低)，符合Linux nice值规范
-        
+
         // CPU亲和性字段
         CpuMask _cpu_mask; // CPU亲和性掩码，每个位表示一个CPU核心
 
         /****************************************************************************************
          * 内存管理
          ****************************************************************************************/
-        uint64 _kstack = 0;      // 内核栈的虚拟地址
+        uint64 _kstack = 0;    // 内核栈的虚拟地址
+        TrapFrame *_trapframe; // 用户态寄存器保存区，用于系统调用和异常处理
+    private:
         bool _shared_vm = false; // 标记是否与父进程共享虚拟内存(CLONE_VM标志)
-        
+
         // 程序段管理
         program_section_desc _prog_sections[max_program_section_num]; // 程序段描述数组
         int _prog_section_cnt = 0;                                    // 已记录的程序段数量
-        
+
         // 堆内存管理
-        uint64 _heap_start = 0;  // 堆的起始地址
-        uint64 _heap_end = 0;    // 堆的结束地址
-        
-        mem::PageTable _pt;                                           // 用户空间页表，等同于Linux的mm->pgd
-        TrapFrame *_trapframe;                                        // 用户态寄存器保存区，用于系统调用和异常处理
+        uint64 _heap_start = 0; // 堆的起始地址
+        uint64 _heap_end = 0;   // 堆的结束地址
 
-    private:
-        uint64 _sz;              // 进程占用的总内存空间大小(字节)，包含所有程序段的总和，由内部自动管理
+        mem::PageTable _pt; // 用户空间页表，等同于Linux的mm->pgd
+        uint64 _sz;         // 进程占用的总内存空间大小(字节)，包含所有程序段的总和，由内部自动管理
 
-    public:
-
-        // 虚拟内存区域管理
-        struct VMA
-        {
-            vma _vm[NVMA]; // 虚拟内存区域数组，类似Linux的vm_area_struct
-            int _ref_cnt;  // VMA引用计数，用于copy-on-write机制
-        };
         VMA *_vma; // VMA管理结构指针
 
+    public:
         /****************************************************************************************
          * 上下文切换
          ****************************************************************************************/
@@ -213,8 +211,6 @@ namespace proc
         uint64 _start_time;     // 进程启动时间 (绝对时间戳)
         uint64 _start_boottime; // 自系统启动以来的启动时间
 
-
-
     public:
         Pcb();
         void init(const char *lock_name, uint gid);
@@ -223,7 +219,7 @@ namespace proc
         void map_kstack(mem::PageTable &pt);
         fs::dentry *get_cwd() { return _cwd; }
         int get_priority();
-        
+
         // 程序段管理方法
         int add_program_section(void *start, ulong size, const char *name = nullptr);
         void remove_program_section(int index);
@@ -231,26 +227,24 @@ namespace proc
         void reset_memory_sections(); // 重置所有内存管理信息
         uint64 get_total_program_memory() const;
         void copy_program_sections(const Pcb *src);
-        
+
         // 堆内存管理方法
         void init_heap(uint64 start_addr);
         uint64 grow_heap(uint64 new_end);
         uint64 shrink_heap(uint64 new_end);
         uint64 get_heap_size() const { return _heap_end > _heap_start ? _heap_end - _heap_start : 0; }
-        void set_heap_start(uint64 start_addr) { _heap_start = start_addr; }
-        void set_heap_end(uint64 end_addr) { _heap_end = end_addr; }
-        
+
         // 内存大小计算方法（内部使用）
         void update_total_memory_size();
         uint64 calculate_total_memory_size() const;
-        
+
         // 内存一致性检查方法（内部使用）
         bool verify_memory_consistency() const;
-        
+
         // 内存管理接口
-        void free_all_memory_resources();       // 释放所有内存资源
-        void emergency_memory_cleanup();        // 紧急内存清理
-        bool check_memory_leaks() const;        // 检查内存泄漏
+        void free_all_memory_resources();        // 释放所有内存资源
+        void emergency_memory_cleanup();         // 紧急内存清理
+        bool check_memory_leaks() const;         // 检查内存泄漏
         void print_detailed_memory_info() const; // 打印详细内存信息
 
     public:
@@ -281,18 +275,46 @@ namespace proc
         uint32 get_fsuid() const { return _fsuid; }
         uint32 get_gid() const { return _gid; }
         uint32 get_egid() const { return _egid; }
-        mode_t get_umask() const { return _umask; }                   // 获取文件模式创建掩码
+        mode_t get_umask() const { return _umask; }             // 获取文件模式创建掩码
         void set_umask(mode_t umask) { _umask = umask & 0777; } // 设置umask，只保留权限位
+
+        // 阶段0.5新增：内存相关字段的访问方法
         TrapFrame *get_trapframe() { return _trapframe; }
+        const TrapFrame *get_trapframe() const { return _trapframe; }
+        void set_trapframe(TrapFrame *tf) { _trapframe = tf; }
+
         uint64 get_kstack() const { return _kstack; }
+        void set_kstack(uint64 kstack) { _kstack = kstack; }
+
         mem::PageTable *get_pagetable() { return &_pt; }
-        ProcState get_state() const { return _state; }
-        char *get_name() { return _name; }
-        uint64 get_size() const { return _sz; }
+        const mem::PageTable *get_pagetable() const { return &_pt; }
+        void set_pagetable(const mem::PageTable &pt) { _pt = pt; }
+
+        bool get_shared_vm() const { return _shared_vm; }
+        void set_shared_vm(bool shared) { _shared_vm = shared; }
+
+        VMA *get_vma() { return _vma; }
+        const VMA *get_vma() const { return _vma; }
+        void set_vma(VMA *vma) { _vma = vma; }
+
+        // 程序段访问方法
+        int get_prog_section_count() const { return _prog_section_cnt; }
+        const program_section_desc *get_prog_sections() const { return _prog_sections; }
+        program_section_desc *get_prog_sections() { return _prog_sections; }
+        void set_prog_section_count(int count) { _prog_section_cnt = count; }
+
+        // 堆内存访问方法
         uint64 get_heap_start() const { return _heap_start; }
         uint64 get_heap_end() const { return _heap_end; }
-        int get_prog_section_count() const { return _prog_section_cnt; }
-        const program_section_desc* get_prog_sections() const { return _prog_sections; }
+        void set_heap_start(uint64 start_addr) { _heap_start = start_addr; }
+        void set_heap_end(uint64 end_addr) { _heap_end = end_addr; }
+
+        // 内存大小访问方法
+        uint64 get_size() const { return _sz; }
+        void set_size(uint64 sz) { _sz = sz; }
+
+        ProcState get_state() const { return _state; }
+        char *get_name() { return _name; }
         uint64 get_last_user_tick() const { return _last_user_tick; }
         uint64 get_user_ticks() const { return _user_ticks; }
         uint64 get_stime() const { return _stime; }
@@ -313,7 +335,7 @@ namespace proc
         {
             return _rlim_vec[ResourceLimitId::RLIMIT_NOFILE].rlim_cur;
         }
-        
+
         // 获取文件大小限制
         uint64 get_fsize_limit() const
         {
@@ -324,8 +346,6 @@ namespace proc
         {
             ipc::signal::add_signal(this, sig);
         }
-
-        void set_trapframe(TrapFrame *tf) { _trapframe = tf; }
 
         void set_last_user_tick(uint64 tick) { _last_user_tick = tick; }
         void set_user_ticks(uint64 ticks) { _user_ticks = ticks; }
@@ -341,11 +361,11 @@ namespace proc
         void set_fsuid(uint32 fsuid) { _fsuid = fsuid; }
         void set_gid(uint32 gid) { _gid = gid; }
         void set_egid(uint32 egid) { _egid = egid; }
-        
+
         // CPU亲和性相关方法
-        const CpuMask& get_cpu_mask() const { return _cpu_mask; }
-        void set_cpu_mask(const CpuMask& mask) { _cpu_mask = mask; }
-        
+        const CpuMask &get_cpu_mask() const { return _cpu_mask; }
+        void set_cpu_mask(const CpuMask &mask) { _cpu_mask = mask; }
+
         bool is_process() const
         {
             return _tid == _tgid; // 线程ID等于线程组ID表示是主线程

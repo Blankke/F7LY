@@ -145,9 +145,9 @@ inline void printRESULT()
     };
     proc::Pcb *_pcb = proc::k_pm.get_cur_pcb();
     for (int i = 0; i < proc::max_vma_num; i++)
-        if (_pcb->_vma->_vm[i].vfile && _pcb->_vma->_vm[i].vfile->_path_name.substr(0, 5) == "/tmp/")
+        if (_pcb->get_vma()->_vm[i].vfile && _pcb->get_vma()->_vm[i].vfile->_path_name.substr(0, 5) == "/tmp/")
         {
-            void *pa = proc::k_pm.get_cur_pcb()->_pt.walk_addr(_pcb->_vma->_vm[i].addr);
+            void *pa = proc::k_pm.get_cur_pcb()->get_pagetable()->walk_addr(_pcb->get_vma()->_vm[i].addr);
             results *r = (results *)pa;
             printf("pid:%d\n",_pcb->_pid);
             printf("pa:%p\n", pa);

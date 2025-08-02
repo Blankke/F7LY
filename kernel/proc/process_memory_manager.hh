@@ -24,6 +24,8 @@
 #include "types.hh"
 #include "proc.hh"
 #include "mem.hh"  // 为MAP_SHARED、PROT_WRITE等常量
+#include "devs/spinlock.hh"
+#include <EASTL/atomic.h>
 #ifdef RISCV
 #include "mem/riscv/pagetable.hh"
 #elif defined(LOONGARCH)
@@ -37,6 +39,8 @@ namespace proc {
  * 
  * 负责统一管理进程的内存资源，提供内存分配、释放和管理的完整接口。
  * 这个类封装了程序段、堆内存和VMA的管理逻辑，避免内存管理代码散落在各处。
+ * 
+ * 阶段0重构：增加了原子引用计数支持，为线程共享内存做准备。
  */
 class ProcessMemoryManager {
 public:
@@ -50,6 +54,49 @@ public:
      * @brief 析构函数，确保资源正确释放
      */
     ~ProcessMemoryManager();
+
+    /****************************************************************************************
+     * 阶段0新增：引用计数管理接口
+     ****************************************************************************************/
+    
+    /**
+     * @brief 增加引用计数
+     * 
+     * 线程安全的原子操作，用于共享内存时增加引用计数。
+     */
+    void get();
+    
+    /**
+     * @brief 减少引用计数
+     * @return true 如果引用计数降至0需要释放，false 仍有其他引用
+     * 
+     * 线程安全的原子操作，当引用计数降至0时返回true，调用者应当释放资源。
+     */
+    bool put();
+    
+    /**
+     * @brief 获取当前引用计数（仅用于调试）
+     * @return 当前引用计数值
+     */
+    int get_ref_count() const;
+    
+    /**
+     * @brief 为线程创建共享内存（增加引用计数）
+     * @return 返回当前对象指针，引用计数+1
+     */
+    ProcessMemoryManager* share_for_thread();
+    
+    /**
+     * @brief 为进程创建完全复制的内存管理器
+     * @return 新的ProcessMemoryManager实例，内容为深拷贝
+     */
+    ProcessMemoryManager* clone_for_fork();
+    
+    /**
+     * @brief 设置关联的PCB（仅在特殊情况下使用，如clone_for_fork后）
+     * @param pcb 新的PCB指针
+     */
+    void set_pcb(Pcb* pcb);
 
     /****************************************************************************************
      * 程序段管理接口
@@ -268,6 +315,15 @@ public:
     bool check_memory_leaks() const;
 
 private:
+    /****************************************************************************************
+     * 阶段0新增：引用计数和线程支持
+     ****************************************************************************************/
+    eastl::atomic<int> ref_count;           // 原子引用计数，用于线程间安全共享
+    SpinLock memory_lock;                   // 内存操作锁，保护并发访问
+    
+    /****************************************************************************************
+     * 原有字段
+     ****************************************************************************************/
     Pcb* _pcb;  ///< 关联的进程控制块
     
     /****************************************************************************************
@@ -318,5 +374,8 @@ private:
      */
     uint64 align_to_page(uint64 addr, bool round_up = true) const;
 };
+
+// 类型别名，便于后续重命名为MemoryDescriptor
+using MemoryDescriptor = ProcessMemoryManager;
 
 } // namespace proc
