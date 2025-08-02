@@ -1686,11 +1686,11 @@ char *ltp_testcases[] = {
     // "mincore04",
     // "mkdir_tests.sh",
     // "mkdir02", //sendmsg
-    // "mkdir03",  //只能过5个
-    // "mkdir04",
+    // "mkdir03",  //pass
+    // "mkdir04",  // setreuid
     // "mkdir05",  //sendmsg
-    // "mkdir09",
-    // "mkdirat01",
+    // "mkdir09",   //bin/sh
+    "mkdirat01",
     // "mkdirat02",
     // "mkfs01.sh",
     // "mknod01",
@@ -2168,8 +2168,8 @@ char *ltp_testcases[] = {
     // "request_key04",
     // "request_key05",
     // "rmdir01",   //pass
-    "rmdir02",
-    // "rmdir03",
+    // "rmdir02", //pass
+    // "rmdir03",  //sendmsg
     // "route4-rmmod",
     // "route6-rmmod",
     // "route-change-dst.sh",

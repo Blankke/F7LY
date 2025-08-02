@@ -305,7 +305,7 @@ namespace mem
             if (pa == 0)
             {
                 printfRed("[copy_str_in] pa ==0! walk failed\n");
-                return -1;
+                return -EFAULT;
             }
 #ifdef RISCV
 
@@ -337,11 +337,12 @@ namespace mem
         }
         if (got_null)
         {
-            return 0;
+            return 0;     
         }
         else
         {
-            return -1;
+            printfRed("[copy_str_in] string not null-terminated\n");
+            return -36;//ENAMETOOLONG; // 返回错误码，表示字符串未以null结尾
         }
     }
     // TODO

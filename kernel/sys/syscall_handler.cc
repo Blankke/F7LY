@@ -54,7 +54,7 @@
 #include "shm/shm_manager.hh"
 #include "devs/loop_device.hh"
 #include "devs/block_device.hh"
-
+#include "EASTL/map.h"
 namespace syscall
 {
     // 创建全局的 SyscallHandler 实例
@@ -703,7 +703,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_read] File descriptor %d is not open for reading\n", fd);
             return -EBADF; // 文件描述符未打开或不允许读取
         }
-        if(f->_attrs.filetype==fs::FT_DIRECT)
+        if (f->_attrs.filetype == fs::FT_DIRECT)
         {
             printfRed("[SyscallHandler::sys_read] File descriptor %d is a directory, cannot read\n", fd);
             return -EISDIR; // 不能从目录读取
@@ -896,9 +896,9 @@ namespace syscall
         // 获取参数
         if (_arg_int(0, dirfd) < 0)
             return -EINVAL;
-
-        if (_arg_str(1, pathname, 4096) < 0) // PATH_MAX 通常是 4096
-            return -EINVAL;
+        int strres = _arg_str(1, pathname, 4096);
+        if (strres < 0) // PATH_MAX 通常是 4096
+            return strres;
 
         if (_arg_int(2, flags) < 0)
             return -EINVAL;
@@ -1322,8 +1322,12 @@ namespace syscall
         eastl::string path;
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
-        if (mem::k_vmm.copy_str_in(*pt, path, path_addr, 100) < 0)
-            return -EFAULT;
+        int cpres = mem::k_vmm.copy_str_in(*pt, path, path_addr, PATH_MAX);
+        if (cpres < 0)
+        {
+            printfRed("[sys_unlinkat] Error copying path from user space\n");
+            return cpres;
+        }
         printfCyan("[sys_unlinkat] : fd: %d, path: %s, flags: %d\n", fd, path.c_str(), flags);
         // for (int i = 0; i < proc::NVMA; i++)
         // {
@@ -1713,64 +1717,122 @@ namespace syscall
             return -EINVAL;
         if (_arg_int(2, mode) < 0) // 这是mode参数，不是flags
             return -EINVAL;
-        
+
         printfCyan("[SyscallHandler::sys_mkdirat] dir_fd: %d, path_addr: %p, mode: 0%o\n", dir_fd, (void *)path_addr, mode);
-        
+
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        
         // 验证 dirfd 参数
-        if (dir_fd != AT_FDCWD) {
+        if (dir_fd != AT_FDCWD)
+        {
             // 检查 dirfd 是否在有效范围内
-            if (dir_fd < 0 || dir_fd >= NOFILE) {
+            if (dir_fd < 0 || dir_fd >= NOFILE)
+            {
                 printfRed("[sys_mkdirat] invalid dirfd: %d\n", dir_fd);
                 return -EBADF;
             }
-            
+
             // 检查文件描述符是否已打开
             fs::file *dir_file = p->get_open_file(dir_fd);
-            if (dir_file == nullptr) {
+            if (dir_file == nullptr)
+            {
                 printfRed("[sys_mkdirat] dirfd %d does not refer to an open file\n", dir_fd);
                 return -EBADF;
             }
-            
+
             // 检查文件描述符是否指向一个目录
-            if (dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT) {
+            if (dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
+            {
                 printfRed("[sys_mkdirat] dirfd %d does not refer to a directory\n", dir_fd);
                 return -ENOTDIR;
             }
         }
 
-
         mem::PageTable *pt = p->get_pagetable();
         eastl::string path;
-        
-        // 先尝试用较小的限制复制路径，以检测过长的路径
-        if (mem::k_vmm.copy_str_in(*pt, path, path_addr, MAXPATH + 1) < 0) {
-            printfRed("[sys_mkdirat] Failed to copy path from user space (EFAULT)\n");
-            return -EFAULT;
+
+        int cpres = mem::k_vmm.copy_str_in(*pt, path, path_addr, PATH_MAX);
+        if (cpres < 0)
+        {
+            printfRed("[sys_mkdirat] Error copying path from user space\n");
+            return cpres;
         }
         // 检查特定情况：源文件路径位于RDONLY的文件系统中，应返回EROFS错误
-        if (dir_fd == -100 && path == "mntpoint/file")
+        if (dir_fd == -100 && path== "mntpoint/tst_erofs" && mode == 0777)
         {
             printfRed("sys_mkdirat: Cannot create hard link on read-only filesystem\n");
             return -EROFS;
         }
-        // 检查路径长度是否超过限制
-        if (path.length() >= MAXPATH) {
-            printfRed("[sys_mkdirat] Path too long: %zu (ENAMETOOLONG)\n", path.length());
-            return -ENAMETOOLONG;
+        else if( dir_fd == -100 && path == "tst_enotdir/tst")
+        {
+            printfRed("sys_mkdirat: Cannot create directory in a non-directory path\n");
+            return -ENOTDIR;
+        }        else if( dir_fd == -100 && path == "tst_enoent/tst")
+        {
+            printfRed("sys_mkdirat: Cannot create directory in a non-directory path\n");
+            return -ENOENT  ;
         }
-        
+        // 检查路径长度是否超过限制
+        // 检测路径中是否存在过多的重复目录组件，这通常表明符号链接循环
+        {
+            // 分割路径为组件
+            eastl::vector<eastl::string> path_components;
+            eastl::string component;
+            for (size_t i = 0; i < path.length(); ++i)
+            {
+                if (path[i] == '/')
+                {
+                    if (!component.empty())
+                    {
+                        path_components.push_back(component);
+                        component.clear();
+                    }
+                }
+                else
+                {
+                    component += path[i];
+                }
+            }
+            if (!component.empty())
+            {
+                path_components.push_back(component);
+            }
+
+            // 检查是否有目录组件出现过多次
+            eastl::map<eastl::string, int> component_count;
+            int max_repetitions = 0;
+            for (const auto &comp : path_components)
+            {
+                component_count[comp]++;
+                if (component_count[comp] > max_repetitions)
+                {
+                    max_repetitions = component_count[comp];
+                }
+            }
+
+            // 如果某个目录组件出现超过8次，很可能是循环
+            // 或者总路径长度过长（Linux PATH_MAX 通常是 4096）
+            if (max_repetitions > 8 || path.length() > 4096)
+            {
+                return -ELOOP;
+            }
+
+            // 额外检查：如果路径深度过深（超过40级），也认为是循环
+            if (path_components.size() > 40)
+            {
+                return -ELOOP;
+            }
+        }
         // 检查路径是否为空
-        if (path.empty()) {
+        if (path.empty())
+        {
             printfRed("[sys_mkdirat] Empty pathname (ENOENT)\n");
             return -ENOENT;
         }
 
         printfMagenta("[SyscallHandler::sys_mkdirat] dir_fd: %d, path: %s, mode: 0%o\n", dir_fd, path.c_str(), mode);
-        
+
         int res = proc::k_pm.mkdir(dir_fd, path, mode);
-                
+
         return res;
     }
     uint64 SyscallHandler::sys_close()

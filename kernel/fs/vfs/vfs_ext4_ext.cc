@@ -533,7 +533,30 @@ int vfs_ext_rmdir(const char *path) {
     // Check if it's a directory
     r = ext4_dir_open(&(var.dir), path);
     if (r == 0) {
+        // Check if directory is empty (only contains "." and ".." entries)
+        const ext4_direntry *rentry;
+        int entry_count = 0;
+        
+        while ((rentry = ext4_dir_entry_next(&(var.dir))) != NULL) {
+            const char *name = (const char *)rentry->name;
+            
+            // Skip "." and ".." entries
+            if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
+                continue;
+            }
+            
+            // Found a non-standard entry, directory is not empty
+            entry_count++;
+            break;
+        }
+        
         (void) ext4_dir_close(&(var.dir));
+        
+        // If directory contains entries other than "." and "..", return ENOTEMPTY
+        if (entry_count > 0) {
+            return -ENOTEMPTY;
+        }
+        
         r = ext4_dir_rm(path);
         return -r;
     } else {
