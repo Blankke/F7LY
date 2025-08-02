@@ -1897,7 +1897,11 @@ namespace syscall
         //     panic("look in my eyes：你为什么要挂vda2？");
         //     return 0;
         // }
-
+        if(dev == "/dev/zero")
+        {
+            printfRed("[SyscallHandler::sys_mount] Cannot mount /dev/zero,字符设备不允许挂载\n");
+            return SYS_ENODEV; // 不允许挂载 /dev/zero
+        }
         eastl::string abs_path = get_absolute_path(mnt.c_str(), p->_cwd_name.c_str()); //< 获取绝对路径
 
         // int ret = fs_mount(TMPDEV, EXT4, (char*)abs_path.c_str(), flags, (void*)data); //< 挂载
