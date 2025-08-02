@@ -698,12 +698,16 @@ namespace syscall
         {
             return SYS_EINVAL;
         }
-        if (f->_attrs.g_read == 0||f->lwext4_file_struct.fsize==0)
+        if (f->_attrs.g_read == 0)
         {
             printfRed("[SyscallHandler::sys_read] File descriptor %d is not open for reading\n", fd);
             return -EBADF; // 文件描述符未打开或不允许读取
         }
-
+        if(f->_attrs.filetype==fs::FT_DIRECT)
+        {
+            printfRed("[SyscallHandler::sys_read] File descriptor %d is a directory, cannot read\n", fd);
+            return -EISDIR; // 不能从目录读取
+        }
         // 检查文件锁是否允许读操作
         if (!check_file_lock_access(f->_lock, f->get_file_offset(), n, false))
         {

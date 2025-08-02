@@ -1834,7 +1834,7 @@ char *ltp_testcases[] = {
     // "msgsnd06",
     // "msgstress01",
     // "msync01",  //pass
-    // "msync02",  //爆了
+    // "msync02",  //pass两个
     // "msync03",   //pass
     // "msync04",
     // "mtest01",
@@ -2119,7 +2119,7 @@ char *ltp_testcases[] = {
     // "rcu_torture.sh",
     // "read_all",
     // "read01", //貌似可以PASS
-    // "read02",   //爆了
+    // "read02",   //pass
     // "read03", //pass
     // "read04", // 完全PASS
     // "readahead01",
@@ -2146,10 +2146,10 @@ char *ltp_testcases[] = {
     // "remove_password.sh",
     // "removexattr01",
     // "removexattr02",
-    // "rename01",
-    // "rename03",
-    // "rename04",
-    // "rename05",
+    // "rename01",   //bin/sh
+    // "rename03",    //bin/sh
+    // "rename04",//bin/sh
+    // "rename05",//bin/sh
     // "rename06",
     // "rename07",
     // "rename08",
@@ -2167,8 +2167,8 @@ char *ltp_testcases[] = {
     // "request_key03",
     // "request_key04",
     // "request_key05",
-    // "rmdir01",
-    // "rmdir02",
+    // "rmdir01",   //pass
+    "rmdir02",
     // "rmdir03",
     // "route4-rmmod",
     // "route6-rmmod",
