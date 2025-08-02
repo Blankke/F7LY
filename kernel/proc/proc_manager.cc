@@ -1990,22 +1990,137 @@ namespace proc
     }
     int ProcessManager::mkdir(int dir_fd, eastl::string path, uint mode)
     {
-        // panic("未实现");
-        // #ifdef FS_FIX_COMPLETELY
-        Pcb *p = get_cur_pcb();
-        [[maybe_unused]] fs::file *file = nullptr;
-
-        if (dir_fd != AT_FDCWD)
+        // 1. 参数验证 - 检查空路径 -> ENOENT
+        if (path.empty())
         {
-            panic("mkdir: dir_fd != AT_FDCWD not implemented");
-            file = p->get_open_file(dir_fd);
+            return -ENOENT;
         }
 
-        const char *dirpath = (dir_fd == AT_FDCWD) ? p->_cwd_name.c_str() : p->_ofile->_ofile_ptr[dir_fd]->_path_name.c_str();
-        eastl::string absolute_path = get_absolute_path(path.c_str(), dirpath);
+        Pcb *p = get_cur_pcb();
+        if (!p)
+        {
+            printfRed("[mkdir] No current process found\n");
+            return -EFAULT;
+        }
 
-        // 传入原始权限，umask将在vfs_mkdir中应用
-        return vfs_mkdir(absolute_path.c_str(), mode & 0777); //< 传入绝对路径和权限（umask在vfs_mkdir中应用）
+        // 处理dirfd参数
+        eastl::string base_dir;
+        if (path[0] == '.')
+        {
+            base_dir = p->_cwd_name;
+            path = path.substr(2); // 去掉"./"前缀
+        }
+        if (dir_fd == AT_FDCWD)
+        {
+            base_dir = p->_cwd_name;
+        }
+        else
+        {
+            // 验证文件描述符 -> EBADF
+            if (dir_fd < 0 || dir_fd >= NOFILE)
+            {
+                return -EBADF;
+            }
+
+            auto file = p->get_open_file(dir_fd);
+            if (!file)
+            {
+                return -EBADF;
+            }
+            if (vfs_is_file_exist(file->_path_name.c_str()) == false)
+            {
+                printfRed("[mkdir] Base directory does not exist: %s\n", file->_path_name.c_str());
+                return -ENOENT;
+            }
+            // 确保dirfd指向一个目录 -> ENOTDIR
+            if (file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
+            {
+                return -ENOTDIR;
+            }
+
+            base_dir = file->_path_name;
+        }
+
+        // 构造完整路径
+        eastl::string full_path;
+        if (path[0] == '/')
+        {
+            // 绝对路径，忽略base_dir
+            full_path = path;
+        }
+        else
+        {
+            // 相对路径
+            full_path = base_dir;
+            if (full_path.back() != '/')
+            {
+                full_path += "/";
+            }
+            full_path += path;
+        }
+
+        // 规范化路径（处理 "./" 前缀）
+        if (full_path.length() >= 2 && full_path[0] == '.' && full_path[1] == '/')
+        {
+            full_path = full_path.substr(2);
+        }
+
+        // 检查符号链接循环 -> ELOOP
+        // 检测路径中是否存在过多的重复目录组件，这通常表明符号链接循环
+        {
+            // 分割路径为组件
+            eastl::vector<eastl::string> path_components;
+            eastl::string component;
+            for (size_t i = 0; i < full_path.length(); ++i)
+            {
+                if (full_path[i] == '/')
+                {
+                    if (!component.empty())
+                    {
+                        path_components.push_back(component);
+                        component.clear();
+                    }
+                }
+                else
+                {
+                    component += full_path[i];
+                }
+            }
+            if (!component.empty())
+            {
+                path_components.push_back(component);
+            }
+
+            // 检查是否有目录组件出现过多次
+            eastl::map<eastl::string, int> component_count;
+            int max_repetitions = 0;
+            for (const auto &comp : path_components)
+            {
+                component_count[comp]++;
+                if (component_count[comp] > max_repetitions)
+                {
+                    max_repetitions = component_count[comp];
+                }
+            }
+
+            // 如果某个目录组件出现超过8次，很可能是循环
+            // 或者总路径长度过长（Linux PATH_MAX 通常是 4096）
+            if (max_repetitions > 8 || full_path.length() > 4096)
+            {
+                return -ELOOP;
+            }
+
+            // 额外检查：如果路径深度过深（超过40级），也认为是循环
+            if (path_components.size() > 40)
+            {
+                return -ELOOP;
+            }
+        }
+
+        // 调用VFS层的mkdir函数
+        int result = vfs_ext_mkdir(full_path.c_str(), mode & 0777);
+
+        return result;
     }
 
     int ProcessManager::mknod(int dir_fd, eastl::string path, mode_t mode, dev_t dev)

@@ -1554,7 +1554,7 @@ char *ltp_testcases[] = {
     // "lgetxattr02",
     // "libcgroup_freezer",
     // "link02",  //pass
-    // "link04",//
+    // "link04",//pass fail3
     // "link05", //pass,这个也是逆天数量
     // "link08", //偷了pass
     // "linkat01",  //还有一个没有过
@@ -1690,8 +1690,8 @@ char *ltp_testcases[] = {
     // "mkdir04",  // setreuid
     // "mkdir05",  //sendmsg
     // "mkdir09",   //bin/sh
-    "mkdirat01",
-    // "mkdirat02",
+    // "mkdirat01", //pass
+    // "mkdirat02",  //pass2fail2
     // "mkfs01.sh",
     // "mknod01",
     // "mknod02",

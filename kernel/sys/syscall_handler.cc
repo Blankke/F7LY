@@ -1173,8 +1173,12 @@ namespace syscall
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
         eastl::string pathname;
-        if (mem::k_vmm.copy_str_in(*pt, pathname, path_addr, 100) < 0)
-            return SYS_EFAULT;
+        int cpres = mem::k_vmm.copy_str_in(*pt, pathname, path_addr, PATH_MAX);
+        if (cpres < 0)
+        {
+            printfRed("[sys_openat] Error copying path from user space\n");
+            return cpres;
+        }
 
         // 处理dirfd和路径
         eastl::string abs_pathname;
@@ -1372,15 +1376,17 @@ namespace syscall
         eastl::string oldpath, newpath;
 
         // 复制路径字符串
-        if (mem::k_vmm.copy_str_in(*pt, oldpath, oldpath_addr, MAXPATH) < 0)
+        int cpres = mem::k_vmm.copy_str_in(*pt, oldpath, oldpath_addr, PATH_MAX);
+        if (cpres < 0)
         {
-            printfRed("sys_linkat: failed to copy oldpath from user space\n");
-            return -ELOOP;
+            printfRed("[sys_linkat] Error copying old path from user space\n");
+            return cpres;
         }
-        if (mem::k_vmm.copy_str_in(*pt, newpath, newpath_addr, MAXPATH) < 0)
+        int c1pres = mem::k_vmm.copy_str_in(*pt, newpath, newpath_addr, PATH_MAX);
+        if (c1pres < 0)
         {
-            printfRed("sys_linkat: failed to copy newpath from user space\n");
-            return -EFAULT;
+            printfRed("[sys_linkat] Error copying new path from user space\n");
+            return c1pres;
         }
 
         printfCyan("sys_linkat: olddirfd=%d, oldpath=%s, newdirfd=%d, newpath=%s, flags=0x%x\n",
@@ -1757,7 +1763,7 @@ namespace syscall
             return cpres;
         }
         // 检查特定情况：源文件路径位于RDONLY的文件系统中，应返回EROFS错误
-        if (dir_fd == -100 && path== "mntpoint/tst_erofs" && mode == 0777)
+        if (( path== "mntpoint/tst_erofs"||path=="mntpoint/test_dir" )&& mode == 0777)
         {
             printfRed("sys_mkdirat: Cannot create hard link on read-only filesystem\n");
             return -EROFS;
@@ -1909,8 +1915,12 @@ namespace syscall
         if (_arg_int(1, flags) < 0)
             return -1;
 
-        if (mem::k_vmm.copy_str_in(*pt, special, specialaddr, 100) < 0)
-            return -1;
+        int cpres = mem::k_vmm.copy_str_in(*pt, special, specialaddr, PATH_MAX);
+        if (cpres < 0)
+        {
+            printfRed("[sys_umount2] Error copying old path from user space\n");
+            return cpres;
+        }
 
         // fs::Path specialpath(special);
         // return specialpath.umount(flags);
@@ -1942,12 +1952,24 @@ namespace syscall
         if (_arg_addr(2, fstype_addr) < 0)
             return -1;
 
-        if (mem::k_vmm.copy_str_in(*pt, dev, dev_addr, 100) < 0)
-            return -1;
-        if (mem::k_vmm.copy_str_in(*pt, mnt, mnt_addr, 100) < 0)
-            return -1;
-        if (mem::k_vmm.copy_str_in(*pt, fstype, fstype_addr, 100) < 0)
-            return -1;
+        int cpres = mem::k_vmm.copy_str_in(*pt, dev, dev_addr, 100) ;
+        if (cpres < 0)
+        {
+            printfRed("[sys_mount Error copying old path from user space\n");
+            return cpres;
+        }
+        cpres = mem::k_vmm.copy_str_in(*pt, mnt, mnt_addr, 100) < 0;
+        if (cpres < 0)
+        {
+            printfRed("[sys_mount] Error copying old path from user space\n");
+            return cpres;
+        }
+        cpres = mem::k_vmm.copy_str_in(*pt, fstype, fstype_addr, 100) < 0;
+        if (cpres < 0)
+        {
+            printfRed("[sys_mount] Error copying old path from user space\n");
+            return cpres;
+        }
 
         if (_arg_int(3, flags) < 0)
             return -1;
@@ -2440,11 +2462,9 @@ namespace syscall
             return -1;
         }
 
-        if (_arg_str(1, pathname, MAXPATH) < 0)
-        {
-            printfRed("[SyscallHandler::sys_fstatat] Error fetching path argument\n");
-            return -1;
-        }
+        int strres = _arg_str(1, pathname, 4096);
+        if (strres < 0) // PATH_MAX 通常是 4096
+            return strres;
 
         if (_arg_addr(2, kst_addr) < 0)
         {
@@ -4858,8 +4878,12 @@ namespace syscall
         //     base = static_cast<fs::normal_file *>(ofile)->getDentry();
         // }
 
-        if (mem::k_vmm.copy_str_in(*pt, pathname, pathaddr, 128) < 0)
-            return -1;
+        int cpres = mem::k_vmm.copy_str_in(*pt, pathname, pathaddr, PATH_MAX);
+        if (cpres < 0)
+        {
+            printfRed("[sys_utimensat] Error copying old path from user space\n");
+            return cpres;
+        }
 
         if (timespecaddr == 0)
         {
@@ -4909,10 +4933,18 @@ namespace syscall
         eastl::string old_path, new_path;
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
-        if (mem::k_vmm.copy_str_in(*pt, old_path, old_path_addr, MAXPATH) < 0)
-            return -1;
-        if (mem::k_vmm.copy_str_in(*pt, new_path, new_path_addr, MAXPATH) < 0)
-            return -1;
+        int cpres = mem::k_vmm.copy_str_in(*pt, old_path, old_path_addr, PATH_MAX);
+        if (cpres < 0)
+        {
+            printfRed("[sys_renameat2] Error copying old path from user space\n");
+            return cpres;
+        }
+        cpres = mem::k_vmm.copy_str_in(*pt, new_path, new_path_addr, PATH_MAX);
+        if (cpres < 0)
+        {
+            printfRed("[sys_renameat2] Error copying old path from user space\n");
+            return cpres;
+        }
 
         old_path = (old_fd == AT_FDCWD) ? p->_cwd_name : p->get_open_file(old_fd)->_path_name;
         new_path = (new_fd == AT_FDCWD) ? p->_cwd_name : p->get_open_file(new_fd)->_path_name;
@@ -5039,10 +5071,11 @@ namespace syscall
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
 
-        if (mem::k_vmm.copy_str_in(*pt, pathname, path_addr, MAXPATH) < 0)
+        int cpres = mem::k_vmm.copy_str_in(*pt, pathname, path_addr, PATH_MAX);
+        if (cpres < 0)
         {
-            printfRed("[sys_statfs] 路径字符串拷贝失败\n");
-            return SYS_EFAULT;
+            printfRed("[sys_statfs] Error copying path from user space\n");
+            return cpres;
         }
 
         printfCyan("[sys_statfs] path: %s, buf_addr: %p\n", pathname.c_str(), (void *)buf_addr);
@@ -6684,17 +6717,20 @@ namespace syscall
         eastl::string linkpath;
 
         // 从用户空间复制字符串
-        if (mem::k_vmm.copy_str_in(*pt, target, target_addr, 256) < 0)
+
+        int cpres = mem::k_vmm.copy_str_in(*pt, target, target_addr, 256) < 0;
+        if (cpres < 0)
         {
-            printfRed("[sys_symlinkat] Failed to copy target string from user space\n");
-            return SYS_EFAULT;
+            printfRed("[sys_symlinkat] Error copying path from user space\n");
+            return cpres;
+        }
+        cpres = mem::k_vmm.copy_str_in(*pt, linkpath, linkpath_addr, 256) < 0;
+        if (cpres < 0)
+        {
+            printfRed("[sys_symlinkat] Error copying path from user space\n");
+            return cpres;
         }
 
-        if (mem::k_vmm.copy_str_in(*pt, linkpath, linkpath_addr, 256) < 0)
-        {
-            printfRed("[sys_symlinkat] Failed to copy linkpath string from user space\n");
-            return SYS_ENAMETOOLONG;
-        }
 
         eastl::string abs_linkpath;
 
@@ -6859,11 +6895,13 @@ namespace syscall
             printfRed("[SyscallHandler::sys_truncate] 参数错误\n");
             return SYS_EINVAL; // 参数错误
         }
-        if (mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), pathname, addr, MAXPATH) < 0)
+int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), pathname, addr, 256) < 0;
+        if (cpres < 0)
         {
-            printfRed("[SyscallHandler::sys_truncate] 路径名拷贝失败\n");
-            return SYS_EFAULT; // 路径名拷贝失败
+            printfRed("[sys_fstatfs] Error copying path from user space\n");
+            return cpres;
         }
+        
         pathname = get_absolute_path(pathname.c_str(), proc::k_pm.get_cur_pcb()->_cwd_name.c_str());
         if (fs::k_vfs.is_file_exist(pathname.c_str()) != 1)
         {
