@@ -1,13 +1,14 @@
 #include "klib.hh"
 #include "virtual_memory_manager.hh"
 #include "physical_memory_manager.hh"
-#include "mem.hh"  // 添加mmap相关常量定义
+#include "trap/loongarch/pci.h"
+#include "mem.hh" // 添加mmap相关常量定义
 #ifdef RISCV
 #include "mem/riscv/pagetable.hh"
-#include "fs/vfs/file/normal_file.hh"  // 添加文件系统支持
+#include "fs/vfs/file/normal_file.hh" // 添加文件系统支持
 #elif defined(LOONGARCH)
 #include "mem/loongarch/pagetable.hh"
-#include "vfs/file/normal_file.hh"  // 添加文件系统支持
+#include "vfs/file/normal_file.hh" // 添加文件系统支持
 #endif
 #include "memlayout.hh"
 #include "platform.hh"
@@ -411,27 +412,32 @@ namespace mem
     int VirtualMemoryManager::allocate_vma_page(PageTable &pt, uint64 va, proc::vma *vm, int access_type)
     {
         // 检查VMA权限
-        if (vm->prot == PROT_NONE) {
+        if (vm->prot == PROT_NONE)
+        {
             printfRed("[allocate_vma_page] access to PROT_NONE page at %p\n", va);
             return -1;
         }
 
         // 检查访问类型权限
-        switch (access_type) {
+        switch (access_type)
+        {
         case 0: // 读取
-            if (!(vm->prot & PROT_READ)) {
+            if (!(vm->prot & PROT_READ))
+            {
                 printfRed("[allocate_vma_page] read access to non-readable page at %p\n", va);
                 return -1;
             }
             break;
         case 1: // 写入
-            if (!(vm->prot & PROT_WRITE)) {
+            if (!(vm->prot & PROT_WRITE))
+            {
                 printfRed("[allocate_vma_page] write access to non-writable page at %p\n", va);
                 return -1;
             }
             break;
         case 2: // 执行
-            if (!(vm->prot & PROT_EXEC)) {
+            if (!(vm->prot & PROT_EXEC))
+            {
                 printfRed("[allocate_vma_page] exec access to non-executable page at %p\n", va);
                 return -1;
             }
@@ -461,7 +467,8 @@ namespace mem
 
         // 分配物理页面
         void *pa = k_pmm.alloc_page();
-        if (pa == nullptr) {
+        if (pa == nullptr)
+        {
             printfRed("[allocate_vma_page] alloc_page failed for va: %p\n", va);
             return -1;
         }
@@ -471,39 +478,45 @@ namespace mem
 
         // 检查是否为文件映射
         fs::normal_file *vf = vm->vfile;
-        if (vf != nullptr && vm->vfd != -1) {
+        if (vf != nullptr && vm->vfd != -1)
+        {
             // 文件映射：从文件读取数据
             uint64 page_va = PGROUNDDOWN(va);
             int offset = vm->offset + (page_va - vm->addr);
-            
-            printfCyan("[allocate_vma_page] reading from file %s at offset %d\n", 
-                      vf->_path_name.c_str(), offset);
-            
+
+            printfCyan("[allocate_vma_page] reading from file %s at offset %d\n",
+                       vf->_path_name.c_str(), offset);
+
             int readbytes = vf->read((uint64)pa, PGSIZE, offset, false);
-            if (readbytes < 0) {
+            if (readbytes < 0)
+            {
                 printfRed("[allocate_vma_page] file read failed\n");
                 k_pmm.free_page(pa);
                 return -1;
             }
-            
-            if (readbytes < PGSIZE) {
+
+            if (readbytes < PGSIZE)
+            {
                 printfYellow("[allocate_vma_page] partial page read (%d bytes)\n", readbytes);
             }
-        } else {
+        }
+        else
+        {
             // 匿名映射：页面已通过clear_page初始化为0
             printfCyan("[allocate_vma_page] handling anonymous mapping at %p\n", va);
         }
 
         // 添加页面映射
         uint64 page_va = PGROUNDDOWN(va);
-        if (!this->map_pages(pt, page_va, PGSIZE, (uint64)pa, pte_flags)) {
+        if (!this->map_pages(pt, page_va, PGSIZE, (uint64)pa, pte_flags))
+        {
             printfRed("[allocate_vma_page] map_pages failed\n");
             k_pmm.free_page(pa);
             return -1;
         }
 
-        printfGreen("[allocate_vma_page] successfully mapped page at va=%p, pa=%p, pte_flags=0x%x\n", 
-                   page_va, pa, pte_flags);
+        printfGreen("[allocate_vma_page] successfully mapped page at va=%p, pa=%p, pte_flags=0x%x\n",
+                    page_va, pa, pte_flags);
         return 0;
     }
 
@@ -511,7 +524,7 @@ namespace mem
     ///
     /// 将内核中的 `len` 字节数据从指针 `p` 拷贝到用户进程页表 `pt` 所映射的虚拟地址 `va` 起始处，
     /// 自动处理跨页情况。支持mmap的惰性分配和各种保护标志。
-    /// 
+    ///
     /// @param pt  用户进程的页表，用于解析虚拟地址。
     /// @param va  拷贝的目标虚拟地址（用户空间），可跨页。
     /// @param p   拷贝的源地址（内核空间指针）。
@@ -522,7 +535,7 @@ namespace mem
 #ifdef RISCV
         uint64 n, a, pa;
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
-        
+
         // 之前vma如果被free了这里会直接炸, 添加一个判断
         if (!proc || !proc->_vma)
         {
@@ -534,7 +547,7 @@ namespace mem
         {
             a = PGROUNDDOWN(va);
             proc::vma *target_vm = nullptr;
-            
+
             // 查找对应的VMA
             for (int i = 0; i < proc::NVMA; ++i)
             {
@@ -548,13 +561,14 @@ namespace mem
                     }
                 }
             }
-            
+
             Pte pte = pt.walk(a, 0);
             if ((pte.is_null() || pte.get_data() == 0) && target_vm != nullptr)
             {
                 // 如果页表项无效且在VMA范围内，使用统一的页面分配逻辑
                 // copy_out 是写操作，需要写权限
-                if (allocate_vma_page(pt, va, target_vm, 1) != 0) {
+                if (allocate_vma_page(pt, va, target_vm, 1) != 0)
+                {
                     printfRed("[copy_out] allocate_vma_page failed for va: %p\n", va);
                     return -1;
                 }
@@ -567,14 +581,14 @@ namespace mem
                 printfRed("[copy_out] walk failed for va: %p\n", va);
                 return -1;
             }
-            
+
             pa = reinterpret_cast<uint64>(pte.pa());
             if (pa == 0)
             {
                 printfRed("[copy_out] pa == 0! walk failed for va: %p\n", va);
                 return -1;
             }
-            
+
             n = PGSIZE - (va - a);
             if (n > len)
                 n = len;
@@ -588,7 +602,7 @@ namespace mem
 #elif defined(LOONGARCH)
         uint64 n, a, pa;
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
-        
+
         // 之前vma如果被free了这里会直接炸, 添加一个判断
         if (!proc || !proc->_vma)
         {
@@ -600,7 +614,7 @@ namespace mem
         {
             a = PGROUNDDOWN(va);
             proc::vma *target_vm = nullptr;
-            
+
             // 查找对应的VMA
             for (int i = 0; i < proc::NVMA; ++i)
             {
@@ -614,13 +628,14 @@ namespace mem
                     }
                 }
             }
-            
+
             Pte pte = pt.walk(a, 0);
             if ((pte.is_null() || pte.get_data() == 0) && target_vm != nullptr)
             {
                 // 如果页表项无效且在VMA范围内，使用统一的页面分配逻辑
                 // copy_out 是写操作，需要写权限
-                if (allocate_vma_page(pt, va, target_vm, 1) != 0) {
+                if (allocate_vma_page(pt, va, target_vm, 1) != 0)
+                {
                     printfRed("[copy_out] allocate_vma_page failed for va: %p\n", va);
                     return -1;
                 }
@@ -633,7 +648,7 @@ namespace mem
                 printfRed("[copy_out] walk failed for va: %p (not in any VMA)\n", va);
                 return -1;
             }
-            
+
             pa = reinterpret_cast<uint64>(pte.pa());
             if (pa == 0)
                 return -1;
@@ -727,11 +742,12 @@ namespace mem
             // panic("uvmcopy: page not valid");
             pa = (uint64)pte.pa();
             flags = pte.get_flags();
-            
+
             // 检查当前虚拟地址是否属于共享内存区域
-            bool is_shared = shm::k_smm.is_shared_memory_address((void*)va);
-            
-            if (is_shared) {
+            bool is_shared = shm::k_smm.is_shared_memory_address((void *)va);
+
+            if (is_shared)
+            {
                 // 对于共享内存，直接复用原物理地址，不分配新页面
                 printfCyan("[vm_copy] Sharing memory for VA=%p -> PA=%p (shared memory)\n", va, pa);
                 if (map_pages(new_pt, va, PGSIZE, pa, flags) == false)
@@ -739,7 +755,9 @@ namespace mem
                     vmunmap(new_pt, 0, va / PGSIZE, 1);
                     return -1;
                 }
-            } else {
+            }
+            else
+            {
                 // 对于普通内存，分配新页面并复制内容
                 if ((mem = mem::PhysicalMemoryManager::alloc_page()) == nullptr)
                 {
@@ -849,6 +867,27 @@ namespace mem
             printf("kvmmap failed\n");
             panic("[vmm] kvmmap failed");
         }
+    }
+
+    void VirtualMemoryManager::pci_map(int bus, int dev, int func, void *pages)
+    {
+#ifdef LOONGARCH
+
+        uint64 va = PCIE0_ECAM_V + ((bus << 16) | (dev << 11) | (func << 8));
+        uint64 pa = PCIE0_ECAM + ((bus << 16) | (dev << 11) | (func << 8));
+        map_pages(k_pagetable, va, PGSIZE, pa, PTE_MAT | PTE_W | PTE_P | PTE_D);
+        static int first = 0;
+        if (!first)
+        {
+            va = PCIE0_MMIO_V;
+            pa = PCIE0_MMIO;
+            map_pages(k_pagetable, va, 16 * PGSIZE, pa, PTE_MAT | PTE_W | PTE_P | PTE_D);
+            first = 1;
+        }
+
+        // mappages(kernel_pagetable, ((uint64)pages) & (~(DMWIN_MASK)), 2 * PGSIZE, pages, PTE_W | PTE_P | PTE_D | PTE_MAT);
+
+#endif
     }
 
     PageTable VirtualMemoryManager::kvmmake()
@@ -1010,7 +1049,7 @@ namespace mem
             pte = pt.walk(a, 1);
             if (pte.is_null())
                 return -1;
-            
+
             // 如果页表项为空
             if (pte.get_data() == 0)
             {
@@ -1025,7 +1064,7 @@ namespace mem
                     return -1;
                 }
             }
-            
+
             if (pte.get_data() & PTE_V)
             {
                 // 清除旧的权限位，保留其他标志位，然后设置新的权限

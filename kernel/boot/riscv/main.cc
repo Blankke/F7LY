@@ -78,7 +78,7 @@ void main()
 
     // hardware_secondary_init
     //  2. Disk 初始化 (debug)
-    new (&riscv::qemu::disk_driver) riscv::qemu::DiskDriver("Disk");
+    // new (&riscv::qemu::disk_driver) riscv::qemu::DiskDriver("Disk");
 
     tmm::k_tm.init("timer manager");
     // fs::k_bufm.init("buffer manager");

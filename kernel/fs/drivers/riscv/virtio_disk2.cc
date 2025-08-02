@@ -22,11 +22,7 @@
 #ifdef RISCV
 #define R(r) ((volatile uint32 *)(VIRTIO0 + (r)))
 #define R2(r) ((volatile uint32 *)(VIRTIO1 + (r)))
-#elif defined(LOONGARCH)
 
-#define R(r) ((volatile uint32 *)(r))
-#define R2(r) ((volatile uint32 *)(r))
-#endif
 
 
 static struct disk {
@@ -527,3 +523,4 @@ virtio_disk_intr2()
   disk2.vdisk_lock.release();
   // printf("[virtio_disk_intr] done!\n");
 }
+#endif

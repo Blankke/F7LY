@@ -38,7 +38,7 @@ namespace mem
 		bool map_pages( PageTable &pt, uint64 va, uint64 size, uint64 pa, uint64 flags );
 		PageTable kvmmake();//创建内核页表，在初始化的时候调用
 		void kvmmap(PageTable &pt, uint64 va, uint64 pa, uint64 sz, uint64 perms);//映射内核页表
-
+void pci_map(int bus, int dev, int func, void *pages);
 
 		uint64 vmalloc(PageTable &pt, uint64 old_sz, uint64 new_sz, uint64 flags);
 

@@ -13,7 +13,7 @@
 #include "proc/scheduler.hh"
 #include "trap_func_wrapper.hh"
 #include "extioi.hh"
-#include "pci.h"
+#include "trap/loongarch/pci.h"
 #include "apic.hh"
 #include "syscall_handler.hh"
 #include "cpu.hh"
@@ -22,6 +22,7 @@
 #include "vfs/file/normal_file.hh"
 #include "devs/loongarch/disk_driver.hh"
 #include "trap/interrupt_stats.hh"
+#include "timer_interface.hh"
 // in kernelvec.S, calls kerneltrap().
 extern "C" void kernelvec();
 extern "C" void uservec();
@@ -90,7 +91,7 @@ int trap_manager::devintr()
     {
       // TODO
       // intr_stats::k_intr_stats.record_interrupt(PCIE_IRQ);
-      loongarch::qemu::disk_driver.handle_intr();
+      // loongarch::qemu::disk_driver.handle_intr();
     }
     else if (irq)
     {

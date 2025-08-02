@@ -23,9 +23,9 @@
 #include "fs/vfs/fs.hh"
 #include "fs/buf.hh"
 #ifdef RISCV
-#include "drivers/riscv/virtio2.hh"
+#include "fs/drivers/riscv/virtio2.hh"
 #elif defined LOONGARCH
-#include "drivers/loongarch/virtio2.hh"
+#include "fs/drivers/riscv/virtio2.hh"
 #endif
 struct {
   SpinLock lock;

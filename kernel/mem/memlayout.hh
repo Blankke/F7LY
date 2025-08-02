@@ -94,6 +94,9 @@
 
 #define DMWIN_MASK 0x9UL << 60
 #define DMWIN1_MASK 0x8UL << 60
+#define VIRT_DMWIN_MASK 0xf000000000000000
+
+#define VIRT2PHY(addr) ((addr) & ~VIRT_DMWIN_MASK)
 
 // qemu puts UART registers here in virtual memory.
 #define UART0 (0x1fe001e0UL | DMWIN_MASK)

@@ -524,15 +524,15 @@ namespace proc
             printfCyan("VMA structure: not present\n");
         }
 
-        // 页表信息
-        if (_pt.get_base())
-        {
-            printfCyan("Page table: present (%p)\n", _pt.get_base());
-        }
-        else
-        {
-            printfCyan("Page table: not present\n");
-        }
+        // // 页表信息
+        // if (_pt.get_base())
+        // {
+        //     printfCyan("Page table: present (%p)\n", _pt.get_base());
+        // }
+        // else
+        // {
+        //     printfCyan("Page table: not present\n");
+        // }
 
         // TrapFrame信息
         if (_trapframe)
