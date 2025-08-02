@@ -67,6 +67,7 @@ extern "C" void main()
     /*********************8888 */
 
     // virtio_disk_init2(); // 初始化 rootfs的块设备
+    virtio_probe();             //曹老师漏了这个
     virtio_disk_init();        // emulated hard disk ps:如果使用SDCard需要修改
     init_fs_table();           // fs_table init
     binit();                   // buffer cache

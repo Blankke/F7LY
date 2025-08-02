@@ -92,6 +92,7 @@ int trap_manager::devintr()
       // TODO
       // intr_stats::k_intr_stats.record_interrupt(PCIE_IRQ);
       // loongarch::qemu::disk_driver.handle_intr();
+      panic("未实现PCIE_IRQ中断处理,不过好像跟riscv不一样，跟蒙老师也不一样，现在好像不用这个\n");
     }
     else if (irq)
     {
