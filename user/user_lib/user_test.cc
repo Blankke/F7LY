@@ -1716,7 +1716,7 @@ char *ltp_testcases[] = {
     // "mlockall01",
     // "mlockall02",
     // "mlockall03",
-    // "mmap001",   //pass
+    "mmap001",   //pass
     // "mmap01",
     // "mmap02",   //pass
     // "mmap03",
