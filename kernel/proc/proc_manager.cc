@@ -1079,26 +1079,43 @@ namespace proc
     Pcb *ProcessManager::fork(Pcb *p, uint64 flags, uint64 stack_ptr, uint64 ctid, bool is_clone3)
     {
         TODO("copy on write fork");
+        
+        // ===== 基础验证和资源分配 =====
+        // 参数验证
+        if (p == nullptr) {
+            return nullptr;
+        }
+        
         uint64 i;
         Pcb *np; // new proc
 
-        // Allocate process.
+        // 分配新进程控制块
         if ((np = alloc_proc()) == nullptr)
         {
             return nullptr;
         }
-        *np->_trapframe = *p->_trapframe; // 拷贝父进程的陷阱值，而不是直接指向, 后面有可能会修改
+        
+        // 拷贝父进程的陷阱帧，而不是直接指向，后面有可能会修改
+        *np->_trapframe = *p->_trapframe;
 
+        // 设置父子进程关系
         _wait_lock.acquire();
         np->_parent = p;
         _wait_lock.release();
 
+        // ===== 基本属性复制 =====
+        // 继承文件系统相关属性
         np->_cwd = p->_cwd;           // 继承当前工作目录
         np->_cwd_name = p->_cwd_name; // 继承当前工作目录名称
         np->_umask = p->_umask;       // 继承文件模式创建掩码
 
+        // ===== 身份信息和进程关系设置 =====
         // 继承父进程的身份信息
         np->_ppid = p->_pid;
+        np->_uid = p->_uid;
+        np->_euid = p->_euid;
+        np->_gid = p->_gid;
+        np->_egid = p->_egid;
 
         // 进程组ID继承逻辑：
         // 1. 对于普通fork()，子进程继承父进程的进程组
@@ -1119,11 +1136,7 @@ namespace proc
             np->_sid = p->_sid;
         }
 
-        np->_uid = p->_uid;
-        np->_euid = p->_euid;
-        np->_gid = p->_gid;
-        np->_egid = p->_egid;
-
+        // ===== 时间统计重置 =====
         // 重置子进程的时间统计（alloc_proc已经初始化，但这里明确重置）
         uint64 cur_tick = tmm::get_ticks();
         np->_start_tick = cur_tick;
@@ -1136,6 +1149,7 @@ namespace proc
         np->_cutime = 0;
         np->_cstime = 0;
 
+        // ===== 进程名称设置 =====
         // 为子进程设置名称，添加子进程标识
         const char child_name_suffix[] = "-child";
         size_t parent_name_len = strlen(p->_name);
@@ -1156,7 +1170,7 @@ namespace proc
             strcat(np->_name, child_name_suffix);
         }
 
-        np->_user_ticks = 0;
+        // ===== 文件描述符处理 =====
 
         if (flags & syscall::CLONE_FILES)
         {
@@ -1179,20 +1193,22 @@ namespace proc
                 }
             }
         }
+        
+        // ===== 内存管理 =====
         if (flags & syscall::CLONE_VM)
         {
             // 共享虚拟内存：新进程共享父进程的内存管理器
-            // 需要获取父进程内存管理器的指针
             ProcessMemoryManager* parent_mm = p->get_memory_manager();
             if (parent_mm != nullptr)
             {
                 np->set_memory_manager(parent_mm->share_for_thread());
-            }else{
+                printfCyan("[clone] Using shared memory manager for process %d (parent %d)\n",
+                           np->_pid, p->_pid);
+            }
+            else
+            {
                 panic("[fork] parent memory_manager is null");
             }
-
-            printfCyan("[clone] Using shared memory manager for process %d (parent %d)\n",
-                       np->_pid, p->_pid);
         }
         else
         {
@@ -1213,7 +1229,7 @@ namespace proc
             }
         }
 
-        // 处理信号处理共享
+        // ===== 信号处理 =====
         if (flags & syscall::CLONE_SIGHAND)
         {
             // 共享信号处理结构
