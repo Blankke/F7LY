@@ -72,6 +72,7 @@ LDFLAGS := -static -nostdlib -nostartfiles -nodefaultlibs -Wl,-z,max-page-size=4
 INCLUDES := -I$(KERNEL_DIR) $(foreach dir,$(SUBDIRS),-I$(KERNEL_DIR)/$(dir))
 INCLUDES += -I$(KERNEL_DIR)/mem -I$(KERNEL_DIR)/devs -I$(KERNEL_DIR)/trap -I$(KERNEL_DIR)/hal -I$(KERNEL_DIR)/proc -I$(KERNEL_DIR)/boot
 INCLUDES += -I$(KERNEL_DIR)/fs -I$(KERNEL_DIR)/net
+INCLUDES += -I$(KERNEL_DIR)/net/onpstack/include
 INCLUDES += -I$(EASTL_DIR)/include -I$(EASTL_DIR)/include/EASTL -I$(EASTL_DIR)/test/packages/EABase/include/Common
 INCLUDES += -I$(KERNEL_DIR)/fs
 # ===== 文件收集规则 =====
