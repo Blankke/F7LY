@@ -13,7 +13,6 @@ namespace tmm
 namespace proc
 {
     constexpr int default_proc_slot = 1; // 默认进程槽位
-    constexpr int MAXARG = 32;
 
     class ProcessManager
     {

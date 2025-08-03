@@ -22,12 +22,16 @@
 #include "fs/vfs/file/normal_file.hh"
 #include "shm/shm_manager.hh"
 
+// 外部符号声明
+extern char trampoline[]; // trampoline.S
+extern char sig_trampoline[]; // sig_trampoline.S
+
 namespace proc
 {
 
     ProcessMemoryManager::ProcessMemoryManager() 
-        : ref_count(1), prog_section_count(0), heap_start(0), heap_end(0), 
-          total_memory_size(0), shared_vm(false)
+        : prog_section_count(0), heap_start(0), heap_end(0), shared_vm(false),
+          total_memory_size(0), ref_count(1)
     {
         // 初始化内存锁
         memory_lock.init("process_memory_lock");
@@ -80,15 +84,23 @@ namespace proc
     {
         // 线程共享：增加引用计数并返回当前对象
         get();
+        shared_vm = true; // 标记为共享虚拟内存
         return this;
     }
 
-    ProcessMemoryManager* ProcessMemoryManager::clone_for_fork()
+    ProcessMemoryManager* ProcessMemoryManager::clone_for_fork(Pcb *target_pcb)
     {
         // 进程复制：创建新的内存管理器并深拷贝内容
         ProcessMemoryManager* new_mgr = new ProcessMemoryManager();
         
-        // 阶段1：实现深拷贝逻辑
+        // 为新进程创建页表
+        if (!new_mgr->create_pagetable(target_pcb))
+        {
+            panic("[clone for fork] create_pagetable faol");
+            delete new_mgr;
+            return nullptr;
+        }
+        
         // 复制程序段信息
         new_mgr->prog_section_count = prog_section_count;
         for (int i = 0; i < max_program_section_num; i++)
@@ -103,14 +115,57 @@ namespace proc
         // 复制总内存大小
         new_mgr->total_memory_size = total_memory_size;
         
-        // 复制共享标志
-        new_mgr->shared_vm = shared_vm;
+        // fork操作不共享虚拟内存，设置为false
+        new_mgr->shared_vm = false;
         
-        // 复制页表（这里是浅拷贝地址，实际页表内容需要在其他地方处理）
-        new_mgr->pagetable = pagetable;
-        
+        // 复制进程的所有内存段
+        bool copy_success = true;
+
+        // 复制程序段
+        for (int i = 0; i < prog_section_count; i++)
+        {
+            uint64 start = (uint64)prog_sections[i]._sec_start;
+            uint64 size = prog_sections[i]._sec_size;
+
+            if (mem::k_vmm.vm_copy(pagetable, new_mgr->pagetable, start, size) < 0)
+            {
+                copy_success = false;
+                break;
+            }
+        }
+
+        // 复制堆
+        if (copy_success && (heap_end > heap_start))
+        {
+            uint64 heap_size = heap_end - heap_start;
+            if (mem::k_vmm.vm_copy(pagetable, new_mgr->pagetable, heap_start, heap_size) < 0)
+            {
+                copy_success = false;
+            }
+        }
+
+        if (!copy_success)
+        {
+            panic("[clone_from_fork] copy failed");
+            delete new_mgr;
+            return nullptr;
+        }
+
         // 复制VMA数据
         new_mgr->vma_data = vma_data;
+        
+        // 处理VMA中的文件映射引用计数
+        for (int i = 0; i < NVMA; ++i)
+        {
+            if (vma_data._vm[i].used)
+            {
+                // 只对文件映射增加引用计数
+                if (vma_data._vm[i].vfile != nullptr)
+                {
+                    vma_data._vm[i].vfile->dup(); // 增加引用计数
+                }
+            }
+        }
         
         return new_mgr;
     }
@@ -384,57 +439,67 @@ namespace proc
      * VMA管理接口实现
      ****************************************************************************************/
 
+    void ProcessMemoryManager::free_single_vma(int vma_index)
+    {
+        if (vma_index < 0 || vma_index >= NVMA || !vma_data._vm[vma_index].used)
+        {
+            return;
+        }
+
+        vma &vm_entry = vma_data._vm[vma_index];
+
+        // printfBlue("  Processing VMA %d: addr=%p, len=%u, vfd=%d, flags=0x%x, prot=0x%x\n",
+        //            vma_index, (void *)vm_entry.addr, vm_entry.len,
+        //            vm_entry.vfd, vm_entry.flags, vm_entry.prot);
+
+        // 写回文件映射（对于共享且可写的映射）
+        if (vm_entry.vfile != nullptr && 
+            vm_entry.flags == MAP_SHARED &&
+            (vm_entry.prot & PROT_WRITE) != 0)
+        {
+            // 简化的写回逻辑，避免调用单独的writeback_vma函数
+            uint64 vma_start = PGROUNDDOWN(vm_entry.addr);
+            uint64 vma_end = PGROUNDUP(vma_start + vm_entry.len);
+            for (uint64 va = vma_start; va < vma_end; va += PGSIZE)
+            {
+                mem::Pte pte = pagetable.walk(va, 0);
+                if (!pte.is_null() && pte.is_valid())
+                {
+                    uint64 pa = (uint64)pte.pa();
+                    int file_offset = vm_entry.offset + (va - vma_start);
+                    int write_result = vm_entry.vfile->write(pa, PGSIZE, file_offset, false);
+                    if (write_result < 0)
+                    {
+                        printfRed("ProcessMemoryManager: VMA %d writeback failed\n", vma_index);
+                    }
+                }
+            }
+        }
+
+        // 释放文件引用
+        if (vm_entry.vfile != nullptr)
+        {
+            vm_entry.vfile->free_file();
+            vm_entry.vfile = nullptr;
+        }
+
+        // 取消虚拟地址映射
+        uint64 va_start = PGROUNDDOWN(vm_entry.addr);
+        uint64 va_end = PGROUNDUP(vm_entry.addr + vm_entry.len);
+        safe_vmunmap(va_start, va_end, true);
+
+        // 清理VMA条目
+        memset(&vm_entry, 0, sizeof(vma));
+    }
+
     void ProcessMemoryManager::free_all_vma()
     {
-        // 遍历所有VMA条目，统一释放（不再调用单独的free_vma）
+        // 遍历所有VMA条目，统一释放
         for (int i = 0; i < NVMA; ++i)
         {
             if (vma_data._vm[i].used)
             {
-                // printfBlue("  Processing VMA %d: addr=%p, len=%u, vfd=%d, flags=0x%x, prot=0x%x\n",
-                //            i, (void *)vma_data._vm[i].addr, vma_data._vm[i].len,
-                //            vma_data._vm[i].vfd, vma_data._vm[i].flags, vma_data._vm[i].prot);
-
-                vma &vm_entry = vma_data._vm[i];
-
-                // 写回文件映射（对于共享且可写的映射）
-                if (vm_entry.vfile != nullptr && 
-                    vm_entry.flags == MAP_SHARED &&
-                    (vm_entry.prot & PROT_WRITE) != 0)
-                {
-                    // 简化的写回逻辑，避免调用单独的writeback_vma函数
-                    uint64 vma_start = PGROUNDDOWN(vm_entry.addr);
-                    uint64 vma_end = PGROUNDUP(vma_start + vm_entry.len);
-                    for (uint64 va = vma_start; va < vma_end; va += PGSIZE)
-                    {
-                        mem::Pte pte = pagetable.walk(va, 0);
-                        if (!pte.is_null() && pte.is_valid())
-                        {
-                            uint64 pa = (uint64)pte.pa();
-                            int file_offset = vm_entry.offset + (va - vma_start);
-                            int write_result = vm_entry.vfile->write(pa, PGSIZE, file_offset, false);
-                            if (write_result < 0)
-                            {
-                                printfRed("ProcessMemoryManager: VMA %d writeback failed\n", i);
-                            }
-                        }
-                    }
-                }
-
-                // 释放文件引用
-                if (vm_entry.vfile != nullptr)
-                {
-                    vm_entry.vfile->free_file();
-                    vm_entry.vfile = nullptr;
-                }
-
-                // 取消虚拟地址映射
-                uint64 va_start = PGROUNDDOWN(vm_entry.addr);
-                uint64 va_end = PGROUNDUP(vm_entry.addr + vm_entry.len);
-                safe_vmunmap(va_start, va_end, true);
-
-                // 清理VMA条目
-                memset(&vm_entry, 0, sizeof(vma));
+                free_single_vma(i);
             }
         }
 
@@ -643,6 +708,57 @@ namespace proc
      * 页表管理接口实现
      ****************************************************************************************/
 
+    bool ProcessMemoryManager::create_pagetable(Pcb *pcb)
+    {
+        // 创建基础页表
+        mem::PageTable pt = mem::k_vmm.vm_create();
+        if (pt.is_null() || pt.get_base() == 0)
+        {
+            printfRed("ProcessMemoryManager: vm_create failed\n");
+            return false;
+        }
+
+#ifdef RISCV
+        // 映射trampoline页面
+        if (mem::k_vmm.map_pages(pt, TRAMPOLINE, PGSIZE, (uint64)trampoline, 
+                                riscv::PteEnum::pte_readable_m | riscv::pte_executable_m) == 0)
+        {
+            panic("ProcessMemoryManager: map trampoline failed\n");
+            pt.freewalk();
+            return false;
+        }
+
+        // 注意：trapframe映射延迟到usertrapret时进行
+
+        // 映射信号trampoline页面
+        if (mem::k_vmm.map_pages(pt, SIG_TRAMPOLINE, PGSIZE, (uint64)sig_trampoline, 
+                                riscv::PteEnum::pte_readable_m | riscv::pte_executable_m | riscv::PteEnum::pte_user_m) == 0)
+        {
+            panic("ProcessMemoryManager: map sigtrapframe failed\n");
+            // 先取消已成功的映射，再释放页表
+            mem::k_vmm.vmunmap(pt, TRAMPOLINE, 1, 0);
+            pt.freewalk();
+            return false;
+        }
+
+#elif defined(LOONGARCH)
+        // 注意：trapframe映射延迟到usertrapret时进行
+
+        // 映射信号trampoline页面  
+        if (mem::k_vmm.map_pages(pt, SIG_TRAMPOLINE, PGSIZE, (uint64)sig_trampoline, 
+                                PTE_P | PTE_MAT | PTE_D | PTE_U) == 0)
+        {
+            panic("ProcessMemoryManager: Fail to map sig_trampoline\n");
+            pt.freewalk();
+            return false;
+        }
+#endif
+
+        // 设置页表
+        pagetable = pt;
+        return true;
+    }
+
     void ProcessMemoryManager::free_pagetable()
     {
         if (!pagetable.get_base())
@@ -658,7 +774,7 @@ namespace proc
 #ifdef RISCV
         mem::k_vmm.vmunmap(pt, TRAMPOLINE, 1, 0);
 #endif
-        mem::k_vmm.vmunmap(pt, TRAPFRAME, 1, 0);
+        // 注意：trapframe映射由usertrapret管理，这里不需要显式取消映射
         mem::k_vmm.vmunmap(pt, SIG_TRAMPOLINE, 1, 0);
 
         // 阶段1：使用统一的引用计数管理
@@ -706,24 +822,29 @@ namespace proc
 
     void ProcessMemoryManager::free_all_memory()
     {
-        // 1. 处理VMA引用计数并释放（如果计数为0）
-        if (ref_count.fetch_sub(1) <= 1)
+        // 减少引用计数，只有当引用计数降为0时才释放整个内存
+        int old_count = ref_count.fetch_sub(1, eastl::memory_order_acq_rel);
+        
+        if (old_count <= 1)
         {
-            // 引用计数降为0，释放VMA
+            // 引用计数降为0，释放所有内存资源
+            
+            // 1. 释放VMA
             free_all_vma();
             shared_vm = false;
-        }
 
-        // 2. 如果页表存在，释放程序段和堆内存
-        if (pagetable.get_base())
-        {
-            free_all_program_sections();
-            free_heap_memory();
-            free_pagetable();
-        }
+            // 2. 如果页表存在，释放程序段和堆内存
+            if (pagetable.get_base())
+            {
+                free_all_program_sections();
+                free_heap_memory();
+                free_pagetable();
+            }
 
-        // 3. 重置内存相关状态
-        reset_memory_sections();
+            // 3. 重置内存相关状态
+            reset_memory_sections();
+        }
+        // 如果引用计数还大于0，说明还有其他进程/线程在使用这块内存，不进行释放
     }
 
     void ProcessMemoryManager::emergency_cleanup()
@@ -801,11 +922,11 @@ namespace proc
             }
         }
 
-        // 清理页表的特殊映射（trampoline、trapframe等）
+        // 清理页表的特殊映射（trampoline、sig_trampoline等）
 #ifdef RISCV
         mem::k_vmm.vmunmap(pagetable, TRAMPOLINE, 1, 0);
 #endif
-        mem::k_vmm.vmunmap(pagetable, TRAPFRAME, 1, 0);
+        // 注意：trapframe映射由usertrapret管理，这里不需要显式取消映射
         mem::k_vmm.vmunmap(pagetable, SIG_TRAMPOLINE, 1, 0);
 
         // 阶段1：不再使用分散的引用计数

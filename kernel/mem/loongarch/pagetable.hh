@@ -16,7 +16,7 @@ namespace mem
 		bool _is_global = false;
 
 	public:
-		PageTable() {};
+		PageTable() {_base_addr = 0;};
 		PageTable(uint64 addr) { _base_addr = addr; };
 		~PageTable() { /* 注意：不在析构函数中调用dec_ref，而是显式调用 */ }
 		void set_base(uint64 addr) { _base_addr = addr; }

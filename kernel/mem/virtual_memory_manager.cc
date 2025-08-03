@@ -692,7 +692,6 @@ namespace mem
             panic("vmm: no mem to crate vm space.");
         k_pmm.clear_page((void *)addr);
         pt.set_base(addr);
-        pt.init_ref(); // 初始化引用计数
 
         return pt;
     }

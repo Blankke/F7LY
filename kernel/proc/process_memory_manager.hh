@@ -80,13 +80,28 @@ namespace proc
         // VMA管理（移除分散的引用计数）
         VMA vma_data;
 
-        // 内存大小
-        uint64 total_memory_size;
-
         // 共享标志
         bool shared_vm;
 
+    private:
+        // 内存大小
+        uint64 total_memory_size;
 
+    public:
+        /**
+         * @brief 增加引用计数
+         *
+         * 线程安全的原子操作，用于共享内存时增加引用计数。
+         */
+        void get();
+
+        /**
+         * @brief 减少引用计数
+         * @return true 如果引用计数降至0需要释放，false 仍有其他引用
+         *
+         * 线程安全的原子操作，当引用计数降至0时返回true，调用者应当释放资源。
+         */
+        bool put();
 
         /**
          * @brief 构造函数
@@ -112,9 +127,10 @@ namespace proc
 
         /**
          * @brief 为进程创建完全复制的内存管理器
+         * @param target_pcb 目标进程的控制块，用于创建页表和内存复制
          * @return 新的ProcessMemoryManager实例，内容为深拷贝
          */
-        ProcessMemoryManager *clone_for_fork();
+        ProcessMemoryManager *clone_for_fork(class Pcb *target_pcb);
 
         /****************************************************************************************
          * 程序段管理接口
@@ -161,13 +177,9 @@ namespace proc
          */
         void free_all_program_sections();
 
-        /**
-         * @brief 验证程序段内存的一致性
-         * @return true 一致，false 不一致
-         */
-        bool verify_program_sections_consistency() const; /****************************************************************************************
-                                                           * 堆内存管理接口
-                                                           ****************************************************************************************/
+        /****************************************************************************************
+         * 堆内存管理接口
+         ****************************************************************************************/
 
         /**
          * @brief 初始化堆
@@ -196,11 +208,12 @@ namespace proc
          *
          * 注意：此函数内部调用cleanup_heap_to_size(0)，仅在free_all_memory()中内部调用
          */
-        void free_heap_memory(); /**
-                                  * @brief 清理堆内存到指定大小
-                                  * @param new_size 新的堆大小，如果为0则完全释放堆内存
-                                  * @return true 成功，false 失败
-                                  */
+        void free_heap_memory();
+        /**
+         * @brief 清理堆内存到指定大小
+         * @param new_size 新的堆大小，如果为0则完全释放堆内存
+         * @return true 成功，false 失败
+         */
         bool cleanup_heap_to_size(uint64 new_size);
 
         /****************************************************************************************
@@ -208,6 +221,18 @@ namespace proc
          *
          * 说明：VMA管理现在统一通过free_all_memory()进行，不建议单独调用
          ****************************************************************************************/
+
+        /**
+         * @brief 释放单个VMA资源
+         * @param vma_index VMA索引
+         *
+         * 释放指定索引的VMA，包括：
+         * - 文件映射的写回操作（对于MAP_SHARED且可写的映射）
+         * - 释放文件引用
+         * - 取消虚拟地址映射
+         * - 清理VMA结构体
+         */
+        void free_single_vma(int vma_index);
 
         /**
          * @brief 释放所有VMA资源
@@ -220,12 +245,14 @@ namespace proc
          *
          * 注意：此函数仅在free_all_memory()中内部调用，不建议单独使用
          */
-        void free_all_vma(); /**
-                              * @brief 取消指定地址范围的内存映射（支持munmap系统调用）
-                              * @param addr 起始地址
-                              * @param length 长度
-                              * @return 0 成功，-1 失败
-                              */
+        void free_all_vma();
+
+        /**
+         * @brief 取消指定地址范围的内存映射（支持munmap系统调用）
+         * @param addr 起始地址
+         * @param length 长度
+         * @return 0 成功，-1 失败
+         */
         int unmap_memory_range(void *addr, size_t length);
 
         /**
@@ -251,6 +278,15 @@ namespace proc
          ****************************************************************************************/
 
         /**
+         * @brief 为进程创建页表
+         * @param pcb 进程控制块指针
+         * @return 创建成功返回true，失败返回false
+         *
+         * 创建包含trampoline、trapframe等基础映射的页表
+         */
+        bool create_pagetable(class Pcb *pcb);
+
+        /**
          * @brief 释放进程页表
          *
          * 释放进程的页表结构，包括：
@@ -259,12 +295,14 @@ namespace proc
          *
          * 注意：此函数仅在free_all_memory()中内部调用，不建议单独使用
          */
-        void free_pagetable(); /**
-                                * @brief 安全的虚拟内存取消映射
-                                * @param va_start 起始虚拟地址
-                                * @param va_end 结束虚拟地址
-                                * @param check_validity 是否检查页面有效性
-                                */
+        void free_pagetable();
+
+        /**
+         * @brief 安全的虚拟内存取消映射
+         * @param va_start 起始虚拟地址
+         * @param va_end 结束虚拟地址
+         * @param check_validity 是否检查页面有效性
+         */
         void safe_vmunmap(uint64 va_start, uint64 va_end, bool check_validity = true);
 
         /****************************************************************************************
@@ -394,21 +432,6 @@ namespace proc
          ****************************************************************************************/
         eastl::atomic<int> ref_count; // 原子引用计数，用于线程间安全共享
         SpinLock memory_lock;         // 内存操作锁，保护并发访问
-
-        /**
-         * @brief 增加引用计数
-         *
-         * 线程安全的原子操作，用于共享内存时增加引用计数。
-         */
-        void get();
-
-        /**
-         * @brief 减少引用计数
-         * @return true 如果引用计数降至0需要释放，false 仍有其他引用
-         *
-         * 线程安全的原子操作，当引用计数降至0时返回true，调用者应当释放资源。
-         */
-        bool put();
 
     private:
         /****************************************************************************************

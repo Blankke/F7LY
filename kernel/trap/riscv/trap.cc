@@ -149,7 +149,7 @@ void trap_manager::timertick()
 // 支持嵌套中断
 void trap_manager::kerneltrap()
 {
-//   printfMagenta("into kerneltrap\n");
+  //   printfMagenta("into kerneltrap\n");
   int which_dev = 0;
 
   // 这些寄存器可能在yield时被修改
@@ -205,17 +205,18 @@ void trap_manager::usertrap()
   w_stvec((uint64)kernelvec);
 
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
-  
+
   // 时间统计：从用户态切换到内核态
   uint64 cur_tick = tmm::get_ticks();
-  if (p->_last_user_tick > 0) {
+  if (p->_last_user_tick > 0)
+  {
     // 累加用户态运行时间
     uint64 user_time = cur_tick - p->_last_user_tick;
     p->_user_ticks += user_time;
   }
   // 记录进入内核态的时间点
   p->_kernel_entry_tick = cur_tick;
-  
+
   p->_trapframe->epc = r_sepc();
   uint64 cause = r_scause();
   if (cause == 8)
@@ -277,38 +278,30 @@ void trap_manager::usertrapret()
 {
   // printfMagenta("into usertrapret\n");
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
-  
+
   // 时间统计：从内核态切换到用户态
   uint64 cur_tick = tmm::get_ticks();
-  if (p->_kernel_entry_tick > 0) {
+  if (p->_kernel_entry_tick > 0)
+  {
     // 累加内核态运行时间
     uint64 kernel_time = cur_tick - p->_kernel_entry_tick;
     p->_stime += kernel_time;
   }
   // 记录进入用户态的时间点
   p->_last_user_tick = cur_tick;
-  
+
   // Debug
   //  printfYellow("[usertrapret] trampoline addr %p\n", trampoline);
 
-  // printf("p->_shared_vm: %d, p->_pt.ref_count: %d\n", p->_shared_vm, p->_pt.get_ref_count());
+  // 统一在usertrapret时动态映射trapframe
+  // 取消当前trapframe的映射(有可能原来没映射, 但是无所谓)
+  mem::k_vmm.vmunmap(*p->get_pagetable(), TRAPFRAME, 1, 0);
 
-  // 检查进程是否使用共享虚拟内存，如果是则需要动态映射trapframe
-  if (p->get_shared_vm() || p->get_pagetable()->get_ref_count() > 1)
+  // 重新映射当前进程的trapframe
+  if (mem::k_vmm.map_pages(*p->get_pagetable(), TRAPFRAME, PGSIZE, (uint64)(p->get_trapframe()),
+                           riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_writable_m) == 0)
   {
-    // 页表被共享，需要动态重新映射trapframe
-    // printfCyan("[usertrapret] Page table shared (ref count: %d), dynamically mapping trapframe for pid %d\n",
-      //  p->get_pagetable()->get_ref_count(), p->_pid);
-
-    // 取消当前trapframe的映射
-    mem::k_vmm.vmunmap(*p->get_pagetable(), TRAPFRAME, 1, 0);
-
-    // 重新映射当前进程的trapframe
-    if (mem::k_vmm.map_pages(*p->get_pagetable(), TRAPFRAME, PGSIZE, (uint64)(p->get_trapframe()),
-                             riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_writable_m) == 0)
-    {
-      panic("usertrapret: failed to dynamically map trapframe");
-    }
+    panic("usertrapret: failed to dynamically map trapframe");
   }
   mem::Pte pte = p->get_pagetable()->walk(TRAMPOLINE, 0);
   if (pte.is_null() || pte.is_valid() == 0)
@@ -377,7 +370,7 @@ int mmap_handler(uint64 va, int cause)
       }
     }
   }
-  
+
   if (i == proc::NVMA)
   {
     printfRed("mmap_handler: no VMA found for va %p\n", va);
@@ -386,15 +379,18 @@ int mmap_handler(uint64 va, int cause)
 
   // 获取VMA结构
   struct proc::vma *vm = &p->get_vma()->_vm[i];
-  
+
   // 确定访问类型
   int access_type = 0; // 默认读取
-  if (cause == 15) { // Store page fault  
+  if (cause == 15)
+  {                  // Store page fault
     access_type = 1; // 写入
-  } else if (cause == 12) { // Instruction page fault
+  }
+  else if (cause == 12)
+  {                  // Instruction page fault
     access_type = 2; // 执行
   }
-  
+
   // 使用统一的VMA页面分配函数
   return mem::k_vmm.allocate_vma_page(*p->get_pagetable(), va, vm, access_type);
 }

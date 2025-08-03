@@ -148,11 +148,9 @@ namespace proc
         _global_id = gid;
         _kstack = mem::VirtualMemoryManager::kstack_vm_from_global_id(_global_id);
         
-        // 阶段1：创建统一内存管理器
-        if (_memory_manager == nullptr)
-        {
-            _memory_manager = new ProcessMemoryManager();
-        }
+        // 注意：不在init中创建ProcessMemoryManager
+        // ProcessMemoryManager的创建延迟到具体需要时（fork、user_init、execve等）
+        _memory_manager = nullptr;
     }
 
     void Pcb::cleanup_sighand()
@@ -187,15 +185,27 @@ namespace proc
     {
         if (_memory_manager != nullptr)
         {
-            // 检查引用计数，如果需要释放则释放资源
-            if (_memory_manager->put())
+            // 直接调用 free_all_memory()，它内部会检查和减少引用计数
+            _memory_manager->free_all_memory();
+            
+            // free_all_memory() 减少了引用计数，如果原来的引用计数<=1，则资源已被释放
+            // 现在检查当前引用计数，如果<=0则删除对象
+            if (_memory_manager->get_ref_count() <= 0)
             {
-                // 引用计数降至0，需要释放
-                _memory_manager->free_all_memory();
                 delete _memory_manager;
             }
             _memory_manager = nullptr;
         }
+    }
+
+    // 设置新的内存管理器
+    void Pcb::set_memory_manager(ProcessMemoryManager* mm)
+    {
+        // 先清理当前的内存管理器
+        cleanup_memory_manager();
+        
+        // 设置新的内存管理器
+        _memory_manager = mm;
     }
 
     void Pcb::cleanup_ofile()
@@ -414,13 +424,6 @@ namespace proc
     }
 
     
-    void Pcb::free_all_memory_resources()
-    {
-        if (_memory_manager)
-        {
-            _memory_manager->free_all_memory();
-        }
-    }
 
     void Pcb::emergency_memory_cleanup()
     {

@@ -16,6 +16,7 @@
 #include "signal.hh"
 #include "process_memory_manager.hh"
 #include "cpu.hh"
+#include "param.h"
 
 // CPU掩码定义，兼容Linux的cpu_set_t
 struct CpuMask
@@ -29,7 +30,7 @@ struct CpuMask
     void clear(int cpu) { bits &= ~(1ULL << cpu); }
     bool is_set(int cpu) const { return (bits & (1ULL << cpu)) != 0; }
     void zero() { bits = 0; }
-    void fill() { bits = (1ULL << NUMCPU) - 1 }
+    void fill() { bits = (1ULL << NUMCPU) - 1 ;}
     bool empty() const { return bits == 0; }
 };
 namespace fs
@@ -192,6 +193,8 @@ namespace proc
         void cleanup_ofile();   // 释放ofile资源的方法
         void cleanup_sighand(); // 释放sighand_struct资源的方法
         void cleanup_memory_manager(); // 释放ProcessMemoryManager资源
+        void set_memory_manager(ProcessMemoryManager* mm); // 设置新的内存管理器
+        ProcessMemoryManager* get_memory_manager() { return _memory_manager; } // 获取内存管理器
         void map_kstack(mem::PageTable &pt);
         fs::dentry *get_cwd() { return _cwd; }
         int get_priority();
@@ -216,8 +219,7 @@ namespace proc
         // 内存一致性检查方法（内部使用）
         bool verify_memory_consistency();
 
-        // 内存管理接口
-        void free_all_memory_resources();        // 释放所有内存资源
+        // 其他内存管理接口
         void emergency_memory_cleanup();         // 紧急内存清理
         bool check_memory_leaks() const;         // 检查内存泄漏
         void print_detailed_memory_info() const; // 打印详细内存信息
@@ -333,6 +335,10 @@ namespace proc
         { 
             return _memory_manager ? _memory_manager->heap_end : 0;
         }
+        uint64 get_heap_size() const 
+        { 
+            return _memory_manager ? (_memory_manager->heap_end - _memory_manager->heap_start) : 0;
+        }
         void set_heap_start(uint64 start_addr) 
         { 
             if (_memory_manager) {
@@ -349,13 +355,7 @@ namespace proc
         // 内存大小访问方法：通过ProcessMemoryManager
         uint64 get_size() const 
         { 
-            return _memory_manager ? _memory_manager->total_memory_size : 0;
-        }
-        void set_size(uint64 sz) 
-        { 
-            if (_memory_manager) {
-                _memory_manager->total_memory_size = sz;
-            }
+            return _memory_manager ? _memory_manager->get_total_memory_usage() : 0;
         }
 
         ProcState get_state() const { return _state; }

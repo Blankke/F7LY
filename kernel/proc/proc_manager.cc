@@ -168,21 +168,8 @@ namespace proc
                     return nullptr;
                 }
 
-                // 初始化内存管理信息（_sz现在由内部自动管理）
-                p->reset_memory_sections();
-                p->set_shared_vm(false); // 不共享虚拟内存
-
-                // 初始化虚拟内存区域管理
-                p->set_vma(new VMA());
-                // VMA引用计数现在由ProcessMemoryManager统一管理
-                for (int i = 0; i < NVMA; ++i)
-                {
-                    p->get_vma()->_vm[i].used = 0; // 标记所有VMA为未使用
-                }
-
-#ifdef LOONGARCH
-                p->elf_base = 0; // 初始化ELF加载基地址
-#endif
+                // 注意：不再在alloc_proc中创建ProcessMemoryManager
+                // ProcessMemoryManager的创建延迟到fork函数中，对于user_init和execve则在相应函数中创建
 
                 /****************************************************************************************
                  * 上下文切换初始化
@@ -260,30 +247,6 @@ namespace proc
                 p->_cstime = 0;                // 子进程系统态时间累计
                 p->_start_time = cur_tick;     // 进程启动时间
                 p->_start_boottime = cur_tick; // 自系统启动以来的启动时间
-
-                /****************************************************************************************
-                 * 程序段描述初始化
-                 ****************************************************************************************/
-                p->set_prog_section_count(0); // 清空程序段计数
-                program_section_desc* sections = p->get_prog_sections();
-                for (int i = 0; i < max_program_section_num; ++i)
-                {
-                    sections[i]._sec_start = nullptr;
-                    sections[i]._sec_size = 0;
-                    sections[i]._debug_name = nullptr;
-                }
-
-                /****************************************************************************************
-                 * 页表创建
-                 ****************************************************************************************/
-                // 创建进程自己的页表（空的页表）
-                _proc_create_vm(p);
-                if (p->get_pagetable()->get_base() == 0)
-                {
-                    freeproc_creation_failed(p); // 使用专门的创建失败清理函数
-                    p->_lock.release();
-                    return nullptr;
-                }
 
                 // 更新上次分配的位置，轮转分配策略
                 _last_alloc_proc_gid = p->_global_id;
@@ -538,18 +501,16 @@ namespace proc
             p->set_trapframe(nullptr);
         }
 
-        // 如果已经创建了页表，需要释放
-        if (p->get_pagetable()->get_base() != 0)
+        // 如果已经创建了ProcessMemoryManager，需要释放
+        ProcessMemoryManager* mm = p->get_memory_manager();
+        if (mm != nullptr)
         {
-            p->get_pagetable()->dec_ref(); // 减少引用计数，如果为0会自动释放
-        }
-
-        // 如果已经分配了其他资源，也需要释放
-        if (p->get_vma() != nullptr)
-        {
-            // VMA现在由ProcessMemoryManager统一管理
-            delete p->get_vma();
-            p->set_vma(nullptr);
+            mm->emergency_cleanup(); // 使用紧急清理，避免正常流程
+            if (mm->get_ref_count() <= 1)
+            {
+                delete mm;
+            }
+            p->set_memory_manager(nullptr);
         }
 
         // 调用标准的PCB清理
@@ -652,7 +613,7 @@ namespace proc
 #ifdef RISCV
         if (mem::k_vmm.map_pages(pt, TRAMPOLINE, PGSIZE, (uint64)trampoline, riscv::PteEnum::pte_readable_m | riscv::pte_executable_m) == 0)
         {
-            pt.dec_ref();
+            pt.freewalk();
             printfRed("proc_pagetable: map trampoline failed\n");
             return empty_pt;
         }
@@ -660,14 +621,14 @@ namespace proc
         // printfGreen("TRAMPOLINE: %p\n", TRAMPOLINE);
         if (mem::k_vmm.map_pages(pt, TRAPFRAME, PGSIZE, (uint64)(p->get_trapframe()), riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_writable_m) == 0)
         {
-            pt.dec_ref();
+            pt.freewalk();
 
             printfRed("proc_pagetable: map trapframe failed\n");
             return empty_pt;
         }
         if (mem::k_vmm.map_pages(pt, SIG_TRAMPOLINE, PGSIZE, (uint64)sig_trampoline, riscv::PteEnum::pte_readable_m | riscv::pte_executable_m | riscv::PteEnum::pte_user_m) == 0)
         {
-            pt.dec_ref();
+            pt.freewalk();
 
             panic("proc_pagetable: map sigtrapframe failed\n");
             return empty_pt;
@@ -676,14 +637,14 @@ namespace proc
 #elif defined(LOONGARCH)
         if (mem::k_vmm.map_pages(pt, TRAPFRAME, PGSIZE, (uint64)(p->_trapframe), PTE_V | PTE_NX | PTE_P | PTE_W | PTE_R | PTE_MAT | PTE_D) == 0)
         {
-            pt.dec_ref();
+            pt.freewalk();
             printfRed("proc_pagetable: map trapframe failed\n");
             return empty_pt;
         }
         if (mem::k_vmm.map_pages(pt, SIG_TRAMPOLINE, PGSIZE, (uint64)sig_trampoline, PTE_P | PTE_MAT | PTE_D | PTE_U) == 0)
         {
             printf("Fail to map sig_trampoline\n");
-            pt.dec_ref();
+            pt.freewalk();
             return empty_pt;
         }
 #endif
@@ -701,8 +662,8 @@ namespace proc
         mem::k_vmm.vmunmap(pt, TRAPFRAME, 1, 0);
         mem::k_vmm.vmunmap(pt, SIG_TRAMPOLINE, 1, 0);
 
-        // 减少页表引用计数，让页表自己管理生命周期
-        pt.dec_ref();
+        // 释放页表
+        pt.freewalk();
     }
 
     void ProcessManager::user_init()
@@ -723,6 +684,20 @@ namespace proc
         }
 
         _init_proc = p;
+
+        // 为init进程创建ProcessMemoryManager
+        ProcessMemoryManager* init_mm = new ProcessMemoryManager();
+        
+        // 完成内存管理器的初始化设置
+        if (!init_mm->create_pagetable(p))
+        {
+            panic("user_init: failed to create pagetable for init process");
+            delete init_mm;
+            return;
+        }
+        
+        // 绑定到当前PCB
+        p->set_memory_manager(init_mm);
 
         // 传入initcode的地址
         printfCyan("initcode pagetable: %p\n", p->get_pagetable()->get_base());
@@ -1114,16 +1089,6 @@ namespace proc
         }
         *np->_trapframe = *p->_trapframe; // 拷贝父进程的陷阱值，而不是直接指向, 后面有可能会修改
 
-        // 复制程序段信息
-        np->copy_program_sections(p);
-
-        // 复制堆信息
-        np->set_heap_start(p->get_heap_start());
-        np->set_heap_end(p->get_heap_end());
-
-        // _sz现在由程序段管理自动计算，确保正确更新
-        np->update_total_memory_size();
-
         _wait_lock.acquire();
         np->_parent = p;
         _wait_lock.release();
@@ -1214,71 +1179,37 @@ namespace proc
                 }
             }
         }
-        mem::PageTable *curpt, *newpt;
-        curpt = p->get_pagetable();
-        newpt = np->get_pagetable();
         if (flags & syscall::CLONE_VM)
         {
-            // 共享虚拟内存：新进程共享父进程的页表
-            np->get_pagetable()->share_from(*p->get_pagetable()); // 共享父进程的页表
+            // 共享虚拟内存：新进程共享父进程的内存管理器
+            // 需要获取父进程内存管理器的指针
+            ProcessMemoryManager* parent_mm = p->get_memory_manager();
+            if (parent_mm != nullptr)
+            {
+                np->set_memory_manager(parent_mm->share_for_thread());
+            }else{
+                panic("[fork] parent memory_manager is null");
+            }
 
-            np->set_vma(p->get_vma());  // 继承父进程的虚拟内存区域映射
-            // VMA引用计数现在由ProcessMemoryManager统一管理（原子操作）
-
-            // 在共享页表的情况下，需要标记为共享虚拟内存
-            // 因为子进程有自己的trapframe，但共享父进程的页表
-            // 我们需要在usertrapret时动态映射正确的trapframe
-            np->set_shared_vm(true); // 标记为共享虚拟内存
-
-            printfCyan("[clone] Using shared page table for process %d (parent %d)\n",
+            printfCyan("[clone] Using shared memory manager for process %d (parent %d)\n",
                        np->_pid, p->_pid);
         }
         else
         {
-            // 复制进程的所有内存段
-            bool copy_success = true;
-
-            // 复制程序段
-            for (int i = 0; i < p->get_prog_section_count(); i++)
+            // fork 操作：创建独立的内存管理器副本
+            ProcessMemoryManager* parent_mm = p->get_memory_manager();
+            if (parent_mm != nullptr)
             {
-                const program_section_desc *sections = p->get_prog_sections();
-                uint64 start = (uint64)sections[i]._sec_start;
-                uint64 size = sections[i]._sec_size;
-
-                if (mem::k_vmm.vm_copy(*curpt, *newpt, start, size) < 0)
+                ProcessMemoryManager* cloned_mm = parent_mm->clone_for_fork(np);
+                if (cloned_mm == nullptr)
                 {
-                    copy_success = false;
-                    break;
+                    panic("[fork] clone failed");
+                    freeproc_creation_failed(np); // 使用专门的创建失败清理函数
+                    np->_lock.release();
+                    panic("fork failed: memory copy failed");
+                    return nullptr;
                 }
-            }
-
-            // 复制堆
-            if (copy_success && p->get_heap_size() > 0)
-            {
-                if (mem::k_vmm.vm_copy(*curpt, *newpt, p->get_heap_start(), p->get_heap_size()) < 0)
-                {
-                    copy_success = false;
-                }
-            }
-
-            if (!copy_success)
-            {
-                freeproc_creation_failed(np); // 使用专门的创建失败清理函数
-                np->_lock.release();
-                panic("fork failed");
-                return nullptr;
-            }
-            for (i = 0; i < NVMA; ++i)
-            {
-                if (p->get_vma()->_vm[i].used)
-                {
-                    memmove(&np->get_vma()->_vm[i], &p->get_vma()->_vm[i], sizeof(p->get_vma()->_vm[i]));
-                    // 只对文件映射增加引用计数
-                    if (p->get_vma()->_vm[i].vfile != nullptr)
-                    {
-                        p->get_vma()->_vm[i].vfile->dup(); // 增加引用计数
-                    }
-                }
+                np->set_memory_manager(cloned_mm);
             }
         }
 
@@ -1728,8 +1659,7 @@ namespace proc
          ****************************************************************************************/
 
         // 使用ProcessMemoryManager统一处理内存释放
-        ProcessMemoryManager memory_mgr(p);
-        memory_mgr.free_all_memory(); // 释放所有内存资源（VMA、程序段、堆、页表、trapframe等）
+        p->cleanup_memory_manager(); // 释放所有内存资源（VMA、程序段、堆、页表、trapframe等）
 
         // 关闭文件描述符表，释放文件资源
         p->cleanup_ofile();
@@ -2750,8 +2680,11 @@ namespace proc
         //              p->get_name(), p->get_pid(), addr, length);
 
         // 使用ProcessMemoryManager进行统一的内存管理
-        ProcessMemoryManager memory_mgr(p);
-        int result = memory_mgr.unmap_memory_range(addr, length);
+        ProcessMemoryManager* memory_mgr = p->get_memory_manager();
+        if (memory_mgr == nullptr) {
+            return -1;
+        }
+        int result = memory_mgr->unmap_memory_range(addr, length);
 
         if (result == 0)
         {
@@ -4119,38 +4052,22 @@ namespace proc
         mem::PageTable old_pt;
         old_pt = *proc->get_pagetable(); // 获取当前进程的页表
 
-        // 使用ProcessMemoryManager进行完整的内存清理
-        ProcessMemoryManager memory_mgr(proc);
-
-        // execve需要清理原进程的所有内存空间，包括：
-        // 1. 程序段（代码段、数据段等）
-        // 2. 堆内存（malloc/brk分配的内存）
-        // 3. VMA映射（mmap创建的映射）
-        // 注意：不释放trapframe和页表结构，因为新程序还需要使用
+        // 使用PCB的cleanup_memory_manager进行完整的内存清理
+        // 这会正确处理引用计数并释放ProcessMemoryManager对象
+        proc->cleanup_memory_manager();
 
         printfBlue("execve: cleaning up old process memory space\n");
 
-        // 清理程序段
-        memory_mgr.free_all_program_sections();
-
-        // 清理堆内存
-        memory_mgr.free_heap_memory();
-
-        // 清理VMA映射 - 使用统一的VMA管理接口
-        // execve应该清除所有VMA映射，因为新程序有自己的内存布局
-        memory_mgr.free_all_vma();
-
-        printfGreen("execve: old process memory space cleaned up\n");
-
-        printfBlue("execve: adding %d program sections to process\n", new_sec_cnt);
-
-        // 首先清空所有旧的程序段记录
-        proc->clear_all_program_sections();
-
-        // 将所有记录的段添加到进程中，使用Pcb的add_program_section方法
+        // 为execve创建新的ProcessMemoryManager
+        ProcessMemoryManager* new_mm = new ProcessMemoryManager();
+        
+        // 设置新页表到新的内存管理器
+        new_mm->pagetable = new_pt;
+        
+        // 将所有记录的段添加到新内存管理器中
         for (int i = 0; i < new_sec_cnt; i++)
         {
-            int section_index = proc->add_program_section(
+            int section_index = new_mm->add_program_section(
                 new_sec_desc[i]._sec_start,
                 new_sec_desc[i]._sec_size,
                 new_sec_desc[i]._debug_name);
@@ -4158,6 +4075,7 @@ namespace proc
             if (section_index < 0)
             {
                 printfRed("execve: failed to add program section %d\n", i);
+                delete new_mm;
                 ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
@@ -4172,12 +4090,19 @@ namespace proc
         {
             printfYellow("execve: warning - no program sections were recorded\n");
             // 为兼容性添加一个总段，使用highest_addr作为大小参考
-            proc->add_program_section((void *)0, PGROUNDUP(highest_addr), "fallback_program");
+            new_mm->add_program_section((void *)0, PGROUNDUP(highest_addr), "fallback_program");
         }
 
         // **重构：使用highest_addr初始化堆**
         // 在所有已分配的内存区域之后初始化堆
-        proc->init_heap(PGROUNDUP(highest_addr));
+        new_mm->init_heap(PGROUNDUP(highest_addr));
+        
+        // 完成新内存管理器的设置后，绑定到当前PCB
+        proc->set_memory_manager(new_mm);
+
+        printfGreen("execve: old process memory space cleaned up\n");
+
+        printfBlue("execve: added %d program sections to process\n", new_sec_cnt);
 
         uint64 entry_point;
         if (is_dynamic)

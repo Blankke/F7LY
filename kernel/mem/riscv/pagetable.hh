@@ -11,12 +11,12 @@ namespace mem
 	{
 	private:
 		uint64 _base_addr;
-        // 阶段1注释：_ref引用计数将被移除，统一使用ProcessMemoryManager的引用计数
-        // int* _ref = nullptr; // 引用计数指针，用于支持clone CLONE_VM标志位
+		// 阶段1注释：_ref引用计数将被移除，统一使用ProcessMemoryManager的引用计数
+		// int* _ref = nullptr; // 引用计数指针，用于支持clone CLONE_VM标志位
 		bool _is_global = false;
 
 	public:
-		PageTable() {};
+		PageTable() { _base_addr = 0; };
 		PageTable(uint64 addr) { _base_addr = addr; };
 		~PageTable() { /* 注意：不在析构函数中调用dec_ref，而是显式调用 */ }
 		void set_base(uint64 addr) { _base_addr = addr; }
@@ -51,7 +51,7 @@ namespace mem
 		void freewalk_mapped();
 
 		Pte kwalkaddr(uint64 va);
-		ulong kwalk_addr( uint64 va );
+		ulong kwalk_addr(uint64 va);
 		uint64 dir_num(int level, uint64 va);
 
 		uint64 get_pte_data(uint64 index) { return (uint64)((pte_t *)_base_addr)[index]; }
@@ -63,7 +63,7 @@ namespace mem
 		Pte &get_pte_ref(uint64 index)
 		{
 			// printfCyan("_base_addr)[index]: %d\n", (uint64 *) (_base_addr)[index]);
-			printfCyan("_base_addr)[index]: %p\n", ((pte_t *)_base_addr)[index] );
+			printfCyan("_base_addr)[index]: %p\n", ((pte_t *)_base_addr)[index]);
 			printfBlue("index: %d\n", index);
 			printfBlue("current_pt: %p\n", _base_addr);
 			return *(Pte *)&(((pte_t *)_base_addr)[index]);
@@ -80,8 +80,8 @@ namespace mem
 	extern PageTable k_pagetable;
 }
 
-	constexpr bool is_page_align( uint64 addr )
-	{
-		ulong pg_sz =PGSIZE;
-		return ( addr & ( pg_sz - 1 ) ) == 0;
-	}
+constexpr bool is_page_align(uint64 addr)
+{
+	ulong pg_sz = PGSIZE;
+	return (addr & (pg_sz - 1)) == 0;
+}

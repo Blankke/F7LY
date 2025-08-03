@@ -230,11 +230,10 @@ namespace mem
             }
             else if (pte.is_valid())
             {
-                ///@todo!!!!!!!!!!!目前无视风险，继续访问！！！！！！
                 // printfRed("freewalk: leaf pte[%d]: %p, pte2pa: %p\n", i, pte.get_data(), pte.pa());
                 // 打印当前页表项va
-                // printfRed("freewalk: leaf pte[%d]: %p, pte2pa: %p, va: %p\n", i, pte.get_data(), pte.pa(), (void *)(get_base() + 8 * i));
-                // panic("freewalk: leaf");
+                printfRed("freewalk: leaf pte[%d]: %p, pte2pa: %p, va: %p\n", i, pte.get_data(), pte.pa(), (void *)(get_base() + 8 * i));
+                panic("freewalk: leaf");
             }
         }
         k_pmm.free_page((void *)(get_base()));

@@ -245,21 +245,15 @@ void trap_manager::usertrapret(void)
   // 记录进入用户态的时间点
   p->_last_user_tick = cur_tick;
 
-  // 检查进程是否使用共享虚拟内存，如果是则需要动态映射trapframe
-  if (p->get_shared_vm() || p->get_pagetable()->get_ref_count() > 1) {
-    // 页表被共享，需要动态重新映射trapframe
-    printfCyan("[usertrapret] Page table shared (ref count: %d), dynamically mapping trapframe for pid %d\n", 
-               p->get_pagetable()->get_ref_count(), p->_pid);
-    
-    // 取消当前trapframe的映射
-    mem::k_vmm.vmunmap(*p->get_pagetable(), TRAPFRAME, 1, 0);
-    
-    // 重新映射当前进程的trapframe
-    if (mem::k_vmm.map_pages(*p->get_pagetable(), TRAPFRAME, PGSIZE, (uint64)(p->get_trapframe()), 
-                             PTE_V | PTE_NX | PTE_P | PTE_W | PTE_R | PTE_MAT | PTE_D) == 0)
-    {
-      panic("usertrapret: failed to dynamically map trapframe");
-    }
+  // 统一在usertrapret时动态映射trapframe
+  // 取消当前trapframe的映射
+  mem::k_vmm.vmunmap(*p->get_pagetable(), TRAPFRAME, 1, 0);
+
+  // 重新映射当前进程的trapframe
+  if (mem::k_vmm.map_pages(*p->get_pagetable(), TRAPFRAME, PGSIZE, (uint64)(p->get_trapframe()),
+                           PTE_V | PTE_NX | PTE_P | PTE_W | PTE_R | PTE_MAT | PTE_D) == 0)
+  {
+    panic("usertrapret: failed to dynamically map trapframe");
   }
 
   intr_off();
