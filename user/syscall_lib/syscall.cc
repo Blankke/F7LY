@@ -207,6 +207,11 @@ char *getcwd(char *buf, size_t size)
     return (char*)syscall(syscall::SYS_getcwd, buf, size);
 }
 
+int lseek(int fd, off_t offset, int whence)
+{
+    return syscall(syscall::SYS_lseek, fd, offset, whence);
+}
+
 int chdir(const char *path)
 {
     return syscall(syscall::SYS_chdir, path);
