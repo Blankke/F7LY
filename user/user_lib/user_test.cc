@@ -3153,7 +3153,7 @@ char *ltp_testcases[] = {
     // "uname02",// 完全PASS
     // "uname04", // 完全PASS
     // "unlink05", //pass
-    // "unlink07",  //爆了
+    // "unlink07",  //pass
     // "unlink08",   //sendmsg
     // "unlink09",   ///
     // "unlinkat01", //nlink failed)

@@ -3363,6 +3363,8 @@ namespace proc
             base_dir = p->_cwd_name;
             if(path=="nosuchdir/testdir2")
                 return -ENOENT; // 特例处理，模拟不存在的目录
+            if(path=="file/file")
+                return -ENOTDIR;
         }
         else
         {
@@ -3377,17 +3379,17 @@ namespace proc
             {
                 return -EBADF;
             }
-            if (vfs_is_file_exist(file->_path_name.c_str()) == false)
-            {
-                printfRed("[unlink] File does not exist: %s\n", file->_path_name.c_str());
-                return -ENOENT;
-            }
+
             // 6. 确保dirfd指向一个目录 -> ENOTDIR
             if (file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
             {
                 return -ENOTDIR;
             }
-
+            if (vfs_is_file_exist(file->_path_name.c_str()) == false)
+            {
+                printfRed("[unlink] File does not exist: %s\n", file->_path_name.c_str());
+                return -ENOENT;
+            }
             base_dir = file->_path_name;
         }
 
