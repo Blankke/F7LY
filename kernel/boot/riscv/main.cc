@@ -22,7 +22,6 @@
 #include "tm/timer_manager.hh"
 #include "proc/scheduler.hh"
 #include "syscall_handler.hh"
-#include "devs/riscv/disk_driver.hh"
 #include "devs/device_manager.hh"
 #include "devs/loop_device.hh"
 #include "fs/vfs/file/device_file.hh"
@@ -38,6 +37,7 @@
 #include "fs/vfs/virtual_fs.hh"
 #include "shm/shm_manager.hh"
 #include "fs/vfs/fifo_manager.hh"
+#include "net/drivers/virtio_net.hh"
 // 注意华科的main函数可能有问题, 注意多核初始化
 void main()
 {
@@ -78,7 +78,6 @@ void main()
 
     // hardware_secondary_init
     //  2. Disk 初始化 (debug)
-    new (&riscv::qemu::disk_driver) riscv::qemu::DiskDriver("Disk");
 
     tmm::k_tm.init("timer manager");
     // fs::k_bufm.init("buffer manager");
@@ -105,6 +104,42 @@ void main()
 
         printfMagenta("user init\n");
 
+    // 网络驱动测试
+    printfCyan("=== Testing VirtIO Network Driver ===\n");
+    virtio_net::virtio_net_init();
+    
+    // 显示设备状态
+    virtio_net::virtio_net_debug_status();
+    
+    // 获取并显示MAC地址
+    uint8 mac[6];
+    virtio_net::virtio_net_get_mac(mac);
+    printfGreen("Network MAC: %02x:%02x:%02x:%02x:%02x:%02x\n", 
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    
+    // 测试发送ARP包
+    printfYellow("Sending test ARP packet...\n");
+    int result = virtio_net::virtio_net_test_send();
+    if (result == 0) {
+        printfGreen("✓ ARP packet sent successfully\n");
+    } else {
+        printfRed("✗ Failed to send ARP packet: %d\n", result);
+    }
+    
+    // 发送后再次检查状态
+    printfYellow("Checking device status after send...\n");
+    virtio_net::virtio_net_debug_status();
+    
+    // 尝试接收数据包
+    printfYellow("Checking for received packets...\n");
+    for (int i = 0; i < 5; i++) {
+        if (virtio_net::virtio_net_test_recv() == 0) {
+            printfGreen("✓ Found received packet!\n");
+            break;
+        }
+    }
+    
+    printfCyan("=== Network Test Complete ===\n");
     printfMagenta("\n"
                   "╦ ╦╔═╗╦  ╔═╗╔═╗╔╦╗╔═╗\n"
                   "║║║║╣ ║  ║  ║ ║║║║║╣\n"

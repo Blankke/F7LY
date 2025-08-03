@@ -17,7 +17,7 @@
 #include "process_memory_manager.hh" // 新增：进程内存管理器
 #include "shm_manager.hh"
 #ifdef RISCV
-#include "devs/riscv/disk_driver.hh"
+// #include "devs/riscv/disk_driver.hh"
 #elif defined(LOONGARCH)
 #include "devs/loongarch/disk_driver.hh"
 #endif

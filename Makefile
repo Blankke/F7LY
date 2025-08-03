@@ -71,7 +71,7 @@ LDFLAGS := -static -nostdlib -nostartfiles -nodefaultlibs -Wl,-z,max-page-size=4
 # 包含头文件路径：架构特定目录 + 通用目录 + 有架构子目录的文件夹根目录
 INCLUDES := -I$(KERNEL_DIR) $(foreach dir,$(SUBDIRS),-I$(KERNEL_DIR)/$(dir))
 INCLUDES += -I$(KERNEL_DIR)/mem -I$(KERNEL_DIR)/devs -I$(KERNEL_DIR)/trap -I$(KERNEL_DIR)/hal -I$(KERNEL_DIR)/proc -I$(KERNEL_DIR)/boot
-INCLUDES += -I$(KERNEL_DIR)/fs
+INCLUDES += -I$(KERNEL_DIR)/fs -I$(KERNEL_DIR)/net
 INCLUDES += -I$(EASTL_DIR)/include -I$(EASTL_DIR)/include/EASTL -I$(EASTL_DIR)/test/packages/EABase/include/Common
 INCLUDES += -I$(KERNEL_DIR)/fs
 # ===== 文件收集规则 =====
@@ -96,6 +96,10 @@ SRCS += $(shell find $(KERNEL_DIR)/boot -maxdepth 1 -type f \
 
 # 收集 fs 目录中的所有文件（fs 没有架构特定子目录）
 SRCS += $(shell find $(KERNEL_DIR)/fs -type f \
+        \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
+
+# 收集 net 目录中的所有文件（net 没有架构特定子目录）
+SRCS += $(shell find $(KERNEL_DIR)/net -type f \
         \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
 
 $(info === SRCS collected ===)
@@ -180,6 +184,9 @@ build-la: dirs $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a $(KERNEL_BIN)
 dirs:
 	@mkdir -p $(BUILD_DIR)
 	@for dir in $(SUBDIRS); do mkdir -p $(BUILD_DIR)/$$dir; done
+	@mkdir -p $(BUILD_DIR)/fs $(BUILD_DIR)/net
+	@find $(KERNEL_DIR)/fs -type d | sed 's|$(KERNEL_DIR)/|$(BUILD_DIR)/|' | xargs mkdir -p
+	@find $(KERNEL_DIR)/net -type d | sed 's|$(KERNEL_DIR)/|$(BUILD_DIR)/|' | xargs mkdir -p
 
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.c
 	@mkdir -p $(dir $@)
