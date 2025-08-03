@@ -2539,9 +2539,9 @@ char *ltp_testcases[] = {
     // "statfs03_64",
     // "statvfs01",
     // "statvfs02", //pass
-    // "statx01",  //uid
-    // "statx02",  //symlink
-    // "statx03",// 爆了
+    // "statx01",  //一直游到海水变蓝
+    // "statx02",  //pass4 fail1
+    // "statx03",// pass6 fail1
     // "statx04",   //bin/sh
     // "statx05",
     // "statx06",
@@ -2555,9 +2555,9 @@ char *ltp_testcases[] = {
     // "stime02",
     // "stop_freeze_sleep_thaw_cont.sh",
     // "stop_freeze_thaw_cont.sh",
-    // "stream01",   //爆了
+    // "stream01",   //pass
     // "stream02",   //pass
-    // "stream03", // stream03.c:249: strlen(junk)=26: file pointer descrepancy 5 (opos=0)
+    // "stream03", //pass
     // "stream04",  //pass
     // "stream05", //pass
     // "stress",
@@ -2573,7 +2573,7 @@ char *ltp_testcases[] = {
     // "symlink02",  //pass
     // "symlink03",   //sendmsg
     // "symlink04", //pass
-    // "symlinkat01",
+    // "symlinkat01", //pass
     // "sync_file_range01",
     // "sync_file_range02",
     // "sync01",
@@ -3153,9 +3153,9 @@ char *ltp_testcases[] = {
     // "uname02",// 完全PASS
     // "uname04", // 完全PASS
     // "unlink05", //pass
-    // "unlink07",  //爆了
+    // "unlink07",  //pass
     // "unlink08",   //sendmsg
-    // "unlink09",   ///
+    // "unlink09",   //pass
     // "unlinkat01", //nlink failed)
     // "unshare01",
     // "unshare01.sh",

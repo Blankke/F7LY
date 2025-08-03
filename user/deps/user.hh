@@ -42,6 +42,7 @@ int mount(const char *special, const char *dir, const char *fstype, unsigned lon
 int umount(const char *special);
 int fork(void);
 char *getcwd(char *buf, size_t size);
+int lseek(int fd, off_t offset, int whence);
 // proc
 int shutdown();
 

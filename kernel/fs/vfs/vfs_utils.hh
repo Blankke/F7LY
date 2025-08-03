@@ -5,6 +5,9 @@
 // 将flags转换为可读的字符串表示
 eastl::string flags_to_string(uint flags);
 
+// 路径规范化函数：处理 . 和 ..
+eastl::string normalize_path(const eastl::string &path);
+
 int vfs_openat(eastl::string absolute_path, fs::file* &file, uint flags, int mode);
 int vfs_is_dir(eastl::string &absolute_path);
 int vfs_path2filetype(eastl::string &absolute_path);

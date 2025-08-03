@@ -55,6 +55,7 @@
 #include "devs/loop_device.hh"
 #include "devs/block_device.hh"
 #include "EASTL/map.h"
+#include "fs/debug.hh"
 namespace syscall
 {
     // 创建全局的 SyscallHandler 实例
@@ -311,6 +312,7 @@ namespace syscall
             if (!(sys_num == 64 && p->_trapframe->a0 == 1) && !(sys_num == 66 && p->_trapframe->a0 == 1))
                 // if (!(sys_num == 64) && !(sys_num == 66))
                 printfCyan("[SyscallHandler::invoke_syscaller]syscall name: %s ret: %d\n", _syscall_name[sys_num], ret);
+            debug_fd_4();
             p->_trapframe->a0 = ret; // 设置返回值
         }
         //     if (sys_num != 64 && sys_num != 66)
@@ -676,7 +678,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_read] File descriptor %d is not open\n", fd);
             return -EBADF;
         }
-        printfCyan("[SyscallHandler::sys_read] fd: %d, buf: %p, n: %d\n", fd, (void *)buf, n);
+
         // https://www.man7.org/linux/man-pages/man2/read.2.html
 
         if (n <= 0)
@@ -719,23 +721,34 @@ namespace syscall
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
 
-        char *k_buf = new char[n + 1];
+        char *k_buf = (char *)mem::k_pmm.kmalloc(n + 10);
         int ret = f->read((uint64)k_buf, n, f->get_file_offset(), true);
         if (ret < 0)
+        {
+            printfRed("[SyscallHandler::sys_read] Error reading file descriptor %d: %d\n", fd, ret);
+            mem::k_pmm.free_page(k_buf);
             return ret;
-
+        }
         static int string_length = 0;
         string_length += strlen(k_buf);
         // printf("[sys_read] read %d characters in total\n", string_length);
         // 添加调试打印，显示读取到的内容
         k_buf[ret] = '\0'; // 确保字符串以null结尾
-        printfYellow("[sys_read] fd=%d, read %d bytes: \"%s\"\n", fd, ret, k_buf);
+        // printfYellow("[sys_read] fd=%d, read %d bytes: \"%s\"\n", fd, ret, k_buf);
+
+        // 打印前64个字节（或实际读取的字节数）
+        int print_len = ret < 64 ? ret : 64;
+        printfYellow("just for [copy file range] test, fd=%d, read %d bytes, first %d bytes: \"", fd, ret, print_len);
+        for (int i = 0; i < print_len; ++i)
+        {
+            printf("%2x ", (unsigned char)k_buf[i]);
+        }
+        printf("\"\n");
 
         if (mem::k_vmm.copy_out(*pt, buf, k_buf, ret) < 0)
             return -EFAULT;
 
-        delete[] k_buf;
-
+        mem::k_pmm.free_page(k_buf);
         return ret;
     }
     uint64 SyscallHandler::sys_kill()
@@ -1266,7 +1279,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_write] Invalid address: %p\n", (void *)p);
             return SYS_EFAULT;
         }
-
+        printfCyan("[SyscallHandler::sys_write] fd: %d, p: %p, n: %d\n", fd, (void *)p, n);
         // 检查文件是否以 O_PATH 标志打开，O_PATH 文件不允许读取
         if (f->lwext4_file_struct.flags & O_PATH)
             return SYS_EBADF;
@@ -1291,7 +1304,8 @@ namespace syscall
         // printf("syscall_write: fd: %d, p: %p, n: %d\n", fd, (void *)p, n);
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = proc->get_pagetable();
-        char *buf = new char[n + 10];
+        char *buf = (char *)mem::k_pmm.kmalloc(n + 10);
+
         // {
         //     mem::UserspaceStream uspace((void *)p, n + 1, pt);
         //     uspace.open();
@@ -1303,11 +1317,12 @@ namespace syscall
         if (mem::k_vmm.copy_in(*pt, buf, p, n) < 0)
         {
             printfRed("[SyscallHandler::sys_write] Error copying data from user space\n");
-            delete[] buf;
+            mem::k_pmm.free_page(buf);
             return -1;
         }
-        long rc = f->write((ulong)buf, n, f->get_file_offset(), true);
-        delete[] buf;
+
+        long rc = f->write((ulong)buf, n, -1, true);
+        mem::k_pmm.free_page(buf);
         return rc;
     }
 
@@ -2729,7 +2744,7 @@ namespace syscall
             if (iov.iov_len == 0)
                 continue;
 
-            char *buf = new char[iov.iov_len];
+            char *buf = (char*)mem::k_pmm.kmalloc(iov.iov_len);
             if (!buf)
             {
                 return SYS_ENOMEM; // Out of memory
@@ -2738,12 +2753,12 @@ namespace syscall
             // Copy data from user space
             if (mem::k_vmm.copy_in(*pt, buf, (uint64)iov.iov_base, iov.iov_len) < 0)
             {
-                delete[] buf;
+                mem::k_pmm.free_page(buf);
                 return SYS_EFAULT; // Bad address
             }
 
             long rc = f->write((ulong)buf, iov.iov_len, f->get_file_offset(), true);
-            delete[] buf;
+                mem::k_pmm.free_page(buf);
 
             if (rc < 0)
             {
@@ -5200,7 +5215,10 @@ namespace syscall
             printfRed("[sys_ftruncate] 文件未以写入模式打开: %d\n", fd);
             return SYS_EINVAL; // 参数无效，文件未以写入模式打开
         }
-        return vfs_truncate(f, length); // 调用vfs_truncate函数进行截断操作
+
+        int result = vfs_truncate(f, length); // 调用vfs_truncate函数进行截断操作
+
+        return result; // 返回截断操作的结果
     }
     uint64 SyscallHandler::sys_pread64()
     {
@@ -5221,24 +5239,24 @@ namespace syscall
         auto old_off = f->get_file_offset();
         f->lseek(offset, SEEK_SET);
 
-        char *kbuf = new char[count];
+        char *kbuf = (char*)mem::k_pmm.kmalloc(count);
         long rc = f->read((ulong)kbuf, count, f->get_file_offset(), true);
         if (rc < 0)
         {
-            delete[] kbuf;
+            mem::k_pmm.free_page(kbuf);
             f->lseek(old_off, SEEK_SET);
             return rc;
         }
 
         if (mem::k_vmm.copy_out(*p->get_pagetable(), buf, kbuf, rc) < 0)
         {
-            delete[] kbuf;
+            mem::k_pmm.free_page(kbuf);
             f->lseek(old_off, SEEK_SET);
             return -1;
         }
 
         f->lseek(old_off, SEEK_SET);
-        delete[] kbuf;
+        mem::k_pmm.free_page(kbuf);
         return rc;
     }
     uint64 SyscallHandler::sys_pwrite64()
@@ -6782,6 +6800,33 @@ namespace syscall
             return SYS_EEXIST;
         }
 
+        // 检查父目录是否存在
+        eastl::string parent_dir;
+        size_t last_slash = abs_linkpath.find_last_of('/');
+        if (last_slash != eastl::string::npos && last_slash > 0)
+        {
+            parent_dir = abs_linkpath.substr(0, last_slash);
+        }
+        else
+        {
+            parent_dir = "/";
+        }
+
+        if (!fs::k_vfs.is_file_exist(parent_dir))
+        {
+            printfRed("[sys_symlinkat] Parent directory does not exist: %s\n", parent_dir.c_str());
+            return SYS_ENOENT;
+        }
+
+        // 检查父目录确实是目录
+        eastl::string parent_str = parent_dir;
+        int parent_type = vfs_path2filetype(parent_str);
+        if (parent_type != fs::FileTypes::FT_DIRECT)
+        {
+            printfRed("[sys_symlinkat] Parent path is not a directory: %s (type: %d)\n", parent_dir.c_str(), parent_type);
+            return SYS_ENOTDIR;
+        }
+
         // 检查是否为虚拟文件系统路径
         if (fs::k_vfs.is_filepath_virtual(abs_linkpath))
         {
@@ -7729,8 +7774,8 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             printfRed("[sys_copy_file_range] Invalid flags\n");
             return -EINVAL;
         }
-        printfBgCyan("[sys_copy_file_range] fd_in=%d, off_in_addr=%p, fd_out=%d, off_out_addr=%p, len=%zu, flags=%u\n",
-                     fd_in, (void *)off_in_addr, fd_out, (void *)off_out_addr, len, flags);
+        printfBlue("[sys_copy_file_range] fd_in=%d, off_in_addr=%p, fd_out=%d, off_out_addr=%p, len=%zu, flags=%u\n",
+                   fd_in, (void *)off_in_addr, fd_out, (void *)off_out_addr, len, flags);
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
 
@@ -7811,7 +7856,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
         // 初始化缓冲区以便调试
         memset(buf, 0, len);
 
-        printfBgCyan("[sys_copy_file_range] Allocated buffer at %p, size %zu\n", buf, len);
+        printfBlue("[sys_copy_file_range] Allocated buffer at %p, size %zu\n", buf, len);
 
         ssize_t read_len = 0;
         ssize_t ret = 0;
@@ -7820,8 +7865,9 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
         if (off_in_addr == 0) // NULL pointer
         {
             // 使用文件自身的偏移
-            printfBgCyan("[sys_copy_file_range] Reading from current file position\n");
-            read_len = f_in->read((uint64)buf, len, -1, true);
+            printfBlue("[sys_copy_file_range] Reading from current file position\n");
+            read_len = f_in->read((uint64)buf, len, f_in->get_file_offset(), true);
+            //        int ret = f->read((uint64)k_buf, n, f->get_file_offset(), true);
         }
         else
         {
@@ -7833,10 +7879,10 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
                 return -EFAULT;
             }
 
-            printfBgCyan("[sys_copy_file_range] Reading from offset %ld\n", in_off);
+            printfBlue("[sys_copy_file_range] Reading from offset %ld\n", in_off);
 
             // 检查偏移是否超过文件大小
-            if ((uint64)in_off > f_in->_stat.size)
+            if ((uint64)in_off > f_in->lwext4_file_struct.fsize)
             {
                 mem::k_pmm.free_page(buf);
                 return 0; // 偏移超过文件大小，直接返回0
@@ -7856,7 +7902,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             }
         }
 
-        printfBgCyan("[sys_copy_file_range] Read %ld bytes\n", read_len);
+        printfBlue("[sys_copy_file_range] Read %ld bytes\n", read_len);
 
         if (read_len <= 0)
         {
@@ -7871,20 +7917,20 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
         // 添加数据验证 - 打印前几个字节用于调试
         if (read_len > 0)
         {
-            printfBgCyan("[sys_copy_file_range] First 16 bytes: ");
+            printfBlue("[sys_copy_file_range] First 16 bytes: ");
             for (int i = 0; i < (read_len > 16 ? 16 : read_len); i++)
             {
-                printfBgCyan("%02x ", (unsigned char)buf[i]);
+                printfBlue("%02x ", (unsigned char)buf[i]);
             }
-            printfBgCyan("\n");
+            printfBlue("\n");
         }
 
         // 处理输出偏移
         if (off_out_addr == 0) // NULL pointer
         {
             // 使用文件自身的偏移
-            printfBgCyan("[sys_copy_file_range] Writing to current file position\n");
-            ret = f_out->write((uint64)buf, read_len, -1, true);
+            printfBlue("[sys_copy_file_range] Writing to current file position\n");
+            ret = f_out->write((uint64)buf, read_len, f_out->get_file_offset(), true);
         }
         else
         {
@@ -7896,7 +7942,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
                 return -EFAULT;
             }
 
-            printfBgCyan("[sys_copy_file_range] Writing to offset %ld\n", out_off);
+            printfBlue("[sys_copy_file_range] Writing to offset %ld\n", out_off);
             // 从指定偏移写入，不更新文件指针
             ret = f_out->write((uint64)buf, read_len, out_off, false);
             if (ret > 0)
@@ -7911,7 +7957,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             }
         }
 
-        printfBgCyan("[sys_copy_file_range] Wrote %ld bytes\n", ret);
+        printfBlue("[sys_copy_file_range] Wrote %ld bytes\n", ret);
 
         mem::k_pmm.free_page(buf);
         return ret;
