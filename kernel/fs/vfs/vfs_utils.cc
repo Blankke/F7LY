@@ -12,6 +12,97 @@
 #include "fs/lwext4/ext4.hh"
 #include <EASTL/vector.h>
 
+// 路径规范化函数：处理 . 和 ..
+eastl::string normalize_path(const eastl::string &path)
+{
+    if (path.empty())
+        return path;
+
+    eastl::vector<eastl::string> components;
+    eastl::string current_component;
+    bool is_absolute = (path[0] == '/');
+
+    // 分割路径组件
+    for (size_t i = 0; i < path.size(); ++i)
+    {
+        if (path[i] == '/')
+        {
+            if (!current_component.empty())
+            {
+                components.push_back(current_component);
+                current_component.clear();
+            }
+        }
+        else
+        {
+            current_component += path[i];
+        }
+    }
+    if (!current_component.empty())
+    {
+        components.push_back(current_component);
+    }
+
+    // 处理 . 和 ..
+    eastl::vector<eastl::string> normalized;
+    for (const auto &comp : components)
+    {
+        if (comp == ".")
+        {
+            // 忽略当前目录
+            continue;
+        }
+        else if (comp == "..")
+        {
+            // 上级目录
+            if (!normalized.empty() && normalized.back() != "..")
+            {
+                normalized.pop_back();
+            }
+            else if (!is_absolute)
+            {
+                // 对于相对路径，保留 ..
+                normalized.push_back(comp);
+            }
+            // 对于绝对路径，根目录的上级还是根目录，所以忽略
+        }
+        else
+        {
+            normalized.push_back(comp);
+        }
+    }
+
+    // 重建路径
+    eastl::string result;
+    if (is_absolute)
+    {
+        result = "/";
+    }
+
+    for (size_t i = 0; i < normalized.size(); ++i)
+    {
+        if (i > 0 || is_absolute)
+        {
+            if (result.back() != '/')
+                result += "/";
+        }
+        result += normalized[i];
+    }
+
+    // 如果结果为空且是绝对路径，返回根目录
+    if (result.empty() && is_absolute)
+    {
+        result = "/";
+    }
+    // 如果结果为空且是相对路径，返回当前目录
+    else if (result.empty())
+    {
+        result = ".";
+    }
+
+    return result;
+}
+
 // 解析符号链接路径
 static int resolve_symlinks(const eastl::string &input_path, eastl::string &resolved_path, int max_depth = 8)
 {
@@ -103,6 +194,9 @@ static int resolve_symlinks(const eastl::string &input_path, eastl::string &reso
                 }
                 new_path += path_parts[j];
             }
+
+            // 标准化路径，处理 . 和 .. 组件
+            new_path = normalize_path(new_path);
 
             printfYellow("Resolving symlink %s -> %s, final path: %s\n",
                          current_path.c_str(), link_path.c_str(), new_path.c_str());

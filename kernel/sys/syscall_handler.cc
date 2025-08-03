@@ -6800,6 +6800,33 @@ namespace syscall
             return SYS_EEXIST;
         }
 
+        // 检查父目录是否存在
+        eastl::string parent_dir;
+        size_t last_slash = abs_linkpath.find_last_of('/');
+        if (last_slash != eastl::string::npos && last_slash > 0)
+        {
+            parent_dir = abs_linkpath.substr(0, last_slash);
+        }
+        else
+        {
+            parent_dir = "/";
+        }
+
+        if (!fs::k_vfs.is_file_exist(parent_dir))
+        {
+            printfRed("[sys_symlinkat] Parent directory does not exist: %s\n", parent_dir.c_str());
+            return SYS_ENOENT;
+        }
+
+        // 检查父目录确实是目录
+        eastl::string parent_str = parent_dir;
+        int parent_type = vfs_path2filetype(parent_str);
+        if (parent_type != fs::FileTypes::FT_DIRECT)
+        {
+            printfRed("[sys_symlinkat] Parent path is not a directory: %s (type: %d)\n", parent_dir.c_str(), parent_type);
+            return SYS_ENOTDIR;
+        }
+
         // 检查是否为虚拟文件系统路径
         if (fs::k_vfs.is_filepath_virtual(abs_linkpath))
         {
