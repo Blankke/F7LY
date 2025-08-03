@@ -373,7 +373,7 @@ namespace virtio_net
         }
 
         // Setup descriptor for device to write incoming packet
-        virtio_net.rx_desc[desc_idx].addr = (uint64)virtio_net.rx_buffers[buf_idx].data;
+        virtio_net.rx_desc[desc_idx].addr = (uint64) mem::k_pagetable.kwalk_addr((uint64)virtio_net.rx_buffers[buf_idx].data);
         virtio_net.rx_desc[desc_idx].len = sizeof(virtio_net.rx_buffers[buf_idx].data);
         virtio_net.rx_desc[desc_idx].flags = VRING_DESC_F_WRITE; // Device writes
         virtio_net.rx_desc[desc_idx].next = 0;
@@ -459,7 +459,7 @@ namespace virtio_net
         virtio_net.tx_buffers[buf_idx].len = len + sizeof(*hdr);
 
         // Setup descriptor for transmission
-        virtio_net.tx_desc[desc_idx].addr = (uint64)virtio_net.tx_buffers[buf_idx].data;
+        virtio_net.tx_desc[desc_idx].addr = (uint64) mem::k_pagetable.kwalk_addr((uint64)virtio_net.tx_buffers[buf_idx].data);
         virtio_net.tx_desc[desc_idx].len = virtio_net.tx_buffers[buf_idx].len;
         virtio_net.tx_desc[desc_idx].flags = 0; // Device reads
         virtio_net.tx_desc[desc_idx].next = 0;
@@ -516,7 +516,7 @@ namespace virtio_net
         for (int i = 0; i < NUM_NET_DESC; i++)
         {
             if (virtio_net.rx_buffers[i].in_use &&
-                (uint64)virtio_net.rx_buffers[i].data == virtio_net.rx_desc[desc_idx].addr)
+                (uint64) mem::k_pagetable.kwalk_addr((uint64)virtio_net.rx_buffers[i].data) == virtio_net.rx_desc[desc_idx].addr)
             {
                 buf_idx = i;
                 break;
@@ -586,7 +586,7 @@ namespace virtio_net
             for (int i = 0; i < NUM_NET_DESC; i++)
             {
                 if (virtio_net.tx_buffers[i].in_use &&
-                    (uint64)virtio_net.tx_buffers[i].data == virtio_net.tx_desc[desc_idx].addr)
+                    (uint64) mem::k_pagetable.kwalk_addr((uint64)virtio_net.tx_buffers[i].data) == virtio_net.tx_desc[desc_idx].addr)
                 {
                     virtio_net.tx_buffers[i].in_use = false;
                     break;
