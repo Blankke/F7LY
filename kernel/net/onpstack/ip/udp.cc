@@ -13,6 +13,7 @@
 #include "netif/netif.hh"
 #include "netif/route.hh"
 #include "onps_input.hh"
+#include "libs/printer.hh"
 #define SYMBOL_GLOBALS
 #include "ip/udp.hh"
 #include "ip/udp_frame.hh" 

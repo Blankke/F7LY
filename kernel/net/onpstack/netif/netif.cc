@@ -293,7 +293,7 @@ PST_NETIF netif_get_by_ip(UINT unNetifIp, BOOL blIsForSending)
             if (NIF_ETHERNET == pstNextNode->stIf.enType)
             {
                 PST_NETIFEXTRA_ETH pstExtra = (PST_NETIFEXTRA_ETH)pstNextNode->stIf.pvExtra; 
-                INT i; 
+                UCHAR i; 
                 for (i = 0; i < ETH_EXTRA_IP_NUM; i++)
                 {
                     if (pstExtra->staExtraIp[i].unAddr)
@@ -372,7 +372,7 @@ PST_NETIF netif_eth_get_by_genmask(UINT unDstIp, in_addr_t *punSrcIp, BOOL blIsF
                 #if ETH_EXTRA_IP_EN
 					//* 然后再遍历附加地址链表，看看是否有匹配的网段吗
 					PST_NETIFEXTRA_ETH pstExtra = (PST_NETIFEXTRA_ETH)pstNextNode->stIf.pvExtra; 
-                    INT i; 
+                    UCHAR i; 
                     for (i = 0; i < ETH_EXTRA_IP_NUM; i++)
                     {
                         if (pstExtra->staExtraIp[i].unAddr && ip_addressing(unDstIp, pstExtra->staExtraIp[i].unAddr, pstExtra->staExtraIp[i].unSubnetMask))
@@ -427,7 +427,7 @@ void netif_eth_set_ip(PST_NETIF pstNetif, in_addr_t unIp, in_addr_t unSubnetMask
 BOOL netif_eth_add_ip(PST_NETIF pstNetif, in_addr_t unIp, in_addr_t unSubnetMask, EN_ONPSERR *penErr)
 {
     PST_NETIFEXTRA_ETH pstExtra = (PST_NETIFEXTRA_ETH)pstNetif->pvExtra; 
-    INT i;
+    UCHAR i;
 
     if (!pstExtra->bIsStaticAddr)
     {
@@ -461,7 +461,7 @@ BOOL netif_eth_add_ip(PST_NETIF pstNetif, in_addr_t unIp, in_addr_t unSubnetMask
 void netif_eth_del_ip(PST_NETIF pstNetif, in_addr_t unIp)
 {
     PST_NETIFEXTRA_ETH pstExtra = (PST_NETIFEXTRA_ETH)pstNetif->pvExtra; 
-    INT i, bTargetIdx = -1; 
+    UCHAR i, bTargetIdx = -1; 
     for (i = 0; i < ETH_EXTRA_IP_NUM; i++)
     {
         if (pstExtra->staExtraIp[i].unAddr)
@@ -478,7 +478,7 @@ void netif_eth_del_ip(PST_NETIF pstNetif, in_addr_t unIp)
         return; 
 
     //* 如果并不是最后一个ip地址存储单元，那么就需要把这之后的ip地址存储单元整体前移一个存储单元，达成实际的删除效果
-    INT bCpyIpNum = i - (bTargetIdx + 1); 
+    UCHAR bCpyIpNum = i - (bTargetIdx + 1); 
     if (bCpyIpNum)
         memmove(&pstExtra->staExtraIp[bTargetIdx], &pstExtra->staExtraIp[bTargetIdx + 1], sizeof(ST_ETH_EXTRA_IP) * bCpyIpNum);
     pstExtra->staExtraIp[i - 1].unAddr = 0; 
@@ -964,7 +964,7 @@ BOOL is_local_ip(in_addr_t unAddr)
             if (NIF_ETHERNET == pstNextNode->stIf.enType)
             {
                 PST_NETIFEXTRA_ETH pstExtra = (PST_NETIFEXTRA_ETH)pstNextNode->stIf.pvExtra; 
-                INT i; 
+                UCHAR i; 
                 for (i = 0; i < ETH_EXTRA_IP_NUM; i++)
                 {
                     if (pstExtra->staExtraIp[i].unAddr)
@@ -1027,7 +1027,7 @@ const ST_NETIF *netif_get_next(const ST_NETIF *pstNextNetif)
 #if SUPPORT_ETHERNET
 CHAR *netif_eth_mac_to_ascii(const UCHAR *pubMac, CHAR *pszMac)
 {
-    INT i, j;
+    UCHAR i, j;
     for (i = 0; i < ETH_MAC_ADDR_LEN - 1; i++)
     {
         j = i * 3;
@@ -1052,8 +1052,8 @@ CHAR *netif_eth_mac_to_ascii(const UCHAR *pubMac, CHAR *pszMac)
 
 UCHAR *netif_eth_ascii_to_mac(const CHAR *pszMac, UCHAR *pubMac)
 {
-    INT i, j;
-    INT nLen = (INT)strlen(pszMac);
+    UCHAR i, j;
+    UCHAR nLen = (UCHAR)strlen(pszMac);
     UCHAR ubVal;
     for (i = 0, j = 0; i < nLen;)
     {

@@ -11,6 +11,8 @@
 #include "onps_utils.hh"
 #include "onps_input.hh"
 #include "netif/netif.hh"
+#include "libs/klib.hh"
+#include "libs/printer.hh"
 
 #define SYMBOL_GLOBALS
 #include "ip/icmp.hh"
@@ -352,7 +354,7 @@ static void icmp_rcv_handler_err(UCHAR *pubPacket, INT nPacketLen)
 		PST_ICMP_ECHO_HDR pstErrEchoHdr = (PST_ICMP_ECHO_HDR)((UCHAR *)pstErrIcmpHdr + sizeof(ST_ICMP_HDR));
 		INT nInput = onps_input_get_icmp(htons(pstErrEchoHdr->usIdentifier));
 		if (nInput >= 0)
-			onps_input_recv(nInput, (const UCHAR *)pubPacket, nPacketLen, NULL, 0, NULL); 
+			onps_input_recv(nInput, (const UCHAR *)pubPacket, nPacketLen, 0, 0, NULL); 
 
 		return; 
 	}
@@ -383,7 +385,9 @@ void icmp_recv(PST_NETIF pstNetif, UCHAR *pubDstMacAddr, UCHAR *pubPacket, INT n
     //* 先看看校验和是否正确
     USHORT usPktChecksum = pstIcmpHdr->usChecksum;
     pstIcmpHdr->usChecksum = 0;
-    USHORT usChecksum = tcpip_checksum((USHORT *)pstIcmpHdr, nPacketLen - sizeof(ST_IP_HDR));
+    // 使用临时缓冲区避免对齐问题
+    UCHAR *pubIcmpData = (UCHAR *)pstIcmpHdr;
+    USHORT usChecksum = tcpip_checksum((USHORT *)pubIcmpData, nPacketLen - sizeof(ST_IP_HDR));
     if (usPktChecksum != usChecksum)
     {
 #if SUPPORT_PRINTF && DEBUG_LEVEL > 3

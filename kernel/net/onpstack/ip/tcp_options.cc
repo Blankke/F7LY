@@ -220,7 +220,7 @@ CHAR tcp_options_get_sack(PST_TCPLINK pstLink, UCHAR *pubOptions, INT nOptionsLe
             #endif
                     return 0;
                 }
-                INT bWriteIdx = 0; 
+                UCHAR bWriteIdx = 0; 
                 while (nInfoLen > 0)
                 {
                     pstLink->stcbSend.staSack[bWriteIdx].unLeft = htonl(pstItem->unLeft);

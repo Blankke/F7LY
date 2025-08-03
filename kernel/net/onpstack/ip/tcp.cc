@@ -15,7 +15,10 @@
 #include "netif/route.hh"
 #include "onps_input.hh"
 #include "ip/tcp_frame.hh"
-#include "ip/tcp_options.hh" 
+#include "ip/tcp_options.hh"
+#include "libs/klib.hh"
+#include "libs/printer.hh"
+#include "libs/common.hh"
 #define SYMBOL_GLOBALS
 #include "ip/tcp.hh"
 #undef SYMBOL_GLOBALS
@@ -146,6 +149,10 @@ static void tcp_close_timeout_handler(void *pvParam)
         //* FIN操作结束，释放input资源
         onps_input_free(pstLink->stcbWaitAck.nInput);        
         return;  
+
+    default:
+        // 对于其他状态，什么都不做
+        break;
     }       
 
     //* 重新启动定时器
@@ -1048,10 +1055,10 @@ static void tcp_link_sack_handler(PST_TCPLINK pstLink, CHAR bSackNum)
     for (i = 0; i < bSackNum; i++)
     {                
         //* 先判断sack范围是否合理       
-        if (uint_after(pstLink->stcbSend.staSack[i].unLeft, unStartSeq) && !uint_after(pstLink->stcbSend.staSack[i].unRight - 1, pstLink->stcbSend.unWriteBytes))            
-            tcp_packet_sacked(pstLink, pstLink->stcbSend.staSack[i].unLeft - 1, pstLink->stcbSend.staSack[i].unRight - 1);         
+        if (uint_after(pstLink->stcbSend.staSack[(UCHAR)i].unLeft, unStartSeq) && !uint_after(pstLink->stcbSend.staSack[(UCHAR)i].unRight - 1, pstLink->stcbSend.unWriteBytes))            
+            tcp_packet_sacked(pstLink, pstLink->stcbSend.staSack[(UCHAR)i].unLeft - 1, pstLink->stcbSend.staSack[(UCHAR)i].unRight - 1);         
 
-        unStartSeq = pstLink->stcbSend.staSack[i].unRight;
+        unStartSeq = pstLink->stcbSend.staSack[(UCHAR)i].unRight;
     }    
 }
 
@@ -1358,7 +1365,7 @@ void tcp_recv(void *pvSrcAddr, void *pvDstAddr, UCHAR *pubPacket, INT nPacketLen
 
         #if SUPPORT_SACK
             //* 看看是否存在sack选项                          
-            if (nTcpHdrLen > sizeof(ST_TCP_HDR))
+            if (nTcpHdrLen > (INT)sizeof(ST_TCP_HDR))
             {                
                 CHAR bSackNum = tcp_options_get_sack(pstLink, pubPacket + sizeof(ST_TCP_HDR), nTcpHdrLen - (INT)sizeof(ST_TCP_HDR));
 				if (bSackNum)		
@@ -1637,12 +1644,14 @@ static BOOL tcp_link_send_data(PST_TCPLINK pstLink)
 {    
     //* 这一段代码能够成功运行的前提是tcp_link_ack_handler()函数必须与本函数放在同一个线程，且其在本函数之前，否则会出现因收到对应ack sequence num删除send timer导致系统宕机的问题
     //* 即使在这里加了tcp_send_timer_lock()线程锁，也无法保证得到的timer指针依然有效，所以必须同一线程且其在本函数之前执行
-    STCB_TCPSENDTIMER **ppstcbSndTimer = (STCB_TCPSENDTIMER **)&pstLink->stcbSend.pstcbSndTimer;
+    STCB_TCPSENDTIMER **ppstcbSndTimer;
     PSTCB_TCPSENDTIMER pstcbSndTimer = pstLink->stcbSend.pstcbSndTimer;        
     CHAR i; 
     for (i = 0; i < pstLink->stcbSend.bSendPacketNum; i++)
     {        
-        ppstcbSndTimer = (STCB_TCPSENDTIMER **)&pstcbSndTimer->pstcbNextForLink;
+        // 使用临时变量避免指针对齐警告
+        void *pTempAddr = &pstcbSndTimer->pstcbNextForLink;
+        ppstcbSndTimer = (STCB_TCPSENDTIMER **)pTempAddr;
         pstcbSndTimer = pstcbSndTimer->pstcbNextForLink; 
     }
 
@@ -1657,7 +1666,7 @@ static BOOL tcp_link_send_data(PST_TCPLINK pstLink)
         {            
             if (pstLink->stcbSend.bIsWndSizeUpdated)
             {
-                nPeerWndSize = ((INT)pstLink->stPeer.usWndSize) * (pstLink->stPeer.bWndScale > 0 ? (INT)pow(2, pstLink->stPeer.bWndScale) : 1);
+                nPeerWndSize = ((INT)pstLink->stPeer.usWndSize) * (pstLink->stPeer.bWndScale > 0 ? (1 << pstLink->stPeer.bWndScale) : 1);
                 if(nPeerWndSize > 0)
                     pstLink->stcbSend.bIsZeroWnd = FALSE;
                 pstLink->stcbSend.unWndSize = (UINT)nPeerWndSize;

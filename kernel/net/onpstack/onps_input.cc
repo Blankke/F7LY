@@ -563,7 +563,7 @@ BOOL onps_input_get(INT nInput, ONPSIOPT enInputOpt, void *pvVal, EN_ONPSERR *pe
     case IOPT_GETTCPUDPADDR: 
         if (IPPROTO_TCP == (EN_IPPROTO)pstcbInput->ubIPProto || IPPROTO_UDP == (EN_IPPROTO)pstcbInput->ubIPProto)
         {
-            if (sizeof(void*) == 4)
+            if (sizeof(pvVal) == 4)
                 *((UINT *)pvVal) = (UINT)(uintptr_t)&pstcbInput->uniHandle.stTcpUdp;
             else
                 *((ULONGLONG *)pvVal) = (ULONGLONG)(uintptr_t)&pstcbInput->uniHandle.stTcpUdp;
@@ -601,14 +601,14 @@ BOOL onps_input_get(INT nInput, ONPSIOPT enInputOpt, void *pvVal, EN_ONPSERR *pe
         break; 
 
     case IOPT_GETATTACH:
-        if (sizeof(void*) == 4)
+        if (sizeof(pvVal) == 4)
             *((UINT *)pvVal) = (UINT)(uintptr_t)pstcbInput->pvAttach;
         else
             *((ULONGLONG *)pvVal) = (ULONGLONG)(uintptr_t)pstcbInput->pvAttach;
         break; 
 
-    case IOPT_GETTCPUDPLINK: 
-        if (sizeof(void*) == 4)
+    case IOPT_GETTCPUDPLINK:
+        if (sizeof(pvVal) == 4)
         {
             if (IPPROTO_TCP == (EN_IPPROTO)pstcbInput->ubIPProto && TCP_TYPE_SERVER == pstcbInput->uniHandle.stTcpUdp.bType)
                 *((UINT *)pvVal) = 0/*(UINT)((PST_INPUTATTACH_TCPSRV)pstcbInput->pvAttach)->pstClients*/;
@@ -1511,9 +1511,9 @@ INT onps_input_get_handle(EN_IPPROTO enIpProto, UINT unNetifIp, USHORT usPort, v
                         //* 如果是tcp协议，我们只需找出本地tcp客户端和tcp服务器（TCP_TYPE_SERVER、TCP_TYPE_LCLIENT）类型的input节点，连接本地服务器的远端tcp客户端忽略
                         if (IPPROTO_UDP == pstcbInput->ubIPProto || (IPPROTO_TCP == pstcbInput->ubIPProto && TCP_TYPE_RCLIENT != pstcbInput->uniHandle.stTcpUdp.bType))
                         {
-                            nInput = pstNextNode->uniData.nVal;                            
+                            nInput = pstNextNode->uniData.nVal;
 
-                            if (sizeof(void*) == 4)
+                            if (sizeof(pvAttach) == 4)
                             {
                                 if (IPPROTO_TCP == pstcbInput->ubIPProto && TCP_TYPE_SERVER == pstcbInput->uniHandle.stTcpUdp.bType)
                                     *((UINT *)pvAttach) = (UINT)0; 

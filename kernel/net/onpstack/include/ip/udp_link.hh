@@ -17,7 +17,7 @@
 
 typedef struct _ST_UDPLINK_ {
     CHAR bIdx;
-    INT bNext;
+    CHAR bNext;
 
 #if SUPPORT_IPV6
 	ST_SOCKADDR stPeerAddr;

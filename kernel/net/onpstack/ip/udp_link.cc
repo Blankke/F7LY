@@ -21,7 +21,7 @@ BOOL udp_link_init(EN_ONPSERR *penErr)
 {
     //* 链接	
     INT i;
-    for (i = 0; i < TCP_LINK_NUM_MAX - 1; i++)
+    for (i = 0; i < UDP_LINK_NUM_MAX - 1; i++)
     {
         l_staUdpLinkNode[i].bIdx = i; 
         l_staUdpLinkNode[i].bNext = i + 1;
@@ -62,7 +62,7 @@ PST_UDPLINK udp_link_get(EN_ONPSERR *penErr)
 
         pstFreeNode = l_pstFreeUdpLinkList;
         if (l_pstFreeUdpLinkList->bNext >= 0)
-            l_pstFreeUdpLinkList = &l_staUdpLinkNode[l_pstFreeUdpLinkList->bNext]; 
+            l_pstFreeUdpLinkList = &l_staUdpLinkNode[(UCHAR)l_pstFreeUdpLinkList->bNext]; 
         else        
             l_pstFreeUdpLinkList = NULL;
     }

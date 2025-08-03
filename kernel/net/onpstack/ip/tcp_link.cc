@@ -11,6 +11,7 @@
 #include "one_shot_timer.hh"
 #include "mmu/buddy.hh"
 #include "onps_input.hh"
+#include "libs/klib.hh"
 #define SYMBOL_GLOBALS
 #include "ip/tcp_link.hh"
 #undef SYMBOL_GLOBALS
@@ -87,7 +88,7 @@ BOOL tcp_link_init(EN_ONPSERR *penErr)
 #endif //* #if SUPPORT_ETHERNET && (TCPSRV_NUM_MAX || NETTOOLS_TELNETSRV)
 
 #if SUPPORT_SACK
-    for (i = 0; i < sizeof(l_stcbaSndTimer) / sizeof(STCB_TCPSENDTIMER) - 1; i++)    
+    for (i = 0; i < (INT)(sizeof(l_stcbaSndTimer) / sizeof(STCB_TCPSENDTIMER)) - 1; i++)    
         l_stcbaSndTimer[i].pstcbNext = &l_stcbaSndTimer[i + 1]; 
     l_stcbaSndTimer[i].pstcbNext = NULL; 
     l_pstcbSListSndTimerFreed = &l_stcbaSndTimer[0];
@@ -162,7 +163,7 @@ PST_TCPLINK tcp_link_get(EN_ONPSERR *penErr)
 
         pstFreeNode = l_pstFreeTcpLinkList;
         if (l_pstFreeTcpLinkList->bNext >= 0)
-            l_pstFreeTcpLinkList = &l_staTcpLinkNode[l_pstFreeTcpLinkList->bNext]; 
+            l_pstFreeTcpLinkList = &l_staTcpLinkNode[(UCHAR)l_pstFreeTcpLinkList->bNext]; 
         else        
             l_pstFreeTcpLinkList = NULL;
 
@@ -251,7 +252,7 @@ void tcp_link_free(PST_TCPLINK pstTcpLink)
                 else
                 {
                     if (pstTcpLink->bNext >= 0)
-                        l_pstUsedTcpLinkList = &l_staTcpLinkNode[pstTcpLink->bNext];
+                        l_pstUsedTcpLinkList = &l_staTcpLinkNode[(UCHAR)pstTcpLink->bNext];
                     else //* 这即是第一个节点也是最后一个节点
                         l_pstUsedTcpLinkList = NULL; 
                 }
@@ -262,7 +263,7 @@ void tcp_link_free(PST_TCPLINK pstTcpLink)
             pstPrevNode = pstNextNode;
             if (pstNextNode->bNext < 0) //* 理论上不会出现小于0的情况在这之前应该能找到
                 break; 
-            pstNextNode = &l_staTcpLinkNode[pstNextNode->bNext];
+            pstNextNode = &l_staTcpLinkNode[(UCHAR)pstNextNode->bNext];
         }
 
         if (l_pstFreeTcpLinkList)        
@@ -294,7 +295,7 @@ PST_TCPLINK tcp_link_list_used_get_next(PST_TCPLINK pstTcpLink)
     if (pstTcpLink)
     {
         if (pstTcpLink->bNext >= 0)
-            pstNextNode = &l_staTcpLinkNode[pstTcpLink->bNext];
+            pstNextNode = &l_staTcpLinkNode[(UCHAR)pstTcpLink->bNext];
     }
     else
     {
@@ -491,7 +492,7 @@ void tcp_link_for_send_data_put(PST_TCPLINK pstTcpLink)
                     break; 
                 }
                 else
-                    pstNext = &l_staTcpLinkNode[pstNext->stcbSend.bNext];
+                    pstNext = &l_staTcpLinkNode[(UCHAR)pstNext->stcbSend.bNext];
             } while (TRUE);
         }
         else        
@@ -517,7 +518,7 @@ void tcp_link_for_send_data_del(PST_TCPLINK pstTcpLink)
                     else //* 链表第一个节点就匹配了
                     {
                         if (pstNext->stcbSend.bNext >= 0)
-                            l_pstSndDataLink = &l_staTcpLinkNode[pstNext->stcbSend.bNext];
+                            l_pstSndDataLink = &l_staTcpLinkNode[(UCHAR)pstNext->stcbSend.bNext];
                         else
                             l_pstSndDataLink = NULL; 
                     }
@@ -528,7 +529,7 @@ void tcp_link_for_send_data_del(PST_TCPLINK pstTcpLink)
                 pstPrev = pstNext;
                 if (pstNext->stcbSend.bNext < 0) //* 理论上不会出现小于0的情况在这之前应该能找到，这是链表的最后一个节点
                     break;
-                pstNext = &l_staTcpLinkNode[pstNext->stcbSend.bNext]; 
+                pstNext = &l_staTcpLinkNode[(UCHAR)pstNext->stcbSend.bNext]; 
             }
 
             pstTcpLink->stcbSend.bIsPutted = FALSE; 
@@ -546,7 +547,7 @@ PST_TCPLINK tcp_link_for_send_data_get_next(PST_TCPLINK pstTcpLink)
         if (pstTcpLink)
         {
             if (pstTcpLink->stcbSend.bNext >= 0)
-                pstNext = &l_staTcpLinkNode[pstTcpLink->stcbSend.bNext];
+                pstNext = &l_staTcpLinkNode[(UCHAR)pstTcpLink->stcbSend.bNext];
         }
         else        
             pstNext = l_pstSndDataLink;        

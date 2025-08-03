@@ -15,6 +15,8 @@
 #include "netif/route.hh"
 #include "onps_input.hh"
 #include "ethernet/arp.hh"
+#include "libs/klib.hh"
+#include "libs/printer.hh"
 
 #define SYMBOL_GLOBALS
 #include "ip/ip.hh"
@@ -92,7 +94,10 @@ static INT netif_ip_send(PST_NETIF pstNetif, UCHAR *pubDstMacAddr, in_addr_t unS
     buf_list_put_head(&sBufListHead, sHdrNode);
 
     //* 计算校验和
-    stHdr.usChecksum = tcpip_checksum((USHORT *)&stHdr, sizeof(ST_IP_HDR))/*tcpip_checksum_ext(sBufListHead)*/;
+    // 使用临时变量避免对齐问题
+    USHORT ausHdrWords[sizeof(ST_IP_HDR) / sizeof(USHORT)];
+    memcpy(ausHdrWords, &stHdr, sizeof(ST_IP_HDR));
+    stHdr.usChecksum = tcpip_checksum(ausHdrWords, sizeof(ST_IP_HDR))/*tcpip_checksum_ext(sBufListHead)*/;
 
 #if SUPPORT_ETHERNET
     //* 看看选择的网卡是否是ethernet类型，如果是则首先需要在此获取目标mac地址
