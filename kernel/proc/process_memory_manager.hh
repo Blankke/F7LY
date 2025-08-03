@@ -284,7 +284,7 @@ namespace proc
          *
          * 创建包含trampoline、trapframe等基础映射的页表
          */
-        bool create_pagetable(class Pcb *pcb);
+        bool create_pagetable();
 
         /**
          * @brief 释放进程页表

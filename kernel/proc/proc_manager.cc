@@ -689,7 +689,7 @@ namespace proc
         ProcessMemoryManager* init_mm = new ProcessMemoryManager();
         
         // 完成内存管理器的初始化设置
-        if (!init_mm->create_pagetable(p))
+        if (!init_mm->create_pagetable())
         {
             panic("user_init: failed to create pagetable for init process");
             delete init_mm;
@@ -1671,33 +1671,7 @@ namespace proc
         // printf("[exit_proc] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
 
         /****************************************************************************************
-         * Phase 1: 释放进程内存和资源
-         ****************************************************************************************/
-
-        // 使用ProcessMemoryManager统一处理内存释放
-        p->cleanup_memory_manager(); // 释放所有内存资源（VMA、程序段、堆、页表、trapframe等）
-
-        // 关闭文件描述符表，释放文件资源
-        p->cleanup_ofile();
-
-        // 清理信号处理结构和信号栈帧
-        p->cleanup_sighand();
-
-        // 释放信号栈帧链表
-        while (p->sig_frame != nullptr)
-        {
-            ipc::signal::signal_frame *next_frame = p->sig_frame->next;
-            mem::k_pmm.free_page(p->sig_frame); // 释放当前信号处理帧
-            p->sig_frame = next_frame;          // 移动到下一个帧
-        }
-        p->sig_frame = nullptr; // 清空信号处理帧指针
-
-        // 清理线程相关资源
-        p->_futex_addr = nullptr;  // 清空futex等待地址
-        p->_robust_list = nullptr; // 清空健壮futex链表
-
-        /****************************************************************************************
-         * Phase 2: 处理父子进程关系和进程状态
+         * Phase 1: 处理父子进程关系和进程状态
          ****************************************************************************************/
 
         // 检查进程组生命周期管理
@@ -1741,7 +1715,7 @@ namespace proc
         _wait_lock.acquire();
 
         // 处理线程退出时的清理地址
-        if (p->get_pagetable()->get_base() != 0 && p->_clear_tid_addr)
+        if (p->_clear_tid_addr)
         {
             uint64 temp0 = 0;
             if (mem::k_vmm.copy_out(*p->get_pagetable(), p->_clear_tid_addr, &temp0, sizeof(temp0)) < 0)
@@ -1749,6 +1723,32 @@ namespace proc
                 printfRed("exit_proc: copy out ctid failed\n");
             }
         }
+
+        /****************************************************************************************
+         * Phase 2: 释放进程内存和资源（在所有用户态写入操作完成后）
+         ****************************************************************************************/
+
+        // 使用ProcessMemoryManager统一处理内存释放
+        p->cleanup_memory_manager(); // 释放所有内存资源（VMA、程序段、堆、页表、trapframe等）
+
+        // 关闭文件描述符表，释放文件资源
+        p->cleanup_ofile();
+
+        // 清理信号处理结构和信号栈帧
+        p->cleanup_sighand();
+
+        // 释放信号栈帧链表
+        while (p->sig_frame != nullptr)
+        {
+            ipc::signal::signal_frame *next_frame = p->sig_frame->next;
+            mem::k_pmm.free_page(p->sig_frame); // 释放当前信号处理帧
+            p->sig_frame = next_frame;          // 移动到下一个帧
+        }
+        p->sig_frame = nullptr; // 清空信号处理帧指针
+
+        // 清理线程相关资源
+        p->_futex_addr = nullptr;  // 清空futex等待地址
+        p->_robust_list = nullptr; // 清空健壮futex链表
 
         p->_lock.acquire();
 
@@ -3396,7 +3396,7 @@ namespace proc
         // 解析路径并查找文件
         if (vfs_is_file_exist(ab_path.c_str()) != 1)
         {
-            printfRed("execve: cannot find file");
+            panic("execve: cannot find file");
             return -1;
         }
 
@@ -3415,7 +3415,7 @@ namespace proc
         // 创建新的页表，避免在加载过程中破坏原进程映像
         new_pt = k_pm.proc_pagetable(proc);
         TODO(if (new_pt == 0) {
-            printfRed("execve: proc_pagetable failed\n");
+            panic("execve: proc_pagetable failed\n");
             return -1;
         })
 
@@ -3473,7 +3473,7 @@ namespace proc
                         printfBlue("execve: using riscv64 dynamic linker\n");
                         if (vfs_is_file_exist("/glibc/lib/ld-linux-riscv64-lp64d.so.1") != 1)
                         {
-                            printfRed("execve: failed to find riscv64 dynamic linker\n");
+                            panic("execve: failed to find riscv64 dynamic linker\n");
                             return -1;
                         }
                         interpreter_path = "/glibc/lib/ld-linux-riscv64-lp64d.so.1";
@@ -3483,7 +3483,7 @@ namespace proc
                         printfBlue("execve: using loongarch64 dynamic linker\n");
                         if (vfs_is_file_exist("/glibc/lib/ld-linux-loongarch-lp64d.so.1") != 1)
                         {
-                            printfRed("execve: failed to find loongarch64 dynamic linker\n");
+                            panic("execve: failed to find loongarch64 dynamic linker\n");
                             return -1;
                         }
                         interpreter_path = "/glibc/lib/ld-linux-loongarch-lp64d.so.1";
@@ -3493,7 +3493,7 @@ namespace proc
                         printfBlue("execve: using loongarch dynamic linker\n");
                         if (vfs_is_file_exist("/musl/lib/libc.so") != 1)
                         {
-                            printfRed("execve: failed to find loongarch musl linker\n");
+                            panic("execve: failed to find loongarch musl linker\n");
                             return -1;
                         }
                         interpreter_path = "/musl/lib/libc.so";
@@ -3503,7 +3503,7 @@ namespace proc
                         printfBlue("execve: using riscv64 sf dynamic linker\n");
                         if (vfs_is_file_exist("/musl/lib/libc.so") != 1)
                         {
-                            printfRed("execve: failed to find riscv64 musl linker\n");
+                            panic("execve: failed to find riscv64 musl linker\n");
                             return -1;
                         }
                         interpreter_path = "/musl/lib/libc.so";
@@ -3514,7 +3514,7 @@ namespace proc
                         printfBlue("execve: using riscv64 sf dynamic linker\n");
                         if (vfs_is_file_exist("/musl/lib/libc.so") != 1)
                         {
-                            printfRed("execve: failed to find riscv64 musl linker\n");
+                            panic("execve: failed to find riscv64 musl linker\n");
                             return -1;
                         }
                         interpreter_path = "/musl/lib/libc.so";
@@ -3546,13 +3546,13 @@ namespace proc
                 // 验证程序段的合法性
                 if (ph.memsz < ph.filesz)
                 {
-                    printfRed("execve: memsz < ph.filesz\n");
+                    panic("execve: memsz < ph.filesz\n");
                     load_bad = true;
                     break;
                 }
                 if (ph.vaddr + ph.memsz < ph.vaddr) // 检查地址溢出
                 {
-                    printfRed("execve: vaddr + memsz < vaddr\n");
+                    panic("execve: vaddr + memsz < vaddr\n");
                     load_bad = true;
                     break;
                 }
@@ -3585,7 +3585,7 @@ namespace proc
 
                 if (mem::k_vmm.uvmalloc(new_pt, segment_start, segment_end, seg_flag) == 0)
                 {
-                    printfRed("execve: vmalloc failed for segment at %p-%p\n",
+                    panic("execve: vmalloc failed for segment at %p-%p\n",
                               (void *)segment_start, (void *)segment_end);
                     load_bad = true;
                     break;
@@ -3611,7 +3611,7 @@ namespace proc
                 // **新增：记录加载的程序段信息**
                 if (new_sec_cnt >= max_program_section_num)
                 {
-                    printfRed("execve: too many program sections\n");
+                    panic("execve: too many program sections\n");
                     load_bad = true;
                     break;
                 }
@@ -3658,7 +3658,7 @@ namespace proc
             // 如果加载过程中出错，清理已分配的资源
             if (load_bad)
             {
-                printfRed("execve: load segment failed, cleaning up allocated memory\n");
+                panic("execve: load segment failed, cleaning up allocated memory\n");
 
                 // 使用ProcessMemoryManager的专门函数进行清理
                 ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
@@ -3671,7 +3671,7 @@ namespace proc
             {
                 if (interpreter_path.length() == 0)
                 {
-                    printfRed("execve: cannot find dynamic linker: %s\n", interpreter_path.c_str());
+                    panic("execve: cannot find dynamic linker: %s\n", interpreter_path.c_str());
                     ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                     return -1;
                 }
@@ -3681,7 +3681,7 @@ namespace proc
 
                 if (interp_elf.magic != elf::elfEnum::ELF_MAGIC)
                 {
-                    printfRed("execve: invalid dynamic linker ELF\n");
+                    panic("execve: invalid dynamic linker ELF\n");
                     ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                     return -1;
                 }
@@ -3727,7 +3727,7 @@ namespace proc
 
                     if (mem::k_vmm.vmalloc(new_pt, linker_segment_start, linker_segment_end, seg_flag) == 0)
                     {
-                        printfRed("execve: load dynamic linker failed at %p-%p\n",
+                        panic("execve: load dynamic linker failed at %p-%p\n",
                                   (void *)linker_segment_start, (void *)linker_segment_end);
                         ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                         return -1;
@@ -3744,7 +3744,7 @@ namespace proc
                                j, (void *)interp_ph.vaddr, (void *)interp_ph.memsz, (void *)interp_ph.off);
                     if (load_seg(new_pt, load_addr, interpreter_path, interp_ph.off, interp_ph.filesz) < 0)
                     {
-                        printfRed("execve: load dynamic linker segment failed\n");
+                        panic("execve: load dynamic linker segment failed\n");
                         ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                         return -1;
                     }
@@ -3752,7 +3752,7 @@ namespace proc
                     // **新增：记录动态链接器段信息**
                     if (new_sec_cnt >= max_program_section_num)
                     {
-                        printfRed("execve: too many program sections (including linker)\n");
+                        panic("execve: too many program sections (including linker)\n");
                         ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                         return -1;
                     }
@@ -3815,7 +3815,7 @@ namespace proc
 #ifdef RISCV
             if (mem::k_vmm.uvmalloc(new_pt, stack_start, stack_end, PTE_W | PTE_X | PTE_R | PTE_U) == 0)
             {
-                printfRed("execve: load user stack failed at %p-%p\n",
+                panic("execve: load user stack failed at %p-%p\n",
                           (void *)stack_start, (void *)stack_end);
                 ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
@@ -3823,7 +3823,7 @@ namespace proc
 #elif defined(LOONGARCH)
             if (mem::k_vmm.uvmalloc(new_pt, stack_start, stack_end, PTE_P | PTE_W | PTE_PLV | PTE_MAT | PTE_D) == 0)
             {
-                printfRed("execve: load user stack failed at %p-%p\n",
+                panic("execve: load user stack failed at %p-%p\n",
                           (void *)stack_start, (void *)stack_end);
                 ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
@@ -3863,7 +3863,7 @@ namespace proc
         uint64_t random[4] = {0x0, -0x114514FF114514UL, 0x2UL << 60, 0x3UL << 60};
         if (sp < stackbase || mem::k_vmm.copy_out(new_pt, sp, (char *)random, 32) < 0)
         {
-            printfRed("execve: copy random data failed\n");
+            panic("execve: copy random data failed\n");
             ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
             return -1;
         }
@@ -3878,7 +3878,7 @@ namespace proc
         {
             if (envc >= MAXARG)
             { // 检查环境变量数量限制
-                printfRed("execve: too many envs\n");
+                panic("execve: too many envs\n");
                 ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
@@ -3886,13 +3886,13 @@ namespace proc
             sp -= sp % 16;               // 对齐到16字节
             if (sp < stackbase + PGSIZE)
             {
-                printfRed("execve: stack overflow\n");
+                panic("execve: stack overflow\n");
                 ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
             if (mem::k_vmm.copy_out(new_pt, sp, envs[envc].c_str(), envs[envc].size() + 1) < 0)
             {
-                printfRed("execve: copy envs failed\n");
+                panic("execve: copy envs failed\n");
                 ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
@@ -3907,7 +3907,7 @@ namespace proc
         {
             if (argc >= MAXARG)
             { // 检查参数数量限制
-                printfRed("execve: too many args\n");
+                panic("execve: too many args\n");
                 ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
@@ -3915,19 +3915,19 @@ namespace proc
             sp -= sp % 16;               // 对齐到16字节
             if (sp < stackbase + PGSIZE)
             {
-                printfRed("execve: stack overflow\n");
+                panic("execve: stack overflow\n");
                 ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
             if (mem::k_vmm.copy_out(new_pt, sp, argv[argc].c_str(), argv[argc].size() + 1) < 0)
             {
-                printfRed("execve: copy args failed\n");
+                panic("execve: copy args failed\n");
                 ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
             uargv[argc] = sp; // 记录字符串地址
 
-            // printfRed("[execve] argv[%d] = \"%s\", user_stack_addr = 0x%p\n", argc, argv[argc].c_str(), sp);
+            // panic("[execve] argv[%d] = \"%s\", user_stack_addr = 0x%p\n", argc, argv[argc].c_str(), sp);
         }
         uargv[argc] = 0; // argv数组以NULL结尾
 
@@ -3964,7 +3964,7 @@ namespace proc
             sp -= sizeof(aux);
             if (mem::k_vmm.copy_out(new_pt, sp, (char *)aux, sizeof(aux)) < 0)
             {
-                printfRed("execve: copy auxv failed\n");
+                panic("execve: copy auxv failed\n");
                 ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
@@ -3976,13 +3976,13 @@ namespace proc
             // sp -= sp % 16;                     // 对齐到16字节
             if (sp < stackbase + PGSIZE)
             {
-                printfRed("execve: stack overflow\n");
+                panic("execve: stack overflow\n");
                 ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
             if (mem::k_vmm.copy_out(new_pt, sp, uenvp, (envc + 1) * sizeof(uint64)) < 0)
             {
-                printfRed("execve: copy envp failed\n");
+                panic("execve: copy envp failed\n");
                 ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
@@ -3996,13 +3996,13 @@ namespace proc
             // sp -= sp % 16;                     // 对齐到16字节
             if (sp < stackbase + PGSIZE)
             {
-                printfRed("execve: stack overflow\n");
+                panic("execve: stack overflow\n");
                 ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
             if (mem::k_vmm.copy_out(new_pt, sp, uargv, (argc + 1) * sizeof(uint64)) < 0)
             {
-                printfRed("execve: copy argv failed\n");
+                panic("execve: copy argv failed\n");
                 ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
             }
@@ -4020,7 +4020,7 @@ namespace proc
         // printfGreen("execve: argc: %d, sp: %p\n", argc, (void *)sp);
         if (mem::k_vmm.copy_out(new_pt, sp, (char *)&argc, sizeof(uint64)) < 0)
         {
-            printfRed("execve: copy argc failed\n");
+            panic("execve: copy argc failed\n");
             ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
             return -1;
         }
@@ -4080,6 +4080,14 @@ namespace proc
         // 设置新页表到新的内存管理器
         new_mm->pagetable = new_pt;
         
+        // 检查是否有段被记录
+        if (new_sec_cnt == 0)
+        {
+            printfYellow("execve: warning - no program sections were recorded\n");
+            // 为兼容性添加一个总段，使用highest_addr作为大小参考
+            new_mm->add_program_section((void *)0, PGROUNDUP(highest_addr), "fallback_program");
+        }
+
         // 将所有记录的段添加到新内存管理器中
         for (int i = 0; i < new_sec_cnt; i++)
         {
@@ -4090,7 +4098,7 @@ namespace proc
 
             if (section_index < 0)
             {
-                printfRed("execve: failed to add program section %d\n", i);
+                panic("execve: failed to add program section %d\n", i);
                 delete new_mm;
                 ProcessMemoryManager::cleanup_execve_pagetable(new_pt, new_sec_desc, new_sec_cnt);
                 return -1;
@@ -4101,13 +4109,6 @@ namespace proc
                         new_sec_desc[i]._sec_start, (void *)new_sec_desc[i]._sec_size);
         }
 
-        // 检查是否有段被记录
-        if (new_sec_cnt == 0)
-        {
-            printfYellow("execve: warning - no program sections were recorded\n");
-            // 为兼容性添加一个总段，使用highest_addr作为大小参考
-            new_mm->add_program_section((void *)0, PGROUNDUP(highest_addr), "fallback_program");
-        }
 
         // **重构：使用highest_addr初始化堆**
         // 在所有已分配的内存区域之后初始化堆

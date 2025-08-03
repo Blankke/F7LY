@@ -94,7 +94,7 @@ namespace proc
         ProcessMemoryManager* new_mgr = new ProcessMemoryManager();
         
         // 为新进程创建页表
-        if (!new_mgr->create_pagetable(target_pcb))
+        if (!new_mgr->create_pagetable())
         {
             panic("[clone for fork] create_pagetable faol");
             delete new_mgr;
@@ -708,7 +708,7 @@ namespace proc
      * 页表管理接口实现
      ****************************************************************************************/
 
-    bool ProcessMemoryManager::create_pagetable(Pcb *pcb)
+    bool ProcessMemoryManager::create_pagetable()
     {
         // 创建基础页表
         mem::PageTable pt = mem::k_vmm.vm_create();
@@ -774,15 +774,10 @@ namespace proc
 #ifdef RISCV
         mem::k_vmm.vmunmap(pt, TRAMPOLINE, 1, 0);
 #endif
-        // 注意：trapframe映射由usertrapret管理，这里不需要显式取消映射
+        mem::k_vmm.vmunmap(pt, TRAPFRAME, 1, 0); // 有可能没有映射
         mem::k_vmm.vmunmap(pt, SIG_TRAMPOLINE, 1, 0);
 
-        // 阶段1：使用统一的引用计数管理
-        if (ref_count.load() <= 1)
-        {
-            // 释放页表结构 - pagetable是对象不是指针，无需delete
-            // pagetable对象会在ProcessMemoryManager析构时自动清理
-        }
+        pt.freewalk();
 
         printfGreen("ProcessMemoryManager: pagetable freed successfully\n");
     }
@@ -839,6 +834,8 @@ namespace proc
                 free_all_program_sections();
                 free_heap_memory();
                 free_pagetable();
+            }else{
+                panic("pagetable is null");
             }
 
             // 3. 重置内存相关状态
