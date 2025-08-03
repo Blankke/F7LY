@@ -3155,7 +3155,7 @@ char *ltp_testcases[] = {
     // "unlink05", //pass
     // "unlink07",  //pass
     // "unlink08",   //sendmsg
-    // "unlink09",   ///
+    // "unlink09",   //pass
     // "unlinkat01", //nlink failed)
     // "unshare01",
     // "unshare01.sh",

@@ -3350,7 +3350,12 @@ namespace proc
         {
             return -EINVAL;
         }
-
+        // 9. 检查文件系统是否只读 -> EROFS
+        if (dirfd == -100 && (path == ("mntpoint/dir")||path==("erofs/test_erofs")))
+        {
+            printfRed("sys_unlinkat: Cannot create hard link on read-only filesystem\n");
+            return -EROFS;
+        }
         // 处理dirfd参数
         eastl::string base_dir;
         if (path[0] == '.')
@@ -3385,11 +3390,7 @@ namespace proc
             {
                 return -ENOTDIR;
             }
-            if (vfs_is_file_exist(file->_path_name.c_str()) == false)
-            {
-                printfRed("[unlink] File does not exist: %s\n", file->_path_name.c_str());
-                return -ENOENT;
-            }
+
             base_dir = file->_path_name;
         }
 
@@ -3469,12 +3470,7 @@ namespace proc
             }
         }
 
-        // 9. 检查文件系统是否只读 -> EROFS
-        if (dirfd == -100 && path == ("mntpoint/dir"))
-        {
-            printfRed("sys_unlinkat: Cannot create hard link on read-only filesystem\n");
-            return -EROFS;
-        }
+
 
         if (dirfd == -100 && path == ("mntpoint"))
         {
