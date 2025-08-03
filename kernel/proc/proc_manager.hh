@@ -52,8 +52,6 @@ namespace proc
         void set_killed(Pcb *p);
 
         // ==================== 内存管理 ====================
-        mem::PageTable proc_pagetable(Pcb *p);
-        void proc_freepagetable(mem::PageTable &pt, uint64 sz);
         int growproc(int n);
         long brk(long n);
         long sbrk(long increment);
@@ -120,8 +118,6 @@ namespace proc
 
     private:
         // 私有辅助函数
-        void _proc_create_vm(Pcb *p, mem::PageTable &pt);
-        void _proc_create_vm(Pcb *p);
     };
 
     extern ProcessManager k_pm; // 全局进程管理器实例
