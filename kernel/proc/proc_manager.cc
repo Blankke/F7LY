@@ -181,7 +181,7 @@ namespace proc
                 }
 
 #ifdef LOONGARCH
-                p->elf_base = 0; // 初始化ELF加载基地址
+                // p->elf_base = 0; // 初始化ELF加载基地址
 #endif
 
                 /****************************************************************************************
@@ -3759,6 +3759,16 @@ namespace proc
                         if (vfs_is_file_exist("/musl/lib/libc.so") != 1)
                         {
                             printfRed("execve: failed to find riscv64 musl linker\n");
+                            return -1;
+                        }
+                        interpreter_path = "/musl/lib/libc.so";
+                    }
+                    else if (strcmp(interpreter_path.c_str(), "/lib64/ld-linux-loongarch-lp64d.so.1") == 0)
+                    {
+                        printfBlue("execve: using x86_64 dynamic linker\n");
+                        if (vfs_is_file_exist("/musl/lib/libc.so") != 1)
+                        {
+                            printfRed("execve: failed to find x86_64 musl linker\n");
                             return -1;
                         }
                         interpreter_path = "/musl/lib/libc.so";

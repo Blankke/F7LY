@@ -1,7 +1,7 @@
 #pragma once
 #ifdef LOONGARCH
 #include "platform.hh"
-#include "memlayout.hh"
+#include "mem/memlayout.hh"
 #include "types.hh"
 
 
@@ -108,11 +108,10 @@ pci_device_t* pci_get_device_by_bus(unsigned int bus, unsigned int dev,unsigned 
 
 //------------------------------------
 
-// TODO: PCIE0重定义
-// #define PCIE0_ECAM          (0x20000000 | DMWIN1_MASK)
-// #define PCIE0_ECAM_V        0x20000000
-// #define PCIE0_MMIO          (0x40000000 | DMWIN_MASK)
-// #define PCIE0_MMIO_V          0x40000000
+#define PCIE0_ECAM          (0x20000000 | DMWIN1_MASK)
+#define PCIE0_ECAM_V        0x20000000
+#define PCIE0_MMIO          (0x40000000 | DMWIN_MASK)
+#define PCIE0_MMIO_V          0x40000000
 
 struct pci_msix {
     int bar_num;            // bar number

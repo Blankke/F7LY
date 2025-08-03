@@ -88,9 +88,9 @@ void  virtio_disk_intr(void);
 void  virtio_disk_intr2();
 
 #elif defined(LOONGARCH)
-#include "fs/buf.h"
-#include "dev/pci/virtio_ring.h"
-#include "fs/buf.h"
+#include "fs/buf.hh"
+#include "fs/drivers/loongarch/virtio_ring.hh"
+
 
 #define NUM 8
 

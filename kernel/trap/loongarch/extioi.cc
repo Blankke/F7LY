@@ -4,7 +4,7 @@
 #include "mem/memlayout.hh"
 #include "platform.hh"
 #include "extioi.hh"
-#include "pci.h"
+#include "trap/loongarch/pci.h"
 #include "printer.hh"
 void extioi_init(void)
 {
