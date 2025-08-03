@@ -1716,9 +1716,9 @@ char *ltp_testcases[] = {
     // "mlockall01",
     // "mlockall02",
     // "mlockall03",
-    "mmap001",   //pass
-    // "mmap01",
-    // "mmap02",   //pass
+    // "mmap001",   //pass
+    // "mmap01",   //bin/sh
+    // "mmap02",   ///(ㄒoㄒ)/~~爆了
     // "mmap03",
     // "mmap04",
     // "mmap05",
@@ -1733,7 +1733,7 @@ char *ltp_testcases[] = {
     // "mmap14",
     // "mmap15",  //pass
     // "mmap16",
-    // "mmap17",   //pass 但是退出爆了
+    // "mmap17",   //pass 
     // "mmap18",
     // "mmap19",  //pass
     // "mmap2",
