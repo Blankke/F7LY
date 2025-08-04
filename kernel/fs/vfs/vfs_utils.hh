@@ -1,3 +1,6 @@
+#ifndef VFS_UTILS_HH
+#define VFS_UTILS_HH
+
 #include <EASTL/string.h>
 #include "fs/vfs/ops.hh"
 #include "fs/vfs/file/file.hh"
@@ -15,6 +18,7 @@ int create_and_write_file(const char *path, const char *data);
 int vfs_is_file_exist(const char *path);
 uint vfs_read_file(const char *path, uint64 buffer_addr, size_t offset, size_t size);
 int vfs_fstat(fs::file *f, fs::Kstat *st);
+int vfs_path_stat(const char *path, fs::Kstat *st, bool follow_symlinks = true);
 int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count);
 int vfs_mkdir(const char *path, uint64_t mode);
 int vfs_frename(const char *oldpath, const char *newpath);
@@ -26,3 +30,5 @@ int vfs_free_file(struct fs::file *file);
 int vfs_copy_file_range(int f_in,off_t offset_in, int f_out,off_t offset_out,size_t size,uint flags);
 bool is_lock_conflict(const struct flock &existing_lock, const struct flock &new_lock);
 bool check_file_lock_access(const struct flock &file_lock, off_t offset, size_t size, bool is_write);
+
+#endif // VFS_UTILS_HH

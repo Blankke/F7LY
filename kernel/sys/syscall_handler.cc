@@ -1023,34 +1023,12 @@ namespace syscall
                 }
             }
 
-            // 使用临时文件描述符获取文件信息
-            int temp_fd = proc::k_pm.open(AT_FDCWD, absolute_path, O_RDONLY);
-            if (temp_fd < 0)
-            {
-                // 根据不同的错误返回相应的错误码
-                switch (-temp_fd)
-                {
-                case ENOENT:
-                    return -ENOENT;
-                case EACCES:
-                    return -EACCES;
-                case ELOOP:
-                    return -ELOOP;
-                case ENOMEM:
-                    return -ENOMEM;
-                case ENOTDIR:
-                    return -ENOTDIR;
-                default:
-                    return -ENOENT;
-                }
-            }
-
-            result = proc::k_pm.fstat(temp_fd, &kst);
-            proc::k_pm.close(temp_fd);
-
+            // 使用 vfs_path_stat 获取文件信息，根据 flags 决定是否跟随符号链接
+            bool follow_symlinks = !(flags & AT_SYMLINK_NOFOLLOW);
+            result = vfs_path_stat(absolute_path.c_str(), &kst, follow_symlinks);
             if (result < 0)
             {
-                return result;
+                return result; // 返回错误码
             }
         }
 
@@ -1961,13 +1939,12 @@ namespace syscall
             printfRed("[sys_mount Error copying old path from user space\n");
             return cpres;
         }
-        cpres = mem::k_vmm.copy_str_in(*pt, mnt, mnt_addr, 100) < 0;
-        if (cpres < 0)
+        cpres = mem::k_vmm.copy_str_in(*pt, mnt, mnt_addr, 100) ;
         {
             printfRed("[sys_mount] Error copying old path from user space\n");
             return cpres;
         }
-        cpres = mem::k_vmm.copy_str_in(*pt, fstype, fstype_addr, 100) < 0;
+        cpres = mem::k_vmm.copy_str_in(*pt, fstype, fstype_addr, 100) ;
         if (cpres < 0)
         {
             printfRed("[sys_mount] Error copying old path from user space\n");
@@ -2581,34 +2558,28 @@ namespace syscall
             printfRed("[SyscallHandler::sys_fstatat] 文件不存在: %s\n", abs_pathname.c_str());
             return SYS_ENOENT; // 文件不存在
         }
-        // 尝试打开文件以获取文件描述符，使用和 sys_openat 相同的方式
 
-        // 根据flags决定打开文件的方式
-        int open_flags = O_RDONLY;
+        // 对于 AT_SYMLINK_NOFOLLOW 标志，我们需要特殊处理符号链接
         if (flags & AT_SYMLINK_NOFOLLOW)
         {
-            open_flags |= O_NOFOLLOW; // 不跟随符号链接
-            printfYellow("[SyscallHandler::sys_fstatat] AT_SYMLINK_NOFOLLOW set, using O_NOFOLLOW\n");
+            printfYellow("[SyscallHandler::sys_fstatat] AT_SYMLINK_NOFOLLOW set, getting symlink attributes directly\n");
+            
+            // 直接通过路径获取文件属性，不跟随符号链接
+            if (vfs_path_stat(abs_pathname.c_str(), &kst, false) < 0)
+            {
+                printfRed("[SyscallHandler::sys_fstatat] Failed to get file stat for symlink: %s\n", abs_pathname.c_str());
+                return -1;
+            }
         }
-
-        // 尝试打开文件以获取文件描述符，使用和 sys_openat 相同的方式
-        int fd = proc::k_pm.open(dirfd, abs_pathname, open_flags);
-        if (fd < 0)
+        else
         {
-            printfRed("[SyscallHandler::sys_fstatat] Failed to open file: %s\n", abs_pathname.c_str());
-            return -1;
+            // 正常情况：跟随符号链接
+            if (vfs_path_stat(abs_pathname.c_str(), &kst, true) < 0)
+            {
+                printfRed("[SyscallHandler::sys_fstatat] Failed to get file stat: %s\n", abs_pathname.c_str());
+                return -1;
+            }
         }
-
-        // 获取文件状态信息
-        if (proc::k_pm.fstat(fd, &kst) < 0)
-        {
-            proc::k_pm.close(fd);
-            printfRed("[SyscallHandler::sys_fstatat] Failed to get file stat\n");
-            return -1;
-        }
-
-        // 关闭临时打开的文件描述符
-        proc::k_pm.close(fd);
 
         // 将结果拷贝到用户空间
         if (mem::k_vmm.copy_out(*pt, kst_addr, &kst, sizeof(kst)) < 0)
@@ -6734,13 +6705,13 @@ namespace syscall
 
         // 从用户空间复制字符串
 
-        int cpres = mem::k_vmm.copy_str_in(*pt, target, target_addr, 256) < 0;
+        int cpres = mem::k_vmm.copy_str_in(*pt, target, target_addr, 256) ;
         if (cpres < 0)
         {
             printfRed("[sys_symlinkat] Error copying path from user space\n");
             return cpres;
         }
-        cpres = mem::k_vmm.copy_str_in(*pt, linkpath, linkpath_addr, 256) < 0;
+        cpres = mem::k_vmm.copy_str_in(*pt, linkpath, linkpath_addr, 256) ;
         if (cpres < 0)
         {
             printfRed("[sys_symlinkat] Error copying path from user space\n");
@@ -6938,7 +6909,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_truncate] 参数错误\n");
             return SYS_EINVAL; // 参数错误
         }
-int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), pathname, addr, 256) < 0;
+int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), pathname, addr, 256) ;
         if (cpres < 0)
         {
             printfRed("[sys_fstatfs] Error copying path from user space\n");

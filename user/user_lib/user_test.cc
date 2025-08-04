@@ -2528,17 +2528,17 @@ char *ltp_testcases[] = {
     // "stat01",      //sendmsg
     // "stat01_64",
     // "stat02",    //pass
-    "stat02_64",   //pass
+    // "stat02_64",   //pass
     // "stat03",   //sendmsg
     // "stat03_64",
     // "statfs01",
     // "statfs01_64",
     // "statfs02",  //pass3fail3
-    "statfs02_64", //pass3fail3
+    // "statfs02_64", //pass3fail3
     // "statfs03",    //sendmsg
     // "statfs03_64",
     // "statvfs01",
-    // "statvfs02", //pass
+    // "statvfs02", //和别的不能一起跑
     // "statx01",  //一直游到海水变蓝
     // "statx02",  //pass4 fail1
     // "statx03",// pass6 fail1
@@ -2570,7 +2570,7 @@ char *ltp_testcases[] = {
     // "swapon03",
     // "swapping01",
     // "symlink01",  //pass
-    // "symlink02",  //pass
+    "symlink02",  //pass
     // "symlink03",   //sendmsg
     // "symlink04", //pass
     // "symlinkat01", //pass

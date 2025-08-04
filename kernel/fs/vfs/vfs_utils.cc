@@ -1260,6 +1260,107 @@ int vfs_frename(const char *oldpath, const char *newpath)
     return -status;
 }
 
+int vfs_path_stat(const char *path, fs::Kstat *st, bool follow_symlinks)
+{
+    // 检查文件是否存在
+    if (vfs_is_file_exist(path) != 1)
+    {
+        return -ENOENT;
+    }
+
+    struct ext4_inode inode;
+    uint32 inode_num = 0;
+    int status = ext4_raw_inode_fill(path, &inode_num, &inode);
+    if (status != EOK)
+    {
+        printfRed("vfs_path_stat: ext4_raw_inode_fill failed for %s, error: %d\n", path, status);
+        return -status;
+    }
+
+    struct ext4_sblock *sb = NULL;
+    status = ext4_get_sblock(path, &sb);
+    if (status != EOK)
+        return -status;
+
+    // 检查是否是符号链接
+    int file_type = ext4_inode_type(sb, &inode);
+    if (file_type == EXT4_INODE_MODE_SOFTLINK && follow_symlinks)
+    {
+        // 如果是符号链接且需要跟随，先解析符号链接
+        eastl::string resolved_path;
+        status = resolve_symlinks(eastl::string(path), resolved_path);
+        if (status < 0)
+        {
+            return status;
+        }
+        
+        // 递归调用获取目标文件的属性
+        return vfs_path_stat(resolved_path.c_str(), st, true);
+    }
+
+    // 填充 stat 结构
+    st->dev = 0;
+    st->ino = inode_num;
+    st->mode = ext4_inode_get_mode(sb, &inode);
+    st->nlink = ext4_inode_get_links_cnt(&inode);
+
+    // 获取原始 uid 和 gid，进行范围检查
+    uint32_t raw_uid = ext4_inode_get_uid(&inode);
+    uint32_t raw_gid = ext4_inode_get_gid(&inode);
+
+    // 检查是否有异常值，如果有则使用默认值
+    if (raw_uid > 65535)
+    {
+        st->uid = 0; // 默认 root
+        printfRed("vfs_path_stat: invalid uid %u, using 0\n", raw_uid);
+    }
+    else
+    {
+        st->uid = raw_uid;
+    }
+
+    if (raw_gid > 65535)
+    {
+        st->gid = 0; // 默认 root group
+        printfRed("vfs_path_stat: invalid gid %u, using 0\n", raw_gid);
+    }
+    else
+    {
+        st->gid = raw_gid;
+    }
+
+    st->rdev = ext4_inode_get_dev(&inode);
+    st->size = inode.size_lo;
+    st->blksize = 4096;
+
+    // 计算所需的512字节块数
+    if (st->size == 0)
+    {
+        st->blocks = 0;
+    }
+    else
+    {
+        st->blocks = (st->size + 511) / 512;
+        if (st->blocks == 0 && st->size > 0)
+        {
+            st->blocks = 1;
+        }
+    }
+
+    st->st_atime_sec = ext4_inode_get_access_time(&inode);
+    st->st_atime_nsec = (inode.atime_extra >> 2) & 0x3FFFFFFF;
+    st->st_ctime_sec = ext4_inode_get_change_inode_time(&inode);
+    st->st_ctime_nsec = (inode.ctime_extra >> 2) & 0x3FFFFFFF;
+    st->st_mtime_sec = ext4_inode_get_modif_time(&inode);
+    st->st_mtime_nsec = (inode.mtime_extra >> 2) & 0x3FFFFFFF;
+    st->mnt_id = 0;
+
+    printfCyan("vfs_path_stat: path: %s, mode: 0%o, size: %u, follow_symlinks: %s\n", 
+               path, st->mode, st->size, follow_symlinks ? "true" : "false");
+    
+    return EOK;
+}
+
 int vfs_link(const char *oldpath, const char *newpath)
 {
     printfYellow("vfs_link: checking source file existence: %s\n", oldpath);
