@@ -1,24 +1,29 @@
 /*
- * 版权属于onps栈开发团队，遵循Apache License 2.0开源许可协议
+ * Copyright 2022-2024 The Onps Project Author All Rights Reserved.
+ *
+ * Author：Neo-T, Created in 2022.04.26 10:26
+ *
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
+ * this file except in compliance with the License.  You can obtain a copy
+ * in the file LICENSE in the source distribution or at
+ * http://www.onps.org.cn/apache2.0.txt
  *
  * 伯克利套接字（Berkeley sockets）非标准且不完全实现，按照传统socket编程思想并结合实际应用经验实现的用户层TCP、UDP通讯接口函数，简化了
  * 传统BSD socket需要的一些繁琐的操作，将一些不必要的操作细节改为底层实现，比如select模型、阻塞及非阻塞读写操作等
- * 
- * Neo-T, 创建于2022.04.26 10:26
  *
  */
 #ifndef SOCKET_H
 #define SOCKET_H
 
 #ifdef SYMBOL_GLOBALS
-	#define SOCKET_EXT
+#define SOCKET_EXT
 #else
-	#define SOCKET_EXT extern
+#define SOCKET_EXT extern
 #endif //* SYMBOL_GLOBALS
 #include "onps_input.hh"
 
-typedef INT SOCKET;         //* socket句柄
-#define INVALID_SOCKET  -1  //* 无效的SOCKET
+typedef INT SOCKET;		  //* socket句柄
+#define INVALID_SOCKET -1 //* 无效的SOCKET
 
 //* tcp链路标志位相关定义
 //* =================================================
@@ -26,7 +31,7 @@ typedef INT SOCKET;         //* socket句柄
 //* =================================================
 
 //* 参数family仅支持AF_INET，其它不支持，type仅支持SOCK_STREAM、SOCK_DGRAM两种协议，protocol固定为0
-SOCKET_EXT SOCKET socket(INT family, INT type, INT protocol, EN_ONPSERR *penErr); 
+SOCKET_EXT SOCKET socket(INT family, INT type, INT protocol, EN_ONPSERR *penErr);
 SOCKET_EXT void close(SOCKET socket);
 
 //* 连接函数，阻塞型，直至连接成功或超时，返回0意味着连接成功，-1则意味着连接失败，具体的错误信息通过onps_get_last_error()函数
@@ -35,20 +40,19 @@ SOCKET_EXT INT connect(SOCKET socket, const CHAR *srv_ip, USHORT srv_port, INT n
 
 //* 功能同上，入口参数与之稍微有些区别，connect()函数的srv_ip参数指向可读的ip地址字符串，connect_ext()函数的srv_ip参数指向的则是
 //* inet_addr()/inet6_aton()函数转换后的16进制的实际地址
-SOCKET_EXT INT connect_ext(SOCKET socket, void *srv_ip, USHORT srv_port, INT nConnTimeout); 
+SOCKET_EXT INT connect_ext(SOCKET socket, void *srv_ip, USHORT srv_port, INT nConnTimeout);
 
 //* 非阻塞连接函数，连接成功返回0，连接中会一直返回1，返回-1则意味着连接失败，具体的错误信息通过onps_get_last_error()函数获得
-SOCKET_EXT INT connect_nb(SOCKET socket, const CHAR *srv_ip, USHORT srv_port); 
+SOCKET_EXT INT connect_nb(SOCKET socket, const CHAR *srv_ip, USHORT srv_port);
 
 //* 功能同上，入口参数与connect_nb()函数的区别同同connect_ext()函数
 SOCKET_EXT INT connect_nb_ext(SOCKET socket, void *srv_ip, USHORT srv_port);
-
 
 //* 发送函数(tcp链路下阻塞型)，直至收到tcp层的ack报文或者超时才会返回，返回值大于0为实际发送的字节数，小于0则发送失败，具体错误信息通过onps_get_last_error()函数获得
 //* 对于udp协议来说参数nWaitAckTimeout将被忽略，其将作为非阻塞型函数使用；
 //* 当使能tcp的SUPPORT_SACK选项支持时，tcp链路下参数nWaitAckTimeout无效，可以是任意值，此时该函数为非阻塞型，其仅仅是把数据写入tcp链路的发送缓冲区，返回值为实际写入
 //* 的数据长度，返回值为0代表缓冲区已满，小于0则发生错误，具体的错误信息通过onps_get_last_error()函数获得
-SOCKET_EXT INT send(SOCKET socket, UCHAR *pubData, INT nDataLen, INT nWaitAckTimeout); 
+SOCKET_EXT INT send(SOCKET socket, UCHAR *pubData, INT nDataLen, INT nWaitAckTimeout);
 
 //* 发送函数(tcp链路下非阻塞型)，udp链路该函数与send()函数功能及实现逻辑完全相同
 SOCKET_EXT INT send_nb(SOCKET socket, UCHAR *pubData, INT nDataLen);
@@ -63,27 +67,27 @@ SOCKET_EXT INT sendto(SOCKET socket, const CHAR *dest_ip, USHORT dest_port, UCHA
 SOCKET_EXT BOOL socket_set_rcv_timeout(SOCKET socket, CHAR bRcvTimeout, EN_ONPSERR *penErr);
 
 //* 修改tcp链路相关控制标志
-SOCKET_EXT BOOL socket_set_tcp_link_flags(SOCKET socket, USHORT usNewFlags, EN_ONPSERR *penErr); 
+SOCKET_EXT BOOL socket_set_tcp_link_flags(SOCKET socket, USHORT usNewFlags, EN_ONPSERR *penErr);
 
 //* 修改tcp链路相关控制标志
 SOCKET_EXT BOOL socket_set_tcp_link_flags_safe(SOCKET socket, USHORT usNewFlags, EN_OPTTYPE enOptType, EN_ONPSERR *penErr);
 
 //* 接收函数(阻塞型/非阻塞型)，依赖于socket_set_rcv_timeout()函数设定的接收等待时长，缺省为一直等待直至收到数据或报错，阻塞型返回值为实际收到的数据长度，-1则代
 //* 表出错；非阻塞型返回值为实际收到的数据长度（大于等于0），-1同样代表接收失败
-SOCKET_EXT INT recv(SOCKET socket, UCHAR *pubDataBuf, INT nDataBufSize); 
+SOCKET_EXT INT recv(SOCKET socket, UCHAR *pubDataBuf, INT nDataBufSize);
 
 //* 接收函数，仅用于udp协议接收
 SOCKET_EXT INT recvfrom(SOCKET socket, UCHAR *pubDataBuf, INT nDataBufSize, void *pvFromIP, USHORT *pusFromPort);
 
 //* 获取当前tcp连接状态，0：未连接；1：已连接；-1：读取状态失败，具体错误信息由参数penErr返回
-SOCKET_EXT INT is_tcp_connected(SOCKET socket, EN_ONPSERR *penErr); 
+SOCKET_EXT INT is_tcp_connected(SOCKET socket, EN_ONPSERR *penErr);
 
 //* 为socket绑定指定的网络地址和端口，如果想绑定任意网络接口地址，参数pszNetifIp为NULL即可
 SOCKET_EXT INT bind(SOCKET socket, const CHAR *pszNetifIp, USHORT usPort);
 
 #if SUPPORT_ETHERNET
 //* tcp服务器进入被动监听状态，入口参数与函数功能与伯克利sockets完全相同
-SOCKET_EXT INT listen(SOCKET socket, USHORT backlog); 
+SOCKET_EXT INT listen(SOCKET socket, USHORT backlog);
 
 //* 接受一个到达的tcp连接请求，参数punFromIP及pusFromPort为发起连接请求的客户端的ip地址及端口，参数nWaitSecs指定等待时长（单位秒）：
 //*     0: 不等待，立即返回
@@ -111,12 +115,12 @@ SOCKET_EXT SOCKET tcpsrv_start(INT family, USHORT usSrvPort, USHORT usBacklog, C
 SOCKET_EXT SOCKET tcp_srv_connect(INT family, void *srv_ip, USHORT srv_port, INT nRcvTimeout, INT nConnTimeout, EN_ONPSERR *penErr);
 
 //* tcp数据发送函数，相对于传统send()函数该函数增加了容错处理逻辑
-SOCKET_EXT BOOL tcp_send(SOCKET hSocket, UCHAR *pubData, INT nDataLen); 
+SOCKET_EXT BOOL tcp_send(SOCKET hSocket, UCHAR *pubData, INT nDataLen);
 
 //* 获取最近一次发生的错误信息
 SOCKET_EXT const CHAR *socket_get_last_error(SOCKET socket, EN_ONPSERR *penErr);
 
 //* 获取最近一次发生的错误码
-SOCKET_EXT EN_ONPSERR socket_get_last_error_code(SOCKET socket); 
+SOCKET_EXT EN_ONPSERR socket_get_last_error_code(SOCKET socket);
 
 #endif
