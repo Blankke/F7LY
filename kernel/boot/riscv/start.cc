@@ -4,7 +4,7 @@
 // 机器启动流程：open-sbi(M-mode) -> entry.S(S-mode) -> start.c -> main.c
 
 // 操作系统启动时的栈空间(每个核心占4KB)
-__attribute__ ((aligned (16))) char stack0[NCPU][4096];
+__attribute__ ((aligned (16))) char stack0[NCPU][4096 * 2];
 
 extern void main();
 

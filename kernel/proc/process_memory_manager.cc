@@ -88,7 +88,7 @@ namespace proc
         return this;
     }
 
-    ProcessMemoryManager* ProcessMemoryManager::clone_for_fork(Pcb *target_pcb)
+    ProcessMemoryManager* ProcessMemoryManager::clone_for_fork()
     {
         // 进程复制：创建新的内存管理器并深拷贝内容
         ProcessMemoryManager* new_mgr = new ProcessMemoryManager();
@@ -100,6 +100,7 @@ namespace proc
             delete new_mgr;
             return nullptr;
         }
+        printf("[clone_for_fork] start clone prog_section\n");
         
         // 复制程序段信息
         new_mgr->prog_section_count = prog_section_count;
@@ -282,19 +283,22 @@ namespace proc
         // 释放程序段占用的内存
         for (int i = 0; i < prog_section_count; i++)
         {
-            if (prog_sections[i]._sec_start && prog_sections[i]._sec_size > 0)
+            if (prog_sections[i]._sec_size > 0)
             {
                 uint64 va_start = PGROUNDDOWN((uint64)prog_sections[i]._sec_start);
                 uint64 va_end = PGROUNDUP((uint64)prog_sections[i]._sec_start + prog_sections[i]._sec_size);
+                printfBlue("  Freeing section %d (%s): %p - %p (%u bytes)\n",
+                           i,
+                           prog_sections[i]._debug_name ? prog_sections[i]._debug_name : "unnamed",
+                           (void *)va_start,
+                           (void *)va_end,
+                           prog_sections[i]._sec_size);
 
-                // printfBlue("  Freeing section %d (%s): %p - %p (%u bytes)\n",
-                //            i,
-                //            prog_sections[i]._debug_name ? prog_sections[i]._debug_name : "unnamed",
-                //            (void *)va_start,
-                //            (void *)va_end,
-                //            prog_sections[i]._sec_size);
 
                 safe_vmunmap(va_start, va_end, true);
+            }else{
+                printfRed("prog_sections[i]._debug_name : %s  prog_sections[i]._sec_start : %p   prog_sections[i]._sec_size : %p\n", prog_sections[i]._debug_name, prog_sections[i]._sec_start, prog_sections[i]._sec_size);
+                panic("free_all_program_section counter illegal section");
             }
         }
 
@@ -823,7 +827,7 @@ namespace proc
         if (old_count <= 1)
         {
             // 引用计数降为0，释放所有内存资源
-            
+            print_memory_usage();
             // 1. 释放VMA
             free_all_vma();
             shared_vm = false;

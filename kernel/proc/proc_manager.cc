@@ -460,17 +460,6 @@ namespace proc
         p->_start_time = 0;        // 清零进程启动时间
         p->_start_boottime = 0;    // 清零自系统启动以来的启动时间
 
-        /****************************************************************************************
-         * 程序段描述清理
-         ****************************************************************************************/
-        p->set_prog_section_count(0); // 清零程序段计数
-        program_section_desc* sections = p->get_prog_sections();
-        for (int i = 0; i < max_program_section_num; ++i)
-        {
-            sections[i]._sec_start = nullptr;
-            sections[i]._sec_size = 0;
-            sections[i]._debug_name = nullptr;
-        }
 
         /****************************************************************************************
          * 上下文清理
@@ -1140,11 +1129,12 @@ namespace proc
         }
         else
         {
+            printfBlue("[fork] clone parent vm\n");
             // fork 操作：创建独立的内存管理器副本
             ProcessMemoryManager* parent_mm = p->get_memory_manager();
             if (parent_mm != nullptr)
             {
-                ProcessMemoryManager* cloned_mm = parent_mm->clone_for_fork(np);
+                ProcessMemoryManager* cloned_mm = parent_mm->clone_for_fork();
                 if (cloned_mm == nullptr)
                 {
                     panic("[fork] clone failed");
@@ -1499,7 +1489,8 @@ namespace proc
                             _wait_lock.release();
                             return -1;
                         }
-                        /// @todo release shm
+
+                        printf("[wait4] freeproc child pid: %d\n", np->_pid);
 
                         k_pm.freeproc(np);
                         np->_lock.release();
@@ -3763,7 +3754,8 @@ namespace proc
 
             mem::k_vmm.uvmclear(new_pt, stack_start); // 设置guardpage
             sp = stack_end;                           // 栈指针从顶部开始
-            stackbase = stack_start + PGSIZE;         // 计算栈底地址(跳过guard page)
+            // stackbase = stack_start + PGSIZE;         // 计算栈底地址(跳过guard page)
+            stackbase = stack_start;         // 计算栈底地址(跳过guard page) -> 不能跳过, 因为free的时候要用
             sp -= sizeof(uint64);                     // 为返回地址预留空间
 
             // 添加用户栈段信息到 ProcessMemoryManager
@@ -3990,8 +3982,7 @@ namespace proc
         // 注意：execve保持进程的身份信息不变，包括PID、PGID、SID、UID/GID等
         // 这符合POSIX标准：execve只替换进程的内存映像，不改变进程的身份标识
 
-        mem::PageTable old_pt;
-        old_pt = *proc->get_pagetable(); // 获取当前进程的页表
+        printfBlue("execve: start clean up old process memory space\n");
 
         // 使用PCB的cleanup_memory_manager进行完整的内存清理
         // 这会正确处理引用计数并释放ProcessMemoryManager对象

@@ -158,7 +158,8 @@ void trap_manager::usertrap()
 
   // 时间统计：从用户态切换到内核态
   uint64 cur_tick = tmm::get_ticks();
-  if (p->_last_user_tick > 0) {
+  if (p->_last_user_tick > 0)
+  {
     // 累加用户态运行时间
     uint64 user_time = cur_tick - p->_last_user_tick;
     p->_user_ticks += user_time;
@@ -225,19 +226,18 @@ void trap_manager::usertrap()
     }
   }
 
-  
-  
   usertrapret();
 }
 
 void trap_manager::usertrapret(void)
 {
-//   printfCyan("==usertrapret== pid=%d\n", proc::k_pm.get_cur_pcb()->_pid);
+  //   printfCyan("==usertrapret== pid=%d\n", proc::k_pm.get_cur_pcb()->_pid);
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
 
   // 时间统计：从内核态切换到用户态
   uint64 cur_tick = tmm::get_ticks();
-  if (p->_kernel_entry_tick > 0) {
+  if (p->_kernel_entry_tick > 0)
+  {
     // 累加内核态运行时间
     uint64 kernel_time = cur_tick - p->_kernel_entry_tick;
     p->_stime += kernel_time;
@@ -263,10 +263,10 @@ void trap_manager::usertrapret(void)
 
   // set up trapframe values that uservec will need when
   // the process next re-enters the kernel.
-  p->get_trapframe()->kernel_pgdl = r_csr_pgdl();      // kernel page table
+  p->get_trapframe()->kernel_pgdl = r_csr_pgdl();                // kernel page table
   p->get_trapframe()->kernel_sp = p->get_kstack() + KSTACK_SIZE; // process's kernel stack
   p->get_trapframe()->kernel_trap = (uint64)wrap_usertrap;
-//   printf("usertrapret: p->get_trapframe()->kernel_trap: %p\n", p->get_trapframe()->kernel_trap);
+  //   printf("usertrapret: p->get_trapframe()->kernel_trap: %p\n", p->get_trapframe()->kernel_trap);
   p->get_trapframe()->kernel_hartid = r_tp(); // hartid for cpuid()
 
   // set up the registers that uservec.S's ertn will use
@@ -368,7 +368,7 @@ int mmap_handler(uint64 va, int cause)
       }
     }
   }
-  
+
   if (i == proc::NVMA)
   {
     printfRed("mmap_handler: no VMA found for va %p\n", va);
@@ -377,15 +377,18 @@ int mmap_handler(uint64 va, int cause)
 
   // 获取VMA结构
   struct proc::vma *vm = &p->get_vma()->_vm[i];
-  
+
   // 确定访问类型 (LoongArch的异常码)
   int access_type = 0; // 默认读取
-  if (cause == 15) { // Store page fault  
+  if (cause == 15)
+  {                  // Store page fault
     access_type = 1; // 写入
-  } else if (cause == 12) { // Instruction page fault
+  }
+  else if (cause == 12)
+  {                  // Instruction page fault
     access_type = 2; // 执行
   }
-  
+
   // 使用统一的VMA页面分配函数
   return mem::k_vmm.allocate_vma_page(*p->get_pagetable(), va, vm, access_type);
 }

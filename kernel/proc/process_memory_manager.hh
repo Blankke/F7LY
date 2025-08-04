@@ -127,10 +127,9 @@ namespace proc
 
         /**
          * @brief 为进程创建完全复制的内存管理器
-         * @param target_pcb 目标进程的控制块，用于创建页表和内存复制
          * @return 新的ProcessMemoryManager实例，内容为深拷贝
          */
-        ProcessMemoryManager *clone_for_fork(class Pcb *target_pcb);
+        ProcessMemoryManager *clone_for_fork();
 
         /****************************************************************************************
          * 程序段管理接口
