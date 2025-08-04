@@ -6197,23 +6197,164 @@ namespace syscall
             return 0;
         }
 
-        // 找到了对应的VMA，现在修改权限
+        // 找到了对应的VMA，现在需要处理权限修改
         proc::vma *vm = &pcb->_vma->_vm[vma_index];
+        uint64 vma_start = vm->addr;
+        uint64 vma_end = vma_start + vm->len;
         int old_prot = vm->prot;
 
-        printfYellow("[sys_mprotect] Changing VMA[%d] protection from %d to %d\n",
-                     vma_index, old_prot, prot);
+        printfYellow("[sys_mprotect] VMA[%d] covers range [%p, %p), target range [%p, %p), prot: %d -> %d\n",
+                     vma_index, (void *)vma_start, (void *)vma_end, (void *)addr, (void *)end_addr, old_prot, prot);
 
-        // 修改VMA的权限
-        vm->prot = prot;
+        // 保存原始VMA状态用于回滚
+        proc::vma original_vma = *vm;
+        
+        // 记录我们创建的新VMA索引，用于失败时清理
+        int created_vma_indices[2] = {-1, -1}; // 最多创建2个新VMA（前段用原VMA，中段和后段用新VMA）
+        int created_vma_count = 0;
+        
+        // 如果要修改的范围与整个VMA完全一致，直接修改VMA权限
+        if (addr == vma_start && end_addr == vma_end)
+        {
+            printfCyan("[sys_mprotect] Exact VMA match, updating protection directly\n");
+            vm->prot = prot;
+        }
+        else
+        {
+            // 需要拆分VMA
+            printfCyan("[sys_mprotect] Need to split VMA for partial protection change\n");
 
-        // 同时更新页表权限（VMA上下文，考虑懒分配）
+            // 查找空闲的VMA槽位
+            int free_vma_count = 0;
+            int free_vma_indices[3]; // 最多需要3个新的VMA（前、中、后）
+            
+            for (int i = 0; i < proc::NVMA; i++)
+            {
+                if (!pcb->_vma->_vm[i].used && free_vma_count < 3)
+                {
+                    free_vma_indices[free_vma_count++] = i;
+                }
+            }
+
+            // 计算需要多少个VMA分段
+            int segments_needed = 0;
+            if (addr > vma_start) segments_needed++; // 前段
+            segments_needed++; // 中段（要修改权限的部分）
+            if (end_addr < vma_end) segments_needed++; // 后段
+
+            if (free_vma_count < segments_needed - 1)
+            {
+                printfRed("[sys_mprotect] Not enough free VMA slots for splitting (need %d, have %d)\n",
+                          segments_needed - 1, free_vma_count);
+                return syscall::SYS_ENOMEM;
+            }
+
+            int next_free_idx = 0;
+
+            // 如果有前段（addr > vma_start），保留原VMA作为前段
+            if (addr > vma_start)
+            {
+                // 原VMA变成前段
+                vm->len = addr - vma_start;
+                printfGreen("[sys_mprotect] Created front segment: VMA[%d] [%p, %p) prot=%d\n",
+                            vma_index, (void *)vm->addr, (void *)(vm->addr + vm->len), vm->prot);
+            }
+            else
+            {
+                // 没有前段，原VMA将被重用作为中段或后段
+            }
+
+            // 创建中段（要修改权限的部分）
+            int middle_vma_idx;
+            if (addr > vma_start)
+            {
+                // 有前段，需要新VMA作为中段
+                middle_vma_idx = free_vma_indices[next_free_idx++];
+                created_vma_indices[created_vma_count++] = middle_vma_idx;
+            }
+            else
+            {
+                // 没有前段，重用原VMA作为中段
+                middle_vma_idx = vma_index;
+            }
+
+            proc::vma *middle_vm = &pcb->_vma->_vm[middle_vma_idx];
+            *middle_vm = original_vma; // 复制原VMA的所有属性
+            middle_vm->used = 1;
+            middle_vm->addr = addr;
+            middle_vm->len = aligned_len;
+            middle_vm->prot = prot;
+            
+            // 调整文件偏移（如果是文件映射）
+            if (middle_vm->vfile != nullptr)
+            {
+                middle_vm->offset += (addr - vma_start);
+                if (middle_vma_idx != vma_index) // 只有在创建新VMA时才增加引用计数
+                {
+                    middle_vm->vfile->dup(); // 增加引用计数
+                }
+            }
+
+            printfGreen("[sys_mprotect] Created middle segment: VMA[%d] [%p, %p) prot=%d\n",
+                        middle_vma_idx, (void *)middle_vm->addr, (void *)(middle_vm->addr + middle_vm->len), middle_vm->prot);
+
+            // 如果有后段（end_addr < vma_end），创建后段
+            if (end_addr < vma_end)
+            {
+                int back_vma_idx = free_vma_indices[next_free_idx++];
+                created_vma_indices[created_vma_count++] = back_vma_idx;
+                
+                proc::vma *back_vm = &pcb->_vma->_vm[back_vma_idx];
+                *back_vm = original_vma; // 复制原VMA的所有属性
+                back_vm->used = 1;
+                back_vm->addr = end_addr;
+                back_vm->len = vma_end - end_addr;
+                back_vm->prot = old_prot; // 保持原来的权限
+                
+                // 调整文件偏移（如果是文件映射）
+                if (back_vm->vfile != nullptr)
+                {
+                    back_vm->offset += (end_addr - vma_start);
+                    back_vm->vfile->dup(); // 增加引用计数
+                }
+
+                printfGreen("[sys_mprotect] Created back segment: VMA[%d] [%p, %p) prot=%d\n",
+                            back_vma_idx, (void *)back_vm->addr, (void *)(back_vm->addr + back_vm->len), back_vm->prot);
+            }
+        }
+
+        // 更新页表权限（VMA上下文，考虑懒分配）
         if (mem::k_vmm.protectpages(*pcb->get_pagetable(), addr, aligned_len, perm, true) < 0)
         {
-            printfRed("[sys_mprotect] protectpages failed for VMA range [%p, %p)\n",
+            printfRed("[sys_mprotect] protectpages failed for range [%p, %p), rolling back VMA changes\n",
                       (void *)addr, (void *)end_addr);
-            // 恢复VMA权限
-            vm->prot = old_prot;
+            
+            // 恢复VMA状态
+            // 1. 恢复原始VMA
+            *vm = original_vma;
+            
+            // 2. 清理我们创建的新VMA
+            for (int i = 0; i < created_vma_count; i++)
+            {
+                int idx = created_vma_indices[i];
+                if (idx >= 0 && idx < proc::NVMA)
+                {
+                    proc::vma *cleanup_vm = &pcb->_vma->_vm[idx];
+                    
+                    // 释放文件引用（如果有）
+                    if (cleanup_vm->vfile != nullptr)
+                    {
+                        cleanup_vm->vfile->free_file();
+                    }
+                    
+                    // 清零VMA结构
+                    memset(cleanup_vm, 0, sizeof(proc::vma));
+                    
+                    printfYellow("[sys_mprotect] Cleaned up VMA[%d] during rollback\n", idx);
+                }
+            }
+            
+            printfYellow("[sys_mprotect] VMA state successfully rolled back\n");
             return syscall::SYS_EFAULT;
         }
 
@@ -6224,8 +6365,8 @@ namespace syscall
         asm volatile("invtlb 0x0,$zero,$zero");
 #endif
 
-        printfGreen("[sys_mprotect] Success: changed VMA[%d] protection for range [%p, %p) to %d\n",
-                    vma_index, (void *)addr, (void *)end_addr, prot);
+        printfGreen("[sys_mprotect] Success: changed protection for range [%p, %p) to %d\n",
+                    (void *)addr, (void *)end_addr, prot);
 
         return 0;
     }

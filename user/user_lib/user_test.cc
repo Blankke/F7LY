@@ -1718,7 +1718,7 @@ char *ltp_testcases[] = {
     // "mlockall03",
     // "mmap001",   //pass
     // "mmap01",   //bin/sh
-    // "mmap02",   ///pass
+    // "mmap02",   //failed
     // "mmap03",
     // "mmap04",
     // "mmap05",
@@ -1727,7 +1727,7 @@ char *ltp_testcases[] = {
     // "mmap09",  //pass
     // "mmap1",
     // "mmap10", //爆了
-    // "mmap11",   //pass
+    // "mmap11",   //pass不能和别的一起跑
     // "mmap12",
     // "mmap13",
     // "mmap14",
@@ -1786,11 +1786,11 @@ char *ltp_testcases[] = {
     // "mpls02.sh",
     // "mpls03.sh",
     // "mpls04.sh",
-    // "mprotect01",
+    // "mprotect01", //爆了
     // "mprotect02",
     // "mprotect03",
     // "mprotect04",
-    // "mprotect05",
+    // "mprotect05", //pass
     // "mq_notify01",
     // "mq_notify02",
     // "mq_notify03",
@@ -1802,11 +1802,11 @@ char *ltp_testcases[] = {
     // "mqns_02",
     // "mqns_03",
     // "mqns_04",
-    // "mremap01",
-    // "mremap02",
-    // "mremap03",
-    // "mremap04",
-    // "mremap05",
+    // "mremap01",//pass
+    // "mremap02",//pass
+    // "mremap03",//pass
+    // "mremap04", //爆了
+    // "mremap05",//pass
     // "mremap06",
     // "msg_comm",
     // "msgctl01",
@@ -2570,7 +2570,7 @@ char *ltp_testcases[] = {
     // "swapon03",
     // "swapping01",
     // "symlink01",  //pass
-    "symlink02",  //pass
+    // "symlink02",  //pass
     // "symlink03",   //sendmsg
     // "symlink04", //pass
     // "symlinkat01", //pass
