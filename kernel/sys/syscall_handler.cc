@@ -732,18 +732,6 @@ namespace syscall
         static int string_length = 0;
         string_length += strlen(k_buf);
         // printf("[sys_read] read %d characters in total\n", string_length);
-        // 添加调试打印，显示读取到的内容
-        k_buf[ret] = '\0'; // 确保字符串以null结尾
-        // printfYellow("[sys_read] fd=%d, read %d bytes: \"%s\"\n", fd, ret, k_buf);
-
-        // 打印前64个字节（或实际读取的字节数）
-        int print_len = ret < 64 ? ret : 64;
-        printfYellow("just for [copy file range] test, fd=%d, read %d bytes, first %d bytes: \"", fd, ret, print_len);
-        for (int i = 0; i < print_len; ++i)
-        {
-            printf("%2x ", (unsigned char)k_buf[i]);
-        }
-        printf("\"\n");
 
         if (mem::k_vmm.copy_out(*pt, buf, k_buf, ret) < 0)
             return -EFAULT;
@@ -4623,7 +4611,11 @@ namespace syscall
         mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
         if (addr != 0)
             p_off = (ulong *)pt->walk_addr(addr); // TODO：TBD原来这里有to_vir
+#ifdef LOONGARCH
+        if (addr != 0)
+            p_off =(ulong *) to_vir((ulong)pt->walk_addr(addr)); // TODO：TBD原来这里有to_vir
 
+#endif
         size_t count;
         if (_arg_addr(3, count) < 0)
             return -4;
@@ -5693,6 +5685,8 @@ namespace syscall
         // 从用户空间拷贝 shmid_ds 结构体
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
+        #ifdef LOONGARCH
+        #endif
         if (mem::k_vmm.copy_in(*pt, &buf, buf_addr, sizeof(buf)) < 0)
         {
             printfRed("[SyscallHandler::sys_shmctl] 拷贝 shmid_ds 结构体失败\n");

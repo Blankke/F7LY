@@ -791,4 +791,35 @@ namespace fs
         return result;
     }
 
+    // ======================== shmmax提供者实现 ========================
+    eastl::string ProcSysKernelShmmaxProvider::generate_content()
+    {
+        // 返回系统共享内存段的最大大小，单位为字节
+        // 这里假设最大值为 32MB
+        const uint64 shmmax = 32 * 1024 * 1024; // 32MB
+        char _buffer[32];
+        snprintf(_buffer, sizeof(_buffer), "%lu\n", shmmax);
+        eastl::string result(_buffer);
+        return result;
+    }
+    eastl::string ProcSysKernelShmmniProvider::generate_content()
+    {
+        // 返回系统共享内存段的最小大小，单位为字节
+        // 这里假设最大值为 32MB
+        const uint64 shmmax = 4 * 1024; // 4KB
+        char _buffer[32];
+        snprintf(_buffer, sizeof(_buffer), "%lu\n", shmmax);
+        eastl::string result(_buffer);
+        return result;
+    }
+    eastl::string ProcSysKernelShmallProvider::generate_content()
+    {
+        // 返回系统共享内存段的总大小，单位为字节
+        // 这里假设最大值为 32MB
+        const uint64 shmall = 16384;
+        char _buffer[32];
+        snprintf(_buffer, sizeof(_buffer), "%lu\n", shmall);
+        eastl::string result(_buffer);
+        return result;
+    }
 } // namespace fs

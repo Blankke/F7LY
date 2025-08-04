@@ -179,13 +179,13 @@ namespace shm
             start_addr = ((start_addr / SHMLBA) + 1) * SHMLBA;
         }
         
-        // 检查地址范围合法性（简化：假设用户空间上限为0x40000000）
-        const uint64 USER_SPACE_LIMIT = 0x40000000ULL;
-        if (start_addr + size > USER_SPACE_LIMIT) {
-            printfRed("[ShmManager] Address 0x%x + size 0x%x exceeds user space limit\n", 
-                     start_addr, size);
-            return 0;
-        }
+        // // 检查地址范围合法性（简化：假设用户空间上限为0x40000000）
+        // const uint64 USER_SPACE_LIMIT = 0x40000000ULL;
+        // if (start_addr + size > USER_SPACE_LIMIT) {
+        //     printfRed("[ShmManager] Address 0x%x + size 0x%x exceeds user space limit\n", 
+        //              start_addr, size);
+        //     return 0;
+        // }
         
         // TODO: 应该检查与现有VMA的冲突，这里简化处理
         return start_addr;
@@ -211,19 +211,19 @@ namespace shm
         }
         
         // 检查地址范围是否在用户空间内
-        const uint64 USER_SPACE_START = 0x1000ULL;     // 用户空间起始地址
-        const uint64 USER_SPACE_LIMIT = 0x40000000ULL; // 用户空间限制
+        // const uint64 USER_SPACE_START = 0x1000ULL;     // 用户空间起始地址
+        // const uint64 USER_SPACE_LIMIT = 0x40000000ULL; // 用户空间限制
         
-        if (addr < USER_SPACE_START) {
-            printfRed("[ShmManager] Address 0x%x is below user space start\n", addr);
-            return false;
-        }
+        // if (addr < USER_SPACE_START) {
+        //     printfRed("[ShmManager] Address 0x%x is below user space start\n", addr);
+        //     return false;
+        // }
         
-        if (addr + size > USER_SPACE_LIMIT) {
-            printfRed("[ShmManager] Address range [0x%x, 0x%x] exceeds user space limit\n", 
-                     addr, addr + size);
-            return false;
-        }
+        // if (addr + size > USER_SPACE_LIMIT) {
+        //     printfRed("[ShmManager] Address range [0x%x, 0x%x] exceeds user space limit\n", 
+        //              addr, addr + size);
+        //     return false;
+        // }
         
         // 检查地址范围是否会溢出
         if (addr + size < addr) {

@@ -321,5 +321,34 @@ namespace fs
             return eastl::make_unique<ProcSelfStatusProvider>();
         }
     };
-
+    // /proc/sys/kernel/shmmax
+    class ProcSysKernelShmmaxProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_writable() const override { return false; } // 允许写入
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcSysKernelShmmaxProvider>();
+        }
+    };
+        // /proc/sys/kernel/shmmni
+    class ProcSysKernelShmmniProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_writable() const override { return false; } // 允许写入
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcSysKernelShmmniProvider>();
+        }
+    };
+    // /proc/sys/kernel/shmall
+    class ProcSysKernelShmallProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_writable() const override { return false; } // 允许写入
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcSysKernelShmallProvider>();
+        }
+    };
 }

@@ -7,7 +7,6 @@ namespace fs
     // 构造函数
     VirtualFileSystem::VirtualFileSystem()
     {
-
     }
 
     // 析构函数
@@ -272,75 +271,76 @@ namespace fs
         // /proc/1/stat
         add_virtual_file("/proc/1/stat", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<Proc1StatProvider>());
-        
-        // /proc/self/fd/X
-        auto int_to_string = [](uint num) -> eastl::string {
-            if (num == 0) return "0";
-            
-            char buffer[16];
-            int pos = 15;
-            buffer[pos] = '\0';
-            
-            while (num > 0) {
-                buffer[--pos] = '0' + (num % 10);
-                num /= 10;
-            }
-            
-            return eastl::string(&buffer[pos]);
-        };
 
-        for (uint i = 0; i < proc::max_open_files; i++)
-        {
-            eastl::string i_str = int_to_string(i);
-            add_virtual_file("/proc/self/fd/" + i_str, fs::FileTypes::FT_SYMLINK,
-                             eastl::make_unique<ProcSelfFdProvider>(i));
-        }
+        // // /proc/self/fd/X
+        // auto int_to_string = [](uint num) -> eastl::string {
+        //     if (num == 0) return "0";
+
+        //     char buffer[16];
+        //     int pos = 15;
+        //     buffer[pos] = '\0';
+
+        //     while (num > 0) {
+        //         buffer[--pos] = '0' + (num % 10);
+        //         num /= 10;
+        //     }
+
+        //     return eastl::string(&buffer[pos]);
+        // };
+
+        // for (uint i = 0; i < proc::max_open_files; i++)
+        // {
+        //     eastl::string i_str = int_to_string(i);
+        //     add_virtual_file("/proc/self/fd/" + i_str, fs::FileTypes::FT_SYMLINK,
+        //                      eastl::make_unique<ProcSelfFdProvider>(i));
+        // }
 
         // 注意：/proc/self/cmdline, /proc/stat, /proc/uptime 等需要相应的 Provider 实现
         // 这里先创建节点，但 provider 为 nullptr，可以后续添加
         add_virtual_file("/proc/self/cmdline", fs::FileTypes::FT_NORMAL, nullptr);
         add_virtual_file("/proc/stat", fs::FileTypes::FT_NORMAL, nullptr);
         add_virtual_file("/proc/uptime", fs::FileTypes::FT_NORMAL, nullptr);
-        
+
         // 添加 /proc/self/stat 文件及其提供者
         add_virtual_file("/proc/self/stat", fs::FileTypes::FT_NORMAL,
-                        eastl::make_unique<ProcSelfStatProvider>());
+                         eastl::make_unique<ProcSelfStatProvider>());
 
         // 添加 /proc/self/maps 文件及其提供者
         add_virtual_file("/proc/self/maps", fs::FileTypes::FT_NORMAL,
-                        eastl::make_unique<ProcSelfMapsProvider>());
+                         eastl::make_unique<ProcSelfMapsProvider>());
 
-        // 添加 /proc/self/pagemap 文件及其提供者  
+        // 添加 /proc/self/pagemap 文件及其提供者
         add_virtual_file("/proc/self/pagemap", fs::FileTypes::FT_NORMAL,
-                        eastl::make_unique<ProcSelfPagemapProvider>());
+                         eastl::make_unique<ProcSelfPagemapProvider>());
 
         // 添加 /proc/self/status 文件及其提供者
         add_virtual_file("/proc/self/status", fs::FileTypes::FT_NORMAL,
-                        eastl::make_unique<ProcSelfStatusProvider>());
+                         eastl::make_unique<ProcSelfStatusProvider>());
 
         // ======================== Loop 设备节点 ========================
         // 添加 /dev/loop-control 控制设备
         add_virtual_file("/dev/loop-control", fs::FileTypes::FT_DEVICE,
-                        eastl::make_unique<DevLoopControlProvider>());
+                         eastl::make_unique<DevLoopControlProvider>());
 
         // 添加预定义的 loop 设备节点 (/dev/loop0 - /dev/loop7)
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < 8; i++)
+        {
             char loop_name[16] = "/dev/loop";
             loop_name[9] = '0' + i;
             loop_name[10] = '\0';
             eastl::string loop_path(loop_name);
             add_virtual_file(loop_path, fs::FileTypes::FT_DEVICE,
-                            eastl::make_unique<DevLoopProvider>(i));
+                             eastl::make_unique<DevLoopProvider>(i));
         }
 
         // 添加 /proc/interrupts 文件及其提供者
         add_virtual_file("/proc/interrupts", fs::FileTypes::FT_NORMAL,
-                        eastl::make_unique<ProcInterruptsProvider>());
+                         eastl::make_unique<ProcInterruptsProvider>());
 
         // /etc/passwd
         add_virtual_file("/etc/passwd", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<EtcPasswdProvider>());
-                         
+
         // /proc/sys/fs/pipe-user-pages-soft
         add_virtual_file("/proc/sys/fs/pipe-user-pages-soft", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcSysFsPipeUserPagesSoftProvider>());
@@ -360,6 +360,17 @@ namespace fs
         add_virtual_file("/dev/zero", fs::FileTypes::FT_DEVICE,
                          eastl::make_unique<DevZeroProvider>());
 
+        // /proc/sys/kernel/shmmax (共享内存最大值)
+        add_virtual_file("/proc/sys/kernel/shmmax", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcSysKernelShmmaxProvider>());
+
+        // /proc/sys/kernel/shmmni (共享内存最大值)
+        add_virtual_file("/proc/sys/kernel/shmmni", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcSysKernelShmmniProvider>());
+
+        // /proc/sys/kernel/shmall (共享内存总大小)
+        add_virtual_file("/proc/sys/kernel/shmall", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcSysKernelShmallProvider>());
         // 打印树结构（调试用）
         printf("Virtual file system tree:\n");
         print_tree(root, 0, "");
@@ -381,7 +392,7 @@ namespace fs
             return result; // 找到有效的provider，直接返回
             // 注意：这里我们需要克隆provider，因为原provider在树中
         }
-       
+
         return result;
     }
 
@@ -404,7 +415,6 @@ namespace fs
     int VirtualFileSystem::vfile_openat(eastl::string absolute_path, fs::file *&file, uint flags)
     {
         vfile_msg vf_msg = get_vfile_msg(absolute_path);
-
 
         fs::FileAttrs attrs;
         attrs.filetype = (fs::FileTypes)vf_msg.file_type;
@@ -438,7 +448,7 @@ namespace fs
 
     int VirtualFileSystem::fstat(fs::file *f, fs::Kstat *st)
     {
-        if(f->is_virtual)
+        if (f->is_virtual)
         {
             // 如果是虚拟文件，使用虚拟文件系统的fstat处理
             return vfile_fstat(f, st);
@@ -455,23 +465,23 @@ namespace fs
     {
 
         // TODO: 单为了/dev/loop0 搞得，其它时候不能乱写Kstat，写成下面这样刚好能过rename01
-        st->dev = 0x5;            // Device: 5h/5d
-        st->ino = 124;            // Inode: 124
+        st->dev = 0x5;             // Device: 5h/5d
+        st->ino = 124;             // Inode: 124
         st->mode = 0660 | S_IFBLK; // block special file, mode: 0660 + block device
-        st->nlink = 1;            // Links: 1
-        st->uid = 0;              // Uid: 0 (root)
-        st->gid = 6;              // Gid: 6 (disk)
-        st->rdev = 7;               // Device type: 7,0
-        st->size = 0;             // Size: 0
-        st->blksize = 4096;       // IO Block: 4096
-        st->blocks = 0;           // Blocks: 0
+        st->nlink = 1;             // Links: 1
+        st->uid = 0;               // Uid: 0 (root)
+        st->gid = 6;               // Gid: 6 (disk)
+        st->rdev = 7;              // Device type: 7,0
+        st->size = 0;              // Size: 0
+        st->blksize = 4096;        // IO Block: 4096
+        st->blocks = 0;            // Blocks: 0
 
-        st->st_atime_sec = 1753278126;    // Access: 2025-07-23 19:02:06
-        st->st_atime_nsec = 192843346;    // Access nsec
-        st->st_ctime_sec = 1753278126;    // Change: 2025-07-23 19:02:06
-        st->st_ctime_nsec = 176778624;    // Change nsec
-        st->st_mtime_sec = 1753278126;    // Modify: 2025-07-23 19:02:06
-        st->st_mtime_nsec = 176778624;    // Modify nsec
+        st->st_atime_sec = 1753278126; // Access: 2025-07-23 19:02:06
+        st->st_atime_nsec = 192843346; // Access nsec
+        st->st_ctime_sec = 1753278126; // Change: 2025-07-23 19:02:06
+        st->st_ctime_nsec = 176778624; // Change nsec
+        st->st_mtime_sec = 1753278126; // Modify: 2025-07-23 19:02:06
+        st->st_mtime_nsec = 176778624; // Modify nsec
         return 0;
     }
 

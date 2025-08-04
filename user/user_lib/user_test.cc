@@ -1718,7 +1718,7 @@ char *ltp_testcases[] = {
     // "mlockall03",
     // "mmap001",   //pass
     // "mmap01",   //bin/sh
-    // "mmap02",   ///(ㄒoㄒ)/~~爆了
+    // "mmap02",   ///pass
     // "mmap03",
     // "mmap04",
     // "mmap05",
@@ -2438,9 +2438,9 @@ char *ltp_testcases[] = {
     // "shmat03",     //pass?
     // "shmat04",     //pass
     // "shmat1",
-    // "shmctl01",     //pass
+    // "shmctl01",     //卡死了
     // "shmctl02",    //sendmsg
-    // "shmctl03",
+    // "shmctl03",    //pass
     // "shmctl04",   //sendmsg
     // "shmctl05",   //remap_file_pages
     // "shmctl06",    //test requires struct shmid64_ds to have the time_high fields

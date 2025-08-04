@@ -229,6 +229,9 @@ namespace mem
         {
             va = PGROUNDDOWN(src_va);
             pa = (uint64)pt.walk_addr(va);
+#ifdef LOONGARCH
+            pa = to_vir((uint64)pt.walk_addr(va));
+#endif
             if (pa == 0)
             {
                 printfRed("[copyin] pa ==0! walk failed\n");
@@ -303,6 +306,9 @@ namespace mem
         {
             va = PGROUNDDOWN(src_va);
             pa = (uint64)pt.walk_addr(va);
+#ifdef LOONGARCH
+            pa = to_vir((uint64)pt.walk_addr(va));
+#endif
             if (pa == 0)
             {
                 printfRed("[copy_str_in] pa ==0! walk failed\n");
@@ -338,12 +344,12 @@ namespace mem
         }
         if (got_null)
         {
-            return 0;     
+            return 0;
         }
         else
         {
             printfRed("[copy_str_in] string not null-terminated\n");
-            return -36;//ENAMETOOLONG; // 返回错误码，表示字符串未以null结尾
+            return -36; // ENAMETOOLONG; // 返回错误码，表示字符串未以null结尾
         }
     }
     // TODO
