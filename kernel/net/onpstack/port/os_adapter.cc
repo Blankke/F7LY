@@ -65,13 +65,19 @@ const static STCB_PSTACKTHREAD lr_stcbaPStackThread[] = {
 //* 当前线程休眠指定的秒数，参数unSecs指定要休眠的秒数
 void os_sleep_secs(UINT unSecs)
 {
-	panic("os_sleep_secs() cannot be empty");
+	tmm::timeval sleep_tv;
+	sleep_tv.tv_sec = unSecs;
+	sleep_tv.tv_usec = 0;
+	tmm::k_tm.sleep_from_tv(sleep_tv);
 }
 
 //* 当前线程休眠指定的毫秒数，单位：毫秒
 void os_sleep_ms(UINT unMSecs)
 {
-	panic("os_sleep_ms() cannot be empty");
+	tmm::timeval sleep_tv;
+	sleep_tv.tv_sec = unMSecs / 1000;
+	sleep_tv.tv_usec = (unMSecs % 1000) * 1000; // 转换为微秒
+	tmm::k_tm.sleep_from_tv(sleep_tv);
 }
 
 //* 获取系统启动以来已运行的秒数（从0开始）
@@ -109,24 +115,59 @@ void os_thread_onpstack_start(void *pvParam)
 
 HMUTEX os_thread_mutex_init(void)
 {
-	panic("os_thread_mutex_init() cannot be empty");
-
-	return INVALID_HMUTEX; //* 初始失败要返回一个无效句柄
+	// 分配内存来存储 SleepLock 对象
+	proc::SleepLock* mutex = new proc::SleepLock();
+	if (mutex == nullptr) {
+		return INVALID_HMUTEX; // 内存分配失败
+	}
+	
+	// 初始化睡眠锁
+	mutex->init("onpstack_mutex_lock", "onpstack_mutex");
+	
+	// 将指针转换为句柄返回
+	return reinterpret_cast<HMUTEX>(mutex);
 }
 
 void os_thread_mutex_lock(HMUTEX hMutex)
 {
-	panic("os_thread_mutex_lock() cannot be empty");
+	if (hMutex == INVALID_HMUTEX) {
+		panic("os_thread_mutex_lock: invalid mutex handle");
+		return;
+	}
+	
+	// 将句柄转换为 SleepLock 指针
+	proc::SleepLock* mutex = reinterpret_cast<proc::SleepLock*>(hMutex);
+	
+	// 获取锁
+	mutex->acquire();
 }
 
 void os_thread_mutex_unlock(HMUTEX hMutex)
 {
-	panic("os_thread_mutex_unlock() cannot be empty");
+	if (hMutex == INVALID_HMUTEX) {
+		panic("os_thread_mutex_unlock: invalid mutex handle");
+		return;
+	}
+	
+	// 将句柄转换为 SleepLock 指针
+	proc::SleepLock* mutex = reinterpret_cast<proc::SleepLock*>(hMutex);
+	
+	// 释放锁
+	mutex->release();
 }
 
 void os_thread_mutex_uninit(HMUTEX hMutex)
 {
-	panic("os_thread_mutex_uninit() cannot be empty");
+	if (hMutex == INVALID_HMUTEX) {
+		panic("os_thread_mutex_uninit: invalid mutex handle");
+		return;
+	}
+	
+	// 将句柄转换为 SleepLock 指针
+	proc::SleepLock* mutex = reinterpret_cast<proc::SleepLock*>(hMutex);
+	
+	// 释放 SleepLock 对象的内存
+	delete mutex;
 }
 
 HSEM os_thread_sem_init(UINT unInitVal, UINT unCount)
