@@ -1,5 +1,12 @@
 /*
- * 版权属于onps栈开发团队，遵循Apache License 2.0开源许可协议
+ * Copyright 2022-2024 The Onps Project Author All Rights Reserved.
+ *
+ * Author：Neo-T
+ *
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
+ * this file except in compliance with the License.  You can obtain a copy
+ * in the file LICENSE in the source distribution or at
+ * http://www.onps.org.cn/apache2.0.txt
  *
  */
 #include "port/datatype.hh"
@@ -716,7 +723,7 @@ const CHAR *hex_to_str_no_lz_8(UCHAR ubVal, CHAR szDst[3], BOOL blIsUppercase, C
 	szDst[0] = ubVal >> 4;
 	szDst[1] = ubVal & 0x0F;
 
-	INT bBytes = 2;
+	UCHAR bBytes = 2;
 	if (szDst[0])
 	{
 		hex_to_char(szDst[0], blIsUppercase);
@@ -790,7 +797,7 @@ const CHAR *hex_to_str_no_lz_16(USHORT usVal, CHAR szDst[5], BOOL blIsUppercase,
 	}
 
 	//* 计算前导零个数
-	INT i = 0, k = 0;
+	UCHAR i = 0, k = 0;
 	for (; i < 3; i++)
 	{
 		if (szDst[i])
@@ -815,7 +822,7 @@ const CHAR *hex_to_str_no_lz_16(USHORT usVal, CHAR szDst[5], BOOL blIsUppercase,
 	else
 	{
 		//* 去掉前导0
-		INT bMovNum = 4 - k;
+		UCHAR bMovNum = 4 - k;
 		for (i = 0; i < bMovNum; i++)
 			szDst[i] = szDst[k++];
 		szDst[bMovNum] = 0;
@@ -845,6 +852,36 @@ USHORT ascii_to_hex_16(const CHAR *pszAscii)
 		usValue = (usValue << 4) + ascii_to_hex_4(pszAscii[i]);
 
 	return usValue;
+}
+
+BOOL is_valid_ip(const CHAR *pszIP)
+{
+	INT nSum = 0;
+	INT i = 0, j = 0;
+	while ('\0' != pszIP[i])
+	{
+		if (j > 3)
+			return FALSE;
+
+		if (pszIP[i] > 0x2F && pszIP[i] < 0x3A)
+			nSum = nSum * 10 + pszIP[i] - '0';
+		else if (pszIP[i] == '.')
+		{
+			j++;
+			if (nSum < 0 || nSum > 255)
+				return FALSE;
+			else
+				nSum = 0;
+		}
+		else
+			return FALSE;
+		i++;
+	}
+
+	if (j != 3 || (nSum < 0 || nSum > 255))
+		return FALSE;
+
+	return TRUE;
 }
 
 in_addr_t inet_addr_small(const char *pszIP)
@@ -1215,3 +1252,39 @@ __lblMacthedBits:
 	return bMatchedBytes * 8 + bit8_matched_from_left(ubaAddr1[i], ubaAddr2[i], 8);
 }
 #endif //* #if SUPPORT_IPV6
+
+//* 两个无符号整数相除，得到指定精度的浮点数结果，其中ubFloatPrecision指定精度。最大63，也就是说小数点最多63位
+const CHAR *dividing_unsigned_int(UINT unDividend, UINT unDivisor, UCHAR ubFloatPrecision, CHAR *pszResult, UINT unResultBufLen)
+{
+	UCHAR ubDecimal[64];
+	INT i;
+	UINT unInteger = unDividend / unDivisor;
+	UINT unRemainder = unDividend % unDivisor;
+	ubFloatPrecision = ubFloatPrecision > 63 ? 63 : ubFloatPrecision;
+	for (i = 0; i < (INT)sizeof(ubDecimal) && i < ubFloatPrecision + 1; i++)
+	{
+		unRemainder *= 10;
+		ubDecimal[i] = (unRemainder / unDivisor) + '0';
+		unRemainder = unRemainder % unDivisor;
+	}
+
+	//* 四舍五入
+	UCHAR ubCarry = i - 1;
+	if (ubDecimal[ubCarry] > '4')
+	{
+		if (ubCarry)
+			ubDecimal[ubCarry - 1] += 1;
+		else
+			unInteger += 1;
+	}
+	ubDecimal[ubCarry] = 0;
+
+	//* 保存结果到用户指定的缓冲区
+	snprintf(pszResult, unResultBufLen, "%d.", unInteger);
+	UINT unUsedSize = strlen(pszResult);
+	UINT unRemainSize = unResultBufLen - unUsedSize;
+	if (0 != unRemainSize)
+		snprintf(pszResult + unUsedSize, unRemainSize, "%s", ubDecimal);
+
+	return pszResult;
+}
