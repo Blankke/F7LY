@@ -11,7 +11,7 @@
 #include "protocols.hh"
 #include "onps_input.hh"
 #include "printer.hh"
-
+#include "timer_manager.hh"
 #if SUPPORT_PPP
 #include "ppp/negotiation_storage.hh"
 #include "ppp/ppp.hh"
@@ -85,9 +85,10 @@ UINT os_get_system_secs(void)
 //* 获取系统启动以来已运行的毫秒数（从0开始）
 UINT os_get_system_msecs(void)
 {
-	panic("os_get_system_msecs() cannot be empty");
+	// panic("os_get_system_msecs() cannot be empty");
+	uint msecs = tmm::k_tm.clock_gettime_msec(tmm::SystemClockId::CLOCK_MONOTONIC);
 
-	return 0;
+	return msecs;
 }
 
 void os_thread_onpstack_start(void *pvParam)

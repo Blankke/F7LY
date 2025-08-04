@@ -18,7 +18,7 @@
 #elif defined(LOONGARCH)
 #include "devs/loongarch/pci.hh"
 #endif
-namespace virtio_net
+namespace net
 {
     // Forward declarations
     static int virtio_net_alloc_rx_desc(void);

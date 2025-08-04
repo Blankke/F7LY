@@ -167,6 +167,8 @@ namespace tmm
 		/// @return 从系统启动以来的tick数
 		/// @note tick是系统时间的基本单位
 		uint64 get_ticks() ;
+
+		int clock_gettime_msec(SystemClockId clockid);
 	};
 
 	/// @brief 全局定时器管理器实例

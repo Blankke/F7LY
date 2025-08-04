@@ -19,7 +19,7 @@
 #include "mmu/buf_list.hh"
 #include "port/os_adapter.hh"
 
-namespace virtio_net_adapter
+namespace net
 {
     // Forward declarations
     static void start_recv_thread_wrapper(void *param);
@@ -44,11 +44,11 @@ namespace virtio_net_adapter
         printf("[virtio_net_adapter] Initializing VirtIO Net to ONPS adapter\n");
         
         // Initialize virtio net driver first
-        virtio_net::virtio_net_init();
+        net::virtio_net_init();
         
         // Get MAC address from virtio net
         uint8 mac_addr[ETH_ALEN];
-        virtio_net::virtio_net_get_mac(mac_addr);
+        net::virtio_net_get_mac(mac_addr);
         
         printf("[virtio_net_adapter] VirtIO MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
                mac_addr[0], mac_addr[1], mac_addr[2], 
@@ -128,7 +128,7 @@ namespace virtio_net_adapter
         buf_list_merge_packet(buf_list_head, packet_buffer);
         
         // Send via virtio net
-        int result = virtio_net::virtio_net_send(packet_buffer, total_len);
+        int result = net::virtio_net_send(packet_buffer, total_len);
         
         if (result != 0) {
             printf("[virtio_net_adapter] virtio_net_send failed: %d\n", result);
@@ -157,7 +157,7 @@ namespace virtio_net_adapter
             uint32 packet_len = sizeof(packet_buffer);
             
             // Try to receive a packet from virtio net
-            int result = virtio_net::virtio_net_recv(packet_buffer, &packet_len);
+            int result = net::virtio_net_recv(packet_buffer, &packet_len);
             
             if (result == 0 && packet_len > 0) {
                 // Successfully received a packet
@@ -221,6 +221,6 @@ namespace virtio_net_adapter
     // Get MAC address for onps registration
     void get_mac_address(unsigned char mac[6])
     {
-        virtio_net::virtio_net_get_mac(mac);
+        net::virtio_net_get_mac(mac);
     }
 }

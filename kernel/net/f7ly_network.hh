@@ -7,7 +7,7 @@
 
 #include "types.hh"
 
-namespace f7ly_network
+namespace net
 {
     // Initialize the complete network stack with VirtIO Net support
     bool init_network_stack();

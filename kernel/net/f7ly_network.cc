@@ -8,7 +8,7 @@
 #include "libs/printer.hh"
 #include "onps.hh"
 
-namespace f7ly_network
+namespace net
 {
     static bool network_initialized = false;
     
@@ -32,7 +32,7 @@ namespace f7ly_network
         printf("[f7ly_network] ONPS core initialized successfully\n");
         
         // Step 2: Initialize VirtIO Net adapter (this will register with ONPS)
-        if (!virtio_net_adapter::adapter_init()) {
+        if (!net::adapter_init()) {
             printf("[f7ly_network] Failed to initialize VirtIO Net adapter\n");
             open_npstack_unload();
             return false;
@@ -58,7 +58,7 @@ namespace f7ly_network
         printf("[f7ly_network] Cleaning up network stack\n");
         
         // Cleanup in reverse order
-        virtio_net_adapter::adapter_cleanup();
+        net::adapter_cleanup();
         open_npstack_unload();
         
         network_initialized = false;
@@ -76,12 +76,12 @@ namespace f7ly_network
         
         // Get and print MAC address
         uint8 mac[6];
-        virtio_net_adapter::get_mac_address(mac);
+        get_mac_address(mac);
         printf("[f7ly_network] MAC Address: %02x:%02x:%02x:%02x:%02x:%02x\n",
                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
         
         // Print VirtIO debug status
-        virtio_net::virtio_net_debug_status();
+        virtio_net_debug_status();
         
         printf("[f7ly_network] ===================================\n");
     }

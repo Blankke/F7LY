@@ -106,7 +106,7 @@
 #define ETH_ALEN 6         // Ethernet address length
 #define ETH_FRAME_LEN 1514 // Maximum Ethernet frame size
 
-namespace virtio_net
+namespace net
 {
     // VirtIO Ring Descriptor
     struct VRingDesc

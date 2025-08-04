@@ -9,7 +9,7 @@
 #include "platform.hh"
 #include "virtio_net.hh"
 
-namespace virtio_net_adapter
+namespace net
 {
     // Adapter initialization - sets up virtio net and registers with onps
     bool adapter_init();
