@@ -8454,7 +8454,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             // 从普通文件读取到管道
 
             // 检查off_in是否超过文件大小
-            if ((uint64)off_in >= f_in->_stat.size)
+            if ((uint64)off_in >= f_in->lwext4_file_struct.fsize)
             {
                 return 0; // 偏移量超过文件大小，返回0
             }
@@ -8522,11 +8522,12 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
 
         ssize_t total_transferred = 0;
         ssize_t remaining = len;
-
+        fs::pipe_file *pipe_file_cast = static_cast<fs::pipe_file *>(pipe_file);
+        pipe_file_cast->set_nonblock(true); // 设置管道为非阻塞模式
         while (remaining > 0)
         {
             // 从管道读取数据到内核缓冲区
-            ssize_t bytes_read = pipe_file->read((uint64)(buffer + total_transferred), remaining, 0, false);
+            ssize_t bytes_read = pipe_file_cast->read((uint64)(buffer + total_transferred), remaining, 0, false);
             if (bytes_read <= 0)
             {
                 // 管道没有数据了，或者出错
@@ -8563,7 +8564,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
         }
 
         // 计算实际可读取的长度
-        ssize_t file_remaining = regular_file->_stat.size - file_offset;
+        ssize_t file_remaining = regular_file->lwext4_file_struct.fsize - file_offset;
         if (file_remaining <= 0)
         {
             return 0; // 文件已经读取完毕
