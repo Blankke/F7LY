@@ -21,8 +21,10 @@
 		Cpu * cpu = Cpu::get_cpu();
 		cpu->push_intr_off();
 
-		if ( is_held() )
-			panic( "lock is already held." );
+		if ( is_held() ){
+			printf("lock name %s is already held\n", _name);
+			panic( "spinlock acquire" );
+		}
 		
 		eastl::atomic_thread_fence( eastl::memory_order_acq_rel );
 
