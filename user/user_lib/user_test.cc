@@ -284,6 +284,7 @@ int ltp_test(const char *path = musl_dir)
 int git_test(const char *path)
 {
     chdir(path);
+    int fd = openat(AT_FDCWD, "/musl/.gitconfig", 02 | 0100);
     char *argv[8] = {0};
     char *envp[] = {
         "HOME=/musl", // 设置 HOME

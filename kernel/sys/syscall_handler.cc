@@ -2468,6 +2468,41 @@ namespace syscall
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
 
+        // 处理 AT_EMPTY_PATH 标志
+        if (pathname.empty() && (flags & AT_EMPTY_PATH))
+        {
+            // 使用 dirfd 指向的文件进行 stat
+            if (dirfd == AT_FDCWD)
+            {
+                printfRed("[SyscallHandler::sys_fstatat] AT_EMPTY_PATH requires valid dirfd\n");
+                return SYS_EBADF;
+            }
+
+            // 直接对 dirfd 进行 fstat 操作
+            int result = proc::k_pm.fstat(dirfd, &kst);
+            if (result < 0)
+            {
+                printfRed("[SyscallHandler::sys_fstatat] fstat failed for dirfd: %d\n", dirfd);
+                return SYS_EBADF;
+            }
+
+            // 将结果拷贝到用户空间
+            if (mem::k_vmm.copy_out(*pt, kst_addr, &kst, sizeof(kst)) < 0)
+            {
+                printfRed("[SyscallHandler::sys_fstatat] Error copying out kstat\n");
+                return -1;
+            }
+
+            printfGreen("[SyscallHandler::sys_fstatat] AT_EMPTY_PATH success for dirfd: %d\n", dirfd);
+            return 0;
+        }
+        else if (pathname.empty())
+        {
+            // pathname 为空但没有 AT_EMPTY_PATH 标志
+            printfRed("[SyscallHandler::sys_fstatat] Empty pathname without AT_EMPTY_PATH flag\n");
+            return SYS_ENOENT;
+        }
+
         // 处理dirfd和路径
         eastl::string abs_pathname;
 
