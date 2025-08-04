@@ -608,7 +608,7 @@ char *ltp_testcases[] = {
     // "chmod05", //sendmsg
     // "chmod06", //sendmsg
     // "chmod07", //sendmsg
-    // "chown01",     //pass但是结束的时候copyout爆了
+    // "chown01",     //pass
     // "chown01_16",
     // "chown02",
     // "chown02_16",
@@ -917,8 +917,8 @@ char *ltp_testcases[] = {
     // "fcntl10_64", //pass
     // "fcntl11",
     // "fcntl11_64",
-    // "fcntl12", //pass
-    // "fcntl12_64",//pass
+    // "fcntl12", //fail
+    // "fcntl12_64",//fail
     // "fcntl13",  //pass
     // "fcntl13_64", //pass
     // "fcntl14",
@@ -1576,10 +1576,10 @@ char *ltp_testcases[] = {
     // "lgetxattr02",
     // "libcgroup_freezer",
     // "link02",  //pass
-    // "link04",//pass fail3
+    // "link04",//sendmsg
     // "link05", //pass,这个也是逆天数量
-    // "link08", //偷了pass
-    // "linkat01",  //还有一个没有过
+    // "link08", //pass3 fail1
+    // "linkat01",  //有一个没过pass
     // "linkat02",//sendmsg
     // "linktest.sh",
     // "listen01",
@@ -1808,7 +1808,7 @@ char *ltp_testcases[] = {
     // "mpls02.sh",
     // "mpls03.sh",
     // "mpls04.sh",
-    "mprotect01", //pass
+    // "mprotect01", //pass
     // "mprotect02",
     // "mprotect03",
     // "mprotect04",

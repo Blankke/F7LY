@@ -317,7 +317,7 @@ namespace mem
 #ifdef RISCV
 
 #elif defined(LOONGARCH)
-            pa = to_phy(pa);
+            pa = to_vir(pa);
 #endif
             n = PGSIZE - (src_va - va);
             if (n > max)
