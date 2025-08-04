@@ -24,6 +24,18 @@ extern "C" {
 	int    strncmp( const char *s1, const char *s2, size_t n ) noexcept( true );
 }
 
+// stdlib.h (C linkage)
+#define STDLIB 1
+#ifdef STDLIB
+extern "C" {
+	void   srand( unsigned int seed );
+	int    rand( void );
+	void  *malloc( size_t size );
+	void   free( void *ptr );
+	int    abs( int x );
+	int    atoi( const char *nptr );
+}
+#endif
 
 extern "C++" {
 #define STDIO 1
@@ -37,15 +49,6 @@ extern "C++" {
 	const void * memchr( const void *src_void, int c, size_t length ) noexcept( true );
 #endif
 
-// stdlib.h
-#ifdef STDLIB
-	void   srand( unsigned int seed );
-	int    rand( void );
-	void  *malloc( size_t size );
-	void   free( void *ptr );
-	int    abs( int x );
-	int    atoi( const char *nptr );
-#endif
 // stdio.h
 #ifdef STDIO
 //#pragma message("klib.h: STDIO")

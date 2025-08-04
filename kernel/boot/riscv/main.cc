@@ -22,7 +22,6 @@
 #include "tm/timer_manager.hh"
 #include "proc/scheduler.hh"
 #include "syscall_handler.hh"
-#include "devs/riscv/disk_driver.hh"
 #include "devs/device_manager.hh"
 #include "devs/loop_device.hh"
 #include "fs/vfs/file/device_file.hh"
@@ -38,6 +37,8 @@
 #include "fs/vfs/virtual_fs.hh"
 #include "shm/shm_manager.hh"
 #include "fs/vfs/fifo_manager.hh"
+#include "net/drivers/virtio_net.hh"
+#include "net/f7ly_network.hh"
 // 注意华科的main函数可能有问题, 注意多核初始化
 void main()
 {
@@ -78,7 +79,6 @@ void main()
 
     // hardware_secondary_init
     //  2. Disk 初始化 (debug)
-    // new (&riscv::qemu::disk_driver) riscv::qemu::DiskDriver("Disk");
 
     tmm::k_tm.init("timer manager");
     // fs::k_bufm.init("buffer manager");
@@ -105,6 +105,7 @@ void main()
 
         printfMagenta("user init\n");
 
+    // net::init_network_stack();
     printfMagenta("\n"
                   "╦ ╦╔═╗╦  ╔═╗╔═╗╔╦╗╔═╗\n"
                   "║║║║╣ ║  ║  ║ ║║║║║╣\n"

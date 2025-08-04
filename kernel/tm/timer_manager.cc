@@ -289,7 +289,16 @@ namespace tmm
 		}
 		return -1;  // 错误时返回-1
 	}
-	
+	int TimerManager::clock_gettime_msec(SystemClockId clockid)
+	{
+		timespec ts;
+		int ret = clock_gettime(clockid, &ts);
+		if (ret == 0) {
+			return (int)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);  // 返回毫秒数
+		}
+		return -1;  // 错误时返回-1
+	}
+
 	// 导出的C接口函数，供C代码调用
 	extern "C"
 	{

@@ -17,6 +17,7 @@
 #include "proc_manager.hh"
 #include "sys/syscall_defs.hh"
 #include "shm/shm_manager.hh"
+#include "net/drivers/virtio_net.hh"
 extern char etext[]; // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
@@ -915,6 +916,7 @@ namespace mem
         kvmmap(pt, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
         // printfGreen("[vmm] kvmmake virtio0 success\n");
         kvmmap(pt, VIRTIO1, VIRTIO1, PGSIZE, PTE_R | PTE_W);
+        kvmmap(pt, VIRTIO_NET_MMIO_BASE, VIRTIO_NET_MMIO_BASE, PGSIZE, PTE_R | PTE_W);
         // printfGreen("[vmm] kvmmake virtio1 success\n");
         // // CLINT
         kvmmap(pt, CLINT, CLINT, 0x10000, PTE_R | PTE_W);

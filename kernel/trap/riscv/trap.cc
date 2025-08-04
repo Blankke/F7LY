@@ -15,7 +15,6 @@
 #include "proc/signal.hh"
 #include "trap_func_wrapper.hh"
 #include "syscall_handler.hh"
-#include "devs/riscv/disk_driver.hh"
 #include "proc.hh"
 #include "mem.hh"
 #include "physical_memory_manager.hh"
