@@ -1245,7 +1245,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_write] Invalid address: %p\n", (void *)p);
             return SYS_EFAULT;
         }
-        printfCyan("[SyscallHandler::sys_write] fd: %d, p: %p, n: %d\n", fd, (void *)p, n);
+
         // 检查文件是否以 O_PATH 标志打开，O_PATH 文件不允许读取
         if (f->lwext4_file_struct.flags & O_PATH)
             return SYS_EBADF;
@@ -6132,6 +6132,13 @@ namespace syscall
             return syscall::SYS_ENOMEM;
         }
 
+        // 特殊检查：地址为0通常表示无效地址
+        if (addr == 0)
+        {
+            printfRed("[sys_mprotect] ENOMEM: invalid address 0\n");
+            return syscall::SYS_ENOMEM;
+        }
+
         proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
         if (!pcb || !pcb->_vma)
         {
@@ -6205,6 +6212,18 @@ namespace syscall
 
         printfYellow("[sys_mprotect] VMA[%d] covers range [%p, %p), target range [%p, %p), prot: %d -> %d\n",
                      vma_index, (void *)vma_start, (void *)vma_end, (void *)addr, (void *)end_addr, old_prot, prot);
+
+        // 检查权限兼容性：对于文件映射，不能添加原始mmap时没有的写权限
+        if (vm->vfile != nullptr && vm->vfd != -1)
+        {
+            // 这是一个文件映射
+            // 如果原始映射没有写权限，但现在要添加写权限，则拒绝
+            if ((!(old_prot & PROT_WRITE)) && (prot & PROT_WRITE))
+            {
+                printfRed("[sys_mprotect] EACCES: Cannot add write permission to read-only file mapping\n");
+                return syscall::SYS_EACCES;
+            }
+        }
 
         // 保存原始VMA状态用于回滚
         proc::vma original_vma = *vm;

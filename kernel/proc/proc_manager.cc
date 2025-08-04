@@ -3008,7 +3008,7 @@ namespace proc
 
         for (int i = 0; i < NVMA; i++)
         {
-            printfYellow("[mremap] Checking VMA[%d]: used=%d\n", i, pcb->_vma->_vm[i].used);
+            // printfYellow("[mremap] Checking VMA[%d]: used=%d\n", i, pcb->_vma->_vm[i].used);
 
             if (!pcb->_vma->_vm[i].used)
                 continue;
@@ -3016,8 +3016,8 @@ namespace proc
             uint64 vma_start = pcb->_vma->_vm[i].addr;
             uint64 vma_end = vma_start + pcb->_vma->_vm[i].len;
 
-            printfYellow("[mremap] VMA[%d]: [%p, %p), len=%d, used=%d\n",
-                         i, (void *)vma_start, (void *)vma_end, pcb->_vma->_vm[i].len, pcb->_vma->_vm[i].used);
+            // printfYellow("[mremap] VMA[%d]: [%p, %p), len=%d, used=%d\n",
+            //              i, (void *)vma_start, (void *)vma_end, pcb->_vma->_vm[i].len, pcb->_vma->_vm[i].used);
 
             if (old_start >= vma_start && old_end <= vma_end)
             {
@@ -3030,6 +3030,21 @@ namespace proc
         // EFAULT: 地址范围未映射或无效
         if (vma_index == -1)
         {
+            // 检查是否是共享内存映射
+            if (shm::k_smm.is_shared_memory_address(old_address))
+            {
+                printfYellow("[mremap] Found shared memory mapping at %p\n", old_address);
+                
+                // 对于共享内存，我们需要检查是否能扩展
+                // 由于当前的共享内存实现比较简单，我们认为共享内存无法就地扩展
+                // 如果没有设置 MREMAP_MAYMOVE，则返回 ENOMEM
+                if (!(flags & MREMAP_MAYMOVE))
+                {
+                    printfRed("[mremap] ENOMEM: Shared memory cannot be expanded in place and MREMAP_MAYMOVE not set\n");
+                    return syscall::SYS_ENOMEM;
+                }
+            }
+            
             printfRed("[mremap] EFAULT: Address range [%p, %p) not found in valid mappings\n",
                       (void *)old_start, (void *)old_end);
             return syscall::SYS_EFAULT;
