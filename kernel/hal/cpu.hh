@@ -2,13 +2,12 @@
 #include "types.hh"
 #include "proc/proc.hh"
 #include "printer.hh"
+#include "param.h"
 #ifdef RISCV
 #include "riscv/rv_csr.hh"
 #elif defined(LOONGARCH)
 #include "loongarch/la_csr.hh"
 #endif
-
-#define NUMCPU 1
 
 class Cpu
 {

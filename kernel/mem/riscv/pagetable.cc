@@ -12,6 +12,8 @@ namespace mem
 {
     PageTable k_pagetable;
 
+    // 阶段1注释：移除分散的页表引用计数管理，统一使用ProcessMemoryManager
+    /*
     // 引用计数管理实现
     void PageTable::init_ref() {
         if (_ref == nullptr && _base_addr != 0) {
@@ -73,6 +75,7 @@ namespace mem
             panic("share_from: warning - sharing page table %p with null ref pointer\n", _base_addr);
         }
     }
+    */
 
     // walk函数用于在页表中查找一个虚拟地址对应的物理地址
     Pte PageTable::walk(uint64 va, bool alloc)
@@ -209,11 +212,11 @@ namespace mem
 
     void PageTable::freewalk()
     {
-        // 检查引用计数，只有引用计数为0或1时才真正释放
-        if (_ref != nullptr && *_ref > 1) {
-            panic("freewalk: page table %p still has %d references, not freeing\n", _base_addr, *_ref);
-            return;
-        }
+        // // 检查引用计数，只有引用计数为0或1时才真正释放
+        // if (_ref != nullptr && *_ref > 1) {
+        //     panic("freewalk: page table %p still has %d references, not freeing\n", _base_addr, *_ref);
+        //     return;
+        // }
 
         for (uint i = 0; i < 512; i++)
         {
@@ -227,11 +230,10 @@ namespace mem
             }
             else if (pte.is_valid())
             {
-                ///@todo!!!!!!!!!!!目前无视风险，继续访问！！！！！！
                 // printfRed("freewalk: leaf pte[%d]: %p, pte2pa: %p\n", i, pte.get_data(), pte.pa());
                 // 打印当前页表项va
-                // printfRed("freewalk: leaf pte[%d]: %p, pte2pa: %p, va: %p\n", i, pte.get_data(), pte.pa(), (void *)(get_base() + 8 * i));
-                // panic("freewalk: leaf");
+                printfRed("freewalk: leaf pte[%d]: %p, pte2pa: %p, va: %p\n", i, pte.get_data(), pte.pa(), (void *)(get_base() + 8 * i));
+                panic("freewalk: leaf");
             }
         }
         k_pmm.free_page((void *)(get_base()));

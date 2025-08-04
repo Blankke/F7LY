@@ -1,5 +1,6 @@
 #pragma once
 
+#define NUMCPU 1
 #define NPROC        64  // maximum number of processes
 #define NCPU          1  // maximum number of CPUs
 #define NOFILE      128  // open files per process

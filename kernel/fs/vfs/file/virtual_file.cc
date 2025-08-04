@@ -598,7 +598,7 @@ namespace fs
         // TODO: 不懂mmap，等曹老师写
         printfRed("需要曹老师实现，下面写的格式不对，内容也不对，只是个示例\n");
         proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
-        if (!pcb || !pcb->_vma) {
+        if (!pcb || !pcb->get_vma()) {
             return "";
         }
 
@@ -606,7 +606,7 @@ namespace fs
         
         // 遍历所有VMA区域
         for (int i = 0; i < proc::NVMA; i++) {
-            proc::vma &vm = pcb->_vma->_vm[i];
+            proc::vma &vm = pcb->get_vma()->_vm[i];
             if (!vm.used) {
                 continue;
             }

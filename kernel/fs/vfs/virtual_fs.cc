@@ -375,9 +375,10 @@ namespace fs
         // /proc/sys/kernel/shmall (共享内存总大小)
         add_virtual_file("/proc/sys/kernel/shmall", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcSysKernelShmallProvider>());
+                         
         // 打印树结构（调试用）
-        printf("Virtual file system tree:\n");
-        print_tree(root, 0, "");
+        // printf("Virtual file system tree:\n");
+        // print_tree(root, 0, "");
     }
 
     vfile_msg VirtualFileSystem::get_vfile_msg(const eastl::string &absolute_path) const

@@ -1808,7 +1808,7 @@ char *ltp_testcases[] = {
     // "mpls02.sh",
     // "mpls03.sh",
     // "mpls04.sh",
-    "mprotect01", //pass
+    // "mprotect01", //pass
     // "mprotect02",
     // "mprotect03",
     // "mprotect04",

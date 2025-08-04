@@ -261,11 +261,11 @@ namespace shm
         // }
         
         // 检查是否与现有VMA冲突
-        if (proc->_vma != nullptr) {
+        if (proc->get_vma() != nullptr) {
             for (int i = 0; i < proc::NVMA; i++) {
-                if (proc->_vma->_vm[i].used) {
-                    uint64 vma_start = proc->_vma->_vm[i].addr;
-                    uint64 vma_end = vma_start + proc->_vma->_vm[i].len;
+                if (proc->get_vma()->_vm[i].used) {
+                    uint64 vma_start = proc->get_vma()->_vm[i].addr;
+                    uint64 vma_end = vma_start + proc->get_vma()->_vm[i].len;
                     
                     if (addr < vma_end && end_addr > vma_start) {
                         printfRed("[ShmManager] Address range [0x%x, 0x%x] conflicts with VMA %d [0x%x, 0x%x]\n",
@@ -568,7 +568,7 @@ namespace shm
 
         // 建立物理内存和虚拟内存的映射 - 使用实际分配的页对齐大小
         bool map_result = mem::k_vmm.map_pages(
-            current_proc->_pt,     // 当前进程页表
+            *current_proc->get_pagetable(),     // 当前进程页表
             attach_addr,           // 虚拟地址
             seg.real_size,         // 映射大小（页对齐）
             seg.phy_addrs,         // 物理地址
@@ -649,7 +649,7 @@ namespace shm
         
         // 解除映射 - 使用实际分配的页对齐大小
         mem::k_vmm.vmunmap(
-            current_proc->_pt,               // 当前进程页表
+            *current_proc->get_pagetable(),               // 当前进程页表
             (uint64)addr,                    // 虚拟地址
             seg.real_size / PGSIZE,          // 页数（使用实际分配大小）
             0                                // 不释放物理页
@@ -772,8 +772,8 @@ namespace shm
 
                 // 复制到用户空间
                 printfCyan("[ShmManager] copy_out pt:%p,va:0x%x, kernel_buf:%p, size:%u\n",
-                          current_proc->_pt, buf_addr, &kernel_buf, sizeof(kernel_buf));
-                if (mem::k_vmm.copy_out(current_proc->_pt, buf_addr, &kernel_buf, sizeof(kernel_buf)) < 0) {
+                          *current_proc->get_pagetable(), buf_addr, &kernel_buf, sizeof(kernel_buf));
+                if (mem::k_vmm.copy_out(*current_proc->get_pagetable(), buf_addr, &kernel_buf, sizeof(kernel_buf)) < 0) {
                     printfRed("[ShmManager] Failed to copy shmid_ds to user space\n");
                     return -EFAULT;
                 }
@@ -812,7 +812,7 @@ namespace shm
 
                 // 从用户空间复制数据
                 struct shmid_ds user_buf;
-                if (mem::k_vmm.copy_in(current_proc->_pt, &user_buf, buf_addr, sizeof(user_buf)) < 0) {
+                if (mem::k_vmm.copy_in(*current_proc->get_pagetable(), &user_buf, buf_addr, sizeof(user_buf)) < 0) {
                     printfRed("[ShmManager] Failed to copy shmid_ds from user space\n");
                     return -EFAULT;
                 }
@@ -884,7 +884,7 @@ namespace shm
                 sys_info.shmall = (shm_size / PGSIZE); // 系统总页数
 
                 // 复制到用户空间
-                if (mem::k_vmm.copy_out(current_proc->_pt, buf_addr, &sys_info, sizeof(sys_info)) < 0) {
+                if (mem::k_vmm.copy_out(*current_proc->get_pagetable(), buf_addr, &sys_info, sizeof(sys_info)) < 0) {
                     printfRed("[ShmManager] Failed to copy shminfo to user space\n");
                     return -EFAULT;
                 }
@@ -924,7 +924,7 @@ namespace shm
                 usage_info.swap_successes = 0;     // 未使用
 
                 // 复制到用户空间
-                if (mem::k_vmm.copy_out(current_proc->_pt, buf_addr, &usage_info, sizeof(usage_info)) < 0) {
+                if (mem::k_vmm.copy_out(*current_proc->get_pagetable(), buf_addr, &usage_info, sizeof(usage_info)) < 0) {
                     printfRed("[ShmManager] Failed to copy shm_info to user space\n");
                     return -EFAULT;
                 }
