@@ -2440,9 +2440,9 @@ char *ltp_testcases[] = {
     // "shmat1",
     // "shmctl01",     //卡死了
     // "shmctl02",    //sendmsg
-    // "shmctl03",    //pass
+    // "shmctl03",    //pass，但是这个似乎不能和别的连着跑
     // "shmctl04",   //sendmsg
-    // "shmctl05",   //remap_file_pages
+    // "shmctl05",   //爆了
     // "shmctl06",    //test requires struct shmid64_ds to have the time_high fields
     // "shmctl07",    //pass
     // "shmctl08",     //pass
@@ -2528,13 +2528,13 @@ char *ltp_testcases[] = {
     // "stat01",      //sendmsg
     // "stat01_64",
     // "stat02",    //pass
-    // "stat02_64",   //pass
+    "stat02_64",   //pass
     // "stat03",   //sendmsg
     // "stat03_64",
     // "statfs01",
     // "statfs01_64",
-    // "statfs02",  //pass偷的
-    // "statfs02_64", //pass偷的
+    // "statfs02",  //pass3fail3
+    "statfs02_64", //pass3fail3
     // "statfs03",    //sendmsg
     // "statfs03_64",
     // "statvfs01",

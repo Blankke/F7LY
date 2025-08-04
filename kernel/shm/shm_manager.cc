@@ -178,7 +178,7 @@ namespace shm
         if (start_addr % SHMLBA != 0) {
             start_addr = ((start_addr / SHMLBA) + 1) * SHMLBA;
         }
-        
+        proc->set_heap_end(start_addr + size); // 更新堆结束位置
         // // 检查地址范围合法性（简化：假设用户空间上限为0x40000000）
         // const uint64 USER_SPACE_LIMIT = 0x40000000ULL;
         // if (start_addr + size > USER_SPACE_LIMIT) {
@@ -252,13 +252,13 @@ namespace shm
         }
         
         // 检查是否与堆冲突
-        uint64 heap_start = proc->get_heap_start();
-        uint64 heap_end = proc->get_heap_end();
-        if (heap_start < heap_end && addr < heap_end && end_addr > heap_start) {
-            printfRed("[ShmManager] Address range [0x%x, 0x%x] conflicts with heap [0x%x, 0x%x]\n",
-                     addr, end_addr, heap_start, heap_end);
-            return true;
-        }
+        // uint64 heap_start = proc->get_heap_start();
+        // uint64 heap_end = proc->get_heap_end();
+        // if (heap_start < heap_end && addr < heap_end && end_addr > heap_start) {
+        //     printfRed("[ShmManager] Address range [0x%x, 0x%x] conflicts with heap [0x%x, 0x%x]\n",
+        //              addr, end_addr, heap_start, heap_end);
+        //     return true;
+        // }
         
         // 检查是否与现有VMA冲突
         if (proc->_vma != nullptr) {
@@ -276,7 +276,7 @@ namespace shm
             }
         }
         
-        // 检查是否与其他共享内存段冲突
+        // // 检查是否与其他共享内存段冲突
         for (const auto& pair : *segments) {
             const shm_segment& seg = pair.second;
             for (void* attached_addr : seg.attached_addrs) {
@@ -286,7 +286,8 @@ namespace shm
                 if (addr < shm_end && end_addr > shm_start) {
                     printfRed("[ShmManager] Address range [0x%x, 0x%x] conflicts with existing shared memory [0x%x, 0x%x]\n",
                              addr, end_addr, shm_start, shm_end);
-                    return true;
+                    if(proc->_pid==seg.creator_pid) 
+                         return true;
                 }
             }
         }
