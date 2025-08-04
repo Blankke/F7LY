@@ -12,6 +12,8 @@
 #include "onps_input.hh"
 #include "printer.hh"
 #include "timer_manager.hh"
+#include "proc/sleeplock.hh"
+#include "semaphore.hh"
 #if SUPPORT_PPP
 #include "ppp/negotiation_storage.hh"
 #include "ppp/ppp.hh"
@@ -172,26 +174,110 @@ void os_thread_mutex_uninit(HMUTEX hMutex)
 
 HSEM os_thread_sem_init(UINT unInitVal, UINT unCount)
 {
-	panic("os_thread_sem_init() cannot be empty");
-
-	return INVALID_HSEM; //* 初始失败要返回一个无效句柄
+	// 分配内存来存储信号量对象
+	sem* semaphore = new sem();
+	if (semaphore == nullptr) {
+		return INVALID_HSEM; // 内存分配失败
+	}
+	
+	// 使用新的带最大值限制的初始化函数
+	if (unCount > 0) {
+		// 有最大值限制
+		sem_init_with_max(semaphore, (int)unInitVal, (int)unCount, "onpstack_semaphore");
+	} else {
+		// 无最大值限制
+		sem_init(semaphore, (int)unInitVal, "onpstack_semaphore");
+	}
+	
+	// 将指针转换为句柄返回
+	return reinterpret_cast<HSEM>(semaphore);
 }
 
 void os_thread_sem_post(HSEM hSem)
 {
-	panic("os_thread_sem_post() cannot be empty");
+	if (hSem == INVALID_HSEM) {
+		panic("os_thread_sem_post: invalid semaphore handle");
+		return;
+	}
+	
+	// 将句柄转换为信号量指针
+	sem* semaphore = reinterpret_cast<sem*>(hSem);
+	
+	// 执行V操作，检查是否成功
+	if (!sem_try_v(semaphore)) {
+		// 达到最大值限制，使用阻塞版本（可能在某些情况下仍然有效）
+		sem_v(semaphore);
+	}
 }
 
 INT os_thread_sem_pend(HSEM hSem, INT nWaitSecs)
 {
-	panic("os_thread_sem_pend() cannot be empty");
-
-	return -1;
+	if (hSem == INVALID_HSEM) {
+		panic("os_thread_sem_pend: invalid semaphore handle");
+		return -1;
+	}
+	
+	// 将句柄转换为信号量指针
+	sem* semaphore = reinterpret_cast<sem*>(hSem);
+	
+	if (nWaitSecs == 0) {
+		// 永久等待直到信号量可用
+		sem_p(semaphore);
+		return 0; // 成功获取信号量
+	} else {
+		// 支持超时的等待，使用新的非阻塞接口
+		
+		// 记录开始时间
+		uint64 start_time = tmm::k_tm.clock_gettime_msec(tmm::CLOCK_MONOTONIC);
+		if (start_time == (uint64)-1) {
+			return -1; // 获取时间失败
+		}
+		
+		uint64 timeout_ms = (uint64)nWaitSecs * 1000; // 转换为毫秒
+		uint64 end_time = start_time + timeout_ms;
+		
+		// 轮询检查信号量状态，使用适当的睡眠间隔
+		while (true) {
+			// 先尝试非阻塞获取信号量
+			if (sem_try_p(semaphore)) {
+				return 0; // 成功获取信号量
+			}
+			
+			// 检查是否超时
+			uint64 current_time = tmm::k_tm.clock_gettime_msec(tmm::CLOCK_MONOTONIC);
+			if (current_time == (uint64)-1) {
+				return -1; // 获取时间失败
+			}
+			
+			if (current_time >= end_time) {
+				return 1; // 超时
+			}
+			
+			// 计算剩余时间，选择合适的睡眠间隔
+			uint64 remaining_ms = end_time - current_time;
+			uint64 sleep_ms = (remaining_ms > 50) ? 10 : 1; // 剩余时间长时睡10ms，短时睡1ms
+			
+			// 使用项目的睡眠机制进行短暂休眠，避免忙等待
+			tmm::timeval sleep_tv;
+			sleep_tv.tv_sec = 0;
+			sleep_tv.tv_usec = sleep_ms * 1000; // 转换为微秒
+			tmm::k_tm.sleep_from_tv(sleep_tv);
+		}
+	}
 }
 
 void os_thread_sem_uninit(HSEM hSem)
 {
-	panic("os_thread_sem_uninit() cannot be empty");
+	if (hSem == INVALID_HSEM) {
+		panic("os_thread_sem_uninit: invalid semaphore handle");
+		return;
+	}
+	
+	// 将句柄转换为信号量指针
+	sem* semaphore = reinterpret_cast<sem*>(hSem);
+	
+	// 释放信号量对象的内存
+	delete semaphore;
 }
 
 #if SUPPORT_PPP
