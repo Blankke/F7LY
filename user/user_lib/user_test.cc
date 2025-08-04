@@ -281,6 +281,27 @@ int ltp_test(const char *path = musl_dir)
     return 0;
 }
 
+int git_test(const char *path)
+{
+    chdir(path);
+    char *argv[8] = {0};
+    char *envp[] = {
+        "HOME=/musl", // 设置 HOME
+        NULL                        // 必须以 NULL 结尾
+    };
+    // argv[0] = "git";
+    // argv[1] = "help";
+    // run_test("git", argv, 0);
+    argv[0] = "git";
+    argv[1] = "config";
+    argv[2] = "--global";
+    argv[3] = "--add";
+    argv[4] = "safe.directory";
+    argv[5] = "/musl/usr/bin";
+    run_test("git", argv, envp);
+    return 0;
+}
+
 char *libctest[][2] = {
     // {"argv", NULL},
     // {"basename", NULL},

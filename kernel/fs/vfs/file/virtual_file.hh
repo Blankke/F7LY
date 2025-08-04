@@ -16,6 +16,7 @@ namespace fs
     {
         GENERIC,
         DEV_ZERO,
+        DEV_NULL,
         PROC_SELF_EXE,
         PROC_MEMINFO,
         // 可以根据需要添加更多类型
@@ -286,6 +287,20 @@ namespace fs
         virtual VirtualProviderType get_provider_type() const override { return VirtualProviderType::DEV_ZERO; }
         virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
             return eastl::make_unique<DevZeroProvider>();
+        }
+    };
+
+    // /dev/null 内容提供者
+    class DevNullProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_dynamic() const override { return true; } // 每次读取都生成新内容
+        virtual bool is_writable() const override { return true; } // 支持写入（丢弃所有数据）
+        virtual long handle_write(uint64 buf, size_t len, long off) override; // 处理写入操作
+        virtual VirtualProviderType get_provider_type() const override { return VirtualProviderType::DEV_NULL; }
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<DevNullProvider>();
         }
     };
 
