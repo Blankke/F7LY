@@ -42,3 +42,5 @@ outputverbose.txt
 sdcard-la-final.img
 sdcard-rv-final.img
 cfr.c
+sdcard-la-onsite.img
+sdcard-rv-onsite.img
