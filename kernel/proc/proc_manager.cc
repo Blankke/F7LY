@@ -977,7 +977,6 @@ namespace proc
         }
         if (flags & syscall::CLONE_PARENT)
         {
-            _wait_lock.acquire();
             if (p->_parent != nullptr)
             {
                 np->_parent = p->_parent; // 继承父进程
@@ -986,7 +985,6 @@ namespace proc
             {
                 panic("clone: parent process is null");
             }
-            _wait_lock.release();
         }
         np->_lock.release();
         return new_pid;
@@ -1016,9 +1014,7 @@ namespace proc
         *np->_trapframe = *p->_trapframe;
 
         // 设置父子进程关系
-        _wait_lock.acquire();
         np->_parent = p;
-        _wait_lock.release();
 
         // ===== 基本属性复制 =====
         // 继承文件系统相关属性
@@ -1480,13 +1476,15 @@ namespace proc
                     if (np->get_state() == ProcState::ZOMBIE)
                     {
                         pid = np->_pid;
+                        // 先释放wait_lock，再进行内存拷贝操作
+                        _wait_lock.release();
+                        
                         // printf("[wait4]: child->xstate: %d\n", np->_xstate);
                         if (addr != 0 &&
                             mem::k_vmm.copy_out(*p->get_pagetable(), addr, (const char *)&np->_xstate,
                                                 sizeof(np->_xstate)) < 0)
                         {
                             np->_lock.release();
-                            _wait_lock.release();
                             return -1;
                         }
 
@@ -1494,7 +1492,6 @@ namespace proc
 
                         k_pm.freeproc(np);
                         np->_lock.release();
-                        _wait_lock.release();
                         return pid;
                     }
                     np->_lock.release();
@@ -1631,8 +1628,6 @@ namespace proc
 
         reparent(p); // 将 p 的所有子进程交给 init 进程收养
 
-        _wait_lock.acquire();
-
         // 处理线程退出时的清理地址
         if (p->_clear_tid_addr)
         {
@@ -1646,7 +1641,6 @@ namespace proc
         /****************************************************************************************
          * Phase 2: 释放进程内存和资源（在所有用户态写入操作完成后）
          ****************************************************************************************/
-
         // 使用ProcessMemoryManager统一处理内存释放
         p->cleanup_memory_manager(); // 释放所有内存资源（VMA、程序段、堆、页表、trapframe等）
 
@@ -1669,6 +1663,7 @@ namespace proc
         p->_futex_addr = nullptr;  // 清空futex等待地址
         p->_robust_list = nullptr; // 清空健壮futex链表
 
+        _wait_lock.acquire();  // 只在需要修改父子关系时获取锁
         p->_lock.acquire();
 
         // 设置退出状态和ZOMBIE状态
