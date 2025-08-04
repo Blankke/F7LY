@@ -23,6 +23,8 @@ namespace mem
 
 	bool debug_trace_walk = false;
 
+	// 阶段1注释：移除分散的页表引用计数管理，统一使用ProcessMemoryManager
+	/*
 	// 引用计数管理实现
 	void PageTable::init_ref() {
 		if (_ref == nullptr && _base_addr != 0) {
@@ -84,6 +86,7 @@ namespace mem
 			panic("share_from: warning - sharing page table %p with null ref pointer\n", _base_addr);
 		}
 	}
+	*/
 	void PageTable::print_page_table()
 	{
 		printfRed("PageTable: %p\n", _base_addr);
@@ -188,11 +191,11 @@ namespace mem
 
 	void PageTable::freewalk()
 	{ // pte num is 4096 / 8 = 512 in pgtable
-		// 检查引用计数，只有引用计数为0或1时才真正释放
-		if (_ref != nullptr && *_ref > 1) {
-			panic("freewalk: page table %p still has %d references, not freeing\n", _base_addr, *_ref);
-			return;
-		}
+		// // 检查引用计数，只有引用计数为0或1时才真正释放
+		// if (_ref != nullptr && *_ref > 1) {
+		// 	panic("freewalk: page table %p still has %d references, not freeing\n", _base_addr, *_ref);
+		// 	return;
+		// }
 
 		printfYellow("freewalk: freewalk page table %p\n", _base_addr);
 		for (uint i = 0; i < 512; i++)

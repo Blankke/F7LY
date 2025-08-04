@@ -544,7 +544,7 @@ namespace mem
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
 
         // 之前vma如果被free了这里会直接炸, 添加一个判断
-        if (!proc || !proc->_vma)
+        if (!proc || !proc->get_vma())
         {
             printfRed("[copy_out] VMA not present, skip copy\n");
             return -1;
@@ -558,12 +558,12 @@ namespace mem
             // 查找对应的VMA
             for (int i = 0; i < proc::NVMA; ++i)
             {
-                if (proc->_vma->_vm[i].used)
+                if (proc->get_vma()->_vm[i].used)
                 {
                     // 检查是否在当前VMA范围内
-                    if (va >= proc->_vma->_vm[i].addr && va < proc->_vma->_vm[i].addr + proc->_vma->_vm[i].len)
+                    if (va >= proc->get_vma()->_vm[i].addr && va < proc->get_vma()->_vm[i].addr + proc->get_vma()->_vm[i].len)
                     {
-                        target_vm = &proc->_vma->_vm[i];
+                        target_vm = &proc->get_vma()->_vm[i];
                         break;
                     }
                 }
@@ -611,7 +611,7 @@ namespace mem
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
 
         // 之前vma如果被free了这里会直接炸, 添加一个判断
-        if (!proc || !proc->_vma)
+        if (!proc || !proc->get_vma())
         {
             printfRed("[copy_out] VMA not present, skip copy\n");
             return -1;
@@ -625,12 +625,12 @@ namespace mem
             // 查找对应的VMA
             for (int i = 0; i < proc::NVMA; ++i)
             {
-                if (proc->_vma->_vm[i].used)
+                if (proc->get_vma()->_vm[i].used)
                 {
                     // 检查是否在当前VMA范围内
-                    if (va >= proc->_vma->_vm[i].addr && va < proc->_vma->_vm[i].addr + proc->_vma->_vm[i].len)
+                    if (va >= proc->get_vma()->_vm[i].addr && va < proc->get_vma()->_vm[i].addr + proc->get_vma()->_vm[i].len)
                     {
-                        target_vm = &proc->_vma->_vm[i];
+                        target_vm = &proc->get_vma()->_vm[i];
                         break;
                     }
                 }
@@ -714,7 +714,6 @@ namespace mem
             panic("vmm: no mem to crate vm space.");
         k_pmm.clear_page((void *)addr);
         pt.set_base(addr);
-        pt.init_ref(); // 初始化引用计数
 
         return pt;
     }
