@@ -77,9 +77,10 @@ void os_sleep_ms(UINT unMSecs)
 //* 获取系统启动以来已运行的秒数（从0开始）
 UINT os_get_system_secs(void)
 {
-	panic("os_get_system_secs() cannot be empty");
+	// panic("os_get_system_secs() cannot be empty");
+	uint secs = tmm::k_tm.clock_gettime_sec(tmm::SystemClockId::CLOCK_MONOTONIC);
 
-	return 0;
+	return secs;
 }
 
 //* 获取系统启动以来已运行的毫秒数（从0开始）
