@@ -22,7 +22,16 @@ extern "C"
         // run_test("/musl/copy-file-range-test-2");
         // run_test("/musl/copy-file-range-test-3");
         // run_test("/musl/copy-file-range-test-4");
-        // run_test("/musl/test_splice");
+        // char *splice_argv[] = {"test_splice","1", NULL};
+        // run_test("/musl/test_splice", splice_argv, 0);
+        // char *splice_argv[] = {"test_splice","2", NULL};
+        // run_test("/musl/test_splice", splice_argv, 0);
+        // char *splice_argv[] = {"test_splice","3", NULL};
+        // run_test("/musl/test_splice", splice_argv, 0);
+        // char *splice_argv[] = {"test_splice","4", NULL};
+        // run_test("/musl/test_splice", splice_argv, 0);
+        // char *splice_argv[] = {"test_splice","5", NULL};
+        // run_test("/musl/test_splice", splice_argv, 0);
 
 
         //现场赛测例
