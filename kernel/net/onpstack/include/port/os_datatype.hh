@@ -9,16 +9,16 @@
 #ifndef OS_DATATYPE_H
 #define OS_DATATYPE_H
 
-typedef INT HMUTEX;			//* 线程同步锁句柄
-#define INVALID_HMUTEX -1	//* 无效的线程同步锁句柄
+typedef void* HMUTEX;		//* 线程同步锁句柄
+#define INVALID_HMUTEX nullptr	//* 无效的线程同步锁句柄
 
 #if SUPPORT_PPP
 typedef INT HTTY;			//* tty终端句柄
 #define INVALID_HTTY -1		//* 无效的tty终端句柄
 #endif
 
-typedef INT HSEM;			//* 信号量，适用与不同线程间通讯
-#define INVALID_HSEM -1		//* 无效的信号量句柄
+typedef void* HSEM;			//* 信号量，适用与不同线程间通讯
+#define INVALID_HSEM nullptr	//* 无效的信号量句柄
 
 #ifndef NULL
 #ifdef __cplusplus

@@ -14,6 +14,7 @@
 #include "timer_manager.hh"
 #include "proc/sleeplock.hh"
 #include "semaphore.hh"
+#include "libs/klib.hh"  // 用于strcpy等函数
 #if SUPPORT_PPP
 #include "ppp/negotiation_storage.hh"
 #include "ppp/ppp.hh"
@@ -126,8 +127,8 @@ HMUTEX os_thread_mutex_init(void)
 	// 初始化睡眠锁
 	mutex->init("onpstack_mutex_lock", "onpstack_mutex");
 	
-	// 将指针转换为句柄返回
-	return reinterpret_cast<HMUTEX>(mutex);
+	// 直接返回指针作为句柄
+	return static_cast<HMUTEX>(mutex);
 }
 
 void os_thread_mutex_lock(HMUTEX hMutex)
@@ -138,7 +139,7 @@ void os_thread_mutex_lock(HMUTEX hMutex)
 	}
 	
 	// 将句柄转换为 SleepLock 指针
-	proc::SleepLock* mutex = reinterpret_cast<proc::SleepLock*>(hMutex);
+	proc::SleepLock* mutex = static_cast<proc::SleepLock*>(hMutex);
 	
 	// 获取锁
 	mutex->acquire();
@@ -152,7 +153,7 @@ void os_thread_mutex_unlock(HMUTEX hMutex)
 	}
 	
 	// 将句柄转换为 SleepLock 指针
-	proc::SleepLock* mutex = reinterpret_cast<proc::SleepLock*>(hMutex);
+	proc::SleepLock* mutex = static_cast<proc::SleepLock*>(hMutex);
 	
 	// 释放锁
 	mutex->release();
@@ -166,7 +167,7 @@ void os_thread_mutex_uninit(HMUTEX hMutex)
 	}
 	
 	// 将句柄转换为 SleepLock 指针
-	proc::SleepLock* mutex = reinterpret_cast<proc::SleepLock*>(hMutex);
+	proc::SleepLock* mutex = static_cast<proc::SleepLock*>(hMutex);
 	
 	// 释放 SleepLock 对象的内存
 	delete mutex;
@@ -180,17 +181,21 @@ HSEM os_thread_sem_init(UINT unInitVal, UINT unCount)
 		return INVALID_HSEM; // 内存分配失败
 	}
 	
+	// 创建一个非const的字符串副本
+	char* sem_name = new char[20];
+	strcpy(sem_name, "onpstack_semaphore");
+	
 	// 使用新的带最大值限制的初始化函数
 	if (unCount > 0) {
 		// 有最大值限制
-		sem_init_with_max(semaphore, (int)unInitVal, (int)unCount, "onpstack_semaphore");
+		sem_init_with_max(semaphore, (int)unInitVal, (int)unCount, sem_name);
 	} else {
 		// 无最大值限制
-		sem_init(semaphore, (int)unInitVal, "onpstack_semaphore");
+		sem_init(semaphore, (int)unInitVal, sem_name);
 	}
 	
-	// 将指针转换为句柄返回
-	return reinterpret_cast<HSEM>(semaphore);
+	// 直接返回指针作为句柄
+	return static_cast<HSEM>(semaphore);
 }
 
 void os_thread_sem_post(HSEM hSem)
@@ -201,7 +206,7 @@ void os_thread_sem_post(HSEM hSem)
 	}
 	
 	// 将句柄转换为信号量指针
-	sem* semaphore = reinterpret_cast<sem*>(hSem);
+	sem* semaphore = static_cast<sem*>(hSem);
 	
 	// 执行V操作，检查是否成功
 	if (!sem_try_v(semaphore)) {
@@ -218,7 +223,7 @@ INT os_thread_sem_pend(HSEM hSem, INT nWaitSecs)
 	}
 	
 	// 将句柄转换为信号量指针
-	sem* semaphore = reinterpret_cast<sem*>(hSem);
+	sem* semaphore = static_cast<sem*>(hSem);
 	
 	if (nWaitSecs == 0) {
 		// 永久等待直到信号量可用
@@ -274,7 +279,7 @@ void os_thread_sem_uninit(HSEM hSem)
 	}
 	
 	// 将句柄转换为信号量指针
-	sem* semaphore = reinterpret_cast<sem*>(hSem);
+	sem* semaphore = static_cast<sem*>(hSem);
 	
 	// 释放信号量对象的内存
 	delete semaphore;
