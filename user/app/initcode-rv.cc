@@ -24,6 +24,9 @@ extern "C"
         // run_test("/musl/copy-file-range-test-4");
         // run_test("/musl/test_splice");
 
+
+        //现场赛测例
+        // git_test("/musl/usr/bin");
         shutdown();
         return 0;
     }

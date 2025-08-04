@@ -360,6 +360,10 @@ namespace fs
         add_virtual_file("/dev/zero", fs::FileTypes::FT_DEVICE,
                          eastl::make_unique<DevZeroProvider>());
 
+        // /dev/null (空设备)
+        add_virtual_file("/dev/null", fs::FileTypes::FT_DEVICE,
+                         eastl::make_unique<DevNullProvider>());
+
         // /proc/sys/kernel/shmmax (共享内存最大值)
         add_virtual_file("/proc/sys/kernel/shmmax", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcSysKernelShmmaxProvider>());
@@ -463,25 +467,71 @@ namespace fs
 
     int VirtualFileSystem::vfile_fstat(fs::file *f, fs::Kstat *st)
     {
+        // 获取虚拟文件的路径，用于判断具体的设备类型
+        const eastl::string& path = f->_path_name;
+        
+        // 为不同的设备设置不同的stat信息
+        if (path == "/dev/null") {
+            // /dev/null 字符设备的标准属性
+            st->dev = 0x5;               // Device: 5h/5d
+            st->ino = 3;                 // Inode: 3 (标准/dev/null的inode)
+            st->mode = 0666 | S_IFCHR;   // character special file, mode: 0666
+            st->nlink = 1;               // Links: 1
+            st->uid = 0;                 // Uid: 0 (root)
+            st->gid = 0;                 // Gid: 0 (root)
+            st->rdev = (1 << 8) | 3;     // Device type: 1,3 (标准/dev/null的设备号)
+            st->size = 0;                // Size: 0
+            st->blksize = 4096;          // IO Block: 4096
+            st->blocks = 0;              // Blocks: 0
+        }
+        else if (path == "/dev/zero") {
+            // /dev/zero 字符设备的标准属性
+            st->dev = 0x5;               // Device: 5h/5d
+            st->ino = 5;                 // Inode: 5 (标准/dev/zero的inode)
+            st->mode = 0666 | S_IFCHR;   // character special file, mode: 0666
+            st->nlink = 1;               // Links: 1
+            st->uid = 0;                 // Uid: 0 (root)
+            st->gid = 0;                 // Gid: 0 (root)
+            st->rdev = (1 << 8) | 5;     // Device type: 1,5 (标准/dev/zero的设备号)
+            st->size = 0;                // Size: 0
+            st->blksize = 4096;          // IO Block: 4096
+            st->blocks = 0;              // Blocks: 0
+        }
+        else if (path.find("/dev/loop") == 0) {
+            // 原有的loop设备处理逻辑
+            st->dev = 0x5;               // Device: 5h/5d
+            st->ino = 124;               // Inode: 124
+            st->mode = 0660 | S_IFBLK;   // block special file, mode: 0660 + block device
+            st->nlink = 1;               // Links: 1
+            st->uid = 0;                 // Uid: 0 (root)
+            st->gid = 6;                 // Gid: 6 (disk)
+            st->rdev = 7;                // Device type: 7,0
+            st->size = 0;                // Size: 0
+            st->blksize = 4096;          // IO Block: 4096
+            st->blocks = 0;              // Blocks: 0
+        }
+        else {
+            // 其他虚拟文件的默认处理
+            st->dev = 0x1;               // Device: 1h/1d
+            st->ino = 1;                 // Inode: 1
+            st->mode = 0644 | S_IFREG;   // regular file, mode: 0644
+            st->nlink = 1;               // Links: 1
+            st->uid = 0;                 // Uid: 0 (root)
+            st->gid = 0;                 // Gid: 0 (root)
+            st->rdev = 0;                // Device type: 0
+            st->size = 0;                // Size: 0 (动态文件大小在读取时确定)
+            st->blksize = 4096;          // IO Block: 4096
+            st->blocks = 0;              // Blocks: 0
+        }
 
-        // TODO: 单为了/dev/loop0 搞得，其它时候不能乱写Kstat，写成下面这样刚好能过rename01
-        st->dev = 0x5;             // Device: 5h/5d
-        st->ino = 124;             // Inode: 124
-        st->mode = 0660 | S_IFBLK; // block special file, mode: 0660 + block device
-        st->nlink = 1;             // Links: 1
-        st->uid = 0;               // Uid: 0 (root)
-        st->gid = 6;               // Gid: 6 (disk)
-        st->rdev = 7;              // Device type: 7,0
-        st->size = 0;              // Size: 0
-        st->blksize = 4096;        // IO Block: 4096
-        st->blocks = 0;            // Blocks: 0
-
+        // 设置时间戳（所有虚拟文件使用相同的时间戳）
         st->st_atime_sec = 1753278126; // Access: 2025-07-23 19:02:06
         st->st_atime_nsec = 192843346; // Access nsec
         st->st_ctime_sec = 1753278126; // Change: 2025-07-23 19:02:06
         st->st_ctime_nsec = 176778624; // Change nsec
         st->st_mtime_sec = 1753278126; // Modify: 2025-07-23 19:02:06
         st->st_mtime_nsec = 176778624; // Modify nsec
+        
         return 0;
     }
 

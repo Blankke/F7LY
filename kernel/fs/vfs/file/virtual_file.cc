@@ -194,6 +194,22 @@ namespace fs
             return len;
         }
 
+        // 特殊处理 /dev/null 设备
+        if (_content_provider && _content_provider->get_provider_type() == VirtualProviderType::DEV_NULL) {
+            // /dev/null 读取时总是返回 0 字节（EOF）
+            // 处理偏移量参数
+            if (off < 0) {
+                off = _file_ptr;
+            }
+
+            // 如果upgrade为true，更新文件指针（虽然对于/dev/null来说意义不大）
+            if (upgrade) {
+                _file_ptr = off;
+            }
+
+            return 0; // 总是返回 EOF
+        }
+
         // 对于动态内容，每次都重新生成
         if (_content_provider->is_dynamic()) {
             _cached_content = _content_provider->generate_content();
@@ -554,6 +570,22 @@ namespace fs
     long DevZeroProvider::handle_write(uint64 buf, size_t len, long off)
     {
         // /dev/zero 设备丢弃所有写入的数据，总是返回写入的长度
+        (void)buf;  // 忽略缓冲区内容
+        (void)off;  // 忽略偏移量
+        return len; // 假装写入了所有数据
+    }
+
+    // ======================== DevNullProvider 实现 ========================
+    
+    eastl::string DevNullProvider::generate_content()
+    {
+        // /dev/null 读取时总是返回空内容（EOF）
+        return "";
+    }
+
+    long DevNullProvider::handle_write(uint64 buf, size_t len, long off)
+    {
+        // /dev/null 设备丢弃所有写入的数据，总是返回写入的长度
         (void)buf;  // 忽略缓冲区内容
         (void)off;  // 忽略偏移量
         return len; // 假装写入了所有数据
