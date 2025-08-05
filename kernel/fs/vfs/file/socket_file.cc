@@ -3,6 +3,7 @@
 #include "proc/proc.hh"
 #include "proc/proc_manager.hh"
 #include "net/onpstack/include/onps.hh"
+#include "net/onpstack/include/ip/tcp_link.hh"
 #include <errno.h>
 
 namespace fs
@@ -439,6 +440,56 @@ namespace fs
             return -ENOTCONN;
         }
 
+        // 如果是 TCP socket，从 onps 获取真实的远程地址
+        if (_protocol == IPPROTO_TCP && _onps_socket >= 0) {
+            // 获取输入句柄
+            INT input_handle;
+            EN_ONPSERR onps_err;
+            if (!onps_input_get(_onps_socket, IOPT_GETATTACH, &input_handle, &onps_err)) {
+                _lock.release();
+                return -EINVAL;
+            }
+            
+            // 获取 TCP 链路
+            PST_TCPLINK tcp_link;
+            if (!onps_input_get(input_handle, IOPT_GETTCPUDPLINK, &tcp_link, &onps_err)) {
+                _lock.release();
+                return -ENOTCONN;
+            }
+            
+            if (!tcp_link) {
+                _lock.release();
+                return -ENOTCONN;
+            }
+            
+            // 检查连接状态
+            if (tcp_link->bState != TLSCONNECTED) {
+                _lock.release();
+                return -ENOTCONN;
+            }
+            
+            // 构造地址结构
+            struct sockaddr_in peer_addr;
+            memset(&peer_addr, 0, sizeof(peer_addr));
+            peer_addr.sin_family = AF_INET;
+            
+#if SUPPORT_IPV6
+            // IPv6 支持待添加
+            _lock.release();
+            return -EAFNOSUPPORT;
+#else
+            peer_addr.sin_addr = tcp_link->stPeer.stSockAddr.unIp;
+            peer_addr.sin_port = tcp_link->stPeer.stSockAddr.usPort;
+#endif
+            
+            // 复制到用户空间
+            int result = copy_sockaddr_to_user(addr, addrlen, &peer_addr);
+            _lock.release();
+            return result;
+        }
+
+        // 对于非 TCP socket 或者没有 onps socket，使用存储的远程地址
+        printfRed("非 TCP socket，使用存储的远程地址\n");
         int result = copy_sockaddr_to_user(addr, addrlen, &_remote_addr);
         _lock.release();
         return result;

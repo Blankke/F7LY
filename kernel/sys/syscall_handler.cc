@@ -6340,7 +6340,6 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_connect()
     {
-        printfRed("这个是乱写的，用了就寄");
         int sockfd;
         uint64 addr;
         int addrlen;
@@ -6363,7 +6362,11 @@ namespace syscall
             return SYS_EINVAL;
         }
 
+        printfCyan("[SyscallHandler::sys_connect] connect socket: sockfd=%d, addr=0x%lx, addrlen=%d\n", 
+                   sockfd, addr, addrlen);
+
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
         fs::file *f = p->get_open_file(sockfd);
         if (!f)
         {
@@ -6372,21 +6375,103 @@ namespace syscall
         }
 
         // 检查是否为socket文件
-        fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
-        if (!socket_f)
+        if (f->_attrs.filetype != fs::FileTypes::FT_SOCKET)
         {
             printfRed("[SyscallHandler::sys_connect] 文件描述符不是socket: %d\n", sockfd);
             return SYS_ENOTSOCK;
         }
 
-        int result = socket_f->connect((const struct sockaddr *)addr, addrlen);
-        if (result < 0)
+        fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
+        SOCKET onps_socket = socket_f->get_onps_socket();
+        
+        if (onps_socket == INVALID_SOCKET)
         {
-            printfRed("[SyscallHandler::sys_connect] connect失败: %d\n", result);
-            return result;
+            printfRed("[SyscallHandler::sys_connect] socket未关联onps socket\n");
+            return SYS_EINVAL;
         }
 
-        printfCyan("[SyscallHandler::sys_connect] connect成功, sockfd=%d\n", sockfd);
+        // 检查地址长度
+        if ((socklen_t)addrlen < sizeof(struct sockaddr_in))
+        {
+            printfRed("[SyscallHandler::sys_connect] 地址长度不足: %d\n", addrlen);
+            return SYS_EINVAL;
+        }
+
+        // 从用户空间复制sockaddr结构体
+        struct sockaddr_in sock_addr;
+        if (mem::k_vmm.copy_in(*pt, &sock_addr, addr, sizeof(struct sockaddr_in)) < 0)
+        {
+            printfRed("[SyscallHandler::sys_connect] 复制sockaddr失败\n");
+            return SYS_EFAULT;
+        }
+
+        // 检查地址族
+        if (sock_addr.sin_family != AF_INET)
+        {
+            printfRed("[SyscallHandler::sys_connect] 不支持的地址族: %d\n", sock_addr.sin_family);
+            return SYS_EAFNOSUPPORT;
+        }
+
+        // 提取IP地址和端口
+        uint32_t ip_addr = sock_addr.sin_addr;
+        uint16_t port = htons(sock_addr.sin_port);  // 转换网络字节序到主机字节序
+        
+        printfCyan("[SyscallHandler::sys_connect] 解析地址: IP=0x%08x, Port=%d\n", ip_addr, port);
+
+        // 检查目标地址是否有效
+        if (ip_addr == 0)
+        {
+            printfRed("[SyscallHandler::sys_connect] 无效的目标地址: 0.0.0.0\n");
+            return SYS_EINVAL;
+        }
+
+        if (port == 0)
+        {
+            printfRed("[SyscallHandler::sys_connect] 无效的目标端口: 0\n");
+            return SYS_EINVAL;
+        }
+
+        // 调用onps的connect_ext函数，使用默认超时时间
+        // connect_ext接受二进制形式的IP地址
+        int result = connect_ext(onps_socket, &ip_addr, port, TCP_CONN_TIMEOUT);
+        
+        if (result != 0)
+        {
+            // 获取onps错误信息
+            EN_ONPSERR onps_err = socket_get_last_error_code(onps_socket);
+            printfRed("[SyscallHandler::sys_connect] onps connect失败, result=%d, 错误: %d\n", result, onps_err);
+            
+            // 将onps错误码转换为系统错误码
+            switch (onps_err)
+            {
+                case ERRTCPCONNTIMEOUT:
+                    return SYS_ETIMEDOUT;  // 连接超时
+                case ERRTCPCONNRESET:
+                    return SYS_ECONNRESET; // 连接被重置
+                case ERRADDRFAMILIES:
+                    return SYS_EAFNOSUPPORT; // 不支持的地址族
+                case ERRUNSUPPIPPROTO:
+                    return SYS_EPROTONOSUPPORT; // 不支持的协议
+                case ERRNOTBINDADDR:
+                    return SYS_EADDRNOTAVAIL; // 地址不可用
+                default:
+                    return SYS_ECONNREFUSED; // 连接被拒绝（默认错误）
+            }
+        }
+
+        // 更新socket_file的状态
+        int socket_file_result = socket_f->connect((const struct sockaddr *)&sock_addr, addrlen);
+        if (socket_file_result < 0)
+        {
+            printfRed("[SyscallHandler::sys_connect] socket_file connect失败: %d\n", socket_file_result);
+            // 这里不返回错误，因为onps连接已经成功了，socket_file的connect主要是状态更新
+        }
+
+        printfCyan("[SyscallHandler::sys_connect] connect成功, sockfd=%d, 目标: %d.%d.%d.%d:%d\n", 
+                   sockfd, 
+                   (ip_addr >> 0) & 0xFF, (ip_addr >> 8) & 0xFF, 
+                   (ip_addr >> 16) & 0xFF, (ip_addr >> 24) & 0xFF, 
+                   port);
         return 0;
     }
     uint64 SyscallHandler::sys_getsockname()
