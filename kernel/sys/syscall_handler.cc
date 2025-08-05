@@ -7060,9 +7060,119 @@ namespace syscall
         return 0;
         panic("未实现该系统调用");
     }
+    /**
+     * sys_clone3 - 基于 struct clone_args 的新式 clone 系统调用
+     * 
+     * 相比于 sys_clone, sys_clone3 有以下主要区别：
+     * 1. 使用结构体传递参数，而不是多个单独的参数，提供更好的可扩展性
+     * 2. 支持更多的 clone 标志和特性（如 pidfd, set_tid 等）
+     * 3. 具有更严格的参数验证和错误处理
+     * 4. 支持向后兼容的结构体大小检查
+     * 
+     * 参数：
+     * - args_addr: 指向 struct clone_args 的用户空间地址
+     * - args_size: struct clone_args 的大小（用于向后兼容）
+     * 
+     * 返回值：
+     * - 成功：新创建进程的 PID
+     * - 失败：负数错误码
+     */
+    
+    // clone3 参数结构体，对应 Linux 内核的 struct clone_args
+    struct clone_args {
+        uint64 flags;          // clone 标志位
+        uint64 pidfd;          // 指向存储新进程文件描述符的位置
+        uint64 child_tid;      // 指向存储子进程 TID 的位置
+        uint64 parent_tid;     // 指向存储父进程 TID 的位置
+        uint64 exit_signal;    // 子进程退出时发送给父进程的信号
+        uint64 stack;          // 栈地址
+        uint64 stack_size;     // 栈大小
+        uint64 tls;            // TLS (线程本地存储) 地址
+        uint64 set_tid;        // 指向 TID 数组的指针
+        uint64 set_tid_size;   // TID 数组的大小
+        uint64 cgroup;         // cgroup 文件描述符
+    };
+
     uint64 SyscallHandler::sys_clone3()
     {
         panic("未实现该系统调用");
+        TODO("TBF")
+        
+        uint64 args_addr;
+        uint64 args_size;
+        struct clone_args args;
+        
+        // 获取参数：clone_args 结构体地址和大小
+        if (_arg_addr(0, args_addr) < 0) {
+            printfRed("[SyscallHandler::sys_clone3] Error fetching clone_args address\n");
+            return SYS_EFAULT;
+        }
+        
+        if (_arg_addr(1, args_size) < 0) {
+            printfRed("[SyscallHandler::sys_clone3] Error fetching clone_args size\n");
+            return SYS_EFAULT;
+        }
+        
+        // 验证参数大小
+        if (args_size < sizeof(uint64)) { // 至少要有 flags 字段
+            printfRed("[SyscallHandler::sys_clone3] Invalid args_size: %llu\n", args_size);
+            return SYS_EINVAL;
+        }
+        
+        if (args_size > sizeof(struct clone_args)) {
+            printfRed("[SyscallHandler::sys_clone3] args_size too large: %llu\n", args_size);
+            return SYS_E2BIG;
+        }
+        
+        // 从用户空间复制 clone_args 结构体
+        proc::Pcb *cur = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = cur->get_pagetable();
+        
+        // 初始化 args 结构体为 0
+        memset(&args, 0, sizeof(args));
+        
+        // 只复制用户提供的大小，避免越界
+        if (mem::k_vmm.copy_in(*pt, &args, args_addr, args_size) != 0) {
+            printfRed("[SyscallHandler::sys_clone3] Error copying clone_args from user space\n");
+            return SYS_EFAULT;
+        }
+        
+        printfCyan("[SyscallHandler::sys_clone3] flags: 0x%lx, stack: %p, child_tid: %p, parent_tid: %p, tls: %p\n",
+                   args.flags, (void *)args.stack, (void *)args.child_tid, (void *)args.parent_tid, (void *)args.tls);
+        
+        // 验证标志位
+        if (args.flags & ~(CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | 
+                          CLONE_PTRACE | CLONE_VFORK | CLONE_PARENT | CLONE_THREAD |
+                          CLONE_NEWNS | CLONE_SYSVSEM | CLONE_SETTLS | 
+                          CLONE_PARENT_SETTID | CLONE_CHILD_CLEARTID | 
+                          CLONE_DETACHED | CLONE_UNTRACED | CLONE_CHILD_SETTID |
+                          CLONE_NEWCGROUP | CLONE_NEWUTS | CLONE_NEWIPC |
+                          CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNET | CLONE_IO |
+                          CLONE_NEWTIME | CLONE_PIDFD | CSIGNAL)) {
+            printfRed("[SyscallHandler::sys_clone3] Invalid flags: 0x%lx\n", args.flags);
+            return SYS_EINVAL;
+        }
+        
+        // 暂时不支持某些复杂特性
+        if (args.flags & (CLONE_PIDFD | CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC |
+                         CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWTIME |
+                         CLONE_NEWCGROUP)) {
+            printfRed("[SyscallHandler::sys_clone3] Unsupported flags: 0x%lx\n", args.flags);
+            return SYS_ENOSYS;  // 功能未实现
+        }
+        
+        // 如果设置了 CLONE_SETTLS 但没有提供 TLS 地址，返回错误
+        if ((args.flags & CLONE_SETTLS) && args.tls == 0) {
+            printfRed("[SyscallHandler::sys_clone3] CLONE_SETTLS set but tls is null\n");
+            return SYS_EINVAL;
+        }
+        
+        // 调用底层的 clone 函数，传入相应的参数
+        uint64 clone_pid = proc::k_pm.clone(args.flags, args.stack, args.parent_tid, 
+                                           args.tls, args.child_tid);
+        
+        printfCyan("[SyscallHandler::sys_clone3] Created process with PID: %llu\n", clone_pid);
+        return clone_pid;
     }
     uint64 SyscallHandler::sys_poweroff()
     {

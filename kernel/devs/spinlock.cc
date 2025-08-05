@@ -35,8 +35,10 @@
 
 	void SpinLock::release()
 	{
-		if ( !is_held() )
-			panic( "lock is already released." );
+		if ( !is_held() ){
+			printf("lock name %s is already released\n", _name);
+			panic( "spinlock released." );
+		}
 		// _locked.store( nullptr, eastl::memory_order_acq_rel );
 		Cpu * cpu = Cpu::get_cpu();
 		_locked.store( nullptr );

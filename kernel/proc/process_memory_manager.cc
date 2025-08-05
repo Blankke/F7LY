@@ -100,7 +100,7 @@ namespace proc
             delete new_mgr;
             return nullptr;
         }
-        printf("[clone_for_fork] start clone prog_section\n");
+        // printf("[clone_for_fork] start clone prog_section\n");
         
         // 复制程序段信息
         new_mgr->prog_section_count = prog_section_count;
