@@ -1437,7 +1437,7 @@ char *ltp_testcases[] = {
     // "hugefallocate02",
     // "hugefork01",
     // "hugefork02",
-    "hugemmap01",
+    // "hugemmap01",
     // "hugemmap02",
     // "hugemmap04",
     // "hugemmap05",

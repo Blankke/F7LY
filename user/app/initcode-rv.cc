@@ -13,11 +13,11 @@ extern "C"
         // lua_test("/mnt/glibc/");
 
         // libcbench_test("/glibc");
-        // ltp_test("/musl/ltp/testcases/bin/");
+        ltp_test("/musl/ltp/testcases/bin/");
 
         // 决赛测例
-        final_test_musl();
-        final_test_glibc();
+        // final_test_musl();
+        // final_test_glibc();
         // 现场赛测例
         //  git_test("/musl/usr/bin");
         shutdown();

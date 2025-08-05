@@ -243,7 +243,7 @@ run-riscv:
 		-nographic \
 		-smp 1 \
 		-bios default \
-		-drive file=$(KERNEL_PREFIX)/sdcard-rv-final.img,if=none,format=raw,id=x0 \
+		-drive file=$(KERNEL_PREFIX)/sdcard-rv.img,if=none,format=raw,id=x0 \
 		-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 \
 		-no-reboot \
 		-device virtio-net-device,netdev=net \
@@ -258,7 +258,7 @@ run-loongarch:
 	    -m 1G \
 	    -nographic \
 	    -smp 1 \
-		-drive file=$(KERNEL_PREFIX)/sdcard-la-final.img,if=none,format=raw,id=x0 \
+		-drive file=$(KERNEL_PREFIX)/sdcard-la.img,if=none,format=raw,id=x0 \
 		-device virtio-blk-pci,drive=x0 \
 		-no-reboot \
 		-rtc base=utc \

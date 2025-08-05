@@ -105,7 +105,6 @@ void main()
 
         printfMagenta("user init\n");
 
-    // net::init_network_stack();
     printfMagenta("\n"
                   "╦ ╦╔═╗╦  ╔═╗╔═╗╔╦╗╔═╗\n"
                   "║║║║╣ ║  ║  ║ ║║║║║╣\n"
