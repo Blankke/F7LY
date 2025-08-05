@@ -195,9 +195,13 @@ void trap_manager::usertrap()
     // printfRed("p->_trapframe->sp: %p,fault_va: %p,p->sz:%p\n", p->_trapframe->sp, r_csr_badv(), p->_sz);
     if (mmap_handler(r_csr_badv(), (r_csr_estat() & CSR_ESTAT_ECODE) >> 16) != 0)
     {
+      // 缺页异常处理失败，发送SIGSEGV信号
+      printf("usertrap(): page fault at %p, sending SIGSEGV to pid=%d\n", r_csr_badv(), p->_pid);
+      proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGSEGV);
+      
       printf("usertrap(): unexpected trapcause %x pid=%d\n", r_csr_estat(), p->_pid);
       printf("            era=%p badi=%x\n", r_csr_era(), r_csr_badi());
-      p->_killed = 1;
+
     }
   }
   else if ((which_dev = devintr()) != 0)
@@ -213,6 +217,9 @@ void trap_manager::usertrap()
 
   if (p->_killed)
     proc::k_pm.exit(-1);
+
+  // 处理信号 - 在返回用户态之前检查并处理待处理的信号
+  proc::ipc::signal::handle_signal();
 
   // give up the CPU if this is a timer interrupt.
   if (which_dev == 2)

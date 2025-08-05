@@ -20,6 +20,7 @@ namespace proc
             constexpr int SIG_UNBLOCK = 1;
             constexpr int SIG_SETMASK = 2;
             constexpr int SIGCHLD = 17;
+            constexpr int SIGSEGV=11;
             enum class SigActionFlags : uint64_t
             {
                 NONE = 0,

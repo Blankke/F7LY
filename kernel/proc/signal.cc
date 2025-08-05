@@ -88,6 +88,12 @@ namespace proc
                     return -22;
                 }
 
+                // 确保关键信号不会被屏蔽
+                uint64 unmaskable_signals = (1UL << (signal::SIGKILL - 1)) | 
+                                           (1UL << (signal::SIGSTOP - 1)) | 
+                                           (1UL << (signal::SIGSEGV - 1));
+                cur_proc->_sigmask &= ~unmaskable_signals;
+
                 // int debugsig = 33; // 你可以修改这个变量来指定要查看的信号号
                 // if (debugsig > 0 && debugsig <= signal::SIGRTMAX) {
                 //     uint64 mask = (1UL << (debugsig - 1));
@@ -121,6 +127,11 @@ namespace proc
                 case signal::SIGKILL:
                     p->_killed = true;
                     break;
+                case signal::SIGSEGV:
+                    // SIGSEGV 默认行为：终止进程并生成核心转储
+                    printf("[default_handle] SIGSEGV: Segmentation fault, terminating process %d\n", p->_pid);
+                    p->_killed = true;
+                    break;
                 case signal::SIGCHLD:
                     panic("[default_handle] SIGCHLD not implemented");
                     break;
@@ -145,17 +156,25 @@ namespace proc
                     }
                     int signum = i;
                     printf("[handle_signal] Handling signal %d\n", signum);
-                    if (is_ignored(p, signum))
+                    
+                    // SIGKILL, SIGSTOP, SIGSEGV等关键信号不能被屏蔽
+                    if (is_ignored(p, signum) && signum != signal::SIGKILL && signum != signal::SIGSTOP && signum != signal::SIGSEGV)
                     {
                         printf("[handle_signal] Signal %d is ignored, sigmask=0x%x\n", signum, p->_sigmask);
-                        return;
+                        continue; // 跳过被屏蔽的信号，继续处理其他信号
+                    }
+                    
+                    // 对于被屏蔽但不能屏蔽的关键信号，输出警告
+                    if (is_ignored(p, signum) && (signum == signal::SIGSEGV))
+                    {
+                        printf("[handle_signal] WARNING: Signal %d is masked but cannot be ignored, processing anyway\n", signum);
                     }
 
                     sigaction *act = nullptr;
                     if (p->_sigactions != nullptr && p->_sigactions->actions[signum] != nullptr)
                     {
                         act = p->_sigactions->actions[signum];
-                        printf("[handle_signal] Found handler for signal %d: %p\n", signum, act->sa_handler);
+                        // printf("[handle_signal] Found handler for signal %d: %p\n", signum, act->sa_handler);
                     }
                     else
                     {
@@ -169,7 +188,7 @@ namespace proc
                     }
                     else
                     {
-                        printf("[handle_signal] Calling do_handle for signal %d\n", signum);
+                        // printf("[handle_signal] Calling do_handle for signal %d\n", signum);
                         do_handle(p, signum, act);
                         
                         // 处理 SA_RESETHAND 标志：执行后重置为默认处理
@@ -181,9 +200,9 @@ namespace proc
                         }
                     }
                     clear_signal(p, signum);
-                    printf("[handle_signal] Cleared signal %d, _signal now 0x%x\n", signum, p->_signal);
+                    // printf("[handle_signal] Cleared signal %d, _signal now 0x%x\n", signum, p->_signal);
                 }
-                printf("[handle_signal] Finished handling signals\n");
+                // printf("[handle_signal] Finished handling signals\n");
             }
 
             void add_signal(proc::Pcb *p, int sig)
@@ -214,7 +233,7 @@ namespace proc
                     panic("[do_handle] Signal %d is ignored", signum);
                     return;
                 }
-                printf("[do_handle] Handling signal %d with handler %p\n", signum, act->sa_handler);
+                // printf("[do_handle] Handling signal %d with handler %p\n", signum, act->sa_handler);
 
                 signal_frame *frame;
                 frame = (signal_frame *)mem::k_pmm.alloc_page();
@@ -226,7 +245,7 @@ namespace proc
                 frame->mask.sig[0] = p->_sigmask; // 保存当前信号掩码
 
                 // 处理 sa_mask：在信号处理期间临时阻塞额外的信号
-                uint64 old_sigmask = p->_sigmask;
+                [[maybe_unused]]uint64 old_sigmask = p->_sigmask;
                 p->_sigmask |= act->sa_mask.sig[0]; // 添加 sa_mask 中指定的信号到当前掩码
                 
                 // 根据 SA_NODEFER 标志决定是否阻塞当前信号
@@ -235,11 +254,13 @@ namespace proc
                     p->_sigmask |= (1UL << (signum - 1)); // 默认阻塞当前信号
                 }
                 
-                // 永远不能屏蔽 SIGKILL 和 SIGSTOP
-                p->_sigmask &= ~((1UL << (signal::SIGKILL - 1)) | (1UL << (signal::SIGSTOP - 1)));
+                // 永远不能屏蔽 SIGKILL, SIGSTOP 和 SIGSEGV
+                p->_sigmask &= ~((1UL << (signal::SIGKILL - 1)) | 
+                                (1UL << (signal::SIGSTOP - 1)) | 
+                                (1UL << (signal::SIGSEGV - 1)));
                 
-                printf("[do_handle] Signal mask updated: old=0x%x, new=0x%x, sa_mask=0x%x\n", 
-                       old_sigmask, p->_sigmask, act->sa_mask.sig[0]);
+                // printf("[do_handle] Signal mask updated: old=0x%x, new=0x%x, sa_mask=0x%x\n", 
+                //        old_sigmask, p->_sigmask, act->sa_mask.sig[0]);
 
                 if (frame == nullptr)
                 {
@@ -446,6 +467,11 @@ namespace proc
 
             bool is_ignored(Pcb *now_p, int sig)
             {
+                // SIGKILL, SIGSTOP 和同步信号（如SIGSEGV）不能被屏蔽
+                if (sig == signal::SIGKILL || sig == signal::SIGSTOP || sig == signal::SIGSEGV)
+                {
+                    return false;
+                }
                 return sig_is_member(now_p->_sigmask, sig);
             }
 

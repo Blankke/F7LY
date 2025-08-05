@@ -241,9 +241,13 @@ void trap_manager::usertrap()
 
     if (mmap_handler(r_stval(), cause) != 0)
     {
+      // 缺页异常处理失败，发送SIGSEGV信号
+      printfRed("usertrap(): page fault at %p, sending SIGSEGV to pid=%d\n", r_stval(), p->_pid);
+      proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGSEGV);
+      
       printfRed("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->_pid);
       printfRed("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-      p->_killed = 1;
+
     }
   }
   else
@@ -255,6 +259,9 @@ void trap_manager::usertrap()
 
   if (p->is_killed())
     proc::k_pm.exit(-1);
+
+  // 处理信号 - 在返回用户态之前检查并处理待处理的信号
+  proc::ipc::signal::handle_signal();
 
   // give up the CPU if this is a timer interrupt.
   if (which_dev == 2)

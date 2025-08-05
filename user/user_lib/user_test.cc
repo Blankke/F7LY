@@ -1863,8 +1863,8 @@ char *ltp_testcases[] = {
     // "munlock01",
     // "munlock02",
     // "munlockall01",
-    // "munmap01",
-    // "munmap02",
+    // "munmap01", //pass
+    // "munmap02",  //pass
     // "munmap03",  //pass
     // "mv_tests.sh",
     // "myfunctions.sh",
