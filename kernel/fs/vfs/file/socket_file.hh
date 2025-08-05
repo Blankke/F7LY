@@ -95,6 +95,8 @@ namespace fs
                   const struct sockaddr *dest_addr, socklen_t addrlen);
         int recvfrom(void *buf, size_t len, int flags,
                     struct sockaddr *src_addr, socklen_t *addrlen);
+        int sendmsg(const struct msghdr *msg, int flags);
+        int recvmsg(struct msghdr *msg, int flags);
         int shutdown(int how);
         int setsockopt(int level, int optname, const void *optval, socklen_t optlen);
         int getsockopt(int level, int optname, void *optval, socklen_t *optlen);

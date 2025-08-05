@@ -6653,7 +6653,108 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_sendmsg()
     {
-        panic("未实现该系统调用");
+        int sockfd;
+        uint64 msg_ptr;
+        int flags;
+
+        if (_arg_int(0, sockfd) < 0) {
+            printfRed("[SyscallHandler::sys_sendmsg] 参数错误: sockfd\n");
+            return SYS_EINVAL;
+        }
+
+        if (_arg_addr(1, msg_ptr) < 0) {
+            printfRed("[SyscallHandler::sys_sendmsg] 参数错误: msg\n");
+            return SYS_EINVAL;
+        }
+
+        if (_arg_int(2, flags) < 0) {
+            printfRed("[SyscallHandler::sys_sendmsg] 参数错误: flags\n");
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        fs::file *f = p->get_open_file(sockfd);
+        if (!f) {
+            printfRed("[SyscallHandler::sys_sendmsg] 无效的文件描述符: %d\n", sockfd);
+            return SYS_EBADF;
+        }
+
+        // 检查是否为socket文件
+        fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
+        if (!socket_f) {
+            printfRed("[SyscallHandler::sys_sendmsg] 文件描述符不是socket: %d\n", sockfd);
+            return SYS_ENOTSOCK;
+        }
+
+        // 从用户空间复制 msghdr 结构
+        struct msghdr msg;
+        proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = pcb->get_pagetable();
+        
+        if (mem::k_vmm.copy_in(*pt, &msg, msg_ptr, sizeof(msg)) < 0) {
+            printfRed("[SyscallHandler::sys_sendmsg] 复制msghdr失败\n");
+            return SYS_EFAULT;
+        }
+
+        // 验证并复制 iovec 数组
+        if (msg.msg_iovlen > IOV_MAX) {
+            printfRed("[SyscallHandler::sys_sendmsg] iovec数组过大: %lu\n", msg.msg_iovlen);
+            return SYS_EINVAL;
+        }
+
+        // 分配内核空间的 iovec 数组
+        eastl::vector<struct iovec> kernel_iov(msg.msg_iovlen);
+        if (mem::k_vmm.copy_in(*pt, kernel_iov.data(), (uint64)msg.msg_iov, 
+                   msg.msg_iovlen * sizeof(struct iovec)) < 0) {
+            printfRed("[SyscallHandler::sys_sendmsg] 复制iovec数组失败\n");
+            return SYS_EFAULT;
+        }
+
+        // 验证每个 iovec 项并分配缓冲区
+        eastl::vector<eastl::vector<uint8_t>> data_buffers(msg.msg_iovlen);
+        for (size_t i = 0; i < msg.msg_iovlen; i++) {
+            if (kernel_iov[i].iov_len > 0) {
+                data_buffers[i].resize(kernel_iov[i].iov_len);
+                if (mem::k_vmm.copy_in(*pt, data_buffers[i].data(), (uint64)kernel_iov[i].iov_base, 
+                           kernel_iov[i].iov_len) < 0) {
+                    printfRed("[SyscallHandler::sys_sendmsg] 复制数据失败: %lu\n", i);
+                    return SYS_EFAULT;
+                }
+                // 更新 iovec 指向内核缓冲区
+                kernel_iov[i].iov_base = data_buffers[i].data();
+            }
+        }
+
+        // 处理目标地址（如果有）
+        struct sockaddr_in dest_addr;
+        if (msg.msg_name && msg.msg_namelen > 0) {
+            if (msg.msg_namelen < sizeof(struct sockaddr_in)) {
+                printfRed("[SyscallHandler::sys_sendmsg] 地址长度不足\n");
+                return SYS_EINVAL;
+            }
+            if (mem::k_vmm.copy_in(*pt, &dest_addr, (uint64)msg.msg_name, sizeof(dest_addr)) < 0) {
+                printfRed("[SyscallHandler::sys_sendmsg] 复制目标地址失败\n");
+                return SYS_EFAULT;
+            }
+        }
+
+        // 构造内核版本的 msghdr
+        struct msghdr kernel_msg = msg;
+        kernel_msg.msg_iov = kernel_iov.data();
+        if (msg.msg_name) {
+            kernel_msg.msg_name = &dest_addr;
+        }
+
+        // 调用 socket 的 sendmsg 方法
+        int result = socket_f->sendmsg(&kernel_msg, flags);
+        if (result < 0) {
+            printfRed("[SyscallHandler::sys_sendmsg] sendmsg失败: %d\n", result);
+            return result;
+        }
+
+        printfCyan("[SyscallHandler::sys_sendmsg] sendmsg成功, sockfd=%d, sent=%d bytes\n", 
+                   sockfd, result);
+        return result;
     }
     uint64 SyscallHandler::sys_mprotect()
     {

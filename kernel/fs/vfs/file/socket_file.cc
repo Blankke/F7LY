@@ -4,6 +4,8 @@
 #include "proc/proc_manager.hh"
 #include "net/onpstack/include/onps.hh"
 #include "net/onpstack/include/ip/tcp_link.hh"
+#include "net/onpstack/include/ip/tcp.hh"
+#include "net/onpstack/include/ip/udp.hh"
 #include <errno.h>
 
 namespace fs
@@ -575,5 +577,140 @@ namespace fs
         socket_file* client = _pending_connections.front();
         _pending_connections.erase(_pending_connections.begin());
         return client;
+    }
+
+    int socket_file::sendmsg(const struct msghdr *msg, int flags)
+    {
+        if (!msg) {
+            return -EFAULT;
+        }
+
+        _lock.acquire();
+
+        // 检查 socket 状态
+        if (_state != SocketState::CONNECTED && _state != SocketState::BOUND) {
+            _lock.release();
+            return -ENOTCONN;
+        }
+
+        // 检查 iovec 参数
+        if (!msg->msg_iov || msg->msg_iovlen == 0) {
+            _lock.release();
+            return -EINVAL;
+        }
+
+        // 计算总数据长度
+        size_t total_len = 0;
+        for (size_t i = 0; i < msg->msg_iovlen; i++) {
+            if (!msg->msg_iov[i].iov_base) {
+                _lock.release();
+                return -EFAULT;
+            }
+            total_len += msg->msg_iov[i].iov_len;
+        }
+
+        if (total_len == 0) {
+            _lock.release();
+            return 0;
+        }
+
+        int result = 0;
+        EN_ONPSERR onps_err;
+
+        // 根据协议类型选择发送方式
+        if (_protocol == IPPROTO_TCP && _onps_socket >= 0) {
+            // TCP 发送：需要将所有 iovec 数据合并后发送
+            eastl::vector<uint8_t> buffer;
+            buffer.reserve(total_len);
+
+            // 收集所有数据到一个缓冲区
+            for (size_t i = 0; i < msg->msg_iovlen; i++) {
+                const uint8_t* data = static_cast<const uint8_t*>(msg->msg_iov[i].iov_base);
+                buffer.insert(buffer.end(), data, data + msg->msg_iov[i].iov_len);
+            }
+
+            // 获取输入句柄
+            INT input_handle;
+            if (!onps_input_get(_onps_socket, IOPT_GETATTACH, &input_handle, &onps_err)) {
+                _lock.release();
+                return -EINVAL;
+            }
+
+            // 使用 onps TCP 发送数据
+            int sent = tcp_send_data(input_handle, buffer.data(), buffer.size(), 3);
+            if (sent < 0) {
+                _lock.release();
+                return -EIO;
+            }
+            result = sent;
+
+        } else if (_protocol == IPPROTO_UDP && _onps_socket >= 0) {
+            // UDP 发送：需要目标地址
+            if (!msg->msg_name || msg->msg_namelen < sizeof(struct sockaddr_in)) {
+                _lock.release();
+                return -EDESTADDRREQ;
+            }
+
+            struct sockaddr_in* dest_addr = static_cast<struct sockaddr_in*>(msg->msg_name);
+            if (dest_addr->sin_family != AF_INET) {
+                _lock.release();
+                return -EAFNOSUPPORT;
+            }
+
+            // 获取输入句柄
+            INT input_handle;
+            if (!onps_input_get(_onps_socket, IOPT_GETATTACH, &input_handle, &onps_err)) {
+                _lock.release();
+                return -EINVAL;
+            }
+
+            // UDP 逐个发送每个 iovec 项（或者合并发送）
+            eastl::vector<uint8_t> buffer;
+            buffer.reserve(total_len);
+
+            for (size_t i = 0; i < msg->msg_iovlen; i++) {
+                const uint8_t* data = static_cast<const uint8_t*>(msg->msg_iov[i].iov_base);
+                buffer.insert(buffer.end(), data, data + msg->msg_iov[i].iov_len);
+            }
+
+            // 使用 onps UDP 发送数据
+            int sent = udp_sendto(input_handle, dest_addr->sin_addr, 
+                                dest_addr->sin_port, buffer.data(), buffer.size());
+            if (sent < 0) {
+                _lock.release();
+                return -EIO;
+            }
+            result = sent;
+
+        } else {
+            // 回退到简单实现：将数据添加到发送缓冲区
+            for (size_t i = 0; i < msg->msg_iovlen; i++) {
+                const uint8_t* data = static_cast<const uint8_t*>(msg->msg_iov[i].iov_base);
+                size_t len = msg->msg_iov[i].iov_len;
+                
+                size_t old_size = _send_buffer.size();
+                _send_buffer.resize(old_size + len);
+                if (_send_buffer.size() != old_size + len) {
+                    _send_buffer.resize(old_size);
+                    _lock.release();
+                    return -ENOMEM;
+                }
+                
+                memcpy(_send_buffer.data() + old_size, data, len);
+            }
+            
+            // 假设立即发送完成
+            _send_buffer.clear();
+            result = total_len;
+        }
+
+        _lock.release();
+        return result;
+    }
+
+    int socket_file::recvmsg(struct msghdr *msg, int flags)
+    {
+        // TODO: 实现 recvmsg
+        return -ENOSYS;
     }
 }

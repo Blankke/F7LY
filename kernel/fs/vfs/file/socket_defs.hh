@@ -87,3 +87,23 @@ struct sockaddr_un {
     unsigned short sun_family;   /* AF_UNIX */
     char sun_path[108];         /* pathname */
 };
+
+// Message header structure for sendmsg/recvmsg
+struct msghdr {
+    void *msg_name;             /* optional address */
+    socklen_t msg_namelen;      /* size of address */
+    struct iovec *msg_iov;      /* scatter/gather array */
+    size_t msg_iovlen;          /* number of elements in msg_iov */
+    void *msg_control;          /* ancillary data, see below */
+    size_t msg_controllen;      /* ancillary data buffer len */
+    int msg_flags;              /* flags on received message */
+};
+
+// sendmsg/recvmsg flags
+#define MSG_OOB         0x01    /* process out-of-band data */
+#define MSG_PEEK        0x02    /* peek at incoming message */
+#define MSG_DONTROUTE   0x04    /* don't use local routing */
+#define MSG_CTRUNC      0x08    /* control data truncated */
+#define MSG_TRUNC       0x20    /* data truncated */
+#define MSG_DONTWAIT    0x40    /* nonblocking request */
+#define MSG_WAITALL     0x100   /* wait for full request or error */
