@@ -280,6 +280,98 @@ int ltp_test(const char *path = musl_dir)
     }
     return 0;
 }
+int final_test_musl()
+{
+    //interrupt
+    printf("#### OS COMP TEST GROUP START interrupts-test1-musl ####\n");
+    run_test("/musl/interrupts-test-1");
+    printf("#### OS COMP TEST GROUP END interrupts-test1-musl ####\n\n");
+    printf("#### OS COMP TEST GROUP START interrupts-test2-musl ####\n");
+    run_test("/musl/interrupts-test-2");
+    printf("#### OS COMP TEST GROUP END interrupts-test2-musl ####\n\n");
+    //copy-file-range
+    printf("#### OS COMP TEST GROUP START copy-file-range-test1-musl ####\n");
+    run_test("/musl/copy-file-range-test-1");
+    printf("#### OS COMP TEST GROUP END copy-file-range-test1-musl ####\n\n");
+    printf("#### OS COMP TEST GROUP START copy-file-range-test2-musl ####");
+    run_test("/musl/copy-file-range-test-2");
+    printf("#### OS COMP TEST GROUP END copy-file-range-test2-musl ####\n\n");
+    printf("#### OS COMP TEST GROUP START copy-file-range-test3-musl ####");
+    run_test("/musl/copy-file-range-test-3");
+    printf("#### OS COMP TEST GROUP END copy-file-range-test3-musl ####\n\n");
+    printf("#### OS COMP TEST GROUP START copy-file-range-test4-musl ####");
+    run_test("/musl/copy-file-range-test-4");
+    printf("#### OS COMP TEST GROUP END copy-file-range-test4-musl ####\n\n");
+    //splice
+    char *splice_argv1[] = {"test_splice", "1", NULL};
+    printf("#### OS COMP TEST GROUP START splice-test1-musl ####\n");
+    run_test("/musl/test_splice", splice_argv1, 0);
+    printf("#### OS COMP TEST GROUP END splice-test1-musl ####\n\n");
+    char *splice_argv2[] = {"test_splice", "2", NULL};
+    printf("#### OS COMP TEST GROUP START splice-test2-musl ####\n");
+    run_test("/musl/test_splice", splice_argv2, 0);
+    printf("#### OS COMP TEST GROUP END splice-test2-musl ####\n\n");
+    char *splice_argv3[] = {"test_splice", "3", NULL};
+    printf("#### OS COMP TEST GROUP START splice-test3-musl ####\n");
+    run_test("/musl/test_splice", splice_argv3, 0);
+    printf("#### OS COMP TEST GROUP END splice-test3-musl ####\n\n");
+    char *splice_argv4[] = {"test_splice", "4", NULL};
+    printf("#### OS COMP TEST GROUP START splice-test4-musl ####\n");
+    run_test("/musl/test_splice", splice_argv4, 0);
+    printf("#### OS COMP TEST GROUP END splice-test4-musl ####\n\n");
+    char *splice_argv5[] = {"test_splice", "5", NULL};
+    printf("#### OS COMP TEST GROUP START splice-test5-musl ####\n");
+    run_test("/musl/test_splice", splice_argv5, 0);
+    printf("#### OS COMP TEST GROUP END splice-test5-musl ####\n\n");
+    return 0;
+}
+
+int final_test_glibc()
+{
+    //interrupt
+    printf("#### OS COMP TEST GROUP START interrupts-test1-glibc ####\n");
+    run_test("/glibc/interrupts-test-1");
+    printf("#### OS COMP TEST GROUP END interrupts-test1-glibc ####\n");
+    printf("#### OS COMP TEST GROUP START interrupts-test2-glibc ####\n");
+    run_test("/glibc/interrupts-test-2");
+    printf("#### OS COMP TEST GROUP END interrupts-test2-glibc ####\n\n");
+    //copy-file-range
+    printf("#### OS COMP TEST GROUP START copy-file-range-test1-glibc ####\n");
+    run_test("/glibc/copy-file-range-test-1");
+    printf("#### OS COMP TEST GROUP END copy-file-range-test1-glibc ####\n\n");
+    printf("#### OS COMP TEST GROUP START copy-file-range-test2-glibc ####");
+    run_test("/glibc/copy-file-range-test-2");
+    printf("#### OS COMP TEST GROUP END copy-file-range-test2-glibc ####\n\n");
+    printf("#### OS COMP TEST GROUP START copy-file-range-test3-glibc ####");
+    run_test("/glibc/copy-file-range-test-3");
+    printf("#### OS COMP TEST GROUP END copy-file-range-test3-glibc ####\n\n");
+    printf("#### OS COMP TEST GROUP START copy-file-range-test4-glibc ####");
+    run_test("/glibc/copy-file-range-test-4");
+    printf("#### OS COMP TEST GROUP END copy-file-range-test4-glibc ####\n\n");
+    //splice
+    char *splice_argv1[] = {"test_splice", "1", NULL};
+    printf("#### OS COMP TEST GROUP START splice-test1-glibc ####\n");
+    run_test("/glibc/test_splice", splice_argv1, 0);
+    printf("#### OS COMP TEST GROUP END splice-test1-glibc ####\n\n");
+    char *splice_argv2[] = {"test_splice", "2", NULL};
+    printf("#### OS COMP TEST GROUP START splice-test2-glibc ####\n");
+    run_test("/glibc/test_splice", splice_argv2, 0);
+    printf("#### OS COMP TEST GROUP END splice-test2-glibc ####\n\n");
+    char *splice_argv3[] = {"test_splice", "3", NULL};
+    printf("#### OS COMP TEST GROUP START splice-test3-glibc ####\n");
+    run_test("/glibc/test_splice", splice_argv3, 0);
+    printf("#### OS COMP TEST GROUP END splice-test3-glibc ####\n\n");
+    char *splice_argv4[] = {"test_splice", "4", NULL};
+    printf("#### OS COMP TEST GROUP START splice-test4-glibc ####\n");
+    run_test("/glibc/test_splice", splice_argv4, 0);
+    printf("#### OS COMP TEST GROUP END splice-test4-glibc ####\n\n");
+    char *splice_argv5[] = {"test_splice", "5", NULL};
+    printf("#### OS COMP TEST GROUP START splice-test5-glibc ####\n");
+    run_test("/glibc/test_splice", splice_argv5, 0);
+    printf("#### OS COMP TEST GROUP END splice-test5-glibc ####\n\n");
+    return 0;
+}
+
 
 int git_test(const char *path)
 {
@@ -921,10 +1013,10 @@ char *ltp_testcases[] = {
     // "fcntl12_64",//fail
     // "fcntl13",  //pass
     // "fcntl13_64", //pass
-    // "fcntl14",
-    // "fcntl14_64",
-    // "fcntl15",
-    // "fcntl15_64",
+    // "fcntl14", //rt_sigsuspend
+    // "fcntl14_64",//rt_sigsuspend
+    // "fcntl15", //passs5 
+    // "fcntl15_64", //pass5
     // "fcntl16",
     // "fcntl16_64",
     // "fcntl17",
@@ -1345,7 +1437,7 @@ char *ltp_testcases[] = {
     // "hugefallocate02",
     // "hugefork01",
     // "hugefork02",
-    // "hugemmap01",
+    "hugemmap01",
     // "hugemmap02",
     // "hugemmap04",
     // "hugemmap05",

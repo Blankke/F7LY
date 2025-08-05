@@ -76,4 +76,6 @@ int basic_test(const char *path);
 int busybox_test(const char *path);
 int libc_test(const char *path);
 int ltp_test(const char *path );
+int final_test_musl(void);
+int final_test_glibc(void);
 int git_test(const char *path);

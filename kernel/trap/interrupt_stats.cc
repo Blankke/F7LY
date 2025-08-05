@@ -24,6 +24,7 @@ namespace intr_stats
         }
         
         // 增加计数
+        // printfGray("[INTR_STATS] Recording interrupt: IRQ %d\n", irq_num);
         _interrupt_counts[irq_num]++;
         
         _lock.release();
