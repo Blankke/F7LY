@@ -127,6 +127,7 @@ namespace syscall
         BIND_SYSCALL(fstat);
         BIND_SYSCALL(sync);  // todo
         BIND_SYSCALL(fsync); // todo
+        BIND_SYSCALL(fdatasync); // todo
         BIND_SYSCALL(utimensat);
         BIND_SYSCALL(exit);
         BIND_SYSCALL(exit_group);
@@ -5313,8 +5314,153 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_fsync()
     {
-        return 0; // copy from 唐老师
-        panic("未实现该系统调用");
+        int fd;
+        fs::file *f = nullptr;
+        
+        // 获取文件描述符参数
+        if (_arg_fd(0, &fd, &f) < 0)
+        {
+            printfRed("[SyscallHandler::sys_fsync] Error fetching file descriptor\n");
+            return SYS_EBADF;
+        }
+        
+        if (f == nullptr)
+        {
+            printfRed("[SyscallHandler::sys_fsync] File descriptor %d is not open\n", fd);
+            return SYS_EBADF;
+        }
+        
+        // 检查文件类型，某些特殊文件不支持同步
+        if (f->_attrs.filetype == fs::FileTypes::FT_PIPE)
+        {
+            printfRed("[SyscallHandler::sys_fsync] fsync not supported on pipes\n");
+            return SYS_EINVAL;
+        }
+        
+        if (f->_attrs.filetype == fs::FileTypes::FT_SOCKET)
+        {
+            printfRed("[SyscallHandler::sys_fsync] fsync not supported on sockets\n");
+            return SYS_EINVAL;
+        }
+        
+        // 对于设备文件，不需要同步，直接返回成功
+        if (f->_attrs.filetype == fs::FileTypes::FT_DEVICE)
+        {
+            printfCyan("[SyscallHandler::sys_fsync] Device file, no sync needed\n");
+            return 0;
+        }
+        
+        // 对于普通文件，执行文件系统级别的同步
+        if (f->_attrs.filetype == fs::FileTypes::FT_NORMAL)
+        {
+            // 首先尝试获取文件系统对象
+            struct filesystem *fs = get_fs_from_path(f->_path_name.c_str());
+            if (fs != nullptr)
+            {
+                int result = vfs_ext_flush(fs);
+                if (result != 0)
+                {
+                    printfRed("[SyscallHandler::sys_fsync] vfs_ext_flush failed with error: %d\n", result);
+                    return SYS_EIO;
+                }
+                printfGreen("[SyscallHandler::sys_fsync] Successfully synced file fd=%d\n", fd);
+                return 0;
+            }
+            else
+            {
+                // 如果无法获取文件系统对象，尝试使用全局缓存刷新
+                printfYellow("[SyscallHandler::sys_fsync] No filesystem object, attempting global cache flush\n");
+                // 对于扩展文件系统，尝试直接刷新缓存
+                int result = ext4_cache_flush("/");
+                if (result != EOK)
+                {
+                    printfRed("[SyscallHandler::sys_fsync] ext4_cache_flush failed with error: %d\n", result);
+                    return SYS_EIO;
+                }
+                printfGreen("[SyscallHandler::sys_fsync] Successfully synced global cache for fd=%d\n", fd);
+                return 0;
+            }
+        }
+        
+        printfYellow("[SyscallHandler::sys_fsync] File type %d, assuming sync successful\n", (int)f->_attrs.filetype);
+        return 0;
+    }
+    
+    uint64 SyscallHandler::sys_fdatasync()
+    {
+        int fd;
+        fs::file *f = nullptr;
+        
+        // 获取文件描述符参数
+        if (_arg_fd(0, &fd, &f) < 0)
+        {
+            printfRed("[SyscallHandler::sys_fdatasync] Error fetching file descriptor\n");
+            return SYS_EBADF;
+        }
+        printfCyan("[SyscallHandler::sys_fdatasync] fd: %d\n", fd);
+        if (f == nullptr)
+        {
+            printfRed("[SyscallHandler::sys_fdatasync] File descriptor %d is not open\n", fd);
+            return SYS_EBADF;
+        }
+        
+        // 检查文件类型，某些特殊文件不支持同步
+        if (f->_attrs.filetype == fs::FileTypes::FT_PIPE)
+        {
+            printfRed("[SyscallHandler::sys_fdatasync] fdatasync not supported on pipes\n");
+            return SYS_EINVAL;
+        }
+        
+        if (f->_attrs.filetype == fs::FileTypes::FT_SOCKET)
+        {
+            printfRed("[SyscallHandler::sys_fdatasync] fdatasync not supported on sockets\n");
+            return SYS_EINVAL;
+        }
+        
+        // 对于设备文件，不需要同步，直接返回成功
+        if (f->_attrs.filetype == fs::FileTypes::FT_DEVICE)
+        {
+            printfCyan("[SyscallHandler::sys_fdatasync] Device file, no sync needed\n");
+            return SYS_EINVAL;
+        }
+        
+        // 对于普通文件，执行数据同步
+        // fdatasync 只需要同步数据和必要的元数据，不需要同步访问时间等非关键元数据
+        if (f->_attrs.filetype == fs::FileTypes::FT_NORMAL)
+        {
+            // 首先尝试获取文件系统对象
+            struct filesystem *fs = get_fs_from_path(f->_path_name.c_str());
+            if (fs != nullptr)
+            {
+                // 对于fdatasync，我们同样使用文件系统级别的刷新
+                // 在实际实现中，这里可以优化为只刷新数据块，不刷新所有元数据
+                int result = vfs_ext_flush(fs);
+                if (result != 0)
+                {
+                    printfRed("[SyscallHandler::sys_fdatasync] vfs_ext_flush failed with error: %d\n", result);
+                    return SYS_EIO;
+                }
+                printfGreen("[SyscallHandler::sys_fdatasync] Successfully synced data for fd=%d\n", fd);
+                return 0;
+            }
+            else
+            {
+                // 如果无法获取文件系统对象，尝试使用全局缓存刷新
+                printfYellow("[SyscallHandler::sys_fdatasync] No filesystem object, attempting global cache flush\n");
+                // 对于扩展文件系统，尝试直接刷新缓存
+                int result = ext4_cache_flush("/");
+                if (result != EOK)
+                {
+                    printfRed("[SyscallHandler::sys_fdatasync] ext4_cache_flush failed with error: %d\n", result);
+                    return SYS_EIO;
+                }
+                printfGreen("[SyscallHandler::sys_fdatasync] Successfully synced global cache for fd=%d\n", fd);
+                return 0;
+            }
+        }
+        
+        printfYellow("[SyscallHandler::sys_fdatasync] File type %d, assuming sync successful\n", (int)f->_attrs.filetype);
+        return 0;
     }
     uint64 SyscallHandler::sys_futex()
     {

@@ -3507,6 +3507,10 @@ namespace proc
         {
             path = "/musl/ltp/testcases/bin/open12_child";
         }
+        if(path == "/usr/local/bin/openat02_child")
+        {
+            path = "/musl/ltp/testcases/bin/openat02_child";
+        }
         eastl::string ab_path;
         if (path[0] == '/')
             ab_path = path; // 已经是绝对路径

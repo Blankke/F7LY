@@ -49,6 +49,10 @@ int shutdown();
 // add
 int sleep(unsigned int seconds);
 
+// sync functions
+int fsync(int fd);
+int fdatasync(int fd);
+
 
 
 // 打印到指定文件描述符，支持%d, %x, %p, %s, %c, %%

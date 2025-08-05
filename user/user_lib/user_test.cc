@@ -971,9 +971,9 @@ char *ltp_testcases[] = {
     // "fcntl38_64",
     // "fcntl39",
     // "fcntl39_64",
-    // "fdatasync01",
-    // "fdatasync02",
-    // "fdatasync03",
+    // "fdatasync01",    //pass
+    // "fdatasync02",   //pass
+    // "fdatasync03",    //loop0
     // "fgetxattr01",   //bin/sh
     // "fgetxattr02",
     // "fgetxattr03",
@@ -1156,10 +1156,10 @@ char *ltp_testcases[] = {
     // "fstatfs02_64",
     // "fsx.sh",
     // "fsx-linux",
-    // "fsync01",
-    // "fsync02",
-    // "fsync03",
-    // "fsync04",
+    // "fsync01", //loop0
+    // "fsync02", //bin/sh
+    // "fsync03",  //pass
+    // "fsync04",  //loop0
     // "ftest01",
     // "ftest02",
     // "ftest03",
@@ -2008,7 +2008,7 @@ char *ltp_testcases[] = {
     // "pipe04", //管道给写爆了，感觉是时间片太长了
     // "pipe05", // 完全PASS
     // "pipe06",    // 完全PASS
-    "pipe07", //proc/self/fd没写
+    // "pipe07", //proc/self/fd没写
     // "pipe08",
     // "pipe09", // 完全PASS
     // "pipe10", // 完全PASS

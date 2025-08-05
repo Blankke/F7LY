@@ -67,6 +67,7 @@ namespace syscall
         SYS_fstat = 80,
         SYS_sync = 81,  // form tsh 
         SYS_fsync = 82, // form tsh 
+        SYS_fdatasync = 83, // form tsh
         SYS_sync_file_range = 84,    // from rocket
         SYS_utimensat = 88,
         SYS_acct = 89,               // from rocket
