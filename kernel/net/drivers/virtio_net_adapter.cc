@@ -59,12 +59,12 @@ namespace net
         memset(&ipv4_config, 0, sizeof(ipv4_config));
         
         // Set default IP configuration (you can modify these)
-        ipv4_config.unAddr = htonl(0xC0A80102);         // 192.168.1.2
-        ipv4_config.unSubnetMask = htonl(0xFFFFFF00);   // 255.255.255.0
-        ipv4_config.unGateway = htonl(0xC0A80101);      // 192.168.1.1
-        ipv4_config.unPrimaryDNS = htonl(0x08080808);   // 8.8.8.8
-        ipv4_config.unBroadcast = htonl(0xC0A801FF);    // 192.168.1.255
-        
+        ipv4_config.unAddr = inet_addr_small("192.168.1.2");
+        ipv4_config.unSubnetMask = inet_addr_small("255.255.255.0");
+        ipv4_config.unGateway = inet_addr_small("192.168.1.1");
+        ipv4_config.unPrimaryDNS = inet_addr_small("8.8.8.8");
+        ipv4_config.unBroadcast = inet_addr_small("192.168.1.255");
+
         // Register ethernet interface with onps
         EN_ONPSERR error;
         onps_netif = ethernet_add("virtio0",              // Interface name

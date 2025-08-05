@@ -2,6 +2,7 @@
 #include "mem/virtual_memory_manager.hh"
 #include "proc/proc.hh"
 #include "proc/proc_manager.hh"
+#include "net/onpstack/include/onps.hh"
 #include <errno.h>
 
 namespace fs
@@ -12,6 +13,7 @@ namespace fs
         , _type(static_cast<SocketType>(type))
         , _family(static_cast<SocketFamily>(domain))
         , _protocol(protocol)
+        , _onps_socket(INVALID_SOCKET)
         , _backlog(0)
         , _blocking(true)
         , _reuse_addr(false)
@@ -29,6 +31,7 @@ namespace fs
         , _type(static_cast<SocketType>(type))
         , _family(static_cast<SocketFamily>(domain))
         , _protocol(protocol)
+        , _onps_socket(INVALID_SOCKET)
         , _backlog(0)
         , _blocking(true)
         , _reuse_addr(false)
@@ -42,6 +45,12 @@ namespace fs
 
     socket_file::~socket_file()
     {
+        // 关闭onps socket
+        if (_onps_socket != INVALID_SOCKET) {
+            close(_onps_socket);
+            _onps_socket = INVALID_SOCKET;
+        }
+        
         // 清理待处理的连接
         for (auto* pending : _pending_connections) {
             if (pending) {
