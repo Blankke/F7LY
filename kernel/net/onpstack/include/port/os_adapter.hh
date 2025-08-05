@@ -48,7 +48,7 @@ OS_ADAPTER_EXT void os_thread_sem_uninit(HSEM hSem);					//* 信号量去初始�
 OS_ADAPTER_EXT void os_thread_onpstack_start(void *pvParam);			//* 启动协议栈内部工作线程
 
 //* 临界区保护函数实现 - 基于F7LY项目的CPU抽象层
-#define os_critical_init()    register int __intr_status; //* 临界区初始化
+#define os_critical_init()    int __intr_status; //* 临界区初始化
 #define os_enter_critical()   do { \
     __intr_status = Cpu::get_intr_stat(); \
     Cpu::interrupt_off(); \
