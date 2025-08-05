@@ -722,6 +722,11 @@ namespace syscall
         mem::PageTable *pt = p->get_pagetable();
 
         char *k_buf = (char *)mem::k_pmm.kmalloc(n + 10);
+        if(!k_buf)
+        {
+            printfRed("[SyscallHandler::sys_read] Error allocating kernel buffer\n");
+            return -ENOMEM; // 内存不足
+        }
         int ret = f->read((uint64)k_buf, n, f->get_file_offset(), true);
         if (ret < 0)
         {
@@ -1271,7 +1276,11 @@ namespace syscall
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = proc->get_pagetable();
         char *buf = (char *)mem::k_pmm.kmalloc(n + 10);
-
+        if(!buf)
+        {
+            printfRed("[SyscallHandler::sys_write] Error allocating memory for buffer\n");
+            return -ENOMEM; // 内存分配失败
+        }
         // {
         //     mem::UserspaceStream uspace((void *)p, n + 1, pt);
         //     uspace.open();
@@ -5238,6 +5247,11 @@ namespace syscall
         f->lseek(offset, SEEK_SET);
 
         char *kbuf = (char*)mem::k_pmm.kmalloc(count);
+        if(!kbuf)
+        {
+            f->lseek(old_off, SEEK_SET);
+            return -ENOMEM; // Out of memory
+        }
         long rc = f->read((ulong)kbuf, count, f->get_file_offset(), true);
         if (rc < 0)
         {

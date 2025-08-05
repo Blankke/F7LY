@@ -1943,7 +1943,7 @@ char *ltp_testcases[] = {
     // "open09", //pass
     // "open10", // socket
     // "open11",    //pass
-    // "open12",    //别跑！会爆
+    // "open12",    //过三个
     // "open12_child",//这个不是测例
     // "open13",    // pass
     // "open14",    //pass这个测例要跑一年，别急着掐死，多等会
@@ -1961,7 +1961,7 @@ char *ltp_testcases[] = {
     // "page01",
     // "page02",
     // "parameters.sh",
-    // "pathconf01",
+    // "pathconf01",   //pass
     // "pathconf02",
     // "pause01",
     // "pause02",
@@ -2008,7 +2008,7 @@ char *ltp_testcases[] = {
     // "pipe04", //管道给写爆了，感觉是时间片太长了
     // "pipe05", // 完全PASS
     // "pipe06",    // 完全PASS
-    // "pipe07", //proc/self/fd没写
+    "pipe07", //proc/self/fd没写
     // "pipe08",
     // "pipe09", // 完全PASS
     // "pipe10", // 完全PASS

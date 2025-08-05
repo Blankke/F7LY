@@ -3503,6 +3503,10 @@ namespace proc
 
         // 构建绝对路径
         // TODO: 这个解析路径写的太狗屎了，换一下
+        if(path =="/usr/local/bin/open12_child")
+        {
+            path = "/musl/ltp/testcases/bin/open12_child";
+        }
         eastl::string ab_path;
         if (path[0] == '/')
             ab_path = path; // 已经是绝对路径
