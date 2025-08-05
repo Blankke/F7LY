@@ -9,6 +9,9 @@
 #ifndef OS_ADAPTER_H
 #define OS_ADAPTER_H
 
+//* 包含平台相关头文件以支持临界区实现
+#include "hal/cpu.hh"
+
 #ifdef SYMBOL_GLOBALS
 #define OS_ADAPTER_EXT
 #else
@@ -44,9 +47,15 @@ OS_ADAPTER_EXT INT os_thread_sem_pend(HSEM hSem, INT nWaitSecs);		//* 等待信�
 OS_ADAPTER_EXT void os_thread_sem_uninit(HSEM hSem);					//* 信号量去初始化，释放该资源
 OS_ADAPTER_EXT void os_thread_onpstack_start(void *pvParam);			//* 启动协议栈内部工作线程
 
-#define os_critical_init()    //* 临界区初始化
-#define os_enter_critical()   //* 进入临界区（关中断）
-#define os_exit_critical()    //* 退出临界区（开中断）
+//* 临界区保护函数实现 - 基于F7LY项目的CPU抽象层
+#define os_critical_init()    register int __intr_status; //* 临界区初始化
+#define os_enter_critical()   do { \
+    __intr_status = Cpu::get_intr_stat(); \
+    Cpu::interrupt_off(); \
+} while(0) //* 进入临界区（关中断）
+#define os_exit_critical()    do { \
+    if (__intr_status) Cpu::interrupt_on(); \
+} while(0) //* 退出临界区（恢复中断状态）
 
 #if SUPPORT_PPP
 OS_ADAPTER_EXT HTTY os_open_tty(const CHAR *pszTTYName);

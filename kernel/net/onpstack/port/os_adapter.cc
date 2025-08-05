@@ -15,6 +15,8 @@
 #include "proc/sleeplock.hh"
 #include "semaphore.hh"
 #include "libs/klib.hh"  // 用于strcpy等函数
+#include "proc/proc_manager.hh"  // 用于进程管理
+#include "sys/syscall_defs.hh"   // 用于CLONE_*常量
 #if SUPPORT_PPP
 #include "ppp/negotiation_storage.hh"
 #include "ppp/ppp.hh"
@@ -101,19 +103,113 @@ UINT os_get_system_msecs(void)
 	return msecs;
 }
 
+// 内核线程包装函数 - 以 extern "C" 形式声明以确保正确的调用约定
+extern "C" void kernel_thread_wrapper()
+{
+	// 获取当前进程的trapframe，从中取得线程入口函数和参数
+	proc::Pcb *current = proc::k_pm.get_cur_pcb();
+	if (current == nullptr) {
+		printf("kernel_thread_wrapper: failed to get current PCB\n");
+		proc::k_pm.exit(-1);
+		return;
+	}
+	
+	// 从trapframe中获取线程入口函数和参数（在创建线程时设置）
+	void (*thread_func)(void*) = (void(*)(void*))(current->_trapframe->a0);
+	void *param = (void*)(current->_trapframe->a1);
+	
+	if (thread_func != nullptr) {
+		printf("onpstack: kernel thread %s starting (func=%p, param=%p)\n", 
+			   current->_name, thread_func, param);
+		
+		// 执行网络协议栈工作线程函数
+		thread_func(param);
+		
+		printf("onpstack: kernel thread %s finished\n", current->_name);
+	} else {
+		printf("kernel_thread_wrapper: null thread function in %s\n", current->_name);
+	}
+	
+	// 线程函数执行完毕，退出线程
+	printf("onpstack: kernel thread %s exiting\n", current->_name);
+	proc::k_pm.exit(0);
+}
+
 void os_thread_onpstack_start(void *pvParam)
 {
-	panic("os_thread_onpstack_start() cannot be empty");
-
-	//* 建立工作线程
+	printf("onpstack: starting protocol stack worker threads...\n");
+	
+	// 建立协议栈工作线程
 	INT i;
-	for (i = 0; i < (INT)(sizeof(lr_stcbaPStackThread) / sizeof(STCB_PSTACKTHREAD)); i++)
+	int threads_created = 0;
+	int total_threads = (INT)(sizeof(lr_stcbaPStackThread) / sizeof(STCB_PSTACKTHREAD));
+	
+	printf("onpstack: need to create %d worker threads\n", total_threads);
+	
+	for (i = 0; i < total_threads; i++)
 	{
-		//* 在此按照顺序建立工作线程
+		const STCB_PSTACKTHREAD *pstThread = &lr_stcbaPStackThread[i];
+		
+		if (pstThread->pfunThread != nullptr)
+		{
+			printf("onpstack: creating thread %d with function %p\n", i, pstThread->pfunThread);
+			
+			// 使用clone创建内核线程
+			// CLONE_VM | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD - 共享内存、文件和信号处理
+			uint64 flags = syscall::CLONE_VM | syscall::CLONE_FILES | syscall::CLONE_SIGHAND | syscall::CLONE_THREAD;
+			
+			// 获取当前进程
+			proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+			if (current_proc == nullptr) {
+				printf("onpstack: ERROR - failed to get current process for thread %d\n", i);
+				continue;
+			}
+			
+			printf("onpstack: current process: pid=%d, name=%s\n", current_proc->_pid, current_proc->_name);
+			
+			// 创建内核线程 - 使用clone系统调用
+			proc::Pcb *thread_pcb = proc::k_pm.fork(current_proc, flags, 0, 0, false);
+			if (thread_pcb != nullptr) {
+				printf("onpstack: fork successful, new thread: pid=%d, tid=%d\n", 
+					   thread_pcb->_pid, thread_pcb->_tid);
+				
+				// 设置线程入口点为包装函数
+#ifdef RISCV
+				thread_pcb->_trapframe->epc = (uint64)kernel_thread_wrapper;
+#elif defined(LOONGARCH)
+				thread_pcb->_trapframe->era = (uint64)kernel_thread_wrapper;
+#endif
+				
+				// 通过trapframe传递参数
+				thread_pcb->_trapframe->a0 = (uint64)pstThread->pfunThread;  // 线程入口函数
+				thread_pcb->_trapframe->a1 = (uint64)pstThread->pvParam;     // 线程参数
+				
+				// 设置线程名称以便调试
+				char thread_name[30];
+				snprintf(thread_name, sizeof(thread_name), "OSTimerCnt");
+				strncpy(thread_pcb->_name, thread_name, sizeof(thread_pcb->_name) - 1);
+				thread_pcb->_name[sizeof(thread_pcb->_name) - 1] = '\0';
+				
+				printf("onpstack: successfully created thread '%s' (pid=%d, tid=%d)\n", 
+					   thread_name, thread_pcb->_pid, thread_pcb->_tid);
+				
+				thread_pcb->_lock.release();
+				
+				threads_created++;
+			} else {
+				printf("onpstack: ERROR - failed to create thread %d (fork returned null)\n", i);
+			}
+		} else {
+			printf("onpstack: skipping thread %d (null function pointer)\n", i);
+		}
 	}
 
-	/* 用户自定义代码 */
-	/* …… */
+	printf("onpstack: protocol stack initialization complete - created %d/%d threads\n", 
+		   threads_created, total_threads);
+	
+	if (threads_created == 0) {
+		printf("onpstack: WARNING - no worker threads were created!\n");
+	}
 }
 
 HMUTEX os_thread_mutex_init(void)
