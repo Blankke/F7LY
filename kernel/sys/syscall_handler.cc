@@ -2375,14 +2375,25 @@ namespace syscall
         proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = cur_proc->get_pagetable();
 
-        if (setaddr != 0)
+        // 从用户空间拷贝新的信号掩码（如果setaddr不为空）
+        signal::sigset_t *newset_ptr = nullptr;
+        if (setaddr != 0) {
             if (mem::k_vmm.copy_in(*pt, &set, setaddr, sizeof(signal::sigset_t)) < 0)
                 return -1;
-        if (oldsetaddr != 0)
-            if (mem::k_vmm.copy_in(*pt, &old_set, oldsetaddr, sizeof(signal::sigset_t)) < 0)
-                return -1;
+            newset_ptr = &set;
+        }
 
-        return signal::sigprocmask(how, &set, &old_set, sigsize);
+        // 调用signal::sigprocmask
+        signal::sigset_t *oldset_ptr = (oldsetaddr != 0) ? &old_set : nullptr;
+        int ret = signal::sigprocmask(how, newset_ptr, oldset_ptr, sigsize);
+        
+        // 如果调用成功且oldsetaddr不为空，将旧的信号掩码拷贝回用户空间
+        if (ret == 0 && oldsetaddr != 0) {
+            if (mem::k_vmm.copy_out(*pt, oldsetaddr, &old_set, sizeof(signal::sigset_t)) < 0)
+                return -1;
+        }
+
+        return ret;
     }
     uint64 SyscallHandler::sys_rt_sigtimedwait()
     {

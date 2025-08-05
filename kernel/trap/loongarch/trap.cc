@@ -195,9 +195,13 @@ void trap_manager::usertrap()
     // printfRed("p->_trapframe->sp: %p,fault_va: %p,p->sz:%p\n", p->_trapframe->sp, r_csr_badv(), p->_sz);
     if (mmap_handler(r_csr_badv(), (r_csr_estat() & CSR_ESTAT_ECODE) >> 16) != 0)
     {
+      // 缺页异常处理失败，发送SIGSEGV信号
+      printf("usertrap(): page fault at %p, sending SIGSEGV to pid=%d\n", r_csr_badv(), p->_pid);
+      p->add_signal(proc::ipc::signal::SIGSEGV);
+      proc::ipc::signal::handle_signal(); // 例外, 假如说发生缺页信号, 则先处理一下信号
+
       printf("usertrap(): unexpected trapcause %x pid=%d\n", r_csr_estat(), p->_pid);
       printf("            era=%p badi=%x\n", r_csr_era(), r_csr_badi());
-      p->_killed = 1;
     }
   }
   else if ((which_dev = devintr()) != 0)

@@ -67,8 +67,12 @@ namespace proc
                 }
 
                 proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
+                
+                // 首先保存当前的信号掩码到oldset（如果oldset不为nullptr）
                 if (oldset != nullptr)
                     oldset->sig[0] = cur_proc->_sigmask;
+                
+                // 如果newset为nullptr，只是查询当前掩码，不修改
                 if (newset == nullptr)
                     return 0;
 
@@ -88,29 +92,32 @@ namespace proc
                     return -22;
                 }
 
-                // int debugsig = 33; // 你可以修改这个变量来指定要查看的信号号
-                // if (debugsig > 0 && debugsig <= signal::SIGRTMAX) {
-                //     uint64 mask = (1UL << (debugsig - 1));
-                //     bool before = (cur_proc->_sigmask & mask);
-                //     bool after = false;
-                //     switch (how) {
-                //         case signal::SIG_BLOCK:
-                //             after = ((cur_proc->_sigmask & mask) != 0);
-                //             printfCyan("[sigprocmask][DEBUG] SIG_BLOCK: signal %d, before=%d, after=%d\n", debugsig, before, after);
-                //             break;
-                //         case signal::SIG_UNBLOCK:
-                //             after = ((cur_proc->_sigmask & mask) != 0);
-                //             printfCyan("[sigprocmask][DEBUG] SIG_UNBLOCK: signal %d, before=%d, after=%d\n", debugsig, before, after);
-                //             break;
-                //         case signal::SIG_SETMASK:
-                //             after = ((cur_proc->_sigmask & mask) != 0);
-                //             printfCyan("[sigprocmask][DEBUG] SIG_SETMASK: signal %d, before=%d, after=%d\n", debugsig, before, after);
-                //             break;
-                //     }
-                // }
+                int debugsig = proc::ipc::signal::SIGSEGV; // 你可以修改这个变量来指定要查看的信号号
+                if (debugsig > 0 && debugsig <= signal::SIGRTMAX) {
+                    uint64 mask = (1UL << (debugsig - 1));
+                    bool before = (oldset != nullptr && oldset->sig[0] != 0) ? 
+                                  (oldset->sig[0] & mask) != 0 : 
+                                  false; // 如果 oldset 为空，说明没有保存之前的状态
+                    bool after = (cur_proc->_sigmask & mask) != 0;
+                    
+                    switch (how) {
+                        case signal::SIG_BLOCK:
+                            printfCyan("[sigprocmask][DEBUG] SIG_BLOCK: signal %d, before=%d, after=%d\n", debugsig, before, after);
+                            break;
+                        case signal::SIG_UNBLOCK:
+                            printfCyan("[sigprocmask][DEBUG] SIG_UNBLOCK: signal %d, before=%d, after=%d\n", debugsig, before, after);
+                            break;
+                        case signal::SIG_SETMASK:
+                            printfCyan("[sigprocmask][DEBUG] SIG_SETMASK: signal %d, before=%d, after=%d\n", debugsig, before, after);
+                            break;
+                    }
+                }
 
-                // 永远不能屏蔽这两个信号
-                cur_proc->_sigmask &= ~((1UL << (signal::SIGKILL - 1)) | (1UL << (signal::SIGSTOP - 1)));
+                // 确保关键信号不会被屏蔽
+                uint64 unmaskable_signals = (1UL << (signal::SIGKILL - 1)) |
+                                            (1UL << (signal::SIGSTOP - 1));
+                cur_proc->_sigmask &= ~unmaskable_signals;
+
                 return 0;
             }
 
@@ -119,6 +126,11 @@ namespace proc
                 switch (signum)
                 {
                 case signal::SIGKILL:
+                    p->_killed = true;
+                    break;
+                case signal::SIGSEGV:
+                    // SIGSEGV 默认行为：终止进程并生成核心转储
+                    printf("[default_handle] SIGSEGV: Segmentation fault, terminating process %d\n", p->_pid);
                     p->_killed = true;
                     break;
                 case signal::SIGCHLD:
@@ -148,14 +160,14 @@ namespace proc
                     if (is_ignored(p, signum))
                     {
                         printf("[handle_signal] Signal %d is ignored, sigmask=0x%x\n", signum, p->_sigmask);
-                        return;
+                        continue; // 跳过被屏蔽的信号，继续处理其他信号
                     }
 
                     sigaction *act = nullptr;
                     if (p->_sigactions != nullptr && p->_sigactions->actions[signum] != nullptr)
                     {
                         act = p->_sigactions->actions[signum];
-                        printf("[handle_signal] Found handler for signal %d: %p\n", signum, act->sa_handler);
+                        // printf("[handle_signal] Found handler for signal %d: %p\n", signum, act->sa_handler);
                     }
                     else
                     {
@@ -169,9 +181,9 @@ namespace proc
                     }
                     else
                     {
-                        printf("[handle_signal] Calling do_handle for signal %d\n", signum);
+                        // printf("[handle_signal] Calling do_handle for signal %d\n", signum);
                         do_handle(p, signum, act);
-                        
+
                         // 处理 SA_RESETHAND 标志：执行后重置为默认处理
                         if (act->sa_flags & (uint64)SigActionFlags::RESETHAND)
                         {
@@ -181,9 +193,9 @@ namespace proc
                         }
                     }
                     clear_signal(p, signum);
-                    printf("[handle_signal] Cleared signal %d, _signal now 0x%x\n", signum, p->_signal);
+                    // printf("[handle_signal] Cleared signal %d, _signal now 0x%x\n", signum, p->_signal);
                 }
-                printf("[handle_signal] Finished handling signals\n");
+                // printf("[handle_signal] Finished handling signals\n");
             }
 
             void add_signal(proc::Pcb *p, int sig)
@@ -214,7 +226,7 @@ namespace proc
                     panic("[do_handle] Signal %d is ignored", signum);
                     return;
                 }
-                printf("[do_handle] Handling signal %d with handler %p\n", signum, act->sa_handler);
+                // printf("[do_handle] Handling signal %d with handler %p\n", signum, act->sa_handler);
 
                 signal_frame *frame;
                 frame = (signal_frame *)mem::k_pmm.alloc_page();
@@ -226,20 +238,22 @@ namespace proc
                 frame->mask.sig[0] = p->_sigmask; // 保存当前信号掩码
 
                 // 处理 sa_mask：在信号处理期间临时阻塞额外的信号
-                uint64 old_sigmask = p->_sigmask;
+                [[maybe_unused]] uint64 old_sigmask = p->_sigmask;
                 p->_sigmask |= act->sa_mask.sig[0]; // 添加 sa_mask 中指定的信号到当前掩码
-                
+
                 // 根据 SA_NODEFER 标志决定是否阻塞当前信号
                 if (!(act->sa_flags & (uint64)SigActionFlags::NODEFER))
                 {
                     p->_sigmask |= (1UL << (signum - 1)); // 默认阻塞当前信号
                 }
-                
-                // 永远不能屏蔽 SIGKILL 和 SIGSTOP
-                p->_sigmask &= ~((1UL << (signal::SIGKILL - 1)) | (1UL << (signal::SIGSTOP - 1)));
-                
-                printf("[do_handle] Signal mask updated: old=0x%x, new=0x%x, sa_mask=0x%x\n", 
-                       old_sigmask, p->_sigmask, act->sa_mask.sig[0]);
+
+                // 永远不能屏蔽 SIGKILL, SIGSTOP
+                p->_sigmask &= ~((1UL << (signal::SIGKILL - 1)) |
+                                 (1UL << (signal::SIGSTOP - 1))
+                                );
+
+                // printf("[do_handle] Signal mask updated: old=0x%x, new=0x%x, sa_mask=0x%x\n",
+                //        old_sigmask, p->_sigmask, act->sa_mask.sig[0]);
 
                 if (frame == nullptr)
                 {
@@ -339,8 +353,8 @@ namespace proc
                 else
                 {
                     // 原有的单参数处理逻辑
-                p->_trapframe->sp -= PGSIZE;
-                p->_trapframe->a0 = signum;
+                    p->_trapframe->sp -= PGSIZE;
+                    p->_trapframe->a0 = signum;
                 }
 
 #ifdef RISCV
@@ -393,16 +407,16 @@ namespace proc
                 if (has_siginfo != UINT64_MAX)
                 {
                     if (p->sig_frame == nullptr)
-                {
-                    panic("[sig_return] No signal frame to return to");
-                    p->_killed = true; // 没有信号帧，直接标记为被kill
-                    return;
-                }
-                signal_frame *frame = p->sig_frame;
-                p->_sigmask = frame->mask.sig[0];                        // 恢复信号掩码
-                memmove(p->_trapframe, &(frame->tf), sizeof(TrapFrame)); // 恢复陷阱帧
-                p->sig_frame = frame->next;                              // 移除当前信号帧
-                mem::k_pmm.free_page(frame);                             // 释放信号帧内存
+                    {
+                        panic("[sig_return] No signal frame to return to");
+                        p->_killed = true; // 没有信号帧，直接标记为被kill
+                        return;
+                    }
+                    signal_frame *frame = p->sig_frame;
+                    p->_sigmask = frame->mask.sig[0];                        // 恢复信号掩码
+                    memmove(p->_trapframe, &(frame->tf), sizeof(TrapFrame)); // 恢复陷阱帧
+                    p->sig_frame = frame->next;                              // 移除当前信号帧
+                    mem::k_pmm.free_page(frame);                             // 释放信号帧内存
                 }
                 else
                 {
