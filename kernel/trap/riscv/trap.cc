@@ -73,7 +73,7 @@ int trap_manager::devintr()
     // irq indicates which device interrupted.
     int irq = plic_mgr.claim();
 
-    intr_stats::k_intr_stats.record_interrupt(irq);
+    // intr_stats::k_intr_stats.record_interrupt(irq);
     if (irq == UART0_IRQ)
     {
       // 现在只写了接收中断, 没有发送中断
@@ -111,7 +111,7 @@ int trap_manager::devintr()
     // printfBlue("zzZ");
     // TODO, 这个5是瞎写的
     // 假设5是时钟中断
-    intr_stats::k_intr_stats.record_interrupt(5);
+    // intr_stats::k_intr_stats.record_interrupt(5);
     timertick();
 
     /// TODO: riscv可以用sbi的tick来实现时钟

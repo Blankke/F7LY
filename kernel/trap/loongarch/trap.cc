@@ -108,7 +108,7 @@ int trap_manager::devintr()
   {
     // timer interrupt,
     // TODO
-    intr_stats::k_intr_stats.record_interrupt(5);
+    // intr_stats::k_intr_stats.record_interrupt(5);
     // printfCyan("[trap] timer interrupt\n");
     if (proc::k_pm.get_cur_cpuid() == 0)
     {
