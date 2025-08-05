@@ -6189,7 +6189,6 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_accept()
     {
-        printfRed("这个是乱写的，用了就寄");
         int sockfd;
         uint64 addr;
         uint64 addrlen_ptr;
@@ -6212,7 +6211,10 @@ namespace syscall
             return SYS_EINVAL;
         }
 
+        printfCyan("[SyscallHandler::sys_accept] accept socket: sockfd=%d\n", sockfd);
+
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
         fs::file *f = p->get_open_file(sockfd);
         if (!f)
         {
@@ -6221,30 +6223,108 @@ namespace syscall
         }
 
         // 检查是否为socket文件
-        fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
-        if (!socket_f)
+        if (f->_attrs.filetype != fs::FileTypes::FT_SOCKET)
         {
             printfRed("[SyscallHandler::sys_accept] 文件描述符不是socket: %d\n", sockfd);
             return SYS_ENOTSOCK;
         }
 
-        fs::socket_file *client_socket = socket_f->accept((struct sockaddr *)addr, (socklen_t *)addrlen_ptr);
-        if (!client_socket)
+        fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
+        SOCKET onps_socket = socket_f->get_onps_socket();
+        
+        if (onps_socket == INVALID_SOCKET)
         {
-            printfRed("[SyscallHandler::sys_accept] accept失败\n");
-            return SYS_EAGAIN; // 或者根据具体情况返回其他错误码
+            printfRed("[SyscallHandler::sys_accept] socket未关联onps socket\n");
+            return SYS_EINVAL;
         }
 
+        // 从用户空间读取地址长度
+        socklen_t user_addrlen = 0;
+        if (addr != 0 && addrlen_ptr != 0)
+        {
+            if (mem::k_vmm.copy_in(*pt, &user_addrlen, addrlen_ptr, sizeof(socklen_t)) < 0)
+            {
+                printfRed("[SyscallHandler::sys_accept] 读取地址长度失败\n");
+                return SYS_EFAULT;
+            }
+        }
+
+        // 准备客户端地址信息
+        in_addr_t client_ip = 0;
+        USHORT client_port = 0;
+        EN_ONPSERR onps_err;
+        
+        // 调用onps的accept函数，阻塞等待连接
+        SOCKET client_socket = ::accept(onps_socket, &client_ip, &client_port, 0, &onps_err);
+        if (client_socket == INVALID_SOCKET)
+        {
+            printfRed("[SyscallHandler::sys_accept] onps accept失败, 错误: %d\n", onps_err);
+            // 将onps错误码转换为系统错误码
+            if (onps_err == ERRTCPNOLISTEN)
+                return SYS_EINVAL;  // 没有监听
+            else if (onps_err == ERRNOTBINDADDR)
+                return SYS_EINVAL;  // 没有绑定地址
+            else
+                return SYS_EAGAIN;  // 其他错误，通常是没有连接可接受
+        }
+
+        // 创建新的socket_file对象用于客户端连接
+        // 继承服务器socket的属性
+        int domain = (int)socket_f->get_family();
+        int type = (int)socket_f->get_type();
+        int protocol = socket_f->get_protocol();
+        
+        fs::socket_file *client_socket_f = new fs::socket_file(domain, type, protocol);
+        if (!client_socket_f)
+        {
+            close(client_socket);  // 关闭onps socket
+            printfRed("[SyscallHandler::sys_accept] 创建客户端socket_file失败\n");
+            return SYS_ENOMEM;
+        }
+
+        // 将onps客户端socket句柄关联到socket_file
+        client_socket_f->set_onps_socket(client_socket);
+
         // 为新的客户端socket分配文件描述符
-        int client_fd = proc::k_pm.alloc_fd(p, client_socket);
+        int client_fd = proc::k_pm.alloc_fd(p, client_socket_f);
         if (client_fd < 0)
         {
-            delete client_socket;
+            close(client_socket);  // 关闭onps socket
+            delete client_socket_f;
             printfRed("[SyscallHandler::sys_accept] 分配客户端文件描述符失败\n");
             return SYS_EMFILE;
         }
 
-        printfCyan("[SyscallHandler::sys_accept] accept成功, sockfd=%d, client_fd=%d\n", sockfd, client_fd);
+        // 如果用户提供了地址缓冲区，填充客户端地址信息
+        if (addr != 0 && user_addrlen > 0)
+        {
+            struct sockaddr_in client_addr;
+            memset(&client_addr, 0, sizeof(client_addr));
+            client_addr.sin_family = AF_INET;
+            client_addr.sin_addr = htonl(client_ip);
+            client_addr.sin_port = htons(client_port);
+
+            // 确定要复制的大小
+            socklen_t copy_len = (user_addrlen < sizeof(struct sockaddr_in)) ? user_addrlen : sizeof(struct sockaddr_in);
+
+            // 复制地址到用户空间
+            if (mem::k_vmm.copy_out(*pt, addr, &client_addr, copy_len) < 0)
+            {
+                printfRed("[SyscallHandler::sys_accept] 复制客户端地址到用户空间失败\n");
+                // 不是致命错误，继续执行
+            }
+
+            // 更新实际地址长度
+            socklen_t actual_len = sizeof(struct sockaddr_in);
+            if (mem::k_vmm.copy_out(*pt, addrlen_ptr, &actual_len, sizeof(socklen_t)) < 0)
+            {
+                printfRed("[SyscallHandler::sys_accept] 复制地址长度到用户空间失败\n");
+                // 不是致命错误，继续执行
+            }
+        }
+
+        printfCyan("[SyscallHandler::sys_accept] accept成功, sockfd=%d, client_fd=%d, client_ip=0x%08x, client_port=%d\n", 
+                   sockfd, client_fd, client_ip, client_port);
         return client_fd;
     }
     uint64 SyscallHandler::sys_connect()

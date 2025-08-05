@@ -105,6 +105,7 @@ namespace fs
         SocketState get_state() const { return _state; }
         SocketType get_type() const { return _type; }
         SocketFamily get_family() const { return _family; }
+        int get_protocol() const { return _protocol; }
         bool is_blocking() const { return _blocking; }
 
         // 内部辅助函数
