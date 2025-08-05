@@ -84,6 +84,11 @@ namespace fs
 		{
 			// 如果偏移量大于文件大小，先写入0填充到该位置
 			char *zero_buf = (char*)mem::k_pmm.kmalloc(off - lwext4_file_struct.fsize);
+			if(zero_buf == nullptr)
+			{
+				printfRed("normal_file::write: Failed to allocate memory for zero buffer\n");
+				return -ENOMEM; // 内存分配失败
+			}
 			memset(zero_buf, 0, off - lwext4_file_struct.fsize);
 			printfYellow("normal_file::write: padding with zeros to offset %ld, size %zu\n", off, off - lwext4_file_struct.fsize);
 			write((uint64)zero_buf, off - lwext4_file_struct.fsize, lwext4_file_struct.fsize, true);

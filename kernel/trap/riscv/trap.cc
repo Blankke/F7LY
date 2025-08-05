@@ -244,7 +244,7 @@ void trap_manager::usertrap()
       // 缺页异常处理失败，发送SIGSEGV信号
       printfRed("usertrap(): page fault at %p, sending SIGSEGV to pid=%d\n", r_stval(), p->_pid);
       proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGSEGV);
-      // 例外, 假如说发生缺页信号, 则先处理一下信号
+      proc::ipc::signal::handle_signal(); // 例外, 假如说发生缺页信号, 则先处理一下信号
       printfRed("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->_pid);
       printfRed("            sepc=%p stval=%p\n", r_sepc(), r_stval());
 

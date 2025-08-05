@@ -56,6 +56,7 @@
 #include "devs/block_device.hh"
 #include "EASTL/map.h"
 #include "fs/debug.hh"
+#include "net/onpstack/include/onps.hh"
 namespace syscall
 {
     // 创建全局的 SyscallHandler 实例
@@ -127,6 +128,7 @@ namespace syscall
         BIND_SYSCALL(fstat);
         BIND_SYSCALL(sync);  // todo
         BIND_SYSCALL(fsync); // todo
+        BIND_SYSCALL(fdatasync); // todo
         BIND_SYSCALL(utimensat);
         BIND_SYSCALL(exit);
         BIND_SYSCALL(exit_group);
@@ -722,6 +724,11 @@ namespace syscall
         mem::PageTable *pt = p->get_pagetable();
 
         char *k_buf = (char *)mem::k_pmm.kmalloc(n + 10);
+        if(!k_buf)
+        {
+            printfRed("[SyscallHandler::sys_read] Error allocating kernel buffer\n");
+            return -ENOMEM; // 内存不足
+        }
         int ret = f->read((uint64)k_buf, n, f->get_file_offset(), true);
         if (ret < 0)
         {
@@ -1271,7 +1278,11 @@ namespace syscall
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = proc->get_pagetable();
         char *buf = (char *)mem::k_pmm.kmalloc(n + 10);
-
+        if(!buf)
+        {
+            printfRed("[SyscallHandler::sys_write] Error allocating memory for buffer\n");
+            return -ENOMEM; // 内存分配失败
+        }
         // {
         //     mem::UserspaceStream uspace((void *)p, n + 1, pt);
         //     uspace.open();
@@ -5249,6 +5260,11 @@ namespace syscall
         f->lseek(offset, SEEK_SET);
 
         char *kbuf = (char*)mem::k_pmm.kmalloc(count);
+        if(!kbuf)
+        {
+            f->lseek(old_off, SEEK_SET);
+            return -ENOMEM; // Out of memory
+        }
         long rc = f->read((ulong)kbuf, count, f->get_file_offset(), true);
         if (rc < 0)
         {
@@ -5310,8 +5326,153 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_fsync()
     {
-        return 0; // copy from 唐老师
-        panic("未实现该系统调用");
+        int fd;
+        fs::file *f = nullptr;
+        
+        // 获取文件描述符参数
+        if (_arg_fd(0, &fd, &f) < 0)
+        {
+            printfRed("[SyscallHandler::sys_fsync] Error fetching file descriptor\n");
+            return SYS_EBADF;
+        }
+        
+        if (f == nullptr)
+        {
+            printfRed("[SyscallHandler::sys_fsync] File descriptor %d is not open\n", fd);
+            return SYS_EBADF;
+        }
+        
+        // 检查文件类型，某些特殊文件不支持同步
+        if (f->_attrs.filetype == fs::FileTypes::FT_PIPE)
+        {
+            printfRed("[SyscallHandler::sys_fsync] fsync not supported on pipes\n");
+            return SYS_EINVAL;
+        }
+        
+        if (f->_attrs.filetype == fs::FileTypes::FT_SOCKET)
+        {
+            printfRed("[SyscallHandler::sys_fsync] fsync not supported on sockets\n");
+            return SYS_EINVAL;
+        }
+        
+        // 对于设备文件，不需要同步，直接返回成功
+        if (f->_attrs.filetype == fs::FileTypes::FT_DEVICE)
+        {
+            printfCyan("[SyscallHandler::sys_fsync] Device file, no sync needed\n");
+            return 0;
+        }
+        
+        // 对于普通文件，执行文件系统级别的同步
+        if (f->_attrs.filetype == fs::FileTypes::FT_NORMAL)
+        {
+            // 首先尝试获取文件系统对象
+            struct filesystem *fs = get_fs_from_path(f->_path_name.c_str());
+            if (fs != nullptr)
+            {
+                int result = vfs_ext_flush(fs);
+                if (result != 0)
+                {
+                    printfRed("[SyscallHandler::sys_fsync] vfs_ext_flush failed with error: %d\n", result);
+                    return SYS_EIO;
+                }
+                printfGreen("[SyscallHandler::sys_fsync] Successfully synced file fd=%d\n", fd);
+                return 0;
+            }
+            else
+            {
+                // 如果无法获取文件系统对象，尝试使用全局缓存刷新
+                printfYellow("[SyscallHandler::sys_fsync] No filesystem object, attempting global cache flush\n");
+                // 对于扩展文件系统，尝试直接刷新缓存
+                int result = ext4_cache_flush("/");
+                if (result != EOK)
+                {
+                    printfRed("[SyscallHandler::sys_fsync] ext4_cache_flush failed with error: %d\n", result);
+                    return SYS_EIO;
+                }
+                printfGreen("[SyscallHandler::sys_fsync] Successfully synced global cache for fd=%d\n", fd);
+                return 0;
+            }
+        }
+        
+        printfYellow("[SyscallHandler::sys_fsync] File type %d, assuming sync successful\n", (int)f->_attrs.filetype);
+        return 0;
+    }
+    
+    uint64 SyscallHandler::sys_fdatasync()
+    {
+        int fd;
+        fs::file *f = nullptr;
+        
+        // 获取文件描述符参数
+        if (_arg_fd(0, &fd, &f) < 0)
+        {
+            printfRed("[SyscallHandler::sys_fdatasync] Error fetching file descriptor\n");
+            return SYS_EBADF;
+        }
+        printfCyan("[SyscallHandler::sys_fdatasync] fd: %d\n", fd);
+        if (f == nullptr)
+        {
+            printfRed("[SyscallHandler::sys_fdatasync] File descriptor %d is not open\n", fd);
+            return SYS_EBADF;
+        }
+        
+        // 检查文件类型，某些特殊文件不支持同步
+        if (f->_attrs.filetype == fs::FileTypes::FT_PIPE)
+        {
+            printfRed("[SyscallHandler::sys_fdatasync] fdatasync not supported on pipes\n");
+            return SYS_EINVAL;
+        }
+        
+        if (f->_attrs.filetype == fs::FileTypes::FT_SOCKET)
+        {
+            printfRed("[SyscallHandler::sys_fdatasync] fdatasync not supported on sockets\n");
+            return SYS_EINVAL;
+        }
+        
+        // 对于设备文件，不需要同步，直接返回成功
+        if (f->_attrs.filetype == fs::FileTypes::FT_DEVICE)
+        {
+            printfCyan("[SyscallHandler::sys_fdatasync] Device file, no sync needed\n");
+            return SYS_EINVAL;
+        }
+        
+        // 对于普通文件，执行数据同步
+        // fdatasync 只需要同步数据和必要的元数据，不需要同步访问时间等非关键元数据
+        if (f->_attrs.filetype == fs::FileTypes::FT_NORMAL)
+        {
+            // 首先尝试获取文件系统对象
+            struct filesystem *fs = get_fs_from_path(f->_path_name.c_str());
+            if (fs != nullptr)
+            {
+                // 对于fdatasync，我们同样使用文件系统级别的刷新
+                // 在实际实现中，这里可以优化为只刷新数据块，不刷新所有元数据
+                int result = vfs_ext_flush(fs);
+                if (result != 0)
+                {
+                    printfRed("[SyscallHandler::sys_fdatasync] vfs_ext_flush failed with error: %d\n", result);
+                    return SYS_EIO;
+                }
+                printfGreen("[SyscallHandler::sys_fdatasync] Successfully synced data for fd=%d\n", fd);
+                return 0;
+            }
+            else
+            {
+                // 如果无法获取文件系统对象，尝试使用全局缓存刷新
+                printfYellow("[SyscallHandler::sys_fdatasync] No filesystem object, attempting global cache flush\n");
+                // 对于扩展文件系统，尝试直接刷新缓存
+                int result = ext4_cache_flush("/");
+                if (result != EOK)
+                {
+                    printfRed("[SyscallHandler::sys_fdatasync] ext4_cache_flush failed with error: %d\n", result);
+                    return SYS_EIO;
+                }
+                printfGreen("[SyscallHandler::sys_fdatasync] Successfully synced global cache for fd=%d\n", fd);
+                return 0;
+            }
+        }
+        
+        printfYellow("[SyscallHandler::sys_fdatasync] File type %d, assuming sync successful\n", (int)f->_attrs.filetype);
+        return 0;
     }
     uint64 SyscallHandler::sys_futex()
     {
@@ -5744,7 +5905,6 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_socket()
     {
-        printfRed("这个是乱写的，用了就寄");
         int domain, type, protocol;
 
         if (_arg_int(0, domain) < 0)
@@ -5765,39 +5925,68 @@ namespace syscall
             return SYS_EINVAL;
         }
 
-        // 检查参数有效性
-        if (domain != AF_INET && domain != AF_INET6 && domain != AF_UNIX)
+        printfCyan("[SyscallHandler::sys_socket] 创建socket: domain=%d, type=%d, protocol=%d\n", 
+                   domain, type, protocol);
+
+        // 检查参数有效性 - 只支持AF_INET, IPv6支持可以后续添加
+        if (domain != AF_INET)
         {
             printfRed("[SyscallHandler::sys_socket] 不支持的协议族: %d\n", domain);
             return SYS_EAFNOSUPPORT;
         }
 
-        if (type != SOCK_STREAM && type != SOCK_DGRAM && type != SOCK_RAW)
+        if (type != SOCK_STREAM && type != SOCK_DGRAM)
         {
             printfRed("[SyscallHandler::sys_socket] 不支持的socket类型: %d\n", type);
             return SYS_EINVAL;
+        }
+
+        // 使用onps创建真正的socket
+        EN_ONPSERR enErr = ERRNO;
+        SOCKET onps_socket = socket(domain, type, protocol, &enErr);
+        
+        if (onps_socket == INVALID_SOCKET)
+        {
+            printfRed("[SyscallHandler::sys_socket] onps创建socket失败: %d\n", enErr);
+            // 将onps错误码转换为系统错误码
+            switch (enErr)
+            {
+                case ERRADDRFAMILIES:
+                    return SYS_EAFNOSUPPORT;
+                case ERRSOCKETTYPE:
+                    return SYS_EINVAL;
+                case ERRNOFREEMEM:
+                    return SYS_ENOMEM;
+                default:
+                    return SYS_EINVAL;
+            }
         }
 
         // 创建socket文件对象
         fs::socket_file *socket_f = new fs::socket_file(domain, type, protocol);
         if (!socket_f)
         {
-            printfRed("[SyscallHandler::sys_socket] 创建socket失败\n");
+            close(onps_socket);  // 关闭onps socket
+            printfRed("[SyscallHandler::sys_socket] 创建socket_file失败\n");
             return SYS_ENOMEM;
         }
+
+        // 将onps socket句柄关联到socket_file
+        socket_f->set_onps_socket(onps_socket);
 
         // 分配文件描述符
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         int fd = proc::k_pm.alloc_fd(p, socket_f);
         if (fd < 0)
         {
+            close(onps_socket);  // 关闭onps socket
             delete socket_f;
             printfRed("[SyscallHandler::sys_socket] 分配文件描述符失败\n");
             return SYS_EMFILE;
         }
 
-        printfCyan("[SyscallHandler::sys_socket] socket创建成功, fd=%d, domain=%d, type=%d, protocol=%d\n",
-                   fd, domain, type, protocol);
+        printfCyan("[SyscallHandler::sys_socket] socket创建成功, fd=%d, onps_socket=%d, domain=%d, type=%d, protocol=%d\n",
+                   fd, onps_socket, domain, type, protocol);
         return fd;
     }
     uint64 SyscallHandler::sys_socketpair()
@@ -5806,7 +5995,6 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_bind()
     {
-        printfRed("这个是乱写的，用了就寄");
         int sockfd;
         uint64 addr;
         int addrlen;
@@ -5829,7 +6017,11 @@ namespace syscall
             return SYS_EINVAL;
         }
 
+        printfCyan("[SyscallHandler::sys_bind] bind socket: sockfd=%d, addr=0x%lx, addrlen=%d\n", 
+                   sockfd, addr, addrlen);
+
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
         fs::file *f = p->get_open_file(sockfd);
         if (!f)
         {
@@ -5838,26 +6030,104 @@ namespace syscall
         }
 
         // 检查是否为socket文件
-        fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
-        if (!socket_f)
+        if (f->_attrs.filetype != fs::FileTypes::FT_SOCKET)
         {
             printfRed("[SyscallHandler::sys_bind] 文件描述符不是socket: %d\n", sockfd);
             return SYS_ENOTSOCK;
         }
 
-        int result = socket_f->bind((const struct sockaddr *)addr, addrlen);
-        if (result < 0)
+        fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
+        SOCKET onps_socket = socket_f->get_onps_socket();
+        
+        if (onps_socket == INVALID_SOCKET)
         {
-            printfRed("[SyscallHandler::sys_bind] bind失败: %d\n", result);
-            return result;
+            printfRed("[SyscallHandler::sys_bind] socket未关联onps socket\n");
+            return SYS_EINVAL;
         }
 
-        printfCyan("[SyscallHandler::sys_bind] bind成功, sockfd=%d\n", sockfd);
+        // 检查地址长度
+        if ((socklen_t)addrlen < sizeof(struct sockaddr_in))
+        {
+            printfRed("[SyscallHandler::sys_bind] 地址长度不足: %d\n", addrlen);
+            return SYS_EINVAL;
+        }
+
+        // 从用户空间复制sockaddr结构体
+        struct sockaddr_in sock_addr;
+        if (mem::k_vmm.copy_in(*pt, &sock_addr, addr, sizeof(struct sockaddr_in)) < 0)
+        {
+            printfRed("[SyscallHandler::sys_bind] 复制sockaddr失败\n");
+            return SYS_EFAULT;
+        }
+
+        // 检查地址族
+        if (sock_addr.sin_family != AF_INET)
+        {
+            printfRed("[SyscallHandler::sys_bind] 不支持的地址族: %d\n", sock_addr.sin_family);
+            return SYS_EAFNOSUPPORT;
+        }
+
+        // 提取IP地址和端口
+        uint32_t ip_addr = sock_addr.sin_addr;
+        uint16_t port = htons(sock_addr.sin_port);
+        
+        printfCyan("[SyscallHandler::sys_bind] 解析地址: IP=0x%08x, Port=%d\n", ip_addr, port);
+
+        // 将IP地址转换为字符串（onps bind需要字符串形式的IP）
+        char ip_str[16];
+        const char *ip_str_ptr = nullptr;
+        
+        if (ip_addr == 0)
+        {
+            // INADDR_ANY，让onps使用任意地址
+            ip_str_ptr = nullptr;
+        }
+        else
+        {
+            // 转换IP地址为字符串格式 (a.b.c.d)
+            uint8_t *ip_bytes = (uint8_t*)&ip_addr;
+            snprintf(ip_str, sizeof(ip_str), "%d.%d.%d.%d", 
+                    ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]);
+            ip_str_ptr = ip_str;
+            printfCyan("[SyscallHandler::sys_bind] IP字符串: %s\n", ip_str);
+        }
+
+        // 调用onps的bind函数
+        int result = bind(onps_socket, ip_str_ptr, port);
+        
+        if (result < 0)
+        {
+            // 获取onps错误信息
+            EN_ONPSERR onps_err = socket_get_last_error_code(onps_socket);
+            printfRed("[SyscallHandler::sys_bind] onps bind失败: %d\n", onps_err);
+            
+            // 转换onps错误码为系统错误码
+            switch (onps_err)
+            {
+                case ERRPORTOCCUPIED:
+                    return SYS_EADDRINUSE;
+                case ERRNOTBINDADDR:
+                    return SYS_EINVAL;
+                case ERRUNSUPPIPPROTO:
+                    return SYS_EPROTONOSUPPORT;
+                default:
+                    return SYS_EINVAL;
+            }
+        }
+
+        // 同时调用socket_file的bind方法来更新状态
+        int socket_file_result = socket_f->bind((const struct sockaddr *)addr, addrlen);
+        if (socket_file_result < 0)
+        {
+            printfRed("[SyscallHandler::sys_bind] socket_file bind失败: %d\n", socket_file_result);
+            // onps bind已经成功，但socket_file状态更新失败，这不是致命错误
+        }
+
+        printfCyan("[SyscallHandler::sys_bind] bind成功, sockfd=%d, onps_socket=%d\n", sockfd, onps_socket);
         return 0;
     }
     uint64 SyscallHandler::sys_listen()
     {
-        printfRed("这个是乱写的，用了就寄");
         int sockfd;
         int backlog;
 
@@ -5873,6 +6143,9 @@ namespace syscall
             return SYS_EINVAL;
         }
 
+        printfCyan("[SyscallHandler::sys_listen] listen socket: sockfd=%d, backlog=%d\n", 
+                   sockfd, backlog);
+
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         fs::file *f = p->get_open_file(sockfd);
         if (!f)
@@ -5882,26 +6155,51 @@ namespace syscall
         }
 
         // 检查是否为socket文件
-        fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
-        if (!socket_f)
+        if (f->_attrs.filetype != fs::FileTypes::FT_SOCKET)
         {
             printfRed("[SyscallHandler::sys_listen] 文件描述符不是socket: %d\n", sockfd);
             return SYS_ENOTSOCK;
         }
 
-        int result = socket_f->listen(backlog);
-        if (result < 0)
+        fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
+        SOCKET onps_socket = socket_f->get_onps_socket();
+        
+        if (onps_socket == INVALID_SOCKET)
         {
-            printfRed("[SyscallHandler::sys_listen] listen失败: %d\n", result);
-            return result;
+            printfRed("[SyscallHandler::sys_listen] socket未关联onps socket\n");
+            return SYS_EINVAL;
         }
 
-        printfCyan("[SyscallHandler::sys_listen] listen成功, sockfd=%d, backlog=%d\n", sockfd, backlog);
+        // 检查backlog是否合理
+        if (backlog < 0)
+        {
+            printfRed("[SyscallHandler::sys_listen] 无效的backlog: %d\n", backlog);
+            return SYS_EINVAL;
+        }
+
+        // 调用onps的listen函数
+        int onps_result = ::listen(onps_socket, (USHORT)backlog);
+        if (onps_result != 0)
+        {
+            printfRed("[SyscallHandler::sys_listen] onps listen失败: %d\n", onps_result);
+            // 将onps错误码转换为系统错误码
+            return SYS_EOPNOTSUPP;  // 可以根据具体错误码进行细化
+        }
+
+        // 更新socket_file的状态
+        int socket_file_result = socket_f->listen(backlog);
+        if (socket_file_result < 0)
+        {
+            printfRed("[SyscallHandler::sys_listen] socket_file listen失败: %d\n", socket_file_result);
+            return socket_file_result;
+        }
+
+        printfCyan("[SyscallHandler::sys_listen] listen成功, sockfd=%d, onps_socket=%d, backlog=%d\n", 
+                   sockfd, onps_socket, backlog);
         return 0;
     }
     uint64 SyscallHandler::sys_accept()
     {
-        printfRed("这个是乱写的，用了就寄");
         int sockfd;
         uint64 addr;
         uint64 addrlen_ptr;
@@ -5924,7 +6222,10 @@ namespace syscall
             return SYS_EINVAL;
         }
 
+        printfCyan("[SyscallHandler::sys_accept] accept socket: sockfd=%d\n", sockfd);
+
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
         fs::file *f = p->get_open_file(sockfd);
         if (!f)
         {
@@ -5933,30 +6234,108 @@ namespace syscall
         }
 
         // 检查是否为socket文件
-        fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
-        if (!socket_f)
+        if (f->_attrs.filetype != fs::FileTypes::FT_SOCKET)
         {
             printfRed("[SyscallHandler::sys_accept] 文件描述符不是socket: %d\n", sockfd);
             return SYS_ENOTSOCK;
         }
 
-        fs::socket_file *client_socket = socket_f->accept((struct sockaddr *)addr, (socklen_t *)addrlen_ptr);
-        if (!client_socket)
+        fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
+        SOCKET onps_socket = socket_f->get_onps_socket();
+        
+        if (onps_socket == INVALID_SOCKET)
         {
-            printfRed("[SyscallHandler::sys_accept] accept失败\n");
-            return SYS_EAGAIN; // 或者根据具体情况返回其他错误码
+            printfRed("[SyscallHandler::sys_accept] socket未关联onps socket\n");
+            return SYS_EINVAL;
         }
 
+        // 从用户空间读取地址长度
+        socklen_t user_addrlen = 0;
+        if (addr != 0 && addrlen_ptr != 0)
+        {
+            if (mem::k_vmm.copy_in(*pt, &user_addrlen, addrlen_ptr, sizeof(socklen_t)) < 0)
+            {
+                printfRed("[SyscallHandler::sys_accept] 读取地址长度失败\n");
+                return SYS_EFAULT;
+            }
+        }
+
+        // 准备客户端地址信息
+        in_addr_t client_ip = 0;
+        USHORT client_port = 0;
+        EN_ONPSERR onps_err;
+        
+        // 调用onps的accept函数，阻塞等待连接
+        SOCKET client_socket = ::accept(onps_socket, &client_ip, &client_port, 0, &onps_err);
+        if (client_socket == INVALID_SOCKET)
+        {
+            printfRed("[SyscallHandler::sys_accept] onps accept失败, 错误: %d\n", onps_err);
+            // 将onps错误码转换为系统错误码
+            if (onps_err == ERRTCPNOLISTEN)
+                return SYS_EINVAL;  // 没有监听
+            else if (onps_err == ERRNOTBINDADDR)
+                return SYS_EINVAL;  // 没有绑定地址
+            else
+                return SYS_EAGAIN;  // 其他错误，通常是没有连接可接受
+        }
+
+        // 创建新的socket_file对象用于客户端连接
+        // 继承服务器socket的属性
+        int domain = (int)socket_f->get_family();
+        int type = (int)socket_f->get_type();
+        int protocol = socket_f->get_protocol();
+        
+        fs::socket_file *client_socket_f = new fs::socket_file(domain, type, protocol);
+        if (!client_socket_f)
+        {
+            close(client_socket);  // 关闭onps socket
+            printfRed("[SyscallHandler::sys_accept] 创建客户端socket_file失败\n");
+            return SYS_ENOMEM;
+        }
+
+        // 将onps客户端socket句柄关联到socket_file
+        client_socket_f->set_onps_socket(client_socket);
+
         // 为新的客户端socket分配文件描述符
-        int client_fd = proc::k_pm.alloc_fd(p, client_socket);
+        int client_fd = proc::k_pm.alloc_fd(p, client_socket_f);
         if (client_fd < 0)
         {
-            delete client_socket;
+            close(client_socket);  // 关闭onps socket
+            delete client_socket_f;
             printfRed("[SyscallHandler::sys_accept] 分配客户端文件描述符失败\n");
             return SYS_EMFILE;
         }
 
-        printfCyan("[SyscallHandler::sys_accept] accept成功, sockfd=%d, client_fd=%d\n", sockfd, client_fd);
+        // 如果用户提供了地址缓冲区，填充客户端地址信息
+        if (addr != 0 && user_addrlen > 0)
+        {
+            struct sockaddr_in client_addr;
+            memset(&client_addr, 0, sizeof(client_addr));
+            client_addr.sin_family = AF_INET;
+            client_addr.sin_addr = htonl(client_ip);
+            client_addr.sin_port = htons(client_port);
+
+            // 确定要复制的大小
+            socklen_t copy_len = (user_addrlen < sizeof(struct sockaddr_in)) ? user_addrlen : sizeof(struct sockaddr_in);
+
+            // 复制地址到用户空间
+            if (mem::k_vmm.copy_out(*pt, addr, &client_addr, copy_len) < 0)
+            {
+                printfRed("[SyscallHandler::sys_accept] 复制客户端地址到用户空间失败\n");
+                // 不是致命错误，继续执行
+            }
+
+            // 更新实际地址长度
+            socklen_t actual_len = sizeof(struct sockaddr_in);
+            if (mem::k_vmm.copy_out(*pt, addrlen_ptr, &actual_len, sizeof(socklen_t)) < 0)
+            {
+                printfRed("[SyscallHandler::sys_accept] 复制地址长度到用户空间失败\n");
+                // 不是致命错误，继续执行
+            }
+        }
+
+        printfCyan("[SyscallHandler::sys_accept] accept成功, sockfd=%d, client_fd=%d, client_ip=0x%08x, client_port=%d\n", 
+                   sockfd, client_fd, client_ip, client_port);
         return client_fd;
     }
     uint64 SyscallHandler::sys_connect()
@@ -6012,7 +6391,6 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_getsockname()
     {
-        printfRed("这个是乱写的，用了就寄");
         int sockfd;
         uint64 addr;
         uint64 addrlen_ptr;
@@ -6036,6 +6414,7 @@ namespace syscall
         }
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
         fs::file *f = p->get_open_file(sockfd);
         if (!f)
         {
@@ -6044,21 +6423,74 @@ namespace syscall
         }
 
         // 检查是否为socket文件
-        fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
-        if (!socket_f)
+        if (f->_attrs.filetype != fs::FileTypes::FT_SOCKET)
         {
             printfRed("[SyscallHandler::sys_getsockname] 文件描述符不是socket: %d\n", sockfd);
             return SYS_ENOTSOCK;
         }
 
-        int result = socket_f->getsockname((struct sockaddr *)addr, (socklen_t *)addrlen_ptr);
-        if (result < 0)
+        fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
+        SOCKET onps_socket = socket_f->get_onps_socket();
+        
+        if (onps_socket == INVALID_SOCKET)
         {
-            printfRed("[SyscallHandler::sys_getsockname] getsockname失败: %d\n", result);
-            return result;
+            printfRed("[SyscallHandler::sys_getsockname] socket未关联onps socket\n");
+            return SYS_EINVAL;
         }
 
-        printfCyan("[SyscallHandler::sys_getsockname] getsockname成功, sockfd=%d\n", sockfd);
+        // 从用户空间读取地址长度
+        socklen_t user_addrlen;
+        if (mem::k_vmm.copy_in(*pt, &user_addrlen, addrlen_ptr, sizeof(socklen_t)) < 0)
+        {
+            printfRed("[SyscallHandler::sys_getsockname] 读取地址长度失败\n");
+            return SYS_EFAULT;
+        }
+
+        // 通过onps获取socket地址信息
+        EN_ONPSERR onps_err;
+        PST_TCPUDP_HANDLE pstHandle;
+        if (!onps_input_get(onps_socket, IOPT_GETTCPUDPADDR, &pstHandle, &onps_err))
+        {
+            printfRed("[SyscallHandler::sys_getsockname] 无法获取socket地址信息, onps错误: %d\n", onps_err);
+            return SYS_EINVAL;
+        }
+
+        // 构造sockaddr_in结构
+        struct sockaddr_in local_addr;
+        memset(&local_addr, 0, sizeof(local_addr));
+        local_addr.sin_family = AF_INET;
+#if SUPPORT_IPV6
+        if (pstHandle->bFamily == AF_INET) {
+            local_addr.sin_addr = pstHandle->stSockAddr.saddr_ipv4;
+        } else {
+            printfRed("[SyscallHandler::sys_getsockname] IPv6暂不支持\n");
+            return SYS_EAFNOSUPPORT;
+        }
+#else
+        local_addr.sin_addr = pstHandle->stSockAddr.saddr_ipv4;
+#endif
+        local_addr.sin_port = htons(pstHandle->stSockAddr.usPort);
+
+        // 确定要复制的大小
+        socklen_t copy_len = (user_addrlen < sizeof(struct sockaddr_in)) ? user_addrlen : sizeof(struct sockaddr_in);
+
+        // 复制地址到用户空间
+        if (mem::k_vmm.copy_out(*pt, addr, &local_addr, copy_len) < 0)
+        {
+            printfRed("[SyscallHandler::sys_getsockname] 复制地址到用户空间失败\n");
+            return SYS_EFAULT;
+        }
+
+        // 更新实际地址长度
+        socklen_t actual_len = sizeof(struct sockaddr_in);
+        if (mem::k_vmm.copy_out(*pt, addrlen_ptr, &actual_len, sizeof(socklen_t)) < 0)
+        {
+            printfRed("[SyscallHandler::sys_getsockname] 复制地址长度到用户空间失败\n");
+            return SYS_EFAULT;
+        }
+
+        printfCyan("[SyscallHandler::sys_getsockname] getsockname成功, sockfd=%d, port=%d\n", 
+                   sockfd, pstHandle->stSockAddr.usPort);
         return 0;
     }
     uint64 SyscallHandler::sys_getpeername()

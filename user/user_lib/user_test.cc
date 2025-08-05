@@ -971,9 +971,9 @@ char *ltp_testcases[] = {
     // "fcntl38_64",
     // "fcntl39",
     // "fcntl39_64",
-    // "fdatasync01",
-    // "fdatasync02",
-    // "fdatasync03",
+    // "fdatasync01",    //pass
+    // "fdatasync02",   //pass
+    // "fdatasync03",    //loop0
     // "fgetxattr01",   //bin/sh
     // "fgetxattr02",
     // "fgetxattr03",
@@ -1156,10 +1156,10 @@ char *ltp_testcases[] = {
     // "fstatfs02_64",
     // "fsx.sh",
     // "fsx-linux",
-    // "fsync01",
-    // "fsync02",
-    // "fsync03",
-    // "fsync04",
+    // "fsync01", //loop0
+    // "fsync02", //bin/sh
+    // "fsync03",  //pass
+    // "fsync04",  //loop0
     // "ftest01",
     // "ftest02",
     // "ftest03",
@@ -1863,8 +1863,8 @@ char *ltp_testcases[] = {
     // "munlock01",
     // "munlock02",
     // "munlockall01",
-    // "munmap01",
-    // "munmap02",
+    // "munmap01", //pass
+    // "munmap02",  //pass
     // "munmap03",  //pass
     // "mv_tests.sh",
     // "myfunctions.sh",
@@ -1943,7 +1943,7 @@ char *ltp_testcases[] = {
     // "open09", //pass
     // "open10", // socket
     // "open11",    //pass
-    // "open12",    //别跑！会爆
+    // "open12",    //过三个
     // "open12_child",//这个不是测例
     // "open13",    // pass
     // "open14",    //pass这个测例要跑一年，别急着掐死，多等会
@@ -1961,7 +1961,7 @@ char *ltp_testcases[] = {
     // "page01",
     // "page02",
     // "parameters.sh",
-    // "pathconf01",
+    // "pathconf01",   //pass
     // "pathconf02",
     // "pause01",
     // "pause02",

@@ -6,6 +6,10 @@
 // #include "net/net.hh"
 #include "devs/spinlock.hh"
 
+// 前向声明，避免包含整个onps头文件
+typedef int SOCKET;
+#define INVALID_SOCKET -1
+
 namespace fs
 {
     // Socket状态
@@ -42,6 +46,9 @@ namespace fs
         SocketFamily _family;
         int _protocol;
         
+        // onps socket句柄
+        SOCKET _onps_socket;
+        
         // 地址信息
         struct sockaddr_in _local_addr;
         struct sockaddr_in _remote_addr;
@@ -64,6 +71,10 @@ namespace fs
         socket_file(int domain, int type, int protocol);
         socket_file(FileAttrs attrs, int domain, int type, int protocol);
         virtual ~socket_file();
+
+        // 设置onps socket句柄
+        void set_onps_socket(SOCKET onps_socket) { _onps_socket = onps_socket; }
+        SOCKET get_onps_socket() const { return _onps_socket; }
 
         // 继承自file类的虚函数
         virtual long read(uint64 buf, size_t len, long off, bool upgrade) override;
@@ -94,6 +105,7 @@ namespace fs
         SocketState get_state() const { return _state; }
         SocketType get_type() const { return _type; }
         SocketFamily get_family() const { return _family; }
+        int get_protocol() const { return _protocol; }
         bool is_blocking() const { return _blocking; }
 
         // 内部辅助函数

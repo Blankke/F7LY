@@ -92,7 +92,7 @@ namespace proc
                     return -22;
                 }
 
-                int debugsig = proc::ipc::signal::SIGSEGV; // 你可以修改这个变量来指定要查看的信号号
+                int debugsig = 0; // 你可以修改这个变量来指定要查看的信号号
                 if (debugsig > 0 && debugsig <= signal::SIGRTMAX) {
                     uint64 mask = (1UL << (debugsig - 1));
                     bool before = (oldset != nullptr && oldset->sig[0] != 0) ? 

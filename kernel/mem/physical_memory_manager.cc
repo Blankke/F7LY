@@ -103,9 +103,14 @@ namespace mem
         // if(size >= PGSIZE)
         // {
             int x = _buddy->Alloc(size_to_page_num(size));
-            void *pa = pgnm2pa(x);
+            if(x ==-1)
+            {
+                printfRed("kmalloc: alloc failed, size = %lu\n", size);
+                return 0; // 分配失败
+            }
+else{            void *pa = pgnm2pa(x);
             memset(pa, 0, PGSIZE);
-            return pa;
+            return pa;}
         // }
         // else if(size < PGSIZE)
         // {

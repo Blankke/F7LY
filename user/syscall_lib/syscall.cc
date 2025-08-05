@@ -255,3 +255,13 @@ int umount(const char *special)
 int shutdown(){
     return syscall(syscall::SYS_shutdown);
 }
+
+int fsync(int fd)
+{
+    return syscall(syscall::SYS_fsync, fd);
+}
+
+int fdatasync(int fd)
+{
+    return syscall(syscall::SYS_fdatasync, fd);
+}

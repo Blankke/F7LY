@@ -61,9 +61,12 @@ struct sockaddr_in {
 typedef unsigned int socklen_t;
 
 // Internet address
+#ifndef s_addr  
 struct in_addr {
     unsigned int s_addr;
 };
+#define s_addr s_addr
+#endif
 
 // IPv6 address
 struct in6_addr {

@@ -130,6 +130,7 @@ namespace syscall
         uint64 sys_pselect6();
         uint64 sys_sync();
         uint64 sys_fsync();
+        uint64 sys_fdatasync();
         uint64 sys_futex();
         uint64 sys_get_robust_list();
         uint64 sys_setitimer();
