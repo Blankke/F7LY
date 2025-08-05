@@ -57,6 +57,7 @@
 #include "EASTL/map.h"
 #include "fs/debug.hh"
 #include "net/onpstack/include/onps.hh"
+#include "interrupt_stats.hh"
 namespace syscall
 {
     // 创建全局的 SyscallHandler 实例
@@ -283,6 +284,7 @@ namespace syscall
     }
     void SyscallHandler::invoke_syscaller()
     {
+        intr_stats::k_intr_stats.record_interrupt(666);
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
         uint64 sys_num = p->get_trapframe()->a7; // 获取系统调用号
 

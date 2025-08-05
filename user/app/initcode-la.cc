@@ -13,6 +13,7 @@ extern "C"
         // ltp_test("/musl/ltp/testcases/bin/");
 
         // 决赛测例
+        sleep(5);
         final_test_musl();
         final_test_glibc();
 

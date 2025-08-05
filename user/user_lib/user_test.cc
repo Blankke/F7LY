@@ -339,13 +339,13 @@ int final_test_glibc()
     printf("#### OS COMP TEST GROUP START copy-file-range-test1-glibc ####\n");
     run_test("/glibc/copy-file-range-test-1");
     printf("#### OS COMP TEST GROUP END copy-file-range-test1-glibc ####\n\n");
-    printf("#### OS COMP TEST GROUP START copy-file-range-test2-glibc ####");
+    printf("#### OS COMP TEST GROUP START copy-file-range-test2-glibc ####\n");
     run_test("/glibc/copy-file-range-test-2");
     printf("#### OS COMP TEST GROUP END copy-file-range-test2-glibc ####\n\n");
-    printf("#### OS COMP TEST GROUP START copy-file-range-test3-glibc ####");
+    printf("#### OS COMP TEST GROUP START copy-file-range-test3-glibc ####\n");
     run_test("/glibc/copy-file-range-test-3");
     printf("#### OS COMP TEST GROUP END copy-file-range-test3-glibc ####\n\n");
-    printf("#### OS COMP TEST GROUP START copy-file-range-test4-glibc ####");
+    printf("#### OS COMP TEST GROUP START copy-file-range-test4-glibc ####\n");
     run_test("/glibc/copy-file-range-test-4");
     printf("#### OS COMP TEST GROUP END copy-file-range-test4-glibc ####\n\n");
     //splice
