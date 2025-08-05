@@ -117,8 +117,13 @@ OBJS_NO_ENTRY := $(filter-out $(ENTRY_OBJ), $(OBJS))
 DEPS := $(OBJS:.o=.d)
 
 # ===== 输出目标 =====
-KERNEL_ELF := $(BUILD_DIR)/kernel.elf
-KERNEL_BIN := $(BUILD_DIR)/kernel.bin
+ifeq ($(ARCH),riscv)
+  KERNEL_ELF := kernel-rv
+  KERNEL_BIN := build/$(OUTPUT_PREFIX)/kernel-rv.bin
+else ifeq ($(ARCH),loongarch)
+  KERNEL_ELF := kernel-la
+  KERNEL_BIN := build/$(OUTPUT_PREFIX)/kernel-la.bin
+endif
 
 # ===== initcode 用户进程编译相关 =====
 # 支持 riscv 和 loongarch 架构，自动选择交叉工具链和参数
@@ -163,14 +168,7 @@ endif
 .PHONY: all clean dirs build riscv loongarch run debug initcode build-la
 
 
-# 根据 ARCH 变量选择默认目标
-ifeq ($(ARCH),riscv)
-all: build
-else ifeq ($(ARCH),loongarch)
-all: build-la
-else
-all: riscv
-endif
+all: loongarch riscv
 
 riscv:
 	@$(MAKE) ARCH=riscv build

@@ -44,3 +44,5 @@ sdcard-rv-final.img
 cfr.c
 sdcard-la-onsite.img
 sdcard-rv-onsite.img
+kernel-rv
+kernel-la
