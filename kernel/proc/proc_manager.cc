@@ -1392,7 +1392,7 @@ namespace proc
 
     int ProcessManager::wait4(int child_pid, uint64 addr, int option)
     {
-        debug_process_states();
+        // debug_process_states();
         Pcb *p = k_pm.get_cur_pcb();
         printf("[wait4] pid: %d child_pid: %d, addr: %p, option: %d\n", p->_pid, child_pid, (void *)addr, option);
 
@@ -1536,7 +1536,7 @@ namespace proc
     // 辅助函数：检查特定PID是否还有剩余线程
     bool ProcessManager::has_remaining_threads(Pcb *parent, int target_pid)
     {
-        debug_process_states();
+        // debug_process_states();
         for (uint i = 0; i < num_process; i++)
         {
             Pcb *np = &k_proc_pool[i];
@@ -1758,7 +1758,7 @@ namespace proc
     /// https://man7.org/linux/man-pages/man2/exit_group.2.html
     void ProcessManager::exit_group(int status)
     {
-        debug_process_states();
+        // debug_process_states();
         proc::Pcb *cp = get_cur_pcb();
 
         // printf("[exit_group] Thread group %d (leader pid %d) exiting with status %d\n",
@@ -1807,7 +1807,7 @@ namespace proc
 
         // printf("[exit_group] Current thread pid %d exiting normally\n", cp->_pid);
 
-        debug_process_states();
+        // debug_process_states();
 
         // 当前线程正常退出，其他线程会在调度时检查killed标志并自行退出
         exit_proc(cp, status);
