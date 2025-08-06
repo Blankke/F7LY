@@ -22,17 +22,31 @@ namespace dev
   {
     if (c == BACKSPACE)
     {
+      #ifdef RISCV
+      sbi_console_putchar('\b');
+      sbi_console_putchar(' ');
+      sbi_console_putchar('\b');
+      #elif defined(LOONGARCH)
       uart.put_char_sync('\b');
       uart.put_char_sync(' ');
       uart.put_char_sync('\b');
+      #endif
     }
     else if (c == '\n' || c == '\r')
     {
-      uart.put_char('\n');
+      #ifdef RISCV
+      sbi_console_putchar('\n');
+      #elif defined(LOONGARCH)
+      uart.put_char_sync('\n');
+      #endif
     }
     else
     {
+      #ifdef RISCV
+      sbi_console_putchar(c);
+      #elif defined(LOONGARCH)
       uart.put_char_sync(c);
+      #endif
     }
   }
 
@@ -43,8 +57,11 @@ namespace dev
       // either_copyin
       if (mem::k_vmm.copy_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), &c, src + i, 1) == -1)
         break;
-      // sbi_console_putchar(c);
+      #ifdef RISCV
+      sbi_console_putchar(c);
+      #elif defined(LOONGARCH)
       uart.put_char_sync(c);
+      #endif
     }
     return 0;
   }
@@ -99,7 +116,11 @@ namespace dev
              input_buf[(e_idx - 1) % INPUT_BUF_SIZE] != '\n')
       {
         e_idx--;
+        #ifdef RISCV
+        sbi_console_putchar((u8)BACKSPACE);
+        #elif defined(LOONGARCH)
         uart.put_char_sync((u8)BACKSPACE);
+        #endif
       }
       break;
     case CTRL_('H'): // Backspace
@@ -107,7 +128,11 @@ namespace dev
       if (e_idx != w_idx)
       {
         e_idx--;
+        #ifdef RISCV
+        sbi_console_putchar((u8)BACKSPACE);
+        #elif defined(LOONGARCH)
         uart.put_char_sync((u8)BACKSPACE);
+        #endif
       }
       break;
     default:
@@ -116,8 +141,11 @@ namespace dev
         c = (c == '\r') ? '\n' : c;
 
         // echo back to the user.
+        #ifdef RISCV
+        sbi_console_putchar(c);
+        #elif defined(LOONGARCH)
         uart.put_char_sync(c);
-
+        #endif
         // store for consumption by consoleread().
         input_buf[e_idx++ % INPUT_BUF_SIZE] = c;
 
