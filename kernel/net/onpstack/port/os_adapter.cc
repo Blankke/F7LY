@@ -103,27 +103,23 @@ UINT os_get_system_msecs(void)
 	return msecs;
 }
 
-// 内核线程包装函数 - 以 extern "C" 形式声明以确保正确的调用约定
+// 内核线程包装器 - 为网络协议栈线程提供正确的参数和退出处理
 extern "C" void kernel_thread_wrapper()
 {
-	// 获取当前进程的trapframe，从中取得线程入口函数和参数
 	proc::Pcb *current = proc::k_pm.get_cur_pcb();
-	if (current == nullptr) {
-		printf("kernel_thread_wrapper: failed to get current PCB\n");
-		proc::k_pm.exit(-1);
-		return;
-	}
 	
-	// 从trapframe中获取线程入口函数和参数（在创建线程时设置）
-	void (*thread_func)(void*) = (void(*)(void*))(current->_trapframe->a0);
-	void *param = (void*)(current->_trapframe->a1);
+	// 从context.s0中获取线程函数指针（在创建时设置）
+	void (*thread_func)(void*) = (void(*)(void*))(current->_context.s0);
+	void *param = (void*)(current->_context.s1);  // 从s1获取参数
 	
 	if (thread_func != nullptr) {
 		printf("onpstack: kernel thread %s starting (func=%p, param=%p)\n", 
 			   current->_name, thread_func, param);
 		
+		printf("onpstack: kernel thread %s is running...\n", current->_name);
 		// 执行网络协议栈工作线程函数
 		thread_func(param);
+
 		
 		printf("onpstack: kernel thread %s finished\n", current->_name);
 	} else {
@@ -173,16 +169,14 @@ void os_thread_onpstack_start(void *pvParam)
 				printf("onpstack: fork successful, new thread: pid=%d, tid=%d\n", 
 					   thread_pcb->_pid, thread_pcb->_tid);
 				
-				// 设置线程入口点为包装函数
-#ifdef RISCV
-				thread_pcb->_trapframe->epc = (uint64)kernel_thread_wrapper;
-#elif defined(LOONGARCH)
-				thread_pcb->_trapframe->era = (uint64)kernel_thread_wrapper;
-#endif
+				// 正确的内核线程入口设置：通过 context.ra 设置包装函数
+				// 当调度器切换到此线程时，会直接跳转到包装函数
+				thread_pcb->_context.ra = (uint64)kernel_thread_wrapper;
 				
-				// 通过trapframe传递参数
-				thread_pcb->_trapframe->a0 = (uint64)pstThread->pfunThread;  // 线程入口函数
-				thread_pcb->_trapframe->a1 = (uint64)pstThread->pvParam;     // 线程参数
+				// 通过callee-saved寄存器传递线程函数指针和参数
+				// 这些寄存器在context切换时会被恢复
+				thread_pcb->_context.s0 = (uint64)pstThread->pfunThread;  // 线程函数指针
+				thread_pcb->_context.s1 = (uint64)pstThread->pvParam;     // 线程参数
 				
 				// 设置线程名称以便调试
 				char thread_name[30];
