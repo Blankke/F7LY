@@ -198,7 +198,6 @@ void trap_manager::usertrap()
       // 缺页异常处理失败，发送SIGSEGV信号
       printf("usertrap(): page fault at %p, sending SIGSEGV to pid=%d\n", r_csr_badv(), p->_pid);
       p->add_signal(proc::ipc::signal::SIGSEGV);
-      proc::ipc::signal::handle_signal(); // 例外, 假如说发生缺页信号, 则先处理一下信号
 
       printf("usertrap(): unexpected trapcause %x pid=%d\n", r_csr_estat(), p->_pid);
       printf("            era=%p badi=%x\n", r_csr_era(), r_csr_badi());
@@ -212,7 +211,7 @@ void trap_manager::usertrap()
   {
     printf("usertrap(): unexpected trapcause %x pid=%d\n", r_csr_estat(), p->_pid);
     printf("            era=%p badi=%x,badv=%p\n", r_csr_era(), r_csr_badi(), r_csr_badv());
-    p->_killed = 1;
+    p->_killed = 1; // loongarch这里先不改, riscv的改为使用scuase判断信号 @todo
   }
 
   if (p->_killed)
@@ -239,6 +238,9 @@ void trap_manager::usertrapret(void)
 {
   //   printfCyan("==usertrapret== pid=%d\n", proc::k_pm.get_cur_pcb()->_pid);
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
+
+  // 优先处理同步信号(紧急信号) - 在返回用户态之前检查并处理
+  proc::ipc::signal::handle_sync_signal();
 
   // 时间统计：从内核态切换到用户态
   uint64 cur_tick = tmm::get_ticks();

@@ -13,6 +13,10 @@
 #include "memlayout.hh"
 #include "platform.hh"
 #include "printer.hh"
+#include "fs/vfs/vfs_ext4_ext.hh" // 添加vfs_ext_get_filesize函数
+#include "proc/signal.hh"         // 添加信号处理
+#include "proc/proc_manager.hh"   // 添加进程管理
+#include "fs/lwext4/ext4_errno.hh"
 #include "proc/proc.hh"
 #include "proc_manager.hh"
 #include "sys/syscall_defs.hh"
@@ -419,6 +423,7 @@ namespace mem
     /// @return 成功返回0，失败返回-1
     int VirtualMemoryManager::allocate_vma_page(PageTable &pt, uint64 va, proc::vma *vm, int access_type)
     {
+
         // 检查VMA权限
         if (vm->prot == PROT_NONE)
         {
@@ -488,12 +493,35 @@ namespace mem
         fs::normal_file *vf = vm->vfile;
         if (vf != nullptr && vm->vfd != -1)
         {
-            // 文件映射：从文件读取数据
+            // 文件映射：需要检查是否访问超出文件大小的区域
             uint64 page_va = PGROUNDDOWN(va);
             int offset = vm->offset + (page_va - vm->addr);
 
-            printfCyan("[allocate_vma_page] reading from file %s at offset %d\n",
-                       vf->_path_name.c_str(), offset);
+            // 获取文件实际大小
+            uint64 file_size = 0;
+            int size_result = vfs_ext_get_filesize(vf->_path_name.c_str(), &file_size);
+            if (size_result != EOK)
+            {
+                printfRed("[allocate_vma_page] failed to get file size for %s\n", vf->_path_name.c_str());
+                k_pmm.free_page(pa);
+                return -1;
+            }
+            printfRed("[allocate_vma_page] offset: %d, file_size: %lu\n", offset, file_size);
+            // 检查访问是否超出文件大小
+            if (offset >= (int)file_size)
+            {
+                printfRed("[allocate_vma_page] access beyond file size: offset=%d, file_size=%lu for %s\n",
+                          offset, file_size, vf->_path_name.c_str());
+                k_pmm.free_page(pa);
+                // 访问超出文件大小，应该产生SIGBUS信号
+                proc::Pcb *p = proc::k_pm.get_cur_pcb();
+                proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGBUS);
+                return 0; // 返回0表示已处理信号，不再继续分配页面
+            }
+
+            // 从文件读取数据
+            printfCyan("[allocate_vma_page] reading from file %s at offset %d (file_size=%lu)\n",
+                       vf->_path_name.c_str(), offset, file_size);
 
             int readbytes = vf->read((uint64)pa, PGSIZE, offset, false);
             if (readbytes < 0)

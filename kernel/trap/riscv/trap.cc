@@ -244,7 +244,6 @@ void trap_manager::usertrap()
       // 缺页异常处理失败，发送SIGSEGV信号
       printfRed("usertrap(): page fault at %p, sending SIGSEGV to pid=%d\n", r_stval(), p->_pid);
       proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGSEGV);
-      proc::ipc::signal::handle_signal(); // 例外, 假如说发生缺页信号, 则先处理一下信号
       printfRed("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->_pid);
       printfRed("            sepc=%p stval=%p\n", r_sepc(), r_stval());
 
@@ -252,9 +251,42 @@ void trap_manager::usertrap()
   }
   else
   {
-    printfRed("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->_pid);
+    // 处理其他未处理的异常，根据异常原因发送相应的同步信号
+    uint64 scause = r_scause();
+    printfRed("usertrap(): unexpected scause %p pid=%d\n", scause, p->_pid);
     printfRed("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-    p->kill();
+    
+    // 根据RISC-V异常原因发送相应的同步信号
+    switch (scause) {
+      case 0:  // Instruction address misaligned
+      case 1:  // Instruction access fault
+        proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGBUS);
+        proc::ipc::signal::handle_sync_signal();
+        break;
+      case 2:  // Illegal instruction
+        proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGILL);
+        proc::ipc::signal::handle_sync_signal();
+        break;
+      case 3:  // Breakpoint
+        proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGTRAP);
+        proc::ipc::signal::handle_sync_signal();
+        break;
+      case 4:  // Load address misaligned
+      case 6:  // Store/AMO address misaligned
+        proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGBUS);
+        proc::ipc::signal::handle_sync_signal();
+        break;
+      case 5:  // Load access fault
+      case 7:  // Store/AMO access fault
+        proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGSEGV);
+        proc::ipc::signal::handle_sync_signal();
+        break;
+      default:
+        // 对于未知的异常，发送SIGSYS信号
+        proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGSYS);
+        proc::ipc::signal::handle_sync_signal();
+        break;
+    }
   }
 
   if (p->is_killed())
@@ -279,8 +311,12 @@ void trap_manager::usertrap()
 
 void trap_manager::usertrapret()
 {
+
   // printfMagenta("into usertrapret\n");
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
+
+  // 优先处理同步信号(紧急信号) - 在返回用户态之前检查并处理
+  proc::ipc::signal::handle_sync_signal();
 
   // 时间统计：从内核态切换到用户态
   uint64 cur_tick = tmm::get_ticks();

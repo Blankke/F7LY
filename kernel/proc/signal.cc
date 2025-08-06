@@ -182,6 +182,31 @@ namespace proc
                     printf("[default_handle] SIGSEGV: Segmentation fault, terminating process %d\n", p->_pid);
                     p->_killed = true;
                     break;
+                case signal::SIGBUS:
+                    // SIGBUS 默认行为：终止进程并生成核心转储
+                    printf("[default_handle] SIGBUS: Bus error, terminating process %d\n", p->_pid);
+                    p->_killed = true;
+                    break;
+                case signal::SIGFPE:
+                    // SIGFPE 默认行为：终止进程并生成核心转储
+                    printf("[default_handle] SIGFPE: Floating point exception, terminating process %d\n", p->_pid);
+                    p->_killed = true;
+                    break;
+                case signal::SIGILL:
+                    // SIGILL 默认行为：终止进程并生成核心转储
+                    printf("[default_handle] SIGILL: Illegal instruction, terminating process %d\n", p->_pid);
+                    p->_killed = true;
+                    break;
+                case signal::SIGTRAP:
+                    // SIGTRAP 默认行为：终止进程并生成核心转储
+                    printf("[default_handle] SIGTRAP: Trace/breakpoint trap, terminating process %d\n", p->_pid);
+                    p->_killed = true;
+                    break;
+                case signal::SIGSYS:
+                    // SIGSYS 默认行为：终止进程并生成核心转储
+                    printf("[default_handle] SIGSYS: Bad system call, terminating process %d\n", p->_pid);
+                    p->_killed = true;
+                    break;
                 case signal::SIGCHLD:
                     panic("[default_handle] SIGCHLD not implemented");
                     break;
@@ -247,6 +272,74 @@ namespace proc
                 // printf("[handle_signal] Finished handling signals\n");
             }
 
+            void handle_sync_signal()
+            {
+                proc::Pcb *p = proc::k_pm.get_cur_pcb();
+                
+                if (p->_signal == 0)
+                {
+                    return; // 没有信号需要处理
+                }
+
+                // 定义同步信号的优先级数组，按紧急程度排序
+                static const int sync_signals[] = {SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGTRAP, SIGSYS};
+                static const int num_sync_signals = sizeof(sync_signals) / sizeof(sync_signals[0]);
+
+                // 按优先级处理同步信号
+                for (int idx = 0; idx < num_sync_signals; idx++)
+                {
+                    int signum = sync_signals[idx];
+                    
+                    if (!sig_is_member(p->_signal, signum))
+                    {
+                        continue; // 该同步信号未被设置
+                    }
+
+                    printf("[handle_sync_signal] Handling urgent sync signal %d\n", signum);
+                    
+                    // 同步信号通常不能被屏蔽（除了通过sigprocmask显式设置）
+                    // 但仍然检查是否被屏蔽
+                    if (is_ignored(p, signum))
+                    {
+                        printf("[handle_sync_signal] Sync signal %d is masked, sigmask=0x%x\n", signum, p->_sigmask);
+                        // 对于同步信号，即使被屏蔽也要处理，因为它们通常是硬件异常
+                        // continue;
+                    }
+
+                    sigaction *act = nullptr;
+                    if (p->_sigactions != nullptr && p->_sigactions->actions[signum] != nullptr)
+                    {
+                        act = p->_sigactions->actions[signum];
+                        printf("[handle_sync_signal] Found handler for sync signal %d: %p\n", signum, act->sa_handler);
+                    }
+
+                    if (act == nullptr || act->sa_handler == nullptr)
+                    {
+                        printf("[handle_sync_signal] Sync signal %d has no handler, using default handler\n", signum);
+                        default_handle(p, signum);
+                    }
+                    else
+                    {
+                        printf("[handle_sync_signal] Calling do_handle for sync signal %d\n", signum);
+                        do_handle(p, signum, act);
+
+                        // 处理 SA_RESETHAND 标志：执行后重置为默认处理
+                        if (act->sa_flags & (uint64)SigActionFlags::RESETHAND)
+                        {
+                            printf("[handle_sync_signal] SA_RESETHAND set, resetting handler for sync signal %d\n", signum);
+                            delete p->_sigactions->actions[signum];
+                            p->_sigactions->actions[signum] = nullptr;
+                        }
+                    }
+                    
+                    clear_signal(p, signum);
+                    printf("[handle_sync_signal] Cleared sync signal %d, _signal now 0x%x\n", signum, p->_signal);
+                    
+                    // 只处理一个同步信号就返回，因为它们通常是致命的
+                    return;
+                }
+            }
+
             void add_signal(proc::Pcb *p, int sig)
             {
                 if (sig <= 0 || sig > proc::ipc::signal::SIGRTMAX)
@@ -267,7 +360,13 @@ namespace proc
                 if ((p->_sigmask & sig_mask) == 0) { // 信号没有被阻塞
                     // 使用特殊的sigsuspend睡眠通道来唤醒等待中的进程
                     void *sigsuspend_chan = (void*)((uint64)p + 0x1000);
-                    proc::k_pm.wakeup(sigsuspend_chan);
+                    // 检查进程是否正在特定的sigsuspend通道上睡眠
+                    if (p->_state == ProcState::SLEEPING && p->_chan == sigsuspend_chan) {
+                        // 直接设置为可运行状态，避免调用wakeup造成的死锁
+                        // 这是安全的，因为调用者已经持有了进程锁
+                        p->_state = ProcState::RUNNABLE;
+                        p->_chan = nullptr;
+                    }
                 }
             }
 
@@ -508,6 +607,12 @@ namespace proc
             bool is_valid(int sig)
             {
                 return (sig <= proc::ipc::signal::SIGRTMAX && sig >= 1);
+            }
+
+            bool is_sync_signal(int sig)
+            {
+                return (sig == SIGSEGV || sig == SIGBUS || sig == SIGFPE || 
+                        sig == SIGILL || sig == SIGTRAP || sig == SIGSYS);
             }
 
             bool sig_is_member(const uint64 set, int n_sig)
