@@ -2,7 +2,10 @@
 #include "proc_manager.hh"
 #include "physical_memory_manager.hh"
 #include "virtual_memory_manager.hh"
+#include "devs/spinlock.hh"
+#include "sys/syscall_defs.hh"
 #include "klib.hh"
+#
 
 namespace proc
 {
@@ -121,6 +124,52 @@ namespace proc
                 return 0;
             }
 
+            int sigsuspend(const sigset_t *mask)
+            {
+                if (mask == nullptr)
+                {
+                    return syscall::SYS_EINVAL; // EINVAL
+                }
+
+                proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
+                
+                // 保存当前的信号掩码
+                uint64 old_sigmask = cur_proc->_sigmask;
+
+                // 设置新的信号掩码，但不能阻塞SIGKILL和SIGSTOP
+                uint64 unmaskable_signals = (1UL << (signal::SIGKILL - 1)) |
+                                            (1UL << (signal::SIGSTOP - 1));
+                cur_proc->_sigmask = mask->sig[0] & ~unmaskable_signals;
+
+                // 检查是否已经有未被阻塞的待处理信号
+                uint64 pending_unblocked = cur_proc->_signal & ~cur_proc->_sigmask;
+                
+                if (pending_unblocked != 0)
+                {
+                    // 有未被阻塞的待处理信号，恢复原掩码并立即返回
+                    cur_proc->_sigmask = old_sigmask;
+                    return syscall::SYS_EINTR; // EINTR - 被信号中断
+                }
+
+                // 使用进程的等待锁进行同步
+                SpinLock sigsuspend_lock;
+                sigsuspend_lock.init("sigsuspend");
+                
+                // 使用一个特殊的地址作为等待信号的睡眠通道
+                void *sigsuspend_chan = (void*)((uint64)cur_proc + 0x1000);
+                
+                // 进入睡眠状态等待信号
+                sigsuspend_lock.acquire();
+                proc::k_pm.sleep(sigsuspend_chan, &sigsuspend_lock);
+                
+                // 当从sleep返回时，说明有信号到达
+                // 恢复原来的信号掩码
+                cur_proc->_sigmask = old_sigmask;
+
+                // sigsuspend总是返回-1并设置errno为EINTR
+                return syscall::SYS_EINTR; // EINTR
+            }
+
             void default_handle(proc::Pcb *p, int signum)
             {
                 switch (signum)
@@ -212,6 +261,14 @@ namespace proc
                 //     return;
                 // }
                 p->_signal |= (1UL << (sig - 1));
+                
+                // 如果进程正在sigsuspend中等待，并且这个信号没有被阻塞，则唤醒它
+                uint64 sig_mask = (1UL << (sig - 1));
+                if ((p->_sigmask & sig_mask) == 0) { // 信号没有被阻塞
+                    // 使用特殊的sigsuspend睡眠通道来唤醒等待中的进程
+                    void *sigsuspend_chan = (void*)((uint64)p + 0x1000);
+                    proc::k_pm.wakeup(sigsuspend_chan);
+                }
             }
 
             void do_handle(proc::Pcb *p, int signum, sigaction *act)

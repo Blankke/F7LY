@@ -8263,6 +8263,36 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
     uint64 SyscallHandler::sys_rt_sigsuspend()
     {
         panic("未实现该系统调用");
+        uint64 setaddr;
+        int sigsize;
+
+        // 获取参数：信号集地址和大小
+        if (_arg_addr(0, setaddr) < 0)
+            return -1;
+        if (_arg_int(1, sigsize) < 0)
+            return -1;
+
+        // 检查信号集大小
+        if (sigsize != sizeof(signal::sigset_t))
+        {
+            printfRed("[sys_rt_sigsuspend] Invalid sigsize: %d, expected: %d\n", 
+                     sigsize, (int)sizeof(signal::sigset_t));
+            return syscall::SYS_EINVAL; // EINVAL
+        }
+
+        proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = cur_proc->get_pagetable();
+
+        // 从用户空间拷贝新的信号掩码
+        signal::sigset_t new_mask;
+        if (mem::k_vmm.copy_in(*pt, &new_mask, setaddr, sizeof(signal::sigset_t)) < 0)
+        {
+            printfRed("[sys_rt_sigsuspend] Failed to copy signal mask from user space\n");
+            return -14; // EFAULT
+        }
+
+        // 调用信号模块中的sigsuspend函数
+        return signal::sigsuspend(&new_mask);
     }
     uint64 SyscallHandler::sys_rt_sigpending()
     {

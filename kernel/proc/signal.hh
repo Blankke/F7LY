@@ -97,6 +97,7 @@ namespace proc
             } sigaction;
             int sigAction(int flag, sigaction *newact, sigaction *oldact);
             int sigprocmask(int how, sigset_t *newset, sigset_t *oldset, size_t sigsize);
+            int sigsuspend(const sigset_t *mask);
             void handle_signal();
             void default_handle(Pcb *p, int signum);
             void add_signal(proc::Pcb *p, int sig);
