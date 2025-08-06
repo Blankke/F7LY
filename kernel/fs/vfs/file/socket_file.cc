@@ -519,7 +519,7 @@ namespace fs
     int socket_file::setsockopt(int level, int optname, const void *optval, socklen_t optlen)
     {
         if (!optval) {
-            return -EFAULT;
+            return -EINVAL;
         }
 
         _lock.acquire();

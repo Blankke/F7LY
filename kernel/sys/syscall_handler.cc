@@ -2094,7 +2094,7 @@ namespace syscall
     static const char _SYSINFO_nodename[] = "(none-node)";
     static const char _SYSINFO_release[] = "4.17.0";
     static const char _SYSINFO_version[] = "4.17.0";
-    static const char _SYSINFO_machine[] = "Riscv";
+    static const char _SYSINFO_machine[] = "riscv64";
     static const char _SYSINFO_domainname[] = "(none-domain)";
     uint64 SyscallHandler::sys_uname()
     {
@@ -6995,6 +6995,11 @@ namespace syscall
         if (_arg_int(4, optlen_tmp) < 0) {
             printfRed("[SyscallHandler::sys_setsockopt] 参数错误: optlen\n");
             return SYS_EINVAL;
+        }
+
+        if(is_bad_addr(optval_ptr))
+        {
+            return SYS_EFAULT;
         }
         socklen_t optlen = (socklen_t)optlen_tmp;
 
