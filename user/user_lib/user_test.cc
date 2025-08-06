@@ -2616,8 +2616,8 @@ char *ltp_testcases[] = {
     // "smt_smp_enabled.sh",
     // "snd_seq01",
     // "snd_timer01",
-    // "socket01",
-    // "socket02",
+    // "socket01", //pass一部分
+    // "socket02", //pass
     // "socketcall01",
     // "socketcall02",
     // "socketcall03",

@@ -57,6 +57,7 @@
 #include "EASTL/map.h"
 #include "fs/debug.hh"
 #include "net/onpstack/include/onps.hh"
+#include "net/onpstack/include/onps_utils.hh"
 #include "interrupt_stats.hh"
 namespace syscall
 {
@@ -2720,8 +2721,8 @@ namespace syscall
             return 0; // No buffers to write
         }
 
-        printfGreen("[SyscallHandler::sys_writev] fd: %d, iov_ptr: %p, iovcnt: %d\n",
-                    fd, (void *)iov_ptr, iovcnt);
+        // printfGreen("[SyscallHandler::sys_writev] fd: %d, iov_ptr: %p, iovcnt: %d\n",
+        //             fd, (void *)iov_ptr, iovcnt);
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = proc->get_pagetable();
 
@@ -5930,37 +5931,69 @@ namespace syscall
         printfCyan("[SyscallHandler::sys_socket] 创建socket: domain=%d, type=%d, protocol=%d\n", 
                    domain, type, protocol);
 
-        // 检查参数有效性 - 只支持AF_INET, IPv6支持可以后续添加
-        if (domain != AF_INET)
+        // 检查协议族有效性
+        switch (domain)
         {
-            printfRed("[SyscallHandler::sys_socket] 不支持的协议族: %d\n", domain);
-            return SYS_EAFNOSUPPORT;
+            case AF_UNSPEC:
+                printfRed("[SyscallHandler::sys_socket] 不支持的协议族 AF_UNSPEC: %d\n", domain);
+                return SYS_EAFNOSUPPORT;
+                
+            case AF_UNIX:  // AF_LOCAL 和 AF_UNIX 是相同的值
+                // AF_UNIX/AF_LOCAL 支持
+                printfCyan("[SyscallHandler::sys_socket] 创建Unix域套接字\n");
+                break;
+                
+            case AF_INET:
+                // AF_INET 支持
+                printfCyan("[SyscallHandler::sys_socket] 创建IPv4套接字\n");
+                break;
+                
+            case AF_INET6:
+                // AF_INET6 暂不支持
+                printfYellow("[SyscallHandler::sys_socket] IPv6协议族暂不支持: %d\n", domain);
+                return SYS_EAFNOSUPPORT;
+                
+            default:
+                printfRed("[SyscallHandler::sys_socket] 未知的协议族: %d\n", domain);
+                return SYS_EAFNOSUPPORT;
         }
 
-        if (type != SOCK_STREAM && type != SOCK_DGRAM)
+        // 检查socket类型有效性
+        if (type != SOCK_STREAM && type != SOCK_DGRAM && type != SOCK_RAW && type != SOCK_SEQPACKET)
         {
             printfRed("[SyscallHandler::sys_socket] 不支持的socket类型: %d\n", type);
             return SYS_EINVAL;
         }
 
-        // 使用onps创建真正的socket
-        EN_ONPSERR enErr = ERRNO;
-        SOCKET onps_socket = socket(domain, type, protocol, &enErr);
+        // 针对不同协议族的特殊处理
+        SOCKET onps_socket = INVALID_SOCKET;
         
-        if (onps_socket == INVALID_SOCKET)
+        if (domain == AF_UNIX)  // AF_LOCAL 等同于 AF_UNIX
         {
-            printfRed("[SyscallHandler::sys_socket] onps创建socket失败: %d\n", enErr);
-            // 将onps错误码转换为系统错误码
-            switch (enErr)
+            // Unix域套接字不需要onps，直接创建socket_file
+            printfCyan("[SyscallHandler::sys_socket] Unix域套接字无需网络栈支持\n");
+        }
+        else if (domain == AF_INET)
+        {
+            // 使用onps创建网络socket
+            EN_ONPSERR enErr = ERRNO;
+            onps_socket = socket(domain, type, protocol, &enErr);
+            
+            if (onps_socket == INVALID_SOCKET)
             {
-                case ERRADDRFAMILIES:
-                    return SYS_EAFNOSUPPORT;
-                case ERRSOCKETTYPE:
-                    return SYS_EINVAL;
-                case ERRNOFREEMEM:
-                    return SYS_ENOMEM;
-                default:
-                    return SYS_EINVAL;
+                printfRed("[SyscallHandler::sys_socket] onps创建socket失败: %d\n", enErr);
+                // 将onps错误码转换为系统错误码
+                switch (enErr)
+                {
+                    case ERRADDRFAMILIES:
+                        return SYS_EAFNOSUPPORT;
+                    case ERRSOCKETTYPE:
+                        return SYS_EINVAL;
+                    case ERRNOFREEMEM:
+                        return SYS_ENOMEM;
+                    default:
+                        return SYS_EINVAL;
+                }
             }
         }
 
@@ -5968,27 +6001,45 @@ namespace syscall
         fs::socket_file *socket_f = new fs::socket_file(domain, type, protocol);
         if (!socket_f)
         {
-            close(onps_socket);  // 关闭onps socket
+            if (onps_socket != INVALID_SOCKET)
+            {
+                close(onps_socket);  // 关闭onps socket
+            }
             printfRed("[SyscallHandler::sys_socket] 创建socket_file失败\n");
             return SYS_ENOMEM;
         }
 
-        // 将onps socket句柄关联到socket_file
-        socket_f->set_onps_socket(onps_socket);
+        // 将onps socket句柄关联到socket_file (仅对网络socket)
+        if (onps_socket != INVALID_SOCKET)
+        {
+            socket_f->set_onps_socket(onps_socket);
+        }
 
         // 分配文件描述符
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         int fd = proc::k_pm.alloc_fd(p, socket_f);
         if (fd < 0)
         {
-            close(onps_socket);  // 关闭onps socket
+            if (onps_socket != INVALID_SOCKET)
+            {
+                close(onps_socket);  // 关闭onps socket
+            }
             delete socket_f;
             printfRed("[SyscallHandler::sys_socket] 分配文件描述符失败\n");
             return SYS_EMFILE;
         }
 
-        printfCyan("[SyscallHandler::sys_socket] socket创建成功, fd=%d, onps_socket=%d, domain=%d, type=%d, protocol=%d\n",
-                   fd, onps_socket, domain, type, protocol);
+        if (domain == AF_UNIX)  // AF_LOCAL 等同于 AF_UNIX
+        {
+            printfCyan("[SyscallHandler::sys_socket] Unix域套接字创建成功, fd=%d, domain=%d, type=%d, protocol=%d\n",
+                       fd, domain, type, protocol);
+        }
+        else
+        {
+            printfCyan("[SyscallHandler::sys_socket] 网络套接字创建成功, fd=%d, onps_socket=%d, domain=%d, type=%d, protocol=%d\n",
+                       fd, onps_socket, domain, type, protocol);
+        }
+        
         return fd;
     }
     uint64 SyscallHandler::sys_socketpair()
@@ -6384,97 +6435,177 @@ namespace syscall
         }
 
         fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
-        SOCKET onps_socket = socket_f->get_onps_socket();
         
-        if (onps_socket == INVALID_SOCKET)
-        {
-            printfRed("[SyscallHandler::sys_connect] socket未关联onps socket\n");
-            return SYS_EINVAL;
-        }
-
-        // 检查地址长度
-        if ((socklen_t)addrlen < sizeof(struct sockaddr_in))
+        // 检查地址长度 - 至少要有sockaddr的基本大小
+        if ((socklen_t)addrlen < sizeof(struct sockaddr))
         {
             printfRed("[SyscallHandler::sys_connect] 地址长度不足: %d\n", addrlen);
             return SYS_EINVAL;
         }
 
-        // 从用户空间复制sockaddr结构体
-        struct sockaddr_in sock_addr;
-        if (mem::k_vmm.copy_in(*pt, &sock_addr, addr, sizeof(struct sockaddr_in)) < 0)
+        // 首先读取通用的sockaddr结构来检查地址族
+        struct sockaddr generic_addr;
+        if (mem::k_vmm.copy_in(*pt, &generic_addr, addr, sizeof(struct sockaddr)) < 0)
         {
             printfRed("[SyscallHandler::sys_connect] 复制sockaddr失败\n");
             return SYS_EFAULT;
         }
 
-        // 检查地址族
-        if (sock_addr.sin_family != AF_INET)
+        // 根据地址族处理不同的地址结构
+        switch (generic_addr.sa_family)
         {
-            printfRed("[SyscallHandler::sys_connect] 不支持的地址族: %d\n", sock_addr.sin_family);
-            return SYS_EAFNOSUPPORT;
-        }
-
-        // 提取IP地址和端口
-        uint32_t ip_addr = sock_addr.sin_addr;
-        uint16_t port = htons(sock_addr.sin_port);  // 转换网络字节序到主机字节序
-        
-        printfCyan("[SyscallHandler::sys_connect] 解析地址: IP=0x%08x, Port=%d\n", ip_addr, port);
-
-        // 检查目标地址是否有效
-        if (ip_addr == 0)
-        {
-            printfRed("[SyscallHandler::sys_connect] 无效的目标地址: 0.0.0.0\n");
-            return SYS_EINVAL;
-        }
-
-        if (port == 0)
-        {
-            printfRed("[SyscallHandler::sys_connect] 无效的目标端口: 0\n");
-            return SYS_EINVAL;
-        }
-
-        // 调用onps的connect_ext函数，使用默认超时时间
-        // connect_ext接受二进制形式的IP地址
-        int result = connect_ext(onps_socket, &ip_addr, port, TCP_CONN_TIMEOUT);
-        
-        if (result != 0)
-        {
-            // 获取onps错误信息
-            EN_ONPSERR onps_err = socket_get_last_error_code(onps_socket);
-            printfRed("[SyscallHandler::sys_connect] onps connect失败, result=%d, 错误: %d\n", result, onps_err);
-            
-            // 将onps错误码转换为系统错误码
-            switch (onps_err)
+            case AF_INET:
             {
-                case ERRTCPCONNTIMEOUT:
-                    return SYS_ETIMEDOUT;  // 连接超时
-                case ERRTCPCONNRESET:
-                    return SYS_ECONNRESET; // 连接被重置
-                case ERRADDRFAMILIES:
-                    return SYS_EAFNOSUPPORT; // 不支持的地址族
-                case ERRUNSUPPIPPROTO:
-                    return SYS_EPROTONOSUPPORT; // 不支持的协议
-                case ERRNOTBINDADDR:
-                    return SYS_EADDRNOTAVAIL; // 地址不可用
-                default:
-                    return SYS_ECONNREFUSED; // 连接被拒绝（默认错误）
+                printfCyan("[SyscallHandler::sys_connect] 处理IPv4连接\n");
+                
+                // 检查IPv4地址长度
+                if ((socklen_t)addrlen < sizeof(struct sockaddr_in))
+                {
+                    printfRed("[SyscallHandler::sys_connect] IPv4地址长度不足: %d\n", addrlen);
+                    return SYS_EINVAL;
+                }
+
+                // 从用户空间复制sockaddr_in结构体
+                struct sockaddr_in sock_addr_in;
+                if (mem::k_vmm.copy_in(*pt, &sock_addr_in, addr, sizeof(struct sockaddr_in)) < 0)
+                {
+                    printfRed("[SyscallHandler::sys_connect] 复制sockaddr_in失败\n");
+                    return SYS_EFAULT;
+                }
+
+                // 获取onps socket句柄
+                SOCKET onps_socket = socket_f->get_onps_socket();
+                if (onps_socket == INVALID_SOCKET)
+                {
+                    printfRed("[SyscallHandler::sys_connect] IPv4 socket未关联onps socket\n");
+                    return SYS_EINVAL;
+                }
+
+                // 提取IP地址和端口
+                uint32_t ip_addr = sock_addr_in.sin_addr;
+                uint16_t port = ENDIAN_CONVERTER_USHORT(sock_addr_in.sin_port);  // 转换网络字节序到主机字节序
+                
+                printfCyan("[SyscallHandler::sys_connect] 解析IPv4地址: IP=0x%08x, Port=%d\n", ip_addr, port);
+
+                // 检查目标地址是否有效
+                if (ip_addr == 0)
+                {
+                    printfRed("[SyscallHandler::sys_connect] 无效的目标地址: 0.0.0.0\n");
+                    return SYS_EINVAL;
+                }
+
+                if (port == 0)
+                {
+                    printfRed("[SyscallHandler::sys_connect] 无效的目标端口: 0\n");
+                    return SYS_EINVAL;
+                }
+
+                // 调用onps的connect_ext函数，使用默认超时时间
+                int result = connect_ext(onps_socket, &ip_addr, port, TCP_CONN_TIMEOUT);
+                
+                if (result != 0)
+                {
+                    // 获取onps错误信息
+                    EN_ONPSERR onps_err = socket_get_last_error_code(onps_socket);
+                    printfRed("[SyscallHandler::sys_connect] onps connect失败, result=%d, 错误: %d\n", result, onps_err);
+                    
+                    // 将onps错误码转换为系统错误码
+                    switch (onps_err)
+                    {
+                        case ERRTCPCONNTIMEOUT:
+                            return SYS_ETIMEDOUT;  // 连接超时
+                        case ERRTCPCONNRESET:
+                            return SYS_ECONNRESET; // 连接被重置
+                        case ERRADDRFAMILIES:
+                            return SYS_EAFNOSUPPORT; // 不支持的地址族
+                        case ERRUNSUPPIPPROTO:
+                            return SYS_EPROTONOSUPPORT; // 不支持的协议
+                        case ERRNOTBINDADDR:
+                            return SYS_EADDRNOTAVAIL; // 地址不可用
+                        default:
+                            return SYS_ECONNREFUSED; // 连接被拒绝（默认错误）
+                    }
+                }
+
+                // 更新socket_file的状态
+                int socket_file_result = socket_f->connect((const struct sockaddr *)&sock_addr_in, addrlen);
+                if (socket_file_result < 0)
+                {
+                    printfRed("[SyscallHandler::sys_connect] socket_file connect失败: %d\n", socket_file_result);
+                    // 这里不返回错误，因为onps连接已经成功了，socket_file的connect主要是状态更新
+                }
+
+                printfCyan("[SyscallHandler::sys_connect] IPv4连接成功, sockfd=%d, 目标: %d.%d.%d.%d:%d\n", 
+                           sockfd, 
+                           (ip_addr >> 0) & 0xFF, (ip_addr >> 8) & 0xFF, 
+                           (ip_addr >> 16) & 0xFF, (ip_addr >> 24) & 0xFF, 
+                           port);
+                return 0;
+            }
+
+            case AF_UNIX:
+            {
+                printfCyan("[SyscallHandler::sys_connect] 处理Unix域套接字连接\n");
+                
+                // 检查Unix地址长度
+                if ((socklen_t)addrlen < sizeof(struct sockaddr_un))
+                {
+                    printfRed("[SyscallHandler::sys_connect] Unix地址长度不足: %d\n", addrlen);
+                    return SYS_EINVAL;
+                }
+
+                // 从用户空间复制sockaddr_un结构体
+                struct sockaddr_un sock_addr_un;
+                if (mem::k_vmm.copy_in(*pt, &sock_addr_un, addr, sizeof(struct sockaddr_un)) < 0)
+                {
+                    printfRed("[SyscallHandler::sys_connect] 复制sockaddr_un失败\n");
+                    return SYS_EFAULT;
+                }
+
+                // Unix域套接字不使用onps，直接通过socket_file处理
+                printfCyan("[SyscallHandler::sys_connect] Unix域套接字路径: %s\n", sock_addr_un.sun_path);
+
+                // 更新socket_file的状态
+                int socket_file_result = socket_f->connect((const struct sockaddr *)&sock_addr_un, addrlen);
+                if (socket_file_result < 0)
+                {
+                    printfRed("[SyscallHandler::sys_connect] Unix域套接字连接失败: %d\n", socket_file_result);
+                    switch (socket_file_result)
+                    {
+                        case -1:
+                            return SYS_ECONNREFUSED; // 连接被拒绝
+                        case -2:
+                            return SYS_ENOENT;       // 路径不存在
+                        case -3:
+                            return SYS_EACCES;       // 权限不足
+                        default:
+                            return SYS_EINVAL;       // 其他错误
+                    }
+                }
+
+                printfCyan("[SyscallHandler::sys_connect] Unix域套接字连接成功, sockfd=%d, 路径: %s\n", 
+                           sockfd, sock_addr_un.sun_path);
+                return 0;
+            }
+
+            case AF_INET6:
+            {
+                printfYellow("[SyscallHandler::sys_connect] IPv6协议族暂不支持: %d\n", generic_addr.sa_family);
+                return SYS_EAFNOSUPPORT;
+            }
+
+            case AF_UNSPEC:
+            {
+                printfRed("[SyscallHandler::sys_connect] 不支持的协议族 AF_UNSPEC: %d\n", generic_addr.sa_family);
+                return SYS_EAFNOSUPPORT;
+            }
+
+            default:
+            {
+                printfRed("[SyscallHandler::sys_connect] 未知的协议族: %d\n", generic_addr.sa_family);
+                return SYS_EAFNOSUPPORT;
             }
         }
-
-        // 更新socket_file的状态
-        int socket_file_result = socket_f->connect((const struct sockaddr *)&sock_addr, addrlen);
-        if (socket_file_result < 0)
-        {
-            printfRed("[SyscallHandler::sys_connect] socket_file connect失败: %d\n", socket_file_result);
-            // 这里不返回错误，因为onps连接已经成功了，socket_file的connect主要是状态更新
-        }
-
-        printfCyan("[SyscallHandler::sys_connect] connect成功, sockfd=%d, 目标: %d.%d.%d.%d:%d\n", 
-                   sockfd, 
-                   (ip_addr >> 0) & 0xFF, (ip_addr >> 8) & 0xFF, 
-                   (ip_addr >> 16) & 0xFF, (ip_addr >> 24) & 0xFF, 
-                   port);
-        return 0;
     }
     uint64 SyscallHandler::sys_getsockname()
     {
