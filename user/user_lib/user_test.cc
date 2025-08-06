@@ -1843,7 +1843,7 @@ char *ltp_testcases[] = {
     // "mmap10", //爆了
     // "mmap11",   //pass不能和别的一起跑
     // "mmap12",
-    // "mmap13",
+    "mmap13", // pass
     // "mmap14",
     // "mmap15",  //pass
     // "mmap16",
