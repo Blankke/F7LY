@@ -1674,7 +1674,7 @@ char *ltp_testcases[] = {
     // "linkat01",  //有一个没过pass
     // "linkat02",//sendmsg
     // "linktest.sh",
-    // "listen01",
+    // "listen01", /pass
     // "listxattr01",
     // "listxattr02",
     // "listxattr03",
@@ -2415,8 +2415,8 @@ char *ltp_testcases[] = {
     // "sendmsg01",
     // "sendmsg02",
     // "sendmsg03",
-    // "sendto01",
-    // "sendto02",
+    // "sendto01", //pass一部分
+    // "sendto02", //pass
     // "sendto03",
     // "set_ipv4addr",
     // "set_mempolicy01",

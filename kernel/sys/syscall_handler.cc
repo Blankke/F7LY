@@ -6488,17 +6488,17 @@ namespace syscall
                 printfCyan("[SyscallHandler::sys_connect] 解析IPv4地址: IP=0x%08x, Port=%d\n", ip_addr, port);
 
                 // 检查目标地址是否有效
-                if (ip_addr == 0)
-                {
-                    printfRed("[SyscallHandler::sys_connect] 无效的目标地址: 0.0.0.0\n");
-                    return SYS_EINVAL;
-                }
+                // if (ip_addr == 0)
+                // {
+                //     printfRed("[SyscallHandler::sys_connect] 无效的目标地址: 0.0.0.0\n");
+                //     return SYS_EINVAL;
+                // }
 
-                if (port == 0)
-                {
-                    printfRed("[SyscallHandler::sys_connect] 无效的目标端口: 0\n");
-                    return SYS_EINVAL;
-                }
+                // if (port == 0)
+                // {
+                //     printfRed("[SyscallHandler::sys_connect] 无效的目标端口: 0\n");
+                //     return SYS_EINVAL;
+                // }
 
                 // 调用onps的connect_ext函数，使用默认超时时间
                 int result = connect_ext(onps_socket, &ip_addr, port, TCP_CONN_TIMEOUT);
@@ -6744,11 +6744,12 @@ namespace syscall
             return SYS_EBADF;
         }
 
-        // 检查是否为socket文件
+
         fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
-        if (!socket_f)
+        // 检查是否为socket文件
+        if (f->_attrs.filetype != fs::FileTypes::FT_SOCKET)
         {
-            printfRed("[SyscallHandler::sys_getpeername] 文件描述符不是socket: %d\n", sockfd);
+            printfRed("[SyscallHandler::sys_getsockname] 文件描述符不是socket: %d\n", sockfd);
             return SYS_ENOTSOCK;
         }
 
@@ -6764,23 +6765,398 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_sendto()
     {
-        panic("未实现该系统调用");
+        // https://www.man7.org/linux/man-pages/man3/sendto.3p.html
+        int sockfd;
+        uint64 buf_ptr;
+        size_t len;
+        int flags;
+        uint64 dest_addr_ptr;
+        socklen_t addrlen;
+
+        if (_arg_int(0, sockfd) < 0) {
+            printfRed("[SyscallHandler::sys_sendto] 参数错误: sockfd\n");
+            return SYS_EINVAL;
+        }
+
+        if (_arg_addr(1, buf_ptr) < 0) {
+            printfRed("[SyscallHandler::sys_sendto] 参数错误: buf\n");
+            return SYS_EINVAL;
+        }
+
+        if (_arg_addr(2, len) < 0) {
+            printfRed("[SyscallHandler::sys_sendto] 参数错误: len\n");
+            return SYS_EINVAL;
+        }
+
+        if (_arg_int(3, flags) < 0) {
+            printfRed("[SyscallHandler::sys_sendto] 参数错误: flags\n");
+            return SYS_EINVAL;
+        }
+
+        if (_arg_addr(4, dest_addr_ptr) < 0) {
+            printfRed("[SyscallHandler::sys_sendto] 参数错误: dest_addr\n");
+            return SYS_EINVAL;
+        }
+
+        int addrlen_tmp;
+        if (_arg_int(5, addrlen_tmp) < 0) {
+            printfRed("[SyscallHandler::sys_sendto] 参数错误: addrlen\n");
+            return SYS_EINVAL;
+        }
+        addrlen = (socklen_t)addrlen_tmp;
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        fs::file *f = p->get_open_file(sockfd);
+        if (!f) {
+            printfRed("[SyscallHandler::sys_sendto] 无效的文件描述符: %d\n", sockfd);
+            return SYS_EBADF;
+        }
+
+        // 检查是否为socket文件
+        fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
+        // 检查是否为socket文件
+        if (f->_attrs.filetype != fs::FileTypes::FT_SOCKET)
+        {
+            printfRed("[SyscallHandler::sys_getsockname] 文件描述符不是socket: %d\n", sockfd);
+            return SYS_ENOTSOCK;
+        }
+
+        // 分配内核缓冲区并复制数据
+        eastl::vector<uint8_t> kernel_buf(len);
+        mem::PageTable *pt = p->get_pagetable();
+        if (mem::k_vmm.copy_in(*pt, kernel_buf.data(), buf_ptr, len) < 0) {
+            printfRed("[SyscallHandler::sys_sendto] 复制数据失败\n");
+            return SYS_EFAULT;
+        }
+
+        // 复制目标地址
+        struct sockaddr dest_addr;
+        if (dest_addr_ptr && addrlen > 0) {
+            if (mem::k_vmm.copy_in(*pt, &dest_addr, dest_addr_ptr, 
+                        eastl::min((size_t)addrlen, sizeof(dest_addr))) < 0) {
+                printfRed("[SyscallHandler::sys_sendto] 复制目标地址失败\n");
+                return SYS_EFAULT;
+            }
+        }
+
+        // 调用socket的sendto方法
+        int result;
+        if (dest_addr_ptr && addrlen > 0) {
+            result = socket_f->sendto(kernel_buf.data(), len, flags, &dest_addr, addrlen);
+        } else {
+            // 如果没有目标地址，等同于send
+            result = socket_f->send(kernel_buf.data(), len, flags);
+        }
+
+        if (result < 0) {
+            printfRed("[SyscallHandler::sys_sendto] sendto失败: %d\n", result);
+            return result;
+        }
+
+        printfCyan("[SyscallHandler::sys_sendto] sendto成功, sockfd=%d, sent=%d bytes\n", 
+                   sockfd, result);
+        return result;
     }
     uint64 SyscallHandler::sys_recvfrom()
     {
-        panic("未实现该系统调用");
+        int sockfd;
+        uint64 buf_ptr;
+        size_t len;
+        int flags;
+        uint64 src_addr_ptr;
+        uint64 addrlen_ptr;
+
+        if (_arg_int(0, sockfd) < 0) {
+            printfRed("[SyscallHandler::sys_recvfrom] 参数错误: sockfd\n");
+            return SYS_EINVAL;
+        }
+
+        if (_arg_addr(1, buf_ptr) < 0) {
+            printfRed("[SyscallHandler::sys_recvfrom] 参数错误: buf\n");
+            return SYS_EINVAL;
+        }
+
+        if (_arg_addr(2, len) < 0) {
+            printfRed("[SyscallHandler::sys_recvfrom] 参数错误: len\n");
+            return SYS_EINVAL;
+        }
+
+        if (_arg_int(3, flags) < 0) {
+            printfRed("[SyscallHandler::sys_recvfrom] 参数错误: flags\n");
+            return SYS_EINVAL;
+        }
+
+        if (_arg_addr(4, src_addr_ptr) < 0) {
+            printfRed("[SyscallHandler::sys_recvfrom] 参数错误: src_addr\n");
+            return SYS_EINVAL;
+        }
+
+        if (_arg_addr(5, addrlen_ptr) < 0) {
+            printfRed("[SyscallHandler::sys_recvfrom] 参数错误: addrlen\n");
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        fs::file *f = p->get_open_file(sockfd);
+        if (!f) {
+            printfRed("[SyscallHandler::sys_recvfrom] 无效的文件描述符: %d\n", sockfd);
+            return SYS_EBADF;
+        }
+
+        // 检查是否为socket文件
+        fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
+        // 检查是否为socket文件
+        if (f->_attrs.filetype != fs::FileTypes::FT_SOCKET)
+        {
+            printfRed("[SyscallHandler::sys_getsockname] 文件描述符不是socket: %d\n", sockfd);
+            return SYS_ENOTSOCK;
+        }
+
+        // 分配内核缓冲区
+        eastl::vector<uint8_t> kernel_buf(len);
+        mem::PageTable *pt = p->get_pagetable();
+
+        // 获取地址长度
+        socklen_t addrlen = 0;
+        if (addrlen_ptr) {
+            if (mem::k_vmm.copy_in(*pt, &addrlen, addrlen_ptr, sizeof(socklen_t)) < 0) {
+                printfRed("[SyscallHandler::sys_recvfrom] 复制addrlen失败\n");
+                return SYS_EFAULT;
+            }
+        }
+
+        // 准备源地址缓冲区
+        struct sockaddr src_addr;
+        socklen_t orig_addrlen = addrlen;
+
+        // 调用socket的recvfrom方法
+        int result = socket_f->recvfrom(kernel_buf.data(), len, flags, 
+                                       src_addr_ptr ? &src_addr : nullptr, 
+                                       src_addr_ptr ? &addrlen : nullptr);
+
+        if (result < 0) {
+            printfRed("[SyscallHandler::sys_recvfrom] recvfrom失败: %d\n", result);
+            return result;
+        }
+
+        // 复制数据到用户空间
+        if (mem::k_vmm.copy_out(*pt, buf_ptr, kernel_buf.data(), result) < 0) {
+            printfRed("[SyscallHandler::sys_recvfrom] 复制数据到用户空间失败\n");
+            return SYS_EFAULT;
+        }
+
+        // 复制源地址到用户空间（如果请求了）
+        if (src_addr_ptr && addrlen > 0) {
+            size_t copy_len = eastl::min((size_t)addrlen, (size_t)orig_addrlen);
+            if (mem::k_vmm.copy_out(*pt, src_addr_ptr, &src_addr, copy_len) < 0) {
+                printfRed("[SyscallHandler::sys_recvfrom] 复制源地址失败\n");
+                return SYS_EFAULT;
+            }
+
+            // 更新地址长度
+            if (mem::k_vmm.copy_out(*pt, addrlen_ptr, &addrlen, sizeof(socklen_t)) < 0) {
+                printfRed("[SyscallHandler::sys_recvfrom] 复制addrlen失败\n");
+                return SYS_EFAULT;
+            }
+        }
+
+        printfCyan("[SyscallHandler::sys_recvfrom] recvfrom成功, sockfd=%d, received=%d bytes\n", 
+                   sockfd, result);
+        return result;
     }
     uint64 SyscallHandler::sys_setsockopt()
     {
-        panic("未实现该系统调用");
+        int sockfd;
+        int level;
+        int optname;
+        uint64 optval_ptr;
+        int optlen_tmp;
+
+        if (_arg_int(0, sockfd) < 0) {
+            printfRed("[SyscallHandler::sys_setsockopt] 参数错误: sockfd\n");
+            return SYS_EINVAL;
+        }
+
+        if (_arg_int(1, level) < 0) {
+            printfRed("[SyscallHandler::sys_setsockopt] 参数错误: level\n");
+            return SYS_EINVAL;
+        }
+
+        if (_arg_int(2, optname) < 0) {
+            printfRed("[SyscallHandler::sys_setsockopt] 参数错误: optname\n");
+            return SYS_EINVAL;
+        }
+
+        if (_arg_addr(3, optval_ptr) < 0) {
+            printfRed("[SyscallHandler::sys_setsockopt] 参数错误: optval\n");
+            return SYS_EINVAL;
+        }
+
+        if (_arg_int(4, optlen_tmp) < 0) {
+            printfRed("[SyscallHandler::sys_setsockopt] 参数错误: optlen\n");
+            return SYS_EINVAL;
+        }
+        socklen_t optlen = (socklen_t)optlen_tmp;
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        fs::file *f = p->get_open_file(sockfd);
+        if (!f) {
+            printfRed("[SyscallHandler::sys_setsockopt] 无效的文件描述符: %d\n", sockfd);
+            return SYS_EBADF;
+        }
+
+        // 检查是否为socket文件
+        fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
+        // 检查是否为socket文件
+        if (f->_attrs.filetype != fs::FileTypes::FT_SOCKET)
+        {
+            printfRed("[SyscallHandler::sys_getsockname] 文件描述符不是socket: %d\n", sockfd);
+            return SYS_ENOTSOCK;
+        }
+
+        // 分配内核缓冲区并复制选项值
+        eastl::vector<uint8_t> optval_buf(optlen);
+        mem::PageTable *pt = p->get_pagetable();
+        if (mem::k_vmm.copy_in(*pt, optval_buf.data(), optval_ptr, optlen) < 0) {
+            printfRed("[SyscallHandler::sys_setsockopt] 复制optval失败\n");
+            return SYS_EFAULT;
+        }
+
+        // 调用socket的setsockopt方法
+        int result = socket_f->setsockopt(level, optname, optval_buf.data(), optlen);
+        if (result < 0) {
+            printfRed("[SyscallHandler::sys_setsockopt] setsockopt失败: %d\n", result);
+            return result;
+        }
+
+        printfCyan("[SyscallHandler::sys_setsockopt] setsockopt成功, sockfd=%d, level=%d, optname=%d\n", 
+                   sockfd, level, optname);
+        return 0;
     }
     uint64 SyscallHandler::sys_getsockopt()
     {
-        panic("未实现该系统调用");
+        int sockfd;
+        int level;
+        int optname;
+        uint64 optval_ptr;
+        uint64 optlen_ptr;
+
+        if (_arg_int(0, sockfd) < 0) {
+            printfRed("[SyscallHandler::sys_getsockopt] 参数错误: sockfd\n");
+            return SYS_EINVAL;
+        }
+
+        if (_arg_int(1, level) < 0) {
+            printfRed("[SyscallHandler::sys_getsockopt] 参数错误: level\n");
+            return SYS_EINVAL;
+        }
+
+        if (_arg_int(2, optname) < 0) {
+            printfRed("[SyscallHandler::sys_getsockopt] 参数错误: optname\n");
+            return SYS_EINVAL;
+        }
+
+        if (_arg_addr(3, optval_ptr) < 0) {
+            printfRed("[SyscallHandler::sys_getsockopt] 参数错误: optval\n");
+            return SYS_EINVAL;
+        }
+
+        if (_arg_addr(4, optlen_ptr) < 0) {
+            printfRed("[SyscallHandler::sys_getsockopt] 参数错误: optlen\n");
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        fs::file *f = p->get_open_file(sockfd);
+        if (!f) {
+            printfRed("[SyscallHandler::sys_getsockopt] 无效的文件描述符: %d\n", sockfd);
+            return SYS_EBADF;
+        }
+
+        // 检查是否为socket文件
+        fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
+        // 检查是否为socket文件
+        if (f->_attrs.filetype != fs::FileTypes::FT_SOCKET)
+        {
+            printfRed("[SyscallHandler::sys_getsockname] 文件描述符不是socket: %d\n", sockfd);
+            return SYS_ENOTSOCK;
+        }
+
+        // 获取选项长度
+        socklen_t optlen;
+        mem::PageTable *pt = p->get_pagetable();
+        if (mem::k_vmm.copy_in(*pt, &optlen, optlen_ptr, sizeof(socklen_t)) < 0) {
+            printfRed("[SyscallHandler::sys_getsockopt] 复制optlen失败\n");
+            return SYS_EFAULT;
+        }
+
+        // 分配内核缓冲区
+        eastl::vector<uint8_t> optval_buf(optlen);
+
+        // 调用socket的getsockopt方法
+        int result = socket_f->getsockopt(level, optname, optval_buf.data(), &optlen);
+        if (result < 0) {
+            printfRed("[SyscallHandler::sys_getsockopt] getsockopt失败: %d\n", result);
+            return result;
+        }
+
+        // 复制选项值到用户空间
+        if (mem::k_vmm.copy_out(*pt, optval_ptr, optval_buf.data(), optlen) < 0) {
+            printfRed("[SyscallHandler::sys_getsockopt] 复制optval到用户空间失败\n");
+            return SYS_EFAULT;
+        }
+
+        // 复制更新后的长度到用户空间
+        if (mem::k_vmm.copy_out(*pt, optlen_ptr, &optlen, sizeof(socklen_t)) < 0) {
+            printfRed("[SyscallHandler::sys_getsockopt] 复制optlen到用户空间失败\n");
+            return SYS_EFAULT;
+        }
+
+        printfCyan("[SyscallHandler::sys_getsockopt] getsockopt成功, sockfd=%d, level=%d, optname=%d\n", 
+                   sockfd, level, optname);
+        return 0;
     }
     uint64 SyscallHandler::sys_shutdown_socket()
     {
-        panic("未实现该系统调用");
+        int sockfd;
+        int how;
+
+        if (_arg_int(0, sockfd) < 0) {
+            printfRed("[SyscallHandler::sys_shutdown_socket] 参数错误: sockfd\n");
+            return SYS_EINVAL;
+        }
+
+        if (_arg_int(1, how) < 0) {
+            printfRed("[SyscallHandler::sys_shutdown_socket] 参数错误: how\n");
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        fs::file *f = p->get_open_file(sockfd);
+        if (!f) {
+            printfRed("[SyscallHandler::sys_shutdown_socket] 无效的文件描述符: %d\n", sockfd);
+            return SYS_EBADF;
+        }
+
+        // 检查是否为socket文件
+        fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
+        // 检查是否为socket文件
+        if (f->_attrs.filetype != fs::FileTypes::FT_SOCKET)
+        {
+            printfRed("[SyscallHandler::sys_getsockname] 文件描述符不是socket: %d\n", sockfd);
+            return SYS_ENOTSOCK;
+        }
+
+        // 调用socket的shutdown方法
+        int result = socket_f->shutdown(how);
+        if (result < 0) {
+            printfRed("[SyscallHandler::sys_shutdown_socket] shutdown失败: %d\n", result);
+            return result;
+        }
+
+        printfCyan("[SyscallHandler::sys_shutdown_socket] shutdown成功, sockfd=%d, how=%d\n", 
+                   sockfd, how);
+        return 0;
     }
     uint64 SyscallHandler::sys_sendmsg()
     {
@@ -6812,8 +7188,10 @@ namespace syscall
 
         // 检查是否为socket文件
         fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
-        if (!socket_f) {
-            printfRed("[SyscallHandler::sys_sendmsg] 文件描述符不是socket: %d\n", sockfd);
+        // 检查是否为socket文件
+        if (f->_attrs.filetype != fs::FileTypes::FT_SOCKET)
+        {
+            printfRed("[SyscallHandler::sys_getsockname] 文件描述符不是socket: %d\n", sockfd);
             return SYS_ENOTSOCK;
         }
 
