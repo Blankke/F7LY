@@ -1388,36 +1388,69 @@ void onps_set_last_error(INT nInput, EN_ONPSERR enErr)
     os_exit_critical();
 }
 
+/**
+ * @brief 检查指定协议和端口是否已被使用
+ * 
+ * 该函数遍历输入处理器的链表，检查指定的协议和端口组合是否已经被某个socket绑定使用。
+ * 这用于防止端口冲突，确保同一个协议的同一个端口不被重复绑定。
+ * 
+ * @param nFamily [仅IPv6支持时] 地址族 (AF_INET 或 AF_INET6)
+ * @param enProtocol IP协议类型 (如 IPPROTO_TCP, IPPROTO_UDP 等)
+ * @param usPort 要检查的端口号 (主机字节序)
+ * 
+ * @return BOOL 
+ *         - TRUE: 端口已被使用
+ *         - FALSE: 端口未被使用，可以绑定
+ * 
+ * @note 该函数是线程安全的，使用互斥锁保护输入处理器链表的访问
+ * @note IPv6支持时会额外检查地址族匹配
+ */
 #if SUPPORT_IPV6
 BOOL onps_input_port_used(INT nFamily, EN_IPPROTO enProtocol, USHORT usPort)
 #else
 BOOL onps_input_port_used(EN_IPPROTO enProtocol, USHORT usPort)
 #endif
 {
-    BOOL blIsUsed = FALSE;
+    BOOL blIsUsed = FALSE;  // 端口使用状态标志，默认未使用
+    
+    // 获取输入处理器链表的互斥锁，确保线程安全
     os_thread_mutex_lock(l_hMtxInput);
     {
+        // 从输入处理器链表头开始遍历
         PST_SLINKEDLIST_NODE pstNextNode = l_pstInputSLList;
         PSTCB_ONPS_INPUT pstcbInput;
+        
+        // 遍历整个输入处理器链表
         while (pstNextNode)
         {
+            // 获取当前节点对应的输入控制块
             pstcbInput = &l_stcbaInput[pstNextNode->uniData.nVal];
+            
 #if SUPPORT_IPV6
-            if ((CHAR)nFamily == pstcbInput->uniHandle.stTcpUdp.bFamily && enProtocol == pstcbInput->ubIPProto && usPort == pstcbInput->uniHandle.stTcpUdp.stSockAddr.usPort)
+            // IPv6支持时：检查地址族、协议类型和端口号是否都匹配
+            if ((CHAR)nFamily == pstcbInput->uniHandle.stTcpUdp.bFamily && 
+                enProtocol == pstcbInput->ubIPProto && 
+                usPort == pstcbInput->uniHandle.stTcpUdp.stSockAddr.usPort)
 #else
-            if (enProtocol == pstcbInput->ubIPProto && usPort == pstcbInput->uniHandle.stTcpUdp.stSockAddr.usPort)
+            // 仅IPv4时：只检查协议类型和端口号是否匹配
+            if (enProtocol == pstcbInput->ubIPProto &&
+                usPort == pstcbInput->uniHandle.stTcpUdp.stSockAddr.usPort &&
+                pstcbInput->uniHandle.stTcpUdp.stSockAddr.usPort != 0)
 #endif
             {
+                // 找到匹配的端口，标记为已使用并退出循环
                 blIsUsed = TRUE;
                 break;
             }
 
+            // 移动到链表的下一个节点
             pstNextNode = pstNextNode->pstNext;
         }
     }
+    // 释放互斥锁
     os_thread_mutex_unlock(l_hMtxInput);
 
-    return blIsUsed;
+    return blIsUsed;  // 返回端口使用状态
 }
 
 #if SUPPORT_IPV6
