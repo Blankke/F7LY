@@ -1888,6 +1888,7 @@ namespace mem
         }
         kvmmap(pt, (uint64)etext, (uint64)etext, phys_top - (uint64)etext,
                PTE_R | PTE_W | PTE_X | PTE_V2);
+               PTE_R | PTE_W | PTE_X | PTE_V2);
         // printfRed("[vmm] kvmmake kernel data success\n");
 
         // Map DTB if it exists
