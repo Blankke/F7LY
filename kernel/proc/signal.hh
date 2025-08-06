@@ -21,6 +21,11 @@ namespace proc
             constexpr int SIG_SETMASK = 2;
             constexpr int SIGCHLD = 17;
             constexpr int SIGSEGV=11;
+            constexpr int SIGBUS = 7;
+            constexpr int SIGFPE = 8;
+            constexpr int SIGILL = 4;
+            constexpr int SIGTRAP = 5;
+            constexpr int SIGSYS = 31;
             enum class SigActionFlags : uint64_t
             {
                 NONE = 0,
@@ -98,6 +103,7 @@ namespace proc
             int sigAction(int flag, sigaction *newact, sigaction *oldact);
             int sigprocmask(int how, sigset_t *newset, sigset_t *oldset, size_t sigsize);
             void handle_signal();
+            void handle_sync_signal();
             void default_handle(Pcb *p, int signum);
             void add_signal(proc::Pcb *p, int sig);
             void do_handle(proc::Pcb *p, int signum, sigaction *act);
@@ -105,6 +111,7 @@ namespace proc
 
             // tool
             bool is_valid(int sig);
+            bool is_sync_signal(int sig);
             bool sig_is_member(const uint64 set, int n_sig);
             bool is_ignored(Pcb *now_p, int sig);
             void clear_signal(Pcb *now_p, int sig);
