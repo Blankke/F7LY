@@ -1,5 +1,8 @@
 #include "console.hh"
 #include "proc_manager.hh"
+#ifdef RISCV
+#include "hal/riscv/sbi.hh"
+#endif
 namespace dev
 {
   Console kConsole; // 全局控制台对象
@@ -28,17 +31,31 @@ namespace dev
   {
     if (c == BACKSPACE)
     {
+      #ifdef RISCV
+      sbi_console_putchar('\b');
+      sbi_console_putchar(' ');
+      sbi_console_putchar('\b');
+      #elif defined(LOONGARCH)
       uart.put_char_sync('\b');
       uart.put_char_sync(' ');
       uart.put_char_sync('\b');
+      #endif
     }
     else if (c == '\n' || c == '\r')
     {
-      uart.put_char('\n');
+      #ifdef RISCV
+      sbi_console_putchar('\n');
+      #elif defined(LOONGARCH)
+      uart.put_char_sync('\n');
+      #endif
     }
     else
     {
+      #ifdef RISCV
+      sbi_console_putchar(c);
+      #elif defined(LOONGARCH)
       uart.put_char_sync(c);
+      #endif
     }
   }
 
@@ -134,9 +151,9 @@ namespace dev
       int target_pgrp = _foreground_pgrp;
       if (_echo_enabled)
       {
-        uart.put_char_sync('^');
-        uart.put_char_sync('C');
-        uart.put_char_sync('\n');
+        console_putc('^');
+        console_putc('C');
+        console_putc('\n');
       }
       r_idx = w_idx = e_idx = 0;
       _lock.release();
@@ -179,9 +196,9 @@ namespace dev
           if (e_idx != w_idx)
           {
             e_idx--;
-          if (_echo_enabled)
-          {
-            console_putc(BACKSPACE);
+            if (_echo_enabled)
+            {
+              console_putc(BACKSPACE);
             }
           }
           break;
