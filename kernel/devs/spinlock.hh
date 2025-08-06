@@ -29,4 +29,8 @@ public:
 
 	bool is_held();
 
+	/// @brief get name of spinlock
+	/// @return name of spinlock
+	const char *get_name() const { return _name; }
+
 };
