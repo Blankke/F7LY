@@ -49,6 +49,7 @@ namespace fs
             // f.ref = 0;
             f.type = fs::FileTypes::FT_NONE;
         }
+        printfGreen("[file pool] initialized with %d files\n", file_pool_max_size);
     }
 
     File *file_pool::alloc_file()

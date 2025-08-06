@@ -271,6 +271,7 @@ namespace dev
             _loop_devices[i] = nullptr;
             _device_allocated[i] = false;
         }
+        printfGreen("[LoopControlDevice] initialized with %d devices\n", MAX_LOOP_DEVICES);
     }
 
     int LoopControlDevice::add_loop_device(int number)

@@ -1097,10 +1097,10 @@ namespace mem
         kvmmap(pt, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
         // printfGreen("[vmm] kvmmake plic success\n");
         // map kernel text executable and read-only.
-        kvmmap(pt, KERNBASE, KERNBASE, (uint64)etext - KERNBASE, PTE_R | PTE_X);
+        kvmmap(pt, KERNBASE, KERNBASE, (uint64)etext - KERNBASE, PTE_R | PTE_X|PTE_V2);
         // printfGreen("[vmm] kvmmake kernel text success\n");
         // map kernel data and the physical RAM we'll make use of.
-        kvmmap(pt, (uint64)etext, (uint64)etext, PHYSTOP - (uint64)etext, PTE_R | PTE_W);
+        kvmmap(pt, (uint64)etext, (uint64)etext, PHYSTOP - (uint64)etext, PTE_R | PTE_W |PTE_X|PTE_V2);
         // printfRed("[vmm] kvmmake kernel data success\n");
         // // map the trampoline for trap entry/exit to
         // // the highest virtual address in the kernel.

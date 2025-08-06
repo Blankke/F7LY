@@ -363,7 +363,10 @@ typedef uint64 *pagetable_t; // 512 PTEs
 #define PGROUNDUP(sz) (((sz) + PGSIZE - 1) & ~(PGSIZE - 1))
 #define PGROUNDDOWN(a) (((a)) & ~(PGSIZE - 1))
 
+#define PTE_A (1L << 6) // accessed
+#define PTE_D (1L << 7) // dirty
 #define PTE_V (1L << 0) // valid
+#define PTE_V2 (PTE_V|PTE_A|PTE_D) // valid
 #define PTE_R (1L << 1)
 #define PTE_W (1L << 2)
 #define PTE_X (1L << 3)
