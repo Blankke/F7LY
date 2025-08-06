@@ -119,7 +119,9 @@ BOOL route_add(PST_NETIF pstNetif, UINT unDestination, UINT unGateway, UINT unGe
         }
 
         //* 执行到这里意味着没找到对应的路由条目，需要新增一个
+        os_thread_mutex_unlock(l_hMtxRoute);
         pstNode = get_free_node();
+        os_thread_mutex_lock(l_hMtxRoute);
         if (NULL == pstNode)
         {
             os_thread_mutex_unlock(l_hMtxRoute);
