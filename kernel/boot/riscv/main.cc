@@ -89,13 +89,21 @@ void main()
     /*********************8888 */
 
     // virtio_disk_init2(); // 初始化 rootfs的块设备
-    virtio_disk_init();  // emulated hard disk ps:如果使用SDCard需要修改
+
+    // virtio_disk_init();  // emulated hard disk ps:如果使用SDCard需要修改
+    
+    printfGreen("virtio_disk_init done\n");
     init_fs_table();     // fs_table init
+    printfGreen("init_fs_table done\n");
     binit();             // buffer cache
+    printfGreen("binit done\n");
     fileinit();          // file table
+    printfGreen("fileinit done\n");
     inodeinit();         // inode table
+    printfGreen("inodeinit done\n");
     fs::k_file_table.init(); // 初始化文件池
     vfs_ext4_init();      // 初始化lwext4
+    printfGreen("vfs_ext4_init done\n");
     fs::k_vfs.dir_init(); // 初始化虚拟文件系统目录
     fs::k_fifo_manager.init(); // 初始化 FIFO 管理器
     // 初始化 loop 设备控制器

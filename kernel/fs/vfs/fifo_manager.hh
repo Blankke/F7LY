@@ -32,6 +32,7 @@ public:
     void init() {
         _lock.init("fifo_manager");
         _fifo_map = new eastl::unordered_map<eastl::string, FifoInfo>();
+        printfGreen("[FIFO Manager] initialized\n");
     }
     // 获取或创建 FIFO
     proc::ipc::Pipe* get_or_create_fifo(const eastl::string& path);
