@@ -45,7 +45,6 @@ void main()
     // riscv::r_mstatus();
 
     k_printer.init(); // 这里也初始化了console和uart
-
     printfWhite("\n\n"); // 留出顶部空白
     print_f7ly();
     print_fuckyou();
@@ -54,7 +53,7 @@ void main()
     trap_mgr.inithart(); // 初始化每个核上的csr
 
     // 初始化中断统计管理器
-    intr_stats::k_intr_stats.init();
+    // intr_stats::k_intr_stats.init();
 
     plic_mgr.init();     // plic初始化
     plic_mgr.inithart(); // 初始化每个核上的csr

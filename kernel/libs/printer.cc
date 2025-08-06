@@ -28,7 +28,7 @@ void Printer::init()
 	dev::kConsole.init();
 	_console = &dev::kConsole;
 	_type = out_type::console;
-	printf("Printer::init end\n");
+	printf("Printer::init end\r\n");
 
 }
 

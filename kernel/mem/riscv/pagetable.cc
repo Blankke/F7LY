@@ -284,6 +284,8 @@ namespace mem
         for (int i = 0; i < 512; i++)
         {
             Pte pte = get_pte(i);
+            if(pte.get_data() == 0&& pte.pa()==0)
+                continue; // 如果PTE无效，则跳过
             printfRed("PTE[%d]: %p, pte2pa: %p\n", i, pte.get_data(), pte.pa());
         }
     }
