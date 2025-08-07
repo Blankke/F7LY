@@ -31,6 +31,7 @@
 #include "trap/interrupt_stats.hh"
 // #include "fs/dev/acpi_controller.hh"
 #include "fs/drivers/riscv/virtio2.hh"
+#include "fs/drivers/riscv/disk.hh"
 #include "fs/vfs/fs.hh"
 #include "fs/buf.hh"
 #include "fs/vfs/vfs_ext4_ext.hh"
@@ -90,7 +91,7 @@ void main()
 
     // virtio_disk_init2(); // 初始化 rootfs的块设备
 
-    // virtio_disk_init();  // emulated hard disk ps:如果使用SDCard需要修改
+    disk_init();  // emulated hard disk ps:如果使用SDCard需要修改
     
     printfGreen("virtio_disk_init done\n");
     init_fs_table();     // fs_table init
