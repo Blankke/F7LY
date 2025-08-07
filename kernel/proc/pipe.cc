@@ -13,6 +13,7 @@
 
 #include "fs/vfs/file/file.hh"
 #include "fs/vfs/file/pipe_file.hh"
+#include "signal.hh"
 // #include "fs/vfs/fs_defs.hh"
 #include "sys/syscall_defs.hh"
 namespace proc
@@ -97,6 +98,13 @@ namespace proc
 					// printfRed("Pipe write failed: read end closed or process killed\n");
 					// 如果读端已关闭，或者当前进程被终止，提前退出
 					_lock.release();
+					
+					// 如果读端已关闭且进程没有被杀死，发送SIGPIPE信号
+					if (!_read_is_open && !pr->is_killed())
+					{
+						proc::ipc::signal::add_signal(pr, proc::ipc::signal::SIGPIPE);
+					}
+					
 					return syscall::SYS_EPIPE; 
 				}
 

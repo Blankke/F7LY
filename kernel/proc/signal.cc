@@ -175,37 +175,43 @@ namespace proc
                 switch (signum)
                 {
                 case signal::SIGKILL:
-                    p->_killed = true;
+                    printf("[default_handle] SIGKILL: Terminating process %d\n", p->_pid);
+                    proc::k_pm.do_signal_exit(p, signum); // 使用信号退出函数，正确设置xstate
                     break;
                 case signal::SIGSEGV:
                     // SIGSEGV 默认行为：终止进程并生成核心转储
                     printf("[default_handle] SIGSEGV: Segmentation fault, terminating process %d\n", p->_pid);
-                    p->_killed = true;
+                    proc::k_pm.do_signal_exit(p, signum); // 使用信号退出函数，正确设置xstate
                     break;
                 case signal::SIGBUS:
                     // SIGBUS 默认行为：终止进程并生成核心转储
                     printf("[default_handle] SIGBUS: Bus error, terminating process %d\n", p->_pid);
-                    p->_killed = true;
+                    proc::k_pm.do_signal_exit(p, signum); // 使用信号退出函数，正确设置xstate
                     break;
                 case signal::SIGFPE:
                     // SIGFPE 默认行为：终止进程并生成核心转储
                     printf("[default_handle] SIGFPE: Floating point exception, terminating process %d\n", p->_pid);
-                    p->_killed = true;
+                    proc::k_pm.do_signal_exit(p, signum); // 使用信号退出函数，正确设置xstate
                     break;
                 case signal::SIGILL:
                     // SIGILL 默认行为：终止进程并生成核心转储
                     printf("[default_handle] SIGILL: Illegal instruction, terminating process %d\n", p->_pid);
-                    p->_killed = true;
+                    proc::k_pm.do_signal_exit(p, signum); // 使用信号退出函数，正确设置xstate
                     break;
                 case signal::SIGTRAP:
                     // SIGTRAP 默认行为：终止进程并生成核心转储
                     printf("[default_handle] SIGTRAP: Trace/breakpoint trap, terminating process %d\n", p->_pid);
-                    p->_killed = true;
+                    proc::k_pm.do_signal_exit(p, signum); // 使用信号退出函数，正确设置xstate
                     break;
                 case signal::SIGSYS:
                     // SIGSYS 默认行为：终止进程并生成核心转储
                     printf("[default_handle] SIGSYS: Bad system call, terminating process %d\n", p->_pid);
-                    p->_killed = true;
+                    proc::k_pm.do_signal_exit(p, signum); // 使用信号退出函数，正确设置xstate
+                    break;
+                case signal::SIGPIPE:
+                    // SIGPIPE 默认行为：终止进程
+                    printf("[default_handle] SIGPIPE: Broken pipe, terminating process %d\n", p->_pid);
+                    proc::k_pm.do_signal_exit(p, signum); // 使用信号退出函数，正确设置xstate
                     break;
                 case signal::SIGCHLD:
                     panic("[default_handle] SIGCHLD not implemented");
@@ -282,7 +288,7 @@ namespace proc
                 }
 
                 // 定义同步信号的优先级数组，按紧急程度排序
-                static const int sync_signals[] = {SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGTRAP, SIGSYS};
+                static const int sync_signals[] = {SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGTRAP, SIGSYS, SIGPIPE};
                 static const int num_sync_signals = sizeof(sync_signals) / sizeof(sync_signals[0]);
 
                 // 按优先级处理同步信号

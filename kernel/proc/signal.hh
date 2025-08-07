@@ -26,6 +26,7 @@ namespace proc
             constexpr int SIGILL = 4;
             constexpr int SIGTRAP = 5;
             constexpr int SIGSYS = 31;
+            constexpr int SIGPIPE = 13;
             enum class SigActionFlags : uint64_t
             {
                 NONE = 0,

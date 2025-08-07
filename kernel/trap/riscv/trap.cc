@@ -246,7 +246,6 @@ void trap_manager::usertrap()
       proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGSEGV);
       printfRed("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->_pid);
       printfRed("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-
     }
   }
   else
@@ -255,37 +254,38 @@ void trap_manager::usertrap()
     uint64 scause = r_scause();
     printfRed("usertrap(): unexpected scause %p pid=%d\n", scause, p->_pid);
     printfRed("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-    
+
     // 根据RISC-V异常原因发送相应的同步信号
-    switch (scause) {
-      case 0:  // Instruction address misaligned
-      case 1:  // Instruction access fault
-        proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGBUS);
-        proc::ipc::signal::handle_sync_signal();
-        break;
-      case 2:  // Illegal instruction
-        proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGILL);
-        proc::ipc::signal::handle_sync_signal();
-        break;
-      case 3:  // Breakpoint
-        proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGTRAP);
-        proc::ipc::signal::handle_sync_signal();
-        break;
-      case 4:  // Load address misaligned
-      case 6:  // Store/AMO address misaligned
-        proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGBUS);
-        proc::ipc::signal::handle_sync_signal();
-        break;
-      case 5:  // Load access fault
-      case 7:  // Store/AMO access fault
-        proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGSEGV);
-        proc::ipc::signal::handle_sync_signal();
-        break;
-      default:
-        // 对于未知的异常，发送SIGSYS信号
-        proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGSYS);
-        proc::ipc::signal::handle_sync_signal();
-        break;
+    switch (scause)
+    {
+    case 0: // Instruction address misaligned
+    case 1: // Instruction access fault
+      proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGBUS);
+      proc::ipc::signal::handle_sync_signal();
+      break;
+    case 2: // Illegal instruction
+      proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGILL);
+      proc::ipc::signal::handle_sync_signal();
+      break;
+    case 3: // Breakpoint
+      proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGTRAP);
+      proc::ipc::signal::handle_sync_signal();
+      break;
+    case 4: // Load address misaligned
+    case 6: // Store/AMO address misaligned
+      proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGBUS);
+      proc::ipc::signal::handle_sync_signal();
+      break;
+    case 5: // Load access fault
+    case 7: // Store/AMO access fault
+      proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGSEGV);
+      proc::ipc::signal::handle_sync_signal();
+      break;
+    default:
+      // 对于未知的异常，发送SIGSYS信号
+      proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGSYS);
+      proc::ipc::signal::handle_sync_signal();
+      break;
     }
   }
 

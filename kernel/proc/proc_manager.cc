@@ -1614,12 +1614,12 @@ namespace proc
     /// @brief 真正执行退出的逻辑
     /// @param p
     /// @param state
-    void ProcessManager::exit_proc(Pcb *p, int state)
+    void ProcessManager::exit_proc(Pcb *p)
     {
         if (p == _init_proc)
             panic("init exiting"); // 保护机制：init 进程不能退出
 
-        // printf("[exit_proc] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
+        // printf("[exit_proc] proc %s pid %d exiting\n", p->_name, p->_pid);
 
         /****************************************************************************************
          * Phase 1: 处理父子进程关系和进程状态
@@ -1701,8 +1701,7 @@ namespace proc
         _wait_lock.acquire(); // 只在需要修改父子关系时获取锁
         p->_lock.acquire();
 
-        // 设置退出状态和ZOMBIE状态
-        p->_xstate = state << 8;       // 存储退出状态（通常高字节存状态）
+        // 设置ZOMBIE状态（不设置xstate，由调用者负责）
         p->_state = ProcState::ZOMBIE; // 标记为 zombie，等待父进程回收
 
         // 如果有父进程，将当前进程的时间累计到父进程中
@@ -1725,6 +1724,35 @@ namespace proc
         panic("zombie exit");
     }
 
+    /// @brief 正常退出，设置退出状态后调用底层退出逻辑
+    /// @param p 要退出的进程
+    /// @param state 退出状态码
+    void ProcessManager::do_exit(Pcb *p, int state)
+    {
+        // 设置正常退出状态
+        p->_xstate = state << 8; // 存储退出状态（通常高字节存状态）
+        
+        printf("[do_exit] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
+        
+        // 调用底层退出逻辑
+        exit_proc(p);
+    }
+
+    /// @brief 信号退出，设置信号相关的退出状态后调用底层退出逻辑
+    /// @param p 要退出的进程
+    /// @param signal_num 导致退出的信号编号
+    void ProcessManager::do_signal_exit(Pcb *p, int signal_num)
+    {
+        // 设置信号退出状态
+        // Linux的wait状态编码：低7位存储信号编号，第8位标示是否core dump
+        p->_xstate = signal_num; // 信号退出时，低字节存信号编号
+        
+        printf("[do_signal_exit] proc %s pid %d killed by signal %d\n", p->_name, p->_pid, signal_num);
+        
+        // 调用底层退出逻辑
+        exit_proc(p);
+    }
+
     /// @brief Pass p's abandoned children to init.
     /// @param p The parent process whose children are to be reparented.
     /// p是即将去世的父亲，他的儿子们马上要成为孤儿，我们要让init来收养他们。
@@ -1745,13 +1773,13 @@ namespace proc
         _wait_lock.release();
     }
     /// @brief 当前进程或线程退出（只退出自己）
-    /// @param state   调用 exit_proc 处理退出逻辑
+    /// @param state   调用 do_exit 处理退出逻辑
     /// “一荣俱荣，一损俱损” commented by @gkq
     void ProcessManager::exit(int state)
     {
         Pcb *p = get_cur_pcb();
         printf("[exit] proc %s pid %d tid %d exiting with state %d\n", p->_name, p->_pid, p->_tid, state);
-        exit_proc(p, state);
+        do_exit(p, state);
     }
 
     /// @brief 当前线程组全部退出
@@ -1811,7 +1839,7 @@ namespace proc
         // debug_process_states();
 
         // 当前线程正常退出，其他线程会在调度时检查killed标志并自行退出
-        exit_proc(cp, status);
+        do_exit(cp, status);
     }
     void ProcessManager::sleep(void *chan, SpinLock *lock)
     {

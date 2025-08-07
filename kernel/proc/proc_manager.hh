@@ -69,7 +69,9 @@ namespace proc
         int clone(uint64 flags, uint64 stack_ptr, uint64 ptid, uint64 tls, uint64 ctid);
         Pcb *fork(Pcb *p, uint64 flags, uint64 stack_ptr, uint64 ctid, bool is_clone3);
         void fork_ret();
-        void exit_proc(Pcb *p, int state);
+        void exit_proc(Pcb *p);           // 底层退出逻辑，不设置xstate
+        void do_exit(Pcb *p, int state);  // 正常退出，设置xstate后调用exit_proc
+        void do_signal_exit(Pcb *p, int signal_num); // 信号退出，设置signal相关xstate后调用exit_proc
         void exit(int state);
         void exit_group(int status);
         int wait4(int child_pid, uint64 addr, int option);
