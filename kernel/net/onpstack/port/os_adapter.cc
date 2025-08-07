@@ -17,6 +17,7 @@
 #include "libs/klib.hh"  // 用于strcpy等函数
 #include "proc/proc_manager.hh"  // 用于进程管理
 #include "sys/syscall_defs.hh"   // 用于CLONE_*常量
+#include "timer_interface.hh" // 用于初始化pcb时间
 #if SUPPORT_PPP
 #include "ppp/negotiation_storage.hh"
 #include "ppp/ppp.hh"
@@ -107,6 +108,17 @@ UINT os_get_system_msecs(void)
 extern "C" void kernel_thread_wrapper()
 {
 	proc::Pcb *current = proc::k_pm.get_cur_pcb();
+
+	current->_lock.release();
+
+
+	// 设置进程开始运行的时间点
+	if (current->_start_tick == 0)
+	{
+		current->_start_tick = tmm::get_ticks();
+		current->_start_time = tmm::get_ticks();     // 同时设置启动时间
+		current->_start_boottime = tmm::get_ticks(); // 系统启动以来的时间
+	}
 	
 	// 从context.s0中获取线程函数指针（在创建时设置）
 	void (*thread_func)(void*) = (void(*)(void*))(current->_context.s0);

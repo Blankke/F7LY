@@ -6,7 +6,9 @@
 #include "net/onpstack/include/ip/tcp_link.hh"
 #include "net/onpstack/include/ip/tcp.hh"
 #include "net/onpstack/include/ip/udp.hh"
+#include "net/onpstack/include/bsd/socket.hh"
 #include <errno.h>
+// 注意：不包含arpa/inet.h，避免冲突
 
 namespace fs
 {
@@ -126,10 +128,36 @@ namespace fs
             return -EINVAL;
         }
 
+        // 复制地址信息
         int result = copy_sockaddr_from_user(&_local_addr, addr, addrlen);
         if (result < 0) {
             _lock.release();
             return -EFAULT;
+        }
+
+        // 创建onps socket句柄（如果还没有）
+        if (_onps_socket == INVALID_SOCKET) {
+            EN_ONPSERR onps_err;
+            _onps_socket = socket(AF_INET, 
+                                (_type == SocketType::TCP) ? 1 : 2, // SOCK_STREAM : SOCK_DGRAM
+                                0, &onps_err);
+            if (_onps_socket == INVALID_SOCKET) {
+                _lock.release();
+                return -ENOMEM;
+            }
+        }
+
+        // 调用onps bind
+        char ip_str[20];
+        inet_ntoa_safe_ext(_local_addr.sin_addr, ip_str);
+        
+        if (::bind(_onps_socket, 
+                   (_local_addr.sin_addr == 0) ? nullptr : ip_str,
+                   _local_addr.sin_port) < 0) {
+            close(_onps_socket);
+            _onps_socket = INVALID_SOCKET;
+            _lock.release();
+            return -EADDRINUSE;
         }
 
         _state = SocketState::BOUND;
@@ -209,13 +237,42 @@ namespace fs
             return -EISCONN;
         }
 
+        // 复制远程地址
         int result = copy_sockaddr_from_user(&_remote_addr, addr, addrlen);
         if (result < 0) {
             _lock.release();
             return -EFAULT;
         }
 
-        // 在实际实现中，这里应该进行真正的网络连接
+        // 创建onps socket句柄（如果还没有）
+        if (_onps_socket == INVALID_SOCKET) {
+            EN_ONPSERR onps_err;
+            _onps_socket = socket(AF_INET, 
+                                (_type == SocketType::TCP) ? 1 : 2, // SOCK_STREAM : SOCK_DGRAM
+                                0, &onps_err);
+            if (_onps_socket == INVALID_SOCKET) {
+                _lock.release();
+                return -ENOMEM;
+            }
+        }
+
+        // 进行连接
+        if (_type == SocketType::TCP) {
+            // TCP连接
+            char ip_str[20];
+            inet_ntoa_safe_ext(_remote_addr.sin_addr, ip_str);
+            
+            if (::connect(_onps_socket, ip_str, _remote_addr.sin_port, 5) < 0) {
+                close(_onps_socket);
+                _onps_socket = INVALID_SOCKET;
+                _lock.release();
+                return -ECONNREFUSED;
+            }
+        } else if (_type == SocketType::UDP) {
+            // UDP "连接"（实际上是设置默认目标地址）
+            // UDP socket 不需要真正的连接，只是记录远程地址
+        }
+
         _state = SocketState::CONNECTED;
         _lock.release();
         return 0;
@@ -229,31 +286,48 @@ namespace fs
 
         _lock.acquire();
         
-        if (_state != SocketState::CONNECTED) {
+        // 检查socket是否已创建onps句柄
+        if (_onps_socket == INVALID_SOCKET) {
             _lock.release();
             return -ENOTCONN;
         }
 
-        // 简单的实现：将数据添加到发送缓冲区
+        int result = 0;
         const uint8_t* data = static_cast<const uint8_t*>(buf);
-        
-        // 检查内存分配
-        size_t old_size = _send_buffer.size();
-        _send_buffer.resize(old_size + len);
-        if (_send_buffer.size() != old_size + len) {
-            _send_buffer.resize(old_size); // 恢复原大小
+
+        if (_type == SocketType::TCP) {
+            // TCP send
+            if (_state != SocketState::CONNECTED) {
+                _lock.release();
+                return -ENOTCONN;
+            }
+
+            // 使用onps TCP发送
+            result = ::send(_onps_socket, const_cast<UCHAR*>(data), (INT)len, 3);
+            if (result < 0) {
+                _lock.release();
+                return -EIO;
+            }
+        } else if (_type == SocketType::UDP) {
+            // UDP send (需要已连接的socket)
+            if (_state != SocketState::CONNECTED) {
+                _lock.release();
+                return -ENOTCONN;
+            }
+
+            // 使用onps UDP发送
+            result = udp_send(_onps_socket, const_cast<UCHAR*>(data), (INT)len);
+            if (result < 0) {
+                _lock.release();
+                return -EIO;
+            }
+        } else {
             _lock.release();
-            return -ENOMEM;
+            return -EOPNOTSUPP;
         }
-        
-        // 复制数据
-        memcpy(_send_buffer.data() + old_size, data, len);
-        
-        // 在实际实现中，这里应该通过网络发送数据
-        _send_buffer.clear(); // 假设立即发送完成
-        
+
         _lock.release();
-        return len;
+        return result;
     }
 
     int socket_file::recv(void *buf, size_t len, int flags)
@@ -264,62 +338,151 @@ namespace fs
 
         _lock.acquire();
         
-        if (_state != SocketState::CONNECTED) {
+        // 检查socket是否已创建onps句柄
+        if (_onps_socket == INVALID_SOCKET) {
             _lock.release();
             return -ENOTCONN;
         }
 
-        // 检查接收缓冲区是否有数据
-        if (_recv_buffer.empty()) {
-            _lock.release();
-            if (_blocking) {
-                // 在实际实现中，这里应该等待数据到达
-                return -EAGAIN;
-            } else {
-                return -EAGAIN;
+        int result = 0;
+        uint8_t* data = static_cast<uint8_t*>(buf);
+
+        if (_type == SocketType::TCP) {
+            // TCP recv
+            if (_state != SocketState::CONNECTED) {
+                _lock.release();
+                return -ENOTCONN;
             }
+
+            // 使用onps TCP接收
+            result = ::recv(_onps_socket, data, (INT)len);
+            if (result < 0) {
+                _lock.release();
+                return -EIO;
+            }
+        } else if (_type == SocketType::UDP) {
+            // UDP recv (不获取源地址)
+            result = udp_recv_upper(_onps_socket, data, len, nullptr, nullptr, -1);
+            if (result < 0) {
+                _lock.release();
+                return -EIO;
+            }
+        } else {
+            _lock.release();
+            return -EOPNOTSUPP;
         }
 
-        // 从接收缓冲区读取数据
-        size_t copy_len = eastl::min(len, _recv_buffer.size());
-        memcpy(buf, _recv_buffer.data(), copy_len);
-        
-        // 移除已读取的数据
-        _recv_buffer.erase(_recv_buffer.begin(), _recv_buffer.begin() + copy_len);
-        
         _lock.release();
-        return copy_len;
+        return result;
     }
 
     int socket_file::sendto(const void *buf, size_t len, int flags,
                            const struct sockaddr *dest_addr, socklen_t addrlen)
     {
-        if (_type != SocketType::UDP) {
-            return -EOPNOTSUPP;
-        }
-
-        if (!is_valid_address(dest_addr, addrlen)) {
+        if (!buf || len == 0) {
             return -EINVAL;
         }
 
-        // 对于UDP socket，sendto不需要连接状态
-        return send(buf, len, flags);
+        _lock.acquire();
+
+        // 检查socket是否已创建onps句柄
+        if (_onps_socket == INVALID_SOCKET) {
+            _lock.release();
+            return -ENOTCONN;
+        }
+
+        int result = 0;
+        const uint8_t* data = static_cast<const uint8_t*>(buf);
+
+        if (_type == SocketType::UDP) {
+            // UDP sendto - 需要目标地址
+            if (!dest_addr || addrlen < sizeof(struct sockaddr_in)) {
+                _lock.release();
+                return -EINVAL;
+            }
+
+            const struct sockaddr_in* dest_addr_in = 
+                reinterpret_cast<const struct sockaddr_in*>(dest_addr);
+            
+            if (dest_addr_in->sin_family != AF_INET) {
+                _lock.release();
+                return -EAFNOSUPPORT;
+            }
+
+            // 使用onps UDP sendto
+            char dest_ip_str[20];
+            inet_ntoa_safe_ext(dest_addr_in->sin_addr, dest_ip_str);
+            
+            result = ::sendto(_onps_socket, dest_ip_str, dest_addr_in->sin_port,
+                            const_cast<UCHAR*>(data), (INT)len);
+            
+            if (result < 0) {
+                _lock.release();
+                return -EIO;
+            }
+        } else if (_type == SocketType::TCP) {
+            // TCP 不支持sendto，应该使用send
+            printfRed("[socket_file::sendto] TCP socket does not support sendto\n");
+            _lock.release();
+            return -EFAULT;
+        } else {
+            _lock.release();
+            return -EOPNOTSUPP;
+        }
+
+        _lock.release();
+        return result;
     }
 
     int socket_file::recvfrom(void *buf, size_t len, int flags,
                              struct sockaddr *src_addr, socklen_t *addrlen)
     {
-        if (_type != SocketType::UDP) {
+        if (!buf || len == 0) {
+            return -EINVAL;
+        }
+
+        _lock.acquire();
+
+        // 检查socket是否已创建onps句柄
+        if (_onps_socket == INVALID_SOCKET) {
+            _lock.release();
+            return -ENOTCONN;
+        }
+
+        int result = 0;
+        uint8_t* data = static_cast<uint8_t*>(buf);
+
+        if (_type == SocketType::UDP) {
+            // UDP recvfrom - 获取源地址
+            UINT from_ip = 0;
+            USHORT from_port = 0;
+            
+            result = ::recvfrom(_onps_socket, data, (INT)len, &from_ip, &from_port);
+            
+            if (result < 0) {
+                _lock.release();
+                return -EIO;
+            }
+
+            // 如果用户提供了地址缓冲区，填充源地址
+            if (result > 0 && src_addr && addrlen && *addrlen >= sizeof(struct sockaddr_in)) {
+                struct sockaddr_in* src_addr_in = reinterpret_cast<struct sockaddr_in*>(src_addr);
+                memset(src_addr_in, 0, sizeof(struct sockaddr_in));
+                src_addr_in->sin_family = AF_INET;
+                src_addr_in->sin_addr = from_ip;
+                src_addr_in->sin_port = from_port;
+                *addrlen = sizeof(struct sockaddr_in);
+            }
+        } else if (_type == SocketType::TCP) {
+            // TCP 不支持recvfrom，应该使用recv
+            _lock.release();
+            return -EOPNOTSUPP;
+        } else {
+            _lock.release();
             return -EOPNOTSUPP;
         }
 
-        int result = recv(buf, len, flags);
-        
-        // 如果用户提供了地址缓冲区，复制源地址
-        if (result > 0 && src_addr && addrlen) {
-            copy_sockaddr_to_user(src_addr, addrlen, &_remote_addr);
-        }
-        
+        _lock.release();
         return result;
     }
 
@@ -334,13 +497,13 @@ namespace fs
 
         // 在实际实现中，这里应该根据how参数关闭读/写/双向
         switch (how) {
-            case SHUT_RD:
+            case 0: // SHUT_RD
                 // 关闭读
                 break;
-            case SHUT_WR:
+            case 1: // SHUT_WR
                 // 关闭写
                 break;
-            case SHUT_RDWR:
+            case 2: // SHUT_RDWR
                 // 关闭读写
                 _state = SocketState::CLOSED;
                 break;
@@ -356,7 +519,7 @@ namespace fs
     int socket_file::setsockopt(int level, int optname, const void *optval, socklen_t optlen)
     {
         if (!optval) {
-            return -EFAULT;
+            return -EINVAL;
         }
 
         _lock.acquire();

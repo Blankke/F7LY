@@ -7,6 +7,13 @@
 #define AF_INET         2       /* internetwork: UDP, TCP, etc. */
 #define AF_INET6        10      /* IPv6 */
 
+// Protocol families (same as address families)
+#define PF_UNSPEC       AF_UNSPEC
+#define PF_UNIX         AF_UNIX
+#define PF_LOCAL        AF_LOCAL
+#define PF_INET         AF_INET
+#define PF_INET6        AF_INET6
+
 // Socket types
 #define SOCK_STREAM     1       /* stream socket */
 #define SOCK_DGRAM      2       /* datagram socket */

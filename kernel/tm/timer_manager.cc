@@ -99,6 +99,7 @@ namespace tmm
 		proc::Pcb *p = proc::k_pm.get_cur_pcb(); // 获取当前进程控制块
 
 		_lock.acquire();
+
 		tick_tmp = trap_mgr.ticks; // 记录开始时的tick值
 		
 		// 循环等待直到经过了n个tick
@@ -132,19 +133,21 @@ namespace tmm
 		uint64 n = tv.tv_sec * tmm::get_main_frequence();
 		uint64 cpt = tmm::cycles_per_tick(); // 每个tick的周期数
 		
-		// printfBlue("sleep from tv: %u ticks\n", n);
-		
 		// 将微秒转换为周期数并累加
 		n += tmm::usec_to_time_stamp(tv.tv_usec);
-		// printfBlue("sleep from tv: %u ticks\n", n);
 		
 		// 将总周期数转换为tick数
 		n /= cpt;
-		// printfBlue("sleep from tv: %u ticks\n", n);
 		
-		if (n == 0)
-			return 0; // 如果转换结果为0，直接返回（无需睡眠）
-			
+		// if (n == 0)
+		// 	return 0; // 如果转换结果为0，直接返回（无需睡眠）
+		
+		if ( n == 0 ){
+			n = 1;
+		}
+
+		printfBlue("sleep from tv: %u ticks\n", n);
+		
 		return sleep_n_ticks(n); // 执行实际的tick睡眠
 	}
 

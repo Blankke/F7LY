@@ -144,34 +144,34 @@ namespace net
     void virtio_recv_thread(void *param)
     {
         printf("[virtio_net_adapter] Receive thread started\n");
+        printfRed("未实现\n");
+        // PST_NETIF netif = (PST_NETIF)param;
+        // if (!netif) {
+        //     printf("[virtio_net_adapter] Invalid netif parameter\n");
+        //     return;
+        // }
+
+        // recv_thread_running = true;
         
-        PST_NETIF netif = (PST_NETIF)param;
-        if (!netif) {
-            printf("[virtio_net_adapter] Invalid netif parameter\n");
-            return;
-        }
-        
-        recv_thread_running = true;
-        
-        while (recv_thread_running) {
-            uint32 packet_len = sizeof(packet_buffer);
+        // while (recv_thread_running) {
+        //     uint32 packet_len = sizeof(packet_buffer);
             
-            // Try to receive a packet from virtio net
-            int result = net::virtio_net_recv(packet_buffer, &packet_len);
+        //     // Try to receive a packet from virtio net
+        //     int result = net::virtio_net_recv(packet_buffer, &packet_len);
             
-            if (result == 0 && packet_len > 0) {
-                // Successfully received a packet
-                printf("[virtio_net_adapter] Received packet of length %d\n", packet_len);
+        //     if (result == 0 && packet_len > 0) {
+        //         // Successfully received a packet
+        //         printf("[virtio_net_adapter] Received packet of length %d\n", packet_len);
                 
-                // Forward to onps ethernet layer
-                ethernet_ii_recv(netif, packet_buffer, packet_len);
-            } else {
-                // No packet available, sleep briefly to avoid busy waiting
-                os_sleep_ms(1); // Sleep for 1ms
-            }
-        }
+        //         // Forward to onps ethernet layer
+        //         ethernet_ii_recv(netif, packet_buffer, packet_len);
+        //     } else {
+        //         // No packet available, sleep briefly to avoid busy waiting
+        //         os_sleep_ms(1); // Sleep for 1ms
+        //     }
+        // }
         
-        printf("[virtio_net_adapter] Receive thread stopped\n");
+        // printf("[virtio_net_adapter] Receive thread stopped\n");
     }
     
     // Start the receive thread  
