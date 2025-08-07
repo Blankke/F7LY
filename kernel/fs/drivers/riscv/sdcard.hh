@@ -185,60 +185,67 @@ typedef struct {				/*!< SDMMC Structure        */
 #define MCI_BMOD_FB             (1 << 1)		/*!< Fixed bursts */
 #define MCI_BMOD_SWR            (1 << 0)		/*!< Software reset of internal registers */
 
-#define SDIO_CMD_INT_MSK    0xA146       /* Interrupts to be enabled for CMD */
-#define SDIO_DATA_INT_MSK   0xBE88       /* Interrupts to enable for data transfer */
-#define SDIO_CARD_INT_MSK   (1UL << 16)  /* SDIO Card interrupt */
+/** @brief SDIO中断掩码定义 - 控制哪些中断被使能 */
+#define SDIO_CMD_INT_MSK    0xA146       /*!< 命令相关中断掩码：命令完成、超时、CRC错误等 */
+#define SDIO_DATA_INT_MSK   0xBE88       /*!< 数据传输中断掩码：数据完成、FIFO就绪、传输错误等 */
+#define SDIO_CARD_INT_MSK   (1UL << 16)  /*!< SDIO卡中断掩码：来自SDIO功能的中断 */
 
-/** @brief	SDIO Command misc options */
-#define SD_WAIT_PRE			 (1UL << 13)
-#define SDIO_CMD_CRC         (1UL << 8)  /**! Response must have a valid CRC */
-#define SDIO_CMD_DATA        (1UL << 9)  /**! Command is a data transfer command */
-#define SD_CMD_WRITE		(1L << 10)
+/** @brief SDIO命令选项标志 - 用于配置命令属性 */
+#define SD_WAIT_PRE			 (1UL << 13)  /*!< 等待前一个数据传输完成 */
+#define SDIO_CMD_CRC         (1UL << 8)   /*!< 响应必须有有效的CRC校验 */
+#define SDIO_CMD_DATA        (1UL << 9)   /*!< 命令是数据传输命令 */
+#define SD_CMD_WRITE		(1L << 10)    /*!< 数据传输方向：写(1)或读(0) */
 
-/** @brief	SDIO Command Responses */
-#define SDIO_CMD_RESP_R1     (1UL << 6)
-#define SDIO_CMD_RESP_R2     (3UL << 6)
-#define SDIO_CMD_RESP_R3     (1UL << 6)
-#define SDIO_CMD_RESP_R4     (1UL << 6)
-#define SDIO_CMD_RESP_R5     (1UL << 6)
-#define SDIO_CMD_RESP_R6     (1UL << 6)
+/** @brief SDIO命令响应类型定义 - 根据SD规范定义的响应格式 */
+#define SDIO_CMD_RESP_R1     (1UL << 6)   /*!< R1响应：48位，包含卡状态 */
+#define SDIO_CMD_RESP_R2     (3UL << 6)   /*!< R2响应：136位，包含CID或CSD */
+#define SDIO_CMD_RESP_R3     (1UL << 6)   /*!< R3响应：48位，包含OCR */
+#define SDIO_CMD_RESP_R4     (1UL << 6)   /*!< R4响应：48位，SDIO专用 */
+#define SDIO_CMD_RESP_R5     (1UL << 6)   /*!< R5响应：48位，SDIO专用 */
+#define SDIO_CMD_RESP_R6     (1UL << 6)   /*!< R6响应：48位，包含RCA */
 
-/** @brief	SDIO Command misc options */
-#define SD_WAIT_PRE			 (1UL << 13)
-#define SDIO_CMD_CRC         (1UL << 8)  /**! Response must have a valid CRC */
-#define SDIO_CMD_DATA        (1UL << 9)  /**! Command is a data transfer command */
-#define SD_CMD_WRITE		(1L << 10)
+/** @brief SD卡命令定义 - 根据SD规范定义的标准命令 */
 
-/** @brief	List of commands */
-#define CMD0            (0 | (1 << 15))
-#define CMD2			(2 | SDIO_CMD_RESP_R2)
-#define CMD3			(3 | SDIO_CMD_RESP_R6)
-#define CMD5            (5 | SDIO_CMD_RESP_R4)
-#define CMD8			(8 | (1UL << 6))
-#define CMD3            (3 | SDIO_CMD_RESP_R6)
-#define CMD7            (7 | SDIO_CMD_RESP_R1)
-#define CMD16           (16 | SDIO_CMD_RESP_R1)
-#define CMD17           (17 | SDIO_CMD_RESP_R1 | SDIO_CMD_DATA | SD_WAIT_PRE)
-#define CMD24           (24 | SDIO_CMD_RESP_R1 | SDIO_CMD_DATA | SD_CMD_WRITE | SD_WAIT_PRE)
-#define CMD52           (52 | SDIO_CMD_RESP_R5 | SDIO_CMD_CRC)
-#define CMD53           (53 | SDIO_CMD_RESP_R5 | SDIO_CMD_DATA | SDIO_CMD_CRC)
-#define CMD55			(55 | (1UL << 6))
-#define ACMD41			(41 | (1UL << 6))
+// 基础命令 - 用于卡识别和初始化
+#define CMD0            (0 | (1 << 15))         /*!< GO_IDLE_STATE: 重置SD卡到idle状态 */
+#define CMD2			(2 | SDIO_CMD_RESP_R2)   /*!< ALL_SEND_CID: 所有卡发送CID */
+#define CMD3			(3 | SDIO_CMD_RESP_R6)   /*!< SEND_RELATIVE_ADDR: 要求卡发布RCA */
+#define CMD5            (5 | SDIO_CMD_RESP_R4)   /*!< IO_SEND_OP_COND: SDIO设备检测 */
+#define CMD8			(8 | (1UL << 6))         /*!< SEND_IF_COND: 检测SD2.0设备和电压 */
+#define CMD7            (7 | SDIO_CMD_RESP_R1)   /*!< SELECT_CARD: 选择/取消选择卡 */
+#define CMD16           (16 | SDIO_CMD_RESP_R1)  /*!< SET_BLOCKLEN: 设置块长度 */
 
+// 数据传输命令
+#define CMD17           (17 | SDIO_CMD_RESP_R1 | SDIO_CMD_DATA | SD_WAIT_PRE)  /*!< READ_SINGLE_BLOCK: 单块读取 */
+#define CMD24           (24 | SDIO_CMD_RESP_R1 | SDIO_CMD_DATA | SD_CMD_WRITE | SD_WAIT_PRE)  /*!< WRITE_BLOCK: 单块写入 */
+
+// SDIO特定命令
+#define CMD52           (52 | SDIO_CMD_RESP_R5 | SDIO_CMD_CRC)    /*!< IO_RW_DIRECT: SDIO直接读写 */
+#define CMD53           (53 | SDIO_CMD_RESP_R5 | SDIO_CMD_DATA | SDIO_CMD_CRC)  /*!< IO_RW_EXTENDED: SDIO扩展读写 */
+
+// 应用专用命令(需要先发送CMD55)
+#define CMD55			(55 | (1UL << 6))        /*!< APP_CMD: 下一个命令是应用专用命令 */
+#define ACMD41			(41 | (1UL << 6))        /*!< SD_SEND_OP_COND: SD卡初始化命令 */
+
+/**
+ * @brief SDIO事件类型枚举
+ * 
+ * 定义SDIO驱动中使用的各种事件类型，用于状态机管理和事件通知
+ */
 enum SDIO_EVENT
 {
-	SDIO_START_COMMAND,  /**! SDIO driver is about to start a command transfer */
-	SDIO_START_DATA,     /**! SDIO driver is about to start a data transfer */
-	SDIO_WAIT_DELAY,     /**! SDIO driver needs to wait for given milli seconds */
-	SDIO_WAIT_COMMAND,   /**! SDIO driver is waiting for a command to complete */
-	SDIO_WAIT_DATA,      /**! SDIO driver is waiting for data transfer to complete */
+	SDIO_START_COMMAND,  /*!< SDIO驱动即将开始命令传输 */
+	SDIO_START_DATA,     /*!< SDIO驱动即将开始数据传输 */
+	SDIO_WAIT_DELAY,     /*!< SDIO驱动需要等待指定的毫秒数 */
+	SDIO_WAIT_COMMAND,   /*!< SDIO驱动正在等待命令完成 */
+	SDIO_WAIT_DATA,      /*!< SDIO驱动正在等待数据传输完成 */
 
-	SDIO_CARD_DETECT,    /**! SDIO driver has detected a card */
-	SDIO_CMD_ERR,        /**! Error in command transfer */
-	SDIO_CMD_DONE,       /**! Command transfer successful */
-	SDIO_DATA_ERR,       /**! Data transfer error */
-	SDIO_DATA_DONE,      /**! Data transfer successful */
-	SDIO_CARD_INT,       /**! SDIO Card interrupt (from a function) */
+	SDIO_CARD_DETECT,    /*!< SDIO驱动检测到卡插入/拔出 */
+	SDIO_CMD_ERR,        /*!< 命令传输错误 */
+	SDIO_CMD_DONE,       /*!< 命令传输成功完成 */
+	SDIO_DATA_ERR,       /*!< 数据传输错误 */
+	SDIO_DATA_DONE,      /*!< 数据传输成功完成 */
+	SDIO_CARD_INT,       /*!< SDIO卡中断(来自功能) */
 };
 
 int sd_test(void);
