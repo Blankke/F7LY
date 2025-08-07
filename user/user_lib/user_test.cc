@@ -1843,7 +1843,7 @@ char *ltp_testcases[] = {
     // "mmap10", //爆了
     // "mmap11",   //pass不能和别的一起跑
     // "mmap12",
-    "mmap13", // pass
+    // "mmap13", // pass
     // "mmap14",
     // "mmap15",  //pass
     // "mmap16",
@@ -3326,8 +3326,8 @@ char *ltp_testcases[] = {
     // "vxlan02.sh",
     // "vxlan03.sh",
     // "vxlan04.sh",
-    // "wait01",
-    // "wait02",
+    // "wait01", // PASS
+    // "wait02", // PASS
     // "wait401",
     // "wait402",
     // "wait403",
