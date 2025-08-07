@@ -39,6 +39,10 @@
 
 // RISC-V virtio-mmio 传输页，QEMU virt 机器最多提供 8 个槽位。
 // 设备顺序由 QEMU 命令行决定，网卡不能固定假设一定在最后一个槽位。
+#define VIRT_OFFSET 0x3F00000000L
+#define SD_BASE 0x16020000L
+#define SD_BASE_V (SD_BASE + VIRT_OFFSET)
+
 #define VIRTIO0 0x10001000
 #define VIRTIO1 0x10002000
 #define VIRTIO_NET 0x10008000

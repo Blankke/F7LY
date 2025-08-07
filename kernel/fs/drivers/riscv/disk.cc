@@ -1,6 +1,6 @@
 #include "fs/drivers/riscv/disk.hh"
 #include "fs/drivers/riscv/sdcard.hh"
-#include "fs/drivers/riscv/virtio2.hh"
+#include "fs/drivers/virtio_blk.hh"
 #include "fs/drivers/riscv/ramdisk.hh"
 void disk_init(void)
 {
@@ -27,7 +27,7 @@ void disk_rw(buf *buf, bool write)
         // printfOrange("disk_rw: read blockno %u\n", buf->blockno);
         sd_read((uint32 *)buf->data, 128, buf->blockno);
     }
-    #else
+#else
     if (write)
     {
         ramdisk_write(buf);
