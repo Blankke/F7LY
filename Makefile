@@ -1,4 +1,10 @@
 EASTL_DIR := thirdparty/EASTL
+
+# ===== 并行编译配置 =====
+# 默认使用所有可用 CPU 核心进行并行编译
+NPROC := $(shell nproc)
+MAKEFLAGS += -j$(NPROC)
+
 # ===== 架构选择 =====
 ARCH ?= riscv
 KERNEL_PREFIX=`pwd`
@@ -223,7 +229,7 @@ $(KERNEL_BIN): $(KERNEL_ELF)
 
 export BUILDPATH := $(BUILD_DIR)
 $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a:
-	@$(MAKE) -C $(EASTL_DIR) CROSS_COMPILE=$(CROSS_COMPILE)
+	@$(MAKE) -C $(EASTL_DIR) CROSS_COMPILE=$(CROSS_COMPILE) -j$(NPROC)
 
 
 run: build
