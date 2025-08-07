@@ -5321,7 +5321,234 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_pselect6()
     {
-        panic("未实现该系统调用");
+        // pselect6(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, 
+        //          const struct timespec *timeout, const sigset_t *sigmask)
+        
+        int nfds;
+        uint64 readfds_addr, writefds_addr, exceptfds_addr, timeout_addr, sigmask_addr;
+        
+        // 获取参数
+        if (_arg_int(0, nfds) < 0) {
+            printfRed("[SyscallHandler::sys_pselect6] Error getting nfds parameter\n");
+            return SYS_EINVAL;
+        }
+        if (_arg_addr(1, readfds_addr) < 0) {
+            printfRed("[SyscallHandler::sys_pselect6] Error getting readfds address\n");
+            return SYS_EFAULT;
+        }
+        if (_arg_addr(2, writefds_addr) < 0) {
+            printfRed("[SyscallHandler::sys_pselect6] Error getting writefds address\n");
+            return SYS_EFAULT;
+        }
+        if (_arg_addr(3, exceptfds_addr) < 0) {
+            printfRed("[SyscallHandler::sys_pselect6] Error getting exceptfds address\n");
+            return SYS_EFAULT;
+        }
+        if (_arg_addr(4, timeout_addr) < 0) {
+            printfRed("[SyscallHandler::sys_pselect6] Error getting timeout address\n");
+            return SYS_EFAULT;
+        }
+        if (_arg_addr(5, sigmask_addr) < 0) {
+            printfRed("[SyscallHandler::sys_pselect6] Error getting sigmask address\n");
+            return SYS_EFAULT;
+        }
+        
+        // 参数验证
+        if (nfds < 0 || nfds > NOFILE) {
+            printfRed("[SyscallHandler::sys_pselect6] Invalid nfds: %d (max: %d)\n", nfds, NOFILE);
+            return SYS_EINVAL;
+        }
+        
+        proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
+        if (p == nullptr) {
+            printfRed("[SyscallHandler::sys_pselect6] Failed to get current process\n");
+            return SYS_ESRCH;
+        }
+        
+        mem::PageTable *pt = p->get_pagetable();
+        if (pt == nullptr) {
+            printfRed("[SyscallHandler::sys_pselect6] Failed to get process page table\n");
+            return SYS_EFAULT;
+        }
+        
+        // 保存原始信号掩码
+        uint64 orig_sigmask = p->_sigmask;
+        
+        // 处理超时时间
+        int64 timeout_us = -1;  // -1表示阻塞
+        tmm::timespec ts;
+        if (timeout_addr != 0) {
+            if (mem::k_vmm.copy_in(*pt, &ts, timeout_addr, sizeof(ts)) < 0) {
+                printfRed("[SyscallHandler::sys_pselect6] Error copying timeout from user space\n");
+                return SYS_EFAULT;
+            }
+            
+            if (ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000) {
+                printfRed("[SyscallHandler::sys_pselect6] Invalid timeout values: sec=%ld, nsec=%ld\n", 
+                         ts.tv_sec, ts.tv_nsec);
+                return SYS_EINVAL;
+            }
+            
+            if (ts.tv_sec == 0 && ts.tv_nsec == 0) {
+                timeout_us = 0;  // 立即返回
+            } else {
+                timeout_us = ts.tv_sec * 1000000LL + ts.tv_nsec / 1000;
+            }
+        }
+        
+        // 处理信号掩码
+        if (sigmask_addr != 0) {
+            uint64 new_sigmask;
+            if (mem::k_vmm.copy_in(*pt, &new_sigmask, sigmask_addr, sizeof(new_sigmask)) < 0) {
+                printfRed("[SyscallHandler::sys_pselect6] Error copying sigmask from user space\n");
+                return SYS_EFAULT;
+            }
+            p->_sigmask = new_sigmask;
+        }
+        
+        // fd_set位图大小(字节数)
+        const int fdset_bytes = (FD_SETSIZE + 7) / 8;
+        
+        // 从用户空间拷贝fd_set
+        uint8 readfds[fdset_bytes], writefds[fdset_bytes], exceptfds[fdset_bytes];
+        uint8 orig_readfds[fdset_bytes], orig_writefds[fdset_bytes], orig_exceptfds[fdset_bytes];
+        
+        memset(readfds, 0, fdset_bytes);
+        memset(writefds, 0, fdset_bytes);
+        memset(exceptfds, 0, fdset_bytes);
+        memset(orig_readfds, 0, fdset_bytes);
+        memset(orig_writefds, 0, fdset_bytes);
+        memset(orig_exceptfds, 0, fdset_bytes);
+        
+        if (readfds_addr != 0) {
+            if (mem::k_vmm.copy_in(*pt, readfds, readfds_addr, fdset_bytes) < 0) {
+                printfRed("[SyscallHandler::sys_pselect6] Error copying readfds from user space\n");
+                p->_sigmask = orig_sigmask;
+                return SYS_EFAULT;
+            }
+            memcpy(orig_readfds, readfds, fdset_bytes);
+        }
+        
+        if (writefds_addr != 0) {
+            if (mem::k_vmm.copy_in(*pt, writefds, writefds_addr, fdset_bytes) < 0) {
+                printfRed("[SyscallHandler::sys_pselect6] Error copying writefds from user space\n");
+                p->_sigmask = orig_sigmask;
+                return SYS_EFAULT;
+            }
+            memcpy(orig_writefds, writefds, fdset_bytes);
+        }
+        
+        if (exceptfds_addr != 0) {
+            if (mem::k_vmm.copy_in(*pt, exceptfds, exceptfds_addr, fdset_bytes) < 0) {
+                printfRed("[SyscallHandler::sys_pselect6] Error copying exceptfds from user space\n");
+                p->_sigmask = orig_sigmask;
+                return SYS_EFAULT;
+            }
+            memcpy(orig_exceptfds, exceptfds, fdset_bytes);
+        }
+        
+        // 记录开始时间(微秒)
+        tmm::timeval start_time = tmm::k_tm.get_time_val();
+        uint64 start_us = start_time.tv_sec * 1000000ULL + start_time.tv_usec;
+        
+        int ready_count = 0;
+        
+        // 主循环：检查文件描述符状态
+        while (true) {
+            ready_count = 0;
+            
+            // 清空结果fd_set
+            memset(readfds, 0, fdset_bytes);
+            memset(writefds, 0, fdset_bytes);
+            memset(exceptfds, 0, fdset_bytes);
+            
+            // 检查每个文件描述符
+            for (int fd = 0; fd < nfds; fd++) {
+                // 检查读fd_set
+                if (readfds_addr != 0 && (orig_readfds[fd / 8] & (1 << (fd % 8)))) {
+                    fs::file *f = p->get_open_file(fd);
+                    if (f == nullptr) {
+                        printfRed("[SyscallHandler::sys_pselect6] Invalid file descriptor: %d\n", fd);
+                        p->_sigmask = orig_sigmask;
+                        return SYS_EBADF;
+                    }
+                    if (f->read_ready()) {
+                        readfds[fd / 8] |= (1 << (fd % 8));
+                        ready_count++;
+                    }
+                }
+                
+                // 检查写fd_set
+                if (writefds_addr != 0 && (orig_writefds[fd / 8] & (1 << (fd % 8)))) {
+                    fs::file *f = p->get_open_file(fd);
+                    if (f == nullptr) {
+                        printfRed("[SyscallHandler::sys_pselect6] Invalid file descriptor: %d\n", fd);
+                        p->_sigmask = orig_sigmask;
+                        return SYS_EBADF;
+                    }
+                    if (f->write_ready()) {
+                        writefds[fd / 8] |= (1 << (fd % 8));
+                        ready_count++;
+                    }
+                }
+                
+                // exceptfds暂时不支持，保持为空
+            }
+            
+            // 如果有就绪的文件描述符，退出循环
+            if (ready_count > 0)
+                break;
+            
+            // 检查超时
+            if (timeout_us == 0) {
+                // 立即返回
+                break;
+            } else if (timeout_us > 0) {
+                tmm::timeval current_time = tmm::k_tm.get_time_val();
+                uint64 current_us = current_time.tv_sec * 1000000ULL + current_time.tv_usec;
+                if (current_us - start_us >= (uint64)timeout_us) {
+                    // 超时
+                    break;
+                }
+            }
+            
+            // 检查信号 - 检查是否有未被屏蔽的待处理信号
+            if (p->_signal & ~p->_sigmask) {
+                // 有未被屏蔽的信号待处理
+                p->_sigmask = orig_sigmask;
+                return SYS_EINTR;
+            }
+            
+            // 让出CPU
+            proc::k_scheduler.yield();
+        }
+        
+        // 恢复原始信号掩码
+        p->_sigmask = orig_sigmask;
+        
+        // 将结果写回用户空间
+        if (readfds_addr != 0) {
+            if (mem::k_vmm.copy_out(*pt, readfds_addr, readfds, fdset_bytes) < 0) {
+                printfRed("[SyscallHandler::sys_pselect6] Error copying readfds to user space\n");
+                return SYS_EFAULT;
+            }
+        }
+        
+        if (writefds_addr != 0) {
+            if (mem::k_vmm.copy_out(*pt, writefds_addr, writefds, fdset_bytes) < 0) {
+                printfRed("[SyscallHandler::sys_pselect6] Error copying writefds to user space\n");
+                return SYS_EFAULT;
+            }
+        }
+        
+        if (exceptfds_addr != 0) {
+            if (mem::k_vmm.copy_out(*pt, exceptfds_addr, exceptfds, fdset_bytes) < 0) {
+                printfRed("[SyscallHandler::sys_pselect6] Error copying exceptfds to user space\n");
+                return SYS_EFAULT;
+            }
+        }
+        
+        return ready_count;
     }
     uint64 SyscallHandler::sys_sync()
     {

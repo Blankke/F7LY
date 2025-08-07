@@ -282,14 +282,14 @@ int ltp_test(const char *path = musl_dir)
 }
 int final_test_musl()
 {
-    //interrupt
+    // interrupt
     printf("#### OS COMP TEST GROUP START interrupts-test1-musl ####\n");
     run_test("/musl/interrupts-test-1");
     printf("#### OS COMP TEST GROUP END interrupts-test1-musl ####\n\n");
     printf("#### OS COMP TEST GROUP START interrupts-test2-musl ####\n");
     run_test("/musl/interrupts-test-2");
     printf("#### OS COMP TEST GROUP END interrupts-test2-musl ####\n\n");
-    //copy-file-range
+    // copy-file-range
     printf("#### OS COMP TEST GROUP START copy-file-range-test1-musl ####\n");
     run_test("/musl/copy-file-range-test-1");
     printf("#### OS COMP TEST GROUP END copy-file-range-test1-musl ####\n\n");
@@ -302,7 +302,7 @@ int final_test_musl()
     printf("#### OS COMP TEST GROUP START copy-file-range-test4-musl ####");
     run_test("/musl/copy-file-range-test-4");
     printf("#### OS COMP TEST GROUP END copy-file-range-test4-musl ####\n\n");
-    //splice
+    // splice
     char *splice_argv1[] = {"test_splice", "1", NULL};
     printf("#### OS COMP TEST GROUP START splice-test1-musl ####\n");
     run_test("/musl/test_splice", splice_argv1, 0);
@@ -328,14 +328,14 @@ int final_test_musl()
 
 int final_test_glibc()
 {
-    //interrupt
+    // interrupt
     printf("#### OS COMP TEST GROUP START interrupts-test1-glibc ####\n");
     run_test("/glibc/interrupts-test-1");
     printf("#### OS COMP TEST GROUP END interrupts-test1-glibc ####\n");
     printf("#### OS COMP TEST GROUP START interrupts-test2-glibc ####\n");
     run_test("/glibc/interrupts-test-2");
     printf("#### OS COMP TEST GROUP END interrupts-test2-glibc ####\n\n");
-    //copy-file-range
+    // copy-file-range
     printf("#### OS COMP TEST GROUP START copy-file-range-test1-glibc ####\n");
     run_test("/glibc/copy-file-range-test-1");
     printf("#### OS COMP TEST GROUP END copy-file-range-test1-glibc ####\n\n");
@@ -348,7 +348,7 @@ int final_test_glibc()
     printf("#### OS COMP TEST GROUP START copy-file-range-test4-glibc ####\n");
     run_test("/glibc/copy-file-range-test-4");
     printf("#### OS COMP TEST GROUP END copy-file-range-test4-glibc ####\n\n");
-    //splice
+    // splice
     char *splice_argv1[] = {"test_splice", "1", NULL};
     printf("#### OS COMP TEST GROUP START splice-test1-glibc ####\n");
     run_test("/glibc/test_splice", splice_argv1, 0);
@@ -372,7 +372,6 @@ int final_test_glibc()
     return 0;
 }
 
-
 int git_test(const char *path)
 {
     chdir(path);
@@ -380,7 +379,7 @@ int git_test(const char *path)
     char *argv[8] = {0};
     char *envp[] = {
         "HOME=/musl", // 设置 HOME
-        NULL                        // 必须以 NULL 结尾
+        NULL          // 必须以 NULL 结尾
     };
     // argv[0] = "git";
     // argv[1] = "help";
@@ -2171,12 +2170,12 @@ char *ltp_testcases[] = {
     // "process_vm01",
     // "profil01",
     // "prot_hsymlinks",
-    // "pselect01",
+    // "pselect01", // /bin/sh
     // "pselect01_64",
-    // "pselect02",
-    // "pselect02_64",
-    // "pselect03",
-    // "pselect03_64",
+    // "pselect02", // pass
+    // "pselect02_64", // pass
+    // "pselect03", // pass
+    // "pselect03_64", // pass
     // "pt_test",
     // "ptem01",
     // "pth_str01",
