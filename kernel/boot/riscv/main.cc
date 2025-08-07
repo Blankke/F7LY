@@ -85,15 +85,15 @@ void main()
 
     syscall::k_syscall_handler.init(); // 初始化系统调用处理器
 
-    proc::k_pm.user_init(); // 初始化用户进程
 
     /*********************8888 */
 
     // virtio_disk_init2(); // 初始化 rootfs的块设备
 
+    proc::k_pm.user_init(); // 初始化用户进程
     disk_init();  // emulated hard disk ps:如果使用SDCard需要修改
-    
-    printfGreen("virtio_disk_init done\n");
+
+    printfGreen("disk_init done\n");
     init_fs_table();     // fs_table init
     printfGreen("init_fs_table done\n");
     binit();             // buffer cache

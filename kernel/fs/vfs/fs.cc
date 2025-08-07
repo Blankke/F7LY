@@ -53,6 +53,7 @@ void filesystem_init(void)
     static char root_path[] = "/";
     fs_mount(ROOTDEV, EXT4, root_path, 0, NULL); // 挂载文件系统
     dir_init();
+    printfGreen("filesystem_init done\n");
 }
 
 void dir_init(void)

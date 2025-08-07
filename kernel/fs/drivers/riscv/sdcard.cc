@@ -348,6 +348,7 @@ uint32 SD_Card_Init(SDMMC_T *pSDMMC, uint32 freq) {
     SD_Send_Command(pSDMMC, CMD55, 0);
     SD_Send_Command(pSDMMC, ACMD41, 0x40100000);
     val = sdioif->response[0];
+    printf("response: %p\n", val);
   } while ((val & 0x80000000) == 0);
 
   printfPink("response: %p\n", val);
