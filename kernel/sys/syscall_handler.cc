@@ -2414,8 +2414,9 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_rt_sigreturn()
     {
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
         proc::ipc::signal::sig_return();
-        return 0;
+        return p->_trapframe->a0; // 当前架构会把a0覆盖, 所以只能返回回去
     }
 
     //================================== busybox===================================================

@@ -205,6 +205,9 @@ void trap_manager::usertrap()
 
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
 
+  p->_trapframe->epc = r_sepc();
+  uint64 cause = r_scause();
+
   // 时间统计：从用户态切换到内核态
   uint64 cur_tick = tmm::get_ticks();
   if (p->_last_user_tick > 0)
@@ -216,8 +219,6 @@ void trap_manager::usertrap()
   // 记录进入内核态的时间点
   p->_kernel_entry_tick = cur_tick;
 
-  p->_trapframe->epc = r_sepc();
-  uint64 cause = r_scause();
   if (cause == 8)
   {
     if (p->is_killed())

@@ -516,6 +516,13 @@ namespace proc
                 {
                     // 原有的单参数处理逻辑
                     p->_trapframe->sp -= PGSIZE;
+                    // 在栈顶写入返回地址标记
+                    uint64 ret_marker = 0;
+                    if (mem::k_vmm.copy_out(*p->get_pagetable(), p->get_trapframe()->sp, &ret_marker, sizeof(uint64)) < 0)
+                    {
+                        panic("[do_handle] Failed to write return marker to user stack");
+                        return;
+                    }
                     p->_trapframe->a0 = signum;
                 }
 
