@@ -44,7 +44,7 @@ typedef struct {				/*!< SDMMC Structure        */
 } SDMMC_T;
 
 
-#define SDMMC                 ((SDMMC_T  *) SD_BASE_V)
+#define SDMMC                 ((SDMMC_T            *) SD_BASE_V)
 
 /** @brief  SDIO DMA descriptor control (des0) register defines
  */

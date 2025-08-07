@@ -84,7 +84,7 @@ namespace shm
         uint64 shm_size;
         
         // 空闲内存块管理 - 使用vector来存储空闲块，保持按地址排序
-        eastl::vector<free_block> free_blocks;
+        eastl::vector<free_block>* free_blocks;
         
         // 私有内存管理方法
         uint64 allocate_memory(size_t size);  // 从空闲块中分配内存

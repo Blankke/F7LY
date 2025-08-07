@@ -271,7 +271,7 @@ namespace proc
 
     void ProcessManager::fork_ret()
     {
-        // printf("into fork_ret\n");
+        printf("into fork_ret\n");
         proc::Pcb *proc = get_cur_pcb();
         proc->_lock.release();
 

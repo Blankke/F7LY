@@ -19,8 +19,9 @@ namespace shm
         next_shmid = 1; // shmid从1开始
 
         // 初始化时整个内存区域都是空闲的
-        free_blocks.clear();
-        free_blocks.push_back({base, size});
+        free_blocks = new eastl::vector<free_block>();
+        free_blocks->clear();
+        free_blocks->push_back({base, size});
         segments =new eastl::unordered_map<int, shm_segment>();
         // 显式初始化 segments 容器
 
@@ -35,7 +36,7 @@ namespace shm
         size_t aligned_size = PGROUNDUP(size);
 
         // 遍历空闲块，找到第一个足够大的块（First Fit策略）
-        for (auto it = free_blocks.begin(); it != free_blocks.end(); ++it)
+        for (auto it = free_blocks->begin(); it != free_blocks->end(); ++it)
         {
             if (it->size >= aligned_size)
             {
@@ -44,7 +45,7 @@ namespace shm
                 // 如果空闲块正好等于需要的大小，直接移除
                 if (it->size == aligned_size)
                 {
-                    free_blocks.erase(it);
+                    free_blocks->erase(it);
                 }
                 else
                 {
@@ -66,10 +67,10 @@ namespace shm
         size_t aligned_size = PGROUNDUP(size);
 
         // 添加新的空闲块
-        free_blocks.push_back({addr, aligned_size});
+        free_blocks->push_back({addr, aligned_size});
 
         // 按地址排序
-        eastl::sort(free_blocks.begin(), free_blocks.end());
+        eastl::sort(free_blocks->begin(), free_blocks->end());
 
         // 合并相邻的空闲块
         merge_adjacent_blocks();
@@ -77,19 +78,19 @@ namespace shm
 
     void ShmManager::merge_adjacent_blocks()
     {
-        if (free_blocks.size() <= 1)
+        if (free_blocks->size() <= 1)
             return;
 
-        auto write_it = free_blocks.begin();
-        auto read_it = free_blocks.begin();
+        auto write_it = free_blocks->begin();
+        auto read_it = free_blocks->begin();
 
-        while (read_it != free_blocks.end())
+        while (read_it != free_blocks->end())
         {
             *write_it = *read_it;
             ++read_it;
 
             // 尝试与后续相邻块合并
-            while (read_it != free_blocks.end() &&
+            while (read_it != free_blocks->end() &&
                    write_it->addr + write_it->size == read_it->addr)
             {
                 write_it->size += read_it->size;
@@ -100,7 +101,7 @@ namespace shm
         }
 
         // 调整vector大小
-        free_blocks.resize(write_it - free_blocks.begin());
+        free_blocks->resize(write_it - free_blocks->begin());
     }
 
     eastl::unordered_map<int, shm_segment>::iterator ShmManager::find_segment_by_key(key_t key)
@@ -1104,10 +1105,10 @@ namespace shm
         printfYellow("[ShmManager] Memory Status:\n");
         printfYellow("  Total memory: 0x%x bytes\n", shm_size);
         printfYellow("  Active segments: %u\n", segments->size());
-        printfYellow("  Free blocks: %u\n", free_blocks.size());
+        printfYellow("  Free blocks: %u\n", free_blocks->size());
 
         size_t total_free = 0;
-        for (const auto &block : free_blocks)
+        for (const auto &block : *free_blocks)
         {
             printfYellow("    Free block: addr=0x%x, size=0x%x\n", block.addr, block.size);
             total_free += block.size;
@@ -1120,7 +1121,7 @@ namespace shm
     size_t ShmManager::get_total_free_memory() const
     {
         size_t total_free = 0;
-        for (const auto &block : free_blocks)
+        for (const auto &block : *free_blocks)
         {
             total_free += block.size;
         }
@@ -1130,7 +1131,7 @@ namespace shm
     size_t ShmManager::get_largest_free_block() const
     {
         size_t largest = 0;
-        for (const auto &block : free_blocks)
+        for (const auto &block : *free_blocks)
         {
             if (block.size > largest)
             {
