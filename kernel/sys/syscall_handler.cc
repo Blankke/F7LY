@@ -50,14 +50,14 @@
 #include "fs/fcntl.hh"
 #include "fs/lwext4/ext4_errno.hh"
 #include "fs/lwext4/ext4.hh"
+#include "net/onpstack/include/onps.hh"
+#include "net/onpstack/include/onps_utils.hh"
 #include "fs/vfs/virtual_fs.hh"
 #include "shm/shm_manager.hh"
 #include "devs/loop_device.hh"
 #include "devs/block_device.hh"
 #include "EASTL/map.h"
 #include "fs/debug.hh"
-#include "net/onpstack/include/onps.hh"
-#include "net/onpstack/include/onps_utils.hh"
 #include "interrupt_stats.hh"
 namespace syscall
 {
@@ -5963,6 +5963,41 @@ namespace syscall
         {
             printfRed("[SyscallHandler::sys_socket] 不支持的socket类型: %d\n", type);
             return SYS_EINVAL;
+        }
+
+        // 检查协议和类型的兼容性 (针对AF_INET)
+        if (domain == AF_INET)
+        {
+            switch (type)
+            {
+                case SOCK_STREAM:
+                    // TCP stream socket
+                    if (protocol != 0 && protocol != IPPROTO_TCP)
+                    {
+                        printfRed("[SyscallHandler::sys_socket] TCP stream不支持协议%d\n", protocol);
+                        return SYS_EPROTONOSUPPORT;
+                    }
+                    break;
+                    
+                case SOCK_DGRAM:
+                    // UDP datagram socket
+                    if (protocol != 0 && protocol != IPPROTO_UDP)
+                    {
+                        printfRed("[SyscallHandler::sys_socket] UDP datagram不支持协议%d\n", protocol);
+                        return SYS_EPROTONOSUPPORT;
+                    }
+                    break;
+                    
+                case SOCK_RAW:
+                    // RAW socket需要root权限
+                    printfRed("[SyscallHandler::sys_socket] RAW socket需要root权限\n");
+                    return SYS_EPROTONOSUPPORT;
+                    
+                default:
+                    // 其他类型暂不支持
+                    printfRed("[SyscallHandler::sys_socket] AF_INET不支持socket类型%d\n", type);
+                    return SYS_EINVAL;
+            }
         }
 
         // 针对不同协议族的特殊处理

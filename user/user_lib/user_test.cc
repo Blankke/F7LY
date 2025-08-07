@@ -1015,7 +1015,7 @@ char *ltp_testcases[] = {
     // "fcntl13_64", //pass
     // "fcntl14", //rt_sigsuspend
     // "fcntl14_64",//rt_sigsuspend
-    // "fcntl15", //passs5 
+    // "fcntl15", //passs5
     // "fcntl15_64", //pass5
     // "fcntl16",
     // "fcntl16_64",
@@ -1847,7 +1847,7 @@ char *ltp_testcases[] = {
     // "mmap14",
     // "mmap15",  //pass
     // "mmap16",
-    // "mmap17",   //pass 
+    // "mmap17",   //pass
     // "mmap18",
     // "mmap19",  //pass
     // "mmap2",
@@ -2250,7 +2250,7 @@ char *ltp_testcases[] = {
     // "reboot01",
     // "reboot02",
     // "recv01",
-    // "recvfrom01",
+    // "recvfrom01", //pass
     // "recvmmsg01",
     // "recvmsg01",
     // "recvmsg02",
@@ -2417,7 +2417,7 @@ char *ltp_testcases[] = {
     // "sendmsg03",
     // "sendto01", //pass一部分
     // "sendto02", //pass
-    // "sendto03",
+    // "sendto03", //.config
     // "set_ipv4addr",
     // "set_mempolicy01",
     // "set_mempolicy02",
@@ -2522,16 +2522,16 @@ char *ltp_testcases[] = {
     // "setrlimit05",
     // "setrlimit06",
     // "setsid01",
-    // "setsockopt01",
+    // "setsockopt01", //pass
     // "setsockopt02",
-    // "setsockopt03",
+    // "setsockopt03", //pass
     // "setsockopt04",
-    // "setsockopt05",
-    // "setsockopt06",
-    // "setsockopt07",
+    // "setsockopt05", //.config
+    // "setsockopt06", //.config
+    // "setsockopt07", //.config
     // "setsockopt08",
-    // "setsockopt09",
-    // "setsockopt10",
+    // "setsockopt09", //.config
+    // "setsockopt10", //.config
     // "settimeofday01",
     // "settimeofday02",
     // "setuid01",
@@ -2616,7 +2616,7 @@ char *ltp_testcases[] = {
     // "smt_smp_enabled.sh",
     // "snd_seq01",
     // "snd_timer01",
-    // "socket01", //pass一部分
+    // "socket01", //pass
     // "socket02", //pass
     // "socketcall01",
     // "socketcall02",
