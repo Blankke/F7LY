@@ -32,6 +32,10 @@
 #define UART0_IRQ 10
 
 // virtio mmio interface
+#define VIRT_OFFSET             0x3F00000000L
+#define SD_BASE            0x16020000
+#define SD_BASE_V               (SD_BASE + VIRT_OFFSET)
+
 
 #define VIRTIO0 0x10001000
 #define VIRTIO1 0x10002000

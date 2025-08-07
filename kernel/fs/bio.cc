@@ -23,6 +23,7 @@
 #include "fs/vfs/fs.hh"
 #include "fs/buf.hh"
 #ifdef RISCV
+#include "fs/drivers/riscv/disk.hh"
 #include "fs/drivers/riscv/virtio2.hh"
 #elif defined LOONGARCH
 #include "fs/drivers/riscv/virtio2.hh"
@@ -102,7 +103,7 @@ bread(uint dev, uint blockno)
   b = bget(dev, blockno);
   if(!b->valid) {
     if (dev == 0) {
-      virtio_disk_rw(b, 0);
+      disk_rw(b, 0);
     } else {
       virtio_disk_rw2(b, 0);
     }
@@ -119,7 +120,7 @@ bwrite(struct buf *b)
   if(!(b->lock.is_holding()))
     panic("bwrite");
   if (b->dev == 0) {
-    virtio_disk_rw(b, 1);
+    disk_rw(b, 1);
   } else {
     virtio_disk_rw2(b, 1);
   }

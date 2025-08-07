@@ -23,6 +23,7 @@
 #include "timer_interface.hh"
 #include "timer_manager.hh"
 #include "fs/drivers/riscv/virtio2.hh"
+#include "fs/drivers/riscv/disk.hh"
 #include "trap/interrupt_stats.hh"
 #include "proc/posix_timers.hh"
 
@@ -89,7 +90,7 @@ int trap_manager::devintr()
     //!!写完磁盘后修改
     else if (irq == VIRTIO0_IRQ)
     {
-      virtio_disk_intr();
+      disk_intr();
     }
     else if (irq == VIRTIO1_IRQ)
     {

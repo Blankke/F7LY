@@ -1121,7 +1121,10 @@ namespace mem
         //     uint64 ppp= (uint64)pt.walk_addr(va);
         //     printfRed("va: %p, pa: %p\n", va, ppp);
         // }
-
+#ifndef QEMU
+        printfOrange("map sdcard range from %p to %p\n", SD_BASE_V, SD_BASE);
+        kvmmap(pt,SD_BASE_V, SD_BASE, 0x10000, PTE_R | PTE_W | PTE_A | PTE_D);
+#endif
         // 初始化堆内存
         kvmmap(pt, vm_kernel_heap_start, HEAP_START, vm_kernel_heap_size, PTE_R | PTE_W);
 #elif defined(LOONGARCH)
