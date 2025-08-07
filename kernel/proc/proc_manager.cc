@@ -2041,6 +2041,12 @@ namespace proc
             }
         }
 
+        // 检查目录是否已存在
+        if (vfs_is_file_exist(full_path.c_str()))
+        {
+            return -EEXIST;
+        }
+
         // 调用VFS层的mkdir函数
         int result = vfs_ext_mkdir(full_path.c_str(), mode & 0777);
 

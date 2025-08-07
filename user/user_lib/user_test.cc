@@ -1799,7 +1799,7 @@ char *ltp_testcases[] = {
     // "mincore04",
     // "mkdir_tests.sh",
     // "mkdir02", //sendmsg
-    // "mkdir03",  //pass
+    "mkdir03",  //pass
     // "mkdir04",  // setreuid
     // "mkdir05",  //sendmsg
     // "mkdir09",   //bin/sh
