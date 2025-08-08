@@ -2,8 +2,8 @@
 #include "types.hh"
 
 #define PAGE_ORDER 10
-#define PGNUM (1 << 19)
-#define BSSIZE 320 //最多支持 2^15 = 32768 页的分配粒度
+#define PGNUM (1 << 17)
+#define BSSIZE 320 
 
 namespace mem {
 

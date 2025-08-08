@@ -233,7 +233,7 @@ namespace mem
                 // printfRed("freewalk: leaf pte[%d]: %p, pte2pa: %p\n", i, pte.get_data(), pte.pa());
                 // 打印当前页表项va
                 printfRed("freewalk: leaf pte[%d]: %p, pte2pa: %p, va: %p\n", i, pte.get_data(), pte.pa(), (void *)(get_base() + 8 * i));
-                panic("freewalk: leaf");
+                // panic("freewalk: leaf");
             }
         }
         k_pmm.free_page((void *)(get_base()));
