@@ -1,0 +1,63 @@
+我抄了一个别人的sd驱动，别人的可以正常通过，他们的输出我放在sdinit.txt中了，我们的在第一个responese的位置就和他们不同，这代表着什么，又是为什么不同呢？我对比了所有偏移量等函数的写法我都和他们一样，但是没搞懂为什么。
+
+
+
+from avxOS,正确的驱动输出：
+ctrl:0x0000000000000007
+arrive a0
+100arrive a
+RINTSTS: 0x0000000000000000
+responese: 0x0000000000000900
+rintst: 0x0000000000000104
+response: 0x0000000000000900
+arrive b
+RINTSTS: 0x0000000000000000
+rintst: 0x0000000000000004
+response: 0x0000000000000900
+RINTSTS: 0x0000000000000000
+rintst: 0x0000000000000004
+response: 0x00000000000001aa
+arrive c
+rintst: 0x0000000000000004
+rintst: 0x0000000000000004
+rintst: 0x0000000000000004
+rintst: 0x0000000000000004
+rintst: 0x0000000000000004
+rintst: 0x0000000000000004
+response: 0xffffffffc0ff8000
+arrive d
+rintst: 0x0000000000000004
+response3: 0x0000000003534453
+response3: 0x000000004e313238
+response3: 0xffffffff8696a60e
+response3: 0x00000000390179e7
+arrive e
+rintst: 0x0000000000000004
+response: 0xffffffffaaaa0520
+arrive e
+rca: 0xffffffffaaaa0000
+rintst: 0x0000000000000004
+response: 0x0000000000000700
+rintst: 0x0000000000000004
+response: 0x0000000000000900
+FIFOTH: 0x00000000200f0010
+FIFOTH: 0x0000000020070008
+HCON: 0x0000000000c43cc1
+Card interface enabled use AT commands!
+
+
+
+我们的，目前有问题：
+ctrl:0x0000000000000007
+arrive a0
+100arrive a 
+RINTSTS: 0x0000000000001000   //按照定义，这个是 Hardware locked write error
+responese: 0x0000000000000900
+response: 0x0000000000000900
+arrive b
+RINTSTS: 0x0000000000000000
+response: 0x0000000000000900
+RINTSTS: 0x0000000000000000
+response: 0x0000000000000187
+arrive c
+在这里就卡死了，response一直是187，没有回应改变了
