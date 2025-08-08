@@ -867,13 +867,13 @@ char *ltp_testcases[] = {
     // "eject_check_tray",
     // "eject-tests.sh",
     // "endian_switch01",
-    // "epoll_create01",
+    // "epoll_create01", // pass 2 skip 1
     // "epoll_create02",
-    // "epoll_create1_01",
+    // "epoll_create1_01", // pass 1 skip 1
     // "epoll_create1_02",
     // "epoll_ctl01",
     // "epoll_ctl02",
-    // "epoll_ctl03",
+    // "epoll_ctl03", // PASS
     // "epoll_ctl04",
     // "epoll_ctl05",
     // "epoll_pwait01",

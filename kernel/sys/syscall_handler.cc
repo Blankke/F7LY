@@ -272,15 +272,12 @@ namespace syscall
         BIND_SYSCALL(reboot);       // from rocket
         BIND_SYSCALL(timer_create); // from rocket
         BIND_SYSCALL(flock);        // from rocket
-        // ...existing code...
-        // printfCyan("====================debug: syscall_num_list\n");
-        // for (uint64 i = 0; i < max_syscall_funcs_num; i++)
-        // {
-        //     if (_syscall_funcs[i] != nullptr && _syscall_name[i] != nullptr)
-        //     {
-        //         printfCyan("syscall_num: %d, syscall_name: %s\n", i, _syscall_name[i]);
-        //     }
-        // }
+
+        // chronix
+        BIND_SYSCALL(epoll_create1); // frome chronix
+        BIND_SYSCALL(epoll_ctl); // frome chronix
+
+
         printfGreen("[SyscallHandler::init]SyscallHandler initialized with %d syscall functions\n", max_syscall_funcs_num);
     }
     void SyscallHandler::invoke_syscaller()
@@ -10050,6 +10047,14 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
     uint64 SyscallHandler::sys_flock()
     {
         return uint64();
+    }
+
+    uint64 SyscallHandler::sys_epoll_create1(){
+        return 0;
+    }
+
+    uint64 SyscallHandler::sys_epoll_ctl(){
+        return 0;
     }
 
     // splice 辅助函数实现

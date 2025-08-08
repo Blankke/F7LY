@@ -232,6 +232,8 @@ namespace syscall
         uint64 sys_reboot();
         uint64 sys_timer_create();
         uint64 sys_flock();
+        uint64 sys_epoll_create1();
+        uint64 sys_epoll_ctl();
     };
 
     extern SyscallHandler k_syscall_handler;
