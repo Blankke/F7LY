@@ -825,6 +825,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_fstat] Error fetching arguments\n");
             return -EINVAL;
         }
+        printfGreen("[SyscallHandler::sys_fstat] fd: %d, kst_addr: %p\n", fd, (void *)kst_addr);
         int status = proc::k_pm.fstat(fd, &kst);
         if (status < 0)
         {
@@ -1253,7 +1254,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_write] Invalid address: %p\n", (void *)p);
             return SYS_EFAULT;
         }
-
+        printfGreen("[SyscallHandler::sys_write] fd: %d, p: %p, n: %d\n", fd, (void *)p, n);
         // 检查文件是否以 O_PATH 标志打开，O_PATH 文件不允许读取
         if (f->lwext4_file_struct.flags & O_PATH)
             return SYS_EBADF;
@@ -8943,7 +8944,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             // group 变更：非特权要求调用者是文件所有者，且组为调用者所属组之一（这里仅检查 gid/egid）
             if (group != -1 && !privileged)
             {
-                uint32_t fuid = 0, fgid = 0; int r0 = ext4_owner_get(target_path.c_str(), &fuid, &fgid);
+                uint32_t fuid = 0, fgid = 0; int r0 = vfs_owner_get(target_path, fuid, fgid, /*follow_symlinks*/ true);
                 if (r0 != EOK)
                     return -EACCES;
                 if (fuid != p->get_euid())
@@ -8958,14 +8959,14 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             // 非特权变更：清除 S_ISUID 和条件清除 S_ISGID
             if (!privileged)
             {
-                uint32_t mode = 0; int mg = ext4_mode_get(target_path.c_str(), &mode);
+                uint32_t mode = 0; int mg = vfs_mode_get(target_path, mode, /*follow_symlinks*/ true);
                 if (mg == EOK)
                 {
                     uint32_t new_mode = mode & ~S_ISUID;
                     if (mode & S_IXGRP)
                         new_mode &= ~S_ISGID;
                     if (new_mode != mode)
-                        ext4_mode_set(target_path.c_str(), new_mode);
+                        vfs_mode_set(target_path, new_mode, /*follow_symlinks*/ true);
                 }
             }
             return 0;
@@ -9020,7 +9021,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             return SYS_EPERM;
         if (group != -1 && !privileged)
         {
-            uint32_t fuid = 0, fgid = 0; int r0 = ext4_owner_get(abs_pathname.c_str(), &fuid, &fgid);
+            uint32_t fuid = 0, fgid = 0; int r0 = vfs_owner_get(abs_pathname, fuid, fgid, /*follow_symlinks*/ !(flags & AT_SYMLINK_NOFOLLOW));
             if (r0 != EOK) return -EACCES;
             if (fuid != p->get_euid()) return SYS_EPERM;
             if (!(group == (int)p->get_gid() || group == (int)p->get_egid())) return SYS_EPERM;
@@ -9033,14 +9034,14 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
 
         if (!privileged)
         {
-            uint32_t mode = 0; int mg = ext4_mode_get(abs_pathname.c_str(), &mode);
+            uint32_t mode = 0; int mg = vfs_mode_get(abs_pathname, mode, /*follow_symlinks*/ !(flags & AT_SYMLINK_NOFOLLOW));
             if (mg == EOK)
             {
                 uint32_t new_mode = mode & ~S_ISUID;
                 if (mode & S_IXGRP)
                     new_mode &= ~S_ISGID;
                 if (new_mode != mode)
-                    ext4_mode_set(abs_pathname.c_str(), new_mode);
+                    vfs_mode_set(abs_pathname, new_mode, /*follow_symlinks*/ !(flags & AT_SYMLINK_NOFOLLOW));
             }
         }
         return 0;
@@ -9093,7 +9094,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
         // group 变更：非特权要求调用者是文件所有者，且组属于调用者
         if (gid != -1 && !privileged)
         {
-            uint32_t fuid = 0, fgid = 0; int r0 = ext4_owner_get(path.c_str(), &fuid, &fgid);
+            uint32_t fuid = 0, fgid = 0; int r0 = vfs_owner_get(path, fuid, fgid, /*follow_symlinks*/ true);
             if (r0 != EOK) return -EACCES;
             if (fuid != p->get_euid()) return -EPERM;
             if (!(gid == (int)p->get_gid() || gid == (int)p->get_egid())) return -EPERM;
@@ -9105,14 +9106,14 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
         // 非特权变更清位
         if (!privileged)
         {
-            uint32_t mode = 0; int mg = ext4_mode_get(path.c_str(), &mode);
+            uint32_t mode = 0; int mg = vfs_mode_get(path, mode, /*follow_symlinks*/ true);
             if (mg == EOK)
             {
                 uint32_t new_mode = mode & ~S_ISUID;
                 if (mode & S_IXGRP)
                     new_mode &= ~S_ISGID;
                 if (new_mode != mode)
-                    ext4_mode_set(path.c_str(), new_mode);
+                    vfs_mode_set(path, new_mode, /*follow_symlinks*/ true);
             }
         }
         return 0;

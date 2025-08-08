@@ -1148,8 +1148,9 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
         st->uid = ext4_inode_get_uid(&inode);
         st->gid = ext4_inode_get_gid(&inode);
 
-        st->rdev = ext4_inode_get_dev(&inode);
-        st->size = inode.size_lo; // 符号链接的大小是目标路径的长度
+    st->rdev = ext4_inode_get_dev(&inode);
+    // 对于符号链接与常规文件，统一从 inode 获取最新大小，避免使用每个 fd 的缓存值
+    st->size = ext4_inode_get_size(sb, &inode);
         st->blksize = 4096;
         st->blocks = (st->size + 511) / 512;
 
@@ -1209,7 +1210,8 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
     }
 
     st->rdev = ext4_inode_get_dev(&inode);
-    st->size = inode.size_lo;
+    // 从 inode 获取实时文件大小，避免不同 fd 间的 size 不一致
+    st->size = ext4_inode_get_size(sb, &inode);
     printfCyan("vfs_fstat: file size: %u bytes\n", st->size);
     // 修复 blksize 计算：避免除零错误，使用标准块大小
     st->blksize = 4096; // 使用标准 4KB 块大小
@@ -1547,6 +1549,81 @@ int vfs_chown(const eastl::string &pathname, int owner, int group, bool follow_s
             return -ENOENT;
         if (status == EROFS)
             return -EROFS;
+        return -EACCES;
+    }
+    return 0;
+}
+
+int vfs_owner_get(const eastl::string &pathname, uint32_t &uid, uint32_t &gid, bool follow_symlinks)
+{
+    if (vfs_is_file_exist(pathname.c_str()) != 1)
+        return -ENOENT;
+
+    eastl::string target_path = pathname;
+    if (follow_symlinks)
+    {
+        eastl::string resolved;
+        int r = resolve_symlinks(pathname, resolved);
+        if (r == 0 && !resolved.empty())
+            target_path = resolved;
+        else if (r < 0)
+            return r;
+    }
+    uint32_t u = 0, g = 0;
+    int s = ext4_owner_get(target_path.c_str(), &u, &g);
+    if (s != EOK)
+    {
+        if (s == ENOENT) return -ENOENT;
+        return -EACCES;
+    }
+    uid = u; gid = g;
+    return 0;
+}
+
+int vfs_mode_get(const eastl::string &pathname, uint32_t &mode, bool follow_symlinks)
+{
+    if (vfs_is_file_exist(pathname.c_str()) != 1)
+        return -ENOENT;
+    eastl::string target_path = pathname;
+    if (follow_symlinks)
+    {
+        eastl::string resolved;
+        int r = resolve_symlinks(pathname, resolved);
+        if (r == 0 && !resolved.empty())
+            target_path = resolved;
+        else if (r < 0)
+            return r;
+    }
+    uint32_t m = 0;
+    int s = ext4_mode_get(target_path.c_str(), &m);
+    if (s != EOK)
+    {
+        if (s == ENOENT) return -ENOENT;
+        return -EACCES;
+    }
+    mode = m;
+    return 0;
+}
+
+int vfs_mode_set(const eastl::string &pathname, uint32_t mode, bool follow_symlinks)
+{
+    if (vfs_is_file_exist(pathname.c_str()) != 1)
+        return -ENOENT;
+    eastl::string target_path = pathname;
+    if (follow_symlinks)
+    {
+        eastl::string resolved;
+        int r = resolve_symlinks(pathname, resolved);
+        if (r == 0 && !resolved.empty())
+            target_path = resolved;
+        else if (r < 0)
+            return r;
+    }
+    int s = ext4_mode_set(target_path.c_str(), mode);
+    if (s != EOK)
+    {
+        if (s == ENOENT) return -ENOENT;
+        if (s == EROFS) return -EROFS;
         return -EACCES;
     }
     return 0;

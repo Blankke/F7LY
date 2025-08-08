@@ -972,7 +972,7 @@ char *ltp_testcases[] = {
     // "fchmod02",  //  /etc/group
     // "fchmod03",//pass 
     // "fchmod04",//pass
-    // "fchmod05",//pass
+    // "fchmod05",//爆了
     // "fchmod06",//pass1 fail2
     // "fchmodat01",  //pass6
     // "fchmodat02", //pass5 fail1
@@ -1236,15 +1236,15 @@ char *ltp_testcases[] = {
     // "fspick01", ///dev/block/loop0
     // "fspick02",
     // "fsstress",
-    // "fstat02",
+    // "fstat02",  //pass 4 fail 2
     // "fstat02_64",
-    // "fstat03", //pass
-    // "fstat03_64",//pass
-    // "fstatat01",  //
-    // "fstatfs01",
+    // "fstat03", //pass2
+    // "fstat03_64",//pass2
+    // "fstatat01",  //无summary
+    // "fstatfs01",  ///dev/loop0
     // "fstatfs01_64",
-    // "fstatfs02",
-    // "fstatfs02_64",
+    // "fstatfs02", //pass 2
+    // "fstatfs02_64", //pass2
     // "fsx.sh",
     // "fsx-linux",
     // "fsync01", ///dev/block/loop0
@@ -1270,8 +1270,8 @@ char *ltp_testcases[] = {
     // "ftrace_regression01.sh",
     // "ftrace_regression02.sh",
     // "ftrace_stress_test.sh",
-    // "ftruncate01",
-    // "ftruncate01_64",
+    // "ftruncate01", //pass1
+    // "ftruncate01_64",//pass1
     // "ftruncate03",
     // "ftruncate03_64",
     // "ftruncate04",

@@ -2168,11 +2168,11 @@ namespace proc
     {
         eastl::string proc_name = proc::k_pm.get_cur_pcb()->_name;
         if (fd < 0 || fd >= (int)max_open_files)
-            return -1;
+            return -EBADF;
 
         Pcb *p = get_cur_pcb();
         if (p->_ofile == nullptr || p->_ofile->_ofile_ptr[fd] == nullptr)
-            return -1;
+            return -EBADF; // Bad file descriptor
         fs::file *f = p->_ofile->_ofile_ptr[fd];
         return fs::k_vfs.fstat(f, buf);
     }
