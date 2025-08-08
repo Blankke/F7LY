@@ -36,26 +36,67 @@ namespace proc
                     if (cur_proc->_sigactions->actions[flag])
                         *oldact = *(cur_proc->_sigactions->actions[flag]);
                     else
-                        *oldact = {nullptr, 0, 0, {{0}}}; // 正确初始化所有字段，包括 sa_mask
+                        *oldact = {SIG_DFL, 0, 0, {{0}}}; // 正确初始化所有字段，包括 sa_mask
                 }
                 if (newact != nullptr)
                 {
-                    if (!cur_proc->_sigactions->actions[flag])
+                    // 检查handler是否为特殊值
+                    if (newact->sa_handler == SIG_ERR)
                     {
-                        cur_proc->_sigactions->actions[flag] = new sigaction;
-                        if (cur_proc->_sigactions->actions[flag] == nullptr)
-                            return -1; // 内存分配失败
+                        printfRed("[sigAction] SIG_ERR is not a valid handler\n");
+                        return -1; // SIG_ERR不是有效的处理函数
+                    }
+                    
+                    if (newact->sa_handler == SIG_DFL)
+                    {
+                        // 恢复默认处理
+                        printfLightCyan("[sigAction] Setting default handler for signal %d\n", flag);
+                        if (cur_proc->_sigactions->actions[flag])
+                        {
+                            delete cur_proc->_sigactions->actions[flag];
+                            cur_proc->_sigactions->actions[flag] = nullptr;
+                        }
+                    }
+                    else if (newact->sa_handler == SIG_IGN)
+                    {
+                        // 忽略信号 - 设置一个特殊的处理函数
+                        printfLightCyan("[sigAction] Setting ignore handler for signal %d\n", flag);
+                        if (!cur_proc->_sigactions->actions[flag])
+                        {
+                            cur_proc->_sigactions->actions[flag] = new sigaction;
+                            if (cur_proc->_sigactions->actions[flag] == nullptr)
+                                return -1; // 内存分配失败
+                        }
+                        else
+                        {
+                            // 如果已经存在，先释放旧的
+                            delete cur_proc->_sigactions->actions[flag];
+                            cur_proc->_sigactions->actions[flag] = new sigaction;
+                            if (cur_proc->_sigactions->actions[flag] == nullptr)
+                                return -1; // 内存分配失败
+                        }
+                        *(cur_proc->_sigactions->actions[flag]) = *newact;
                     }
                     else
                     {
-                        // 如果已经存在，先释放旧的
-                        delete cur_proc->_sigactions->actions[flag];
-                        cur_proc->_sigactions->actions[flag] = new sigaction;
-                        if (cur_proc->_sigactions->actions[flag] == nullptr)
-                            return -1; // 内存分配失败
+                        // 普通的用户定义处理函数
+                        if (!cur_proc->_sigactions->actions[flag])
+                        {
+                            cur_proc->_sigactions->actions[flag] = new sigaction;
+                            if (cur_proc->_sigactions->actions[flag] == nullptr)
+                                return -1; // 内存分配失败
+                        }
+                        else
+                        {
+                            // 如果已经存在，先释放旧的
+                            delete cur_proc->_sigactions->actions[flag];
+                            cur_proc->_sigactions->actions[flag] = new sigaction;
+                            if (cur_proc->_sigactions->actions[flag] == nullptr)
+                                return -1; // 内存分配失败
+                        }
+                        printfLightCyan("[sigAction] Setting handler for signal %d: enter %p flags: %p mask: %p\n", flag, newact->sa_handler, newact->sa_flags, newact->sa_mask.sig[0]);
+                        *(cur_proc->_sigactions->actions[flag]) = *newact;
                     }
-                    // printf("[sigAction] Setting handler for signal %d: enter %p flags: %p mask: %p\n", flag, newact->sa_handler, newact->sa_flags, newact->sa_mask.sig[0]);
-                    *(cur_proc->_sigactions->actions[flag]) = *newact;
                 }
 
                 return 0;
@@ -283,10 +324,15 @@ namespace proc
                         printf("[handle_signal] No user handler for signal %d\n", signum);
                     }
 
-                    if (act == nullptr || act->sa_handler == nullptr)
+                    if (act == nullptr || act->sa_handler == nullptr || act->sa_handler == SIG_DFL)
                     {
-                        printf("[handle_signal] Signal %d has no handler, using default handler\n", signum);
+                        printf("[handle_signal] Signal %d has no handler or SIG_DFL, using default handler\n", signum);
                         default_handle(p, signum);
+                    }
+                    else if (act->sa_handler == SIG_IGN)
+                    {
+                        printf("[handle_signal] Signal %d is ignored (SIG_IGN)\n", signum);
+                        // 直接清除信号，不做任何处理
                     }
                     else
                     {
@@ -348,10 +394,15 @@ namespace proc
                         printf("[handle_sync_signal] Found handler for sync signal %d: %p\n", signum, act->sa_handler);
                     }
 
-                    if (act == nullptr || act->sa_handler == nullptr)
+                    if (act == nullptr || act->sa_handler == nullptr || act->sa_handler == SIG_DFL)
                     {
-                        printf("[handle_sync_signal] Sync signal %d has no handler, using default handler\n", signum);
+                        printf("[handle_sync_signal] Sync signal %d has no handler or SIG_DFL, using default handler\n", signum);
                         default_handle(p, signum);
+                    }
+                    else if (act->sa_handler == SIG_IGN)
+                    {
+                        printf("[handle_sync_signal] Sync signal %d is ignored (SIG_IGN)\n", signum);
+                        // 对于同步信号，通常不应该被忽略，但仍然尊重用户设置
                     }
                     else
                     {
@@ -405,10 +456,15 @@ namespace proc
                         printf("[handle_signal] No user handler for signal %d\n", signum);
                     }
 
-                    if (act == nullptr || act->sa_handler == nullptr)
+                    if (act == nullptr || act->sa_handler == nullptr || act->sa_handler == SIG_DFL)
                     {
-                        printf("[handle_signal] Signal %d has no handler, using default handler\n", signum);
+                        printf("[handle_signal] Signal %d has no handler or SIG_DFL, using default handler\n", signum);
                         default_handle(p, signum);
+                    }
+                    else if (act->sa_handler == SIG_IGN)
+                    {
+                        printf("[handle_signal] Signal %d is ignored (SIG_IGN)\n", signum);
+                        // 直接清除信号，不做任何处理
                     }
                     clear_signal(p, signum);
                     // printf("[handle_signal] Cleared signal %d, _signal now 0x%x\n", signum, p->_signal);
@@ -453,6 +509,27 @@ namespace proc
                     panic("[do_handle] act is NULL");
                     return;
                 }
+                
+                // 检查是否为特殊的处理函数值
+                if (act->sa_handler == SIG_DFL)
+                {
+                    panic("[do_handle] SIG_DFL should not reach do_handle, using default handler\n");
+                    default_handle(p, signum);
+                    return;
+                }
+                
+                if (act->sa_handler == SIG_IGN)
+                {
+                    panic("[do_handle] SIG_IGN should not reach do_handle, ignoring signal %d\n", signum);
+                    return;
+                }
+                
+                if (act->sa_handler == SIG_ERR)
+                {
+                    panic("[do_handle] SIG_ERR is not a valid handler");
+                    return;
+                }
+                
                 if (is_ignored(p, signum))
                 {
                     panic("[do_handle] Signal %d is ignored", signum);
