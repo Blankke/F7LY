@@ -86,6 +86,7 @@ namespace fs
         result += "bin:x:2:2:bin:/bin:/usr/sbin/nologin\n";
         result += "sys:x:3:3:sys:/dev:/usr/sbin/nologin\n";
         result += "sync:x:4:65534:sync:/bin:/bin/sync\n";
+        result += "nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n"; //这行不能删，挺多ltp要用这一行。前面几行应该随意一点。
         return result;
     }
 
