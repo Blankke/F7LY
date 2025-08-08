@@ -170,52 +170,81 @@ namespace proc
                 return syscall::SYS_EINTR; // EINTR
             }
 
-            void default_handle(proc::Pcb *p, int signum)
+            // 获取信号的默认行为
+            SignalAction get_default_signal_action(int signum)
             {
                 switch (signum)
                 {
-                case signal::SIGKILL:
-                    printf("[default_handle] SIGKILL: Terminating process %d\n", p->_pid);
-                    proc::k_pm.do_signal_exit(p, signum); // 使用信号退出函数，正确设置xstate
-                    break;
-                case signal::SIGSEGV:
-                    // SIGSEGV 默认行为：终止进程并生成核心转储
-                    printf("[default_handle] SIGSEGV: Segmentation fault, terminating process %d\n", p->_pid);
-                    proc::k_pm.do_signal_exit(p, signum); // 使用信号退出函数，正确设置xstate
-                    break;
-                case signal::SIGBUS:
-                    // SIGBUS 默认行为：终止进程并生成核心转储
-                    printf("[default_handle] SIGBUS: Bus error, terminating process %d\n", p->_pid);
-                    proc::k_pm.do_signal_exit(p, signum); // 使用信号退出函数，正确设置xstate
-                    break;
-                case signal::SIGFPE:
-                    // SIGFPE 默认行为：终止进程并生成核心转储
-                    printf("[default_handle] SIGFPE: Floating point exception, terminating process %d\n", p->_pid);
-                    proc::k_pm.do_signal_exit(p, signum); // 使用信号退出函数，正确设置xstate
-                    break;
-                case signal::SIGILL:
-                    // SIGILL 默认行为：终止进程并生成核心转储
-                    printf("[default_handle] SIGILL: Illegal instruction, terminating process %d\n", p->_pid);
-                    proc::k_pm.do_signal_exit(p, signum); // 使用信号退出函数，正确设置xstate
-                    break;
-                case signal::SIGTRAP:
-                    // SIGTRAP 默认行为：终止进程并生成核心转储
-                    printf("[default_handle] SIGTRAP: Trace/breakpoint trap, terminating process %d\n", p->_pid);
-                    proc::k_pm.do_signal_exit(p, signum); // 使用信号退出函数，正确设置xstate
-                    break;
-                case signal::SIGSYS:
-                    // SIGSYS 默认行为：终止进程并生成核心转储
-                    printf("[default_handle] SIGSYS: Bad system call, terminating process %d\n", p->_pid);
-                    proc::k_pm.do_signal_exit(p, signum); // 使用信号退出函数，正确设置xstate
-                    break;
-                case signal::SIGPIPE:
-                    // SIGPIPE 默认行为：终止进程
-                    printf("[default_handle] SIGPIPE: Broken pipe, terminating process %d\n", p->_pid);
-                    proc::k_pm.do_signal_exit(p, signum); // 使用信号退出函数，正确设置xstate
-                    break;
-                case signal::SIGCHLD:
-                    panic("[default_handle] SIGCHLD not implemented");
-                    break;
+                // 需要core dump的信号
+                case signal::SIGABRT:   // 6 - abort signal
+                case signal::SIGBUS:    // 7 - bus error  
+                case signal::SIGFPE:    // 8 - floating point exception
+                case signal::SIGILL:    // 4 - illegal instruction
+                case signal::SIGQUIT:   // 3 - quit signal
+                case signal::SIGSEGV:   // 11 - segmentation fault
+                case signal::SIGSYS:    // 31 - bad system call
+                case signal::SIGTRAP:   // 5 - trace/breakpoint trap
+                case signal::SIGXCPU:   // 24 - CPU time limit exceeded
+                case signal::SIGXFSZ:   // 25 - file size limit exceeded
+                    return {true, true};  // terminate = true, coredump = true
+                    
+                // 只终止但不core dump的信号
+                case signal::SIGALRM:   // 14 - timer alarm
+                case signal::SIGHUP:    // 1 - hangup
+                case signal::SIGINT:    // 2 - interrupt
+                case signal::SIGKILL:   // 9 - kill (cannot be caught)
+                case signal::SIGPIPE:   // 13 - broken pipe
+                case signal::SIGPOLL:   // 29 - pollable event (also SIGIO)
+                case signal::SIGPROF:   // 27 - profiling timer alarm
+                case signal::SIGTERM:   // 15 - termination signal
+                case signal::SIGUSR1:   // 10 - user-defined signal 1
+                case signal::SIGUSR2:   // 12 - user-defined signal 2
+                case signal::SIGVTALRM: // 26 - virtual timer alarm
+                    return {true, false}; // terminate = true, coredump = false
+                    
+                // 停止信号（目前简单处理为终止）
+                case signal::SIGSTOP:   // 19 - stop signal (cannot be caught)
+                case signal::SIGTSTP:   // 20 - terminal stop signal
+                case signal::SIGTTIN:   // 21 - background process reading from terminal
+                case signal::SIGTTOU:   // 22 - background process writing to terminal
+                    return {true, false}; // terminate = true, coredump = false
+                    
+                // 继续信号和其他可忽略的信号
+                case signal::SIGCONT:   // 18 - continue signal
+                case signal::SIGCHLD:   // 17 - child process terminated
+                case signal::SIGWINCH:  // 28 - window resize signal
+                case signal::SIGURG:    // 23 - urgent data on socket
+                case signal::SIGPWR:    // 30 - power failure signal
+                    return {false, false}; // terminate = false, coredump = false
+                    
+                default:
+                    return {true, false}; // 未知信号默认终止，不core dump
+                }
+            }
+
+            void default_handle(proc::Pcb *p, int signum)
+            {
+                SignalAction action = get_default_signal_action(signum);
+                
+                if (action.terminate) {
+                    if (action.coredump) {
+                        printf("[default_handle] Signal %d: Terminating process %d with core dump\n", signum, p->_pid);
+                    } else {
+                        printf("[default_handle] Signal %d: Terminating process %d\n", signum, p->_pid);
+                    }
+                    proc::k_pm.do_signal_exit(p, signum, action.coredump);
+                } else {
+                    // 信号被忽略
+                    const char* signal_name = "";
+                    switch (signum) {
+                        case signal::SIGCONT: signal_name = "SIGCONT"; break;
+                        case signal::SIGCHLD: signal_name = "SIGCHLD"; break;
+                        case signal::SIGWINCH: signal_name = "SIGWINCH"; break;
+                        case signal::SIGURG: signal_name = "SIGURG"; break;
+                        case signal::SIGPWR: signal_name = "SIGPWR"; break;
+                        default: signal_name = "Unknown"; break;
+                    }
+                    printf("[default_handle] %s (%d): Ignored for process %d\n", signal_name, signum, p->_pid);
                 }
             }
 
@@ -307,7 +336,7 @@ namespace proc
                     // 但仍然检查是否被屏蔽
                     if (is_ignored(p, signum))
                     {
-                        printf("[handle_sync_signal] Sync signal %d is masked, sigmask=0x%x\n", signum, p->_sigmask);
+                        printfYellow("[handle_sync_signal] Sync signal %d is masked, sigmask=0x%x\n", signum, p->_sigmask);
                         // 对于同步信号，即使被屏蔽也要处理，因为它们通常是硬件异常
                         // continue;
                     }
@@ -344,6 +373,47 @@ namespace proc
                     // 只处理一个同步信号就返回，因为它们通常是致命的
                     return;
                 }
+
+                // 如果当前信号没有注册信号处理函数, 则调用默认信号处理函数(这里不能处理自定义信号, 防止死循环)
+                if (p->_signal == 0)
+                {
+                    return; // 没有信号需要处理
+                }
+                for (uint64 i = 1; i <= proc::ipc::signal::SIGRTMAX && (p->_signal != 0); i++)
+                {
+                    if (!sig_is_member(p->_signal, i))
+                    {
+                        // printf("[handle_signal] Signal %d not set, skipping\n", i);
+                        continue; // 该信号未被设置
+                    }
+                    int signum = i;
+                    // printf("[handle_signal] Handling signal %d\n", signum);
+                    if (is_ignored(p, signum))
+                    {
+                        printf("[handle_signal] Signal %d is ignored, sigmask=0x%x\n", signum, p->_sigmask);
+                        continue; // 跳过被屏蔽的信号，继续处理其他信号
+                    }
+
+                    sigaction *act = nullptr;
+                    if (p->_sigactions != nullptr && p->_sigactions->actions[signum] != nullptr)
+                    {
+                        act = p->_sigactions->actions[signum];
+                        // printf("[handle_signal] Found handler for signal %d: %p\n", signum, act->sa_handler);
+                    }
+                    else
+                    {
+                        printf("[handle_signal] No user handler for signal %d\n", signum);
+                    }
+
+                    if (act == nullptr || act->sa_handler == nullptr)
+                    {
+                        printf("[handle_signal] Signal %d has no handler, using default handler\n", signum);
+                        default_handle(p, signum);
+                    }
+                    clear_signal(p, signum);
+                    // printf("[handle_signal] Cleared signal %d, _signal now 0x%x\n", signum, p->_signal);
+                }
+                
             }
 
             void add_signal(proc::Pcb *p, int sig)

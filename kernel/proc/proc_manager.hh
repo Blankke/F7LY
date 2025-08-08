@@ -71,7 +71,7 @@ namespace proc
         void fork_ret();
         void exit_proc(Pcb *p);           // 底层退出逻辑，不设置xstate
         void do_exit(Pcb *p, int state);  // 正常退出，设置xstate后调用exit_proc
-        void do_signal_exit(Pcb *p, int signal_num); // 信号退出，设置signal相关xstate后调用exit_proc
+        void do_signal_exit(Pcb *p, int signal_num, bool coredump = false); // 信号退出，设置signal相关xstate后调用exit_proc
         void exit(int state);
         void exit_group(int status);
         int wait4(int child_pid, uint64 addr, int option);

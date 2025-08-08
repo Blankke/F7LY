@@ -11,22 +11,43 @@ namespace proc
         namespace signal
         {
 
-            constexpr int SIGKILL = 9;
-            constexpr int SIGSTOP = 19;
+            // Standard signal numbers (following Linux convention)
+            constexpr int SIGHUP = 1;
+            constexpr int SIGINT = 2;
             constexpr int SIGQUIT = 3;
+            constexpr int SIGILL = 4;
+            constexpr int SIGTRAP = 5;
+            constexpr int SIGABRT = 6;
+            constexpr int SIGBUS = 7;
+            constexpr int SIGFPE = 8;
+            constexpr int SIGKILL = 9;
+            constexpr int SIGUSR1 = 10;
+            constexpr int SIGSEGV = 11;
+            constexpr int SIGUSR2 = 12;
+            constexpr int SIGPIPE = 13;
+            constexpr int SIGALRM = 14;
+            constexpr int SIGTERM = 15;
+            constexpr int SIGSTKFLT = 16;
+            constexpr int SIGCHLD = 17;
+            constexpr int SIGCONT = 18;
+            constexpr int SIGSTOP = 19;
+            constexpr int SIGTSTP = 20;
+            constexpr int SIGTTIN = 21;
+            constexpr int SIGTTOU = 22;
+            constexpr int SIGURG = 23;
+            constexpr int SIGXCPU = 24;
+            constexpr int SIGXFSZ = 25;
+            constexpr int SIGVTALRM = 26;
+            constexpr int SIGPROF = 27;
+            constexpr int SIGWINCH = 28;
+            constexpr int SIGPOLL = 29;  // Also known as SIGIO
+            constexpr int SIGPWR = 30;
+            constexpr int SIGSYS = 31;   // Also known as SIGUNUSED
             constexpr int SIGRTMAX = 64;
-            constexpr int SIGXFSZ =25;  // File size limit exceeded signal
+            
             constexpr int SIG_BLOCK = 0;
             constexpr int SIG_UNBLOCK = 1;
             constexpr int SIG_SETMASK = 2;
-            constexpr int SIGCHLD = 17;
-            constexpr int SIGSEGV=11;
-            constexpr int SIGBUS = 7;
-            constexpr int SIGFPE = 8;
-            constexpr int SIGILL = 4;
-            constexpr int SIGTRAP = 5;
-            constexpr int SIGSYS = 31;
-            constexpr int SIGPIPE = 13;
             enum class SigActionFlags : uint64_t
             {
                 NONE = 0,
@@ -101,12 +122,20 @@ namespace proc
                 uint64 sa_restorer;      // 恢复函数
                 sigset_t sa_mask;        // 处理期间阻塞的信号
             } sigaction;
+            
+            // 信号默认行为结构体
+            struct SignalAction {
+                bool terminate;
+                bool coredump;
+            };
+            
             int sigAction(int flag, sigaction *newact, sigaction *oldact);
             int sigprocmask(int how, sigset_t *newset, sigset_t *oldset, size_t sigsize);
             int sigsuspend(const sigset_t *mask);
             void handle_signal();
             void handle_sync_signal();
             void default_handle(Pcb *p, int signum);
+            SignalAction get_default_signal_action(int signum);
             void add_signal(proc::Pcb *p, int sig);
             void do_handle(proc::Pcb *p, int signum, sigaction *act);
             void sig_return();

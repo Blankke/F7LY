@@ -1741,13 +1741,18 @@ namespace proc
     /// @brief 信号退出，设置信号相关的退出状态后调用底层退出逻辑
     /// @param p 要退出的进程
     /// @param signal_num 导致退出的信号编号
-    void ProcessManager::do_signal_exit(Pcb *p, int signal_num)
+    /// @param coredump 是否生成core dump
+    void ProcessManager::do_signal_exit(Pcb *p, int signal_num, bool coredump)
     {
         // 设置信号退出状态
         // Linux的wait状态编码：低7位存储信号编号，第8位标示是否core dump
-        p->_xstate = signal_num; // 信号退出时，低字节存信号编号
+        p->_xstate = signal_num & 0x7F; // 低7位存信号编号
+        if (coredump) {
+            p->_xstate |= 0x80; // 第8位设置core dump标志
+        }
         
-        printf("[do_signal_exit] proc %s pid %d killed by signal %d\n", p->_name, p->_pid, signal_num);
+        printf("[do_signal_exit] proc %s pid %d killed by signal %d (coredump=%s)\n", 
+               p->_name, p->_pid, signal_num, coredump ? "yes" : "no");
         
         // 调用底层退出逻辑
         exit_proc(p);
