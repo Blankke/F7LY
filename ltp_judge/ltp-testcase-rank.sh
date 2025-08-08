@@ -3,13 +3,6 @@
 # 配置常量
 TIMEOUT_SECONDS=15
 
-# 检查是否有sudo权限
-if ! sudo -n true 2>/dev/null; then
-    echo "This script requires sudo privileges. Please run with sudo or configure passwordless sudo."
-    echo "You can run: sudo $0"
-    exit 1
-fi
-
 files_array=(
     "abort01"
     "abs01"
@@ -2403,13 +2396,13 @@ for program_name in "${files_array[@]}"; do
     fi
     
     # 使用 qemu-riscv64-static 执行程序并捕获输出（带${TIMEOUT_SECONDS}秒超时）
-    echo "Running: sudo qemu-riscv64-static $program_path (timeout: ${TIMEOUT_SECONDS}s)"
+    echo "Running: qemu-riscv64-static $program_path (timeout: ${TIMEOUT_SECONDS}s)"
     
     # 直接运行程序并捕获其完整输出
     {
         echo "RUN LTP CASE $program_name"
-        # 使用 timeout 命令限制执行时间，并捕获完整输出，添加sudo权限
-        timeout ${TIMEOUT_SECONDS}s sudo qemu-riscv64-static "$program_path" 2>&1
+        # 使用 timeout 命令限制执行时间，并捕获完整输出
+        timeout ${TIMEOUT_SECONDS}s qemu-riscv64-static "$program_path" 2>&1
         exit_code=$?
         
         # 检查是否超时
