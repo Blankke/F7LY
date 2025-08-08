@@ -424,7 +424,7 @@ namespace syscall
         if (_arg_addr(arg_n, addr) < 0)
         {
             printfRed("[SyscallHandler::_arg_str]arg_n is out of range");
-            return -1;
+            return -EFAULT; // 错误地址
         }
         return _fetch_str(addr, buf, max);
     }
@@ -1086,10 +1086,11 @@ namespace syscall
     uint64 SyscallHandler::sys_chdir()
     {
         eastl::string path;
-        if (_arg_str(0, path, path.max_size()) < 0)
+        int res1=_arg_str(0, path, path.max_size()) ;
+        if (res1<0)
         {
             printfRed("[SyscallHandler::sys_chdir] Error fetching path argument\n");
-            return -1;
+            return res1;
         }
         // 调用进程管理器的 chdir 函数
         return proc::k_pm.chdir(path);

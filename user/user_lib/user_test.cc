@@ -684,8 +684,8 @@ char *ltp_testcases[] = {
     // "cgroup_regression_test.sh",
     // "cgroup_xattr",
     // "change_password.sh",
-    // "chdir01",
-    // "chdir04",
+    // "chdir01",    //  /dev/block/loop0
+    // "chdir04", //pass 3
     // "check_envval",
     // "check_icmpv4_connectivity",
     // "check_icmpv6_connectivity",
