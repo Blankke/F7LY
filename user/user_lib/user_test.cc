@@ -2584,7 +2584,7 @@ char *ltp_testcases[] = {
     // "sighold02",
     // "signal01",
     // "signal02",
-    // "signal03",
+    // "signal03", // PASS
     // "signal04",
     // "signal05",
     // "signal06",
@@ -3254,7 +3254,7 @@ char *ltp_testcases[] = {
     // "uevent01",
     // "uevent02",
     // "uevent03",
-    // "ulimit01",
+    // "ulimit01", // PASS
     // "umask01",
     // "umip_basic_test",
     // "umount01",

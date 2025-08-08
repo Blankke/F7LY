@@ -48,6 +48,15 @@ namespace proc
             constexpr int SIG_BLOCK = 0;
             constexpr int SIG_UNBLOCK = 1;
             constexpr int SIG_SETMASK = 2;
+            
+            // Signal handler type
+            typedef void (*__sighandler_t)(int);
+            
+            // Special signal handler values
+            #define	SIG_ERR	 ((__sighandler_t) -1)	/* Error return.  */
+            #define	SIG_DFL	 ((__sighandler_t)  0)	/* Default action.  */
+            #define	SIG_IGN	 ((__sighandler_t)  1)	/* Ignore signal.  */
+            
             enum class SigActionFlags : uint64_t
             {
                 NONE = 0,
@@ -117,7 +126,7 @@ namespace proc
             // 简化版 sigaction
             typedef struct sigaction
             {
-                void (*sa_handler)(int); // 信号处理函数
+                __sighandler_t sa_handler; // 信号处理函数
                 uint64 sa_flags;         // 行为标志
                 uint64 sa_restorer;      // 恢复函数
                 sigset_t sa_mask;        // 处理期间阻塞的信号
