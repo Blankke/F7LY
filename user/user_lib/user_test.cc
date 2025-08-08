@@ -1236,7 +1236,7 @@ char *ltp_testcases[] = {
     // "fspick01", ///dev/block/loop0
     // "fspick02",
     // "fsstress",
-    "fstat02",  //pass 5 fail 1
+    // "fstat02",  //pass 5 fail 1
     // "fstat02_64",
     // "fstat03", //pass2
     // "fstat03_64",//pass2
@@ -1667,11 +1667,11 @@ char *ltp_testcases[] = {
     // "lgetxattr02",
     // "libcgroup_freezer",
     // "link02",  //pass
-    // "link04",//sendmsg
+    // "link04",//pass9 fail 5
     // "link05", //pass,这个也是逆天数量
     // "link08", //pass3 fail1
-    // "linkat01",  //有一个没过pass
-    // "linkat02",//sendmsg
+    // "linkat01",  //没summary
+    // "linkat02",///dev/block/loop0
     // "linktest.sh",
     // "listen01", /pass
     // "listxattr01",
@@ -1688,10 +1688,10 @@ char *ltp_testcases[] = {
     // "locktests",
     // "logrotate_tests.sh",
     // "lremovexattr01",
-    // "lseek01", //爆了
-    // "lseek02",  //过了一半
+    // "lseek01", //passed   4
+    // "lseek02",  //passed   15
     // "lseek07", //pass
-    // "lseek11",
+    // "lseek11",  //SEEK_DATA and SEEK_HOLE not implemented
     // "lsmod01.sh",
     // "lstat01",
     // "lstat01_64",
@@ -1707,7 +1707,7 @@ char *ltp_testcases[] = {
     // "macsec03.sh",
     // "macvlan01.sh",
     // "macvtap01.sh",
-    // "madvise01",  //pass
+    // "madvise01",  
     // "madvise02",
     // "madvise03",
     // "madvise05",
@@ -1722,7 +1722,7 @@ char *ltp_testcases[] = {
     // "mallinfo2_01",
     // "mallocstress",
     // "mallopt01",
-    // "max_map_count",
+    // "max_map_count",  ///proc/sys/vm/overcommit_memory
     // "mbind01",
     // "mbind02",
     // "mbind03",
@@ -1751,7 +1751,7 @@ char *ltp_testcases[] = {
     // "mcast-queryfld06.sh",
     // "meltdown",
     // "mem_process",
-    // "mem02",
+    // "mem02",   //过了但是没有summary
     // "membarrier01",
     // "memcg_control_test.sh",
     // "memcg_failcnt.sh",
@@ -1775,33 +1775,33 @@ char *ltp_testcases[] = {
     // "memcg_test_4.sh",
     // "memcg_usage_in_bytes_test.sh",
     // "memcg_use_hierarchy_test.sh",
-    // "memcmp01",
-    // "memcontrol01",
-    // "memcontrol02",
-    // "memcontrol03",
-    // "memcontrol04",
-    // "memcpy01",
+    // "memcmp01",  //pass 2
+    // "memcontrol01",   ///proc/self/mounts
+    // "memcontrol02",  ///dev/block/loop0
+    // "memcontrol03",  ///dev/block/loop0
+    // "memcontrol04",   ///dev/block/loop0连着跑似乎就变成loop1和loop2了
+    // "memcpy01",  //passed   2
     // "memctl_test01",
     // "memfd_create01",
     // "memfd_create02",
     // "memfd_create03",
     // "memfd_create04",
-    // "memset01",
+    // "memset01",  //passed   1
     // "memtoy",
     // "mesgq_nstest",
     // "migrate_pages01",
     // "migrate_pages02",
     // "migrate_pages03",
-    // "min_free_kbytes",
+    // "min_free_kbytes",  ///proc/sys/vm/overcommit_memory
     // "mincore01",
     // "mincore02",
     // "mincore03",
     // "mincore04",
     // "mkdir_tests.sh",
-    // "mkdir02", //sendmsg
+    // "mkdir02", //setregrid未实现
     // "mkdir03",  //pass
     // "mkdir04",  // setreuid
-    // "mkdir05",  //sendmsg
+    // "mkdir05",  //group id
     // "mkdir09",   //bin/sh
     // "mkdirat01", //pass
     // "mkdirat02",  //pass2fail2
@@ -1832,14 +1832,14 @@ char *ltp_testcases[] = {
     // "mmap001",   //pass.
     // "mmap01",   //bin/sh
     // "mmap02",   //failed
-    // "mmap03",
+    // "mmap03",//无所谓，没summary
     // "mmap04",
-    // "mmap05",
-    // "mmap06",
+    // "mmap05",  //shared prot
+    // "mmap06", //pass6 fail 2
     // "mmap08", //pass
     // "mmap09",  //pass
     // "mmap1",
-    // "mmap10", //爆了
+    // "mmap10", //无所谓，没summary
     // "mmap11",   //pass不能和别的一起跑
     // "mmap12",
     // "mmap13", // pass
@@ -1869,7 +1869,7 @@ char *ltp_testcases[] = {
     // "modify_ldt02",
     // "modify_ldt03",
     // "mount_setattr01",
-    // "mount01",
+    // "mount01", ///dev/loop0
     // "mount02",
     // "mount03",
     // "mount03_suid_child",
@@ -1899,11 +1899,11 @@ char *ltp_testcases[] = {
     // "mpls02.sh",
     // "mpls03.sh",
     // "mpls04.sh",
-    // "mprotect01", //pass
-    // "mprotect02",
-    // "mprotect03",
-    // "mprotect04",
-    // "mprotect05", //pass
+    // "mprotect01", //无所谓，没summary
+    // "mprotect02",//无所谓，没summary
+    // "mprotect03",//无所谓，没summary
+    // "mprotect04",//无所谓，没summary
+    // "mprotect05", //pass 1 fail1
     // "mq_notify01",
     // "mq_notify02",
     // "mq_notify03",
@@ -1949,7 +1949,7 @@ char *ltp_testcases[] = {
     // "msync01",  //pass
     // "msync02",  //pass两个
     // "msync03",   //pass
-    // "msync04",
+    // "msync04",  ///dev/loop0
     // "mtest01",
     // "munlock01",
     // "munlock02",
@@ -2025,14 +2025,14 @@ char *ltp_testcases[] = {
     // "open_tree01",
     // "open_tree02",
     // "open01",    //pass
-    // "open02", //socket
+    // "open02", //pass1 fail1
     // "open03", // 完全PASS
     // "open04",    //完全PASS
     // "open06",   //pass
     // "open07",   //pass
-    // "open08", // socket
+    // "open08", // setgid
     // "open09", //pass
-    // "open10", // socket
+    // "open10", // setgid
     // "open11",    //pass
     // "open12",    //过三个
     // "open12_child",//这个不是测例
@@ -2042,7 +2042,7 @@ char *ltp_testcases[] = {
     // "openat02",   //爆了
     // "openat02_child",
     // "openat03",   //pass这个和那个一年是同一个
-    // "openat04",
+    // "openat04", ///dev/block/loop0
     // "openat201",
     // "openat202",
     // "openat203",
@@ -2053,7 +2053,7 @@ char *ltp_testcases[] = {
     // "page02",
     // "parameters.sh",
     // "pathconf01",   //pass
-    // "pathconf02",
+    // "pathconf02",  //pass1 fail5
     // "pause01",
     // "pause02",
     // "pause03",
@@ -2239,12 +2239,12 @@ char *ltp_testcases[] = {
     // "readahead02",
     // "readdir01",
     // "readdir21",
-    // "readlink01", //sendmsg
-    // "readlink03",//sendmsg
+    // "readlink01", //pass 2
+    // "readlink03",//pass3 fail 5
     // "readlinkat01", //pass
     // "readlinkat02", //pass五个
     // "readv01", //pass
-    // "readv02",   //爆了
+    // "readv02",   //pass4 fail1
     // "realpath01",
     // "reboot01",
     // "reboot02",
@@ -2282,7 +2282,7 @@ char *ltp_testcases[] = {
     // "request_key05",
     // "rmdir01",   //pass
     // "rmdir02", //pass
-    // "rmdir03",  //sendmsg
+    // "rmdir03",  //fail2
     // "route4-rmmod",
     // "route6-rmmod",
     // "route-change-dst.sh",
@@ -2552,19 +2552,19 @@ char *ltp_testcases[] = {
     // "shmat04",     //pass
     // "shmat1",
     // "shmctl01",     //卡死了
-    // "shmctl02",    //sendmsg
+    // "shmctl02",    //passed   16 fail 4
     // "shmctl03",    //pass，但是这个似乎不能和别的连着跑
-    // "shmctl04",   //sendmsg
-    // "shmctl05",   //爆了
+    // "shmctl04",   //kernel doesn't support SHM_STAT_ANY
+    // "shmctl05",   // remap_file_pages未实现
     // "shmctl06",    //test requires struct shmid64_ds to have the time_high fields
     // "shmctl07",    //pass
     // "shmctl08",     //pass
-    // "shmdt01",      //信号
+    // "shmdt01",      //pass 2
     // "shmdt02",      //pass
     // "shmem_2nstest", //看不懂
     // "shmget02",
     // "shmget03",
-    // "shmget04",   //sendmsg
+    // "shmget04",   //爆了
     // "shmget05",    //.config
     // "shmget06", //.config
     // "shmnstest",   //pass
@@ -2638,21 +2638,21 @@ char *ltp_testcases[] = {
     // "stack_clash",
     // "stack_space",
     // "starvation",
-    // "stat01",      //sendmsg
+    // "stat01",      //passed   12
     // "stat01_64",
     // "stat02",    //pass
     // "stat02_64",   //pass
-    // "stat03",   //sendmsg
+    // "stat03",   //pass4 fail2
     // "stat03_64",
-    // "statfs01",
+    // "statfs01",  ///dev/loop0
     // "statfs01_64",
     // "statfs02",  //pass3fail3
     // "statfs02_64", //pass3fail3
-    // "statfs03",    //sendmsg
+    // "statfs03",   //爆了
     // "statfs03_64",
     // "statvfs01",
     // "statvfs02", //和别的不能一起跑
-    // "statx01",  //一直游到海水变蓝
+    // "statx01",  //pass8 fail2
     // "statx02",  //pass4 fail1
     // "statx03",// pass6 fail1
     // "statx04",   //bin/sh
@@ -2692,7 +2692,7 @@ char *ltp_testcases[] = {
     // "sync01",
     // "syncfs01",
     // "syscall01",  //pass
-    // "sysconf01", //过了很多，很多没过
+    // "sysconf01", //没summary
     // "sysctl01",
     // "sysctl01.sh",
     // "sysctl02.sh",
@@ -3267,9 +3267,9 @@ char *ltp_testcases[] = {
     // "uname04", // 完全PASS
     // "unlink05", //pass
     // "unlink07",  //pass
-    // "unlink08",   //sendmsg
+    // "unlink08",   //pass2fail2
     // "unlink09",   //pass
-    // "unlinkat01", //nlink failed)
+    // "unlinkat01", //passed   7
     // "unshare01",
     // "unshare01.sh",
     // "unshare02",
@@ -3371,7 +3371,7 @@ char *ltp_testcases[] = {
     // "write02", //pass
     // "write03", // 完全PASS
     // "write04", /pass
-    // "write05", // 有没过的
+    // "write05", // passed   3
     // "write06",
     // "writetest",
     // "writev01", // 完全PASS

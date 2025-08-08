@@ -2047,7 +2047,30 @@ namespace syscall
         }
         printfYellow("[SyscallHandler::sys_mmap] addr: %p, map_size: %u, prot: %d, flags: %d, fd: %d, offset: %u\n",
                      (void *)addr, map_size, prot, flags, fd, offset);
-
+        fs::file *f = nullptr;
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        f=p->get_open_file(fd);
+            if(!(flags&MAP_ANONYMOUS))
+        {   if (f == nullptr)
+        {
+            printfRed("[SyscallHandler::sys_mmap] Invalid file descriptor: %d\n", fd);
+            return -EBADF; // 返回无效文件描述符错误
+        }
+        if(f->_attrs.u_read==0)
+        {
+            printfRed("[SyscallHandler::sys_mmap] File descriptor %d is not open for reading\n", fd);
+            return -EACCES; // 返回权限错误
+        }}
+        if(map_size ==0)
+        {
+            printfRed("[SyscallHandler::sys_mmap] Invalid map_size: %zu\n", map_size);
+            return -EINVAL; // 返回无效参数错误
+        }
+        if(!(flags&MAP_SHARED) && !(flags&MAP_PRIVATE)&&!(flags&MAP_SHARED_VALIDATE))
+        {
+            printfRed("[SyscallHandler::sys_mmap] Invalid flags: %d\n", flags);
+            return -EINVAL; // 返回无效参数错误
+        }
         int mmap_errno = 0;
         void *result = proc::k_pm.mmap((void *)addr, map_size, prot, flags, fd, offset, &mmap_errno);
 
