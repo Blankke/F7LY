@@ -25,6 +25,9 @@ int vfs_frename(const char *oldpath, const char *newpath);
 int vfs_link(const char *oldpath, const char *newpath);
 int vfs_truncate(fs::file *f, size_t length);
 int vfs_chmod(eastl::string pathname, mode_t mode);
+// Change owner/group for a path. If follow_symlinks is true, operate on the target of symlink
+// else operate on the link itself (lchown-like). Returns 0 on success, negative errno on error.
+int vfs_chown(const eastl::string &pathname, int owner, int group, bool follow_symlinks);
 int vfs_fallocate(fs::file *f,off_t offset, size_t length);
 int vfs_free_file(struct fs::file *file);
 int vfs_copy_file_range(int f_in,off_t offset_in, int f_out,off_t offset_out,size_t size,uint flags);

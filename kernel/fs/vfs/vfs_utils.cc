@@ -1500,6 +1500,58 @@ int vfs_free_file(fs::file *file)
     return 0;
 }
 
+int vfs_chown(const eastl::string &pathname, int owner, int group, bool follow_symlinks)
+{
+    // Basic existence check
+    if (vfs_is_file_exist(pathname.c_str()) != 1)
+    {
+        return -ENOENT;
+    }
+
+    // Symlink handling: if not following, ensure the path is a symlink and operate on it directly.
+    // Our ext4_owner_set operates on the path's inode. vfs_openat already has a resolver,
+    // here we emulate lchown by avoiding resolving final symlink.
+    eastl::string target_path = pathname;
+    if (follow_symlinks)
+    {
+        // Resolve symlinks to the final target
+        eastl::string resolved;
+        int r = resolve_symlinks(pathname, resolved);
+        if (r == 0 && !resolved.empty())
+        {
+            target_path = resolved;
+        }
+        else if (r < 0)
+        {
+            return r; // e.g., -ELOOP
+        }
+    }
+
+    // Handle "-1 means unchanged" per POSIX: read current owner/group if needed
+    uint32_t cur_uid = 0, cur_gid = 0;
+    int gstat = ext4_owner_get(target_path.c_str(), &cur_uid, &cur_gid);
+    if (gstat != EOK)
+    {
+        // If we can't read current owner/group, propagate as access error
+        return -EACCES;
+    }
+
+    uint32_t new_uid = (owner < 0) ? cur_uid : (uint32_t)owner;
+    uint32_t new_gid = (group < 0) ? cur_gid : (uint32_t)group;
+
+    int status = ext4_owner_set(target_path.c_str(), new_uid, new_gid);
+    if (status != EOK)
+    {
+        // Map typical errors
+        if (status == ENOENT)
+            return -ENOENT;
+        if (status == EROFS)
+            return -EROFS;
+        return -EACCES;
+    }
+    return 0;
+}
+
 
 bool is_lock_conflict(const struct flock &existing_lock, const struct flock &new_lock)
 {

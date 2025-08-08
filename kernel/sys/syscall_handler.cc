@@ -8883,94 +8883,166 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
     }
     uint64 SyscallHandler::sys_fchownat()
     {
-        // 没实现，假的
         int dirfd;
         eastl::string pathname;
-        long mode_long;
+        int owner;
+        int group;
         int flags;
         if (_arg_int(0, dirfd) < 0 ||
             _arg_str(1, pathname, MAXPATH) < 0 ||
-            _arg_long(2, mode_long) < 0 ||
-            _arg_int(3, flags) < 0)
+            _arg_int(2, owner) < 0 ||
+            _arg_int(3, group) < 0 ||
+            _arg_int(4, flags) < 0)
         {
             printfRed("[SyscallHandler::sys_fchownat] 参数错误\n");
-            return SYS_EINVAL; // 参数错误
+            return SYS_EINVAL;
         }
-        // mode_t mode = (mode_t)mode_long;
+
+        // 校验 flags
+        const int allowed = AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW;
+        if (flags & ~allowed)
+        {
+            printfRed("[SyscallHandler::sys_fchownat] 无效的flags: 0x%x\n", flags);
+            return SYS_EINVAL;
+        }
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
 
-        // 处理dirfd和路径
-        eastl::string abs_pathname;
-
-        // 检查是否为绝对路径
-        if (pathname[0] == '/')
+        // AT_EMPTY_PATH: 路径可为空，操作 dirfd 指向的文件（AT_FDCWD 表示 CWD）
+        if (pathname.empty())
         {
-            // 绝对路径，忽略dirfd
+            if (!(flags & AT_EMPTY_PATH))
+            {
+                printfRed("[SyscallHandler::sys_fchownat] 空路径但未指定AT_EMPTY_PATH\n");
+                return SYS_ENOENT;
+            }
+
+            eastl::string target_path;
+            if (dirfd == AT_FDCWD)
+            {
+                target_path = p->_cwd_name;
+            }
+            else
+            {
+                fs::file *f = p->get_open_file(dirfd);
+                if (!f)
+                {
+                    printfRed("[SyscallHandler::sys_fchownat] AT_EMPTY_PATH但dirfd无效: %d\n", dirfd);
+                    return SYS_EBADF;
+                }
+                // 允许 O_PATH 句柄
+                target_path = f->_path_name;
+            }
+
+            // 权限与语义检查
+            bool privileged = (p && p->get_euid() == 0);
+            // 如果要修改owner且非特权，返回EPERM
+            if (owner != -1 && !privileged)
+                return SYS_EPERM;
+
+            // group 变更：非特权要求调用者是文件所有者，且组为调用者所属组之一（这里仅检查 gid/egid）
+            if (group != -1 && !privileged)
+            {
+                uint32_t fuid = 0, fgid = 0; int r0 = ext4_owner_get(target_path.c_str(), &fuid, &fgid);
+                if (r0 != EOK)
+                    return -EACCES;
+                if (fuid != p->get_euid())
+                    return SYS_EPERM;
+                if (!(group == (int)p->get_gid() || group == (int)p->get_egid()))
+                    return SYS_EPERM;
+            }
+
+            int rc = vfs_chown(target_path, owner, group, /*follow_symlinks*/ true);
+            if (rc < 0) return rc;
+
+            // 非特权变更：清除 S_ISUID 和条件清除 S_ISGID
+            if (!privileged)
+            {
+                uint32_t mode = 0; int mg = ext4_mode_get(target_path.c_str(), &mode);
+                if (mg == EOK)
+                {
+                    uint32_t new_mode = mode & ~S_ISUID;
+                    if (mode & S_IXGRP)
+                        new_mode &= ~S_ISGID;
+                    if (new_mode != mode)
+                        ext4_mode_set(target_path.c_str(), new_mode);
+                }
+            }
+            return 0;
+        }
+
+        // 构造绝对路径
+        eastl::string abs_pathname;
+        if (!pathname.empty() && pathname[0] == '/')
+        {
             abs_pathname = pathname;
         }
         else
         {
-            // 相对路径，需要处理dirfd
             if (dirfd == AT_FDCWD)
             {
-
-                // 使用当前工作目录
                 abs_pathname = get_absolute_path(pathname.c_str(), p->_cwd_name.c_str());
             }
             else
             {
-                // 使用dirfd指向的目录
                 fs::file *dir_file = p->get_open_file(dirfd);
                 if (!dir_file)
                 {
                     printfRed("[SyscallHandler::sys_fchownat] 无效的dirfd: %d\n", dirfd);
-                    return SYS_EBADF; // 无效的文件描述符
+                    return SYS_EBADF;
                 }
-
-                // 检查dirfd是否以 O_PATH 标志打开
-                if (dir_file->lwext4_file_struct.flags & O_PATH)
+                if (dir_file && dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
                 {
-                    return -EBADF;
+                    printfRed("[SyscallHandler::sys_fchownat] dirfd %d不是目录，文件类型: %d\n", dirfd, (int)dir_file->_attrs.filetype);
+                    return SYS_ENOTDIR;
                 }
-
-                // 使用dirfd对应的路径作为基准目录
+                // 允许 O_PATH 作为基目录
                 abs_pathname = get_absolute_path(pathname.c_str(), dir_file->_path_name.c_str());
             }
         }
 
-        // 检查是否是 /proc/self/fd/ 路径
+        // /proc/self/fd/<n> 特例处理
         if (abs_pathname.find("/proc/self/fd/") == 0)
         {
-            // 解析文件描述符
-            eastl::string fd_str = abs_pathname.substr(14); // 跳过 "/proc/self/fd/"
-            int fd = 0;
+            eastl::string fd_str = abs_pathname.substr(14);
+            int tfd = 0;
             for (size_t i = 0; i < fd_str.size(); ++i)
-            {
-                if (fd_str[i] < '0' || fd_str[i] > '9')
-                    break;
-                fd = fd * 10 + (fd_str[i] - '0');
-            }
-
-            fs::file *target_file = p->get_open_file(fd);
+            { if (fd_str[i] < '0' || fd_str[i] > '9') break; tfd = tfd * 10 + (fd_str[i] - '0'); }
+            fs::file *target_file = p->get_open_file(tfd);
             if (!target_file)
-            {
-                printfRed("[SyscallHandler::sys_fchmodat] 无效的文件描述符: %d\n", fd);
                 return SYS_EBADF;
-            }
-
-            // 检查是否以 O_PATH 标志打开，如果是则返回 EBADF
-            if (target_file->lwext4_file_struct.flags & O_PATH)
-            {
-                printfRed("[SyscallHandler::sys_fchmodat] O_PATH标志打开的文件不允许修改权限\n");
-                return SYS_EBADF;
-            }
-
-            // 使用实际文件路径
-            abs_pathname = target_file->_path_name;
+            abs_pathname = target_file->_path_name; // 允许 O_PATH
         }
 
-        // 没有实现实际功能，只有错误检查
+        // 权限判断
+        bool privileged = (p && p->get_euid() == 0);
+        if (owner != -1 && !privileged)
+            return SYS_EPERM;
+        if (group != -1 && !privileged)
+        {
+            uint32_t fuid = 0, fgid = 0; int r0 = ext4_owner_get(abs_pathname.c_str(), &fuid, &fgid);
+            if (r0 != EOK) return -EACCES;
+            if (fuid != p->get_euid()) return SYS_EPERM;
+            if (!(group == (int)p->get_gid() || group == (int)p->get_egid())) return SYS_EPERM;
+        }
+
+        // 是否跟随符号链接
+        bool follow = !(flags & AT_SYMLINK_NOFOLLOW);
+        int rc = vfs_chown(abs_pathname, owner, group, follow);
+        if (rc < 0) return rc;
+
+        if (!privileged)
+        {
+            uint32_t mode = 0; int mg = ext4_mode_get(abs_pathname.c_str(), &mode);
+            if (mg == EOK)
+            {
+                uint32_t new_mode = mode & ~S_ISUID;
+                if (mode & S_IXGRP)
+                    new_mode &= ~S_ISGID;
+                if (new_mode != mode)
+                    ext4_mode_set(abs_pathname.c_str(), new_mode);
+            }
+        }
         return 0;
     }
     uint64 SyscallHandler::sys_fchown()
@@ -9002,7 +9074,47 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             return -EBADF;
         }
 
-        // 没实现实际功能，只有错误检查
+        // 权限与语义实现
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        bool privileged = (p && p->get_euid() == 0);
+
+        // 如果不改变任何东西
+        if (uid == -1 && gid == -1)
+            return 0;
+
+        // owner 变更需要特权
+        if (uid != -1 && !privileged)
+            return -EPERM;
+
+        eastl::string path = f->_path_name;
+        if (path.empty())
+            return -EBADF;
+
+        // group 变更：非特权要求调用者是文件所有者，且组属于调用者
+        if (gid != -1 && !privileged)
+        {
+            uint32_t fuid = 0, fgid = 0; int r0 = ext4_owner_get(path.c_str(), &fuid, &fgid);
+            if (r0 != EOK) return -EACCES;
+            if (fuid != p->get_euid()) return -EPERM;
+            if (!(gid == (int)p->get_gid() || gid == (int)p->get_egid())) return -EPERM;
+        }
+
+        int rc = vfs_chown(path, uid, gid, /*follow_symlinks*/ true);
+        if (rc < 0) return rc;
+
+        // 非特权变更清位
+        if (!privileged)
+        {
+            uint32_t mode = 0; int mg = ext4_mode_get(path.c_str(), &mode);
+            if (mg == EOK)
+            {
+                uint32_t new_mode = mode & ~S_ISUID;
+                if (mode & S_IXGRP)
+                    new_mode &= ~S_ISGID;
+                if (new_mode != mode)
+                    ext4_mode_set(path.c_str(), new_mode);
+            }
+        }
         return 0;
     }
     uint64 SyscallHandler::sys_preadv()
@@ -10061,6 +10173,28 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
     }
     uint64 SyscallHandler::sys_flock()
     {
+        // flock 系统调用的实现
+        int fd;
+        int operation;
+        if (_arg_int(0, fd) < 0 || _arg_int(1, operation) < 0)
+        {            
+            printfRed("[SyscallHandler::sys_flock] Invalid arguments\n");
+            return SYS_EINVAL;
+        }
+        proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
+        fs::file *file = pcb->get_open_file(fd);
+        if (!file)
+        {
+            printfRed("[SyscallHandler::sys_flock] Invalid file descriptor: %d\n", fd);
+            return SYS_EBADF;
+        }
+        if(operation & ~(LOCK_SH | LOCK_EX | LOCK_UN )||
+        ((operation & (LOCK_SH )) && (operation & LOCK_EX)))
+        {
+            printfRed("[SyscallHandler::sys_flock] Invalid operation flags: %d\n", operation);
+            return SYS_EINVAL;
+        }
+
         return uint64();
     }
 

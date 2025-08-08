@@ -978,16 +978,16 @@ char *ltp_testcases[] = {
     // "fchmodat02", //pass5 fail1
     // "fchown01",//pass
     // "fchown01_16",
-    // "fchown02", //pass 2 fail 3
+    // "fchown02", //pass 2 fail 1
     // "fchown02_16",
     // "fchown03",  //setresgid未实现
     // "fchown03_16",
-    // "fchown04", 
+    // "fchown04",  //pass 2 fail 1
     // "fchown04_16",
-    // "fchown05",
+    // "fchown05",  //passed   6
     // "fchown05_16",
-    // "fchownat01",
-    // "fchownat02",
+    // "fchownat01",   //pass但是没summary
+    // "fchownat02",////pass但是没summary
     // "fcntl01",
     // "fcntl01_64",
     // "fcntl02", //pass
@@ -1081,18 +1081,18 @@ char *ltp_testcases[] = {
     // "float_iperb",
     // "float_power",
     // "float_trigo",
-    // "flock01",
-    // "flock02",
-    // "flock03",
-    // "flock04",
-    // "flock06",
+    // "flock01",   //pass 3
+    // "flock02", //pass 3
+    // "flock03",  //pass1 fail2 brok 1
+    // "flock04",   //pass5 fail1
+    // "flock06",   //pass2 fail 2
     // "force_erase.sh",
     // "fork_exec_loop",
     // "fork_freeze.sh",
-    // "fork_procs",
-    // "fork01",
-    // "fork03",
-    // "fork04",
+    // "fork_procs",// pass1 跑挺久
+    // "fork01",  //pass 2
+    // "fork03",   //pass 1
+    // "fork04",   //pass 3
     // "fork05",
     // "fork07",
     // "fork08",
@@ -1224,16 +1224,16 @@ char *ltp_testcases[] = {
     // "fs_racer_file_rename.sh",
     // "fs_racer_file_rm.sh",
     // "fs_racer_file_symlink.sh",
-    // "fsconfig01",
+    // "fsconfig01", ///dev/block/loop0
     // "fsconfig02",
     // "fsconfig03",
     // "fsetxattr01",
     // "fsetxattr02",
     // "fsmount01",
     // "fsmount02",
-    // "fsopen01",
+    // "fsopen01",   ///dev/block/loop0
     // "fsopen02",
-    // "fspick01",
+    // "fspick01", ///dev/block/loop0
     // "fspick02",
     // "fsstress",
     // "fstat02",
@@ -1247,10 +1247,10 @@ char *ltp_testcases[] = {
     // "fstatfs02_64",
     // "fsx.sh",
     // "fsx-linux",
-    // "fsync01", //loop0
+    // "fsync01", ///dev/block/loop0
     // "fsync02", //bin/sh
     // "fsync03",  //pass
-    // "fsync04",  //loop0
+    // "fsync04",  ///dev/block/loop0
     // "ftest01",
     // "ftest02",
     // "ftest03",
