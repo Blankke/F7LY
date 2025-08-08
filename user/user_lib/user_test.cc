@@ -570,7 +570,7 @@ char *ltp_testcases[] = {
     // "accept02",
     // "accept03",
     // "accept4_01",
-    // "access01",
+    // "access01", // 107 pass 92 fail
     // "access02",
     // "access03",
     // "access04",
@@ -3343,11 +3343,11 @@ char *ltp_testcases[] = {
     // "waitid11",
     // "waitpid01", // PASS
     // "waitpid03",
-    // "waitpid04",
+    // "waitpid04", // 部分pass p2 f2
     // "waitpid06",
     // "waitpid07",
     // "waitpid08",
-    // "waitpid09",
+    // "waitpid09", // 部分pass p3 f1
     // "waitpid10",
     // "waitpid11",
     // "waitpid12",

@@ -2447,7 +2447,7 @@ namespace syscall
     uint64 SyscallHandler::sys_setuid()
     {
         // TODO
-        return 1; // 直接返回1，抄学长的
+        return 0; // 直接返回1，抄学长的
     }
     uint64 SyscallHandler::sys_fstatat()
     {
