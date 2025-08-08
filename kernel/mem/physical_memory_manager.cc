@@ -14,7 +14,7 @@ namespace mem
     PhysicalMemoryManager k_pmm;
     uint64 PhysicalMemoryManager::pa_start;
     SpinLock PhysicalMemoryManager::memlock;
-    BuddySystem* PhysicalMemoryManager::_buddy;
+    BuddySystem *PhysicalMemoryManager::_buddy;
 
     uint64 PhysicalMemoryManager::pa2pgnm(void *pa)
     {
@@ -40,15 +40,15 @@ namespace mem
     {
         // 多核情况下应该加锁
         memlock.init("memlock");
-        //把原本Buddy的初始化放在这里，Buddy变成pmm的一个成员
+        // 把原本Buddy的初始化放在这里，Buddy变成pmm的一个成员
 
         /*pa_start是buddy系统在物理内存中的起始地址,加上一个Sizeof(BuddySystem)后后面存的东西是tree,
         然后tree存完了之后才是buddy系统管理的那块内存。加上的BSSIZE是预留来放BuddySystem的大小和tree的大小，
         在这之后才是buddy系统管理的那块内存，这时pa_start指向的就是buddy系统管理的那块内存的开始地址，
         再被初始化为buddy的基址。*/
         pa_start = reinterpret_cast<uint64_t>(end);
-        pa_start = (pa_start + PGSIZE - 1) & ~(PGSIZE - 1); //将pa_start向高地址对齐到PGSIZE的整数倍
-        _buddy = reinterpret_cast<BuddySystem*>(pa_start);
+        pa_start = (pa_start + PGSIZE - 1) & ~(PGSIZE - 1); // 将pa_start向高地址对齐到PGSIZE的整数倍
+        _buddy = reinterpret_cast<BuddySystem *>(pa_start);
         pa_start += BSSIZE * PGSIZE;
         memset(_buddy, 0, BSSIZE * PGSIZE);
         _buddy->Initialize(pa_start);
@@ -57,10 +57,10 @@ namespace mem
 
     void *PhysicalMemoryManager::alloc_page()
     {
-        
+
         int x = _buddy->Alloc(0);
 
-        if(x == -1)
+        if (x == -1)
         {
             panic("[pmm] alloc_page failed");
         }
@@ -70,16 +70,16 @@ namespace mem
         return pa;
     }
 
-    void PhysicalMemoryManager::free_page1(void *pa,uint64 size)
+    void PhysicalMemoryManager::free_page1(void *pa, uint64 size)
     {
 
         auto addr = reinterpret_cast<uint64>(pa);
-        if(addr%PGSIZE != 0)
-       {
+        if (addr % PGSIZE != 0)
+        {
 
-           SlabAllocator::dealloc(pa, size);
+            SlabAllocator::dealloc(pa, size);
 
-           return;
+            return;
         }
         _buddy->Free(pa2pgnm(pa));
     }
@@ -99,18 +99,35 @@ namespace mem
 
     void *PhysicalMemoryManager::kmalloc(size_t size)
     {
-        // printfCyan("kmalloc: size = %u\n", size);
-        // if(size >= PGSIZE)
-        // {
-            int x = _buddy->Alloc(size_to_page_num(size));
-            if(x ==-1)
-            {
-                printfRed("kmalloc: alloc failed, size = %lu\n", size);
-                return 0; // 分配失败
+        int page_num = size_to_page_num(size);
+        // printfCyan("kmalloc: size = %lu, page_num = %d\n", size, page_num);
+        
+        // 检查请求的页数是否合理
+        if (page_num > PGNUM) {
+            printfRed("kmalloc: request too many pages (%d > %d)\n", page_num, PGNUM);
+            return 0;
+        }
+        
+        int x = _buddy->Alloc(page_num);
+        // printfCyan("kmalloc: buddy返回的页号 x = %d\n", x);
+        
+        if (x == -1)
+        {
+            printfRed("kmalloc: alloc failed, size = %lu\n", size);
+            return 0; // 分配失败
+        }
+        else
+        {
+            // 检查返回的页号是否在合理范围内
+            if (x < 0 || x >= PGNUM) {
+                printfRed("kmalloc: 警告！buddy返回的页号超出范围: %d (应该在0-%d之间)\n", x, PGNUM-1);
+                return 0;
             }
-else{            void *pa = pgnm2pa(x);
+            
+            void *pa = pgnm2pa(x);
             memset(pa, 0, PGSIZE);
-            return pa;}
+            return pa;
+        }
         // }
         // else if(size < PGSIZE)
         // {
@@ -126,10 +143,9 @@ else{            void *pa = pgnm2pa(x);
 
     void *PhysicalMemoryManager::kcalloc(uint n, size_t size)
     {
-        void* pa = kmalloc(n * size);
+        void *pa = kmalloc(n * size);
         memset(pa, 0, n * size);
         return pa;
     }
 
-    
 }

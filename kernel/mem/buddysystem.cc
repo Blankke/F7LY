@@ -60,12 +60,37 @@ namespace mem
             tree[i] = NODE_UNUSED;
         }
 
+        // 计算并打印实际管辖的内存区域
+        uint64 managed_start = reinterpret_cast<uint64>(base_ptr);
+        uint64 managed_end = managed_start + (static_cast<uint64>(PGNUM) * PGSIZE);
+        uint64 managed_size_mb = (static_cast<uint64>(PGNUM) * PGSIZE) / (1024 * 1024);
+        
+        printf("[BuddySystem] Managed memory region: 0x%lx - 0x%lx (%lu MB, %d pages)\n",
+               managed_start, managed_end, managed_size_mb, PGNUM);
+        printf("[BuddySystem] Tree structure location: %p (size: %d bytes)\n", 
+               tree, max_nodes);
+
         printfGreen("[mem] Buddy System Init with %d pages, level=%d\n", PGNUM, level);
     }
 
     int BuddySystem::IndexOffset(int index, int level, int max_level) const
     {
-        return ((index + 1) - (1 << level)) << (max_level - level);
+        // 计算该 index 在完全二叉树中的真实层级 L（根为 0）
+        int x = index + 1; // 完全二叉堆性质：层级由 index+1 的最高位决定
+        int L = 0;
+        while ((1 << (L + 1)) <= x)
+            ++L;
+
+        // 若传入的 level 与实际层级不一致，给出提示，便于调试
+        if (L != level)
+        {
+            // printfYellow("[BuddySystem] IndexOffset level mismatch: index=%d, passed_level=%d, computed_level=%d\n",
+            //              index, level, L);
+        }
+
+        int pos = x - (1 << L);               // 该层内的位置
+        int result = pos << (max_level - L);   // 映射到叶子层的起始页号
+        return result;
     }
 
     void BuddySystem::MarkParent(int index)
@@ -111,7 +136,11 @@ namespace mem
                 {
                     tree[index] = NODE_USED;
                     MarkParent(index);
-                    return IndexOffset(index, current_level, level);
+                    int result = IndexOffset(index, current_level, level);
+                    // 添加调试信息
+                    // printfYellow("[BuddySystem] Found block: index=%d, current_level=%d, level=%d, result=%d\n",
+                    //              index, current_level, level, result);
+                    return result;
                 }
             }
             else
