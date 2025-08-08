@@ -695,10 +695,10 @@ char *ltp_testcases[] = {
     // "check_setkey",
     // "check_simple_capset",
     // "chmod01", // 完全PASS
-    // "chmod03",   //sendmsg
-    // "chmod05", //sendmsg
-    // "chmod06", //sendmsg
-    // "chmod07", //sendmsg
+    // "chmod03",   //pass 4
+    // "chmod05", //   setgroups未实现
+    // "chmod06", //   pass4 fail 5
+    // "chmod07", //pass4 fail 5
     // "chown01",     //pass
     // "chown01_16",
     // "chown02",
@@ -784,19 +784,19 @@ char *ltp_testcases[] = {
     // "cpuhotplug07.sh",
     // "cpuset01",
     // "crash01",
-    // "crash02",
-    // "creat01",
-    // "creat03",
-    // "creat04",
-    // "creat05",
-    // "creat06",
-    // "creat07",
+    // "crash02",  //  acct未实现
+    // "creat01", //passed   6
+    // "creat03", //pass
+    // "creat04",  //pass
+    // "creat05", //pass
+    // "creat06", //pass
+    // "creat07",   //pass4 fail4
     // "creat07_child",
-    // "creat08",
-    // "creat09",
+    // "creat08",   //group
+    // "creat09",   // /dev/block/loop0
     // "create_datafile",
     // "create_file",
-    // "crypto_user01",
+    // "crypto_user01",  //socket(16, 524290, 21) failed: EAFNOSUPPORT (97)
     // "crypto_user02",
     // "cve-2014-0196",
     // "cve-2015-3290",
@@ -967,22 +967,22 @@ char *ltp_testcases[] = {
     // "fanout01",
     // "fchdir01", //完全PASS
     // "fchdir02", // 完全PASS
-    // "fchdir03",  //sendmsg
+    // "fchdir03",  // fail
     // "fchmod01",   //pass
-    // "fchmod02",  //sendmsg
-    // "fchmod03",//sendmsg
-    // "fchmod04",//sendmsg
-    // "fchmod05",//sendmsg
-    // "fchmod06",//sendmsg
-    // "fchmodat01",  //pass
-    // "fchmodat02",
+    // "fchmod02",  //  /etc/group
+    // "fchmod03",//pass 
+    // "fchmod04",//pass
+    // "fchmod05",//pass
+    // "fchmod06",//pass1 fail2
+    // "fchmodat01",  //pass6
+    // "fchmodat02", //pass5 fail1
     // "fchown01",//pass
     // "fchown01_16",
-    // "fchown02",
+    // "fchown02", //pass 2 fail 3
     // "fchown02_16",
-    // "fchown03",
+    // "fchown03",  //setresgid未实现
     // "fchown03_16",
-    // "fchown04",
+    // "fchown04", 
     // "fchown04_16",
     // "fchown05",
     // "fchown05_16",

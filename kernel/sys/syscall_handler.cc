@@ -8740,7 +8740,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             printfRed("[SyscallHandler::sys_fchmod] 文件指针为空\n");
             return -EBADF;
         }
-
+        printfCyan("[SyscallHandler::sys_fchmod] fd=%d, mode=%ld\n", fd, mode_long);
         // 检查文件是否以 O_PATH 标志打开，O_PATH 文件不允许 fchmod
         if (f->lwext4_file_struct.flags & O_PATH)
         {
@@ -8766,12 +8766,16 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
         long mode_long;
         int flags;
         if (_arg_int(0, dirfd) < 0 ||
-            _arg_str(1, pathname, MAXPATH) < 0 ||
             _arg_long(2, mode_long) < 0 ||
             _arg_int(3, flags) < 0)
         {
             printfRed("[SyscallHandler::sys_fchmodat] 参数错误\n");
             return SYS_EINVAL; // 参数错误
+        }
+        int rs=_arg_str(1, pathname, MAXPATH) ;
+        if(rs<0)
+        {
+            return rs; // 参数错误
         }
         mode_t mode = (mode_t)mode_long;
         printfCyan("[SyscallHandler::sys_fchmodat] dirfd=%d, pathname=%s, mode=%d, flags=%o\n", dirfd, pathname.c_str(), mode, flags);
@@ -8780,7 +8784,6 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
 
         // 处理dirfd和路径
         eastl::string abs_pathname;
-
         // 检查是否为绝对路径
         if (pathname[0] == '/')
         {
@@ -8804,7 +8807,11 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
                     printfRed("[SyscallHandler::sys_fchmodat] 无效的dirfd: %d\n", dirfd);
                     return SYS_EBADF; // 无效的文件描述符
                 }
-
+            if (dir_file && dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
+            {
+                printfRed("[SyscallHandler::sys_fchmodat] dirfd %d不是目录，文件类型: %d\n", dirfd, (int)dir_file->_attrs.filetype);
+                return SYS_ENOTDIR; // 不是目录
+            }
                 // 检查dirfd是否以 O_PATH 标志打开
                 if (dir_file->lwext4_file_struct.flags & O_PATH)
                 {
@@ -8850,7 +8857,14 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
         }
 
         fs::file *file = nullptr;
-        fs::k_vfs.openat(abs_pathname, file, O_RDONLY);
+        int res =fs::k_vfs.openat(abs_pathname, file, O_RDONLY);
+        if(res<0)
+        {
+            printfRed("[SyscallHandler::sys_fchmodat] 无法打开文件: %s, 错误码: %d\n", abs_pathname.c_str(), res);
+            return res; // 返回错误码
+        }
+        proc::Pcb *cur_pcb = proc::k_pm.get_cur_pcb();
+        if(cur_pcb->_uid!= 0 && cur_pcb->_uid != file->lwext4_file_struct.flags)
         if (file->lwext4_file_struct.flags & O_PATH)
         {
             printfRed("[SyscallHandler::sys_fchmodat] O_PATH标志打开的文件不允许修改权限\n");
