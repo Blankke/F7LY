@@ -1148,8 +1148,7 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
         st->uid = ext4_inode_get_uid(&inode);
         st->gid = ext4_inode_get_gid(&inode);
 
-    st->rdev = ext4_inode_get_dev(&inode);
-    // 对于符号链接与常规文件，统一从 inode 获取最新大小，避免使用每个 fd 的缓存值
+        st->rdev = ext4_inode_get_dev(&inode);
     st->size = ext4_inode_get_size(sb, &inode);
         st->blksize = 4096;
         st->blocks = (st->size + 511) / 512;
@@ -1210,7 +1209,6 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
     }
 
     st->rdev = ext4_inode_get_dev(&inode);
-    // 从 inode 获取实时文件大小，避免不同 fd 间的 size 不一致
     st->size = ext4_inode_get_size(sb, &inode);
     printfCyan("vfs_fstat: file size: %u bytes\n", st->size);
     // 修复 blksize 计算：避免除零错误，使用标准块大小

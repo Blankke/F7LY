@@ -9164,7 +9164,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
     }
     uint64 SyscallHandler::sys_rt_sigsuspend()
     {
-        panic("未实现该系统调用");
+        // panic("未实现该系统调用");
         uint64 setaddr;
         int sigsize;
 

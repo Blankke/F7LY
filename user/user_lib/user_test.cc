@@ -1236,7 +1236,7 @@ char *ltp_testcases[] = {
     // "fspick01", ///dev/block/loop0
     // "fspick02",
     // "fsstress",
-    // "fstat02",  //pass 4 fail 2
+    "fstat02",  //pass 5 fail 1
     // "fstat02_64",
     // "fstat03", //pass2
     // "fstat03_64",//pass2
@@ -1337,14 +1337,14 @@ char *ltp_testcases[] = {
     // "get_robust_list01",
     // "getaddrinfo_01",
     // "getcontext01",
-    // "getcpu01",
+    // "getcpu01",  //sched_setaffinity
     // "getcwd01",//pass
     // "getcwd02", // 完全PASS
     // "getcwd03",     //pass
     // "getcwd04", // Test needs at least 2 CPUs online 这个是因为 sched_getaffinity返回0，说不定它不用两个CPU
     // "getdents01",
     // "getdents02",
-    // "getdomainname01",
+    // "getdomainname01", //pass 1
     // "getegid01",
     // "getegid01_16",
     // "getegid02",
@@ -1395,8 +1395,8 @@ char *ltp_testcases[] = {
     // "getresuid02_16",
     // "getresuid03",
     // "getresuid03_16",
-    // "getrlimit01",
-    // "getrlimit02",
+    // "getrlimit01",  //passed   16
+    // "getrlimit02",  //爆了
     // "getrlimit03",
     // "getrusage01",
     // "getrusage02",
