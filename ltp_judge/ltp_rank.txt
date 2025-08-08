@@ -1,0 +1,3 @@
+Test Case Name | Pass Count | Total Count
+============================================
+lchown01                       | 0          | 0          
