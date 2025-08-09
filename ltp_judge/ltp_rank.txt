@@ -28,12 +28,12 @@ creat09                        | 32         | 32         |
 posix_fadvise03                | 32         | 32         |
 posix_fadvise03_64             | 32         | 32         |
 timer_settime01                | 32         | 32         |
-signal03                       | 31         | 31         |
-signal05                       | 31         | 31         |
+signal03                       | 31         | 31         | ok
+signal05                       | 31         | 31         | ok
 getitimer01                    | 30         | 30         |
 mq_timedreceive01              | 30         | 30         |
 open11                         | 28         | 28         |
-signal04                       | 28         | 28         |
+signal04                       | 28         | 28         | ok
 name_to_handle_at01            | 27         | 27         |
 setns01                        | 25         | 25         |
 io_control01                   | 24         | 24         |

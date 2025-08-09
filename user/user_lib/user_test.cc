@@ -2583,9 +2583,9 @@ char *ltp_testcases[] = {
     // "sigaltstack02",
     // "sighold02",
     // "signal01",
-    // "signal02",
+    // "signal02", // pass 1 fail 2
     // "signal03", // PASS
-    // "signal04",
+    // "signal04", // PASS
     // "signal05", // PASS
     // "signal06",
     // "signalfd01",
