@@ -565,9 +565,9 @@ uint32 sd_write(uint32 *dat, int size, int addr) {
     SD_Send_Command(SDMMC, CMD24, addr + i);  // CMD24: 单块写入，参数为扇区地址
     while (SDMMC->RINTSTS & 0x10) {  // 轮询TXDR中断(bit4)，表示需要发送数据
       if (tt < size) {
-        *(uint32 *)(SD_BASE_V + 0x200) = dat[tt];  // 向FIFO(偏移0x200)写入数据
+  *(volatile uint32 *)(SD_BASE_V + 0x200) = dat[tt];  // 向FIFO(偏移0x200)写入数据
       } else
-        *(uint32 *)(SD_BASE_V + 0x200) = 0;        // 不足部分填0
+  *(volatile uint32 *)(SD_BASE_V + 0x200) = 0;        // 不足部分填0
       tt++;
       // printf("rintst: %p\n", LPC_SDMMC->RINTSTS);
       // printf("data %d: %d\n", i, temp_data);
@@ -630,7 +630,7 @@ uint32 sd_read(uint32 *dat, int size, int addr) {
     // }
     // 当前使用固定次数读取方式(每块128个32位字)
     for (int j = 0; j < 128; j++) {
-      dat[tt] = *(uint32 *)(SD_BASE_V + 0x200);  // 从FIFO(偏移0x200)读取数据
+  dat[tt] = *(volatile uint32 *)(SD_BASE_V + 0x200);  // 从FIFO(偏移0x200)读取数据
       printf("data: %d: %p\n", tt, dat[tt]);
       tt++;
       // printf("rintst: %p\n", SDMMC->RINTSTS);
@@ -654,7 +654,7 @@ void sd_init() {
 
   while (Platform_CardNDetect(SDMMC)) {
   }
-
+printfPink("HCON: %p\n", SDMMC->HCON);
   SDIO_Setup_Callback(SDMMC, SDIO_WakeEvent, SDIO_WaitEvent);
 
   rca = SD_Card_Init(SDMMC, 400000);
@@ -729,7 +729,7 @@ int sd_test(void) {
 
   int tt = 1;
   while (SDMMC->RINTSTS & 0x10) {
-    *(uint32 *)(SD_BASE_V + 0x200) = tt;
+  *(volatile uint32 *)(SD_BASE_V + 0x200) = tt;
     tt++;
     // printf("rintst: %p\n", LPC_SDMMC->RINTSTS);
     // printf("data %d: %d\n", i, temp_data);
@@ -748,7 +748,7 @@ int sd_test(void) {
   uint32 temp_data;
   for (int i = 0; i < 128; i++) {
     // wait_for_read_irq(LPC_SDMMC);
-    temp_data = *(uint32 *)(SD_BASE_V + 0x200);
+  temp_data = *(volatile uint32 *)(SD_BASE_V + 0x200);
     printf("rintst: %p\n", SDMMC->RINTSTS);
     printf("data %d: %d\n", i, temp_data);
     for (int j = 0; j < 100000; j++) {

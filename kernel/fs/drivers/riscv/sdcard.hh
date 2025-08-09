@@ -2,49 +2,49 @@
 #include "memlayout.hh"
 
 typedef struct {				/*!< SDMMC Structure        */
-	uint32  CTRL;		/*!< Control Register       */
-	uint32  PWREN;		/*!< Power Enable Register  */
-	uint32  CLKDIV;		/*!< Clock Divider Register */
-	uint32  CLKSRC;		/*!< SD Clock Source Register */
-	uint32  CLKENA;		/*!< Clock Enable Register  */
-	uint32  TMOUT;		/*!< Timeout Register       */
-	uint32  CTYPE;		/*!< Card Type Register     */
-	uint32  BLKSIZ;		/*!< Block Size Register    */
-	uint32  BYTCNT;		/*!< Byte Count Register    */
-	uint32  INTMASK;		/*!< Interrupt Mask Register */
-	uint32  CMDARG;		/*!< Command Argument Register */
-	uint32  CMD;			/*!< Command Register       */
-	uint32  RESP0;		/*!< Response Register 0    */
-	uint32  RESP1;		/*!< Response Register 1    */
-	uint32  RESP2;		/*!< Response Register 2    */
-	uint32  RESP3;		/*!< Response Register 3    */
-	uint32  MINTSTS;		/*!< Masked Interrupt Status Register */
-	uint32  RINTSTS;		/*!< Raw Interrupt Status Register */
-	uint32  STATUS;		/*!< Status Register        */
-	uint32  FIFOTH;		/*!< FIFO Threshold Watermark Register */
-	uint32  CDETECT;		/*!< Card Detect Register   */
-	uint32  WRTPRT;		/*!< Write Protect Register */
-	uint32  RESERVED0;		/*!< General Purpose Input/Output Register */   //gpio
-	uint32  TCBCNT;		/*!< Transferred CIU Card Byte Count Register */
-	uint32  TBBCNT;		/*!< Transferred Host to BIU-FIFO Byte Count Register */
-	uint32  DEBNCE;		/*!< Debounce Count Register */
-	uint32  USRID;		/*!< User ID Register       */
-	uint32  VERID;		/*!< Version ID Register    */
-	uint32  HCON;
-	uint32  UHS_REG;		/*!< UHS-1 Register         */
-	uint32  RST_N;		/*!< Hardware Reset         */
-	uint32  RESERVED1;
-	uint32  BMOD;		/*!< Bus Mode Register      */
-	uint32  PLDMND;		/*!< Poll Demand Register   */
-	uint32  DBADDR;		/*!< Descriptor List Base Address Register */
-	uint32  IDSTS;		/*!< Internal DMAC Status Register */
-	uint32  IDINTEN;		/*!< Internal DMAC Interrupt Enable Register */
-	uint32  DSCADDR;		/*!< Current Host Descriptor Address Register */
-	uint32  BUFADDR;		/*!< Current Buffer Descriptor Address Register */
+	volatile  uint32  CTRL;		/*!< Control Register       */
+	volatile  uint32  PWREN;		/*!< Power Enable Register  */
+	volatile  uint32  CLKDIV;		/*!< Clock Divider Register */
+	volatile  uint32  CLKSRC;		/*!< SD Clock Source Register */
+	volatile  uint32  CLKENA;		/*!< Clock Enable Register  */
+	volatile  uint32  TMOUT;		/*!< Timeout Register       */
+	volatile  uint32  CTYPE;		/*!< Card Type Register     */
+	volatile  uint32  BLKSIZ;		/*!< Block Size Register    */
+	volatile  uint32  BYTCNT;		/*!< Byte Count Register    */
+	volatile  uint32  INTMASK;		/*!< Interrupt Mask Register */
+	volatile  uint32  CMDARG;		/*!< Command Argument Register */
+	volatile  uint32  CMD;			/*!< Command Register       */
+	volatile  uint32  RESP0;		/*!< Response Register 0    */
+	volatile  uint32  RESP1;		/*!< Response Register 1    */
+	volatile  uint32  RESP2;		/*!< Response Register 2    */
+	volatile  uint32  RESP3;		/*!< Response Register 3    */
+	volatile  uint32  MINTSTS;		/*!< Masked Interrupt Status Register */
+	volatile  uint32  RINTSTS;		/*!< Raw Interrupt Status Register */
+	volatile  uint32  STATUS;		/*!< Status Register        */
+	volatile  uint32  FIFOTH;		/*!< FIFO Threshold Watermark Register */
+	volatile  uint32  CDETECT;		/*!< Card Detect Register   */
+	volatile  uint32  WRTPRT;		/*!< Write Protect Register */
+	volatile  uint32  RESERVED0;		/*!< General Purpose Input/Output Register */   //gpio
+	volatile  uint32  TCBCNT;		/*!< Transferred CIU Card Byte Count Register */
+	volatile  uint32  TBBCNT;		/*!< Transferred Host to BIU-FIFO Byte Count Register */
+	volatile  uint32  DEBNCE;		/*!< Debounce Count Register */
+	volatile  uint32  USRID;		/*!< User ID Register       */
+	volatile  uint32  VERID;		/*!< Version ID Register    */
+	volatile  uint32  HCON;
+	volatile  uint32  UHS_REG;		/*!< UHS-1 Register         */
+	volatile  uint32  RST_N;		/*!< Hardware Reset         */
+	volatile  uint32  RESERVED1;
+	volatile  uint32  BMOD;		/*!< Bus Mode Register      */
+	volatile  uint32  PLDMND;		/*!< Poll Demand Register   */
+	volatile  uint32  DBADDR;		/*!< Descriptor List Base Address Register */
+	volatile  uint32  IDSTS;		/*!< Internal DMAC Status Register */
+	volatile  uint32  IDINTEN;		/*!< Internal DMAC Interrupt Enable Register */
+	volatile  uint32  DSCADDR;		/*!< Current Host Descriptor Address Register */
+	volatile  uint32  BUFADDR;		/*!< Current Buffer Descriptor Address Register */
 } SDMMC_T;
 
 
-#define SDMMC                 ((SDMMC_T            *) SD_BASE_V)
+#define SDMMC                 ((SDMMC_T *) SD_BASE_V)
 
 /** @brief  SDIO DMA descriptor control (des0) register defines
  */
