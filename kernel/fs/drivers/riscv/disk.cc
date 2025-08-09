@@ -17,9 +17,14 @@ void disk_rw(buf *buf, bool write)
     virtio_disk_rw(buf, write);
 #else
     if (write)
+    {
         sd_write((uint32 *)buf->data, 128, buf->blockno);
+    }
     else
+    {
+        printfOrange("disk_rw: read blockno %u\n", buf->blockno);
         sd_read((uint32 *)buf->data, 128, buf->blockno);
+    }
 #endif
 }
 

@@ -7,9 +7,9 @@
 #include "fs/vfs/fs.hh"
 #include "fs/buf.hh"
 
-#if defined(QEMU)
-#include "dev/virtio.h"
-#endif
+// #if defined(QEMU)
+// #include "dev/virtio.h"
+// #endif
 
 #include "fs/lwext4/ext4.hh"
 #include "fs/lwext4/ext4_blockdev.hh"

@@ -83,8 +83,10 @@ int ext4_fs_init(struct ext4_fs *fs, struct ext4_blockdev *bdev, bool read_only)
 
     r = ext4_fs_check_features(fs, &read_only);
     if (r != EOK)
+    {
+        printfRed("ext4_fs_init: unsupported features\n");
         return r;
-
+    }
     if (read_only)
         fs->read_only = read_only;
 
@@ -111,8 +113,10 @@ int ext4_fs_init(struct ext4_fs *fs, struct ext4_blockdev *bdev, bool read_only)
         ext4_set16(&fs->sb, state, EXT4_SUPERBLOCK_STATE_ERROR_FS);
         r = ext4_sb_write(fs->bdev, &fs->sb);
         if (r != EOK)
+        {
+            printfRed("ext4_fs_init: cannot write superblock, r=%d\n", r);
             return r;
-
+        }
         /*Update mount count*/
         ext4_set16(&fs->sb, mount_count, ext4_get16(&fs->sb, mount_count) + 1);
     }
