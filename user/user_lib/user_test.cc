@@ -731,7 +731,7 @@ char *ltp_testcases[] = {
     // "cleanup_lvm.sh",
     // "clock_adjtime01",
     // "clock_adjtime02",
-    // "clock_getres01",
+    // "clock_getres01", //pass
     // "clock_gettime01",
     // "clock_gettime02",
     // "clock_gettime03",
@@ -2255,7 +2255,7 @@ char *ltp_testcases[] = {
     // "readdir01",
     // "readdir21",
     // "readlink01", //pass 2
-    "readlink03",//pass3 fail 5
+    // "readlink03",//pass3 fail 5
     // "readlinkat01", //pass
     // "readlinkat02", //pass五个
     // "readv01", //pass

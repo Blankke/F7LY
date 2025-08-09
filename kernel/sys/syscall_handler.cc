@@ -3323,6 +3323,10 @@ namespace syscall
     const uint SYS_CLOCK_REALTIME_COARSE = 5;
     const uint SYS_CLOCK_MONOTONIC_COARSE = 6;
     const uint SYS_CLOCK_BOOTTIME = 7;
+    const uint SYS_CLOCK_REALTIME_ALARM = 8;
+    const uint SYS_CLOCK_BOOTTIME_ALARM = 9;
+    const uint SYS_CLOCK_SGI_CYCLE = 10;
+    const uint SYS_CLOCK_TAI = 11;
     uint64 SyscallHandler::sys_clock_gettime()
     {
         // rocket
@@ -3353,6 +3357,10 @@ namespace syscall
             case SYS_CLOCK_BOOTTIME:
             case SYS_CLOCK_PROCESS_CPUTIME_ID:
             case SYS_CLOCK_THREAD_CPUTIME_ID:
+            case SYS_CLOCK_REALTIME_ALARM:
+            case SYS_CLOCK_BOOTTIME_ALARM:
+            case SYS_CLOCK_SGI_CYCLE:
+            case SYS_CLOCK_TAI:
                 return 0; // 有效的clock_id
             default:
                 return SYS_EINVAL; // 无效的clock_id
@@ -9290,7 +9298,102 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
     }
     uint64 SyscallHandler::sys_clock_getres()
     {
-        panic("未实现该系统调用");
+        // https://www.man7.org/linux/man-pages/man2/clock_getres.2.html
+        int clock_id;
+        uint64 res_addr;
+        
+        // 获取参数
+        if (_arg_int(0, clock_id) < 0)
+        {
+            printfRed("[SyscallHandler::sys_clock_getres] Error fetching clock_id argument\n");
+            return SYS_EINVAL;
+        }
+        if (_arg_addr(1, res_addr) < 0)
+        {
+            printfRed("[SyscallHandler::sys_clock_getres] Error fetching res argument\n");
+            return SYS_EINVAL;
+        }
+
+        // 检查clock_id是否有效
+        tmm::timespec resolution;
+        bool valid_clock = true;
+        
+        switch (clock_id)
+        {
+        case SYS_CLOCK_REALTIME:
+        case SYS_CLOCK_MONOTONIC:
+        case SYS_CLOCK_MONOTONIC_RAW:
+        case SYS_CLOCK_BOOTTIME:
+        case SYS_CLOCK_PROCESS_CPUTIME_ID:
+        case SYS_CLOCK_THREAD_CPUTIME_ID:
+        case SYS_CLOCK_TAI:
+            // 高精度时钟：基于硬件定时器频率 3.125MHz
+            // 理论分辨率: 1 / 3,125,000 ≈ 320纳秒
+            // 实际上设为1纳秒以匹配Linux行为
+            resolution.tv_sec = 0;
+            resolution.tv_nsec = 1;
+            break;
+            
+        case SYS_CLOCK_REALTIME_COARSE:
+        case SYS_CLOCK_MONOTONIC_COARSE:
+            // 粗粒度时钟：较低精度但更高性能
+            // 通常使用jiffies，设为1毫秒
+            resolution.tv_sec = 0;
+            resolution.tv_nsec = 1000000; // 1毫秒 = 1,000,000纳秒
+            break;
+            
+        case SYS_CLOCK_REALTIME_ALARM:
+        case SYS_CLOCK_BOOTTIME_ALARM:
+            // 闹钟时钟：与对应的基础时钟具有相同的分辨率
+            // REALTIME_ALARM 基于 REALTIME，BOOTTIME_ALARM 基于 BOOTTIME
+            resolution.tv_sec = 0;
+            resolution.tv_nsec = 1;
+            break;
+            
+        case SYS_CLOCK_SGI_CYCLE:
+            // SGI周期计数器（已废弃）
+            // 虽然已废弃，但为了兼容性仍需支持查询
+            // 设置为高精度分辨率
+            resolution.tv_sec = 0;
+            resolution.tv_nsec = 1;
+            break;
+            
+        default:
+            valid_clock = false;
+            break;
+        }
+        
+        if (!valid_clock)
+        {
+            printfRed("[SyscallHandler::sys_clock_getres] Invalid clock_id: %d\n", clock_id);
+            return SYS_EINVAL;
+        }
+        
+        // 如果res指针为NULL，仅检查clock_id有效性即可
+        if (res_addr == 0)
+        {
+            return 0;
+        }
+        
+        // 检查地址是否有效
+        if (is_bad_addr(res_addr))
+        {
+            return SYS_EFAULT;
+        }
+        
+        // 将分辨率信息拷贝到用户空间
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        if (mem::k_vmm.copy_out(*pt, res_addr, &resolution, sizeof(resolution)) < 0)
+        {
+            printfRed("[SyscallHandler::sys_clock_getres] Error copying resolution to user space\n");
+            return SYS_EFAULT;
+        }
+        
+        printfCyan("[SyscallHandler::sys_clock_getres] clock_id: %d, resolution: %ld.%09ld\n", 
+                   clock_id, resolution.tv_sec, resolution.tv_nsec);
+        
+        return 0;
     }
     uint64 SyscallHandler::sys_sched_setscheduler()
     {
