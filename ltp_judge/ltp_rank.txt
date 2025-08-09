@@ -12,7 +12,7 @@ memcontrol02                   | 54         | 54         |
 mount07                        | 52         | 56         |
 rename01                       | 48         | 48         |
 rename03                       | 48         | 48         |
-timer_settime02                | 48         | 48         |
+timer_settime02                | 48         | 48         | pass
 clock_getres01                 | 44         | 44         | pass
 statx08                        | 38         | 49         |
 fsetxattr01                    | 38         | 40         |

@@ -82,6 +82,8 @@ namespace syscall
         SYS_nanosleep = 101,
         SYS_setitimer = 103, // form tsh 
         SYS_timer_create = 107,
+        SYS_timer_settime = 110,
+        SYS_timer_delete = 111,
         SYS_clock_settime = 112,     // from rocket
         SYS_clock_gettime = 113,
         SYS_clock_getres = 114,      // from rocket

@@ -3106,7 +3106,7 @@ char *ltp_testcases[] = {
     // "timer_getoverrun01",
     // "timer_gettime01",
     // "timer_settime01",
-    // "timer_settime02",
+    // "timer_settime02", //pass
     // "timer_settime03",
     // "timerfd_create01",
     // "timerfd_gettime01",

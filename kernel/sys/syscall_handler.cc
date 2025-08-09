@@ -48,6 +48,35 @@
 #include "fs/vfs/vfs_utils.hh"
 #include "fs/fs_defs.hh"
 #include "fs/fcntl.hh"
+
+// 全局定时器管理
+namespace {
+    // 扩展的定时器结构体定义
+    struct extended_posix_timer
+    {
+        int timer_id;               // 定时器 ID
+        int clockid;                // 时钟类型
+        struct sigevent
+        {
+            int sigev_notify;
+            int sigev_signo;
+            union sigval
+            {
+                int sival_int;
+                void *sival_ptr;
+            } sigev_value;
+        } event;                    // 事件配置
+        bool active;                // 是否激活
+        bool armed;                 // 是否武装（设置了过期时间）
+        tmm::itimerspec spec;       // 定时器规格
+        tmm::timespec expiry_time;  // 绝对过期时间
+    };
+
+    // 全局静态定时器数组（在所有定时器函数之间共享）
+    static extended_posix_timer g_timers[32];
+    static int g_next_timer_id = 1;
+    static bool g_timers_initialized = false;
+}
 #include "fs/lwext4/ext4_errno.hh"
 #include "fs/lwext4/ext4.hh"
 #include "net/onpstack/include/onps.hh"
@@ -278,6 +307,9 @@ namespace syscall
         BIND_SYSCALL(epoll_create1); // frome chronix
         BIND_SYSCALL(epoll_ctl); // frome chronix
 
+        /// usr/include/asm-generic/unistd.h
+        BIND_SYSCALL(timer_settime);
+        BIND_SYSCALL(timer_delete);
 
         printfGreen("[SyscallHandler::init]SyscallHandler initialized with %d syscall functions\n", max_syscall_funcs_num);
     }
@@ -10421,9 +10453,488 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
     {
         panic("未实现该系统调用");
     }
+    /**
+     * @brief 创建 POSIX 每进程定时器
+     * 
+     * timer_create() 创建一个新的每进程间隔定时器。新定时器的 ID 被返回到 timerid 指向的缓冲区中，
+     * 该指针必须是非空指针。此 ID 在进程内是唯一的，直到定时器被删除。新定时器初始处于未武装状态。
+     * 
+     * 参数：
+     * - clockid: 指定新定时器用来测量时间的时钟
+     * - sevp: 指向 sigevent 结构的指针，指定定时器过期时如何通知调用者
+     * - timerid: 指向 timer_t 的指针，用于返回新定时器的 ID
+     * 
+     * 返回值：
+     * - 成功：0，新定时器的 ID 被放置在 *timerid 中
+     * - 失败：-1，并设置 errno
+     * 
+     * @see https://www.man7.org/linux/man-pages/man2/timer_create.2.html
+     */
     uint64 SyscallHandler::sys_timer_create()
     {
-        panic("未实现该系统调用");
+        // https://www.man7.org/linux/man-pages/man2/timer_create.2.html
+        int clockid;
+        uint64 sevp_addr;
+        uint64 timerid_addr;
+        
+        // 获取参数
+        if (_arg_int(0, clockid) < 0)
+        {
+            printfRed("[SyscallHandler::sys_timer_create] Error fetching clockid argument\n");
+            return SYS_EINVAL;
+        }
+        if (_arg_addr(1, sevp_addr) < 0)
+        {
+            printfRed("[SyscallHandler::sys_timer_create] Error fetching sevp argument\n");
+            return SYS_EINVAL;
+        }
+        if (_arg_addr(2, timerid_addr) < 0)
+        {
+            printfRed("[SyscallHandler::sys_timer_create] Error fetching timerid argument\n");
+            return SYS_EINVAL;
+        }
+        
+        // 检查 timerid 指针是否有效（不能为 NULL）
+        if (timerid_addr == 0)
+        {
+            printfRed("[SyscallHandler::sys_timer_create] timerid cannot be NULL\n");
+            return SYS_EINVAL;
+        }
+        
+        // 验证 clockid 是否有效
+        switch (clockid)
+        {
+        case SYS_CLOCK_REALTIME:
+        case SYS_CLOCK_MONOTONIC:
+        case SYS_CLOCK_PROCESS_CPUTIME_ID:
+        case SYS_CLOCK_THREAD_CPUTIME_ID:
+        case SYS_CLOCK_BOOTTIME:
+        case SYS_CLOCK_REALTIME_ALARM:
+        case SYS_CLOCK_BOOTTIME_ALARM:
+        case SYS_CLOCK_TAI:
+            break; // 有效的时钟类型
+        default:
+            printfRed("[SyscallHandler::sys_timer_create] Invalid clockid: %d\n", clockid);
+            return SYS_EINVAL;
+        }
+        
+        // 检查特权时钟（需要 CAP_WAKE_ALARM 权限）
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if ((clockid == SYS_CLOCK_REALTIME_ALARM || clockid == SYS_CLOCK_BOOTTIME_ALARM))
+        {
+            // 简化实现：只允许 root 用户使用闹钟时钟
+            if (p->get_euid() != 0)
+            {
+                printfRed("[SyscallHandler::sys_timer_create] No permission for alarm clocks\n");
+                return SYS_EPERM;
+            }
+        }
+        
+        mem::PageTable *pt = p->get_pagetable();
+        
+        // SIGEV_* 常量定义
+        constexpr int SIGEV_NONE = 1;
+        constexpr int SIGEV_SIGNAL = 0;
+        constexpr int SIGEV_THREAD = 2;
+        
+        // 使用全局定义的 sigevent 结构体
+        extended_posix_timer::sigevent sev;
+        
+        // 处理 sevp 参数
+        if (sevp_addr == 0)
+        {
+            // sevp 为 NULL，使用默认值
+            sev.sigev_notify = SIGEV_SIGNAL;
+            sev.sigev_signo = signal::SIGALRM;
+            sev.sigev_value.sival_int = 0; // 将在分配 timer ID 后设置
+        }
+        else
+        {
+            // 从用户空间拷贝 sigevent 结构
+            if (mem::k_vmm.copy_in(*pt, &sev, sevp_addr, sizeof(extended_posix_timer::sigevent)) < 0)
+            {
+                printfRed("[SyscallHandler::sys_timer_create] Error copying sigevent from user space\n");
+                return SYS_EFAULT;
+            }
+            
+            // 验证 sigev_notify 字段
+            if (sev.sigev_notify != SIGEV_NONE && 
+                sev.sigev_notify != SIGEV_SIGNAL &&
+                sev.sigev_notify != SIGEV_THREAD)
+            {
+                printfRed("[SyscallHandler::sys_timer_create] Invalid sigev_notify: %d\n", sev.sigev_notify);
+                return SYS_EINVAL;
+            }
+            
+            // 如果是信号通知，验证信号编号
+            if (sev.sigev_notify == SIGEV_SIGNAL)
+            {
+                if (sev.sigev_signo < 1 || sev.sigev_signo > 64)
+                {
+                    printfRed("[SyscallHandler::sys_timer_create] Invalid signal number: %d\n", sev.sigev_signo);
+                    return SYS_EINVAL;
+                }
+            }
+        }
+        
+        // 统一的扩展定时器结构体定义（在所有定时器函数之间共享）
+        // 使用全局定时器数组（统一的定时器管理）
+        
+        // 初始化定时器数组（第一次调用时）
+        if (!g_timers_initialized)
+        {
+            for (int i = 0; i < 32; i++)
+            {
+                g_timers[i].active = false;
+                g_timers[i].armed = false;
+                g_timers[i].timer_id = 0;
+                g_timers[i].clockid = 0;
+                g_timers[i].event.sigev_notify = 0;
+                g_timers[i].event.sigev_signo = 0;
+                g_timers[i].event.sigev_value.sival_int = 0;
+                g_timers[i].spec.it_value.tv_sec = 0;
+                g_timers[i].spec.it_value.tv_nsec = 0;
+                g_timers[i].spec.it_interval.tv_sec = 0;
+                g_timers[i].spec.it_interval.tv_nsec = 0;
+                g_timers[i].expiry_time.tv_sec = 0;
+                g_timers[i].expiry_time.tv_nsec = 0;
+            }
+            g_timers_initialized = true;
+        }
+        
+        // 查找空闲的定时器槽位
+        int timer_slot = -1;
+        for (int i = 0; i < 32; i++)
+        {
+            if (!g_timers[i].active)
+            {
+                timer_slot = i;
+                break;
+            }
+        }
+        
+        if (timer_slot == -1)
+        {
+            printfRed("[SyscallHandler::sys_timer_create] No available timer slots\n");
+            return SYS_EAGAIN;
+        }
+        
+        // 初始化定时器
+        g_timers[timer_slot].timer_id = g_next_timer_id++;
+        g_timers[timer_slot].clockid = clockid;
+        g_timers[timer_slot].event = sev;
+        g_timers[timer_slot].active = true;
+        g_timers[timer_slot].armed = false;  // 新创建的定时器初始为未武装状态
+        
+        // 初始化定时器规格为零（未武装状态）
+        g_timers[timer_slot].spec.it_value.tv_sec = 0;
+        g_timers[timer_slot].spec.it_value.tv_nsec = 0;
+        g_timers[timer_slot].spec.it_interval.tv_sec = 0;
+        g_timers[timer_slot].spec.it_interval.tv_nsec = 0;
+        g_timers[timer_slot].expiry_time.tv_sec = 0;
+        g_timers[timer_slot].expiry_time.tv_nsec = 0;
+        
+        // 如果 sevp 为 NULL，设置默认的 sival_int 为 timer_id
+        if (sevp_addr == 0)
+        {
+            g_timers[timer_slot].event.sigev_value.sival_int = g_timers[timer_slot].timer_id;
+        }
+        
+        // 将 timer ID 拷贝到用户空间
+        int timer_id = g_timers[timer_slot].timer_id;
+        if (mem::k_vmm.copy_out(*pt, timerid_addr, &timer_id, sizeof(timer_id)) < 0)
+        {
+            // 失败时清理定时器
+            g_timers[timer_slot].active = false;
+            printfRed("[SyscallHandler::sys_timer_create] Error copying timer ID to user space\n");
+            return SYS_EFAULT;
+        }
+        
+        printfCyan("[SyscallHandler::sys_timer_create] Created timer ID: %d, clockid: %d, notify: %d\n",
+                   timer_id, clockid, sev.sigev_notify);
+        
+        return 0;
+    }
+    /**
+     * @brief 设置 POSIX 每进程定时器的武装状态和时间规格
+     * 
+     * timer_settime() 武装或解除由 timerid 标识的定时器。new_value 参数指向一个
+     * itimerspec 结构，该结构指定定时器的新初始值和新间隔。
+     * 
+     * 参数：
+     * - timerid: 定时器标识符（由 timer_create 返回）
+     * - flags: 控制标志，如 TIMER_ABSTIME
+     * - new_value: 指向 itimerspec 结构的指针，指定新的定时器设置
+     * - old_value: 可选的指向 itimerspec 结构的指针，用于返回之前的设置
+     * 
+     * 返回值：
+     * - 成功：0
+     * - 失败：-1，并设置 errno
+     * 
+     * @see https://www.man7.org/linux/man-pages/man2/timer_settime.2.html
+     */
+    uint64 SyscallHandler::sys_timer_settime()
+    {
+        // https://www.man7.org/linux/man-pages/man2/timer_settime.2.html
+        int timerid;
+        int flags;
+        uint64 new_value_addr;
+        uint64 old_value_addr;
+        
+        // 获取参数
+        if (_arg_int(0, timerid) < 0)
+        {
+            printfRed("[SyscallHandler::sys_timer_settime] Error fetching timerid argument\n");
+            return SYS_EINVAL;
+        }
+        if (_arg_int(1, flags) < 0)
+        {
+            printfRed("[SyscallHandler::sys_timer_settime] Error fetching flags argument\n");
+            return SYS_EINVAL;
+        }
+        if (_arg_addr(2, new_value_addr) < 0)
+        {
+            printfRed("[SyscallHandler::sys_timer_settime] Error fetching new_value argument\n");
+            return SYS_EINVAL;
+        }
+        if (_arg_addr(3, old_value_addr) < 0)
+        {
+            printfRed("[SyscallHandler::sys_timer_settime] Error fetching old_value argument\n");
+            return SYS_EINVAL;
+        }
+        
+        // 检查 new_value 指针是否有效（不能为 NULL）
+        if (new_value_addr == 0)
+        {
+            printfRed("[SyscallHandler::sys_timer_settime] new_value cannot be NULL\n");
+            return SYS_EINVAL;
+        }
+        
+        // 验证 flags 参数
+        if (flags != 0 && flags != TIMER_ABSTIME)
+        {
+            printfRed("[SyscallHandler::sys_timer_settime] Invalid flags: %d\n", flags);
+            return SYS_EINVAL;
+        }
+        
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        
+        // 从用户空间拷贝新的定时器规格
+        tmm::itimerspec new_timer_spec;
+        if (mem::k_vmm.copy_in(*pt, &new_timer_spec, new_value_addr, sizeof(tmm::itimerspec)) < 0)
+        {
+            printfRed("[SyscallHandler::sys_timer_settime] Error copying new_value from user space\n");
+            return SYS_EFAULT;
+        }
+        
+        // 验证时间值的有效性
+        if (new_timer_spec.it_value.tv_nsec < 0 || new_timer_spec.it_value.tv_nsec >= 1000000000 ||
+            new_timer_spec.it_interval.tv_nsec < 0 || new_timer_spec.it_interval.tv_nsec >= 1000000000)
+        {
+            printfRed("[SyscallHandler::sys_timer_settime] Invalid nanosecond values\n");
+            return SYS_EINVAL;
+        }
+        
+        if (new_timer_spec.it_value.tv_sec < 0 || new_timer_spec.it_interval.tv_sec < 0)
+        {
+            printfRed("[SyscallHandler::sys_timer_settime] Negative time values not allowed\n");
+            return SYS_EINVAL;
+        }
+        
+        // 使用全局定时器数组（与 timer_create 和 timer_delete 共享）
+        // 确保定时器数组已初始化
+        if (!g_timers_initialized)
+        {
+            printfRed("[SyscallHandler::sys_timer_settime] Timer system not initialized\n");
+            return SYS_EINVAL;
+        }
+        
+        // 查找对应的定时器
+        int timer_slot = -1;
+        for (int i = 0; i < 32; i++)
+        {
+            if (g_timers[i].active && g_timers[i].timer_id == timerid)
+            {
+                timer_slot = i;
+                break;
+            }
+        }
+        
+        if (timer_slot == -1)
+        {
+            printfRed("[SyscallHandler::sys_timer_settime] Invalid timer ID: %d\n", timerid);
+            return SYS_EINVAL;
+        }
+        
+        // 保存旧的定时器规格（如果需要返回）
+        tmm::itimerspec old_timer_spec;
+        if (old_value_addr != 0)
+        {
+            old_timer_spec = g_timers[timer_slot].spec;
+            
+            // 如果定时器当前未武装，返回零值
+            if (!g_timers[timer_slot].armed)
+            {
+                old_timer_spec.it_value.tv_sec = 0;
+                old_timer_spec.it_value.tv_nsec = 0;
+                old_timer_spec.it_interval.tv_sec = 0;
+                old_timer_spec.it_interval.tv_nsec = 0;
+            }
+        }
+        
+        // 设置新的定时器规格
+        g_timers[timer_slot].spec = new_timer_spec;
+        
+        // 检查是否解除定时器（it_value 为零）
+        if (new_timer_spec.it_value.tv_sec == 0 && new_timer_spec.it_value.tv_nsec == 0)
+        {
+            // 解除定时器
+            g_timers[timer_slot].armed = false;
+            printfCyan("[SyscallHandler::sys_timer_settime] Timer %d disarmed\n", timerid);
+        }
+        else
+        {
+            // 武装定时器
+            g_timers[timer_slot].armed = true;
+            
+            // 计算绝对过期时间
+            tmm::timespec current_time;
+            int clockid = g_timers[timer_slot].clockid;
+            
+            // 获取当前时间（简化实现）
+            if (tmm::k_tm.clock_gettime(static_cast<tmm::SystemClockId>(clockid), &current_time) < 0)
+            {
+                printfRed("[SyscallHandler::sys_timer_settime] Failed to get current time\n");
+                return SYS_EFAULT;
+            }
+            
+            if (flags & TIMER_ABSTIME)
+            {
+                // 绝对时间模式：直接使用 it_value 作为过期时间
+                g_timers[timer_slot].expiry_time = new_timer_spec.it_value;
+            }
+            else
+            {
+                // 相对时间模式：当前时间 + it_value
+                g_timers[timer_slot].expiry_time.tv_sec = current_time.tv_sec + new_timer_spec.it_value.tv_sec;
+                g_timers[timer_slot].expiry_time.tv_nsec = current_time.tv_nsec + new_timer_spec.it_value.tv_nsec;
+                
+                // 处理纳秒溢出
+                if (g_timers[timer_slot].expiry_time.tv_nsec >= 1000000000)
+                {
+                    g_timers[timer_slot].expiry_time.tv_sec++;
+                    g_timers[timer_slot].expiry_time.tv_nsec -= 1000000000;
+                }
+            }
+            
+            printfCyan("[SyscallHandler::sys_timer_settime] Timer %d armed, expires at %ld.%09ld\n",
+                       timerid, g_timers[timer_slot].expiry_time.tv_sec, 
+                       g_timers[timer_slot].expiry_time.tv_nsec);
+        }
+        
+        // 如果请求返回旧值，将其拷贝到用户空间
+        if (old_value_addr != 0)
+        {
+            if (mem::k_vmm.copy_out(*pt, old_value_addr, &old_timer_spec, sizeof(tmm::itimerspec)) < 0)
+            {
+                printfRed("[SyscallHandler::sys_timer_settime] Error copying old_value to user space\n");
+                return SYS_EFAULT;
+            }
+        }
+        
+        printfCyan("[SyscallHandler::sys_timer_settime] Timer %d settime completed, flags: %d\n", timerid, flags);
+        
+        return 0;
+    }
+    /**
+     * @brief 删除 POSIX 每进程定时器
+     * 
+     * timer_delete() 删除由 timerid 给出的 ID 的定时器。如果定时器在此调用时是武装状态，
+     * 则在删除之前将其解除武装。由被删除定时器产生的任何挂起信号的处理是未指定的。
+     * 
+     * 参数：
+     * - timerid: 定时器标识符（由 timer_create 返回）
+     * 
+     * 返回值：
+     * - 成功：0
+     * - 失败：-1，并设置 errno
+     * 
+     * @see https://www.man7.org/linux/man-pages/man2/timer_delete.2.html
+     */
+    uint64 SyscallHandler::sys_timer_delete()
+    {
+        // https://www.man7.org/linux/man-pages/man2/timer_delete.2.html
+        int timerid;
+        
+        // 获取参数
+        if (_arg_int(0, timerid) < 0)
+        {
+            printfRed("[SyscallHandler::sys_timer_delete] Error fetching timerid argument\n");
+            return SYS_EINVAL;
+        }
+        
+        // 扩展的定时器结构体定义（与 timer_settime 保持一致）
+        // 使用全局定时器数组（与 timer_create 和 timer_settime 共享）
+        // 确保定时器数组已初始化
+        if (!g_timers_initialized)
+        {
+            printfRed("[SyscallHandler::sys_timer_delete] Timer system not initialized\n");
+            return SYS_EINVAL;
+        }
+        
+        // 查找对应的定时器
+        int timer_slot = -1;
+        for (int i = 0; i < 32; i++)
+        {
+            if (g_timers[i].active && g_timers[i].timer_id == timerid)
+            {
+                timer_slot = i;
+                break;
+            }
+        }
+        
+        if (timer_slot == -1)
+        {
+            printfRed("[SyscallHandler::sys_timer_delete] Invalid timer ID: %d\n", timerid);
+            return SYS_EINVAL;
+        }
+        
+        // 检查定时器是否当前是武装状态
+        bool was_armed = g_timers[timer_slot].armed;
+        
+        // 删除定时器：将其标记为非活动状态
+        g_timers[timer_slot].active = false;
+        g_timers[timer_slot].armed = false;
+        
+        // 清理定时器数据（可选，为了安全）
+        g_timers[timer_slot].timer_id = 0;
+        g_timers[timer_slot].clockid = 0;
+        g_timers[timer_slot].event.sigev_notify = 0;
+        g_timers[timer_slot].event.sigev_signo = 0;
+        g_timers[timer_slot].event.sigev_value.sival_int = 0;
+        
+        // 清零定时器规格
+        g_timers[timer_slot].spec.it_value.tv_sec = 0;
+        g_timers[timer_slot].spec.it_value.tv_nsec = 0;
+        g_timers[timer_slot].spec.it_interval.tv_sec = 0;
+        g_timers[timer_slot].spec.it_interval.tv_nsec = 0;
+        
+        // 清零过期时间
+        g_timers[timer_slot].expiry_time.tv_sec = 0;
+        g_timers[timer_slot].expiry_time.tv_nsec = 0;
+        
+        printfCyan("[SyscallHandler::sys_timer_delete] Timer %d deleted successfully (was %s)\n", 
+                   timerid, was_armed ? "armed" : "disarmed");
+        
+        // 注意：根据 POSIX 标准，对于由被删除定时器产生的任何挂起信号的处理是未指定的
+        // 在我们的简化实现中，我们不需要特殊处理挂起的信号
+        // 在完整实现中，可能需要：
+        // 1. 从信号队列中移除相关的挂起信号
+        // 2. 取消任何正在进行的定时器操作
+        // 3. 通知调度器停止监控此定时器
+        
+        return 0;
     }
     uint64 SyscallHandler::sys_flock()
     {

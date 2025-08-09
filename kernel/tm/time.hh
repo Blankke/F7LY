@@ -40,6 +40,17 @@ namespace tmm
 	};
 
 	/**
+	 * @brief POSIX间隔定时器规格结构体
+	 * 用于指定定时器的初始过期时间和重复间隔
+	 * 遵循POSIX.1b标准，用于timer_settime()和timer_gettime()系统调用
+	 */
+	struct itimerspec
+	{
+		struct timespec it_interval; ///< 定时器间隔（0表示一次性定时器）
+		struct timespec it_value;    ///< 定时器初始过期时间（0表示解除定时器）
+	};
+
+	/**
 	 * @brief 系统时钟类型枚举
 	 * 定义了POSIX.1b标准支持的各种系统时钟类型
 	 * 不同的时钟类型有不同的语义和使用场景
