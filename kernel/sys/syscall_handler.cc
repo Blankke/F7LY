@@ -2456,23 +2456,23 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_getuid()
     {
-        // TODO//我们root用户id就是1
-        return 1;
+        // TODO
+        return 0;
     }
     uint64 SyscallHandler::sys_getgid()
     {
         // TODO
-        return 1; // 直接返回1，抄学长的
+        return 0; 
     }
     uint64 SyscallHandler::sys_setgid()
     {
         // TODO
-        return 1; // 直接返回1，抄学长的
+        return 0;
     }
     uint64 SyscallHandler::sys_setuid()
     {
         // TODO
-        return 0; // 直接返回1，抄学长的
+        return 0; 
     }
     uint64 SyscallHandler::sys_fstatat()
     {
@@ -9541,7 +9541,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
     }
     uint64 SyscallHandler::sys_fadvise64()
     {
-        panic("未实现该系统调用");
+        return 0;
     }
     uint64 SyscallHandler::sys_msync()
     {

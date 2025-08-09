@@ -35,6 +35,7 @@ int uname(void *buf);
 int brk(void *addr);
 int sbrk(void *addr);
 int chdir(const char *path);
+int mkdir(const char *path, mode_t mode);
 int getdents64(int fd, struct linux_dirent64 *dirp64, unsigned long len);
 int pipe(int fd[2]);
 int dup(int fd);
@@ -43,6 +44,7 @@ int umount(const char *special);
 int fork(void);
 char *getcwd(char *buf, size_t size);
 int lseek(int fd, off_t offset, int whence);
+
 // proc
 int shutdown();
 
@@ -79,3 +81,6 @@ int ltp_test(const char *path );
 int final_test_musl(void);
 int final_test_glibc(void);
 int git_test(const char *path);
+
+// init函数
+void init_env(const char *path);

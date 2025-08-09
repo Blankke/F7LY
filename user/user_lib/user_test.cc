@@ -4,9 +4,10 @@
 extern char *bb_cmds[][10];
 extern char *libctest[][2];
 
-const char musl_dir[] = "/mnt/musl/";
-const char glibc_dir[] = "/mnt/glibc/";
+const char musl_dir[] = "/musl/";
+const char glibc_dir[] = "/glibc/";
 extern char *ltp_testcases[];
+
 int strcmp(const char *s1, const char *s2) noexcept(true)
 {
     for (; *s1 == *s2; s1++, s2++)
@@ -46,6 +47,20 @@ int run_test(const char *path, char *argv[], char *envp[])
             printf("wait fail\n");
     }
     return 0;
+}
+
+void init_env(const char *path = musl_dir)
+{
+    chdir(path);
+
+    mkdir("/bin", 0755);
+    char *bb_sh[8] = {0};
+    bb_sh[0] = "busybox";
+    bb_sh[1] = "sh";
+    bb_sh[2] = "-c";
+    bb_sh[3] = "/musl/busybox --install /bin";
+    run_test("busybox", bb_sh, 0);
+
 }
 
 int basic_test(const char *path = musl_dir)
@@ -2123,8 +2138,8 @@ char *ltp_testcases[] = {
     // "pm_sched_mc.py",
     // "poll01",  //pass
     // "poll02",
-    // "posix_fadvise01",
-    // "posix_fadvise01_64",
+    // "posix_fadvise01", // pass
+    // "posix_fadvise01_64", // pass
     // "posix_fadvise02",
     // "posix_fadvise02_64",
     // "posix_fadvise03",

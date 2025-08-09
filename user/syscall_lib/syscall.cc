@@ -217,10 +217,10 @@ int chdir(const char *path)
     return syscall(syscall::SYS_chdir, path);
 }
 
-// int mkdir(const char *path, mode_t mode)
-// {
-//     return syscall(syscall::SYS_mkdirat, AT_FDCWD, path, mode);
-// }
+int mkdir(const char *path, mode_t mode)
+{
+    return syscall(syscall::SYS_mkdirat, AT_FDCWD, path, mode);
+}
 
 int getdents64(int fd, struct linux_dirent64 *dirp64, unsigned long len)
 {

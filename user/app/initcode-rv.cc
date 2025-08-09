@@ -4,6 +4,7 @@ extern "C"
 {
     __attribute__((section(".text.startup"))) int main()
     {
+        init_env("/musl/");
         // basic_test("musl/");
         // basic_test("glibc/");
         // busybox_test("/musl/");
