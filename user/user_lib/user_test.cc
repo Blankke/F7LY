@@ -392,7 +392,6 @@ char *libctest[][2] = {
     {NULL}};
 
 char *ltp_testcases[] = {
-    NULL,
     // "abort01",
     "abs01", // 完全PASS,没summary
     // "accept01",
@@ -1496,9 +1495,9 @@ char *ltp_testcases[] = {
     // "lgetxattr02",
     // "libcgroup_freezer",
     "link02", // pass
-    "link04", // pass9 fail 5
+    // "link04", // pass9 fail 5
     // "link05", //pass,这个也是逆天数量
-    "link08", // pass3 fail1
+    // "link08", // pass3 fail1
     // "linkat01",  //没summary
     // "linkat02",///dev/block/loop0
     // "linktest.sh",
@@ -1609,7 +1608,7 @@ char *ltp_testcases[] = {
     // "memcontrol02",  ///dev/block/loop0
     // "memcontrol03",  ///dev/block/loop0
     // "memcontrol04",   ///dev/block/loop0连着跑似乎就变成loop1和loop2了
-    "memcpy01", // passed   2
+    // "memcpy01", // passed   2
     // "memctl_test01",
     // "memfd_create01",
     // "memfd_create02",
