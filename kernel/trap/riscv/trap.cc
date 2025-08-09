@@ -307,6 +307,7 @@ void trap_manager::usertrap()
     }
   }
   // printfMagenta("left usertrap\n");
+  proc::ipc::signal::handle_signal();
   usertrapret();
 }
 

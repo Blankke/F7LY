@@ -230,7 +230,7 @@ void trap_manager::usertrap()
       proc::k_scheduler.yield();
     }
   }
-
+  ipc::signal::handle_signal(); // 处理信号 - 在返回用户态之前检查并处理待处理的信号
   usertrapret();
 }
 
