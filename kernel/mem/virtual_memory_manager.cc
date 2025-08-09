@@ -123,7 +123,7 @@ namespace mem
 #ifdef RISCV
             pte.set_data(PA2PTE(PGROUNDDOWN(riscv::virt_to_phy_address(pa))) |
                          flags |
-                         riscv::PteEnum::pte_valid_m);
+                         riscv::PteEnum::pte_valid_m|PTE_A|PTE_D);
 #elif defined(LOONGARCH)
             pte.set_data(PA2PTE(PGROUNDDOWN(pa)) |
                          flags |
