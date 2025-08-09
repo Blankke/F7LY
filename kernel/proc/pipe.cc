@@ -121,12 +121,15 @@ namespace proc
 						}
 						return syscall::SYS_EAGAIN; // 管道已满，返回 EAGAIN 错误
 					}
+					else
+					{
+						// 阻塞模式：等待读端消费数据
+						// 唤醒读端（可能已阻塞）
+						k_pm.wakeup(&_read_sleep);
+						// 当前写入进程挂起，等待读端消费数据后唤醒
+						k_pm.sleep(&_write_sleep, &_lock);
+					}
 					
-					// 阻塞模式：等待读端消费数据
-					// 唤醒读端（可能已阻塞）
-					k_pm.wakeup(&_read_sleep);
-					// 当前写入进程挂起，等待读端消费数据后唤醒
-					k_pm.sleep(&_write_sleep, &_lock);
 				}
 				else
 				{

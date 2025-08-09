@@ -6,7 +6,7 @@ memfd_create01                 | 157        | 157        |
 getpid01                       | 100        | 100        | ok
 chdir01                        | 92         | 95         |
 splice07                       | 75         | 126        |
-pipe11                         | 70         | 70         |
+pipe11                         | 70         | 70         | ok
 fsync01                        | 60         | 60         |
 memcontrol02                   | 54         | 54         |
 mount07                        | 52         | 56         |

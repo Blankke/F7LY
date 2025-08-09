@@ -50,7 +50,7 @@ namespace proc
         ZOMBIE
     };
 
-    constexpr uint num_process = 32;      // 系统中允许的最大进程数量
+    constexpr uint num_process = 64;      // 系统中允许的最大进程数量
     constexpr int default_proc_prio = 10; // 默认进程优先级
     constexpr int lowest_proc_prio = 19;  // 最低进程优先级
     constexpr int highest_proc_prio = 0;  // 最高进程优先级

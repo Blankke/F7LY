@@ -23,7 +23,7 @@ namespace proc
 
 	namespace ipc
 	{
-		constexpr uint default_pipe_size = 1024;
+		constexpr uint default_pipe_size = 4096;
 		constexpr uint min_pipe_size = 256;
 		constexpr uint max_pipe_size = 16384;  // 16KB 最大管道大小
 

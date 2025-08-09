@@ -2103,7 +2103,7 @@ char *ltp_testcases[] = {
     // "pipe08",
     // "pipe09", // 完全PASS
     // "pipe10", // 完全PASS
-    // "pipe11",
+    // "pipe11", //pass
     // "pipe12", // pass
     // "pipe13", // proc/4/stat没写
     // "pipe14", // 完全PASS
