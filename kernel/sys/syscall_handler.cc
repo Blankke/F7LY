@@ -231,7 +231,7 @@ namespace syscall
         BIND_SYSCALL(getrandom);
         BIND_SYSCALL(statx);
         BIND_SYSCALL(clone3);   // todo
-        BIND_SYSCALL(poweroff); // todo
+
 
         // rocket syscalls
         BIND_SYSCALL(setxattr);           // from rocket
@@ -310,6 +310,7 @@ namespace syscall
         /// usr/include/asm-generic/unistd.h
         BIND_SYSCALL(timer_settime);
         BIND_SYSCALL(timer_delete);
+        BIND_SYSCALL(eventfd2);
 
         printfGreen("[SyscallHandler::init]SyscallHandler initialized with %d syscall functions\n", max_syscall_funcs_num);
     }
@@ -8140,10 +8141,7 @@ namespace syscall
         printfCyan("[SyscallHandler::sys_clone3] Created process with PID: %llu\n", clone_pid);
         return clone_pid;
     }
-    uint64 SyscallHandler::sys_poweroff()
-    {
-        panic("未实现该系统调用");
-    }
+
 
     //================================== rocket syscalls ===================================
     uint64 SyscallHandler::sys_fsetxattr()
@@ -10970,8 +10968,11 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
     uint64 SyscallHandler::sys_epoll_ctl(){
         return 0;
     }
-
-    // splice 辅助函数实现
+    uint64 SyscallHandler::sys_eventfd2()
+    {
+        panic("未实现该系统调用");
+    }
+        // splice 辅助函数实现
     ssize_t SyscallHandler::_splice_pipe_to_file(fs::file *pipe_file, fs::file *regular_file, off_t file_offset, size_t len)
     {
         if (!pipe_file || !regular_file)

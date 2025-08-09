@@ -160,7 +160,7 @@ namespace syscall
         uint64 sys_mprotect();
         uint64 sys_membarrier();
         uint64 sys_clone3();
-        uint64 sys_poweroff();
+
 
 
         //rocket
@@ -236,6 +236,7 @@ namespace syscall
         uint64 sys_flock();
         uint64 sys_epoll_create1();
         uint64 sys_epoll_ctl();
+        uint64 sys_eventfd2();
     };
 
     extern SyscallHandler k_syscall_handler;

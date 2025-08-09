@@ -5,7 +5,7 @@ access01                       | 199        | 199        | 过一部份
 memfd_create01                 | 157        | 157        |
 getpid01                       | 100        | 100        | ok
 chdir01                        | 92         | 95         |
-splice07                       | 75         | 126        |
+splice07                       | 75         | 126        | 这个貌似能修，争取一下, 测这个记得开网络(init_network_stack)
 pipe11                         | 70         | 70         | ok
 fsync01                        | 60         | 60         |
 memcontrol02                   | 54         | 54         |
@@ -32,7 +32,7 @@ signal03                       | 31         | 31         | ok
 signal05                       | 31         | 31         | ok
 getitimer01                    | 30         | 30         |
 mq_timedreceive01              | 30         | 30         |
-open11                         | 28         | 28         |
+open11                         | 28         | 28         | pass
 signal04                       | 28         | 28         | ok
 name_to_handle_at01            | 27         | 27         |
 setns01                        | 25         | 25         |

@@ -348,7 +348,7 @@ namespace proc
             new (&dev::k_uart) dev::UartManager(UART0);
             dev::register_debug_uart(&dev::k_uart);
 
-            // net::init_network_stack();
+            net::init_network_stack();
         }
 
         // 设置进程开始运行的时间点

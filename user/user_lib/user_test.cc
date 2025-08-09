@@ -277,22 +277,15 @@ int ltp_test(const char *path = musl_dir)
     chdir("/musl/ltp/testcases/bin");
     printf("#### OS COMP TEST GROUP START ltp-musl ####\n");
     char *bb_sh[8] = {0};
+    int result = 0;
     for (int i = 0; ltp_testcases[i] != NULL; i++)
     {
-        int len = strlen(ltp_testcases[i]);
-        if (len >= 3 && strcmp(ltp_testcases[i] + len - 3, ".sh") == 0)
-        {
-            bb_sh[0] = "busybox";
-            bb_sh[1] = "sh";
-            bb_sh[2] = ltp_testcases[i];
-            run_test("/musl/busybox", bb_sh, 0);
-        }
-        else
-        {
-            bb_sh[0] = ltp_testcases[i];
-            run_test(ltp_testcases[i], bb_sh, 0);
-        }
+        printf("RUN LTP CASE %s\n", ltp_testcases[i]);
+        bb_sh[0] = ltp_testcases[i];
+        result = run_test(ltp_testcases[i], bb_sh, 0);
+        printf("FAIL LTP CASE %s: %d\n", ltp_testcases[i], result);
     }
+    printf("#### OS COMP TEST GROUP END ltp-musl ####\n");
     return 0;
 }
 int final_test_musl()
