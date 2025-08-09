@@ -2240,7 +2240,7 @@ char *ltp_testcases[] = {
     // "readdir01",
     // "readdir21",
     // "readlink01", //pass 2
-    // "readlink03",//pass3 fail 5
+    "readlink03",//pass3 fail 5
     // "readlinkat01", //pass
     // "readlinkat02", //pass五个
     // "readv01", //pass

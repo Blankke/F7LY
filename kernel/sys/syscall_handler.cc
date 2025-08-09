@@ -57,6 +57,7 @@
 #include "devs/loop_device.hh"
 #include "devs/block_device.hh"
 #include "EASTL/map.h"
+#include "EASTL/vector.h"
 #include "fs/debug.hh"
 #include "interrupt_stats.hh"
 namespace syscall
@@ -2873,29 +2874,28 @@ namespace syscall
         size_t ret;
 
         if (_arg_int(0, fd) < 0)
-            return -1;
+            return -EINVAL;
 
         eastl::string path;
-        if (_arg_str(1, path, MAXPATH) < 0)
-            return -1;
+       int res=_arg_str(1, path, PATH_MAX) ;
+        if(res<0)
+        {
+            printfRed("[sys_readlinkat] Error fetching path argument\n");
+            return res; // 返回错误码
+        }
 
         uint64 buf;
         if (_arg_addr(2, buf) < 0)
-            return -1;
+            return -EINVAL;
 
         size_t buf_size;
         if (_arg_addr(3, buf_size) < 0)
-            return -1;
+            return -EINVAL;
 
         if (buf_size <= 0)
         {
             printfRed("[sys_readlinkat] bufsiz must be greater than 0");
             return SYS_EINVAL;
-        }
-        if (path.length() > PATH_MAX)
-        {
-            printfRed("[sys_readlinkat] path length exceeds PATH_MAX");
-            return SYS_ENAMETOOLONG;
         }
 
         // 特殊路径处理
@@ -2906,7 +2906,7 @@ namespace syscall
             ret = exe_path.size();
             if (mem::k_vmm.copy_out(*pt, buf, buffer, ret) < 0)
             {
-                return -1;
+                return -EFAULT;
             }
             return ret;
         }
@@ -2957,7 +2957,7 @@ namespace syscall
             if (fd < 0 || (uint)fd >= proc::max_open_files)
             {
                 printfRed("[sys_readlinkat] Invalid dirfd: %d", fd);
-                return SYS_EBADF;
+                return SYS_ENOENT;
             }
 
             fs::file *file = p->get_open_file(fd);
@@ -3032,7 +3032,134 @@ namespace syscall
             }
         }
 
-        // 检查文件是否存在和是否为符号链接
+        // 检查符号链接循环 - 使用路径长度和深度检测
+        {
+            // 分割路径为组件
+            eastl::vector<eastl::string> path_components;
+            eastl::string component;
+            for (size_t i = 0; i < abs_path.length(); ++i)
+            {
+                if (abs_path[i] == '/')
+                {
+                    if (!component.empty())
+                    {
+                        path_components.push_back(component);
+                        component.clear();
+                    }
+                }
+                else
+                {
+                    component += abs_path[i];
+                }
+            }
+            if (!component.empty())
+            {
+                path_components.push_back(component);
+            }
+
+            // 检查是否有目录组件出现过多次
+            eastl::map<eastl::string, int> component_count;
+            int max_repetitions = 0;
+            for (const auto &comp : path_components)
+            {
+                component_count[comp]++;
+                if (component_count[comp] > max_repetitions)
+                {
+                    max_repetitions = component_count[comp];
+                }
+            }
+
+            // 如果某个目录组件出现超过8次，很可能是循环
+            // 或者总路径长度过长（Linux PATH_MAX 通常是 4096）
+            if (max_repetitions > 8 || abs_path.length() > 4096)
+            {
+                printfRed("[sys_readlinkat] Too many symbolic links or path too long: %s", abs_path.c_str());
+                return SYS_ELOOP;
+            }
+
+            // 额外检查：如果路径深度过深（超过40级），也认为是循环
+            if (path_components.size() > 40)
+            {
+                printfRed("[sys_readlinkat] Path depth too deep: %s", abs_path.c_str());
+                return SYS_ELOOP;
+            }
+        }
+
+        // 逐段检查路径中每个父目录的类型和权限
+        size_t last_slash = abs_path.find_last_of('/');
+        if (last_slash != eastl::string::npos && last_slash > 0)
+        {
+            eastl::string parent_path = abs_path.substr(0, last_slash);
+            eastl::string current_path = "";
+            size_t start = 1; // 跳过第一个 '/'
+            
+            while (start <= parent_path.length())
+            {
+                size_t end = parent_path.find('/', start);
+                if (end == eastl::string::npos)
+                    end = parent_path.length();
+
+                current_path += "/" + parent_path.substr(start, end - start);
+
+                // 检查当前路径组件是否存在
+                if (!fs::k_vfs.is_file_exist(current_path.c_str()))
+                {
+                    printfRed("[sys_readlinkat] Directory component does not exist: %s", current_path.c_str());
+                    return SYS_ENOENT;
+                }
+
+                // 检查当前路径组件是否为目录
+                int comp_type = fs::k_vfs.path2filetype(current_path);
+                if (comp_type != fs::FileTypes::FT_DIRECT)
+                {
+                    printfRed("[sys_readlinkat] Path component is not a directory: %s", current_path.c_str());
+                    return SYS_ENOTDIR;
+                }
+
+                // 检查目录的搜索权限（执行权限）
+                uint32_t dir_mode = 0;
+                uint32_t dir_uid = 0, dir_gid = 0;
+                if (vfs_mode_get(current_path, dir_mode, true) == EOK && 
+                    vfs_owner_get(current_path, dir_uid, dir_gid, true) == EOK)
+                {
+                    uint32_t proc_uid = p->get_euid();
+                    uint32_t proc_gid = p->get_egid();
+                    
+                    bool has_search_permission = false;
+                    
+                    // root 用户总是有权限
+                    if (proc_uid == 0)
+                    {
+                        has_search_permission = true;
+                    }
+                    // 检查所有者权限
+                    else if (proc_uid == dir_uid)
+                    {
+                        has_search_permission = (dir_mode & S_IXUSR) != 0;
+                    }
+                    // 检查组权限
+                    else if (proc_gid == dir_gid)
+                    {
+                        has_search_permission = (dir_mode & S_IXGRP) != 0;
+                    }
+                    // 检查其他用户权限
+                    else
+                    {
+                        has_search_permission = (dir_mode & S_IXOTH) != 0;
+                    }
+                    
+                    if (!has_search_permission)
+                    {
+                        printfRed("[sys_readlinkat] Search permission denied for directory: %s", current_path.c_str());
+                        return SYS_EACCES;
+                    }
+                }
+
+                start = end + 1;
+            }
+        }
+
+        // 检查最终文件是否存在和是否为符号链接
         if (!fs::k_vfs.is_file_exist(abs_path))
         {
             printfRed("[sys_readlinkat] File does not exist: %s", abs_path.c_str());
