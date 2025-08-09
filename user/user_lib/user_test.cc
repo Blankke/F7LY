@@ -1,7 +1,7 @@
 
 #include "user.hh"
 
-extern char *bb_cmds[][10];
+
 extern char *libctest[][2];
 
 const char musl_dir[] = "/musl/";
@@ -76,38 +76,38 @@ int basic_test(const char *path = musl_dir)
     {
         printf("#### OS COMP TEST GROUP START basic-glibc ####\n");
     }
-    // run_test("write");
-    // run_test("fork");
-    // run_test("exit");
-    // run_test("wait");
-    // run_test("getpid");
-    // run_test("getppid");
-    // run_test("dup");
-    // run_test("dup2");
-    // run_test("execve");
-    // run_test("getcwd");
-    // run_test("gettimeofday");
-    // run_test("yield");
-    // run_test("sleep");
-    // run_test("times");
-    // run_test("clone");
-    // run_test("brk");
-    // run_test("waitpid");
-    // run_test("mmap");
-    // run_test("fstat");
-    // run_test("uname");
-    // run_test("openat");
-    // run_test("open");
-    // run_test("close");
-    // run_test("read");
-    // run_test("getdents");
-    // run_test("mkdir_");
-    // run_test("chdir");
-    // run_test("mount");       //todo
-    // run_test("umount");      //todo
-    // run_test("munmap");
-    // run_test("unlink");
-    // run_test("pipe");
+    run_test("write");
+    run_test("fork");
+    run_test("exit");
+    run_test("wait");
+    run_test("getpid");
+    run_test("getppid");
+    run_test("dup");
+    run_test("dup2");
+    run_test("execve");
+    run_test("getcwd");
+    run_test("gettimeofday");
+    run_test("yield");
+    run_test("sleep");
+    run_test("times");
+    run_test("clone");
+    run_test("brk");
+    run_test("waitpid");
+    run_test("mmap");
+    run_test("fstat");
+    run_test("uname");
+    run_test("openat");
+    run_test("open");
+    run_test("close");
+    run_test("read");
+    run_test("getdents");
+    run_test("mkdir_");
+    run_test("chdir");
+    run_test("mount");       //todo
+    run_test("umount");      //todo
+    run_test("munmap");
+    run_test("unlink");
+    run_test("pipe");
     // sleep(20);
     if (strcmp(path, musl_dir) == 0)
     {
@@ -131,37 +131,6 @@ int busybox_test(const char *path = musl_dir)
     return 0;
 }
 
-int busybox_glibc_test(void)
-{
-    [[maybe_unused]] int pid;
-    for (int i = 0; bb_cmds[i][0] != NULL; i++)
-    {
-        pid = fork();
-        if (pid < 0)
-        {
-            printf("fork failed\n");
-            return -1;
-        }
-        else if (pid == 0)
-        {
-            chdir(glibc_dir);
-            if (execve("busybox", bb_cmds[i], 0) < 0)
-            {
-                printf("execve failed\n");
-                exit(1);
-            }
-            exit(0);
-        }
-        else
-        {
-            int child_exit_state = 33;
-            if (wait(&child_exit_state) < 0)
-                printf("wait fail\n");
-            printf("shell exited with code %d\n", child_exit_state);
-        }
-    }
-    return 0;
-}
 
 int libcbench_test(const char *path = musl_dir)
 {
@@ -272,10 +241,10 @@ int lmbench_test(const char *path = musl_dir)
     return 0;
 }
 
-int ltp_test(const char *path = musl_dir)
+int ltp_test(bool is_musl)
 {
-    chdir("/musl/ltp/testcases/bin");
-    printf("#### OS COMP TEST GROUP START ltp-musl ####\n");
+    chdir(is_musl ? "/musl/ltp/testcases/bin" : "/glibc/ltp/testcases/bin");
+    printf("#### OS COMP TEST GROUP START ltp-%s ####\n", is_musl ? "musl" : "glibc");
     char *bb_sh[8] = {0};
     int result = 0;
     for (int i = 0; ltp_testcases[i] != NULL; i++)
@@ -285,100 +254,10 @@ int ltp_test(const char *path = musl_dir)
         result = run_test(ltp_testcases[i], bb_sh, 0);
         printf("FAIL LTP CASE %s: %d\n", ltp_testcases[i], result);
     }
-    printf("#### OS COMP TEST GROUP END ltp-musl ####\n");
-    return 0;
-}
-int final_test_musl()
-{
-    // interrupt
-    printf("#### OS COMP TEST GROUP START interrupts-test1-musl ####\n");
-    run_test("/musl/interrupts-test-1");
-    printf("#### OS COMP TEST GROUP END interrupts-test1-musl ####\n\n");
-    printf("#### OS COMP TEST GROUP START interrupts-test2-musl ####\n");
-    run_test("/musl/interrupts-test-2");
-    printf("#### OS COMP TEST GROUP END interrupts-test2-musl ####\n\n");
-    // copy-file-range
-    printf("#### OS COMP TEST GROUP START copy-file-range-test1-musl ####\n");
-    run_test("/musl/copy-file-range-test-1");
-    printf("#### OS COMP TEST GROUP END copy-file-range-test1-musl ####\n\n");
-    printf("#### OS COMP TEST GROUP START copy-file-range-test2-musl ####");
-    run_test("/musl/copy-file-range-test-2");
-    printf("#### OS COMP TEST GROUP END copy-file-range-test2-musl ####\n\n");
-    printf("#### OS COMP TEST GROUP START copy-file-range-test3-musl ####");
-    run_test("/musl/copy-file-range-test-3");
-    printf("#### OS COMP TEST GROUP END copy-file-range-test3-musl ####\n\n");
-    printf("#### OS COMP TEST GROUP START copy-file-range-test4-musl ####");
-    run_test("/musl/copy-file-range-test-4");
-    printf("#### OS COMP TEST GROUP END copy-file-range-test4-musl ####\n\n");
-    // splice
-    char *splice_argv1[] = {"test_splice", "1", NULL};
-    printf("#### OS COMP TEST GROUP START splice-test1-musl ####\n");
-    run_test("/musl/test_splice", splice_argv1, 0);
-    printf("#### OS COMP TEST GROUP END splice-test1-musl ####\n\n");
-    char *splice_argv2[] = {"test_splice", "2", NULL};
-    printf("#### OS COMP TEST GROUP START splice-test2-musl ####\n");
-    run_test("/musl/test_splice", splice_argv2, 0);
-    printf("#### OS COMP TEST GROUP END splice-test2-musl ####\n\n");
-    char *splice_argv3[] = {"test_splice", "3", NULL};
-    printf("#### OS COMP TEST GROUP START splice-test3-musl ####\n");
-    run_test("/musl/test_splice", splice_argv3, 0);
-    printf("#### OS COMP TEST GROUP END splice-test3-musl ####\n\n");
-    char *splice_argv4[] = {"test_splice", "4", NULL};
-    printf("#### OS COMP TEST GROUP START splice-test4-musl ####\n");
-    run_test("/musl/test_splice", splice_argv4, 0);
-    printf("#### OS COMP TEST GROUP END splice-test4-musl ####\n\n");
-    char *splice_argv5[] = {"test_splice", "5", NULL};
-    printf("#### OS COMP TEST GROUP START splice-test5-musl ####\n");
-    run_test("/musl/test_splice", splice_argv5, 0);
-    printf("#### OS COMP TEST GROUP END splice-test5-musl ####\n\n");
+    printf("#### OS COMP TEST GROUP END ltp-%s ####\n", is_musl ? "musl" : "glibc");
     return 0;
 }
 
-int final_test_glibc()
-{
-    // interrupt
-    printf("#### OS COMP TEST GROUP START interrupts-test1-glibc ####\n");
-    run_test("/glibc/interrupts-test-1");
-    printf("#### OS COMP TEST GROUP END interrupts-test1-glibc ####\n");
-    printf("#### OS COMP TEST GROUP START interrupts-test2-glibc ####\n");
-    run_test("/glibc/interrupts-test-2");
-    printf("#### OS COMP TEST GROUP END interrupts-test2-glibc ####\n\n");
-    // copy-file-range
-    printf("#### OS COMP TEST GROUP START copy-file-range-test1-glibc ####\n");
-    run_test("/glibc/copy-file-range-test-1");
-    printf("#### OS COMP TEST GROUP END copy-file-range-test1-glibc ####\n\n");
-    printf("#### OS COMP TEST GROUP START copy-file-range-test2-glibc ####\n");
-    run_test("/glibc/copy-file-range-test-2");
-    printf("#### OS COMP TEST GROUP END copy-file-range-test2-glibc ####\n\n");
-    printf("#### OS COMP TEST GROUP START copy-file-range-test3-glibc ####\n");
-    run_test("/glibc/copy-file-range-test-3");
-    printf("#### OS COMP TEST GROUP END copy-file-range-test3-glibc ####\n\n");
-    printf("#### OS COMP TEST GROUP START copy-file-range-test4-glibc ####\n");
-    run_test("/glibc/copy-file-range-test-4");
-    printf("#### OS COMP TEST GROUP END copy-file-range-test4-glibc ####\n\n");
-    // splice
-    char *splice_argv1[] = {"test_splice", "1", NULL};
-    printf("#### OS COMP TEST GROUP START splice-test1-glibc ####\n");
-    run_test("/glibc/test_splice", splice_argv1, 0);
-    printf("#### OS COMP TEST GROUP END splice-test1-glibc ####\n\n");
-    char *splice_argv2[] = {"test_splice", "2", NULL};
-    printf("#### OS COMP TEST GROUP START splice-test2-glibc ####\n");
-    run_test("/glibc/test_splice", splice_argv2, 0);
-    printf("#### OS COMP TEST GROUP END splice-test2-glibc ####\n\n");
-    char *splice_argv3[] = {"test_splice", "3", NULL};
-    printf("#### OS COMP TEST GROUP START splice-test3-glibc ####\n");
-    run_test("/glibc/test_splice", splice_argv3, 0);
-    printf("#### OS COMP TEST GROUP END splice-test3-glibc ####\n\n");
-    char *splice_argv4[] = {"test_splice", "4", NULL};
-    printf("#### OS COMP TEST GROUP START splice-test4-glibc ####\n");
-    run_test("/glibc/test_splice", splice_argv4, 0);
-    printf("#### OS COMP TEST GROUP END splice-test4-glibc ####\n\n");
-    char *splice_argv5[] = {"test_splice", "5", NULL};
-    printf("#### OS COMP TEST GROUP START splice-test5-glibc ####\n");
-    run_test("/glibc/test_splice", splice_argv5, 0);
-    printf("#### OS COMP TEST GROUP END splice-test5-glibc ####\n\n");
-    return 0;
-}
 
 int git_test(const char *path)
 {
@@ -403,182 +282,124 @@ int git_test(const char *path)
 }
 
 char *libctest[][2] = {
-    // {"argv", NULL},
-    // {"basename", NULL},
-    // {"clocale_mbfuncs", NULL},
-    // {"clock_gettime", NULL},
-    // {"dirname", NULL},
-    // {"env", NULL},
+    {"argv", NULL},
+    {"basename", NULL},
+    {"clocale_mbfuncs", NULL},
+    {"clock_gettime", NULL},
+    {"dirname", NULL},
+    {"env", NULL},
     {"fdopen", NULL}, // fdopen failed 问题在于写入后读不出来，怀疑根本没写入成功
-    // {"fnmatch", NULL},
-    // // // {"fscanf", NULL}, //ioctl 爆了
-    // // // {"fwscanf", NULL}, //死了
-    // {"iconv_open", NULL},
-    // {"inet_pton", NULL},
-    // {"mbc", NULL},
-    // {"memstream", NULL},
-    // // {"pthread_cancel_points", NULL}, //sig， fork高级用法
-    // {"pthread_cancel", NULL}, // sig， fork高级用法
-    // {"pthread_cond", NULL},   // sig， fork高级用法
-    // {"pthread_tsd", NULL},    // sig， fork高级用法
-    // {"qsort", NULL},
-    // {"random", NULL},
-    // {"search_hsearch", NULL},
-    // {"search_insque", NULL},
-    // {"search_lsearch", NULL},
-    // {"search_tsearch", NULL},
-    // // // // {"setjmp", NULL}, //信号相关，爆了
-    // {"snprintf", NULL},
-    // // // // {"socket", NULL}, // 网络相关，这个不测了
-    // {"sscanf", NULL},
-    // {"sscanf_long", NULL}, //龙芯会爆，riscv正常
-    // {"stat", NULL}, //sys_fstatat我关掉了，原来就是关的，开了basictest爆炸，应该没实现对
-    // {"strftime", NULL},
-    // {"string", NULL},
-    // {"string_memcpy", NULL},
-    // {"string_memmem", NULL},
-    // {"string_memset", NULL},
-    // {"string_strchr", NULL},
-    // {"string_strcspn", NULL},
-    // {"string_strstr", NULL},
-    // {"strptime", NULL},
-    // {"strtod", NULL},
-    // {"strtod_simple", NULL},
-    // {"strtof", NULL},
-    // {"strtol", NULL},
-    // {"strtold", NULL},
-    // {"swprintf", NULL},
-    // {"tgmath", NULL},
-    // {"time", NULL},
-    // {"tls_align", NULL},
-    // {"udiv", NULL},
-    // // // // {"ungetc", NULL}, //文件系统爆了
-    // // // // {"utime", NULL}, // sys_utimensat实现不正确
-    // {"wcsstr", NULL},
-    // {"wcstol", NULL},
-    // // // // {"daemon_failure", NULL}, // 爆了
-    // {"dn_expand_empty", NULL},
-    // {"dn_expand_ptr_0", NULL},
-    // // // // {"fflush_exit", NULL},//fd爆了，标准输出不见了
-    // {"fgets_eof", NULL},
-    // {"fgetwc_buffering", NULL},
-    // {"fpclassify_invalid_ld80", NULL},
-    // {"ftello_unflushed_append", NULL},
-    // {"getpwnam_r_crash", NULL},
-    // {"getpwnam_r_errno", NULL},
-    // {"iconv_roundtrips", NULL},
-    // {"inet_ntop_v4mapped", NULL},
-    // {"inet_pton_empty_last_field", NULL},
-    // {"iswspace_null", NULL},
-    // {"lrand48_signextend", NULL},
-    // {"lseek_large", NULL},
-    // {"malloc_0", NULL},
-    // {"mbsrtowcs_overflow", NULL},
-    // {"memmem_oob_read", NULL},
-    // {"memmem_oob", NULL},
-    // {"mkdtemp_failure", NULL},
-    // {"mkstemp_failure", NULL},
-    // {"printf_1e9_oob", NULL},
-    // {"printf_fmt_g_round", NULL},
-    // {"printf_fmt_g_zeros", NULL},
-    // {"printf_fmt_n", NULL},
-    // // {"pthread_robust_detach", NULL}, //爆了
-    // {"pthread_cancel_sem_wait", NULL},   // sig， fork高级用法
-    // {"pthread_cond_smasher", NULL},      // sig， fork高级用法
-    // // {"pthread_condattr_setclock", NULL}, // sig， fork高级用法
-    // {"pthread_exit_cancel", NULL},       // sig， fork高级用法
-    // {"pthread_once_deadlock", NULL},     // sig， fork高级用法
-    // {"pthread_rwlock_ebusy", NULL},      // sig， fork高级用法
-    // {"putenv_doublefree", NULL},
-    // {"regex_backref_0", NULL},
-    // {"regex_bracket_icase", NULL},
-    // {"regex_ere_backref", NULL},
-    // {"regex_escaped_high_byte", NULL},
-    // {"regex_negated_range", NULL},
-    // {"regexec_nosub", NULL},
-    // // // // {"rewind_clear_error", NULL}, // 爆了
-    // // // // {"rlimit_open_files", NULL}, // 爆了
-    // {"scanf_bytes_consumed", NULL},
-    // {"scanf_match_literal_eof", NULL},
-    // {"scanf_nullbyte_char", NULL},
-    // {"setvbuf_unget", NULL}, // streamdevice not support lseek currently!但是pass了
-    // {"sigprocmask_internal", NULL},
-    // {"sscanf_eof", NULL},
-    // {"statvfs", NULL},
-    // {"strverscmp", NULL},
-    // {"syscall_sign_extend", NULL},
-    // {"uselocale_0", NULL},
-    // {"wcsncpy_read_overflow", NULL},
-    // {"wcsstr_false_negative", NULL},
-    {NULL}};
-
-char *bb_cmds[][10] = {
-    {"echo", "#### independent command test", NULL},
-    {"ash", "-c", "exit", NULL},
-    {"sh", "-c", "exit", NULL},
-    {"basename", "/aaa/bbb", NULL},
-    {"cal", NULL},
-    {"clear", NULL},
-    {"date", NULL},
-    {"df", NULL},
-    {"dirname", "/aaa/bbb", NULL},
-    {"dmesg", NULL},
-    {"du", NULL},
-    {"expr", "1", "+", "1", NULL},
-    {"false", NULL}, // 这个有问题
-    {"true", NULL},
-    {"which", "ls", NULL}, // 这个有问题
-    {"uname", NULL},
-    {"uptime", NULL},
-    {"printf", "abc\\n", NULL}, // 这个有问题
-    {"ps", NULL},               // 这个有问题
-    {"pwd", NULL},
-    {"free", NULL},
-    {"hwclock", NULL},
-    {"kill", "10", NULL},
-    {"ls", NULL}, // 这个能过测评，但是还是有问题
-    {"sleep", "1", NULL},
-    {"echo", "#### file operation test", NULL},
-    {"touch", "test.txt", NULL},
-    {"echo \"hello world\" > test.txt", NULL}, // 这个有问题
-    {"cat", "test.txt", NULL},
-    {"cut", "-c", "3", "test.txt", NULL},
-    // {"od", "test.txt", NULL},
-    // {"head", "test.txt", NULL},
-    // {"tail", "test.txt", NULL},
-    // {"hexdump", "-C", "test.txt", NULL},
-    // {"md5sum", "test.txt", NULL},
-    // {"echo 'ccccccc' >> test.txt", NULL}, // applet not found
-    // {"echo 'bbbbbbb' >> test.txt", NULL}, // applet not found
-    // {"echo 'aaaaaaa' >> test.txt", NULL}, // applet not found
-    // {"echo '2222222' >> test.txt", NULL}, // applet not found
-    // {"echo '1111111' >> test.txt", NULL}, // applet not found
-    // {"echo 'bbbbbbb' >> test.txt", NULL}, // applet not found
-    {"sort test.txt | busybox uniq", NULL},
-    {"stat", "test.txt", NULL},
-    {"strings", "test.txt", NULL},
-    {"wc", "test.txt", NULL},
-    {"[ -f test.txt ]", NULL}, // applet not found
-    {"more", "test.txt", NULL},
-    {"rm", "test.txt", NULL},
-    {"mkdir", "test_dir", NULL},
-    {"mv", "test_dir", "test", NULL},
-    {"rmdir", "test", NULL},
-    {"grep", "hello", "busybox_cmd.txt", NULL},         // 这个有问题
-    {"cp", "busybox_cmd.txt", "busybox_cmd.bak", NULL}, // 这个有问题
-    {"rm", "busybox_cmd.bak", NULL},
-    // {"find", ".", "-name", "busybox_cmd.txt", NULL},
-    {"echo", "hello", NULL},
+    {"fnmatch", NULL},
+    // // {"fscanf", NULL}, //ioctl 爆了
+    // // {"fwscanf", NULL}, //死了
+    {"iconv_open", NULL},
+    {"inet_pton", NULL},
+    {"mbc", NULL},
+    {"memstream", NULL},
+    // {"pthread_cancel_points", NULL}, //sig， fork高级用法
+    {"pthread_cancel", NULL}, // sig， fork高级用法
+    {"pthread_cond", NULL},   // sig， fork高级用法
+    {"pthread_tsd", NULL},    // sig， fork高级用法
+    {"qsort", NULL},
+    {"random", NULL},
+    {"search_hsearch", NULL},
+    {"search_insque", NULL},
+    {"search_lsearch", NULL},
+    {"search_tsearch", NULL},
+    // // // {"setjmp", NULL}, //信号相关，爆了
+    {"snprintf", NULL},
+    // // // {"socket", NULL}, // 网络相关，这个不测了
+    {"sscanf", NULL},
+    {"sscanf_long", NULL}, //龙芯会爆，riscv正常
+    {"stat", NULL}, //sys_fstatat我关掉了，原来就是关的，开了basictest爆炸，应该没实现对
+    {"strftime", NULL},
+    {"string", NULL},
+    {"string_memcpy", NULL},
+    {"string_memmem", NULL},
+    {"string_memset", NULL},
+    {"string_strchr", NULL},
+    {"string_strcspn", NULL},
+    {"string_strstr", NULL},
+    {"strptime", NULL},
+    {"strtod", NULL},
+    {"strtod_simple", NULL},
+    {"strtof", NULL},
+    {"strtol", NULL},
+    {"strtold", NULL},
+    {"swprintf", NULL},
+    {"tgmath", NULL},
+    {"time", NULL},
+    {"tls_align", NULL},
+    {"udiv", NULL},
+    // // // {"ungetc", NULL}, //文件系统爆了
+    // // // {"utime", NULL}, // sys_utimensat实现不正确
+    {"wcsstr", NULL},
+    {"wcstol", NULL},
+    // // // {"daemon_failure", NULL}, // 爆了
+    {"dn_expand_empty", NULL},
+    {"dn_expand_ptr_0", NULL},
+    // // // {"fflush_exit", NULL},//fd爆了，标准输出不见了
+    {"fgets_eof", NULL},
+    {"fgetwc_buffering", NULL},
+    {"fpclassify_invalid_ld80", NULL},
+    {"ftello_unflushed_append", NULL},
+    {"getpwnam_r_crash", NULL},
+    {"getpwnam_r_errno", NULL},
+    {"iconv_roundtrips", NULL},
+    {"inet_ntop_v4mapped", NULL},
+    {"inet_pton_empty_last_field", NULL},
+    {"iswspace_null", NULL},
+    {"lrand48_signextend", NULL},
+    {"lseek_large", NULL},
+    {"malloc_0", NULL},
+    {"mbsrtowcs_overflow", NULL},
+    {"memmem_oob_read", NULL},
+    {"memmem_oob", NULL},
+    {"mkdtemp_failure", NULL},
+    {"mkstemp_failure", NULL},
+    {"printf_1e9_oob", NULL},
+    {"printf_fmt_g_round", NULL},
+    {"printf_fmt_g_zeros", NULL},
+    {"printf_fmt_n", NULL},
+    // {"pthread_robust_detach", NULL}, //爆了
+    {"pthread_cancel_sem_wait", NULL},   // sig， fork高级用法
+    {"pthread_cond_smasher", NULL},      // sig， fork高级用法
+    // {"pthread_condattr_setclock", NULL}, // sig， fork高级用法
+    {"pthread_exit_cancel", NULL},       // sig， fork高级用法
+    {"pthread_once_deadlock", NULL},     // sig， fork高级用法
+    {"pthread_rwlock_ebusy", NULL},      // sig， fork高级用法
+    {"putenv_doublefree", NULL},
+    {"regex_backref_0", NULL},
+    {"regex_bracket_icase", NULL},
+    {"regex_ere_backref", NULL},
+    {"regex_escaped_high_byte", NULL},
+    {"regex_negated_range", NULL},
+    {"regexec_nosub", NULL},
+    // // // {"rewind_clear_error", NULL}, // 爆了
+    // // // {"rlimit_open_files", NULL}, // 爆了
+    {"scanf_bytes_consumed", NULL},
+    {"scanf_match_literal_eof", NULL},
+    {"scanf_nullbyte_char", NULL},
+    {"setvbuf_unget", NULL}, // streamdevice not support lseek currently!但是pass了
+    {"sigprocmask_internal", NULL},
+    {"sscanf_eof", NULL},
+    {"statvfs", NULL},
+    {"strverscmp", NULL},
+    {"syscall_sign_extend", NULL},
+    {"uselocale_0", NULL},
+    {"wcsncpy_read_overflow", NULL},
+    {"wcsstr_false_negative", NULL},
     {NULL}};
 
 char *ltp_testcases[] = {
+    NULL,
     // "abort01",
-    // "abs01",             // 完全PASS
+    "abs01", // 完全PASS,没summary
     // "accept01",
     // "accept02",
     // "accept03",
     // "accept4_01",
-    // "access01", // 107 pass 92 fail
+    "access01", // 107 pass 92 fail
     // "access02",
     // "access03",
     // "access04",
@@ -702,12 +523,12 @@ char *ltp_testcases[] = {
     // "check_pe",
     // "check_setkey",
     // "check_simple_capset",
-    // "chmod01", // 完全PASS
-    // "chmod03",   //pass 4
+    "chmod01", // 完全PASS
+    "chmod03", // pass 4
     // "chmod05", //   setgroups未实现
-    // "chmod06", //   pass4 fail 5
-    // "chmod07", //pass4 fail 5
-    // "chown01",     //pass
+    "chmod06", //   pass4 fail 5
+    "chmod07", // pass4 fail 5
+    "chown01", // pass
     // "chown01_16",
     // "chown02",
     // "chown02_16",
@@ -724,7 +545,7 @@ char *ltp_testcases[] = {
     // "cleanup_lvm.sh",
     // "clock_adjtime01",
     // "clock_adjtime02",
-    // "clock_getres01", //pass
+    "clock_getres01", // pass
     // "clock_gettime01",
     // "clock_gettime02",
     // "clock_gettime03",
@@ -793,12 +614,12 @@ char *ltp_testcases[] = {
     // "cpuset01",
     // "crash01",
     // "crash02",  //  acct未实现
-    // "creat01", //passed   6
-    // "creat03", //pass
-    // "creat04",  //pass
-    // "creat05", //pass
-    // "creat06", //pass
-    // "creat07",   //pass4 fail4
+    "creat01", // passed   6
+    "creat03", // pass
+    "creat04", // pass
+    "creat05", // pass
+    "creat06", // pass
+    // "creat07",   //pass4 fail4 这个好像会trap
     // "creat07_child",
     // "creat08",   //group
     // "creat09",   // /dev/block/loop0
@@ -854,34 +675,34 @@ char *ltp_testcases[] = {
     // "dns-stress-lib.sh",
     // "doio",
     // "du01.sh",
-    // "dup01",//完全PASS
-    // "dup02",// 完全PASS
-    // "dup03",// 完全PASS
-    // "dup04",// 完全PASS
-    // "dup05",  //pass
-    // "dup06", //完全PASS
-    // "dup07",//完全PASS
-    // "dup201",//完全PASS
-    // "dup202",//完全PASS
-    // "dup203", //pass
-    // "dup204",// 完全PASS
-    // "dup205",//完全PASS
-    // "dup206", //完全PASS
+    "dup01",  // 完全PASS
+    "dup02",  // 完全PASS
+    "dup03",  // 完全PASS
+    "dup04",  // 完全PASS
+    "dup05",  // pass
+    "dup06",  // 完全PASS
+    "dup07",  // 完全PASS
+    "dup201", // 完全PASS
+    "dup202", // 完全PASS
+    "dup203", // pass
+    "dup204", // 完全PASS
+    "dup205", // 完全PASS
+    "dup206", // 完全PASS
     // "dup207", //
     // "dup3_01",//
-    // "dup3_02",// 完全PASS
+    "dup3_02", // 完全PASS
     // "dynamic_debug01.sh",
     // "ebizzy",
     // "eject_check_tray",
     // "eject-tests.sh",
     // "endian_switch01",
-    // "epoll_create01", // pass 2 skip 1
+    "epoll_create01", // pass 2 skip 1
     // "epoll_create02",
-    // "epoll_create1_01", // pass 1 skip 1
+    "epoll_create1_01", // pass 1 skip 1
     // "epoll_create1_02",
     // "epoll_ctl01",
     // "epoll_ctl02",
-    // "epoll_ctl03", // PASS
+    "epoll_ctl03", // PASS
     // "epoll_ctl04",
     // "epoll_ctl05",
     // "epoll_pwait01",
@@ -916,10 +737,10 @@ char *ltp_testcases[] = {
     // "execle01_child",
     // "execlp01",
     // "execlp01_child",
-    // "execv01",               // 完全PASS
+    "execv01", // 完全PASS
     // "execv01_child",
     // "execve_child",
-    // "execve01",              // 完全PASS
+    "execve01", // 完全PASS
     // "execve01_child",
     // "execve02",
     // "execve03",
@@ -938,12 +759,12 @@ char *ltp_testcases[] = {
     // "exit01",
     // "exit02",
     // "f00f",
-    // "faccessat01", //完全PASS
-    // "faccessat02", // 完全PASS
-    // "faccessat201",  //pass
+    "faccessat01",  // 完全PASS
+    "faccessat02",  // 完全PASS
+    "faccessat201", // pass
     // "faccessat202", //涉及网络😭😭😭
     // "fallocate01",    //过了一半
-    // "fallocate02",   //完全通过
+    "fallocate02", // 完全通过
     // "fallocate03", //卡死了
     // "fallocate04",
     // "fallocate05",
@@ -973,57 +794,57 @@ char *ltp_testcases[] = {
     // "fanotify22",
     // "fanotify23",
     // "fanout01",
-    // "fchdir01", //完全PASS
-    // "fchdir02", // 完全PASS
+    "fchdir01", // 完全PASS
+    "fchdir02", // 完全PASS
     // "fchdir03",  // fail
-    // "fchmod01",   //pass
+    "fchmod01", // pass
     // "fchmod02",  //  /etc/group
-    // "fchmod03",//pass 
-    // "fchmod04",//pass
+    "fchmod03", // pass
+    "fchmod04", // pass
     // "fchmod05",//爆了
     // "fchmod06",//pass1 fail2
-    // "fchmodat01",  //pass6
-    // "fchmodat02", //pass5 fail1
-    // "fchown01",//pass
+    "fchmodat01", // pass6
+    "fchmodat02", // pass5 fail1
+    "fchown01",   // pass
     // "fchown01_16",
-    // "fchown02", //pass 2 fail 1
+    "fchown02", // pass 2 fail 1
     // "fchown02_16",
     // "fchown03",  //setresgid未实现
     // "fchown03_16",
-    // "fchown04",  //pass 2 fail 1
+    "fchown04", // pass 2 fail 1
     // "fchown04_16",
-    // "fchown05",  //passed   6
+    "fchown05", // passed   6
     // "fchown05_16",
     // "fchownat01",   //pass但是没summary
     // "fchownat02",////pass但是没summary
     // "fcntl01",
     // "fcntl01_64",
-    // "fcntl02", //pass
-    // "fcntl02_64",//pass
-    // "fcntl03",//pass
-    // "fcntl03_64", //pass
-    // "fcntl04", //pass
-    // "fcntl04_64", //pass
-    // "fcntl05",   //pass
-    // "fcntl05_64",  //pass
+    "fcntl02",    // pass
+    "fcntl02_64", // pass
+    "fcntl03",    // pass
+    "fcntl03_64", // pass
+    "fcntl04",    // pass
+    "fcntl04_64", // pass
+    "fcntl05",    // pass
+    "fcntl05_64", // pass
     // "fcntl07",
     // "fcntl07_64",
-    // "fcntl08",   //pass
-    // "fcntl08_64", //pass
-    // "fcntl09",   //pass
-    // "fcntl09_64",   //pass
-    // "fcntl10",   //pass
-    // "fcntl10_64", //pass
+    "fcntl08",    // pass
+    "fcntl08_64", // pass
+    "fcntl09",    // pass
+    "fcntl09_64", // pass
+    "fcntl10",    // pass
+    "fcntl10_64", // pass
     // "fcntl11",
     // "fcntl11_64",
     // "fcntl12", //fail
     // "fcntl12_64",//fail
-    // "fcntl13",  //pass
-    // "fcntl13_64", //pass
+    "fcntl13",    // pass
+    "fcntl13_64", // pass
     // "fcntl14", //rt_sigsuspend
     // "fcntl14_64",//rt_sigsuspend
-    // "fcntl15", //passs5
-    // "fcntl15_64", //pass5
+    "fcntl15",    // passs5
+    "fcntl15_64", // pass5
     // "fcntl16",
     // "fcntl16_64",
     // "fcntl17",
@@ -1070,8 +891,8 @@ char *ltp_testcases[] = {
     // "fcntl38_64",
     // "fcntl39",
     // "fcntl39_64",
-    // "fdatasync01",    //pass
-    // "fdatasync02",   //pass
+    "fdatasync01", // pass
+    "fdatasync02", // pass
     // "fdatasync03",    //loop0
     // "fgetxattr01",   //bin/sh
     // "fgetxattr02",
@@ -1089,11 +910,11 @@ char *ltp_testcases[] = {
     // "float_iperb",
     // "float_power",
     // "float_trigo",
-    // "flock01",   //pass 3
-    // "flock02", //pass 3
+    "flock01", // pass 3
+    "flock02", // pass 3
     // "flock03",  //pass1 fail2 brok 1
-    // "flock04",   //pass5 fail1
-    // "flock06",   //pass2 fail 2
+    "flock04", // pass5 fail1
+    "flock06", // pass2 fail 2
     // "force_erase.sh",
     // "fork_exec_loop",
     // "fork_freeze.sh",
@@ -1109,7 +930,7 @@ char *ltp_testcases[] = {
     // "fork13",
     // "fork14",
     // "fou01.sh",
-    // "fpathconf01",  //pass
+    "fpathconf01", // pass
     // "fptest01",
     // "fptest02",
     // "frag",
@@ -1244,20 +1065,20 @@ char *ltp_testcases[] = {
     // "fspick01", ///dev/block/loop0
     // "fspick02",
     // "fsstress",
-    // "fstat02",  //pass 5 fail 1
+    "fstat02", // pass 5 fail 1
     // "fstat02_64",
-    // "fstat03", //pass2
-    // "fstat03_64",//pass2
+    "fstat03",    // pass2
+    "fstat03_64", // pass2
     // "fstatat01",  //无summary
     // "fstatfs01",  ///dev/loop0
     // "fstatfs01_64",
-    // "fstatfs02", //pass 2
-    // "fstatfs02_64", //pass2
+    "fstatfs02",    // pass 2
+    "fstatfs02_64", // pass2
     // "fsx.sh",
     // "fsx-linux",
     // "fsync01", ///dev/block/loop0
     // "fsync02", //bin/sh
-    // "fsync03",  //pass
+    "fsync03", // pass
     // "fsync04",  ///dev/block/loop0
     // "ftest01",
     // "ftest02",
@@ -1346,13 +1167,13 @@ char *ltp_testcases[] = {
     // "getaddrinfo_01",
     // "getcontext01",
     // "getcpu01",  //sched_setaffinity
-    // "getcwd01",//pass
-    // "getcwd02", // 完全PASS
-    // "getcwd03",     //pass
+    "getcwd01", // pass
+    "getcwd02", // 完全PASS
+    "getcwd03", // pass
     // "getcwd04", // Test needs at least 2 CPUs online 这个是因为 sched_getaffinity返回0，说不定它不用两个CPU
     // "getdents01",
     // "getdents02",
-    // "getdomainname01", //pass 1
+    "getdomainname01", // pass 1
     // "getegid01",
     // "getegid01_16",
     // "getegid02",
@@ -1377,20 +1198,20 @@ char *ltp_testcases[] = {
     // "getitimer02",
     // "getpagesize01",
     // "getpeername01",
-    // "getpgid01", // PASS
-    // "getpgid02", // PASS
+    "getpgid01", // PASS
+    "getpgid02", // PASS
     // "getpgrp01",
-    // "getpid01", // PASS
-    // "getpid02", // PASS
-    // "getppid01",// PASS
-    // "getppid02",// PASS
+    "getpid01",  // PASS
+    "getpid02",  // PASS
+    "getppid01", // PASS
+    "getppid02", // PASS
     // "getpriority01",
     // "getpriority02",
-    // "getrandom01",// pass
-    // "getrandom02", // 完全PASS
-    // "getrandom03", // 完全PASS
-    // "getrandom04", // 完全PASS
-    // "getrandom05",// pass
+    "getrandom01", // pass
+    "getrandom02", // 完全PASS
+    "getrandom03", // 完全PASS
+    "getrandom04", // 完全PASS
+    "getrandom05", // pass
     // "getresgid01",
     // "getresgid01_16",
     // "getresgid02",
@@ -1403,7 +1224,7 @@ char *ltp_testcases[] = {
     // "getresuid02_16",
     // "getresuid03",
     // "getresuid03_16",
-    // "getrlimit01",  //passed   16
+    "getrlimit01", // passed   16
     // "getrlimit02",  //爆了
     // "getrlimit03",
     // "getrusage01",
@@ -1416,9 +1237,9 @@ char *ltp_testcases[] = {
     // "getsockname01",
     // "getsockopt01",
     // "getsockopt02",
-    // "gettid01", // PASS
-    // "gettid02", // PASS
-    // "gettimeofday01",//pass
+    // "gettid01",       // PASS
+    // "gettid02",       // PASS
+    "gettimeofday01", // pass
     // "gettimeofday02",
     // "getuid01",
     // "getuid01_16",
@@ -1674,10 +1495,10 @@ char *ltp_testcases[] = {
     // "lgetxattr01",
     // "lgetxattr02",
     // "libcgroup_freezer",
-    // "link02",  //pass
-    // "link04",//pass9 fail 5
+    "link02", // pass
+    "link04", // pass9 fail 5
     // "link05", //pass,这个也是逆天数量
-    // "link08", //pass3 fail1
+    "link08", // pass3 fail1
     // "linkat01",  //没summary
     // "linkat02",///dev/block/loop0
     // "linktest.sh",
@@ -1688,17 +1509,17 @@ char *ltp_testcases[] = {
     // "llistxattr01",
     // "llistxattr02",
     // "llistxattr03",
-    // "llseek01",  //pass
-    // "llseek02",  //pass
-    // "llseek03",//pass
+    "llseek01", // pass
+    "llseek02", // pass
+    "llseek03", // pass
     // "ln_tests.sh",
     // "lock_torture.sh",
     // "locktests",
     // "logrotate_tests.sh",
     // "lremovexattr01",
-    // "lseek01", //passed   4
-    // "lseek02",  //passed   15
-    // "lseek07", //pass
+    "lseek01", // passed   4
+    "lseek02", // passed   15
+    "lseek07", // pass
     // "lseek11",  //SEEK_DATA and SEEK_HOLE not implemented
     // "lsmod01.sh",
     // "lstat01",
@@ -1715,7 +1536,7 @@ char *ltp_testcases[] = {
     // "macsec03.sh",
     // "macvlan01.sh",
     // "macvtap01.sh",
-    // "madvise01",  
+    // "madvise01",
     // "madvise02",
     // "madvise03",
     // "madvise05",
@@ -1783,18 +1604,18 @@ char *ltp_testcases[] = {
     // "memcg_test_4.sh",
     // "memcg_usage_in_bytes_test.sh",
     // "memcg_use_hierarchy_test.sh",
-    // "memcmp01",  //pass 2
+    "memcmp01", // pass 2
     // "memcontrol01",   ///proc/self/mounts
     // "memcontrol02",  ///dev/block/loop0
     // "memcontrol03",  ///dev/block/loop0
     // "memcontrol04",   ///dev/block/loop0连着跑似乎就变成loop1和loop2了
-    // "memcpy01",  //passed   2
+    "memcpy01", // passed   2
     // "memctl_test01",
     // "memfd_create01",
     // "memfd_create02",
     // "memfd_create03",
     // "memfd_create04",
-    // "memset01",  //passed   1
+    "memset01", // passed   1
     // "memtoy",
     // "mesgq_nstest",
     // "migrate_pages01",
@@ -1807,12 +1628,12 @@ char *ltp_testcases[] = {
     // "mincore04",
     // "mkdir_tests.sh",
     // "mkdir02", //setregrid未实现
-    // "mkdir03",  //pass
+    "mkdir03", // pass
     // "mkdir04",  // setreuid
     // "mkdir05",  //group id
     // "mkdir09",   //bin/sh
-    // "mkdirat01", //pass
-    // "mkdirat02",  //pass2fail2
+    "mkdirat01", // pass
+    "mkdirat02", // pass2fail2
     // "mkfs01.sh",
     // "mknod01",
     // "mknod02",
@@ -1837,28 +1658,28 @@ char *ltp_testcases[] = {
     // "mlockall01",
     // "mlockall02",
     // "mlockall03",
-    // "mmap001",   //pass.
+    "mmap001", // pass.
     // "mmap01",   //bin/sh
     // "mmap02",   //failed
     // "mmap03",//无所谓，没summary
     // "mmap04",
-    // "mmap05",  //pass1 但是panic关了一个
+    "mmap05", // pass1 但是panic关了一个
     // "mmap06", //pass6 fail 2
-    // "mmap08", //pass
-    // "mmap09",  //pass
+    "mmap08", // pass
+    "mmap09", // pass
     // "mmap1",
     // "mmap10", //无所谓，没summary
     // "mmap11",   //pass不能和别的一起跑
     // "mmap12",
-    // "mmap13", // pass
+    "mmap13", // pass
     // "mmap14",
-    // "mmap15",  //pass
+    "mmap15", // pass
     // "mmap16",
-    // "mmap17",   //pass
+    "mmap17", // pass
     // "mmap18",
-    // "mmap19",  //pass
+    "mmap19", // pass
     // "mmap2",
-    // "mmap20",   //pass
+    "mmap20", // pass
     // "mmap3",
     // "mmap-corruption01",
     // "mmapstress01",
@@ -1923,11 +1744,11 @@ char *ltp_testcases[] = {
     // "mqns_02",
     // "mqns_03",
     // "mqns_04",
-    // "mremap01",//pass
-    // "mremap02",//pass
-    // "mremap03",//pass
-    // "mremap04", //pass
-    // "mremap05",//pass
+    "mremap01", // pass
+    "mremap02", // pass
+    "mremap03", // pass
+    "mremap04", // pass
+    "mremap05", // pass
     // "mremap06",
     // "msg_comm",
     // "msgctl01",
@@ -1954,17 +1775,17 @@ char *ltp_testcases[] = {
     // "msgsnd05",
     // "msgsnd06",
     // "msgstress01",
-    // "msync01",  //pass
-    // "msync02",  //pass两个
+    "msync01", // pass
+    "msync02", // pass两个
     // "msync03",   //pass
     // "msync04",  ///dev/loop0
     // "mtest01",
     // "munlock01",
     // "munlock02",
     // "munlockall01",
-    // "munmap01", //pass
-    // "munmap02",  //pass
-    // "munmap03",  //pass
+    "munmap01", // pass
+    "munmap02", // pass
+    "munmap03", // pass
     // "mv_tests.sh",
     // "myfunctions.sh",
     // "name_to_handle_at01",
@@ -1980,7 +1801,7 @@ char *ltp_testcases[] = {
     // "netns_sysfs.sh",
     // "netstat01.sh",
     // "netstress",
-    // "newuname01", //pass
+    "newuname01", // pass
     // "nextafter01",
     // "nfs_flock",
     // "nfs_flock_dgen",
@@ -2032,21 +1853,21 @@ char *ltp_testcases[] = {
     // "open_by_handle_at02",
     // "open_tree01",
     // "open_tree02",
-    // "open01",    //pass
-    // "open02", //pass1 fail1
-    // "open03", // 完全PASS
-    // "open04",    //完全PASS
-    // "open06",   //pass
-    // "open07",   //pass
+    "open01", // pass
+    "open02", // pass1 fail1
+    "open03", // 完全PASS
+    "open04", // 完全PASS
+    "open06", // pass
+    "open07", // pass
     // "open08", // setgid
-    // "open09", //pass
+    "open09", // pass
     // "open10", // setgid
-    // "open11",    //pass
+    "open11", // pass
     // "open12",    //过三个
     // "open12_child",//这个不是测例
-    // "open13",    // pass
+    "open13", // pass
     // "open14",    //pass这个测例要跑一年，别急着掐死，多等会
-    // "openat01", // pass
+    "openat01", // pass
     // "openat02",   //爆了
     // "openat02_child",
     // "openat03",   //pass这个和那个一年是同一个
@@ -2060,8 +1881,8 @@ char *ltp_testcases[] = {
     // "page01",
     // "page02",
     // "parameters.sh",
-    // "pathconf01",   //pass
-    // "pathconf02",  //pass1 fail5
+    "pathconf01", // pass
+    "pathconf02", // pass1 fail5
     // "pause01",
     // "pause02",
     // "pause03",
@@ -2101,22 +1922,22 @@ char *ltp_testcases[] = {
     // "pids_task2",
     // "ping01.sh",
     // "ping02.sh",
-    // "pipe01",// 完全PASS
+    "pipe01", // 完全PASS
     // "pipe02",
-    // "pipe03", // 完全PASS
+    "pipe03", // 完全PASS
     // "pipe04", //管道给写爆了，感觉是时间片太长了
-    // "pipe05", // 完全PASS
-    // "pipe06",    // 完全PASS
+    "pipe05", // 完全PASS
+    "pipe06", // 完全PASS
     // "pipe07", //proc/self/fd没写
     // "pipe08",
-    // "pipe09", // 完全PASS
-    // "pipe10", // 完全PASS
-    // "pipe11", //pass
-    // "pipe12", // pass
+    "pipe09", // 完全PASS
+    "pipe10", // 完全PASS
+    "pipe11", // pass
+    "pipe12", // pass
     // "pipe13", // proc/4/stat没写
-    // "pipe14", // 完全PASS
+    "pipe14", // 完全PASS
     // "pipe15", //NOFILE limit max too low: 128 < 65536
-    // "pipe2_01", //pass
+    "pipe2_01", // pass
     // "pipe2_02",
     // "pipe2_02_child",
     // "pipe2_04",
@@ -2129,10 +1950,10 @@ char *ltp_testcases[] = {
     // "pm_include.sh",
     // "pm_sched_domain.py",
     // "pm_sched_mc.py",
-    // "poll01",  //pass
+    "poll01", // pass
     // "poll02",
-    // "posix_fadvise01", // pass
-    // "posix_fadvise01_64", // pass
+    "posix_fadvise01",    // pass
+    "posix_fadvise01_64", // pass
     // "posix_fadvise02",
     // "posix_fadvise02_64",
     // "posix_fadvise03",
@@ -2151,8 +1972,8 @@ char *ltp_testcases[] = {
     // "prctl08",
     // "prctl09",
     // "prctl10",
-    // "pread01",    //pass
-    // "pread01_64",  //pass
+    "pread01",    // pass
+    "pread01_64", // pass
     // "pread02",           //爆了
     // "pread02_64",
     // "preadv01",
@@ -2180,10 +2001,10 @@ char *ltp_testcases[] = {
     // "prot_hsymlinks",
     // "pselect01", // /bin/sh
     // "pselect01_64",
-    // "pselect02", // pass
+    "pselect02", // pass
     // "pselect02_64", // pass
-    // "pselect03", // pass
-    // "pselect03_64", // pass
+    "pselect03",    // pass
+    "pselect03_64", // pass
     // "pt_test",
     // "ptem01",
     // "pth_str01",
@@ -2209,8 +2030,8 @@ char *ltp_testcases[] = {
     // "pty05",
     // "pty06",
     // "pty07",
-    // "pwrite01",    //pass
-    // "pwrite01_64",    //pass
+    "pwrite01",    // pass
+    "pwrite01_64", // pass
     // "pwrite02",
     // "pwrite02_64",
     // "pwrite03",
@@ -2239,25 +2060,25 @@ char *ltp_testcases[] = {
     // "quotactl09",
     // "rcu_torture.sh",
     // "read_all",
-    // "read01", //貌似可以PASS
-    // "read02",   //pass
-    // "read03", //pass
-    // "read04", // 完全PASS
+    "read01", // 貌似可以PASS
+    "read02", // pass
+    "read03", // pass
+    "read04", // 完全PASS
     // "readahead01",
     // "readahead02",
     // "readdir01",
     // "readdir21",
-    // "readlink01", //pass 2
-    // "readlink03",//pass
-    // "readlinkat01", //pass
-    // "readlinkat02", //pass五个
-    // "readv01", //pass
-    // "readv02",   //pass4 fail1
+    "readlink01",   // pass 2
+    "readlink03",   // pass
+    "readlinkat01", // pass
+    "readlinkat02", // pass五个
+    "readv01",      // pass
+    "readv02",      // pass4 fail1
     // "realpath01",
     // "reboot01",
     // "reboot02",
     // "recv01",
-    // "recvfrom01", //pass
+    "recvfrom01", // pass
     // "recvmmsg01",
     // "recvmsg01",
     // "recvmsg02",
@@ -2288,8 +2109,8 @@ char *ltp_testcases[] = {
     // "request_key03",
     // "request_key04",
     // "request_key05",
-    // "rmdir01",   //pass
-    // "rmdir02", //pass
+    "rmdir01", // pass
+    "rmdir02", // pass
     // "rmdir03",  //fail2
     // "route4-rmmod",
     // "route6-rmmod",
@@ -2332,7 +2153,7 @@ char *ltp_testcases[] = {
     // "runpwtests06.sh",
     // "rwtest",
     // "sbrk01", // 爆了
-    // "sbrk02", // pass
+    "sbrk02", // pass
     // "sbrk03", // Arch需要是S390
     // "sched_datafile",
     // "sched_driver",
@@ -2340,7 +2161,7 @@ char *ltp_testcases[] = {
     // "sched_get_priority_max02",
     // "sched_get_priority_min01",
     // "sched_get_priority_min02",
-    // "sched_getaffinity01", // PASS
+    "sched_getaffinity01", // PASS
     // "sched_getattr01",
     // "sched_getattr02",
     // "sched_getparam01",
@@ -2369,7 +2190,7 @@ char *ltp_testcases[] = {
     // "sched_tc4",
     // "sched_tc5",
     // "sched_tc6",
-    // "sched_yield01", //pass
+    "sched_yield01", // pass
     // "sctp_big_chunk",
     // "sctp_ipsec.sh",
     // "sctp_ipsec_vti.sh",
@@ -2422,8 +2243,8 @@ char *ltp_testcases[] = {
     // "sendmsg01",
     // "sendmsg02",
     // "sendmsg03",
-    // "sendto01", //pass一部分
-    // "sendto02", //pass
+    "sendto01", // pass一部分
+    "sendto02", // pass
     // "sendto03", //.config
     // "set_ipv4addr",
     // "set_mempolicy01",
@@ -2474,8 +2295,8 @@ char *ltp_testcases[] = {
     // "setitimer02",
     // "setns01",
     // "setns02",
-    // "setpgid01", // pass
-    // "setpgid02", // pass
+    "setpgid01", // pass
+    "setpgid02", // pass
     // "setpgid03", // 要完善sid逻辑, 而且现在退不出去, 先不修
     // "setpgid03_child",
     // "setpgrp01",
@@ -2529,9 +2350,9 @@ char *ltp_testcases[] = {
     // "setrlimit05",
     // "setrlimit06",
     // "setsid01",
-    // "setsockopt01", //pass
+    "setsockopt01", // pass
     // "setsockopt02",
-    // "setsockopt03", //pass
+    "setsockopt03", // pass
     // "setsockopt04",
     // "setsockopt05", //.config
     // "setsockopt06", //.config
@@ -2554,21 +2375,21 @@ char *ltp_testcases[] = {
     // "shell_pipe01.sh",
     // "shm_comm",
     // "shm_test",
-    // "shmat01",    //pass4
+    "shmat01", // pass4
     // "shmat02",
-    // "shmat03",     //pass?
-    // "shmat04",     //pass
+    "shmat03", // pass?
+    "shmat04", // pass
     // "shmat1",
     // "shmctl01",     //卡死了
-    // "shmctl02",    //passed   16 fail 4
+    "shmctl02", // passed   16 fail 4
     // "shmctl03",    //pass，但是这个似乎不能和别的连着跑
     // "shmctl04",   //kernel doesn't support SHM_STAT_ANY
     // "shmctl05",   // remap_file_pages未实现
     // "shmctl06",    //test requires struct shmid64_ds to have the time_high fields
-    // "shmctl07",    //pass
-    // "shmctl08",     //pass
-    // "shmdt01",      //pass 2
-    // "shmdt02",      //pass
+    "shmctl07", // pass
+    "shmctl08", // pass
+    "shmdt01",  // pass 2
+    "shmdt02",  // pass
     // "shmem_2nstest", //看不懂
     // "shmget02",
     // "shmget03",
@@ -2591,10 +2412,10 @@ char *ltp_testcases[] = {
     // "sigaltstack02",
     // "sighold02",
     // "signal01",
-    // "signal02", // pass 1 fail 2
-    // "signal03", // PASS
-    // "signal04", // PASS
-    // "signal05", // PASS
+    "signal02", // pass 1 fail 2
+    "signal03", // PASS
+    "signal04", // PASS
+    "signal05", // PASS
     // "signal06",
     // "signalfd01",
     // "signalfd4_01",
@@ -2646,23 +2467,23 @@ char *ltp_testcases[] = {
     // "stack_clash",
     // "stack_space",
     // "starvation",
-    // "stat01",      //passed   12
+    "stat01", // passed   12
     // "stat01_64",
-    // "stat02",    //pass
-    // "stat02_64",   //pass
-    // "stat03",   //pass4 fail2
+    "stat02",    // pass
+    "stat02_64", // pass
+    "stat03",    // pass4 fail2
     // "stat03_64",
     // "statfs01",  ///dev/loop0
     // "statfs01_64",
-    // "statfs02",  //pass3fail3
-    // "statfs02_64", //pass3fail3
+    "statfs02",    // pass3fail3
+    "statfs02_64", // pass3fail3
     // "statfs03",   //爆了
     // "statfs03_64",
     // "statvfs01",
     // "statvfs02", //和别的不能一起跑
-    // "statx01",  //pass8 fail2
-    // "statx02",  //pass4 fail1
-    // "statx03",// pass6 fail1
+    "statx01", // pass8 fail2
+    "statx02", // pass4 fail1
+    "statx03", // pass6 fail1
     // "statx04",   //bin/sh
     // "statx05",
     // "statx06",
@@ -2676,11 +2497,11 @@ char *ltp_testcases[] = {
     // "stime02",
     // "stop_freeze_sleep_thaw_cont.sh",
     // "stop_freeze_thaw_cont.sh",
-    // "stream01",   //pass
-    // "stream02",   //pass
-    // "stream03", //pass
-    // "stream04",  //pass
-    // "stream05", //pass
+    "stream01", // pass
+    "stream02", // pass
+    "stream03", // pass
+    "stream04", // pass
+    "stream05", // pass
     // "stress",
     // "string01", //pass
     // "support_numa",
@@ -2690,16 +2511,16 @@ char *ltp_testcases[] = {
     // "swapon02",
     // "swapon03",
     // "swapping01",
-    // "symlink01",  //pass
-    // "symlink02",  //pass
+    "symlink01", // pass
+    "symlink02", // pass
     // "symlink03",   //sendmsg
-    // "symlink04", //pass
-    // "symlinkat01", //pass
+    "symlink04",   // pass
+    "symlinkat01", // pass
     // "sync_file_range01",
     // "sync_file_range02",
     // "sync01",
     // "syncfs01",
-    // "syscall01",  //pass
+    "syscall01", // pass
     // "sysconf01", //没summary
     // "sysctl01",
     // "sysctl01.sh",
@@ -3091,7 +2912,7 @@ char *ltp_testcases[] = {
     // "thp02",
     // "thp03",
     // "thp04",
-    // "time01",   //pass
+    "time01", // pass
     // "timed_forkbomb",
     // "timens01", //.config
     // "timer_delete01",
@@ -3099,7 +2920,7 @@ char *ltp_testcases[] = {
     // "timer_getoverrun01",
     // "timer_gettime01",
     // "timer_settime01",
-    // "timer_settime02", //pass
+    "timer_settime02", // pass
     // "timer_settime03",
     // "timerfd_create01",
     // "timerfd_gettime01",
@@ -3262,7 +3083,7 @@ char *ltp_testcases[] = {
     // "uevent01",
     // "uevent02",
     // "uevent03",
-    // "ulimit01", // PASS
+    "ulimit01", // PASS
     // "umask01",
     // "umip_basic_test",
     // "umount01",
@@ -3270,14 +3091,14 @@ char *ltp_testcases[] = {
     // "umount03",
     // "umount2_01",
     // "umount2_02",
-    // "uname01", // 完全PASS
-    // "uname02",// 完全PASS
-    // "uname04", // 完全PASS
-    // "unlink05", //pass
-    // "unlink07",  //pass
-    // "unlink08",   //pass2fail2
-    // "unlink09",   //pass
-    // "unlinkat01", //passed   7
+    "uname01",    // 完全PASS
+    "uname02",    // 完全PASS
+    "uname04",    // 完全PASS
+    "unlink05",   // pass
+    "unlink07",   // pass
+    "unlink08",   // pass2fail2
+    "unlink09",   // pass
+    "unlinkat01", // passed   7
     // "unshare01",
     // "unshare01.sh",
     // "unshare02",
@@ -3333,10 +3154,10 @@ char *ltp_testcases[] = {
     // "vxlan02.sh",
     // "vxlan03.sh",
     // "vxlan04.sh",
-    // "wait01", // PASS
-    // "wait02", // PASS
+    "wait01", // PASS
+    "wait02", // PASS
     // "wait401",
-    // "wait402", // PASS
+    "wait402", // PASS
     // "wait403",
     // "waitid01",
     // "waitid02",
@@ -3349,13 +3170,13 @@ char *ltp_testcases[] = {
     // "waitid09",
     // "waitid10",
     // "waitid11",
-    // "waitpid01", // PASS
+    "waitpid01", // PASS
     // "waitpid03",
-    // "waitpid04", // 部分pass p2 f2
+    "waitpid04", // 部分pass p2 f2
     // "waitpid06",
     // "waitpid07",
     // "waitpid08",
-    // "waitpid09", // 部分pass p3 f1
+    "waitpid09", // 部分pass p3 f1
     // "waitpid10",
     // "waitpid11",
     // "waitpid12",
@@ -3375,18 +3196,18 @@ char *ltp_testcases[] = {
     // "wqueue08",
     // "wqueue09",
     // "write_freezing.sh",
-    // "write01", // 完全PASS
-    // "write02", //pass
-    // "write03", // 完全PASS
-    // "write04", /pass
-    // "write05", // passed   3
+    "write01", // 完全PASS
+    "write02", // pass
+    "write03", // 完全PASS
+    "write04", // pass
+    "write05", // passed   3
     // "write06",
     // "writetest",
-    // "writev01", // 完全PASS
+    "writev01", // 完全PASS
     // "writev02",
     // "writev03",
-    // "writev05", // 完全PASS
-    // "writev06", // 完全PASS
+    "writev05", // 完全PASS
+    "writev06", // 完全PASS
     // "writev07",
     // "zram_lib.sh",
     // "zram01.sh",

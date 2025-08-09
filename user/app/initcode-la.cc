@@ -5,18 +5,15 @@ extern "C"
     int main()
     {
         init_env("/musl/");
-        // basic_test("/musl/");
-        // basic_test("/glibc/");
-        // busybox_test("/musl/");
-        // busybox_test("/glibc/");
-
-        // libcbench_test("/glibc");
-        // ltp_test("/musl/ltp/testcases/bin/");
-
-        // 决赛测例
-        sleep(5);
-        final_test_musl();
-        final_test_glibc();
+        ltp_test(true);
+        ltp_test(false);
+        basic_test("/musl/");
+        basic_test("/glibc/");
+        busybox_test("/musl/");
+        busybox_test("/glibc/");
+        libc_test("/musl/"); // 不测glibc, 不要求测
+        lua_test("/musl/");
+        lua_test("/glibc/");
 
         shutdown();
         return 0;
