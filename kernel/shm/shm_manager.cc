@@ -560,6 +560,10 @@ namespace shm
             flags |= PTE_R; // 只读权限
             printfCyan("[ShmManager] Attaching with READ-ONLY permissions\n");
         }
+        else if(shmflg & SHM_NONE)
+        {
+            flags =0;
+        }
         else
         {
             flags |= PTE_R | PTE_W; // 读写权限

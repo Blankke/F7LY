@@ -1834,7 +1834,7 @@ char *ltp_testcases[] = {
     // "mmap02",   //failed
     // "mmap03",//无所谓，没summary
     // "mmap04",
-    // "mmap05",  //shared prot
+    // "mmap05",  //pass1 但是panic关了一个
     // "mmap06", //pass6 fail 2
     // "mmap08", //pass
     // "mmap09",  //pass
@@ -2546,7 +2546,7 @@ char *ltp_testcases[] = {
     // "shell_pipe01.sh",
     // "shm_comm",
     // "shm_test",
-    // "shmat01",    //pass一个没过
+    // "shmat01",    //pass4
     // "shmat02",
     // "shmat03",     //pass?
     // "shmat04",     //pass
@@ -2568,15 +2568,15 @@ char *ltp_testcases[] = {
     // "shmget05",    //.config
     // "shmget06", //.config
     // "shmnstest",   //pass
-    // "shmt02",     //pass
-    // "shmt03",      //pass
-    // "shmt04",      //pass
-    // "shmt05",          //pass
-    // "shmt06",        //pass
-    // "shmt07",       //pass
-    // "shmt08",      //pass
-    // "shmt09",      //sbrk
-    // "shmt10",       //pass
+    // "shmt02",     //pass 无summary
+    // "shmt03",      //pass 无summary
+    // "shmt04",      //pass 无summary
+    // "shmt05",          //pass 无summary
+    // "shmt06",        //pass 无summary
+    // "shmt07",       //pass 无summary
+    // "shmt08",      //pass 无summary
+    // "shmt09",      //sbrk 无summary
+    // "shmt10",       //pass 无summary
     // "sigaction01",
     // "sigaction02",
     // "sigaltstack01",

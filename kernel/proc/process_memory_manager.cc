@@ -4,7 +4,7 @@
  *
  * 实现进程内存管理器的所有功能，提供统一的内存管理接口。
  * 将原本散落在proc_manager.cc中的内存管理逻辑重构到这里。
- * 
+ *
  * 统一管理说明：
  * - 所有内存释放统一通过 free_all_memory() 进行
  * - free_heap_memory() 内部调用 cleanup_heap_to_size(0)
@@ -23,19 +23,19 @@
 #include "shm/shm_manager.hh"
 
 // 外部符号声明
-extern char trampoline[]; // trampoline.S
+extern char trampoline[];     // trampoline.S
 extern char sig_trampoline[]; // sig_trampoline.S
 
 namespace proc
 {
 
-    ProcessMemoryManager::ProcessMemoryManager() 
+    ProcessMemoryManager::ProcessMemoryManager()
         : prog_section_count(0), heap_start(0), heap_end(0), shared_vm(false),
           total_memory_size(0), ref_count(1)
     {
         // 初始化内存锁
         memory_lock.init("process_memory_lock");
-        
+
         // 初始化程序段数组
         for (int i = 0; i < max_program_section_num; i++)
         {
@@ -43,7 +43,7 @@ namespace proc
             prog_sections[i]._sec_size = 0;
             prog_sections[i]._debug_name = nullptr;
         }
-        
+
         // 初始化VMA数据
         // 阶段1：移除VMA的分散引用计数，统一使用ProcessMemoryManager的引用计数
         for (int i = 0; i < NVMA; i++)
@@ -57,7 +57,6 @@ namespace proc
         // 析构函数中不执行清理操作，避免双重释放
         // 清理应该通过显式调用free_all_memory()来完成
     }
-
 
     void ProcessMemoryManager::get()
     {
@@ -80,7 +79,7 @@ namespace proc
         return ref_count.load(eastl::memory_order_acquire);
     }
 
-    ProcessMemoryManager* ProcessMemoryManager::share_for_thread()
+    ProcessMemoryManager *ProcessMemoryManager::share_for_thread()
     {
         // 线程共享：增加引用计数并返回当前对象
         get();
@@ -88,11 +87,11 @@ namespace proc
         return this;
     }
 
-    ProcessMemoryManager* ProcessMemoryManager::clone_for_fork()
+    ProcessMemoryManager *ProcessMemoryManager::clone_for_fork()
     {
         // 进程复制：创建新的内存管理器并深拷贝内容
-        ProcessMemoryManager* new_mgr = new ProcessMemoryManager();
-        
+        ProcessMemoryManager *new_mgr = new ProcessMemoryManager();
+
         // 为新进程创建页表
         if (!new_mgr->create_pagetable())
         {
@@ -101,24 +100,24 @@ namespace proc
             return nullptr;
         }
         // printf("[clone_for_fork] start clone prog_section\n");
-        
+
         // 复制程序段信息
         new_mgr->prog_section_count = prog_section_count;
         for (int i = 0; i < max_program_section_num; i++)
         {
             new_mgr->prog_sections[i] = prog_sections[i];
         }
-        
+
         // 复制堆信息
         new_mgr->heap_start = heap_start;
         new_mgr->heap_end = heap_end;
-        
+
         // 复制总内存大小
         new_mgr->total_memory_size = total_memory_size;
-        
+
         // fork操作不共享虚拟内存，设置为false
         new_mgr->shared_vm = false;
-        
+
         // 复制进程的所有内存段
         bool copy_success = true;
 
@@ -154,7 +153,7 @@ namespace proc
 
         // 复制VMA数据
         new_mgr->vma_data = vma_data;
-        
+
         // 处理VMA中的文件映射引用计数
         for (int i = 0; i < NVMA; ++i)
         {
@@ -167,7 +166,7 @@ namespace proc
                 }
             }
         }
-        
+
         return new_mgr;
     }
 
@@ -246,11 +245,11 @@ namespace proc
     {
         // 清空所有程序段
         clear_all_program_sections_data();
-        
+
         // 重置堆信息
         heap_start = 0;
         heap_end = 0;
-        
+
         // 重置总内存大小
         total_memory_size = 0;
     }
@@ -294,9 +293,10 @@ namespace proc
                 //            (void *)va_end,
                 //            prog_sections[i]._sec_size);
 
-
                 safe_vmunmap(va_start, va_end, true);
-            }else{
+            }
+            else
+            {
                 printfRed("prog_sections[i]._debug_name : %s  prog_sections[i]._sec_start : %p   prog_sections[i]._sec_size : %p\n", prog_sections[i]._debug_name, prog_sections[i]._sec_start, prog_sections[i]._sec_size);
                 panic("free_all_program_section counter illegal section");
             }
@@ -457,7 +457,7 @@ namespace proc
         //            vm_entry.vfd, vm_entry.flags, vm_entry.prot);
 
         // 写回文件映射（对于共享且可写的映射）
-        if (vm_entry.vfile != nullptr && 
+        if (vm_entry.vfile != nullptr &&
             vm_entry.flags == MAP_SHARED &&
             (vm_entry.prot & PROT_WRITE) != 0)
         {
@@ -559,8 +559,8 @@ namespace proc
             uint64 vma_start = vm_entry.addr;
             uint64 vma_end = vm_entry.addr + vm_entry.len;
 
-            // printfCyan("ProcessMemoryManager: processing overlapping VMA %d: [%p, %p)\n",
-            //            vma_idx, (void *)vma_start, (void *)vma_end);
+            printfCyan("ProcessMemoryManager: processing overlapping VMA %d: [%p, %p)\n",
+                       vma_idx, (void *)vma_start, (void *)vma_end);
 
             // 计算需要取消映射的区域
             uint64 unmap_start = start_addr > vma_start ? start_addr : vma_start;
@@ -583,7 +583,7 @@ namespace proc
                         // 页面已分配，需要写回到文件
                         uint64 pa = (uint64)pte.pa();
                         int file_offset = vm_entry.offset + (va - vma_start);
-                        
+
                         // 写回数据到文件
                         int write_result = vm_entry.vfile->write(pa, PGSIZE, file_offset, false);
                         if (write_result < 0)
@@ -593,10 +593,14 @@ namespace proc
                     }
                 }
             }
-
-            // 取消页表映射
-            safe_vmunmap(unmap_start, unmap_end, true);
-
+            if (vm_entry.flags & MAP_SHARED) // 取消页表映射
+            {
+                shm::k_smm.detach_seg(addr);
+            }
+            else
+            { // 取消页表映射
+                safe_vmunmap(unmap_start, unmap_end, true);
+            }
             // 处理VMA条目的更新
             if (unmap_start == vma_start && unmap_end == vma_end)
             {
@@ -724,8 +728,8 @@ namespace proc
 
 #ifdef RISCV
         // 映射trampoline页面
-        if (mem::k_vmm.map_pages(pt, TRAMPOLINE, PGSIZE, (uint64)trampoline, 
-                                riscv::PteEnum::pte_readable_m | riscv::pte_executable_m) == 0)
+        if (mem::k_vmm.map_pages(pt, TRAMPOLINE, PGSIZE, (uint64)trampoline,
+                                 riscv::PteEnum::pte_readable_m | riscv::pte_executable_m) == 0)
         {
             panic("ProcessMemoryManager: map trampoline failed\n");
             pt.freewalk();
@@ -735,8 +739,8 @@ namespace proc
         // 注意：trapframe映射延迟到usertrapret时进行
 
         // 映射信号trampoline页面
-        if (mem::k_vmm.map_pages(pt, SIG_TRAMPOLINE, PGSIZE, (uint64)sig_trampoline, 
-                                riscv::PteEnum::pte_readable_m | riscv::pte_executable_m | riscv::PteEnum::pte_user_m) == 0)
+        if (mem::k_vmm.map_pages(pt, SIG_TRAMPOLINE, PGSIZE, (uint64)sig_trampoline,
+                                 riscv::PteEnum::pte_readable_m | riscv::pte_executable_m | riscv::PteEnum::pte_user_m) == 0)
         {
             panic("ProcessMemoryManager: map sigtrapframe failed\n");
             // 先取消已成功的映射，再释放页表
@@ -748,9 +752,9 @@ namespace proc
 #elif defined(LOONGARCH)
         // 注意：trapframe映射延迟到usertrapret时进行
 
-        // 映射信号trampoline页面  
-        if (mem::k_vmm.map_pages(pt, SIG_TRAMPOLINE, PGSIZE, (uint64)sig_trampoline, 
-                                PTE_P | PTE_MAT | PTE_D | PTE_U) == 0)
+        // 映射信号trampoline页面
+        if (mem::k_vmm.map_pages(pt, SIG_TRAMPOLINE, PGSIZE, (uint64)sig_trampoline,
+                                 PTE_P | PTE_MAT | PTE_D | PTE_U) == 0)
         {
             panic("ProcessMemoryManager: Fail to map sig_trampoline\n");
             pt.freewalk();
@@ -823,7 +827,7 @@ namespace proc
     {
         // 减少引用计数，只有当引用计数降为0时才释放整个内存
         int old_count = ref_count.fetch_sub(1, eastl::memory_order_acq_rel);
-        
+
         if (old_count <= 1)
         {
             // 引用计数降为0，释放所有内存资源
@@ -838,7 +842,9 @@ namespace proc
                 free_all_program_sections();
                 free_heap_memory();
                 free_pagetable();
-            }else{
+            }
+            else
+            {
                 panic("pagetable is null");
             }
 
@@ -984,30 +990,30 @@ namespace proc
     {
         printfCyan("=== ProcessMemoryManager Memory Information ===\n");
         printfCyan("Total process size: %u bytes\n", (uint32)total_memory_size);
-        
+
         // 程序段信息
         printfCyan("Program sections (%d):\n", prog_section_count);
         uint64 sections_total = 0;
         for (int i = 0; i < prog_section_count; i++)
         {
             printfCyan("  Section %d (%s): %p - %p (%u bytes)\n",
-                      i,
-                      prog_sections[i]._debug_name ? prog_sections[i]._debug_name : "unnamed",
-                      prog_sections[i]._sec_start,
-                      (void*)((uint64)prog_sections[i]._sec_start + prog_sections[i]._sec_size),
-                      (uint32)prog_sections[i]._sec_size);
+                       i,
+                       prog_sections[i]._debug_name ? prog_sections[i]._debug_name : "unnamed",
+                       prog_sections[i]._sec_start,
+                       (void *)((uint64)prog_sections[i]._sec_start + prog_sections[i]._sec_size),
+                       (uint32)prog_sections[i]._sec_size);
             sections_total += prog_sections[i]._sec_size;
         }
         printfCyan("Total program sections: %u bytes\n", (uint32)sections_total);
-        
+
         // 堆信息
         uint64 heap_size = (heap_end > heap_start) ? (heap_end - heap_start) : 0;
         if (heap_size > 0)
         {
-            printfCyan("Heap: %p - %p (%u bytes)\n", 
-                      (void*)heap_start,
-                      (void*)heap_end,
-                      (uint32)heap_size);
+            printfCyan("Heap: %p - %p (%u bytes)\n",
+                       (void *)heap_start,
+                       (void *)heap_end,
+                       (uint32)heap_size);
         }
         else
         {
@@ -1023,12 +1029,12 @@ namespace proc
             if (vma_data._vm[i].used)
             {
                 printfCyan("  VMA %d: %p - %p (%u bytes, prot=%d, flags=%d)\n",
-                          i,
-                          (void*)vma_data._vm[i].addr,
-                          (void*)(vma_data._vm[i].addr + vma_data._vm[i].len),
-                          (uint32)vma_data._vm[i].len,
-                          vma_data._vm[i].prot,
-                          vma_data._vm[i].flags);
+                           i,
+                           (void *)vma_data._vm[i].addr,
+                           (void *)(vma_data._vm[i].addr + vma_data._vm[i].len),
+                           (uint32)vma_data._vm[i].len,
+                           vma_data._vm[i].prot,
+                           vma_data._vm[i].flags);
                 vma_total += vma_data._vm[i].len;
                 active_vmas++;
             }
@@ -1063,8 +1069,8 @@ namespace proc
         if (total_memory_size != calculated_total)
         {
             printfRed("Memory inconsistency detected in verify_all_memory_consistency\n");
-            printfRed("  total_memory_size: %u, calculated: %u\n", 
-                     (uint32)total_memory_size, (uint32)calculated_total);
+            printfRed("  total_memory_size: %u, calculated: %u\n",
+                      (uint32)total_memory_size, (uint32)calculated_total);
             consistent = false;
         }
 

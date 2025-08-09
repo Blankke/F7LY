@@ -12,7 +12,7 @@ typedef unsigned long shmatt_t;
 #define SHM_RND		020000		/* round attach address to SHMLBA */
 #define SHM_REMAP	040000		/* take-over region on attach */
 #define SHM_EXEC	0100000		/* execution access */
-
+#define SHM_NONE   0200000		/* don't allocate memory on attach */
 /* Commands for `shmctl'.  */
 #define SHM_LOCK	11		/* lock segment (root only) */
 #define SHM_UNLOCK	12		/* unlock segment (root only) */

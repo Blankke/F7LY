@@ -2731,7 +2731,14 @@ namespace proc
                         }
                         return MAP_FAILED;
                     }
-                    shm::k_smm.attach_seg(shmid, (void *)map_addr);
+                    int shmflg = 0;
+                    if((prot & PROT_READ)&&(prot & PROT_WRITE )   )
+                    shmflg =0;
+                    if((prot & PROT_READ) && !(prot & PROT_WRITE))
+                    shmflg = SHM_RDONLY;
+                    if(prot==PROT_NONE)
+                    shmflg = SHM_NONE;
+                    shm::k_smm.attach_seg(shmid, (void *)map_addr,shmflg);
                     printfCyan("[mmap] Created shared memory segment with key %d at addr %p\n", key, (void *)map_addr);
                 }
                 p->set_heap_end(map_addr + aligned_length);

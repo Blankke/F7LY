@@ -2021,7 +2021,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_munmap] Error fetching munmap arguments\n");
             return -EINVAL;
         }
-
+        printfYellow("[SyscallHandler::sys_munmap] start: %p, size: %zu\n", (void *)start, size);
         int result = proc::k_pm.munmap((void *)start, size);
         if (result < 0)
         {
