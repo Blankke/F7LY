@@ -3157,7 +3157,7 @@ char *ltp_testcases[] = {
     "wait02", // PASS
     "wait401", // PASS
     "wait402", // PASS
-    // "wait403",
+    "wait403", // PASS
     // "waitid01",
     // "waitid02",
     // "waitid03",

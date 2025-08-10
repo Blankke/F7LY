@@ -349,6 +349,10 @@ namespace fs
         // /proc/sys/kernel/shmall (共享内存总大小)
         add_virtual_file("/proc/sys/kernel/shmall", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcSysKernelShmallProvider>());
+
+        // /proc/sys/kernel/tainted (内核污染状态)
+        add_virtual_file("/proc/sys/kernel/tainted", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcSysKernelTaintedProvider>());
                          
         // 打印树结构（调试用）
         // printf("Virtual file system tree:\n");

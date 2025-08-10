@@ -954,4 +954,12 @@ namespace fs
         eastl::string result(_buffer);
         return result;
     }
+
+    // ======================== tainted提供者实现 ========================
+    eastl::string ProcSysKernelTaintedProvider::generate_content()
+    {
+        // 返回内核污染状态
+        // 0 表示内核未被污染（无专有模块或其他问题）
+        return "0\n";
+    }
 } // namespace fs
