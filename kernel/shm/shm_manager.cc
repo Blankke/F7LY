@@ -619,7 +619,7 @@ namespace shm
             // for (void* attached_addr : seg.attached_addrs) {
             //     printfCyan("%p ", attached_addr);
             // }
-            printfCyan("\n");
+            // printfCyan("\n");
             // 在附加地址列表中查找
             auto addr_it = eastl::find(seg.attached_addrs.begin(), seg.attached_addrs.end(), addr);
             if (addr_it != seg.attached_addrs.end()) {
