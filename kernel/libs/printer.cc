@@ -70,7 +70,7 @@ void Printer::printptr( uint64 x )
 
 void Printer::print( const char *fmt, ... )
 {
-// #define DIS_PRINTF
+#define DIS_PRINTF
 #ifdef DIS_PRINTF
   // 当定义了 DIS_PRINTF 宏时，不产生任何输出
   // 但仍需要处理可变参数以避免潜在问题
@@ -497,12 +497,213 @@ int Printer::snprint(char *buffer, size_t size, const char *fmt, ...)
 
 void Printer::k_panic( const char *f, uint l, const char *info, ... )
 {
+  // 直接使用控制台输出，不依赖 printf，以确保在 DIS_PRINTF 宏定义时也能正常输出 panic 信息
   va_list ap;
   va_start( ap, info );
-  printf("panic: ");
-  printf("%s:%d: ", f, l);
-  printf(info, ap);
-  printf("\n");
+  
+  // 输出 "panic: "
+  const char* panic_str = "panic: ";
+  for (const char* p = panic_str; *p; p++) {
+    if (k_printer._console) k_printer._console->console_putc(*p);
+  }
+  
+  // 输出文件名:行号:
+  for (const char* p = f; *p; p++) {
+    if (k_printer._console) k_printer._console->console_putc(*p);
+  }
+  if (k_printer._console) k_printer._console->console_putc(':');
+  
+  // 输出行号
+  char line_buf[16];
+  int line_idx = 0;
+  uint line_num = l;
+  do {
+    line_buf[line_idx++] = k_printer._lower_digits[line_num % 10];
+  } while ((line_num /= 10) != 0);
+  while (--line_idx >= 0) {
+    if (k_printer._console) k_printer._console->console_putc(line_buf[line_idx]);
+  }
+  
+  if (k_printer._console) k_printer._console->console_putc(':');
+  if (k_printer._console) k_printer._console->console_putc(' ');
+  
+  // 格式化输出 info 字符串
+  if (info) {
+    int i, c;
+    const char *s;
+    
+    for (i = 0; (c = info[i] & 0xff) != 0; ) {
+      if (c != '%') {
+        if (k_printer._console) k_printer._console->console_putc(c);
+        i++;
+        continue;
+      }
+      i++; // skip '%'
+      int width = 0;
+      // Parse width (e.g., %04x)
+      while (info[i] >= '0' && info[i] <= '9') {
+        width = width * 10 + (info[i] - '0');
+        i++;
+      }
+      
+      // Parse length modifiers
+      bool is_long = false;
+      bool is_size_t = false;
+      if (info[i] == 'l') {
+        is_long = true;
+        i++;
+      } else if (info[i] == 'z') {
+        is_size_t = true;
+        i++;
+      }
+      
+      c = info[i] & 0xff;
+      if (c == 0)
+        break;
+      switch (c) {
+      case 'b':
+        k_printer.printint(va_arg(ap, int), 2, 1);
+        break;
+      case 'd':
+        if (is_long) {
+          // %ld - long int
+          long val = va_arg(ap, long);
+          char buf[32];
+          int j = 0;
+          int sign = 0;
+          unsigned long uval;
+          
+          if (val < 0) {
+            sign = 1;
+            uval = -val;
+          } else {
+            uval = val;
+          }
+          
+          do {
+            buf[j++] = k_printer._lower_digits[uval % 10];
+          } while ((uval /= 10) != 0);
+          
+          if (sign) buf[j++] = '-';
+          
+          while (--j >= 0)
+            if (k_printer._console) k_printer._console->console_putc(buf[j]);
+        } else {
+          k_printer.printint(va_arg(ap, int), 10, 1);
+        }
+        break;
+      case 'u':
+        if (is_long) {
+          // %lu - unsigned long
+          unsigned long val = va_arg(ap, unsigned long);
+          char buf[32];
+          int j = 0;
+          
+          do {
+            buf[j++] = k_printer._lower_digits[val % 10];
+          } while ((val /= 10) != 0);
+          
+          while (--j >= 0)
+            if (k_printer._console) k_printer._console->console_putc(buf[j]);
+        } else if (is_size_t) {
+          // %zu - size_t
+          size_t val = va_arg(ap, size_t);
+          char buf[32];
+          int j = 0;
+          
+          do {
+            buf[j++] = k_printer._lower_digits[val % 10];
+          } while ((val /= 10) != 0);
+          
+          while (--j >= 0)
+            if (k_printer._console) k_printer._console->console_putc(buf[j]);
+        } else {
+          k_printer.printint(va_arg(ap, uint), 10, 0);
+        }
+        break;
+      case 'x': {
+        // 打印无符号16进制
+        uint64 val;
+        if (is_long) {
+          // %lx - unsigned long hex
+          val = va_arg(ap, unsigned long);
+        } else {
+          val = va_arg(ap, uint64);
+        }
+        char buf[16];
+        int j = 0;
+        do {
+          buf[j++] = k_printer._lower_digits[val % 16];
+        } while ((val /= 16) != 0);
+        // Padding with '0' if width > j
+        for (int k = j; k < width; k++)
+          if (k_printer._console) k_printer._console->console_putc('0');
+        while (--j >= 0)
+          if (k_printer._console) k_printer._console->console_putc(buf[j]);
+        break;
+      }
+      case 'X': {
+        // 打印大写无符号16进制
+        uint64 val;
+        if (is_long) {
+          // %lX - unsigned long hex (uppercase)
+          val = va_arg(ap, unsigned long);
+        } else {
+          val = va_arg(ap, uint64);
+        }
+        char buf[16];
+        int j = 0;
+        do {
+          buf[j++] = k_printer._upper_digits[val % 16];
+        } while ((val /= 16) != 0);
+        for (int k = j; k < width; k++)
+          if (k_printer._console) k_printer._console->console_putc('0');
+        while (--j >= 0)
+          if (k_printer._console) k_printer._console->console_putc(buf[j]);
+        break;
+      }
+      case 'o': {
+        // 打印大写无符号8进制（64位）
+        uint64 val = va_arg(ap, uint64);
+        char buf[16];
+        int j = 0;
+        do {
+          buf[j++] = k_printer._upper_digits[val % 8];
+        } while ((val /= 8) != 0);
+        for (int k = j; k < width; k++)
+          if (k_printer._console) k_printer._console->console_putc('0');
+        while (--j >= 0)
+          if (k_printer._console) k_printer._console->console_putc(buf[j]);
+        break;
+      }
+      case 'p':
+        k_printer.printptr(va_arg(ap, uint64));
+        break;
+      case 's':
+        if ((s = va_arg(ap, const char *)) == 0)
+          s = "(null)";
+        for (; *s; s++)
+          if (k_printer._console) k_printer._console->console_putc(*s);
+        break;
+      case 'c': {
+        int ch = va_arg(ap, int);
+        if (k_printer._console) k_printer._console->console_putc(ch);
+        break;
+      }
+      case '%':
+        if (k_printer._console) k_printer._console->console_putc('%');
+        break;
+      default:
+        // Print unknown % sequence to draw attention.
+        if (k_printer._console) k_printer._console->console_putc('%');
+        if (k_printer._console) k_printer._console->console_putc(c);
+        break;
+      }
+      i++;
+    }
+  }
+  
+  if (k_printer._console) k_printer._console->console_putc('\n');
   va_end( ap );
   k_printer._panicked = 1; // freeze uart output from other CPUs
   
