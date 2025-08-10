@@ -65,7 +65,8 @@
 
 #elif defined(LOONGARCH)
 // LoongArch specific includes for PCI-based VirtIO
-#include "devs/loongarch/pci.hh"
+#include "trap/loongarch/pci.h"
+#include "fs/drivers/loongarch/virtio_pci.hh"
 
 // Status register bits (same as RISCV)
 #define VIRTIO_CONFIG_S_ACKNOWLEDGE 1
@@ -198,7 +199,7 @@ namespace net
 
 #ifdef LOONGARCH
         // PCI specific fields for LoongArch
-        loongarch::qemu::virtio_pci_hw virtio_net_hw;
+        virtio_pci_hw_t virtio_net_hw;
         uint64 pci_dev;
         int port_id;
 #endif

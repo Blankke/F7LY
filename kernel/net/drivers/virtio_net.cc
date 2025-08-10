@@ -16,7 +16,10 @@
 #ifdef RISCV
 #include "param.h"
 #elif defined(LOONGARCH)
-#include "devs/loongarch/pci.hh"
+#include "trap/loongarch/pci.h"
+#include "fs/drivers/loongarch/virtio_pci.hh"
+#include "fs/drivers/loongarch/virtio_ring.hh"
+#include "virtual_memory_manager.hh"
 #endif
 namespace net
 {
@@ -35,7 +38,8 @@ namespace net
 #ifdef RISCV
         virtio_net_init_mmio();
 #elif defined(LOONGARCH)
-        virtio_net_init_pci();
+        // virtio_net_init_pci();
+        printfRed("loongarch virtio net未实现");
 #endif
 
         printf("VirtIO network device initialized\n");
@@ -184,29 +188,31 @@ namespace net
     // LoongArch PCI-based initialization
     void virtio_net_init_pci(void)
     {
+        printf("[virtio_net_init_pci] Initializing LoongArch PCI VirtIO network device\n");
+        
         // Probe for VirtIO network device on PCI bus
         if (virtio_net_probe_pci() != 0)
         {
-            printf("No VirtIO network device found on PCI bus\n");
+            printf("[virtio_net_init_pci] No VirtIO network device found on PCI bus\n");
             return;
         }
 
-        // Device-specific initialization similar to virtio_disk driver
         uint8 status = 0;
 
-        // Reset device
-        loongarch::qemu::virtio_pci_set_status(&virtio_net.virtio_net_hw, 0);
+        // 1. Reset device
+        virtio_pci_set_status(&virtio_net.virtio_net_hw, 0);
 
-        // Set acknowledge status
+        // 2. Set acknowledge status
         status |= VIRTIO_CONFIG_S_ACKNOWLEDGE;
-        loongarch::qemu::virtio_pci_set_status(&virtio_net.virtio_net_hw, status);
+        virtio_pci_set_status(&virtio_net.virtio_net_hw, status);
 
-        // Set driver status
+        // 3. Set driver status
         status |= VIRTIO_CONFIG_S_DRIVER;
-        loongarch::qemu::virtio_pci_set_status(&virtio_net.virtio_net_hw, status);
+        virtio_pci_set_status(&virtio_net.virtio_net_hw, status);
 
-        // Feature negotiation
-        uint64 features = loongarch::qemu::virtio_pci_get_device_features(&virtio_net.virtio_net_hw);
+        // 4. Feature negotiation
+        uint64 features = virtio_pci_get_device_features(&virtio_net.virtio_net_hw);
+        printf("[virtio_net_init_pci] Device features: 0x%lx\n", features);
 
         // Enable only basic features for simple operation
         features &= (1ULL << VIRTIO_NET_F_MAC);
@@ -220,22 +226,22 @@ namespace net
         features &= ~(1ULL << VIRTIO_RING_F_EVENT_IDX);
         features &= ~(1ULL << VIRTIO_RING_F_INDIRECT_DESC);
 
-        loongarch::qemu::virtio_pci_set_driver_features(&virtio_net.virtio_net_hw, features);
+        virtio_pci_set_driver_features(&virtio_net.virtio_net_hw, features);
 
-        // Feature negotiation complete
+        // 5. Feature negotiation complete
         status |= VIRTIO_CONFIG_S_FEATURES_OK;
-        loongarch::qemu::virtio_pci_set_status(&virtio_net.virtio_net_hw, status);
+        virtio_pci_set_status(&virtio_net.virtio_net_hw, status);
 
-        // Check if features were accepted
-        status = loongarch::qemu::virtio_pci_get_status(&virtio_net.virtio_net_hw);
+        // 6. Check if features were accepted
+        status = virtio_pci_get_status(&virtio_net.virtio_net_hw);
         if (!(status & VIRTIO_CONFIG_S_FEATURES_OK))
         {
             panic("VirtIO net device did not accept features");
         }
 
-        // Initialize queues
-        // RX queue (queue 0)
-        uint32 qsize = loongarch::qemu::virtio_pci_get_queue_size(&virtio_net.virtio_net_hw, VIRTIO_NET_RX_QUEUE_IDX);
+        // 7. Initialize RX queue (queue 0)
+        uint32 qsize = virtio_pci_get_queue_size(&virtio_net.virtio_net_hw, VIRTIO_NET_RX_QUEUE_IDX);
+        printf("[virtio_net_init_pci] RX queue max size: %d\n", qsize);
         if (qsize == 0)
         {
             panic("VirtIO net has no RX queue");
@@ -245,7 +251,7 @@ namespace net
             panic("VirtIO net RX queue too short");
         }
 
-        loongarch::qemu::virtio_pci_set_queue_size(&virtio_net.virtio_net_hw, VIRTIO_NET_RX_QUEUE_IDX, NUM_NET_DESC);
+        virtio_pci_set_queue_size(&virtio_net.virtio_net_hw, VIRTIO_NET_RX_QUEUE_IDX, NUM_NET_DESC);
 
         // Setup RX queue memory layout
         memset(virtio_net.pages, 0, sizeof(virtio_net.pages));
@@ -253,12 +259,13 @@ namespace net
         virtio_net.rx_avail = (uint16 *)(virtio_net.pages + NUM_NET_DESC * sizeof(struct VRingDesc));
         virtio_net.rx_used = (struct VRingUsedArea *)(virtio_net.pages + PGSIZE);
 
-        loongarch::qemu::virtio_pci_set_queue_addr(&virtio_net.virtio_net_hw, VIRTIO_NET_RX_QUEUE_IDX,
-                                                   virtio_net.rx_desc, virtio_net.rx_avail, virtio_net.rx_used);
-        loongarch::qemu::virtio_pci_set_queue_enable(&virtio_net.virtio_net_hw, VIRTIO_NET_RX_QUEUE_IDX);
+        virtio_pci_set_queue_addr2(&virtio_net.virtio_net_hw, VIRTIO_NET_RX_QUEUE_IDX,
+                                   virtio_net.rx_desc, virtio_net.rx_avail, virtio_net.rx_used);
+        virtio_pci_set_queue_enable(&virtio_net.virtio_net_hw, VIRTIO_NET_RX_QUEUE_IDX);
 
-        // TX queue (queue 1)
-        qsize = loongarch::qemu::virtio_pci_get_queue_size(&virtio_net.virtio_net_hw, VIRTIO_NET_TX_QUEUE_IDX);
+        // 8. Initialize TX queue (queue 1)
+        qsize = virtio_pci_get_queue_size(&virtio_net.virtio_net_hw, VIRTIO_NET_TX_QUEUE_IDX);
+        printf("[virtio_net_init_pci] TX queue max size: %d\n", qsize);
         if (qsize == 0)
         {
             panic("VirtIO net has no TX queue");
@@ -268,18 +275,18 @@ namespace net
             panic("VirtIO net TX queue too short");
         }
 
-        loongarch::qemu::virtio_pci_set_queue_size(&virtio_net.virtio_net_hw, VIRTIO_NET_TX_QUEUE_IDX, NUM_NET_DESC);
+        virtio_pci_set_queue_size(&virtio_net.virtio_net_hw, VIRTIO_NET_TX_QUEUE_IDX, NUM_NET_DESC);
 
         // Setup TX queue memory layout
         virtio_net.tx_desc = (struct VRingDesc *)(virtio_net.pages + 2 * PGSIZE);
         virtio_net.tx_avail = (uint16 *)(virtio_net.pages + 2 * PGSIZE + NUM_NET_DESC * sizeof(struct VRingDesc));
         virtio_net.tx_used = (struct VRingUsedArea *)(virtio_net.pages + 3 * PGSIZE);
 
-        loongarch::qemu::virtio_pci_set_queue_addr(&virtio_net.virtio_net_hw, VIRTIO_NET_TX_QUEUE_IDX,
-                                                   virtio_net.tx_desc, virtio_net.tx_avail, virtio_net.tx_used);
-        loongarch::qemu::virtio_pci_set_queue_enable(&virtio_net.virtio_net_hw, VIRTIO_NET_TX_QUEUE_IDX);
+        virtio_pci_set_queue_addr2(&virtio_net.virtio_net_hw, VIRTIO_NET_TX_QUEUE_IDX,
+                                   virtio_net.tx_desc, virtio_net.tx_avail, virtio_net.tx_used);
+        virtio_pci_set_queue_enable(&virtio_net.virtio_net_hw, VIRTIO_NET_TX_QUEUE_IDX);
 
-        // Mark all descriptors as free initially
+        // 9. Mark all descriptors as free initially
         for (int i = 0; i < NUM_NET_DESC; i++)
         {
             virtio_net.rx_free[i] = 1;
@@ -288,7 +295,7 @@ namespace net
             virtio_net.tx_buffers[i].in_use = false;
         }
 
-        // Pre-populate RX queue with buffers
+        // 10. Pre-populate RX queue with buffers
         for (int i = 0; i < NUM_NET_DESC; i++)
         {
             if (virtio_net_alloc_rx_desc() < 0)
@@ -297,35 +304,62 @@ namespace net
             }
         }
 
-        // Device ready
+        // 11. Device ready
         status |= VIRTIO_CONFIG_S_DRIVER_OK;
-        loongarch::qemu::virtio_pci_set_status(&virtio_net.virtio_net_hw, status);
+        virtio_pci_set_status(&virtio_net.virtio_net_hw, status);
 
-        // Set default MAC address
+        // 12. Set default MAC address
         for (int i = 0; i < ETH_ALEN; i++)
         {
             virtio_net.mac_addr[i] = 0x52 + i; // Default test MAC: 52:53:54:55:56:57
         }
+
+        printf("[virtio_net_init_pci] ✓ VirtIO network device initialized successfully\n");
     }
 
     // Probe for VirtIO network device on PCI bus
     int virtio_net_probe_pci(void)
     {
-        loongarch::qemu::pci_device device = loongarch::qemu::pci_device_probe(VIRTIO_NET_VENDOR_ID, VIRTIO_NET_DEVICE_ID);
-        if (device.bus == 0xFF)
+        printf("[virtio_net_probe_pci] Probing for VirtIO network device\n");
+        
+        uint64 pci_base = pci_device_probe(VIRTIO_NET_VENDOR_ID, VIRTIO_NET_DEVICE_ID);
+        if (pci_base == 0)
         {
-            return -1; // Device not found
-        }
-
-        virtio_net.pci_dev = loongarch::qemu::pci_config_address(device.bus, device.device, device.function);
-        virtio_net.port_id = 0; // First network device
-
-        // Read PCI capabilities for VirtIO
-        if (loongarch::qemu::virtio_pci_read_caps(&virtio_net.virtio_net_hw, virtio_net.pci_dev) != 0)
-        {
+            printf("[virtio_net_probe_pci] VirtIO network device not found\n");
             return -1;
         }
 
+        virtio_net.pci_dev = pci_base;
+        virtio_net.port_id = 0; // First network device
+
+        printf("[virtio_net_probe_pci] Found VirtIO network device at PCI base: 0x%lx\n", pci_base);
+
+        // Extract bus, device, function from pci_base offset
+        uint8 bus = (pci_base >> 16) & 0xFF;
+        uint8 device = (pci_base >> 11) & 0x1F;
+        uint8 function = (pci_base >> 8) & 0x7;
+
+        // Map PCI configuration space and MMIO space - this is crucial!
+        mem::k_vmm.pci_map(bus, device, function, virtio_net.pages);
+        printf("[virtio_net_probe_pci] PCI memory mapping completed for bus=%d, dev=%d, func=%d\n", bus, device, function);
+
+        // Initialize PCI device - enable memory and bus master
+        uint16 cmd = pci_config_read16(pci_base + PCI_STATUS_COMMAND);
+        printf("[virtio_net_probe_pci] Original command register: 0x%x\n", cmd);
+        cmd |= PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER | PCI_COMMAND_IO;
+        pci_config_write16(pci_base + PCI_STATUS_COMMAND, cmd);
+        uint16 new_cmd = pci_config_read16(pci_base + PCI_STATUS_COMMAND);
+        printf("[virtio_net_probe_pci] New command register: 0x%x\n", new_cmd);
+
+        // Read and setup PCI capabilities for VirtIO
+        printf("[virtio_net_probe_pci] Reading PCI capabilities...\n");
+        if (virtio_pci_read_caps(&virtio_net.virtio_net_hw, pci_base, 0) != 0)
+        {
+            printf("[virtio_net_probe_pci] Failed to read PCI capabilities\n");
+            return -1;
+        }
+
+        printf("[virtio_net_probe_pci] ✓ PCI capabilities read successfully\n");
         return 0;
     }
 #endif
@@ -389,7 +423,7 @@ namespace net
         *R_NET(VIRTIO_MMIO_QUEUE_SEL) = VIRTIO_NET_RX_QUEUE_IDX;
         *R_NET(VIRTIO_MMIO_QUEUE_NOTIFY) = VIRTIO_NET_RX_QUEUE_IDX;
 #elif defined(LOONGARCH)
-        loongarch::qemu::virtio_pci_set_queue_notify(&virtio_net.virtio_net_hw, VIRTIO_NET_RX_QUEUE_IDX);
+        virtio_pci_set_queue_notify(&virtio_net.virtio_net_hw, VIRTIO_NET_RX_QUEUE_IDX);
 #endif
 
         virtio_net.net_lock.release();
@@ -476,7 +510,7 @@ namespace net
         *R_NET(VIRTIO_MMIO_QUEUE_NOTIFY) = VIRTIO_NET_TX_QUEUE_IDX;
         printf("[virtio_net_send] Notified device via MMIO\n");
 #elif defined(LOONGARCH)
-        loongarch::qemu::virtio_pci_set_queue_notify(&virtio_net.virtio_net_hw, VIRTIO_NET_TX_QUEUE_IDX);
+        virtio_pci_set_queue_notify(&virtio_net.virtio_net_hw, VIRTIO_NET_TX_QUEUE_IDX);
         printf("[virtio_net_send] Notified device via PCI\n");
 #endif
 
@@ -567,7 +601,7 @@ namespace net
         printf("[virtio_net_intr] MMIO interrupt status: 0x%x\n", intr_status);
 #elif defined(LOONGARCH)
         // Clear PCI interrupt status
-        uint32 isr_status = loongarch::qemu::virtio_pci_clear_isr(&virtio_net.virtio_net_hw);
+        uint32 isr_status = virtio_pci_clear_isr(&virtio_net.virtio_net_hw);
         printf("[virtio_net_intr] PCI ISR status: 0x%x\n", isr_status);
 #endif
 

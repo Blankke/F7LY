@@ -43,7 +43,9 @@ namespace net
         network_initialized = true;
         
         // Print initial status
+#ifdef RISCV
         print_network_status();
+#endif
         
         return true;
     }
