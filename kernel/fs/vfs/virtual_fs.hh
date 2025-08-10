@@ -125,6 +125,10 @@ namespace fs
         vfile_tree_node* create_path_nodes(const eastl::string& path);
         void destroy_tree(vfile_tree_node* node);
         
+        // 新增：处理动态 /proc/<pid>/stat 路径的辅助方法
+        bool is_proc_pid_stat_path(const eastl::string& path) const;
+        int extract_pid_from_path(const eastl::string& path) const;
+        
     public:
         VirtualFileSystem();
         ~VirtualFileSystem();

@@ -2,6 +2,7 @@
 #include "fs/vfs/file/virtual_file.hh"
 #include "fs/vfs/vfs_utils.hh"
 #include "proc/proc.hh"
+#include "proc/proc_manager.hh"
 namespace fs
 {
     // 构造函数
@@ -268,42 +269,15 @@ namespace fs
         add_virtual_file("/proc/sys/kernel/pid_max", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcSysKernelPidMaxProvider>());
 
-        // /proc/1/stat
-        add_virtual_file("/proc/1/stat", fs::FileTypes::FT_NORMAL,
-                         eastl::make_unique<Proc1StatProvider>());
-
-        // // /proc/self/fd/X
-        // auto int_to_string = [](uint num) -> eastl::string {
-        //     if (num == 0) return "0";
-
-        //     char buffer[16];
-        //     int pos = 15;
-        //     buffer[pos] = '\0';
-
-        //     while (num > 0) {
-        //         buffer[--pos] = '0' + (num % 10);
-        //         num /= 10;
-        //     }
-
-        //     return eastl::string(&buffer[pos]);
-        // };
-
-        // for (uint i = 0; i < proc::max_open_files; i++)
-        // {
-        //     eastl::string i_str = int_to_string(i);
-        //     add_virtual_file("/proc/self/fd/" + i_str, fs::FileTypes::FT_SYMLINK,
-        //                      eastl::make_unique<ProcSelfFdProvider>(i));
-        // }
-
         // 注意：/proc/self/cmdline, /proc/stat, /proc/uptime 等需要相应的 Provider 实现
         // 这里先创建节点，但 provider 为 nullptr，可以后续添加
         add_virtual_file("/proc/self/cmdline", fs::FileTypes::FT_NORMAL, nullptr);
         add_virtual_file("/proc/stat", fs::FileTypes::FT_NORMAL, nullptr);
         add_virtual_file("/proc/uptime", fs::FileTypes::FT_NORMAL, nullptr);
 
-        // 添加 /proc/self/stat 文件及其提供者
+        // 添加 /proc/self/stat 文件及其提供者 (使用新的统一provider)
         add_virtual_file("/proc/self/stat", fs::FileTypes::FT_NORMAL,
-                         eastl::make_unique<ProcSelfStatProvider>());
+                         eastl::make_unique<ProcPidStatProvider>(-1)); // -1表示当前进程
 
         // 添加 /proc/self/maps 文件及其提供者
         add_virtual_file("/proc/self/maps", fs::FileTypes::FT_NORMAL,
@@ -405,6 +379,26 @@ namespace fs
     {
         int err;
         vfile_tree_node *node = find_node_by_path(absolute_path);
+        
+        // 检查是否是 /proc/<pid>/stat 格式的路径
+        if (!node && is_proc_pid_stat_path(absolute_path)) {
+            int pid = extract_pid_from_path(absolute_path);
+            if (pid > 0) {
+                // 验证进程是否存在
+                proc::Pcb* target_pcb = proc::k_pm.find_proc_by_pid(pid);
+                if (target_pcb) {
+                    printfCyan("[open] creating dynamic /proc/%d/stat file\n", pid);
+                    // 动态创建 /proc/<pid>/stat 文件
+                    fs::FileAttrs attrs;
+                    attrs.filetype = fs::FileTypes::FT_NORMAL;
+                    attrs._value = 0644;
+                    file = new virtual_file(attrs, absolute_path, 
+                                          eastl::make_unique<ProcPidStatProvider>(pid));
+                    return 0;
+                }
+            }
+        }
+        
         if (node)
         {
             printfCyan("[open] using virtual file system for path: %s\n", absolute_path.c_str());
@@ -449,6 +443,48 @@ namespace fs
         }
 
         return parts;
+    }
+    
+    // 检查路径是否符合 /proc/<pid>/stat 格式
+    bool VirtualFileSystem::is_proc_pid_stat_path(const eastl::string& path) const
+    {
+        // 检查是否以 /proc/ 开头并以 /stat 结尾
+        if (path.size() < 11) return false; // 最短: /proc/1/stat (11个字符)
+        if (path.substr(0, 6) != "/proc/") return false;
+        if (path.substr(path.size() - 5) != "/stat") return false;
+        
+        // 提取中间的PID部分并验证是否为数字
+        eastl::string pid_str = path.substr(6, path.size() - 11);
+        if (pid_str.empty()) return false;
+        
+        // 检查是否全为数字
+        for (size_t i = 0; i < pid_str.size(); i++) {
+            if (pid_str[i] < '0' || pid_str[i] > '9') {
+                return false;
+            }
+        }
+        
+        return true;
+    }
+    
+    // 从路径中提取PID
+    int VirtualFileSystem::extract_pid_from_path(const eastl::string& path) const
+    {
+        if (!is_proc_pid_stat_path(path)) return -1;
+        
+        eastl::string pid_str = path.substr(6, path.size() - 11);
+        int pid = 0;
+        
+        // 手动转换字符串为整数
+        for (size_t i = 0; i < pid_str.size(); i++) {
+            if (pid_str[i] >= '0' && pid_str[i] <= '9') {
+                pid = pid * 10 + (pid_str[i] - '0');
+            } else {
+                return -1; // 无效字符
+            }
+        }
+        
+        return pid;
     }
 
     int VirtualFileSystem::fstat(fs::file *f, fs::Kstat *st)

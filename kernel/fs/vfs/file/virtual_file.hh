@@ -3,6 +3,7 @@
 #include "fs/vfs/file/file.hh"
 #include <EASTL/string.h>
 #include <EASTL/unique_ptr.h>
+#include "proc/proc.hh"
 
 namespace mem
 {
@@ -242,26 +243,22 @@ namespace fs
         }
     };
 
-    // /proc/1/stat 内容提供者
-    class Proc1StatProvider : public VirtualContentProvider
+    // 通用的 /proc/<pid>/stat 内容提供者
+    class ProcPidStatProvider : public VirtualContentProvider
     {
+    private:
+        int target_pid; // 目标进程PID，-1表示使用当前进程(self)
+        
     public:
-        virtual eastl::string generate_content() override;
-        virtual bool is_dynamic() const override { return false; } // 静态内容
-        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
-            return eastl::make_unique<Proc1StatProvider>();
-        }
-    };
-    
-    // /proc/self/stat 内容提供者
-    class ProcSelfStatProvider : public VirtualContentProvider
-    {
-    public:
+        ProcPidStatProvider(int pid = -1) : target_pid(pid) {}
         virtual eastl::string generate_content() override;
         virtual bool is_dynamic() const override { return true; } // 进程状态需要实时更新
         virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
-            return eastl::make_unique<ProcSelfStatProvider>();
+            return eastl::make_unique<ProcPidStatProvider>(target_pid);
         }
+        
+        // 生成标准Linux /proc/[pid]/stat格式的内容
+        eastl::string generate_stat_content(proc::Pcb* pcb);
     };
 
     // /proc/interrupts 内容提供者

@@ -3155,7 +3155,7 @@ char *ltp_testcases[] = {
     // "vxlan04.sh",
     "wait01", // PASS
     "wait02", // PASS
-    // "wait401",
+    "wait401", // PASS
     "wait402", // PASS
     // "wait403",
     // "waitid01",

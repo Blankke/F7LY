@@ -707,6 +707,7 @@ namespace proc
     {
         Pcb *p;
         int count = 0; // 记录发送信号的进程数量
+        printfCyan("kill_signal: pid=%d, sig=%d\n", pid, sig);
 
         if (pid > 0)
         {

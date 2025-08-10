@@ -8,6 +8,7 @@
 #include "printer.hh"
 #include "proc/proc.hh"
 #include "trap/interrupt_stats.hh"
+// #include "mem/mem_layout.hh"
 #include "fs/vfs/file/normal_file.hh"
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
@@ -397,23 +398,34 @@ namespace fs
         return int_to_string(proc::pid_max) + "\n";
     }
 
-    // 实现 /proc/1/stat 的内容生成
-    eastl::string Proc1StatProvider::generate_content()
+    // 实现通用的 /proc/<pid>/stat 的内容生成
+    eastl::string ProcPidStatProvider::generate_content()
     {
-        // Linux标准/proc/1/stat格式 (init进程)
-        // 格式: pid comm state ppid pgrp session tty_nr tpgid flags minflt cminflt majflt cmajflt utime stime cutime cstime priority nice num_threads itrealvalue starttime vsize rss rsslim startcode endcode startstack kstkesp kstkeip signal blocked sigignore sigcatch wchan nswap cnswap exit_signal processor rt_priority policy delayacct_blkio_ticks guest_time cguest_time start_data end_data start_brk arg_start arg_end env_start env_end exit_code
-        return "1 (init) S 0 1 1 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n";
-    }
-    
-    // 实现 /proc/self/stat 的内容生成
-    // 参考Linux的/proc/[pid]/stat格式
-    eastl::string ProcSelfStatProvider::generate_content()
-    {
-        proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
-        if (!pcb) {
+        proc::Pcb *target_pcb = nullptr;
+        
+        if (target_pid == -1) {
+            // /proc/self/stat - 使用当前进程
+            target_pcb = proc::k_pm.get_cur_pcb();
+        } else {
+            // /proc/<pid>/stat - 查找指定PID的进程
+            target_pcb = proc::k_pm.find_proc_by_pid(target_pid);
+        }
+        
+        if (!target_pcb) {
+            // 如果找不到进程，返回默认值或错误格式
+            if (target_pid == 1) {
+                // init进程的特殊处理
+                return "1 (init) S 0 1 1 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n";
+            }
             return "0 (unknown) R 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n";
         }
         
+        return generate_stat_content(target_pcb);
+    }
+    
+    // 生成标准Linux /proc/[pid]/stat格式的内容
+    eastl::string ProcPidStatProvider::generate_stat_content(proc::Pcb* pcb)
+    {
         // 辅助函数：转换整数为字符串
         auto int_to_string = [](long num) -> eastl::string {
             if (num == 0) return "0";
@@ -441,110 +453,197 @@ namespace fs
         
         eastl::string result;
         
-        // pid
+        // 1. pid (进程ID)
         result += int_to_string(pcb->_pid) + " ";
         
-        // comm (进程名，带括号)
+        // 2. comm (进程名，带括号)
         result += "(" + eastl::string(pcb->_name) + ") ";
         
-        // state (进程状态: R=running, S=sleeping, Z=zombie, etc.)
-        result += "R ";  // 假设进程处于运行状态
+        // 3. state (进程状态: R=running, S=sleeping, Z=zombie, D=disk sleep等)
+        char state_char = 'R'; // 默认运行状态
+        switch (pcb->_state) {
+            case proc::ProcState::RUNNING:
+            case proc::ProcState::RUNNABLE:
+                state_char = 'R';
+                break;
+            case proc::ProcState::SLEEPING:
+                state_char = 'S';
+                break;
+            case proc::ProcState::ZOMBIE:
+                state_char = 'Z';
+                break;
+            default:
+                state_char = 'R';
+                break;
+        }
+        result += state_char;
+        result += " ";
         
-        // ppid (父进程ID)
-        result += int_to_string(pcb->_ppid) + " ";
+        // 4. ppid (父进程ID)
+        result += int_to_string(pcb->get_ppid()) + " ";
 
-        // pgrp (进程组ID)
-        result += int_to_string(pcb->_pid) + " ";
+        // 5. pgrp (进程组ID)
+        result += int_to_string(pcb->get_pgid()) + " ";
         
-        // session
-        result += int_to_string(pcb->_pid) + " ";
+        // 6. session (会话ID)
+        result += int_to_string(pcb->get_sid()) + " ";
         
-        // tty_nr (控制终端)
+        // 7. tty_nr (控制终端)
         result += "0 ";
         
-        // tpgid (控制终端的前台进程组)
+        // 8. tpgid (控制终端的前台进程组)
+        result += "-1 ";
+        
+        // 9. flags (进程标志)
+        result += "4194304 ";
+        
+        // 10. minflt (次缺页错误数)
         result += "0 ";
         
-        // flags
+        // 11. cminflt (子进程次缺页错误数)
         result += "0 ";
         
-        // minflt (次缺页错误数)
+        // 12. majflt (主缺页错误数)
         result += "0 ";
         
-        // cminflt (子进程次缺页错误数)
+        // 13. cmajflt (子进程主缺页错误数)
         result += "0 ";
         
-        // majflt (主缺页错误数)
-        result += "0 ";
-        
-        // cmajflt (子进程主缺页错误数)
-        result += "0 ";
-        
-        // utime (用户态CPU时间)
+        // 14. utime (用户态CPU时间，以时钟滴答为单位)
         result += int_to_string(pcb->_utime) + " ";
         
-        // stime (内核态CPU时间)
+        // 15. stime (内核态CPU时间，以时钟滴答为单位)
         result += int_to_string(pcb->_stime) + " ";
         
-        // cutime (子进程用户态CPU时间)
-        result += "0 ";
+        // 16. cutime (子进程用户态CPU时间)
+        result += int_to_string(pcb->_cutime) + " ";
         
-        // cstime (子进程内核态CPU时间)
-        result += "0 ";
+        // 17. cstime (子进程内核态CPU时间)
+        result += int_to_string(pcb->_cstime) + " ";
         
-        // priority (进程优先级)
-        result += "0 ";
+        // 18. priority (进程优先级)
+        result += int_to_string(20) + " ";  // 默认优先级20
         
-        // nice (nice值)
-        result += "0 ";
+        // 19. nice (nice值)
+        result += int_to_string(0) + " ";   // 默认nice值0
         
-        // num_threads (线程数)
+        // 20. num_threads (线程数)
         result += "1 ";
         
-        // itrealvalue (SIGALRM倒计时值)
+        // 21. itrealvalue (SIGALRM倒计时值，已弃用)
         result += "0 ";
         
-        // starttime (启动时间，自系统启动后的节拍数)
+        // 22. starttime (启动时间，自系统启动后的节拍数)
         result += int_to_string(pcb->_start_time) + " ";
         
-        // vsize (虚拟内存大小，字节)
-        result += "4194304 ";  // 假设4MB虚拟内存
+        // 23. vsize (虚拟内存大小，字节)
+        uint64 vsize = 0;
+        if (pcb->get_memory_manager()) {
+            // 使用实际的内存管理器方法获取虚拟内存大小
+            vsize = pcb->get_memory_manager()->get_total_memory_usage();
+            uint64 vma_usage = pcb->get_memory_manager()->get_vma_memory_usage();
+            vsize += vma_usage;
+        }
+        if (vsize == 0) {
+            vsize = 4194304; // 默认4MB
+        }
+        result += int_to_string(vsize) + " ";
         
-        // rss (常驻内存大小，页)
-        result += "1024 ";  // 假设1024页
+        // 24. rss (常驻内存大小，页)
+        uint64 rss = 0;
+        if (pcb->get_memory_manager()) {
+            // 简单估算RSS：使用程序段大小作为近似值
+            uint64 total_mem = pcb->get_memory_manager()->get_total_memory_usage();
+            rss = (total_mem + PGSIZE - 1) / PGSIZE; // 转换为页数
+        }
+        if (rss == 0) {
+            rss = 1024; // 默认1024页
+        }
+        result += int_to_string(rss) + " ";
         
-        // rsslim (常驻内存限制)
-        result += "4294967295 ";  // 无限制
+        // 25. rsslim (常驻内存限制)
+        result += "18446744073709551615 ";  // RLIM_INFINITY
         
-        // startcode (代码段起始地址)
+        // 26. startcode (代码段起始地址)
+        result += "134512640 ";
+        
+        // 27. endcode (代码段结束地址)
+        result += "134529084 ";
+        
+        // 28. startstack (堆栈起始地址)
+        result += "140737488347136 ";
+        
+        // 29. kstkesp (ESP寄存器值，已弃用)
         result += "0 ";
         
-        // endcode (代码段结束地址)
+        // 30. kstkeip (EIP寄存器值，已弃用)
         result += "0 ";
         
-        // startstack (堆栈起始地址)
+        // 31. signal (待处理信号位图)
+        result += int_to_string(pcb->_signal) + " ";
+        
+        // 32. blocked (阻塞信号位图)
+        result += int_to_string(pcb->_sigmask) + " ";
+        
+        // 33. sigignore (忽略信号位图)
         result += "0 ";
         
-        // kstkesp (ESP寄存器值)
+        // 34. sigcatch (捕获信号位图)
         result += "0 ";
         
-        // kstkeip (EIP寄存器值)
+        // 35. wchan (进程休眠内核函数地址)
         result += "0 ";
         
-        // signal (待处理信号位图)
+        // 36. nswap (已交换页数，已弃用)
         result += "0 ";
         
-        // blocked (阻塞信号位图)
+        // 37. cnswap (子进程已交换页数，已弃用)
         result += "0 ";
         
-        // sigignore (忽略信号位图)
+        // 38. exit_signal (退出时发送给父进程的信号)
+        result += "17 ";  // SIGCHLD
+        
+        // 39. processor (最后运行的处理器号)
+        result += int_to_string(0) + " ";
+        
+        // 40. rt_priority (实时优先级)
         result += "0 ";
         
-        // sigcatch (捕获信号位图)
+        // 41. policy (调度策略)
+        result += "0 ";  // SCHED_NORMAL
+        
+        // 42. delayacct_blkio_ticks (块I/O延迟累计时间)
         result += "0 ";
         
-        // wchan (进程休眠内核函数地址)
+        // 43. guest_time (虚拟化guest时间)
         result += "0 ";
+        
+        // 44. cguest_time (子进程虚拟化guest时间)
+        result += "0 ";
+        
+        // 45. start_data (数据段起始地址)
+        result += "134529084 ";
+        
+        // 46. end_data (数据段结束地址)
+        result += "134531240 ";
+        
+        // 47. start_brk (堆起始地址)
+        result += "134531240 ";
+        
+        // 48. arg_start (参数起始地址)
+        result += "140737488346624 ";
+        
+        // 49. arg_end (参数结束地址)
+        result += "140737488346633 ";
+        
+        // 50. env_start (环境变量起始地址)
+        result += "140737488346633 ";
+        
+        // 51. env_end (环境变量结束地址)
+        result += "140737488347136 ";
+        
+        // 52. exit_code (退出码)
+        result += int_to_string(pcb->_xstate) + " ";
         
         // 添加换行符结束
         result += "\n";
