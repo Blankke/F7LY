@@ -237,6 +237,7 @@ namespace syscall
         uint64 sys_epoll_create1();
         uint64 sys_epoll_ctl();
         uint64 sys_eventfd2();
+        uint64 sys_waitid();
     };
 
     extern SyscallHandler k_syscall_handler;

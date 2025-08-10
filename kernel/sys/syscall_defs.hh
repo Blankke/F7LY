@@ -75,6 +75,7 @@ namespace syscall
         SYS_acct = 89, // from rocket
         SYS_exit = 93,
         SYS_exit_group = 94,
+        SYS_waitid = 95,
         SYS_set_tid_address = 96,
         SYS_futex = 98, // form tsh
         SYS_set_robust_list = 99,
