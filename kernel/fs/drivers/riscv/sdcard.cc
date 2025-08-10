@@ -498,7 +498,7 @@ uint32 SD_Card_Init(SDMMC_T *pSDMMC, uint32 freq)
     SD_Send_Command(pSDMMC, CMD55, 0);           // CMD55: 下一个命令是应用专用命令
     SD_Send_Command(pSDMMC, ACMD41, 0x40100000); // ACMD41: 初始化命令，0x40100000表示高容量支持
     val = sdioif->response[0];
-    printf("response: %p\n", val);
+    // printf("response: %p\n", val);
   } while ((val & 0x80000000) == 0); // 等待bit31置1，表示初始化完成
 
   printfPink("response: %p\n", val);
@@ -664,42 +664,72 @@ uint32 sd_read(uint32 *dat, int size, int addr)
   int tt = 0;
 
   for (int i = 0; i < blk; i++)
-  {                                          // 逐块读取
+  { // 逐块读取
     SDMMC->BLKSIZ = 512;                     // 设置块大小为512字节
     SDMMC->BYTCNT = 512;                     // 设置传输字节数为512
     SD_Send_Command(SDMMC, CMD17, addr + i); // CMD17: 单块读取，参数为扇区地址
-    // while (SDMMC->RINTSTS & 0x20)  // 可选：轮询RXDR中断(bit5)方式读取
-    // {
-    // 	if (tt < size)
-    // 	{
-    // 		dat[tt] = *(uint32 *)(SD_BASE_V + 0x200);
-    // 	}
-    // 	temp = *(uint32 *)(SD_BASE_V + 0x200);
-    // 	tt++;
-    // 	// printf("rintst: %p\n", LPC_SDMMC->RINTSTS);
-    // 	// printf("data %d: %d\n", i, temp_data);
-    // 	for (int j = 0; j < 100000; j++)
-    // 	{
-    // 		/* code */
-    // 	}
-    // 	SD_IRQHandler(SDMMC);
-    // }
-    // 当前使用固定次数读取方式(每块128个32位字)
-    for (int j = 0; j < 128; j++)
+
+    // 读取一个块（128个32位字）。等待FIFO有数据再读，避免空读
+    int words_left = 128;
+    int safety_tries = 1000000; // 简单超时防护，避免死等
+    while (words_left > 0)
     {
-      dat[tt] = *(volatile uint32 *)(SD_BASE_V + 0x200); // 从FIFO(偏移0x200)读取数据
-      printf("data: %d: 0x%p\n", tt, dat[tt]);
-      tt++;
-      // printf("rintst: %p\n", SDMMC->RINTSTS);
-      // printf("data %d: %d\n",tt, dat[tt]);
-      for (int j = 0; j < 100000; j++)
-      { // 延时等待
-        /* code */
+      // 等待FIFO计数>0或数据完成/错误
+      while ((MCI_STS_GET_FCNT(SDMMC->STATUS) == 0) &&
+             !(SDMMC->RINTSTS & (MCI_INT_RXDR | MCI_INT_DATA_OVER | MCI_INT_DTO | MCI_INT_DCRC | MCI_INT_FRUN)))
+      {
+        if (--safety_tries == 0)
+        {
+          printfRed("sd_read timeout waiting FIFO/data, RINTSTS=%p STATUS=%p\n", SDMMC->RINTSTS, SDMMC->STATUS);
+          return 1;
+        }
       }
+
+      // 错误检查：数据超时/CRC/溢出
+      uint32 rints = SDMMC->RINTSTS;
+      if (rints & (MCI_INT_DTO | MCI_INT_DCRC | MCI_INT_FRUN))
+      {
+        printfRed("sd_read error, RINTSTS=%p\n", rints);
+        // 清错误位
+        SDMMC->RINTSTS = (rints & (MCI_INT_DTO | MCI_INT_DCRC | MCI_INT_FRUN));
+        return 1;
+      }
+
+      // 从FIFO读取可用数据
+      uint32 avail = MCI_STS_GET_FCNT(SDMMC->STATUS);
+      if (avail == 0 && (rints & MCI_INT_DATA_OVER))
+      {
+        // 传输完成但words_left>0，尽量退出避免死循环
+        printfRed("sd_read data over with words_left=%d\n", words_left);
+        SDMMC->RINTSTS = MCI_INT_DATA_OVER;
+        break;
+      }
+
+      uint32 to_read = avail;
+      if (to_read > (uint32)words_left)
+        to_read = (uint32)words_left;
+
+      for (uint32 j = 0; j < to_read; j++)
+      {
+        dat[tt] = *(volatile uint32 *)(SD_BASE_V + 0x200); // 从FIFO(偏移0x200)读取数据
+        // 可选调试：打印首几个字
+        // if (tt < 4) printf("sd_read word[%d]=0x%p\n", tt, dat[tt]);
+        tt++;
+      }
+      words_left -= (int)to_read;
+
+      // 清空RXDR中断（若置位）
+      if (rints & MCI_INT_RXDR)
+        SDMMC->RINTSTS = MCI_INT_RXDR;
     }
-    // SD_IRQHandler(SDMMC);
+
+    // 等待并清除“数据传输完成”标志
+    int tries_do = 100000;
+    while (!(SDMMC->RINTSTS & MCI_INT_DATA_OVER) && tries_do-- > 0)
+      ;
+    if (SDMMC->RINTSTS & MCI_INT_DATA_OVER)
+      SDMMC->RINTSTS = MCI_INT_DATA_OVER;
   }
-  // printf("tt: %d\n", tt);
   return 0;
 }
 
