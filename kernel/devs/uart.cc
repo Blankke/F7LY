@@ -2,7 +2,7 @@
 #include "printer.hh"
 #include "console.hh"
 #include"device_manager.hh"
-
+#include "sbi.hh"
 namespace dev
 {
 	UartManager k_uart;
@@ -31,19 +31,22 @@ namespace dev
 
 	int UartManager::put_char_sync(u8 c)
 	{
-
+#ifdef QEMU
 		if (k_printer.is_panic())
 			while (1)
 				;
 		while ((_read_reg(UartReg::LSR) & UartLSR::tx_idle) == 0)
 			;
 		_write_reg(UartReg::THR, c);
-
+#else
+		sbi_console_putchar(c);
+#endif
 		return 0;
 	}
 
 	int UartManager::put_char(u8 c)
 	{
+#ifdef QEMU
 		_lock.acquire();
 
 		if (k_printer.is_panic())
@@ -69,19 +72,31 @@ namespace dev
 				return 0;
 			}
 		}
+#else
+		sbi_console_putchar(c);
+		return 0;
+#endif
 	}
 
 	int UartManager::get_char_sync(u8* c)
 	{
+	#ifdef QEMU
 		volatile regLSR *lsr = (volatile regLSR *)(_uart_base + LSR);
 		while (lsr->data_ready == 0)
 			;
 		*c = _read_reg( UartReg::THR );
+	#else
+		int ch = sbi_console_getchar();
+		if (ch == -1)
+			return -1;
+		*c = (u8)ch;
+	#endif
 		return 0;
 	}
 
 	int UartManager::get_char(u8 *c)
 	{
+	#ifdef QEMU
 		if (_read_buffer_empty())
 			return -1;
 		else
@@ -89,6 +104,13 @@ namespace dev
 			*c = _read_buffer_get();
 			return 0;
 		}
+	#else
+		int ch = sbi_console_getchar();
+		if (ch == -1)
+			return -1;
+		*c = (u8)ch;
+		return 0;
+	#endif
 	}
 
 	void UartManager::start()
