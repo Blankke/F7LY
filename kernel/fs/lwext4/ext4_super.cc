@@ -98,11 +98,13 @@ static uint32_t ext4_sb_csum(struct ext4_sblock *s)
 static bool ext4_sb_verify_csum(struct ext4_sblock *s)
 {
     if (!ext4_sb_feature_ro_com(s, EXT4_FRO_COM_METADATA_CSUM))
+    {
         return true;
-
+    }
     if (s->checksum_type != to_le32(EXT4_CHECKSUM_CRC32C))
+    {
         return false;
-
+    }
     return s->checksum == to_le32(ext4_sb_csum(s));
 }
 
@@ -128,9 +130,10 @@ int ext4_sb_read(struct ext4_blockdev *bdev, struct ext4_sblock *s)
 bool ext4_sb_check(struct ext4_sblock *s)
 {
     // Hexdump the ext4_sblock structure for debugging
-    const unsigned char* data = reinterpret_cast<const unsigned char*>(s);
+    const unsigned char *data = reinterpret_cast<const unsigned char *>(s);
     printf("ext4_sblock hexdump:\n");
-    for (size_t i = 0; i < sizeof(struct ext4_sblock); ++i) {
+    for (size_t i = 0; i < sizeof(struct ext4_sblock); ++i)
+    {
         printf("%02x ", data[i]);
         if ((i + 1) % 16 == 0)
             printf("\n");

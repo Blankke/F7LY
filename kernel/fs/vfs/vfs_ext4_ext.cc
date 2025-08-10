@@ -76,7 +76,7 @@ int vfs_ext_mount(struct filesystem *fs, uint64_t rwflag, void *data) {
 
     printf("MOUNT BEGIN %s\n", fs->path);
     bdev = &vbdev->bd;
-    r = ext4_mount(DEV_NAME, fs->path, false);
+    r = ext4_mount(DEV_NAME, fs->path, true);
     printf("EXT4 mount result: %d\n", r);
 
     // r = ext4_cache_write_back(fs->path, true);
