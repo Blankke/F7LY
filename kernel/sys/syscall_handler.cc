@@ -307,6 +307,9 @@ namespace syscall
         BIND_SYSCALL(epoll_create1); // frome chronix
         BIND_SYSCALL(epoll_ctl); // frome chronix
 
+        // todo
+        BIND_SYSCALL(waitid);
+
         /// usr/include/asm-generic/unistd.h
         BIND_SYSCALL(timer_settime);
         BIND_SYSCALL(timer_delete);
@@ -570,6 +573,13 @@ namespace syscall
             return -1;
         if (_arg_int(2, option) < 0)
             return -1;
+        
+        // 检查无效的PID值
+        // 根据POSIX标准，PID不能是INT_MIN或其他无效值
+        if (pid == INT_MIN) {
+            return SYS_ESRCH;
+        }
+        
         // printf("[SyscallHandler::sys_wait4] pid: %d, wstatus_addr: %p, option: %d\n",
         //    pid, wstatus_addr, option);
         int waitret = proc::k_pm.wait4(pid, wstatus_addr, option);
@@ -10448,6 +10458,10 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
         panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_reboot()
+    {
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_waitid()
     {
         panic("未实现该系统调用");
     }
