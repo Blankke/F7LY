@@ -1306,7 +1306,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_write] Invalid address: %p\n", (void *)p);
             return SYS_EFAULT;
         }
-        printfGreen("[SyscallHandler::sys_write] fd: %d, p: %p, n: %d\n", fd, (void *)p, n);
+        // printfGreen("[SyscallHandler::sys_write] fd: %d, p: %p, n: %d\n", fd, (void *)p, n);
         // 检查文件是否以 O_PATH 标志打开，O_PATH 文件不允许读取
         if (f->lwext4_file_struct.flags & O_PATH)
             return SYS_EBADF;
