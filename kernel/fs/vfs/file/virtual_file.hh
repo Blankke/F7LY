@@ -205,6 +205,7 @@ namespace fs
     public:
         DevLoopProvider(int loop_number) : _loop_number(loop_number) {}
         virtual eastl::string generate_content() override;
+        virtual bool is_writable() const override { return true; }
         virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
             return eastl::make_unique<DevLoopProvider>(_loop_number);
         }

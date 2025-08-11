@@ -264,9 +264,10 @@ namespace fs
     }
     long virtual_file::write(uint64 buf, size_t len, long off, bool upgrade)
     {
-        if (!_content_provider->is_writable()) {
+        if (!_content_provider->is_writable())
+        {
             printfRed("virtual_file::write: this virtual file is read-only");
-            return -1;
+            return -EBADF;
         }
 
         if (_attrs.u_write != 1) {

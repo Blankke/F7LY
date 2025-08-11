@@ -1314,7 +1314,7 @@ namespace syscall
         // TODO: 文件描述符的flags检查，只读就不能写，返回SYS_EBADF
         // 我用的是lwext4的文件描述符结构体，flags是lwext4_file_struct.flags
         // 好像不太对这样，因为有的文件这个结构体没用到，也没初始化
-        if (f->_attrs.g_write == 0)
+        if (f->_attrs.g_write == 0 && !f->is_virtual)
         {
             printfRed("[SyscallHandler::sys_write] File descriptor %d is read-only\n", fd);
             return SYS_EBADF;
