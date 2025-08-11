@@ -55,9 +55,7 @@ namespace fs
     eastl::string ProcMountsProvider::generate_content()
     {
         eastl::string result;
-        result += "/dev/sda1 / ext4 rw,relatime 0 0\n";
-        result += "proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0\n";
-        result += "tmpfs /tmp tmpfs rw,nosuid,nodev 0 0\n";
+        result += "/dev/loop0 /wcnmd ext4 rw,relatime 0 0\n";
         return result;
     }
 
@@ -106,7 +104,7 @@ namespace fs
 
     eastl::string DevLoopProvider::generate_content()
     {
-        printfRed("未实现");
+        printfRed("未实现xxxxxxxxxxx");
         return "Loop device content\n";
     }
 
@@ -158,7 +156,7 @@ namespace fs
     long virtual_file::read(uint64 buf, size_t len, long off, bool upgrade)
     {
         // printfGreen("virtual_file::read called with buf: %p, len: %u, off: %d, upgrade: %d\n", (void *)buf, len, off, upgrade);
-        
+        printf("file_path: %s\n", _path_name.c_str());
         if (_attrs.u_read != 1) {
             printfRed("virtual_file:: not allowed to read!");
             return -1;
@@ -310,6 +308,11 @@ namespace fs
 
     off_t virtual_file::lseek(off_t offset, int whence)
     {
+        if (_content_provider->is_readable())
+        {
+            printfRed("偷一手这里"); //专为loop
+            return 64 * 1024;
+        }
         // 对于动态内容，确保获得最新的文件大小
         if (_content_provider->is_dynamic()) {
             _cached_content = _content_provider->generate_content();
