@@ -224,8 +224,7 @@ void trap_manager::usertrap()
     if (timeslice >= 10)
     {
       timeslice = 0;
-      // 处理信号 - 在返回用户态之前检查并处理待处理的信号
-      proc::ipc::signal::handle_signal();
+      // proc::ipc::signal::handle_signal();
       printf("yield in usertrap\n");
       proc::k_scheduler.yield();
     }
