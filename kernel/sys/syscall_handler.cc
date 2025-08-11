@@ -10546,7 +10546,80 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
     }
     uint64 SyscallHandler::sys_memfd_create()
     {
-        return uint64();
+ // int memfd_create(const char *name, unsigned int flags)
+        // 支持标志：MFD_CLOEXEC(0x0001), MFD_ALLOW_SEALING(0x0002)
+        // 其余标志一律返回 EINVAL。
+        // 语义：在匿名内存文件系统中创建一个匿名文件句柄。这里复用 VFS 的 O_TMPFILE 机制在 /tmp 下创建匿名文件。
+
+        // 本地定义需要的标志常量，避免影响全局头文件
+        constexpr unsigned int MFD_CLOEXEC = 0x0001;
+        constexpr unsigned int MFD_ALLOW_SEALING = 0x0002;
+        // constexpr unsigned int MFD_HUGETLB = 0x0004; // 未支持
+        // 名称长度限制：Linux 约定最大 249 字节（不含终止符）
+        constexpr int MEMFD_NAME_MAX = 249;
+
+        uint64 name_addr = 0;
+        unsigned int flags = 0;
+
+        if (_arg_addr(0, name_addr) < 0)
+            return SYS_EFAULT;
+        int flags_tmp = 0;
+        if (_arg_int(1, flags_tmp) < 0)
+            return SYS_EINVAL;
+        flags = static_cast<unsigned int>(flags_tmp);
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+
+        // 拷贝并校验 name
+        eastl::string name;
+        if (mem::k_vmm.copy_str_in(*pt, name, name_addr, PATH_MAX) < 0)
+            return SYS_EFAULT;
+        // 非空、长度限制、不能包含 '/'
+        if (name.size() == 0 || name.size() > (size_t)MEMFD_NAME_MAX)
+            return SYS_EINVAL;
+        for (char c : name)
+        {
+            if (c == '/')
+                return SYS_EINVAL;
+        }
+
+        // 校验 flags：仅支持 MFD_CLOEXEC 和 MFD_ALLOW_SEALING
+        const unsigned int allowed = MFD_CLOEXEC | MFD_ALLOW_SEALING;
+        if (flags & ~allowed)
+            return SYS_EINVAL;
+
+        // 通过 VFS 在 /tmp 下用 O_TMPFILE 创建一个匿名文件，读写打开
+        // 说明：normal_file 中对 O_TMPFILE 会放宽 r/w 权限检查
+        const eastl::string dir_path = "/tmp";
+        const int oflags = O_RDWR | O_LARGEFILE | O_TMPFILE;
+        const int mode = 0600; // 实际权限对 O_TMPFILE 不敏感；保持与其它创建语义一致
+
+        int fd = proc::k_pm.open(AT_FDCWD, dir_path, oflags, mode);
+        if (fd < 0)
+        {
+            // 直接返回底层错误（可能为 -EMFILE/-ENOENT/-ENOTDIR/-ENOMEM 等）
+            return fd;
+        }
+
+        // 设置 FD_CLOEXEC（如要求）
+        if (flags & MFD_CLOEXEC)
+        {
+            if (p->_ofile && fd >= 0 && fd < (int)proc::max_open_files)
+            {
+                p->_ofile->_fl_cloexec[fd] = true;
+            }
+        }
+
+        // 将 /proc/self/fd/<n> 的目标名渲染为 "memfd:<name>"
+        if (p->_ofile && p->_ofile->_ofile_ptr[fd])
+        {
+            fs::file *f = p->_ofile->_ofile_ptr[fd];
+            f->_path_name = eastl::string("memfd:") + name;
+        }
+
+        // 目前不实现 sealing 语义，仅接受 MFD_ALLOW_SEALING 标志，后续在 fcntl F_*_SEALS 中扩展
+        return fd;
     }
     /**
      * @brief 创建 POSIX 每进程定时器

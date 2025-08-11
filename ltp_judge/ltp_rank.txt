@@ -2,11 +2,7 @@ Test Case Name | Pass Count | Total Count | performance
 ===============================================================
 epoll_ctl03                    | 256        | 256        | ok
 access01                       | 199        | 199        | 过一部份
-<<<<<<< HEAD
-memfd_create01                 | 157        | 157        | 
-=======
-memfd_create01                 | 157        | 157        | 曹老师写一下这个，好像有mmap我不会
->>>>>>> refs/remotes/origin/main
+memfd_create01                 | 157        | 157        | 这个勾把还挺难，F_SEAL后面再补一下
 getpid01                       | 100        | 100        | ok
 chdir01                        | 92         | 95         | ok
 splice07                       | 75         | 126        | 这个貌似能修，争取一下, 测这个记得开网络(init_network_stack)
