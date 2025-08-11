@@ -407,7 +407,27 @@ namespace proc
         {
             if (is_page_mapped(va))
             {
-                mem::k_vmm.vmunmap(pagetable, va, 1, 1);
+                // 检查是否为共享内存地址
+                void* shm_start_addr = nullptr;
+                size_t shm_size = 0;
+                if (shm::k_smm.find_shared_memory_segment((void *)va, &shm_start_addr, &shm_size))
+                {
+                    // 对于共享内存，使用detach_seg来正确处理引用计数
+                    int result = shm::k_smm.detach_seg(shm_start_addr);
+                    if (result != 0)
+                    {
+                        panic("[shrink_heap] Failed to detach shared memory at VA=%p\n", shm_start_addr);
+                    }
+                    
+                    // 跳过整个共享内存段，直接移动到段结束位置
+                    uint64 shm_end = (uint64)shm_start_addr + shm_size;
+                    va = PGROUNDUP(shm_end) - PGSIZE; // -PGSIZE因为循环会+PGSIZE
+                }
+                else
+                {
+                    // 对于普通内存，直接使用vmunmap
+                    mem::k_vmm.vmunmap(pagetable, va, 1, 1);
+                }
             }
         }
 
@@ -452,16 +472,15 @@ namespace proc
 
         vma &vm_entry = vma_data._vm[vma_index];
 
-        // printfBlue("  Processing VMA %d: addr=%p, len=%u, vfd=%d, flags=0x%x, prot=0x%x\n",
-        //            vma_index, (void *)vm_entry.addr, vm_entry.len,
-        //            vm_entry.vfd, vm_entry.flags, vm_entry.prot);
+        printfBlue("  Processing VMA %d: addr=%p, len=%u, vfd=%d, flags=0x%x, prot=0x%x\n",
+                   vma_index, (void *)vm_entry.addr, vm_entry.len,
+                   vm_entry.vfd, vm_entry.flags, vm_entry.prot);
 
         // 写回文件映射（对于共享且可写的映射）
         if (vm_entry.vfile != nullptr &&
             vm_entry.flags == MAP_SHARED &&
             (vm_entry.prot & PROT_WRITE) != 0)
         {
-            // 简化的写回逻辑，避免调用单独的writeback_vma函数
             uint64 vma_start = PGROUNDDOWN(vm_entry.addr);
             uint64 vma_end = PGROUNDUP(vma_start + vm_entry.len);
             for (uint64 va = vma_start; va < vma_end; va += PGSIZE)
@@ -471,6 +490,7 @@ namespace proc
                 {
                     uint64 pa = (uint64)pte.pa();
                     int file_offset = vm_entry.offset + (va - vma_start);
+                    printf("    Writing back page at va=%p to file offset %d\n", (void *)va, file_offset);
                     int write_result = vm_entry.vfile->write(pa, PGSIZE, file_offset, false);
                     if (write_result < 0)
                     {
@@ -487,12 +507,14 @@ namespace proc
             vm_entry.vfile = nullptr;
         }
 
-        // 取消虚拟地址映射
-        uint64 va_start = PGROUNDDOWN(vm_entry.addr);
-        uint64 va_end = PGROUNDUP(vm_entry.addr + vm_entry.len);
-        safe_vmunmap(va_start, va_end, true);
+        ///@brief 这里应该不用解除映射，因为mmap的位置也在堆上，后续free_heap的时候也要unmap
+        ///此处应该只用处理文件映射相关的引用
+        // // 取消虚拟地址映射
+        // uint64 va_start = PGROUNDDOWN(vm_entry.addr);
+        // uint64 va_end = PGROUNDUP(vm_entry.addr + vm_entry.len);
+        // safe_vmunmap(va_start, va_end, true);
 
-        // 清理VMA条目
+        // // 清理VMA条目
         memset(&vm_entry, 0, sizeof(vma));
     }
 
@@ -808,13 +830,54 @@ namespace proc
                 mem::Pte pte = pagetable.walk(va, 0);
                 if (!pte.is_null() && pte.is_valid())
                 {
-                    mem::k_vmm.vmunmap(pagetable, va, 1, 1);
+                    // 检查是否为共享内存地址
+                    void* shm_start_addr = nullptr;
+                    size_t shm_size = 0;
+                    if (shm::k_smm.find_shared_memory_segment((void *)va, &shm_start_addr, &shm_size))
+                    {
+                        // // 对于共享内存，使用detach_seg来正确处理引用计数
+                        // int result = shm::k_smm.detach_seg(shm_start_addr);
+                        // if (result != 0)
+                        // {
+                        //     printfRed("[safe_vmunmap] Failed to detach shared memory at VA=%p\n", shm_start_addr);
+                        // }
+                        
+                        // // 跳过整个共享内存段，直接移动到段结束位置
+                        // uint64 shm_end = (uint64)shm_start_addr + shm_size;
+                        // va = PGROUNDUP(shm_end) - PGSIZE; // -PGSIZE因为循环会+PGSIZE
+                        panic("shared memory should not appear here");
+                    }
+                    else
+                    {
+                        // 对于普通内存，直接使用vmunmap
+                        mem::k_vmm.vmunmap(pagetable, va, 1, 1);
+                    }
                 }
             }
             else
             {
-                // 不检查有效性，直接尝试取消映射
-                mem::k_vmm.vmunmap(pagetable, va, 1, 1);
+                // 不检查有效性时也要区分共享内存和普通内存
+                void* shm_start_addr = nullptr;
+                size_t shm_size = 0;
+                if (shm::k_smm.find_shared_memory_segment((void *)va, &shm_start_addr, &shm_size))
+                {
+                    // // 对于共享内存，使用detach_seg来正确处理引用计数
+                    // int result = shm::k_smm.detach_seg(shm_start_addr);
+                    // if (result != 0)
+                    // {
+                    //     printfRed("[safe_vmunmap] Failed to detach shared memory at VA=%p (no validity check)\n", shm_start_addr);
+                    // }
+                    
+                    // // 跳过整个共享内存段，直接移动到段结束位置
+                    // uint64 shm_end = (uint64)shm_start_addr + shm_size;
+                    // va = PGROUNDUP(shm_end) - PGSIZE; // -PGSIZE因为循环会+PGSIZE
+                    panic("shared memory should not appear here");
+                }
+                else
+                {
+                    // 对于普通内存，直接尝试取消映射
+                    mem::k_vmm.vmunmap(pagetable, va, 1, 1);
+                }
             }
         }
     }
@@ -834,14 +897,18 @@ namespace proc
             // print_memory_usage();
             // 1. 释放VMA
             free_all_vma();
+            printf("ProcessMemoryManager: all VMA freed\n");
             shared_vm = false;
 
             // 2. 如果页表存在，释放程序段和堆内存
             if (pagetable.get_base())
             {
                 free_all_program_sections();
+                printf("ProcessMemoryManager: all program sections freed\n");
                 free_heap_memory();
+                printf("ProcessMemoryManager: all heap memory freed\n");
                 free_pagetable();
+                printf("ProcessMemoryManager: pagetable freed\n");
             }
             else
             {
@@ -1150,21 +1217,7 @@ namespace proc
         return !pte.is_null() && pte.is_valid();
     }
 
-    bool ProcessMemoryManager::safe_unmap_page(uint64 va)
-    {
-        if (!pagetable.get_base())
-        {
-            return false;
-        }
 
-        if (is_page_mapped(va))
-        {
-            mem::k_vmm.vmunmap(pagetable, va, 1, 1);
-            return true;
-        }
-
-        return false;
-    }
 
     bool ProcessMemoryManager::writeback_file_mapping(const vma &vma_entry)
     {
