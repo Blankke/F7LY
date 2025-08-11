@@ -48,35 +48,8 @@
 #include "fs/vfs/vfs_utils.hh"
 #include "fs/fs_defs.hh"
 #include "fs/fcntl.hh"
+#include "proc/posix_timers.hh"
 
-// 全局定时器管理
-namespace {
-    // 扩展的定时器结构体定义
-    struct extended_posix_timer
-    {
-        int timer_id;               // 定时器 ID
-        int clockid;                // 时钟类型
-        struct sigevent
-        {
-            int sigev_notify;
-            int sigev_signo;
-            union sigval
-            {
-                int sival_int;
-                void *sival_ptr;
-            } sigev_value;
-        } event;                    // 事件配置
-        bool active;                // 是否激活
-        bool armed;                 // 是否武装（设置了过期时间）
-        tmm::itimerspec spec;       // 定时器规格
-        tmm::timespec expiry_time;  // 绝对过期时间
-    };
-
-    // 全局静态定时器数组（在所有定时器函数之间共享）
-    static extended_posix_timer g_timers[32];
-    static int g_next_timer_id = 1;
-    static bool g_timers_initialized = false;
-}
 #include "fs/lwext4/ext4_errno.hh"
 #include "fs/lwext4/ext4.hh"
 #include "net/onpstack/include/onps.hh"

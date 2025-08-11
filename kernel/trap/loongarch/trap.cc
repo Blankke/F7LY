@@ -23,6 +23,7 @@
 #include "devs/loongarch/disk_driver.hh"
 #include "trap/interrupt_stats.hh"
 #include "timer_interface.hh"
+#include "proc/posix_timers.hh"
 // in kernelvec.S, calls kerneltrap().
 extern "C" void kernelvec();
 extern "C" void uservec();
@@ -137,6 +138,9 @@ void trap_manager::timertick()
 
   // !!写完进城后修改
   proc::k_pm.wakeup(&ticks);
+
+  // Check for expired POSIX timers and send signals
+  check_expired_timers();
 
   // release the lock
   tickslock.release();

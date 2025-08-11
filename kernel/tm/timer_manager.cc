@@ -247,6 +247,92 @@ namespace tmm
 				break;
 			}
 			
+			case CLOCK_REALTIME_ALARM: // 实时闹钟时钟
+			{
+				// 对于闹钟时钟，使用与 CLOCK_REALTIME 相同的时间基准
+				// 但需要特殊权限检查（在上层调用中处理）
+				_lock.acquire();
+				t_val = tmm::get_hw_time_stamp();
+				t_val += trap_mgr.ticks * cpt;
+				_lock.release();
+
+				tp->tv_sec = (long)(t_val / freq);
+				ulong rest_cyc = t_val % freq;
+				const int64 nsec_max = 1000000000L;
+				tp->tv_nsec = (long)((rest_cyc * nsec_max) / freq);
+
+				// 处理纳秒溢出
+				while (tp->tv_nsec >= (long)nsec_max)
+				{
+					tp->tv_sec++;
+					tp->tv_nsec -= (long)nsec_max;
+				}
+				while (tp->tv_nsec < 0)
+				{
+					tp->tv_sec--;
+					tp->tv_nsec += nsec_max;
+				}
+				break;
+			}
+			
+			case CLOCK_BOOTTIME_ALARM: // 启动时间闹钟
+			{
+				// 对于启动时间闹钟，使用与 CLOCK_BOOTTIME 相同的时间基准
+				_lock.acquire();
+				uint64 ticks = trap_mgr.ticks;
+				_lock.release();
+				
+				uint64 total_cycles = ticks * cpt;
+				tp->tv_sec = (long)(total_cycles / freq);
+				ulong rest_cyc = total_cycles % freq;
+				const int64 nsec_max = 1000000000L;
+				tp->tv_nsec = (long)((rest_cyc * nsec_max) / freq);
+				break;
+			}
+			
+			case CLOCK_TAI: // 国际原子时钟
+			{
+				// TAI 时钟通常与实时时钟相似，但不包含闰秒调整
+				// 在简化实现中，我们使用与 CLOCK_REALTIME 相同的时间基准
+				_lock.acquire();
+				t_val = tmm::get_hw_time_stamp();
+				t_val += trap_mgr.ticks * cpt;
+				_lock.release();
+
+				tp->tv_sec = (long)(t_val / freq);
+				ulong rest_cyc = t_val % freq;
+				const int64 nsec_max = 1000000000L;
+				tp->tv_nsec = (long)((rest_cyc * nsec_max) / freq);
+
+				// 处理纳秒溢出
+				while (tp->tv_nsec >= (long)nsec_max)
+				{
+					tp->tv_sec++;
+					tp->tv_nsec -= (long)nsec_max;
+				}
+				while (tp->tv_nsec < 0)
+				{
+					tp->tv_sec--;
+					tp->tv_nsec += nsec_max;
+				}
+				break;
+			}
+			
+			case CLOCK_SGI_CYCLE: // SGI周期计数器（已废弃，但为了兼容性支持）
+			{
+				// SGI周期计数器已废弃，返回单调时钟时间作为兼容性支持
+				_lock.acquire();
+				uint64 ticks = trap_mgr.ticks;
+				_lock.release();
+				
+				uint64 total_cycles = ticks * cpt;
+				tp->tv_sec = (long)(total_cycles / freq);
+				ulong rest_cyc = total_cycles % freq;
+				const int64 nsec_max = 1000000000L;
+				tp->tv_nsec = (long)((rest_cyc * nsec_max) / freq);
+				break;
+			}
+			
 			default:
 			{
 				// 不支持的时钟类型
