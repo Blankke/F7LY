@@ -3175,7 +3175,7 @@ char *ltp_testcases[] = {
     "waitpid03", // PASS
     "waitpid04", // PASS
     "waitpid06", // PASS
-    // "waitpid07",
+    "waitpid07", // PASS
     // "waitpid08",
     "waitpid09", // 部分pass p3 f1
     // "waitpid10",

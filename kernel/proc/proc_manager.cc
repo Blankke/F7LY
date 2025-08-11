@@ -43,6 +43,7 @@
 #include "sys/syscall_defs.hh"
 #include "fs/vfs/fs.hh"
 #include "fs/vfs/virtual_fs.hh"
+#include "sys/syscall_defs.hh"
 extern "C"
 {
     extern uint64 initcode_start[];
@@ -1502,18 +1503,18 @@ namespace proc
                 }
             }
 
+            // 如果没有找到任何子进程或当前进程被杀死
+            if (!found_children || p->_killed)
+            {
+                _wait_lock.release();
+                return syscall::SYS_ECHILD;
+            }
+
             // 如果设置了WNOHANG且没有可回收的zombie，立即返回
             if ((option & syscall::WNOHANG) && !collected_zombie)
             {
                 _wait_lock.release();
                 return 0;
-            }
-
-            // 如果没有找到任何子进程或当前进程被杀死
-            if (!found_children || p->_killed)
-            {
-                _wait_lock.release();
-                return -ECHILD;
             }
 
             // 等待子进程退出
@@ -1629,7 +1630,7 @@ namespace proc
         if (p == _init_proc)
             panic("init exiting"); // 保护机制：init 进程不能退出
 
-        // printf("[exit_proc] proc %s pid %d exiting\n", p->_name, p->_pid);
+        printf("[exit_proc] proc %s pid %d exiting\n", p->_name, p->_pid);
 
         /****************************************************************************************
          * Phase 1: 处理父子进程关系和进程状态
@@ -1728,7 +1729,7 @@ namespace proc
 
         _wait_lock.release();
 
-        // printfYellow("[exit_proc] proc %s pid %d became zombie, memory freed\n", p->_name, p->_pid);
+        printfYellow("[exit_proc] proc %s pid %d became zombie, memory freed\n", p->_name, p->_pid);
 
         k_scheduler.call_sched(); // jump to schedular, never return
         panic("zombie exit");
@@ -1917,14 +1918,14 @@ namespace proc
                     p->_futex_addr = uaddr2;
                     count2++;
                 }
-
-                if (count1 >= val && count2 >= val2)
-                {
-                    p->_lock.release();
-                    break;
-                }
             }
             p->_lock.release();
+            
+            // 检查是否已经完成所需的唤醒和重排队操作
+            if (count1 >= val && (!uaddr2 || count2 >= val2))
+            {
+                break;
+            }
         }
         return count1;
     }
