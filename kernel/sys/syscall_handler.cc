@@ -310,6 +310,12 @@ namespace syscall
         // todo
         BIND_SYSCALL(waitid);
         BIND_SYSCALL(memfd_create);
+        BIND_SYSCALL(setns);
+        BIND_SYSCALL(semop);
+        BIND_SYSCALL(semget);
+        BIND_SYSCALL(semctl);
+        BIND_SYSCALL(semtimedop);
+        
         /// usr/include/asm-generic/unistd.h
         BIND_SYSCALL(timer_settime);
         BIND_SYSCALL(timer_delete);
@@ -8171,6 +8177,31 @@ namespace syscall
         return clone_pid;
     }
 
+    uint64 SyscallHandler::sys_setns()
+    {
+        panic("未实现该系统调用");
+    }
+
+    uint64 SyscallHandler::sys_semop()
+    {
+        return 0;
+       panic("未实现该系统调用");
+    }
+
+    uint64 SyscallHandler::sys_semget()
+    {
+        return uint64();
+    }
+
+    uint64 SyscallHandler::sys_semctl()
+    {
+        return uint64();
+    }
+
+    uint64 SyscallHandler::sys_semtimedop()
+    {
+        return uint64();
+    }
 
     //================================== rocket syscalls ===================================
     uint64 SyscallHandler::sys_fsetxattr()

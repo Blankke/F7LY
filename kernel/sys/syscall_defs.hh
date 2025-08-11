@@ -144,6 +144,10 @@ namespace syscall
         SYS_getegid = 177, // form tsh
         SYS_gettid = 178,
         SYS_sysinfo = 179,
+        SYS_semget =190,
+        SYS_semctl = 191,         
+        SYS_semtimedop = 192,       
+        SYS_semop =193,
         SYS_shmget = 194,          // form tsh
         SYS_shmctl = 195,          // form tsh
         SYS_shmat = 196,           // form tsh
@@ -181,6 +185,7 @@ namespace syscall
         SYS_wait4 = 260,
         SYS_prlimit64 = 261,
         SYS_clockadjtime = 266, // from rocket
+        SYS_setns =268,
         SYS_renameat2 = 276,
         SYS_getrandom = 278,
         SYS_memfd_create = 279, 

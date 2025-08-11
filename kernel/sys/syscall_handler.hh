@@ -27,7 +27,7 @@ namespace syscall
 
     private:
         int _fetch_addr(uint64 addr, uint64 &out_data);
-        int _fetch_str(uint64 addr, eastl::string&buf, uint64 max);
+        int _fetch_str(uint64 addr, eastl::string &buf, uint64 max);
         uint64 _arg_raw(int arg_n);
 
         int _arg_int(int arg_n, int &out_int);
@@ -35,12 +35,13 @@ namespace syscall
         int _arg_addr(int arg_n, uint64 &out_addr);
         int _arg_str(int arg_n, eastl::string &buf, int max);
         int _arg_fd(int arg_n, int *out_fd, fs::file **out_f);
-        int  argfd(int n, int *pfd, struct file **pf);
+        int argfd(int n, int *pfd, struct file **pf);
         bool is_bad_addr(uint64 addr);
-        
+
         // splice 辅助函数
         ssize_t _splice_pipe_to_file(fs::file *pipe_file, fs::file *regular_file, off_t file_offset, size_t len);
         ssize_t _splice_file_to_pipe(fs::file *regular_file, off_t file_offset, fs::file *pipe_file, size_t len);
+
     private: // ================ syscall functions ================
         uint64 sys_exec();
         uint64 sys_fork();
@@ -160,10 +161,12 @@ namespace syscall
         uint64 sys_mprotect();
         uint64 sys_membarrier();
         uint64 sys_clone3();
-
-
-
-        //rocket
+        uint64 sys_setns();
+        uint64 sys_semop();
+        uint64 sys_semget();
+        uint64 sys_semctl();
+        uint64 sys_semtimedop();
+        // rocket
         uint64 sys_setxattr();
         uint64 sys_lsetxattr();
         uint64 sys_fsetxattr();
