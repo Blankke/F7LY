@@ -314,6 +314,8 @@ namespace syscall
         BIND_SYSCALL(timer_settime);
         BIND_SYSCALL(timer_delete);
         BIND_SYSCALL(eventfd2);
+        BIND_SYSCALL(memfd_create);
+        BIND_SYSCALL(timer_gettime);
 
         printfGreen("[SyscallHandler::init]SyscallHandler initialized with %d syscall functions\n", max_syscall_funcs_num);
     }
@@ -11003,6 +11005,128 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
     {
         panic("未实现该系统调用");
     }
+    uint64 SyscallHandler::sys_memfd_create()
+    {
+        // https://www.man7.org/linux/man-pages/man2/memfd_create.2.html
+        panic("未实现该系统调用");
+    }
+    uint64 SyscallHandler::sys_timer_gettime()
+    {
+        // https://www.man7.org/linux/man-pages/man2/timer_gettime.2.html
+        int timerid;
+        uint64 curr_value_addr;
+        
+        // 获取参数
+        if (_arg_int(0, timerid) < 0)
+        {
+            printfRed("[SyscallHandler::sys_timer_gettime] Error fetching timerid argument\n");
+            return SYS_EINVAL;
+        }
+        if (_arg_addr(1, curr_value_addr) < 0)
+        {
+            printfRed("[SyscallHandler::sys_timer_gettime] Error fetching curr_value argument\n");
+            return SYS_EINVAL;
+        }
+        
+        // 检查 curr_value 指针是否有效（不能为 NULL）
+        if (curr_value_addr == 0)
+        {
+            printfRed("[SyscallHandler::sys_timer_gettime] curr_value cannot be NULL\n");
+            return SYS_EINVAL;
+        }
+        
+        // 确保定时器数组已初始化
+        if (!g_timers_initialized)
+        {
+            printfRed("[SyscallHandler::sys_timer_gettime] Timer system not initialized\n");
+            return SYS_EINVAL;
+        }
+        
+        // 查找对应的定时器
+        int timer_slot = -1;
+        for (int i = 0; i < 32; i++)
+        {
+            if (g_timers[i].active && g_timers[i].timer_id == timerid)
+            {
+                timer_slot = i;
+                break;
+            }
+        }
+        
+        if (timer_slot == -1)
+        {
+            printfRed("[SyscallHandler::sys_timer_gettime] Invalid timer ID: %d\n", timerid);
+            return SYS_EINVAL;
+        }
+        
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        
+        // 准备返回的定时器规格
+        tmm::itimerspec current_spec;
+        
+        // 复制定时器间隔（总是保持不变）
+        current_spec.it_interval = g_timers[timer_slot].spec.it_interval;
+        
+        // 如果定时器未武装，返回零值
+        if (!g_timers[timer_slot].armed)
+        {
+            current_spec.it_value.tv_sec = 0;
+            current_spec.it_value.tv_nsec = 0;
+        }
+        else
+        {
+            // 定时器已武装，需要计算剩余时间
+            // 获取当前时间
+            tmm::timespec current_time;
+            tmm::SystemClockId cid = (tmm::SystemClockId)g_timers[timer_slot].clockid;
+            
+            if (tmm::k_tm.clock_gettime(cid, &current_time) != 0)
+            {
+                printfRed("[SyscallHandler::sys_timer_gettime] Failed to get current time\n");
+                return SYS_EINVAL;
+            }
+            
+            // 计算剩余时间：过期时间 - 当前时间
+            long remaining_sec = g_timers[timer_slot].expiry_time.tv_sec - current_time.tv_sec;
+            long remaining_nsec = g_timers[timer_slot].expiry_time.tv_nsec - current_time.tv_nsec;
+            
+            // 处理纳秒借位
+            if (remaining_nsec < 0)
+            {
+                remaining_sec -= 1;
+                remaining_nsec += 1000000000;
+            }
+            
+            // 如果定时器已过期，返回零值
+            if (remaining_sec < 0 || (remaining_sec == 0 && remaining_nsec <= 0))
+            {
+                current_spec.it_value.tv_sec = 0;
+                current_spec.it_value.tv_nsec = 0;
+            }
+            else
+            {
+                current_spec.it_value.tv_sec = remaining_sec;
+                current_spec.it_value.tv_nsec = remaining_nsec;
+            }
+        }
+        
+        // 将结果复制到用户空间
+        if (mem::k_vmm.copy_out(*pt, curr_value_addr, &current_spec, sizeof(tmm::itimerspec)) < 0)
+        {
+            printfRed("[SyscallHandler::sys_timer_gettime] Error copying curr_value to user space\n");
+            return SYS_EFAULT;
+        }
+        
+        printfCyan("[SyscallHandler::sys_timer_gettime] Timer %d: it_value=[%ld.%09ld], it_interval=[%ld.%09ld], armed=%s\n",
+                   timerid, 
+                   current_spec.it_value.tv_sec, current_spec.it_value.tv_nsec,
+                   current_spec.it_interval.tv_sec, current_spec.it_interval.tv_nsec,
+                   g_timers[timer_slot].armed ? "yes" : "no");
+        
+        return 0; // 成功
+    }
+
         // splice 辅助函数实现
     ssize_t SyscallHandler::_splice_pipe_to_file(fs::file *pipe_file, fs::file *regular_file, off_t file_offset, size_t len)
     {
