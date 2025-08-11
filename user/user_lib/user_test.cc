@@ -246,12 +246,16 @@ int ltp_test(bool is_musl)
     chdir(is_musl ? "/musl/ltp/testcases/bin" : "/glibc/ltp/testcases/bin");
     printf("#### OS COMP TEST GROUP START ltp-%s ####\n", is_musl ? "musl" : "glibc");
     char *bb_sh[8] = {0};
+    char *envp[] = {
+        "PATH=/bin", // 设置 PATH
+        NULL          // 必须以 NULL 结尾
+    }; //这个测loop的那些测例要用
     int result = 0;
     for (int i = 0; ltp_testcases[i] != NULL; i++)
     {
         printf("RUN LTP CASE %s\n", ltp_testcases[i]);
         bb_sh[0] = ltp_testcases[i];
-        result = run_test(ltp_testcases[i], bb_sh, 0);
+        result = run_test(ltp_testcases[i], bb_sh, envp);
         printf("FAIL LTP CASE %s: %d\n", ltp_testcases[i], result);
     }
     printf("#### OS COMP TEST GROUP END ltp-%s ####\n", is_musl ? "musl" : "glibc");

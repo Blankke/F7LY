@@ -425,7 +425,7 @@ namespace fs
 
         fs::FileAttrs attrs;
         attrs.filetype = (fs::FileTypes)vf_msg.file_type;
-        attrs._value = 0644;
+        attrs._value = 0777;
         file = new virtual_file(attrs, absolute_path, eastl::move(vf_msg.provider));
         return 0;
     }

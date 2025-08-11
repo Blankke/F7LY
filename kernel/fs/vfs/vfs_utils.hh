@@ -17,6 +17,7 @@ int vfs_path2filetype(eastl::string &absolute_path);
 int create_and_write_file(const char *path, const char *data);
 int vfs_is_file_exist(const char *path);
 uint vfs_read_file(const char *path, uint64 buffer_addr, size_t offset, size_t size);
+int vfs_write_file(const char *path, uint64 buffer_addr, size_t offset, size_t size);
 int vfs_fstat(fs::file *f, fs::Kstat *st);
 int vfs_path_stat(const char *path, fs::Kstat *st, bool follow_symlinks = true);
 int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count);

@@ -62,10 +62,11 @@ namespace dev
 
         // 检查文件类型
 
-
+        printfGreen("[LoopDevice] Binding file %s to loop device %d\n", file->_path_name.c_str(), _loop_number);
         _backing_file = file;
         _is_bound = true;
         _file_name = "unknown"; // 可以后续改进获取文件名
+        _file_path = file->_path_name;
 
         return 0;
     }
@@ -239,31 +240,15 @@ namespace dev
         if (!_backing_file || !buffer) {
             return -1;
         }
-
-        // 计算在文件中的实际偏移量
-        uint64_t file_offset = _offset + offset;
-        
-        // 检查是否超出文件大小
-        uint64_t file_size = _backing_file->_stat.size;
-        if (file_offset >= file_size) {
-            return 0; // 已到文件末尾
+        if(is_write)
+        {
+            return vfs_write_file(_file_path.c_str(), reinterpret_cast<uint64_t>(buffer), offset, size);
+        }
+        else
+        {
+            return vfs_read_file(_file_path.c_str(), reinterpret_cast<uint64_t>(buffer), offset, size);
         }
 
-        // 限制读写大小，不能超出文件末尾
-        size_t actual_size = size;
-        if (file_offset + actual_size > file_size) {
-            actual_size = file_size - file_offset;
-        }
-
-        // 执行读写操作
-        long result;
-        if (is_write) {
-            result = _backing_file->write(reinterpret_cast<uint64_t>(buffer), actual_size, file_offset, true);
-        } else {
-            result = _backing_file->read(reinterpret_cast<uint64_t>(buffer), actual_size, file_offset, true);
-        }
-
-        return result < 0 ? -1 : static_cast<int>(result);
     }
 
     uint64_t LoopDevice::_get_file_size()

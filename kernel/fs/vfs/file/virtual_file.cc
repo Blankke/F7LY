@@ -10,6 +10,7 @@
 #include "trap/interrupt_stats.hh"
 // #include "mem/mem_layout.hh"
 #include "fs/vfs/file/normal_file.hh"
+#include "loop_device.hh"
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
 namespace fs
@@ -105,35 +106,23 @@ namespace fs
 
     eastl::string DevLoopProvider::generate_content()
     {
-        // 具体的 loop 设备节点，这里返回设备信息
-        eastl::string result;
-        result += "Loop device #";
-        
-        // 手动转换数字到字符串
-        char num_str[16];
-        int temp = _loop_number;
-        int pos = 0;
-        if (temp == 0) {
-            num_str[pos++] = '0';
-        } else {
-            char temp_str[16];
-            int temp_pos = 0;
-            while (temp > 0) {
-                temp_str[temp_pos++] = '0' + (temp % 10);
-                temp /= 10;
-            }
-            // 反转字符串
-            for (int i = temp_pos - 1; i >= 0; i--) {
-                num_str[pos++] = temp_str[i];
-            }
-        }
-        num_str[pos] = '\0';
-        
-        result += num_str;
-        result += "\n";
-        result += "Device path: /dev/loop";
-        result += num_str;
-        result += "\n";
+        printfRed("未实现");
+        return "Loop device content\n";
+    }
+
+    long DevLoopProvider::handle_read(uint64 buf, size_t len, long off)
+    {
+        dev::LoopDevice *loop_dev = dev::LoopControlDevice::get_loop_device(_loop_number);
+        int result = loop_dev->_read_write_file(off, (void *)buf, len, false);
+        return result;
+    }
+
+    long DevLoopProvider::handle_write(uint64 buf, size_t len, long off)
+    {
+        // 处理对 loop 设备的写入操作
+        // 这里可以实现对 loop 设备的配置，如关联文件等
+        dev::LoopDevice *loop_dev = dev::LoopControlDevice::get_loop_device(_loop_number);
+        int result = loop_dev->_read_write_file(off, (void*)buf, len,  true);
         return result;
     }
 
@@ -175,6 +164,22 @@ namespace fs
             return -1;
         }
 
+        if (_content_provider->is_readable())
+        {
+            // md，纯屎山我服了。为loop定制
+            long result = _content_provider->handle_read(buf, len, off);
+
+            if (off < 0)
+            {
+                off = _file_ptr;
+            }
+
+            if (result > 0 && upgrade)
+            {
+                _file_ptr = off + result;
+            }
+            return result;
+        }
         // 特殊处理 /dev/zero 设备
         if (_content_provider && _content_provider->get_provider_type() == VirtualProviderType::DEV_ZERO) {
             // 处理偏移量参数
