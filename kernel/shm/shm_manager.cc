@@ -703,6 +703,66 @@ namespace shm
         return false;
     }
 
+    bool ShmManager::find_shared_memory_segment(void *addr, void **start_addr, size_t *size)
+    {
+        if (!addr) {
+            return false;
+        }
+
+        uint64 target_addr = (uint64)addr;
+
+        // 遍历所有共享内存段
+        for (auto it = segments->begin(); it != segments->end(); ++it)
+        {
+            shm_segment &seg = it->second;
+            
+            // 检查每个附加地址及其范围
+            for (void* attached_addr : seg.attached_addrs) {
+                uint64 seg_start = (uint64)attached_addr;
+                uint64 seg_end = seg_start + seg.real_size;
+                
+                // 检查目标地址是否在这个段的范围内
+                if (target_addr >= seg_start && target_addr < seg_end) {
+                    if (start_addr) {
+                        *start_addr = attached_addr;
+                    }
+                    if (size) {
+                        *size = seg.real_size;
+                    }
+                    return true;
+                }
+            }
+        }
+        
+        return false;
+    }
+
+    bool ShmManager::add_reference_for_fork(void *addr)
+    {
+        if (!addr) {
+            return false;
+        }
+
+        // 遍历所有共享内存段，找到包含该地址的段
+        auto it = segments->begin();
+        for (; it != segments->end(); ++it)
+        {
+            shm_segment &seg = it->second;
+            
+            // 在附加地址列表中查找
+            auto addr_it = eastl::find(seg.attached_addrs.begin(), seg.attached_addrs.end(), addr);
+            if (addr_it != seg.attached_addrs.end()) {
+                // 找到了包含该地址的共享内存段，增加引用计数
+                seg.nattch++;
+                printfCyan("[ShmManager] Fork: increased reference count for shared memory at %p, shmid=%d, nattch=%d\n", 
+                          addr, seg.shmid, seg.nattch);
+                return true;
+            }
+        }
+        
+        return false;
+    }
+
     int ShmManager::shmctl(int shmid, int cmd, struct shmid_ds *buf,uint64 buf_addr)
     {
         proc::Pcb* current_proc = proc::k_pm.get_cur_pcb();

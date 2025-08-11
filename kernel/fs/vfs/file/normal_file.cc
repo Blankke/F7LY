@@ -14,6 +14,9 @@ namespace fs
 {
 	long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 	{
+		// 获取文件睡眠锁，确保读写操作的一致性
+		_file_lock.acquire();
+		
 		// printfGreen("normal_file::read called with buf: %p, len: %u, off: %d, upgrade: %d\n", (void *)buf, len, off, upgrade);
 		ulong cnt = -1;
 		if (_attrs.u_read != 1)
@@ -26,6 +29,7 @@ namespace fs
 			else
 			{
 				printfRed("normal_file:: not allowed to read! ");
+				_file_lock.release(); // 释放锁
 				return -1;
 			}
 		}
@@ -44,6 +48,7 @@ namespace fs
 			if (seek_status != EOK)
 			{
 				printfRed("normal_file::read: ext4_fseek failed with status %d", seek_status);
+				_file_lock.release(); // 释放锁
 				return -1;
 			}
 		}
@@ -55,6 +60,7 @@ namespace fs
 			printfRed("normal_file::read: ext4_fread failed with status %d", status);
 			// 恢复原来的文件位置
 			ext4_fseek(&lwext4_file_struct, current_pos, SEEK_SET);
+			_file_lock.release(); // 释放锁
 			return -status;
 		}
 
@@ -69,10 +75,15 @@ namespace fs
 			ext4_fseek(&lwext4_file_struct, current_pos, SEEK_SET);
 		}
 
+		_file_lock.release(); // 释放锁
 		return cnt;
 	}
 	long normal_file::write(uint64 buf, size_t len, long off, bool upgrade)
 	{
+		// 获取文件睡眠锁，防止多进程并发写入竞态
+		// 睡眠锁允许在持有锁期间进行I/O等可能阻塞的操作
+		_file_lock.acquire();
+		
 		// printfGreen("normal_file::write called with buf: %p, len: %zu, off: %ld, upgrade: %d\n", (void *)buf, len, off, upgrade);
 		uint64 ret = 0;
 		// 处理偏移量参数
@@ -111,6 +122,7 @@ namespace fs
 						  off, len, fsize_limit);
 				// 发送 SIGXFSZ 信号给进程
 				current_proc->add_signal(proc::ipc::signal::SIGXFSZ);
+				_file_lock.release(); // 释放锁
 				return -EFBIG;
 			}
 		}
@@ -125,6 +137,7 @@ namespace fs
 			else
 			{
 				printfRed("normal_file:: not allowed to write! ");
+				_file_lock.release(); // 释放锁
 				return -EBADF;
 			}
 		}
@@ -145,6 +158,7 @@ namespace fs
 				if (inode_flags & EXT4_INODE_FLAG_IMMUTABLE)
 				{
 					printfRed("normal_file::write: File is immutable, cannot write\n");
+					_file_lock.release(); // 释放锁
 					return -EPERM;
 				}
 
@@ -155,6 +169,7 @@ namespace fs
 					if (off != (long)file_size)
 					{
 						printfRed("normal_file::write: File is append-only, can only write at end\n");
+						_file_lock.release(); // 释放锁
 						return -EPERM;
 					}
 				}
@@ -167,6 +182,7 @@ namespace fs
 			if (seek_status != EOK)
 			{
 				printfRed("normal_file::write: ext4_fseek failed with status %d", seek_status);
+				_file_lock.release(); // 释放锁
 				return -EFAULT;
 			}
 		}
@@ -176,8 +192,10 @@ namespace fs
 		// printfBgGreen("normal_file::write: calling ext4_fwrite with buf: %p, len: %zu, off: %ld\n", kbuf, len, off);
 		// printfBgGreen("normal_file::write: current file path: %s\n", _path_name.c_str());
 		int status = ext4_fwrite(ext4_f, kbuf, len, &ret);
-		if (status != EOK)
+		if (status != EOK) {
+			_file_lock.release(); // 释放锁
 			return -EFAULT;
+		}
 		if (ret >= 0 && upgrade)
 		{
 			printfGreen("normal_file::write: ext4_fwrite success, ret: %d\n", ret);
@@ -190,6 +208,7 @@ namespace fs
 			ext4_fseek(&lwext4_file_struct, current_pos, SEEK_SET);
 		}
 
+		_file_lock.release(); // 释放锁
 		return ret;
 	}
 

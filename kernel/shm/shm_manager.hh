@@ -117,6 +117,12 @@ namespace shm
         // 检查地址是否属于共享内存区域
         bool is_shared_memory_address(void *addr);
 
+        // 查找包含指定地址的共享内存段，返回段的起始地址和大小
+        bool find_shared_memory_segment(void *addr, void **start_addr, size_t *size = nullptr);
+
+        // 为fork进程增加共享内存引用计数
+        bool add_reference_for_fork(void *addr);
+
         // 控制共享内存段 (标准shmctl接口)
         // cmd可以是: IPC_STAT, IPC_SET, IPC_RMID
         // 用法示例:

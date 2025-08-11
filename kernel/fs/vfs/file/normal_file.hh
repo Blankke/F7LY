@@ -1,4 +1,5 @@
 #include "fs/vfs/file/file.hh"
+#include "sleeplock.hh"
 // #include "fs/vfs/dentry.hh"
 #pragma once
 namespace mem
@@ -12,6 +13,7 @@ namespace fs
 	{
 	protected:
 		dentry *_den;
+		mutable proc::SleepLock _file_lock; // 文件级睡眠锁，用于防止并发写入竞态
 
 	public:
 		normal_file() = default;
@@ -19,6 +21,8 @@ namespace fs
 		{
 			dup();
 			new(&_stat) Kstat(attrs.filetype);
+			// 初始化文件睡眠锁
+			_file_lock.init("file_write_lock", path.c_str());
 		}
 		// normal_file( FileAttrs attrs, dentry *den ) : file( attrs ), _den( den ) { dup(); new ( &_stat ) Kstat( den ); }
 		// normal_file( dentry *den ) : file( den->getNode()->rMode() ), _den( den ) { dup(); new ( &_stat ) Kstat( den ); }

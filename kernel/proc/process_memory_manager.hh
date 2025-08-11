@@ -443,14 +443,7 @@ namespace proc
          * @return true 已映射，false 未映射
          */
         bool is_page_mapped(uint64 va);
-
-        /**
-         * @brief 安全地取消单个页面的映射
-         * @param va 虚拟地址
-         * @return true 成功，false 失败
-         */
-        bool safe_unmap_page(uint64 va);
-
+        
         /**
          * @brief 写回文件映射的数据
          * @param vma_entry VMA条目
