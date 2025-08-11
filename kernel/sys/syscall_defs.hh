@@ -182,6 +182,7 @@ namespace syscall
         SYS_clockadjtime = 266, // from rocket
         SYS_renameat2 = 276,
         SYS_getrandom = 278,
+        SYS_memfd_create = 279, 
         SYS_membarrier = 283,      // form tsh
         SYS_copy_file_range = 285, // from rocket
         SYS_statx = 291,

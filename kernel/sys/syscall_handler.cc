@@ -309,7 +309,7 @@ namespace syscall
 
         // todo
         BIND_SYSCALL(waitid);
-
+        BIND_SYSCALL(memfd_create);
         /// usr/include/asm-generic/unistd.h
         BIND_SYSCALL(timer_settime);
         BIND_SYSCALL(timer_delete);
@@ -9701,6 +9701,66 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
     }
     uint64 SyscallHandler::sys_fadvise64()
     {
+        int fd;
+        uint64 offset_addr,size_addr;
+        off_t offset;
+        off_t size;
+        int advice;
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        fs::file *file ;
+        // 获取参数
+        if (_arg_fd(0, &fd,&file) < 0 )
+        {
+            printfRed("[SyscallHandler::sys_fadvise64] 无效的文件描述符\n");
+            return SYS_EBADF; // 无效的文件描述符
+        }
+        if(_arg_addr(1, offset_addr) < 0 ||
+            _arg_addr(2, size_addr) < 0 || _arg_int(3, advice) < 0)
+        {            printfRed("[SyscallHandler::sys_fadvise64] 参数错误\n");
+            return SYS_EINVAL; // 参数错误
+        }
+        if( mem::k_vmm.copy_in(*p->get_pagetable(), &offset, offset_addr, sizeof(offset)) < 0 ||
+            mem::k_vmm.copy_in(*p->get_pagetable(), &size, size_addr, sizeof(size)) < 0)
+        {            printfRed("[SyscallHandler::sys_fadvise64] 拷贝参数失败\n");
+            return SYS_EFAULT; // 拷贝参数失败
+        }
+
+        if(file->_attrs.filetype== fs::FileTypes::FT_PIPE)
+        {
+            printfRed("[SyscallHandler::sys_fadvise64] 无法对管道文件进行fadvise\n");
+            return SYS_ESPIPE; // 无效的文件类型
+        }
+        switch (advice)
+        {
+        case POSIX_FADV_NORMAL:
+            /* code */
+            break;
+        case POSIX_FADV_RANDOM:
+            /* code */
+            break;
+        case POSIX_FADV_SEQUENTIAL:
+            /* code */
+            break;
+        case POSIX_FADV_WILLNEED:
+            /* code */
+            break;
+        case POSIX_FADV_DONTNEED:
+            /* code */
+            if (offset < 0 || size <= 0)
+            {
+                printfRed("[SyscallHandler::sys_fadvise64] 无效的偏移量或大小: offset=%ld, size=%ld\n", offset, size);
+                return SYS_EINVAL; // 无效的偏移量或大小
+            }
+            break;
+        case POSIX_FADV_NOREUSE:
+            /* code */
+            break;
+        default:
+            printfRed("[SyscallHandler::sys_fadvise64] 无效的建议: %d\n", advice);
+            return SYS_EINVAL; // 无效的建议
+        }
+
+        //没有实际功能，就是错误处理
         return 0;
     }
     uint64 SyscallHandler::sys_msync()
@@ -10482,21 +10542,25 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
     {
         panic("未实现该系统调用");
     }
+    uint64 SyscallHandler::sys_memfd_create()
+    {
+        return uint64();
+    }
     /**
      * @brief 创建 POSIX 每进程定时器
-     * 
+     *
      * timer_create() 创建一个新的每进程间隔定时器。新定时器的 ID 被返回到 timerid 指向的缓冲区中，
      * 该指针必须是非空指针。此 ID 在进程内是唯一的，直到定时器被删除。新定时器初始处于未武装状态。
-     * 
+     *
      * 参数：
      * - clockid: 指定新定时器用来测量时间的时钟
      * - sevp: 指向 sigevent 结构的指针，指定定时器过期时如何通知调用者
      * - timerid: 指向 timer_t 的指针，用于返回新定时器的 ID
-     * 
+     *
      * 返回值：
      * - 成功：0，新定时器的 ID 被放置在 *timerid 中
      * - 失败：-1，并设置 errno
-     * 
+     *
      * @see https://www.man7.org/linux/man-pages/man2/timer_create.2.html
      */
     uint64 SyscallHandler::sys_timer_create()

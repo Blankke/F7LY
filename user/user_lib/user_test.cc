@@ -392,6 +392,8 @@ char *libctest[][2] = {
     {NULL}};
 
 char *ltp_testcases[] = {
+    "posix_fadvise02",
+    NULL,
     // "abort01",
     "abs01", // 完全PASS,没summary
     // "accept01",
@@ -1951,12 +1953,12 @@ char *ltp_testcases[] = {
     // "pm_sched_mc.py",
     "poll01", // pass
     // "poll02",
-    "posix_fadvise01",    // pass
-    "posix_fadvise01_64", // pass
-    // "posix_fadvise02",
-    // "posix_fadvise02_64",
-    // "posix_fadvise03",
-    // "posix_fadvise03_64",
+    "posix_fadvise01",    // pass6
+    "posix_fadvise01_64", // pass6
+    "posix_fadvise02", //pass6
+    "posix_fadvise02_64", //pass6
+    "posix_fadvise03",   //pass32
+    "posix_fadvise03_64", // pass32
     // "posix_fadvise04",
     // "posix_fadvise04_64",
     // "ppoll01",

@@ -2,31 +2,31 @@ Test Case Name | Pass Count | Total Count | performance
 ===============================================================
 epoll_ctl03                    | 256        | 256        | ok
 access01                       | 199        | 199        | 过一部份
-memfd_create01                 | 157        | 157        |
+memfd_create01                 | 157        | 157        | 
 getpid01                       | 100        | 100        | ok
 chdir01                        | 92         | 95         | ok
 splice07                       | 75         | 126        | 这个貌似能修，争取一下, 测这个记得开网络(init_network_stack)
 pipe11                         | 70         | 70         | ok
 fsync01                        | 60         | 60         | 跑不了
-memcontrol02                   | 54         | 54         | 
+memcontrol02                   | 54         | 54         |    loopdev
 mount07                        | 52         | 56         |跑不了
-rename01                       | 48         | 48         |
+rename01                       | 48         | 48         |   loopdev
 rename03                       | 48         | 48         |
 timer_settime02                | 48         | 48         | pass
 clock_getres01                 | 44         | 44         | pass
-statx08                        | 38         | 49         |
+statx08                        | 38         | 49         |    loopdev
 fsetxattr01                    | 38         | 40         |
 setxattr01                     | 38         | 40         |
 waitpid01                      | 37         | 38         | ok
 memcontrol04                   | 36         | 36         |
-mkdir09                        | 36         | 36         |
+mkdir09                        | 36         | 36         |   loopdev
 mq_timedsend01                 | 34         | 34         |
 utimensat01                    | 34         | 34         |
-chmod01                        | 32         | 32         |
-confstr01                      | 32         | 32         |
-creat09                        | 32         | 32         |
-posix_fadvise03                | 32         | 32         |
-posix_fadvise03_64             | 32         | 32         |
+chmod01                        | 32         | 32         | ok
+confstr01                      | 32         | 32         | ok
+creat09                        | 32         | 32         | loopdev
+posix_fadvise03                | 32         | 32         |  ok
+posix_fadvise03_64             | 32         | 32         |  ok
 timer_settime01                | 32         | 32         |
 signal03                       | 31         | 31         | ok
 signal05                       | 31         | 31         | ok
