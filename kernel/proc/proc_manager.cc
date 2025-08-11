@@ -1732,9 +1732,9 @@ namespace proc
     {
         // 设置正常退出状态
         p->_xstate = state << 8; // 存储退出状态（通常高字节存状态）
-        
+
         printf("[do_exit] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
-        
+
         // 调用底层退出逻辑
         exit_proc(p);
     }
@@ -1748,13 +1748,14 @@ namespace proc
         // 设置信号退出状态
         // Linux的wait状态编码：低7位存储信号编号，第8位标示是否core dump
         p->_xstate = signal_num & 0x7F; // 低7位存信号编号
-        if (coredump) {
+        if (coredump)
+        {
             p->_xstate |= 0x80; // 第8位设置core dump标志
         }
-        
-        printf("[do_signal_exit] proc %s pid %d killed by signal %d (coredump=%s)\n", 
+
+        printf("[do_signal_exit] proc %s pid %d killed by signal %d (coredump=%s)\n",
                p->_name, p->_pid, signal_num, coredump ? "yes" : "no");
-        
+
         // 调用底层退出逻辑
         exit_proc(p);
     }

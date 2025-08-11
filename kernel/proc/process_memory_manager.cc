@@ -898,18 +898,18 @@ namespace proc
             // print_memory_usage();
             // 1. 释放VMA
             free_all_vma();
-            printf("ProcessMemoryManager: all VMA freed\n");
+            // printfGreen("ProcessMemoryManager: all VMA freed\n");
             shared_vm = false;
 
             // 2. 如果页表存在，释放程序段和堆内存
             if (pagetable.get_base())
             {
                 free_all_program_sections();
-                printf("ProcessMemoryManager: all program sections freed\n");
+                // printfGreen("ProcessMemoryManager: all program sections freed\n");
                 free_heap_memory();
-                printf("ProcessMemoryManager: all heap memory freed\n");
+                // printfGreen("ProcessMemoryManager: heap memory freed\n");
                 free_pagetable();
-                printf("ProcessMemoryManager: pagetable freed\n");
+                // printfGreen("ProcessMemoryManager: pagetable freed\n");
             }
             else
             {
