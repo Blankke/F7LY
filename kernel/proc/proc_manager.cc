@@ -1397,6 +1397,15 @@ namespace proc
         Pcb *p = k_pm.get_cur_pcb();
         printf("[wait4] pid: %d child_pid: %d, addr: %p, option: %d\n", p->_pid, child_pid, (void *)addr, option);
 
+        // 检查不支持的选项标志
+        const int supported_options = syscall::WNOHANG;
+        const int unsupported_options = option & ~supported_options;
+        if (unsupported_options != 0)
+        {
+            printf("[wait4] unsupported option flags: 0x%x, returning -EINVAL\n", unsupported_options);
+            return syscall::SYS_EINVAL;
+        }
+
         // 对于特定PID情况，验证主线程的父子关系
         if (child_pid > 0)
         {

@@ -234,8 +234,13 @@ namespace syscall
     enum SYS_wait
     {
         /* Bits in the third argument to `waitpid'.  */
-        WNOHANG = 1,  /* Don't block waiting.  */
-        WUNTRACED = 2 /* Report status of stopped children.  */
+        WNOHANG = 1,       /* Don't block waiting.  */
+        WUNTRACED = 2,     /* Report status of stopped children.  */
+        WCONTINUED = 8,    /* Report status of continued children.  */
+        WNOWAIT = 0x01000000, /* Don't reap, just poll status.  */
+        __WNOTHREAD = 0x20000000, /* Don't wait on children of other threads  */
+        __WALL = 0x40000000,      /* Wait on all children, regardless of type  */
+        __WCLONE = 0x80000000     /* Wait only on non-SIGCHLD children  */
     };
 
     // getrandom flags
