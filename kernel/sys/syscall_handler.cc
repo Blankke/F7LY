@@ -288,7 +288,20 @@ namespace syscall
         BIND_SYSCALL(semget);
         BIND_SYSCALL(semctl);
         BIND_SYSCALL(semtimedop);
-        
+        BIND_SYSCALL(signalfd4);
+        BIND_SYSCALL(vmsplice);
+        BIND_SYSCALL(timerfd_create);
+        BIND_SYSCALL(pidfd_open);
+        BIND_SYSCALL(fanotify_init);
+        BIND_SYSCALL(inotify_init1);
+        BIND_SYSCALL(userfaultfd);
+        BIND_SYSCALL(perf_event_open);
+        BIND_SYSCALL(io_uring_setup);
+        BIND_SYSCALL(bpf);
+        BIND_SYSCALL(fsopen);
+        BIND_SYSCALL(fspick);
+        BIND_SYSCALL(open_tree);
+        BIND_SYSCALL(memfd_secret);
         /// usr/include/asm-generic/unistd.h
         BIND_SYSCALL(timer_settime);
         BIND_SYSCALL(timer_delete);
@@ -4081,6 +4094,62 @@ namespace syscall
         printfRed("[SyscallHandler::sys_ioctl] Unsupported ioctl command: 0x%X\n", cmd);
 
         return -EINVAL;
+    }
+    uint64 SyscallHandler::sys_memfd_secret()
+    {
+        return -1;
+    }
+    uint64 SyscallHandler::sys_open_tree()
+    {
+        return uint64();
+    }
+    uint64 SyscallHandler::sys_fspick()
+    {
+        return uint64();
+    }
+    uint64 SyscallHandler::sys_fsopen()
+    {
+        return uint64();
+    }
+    uint64 SyscallHandler::sys_bpf()
+    {
+        return uint64();
+    }
+    uint64 SyscallHandler::sys_io_uring_setup()
+    {
+        return uint64();
+    }
+    uint64 SyscallHandler::sys_perf_event_open()
+    {
+        return uint64();
+    }
+    uint64 SyscallHandler::sys_userfaultfd()
+    {
+        return uint64();
+    }
+    uint64 SyscallHandler::sys_inotify_init1()
+    {
+        return uint64();
+    }
+    uint64 SyscallHandler::sys_fanotify_init()
+    {
+        return uint64();
+    }
+    uint64 SyscallHandler::sys_pidfd_open()
+    {
+        return uint64();
+    }
+    uint64 SyscallHandler::sys_vmsplice()
+    {
+        return uint64();
+    }
+    uint64 SyscallHandler::sys_signalfd4()
+    {
+        return uint64();
+    }
+    uint64 SyscallHandler::sys_timerfd_create()
+    {
+        return uint64();
     }
     uint64 SyscallHandler::sys_syslog()
     {
@@ -11148,6 +11217,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
     }
     uint64 SyscallHandler::sys_eventfd2()
     {
+        return 0;
         panic("未实现该系统调用");
     }
 

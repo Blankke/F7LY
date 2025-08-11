@@ -349,7 +349,7 @@ namespace proc
             new (&dev::k_uart) dev::UartManager(UART0);
             dev::register_debug_uart(&dev::k_uart);
 
-            // net::init_network_stack();
+            net::init_network_stack();
         }
 
         // 设置进程开始运行的时间点
@@ -2142,6 +2142,8 @@ namespace proc
             return -EMFILE; // 分配文件描述符失败
         }
         // 下面这个就是套的第二层，这一层的意义似乎只在于分配文件描述符
+        if(path=="/lib/riscv64-linux-gnu/libc.so.6")
+            path="/glibc/lib/ld-linux-riscv64-lp64d.so.1";
         int err = fs::k_vfs.openat(path, p->_ofile->_ofile_ptr[fd], flags, mode);
         if (err < 0)
         {

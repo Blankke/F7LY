@@ -396,7 +396,11 @@ char *libctest[][2] = {
     {NULL}};
 
 char *ltp_testcases[] = {
-    "waitpid03",
+    "splice07",
+    // "epoll_ctl03",
+    // "access01",
+    // "getpid01",
+    // "chdir01",
     NULL,
     // "abort01",
     "abs01", // 完全PASS,没summary

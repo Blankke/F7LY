@@ -23,6 +23,7 @@ namespace syscall
         SYS_dup = 23,
         SYS_dup3 = 24,
         SYS_fcntl = 25,
+        SYS_inotify_init1 = 26,
         SYS_ioctl = 29,
         SYS_flock = 32,
         SYS_mknodat = 33, // from rocket
@@ -63,6 +64,8 @@ namespace syscall
         SYS_sendfile = 71,
         SYS_pselect6 = 72, // form tsh
         SYS_ppoll = 73,
+        SYS_signalfd4 = 74,
+        SYS_vmsplice = 75,
         SYS_splice = 76,
         SYS_readlinkat = 78,
         SYS_fstatat = 79,
@@ -71,6 +74,7 @@ namespace syscall
         SYS_fsync = 82,           // form tsh
         SYS_fdatasync = 83,       // form tsh
         SYS_sync_file_range = 84, // from rocket
+        SYS_timerfd_create = 85,  // from rocket
         SYS_utimensat = 88,
         SYS_acct = 89, // from rocket
         SYS_exit = 93,
@@ -144,10 +148,10 @@ namespace syscall
         SYS_getegid = 177, // form tsh
         SYS_gettid = 178,
         SYS_sysinfo = 179,
-        SYS_semget =190,
-        SYS_semctl = 191,         
-        SYS_semtimedop = 192,       
-        SYS_semop =193,
+        SYS_semget = 190,
+        SYS_semctl = 191,
+        SYS_semtimedop = 192,
+        SYS_semop = 193,
         SYS_shmget = 194,          // form tsh
         SYS_shmctl = 195,          // form tsh
         SYS_shmat = 196,           // form tsh
@@ -181,23 +185,33 @@ namespace syscall
         SYS_madvise = 233,
         SYS_remap_file_pages = 234, // from rocket
         SYS_get_mempolicy = 236,    // from rocket
+        SYS_perf_event_open=241,
         SYS_accept4 = 242,          // from rocket
         SYS_wait4 = 260,
         SYS_prlimit64 = 261,
+        SYS_fanotify_init = 262,
         SYS_clockadjtime = 266, // from rocket
-        SYS_setns =268,
+        SYS_setns = 268,
         SYS_renameat2 = 276,
         SYS_getrandom = 278,
-        SYS_memfd_create = 279, 
+        SYS_memfd_create = 279,
+        SYS_bpf=280,
+        SYS_userfaultfd = 282,
         SYS_membarrier = 283,      // form tsh
         SYS_copy_file_range = 285, // from rocket
         SYS_statx = 291,
-        SYS_strerror = 300,    // from rocket
-        SYS_perror = 301,      // from rocket
+        SYS_strerror = 300, // from rocket
+        SYS_perror = 301,   // from rocket
+        SYS_io_uring_setup =425,
+        SYS_open_tree =428,
+        SYS_fsopen =430,
+        SYS_fspick =433,
+        SYS_pidfd_open = 434,
         SYS_clone3 = 435,      // form tsh
         SYS_close_range = 436, // from rocket
         SYS_openat2 = 437,     // from rocket
         SYS_faccessat2 = 439,  // from rocket
+        SYS_memfd_secret=447,
         SYS_shutdown = 2025
     };
 
@@ -234,10 +248,10 @@ namespace syscall
     enum SYS_wait
     {
         /* Bits in the third argument to `waitpid'.  */
-        WNOHANG = 1,       /* Don't block waiting.  */
-        WUNTRACED = 2,     /* Report status of stopped children.  */
-        WCONTINUED = 8,    /* Report status of continued children.  */
-        WNOWAIT = 0x01000000, /* Don't reap, just poll status.  */
+        WNOHANG = 1,              /* Don't block waiting.  */
+        WUNTRACED = 2,            /* Report status of stopped children.  */
+        WCONTINUED = 8,           /* Report status of continued children.  */
+        WNOWAIT = 0x01000000,     /* Don't reap, just poll status.  */
         __WNOTHREAD = 0x20000000, /* Don't wait on children of other threads  */
         __WALL = 0x40000000,      /* Wait on all children, regardless of type  */
         __WCLONE = 0x80000000     /* Wait only on non-SIGCHLD children  */

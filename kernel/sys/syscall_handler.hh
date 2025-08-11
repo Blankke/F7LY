@@ -123,6 +123,20 @@ namespace syscall
         uint64 sys_clock_nanosleep();
 
         // 补全的 todo 接口
+        uint64 sys_memfd_secret();
+        uint64 sys_open_tree();
+        uint64 sys_fspick();
+        uint64 sys_fsopen();
+        uint64 sys_bpf();
+        uint64 sys_io_uring_setup();
+        uint64 sys_perf_event_open();
+        uint64 sys_userfaultfd();
+        uint64 sys_inotify_init1();
+        uint64 sys_fanotify_init();
+        uint64 sys_pidfd_open();
+        uint64 sys_vmsplice();
+        uint64 sys_signalfd4();
+        uint64 sys_timerfd_create();
         uint64 sys_syslog();
         uint64 sys_statfs();
         uint64 sys_ftruncate();
