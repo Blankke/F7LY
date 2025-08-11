@@ -27,7 +27,7 @@ confstr01                      | 32         | 32         | ok
 creat09                        | 32         | 32         | loopdev
 posix_fadvise03                | 32         | 32         |  ok
 posix_fadvise03_64             | 32         | 32         |  ok
-timer_settime01                | 32         | 32         |郑老师修SIGALARM
+timer_settime01                | 32         | 32         | ok
 signal03                       | 31         | 31         | ok
 signal05                       | 31         | 31         | ok
 getitimer01                    | 30         | 30         |

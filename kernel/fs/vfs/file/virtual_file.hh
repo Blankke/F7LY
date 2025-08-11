@@ -47,6 +47,15 @@ namespace fs
 
         // 获取提供者类型
         virtual VirtualProviderType get_provider_type() const { return VirtualProviderType::GENERIC; }
+
+        virtual bool is_readable() const { return false; }
+
+        // @brief 这个设计很狗屎，handle_read本来应该跟 generate_content类似的，但是content这玩意儿首先它常驻内存，比较狗屎。
+        // content设计之初只是为了一些非常简单的，内容很少的虚拟文件，甚至返回值都是eastl::string。
+        // 现在增加handle_read是为了真正的实现虚拟文件的读取操作，比如/dev/loopX
+        //
+        // 总之，content这个设计太屎山了，一时难以重构，引入read过渡一下。
+        virtual long handle_read(uint64 buf, size_t len, long off) { return -1; }
     };
 
     class virtual_file : public file
@@ -205,9 +214,13 @@ namespace fs
     public:
         DevLoopProvider(int loop_number) : _loop_number(loop_number) {}
         virtual eastl::string generate_content() override;
+        virtual bool is_writable() const override { return true; }
+        virtual long handle_write(uint64 buf, size_t len, long off) override;
         virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
             return eastl::make_unique<DevLoopProvider>(_loop_number);
         }
+        virtual bool is_readable() const override { return true; }
+        virtual long handle_read(uint64 buf, size_t len, long off) override;
     };
 
     // /dev/loop-control 控制设备提供者

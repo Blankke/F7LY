@@ -246,12 +246,16 @@ int ltp_test(bool is_musl)
     chdir(is_musl ? "/musl/ltp/testcases/bin" : "/glibc/ltp/testcases/bin");
     printf("#### OS COMP TEST GROUP START ltp-%s ####\n", is_musl ? "musl" : "glibc");
     char *bb_sh[8] = {0};
+    char *envp[] = {
+        "PATH=/bin", // 设置 PATH
+        NULL          // 必须以 NULL 结尾
+    }; //这个测loop的那些测例要用
     int result = 0;
     for (int i = 0; ltp_testcases[i] != NULL; i++)
     {
         printf("RUN LTP CASE %s\n", ltp_testcases[i]);
         bb_sh[0] = ltp_testcases[i];
-        result = run_test(ltp_testcases[i], bb_sh, 0);
+        result = run_test(ltp_testcases[i], bb_sh, envp);
         printf("FAIL LTP CASE %s: %d\n", ltp_testcases[i], result);
     }
     printf("#### OS COMP TEST GROUP END ltp-%s ####\n", is_musl ? "musl" : "glibc");
@@ -2920,7 +2924,7 @@ char *ltp_testcases[] = {
     // "timer_delete02",
     // "timer_getoverrun01",
     // "timer_gettime01",
-    // "timer_settime01",
+    "timer_settime01", // PASS
     "timer_settime02", // pass
     // "timer_settime03",
     // "timerfd_create01",
@@ -3173,9 +3177,9 @@ char *ltp_testcases[] = {
     // "waitid11",
     "waitpid01", // PASS
     "waitpid03", // PASS
-    "waitpid04", // 部分pass p2 f2
-    // "waitpid06",
-    // "waitpid07",
+    "waitpid04", // PASS
+    "waitpid06", // PASS
+    "waitpid07", // PASS
     // "waitpid08",
     "waitpid09", // 部分pass p3 f1
     // "waitpid10",

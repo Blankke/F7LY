@@ -77,7 +77,8 @@ namespace dev
         uint32_t _block_size;                // 块大小
         uint32_t _flags;                     // 标志位
         eastl::string _file_name;            // 绑定的文件名
-        
+        eastl::string _file_path;            // 绑定的文件路径
+
         static const uint32_t DEFAULT_BLOCK_SIZE = 512;
 
     public:
@@ -99,10 +100,10 @@ namespace dev
         // 属性访问
         int get_loop_number() const { return _loop_number; }
         bool is_bound() const { return _is_bound; }
-        const eastl::string& get_file_name() const { return _file_name; }
+        const eastl::string &get_file_name() const { panic("xxx"); }
         uint64_t get_size() const;
 
-    private:
+
         int _read_write_file(uint64_t offset, void* buffer, size_t size, bool is_write);
         uint64_t _get_file_size();
     };

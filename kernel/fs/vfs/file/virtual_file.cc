@@ -10,6 +10,7 @@
 #include "trap/interrupt_stats.hh"
 // #include "mem/mem_layout.hh"
 #include "fs/vfs/file/normal_file.hh"
+#include "loop_device.hh"
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
 namespace fs
@@ -54,9 +55,7 @@ namespace fs
     eastl::string ProcMountsProvider::generate_content()
     {
         eastl::string result;
-        result += "/dev/sda1 / ext4 rw,relatime 0 0\n";
-        result += "proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0\n";
-        result += "tmpfs /tmp tmpfs rw,nosuid,nodev 0 0\n";
+        result += "/dev/loop0 /wcnmd ext4 rw,relatime 0 0\n";
         return result;
     }
 
@@ -105,35 +104,23 @@ namespace fs
 
     eastl::string DevLoopProvider::generate_content()
     {
-        // 具体的 loop 设备节点，这里返回设备信息
-        eastl::string result;
-        result += "Loop device #";
-        
-        // 手动转换数字到字符串
-        char num_str[16];
-        int temp = _loop_number;
-        int pos = 0;
-        if (temp == 0) {
-            num_str[pos++] = '0';
-        } else {
-            char temp_str[16];
-            int temp_pos = 0;
-            while (temp > 0) {
-                temp_str[temp_pos++] = '0' + (temp % 10);
-                temp /= 10;
-            }
-            // 反转字符串
-            for (int i = temp_pos - 1; i >= 0; i--) {
-                num_str[pos++] = temp_str[i];
-            }
-        }
-        num_str[pos] = '\0';
-        
-        result += num_str;
-        result += "\n";
-        result += "Device path: /dev/loop";
-        result += num_str;
-        result += "\n";
+        printfRed("未实现xxxxxxxxxxx");
+        return "Loop device content\n";
+    }
+
+    long DevLoopProvider::handle_read(uint64 buf, size_t len, long off)
+    {
+        dev::LoopDevice *loop_dev = dev::LoopControlDevice::get_loop_device(_loop_number);
+        int result = loop_dev->_read_write_file(off, (void *)buf, len, false);
+        return result;
+    }
+
+    long DevLoopProvider::handle_write(uint64 buf, size_t len, long off)
+    {
+        // 处理对 loop 设备的写入操作
+        // 这里可以实现对 loop 设备的配置，如关联文件等
+        dev::LoopDevice *loop_dev = dev::LoopControlDevice::get_loop_device(_loop_number);
+        int result = loop_dev->_read_write_file(off, (void*)buf, len,  true);
         return result;
     }
 
@@ -169,12 +156,28 @@ namespace fs
     long virtual_file::read(uint64 buf, size_t len, long off, bool upgrade)
     {
         // printfGreen("virtual_file::read called with buf: %p, len: %u, off: %d, upgrade: %d\n", (void *)buf, len, off, upgrade);
-        
+        printf("file_path: %s\n", _path_name.c_str());
         if (_attrs.u_read != 1) {
             printfRed("virtual_file:: not allowed to read!");
             return -1;
         }
 
+        if (_content_provider->is_readable())
+        {
+            // md，纯屎山我服了。为loop定制
+            long result = _content_provider->handle_read(buf, len, off);
+
+            if (off < 0)
+            {
+                off = _file_ptr;
+            }
+
+            if (result > 0 && upgrade)
+            {
+                _file_ptr = off + result;
+            }
+            return result;
+        }
         // 特殊处理 /dev/zero 设备
         if (_content_provider && _content_provider->get_provider_type() == VirtualProviderType::DEV_ZERO) {
             // 处理偏移量参数
@@ -264,9 +267,10 @@ namespace fs
     }
     long virtual_file::write(uint64 buf, size_t len, long off, bool upgrade)
     {
-        if (!_content_provider->is_writable()) {
+        if (!_content_provider->is_writable())
+        {
             printfRed("virtual_file::write: this virtual file is read-only");
-            return -1;
+            return -EBADF;
         }
 
         if (_attrs.u_write != 1) {
@@ -304,6 +308,11 @@ namespace fs
 
     off_t virtual_file::lseek(off_t offset, int whence)
     {
+        if (_content_provider->is_readable())
+        {
+            printfRed("偷一手这里"); //专为loop
+            return 64 * 1024;
+        }
         // 对于动态内容，确保获得最新的文件大小
         if (_content_provider->is_dynamic()) {
             _cached_content = _content_provider->generate_content();

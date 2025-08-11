@@ -381,6 +381,7 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
     // 分离父目录和文件名
     eastl::string parent_dir;
     eastl::string filename;
+
     
     size_t last_slash = absolute_path.find_last_of('/');
     if (last_slash != eastl::string::npos && last_slash > 0)
@@ -830,7 +831,6 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
         // 注意：这里需要在实际使用时在文件描述符表中设置FD_CLOEXEC
         printfYellow("vfs_openat: O_CLOEXEC flag set for file %s\n", absolute_path.c_str());
     }
-
     return EOK;
 }
 
@@ -1707,4 +1707,58 @@ bool check_file_lock_access(const struct flock &file_lock, off_t offset, size_t 
         return false; // 读锁阻止写操作
 
     return true; // 读锁允许读操作
+}
+
+int vfs_write_file(const char *path, uint64 buffer_addr, size_t offset, size_t size)
+{
+    // 检查文件是否存在
+    if (vfs_is_file_exist(path) != 1)
+    {
+        printfRed("File does not exist: %s\n", path);
+        return -ENOENT;
+    }
+
+    int res;
+    ext4_file file;
+
+    // 打开文件（读写模式）
+    res = ext4_fopen(&file, path, "r+b");
+    if (res != EOK)
+    {
+        printfRed("Failed to open file for writing: %d\n", res);
+        return -res;
+    }
+
+    // 如果有偏移，设置文件指针位置
+    if (offset > 0)
+    {
+        res = ext4_fseek(&file, offset, SEEK_SET);
+        if (res != EOK)
+        {
+            printfRed("Failed to seek file: %d\n", res);
+            ext4_fclose(&file);
+            return -res;
+        }
+    }
+
+    // 写入数据
+    size_t bytes_written;
+    res = ext4_fwrite(&file, (void *)buffer_addr, size, &bytes_written);
+    if (res != EOK)
+    {
+        printfRed("Failed to write file: %d\n", res);
+        ext4_fclose(&file);
+        return -res;
+    }
+
+    // 关闭文件
+    res = ext4_fclose(&file);
+    if (res != EOK)
+    {
+        printfRed("Failed to close file: %d\n", res);
+        return -res;
+    }
+
+    // 返回实际写入的字节数
+    return bytes_written;
 }

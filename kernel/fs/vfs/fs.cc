@@ -58,45 +58,12 @@ void filesystem_init(void)
 void dir_init(void)
 {
     struct inode *ip;
-    if ((ip = namei((char *)"/dev/null")) == NULL)
-        vfs_ext_mknod((char *)"/dev/null", T_CHR, 2); // 2 is the device number for /dev/null
-    else
-        free_inode(ip);
-
-    if ((ip = namei((char *)"/proc")) == NULL)
-        vfs_ext_mkdir((char *)"/proc", 0777);
-    else
-        free_inode(ip);
-
-    if ((ip = namei((char *)"/proc/mounts")) == NULL)
-        vfs_ext_mkdir((char *)"/proc/mounts", 0777);
-    else
-        free_inode(ip);
-
-    if ((ip = namei((char *)"/proc/mounts")) == NULL)
-        vfs_ext_mkdir((char *)"/proc/mounts", 0777);
-    else
-        free_inode(ip);
-
-    // if ((ip = namei((char *)"/proc/meminfo")) == NULL)
-    //     vfs_ext_mkdir((char *)"/proc/meminfo", 0777);
-    // else
-    //     free_inode(ip);
 
     if ((ip = namei((char *)"/dev/misc/rtc")) == NULL)
         vfs_ext_mkdir((char *)"/dev/misc/rtc", 0777);
     else
         free_inode(ip);
 
-    if ((ip = namei((char *)"proc/self/exe")) == NULL)
-        vfs_ext_mkdir((char *)"proc/self/exe", 0777);
-    else
-        free_inode(ip);
-
-    if ((ip = namei((char *)"/dev/zero")) == NULL)
-        vfs_ext_mknod((char *)"/dev/zero", T_CHR, 3); // 3 is the device number for /dev/zero
-    else
-        free_inode(ip);
 
     if ((ip = namei((char *)"/tmp")) != NULL)
     {

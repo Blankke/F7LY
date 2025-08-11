@@ -24,6 +24,8 @@
 #include "timer_manager.hh"
 #include "fs/drivers/riscv/virtio2.hh"
 #include "trap/interrupt_stats.hh"
+#include "proc/posix_timers.hh"
+
 // #include "fuckyou.hh"
 // in kernelvec.S, calls kerneltrap().
 extern "C" void kernelvec();
@@ -135,6 +137,9 @@ void trap_manager::timertick()
   // increment the ticks count
   ticks++;
   proc::k_pm.wakeup(&ticks);
+
+  // Check for expired POSIX timers and send signals
+  check_expired_timers();
 
   // printfCyan("[tm]  timertick here,p->addr:%x \n",Cpu::get_cpu()->get_cur_proc());
   // release the lock

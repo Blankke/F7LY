@@ -481,21 +481,34 @@ namespace proc
             vm_entry.flags == MAP_SHARED &&
             (vm_entry.prot & PROT_WRITE) != 0)
         {
-            // 简化的写回逻辑，避免调用单独的writeback_vma函数
-            uint64 vma_start = PGROUNDDOWN(vm_entry.addr);
-            uint64 vma_end = PGROUNDUP(vma_start + vm_entry.len);
-            for (uint64 va = vma_start; va < vma_end; va += PGSIZE)
+            // 检查是否为/tmp下的临时文件或memfd，如果是则跳过写回
+            bool is_tmp_file = false;
+            if (vm_entry.vfile->_path_name.find("/tmp/") == 0 || 
+                vm_entry.vfile->_path_name.find("memfd:") == 0)
             {
-                mem::Pte pte = pagetable.walk(va, 0);
-                if (!pte.is_null() && pte.is_valid())
+                is_tmp_file = true;
+                printf("    Skipping writeback for temporary file: %s\n", 
+                       vm_entry.vfile->_path_name.c_str());
+            }
+            
+            if (!is_tmp_file)
+            {
+                // 简化的写回逻辑，避免调用单独的writeback_vma函数
+                uint64 vma_start = PGROUNDDOWN(vm_entry.addr);
+                uint64 vma_end = PGROUNDUP(vma_start + vm_entry.len);
+                for (uint64 va = vma_start; va < vma_end; va += PGSIZE)
                 {
-                    uint64 pa = (uint64)pte.pa();
-                    int file_offset = vm_entry.offset + (va - vma_start);
-                    printf("    Writing back page at va=%p to file offset %d\n", (void *)va, file_offset);
-                    int write_result = vm_entry.vfile->write(pa, PGSIZE, file_offset, false);
-                    if (write_result < 0)
+                    mem::Pte pte = pagetable.walk(va, 0);
+                    if (!pte.is_null() && pte.is_valid())
                     {
-                        printfRed("ProcessMemoryManager: VMA %d writeback failed\n", vma_index);
+                        uint64 pa = (uint64)pte.pa();
+                        int file_offset = vm_entry.offset + (va - vma_start);
+                        printf("    Writing back page at va=%p to file offset %d\n", (void *)va, file_offset);
+                        int write_result = vm_entry.vfile->write(pa, PGSIZE, file_offset, false);
+                        if (write_result < 0)
+                        {
+                            printfRed("ProcessMemoryManager: VMA %d writeback failed\n", vma_index);
+                        }
                     }
                 }
             }
