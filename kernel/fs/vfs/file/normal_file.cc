@@ -102,7 +102,9 @@ namespace fs
 			}
 			memset(zero_buf, 0, off - lwext4_file_struct.fsize);
 			printfYellow("normal_file::write: padding with zeros to offset %ld, size %zu\n", off, off - lwext4_file_struct.fsize);
+			_file_lock.release(); // 释放锁，允许其他操作
 			write((uint64)zero_buf, off - lwext4_file_struct.fsize, lwext4_file_struct.fsize, true);
+			_file_lock.acquire(); // 重新获取锁
 			printfGreen("normal_file::write: padding with zeros to offset %ld, size %zu\n", off, off - lwext4_file_struct.fsize);
 			mem::k_pmm.free_page(zero_buf);
 			// 更新文件大小

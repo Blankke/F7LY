@@ -392,7 +392,7 @@ char *libctest[][2] = {
     {NULL}};
 
 char *ltp_testcases[] = {
-    "memfd_create01",
+    "waitpid03",
     NULL,
     // "abort01",
     "abs01", // 完全PASS,没summary
