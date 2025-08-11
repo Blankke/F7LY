@@ -1884,6 +1884,7 @@ namespace syscall
         int fd;
         if (_arg_int(0, fd) < 0)
             return -1;
+        printfCyan("[SyscallHandler::sys_close] fd: %d\n", fd);
         return proc::k_pm.close(fd);
     }
     uint64 SyscallHandler::sys_mknod()
@@ -2686,26 +2687,41 @@ namespace syscall
             return SYS_ENOENT; // 文件不存在
         }
 
-        // 对于 AT_SYMLINK_NOFOLLOW 标志，我们需要特殊处理符号链接
+        // 使用 k_vfs.openat 来获取文件对象，这样可以处理虚拟文件
+        fs::file *file_obj = nullptr;
+        uint open_flags = O_RDONLY;
+        
+        // 对于 AT_SYMLINK_NOFOLLOW 标志，添加 O_NOFOLLOW 标志
         if (flags & AT_SYMLINK_NOFOLLOW)
         {
-            printfYellow("[SyscallHandler::sys_fstatat] AT_SYMLINK_NOFOLLOW set, getting symlink attributes directly\n");
-            
-            // 直接通过路径获取文件属性，不跟随符号链接
-            if (vfs_path_stat(abs_pathname.c_str(), &kst, false) < 0)
-            {
-                printfRed("[SyscallHandler::sys_fstatat] Failed to get file stat for symlink: %s\n", abs_pathname.c_str());
-                return -1;
-            }
+            printfYellow("[SyscallHandler::sys_fstatat] AT_SYMLINK_NOFOLLOW set, adding O_NOFOLLOW flag\n");
+            open_flags |= O_NOFOLLOW;
         }
-        else
+        
+        // 使用 k_vfs.openat 打开文件，这会正确处理虚拟文件和普通文件
+        int open_result = fs::k_vfs.openat(abs_pathname, file_obj, open_flags);
+        if (open_result < 0)
         {
-            // 正常情况：跟随符号链接
-            if (vfs_path_stat(abs_pathname.c_str(), &kst, true) < 0)
+            printfRed("[SyscallHandler::sys_fstatat] Failed to open file: %s, error: %d\n", abs_pathname.c_str(), open_result);
+            return open_result;
+        }
+        
+        // 使用 k_vfs.fstat 获取文件状态，这会正确处理虚拟文件
+        if (fs::k_vfs.fstat(file_obj, &kst) < 0)
+        {
+            printfRed("[SyscallHandler::sys_fstatat] Failed to get file stat: %s\n", abs_pathname.c_str());
+            // 释放文件对象
+            if (file_obj)
             {
-                printfRed("[SyscallHandler::sys_fstatat] Failed to get file stat: %s\n", abs_pathname.c_str());
-                return -1;
+                delete file_obj;
             }
+            return -1;
+        }
+        
+        // 释放文件对象
+        if (file_obj)
+        {
+            delete file_obj;
         }
 
         // 将结果拷贝到用户空间
@@ -4179,6 +4195,7 @@ namespace syscall
                 {
                     f->refcnt++;
                     p->_ofile->_fl_cloexec[retfd] = true; // 设置 CLOEXEC 标志
+                    p->_ofile->_ofile_ptr[retfd] = f;
                     break;
                 }
             }

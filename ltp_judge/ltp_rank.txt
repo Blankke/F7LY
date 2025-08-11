@@ -4,12 +4,12 @@ epoll_ctl03                    | 256        | 256        | ok
 access01                       | 199        | 199        | 过一部份
 memfd_create01                 | 157        | 157        |
 getpid01                       | 100        | 100        | ok
-chdir01                        | 92         | 95         |
+chdir01                        | 92         | 95         | ok
 splice07                       | 75         | 126        | 这个貌似能修，争取一下, 测这个记得开网络(init_network_stack)
 pipe11                         | 70         | 70         | ok
-fsync01                        | 60         | 60         |
-memcontrol02                   | 54         | 54         |
-mount07                        | 52         | 56         |
+fsync01                        | 60         | 60         | 跑不了
+memcontrol02                   | 54         | 54         | 
+mount07                        | 52         | 56         |跑不了
 rename01                       | 48         | 48         |
 rename03                       | 48         | 48         |
 timer_settime02                | 48         | 48         | pass

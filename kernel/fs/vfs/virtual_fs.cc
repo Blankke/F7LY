@@ -265,6 +265,10 @@ namespace fs
         add_virtual_file("/proc/mounts", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcMountsProvider>());
 
+        // /proc/self/mounts (和 /proc/mounts 内容相同)
+        add_virtual_file("/proc/self/mounts", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcMountsProvider>());
+
         // /proc/sys/kernel/pid_max
         add_virtual_file("/proc/sys/kernel/pid_max", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcSysKernelPidMaxProvider>());
