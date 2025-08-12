@@ -1920,7 +1920,7 @@ namespace proc
                 }
             }
             p->_lock.release();
-            
+
             // 检查是否已经完成所需的唤醒和重排队操作
             if (count1 >= val && (!uaddr2 || count2 >= val2))
             {
@@ -2142,8 +2142,10 @@ namespace proc
             return -EMFILE; // 分配文件描述符失败
         }
         // 下面这个就是套的第二层，这一层的意义似乎只在于分配文件描述符
-        if(path=="/lib/riscv64-linux-gnu/libc.so.6")
-            path="/glibc/lib/ld-linux-riscv64-lp64d.so.1";
+        if (path == "/lib/riscv64-linux-gnu/libc.so.6")
+            path = "/glibc/lib/libc.so.6";
+        if (path == "/lib/riscv64-linux-gnu/tls/libc.so.6")
+            path = "/glibc/lib/libc.so.6";
         int err = fs::k_vfs.openat(path, p->_ofile->_ofile_ptr[fd], flags, mode);
         if (err < 0)
         {

@@ -5,8 +5,8 @@ extern "C"
     __attribute__((section(".text.startup"))) int main()
     {
         init_env("/musl/");
-        ltp_test(true);
-        // ltp_test(false);
+        // ltp_test(true);
+        ltp_test(false);
         // basic_test("/musl/");
         // basic_test("/glibc/");
         // busybox_test("/musl/");

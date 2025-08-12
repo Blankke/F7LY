@@ -387,4 +387,28 @@ namespace fs
             return eastl::make_unique<ProcSysKernelTaintedProvider>();
         }
     };
+
+    // /etc/ld.so.preload 内容提供者（通常为空，表示不预加载任何库）
+    class EtcLdSoPreloadProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+    virtual bool is_dynamic() const override { return false; }
+    virtual bool is_writable() const override { return true; }
+    virtual long handle_write(uint64 buf, size_t len, long off) override;
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<EtcLdSoPreloadProvider>();
+        }
+    };
+
+    // /etc/ld.so.cache 内容提供者（提供一个空或最小可接受的内容，动态链接器将回退到目录扫描）
+    class EtcLdSoCacheProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_dynamic() const override { return false; }
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<EtcLdSoCacheProvider>();
+        }
+    };
 }

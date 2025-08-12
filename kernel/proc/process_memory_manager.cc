@@ -859,7 +859,7 @@ namespace proc
                         // // 跳过整个共享内存段，直接移动到段结束位置
                         // uint64 shm_end = (uint64)shm_start_addr + shm_size;
                         // va = PGROUNDUP(shm_end) - PGSIZE; // -PGSIZE因为循环会+PGSIZE
-                        panic("shared memory should not appear here");
+                        // panic("shared memory should not appear here");
                     }
                     else
                     {

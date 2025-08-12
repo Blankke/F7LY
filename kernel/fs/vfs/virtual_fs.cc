@@ -261,6 +261,13 @@ namespace fs
         add_virtual_file("/proc/version", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcVersionProvider>());
 
+    // 兼容 glibc 动态链接器：/etc/ld.so.preload 与 /etc/ld.so.cache
+    // 两者常被访问；前者通常为空表示不预加载库，后者若不可用则回退到目录扫描。
+    add_virtual_file("/etc/ld.so.preload", fs::FileTypes::FT_NORMAL,
+             eastl::make_unique<EtcLdSoPreloadProvider>());
+    add_virtual_file("/etc/ld.so.cache", fs::FileTypes::FT_NORMAL,
+             eastl::make_unique<EtcLdSoCacheProvider>());
+
         // /proc/mounts
         add_virtual_file("/proc/mounts", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcMountsProvider>());

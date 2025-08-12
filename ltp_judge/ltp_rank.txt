@@ -48,7 +48,7 @@ swapon02                       | 20         | 21         |
 madvise01                      | 20         | 20         |
 ppoll01                        | 20         | 20         |
 copy_file_range02              | 18         | 28         |
-llseek03                       | 18         | 18         |
+llseek03                       | 18         | 18         |  ok
 personality01                  | 18         | 18         |
 setitimer01                    | 18         | 18         |
 statvfs01                      | 18         | 18         |

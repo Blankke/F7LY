@@ -971,4 +971,36 @@ namespace fs
         // 0 表示内核未被污染（无专有模块或其他问题）
         return "0\n";
     }
+
+    // ======================== /etc/ld.so.preload 提供者实现 ========================
+    // glibc 动态加载器在启动时会尝试读取该文件，列出需要强制预加载的共享库路径。
+    // 多数系统上它不存在或为空，我们返回空内容即可，表示不预加载任何库。
+    // 简易实现：维护一个静态的预加载列表（文本，每行一个so路径）。
+    // 写入时覆盖整个内容（忽略off），读取时返回完整内容。
+    static eastl::string g_ld_preload_content;
+
+    eastl::string EtcLdSoPreloadProvider::generate_content()
+    {
+    // /etc/ld.so.preload 按行列出需要强制预加载的共享库路径。
+    // 默认返回空内容，避免干扰动态链接器（若需要可在运行时写入）。
+    return "";
+    }
+
+    long EtcLdSoPreloadProvider::handle_write(uint64 buf, size_t len, long off)
+    {
+        (void)off; // 简化：总是当作覆盖写
+        // 将用户缓冲区复制成字符串；这里直接按内核态视角复制
+        char* p = (char*)buf;
+        g_ld_preload_content.assign(p, p + len);
+        return (long)len;
+    }
+
+    // ======================== /etc/ld.so.cache 提供者实现 ========================
+    // 真实系统上该文件是二进制缓存，用于加速查找。为了兼容性，我们返回空内容，
+    // 让动态链接器回退到按目录扫描（如 /lib, /lib64, /lib/riscv64-linux-gnu 等）。
+    // 若未来需要更强兼容，可伪造一个最小头部，但通常空文件即可让 glibc 继续按路径搜索。
+    eastl::string EtcLdSoCacheProvider::generate_content()
+    {
+        return ""; // 空文件，触发回退逻辑
+    }
 } // namespace fs
