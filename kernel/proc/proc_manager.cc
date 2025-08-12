@@ -1259,6 +1259,27 @@ namespace proc
             np->_clear_tid_addr = ctid;
         }
 
+        /////////debug
+        uint64 debug_ra;
+        uint64 ra_ptr = (uint64)0x10cb88;
+        if (mem::k_vmm.copy_in(*p->get_pagetable(), &debug_ra, ra_ptr, sizeof(debug_ra)) < 0)
+        {
+            printfRed("fork: copy_in failed for father debug_ra");
+        }
+        else
+        {
+            printf("fork: father debug_ra: %p, ra_ptr: %p\n", (void *)debug_ra, (void *)ra_ptr);
+        }
+
+        if (mem::k_vmm.copy_in(*np->get_pagetable(), &debug_ra, ra_ptr, sizeof(debug_ra)) < 0)
+        {
+            printfRed("fork: copy_in failed for child debug_ra");
+        }
+        else
+        {
+            printf("fork: child debug_ra: %p, ra_ptr: %p\n", (void *)debug_ra, (void *)ra_ptr);
+        }
+
         np->_state = ProcState::RUNNABLE;
 
         return np;
