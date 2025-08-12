@@ -265,3 +265,16 @@ int fdatasync(int fd)
 {
     return syscall(syscall::SYS_fdatasync, fd);
 }
+
+int userdebug1(){
+    return syscall(syscall::SYS_userdebug1);
+}
+int userdebug2(){
+    return syscall(syscall::SYS_userdebug2);
+}
+int userdebug3(){
+    return syscall(syscall::SYS_userdebug3);
+}
+int userdebug4(){
+    return syscall(syscall::SYS_userdebug4);
+}

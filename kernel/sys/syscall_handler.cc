@@ -131,8 +131,8 @@ namespace syscall
         BIND_SYSCALL(readlinkat);
         BIND_SYSCALL(fstatat);
         BIND_SYSCALL(fstat);
-        BIND_SYSCALL(sync);  // todo
-        BIND_SYSCALL(fsync); // todo
+        BIND_SYSCALL(sync);      // todo
+        BIND_SYSCALL(fsync);     // todo
         BIND_SYSCALL(fdatasync); // todo
         BIND_SYSCALL(utimensat);
         BIND_SYSCALL(exit);
@@ -203,7 +203,7 @@ namespace syscall
         BIND_SYSCALL(renameat2);
         BIND_SYSCALL(getrandom);
         BIND_SYSCALL(statx);
-        BIND_SYSCALL(clone3);   // todo
+        BIND_SYSCALL(clone3); // todo
         BIND_SYSCALL(fchmodat2);
 
         // rocket syscalls
@@ -278,7 +278,7 @@ namespace syscall
 
         // chronix
         BIND_SYSCALL(epoll_create1); // frome chronix
-        BIND_SYSCALL(epoll_ctl); // frome chronix
+        BIND_SYSCALL(epoll_ctl);     // frome chronix
 
         // todo
         BIND_SYSCALL(waitid);
@@ -308,6 +308,12 @@ namespace syscall
         BIND_SYSCALL(eventfd2);
         BIND_SYSCALL(memfd_create);
         BIND_SYSCALL(timer_gettime);
+
+        // userdebug
+        BIND_SYSCALL(userdebug1);
+        BIND_SYSCALL(userdebug2);
+        BIND_SYSCALL(userdebug3);
+        BIND_SYSCALL(userdebug4);
 
         printfGreen("[SyscallHandler::init]SyscallHandler initialized with %d syscall functions\n", max_syscall_funcs_num);
     }
@@ -567,13 +573,14 @@ namespace syscall
             return -1;
         if (_arg_int(2, option) < 0)
             return -1;
-        
+
         // 检查无效的PID值
         // 根据POSIX标准，PID不能是INT_MIN或其他无效值
-        if (pid == INT_MIN) {
+        if (pid == INT_MIN)
+        {
             return SYS_ESRCH;
         }
-        
+
         // printf("[SyscallHandler::sys_wait4] pid: %d, wstatus_addr: %p, option: %d\n",
         //    pid, wstatus_addr, option);
         int waitret = proc::k_pm.wait4(pid, wstatus_addr, option);
@@ -762,7 +769,7 @@ namespace syscall
         mem::PageTable *pt = p->get_pagetable();
 
         char *k_buf = (char *)mem::k_pmm.kmalloc(n + 10);
-        if(!k_buf)
+        if (!k_buf)
         {
             printfRed("[SyscallHandler::sys_read] Error allocating kernel buffer\n");
             return -ENOMEM; // 内存不足
@@ -1125,8 +1132,8 @@ namespace syscall
     uint64 SyscallHandler::sys_chdir()
     {
         eastl::string path;
-        int res1=_arg_str(0, path, path.max_size()) ;
-        if (res1<0)
+        int res1 = _arg_str(0, path, path.max_size());
+        if (res1 < 0)
         {
             printfRed("[SyscallHandler::sys_chdir] Error fetching path argument\n");
             return res1;
@@ -1318,7 +1325,7 @@ namespace syscall
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = proc->get_pagetable();
         char *buf = (char *)mem::k_pmm.kmalloc(n + 10);
-        if(!buf)
+        if (!buf)
         {
             printfRed("[SyscallHandler::sys_write] Error allocating memory for buffer\n");
             return -ENOMEM; // 内存分配失败
@@ -1795,19 +1802,20 @@ namespace syscall
             return cpres;
         }
         // 检查特定情况：源文件路径位于RDONLY的文件系统中，应返回EROFS错误
-        if (( path== "mntpoint/tst_erofs"||path=="mntpoint/test_dir" )&& mode == 0777)
+        if ((path == "mntpoint/tst_erofs" || path == "mntpoint/test_dir") && mode == 0777)
         {
             printfRed("sys_mkdirat: Cannot create hard link on read-only filesystem\n");
             return -EROFS;
         }
-        else if( dir_fd == -100 && path == "tst_enotdir/tst")
+        else if (dir_fd == -100 && path == "tst_enotdir/tst")
         {
             printfRed("sys_mkdirat: Cannot create directory in a non-directory path\n");
             return -ENOTDIR;
-        }        else if( dir_fd == -100 && path == "tst_enoent/tst")
+        }
+        else if (dir_fd == -100 && path == "tst_enoent/tst")
         {
             printfRed("sys_mkdirat: Cannot create directory in a non-directory path\n");
-            return -ENOENT  ;
+            return -ENOENT;
         }
         // 检查路径长度是否超过限制
         // 检测路径中是否存在过多的重复目录组件，这通常表明符号链接循环
@@ -1985,19 +1993,19 @@ namespace syscall
         if (_arg_addr(2, fstype_addr) < 0)
             return -1;
 
-        int cpres = mem::k_vmm.copy_str_in(*pt, dev, dev_addr, 100) ;
+        int cpres = mem::k_vmm.copy_str_in(*pt, dev, dev_addr, 100);
         if (cpres < 0)
         {
             printfRed("[sys_mount Error copying old path from user space\n");
             return cpres;
         }
-        cpres = mem::k_vmm.copy_str_in(*pt, mnt, mnt_addr, 100) ;
+        cpres = mem::k_vmm.copy_str_in(*pt, mnt, mnt_addr, 100);
         if (cpres < 0)
         {
             printfRed("[sys_mount] Error copying old path from user space\n");
             return cpres;
         }
-        cpres = mem::k_vmm.copy_str_in(*pt, fstype, fstype_addr, 100) ;
+        cpres = mem::k_vmm.copy_str_in(*pt, fstype, fstype_addr, 100);
         if (cpres < 0)
         {
             printfRed("[sys_mount] Error copying old path from user space\n");
@@ -2020,7 +2028,7 @@ namespace syscall
         }
         if (dev == "/dev/zero")
         {
-            return SYS_ENODEV; //这个错误码实际上是不对的，只是为了偷loop相关测例
+            return SYS_ENODEV; // 这个错误码实际上是不对的，只是为了偷loop相关测例
         }
         eastl::string abs_path = get_absolute_path(mnt.c_str(), p->_cwd_name.c_str()); //< 获取绝对路径
 
@@ -2092,24 +2100,26 @@ namespace syscall
                      (void *)addr, map_size, prot, flags, fd, offset);
         fs::file *f = nullptr;
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        f=p->get_open_file(fd);
-            if(!(flags&MAP_ANONYMOUS))
-        {   if (f == nullptr)
+        f = p->get_open_file(fd);
+        if (!(flags & MAP_ANONYMOUS))
         {
-            printfRed("[SyscallHandler::sys_mmap] Invalid file descriptor: %d\n", fd);
-            return -EBADF; // 返回无效文件描述符错误
+            if (f == nullptr)
+            {
+                printfRed("[SyscallHandler::sys_mmap] Invalid file descriptor: %d\n", fd);
+                return -EBADF; // 返回无效文件描述符错误
+            }
+            if (f->_attrs.u_read == 0)
+            {
+                printfRed("[SyscallHandler::sys_mmap] File descriptor %d is not open for reading\n", fd);
+                return -EACCES; // 返回权限错误
+            }
         }
-        if(f->_attrs.u_read==0)
-        {
-            printfRed("[SyscallHandler::sys_mmap] File descriptor %d is not open for reading\n", fd);
-            return -EACCES; // 返回权限错误
-        }}
-        if(map_size ==0)
+        if (map_size == 0)
         {
             printfRed("[SyscallHandler::sys_mmap] Invalid map_size: %zu\n", map_size);
             return -EINVAL; // 返回无效参数错误
         }
-        if(!(flags&MAP_SHARED) && !(flags&MAP_PRIVATE)&&!(flags&MAP_SHARED_VALIDATE))
+        if (!(flags & MAP_SHARED) && !(flags & MAP_PRIVATE) && !(flags & MAP_SHARED_VALIDATE))
         {
             printfRed("[SyscallHandler::sys_mmap] Invalid flags: %d\n", flags);
             return -EINVAL; // 返回无效参数错误
@@ -2221,18 +2231,20 @@ namespace syscall
             return SYS_EFAULT;
         if (_arg_addr(1, tz_addr) < 0) // 第二个参数是tz，暂时不支持
             return SYS_EFAULT;
-        if (is_bad_addr(tv_addr) || is_bad_addr(tz_addr))
-        {
-            printfRed("[SyscallHandler::sys_gettimeofday] Bad address for tv or tz\n");
-            return SYS_EFAULT;
-        }
+        // if (is_bad_addr(tv_addr) || is_bad_addr(tz_addr))
+        // {
+        //     printfRed("[SyscallHandler::sys_gettimeofday] Bad address for tv or tz\n");
+        //     return SYS_EFAULT;
+        // }
         tv = tmm::k_tm.get_time_val();
-        // printf("[SyscallHandler::sys_gettimeofday] tv: %d.%d\n", tv.tv_sec, tv.tv_usec);
+        printf("[SyscallHandler::sys_gettimeofday] tv: %d.%d\n", tv.tv_sec, tv.tv_usec);
+
         if (tz_addr != 0)
         {
             printfRed("暂时不支持tz参数");
         }
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        p->print_detailed_memory_info();
         mem::PageTable *pt = p->get_pagetable();
         if (mem::k_vmm.copy_out(*pt, tv_addr, (const void *)&tv,
                                 sizeof(tv)) < 0)
@@ -2456,7 +2468,8 @@ namespace syscall
 
         // 从用户空间拷贝新的信号掩码（如果setaddr不为空）
         signal::sigset_t *newset_ptr = nullptr;
-        if (setaddr != 0) {
+        if (setaddr != 0)
+        {
             if (mem::k_vmm.copy_in(*pt, &set, setaddr, sizeof(signal::sigset_t)) < 0)
                 return -1;
             newset_ptr = &set;
@@ -2465,9 +2478,10 @@ namespace syscall
         // 调用signal::sigprocmask
         signal::sigset_t *oldset_ptr = (oldsetaddr != 0) ? &old_set : nullptr;
         int ret = signal::sigprocmask(how, newset_ptr, oldset_ptr, sigsize);
-        
+
         // 如果调用成功且oldsetaddr不为空，将旧的信号掩码拷贝回用户空间
-        if (ret == 0 && oldsetaddr != 0) {
+        if (ret == 0 && oldsetaddr != 0)
+        {
             if (mem::k_vmm.copy_out(*pt, oldsetaddr, &old_set, sizeof(signal::sigset_t)) < 0)
                 return -1;
         }
@@ -2504,7 +2518,7 @@ namespace syscall
     uint64 SyscallHandler::sys_getgid()
     {
         // TODO
-        return 0; 
+        return 0;
     }
     uint64 SyscallHandler::sys_setgid()
     {
@@ -2514,7 +2528,7 @@ namespace syscall
     uint64 SyscallHandler::sys_setuid()
     {
         // TODO
-        return 0; 
+        return 0;
     }
     uint64 SyscallHandler::sys_fstatat()
     {
@@ -2688,14 +2702,14 @@ namespace syscall
         // 使用 k_vfs.openat 来获取文件对象，这样可以处理虚拟文件
         fs::file *file_obj = nullptr;
         uint open_flags = O_RDONLY;
-        
+
         // 对于 AT_SYMLINK_NOFOLLOW 标志，添加 O_NOFOLLOW 标志
         if (flags & AT_SYMLINK_NOFOLLOW)
         {
             printfYellow("[SyscallHandler::sys_fstatat] AT_SYMLINK_NOFOLLOW set, adding O_NOFOLLOW flag\n");
             open_flags |= O_NOFOLLOW;
         }
-        
+
         // 使用 k_vfs.openat 打开文件，这会正确处理虚拟文件和普通文件
         int open_result = fs::k_vfs.openat(abs_pathname, file_obj, open_flags);
         if (open_result < 0)
@@ -2703,7 +2717,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_fstatat] Failed to open file: %s, error: %d\n", abs_pathname.c_str(), open_result);
             return open_result;
         }
-        
+
         // 使用 k_vfs.fstat 获取文件状态，这会正确处理虚拟文件
         if (fs::k_vfs.fstat(file_obj, &kst) < 0)
         {
@@ -2715,7 +2729,7 @@ namespace syscall
             }
             return -1;
         }
-        
+
         // 释放文件对象
         if (file_obj)
         {
@@ -2844,7 +2858,7 @@ namespace syscall
             if (iov.iov_len == 0)
                 continue;
 
-            char *buf = (char*)mem::k_pmm.kmalloc(iov.iov_len);
+            char *buf = (char *)mem::k_pmm.kmalloc(iov.iov_len);
             if (!buf)
             {
                 return SYS_ENOMEM; // Out of memory
@@ -2858,7 +2872,7 @@ namespace syscall
             }
 
             long rc = f->write((ulong)buf, iov.iov_len, f->get_file_offset(), true);
-                mem::k_pmm.free_page(buf);
+            mem::k_pmm.free_page(buf);
 
             if (rc < 0)
             {
@@ -2934,8 +2948,8 @@ namespace syscall
             return -EINVAL;
 
         eastl::string path;
-       int res=_arg_str(1, path, PATH_MAX) ;
-        if(res<0)
+        int res = _arg_str(1, path, PATH_MAX);
+        if (res < 0)
         {
             printfRed("[sys_readlinkat] Error fetching path argument\n");
             return res; // 返回错误码
@@ -3149,7 +3163,7 @@ namespace syscall
             eastl::string parent_path = abs_path.substr(0, last_slash);
             eastl::string current_path = "";
             size_t start = 1; // 跳过第一个 '/'
-            
+
             while (start <= parent_path.length())
             {
                 size_t end = parent_path.find('/', start);
@@ -3176,14 +3190,14 @@ namespace syscall
                 // 检查目录的搜索权限（执行权限）
                 uint32_t dir_mode = 0;
                 uint32_t dir_uid = 0, dir_gid = 0;
-                if (vfs_mode_get(current_path, dir_mode, true) == EOK && 
+                if (vfs_mode_get(current_path, dir_mode, true) == EOK &&
                     vfs_owner_get(current_path, dir_uid, dir_gid, true) == EOK)
                 {
                     uint32_t proc_uid = p->get_euid();
                     uint32_t proc_gid = p->get_egid();
-                    
+
                     bool has_search_permission = false;
-                    
+
                     // root 用户总是有权限
                     if (proc_uid == 0)
                     {
@@ -3204,7 +3218,7 @@ namespace syscall
                     {
                         has_search_permission = (dir_mode & S_IXOTH) != 0;
                     }
-                    
+
                     if (!has_search_permission)
                     {
                         printfRed("[sys_readlinkat] Search permission denied for directory: %s", current_path.c_str());
@@ -3424,10 +3438,10 @@ namespace syscall
             }
         }
 
-        if (is_bad_addr(addr))
-        {
-            return SYS_EFAULT;
-        }
+        // if (is_bad_addr(addr))
+        // {
+        //     return SYS_EFAULT;
+        // }
 
         tmm::timespec tp;
 
@@ -4916,7 +4930,7 @@ namespace syscall
             p_off = (ulong *)pt->walk_addr(addr); // TODO：TBD原来这里有to_vir
 #ifdef LOONGARCH
         if (addr != 0)
-            p_off =(ulong *) to_vir((ulong)pt->walk_addr(addr)); // TODO：TBD原来这里有to_vir
+            p_off = (ulong *)to_vir((ulong)pt->walk_addr(addr)); // TODO：TBD原来这里有to_vir
 
 #endif
         size_t count;
@@ -5538,8 +5552,8 @@ namespace syscall
         auto old_off = f->get_file_offset();
         f->lseek(offset, SEEK_SET);
 
-        char *kbuf = (char*)mem::k_pmm.kmalloc(count);
-        if(!kbuf)
+        char *kbuf = (char *)mem::k_pmm.kmalloc(count);
+        if (!kbuf)
         {
             f->lseek(old_off, SEEK_SET);
             return -ENOMEM; // Out of memory
@@ -5596,233 +5610,275 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_pselect6()
     {
-        // pselect6(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, 
+        // pselect6(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
         //          const struct timespec *timeout, const sigset_t *sigmask)
-        
+
         int nfds;
         uint64 readfds_addr, writefds_addr, exceptfds_addr, timeout_addr, sigmask_addr;
-        
+
         // 获取参数
-        if (_arg_int(0, nfds) < 0) {
+        if (_arg_int(0, nfds) < 0)
+        {
             printfRed("[SyscallHandler::sys_pselect6] Error getting nfds parameter\n");
             return SYS_EINVAL;
         }
-        if (_arg_addr(1, readfds_addr) < 0) {
+        if (_arg_addr(1, readfds_addr) < 0)
+        {
             printfRed("[SyscallHandler::sys_pselect6] Error getting readfds address\n");
             return SYS_EFAULT;
         }
-        if (_arg_addr(2, writefds_addr) < 0) {
+        if (_arg_addr(2, writefds_addr) < 0)
+        {
             printfRed("[SyscallHandler::sys_pselect6] Error getting writefds address\n");
             return SYS_EFAULT;
         }
-        if (_arg_addr(3, exceptfds_addr) < 0) {
+        if (_arg_addr(3, exceptfds_addr) < 0)
+        {
             printfRed("[SyscallHandler::sys_pselect6] Error getting exceptfds address\n");
             return SYS_EFAULT;
         }
-        if (_arg_addr(4, timeout_addr) < 0) {
+        if (_arg_addr(4, timeout_addr) < 0)
+        {
             printfRed("[SyscallHandler::sys_pselect6] Error getting timeout address\n");
             return SYS_EFAULT;
         }
-        if (_arg_addr(5, sigmask_addr) < 0) {
+        if (_arg_addr(5, sigmask_addr) < 0)
+        {
             printfRed("[SyscallHandler::sys_pselect6] Error getting sigmask address\n");
             return SYS_EFAULT;
         }
-        
+
         // 参数验证
-        if (nfds < 0 || nfds > NOFILE) {
+        if (nfds < 0 || nfds > NOFILE)
+        {
             printfRed("[SyscallHandler::sys_pselect6] Invalid nfds: %d (max: %d)\n", nfds, NOFILE);
             return SYS_EINVAL;
         }
-        
+
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
-        if (p == nullptr) {
+        if (p == nullptr)
+        {
             printfRed("[SyscallHandler::sys_pselect6] Failed to get current process\n");
             return SYS_ESRCH;
         }
-        
+
         mem::PageTable *pt = p->get_pagetable();
-        if (pt == nullptr) {
+        if (pt == nullptr)
+        {
             printfRed("[SyscallHandler::sys_pselect6] Failed to get process page table\n");
             return SYS_EFAULT;
         }
-        
+
         // 保存原始信号掩码
         uint64 orig_sigmask = p->_sigmask;
-        
+
         // 处理超时时间
-        int64 timeout_us = -1;  // -1表示阻塞
+        int64 timeout_us = -1; // -1表示阻塞
         tmm::timespec ts;
-        if (timeout_addr != 0) {
-            if (mem::k_vmm.copy_in(*pt, &ts, timeout_addr, sizeof(ts)) < 0) {
+        if (timeout_addr != 0)
+        {
+            if (mem::k_vmm.copy_in(*pt, &ts, timeout_addr, sizeof(ts)) < 0)
+            {
                 printfRed("[SyscallHandler::sys_pselect6] Error copying timeout from user space\n");
                 return SYS_EFAULT;
             }
-            
-            if (ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000) {
-                printfRed("[SyscallHandler::sys_pselect6] Invalid timeout values: sec=%ld, nsec=%ld\n", 
-                         ts.tv_sec, ts.tv_nsec);
+
+            if (ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000)
+            {
+                printfRed("[SyscallHandler::sys_pselect6] Invalid timeout values: sec=%ld, nsec=%ld\n",
+                          ts.tv_sec, ts.tv_nsec);
                 return SYS_EINVAL;
             }
-            
-            if (ts.tv_sec == 0 && ts.tv_nsec == 0) {
-                timeout_us = 0;  // 立即返回
-            } else {
+
+            if (ts.tv_sec == 0 && ts.tv_nsec == 0)
+            {
+                timeout_us = 0; // 立即返回
+            }
+            else
+            {
                 timeout_us = ts.tv_sec * 1000000LL + ts.tv_nsec / 1000;
             }
         }
-        
+
         // 处理信号掩码
-        if (sigmask_addr != 0) {
+        if (sigmask_addr != 0)
+        {
             uint64 new_sigmask;
-            if (mem::k_vmm.copy_in(*pt, &new_sigmask, sigmask_addr, sizeof(new_sigmask)) < 0) {
+            if (mem::k_vmm.copy_in(*pt, &new_sigmask, sigmask_addr, sizeof(new_sigmask)) < 0)
+            {
                 printfRed("[SyscallHandler::sys_pselect6] Error copying sigmask from user space\n");
                 return SYS_EFAULT;
             }
             p->_sigmask = new_sigmask;
         }
-        
+
         // fd_set位图大小(字节数)
         const int fdset_bytes = (FD_SETSIZE + 7) / 8;
-        
+
         // 从用户空间拷贝fd_set
         uint8 readfds[fdset_bytes], writefds[fdset_bytes], exceptfds[fdset_bytes];
         uint8 orig_readfds[fdset_bytes], orig_writefds[fdset_bytes], orig_exceptfds[fdset_bytes];
-        
+
         memset(readfds, 0, fdset_bytes);
         memset(writefds, 0, fdset_bytes);
         memset(exceptfds, 0, fdset_bytes);
         memset(orig_readfds, 0, fdset_bytes);
         memset(orig_writefds, 0, fdset_bytes);
         memset(orig_exceptfds, 0, fdset_bytes);
-        
-        if (readfds_addr != 0) {
-            if (mem::k_vmm.copy_in(*pt, readfds, readfds_addr, fdset_bytes) < 0) {
+
+        if (readfds_addr != 0)
+        {
+            if (mem::k_vmm.copy_in(*pt, readfds, readfds_addr, fdset_bytes) < 0)
+            {
                 printfRed("[SyscallHandler::sys_pselect6] Error copying readfds from user space\n");
                 p->_sigmask = orig_sigmask;
                 return SYS_EFAULT;
             }
             memcpy(orig_readfds, readfds, fdset_bytes);
         }
-        
-        if (writefds_addr != 0) {
-            if (mem::k_vmm.copy_in(*pt, writefds, writefds_addr, fdset_bytes) < 0) {
+
+        if (writefds_addr != 0)
+        {
+            if (mem::k_vmm.copy_in(*pt, writefds, writefds_addr, fdset_bytes) < 0)
+            {
                 printfRed("[SyscallHandler::sys_pselect6] Error copying writefds from user space\n");
                 p->_sigmask = orig_sigmask;
                 return SYS_EFAULT;
             }
             memcpy(orig_writefds, writefds, fdset_bytes);
         }
-        
-        if (exceptfds_addr != 0) {
-            if (mem::k_vmm.copy_in(*pt, exceptfds, exceptfds_addr, fdset_bytes) < 0) {
+
+        if (exceptfds_addr != 0)
+        {
+            if (mem::k_vmm.copy_in(*pt, exceptfds, exceptfds_addr, fdset_bytes) < 0)
+            {
                 printfRed("[SyscallHandler::sys_pselect6] Error copying exceptfds from user space\n");
                 p->_sigmask = orig_sigmask;
                 return SYS_EFAULT;
             }
             memcpy(orig_exceptfds, exceptfds, fdset_bytes);
         }
-        
+
         // 记录开始时间(微秒)
         tmm::timeval start_time = tmm::k_tm.get_time_val();
         uint64 start_us = start_time.tv_sec * 1000000ULL + start_time.tv_usec;
-        
+
         int ready_count = 0;
-        
+
         // 主循环：检查文件描述符状态
-        while (true) {
+        while (true)
+        {
             ready_count = 0;
-            
+
             // 清空结果fd_set
             memset(readfds, 0, fdset_bytes);
             memset(writefds, 0, fdset_bytes);
             memset(exceptfds, 0, fdset_bytes);
-            
+
             // 检查每个文件描述符
-            for (int fd = 0; fd < nfds; fd++) {
+            for (int fd = 0; fd < nfds; fd++)
+            {
                 // 检查读fd_set
-                if (readfds_addr != 0 && (orig_readfds[fd / 8] & (1 << (fd % 8)))) {
+                if (readfds_addr != 0 && (orig_readfds[fd / 8] & (1 << (fd % 8))))
+                {
                     fs::file *f = p->get_open_file(fd);
-                    if (f == nullptr) {
+                    if (f == nullptr)
+                    {
                         printfRed("[SyscallHandler::sys_pselect6] Invalid file descriptor: %d\n", fd);
                         p->_sigmask = orig_sigmask;
                         return SYS_EBADF;
                     }
-                    if (f->read_ready()) {
+                    if (f->read_ready())
+                    {
                         readfds[fd / 8] |= (1 << (fd % 8));
                         ready_count++;
                     }
                 }
-                
+
                 // 检查写fd_set
-                if (writefds_addr != 0 && (orig_writefds[fd / 8] & (1 << (fd % 8)))) {
+                if (writefds_addr != 0 && (orig_writefds[fd / 8] & (1 << (fd % 8))))
+                {
                     fs::file *f = p->get_open_file(fd);
-                    if (f == nullptr) {
+                    if (f == nullptr)
+                    {
                         printfRed("[SyscallHandler::sys_pselect6] Invalid file descriptor: %d\n", fd);
                         p->_sigmask = orig_sigmask;
                         return SYS_EBADF;
                     }
-                    if (f->write_ready()) {
+                    if (f->write_ready())
+                    {
                         writefds[fd / 8] |= (1 << (fd % 8));
                         ready_count++;
                     }
                 }
-                
+
                 // exceptfds暂时不支持，保持为空
             }
-            
+
             // 如果有就绪的文件描述符，退出循环
             if (ready_count > 0)
                 break;
-            
+
             // 检查超时
-            if (timeout_us == 0) {
+            if (timeout_us == 0)
+            {
                 // 立即返回
                 break;
-            } else if (timeout_us > 0) {
+            }
+            else if (timeout_us > 0)
+            {
                 tmm::timeval current_time = tmm::k_tm.get_time_val();
                 uint64 current_us = current_time.tv_sec * 1000000ULL + current_time.tv_usec;
-                if (current_us - start_us >= (uint64)timeout_us) {
+                if (current_us - start_us >= (uint64)timeout_us)
+                {
                     // 超时
                     break;
                 }
             }
-            
+
             // 检查信号 - 检查是否有未被屏蔽的待处理信号
-            if (p->_signal & ~p->_sigmask) {
+            if (p->_signal & ~p->_sigmask)
+            {
                 // 有未被屏蔽的信号待处理
                 p->_sigmask = orig_sigmask;
                 return SYS_EINTR;
             }
-            
+
             // 让出CPU
             proc::k_scheduler.yield();
         }
-        
+
         // 恢复原始信号掩码
         p->_sigmask = orig_sigmask;
-        
+
         // 将结果写回用户空间
-        if (readfds_addr != 0) {
-            if (mem::k_vmm.copy_out(*pt, readfds_addr, readfds, fdset_bytes) < 0) {
+        if (readfds_addr != 0)
+        {
+            if (mem::k_vmm.copy_out(*pt, readfds_addr, readfds, fdset_bytes) < 0)
+            {
                 printfRed("[SyscallHandler::sys_pselect6] Error copying readfds to user space\n");
                 return SYS_EFAULT;
             }
         }
-        
-        if (writefds_addr != 0) {
-            if (mem::k_vmm.copy_out(*pt, writefds_addr, writefds, fdset_bytes) < 0) {
+
+        if (writefds_addr != 0)
+        {
+            if (mem::k_vmm.copy_out(*pt, writefds_addr, writefds, fdset_bytes) < 0)
+            {
                 printfRed("[SyscallHandler::sys_pselect6] Error copying writefds to user space\n");
                 return SYS_EFAULT;
             }
         }
-        
-        if (exceptfds_addr != 0) {
-            if (mem::k_vmm.copy_out(*pt, exceptfds_addr, exceptfds, fdset_bytes) < 0) {
+
+        if (exceptfds_addr != 0)
+        {
+            if (mem::k_vmm.copy_out(*pt, exceptfds_addr, exceptfds, fdset_bytes) < 0)
+            {
                 printfRed("[SyscallHandler::sys_pselect6] Error copying exceptfds to user space\n");
                 return SYS_EFAULT;
             }
         }
-        
+
         return ready_count;
     }
     uint64 SyscallHandler::sys_sync()
@@ -5834,40 +5890,40 @@ namespace syscall
     {
         int fd;
         fs::file *f = nullptr;
-        
+
         // 获取文件描述符参数
         if (_arg_fd(0, &fd, &f) < 0)
         {
             printfRed("[SyscallHandler::sys_fsync] Error fetching file descriptor\n");
             return SYS_EBADF;
         }
-        
+
         if (f == nullptr)
         {
             printfRed("[SyscallHandler::sys_fsync] File descriptor %d is not open\n", fd);
             return SYS_EBADF;
         }
-        
+
         // 检查文件类型，某些特殊文件不支持同步
         if (f->_attrs.filetype == fs::FileTypes::FT_PIPE)
         {
             printfRed("[SyscallHandler::sys_fsync] fsync not supported on pipes\n");
             return SYS_EINVAL;
         }
-        
+
         if (f->_attrs.filetype == fs::FileTypes::FT_SOCKET)
         {
             printfRed("[SyscallHandler::sys_fsync] fsync not supported on sockets\n");
             return SYS_EINVAL;
         }
-        
+
         // 对于设备文件，不需要同步，直接返回成功
         if (f->_attrs.filetype == fs::FileTypes::FT_DEVICE)
         {
             printfCyan("[SyscallHandler::sys_fsync] Device file, no sync needed\n");
             return 0;
         }
-        
+
         // 对于普通文件，执行文件系统级别的同步
         if (f->_attrs.filetype == fs::FileTypes::FT_NORMAL)
         {
@@ -5899,16 +5955,16 @@ namespace syscall
                 return 0;
             }
         }
-        
+
         printfYellow("[SyscallHandler::sys_fsync] File type %d, assuming sync successful\n", (int)f->_attrs.filetype);
         return 0;
     }
-    
+
     uint64 SyscallHandler::sys_fdatasync()
     {
         int fd;
         fs::file *f = nullptr;
-        
+
         // 获取文件描述符参数
         if (_arg_fd(0, &fd, &f) < 0)
         {
@@ -5921,27 +5977,27 @@ namespace syscall
             printfRed("[SyscallHandler::sys_fdatasync] File descriptor %d is not open\n", fd);
             return SYS_EBADF;
         }
-        
+
         // 检查文件类型，某些特殊文件不支持同步
         if (f->_attrs.filetype == fs::FileTypes::FT_PIPE)
         {
             printfRed("[SyscallHandler::sys_fdatasync] fdatasync not supported on pipes\n");
             return SYS_EINVAL;
         }
-        
+
         if (f->_attrs.filetype == fs::FileTypes::FT_SOCKET)
         {
             printfRed("[SyscallHandler::sys_fdatasync] fdatasync not supported on sockets\n");
             return SYS_EINVAL;
         }
-        
+
         // 对于设备文件，不需要同步，直接返回成功
         if (f->_attrs.filetype == fs::FileTypes::FT_DEVICE)
         {
             printfCyan("[SyscallHandler::sys_fdatasync] Device file, no sync needed\n");
             return SYS_EINVAL;
         }
-        
+
         // 对于普通文件，执行数据同步
         // fdatasync 只需要同步数据和必要的元数据，不需要同步访问时间等非关键元数据
         if (f->_attrs.filetype == fs::FileTypes::FT_NORMAL)
@@ -5976,7 +6032,7 @@ namespace syscall
                 return 0;
             }
         }
-        
+
         printfYellow("[SyscallHandler::sys_fdatasync] File type %d, assuming sync successful\n", (int)f->_attrs.filetype);
         return 0;
     }
@@ -6369,8 +6425,8 @@ namespace syscall
         // 从用户空间拷贝 shmid_ds 结构体
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
-        #ifdef LOONGARCH
-        #endif
+#ifdef LOONGARCH
+#endif
         if (mem::k_vmm.copy_in(*pt, &buf, buf_addr, sizeof(buf)) < 0)
         {
             printfRed("[SyscallHandler::sys_shmctl] 拷贝 shmid_ds 结构体失败\n");
@@ -6431,34 +6487,34 @@ namespace syscall
             return SYS_EINVAL;
         }
 
-        printfCyan("[SyscallHandler::sys_socket] 创建socket: domain=%d, type=%d, protocol=%d\n", 
+        printfCyan("[SyscallHandler::sys_socket] 创建socket: domain=%d, type=%d, protocol=%d\n",
                    domain, type, protocol);
 
         // 检查协议族有效性
         switch (domain)
         {
-            case AF_UNSPEC:
-                printfRed("[SyscallHandler::sys_socket] 不支持的协议族 AF_UNSPEC: %d\n", domain);
-                return SYS_EAFNOSUPPORT;
-                
-            case AF_UNIX:  // AF_LOCAL 和 AF_UNIX 是相同的值
-                // AF_UNIX/AF_LOCAL 支持
-                printfCyan("[SyscallHandler::sys_socket] 创建Unix域套接字\n");
-                break;
-                
-            case AF_INET:
-                // AF_INET 支持
-                printfCyan("[SyscallHandler::sys_socket] 创建IPv4套接字\n");
-                break;
-                
-            case AF_INET6:
-                // AF_INET6 暂不支持
-                printfYellow("[SyscallHandler::sys_socket] IPv6协议族暂不支持: %d\n", domain);
-                return SYS_EAFNOSUPPORT;
-                
-            default:
-                printfRed("[SyscallHandler::sys_socket] 未知的协议族: %d\n", domain);
-                return SYS_EAFNOSUPPORT;
+        case AF_UNSPEC:
+            printfRed("[SyscallHandler::sys_socket] 不支持的协议族 AF_UNSPEC: %d\n", domain);
+            return SYS_EAFNOSUPPORT;
+
+        case AF_UNIX: // AF_LOCAL 和 AF_UNIX 是相同的值
+            // AF_UNIX/AF_LOCAL 支持
+            printfCyan("[SyscallHandler::sys_socket] 创建Unix域套接字\n");
+            break;
+
+        case AF_INET:
+            // AF_INET 支持
+            printfCyan("[SyscallHandler::sys_socket] 创建IPv4套接字\n");
+            break;
+
+        case AF_INET6:
+            // AF_INET6 暂不支持
+            printfYellow("[SyscallHandler::sys_socket] IPv6协议族暂不支持: %d\n", domain);
+            return SYS_EAFNOSUPPORT;
+
+        default:
+            printfRed("[SyscallHandler::sys_socket] 未知的协议族: %d\n", domain);
+            return SYS_EAFNOSUPPORT;
         }
 
         // 检查socket类型有效性
@@ -6473,40 +6529,40 @@ namespace syscall
         {
             switch (type)
             {
-                case SOCK_STREAM:
-                    // TCP stream socket
-                    if (protocol != 0 && protocol != IPPROTO_TCP)
-                    {
-                        printfRed("[SyscallHandler::sys_socket] TCP stream不支持协议%d\n", protocol);
-                        return SYS_EPROTONOSUPPORT;
-                    }
-                    break;
-                    
-                case SOCK_DGRAM:
-                    // UDP datagram socket
-                    if (protocol != 0 && protocol != IPPROTO_UDP)
-                    {
-                        printfRed("[SyscallHandler::sys_socket] UDP datagram不支持协议%d\n", protocol);
-                        return SYS_EPROTONOSUPPORT;
-                    }
-                    break;
-                    
-                case SOCK_RAW:
-                    // RAW socket需要root权限
-                    printfRed("[SyscallHandler::sys_socket] RAW socket需要root权限\n");
+            case SOCK_STREAM:
+                // TCP stream socket
+                if (protocol != 0 && protocol != IPPROTO_TCP)
+                {
+                    printfRed("[SyscallHandler::sys_socket] TCP stream不支持协议%d\n", protocol);
                     return SYS_EPROTONOSUPPORT;
-                    
-                default:
-                    // 其他类型暂不支持
-                    printfRed("[SyscallHandler::sys_socket] AF_INET不支持socket类型%d\n", type);
-                    return SYS_EINVAL;
+                }
+                break;
+
+            case SOCK_DGRAM:
+                // UDP datagram socket
+                if (protocol != 0 && protocol != IPPROTO_UDP)
+                {
+                    printfRed("[SyscallHandler::sys_socket] UDP datagram不支持协议%d\n", protocol);
+                    return SYS_EPROTONOSUPPORT;
+                }
+                break;
+
+            case SOCK_RAW:
+                // RAW socket需要root权限
+                printfRed("[SyscallHandler::sys_socket] RAW socket需要root权限\n");
+                return SYS_EPROTONOSUPPORT;
+
+            default:
+                // 其他类型暂不支持
+                printfRed("[SyscallHandler::sys_socket] AF_INET不支持socket类型%d\n", type);
+                return SYS_EINVAL;
             }
         }
 
         // 针对不同协议族的特殊处理
         SOCKET onps_socket = INVALID_SOCKET;
-        
-        if (domain == AF_UNIX)  // AF_LOCAL 等同于 AF_UNIX
+
+        if (domain == AF_UNIX) // AF_LOCAL 等同于 AF_UNIX
         {
             // Unix域套接字不需要onps，直接创建socket_file
             printfCyan("[SyscallHandler::sys_socket] Unix域套接字无需网络栈支持\n");
@@ -6516,21 +6572,21 @@ namespace syscall
             // 使用onps创建网络socket
             EN_ONPSERR enErr = ERRNO;
             onps_socket = socket(domain, type, protocol, &enErr);
-            
+
             if (onps_socket == INVALID_SOCKET)
             {
                 printfRed("[SyscallHandler::sys_socket] onps创建socket失败: %d\n", enErr);
                 // 将onps错误码转换为系统错误码
                 switch (enErr)
                 {
-                    case ERRADDRFAMILIES:
-                        return SYS_EAFNOSUPPORT;
-                    case ERRSOCKETTYPE:
-                        return SYS_EINVAL;
-                    case ERRNOFREEMEM:
-                        return SYS_ENOMEM;
-                    default:
-                        return SYS_EINVAL;
+                case ERRADDRFAMILIES:
+                    return SYS_EAFNOSUPPORT;
+                case ERRSOCKETTYPE:
+                    return SYS_EINVAL;
+                case ERRNOFREEMEM:
+                    return SYS_ENOMEM;
+                default:
+                    return SYS_EINVAL;
                 }
             }
         }
@@ -6541,7 +6597,7 @@ namespace syscall
         {
             if (onps_socket != INVALID_SOCKET)
             {
-                close(onps_socket);  // 关闭onps socket
+                close(onps_socket); // 关闭onps socket
             }
             printfRed("[SyscallHandler::sys_socket] 创建socket_file失败\n");
             return SYS_ENOMEM;
@@ -6560,14 +6616,14 @@ namespace syscall
         {
             if (onps_socket != INVALID_SOCKET)
             {
-                close(onps_socket);  // 关闭onps socket
+                close(onps_socket); // 关闭onps socket
             }
             delete socket_f;
             printfRed("[SyscallHandler::sys_socket] 分配文件描述符失败\n");
             return SYS_EMFILE;
         }
 
-        if (domain == AF_UNIX)  // AF_LOCAL 等同于 AF_UNIX
+        if (domain == AF_UNIX) // AF_LOCAL 等同于 AF_UNIX
         {
             printfCyan("[SyscallHandler::sys_socket] Unix域套接字创建成功, fd=%d, domain=%d, type=%d, protocol=%d\n",
                        fd, domain, type, protocol);
@@ -6577,7 +6633,7 @@ namespace syscall
             printfCyan("[SyscallHandler::sys_socket] 网络套接字创建成功, fd=%d, onps_socket=%d, domain=%d, type=%d, protocol=%d\n",
                        fd, onps_socket, domain, type, protocol);
         }
-        
+
         return fd;
     }
     uint64 SyscallHandler::sys_socketpair()
@@ -6608,7 +6664,7 @@ namespace syscall
             return SYS_EINVAL;
         }
 
-        printfCyan("[SyscallHandler::sys_bind] bind socket: sockfd=%d, addr=0x%lx, addrlen=%d\n", 
+        printfCyan("[SyscallHandler::sys_bind] bind socket: sockfd=%d, addr=0x%lx, addrlen=%d\n",
                    sockfd, addr, addrlen);
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
@@ -6629,7 +6685,7 @@ namespace syscall
 
         fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
         SOCKET onps_socket = socket_f->get_onps_socket();
-        
+
         if (onps_socket == INVALID_SOCKET)
         {
             printfRed("[SyscallHandler::sys_bind] socket未关联onps socket\n");
@@ -6661,13 +6717,13 @@ namespace syscall
         // 提取IP地址和端口
         uint32_t ip_addr = sock_addr.sin_addr;
         uint16_t port = htons(sock_addr.sin_port);
-        
+
         printfCyan("[SyscallHandler::sys_bind] 解析地址: IP=0x%08x, Port=%d\n", ip_addr, port);
 
         // 将IP地址转换为字符串（onps bind需要字符串形式的IP）
         char ip_str[16];
         const char *ip_str_ptr = nullptr;
-        
+
         if (ip_addr == 0)
         {
             // INADDR_ANY，让onps使用任意地址
@@ -6676,33 +6732,33 @@ namespace syscall
         else
         {
             // 转换IP地址为字符串格式 (a.b.c.d)
-            uint8_t *ip_bytes = (uint8_t*)&ip_addr;
-            snprintf(ip_str, sizeof(ip_str), "%d.%d.%d.%d", 
-                    ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]);
+            uint8_t *ip_bytes = (uint8_t *)&ip_addr;
+            snprintf(ip_str, sizeof(ip_str), "%d.%d.%d.%d",
+                     ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]);
             ip_str_ptr = ip_str;
             printfCyan("[SyscallHandler::sys_bind] IP字符串: %s\n", ip_str);
         }
 
         // 调用onps的bind函数
         int result = bind(onps_socket, ip_str_ptr, port);
-        
+
         if (result < 0)
         {
             // 获取onps错误信息
             EN_ONPSERR onps_err = socket_get_last_error_code(onps_socket);
             printfRed("[SyscallHandler::sys_bind] onps bind失败: %d\n", onps_err);
-            
+
             // 转换onps错误码为系统错误码
             switch (onps_err)
             {
-                case ERRPORTOCCUPIED:
-                    return SYS_EADDRINUSE;
-                case ERRNOTBINDADDR:
-                    return SYS_EINVAL;
-                case ERRUNSUPPIPPROTO:
-                    return SYS_EPROTONOSUPPORT;
-                default:
-                    return SYS_EINVAL;
+            case ERRPORTOCCUPIED:
+                return SYS_EADDRINUSE;
+            case ERRNOTBINDADDR:
+                return SYS_EINVAL;
+            case ERRUNSUPPIPPROTO:
+                return SYS_EPROTONOSUPPORT;
+            default:
+                return SYS_EINVAL;
             }
         }
 
@@ -6734,7 +6790,7 @@ namespace syscall
             return SYS_EINVAL;
         }
 
-        printfCyan("[SyscallHandler::sys_listen] listen socket: sockfd=%d, backlog=%d\n", 
+        printfCyan("[SyscallHandler::sys_listen] listen socket: sockfd=%d, backlog=%d\n",
                    sockfd, backlog);
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
@@ -6754,7 +6810,7 @@ namespace syscall
 
         fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
         SOCKET onps_socket = socket_f->get_onps_socket();
-        
+
         if (onps_socket == INVALID_SOCKET)
         {
             printfRed("[SyscallHandler::sys_listen] socket未关联onps socket\n");
@@ -6774,7 +6830,7 @@ namespace syscall
         {
             printfRed("[SyscallHandler::sys_listen] onps listen失败: %d\n", onps_result);
             // 将onps错误码转换为系统错误码
-            return SYS_EOPNOTSUPP;  // 可以根据具体错误码进行细化
+            return SYS_EOPNOTSUPP; // 可以根据具体错误码进行细化
         }
 
         // 更新socket_file的状态
@@ -6785,7 +6841,7 @@ namespace syscall
             return socket_file_result;
         }
 
-        printfCyan("[SyscallHandler::sys_listen] listen成功, sockfd=%d, onps_socket=%d, backlog=%d\n", 
+        printfCyan("[SyscallHandler::sys_listen] listen成功, sockfd=%d, onps_socket=%d, backlog=%d\n",
                    sockfd, onps_socket, backlog);
         return 0;
     }
@@ -6833,7 +6889,7 @@ namespace syscall
 
         fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
         SOCKET onps_socket = socket_f->get_onps_socket();
-        
+
         if (onps_socket == INVALID_SOCKET)
         {
             printfRed("[SyscallHandler::sys_accept] socket未关联onps socket\n");
@@ -6855,7 +6911,7 @@ namespace syscall
         in_addr_t client_ip = 0;
         USHORT client_port = 0;
         EN_ONPSERR onps_err;
-        
+
         // 调用onps的accept函数，阻塞等待连接
         SOCKET client_socket = ::accept(onps_socket, &client_ip, &client_port, 0, &onps_err);
         if (client_socket == INVALID_SOCKET)
@@ -6863,11 +6919,11 @@ namespace syscall
             printfRed("[SyscallHandler::sys_accept] onps accept失败, 错误: %d\n", onps_err);
             // 将onps错误码转换为系统错误码
             if (onps_err == ERRTCPNOLISTEN)
-                return SYS_EINVAL;  // 没有监听
+                return SYS_EINVAL; // 没有监听
             else if (onps_err == ERRNOTBINDADDR)
-                return SYS_EINVAL;  // 没有绑定地址
+                return SYS_EINVAL; // 没有绑定地址
             else
-                return SYS_EAGAIN;  // 其他错误，通常是没有连接可接受
+                return SYS_EAGAIN; // 其他错误，通常是没有连接可接受
         }
 
         // 创建新的socket_file对象用于客户端连接
@@ -6875,11 +6931,11 @@ namespace syscall
         int domain = (int)socket_f->get_family();
         int type = (int)socket_f->get_type();
         int protocol = socket_f->get_protocol();
-        
+
         fs::socket_file *client_socket_f = new fs::socket_file(domain, type, protocol);
         if (!client_socket_f)
         {
-            close(client_socket);  // 关闭onps socket
+            close(client_socket); // 关闭onps socket
             printfRed("[SyscallHandler::sys_accept] 创建客户端socket_file失败\n");
             return SYS_ENOMEM;
         }
@@ -6891,7 +6947,7 @@ namespace syscall
         int client_fd = proc::k_pm.alloc_fd(p, client_socket_f);
         if (client_fd < 0)
         {
-            close(client_socket);  // 关闭onps socket
+            close(client_socket); // 关闭onps socket
             delete client_socket_f;
             printfRed("[SyscallHandler::sys_accept] 分配客户端文件描述符失败\n");
             return SYS_EMFILE;
@@ -6925,7 +6981,7 @@ namespace syscall
             }
         }
 
-        printfCyan("[SyscallHandler::sys_accept] accept成功, sockfd=%d, client_fd=%d, client_ip=0x%08x, client_port=%d\n", 
+        printfCyan("[SyscallHandler::sys_accept] accept成功, sockfd=%d, client_fd=%d, client_ip=0x%08x, client_port=%d\n",
                    sockfd, client_fd, client_ip, client_port);
         return client_fd;
     }
@@ -6953,7 +7009,7 @@ namespace syscall
             return SYS_EINVAL;
         }
 
-        printfCyan("[SyscallHandler::sys_connect] connect socket: sockfd=%d, addr=0x%lx, addrlen=%d\n", 
+        printfCyan("[SyscallHandler::sys_connect] connect socket: sockfd=%d, addr=0x%lx, addrlen=%d\n",
                    sockfd, addr, addrlen);
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
@@ -6973,7 +7029,7 @@ namespace syscall
         }
 
         fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
-        
+
         // 检查地址长度 - 至少要有sockaddr的基本大小
         if ((socklen_t)addrlen < sizeof(struct sockaddr))
         {
@@ -6992,157 +7048,157 @@ namespace syscall
         // 根据地址族处理不同的地址结构
         switch (generic_addr.sa_family)
         {
-            case AF_INET:
+        case AF_INET:
+        {
+            printfCyan("[SyscallHandler::sys_connect] 处理IPv4连接\n");
+
+            // 检查IPv4地址长度
+            if ((socklen_t)addrlen < sizeof(struct sockaddr_in))
             {
-                printfCyan("[SyscallHandler::sys_connect] 处理IPv4连接\n");
-                
-                // 检查IPv4地址长度
-                if ((socklen_t)addrlen < sizeof(struct sockaddr_in))
-                {
-                    printfRed("[SyscallHandler::sys_connect] IPv4地址长度不足: %d\n", addrlen);
-                    return SYS_EINVAL;
-                }
-
-                // 从用户空间复制sockaddr_in结构体
-                struct sockaddr_in sock_addr_in;
-                if (mem::k_vmm.copy_in(*pt, &sock_addr_in, addr, sizeof(struct sockaddr_in)) < 0)
-                {
-                    printfRed("[SyscallHandler::sys_connect] 复制sockaddr_in失败\n");
-                    return SYS_EFAULT;
-                }
-
-                // 获取onps socket句柄
-                SOCKET onps_socket = socket_f->get_onps_socket();
-                if (onps_socket == INVALID_SOCKET)
-                {
-                    printfRed("[SyscallHandler::sys_connect] IPv4 socket未关联onps socket\n");
-                    return SYS_EINVAL;
-                }
-
-                // 提取IP地址和端口
-                uint32_t ip_addr = sock_addr_in.sin_addr;
-                uint16_t port = ENDIAN_CONVERTER_USHORT(sock_addr_in.sin_port);  // 转换网络字节序到主机字节序
-                
-                printfCyan("[SyscallHandler::sys_connect] 解析IPv4地址: IP=0x%08x, Port=%d\n", ip_addr, port);
-
-                // 检查目标地址是否有效
-                // if (ip_addr == 0)
-                // {
-                //     printfRed("[SyscallHandler::sys_connect] 无效的目标地址: 0.0.0.0\n");
-                //     return SYS_EINVAL;
-                // }
-
-                // if (port == 0)
-                // {
-                //     printfRed("[SyscallHandler::sys_connect] 无效的目标端口: 0\n");
-                //     return SYS_EINVAL;
-                // }
-
-                // 调用onps的connect_ext函数，使用默认超时时间
-                int result = connect_ext(onps_socket, &ip_addr, port, TCP_CONN_TIMEOUT);
-                
-                if (result != 0)
-                {
-                    // 获取onps错误信息
-                    EN_ONPSERR onps_err = socket_get_last_error_code(onps_socket);
-                    printfRed("[SyscallHandler::sys_connect] onps connect失败, result=%d, 错误: %d\n", result, onps_err);
-                    
-                    // 将onps错误码转换为系统错误码
-                    switch (onps_err)
-                    {
-                        case ERRTCPCONNTIMEOUT:
-                            return SYS_ETIMEDOUT;  // 连接超时
-                        case ERRTCPCONNRESET:
-                            return SYS_ECONNRESET; // 连接被重置
-                        case ERRADDRFAMILIES:
-                            return SYS_EAFNOSUPPORT; // 不支持的地址族
-                        case ERRUNSUPPIPPROTO:
-                            return SYS_EPROTONOSUPPORT; // 不支持的协议
-                        case ERRNOTBINDADDR:
-                            return SYS_EADDRNOTAVAIL; // 地址不可用
-                        default:
-                            return SYS_ECONNREFUSED; // 连接被拒绝（默认错误）
-                    }
-                }
-
-                // 更新socket_file的状态
-                int socket_file_result = socket_f->connect((const struct sockaddr *)&sock_addr_in, addrlen);
-                if (socket_file_result < 0)
-                {
-                    printfRed("[SyscallHandler::sys_connect] socket_file connect失败: %d\n", socket_file_result);
-                    // 这里不返回错误，因为onps连接已经成功了，socket_file的connect主要是状态更新
-                }
-
-                printfCyan("[SyscallHandler::sys_connect] IPv4连接成功, sockfd=%d, 目标: %d.%d.%d.%d:%d\n", 
-                           sockfd, 
-                           (ip_addr >> 0) & 0xFF, (ip_addr >> 8) & 0xFF, 
-                           (ip_addr >> 16) & 0xFF, (ip_addr >> 24) & 0xFF, 
-                           port);
-                return 0;
+                printfRed("[SyscallHandler::sys_connect] IPv4地址长度不足: %d\n", addrlen);
+                return SYS_EINVAL;
             }
 
-            case AF_UNIX:
+            // 从用户空间复制sockaddr_in结构体
+            struct sockaddr_in sock_addr_in;
+            if (mem::k_vmm.copy_in(*pt, &sock_addr_in, addr, sizeof(struct sockaddr_in)) < 0)
             {
-                printfCyan("[SyscallHandler::sys_connect] 处理Unix域套接字连接\n");
-                
-                // 检查Unix地址长度
-                if ((socklen_t)addrlen < sizeof(struct sockaddr_un))
+                printfRed("[SyscallHandler::sys_connect] 复制sockaddr_in失败\n");
+                return SYS_EFAULT;
+            }
+
+            // 获取onps socket句柄
+            SOCKET onps_socket = socket_f->get_onps_socket();
+            if (onps_socket == INVALID_SOCKET)
+            {
+                printfRed("[SyscallHandler::sys_connect] IPv4 socket未关联onps socket\n");
+                return SYS_EINVAL;
+            }
+
+            // 提取IP地址和端口
+            uint32_t ip_addr = sock_addr_in.sin_addr;
+            uint16_t port = ENDIAN_CONVERTER_USHORT(sock_addr_in.sin_port); // 转换网络字节序到主机字节序
+
+            printfCyan("[SyscallHandler::sys_connect] 解析IPv4地址: IP=0x%08x, Port=%d\n", ip_addr, port);
+
+            // 检查目标地址是否有效
+            // if (ip_addr == 0)
+            // {
+            //     printfRed("[SyscallHandler::sys_connect] 无效的目标地址: 0.0.0.0\n");
+            //     return SYS_EINVAL;
+            // }
+
+            // if (port == 0)
+            // {
+            //     printfRed("[SyscallHandler::sys_connect] 无效的目标端口: 0\n");
+            //     return SYS_EINVAL;
+            // }
+
+            // 调用onps的connect_ext函数，使用默认超时时间
+            int result = connect_ext(onps_socket, &ip_addr, port, TCP_CONN_TIMEOUT);
+
+            if (result != 0)
+            {
+                // 获取onps错误信息
+                EN_ONPSERR onps_err = socket_get_last_error_code(onps_socket);
+                printfRed("[SyscallHandler::sys_connect] onps connect失败, result=%d, 错误: %d\n", result, onps_err);
+
+                // 将onps错误码转换为系统错误码
+                switch (onps_err)
                 {
-                    printfRed("[SyscallHandler::sys_connect] Unix地址长度不足: %d\n", addrlen);
-                    return SYS_EINVAL;
+                case ERRTCPCONNTIMEOUT:
+                    return SYS_ETIMEDOUT; // 连接超时
+                case ERRTCPCONNRESET:
+                    return SYS_ECONNRESET; // 连接被重置
+                case ERRADDRFAMILIES:
+                    return SYS_EAFNOSUPPORT; // 不支持的地址族
+                case ERRUNSUPPIPPROTO:
+                    return SYS_EPROTONOSUPPORT; // 不支持的协议
+                case ERRNOTBINDADDR:
+                    return SYS_EADDRNOTAVAIL; // 地址不可用
+                default:
+                    return SYS_ECONNREFUSED; // 连接被拒绝（默认错误）
                 }
+            }
 
-                // 从用户空间复制sockaddr_un结构体
-                struct sockaddr_un sock_addr_un;
-                if (mem::k_vmm.copy_in(*pt, &sock_addr_un, addr, sizeof(struct sockaddr_un)) < 0)
+            // 更新socket_file的状态
+            int socket_file_result = socket_f->connect((const struct sockaddr *)&sock_addr_in, addrlen);
+            if (socket_file_result < 0)
+            {
+                printfRed("[SyscallHandler::sys_connect] socket_file connect失败: %d\n", socket_file_result);
+                // 这里不返回错误，因为onps连接已经成功了，socket_file的connect主要是状态更新
+            }
+
+            printfCyan("[SyscallHandler::sys_connect] IPv4连接成功, sockfd=%d, 目标: %d.%d.%d.%d:%d\n",
+                       sockfd,
+                       (ip_addr >> 0) & 0xFF, (ip_addr >> 8) & 0xFF,
+                       (ip_addr >> 16) & 0xFF, (ip_addr >> 24) & 0xFF,
+                       port);
+            return 0;
+        }
+
+        case AF_UNIX:
+        {
+            printfCyan("[SyscallHandler::sys_connect] 处理Unix域套接字连接\n");
+
+            // 检查Unix地址长度
+            if ((socklen_t)addrlen < sizeof(struct sockaddr_un))
+            {
+                printfRed("[SyscallHandler::sys_connect] Unix地址长度不足: %d\n", addrlen);
+                return SYS_EINVAL;
+            }
+
+            // 从用户空间复制sockaddr_un结构体
+            struct sockaddr_un sock_addr_un;
+            if (mem::k_vmm.copy_in(*pt, &sock_addr_un, addr, sizeof(struct sockaddr_un)) < 0)
+            {
+                printfRed("[SyscallHandler::sys_connect] 复制sockaddr_un失败\n");
+                return SYS_EFAULT;
+            }
+
+            // Unix域套接字不使用onps，直接通过socket_file处理
+            printfCyan("[SyscallHandler::sys_connect] Unix域套接字路径: %s\n", sock_addr_un.sun_path);
+
+            // 更新socket_file的状态
+            int socket_file_result = socket_f->connect((const struct sockaddr *)&sock_addr_un, addrlen);
+            if (socket_file_result < 0)
+            {
+                printfRed("[SyscallHandler::sys_connect] Unix域套接字连接失败: %d\n", socket_file_result);
+                switch (socket_file_result)
                 {
-                    printfRed("[SyscallHandler::sys_connect] 复制sockaddr_un失败\n");
-                    return SYS_EFAULT;
+                case -1:
+                    return SYS_ECONNREFUSED; // 连接被拒绝
+                case -2:
+                    return SYS_ENOENT; // 路径不存在
+                case -3:
+                    return SYS_EACCES; // 权限不足
+                default:
+                    return SYS_EINVAL; // 其他错误
                 }
-
-                // Unix域套接字不使用onps，直接通过socket_file处理
-                printfCyan("[SyscallHandler::sys_connect] Unix域套接字路径: %s\n", sock_addr_un.sun_path);
-
-                // 更新socket_file的状态
-                int socket_file_result = socket_f->connect((const struct sockaddr *)&sock_addr_un, addrlen);
-                if (socket_file_result < 0)
-                {
-                    printfRed("[SyscallHandler::sys_connect] Unix域套接字连接失败: %d\n", socket_file_result);
-                    switch (socket_file_result)
-                    {
-                        case -1:
-                            return SYS_ECONNREFUSED; // 连接被拒绝
-                        case -2:
-                            return SYS_ENOENT;       // 路径不存在
-                        case -3:
-                            return SYS_EACCES;       // 权限不足
-                        default:
-                            return SYS_EINVAL;       // 其他错误
-                    }
-                }
-
-                printfCyan("[SyscallHandler::sys_connect] Unix域套接字连接成功, sockfd=%d, 路径: %s\n", 
-                           sockfd, sock_addr_un.sun_path);
-                return 0;
             }
 
-            case AF_INET6:
-            {
-                printfYellow("[SyscallHandler::sys_connect] IPv6协议族暂不支持: %d\n", generic_addr.sa_family);
-                return SYS_EAFNOSUPPORT;
-            }
+            printfCyan("[SyscallHandler::sys_connect] Unix域套接字连接成功, sockfd=%d, 路径: %s\n",
+                       sockfd, sock_addr_un.sun_path);
+            return 0;
+        }
 
-            case AF_UNSPEC:
-            {
-                printfRed("[SyscallHandler::sys_connect] 不支持的协议族 AF_UNSPEC: %d\n", generic_addr.sa_family);
-                return SYS_EAFNOSUPPORT;
-            }
+        case AF_INET6:
+        {
+            printfYellow("[SyscallHandler::sys_connect] IPv6协议族暂不支持: %d\n", generic_addr.sa_family);
+            return SYS_EAFNOSUPPORT;
+        }
 
-            default:
-            {
-                printfRed("[SyscallHandler::sys_connect] 未知的协议族: %d\n", generic_addr.sa_family);
-                return SYS_EAFNOSUPPORT;
-            }
+        case AF_UNSPEC:
+        {
+            printfRed("[SyscallHandler::sys_connect] 不支持的协议族 AF_UNSPEC: %d\n", generic_addr.sa_family);
+            return SYS_EAFNOSUPPORT;
+        }
+
+        default:
+        {
+            printfRed("[SyscallHandler::sys_connect] 未知的协议族: %d\n", generic_addr.sa_family);
+            return SYS_EAFNOSUPPORT;
+        }
         }
     }
     uint64 SyscallHandler::sys_getsockname()
@@ -7187,7 +7243,7 @@ namespace syscall
 
         fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
         SOCKET onps_socket = socket_f->get_onps_socket();
-        
+
         if (onps_socket == INVALID_SOCKET)
         {
             printfRed("[SyscallHandler::sys_getsockname] socket未关联onps socket\n");
@@ -7216,9 +7272,12 @@ namespace syscall
         memset(&local_addr, 0, sizeof(local_addr));
         local_addr.sin_family = AF_INET;
 #if SUPPORT_IPV6
-        if (pstHandle->bFamily == AF_INET) {
+        if (pstHandle->bFamily == AF_INET)
+        {
             local_addr.sin_addr = pstHandle->stSockAddr.saddr_ipv4;
-        } else {
+        }
+        else
+        {
             printfRed("[SyscallHandler::sys_getsockname] IPv6暂不支持\n");
             return SYS_EAFNOSUPPORT;
         }
@@ -7245,7 +7304,7 @@ namespace syscall
             return SYS_EFAULT;
         }
 
-        printfCyan("[SyscallHandler::sys_getsockname] getsockname成功, sockfd=%d, port=%d\n", 
+        printfCyan("[SyscallHandler::sys_getsockname] getsockname成功, sockfd=%d, port=%d\n",
                    sockfd, pstHandle->stSockAddr.usPort);
         return 0;
     }
@@ -7282,7 +7341,6 @@ namespace syscall
             return SYS_EBADF;
         }
 
-
         fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
         // 检查是否为socket文件
         if (f->_attrs.filetype != fs::FileTypes::FT_SOCKET)
@@ -7311,33 +7369,39 @@ namespace syscall
         uint64 dest_addr_ptr;
         socklen_t addrlen;
 
-        if (_arg_int(0, sockfd) < 0) {
+        if (_arg_int(0, sockfd) < 0)
+        {
             printfRed("[SyscallHandler::sys_sendto] 参数错误: sockfd\n");
             return SYS_EINVAL;
         }
 
-        if (_arg_addr(1, buf_ptr) < 0) {
+        if (_arg_addr(1, buf_ptr) < 0)
+        {
             printfRed("[SyscallHandler::sys_sendto] 参数错误: buf\n");
             return SYS_EINVAL;
         }
 
-        if (_arg_addr(2, len) < 0) {
+        if (_arg_addr(2, len) < 0)
+        {
             printfRed("[SyscallHandler::sys_sendto] 参数错误: len\n");
             return SYS_EINVAL;
         }
 
-        if (_arg_int(3, flags) < 0) {
+        if (_arg_int(3, flags) < 0)
+        {
             printfRed("[SyscallHandler::sys_sendto] 参数错误: flags\n");
             return SYS_EINVAL;
         }
 
-        if (_arg_addr(4, dest_addr_ptr) < 0) {
+        if (_arg_addr(4, dest_addr_ptr) < 0)
+        {
             printfRed("[SyscallHandler::sys_sendto] 参数错误: dest_addr\n");
             return SYS_EINVAL;
         }
 
         int addrlen_tmp;
-        if (_arg_int(5, addrlen_tmp) < 0) {
+        if (_arg_int(5, addrlen_tmp) < 0)
+        {
             printfRed("[SyscallHandler::sys_sendto] 参数错误: addrlen\n");
             return SYS_EINVAL;
         }
@@ -7345,7 +7409,8 @@ namespace syscall
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         fs::file *f = p->get_open_file(sockfd);
-        if (!f) {
+        if (!f)
+        {
             printfRed("[SyscallHandler::sys_sendto] 无效的文件描述符: %d\n", sockfd);
             return SYS_EBADF;
         }
@@ -7362,16 +7427,19 @@ namespace syscall
         // 分配内核缓冲区并复制数据
         eastl::vector<uint8_t> kernel_buf(len);
         mem::PageTable *pt = p->get_pagetable();
-        if (mem::k_vmm.copy_in(*pt, kernel_buf.data(), buf_ptr, len) < 0) {
+        if (mem::k_vmm.copy_in(*pt, kernel_buf.data(), buf_ptr, len) < 0)
+        {
             printfRed("[SyscallHandler::sys_sendto] 复制数据失败\n");
             return SYS_EFAULT;
         }
 
         // 复制目标地址
         struct sockaddr dest_addr;
-        if (dest_addr_ptr && addrlen > 0) {
-            if (mem::k_vmm.copy_in(*pt, &dest_addr, dest_addr_ptr, 
-                        eastl::min((size_t)addrlen, sizeof(dest_addr))) < 0) {
+        if (dest_addr_ptr && addrlen > 0)
+        {
+            if (mem::k_vmm.copy_in(*pt, &dest_addr, dest_addr_ptr,
+                                   eastl::min((size_t)addrlen, sizeof(dest_addr))) < 0)
+            {
                 printfRed("[SyscallHandler::sys_sendto] 复制目标地址失败\n");
                 return SYS_EFAULT;
             }
@@ -7379,19 +7447,23 @@ namespace syscall
 
         // 调用socket的sendto方法
         int result;
-        if (dest_addr_ptr && addrlen > 0) {
+        if (dest_addr_ptr && addrlen > 0)
+        {
             result = socket_f->sendto(kernel_buf.data(), len, flags, &dest_addr, addrlen);
-        } else {
+        }
+        else
+        {
             // 如果没有目标地址，等同于send
             result = socket_f->send(kernel_buf.data(), len, flags);
         }
 
-        if (result < 0) {
+        if (result < 0)
+        {
             printfRed("[SyscallHandler::sys_sendto] sendto失败: %d\n", result);
             return result;
         }
 
-        printfCyan("[SyscallHandler::sys_sendto] sendto成功, sockfd=%d, sent=%d bytes\n", 
+        printfCyan("[SyscallHandler::sys_sendto] sendto成功, sockfd=%d, sent=%d bytes\n",
                    sockfd, result);
         return result;
     }
@@ -7404,39 +7476,46 @@ namespace syscall
         uint64 src_addr_ptr;
         uint64 addrlen_ptr;
 
-        if (_arg_int(0, sockfd) < 0) {
+        if (_arg_int(0, sockfd) < 0)
+        {
             printfRed("[SyscallHandler::sys_recvfrom] 参数错误: sockfd\n");
             return SYS_EINVAL;
         }
 
-        if (_arg_addr(1, buf_ptr) < 0) {
+        if (_arg_addr(1, buf_ptr) < 0)
+        {
             printfRed("[SyscallHandler::sys_recvfrom] 参数错误: buf\n");
             return SYS_EINVAL;
         }
 
-        if (_arg_addr(2, len) < 0) {
+        if (_arg_addr(2, len) < 0)
+        {
             printfRed("[SyscallHandler::sys_recvfrom] 参数错误: len\n");
             return SYS_EINVAL;
         }
 
-        if (_arg_int(3, flags) < 0) {
+        if (_arg_int(3, flags) < 0)
+        {
             printfRed("[SyscallHandler::sys_recvfrom] 参数错误: flags\n");
             return SYS_EINVAL;
         }
 
-        if (_arg_addr(4, src_addr_ptr) < 0) {
+        if (_arg_addr(4, src_addr_ptr) < 0)
+        {
             printfRed("[SyscallHandler::sys_recvfrom] 参数错误: src_addr\n");
             return SYS_EINVAL;
         }
 
-        if (_arg_addr(5, addrlen_ptr) < 0) {
+        if (_arg_addr(5, addrlen_ptr) < 0)
+        {
             printfRed("[SyscallHandler::sys_recvfrom] 参数错误: addrlen\n");
             return SYS_EINVAL;
         }
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         fs::file *f = p->get_open_file(sockfd);
-        if (!f) {
+        if (!f)
+        {
             printfRed("[SyscallHandler::sys_recvfrom] 无效的文件描述符: %d\n", sockfd);
             return SYS_EBADF;
         }
@@ -7456,8 +7535,10 @@ namespace syscall
 
         // 获取地址长度
         socklen_t addrlen = 0;
-        if (addrlen_ptr) {
-            if (mem::k_vmm.copy_in(*pt, &addrlen, addrlen_ptr, sizeof(socklen_t)) < 0) {
+        if (addrlen_ptr)
+        {
+            if (mem::k_vmm.copy_in(*pt, &addrlen, addrlen_ptr, sizeof(socklen_t)) < 0)
+            {
                 printfRed("[SyscallHandler::sys_recvfrom] 复制addrlen失败\n");
                 return SYS_EFAULT;
             }
@@ -7468,37 +7549,42 @@ namespace syscall
         socklen_t orig_addrlen = addrlen;
 
         // 调用socket的recvfrom方法
-        int result = socket_f->recvfrom(kernel_buf.data(), len, flags, 
-                                       src_addr_ptr ? &src_addr : nullptr, 
-                                       src_addr_ptr ? &addrlen : nullptr);
+        int result = socket_f->recvfrom(kernel_buf.data(), len, flags,
+                                        src_addr_ptr ? &src_addr : nullptr,
+                                        src_addr_ptr ? &addrlen : nullptr);
 
-        if (result < 0) {
+        if (result < 0)
+        {
             printfRed("[SyscallHandler::sys_recvfrom] recvfrom失败: %d\n", result);
             return result;
         }
 
         // 复制数据到用户空间
-        if (mem::k_vmm.copy_out(*pt, buf_ptr, kernel_buf.data(), result) < 0) {
+        if (mem::k_vmm.copy_out(*pt, buf_ptr, kernel_buf.data(), result) < 0)
+        {
             printfRed("[SyscallHandler::sys_recvfrom] 复制数据到用户空间失败\n");
             return SYS_EFAULT;
         }
 
         // 复制源地址到用户空间（如果请求了）
-        if (src_addr_ptr && addrlen > 0) {
+        if (src_addr_ptr && addrlen > 0)
+        {
             size_t copy_len = eastl::min((size_t)addrlen, (size_t)orig_addrlen);
-            if (mem::k_vmm.copy_out(*pt, src_addr_ptr, &src_addr, copy_len) < 0) {
+            if (mem::k_vmm.copy_out(*pt, src_addr_ptr, &src_addr, copy_len) < 0)
+            {
                 printfRed("[SyscallHandler::sys_recvfrom] 复制源地址失败\n");
                 return SYS_EFAULT;
             }
 
             // 更新地址长度
-            if (mem::k_vmm.copy_out(*pt, addrlen_ptr, &addrlen, sizeof(socklen_t)) < 0) {
+            if (mem::k_vmm.copy_out(*pt, addrlen_ptr, &addrlen, sizeof(socklen_t)) < 0)
+            {
                 printfRed("[SyscallHandler::sys_recvfrom] 复制addrlen失败\n");
                 return SYS_EFAULT;
             }
         }
 
-        printfCyan("[SyscallHandler::sys_recvfrom] recvfrom成功, sockfd=%d, received=%d bytes\n", 
+        printfCyan("[SyscallHandler::sys_recvfrom] recvfrom成功, sockfd=%d, received=%d bytes\n",
                    sockfd, result);
         return result;
     }
@@ -7510,40 +7596,46 @@ namespace syscall
         uint64 optval_ptr;
         int optlen_tmp;
 
-        if (_arg_int(0, sockfd) < 0) {
+        if (_arg_int(0, sockfd) < 0)
+        {
             printfRed("[SyscallHandler::sys_setsockopt] 参数错误: sockfd\n");
             return SYS_EINVAL;
         }
 
-        if (_arg_int(1, level) < 0) {
+        if (_arg_int(1, level) < 0)
+        {
             printfRed("[SyscallHandler::sys_setsockopt] 参数错误: level\n");
             return SYS_EINVAL;
         }
 
-        if (_arg_int(2, optname) < 0) {
+        if (_arg_int(2, optname) < 0)
+        {
             printfRed("[SyscallHandler::sys_setsockopt] 参数错误: optname\n");
             return SYS_EINVAL;
         }
 
-        if (_arg_addr(3, optval_ptr) < 0) {
+        if (_arg_addr(3, optval_ptr) < 0)
+        {
             printfRed("[SyscallHandler::sys_setsockopt] 参数错误: optval\n");
             return SYS_EINVAL;
         }
 
-        if (_arg_int(4, optlen_tmp) < 0) {
+        if (_arg_int(4, optlen_tmp) < 0)
+        {
             printfRed("[SyscallHandler::sys_setsockopt] 参数错误: optlen\n");
             return SYS_EINVAL;
         }
 
-        if(is_bad_addr(optval_ptr))
-        {
-            return SYS_EFAULT;
-        }
+        // if (is_bad_addr(optval_ptr))
+        // {
+        //     return SYS_EFAULT;
+        // }
         socklen_t optlen = (socklen_t)optlen_tmp;
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         fs::file *f = p->get_open_file(sockfd);
-        if (!f) {
+        if (!f)
+        {
             printfRed("[SyscallHandler::sys_setsockopt] 无效的文件描述符: %d\n", sockfd);
             return SYS_EBADF;
         }
@@ -7560,19 +7652,21 @@ namespace syscall
         // 分配内核缓冲区并复制选项值
         eastl::vector<uint8_t> optval_buf(optlen);
         mem::PageTable *pt = p->get_pagetable();
-        if (mem::k_vmm.copy_in(*pt, optval_buf.data(), optval_ptr, optlen) < 0) {
+        if (mem::k_vmm.copy_in(*pt, optval_buf.data(), optval_ptr, optlen) < 0)
+        {
             printfRed("[SyscallHandler::sys_setsockopt] 复制optval失败\n");
             return SYS_EFAULT;
         }
 
         // 调用socket的setsockopt方法
         int result = socket_f->setsockopt(level, optname, optval_buf.data(), optlen);
-        if (result < 0) {
+        if (result < 0)
+        {
             printfRed("[SyscallHandler::sys_setsockopt] setsockopt失败: %d\n", result);
             return result;
         }
 
-        printfCyan("[SyscallHandler::sys_setsockopt] setsockopt成功, sockfd=%d, level=%d, optname=%d\n", 
+        printfCyan("[SyscallHandler::sys_setsockopt] setsockopt成功, sockfd=%d, level=%d, optname=%d\n",
                    sockfd, level, optname);
         return 0;
     }
@@ -7584,34 +7678,40 @@ namespace syscall
         uint64 optval_ptr;
         uint64 optlen_ptr;
 
-        if (_arg_int(0, sockfd) < 0) {
+        if (_arg_int(0, sockfd) < 0)
+        {
             printfRed("[SyscallHandler::sys_getsockopt] 参数错误: sockfd\n");
             return SYS_EINVAL;
         }
 
-        if (_arg_int(1, level) < 0) {
+        if (_arg_int(1, level) < 0)
+        {
             printfRed("[SyscallHandler::sys_getsockopt] 参数错误: level\n");
             return SYS_EINVAL;
         }
 
-        if (_arg_int(2, optname) < 0) {
+        if (_arg_int(2, optname) < 0)
+        {
             printfRed("[SyscallHandler::sys_getsockopt] 参数错误: optname\n");
             return SYS_EINVAL;
         }
 
-        if (_arg_addr(3, optval_ptr) < 0) {
+        if (_arg_addr(3, optval_ptr) < 0)
+        {
             printfRed("[SyscallHandler::sys_getsockopt] 参数错误: optval\n");
             return SYS_EINVAL;
         }
 
-        if (_arg_addr(4, optlen_ptr) < 0) {
+        if (_arg_addr(4, optlen_ptr) < 0)
+        {
             printfRed("[SyscallHandler::sys_getsockopt] 参数错误: optlen\n");
             return SYS_EINVAL;
         }
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         fs::file *f = p->get_open_file(sockfd);
-        if (!f) {
+        if (!f)
+        {
             printfRed("[SyscallHandler::sys_getsockopt] 无效的文件描述符: %d\n", sockfd);
             return SYS_EBADF;
         }
@@ -7628,7 +7728,8 @@ namespace syscall
         // 获取选项长度
         socklen_t optlen;
         mem::PageTable *pt = p->get_pagetable();
-        if (mem::k_vmm.copy_in(*pt, &optlen, optlen_ptr, sizeof(socklen_t)) < 0) {
+        if (mem::k_vmm.copy_in(*pt, &optlen, optlen_ptr, sizeof(socklen_t)) < 0)
+        {
             printfRed("[SyscallHandler::sys_getsockopt] 复制optlen失败\n");
             return SYS_EFAULT;
         }
@@ -7638,24 +7739,27 @@ namespace syscall
 
         // 调用socket的getsockopt方法
         int result = socket_f->getsockopt(level, optname, optval_buf.data(), &optlen);
-        if (result < 0) {
+        if (result < 0)
+        {
             printfRed("[SyscallHandler::sys_getsockopt] getsockopt失败: %d\n", result);
             return result;
         }
 
         // 复制选项值到用户空间
-        if (mem::k_vmm.copy_out(*pt, optval_ptr, optval_buf.data(), optlen) < 0) {
+        if (mem::k_vmm.copy_out(*pt, optval_ptr, optval_buf.data(), optlen) < 0)
+        {
             printfRed("[SyscallHandler::sys_getsockopt] 复制optval到用户空间失败\n");
             return SYS_EFAULT;
         }
 
         // 复制更新后的长度到用户空间
-        if (mem::k_vmm.copy_out(*pt, optlen_ptr, &optlen, sizeof(socklen_t)) < 0) {
+        if (mem::k_vmm.copy_out(*pt, optlen_ptr, &optlen, sizeof(socklen_t)) < 0)
+        {
             printfRed("[SyscallHandler::sys_getsockopt] 复制optlen到用户空间失败\n");
             return SYS_EFAULT;
         }
 
-        printfCyan("[SyscallHandler::sys_getsockopt] getsockopt成功, sockfd=%d, level=%d, optname=%d\n", 
+        printfCyan("[SyscallHandler::sys_getsockopt] getsockopt成功, sockfd=%d, level=%d, optname=%d\n",
                    sockfd, level, optname);
         return 0;
     }
@@ -7664,19 +7768,22 @@ namespace syscall
         int sockfd;
         int how;
 
-        if (_arg_int(0, sockfd) < 0) {
+        if (_arg_int(0, sockfd) < 0)
+        {
             printfRed("[SyscallHandler::sys_shutdown_socket] 参数错误: sockfd\n");
             return SYS_EINVAL;
         }
 
-        if (_arg_int(1, how) < 0) {
+        if (_arg_int(1, how) < 0)
+        {
             printfRed("[SyscallHandler::sys_shutdown_socket] 参数错误: how\n");
             return SYS_EINVAL;
         }
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         fs::file *f = p->get_open_file(sockfd);
-        if (!f) {
+        if (!f)
+        {
             printfRed("[SyscallHandler::sys_shutdown_socket] 无效的文件描述符: %d\n", sockfd);
             return SYS_EBADF;
         }
@@ -7692,12 +7799,13 @@ namespace syscall
 
         // 调用socket的shutdown方法
         int result = socket_f->shutdown(how);
-        if (result < 0) {
+        if (result < 0)
+        {
             printfRed("[SyscallHandler::sys_shutdown_socket] shutdown失败: %d\n", result);
             return result;
         }
 
-        printfCyan("[SyscallHandler::sys_shutdown_socket] shutdown成功, sockfd=%d, how=%d\n", 
+        printfCyan("[SyscallHandler::sys_shutdown_socket] shutdown成功, sockfd=%d, how=%d\n",
                    sockfd, how);
         return 0;
     }
@@ -7707,24 +7815,28 @@ namespace syscall
         uint64 msg_ptr;
         int flags;
 
-        if (_arg_int(0, sockfd) < 0) {
+        if (_arg_int(0, sockfd) < 0)
+        {
             printfRed("[SyscallHandler::sys_sendmsg] 参数错误: sockfd\n");
             return SYS_EINVAL;
         }
 
-        if (_arg_addr(1, msg_ptr) < 0) {
+        if (_arg_addr(1, msg_ptr) < 0)
+        {
             printfRed("[SyscallHandler::sys_sendmsg] 参数错误: msg\n");
             return SYS_EINVAL;
         }
 
-        if (_arg_int(2, flags) < 0) {
+        if (_arg_int(2, flags) < 0)
+        {
             printfRed("[SyscallHandler::sys_sendmsg] 参数错误: flags\n");
             return SYS_EINVAL;
         }
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         fs::file *f = p->get_open_file(sockfd);
-        if (!f) {
+        if (!f)
+        {
             printfRed("[SyscallHandler::sys_sendmsg] 无效的文件描述符: %d\n", sockfd);
             return SYS_EBADF;
         }
@@ -7742,33 +7854,39 @@ namespace syscall
         struct msghdr msg;
         proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = pcb->get_pagetable();
-        
-        if (mem::k_vmm.copy_in(*pt, &msg, msg_ptr, sizeof(msg)) < 0) {
+
+        if (mem::k_vmm.copy_in(*pt, &msg, msg_ptr, sizeof(msg)) < 0)
+        {
             printfRed("[SyscallHandler::sys_sendmsg] 复制msghdr失败\n");
             return SYS_EFAULT;
         }
 
         // 验证并复制 iovec 数组
-        if (msg.msg_iovlen > IOV_MAX) {
+        if (msg.msg_iovlen > IOV_MAX)
+        {
             printfRed("[SyscallHandler::sys_sendmsg] iovec数组过大: %lu\n", msg.msg_iovlen);
             return SYS_EINVAL;
         }
 
         // 分配内核空间的 iovec 数组
         eastl::vector<struct iovec> kernel_iov(msg.msg_iovlen);
-        if (mem::k_vmm.copy_in(*pt, kernel_iov.data(), (uint64)msg.msg_iov, 
-                   msg.msg_iovlen * sizeof(struct iovec)) < 0) {
+        if (mem::k_vmm.copy_in(*pt, kernel_iov.data(), (uint64)msg.msg_iov,
+                               msg.msg_iovlen * sizeof(struct iovec)) < 0)
+        {
             printfRed("[SyscallHandler::sys_sendmsg] 复制iovec数组失败\n");
             return SYS_EFAULT;
         }
 
         // 验证每个 iovec 项并分配缓冲区
         eastl::vector<eastl::vector<uint8_t>> data_buffers(msg.msg_iovlen);
-        for (size_t i = 0; i < msg.msg_iovlen; i++) {
-            if (kernel_iov[i].iov_len > 0) {
+        for (size_t i = 0; i < msg.msg_iovlen; i++)
+        {
+            if (kernel_iov[i].iov_len > 0)
+            {
                 data_buffers[i].resize(kernel_iov[i].iov_len);
-                if (mem::k_vmm.copy_in(*pt, data_buffers[i].data(), (uint64)kernel_iov[i].iov_base, 
-                           kernel_iov[i].iov_len) < 0) {
+                if (mem::k_vmm.copy_in(*pt, data_buffers[i].data(), (uint64)kernel_iov[i].iov_base,
+                                       kernel_iov[i].iov_len) < 0)
+                {
                     printfRed("[SyscallHandler::sys_sendmsg] 复制数据失败: %lu\n", i);
                     return SYS_EFAULT;
                 }
@@ -7779,12 +7897,15 @@ namespace syscall
 
         // 处理目标地址（如果有）
         struct sockaddr_in dest_addr;
-        if (msg.msg_name && msg.msg_namelen > 0) {
-            if (msg.msg_namelen < sizeof(struct sockaddr_in)) {
+        if (msg.msg_name && msg.msg_namelen > 0)
+        {
+            if (msg.msg_namelen < sizeof(struct sockaddr_in))
+            {
                 printfRed("[SyscallHandler::sys_sendmsg] 地址长度不足\n");
                 return SYS_EINVAL;
             }
-            if (mem::k_vmm.copy_in(*pt, &dest_addr, (uint64)msg.msg_name, sizeof(dest_addr)) < 0) {
+            if (mem::k_vmm.copy_in(*pt, &dest_addr, (uint64)msg.msg_name, sizeof(dest_addr)) < 0)
+            {
                 printfRed("[SyscallHandler::sys_sendmsg] 复制目标地址失败\n");
                 return SYS_EFAULT;
             }
@@ -7793,18 +7914,20 @@ namespace syscall
         // 构造内核版本的 msghdr
         struct msghdr kernel_msg = msg;
         kernel_msg.msg_iov = kernel_iov.data();
-        if (msg.msg_name) {
+        if (msg.msg_name)
+        {
             kernel_msg.msg_name = &dest_addr;
         }
 
         // 调用 socket 的 sendmsg 方法
         int result = socket_f->sendmsg(&kernel_msg, flags);
-        if (result < 0) {
+        if (result < 0)
+        {
             printfRed("[SyscallHandler::sys_sendmsg] sendmsg失败: %d\n", result);
             return result;
         }
 
-        printfCyan("[SyscallHandler::sys_sendmsg] sendmsg成功, sockfd=%d, sent=%d bytes\n", 
+        printfCyan("[SyscallHandler::sys_sendmsg] sendmsg成功, sockfd=%d, sent=%d bytes\n",
                    sockfd, result);
         return result;
     }
@@ -7945,11 +8068,11 @@ namespace syscall
 
         // 保存原始VMA状态用于回滚
         proc::vma original_vma = *vm;
-        
+
         // 记录我们创建的新VMA索引，用于失败时清理
         int created_vma_indices[2] = {-1, -1}; // 最多创建2个新VMA（前段用原VMA，中段和后段用新VMA）
         int created_vma_count = 0;
-        
+
         // 如果要修改的范围与整个VMA完全一致，直接修改VMA权限
         if (addr == vma_start && end_addr == vma_end)
         {
@@ -7964,7 +8087,7 @@ namespace syscall
             // 查找空闲的VMA槽位
             int free_vma_count = 0;
             int free_vma_indices[3]; // 最多需要3个新的VMA（前、中、后）
-            
+
             for (int i = 0; i < proc::NVMA; i++)
             {
                 if (!pcb->get_vma()->_vm[i].used && free_vma_count < 3)
@@ -7975,9 +8098,11 @@ namespace syscall
 
             // 计算需要多少个VMA分段
             int segments_needed = 0;
-            if (addr > vma_start) segments_needed++; // 前段
-            segments_needed++; // 中段（要修改权限的部分）
-            if (end_addr < vma_end) segments_needed++; // 后段
+            if (addr > vma_start)
+                segments_needed++; // 前段
+            segments_needed++;     // 中段（要修改权限的部分）
+            if (end_addr < vma_end)
+                segments_needed++; // 后段
 
             if (free_vma_count < segments_needed - 1)
             {
@@ -8021,7 +8146,7 @@ namespace syscall
             middle_vm->addr = addr;
             middle_vm->len = aligned_len;
             middle_vm->prot = prot;
-            
+
             // 调整文件偏移（如果是文件映射）
             if (middle_vm->vfile != nullptr)
             {
@@ -8040,14 +8165,14 @@ namespace syscall
             {
                 int back_vma_idx = free_vma_indices[next_free_idx++];
                 created_vma_indices[created_vma_count++] = back_vma_idx;
-                
+
                 proc::vma *back_vm = &pcb->get_vma()->_vm[back_vma_idx];
                 *back_vm = original_vma; // 复制原VMA的所有属性
                 back_vm->used = 1;
                 back_vm->addr = end_addr;
                 back_vm->len = vma_end - end_addr;
                 back_vm->prot = old_prot; // 保持原来的权限
-                
+
                 // 调整文件偏移（如果是文件映射）
                 if (back_vm->vfile != nullptr)
                 {
@@ -8065,11 +8190,11 @@ namespace syscall
         {
             printfRed("[sys_mprotect] protectpages failed for range [%p, %p), rolling back VMA changes\n",
                       (void *)addr, (void *)end_addr);
-            
+
             // 恢复VMA状态
             // 1. 恢复原始VMA
             *vm = original_vma;
-            
+
             // 2. 清理我们创建的新VMA
             for (int i = 0; i < created_vma_count; i++)
             {
@@ -8077,20 +8202,20 @@ namespace syscall
                 if (idx >= 0 && idx < proc::NVMA)
                 {
                     proc::vma *cleanup_vm = &pcb->get_vma()->_vm[idx];
-                    
+
                     // 释放文件引用（如果有）
                     if (cleanup_vm->vfile != nullptr)
                     {
                         cleanup_vm->vfile->free_file();
                     }
-                    
+
                     // 清零VMA结构
                     memset(cleanup_vm, 0, sizeof(proc::vma));
-                    
+
                     printfYellow("[sys_mprotect] Cleaned up VMA[%d] during rollback\n", idx);
                 }
             }
-            
+
             printfYellow("[sys_mprotect] VMA state successfully rolled back\n");
             return syscall::SYS_EFAULT;
         }
@@ -8114,115 +8239,124 @@ namespace syscall
     }
     /**
      * sys_clone3 - 基于 struct clone_args 的新式 clone 系统调用
-     * 
+     *
      * 相比于 sys_clone, sys_clone3 有以下主要区别：
      * 1. 使用结构体传递参数，而不是多个单独的参数，提供更好的可扩展性
      * 2. 支持更多的 clone 标志和特性（如 pidfd, set_tid 等）
      * 3. 具有更严格的参数验证和错误处理
      * 4. 支持向后兼容的结构体大小检查
-     * 
+     *
      * 参数：
      * - args_addr: 指向 struct clone_args 的用户空间地址
      * - args_size: struct clone_args 的大小（用于向后兼容）
-     * 
+     *
      * 返回值：
      * - 成功：新创建进程的 PID
      * - 失败：负数错误码
      */
-    
+
     // clone3 参数结构体，对应 Linux 内核的 struct clone_args
-    struct clone_args {
-        uint64 flags;          // clone 标志位
-        uint64 pidfd;          // 指向存储新进程文件描述符的位置
-        uint64 child_tid;      // 指向存储子进程 TID 的位置
-        uint64 parent_tid;     // 指向存储父进程 TID 的位置
-        uint64 exit_signal;    // 子进程退出时发送给父进程的信号
-        uint64 stack;          // 栈地址
-        uint64 stack_size;     // 栈大小
-        uint64 tls;            // TLS (线程本地存储) 地址
-        uint64 set_tid;        // 指向 TID 数组的指针
-        uint64 set_tid_size;   // TID 数组的大小
-        uint64 cgroup;         // cgroup 文件描述符
+    struct clone_args
+    {
+        uint64 flags;        // clone 标志位
+        uint64 pidfd;        // 指向存储新进程文件描述符的位置
+        uint64 child_tid;    // 指向存储子进程 TID 的位置
+        uint64 parent_tid;   // 指向存储父进程 TID 的位置
+        uint64 exit_signal;  // 子进程退出时发送给父进程的信号
+        uint64 stack;        // 栈地址
+        uint64 stack_size;   // 栈大小
+        uint64 tls;          // TLS (线程本地存储) 地址
+        uint64 set_tid;      // 指向 TID 数组的指针
+        uint64 set_tid_size; // TID 数组的大小
+        uint64 cgroup;       // cgroup 文件描述符
     };
 
     uint64 SyscallHandler::sys_clone3()
     {
         panic("未实现该系统调用");
         TODO("TBF")
-        
+
         uint64 args_addr;
         uint64 args_size;
         struct clone_args args;
-        
+
         // 获取参数：clone_args 结构体地址和大小
-        if (_arg_addr(0, args_addr) < 0) {
+        if (_arg_addr(0, args_addr) < 0)
+        {
             printfRed("[SyscallHandler::sys_clone3] Error fetching clone_args address\n");
             return SYS_EFAULT;
         }
-        
-        if (_arg_addr(1, args_size) < 0) {
+
+        if (_arg_addr(1, args_size) < 0)
+        {
             printfRed("[SyscallHandler::sys_clone3] Error fetching clone_args size\n");
             return SYS_EFAULT;
         }
-        
+
         // 验证参数大小
-        if (args_size < sizeof(uint64)) { // 至少要有 flags 字段
+        if (args_size < sizeof(uint64))
+        { // 至少要有 flags 字段
             printfRed("[SyscallHandler::sys_clone3] Invalid args_size: %llu\n", args_size);
             return SYS_EINVAL;
         }
-        
-        if (args_size > sizeof(struct clone_args)) {
+
+        if (args_size > sizeof(struct clone_args))
+        {
             printfRed("[SyscallHandler::sys_clone3] args_size too large: %llu\n", args_size);
             return SYS_E2BIG;
         }
-        
+
         // 从用户空间复制 clone_args 结构体
         proc::Pcb *cur = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = cur->get_pagetable();
-        
+
         // 初始化 args 结构体为 0
         memset(&args, 0, sizeof(args));
-        
+
         // 只复制用户提供的大小，避免越界
-        if (mem::k_vmm.copy_in(*pt, &args, args_addr, args_size) != 0) {
+        if (mem::k_vmm.copy_in(*pt, &args, args_addr, args_size) != 0)
+        {
             printfRed("[SyscallHandler::sys_clone3] Error copying clone_args from user space\n");
             return SYS_EFAULT;
         }
-        
+
         printfCyan("[SyscallHandler::sys_clone3] flags: 0x%lx, stack: %p, child_tid: %p, parent_tid: %p, tls: %p\n",
                    args.flags, (void *)args.stack, (void *)args.child_tid, (void *)args.parent_tid, (void *)args.tls);
-        
+
         // 验证标志位
-        if (args.flags & ~(CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | 
-                          CLONE_PTRACE | CLONE_VFORK | CLONE_PARENT | CLONE_THREAD |
-                          CLONE_NEWNS | CLONE_SYSVSEM | CLONE_SETTLS | 
-                          CLONE_PARENT_SETTID | CLONE_CHILD_CLEARTID | 
-                          CLONE_DETACHED | CLONE_UNTRACED | CLONE_CHILD_SETTID |
-                          CLONE_NEWCGROUP | CLONE_NEWUTS | CLONE_NEWIPC |
-                          CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNET | CLONE_IO |
-                          CLONE_NEWTIME | CLONE_PIDFD | CSIGNAL)) {
+        if (args.flags & ~(CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND |
+                           CLONE_PTRACE | CLONE_VFORK | CLONE_PARENT | CLONE_THREAD |
+                           CLONE_NEWNS | CLONE_SYSVSEM | CLONE_SETTLS |
+                           CLONE_PARENT_SETTID | CLONE_CHILD_CLEARTID |
+                           CLONE_DETACHED | CLONE_UNTRACED | CLONE_CHILD_SETTID |
+                           CLONE_NEWCGROUP | CLONE_NEWUTS | CLONE_NEWIPC |
+                           CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNET | CLONE_IO |
+                           CLONE_NEWTIME | CLONE_PIDFD | CSIGNAL))
+        {
             printfRed("[SyscallHandler::sys_clone3] Invalid flags: 0x%lx\n", args.flags);
             return SYS_EINVAL;
         }
-        
+
         // 暂时不支持某些复杂特性
         if (args.flags & (CLONE_PIDFD | CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC |
-                         CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWTIME |
-                         CLONE_NEWCGROUP)) {
+                          CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWTIME |
+                          CLONE_NEWCGROUP))
+        {
             printfRed("[SyscallHandler::sys_clone3] Unsupported flags: 0x%lx\n", args.flags);
-            return SYS_ENOSYS;  // 功能未实现
+            return SYS_ENOSYS; // 功能未实现
         }
-        
+
         // 如果设置了 CLONE_SETTLS 但没有提供 TLS 地址，返回错误
-        if ((args.flags & CLONE_SETTLS) && args.tls == 0) {
+        if ((args.flags & CLONE_SETTLS) && args.tls == 0)
+        {
             printfRed("[SyscallHandler::sys_clone3] CLONE_SETTLS set but tls is null\n");
             return SYS_EINVAL;
         }
-        
+
         // 调用底层的 clone 函数，传入相应的参数
-        uint64 clone_pid = proc::k_pm.clone(args.flags, args.stack, args.parent_tid, 
-                                           args.tls, args.child_tid);
-        
+        uint64 clone_pid = proc::k_pm.clone(args.flags, args.stack, args.parent_tid,
+                                            args.tls, args.child_tid);
+
         printfCyan("[SyscallHandler::sys_clone3] Created process with PID: %llu\n", clone_pid);
         return clone_pid;
     }
@@ -8235,7 +8369,7 @@ namespace syscall
     uint64 SyscallHandler::sys_semop()
     {
         return 0;
-       panic("未实现该系统调用");
+        panic("未实现该系统调用");
     }
 
     uint64 SyscallHandler::sys_semget()
@@ -8715,19 +8849,18 @@ namespace syscall
 
         // 从用户空间复制字符串
 
-        int cpres = mem::k_vmm.copy_str_in(*pt, target, target_addr, 256) ;
+        int cpres = mem::k_vmm.copy_str_in(*pt, target, target_addr, 256);
         if (cpres < 0)
         {
             printfRed("[sys_symlinkat] Error copying path from user space\n");
             return cpres;
         }
-        cpres = mem::k_vmm.copy_str_in(*pt, linkpath, linkpath_addr, 256) ;
+        cpres = mem::k_vmm.copy_str_in(*pt, linkpath, linkpath_addr, 256);
         if (cpres < 0)
         {
             printfRed("[sys_symlinkat] Error copying path from user space\n");
             return cpres;
         }
-
 
         eastl::string abs_linkpath;
 
@@ -8919,13 +9052,13 @@ namespace syscall
             printfRed("[SyscallHandler::sys_truncate] 参数错误\n");
             return SYS_EINVAL; // 参数错误
         }
-int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), pathname, addr, 256) ;
+        int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), pathname, addr, 256);
         if (cpres < 0)
         {
             printfRed("[sys_fstatfs] Error copying path from user space\n");
             return cpres;
         }
-        
+
         pathname = get_absolute_path(pathname.c_str(), proc::k_pm.get_cur_pcb()->_cwd_name.c_str());
         if (fs::k_vfs.is_file_exist(pathname.c_str()) != 1)
         {
@@ -9071,8 +9204,8 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             printfRed("[SyscallHandler::sys_fchmodat] 参数错误\n");
             return SYS_EINVAL; // 参数错误
         }
-        int rs=_arg_str(1, pathname, MAXPATH) ;
-        if(rs<0)
+        int rs = _arg_str(1, pathname, MAXPATH);
+        if (rs < 0)
         {
             return rs; // 参数错误
         }
@@ -9106,11 +9239,11 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
                     printfRed("[SyscallHandler::sys_fchmodat] 无效的dirfd: %d\n", dirfd);
                     return SYS_EBADF; // 无效的文件描述符
                 }
-            if (dir_file && dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
-            {
-                printfRed("[SyscallHandler::sys_fchmodat] dirfd %d不是目录，文件类型: %d\n", dirfd, (int)dir_file->_attrs.filetype);
-                return SYS_ENOTDIR; // 不是目录
-            }
+                if (dir_file && dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
+                {
+                    printfRed("[SyscallHandler::sys_fchmodat] dirfd %d不是目录，文件类型: %d\n", dirfd, (int)dir_file->_attrs.filetype);
+                    return SYS_ENOTDIR; // 不是目录
+                }
                 // 检查dirfd是否以 O_PATH 标志打开
                 if (dir_file->lwext4_file_struct.flags & O_PATH)
                 {
@@ -9156,20 +9289,20 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
         }
 
         fs::file *file = nullptr;
-        int res =fs::k_vfs.openat(abs_pathname, file, O_RDONLY);
-        if(res<0)
+        int res = fs::k_vfs.openat(abs_pathname, file, O_RDONLY);
+        if (res < 0)
         {
             printfRed("[SyscallHandler::sys_fchmodat] 无法打开文件: %s, 错误码: %d\n", abs_pathname.c_str(), res);
             return res; // 返回错误码
         }
         proc::Pcb *cur_pcb = proc::k_pm.get_cur_pcb();
-        if(cur_pcb->_uid!= 0 && cur_pcb->_uid != file->lwext4_file_struct.flags)
-        if (file->lwext4_file_struct.flags & O_PATH)
-        {
-            printfRed("[SyscallHandler::sys_fchmodat] O_PATH标志打开的文件不允许修改权限\n");
-            file->free_file();
-            return SYS_EBADF; // 无效的文件描述符
-        }
+        if (cur_pcb->_uid != 0 && cur_pcb->_uid != file->lwext4_file_struct.flags)
+            if (file->lwext4_file_struct.flags & O_PATH)
+            {
+                printfRed("[SyscallHandler::sys_fchmodat] O_PATH标志打开的文件不允许修改权限\n");
+                file->free_file();
+                return SYS_EBADF; // 无效的文件描述符
+            }
         // 检查文件是否存在
 
         file->free_file();
@@ -9242,7 +9375,8 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             // group 变更：非特权要求调用者是文件所有者，且组为调用者所属组之一（这里仅检查 gid/egid）
             if (group != -1 && !privileged)
             {
-                uint32_t fuid = 0, fgid = 0; int r0 = vfs_owner_get(target_path, fuid, fgid, /*follow_symlinks*/ true);
+                uint32_t fuid = 0, fgid = 0;
+                int r0 = vfs_owner_get(target_path, fuid, fgid, /*follow_symlinks*/ true);
                 if (r0 != EOK)
                     return -EACCES;
                 if (fuid != p->get_euid())
@@ -9252,12 +9386,14 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             }
 
             int rc = vfs_chown(target_path, owner, group, /*follow_symlinks*/ true);
-            if (rc < 0) return rc;
+            if (rc < 0)
+                return rc;
 
             // 非特权变更：清除 S_ISUID 和条件清除 S_ISGID
             if (!privileged)
             {
-                uint32_t mode = 0; int mg = vfs_mode_get(target_path, mode, /*follow_symlinks*/ true);
+                uint32_t mode = 0;
+                int mg = vfs_mode_get(target_path, mode, /*follow_symlinks*/ true);
                 if (mg == EOK)
                 {
                     uint32_t new_mode = mode & ~S_ISUID;
@@ -9306,7 +9442,11 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             eastl::string fd_str = abs_pathname.substr(14);
             int tfd = 0;
             for (size_t i = 0; i < fd_str.size(); ++i)
-            { if (fd_str[i] < '0' || fd_str[i] > '9') break; tfd = tfd * 10 + (fd_str[i] - '0'); }
+            {
+                if (fd_str[i] < '0' || fd_str[i] > '9')
+                    break;
+                tfd = tfd * 10 + (fd_str[i] - '0');
+            }
             fs::file *target_file = p->get_open_file(tfd);
             if (!target_file)
                 return SYS_EBADF;
@@ -9319,20 +9459,26 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             return SYS_EPERM;
         if (group != -1 && !privileged)
         {
-            uint32_t fuid = 0, fgid = 0; int r0 = vfs_owner_get(abs_pathname, fuid, fgid, /*follow_symlinks*/ !(flags & AT_SYMLINK_NOFOLLOW));
-            if (r0 != EOK) return -EACCES;
-            if (fuid != p->get_euid()) return SYS_EPERM;
-            if (!(group == (int)p->get_gid() || group == (int)p->get_egid())) return SYS_EPERM;
+            uint32_t fuid = 0, fgid = 0;
+            int r0 = vfs_owner_get(abs_pathname, fuid, fgid, /*follow_symlinks*/ !(flags & AT_SYMLINK_NOFOLLOW));
+            if (r0 != EOK)
+                return -EACCES;
+            if (fuid != p->get_euid())
+                return SYS_EPERM;
+            if (!(group == (int)p->get_gid() || group == (int)p->get_egid()))
+                return SYS_EPERM;
         }
 
         // 是否跟随符号链接
         bool follow = !(flags & AT_SYMLINK_NOFOLLOW);
         int rc = vfs_chown(abs_pathname, owner, group, follow);
-        if (rc < 0) return rc;
+        if (rc < 0)
+            return rc;
 
         if (!privileged)
         {
-            uint32_t mode = 0; int mg = vfs_mode_get(abs_pathname, mode, /*follow_symlinks*/ !(flags & AT_SYMLINK_NOFOLLOW));
+            uint32_t mode = 0;
+            int mg = vfs_mode_get(abs_pathname, mode, /*follow_symlinks*/ !(flags & AT_SYMLINK_NOFOLLOW));
             if (mg == EOK)
             {
                 uint32_t new_mode = mode & ~S_ISUID;
@@ -9392,19 +9538,25 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
         // group 变更：非特权要求调用者是文件所有者，且组属于调用者
         if (gid != -1 && !privileged)
         {
-            uint32_t fuid = 0, fgid = 0; int r0 = vfs_owner_get(path, fuid, fgid, /*follow_symlinks*/ true);
-            if (r0 != EOK) return -EACCES;
-            if (fuid != p->get_euid()) return -EPERM;
-            if (!(gid == (int)p->get_gid() || gid == (int)p->get_egid())) return -EPERM;
+            uint32_t fuid = 0, fgid = 0;
+            int r0 = vfs_owner_get(path, fuid, fgid, /*follow_symlinks*/ true);
+            if (r0 != EOK)
+                return -EACCES;
+            if (fuid != p->get_euid())
+                return -EPERM;
+            if (!(gid == (int)p->get_gid() || gid == (int)p->get_egid()))
+                return -EPERM;
         }
 
         int rc = vfs_chown(path, uid, gid, /*follow_symlinks*/ true);
-        if (rc < 0) return rc;
+        if (rc < 0)
+            return rc;
 
         // 非特权变更清位
         if (!privileged)
         {
-            uint32_t mode = 0; int mg = vfs_mode_get(path, mode, /*follow_symlinks*/ true);
+            uint32_t mode = 0;
+            int mg = vfs_mode_get(path, mode, /*follow_symlinks*/ true);
             if (mg == EOK)
             {
                 uint32_t new_mode = mode & ~S_ISUID;
@@ -9441,7 +9593,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
         // https://www.man7.org/linux/man-pages/man2/clock_getres.2.html
         int clock_id;
         uint64 res_addr;
-        
+
         // 获取参数
         if (_arg_int(0, clock_id) < 0)
         {
@@ -9457,7 +9609,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
         // 检查clock_id是否有效
         tmm::timespec resolution;
         bool valid_clock = true;
-        
+
         switch (clock_id)
         {
         case SYS_CLOCK_REALTIME:
@@ -9473,7 +9625,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             resolution.tv_sec = 0;
             resolution.tv_nsec = 1;
             break;
-            
+
         case SYS_CLOCK_REALTIME_COARSE:
         case SYS_CLOCK_MONOTONIC_COARSE:
             // 粗粒度时钟：较低精度但更高性能
@@ -9481,7 +9633,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             resolution.tv_sec = 0;
             resolution.tv_nsec = 1000000; // 1毫秒 = 1,000,000纳秒
             break;
-            
+
         case SYS_CLOCK_REALTIME_ALARM:
         case SYS_CLOCK_BOOTTIME_ALARM:
             // 闹钟时钟：与对应的基础时钟具有相同的分辨率
@@ -9489,7 +9641,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             resolution.tv_sec = 0;
             resolution.tv_nsec = 1;
             break;
-            
+
         case SYS_CLOCK_SGI_CYCLE:
             // SGI周期计数器（已废弃）
             // 虽然已废弃，但为了兼容性仍需支持查询
@@ -9497,30 +9649,30 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             resolution.tv_sec = 0;
             resolution.tv_nsec = 1;
             break;
-            
+
         default:
             valid_clock = false;
             break;
         }
-        
+
         if (!valid_clock)
         {
             printfRed("[SyscallHandler::sys_clock_getres] Invalid clock_id: %d\n", clock_id);
             return SYS_EINVAL;
         }
-        
+
         // 如果res指针为NULL，仅检查clock_id有效性即可
         if (res_addr == 0)
         {
             return 0;
         }
-        
-        // 检查地址是否有效
-        if (is_bad_addr(res_addr))
-        {
-            return SYS_EFAULT;
-        }
-        
+
+        // // 检查地址是否有效
+        // if (is_bad_addr(res_addr))
+        // {
+        //     return SYS_EFAULT;
+        // }
+
         // 将分辨率信息拷贝到用户空间
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
@@ -9529,10 +9681,10 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             printfRed("[SyscallHandler::sys_clock_getres] Error copying resolution to user space\n");
             return SYS_EFAULT;
         }
-        
-        printfCyan("[SyscallHandler::sys_clock_getres] clock_id: %d, resolution: %ld.%09ld\n", 
+
+        printfCyan("[SyscallHandler::sys_clock_getres] clock_id: %d, resolution: %ld.%09ld\n",
                    clock_id, resolution.tv_sec, resolution.tv_nsec);
-        
+
         return 0;
     }
     uint64 SyscallHandler::sys_sched_setscheduler()
@@ -9570,8 +9722,8 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
         // 检查信号集大小
         if (sigsize != sizeof(signal::sigset_t))
         {
-            printfRed("[sys_rt_sigsuspend] Invalid sigsize: %d, expected: %d\n", 
-                     sigsize, (int)sizeof(signal::sigset_t));
+            printfRed("[sys_rt_sigsuspend] Invalid sigsize: %d, expected: %d\n",
+                      sigsize, (int)sizeof(signal::sigset_t));
             return syscall::SYS_EINVAL; // EINVAL
         }
 
@@ -9785,30 +9937,32 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
     uint64 SyscallHandler::sys_fadvise64()
     {
         int fd;
-        uint64 offset_addr,size_addr;
+        uint64 offset_addr, size_addr;
         off_t offset;
         off_t size;
         int advice;
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        fs::file *file ;
+        fs::file *file;
         // 获取参数
-        if (_arg_fd(0, &fd,&file) < 0 )
+        if (_arg_fd(0, &fd, &file) < 0)
         {
             printfRed("[SyscallHandler::sys_fadvise64] 无效的文件描述符\n");
             return SYS_EBADF; // 无效的文件描述符
         }
-        if(_arg_addr(1, offset_addr) < 0 ||
+        if (_arg_addr(1, offset_addr) < 0 ||
             _arg_addr(2, size_addr) < 0 || _arg_int(3, advice) < 0)
-        {            printfRed("[SyscallHandler::sys_fadvise64] 参数错误\n");
+        {
+            printfRed("[SyscallHandler::sys_fadvise64] 参数错误\n");
             return SYS_EINVAL; // 参数错误
         }
-        if( mem::k_vmm.copy_in(*p->get_pagetable(), &offset, offset_addr, sizeof(offset)) < 0 ||
+        if (mem::k_vmm.copy_in(*p->get_pagetable(), &offset, offset_addr, sizeof(offset)) < 0 ||
             mem::k_vmm.copy_in(*p->get_pagetable(), &size, size_addr, sizeof(size)) < 0)
-        {            printfRed("[SyscallHandler::sys_fadvise64] 拷贝参数失败\n");
+        {
+            printfRed("[SyscallHandler::sys_fadvise64] 拷贝参数失败\n");
             return SYS_EFAULT; // 拷贝参数失败
         }
 
-        if(file->_attrs.filetype== fs::FileTypes::FT_PIPE)
+        if (file->_attrs.filetype == fs::FileTypes::FT_PIPE)
         {
             printfRed("[SyscallHandler::sys_fadvise64] 无法对管道文件进行fadvise\n");
             return SYS_ESPIPE; // 无效的文件类型
@@ -9843,7 +9997,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             return SYS_EINVAL; // 无效的建议
         }
 
-        //没有实际功能，就是错误处理
+        // 没有实际功能，就是错误处理
         return 0;
     }
     uint64 SyscallHandler::sys_msync()
@@ -10627,7 +10781,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
     }
     uint64 SyscallHandler::sys_memfd_create()
     {
- // int memfd_create(const char *name, unsigned int flags)
+        // int memfd_create(const char *name, unsigned int flags)
         // 支持标志：MFD_CLOEXEC(0x0001), MFD_ALLOW_SEALING(0x0002)
         // 其余标志一律返回 EINVAL。
         // 语义：在匿名内存文件系统中创建一个匿名文件句柄。这里复用 VFS 的 O_TMPFILE 机制在 /tmp 下创建匿名文件。
@@ -10725,7 +10879,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
         int clockid;
         uint64 sevp_addr;
         uint64 timerid_addr;
-        
+
         // 获取参数
         if (_arg_int(0, clockid) < 0)
         {
@@ -10742,14 +10896,14 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             printfRed("[SyscallHandler::sys_timer_create] Error fetching timerid argument\n");
             return SYS_EINVAL;
         }
-        
+
         // 检查 timerid 指针是否有效（不能为 NULL）
         if (timerid_addr == 0)
         {
             printfRed("[SyscallHandler::sys_timer_create] timerid cannot be NULL\n");
             return SYS_EINVAL;
         }
-        
+
         // 验证 clockid 是否有效
         switch (clockid)
         {
@@ -10766,7 +10920,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             printfRed("[SyscallHandler::sys_timer_create] Invalid clockid: %d\n", clockid);
             return SYS_EINVAL;
         }
-        
+
         // 检查特权时钟（需要 CAP_WAKE_ALARM 权限）
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         if ((clockid == SYS_CLOCK_REALTIME_ALARM || clockid == SYS_CLOCK_BOOTTIME_ALARM))
@@ -10778,17 +10932,17 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
                 return SYS_EPERM;
             }
         }
-        
+
         mem::PageTable *pt = p->get_pagetable();
-        
+
         // SIGEV_* 常量定义
         constexpr int SIGEV_NONE = 1;
         constexpr int SIGEV_SIGNAL = 0;
         constexpr int SIGEV_THREAD = 2;
-        
+
         // 使用全局定义的 sigevent 结构体
         extended_posix_timer::sigevent sev;
-        
+
         // 处理 sevp 参数
         if (sevp_addr == 0)
         {
@@ -10805,16 +10959,16 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
                 printfRed("[SyscallHandler::sys_timer_create] Error copying sigevent from user space\n");
                 return SYS_EFAULT;
             }
-            
+
             // 验证 sigev_notify 字段
-            if (sev.sigev_notify != SIGEV_NONE && 
+            if (sev.sigev_notify != SIGEV_NONE &&
                 sev.sigev_notify != SIGEV_SIGNAL &&
                 sev.sigev_notify != SIGEV_THREAD)
             {
                 printfRed("[SyscallHandler::sys_timer_create] Invalid sigev_notify: %d\n", sev.sigev_notify);
                 return SYS_EINVAL;
             }
-            
+
             // 如果是信号通知，验证信号编号
             if (sev.sigev_notify == SIGEV_SIGNAL)
             {
@@ -10825,10 +10979,10 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
                 }
             }
         }
-        
+
         // 统一的扩展定时器结构体定义（在所有定时器函数之间共享）
         // 使用全局定时器数组（统一的定时器管理）
-        
+
         // 初始化定时器数组（第一次调用时）
         if (!g_timers_initialized)
         {
@@ -10850,7 +11004,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             }
             g_timers_initialized = true;
         }
-        
+
         // 查找空闲的定时器槽位
         int timer_slot = -1;
         for (int i = 0; i < 32; i++)
@@ -10861,20 +11015,20 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
                 break;
             }
         }
-        
+
         if (timer_slot == -1)
         {
             printfRed("[SyscallHandler::sys_timer_create] No available timer slots\n");
             return SYS_EAGAIN;
         }
-        
+
         // 初始化定时器
         g_timers[timer_slot].timer_id = g_next_timer_id++;
         g_timers[timer_slot].clockid = clockid;
         g_timers[timer_slot].event = sev;
         g_timers[timer_slot].active = true;
-        g_timers[timer_slot].armed = false;  // 新创建的定时器初始为未武装状态
-        
+        g_timers[timer_slot].armed = false; // 新创建的定时器初始为未武装状态
+
         // 初始化定时器规格为零（未武装状态）
         g_timers[timer_slot].spec.it_value.tv_sec = 0;
         g_timers[timer_slot].spec.it_value.tv_nsec = 0;
@@ -10882,13 +11036,13 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
         g_timers[timer_slot].spec.it_interval.tv_nsec = 0;
         g_timers[timer_slot].expiry_time.tv_sec = 0;
         g_timers[timer_slot].expiry_time.tv_nsec = 0;
-        
+
         // 如果 sevp 为 NULL，设置默认的 sival_int 为 timer_id
         if (sevp_addr == 0)
         {
             g_timers[timer_slot].event.sigev_value.sival_int = g_timers[timer_slot].timer_id;
         }
-        
+
         // 将 timer ID 拷贝到用户空间
         int timer_id = g_timers[timer_slot].timer_id;
         if (mem::k_vmm.copy_out(*pt, timerid_addr, &timer_id, sizeof(timer_id)) < 0)
@@ -10898,28 +11052,28 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             printfRed("[SyscallHandler::sys_timer_create] Error copying timer ID to user space\n");
             return SYS_EFAULT;
         }
-        
+
         printfCyan("[SyscallHandler::sys_timer_create] Created timer ID: %d, clockid: %d, notify: %d\n",
                    timer_id, clockid, sev.sigev_notify);
-        
+
         return 0;
     }
     /**
      * @brief 设置 POSIX 每进程定时器的武装状态和时间规格
-     * 
+     *
      * timer_settime() 武装或解除由 timerid 标识的定时器。new_value 参数指向一个
      * itimerspec 结构，该结构指定定时器的新初始值和新间隔。
-     * 
+     *
      * 参数：
      * - timerid: 定时器标识符（由 timer_create 返回）
      * - flags: 控制标志，如 TIMER_ABSTIME
      * - new_value: 指向 itimerspec 结构的指针，指定新的定时器设置
      * - old_value: 可选的指向 itimerspec 结构的指针，用于返回之前的设置
-     * 
+     *
      * 返回值：
      * - 成功：0
      * - 失败：-1，并设置 errno
-     * 
+     *
      * @see https://www.man7.org/linux/man-pages/man2/timer_settime.2.html
      */
     uint64 SyscallHandler::sys_timer_settime()
@@ -10929,7 +11083,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
         int flags;
         uint64 new_value_addr;
         uint64 old_value_addr;
-        
+
         // 获取参数
         if (_arg_int(0, timerid) < 0)
         {
@@ -10951,24 +11105,24 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             printfRed("[SyscallHandler::sys_timer_settime] Error fetching old_value argument\n");
             return SYS_EINVAL;
         }
-        
+
         // 检查 new_value 指针是否有效（不能为 NULL）
         if (new_value_addr == 0)
         {
             printfRed("[SyscallHandler::sys_timer_settime] new_value cannot be NULL\n");
             return SYS_EINVAL;
         }
-        
+
         // 验证 flags 参数
         if (flags != 0 && flags != TIMER_ABSTIME)
         {
             printfRed("[SyscallHandler::sys_timer_settime] Invalid flags: %d\n", flags);
             return SYS_EINVAL;
         }
-        
+
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
-        
+
         // 从用户空间拷贝新的定时器规格
         tmm::itimerspec new_timer_spec;
         if (mem::k_vmm.copy_in(*pt, &new_timer_spec, new_value_addr, sizeof(tmm::itimerspec)) < 0)
@@ -10976,7 +11130,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             printfRed("[SyscallHandler::sys_timer_settime] Error copying new_value from user space\n");
             return SYS_EFAULT;
         }
-        
+
         // 验证时间值的有效性
         if (new_timer_spec.it_value.tv_nsec < 0 || new_timer_spec.it_value.tv_nsec >= 1000000000 ||
             new_timer_spec.it_interval.tv_nsec < 0 || new_timer_spec.it_interval.tv_nsec >= 1000000000)
@@ -10984,13 +11138,13 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             printfRed("[SyscallHandler::sys_timer_settime] Invalid nanosecond values\n");
             return SYS_EINVAL;
         }
-        
+
         if (new_timer_spec.it_value.tv_sec < 0 || new_timer_spec.it_interval.tv_sec < 0)
         {
             printfRed("[SyscallHandler::sys_timer_settime] Negative time values not allowed\n");
             return SYS_EINVAL;
         }
-        
+
         // 使用全局定时器数组（与 timer_create 和 timer_delete 共享）
         // 确保定时器数组已初始化
         if (!g_timers_initialized)
@@ -10998,7 +11152,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             printfRed("[SyscallHandler::sys_timer_settime] Timer system not initialized\n");
             return SYS_EINVAL;
         }
-        
+
         // 查找对应的定时器
         int timer_slot = -1;
         for (int i = 0; i < 32; i++)
@@ -11009,19 +11163,19 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
                 break;
             }
         }
-        
+
         if (timer_slot == -1)
         {
             printfRed("[SyscallHandler::sys_timer_settime] Invalid timer ID: %d\n", timerid);
             return SYS_EINVAL;
         }
-        
+
         // 保存旧的定时器规格（如果需要返回）
         tmm::itimerspec old_timer_spec;
         if (old_value_addr != 0)
         {
             old_timer_spec = g_timers[timer_slot].spec;
-            
+
             // 如果定时器当前未武装，返回零值
             if (!g_timers[timer_slot].armed)
             {
@@ -11031,10 +11185,10 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
                 old_timer_spec.it_interval.tv_nsec = 0;
             }
         }
-        
+
         // 设置新的定时器规格
         g_timers[timer_slot].spec = new_timer_spec;
-        
+
         // 检查是否解除定时器（it_value 为零）
         if (new_timer_spec.it_value.tv_sec == 0 && new_timer_spec.it_value.tv_nsec == 0)
         {
@@ -11046,18 +11200,18 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
         {
             // 武装定时器
             g_timers[timer_slot].armed = true;
-            
+
             // 计算绝对过期时间
             tmm::timespec current_time;
             int clockid = g_timers[timer_slot].clockid;
-            
+
             // 获取当前时间（简化实现）
             if (tmm::k_tm.clock_gettime(static_cast<tmm::SystemClockId>(clockid), &current_time) < 0)
             {
                 printfRed("[SyscallHandler::sys_timer_settime] Failed to get current time\n");
                 return SYS_EFAULT;
             }
-            
+
             if (flags & TIMER_ABSTIME)
             {
                 // 绝对时间模式：直接使用 it_value 作为过期时间
@@ -11068,7 +11222,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
                 // 相对时间模式：当前时间 + it_value
                 g_timers[timer_slot].expiry_time.tv_sec = current_time.tv_sec + new_timer_spec.it_value.tv_sec;
                 g_timers[timer_slot].expiry_time.tv_nsec = current_time.tv_nsec + new_timer_spec.it_value.tv_nsec;
-                
+
                 // 处理纳秒溢出
                 if (g_timers[timer_slot].expiry_time.tv_nsec >= 1000000000)
                 {
@@ -11076,12 +11230,12 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
                     g_timers[timer_slot].expiry_time.tv_nsec -= 1000000000;
                 }
             }
-            
+
             printfCyan("[SyscallHandler::sys_timer_settime] Timer %d armed, expires at %ld.%09ld\n",
-                       timerid, g_timers[timer_slot].expiry_time.tv_sec, 
+                       timerid, g_timers[timer_slot].expiry_time.tv_sec,
                        g_timers[timer_slot].expiry_time.tv_nsec);
         }
-        
+
         // 如果请求返回旧值，将其拷贝到用户空间
         if (old_value_addr != 0)
         {
@@ -11091,38 +11245,38 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
                 return SYS_EFAULT;
             }
         }
-        
+
         printfCyan("[SyscallHandler::sys_timer_settime] Timer %d settime completed, flags: %d\n", timerid, flags);
-        
+
         return 0;
     }
     /**
      * @brief 删除 POSIX 每进程定时器
-     * 
+     *
      * timer_delete() 删除由 timerid 给出的 ID 的定时器。如果定时器在此调用时是武装状态，
      * 则在删除之前将其解除武装。由被删除定时器产生的任何挂起信号的处理是未指定的。
-     * 
+     *
      * 参数：
      * - timerid: 定时器标识符（由 timer_create 返回）
-     * 
+     *
      * 返回值：
      * - 成功：0
      * - 失败：-1，并设置 errno
-     * 
+     *
      * @see https://www.man7.org/linux/man-pages/man2/timer_delete.2.html
      */
     uint64 SyscallHandler::sys_timer_delete()
     {
         // https://www.man7.org/linux/man-pages/man2/timer_delete.2.html
         int timerid;
-        
+
         // 获取参数
         if (_arg_int(0, timerid) < 0)
         {
             printfRed("[SyscallHandler::sys_timer_delete] Error fetching timerid argument\n");
             return SYS_EINVAL;
         }
-        
+
         // 扩展的定时器结构体定义（与 timer_settime 保持一致）
         // 使用全局定时器数组（与 timer_create 和 timer_settime 共享）
         // 确保定时器数组已初始化
@@ -11131,7 +11285,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             printfRed("[SyscallHandler::sys_timer_delete] Timer system not initialized\n");
             return SYS_EINVAL;
         }
-        
+
         // 查找对应的定时器
         int timer_slot = -1;
         for (int i = 0; i < 32; i++)
@@ -11142,47 +11296,47 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
                 break;
             }
         }
-        
+
         if (timer_slot == -1)
         {
             printfRed("[SyscallHandler::sys_timer_delete] Invalid timer ID: %d\n", timerid);
             return SYS_EINVAL;
         }
-        
+
         // 检查定时器是否当前是武装状态
         bool was_armed = g_timers[timer_slot].armed;
-        
+
         // 删除定时器：将其标记为非活动状态
         g_timers[timer_slot].active = false;
         g_timers[timer_slot].armed = false;
-        
+
         // 清理定时器数据（可选，为了安全）
         g_timers[timer_slot].timer_id = 0;
         g_timers[timer_slot].clockid = 0;
         g_timers[timer_slot].event.sigev_notify = 0;
         g_timers[timer_slot].event.sigev_signo = 0;
         g_timers[timer_slot].event.sigev_value.sival_int = 0;
-        
+
         // 清零定时器规格
         g_timers[timer_slot].spec.it_value.tv_sec = 0;
         g_timers[timer_slot].spec.it_value.tv_nsec = 0;
         g_timers[timer_slot].spec.it_interval.tv_sec = 0;
         g_timers[timer_slot].spec.it_interval.tv_nsec = 0;
-        
+
         // 清零过期时间
         g_timers[timer_slot].expiry_time.tv_sec = 0;
         g_timers[timer_slot].expiry_time.tv_nsec = 0;
-        
-        printfCyan("[SyscallHandler::sys_timer_delete] Timer %d deleted successfully (was %s)\n", 
+
+        printfCyan("[SyscallHandler::sys_timer_delete] Timer %d deleted successfully (was %s)\n",
                    timerid, was_armed ? "armed" : "disarmed");
-        
+
         // 注意：根据 POSIX 标准，对于由被删除定时器产生的任何挂起信号的处理是未指定的
         // 在我们的简化实现中，我们不需要特殊处理挂起的信号
         // 在完整实现中，可能需要：
         // 1. 从信号队列中移除相关的挂起信号
         // 2. 取消任何正在进行的定时器操作
         // 3. 通知调度器停止监控此定时器
-        
+
         return 0;
     }
     uint64 SyscallHandler::sys_flock()
@@ -11191,7 +11345,7 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
         int fd;
         int operation;
         if (_arg_int(0, fd) < 0 || _arg_int(1, operation) < 0)
-        {            
+        {
             printfRed("[SyscallHandler::sys_flock] Invalid arguments\n");
             return SYS_EINVAL;
         }
@@ -11202,8 +11356,8 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             printfRed("[SyscallHandler::sys_flock] Invalid file descriptor: %d\n", fd);
             return SYS_EBADF;
         }
-        if(operation & ~(LOCK_SH | LOCK_EX | LOCK_UN )||
-        ((operation & (LOCK_SH )) && (operation & LOCK_EX)))
+        if (operation & ~(LOCK_SH | LOCK_EX | LOCK_UN) ||
+            ((operation & (LOCK_SH)) && (operation & LOCK_EX)))
         {
             printfRed("[SyscallHandler::sys_flock] Invalid operation flags: %d\n", operation);
             return SYS_EINVAL;
@@ -11212,11 +11366,13 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
         return uint64();
     }
 
-    uint64 SyscallHandler::sys_epoll_create1(){
+    uint64 SyscallHandler::sys_epoll_create1()
+    {
         return 0;
     }
 
-    uint64 SyscallHandler::sys_epoll_ctl(){
+    uint64 SyscallHandler::sys_epoll_ctl()
+    {
         return 0;
     }
     uint64 SyscallHandler::sys_eventfd2()
@@ -11225,12 +11381,33 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
         panic("未实现该系统调用");
     }
 
+    uint64 SyscallHandler::sys_userdebug1()
+    {
+        proc::k_pm.debug_process_states();
+        return 0;
+    }
+    uint64 SyscallHandler::sys_userdebug2()
+    {
+        panic("未实现该系统调用");
+        return 0;
+    }
+    uint64 SyscallHandler::sys_userdebug3()
+    {
+        panic("未实现该系统调用");
+        return 0;
+    }
+    uint64 SyscallHandler::sys_userdebug4()
+    {
+        panic("未实现该系统调用");
+        return 0;
+    }
+
     uint64 SyscallHandler::sys_timer_gettime()
     {
         // https://www.man7.org/linux/man-pages/man2/timer_gettime.2.html
         int timerid;
         uint64 curr_value_addr;
-        
+
         // 获取参数
         if (_arg_int(0, timerid) < 0)
         {
@@ -11242,21 +11419,21 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             printfRed("[SyscallHandler::sys_timer_gettime] Error fetching curr_value argument\n");
             return SYS_EINVAL;
         }
-        
+
         // 检查 curr_value 指针是否有效（不能为 NULL）
         if (curr_value_addr == 0)
         {
             printfRed("[SyscallHandler::sys_timer_gettime] curr_value cannot be NULL\n");
             return SYS_EINVAL;
         }
-        
+
         // 确保定时器数组已初始化
         if (!g_timers_initialized)
         {
             printfRed("[SyscallHandler::sys_timer_gettime] Timer system not initialized\n");
             return SYS_EINVAL;
         }
-        
+
         // 查找对应的定时器
         int timer_slot = -1;
         for (int i = 0; i < 32; i++)
@@ -11267,22 +11444,22 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
                 break;
             }
         }
-        
+
         if (timer_slot == -1)
         {
             printfRed("[SyscallHandler::sys_timer_gettime] Invalid timer ID: %d\n", timerid);
             return SYS_EINVAL;
         }
-        
+
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
-        
+
         // 准备返回的定时器规格
         tmm::itimerspec current_spec;
-        
+
         // 复制定时器间隔（总是保持不变）
         current_spec.it_interval = g_timers[timer_slot].spec.it_interval;
-        
+
         // 如果定时器未武装，返回零值
         if (!g_timers[timer_slot].armed)
         {
@@ -11295,24 +11472,24 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
             // 获取当前时间
             tmm::timespec current_time;
             tmm::SystemClockId cid = (tmm::SystemClockId)g_timers[timer_slot].clockid;
-            
+
             if (tmm::k_tm.clock_gettime(cid, &current_time) != 0)
             {
                 printfRed("[SyscallHandler::sys_timer_gettime] Failed to get current time\n");
                 return SYS_EINVAL;
             }
-            
+
             // 计算剩余时间：过期时间 - 当前时间
             long remaining_sec = g_timers[timer_slot].expiry_time.tv_sec - current_time.tv_sec;
             long remaining_nsec = g_timers[timer_slot].expiry_time.tv_nsec - current_time.tv_nsec;
-            
+
             // 处理纳秒借位
             if (remaining_nsec < 0)
             {
                 remaining_sec -= 1;
                 remaining_nsec += 1000000000;
             }
-            
+
             // 如果定时器已过期，返回零值
             if (remaining_sec < 0 || (remaining_sec == 0 && remaining_nsec <= 0))
             {
@@ -11325,24 +11502,24 @@ int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), p
                 current_spec.it_value.tv_nsec = remaining_nsec;
             }
         }
-        
+
         // 将结果复制到用户空间
         if (mem::k_vmm.copy_out(*pt, curr_value_addr, &current_spec, sizeof(tmm::itimerspec)) < 0)
         {
             printfRed("[SyscallHandler::sys_timer_gettime] Error copying curr_value to user space\n");
             return SYS_EFAULT;
         }
-        
+
         printfCyan("[SyscallHandler::sys_timer_gettime] Timer %d: it_value=[%ld.%09ld], it_interval=[%ld.%09ld], armed=%s\n",
-                   timerid, 
+                   timerid,
                    current_spec.it_value.tv_sec, current_spec.it_value.tv_nsec,
                    current_spec.it_interval.tv_sec, current_spec.it_interval.tv_nsec,
                    g_timers[timer_slot].armed ? "yes" : "no");
-        
+
         return 0; // 成功
     }
 
-        // splice 辅助函数实现
+    // splice 辅助函数实现
     ssize_t SyscallHandler::_splice_pipe_to_file(fs::file *pipe_file, fs::file *regular_file, off_t file_offset, size_t len)
     {
         if (!pipe_file || !regular_file)

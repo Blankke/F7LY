@@ -55,6 +55,12 @@ int sleep(unsigned int seconds);
 int fsync(int fd);
 int fdatasync(int fd);
 
+// debug
+int userdebug1();
+int userdebug2();
+int userdebug3();
+int userdebug4();
+
 
 
 // 打印到指定文件描述符，支持%d, %x, %p, %s, %c, %%

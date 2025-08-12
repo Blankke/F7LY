@@ -213,6 +213,12 @@ namespace syscall
         SYS_faccessat2 = 439,  // from rocket
         SYS_memfd_secret=447,
         SYS_fchmodat2 =452,
+
+
+        SYS_userdebug1 = 2021,
+        SYS_userdebug2 = 2022,
+        SYS_userdebug3 = 2023,
+        SYS_userdebug4 = 2024,
         SYS_shutdown = 2025
     };
 

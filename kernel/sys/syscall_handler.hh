@@ -257,6 +257,10 @@ namespace syscall
         uint64 sys_waitid();
         uint64 sys_memfd_create();
         uint64 sys_timer_gettime();
+        uint64 sys_userdebug1();
+        uint64 sys_userdebug2();
+        uint64 sys_userdebug3();
+        uint64 sys_userdebug4();
     };
 
     extern SyscallHandler k_syscall_handler;

@@ -1402,7 +1402,7 @@ namespace proc
         printf("[wait4] pid: %d child_pid: %d, addr: %p, option: %d\n", p->_pid, child_pid, (void *)addr, option);
 
         // 检查不支持的选项标志
-        const int supported_options = syscall::WNOHANG;
+        const int supported_options = syscall::WNOHANG | syscall::WUNTRACED;
         const int unsupported_options = option & ~supported_options;
         if (unsupported_options != 0)
         {
