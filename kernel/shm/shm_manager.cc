@@ -722,7 +722,7 @@ namespace shm
         uint64 target_addr = (uint64)addr;
 
         uint cur_tid = proc::k_pm.get_cur_pcb()->get_tid();
-        printf("[ShmManager] Finding shared memory segment for address: %p (tid=%d)\n", addr, cur_tid);
+        // printf("[ShmManager] Finding shared memory segment for address: %p (tid=%d)\n", addr, cur_tid);
         // 遍历所有共享内存段（只看当前线程）
         for (auto it = segments->begin(); it != segments->end(); ++it)
         {

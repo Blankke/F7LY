@@ -849,7 +849,7 @@ namespace proc
                     void* shm_start_addr = nullptr;
                     size_t shm_size = 0;
                     int shmid=shm::k_smm.find_shared_memory_segment((void *)va, &shm_start_addr, &shm_size);
-                    printfBlue("[safe_vmunmap] Attempting to unmap VA=%p,tid:%d\n", (void *)va,shmid);
+                    // printfBlue("[safe_vmunmap] Attempting to unmap VA=%p,tid:%d\n", (void *)va,shmid);
                     if (shmid>=0)
                     {
                         printfRed("[safe_vmunmap] Attempted to unmap shared memory at VA=%p (validity check)\n", shm_start_addr);

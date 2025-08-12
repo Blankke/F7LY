@@ -204,7 +204,7 @@ namespace syscall
         BIND_SYSCALL(getrandom);
         BIND_SYSCALL(statx);
         BIND_SYSCALL(clone3);   // todo
-
+        BIND_SYSCALL(fchmodat2);
 
         // rocket syscalls
         BIND_SYSCALL(setxattr);           // from rocket
@@ -5361,6 +5361,10 @@ namespace syscall
                                 rem_addr, &zero_ts, sizeof(zero_ts));
         }
         return 0;
+    }
+    uint64 SyscallHandler::sys_fchmodat2()
+    {
+        return uint64();
     }
     uint64 SyscallHandler::sys_statfs()
     {

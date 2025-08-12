@@ -392,46 +392,181 @@ char *libctest[][2] = {
     {NULL}};
 
 char *ltp_testcases[] = {
+    // NULL,
+    "pipe11", // pass
     "open11",
     "splice07",
     "epoll_ctl03",
     "access01",
-        "getpid01",
-        "waitpid01", // PASS
+    "getpid01",
+    "waitpid01", // PASS
     // "pipe11",
     "timer_settime02",
     "clock_getres01",
     "chmod01",
     "confstr01",
+    "creat01",         // passed   6
+    "creat06",         // pass
+    "posix_fadvise01", // pass6
+    "posix_fadvise02", // pass6
     "posix_fadvise03",
-    "posix_fadvise03_64",
     "timer_settime01",
     "signal03",
     "signal05",
     "signal04",
-        "fchdir01", // 完全PASS
-    "fchdir02", // 完全PASS
-    "fchmod01", // pass
-    "fchmod03", // pass
-    "fchmod04", // pass
-    "fchmodat01", // pass6
-    "fchmodat02", // pass5 fail1
-    "fchown01",   // pass
-    "fchown02", // pass 2 fail 1
-    "fchown04", // pass 2 fail 1
-    "fchown05", // passed   6
-    "fcntl02",    // pass
-    "fcntl03",    // pass
-    "fcntl04",    // pass
-    "fcntl05",    // pass
-    "fcntl08",    // pass
-    "fcntl13",    // pass
-    "fcntl15",    // passs5
-    "waitpid03", // PASS
-    "waitpid04", // PASS
-    "waitpid06", // PASS
-    "waitpid07", // PASS
-    "waitpid09", // 部分pass p3 f1
+    "dup01",          // 完全PASS
+    "dup02",          // 完全PASS
+    "dup03",          // 完全PASS
+    "dup04",          // 完全PASS
+    "dup05",          // pass
+    "dup06",          // 完全PASS
+    "dup07",          // 完全PASS
+    "dup201",         // 完全PASS
+    "dup202",         // 完全PASS
+    "dup203",         // pass
+    "dup204",         // 完全PASS
+    "dup205",         // 完全PASS
+    "dup206",         // 完全PASS
+    "fchdir01",       // 完全PASS
+    "fchdir02",       // 完全PASS
+    "fchmod01",       // pass
+    "fchmod03",       // pass
+    "fchmod04",       // pass
+    "fchmodat01",     // pass6
+    "fchmodat02",     // pass5 fail1
+    "fchown01",       // pass
+    "fchown02",       // pass 2 fail 1
+    "fchown04",       // pass 2 fail 1
+    "fchown05",       // passed   6
+    "fcntl02",        // pass
+    "fcntl03",        // pass
+    "fcntl04",        // pass
+    "fcntl05",        // pass
+    "fcntl08",        // pass
+    "fcntl13",        // pass
+    "fcntl15",        // passs5
+    "fstat02",        // pass 5 fail 1
+    "fstat03",        // pass2
+    "faccessat01",    // 完全PASS
+    "faccessat02",    // 完全PASS
+    "faccessat201",   // pass
+    "flock01",        // pass 3
+    "flock02",        // pass 3
+    "flock03",        // pass1 fail2 brok 1
+    "flock04",        // pass5 fail1
+    "flock06",        // pass2 fail 2
+    "fpathconf01",    // pass
+    "fsync03",        // pass
+    "waitpid03",      // PASS
+    "waitpid04",      // PASS
+    "waitpid06",      // PASS
+    "waitpid07",      // PASS
+    "waitpid09",      // 部分pass p3 f1
+    "getcwd01",       // pass
+    "getcwd02",       // 完全PASS
+    "getcwd03",       // pass
+    "getpgid01",      // PASS
+    "getpgid02",      // PASS
+    "getpid02",       // PASS
+    "getppid01",      // PASS
+    "getppid02",      // PASS
+    "getrandom01",    // pass
+    "getrandom02",    // 完全PASS
+    "getrandom03",    // 完全PASS
+    "getrandom04",    // 完全PASS
+    "getrandom05",    // pass
+    "getrlimit01",    // passed   16
+    "gettimeofday01", // pass
+    "link02",         // pass
+    "link04",         // pass9 fail 5
+    "link08",         // pass3 fail1
+    "llseek01",       // pass
+    "llseek02",       // pass
+    "llseek03",       // pass
+    "lseek01",        // passed   4
+    "lseek02",        // passed   15
+    "lseek07",        // pass
+    "mkdirat02",      // pass2fail2
+    "mkdir03",        // pass
+    "mmap05",         // pass1 但是panic关了一个
+    "mmap06",         // pass6 fail 2
+    "mmap08",         // pass
+    "mmap09",         // pass
+    "mmap13",         // pass
+    "mmap15",         // pass
+    "mmap17",         // pass
+    "mmap19",         // pass
+    "mmap20",         // pass
+    "open01",         // pass
+    "open02",         // pass1 fail1
+    "open03",         // 完全PASS
+    "open04",         // 完全PASS
+    "open06",         // pass
+    "open07",         // pass
+    "open09",         // pass
+    "openat01",       // pass
+    "pathconf01",     // pass
+    "pathconf02",     // pass1 fail5
+    "pipe01",         // 完全PASS
+    "pipe03",         // 完全PASS
+    "pipe06",         // 完全PASS
+    "pipe10",         // 完全PASS
+    "pipe12",         // pass
+    "pipe14",         // 完全PASS
+    "poll01",         // pass
+    "pread01",        // pass
+    "pselect02",      // pass
+    "pselect03",      // pass
+    "pwrite01",       // pass
+    "read01",         // 貌似可以PASS
+    "read02",         // pass
+    "read04",         // 完全PASS
+    "readlink01",     // pass 2
+    "readlink03",     // pass
+    "readlinkat01",   // pass
+    "readlinkat02",   // pass五个
+    "readv01",        // pass
+    "readv02",        // pass4 fail1
+    "rmdir01",        // pass
+    "rmdir02",        // pass
+    "rmdir03",        // fail2
+    "shmat01",        // pass4
+    "shmat03",        // pass?
+    "shmat04",        // pass
+    "shmctl02",       // passed   16 fail 4
+    "shmctl07",       // pass
+    "shmctl08",       // pass
+    "shmdt01",        // pass 2
+    "shmdt02",        // pass
+    "stat01",         // passed   12
+    "stat03",         // pass4 fail2
+    "statfs02",       // pass3fail3
+    "statx01",        // pass8 fail2
+    "statx02",        // pass4 fail1
+    "statx03",        // pass6 fail1
+        // "stream01", // pass
+    "stream02", // pass
+    "stream03", // pass
+    "stream04", // pass
+    "stream05", // pass
+        // "symlink01", // pass
+    "symlink02", // pass
+    "symlink03",   //sendmsg
+    "symlink04",   // pass
+        "uname01",    // 完全PASS
+    "uname02",    // 完全PASS
+
+    "unlink05",   // pass
+    "unlink07",   // pass
+    "unlink08",   // pass2fail2
+    "unlink09",   // pass
+    "unlinkat01", // passed   7
+        "write01", // 完全PASS
+    "write02", // pass
+    "write03", // 完全PASS
+    "write05", // passed   3
+        "writev05", // 完全PASS
+    "writev06", // 完全PASS
     NULL,
     // "abort01",
     "abs01", // 完全PASS,没summary
@@ -952,7 +1087,7 @@ char *ltp_testcases[] = {
     // "float_trigo",
     "flock01", // pass 3
     "flock02", // pass 3
-    // "flock03",  //pass1 fail2 brok 1
+    "flock03", // pass1 fail2 brok 1
     "flock04", // pass5 fail1
     "flock06", // pass2 fail 2
     // "force_erase.sh",
@@ -1784,11 +1919,11 @@ char *ltp_testcases[] = {
     // "mqns_02",
     // "mqns_03",
     // "mqns_04",
-    "mremap01", // pass
-    "mremap02", // pass
-    "mremap03", // pass
-    "mremap04", // pass
-    "mremap05", // pass
+    "mremap01", // pass 没summary
+    "mremap02", // pass 没summary
+    "mremap03", // pass 没summary
+    "mremap04", // pass 没summary
+    "mremap05", // pass 没summary
     // "mremap06",
     // "msg_comm",
     // "msgctl01",
@@ -1823,9 +1958,9 @@ char *ltp_testcases[] = {
     // "munlock01",
     // "munlock02",
     // "munlockall01",
-    "munmap01", // pass
-    "munmap02", // pass
-    "munmap03", // pass
+    "munmap01", // pass 没summary
+    "munmap02", // pass 没summary
+    "munmap03", // pass 没summary
     // "mv_tests.sh",
     // "myfunctions.sh",
     // "name_to_handle_at01",
@@ -1841,7 +1976,7 @@ char *ltp_testcases[] = {
     // "netns_sysfs.sh",
     // "netstat01.sh",
     // "netstress",
-    "newuname01", // pass
+    "newuname01", // pass 没summary
     // "nextafter01",
     // "nfs_flock",
     // "nfs_flock_dgen",
@@ -2553,7 +2688,7 @@ char *ltp_testcases[] = {
     // "swapping01",
     "symlink01", // pass
     "symlink02", // pass
-    // "symlink03",   //sendmsg
+    "symlink03",   //sendmsg
     "symlink04",   // pass
     "symlinkat01", // pass
     // "sync_file_range01",

@@ -877,7 +877,8 @@ int vfs_path2filetype(eastl::string &absolute_path)
             case EXT4_INODE_MODE_SOCKET:
                 return fs::FileTypes::FT_DEVICE;
             default:
-                panic("一直游到海水变蓝.");
+                printfRed("vfs_path2filetype: unknown file type %d for path: %s\n", type, absolute_path.c_str());
+                // panic("一直游到海水变蓝.");
             }
         }
     }

@@ -121,7 +121,7 @@ namespace syscall
         uint64 sys_renameat2();
         uint64 sys_readv();
         uint64 sys_clock_nanosleep();
-
+        uint64 sys_fchmodat2();
         // 补全的 todo 接口
         uint64 sys_memfd_secret();
         uint64 sys_open_tree();

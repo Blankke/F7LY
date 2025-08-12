@@ -212,6 +212,7 @@ namespace syscall
         SYS_openat2 = 437,     // from rocket
         SYS_faccessat2 = 439,  // from rocket
         SYS_memfd_secret=447,
+        SYS_fchmodat2 =452,
         SYS_shutdown = 2025
     };
 
