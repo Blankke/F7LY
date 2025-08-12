@@ -520,16 +520,16 @@ namespace mem
             }
 
             // 从文件读取数据
-            // printfCyan("[allocate_vma_page] reading from file %s at offset %d (file_size=%lu)\n",
-            //            vf->_path_name.c_str(), offset, file_size);
+            printfCyan("[allocate_vma_page] reading from file %s at offset %d (file_size=%lu)\n",
+                       vf->_path_name.c_str(), offset, file_size);
 
-            // int readbytes = vf->read((uint64)pa, PGSIZE, offset, false);
-            // if (readbytes < 0)
-            // {
-            //     printfRed("[allocate_vma_page] file read failed\n");
-            //     k_pmm.free_page(pa);
-            //     return -1;
-            // }
+            int readbytes = vf->read((uint64)pa, PGSIZE, offset, false);
+            if (readbytes < 0)
+            {
+                printfRed("[allocate_vma_page] file read failed\n");
+                k_pmm.free_page(pa);
+                return -1;
+            }
 
             // Hexdump the page data
             printfCyan("[allocate_vma_page] Hexdump of page data (PA=%p, size=%d):\n", pa, PGSIZE);
@@ -553,10 +553,10 @@ namespace mem
                 printf("|\n");
             }
 
-            // if (readbytes < PGSIZE)
-            // {
-            //     printfYellow("[allocate_vma_page] partial page read (%d bytes)\n", readbytes);
-            // }
+            if (readbytes < PGSIZE)
+            {
+                printfYellow("[allocate_vma_page] partial page read (%d bytes)\n", readbytes);
+            }
         }
         else
         {
