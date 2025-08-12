@@ -425,10 +425,13 @@ char *ltp_testcases[] = {
     "fcntl04",    // pass
     "fcntl05",    // pass
     "fcntl08",    // pass
-    "fcntl09",    // pass
-    "fcntl10",    // pass
     "fcntl13",    // pass
     "fcntl15",    // passs5
+    "waitpid03", // PASS
+    "waitpid04", // PASS
+    "waitpid06", // PASS
+    "waitpid07", // PASS
+    "waitpid09", // 部分pass p3 f1
     NULL,
     // "abort01",
     "abs01", // 完全PASS,没summary

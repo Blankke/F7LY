@@ -443,8 +443,8 @@ namespace shm
 
         segments->insert({new_seg.shmid, new_seg});
         
-        printfGreen("[ShmManager] Created new segment shmid=%d, key=0x%x, size=0x%x at phy_addr=0x%x\n",
-                    new_seg.shmid, key, new_seg.size, allocated_addr);
+        printfGreen("[ShmManager] Created new segment shmid=%d, key=0x%x, size=0x%x at phy_addr=0x%x,pid=%d\n",
+                    new_seg.shmid, key, new_seg.size, allocated_addr,current_proc->_pid);
 
         return new_seg.shmid; // 返回新创建的共享内存段ID
     }
@@ -655,6 +655,8 @@ namespace shm
             auto it2 = eastl::find_if(seg.attached_addrs.begin(), seg.attached_addrs.end(), [&](const attached_entry& e){
                 return e.tid == cur_tid && e.addr == addr;
             });
+            printfRed("[ShmManager] Detaching segment shmid=%d from address %p (tid=%d)\n",
+                     seg.shmid, addr, cur_tid);
             if (it2 != seg.attached_addrs.end()) {
                 seg.attached_addrs.erase(it2);
             }
@@ -711,15 +713,16 @@ namespace shm
         return false;
     }
 
-    bool ShmManager::find_shared_memory_segment(void *addr, void **start_addr, size_t *size)
+    int ShmManager::find_shared_memory_segment(void *addr, void **start_addr, size_t *size)
     {
         if (!addr) {
-            return false;
+            return -1;
         }
 
         uint64 target_addr = (uint64)addr;
 
         uint cur_tid = proc::k_pm.get_cur_pcb()->get_tid();
+        printf("[ShmManager] Finding shared memory segment for address: %p (tid=%d)\n", addr, cur_tid);
         // 遍历所有共享内存段（只看当前线程）
         for (auto it = segments->begin(); it != segments->end(); ++it)
         {
@@ -739,12 +742,12 @@ namespace shm
                     if (size) {
                         *size = seg.real_size;
                     }
-                    return true;
+                    return e.tid;  // 返回找到的共享内存段ID
                 }
             }
         }
         
-        return false;
+        return -1;
     }
 
     bool ShmManager::add_reference_for_fork(void *addr)
@@ -1153,6 +1156,7 @@ namespace shm {
             }
         }
         if (duplicated) {
+            proc::k_pm.get_cur_pcb()->get_memory_manager()->print_memory_usage();
             printfCyan("[ShmManager] Fork: duplicated attachments from tid=%d to tid=%d\n", parent_tid, child_tid);
         }
         return duplicated;

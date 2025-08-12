@@ -781,9 +781,9 @@ namespace mem
             // 检查当前虚拟地址是否属于共享内存区域
             void* shm_start_addr = nullptr;
             size_t shm_size = 0;
-            bool is_shared = shm::k_smm.find_shared_memory_segment((void *)va, &shm_start_addr, &shm_size);
+            int is_shared = shm::k_smm.find_shared_memory_segment((void *)va, &shm_start_addr, &shm_size);
 
-            if (is_shared)
+            if (is_shared>=0)
             {
                 // 对于共享内存，直接复用原物理地址，不分配新页面
                 printfCyan("[vm_copy] Sharing memory for VA=%p -> PA=%p (shared memory)\n", va, pa);
@@ -793,15 +793,7 @@ namespace mem
                     return -1;
                 }
                 
-                // 只在共享内存段的起始地址增加引用计数，避免重复增加
-                if ((void *)va == shm_start_addr)
-                {
-                    if (!shm::k_smm.add_reference_for_fork(shm_start_addr))
-                    {
-                        printfRed("[vm_copy] Failed to add reference for shared memory at VA=%p\n", shm_start_addr);
-                        panic("[vm_copy] Failed to add reference for shared memory");
-                    }
-                }
+
             }
             else
             {

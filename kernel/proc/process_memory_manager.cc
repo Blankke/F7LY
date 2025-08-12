@@ -121,6 +121,7 @@ namespace proc
         // 复制进程的所有内存段
         bool copy_success = true;
 
+
         // 复制程序段
         for (int i = 0; i < prog_section_count; i++)
         {
@@ -410,7 +411,7 @@ namespace proc
                 // 检查是否为共享内存地址
                 void* shm_start_addr = nullptr;
                 size_t shm_size = 0;
-                if (shm::k_smm.find_shared_memory_segment((void *)va, &shm_start_addr, &shm_size))
+                if (shm::k_smm.find_shared_memory_segment((void *)va, &shm_start_addr, &shm_size)>=0)
                 {
                     // 对于共享内存，使用detach_seg来正确处理引用计数
                     int result = shm::k_smm.detach_seg(shm_start_addr);
@@ -847,19 +848,15 @@ namespace proc
                     // 检查是否为共享内存地址
                     void* shm_start_addr = nullptr;
                     size_t shm_size = 0;
-                    if (shm::k_smm.find_shared_memory_segment((void *)va, &shm_start_addr, &shm_size))
+                    int shmid=shm::k_smm.find_shared_memory_segment((void *)va, &shm_start_addr, &shm_size);
+                    printfBlue("[safe_vmunmap] Attempting to unmap VA=%p,tid:%d\n", (void *)va,shmid);
+                    if (shmid>=0)
                     {
-                        // // 对于共享内存，使用detach_seg来正确处理引用计数
-                        // int result = shm::k_smm.detach_seg(shm_start_addr);
-                        // if (result != 0)
-                        // {
-                        //     printfRed("[safe_vmunmap] Failed to detach shared memory at VA=%p\n", shm_start_addr);
-                        // }
+                        printfRed("[safe_vmunmap] Attempted to unmap shared memory at VA=%p (validity check)\n", shm_start_addr);
+                        printfRed("[safe_vmunmap] Shared memory segment ID: %d\n", shmid);
                         
-                        // // 跳过整个共享内存段，直接移动到段结束位置
-                        // uint64 shm_end = (uint64)shm_start_addr + shm_size;
-                        // va = PGROUNDUP(shm_end) - PGSIZE; // -PGSIZE因为循环会+PGSIZE
-                        // panic("shared memory should not appear here");
+                        printfRed("[safe_vmunmap] current pid:%d, seg pid :%d\n", k_pm.get_cur_pcb()->_tid,shmid);
+                        panic("shared memory should not appear here");
                     }
                     else
                     {
@@ -904,7 +901,7 @@ namespace proc
     {
         // 减少引用计数，只有当引用计数降为0时才释放整个内存
         int old_count = ref_count.fetch_sub(1, eastl::memory_order_acq_rel);
-
+        
         if (old_count <= 1)
         {
             // 引用计数降为0，释放所有内存资源
@@ -931,6 +928,11 @@ namespace proc
 
             // 3. 重置内存相关状态
             reset_memory_sections();
+        }
+        else{
+
+            ///@todo 减少shm的segments里面的addr的vector里面的所有的包含此tid的都detach
+            /// 同时记得在进程里面也增加一个duplicate_attachments的调用
         }
         // 如果引用计数还大于0，说明还有其他进程/线程在使用这块内存，不进行释放
     }

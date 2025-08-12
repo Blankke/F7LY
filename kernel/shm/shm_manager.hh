@@ -125,7 +125,7 @@ namespace shm
         bool is_shared_memory_address(void *addr);
 
         // 查找包含指定地址的共享内存段，返回段的起始地址和大小
-        bool find_shared_memory_segment(void *addr, void **start_addr, size_t *size = nullptr);
+        int find_shared_memory_segment(void *addr, void **start_addr, size_t *size = nullptr);
 
         // 为fork进程增加共享内存引用计数
         bool add_reference_for_fork(void *addr);
