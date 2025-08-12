@@ -276,18 +276,19 @@ namespace shm
             }
         }
         
-        // // 检查是否与其他共享内存段冲突
+        // // 检查是否与其他共享内存段冲突（仅与当前线程的映射比较，避免跨进程/线程误判）
+        uint cur_tid = proc->get_tid();
         for (const auto& pair : *segments) {
             const shm_segment& seg = pair.second;
-            for (void* attached_addr : seg.attached_addrs) {
-                uint64 shm_start = (uint64)attached_addr;
+            for (const auto& ent : seg.attached_addrs) {
+                if (ent.tid != cur_tid) continue;
+                uint64 shm_start = (uint64)ent.addr;
                 uint64 shm_end = shm_start + seg.real_size;
                 
                 if (addr < shm_end && end_addr > shm_start) {
-                    printfRed("[ShmManager] Address range [0x%x, 0x%x] conflicts with existing shared memory [0x%x, 0x%x]\n",
-                             addr, end_addr, shm_start, shm_end);
-                    if(proc->_pid==seg.creator_pid) 
-                         return true;
+                    printfRed("[ShmManager] Address range [0x%x, 0x%x] conflicts with existing shared memory [0x%x, 0x%x] (tid=%d)\n",
+                             addr, end_addr, shm_start, shm_end, cur_tid);
+                    return true;
                 }
             }
         }
@@ -585,8 +586,8 @@ namespace shm
             return (void *)-ENOMEM;  // 数据空间不足
         }
 
-        // 按标准更新段信息
-        seg.attached_addrs.push_back((void *)attach_addr);        // 记录映射的虚拟地址
+    // 按标准更新段信息
+    seg.attached_addrs.push_back(attached_entry{current_proc->get_tid(), (void *)attach_addr});        // 记录映射的虚拟地址（带tid）
         seg.atime = tmm::k_tm.clock_gettime_sec(tmm::CLOCK_REALTIME); // 设置shm_atime为当前时间
         seg.last_pid = current_proc->_pid;     // 更新最后操作进程ID (shm_lpid)
         seg.nattch++;                          // 增加附加计数 (shm_nattch)
@@ -609,7 +610,7 @@ namespace shm
         printfCyan("[ShmManager::detach_seg] Looking for address: %p\n", addr);
         
         auto it = segments->begin();
-        // 查找包含该地址的共享内存段
+    // 查找包含该地址的共享内存段（限定当前线程）
         for (; it != segments->end(); ++it)
         {
             shm_segment &seg = it->second;
@@ -620,8 +621,11 @@ namespace shm
             //     printfCyan("%p ", attached_addr);
             // }
             // printfCyan("\n");
-            // 在附加地址列表中查找
-            auto addr_it = eastl::find(seg.attached_addrs.begin(), seg.attached_addrs.end(), addr);
+            // 在附加地址列表中查找（tid + 地址匹配）
+            uint cur_tid = proc::k_pm.get_cur_pcb()->get_tid();
+            auto addr_it = eastl::find_if(seg.attached_addrs.begin(), seg.attached_addrs.end(), [&](const attached_entry& e){
+                return e.tid == cur_tid && e.addr == addr;
+            });
             if (addr_it != seg.attached_addrs.end()) {
                 // printfCyan("[ShmManager::detach_seg] Found address in segment shmid=%d\n", seg.shmid);
                 break;
@@ -633,9 +637,9 @@ namespace shm
             printfRed("[ShmManager] Segment with address %p not found\n", addr);
             printfYellow("[ShmManager] Available segments:\n");
             for (const auto& pair : *segments) {
-                printfYellow("  shmid=%d, attached addresses: ", pair.second.shmid);
-                for (void* attached_addr : pair.second.attached_addrs) {
-                    printfYellow("%p ", attached_addr);
+                printfYellow("  shmid=%d, attachments: ", pair.second.shmid);
+                for (const auto &ent : pair.second.attached_addrs) {
+                    printfYellow("(tid=%d, addr=%p) ", ent.tid, ent.addr);
                 }
                 printfYellow("\n");
             }
@@ -645,11 +649,16 @@ namespace shm
         shm_segment &seg = it->second;
         proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
         
-        // 从附加地址列表中移除这个地址
-        // auto addr_it = eastl::find(seg.attached_addrs.begin(), seg.attached_addrs.end(), addr);
-        // if (addr_it != seg.attached_addrs.end()) {
-        //     seg.attached_addrs.erase(addr_it);
-        // }
+        // 从附加地址列表中移除这个地址（仅当前线程）
+        {
+            uint cur_tid = current_proc->get_tid();
+            auto it2 = eastl::find_if(seg.attached_addrs.begin(), seg.attached_addrs.end(), [&](const attached_entry& e){
+                return e.tid == cur_tid && e.addr == addr;
+            });
+            if (it2 != seg.attached_addrs.end()) {
+                seg.attached_addrs.erase(it2);
+            }
+        }
         
         // 解除映射 - 使用实际分配的页对齐大小
         mem::k_vmm.vmunmap(
@@ -687,19 +696,18 @@ namespace shm
             return false;
         }
 
-        // 遍历所有共享内存段
-        auto it = segments->begin();
-        for (; it != segments->end(); ++it)
+        uint cur_tid = proc::k_pm.get_cur_pcb()->get_tid();
+        // 遍历所有共享内存段，仅匹配当前线程的记录
+        for (auto it = segments->begin(); it != segments->end(); ++it)
         {
             shm_segment &seg = it->second;
-            
-            // 在附加地址列表中查找
-            auto addr_it = eastl::find(seg.attached_addrs.begin(), seg.attached_addrs.end(), addr);
+            auto addr_it = eastl::find_if(seg.attached_addrs.begin(), seg.attached_addrs.end(), [&](const attached_entry& e){
+                return e.tid == cur_tid && e.addr == addr;
+            });
             if (addr_it != seg.attached_addrs.end()) {
                 return true;
             }
         }
-        
         return false;
     }
 
@@ -711,20 +719,22 @@ namespace shm
 
         uint64 target_addr = (uint64)addr;
 
-        // 遍历所有共享内存段
+        uint cur_tid = proc::k_pm.get_cur_pcb()->get_tid();
+        // 遍历所有共享内存段（只看当前线程）
         for (auto it = segments->begin(); it != segments->end(); ++it)
         {
             shm_segment &seg = it->second;
             
             // 检查每个附加地址及其范围
-            for (void* attached_addr : seg.attached_addrs) {
-                uint64 seg_start = (uint64)attached_addr;
+            for (const auto& e : seg.attached_addrs) {
+                if (e.tid != cur_tid) continue;
+                uint64 seg_start = (uint64)e.addr;
                 uint64 seg_end = seg_start + seg.real_size;
                 
                 // 检查目标地址是否在这个段的范围内
                 if (target_addr >= seg_start && target_addr < seg_end) {
                     if (start_addr) {
-                        *start_addr = attached_addr;
+                        *start_addr = e.addr;
                     }
                     if (size) {
                         *size = seg.real_size;
@@ -743,14 +753,16 @@ namespace shm
             return false;
         }
 
-        // 遍历所有共享内存段，找到包含该地址的段
-        auto it = segments->begin();
-        for (; it != segments->end(); ++it)
+        uint cur_tid = proc::k_pm.get_cur_pcb()->get_tid();
+        // 遍历所有共享内存段，找到包含该地址的段（限定当前线程）
+        for (auto it = segments->begin(); it != segments->end(); ++it)
         {
             shm_segment &seg = it->second;
             
             // 在附加地址列表中查找
-            auto addr_it = eastl::find(seg.attached_addrs.begin(), seg.attached_addrs.end(), addr);
+            auto addr_it = eastl::find_if(seg.attached_addrs.begin(), seg.attached_addrs.end(), [&](const attached_entry& e){
+                return e.tid == cur_tid && e.addr == addr;
+            });
             if (addr_it != seg.attached_addrs.end()) {
                 // 找到了包含该地址的共享内存段，增加引用计数
                 seg.nattch++;
@@ -1123,5 +1135,26 @@ namespace shm
             }
         }
         return largest;
+    }
+}
+
+namespace shm {
+    bool ShmManager::duplicate_attachments_for_fork(uint parent_tid, uint child_tid)
+    {
+        bool duplicated = false;
+        for (auto &pair : *segments) {
+            shm_segment &seg = pair.second;
+            for (const auto &e : seg.attached_addrs) {
+                if (e.tid == parent_tid) {
+                    seg.attached_addrs.push_back(attached_entry{child_tid, e.addr});
+                    seg.nattch++;
+                    duplicated = true;
+                }
+            }
+        }
+        if (duplicated) {
+            printfCyan("[ShmManager] Fork: duplicated attachments from tid=%d to tid=%d\n", parent_tid, child_tid);
+        }
+        return duplicated;
     }
 }

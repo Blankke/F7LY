@@ -4,6 +4,12 @@
 #include "proc.hh"
 namespace shm
 {
+    struct attached_entry
+    {
+        uint tid;     // 线程ID（全局唯一标识线程）
+        void *addr;   // 该线程在其地址空间中映射的虚拟起始地址
+    };
+
     struct shm_segment
     {
         int shmid;         // 共享内存段ID
@@ -27,7 +33,8 @@ namespace shm
 				u16 _rsv : 7;
 			}__attribute__((__packed__));
 		}__attribute__((__packed__));
-        eastl::vector<void*> attached_addrs;  // 所有附加的虚拟地址列表
+    // 每次附加记录为 (tid, addr)，避免跨进程/线程的地址混淆
+    eastl::vector<attached_entry> attached_addrs;
         uint64 phy_addrs;  // 物理地址
         
         // 时间信息（POSIX标准：自Unix纪元以来的秒数）
@@ -122,6 +129,10 @@ namespace shm
 
         // 为fork进程增加共享内存引用计数
         bool add_reference_for_fork(void *addr);
+
+    // 在 fork 结束时，把父线程 tid 的所有附加记录复制一份给子线程 tid
+    // 返回是否有任何记录被复制
+    bool duplicate_attachments_for_fork(uint parent_tid, uint child_tid);
 
         // 控制共享内存段 (标准shmctl接口)
         // cmd可以是: IPC_STAT, IPC_SET, IPC_RMID

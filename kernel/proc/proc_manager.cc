@@ -1016,11 +1016,15 @@ namespace proc
             return nullptr;
         }
 
-        // 拷贝父进程的陷阱帧，而不是直接指向，后面有可能会修改
+    // 拷贝父进程的陷阱帧，而不是直接指向，后面有可能会修改
         *np->_trapframe = *p->_trapframe;
 
         // 设置父子进程关系
-        np->_parent = p;
+    np->_parent = p;
+
+    // 继承共享内存附加记录：把父线程tid对应的附加项复制到子线程tid
+    // 注意：此处 np->_tid 已在 alloc_proc() 中分配
+    shm::k_smm.duplicate_attachments_for_fork(p->get_tid(), np->get_tid());
 
         // ===== 基本属性复制 =====
         // 继承文件系统相关属性

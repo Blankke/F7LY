@@ -392,24 +392,43 @@ char *libctest[][2] = {
     {NULL}};
 
 char *ltp_testcases[] = {
+    "open11",
     "splice07",
-    // "epoll_ctl03",
-    // "access01",
-    //     "getpid01",
-    //     "chdir01",
-    //     "waitpid01", // PASS
+    "epoll_ctl03",
+    "access01",
+        "getpid01",
+        "waitpid01", // PASS
     // "pipe11",
-    // "timer_settime02",
-    // "clock_getres01",
-    // "chmod01",
-    // "confstr01",
-    // "posix_fadvise03",
-    // "posix_fadvise03_64",
-    // "timer_settime01",
-    // "signal03",
-    // "signal05",
-    // "signal04",
-    // "open11",
+    "timer_settime02",
+    "clock_getres01",
+    "chmod01",
+    "confstr01",
+    "posix_fadvise03",
+    "posix_fadvise03_64",
+    "timer_settime01",
+    "signal03",
+    "signal05",
+    "signal04",
+        "fchdir01", // 完全PASS
+    "fchdir02", // 完全PASS
+    "fchmod01", // pass
+    "fchmod03", // pass
+    "fchmod04", // pass
+    "fchmodat01", // pass6
+    "fchmodat02", // pass5 fail1
+    "fchown01",   // pass
+    "fchown02", // pass 2 fail 1
+    "fchown04", // pass 2 fail 1
+    "fchown05", // passed   6
+    "fcntl02",    // pass
+    "fcntl03",    // pass
+    "fcntl04",    // pass
+    "fcntl05",    // pass
+    "fcntl08",    // pass
+    "fcntl09",    // pass
+    "fcntl10",    // pass
+    "fcntl13",    // pass
+    "fcntl15",    // passs5
     NULL,
     // "abort01",
     "abs01", // 完全PASS,没summary

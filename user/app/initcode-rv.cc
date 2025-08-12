@@ -5,8 +5,8 @@ extern "C"
     __attribute__((section(".text.startup"))) int main()
     {
         init_env("/musl/");
-        // ltp_test(true);
-        ltp_test(false);
+        ltp_test(true);
+        // ltp_test(false);
         // basic_test("/musl/");
         // basic_test("/glibc/");
         // busybox_test("/musl/");
@@ -14,7 +14,6 @@ extern "C"
         // libc_test("/musl/"); // 不测glibc, 不要求测
         // lua_test("/musl/");
         // lua_test("/glibc/");
-
         // libcbench_test("/glibc");
 
         // 决赛测例

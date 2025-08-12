@@ -70,7 +70,7 @@ void Printer::printptr( uint64 x )
 
 void Printer::print( const char *fmt, ... )
 {
-// #define DIS_PRINTF
+#define DIS_PRINTF
 #ifdef DIS_PRINTF
   // 当定义了 DIS_PRINTF 宏时，不产生任何输出
   // 但仍需要处理可变参数以避免潜在问题
