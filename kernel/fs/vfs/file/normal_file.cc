@@ -40,7 +40,7 @@ namespace fs
 
 		// 保存当前文件位置，用于之后恢复
 		long current_pos = _file_ptr;
-		printfYellow("normal file offset: %d, requested offset: %d\n", current_pos, off);
+		printfYellow("read normal file offset: %d, requested offset: %d\n", current_pos, off);
 		// 如果指定的偏移量与当前文件指针不同，需要设置文件位置
 		if (off != _file_ptr)
 		{
@@ -111,7 +111,7 @@ namespace fs
 			lwext4_file_struct.fsize = off;
 		}
 
-		printfYellow("normal file offset: %d, requested offset: %d\n", current_pos, off);
+		printfYellow("write normal file offset: %d, requested offset: %d\n", current_pos, off);
 		// 检查文件大小限制 (RLIMIT_FSIZE)
 		proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
 		uint64 fsize_limit = current_proc->get_fsize_limit();

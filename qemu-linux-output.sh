@@ -8,7 +8,7 @@ if [ $# -eq 0 ]; then
 fi
 
 program_name=$1
-program_path="/mnt/sdcard-rv/musl/ltp/testcases/bin/$program_name"
+program_path="/mnt/sdcard-rv/glibc/ltp/testcases/bin/$program_name"
 
 # 检查程序是否存在
 if [ ! -f "$program_path" ]; then

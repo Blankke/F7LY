@@ -506,7 +506,7 @@ namespace mem
                 k_pmm.free_page(pa);
                 return -1;
             }
-            printfRed("[allocate_vma_page] offset: %d, file_size: %lu\n", offset, file_size);
+            printfRed("[allocate_vma_page] offset: 0x%x, file_size: 0x%lx\n", offset, file_size);
             // 检查访问是否超出文件大小
             if (offset >= (int)file_size)
             {
@@ -520,21 +520,43 @@ namespace mem
             }
 
             // 从文件读取数据
-            printfCyan("[allocate_vma_page] reading from file %s at offset %d (file_size=%lu)\n",
-                       vf->_path_name.c_str(), offset, file_size);
+            // printfCyan("[allocate_vma_page] reading from file %s at offset %d (file_size=%lu)\n",
+            //            vf->_path_name.c_str(), offset, file_size);
 
-            int readbytes = vf->read((uint64)pa, PGSIZE, offset, false);
-            if (readbytes < 0)
-            {
-                printfRed("[allocate_vma_page] file read failed\n");
-                k_pmm.free_page(pa);
-                return -1;
+            // int readbytes = vf->read((uint64)pa, PGSIZE, offset, false);
+            // if (readbytes < 0)
+            // {
+            //     printfRed("[allocate_vma_page] file read failed\n");
+            //     k_pmm.free_page(pa);
+            //     return -1;
+            // }
+
+            // Hexdump the page data
+            printfCyan("[allocate_vma_page] Hexdump of page data (PA=%p, size=%d):\n", pa, PGSIZE);
+            uint8_t* data = (uint8_t*)pa;
+            for (int i = 0; i < PGSIZE; i += 16) {
+                printf("%08x: ", i);
+                // Print hex bytes
+                for (int j = 0; j < 16 && (i + j) < PGSIZE; j++) {
+                    printf("%02x ", data[i + j]);
+                }
+                // Pad if less than 16 bytes
+                for (int j = PGSIZE - i; j < 16; j++) {
+                    printf("   ");
+                }
+                printf(" |");
+                // Print ASCII representation
+                for (int j = 0; j < 16 && (i + j) < PGSIZE; j++) {
+                    char c = data[i + j];
+                    printf("%c", (c >= 32 && c <= 126) ? c : '.');
+                }
+                printf("|\n");
             }
 
-            if (readbytes < PGSIZE)
-            {
-                printfYellow("[allocate_vma_page] partial page read (%d bytes)\n", readbytes);
-            }
+            // if (readbytes < PGSIZE)
+            // {
+            //     printfYellow("[allocate_vma_page] partial page read (%d bytes)\n", readbytes);
+            // }
         }
         else
         {
