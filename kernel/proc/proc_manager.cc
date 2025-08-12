@@ -2680,7 +2680,30 @@ namespace proc
             {
                 // MAP_FIXED: 可以覆盖现有映射
                 printfYellow("[mmap] MAP_FIXED: may override existing mappings\n");
-                // TODO: 取消映射冲突区域
+
+                // 在建立新映射前，必须先把将要覆盖的地址范围内的旧映射全部取消，
+                // 否则会产生重叠VMA，导致后续缺页时按旧VMA权限判定出错。
+                ProcessMemoryManager *mm = p->get_memory_manager();
+                if (mm == nullptr)
+                {
+                    printfRed("[mmap] Internal error: memory manager is null\n");
+                    if (errno != nullptr)
+                    {
+                        *errno = EFAULT;
+                    }
+                    return MAP_FAILED;
+                }
+
+                int unmap_ret = mm->unmap_memory_range((void *)map_addr, aligned_length);
+                if (unmap_ret != 0)
+                {
+                    // 即使未找到完全匹配的VMA也继续（可能是空洞），但如果返回硬错误，直接失败
+                    // 这里保守地认为非0即失败
+                    printfYellow("[mmap] MAP_FIXED: unmap of [%p, %p) returned %d\n",
+                                 (void *)map_addr, (void *)(map_addr + aligned_length), unmap_ret);
+                    // 继续进行映射，Linux 行为是无论是否有旧映射都强制覆盖；
+                    // 我们的 unmap 尝试只为清理重叠VMA，失败非致命，除非明显错误。
+                }
             }
         }
         else

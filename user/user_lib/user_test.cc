@@ -1,7 +1,6 @@
 
 #include "user.hh"
 
-
 extern char *libctest[][2];
 
 const char musl_dir[] = "/musl/";
@@ -60,7 +59,6 @@ void init_env(const char *path = musl_dir)
     bb_sh[2] = "-c";
     bb_sh[3] = "/musl/busybox --install /bin";
     run_test("busybox", bb_sh, 0);
-
 }
 
 int basic_test(const char *path = musl_dir)
@@ -103,8 +101,8 @@ int basic_test(const char *path = musl_dir)
     run_test("getdents");
     run_test("mkdir_");
     run_test("chdir");
-    run_test("mount");       //todo
-    run_test("umount");      //todo
+    run_test("mount");  // todo
+    run_test("umount"); // todo
     run_test("munmap");
     run_test("unlink");
     run_test("pipe");
@@ -130,7 +128,6 @@ int busybox_test(const char *path = musl_dir)
     run_test("busybox", bb_sh, 0);
     return 0;
 }
-
 
 int libcbench_test(const char *path = musl_dir)
 {
@@ -248,8 +245,8 @@ int ltp_test(bool is_musl)
     char *bb_sh[8] = {0};
     char *envp[] = {
         "PATH=/bin", // 设置 PATH
-        NULL          // 必须以 NULL 结尾
-    }; //这个测loop的那些测例要用
+        NULL         // 必须以 NULL 结尾
+    }; // 这个测loop的那些测例要用
     int result = 0;
     for (int i = 0; ltp_testcases[i] != NULL; i++)
     {
@@ -261,7 +258,6 @@ int ltp_test(bool is_musl)
     printf("#### OS COMP TEST GROUP END ltp-%s ####\n", is_musl ? "musl" : "glibc");
     return 0;
 }
-
 
 int git_test(const char *path)
 {
@@ -314,8 +310,8 @@ char *libctest[][2] = {
     {"snprintf", NULL},
     // // // {"socket", NULL}, // 网络相关，这个不测了
     {"sscanf", NULL},
-    {"sscanf_long", NULL}, //龙芯会爆，riscv正常
-    {"stat", NULL}, //sys_fstatat我关掉了，原来就是关的，开了basictest爆炸，应该没实现对
+    {"sscanf_long", NULL}, // 龙芯会爆，riscv正常
+    {"stat", NULL},        // sys_fstatat我关掉了，原来就是关的，开了basictest爆炸，应该没实现对
     {"strftime", NULL},
     {"string", NULL},
     {"string_memcpy", NULL},
@@ -366,12 +362,12 @@ char *libctest[][2] = {
     {"printf_fmt_g_zeros", NULL},
     {"printf_fmt_n", NULL},
     // {"pthread_robust_detach", NULL}, //爆了
-    {"pthread_cancel_sem_wait", NULL},   // sig， fork高级用法
-    {"pthread_cond_smasher", NULL},      // sig， fork高级用法
+    {"pthread_cancel_sem_wait", NULL}, // sig， fork高级用法
+    {"pthread_cond_smasher", NULL},    // sig， fork高级用法
     // {"pthread_condattr_setclock", NULL}, // sig， fork高级用法
-    {"pthread_exit_cancel", NULL},       // sig， fork高级用法
-    {"pthread_once_deadlock", NULL},     // sig， fork高级用法
-    {"pthread_rwlock_ebusy", NULL},      // sig， fork高级用法
+    {"pthread_exit_cancel", NULL},   // sig， fork高级用法
+    {"pthread_once_deadlock", NULL}, // sig， fork高级用法
+    {"pthread_rwlock_ebusy", NULL},  // sig， fork高级用法
     {"putenv_doublefree", NULL},
     {"regex_backref_0", NULL},
     {"regex_bracket_icase", NULL},
@@ -397,10 +393,23 @@ char *libctest[][2] = {
 
 char *ltp_testcases[] = {
     "splice07",
-    // "epoll_ctl03",
-    // "access01",
-    // "getpid01",
-    // "chdir01",
+    "epoll_ctl03",
+    "access01",
+        "getpid01",
+        "chdir01",
+        "waitpid01", // PASS
+    "pipe11",
+    "timer_settime02",
+    "clock_getres01",
+    "chmod01",
+    "confstr01",
+    "posix_fadvise03",
+    "posix_fadvise03_64",
+    "timer_settime01",
+    "signal03",
+    "signal05",
+    "signal04",
+    "open11",
     NULL,
     // "abort01",
     "abs01", // 完全PASS,没summary
@@ -1963,9 +1972,9 @@ char *ltp_testcases[] = {
     // "poll02",
     "posix_fadvise01",    // pass6
     "posix_fadvise01_64", // pass6
-    "posix_fadvise02", //pass6
-    "posix_fadvise02_64", //pass6
-    "posix_fadvise03",   //pass32
+    "posix_fadvise02",    // pass6
+    "posix_fadvise02_64", // pass6
+    "posix_fadvise03",    // pass32
     "posix_fadvise03_64", // pass32
     // "posix_fadvise04",
     // "posix_fadvise04_64",
@@ -3163,8 +3172,8 @@ char *ltp_testcases[] = {
     // "vxlan02.sh",
     // "vxlan03.sh",
     // "vxlan04.sh",
-    "wait01", // PASS
-    "wait02", // PASS
+    "wait01",  // PASS
+    "wait02",  // PASS
     "wait401", // PASS
     "wait402", // PASS
     "wait403", // PASS

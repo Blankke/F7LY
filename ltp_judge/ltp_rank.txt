@@ -2,7 +2,7 @@ Test Case Name | Pass Count | Total Count | performance
 ===============================================================
 splice07                       | 566      | 566       | 这个貌似能修，争取一下, 测这个记得开网络(init_network_stack)
 epoll_ctl03                    | 256        | 256        | ok
-access01                       | 199        | 199        | 过一部份
+access01                       | 199        | 199        | 记得改shm的附加列表
 memfd_create01                 | 157        | 157        | pass 2 这个勾把还挺难，F_SEAL后面再补一下
 getpid01                       | 100        | 100        | ok
 chdir01                        | 92         | 95         | ok

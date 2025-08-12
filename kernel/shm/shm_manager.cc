@@ -646,10 +646,10 @@ namespace shm
         proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
         
         // 从附加地址列表中移除这个地址
-        auto addr_it = eastl::find(seg.attached_addrs.begin(), seg.attached_addrs.end(), addr);
-        if (addr_it != seg.attached_addrs.end()) {
-            seg.attached_addrs.erase(addr_it);
-        }
+        // auto addr_it = eastl::find(seg.attached_addrs.begin(), seg.attached_addrs.end(), addr);
+        // if (addr_it != seg.attached_addrs.end()) {
+        //     seg.attached_addrs.erase(addr_it);
+        // }
         
         // 解除映射 - 使用实际分配的页对齐大小
         mem::k_vmm.vmunmap(
