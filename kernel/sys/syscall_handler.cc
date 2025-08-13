@@ -11393,12 +11393,12 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_userdebug3()
     {
-        panic("未实现该系统调用");
+        enable_printf();
         return 0;
     }
     uint64 SyscallHandler::sys_userdebug4()
     {
-        panic("未实现该系统调用");
+        disable_printf();
         return 0;
     }
 

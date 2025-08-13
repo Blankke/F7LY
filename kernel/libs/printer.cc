@@ -8,6 +8,11 @@
 // 全局打印器实例
 Printer k_printer;
 
+// 使用匿名命名空间限制 disable_printf 变量的作用域
+namespace {
+    bool disable_printf_flag = true;  // 默认关闭 printf
+}
+
 int	 Printer::_trace_flag	  = 0;
 char Printer::_lower_digits[] = "0123456789abcdef";
 char Printer::_upper_digits[] = "0123456789ABCDEF";
@@ -23,6 +28,22 @@ void Printer::init()
 	_type = out_type::console;
 	printf("Printer::init end\n");
 
+}
+
+// printf 控制函数实现
+void Printer::enable_printf()
+{
+    disable_printf_flag = false;
+}
+
+void Printer::disable_printf()
+{
+    disable_printf_flag = true;
+}
+
+bool Printer::is_printf_disabled()
+{
+    return disable_printf_flag;
 }
 
 void Printer::printint( int xx, int base, int sign )
@@ -70,15 +91,14 @@ void Printer::printptr( uint64 x )
 
 void Printer::print( const char *fmt, ... )
 {
-#define DIS_PRINTF
-#ifdef DIS_PRINTF
-  // 当定义了 DIS_PRINTF 宏时，不产生任何输出
-  // 但仍需要处理可变参数以避免潜在问题
-  va_list ap1;
-  va_start(ap1, fmt);
-  va_end(ap1);
-  return;
-#endif
+  // 如果禁用了 printf 输出，则直接返回
+  if (disable_printf_flag) {
+    // 仍需要处理可变参数以避免潜在问题
+    va_list ap1;
+    va_start(ap1, fmt);
+    va_end(ap1);
+    return;
+  }
 
   va_list ap;
   int i, c, tmp_locking;

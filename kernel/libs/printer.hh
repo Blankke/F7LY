@@ -79,6 +79,11 @@ public:
 	void init();
 	inline int is_panic() { return _panicked; }
 
+	// 控制 printf 输出的方法
+	static void enable_printf();
+	static void disable_printf();
+	static bool is_printf_disabled();
+
 	void print(const char *fmt, ...);
 	int snprint(char *buffer, size_t size, const char *fmt, ...);
 	void printint(int xx, int base, int sign);
@@ -144,3 +149,7 @@ public:
 	
 };
 extern Printer k_printer;
+
+// printf 控制宏定义（必须放在类定义之后以避免宏展开冲突）
+#define enable_printf() Printer::enable_printf()
+#define disable_printf() Printer::disable_printf()
