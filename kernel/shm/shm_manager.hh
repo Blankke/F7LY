@@ -132,7 +132,7 @@ namespace shm
 
     // 在 fork 结束时，把父线程 tid 的所有附加记录复制一份给子线程 tid
     // 返回是否有任何记录被复制
-    bool duplicate_attachments_for_fork(uint parent_tid, uint child_tid);
+        bool duplicate_attachments_for_fork(uint parent_tid, uint child_tid);
 
         // 控制共享内存段 (标准shmctl接口)
         // cmd可以是: IPC_STAT, IPC_SET, IPC_RMID

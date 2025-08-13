@@ -202,6 +202,7 @@ namespace proc
 				}
 				printfRed("pipe 缓冲区为空，阻塞模式\n");
 				// 阻塞模式：让当前进程进入休眠状态，等待写端唤醒
+				
 				k_pm.sleep(&_read_sleep, &_lock); // DOC: piperead-sleep
 			}
 

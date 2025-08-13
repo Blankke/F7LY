@@ -2581,7 +2581,7 @@ namespace proc
         }
 
         // 检查是否有足够的内存可用
-        // TODO: 检查系统是否有足够的物理内存
+        /// TODO: 检查系统是否有足够的物理内存
         // if (!enough_memory_available(aligned_length)) {
         //     if (errno != nullptr) {
         //         *errno =ENOMEM;
@@ -2590,7 +2590,7 @@ namespace proc
         // }
 
         // 检查进程的RLIMIT_DATA限制
-        // TODO: 检查进程数据段大小限制
+        /// TODO: 检查进程数据段大小限制
         // if (would_exceed_data_limit(p, aligned_length)) {
         //     if (errno != nullptr) {
         //         *errno =ENOMEM;
@@ -2781,6 +2781,36 @@ namespace proc
                     if (prot == PROT_NONE)
                         shmflg = SHM_NONE;
                     shm::k_smm.attach_seg(shmid, (void *)map_addr, shmflg);
+                    uint64 pa=shm::k_smm.get_seg_info(shmid).phy_addrs;
+                    if (vfile != nullptr)
+                    {
+                        if (vfile != nullptr )
+                        {
+                            // 文件映射：需要检查是否访问超出文件大小的区域
+                            // 获取文件实际大小
+                            uint64 file_size = 0;
+                            int size_result = vfs_ext_get_filesize(vfile->_path_name.c_str(), &file_size);
+                            if (size_result != EOK)
+                            {
+                                shm::k_smm.detach_seg((void *)map_addr);
+                                *errno= -size_result;
+                                return MAP_FAILED;
+                            }
+
+                            int readbytes = vfile->read((uint64)pa, PGSIZE, offset, false);
+                            if (readbytes < 0)
+                            {
+                                shm::k_smm.detach_seg((void *)map_addr);
+                                *errno= -EFAULT;
+                                return MAP_FAILED;
+                            }
+
+                            if (readbytes < PGSIZE)
+                            {
+                                printfYellow("[mmap] MAP_SHARED partial page read (%d bytes)\n", readbytes);
+                            }
+                        }
+                    }
                     printfCyan("[mmap] Created shared memory segment with key %d at addr %p\n", key, (void *)map_addr);
                 }
                 p->set_heap_end(map_addr + aligned_length);
