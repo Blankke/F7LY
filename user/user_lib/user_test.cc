@@ -290,13 +290,13 @@ char *libctest[][2] = {
     {"env", NULL},
     {"fdopen", NULL}, // fdopen failed 问题在于写入后读不出来，怀疑根本没写入成功
     {"fnmatch", NULL},
-    // // {"fscanf", NULL}, //ioctl 爆了
-    // // {"fwscanf", NULL}, //死了
+    {"fscanf", NULL}, //ioctl 爆了
+    {"fwscanf", NULL}, //死了
     {"iconv_open", NULL},
     {"inet_pton", NULL},
     {"mbc", NULL},
     {"memstream", NULL},
-    // {"pthread_cancel_points", NULL}, //sig， fork高级用法
+    {"pthread_cancel_points", NULL}, //sig， fork高级用法
     {"pthread_cancel", NULL}, // sig， fork高级用法
     {"pthread_cond", NULL},   // sig， fork高级用法
     {"pthread_tsd", NULL},    // sig， fork高级用法
@@ -306,12 +306,12 @@ char *libctest[][2] = {
     {"search_insque", NULL},
     {"search_lsearch", NULL},
     {"search_tsearch", NULL},
-    // // // {"setjmp", NULL}, //信号相关，爆了
+    {"setjmp", NULL}, //信号相关，爆了
     {"snprintf", NULL},
     // // // {"socket", NULL}, // 网络相关，这个不测了
     {"sscanf", NULL},
     {"sscanf_long", NULL}, // 龙芯会爆，riscv正常
-    {"stat", NULL},        // sys_fstatat我关掉了，原来就是关的，开了basictest爆炸，应该没实现对
+    // {"stat", NULL},        // sys_fstatat我关掉了，原来就是关的，开了basictest爆炸，应该没实现对
     {"strftime", NULL},
     {"string", NULL},
     {"string_memcpy", NULL},
@@ -331,11 +331,11 @@ char *libctest[][2] = {
     {"time", NULL},
     {"tls_align", NULL},
     {"udiv", NULL},
-    // // // {"ungetc", NULL}, //文件系统爆了
+    {"ungetc", NULL},
     // // // {"utime", NULL}, // sys_utimensat实现不正确
     {"wcsstr", NULL},
     {"wcstol", NULL},
-    // // // {"daemon_failure", NULL}, // 爆了
+    {"daemon_failure", NULL}, 
     {"dn_expand_empty", NULL},
     {"dn_expand_ptr_0", NULL},
     // // // {"fflush_exit", NULL},//fd爆了，标准输出不见了
@@ -521,6 +521,7 @@ char *ltp_testcases[] = {
     "pwrite01",       // pass
     "read01",         // 貌似可以PASS
     "read02",         // pass
+    "read03",
     "read04",         // 完全PASS
     "readlink01",     // pass 2
     "readlink03",     // pass
@@ -565,6 +566,7 @@ char *ltp_testcases[] = {
         "write01", // 完全PASS
     "write02", // pass
     "write03", // 完全PASS
+    "write04",
     "write05", // passed   3
         "writev05", // 完全PASS
     "writev06", // 完全PASS

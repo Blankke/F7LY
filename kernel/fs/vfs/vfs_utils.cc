@@ -768,7 +768,11 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
 
         // 对于 FIFO，使用全局管理器获取或创建 Pipe 对象
         proc::ipc::Pipe *pipe = fs::k_fifo_manager.get_or_create_fifo(absolute_path);
-
+        if(flags&O_NONBLOCK)
+        {
+            pipe->set_nonblock(true);
+            printfYellow("vfs_openat: O_NONBLOCK set for FIFO %s\n", absolute_path.c_str());
+        }
         bool is_write_end = false;
         if (access_mode == O_WRONLY)
         {
