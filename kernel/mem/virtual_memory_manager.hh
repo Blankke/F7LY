@@ -132,6 +132,11 @@ void pci_map(int bus, int dev, int func, void *pages);
 
 		int protectpages(PageTable &pt, uint64 va, uint64 size, int perm, bool is_vma = false);
 
+		/// @brief 以十六进制格式打印内存页面内容
+		/// @param data 数据指针
+		/// @param size 数据大小（字节数）
+		void hexdump_page(const void* data, uint64 size);
+
 	private:
 	};
 

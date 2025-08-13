@@ -533,25 +533,7 @@ namespace mem
 
             // Hexdump the page data
             printfCyan("[allocate_vma_page] Hexdump of page data (PA=%p, size=%d):\n", pa, PGSIZE);
-            uint8_t* data = (uint8_t*)pa;
-            for (int i = 0; i < PGSIZE; i += 16) {
-                printf("%08x: ", i);
-                // Print hex bytes
-                for (int j = 0; j < 16 && (i + j) < PGSIZE; j++) {
-                    printf("%02x ", data[i + j]);
-                }
-                // Pad if less than 16 bytes
-                for (int j = PGSIZE - i; j < 16; j++) {
-                    printf("   ");
-                }
-                printf(" |");
-                // Print ASCII representation
-                for (int j = 0; j < 16 && (i + j) < PGSIZE; j++) {
-                    char c = data[i + j];
-                    printf("%c", (c >= 32 && c <= 126) ? c : '.');
-                }
-                printf("|\n");
-            }
+            hexdump_page(pa, PGSIZE);
 
             if (readbytes < PGSIZE)
             {
@@ -1138,5 +1120,34 @@ namespace mem
                 pte.set_data(pte.get_data() | PTE_U);
         }
         return 0;
+    }
+
+    void VirtualMemoryManager::hexdump_page(const void* data, uint64 size)
+    {
+        const uint8_t* bytes = (const uint8_t*)data;
+        
+        for (uint64 i = 0; i < size; i += 16) {
+            printf("%08x: ", (uint32_t)i);
+            
+            // Print hex bytes
+            for (int j = 0; j < 16 && (i + j) < size; j++) {
+                printf("%02x ", bytes[i + j]);
+            }
+            
+            // Pad if less than 16 bytes
+            for (uint64 j = size - i; j < 16; j++) {
+                printf("   ");
+            }
+            
+            printf(" |");
+            
+            // Print ASCII representation
+            for (int j = 0; j < 16 && (i + j) < size; j++) {
+                char c = bytes[i + j];
+                printf("%c", (c >= 32 && c <= 126) ? c : '.');
+            }
+            
+            printf("|\n");
+        }
     }
 }
