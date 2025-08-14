@@ -387,7 +387,7 @@ namespace mem
                                           uint64 src_va, uint64 max)
     {
 
-        printfCyan("[copy_str_in] src_va: %p, max: %d\n", src_va, max);
+        // printfCyan("[copy_str_in] src_va: %p, max: %d\n", src_va, max);
         uint64 n, va, pa;
         int got_null = 0;
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
