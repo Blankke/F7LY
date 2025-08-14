@@ -8,6 +8,7 @@
 #include "net/onpstack/include/ip/udp.hh"
 #include "net/onpstack/include/bsd/socket.hh"
 #include <errno.h>
+#include "fs/vfs/virtual_fs.hh"
 // 注意：不包含arpa/inet.h，避免冲突
 
 namespace fs
@@ -236,46 +237,96 @@ namespace fs
             _lock.release();
             return -EISCONN;
         }
+        // 根据 socket 族类型处理不同的连接方式
+        if (_family == SocketFamily::UNIX) {
+            // Unix domain socket 连接
+            if (addrlen < sizeof(struct sockaddr_un)) {
+                _lock.release();
+                return -EINVAL;
+            }
 
-        // 复制远程地址
-        int result = copy_sockaddr_from_user(&_remote_addr, addr, addrlen);
-        if (result < 0) {
+            // proc::Pcb *p = proc::k_pm.get_cur_pcb();
+            // mem::PageTable *pt = p->get_pagetable();
+
+            struct sockaddr_un *unix_addr = (struct sockaddr_un *)addr;
+
+
+            if (unix_addr->sun_family != AF_UNIX) {
+                _lock.release();
+                return -EAFNOSUPPORT;
+            }
+
+            // Unix domain socket 连接逻辑
+            // 这里应该根据路径查找对应的 socket 文件或者建立 IPC 连接
+            // 目前简化处理：检查路径是否有效
+            if (unix_addr->sun_path[0] == '\0') {
+                // 抽象命名空间 socket (以空字符开头)
+                printfCyan("[socket_file::connect] 抽象 Unix socket: %s\n", &unix_addr->sun_path[1]);
+            } else {
+                // 文件系统路径 socket
+                printfCyan("[socket_file::connect] Unix socket 路径: %s\n", unix_addr->sun_path);
+                
+                // TODO: 这里应该检查路径是否存在，是否为 socket 文件等
+                // 简化实现：假设连接成功
+                // Unix域套接字连接逻辑在此处应该实现
+                printfRed("先实现文件检查逻辑\n");
+                _lock.release();
+                return -2;
+                printfRed("UNIX IPC未实现\n");
+            }
+
+            _state = SocketState::CONNECTED;
             _lock.release();
-            return -EFAULT;
-        }
+            return 0;
 
-        // 创建onps socket句柄（如果还没有）
-        if (_onps_socket == INVALID_SOCKET) {
-            EN_ONPSERR onps_err;
-            _onps_socket = socket(AF_INET, 
-                                (_type == SocketType::TCP) ? 1 : 2, // SOCK_STREAM : SOCK_DGRAM
-                                0, &onps_err);
+        } else if (_family == SocketFamily::INET) {
+            // 网络 socket 连接 (原有逻辑)
+            printfRed("这玩意儿好像写错了，不用copy in\n");
+            // 复制远程地址
+            int result = copy_sockaddr_from_user(&_remote_addr, addr, addrlen);
+            if (result < 0) {
+                _lock.release();
+                return -EFAULT;
+            }
+
+            // 创建onps socket句柄（如果还没有）
             if (_onps_socket == INVALID_SOCKET) {
-                _lock.release();
-                return -ENOMEM;
+                EN_ONPSERR onps_err;
+                _onps_socket = socket(AF_INET, 
+                                    (_type == SocketType::TCP) ? 1 : 2, // SOCK_STREAM : SOCK_DGRAM
+                                    0, &onps_err);
+                if (_onps_socket == INVALID_SOCKET) {
+                    _lock.release();
+                    return -ENOMEM;
+                }
             }
-        }
 
-        // 进行连接
-        if (_type == SocketType::TCP) {
-            // TCP连接
-            char ip_str[20];
-            inet_ntoa_safe_ext(_remote_addr.sin_addr, ip_str);
-            
-            if (::connect(_onps_socket, ip_str, _remote_addr.sin_port, 5) < 0) {
-                close(_onps_socket);
-                _onps_socket = INVALID_SOCKET;
-                _lock.release();
-                return -ECONNREFUSED;
+            // 进行连接
+            if (_type == SocketType::TCP) {
+                // TCP连接
+                char ip_str[20];
+                inet_ntoa_safe_ext(_remote_addr.sin_addr, ip_str);
+                
+                if (::connect(_onps_socket, ip_str, _remote_addr.sin_port, 5) < 0) {
+                    close(_onps_socket);
+                    _onps_socket = INVALID_SOCKET;
+                    _lock.release();
+                    return -ECONNREFUSED;
+                }
+            } else if (_type == SocketType::UDP) {
+                // UDP "连接"（实际上是设置默认目标地址）
+                // UDP socket 不需要真正的连接，只是记录远程地址
             }
-        } else if (_type == SocketType::UDP) {
-            // UDP "连接"（实际上是设置默认目标地址）
-            // UDP socket 不需要真正的连接，只是记录远程地址
-        }
 
-        _state = SocketState::CONNECTED;
-        _lock.release();
-        return 0;
+            _state = SocketState::CONNECTED;
+            _lock.release();
+            return 0;
+
+        } else {
+            // 不支持的协议族
+            _lock.release();
+            return -EAFNOSUPPORT;
+        }
     }
 
     int socket_file::send(const void *buf, size_t len, int flags)
