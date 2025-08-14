@@ -2702,7 +2702,7 @@ namespace proc
                     return MAP_FAILED;
                 }
 
-                int unmap_ret = mm->unmap_memory_range_fix((void *)map_addr, aligned_length);
+                int unmap_ret = mm->unmap_memory_range((void *)map_addr, aligned_length);
                 if (unmap_ret != 0)
                 {
                     // 即使未找到完全匹配的VMA也继续（可能是空洞），但如果返回硬错误，直接失败
@@ -2911,7 +2911,7 @@ namespace proc
         {
             return -1;
         }
-        int result = memory_mgr->unmap_memory_range_fix(addr, length);
+        int result = memory_mgr->unmap_memory_range(addr, length);
 
         if (result == 0)
         {

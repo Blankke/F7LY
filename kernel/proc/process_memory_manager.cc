@@ -661,20 +661,33 @@ namespace proc
         }
 
         // 检查是否需要调整堆指针
-        if (start_addr <= heap_end && end_addr > heap_start)
+        // 只有在 addr + length 等于堆顶指针的时候才收缩堆顶
+        // 但要排除 VMA 拆分的情况，VMA 拆分不应该影响堆边界
+        if (end_addr == heap_end && start_addr >= heap_start && start_addr < heap_end)
         {
-            // 取消映射的区域与堆重叠，需要调整堆大小
-            if (start_addr <= heap_start)
+            // 检查是否是真正的堆收缩操作（而不是 VMA 拆分）
+            // 如果存在重叠的 VMA 且进行了部分取消映射，则不应该收缩堆
+            bool is_heap_shrink = true;
+            for (int i = 0; i < overlap_count; i++)
             {
-                // 从堆开始位置或更早开始取消映射
-                heap_end = heap_start;
-                // printfYellow("ProcessMemoryManager: reset heap_end to heap_start\n");
+                int vma_idx = overlapping_vmas[i];
+                vma &vm_entry = vma_data._vm[vma_idx];
+                uint64 vma_start = vm_entry.addr;
+                uint64 vma_end = vm_entry.addr + vm_entry.len;
+                
+                // 如果 VMA 被部分取消映射（即拆分），则不收缩堆
+                if (!(start_addr <= vma_start && end_addr >= vma_end))
+                {
+                    is_heap_shrink = false;
+                    break;
+                }
             }
-            else if (start_addr < heap_end)
+            
+            if (is_heap_shrink)
             {
-                // 从堆中间开始取消映射
-                heap_end = start_addr;
-                // printfYellow("ProcessMemoryManager: shrunk heap_end to %p\n", (void *)start_addr);
+                // 取消映射的区域正好结束于堆顶，收缩堆顶到开始位置
+                heap_end = (uint64)addr;
+                // printfYellow("ProcessMemoryManager: shrunk heap_end to %p (exact match at heap top)\n", (void *)start_addr);
             }
         }
 
