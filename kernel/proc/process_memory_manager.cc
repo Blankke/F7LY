@@ -856,9 +856,52 @@ namespace proc
         else if (unmap_start > vma_start && unmap_end < vma_end)
         {
             // 从VMA中间取消映射（需要分割VMA）
-            printfRed("ProcessMemoryManager: middle unmapping not fully supported yet\n");
-            // 这里可以实现VMA分割逻辑，但比较复杂
-            return false;
+            printfCyan("ProcessMemoryManager: implementing middle unmapping (VMA split)\n");
+            
+            // 找到一个空的VMA槽位用于分割后的后半部分
+            int new_vma_idx = -1;
+            for (int j = 0; j < NVMA; j++)
+            {
+                if (!vma_data._vm[j].used)
+                {
+                    new_vma_idx = j;
+                    break;
+                }
+            }
+            
+            if (new_vma_idx == -1)
+            {
+                printfRed("ProcessMemoryManager: no free VMA slot for split\n");
+                return false;
+            }
+            
+            // 创建后半部分的VMA
+            vma &new_vm = vma_data._vm[new_vma_idx];
+            new_vm.used = 1;
+            new_vm.addr = unmap_end;
+            new_vm.len = vma_end - unmap_end;
+            new_vm.prot = vm_entry.prot;
+            new_vm.flags = vm_entry.flags;
+            new_vm.vfile = vm_entry.vfile;
+            if (vm_entry.vfile)
+            {
+                new_vm.offset = vm_entry.offset + (unmap_end - vma_start);
+                // 增加文件引用计数
+                vm_entry.vfile->dup();
+            }
+            else
+            {
+                new_vm.offset = 0;
+            }
+            
+            // 修改原VMA为前半部分
+            vm_entry.len = unmap_start - vma_start;
+            
+            printfCyan("ProcessMemoryManager: split VMA %d into [%p, %p) and VMA %d [%p, %p)\n",
+                       vma_index, (void *)vm_entry.addr, (void *)(vm_entry.addr + vm_entry.len),
+                       new_vma_idx, (void *)new_vm.addr, (void *)(new_vm.addr + new_vm.len));
+            
+            return true;
         }
 
         return false;

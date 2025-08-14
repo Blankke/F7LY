@@ -251,6 +251,7 @@ int ltp_test(bool is_musl)
     char *bb_sh[8] = {0};
     char *envp[] = {
         "PATH=/bin", // 设置 PATH
+        "LD_LIBRARY_PATH=/glibc/lib",
         NULL         // 必须以 NULL 结尾
     }; // 这个测loop的那些测例要用
     int result = 0;
