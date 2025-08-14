@@ -411,4 +411,15 @@ namespace fs
             return eastl::make_unique<EtcLdSoCacheProvider>();
         }
     };
+
+    // /proc/stat 系统统计信息提供者
+    class ProcStatProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_dynamic() const override { return true; } // 系统统计需要实时更新
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcStatProvider>();
+        }
+    };
 }

@@ -283,7 +283,8 @@ namespace fs
         // 注意：/proc/self/cmdline, /proc/stat, /proc/uptime 等需要相应的 Provider 实现
         // 这里先创建节点，但 provider 为 nullptr，可以后续添加
         add_virtual_file("/proc/self/cmdline", fs::FileTypes::FT_NORMAL, nullptr);
-        add_virtual_file("/proc/stat", fs::FileTypes::FT_NORMAL, nullptr);
+        add_virtual_file("/proc/stat", fs::FileTypes::FT_NORMAL, 
+                         eastl::make_unique<ProcStatProvider>());
         add_virtual_file("/proc/uptime", fs::FileTypes::FT_NORMAL, nullptr);
 
         // 添加 /proc/self/stat 文件及其提供者 (使用新的统一provider)

@@ -1100,4 +1100,49 @@ namespace fs
     {
         return ""; // 空文件，触发回退逻辑
     }
+
+    // ======================== /proc/stat 系统统计信息提供者实现 ========================
+    eastl::string ProcStatProvider::generate_content()
+    {
+        eastl::string result;
+        
+        // CPU统计行：cpu user nice system idle iowait irq softirq steal guest guest_nice
+        // 简化实现，提供基本的CPU统计信息
+        // 格式：cpu <user> <nice> <system> <idle> <iowait> <irq> <softirq> <steal> <guest> <guest_nice>
+        // 这里使用一些合理的默认值
+        result += "cpu  10000 0 5000 900000 100 0 50 0 0 0\n";
+        
+        // 单个CPU核心统计（简化为单核）
+        result += "cpu0 10000 0 5000 900000 100 0 50 0 0 0\n";
+        
+        // 中断统计行：intr <total> <per-irq counts...>
+        // 简化实现，只提供总中断数
+        result += "intr 50000";
+        // 添加一些基本的中断计数器（简化）
+        for (int i = 0; i < 16; i++) {
+            result += " 0";
+        }
+        result += "\n";
+        
+        // 上下文切换次数
+        result += "ctxt 100000\n";
+        
+        // 系统启动时间（boot time），Unix时间戳
+        // 使用一个固定的时间戳，表示系统启动时间
+        result += "btime 1700000000\n";
+        
+        // 进程创建数量
+        result += "processes 1000\n";
+        
+        // 当前运行进程数
+        result += "procs_running 1\n";
+        
+        // 当前阻塞进程数
+        result += "procs_blocked 0\n";
+        
+        // softirq 行（软中断统计）
+        result += "softirq 10000 100 200 300 400 500 600 700 800 900 1000\n";
+        
+        return result;
+    }
 } // namespace fs
