@@ -6527,7 +6527,7 @@ namespace syscall
         // 检查协议和类型的兼容性 (针对AF_INET)
         if (domain == AF_INET)
         {
-            switch (type & 0b100)
+            switch (type & 0b111)
             {
             case SOCK_STREAM:
                 // TCP stream socket
