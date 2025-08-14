@@ -308,7 +308,7 @@ namespace syscall
         BIND_SYSCALL(eventfd2);
         BIND_SYSCALL(memfd_create);
         BIND_SYSCALL(timer_gettime);
-
+        BIND_SYSCALL(getitimer);
         // userdebug
         BIND_SYSCALL(userdebug1);
         BIND_SYSCALL(userdebug2);
@@ -11516,6 +11516,100 @@ namespace syscall
                    current_spec.it_interval.tv_sec, current_spec.it_interval.tv_nsec,
                    g_timers[timer_slot].armed ? "yes" : "no");
 
+        return 0; // 成功
+    }
+    uint64 SyscallHandler::sys_getitimer()
+    {
+        // https://www.man7.org/linux/man-pages/man2/getitimer.2.html
+        int which;
+        uint64 curr_value_addr;
+
+        // 获取参数
+        if (_arg_int(0, which) < 0)
+        {
+            printfRed("[SyscallHandler::sys_getitimer] Error fetching which argument\n");
+            return SYS_EINVAL;
+        }
+        if (_arg_addr(1, curr_value_addr) < 0)
+        {
+            printfRed("[SyscallHandler::sys_getitimer] Error fetching curr_value argument\n");
+            return SYS_EINVAL;
+        }
+
+        // 检查 curr_value 指针是否有效（不能为 NULL）
+        if (curr_value_addr == 0)
+        {
+            printfRed("[SyscallHandler::sys_getitimer] curr_value cannot be NULL\n");
+            return SYS_EINVAL;
+        }
+
+        // 验证 which 参数是否有效
+        constexpr int ITIMER_REAL = 0;    // 实时定时器（墙钟时间）
+        constexpr int ITIMER_VIRTUAL = 1; // 虚拟定时器（用户态运行时间）
+        constexpr int ITIMER_PROF = 2;    // 性能分析定时器（用户态+内核态运行时间）
+
+        if (which < ITIMER_REAL || which > ITIMER_PROF)
+        {
+            printfRed("[SyscallHandler::sys_getitimer] Invalid which: %d\n", which);
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (p == nullptr)
+        {
+            panic("[SyscallHandler::sys_getitimer] Current process is null\n");
+            return SYS_ESRCH;
+        }
+
+        // 定义 itimerval 结构体（Linux兼容）
+        struct itimerval
+        {
+            struct timeval it_interval; // 定时器间隔
+            struct timeval it_value;    // 当前值
+        };
+
+        struct timeval
+        {
+            long tv_sec;  // 秒
+            long tv_usec; // 微秒
+        };
+
+        itimerval curr_timer;
+
+        // 目前简化实现：所有定时器都返回零值
+        // 在完整实现中，应该从进程的定时器状态中获取实际值
+        curr_timer.it_interval.tv_sec = 0;
+        curr_timer.it_interval.tv_usec = 0;
+        curr_timer.it_value.tv_sec = 0;
+        curr_timer.it_value.tv_usec = 0;
+
+        // TODO: 实际实现应该根据定时器类型获取正确的值
+        switch (which)
+        {
+        case ITIMER_REAL:
+            // 实时定时器：基于墙钟时间，通常使用 SIGALRM 信号
+            printfCyan("[SyscallHandler::sys_getitimer] Getting ITIMER_REAL timer\n");
+            break;
+        case ITIMER_VIRTUAL:
+            // 虚拟定时器：仅在用户态运行时递减，使用 SIGVTALRM 信号
+            printfCyan("[SyscallHandler::sys_getitimer] Getting ITIMER_VIRTUAL timer\n");
+            break;
+        case ITIMER_PROF:
+            // 性能分析定时器：在用户态和内核态运行时都递减，使用 SIGPROF 信号
+            printfCyan("[SyscallHandler::sys_getitimer] Getting ITIMER_PROF timer\n");
+            break;
+        }
+
+        // 将定时器值拷贝到用户空间
+        mem::PageTable *pt = p->get_pagetable();
+        if (mem::k_vmm.copy_out(*pt, curr_value_addr, &curr_timer, sizeof(itimerval)) < 0)
+        {
+            printfRed("[SyscallHandler::sys_getitimer] Error copying timer value to user space\n");
+            return SYS_EFAULT;
+        }
+
+        printfCyan("[SyscallHandler::sys_getitimer] Successfully returned timer values for which=%d\n", which);
+        
         return 0; // 成功
     }
 

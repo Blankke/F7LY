@@ -85,6 +85,7 @@ namespace syscall
         SYS_set_robust_list = 99,
         SYS_get_robust_list = 100, // form tsh
         SYS_nanosleep = 101,
+        SYS_getitimer = 102,
         SYS_setitimer = 103, // form tsh
         SYS_timer_create = 107,
         SYS_timer_gettime = 108,
@@ -185,8 +186,8 @@ namespace syscall
         SYS_madvise = 233,
         SYS_remap_file_pages = 234, // from rocket
         SYS_get_mempolicy = 236,    // from rocket
-        SYS_perf_event_open=241,
-        SYS_accept4 = 242,          // from rocket
+        SYS_perf_event_open = 241,
+        SYS_accept4 = 242, // from rocket
         SYS_wait4 = 260,
         SYS_prlimit64 = 261,
         SYS_fanotify_init = 262,
@@ -195,25 +196,24 @@ namespace syscall
         SYS_renameat2 = 276,
         SYS_getrandom = 278,
         SYS_memfd_create = 279,
-        SYS_bpf=280,
+        SYS_bpf = 280,
         SYS_userfaultfd = 282,
         SYS_membarrier = 283,      // form tsh
         SYS_copy_file_range = 285, // from rocket
         SYS_statx = 291,
         SYS_strerror = 300, // from rocket
         SYS_perror = 301,   // from rocket
-        SYS_io_uring_setup =425,
-        SYS_open_tree =428,
-        SYS_fsopen =430,
-        SYS_fspick =433,
+        SYS_io_uring_setup = 425,
+        SYS_open_tree = 428,
+        SYS_fsopen = 430,
+        SYS_fspick = 433,
         SYS_pidfd_open = 434,
         SYS_clone3 = 435,      // form tsh
         SYS_close_range = 436, // from rocket
         SYS_openat2 = 437,     // from rocket
         SYS_faccessat2 = 439,  // from rocket
-        SYS_memfd_secret=447,
-        SYS_fchmodat2 =452,
-
+        SYS_memfd_secret = 447,
+        SYS_fchmodat2 = 452,
 
         SYS_userdebug1 = 2021,
         SYS_userdebug2 = 2022,

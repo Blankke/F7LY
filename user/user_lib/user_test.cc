@@ -399,7 +399,6 @@ char *libctest[][2] = {
     {NULL}};
 
 char *ltp_testcases[] = {
-
     // NULL,
     "pipe11", // pass
     "open11",
@@ -412,6 +411,7 @@ char *ltp_testcases[] = {
     "timer_settime01",
     "timer_settime02",
     "clock_getres01",
+    "getitimer01",
     "chmod01",
     "confstr01",
     "creat01",         // passed   6
@@ -505,38 +505,38 @@ char *ltp_testcases[] = {
     "mknod02",
     "mknod09",
     "mmap02",
-    "mmap05",         // pass1 但是panic关了一个
-    "mmap06",         // pass6 fail 2
-    "mmap08",         // pass
-    "mmap09",         // pass
-    "mmap13",         // pass
-    "mmap15",         // pass
-    "mmap17",         // pass
-    "mmap19",         // pass
-    "mmap20",         // pass
-    "open01",         // pass
-    "open02",         // pass1 fail1
-    "open03",         // 完全PASS
-    "open04",         // 完全PASS
-    "open06",         // pass
-    "open07",         // pass
-    "open09",         // pass
-    "openat01",       // pass
-    "pathconf01",     // pass
-    "pathconf02",     // pass1 fail5
-    "pipe01",         // 完全PASS
-    "pipe03",         // 完全PASS
-    "pipe06",         // 完全PASS
-    "pipe10",         // 完全PASS
-    "pipe12",         // pass
-    "pipe14",         // 完全PASS
-    "poll01",         // pass
-    "pread01",        // pass
-    "pselect02",      // pass
-    "pselect03",      // pass
-    "pwrite01",       // pass
-    "read01",         // 貌似可以PASS
-    "read02",         // pass
+    "mmap05",     // pass1 但是panic关了一个
+    "mmap06",     // pass6 fail 2
+    "mmap08",     // pass
+    "mmap09",     // pass
+    "mmap13",     // pass
+    "mmap15",     // pass
+    "mmap17",     // pass
+    "mmap19",     // pass
+    "mmap20",     // pass
+    "open01",     // pass
+    "open02",     // pass1 fail1
+    "open03",     // 完全PASS
+    "open04",     // 完全PASS
+    "open06",     // pass
+    "open07",     // pass
+    "open09",     // pass
+    "openat01",   // pass
+    "pathconf01", // pass
+    "pathconf02", // pass1 fail5
+    "pipe01",     // 完全PASS
+    "pipe03",     // 完全PASS
+    "pipe06",     // 完全PASS
+    "pipe10",     // 完全PASS
+    "pipe12",     // pass
+    "pipe14",     // 完全PASS
+    "poll01",     // pass
+    "pread01",    // pass
+    "pselect02",  // pass
+    "pselect03",  // pass
+    "pwrite01",   // pass
+    "read01",     // 貌似可以PASS
+    "read02",     // pass
     "read03",
     "read04",       // 完全PASS
     "readlink01",   // pass 2
@@ -563,18 +563,18 @@ char *ltp_testcases[] = {
     "statx02",      // pass4 fail1
     "statx03",      // pass6 fail1
     // "stream01", // pass
-    "stream02",     // pass
-    "stream03",     // pass
-    "stream04",     // pass
-    "stream05",     // pass
+    "stream02", // pass
+    "stream03", // pass
+    "stream04", // pass
+    "stream05", // pass
     // "symlink01", // pass
-    "symlink02",    // pass
-    "symlink03",    // sendmsg
-    "symlink04",    // pass
-    "syscall01",    // pass
-    "time01",       // pass
-    "uname01",      // 完全PASS
-    "uname02",      // 完全PASS
+    "symlink02", // pass
+    "symlink03", // sendmsg
+    "symlink04", // pass
+    "syscall01", // pass
+    "time01",    // pass
+    "uname01",   // 完全PASS
+    "uname02",   // 完全PASS
 
     "unlink05",   // pass
     "unlink07",   // pass
