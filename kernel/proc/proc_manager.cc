@@ -3702,8 +3702,8 @@ namespace proc
         // 解析路径并查找文件
         if (vfs_is_file_exist(ab_path.c_str()) != 1)
         {
-            panic("execve: cannot find file");
-            return -1;
+            printfRed("execve: cannot find file");
+            return -ENOENT;
         }
 
         // 读取ELF文件头，验证文件格式
