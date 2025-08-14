@@ -392,11 +392,8 @@ char *libctest[][2] = {
     {NULL}};
 
 char *ltp_testcases[] = {
-        // "syscall01", // pass
-            "time01", // pass
 
-
-    NULL,
+    // NULL,
     "pipe11", // pass
     "open11",
     "splice07",
@@ -455,8 +452,8 @@ char *ltp_testcases[] = {
     "fcntl15",        // passs5
     "fstat02",        // pass 5 fail 1
     "fstat03",        // pass2
-            "fstatfs02",    // pass 2
-    "fsync02", //bin/sh
+    "fstatfs02",      // pass 2
+    "fsync02",        // bin/sh
     "faccessat01",    // 完全PASS
     "faccessat02",    // 完全PASS
     "faccessat201",   // pass
@@ -498,6 +495,9 @@ char *ltp_testcases[] = {
     "lseek07",        // pass
     "mkdirat02",      // pass2fail2
     "mkdir03",        // pass
+    "mknod02",
+    "mknod09",
+    "mmap02",
     "mmap05",         // pass1 但是panic关了一个
     "mmap06",         // pass6 fail 2
     "mmap08",         // pass
@@ -555,15 +555,17 @@ char *ltp_testcases[] = {
     "statx01",      // pass8 fail2
     "statx02",      // pass4 fail1
     "statx03",      // pass6 fail1
-                    // "stream01", // pass
+    // "stream01", // pass
     "stream02",     // pass
     "stream03",     // pass
     "stream04",     // pass
     "stream05",     // pass
-                    // "symlink01", // pass
+    // "symlink01", // pass
     "symlink02",    // pass
     "symlink03",    // sendmsg
     "symlink04",    // pass
+    "syscall01",    // pass
+    "time01",       // pass
     "uname01",      // 完全PASS
     "uname02",      // 完全PASS
 
@@ -3326,7 +3328,7 @@ char *ltp_testcases[] = {
     // "vlan01.sh",
     // "vlan02.sh",
     // "vlan03.sh",
-    // "vma01",
+    // "vma01", //pass 没有summary
     // "vma02",
     // "vma03",
     // "vma04",

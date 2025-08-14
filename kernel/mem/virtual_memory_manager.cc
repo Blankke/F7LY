@@ -462,11 +462,16 @@ namespace mem
 #ifdef RISCV
         pte_flags = riscv::PteEnum::pte_user_m; // 用户可访问
         if (vm->prot & PROT_READ)
+        {
+            printfGreen("[allocate_vma_page] readable page at %p\n", va);
             pte_flags |= riscv::PteEnum::pte_readable_m;
+        }
         if (vm->prot & PROT_WRITE)
-{   printfGreen("[allocate_vma_page] writable page at %p\n", va);
-                pte_flags |= riscv::PteEnum::pte_writable_m;
-            }
+        {
+            printfGreen("[allocate_vma_page] writable page at %p\n", va);
+            pte_flags |= riscv::PteEnum::pte_writable_m;
+            pte_flags |= riscv::PteEnum::pte_readable_m;
+        }
         if (vm->prot & PROT_EXEC)
             pte_flags |= riscv::PteEnum::pte_executable_m;
 #elif defined(LOONGARCH)
@@ -782,11 +787,11 @@ namespace mem
             flags = pte.get_flags();
 
             // 检查当前虚拟地址是否属于共享内存区域
-            void* shm_start_addr = nullptr;
+            void *shm_start_addr = nullptr;
             size_t shm_size = 0;
             int is_shared = shm::k_smm.find_shared_memory_segment((void *)va, &shm_start_addr, &shm_size);
 
-            if (is_shared>=0)
+            if (is_shared >= 0)
             {
                 // 对于共享内存，直接复用原物理地址，不分配新页面
                 printfCyan("[vm_copy] Sharing memory for VA=%p -> PA=%p (shared memory)\n", va, pa);
@@ -795,8 +800,6 @@ namespace mem
                     vmunmap(new_pt, 0, va / PGSIZE, 1);
                     return -1;
                 }
-                
-
             }
             else
             {

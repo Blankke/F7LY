@@ -704,8 +704,6 @@ namespace fs
     
     eastl::string ProcSelfMapsProvider::generate_content()
     {
-        // TODO: 不懂mmap，等曹老师写
-        printfRed("需要曹老师实现，下面写的格式不对，内容也不对，只是个示例\n");
         proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
         if (!pcb || !pcb->get_vma()) {
             return "";
@@ -725,38 +723,55 @@ namespace fs
             
             // 地址范围 (start-end)
             char addr_buf[64];
-            // sprintf(addr_buf, "%016lx-%016lx ", vm.addr, vm.addr + vm.len);
+            snprintf(addr_buf, sizeof(addr_buf), "%016lx-%016lx ", 
+                    (unsigned long)vm.addr, (unsigned long)(vm.addr + vm.len));
             result += addr_buf;
             
             // 权限 (rwxp/rwxs)
             char perms[5] = "----";
-            if (vm.prot & 0x1) perms[0] = 'r';  // PROT_READ
-            if (vm.prot & 0x2) perms[1] = 'w';  // PROT_WRITE  
-            if (vm.prot & 0x4) perms[2] = 'x';  // PROT_EXEC
-            if (vm.flags & 0x1) perms[3] = 's'; // MAP_SHARED
-            else perms[3] = 'p';                // MAP_PRIVATE
+            if (vm.prot & PROT_READ) perms[0] = 'r';   // PROT_READ = 1
+            if (vm.prot & PROT_WRITE) perms[1] = 'w';  // PROT_WRITE = 2
+            if (vm.prot & PROT_EXEC) perms[2] = 'x';   // PROT_EXEC = 4
+            if (vm.flags & MAP_SHARED) perms[3] = 's'; // MAP_SHARED = 0x01
+            else perms[3] = 'p';                       // MAP_PRIVATE = 0x02
             perms[4] = '\0';
             result += perms;
             result += " ";
             
             // 文件偏移
             char offset_buf[16];
-            // sprintf(offset_buf, "%08x ", vm.offset);
+            snprintf(offset_buf, sizeof(offset_buf), "%08x ", (unsigned int)vm.offset);
             result += offset_buf;
             
-            // 设备号 (major:minor)
-            result += "00:00 ";
+            // 设备号 (major:minor) - 匿名映射为00:00，文件映射可以设为固定值
+            if (vm.vfile && vm.vfd != -1) {
+                result += "08:01 "; // 假设设备号，可以根据实际需要调整
+            } else {
+                result += "00:00 "; // 匿名映射
+            }
             
-            // inode号
-            result += "0 ";
+            // inode号 - 匿名映射为0，文件映射可以设为固定值
+            if (vm.vfile && vm.vfd != -1) {
+                result += "1234567 "; // 假设inode号，可以根据实际需要调整
+            } else {
+                result += "0 ";
+            }
             
             // 路径名
             if (vm.vfile && !vm.vfile->_path_name.empty()) {
                 result += vm.vfile->_path_name;
-            } else if (vm.addr <= 0x400000) {
-                result += "[heap]";
-            } else if (vm.addr >= 0x7fff0000) {
-                result += "[stack]";
+            } else {
+                // 根据地址范围推断区域类型
+                if (vm.addr < 0x400000) {
+                    // 低地址通常是代码段或数据段，但这里是匿名映射，可能是堆
+                    result += "[heap]";
+                } else if (vm.addr >= 0x7fff0000UL) {
+                    // 高地址通常是栈
+                    result += "[stack]";
+                } else {
+                    // 中间区域的匿名映射
+                    result += "[anon]";
+                }
             }
             
             result += "\n";
@@ -769,22 +784,104 @@ namespace fs
     
     eastl::string ProcSelfPagemapProvider::generate_content()
     {
-        // TODO: 等曹老师写
-        printfRed("需要曹老师实现，只是个示例\n");
-
-        // /proc/self/pagemap 是二进制文件，每个虚拟页面对应8字节
-        // 由于这是一个文本实现，我们返回空内容或简化的表示
-        // 在真实实现中，这应该生成二进制数据
         proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
         if (!pcb) {
             return "";
         }
+
+        // /proc/self/pagemap 是二进制文件，每个虚拟页面对应8字节
+        // 由于当前virtual_file只支持文本，我们先返回二进制数据的字符串表示
+        // 在真实实现中，这应该生成二进制数据并支持二进制读取
         
         eastl::string result;
-        result += "# Pagemap entries (simplified text representation)\n";
-        result += "# Format: virtual_addr -> physical_addr [flags]\n";
         
-        //关于二进制数据，可以用二进制表示进一段内存中，转成char*再转eastl::string
+        // 获取进程的页表
+        mem::PageTable *pt_ptr = pcb->get_pagetable();
+        if (!pt_ptr || !pt_ptr->get_base()) {
+            return ""; // 页表不存在
+        }
+        mem::PageTable &pt = *pt_ptr;
+        
+        // 遍历所有VMA区域，只检查已映射的虚拟页面
+        proc::VMA *vma_data = pcb->get_vma();
+        if (!vma_data) {
+            return "";
+        }
+        
+        // 计算需要的总页面数
+        uint64 total_pages = 0;
+        for (int i = 0; i < proc::NVMA; i++) {
+            proc::vma &vm = vma_data->_vm[i];
+            if (vm.used) {
+                uint64 vma_pages = (vm.len + PGSIZE - 1) / PGSIZE;
+                total_pages += vma_pages;
+            }
+        }
+        
+        // 预分配空间
+        result.reserve(total_pages * 8);
+        
+        // 遍历每个VMA区域
+        for (int i = 0; i < proc::NVMA; i++) {
+            proc::vma &vm = vma_data->_vm[i];
+            if (!vm.used) {
+                continue;
+            }
+            
+            // 遍历VMA中的每一页
+            uint64 vma_start = PGROUNDDOWN(vm.addr);
+            uint64 vma_end = PGROUNDUP(vm.addr + vm.len);
+            
+            for (uint64 va = vma_start; va < vma_end; va += PGSIZE) {
+                uint64 pagemap_entry = 0;
+                
+                // 获取页表项
+                mem::Pte pte = pt.walk(va, false); // 不分配新页面
+                
+                if (!pte.is_null() && pte.is_valid()) {
+                    // 页面存在
+                    void *pa = pte.pa();
+                    uint64 pfn = (uint64)pa >> 12; // 页帧号 = 物理地址 >> 12
+                    
+                    // 构造pagemap条目
+                    // 位0-54: 页面帧号(PFN)
+                    pagemap_entry |= (pfn & 0x7FFFFFFFFFFFFFULL);
+                    
+                    // 位55: 软脏位 (暂时设为0)
+                    // 位56: 页面独占映射 (暂时设为1，表示进程独占)
+                    pagemap_entry |= (1ULL << 56);
+                    
+                    // 位57: uffd-wp写保护位 (暂时设为0)
+                    // 位58-60: 零
+                    
+                    // 位61: 页面是文件页或共享匿名页
+                    bool is_file_page = false;
+                    if (vm.vfile && vm.vfd != -1) {
+                        is_file_page = true; // 文件映射
+                    }
+                    if (vm.flags & MAP_SHARED) {
+                        is_file_page = true; // 共享匿名页
+                    }
+                    if (is_file_page) {
+                        pagemap_entry |= (1ULL << 61);
+                    }
+                    
+                    // 位62: 页面已交换 (暂时设为0，我们没有交换)
+                    // 位63: 页面存在
+                    pagemap_entry |= (1ULL << 63);
+                } else {
+                    // 页面不存在或无效，pagemap_entry保持为0
+                }
+                
+                // 将8字节的pagemap条目作为二进制数据添加到结果中
+                // 注意：这里我们将二进制数据转换为字符串，实际应该是二进制
+                char entry_bytes[8];
+                for (int j = 0; j < 8; j++) {
+                    entry_bytes[j] = (char)((pagemap_entry >> (j * 8)) & 0xFF);
+                }
+                result.append(entry_bytes, 8);
+            }
+        }
         
         return result;
     }
