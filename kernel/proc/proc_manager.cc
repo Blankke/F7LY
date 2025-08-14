@@ -2911,7 +2911,7 @@ namespace proc
         {
             return -1;
         }
-        int result = memory_mgr->unmap_memory_range(addr, length);
+        int result = memory_mgr->unmap_memory_range_fix(addr, length);
 
         if (result == 0)
         {

@@ -2244,7 +2244,7 @@ namespace syscall
             printfRed("暂时不支持tz参数");
         }
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        p->print_detailed_memory_info();
+        // p->print_detailed_memory_info();
         mem::PageTable *pt = p->get_pagetable();
         if (mem::k_vmm.copy_out(*pt, tv_addr, (const void *)&tv,
                                 sizeof(tv)) < 0)
@@ -6151,7 +6151,7 @@ namespace syscall
         proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = current_proc->get_pagetable();
 
-        current_proc->print_detailed_memory_info();
+        // current_proc->print_detailed_memory_info();
 
         printfGreen("[sys_sched_getaffinity] Copying CPU mask to user space at address %p\n", (void *)mask_addr);
         if (mem::k_vmm.copy_out(*pt, mask_addr, &cpu_mask, sizeof(CpuMask)) < 0)

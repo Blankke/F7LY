@@ -194,7 +194,8 @@ void trap_manager::usertrap()
     syscall::k_syscall_handler.invoke_syscaller();
   }
 
-  else if (((r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x1 || (r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x2)||(r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x8)
+  else if (((r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x1 || (r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x2)
+  ||(r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x8  ||(r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x3)
   {
     // printfRed("p->_trapframe->sp: %p,fault_va: %p,p->sz:%p\n", p->_trapframe->sp, r_csr_badv(), p->_sz);
     if (mmap_handler(r_csr_badv(), (r_csr_estat() & CSR_ESTAT_ECODE) >> 16) != 0)

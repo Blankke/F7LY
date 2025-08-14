@@ -680,6 +680,10 @@ namespace proc
 
         return 0;
     }
+    /// @brief 不修改堆顶的unmap
+    /// @param addr 
+    /// @param length 
+    /// @return 
     int ProcessMemoryManager::unmap_memory_range_fix(void *addr, size_t length)
     {
         if (!addr || length == 0)

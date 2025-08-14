@@ -248,7 +248,7 @@ namespace mem
                     {
                         if (proc->get_vma()->_vm[i].used)
                         {
-                            if (src_va >= proc->get_vma()->_vm[i].addr && 
+                            if (src_va >= proc->get_vma()->_vm[i].addr &&
                                 src_va < proc->get_vma()->_vm[i].addr + proc->get_vma()->_vm[i].len)
                             {
                                 target_vm = &proc->get_vma()->_vm[i];
@@ -317,7 +317,7 @@ namespace mem
                     {
                         if (proc->get_vma()->_vm[i].used)
                         {
-                            if (src_va >= proc->get_vma()->_vm[i].addr && 
+                            if (src_va >= proc->get_vma()->_vm[i].addr &&
                                 src_va < proc->get_vma()->_vm[i].addr + proc->get_vma()->_vm[i].len)
                             {
                                 target_vm = &proc->get_vma()->_vm[i];
@@ -391,7 +391,7 @@ namespace mem
         uint64 n, va, pa;
         int got_null = 0;
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
-        
+
         while (got_null == 0 && max > 0)
         {
             va = PGROUNDDOWN(src_va);
@@ -409,7 +409,7 @@ namespace mem
                     {
                         if (proc->get_vma()->_vm[i].used)
                         {
-                            if (src_va >= proc->get_vma()->_vm[i].addr && 
+                            if (src_va >= proc->get_vma()->_vm[i].addr &&
                                 src_va < proc->get_vma()->_vm[i].addr + proc->get_vma()->_vm[i].len)
                             {
                                 target_vm = &proc->get_vma()->_vm[i];
@@ -634,9 +634,15 @@ namespace mem
             int size_result = vfs_ext_get_filesize(vf->_path_name.c_str(), &file_size);
             if (size_result != EOK)
             {
-                printfRed("[allocate_vma_page] failed to get file size for %s\n", vf->_path_name.c_str());
-                k_pmm.free_page(pa);
-                return -1;
+                if (vf->_stat.size < 0)
+                {
+                    printfRed("[allocate_vma_page] failed to get file size for %s\n", vf->_path_name.c_str());
+                    k_pmm.free_page(pa);
+                    return size_result;
+                }
+                else{
+                    file_size = vf->_stat.size;
+                }
             }
             printfRed("[allocate_vma_page] offset: %d, file_size: %lu\n", offset, file_size);
             // 检查访问是否超出文件大小
