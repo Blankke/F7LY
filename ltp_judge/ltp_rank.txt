@@ -34,8 +34,8 @@ getitimer01                    | 30         | 30         | 过了一半
 mq_timedreceive01              | 30         | 30         | 这个貌似能修，争取一下
 open11                         | 28         | 28         | pass
 signal04                       | 28         | 28         | ok
-name_to_handle_at01            | 27         | 27         | 
-setns01                        | 25         | 25         |
+name_to_handle_at01            | 27         | 27         | 这个可能难写，先放着
+setns01                        | 25         | 25         | /proc/5/ns/uts 8月15号任务，把它写了
 io_control01                   | 24         | 24         |
 statx12                        | 24         | 24         |  loopdev
 semop02                        | 23         | 26         |  可以做错误处理
@@ -53,8 +53,8 @@ personality01                  | 18         | 18         |
 setitimer01                    | 18         | 18         |
 statvfs01                      | 18         | 18         |
 pathconf01                     | 17         | 17         |
-select03                       | 16         | 40         |
-select01                       | 16         | 19         |
+select03                       | 16         | 40         | 过了一半，8月15号修
+select01                       | 16         | 19         | 过了一半，8月15号修
 getxattr02                     | 16         | 18         |
 prctl02                        | 16         | 18         |
 access02                       | 16         | 16         |
@@ -433,7 +433,7 @@ flock03                        | 3          | 3          |
 fork04                         | 3          | 3          |
 futex_cmp_requeue02            | 3          | 3          |
 getcwd02                       | 3          | 3          |
-getitimer02                    | 3          | 3          |
+getitimer02                    | 3          | 3          | pass
 getpriority01                  | 3          | 3          |
 gettimeofday01                 | 3          | 3          |
 hugeshmat04                    | 3          | 3          |

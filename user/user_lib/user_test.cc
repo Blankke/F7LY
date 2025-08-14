@@ -412,6 +412,9 @@ char *ltp_testcases[] = {
     "timer_settime02",
     "clock_getres01",
     "getitimer01",
+    "getitimer02",
+    "select01",
+    "select03",
     "chmod01",
     "confstr01",
     "creat01",         // passed   6
