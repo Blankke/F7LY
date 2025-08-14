@@ -229,6 +229,7 @@ namespace mem
     {
         uint64 n, va, pa;
         char *p_dst = (char *)dst;
+        proc::Pcb *proc = proc::k_pm.get_cur_pcb();
 
         while (len > 0)
         {
@@ -239,8 +240,48 @@ namespace mem
 #endif
             if (pa == 0)
             {
-                printfRed("[copyin] pa ==0! walk failed\n");
-                return -1;
+                // 检查是否在VMA范围内，如果是则进行懒分配
+                proc::vma *target_vm = nullptr;
+                if (proc && proc->get_vma())
+                {
+                    for (int i = 0; i < proc::NVMA; ++i)
+                    {
+                        if (proc->get_vma()->_vm[i].used)
+                        {
+                            if (src_va >= proc->get_vma()->_vm[i].addr && 
+                                src_va < proc->get_vma()->_vm[i].addr + proc->get_vma()->_vm[i].len)
+                            {
+                                target_vm = &proc->get_vma()->_vm[i];
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (target_vm != nullptr)
+                {
+                    // 在VMA范围内，进行懒分配
+                    if (allocate_vma_page(pt, src_va, target_vm, 0) != 0) // 0表示读取操作
+                    {
+                        printfRed("[copy_in] allocate_vma_page failed for va: %p\n", src_va);
+                        return -1;
+                    }
+                    // 重新获取物理地址
+                    pa = (uint64)pt.walk_addr(va);
+#ifdef LOONGARCH
+                    pa = to_vir((uint64)pt.walk_addr(va));
+#endif
+                    if (pa == 0)
+                    {
+                        printfRed("[copy_in] pa still 0 after allocate_vma_page\n");
+                        return -1;
+                    }
+                }
+                else
+                {
+                    printfRed("[copy_in] pa == 0! walk failed and not in VMA\n");
+                    return -1;
+                }
             }
             n = PGSIZE - (src_va - va);
             if (n > len)
@@ -260,13 +301,54 @@ namespace mem
         uint64 n, va, pa;
         int got_null = 0;
         char *p_dst = (char *)dst;
+        proc::Pcb *proc = proc::k_pm.get_cur_pcb();
 
         while (got_null == 0 && max > 0)
         {
             va = PGROUNDDOWN(src_va);
             pa = (uint64)pt.walk_addr(va);
             if (pa == 0)
-                return -1;
+            {
+                // 检查是否在VMA范围内，如果是则进行懒分配
+                proc::vma *target_vm = nullptr;
+                if (proc && proc->get_vma())
+                {
+                    for (int i = 0; i < proc::NVMA; ++i)
+                    {
+                        if (proc->get_vma()->_vm[i].used)
+                        {
+                            if (src_va >= proc->get_vma()->_vm[i].addr && 
+                                src_va < proc->get_vma()->_vm[i].addr + proc->get_vma()->_vm[i].len)
+                            {
+                                target_vm = &proc->get_vma()->_vm[i];
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (target_vm != nullptr)
+                {
+                    // 在VMA范围内，进行懒分配
+                    if (allocate_vma_page(pt, src_va, target_vm, 0) != 0) // 0表示读取操作
+                    {
+                        printfRed("[copy_str_in] allocate_vma_page failed for va: %p\n", src_va);
+                        return -1;
+                    }
+                    // 重新获取物理地址
+                    pa = (uint64)pt.walk_addr(va);
+                    if (pa == 0)
+                    {
+                        printfRed("[copy_str_in] pa still 0 after allocate_vma_page\n");
+                        return -1;
+                    }
+                }
+                else
+                {
+                    printfRed("[copy_str_in] pa == 0! walk failed and not in VMA\n");
+                    return -1;
+                }
+            }
             n = PGSIZE - (src_va - va);
             if (n > max)
                 n = max;
@@ -304,9 +386,12 @@ namespace mem
     int VirtualMemoryManager::copy_str_in(PageTable &pt, eastl::string &dst,
                                           uint64 src_va, uint64 max)
     {
+
+        printfCyan("[copy_str_in] src_va: %p, max: %d\n", src_va, max);
         uint64 n, va, pa;
         int got_null = 0;
-
+        proc::Pcb *proc = proc::k_pm.get_cur_pcb();
+        
         while (got_null == 0 && max > 0)
         {
             va = PGROUNDDOWN(src_va);
@@ -316,8 +401,48 @@ namespace mem
 #endif
             if (pa == 0)
             {
-                printfRed("[copy_str_in] pa ==0! walk failed\n");
-                return -EFAULT;
+                // 检查是否在VMA范围内，如果是则进行懒分配
+                proc::vma *target_vm = nullptr;
+                if (proc && proc->get_vma())
+                {
+                    for (int i = 0; i < proc::NVMA; ++i)
+                    {
+                        if (proc->get_vma()->_vm[i].used)
+                        {
+                            if (src_va >= proc->get_vma()->_vm[i].addr && 
+                                src_va < proc->get_vma()->_vm[i].addr + proc->get_vma()->_vm[i].len)
+                            {
+                                target_vm = &proc->get_vma()->_vm[i];
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (target_vm != nullptr)
+                {
+                    // 在VMA范围内，进行懒分配
+                    if (allocate_vma_page(pt, src_va, target_vm, 0) != 0) // 0表示读取操作
+                    {
+                        printfRed("[copy_str_in] allocate_vma_page failed for va: %p\n", src_va);
+                        return -EFAULT;
+                    }
+                    // 重新获取物理地址
+                    pa = (uint64)pt.walk_addr(va);
+#ifdef LOONGARCH
+                    pa = to_vir((uint64)pt.walk_addr(va));
+#endif
+                    if (pa == 0)
+                    {
+                        printfRed("[copy_str_in] pa still 0 after allocate_vma_page\n");
+                        return -EFAULT;
+                    }
+                }
+                else
+                {
+                    printfRed("[copy_str_in] pa == 0! walk failed and not in VMA\n");
+                    return -EFAULT;
+                }
             }
 #ifdef RISCV
 
