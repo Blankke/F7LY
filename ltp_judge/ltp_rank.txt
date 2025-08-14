@@ -36,20 +36,20 @@ open11                         | 28         | 28         | pass
 signal04                       | 28         | 28         | ok
 name_to_handle_at01            | 27         | 27         | 这个可能难写，先放着
 setns01                        | 25         | 25         | /proc/5/ns/uts 8月15号任务，把它写了
-io_control01                   | 24         | 24         |
+io_control01                   | 24         | 24         | 有点难，不确定是不是真loop
 statx12                        | 24         | 24         |  loopdev
 semop02                        | 23         | 26         |  可以做错误处理
-getaddrinfo_01                 | 22         | 22         |
+getaddrinfo_01                 | 22         | 22         | 这个可以修
 setregid03                     | 22         | 22         |
 memcontrol03                   | 21         | 21         |
-fallocate06                    | 20         | 28         |
+fallocate06                    | 20         | 28         | loopdev
 fgetxattr01                    | 20         | 22         |
-swapon02                       | 20         | 21         |
-madvise01                      | 20         | 20         |
-ppoll01                        | 20         | 20         |
-copy_file_range02              | 18         | 28         |
+swapon02                       | 20         | 21         | loopdev
+madvise01                      | 20         | 20         | pass
+ppoll01                        | 20         | 20         | 感觉能修
+copy_file_range02              | 18         | 28         | loop
 llseek03                       | 18         | 18         |  ok
-personality01                  | 18         | 18         |
+personality01                  | 18         | 18         | 感觉能修
 setitimer01                    | 18         | 18         |
 statvfs01                      | 18         | 18         |
 pathconf01                     | 17         | 17         |

@@ -503,6 +503,7 @@ char *ltp_testcases[] = {
     "lseek01",        // passed   4
     "lseek02",        // passed   15
     "lseek07",        // pass
+    "madvise01",      // pass
     "mkdirat02",      // pass2fail2
     "mkdir03",        // pass
     "mknod02",
