@@ -13,6 +13,8 @@ namespace {
     bool disable_printf_flag = true;  // 默认关闭 printf
 }
 
+
+
 int	 Printer::_trace_flag	  = 0;
 char Printer::_lower_digits[] = "0123456789abcdef";
 char Printer::_upper_digits[] = "0123456789ABCDEF";

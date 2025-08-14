@@ -80,6 +80,9 @@ enum PteEnum
     _build_pte_bit_(writable, 0x1, 2)  // writable
     _build_pte_bit_(executable, 0x1, 3)  // executable
     _build_pte_bit_(user, 0x1, 4)  // user can access
+    _build_pte_bit_(global, 0x1, 5)  // global mapping (G)
+    _build_pte_bit_(accessed, 0x1, 6)  // accessed (A)
+    _build_pte_bit_(dirty, 0x1, 7)  // dirty (D)
 
     // _build_pte_bit_(valid, 0x1, 0)      // V: 有效位 (1 = 该PTE有效)
     // _build_pte_bit_(dirty, 0x1, 1)      // D: 脏位 (1 = 该页被修改过)

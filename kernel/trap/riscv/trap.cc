@@ -238,7 +238,7 @@ void trap_manager::usertrap()
   {
     // ok
   }
-  else if (cause == 13 || cause == 15)
+  else if (cause == 13 || cause == 15 || cause == 12)
   {
     // 缺页故障处理
     TODO("pagefault_handler");
@@ -428,14 +428,19 @@ int mmap_handler(uint64 va, int cause)
   // 确定访问类型
   int access_type = 0; // 默认读取
   if (cause == 15)
-  {                  // Store page fault
+  { // Store page fault
+    printfRed("mmap_handler: store page fault at %p\n", va);
     access_type = 1; // 写入
   }
   else if (cause == 12)
   {                  // Instruction page fault
+    printfRed("mmap_handler: instruction page fault at %p\n", va);
     access_type = 2; // 执行
   }
-
+  else
+  {
+    printfRed("mmap_handler: load page fault at %p\n", va);
+  }
   // 使用统一的VMA页面分配函数
   return mem::k_vmm.allocate_vma_page(*p->get_pagetable(), va, vm, access_type);
 }

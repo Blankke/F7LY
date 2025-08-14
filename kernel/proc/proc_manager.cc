@@ -2147,8 +2147,11 @@ namespace proc
         // 下面这个就是套的第二层，这一层的意义似乎只在于分配文件描述符
         if (path == "/lib/riscv64-linux-gnu/libc.so.6")
             path = "/glibc/lib/libc.so.6";
-        if (path == "/lib/riscv64-linux-gnu/tls/libc.so.6")
-            path = "/glibc/lib/libc.so.6";
+        // if (path == "/lib/riscv64-linux-gnu/tls/libc.so.6")
+        //     path = "/glibc/lib/libc.so.6";
+        // if (path == "/lib")
+        //     path = "/glibc/lib";
+        
         int err = fs::k_vfs.openat(path, p->_ofile->_ofile_ptr[fd], flags, mode);
         if (err < 0)
         {
@@ -2450,7 +2453,7 @@ namespace proc
     {
         printfYellow("[mmap] addr: %p, length: %u, prot: %d, flags: %d, fd: %d, offset: %d\n",
                      addr, length, prot, flags, fd, offset);
-
+            // proc::k_pm.get_cur_pcb()->print_detailed_memory_info();
         // 初始化错误码
         if (errno != nullptr)
         {
@@ -2699,7 +2702,7 @@ namespace proc
                     return MAP_FAILED;
                 }
 
-                int unmap_ret = mm->unmap_memory_range((void *)map_addr, aligned_length);
+                int unmap_ret = mm->unmap_memory_range_fix((void *)map_addr, aligned_length);
                 if (unmap_ret != 0)
                 {
                     // 即使未找到完全匹配的VMA也继续（可能是空洞），但如果返回硬错误，直接失败
@@ -2813,6 +2816,8 @@ namespace proc
                     }
                     printfCyan("[mmap] Created shared memory segment with key %d at addr %p\n", key, (void *)map_addr);
                 }
+                
+                
                 p->set_heap_end(map_addr + aligned_length);
                 printfYellow("[mmap] Updated heap_end to %p for anonymous mapping\n",
                              (void *)(map_addr + aligned_length));
@@ -2861,7 +2866,7 @@ namespace proc
 
         printfGreen("[mmap] Success: addr=%p, len=%d, prot=%d, flags=%d\n",
                     (void *)map_addr, aligned_length, prot, flags);
-
+            // proc::k_pm.get_cur_pcb()->print_detailed_memory_info();
         return (void *)map_addr;
     }
     /// @brief 取消内存映射，符合POSIX标准的munmap实现

@@ -290,23 +290,23 @@ char *libctest[][2] = {
     {"env", NULL},
     {"fdopen", NULL}, // fdopen failed 问题在于写入后读不出来，怀疑根本没写入成功
     {"fnmatch", NULL},
-    {"fscanf", NULL}, //ioctl 爆了
-    {"fwscanf", NULL}, //死了
+    {"fscanf", NULL},  // ioctl 爆了
+    {"fwscanf", NULL}, // 死了
     {"iconv_open", NULL},
     {"inet_pton", NULL},
     {"mbc", NULL},
     {"memstream", NULL},
-    {"pthread_cancel_points", NULL}, //sig， fork高级用法
-    {"pthread_cancel", NULL}, // sig， fork高级用法
-    {"pthread_cond", NULL},   // sig， fork高级用法
-    {"pthread_tsd", NULL},    // sig， fork高级用法
+    {"pthread_cancel_points", NULL}, // sig， fork高级用法
+    {"pthread_cancel", NULL},        // sig， fork高级用法
+    {"pthread_cond", NULL},          // sig， fork高级用法
+    {"pthread_tsd", NULL},           // sig， fork高级用法
     {"qsort", NULL},
     {"random", NULL},
     {"search_hsearch", NULL},
     {"search_insque", NULL},
     {"search_lsearch", NULL},
     {"search_tsearch", NULL},
-    {"setjmp", NULL}, //信号相关，爆了
+    {"setjmp", NULL}, // 信号相关，爆了
     {"snprintf", NULL},
     // // // {"socket", NULL}, // 网络相关，这个不测了
     {"sscanf", NULL},
@@ -335,7 +335,7 @@ char *libctest[][2] = {
     // // // {"utime", NULL}, // sys_utimensat实现不正确
     {"wcsstr", NULL},
     {"wcstol", NULL},
-    {"daemon_failure", NULL}, 
+    {"daemon_failure", NULL},
     {"dn_expand_empty", NULL},
     {"dn_expand_ptr_0", NULL},
     // // // {"fflush_exit", NULL},//fd爆了，标准输出不见了
@@ -392,8 +392,11 @@ char *libctest[][2] = {
     {NULL}};
 
 char *ltp_testcases[] = {
-    
-    // NULL,
+        // "syscall01", // pass
+            "time01", // pass
+
+
+    NULL,
     "pipe11", // pass
     "open11",
     "splice07",
@@ -402,6 +405,7 @@ char *ltp_testcases[] = {
     "getpid01",
     "waitpid01", // PASS
     // "pipe11",
+    "timer_settime01",
     "timer_settime02",
     "clock_getres01",
     "chmod01",
@@ -411,43 +415,48 @@ char *ltp_testcases[] = {
     "posix_fadvise01", // pass6
     "posix_fadvise02", // pass6
     "posix_fadvise03",
-    "timer_settime01",
     "signal03",
     "signal05",
     "signal04",
-    "dup01",          // 完全PASS
-    "dup02",          // 完全PASS
-    "dup03",          // 完全PASS
-    "dup04",          // 完全PASS
-    "dup05",          // pass
-    "dup06",          // 完全PASS
-    "dup07",          // 完全PASS
-    "dup201",         // 完全PASS
-    "dup202",         // 完全PASS
-    "dup203",         // pass
-    "dup204",         // 完全PASS
-    "dup205",         // 完全PASS
-    "dup206",         // 完全PASS
-    "fchdir01",       // 完全PASS
-    "fchdir02",       // 完全PASS
-    "fchmod01",       // pass
-    "fchmod03",       // pass
-    "fchmod04",       // pass
-    "fchmodat01",     // pass6
-    "fchmodat02",     // pass5 fail1
-    "fchown01",       // pass
-    "fchown02",       // pass 2 fail 1
-    "fchown04",       // pass 2 fail 1
-    "fchown05",       // passed   6
-    "fcntl02",        // pass
-    "fcntl03",        // pass
-    "fcntl04",        // pass
-    "fcntl05",        // pass
-    "fcntl08",        // pass
+    "dup01",            // 完全PASS
+    "dup02",            // 完全PASS
+    "dup03",            // 完全PASS
+    "dup04",            // 完全PASS
+    "dup05",            // pass
+    "dup06",            // 完全PASS
+    "dup07",            // 完全PASS
+    "dup201",           // 完全PASS
+    "dup202",           // 完全PASS
+    "dup203",           // pass
+    "dup204",           // 完全PASS
+    "dup205",           // 完全PASS
+    "dup206",           // 完全PASS
+    "epoll_create01",   // pass 2 skip 1
+    "epoll_create1_01", // pass 1 skip 1
+    "execv01",          // 完全PASS
+    "execve01",         // 完全PASS
+    "fchdir01",         // 完全PASS
+    "fchdir02",         // 完全PASS
+    "fchmod01",         // pass
+    "fchmod03",         // pass
+    "fchmod04",         // pass
+    "fchmodat01",       // pass6
+    "fchmodat02",       // pass5 fail1
+    "fchown01",         // pass
+    "fchown02",         // pass 2 fail 1
+    "fchown04",         // pass 2 fail 1
+    "fchown05",         // passed   6
+    "fcntl02",          // pass
+    "fcntl03",          // pass
+    "fcntl04",          // pass
+    "fcntl05",          // pass
+    "fcntl08",          // pass
     // "fcntl13",        // pass // la 会把用户态printf干爆
     "fcntl15",        // passs5
     "fstat02",        // pass 5 fail 1
     "fstat03",        // pass2
+            "fstatfs02",    // pass 2
+    "fsync02", //bin/sh
     "faccessat01",    // 完全PASS
     "faccessat02",    // 完全PASS
     "faccessat201",   // pass
@@ -522,53 +531,53 @@ char *ltp_testcases[] = {
     "read01",         // 貌似可以PASS
     "read02",         // pass
     "read03",
-    "read04",         // 完全PASS
-    "readlink01",     // pass 2
-    "readlink03",     // pass
-    "readlinkat01",   // pass
-    "readlinkat02",   // pass五个
-    "readv01",        // pass
-    "readv02",        // pass4 fail1
-    "rmdir01",        // pass
-    "rmdir02",        // pass
-    "rmdir03",        // fail2
-    "shmat01",        // pass4
-    "shmat03",        // pass?
-    "shmat04",        // pass
-    "shmctl02",       // passed   16 fail 4
-    "shmctl07",       // pass
-    "shmctl08",       // pass
-    "shmdt01",        // pass 2
-    "shmdt02",        // pass
-    "stat01",         // passed   12
-    "stat03",         // pass4 fail2
-    "statfs02",       // pass3fail3
-    "statx01",        // pass8 fail2
-    "statx02",        // pass4 fail1
-    "statx03",        // pass6 fail1
-        // "stream01", // pass
-    "stream02", // pass
-    "stream03", // pass
-    "stream04", // pass
-    "stream05", // pass
-        // "symlink01", // pass
-    "symlink02", // pass
-    "symlink03",   //sendmsg
-    "symlink04",   // pass
-        "uname01",    // 完全PASS
-    "uname02",    // 完全PASS
+    "read04",       // 完全PASS
+    "readlink01",   // pass 2
+    "readlink03",   // pass
+    "readlinkat01", // pass
+    "readlinkat02", // pass五个
+    "readv01",      // pass
+    "readv02",      // pass4 fail1
+    "rmdir01",      // pass
+    "rmdir02",      // pass
+    "rmdir03",      // fail2
+    "shmat01",      // pass4
+    "shmat03",      // pass?
+    "shmat04",      // pass
+    "shmctl02",     // passed   16 fail 4
+    "shmctl07",     // pass
+    "shmctl08",     // pass
+    "shmdt01",      // pass 2
+    "shmdt02",      // pass
+    "stat01",       // passed   12
+    "stat03",       // pass4 fail2
+    "statfs02",     // pass3fail3
+    "statx01",      // pass8 fail2
+    "statx02",      // pass4 fail1
+    "statx03",      // pass6 fail1
+                    // "stream01", // pass
+    "stream02",     // pass
+    "stream03",     // pass
+    "stream04",     // pass
+    "stream05",     // pass
+                    // "symlink01", // pass
+    "symlink02",    // pass
+    "symlink03",    // sendmsg
+    "symlink04",    // pass
+    "uname01",      // 完全PASS
+    "uname02",      // 完全PASS
 
     "unlink05",   // pass
     "unlink07",   // pass
     "unlink08",   // pass2fail2
     "unlink09",   // pass
     "unlinkat01", // passed   7
-        "write01", // 完全PASS
-    "write02", // pass
-    "write03", // 完全PASS
+    "write01",    // 完全PASS
+    "write02",    // pass
+    "write03",    // 完全PASS
     "write04",
-    "write05", // passed   3
-        "writev05", // 完全PASS
+    "write05",  // passed   3
+    "writev05", // 完全PASS
     "writev06", // 完全PASS
     NULL,
     // "abort01",
@@ -2689,9 +2698,9 @@ char *ltp_testcases[] = {
     // "swapon02",
     // "swapon03",
     // "swapping01",
-    "symlink01", // pass
-    "symlink02", // pass
-    "symlink03",   //sendmsg
+    "symlink01",   // pass
+    "symlink02",   // pass
+    "symlink03",   // sendmsg
     "symlink04",   // pass
     "symlinkat01", // pass
     // "sync_file_range01",

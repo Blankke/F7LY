@@ -464,7 +464,9 @@ namespace mem
         if (vm->prot & PROT_READ)
             pte_flags |= riscv::PteEnum::pte_readable_m;
         if (vm->prot & PROT_WRITE)
-            pte_flags |= riscv::PteEnum::pte_writable_m;
+{   printfGreen("[allocate_vma_page] writable page at %p\n", va);
+                pte_flags |= riscv::PteEnum::pte_writable_m;
+            }
         if (vm->prot & PROT_EXEC)
             pte_flags |= riscv::PteEnum::pte_executable_m;
 #elif defined(LOONGARCH)
@@ -539,6 +541,7 @@ namespace mem
         else
         {
             // 匿名映射：页面已通过clear_page初始化为0
+
             printfCyan("[allocate_vma_page] handling anonymous mapping at %p\n", va);
         }
 

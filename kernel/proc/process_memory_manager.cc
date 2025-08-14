@@ -680,7 +680,122 @@ namespace proc
 
         return 0;
     }
+    int ProcessMemoryManager::unmap_memory_range_fix(void *addr, size_t length)
+    {
+        if (!addr || length == 0)
+        {
+            return -1;
+        }
 
+        // 检查地址对齐
+        if ((uint64)addr % PGSIZE != 0)
+        {
+            printfRed("ProcessMemoryManager: unmap address not page aligned: %p\n", addr);
+            return -1;
+        }
+
+        uint64 start_addr = (uint64)addr;
+        uint64 aligned_length = PGROUNDUP(length);
+        uint64 end_addr = start_addr + aligned_length;
+
+        // 检查地址范围溢出
+        if (end_addr < start_addr)
+        {
+            printfRed("ProcessMemoryManager: address range overflow\n");
+            return -1;
+        }
+
+        // printfYellow("ProcessMemoryManager: unmapping range [%p, %p) length=%u\n",
+        //              addr, (void *)end_addr, aligned_length);
+
+        // 查找重叠的VMA
+        int overlapping_vmas[NVMA];
+        int overlap_count = find_overlapping_vmas(start_addr, end_addr, overlapping_vmas, NVMA);
+
+        if (overlap_count == 0)
+        {
+            printfYellow("ProcessMemoryManager: no VMA found for unmapping range\n");
+            // 仍然尝试取消页表映射，以防有非VMA管理的映射
+            safe_vmunmap(start_addr, end_addr, true);
+            return 0;
+        }
+
+        // 处理每个重叠的VMA
+        for (int i = 0; i < overlap_count; i++)
+        {
+            int vma_idx = overlapping_vmas[i];
+            vma &vm_entry = vma_data._vm[vma_idx];
+
+            uint64 vma_start = vm_entry.addr;
+            uint64 vma_end = vm_entry.addr + vm_entry.len;
+
+            printfCyan("ProcessMemoryManager: processing overlapping VMA %d: [%p, %p)\n",
+                       vma_idx, (void *)vma_start, (void *)vma_end);
+
+            // 计算需要取消映射的区域
+            uint64 unmap_start = start_addr > vma_start ? start_addr : vma_start;
+            uint64 unmap_end = end_addr < vma_end ? end_addr : vma_end;
+
+            // 如果需要写回文件映射
+            if (vm_entry.vfile != nullptr &&
+                vm_entry.flags == MAP_SHARED &&
+                (vm_entry.prot & PROT_WRITE) != 0)
+            {
+                printfCyan("ProcessMemoryManager: writing back shared file mapping\n");
+                // 内联writeback_vma逻辑
+                uint64 vma_start = PGROUNDDOWN(vm_entry.addr);
+                uint64 vma_end = PGROUNDUP(vma_start + vm_entry.len);
+                for (uint64 va = vma_start; va < vma_end; va += PGSIZE)
+                {
+                    mem::Pte pte = pagetable.walk(va, 0);
+                    if (!pte.is_null() && pte.is_valid())
+                    {
+                        // 页面已分配，需要写回到文件
+                        uint64 pa = (uint64)pte.pa();
+                        int file_offset = vm_entry.offset + (va - vma_start);
+
+                        // 写回数据到文件
+                        int write_result = vm_entry.vfile->write(pa, PGSIZE, file_offset, false);
+                        if (write_result < 0)
+                        {
+                            printfRed("[ProcessMemoryManager] Failed to write back page at va=%p\n", (void *)va);
+                        }
+                    }
+                }
+            }
+            if (vm_entry.flags & MAP_SHARED) // 取消页表映射
+            {
+                shm::k_smm.detach_seg(addr);
+            }
+            else
+            { // 取消页表映射
+                safe_vmunmap(unmap_start, unmap_end, true);
+            }
+            // 处理VMA条目的更新
+            if (unmap_start == vma_start && unmap_end == vma_end)
+            {
+                // 完全取消映射
+                // printfCyan("ProcessMemoryManager: completely unmapping VMA %d\n", vma_idx);
+                if (vm_entry.vfile)
+                {
+                    vm_entry.vfile->free_file();
+                }
+                memset(&vm_entry, 0, sizeof(vma));
+            }
+            else
+            {
+                // 部分取消映射
+                if (!partial_unmap_vma(vma_idx, unmap_start, unmap_end))
+                {
+                    printfRed("ProcessMemoryManager: partial unmap failed for VMA %d\n", vma_idx);
+                    return -1;
+                }
+            }
+        }
+
+
+        return 0;
+    }
     int ProcessMemoryManager::find_overlapping_vmas(uint64 start_addr, uint64 end_addr,
                                                     int overlapping_vmas[], int max_count)
     {

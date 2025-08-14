@@ -253,7 +253,7 @@ namespace proc
          * @return 0 成功，-1 失败
          */
         int unmap_memory_range(void *addr, size_t length);
-
+        int unmap_memory_range_fix(void *addr, size_t length);
         /**
          * @brief 查找覆盖指定地址范围的VMA
          * @param start_addr 起始地址
