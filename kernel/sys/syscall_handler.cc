@@ -6518,7 +6518,7 @@ namespace syscall
         }
 
         // 检查socket类型有效性
-        if (type != SOCK_STREAM && type != SOCK_DGRAM && type != SOCK_RAW && type != SOCK_SEQPACKET)
+        if (!(type & SOCK_STREAM) && !(type & SOCK_DGRAM) && !(type & SOCK_RAW) && !(type & SOCK_SEQPACKET))
         {
             printfRed("[SyscallHandler::sys_socket] 不支持的socket类型: %d\n", type);
             return SYS_EINVAL;
@@ -6527,7 +6527,7 @@ namespace syscall
         // 检查协议和类型的兼容性 (针对AF_INET)
         if (domain == AF_INET)
         {
-            switch (type)
+            switch (type & 0b100)
             {
             case SOCK_STREAM:
                 // TCP stream socket
