@@ -194,16 +194,16 @@ void trap_manager::usertrap()
     syscall::k_syscall_handler.invoke_syscaller();
   }
 
-  else if (((r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x1 || (r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x2))
+  else if (((r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x1 || (r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x2)||(r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x8)
   {
     // printfRed("p->_trapframe->sp: %p,fault_va: %p,p->sz:%p\n", p->_trapframe->sp, r_csr_badv(), p->_sz);
     if (mmap_handler(r_csr_badv(), (r_csr_estat() & CSR_ESTAT_ECODE) >> 16) != 0)
     {
       // 缺页异常处理失败，发送SIGSEGV信号
-      printf("usertrap(): page fault at %p, sending SIGSEGV to pid=%d\n", r_csr_badv(), p->_pid);
+      printfRed("usertrap(): page fault at %p, sending SIGSEGV to pid=%d\n", r_csr_badv(), p->_pid);
       p->add_signal(proc::ipc::signal::SIGSEGV);
 
-      printf("usertrap(): unexpected trapcause %x pid=%d\n", r_csr_estat(), p->_pid);
+      printf("usertrap(): unexpected trapcause 0x%x pid=%d\n", r_csr_estat(), p->_pid);
       printf("            era=%p badi=%x\n", r_csr_era(), r_csr_badi());
     }
   }
@@ -391,13 +391,18 @@ int mmap_handler(uint64 va, int cause)
 
   // 确定访问类型 (LoongArch的异常码)
   int access_type = 0; // 默认读取
-  if (cause == 15)
+  if (cause == 2)
   {                  // Store page fault
+    printfOrange("[mmap_handler] Store page fault at va: %p\n", va);
     access_type = 1; // 写入
   }
-  else if (cause == 12)
+  else if (cause == 8)
   {                  // Instruction page fault
+    printfOrange("[mmap_handler] Instruction page fault at va: %p\n", va);
     access_type = 2; // 执行
+  }
+  else{
+    printfRed("[mmap_handler] Load page fault cause: %d at va: %p\n", cause, va);
   }
 
   // 使用统一的VMA页面分配函数
