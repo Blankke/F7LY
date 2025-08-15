@@ -781,17 +781,17 @@ getcwd04                       |            | Test needs at least 2 CPUs online 
 getdents01                     |            | 
 getdents02                     |            | 
 getdomainname01                | pass       | pass 1
-getegid01                      |            | 
+getegid01                      | pass           | 
 getegid01_16                   |            | 
-getegid02                      |            | 
+getegid02                      | pass           | 
 getegid02_16                   |            | 
-geteuid01                      |            | 
+geteuid01                      | pass           | 
 geteuid01_16                   |            | 
-geteuid02                      |            | 
+geteuid02                      | pass           | 
 geteuid02_16                   |            | 
-getgid01                       |            | 
+getgid01                       | pass           | 
 getgid01_16                    |            | 
-getgid03                       |            | 
+getgid03                       | pass           | 
 getgid03_16                    |            | 
 getgroups01                    |            | 
 getgroups01_16                 |            | 
@@ -1969,11 +1969,11 @@ setsockopt09                   |            | .config
 setsockopt10                   |            | .config
 settimeofday01                 |            | 
 settimeofday02                 |            | 
-setuid01                       |            | 
+setuid01                       | pass           | 
 setuid01_16                    |            | 
-setuid03                       |            | 
+setuid03                       | pass           | 
 setuid03_16                    |            | 
-setuid04                       |            | 
+setuid04                       |            | open权限
 setuid04_16                    |            | 
 setxattr01                     |            | 
 setxattr02                     |            | 

@@ -547,6 +547,8 @@ struct ltp_testcase ltp_testcases[] = {
     {"getpid02", true, true},       // PASS
     {"getppid01", true, true},      // PASS
     {"getppid02", true, true},      // PASS
+    {"getgid01", true, true},       // PASS
+    {"getgid03", true, true},       // PASS
     {"setgid01", true, true},       // PASS
     {"setgid02", true, true},       // PASS
     {"setgid03", true, true},       // PASS
