@@ -416,7 +416,7 @@ fchown01                       | pass       | pass
 fchown01_16                    |            | 
 fchown02                       | pass       | pass 2 fail 1
 fchown02_16                    |            | 
-fchown03                       |            | setresgid未实现
+fchown03                       | pass           | 
 fchown03_16                    |            | 
 fchown04                       | pass       | pass 2 fail 1
 fchown04_16                    |            | 
@@ -848,9 +848,9 @@ gettid01                       |            | PASS
 gettid02                       |            | 回不来
 gettimeofday01                 | pass       | pass
 gettimeofday02                 |            | 
-getuid01                       |            | 
+getuid01                       | pass           | 
 getuid01_16                    |            | 
-getuid03                       |            | 
+getuid03                       | pass           | 
 getuid03_16                    |            | 
 getxattr01                     |            | 
 getxattr02                     |            | 
@@ -1234,11 +1234,11 @@ mincore02                      |            |
 mincore03                      |            | 
 mincore04                      |            | 
 mkdir_tests.sh                 |            | 
-mkdir02                        |            | setregrid未实现
+mkdir02                        |            | 还是跑不了
 mkdir03                        | pass       | pass
-mkdir04                        |            | setreuid
-mkdir05                        |            | group id
-mkdir09                        |            | bin/sh
+mkdir04                        |            | 还是跑不了
+mkdir05                        |            | 还是跑不了
+mkdir09                        |            | /loop
 mkdirat01                      | pass       | pass
 mkdirat02                      | pass       | pass2fail2
 mkfs01.sh                      |            | 
@@ -1466,9 +1466,9 @@ open03                         | pass       | 完全PASS
 open04                         | pass       | 完全PASS
 open06                         | pass       | pass
 open07                         | pass       | pass
-open08                         |            | setgid
+open08                         | pass           | 
 open09                         | pass       | pass
-open10                         |            | setgid
+open10                         | pass           | setgid
 open11                         | pass       | pass
 open12                         |            | 过三个
 open12_child                   |            | 这个不是测例

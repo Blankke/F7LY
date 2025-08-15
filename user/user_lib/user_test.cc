@@ -601,7 +601,9 @@ struct ltp_testcase ltp_testcases[] = {
     {"open04", true, true},     // 完全PASS
     {"open06", true, true},     // pass
     {"open07", true, true},     // pass
+    {"open08", true, true},     // p4 f2
     {"open09", true, true},     // pass
+    {"open10", true, true},     // p6 f3
     {"openat01", true, true},   // pass
     {"pathconf01", true, true}, // pass
     {"pathconf02", true, true}, // pass1 fail5
