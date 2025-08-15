@@ -641,15 +641,15 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
             // 设置文件所有者和组
             // 获取当前进程的 uid 和 gid
             proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
-            uint32_t current_uid = 1; // 使用与 sys_getuid() 一致的值
-            uint32_t current_gid = 1; // 使用与 sys_getgid() 一致的值
+            uint32_t current_uid = 0; // 默认值
+            uint32_t current_gid = 0; // 默认值
 
             if (current_proc != nullptr)
             {
-                // 注意：虽然进程的_uid可能是0，但为了与sys_getuid()保持一致，
-                // 文件创建时应使用sys_getuid()返回的值（即1）
-                current_uid = 1; // 与 sys_getuid() 返回值保持一致
-                current_gid = 1; // 与 sys_getgid() 返回值保持一致
+                // 使用进程的有效用户ID和组ID来设置文件的所有者
+                // 这符合Linux的文件创建行为：新文件的owner是创建进程的euid/egid
+                current_uid = current_proc->_euid; // 使用有效用户ID
+                current_gid = current_proc->_egid; // 使用有效组ID
             }
 
             // 设置文件的 uid 和 gid

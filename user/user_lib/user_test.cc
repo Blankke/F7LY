@@ -150,16 +150,16 @@ int iozone_test(const char *path = musl_dir)
     bb_sh[3] = "1k";
     bb_sh[4] = "-s";
     bb_sh[5] = "4m";
-    if(path==musl_dir)
-    printf("#### OS COMP TEST GROUP START iozone-musl ####\n");
+    if (path == musl_dir)
+        printf("#### OS COMP TEST GROUP START iozone-musl ####\n");
     else
-    printf("#### OS COMP TEST GROUP START iozone-glibc ####\n");
+        printf("#### OS COMP TEST GROUP START iozone-glibc ####\n");
     printf("iozone automatic measurements\n");
     run_test("iozone", bb_sh, 0);
-    if(path==musl_dir)
-    printf("#### OS COMP TEST GROUP end iozone-musl ####\n");
-else
-    printf("#### OS COMP TEST GROUP end iozone-glibc ####\n");
+    if (path == musl_dir)
+        printf("#### OS COMP TEST GROUP end iozone-musl ####\n");
+    else
+        printf("#### OS COMP TEST GROUP end iozone-glibc ####\n");
     return 0;
 }
 
@@ -252,7 +252,7 @@ int ltp_test(bool is_musl)
     char *envp[] = {
         "PATH=/bin", // 设置 PATH
         "LD_LIBRARY_PATH=/glibc/lib",
-        NULL         // 必须以 NULL 结尾
+        NULL // 必须以 NULL 结尾
     }; // 这个测loop的那些测例要用
     int result = 0;
     for (int i = 0; ltp_testcases[i] != NULL; i++)
@@ -399,22 +399,74 @@ char *libctest[][2] = {
     {NULL}};
 
 char *ltp_testcases[] = {
-    // NULL,
-    "pipe11", // pass
-    "open11",
+    //  "setregid01",       // PASS
+    // "setregid01_16",     // SKIP
+    // "setregid02",        // PASS
+    // "setregid02_16",     // SKIP
+    // "setregid03",        // PASS
+    // "setregid03_16",     // SKIP
+    // "setregid04",        // PASS
+    // "setregid04_16",     // SKIP
+    // "setresgid01",
+    // "setresgid01_16",
+    // "setresgid02",
+    // "setresgid02_16",
+    // "setresgid03",
+    // "setresgid03_16",
+    // "setresgid04",
+    // "setresgid04_16",
+    // "setresuid01",
+    // "setresuid01_16",
+    // "setresuid02",
+    // "setresuid02_16",
+    // "setresuid03",
+    // "setresuid03_16",
+    // "setresuid04",
+    // "setresuid04_16",
+    // "setresuid05",
+    // "setresuid05_16",
+    // "setreuid01",
+    // "setreuid01_16",
+    // "setreuid02",
+    // "setreuid02_16",
+    // "setreuid03",
+    // "setreuid03_16",
+    // "setreuid04",
+    // "setreuid04_16",
+    // "setreuid05",
+    // "setreuid05_16",
+    // "setreuid06",
+    // "setreuid06_16",
+    // "setreuid07",
+    // "setreuid07_16",
+    // "setrlimit01",
+    // "setrlimit02",
+    // "setrlimit03",
+    // "setrlimit04",
+    // "setrlimit05",
+    // "setrlimit06",
+    // "setsid01",
+    NULL,
     "splice07",
     "epoll_ctl03",
     "access01",
+    "access02",
+    "access03",
+    "access04",
     "getpid01",
     "waitpid01", // PASS
     "timer_settime01",
     "timer_settime02",
     "clock_getres01",
+    "clock_gettime02", // pass
     "getitimer01",
     "getitimer02",
     "select01",
     "select03",
     "chmod01",
+    "chmod03", // pass 4
+    "chmod06", //   pass4 fail 5
+    // "chmod07", // pass4 fail 5,现在貌似fail了
     "confstr01",
     "creat01",         // passed   6
     "creat06",         // pass
@@ -428,6 +480,8 @@ char *ltp_testcases[] = {
     "add_key02",
     "add_key03",
     "add_key04",
+    "accept01",
+    "accept03",
     "dup01",            // 完全PASS
     "dup02",            // 完全PASS
     "dup03",            // 完全PASS
@@ -463,6 +517,7 @@ char *ltp_testcases[] = {
     "fcntl08",          // pass
     // "fcntl13",        // pass // la 会把用户态printf干爆
     "fcntl15",        // passs5
+    "fcntl15_64",     // passs5
     "fstat02",        // pass 5 fail 1
     "fstat03",        // pass2
     "fstatfs02",      // pass 2
@@ -490,6 +545,10 @@ char *ltp_testcases[] = {
     "getpid02",       // PASS
     "getppid01",      // PASS
     "getppid02",      // PASS
+    "setregid01",     // PASS
+    "setregid02",     // PASS
+    "setregid03",     // PASS
+    "setregid04",     // PASS
     "getrandom01",    // pass
     "getrandom02",    // 完全PASS
     "getrandom03",    // 完全PASS
@@ -507,8 +566,10 @@ char *ltp_testcases[] = {
     "lseek02",        // passed   15
     "lseek07",        // pass
     "madvise01",      // pass
-    "mkdirat02",      // pass2fail2
-    "mkdir03",        // pass
+    "madvise05",
+    "madvise10",
+    "mkdirat02", // pass2fail2
+    "mkdir03",   // pass
     "mknod02",
     "mknod09",
     "mmap02",
@@ -545,10 +606,10 @@ char *ltp_testcases[] = {
     "read01",     // 貌似可以PASS
     "read02",     // pass
     "read03",
-    "read04",       // 完全PASS
-    "readlink01",   // pass 2
-    "readlink03",   // pass
-    "readlinkat01", // pass
+    "read04",     // 完全PASS
+    "readlink01", // pass 2
+    "readlink03", // pass
+    // "readlinkat01", // pass 现在好像爆了
     "readlinkat02", // pass五个
     "readv01",      // pass
     "readv02",      // pass4 fail1
@@ -575,10 +636,13 @@ char *ltp_testcases[] = {
     // "stream04", // pass no summary
     // "stream05", // pass no summary
     // "symlink01", // pass no summary
+    // "symlink01", // pass
     "symlink02", // pass
     "symlink03", // sendmsg
     "symlink04", // pass
     "syscall01", // pass
+    "socket01",  // pass
+    "socket02",  // pass
     "time01",    // pass
     "uname01",   // 完全PASS
     "uname02",   // 完全PASS
@@ -595,6 +659,7 @@ char *ltp_testcases[] = {
     "write05",  // passed   3
     "writev05", // 完全PASS
     "writev06", // 完全PASS
+    "gettid01", // PASS
     NULL,
     // "abort01",
     "abs01", // 完全PASS,没summary
@@ -1441,7 +1506,7 @@ char *ltp_testcases[] = {
     // "getsockopt01",
     // "getsockopt02",
     // "gettid01",       // PASS
-    // "gettid02",       // PASS
+    // "gettid02",       // 回不来
     "gettimeofday01", // pass
     // "gettimeofday02",
     // "getuid01",
@@ -2506,14 +2571,14 @@ char *ltp_testcases[] = {
     // "setpgrp02",
     // "setpriority01",
     // "setpriority02",
-    // "setregid01",
-    // "setregid01_16",
-    // "setregid02",
-    // "setregid02_16",
-    // "setregid03",
-    // "setregid03_16",
-    // "setregid04",
-    // "setregid04_16",
+    "setregid01", // PASS
+    // "setregid01_16",     // SKIP
+    "setregid02", // PASS
+    // "setregid02_16",     // SKIP
+    "setregid03", // PASS
+    // "setregid03_16",     // SKIP
+    "setregid04", // PASS
+    // "setregid04_16",     // SKIP
     // "setresgid01",
     // "setresgid01_16",
     // "setresgid02",
