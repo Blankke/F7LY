@@ -10826,11 +10826,55 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_setfsuid()
     {
-        panic("未实现该系统调用");
+        uint32_t fsuid;
+        if (_arg_int(0, (int &)fsuid) < 0)
+            return -EINVAL;
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (!p)
+            return -ESRCH;
+
+        uint32_t old_fsuid = p->_fsuid;
+
+        // 根据 Linux 标准：
+        // 1. root 用户可以设置任意值
+        // 2. 非 root 用户只能设置为 real uid, effective uid 或 saved uid
+        if (p->_euid == 0 ||
+            fsuid == p->_uid ||
+            fsuid == p->_euid ||
+            fsuid == p->_suid)
+        {
+            p->_fsuid = fsuid;
+        }
+
+        // 返回之前的 fsuid
+        return old_fsuid;
     }
     uint64 SyscallHandler::sys_setfsgid()
     {
-        panic("未实现该系统调用");
+        uint32_t fsgid;
+        if (_arg_int(0, (int &)fsgid) < 0)
+            return -EINVAL;
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (!p)
+            return -ESRCH;
+
+        uint32_t old_fsgid = p->_fsgid;
+
+        // 根据 Linux 标准：
+        // 1. root 用户可以设置任意值
+        // 2. 非 root 用户只能设置为 real gid, effective gid 或 saved gid
+        if (p->_euid == 0 ||
+            fsgid == p->_gid ||
+            fsgid == p->_egid ||
+            fsgid == p->_sgid)
+        {
+            p->_fsgid = fsgid;
+        }
+
+        // 返回之前的 fsgid
+        return old_fsgid;
     }
     uint64 SyscallHandler::sys_getgroups()
     {

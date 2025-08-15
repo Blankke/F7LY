@@ -432,11 +432,17 @@ struct ltp_testcase ltp_testcases[] = {
     // {"setresgid01", true, true}, // 先等等
     // {"setresgid02", true, true}, // 先等等
     // {"setresgid03", true, true}, // 先等等
-    // {"setresgid04", true, true}, // 先等等
+    // {"mkdir02", true, true}, // 先等等
+    // {"mkdir03", true, true}, // 先等等
+    // {"mkdir04", true, true}, // 先等等
+    // {"mkdir05", true, true}, // 先等等
 
-    // {"getegid01", true, true}, // PASS
-    // {"getegid02", true, true}, // PASS
-    
+    // {"getsid01", true, true}, // 先等等
+    // {"getsid02", true, true}, // 先等等
+
+    // {"getuid01", true, true},
+    // {"getuid03", true, true},
+
     // {"setresuid01", true, true},
     // {"setresuid01_16", true, true},
     // {"setresuid02", true, true},
@@ -448,7 +454,12 @@ struct ltp_testcase ltp_testcases[] = {
     // {"setresuid05", true, true},
     // {"setresuid05_16", true, true},
     // {"setsid01", true, true},
+    // {"truncate02", true, true},
+    // {"truncate02_64", true, true},
+    {"truncate03", true, true},
+    // {"truncate03_64", true, true},
     {NULL, true, true},
+    {"memfd_create01", true, true},
     {"splice07", true, true},
     {"epoll_ctl03", true, true},
     {"access01", true, true},
@@ -475,6 +486,9 @@ struct ltp_testcase ltp_testcases[] = {
     {"posix_fadvise01", true, true}, // pass6
     {"posix_fadvise02", true, true}, // pass6
     {"posix_fadvise03", true, true},
+    {"posix_fadvise01_64", true, true}, // pass6
+    {"posix_fadvise02_64", true, true}, // pass6
+    {"posix_fadvise03_64", true, true},
     {"signal03", true, true},
     {"signal05", true, true},
     {"signal04", true, true},
@@ -518,17 +532,30 @@ struct ltp_testcase ltp_testcases[] = {
     {"fcntl04", true, true},          // pass
     {"fcntl05", true, true},          // pass
     {"fcntl08", true, true},          // pass
+    {"fcntl09", true, true},          // pass
+    {"fcntl10", true, true},          // pass
     {"fcntl13", true, false},         // pass // la 会把用户态printf干爆
     {"fcntl15", true, true},          // passs5
+    {"fcntl02_64", true, true},       // pass
+    {"fcntl03_64", true, true},       // pass
+    {"fcntl04_64", true, true},       // pass
+    {"fcntl05_64", true, true},       // pass
+    {"fcntl08_64", true, true},       // pass
+    {"fcntl09_64", true, true},       // pass
+    {"fcntl10_64", true, true},       // pass
+    {"fcntl13_64", true, false},      // pass // la 会把用户态printf干爆
     {"fcntl15_64", true, true},       // passs5
     {"fstat02", true, true},          // pass 5 fail 1
     {"fstat03", true, false},         // pass2
+    {"fstat02_64", true, true},       // pass 5 fail 1
+    {"fstat03_64", true, false},      // pass2
     {"fstatfs02", true, true},        // pass 2
-    {"ftruncate01", true, true},   //pass 2
-    {"ftruncate03", true, true},  //pass 4
+    {"ftruncate01", true, true},      // pass 2
+    {"ftruncate03", true, true},      // pass 4
     {"faccessat01", true, true},      // 完全PASS
     {"faccessat02", true, true},      // 完全PASS
     {"faccessat201", true, true},     // pass
+    {"setrlimit04", true, true},      // p1
     {"flock01", true, true},          // pass 3
     {"flock02", true, true},          // pass 3
     {"flock03", true, true},          // pass1 fail2 brok 1
@@ -550,6 +577,19 @@ struct ltp_testcase ltp_testcases[] = {
     {"getpid02", true, true},         // PASS
     {"getppid01", true, true},        // PASS
     {"getppid02", true, true},        // PASS
+    {"getgid01", true, true},         // PASS
+    {"getgid03", true, true},         // PASS
+    {"getsid01", true, true},         // PASS
+    {"getsid02", true, true},         // PASS
+    {"getuid01", true, true},         // PASS
+    {"getuid03", true, true},         // PASS
+    {"setgid01", true, true},         // PASS
+    {"setgid02", true, true},         // PASS
+    {"setgid03", true, true},         // PASS
+    {"setresgid01", true, true},      // 先等等
+    {"setresgid02", true, true},      // 先等等
+    {"setresgid03", true, true},      // 先等等
+    {"setresgid04", true, true},      // 先等等
     {"setreuid01", true, true},       // PASS
     {"setreuid02", true, true},       // PASS
     {"setreuid03", true, true},       // PASS
@@ -561,6 +601,24 @@ struct ltp_testcase ltp_testcases[] = {
     {"setregid02", true, true},       // PASS
     {"setregid03", true, true},       // PASS
     {"setregid04", true, true},       // PASS
+    {"setegid01", true, true},        // PASS
+    {"setegid02", true, true},        // PASS
+    {"setfsgid01", true, true},       // p2 f1
+    {"setfsgid02", true, true},       // PASS
+    {"setfsuid01", true, true},       // PASS
+    {"setfsuid03", true, true},       // PASS
+    {"getpgrp01", true, true},        // PASS
+    {"setuid01", true, true},         // PASS
+    {"setuid03", true, true},         // PASS
+    {"setresuid01", true, true},      // PASS
+    {"setresuid02", true, true},      // PASS
+    {"setresuid03", true, true},      // PASS
+    {"setresuid04", true, true},      // p1 f2
+    {"setresuid05", true, true},      // PASS
+    {"getegid01", true, true},        // PASS
+    {"getegid02", true, true},        // PASS
+    {"geteuid01", true, true},        // PASS
+    {"geteuid02", true, true},        // PASS
     {"getrandom01", true, true},      // pass
     {"getrandom02", true, true},      // 完全PASS
     {"getrandom03", true, true},      // 完全PASS
@@ -577,47 +635,56 @@ struct ltp_testcase ltp_testcases[] = {
     {"lseek01", true, true},          // passed   4
     {"lseek02", true, true},          // passed   15
     {"lseek07", true, true},          // pass
-    {"madvise01", true, true},        // pass
+    {"lstat01", true, true},
+    {"lstat01_64", true, true},
+    {"lstat02", true, true},
+    {"lstat02_64", true, true},
+    {"madvise01", true, true}, // pass
     {"madvise05", true, true},
     {"madvise10", true, true},
-    {"memfd_create01", true, true}, 
     {"mkdirat02", true, true}, // pass2fail2
     {"mkdir03", true, true},   // pass
     {"mknod02", true, true},
     {"mknod09", true, true},
     {"mmap02", true, true},
-    {"mmap05", true, true},     // pass1 但是panic关了一个
-    {"mmap06", true, true},     // pass6 fail 2
-    {"mmap08", true, true},     // pass
-    {"mmap09", true, true},     // pass
-    {"mmap13", true, true},     // pass
-    {"mmap15", true, true},     // pass
-    {"mmap17", true, true},     // pass
-    {"mmap19", true, true},     // pass
-    {"mmap20", true, true},     // pass
-    {"open01", true, true},     // pass
-    {"open02", true, true},     // pass1 fail1
-    {"open03", true, true},     // 完全PASS
-    {"open04", true, true},     // 完全PASS
-    {"open06", true, true},     // pass
-    {"open07", true, true},     // pass
-    {"open09", true, true},     // pass
-    {"openat01", true, true},   // pass
-    {"pathconf01", true, true}, // pass
-    {"pathconf02", true, true}, // pass1 fail5
-    {"pipe01", true, true},     // 完全PASS
-    {"pipe03", true, true},     // 完全PASS
-    {"pipe06", true, true},     // 完全PASS
-    {"pipe10", true, true},     // 完全PASS
-    {"pipe12", true, true},     // pass
-    {"pipe14", true, true},     // 完全PASS
-    {"poll01", true, true},     // pass
-    {"pread01", true, true},    // pass
-    {"pselect02", true, true},  // pass
-    {"pselect03", true, true},  // pass
-    {"pwrite01", true, true},   // pass
-    {"read01", true, true},     // 貌似可以PASS
-    {"read02", true, true},     // pass
+    {"mmap05", true, true},       // pass1 但是panic关了一个
+    {"mmap06", true, true},       // pass6 fail 2
+    {"mmap08", true, true},       // pass
+    {"mmap09", true, true},       // pass
+    {"mmap13", true, true},       // pass
+    {"mmap15", true, true},       // pass
+    {"mmap17", true, true},       // pass
+    {"mmap19", true, true},       // pass
+    {"mmap20", true, true},       // pass
+    {"open01", true, true},       // pass
+    {"open02", true, true},       // pass1 fail1
+    {"open03", true, true},       // 完全PASS
+    {"open04", true, true},       // 完全PASS
+    {"open06", true, true},       // pass
+    {"open07", true, true},       // pass
+    {"open08", true, true},       // p4 f2
+    {"open09", true, true},       // pass
+    {"open10", true, true},       // p6 f3
+    {"openat01", true, true},     // pass
+    {"pathconf01", true, true},   // pass
+    {"pathconf02", true, true},   // pass1 fail5
+    {"pipe01", true, true},       // 完全PASS
+    {"pipe03", true, true},       // 完全PASS
+    {"pipe06", true, true},       // 完全PASS
+    {"pipe10", true, true},       // 完全PASS
+    {"pipe12", true, true},       // pass
+    {"pipe14", true, true},       // 完全PASS
+    {"poll01", true, true},       // pass
+    {"pread01", true, true},      // pass
+    {"pread01_64", true, true},   // pass
+    {"pselect02", true, true},    // pass
+    {"pselect02_64", true, true}, // pass
+    {"pselect03", true, true},    // pass
+    {"pselect03_64", true, true}, // pass
+    {"pwrite01", true, true},     // pass
+    {"pwrite01_64", true, true},  // pass
+    {"read01", true, true},       // 貌似可以PASS
+    {"read02", true, true},       // pass
     {"read03", true, true},
     {"read04", true, true},     // 完全PASS
     {"readlink01", true, true}, // pass 2
@@ -639,7 +706,10 @@ struct ltp_testcase ltp_testcases[] = {
     {"shmdt02", true, true},      // pass
     {"stat01", true, true},       // passed   12
     {"stat03", true, true},       // pass4 fail2
+    {"stat01_64", true, true},    // passed   12
+    {"stat03_64", true, true},    // pass4 fail2
     {"statfs02", true, true},     // pass3fail3
+    {"statfs02_64", true, true},  // pass3fail3
     {"statx01", true, true},      // pass8 fail2
     {"statx02", true, true},      // pass4 fail1
     {"statx03", true, true},      // pass6 fail1
@@ -672,4 +742,5 @@ struct ltp_testcase ltp_testcases[] = {
     {"writev05", true, true}, // 完全PASS
     {"writev06", true, true}, // 完全PASS
     {"gettid01", true, true}, // PASS
+    {"set_tid_address01", true, true},
     {NULL, false, false}};
