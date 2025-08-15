@@ -516,22 +516,22 @@ char *ltp_testcases[] = {
     "fcntl05",          // pass
     "fcntl08",          // pass
     // "fcntl13",        // pass // la 会把用户态printf干爆
-    "fcntl15",        // passs5
-    "fcntl15_64",     // passs5
-    "fstat02",        // pass 5 fail 1
-    "fstat03",        // pass2
-    "fstatfs02",      // pass 2
-    "faccessat01",    // 完全PASS
-    "faccessat02",    // 完全PASS
-    "faccessat201",   // pass
-    "flock01",        // pass 3
-    "flock02",        // pass 3
-    "flock03",        // pass1 fail2 brok 1
-    "flock04",        // pass5 fail1
-    "flock06",        // pass2 fail 2
-    "fpathconf01",    // pass
-    "fsync03",        // pass
-    "waitpid03",      // PASS
+    "fcntl15",      // passs5
+    "fcntl15_64",   // passs5
+    "fstat02",      // pass 5 fail 1
+    "fstat03",      // pass2
+    "fstatfs02",    // pass 2
+    "faccessat01",  // 完全PASS
+    "faccessat02",  // 完全PASS
+    "faccessat201", // pass
+    "flock01",      // pass 3
+    "flock02",      // pass 3
+    "flock03",      // pass1 fail2 brok 1
+    "flock04",      // pass5 fail1
+    "flock06",      // pass2 fail 2
+    "fpathconf01",  // pass
+    "fsync03",      // pass
+    "waitpid03",    // PASS
 
     "waitpid04",      // PASS
     "waitpid06",      // PASS
@@ -545,6 +545,13 @@ char *ltp_testcases[] = {
     "getpid02",       // PASS
     "getppid01",      // PASS
     "getppid02",      // PASS
+    "setreuid01",     // PASS
+    "setreuid02",     // PASS
+    "setreuid03",     // PASS
+    "setreuid04",     // PASS
+    "setreuid05",     // PASS
+    "setreuid06",     // PASS
+    "setreuid07",     // p1 f2
     "setregid01",     // PASS
     "setregid02",     // PASS
     "setregid03",     // PASS
@@ -2597,19 +2604,19 @@ char *ltp_testcases[] = {
     // "setresuid04_16",
     // "setresuid05",
     // "setresuid05_16",
-    // "setreuid01",
+    "setreuid01", // PASS
+    "setreuid02", // PASS
+    "setreuid03", // PASS
+    "setreuid04", // PASS
+    "setreuid05", // PASS
+    "setreuid06", // PASS
+    "setreuid07", // p1 f2
     // "setreuid01_16",
-    // "setreuid02",
     // "setreuid02_16",
-    // "setreuid03",
     // "setreuid03_16",
-    // "setreuid04",
     // "setreuid04_16",
-    // "setreuid05",
     // "setreuid05_16",
-    // "setreuid06",
     // "setreuid06_16",
-    // "setreuid07",
     // "setreuid07_16",
     // "setrlimit01",
     // "setrlimit02",
