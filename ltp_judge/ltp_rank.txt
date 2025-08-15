@@ -77,7 +77,7 @@ utime01                        | 15         | 15         |
 utime02                        | 15         | 15         |
 utime04                        | 15         | 15         |
 utime05                        | 15         | 15         |
-readahead01                    | 14         | 24         |
+readahead01                    | 14         | 24         | 缺syscal
 bind05                         | 14         | 14         |
 link04                         | 14         | 14         |
 memfd_create02                 | 14         | 14         |
@@ -90,37 +90,37 @@ fgetxattr02                    | 13         | 13         |
 ioctl_loop01                   | 13         | 13         |
 semctl01                       | 13         | 13         |
 copy_file_range01              | 12         | 24         |
-af_alg01                       | 12         | 14         |
+af_alg01                       | 12         | 14         | no
 clock_nanosleep01              | 12         | 14         | vDSO
 fremovexattr02                 | 12         | 14         |
-madvise10                      | 12         | 14         |
-msgctl04                       | 12         | 14         |
-select02                       | 12         | 14         |
-getdents02                     | 12         | 13         |
+madvise10                      | 12         | 14         | pass
+msgctl04                       | 12         | 14         | 缺syscal
+select02                       | 12         | 14         | 修
+getdents02                     | 12         | 13         | 爆了
 access04                       | 12         | 12         | 一半
-asapi_02                       | 12         | 12         |
+asapi_02                       | 12         | 12         | no
 clock_settime02                | 12         | 12         | 可以修
-fcntl15                        | 12         | 12         |
-fcntl15_64                     | 12         | 12         |
-fstatfs01                      | 12         | 12         |
+fcntl15                        | 12         | 12         | 一半
+fcntl15_64                     | 12         | 12         | 一半
+fstatfs01                      | 12         | 12         | no
 fstatfs01_64                   | 12         | 12         |
 ioctl_loop07                   | 12         | 12         |
 membarrier01                   | 12         | 12         |
 mount02                        | 12         | 12         |
-readahead02                    | 12         | 12         |
-readlinkat01                   | 12         | 12         |
+readahead02                    | 12         | 12         | loop
+readlinkat01                   | 12         | 12         | 修，之前pass，现在爆了
 rename08                       | 12         | 12         |
 rename10                       | 12         | 12         |
-shmctl01                       | 12         | 12         |
-stat01                         | 12         | 12         |
-stat01_64                      | 12         | 12         |
+shmctl01                       | 12         | 12         | 修，不知道难不难，好像卡死
+stat01                         | 12         | 12         | pass
+stat01_64                      | 12         | 12         | pass
 sync_file_range02              | 12         | 12         |
 timerfd01                      | 12         | 12         | 修
 times03                        | 12         | 12         | 修，可能难，yileld
 futex_wake02                   | 11         | 11         |
 futex_wake03                   | 11         | 11         |
 gettid02                       | 11         | 11         | 修，已经过了10个了
-mkdir03                        | 11         | 11         |
+mkdir03                        | 11         | 11         | pass
 fallocate05                    | 10         | 14         |
 statx01                        | 10         | 11         |
 clock_gettime02                | 10         | 10         | pass
@@ -129,24 +129,24 @@ kmsg01                         | 10         | 10         |
 mount01                        | 10         | 10         | loop
 mq_open01                      | 10         | 10         |
 readv01                        | 10         | 10         | pass
-socketpair01                   | 10         | 10         |
-waitid08                       | 10         | 10         |
+socketpair01                   | 10         | 10         | 缺syscal
+waitid08                       | 10         | 10         | 缺syscal
 recvmsg01                      | 9          | 10         |
-acct01                         | 9          | 9          |
-chmod06                        | 9          | 9          |
-clock_adjtime01                | 9          | 9          |
-creat08                        | 9          | 9          |
-epoll_ctl02                    | 9          | 9          |
-epoll_wait06                   | 9          | 9          |
-fpathconf01                    | 9          | 9          |
-getrandom03                    | 9          | 9          |
-getsockopt01                   | 9          | 9          |
+acct01                         | 9          | 9          | 缺syscal
+chmod06                        | 9          | 9          | 一半
+clock_adjtime01                | 9          | 9          | 修
+creat08                        | 9          | 9          | 修，可能难
+epoll_ctl02                    | 9          | 9          | 修，感觉简单
+epoll_wait06                   | 9          | 9          | 修，缺syscal
+fpathconf01                    | 9          | 9          | pass
+getrandom03                    | 9          | 9          | pass
+getsockopt01                   | 9          | 9          | 修，有难度
 inotify02                      | 9          | 9          |
 inotify12                      | 9          | 9          |
 ioctl03                        | 9          | 9          |
 ioctl06                        | 9          | 9          |
 memfd_create04                 | 9          | 9          |
-open10                         | 9          | 9          |
+open10                         | 9          | 9          | 缺settid
 open_by_handle_at01            | 9          | 9          |
 rmdir02                        | 9          | 9          |
 setregid04                     | 9          | 9          |
@@ -155,7 +155,7 @@ socket01                       | 9          | 9          |
 fallocate04                    | 8          | 13         |
 accept4_01                     | 8          | 9          |
 ioctl01                        | 8          | 9          |
-access03                       | 8          | 8          |
+access03                       | 8          | 8          | pass
 chown04                        | 8          | 8          |
 creat06                        | 8          | 8          |
 fallocate03                    | 8          | 8          |
@@ -334,7 +334,7 @@ select04                       | 4          | 7          |
 fremovexattr01                 | 4          | 6          |
 lremovexattr01                 | 4          | 6          |
 syslog12                       | 4          | 6          |
-accept01                       | 4          | 5          |
+accept01                       | 4          | 5          | pass
 getcwd01                       | 4          | 5          |
 mmap16                         | 4          | 5          |
 msync04                        | 4          | 5          |
@@ -347,7 +347,7 @@ clock_settime01                | 4          | 4          |
 dup201                         | 4          | 4          |
 dup203                         | 4          | 4          |
 dup204                         | 4          | 4          |
-eventfd01                      | 4          | 4          |
+eventfd01                      | 4          | 4          | no
 fcntl13                        | 4          | 4          |
 fcntl13_64                     | 4          | 4          |
 fcntl30                        | 4          | 4          |
