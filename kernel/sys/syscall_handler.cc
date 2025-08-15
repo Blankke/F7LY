@@ -9681,53 +9681,203 @@ namespace syscall
     uint64 SyscallHandler::sys_truncate()
     {
         uint64 addr;
-        eastl::string pathname;
         off_t length;
+        
+        // 参数验证
         if (_arg_addr(0, addr) < 0 || _arg_long(1, length) < 0)
         {
             printfRed("[SyscallHandler::sys_truncate] 参数错误\n");
             return SYS_EINVAL; // 参数错误
         }
-        int cpres = mem::k_vmm.copy_str_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), pathname, addr, 256);
+
+        // 检查 length 参数
+        if (length < 0)
+        {
+            printfRed("[SyscallHandler::sys_truncate] Invalid length: %ld\n", length);
+            return SYS_EINVAL;
+        }
+
+        // 从用户空间复制路径名
+        eastl::string pathname;
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (!p)
+        {
+            printfRed("[SyscallHandler::sys_truncate] Cannot get current process\n");
+            return SYS_ESRCH;
+        }
+
+        int cpres = mem::k_vmm.copy_str_in(*p->get_pagetable(), pathname, addr, PATH_MAX);
         if (cpres < 0)
         {
-            printfRed("[sys_fstatfs] Error copying path from user space\n");
-            return cpres;
+            printfRed("[SyscallHandler::sys_truncate] EFAULT: pathname points outside accessible address space\n");
+            return cpres; // 地址空间错误
         }
 
-        pathname = get_absolute_path(pathname.c_str(), proc::k_pm.get_cur_pcb()->_cwd_name.c_str());
-        if (fs::k_vfs.is_file_exist(pathname.c_str()) != 1)
+        // 检查路径名长度
+        if (pathname.length() == 0)
         {
-            printfRed("[SyscallHandler::sys_truncate] 文件不存在: %s\n", pathname.c_str());
-            return SYS_ENOENT; // 文件不存在
+            printfRed("[SyscallHandler::sys_truncate] Empty pathname\n");
+            return SYS_ENOENT;
         }
 
-        // 打开文件，需要使用写入模式
-        fs::file *file = nullptr;
-        int flags = O_WRONLY; // 以写入模式打开
-        int status = fs::k_vfs.openat(pathname, file, flags);
-
-        if (status != EOK || !file)
+        if (pathname.length() > PATH_MAX)
         {
-            printfRed("[SyscallHandler::sys_truncate] 无法打开文件: %s, 错误码: %d\n", pathname.c_str(), status);
-            return SYS_EACCES; // 访问被拒绝
+            printfRed("[SyscallHandler::sys_truncate] ENAMETOOLONG: pathname exceeds maximum length\n");
+            return SYS_ENAMETOOLONG; // 路径名过长
         }
 
-        // 检查是否具有写权限
-        if (!(file->_attrs.u_write))
+        // 检查路径组件长度
+        size_t pos = 0;
+        while (pos < pathname.length())
         {
-            printfRed("[SyscallHandler::sys_truncate] 文件没有写权限: %s\n", pathname.c_str());
-            file->free_file(); // 释放文件对象
-            return SYS_EACCES; // 访问被拒绝
+            size_t next_slash = pathname.find('/', pos);
+            if (next_slash == eastl::string::npos)
+                next_slash = pathname.length();
+            
+            size_t component_len = next_slash - pos;
+            if (component_len > 255)
+            {
+                printfRed("[SyscallHandler::sys_truncate] ENAMETOOLONG: path component exceeds 255 characters\n");
+                return SYS_ENAMETOOLONG;
+            }
+            
+            pos = next_slash + 1;
         }
 
-        // 调用vfs_truncate执行截断操作
-        status = vfs_truncate(file, length);
+        // 获取绝对路径
+        pathname = get_absolute_path(pathname.c_str(), p->_cwd_name.c_str());
+        printfCyan("[SyscallHandler::sys_truncate] pathname: %s, length: %ld\n", pathname.c_str(), length);
 
-        // 释放文件对象
-        file->free_file();
+        // 验证路径中的每个父目录都存在且是目录
+        eastl::string path_to_check = pathname;
+        size_t last_slash = path_to_check.find_last_of('/');
+        if (last_slash != eastl::string::npos && last_slash > 0)
+        {
+            eastl::string parent_path = path_to_check.substr(0, last_slash);
+            eastl::string current_path = "";
 
-        return status;
+            size_t start = 1; // 跳过第一个 '/'
+            while (start < parent_path.length())
+            {
+                size_t end = parent_path.find('/', start);
+                if (end == eastl::string::npos)
+                    end = parent_path.length();
+
+                current_path += "/" + parent_path.substr(start, end - start);
+
+                int exists = fs::k_vfs.is_file_exist(current_path.c_str());
+                if (exists == 0)
+                {
+                    printfRed("[SyscallHandler::sys_truncate] ENOENT: directory component does not exist: %s\n", current_path.c_str());
+                    return SYS_ENOENT;
+                }
+                else if (exists == 1)
+                {
+                    int file_type = fs::k_vfs.path2filetype(current_path);
+                    if (file_type != fs::FileTypes::FT_DIRECT)
+                    {
+                        printfRed("[SyscallHandler::sys_truncate] ENOTDIR: component is not a directory: %s\n", current_path.c_str());
+                        return SYS_ENOTDIR;
+                    }
+                }
+
+                start = end + 1;
+            }
+        }
+
+        // 检查目标文件是否存在
+        int file_exists = fs::k_vfs.is_file_exist(pathname.c_str());
+        if (file_exists != 1)
+        {
+            printfRed("[SyscallHandler::sys_truncate] ENOENT: file does not exist: %s\n", pathname.c_str());
+            return SYS_ENOENT;
+        }
+
+        // 检查目标是否是目录
+        int file_type = fs::k_vfs.path2filetype(pathname);
+        if (file_type == fs::FileTypes::FT_DIRECT)
+        {
+            printfRed("[SyscallHandler::sys_truncate] EISDIR: target is a directory: %s\n", pathname.c_str());
+            return SYS_EISDIR;
+        }
+
+        // 打开文件进行截断操作
+        int flags = O_WRONLY;
+        int fd = proc::k_pm.open(AT_FDCWD, pathname, flags, 0);
+
+        if (fd < 0)
+        {
+            printfRed("[SyscallHandler::sys_truncate] EACCES: cannot open file for writing: %s, error: %d\n", pathname.c_str(), fd);
+            return fd;
+        }
+
+        // 获取文件对象
+        fs::file *file = p->get_open_file(fd);
+        if (!file)
+        {
+            printfRed("[SyscallHandler::sys_truncate] Failed to get file object for fd: %d\n", fd);
+            proc::k_pm.close(fd);
+            return SYS_EBADF;
+        }
+
+        // 检查文件权限
+        if (!file->_attrs.u_write)
+        {
+            printfRed("[SyscallHandler::sys_truncate] EACCES: no write permission: %s\n", pathname.c_str());
+            proc::k_pm.close(fd);
+            return SYS_EACCES;
+        }
+
+        // 对于 memfd 文件，检查密封状态
+        if (file->_path_name.find("memfd:") == 0)
+        {
+            if (file->_seals & F_SEAL_WRITE)
+            {
+                printfRed("[SyscallHandler::sys_truncate] EPERM: memfd sealed with F_SEAL_WRITE\n");
+                proc::k_pm.close(fd);
+                return SYS_EPERM;
+            }
+
+            if (length > (off_t)file->lwext4_file_struct.fsize && (file->_seals & F_SEAL_GROW))
+            {
+                printfRed("[SyscallHandler::sys_truncate] EPERM: memfd sealed with F_SEAL_GROW, cannot extend\n");
+                proc::k_pm.close(fd);
+                return SYS_EPERM;
+            }
+
+            if (length < (off_t)file->lwext4_file_struct.fsize && (file->_seals & F_SEAL_SHRINK))
+            {
+                printfRed("[SyscallHandler::sys_truncate] EPERM: memfd sealed with F_SEAL_SHRINK, cannot shrink\n");
+                proc::k_pm.close(fd);
+                return SYS_EPERM;
+            }
+        }
+
+        // 检查文件大小限制 (简化版本，实际实现可能需要更复杂的检查)
+        // 这里使用一个合理的最大文件大小限制
+        const off_t MAX_FILE_SIZE = (1ULL << 20); 
+        if (length > MAX_FILE_SIZE)
+        {
+            printfRed("[SyscallHandler::sys_truncate] EFBIG: length exceeds maximum file size\n");
+            proc::k_pm.close(fd);
+            return SYS_EFBIG;
+        }
+
+        // 执行截断操作
+        printfCyan("[SyscallHandler::sys_truncate] Truncating file %s to length %ld bytes\n", pathname.c_str(), length);
+        int result = vfs_truncate(file, length);
+
+        // 关闭文件描述符
+        proc::k_pm.close(fd);
+
+        if (result < 0)
+        {
+            printfRed("[SyscallHandler::sys_truncate] truncate operation failed: %d\n", result);
+            return result;
+        }
+
+        printfGreen("[SyscallHandler::sys_truncate] Successfully truncated %s to %ld bytes\n", pathname.c_str(), length);
+        return 0;
     }
     uint64 SyscallHandler::sys_fallocate()
     {

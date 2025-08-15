@@ -454,10 +454,7 @@ struct ltp_testcase ltp_testcases[] = {
     // {"setresuid05", true, true},
     // {"setresuid05_16", true, true},
     // {"setsid01", true, true},
-    // {"truncate02", true, true},
-    // {"truncate02_64", true, true},
-    {"truncate03", true, true},
-    // {"truncate03_64", true, true},
+
     {NULL, true, true},
     {"memfd_create01", true, true},
     {"splice07", true, true},
@@ -720,13 +717,17 @@ struct ltp_testcase ltp_testcases[] = {
     // "stream05", true, true}, // pass no summary
     // "symlink01", true, true}, // pass no summary
     // "symlink01", true, true}, // pass
-    {"symlink02", true, true},  // pass
-    {"symlink03", true, true},  // sendmsg
-    {"symlink04", true, true},  // pass
-    {"syscall01", true, true},  // pass
-    {"socket01", true, true},   // pass
-    {"socket02", true, true},   // pass
-    {"time01", true, true},     // pass
+    {"symlink02", true, true}, // pass
+    {"symlink03", true, true}, // sendmsg
+    {"symlink04", true, true}, // pass
+    {"syscall01", true, true}, // pass
+    {"socket01", true, true},  // pass
+    {"socket02", true, true},  // pass
+    {"time01", true, true},    // pass
+    {"truncate02", true, true},
+    {"truncate02_64", true, true},
+    {"truncate03", true, true},
+    {"truncate03_64", true, true},
     {"uname01", true, true},    // 完全PASS
     {"uname02", true, true},    // 完全PASS
     {"unlink05", true, true},   // pass
