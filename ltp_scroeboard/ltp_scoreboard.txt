@@ -1881,11 +1881,11 @@ setfsuid03                     |            |
 setfsuid03_16                  |            | 
 setfsuid04                     |            | 
 setfsuid04_16                  |            | 
-setgid01                       |            | 
+setgid01                       | pass       | 
 setgid01_16                    |            | 
-setgid02                       |            | 
+setgid02                       | pass       | 
 setgid02_16                    |            | 
-setgid03                       |            | 
+setgid03                       | pass       | 
 setgid03_16                    |            | 
 setgroups01                    |            | 
 setgroups01_16                 |            | 
@@ -1953,7 +1953,7 @@ setreuid07_16                  |            |
 setrlimit01                    |            | 
 setrlimit02                    |            | 
 setrlimit03                    |            | 
-setrlimit04                    |            | 
+setrlimit04                    | pass           | 
 setrlimit05                    |            | 
 setrlimit06                    |            | 
 setsid01                       |            | 
