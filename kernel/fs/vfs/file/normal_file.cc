@@ -178,6 +178,17 @@ namespace fs
 			}
 		}
 
+		// Enforce memfd write seal
+		if (_path_name.find("memfd:") == 0)
+		{
+			if ((_seals & F_SEAL_WRITE) != 0)
+			{
+				_file_lock.release();
+				return -EPERM;
+			}
+			// If shrink/grow seals are set, writing is still allowed as long as size constraints are respected
+		}
+
 		if (off != _file_ptr)
 		{
 			int seek_status = ext4_fseek(&lwext4_file_struct, off, SEEK_SET);

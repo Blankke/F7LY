@@ -141,6 +141,9 @@ namespace fs
 		struct ext4_file lwext4_file_struct;
 		struct ext4_dir lwext4_dir_struct;
 		flock _lock; // file lock, used for flock
+	// memfd sealing state
+	uint32_t _seals = 0;             // bitmask of F_SEAL_*
+	bool _sealing_allowed = false;   // whether F_ADD_SEALS is permitted
 	public:
 		file() = default;
 		file(FileAttrs attrs) : _attrs(attrs), refcnt(0), _stat(_attrs.filetype)

@@ -4715,16 +4715,61 @@ namespace syscall
                 return pf->get_pipe_size();
             }
 
-        //   File Sealing (暂不支持)
+        //   File Sealing
         case F_ADD_SEALS:
+        {
             if (_arg_addr(2, arg) < 0)
                 return SYS_EFAULT;
-            printfRed("[SyscallHandler::sys_fcntl] F_ADD_SEALS not implemented\n");
-            return SYS_EINVAL; // arg 包含未识别的密封位
+            uint32_t add = (uint32_t)arg;
+            // only memfd supports sealing: identified by path_name prefix
+            if (f->_path_name.find("memfd:") != 0)
+                return SYS_EINVAL;
+            // can't add seals if not allowed
+            if (!f->_sealing_allowed)
+                return SYS_EPERM;
+            // unknown bits
+            uint32_t known = F_SEAL_SEAL | F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE;
+            if (add & ~known)
+                return SYS_EINVAL;
+            // if F_SEAL_SEAL already set, no further seals can be added
+            if (f->_seals & F_SEAL_SEAL)
+                return SYS_EPERM;
+            // If adding F_SEAL_WRITE, ensure no active MAP_SHARED|PROT_WRITE mappings exist for this file
+            if (add & F_SEAL_WRITE)
+            {
+                proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
+                if (pcb && pcb->get_vma())
+                {
+                    fs::normal_file *nf = static_cast<fs::normal_file *>(f);
+                    for (int i = 0; i < proc::NVMA; ++i)
+                    {
+                        auto &vm = pcb->get_vma()->_vm[i];
+                        if (!vm.used)
+                            continue;
+                        if (vm.vfile == nf && (vm.flags & MAP_SHARED) && (vm.prot & PROT_WRITE))
+                        {
+                            return SYS_EBUSY;
+                        }
+                    }
+                }
+            }
+            // merging existing seals
+            f->_seals |= add;
+            if (add & F_SEAL_SEAL)
+            {
+                // Once F_SEAL_SEAL is set, disallow future additions explicitly
+                f->_sealing_allowed = false;
+            }
+            return 0;
+        }
 
         case F_GET_SEALS:
-            printfRed("[SyscallHandler::sys_fcntl] F_GET_SEALS not implemented\n");
-            return SYS_EINVAL; // 文件系统不支持密封
+        {
+            // only memfd supports sealing
+            if (f->_path_name.find("memfd:") != 0)
+                return 0; // regular files report 0
+            return f->_seals;
+        }
 
         default:
             printfRed("[SyscallHandler::sys_fcntl] Unrecognized fcntl operation: %d\n", op);
@@ -5634,6 +5679,19 @@ namespace syscall
         {
             printfRed("[sys_ftruncate] 文件未以写入模式打开: %d\n", fd);
             return SYS_EINVAL; // 参数无效，文件未以写入模式打开
+        }
+
+        // Enforce memfd sealing rules
+        if (f->_path_name.find("memfd:") == 0)
+        {
+            // WRITE seal forbids any modification of file contents, including truncation
+            if (f->_seals & F_SEAL_WRITE)
+                return SYS_EPERM;
+            uint64_t cur_size = f->lwext4_file_struct.fsize;
+            if ((uint64_t)length < cur_size && (f->_seals & F_SEAL_SHRINK))
+                return SYS_EPERM;
+            if ((uint64_t)length > cur_size && (f->_seals & F_SEAL_GROW))
+                return SYS_EPERM;
         }
 
         int result = vfs_truncate(f, length); // 调用vfs_truncate函数进行截断操作
@@ -9379,6 +9437,17 @@ namespace syscall
             return SYS_EINVAL; // 参数错误
         }
 
+        // Enforce memfd sealing
+        if (f->_path_name.find("memfd:") == 0)
+        {
+            if (f->_seals & F_SEAL_WRITE)
+                return SYS_EPERM;
+            // Determine growth
+            uint64_t end = (uint64_t)offset + (uint64_t)len;
+            uint64_t cur = f->lwext4_file_struct.fsize;
+            if (end > cur && (f->_seals & F_SEAL_GROW))
+                return SYS_EPERM;
+        }
         return vfs_fallocate(f, offset, len);
     }
     uint64 SyscallHandler::sys_fchdir()
@@ -11104,9 +11173,21 @@ namespace syscall
         {
             fs::file *f = p->_ofile->_ofile_ptr[fd];
             f->_path_name = eastl::string("memfd:") + name;
+            // initialize sealing state: allowed only when flag set
+            f->_seals = 0;
+            if (flags & MFD_ALLOW_SEALING)
+            {
+                f->_sealing_allowed = true;
+            }
+            else
+            {
+                // When sealing is not allowed, Linux sets F_SEAL_SEAL by default
+                f->_sealing_allowed = false;
+                f->_seals |= F_SEAL_SEAL;
+            }
         }
 
-        // 目前不实现 sealing 语义，仅接受 MFD_ALLOW_SEALING 标志，后续在 fcntl F_*_SEALS 中扩展
+        // 返回 fd，密封语义由 fcntl F_*_SEALS 实现
         return fd;
     }
     /**

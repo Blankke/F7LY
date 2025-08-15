@@ -2563,6 +2563,16 @@ namespace proc
 
             vfile = static_cast<fs::normal_file *>(f);
             printfCyan("[mmap] File mapping: %s\n", f->_path_name.c_str());
+            // Respect memfd write seal: disallow shared writable mappings
+            if (f->_path_name.find("memfd:") == 0)
+            {
+                if ((flags & MAP_SHARED) && (prot & PROT_WRITE) && (f->_seals & F_SEAL_WRITE))
+                {
+                    if (errno)
+                        *errno = EPERM;
+                    return MAP_FAILED;
+                }
+            }
         }
         else
         {

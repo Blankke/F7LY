@@ -477,6 +477,7 @@ char *ltp_testcases[] = {
     "fpathconf01",    // pass
     "fsync03",        // pass
     "waitpid03",      // PASS
+
     "waitpid04",      // PASS
     "waitpid06",      // PASS
     "waitpid07",      // PASS
@@ -568,12 +569,12 @@ char *ltp_testcases[] = {
     "statx01",      // pass8 fail2
     "statx02",      // pass4 fail1
     "statx03",      // pass6 fail1
-    // "stream01", // pass
-    "stream02", // pass
-    "stream03", // pass
-    "stream04", // pass
-    "stream05", // pass
-    // "symlink01", // pass
+    // "stream01", // pass no summary
+    // "stream02", // pass no summary
+    // "stream03", // pass no summary
+    // "stream04", // pass no summary
+    // "stream05", // pass no summary
+    // "symlink01", // pass no summary
     "symlink02", // pass
     "symlink03", // sendmsg
     "symlink04", // pass

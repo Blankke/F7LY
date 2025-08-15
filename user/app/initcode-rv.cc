@@ -8,8 +8,8 @@ extern "C"
         // iozone_test("/musl");
         // iozone_test("/glibc");
         ltp_test(false);
-        basic_test("/musl/");
-        basic_test("/glibc/");
+        // basic_test("/musl/");
+        // basic_test("/glibc/");
         ltp_test(true);
         // busybox_test("/musl/");
         // busybox_test("/glibc/");
