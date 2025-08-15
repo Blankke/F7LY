@@ -407,7 +407,6 @@ char *ltp_testcases[] = {
     "access01",
     "getpid01",
     "waitpid01", // PASS
-    // "pipe11",
     "timer_settime01",
     "timer_settime02",
     "clock_getres01",
@@ -425,6 +424,10 @@ char *ltp_testcases[] = {
     "signal03",
     "signal05",
     "signal04",
+    "add_key01",
+    "add_key02",
+    "add_key03",
+    "add_key04",
     "dup01",            // 完全PASS
     "dup02",            // 完全PASS
     "dup03",            // 完全PASS
@@ -463,7 +466,6 @@ char *ltp_testcases[] = {
     "fstat02",        // pass 5 fail 1
     "fstat03",        // pass2
     "fstatfs02",      // pass 2
-    "fsync02",        // bin/sh
     "faccessat01",    // 完全PASS
     "faccessat02",    // 完全PASS
     "faccessat201",   // pass

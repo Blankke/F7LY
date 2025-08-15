@@ -8,9 +8,9 @@ extern "C"
         // iozone_test("/musl");
         // iozone_test("/glibc");
         ltp_test(false);
+        basic_test("/musl/");
+        basic_test("/glibc/");
         ltp_test(true);
-        // basic_test("/musl/");
-        // basic_test("/glibc/");
         // busybox_test("/musl/");
         // busybox_test("/glibc/");
         // libc_test("/musl/"); // 不测glibc, 不要求测

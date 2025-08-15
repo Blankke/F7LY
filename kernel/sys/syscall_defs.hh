@@ -176,6 +176,8 @@ namespace syscall
         SYS_brk = 214,
         SYS_munmap = 215,
         SYS_mremap = 216,
+        SYS_add_key = 217, // from rocket
+        SYS_keyctl =219,
         SYS_clone = 220,
         SYS_execve = 221,
         SYS_mmap = 222,
@@ -329,5 +331,6 @@ namespace syscall
     constexpr int SYS_ETIMEDOUT = -110;    // 操作超时（如网络请求未在指定时间内响应）
     constexpr int SYS_ECONNREFUSED = -111; // 连接被拒绝（对端无监听服务）
     constexpr int SYS_EINPROGRESS = -115;  // 套接字为非阻塞模式且连接无法立即完成
+    constexpr int SYS_EBADMSG = -74;       // 消息格式错误（不是有效的数据消息）
     constexpr int SYS_ERESTARTSYS = -512;  // 内核自动重启系统调用
 }
