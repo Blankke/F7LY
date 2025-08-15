@@ -536,7 +536,7 @@ struct ltp_testcase ltp_testcases[] = {
     {"faccessat01", true, true},      // 完全PASS
     {"faccessat02", true, true},      // 完全PASS
     {"faccessat201", true, true},     // pass
-    {"setrlimit04", true, true},  // p1
+    {"setrlimit04", true, true},      // p1
     {"flock01", true, true},          // pass 3
     {"flock02", true, true},          // pass 3
     {"flock03", true, true},          // pass1 fail2 brok 1
@@ -558,19 +558,19 @@ struct ltp_testcase ltp_testcases[] = {
     {"getpid02", true, true},         // PASS
     {"getppid01", true, true},        // PASS
     {"getppid02", true, true},        // PASS
-    {"getgid01", true, true},     // PASS
-    {"getgid03", true, true},     // PASS
-    {"getsid01", true, true},     // 先等等
-    {"getsid02", true, true},     // 先等等
-    {"getuid01", true, true},
-    {"getuid03", true, true},
-    {"setgid01", true, true},       // PASS
-    {"setgid02", true, true},       // PASS
-    {"setgid03", true, true},       // PASS
-    {"setresgid01", true, true},    // 先等等
-    {"setresgid02", true, true},    // 先等等
-    {"setresgid03", true, true},    // 先等等
-    {"setresgid04", true, true},    // 先等等
+    {"getgid01", true, true},         // PASS
+    {"getgid03", true, true},         // PASS
+    {"getsid01", true, true},         // PASS
+    {"getsid02", true, true},         // PASS
+    {"getuid01", true, true},         // PASS
+    {"getuid03", true, true},         // PASS
+    {"setgid01", true, true},         // PASS
+    {"setgid02", true, true},         // PASS
+    {"setgid03", true, true},         // PASS
+    {"setresgid01", true, true},      // 先等等
+    {"setresgid02", true, true},      // 先等等
+    {"setresgid03", true, true},      // 先等等
+    {"setresgid04", true, true},      // 先等等
     {"setreuid01", true, true},       // PASS
     {"setreuid02", true, true},       // PASS
     {"setreuid03", true, true},       // PASS
@@ -589,12 +589,17 @@ struct ltp_testcase ltp_testcases[] = {
     {"setfsuid01", true, true},       // PASS
     {"setfsuid03", true, true},       // PASS
     {"getpgrp01", true, true},        // PASS
-    {"setuid01", true, true},       // PASS
-    {"setuid03", true, true},       // PASS
-    {"getegid01", true, true},      // PASS
-    {"getegid02", true, true},      // PASS
-    {"geteuid01", true, true},      // PASS
-    {"geteuid02", true, true},      // PASS
+    {"setuid01", true, true},         // PASS
+    {"setuid03", true, true},         // PASS
+    {"setresuid01", true, true},      // PASS
+    {"setresuid02", true, true},      // PASS
+    {"setresuid03", true, true},      // PASS
+    {"setresuid04", true, true},      // p1 f2
+    {"setresuid05", true, true},      // PASS
+    {"getegid01", true, true},        // PASS
+    {"getegid02", true, true},        // PASS
+    {"geteuid01", true, true},        // PASS
+    {"geteuid02", true, true},        // PASS
     {"getrandom01", true, true},      // pass
     {"getrandom02", true, true},      // 完全PASS
     {"getrandom03", true, true},      // 完全PASS

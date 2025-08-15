@@ -1926,15 +1926,15 @@ setresgid03                    | pass           |
 setresgid03_16                 |            | 
 setresgid04                    | pass           | 
 setresgid04_16                 |            | 
-setresuid01                    |            | 
+setresuid01                    | pass           | 
 setresuid01_16                 |            | 
-setresuid02                    |            | 
+setresuid02                    | pass           | 
 setresuid02_16                 |            | 
-setresuid03                    |            | 
+setresuid03                    | pass           | 
 setresuid03_16                 |            | 
-setresuid04                    |            | 
+setresuid04                    | pass           | p1 f2
 setresuid04_16                 |            | 
-setresuid05                    |            | 
+setresuid05                    | pass           | 
 setresuid05_16                 |            | 
 setreuid01                     | pass       | PASS
 setreuid02                     | pass       | PASS
