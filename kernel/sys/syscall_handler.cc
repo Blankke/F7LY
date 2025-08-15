@@ -1290,6 +1290,11 @@ namespace syscall
             // 处理 O_TRUNC 标志 - 这个标志需要执行，因为它会影响文件大小
             if (flags & O_TRUNC)
             {
+                if (target_file->_seals & F_SEAL_SHRINK)
+                {
+                    printfRed("[SyscallHandler::sys_openat] File is sealed with F_SEAL_SHRINK, cannot truncate\n");
+                    return -EPERM; // 文件被封印，
+                }
                 printfCyan("[SyscallHandler::sys_openat] truncating file for /proc/self/fd/ path with O_TRUNC flag\n");
                 // 截断文件到0字节
                 if (target_file->lwext4_file_struct.fsize > 0)
@@ -2190,6 +2195,39 @@ namespace syscall
             printfRed("[SyscallHandler::sys_mmap] Invalid flags: %d\n", flags);
             return -EINVAL; // 返回无效参数错误
         }
+        // 处理 memfd 文件的特殊情况
+        if (!(flags & MAP_ANONYMOUS) && f != nullptr)
+        {
+            // 检查是否是 memfd 文件
+            if (f->_path_name.find("memfd:") == 0)
+            {
+                printfCyan("[SyscallHandler::sys_mmap] Handling memfd file: %s\n", f->_path_name.c_str());
+
+                // 检查 memfd 的 seals
+                if ((flags & MAP_SHARED) && (prot & PROT_WRITE) && (f->_seals & F_SEAL_WRITE))
+                {
+                    printfRed("[SyscallHandler::sys_mmap] memfd文件被F_SEAL_WRITE密封，无法创建共享写映射\n");
+                    return -EPERM;
+                }
+
+                // 对于 memfd 文件，我们需要直接处理内存映射，而不是通过文件系统路径
+                // 因为 memfd 文件的路径在文件系统中不存在
+
+                // 验证偏移量和大小
+                if (offset > f->lwext4_file_struct.fsize)
+                {
+                    printfRed("[SyscallHandler::sys_mmap] offset %zu exceeds file size %llu\n",
+                              offset, f->lwext4_file_struct.fsize);
+                    return -ENXIO;
+                }
+
+                if (offset + map_size > f->lwext4_file_struct.fsize)
+                {
+                    printfYellow("[SyscallHandler::sys_mmap] mapping extends beyond file size, will be zero-filled\n");
+                }
+            }
+        }
+
         int mmap_errno = 0;
         void *result = proc::k_pm.mmap((void *)addr, map_size, prot, flags, fd, offset, &mmap_errno);
 
@@ -5967,15 +6005,18 @@ namespace syscall
         uint64 buf;
         uint64 count;
         int offset;
-        if (_arg_fd(0, &fd, nullptr) < 0 || _arg_addr(1, buf) < 0 ||
+        if (_arg_fd(0, &fd, nullptr) < 0)
+        if( _arg_addr(1, buf) < 0 ||
             _arg_addr(2, count) < 0 || _arg_int(3, offset) < 0)
-            return -1;
-
+        {
+            return -EINVAL; // Invalid arguments
+        }
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         fs::file *f = p->get_open_file(fd);
         if (!f)
-            return -1;
-
+            return -EBADF;
+        printfCyan("[SyscallHandler::sys_pwrite64] fd: %d, buf: %p, count: %lu, offset: %d\n",
+               fd, (void *)buf, count, offset);
         auto old_off = f->get_file_offset();
         f->lseek(offset, SEEK_SET);
 
@@ -6676,7 +6717,7 @@ namespace syscall
     {
         panic("未实现该系统调用");
     }
-    
+
     uint64 SyscallHandler::sys_getsid()
     {
         int pid;
@@ -8491,14 +8532,30 @@ namespace syscall
         if (vm->vfile != nullptr && vm->vfd != -1)
         {
             // 这是一个文件映射
-            // 如果原始映射没有写权限，但现在要添加写权限，则拒绝
+            // 如果原始映射没有写权限，但现在要添加写权限，则需要检查
             if ((!(old_prot & PROT_WRITE)) && (prot & PROT_WRITE))
             {
-                printfRed("[sys_mprotect] EACCES: Cannot add write permission to read-only file mapping\n");
-                return syscall::SYS_EACCES;
+                // 对于 memfd 文件，检查是否被 F_SEAL_WRITE 密封
+                if (vm->vfile->_path_name.find("memfd:") == 0)
+                {
+                    fs::file *file = proc::k_pm.get_cur_pcb()->get_open_file(vm->vfd);
+                    if (file && (file->_seals & F_SEAL_WRITE))
+                    {
+                        printfRed("[sys_mprotect] EPERM: Cannot add write permission to F_SEAL_WRITE sealed memfd\n");
+                        return syscall::SYS_EPERM;
+                    }
+                }
+                else
+                {
+                    // 普通文件：检查文件是否具有写权限
+                    if (!vm->vfile->_attrs.u_write)
+                    {
+                        printfRed("[sys_mprotect] EACCES: Cannot add write permission to read-only file mapping\n");
+                        return syscall::SYS_EACCES;
+                    }
+                }
             }
         }
-
         // 保存原始VMA状态用于回滚
         proc::vma original_vma = *vm;
 
@@ -10753,7 +10810,7 @@ namespace syscall
         uint32 egid = p->get_egid();
         uint32 sgid = p->get_sgid();
 
-        printfCyan("[SyscallHandler::sys_getresgid] 返回组ID: rgid=%u, egid=%u, sgid=%u\n", 
+        printfCyan("[SyscallHandler::sys_getresgid] 返回组ID: rgid=%u, egid=%u, sgid=%u\n",
                    rgid, egid, sgid);
 
         // 将结果拷贝到用户空间

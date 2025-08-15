@@ -434,9 +434,9 @@ struct ltp_testcase ltp_testcases[] = {
     // {"setresgid03", true, true}, // 先等等
     // {"setresgid04", true, true}, // 先等等
 
-    {"getegid01", true, true}, // PASS
-    {"getegid02", true, true}, // PASS
-
+    // {"getegid01", true, true}, // PASS
+    // {"getegid02", true, true}, // PASS
+    
     // {"setresuid01", true, true},
     // {"setresuid01_16", true, true},
     // {"setresuid02", true, true},
@@ -448,13 +448,12 @@ struct ltp_testcase ltp_testcases[] = {
     // {"setresuid05", true, true},
     // {"setresuid05_16", true, true},
     // {"setsid01", true, true},
-    {"memfd_create01", true, true},
     {NULL, true, true},
     {"splice07", true, true},
     {"epoll_ctl03", true, true},
     {"access01", true, true},
     {"access02", true, true},
-    {"access03", true, true},
+    {"access03", true, false},
     {"access04", true, true},
     {"getpid01", true, true},
     {"waitpid01", true, true}, // PASS
@@ -581,6 +580,7 @@ struct ltp_testcase ltp_testcases[] = {
     {"madvise01", true, true},        // pass
     {"madvise05", true, true},
     {"madvise10", true, true},
+    {"memfd_create01", true, true}, 
     {"mkdirat02", true, true}, // pass2fail2
     {"mkdir03", true, true},   // pass
     {"mknod02", true, true},

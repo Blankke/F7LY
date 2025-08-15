@@ -2814,9 +2814,23 @@ namespace proc
                             // 文件映射：需要检查是否访问超出文件大小的区域
                             // 获取文件实际大小
                             uint64 file_size = 0;
-                            int size_result = vfs_ext_get_filesize(vfile->_path_name.c_str(), &file_size);
+                            int size_result = EOK;
+                            
+                            // 对于 memfd 文件，直接使用文件对象中的大小
+                            if (vfile->_path_name.find("memfd:") == 0)
+                            {
+                                file_size = vfile->lwext4_file_struct.fsize;
+                                printfCyan("[mmap] memfd file mapping, size: %llu\n", file_size);
+                            }
+                            else
+                            {
+                                // 对于普通文件，使用 vfs_ext_get_filesize
+                                size_result = vfs_ext_get_filesize(vfile->_path_name.c_str(), &file_size);
+                            }
+                            
                             if (size_result != EOK)
                             {
+                                printfRed("[mmap] Failed to get file size for %s, error: %d\n", vfile->_path_name.c_str(), size_result);
                                 shm::k_smm.detach_seg((void *)map_addr);
                                 *errno= -size_result;
                                 return MAP_FAILED;
@@ -2825,6 +2839,7 @@ namespace proc
                             int readbytes = vfile->read((uint64)pa, PGSIZE, offset, false);
                             if (readbytes < 0)
                             {
+                                printfRed("[mmap] Failed to read file data for mapping, error: %d\n", readbytes);
                                 shm::k_smm.detach_seg((void *)map_addr);
                                 *errno= -EFAULT;
                                 return MAP_FAILED;
@@ -2886,8 +2901,8 @@ namespace proc
             printfCyan("[mmap] MAP_LOCKED: pages will be locked in memory\n");
         }
 
-        printfGreen("[mmap] Success: addr=%p, len=%d, prot=%d, flags=%d\n",
-                    (void *)map_addr, aligned_length, prot, flags);
+        printfGreen("[mmap] Success: addr=%p, len=%d, prot=%d, flags=%d,vma[%d]\n",
+                    (void *)map_addr, aligned_length, prot, flags,vma_idx);
             // proc::k_pm.get_cur_pcb()->print_detailed_memory_info();
         return (void *)map_addr;
     }

@@ -397,7 +397,7 @@ int mmap_handler(uint64 va, int cause)
     printfOrange("[mmap_handler] Store page fault at va: %p\n", va);
     access_type = 1; // 写入
   }
-  else if (cause == 8)
+  else if (cause == 8||cause == 3)
   {                  // Instruction page fault
     printfOrange("[mmap_handler] Instruction page fault at va: %p\n", va);
     access_type = 2; // 执行
