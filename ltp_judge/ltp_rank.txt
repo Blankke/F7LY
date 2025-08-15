@@ -40,7 +40,7 @@ io_control01                   | 24         | 24         | 有点难，不确定
 statx12                        | 24         | 24         |  loopdev
 semop02                        | 23         | 26         |  可以做错误处理
 getaddrinfo_01                 | 22         | 22         | 这个可以修
-setregid03                     | 22         | 22         |
+setregid03                     | 22         | 22         | ok
 memcontrol03                   | 21         | 21         |
 fallocate06                    | 20         | 28         | loopdev
 fgetxattr01                    | 20         | 22         |

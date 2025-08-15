@@ -10139,9 +10139,131 @@ namespace syscall
     {
         panic("未实现该系统调用");
     }
+    /**
+     * sys_setregrid() - 设置真实组ID和有效组ID
+     * @rgid: 新的真实组ID，-1 表示不改变
+     * @egid: 新的有效组ID，-1 表示不改变
+     * 
+     * 该系统调用允许进程设置其真实组ID和有效组ID。
+     * 
+     * POSIX权限规则：
+     * - 特权进程（euid == 0）可以设置任意值
+     * - 非特权进程的规则：
+     *   1. 如果 rgid != -1，只能设置为当前的 rgid 或 egid
+     *   2. 如果 egid != -1，只能设置为当前的 rgid、egid 或 sgid
+     *   3. 如果 rgid 发生改变，则 sgid 被设置为新的 egid
+     * 
+     * 返回值：
+     * - 0: 成功
+     * - SYS_EINVAL: 参数无效
+     * - SYS_EPERM: 权限不足
+     * - SYS_EFAULT: 内部错误
+     */
     uint64 SyscallHandler::sys_setregrid()
     {
-        panic("未实现该系统调用");
+        int rgid, egid;
+
+        // 获取参数
+        if (_arg_int(0, rgid) < 0 || _arg_int(1, egid) < 0)
+        {
+            printfRed("[SyscallHandler::sys_setregrid] 参数错误\n");
+            return SYS_EINVAL;
+        }
+
+        printfCyan("[SyscallHandler::sys_setregrid] rgid: %d, egid: %d\n", rgid, egid);
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (p == nullptr)
+        {
+            printfRed("[SyscallHandler::sys_setregrid] 无法获取当前进程\n");
+            return SYS_EFAULT;
+        }
+
+        // 获取当前的组ID
+        uint32 current_rgid = p->_gid;   // 当前真实组ID
+        uint32 current_egid = p->_egid;  // 当前有效组ID
+        uint32 current_sgid = p->_sgid;  // 当前保存的设置组ID
+
+        printfCyan("[SyscallHandler::sys_setregrid] 当前状态: rgid=%d, egid=%d, sgid=%d\n", 
+                   current_rgid, current_egid, current_sgid);
+
+        // 如果两个参数都是 -1，这是无操作，直接返回成功
+        if (rgid == -1 && egid == -1)
+        {
+            printfCyan("[SyscallHandler::sys_setregrid] 无操作，直接返回成功\n");
+            return 0;
+        }
+
+        // 计算新的GID值
+        uint32 new_rgid = (rgid == -1) ? current_rgid : (uint32)rgid;
+        uint32 new_egid = (egid == -1) ? current_egid : (uint32)egid;
+
+        // 权限检查
+        if (p->_euid == 0)
+        {
+            // 特权进程可以设置任意值
+            printfCyan("[SyscallHandler::sys_setregrid] 特权进程，可以设置任意值\n");
+            
+            // 检查 gid 的有效性（非负数）
+            if (rgid != -1 && rgid < 0)
+            {
+                printfRed("[SyscallHandler::sys_setregrid] 无效的 rgid: %d\n", rgid);
+                return SYS_EINVAL;
+            }
+            if (egid != -1 && egid < 0)
+            {
+                printfRed("[SyscallHandler::sys_setregrid] 无效的 egid: %d\n", egid);
+                return SYS_EINVAL;
+            }
+        }
+        else
+        {
+            // 非特权进程权限检查
+            printfCyan("[SyscallHandler::sys_setregrid] 非特权进程，检查权限\n");
+            
+            // 检查 rgid 权限
+            if (rgid != -1)
+            {
+                if (rgid < 0 || (rgid != (int)current_rgid && rgid != (int)current_egid))
+                {
+                    printfRed("[SyscallHandler::sys_setregrid] 非特权进程无权设置 rgid: %d (允许: %d, %d)\n", 
+                              rgid, current_rgid, current_egid);
+                    return SYS_EPERM;
+                }
+                printfCyan("[SyscallHandler::sys_setregrid] rgid权限检查通过: %d\n", rgid);
+            }
+
+            // 检查 egid 权限：可以设置为当前的 rgid、egid 或 sgid
+            if (egid != -1)
+            {
+                if (egid < 0 || (egid != (int)current_rgid && egid != (int)current_egid && egid != (int)current_sgid))
+                {
+                    printfRed("[SyscallHandler::sys_setregrid] 非特权进程无权设置 egid: %d (允许: %d, %d, %d)\n", 
+                              egid, current_rgid, current_egid, current_sgid);
+                    return SYS_EPERM;
+                }
+                printfCyan("[SyscallHandler::sys_setregrid] egid权限检查通过: %d\n", egid);
+            }
+        }
+
+        // 更新GID值
+        p->_gid = new_rgid;
+        p->_egid = new_egid;
+
+        // 根据POSIX标准：如果真实组ID发生改变，保存的设置组ID被设置为新的有效组ID
+        if (rgid != -1 && new_rgid != current_rgid)
+        {
+            p->_sgid = new_egid;
+            printfCyan("[SyscallHandler::sys_setregrid] rgid改变，更新 sgid 为: %d\n", p->_sgid);
+        }
+
+        // 更新文件系统组ID
+        p->_fsgid = p->_egid;
+
+        printfCyan("[SyscallHandler::sys_setregrid] 成功设置组ID - rgid=%d, egid=%d, sgid=%d, fsgid=%d\n", 
+                   p->_gid, p->_egid, p->_sgid, p->_fsgid);
+
+        return 0;
     }
     uint64 SyscallHandler::sys_setreuid()
     {

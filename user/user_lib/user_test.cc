@@ -150,16 +150,16 @@ int iozone_test(const char *path = musl_dir)
     bb_sh[3] = "1k";
     bb_sh[4] = "-s";
     bb_sh[5] = "4m";
-    if(path==musl_dir)
-    printf("#### OS COMP TEST GROUP START iozone-musl ####\n");
+    if (path == musl_dir)
+        printf("#### OS COMP TEST GROUP START iozone-musl ####\n");
     else
-    printf("#### OS COMP TEST GROUP START iozone-glibc ####\n");
+        printf("#### OS COMP TEST GROUP START iozone-glibc ####\n");
     printf("iozone automatic measurements\n");
     run_test("iozone", bb_sh, 0);
-    if(path==musl_dir)
-    printf("#### OS COMP TEST GROUP end iozone-musl ####\n");
-else
-    printf("#### OS COMP TEST GROUP end iozone-glibc ####\n");
+    if (path == musl_dir)
+        printf("#### OS COMP TEST GROUP end iozone-musl ####\n");
+    else
+        printf("#### OS COMP TEST GROUP end iozone-glibc ####\n");
     return 0;
 }
 
@@ -252,7 +252,7 @@ int ltp_test(bool is_musl)
     char *envp[] = {
         "PATH=/bin", // 设置 PATH
         "LD_LIBRARY_PATH=/glibc/lib",
-        NULL         // 必须以 NULL 结尾
+        NULL // 必须以 NULL 结尾
     }; // 这个测loop的那些测例要用
     int result = 0;
     for (int i = 0; ltp_testcases[i] != NULL; i++)
@@ -399,9 +399,54 @@ char *libctest[][2] = {
     {NULL}};
 
 char *ltp_testcases[] = {
-    // NULL,
-    "pipe11", // pass
-    "open11",
+    //  "setregid01",       // PASS
+    // "setregid01_16",     // SKIP
+    // "setregid02",        // PASS
+    // "setregid02_16",     // SKIP
+    // "setregid03",        // PASS
+    // "setregid03_16",     // SKIP
+    // "setregid04",        // PASS
+    // "setregid04_16",     // SKIP
+    // "setresgid01",
+    // "setresgid01_16",
+    // "setresgid02",
+    // "setresgid02_16",
+    // "setresgid03",
+    // "setresgid03_16",
+    // "setresgid04",
+    // "setresgid04_16",
+    // "setresuid01",
+    // "setresuid01_16",
+    // "setresuid02",
+    // "setresuid02_16",
+    // "setresuid03",
+    // "setresuid03_16",
+    // "setresuid04",
+    // "setresuid04_16",
+    // "setresuid05",
+    // "setresuid05_16",
+    // "setreuid01",
+    // "setreuid01_16",
+    // "setreuid02",
+    // "setreuid02_16",
+    // "setreuid03",
+    // "setreuid03_16",
+    // "setreuid04",
+    // "setreuid04_16",
+    // "setreuid05",
+    // "setreuid05_16",
+    // "setreuid06",
+    // "setreuid06_16",
+    // "setreuid07",
+    // "setreuid07_16",
+    // "setrlimit01",
+    // "setrlimit02",
+    // "setrlimit03",
+    // "setrlimit04",
+    // "setrlimit05",
+    // "setrlimit06",
+    // "setsid01",
+    NULL,
     "splice07",
     "epoll_ctl03",
     "access01",
@@ -499,6 +544,10 @@ char *ltp_testcases[] = {
     "getpid02",       // PASS
     "getppid01",      // PASS
     "getppid02",      // PASS
+    "setregid01",     // PASS
+    "setregid02",     // PASS
+    "setregid03",     // PASS
+    "setregid04",     // PASS
     "getrandom01",    // pass
     "getrandom02",    // 完全PASS
     "getrandom03",    // 完全PASS
@@ -609,6 +658,7 @@ char *ltp_testcases[] = {
     "write05",  // passed   3
     "writev05", // 完全PASS
     "writev06", // 完全PASS
+    "gettid01", // PASS
     NULL,
     // "abort01",
     "abs01", // 完全PASS,没summary
@@ -1455,7 +1505,7 @@ char *ltp_testcases[] = {
     // "getsockopt01",
     // "getsockopt02",
     // "gettid01",       // PASS
-    // "gettid02",       // PASS
+    // "gettid02",       // 回不来
     "gettimeofday01", // pass
     // "gettimeofday02",
     // "getuid01",
@@ -2520,14 +2570,14 @@ char *ltp_testcases[] = {
     // "setpgrp02",
     // "setpriority01",
     // "setpriority02",
-    // "setregid01",
-    // "setregid01_16",
-    // "setregid02",
-    // "setregid02_16",
-    // "setregid03",
-    // "setregid03_16",
-    // "setregid04",
-    // "setregid04_16",
+    "setregid01", // PASS
+    // "setregid01_16",     // SKIP
+    "setregid02", // PASS
+    // "setregid02_16",     // SKIP
+    "setregid03", // PASS
+    // "setregid03_16",     // SKIP
+    "setregid04", // PASS
+    // "setregid04_16",     // SKIP
     // "setresgid01",
     // "setresgid01_16",
     // "setresgid02",

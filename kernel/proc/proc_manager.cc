@@ -141,8 +141,12 @@ namespace proc
                 p->_sid = p->_pid;  // 会话ID（初始化为自身PID）
                 p->_uid = 0;        // 真实用户ID（root）
                 p->_euid = 0;       // 有效用户ID（root）
+                p->_suid = 0;       // 保存的设置用户ID（root）
+                p->_fsuid = 0;      // 文件系统用户ID（root）
                 p->_gid = 0;        // 真实组ID（root）
                 p->_egid = 0;       // 有效组ID（root）
+                p->_sgid = 0;       // 保存的设置组ID（root）
+                p->_fsgid = 0;      // 文件系统组ID（root）
 
                 /****************************************************************************************
                  * 进程状态和调度信息初始化
@@ -349,7 +353,7 @@ namespace proc
             new (&dev::k_uart) dev::UartManager(UART0);
             dev::register_debug_uart(&dev::k_uart);
 
-            net::init_network_stack();
+            // net::init_network_stack();
         }
 
         // 设置进程开始运行的时间点
@@ -396,8 +400,12 @@ namespace proc
         p->_sid = 0;  // 清除会话ID
         p->_uid = 0;  // 清除真实用户ID
         p->_euid = 0; // 清除有效用户ID
+        p->_suid = 0; // 清除保存的设置用户ID
+        p->_fsuid = 0; // 清除文件系统用户ID
         p->_gid = 0;  // 清除真实组ID
         p->_egid = 0; // 清除有效组ID
+        p->_sgid = 0; // 清除保存的设置组ID
+        p->_fsgid = 0; // 清除文件系统组ID
 
         /****************************************************************************************
          * 进程状态和调度信息清理
@@ -1033,8 +1041,12 @@ namespace proc
         np->_ppid = p->_pid;
         np->_uid = p->_uid;
         np->_euid = p->_euid;
+        np->_suid = p->_suid;
+        np->_fsuid = p->_fsuid;
         np->_gid = p->_gid;
         np->_egid = p->_egid;
+        np->_sgid = p->_sgid;
+        np->_fsgid = p->_fsgid;
 
         // 进程组ID继承逻辑：
         // 1. 对于普通fork()，子进程继承父进程的进程组

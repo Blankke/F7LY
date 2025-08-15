@@ -102,6 +102,8 @@ namespace proc
         uint32 _fsuid; // 文件系统用户ID
         uint32 _gid;   // 真实组ID
         uint32 _egid;  // 有效组ID
+        uint32 _sgid;  // 保存的设置组ID
+        uint32 _fsgid; // 文件系统组ID
 
         /****************************************************************************************
          * 进程状态和调度信息
@@ -252,6 +254,8 @@ namespace proc
         uint32 get_fsuid() const { return _fsuid; }
         uint32 get_gid() const { return _gid; }
         uint32 get_egid() const { return _egid; }
+        uint32 get_sgid() const { return _sgid; }
+        uint32 get_fsgid() const { return _fsgid; }
         mode_t get_umask() const { return _umask; }             // 获取文件模式创建掩码
         void set_umask(mode_t umask) { _umask = umask & 0777; } // 设置umask，只保留权限位
 
@@ -406,6 +410,8 @@ namespace proc
         void set_fsuid(uint32 fsuid) { _fsuid = fsuid; }
         void set_gid(uint32 gid) { _gid = gid; }
         void set_egid(uint32 egid) { _egid = egid; }
+        void set_sgid(uint32 sgid) { _sgid = sgid; }
+        void set_fsgid(uint32 fsgid) { _fsgid = fsgid; }
 
         // CPU亲和性相关方法
         const CpuMask &get_cpu_mask() const { return _cpu_mask; }
