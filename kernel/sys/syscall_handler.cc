@@ -2546,12 +2546,24 @@ namespace syscall
             
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         
-        // 权限检查：只有root或者设置为当前有效用户ID才允许
-        if (p->_euid != 0 && uid != p->_euid && uid != p->_uid)
-            return -EPERM;
-            
-        p->_uid = uid;
-        p->_euid = uid;
+        // 根据POSIX标准的setuid实现
+        if (p->_euid == 0) 
+        {
+            // 特权用户可以设置所有三个UID为任意值
+            p->_uid = uid;
+            p->_euid = uid; 
+            p->_suid = uid;  // 设置saved UID
+        }
+        else 
+        {
+            // 非特权用户只能设置为当前的real UID或effective UID
+            if (uid != p->_uid && uid != p->_euid)
+                return -EPERM;
+                
+            // 只设置effective UID，real UID和saved UID保持不变
+            p->_euid = uid;
+        }
+        
         return 0;
     }
     uint64 SyscallHandler::sys_fstatat()
@@ -10336,7 +10348,73 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_setreuid()
     {
-        panic("未实现该系统调用");
+        int ruid, euid;
+        
+        // 获取参数
+        if (_arg_int(0, ruid) < 0 || _arg_int(1, euid) < 0)
+        {
+            printfRed("[SyscallHandler::sys_setreuid] 参数错误\n");
+            return -EINVAL;
+        }
+        
+        printfCyan("[SyscallHandler::sys_setreuid] ruid: %d, euid: %d\n", ruid, euid);
+        
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        
+        // 获取当前的用户ID
+        uint32 old_ruid = p->get_uid();
+        uint32 old_euid = p->get_euid();  
+        uint32 old_suid = p->get_suid();
+        
+        printfCyan("[SyscallHandler::sys_setreuid] 当前状态: ruid=%u, euid=%u, suid=%u\n", 
+                   old_ruid, old_euid, old_suid);
+        
+        // 确定新的用户ID（-1表示不改变）
+        uint32 new_ruid = (ruid == -1) ? old_ruid : (uint32)ruid;
+        uint32 new_euid = (euid == -1) ? old_euid : (uint32)euid;
+        
+        // 权限检查
+        // 特权用户（有效用户ID为0）可以设置任意值
+        if (old_euid != 0)
+        {
+            // 非特权用户只能设置为现有的三个UID值之一
+            if (ruid != -1 && new_ruid != old_ruid && new_ruid != old_euid && new_ruid != old_suid)
+            {
+                printfRed("[SyscallHandler::sys_setreuid] 权限不足：无法设置真实用户ID为 %u\n", new_ruid);
+                return -EPERM;
+            }
+            
+            if (euid != -1 && new_euid != old_ruid && new_euid != old_euid && new_euid != old_suid)
+            {
+                printfRed("[SyscallHandler::sys_setreuid] 权限不足：无法设置有效用户ID为 %u\n", new_euid);
+                return -EPERM;
+            }
+        }
+        
+        // 更新保存的用户ID (saved set-user-ID)
+        // 根据POSIX标准的正确规则：
+        uint32 new_suid = old_suid;
+        
+        // saved UID 的更新规则：
+        // 1. 如果 real UID 被改变，saved UID 设置为新的 effective UID
+        // 2. 如果 effective UID 被设置为与新的 real UID 不同的值，saved UID 设置为新的 effective UID
+        // 3. 否则，saved UID 保持不变
+        
+        if ((ruid != -1 && new_ruid != old_ruid) || 
+            (euid != -1 && new_euid != new_ruid))
+        {
+            new_suid = new_euid;
+        }
+        
+        // 设置新的用户ID
+        p->set_uid(new_ruid);
+        p->set_euid(new_euid);
+        p->set_suid(new_suid);
+        
+        printfGreen("[SyscallHandler::sys_setreuid] 成功设置用户ID: ruid=%u, euid=%u, suid=%u\n", 
+                   new_ruid, new_euid, new_suid);
+        
+        return 0;
     }
     uint64 SyscallHandler::sys_setresuid()
     {
