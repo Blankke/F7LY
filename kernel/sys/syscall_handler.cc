@@ -161,6 +161,7 @@ namespace syscall
         BIND_SYSCALL(setpgid); // todo
         BIND_SYSCALL(getpgid); // todo
         BIND_SYSCALL(setsid);  // todo
+        BIND_SYSCALL(getsid);  // 新增: get session id
         BIND_SYSCALL(uname);
         BIND_SYSCALL(getrusage); // todo
         BIND_SYSCALL(gettimeofday);
@@ -6604,6 +6605,54 @@ namespace syscall
     uint64 SyscallHandler::sys_setsid()
     {
         panic("未实现该系统调用");
+    }
+    
+    uint64 SyscallHandler::sys_getsid()
+    {
+        int pid;
+
+        // 获取参数
+        if (_arg_int(0, pid) < 0)
+        {
+            printfRed("[SyscallHandler::sys_getsid] Error fetching pid argument\n");
+            return SYS_EINVAL;
+        }
+
+        printfCyan("[SyscallHandler::sys_getsid] pid: %d\n", pid);
+
+        // 如果 pid 为 0，返回当前进程的会话ID
+        if (pid == 0)
+        {
+            proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+            if (current_proc == nullptr)
+            {
+                panic("[SyscallHandler::sys_getsid] Current process is null\n");
+                return SYS_ESRCH;
+            }
+
+            printfGreen("[SyscallHandler::sys_getsid] Returning session ID %d for current process\n", current_proc->get_sid());
+            return current_proc->get_sid();
+        }
+
+        // 根据 pid 查找对应的进程
+        proc::Pcb *target_proc = proc::k_pm.find_proc_by_pid(pid);
+        if (target_proc == nullptr)
+        {
+            printfRed("[SyscallHandler::sys_getsid] Process with pid %d not found\n", pid);
+            return SYS_ESRCH; // 进程不存在
+        }
+
+        // 根据Linux标准，只能查询同一会话中的进程的会话ID
+        // 如果不在同一会话中，返回错误
+        proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+        if (current_proc != nullptr && current_proc->get_sid() != target_proc->get_sid())
+        {
+            printfRed("[SyscallHandler::sys_getsid] Permission denied: process %d is not in the same session\n", pid);
+            return SYS_EPERM;
+        }
+
+        printfGreen("[SyscallHandler::sys_getsid] Returning session ID %d for process %d\n", target_proc->get_sid(), pid);
+        return target_proc->get_sid();
     }
     uint64 SyscallHandler::sys_getrusage()
     {

@@ -131,6 +131,7 @@ namespace syscall
         SYS_setpgid = 154,   // form tsh
         SYS_getpgid = 155,   // form tsh
         SYS_setsid = 157,    // form tsh
+        SYS_getsid = 156,    // 新增: get session id
         SYS_getgroups = 158, // from rocket
         SYS_setgroups = 159, // from rocket
         SYS_uname = 160,
