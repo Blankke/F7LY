@@ -353,7 +353,7 @@ namespace proc
             new (&dev::k_uart) dev::UartManager(UART0);
             dev::register_debug_uart(&dev::k_uart);
 
-            // net::init_network_stack();
+            net::init_network_stack();
         }
 
         // 设置进程开始运行的时间点
@@ -961,14 +961,14 @@ namespace proc
         return syscall::SYS_EMFILE;
     }
 
-    int ProcessManager::clone(uint64 flags, uint64 stack_ptr, uint64 ptid, uint64 tls, uint64 ctid)
+    int ProcessManager::clone(uint64 flags, uint64 stack_ptr, uint64 ptid, uint64 tls, uint64 ctid, bool is_clone3)
     {
         if (flags == 0)
         {
             return 22; // EINVAL: Invalid argument
         }
         Pcb *p = get_cur_pcb();
-        Pcb *np = fork(p, flags, stack_ptr, ctid, false);
+        Pcb *np = fork(p, flags, stack_ptr, ctid, is_clone3);
         if (np == nullptr)
         {
             return -1; // EAGAIN: Out of memory

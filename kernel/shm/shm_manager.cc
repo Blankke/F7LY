@@ -490,7 +490,7 @@ namespace shm
         }
 
         // 检查进程附加段数量限制
-        const int SHMSEG_MAX = 128;  // 每个进程最大附加段数量
+        const int SHMSEG_MAX = 500;  // 每个进程最大附加段数量
         int current_attachments = 0;
         for (const auto& pair : *segments) {
             current_attachments += pair.second.attached_addrs.size();  // 统计所有附加地址

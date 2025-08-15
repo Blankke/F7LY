@@ -8575,7 +8575,7 @@ namespace syscall
 
     uint64 SyscallHandler::sys_clone3()
     {
-        panic("未实现该系统调用");
+        // panic("未实现该系统调用");
         TODO("TBF")
 
         uint64 args_addr;
@@ -8594,7 +8594,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_clone3] Error fetching clone_args size\n");
             return SYS_EFAULT;
         }
-
+        printf("[SyscallHandler::sys_clone3] args_addr: %p, args_size: %lu\n",args_addr,args_size);
         // 验证参数大小
         if (args_size < sizeof(uint64))
         { // 至少要有 flags 字段
@@ -8657,7 +8657,7 @@ namespace syscall
 
         // 调用底层的 clone 函数，传入相应的参数
         uint64 clone_pid = proc::k_pm.clone(args.flags, args.stack, args.parent_tid,
-                                            args.tls, args.child_tid);
+                                            args.tls, args.child_tid,true);
 
         printfCyan("[SyscallHandler::sys_clone3] Created process with PID: %llu\n", clone_pid);
         return clone_pid;

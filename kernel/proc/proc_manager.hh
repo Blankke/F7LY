@@ -66,7 +66,7 @@ namespace proc
         int exec(eastl::string path, eastl::vector<eastl::string> argv);
         int execve(eastl::string path, eastl::vector<eastl::string> argv, eastl::vector<eastl::string> envs);
         int load_seg(mem::PageTable &pt, uint64 va, eastl::string &path, uint offset, uint size);
-        int clone(uint64 flags, uint64 stack_ptr, uint64 ptid, uint64 tls, uint64 ctid);
+        int clone(uint64 flags, uint64 stack_ptr, uint64 ptid, uint64 tls, uint64 ctid,bool is_clone3 = false);
         Pcb *fork(Pcb *p, uint64 flags, uint64 stack_ptr, uint64 ctid, bool is_clone3);
         void fork_ret();
         void exit_proc(Pcb *p);           // 底层退出逻辑，不设置xstate
