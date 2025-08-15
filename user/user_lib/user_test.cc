@@ -525,8 +525,8 @@ struct ltp_testcase ltp_testcases[] = {
     {"fstat02", true, true},          // pass 5 fail 1
     {"fstat03", true, false},         // pass2
     {"fstatfs02", true, true},        // pass 2
-    {"ftruncate01", true, true},   //pass 2
-    {"ftruncate03", true, true},  //pass 4
+    {"ftruncate01", true, true},      // pass 2
+    {"ftruncate03", true, true},      // pass 4
     {"faccessat01", true, true},      // 完全PASS
     {"faccessat02", true, true},      // 完全PASS
     {"faccessat201", true, true},     // pass
@@ -562,6 +562,12 @@ struct ltp_testcase ltp_testcases[] = {
     {"setregid02", true, true},       // PASS
     {"setregid03", true, true},       // PASS
     {"setregid04", true, true},       // PASS
+    {"setegid01", true, true},        // PASS
+    {"setegid02", true, true},        // PASS
+    {"setfsgid01", true, true},       // p2 f1
+    {"setfsgid02", true, true},       // PASS
+    {"setfsuid01", true, true},       // PASS
+    {"setfsuid03", true, true},       // PASS
     {"getpgrp01", true, true},        // PASS
     {"getrandom01", true, true},      // pass
     {"getrandom02", true, true},      // 完全PASS
@@ -675,4 +681,5 @@ struct ltp_testcase ltp_testcases[] = {
     {"writev05", true, true}, // 完全PASS
     {"writev06", true, true}, // 完全PASS
     {"gettid01", true, true}, // PASS
+    {"set_tid_address01", true, true},
     {NULL, false, false}};
