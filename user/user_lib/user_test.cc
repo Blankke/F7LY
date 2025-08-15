@@ -510,6 +510,7 @@ struct ltp_testcase ltp_testcases[] = {
     {"fchmodat02", true, true},       // pass5 fail1
     {"fchown01", true, true},         // pass
     {"fchown02", true, true},         // pass 2 fail 1
+    {"fchown03", true, true},         // pass
     {"fchown04", true, true},         // pass 2 fail 1
     {"fchown05", true, true},         // passed   6
     {"fcntl02", true, true},          // pass
