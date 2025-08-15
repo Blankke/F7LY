@@ -807,7 +807,7 @@ getpagesize01                  |            |
 getpeername01                  |            | 
 getpgid01                      | pass       | PASS
 getpgid02                      | pass       | PASS
-getpgrp01                      |            | 
+getpgrp01                      | pass           | 
 getpid01                       | pass       | PASS
 getpid02                       | pass       | PASS
 getppid01                      | pass       | PASS
@@ -1865,19 +1865,19 @@ set_tid_address01              |            |
 setdomainname01                |            | 
 setdomainname02                |            | 
 setdomainname03                |            | 
-setegid01                      |            | 
-setegid02                      |            | 
-setfsgid01                     |            | 
+setegid01                      | pass           | 
+setegid02                      | pass           | 
+setfsgid01                     | pass           | p2 f1
 setfsgid01_16                  |            | 
-setfsgid02                     |            | 
+setfsgid02                     | pass           | 
 setfsgid02_16                  |            | 
-setfsgid03                     |            | 
+setfsgid03                     |            | 没有summary
 setfsgid03_16                  |            | 
-setfsuid01                     |            | 
+setfsuid01                     | pass           | 
 setfsuid01_16                  |            | 
 setfsuid02                     |            | 
 setfsuid02_16                  |            | 
-setfsuid03                     |            | 
+setfsuid03                     | pass           | 
 setfsuid03_16                  |            | 
 setfsuid04                     |            | 
 setfsuid04_16                  |            | 
