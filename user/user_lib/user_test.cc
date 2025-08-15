@@ -562,6 +562,7 @@ struct ltp_testcase ltp_testcases[] = {
     {"setregid02", true, true},       // PASS
     {"setregid03", true, true},       // PASS
     {"setregid04", true, true},       // PASS
+    {"getpgrp01", true, true},        // PASS
     {"getrandom01", true, true},      // pass
     {"getrandom02", true, true},      // 完全PASS
     {"getrandom03", true, true},      // 完全PASS
