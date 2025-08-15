@@ -7,7 +7,8 @@ const char musl_dir[] = "/musl/";
 const char glibc_dir[] = "/glibc/";
 
 // LTP测例结构体：{测例名字，riscv是否测试，龙芯是否测试}
-struct ltp_testcase {
+struct ltp_testcase
+{
     const char *name;
     bool test_riscv;
     bool test_loongarch;
@@ -263,28 +264,30 @@ int ltp_test(bool is_musl)
         NULL // 必须以 NULL 结尾
     }; // 这个测loop的那些测例要用
     int result = 0;
-    
+
     // 检测当前平台
 #ifdef LOONGARCH
     bool is_loongarch = true;
 #else
     bool is_loongarch = false;
 #endif
-    
+
     for (int i = 0; ltp_testcases[i].name != NULL; i++)
     {
         // 根据平台决定是否跳过测例
-        if (is_loongarch && !ltp_testcases[i].test_loongarch) {
+        if (is_loongarch && !ltp_testcases[i].test_loongarch)
+        {
             printf("SKIP LTP CASE %s (disabled for LoongArch)\n", ltp_testcases[i].name);
             continue;
         }
-        if (!is_loongarch && !ltp_testcases[i].test_riscv) {
+        if (!is_loongarch && !ltp_testcases[i].test_riscv)
+        {
             printf("SKIP LTP CASE %s (disabled for RISC-V)\n", ltp_testcases[i].name);
             continue;
         }
-        
+
         printf("RUN LTP CASE %s\n", ltp_testcases[i].name);
-        bb_sh[0] = (char*)ltp_testcases[i].name;
+        bb_sh[0] = (char *)ltp_testcases[i].name;
         result = run_test(ltp_testcases[i].name, bb_sh, envp);
         printf("FAIL LTP CASE %s: %d\n", ltp_testcases[i].name, result);
     }
@@ -426,14 +429,6 @@ char *libctest[][2] = {
 
 struct ltp_testcase ltp_testcases[] = {
     // 示例：{测例名字, riscv是否测试, 龙芯是否测试}
-    //  {"setregid01", true, true},       // PASS
-    // {"setregid01_16", true, true},     // SKIP
-    // {"setregid02", true, true},        // PASS
-    // {"setregid02_16", true, true},     // SKIP
-    // {"setregid03", true, true},        // PASS
-    // {"setregid03_16", true, true},     // SKIP
-    // {"setregid04", true, true},        // PASS
-    // {"setregid04_16", true, true},     // SKIP
     // {"setresgid01", true, true},
     // {"setresgid01_16", true, true},
     // {"setresgid02", true, true},
@@ -452,26 +447,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"setresuid04_16", true, true},
     // {"setresuid05", true, true},
     // {"setresuid05_16", true, true},
-    // {"setreuid01", true, true},
-    // {"setreuid01_16", true, true},
-    // {"setreuid02", true, true},
-    // {"setreuid02_16", true, true},
-    // {"setreuid03", true, true},
-    // {"setreuid03_16", true, true},
-    // {"setreuid04", true, true},
-    // {"setreuid04_16", true, true},
-    // {"setreuid05", true, true},
-    // {"setreuid05_16", true, true},
-    // {"setreuid06", true, true},
-    // {"setreuid06_16", true, true},
-    // {"setreuid07", true, true},
-    // {"setreuid07_16", true, true},
-    // {"setrlimit01", true, true},
-    // {"setrlimit02", true, true},
-    // {"setrlimit03", true, true},
-    // {"setrlimit04", true, true},
-    // {"setrlimit05", true, true},
-    // {"setrlimit06", true, true},
     // {"setsid01", true, true},
     {NULL, true, true},
     {"splice07", true, true},
@@ -551,6 +526,7 @@ struct ltp_testcase ltp_testcases[] = {
     {"faccessat01", true, true},    // 完全PASS
     {"faccessat02", true, true},    // 完全PASS
     {"faccessat201", true, true},   // pass
+    {"setrlimit04", true, true},     // p1
     {"flock01", true, true},        // pass 3
     {"flock02", true, true},        // pass 3
     {"flock03", true, true},        // pass1 fail2 brok 1
