@@ -1918,13 +1918,13 @@ setregid03                     | pass       | PASS
 setregid03_16                  |            | SKIP
 setregid04                     | pass       | PASS
 setregid04_16                  |            | SKIP
-setresgid01                    |            | 
+setresgid01                    | pass           | 
 setresgid01_16                 |            | 
-setresgid02                    |            | 
+setresgid02                    | pass           | 
 setresgid02_16                 |            | 
-setresgid03                    |            | 
+setresgid03                    | pass           | 
 setresgid03_16                 |            | 
-setresgid04                    |            | 
+setresgid04                    | pass           | 
 setresgid04_16                 |            | 
 setresuid01                    |            | 
 setresuid01_16                 |            | 

@@ -10579,11 +10579,116 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_setresgid()
     {
-        panic("未实现该系统调用");
+        int rgid, egid, sgid;
+
+        // 获取参数
+        if (_arg_int(0, rgid) < 0 || _arg_int(1, egid) < 0 || _arg_int(2, sgid) < 0)
+        {
+            printfRed("[SyscallHandler::sys_setresgid] 参数错误\n");
+            return SYS_EINVAL;
+        }
+
+        printfCyan("[SyscallHandler::sys_setresgid] rgid: %d, egid: %d, sgid: %d\n", rgid, egid, sgid);
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+
+        // 获取当前的组ID
+        uint32 origin_gid = p->get_gid();
+        uint32 origin_egid = p->get_egid();
+        uint32 origin_sgid = p->get_sgid();
+
+        // 检查是否为特权进程（root用户，euid == 0）
+        if (p->get_euid() == 0)
+        {
+            printfCyan("[SyscallHandler::sys_setresgid] 特权进程，可以设置任意值\n");
+
+            // 特权进程可以设置任意值
+            if (rgid != -1)
+            {
+                p->set_gid(rgid);
+            }
+            if (egid != -1)
+            {
+                p->set_egid(egid);
+                p->set_fsgid(egid); // 同时设置文件系统组ID
+            }
+            if (sgid != -1)
+            {
+                p->set_sgid(sgid);
+            }
+        }
+        else
+        {
+            // 非特权进程，需要检查权限
+            if (rgid != -1)
+            {
+                if (rgid != (int)origin_gid && rgid != (int)origin_egid && rgid != (int)origin_sgid)
+                {
+                    printfRed("[SyscallHandler::sys_setresgid] 非特权进程无权设置 rgid: %d\n", rgid);
+                    return SYS_EPERM;
+                }
+                printfCyan("[SyscallHandler::sys_setresgid] 非特权进程设置 rgid: %d\n", rgid);
+                p->set_gid(rgid);
+            }
+
+            if (egid != -1)
+            {
+                if (egid != (int)origin_gid && egid != (int)origin_egid && egid != (int)origin_sgid)
+                {
+                    printfRed("[SyscallHandler::sys_setresgid] 非特权进程无权设置 egid: %d\n", egid);
+                    return SYS_EPERM;
+                }
+                printfCyan("[SyscallHandler::sys_setresgid] 非特权进程设置 egid: %d\n", egid);
+                p->set_egid(egid);
+                p->set_fsgid(egid); // 同时设置文件系统组ID
+            }
+
+            if (sgid != -1)
+            {
+                if (sgid != (int)origin_gid && sgid != (int)origin_egid && sgid != (int)origin_sgid)
+                {
+                    printfRed("[SyscallHandler::sys_setresgid] 非特权进程无权设置 sgid: %d\n", sgid);
+                    return SYS_EPERM;
+                }
+                printfCyan("[SyscallHandler::sys_setresgid] 非特权进程设置 sgid: %d\n", sgid);
+                p->set_sgid(sgid);
+            }
+        }
+
+        return 0;
     }
     uint64 SyscallHandler::sys_getresgid()
     {
-        panic("未实现该系统调用");
+        uint64 rgid_addr, egid_addr, sgid_addr;
+
+        // 获取参数
+        if (_arg_addr(0, rgid_addr) < 0 || _arg_addr(1, egid_addr) < 0 || _arg_addr(2, sgid_addr) < 0)
+        {
+            printfRed("[SyscallHandler::sys_getresgid] 参数错误\n");
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+
+        // 获取当前的组ID
+        uint32 rgid = p->get_gid();
+        uint32 egid = p->get_egid();
+        uint32 sgid = p->get_sgid();
+
+        printfCyan("[SyscallHandler::sys_getresgid] 返回组ID: rgid=%u, egid=%u, sgid=%u\n", 
+                   rgid, egid, sgid);
+
+        // 将结果拷贝到用户空间
+        if (mem::k_vmm.copy_out(*pt, rgid_addr, &rgid, sizeof(rgid)) < 0 ||
+            mem::k_vmm.copy_out(*pt, egid_addr, &egid, sizeof(egid)) < 0 ||
+            mem::k_vmm.copy_out(*pt, sgid_addr, &sgid, sizeof(sgid)) < 0)
+        {
+            printfRed("[SyscallHandler::sys_getresgid] 拷贝到用户空间失败\n");
+            return SYS_EFAULT;
+        }
+
+        return 0;
     }
     uint64 SyscallHandler::sys_setfsuid()
     {

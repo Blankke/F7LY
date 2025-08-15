@@ -556,6 +556,10 @@ struct ltp_testcase ltp_testcases[] = {
     {"setgid01", true, true},       // PASS
     {"setgid02", true, true},       // PASS
     {"setgid03", true, true},       // PASS
+    {"setresgid01", true, true},    // 先等等
+    {"setresgid02", true, true},    // 先等等
+    {"setresgid03", true, true},    // 先等等
+    {"setresgid04", true, true},    // 先等等
     {"setreuid01", true, true},     // PASS
     {"setreuid02", true, true},     // PASS
     {"setreuid03", true, true},     // PASS
