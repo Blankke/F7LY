@@ -405,16 +405,23 @@ char *ltp_testcases[] = {
     "splice07",
     "epoll_ctl03",
     "access01",
+    "access02",
+    "access03",
+    "access04",
     "getpid01",
     "waitpid01", // PASS
     "timer_settime01",
     "timer_settime02",
     "clock_getres01",
+    "clock_gettime02", // pass
     "getitimer01",
     "getitimer02",
     "select01",
     "select03",
     "chmod01",
+    "chmod03", // pass 4
+    "chmod06", //   pass4 fail 5
+    // "chmod07", // pass4 fail 5,现在貌似fail了
     "confstr01",
     "creat01",         // passed   6
     "creat06",         // pass

@@ -4742,11 +4742,11 @@ namespace syscall
         eastl::string pathname;
         if (_arg_int(0, dirfd) < 0 || _arg_int(2, mode) < 0 || _arg_int(3, flags) < 0)
         {
-            return -EINVAL; // 参数错误
+            return -EFAULT; // 参数错误
         }
         if (_arg_str(1, pathname, MAXPATH) < 0)
         {
-            return -EINVAL; // 参数错误
+            return -EFAULT; // 参数错误
         }
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         // 处理dirfd和路径
