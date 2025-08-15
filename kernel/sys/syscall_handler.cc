@@ -2514,22 +2514,44 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_getuid()
     {
-        // TODO
-        return 0;
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        return p->_uid; // 返回真实用户ID
     }
     uint64 SyscallHandler::sys_getgid()
     {
-        // TODO
-        return 0;
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        return p->_gid; // 返回真实组ID
     }
     uint64 SyscallHandler::sys_setgid()
     {
-        // TODO
+        uint32_t gid;  // 改为 uint32_t 类型
+        if (_arg_int(0, (int&)gid) < 0)
+            return -EINVAL;
+            
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        
+        // 权限检查：只有root或者设置为当前有效组ID才允许
+        if (p->_euid != 0 && gid != p->_egid && gid != p->_gid)
+            return -EPERM;
+            
+        p->_gid = gid;
+        p->_egid = gid;
         return 0;
     }
     uint64 SyscallHandler::sys_setuid()
     {
-        // TODO
+        uint32_t uid;  // 改为 uint32_t 类型
+        if (_arg_int(0, (int&)uid) < 0)
+            return -EINVAL;
+            
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        
+        // 权限检查：只有root或者设置为当前有效用户ID才允许
+        if (p->_euid != 0 && uid != p->_euid && uid != p->_uid)
+            return -EPERM;
+            
+        p->_uid = uid;
+        p->_euid = uid;
         return 0;
     }
     uint64 SyscallHandler::sys_fstatat()
@@ -4796,7 +4818,12 @@ namespace syscall
 
         printfCyan("[SyscallHandler::sys_faccessat] 绝对路径: %s\n", abs_pathname.c_str());
 
-        // 首先验证路径中的每个父目录都是目录
+        // 获取当前进程的用户信息（用于目录权限检查）
+        proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+        uint32_t check_uid = current_proc->_uid; // 使用实际用户ID
+        uint32_t check_gid = current_proc->_gid; // 使用实际组ID
+
+        // 首先验证路径中的每个父目录都是目录，并检查执行权限
         eastl::string path_to_check = abs_pathname;
         size_t last_slash = path_to_check.find_last_of('/');
         if (last_slash != eastl::string::npos && last_slash > 0)
@@ -4823,6 +4850,55 @@ namespace syscall
                         printfRed("[SyscallHandler::sys_faccessat] 路径中的组件不是目录: %s\n", current_path.c_str());
                         return SYS_ENOTDIR; // 不是目录
                     }
+                    
+                    // 检查目录的执行权限
+                    uint32_t dir_mode;
+                    int r = ext4_mode_get(current_path.c_str(), &dir_mode);
+                    if (r != EOK)
+                    {
+                        printfRed("[SyscallHandler::sys_faccessat] 无法获取目录权限: %s, error: %d\n", current_path.c_str(), r);
+                        return -r;
+                    }
+                    
+                    uint32_t dir_uid, dir_gid;
+                    r = ext4_owner_get(current_path.c_str(), &dir_uid, &dir_gid);
+                    if (r != EOK)
+                    {
+                        printfRed("[SyscallHandler::sys_faccessat] 无法获取目录所有者信息: %s, error: %d\n", current_path.c_str(), r);
+                        return -r;
+                    }
+                    
+                    // 检查目录执行权限
+                    uint32_t dir_owner_perms = (dir_mode >> 6) & 0x7;
+                    uint32_t dir_group_perms = (dir_mode >> 3) & 0x7;
+                    uint32_t dir_other_perms = dir_mode & 0x7;
+                    
+                    // 检查目录执行权限
+                    if (check_uid != 0) // 非root用户需要检查执行权限
+                    {
+                        uint32_t dir_effective_perms;
+                        if (check_uid == dir_uid)
+                        {
+                            dir_effective_perms = dir_owner_perms;
+                        }
+                        else if (check_gid == dir_gid)
+                        {
+                            dir_effective_perms = dir_group_perms;
+                        }
+                        else
+                        {
+                            dir_effective_perms = dir_other_perms;
+                        }
+                        
+                        // 检查执行权限
+                        if (!(dir_effective_perms & 0x1))
+                        {
+                            printfRed("[SyscallHandler::sys_faccessat] 目录缺少执行权限: %s (dir_uid=%u, dir_gid=%u, check_uid=%u, check_gid=%u, mode=0%o, effective_perms=0%o)\n", 
+                                     current_path.c_str(), dir_uid, dir_gid, check_uid, check_gid, dir_mode, dir_effective_perms);
+                            return -EACCES; // 权限不足
+                        }
+                    }
+                    // root用户可以访问所有目录，无需检查执行权限
                 }
                 else if (fs::k_vfs.is_file_exist(current_path.c_str()) == 0)
                 {
@@ -4840,25 +4916,84 @@ namespace syscall
             printfRed("[SyscallHandler::sys_faccessat] 文件不存在: %s\n", abs_pathname.c_str());
             return SYS_ENOENT; // 文件不存在
         }
-        [[maybe_unused]] int _flags = 0;
-        // if( ( _mode & ( R_OK | X_OK )) && ( _mode & W_OK ) )
-        // 	flags = 6;    	//O_RDWR;
-        // else if( _mode & W_OK )
-        // 	flags = 2;		//O_WRONLY + 1;
-        // else if( _mode & ( R_OK | X_OK ))
-        // 	flags = 4		//O_RDONLY + 1;
-
-        if (mode & R_OK)
-            _flags |= 4;
-        if (mode & W_OK)
-            _flags |= 2;
-        if (mode & X_OK)
-            _flags |= 1;
-        int fd = proc::k_pm.open(dirfd, abs_pathname, _flags);
-        if (fd < 0)
+        // 获取文件的权限信息
+        uint32_t file_mode;
+        int r = ext4_mode_get(abs_pathname.c_str(), &file_mode);
+        if (r != EOK)
         {
-            return fd; // 返回错误码
+            printfRed("[SyscallHandler::sys_faccessat] 无法获取文件权限: %s, error: %d\n", abs_pathname.c_str(), r);
+            return -r;
         }
+
+        // 获取文件的owner和group信息
+        uint32_t file_uid, file_gid;
+        r = ext4_owner_get(abs_pathname.c_str(), &file_uid, &file_gid);
+        if (r != EOK)
+        {
+            printfRed("[SyscallHandler::sys_faccessat] 无法获取文件所有者信息: %s, error: %d\n", abs_pathname.c_str(), r);
+            return -r;
+        }
+
+        // 获取当前进程的用户信息
+        current_proc = proc::k_pm.get_cur_pcb();
+        uint32_t current_uid = current_proc->_uid; // 使用实际用户ID
+        uint32_t current_gid = current_proc->_gid; // 使用实际组ID
+        
+        // 提取权限位
+        uint32_t owner_perms = (file_mode >> 6) & 0x7;  // owner权限 (rwx)
+        uint32_t group_perms = (file_mode >> 3) & 0x7;  // group权限 (rwx)
+        uint32_t other_perms = file_mode & 0x7;         // other权限 (rwx)
+
+        // 确定使用哪组权限
+        uint32_t effective_perms;
+        if (current_uid == 0) // root用户的特殊处理
+        {
+            // root用户对读写权限有完全访问权
+            effective_perms = 0x6; // rw-
+            // 但对执行权限，需要文件至少在某一权限组中有执行权限
+            if ((owner_perms & 0x1) || (group_perms & 0x1) || (other_perms & 0x1))
+            {
+                effective_perms |= 0x1; // 添加执行权限
+            }
+        }
+        else if (current_uid == file_uid)
+        {
+            effective_perms = owner_perms;
+        }
+        else if (current_gid == file_gid)
+        {
+            effective_perms = group_perms;
+        }
+        else
+        {
+            effective_perms = other_perms;
+        }
+
+        // 检查请求的权限 (权限常量在fs_defs.hh中定义)
+        if (mode & R_OK && !(effective_perms & 0x4)) // 检查读权限
+        {
+            printfRed("[SyscallHandler::sys_faccessat] 缺少读权限: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n", 
+                     abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
+            return -EACCES;
+        }
+        
+        if (mode & W_OK && !(effective_perms & 0x2)) // 检查写权限
+        {
+            printfRed("[SyscallHandler::sys_faccessat] 缺少写权限: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n", 
+                     abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
+            return -EACCES;
+        }
+        
+        if (mode & X_OK && !(effective_perms & 0x1)) // 检查执行权限
+        {
+            printfRed("[SyscallHandler::sys_faccessat] 缺少执行权限: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n", 
+                     abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
+            return -EACCES;
+        }
+
+        // F_OK 只检查文件是否存在，前面已经检查过了
+        printfGreen("[SyscallHandler::sys_faccessat] 权限检查通过: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n", 
+                   abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
         // #endif
         return 0;
     }
@@ -5181,7 +5316,8 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_geteuid()
     {
-        return 0; // 抄的
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        return p->_euid; // 返回有效用户ID
     }
     uint64 SyscallHandler::sys_madvise()
     {
@@ -6498,7 +6634,8 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_getegid()
     {
-        return 1;
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        return p->_egid; // 返回有效组ID
     }
     uint64 SyscallHandler::sys_shmget()
     {
@@ -10738,7 +10875,20 @@ namespace syscall
         // 如果设置了此标志，我们需要检查文件本身而不是它指向的目标
         // 当前实现中，我们暂时不处理符号链接，所以这个标志的影响有限
 
-        // 首先验证路径中的每个父目录都是目录
+        // 获取当前进程的用户信息（用于目录权限检查）
+        uint32_t check_uid, check_gid;
+        if (flags & AT_EACCESS)
+        {
+            check_uid = p->_euid; // 使用有效用户ID
+            check_gid = p->_egid; // 使用有效组ID
+        }
+        else
+        {
+            check_uid = p->_uid; // 使用实际用户ID
+            check_gid = p->_gid; // 使用实际组ID
+        }
+
+        // 首先验证路径中的每个父目录都是目录，并检查执行权限
         eastl::string path_to_check = abs_pathname;
         size_t last_slash = path_to_check.find_last_of('/');
         if (last_slash != eastl::string::npos && last_slash > 0)
@@ -10765,6 +10915,55 @@ namespace syscall
                         printfRed("[SyscallHandler::sys_faccessat2] 路径中的组件不是目录: %s\n", current_path.c_str());
                         return SYS_ENOTDIR; // 不是目录
                     }
+                    
+                    // 检查目录的执行权限
+                    uint32_t dir_mode;
+                    int r = ext4_mode_get(current_path.c_str(), &dir_mode);
+                    if (r != EOK)
+                    {
+                        printfRed("[SyscallHandler::sys_faccessat2] 无法获取目录权限: %s, error: %d\n", current_path.c_str(), r);
+                        return -r;
+                    }
+                    
+                    uint32_t dir_uid, dir_gid;
+                    r = ext4_owner_get(current_path.c_str(), &dir_uid, &dir_gid);
+                    if (r != EOK)
+                    {
+                        printfRed("[SyscallHandler::sys_faccessat2] 无法获取目录所有者信息: %s, error: %d\n", current_path.c_str(), r);
+                        return -r;
+                    }
+                    
+                    // 检查目录执行权限
+                    uint32_t dir_owner_perms = (dir_mode >> 6) & 0x7;
+                    uint32_t dir_group_perms = (dir_mode >> 3) & 0x7;
+                    uint32_t dir_other_perms = dir_mode & 0x7;
+                    
+                    // 检查目录执行权限
+                    if (check_uid != 0) // 非root用户需要检查执行权限
+                    {
+                        uint32_t dir_effective_perms;
+                        if (check_uid == dir_uid)
+                        {
+                            dir_effective_perms = dir_owner_perms;
+                        }
+                        else if (check_gid == dir_gid)
+                        {
+                            dir_effective_perms = dir_group_perms;
+                        }
+                        else
+                        {
+                            dir_effective_perms = dir_other_perms;
+                        }
+                        
+                        // 检查执行权限
+                        if (!(dir_effective_perms & 0x1))
+                        {
+                            printfRed("[SyscallHandler::sys_faccessat2] 目录缺少执行权限: %s (dir_uid=%u, dir_gid=%u, check_uid=%u, check_gid=%u, mode=0%o, effective_perms=0%o)\n", 
+                                     current_path.c_str(), dir_uid, dir_gid, check_uid, check_gid, dir_mode, dir_effective_perms);
+                            return -EACCES; // 权限不足
+                        }
+                    }
+                    // root用户可以访问所有目录，无需检查执行权限
                 }
                 else if (fs::k_vfs.is_file_exist(current_path.c_str()) == 0)
                 {
@@ -10784,38 +10983,98 @@ namespace syscall
         }
 
         // 处理访问权限检查
-        [[maybe_unused]] int _flags = 0;
+        // 获取文件的权限信息
+        uint32_t file_mode;
+        int r = ext4_mode_get(abs_pathname.c_str(), &file_mode);
+        if (r != EOK)
+        {
+            printfRed("[SyscallHandler::sys_faccessat2] 无法获取文件权限: %s, error: %d\n", abs_pathname.c_str(), r);
+            return -r;
+        }
 
+        // 获取当前进程的用户信息
+        proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+        uint32_t current_uid, current_gid;
+        
         // 如果设置了 AT_EACCESS 标志，使用有效用户和组ID进行检查
         // 否则使用实际用户和组ID进行检查
-        // 在当前简化的实现中，我们暂时不区分这两种情况
         if (flags & AT_EACCESS)
         {
-            // TODO
-            // printfCyan("[SyscallHandler::sys_faccessat2] 使用有效用户ID进行访问检查\n");
-            // 这里应该使用有效用户ID (euid) 和有效组ID (egid) 进行权限检查
+            current_uid = current_proc->_euid; // 有效用户ID
+            current_gid = current_proc->_egid; // 有效组ID
+            // printfCyan("[SyscallHandler::sys_faccessat2] 使用有效用户ID进行访问检查: uid=%u, gid=%u\n", current_uid, current_gid);
         }
         else
         {
-            // TODO
-            // printfCyan("[SyscallHandler::sys_faccessat2] 使用实际用户ID进行访问检查\n");
-            // 这里应该使用实际用户ID (uid) 和实际组ID (gid) 进行权限检查
+            current_uid = current_proc->_uid; // 实际用户ID
+            current_gid = current_proc->_gid; // 实际组ID
+            // printfCyan("[SyscallHandler::sys_faccessat2] 使用实际用户ID进行访问检查: uid=%u, gid=%u\n", current_uid, current_gid);
         }
 
-        if (mode & R_OK)
-            _flags |= 4;
-        if (mode & W_OK)
-            _flags |= 2;
-        if (mode & X_OK)
-            _flags |= 1;
-        int fd = proc::k_pm.open(dirfd, abs_pathname, _flags);
-        if (fd < 0)
+        // 获取文件的owner和group信息
+        uint32_t file_uid, file_gid;
+        r = ext4_owner_get(abs_pathname.c_str(), &file_uid, &file_gid);
+        if (r != EOK)
         {
-            return fd; // 返回错误码
+            printfRed("[SyscallHandler::sys_faccessat2] 无法获取文件所有者信息: %s, error: %d\n", abs_pathname.c_str(), r);
+            return -r;
+        }
+        
+        // 提取权限位
+        uint32_t owner_perms = (file_mode >> 6) & 0x7;  // owner权限 (rwx)
+        uint32_t group_perms = (file_mode >> 3) & 0x7;  // group权限 (rwx)
+        uint32_t other_perms = file_mode & 0x7;         // other权限 (rwx)
+
+        // 确定使用哪组权限
+        uint32_t effective_perms;
+        if (current_uid == 0) // root用户的特殊处理
+        {
+            // root用户对读写权限有完全访问权
+            effective_perms = 0x6; // rw-
+            // 但对执行权限，需要文件至少在某一权限组中有执行权限
+            if ((owner_perms & 0x1) || (group_perms & 0x1) || (other_perms & 0x1))
+            {
+                effective_perms |= 0x1; // 添加执行权限
+            }
+        }
+        else if (current_uid == file_uid)
+        {
+            effective_perms = owner_perms;
+        }
+        else if (current_gid == file_gid)
+        {
+            effective_perms = group_perms;
+        }
+        else
+        {
+            effective_perms = other_perms;
         }
 
-        // 关闭刚打开的文件描述符，因为 faccessat2 只是检查访问权限
-        proc::k_pm.close(fd);
+        // 检查请求的权限
+        if (mode & R_OK && !(effective_perms & 0x4)) // 检查读权限
+        {
+            printfRed("[SyscallHandler::sys_faccessat2] 缺少读权限: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n", 
+                     abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
+            return -EACCES;
+        }
+        
+        if (mode & W_OK && !(effective_perms & 0x2)) // 检查写权限
+        {
+            printfRed("[SyscallHandler::sys_faccessat2] 缺少写权限: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n", 
+                     abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
+            return -EACCES;
+        }
+        
+        if (mode & X_OK && !(effective_perms & 0x1)) // 检查执行权限
+        {
+            printfRed("[SyscallHandler::sys_faccessat2] 缺少执行权限: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n", 
+                     abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
+            return -EACCES;
+        }
+
+        // F_OK 只检查文件是否存在，前面已经检查过了
+        printfGreen("[SyscallHandler::sys_faccessat2] 权限检查通过: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n", 
+                   abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
 
         return 0;
     }
