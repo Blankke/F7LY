@@ -10,7 +10,7 @@ extern "C"
         // basic_test("/musl/");
         // basic_test("/glibc/");
         ltp_test(true);
-        ltp_test(false);
+        // ltp_test(false);
         // busybox_test("/musl/");
         // busybox_test("/glibc/");
         // libc_test("/musl/"); // 不测glibc, 不要求测

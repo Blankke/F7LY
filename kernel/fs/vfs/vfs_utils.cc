@@ -10,7 +10,11 @@
 #include "fs/vfs/fifo_manager.hh"
 #include "proc_manager.hh" // 用于访问当前进程的umask
 #include "fs/lwext4/ext4.hh"
+#include "fs/vfs/vfs_ext4_ext.hh" // 包含 NS_to_S 宏
+#include "tm/time.h" // 包含 TIME2NS 宏
 #include <EASTL/vector.h>
+#include <EASTL/algorithm.h>
+#include <libs/string.hh>
 
 // 路径规范化函数：处理 . 和 ..
 eastl::string normalize_path(const eastl::string &path)
@@ -1126,6 +1130,39 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
         return EOK;
     }
 
+    // 检查是否是 memfd 文件（路径以 "memfd:" 开头）
+    if (f->_path_name.find("memfd:") == 0)
+    {
+        printfCyan("vfs_fstat: memfd file, using synthetic stat information\n");
+        
+        // 为 memfd 文件创建合成的 stat 信息
+        memset(st, 0, sizeof(fs::Kstat));
+        
+        st->dev = 0;              // 设备号
+        st->ino = (uint64)f;      // 使用文件对象地址作为伪 inode 号
+        st->mode = S_IFREG | 0600; // 常规文件，拥有者读写权限
+        st->nlink = 1;            // 链接数
+        st->uid = 0;              // 用户 ID (root)
+        st->gid = 0;              // 组 ID (root)
+        st->rdev = 0;             // 设备 ID
+        st->size = f->lwext4_file_struct.fsize; // 从 lwext4 结构获取大小
+        st->blksize = 4096;       // 块大小
+        st->blocks = (st->size + 511) / 512; // 512字节块数
+        
+        // 设置时间戳（使用当前时间）
+        uint64 current_time = NS_to_S(TIME2NS(rdtime()));
+        st->st_atime_sec = current_time;
+        st->st_atime_nsec = 0;
+        st->st_ctime_sec = current_time;
+        st->st_ctime_nsec = 0;
+        st->st_mtime_sec = current_time;
+        st->st_mtime_nsec = 0;
+        st->mnt_id = 0;
+        
+        printfCyan("vfs_fstat: memfd file size: %u bytes\n", st->size);
+        return EOK;
+    }
+
     // 检查是否是符号链接文件
     if (f->_attrs.filetype == fs::FileTypes::FT_SYMLINK)
     {
@@ -1417,17 +1454,93 @@ int vfs_truncate(fs::file *f, size_t length)
         return -EINVAL;
     }
 
-    // 直接调用ext4的truncate函数
-    int status = ext4_ftruncate(&f->lwext4_file_struct, length);
-    if (status != EOK)
+    // 获取当前文件大小
+    uint64_t current_size = ext4_fsize(&f->lwext4_file_struct);
+    
+    // 如果新大小等于当前大小，无需操作
+    if (length == current_size)
     {
-        printfRed("vfs_truncate: failed to truncate file %s, error: %d\n", f->_path_name.c_str(), status);
-        return -status;
+        return EOK;
     }
-
+    
+    // 如果新大小小于当前大小，执行收缩操作
+    if (length < current_size)
+    {
+        int status = ext4_ftruncate(&f->lwext4_file_struct, length);
+        if (status != EOK)
+        {
+            printfRed("vfs_truncate: failed to truncate file %s to size %zu, error: %d\n", 
+                     f->_path_name.c_str(), length, status);
+            return -status;
+        }
+        f->_stat.size = length;
+        return EOK;
+    }
+    
+    // 如果新大小大于当前大小，需要扩展文件并零填充
+    // 首先保存当前文件位置
+    uint64_t original_pos = ext4_ftell(&f->lwext4_file_struct);
+    
+    // 定位到文件末尾开始零填充
+    int seek_status = ext4_fseek(&f->lwext4_file_struct, current_size, SEEK_SET);
+    if (seek_status != EOK)
+    {
+        printfRed("vfs_truncate: failed to seek to position %llu in file %s, error: %d\n", 
+                 current_size, f->_path_name.c_str(), seek_status);
+        return -seek_status;
+    }
+    
+    // 计算需要零填充的字节数
+    size_t zero_fill_size = length - current_size;
+    
+    // 分块写入零数据，避免一次性分配过大的缓冲区
+    const size_t chunk_size = 4096; // 4KB chunks
+    char zero_buffer[chunk_size];
+    memset(zero_buffer, 0, chunk_size);
+    
+    size_t bytes_written_total = 0;
+    while (bytes_written_total < zero_fill_size)
+    {
+        size_t bytes_to_write = eastl::min(chunk_size, zero_fill_size - bytes_written_total);
+        size_t bytes_written = 0;
+        
+        int write_status = ext4_fwrite(&f->lwext4_file_struct, zero_buffer, bytes_to_write, &bytes_written);
+        if (write_status != EOK)
+        {
+            printfRed("vfs_truncate: failed to write zeros during file extension for %s, error: %d\n", 
+                     f->_path_name.c_str(), write_status);
+            // 尝试恢复原始文件位置
+            ext4_fseek(&f->lwext4_file_struct, original_pos, SEEK_SET);
+            return -write_status;
+        }
+        
+        if (bytes_written == 0)
+        {
+            printfRed("vfs_truncate: no bytes written during zero-fill for file %s\n", f->_path_name.c_str());
+            ext4_fseek(&f->lwext4_file_struct, original_pos, SEEK_SET);
+            return -EIO;
+        }
+        
+        bytes_written_total += bytes_written;
+    }
+    
+    // 恢复原始文件位置（如果原始位置仍在有效范围内）
+    if (original_pos <= length)
+    {
+        ext4_fseek(&f->lwext4_file_struct, original_pos, SEEK_SET);
+    }
+    else
+    {
+        // 如果原始位置超出新文件大小，设置到文件末尾
+        ext4_fseek(&f->lwext4_file_struct, length, SEEK_SET);
+    }
+    
     // 更新文件大小
     f->_stat.size = length;
-
+    
+    printfGreen("vfs_truncate: successfully extended file %s from %llu to %zu bytes with zero-fill\n", 
+                f->_path_name.c_str(), current_size, length);
+    
     return EOK;
 }
 int vfs_chmod(eastl::string pathname, mode_t mode)
@@ -1481,7 +1594,7 @@ int vfs_fallocate(fs::file *f, off_t offset, size_t length)
 
     // 使用 ext4_ftruncate 来扩展文件大小
     // 这会自动分配必要的磁盘块
-    int status = ext4_ftruncate(&f->lwext4_file_struct, target_size);
+    int status = vfs_truncate(f, target_size);
     if (status != EOK)
     {
         printfRed("vfs_fallocate: failed to allocate space for file %s, error: %d\n",

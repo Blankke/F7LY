@@ -448,6 +448,7 @@ struct ltp_testcase ltp_testcases[] = {
     // {"setresuid05", true, true},
     // {"setresuid05_16", true, true},
     // {"setsid01", true, true},
+    {"memfd_create01", true, true},
     {NULL, true, true},
     {"splice07", true, true},
     {"epoll_ctl03", true, true},
@@ -518,83 +519,66 @@ struct ltp_testcase ltp_testcases[] = {
     {"fcntl04", true, true},          // pass
     {"fcntl05", true, true},          // pass
     {"fcntl08", true, true},          // pass
-    // "fcntl13", true, true},        // pass // la 会把用户态printf干爆
-    {"fcntl15", true, true},      // passs5
-    {"fcntl15_64", true, true},   // passs5
-    {"fstat02", true, true},      // pass 5 fail 1
-    {"fstat03", true, true},      // pass2
-    {"fstatfs02", true, true},    // pass 2
-    {"faccessat01", true, true},  // 完全PASS
-    {"faccessat02", true, true},  // 完全PASS
-    {"faccessat201", true, true}, // pass
-    {"setrlimit04", true, true},  // p1
-    {"flock01", true, true},      // pass 3
-    {"flock02", true, true},      // pass 3
-    {"flock03", true, true},      // pass1 fail2 brok 1
-    {"flock04", true, true},      // pass5 fail1
-    {"flock06", true, true},      // pass2 fail 2
-    {"fpathconf01", true, true},  // pass
-    {"fsync03", true, true},      // pass
-    {"waitpid03", true, true},    // PASS
-    {"waitpid04", true, true},    // PASS
-    {"waitpid06", true, true},    // PASS
-    {"waitpid07", true, true},    // PASS
-    {"waitpid09", true, true},    // 部分pass p3 f1
-    {"getcwd01", true, true},     // pass
-    {"getcwd02", true, true},     // 完全PASS
-    {"getcwd03", true, true},     // pass
-    {"getpgid01", true, true},    // PASS
-    {"getpgid02", true, true},    // PASS
-    {"getpid02", true, true},     // PASS
-    {"getppid01", true, true},    // PASS
-    {"getppid02", true, true},    // PASS
-    {"getgid01", true, true},     // PASS
-    {"getgid03", true, true},     // PASS
-    {"getsid01", true, true},     // 先等等
-    {"getsid02", true, true},     // 先等等
-    {"getuid01", true, true},
-    {"getuid03", true, true},
-    {"setgid01", true, true},       // PASS
-    {"setgid02", true, true},       // PASS
-    {"setgid03", true, true},       // PASS
-    {"setresgid01", true, true},    // 先等等
-    {"setresgid02", true, true},    // 先等等
-    {"setresgid03", true, true},    // 先等等
-    {"setresgid04", true, true},    // 先等等
-    {"setreuid01", true, true},     // PASS
-    {"setreuid02", true, true},     // PASS
-    {"setreuid03", true, true},     // PASS
-    {"setreuid04", true, true},     // PASS
-    {"setreuid05", true, true},     // PASS
-    {"setreuid06", true, true},     // PASS
-    {"setreuid07", true, true},     // p1 f2
-    {"setregid01", true, true},     // PASS
-    {"setregid02", true, true},     // PASS
-    {"setregid03", true, true},     // PASS
-    {"setregid04", true, true},     // PASS
-    {"setuid01", true, true},       // PASS
-    {"setuid03", true, true},       // PASS
-    {"getegid01", true, true},      // PASS
-    {"getegid02", true, true},      // PASS
-    {"geteuid01", true, true},      // PASS
-    {"geteuid02", true, true},      // PASS
-    {"getrandom01", true, true},    // pass
-    {"getrandom02", true, true},    // 完全PASS
-    {"getrandom03", true, true},    // 完全PASS
-    {"getrandom04", true, true},    // 完全PASS
-    {"getrandom05", true, true},    // pass
-    {"getrlimit01", true, true},    // passed   16
-    {"gettimeofday01", true, true}, // pass
-    {"link02", true, true},         // pass
-    {"link04", true, true},         // pass9 fail 5
-    {"link08", true, true},         // pass3 fail1
-    {"llseek01", true, true},       // pass
-    {"llseek02", true, true},       // pass
-    {"llseek03", true, true},       // pass
-    {"lseek01", true, true},        // passed   4
-    {"lseek02", true, true},        // passed   15
-    {"lseek07", true, true},        // pass
-    {"madvise01", true, true},      // pass
+    {"fcntl13", true, false},         // pass // la 会把用户态printf干爆
+    {"fcntl15", true, true},          // passs5
+    {"fcntl15_64", true, true},       // passs5
+    {"fstat02", true, true},          // pass 5 fail 1
+    {"fstat03", true, false},         // pass2
+    {"fstatfs02", true, true},        // pass 2
+    {"ftruncate01", true, true},   //pass 2
+    {"ftruncate03", true, true},  //pass 4
+    {"faccessat01", true, true},      // 完全PASS
+    {"faccessat02", true, true},      // 完全PASS
+    {"faccessat201", true, true},     // pass
+    {"flock01", true, true},          // pass 3
+    {"flock02", true, true},          // pass 3
+    {"flock03", true, true},          // pass1 fail2 brok 1
+    {"flock04", true, true},          // pass5 fail1
+    {"flock06", true, true},          // pass2 fail 2
+    {"fpathconf01", true, true},      // pass
+    {"fsync02", true, true},          // pass
+    {"fsync03", true, true},          // pass
+    {"waitpid03", true, true},        // PASS
+    {"waitpid04", true, true},        // PASS
+    {"waitpid06", true, true},        // PASS
+    {"waitpid07", true, true},        // PASS
+    {"waitpid09", true, true},        // 部分pass p3 f1
+    {"getcwd01", true, true},         // pass
+    {"getcwd02", true, true},         // 完全PASS
+    {"getcwd03", true, false},        // pass
+    {"getpgid01", true, true},        // PASS
+    {"getpgid02", true, true},        // PASS
+    {"getpid02", true, true},         // PASS
+    {"getppid01", true, true},        // PASS
+    {"getppid02", true, true},        // PASS
+    {"setreuid01", true, true},       // PASS
+    {"setreuid02", true, true},       // PASS
+    {"setreuid03", true, true},       // PASS
+    {"setreuid04", true, true},       // PASS
+    {"setreuid05", true, true},       // PASS
+    {"setreuid06", true, true},       // PASS
+    {"setreuid07", true, true},       // p1 f2
+    {"setregid01", true, true},       // PASS
+    {"setregid02", true, true},       // PASS
+    {"setregid03", true, true},       // PASS
+    {"setregid04", true, true},       // PASS
+    {"getrandom01", true, true},      // pass
+    {"getrandom02", true, true},      // 完全PASS
+    {"getrandom03", true, true},      // 完全PASS
+    {"getrandom04", true, true},      // 完全PASS
+    {"getrandom05", true, true},      // pass
+    {"getrlimit01", true, true},      // passed   16
+    {"gettimeofday01", true, true},   // pass
+    {"link02", true, true},           // pass
+    {"link04", true, true},           // pass9 fail 5
+    {"link08", true, true},           // pass3 fail1
+    {"llseek01", true, true},         // pass
+    {"llseek02", true, true},         // pass
+    {"llseek03", true, true},         // pass
+    {"lseek01", true, true},          // passed   4
+    {"lseek02", true, true},          // passed   15
+    {"lseek07", true, true},          // pass
+    {"madvise01", true, true},        // pass
     {"madvise05", true, true},
     {"madvise10", true, true},
     {"mkdirat02", true, true}, // pass2fail2

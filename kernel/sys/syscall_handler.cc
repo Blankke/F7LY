@@ -1262,6 +1262,69 @@ namespace syscall
         }
 
         printfCyan("[SyscallHandler::sys_openat] 绝对路径: %s, mode: 0%o\n", abs_pathname.c_str(), mode);
+
+        // 检查是否是 /proc/self/fd/ 路径
+        if (abs_pathname.find("/proc/self/fd/") == 0)
+        {
+            // 解析文件描述符
+            eastl::string fd_str = abs_pathname.substr(14); // 跳过 "/proc/self/fd/"
+            int target_fd = 0;
+            for (size_t i = 0; i < fd_str.size(); ++i)
+            {
+                if (fd_str[i] < '0' || fd_str[i] > '9')
+                    break;
+                target_fd = target_fd * 10 + (fd_str[i] - '0');
+            }
+
+            fs::file *target_file = p->get_open_file(target_fd);
+            if (!target_file)
+            {
+                printfRed("[SyscallHandler::sys_openat] 无效的文件描述符: %d\n", target_fd);
+                return SYS_EBADF;
+            }
+
+            // 对于 /proc/self/fd/ 路径，应该直接复制文件描述符而不是重新打开
+            // 这相当于 dup() 操作，但需要处理某些标志
+            printfCyan("[SyscallHandler::sys_openat] duplicating fd %d for /proc/self/fd/%d\n", target_fd, target_fd);
+
+            // 处理 O_TRUNC 标志 - 这个标志需要执行，因为它会影响文件大小
+            if (flags & O_TRUNC)
+            {
+                printfCyan("[SyscallHandler::sys_openat] truncating file for /proc/self/fd/ path with O_TRUNC flag\n");
+                // 截断文件到0字节
+                if (target_file->lwext4_file_struct.fsize > 0)
+                {
+                    // 使用 vfs_truncate 函数支持文件扩展和收缩
+                    int ret = vfs_truncate(target_file, 0);
+                    if (ret != 0)
+                    {
+                        printfRed("[SyscallHandler::sys_openat] Failed to truncate file: %d\n", ret);
+                        return -EIO;
+                    }
+                    printfCyan("[SyscallHandler::sys_openat] File successfully truncated to 0 bytes\n");
+                }
+            }
+
+            // 检查其他不适用的标志
+            if (flags & (O_CREAT | O_EXCL))
+            {
+                // 对于已存在的文件描述符，这些标志不适用
+                printfYellow("[SyscallHandler::sys_openat] ignoring O_CREAT/O_EXCL flags for /proc/self/fd/ path\n");
+                flags &= ~(O_CREAT | O_EXCL);
+            }
+
+            // 分配新的文件描述符并复制文件
+            int new_fd = proc::k_pm.alloc_fd(p, target_file);
+            if (new_fd < 0)
+            {
+                printfRed("[SyscallHandler::sys_openat] Error allocating fd for /proc/self/fd/ path\n");
+                return SYS_EMFILE;
+            }
+
+            target_file->dup(); // 增加引用计数
+            return new_fd;
+        }
+
         // 不知道什么套娃设计，这个b函数套了两层
         return proc::k_pm.open(dir_fd, abs_pathname, flags, mode);
 
@@ -2525,46 +2588,46 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_setgid()
     {
-        uint32_t gid;  // 改为 uint32_t 类型
-        if (_arg_int(0, (int&)gid) < 0)
+        uint32_t gid; // 改为 uint32_t 类型
+        if (_arg_int(0, (int &)gid) < 0)
             return -EINVAL;
-            
+
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        
+
         // 权限检查：只有root或者设置为当前有效组ID才允许
         if (p->_euid != 0 && gid != p->_egid && gid != p->_gid)
             return -EPERM;
-            
+
         p->_gid = gid;
         p->_egid = gid;
         return 0;
     }
     uint64 SyscallHandler::sys_setuid()
     {
-        uint32_t uid;  // 改为 uint32_t 类型
-        if (_arg_int(0, (int&)uid) < 0)
+        uint32_t uid; // 改为 uint32_t 类型
+        if (_arg_int(0, (int &)uid) < 0)
             return -EINVAL;
-            
+
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        
+
         // 根据POSIX标准的setuid实现
-        if (p->_euid == 0) 
+        if (p->_euid == 0)
         {
             // 特权用户可以设置所有三个UID为任意值
             p->_uid = uid;
-            p->_euid = uid; 
-            p->_suid = uid;  // 设置saved UID
+            p->_euid = uid;
+            p->_suid = uid; // 设置saved UID
         }
-        else 
+        else
         {
             // 非特权用户只能设置为当前的real UID或effective UID
             if (uid != p->_uid && uid != p->_euid)
                 return -EPERM;
-                
+
             // 只设置effective UID，real UID和saved UID保持不变
             p->_euid = uid;
         }
-        
+
         return 0;
     }
     uint64 SyscallHandler::sys_fstatat()
@@ -4155,12 +4218,12 @@ namespace syscall
         // add_key(const char *type, const char *description,
         //         const void payload[.size], size_t size,
         //         key_serial_t keyring);
-        
+
         eastl::string type, description;
         uint64 payload_addr;
         long size;
         long keyring;
-        
+
         // 获取 key type 字符串参数
         int res = _arg_str(0, type, 256);
         if (res < 0)
@@ -4168,7 +4231,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_add_key] Error fetching key type argument\n");
             return res;
         }
-        
+
         // 获取 description 字符串参数
         res = _arg_str(1, description, 256);
         if (res < 0)
@@ -4176,34 +4239,34 @@ namespace syscall
             printfRed("[SyscallHandler::sys_add_key] Error fetching key description argument\n");
             return res;
         }
-        
+
         // 获取 payload 指针
         if (_arg_addr(2, payload_addr) < 0)
         {
             printfRed("[SyscallHandler::sys_add_key] Error fetching payload address\n");
             return SYS_EINVAL;
         }
-        
+
         // 获取 size 参数
         if (_arg_long(3, size) < 0)
         {
             printfRed("[SyscallHandler::sys_add_key] Error fetching size argument\n");
             return SYS_EINVAL;
         }
-        
+
         // 获取 keyring 参数
         if (_arg_long(4, keyring) < 0)
         {
             printfRed("[SyscallHandler::sys_add_key] Error fetching keyring argument\n");
             return SYS_EINVAL;
         }
-        
+
         // 根据测试要求检查：如果 payload 为 NULL 但 size 非零，返回 EFAULT
         if (payload_addr == 0 && size > 0)
         {
             return SYS_EFAULT;
         }
-        
+
         // 验证支持的 key 类型
         // 根据手册和测试，支持以下类型：
         if (type == "user" || type == "logon" || type == "big_key" || type == "keyring")
@@ -4221,20 +4284,20 @@ namespace syscall
                 // 对于其他类型，检查大小限制
                 if (type == "user" || type == "logon")
                 {
-                    if (size > 32767)  // 根据手册，user 和 logon 类型最大 32,767 字节
+                    if (size > 32767) // 根据手册，user 和 logon 类型最大 32,767 字节
                     {
                         return SYS_EINVAL;
                     }
                 }
                 else if (type == "big_key")
                 {
-                    if (size > 1024 * 1024)  // big_key 最大 1 MiB
+                    if (size > 1024 * 1024) // big_key 最大 1 MiB
                     {
                         return SYS_EINVAL;
                     }
                 }
             }
-            
+
             // 简单模拟：返回一个伪造的 key serial number
             // 在真实实现中，这里应该创建实际的 key 并存储
             static uint64 next_key_serial = 1000;
@@ -4908,7 +4971,7 @@ namespace syscall
                         printfRed("[SyscallHandler::sys_faccessat] 路径中的组件不是目录: %s\n", current_path.c_str());
                         return SYS_ENOTDIR; // 不是目录
                     }
-                    
+
                     // 检查目录的执行权限
                     uint32_t dir_mode;
                     int r = ext4_mode_get(current_path.c_str(), &dir_mode);
@@ -4917,7 +4980,7 @@ namespace syscall
                         printfRed("[SyscallHandler::sys_faccessat] 无法获取目录权限: %s, error: %d\n", current_path.c_str(), r);
                         return -r;
                     }
-                    
+
                     uint32_t dir_uid, dir_gid;
                     r = ext4_owner_get(current_path.c_str(), &dir_uid, &dir_gid);
                     if (r != EOK)
@@ -4925,12 +4988,12 @@ namespace syscall
                         printfRed("[SyscallHandler::sys_faccessat] 无法获取目录所有者信息: %s, error: %d\n", current_path.c_str(), r);
                         return -r;
                     }
-                    
+
                     // 检查目录执行权限
                     uint32_t dir_owner_perms = (dir_mode >> 6) & 0x7;
                     uint32_t dir_group_perms = (dir_mode >> 3) & 0x7;
                     uint32_t dir_other_perms = dir_mode & 0x7;
-                    
+
                     // 检查目录执行权限
                     if (check_uid != 0) // 非root用户需要检查执行权限
                     {
@@ -4947,12 +5010,12 @@ namespace syscall
                         {
                             dir_effective_perms = dir_other_perms;
                         }
-                        
+
                         // 检查执行权限
                         if (!(dir_effective_perms & 0x1))
                         {
-                            printfRed("[SyscallHandler::sys_faccessat] 目录缺少执行权限: %s (dir_uid=%u, dir_gid=%u, check_uid=%u, check_gid=%u, mode=0%o, effective_perms=0%o)\n", 
-                                     current_path.c_str(), dir_uid, dir_gid, check_uid, check_gid, dir_mode, dir_effective_perms);
+                            printfRed("[SyscallHandler::sys_faccessat] 目录缺少执行权限: %s (dir_uid=%u, dir_gid=%u, check_uid=%u, check_gid=%u, mode=0%o, effective_perms=0%o)\n",
+                                      current_path.c_str(), dir_uid, dir_gid, check_uid, check_gid, dir_mode, dir_effective_perms);
                             return -EACCES; // 权限不足
                         }
                     }
@@ -4996,11 +5059,11 @@ namespace syscall
         current_proc = proc::k_pm.get_cur_pcb();
         uint32_t current_uid = current_proc->_uid; // 使用实际用户ID
         uint32_t current_gid = current_proc->_gid; // 使用实际组ID
-        
+
         // 提取权限位
-        uint32_t owner_perms = (file_mode >> 6) & 0x7;  // owner权限 (rwx)
-        uint32_t group_perms = (file_mode >> 3) & 0x7;  // group权限 (rwx)
-        uint32_t other_perms = file_mode & 0x7;         // other权限 (rwx)
+        uint32_t owner_perms = (file_mode >> 6) & 0x7; // owner权限 (rwx)
+        uint32_t group_perms = (file_mode >> 3) & 0x7; // group权限 (rwx)
+        uint32_t other_perms = file_mode & 0x7;        // other权限 (rwx)
 
         // 确定使用哪组权限
         uint32_t effective_perms;
@@ -5030,28 +5093,28 @@ namespace syscall
         // 检查请求的权限 (权限常量在fs_defs.hh中定义)
         if (mode & R_OK && !(effective_perms & 0x4)) // 检查读权限
         {
-            printfRed("[SyscallHandler::sys_faccessat] 缺少读权限: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n", 
-                     abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
+            printfRed("[SyscallHandler::sys_faccessat] 缺少读权限: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n",
+                      abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
             return -EACCES;
         }
-        
+
         if (mode & W_OK && !(effective_perms & 0x2)) // 检查写权限
         {
-            printfRed("[SyscallHandler::sys_faccessat] 缺少写权限: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n", 
-                     abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
+            printfRed("[SyscallHandler::sys_faccessat] 缺少写权限: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n",
+                      abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
             return -EACCES;
         }
-        
+
         if (mode & X_OK && !(effective_perms & 0x1)) // 检查执行权限
         {
-            printfRed("[SyscallHandler::sys_faccessat] 缺少执行权限: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n", 
-                     abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
+            printfRed("[SyscallHandler::sys_faccessat] 缺少执行权限: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n",
+                      abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
             return -EACCES;
         }
 
         // F_OK 只检查文件是否存在，前面已经检查过了
-        printfGreen("[SyscallHandler::sys_faccessat] 权限检查通过: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n", 
-                   abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
+        printfGreen("[SyscallHandler::sys_faccessat] 权限检查通过: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n",
+                    abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
         // #endif
         return 0;
     }
@@ -5812,7 +5875,6 @@ namespace syscall
             printfRed("[sys_ftruncate] 参数错误\n");
             return SYS_EINVAL; // 参数错误
         }
-        printfGreen("[sys_ftruncate] fd: %d, length: %d\n", fd, length);
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         fs::file *f = p->get_open_file(fd);
 
@@ -5833,16 +5895,24 @@ namespace syscall
         // Enforce memfd sealing rules
         if (f->_path_name.find("memfd:") == 0)
         {
-            // WRITE seal forbids any modification of file contents, including truncation
-            if (f->_seals & F_SEAL_WRITE)
-                return SYS_EPERM;
+
             uint64_t cur_size = f->lwext4_file_struct.fsize;
             if ((uint64_t)length < cur_size && (f->_seals & F_SEAL_SHRINK))
                 return SYS_EPERM;
             if ((uint64_t)length > cur_size && (f->_seals & F_SEAL_GROW))
                 return SYS_EPERM;
         }
-
+        if (f->_attrs.filetype == fs::FT_SOCKET)
+        {
+            printfRed("[sys_ftruncate] Cannot truncate a socket file: %d\n", fd);
+            return SYS_EINVAL; // 无效的文件类型，不能对socket文件进行截
+        }
+        if (length < 0)
+        {
+            printfRed("[sys_ftruncate] 截断长度不能为负数: %d\n", length);
+            return SYS_EINVAL; // 截断长度不能为负数
+        }
+        printfGreen("[sys_ftruncate] fd: %d, length: %d,filetype:%d\n", fd, length, f->_attrs.filetype);
         int result = vfs_truncate(f, length); // 调用vfs_truncate函数进行截断操作
 
         return result; // 返回截断操作的结果
@@ -8655,7 +8725,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_clone3] Error fetching clone_args size\n");
             return SYS_EFAULT;
         }
-        printf("[SyscallHandler::sys_clone3] args_addr: %p, args_size: %lu\n",args_addr,args_size);
+        printf("[SyscallHandler::sys_clone3] args_addr: %p, args_size: %lu\n", args_addr, args_size);
         // 验证参数大小
         if (args_size < sizeof(uint64))
         { // 至少要有 flags 字段
@@ -8718,7 +8788,7 @@ namespace syscall
 
         // 调用底层的 clone 函数，传入相应的参数
         uint64 clone_pid = proc::k_pm.clone(args.flags, args.stack, args.parent_tid,
-                                            args.tls, args.child_tid,true);
+                                            args.tls, args.child_tid, true);
 
         printfCyan("[SyscallHandler::sys_clone3] Created process with PID: %llu\n", clone_pid);
         return clone_pid;
@@ -9638,13 +9708,20 @@ namespace syscall
         // Enforce memfd sealing
         if (f->_path_name.find("memfd:") == 0)
         {
-            if (f->_seals & F_SEAL_WRITE)
+            // F_SEAL_WRITE affects fallocate only in combination with FALLOC_FL_PUNCH_HOLE flag
+            if ((f->_seals & F_SEAL_WRITE) && (mode & 0x02)) // FALLOC_FL_PUNCH_HOLE = 0x02
+            {
+                printfRed("[SyscallHandler::sys_fallocate] memfd文件被F_SEAL_WRITE密封，无法使用FALLOC_FL_PUNCH_HOLE: %s\n", f->_path_name.c_str());
                 return SYS_EPERM;
+            }
             // Determine growth
             uint64_t end = (uint64_t)offset + (uint64_t)len;
             uint64_t cur = f->lwext4_file_struct.fsize;
             if (end > cur && (f->_seals & F_SEAL_GROW))
+            {
+                printfRed("[SyscallHandler::sys_fallocate] memfd文件被F_SEAL_GROW密封，无法扩展: %s\n", f->_path_name.c_str());
                 return SYS_EPERM;
+            }
         }
         return vfs_fallocate(f, offset, len);
     }
@@ -10273,16 +10350,16 @@ namespace syscall
      * sys_setregrid() - 设置真实组ID和有效组ID
      * @rgid: 新的真实组ID，-1 表示不改变
      * @egid: 新的有效组ID，-1 表示不改变
-     * 
+     *
      * 该系统调用允许进程设置其真实组ID和有效组ID。
-     * 
+     *
      * POSIX权限规则：
      * - 特权进程（euid == 0）可以设置任意值
      * - 非特权进程的规则：
      *   1. 如果 rgid != -1，只能设置为当前的 rgid 或 egid
      *   2. 如果 egid != -1，只能设置为当前的 rgid、egid 或 sgid
      *   3. 如果 rgid 发生改变，则 sgid 被设置为新的 egid
-     * 
+     *
      * 返回值：
      * - 0: 成功
      * - SYS_EINVAL: 参数无效
@@ -10310,11 +10387,11 @@ namespace syscall
         }
 
         // 获取当前的组ID
-        uint32 current_rgid = p->_gid;   // 当前真实组ID
-        uint32 current_egid = p->_egid;  // 当前有效组ID
-        uint32 current_sgid = p->_sgid;  // 当前保存的设置组ID
+        uint32 current_rgid = p->_gid;  // 当前真实组ID
+        uint32 current_egid = p->_egid; // 当前有效组ID
+        uint32 current_sgid = p->_sgid; // 当前保存的设置组ID
 
-        printfCyan("[SyscallHandler::sys_setregrid] 当前状态: rgid=%d, egid=%d, sgid=%d\n", 
+        printfCyan("[SyscallHandler::sys_setregrid] 当前状态: rgid=%d, egid=%d, sgid=%d\n",
                    current_rgid, current_egid, current_sgid);
 
         // 如果两个参数都是 -1，这是无操作，直接返回成功
@@ -10333,7 +10410,7 @@ namespace syscall
         {
             // 特权进程可以设置任意值
             printfCyan("[SyscallHandler::sys_setregrid] 特权进程，可以设置任意值\n");
-            
+
             // 检查 gid 的有效性（非负数）
             if (rgid != -1 && rgid < 0)
             {
@@ -10350,13 +10427,13 @@ namespace syscall
         {
             // 非特权进程权限检查
             printfCyan("[SyscallHandler::sys_setregrid] 非特权进程，检查权限\n");
-            
+
             // 检查 rgid 权限
             if (rgid != -1)
             {
                 if (rgid < 0 || (rgid != (int)current_rgid && rgid != (int)current_egid))
                 {
-                    printfRed("[SyscallHandler::sys_setregrid] 非特权进程无权设置 rgid: %d (允许: %d, %d)\n", 
+                    printfRed("[SyscallHandler::sys_setregrid] 非特权进程无权设置 rgid: %d (允许: %d, %d)\n",
                               rgid, current_rgid, current_egid);
                     return SYS_EPERM;
                 }
@@ -10368,7 +10445,7 @@ namespace syscall
             {
                 if (egid < 0 || (egid != (int)current_rgid && egid != (int)current_egid && egid != (int)current_sgid))
                 {
-                    printfRed("[SyscallHandler::sys_setregrid] 非特权进程无权设置 egid: %d (允许: %d, %d, %d)\n", 
+                    printfRed("[SyscallHandler::sys_setregrid] 非特权进程无权设置 egid: %d (允许: %d, %d, %d)\n",
                               egid, current_rgid, current_egid, current_sgid);
                     return SYS_EPERM;
                 }
@@ -10390,7 +10467,7 @@ namespace syscall
         // 更新文件系统组ID
         p->_fsgid = p->_egid;
 
-        printfCyan("[SyscallHandler::sys_setregrid] 成功设置组ID - rgid=%d, egid=%d, sgid=%d, fsgid=%d\n", 
+        printfCyan("[SyscallHandler::sys_setregrid] 成功设置组ID - rgid=%d, egid=%d, sgid=%d, fsgid=%d\n",
                    p->_gid, p->_egid, p->_sgid, p->_fsgid);
 
         return 0;
@@ -10398,30 +10475,30 @@ namespace syscall
     uint64 SyscallHandler::sys_setreuid()
     {
         int ruid, euid;
-        
+
         // 获取参数
         if (_arg_int(0, ruid) < 0 || _arg_int(1, euid) < 0)
         {
             printfRed("[SyscallHandler::sys_setreuid] 参数错误\n");
             return -EINVAL;
         }
-        
+
         printfCyan("[SyscallHandler::sys_setreuid] ruid: %d, euid: %d\n", ruid, euid);
-        
+
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        
+
         // 获取当前的用户ID
         uint32 old_ruid = p->get_uid();
-        uint32 old_euid = p->get_euid();  
+        uint32 old_euid = p->get_euid();
         uint32 old_suid = p->get_suid();
-        
-        printfCyan("[SyscallHandler::sys_setreuid] 当前状态: ruid=%u, euid=%u, suid=%u\n", 
+
+        printfCyan("[SyscallHandler::sys_setreuid] 当前状态: ruid=%u, euid=%u, suid=%u\n",
                    old_ruid, old_euid, old_suid);
-        
+
         // 确定新的用户ID（-1表示不改变）
         uint32 new_ruid = (ruid == -1) ? old_ruid : (uint32)ruid;
         uint32 new_euid = (euid == -1) ? old_euid : (uint32)euid;
-        
+
         // 权限检查
         // 特权用户（有效用户ID为0）可以设置任意值
         if (old_euid != 0)
@@ -10432,37 +10509,37 @@ namespace syscall
                 printfRed("[SyscallHandler::sys_setreuid] 权限不足：无法设置真实用户ID为 %u\n", new_ruid);
                 return -EPERM;
             }
-            
+
             if (euid != -1 && new_euid != old_ruid && new_euid != old_euid && new_euid != old_suid)
             {
                 printfRed("[SyscallHandler::sys_setreuid] 权限不足：无法设置有效用户ID为 %u\n", new_euid);
                 return -EPERM;
             }
         }
-        
+
         // 更新保存的用户ID (saved set-user-ID)
         // 根据POSIX标准的正确规则：
         uint32 new_suid = old_suid;
-        
+
         // saved UID 的更新规则：
         // 1. 如果 real UID 被改变，saved UID 设置为新的 effective UID
         // 2. 如果 effective UID 被设置为与新的 real UID 不同的值，saved UID 设置为新的 effective UID
         // 3. 否则，saved UID 保持不变
-        
-        if ((ruid != -1 && new_ruid != old_ruid) || 
+
+        if ((ruid != -1 && new_ruid != old_ruid) ||
             (euid != -1 && new_euid != new_ruid))
         {
             new_suid = new_euid;
         }
-        
+
         // 设置新的用户ID
         p->set_uid(new_ruid);
         p->set_euid(new_euid);
         p->set_suid(new_suid);
-        
-        printfGreen("[SyscallHandler::sys_setreuid] 成功设置用户ID: ruid=%u, euid=%u, suid=%u\n", 
-                   new_ruid, new_euid, new_suid);
-        
+
+        printfGreen("[SyscallHandler::sys_setreuid] 成功设置用户ID: ruid=%u, euid=%u, suid=%u\n",
+                    new_ruid, new_euid, new_suid);
+
         return 0;
     }
     uint64 SyscallHandler::sys_setresuid()
@@ -11338,7 +11415,7 @@ namespace syscall
                         printfRed("[SyscallHandler::sys_faccessat2] 路径中的组件不是目录: %s\n", current_path.c_str());
                         return SYS_ENOTDIR; // 不是目录
                     }
-                    
+
                     // 检查目录的执行权限
                     uint32_t dir_mode;
                     int r = ext4_mode_get(current_path.c_str(), &dir_mode);
@@ -11347,7 +11424,7 @@ namespace syscall
                         printfRed("[SyscallHandler::sys_faccessat2] 无法获取目录权限: %s, error: %d\n", current_path.c_str(), r);
                         return -r;
                     }
-                    
+
                     uint32_t dir_uid, dir_gid;
                     r = ext4_owner_get(current_path.c_str(), &dir_uid, &dir_gid);
                     if (r != EOK)
@@ -11355,12 +11432,12 @@ namespace syscall
                         printfRed("[SyscallHandler::sys_faccessat2] 无法获取目录所有者信息: %s, error: %d\n", current_path.c_str(), r);
                         return -r;
                     }
-                    
+
                     // 检查目录执行权限
                     uint32_t dir_owner_perms = (dir_mode >> 6) & 0x7;
                     uint32_t dir_group_perms = (dir_mode >> 3) & 0x7;
                     uint32_t dir_other_perms = dir_mode & 0x7;
-                    
+
                     // 检查目录执行权限
                     if (check_uid != 0) // 非root用户需要检查执行权限
                     {
@@ -11377,12 +11454,12 @@ namespace syscall
                         {
                             dir_effective_perms = dir_other_perms;
                         }
-                        
+
                         // 检查执行权限
                         if (!(dir_effective_perms & 0x1))
                         {
-                            printfRed("[SyscallHandler::sys_faccessat2] 目录缺少执行权限: %s (dir_uid=%u, dir_gid=%u, check_uid=%u, check_gid=%u, mode=0%o, effective_perms=0%o)\n", 
-                                     current_path.c_str(), dir_uid, dir_gid, check_uid, check_gid, dir_mode, dir_effective_perms);
+                            printfRed("[SyscallHandler::sys_faccessat2] 目录缺少执行权限: %s (dir_uid=%u, dir_gid=%u, check_uid=%u, check_gid=%u, mode=0%o, effective_perms=0%o)\n",
+                                      current_path.c_str(), dir_uid, dir_gid, check_uid, check_gid, dir_mode, dir_effective_perms);
                             return -EACCES; // 权限不足
                         }
                     }
@@ -11418,7 +11495,7 @@ namespace syscall
         // 获取当前进程的用户信息
         proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
         uint32_t current_uid, current_gid;
-        
+
         // 如果设置了 AT_EACCESS 标志，使用有效用户和组ID进行检查
         // 否则使用实际用户和组ID进行检查
         if (flags & AT_EACCESS)
@@ -11442,11 +11519,11 @@ namespace syscall
             printfRed("[SyscallHandler::sys_faccessat2] 无法获取文件所有者信息: %s, error: %d\n", abs_pathname.c_str(), r);
             return -r;
         }
-        
+
         // 提取权限位
-        uint32_t owner_perms = (file_mode >> 6) & 0x7;  // owner权限 (rwx)
-        uint32_t group_perms = (file_mode >> 3) & 0x7;  // group权限 (rwx)
-        uint32_t other_perms = file_mode & 0x7;         // other权限 (rwx)
+        uint32_t owner_perms = (file_mode >> 6) & 0x7; // owner权限 (rwx)
+        uint32_t group_perms = (file_mode >> 3) & 0x7; // group权限 (rwx)
+        uint32_t other_perms = file_mode & 0x7;        // other权限 (rwx)
 
         // 确定使用哪组权限
         uint32_t effective_perms;
@@ -11476,28 +11553,28 @@ namespace syscall
         // 检查请求的权限
         if (mode & R_OK && !(effective_perms & 0x4)) // 检查读权限
         {
-            printfRed("[SyscallHandler::sys_faccessat2] 缺少读权限: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n", 
-                     abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
+            printfRed("[SyscallHandler::sys_faccessat2] 缺少读权限: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n",
+                      abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
             return -EACCES;
         }
-        
+
         if (mode & W_OK && !(effective_perms & 0x2)) // 检查写权限
         {
-            printfRed("[SyscallHandler::sys_faccessat2] 缺少写权限: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n", 
-                     abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
+            printfRed("[SyscallHandler::sys_faccessat2] 缺少写权限: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n",
+                      abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
             return -EACCES;
         }
-        
+
         if (mode & X_OK && !(effective_perms & 0x1)) // 检查执行权限
         {
-            printfRed("[SyscallHandler::sys_faccessat2] 缺少执行权限: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n", 
-                     abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
+            printfRed("[SyscallHandler::sys_faccessat2] 缺少执行权限: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n",
+                      abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
             return -EACCES;
         }
 
         // F_OK 只检查文件是否存在，前面已经检查过了
-        printfGreen("[SyscallHandler::sys_faccessat2] 权限检查通过: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n", 
-                   abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
+        printfGreen("[SyscallHandler::sys_faccessat2] 权限检查通过: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n",
+                    abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
 
         return 0;
     }
