@@ -73,6 +73,7 @@ namespace proc
 
 	int futex_wait(uint64 uaddr, int val, tmm::timespec *timeout);
 	int futex_wakeup(uint64 uaddr, int val, void *uaddr2, int val2);
+	void futex_cleanup_robust_list(struct robust_list_head *head);
 
 } // namespace pm
 // futex
@@ -97,5 +98,10 @@ namespace proc
 #define FUTEX_CLOCK_REALTIME 256
 
 #define FUTEX_CMD_MASK ~(FUTEX_PRIVATE_FLAG | FUTEX_CLOCK_REALTIME)
+
+// Robust futex constants
+#define FUTEX_OWNER_DIED	0x40000000  // Mutex owner died
+#define FUTEX_WAITERS		0x80000000  // Has waiters bit
+#define FUTEX_TID_MASK		0x3fffffff  // Thread ID mask
 
 #define EAGAIN 11
