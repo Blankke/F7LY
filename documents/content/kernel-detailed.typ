@@ -866,9 +866,10 @@ namespace signal
     };
     typedef struct sigaction
     {
-        void (*sa_handler)(int); // 信号处理函数
+        __sighandler_t sa_handler; // 信号处理函数
+        uint64 sa_flags;         // 行为标志
+        uint64 sa_restorer;      // 恢复函数
         sigset_t sa_mask;        // 处理期间阻塞的信号
-        int sa_flags;          
     } sigaction;
 }
 ```
@@ -880,7 +881,7 @@ namespace signal
 
 F7LY的信号机制支持包括`SIGCHLD`在内的常用信号。例如，当子进程状态变为Zombie时，内核通过发送`SIGCHLD`信号告知父进程状态变化，同时提供子进程的PID、状态码、用户态和内核态运行时间等信息，为父进程调用`wait4()`等系统调用获取子进程状态提供必要数据。
 
-=== 信号处理函数
+==== 信号处理流程
 
 在任务从内核态返回用户态前，需要处理挂起的信号。F7LY在中断处理器`usertrap`中加入`handle_signal()`，在时钟中断或其他中断后及时执行挂起信号：
 
@@ -905,13 +906,27 @@ usertrapret();
 1. 获取当前进程PCB；
 2. 遍历进程挂起的信号位掩码，检查每个信号的有效性；
 3. 根据`sigaction`判断信号是否需要自定义处理：
-   - 若`sa_handler == nullptr`，使用默认处理（例如SIGKILL设置`p->_killed=true`）；
+   - 若`sa_handler == nullptr`或者`sa_handler == SIG_DFL`，使用默认处理（例如SIGKILL设置`p->_killed=true`）；
+   - 若`sa_handler == SIG_IGN`，忽略该信号；
    - 否则调用用户自定义的信号处理函数；
 4. 处理完当前信号后不会丢失其他信号，通过位掩码保留剩余信号，保证处理安全性。
 
-==== 信号上下文保存与恢复
+==== 默认信号处理函数
 
-F7LY实现的信号处理支持完整的上下文保存与恢复：
+当进程没有为特定信号设置自定义处理函数时，F7LY内核会调用默认的信号处理函数`default_handle()`。该函数根据POSIX标准的信号语义，为不同类型的信号提供相应的默认行为。
+
+F7LY通过`SignalAction`结构体定义信号的默认行为：
+
+```cpp
+struct SignalAction {
+    bool terminate;    // 是否终止进程
+    bool coredump;     // 是否生成core dump
+};
+```
+
+==== 用户自定义信号处理
+
+F7LY实现了完整的用户自定义信号处理机制，支持完整的上下文保存与恢复：
 
 - 当内核准备进入用户态执行信号处理函数时，会将当前上下文保存到`sig_trapframe`中；
 - 信号处理完成后，程序需回到原执行状态。此过程使用`sigreturn`系统调用恢复上下文。
@@ -922,6 +937,34 @@ F7LY实现的信号处理支持完整的上下文保存与恢复：
 - `sig_trampoline`唯一作用是触发`ecall`，调用`SYS_rt_sigreturn`系统调用，执行上下文恢复。
 
 这一设计使得F7LY在支持自定义信号处理时能保证上下文正确性，安全地完成用户态与内核态的切换。
+
+对于flag中包含了`SA_SIGINFO`的信号，F7LY支持传递`LinuxSigInfo`结构体作为参数，提供更多信号上下文信息:
+- 在进入信号处理函数时，内核会将装填`LinuxSigInfo`结构体, 并将其存放到栈上传递给用户态处理函数。
+- 在用户态调用`sigreturn`时，内核会解析`LinuxSigInfo`结构体，并将其恢复到用户态栈中。
+
+```cpp
+// SA_SIGINFO标志的处理
+if (act->sa_flags & SA_SIGINFO) {
+    // 构造LinuxSigInfo结构
+    LinuxSigInfo siginfo = {
+        .si_signo = (uint32)signum,
+        .si_errno = 0,
+        .si_code = 0
+    };
+    
+    // 将siginfo和ucontext写入用户栈
+    uint64 linuxinfo_sp = usercontext_sp - sizeof(LinuxSigInfo);
+    mem::k_vmm.copy_out(\*p->get_pagetable(), linuxinfo_sp, 
+                       &siginfo, sizeof(LinuxSigInfo));
+    
+    // 设置三参数信号处理函数的参数
+    p->_trapframe->a0 = signum;         // 信号编号
+    p->_trapframe->a1 = linuxinfo_sp;   // siginfo_t*
+    p->_trapframe->a2 = usercontext_sp; // ucontext_t*
+}
+```
+
+同时，F7LY还在栈顶设置了信号哨兵`guard`，用于检测栈溢出或非法访问。信号处理函数在执行前会在栈上压入哨兵值，返回值检查哨兵值是否一致，确保栈空间安全。
 
 #figure(
   image("fig/信号处理.png", width: 70%),
