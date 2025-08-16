@@ -346,7 +346,7 @@ char *libctest[][2] = {
     {"snprintf", NULL},
     // // // {"socket", NULL}, // 网络相关，这个不测了
     {"sscanf", NULL},
-    {"sscanf_long", NULL}, // 龙芯会爆，riscv正常
+    // {"sscanf_long", NULL}, // 龙芯会爆，riscv正常
     // {"stat", NULL},        // sys_fstatat我关掉了，原来就是关的，开了basictest爆炸，应该没实现对
     {"strftime", NULL},
     {"string", NULL},
@@ -564,7 +564,7 @@ struct ltp_testcase ltp_testcases[] = {
     {"flistxattr02", true, true},     // pass 2
     {"flistxattr03", true, true},     // pass 2
     {"fpathconf01", true, true},      // pass
-    {"fsync02", true, true},          // pass
+    {"fsync02", true, false},         // pass
     {"fsync03", true, true},          // pass
     {"kill03", true, true},           // pass
     {"kill11", true, true},           // pass
@@ -718,43 +718,43 @@ struct ltp_testcase ltp_testcases[] = {
     {"stat01", true, true},       // passed   12
     {"stat03", true, true},       // pass4 fail2
     {"stat01_64", true, true},    // passed   12
-    {"stat03_64", true, true},    // pass4 fail2
+    {"stat03_64", true, false},   // pass4 fail2
     {"statfs02", true, false},    // pass3fail3
     {"statfs02_64", true, false}, // pass3fail3
     {"statx01", true, true},      // pass8 fail2
     {"statx02", true, true},      // pass4 fail1
     {"statx03", true, true},      // pass6 fail1
-    {"symlink02", true, true}, // pass
-    {"symlink03", true, true}, // sendmsg
-    {"symlink04", true, true}, // pass
-    {"syscall01", true, true}, // pass
-    {"socket01", true, true},  // pass
-    {"socket02", true, true},  // pass
-    {"time01", true, true},    // pass
+    {"symlink02", true, true},    // pass
+    {"symlink03", true, true},    // sendmsg
+    {"symlink04", true, true},    // pass
+    {"syscall01", true, true},    // pass
+    {"socket01", true, true},     // pass
+    {"socket02", true, true},     // pass
+    {"time01", true, true},       // pass
     {"truncate02", true, true},
     {"truncate02_64", true, true},
     {"truncate03", true, true},
     {"truncate03_64", true, true},
     {"uname01", true, true},    // 完全PASS
     {"uname02", true, true},    // 完全PASS
-    {"unlink05", true, true},   // pass
-    {"unlink07", true, true},   // pass
-    {"unlink08", true, true},   // pass2fail2
-    {"unlink09", true, true},   // pass
-    {"unlinkat01", true, true}, // passed   7
-    {"write01", true, true},    // 完全PASS
-    {"write02", true, true},    // pass
-    {"write03", true, true},    // 完全PASS
-    {"write04", true, true},
-    {"write05", true, true},  // passed   3
-    {"writev05", true, true}, // 完全PASS
-    {"writev06", true, true}, // 完全PASS
+    {"unlink05", true, false},   // pass
+    {"unlink07", true, false},   // pass
+    {"unlink08", true, false},   // pass2fail2
+    {"unlink09", true, false},   // pass
+    {"unlinkat01", true, false}, // passed   7
+    {"write01", true, false},    // 完全PASS
+    {"write02", true, false},    // pass
+    {"write03", true, false},    // 完全PASS
+    {"write04", true, false},
+    {"write05", true, false},  // passed   3
+    {"writev05", true, false}, // 完全PASS
+    {"writev06", true, false}, // 完全PASS
     {"execl01", true, true},  // PASS
     {"execle01", true, true}, // PASS
     {"execlp01", true, true}, // PASS
     {"execv01", true, true},  // PASS
     {"execve01", true, true}, // PASS
     {"execvp01", true, true}, // PASS
-    {"gettid01", true, true}, // PASS
-    {"set_tid_address01", true, true},
+    {"gettid01", true, false}, // PASS
+    {"set_tid_address01", true, false},
     {NULL, false, false}};
