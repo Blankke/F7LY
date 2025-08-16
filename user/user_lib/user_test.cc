@@ -681,6 +681,7 @@ struct ltp_testcase ltp_testcases[] = {
     {"pipe10", true, true},       // 完全PASS
     {"pipe12", true, true},       // pass
     {"pipe14", true, true},       // 完全PASS
+    {"exit02", true, true},       // pass
     {"poll01", true, true},       // pass
     {"pread01", true, true},      // pass
     {"pread01_64", true, true},   // pass
@@ -752,6 +753,12 @@ struct ltp_testcase ltp_testcases[] = {
     {"write05", true, true},  // passed   3
     {"writev05", true, true}, // 完全PASS
     {"writev06", true, true}, // 完全PASS
+    {"execl01", true, true},  // PASS
+    {"execle01", true, true}, // PASS
+    {"execlp01", true, true}, // PASS
+    {"execv01", true, true},  // PASS
+    {"execve01", true, true}, // PASS
+    {"execvp01", true, true}, // PASS
     {"gettid01", true, true}, // PASS
     {"set_tid_address01", true, true},
     {NULL, false, false}};
