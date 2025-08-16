@@ -622,6 +622,10 @@ struct ltp_testcase ltp_testcases[] = {
     {"getegid02", true, true},        // PASS
     {"geteuid01", true, true},        // PASS
     {"geteuid02", true, true},        // PASS
+    {"clone01", true, true},          // pass
+    {"clone03", true, true},          // pass
+    {"clone06", true, true},          // pass
+    {"clone302", true, true},         // p3 f5 s1
     {"getrandom01", true, true},      // pass
     {"getrandom02", true, true},      // 完全PASS
     {"getrandom03", true, true},      // 完全PASS

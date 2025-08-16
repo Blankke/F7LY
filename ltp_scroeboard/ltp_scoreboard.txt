@@ -164,17 +164,17 @@ clock_nanosleep04              |            |
 clock_settime01                |            | 
 clock_settime02                |            | 
 clock_settime03                |            | 
-clone01                        |            | 
-clone02                        |            | 
-clone03                        |            | 
+clone01                        | pass           | 
+clone02                        | pass           |  没有summary
+clone03                        | pass           | 
 clone04                        |            | 
 clone05                        |            | 
-clone06                        |            | 
+clone06                        | pass           | 
 clone07                        |            | 
 clone08                        |            | 
 clone09                        |            | 
 clone301                       |            | 
-clone302                       |            | 
+clone302                       | pass           | 
 clone303                       |            | 
 close_range01                  |            | 
 close_range02                  |            | 
@@ -1068,14 +1068,14 @@ keyctl07                       |            |
 keyctl08                       |            | 
 keyctl09                       |            | 
 kill02                         |            | 
-kill03                         |            | 
+kill03                         | pass           | 
 kill05                         |            | 
 kill06                         |            | 
 kill07                         |            | 
 kill08                         |            | 
 kill09                         |            | 
 kill10                         |            | 
-kill11                         |            | 
+kill11                         | pass           | 
 kill12                         |            | 
 kill13                         |            | 
 killall_icmp_traffic           |            | 
@@ -1906,8 +1906,8 @@ setpgid01                      | pass       | pass
 setpgid02                      | pass       | pass
 setpgid03                      |            | 要完善sid逻辑, 而且现在退不出去, 先不修
 setpgid03_child                |            | 
-setpgrp01                      |            | 
-setpgrp02                      |            | 
+setpgrp01                      | pass           | 
+setpgrp02                      | pass           | 
 setpriority01                  |            | 
 setpriority02                  |            | 
 setregid01                     | pass       | PASS
