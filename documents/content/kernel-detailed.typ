@@ -696,6 +696,11 @@ F7LY内核目前仅支持ext4文件系统，但由于系统状态文件（如`pr
 - open等全局的文件操作通过使用面向过程调用的VFS接口，避免了C++虚类继承机制所带来的性能开销，尤其是在频繁进行文件操作时。    
 - 虚拟文件管理仅在必要时使用虚拟文件封装，从而确保在文件操作时能够快速定位并执行正确的文件类型操作。 
 - 文件读写这类基础操作通过虚函数重载的方式来处理不同类型的文件，实现了代码的灵活性和可扩展性，同时确保了操作的高效性。
+#figure(
+  image("fig/文件操作.png", width: 75%),
+  caption: [两层封装的文件操作],
+) <fig:file-operation>
+通过两次封装，F7LY的VFS能够在保证灵活性的同时，提供高效的文件操作性能。第一层封装是对lwext4库的封装，第二层则是对虚拟文件类的封装，这样既能利用现有成熟库的稳定性，又能在上层提供统一的接口供用户程序调用。
 
 === VFS核心元数据结构剖析
 
@@ -844,6 +849,55 @@ F7LY内核实现了完整的虚拟文件系统，为应用程序提供了类Linu
 特别地，F7LY的Loop设备支持使得系统能够将文件作为块设备进行挂载，这为文件系统镜像的使用和测试提供了重要支持。通过Loop设备，用户可以挂载ISO镜像、磁盘镜像等文件，极大地扩展了文件系统的灵活性。
 
 这些虚拟文件通过专门的Provider类实现，每个Provider负责生成对应文件的内容，确保了系统信息的实时性和准确性。虚拟文件系统的实现使得F7LY能够很好地兼容标准的Linux应用程序和系统工具。
+=== 额外的文件功能
+在基础文件读写之外，F7LY 还实现了部分 Linux 系统调用所涉及的扩展文件功能，涵盖文件控制接口（`fcntl`）以及扩展属性（xattr 和 ioctl），以增强文件系统的兼容性和灵活性。
+==== 文件控制（fcntl）
+`fcntl` 系统调用在 UNIX/Linux 系统中用于对文件描述符进行多样化的管理。F7LY 目前已经支持若干常用的 `op` 操作，其入口函数为  
+`SyscallHandler::sys_fcntl()`，参数解析使用 `_arg_fd`、`_arg_int` 和 `_arg_addr`。  
+实现流程为：根据传入的 `fd` 获取对应的 `fs::file*`，再依据不同的 `op` 进行分支处理。主要功能如下：
+#figure(
+  image("fig/fcntl.png", width: 75%),
+  caption: [文件控制调用],
+) <fig:fcntl>
+1. 文件描述符复制（`F_DUPFD` /` F_DUPFD_CLOEXEC`）   
+    - 调用 `proc::k_pm.alloc_fd(p, f, i)` 分配新的文件描述符。        
+    - 在进程文件表中记录：`p->_ofile->_ofile_ptr[retfd] = f`，同时增加 `f->refcnt`。        
+    - `F_DUPFD_CLOEXEC` 额外设置 `p->_ofile->_fl_cloexec[retfd] = true`。        
+2. 文件描述符标志（`F_GETFD` / `F_SETFD`）    
+    - `FD_CLOEXEC` 标志由 `p->_ofile->_fl_cloexec[fd]` 维护。        
+    - `F_GETFD` 返回当前标志值；`F_SETFD` 根据参数设置或清除该标志。        
+3. 文件状态标志（`F_GETFL` /`F_SETFL`）    
+    - 文件的状态标志存储在 `f->lwext4_file_struct.flags`。        
+    - 对管道文件，`O_NONBLOCK` 的设置通过 `fs::pipe_file` 接口进行同步。        
+    - `F_SETFL` 仅允许修改以下标志：  
+        `O_APPEND | O_ASYNC | O_DIRECT | O_NOATIME | O_NONBLOCK`，  
+        而访问模式位（`O_RDONLY`/`O_WRONLY`/`O_RDWR`）保持不变。        
+4. 记录锁（`F_SETLK` / `F_SETLKW` / `F_GETLK`）
+    - F7LY 实现了简化的 advisory record locking：        
+        - 每个文件维护一个 `struct flock`（`f->_lock`），用于记录锁状态。            
+        - `F_SETLK`：设置锁，当前仅支持单锁存储，权限和竞争处理有限。            
+        - `F_SETLKW`：在冲突时阻塞等待写操作。            
+        - `F_GETLK`：检查冲突并返回冲突信息或 `F_UNLCK`。              
+5. 管道相关（`F_SETPIPE_SZ` / `F_GETPIPE_SZ`）   
+    - 针对 `f->_attrs.filetype == FT_PIPE` 的文件，调用 `set_pipe_size()` / `get_pipe_size()` 管理管道容量。        
+    - 实现在 `kernel/proc/pipe.cc` 与 `kernel/fs/vfs/file/pipe_file.hh`。        
+6. 文件封印（`F_ADD_SEALS`, `F_GET_SEALS`）  
+    - 用于 `memfd_create` 的支持，仅当路径名前缀为 `memfd:` 时启用。        
+    - 实现了四种封印：        
+        - `F_SEAL_SHRINK`            
+        - `F_SEAL_WRITE`            
+        - `F_SEAL_GROW`            
+        - `F_SEAL_SEAL`（启用后禁止添加新的封印）            
+    - 封印状态存储在 `f->_seals` 与 `f->_sealing_allowed` 字段中。        
+==== 文件扩展属性
+F7LY 在移植 `lwext4` 库时，保留了其完整的扩展属性支持，并在 VFS 层进行了封装，实现了如下功能：
+==== *xattr 支持*    
+    - `lwext4` 子系统实现了完整的 xattr 接口：        
+        - `sys_setxattr`, `sys_lsetxattr`, `sys_fsetxattr`            
+        - `sys_getxattr`, `sys_lgetxattr`, `sys_fgetxattr`            
+    - 提供 `set/get/list/remove` 等操作，能够满足常见的扩展属性管理需求。        
+==== *inode flags 管理*   
+    - 通过 `ioctl` 系统调用支持 `FS_IOC_GETFLAGS (0x6601)` 与 `FS_IOC_SETFLAGS (0x6602)`，可对 ext4 inode flags 进行查询和设置。
 
 == 进程间通信
 
@@ -962,7 +1016,7 @@ int futex_wakeup(uint64 uaddr, int val, void *uaddr2, int val2);
 
 Futex是现代多线程程序同步的基础设施，可用于实现pthread库的互斥锁、条件变量、读写锁等高级同步原语，既具备高效的用户态自旋性能，又能在需要阻塞时与内核协作实现调度，让同步操作兼具性能和安全性。
 
-=== 共享内存机制
+=== *共享内存机制*
 
 共享内存是一种高效的进程间通信（IPC）机制，允许多个进程直接访问同一块物理内存区域，从而实现数据的快速交换。F7LY借鉴Linux设计的同时改用面向对象的管理方式，支持符合POSIX标准的共享内存机制，并在内核中实现了相关系统调用。
 
@@ -1095,3 +1149,114 @@ static void setup_ipc(void)
   image("fig/共享内存空间管理.png", width: 75%),
   caption: [共享内存管理接口],
 ) <fig:shared-memory>
+
+=== *memfd机制*
+在现代 Linux 系统中，`memfd_create` 提供了一种高效的共享内存机制：  
+发送方进程首先调用 `memfd_create` 创建一个内存文件，然后通过 `mmap` 将其映射到进程地址空间，从而获得一块可读写的共享内存区域。此时，进程可以向这块内存写入数据，并通过 Unix Domain Socket 将文件描述符发送给接收方进程，后者接收并映射同一个内存文件，从而实现高效的跨进程共享。
+==== F7LY的memfd实现
+在F7LY 内核中，我们完整实现了这一机制，并针对比赛环境进行了适配与优化：
+- `memfd` 的创建与标识    
+    - 在 `sys_memfd_create` 中，F7LY 使用 VFS 的 `O_TMPFILE` 机制在 `/tmp` 下创建匿名文件，并将其 `_path_name` 标记为 `memfd:<name>`，以区分普通临时文件。        
+    - 参数校验完全遵循 Linux 约定：`name` 长度限制为 `MEMFD_NAME_MAX=249`，不允许包含 `'/'`；`flags` 仅允许 `MFD_CLOEXEC (0x1)` 与 `MFD_ALLOW_SEALING (0x2)`，其余返回 `EINVAL`。        
+    - `MFD_CLOEXEC` 通过在进程的 `_ofile->_fl_cloexec[fd]` 上打标记实现。
+- memfd 的内部表示   
+    - 每个 memfd 文件对象对应一个 `fs::file` 结构，其中：        
+        - `_seals`：一个 32 位位掩码，保存 `F_SEAL_*` 标志。            
+        - `_sealing_allowed`：布尔值，标记是否允许后续添加 seal（由 `MFD_ALLOW_SEALING` 控制）。            
+    - 若创建时未允许 sealing，则内核直接写入 `F_SEAL_SEAL`，表示该 memfd 已被完全封印。
+==== memfd 的 sealing 支持
+F7LY 对 `fcntl(F_ADD_SEALS/F_GET_SEALS)` 的支持与 Linux 接轨，但内部逻辑专门围绕比赛内核的 VFS 层实现：
+- fcntl 路径   
+    - 仅当 `f->_path_name` 以 `memfd:` 开头时允许执行 sealing。        
+    - 如果 `_sealing_allowed == false`，则禁止添加新 seal，返回 `EPERM`。        
+    - 添加 `F_SEAL_WRITE` 前，会检查该 memfd 是否已在当前进程中以 `MAP_SHARED|PROT_WRITE` 方式映射，若存在则返回 `EBUSY`。        
+- 系统调用路径上的强制检查    
+    - `sys_mmap`：禁止对带有 `F_SEAL_WRITE` 的 memfd 建立写共享映射。        
+    - `sys_mprotect`：禁止对已映射区域新增写权限。        
+    - `sys_ftruncate` / `sys_fallocate`：分别检查 `F_SEAL_SHRINK` 与 `F_SEAL_GROW`，若冲突则拒绝。        
+    - `normal_file::write`：写入时检查 `_seals & F_SEAL_WRITE`，若被封印则返回 `EPERM`。      
+
+这些检查点保证了 seal 的一致性，使得 memfd 在 F7LY 内核中具备了与 Linux 接近的语义。
+
+=== *管道机制*
+管道（Pipe）是操作系统提供的一种进程间通信（IPC）机制，允许一个进程的输出直接作为另一个进程的输入。F7LY内核实现了符合POSIX标准的管道机制，支持匿名管道和命名管道（FIFO）。
+==== 管道的基本实现
+F7LY的管道实现基于虚拟文件系统（VFS），通过`pipe_file`类来管理管道的读写操作。管道的核心数据结构包括：
+```cpp
+	class pipe_file : public file
+	{
+	private:
+		uint64 _off = 0;
+		proc::ipc::Pipe *_pipe;
+		bool is_write = false;//读端还是写端
+		eastl::string _fifo_path; // 用于 FIFO 文件的路径跟踪
+		int _pipe_flags = 0; // 管道标志，默认为0
+  public:
+		void set_fifo_path(const eastl::string& path) { _fifo_path = path; }
+    long read(uint64 buf, size_t len, long off, bool upgrade) override
+    long write(uint64 buf, size_t len, long off, bool upgrade) override 
+    //其余字段省略
+  }
+```
+管道文件类`pipe_file`继承自`file`类，包含一个`_pipe`指针，指向实际的管道数据结构。该类实现了读写操作，并支持FIFO文件的路径跟踪。
+
+```cpp
+		class Pipe
+		{
+			friend ProcessManager;
+			friend class fs::FifoManager; // 允许 FifoManager 访问私有成员
+		private:
+			SpinLock _lock;
+			// 使用动态分配的循环缓冲区
+			uint8 *_buffer;
+			uint32 _pipe_size; // 动态管道大小
+			uint32 _head;  // 读取位置
+			uint32 _tail;  // 写入位置
+			uint32 _count; // 当前数据量
+			bool _read_is_open;
+			bool _write_is_open;
+			bool _nonblock; // 非阻塞模式标志
+			uint8 _read_sleep;
+			uint8 _write_sleep;
+			int pipe_flags; // 管道标志
+    public:
+      int write( uint64 addr, int n );
+			int write_in_kernel( uint64 addr, int n );
+			int read( uint64 addr, int n );
+			int alloc( fs::pipe_file * &f0, fs::pipe_file * &f1);
+			void close( bool is_write );
+      }
+```
+管道的读写操作通过`read`和`write`方法实现，支持阻塞和非阻塞模式。基本实现方式是通过`Pipe`类来管理管道的缓冲区和读写指针。
+#figure(
+  image("fig/管道.png", width: 50%),
+  caption: [管道基本实现],
+) <fig:pipe-basic-implementation>
+==== 管道管理器
+为记录有名管道的创建和销毁，F7LY实现了一个管道管理器`FifoManager`，用于管理所有有名管道的生命周期。该管理器维护一个unordered_map容器，并提供创建、删除和查找管道的接口。
+基础的管道信息结构体由读者写者计数和管道本身组成:
+```cpp
+struct FifoInfo {
+    proc::ipc::Pipe *pipe;
+    int reader_count;
+    int writer_count;
+    
+    FifoInfo() : pipe(nullptr), reader_count(0), writer_count(0) {}
+    FifoInfo(proc::ipc::Pipe *p) : pipe(p), reader_count(0), writer_count(0) {}
+};
+```
+在 `pipe_file`类中有一个`_fifo_path`字段，用于跟踪有名管道的路径。通过该路径，F7LY能够在文件系统中创建和管理有名管道。
+`FifoManager`类提供了以下关键方法：
+```cpp
+    proc::ipc::Pipe* get_or_create_fifo(const eastl::string& path);
+    bool open_fifo(const eastl::string& path, bool is_writer);
+    void close_fifo(const eastl::string& path, bool is_writer);
+    bool has_readers(const eastl::string& path);
+    bool has_writers(const eastl::string& path);
+    FifoInfo get_fifo_info(const eastl::string& path);
+```
+需要创建管道时，调用`get_or_create_fifo`方法，该方法会检查是否已经存在同名的管道，如果存在则返回对应的管道指针，否则创建新的管道并返回。通过`open_fifo`和`close_fifo`方法，F7LY能够管理管道的打开和关闭操作，并维护读者和写者计数。
+#figure(
+  image("fig/fifomanager.png", width: 75%),
+  caption: [有名管道管理器],
+) <fig:fifo-manager>
