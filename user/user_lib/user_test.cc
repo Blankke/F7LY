@@ -605,6 +605,8 @@ struct ltp_testcase ltp_testcases[] = {
     {"setfsuid01", true, true},       // PASS
     {"setfsuid03", true, true},       // PASS
     {"getpgrp01", true, true},        // PASS
+    {"setpgrp01", true, true},        // PASS
+    {"setpgrp02", true, true},        // PASS
     {"setuid01", true, true},         // PASS
     {"setuid03", true, true},         // PASS
     {"setresuid01", true, true},      // PASS
