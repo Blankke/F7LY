@@ -363,8 +363,8 @@ execveat03                     |            |
 execvp01                       |            | 
 execvp01_child                 |            | 
 exit_group01                   |            | 
-exit01                         |            | 
-exit02                         |            | 
+exit01                         | pass           | 没有summary
+exit02                         | pass           | 
 f00f                           |            | 
 faccessat01                    | pass       | 完全PASS
 faccessat02                    | pass       | 完全PASS
@@ -1609,7 +1609,7 @@ prot_hsymlinks                 |            |
 pselect01                      |            | /bin/sh
 pselect01_64                   |            | 
 pselect02                      | pass       | pass
-pselect02_64                   |            | pass
+pselect02_64                   | pass           | pass
 pselect03                      | pass       | pass
 pselect03_64                   | pass       | pass
 pt_test                        |            | 
@@ -1802,9 +1802,9 @@ sctp_big_chunk                 |            |
 sctp_ipsec.sh                  |            | 
 sctp_ipsec_vti.sh              |            | 
 sctp01.sh                      |            | 
-select01                       |            | 
+select01                       | pass           | 
 select02                       |            | 
-select03                       |            | 
+select03                       | pass           | 
 select04                       |            | 
 sem_comm                       |            | 
 sem_nstest                     |            | 
