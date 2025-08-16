@@ -1,5 +1,3 @@
-#set par(first-line-indent: 2em)
-
 = 内核详细介绍
 
 == 机器启动
@@ -434,7 +432,7 @@ struct vma
 F7LY目前能够利用缺页异常处理来实现写时复制（Copy on write）、地址空间的懒分配（Lazy page allocation）以及用户的地址检查机制。
 
 #figure(
-  image("fig/缺页.png", width: 60%),
+  image("fig/缺页.png", width: 70%),
   caption: [缺页异常处理流程],
 ) <fig:page-fault>
 
@@ -552,17 +550,17 @@ class ProcessMemoryManager
         // 内存大小
         uint64 total_memory_size;
     public:
-        //...各种公共方法
+                //...各种公共方法
     }
 ```
 
 ==== 线程的创建与释放
 
-在F7LY内核中，进程使用独立的内存管理器来支持线程的创建和释放。虽然线程拥有独立的上下文，但它们位于同一进程中，且共享进程的地址空间。这种设计使得线程间可以高效共享内存，同时确保每个线程的上下文是独立的。为了支持线程的共享内存，我们使用了`ProcessMemoryManager` 类的多种方法。具体而言，以下方法在F7LY中用于支持线程的共享内存操作：
+在F7LY内核中，进程使用独立的内存管理器来支持线程的创建和释放。虽然线程拥有独立的上下文，但它们位于同一进程中，且共享进程的地址空间。这种设计使得线程间可以高效共享内存，同时确保每个线程的上下文是独立的。为了支持线程的共享内存，我们使用了`ProcessMemoryManager`类的多种方法。具体而言，以下方法在F7LY中用于支持线程的共享内存操作：
 
 ```cpp
-       ProcessMemoryManager *share_for_thread(); //为线程创建共享内存（增加引用计数）
-        ProcessMemoryManager *clone_for_fork(); //为进程创建完全复制的内存管理器
+ProcessMemoryManager *share_for_thread(); //为线程创建共享内存（增加引用计数）
+ProcessMemoryManager *clone_for_fork(); //为进程创建完全复制的内存管理器
 ```
 
 线程的创建与释放流程，尤其在`fork`和`clone`系统调用中，涉及以下步骤：
@@ -578,7 +576,7 @@ class ProcessMemoryManager
 
 F7LY通过`ProcessMemoryManager`类提供了一系列方法来支持进程内存的动态增长与回收。这些方法涵盖了从堆内存的扩展与收缩，到虚拟内存区域（VMA）的管理等多个方面。通过这些接口，F7LY可以支持sbrk、brk、mmap系统调用为进程提供动态内存分配的支持。
 
-此外，系统通过 `/proc/stat`路径暴露进程的内存占用状态，方便外部工具或系统管理员查看进程的内存使用情况。
+此外，系统通过`/proc/stat`路径暴露进程的内存占用状态，方便外部工具或系统管理员查看进程的内存使用情况。
 
 ==== 内存释放
 
@@ -591,20 +589,509 @@ F7LY通过`ProcessMemoryManager`类提供了一系列方法来支持进程内存
 
 === 进程管理器
 
-F7LY的进程管理使用类ProcessManager封装对进程的许多操作，并使用全局对象`k_pmm`进行管理，既包含了对于当前进程的状态信息获取和修改接口，又作为系统调用和进程结构体这一个体之间的桥梁便于通过系统调用直接对进程进行操作。
+F7LY的进程管理使用类ProcessManager封装对进程的许多操作，并使用全局对象`k_pm`进行管理，既包含了对于当前进程的状态信息获取和修改接口，又作为系统调用和进程结构体这一个体之间的桥梁便于通过系统调用直接对进程进行操作。
 
 下面将介绍这一类的公共接口与各字段的含义：
+
+ProcessManager类的主要字段包括：
+
+- `_pid_lock`：进程ID分配锁
+- `_wait_lock`：等待操作锁  
+- `_cur_pid`：当前分配的进程ID
+- `_init_proc`：初始进程指针
+- `_last_alloc_proc_gid_field`：上次分配的全局ID
 
 ```cpp
 class ProcessManager
 {
-private:
-    SpinLock _pid_lock;        
-    SpinLock _wait_lock;       
-    int _cur_pid;             
-    Pcb *_init_proc;           
-    uint _last_alloc_proc_gid; 
-
-public:
-    ProcessManager() = default;
+    // 进程管理的核心功能实现
+    // 包括进程创建、销毁、调度等
+};
 ```
+
+`ProcessManager`类的功能可以分为两个主要部分：
+
+1. *进程状态管理*：
+   - 分配与释放进程：`ProcessManager`负责进程的生命周期管理，包括进程的创建、销毁、以及资源的回收。每当一个新进程需要创建时，它会调用`ProcessManager`来分配进程ID（PID）并初始化进程相关的资源。当进程结束时，`ProcessManager`会负责清理并回收进程所占用的内存和其他资源。   
+   - 进程属性设置:`ProcessManager`提供了一系列接口用于设置和获取进程的各种属性，如PID、PPID、PGID、UID、GID等。这些属性对于进程的管理和调度至关重要，确保每个进程都能正确地标识和管理其资源。
+   - 进程状态转换：`ProcessManager`管理进程的状态转换，包括进程的运行、就绪、阻塞和终止等状态。它通过调度器与进程控制块（PCB）协同工作，确保进程能够在适当的时间点切换状态，并正确响应系统调用和中断。
+
+2. *系统调用接口与进程生命周期*：
+   - 系统调用处理：`ProcessManager`提供了多个系统调用接口，如`fork`、`execve`、`wait`、`exit`等。这些接口允许用户态程序通过系统调用与内核交互，执行进程创建、程序替换、进程等待和终止等操作。
+   - 进程调度与切换：`ProcessManager`与调度器协同工作，管理进程的调度和上下文切换。它确保在多任务环境下，CPU资源能够公平地分配给各个进程，并根据优先级和状态进行调度。
+   - 信号处理与进程间通信：`ProcessManager`还负责处理进程间的信号传递和通信机制，确保进程能够响应外部事件和内部状态变化。
+
+执行用户态程序的流程是：首先使用`fork`创建一个子进程，然后通过`execve`加载ELF文件中的用户程序，将原进程的内存空间和执行上下文替换为新程序的资源，并从ELF文件定义的入口地址（entry）开始执行。
+
+当用户态程序需要申请内核资源或执行特权操作时，会通过系统调用进入内核。这一过程由硬件触发用户态到内核态的陷入（`usertrap`），在陷入点内核会根据异常码进行判断，并通过`syscall_handler`包装逻辑进入具体的系统调用处理流程。
+
+#figure(
+  image("fig/进程架构.png", width: 50%),
+  caption: [双管理器进程架构],
+) <fig:process-architecture>
+
+== 文件系统架构
+
+=== 虚拟文件系统
+
+虚拟文件系统（Virtual File System, VFS）是操作系统内核中的关键子系统，负责统一管理磁盘文件、I/O设备等字符流的交互，为上层提供一致、透明的文件访问接口。VFS通过标准化的系统调用（如`open()`、`read()`、`write()`）屏蔽了底层文件系统和存储介质的差异，使用户程序能够以统一的方式访问不同类型的文件系统。
+
+在F7LY的设计过程中，初赛时参考的往年队伍XN6的文件系统存在不完善之处，这使得后续的开发工作遇到了许多困难。尤其是C++的虚类继承机制在文件操作时导致了多次解码，影响了性能。因此，在决赛阶段，F7LY决定移植成熟的*lwext4库*，并基于此实现了一个面向过程调用的VFS接口。为了保持高效的性能，我们在虚拟文件管理时使用了一层简单的虚拟文件封装，通过这一层封装来选择正确的文件类型与操作。
+
+==== 虚拟文件架构
+
+1. *底层元数据与文件结构*：
+   在VFS的底层，我们使用了`lwext4`库中的`lwext4_file_struct`结构体，它提供了对文件元数据的管理，包括关键字段：  
+   - `fsize`：文件大小。
+   - `fpos`：当前文件位置读写偏移指针。
+   - `flags`：文件标志位，指示文件的打开模式（如只读、可写等）。
+   - `inode`：指向文件的索引节点（Inode），包含文件的元数据。
+
+2. *虚拟文件类file*：
+   为了管理打开的文件，F7LY设计了一个`file`类，该类是一个虚类，用于表示进程中打开文件的状态属性。`file`类包含了以下关键字段：  
+   - `lwext4_file_struct`：指向底层文件结构的指针，封装了文件的元数据。
+   - `st`：一个`Kstat`结构体，包含文件的状态信息，如文件大小、访问时间等。
+   - `attrs`：一个`FileAttrs`结构体，包含文件的属性信息，如权限、类型等。
+   - `file_ptr`：文件的读写指针，为支持稀疏文件的高效读写提供了便利。
+   
+   这个类不仅包含了文件的基本信息，还通过虚函数为不同的文件类型提供了不同的操作接口。为避免直接操作底层元数据，这一层的封装同步存储了文件大小等数据，旨在避免造成lwext4库的破坏（该库为c语言，没有封装性），并在上层能更直观的获取到数据。
+
+3. *虚拟文件类的继承结构*：
+   根据Linux"一切皆文件"的设计理念，F7LY的`file`类被派生出了多个具体的文件类型。这些派生类包括：
+   - `normal_file`：表示普通文件，提供了对普通文件的读写操作。
+   - `device_file`：表示设备文件，提供了对设备的特殊操作。
+   - `pipe_file`：表示管道文件，提供了对管道的读写操作。
+   - `socket_file`：表示套接字文件，提供了对网络套接字的操作。
+   - `dir_file`：表示目录文件，提供了对目录的遍历和操作。
+   - `virtual_file`：表示虚拟文件，提供对系统状态文件的操作。
+   
+   每种文件类型根据其特性，提供不同的读写操作。通过虚函数重载，F7LY能够为每个文件类型实现特定的读写操作，确保文件操作的多样性与高效性。
+
+#figure(
+  image("fig/虚拟文件.png", width: 70%),
+  caption: [虚拟文件类继承结构],
+) <fig:virtual-file-hierarchy>
+
+==== 虚拟文件系统架构
+
+F7LY内核目前仅支持ext4文件系统，但由于系统状态文件（如`proc`、`sys`等）并不存储在ext4文件系统中，因此我们设计了一个简单的VFS架构来支持多种文件系统的挂载与管理。VFS通过标准化的接口，屏蔽了底层文件系统的差异，使得用户程序能够以统一的方式访问不同类型的文件系统。
+
+在这个vfs中，底层的ext4文件系统通过`lwext4`库进行管理，元数据结构如超级块、inode等均由该库提供支持，文件的读写操作通过`normal_file`类进行封装和管理。而与磁盘的交互则通过`BlockDevice`类进行处理，使用`buf`结构体统一块大小的访问，确保了对物理存储设备的统一访问接口。
+
+而系统状态文件则通过`virtual_fs`类进行管理，在初始化时会使用虚拟文件的`VirtualContentProvider`来创建和管理这些文件，标记这些文件为动态或静态以便后续与内核状态同步。这样，F7LY的VFS能够同时支持持久化存储的文件系统和非持久化的系统状态文件，提供了灵活且高效的文件访问机制。
+
+#figure(
+  image("fig/文件系统构筑.png", width: 75%),
+  caption: [虚拟文件系统架构],
+) <fig:vfs-architecture>
+
+目前状态文件支持的路径包括：
+- `/proc/`：包含进程信息、系统状态等动态内容。
+- `/sys/`：包含系统硬件信息、内核参数等静态内容。
+- `/dev/`：包含设备文件，提供对硬件设备的访问接口。
+
+==== VFS与性能的优化
+
+为了确保高效的性能，F7LY采取了如下优化策略：
+- open等全局的文件操作通过使用面向过程调用的VFS接口，避免了C++虚类继承机制所带来的性能开销，尤其是在频繁进行文件操作时。    
+- 虚拟文件管理仅在必要时使用虚拟文件封装，从而确保在文件操作时能够快速定位并执行正确的文件类型操作。 
+- 文件读写这类基础操作通过虚函数重载的方式来处理不同类型的文件，实现了代码的灵活性和可扩展性，同时确保了操作的高效性。
+
+=== VFS核心元数据结构剖析
+
+==== Buffer
+
+Buffer用于管理磁盘数据的内存缓冲区。它提供了磁盘扇区数据在内存中的抽象表示。F7LY的缓冲区容器（BufferBlock），组织和管理一组相关的磁盘缓冲区，用于组成了链表节点，串接而成一块缓冲数据链。
+
+#figure(
+  image("fig/os-buffer-pool.png", width: 75%),
+  caption: [Buffer缓冲区管理],
+) <fig:buffer-pool>
+
+==== SuperBlock
+
+超级块作为文件系统的核心元数据结构，承担着存储文件系统全局配置信息的重要职责。在物理存储层面，该结构通常映射到磁盘特定位置的元数据存储区域。从面向对象的角度来看，每个超级块实例都代表着一个具体的文件系统实例化对象。
+
+针对基于持久化存储的文件系统，其生命周期管理包含以下关键流程：
+
+- *挂载阶段*：内核需要从磁盘元数据区域读取原始超级块信息，并在内存中构建对应的运行时数据结构；
+- *卸载阶段*：系统需要执行相反的操作，包括释放内存中的超级块对象，并将修改后的元数据同步回持久化存储设备。
+
+而对于非持久化文件系统（如内存文件系统sysfs、procfs等），其超级块管理则简化为仅需在内存空间维护独立的元数据结构，无需考虑与物理存储设备的同步问题。这种差异化的实现机制充分体现了VFS设计对不同存储介质的良好适应性。
+
+F7LY的VFS超级块由superblock定义：
+
+```cpp
+struct superblock {
+    uint8 s_dev; //块设备标识符
+    uint32 s_blocksize; //数据块大小，字节单位
+
+    uint32 s_magic; //文件系统的魔数
+    uint32 s_maxbytes; //最大文件大小
+    inode_ptr root; //指根目录
+
+    super_operations_ptr s_op;
+
+    SpinLock dirty_lock;
+    list_head s_dirty_inodes; //脏inode表
+};
+```
+
+对于具体的文件系统，只需要移植自己的超级块结构体，并完善同样的函数实现。如ext4的超级块：
+
+```cpp
+struct ext4_sblock {
+    uint32_t inodes_count; /* I-nodes count */
+    uint32_t blocks_count_lo; /* Blocks count */
+    uint32_t reserved_blocks_count_lo; /* Reserved blocks count */
+    uint32_t free_blocks_count_lo; /* Free blocks count */
+    uint32_t free_inodes_count; /* Free inodes count */
+    uint32_t first_data_block; /* First Data Block */
+    uint32_t log_block_size; /* Block size */
+    uint32_t log_cluster_size; /* Obsoleted fragment size */
+    uint32_t blocks_per_group; /* Number of blocks per group */
+    uint32_t frags_per_group; /* Obsoleted fragments per group */
+    uint32_t inodes_per_group; /* Number of inodes per group */
+    uint32_t mount_time; /* Mount time */
+    uint32_t write_time; /* Write time */
+    uint16_t mount_count; /* Mount count */
+    uint16_t max_mount_count; /* Maximal mount count */
+    uint16_t magic; /* Magic signature */
+    uint16_t state; /* File system state */
+    uint16_t errors; /* Behavior when detecting errors */
+    uint16_t minor_rev_level; /* Minor revision level */
+    uint32_t last_check_time; /* Time of last check */
+    // ... 省略其他字段
+}
+```
+
+==== Inode
+
+在F7LY中，*Inode（索引节点）是文件系统的核心元数据结构*，我们通过独立于文件名的Inode编号唯一标识每个文件或目录，并在其中存储文件类型、权限、所有者、大小、时间戳、数据块位置等关键信息。F7LY的底层文件系统采用多级索引机制：直接指针用于快速访问小文件数据，间接指针支持大文件的存储扩展，从而兼顾性能与可扩展性。
+
+在虚拟文件系统层（VFS），F7LY定义了一个通用的Inode结构体，包含文件类型、权限、锁机制、操作函数指针等字段，并通过函数指针实现对不同文件系统的操作抽象。这样，VFS可以统一管理各种文件系统的Inode操作，如读写、锁定、更新等。
+
+```cpp
+struct inode {
+    uint8 i_dev;
+    uint16 i_mode; //类型 & 访问权限
+    //...省略其他字段 
+    SpinLock lock; //测试完成后再换成信号量
+    struct inode_operations *i_op; //inode操作函数
+    struct superblock *i_sb;
+    struct vfs_ext4_inode_info i_info; //EXT4 inode结构
+};
+
+struct inode_operations {
+    void (*unlockput)(struct inode *self);
+    void (*unlock)(struct inode *self);
+    void (*put)(struct inode *self);
+    void (*lock)(struct inode *self);
+    void (*update)(struct inode *self);
+    ssize_t (*read)(struct inode *self, int user_dst, uint64 dst, uint off, uint n);
+    int (*write)(struct inode *self, int user_src, uint64 src, uint off, uint n);
+    int (*isdir)(struct inode *self); // 是否是directory
+    struct inode *(*dup)(struct inode *self);
+    //For directory
+    struct inode *(*dirlookup)(struct inode *self, const char *name, uint *poff);
+    int (*deletei)(struct inode *self, struct inode *ip);            
+    int (*dir_empty)(struct inode *self);
+    struct inode *(*create)(struct inode *self, const char *name, uchar type, short major, short minor);
+    void (*stat)(struct inode *self, struct stat *st);
+};
+```
+
+=== 系统文件访问
+
+F7LY内核实现了完整的虚拟文件系统，为应用程序提供了类Linux的系统文件接口。虚拟文件系统通过树形结构组织，支持多种文件类型，包括普通文件、符号链接和设备文件。系统在初始化时会创建以下虚拟文件，并标记动态和静态：
+
+*\/proc文件系统：*
+- `/proc/self/exe` - 当前进程可执行文件的符号链接
+- `/proc/meminfo` - 系统内存使用信息
+- `/proc/cpuinfo` - CPU硬件信息
+- `/proc/version` - 内核版本信息
+- `/proc/mounts` - 文件系统挂载信息
+- `/proc/self/mounts` - 当前进程的挂载信息
+- `/proc/self/cmdline` - 当前进程命令行参数
+- `/proc/self/stat` - 当前进程状态统计
+- `/proc/self/maps` - 当前进程内存映射信息
+- `/proc/self/pagemap` - 当前进程页面映射
+- `/proc/self/status` - 当前进程详细状态
+- `/proc/stat` - 系统统计信息
+- `/proc/uptime` - 系统运行时间
+- `/proc/interrupts` - 中断统计信息
+
+*\/proc/sys内核参数：*
+- `/proc/sys/kernel/pid_max` - 最大进程ID
+- `/proc/sys/kernel/shmmax` - 共享内存段最大大小
+- `/proc/sys/kernel/shmmni` - 共享内存段最大数量
+- `/proc/sys/kernel/shmall` - 共享内存总大小限制
+- `/proc/sys/kernel/tainted` - 内核污染状态
+- `/proc/sys/fs/pipe-user-pages-soft` - 管道用户页面软限制
+
+*\/etc配置文件：*
+- `/etc/passwd` - 用户账户信息
+- `/etc/ld.so.preload` - 动态链接器预加载库配置
+- `/etc/ld.so.cache` - 动态链接器缓存文件
+
+*\/dev设备文件：*
+- `/dev/null` - 空设备，丢弃所有写入数据
+- `/dev/zero` - 零设备，读取时返回零字节
+- `/dev/loop-control` - Loop设备控制接口
+- `/dev/loop0` - `/dev/loop7` - Loop块设备，支持文件系统镜像挂载
+- `/dev/block/8:0` - 块设备文件
+
+特别地，F7LY的Loop设备支持使得系统能够将文件作为块设备进行挂载，这为文件系统镜像的使用和测试提供了重要支持。通过Loop设备，用户可以挂载ISO镜像、磁盘镜像等文件，极大地扩展了文件系统的灵活性。
+
+这些虚拟文件通过专门的Provider类实现，每个Provider负责生成对应文件的内容，确保了系统信息的实时性和准确性。虚拟文件系统的实现使得F7LY能够很好地兼容标准的Linux应用程序和系统工具。
+
+== 进程间通信
+
+=== 信号机制
+
+信号是操作系统向进程传递异步事件通知的重要手段，广泛用于异常处理、进程控制和进程间通信。F7LY借鉴Linux的设计，支持符合POSIX标准的信号机制，并在PCB中内置信号处理所需的关键数据结构。
+
+==== 核心数据结构
+
+F7LY定义了以下结构体以支持灵活、兼容的信号处理：
+
+```cpp
+namespace signal
+{
+    struct signal_frame
+    {
+        sigset_t mask;
+        TrapFrame tf;
+        signal_frame *next;
+    };
+    typedef struct sigaction
+    {
+        void (*sa_handler)(int); // 信号处理函数
+        sigset_t sa_mask;        // 处理期间阻塞的信号
+        int sa_flags;          
+    } sigaction;
+}
+```
+
+这些结构体与POSIX标准中的`siginfo_t`语义接近，增强了对标准接口的兼容性；
+
+- `signal_frame`用于保存信号处理过程中的进程上下文；
+- `sigaction`定义每个信号对应的处理行为。
+
+F7LY的信号机制支持包括`SIGCHLD`在内的常用信号。例如，当子进程状态变为Zombie时，内核通过发送`SIGCHLD`信号告知父进程状态变化，同时提供子进程的PID、状态码、用户态和内核态运行时间等信息，为父进程调用`wait4()`等系统调用获取子进程状态提供必要数据。
+
+=== 信号处理函数
+
+在任务从内核态返回用户态前，需要处理挂起的信号。F7LY在中断处理器`usertrap`中加入`handle_signal()`，在时钟中断或其他中断后及时执行挂起信号：
+
+```cpp
+if (which_dev == 2)
+{
+  timeslice++; 
+  if (timeslice >= 10)
+  {
+    timeslice = 0;
+    printf("yield in usertrap
+");
+    proc::k_scheduler.yield();
+  }
+}
+handle_signal();
+usertrapret();
+```
+
+`handle_signal()`的核心逻辑是：
+
+1. 获取当前进程PCB；
+2. 遍历进程挂起的信号位掩码，检查每个信号的有效性；
+3. 根据`sigaction`判断信号是否需要自定义处理：
+   - 若`sa_handler == nullptr`，使用默认处理（例如SIGKILL设置`p->_killed=true`）；
+   - 否则调用用户自定义的信号处理函数；
+4. 处理完当前信号后不会丢失其他信号，通过位掩码保留剩余信号，保证处理安全性。
+
+==== 信号上下文保存与恢复
+
+F7LY实现的信号处理支持完整的上下文保存与恢复：
+
+- 当内核准备进入用户态执行信号处理函数时，会将当前上下文保存到`sig_trapframe`中；
+- 信号处理完成后，程序需回到原执行状态。此过程使用`sigreturn`系统调用恢复上下文。
+
+为了实现从信号处理返回，F7LY设计了类似`trampoline`的机制：
+
+- 信号处理时将EPC（返回地址）设置到汇编实现的`sig_trampoline`函数；
+- `sig_trampoline`唯一作用是触发`ecall`，调用`SYS_rt_sigreturn`系统调用，执行上下文恢复。
+
+这一设计使得F7LY在支持自定义信号处理时能保证上下文正确性，安全地完成用户态与内核态的切换。
+
+#figure(
+  image("fig/信号处理.png", width: 70%),
+  caption: [信号处理流程],
+) <fig:signal-handling>
+
+=== Futex
+
+Futex（Fast Userspace Mutex）是Linux内核提供的一种高效用户态同步原语，可用于实现互斥锁、条件变量、信号量等多种同步机制。F7LY借鉴Linux的设计，构建了可扩展的Futex实现，并支持相关系统调用。
+
+```cpp
+struct robust_list {
+    struct robust_list *next;
+};
+struct robust_list_head {
+    robust_list list;           // 链表头
+    long futex_offset;          // futex 字段的相对偏移
+    robust_list *list_op_pending; // 待处理的锁操作
+};
+```
+
+F7LY使用`robust_list`结构体作为构成单向链表的节点嵌入在用户空间的锁结构中。内核只需要知道前向链接，用户空间可以使用双向链表实现O(1)的添加和删除。
+
+- *`list`*：robust locks链表的头节点，如果为空则指向自己。
+- *`futex_offset`*：用户空间设置的相对偏移量，告诉内核futex字段在数据结构中的位置。
+- *`list_op_pending`*：防止线程死亡竞争的字段。
+  - 用户空间首先将此字段设置为即将获取的锁的地址。
+  - 然后执行锁获取操作。
+  - 再将自己添加到列表中。
+  - 最后清除此字段。
+
+Robust Futex的意义是当线程异常终止时，内核可以自动清理该线程持有的锁，防止死锁。
+
+```cpp
+int futex_wait(uint64 uaddr, int val, tmm::timespec *timeout);
+int futex_wakeup(uint64 uaddr, int val, void *uaddr2, int val2);
+```
+
+Futex是现代多线程程序同步的基础设施，可用于实现pthread库的互斥锁、条件变量、读写锁等高级同步原语，既具备高效的用户态自旋性能，又能在需要阻塞时与内核协作实现调度，让同步操作兼具性能和安全性。
+
+=== 共享内存机制
+
+共享内存是一种高效的进程间通信（IPC）机制，允许多个进程直接访问同一块物理内存区域，从而实现数据的快速交换。F7LY借鉴Linux设计的同时改用面向对象的管理方式，支持符合POSIX标准的共享内存机制，并在内核中实现了相关系统调用。
+
+F7LY的内核空间通过类`SharedMemoryManager`，并设立全局对象`k_smm`来管理共享内存区域。该类负责创建、销毁和跟踪共享内存段的生命周期，确保多个进程能够安全地访问和操作共享内存。
+
+该类的定义如下：
+```cpp
+class ShmManager
+{
+private:
+    unordered_map segments; // 共享内存段映射
+    int next_shmid; 
+    uint64 shm_base;
+    uint64 shm_size;
+    vector free_blocks;
+public:
+    int create_seg(key_t key, size_t size, int shmflg);
+    int delete_seg(int shmid);
+    void_ptr attach_seg(int shmid, void_ptr shmaddr, int shmflg);
+    int detach_seg(void_ptr addr);
+    bool is_shared_memory_address(void_ptr addr);
+    bool find_shared_memory_segment(/* ... */);
+    bool add_reference_for_fork(void_ptr addr);
+    int shmctl(int shmid, int cmd, shmid_ds_ptr buf, uint64 buf_addr);
+    //...省略其他函数
+};
+```
+
+==== 共享内存段结构体
+
+该类封装了一个共享内存段的列表，每个共享内存段由`shm_segment`类表示，包含以下关键字段：
+```cpp
+   struct shm_segment
+    {
+        int shmid;         // 共享内存段ID
+        key_t key;         // 共享内存段键值
+        size_t size;       // 用户请求的原始大小
+        size_t real_size;  // 实际分配的页对齐大小
+        union
+        {
+            u16 shmflg;
+            struct
+            {
+                u16 o_exec : 1;  // 其他执行权限
+                u16 o_write : 1; // 其他写权限
+                u16 o_read : 1;  // 其他读权限
+                u16 g_exec : 1;  // 组执行权限
+                u16 g_write : 1; // 组写权限
+                u16 g_read : 1;  // 组读权限
+                u16 u_exec : 1;  // 用户执行权限
+                u16 u_write : 1; // 用户写权限
+                u16 u_read : 1;  // 用户读权限
+                u16 _rsv : 7;
+            }__attribute__((__packed__));
+        }__attribute__((__packed__));
+        eastl::vector<pair<tid,void*>> attached_addrs; 
+        uint64 phy_addrs;  // 物理地址
+        int nattch;        // 当前附加的进程数量
+        ....//省略其他字段
+    };
+```
+
+该结构体与linux的shm_segment结构体兼容，包含了共享内存段的ID、键值、大小、权限标志等信息。与原本的linux结构体不同，它维护了一个附加地址列表，用于跟踪所有附加到该共享内存段的虚拟地址并存储附加地址的唯一tid，该方法可以支持多个进程附加到同一个共享内存段，并使用键值区别不同页表上的附加值。
+
+==== 共享内存的实现
+
+在设计`SharedMemoryManager`的类方法时，F7LY直接参考了posix标准的共享内存API，并实现了以下关键方法：
+- `create_seg`：该方法对标shmget系统调用，创建一个新的共享内存段，并返回其ID。该方法接受三个参数：键值、大小和标志位。它会检查是否已经存在同样的键值的共享内存段，如果存在则返回其ID，否则创建新的段并返回新段的ID。
+- `delete_seg`：该方法对标shmctl系统调用中的删除逻辑，但给出更灵活的api，删除指定的共享内存段。它会检查该段是否存在，并且只有附加地址列表为空，且设置删除标志（`SHM_DEST`）时才会被调用删除，否则减少附加计数并按标准更新段信息。删除后会释放物理内存并从段列表中移除。
+- `attach_seg`：该方法对标shmat系统调用，允许进程附加到指定的共享内存段。它会检查是否已经存在附加地址，如果不存在则分配新的虚拟地址，并将其添加到附加地址列表中。若指定了附加地址，则直接使用该地址。附加的同时记录此次附加的进程ID，并增加附加计数。若附加成功，则返回附加地址。
+- `detach_seg`：该方法对标shmdt系统调用，允许进程从共享内存段中分离。它会检查指定的地址是否属于共享内存段，并从附加地址列表中移除该地址，同时减少附加计数。如果附加计数为0且设置了删除标志，则释放物理内存并从段列表中移除该段。
+- `is_shared_memory_address`：检查指定地址是否属于共享内存段，返回布尔值。主要用于查找和验证附加地址是否有效，并进入共享内存处理逻辑。
+- `shmctl`：该方法对标shmctl系统调用，提供对共享内存段的控制操作，如获取段信息、设置权限等。它接受三个参数：共享内存段ID、命令和缓冲区地址。根据命令执行不同的操作，如获取段信息、设置权限等。
+
+这些方法实现了共享内存段的创建、删除、附加和分离等基本操作，符合POSIX标准的共享内存API规范。
+
+==== 使用ShmManager实现mmap的共享内存
+
+在F7LY的实现中，PCB没有直接存储共享内存段的引用计数，而是通过`SharedMemoryManager`类来管理所有共享内存段的生命周期。每个进程在附加共享内存段时，都会调用`attach_seg`方法，该方法会检查是否已经存在附加地址，并更新附加地址列表。
+
+F7LY的`mmap`系统调用支持共享内存段的映射。通过`SharedMemoryManager`类的`attach_seg`方法，进程可以将共享内存段映射到自己的虚拟地址空间中。
+
+当进程调用`mmap`时，若包含flag`MAP_SHARED`，则会触发共享内存段的附加操作。在一般的mmap操作时，会在用户堆顶选取虚拟地址，并使用`PhysicalMemoryManager`分配物理页。若是共享内存段，则会调用`create_seg`方法并传入特定的key值创建一个不会重复的共享内存段。并调用`attach_seg`方法将共享内存段附加到进程的虚拟地址空间中。
+
+```cpp
+  bool is_shared_memory_address(void *addr);
+  int find_shared_memory_segment(void *addr, 
+  void **start_addr, size_t *size = nullptr);
+  bool add_reference_for_fork(void *addr);
+  bool duplicate_attachments_for_fork(uint parent_tid, uint child_tid);
+```
+
+共享的vma数据会在fork时跟随`ProcessMemoryManager`一起管理，进程复制时使用相关接口检查地址是否属于共享内存段，并获取共享内存段信息。若是共享内存段，则增加引用计数，并在子进程中复制附加地址。
+
+此处区分进程与线程的共享内存段管理，根据传入的`CLONE_VM`标志不同进行不同处理，确保每个进程在fork时能够正确处理共享内存段的引用计数和附加地址。
+
+==== 通过/dev/shm访问共享内存
+
+F7LY的共享内存段可以通过`/dev/shm`目录访问。在初始化目录时会通过`VirtualContentProvider`创建标志为动态的虚拟目录，该目录下的文件对应于共享内存段，每个文件名为共享内存段的键值（key）。
+
+用户可以通过标准的文件操作接口（如`open`、`read`、`write`等）来访问这些共享内存段。这些访问的请求将会转发到`ShmManager`类的相应方法中进行处理。
+
+例如，用户可以通过以下方式创建和访问共享内存段：
+```cpp
+int fd = open("/dev/shm/my_shared_memory",
+              O_RDWR | O_CREAT, 0666);
+if (fd < 0) {
+    perror("open");
+    return -1;
+}   
+```
+
+特别的，LTP测试中初始化阶段会使用下面的方法设置好IPC的共享内存段，并以此存储测试的结果。
+```cpp
+static void setup_ipc(void)
+{
+    size_t size = getpagesize();
+    if (access("/dev/shm", F_OK) == 0) {
+        snprintf(shm_path, sizeof(shm_path), "/dev/shm/ltp_%s_%d",
+            tid, getpid());
+    } else {
+        //...其余进程通信逻辑
+    }
+}
+```
+
+这样的方法可以确保每个进程在访问共享内存时都能正确地创建和使用对应的共享内存段。
+
+#figure(
+  image("fig/共享内存空间管理.png", width: 75%),
+  caption: [共享内存管理接口],
+) <fig:shared-memory>
