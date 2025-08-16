@@ -547,7 +547,9 @@ struct ltp_testcase ltp_testcases[] = {
     {"fstat02_64", true, true},       // pass 5 fail 1
     {"fstat03_64", true, false},      // pass2
     {"fstatfs02", true, false},       // pass 2
+    {"fstatfs02_64", true, true},     // pass 2
     {"ftruncate01", true, true},      // pass 2
+    {"ftruncate01_64", true, true},   // pass 2
     {"ftruncate03", true, true},      // pass 4
     {"faccessat01", true, true},      // 完全PASS
     {"faccessat02", true, true},      // 完全PASS
