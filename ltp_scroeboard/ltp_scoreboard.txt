@@ -2023,7 +2023,7 @@ signal02                       | pass       | pass 1 fail 2
 signal03                       | pass       | PASS
 signal04                       | pass       | PASS
 signal05                       | pass       | PASS
-signal06                       |            | 
+signal06                       |            | Only test on x86_64.
 signalfd01                     |            | 
 signalfd4_01                   |            | 
 signalfd4_02                   |            | 

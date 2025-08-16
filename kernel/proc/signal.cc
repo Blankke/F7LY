@@ -23,8 +23,15 @@ namespace proc
 
             int sigAction(int flag, sigaction *newact, sigaction *oldact)
             {
-                if (flag <= 0 || flag > signal::SIGRTMAX || flag == signal::SIGKILL || flag == signal::SIGSTOP)
-                    return -1;
+                if (flag <= 0 || flag > signal::SIGRTMAX)
+                    return syscall::SYS_EINVAL;
+                
+                // SIGKILL和SIGSTOP不能被设置处理函数 - 根据POSIX标准返回EINVAL
+                if (flag == signal::SIGKILL || flag == signal::SIGSTOP)
+                {
+                    return syscall::SYS_EINVAL;
+                }
+                
                 proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
                 if (cur_proc->_sigactions == nullptr)
                 {
@@ -44,7 +51,7 @@ namespace proc
                     if (newact->sa_handler == SIG_ERR)
                     {
                         printfRed("[sigAction] SIG_ERR is not a valid handler\n");
-                        return -1; // SIG_ERR不是有效的处理函数
+                        return syscall::SYS_EINVAL; // SIG_ERR不是有效的处理函数
                     }
                     
                     if (newact->sa_handler == SIG_DFL)
@@ -65,7 +72,7 @@ namespace proc
                         {
                             cur_proc->_sigactions->actions[flag] = new sigaction;
                             if (cur_proc->_sigactions->actions[flag] == nullptr)
-                                return -1; // 内存分配失败
+                                return syscall::SYS_ENOMEM; // 内存分配失败
                         }
                         else
                         {
@@ -73,7 +80,7 @@ namespace proc
                             delete cur_proc->_sigactions->actions[flag];
                             cur_proc->_sigactions->actions[flag] = new sigaction;
                             if (cur_proc->_sigactions->actions[flag] == nullptr)
-                                return -1; // 内存分配失败
+                                return syscall::SYS_ENOMEM; // 内存分配失败
                         }
                         *(cur_proc->_sigactions->actions[flag]) = *newact;
                     }
@@ -84,7 +91,7 @@ namespace proc
                         {
                             cur_proc->_sigactions->actions[flag] = new sigaction;
                             if (cur_proc->_sigactions->actions[flag] == nullptr)
-                                return -1; // 内存分配失败
+                                return syscall::SYS_ENOMEM; // 内存分配失败
                         }
                         else
                         {
@@ -92,7 +99,7 @@ namespace proc
                             delete cur_proc->_sigactions->actions[flag];
                             cur_proc->_sigactions->actions[flag] = new sigaction;
                             if (cur_proc->_sigactions->actions[flag] == nullptr)
-                                return -1; // 内存分配失败
+                                return syscall::SYS_ENOMEM; // 内存分配失败
                         }
                         printfLightCyan("[sigAction] Setting handler for signal %d: enter %p flags: %p mask: %p\n", flag, newact->sa_handler, newact->sa_flags, newact->sa_mask.sig[0]);
                         *(cur_proc->_sigactions->actions[flag]) = *newact;

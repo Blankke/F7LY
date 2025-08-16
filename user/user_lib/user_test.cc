@@ -487,8 +487,8 @@ struct ltp_testcase ltp_testcases[] = {
     {"posix_fadvise02_64", true, true}, // pass6
     {"posix_fadvise03_64", true, true},
     {"signal03", true, true},
-    {"signal05", true, true},
     {"signal04", true, true},
+    {"signal05", true, true},
     {"add_key01", true, true},
     {"add_key02", true, true},
     {"add_key03", true, true},
