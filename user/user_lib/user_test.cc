@@ -561,6 +561,8 @@ struct ltp_testcase ltp_testcases[] = {
     {"fpathconf01", true, true},      // pass
     {"fsync02", true, true},          // pass
     {"fsync03", true, true},          // pass
+    {"kill03", true, true},           // pass
+    {"kill11", true, true},           // pass
     {"waitpid03", true, true},        // PASS
     {"waitpid04", true, true},        // PASS
     {"waitpid06", true, true},        // PASS

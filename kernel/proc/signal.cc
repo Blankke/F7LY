@@ -241,6 +241,7 @@ namespace proc
                 case signal::SIGUSR1:   // 10 - user-defined signal 1
                 case signal::SIGUSR2:   // 12 - user-defined signal 2
                 case signal::SIGVTALRM: // 26 - virtual timer alarm
+                case signal::SIGPWR:    // 30 - power failure signal
                     return {true, false}; // terminate = true, coredump = false
                     
                 // 停止信号（目前简单处理为终止）
@@ -255,7 +256,6 @@ namespace proc
                 case signal::SIGCHLD:   // 17 - child process terminated
                 case signal::SIGWINCH:  // 28 - window resize signal
                 case signal::SIGURG:    // 23 - urgent data on socket
-                case signal::SIGPWR:    // 30 - power failure signal
                     return {false, false}; // terminate = false, coredump = false
                     
                 default:

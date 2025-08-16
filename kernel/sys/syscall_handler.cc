@@ -2487,8 +2487,25 @@ namespace syscall
         int pid, sig;
         _arg_int(0, pid);
         _arg_int(1, sig);
-        return proc::k_pm.kill_signal(pid, sig);
-        return 0;
+        
+        // Check for invalid signal number
+        if (sig < 0 || sig > proc::ipc::signal::SIGRTMAX || sig == 0)
+        {
+            return SYS_EINVAL;
+        }
+        
+        // Special case for INT_MIN - should return ESRCH
+        if (pid == INT_MIN)
+        {
+            return SYS_ESRCH;
+        }
+        
+        int result = proc::k_pm.kill_signal(pid, sig);
+        if (result == -1)
+        {
+            return SYS_ESRCH;  // Process not found
+        }
+        return result;
     }
     uint64 SyscallHandler::sys_tkill()
     {
