@@ -41,4 +41,19 @@ int vfs_copy_file_range(int f_in,off_t offset_in, int f_out,off_t offset_out,siz
 bool is_lock_conflict(const struct flock &existing_lock, const struct flock &new_lock);
 bool check_file_lock_access(const struct flock &file_lock, off_t offset, size_t size, bool is_write);
 
+// Extended attributes (xattr) interfaces for VFS
+// Path-based; follow_symlinks controls final symlink resolution (true for setxattr/getxattr/listxattr/removexattr, false for l* variants)
+int vfs_setxattr(const eastl::string &pathname, const char *name, const void *data, size_t size, bool follow_symlinks);
+// buf may be nullptr with buf_size==0 to query size; out_size returns actual size on success
+int vfs_getxattr(const eastl::string &pathname, const char *name, void *buf, size_t buf_size, size_t &out_size, bool follow_symlinks);
+// list may be nullptr with size==0 to query required size; ret_size returns used bytes
+int vfs_listxattr(const eastl::string &pathname, char *list, size_t size, size_t &ret_size, bool follow_symlinks);
+int vfs_removexattr(const eastl::string &pathname, const char *name, bool follow_symlinks);
+
+// FD-based helpers implemented via file->_path_name
+int vfs_fsetxattr(fs::file *f, const char *name, const void *data, size_t size);
+int vfs_fgetxattr(fs::file *f, const char *name, void *buf, size_t buf_size, size_t &out_size);
+int vfs_flistxattr(fs::file *f, char *list, size_t size, size_t &ret_size);
+int vfs_fremovexattr(fs::file *f, const char *name);
+
 #endif // VFS_UTILS_HH

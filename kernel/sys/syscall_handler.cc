@@ -214,6 +214,12 @@ namespace syscall
         BIND_SYSCALL(getxattr);           // from rocket
         BIND_SYSCALL(lgetxattr);          // from rocket
         BIND_SYSCALL(fgetxattr);          // from rocket
+        BIND_SYSCALL(listxattr);          // from rocket
+        BIND_SYSCALL(llistxattr);         // from rocket
+        BIND_SYSCALL(flistxattr);         // from rocket
+        BIND_SYSCALL(removexattr);        // from rocket
+        BIND_SYSCALL(lremovexattr);       // from rocket
+        BIND_SYSCALL(fremovexattr);       // from rocket
         BIND_SYSCALL(mknodat);            // from rocket
         BIND_SYSCALL(symlinkat);          // from rocket
         BIND_SYSCALL(fstatfs);            // from rocket
@@ -2487,23 +2493,23 @@ namespace syscall
         int pid, sig;
         _arg_int(0, pid);
         _arg_int(1, sig);
-        
+
         // Check for invalid signal number
         if (sig < 0 || sig > proc::ipc::signal::SIGRTMAX || sig == 0)
         {
             return SYS_EINVAL;
         }
-        
+
         // Special case for INT_MIN - should return ESRCH
         if (pid == INT_MIN)
         {
             return SYS_ESRCH;
         }
-        
+
         int result = proc::k_pm.kill_signal(pid, sig);
         if (result == -1)
         {
-            return SYS_ESRCH;  // Process not found
+            return SYS_ESRCH; // Process not found
         }
         return result;
     }
@@ -6023,17 +6029,17 @@ namespace syscall
         uint64 count;
         int offset;
         if (_arg_fd(0, &fd, nullptr) < 0)
-        if( _arg_addr(1, buf) < 0 ||
-            _arg_addr(2, count) < 0 || _arg_int(3, offset) < 0)
-        {
-            return -EINVAL; // Invalid arguments
-        }
+            if (_arg_addr(1, buf) < 0 ||
+                _arg_addr(2, count) < 0 || _arg_int(3, offset) < 0)
+            {
+                return -EINVAL; // Invalid arguments
+            }
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         fs::file *f = p->get_open_file(fd);
         if (!f)
             return -EBADF;
         printfCyan("[SyscallHandler::sys_pwrite64] fd: %d, buf: %p, count: %lu, offset: %d\n",
-               fd, (void *)buf, count, offset);
+                   fd, (void *)buf, count, offset);
         auto old_off = f->get_file_offset();
         f->lseek(offset, SEEK_SET);
 
@@ -9057,10 +9063,11 @@ namespace syscall
             printfRed("[SyscallHandler::sys_fsetxattr] 无效的文件描述符\n");
             return -EBADF;
         }
-        if (_arg_str(1, name, MAXPATH) < 0)
+        int res = _arg_str(1, name, PATH_MAX);
+        if (res < 0)
         {
             printfRed("[SyscallHandler::sys_fsetxattr] 获取属性名失败\n");
-            return -EINVAL;
+            return res;
         }
         if (_arg_addr(2, value_addr) < 0)
         {
@@ -9077,7 +9084,8 @@ namespace syscall
             printfRed("[SyscallHandler::sys_fsetxattr] 获取标志参数失败\n");
             return -EINVAL;
         }
-
+        printfCyan("[SyscallHandler::sys_fsetxattr] fd: %d, name: %s, value_addr: %p, size: %ld, flags: %d\n",
+                   fd, name.c_str(), (void *)value_addr, isize, flags);
         size = isize;
 
         if (f == nullptr)
@@ -9107,16 +9115,33 @@ namespace syscall
         if (flags != 0 && flags != XATTR_CREATE && flags != XATTR_REPLACE &&
             flags != (XATTR_CREATE | XATTR_REPLACE))
         {
+            printfRed("[SyscallHandler::sys_fsetxattr] 无效的标志参数: %d\n", flags);
             return -EINVAL;
         }
 
-        printfCyan("[SyscallHandler::sys_fsetxattr] fd=%d, name=%s, value=%p, size=%zu, flags=%d\n",
-                   fd, name.c_str(), (void *)value_addr, size, flags);
+        // Only support flags==0 for now; create/replace semantics can be handled in ext4 layer later
+        // Copy value from user if provided
+        void *kbuf = nullptr;
+        if (size > 0)
+        {
+            proc::Pcb *p = proc::k_pm.get_cur_pcb();
+            if (!p)
+                return -ESRCH;
+            kbuf = mem::k_pmm.kmalloc(size);
+            if (!kbuf)
+                return -ENOMEM;
+            if (mem::k_vmm.copy_in(*p->get_pagetable(), (char *)kbuf, value_addr, size) < 0)
+            {
+                mem::k_pmm.free_page(kbuf);
+                printfRed("[SyscallHandler::sys_fsetxattr] 从用户空间复制值失败\n");
+                return -EFAULT;
+            }
+        }
 
-        // 简化实现：由于我们还没有完整的文件系统扩展属性支持，
-        // 这里返回 ENOTSUP 表示不支持扩展属性
-        // 在真实的实现中，需要将属性存储到文件系统的inode中
-        return -ENOTSUP;
+        int r = vfs_fsetxattr(f, name.c_str(), kbuf, size);
+        if (kbuf)
+            mem::k_pmm.free_page(kbuf);
+        return r;
     }
     uint64 SyscallHandler::sys_fgetxattr()
     {
@@ -9132,10 +9157,11 @@ namespace syscall
             printfRed("[SyscallHandler::sys_fgetxattr] 无效的文件描述符\n");
             return -EBADF;
         }
-        if (_arg_str(1, name, MAXPATH) < 0)
+        int res = _arg_str(1, name, PATH_MAX);
+        if (res < 0)
         {
             printfRed("[SyscallHandler::sys_fgetxattr] 获取属性名失败\n");
-            return -EINVAL;
+            return res;
         }
         if (_arg_addr(2, value_addr) < 0)
         {
@@ -9148,43 +9174,54 @@ namespace syscall
             return -EINVAL;
         }
         size = isize;
-
+        printfCyan("[SyscallHandler::sys_fgetxattr] fd: %d, name: %s, value_addr: %p, size: %ld\n",
+                   fd, name.c_str(), (void *)value_addr, isize);
         if (f == nullptr)
         {
             printfRed("[SyscallHandler::sys_fgetxattr] 文件指针为空\n");
             return -EBADF;
         }
 
-        printfCyan("[SyscallHandler::sys_fgetxattr] fd=%d, name=%s, value=%p, size=%zu\n",
-                   fd, name.c_str(), (void *)value_addr, size);
-
         if (f->lwext4_file_struct.flags & O_PATH)
             return -EBADF;
 
-        // 检查属性名是否为空或过长
         if (name.empty() || name.length() > 255)
-        {
             return -ERANGE;
-        }
 
-        // 如果size为0，应该返回属性值的大小（如果存在）
-        if (size == 0)
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (!p)
+            return -ESRCH;
+
+        // Allocate kernel buffer if size>0; if size==0 we query size only
+        void *kbuf = nullptr;
+        if (size > 0)
         {
-            // 在真实实现中，这里应该查询属性的大小
-            // 现在返回 ENODATA 表示属性不存在
-            return -ENODATA;
+            kbuf = mem::k_pmm.kmalloc(size);
+            if (!kbuf)
+                return -ENOMEM;
         }
-
-        // 检查缓冲区大小是否足够
-        if (size > 65536)
-        { // 64KB limit
-            return -ERANGE;
+        size_t out_size = 0;
+        int r = vfs_fgetxattr(f, name.c_str(), kbuf, size, out_size);
+        if (r == 0)
+        {
+            if (size == 0)
+            {
+                // return size of attr
+                return out_size;
+            }
+            if (mem::k_vmm.copy_out(*p->get_pagetable(), value_addr, kbuf, eastl::min(out_size, (size_t)size)) < 0)
+            {
+                if (kbuf)
+                    mem::k_pmm.free_page(kbuf);
+                return -EFAULT;
+            }
+            if (kbuf)
+                mem::k_pmm.free_page(kbuf);
+            return out_size;
         }
-
-        // 简化实现：由于我们还没有完整的文件系统扩展属性支持，
-        // 返回 ENODATA 表示请求的扩展属性不存在
-        // 在真实的实现中，需要从文件系统的inode中读取属性
-        return -ENODATA;
+        if (kbuf)
+            mem::k_pmm.free_page(kbuf);
+        return r;
     }
 
     uint64 SyscallHandler::sys_setxattr()
@@ -9197,15 +9234,17 @@ namespace syscall
         int flags;
 
         // 获取参数
-        if (_arg_str(0, path, MAXPATH) < 0)
+        int res = _arg_str(0, path, PATH_MAX);
+        if (res < 0)
         {
             printfRed("[SyscallHandler::sys_setxattr] 获取路径失败\n");
-            return -EINVAL;
+            return res;
         }
-        if (_arg_str(1, name, MAXPATH) < 0)
+        res = _arg_str(1, name, PATH_MAX);
+        if (res < 0)
         {
             printfRed("[SyscallHandler::sys_setxattr] 获取属性名失败\n");
-            return -EINVAL;
+            return res;
         }
         if (_arg_addr(2, value_addr) < 0)
         {
@@ -9243,17 +9282,32 @@ namespace syscall
             return -ERANGE;
         }
 
-        // 验证标志
-        if (flags != 0 && flags != XATTR_CREATE && flags != XATTR_REPLACE)
-        {
+        // Only support flags==0 for now
+        if (flags != 0)
             return -EINVAL;
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (!p)
+            return -ESRCH;
+        void *kbuf = nullptr;
+        if (size > 0)
+        {
+            kbuf = mem::k_pmm.kmalloc(size);
+            if (!kbuf)
+                return -ENOMEM;
+            if (mem::k_vmm.copy_in(*p->get_pagetable(), (char *)kbuf, value_addr, size) < 0)
+            {
+                mem::k_pmm.free_page(kbuf);
+                return -EFAULT;
+            }
         }
 
-        printfCyan("[SyscallHandler::sys_setxattr] path=%s, name=%s, value=%p, size=%zu, flags=%d\n",
-                   path.c_str(), name.c_str(), (void *)value_addr, size, flags);
-
-        // 简化实现：返回 ENOTSUP 表示不支持扩展属性
-        return -ENOTSUP;
+        // Build absolute path
+        eastl::string abs_path = get_absolute_path(path.c_str(), proc::k_pm.get_cur_pcb()->_cwd_name.c_str());
+        int r = vfs_setxattr(abs_path, name.c_str(), kbuf, size, /*follow_symlinks*/ true);
+        if (kbuf)
+            mem::k_pmm.free_page(kbuf);
+        return r;
     }
 
     uint64 SyscallHandler::sys_lsetxattr()
@@ -9266,15 +9320,17 @@ namespace syscall
         int flags;
 
         // 获取参数 - 与setxattr相同
-        if (_arg_str(0, path, MAXPATH) < 0)
+        int res = _arg_str(0, path, PATH_MAX);
+        if (res < 0)
         {
             printfRed("[SyscallHandler::sys_lsetxattr] 获取路径失败\n");
-            return -EINVAL;
+            return res;
         }
-        if (_arg_str(1, name, MAXPATH) < 0)
+        res = _arg_str(1, name, PATH_MAX);
+        if (res < 0)
         {
             printfRed("[SyscallHandler::sys_lsetxattr] 获取属性名失败\n");
-            return -EINVAL;
+            return res;
         }
         if (_arg_addr(2, value_addr) < 0)
         {
@@ -9291,7 +9347,8 @@ namespace syscall
             printfRed("[SyscallHandler::sys_lsetxattr] 获取标志参数失败\n");
             return -EINVAL;
         }
-
+        printfCyan("[SyscallHandler::sys_lsetxattr] path: %s, name: %s, value_addr: %p, size: %ld, flags: %d\n",
+                   path.c_str(), name.c_str(), (void *)value_addr, isize, flags);
         size = isize;
 
         // 检查路径
@@ -9312,18 +9369,30 @@ namespace syscall
             return -ERANGE;
         }
 
-        // 验证标志
-        if (flags != 0 && flags != XATTR_CREATE && flags != XATTR_REPLACE)
-        {
+        // Only support flags==0 for now
+        if (flags != 0)
             return -EINVAL;
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (!p)
+            return -ESRCH;
+        void *kbuf = nullptr;
+        if (size > 0)
+        {
+            kbuf = mem::k_pmm.kmalloc(size);
+            if (!kbuf)
+                return -ENOMEM;
+            if (mem::k_vmm.copy_in(*p->get_pagetable(), (char *)kbuf, value_addr, size) < 0)
+            {
+                mem::k_pmm.free_page(kbuf);
+                return -EFAULT;
+            }
         }
-
-        printfCyan("[SyscallHandler::sys_lsetxattr] path=%s, name=%s, value=%p, size=%zu, flags=%d\n",
-                   path.c_str(), name.c_str(), (void *)value_addr, size, flags);
-
-        // lsetxattr与setxattr的区别在于对符号链接的处理
-        // 简化实现：返回 ENOTSUP 表示不支持扩展属性
-        return -ENOTSUP;
+        eastl::string abs_path = get_absolute_path(path.c_str(), p->_cwd_name.c_str());
+        int r = vfs_setxattr(abs_path, name.c_str(), kbuf, size, /*follow_symlinks*/ false);
+        if (kbuf)
+            mem::k_pmm.free_page(kbuf);
+        return r;
     }
 
     uint64 SyscallHandler::sys_getxattr()
@@ -9335,15 +9404,17 @@ namespace syscall
         size_t size;
 
         // 获取参数
-        if (_arg_str(0, path, MAXPATH) < 0)
+        int res = _arg_str(0, path, PATH_MAX);
+        if (res < 0)
         {
             printfRed("[SyscallHandler::sys_getxattr] 获取路径失败\n");
-            return -EINVAL;
+            return res;
         }
-        if (_arg_str(1, name, MAXPATH) < 0)
+        res = _arg_str(1, name, PATH_MAX);
+        if (res < 0)
         {
             printfRed("[SyscallHandler::sys_getxattr] 获取属性名失败\n");
-            return -EINVAL;
+            return res;
         }
         if (_arg_addr(2, value_addr) < 0)
         {
@@ -9355,7 +9426,8 @@ namespace syscall
             printfRed("[SyscallHandler::sys_getxattr] 获取大小参数失败\n");
             return -EINVAL;
         }
-
+        printfCyan("[SyscallHandler::sys_getxattr] path: %s, name: %s, value_addr: %p, size: %ld\n",
+                   path.c_str(), name.c_str(), (void *)value_addr, isize);
         size = isize;
 
         // 检查路径
@@ -9370,25 +9442,36 @@ namespace syscall
             return -ERANGE;
         }
 
-        // 如果size为0，应该返回属性值的大小（如果存在）
-        if (size == 0)
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (!p)
+            return -ESRCH;
+        void *kbuf = nullptr;
+        if (size > 0)
         {
-            // 在真实实现中，这里应该查询属性的大小
-            // 现在返回 ENODATA 表示属性不存在
-            return -ENODATA;
+            kbuf = mem::k_pmm.kmalloc(size);
+            if (!kbuf)
+                return -ENOMEM;
         }
-
-        // 检查缓冲区大小是否足够
-        if (size > 65536)
-        { // 64KB limit
-            return -ERANGE;
+        eastl::string abs_path = get_absolute_path(path.c_str(), p->_cwd_name.c_str());
+        size_t out_size = 0;
+        int r = vfs_getxattr(abs_path, name.c_str(), kbuf, size, out_size, /*follow_symlinks*/ true);
+        if (r == 0)
+        {
+            if (size == 0)
+                return out_size;
+            if (mem::k_vmm.copy_out(*p->get_pagetable(), value_addr, kbuf, eastl::min(out_size, (size_t)size)) < 0)
+            {
+                if (kbuf)
+                    mem::k_pmm.free_page(kbuf);
+                return -EFAULT;
+            }
+            if (kbuf)
+                mem::k_pmm.free_page(kbuf);
+            return out_size;
         }
-
-        printfCyan("[SyscallHandler::sys_getxattr] path=%s, name=%s, value=%p, size=%zu\n",
-                   path.c_str(), name.c_str(), (void *)value_addr, size);
-
-        // 简化实现：返回 ENODATA 表示属性不存在
-        return -ENODATA;
+        if (kbuf)
+            mem::k_pmm.free_page(kbuf);
+        return r;
     }
 
     uint64 SyscallHandler::sys_lgetxattr()
@@ -9400,15 +9483,17 @@ namespace syscall
         size_t size;
 
         // 获取参数 - 与getxattr相同
-        if (_arg_str(0, path, MAXPATH) < 0)
+        int res = _arg_str(0, path, PATH_MAX);
+        if (res < 0)
         {
             printfRed("[SyscallHandler::sys_lgetxattr] 获取路径失败\n");
-            return -EINVAL;
+            return res;
         }
-        if (_arg_str(1, name, MAXPATH) < 0)
+        res = _arg_str(1, name, PATH_MAX);
+        if (res < 0)
         {
             printfRed("[SyscallHandler::sys_lgetxattr] 获取属性名失败\n");
-            return -EINVAL;
+            return res;
         }
         if (_arg_addr(2, value_addr) < 0)
         {
@@ -9420,41 +9505,265 @@ namespace syscall
             printfRed("[SyscallHandler::sys_lgetxattr] 获取大小参数失败\n");
             return -EINVAL;
         }
-
+        printfCyan("[SyscallHandler::sys_lgetxattr] path: %s, name: %s, value_addr: %p, size: %ld\n",
+                   path.c_str(), name.c_str(), (void *)value_addr, isize);
         size = isize;
 
         // 检查路径
         if (path.empty())
         {
+            printfRed("[SyscallHandler::sys_lgetxattr] 路径不能为空\n");
             return -EINVAL;
         }
 
         // 检查属性名是否为空或过长
         if (name.empty() || name.length() > 255)
         {
+            printfRed("[SyscallHandler::sys_lgetxattr] 属性名不能为空或过长\n");
             return -ERANGE;
         }
 
-        // 如果size为0，应该返回属性值的大小（如果存在）
-        if (size == 0)
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (!p)
         {
-            // 在真实实现中，这里应该查询属性的大小
-            // 现在返回 ENODATA 表示属性不存在
-            return -ENODATA;
+            printfRed("[SyscallHandler::sys_lgetxattr] 当前进程不存在\n");
+            return -ESRCH;
         }
-
-        // 检查缓冲区大小是否足够
-        if (size > 65536)
-        { // 64KB limit
-            return -ERANGE;
+        void *kbuf = nullptr;
+        if (size > 0)
+        {
+            kbuf = mem::k_pmm.kmalloc(size);
+            if (!kbuf)
+                return -ENOMEM;
         }
+        eastl::string abs_path = get_absolute_path(path.c_str(), p->_cwd_name.c_str());
+        size_t out_size = 0;
+        int r = vfs_getxattr(abs_path, name.c_str(), kbuf, size, out_size, /*follow_symlinks*/ false);
+        if (r == 0)
+        {
+            if (size == 0)
+                return out_size;
+            if (mem::k_vmm.copy_out(*p->get_pagetable(), value_addr, kbuf, eastl::min(out_size, (size_t)size)) < 0)
+            {
+                if (kbuf)
+                    mem::k_pmm.free_page(kbuf);
+                printfRed("[SyscallHandler::sys_lgetxattr] 内存拷贝失败\n");
+                return -EFAULT;
+            }
+            if (kbuf)
+                mem::k_pmm.free_page(kbuf);
+            return out_size;
+        }
+        if (kbuf)
+            mem::k_pmm.free_page(kbuf);
+        printfRed("[SyscallHandler::sys_lgetxattr] 获取属性失败: %d\n", r);
+        return r;
+    }
 
-        printfCyan("[SyscallHandler::sys_lgetxattr] path=%s, name=%s, value=%p, size=%zu\n",
-                   path.c_str(), name.c_str(), (void *)value_addr, size);
+    // listxattr family
+    uint64 SyscallHandler::sys_listxattr()
+    {
+        eastl::string path;
+        uint64 list_addr;
+        long isize;
+        size_t size;
+        if (_arg_str(0, path, MAXPATH) < 0)
+            return -EINVAL;
+        if (_arg_addr(1, list_addr) < 0)
+            return -EINVAL;
+        if (_arg_long(2, isize) < 0)
+            return -EINVAL;
+        size = isize;
+        printfCyan("[SyscallHandler::sys_listxattr] path: %s, list_addr: %p, size: %ld\n",
+                   path.c_str(), (void *)list_addr, isize);
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (!p)
+            return -ESRCH;
+        void *kbuf = nullptr;
+        if (size > 0)
+        {
+            kbuf = mem::k_pmm.kmalloc(size);
+            if (!kbuf)
+                return -ENOMEM;
+        }
+        eastl::string abs_path = get_absolute_path(path.c_str(), p->_cwd_name.c_str());
+        size_t used = 0;
+        int r = vfs_listxattr(abs_path, (char *)kbuf, size, used, /*follow_symlinks*/ true);
+        if (r == 0)
+        {
+            if (size == 0)
+                return used;
+            if (mem::k_vmm.copy_out(*p->get_pagetable(), list_addr, kbuf, eastl::min(used, (size_t)size)) < 0)
+            {
+                if (kbuf)
+                    mem::k_pmm.free_page(kbuf);
+                return -EFAULT;
+            }
+            if (kbuf)
+                mem::k_pmm.free_page(kbuf);
+            return used;
+        }
+        if (kbuf)
+            mem::k_pmm.free_page(kbuf);
+        return r;
+    }
 
-        // lgetxattr与getxattr的区别在于对符号链接的处理
-        // 简化实现：返回 ENODATA 表示属性不存在
-        return -ENODATA;
+    uint64 SyscallHandler::sys_llistxattr()
+    {
+        eastl::string path;
+        uint64 list_addr;
+        long isize;
+        size_t size;
+        int res = _arg_str(0, path, PATH_MAX);
+        if (res < 0)
+            return res;
+        if (_arg_addr(1, list_addr) < 0)
+            return -EINVAL;
+        if (_arg_long(2, isize) < 0)
+            return -EINVAL;
+        size = isize;
+        printfCyan("[SyscallHandler::sys_llistxattr] path: %s, list_addr: %p, size: %ld\n",
+                   path.c_str(), (void *)list_addr, isize);
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (!p)
+            return -ESRCH;
+        void *kbuf = nullptr;
+        if (size > 0)
+        {
+            kbuf = mem::k_pmm.kmalloc(size);
+            if (!kbuf)
+                return -ENOMEM;
+        }
+        eastl::string abs_path = get_absolute_path(path.c_str(), p->_cwd_name.c_str());
+        size_t used = 0;
+        int r = vfs_listxattr(abs_path, (char *)kbuf, size, used, /*follow_symlinks*/ false);
+        if (r == 0)
+        {
+            if (size == 0)
+                return used;
+            if (mem::k_vmm.copy_out(*p->get_pagetable(), list_addr, kbuf, eastl::min(used, (size_t)size)) < 0)
+            {
+                if (kbuf)
+                    mem::k_pmm.free_page(kbuf);
+                return -EFAULT;
+            }
+            if (kbuf)
+                mem::k_pmm.free_page(kbuf);
+            return used;
+        }
+        if (kbuf)
+            mem::k_pmm.free_page(kbuf);
+        return r;
+    }
+
+    uint64 SyscallHandler::sys_flistxattr()
+    {
+        int fd;
+        fs::file *f;
+        uint64 list_addr;
+        long isize;
+        size_t size;
+        if (_arg_fd(0, &fd, &f) < 0)
+            return -EBADF;
+        if (_arg_addr(1, list_addr) < 0)
+            return -EINVAL;
+        if (_arg_long(2, isize) < 0)
+            return -EINVAL;
+        size = isize;
+        printfCyan("[SyscallHandler::sys_flistxattr] fd: %d, list_addr: %p, size: %ld\n",
+                   fd, (void *)list_addr, isize);
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (!p)
+            return -ESRCH;
+        void *kbuf = nullptr;
+        if (size > 0)
+        {
+            kbuf = mem::k_pmm.kmalloc(size);
+            if (!kbuf)
+                return -ENOMEM;
+        }
+        size_t used = 0;
+        int r = vfs_flistxattr(f, (char *)kbuf, size, used);
+        if (r == 0)
+        {
+            if (size == 0)
+                return used;
+            if (mem::k_vmm.copy_out(*p->get_pagetable(), list_addr, kbuf, eastl::min(used, (size_t)size)) < 0)
+            {
+                if (kbuf)
+                    mem::k_pmm.free_page(kbuf);
+                return -EFAULT;
+            }
+            if (kbuf)
+                mem::k_pmm.free_page(kbuf);
+            return used;
+        }
+        if (kbuf)
+            mem::k_pmm.free_page(kbuf);
+        return r;
+    }
+
+    // removexattr family
+    uint64 SyscallHandler::sys_removexattr()
+    {
+        eastl::string path;
+        eastl::string name;
+        int res = _arg_str(0, path, PATH_MAX);
+        if (res < 0)
+        {
+            printfRed("[SyscallHandler::sys_removexattr] 获取路径失败\n");
+            return res;
+        }
+        res = _arg_str(1, name, PATH_MAX);
+        if (res < 0)
+        {
+            printfRed("[SyscallHandler::sys_removexattr] 获取属性名失败\n");
+            return res;
+        }
+        printfCyan("[SyscallHandler::sys_removexattr] path: %s, name: %s\n", path.c_str(), name.c_str());
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (!p)
+            return -ESRCH;
+        eastl::string abs_path = get_absolute_path(path.c_str(), p->_cwd_name.c_str());
+        return vfs_removexattr(abs_path, name.c_str(), /*follow_symlinks*/ true);
+    }
+
+    uint64 SyscallHandler::sys_lremovexattr()
+    {
+        eastl::string path;
+        eastl::string name;
+        int res = _arg_str(0, path, PATH_MAX);
+        if (res < 0)
+        {
+            printfRed("[SyscallHandler::sys_lremovexattr] 获取路径失败\n");
+            return res;
+        }
+        res = _arg_str(1, name, PATH_MAX);
+        if (res < 0)
+        {
+            printfRed("[SyscallHandler::sys_lremovexattr] 获取属性名失败\n");
+            return res;
+        }
+        printfCyan("[SyscallHandler::sys_lremovexattr] path: %s, name: %s\n", path.c_str(), name.c_str());
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (!p)
+            return -ESRCH;
+        eastl::string abs_path = get_absolute_path(path.c_str(), p->_cwd_name.c_str());
+        return vfs_removexattr(abs_path, name.c_str(), /*follow_symlinks*/ false);
+    }
+
+    uint64 SyscallHandler::sys_fremovexattr()
+    {
+        int fd;
+        fs::file *f;
+        eastl::string name;
+        if (_arg_fd(0, &fd, &f) < 0)
+            return -EBADF;
+        int res = _arg_str(1, name, PATH_MAX);
+        if (res < 0)
+            return -EINVAL;
+        printfCyan("[SyscallHandler::sys_fremovexattr] fd: %d, name: %s\n", fd, name.c_str());
+        return vfs_fremovexattr(f, name.c_str());
     }
 
     uint64 SyscallHandler::sys_mknodat()
@@ -9699,7 +10008,7 @@ namespace syscall
     {
         uint64 addr;
         off_t length;
-        
+
         // 参数验证
         if (_arg_addr(0, addr) < 0 || _arg_long(1, length) < 0)
         {
@@ -9750,14 +10059,14 @@ namespace syscall
             size_t next_slash = pathname.find('/', pos);
             if (next_slash == eastl::string::npos)
                 next_slash = pathname.length();
-            
+
             size_t component_len = next_slash - pos;
             if (component_len > 255)
             {
                 printfRed("[SyscallHandler::sys_truncate] ENAMETOOLONG: path component exceeds 255 characters\n");
                 return SYS_ENAMETOOLONG;
             }
-            
+
             pos = next_slash + 1;
         }
 
@@ -9872,7 +10181,7 @@ namespace syscall
 
         // 检查文件大小限制 (简化版本，实际实现可能需要更复杂的检查)
         // 这里使用一个合理的最大文件大小限制
-        const off_t MAX_FILE_SIZE = (1ULL << 20); 
+        const off_t MAX_FILE_SIZE = (1ULL << 20);
         if (length > MAX_FILE_SIZE)
         {
             printfRed("[SyscallHandler::sys_truncate] EFBIG: length exceeds maximum file size\n");

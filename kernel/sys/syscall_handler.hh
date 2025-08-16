@@ -155,7 +155,7 @@ namespace syscall
         uint64 sys_setpgid();
         uint64 sys_getpgid();
         uint64 sys_setsid();
-        uint64 sys_getsid();        // 新增: get session id
+        uint64 sys_getsid(); // 新增: get session id
         uint64 sys_getrusage();
         uint64 sys_getegid();
         uint64 sys_shmget();
@@ -190,6 +190,12 @@ namespace syscall
         uint64 sys_getxattr();
         uint64 sys_lgetxattr();
         uint64 sys_fgetxattr();
+        uint64 sys_listxattr();
+        uint64 sys_llistxattr();
+        uint64 sys_flistxattr();
+        uint64 sys_removexattr();
+        uint64 sys_lremovexattr();
+        uint64 sys_fremovexattr();
         uint64 sys_mknodat();
         uint64 sys_symlinkat();
         uint64 sys_fstatfs();

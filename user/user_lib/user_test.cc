@@ -560,6 +560,9 @@ struct ltp_testcase ltp_testcases[] = {
     {"flock03", true, true},          // pass1 fail2 brok 1
     {"flock04", true, true},          // pass5 fail1
     {"flock06", true, true},          // pass2 fail 2
+    {"flistxattr01", true, true},     // pass 1
+    {"flistxattr02", true, true},     // pass 2
+    {"flistxattr03", true, true},     // pass 2
     {"fpathconf01", true, true},      // pass
     {"fsync02", true, true},          // pass
     {"fsync03", true, true},          // pass
@@ -721,13 +724,6 @@ struct ltp_testcase ltp_testcases[] = {
     {"statx01", true, true},      // pass8 fail2
     {"statx02", true, true},      // pass4 fail1
     {"statx03", true, true},      // pass6 fail1
-    // "stream01", true, true}, // pass no summary
-    // "stream02", true, true}, // pass no summary
-    // "stream03", true, true}, // pass no summary
-    // "stream04", true, true}, // pass no summary
-    // "stream05", true, true}, // pass no summary
-    // "symlink01", true, true}, // pass no summary
-    // "symlink01", true, true}, // pass
     {"symlink02", true, true}, // pass
     {"symlink03", true, true}, // sendmsg
     {"symlink04", true, true}, // pass
