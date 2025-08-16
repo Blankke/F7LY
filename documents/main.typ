@@ -26,3 +26,5 @@
 #include "content/kernel-detailed.typ"
 
 #include "content/syscall.typ"
+
+#include "content/summary.typ"
