@@ -86,18 +86,18 @@ namespace proc
                     }
                     swtch(cur_context, &p->_context);
                     // printf( "return from %d, name: %s\n", p->_global_id, p->_name );
-                    bool flag = false;
-                    for (Pcb *np = k_proc_pool; np < &k_proc_pool[num_process]; np++)
-                    {
-                        if(np->_state == ProcState::UNUSED){
-                            flag = true;
-                            break;
-                        }
-                        // printf("[sche]  proc global_id: [%d], pid: [%d], parent: [%d], state: %d, name: %s\n", np->_global_id, np->_pid,  np->get_ppid(), (int)np->_state, np->_name);
-                    }
-                    if(flag == false){
-                        panic("no unused proc in pool, please check your code");
-                    }
+                    // bool flag = false;
+                    // for (Pcb *np = k_proc_pool; np < &k_proc_pool[num_process]; np++)
+                    // {
+                    //     if(np->_state == ProcState::UNUSED){
+                    //         flag = true;
+                    //         break;
+                    //     }
+                    //     // printf("[sche]  proc global_id: [%d], pid: [%d], parent: [%d], state: %d, name: %s\n", np->_global_id, np->_pid,  np->get_ppid(), (int)np->_state, np->_name);
+                    // }
+                    // if(flag == false){
+                    //     panic("no unused proc in pool, please check your code");
+                    // }
                     cpu->set_cur_proc(nullptr);
                 }
                 p->_lock.release();
