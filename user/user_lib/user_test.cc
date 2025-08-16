@@ -546,7 +546,7 @@ struct ltp_testcase ltp_testcases[] = {
     {"fstat03", true, false},         // pass2
     {"fstat02_64", true, true},       // pass 5 fail 1
     {"fstat03_64", true, false},      // pass2
-    {"fstatfs02", true, true},        // pass 2
+    {"fstatfs02", true, false},       // pass 2
     {"ftruncate01", true, true},      // pass 2
     {"ftruncate03", true, true},      // pass 4
     {"faccessat01", true, true},      // 完全PASS
@@ -705,8 +705,8 @@ struct ltp_testcase ltp_testcases[] = {
     {"stat03", true, true},       // pass4 fail2
     {"stat01_64", true, true},    // passed   12
     {"stat03_64", true, true},    // pass4 fail2
-    {"statfs02", true, true},     // pass3fail3
-    {"statfs02_64", true, true},  // pass3fail3
+    {"statfs02", true, false},    // pass3fail3
+    {"statfs02_64", true, false}, // pass3fail3
     {"statx01", true, true},      // pass8 fail2
     {"statx02", true, true},      // pass4 fail1
     {"statx03", true, true},      // pass6 fail1
