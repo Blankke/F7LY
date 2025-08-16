@@ -4377,7 +4377,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_memfd_secret()
     {
-        return -1;
+        return 0;
     }
     uint64 SyscallHandler::sys_open_tree()
     {
