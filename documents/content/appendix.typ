@@ -10,9 +10,12 @@
 })
 = 重要类的具体字段解析
 
+// 设置表格可跨页
+#show figure: set block(breakable: true)
+
 #figure(
   table(
-    columns: (1fr, 2.5fr),
+    columns: (4cm, 10cm),
     align: (left, left),
     table.header(
       [*函数名*], [*含义*]
@@ -38,7 +41,7 @@
 
 #figure(
   table(
-    columns: (1fr,2.5fr),
+    columns: (4cm, 10cm),
     align: (left, left),
     table.header(
       [*函数名*], [*含义*]
@@ -71,7 +74,7 @@
 
 #figure(
   table(
-    columns: (3.5cm, 3cm, 7cm),
+    columns: (4cm, 4cm, 6cm),
     align: (left, left, left),
     table.header(
       [*字段名*], [*类型*], [*含义*]
@@ -98,7 +101,7 @@
 
 #figure(
   table(
-    columns: (3.5cm, 3cm, 7cm),
+    columns: (4cm, 4cm, 6cm),
     align: (left, left, left),
     table.header(
       [*字段名*], [*类型*], [*含义*]
@@ -133,15 +136,12 @@
 
 本节详细列出F7LY内核实现的210+个系统调用，按功能模块分类。
 
-// 设置表格可跨页
-#show figure: set block(breakable: true)
-
 #heading(level: 2, outlined: false)[进程生命周期管理]
 
 #figure(
   table(
-    columns: (auto, 10cm),
-    align: (center, left),
+    columns: (4cm, 10cm),
+    align: (left, left),
     table.header(
       [*系统调用*], [*功能描述*]
     ),
@@ -176,7 +176,7 @@
 
 #figure(
   table(
-    columns: (auto, 10cm),
+    columns: (4cm, 10cm),
     align: (left, left),
     table.header(
       [*系统调用*], [*功能描述*]
@@ -203,8 +203,8 @@
 
 #figure(
   table(
-    columns: (auto, 10cm),
-    align: (center, left),
+    columns: (4cm, 10cm),
+    align: (left, left),
     table.header(
       [*系统调用*], [*功能描述*]
     ),
@@ -253,7 +253,7 @@
 
 #figure(
   table(
-    columns: (auto, 10cm),
+    columns: (4cm, 10cm),
     align: (left, left),
     table.header(
       [*系统调用*], [*功能描述*]
@@ -279,7 +279,7 @@
 
 #figure(
   table(
-    columns: (auto, 10cm),
+    columns: (4cm, 10cm),
     align: (left, left),
     table.header(
       [*系统调用*], [*功能描述*]
@@ -310,7 +310,7 @@
 
 #figure(
   table(
-    columns: (auto, 10cm),
+    columns: (4cm, 10cm),
     align: (left, left),
     table.header(
       [*系统调用*], [*功能描述*]
@@ -337,7 +337,7 @@
 
 #figure(
   table(
-    columns: (auto, 8cm),
+    columns: (4cm, 10cm),
     align: (left, left),
     table.header(
       [*系统调用*], [*功能描述*]
@@ -359,7 +359,7 @@
 
 #figure(
   table(
-    columns: (3cm, 8cm),
+    columns: (4cm, 10cm),
     align: (left, left),
     table.header(
       [*系统调用*], [*功能描述*]

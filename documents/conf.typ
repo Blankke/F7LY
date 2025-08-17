@@ -143,7 +143,7 @@
   }
 
   show link: it => {
-    text(blue, it.body) // 示例：蓝色文本，无下划线
+    underline(text(blue)[#it])
   }
   content
 }
