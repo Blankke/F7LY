@@ -350,7 +350,7 @@ extern HeapMemoryManager k_hmm;
 F7LY 对 LibAllocator 进行了定制性适配，使其不再从物理内存中直接申请页帧，而是通过内核内部的 BuddyAllocator 分配大块内存作为 `L'Major` 的来源。这种结构层次分明、责任明确，既保持了 Buddy 分配器的可控性，也引入了 LibAllocator 在细粒度分配上的高效策略。
 
 #figure(
-  image("fig/buddy-allocator.png", width: 90%),
+  image("fig/buddy-allocator.png", width: 60%),
   caption: [Buddy Allocator 分配示意图],
 ) <fig:buddy-allocator>
 
@@ -595,10 +595,14 @@ F7LY通过`ProcessMemoryManager`类提供了一系列方法来支持进程内存
 1. *检查共享标志*：首先，方法会检查进程内存管理器中的`shared_vm`标志，以确定当前进程是否与其他线程共享内存。
 2. *处理共享内存*：在释放内存前，首先会减少共享内存的引用计数。只有当引用计数降为0时，内存资源才会被实际释放。这样确保了共享内存仅在最后一个引用被释放时才清理掉，从而避免了早期释放导致的悬挂引用问题。 
 3. *释放内存资源*：如果当前进程不共享内存，或者引用计数已经降为0，方法会继续释放所有与进程相关的内存资源，包括页表、堆内存、VMA等。通过调用`pagetable.freewalk_mapped()`来递归释放页表及其映射的物理页，并清理其他内存区域。
-
+#figure(
+  image("fig/进程架构.png", width: 90%),
+  caption: [双管理器进程架构],
+) <fig:process-architecture>
 === 进程管理器
 
 F7LY的进程管理使用类ProcessManager封装对进程的许多操作，并使用全局对象`k_pm`进行管理，既包含了对于当前进程的状态信息获取和修改接口，又作为系统调用和进程结构体这一个体之间的桥梁便于通过系统调用直接对进程进行操作。
+
 
 下面将介绍这一类的公共接口与各字段的含义：
 
@@ -634,10 +638,6 @@ class ProcessManager
 
 当用户态程序需要申请内核资源或执行特权操作时，会通过系统调用进入内核。这一过程由硬件触发用户态到内核态的陷入（`usertrap`），在陷入点内核会根据异常码进行判断，并通过`syscall_handler`包装逻辑进入具体的系统调用处理流程。
 
-#figure(
-  image("fig/进程架构.png", width: 90%),
-  caption: [双管理器进程架构],
-) <fig:process-architecture>
 
 == 文件系统架构
 
@@ -677,7 +677,7 @@ class ProcessManager
    每种文件类型根据其特性，提供不同的读写操作。通过虚函数重载，F7LY能够为每个文件类型实现特定的读写操作，确保文件操作的多样性与高效性。
 
 #figure(
-  image("fig/虚拟文件.png", width: 50%),
+  image("fig/虚拟文件.png", width: 60%),
   caption: [虚拟文件类继承结构],
 ) <fig:virtual-file-hierarchy>
 
@@ -690,7 +690,7 @@ F7LY内核目前仅支持ext4文件系统，但由于系统状态文件（如`pr
 而系统状态文件则通过`virtual_fs`类进行管理，在初始化时会使用虚拟文件的`VirtualContentProvider`来创建和管理这些文件，标记这些文件为动态或静态以便后续与内核状态同步。这样，F7LY的VFS能够同时支持持久化存储的文件系统和非持久化的系统状态文件，提供了灵活且高效的文件访问机制。
 
 #figure(
-  image("fig/文件系统构筑.png", width: 75%),
+  image("fig/文件系统构筑.png", width: 80%),
   caption: [虚拟文件系统架构],
 ) <fig:vfs-architecture>
 
@@ -705,11 +705,11 @@ F7LY内核目前仅支持ext4文件系统，但由于系统状态文件（如`pr
 - open等全局的文件操作通过使用面向过程调用的VFS接口，避免了C++虚类继承机制所带来的性能开销，尤其是在频繁进行文件操作时。    
 - 虚拟文件管理仅在必要时使用虚拟文件封装，从而确保在文件操作时能够快速定位并执行正确的文件类型操作。 
 - 文件读写这类基础操作通过虚函数重载的方式来处理不同类型的文件，实现了代码的灵活性和可扩展性，同时确保了操作的高效性。
+#text()[#h(2em)]通过两次封装，F7LY的VFS能够在保证灵活性的同时，提供高效的文件操作性能。第一层封装是对lwext4库的封装，第二层则是对虚拟文件类的封装，这样既能利用现有成熟库的稳定性，又能在上层提供统一的接口供用户程序调用。
 #figure(
-  image("fig/文件操作.png", width: 100%),
+  image("fig/文件操作.png", width: 80%),
   caption: [两层封装的文件操作],
 ) <fig:file-operation>
-#text()[#h(2em)]通过两次封装，F7LY的VFS能够在保证灵活性的同时，提供高效的文件操作性能。第一层封装是对lwext4库的封装，第二层则是对虚拟文件类的封装，这样既能利用现有成熟库的稳定性，又能在上层提供统一的接口供用户程序调用。
 
 === VFS核心元数据结构剖析
 
@@ -1226,7 +1226,7 @@ static void setup_ipc(void)
 #text()[#h(2em)]这样的方法可以确保每个进程在访问共享内存时都能正确地创建和使用对应的共享内存段。
 
 #figure(
-  image("fig/共享内存空间管理.png", width: 80%),
+  image("fig/共享内存空间管理.png", width: 90%),
   caption: [共享内存管理接口],
 ) <fig:shared-memory>
 
@@ -1309,7 +1309,7 @@ F7LY的管道实现基于虚拟文件系统（VFS），通过`pipe_file`类来�
 ```
 #text()[#h(2em)]管道的读写操作通过`read`和`write`方法实现，支持阻塞和非阻塞模式。基本实现方式是通过`Pipe`类来管理管道的缓冲区和读写指针。
 #figure(
-  image("fig/管道.png", width: 50%),
+  image("fig/管道.png", width: 60%),
   caption: [管道基本实现],
 ) <fig:pipe-basic-implementation>
 ==== 管道管理器
