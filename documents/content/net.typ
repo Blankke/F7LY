@@ -13,7 +13,7 @@ F7LY-OS 的网络系统采用分层架构设计，从底层硬件驱动到上层
 + *VFS 集成层*：将套接字抽象为文件，实现统一的文件操作接口。
 
 #figure(
-  image("fig/netarch.svg", width: 85%),
+  image("fig/netarch.png", width: 85%),
   caption: [网络模块架构示意图],
 ) <fig:netarch>
 === 网络系统初始化流程
