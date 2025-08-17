@@ -179,4 +179,100 @@ namespace proc
         // wakeup2返回实际唤醒的进程数，这是成功的情况
         return woken >= 0 ? woken : syscall::SYS_ESRCH;  // 如果返回负数表示没找到进程
     }
+
+    void futex_cleanup_robust_list(struct robust_list_head *head)
+    {
+        if (!head) {
+            return;
+        }
+
+        Pcb *current = k_pm.get_cur_pcb();
+        
+        // 获取当前线程ID，用于标记mutex的原主人
+        int tid = current->_tid;
+        
+        // 限制遍历次数，防止无限循环
+        const int MAX_ROBUST_ENTRIES = 1000;
+        int count = 0;
+        
+        // 首先处理list_op_pending中可能正在操作的锁
+        if (head->list_op_pending && head->list_op_pending != &head->list) {
+            // 计算futex地址：robust_list地址 + futex_offset
+            uint64 futex_addr = (uint64)head->list_op_pending + head->futex_offset;
+            
+            // 尝试读取并修改futex值
+            uint32 futex_val;
+            if (mem::k_vmm.copy_in(*current->get_pagetable(), 
+                                 (char *)&futex_val, futex_addr, sizeof(futex_val)) == 0) {
+                
+                // 检查这个futex是否真的属于当前线程
+                if ((futex_val & FUTEX_TID_MASK) == (uint32)tid) {
+                    // 标记owner died，保留waiters bit
+                    uint32 new_val = (futex_val & FUTEX_WAITERS) | FUTEX_OWNER_DIED;
+                    
+                    if (mem::k_vmm.copy_out(*current->get_pagetable(), 
+                                          futex_addr, &new_val, sizeof(new_val)) == 0) {
+                        // 如果有等待者，唤醒它们
+                        if (futex_val & FUTEX_WAITERS) {
+                            futex_wakeup(futex_addr, 1, nullptr, 0);
+                        }
+                        printf("[futex_cleanup] Cleaned pending robust futex at 0x%lx\n", futex_addr);
+                    }
+                }
+            }
+        }
+        
+        // 遍历robust_list链表
+        struct robust_list *entry = head->list.next;
+        
+        while (entry && entry != &head->list && count < MAX_ROBUST_ENTRIES) {
+            count++;
+            
+            // 计算futex地址
+            uint64 futex_addr = (uint64)entry + head->futex_offset;
+            
+            // 读取下一个entry，因为我们可能会修改当前entry
+            struct robust_list *next_entry = nullptr;
+            if (mem::k_vmm.copy_in(*current->get_pagetable(), 
+                                 (char *)&next_entry, (uint64)&entry->next, sizeof(next_entry)) != 0) {
+                printf("[futex_cleanup] Failed to read next robust_list entry\n");
+                break;
+            }
+            
+            // 尝试读取并修改futex值
+            uint32 futex_val;
+            if (mem::k_vmm.copy_in(*current->get_pagetable(), 
+                                 (char *)&futex_val, futex_addr, sizeof(futex_val)) == 0) {
+                
+                // 检查这个futex是否真的属于当前线程
+                if ((futex_val & FUTEX_TID_MASK) == (uint32)tid) {
+                    // 标记owner died，保留waiters bit
+                    uint32 new_val = (futex_val & FUTEX_WAITERS) | FUTEX_OWNER_DIED;
+                    
+                    if (mem::k_vmm.copy_out(*current->get_pagetable(), 
+                                          futex_addr, &new_val, sizeof(new_val)) == 0) {
+                        // 如果有等待者，唤醒它们
+                        if (futex_val & FUTEX_WAITERS) {
+                            futex_wakeup(futex_addr, 1, nullptr, 0);
+                        }
+                        printf("[futex_cleanup] Cleaned robust futex at 0x%lx\n", futex_addr);
+                    }
+                } else {
+                    printf("[futex_cleanup] Futex at 0x%lx not owned by current thread (tid=%d, futex_val=0x%x)\n", 
+                           futex_addr, tid, futex_val);
+                }
+            } else {
+                printf("[futex_cleanup] Failed to read futex value at 0x%lx\n", futex_addr);
+            }
+            
+            // 移动到下一个entry
+            entry = next_entry;
+        }
+        
+        if (count >= MAX_ROBUST_ENTRIES) {
+            printf("[futex_cleanup] Warning: Reached maximum robust_list entries limit\n");
+        }
+        
+        printf("[futex_cleanup] Cleaned %d robust futex entries\n", count);
+    }
 }

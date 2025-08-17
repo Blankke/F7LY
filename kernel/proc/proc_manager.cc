@@ -1,4 +1,5 @@
 #include "proc_manager.hh"
+#include "futex.hh"  // 添加futex头文件，用于robust futex清理
 #include "hal/cpu.hh"
 #include "physical_memory_manager.hh"
 #include "klib.hh"
