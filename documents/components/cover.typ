@@ -13,9 +13,9 @@
     // 添加校徽
     #image("../content/fig/校徽.png", width: 10cm)
 
-    #text(size: 字号.特号, font: 字体.宋体, weight: "bold")[*F7LY-OS*]
+    #text(size: 字号.特号, font: "Cambria Math", weight: "bold")[*F7LY-OS*]
 
-    #text(size: 字号.一号, font: 字体.黑体, weight: "bold")[#title]
+    #text(size: 字号.一号, font: 字体.宋体, weight: "bold")[#title]
 
     #v(字号.小四 * 6 * space_scale_ratio)    #v(字号.小四 * 5 * space_scale_ratio)
 
