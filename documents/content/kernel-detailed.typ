@@ -1038,16 +1038,7 @@ if (act->sa_flags & SA_SIGINFO) {
 
 Futex（Fast Userspace Mutex）是Linux内核提供的一种高效用户态同步原语，可用于实现互斥锁、条件变量、信号量等多种同步机制。F7LY借鉴Linux的设计，构建了可扩展的Futex实现，并支持相关系统调用。
 
-```cpp
-struct robust_list {
-    struct robust_list *next;
-};
-struct robust_list_head {
-    robust_list list;           // 链表头
-    long futex_offset;          // futex 字段的相对偏移
-    robust_list *list_op_pending; // 待处理的锁操作
-};
-```
+==== Robust list
 
 F7LY使用`robust_list`结构体作为构成单向链表的节点嵌入在用户空间的锁结构中。内核只需要知道前向链接，用户空间可以使用双向链表实现O(1)的添加和删除。
 
@@ -1059,14 +1050,40 @@ F7LY使用`robust_list`结构体作为构成单向链表的节点嵌入在用户
   - 再将自己添加到列表中。
   - 最后清除此字段。
 
+```cpp
+struct robust_list {
+    struct robust_list *next;
+};
+struct robust_list_head {
+    robust_list list;           // 链表头
+    long futex_offset;          // futex 字段的相对偏移
+    robust_list *list_op_pending; // 待处理的锁操作
+};
+```
+
 Robust Futex的意义是当线程异常终止时，内核可以自动清理该线程持有的锁，防止死锁。
+
+==== Futex Wait 与 Wakeup 机制
+
+F7LY实现的futex系统调用遵循Linux标准，提供了`futex_wait`和`futex_wakeup`两个核心操作。
 
 ```cpp
 int futex_wait(uint64 uaddr, int val, tmm::timespec *timeout);
 int futex_wakeup(uint64 uaddr, int val, void *uaddr2, int val2);
 ```
 
-Futex是现代多线程程序同步的基础设施，可用于实现pthread库的互斥锁、条件变量、读写锁等高级同步原语，既具备高效的用户态自旋性能，又能在需要阻塞时与内核协作实现调度，让同步操作兼具性能和安全性。
+*工作机制*
+
+`futex_wait`首先原子性地检查用户地址`uaddr`处的值是否等于期望值`val`，若不匹配则立即返回`EAGAIN`；若匹配，则将当前进程设置为`SLEEPING`状态并记录等待通道，支持超时和信号中断处理。
+
+`futex_wakeup`通过进程管理器查找等待在目标地址的进程，将其从`SLEEPING`状态恢复到`RUNNABLE`状态，返回实际唤醒的进程数量。
+
+#figure(
+  image("fig/futex.png", width: 70%),
+  caption: [futex工作机制],
+) <fig:signal-handling>
+
+这种设计实现了高效的用户态快速路径：锁可用时直接获取，需要阻塞时才进入内核，显著减少系统调用开销。Futex是现代多线程程序同步的基础设施，可用于实现互斥锁、条件变量等高级同步原语。
 
 === *共享内存机制*
 
