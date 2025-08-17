@@ -25,7 +25,7 @@ r riscv l loongarch:
 
 ifeq ($(ARCH),riscv)
   CROSS_COMPILE := riscv64-linux-gnu-
-  ARCH_CFLAGS := -DRISCV -mcmodel=medany 
+  ARCH_CFLAGS := -DRISCV -mcmodel=medany  
   OUTPUT_PREFIX := riscv
   QEMU_CMD := qemu-system-riscv64 -machine virt -m 128M -nographic -smp 1 -bios default -hdb ${KERNEL_PREFIX}/sdcard-rv-onsite.img -kernel
 else ifeq ($(ARCH),loongarch)
