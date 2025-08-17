@@ -166,7 +166,7 @@ private:
 
 F7LY在其底层根据RISC-V和loongarch的不同硬件设备使用而封装了不同的中断处理器，在不同文件夹下实现了PLIC、EXTIOI、APIC的驱动并应用在中断处理之中。
 
-- *RISC-V*在处理中设定了中断处理的入口（`uservec`）以及返回的入口（`user-` `trapret`），具体逻辑参照了xv6的中断处理，但封装在对象之中，并使用包装函数（`wrap_`前缀的全局函数）设置中断入口。
+- *RISC-V*实现了中断处理的入口（`uservec`）以及返回的入口（`user-trapret`），具体逻辑参照了xv6的中断处理，但封装在对象之中，并使用包装函数（`wrap_`前缀的全局函数）设置中断入口。
 - *Loongarch*针对架构的特殊性设置了TLB重填的处理程序入口（`tlbrefill.S`），以及机器异常的处理程序（`merror.S`），使用类似的逻辑进行接口统一化，使得上层程序可以统一调用。
 
 如果用户程序发出系统调用，或者做了一些非法的事情，或者设备中断，那么在用户空间中执行时就可能会产生陷阱。来自用户空间的陷阱的高级路径是`uservec`，然后是`usertrap`；返回时，先是`usertrapret`，然后是`userret`。
@@ -452,7 +452,7 @@ F7LY目前能够利用缺页异常处理来实现写时复制（Copy on write）
 
 进程是操作系统中资源分配的基本单位。每个进程都有自己独立的地址空间和资源，如内存、文件描述符等。线程是操作系统中CPU调度的基本单位，线程共享所在的进程的地址空间和资源，但是有独立的执行上下文。
 
-许多操作系统内核的设计都将进程和线程分开设计，分别使用Process和Thread结构体来表示。但其实在Linux内核中并没有严格地区分进程和线程，而是通过一组统一的API来操作任务。例如`sys_clone`通过不同的flags组合创建共享不同资源的新任务，因此进程和线程的创建本质上是类似的。F7LY此处统一使用Pcb结构体，并在Pcb中设置globa_id、pid、tid、ppid、pgid等标准Linux进程标识符用于标记进程和线程状态，线程的共享内存状况也一并记录便于管理。
+F7LY没有严格地区分进程和线程，统一使用Pcb结构体记录进程和线程，并在Pcb中设置globa_id、pid、tid、ppid、pgid等标准Linux进程标识符用于标记进程和线程状态，线程的共享内存状况也一并记录便于管理。
 
 ==== PCB的组成
 
@@ -567,8 +567,10 @@ class ProcessMemoryManager
 在F7LY内核中，进程使用独立的内存管理器来支持线程的创建和释放。虽然线程拥有独立的上下文，但它们位于同一进程中，且共享进程的地址空间。这种设计使得线程间可以高效共享内存，同时确保每个线程的上下文是独立的。为了支持线程的共享内存，我们使用了`ProcessMemoryManager`类的多种方法。具体而言，以下方法在F7LY中用于支持线程的共享内存操作：
 
 ```cpp
-ProcessMemoryManager *share_for_thread(); //为线程创建共享内存（增加引用计数）
-ProcessMemoryManager *clone_for_fork(); //为进程创建完全复制的内存管理器
+//为线程创建共享内存（增加引用计数）
+ProcessMemoryManager *share_for_thread(); 
+//为进程创建完全复制的内存管理器
+ProcessMemoryManager *clone_for_fork(); 
 ```
 
 线程的创建与释放流程，尤其在`fork`和`clone`系统调用中，涉及以下步骤：
@@ -634,7 +636,7 @@ class ProcessManager
 当用户态程序需要申请内核资源或执行特权操作时，会通过系统调用进入内核。这一过程由硬件触发用户态到内核态的陷入（`usertrap`），在陷入点内核会根据异常码进行判断，并通过`syscall_handler`包装逻辑进入具体的系统调用处理流程。
 
 #figure(
-  image("fig/进程架构.png", width: 50%),
+  image("fig/进程架构.png", width: 80%),
   caption: [双管理器进程架构],
 ) <fig:process-architecture>
 
@@ -942,8 +944,6 @@ namespace signal
 - `signal_frame`用于保存信号处理过程中的进程上下文；
 - `sigaction`定义每个信号对应的处理行为。
 
-F7LY的信号机制支持包括`SIGCHLD`在内的常用信号。例如，当子进程状态变为Zombie时，内核通过发送`SIGCHLD`信号告知父进程状态变化，同时提供子进程的PID、状态码、用户态和内核态运行时间等信息，为父进程调用`wait4()`等系统调用获取子进程状态提供必要数据。
-
 ==== 信号处理流程
 
 在任务从内核态返回用户态前，需要处理挂起的信号。F7LY在中断处理器`usertrap`中加入`handle_signal()`，在时钟中断或其他中断后及时执行挂起信号：
@@ -1034,9 +1034,33 @@ if (act->sa_flags & SA_SIGINFO) {
   caption: [信号处理流程],
 ) <fig:signal-handling>
 
+==== 信号与系统调用的集成
+
+F7LY的信号机制支持包括`SIGCHLD`在内的常用信号。例如，当子进程状态变为Zombie时，内核通过发送`SIGCHLD`信号告知父进程状态变化，同时提供子进程的PID、状态码、用户态和内核态运行时间等信息，为父进程调用`wait4()`等系统调用获取子进程状态提供必要数据。
+
+在系统调用执行过程中，F7LY内核会根据不同的事件触发相应的信号发送：
+
+- *进程异常终止*：当进程因段错误、非法指令等异常终止时，内核向父进程发送`SIGCHLD`信号，并设置相应的退出状态码。
+- *内存访问违规*：当进程访问无效内存地址或违反内存保护时，内核向该进程发送`SIGSEGV`信号，触发段错误处理。
+- *资源限制违规*：当进程超出系统资源限制（如CPU时间、文件大小）时，内核发送相应的信号（`SIGXCPU`、`SIGXFSZ`）通知进程。
+
+这种信号与系统调用的紧密集成确保了F7LY能够及时响应各种系统事件，为用户态程序提供可靠的异步通知机制。
+
 === Futex
 
 Futex（Fast Userspace Mutex）是Linux内核提供的一种高效用户态同步原语，可用于实现互斥锁、条件变量、信号量等多种同步机制。F7LY借鉴Linux的设计，构建了可扩展的Futex实现，并支持相关系统调用。
+
+==== Robust list
+
+F7LY使用`robust_list`结构体作为构成单向链表的节点嵌入在用户空间的锁结构中。内核只需要知道前向链接，用户空间可以使用双向链表实现O(1)的添加和删除。
+
+- *`list`*：robust locks链表的头节点，如果为空则指向自己。
+- *`futex_offset`*：用户空间设置的相对偏移量，告诉内核futex字段在数据结构中的位置。
+- *`list_op_pending`*：防止线程死亡竞争的字段。
+  - 用户空间首先将此字段设置为即将获取的锁的地址。
+  - 然后执行锁获取操作。
+  - 再将自己添加到列表中。
+  - 最后清除此字段。
 
 ```cpp
 struct robust_list {
@@ -1049,24 +1073,29 @@ struct robust_list_head {
 };
 ```
 
-F7LY使用`robust_list`结构体作为构成单向链表的节点嵌入在用户空间的锁结构中。内核只需要知道前向链接，用户空间可以使用双向链表实现O(1)的添加和删除。
-
-- *`list`*：robust locks链表的头节点，如果为空则指向自己。
-- *`futex_offset`*：用户空间设置的相对偏移量，告诉内核futex字段在数据结构中的位置。
-- *`list_op_pending`*：防止线程死亡竞争的字段。
-  - 用户空间首先将此字段设置为即将获取的锁的地址。
-  - 然后执行锁获取操作。
-  - 再将自己添加到列表中。
-  - 最后清除此字段。
-
 Robust Futex的意义是当线程异常终止时，内核可以自动清理该线程持有的锁，防止死锁。
+
+==== Futex Wait 与 Wakeup 机制
+
+F7LY实现的futex系统调用遵循Linux标准，提供了`futex_wait`和`futex_wakeup`两个核心操作。
 
 ```cpp
 int futex_wait(uint64 uaddr, int val, tmm::timespec *timeout);
 int futex_wakeup(uint64 uaddr, int val, void *uaddr2, int val2);
 ```
 
-Futex是现代多线程程序同步的基础设施，可用于实现pthread库的互斥锁、条件变量、读写锁等高级同步原语，既具备高效的用户态自旋性能，又能在需要阻塞时与内核协作实现调度，让同步操作兼具性能和安全性。
+*工作机制*
+
+`futex_wait`首先原子性地检查用户地址`uaddr`处的值是否等于期望值`val`，若不匹配则立即返回`EAGAIN`；若匹配，则将当前进程设置为`SLEEPING`状态并记录等待通道，支持超时和信号中断处理。
+
+`futex_wakeup`通过进程管理器查找等待在目标地址的进程，将其从`SLEEPING`状态恢复到`RUNNABLE`状态，返回实际唤醒的进程数量。
+
+#figure(
+  image("fig/futex.png", width: 70%),
+  caption: [futex工作机制],
+) <fig:signal-handling>
+
+这种设计实现了高效的用户态快速路径：锁可用时直接获取，需要阻塞时才进入内核，显著减少系统调用开销。Futex是现代多线程程序同步的基础设施，可用于实现互斥锁、条件变量等高级同步原语。
 
 === *共享内存机制*
 
