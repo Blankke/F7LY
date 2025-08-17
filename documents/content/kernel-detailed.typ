@@ -22,7 +22,7 @@ F7LY OS支持双架构启动，机器启动的源文件分别在 `kernel/boot/ri
 
 ```c
 _entry:
-    la sp, stack0           # Load base addr of stack
+    la sp, stack0          # Load base addr of stack
     li t0, 1024*4          # 4KB space per stack
     mv t1, a0              # gain hartid
     addi t1, t1, 1
@@ -56,7 +56,7 @@ void start(uint64 hartid, uint64 dtb_entry)
 
 ==== 主函数初始化
 
-系统初始化分为三个主要阶段：
+系统初始化分为四个主要阶段：
 
 *1. 基础服务初始化*
 ```cpp
@@ -72,7 +72,7 @@ mem::k_vmm.init();
 mem::k_hmm.init();            
 ```
 
-#text()[#h(2em)]*3. 进程和设备管理*
+#text()[#h(2em)]*3. 进程和设备管理初始化*
 ```cpp
 proc::k_pm.init();
 dev::k_devm.register_stdin();
@@ -378,9 +378,7 @@ F7LY采用*静态预配置+管理器分派*的机制进行地址空间管理。�
 
 针对 `mmap` 所涉及的文件映射与匿名映射，F7LY在每个进程控制块（PCB）中*预先分配了一块VMA表区域*，用于记录与管理该进程的虚拟内存区域（VMA），避免了运行时动态结构分配所带来的复杂性与不确定性。
 
-*页表*
-
-PageTable 类用于抽象和管理多级页表结构。其核心成员变量包括：
+*页表* #h(1em)PageTable 类用于抽象和管理多级页表结构。其核心成员变量包括：
 
 - `base_addr`页表的物理基地址，指向页表的起始位置。
 - `_is_global`标记该页表是否为全局页表（如内核页表）。
@@ -394,9 +392,7 @@ PageTable 类用于抽象和管理多级页表结构。其核心成员变量包�
 
 #text()[#h(2em)]在walk函数中，由于RISC-V使用SV39标准页表，而loongarch使用4级页表，二者不可统一，在此处F7LY分别定义了不同的实现，并在编译时根据宏进行区别。
 
-*PTE*
-
-PTE类封装了单个页表项（Page Table Entry），通常包含如下信息：
+*PTE* #h(1em)PTE类封装了单个页表项（Page Table Entry），通常包含如下信息：
 
 - 物理页帧号（PPN）。
 - 有效位（Valid）、读/写/执行权限（R/W/X）、用户/超级用户位（U/S）等标志位。
