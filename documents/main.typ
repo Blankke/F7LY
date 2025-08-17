@@ -27,7 +27,7 @@
 
 #include "content/syscall.typ"
 
+#include "content/net.typ"
 #include "content/summary.typ"
-
 
 #include "content/appendix.typ"
