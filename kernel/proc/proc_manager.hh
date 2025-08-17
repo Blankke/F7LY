@@ -21,8 +21,8 @@ namespace proc
         SpinLock _pid_lock;        // 进程ID锁
         SpinLock _tid_lock;        // 线程ID锁
         SpinLock _wait_lock;       // 等待锁
-        int _cur_pid;              // 当前分配的最大PID
-        int _cur_tid;              // 当前分配的最大TID
+        uint _cur_pid;              // 当前分配的最大PID
+        uint _cur_tid;              // 当前分配的最大TID
         Pcb *_init_proc;           // 用户init进程
         uint _last_alloc_proc_gid; // 上次分配的进程组ID
 
