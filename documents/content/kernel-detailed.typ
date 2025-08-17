@@ -198,7 +198,7 @@ private:
 F7LY 在支持多架构内核时，并未采用"一体适配"的简化策略，而是根据架构自身特性量身定制内核布局，以保障启动路径的最小依赖性和最大清晰性。
 
 #figure(
-  image("fig/决赛内核地址空间.png", width: 90%),
+  image("fig/决赛内核地址空间.png", width: 75%),
   caption: [内核地址空间布局],
 ) <fig:address-layout>
 
@@ -216,7 +216,7 @@ F7LY的地址空间设计参考了xv6的物理地址布局，采用分离的内�
 对于用户地址空间，F7LY实现了现代化的进程内存管理架构，使用ProcessMemoryManager统一管理每个进程的内存布局：
 
 #figure(
-  image("fig/决赛用户地址空间.png", width: 85%),
+  image("fig/决赛用户地址空间.png", width: 75%),
   caption: [用户地址空间布局],
 ) <fig:user-address-layout>
 
@@ -294,7 +294,7 @@ void PhysicalMemoryManager::init()
 #text()[#h(2em)]对于更细粒度的大小分配（函数`kmalloc`），F7LY采用了linux的`SlabAllocator`。slab allocator背后的思想是缓存经常使用的object并保持在初始状态供kernel使用。如果被基于object的allocator，内核将耗费很多时间在分配，初始化和释放相同的object。slab allocator的目的就是缓存一些被释放的object因此这些基础的structures在多次调用期间被预留起来。
 
 #figure(
-  image("fig/物理内存管理.png", width: 80%),
+  image("fig/物理内存管理.png", width: 70%),
   caption: [物理内存管理],
 ) <fig:physical-memory-management>
 
@@ -319,7 +319,7 @@ private:
 #text()[#h(2em)]Slab与Buddy二者分层次调用即可实现细粒度的物理内存分配，更小块的内存分配可以帮忙消除buddy allocator原本会造成的内部碎片问题。
 
 #figure(
-  image("fig/堆空间管理.png", width: 80%),
+  image("fig/堆空间管理.png", width: 70%),
   caption: [堆空间管理],
 ) <fig:heap-layout>
 
@@ -439,7 +439,7 @@ struct vma
 F7LY目前能够利用缺页异常处理来实现写时复制（Copy on write）、地址空间的懒分配（Lazy page allocation）以及用户的地址检查机制。
 
 #figure(
-  image("fig/缺页.png", width: 70%),
+  image("fig/缺页.png", width: 50%),
   caption: [缺页异常处理流程],
 ) <fig:page-fault>
 
@@ -635,7 +635,7 @@ class ProcessManager
 当用户态程序需要申请内核资源或执行特权操作时，会通过系统调用进入内核。这一过程由硬件触发用户态到内核态的陷入（`usertrap`），在陷入点内核会根据异常码进行判断，并通过`syscall_handler`包装逻辑进入具体的系统调用处理流程。
 
 #figure(
-  image("fig/进程架构.png", width: 80%),
+  image("fig/进程架构.png", width: 90%),
   caption: [双管理器进程架构],
 ) <fig:process-architecture>
 
@@ -677,7 +677,7 @@ class ProcessManager
    每种文件类型根据其特性，提供不同的读写操作。通过虚函数重载，F7LY能够为每个文件类型实现特定的读写操作，确保文件操作的多样性与高效性。
 
 #figure(
-  image("fig/虚拟文件.png", width: 70%),
+  image("fig/虚拟文件.png", width: 50%),
   caption: [虚拟文件类继承结构],
 ) <fig:virtual-file-hierarchy>
 
@@ -706,7 +706,7 @@ F7LY内核目前仅支持ext4文件系统，但由于系统状态文件（如`pr
 - 虚拟文件管理仅在必要时使用虚拟文件封装，从而确保在文件操作时能够快速定位并执行正确的文件类型操作。 
 - 文件读写这类基础操作通过虚函数重载的方式来处理不同类型的文件，实现了代码的灵活性和可扩展性，同时确保了操作的高效性。
 #figure(
-  image("fig/文件操作.png", width: 75%),
+  image("fig/文件操作.png", width: 100%),
   caption: [两层封装的文件操作],
 ) <fig:file-operation>
 #text()[#h(2em)]通过两次封装，F7LY的VFS能够在保证灵活性的同时，提供高效的文件操作性能。第一层封装是对lwext4库的封装，第二层则是对虚拟文件类的封装，这样既能利用现有成熟库的稳定性，又能在上层提供统一的接口供用户程序调用。
@@ -718,7 +718,7 @@ F7LY内核目前仅支持ext4文件系统，但由于系统状态文件（如`pr
 Buffer用于管理磁盘数据的内存缓冲区。它提供了磁盘扇区数据在内存中的抽象表示。F7LY的缓冲区容器（BufferBlock），组织和管理一组相关的磁盘缓冲区，用于组成了链表节点，串接而成一块缓冲数据链。
 
 #figure(
-  image("fig/os-buffer-pool.png", width: 75%),
+  image("fig/os-buffer-pool.png", width: 55%),
   caption: [Buffer缓冲区管理],
 ) <fig:buffer-pool>
 
@@ -901,12 +901,12 @@ F7LY内核实现了完整的虚拟文件系统，为应用程序提供了类Linu
     - 封印状态存储在 `f->_seals` 与 `f->_sealing_allowed` 字段中。        
 ==== 文件扩展属性
 F7LY 在移植 `lwext4` 库时，保留了其完整的扩展属性支持，并在 VFS 层进行了封装，实现了如下功能：
-==== *xattr 支持*    
+==== xattr 支持    
     - `lwext4` 子系统实现了完整的 xattr 接口：        
         - `sys_setxattr`, `sys_lsetxattr`, `sys_fsetxattr`            
         - `sys_getxattr`, `sys_lgetxattr`, `sys_fgetxattr`            
     - 提供 `set/get/list/remove` 等操作，能够满足常见的扩展属性管理需求。        
-==== *inode flags 管理*   
+==== inode flags 管理  
     - 通过 `ioctl` 系统调用支持 `FS_IOC_GETFLAGS (0x6601)` 与 `FS_IOC_SETFLAGS (0x6602)`，可对 ext4 inode flags 进行查询和设置。
 
 == 进程间通信
@@ -1029,7 +1029,7 @@ if (act->sa_flags & SA_SIGINFO) {
 #text()[#h(2em)]同时，F7LY还在栈顶设置了信号哨兵`guard`，用于检测栈溢出或非法访问。信号处理函数在执行前会在栈上压入哨兵值，返回值检查哨兵值是否一致，确保栈空间安全。
 
 #figure(
-  image("fig/信号处理.png", width: 70%),
+  image("fig/信号处理.png", width: 90%),
   caption: [信号处理流程],
 ) <fig:signal-handling>
 
@@ -1226,7 +1226,7 @@ static void setup_ipc(void)
 #text()[#h(2em)]这样的方法可以确保每个进程在访问共享内存时都能正确地创建和使用对应的共享内存段。
 
 #figure(
-  image("fig/共享内存空间管理.png", width: 75%),
+  image("fig/共享内存空间管理.png", width: 80%),
   caption: [共享内存管理接口],
 ) <fig:shared-memory>
 
