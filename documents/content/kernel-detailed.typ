@@ -38,7 +38,7 @@ _entry:
 - `a1`：设备树地址信息dtb_entry  。
 - `sp`：已在entry.S中设置完成。
 
-主要工作：
+#text()[#h(2em)]主要工作：
 - 关闭分页机制，使用物理地址访问
 - 设置临时trap处理函数为死循环
 - 将hartid保存到tp寄存器供后续使用
@@ -65,14 +65,14 @@ trap_mgr.init();
 plic_mgr.init();               
 ```
 
-*2. 内存管理初始化*
+#text()[#h(2em)]*2. 内存管理初始化*
 ```cpp
 mem::k_pmm.init();             
 mem::k_vmm.init();             
 mem::k_hmm.init();            
 ```
 
-*3. 进程和设备管理*
+#text()[#h(2em)]*3. 进程和设备管理*
 ```cpp
 proc::k_pm.init();
 dev::k_devm.register_stdin();
@@ -80,7 +80,7 @@ riscv::qemu::disk_driver.init();
 syscall::k_syscall_handler.init(); 
 ```
 
-*4. 启动用户进程和调度器*
+#text()[#h(2em)]*4. 启动用户进程和调度器*
 ```cpp
 proc::k_pm.user_init(); 
 proc::k_scheduler.start_schedule(); 
@@ -107,7 +107,7 @@ li.w        $t0, 0x01                   # FPE=1, SXE=0, ASXE=0, BTE=0
 csrwr       $t0, LOONGARCH_CSR_EUEN
 ```
 
-其余大部分启动的基本流程与riscv类似，在中断与虚拟化方面LoongArch架构采用不同的启动方式：
+#text()[#h(2em)]其余大部分启动的基本流程与riscv类似，在中断与虚拟化方面LoongArch架构采用不同的启动方式：
 - 使用ACPI控制器进行硬件发现和初始化。
 - 通过APIC和ExtiOI进行中断管理。
 - 支持LoongArch原生的虚拟化和安全特性。
@@ -139,7 +139,7 @@ void main()
 Kernel space successfully initialized
 ```
 
-此时内核已完成所有初始化工作，进入正常的多进程调度运行状态。
+#text()[#h(2em)]此时内核已完成所有初始化工作，进入正常的多进程调度运行状态。
 
 == 中断管理器
 
@@ -164,12 +164,12 @@ private:
 };
 ```
 
-F7LY在其底层根据RISC-V和loongarch的不同硬件设备使用而封装了不同的中断处理器，在不同文件夹下实现了PLIC、EXTIOI、APIC的驱动并应用在中断处理之中。
+#text()[#h(2em)]F7LY在其底层根据RISC-V和loongarch的不同硬件设备使用而封装了不同的中断处理器，在不同文件夹下实现了PLIC、EXTIOI、APIC的驱动并应用在中断处理之中。
 
 - *RISC-V*实现了中断处理的入口（`uservec`）以及返回的入口（`user-trapret`），具体逻辑参照了xv6的中断处理，但封装在对象之中，并使用包装函数（`wrap_`前缀的全局函数）设置中断入口。
 - *Loongarch*针对架构的特殊性设置了TLB重填的处理程序入口（`tlbrefill.S`），以及机器异常的处理程序（`merror.S`），使用类似的逻辑进行接口统一化，使得上层程序可以统一调用。
 
-如果用户程序发出系统调用，或者做了一些非法的事情，或者设备中断，那么在用户空间中执行时就可能会产生陷阱。来自用户空间的陷阱的高级路径是`uservec`，然后是`usertrap`；返回时，先是`usertrapret`，然后是`userret`。
+#text()[#h(2em)]如果用户程序发出系统调用，或者做了一些非法的事情，或者设备中断，那么在用户空间中执行时就可能会产生陷阱。来自用户空间的陷阱的高级路径是`uservec`，然后是`usertrap`；返回时，先是`usertrapret`，然后是`userret`。
 
 首先通过`crmd`寄存器确认陷阱确实来自用户模式，然后将中断入口点（`eentry`）设为`kernelvec`，并获取当前进程信息并保存用户程序计数器。
 
@@ -187,7 +187,7 @@ F7LY在其底层根据RISC-V和loongarch的不同硬件设备使用而封装了�
 - *未知陷阱*：
   - 打印错误信息并标记进程为已终止。
 
-如果是时钟中断（`which_dev == 2`），则增加时间片计数，当达到阈值（10个时间片）时调用`yield`。最后调用 `usertrapret()` 函数返回用户态，该函数负责恢复用户态执行环境。
+#text()[#h(2em)]如果是时钟中断（`which_dev == 2`），则增加时间片计数，当达到阈值（10个时间片）时调用`yield`。最后调用 `usertrapret()` 函数返回用户态，该函数负责恢复用户态执行环境。
 
 == 内存管理
 
@@ -197,14 +197,15 @@ F7LY在其底层根据RISC-V和loongarch的不同硬件设备使用而封装了�
 
 F7LY 在支持多架构内核时，并未采用"一体适配"的简化策略，而是根据架构自身特性量身定制内核布局，以保障启动路径的最小依赖性和最大清晰性。
 
-对于RISC-V，qemu的入口地址位于`0x8020_0000`。在此处，F7LY采用OPENSBI自动识别内核的ELF文件入口地址（LMA），低地址采用直接映射的方式映射所有MMIO设备以及内核代码。因为在进入到`entry.S`时仍然未开启分页，所以映射时低处地址采用直接映射便于访问。
-
-与RISC-V使用 QEMU 默认跳转地址（`0x80200000`）不同，LoongArch 架构的启动顺序允许我们将内核加载地址与运行地址（VMA = LMA）分离，从而更灵活地构造分页映射策略。F7LY的LoongArch端应用loongarch的直接映射窗口，在链接脚本处使用`0x9000000080000000`加载内核镜像。
-
 #figure(
   image("fig/决赛内核地址空间.png", width: 90%),
   caption: [内核地址空间布局],
 ) <fig:address-layout>
+
+#text()[#h(2em)]对于RISC-V，qemu的入口地址位于`0x8020_0000`。在此处，F7LY采用OPENSBI自动识别内核的ELF文件入口地址（LMA），低地址采用直接映射的方式映射所有MMIO设备以及内核代码。因为在进入到`entry.S`时仍然未开启分页，所以映射时低处地址采用直接映射便于访问。
+
+与RISC-V使用 QEMU 默认跳转地址（`0x80200000`）不同，LoongArch 架构的启动顺序允许我们将内核加载地址与运行地址（VMA = LMA）分离，从而更灵活地构造分页映射策略。F7LY的LoongArch端应用loongarch的直接映射窗口，在链接脚本处使用`0x9000000080000000`加载内核镜像。
+
 
 ==== 地址空间布局
 
@@ -214,6 +215,11 @@ F7LY的地址空间设计参考了xv6的物理地址布局，采用分离的内�
 
 对于用户地址空间，F7LY实现了现代化的进程内存管理架构，使用ProcessMemoryManager统一管理每个进程的内存布局：
 
+#figure(
+  image("fig/决赛用户地址空间.png", width: 85%),
+  caption: [用户地址空间布局],
+) <fig:user-address-layout>
+
 - *程序段管理*：通过program_section_desc结构记录ELF加载的各个段（代码段、数据段、BSS段等），每个段包含起始地址、大小和调试名称，支持动态链接和静态链接程序。
 
 - *堆内存管理*：使用heap_start和heap_end指针管理进程堆空间，堆空间紧接在程序段之后分配。通过grow_heap()和shrink_heap()接口支持动态扩展和收缩，与传统的brk系统调用兼容。
@@ -222,10 +228,7 @@ F7LY的地址空间设计参考了xv6的物理地址布局，采用分离的内�
 
 - *引用计数管理*：ProcessMemoryManager实现了引用计数机制，支持进程间内存共享（如使用CLONE_VM标志的clone行为）。
 
-#figure(
-  image("fig/决赛用户地址空间.png", width: 90%),
-  caption: [用户地址空间布局],
-) <fig:user-address-layout>
+
 
 === 物理内存管理
 
@@ -250,7 +253,7 @@ private:
 }
 ```
 
-伙伴分配器(Buddy Allocator)通过分配和管理内存块来满足不同大小的内存请求，并进行高效的合并和分割操作。其优点在于分配和释放内存块的操作非常快速，且通过内存块大小的选择和合并操作，有效减少了外部碎片。但是对于页面内部的空间碎片，需要更细粒度的管理器进行分配，考虑到空闲物理空间与内核堆空间应用场景的不同，我们选择使用不同的细粒度分配器进行管理。
+#text()[#h(2em)]伙伴分配器(Buddy Allocator)通过分配和管理内存块来满足不同大小的内存请求，并进行高效的合并和分割操作。其优点在于分配和释放内存块的操作非常快速，且通过内存块大小的选择和合并操作，有效减少了外部碎片。但是对于页面内部的空间碎片，需要更细粒度的管理器进行分配，考虑到空闲物理空间与内核堆空间应用场景的不同，我们选择使用不同的细粒度分配器进行管理。
 
 ==== 内核物理内存
 
@@ -273,7 +276,7 @@ private:
 extern PhysicalMemoryManager k_pmm;
 ```
 
-`k_pmm`在初始化时会使用地址布局中的地址标志(`pa_start`)，原本Buddy的初始化放在这里，Buddy变成pmm的一个成员`pa_start`是buddy系统在物理内存中的起始地址，加上一个`Sizeof(BuddySystem)`后后面存的东西是tree，然后tree存完了之后才是buddy系统管理的那块内存。加上的BSSIZE是预留来放BuddySystem的大小和tree的大小，这之后才是buddy系统管理的那块内存，这时`pa_start`指向的就是buddy系统管理的那块内存的开始地址，再被初始化为buddy的基址。
+#text()[#h(2em)]`k_pmm`在初始化时会使用地址布局中的地址标志(`pa_start`)，原本Buddy的初始化放在这里，Buddy变成pmm的一个成员`pa_start`是buddy系统在物理内存中的起始地址，加上一个`Sizeof(BuddySystem)`后后面存的东西是tree，然后tree存完了之后才是buddy系统管理的那块内存。加上的BSSIZE是预留来放BuddySystem的大小和tree的大小，这之后才是buddy系统管理的那块内存，这时`pa_start`指向的就是buddy系统管理的那块内存的开始地址，再被初始化为buddy的基址。
 
 ```cpp
 void PhysicalMemoryManager::init()
@@ -288,14 +291,14 @@ void PhysicalMemoryManager::init()
 }
 ```
 
-对于更细粒度的大小分配（函数`kmalloc`），F7LY采用了linux的`SlabAllocator`。slab allocator背后的思想是缓存经常使用的object并保持在初始状态供kernel使用。如果被基于object的allocator，内核将耗费很多时间在分配，初始化和释放相同的object。slab allocator的目的就是缓存一些被释放的object因此这些基础的structures在多次调用期间被预留起来。
+#text()[#h(2em)]对于更细粒度的大小分配（函数`kmalloc`），F7LY采用了linux的`SlabAllocator`。slab allocator背后的思想是缓存经常使用的object并保持在初始状态供kernel使用。如果被基于object的allocator，内核将耗费很多时间在分配，初始化和释放相同的object。slab allocator的目的就是缓存一些被释放的object因此这些基础的structures在多次调用期间被预留起来。
 
 #figure(
   image("fig/物理内存管理.png", width: 80%),
   caption: [物理内存管理],
 ) <fig:physical-memory-management>
 
-slab allocator由一组cache组成，这些cache由一个叫做cache chain的双向循环链表连接在一起。在slab allocator的上下文件，一个cache就是一个管理许多像`mm_struct`或者`fs_cache`这种特殊类型的object的管理者。这些cache通过cache struct的next字段连接在一起。
+#text()[#h(2em)]slab allocator由一组cache组成，这些cache由一个叫做cache chain的双向循环链表连接在一起。在slab allocator的上下文件，一个cache就是一个管理许多像`mm_struct`或者`fs_cache`这种特殊类型的object的管理者。这些cache通过cache struct的next字段连接在一起。
 
 每一cache维护了有多个连续物理page组成的block，这些block称之为slab。slab被切分成很多小块来存放slab自身的数据结构和其管理的object。
 
@@ -313,7 +316,7 @@ private:
 }
 ```
 
-Slab与Buddy二者分层次调用即可实现细粒度的物理内存分配，更小块的内存分配可以帮忙消除buddy allocator原本会造成的内部碎片问题。
+#text()[#h(2em)]Slab与Buddy二者分层次调用即可实现细粒度的物理内存分配，更小块的内存分配可以帮忙消除buddy allocator原本会造成的内部碎片问题。
 
 #figure(
   image("fig/堆空间管理.png", width: 80%),
@@ -340,7 +343,7 @@ public:
 extern HeapMemoryManager k_hmm;
 ```
 
-对于堆，设置管理类`HeapMemoryManager`并创建全局对象`k_hmm`进行管理。`k_hmm`在初始化时会从堆地址开始初始化Buddy System，并将此处划分为堆空间。
+#text()[#h(2em)]对于堆，设置管理类`HeapMemoryManager`并创建全局对象`k_hmm`进行管理。`k_hmm`在初始化时会从堆地址开始初始化Buddy System，并将此处划分为堆空间。
 
 为提升堆分配的性能、减少碎片，我们在堆空间上引入了第三方高效内存分配器LibAllocator#footnote[https://github.com/blanham/liballoc]，主要用于进行高效内存管理。分配器设计为二层结构：上层是*粗粒度分配器（`L'Major`）*，负责大块内存获取；下层是*细粒度分配器（`L'Minor`）*，用于将大块切分成适用于常规 `new`/`malloc` 调用的空间，极大提升了小对象分配的效率。
 
@@ -351,7 +354,7 @@ F7LY 对 LibAllocator 进行了定制性适配，使其不再从物理内存中�
   caption: [Buddy Allocator 分配示意图],
 ) <fig:buddy-allocator>
 
-F7LY 重载了标准的 `new` / `delete` 运算符，使其默认在堆空间上分配内存并交由 `k_hmm` 管理：
+#text()[#h(2em)]F7LY 重载了标准的 `new` / `delete` 运算符，使其默认在堆空间上分配内存并交由 `k_hmm` 管理：
 
 ```cpp
 void * operator new(uint64 size)
@@ -367,7 +370,7 @@ void operator delete(void * p) noexcept
 // 省略展示其余用法的new和delete运算符。
 ```
 
-通过这种方式，内核中的对象创建和销毁行为得以统一，所有堆内分配操作均通过 `k_hmm` 路由，有效避免了裸指针操作和分配器混用的问题。
+#text()[#h(2em)]通过这种方式，内核中的对象创建和销毁行为得以统一，所有堆内分配操作均通过 `k_hmm` 路由，有效避免了裸指针操作和分配器混用的问题。
 
 ==== 地址空间管理
 
@@ -389,7 +392,7 @@ PageTable 类用于抽象和管理多级页表结构。其核心成员变量包�
 - `freewalk()` / `freewalk_mapped()`：递归释放页表及其映射的物理页。
 - `get_pte(index)` / `set_pte(index, pte)`：获取/设置指定索引的 PTE。
 
-在walk函数中，由于RISC-V使用SV39标准页表，而loongarch使用4级页表，二者不可统一，在此处F7LY分别定义了不同的实现，并在编译时根据宏进行区别。
+#text()[#h(2em)]在walk函数中，由于RISC-V使用SV39标准页表，而loongarch使用4级页表，二者不可统一，在此处F7LY分别定义了不同的实现，并在编译时根据宏进行区别。
 
 *PTE*
 
@@ -433,7 +436,7 @@ struct vma
 };
 ```
 
-当用户态调用 `mmap` 系统调用时，内核会查找该进程 PCB 中的空闲 VMA 槽位，将映射信息记录其中，并返回分配好的虚拟地址。若为文件映射，则填入对应的 `vfile` 和 `offset` 字段；若为匿名映射，则标记 `flags` 中的 `MAP_ANONYMOUS`，并将 `vfile` 设为 `nullptr`。
+#text()[#h(2em)]当用户态调用 `mmap` 系统调用时，内核会查找该进程 PCB 中的空闲 VMA 槽位，将映射信息记录其中，并返回分配好的虚拟地址。若为文件映射，则填入对应的 `vfile` 和 `offset` 字段；若为匿名映射，则标记 `flags` 中的 `MAP_ANONYMOUS`，并将 `vfile` 设为 `nullptr`。
 
 ==== 缺页异常处理
 
@@ -444,7 +447,7 @@ F7LY目前能够利用缺页异常处理来实现写时复制（Copy on write）
   caption: [缺页异常处理流程],
 ) <fig:page-fault>
 
-当用户程序因缺页异常进入内核时，两个架构的异常处理程序使用同样的处理逻辑，先检查缺页的地址是否处于物理空间，或处于vma记录的地址空间内，若是，则分配物理页面并建立映射。若不是，则抛出缺页错误。
+#text()[#h(2em)]当用户程序因缺页异常进入内核时，两个架构的异常处理程序使用同样的处理逻辑，先检查缺页的地址是否处于物理空间，或处于vma记录的地址空间内，若是，则分配物理页面并建立映射。若不是，则抛出缺页错误。
 
 == 进程管理
 
@@ -480,7 +483,7 @@ extern Pcb k_proc_pool[num_process];
   [ZOMBIE], [进程已终止，但PCB依然存在，以便父进程读取退出状态并等待回收],
 )
 
-进程状态的切换如下：
+#text()[#h(2em)]进程状态的切换如下：
 
 - 创建进程池时构造函数中赋值UNUSED
 - `alloc_proc()`从空闲进程中初始化时创建用户页表分配物理空间，并切换为USED。
@@ -520,7 +523,7 @@ public:
   caption: [上下文切换],
 ) <fig:context-switch>
 
-`swtch`对线程没有直接的了解；它只是保存和恢复上下文（Contexts），`call_sched`调用`swtch`切换到`cpu->scheduler`，即每个CPU的调度程序上下文。调度程序上下文之前通过`scheduler`对`swtch`（`swtch(&p->_context, cpu` `->get_context());`）的调用进行了保存。当我们追踪`swtch`到返回时，它返回到`scheduler`而不是`sched`。
+#text()[#h(2em)]`swtch`对线程没有直接的了解；它只是保存和恢复上下文（Contexts），`call_sched`调用`swtch`切换到`cpu->scheduler`，即每个CPU的调度程序上下文。调度程序上下文之前通过`scheduler`对`swtch`（`swtch(&p->_context, cpu` `->get_context());`）的调用进行了保存。当我们追踪`swtch`到返回时，它返回到`scheduler`而不是`sched`。
 
 ==== 有栈协程调度
 
@@ -573,7 +576,7 @@ ProcessMemoryManager *share_for_thread();
 ProcessMemoryManager *clone_for_fork(); 
 ```
 
-线程的创建与释放流程，尤其在`fork`和`clone`系统调用中，涉及以下步骤：
+#text()[#h(2em)]线程的创建与释放流程，尤其在`fork`和`clone`系统调用中，涉及以下步骤：
 
 1. *分配与初始化子Pcb*：在调用`fork`和`clone`时，首先会为子进程分配并初始化一个新的进程控制块（Pcb）。    
 2. *复制/共享打开文件*：在新创建的Pcb中，子进程会继承父进程的文件描述符，这些描述符指向相同的文件对象。 
@@ -619,7 +622,7 @@ class ProcessManager
 };
 ```
 
-`ProcessManager`类的功能可以分为两个主要部分：
+#text()[#h(2em)]`ProcessManager`类的功能可以分为两个主要部分：
 
 1. *进程状态管理*：
    - 分配与释放进程：`ProcessManager`负责进程的生命周期管理，包括进程的创建、销毁、以及资源的回收。每当一个新进程需要创建时，它会调用`ProcessManager`来分配进程ID（PID）并初始化进程相关的资源。当进程结束时，`ProcessManager`会负责清理并回收进程所占用的内存和其他资源。   
@@ -631,7 +634,7 @@ class ProcessManager
    - 进程调度与切换：`ProcessManager`与调度器协同工作，管理进程的调度和上下文切换。它确保在多任务环境下，CPU资源能够公平地分配给各个进程，并根据优先级和状态进行调度。
    - 信号处理与进程间通信：`ProcessManager`还负责处理进程间的信号传递和通信机制，确保进程能够响应外部事件和内部状态变化。
 
-执行用户态程序的流程是：首先使用`fork`创建一个子进程，然后通过`execve`加载ELF文件中的用户程序，将原进程的内存空间和执行上下文替换为新程序的资源，并从ELF文件定义的入口地址（entry）开始执行。
+#text()[#h(2em)]执行用户态程序的流程是：首先使用`fork`创建一个子进程，然后通过`execve`加载ELF文件中的用户程序，将原进程的内存空间和执行上下文替换为新程序的资源，并从ELF文件定义的入口地址（entry）开始执行。
 
 当用户态程序需要申请内核资源或执行特权操作时，会通过系统调用进入内核。这一过程由硬件触发用户态到内核态的陷入（`usertrap`），在陷入点内核会根据异常码进行判断，并通过`syscall_handler`包装逻辑进入具体的系统调用处理流程。
 
@@ -695,7 +698,7 @@ F7LY内核目前仅支持ext4文件系统，但由于系统状态文件（如`pr
   caption: [虚拟文件系统架构],
 ) <fig:vfs-architecture>
 
-目前状态文件支持的路径包括：
+#text()[#h(2em)]目前状态文件支持的路径包括：
 - `/proc/`：包含进程信息、系统状态等动态内容。
 - `/sys/`：包含系统硬件信息、内核参数等静态内容。
 - `/dev/`：包含设备文件，提供对硬件设备的访问接口。
@@ -710,7 +713,7 @@ F7LY内核目前仅支持ext4文件系统，但由于系统状态文件（如`pr
   image("fig/文件操作.png", width: 75%),
   caption: [两层封装的文件操作],
 ) <fig:file-operation>
-通过两次封装，F7LY的VFS能够在保证灵活性的同时，提供高效的文件操作性能。第一层封装是对lwext4库的封装，第二层则是对虚拟文件类的封装，这样既能利用现有成熟库的稳定性，又能在上层提供统一的接口供用户程序调用。
+#text()[#h(2em)]通过两次封装，F7LY的VFS能够在保证灵活性的同时，提供高效的文件操作性能。第一层封装是对lwext4库的封装，第二层则是对虚拟文件类的封装，这样既能利用现有成熟库的稳定性，又能在上层提供统一的接口供用户程序调用。
 
 === VFS核心元数据结构剖析
 
@@ -857,7 +860,7 @@ F7LY内核实现了完整的虚拟文件系统，为应用程序提供了类Linu
 - `/dev/loop0` - `/dev/loop7` - Loop块设备，支持文件系统镜像挂载
 - `/dev/block/8:0` - 块设备文件
 
-特别地，F7LY的Loop设备支持使得系统能够将文件作为块设备进行挂载，这为文件系统镜像的使用和测试提供了重要支持。通过Loop设备，用户可以挂载ISO镜像、磁盘镜像等文件，极大地扩展了文件系统的灵活性。
+#text()[#h(2em)]特别地，F7LY的Loop设备支持使得系统能够将文件作为块设备进行挂载，这为文件系统镜像的使用和测试提供了重要支持。通过Loop设备，用户可以挂载ISO镜像、磁盘镜像等文件，极大地扩展了文件系统的灵活性。
 
 这些虚拟文件通过专门的Provider类实现，每个Provider负责生成对应文件的内容，确保了系统信息的实时性和准确性。虚拟文件系统的实现使得F7LY能够很好地兼容标准的Linux应用程序和系统工具。
 === 额外的文件功能
@@ -939,7 +942,7 @@ namespace signal
 }
 ```
 
-这些结构体与POSIX标准中的`siginfo_t`语义接近，增强了对标准接口的兼容性；
+#text()[#h(2em)]这些结构体与POSIX标准中的`siginfo_t`语义接近，增强了对标准接口的兼容性；
 
 - `signal_frame`用于保存信号处理过程中的进程上下文；
 - `sigaction`定义每个信号对应的处理行为。
@@ -999,7 +1002,7 @@ F7LY实现了完整的用户自定义信号处理机制，支持完整的上下�
 - 信号处理时将EPC（返回地址）设置到汇编实现的`sig_trampoline`函数；
 - `sig_trampoline`唯一作用是触发`ecall`，调用`SYS_rt_sigreturn`系统调用，执行上下文恢复。
 
-这一设计使得F7LY在支持自定义信号处理时能保证上下文正确性，安全地完成用户态与内核态的切换。
+#text()[#h(2em)]这一设计使得F7LY在支持自定义信号处理时能保证上下文正确性，安全地完成用户态与内核态的切换。
 
 对于flag中包含了`SA_SIGINFO`的信号，F7LY支持传递`LinuxSigInfo`结构体作为参数，提供更多信号上下文信息:
 - 在进入信号处理函数时，内核会将装填`LinuxSigInfo`结构体, 并将其存放到栈上传递给用户态处理函数。
@@ -1027,7 +1030,7 @@ if (act->sa_flags & SA_SIGINFO) {
 }
 ```
 
-同时，F7LY还在栈顶设置了信号哨兵`guard`，用于检测栈溢出或非法访问。信号处理函数在执行前会在栈上压入哨兵值，返回值检查哨兵值是否一致，确保栈空间安全。
+#text()[#h(2em)]同时，F7LY还在栈顶设置了信号哨兵`guard`，用于检测栈溢出或非法访问。信号处理函数在执行前会在栈上压入哨兵值，返回值检查哨兵值是否一致，确保栈空间安全。
 
 #figure(
   image("fig/信号处理.png", width: 70%),
@@ -1044,7 +1047,7 @@ F7LY的信号机制支持包括`SIGCHLD`在内的常用信号。例如，当子�
 - *内存访问违规*：当进程访问无效内存地址或违反内存保护时，内核向该进程发送`SIGSEGV`信号，触发段错误处理。
 - *资源限制违规*：当进程超出系统资源限制（如CPU时间、文件大小）时，内核发送相应的信号（`SIGXCPU`、`SIGXFSZ`）通知进程。
 
-这种信号与系统调用的紧密集成确保了F7LY能够及时响应各种系统事件，为用户态程序提供可靠的异步通知机制。
+#text()[#h(2em)]这种信号与系统调用的紧密集成确保了F7LY能够及时响应各种系统事件，为用户态程序提供可靠的异步通知机制。
 
 === Futex
 
@@ -1073,7 +1076,7 @@ struct robust_list_head {
 };
 ```
 
-Robust Futex的意义是当线程异常终止时，内核可以自动清理该线程持有的锁，防止死锁。
+#text()[#h(2em)]Robust Futex的意义是当线程异常终止时，内核可以自动清理该线程持有的锁，防止死锁。
 
 ==== Futex Wait 与 Wakeup 机制
 
@@ -1095,7 +1098,7 @@ int futex_wakeup(uint64 uaddr, int val, void *uaddr2, int val2);
   caption: [futex工作机制],
 ) <fig:signal-handling>
 
-这种设计实现了高效的用户态快速路径：锁可用时直接获取，需要阻塞时才进入内核，显著减少系统调用开销。Futex是现代多线程程序同步的基础设施，可用于实现互斥锁、条件变量等高级同步原语。
+#text()[#h(2em)]这种设计实现了高效的用户态快速路径：锁可用时直接获取，需要阻塞时才进入内核，显著减少系统调用开销。Futex是现代多线程程序同步的基础设施，可用于实现互斥锁、条件变量等高级同步原语。
 
 === 共享内存机制
 
@@ -1190,7 +1193,7 @@ F7LY的`mmap`系统调用支持共享内存段的映射。通过`SharedMemoryMan
   bool duplicate_attachments_for_fork(uint parent_tid, uint child_tid);
 ```
 
-共享的vma数据会在fork时跟随`ProcessMemoryManager`一起管理，进程复制时使用相关接口检查地址是否属于共享内存段，并获取共享内存段信息。若是共享内存段，则增加引用计数，并在子进程中复制附加地址。
+#text()[#h(2em)]共享的vma数据会在fork时跟随`ProcessMemoryManager`一起管理，进程复制时使用相关接口检查地址是否属于共享内存段，并获取共享内存段信息。若是共享内存段，则增加引用计数，并在子进程中复制附加地址。
 
 此处区分进程与线程的共享内存段管理，根据传入的`CLONE_VM`标志不同进行不同处理，确保每个进程在fork时能够正确处理共享内存段的引用计数和附加地址。
 
@@ -1210,7 +1213,7 @@ if (fd < 0) {
 }   
 ```
 
-特别的，LTP测试中初始化阶段会使用下面的方法设置好IPC的共享内存段，并以此存储测试的结果。
+#text()[#h(2em)]特别的，LTP测试中初始化阶段会使用下面的方法设置好IPC的共享内存段，并以此存储测试的结果。
 ```cpp
 static void setup_ipc(void)
 {
@@ -1224,7 +1227,7 @@ static void setup_ipc(void)
 }
 ```
 
-这样的方法可以确保每个进程在访问共享内存时都能正确地创建和使用对应的共享内存段。
+#text()[#h(2em)]这样的方法可以确保每个进程在访问共享内存时都能正确地创建和使用对应的共享内存段。
 
 #figure(
   image("fig/共享内存空间管理.png", width: 75%),
@@ -1257,7 +1260,7 @@ F7LY 对 `fcntl(F_ADD_SEALS/F_GET_SEALS)` 的支持与 Linux 接轨，但内部�
     - `sys_ftruncate` / `sys_fallocate`：分别检查 `F_SEAL_SHRINK` 与 `F_SEAL_GROW`，若冲突则拒绝。        
     - `normal_file::write`：写入时检查 `_seals & F_SEAL_WRITE`，若被封印则返回 `EPERM`。      
 
-这些检查点保证了 seal 的一致性，使得 memfd 在 F7LY 内核中具备了与 Linux 接近的语义。
+#text()[#h(2em)]这些检查点保证了 seal 的一致性，使得 memfd 在 F7LY 内核中具备了与 Linux 接近的语义。
 
 === 管道机制
 管道（Pipe）是操作系统提供的一种进程间通信（IPC）机制，允许一个进程的输出直接作为另一个进程的输入。F7LY内核实现了符合POSIX标准的管道机制，支持匿名管道和命名管道（FIFO）。
@@ -1279,7 +1282,7 @@ F7LY的管道实现基于虚拟文件系统（VFS），通过`pipe_file`类来�
     //其余字段省略
   }
 ```
-管道文件类`pipe_file`继承自`file`类，包含一个`_pipe`指针，指向实际的管道数据结构。该类实现了读写操作，并支持FIFO文件的路径跟踪。
+#text()[#h(2em)]管道文件类`pipe_file`继承自`file`类，包含一个`_pipe`指针，指向实际的管道数据结构。该类实现了读写操作，并支持FIFO文件的路径跟踪。
 
 ```cpp
 		class Pipe
@@ -1308,7 +1311,7 @@ F7LY的管道实现基于虚拟文件系统（VFS），通过`pipe_file`类来�
 			void close( bool is_write );
       }
 ```
-管道的读写操作通过`read`和`write`方法实现，支持阻塞和非阻塞模式。基本实现方式是通过`Pipe`类来管理管道的缓冲区和读写指针。
+#text()[#h(2em)]管道的读写操作通过`read`和`write`方法实现，支持阻塞和非阻塞模式。基本实现方式是通过`Pipe`类来管理管道的缓冲区和读写指针。
 #figure(
   image("fig/管道.png", width: 50%),
   caption: [管道基本实现],
@@ -1326,7 +1329,7 @@ struct FifoInfo {
     FifoInfo(proc::ipc::Pipe *p) : pipe(p), reader_count(0), writer_count(0) {}
 };
 ```
-在 `pipe_file`类中有一个`_fifo_path`字段，用于跟踪有名管道的路径。通过该路径，F7LY能够在文件系统中创建和管理有名管道。
+#text()[#h(2em)]在 `pipe_file`类中有一个`_fifo_path`字段，用于跟踪有名管道的路径。通过该路径，F7LY能够在文件系统中创建和管理有名管道。
 `FifoManager`类提供了以下关键方法：
 ```cpp
     proc::ipc::Pipe* get_or_create_fifo(const eastl::string& path);
@@ -1336,8 +1339,9 @@ struct FifoInfo {
     bool has_writers(const eastl::string& path);
     FifoInfo get_fifo_info(const eastl::string& path);
 ```
-需要创建管道时，调用`get_or_create_fifo`方法，该方法会检查是否已经存在同名的管道，如果存在则返回对应的管道指针，否则创建新的管道并返回。通过`open_fifo`和`close_fifo`方法，F7LY能够管理管道的打开和关闭操作，并维护读者和写者计数。
 #figure(
   image("fig/fifomanager.png", width: 75%),
   caption: [有名管道管理器],
 ) <fig:fifo-manager>
+#text()[#h(2em)]需要创建管道时，调用`get_or_create_fifo`方法，该方法会检查是否已经存在同名的管道，如果存在则返回对应的管道指针，否则创建新的管道并返回。通过`open_fifo`和`close_fifo`方法，F7LY能够管理管道的打开和关闭操作，并维护读者和写者计数。
+

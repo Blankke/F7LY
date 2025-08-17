@@ -85,6 +85,7 @@
     set par(first-line-indent: 0em)
 
     if it.level == 1 {
+      pagebreak(weak: true)
       align(center)[
         #v(1em)
         #main-format-heading(it: it, font: 字体.黑体, size: 字号.小二)
@@ -93,7 +94,7 @@
     } else if it.level == 2 {
       main-format-heading(it: it, font: 字体.黑体, size: 字号.小三)
     } else if it.level >= 3 {
-      main-format-heading(it: it, font: 字体.黑体, size: 字号.小四)
+      main-format-heading(it: it, font: 字体.黑体, size: 字号.小三)
     }
   }
 
@@ -146,3 +147,4 @@
   }
   content
 }
+

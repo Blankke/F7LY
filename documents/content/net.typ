@@ -164,7 +164,7 @@ long socket_file::send(const void *buf, size_t len, int flags)
 }
 ```
 
-对于数据接收，TCP 会将收到的数据段重新组装成有序的字节流，存储在接收缓冲区中。应用程序通过 `recv()` 函数可以按需读取数据，TCP 保证读取到的数据顺序与发送顺序完全一致。
+#text()[#h(2em)]对于数据接收，TCP 会将收到的数据段重新组装成有序的字节流，存储在接收缓冲区中。应用程序通过 `recv()` 函数可以按需读取数据，TCP 保证读取到的数据顺序与发送顺序完全一致。
 
 ```cpp
 long socket_file::recv(void *buf, size_t len, int flags)
@@ -177,7 +177,7 @@ long socket_file::recv(void *buf, size_t len, int flags)
 }
 ```
 
-TCP 传输还支持多种选项配置，如 Nagle 算法控制、延迟确认等，以平衡网络效率和实时性需求。
+#text()[#h(2em)]TCP 传输还支持多种选项配置，如 Nagle 算法控制、延迟确认等，以平衡网络效率和实时性需求。
 
 ==== UDP 高效传输
 
@@ -196,7 +196,7 @@ long socket_file::sendto(const void *buf, size_t len, int flags,
 }
 ```
 
-通过 `sendto()` 和 `recvfrom()` 函数，应用程序可以向任意目的地址发送数据，或从任意源地址接收数据。UDP 不提供可靠性保证，数据包可能丢失、重复或乱序到达，但这种设计使得 UDP 在实时通信、广播、多播等场景中具有独特优势。
+#text()[#h(2em)]通过 `sendto()` 和 `recvfrom()` 函数，应用程序可以向任意目的地址发送数据，或从任意源地址接收数据。UDP 不提供可靠性保证，数据包可能丢失、重复或乱序到达，但这种设计使得 UDP 在实时通信、广播、多播等场景中具有独特优势。
 
 ```cpp
 long socket_file::recvfrom(void *buf, size_t len, int flags,
@@ -255,4 +255,4 @@ F7LY-OS 的网络系统通过分层设计实现了完整的网络功能，从底
 + 高效的零拷贝数据传输
 + 完善的错误处理和调试支持
 
-通过与 VFS 的深度集成，网络套接字能够像普通文件一样进行操作，为系统提供了统一、简洁的编程接口。整个网络系统为 F7LY-OS 的网络通信功能奠定了坚实的基础。 
+#text()[#h(2em)]通过与 VFS 的深度集成，网络套接字能够像普通文件一样进行操作，为系统提供了统一、简洁的编程接口。整个网络系统为 F7LY-OS 的网络通信功能奠定了坚实的基础。 

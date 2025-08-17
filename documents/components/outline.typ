@@ -8,6 +8,10 @@
     #heading([目录], level: 1, outlined: false)
   ]
 
+  #show outline.entry.where(level: 1): it => {
+    text(weight: "bold", it)
+  }
+
   #outline(title: align(center)[目录], indent: 2em, depth: 3)
   // #outline(title: align(center)[目录], indent: auto)
 ]
