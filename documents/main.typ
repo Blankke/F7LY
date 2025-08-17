@@ -10,7 +10,6 @@
 
 #cover(
   title: "设计文档",
-  institute: "武汉大学",
 )
 
 #show: preface.with(title: "F7LY-OS")
