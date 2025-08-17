@@ -9,7 +9,7 @@
 #set text(lang: "zh", region: "cn")
 
 #cover(
-  title: "F7LY-OS",
+  title: "设计文档",
   institute: "武汉大学",
 )
 
