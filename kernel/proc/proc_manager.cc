@@ -98,18 +98,19 @@ namespace proc
 
     void ProcessManager::alloc_pid(Pcb *p)
     {
-        _pid_lock.acquire();
+        // _pid_lock.acquire();
         p->_pid = _cur_pid;
         _cur_pid++;
-        _pid_lock.release();
+        // _pid_lock.release();
+        printfGreen("[proc] Allocated PID %d for process %s\n", p->_pid, p->_name);
     }
 
     void ProcessManager::alloc_tid(Pcb *p)
     {
-        _tid_lock.acquire();
+        // _tid_lock.acquire();
         p->_tid = _cur_tid;
         _cur_tid++;
-        _tid_lock.release();
+        // _tid_lock.release();
     }
 
     Pcb *ProcessManager::alloc_proc()
@@ -118,15 +119,19 @@ namespace proc
         // 遍历整个进程池，尝试分配一个 UNUSED 的进程控制块
         for (uint i = 0; i < num_process; i++)
         {
+            printfYellow("[proc] Allocating new process PCB %d,cur_pid=%d\n", i, _cur_pid);
             // 使用轮转式分配策略，避免总是从头找，提高公平性
             p = &k_proc_pool[(_last_alloc_proc_gid + i) % num_process];
             p->_lock.acquire();
+            printfGreen("[proc] Allocating new process PCB %d,cur_pid=%d\n", p->_global_id, _cur_pid);
             if (p->_state == ProcState::UNUSED)
             {
                 /****************************************************************************************
                  * 基本进程标识和状态管理初始化
                  ****************************************************************************************/
-                k_pm.alloc_pid(p);           // 分配全局唯一的进程ID
+                printfGreen("[proc] Allocating new process PCB %d,cur_pid=%d\n", p->_global_id,_cur_pid);
+                 k_pm.alloc_pid(p);           // 分配全局唯一的进程ID
+                printfGreen("[proc] Allocated PID %d for new process\n", p->_pid);
                 k_pm.alloc_tid(p);           // 分配线程ID（单线程进程中等于PID）
                 p->_state = ProcState::USED; // 标记进程控制块为已使用
 
@@ -330,7 +335,7 @@ namespace proc
             //             proc->_cwd = fs::ramfs::k_ramfs.getRoot()->EntrySearch("mnt");
             //             proc->_cwd_name = "/mnt/";
 
-            filesystem_init();
+            // filesystem_init();
             // filesystem2_init(); // 这个滚蛋
             fs::device_file *f_in = new fs::device_file();
             // fs::device_file *f_err = new fs::device_file();

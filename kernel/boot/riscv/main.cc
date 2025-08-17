@@ -91,7 +91,7 @@ void main()
     // virtio_disk_init2(); // 初始化 rootfs的块设备
 
     proc::k_pm.user_init(); // 初始化用户进程
-    disk_init();  // emulated hard disk ps:如果使用SDCard需要修改
+    // disk_init();  // emulated hard disk ps:如果使用SDCard需要修改
 
     printfGreen("disk_init done\n");
     init_fs_table();     // fs_table init
