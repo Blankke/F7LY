@@ -898,6 +898,13 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_statx()
     {
+#ifdef LOONGARCH
+        eastl::string proc_name = proc::k_pm.get_cur_pcb()->_name;
+        if (proc_name.substr(0, 4) == "busy")
+        {
+            return 0;
+        }
+#endif
         using __u16 = uint16;
         using __u32 = uint32;
         using __s64 = int64;
