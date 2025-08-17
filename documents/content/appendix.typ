@@ -1,7 +1,14 @@
-
-= 附录
-
-== 重要类的具体字段解析
+// 重置标题计数器并设置附录编号格式
+#counter(heading).update(0)
+#set heading(numbering: (..nums) => {
+  let nums-vec = nums.pos()
+  if nums-vec.len() == 1 [
+    #numbering("附录 A", ..nums-vec) #h(0.75em)
+  ] else [
+    #numbering("A.1", ..nums-vec) #h(0.75em)
+  ]
+})
+= 重要类的具体字段解析
 
 #figure(
   table(
@@ -122,11 +129,11 @@
   caption: [PCB结构字段说明（第二部分)]
 )
 
-== 系统调用实现列表
+= 系统调用实现列表
 
 本节详细列出F7LY内核实现的210+个系统调用，按功能模块分类。
 
-=== 进程生命周期管理
+#heading(level: 2, outlined: false)[进程生命周期管理]
 
 #figure(
   table(
@@ -162,7 +169,7 @@
   caption: [进程生命周期管理系统调用]
 )
 
-=== 内存管理系统调用
+#heading(level: 2, outlined: false)[内存管理系统调用]
 
 #figure(
   table(
@@ -189,7 +196,7 @@
   caption: [内存管理系统调用]
 )
 
-=== 文件系统操作系统调用
+#heading(level: 2, outlined: false)[文件系统操作系统调用]
 
 #figure(
   table(
@@ -239,7 +246,7 @@
   caption: [文件系统操作系统调用]
 )
 
-=== 信号处理系统调用
+#heading(level: 2, outlined: false)[信号处理系统调用]
 
 #figure(
   table(
@@ -265,7 +272,7 @@
   caption: [信号处理系统调用]
 )
 
-=== 网络通信系统调用
+#heading(level: 2, outlined: false)[网络通信系统调用]
 
 #figure(
   table(
@@ -296,7 +303,7 @@
   caption: [网络通信系统调用]
 )
 
-=== 时间管理系统调用
+#heading(level: 2, outlined: false)[时间管理系统调用]
 
 #figure(
   table(
@@ -323,7 +330,7 @@
   caption: [时间管理系统调用]
 )
 
-=== 系统信息与控制系统调用
+#heading(level: 2, outlined: false)[系统信息与控制系统调用]
 
 #figure(
   table(
@@ -345,7 +352,7 @@
   caption: [系统信息与控制系统调用]
 )
 
-=== 其他重要系统调用
+#heading(level: 2, outlined: false)[其他重要系统调用]
 
 #figure(
   table(

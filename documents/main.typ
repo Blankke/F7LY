@@ -19,8 +19,6 @@
 
 #show: main
 
-#include "content/general.typ"
-
 #include "content/overview.typ"
 
 #include "content/kernel-detailed.typ"

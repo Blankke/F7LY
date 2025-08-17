@@ -880,7 +880,7 @@ F7LY内核实现了完整的虚拟文件系统，为应用程序提供了类Linu
 3. 文件状态标志（`F_GETFL` /`F_SETFL`）    
     - 文件的状态标志存储在 `f->lwext4_file_struct.flags`。        
     - 对管道文件，`O_NONBLOCK` 的设置通过 `fs::pipe_file` 接口进行同步。        
-    - `F_SETFL` 仅允许修改以下标志：  
+    - `F_SETFL` 仅允许修改以下标志：\
         `O_APPEND | O_ASYNC | O_DIRECT | O_NOATIME | O_NONBLOCK`，  
         而访问模式位（`O_RDONLY`/`O_WRONLY`/`O_RDWR`）保持不变。        
 4. 记录锁（`F_SETLK` / `F_SETLKW` / `F_GETLK`）
@@ -1097,7 +1097,7 @@ int futex_wakeup(uint64 uaddr, int val, void *uaddr2, int val2);
 
 这种设计实现了高效的用户态快速路径：锁可用时直接获取，需要阻塞时才进入内核，显著减少系统调用开销。Futex是现代多线程程序同步的基础设施，可用于实现互斥锁、条件变量等高级同步原语。
 
-=== *共享内存机制*
+=== 共享内存机制
 
 共享内存是一种高效的进程间通信（IPC）机制，允许多个进程直接访问同一块物理内存区域，从而实现数据的快速交换。F7LY借鉴Linux设计的同时改用面向对象的管理方式，支持符合POSIX标准的共享内存机制，并在内核中实现了相关系统调用。
 
@@ -1259,7 +1259,7 @@ F7LY 对 `fcntl(F_ADD_SEALS/F_GET_SEALS)` 的支持与 Linux 接轨，但内部�
 
 这些检查点保证了 seal 的一致性，使得 memfd 在 F7LY 内核中具备了与 Linux 接近的语义。
 
-=== *管道机制*
+=== 管道机制
 管道（Pipe）是操作系统提供的一种进程间通信（IPC）机制，允许一个进程的输出直接作为另一个进程的输入。F7LY内核实现了符合POSIX标准的管道机制，支持匿名管道和命名管道（FIFO）。
 ==== 管道的基本实现
 F7LY的管道实现基于虚拟文件系统（VFS），通过`pipe_file`类来管理管道的读写操作。管道的核心数据结构包括：
