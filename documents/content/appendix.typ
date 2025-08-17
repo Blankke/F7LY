@@ -253,7 +253,7 @@
 
 #figure(
   table(
-    columns: (4cm, 10cm),
+    columns: (5cm, 9cm),
     align: (left, left),
     table.header(
       [*系统调用*], [*功能描述*]
@@ -310,7 +310,7 @@
 
 #figure(
   table(
-    columns: (4cm, 10cm),
+    columns: (5cm, 9cm),
     align: (left, left),
     table.header(
       [*系统调用*], [*功能描述*]
@@ -337,7 +337,7 @@
 
 #figure(
   table(
-    columns: (4cm, 10cm),
+    columns: (6cm, 8cm),
     align: (left, left),
     table.header(
       [*系统调用*], [*功能描述*]
