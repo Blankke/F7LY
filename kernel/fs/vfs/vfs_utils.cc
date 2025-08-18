@@ -865,7 +865,8 @@ int vfs_path2filetype(eastl::string &absolute_path)
     {
         struct ext4_sblock *sb = NULL;
         ext4_get_sblock(absolute_path.c_str(), &sb);
-        int type = ext4_inode_type(sb, &inode);
+        int type = -1;
+        type = ext4_inode_type(sb, &inode);
         if (sb != NULL)
         {
             switch (type)
