@@ -5702,14 +5702,25 @@ namespace syscall
         cpres = mem::k_vmm.copy_str_in(*pt, new_path, new_path_addr, PATH_MAX);
         if (cpres < 0)
         {
-            printfRed("[sys_renameat2] Error copying old path from user space\n");
+            printfRed("[sys_renameat2] Error copying new path from user space\n");
             return cpres;
         }
 
-        old_path = (old_fd == AT_FDCWD) ? p->_cwd_name : p->get_open_file(old_fd)->_path_name;
-        new_path = (new_fd == AT_FDCWD) ? p->_cwd_name : p->get_open_file(new_fd)->_path_name;
-        eastl::string old_abs_path = get_absolute_path(old_path.c_str(), p->_cwd_name.c_str());
-        eastl::string new_abs_path = get_absolute_path(new_path.c_str(), p->_cwd_name.c_str());
+        // 获取基础目录路径
+        eastl::string old_base_path = (old_fd == AT_FDCWD) ? p->_cwd_name : p->get_open_file(old_fd)->_path_name;
+        eastl::string new_base_path = (new_fd == AT_FDCWD) ? p->_cwd_name : p->get_open_file(new_fd)->_path_name;
+
+        printf("[sys_renameat2] old_fd: %d, old_path: %s, new_fd: %d, new_path: %s, flags: %d\n",
+               old_fd, old_path.c_str(), new_fd, new_path.c_str(), flags);
+        printf("[sys_renameat2] old_base_path: %s, new_base_path: %s\n",
+               old_base_path.c_str(), new_base_path.c_str());
+        
+        // 构建绝对路径
+        eastl::string old_abs_path = get_absolute_path(old_path.c_str(), old_base_path.c_str());
+        eastl::string new_abs_path = get_absolute_path(new_path.c_str(), new_base_path.c_str());
+
+        printf("[sys_renameat2] old_abs_path: %s, new_abs_path: %s, flags: %d\n",
+               old_abs_path.c_str(), new_abs_path.c_str(), flags);
         int ret = 0;
         if ((ret = vfs_frename(old_abs_path.c_str(), new_abs_path.c_str())) < 0)
         {
