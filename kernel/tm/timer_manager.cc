@@ -146,7 +146,7 @@ namespace tmm
 			n = 1;
 		}
 
-		printfBlue("sleep from tv: %u ticks\n", n);
+		// printfBlue("sleep from tv: %u ticks\n", n);
 		
 		return sleep_n_ticks(n); // 执行实际的tick睡眠
 	}

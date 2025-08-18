@@ -16,6 +16,8 @@ struct ltp_testcase
 
 extern struct ltp_testcase ltp_testcases[];
 
+extern char *git_testcases[][8];
+
 int strcmp(const char *s1, const char *s2) noexcept(true)
 {
     for (; *s1 == *s2; s1++, s2++)
@@ -298,24 +300,36 @@ int ltp_test(bool is_musl)
 int git_test(const char *path)
 {
     chdir(path);
-    int fd = openat(AT_FDCWD, "/musl/.gitconfig", 02 | 0100);
-    char *argv[8] = {0};
     char *envp[] = {
         "HOME=/musl", // 设置 HOME
         NULL          // 必须以 NULL 结尾
     };
-    // argv[0] = "git";
-    // argv[1] = "help";
-    // run_test("git", argv, 0);
-    argv[0] = "git";
-    argv[1] = "config";
-    argv[2] = "--global";
-    argv[3] = "--add";
-    argv[4] = "safe.directory";
-    argv[5] = "/musl/usr/bin";
-    run_test("git", argv, envp);
+    // for (int i = 0; git_testcases[i][0] != NULL; i++)
+    // {
+    //     run_test(git_testcases[i][0], git_testcases[i], envp);
+    // }
+    char *bb_sh[8] = {0};
+    bb_sh[0] = "busybox";
+    bb_sh[1] = "sh";
+    bb_sh[2] = "git_testcode_old.sh";
+    run_test("busybox", bb_sh, envp);
     return 0;
 }
+
+char *git_testcases[][8] = {
+    // {"busybox", "echo", "#### OS COMP TEST GROUP START git-musl ####", NULL},
+    // {"usr/bin/git", "config", "--global", "--add", "safe.directory", "$(pwd)", NULL},
+    // {"usr/bin/git", "config", "--global", "user.email", "you@example.com", NULL},
+    // {"usr/bin/git", "config", "--global", "user.name", "Your Name", NULL},
+    // {"usr/bin/git", "help", NULL}, // ok
+    // {"usr/bin/git", "init", NULL},
+    // {"busybox", "echo", "hello world > README.md", NULL},
+    // {"usr/bin/git", "add", "README.md", NULL},
+    // {"usr/bin/git", "commit", "-m", "add README.md", NULL},
+    // {"usr/bin/git", "log", NULL},
+    // {"busybox", "echo", "#### OS COMP TEST GROUP END git-musl ####", NULL},
+    {NULL}
+};
 
 char *libctest[][2] = {
     {"argv", NULL},

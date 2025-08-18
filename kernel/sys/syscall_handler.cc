@@ -3189,7 +3189,7 @@ namespace syscall
             printfCyan("[sys_readlinkat] Successfully read proc fd symlink: /proc/self/fd/%d -> %s\n", target_fd, target_path.c_str());
             return target_path.length();
         }
-        printfCyan("[sys_readlinkat] fd: %d, path: %s, buf: %p, buf_size: %u", fd, path.c_str(), (void *)buf, buf_size);
+        printfCyan("[sys_readlinkat] fd: %d, path: %s, buf: %p, buf_size: %u\n", fd, path.c_str(), (void *)buf, buf_size);
         // 如果路径为空，获取dirfd对应的符号链接
         if (path.empty())
         {

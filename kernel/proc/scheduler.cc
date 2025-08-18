@@ -82,7 +82,7 @@ namespace proc
                     if(last_global_id != p->_global_id)
                     {
                         last_global_id = p->_global_id;
-                        printfRed("[sche]  switch to proc global_id: %d pid: %d tid: %d tgid: %d, name: %s\n", p->_global_id, p->_pid, p->_tid, p->_tgid, p->_name);
+                        // printfRed("[sche]  switch to proc global_id: %d pid: %d tid: %d tgid: %d, name: %s\n", p->_global_id, p->_pid, p->_tid, p->_tgid, p->_name);
                     }
                     swtch(cur_context, &p->_context);
                     // printf( "return from %d, name: %s\n", p->_global_id, p->_name );
