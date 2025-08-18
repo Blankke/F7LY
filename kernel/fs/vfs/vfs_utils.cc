@@ -1163,6 +1163,42 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
         return EOK;
     }
 
+    // 检查是否是设备文件
+    if (f->_attrs.filetype == fs::FileTypes::FT_DEVICE)
+    {
+        printfCyan("vfs_fstat: device file, using synthetic stat information\n");
+        
+        // 为设备文件创建合成的stat信息
+        memset(st, 0, sizeof(fs::Kstat));
+        
+        st->dev = 0;                                        // 设备号
+        st->ino = (uint64)f;                                // 使用文件对象地址作为伪inode号
+        st->mode = S_IFCHR | 0600;                          // 字符设备，拥有者读写权限
+        st->nlink = 1;                                      // 链接数
+        st->uid = 0;                                        // 用户ID (root)
+        st->gid = 0;                                        // 组ID (root)
+        
+        // 设备号设为简单的默认值，因为_dev_num是私有成员
+        st->rdev = 1;                                       // 标准输出设备号
+        
+        st->size = 0;                                       // 设备文件大小通常为0
+        st->blksize = 4096;                                 // 块大小
+        st->blocks = 0;                                     // 设备文件不占用块
+        
+        // 设置时间戳（使用当前时间）
+        uint64 current_time = NS_to_S(TIME2NS(rdtime()));
+        st->st_atime_sec = current_time;
+        st->st_atime_nsec = 0;
+        st->st_ctime_sec = current_time;
+        st->st_ctime_nsec = 0;
+        st->st_mtime_sec = current_time;
+        st->st_mtime_nsec = 0;
+        st->mnt_id = 0;
+        
+        printfCyan("vfs_fstat: device file, rdev: %u\n", st->rdev);
+        return EOK;
+    }
+
     // 检查是否是符号链接文件
     if (f->_attrs.filetype == fs::FileTypes::FT_SYMLINK)
     {
