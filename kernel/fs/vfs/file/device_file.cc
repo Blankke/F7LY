@@ -3,6 +3,8 @@
 #include "device_manager.hh"
 #include "stream_device.hh"
 
+
+
 #include <termios.h>
 
 namespace fs
@@ -32,9 +34,9 @@ namespace fs
 		panic("device_file::read: not implemented yet");
 		ret = 0;
 
-		/// @note 对于流式设备而言，没有文件偏移的概念
-		// if ( ret >= 0 && upgrade )  // 这里 没有写sdev从指定位置读取的函数
-		// 	off += ret;
+		/// @note 对于设备文件，根据upgrade参数决定是否更新文件指针
+		if ( ret >= 0 && upgrade )
+			_file_ptr += ret;
 		return ret;
 
 	}
@@ -69,6 +71,10 @@ namespace fs
 		}
 
 		ret = sdev->write((void*)buf, len);
+
+		/// @note 根据upgrade参数决定是否更新文件指针
+		if ( ret >= 0 && upgrade )
+			_file_ptr += ret;
 
 		return ret;
 	}
@@ -202,5 +208,39 @@ namespace fs
 		}
 		
 		return cdev->get_line_status();
+	}
+
+	off_t device_file::lseek( off_t offset, int whence )
+	{
+		off_t new_offset;
+		
+		switch (whence)
+		{
+			case SEEK_SET:
+				new_offset = offset;
+				break;
+			case SEEK_CUR:
+				new_offset = _file_ptr + offset;
+				break;
+			case SEEK_END:
+				// 对于设备文件，SEEK_END 的行为可能因设备类型而异
+				// 这里假设设备文件大小为0（流式设备）
+				new_offset = 0 + offset;
+				break;
+			default:
+				printfRed("device_file::lseek: invalid whence %d\n", whence);
+				return -EINVAL;
+		}
+		
+		// 检查新偏移量是否有效（不能为负数）
+		if (new_offset < 0)
+		{
+			printfRed("device_file::lseek: invalid offset %ld\n", new_offset);
+			return -EINVAL;
+		}
+		
+		// 更新文件指针
+		_file_ptr = new_offset;
+		return new_offset;
 	}
 }

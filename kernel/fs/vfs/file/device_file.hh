@@ -14,7 +14,6 @@ namespace fs
 	class device_file : public file
 	{
 	private:
-		int off = 0;
 		// dev::StreamDevice * _dev = nullptr;
 		// dentry * _dentry = nullptr;
 		eastl::string path_name;
@@ -56,11 +55,11 @@ namespace fs
 		/// @brief 判断设备是否已准备好进行写入操作。
 		virtual bool write_ready() override;
 		
-		/// @brief 移动文件指针到指定位置。当前 streamdevice 不支持 lseek 操作，调用此函数会返回错误。
+		/// @brief 移动文件指针到指定位置。
 		/// @param offset 以字节为单位的偏移量，用于指定新的文件指针位置。
 		/// @param whence 指定偏移量的起始位置，可以是 SEEK_SET（文件开头）、SEEK_CUR（当前位置）或 SEEK_END（文件末尾）。
-		/// @return 返回新的文件指针位置（成功时），或返回负值（如 -EINVAL）表示不支持该操作。
-		virtual off_t lseek( off_t offset, int whence ) override { printfRed( "streamdevice not support lseek currently!" );return -EINVAL; };
+		/// @return 返回新的文件指针位置（成功时），或返回负值表示错误。
+		virtual off_t lseek( off_t offset, int whence ) override;
 		int tcgetattr( termios * ts );
 		
 		/// @brief 获取设备输入缓冲区中的字节数
