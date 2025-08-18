@@ -27,7 +27,7 @@ ifeq ($(ARCH),riscv)
   CROSS_COMPILE := riscv64-linux-gnu-
   ARCH_CFLAGS := -DRISCV -mcmodel=medany
   OUTPUT_PREFIX := riscv
-  QEMU_CMD := qemu-system-riscv64 -machine virt -m 128M -nographic -smp 1 -bios default -hdb ${KERNEL_PREFIX}/sdcard-rv.img -kernel
+  QEMU_CMD := qemu-system-riscv64 -machine virt -m 128M -nographic -smp 1 -bios default -hdb ${KERNEL_PREFIX}/sdcard-rv-onsite.img -kernel
 else ifeq ($(ARCH),loongarch)
   CROSS_COMPILE := loongarch64-linux-gnu-
   ARCH_CFLAGS := -DLOONGARCH -mcmodel=normal -Wno-error=use-after-free
@@ -249,7 +249,7 @@ run-riscv:
 		-nographic \
 		-smp 1 \
 		-bios default \
-		-drive file=$(KERNEL_PREFIX)/sdcard-rv.img,if=none,format=raw,id=x0 \
+		-drive file=$(KERNEL_PREFIX)/sdcard-rv-onsite.img,if=none,format=raw,id=x0 \
 		-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 \
 		-no-reboot \
 		-device virtio-net-device,netdev=net \
@@ -289,7 +289,7 @@ debug-riscv:
 		-nographic \
 		-smp 1 \
 		-bios default \
-		-drive file=$(KERNEL_PREFIX)/sdcard-rv.img,if=none,format=raw,id=x0 \
+		-drive file=$(KERNEL_PREFIX)/sdcard-rv-onsite.img,if=none,format=raw,id=x0 \
 		-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 \
 		-no-reboot \
 		-device virtio-net-device,netdev=net \
