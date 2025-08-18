@@ -21,19 +21,19 @@ function test_1() {
 
 function test_2() {
     echo "==== GIT TEST 2 ==="
-    sudo rm -rf test_git
-    sudo mkdir test_git 
-    sudo cd test_git
+    rm -rf test_git
+    mkdir test_git 
+    cd test_git
     usr/bin/git init
     check_ret "git init"
-    sudo ls .git
+    ls .git
     check_ret "ls .git"
-    sudo echo -e "AAAAA11111\nBBBBB11111\n" > a.txt
+    echo -e "AAAAA11111\nBBBBB11111\n" > a.txt
     usr/bin/git add a.txt
     check_ret "git add a.txt"
     usr/bin/git commit -m "init commit"
     check_ret "git commit -m \"init commit\""
-    sudo echo -e "AAAAA11111\nBBBBB11111\nCCCCC22222" > a.txt
+    echo -e "AAAAA11111\nBBBBB11111\nCCCCC22222" > a.txt
     usr/bin/git diff a.txt
     usr/bin/git add a.txt
     check_ret "git add a.txt"
@@ -41,7 +41,7 @@ function test_2() {
     check_ret "git commit -m \"update a.txt\""
     usr/bin/git reflog
     check_ret "git reflog"
-    sudo cd ..
+    cd ..
     echo "==== FINISH TEST 2 ===="
 }
 
