@@ -1381,6 +1381,63 @@ int ext4_frename(const char *path, const char *new_path)
 
     child_inode = f.inode;
     ext4_fclose(&f);
+
+    /* Check if target path exists (Linux behavior: overwrite if it's a file) */
+    ext4_file target_file;
+    r = ext4_generic_open2(&target_file, new_path, O_RDONLY, EXT4_DE_UNKNOWN, NULL, NULL);
+    if (r == EOK)
+    {
+        /* Target exists, need to check what it is */
+        uint32_t target_inode = target_file.inode;
+        ext4_fclose(&target_file);
+        
+        /* Get source file type */
+        struct ext4_inode_ref source_ref;
+        r = ext4_fs_get_inode_ref(&mp->fs, child_inode, &source_ref);
+        if (r != EOK) {
+            EXT4_MP_UNLOCK(mp);
+            return r;
+        }
+        bool source_is_dir = ext4_inode_is_type(&mp->fs.sb, source_ref.inode, EXT4_INODE_MODE_DIRECTORY);
+        ext4_fs_put_inode_ref(&source_ref);
+        
+        /* Get target file type */
+        struct ext4_inode_ref target_ref;
+        r = ext4_fs_get_inode_ref(&mp->fs, target_inode, &target_ref);
+        if (r != EOK) {
+            EXT4_MP_UNLOCK(mp);
+            return r;
+        }
+        bool target_is_dir = ext4_inode_is_type(&mp->fs.sb, target_ref.inode, EXT4_INODE_MODE_DIRECTORY);
+        ext4_fs_put_inode_ref(&target_ref);
+        
+        /* Apply Linux rename semantics */
+        if (source_is_dir && !target_is_dir) {
+            /* Cannot rename directory over file */
+            EXT4_MP_UNLOCK(mp);
+            return ENOTDIR;
+        }
+        if (!source_is_dir && target_is_dir) {
+            /* Cannot rename file over directory */
+            EXT4_MP_UNLOCK(mp);
+            return EISDIR;
+        }
+        
+        /* Same type - remove target first */
+        EXT4_MP_UNLOCK(mp);
+        r = ext4_fremove(new_path);
+        if (r != EOK)
+            return r;
+        EXT4_MP_LOCK(mp);
+    }
+    else if (r != ENOENT)
+    {
+        /* Some other error occurred while checking target */
+        EXT4_MP_UNLOCK(mp);
+        return r;
+    }
+    /* If r == ENOENT, target doesn't exist, which is fine */
+
     ext4_trans_start(mp);
 
     /*Load parent*/
