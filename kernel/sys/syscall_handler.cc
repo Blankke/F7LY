@@ -2538,15 +2538,26 @@ namespace syscall
                 }
                 printfCyan(")\n");
                 
-                // 打印文件名（注意字符串可能不以\0结尾）
-                int name_len = entry->d_reclen - sizeof(struct linux_dirent64);
-                if (name_len > 0 && name_len < 256) {
+                // 打印文件名（使用正确的长度计算方法）
+                // linux_dirent64结构: d_ino(8) + d_off(8) + d_reclen(2) + d_type(1) + d_name[0]
+                int name_start_offset = sizeof(uint64) + sizeof(int64) + sizeof(unsigned short) + sizeof(unsigned char);
+                int name_len = entry->d_reclen - name_start_offset;
+                
+                // 尝试使用strlen来获取实际的字符串长度
+                int actual_name_len = strlen(entry->d_name);
+                if (actual_name_len > 0 && actual_name_len < name_len && actual_name_len < 256) {
+                    printfCyan("  d_name: \"%s\" (strlen=%d, calc_len=%d)\n", 
+                              entry->d_name, actual_name_len, name_len);
+                } else if (name_len > 0 && name_len < 256) {
+                    // 如果strlen不可靠，使用计算的长度但确保安全
                     char name_buf[256];
-                    strncpy(name_buf, entry->d_name, name_len);
-                    name_buf[name_len] = '\0'; // 确保字符串结尾
-                    printfCyan("  d_name: \"%s\"\n", name_buf);
+                    int safe_len = (name_len > 255) ? 255 : name_len;
+                    strncpy(name_buf, entry->d_name, safe_len);
+                    name_buf[safe_len] = '\0'; // 确保字符串结尾
+                    printfCyan("  d_name: \"%s\" (safe_copy, len=%d)\n", name_buf, safe_len);
                 } else {
-                    printfCyan("  d_name: <invalid name length %d>\n", name_len);
+                    printfCyan("  d_name: <invalid name length %d, name_start_offset=%d>\n", 
+                              name_len, name_start_offset);
                 }
                 
                 printfCyan("  Entry ends at offset: %d\n", bytes_processed + entry->d_reclen);
