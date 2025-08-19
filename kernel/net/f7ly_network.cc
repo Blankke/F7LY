@@ -32,11 +32,11 @@ namespace net
         printf("[f7ly_network] ONPS core initialized successfully\n");
         
         // Step 2: Initialize VirtIO Net adapter (this will register with ONPS)
-        if (!net::adapter_init()) {
-            printf("[f7ly_network] Failed to initialize VirtIO Net adapter\n");
-            open_npstack_unload();
-            return false;
-        }
+        // if (!net::adapter_init()) {
+        //     printf("[f7ly_network] Failed to initialize VirtIO Net adapter\n");
+        //     open_npstack_unload();
+        //     return false;
+        // }
         
         printf("[f7ly_network] VirtIO Net adapter initialized successfully\n");
         
@@ -44,7 +44,7 @@ namespace net
         
         // Print initial status
 #ifdef RISCV
-        print_network_status();
+        // print_network_status();
 #endif
         
         return true;

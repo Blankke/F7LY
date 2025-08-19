@@ -122,6 +122,7 @@ void main()
                   "Kernel space successfully initialized\n"); // ANSI Shadow 字体风格
 
     proc::k_scheduler.init("scheduler");
+    printfCyan("[main] before start schedule , cur_pid=%d, cur_tid=%d\n", proc::k_pm._cur_pid, proc::k_pm._cur_tid);
     proc::k_scheduler.start_schedule(); // 启动调度器
     sbi_shutdown();
 }

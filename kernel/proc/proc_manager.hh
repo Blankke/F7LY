@@ -16,7 +16,7 @@ namespace proc
 
     class ProcessManager
     {
-    private:
+    public:
         // 核心成员变量
         SpinLock _pid_lock;        // 进程ID锁
         SpinLock _tid_lock;        // 线程ID锁

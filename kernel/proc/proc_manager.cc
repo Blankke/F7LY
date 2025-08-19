@@ -54,7 +54,7 @@ extern "C"
     extern char trampoline[]; // trampoline.S
     void _wrp_fork_ret(void)
     {
-        // printf("into _wrapped_fork_ret\n");
+        printf("into _wrapped_fork_ret, cur_pid:%d\n", proc::k_pm._cur_pid);
         proc::k_pm.fork_ret();
     }
     extern char sig_trampoline[]; // sig_trampoline.S
@@ -98,19 +98,19 @@ namespace proc
 
     void ProcessManager::alloc_pid(Pcb *p)
     {
-        // _pid_lock.acquire();
+        _pid_lock.acquire();
         p->_pid = _cur_pid;
         _cur_pid++;
-        // _pid_lock.release();
+        _pid_lock.release();
         printfGreen("[proc] Allocated PID %d for process %s\n", p->_pid, p->_name);
     }
 
     void ProcessManager::alloc_tid(Pcb *p)
     {
-        // _tid_lock.acquire();
+        _tid_lock.acquire();
         p->_tid = _cur_tid;
         _cur_tid++;
-        // _tid_lock.release();
+        _tid_lock.release();
     }
 
     Pcb *ProcessManager::alloc_proc()
@@ -123,6 +123,7 @@ namespace proc
             // 使用轮转式分配策略，避免总是从头找，提高公平性
             p = &k_proc_pool[(_last_alloc_proc_gid + i) % num_process];
             p->_lock.acquire();
+            // if(_cur_pid<0)
             printfGreen("[proc] Allocating new process PCB %d,cur_pid=%d\n", p->_global_id, _cur_pid);
             if (p->_state == ProcState::UNUSED)
             {
@@ -279,7 +280,7 @@ namespace proc
         printf("into fork_ret\n");
         proc::Pcb *proc = get_cur_pcb();
         proc->_lock.release();
-
+        printf("[forkret] just into forkret , cur_pid=%d, cur_tid=%d\n", _cur_pid, _cur_tid);
         static int first = 1;
         if (first)
         {
@@ -337,13 +338,14 @@ namespace proc
 
             // filesystem_init();
             // filesystem2_init(); // 这个滚蛋
+            printf("[forkret] into forkret , cur_pid=%d, cur_tid=%d\n", _cur_pid, _cur_tid);
             fs::device_file *f_in = new fs::device_file();
             // fs::device_file *f_err = new fs::device_file();
             eastl::string pathout("/dev/stdout");
             fs::FileAttrs fAttrsout = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0222); // only write
             fs::device_file *f_out =
                 new fs::device_file(fAttrsout, pathout, 1);
-
+            // _cur_pid=_cur_tid=2;
             eastl::string patherr("/dev/stderr");
             fs::FileAttrs fAttrserr = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0222); // only write
             fs::device_file *f_err = new fs::device_file(fAttrserr, patherr, 2);
