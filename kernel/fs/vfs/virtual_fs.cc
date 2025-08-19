@@ -261,12 +261,12 @@ namespace fs
         add_virtual_file("/proc/version", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcVersionProvider>());
 
-    // 兼容 glibc 动态链接器：/etc/ld.so.preload 与 /etc/ld.so.cache
-    // 两者常被访问；前者通常为空表示不预加载库，后者若不可用则回退到目录扫描。
-    add_virtual_file("/etc/ld.so.preload", fs::FileTypes::FT_NORMAL,
-             eastl::make_unique<EtcLdSoPreloadProvider>());
-    add_virtual_file("/etc/ld.so.cache", fs::FileTypes::FT_NORMAL,
-             eastl::make_unique<EtcLdSoCacheProvider>());
+        // 兼容 glibc 动态链接器：/etc/ld.so.preload 与 /etc/ld.so.cache
+        // 两者常被访问；前者通常为空表示不预加载库，后者若不可用则回退到目录扫描。
+        add_virtual_file("/etc/ld.so.preload", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<EtcLdSoPreloadProvider>());
+        add_virtual_file("/etc/ld.so.cache", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<EtcLdSoCacheProvider>());
 
         // /proc/mounts
         add_virtual_file("/proc/mounts", fs::FileTypes::FT_NORMAL,
@@ -283,7 +283,7 @@ namespace fs
         // 注意：/proc/self/cmdline, /proc/stat, /proc/uptime 等需要相应的 Provider 实现
         // 这里先创建节点，但 provider 为 nullptr，可以后续添加
         add_virtual_file("/proc/self/cmdline", fs::FileTypes::FT_NORMAL, nullptr);
-        add_virtual_file("/proc/stat", fs::FileTypes::FT_NORMAL, 
+        add_virtual_file("/proc/stat", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcStatProvider>());
         add_virtual_file("/proc/uptime", fs::FileTypes::FT_NORMAL, nullptr);
 
@@ -365,7 +365,7 @@ namespace fs
         // /proc/sys/kernel/tainted (内核污染状态)
         add_virtual_file("/proc/sys/kernel/tainted", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcSysKernelTaintedProvider>());
-                         
+
         // 打印树结构（调试用）
         // printf("Virtual file system tree:\n");
         // print_tree(root, 0, "");
@@ -395,26 +395,29 @@ namespace fs
     {
         int err;
         vfile_tree_node *node = find_node_by_path(absolute_path);
-        
+
         // 检查是否是 /proc/<pid>/stat 格式的路径
-        if (!node && is_proc_pid_stat_path(absolute_path)) {
+        if (!node && is_proc_pid_stat_path(absolute_path))
+        {
             int pid = extract_pid_from_path(absolute_path);
-            if (pid > 0) {
+            if (pid > 0)
+            {
                 // 验证进程是否存在
-                proc::Pcb* target_pcb = proc::k_pm.find_proc_by_pid(pid);
-                if (target_pcb) {
+                proc::Pcb *target_pcb = proc::k_pm.find_proc_by_pid(pid);
+                if (target_pcb)
+                {
                     printfCyan("[open] creating dynamic /proc/%d/stat file\n", pid);
                     // 动态创建 /proc/<pid>/stat 文件
                     fs::FileAttrs attrs;
                     attrs.filetype = fs::FileTypes::FT_NORMAL;
                     attrs._value = 0644;
-                    file = new virtual_file(attrs, absolute_path, 
-                                          eastl::make_unique<ProcPidStatProvider>(pid));
+                    file = new virtual_file(attrs, absolute_path,
+                                            eastl::make_unique<ProcPidStatProvider>(pid));
                     return 0;
                 }
             }
         }
-        
+
         if (node)
         {
             printfCyan("[open] using virtual file system for path: %s\n", absolute_path.c_str());
@@ -460,46 +463,57 @@ namespace fs
 
         return parts;
     }
-    
+
     // 检查路径是否符合 /proc/<pid>/stat 格式
-    bool VirtualFileSystem::is_proc_pid_stat_path(const eastl::string& path) const
+    bool VirtualFileSystem::is_proc_pid_stat_path(const eastl::string &path) const
     {
         // 检查是否以 /proc/ 开头并以 /stat 结尾
-        if (path.size() < 11) return false; // 最短: /proc/1/stat (11个字符)
-        if (path.substr(0, 6) != "/proc/") return false;
-        if (path.substr(path.size() - 5) != "/stat") return false;
-        
+        if (path.size() < 11)
+            return false; // 最短: /proc/1/stat (11个字符)
+        if (path.substr(0, 6) != "/proc/")
+            return false;
+        if (path.substr(path.size() - 5) != "/stat")
+            return false;
+
         // 提取中间的PID部分并验证是否为数字
         eastl::string pid_str = path.substr(6, path.size() - 11);
-        if (pid_str.empty()) return false;
-        
+        if (pid_str.empty())
+            return false;
+
         // 检查是否全为数字
-        for (size_t i = 0; i < pid_str.size(); i++) {
-            if (pid_str[i] < '0' || pid_str[i] > '9') {
+        for (size_t i = 0; i < pid_str.size(); i++)
+        {
+            if (pid_str[i] < '0' || pid_str[i] > '9')
+            {
                 return false;
             }
         }
-        
+
         return true;
     }
-    
+
     // 从路径中提取PID
-    int VirtualFileSystem::extract_pid_from_path(const eastl::string& path) const
+    int VirtualFileSystem::extract_pid_from_path(const eastl::string &path) const
     {
-        if (!is_proc_pid_stat_path(path)) return -1;
-        
+        if (!is_proc_pid_stat_path(path))
+            return -1;
+
         eastl::string pid_str = path.substr(6, path.size() - 11);
         int pid = 0;
-        
+
         // 手动转换字符串为整数
-        for (size_t i = 0; i < pid_str.size(); i++) {
-            if (pid_str[i] >= '0' && pid_str[i] <= '9') {
+        for (size_t i = 0; i < pid_str.size(); i++)
+        {
+            if (pid_str[i] >= '0' && pid_str[i] <= '9')
+            {
                 pid = pid * 10 + (pid_str[i] - '0');
-            } else {
+            }
+            else
+            {
                 return -1; // 无效字符
             }
         }
-        
+
         return pid;
     }
 
@@ -508,73 +522,100 @@ namespace fs
         if (f->is_virtual)
         {
             // 如果是虚拟文件，使用虚拟文件系统的fstat处理
-            return vfile_fstat(f, st);
+            printf("[VirtualFileSystem] ::fstat: calling vfile_fstat for virtual file: %s\n", f->_path_name.c_str());
+            int result = vfile_fstat(f, st);
+            if (result < 0)
+            {
+                printfRed("[VirtualFileSystem] ::fstat: vfile_fstat failed for %s with error %d\n", f->_path_name.c_str(), result);
+            }
+            else
+            {
+                printfGreen("[VirtualFileSystem] ::fstat: vfile_fstat succeeded for %s\n", f->_path_name.c_str());
+                printf("[SyscallHandler::sys_fstat] Kstat: ino=%p, size=%p, mode=0%o, nlink=%u, uid=%u, gid=%u, rdev=%p, blksize=%u, blocks=%p\n",
+                       st->ino, st->size, st->mode, st->nlink, st->uid, st->gid, st->rdev, st->blksize, st->blocks);
+            }
+            return result;
         }
         else
         {
             // 调用常规的fstat处理
             printfCyan("[VirtualFileSystem] ::fstat: calling vfs_fstat for non-virtual file\n");
-            return vfs_fstat(f, st);
+            int result = vfs_fstat(f, st);
+            if (result < 0)
+            {
+                printfRed("[VirtualFileSystem] ::fstat: vfile_fstat failed for %s with error %d\n", f->_path_name.c_str(), result);
+            }
+            else
+            {
+                printfGreen("[VirtualFileSystem] ::fstat: vfile_fstat succeeded for %s\n", f->_path_name.c_str());
+                printf("[SyscallHandler::sys_fstat] Kstat: ino=%p, size=%p, mode=0%o, nlink=%u, uid=%u, gid=%u, rdev=%p, blksize=%u, blocks=%p\n",
+                       st->ino, st->size, st->mode, st->nlink, st->uid, st->gid, st->rdev, st->blksize, st->blocks);
+            }
+            return result;
         }
     }
 
     int VirtualFileSystem::vfile_fstat(fs::file *f, fs::Kstat *st)
     {
         // 获取虚拟文件的路径，用于判断具体的设备类型
-        const eastl::string& path = f->_path_name;
-        
+        const eastl::string &path = f->_path_name;
+
         // 为不同的设备设置不同的stat信息
-        if (path == "/dev/null") {
+        if (path == "/dev/null")
+        {
             // /dev/null 字符设备的标准属性
-            st->dev = 0x5;               // Device: 5h/5d
-            st->ino = 3;                 // Inode: 3 (标准/dev/null的inode)
-            st->mode = 0666 | S_IFCHR;   // character special file, mode: 0666
-            st->nlink = 1;               // Links: 1
-            st->uid = 0;                 // Uid: 0 (root)
-            st->gid = 0;                 // Gid: 0 (root)
-            st->rdev = (1 << 8) | 3;     // Device type: 1,3 (标准/dev/null的设备号)
-            st->size = 0;                // Size: 0
-            st->blksize = 4096;          // IO Block: 4096
-            st->blocks = 0;              // Blocks: 0
+            st->dev = 0x5;             // Device: 5h/5d
+            st->ino = 3;               // Inode: 3 (标准/dev/null的inode)
+            st->mode = 0666 | S_IFCHR; // character special file, mode: 0666
+            st->nlink = 1;             // Links: 1
+            st->uid = 0;               // Uid: 0 (root)
+            st->gid = 0;               // Gid: 0 (root)
+            st->rdev = (1 << 8) | 3;   // Device type: 1,3 (标准/dev/null的设备号)
+            st->size = 0;              // Size: 0
+            st->blksize = 4096;        // IO Block: 4096
+            st->blocks = 0;            // Blocks: 0
         }
-        else if (path == "/dev/zero") {
+        else if (path == "/dev/zero")
+        {
             // /dev/zero 字符设备的标准属性
-            st->dev = 0x5;               // Device: 5h/5d
-            st->ino = 5;                 // Inode: 5 (标准/dev/zero的inode)
-            st->mode = 0666 | S_IFCHR;   // character special file, mode: 0666
-            st->nlink = 1;               // Links: 1
-            st->uid = 0;                 // Uid: 0 (root)
-            st->gid = 0;                 // Gid: 0 (root)
-            st->rdev = (1 << 8) | 5;     // Device type: 1,5 (标准/dev/zero的设备号)
-            st->size = 0;                // Size: 0
-            st->blksize = 4096;          // IO Block: 4096
-            st->blocks = 0;              // Blocks: 0
+            st->dev = 0x5;             // Device: 5h/5d
+            st->ino = 5;               // Inode: 5 (标准/dev/zero的inode)
+            st->mode = 0666 | S_IFCHR; // character special file, mode: 0666
+            st->nlink = 1;             // Links: 1
+            st->uid = 0;               // Uid: 0 (root)
+            st->gid = 0;               // Gid: 0 (root)
+            st->rdev = (1 << 8) | 5;   // Device type: 1,5 (标准/dev/zero的设备号)
+            st->size = 0;              // Size: 0
+            st->blksize = 4096;        // IO Block: 4096
+            st->blocks = 0;            // Blocks: 0
         }
-        else if (path.find("/dev/loop") == 0) {
+        else if (path.find("/dev/loop") == 0)
+        {
             // 原有的loop设备处理逻辑
-            st->dev = 0x5;               // Device: 5h/5d
-            st->ino = 124;               // Inode: 124
-            st->mode = 0660 | S_IFBLK;   // block special file, mode: 0660 + block device
-            st->nlink = 1;               // Links: 1
-            st->uid = 0;                 // Uid: 0 (root)
-            st->gid = 6;                 // Gid: 6 (disk)
-            st->rdev = 7;                // Device type: 7,0
-            st->size = 0;                // Size: 0
-            st->blksize = 4096;          // IO Block: 4096
-            st->blocks = 0;              // Blocks: 0
+            st->dev = 0x5;             // Device: 5h/5d
+            st->ino = 124;             // Inode: 124
+            st->mode = 0660 | S_IFBLK; // block special file, mode: 0660 + block device
+            st->nlink = 1;             // Links: 1
+            st->uid = 0;               // Uid: 0 (root)
+            st->gid = 6;               // Gid: 6 (disk)
+            st->rdev = 7;              // Device type: 7,0
+            st->size = 0;              // Size: 0
+            st->blksize = 4096;        // IO Block: 4096
+            st->blocks = 0;            // Blocks: 0
         }
-        else {
+        else
+        {
             // 其他虚拟文件的默认处理
-            st->dev = 0x1;               // Device: 1h/1d
-            st->ino = 1;                 // Inode: 1
-            st->mode = 0644 | S_IFREG;   // regular file, mode: 0644
-            st->nlink = 1;               // Links: 1
-            st->uid = 0;                 // Uid: 0 (root)
-            st->gid = 0;                 // Gid: 0 (root)
-            st->rdev = 0;                // Device type: 0
-            st->size = 0;                // Size: 0 (动态文件大小在读取时确定)
-            st->blksize = 4096;          // IO Block: 4096
-            st->blocks = 0;              // Blocks: 0
+            st->dev = 0x1;             // Device: 1h/1d
+            st->ino = 1;               // Inode: 1
+            st->mode = 0644 | S_IFREG; // regular file, mode: 0644
+            st->nlink = 1;             // Links: 1
+            st->uid = 0;               // Uid: 0 (root)
+            st->gid = 0;               // Gid: 0 (root)
+            st->rdev = 0;              // Device type: 0
+            st->size = 0;              // Size: 0 (动态文件大小在读取时确定)
+            st->blksize = 4096;        // IO Block: 4096
+            st->blocks = 0;            // Blocks: 0
         }
 
         // 设置时间戳（所有虚拟文件使用相同的时间戳）
@@ -584,7 +625,7 @@ namespace fs
         st->st_ctime_nsec = 176778624; // Change nsec
         st->st_mtime_sec = 1753278126; // Modify: 2025-07-23 19:02:06
         st->st_mtime_nsec = 176778624; // Modify nsec
-        
+
         return 0;
     }
 

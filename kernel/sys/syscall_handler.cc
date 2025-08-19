@@ -2433,51 +2433,147 @@ namespace syscall
 
         return buf;
     }
-#define GETDENTS64_BUF_SIZE 4 * 4096              //< 似乎用不了这么多
-    char sys_getdents64_buf[GETDENTS64_BUF_SIZE]; //< 函数专用缓冲区
+
     uint64 SyscallHandler::sys_getdents64()
     {
         fs::file *f;
         uint64 buf_addr;
         uint64 buf_len;
-        if (_arg_fd(0, nullptr, &f) < 0)
-            return -1;
-        if (_arg_addr(1, buf_addr) < 0)
-            return -1;
-        if (_arg_addr(2, buf_len) < 0)
-            return -1;
-
-        if (f->_attrs.filetype != fs::FileTypes::FT_NORMAL &&
-            f->_attrs.filetype != fs::FileTypes::FT_DIRECT)
-            return -1;
-
-        /* @note busybox的ps */
-        if (f->_path_name == "/proc")
-        {
-            // panic("用于busybox ps是什么");
-            // TODO: 仔细研究一下
+        
+        // 参数验证
+        if (_arg_fd(0, nullptr, &f) < 0) {
+            printfRed("[sys_getdents64] FAILED - Invalid file descriptor\n");
+            return -EBADF;
+        }
+        if (_arg_addr(1, buf_addr) < 0) {
+            printfRed("[sys_getdents64] FAILED - Invalid buffer address\n");
+            return -EFAULT;
+        }
+        if (_arg_addr(2, buf_len) < 0) {
+            printfRed("[sys_getdents64] FAILED - Invalid buffer length\n");
+            return -EFAULT;
+        }
+        
+        // 检查文件描述符是否为目录
+        if (f->_attrs.filetype != fs::FileTypes::FT_DIRECT) {
+            printfRed("[sys_getdents64] FAILED - File descriptor is not a directory\n");
+            return -ENOTDIR;
+        }
+        
+        // 检查缓冲区长度
+        if (buf_len == 0) {
             return 0;
         }
-
-        memset((void *)sys_getdents64_buf, 0, GETDENTS64_BUF_SIZE);
-        // printfMagenta("[SyscallHandler::sys_getdents64] \n");
-        int count = vfs_getdents(f, (struct linux_dirent64 *)sys_getdents64_buf, buf_len);
-        mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
-        mem::k_vmm.copy_out(*pt, (uint64)buf_addr, (char *)sys_getdents64_buf, count);
-        return count;
-
-        // 下面是蒙老师的userspacestream版本，看不懂
-        //  mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
-
-        // mem::UserspaceStream us((void *)buf_addr, buf_len, pt);
-
-        // us.open();
-        // u64 rlen = us.rest_space();
-        // f->read_sub_dir(us);
-        // rlen -= us.rest_space();
-        // us.close();
-
-        // return rlen;
+        
+        // 限制缓冲区大小，避免栈溢出
+        const uint64 max_buf_size = 4096; // 4KB 栈缓冲区
+        if (buf_len > max_buf_size) {
+            buf_len = max_buf_size;
+        }
+        
+        // 在栈上分配内核缓冲区
+        char kernel_buf[max_buf_size];
+        struct linux_dirent64 *dirp = (struct linux_dirent64 *)kernel_buf;
+        
+        // 调用底层VFS函数获取目录项
+        int result = vfs_getdents(f, dirp, buf_len);
+        
+        if (result < 0) {
+            printfRed("[sys_getdents64] FAILED - vfs_getdents returned error: %d\n", result);
+            return result;
+        }
+        
+        // 调试输出：打印获取到的目录项信息
+        if (result > 0) {
+            printfCyan("[sys_getdents64] DEBUG - Total bytes read: %d\n", result);
+            printfCyan("[sys_getdents64] DEBUG - Parsing directory entries:\n");
+            
+            char *buf_ptr = kernel_buf;
+            int bytes_processed = 0;
+            int entry_count = 0;
+            
+            while (bytes_processed < result) {
+                struct linux_dirent64 *entry = (struct linux_dirent64 *)(buf_ptr + bytes_processed);
+                
+                // 检查条目的有效性
+                if (entry->d_reclen == 0 || bytes_processed + entry->d_reclen > result) {
+                    printfRed("[sys_getdents64] DEBUG - Invalid entry at offset %d, reclen=%d\n", 
+                             bytes_processed, entry->d_reclen);
+                    break;
+                }
+                
+                entry_count++;
+                
+                // 打印条目详细信息
+                printfCyan("[sys_getdents64] DEBUG - Entry %d:\n", entry_count);
+                printfCyan("  d_ino: %lu\n", entry->d_ino);
+                printfCyan("  d_off: %ld\n", entry->d_off);
+                printfCyan("  d_reclen: %u\n", entry->d_reclen);
+                printfCyan("  d_type: %u (", entry->d_type);
+                
+                // 打印文件类型的可读名称
+                switch (entry->d_type) {
+                    case T_DIR:
+                        printfCyan("Directory");
+                        break;
+                    case T_FILE:
+                        printfCyan("Regular File");
+                        break;
+                    case T_CHR:
+                        printfCyan("Character Device");
+                        break;
+                    case T_BLK:
+                        printfCyan("Block Device");
+                        break;
+                    case T_FIFO:
+                        printfCyan("FIFO/Pipe");
+                        break;
+                    case T_SOCK:
+                        printfCyan("Socket");
+                        break;
+                    case T_UNKNOWN:
+                    default:
+                        printfCyan("Unknown");
+                        break;
+                }
+                printfCyan(")\n");
+                
+                // 打印文件名（注意字符串可能不以\0结尾）
+                int name_len = entry->d_reclen - sizeof(struct linux_dirent64);
+                if (name_len > 0 && name_len < 256) {
+                    char name_buf[256];
+                    strncpy(name_buf, entry->d_name, name_len);
+                    name_buf[name_len] = '\0'; // 确保字符串结尾
+                    printfCyan("  d_name: \"%s\"\n", name_buf);
+                } else {
+                    printfCyan("  d_name: <invalid name length %d>\n", name_len);
+                }
+                
+                printfCyan("  Entry ends at offset: %d\n", bytes_processed + entry->d_reclen);
+                
+                bytes_processed += entry->d_reclen;
+            }
+            
+            printfCyan("[sys_getdents64] DEBUG - Total entries processed: %d\n", entry_count);
+            printfCyan("[sys_getdents64] DEBUG - Total bytes processed: %d/%d\n", bytes_processed, result);
+        } else {
+            printfYellow("[sys_getdents64] DEBUG - No entries returned (result=0)\n");
+        }
+        
+        // 将结果复制到用户空间
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        
+        if (result > 0) {
+            int copy_result = mem::k_vmm.copy_out(*pt, buf_addr, kernel_buf, result);
+            if (copy_result < 0) {
+                printfRed("[sys_getdents64] FAILED - Cannot copy to user space\n");
+                return -EFAULT;
+            }
+        }
+        
+        printfYellow("[sys_getdents64] SUCCESS - Read %d bytes from directory\n", result);
+        return result;
     }
     uint64 SyscallHandler::sys_shutdown()
     {
