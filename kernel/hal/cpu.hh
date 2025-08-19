@@ -12,11 +12,12 @@
 class Cpu
 {
 private:
-        proc::Pcb *_cur_proc;   // 当前进程
-        proc::Context _context; // 进程上下文
-        int _num_off;           // 关闭中断层数
-        int _int_ena;           // 关中断前中断开关状态
-        
+        proc::Pcb *_cur_proc; // 当前进程
+        __attribute__((aligned(128)))
+        proc::Context _context;                     // 进程上下文
+        __attribute__((aligned(128))) int _num_off; // 关闭中断层数
+        int _int_ena;                               // 关中断前中断开关状态
+
 public:
         proc::Context *get_context() { return &_context; }
 
