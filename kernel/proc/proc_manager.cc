@@ -3858,12 +3858,12 @@ namespace proc
                     {
                         // TODO: 这个可不是sf了, 那怎么办呢
                         printfBlue("execve: using riscv64 sf dynamic linker\n");
-                        if (vfs_is_file_exist("/musl/lib/libc.so") != 1)
+                        if (vfs_is_file_exist("/lib/ld-musl-riscv64.so.1") != 1)
                         {
                             panic("execve: failed to find riscv64 musl linker\n");
                             return -1;
                         }
-                        interpreter_path = "/musl/lib/libc.so";
+                        interpreter_path = "/lib/ld-musl-riscv64.so.1";
                     }
                     else if (strcmp(interpreter_path.c_str(), "/lib64/ld-linux-loongarch-lp64d.so.1") == 0)
                     {
