@@ -350,6 +350,10 @@ namespace fs
         add_virtual_file("/dev/null", fs::FileTypes::FT_DEVICE,
                          eastl::make_unique<DevNullProvider>());
 
+        // /dev/urandom (随机数设备)
+        add_virtual_file("/dev/urandom", fs::FileTypes::FT_DEVICE,
+                         eastl::make_unique<DevUrandomProvider>());
+
         // /proc/sys/kernel/shmmax (共享内存最大值)
         add_virtual_file("/proc/sys/kernel/shmmax", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcSysKernelShmmaxProvider>());

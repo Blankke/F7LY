@@ -976,9 +976,18 @@ uint vfs_read_file(const char *path, uint64 buffer_addr, size_t offset, size_t s
 
     int res;
     ext4_file file;
+    eastl::string resolved_path;
+    res = resolve_symlinks(eastl::string(path), resolved_path);
+    if (res != 0) {
+        printfRed("Failed to resolve symlinks for path: %s, error: %d\n", path, res);
+        return res;
+    }
+    
+    // printfCyan("vfs_read_file: resolved path %s -> %s\n", path, resolved_path.c_str());
 
     // 打开文件（只读模式）
-    res = ext4_fopen(&file, path, "rb");
+    res = ext4_fopen(&file, resolved_path.c_str(), "rb");
+
     if (res != EOK)
     {
         printfRed("Failed to open file: %d\n", res);

@@ -1970,7 +1970,7 @@ namespace syscall
         int fd;
         if (_arg_int(0, fd) < 0)
             return -1;
-        printfCyan("[SyscallHandler::sys_close] fd: %d\n", fd);
+        printfCyan("[SyscallHandler::sys_close] fd: %d fd_name: %s\n", fd, proc::k_pm.get_cur_pcb()->get_open_file(fd)->_path_name.c_str());
         return proc::k_pm.close(fd);
     }
     uint64 SyscallHandler::sys_mknod()
@@ -6888,7 +6888,56 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_setsid()
     {
-        panic("未实现该系统调用");
+        proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+        if (current_proc == nullptr)
+        {
+            panic("[SyscallHandler::sys_setsid] Current process is null\n");
+            return SYS_ESRCH;
+        }
+
+        printfCyan("[SyscallHandler::sys_setsid] Process %d (pgid=%d, sid=%d) calling setsid\n", 
+                   current_proc->get_pid(), current_proc->get_pgid(), current_proc->get_sid());
+
+        // 根据 POSIX 标准，如果调用进程已经是进程组领导者，则 setsid 失败
+        // 进程组领导者的特征是 pid == pgid
+        if (current_proc->get_pid() == current_proc->get_pgid())
+        {
+            printfRed("[SyscallHandler::sys_setsid] Process %d is already a process group leader (pgid=%d), cannot call setsid\n", 
+                      current_proc->get_pid(), current_proc->get_pgid());
+            return SYS_EPERM; // 操作不允许
+        }
+
+        // 检查是否已经存在以当前进程 PID 为进程组 ID 的其他进程
+        // 这是为了确保新的进程组 ID 是唯一的
+        for (uint i = 0; i < proc::num_process; i++)
+        {
+            proc::Pcb *p = &proc::k_proc_pool[i];
+            if (p->get_state() != proc::ProcState::UNUSED && 
+                p != current_proc && 
+                p->get_pgid() == current_proc->get_pid())
+            {
+                printfRed("[SyscallHandler::sys_setsid] Another process (pid=%d) already has pgid=%d, cannot create session\n", 
+                          p->get_pid(), current_proc->get_pid());
+                return SYS_EPERM; // 操作不允许
+            }
+        }
+
+        // 创建新会话和新进程组
+        // 1. 设置新的会话ID为当前进程的PID
+        current_proc->set_sid(current_proc->get_pid());
+        
+        // 2. 设置新的进程组ID为当前进程的PID
+        current_proc->set_pgid(current_proc->get_pid());
+
+        // 3. 分离控制终端（如果有的话）
+        // 注意：当前系统可能没有实现控制终端，所以这里只是注释说明
+        // current_proc->set_controlling_tty(nullptr);
+
+        printfGreen("[SyscallHandler::sys_setsid] Successfully created new session for process %d (sid=%d, pgid=%d)\n", 
+                    current_proc->get_pid(), current_proc->get_sid(), current_proc->get_pgid());
+
+        // 返回新的会话ID（等于进程PID）
+        return current_proc->get_sid();
     }
 
     uint64 SyscallHandler::sys_getsid()
@@ -7114,6 +7163,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_socket()
     {
+        return SYS_ENOSYS;
         int domain, type, protocol;
 
         if (_arg_int(0, domain) < 0)
@@ -8008,6 +8058,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_sendto()
     {
+        return SYS_ENOSYS;
         // https://www.man7.org/linux/man-pages/man3/sendto.3p.html
         int sockfd;
         uint64 buf_ptr;

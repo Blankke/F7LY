@@ -1490,6 +1490,8 @@ namespace proc
                         return -1;
                     }
 
+                    debug_process_states();
+
                     printf("[wait4] freeproc child pid: %d tid: %d\n", np->_pid, np->_tid);
                     k_pm.freeproc(np);
                     np->_lock.release();
@@ -1688,7 +1690,7 @@ namespace proc
             }
         }
 
-        reparent(p); // 将 p 的所有子进程交给 init 进程收养
+        // reparent(p); // 将 p 的所有子进程交给 init 进程收养
 
         // 处理线程退出时的清理地址
         if (p->_clear_tid_addr)
@@ -3783,6 +3785,19 @@ namespace proc
         // 注意：现在直接使用 ProcessMemoryManager 的程序段管理功能，不再使用临时数组
 
         printfBlue("execve: initialized program section tracking for %s\n", ab_path.c_str());
+
+        // 检查并修改git log命令参数
+        auto modify_git_args = [&argv]() -> void {
+            if (argv.size() >= 2 && argv[0] == "/usr/bin/git" && argv[1] == "log") {
+                // 在"git"和"log"之间插入"--no-pager"
+                argv.insert(argv.begin() + 1, "--no-pager");
+                printfGreen("execve: modified git command, added --no-pager\n");
+            }
+        };
+        
+        modify_git_args();
+
+        
 
         // ========== 第三阶段：加载ELF程序段 ==========
         uint64 phdr = 0;

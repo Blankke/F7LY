@@ -53,7 +53,7 @@ int run_test(const char *path, char *argv[], char *envp[])
     else
     {
         int child_exit_state = -100;
-        if (wait(&child_exit_state) < 0)
+        if (waitpid(pid, &child_exit_state, 0) < 0)
             printf("wait fail\n");
     }
     return 0;
@@ -301,7 +301,7 @@ int git_test(const char *path)
 {
     chdir(path);
     char *envp[] = {
-        "HOME=/", // 设置 HOME
+        "HOME=/proj", // 设置 HOME
         NULL          // 必须以 NULL 结尾
     };
     for (int i = 0; git_testcases[i][0] != NULL; i++)
@@ -317,18 +317,18 @@ int git_test(const char *path)
 }
 
 char *git_testcases[][8] = {
-    // {"bin/busybox", "echo", "=============== Task0 BEGIN git -h ===============", NULL},
-    // {"usr/bin/git", "help", NULL},
-    // {"bin/busybox", "echo", "=============== Task0 END git -h ===============", NULL  },
-    //     {"bin/busybox", "echo", "=============== Task1 BEGIN git -h ===============", NULL},
-    //     {"bin/busybox", "mkdir", "proj", NULL},
-    // {"bin/busybox", "cd", "proj", NULL},
+    {"/bin/busybox", "echo", "=============== Task0 BEGIN git -h ===============", NULL},
+    {"/usr/bin/git", "help", NULL},
+    {"/bin/busybox", "echo", "=============== Task0 END git -h ===============", NULL},
+    {"/bin/busybox", "echo", "=============== Task1 BEGIN file ===============", NULL},
+    {"/usr/bin/git", "config", "--global", "--add", "safe.directory", "$(pwd)", NULL},
+    {"/usr/bin/git", "config", "--global", "user.email", "you@example.com", NULL},
+    {"/usr/bin/git", "config", "--global", "user.name", "Your Name", NULL},
     {"/usr/bin/git", "init", NULL},
-    // {"bin/busybox", "sh", "-c", "busybox cat > README.md", NULL},
     {"/usr/bin/git", "add", ".", NULL},
     {"/usr/bin/git", "commit", "-m", "add README.md", NULL},
-    {"/usr/bin/git", "--no-pager", "log", NULL},
-    //     {"bin/busybox", "echo", "=============== Task1 END git -h ===============", NULL},
+    {"/usr/bin/git", "log", NULL},
+    {"/bin/busybox", "echo", "=============== Task1 END file ===============", NULL},
     {NULL}};
 
 char *libctest[][2] = {

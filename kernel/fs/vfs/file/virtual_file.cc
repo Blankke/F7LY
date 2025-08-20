@@ -215,6 +215,32 @@ namespace fs
             return 0; // 总是返回 EOF
         }
 
+        // 特殊处理 /dev/urandom 设备
+        if (_content_provider && _content_provider->get_provider_type() == VirtualProviderType::DEV_URANDOM) {
+            // 处理偏移量参数
+            if (off < 0) {
+                off = _file_ptr;
+            }
+
+            // /dev/urandom 可以读取任意数量的随机字节
+            char* dst_buf = (char*)buf;
+            
+            // 简单的伪随机数生成器（线性同余生成器）
+            // 在真实实现中，这里应该使用加密安全的随机数生成器
+            static uint32_t seed = 0x12345678; // 静态种子变量，初始化为一个非零值
+            for (size_t i = 0; i < len; i++) {
+                seed = seed * 1664525 + 1013904223; // 更好的LCG参数
+                dst_buf[i] = (char)(seed >> 24); // 取最高字节作为随机数
+            }
+
+            // 如果upgrade为true，更新文件指针
+            if (upgrade) {
+                _file_ptr = off + len;
+            }
+
+            return len;
+        }
+
         // 对于动态内容，每次都重新生成
         if (_content_provider->is_dynamic()) {
             _cached_content = _content_provider->generate_content();
@@ -698,6 +724,24 @@ namespace fs
         (void)buf;  // 忽略缓冲区内容
         (void)off;  // 忽略偏移量
         return len; // 假装写入了所有数据
+    }
+
+    // ======================== DevUrandomProvider 实现 ========================
+    
+    eastl::string DevUrandomProvider::generate_content()
+    {
+        // /dev/urandom 不需要预先生成内容，因为它产生随机字节
+        // 这个方法不应该被调用，因为我们会重写读取逻辑
+        return "";
+    }
+
+    long DevUrandomProvider::handle_write(uint64 buf, size_t len, long off)
+    {
+        // /dev/urandom 设备接受写入来更新熵池，总是返回写入的长度
+        // 在真实实现中，这些数据会被用来增加系统的熵
+        (void)buf;  // 忽略缓冲区内容（简化实现）
+        (void)off;  // 忽略偏移量
+        return len; // 假装写入了所有数据来更新熵池
     }
 
     // ======================== ProcSelfMapsProvider 实现 ========================

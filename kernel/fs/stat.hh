@@ -1,13 +1,13 @@
 #pragma once
 #include "types.hh"
-#define T_DIR     1   // Directory
-#define T_FILE    2   // File
-#define T_DEVICE  3   // Device
-#define T_CHR     4   // 字符设备
-#define T_BLK     5   // 块设备
-#define T_FIFO    6   // FIFO/命名管道
-#define T_SOCK    7   // Socket
-#define T_UNKNOWN 8
+#define T_DIR     4     // Directory
+#define T_FILE    8   // File
+#define T_DEVICE  6   // Device
+#define T_CHR     2   // 字符设备
+#define T_BLK     6   // 块设备
+#define T_FIFO    1   // FIFO/命名管道
+#define T_SOCK    12   // Socket
+#define T_UNKNOWN 14
 
 // struct stat {
 //   int dev;     // File system's disk device
