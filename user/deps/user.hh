@@ -89,6 +89,6 @@ int final_test_glibc(void);
 int git_test(const char *path);
 int vim_h();
 int gcc_test();
-
+int rustc_test();
 // init函数
 void init_env(const char *path);
