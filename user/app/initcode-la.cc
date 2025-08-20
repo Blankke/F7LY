@@ -4,8 +4,7 @@ extern "C"
 {
     int main()
     {
-
-        vim_h();
+        gcc_test();
         shutdown();
         return 0;
     }

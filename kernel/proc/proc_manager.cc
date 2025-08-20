@@ -1472,7 +1472,7 @@ namespace proc
             for (uint i = 0; i < num_process; i++)
             {
                 Pcb *np = &k_proc_pool[i];
-                printf("[wait4] checking global_id: %d, pid: %d tid: %d state: %d\n", np->_global_id, np->_pid, np->_tid, (int)np->get_state());
+                // printf("[wait4] checking global_id: %d, pid: %d tid: %d state: %d\n", np->_global_id, np->_pid, np->_tid, (int)np->get_state());
 
                 // 检查是否是目标子进程
                 if (!is_target_child(np, p, child_pid))
