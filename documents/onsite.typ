@@ -18,4 +18,4 @@
 
 #show: main
 
-#include "analysis.typ"
+#include "content/analysis.typ"
