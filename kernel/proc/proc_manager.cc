@@ -62,6 +62,7 @@ extern "C"
 
 namespace proc
 {
+    __attribute__((aligned(512)))
     ProcessManager k_pm;
 
     void ProcessManager::init(const char *pid_lock_name, const char *tid_lock_name, const char *wait_lock_name)
@@ -336,7 +337,7 @@ namespace proc
             //             proc->_cwd = fs::ramfs::k_ramfs.getRoot()->EntrySearch("mnt");
             //             proc->_cwd_name = "/mnt/";
 
-            // filesystem_init();
+            filesystem_init();
             // filesystem2_init(); // 这个滚蛋
             printf("[forkret] into forkret , cur_pid=%d, cur_tid=%d\n", _cur_pid, _cur_tid);
             fs::device_file *f_in = new fs::device_file();
@@ -1419,7 +1420,7 @@ namespace proc
     {
         // debug_process_states();
         Pcb *p = k_pm.get_cur_pcb();
-        printf("[wait4] pid: %d child_pid: %d, addr: %p, option: %d\n", p->_pid, child_pid, (void *)addr, option);
+        printfYellow("[proc::wait4] pid: %d child_pid: %d, addr: %p, option: %d\n", p->_pid, child_pid, (void *)addr, option);
 
         // 检查不支持的选项标志
         const int supported_options = syscall::WNOHANG | syscall::WUNTRACED;
@@ -1466,12 +1467,12 @@ namespace proc
             bool found_children = false;
             bool collected_zombie = false;
             int returned_pid = -1;
-
+            printf("[wait4] process %d waiting for child pid %d with addr %p and option %d\n", p->_pid, child_pid, (void *)addr, option);
             // 遍历所有进程，寻找符合条件的子进程
             for (uint i = 0; i < num_process; i++)
             {
                 Pcb *np = &k_proc_pool[i];
-                // printf("[wait4] checking global_id: %d, pid: %d tid: %d state: %d\n", np->_global_id, np->_pid, np->_tid, (int)np->get_state());
+                printf("[wait4] checking global_id: %d, pid: %d tid: %d state: %d\n", np->_global_id, np->_pid, np->_tid, (int)np->get_state());
 
                 // 检查是否是目标子进程
                 if (!is_target_child(np, p, child_pid))
