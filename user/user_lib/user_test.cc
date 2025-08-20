@@ -317,9 +317,7 @@ int gcc_test()
 {
     char *bb_sh[8] = {0};
     bb_sh[0] = "/usr/bin/gcc";
-    bb_sh[1] = "hello.c";
-    bb_sh[2] = "-o";
-    bb_sh[3] = "hello";
+    bb_sh[1] = "--h";
     run_test("/usr/bin/gcc", bb_sh, 0);
     return 0;
 }
