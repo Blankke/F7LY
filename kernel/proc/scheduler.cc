@@ -53,7 +53,7 @@ namespace proc
 
         for (;;)
         {
-            printfCyan("[sche]  start_schedule here , cur_pid=%d, cur_tid=%d\n", proc::k_pm._cur_pid, proc::k_pm._cur_tid);
+            // printfCyan("[sche]  start_schedule here , cur_pid=%d, cur_tid=%d\n", proc::k_pm._cur_pid, proc::k_pm._cur_tid);
             cpu->interrupt_on();
 
             priority = get_highest_proirity();
@@ -84,7 +84,7 @@ namespace proc
                         last_global_id = p->_global_id;
                         // printfRed("[sche]  switch to proc global_id: %d pid: %d tid: %d tgid: %d, name: %s\n", p->_global_id, p->_pid, p->_tid, p->_tgid, p->_name);
                     }
-                    printfRed("[start_schedule] cur_context:%p,sizeof context:%x, p->_context:%p,cur_pid_addr:%p\n", cur_context,sizeof(Context), &p->_context,&k_pm._cur_pid);
+                    // printfRed("[start_schedule] cur_context:%p,sizeof context:%x, p->_context:%p,cur_pid_addr:%p\n", cur_context,sizeof(Context), &p->_context,&k_pm._cur_pid);
                     swtch(cur_context, &p->_context);
                     // printf( "return from %d, name: %s\n", p->_global_id, p->_name );
                     // bool flag = false;
