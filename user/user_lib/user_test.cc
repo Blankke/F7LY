@@ -316,6 +316,16 @@ int git_test(const char *path)
     return 0;
 }
 
+int vim_h()
+{
+    chdir("/musl");
+    char *bb_sh[2] = {0};
+    bb_sh[0] = "usr/bin/vim";
+    bb_sh[1] = "-h";
+    run_test("usr/bin/vim", bb_sh, 0);
+    return 0;
+}
+
 char *git_testcases[][8] = {
     {"/bin/busybox", "echo", "=============== Task0 BEGIN git -h ===============", NULL},
     {"/usr/bin/git", "help", NULL},

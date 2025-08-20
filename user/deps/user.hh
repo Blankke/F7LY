@@ -87,6 +87,6 @@ int ltp_test(bool is_musl);
 int final_test_musl(void);
 int final_test_glibc(void);
 int git_test(const char *path);
-
+int vim_h();
 // init函数
 void init_env(const char *path);

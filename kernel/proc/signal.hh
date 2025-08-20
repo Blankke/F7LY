@@ -49,6 +49,15 @@ namespace proc
             constexpr int SIG_UNBLOCK = 1;
             constexpr int SIG_SETMASK = 2;
             
+            // Signal stack flags
+            constexpr int SS_ONSTACK = 1;
+            constexpr int SS_DISABLE = 2;
+            constexpr int SS_AUTODISARM = 4;
+            
+            // Signal stack size constants
+            constexpr size_t MINSIGSTKSZ = 2048;
+            constexpr size_t SIGSTKSZ = 8192;
+            
             // Signal handler type
             typedef void (*__sighandler_t)(int);
             
@@ -85,9 +94,9 @@ namespace proc
 
             struct signalstack
             {
-                uint64 sp;
-                uint32 flags;
-                uint64 size;
+                void *ss_sp;     // Base address of stack
+                int ss_flags;    // Flags (SS_ONSTACK, SS_DISABLE, SS_AUTODISARM)
+                size_t ss_size;  // Number of bytes in stack
             };
 
             struct generalregs{
@@ -141,6 +150,7 @@ namespace proc
             int sigAction(int flag, sigaction *newact, sigaction *oldact);
             int sigprocmask(int how, sigset_t *newset, sigset_t *oldset, size_t sigsize);
             int sigsuspend(const sigset_t *mask);
+            int sigaltstack(const signalstack *ss, signalstack *old_ss);
             void handle_signal();
             void handle_sync_signal();
             void default_handle(Pcb *p, int signum);

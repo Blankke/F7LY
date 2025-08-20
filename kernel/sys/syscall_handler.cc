@@ -11036,7 +11036,55 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_sigaltstack()
     {
-        panic("未实现该系统调用");
+        uint64 ss_addr, old_ss_addr;
+        
+        // 获取参数
+        if (_arg_addr(0, ss_addr) < 0)
+            return -1;
+        if (_arg_addr(1, old_ss_addr) < 0)
+            return -1;
+        
+        proc::ipc::signal::signalstack ss, old_ss;
+        proc::ipc::signal::signalstack *ss_ptr = nullptr;
+        proc::ipc::signal::signalstack *old_ss_ptr = nullptr;
+        proc::Pcb* _cur_proc = proc::k_pm.get_cur_pcb();
+        // 从用户空间复制ss参数
+        if (ss_addr != 0)
+        {
+            if (mem::k_vmm.copy_in(*_cur_proc->get_pagetable(), &ss, ss_addr, sizeof(ss)) < 0)
+            {
+                printfRed("[sys_sigaltstack] Failed to copy ss from user space\n");
+                return syscall::SYS_EFAULT;
+            }
+            ss_ptr = &ss;
+        }
+        
+        // 准备old_ss指针
+        if (old_ss_addr != 0)
+        {
+            old_ss_ptr = &old_ss;
+        }
+        
+        // 调用sigaltstack实现
+        int result = proc::ipc::signal::sigaltstack(ss_ptr, old_ss_ptr);
+        
+        // 如果有错误，返回错误码
+        if (result != 0)
+        {
+            return result;
+        }
+        
+        // 将old_ss复制回用户空间
+        if (old_ss_addr != 0)
+        {
+            if (mem::k_vmm.copy_out(*_cur_proc->get_pagetable(), old_ss_addr, &old_ss, sizeof(old_ss)) < 0)
+            {
+                printfRed("[sys_sigaltstack] Failed to copy old_ss to user space\n");
+                return syscall::SYS_EFAULT;
+            }
+        }
+        
+        return 0;
     }
     uint64 SyscallHandler::sys_rt_sigsuspend()
     {
