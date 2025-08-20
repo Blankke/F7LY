@@ -313,6 +313,17 @@ int git_test(const char *path)
     // run_test("busybox", bb_sh, envp);
     return 0;
 }
+int gcc_test()
+{
+    chdir("/musl");
+    char *bb_sh[8] = {0};
+    bb_sh[0] = "/usr/bin/gcc";
+    bb_sh[1] = "hello.c";
+    bb_sh[2] = "-o";
+    bb_sh[3] = "hello";
+    run_test("/usr/bin/gcc", bb_sh, 0);
+    return 0;
+}
 
 int vim_h()
 {
