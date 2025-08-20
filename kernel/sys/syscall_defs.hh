@@ -340,4 +340,24 @@ namespace syscall
     constexpr int SYS_EINPROGRESS = -115;  // 套接字为非阻塞模式且连接无法立即完成
     constexpr int SYS_EBADMSG = -74;       // 消息格式错误（不是有效的数据消息）
     constexpr int SYS_ERESTARTSYS = -512;  // 内核自动重启系统调用
+
+    // prctl operation constants
+    constexpr int PR_SET_NAME = 15;           // 设置进程名称
+    constexpr int PR_GET_NAME = 16;           // 获取进程名称
+    constexpr int PR_SET_DUMPABLE = 4;        // 设置进程可dump标志
+    constexpr int PR_GET_DUMPABLE = 3;        // 获取进程可dump标志
+    constexpr int PR_SET_PDEATHSIG = 1;       // 设置父进程死亡信号
+    constexpr int PR_GET_PDEATHSIG = 2;       // 获取父进程死亡信号
+    constexpr int PR_SET_KEEPCAPS = 8;        // 设置keepcaps标志
+    constexpr int PR_GET_KEEPCAPS = 7;        // 获取keepcaps标志
+    constexpr int PR_SET_TIMING = 13;         // 设置进程定时模式
+    constexpr int PR_GET_TIMING = 14;         // 获取进程定时模式
+    constexpr int PR_SET_SECUREBITS = 28;     // 设置安全位
+    constexpr int PR_GET_SECUREBITS = 27;     // 获取安全位
+    constexpr int PR_SET_TIMERSLACK = 29;     // 设置定时器松弛时间
+    constexpr int PR_GET_TIMERSLACK = 30;     // 获取定时器松弛时间
+    constexpr int PR_SET_NO_NEW_PRIVS = 38;   // 设置no_new_privs标志
+    constexpr int PR_GET_NO_NEW_PRIVS = 39;   // 获取no_new_privs标志
+    constexpr int PR_SET_THP_DISABLE = 41;    // 设置禁用透明大页
+    constexpr int PR_GET_THP_DISABLE = 42;    // 获取透明大页禁用状态
 }

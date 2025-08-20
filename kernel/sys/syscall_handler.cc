@@ -28,6 +28,7 @@
 #include <asm-generic/statfs.h>
 #include "fs/ioctl.hh"
 #include <asm-generic/poll.h>
+#include <bits/time.h>
 #include <linux/sysinfo.h>
 #include <linux/fs.h>
 #include "fs/vfs/file/normal_file.hh"
@@ -5334,117 +5335,217 @@ namespace syscall
         uint64 sigmask_addr;
         pollfd *fds = nullptr;
         int nfds;
-        [[maybe_unused]] timespec tm{0, 0}; // 现在没用上
-        [[maybe_unused]] sigset_t sigmask;  // 现在没用上
-        [[maybe_unused]] int timeout;       // 现在没用上
+        timespec tm{0, 0};
+        proc::ipc::signal::sigset_t sigmask;
+        proc::ipc::signal::sigset_t old_sigmask;
+        int timeout_ms = -1;  // 超时时间（毫秒），-1表示无限等待
         int ret = 0;
+        bool have_events = false;
 
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = proc->get_pagetable();
 
+        // 获取参数
         if (_arg_addr(0, fds_addr) < 0)
-            return -1;
+            return -EFAULT;
 
         if (_arg_int(1, nfds) < 0)
-            return -1;
+            return -EFAULT;
 
         if (_arg_addr(2, timeout_addr) < 0)
-            return -1;
+            return -EFAULT;
 
         if (_arg_addr(3, sigmask_addr) < 0)
-            return -1;
+            return -EFAULT;
 
-        fds = new pollfd[nfds];
-        if (fds == nullptr)
-            return -2;
-        for (int i = 0; i < nfds; i++)
-        {
-            if (mem::k_vmm.copy_in(*pt, &fds[i],
-                                   fds_addr + i * sizeof(pollfd),
-                                   sizeof(pollfd)) < 0)
+        // 验证nfds范围
+        if (nfds < 0)
+            return -EINVAL;
+
+        // 验证fds指针
+        if (fds_addr == 0 && nfds > 0)
+            return -EFAULT;
+
+        // 分配pollfd数组
+        if (nfds > 0) {
+            fds = new pollfd[nfds];
+            if (fds == nullptr)
+                return -ENOMEM;
+
+            // 复制用户空间的pollfd数组
+            for (int i = 0; i < nfds; i++)
             {
-                delete[] fds;
-                return -1;
+                if (mem::k_vmm.copy_in(*pt, &fds[i],
+                                       fds_addr + i * sizeof(pollfd),
+                                       sizeof(pollfd)) < 0)
+                {
+                    delete[] fds;
+                    return -EFAULT;
+                }
             }
         }
 
+        // 处理超时参数
         if (timeout_addr != 0)
         {
-            if ((mem::k_vmm.copy_in(*pt, &tm, timeout_addr, sizeof(tm))) <
-                0)
+            if (mem::k_vmm.copy_in(*pt, &tm, timeout_addr, sizeof(tm)) < 0)
             {
                 delete[] fds;
-                return -1;
+                return -EFAULT;
             }
-            timeout = tm.tv_sec * 1000 + tm.tv_nsec / 1'000'000;
+            
+            // 检查timespec是否有效
+            if (tm.tv_sec < 0 || tm.tv_nsec < 0 || tm.tv_nsec >= 1000000000)
+            {
+                delete[] fds;
+                return -EINVAL;
+            }
+            
+            // 转换为毫秒，检查溢出
+            if (tm.tv_sec > INT_MAX / 1000)
+            {
+                timeout_ms = -1; // 太大，设为无限等待
+            }
+            else
+            {
+                timeout_ms = tm.tv_sec * 1000 + tm.tv_nsec / 1000000;
+            }
         }
-        else
-            timeout = -1;
 
+        // 处理信号掩码
+        bool sigmask_changed = false;
         if (sigmask_addr != 0)
-            if (mem::k_vmm.copy_in(*pt, &sigmask, sigmask_addr,
-                                   sizeof(sigset_t)) < 0)
+        {
+            if (mem::k_vmm.copy_in(*pt, &sigmask, sigmask_addr, sizeof(sigset_t)) < 0)
             {
                 delete[] fds;
-                return -1;
+                return -EFAULT;
             }
+            
+            // 原子地更改信号掩码
+            // 保存当前信号掩码并设置新的
+            old_sigmask.sig[0] = proc->_sigmask;
+            proc->_sigmask = sigmask.sig[0];
+            sigmask_changed = true;
+        }
 
-        while (1)
+        // 轮询循环
+        uint64 start_time = tmm::k_tm.get_ticks();
+        uint64 timeout_ticks = (timeout_ms == -1) ? UINT64_MAX : 
+                               (timeout_ms * CLOCKS_PER_SEC) / 1000;
 
+        while (true)
         {
-            for (auto i = 0; i < nfds; i++)
+            ret = 0;
+            have_events = false;
+
+            // 检查每个文件描述符
+            for (int i = 0; i < nfds; i++)
             {
                 fds[i].revents = 0;
+                
+                // 负的fd被忽略
                 if (fds[i].fd < 0)
                 {
                     continue;
                 }
 
-                fs::file *f = nullptr;
-                int reti = 0;
-
-                if ((f = proc->get_open_file(fds[i].fd)) == nullptr)
+                fs::file *f = proc->get_open_file(fds[i].fd);
+                
+                if (f == nullptr)
                 {
                     fds[i].revents |= POLLNVAL;
-                    reti = 1;
+                    have_events = true;
                 }
                 else
                 {
+                    // 检查读就绪
                     if (fds[i].events & POLLIN)
                     {
                         if (f->read_ready())
                         {
                             fds[i].revents |= POLLIN;
-                            reti = 1;
+                            have_events = true;
                         }
                     }
+                    
+                    // 检查写就绪
                     if (fds[i].events & POLLOUT)
                     {
                         if (f->write_ready())
                         {
                             fds[i].revents |= POLLOUT;
-                            reti = 1;
+                            have_events = true;
                         }
                     }
+                    
+                    // 检查优先数据
+                    if (fds[i].events & POLLPRI)
+                    {
+                        // 大多数文件类型不支持优先数据
+                        // 可以根据具体文件类型实现
+                    }
+                    
+                    // TODO: 检查错误和挂起条件
+                    // 这些检查需要根据具体文件类型实现
+                    // if (f->has_error()) fds[i].revents |= POLLERR;
+                    // if (f->is_hangup()) fds[i].revents |= POLLHUP;
                 }
 
-                ret += reti;
+                if (fds[i].revents != 0)
+                    ret++;
             }
-            if (ret != 0)
+
+            // 如果有事件发生，退出
+            if (have_events)
                 break;
-            // else
-            // {
-            // 	/// @todo sleep
-            // }
+
+            // 检查超时
+            if (timeout_ms == 0)
+            {
+                // 非阻塞调用，立即返回
+                break;
+            }
+            else if (timeout_ms > 0)
+            {
+                uint64 current_time = tmm::k_tm.get_ticks();
+                if (current_time - start_time >= timeout_ticks)
+                {
+                    // 超时
+                    break;
+                }
+            }
+
+            // 检查是否有信号待处理
+            if (proc->_signal & ~proc->_sigmask)
+            {
+                ret = -EINTR;
+                break;
+            }
+
+            // 让出CPU，等待一段时间
+            proc::k_scheduler.yield();
         }
 
-        if (mem::k_vmm.copy_out(*pt, fds_addr, fds, nfds * sizeof(pollfd)) < 0)
+        // 恢复原始信号掩码
+        if (sigmask_changed)
         {
-            delete[] fds;
-            return -1;
+            proc->_sigmask = old_sigmask.sig[0];
         }
 
-        delete[] fds;
+        // 将结果复制回用户空间
+        if (ret >= 0 && nfds > 0)
+        {
+            if (mem::k_vmm.copy_out(*pt, fds_addr, fds, nfds * sizeof(pollfd)) < 0)
+            {
+                delete[] fds;
+                return -EFAULT;
+            }
+        }
+
+        if (fds != nullptr)
+            delete[] fds;
+            
         return ret;
     }
 
@@ -12519,7 +12620,354 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_prctl()
     {
-        panic("未实现该系统调用");
+        int op;
+        uint64 arg2, arg3, arg4, arg5;
+        
+        // 获取参数
+        if (_arg_int(0, op) < 0)
+        {
+            return -EINVAL;
+        }
+        
+        arg2 = _arg_raw(1);
+        arg3 = _arg_raw(2);
+        arg4 = _arg_raw(3);
+        arg5 = _arg_raw(4);
+        
+        proc::Pcb *current = proc::k_pm.get_cur_pcb();
+        if (!current)
+        {
+            return -EINVAL;
+        }
+        
+        // 检查不使用的参数是否为0（除了某些特定操作）
+        switch (op)
+        {
+        case PR_SET_NAME:
+        {
+            // 设置进程名称
+            if (!arg2)
+            {
+                return -EINVAL;
+            }
+            
+            // 检查参数3,4,5是否为0
+            if (arg3 != 0 || arg4 != 0 || arg5 != 0)
+            {
+                return -EINVAL;
+            }
+            
+            eastl::string name_str;
+            int ret = _fetch_str(arg2, name_str, 16); // PR_SET_NAME限制为16字节
+            if (ret < 0)
+            {
+                return -EFAULT;
+            }
+            
+            // 复制名称到PCB（限制长度）
+            strncpy(current->_name, name_str.c_str(), sizeof(current->_name) - 1);
+            current->_name[sizeof(current->_name) - 1] = '\0';
+            
+            return 0;
+        }
+        
+        case PR_GET_NAME:
+        {
+            // 获取进程名称
+            if (!arg2)
+            {
+                return -EINVAL;
+            }
+            
+            // 检查参数3,4,5是否为0
+            if (arg3 != 0 || arg4 != 0 || arg5 != 0)
+            {
+                return -EINVAL;
+            }
+            
+            // 复制进程名称到用户空间
+            mem::PageTable *pt = current->get_pagetable();
+            if (!pt)
+            {
+                return -EINVAL;
+            }
+            
+            size_t name_len = strlen(current->_name);
+            if (name_len >= 16)
+            {
+                name_len = 15; // 留空间给null终止符
+            }
+            
+            char temp_name[17];
+            strncpy(temp_name, current->_name, name_len);
+            temp_name[name_len] = '\0';
+            
+            if (mem::k_vmm.copy_out(*pt, arg2, temp_name, name_len + 1) < 0)
+            {
+                return -EFAULT;
+            }
+            
+            return 0;
+        }
+        
+        case PR_SET_DUMPABLE:
+        {
+            // 设置进程可dump标志
+            // 检查参数3,4,5是否为0
+            if (arg3 != 0 || arg4 != 0 || arg5 != 0)
+            {
+                return -EINVAL;
+            }
+            
+            if (arg2 != 0 && arg2 != 1)
+            {
+                return -EINVAL;
+            }
+            
+            current->_dumpable = (int)arg2;
+            return 0;
+        }
+        
+        case PR_GET_DUMPABLE:
+        {
+            // 获取进程可dump标志
+            // 检查参数2,3,4,5是否为0
+            if (arg2 != 0 || arg3 != 0 || arg4 != 0 || arg5 != 0)
+            {
+                return -EINVAL;
+            }
+            
+            return current->_dumpable;
+        }
+        
+        case PR_SET_PDEATHSIG:
+        {
+            // 设置父进程死亡信号
+            // 检查参数3,4,5是否为0
+            if (arg3 != 0 || arg4 != 0 || arg5 != 0)
+            {
+                return -EINVAL;
+            }
+            
+            // 检查信号值是否有效（0-64）
+            if (arg2 > 64)
+            {
+                return -EINVAL;
+            }
+            
+            current->_pdeathsig = (int)arg2;
+            return 0;
+        }
+        
+        case PR_GET_PDEATHSIG:
+        {
+            // 获取父进程死亡信号
+            if (!arg2)
+            {
+                return -EINVAL;
+            }
+            
+            // 检查参数3,4,5是否为0
+            if (arg3 != 0 || arg4 != 0 || arg5 != 0)
+            {
+                return -EINVAL;
+            }
+            
+            mem::PageTable *pt = current->get_pagetable();
+            if (!pt)
+            {
+                return -EINVAL;
+            }
+            
+            int pdeathsig = current->_pdeathsig;
+            if (mem::k_vmm.copy_out(*pt, arg2, &pdeathsig, sizeof(int)) < 0)
+            {
+                return -EFAULT;
+            }
+            
+            return 0;
+        }
+        
+        case PR_SET_KEEPCAPS:
+        {
+            // 设置keepcaps标志
+            // 检查参数3,4,5是否为0
+            if (arg3 != 0 || arg4 != 0 || arg5 != 0)
+            {
+                return -EINVAL;
+            }
+            
+            if (arg2 != 0 && arg2 != 1)
+            {
+                return -EINVAL;
+            }
+            
+            current->_keepcaps = (int)arg2;
+            return 0;
+        }
+        
+        case PR_GET_KEEPCAPS:
+        {
+            // 获取keepcaps标志
+            // 检查参数2,3,4,5是否为0
+            if (arg2 != 0 || arg3 != 0 || arg4 != 0 || arg5 != 0)
+            {
+                return -EINVAL;
+            }
+            
+            return current->_keepcaps;
+        }
+        
+        case PR_SET_TIMING:
+        {
+            // 设置进程定时模式
+            // 检查参数3,4,5是否为0
+            if (arg3 != 0 || arg4 != 0 || arg5 != 0)
+            {
+                return -EINVAL;
+            }
+            
+            if (arg2 != 0 && arg2 != 1)
+            {
+                return -EINVAL;
+            }
+            
+            current->_timing = (int)arg2;
+            return 0;
+        }
+        
+        case PR_GET_TIMING:
+        {
+            // 获取进程定时模式
+            // 检查参数2,3,4,5是否为0
+            if (arg2 != 0 || arg3 != 0 || arg4 != 0 || arg5 != 0)
+            {
+                return -EINVAL;
+            }
+            
+            return current->_timing;
+        }
+        
+        case PR_SET_SECUREBITS:
+        {
+            // 设置安全位
+            // 检查参数3,4,5是否为0
+            if (arg3 != 0 || arg4 != 0 || arg5 != 0)
+            {
+                return -EINVAL;
+            }
+            
+            current->_securebits = arg2;
+            return 0;
+        }
+        
+        case PR_GET_SECUREBITS:
+        {
+            // 获取安全位
+            // 检查参数2,3,4,5是否为0
+            if (arg2 != 0 || arg3 != 0 || arg4 != 0 || arg5 != 0)
+            {
+                return -EINVAL;
+            }
+            
+            return current->_securebits;
+        }
+        
+        case PR_SET_TIMERSLACK:
+        {
+            // 设置定时器松弛时间
+            // 检查参数3,4,5是否为0
+            if (arg3 != 0 || arg4 != 0 || arg5 != 0)
+            {
+                return -EINVAL;
+            }
+            
+            current->_timer_slack_ns = arg2;
+            return 0;
+        }
+        
+        case PR_GET_TIMERSLACK:
+        {
+            // 获取定时器松弛时间
+            // 检查参数2,3,4,5是否为0
+            if (arg2 != 0 || arg3 != 0 || arg4 != 0 || arg5 != 0)
+            {
+                return -EINVAL;
+            }
+            
+            return current->_timer_slack_ns;
+        }
+        
+        case PR_SET_NO_NEW_PRIVS:
+        {
+            // 设置no_new_privs标志
+            // 检查参数3,4,5是否为0
+            if (arg3 != 0 || arg4 != 0 || arg5 != 0)
+            {
+                return -EINVAL;
+            }
+            
+            if (arg2 != 0 && arg2 != 1)
+            {
+                return -EINVAL;
+            }
+            
+            // no_new_privs只能从0设置为1，不能从1设置为0
+            if (current->_no_new_privs == 1 && arg2 == 0)
+            {
+                return -EINVAL;
+            }
+            
+            current->_no_new_privs = (int)arg2;
+            return 0;
+        }
+        
+        case PR_GET_NO_NEW_PRIVS:
+        {
+            // 获取no_new_privs标志
+            // 检查参数2,3,4,5是否为0
+            if (arg2 != 0 || arg3 != 0 || arg4 != 0 || arg5 != 0)
+            {
+                return -EINVAL;
+            }
+            
+            return current->_no_new_privs;
+        }
+        
+        case PR_SET_THP_DISABLE:
+        {
+            // 设置禁用透明大页标志
+            // 检查参数3,4,5是否为0
+            if (arg3 != 0 || arg4 != 0 || arg5 != 0)
+            {
+                return -EINVAL;
+            }
+            
+            if (arg2 != 0 && arg2 != 1)
+            {
+                return -EINVAL;
+            }
+            
+            current->_thp_disable = (int)arg2;
+            return 0;
+        }
+        
+        case PR_GET_THP_DISABLE:
+        {
+            // 获取透明大页禁用状态
+            // 检查参数2,3,4,5是否为0
+            if (arg2 != 0 || arg3 != 0 || arg4 != 0 || arg5 != 0)
+            {
+                return -EINVAL;
+            }
+            
+            return current->_thp_disable;
+        }
+        
+        default:
+            // 不支持的操作
+            return -EINVAL;
+        }
     }
     uint64 SyscallHandler::sys_ptrace()
     {
