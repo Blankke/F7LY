@@ -598,7 +598,9 @@ namespace mem
             pte_flags |= riscv::PteEnum::pte_readable_m;
         }
         if (vm->prot & PROT_EXEC)
+        {
             pte_flags |= riscv::PteEnum::pte_executable_m;
+        }
 #elif defined(LOONGARCH)
         pte_flags = PTE_U | PTE_D; // 用户可访问
         if (vm->prot & PROT_READ)
@@ -640,7 +642,8 @@ namespace mem
                     k_pmm.free_page(pa);
                     return size_result;
                 }
-                else{
+                else
+                {
                     file_size = vf->_stat.size;
                 }
             }

@@ -51,8 +51,38 @@ namespace dev
 
   int Console::console_read(int user_dst, uint64 dst, int n)
   {
+    _lock.acquire();
+    int target = n;
+    int copied = 0;
     
-    return 0;
+    // 等待直到有输入或遇到换行符
+    while (copied < target) {
+      // 如果读缓冲区为空且没有数据，等待输入
+      if (r_idx == w_idx) {
+        _lock.release();
+        // TODO: 这里应该等待输入事件，目前先返回已读取的字节数
+        return copied;
+      }
+      
+      char c = input_buf[r_idx % INPUT_BUF_SIZE];
+      r_idx++;
+      
+      // 将字符复制到用户空间
+      if (mem::k_vmm.copy_out(*proc::k_pm.get_cur_pcb()->get_pagetable(), dst + copied, &c, 1) < 0) {
+        _lock.release();
+        return copied > 0 ? copied : -1;
+      }
+      
+      copied++;
+      
+      // 如果遇到换行符，结束读取
+      if (c == '\n') {
+        break;
+      }
+    }
+    
+    _lock.release();
+    return copied;
   }
   int Console::console_intr(int c)
   {

@@ -3892,8 +3892,8 @@ namespace proc
                     }
                     else
                     {
-                        panic("execve: unknown dynamic linker: %s\n", interpreter_path.c_str());
-                        return -1; // 不支持的动态链接器
+                        // panic("execve: unknown dynamic linker: %s\n", interpreter_path.c_str());
+                        // return -1; // 不支持的动态链接器
                     }
                     break;
                 }
@@ -4503,7 +4503,7 @@ namespace proc
         printfGreen("execve succeed, new process size: %p\n", proc->get_size());
         printfGreen("execve: process '%s' loaded with %d program sections\n",
                     proc->get_name(), proc->get_prog_section_count());
-
+        proc->print_detailed_memory_info();
         // 写成0为了适配glibc的rtld_fini需求
 
 #undef CLEANUP_AND_RETURN

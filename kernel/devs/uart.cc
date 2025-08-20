@@ -148,13 +148,23 @@ namespace dev
 	//=========================中断相关==========================
 	int UartManager::handle_intr()
 	{
+		// 处理接收到的字符
 		while (1)
 		{
-			u8* c =0;
-			if( get_char(c)==-1)
+			volatile regLSR *lsr = (volatile regLSR *)(_uart_base + LSR);
+			if (lsr->data_ready == 0)
 				break;
-			return *c;
-			kConsole.console_intr(*c);
+			
+			// 从硬件读取字符
+			u8 c = _read_reg(UartReg::RHR);
+			
+			// 放入读缓冲区
+			if (!_read_buffer_full()) {
+				_read_buffer_put(c);
+			}
+			
+			// 传递给控制台进行进一步处理
+			kConsole.console_intr(c);
 		}
 
 		// send buffered characters.
