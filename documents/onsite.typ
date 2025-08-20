@@ -19,3 +19,4 @@
 #show: main
 
 #include "content/analysis.typ"
+#include "content/gcc.typ"
