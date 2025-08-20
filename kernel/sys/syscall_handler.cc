@@ -2439,150 +2439,173 @@ namespace syscall
         fs::file *f;
         uint64 buf_addr;
         uint64 buf_len;
-        
+
         // 参数验证
-        if (_arg_fd(0, nullptr, &f) < 0) {
+        if (_arg_fd(0, nullptr, &f) < 0)
+        {
             printfRed("[sys_getdents64] FAILED - Invalid file descriptor\n");
             return -EBADF;
         }
-        if (_arg_addr(1, buf_addr) < 0) {
+        if (_arg_addr(1, buf_addr) < 0)
+        {
             printfRed("[sys_getdents64] FAILED - Invalid buffer address\n");
             return -EFAULT;
         }
-        if (_arg_addr(2, buf_len) < 0) {
+        if (_arg_addr(2, buf_len) < 0)
+        {
             printfRed("[sys_getdents64] FAILED - Invalid buffer length\n");
             return -EFAULT;
         }
-        
+
         // 检查文件描述符是否为目录
-        if (f->_attrs.filetype != fs::FileTypes::FT_DIRECT) {
+        if (f->_attrs.filetype != fs::FileTypes::FT_DIRECT)
+        {
             printfRed("[sys_getdents64] FAILED - File descriptor is not a directory\n");
             return -ENOTDIR;
         }
-        
+
+        printfGreen("[sys_getdents64] DEBUG - File descriptor: %d, Buffer address: %p, Buffer length: %lu\n",
+                    f->_path_name.c_str(), (void *)buf_addr, buf_len);
+
         // 检查缓冲区长度
-        if (buf_len == 0) {
+        if (buf_len == 0)
+        {
             return 0;
         }
-        
+
         // 限制缓冲区大小，避免栈溢出
         const uint64 max_buf_size = 4096; // 4KB 栈缓冲区
-        if (buf_len > max_buf_size) {
+        if (buf_len > max_buf_size)
+        {
             buf_len = max_buf_size;
         }
-        
+
         // 在栈上分配内核缓冲区
         char kernel_buf[max_buf_size];
         struct linux_dirent64 *dirp = (struct linux_dirent64 *)kernel_buf;
-        
+
         // 调用底层VFS函数获取目录项
         int result = vfs_getdents(f, dirp, buf_len);
-        
-        if (result < 0) {
+
+        if (result < 0)
+        {
             printfRed("[sys_getdents64] FAILED - vfs_getdents returned error: %d\n", result);
             return result;
         }
-        
+
         // 调试输出：打印获取到的目录项信息
-        if (result > 0) {
+        if (result > 0)
+        {
             printfCyan("[sys_getdents64] DEBUG - Total bytes read: %d\n", result);
             printfCyan("[sys_getdents64] DEBUG - Parsing directory entries:\n");
-            
+
             char *buf_ptr = kernel_buf;
             int bytes_processed = 0;
             int entry_count = 0;
-            
-            while (bytes_processed < result) {
+
+            while (bytes_processed < result)
+            {
                 struct linux_dirent64 *entry = (struct linux_dirent64 *)(buf_ptr + bytes_processed);
-                
+
                 // 检查条目的有效性
-                if (entry->d_reclen == 0 || bytes_processed + entry->d_reclen > result) {
-                    printfRed("[sys_getdents64] DEBUG - Invalid entry at offset %d, reclen=%d\n", 
-                             bytes_processed, entry->d_reclen);
+                if (entry->d_reclen == 0 || bytes_processed + entry->d_reclen > result)
+                {
+                    printfRed("[sys_getdents64] DEBUG - Invalid entry at offset %d, reclen=%d\n",
+                              bytes_processed, entry->d_reclen);
                     break;
                 }
-                
+
                 entry_count++;
-                
+
                 // 打印条目详细信息
                 printfCyan("[sys_getdents64] DEBUG - Entry %d:\n", entry_count);
                 printfCyan("  d_ino: %lu\n", entry->d_ino);
                 printfCyan("  d_off: %ld\n", entry->d_off);
                 printfCyan("  d_reclen: %u\n", entry->d_reclen);
                 printfCyan("  d_type: %u (", entry->d_type);
-                
+
                 // 打印文件类型的可读名称
-                switch (entry->d_type) {
-                    case T_DIR:
-                        printfCyan("Directory");
-                        break;
-                    case T_FILE:
-                        printfCyan("Regular File");
-                        break;
-                    case T_CHR:
-                        printfCyan("Character Device");
-                        break;
-                    case T_BLK:
-                        printfCyan("Block Device");
-                        break;
-                    case T_FIFO:
-                        printfCyan("FIFO/Pipe");
-                        break;
-                    case T_SOCK:
-                        printfCyan("Socket");
-                        break;
-                    case T_UNKNOWN:
-                    default:
-                        printfCyan("Unknown");
-                        break;
+                switch (entry->d_type)
+                {
+                case T_DIR:
+                    printfCyan("Directory");
+                    break;
+                case T_FILE:
+                    printfCyan("Regular File");
+                    break;
+                case T_CHR:
+                    printfCyan("Character Device");
+                    break;
+                case T_BLK:
+                    printfCyan("Block Device");
+                    break;
+                case T_FIFO:
+                    printfCyan("FIFO/Pipe");
+                    break;
+                case T_SOCK:
+                    printfCyan("Socket");
+                    break;
+                case T_UNKNOWN:
+                default:
+                    printfCyan("Unknown");
+                    break;
                 }
                 printfCyan(")\n");
-                
+
                 // 打印文件名（使用正确的长度计算方法）
                 // linux_dirent64结构: d_ino(8) + d_off(8) + d_reclen(2) + d_type(1) + d_name[0]
                 int name_start_offset = sizeof(uint64) + sizeof(int64) + sizeof(unsigned short) + sizeof(unsigned char);
                 int name_len = entry->d_reclen - name_start_offset;
-                
+
                 // 尝试使用strlen来获取实际的字符串长度
                 int actual_name_len = strlen(entry->d_name);
-                if (actual_name_len > 0 && actual_name_len < name_len && actual_name_len < 256) {
-                    printfCyan("  d_name: \"%s\" (strlen=%d, calc_len=%d)\n", 
-                              entry->d_name, actual_name_len, name_len);
-                } else if (name_len > 0 && name_len < 256) {
+                if (actual_name_len > 0 && actual_name_len < name_len && actual_name_len < 256)
+                {
+                    printfCyan("  d_name: \"%s\" (strlen=%d, calc_len=%d)\n",
+                               entry->d_name, actual_name_len, name_len);
+                }
+                else if (name_len > 0 && name_len < 256)
+                {
                     // 如果strlen不可靠，使用计算的长度但确保安全
                     char name_buf[256];
                     int safe_len = (name_len > 255) ? 255 : name_len;
                     strncpy(name_buf, entry->d_name, safe_len);
                     name_buf[safe_len] = '\0'; // 确保字符串结尾
                     printfCyan("  d_name: \"%s\" (safe_copy, len=%d)\n", name_buf, safe_len);
-                } else {
-                    printfCyan("  d_name: <invalid name length %d, name_start_offset=%d>\n", 
-                              name_len, name_start_offset);
                 }
-                
+                else
+                {
+                    printfCyan("  d_name: <invalid name length %d, name_start_offset=%d>\n",
+                               name_len, name_start_offset);
+                }
+
                 printfCyan("  Entry ends at offset: %d\n", bytes_processed + entry->d_reclen);
-                
+
                 bytes_processed += entry->d_reclen;
             }
-            
+
             printfCyan("[sys_getdents64] DEBUG - Total entries processed: %d\n", entry_count);
             printfCyan("[sys_getdents64] DEBUG - Total bytes processed: %d/%d\n", bytes_processed, result);
-        } else {
+        }
+        else
+        {
             printfYellow("[sys_getdents64] DEBUG - No entries returned (result=0)\n");
         }
-        
+
         // 将结果复制到用户空间
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
-        
-        if (result > 0) {
+
+        if (result > 0)
+        {
             int copy_result = mem::k_vmm.copy_out(*pt, buf_addr, kernel_buf, result);
-            if (copy_result < 0) {
+            if (copy_result < 0)
+            {
                 printfRed("[sys_getdents64] FAILED - Cannot copy to user space\n");
                 return -EFAULT;
             }
         }
-        
+
         printfYellow("[sys_getdents64] SUCCESS - Read %d bytes from directory\n", result);
         return result;
     }
@@ -5457,6 +5480,8 @@ namespace syscall
         if (_arg_fd(1, &in_fd, &in_f) < 0)
             return -2;
 
+        printf("[SyscallHandler::sys_sendfile] in_fd: %d, out_fd: %d\n", in_fd, out_fd);
+
         ulong addr;
         ulong *p_off = nullptr;
         p_off = p_off;
@@ -5821,7 +5846,7 @@ namespace syscall
                old_fd, old_path.c_str(), new_fd, new_path.c_str(), flags);
         printf("[sys_renameat2] old_base_path: %s, new_base_path: %s\n",
                old_base_path.c_str(), new_base_path.c_str());
-        
+
         // 构建绝对路径
         eastl::string old_abs_path = get_absolute_path(old_path.c_str(), old_base_path.c_str());
         eastl::string new_abs_path = get_absolute_path(new_path.c_str(), new_base_path.c_str());
