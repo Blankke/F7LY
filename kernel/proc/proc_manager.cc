@@ -330,7 +330,7 @@ namespace proc
             //             proc->_cwd = fs::ramfs::k_ramfs.getRoot()->EntrySearch("mnt");
             //             proc->_cwd_name = "/mnt/";
 
-            // filesystem_init();
+            filesystem_init();
             // filesystem2_init(); // 这个滚蛋
             fs::device_file *f_in = new fs::device_file();
             // fs::device_file *f_err = new fs::device_file();
@@ -354,7 +354,7 @@ namespace proc
             new (&dev::k_uart) dev::UartManager(UART0);
             dev::register_debug_uart(&dev::k_uart);
 
-            net::init_network_stack();
+            // net::init_network_stack();
         }
 
         // 设置进程开始运行的时间点
@@ -3935,11 +3935,11 @@ namespace proc
                 seg_flag |= PTE_P | PTE_D | PTE_PLV; // PTE_P: Present bit, segment is present in memory
                 // PTE_D: Dirty bit, segment is dirty (modified)
                 if (!(ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC))
-                    seg_flag |= PTE_NX; // not executable
+                    seg_flag |= 0; // not executable
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
                     seg_flag |= PTE_W;
                 if (!(ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ))
-                    seg_flag |= PTE_NR; // not readable
+                    seg_flag |= 0; // not readable
 #endif
                 // printfRed("execve: loading segment %d, type: %d, startva: %p, endva: %p, memsz: %p, filesz: %p, flags: %d\n", i, ph.type, (void *)ph.vaddr, (void *)(ph.vaddr + ph.memsz), (void *)ph.memsz, (void *)ph.filesz, ph.flags);
 
@@ -4080,11 +4080,11 @@ namespace proc
 #elif defined(LOONGARCH)
                     seg_flag |= PTE_P | PTE_D | PTE_PLV;
                     if (!(interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC))
-                        seg_flag |= PTE_NX;
+                        seg_flag |= 0;
                     if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
                         seg_flag |= PTE_W;
                     if (!(interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ))
-                        seg_flag |= PTE_NR;
+                        seg_flag |= 0;
 #endif
 
                     // **重构：为动态链接器段分配独立的虚拟内存**

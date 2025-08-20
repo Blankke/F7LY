@@ -2493,104 +2493,104 @@ namespace syscall
             return result;
         }
 
-        // 调试输出：打印获取到的目录项信息
-        if (result > 0)
-        {
-            printfCyan("[sys_getdents64] DEBUG - Total bytes read: %d\n", result);
-            printfCyan("[sys_getdents64] DEBUG - Parsing directory entries:\n");
+        // // 调试输出：打印获取到的目录项信息
+        // if (result > 0)
+        // {
+        //     printfCyan("[sys_getdents64] DEBUG - Total bytes read: %d\n", result);
+        //     printfCyan("[sys_getdents64] DEBUG - Parsing directory entries:\n");
 
-            char *buf_ptr = kernel_buf;
-            int bytes_processed = 0;
-            int entry_count = 0;
+        //     char *buf_ptr = kernel_buf;
+        //     int bytes_processed = 0;
+        //     int entry_count = 0;
 
-            while (bytes_processed < result)
-            {
-                struct linux_dirent64 *entry = (struct linux_dirent64 *)(buf_ptr + bytes_processed);
+        //     while (bytes_processed < result)
+        //     {
+        //         struct linux_dirent64 *entry = (struct linux_dirent64 *)(buf_ptr + bytes_processed);
 
-                // 检查条目的有效性
-                if (entry->d_reclen == 0 || bytes_processed + entry->d_reclen > result)
-                {
-                    printfRed("[sys_getdents64] DEBUG - Invalid entry at offset %d, reclen=%d\n",
-                              bytes_processed, entry->d_reclen);
-                    break;
-                }
+        //         // 检查条目的有效性
+        //         if (entry->d_reclen == 0 || bytes_processed + entry->d_reclen > result)
+        //         {
+        //             printfRed("[sys_getdents64] DEBUG - Invalid entry at offset %d, reclen=%d\n",
+        //                       bytes_processed, entry->d_reclen);
+        //             break;
+        //         }
 
-                entry_count++;
+        //         entry_count++;
 
-                // 打印条目详细信息
-                printfCyan("[sys_getdents64] DEBUG - Entry %d:\n", entry_count);
-                printfCyan("  d_ino: %lu\n", entry->d_ino);
-                printfCyan("  d_off: %ld\n", entry->d_off);
-                printfCyan("  d_reclen: %u\n", entry->d_reclen);
-                printfCyan("  d_type: %u (", entry->d_type);
+        //         // 打印条目详细信息
+        //         printfCyan("[sys_getdents64] DEBUG - Entry %d:\n", entry_count);
+        //         printfCyan("  d_ino: %lu\n", entry->d_ino);
+        //         printfCyan("  d_off: %ld\n", entry->d_off);
+        //         printfCyan("  d_reclen: %u\n", entry->d_reclen);
+        //         printfCyan("  d_type: %u (", entry->d_type);
 
-                // 打印文件类型的可读名称
-                switch (entry->d_type)
-                {
-                case T_DIR:
-                    printfCyan("Directory");
-                    break;
-                case T_FILE:
-                    printfCyan("Regular File");
-                    break;
-                case T_CHR:
-                    printfCyan("Character Device");
-                    break;
-                case T_BLK:
-                    printfCyan("Block Device");
-                    break;
-                case T_FIFO:
-                    printfCyan("FIFO/Pipe");
-                    break;
-                case T_SOCK:
-                    printfCyan("Socket");
-                    break;
-                case T_UNKNOWN:
-                default:
-                    printfCyan("Unknown");
-                    break;
-                }
-                printfCyan(")\n");
+        //         // 打印文件类型的可读名称
+        //         switch (entry->d_type)
+        //         {
+        //         case T_DIR:
+        //             printfCyan("Directory");
+        //             break;
+        //         case T_FILE:
+        //             printfCyan("Regular File");
+        //             break;
+        //         case T_CHR:
+        //             printfCyan("Character Device");
+        //             break;
+        //         case T_BLK:
+        //             printfCyan("Block Device");
+        //             break;
+        //         case T_FIFO:
+        //             printfCyan("FIFO/Pipe");
+        //             break;
+        //         case T_SOCK:
+        //             printfCyan("Socket");
+        //             break;
+        //         case T_UNKNOWN:
+        //         default:
+        //             printfCyan("Unknown");
+        //             break;
+        //         }
+        //         printfCyan(")\n");
 
-                // 打印文件名（使用正确的长度计算方法）
-                // linux_dirent64结构: d_ino(8) + d_off(8) + d_reclen(2) + d_type(1) + d_name[0]
-                int name_start_offset = sizeof(uint64) + sizeof(int64) + sizeof(unsigned short) + sizeof(unsigned char);
-                int name_len = entry->d_reclen - name_start_offset;
+        //         // 打印文件名（使用正确的长度计算方法）
+        //         // linux_dirent64结构: d_ino(8) + d_off(8) + d_reclen(2) + d_type(1) + d_name[0]
+        //         int name_start_offset = sizeof(uint64) + sizeof(int64) + sizeof(unsigned short) + sizeof(unsigned char);
+        //         int name_len = entry->d_reclen - name_start_offset;
 
-                // 尝试使用strlen来获取实际的字符串长度
-                int actual_name_len = strlen(entry->d_name);
-                if (actual_name_len > 0 && actual_name_len < name_len && actual_name_len < 256)
-                {
-                    printfCyan("  d_name: \"%s\" (strlen=%d, calc_len=%d)\n",
-                               entry->d_name, actual_name_len, name_len);
-                }
-                else if (name_len > 0 && name_len < 256)
-                {
-                    // 如果strlen不可靠，使用计算的长度但确保安全
-                    char name_buf[256];
-                    int safe_len = (name_len > 255) ? 255 : name_len;
-                    strncpy(name_buf, entry->d_name, safe_len);
-                    name_buf[safe_len] = '\0'; // 确保字符串结尾
-                    printfCyan("  d_name: \"%s\" (safe_copy, len=%d)\n", name_buf, safe_len);
-                }
-                else
-                {
-                    printfCyan("  d_name: <invalid name length %d, name_start_offset=%d>\n",
-                               name_len, name_start_offset);
-                }
+        //         // 尝试使用strlen来获取实际的字符串长度
+        //         int actual_name_len = strlen(entry->d_name);
+        //         if (actual_name_len > 0 && actual_name_len < name_len && actual_name_len < 256)
+        //         {
+        //             printfCyan("  d_name: \"%s\" (strlen=%d, calc_len=%d)\n",
+        //                        entry->d_name, actual_name_len, name_len);
+        //         }
+        //         else if (name_len > 0 && name_len < 256)
+        //         {
+        //             // 如果strlen不可靠，使用计算的长度但确保安全
+        //             char name_buf[256];
+        //             int safe_len = (name_len > 255) ? 255 : name_len;
+        //             strncpy(name_buf, entry->d_name, safe_len);
+        //             name_buf[safe_len] = '\0'; // 确保字符串结尾
+        //             printfCyan("  d_name: \"%s\" (safe_copy, len=%d)\n", name_buf, safe_len);
+        //         }
+        //         else
+        //         {
+        //             printfCyan("  d_name: <invalid name length %d, name_start_offset=%d>\n",
+        //                        name_len, name_start_offset);
+        //         }
 
-                printfCyan("  Entry ends at offset: %d\n", bytes_processed + entry->d_reclen);
+        //         printfCyan("  Entry ends at offset: %d\n", bytes_processed + entry->d_reclen);
 
-                bytes_processed += entry->d_reclen;
-            }
+        //         bytes_processed += entry->d_reclen;
+        //     }
 
-            printfCyan("[sys_getdents64] DEBUG - Total entries processed: %d\n", entry_count);
-            printfCyan("[sys_getdents64] DEBUG - Total bytes processed: %d/%d\n", bytes_processed, result);
-        }
-        else
-        {
-            printfYellow("[sys_getdents64] DEBUG - No entries returned (result=0)\n");
-        }
+        //     printfCyan("[sys_getdents64] DEBUG - Total entries processed: %d\n", entry_count);
+        //     printfCyan("[sys_getdents64] DEBUG - Total bytes processed: %d/%d\n", bytes_processed, result);
+        // }
+        // else
+        // {
+        //     printfYellow("[sys_getdents64] DEBUG - No entries returned (result=0)\n");
+        // }
 
         // 将结果复制到用户空间
         proc::Pcb *p = proc::k_pm.get_cur_pcb();

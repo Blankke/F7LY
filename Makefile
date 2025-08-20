@@ -304,7 +304,7 @@ debug-loongarch:
 	    -m 1G \
 	    -nographic \
 	    -smp 1 \
-		-drive file=$(KERNEL_PREFIX)/sdcard-la.img,if=none,format=raw,id=x0 \
+		-drive file=$(KERNEL_PREFIX)/sdcard-la-onsite.img,if=none,format=raw,id=x0 \
 		-device virtio-blk-pci,drive=x0 \
 		-no-reboot \
 		-rtc base=utc \
