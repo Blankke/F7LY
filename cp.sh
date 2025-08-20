@@ -1,8 +1,8 @@
 #! /bin/sh
-sudo umount /mnt/sdcard-rv
-rm sdcard-rv-onsite.img
-cp sdcard-rv-onsite.img.bak sdcard-rv-onsite.img
-sudo mount -o loop sdcard-rv-onsite.img /mnt/sdcard-rv
-sudo mkdir /mnt/sdcard-rv/proj
-sudo touch /mnt/sdcard-rv/proj/README.md
+sudo umount /mnt/sdcard-la
+rm sdcard-la-onsite.img
+cp sdcard-la-onsite.img.bak sdcard-la-onsite.img
+sudo mount -o loop sdcard-la-onsite.img /mnt/sdcard-la
+sudo mkdir /mnt/sdcard-la/proj
+sudo touch /mnt/sdcard-la/proj/README.md
 

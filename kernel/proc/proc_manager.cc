@@ -330,7 +330,7 @@ namespace proc
             //             proc->_cwd = fs::ramfs::k_ramfs.getRoot()->EntrySearch("mnt");
             //             proc->_cwd_name = "/mnt/";
 
-            filesystem_init();
+            // filesystem_init();
             // filesystem2_init(); // 这个滚蛋
             fs::device_file *f_in = new fs::device_file();
             // fs::device_file *f_err = new fs::device_file();
@@ -3889,11 +3889,6 @@ namespace proc
                             return -1;
                         }
                         interpreter_path = "/glibc/lib/ld-linux-loongarch-lp64d.so.1";
-                    }
-                    else
-                    {
-                        panic("execve: unknown dynamic linker: %s\n", interpreter_path.c_str());
-                        return -1; // 不支持的动态链接器
                     }
                     break;
                 }
