@@ -1037,8 +1037,8 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
         printfRed("[vfs_getdents] file is null or mount point is null\n");
         return EINVAL;
     }
-    ext4_dir_entry_next(&file->lwext4_dir_struct);
-    ext4_dir_entry_next(&file->lwext4_dir_struct); //< 跳过/.和/..
+    // ext4_dir_entry_next(&file->lwext4_dir_struct);
+    // ext4_dir_entry_next(&file->lwext4_dir_struct); //< 跳过/.和/..
     d = dirp;
     while (1)
     {
