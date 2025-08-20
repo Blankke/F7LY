@@ -95,9 +95,15 @@ namespace proc
          * 信号处理
          ****************************************************************************************/
         _sigactions = nullptr; // 信号处理函数表
-        _sigmask = 0;          // 信号屏蔽掩码
-        _signal = 0;           // 待处理信号掩码
+                _sigmask = 0;      // 信号屏蔽掩码
+        _signal = 0;       // 待处理信号掩码
         sig_frame = nullptr;   // 信号处理栈帧
+        
+        // 初始化信号栈
+        _alt_stack.ss_sp = nullptr;
+        _alt_stack.ss_flags = proc::ipc::signal::SS_DISABLE;
+        _alt_stack.ss_size = 0;
+        _on_sigstack = false;
 
         /****************************************************************************************
          * 资源限制

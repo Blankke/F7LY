@@ -218,6 +218,72 @@ namespace proc
                 return syscall::SYS_EINTR; // EINTR
             }
 
+            int sigaltstack(const signalstack *ss, signalstack *old_ss)
+            {
+                proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
+                
+                // 如果请求获取当前的信号栈信息
+                if (old_ss != nullptr)
+                {
+                    old_ss->ss_sp = cur_proc->_alt_stack.ss_sp;
+                    old_ss->ss_size = cur_proc->_alt_stack.ss_size;
+                    
+                    // 设置flags
+                    if (cur_proc->_on_sigstack)
+                    {
+                        old_ss->ss_flags = SS_ONSTACK;
+                    }
+                    else if (cur_proc->_alt_stack.ss_flags & SS_DISABLE)
+                    {
+                        old_ss->ss_flags = SS_DISABLE;
+                    }
+                    else
+                    {
+                        old_ss->ss_flags = cur_proc->_alt_stack.ss_flags;
+                    }
+                }
+
+                // 如果ss为NULL，只返回当前信息，不修改
+                if (ss == nullptr)
+                {
+                    return 0;
+                }
+
+                // 检查是否正在信号栈上执行
+                if (cur_proc->_on_sigstack)
+                {
+                    return syscall::SYS_EPERM; // EPERM - 不能在信号栈上改变信号栈
+                }
+
+                // 检查是否要禁用信号栈
+                if (ss->ss_flags & SS_DISABLE)
+                {
+                    cur_proc->_alt_stack.ss_sp = nullptr;
+                    cur_proc->_alt_stack.ss_flags = SS_DISABLE;
+                    cur_proc->_alt_stack.ss_size = 0;
+                    return 0;
+                }
+
+                // 检查栈大小是否满足最小要求
+                if (ss->ss_size < MINSIGSTKSZ)
+                {
+                    return syscall::SYS_ENOMEM; // ENOMEM - 栈太小
+                }
+
+                // 检查flags是否有效
+                if (ss->ss_flags & ~(SS_AUTODISARM))
+                {
+                    return syscall::SYS_EINVAL; // EINVAL - 无效的flags
+                }
+
+                // 设置新的信号栈
+                cur_proc->_alt_stack.ss_sp = ss->ss_sp;
+                cur_proc->_alt_stack.ss_size = ss->ss_size;
+                cur_proc->_alt_stack.ss_flags = ss->ss_flags;
+
+                return 0;
+            }
+
             // 获取信号的默认行为
             SignalAction get_default_signal_action(int signum)
             {
@@ -595,17 +661,43 @@ namespace proc
                     pa = reinterpret_cast<uint64>(pte.pa());
                     printf("[copy_out] va: %p, pte: %p, pa: %p\n", va, pte.get_data(), pa);
 
-                    // 计算用户栈上的地址
-                    uint64 usercontext_sp = p->_trapframe->sp - PGSIZE - sizeof(usercontext);
+                    // 决定使用哪个栈：信号栈或正常栈
+                    uint64 stack_sp;
+                    uint64 sig_size;
+                    
+                    // 检查是否应该使用信号栈
+                    if ((act->sa_flags & (uint64)SigActionFlags::ONSTACK) &&
+                        !(p->_alt_stack.ss_flags & SS_DISABLE) &&
+                        !p->_on_sigstack)
+                    {
+                        // 使用信号栈
+                        stack_sp = (uint64)p->_alt_stack.ss_sp + p->_alt_stack.ss_size;
+                        sig_size = p->_alt_stack.ss_size;
+                        p->_on_sigstack = true;
+                        
+                        // 如果设置了SS_AUTODISARM，清除信号栈设置
+                        if (p->_alt_stack.ss_flags & SS_AUTODISARM)
+                        {
+                            p->_alt_stack.ss_flags |= SS_DISABLE;
+                        }
+                    }
+                    else
+                    {
+                        // 使用正常的用户栈
+                        stack_sp = p->_trapframe->sp;
+                        sig_size = 5 * PGSIZE; // 预留空间，确保足够大
+                    }
+
+                    // 计算栈上的地址
+                    uint64 usercontext_sp = stack_sp - PGSIZE - sizeof(usercontext);
                     uint64 linuxinfo_sp = usercontext_sp - sizeof(LinuxSigInfo);
-                    uint64 sig_size = 5 * PGSIZE; // 预留空间，确保足够大(TODO: 需要根据实际情况调整大小)
 
                     // 构造 ustack 结构
                     usercontext uctx;
                     memset(&uctx, 0, sizeof(usercontext)); // 全部初始化为0
                     uctx.flags = 0;
                     uctx.link = 0;
-                    uctx.stack = {linuxinfo_sp, 0, sig_size};
+                    uctx.stack = {(void*)linuxinfo_sp, 0, sig_size};
                     uctx.sigmask = p->_sigmask;
 #ifdef RISCV
                     uctx.mcontext.gp.x[17] = p->_trapframe->epc; // epc(TODO)
@@ -669,7 +761,31 @@ namespace proc
                 else
                 {
                     // 原有的单参数处理逻辑
-                    p->_trapframe->sp -= PGSIZE;
+                    uint64 stack_sp;
+                    
+                    // 检查是否应该使用信号栈
+                    if ((act->sa_flags & (uint64)SigActionFlags::ONSTACK) &&
+                        !(p->_alt_stack.ss_flags & SS_DISABLE) &&
+                        !p->_on_sigstack)
+                    {
+                        // 使用信号栈
+                        stack_sp = (uint64)p->_alt_stack.ss_sp + p->_alt_stack.ss_size;
+                        p->_on_sigstack = true;
+                        
+                        // 如果设置了SS_AUTODISARM，清除信号栈设置
+                        if (p->_alt_stack.ss_flags & SS_AUTODISARM)
+                        {
+                            p->_alt_stack.ss_flags |= SS_DISABLE;
+                        }
+                    }
+                    else
+                    {
+                        // 使用正常的用户栈
+                        stack_sp = p->_trapframe->sp;
+                    }
+                    
+                    p->_trapframe->sp = stack_sp - PGSIZE;
+                    
                     // 在栈顶写入返回地址标记
                     uint64 ret_marker = 0;
                     if (mem::k_vmm.copy_out(*p->get_pagetable(), p->get_trapframe()->sp, &ret_marker, sizeof(uint64)) < 0)
@@ -739,6 +855,10 @@ namespace proc
                     p->_sigmask = frame->mask.sig[0];                        // 恢复信号掩码
                     memmove(p->_trapframe, &(frame->tf), sizeof(TrapFrame)); // 恢复陷阱帧
                     p->sig_frame = frame->next;                              // 移除当前信号帧
+                    
+                    // 恢复信号栈状态
+                    p->_on_sigstack = false;
+                    
                     mem::k_pmm.free_page(frame);                             // 释放信号帧内存
                 }
                 else
@@ -761,6 +881,10 @@ namespace proc
                     p->_sigmask = frame->mask.sig[0];                        // 恢复信号掩码
                     memmove(p->_trapframe, &(frame->tf), sizeof(TrapFrame)); // 恢复陷阱帧
                     p->sig_frame = frame->next;                              // 移除当前信号帧
+                    
+                    // 恢复信号栈状态
+                    p->_on_sigstack = false;
+                    
                     mem::k_pmm.free_page(frame);
 #ifdef RISCV
                     p->_trapframe->epc = uctx.mcontext.gp.x[17];

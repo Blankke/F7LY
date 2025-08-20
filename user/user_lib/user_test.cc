@@ -316,6 +316,16 @@ int git_test(const char *path)
     return 0;
 }
 
+int vim_h()
+{
+    chdir("/musl");
+    char *bb_sh[2] = {0};
+    bb_sh[0] = "usr/bin/vim";
+    bb_sh[1] = "-h";
+    run_test("usr/bin/vim", bb_sh, 0);
+    return 0;
+}
+
 char *git_testcases[][8] = {
     // {"busybox", "echo", "#### OS COMP TEST GROUP START git-musl ####", NULL},
     // {"usr/bin/git", "config", "--global", "--add", "safe.directory", "$(pwd)", NULL},
@@ -328,8 +338,7 @@ char *git_testcases[][8] = {
     // {"usr/bin/git", "commit", "-m", "add README.md", NULL},
     // {"usr/bin/git", "log", NULL},
     // {"busybox", "echo", "#### OS COMP TEST GROUP END git-musl ####", NULL},
-    {NULL}
-};
+    {NULL}};
 
 char *libctest[][2] = {
     {"argv", NULL},
@@ -749,8 +758,8 @@ struct ltp_testcase ltp_testcases[] = {
     {"truncate02_64", true, true},
     {"truncate03", true, true},
     {"truncate03_64", true, true},
-    {"uname01", true, true},    // 完全PASS
-    {"uname02", true, true},    // 完全PASS
+    {"uname01", true, true},     // 完全PASS
+    {"uname02", true, true},     // 完全PASS
     {"unlink05", true, false},   // pass
     {"unlink07", true, false},   // pass
     {"unlink08", true, false},   // pass2fail2
@@ -763,12 +772,12 @@ struct ltp_testcase ltp_testcases[] = {
     {"write05", true, false},  // passed   3
     {"writev05", true, false}, // 完全PASS
     {"writev06", true, false}, // 完全PASS
-    {"execl01", true, true},  // PASS
-    {"execle01", true, true}, // PASS
-    {"execlp01", true, true}, // PASS
-    {"execv01", true, true},  // PASS
-    {"execve01", true, true}, // PASS
-    {"execvp01", true, true}, // PASS
+    {"execl01", true, true},   // PASS
+    {"execle01", true, true},  // PASS
+    {"execlp01", true, true},  // PASS
+    {"execv01", true, true},   // PASS
+    {"execve01", true, true},  // PASS
+    {"execvp01", true, true},  // PASS
     {"gettid01", true, false}, // PASS
     {"set_tid_address01", true, false},
     {NULL, false, false}};

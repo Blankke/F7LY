@@ -167,6 +167,8 @@ namespace proc
         uint64 _sigmask = 0;                            // 信号屏蔽掩码，阻塞指定信号
         uint64 _signal = 0;                             // 待处理信号掩码
         ipc::signal::signal_frame *sig_frame = nullptr; // 信号处理栈帧，保存信号处理上下文
+        ipc::signal::signalstack _alt_stack;           // 信号处理备用栈
+        bool _on_sigstack = false;                      // 当前是否在信号栈上执行
 
         /****************************************************************************************
          * 资源限制
