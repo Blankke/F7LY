@@ -317,7 +317,6 @@ int git_test(const char *path)
 }
 int gcc_test()
 {
-    chdir("/musl");
     char *bb_sh[8] = {0};
     bb_sh[0] = "/usr/bin/gcc";
     bb_sh[1] = "hello.c";
@@ -327,9 +326,16 @@ int gcc_test()
     return 0;
 }
 
+int rustc_test()
+{
+    char *bb_sh[2] = {0};
+    bb_sh[0] = "/usr/bin/rustc";
+    bb_sh[1] = "-V";
+    run_test("/usr/bin/rustc", bb_sh, 0);
+}
+
 int vim_h()
 {
-    chdir("/musl");
     char *bb_sh[2] = {0};
     bb_sh[0] = "usr/bin/vim";
     bb_sh[1] = "-h";
