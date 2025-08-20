@@ -19,3 +19,5 @@
 #show: main
 
 #include "content/analysis.typ"
+
+#include "content/technique-root.typ"
