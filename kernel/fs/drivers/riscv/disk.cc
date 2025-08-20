@@ -24,7 +24,7 @@ void disk_rw(buf *buf, bool write)
     }
     else
     {
-        printfOrange("disk_rw: read blockno %u\n", buf->blockno);
+        // printfOrange("disk_rw: read blockno %u\n", buf->blockno);
         sd_read((uint32 *)buf->data, 128, buf->blockno);
     }
     #else

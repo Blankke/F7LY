@@ -24,8 +24,8 @@
 
 namespace proc
 {
+    __attribute__((aligned(4096)))
     Pcb k_proc_pool[num_process]; // 全局进程池，存储所有进程的PCB
-
     Pcb::Pcb()
     {
         /****************************************************************************************
@@ -63,7 +63,7 @@ namespace proc
         // 调度相关字段
         _slot = 0;                     // 时间片剩余量
         _priority = default_proc_prio; // 默认进程优先级
-        
+
         // CPU亲和性初始化：默认可以在任何CPU上运行
         _cpu_mask.fill(); // 设置所有可用CPU位
 
@@ -72,7 +72,7 @@ namespace proc
          ****************************************************************************************/
         _kstack = 0;          // 内核栈虚拟地址
         _trapframe = nullptr; // 用户态寄存器保存区
-        
+
         // 阶段1：创建统一内存管理器
         _memory_manager = nullptr; // 延迟到init()中创建，避免在构造函数中panic
 
@@ -95,10 +95,10 @@ namespace proc
          * 信号处理
          ****************************************************************************************/
         _sigactions = nullptr; // 信号处理函数表
-                _sigmask = 0;      // 信号屏蔽掩码
-        _signal = 0;       // 待处理信号掩码
+        _sigmask = 0;          // 信号屏蔽掩码
+        _signal = 0;           // 待处理信号掩码
         sig_frame = nullptr;   // 信号处理栈帧
-        
+
         // 初始化信号栈
         _alt_stack.ss_sp = nullptr;
         _alt_stack.ss_flags = proc::ipc::signal::SS_DISABLE;
@@ -140,7 +140,7 @@ namespace proc
         // 设置打开文件数量限制
         _rlim_vec[ResourceLimitId::RLIMIT_NOFILE].rlim_cur = max_open_files;
         _rlim_vec[ResourceLimitId::RLIMIT_NOFILE].rlim_max = max_open_files;
-        
+
         // 设置文件大小限制 (默认无限制)
         _rlim_vec[ResourceLimitId::RLIMIT_FSIZE].rlim_cur = ResourceLimitId::RLIM_INFINITY;
         _rlim_vec[ResourceLimitId::RLIMIT_FSIZE].rlim_max = ResourceLimitId::RLIM_INFINITY;
@@ -155,7 +155,7 @@ namespace proc
         _state = ProcState::UNUSED;
         _global_id = gid;
         _kstack = mem::VirtualMemoryManager::kstack_vm_from_global_id(_global_id);
-        
+
         // 注意：不在init中创建ProcessMemoryManager
         // ProcessMemoryManager的创建延迟到具体需要时（fork、user_init、execve等）
         _memory_manager = nullptr;
@@ -195,7 +195,7 @@ namespace proc
         {
             // 直接调用 free_all_memory()，它内部会检查和减少引用计数
             _memory_manager->free_all_memory();
-            
+
             // free_all_memory() 减少了引用计数，如果原来的引用计数<=1，则资源已被释放
             // 现在检查当前引用计数，如果<=0则删除对象
             if (_memory_manager->get_ref_count() <= 0)
@@ -207,11 +207,11 @@ namespace proc
     }
 
     // 设置新的内存管理器
-    void Pcb::set_memory_manager(ProcessMemoryManager* mm)
+    void Pcb::set_memory_manager(ProcessMemoryManager *mm)
     {
         // 先清理当前的内存管理器
         cleanup_memory_manager();
-        
+
         // 设置新的内存管理器
         _memory_manager = mm;
     }
@@ -421,7 +421,6 @@ namespace proc
         return 0;
     }
 
-    
     bool Pcb::verify_memory_consistency()
     {
         if (_memory_manager)
@@ -430,8 +429,6 @@ namespace proc
         }
         return true; // 没有内存管理器时认为是一致的
     }
-
-    
 
     void Pcb::emergency_memory_cleanup()
     {

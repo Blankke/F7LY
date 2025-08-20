@@ -713,7 +713,7 @@ uint32 sd_read(uint32 *dat, int size, int addr)
       {
         dat[tt] = *(volatile uint32 *)(SD_BASE_V + 0x200); // 从FIFO(偏移0x200)读取数据
         // 可选调试：打印首几个字
-        printf("sd_read word[%d]=0x%p\n", tt, dat[tt]);
+        // printf("sd_read word[%d]=0x%p\n", tt, dat[tt]);
         tt++;
       }
       words_left -= (int)to_read;

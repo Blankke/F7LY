@@ -4,6 +4,7 @@
 #elif defined(LOONGARCH)
 #include "la_csr.hh"
 #endif
+__attribute__((aligned(256)))
 Cpu k_cpus[NUMCPU];
 
 // ---- public:

@@ -42,11 +42,11 @@ namespace proc
 {
     enum ProcState
     {
-        UNUSED,
-        USED,
-        SLEEPING,
-        RUNNABLE,
-        RUNNING,
+        UNUSED, // 0
+        USED, // 1
+        SLEEPING, // 2
+        RUNNABLE, // 3
+        RUNNING, // 4
         ZOMBIE
     };
 
