@@ -202,8 +202,8 @@ static int resolve_symlinks(const eastl::string &input_path, eastl::string &reso
             // 标准化路径，处理 . 和 .. 组件
             new_path = normalize_path(new_path);
 
-            printfYellow("Resolving symlink %s -> %s, final path: %s\n",
-                         current_path.c_str(), link_path.c_str(), new_path.c_str());
+            // printfYellow("Resolving symlink %s -> %s, final path: %s\n",
+            //              current_path.c_str(), link_path.c_str(), new_path.c_str());
 
             // 递归解析剩余的符号链接
             return resolve_symlinks(new_path, resolved_path, max_depth - 1);
@@ -940,9 +940,18 @@ int vfs_is_file_exist(const char *path)
 {
     struct ext4_inode inode;
     uint32_t ino;
-    // printfYellow("vfs_is_file_exist: checking path: %s\n", path);
+    
+    // 先解析符号链接
+    eastl::string resolved_path;
+    int res = resolve_symlinks(eastl::string(path), resolved_path);
+    if (res != 0) {
+        printfRed("vfs_is_file_exist: failed to resolve symlinks for path: %s\n", path);
+        return 0;
+    }
+    
+    // printfYellow("vfs_is_file_exist: checking path: %s -> %s\n", path, resolved_path.c_str());
     // 尝试获取文件的inode信息
-    int res = ext4_raw_inode_fill(path, &ino, &inode);
+    res = ext4_raw_inode_fill(resolved_path.c_str(), &ino, &inode);
     // printfYellow("vfs_is_file_exist: ext4_raw_inode_fill returned: %d for path: %s\n", res, path);
     // TODO : 这里有个特别诡异的现象，加了print下面这行会爆炸
     //  printf("res:%p\n", res);
@@ -976,9 +985,19 @@ uint vfs_read_file(const char *path, uint64 buffer_addr, size_t offset, size_t s
 
     int res;
     ext4_file file;
+    
+    // 解析符号链接
+    eastl::string resolved_path;
+    res = resolve_symlinks(eastl::string(path), resolved_path);
+    if (res != 0) {
+        printfRed("Failed to resolve symlinks for path: %s, error: %d\n", path, res);
+        return res;
+    }
+    
+    // printfCyan("vfs_read_file: resolved path %s -> %s\n", path, resolved_path.c_str());
 
     // 打开文件（只读模式）
-    res = ext4_fopen(&file, path, "rb");
+    res = ext4_fopen(&file, resolved_path.c_str(), "rb");
     if (res != EOK)
     {
         printfRed("Failed to open file: %d\n", res);

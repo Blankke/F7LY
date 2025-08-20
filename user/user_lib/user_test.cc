@@ -61,14 +61,12 @@ int run_test(const char *path, char *argv[], char *envp[])
 
 void init_env(const char *path = musl_dir)
 {
-    chdir(path);
 
-    mkdir("/bin", 0755);
     char *bb_sh[8] = {0};
-    bb_sh[0] = "busybox";
+    bb_sh[0] = "/bin/busybox";
     bb_sh[1] = "sh";
     bb_sh[2] = "-c";
-    bb_sh[3] = "/musl/busybox --install /bin";
+    bb_sh[3] = "/bin/busybox --install /bin";
     run_test("busybox", bb_sh, 0);
 }
 
@@ -318,7 +316,6 @@ int git_test(const char *path)
 
 int vim_h()
 {
-    chdir("/musl");
     char *bb_sh[2] = {0};
     bb_sh[0] = "usr/bin/vim";
     bb_sh[1] = "-h";
@@ -781,3 +778,135 @@ struct ltp_testcase ltp_testcases[] = {
     {"gettid01", true, false}, // PASS
     {"set_tid_address01", true, false},
     {NULL, false, false}};
+
+// 简单的交互式shell
+int interactive_shell()
+{
+    printf("F7LY OS Interactive Shell\n");
+    printf("Type 'help' for available commands, 'exit' to quit\n\n");
+    
+    char input_buffer[256];
+    char *args[32];
+    
+    while (1) {
+        printf("F7LY> ");
+        
+        // 读取用户输入
+        if (read(0, input_buffer, sizeof(input_buffer)-1) <= 0) {
+            continue;
+        }
+        
+        // 去除换行符
+        int len = 0;
+        while (input_buffer[len] != '\0' && len < 255) len++;
+        if (len > 0 && input_buffer[len-1] == '\n') {
+            input_buffer[len-1] = '\0';
+        }
+        
+        // 跳过空行
+        if (input_buffer[0] == '\0') {
+            continue;
+        }
+        
+        // 简单的命令解析
+        int argc = 0;
+        char *current = input_buffer;
+        while (*current && argc < 31) {
+            // 跳过空格
+            while (*current == ' ' || *current == '\t') current++;
+            if (*current == '\0') break;
+            
+            args[argc++] = current;
+            
+            // 找到下一个空格或字符串结尾
+            while (*current && *current != ' ' && *current != '\t') current++;
+            if (*current) {
+                *current = '\0';
+                current++;
+            }
+        }
+        args[argc] = 0;
+        
+        if (argc == 0) {
+            continue;
+        }
+        
+        // 处理内置命令
+        if (strcmp(args[0], "exit") == 0) {
+            printf("Goodbye!\n");
+            break;
+        } else if (strcmp(args[0], "help") == 0) {
+            printf("Available commands:\n");
+            printf("  help     - Show this help\n");
+            printf("  exit     - Exit shell\n");
+            printf("  cd <dir> - Change directory\n");
+            printf("  ls       - List directory contents\n");
+            printf("  cat <file> - Display file contents\n");
+            printf("  echo <text> - Echo text\n");
+            printf("  pwd      - Print working directory\n");
+            printf("  Any other command will be executed if available\n");
+        } else if (strcmp(args[0], "cd") == 0) {
+            if (argc < 2) {
+                printf("cd: missing argument\n");
+            } else {
+                if (chdir(args[1]) != 0) {
+                    printf("cd: cannot change directory to '%s'\n", args[1]);
+                }
+            }
+        } else if (strcmp(args[0], "pwd") == 0) {
+            char cwd[256];
+            if (getcwd(cwd, sizeof(cwd)) != 0) {
+                printf("%s\n", cwd);
+            } else {
+                printf("pwd: error getting current directory\n");
+            }
+        } else if (strcmp(args[0], "echo") == 0) {
+            for (int i = 1; i < argc; i++) {
+                printf("%s", args[i]);
+                if (i < argc - 1) printf(" ");
+            }
+            printf("\n");
+        } else {
+            // 尝试执行外部命令
+            printf("Executing: %s", args[0]);
+            for (int i = 1; i < argc; i++) {
+                printf(" %s", args[i]);
+            }
+            printf("\n");
+            
+            int pid = fork();
+            if (pid == 0) {
+                // 子进程执行命令
+                execve(args[0], args, 0);
+                // 如果execve失败，尝试在busybox中执行
+                char busybox_path[256];
+                char *prefix = "/musl/usr/bin/";
+                int i = 0;
+                // 复制前缀
+                while (prefix[i] != '\0' && i < 240) {
+                    busybox_path[i] = prefix[i];
+                    i++;
+                }
+                // 复制命令名
+                int j = 0;
+                while (args[0][j] != '\0' && i < 255) {
+                    busybox_path[i++] = args[0][j++];
+                }
+                busybox_path[i] = '\0';
+                execve(busybox_path, args, 0);
+                
+                // 如果都失败了
+                printf("Error: command '%s' not found\n", args[0]);
+                exit(1);
+            } else if (pid > 0) {
+                // 父进程等待子进程完成
+                int status;
+                wait(&status);
+            } else {
+                printf("Error: failed to fork\n");
+            }
+        }
+    }
+    
+    return 0;
+}

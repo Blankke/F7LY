@@ -39,7 +39,7 @@ namespace proc
         const char *_debug_name = nullptr;
     };
 
-    constexpr int NVMA = 30; // 每个进程最多的虚拟内存区域数量
+    constexpr int NVMA = 50; // 每个进程最多的虚拟内存区域数量
 
     // VMA结构体定义（从proc.hh移动过来）
     struct VMA
