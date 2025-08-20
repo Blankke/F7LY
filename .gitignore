@@ -52,3 +52,5 @@ ref.txt
 sdcard-rv.zip
 sdcard-rv-onsite.img.bak
 sdcard-la-onsite.img.bak
+sdcard-la-onsite.img.gz
+alpine-linux-loongarch64-ext4fs.img.xz

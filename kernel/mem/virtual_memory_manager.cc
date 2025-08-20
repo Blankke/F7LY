@@ -556,31 +556,31 @@ namespace mem
             return -1;
         }
 
-        // 检查访问类型权限
-        switch (access_type)
-        {
-        case 0: // 读取
-            if (!(vm->prot & PROT_READ))
-            {
-                printfRed("[allocate_vma_page] read access to non-readable page at %p\n", va);
-                return -1;
-            }
-            break;
-        case 1: // 写入
-            if (!(vm->prot & PROT_WRITE))
-            {
-                printfRed("[allocate_vma_page] write access to non-writable page at %p\n", va);
-                return -1;
-            }
-            break;
-        case 2: // 执行
-            if (!(vm->prot & PROT_EXEC))
-            {
-                printfRed("[allocate_vma_page] exec access to non-executable page at %p\n", va);
-                return -1;
-            }
-            break;
-        }
+        // // 检查访问类型权限
+        // switch (access_type)
+        // {
+        // case 0: // 读取
+        //     if (!(vm->prot & PROT_READ))
+        //     {
+        //         printfRed("[allocate_vma_page] read access to non-readable page at %p\n", va);
+        //         return -1;
+        //     }
+        //     break;
+        // case 1: // 写入
+        //     if (!(vm->prot & PROT_WRITE))
+        //     {
+        //         printfRed("[allocate_vma_page] write access to non-writable page at %p\n", va);
+        //         return -1;
+        //     }
+        //     break;
+        // case 2: // 执行
+        //     if (!(vm->prot & PROT_EXEC))
+        //     {
+        //         printfRed("[allocate_vma_page] exec access to non-executable page at %p\n", va);
+        //         return -1;
+        //     }
+        //     break;
+        // }
 
         // 构建页表项权限
         uint64 pte_flags = 0;
@@ -600,13 +600,18 @@ namespace mem
         if (vm->prot & PROT_EXEC)
             pte_flags |= riscv::PteEnum::pte_executable_m;
 #elif defined(LOONGARCH)
-        pte_flags = PTE_U | PTE_D; // 用户可访问
-        if (vm->prot & PROT_READ)
-            pte_flags |= PTE_R;
-        if (vm->prot & PROT_WRITE)
-            pte_flags |= PTE_W;
-        if (vm->prot & PROT_EXEC)
-            pte_flags |= PTE_X;
+        pte_flags = PTE_V | PTE_W | PTE_MAT | PTE_PLV | PTE_D | PTE_P; // 用户可访问
+        // if (vm->prot & PROT_READ)
+        // {
+        //     pte_flags |= PTE_R;
+        //     pte_flags |= PTE_X;
+        // }
+        // if (vm->prot & PROT_WRITE)
+        // {
+        //     pte_flags |= PTE_W;
+        // }
+        // if (vm->prot & PROT_EXEC)
+        //     pte_flags |= PTE_X;
         pte_flags |= PTE_MAT; // 内存访问类型
 #endif
 
@@ -640,7 +645,8 @@ namespace mem
                     k_pmm.free_page(pa);
                     return size_result;
                 }
-                else{
+                else
+                {
                     file_size = vf->_stat.size;
                 }
             }

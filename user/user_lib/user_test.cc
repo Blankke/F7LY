@@ -317,10 +317,10 @@ int git_test(const char *path)
 }
 
 char *git_testcases[][8] = {
-    // {"/bin/busybox", "echo", "=============== Task0 BEGIN git -h ===============", NULL},
+    // {"busybox", "echo", "=============== Task0 BEGIN git -h ===============", NULL},
     // {"/usr/bin/git", "help", NULL},
-    // {"/bin/busybox", "echo", "=============== Task0 END git -h ===============", NULL},
-    // // {"/bin/busybox", "echo", "=============== Task1 BEGIN file ===============", NULL},
+    // {"busybox", "echo", "=============== Task0 END git -h ===============", NULL},
+    // // {"busybox", "echo", "=============== Task1 BEGIN file ===============", NULL},
     // {"/usr/bin/git", "config", "--global", "--add", "safe.directory", "$(pwd)", NULL},
     // {"/usr/bin/git", "config", "--global", "user.email", "you@example.com", NULL},
     // {"/usr/bin/git", "config", "--global", "user.name", "Your Name", NULL},
@@ -328,7 +328,7 @@ char *git_testcases[][8] = {
     {"/usr/bin/git", "add", ".", NULL},
     // {"/usr/bin/git", "commit", "-m", "add README.md", NULL},
     // {"/usr/bin/git", "log", NULL},
-    // {"/bin/busybox", "echo", "=============== Task1 END file ===============", NULL},
+    // {"busybox", "echo", "=============== Task1 END file ===============", NULL},
     {NULL}};
 
 char *libctest[][2] = {
