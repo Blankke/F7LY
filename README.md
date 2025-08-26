@@ -1,14 +1,14 @@
-
-
 # 🚀 F7LY OS 🚀
 
 ## 🌟 文档中心 🌟
 
-- **开发仓库:** 🔗 [GitHub - KidsZZ/F7LY-OS](https://github.com/KidsZZ/F7LY-OS)
+- **开发仓库:** 🔗 [GitHub - KidsZZ/F7LY-OS](https://github.com/KidsZZ/F7LY)
     
-- **完整设计文档:** 📄 [F7LY_OS设计文档](docs/F7LY_OS设计文档.pdf)
-    
-- **汇报资料:** 🎬 [PPT和视频](https://pan.baidu.com/s/1FR3LMaC9YEpjRo3k6oIS8A) 提取码: `a8ac`
+- **完整设计文档:** 📄 [F7LY_OS决赛设计文档](docs/F7LY-OS决赛设计文档.pdf)
+- **现场赛文档:** 📄 [F7LY_OS现场赛文档](docs/F7LY现场赛文档.pdf)
+- 现场赛系统设计细节可参见决赛文档
+- 物理硬件细节参见github仓库 `Visionfive2`分支
+- ppt见docs文件夹[F7LYppt](docs/F7LY答辩ppt-武汉大学.pdf)
     
 
 ## 💡 F7LY OS 简介 💡
