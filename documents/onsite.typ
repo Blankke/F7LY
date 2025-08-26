@@ -20,10 +20,8 @@
 
 #include "content/analysis.typ"
 
-
-#include "content/gcc.typ"
-#include "content/proj_practice.typ"
-
 #include "content/technique-root.typ"
+
+#include "content/proj_practice.typ"
 
 #include "content/summary&review.typ"
