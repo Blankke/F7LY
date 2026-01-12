@@ -120,11 +120,18 @@ int idx = 0;
 int fat32_init_internal(uint32 dev)
 {
     fat.dev = dev;
-    #ifdef DEBUG
-    printf("[fat32_init] enter!\n");
-    #endif
+    printf("[fat32_init] Initializing FAT32 on device %u\n", dev);
     // 读取引导扇区（第0个设备的第0个扇区）
     struct buf *b = bread(fat.dev, 0);
+    
+    // 打印引导扇区前100字节，验证是否真正读取到数据
+    printf("[fat32_init] Boot sector first 16 bytes:");
+    for (int i = 0; i < 16; i++) {
+        printf(" %02x", (unsigned char)b->data[i]);
+    }
+    printf("\n");
+    printf("[fat32_init] FAT32 signature at offset 82: %.5s\n", (char*)(b->data + 82));
+    
     // 校验FAT32标识（引导扇区偏移82处应为"FAT32"）
     if (strncmp((char const*)(b->data + 82), "FAT32", 5))
         panic("not FAT32 volume");
@@ -349,9 +356,9 @@ static uint rw_clus(uint32 cluster, int write, int user, uint64 data, uint off, 
             // 写操作：从用户/内核地址拷贝到缓冲区
             if ((bad = either_copyin(bp->data + (off % BSIZE), user, data, m)) != -1) {
                 if (!user && m == 32) {
-                     unsigned char *d = (unsigned char *)data;
+                    [[maybe_unused]] unsigned char *d = (unsigned char *)data;
                      // Only debug if looks like dir entry
-                     printf("[DEBUG] rw_clus WRITE ENTRY: %02x %02x %02x ... at sec %u off %u\n", d[0], d[11], d[12], sec, (uint)(off % BSIZE));
+                    //  printf("[DEBUG] rw_clus WRITE ENTRY: %02x %02x %02x ... at sec %u off %u\n", d[0], d[11], d[12], sec, (uint)(off % BSIZE));
                 }
                 bwrite(bp); // 写回磁盘
             }
@@ -359,8 +366,8 @@ static uint rw_clus(uint32 cluster, int write, int user, uint64 data, uint off, 
             // 读操作：从缓冲区拷贝到用户/内核地址
             bad = either_copyout(user, data, bp->data + (off % BSIZE), m);
             if (!user && m == 32) {
-                 unsigned char *d = (unsigned char *)data;
-                 printf("[DEBUG] rw_clus READ ENTRY: %02x ... at sec %u off %u\n", d[0], sec, (uint)(off % BSIZE));
+                 [[maybe_unused]]unsigned char *d = (unsigned char *)data;
+                 // printf("[DEBUG] rw_clus READ ENTRY: %02x ... at sec %u off %u\n", d[0], sec, (uint)(off % BSIZE));
             }
         }
         brelse(bp);
@@ -382,6 +389,8 @@ static int reloc_clus(struct fat32_entry *entry, uint off, int alloc)
 {
     // 计算偏移量对应的簇号（相对于文件起始）
     uint clus_num = off / fat.byts_per_clus;
+    // printf("[DEBUG] reloc_clus: off=%u, clus_num=%u, entry->clus_cnt=%u, cur_clus=%u\n", 
+        //    off, clus_num, entry->clus_cnt, entry->cur_clus);
     
     // 簇号大于当前已遍历的簇数：向后遍历簇链
     while (clus_num > entry->clus_cnt) {
@@ -659,7 +668,7 @@ void emake(struct fat32_entry *dp, struct fat32_entry *ep, uint off)
         de.sne.fst_clus_lo = (uint16)(ep->first_clus & 0xffff); // 起始簇号低16位
         de.sne.file_size = 0; 
         
-        printf("[DEBUG] emake: writing special entry . at off %u\n", off);
+        // printf("[DEBUG] emake: writing special entry . at off %u\n", off);
         off = reloc_clus(dp, off, 1);
         rw_clus(dp->cur_clus, 1, 0, (uint64)&de, off, sizeof(de));
         return;
@@ -670,7 +679,7 @@ void emake(struct fat32_entry *dp, struct fat32_entry *ep, uint off)
         de.sne.fst_clus_lo = (uint16)(ep->first_clus & 0xffff); // 起始簇号低16位
         de.sne.file_size = 0; 
         
-        printf("[DEBUG] emake: writing special entry .. at off %u\n", off);
+        // printf("[DEBUG] emake: writing special entry .. at off %u\n", off);
         off = reloc_clus(dp, off, 1);
         rw_clus(dp->cur_clus, 1, 0, (uint64)&de, off, sizeof(de));
         return;
@@ -685,7 +694,7 @@ void emake(struct fat32_entry *dp, struct fat32_entry *ep, uint off)
     de.lne.checksum = cal_checksum((uchar *)shortname); // 计算校验和
     de.lne.attr = ATTR_LONG_NAME; // 标记为长文件名项
 
-    printf("[DEBUG] emake: writing entry %s (short: %s) at off %u\n", ep->filename, shortname, off);
+    // printf("[DEBUG] emake: writing entry %s (short: %s) at off %u\n", ep->filename, shortname, off);
 
     // 写入所有长文件名项（倒序）
     for (int i = entcnt; i > 0; i--) {
@@ -739,6 +748,7 @@ void emake(struct fat32_entry *dp, struct fat32_entry *ep, uint off)
  */
 struct fat32_entry *ealloc(struct fat32_entry *dp, char *name, int attr)
 {
+    // printf("[DEBUG] ealloc: name=%s, attr=0x%x, dp=%s\n", name, attr, dp->filename);
     if (!(dp->attribute & ATTR_DIRECTORY)) {
         panic("ealloc not dir");
     }
@@ -1062,7 +1072,6 @@ int enext(struct fat32_entry *dp, struct fat32_entry *ep, uint off, int *count)
     for (int off2; (off2 = reloc_clus(dp, off, 0)) != -1; off += 32) {
         // 读取32字节目录项
         if (rw_clus(dp->cur_clus, 0, 0, (uint64)&de, off2, 32) != 32 || de.lne.order == END_OF_ENTRY) {
-            printf("[DEBUG] enext: hit END_OF_ENTRY at off %d (cluster %d off2 %d). Byte: 0x%02x\n", off, dp->cur_clus, off2, (uint8)de.lne.order);
             return -1;
         }
         // 空目录项：计数+1
@@ -1087,7 +1096,6 @@ int enext(struct fat32_entry *dp, struct fat32_entry *ep, uint off, int *count)
                 read_entry_name(ep->filename, &de);
             }
             read_entry_info(ep, &de);
-            printf("[DEBUG] enext: found entry %s at off %d\n", ep->filename, off);
             return 1;
         }
     }
@@ -1148,6 +1156,7 @@ struct fat32_entry *dirlookup(struct fat32_entry *dp, char *filename, uint *poff
     // 未找到文件，记录空项偏移
     if (poff) {
         *poff = off;
+        // printf("[DEBUG] dirlookup: file not found, returning off=%u\n", off);
     }
     eput(ep);
     return NULL;
@@ -1187,7 +1196,7 @@ static char *skipelem(char *path, char *name)
 // FAT32版本的路径查找函数（对应xv6原始文件系统的namex）
 static struct fat32_entry *lookup_path(char *path, int parent, char *name)
 {
-    printf("[DEBUG] lookup_path: %s, parent=%d\n", path, parent);
+    // printf("[DEBUG] lookup_path: %s, parent=%d\n", path, parent);
     struct fat32_entry *entry, *next;
     // 初始化起始目录：绝对路径→根目录，相对路径→当前工作目录
     if (*path == '/') {
@@ -1201,7 +1210,7 @@ static struct fat32_entry *lookup_path(char *path, int parent, char *name)
     }
     // 逐段解析路径
     while ((path = skipelem(path, name)) != 0) {
-        printf("[DEBUG] lookup_path: elem=%s\n", name);
+        // printf("[DEBUG] lookup_path: elem=%s\n", name);
         elock(entry);
         // 当前项不是目录 → 失败
         if (!(entry->attribute & ATTR_DIRECTORY)) {
@@ -1216,7 +1225,7 @@ static struct fat32_entry *lookup_path(char *path, int parent, char *name)
         }
         // 查找下一个路径元素
         if ((next = dirlookup(entry, name, 0)) == 0) {
-            printf("[DEBUG] lookup_path: elem %s not found in entry %s\n", name, entry->filename);
+            // printf("[DEBUG] lookup_path: elem %s not found in entry %s\n", name, entry->filename);
             eunlock(entry);
             eput(entry);
             return NULL;

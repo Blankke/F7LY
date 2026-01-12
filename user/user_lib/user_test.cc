@@ -73,8 +73,8 @@ void init_env(const char *path = musl_dir)
 int basic_test(const char *path = musl_dir)
 {
     [[maybe_unused]] int pid;
-    chdir(path);
-    chdir("basic");
+    // chdir(path);
+    // chdir("basic");
     if (strcmp(path, musl_dir) == 0)
     {
         printf("#### OS COMP TEST GROUP START basic-musl ####\n");
@@ -896,7 +896,7 @@ int interactive_shell()
                 execve(args[0], args, 0);
                 // 如果execve失败，尝试在busybox中执行
                 char busybox_path[256];
-                char *prefix = "/musl/usr/bin/";
+                const char *prefix = "/musl/usr/bin/";
                 int i = 0;
                 // 复制前缀
                 while (prefix[i] != '\0' && i < 240) {
@@ -925,4 +925,14 @@ int interactive_shell()
     }
     
     return 0;
+}
+
+int basic_musl_test(void)
+{
+    return basic_test(musl_dir);
+}
+
+int basic_glibc_test(void)
+{
+    return basic_test(glibc_dir);
 }
