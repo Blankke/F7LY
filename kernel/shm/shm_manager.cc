@@ -349,9 +349,9 @@ namespace shm
             }
             
             // 验证大小是否匹配
-            if (size > seg.size) {
+            if (size > seg.real_size) {
                 printfRed("[ShmManager] Requested size 0x%x exceeds existing segment size 0x%x\n", 
-                         size, seg.size);
+                         size, seg.real_size);
                 return -EINVAL;  // 请求的大小超过现有段大小
             }
             

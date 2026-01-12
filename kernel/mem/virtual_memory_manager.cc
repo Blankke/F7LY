@@ -5,10 +5,8 @@
 #include "mem.hh" // 添加mmap相关常量定义
 #ifdef RISCV
 #include "mem/riscv/pagetable.hh"
-#include "fs/vfs/file/normal_file.hh" // 添加文件系统支持
 #elif defined(LOONGARCH)
 #include "mem/loongarch/pagetable.hh"
-#include "vfs/file/normal_file.hh" // 添加文件系统支持
 #endif
 #include "memlayout.hh"
 #include "platform.hh"
@@ -22,6 +20,7 @@
 #include "sys/syscall_defs.hh"
 #include "shm/shm_manager.hh"
 #include "net/drivers/virtio_net.hh"
+#include "fs/vfs/vfs_utils.hh"
 extern char etext[]; // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
@@ -626,7 +625,7 @@ namespace mem
         k_pmm.clear_page(pa);
 
         // 检查是否为文件映射
-        fs::normal_file *vf = vm->vfile;
+        fs::file *vf = vm->vfile;
         if (vf != nullptr && vm->vfd != -1)
         {
             // 文件映射：需要检查是否访问超出文件大小的区域
@@ -634,20 +633,14 @@ namespace mem
             int offset = vm->offset + (page_va - vm->addr);
 
             // 获取文件实际大小
-            uint64 file_size = 0;
-            int size_result = vfs_ext_get_filesize(vf->_path_name.c_str(), &file_size);
+            fs::Kstat st;
+            int size_result = vfs_fstat(vf, &st);
+            uint64 file_size = st.size;
             if (size_result != EOK)
             {
-                if (vf->_stat.size < 0)
-                {
-                    printfRed("[allocate_vma_page] failed to get file size for %s\n", vf->_path_name.c_str());
-                    k_pmm.free_page(pa);
-                    return size_result;
-                }
-                else
-                {
-                    file_size = vf->_stat.size;
-                }
+                printfRed("[allocate_vma_page] failed to get file size for %s\n", vf->_path_name.c_str());
+                k_pmm.free_page(pa);
+                return size_result;
             }
             printfRed("[allocate_vma_page] offset: %d, file_size: %lu\n", offset, file_size);
             // 检查访问是否超出文件大小

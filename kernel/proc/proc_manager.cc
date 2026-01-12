@@ -2079,8 +2079,8 @@ namespace proc
             return -EEXIST;
         }
 
-        // 调用VFS层的mkdir函数
-        int result = vfs_ext_mkdir(full_path.c_str(), mode & 0777);
+        // 调用VFS层的mkdir函数，自动选择底层文件系统
+        int result = vfs_mkdir(full_path.c_str(), mode & 0777);
 
         return result;
     }
@@ -2505,7 +2505,7 @@ namespace proc
         }
 
         // 文件映射验证
-        fs::normal_file *vfile = nullptr;
+        fs::file *vfile = nullptr;
         fs::file *f = nullptr;
         if (!is_anonymous)
         {
@@ -2573,7 +2573,7 @@ namespace proc
                 // }
             }
 
-            vfile = static_cast<fs::normal_file *>(f);
+            vfile = f;
             printfCyan("[mmap] File mapping: %s\n", f->_path_name.c_str());
             // Respect memfd write seal: disallow shared writable mappings
             if (f->_path_name.find("memfd:") == 0)
@@ -2809,30 +2809,16 @@ namespace proc
                     uint64 pa=shm::k_smm.get_seg_info(shmid).phy_addrs;
                     if (vfile != nullptr)
                     {
-                        if (vfile != nullptr )
+                        if (vfile != nullptr)
                         {
-                            // 文件映射：需要检查是否访问超出文件大小的区域
-                            // 获取文件实际大小
-                            uint64 file_size = 0;
-                            int size_result = EOK;
-                            
-                            // 对于 memfd 文件，直接使用文件对象中的大小
-                            if (vfile->_path_name.find("memfd:") == 0)
-                            {
-                                file_size = vfile->lwext4_file_struct.fsize;
-                                printfCyan("[mmap] memfd file mapping, size: %llu\n", file_size);
-                            }
-                            else
-                            {
-                                // 对于普通文件，使用 vfs_ext_get_filesize
-                                size_result = vfs_ext_get_filesize(vfile->_path_name.c_str(), &file_size);
-                            }
-                            
+                            fs::Kstat st;
+                            int size_result = fs::k_vfs.fstat(vfile, &st);
                             if (size_result != EOK)
                             {
                                 printfRed("[mmap] Failed to get file size for %s, error: %d\n", vfile->_path_name.c_str(), size_result);
                                 shm::k_smm.detach_seg((void *)map_addr);
-                                *errno= -size_result;
+                                if (errno)
+                                    *errno = size_result < 0 ? -size_result : size_result;
                                 return MAP_FAILED;
                             }
 
@@ -3572,17 +3558,7 @@ namespace proc
             return -EBUSY;
         }
         // 调用VFS层的相应函数
-        int result;
-        if (flags & AT_REMOVEDIR)
-        {
-            // 删除目录操作
-            result = vfs_ext_rmdir(full_path.c_str());
-        }
-        else
-        {
-            // 删除文件或符号链接
-            result = vfs_ext_unlink(full_path.c_str());
-        }
+        int result = vfs_unlink_path(full_path.c_str(), flags & AT_REMOVEDIR);
 
         // 如果成功，从文件表中移除
         if (result == 0)
