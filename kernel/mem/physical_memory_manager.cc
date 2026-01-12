@@ -8,6 +8,9 @@
 #include "slab.hh"
 #include "platform.hh"
 extern "C" char end[]; // 来自链接脚本
+#ifdef RISCV
+extern uint64 k_dtb_addr;
+#endif
 
 namespace mem
 {
@@ -15,6 +18,14 @@ namespace mem
     uint64 PhysicalMemoryManager::pa_start;
     SpinLock PhysicalMemoryManager::memlock;
     BuddySystem *PhysicalMemoryManager::_buddy;
+    uint32 PhysicalMemoryManager::page_count;
+    uint32 PhysicalMemoryManager::heap_page_count;
+    uint64 PhysicalMemoryManager::phys_top;
+    uint64 PhysicalMemoryManager::heap_area_start;
+    uint64 PhysicalMemoryManager::heap_area_size;
+    uint64 PhysicalMemoryManager::heap_allocator_size;
+    uint64 PhysicalMemoryManager::shm_start;
+    uint64 PhysicalMemoryManager::shm_size;
 
     uint64 PhysicalMemoryManager::pa2pgnm(void *pa)
     {
@@ -51,8 +62,83 @@ namespace mem
         _buddy = reinterpret_cast<BuddySystem *>(pa_start);
         pa_start += BSSIZE * PGSIZE;
         memset(_buddy, 0, BSSIZE * PGSIZE);
-        _buddy->Initialize(pa_start);
-        printfGreen("[pmm] buddy system initialized, pa_start: %p\n", pa_start);
+        // 计算可用物理内存的上界，优先使用 dtb 位置作为上限以避免踩到 dtb
+        uint64 usable_top = PHYSTOP;
+#ifdef RISCV
+        if (k_dtb_addr && k_dtb_addr < usable_top)
+        {
+            usable_top = PGROUNDDOWN(k_dtb_addr);
+        }
+#endif
+
+        phys_top = usable_top;
+
+        if (usable_top <= pa_start + PGSIZE * 4)
+        {
+            panic("[pmm] insufficient memory: usable_top=%p, pa_start=%p", usable_top, pa_start);
+        }
+
+        uint64 available_bytes = usable_top - pa_start;
+
+        // 为堆和共享内存预留一部分空间，这里按 1/3 留给堆/共享内存，2/3 留给物理页分配
+        uint64 heap_region_bytes = available_bytes / 3;
+        uint64 heap_meta_bytes = BSSIZE * PGSIZE;
+        uint64 min_heap_region = heap_meta_bytes + (_1M * 8);
+        uint64 max_heap_region = heap_meta_bytes + vm_kernel_heap_size + SHM_SIZE;
+
+        if (heap_region_bytes < min_heap_region)
+            heap_region_bytes = min_heap_region;
+        if (heap_region_bytes > max_heap_region)
+            heap_region_bytes = max_heap_region;
+        if (heap_region_bytes + PGSIZE * 16 > available_bytes)
+            heap_region_bytes = available_bytes > PGSIZE * 32 ? available_bytes - PGSIZE * 16 : available_bytes / 2;
+
+        heap_area_start = PGROUNDDOWN(usable_top - heap_region_bytes);
+        heap_area_size = usable_top - heap_area_start;
+
+        uint64 pmm_bytes = heap_area_start - pa_start;
+        if (pmm_bytes < PGSIZE * 16)
+        {
+            panic("[pmm] not enough space for page allocator: %p bytes", pmm_bytes);
+        }
+
+        page_count = pmm_bytes / PGSIZE;
+
+        // 拆分堆区域：metadata + 普通堆 + 共享内存
+        if (heap_area_size <= heap_meta_bytes)
+        {
+            panic("[pmm] heap region too small");
+        }
+        uint64 usable_heap_bytes = heap_area_size - heap_meta_bytes;
+        uint64 tmp_shm_size = usable_heap_bytes / 3;
+        if (tmp_shm_size > SHM_SIZE)
+            tmp_shm_size = SHM_SIZE;
+        heap_allocator_size = usable_heap_bytes - tmp_shm_size;
+        if (heap_allocator_size > vm_kernel_heap_size)
+        {
+            heap_allocator_size = vm_kernel_heap_size;
+            tmp_shm_size = usable_heap_bytes - heap_allocator_size;
+        }
+        heap_allocator_size = PGROUNDDOWN(heap_allocator_size);
+        shm_size = PGROUNDDOWN(tmp_shm_size);
+        if (heap_allocator_size + shm_size > usable_heap_bytes)
+        {
+            shm_size = usable_heap_bytes > heap_allocator_size ? usable_heap_bytes - heap_allocator_size : 0;
+            shm_size = PGROUNDDOWN(shm_size);
+        }
+        shm_start = heap_area_start + heap_meta_bytes + heap_allocator_size;
+        heap_page_count = heap_allocator_size / PGSIZE;
+
+        if (heap_page_count == 0 || shm_size == 0)
+        {
+            panic("[pmm] heap/shm space too small (heap pages=%d, shm=%p)", heap_page_count, shm_size);
+        }
+
+        _buddy->Initialize(pa_start, page_count);
+        printfGreen("[pmm] buddy system initialized, pa_start: %p, pages: %d\n", pa_start, page_count);
+        printfGreen("[pmm] heap region: start=%p size=%p (usable=%p), heap_pages=%d\n",
+                    heap_area_start, heap_area_size, heap_allocator_size, heap_page_count);
+        printfGreen("[pmm] shm region: start=%p size=%p\n", shm_start, shm_size);
     }
 
     void *PhysicalMemoryManager::alloc_page()
@@ -103,8 +189,8 @@ namespace mem
         // printfCyan("kmalloc: size = %lu, page_num = %d\n", size, page_num);
         
         // 检查请求的页数是否合理
-        if (page_num > PGNUM) {
-            printfRed("kmalloc: request too many pages (%d > %d)\n", page_num, PGNUM);
+        if ((uint32)page_num > page_count) {
+            printfRed("kmalloc: request too many pages (%d > %d)\n", page_num, page_count);
             return 0;
         }
         
@@ -119,8 +205,8 @@ namespace mem
         else
         {
             // 检查返回的页号是否在合理范围内
-            if (x < 0 || x >= PGNUM) {
-                printfRed("kmalloc: 警告！buddy返回的页号超出范围: %d (应该在0-%d之间)\n", x, PGNUM-1);
+            if (x < 0 || (uint32)x >= page_count) {
+                printfRed("kmalloc: 警告！buddy返回的页号超出范围: %d (应该在0-%d之间)\n", x, page_count-1);
                 return 0;
             }
             

@@ -44,8 +44,8 @@ extern "C" void main()
     mem::k_pmm.init();
 
     mem::k_vmm.init("virtual_memory_manager");
-    mem::k_hmm.init("heap_memory_manager", HEAP_START);
-    shm::k_smm.init(SHM_START, SHM_SIZE); // 初始化共享内存管理器
+    mem::k_hmm.init("heap_memory_manager", mem::k_pmm.get_heap_area_start(), mem::k_pmm.get_heap_allocator_size());
+    shm::k_smm.init(mem::k_pmm.get_shm_start(), mem::k_pmm.get_shm_size()); // 初始化共享内存管理器
 
     mem::SlabAllocator::init(); // 初始化 SlabAllocator
     if (dev::k_devm.register_stdin(static_cast<dev::VirtualDevice *>(&dev::k_stdin)) < 0)

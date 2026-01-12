@@ -51,3 +51,4 @@ output
 ref.txt
 sdcard-rv.zip
 testsuits/
+kernel-qemu

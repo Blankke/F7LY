@@ -1095,7 +1095,12 @@ namespace mem
         kvmmap(pt, KERNBASE, KERNBASE, (uint64)etext - KERNBASE, PTE_R | PTE_X);
         // printfGreen("[vmm] kvmmake kernel text success\n");
         // map kernel data and the physical RAM we'll make use of.
-        kvmmap(pt, (uint64)etext, (uint64)etext, PHYSTOP - (uint64)etext, PTE_R | PTE_W);
+        uint64 phys_top = k_pmm.get_phys_top();
+        if (phys_top <= (uint64)etext)
+        {
+            panic("[vmm] invalid phys_top %p vs etext %p", phys_top, etext);
+        }
+        kvmmap(pt, (uint64)etext, (uint64)etext, phys_top - (uint64)etext, PTE_R | PTE_W);
         // printfRed("[vmm] kvmmake kernel data success\n");
 
         // Map DTB if it exists
@@ -1127,7 +1132,7 @@ namespace mem
         // }
 
         // 初始化堆内存
-        kvmmap(pt, vm_kernel_heap_start, HEAP_START, vm_kernel_heap_size, PTE_R | PTE_W);
+        kvmmap(pt, vm_kernel_heap_start, mem::k_pmm.get_heap_area_start(), mem::k_pmm.get_heap_area_size(), PTE_R | PTE_W);
 #elif defined(LOONGARCH)
         kvmmap(pt, ((uint64)etext) & (~(DMWIN_MASK)), (uint64)etext, PHYSTOP - (uint64)etext, PTE_R | PTE_W);
 
