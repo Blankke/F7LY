@@ -6,7 +6,7 @@
 // 操作系统启动时的栈空间(每个核心占4KB)
 __attribute__ ((aligned (16))) char stack0[NCPU][4096 * 2];
 
-extern void main();
+extern "C" void main(uint64 hartid, uint64 dtb_entry);
 
 void trap_loop()
 {
@@ -31,5 +31,5 @@ void start(uint64 hartid, uint64 dtb_entry)
     // 使用tp保存hartid以方便在S态查看
     riscv::w_tp(hartid);
     // 进入main函数完成一系列初始化
-    main();
+    main(hartid, dtb_entry);
 }

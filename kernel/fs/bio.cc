@@ -22,6 +22,8 @@
 
 #include "fs/vfs/fs.hh"
 #include "fs/buf.hh"
+#include "devs/device_manager.hh"
+#include "devs/block_device.hh"
 #ifdef RISCV
 #include "fs/drivers/riscv/virtio2.hh"
 #elif defined LOONGARCH
@@ -101,10 +103,24 @@ bread(uint dev, uint blockno)
 
   b = bget(dev, blockno);
   if(!b->valid) {
-    if (dev == 0) {
-      virtio_disk_rw(b, 0);
-    } else {
-      virtio_disk_rw2(b, 0);
+    bool handled = false;
+    dev::VirtualDevice* vdev = dev::k_devm.get_device(dev);
+    if (vdev && vdev->type() == dev::DeviceType::dev_block) {
+       dev::BlockDevice* bd = (dev::BlockDevice*)vdev;
+       dev::BufferDescriptor bsecs[1];
+       bsecs[0].buf_addr = (uint64)b->data;
+       bsecs[0].buf_size = BSIZE;
+       if (bd->read_blocks(blockno, 1, bsecs, 1) == 0) {
+           handled = true;
+       }
+    }
+
+    if (!handled) {
+      if (dev == 0) {
+        virtio_disk_rw(b, 0);
+      } else {
+        virtio_disk_rw2(b, 0);
+      }
     }
 
     b->valid = 1;
@@ -118,10 +134,25 @@ bwrite(struct buf *b)
 {
   if(!(b->lock.is_holding()))
     panic("bwrite");
-  if (b->dev == 0) {
-    virtio_disk_rw(b, 1);
-  } else {
-    virtio_disk_rw2(b, 1);
+
+  bool handled = false;
+  dev::VirtualDevice* vdev = dev::k_devm.get_device(b->dev);
+  if (vdev && vdev->type() == dev::DeviceType::dev_block) {
+       dev::BlockDevice* bd = (dev::BlockDevice*)vdev;
+       dev::BufferDescriptor bsecs[1];
+       bsecs[0].buf_addr = (uint64)b->data;
+       bsecs[0].buf_size = BSIZE;
+       if (bd->write_blocks(b->blockno, 1, bsecs, 1) == 0) {
+           handled = true;
+       }
+  }
+
+  if (!handled) {
+    if (b->dev == 0) {
+      virtio_disk_rw(b, 1);
+    } else {
+      virtio_disk_rw2(b, 1);
+    }
   }
 }
 

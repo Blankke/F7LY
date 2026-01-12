@@ -25,6 +25,8 @@
 extern char etext[]; // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
+extern uint64 k_dtb_addr; // Defined in main.cc
+
 #ifdef LOONGARCH
 void tlbinit(void)
 {
@@ -1102,6 +1104,15 @@ namespace mem
         // map kernel data and the physical RAM we'll make use of.
         kvmmap(pt, (uint64)etext, (uint64)etext, PHYSTOP - (uint64)etext, PTE_R | PTE_W);
         // printfRed("[vmm] kvmmake kernel data success\n");
+
+        // Map DTB if it exists
+        if (k_dtb_addr != 0) {
+             // Map a reasonable size for DTB (e.g. 2MB to be safe and cover crossing page boundaries)
+             // We map to identity address
+             kvmmap(pt, k_dtb_addr, k_dtb_addr, 0x200000, PTE_R | PTE_W);
+             // printfGreen("[vmm] mapped DTB at %p\n", k_dtb_addr);
+        }
+
         // // map the trampoline for trap entry/exit to
         // // the highest virtual address in the kernel.
         kvmmap(pt, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);

@@ -329,7 +329,6 @@ namespace proc
             //             /// @todo 这里暂时修改进程的工作目录为fat的挂载点
             //             proc->_cwd = fs::ramfs::k_ramfs.getRoot()->EntrySearch("mnt");
             //             proc->_cwd_name = "/mnt/";
-
             filesystem_init();
             // filesystem2_init(); // 这个滚蛋
             fs::device_file *f_in = new fs::device_file();

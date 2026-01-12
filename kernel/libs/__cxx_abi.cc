@@ -11,6 +11,10 @@
 #include "__cxx_abi.hh"
 #include "common.hh"
 
+extern "C" {
+	void *__dso_handle = 0;
+}
+
 namespace __cxxabiv1
 {
 	extern "C" {

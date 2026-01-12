@@ -39,9 +39,13 @@
 #include "fs/vfs/fifo_manager.hh"
 #include "net/drivers/virtio_net.hh"
 #include "net/f7ly_network.hh"
+
+uint64 k_dtb_addr;
+
 // 注意华科的main函数可能有问题, 注意多核初始化
-void main()
+extern "C" void main(uint64 hartid, uint64 dtb_addr)
 {
+    k_dtb_addr = dtb_addr;
     // riscv::r_mstatus();
 
     k_printer.init(); // 这里也初始化了console和uart

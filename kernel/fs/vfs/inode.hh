@@ -8,6 +8,7 @@
 #include "fs/stat.hh"
 
 #include "fs/lwext4/ext4.hh"
+#include "fs/fat32/fat32_inode.hh"
 
 struct superblock;
 struct inode;
@@ -98,6 +99,7 @@ struct inode {
     struct superblock *i_sb;
 
     struct vfs_ext4_inode_info i_info; //EXT4 inode结构
+    struct vfs_fat32_inode_info i_fat_info;
 };
 
 

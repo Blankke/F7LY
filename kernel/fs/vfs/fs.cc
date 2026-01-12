@@ -10,15 +10,22 @@
 #include "fs/vfs/vfs_utils.hh"
 #include "proc/meminfo.hh"
 #include "proc/cpuinfo.hh"
+#include "fs/fat32/fat32.hh"
+
+#include "devs/ramdisk.hh"
+#include "devs/dtb.hh"
+#include "devs/device_manager.hh"
+
 filesystem_t *fs_table[VFS_MAX_FS];
 filesystem_op_t *fs_ops_table[VFS_MAX_FS] = {
     NULL,
-    NULL, // remain for FAT32 if needed
+    &fat32_fs_op, 
     &ext4_fs_op,
     NULL,
 };
 
 filesystem_t ext4_fs;
+filesystem_t fat32_fs;
 
 filesystem_t root_fs; // 仅用来加载init程序
 
@@ -32,6 +39,7 @@ void init_fs_table(void)
         fs_table[i] = NULL;
     }
     fs_table[EXT4] = &ext4_fs;
+    fs_table[FAT32] = &fat32_fs;
     printf("init_fs_table finished\n");
 }
 
@@ -48,11 +56,46 @@ void fs_init(filesystem_t *fs, int dev, fs_t fs_type, char *path)
     printf("fs_init done\n");
 }
 
+extern uint64 k_dtb_addr;
+
 void filesystem_init(void)
 {
+    // Try to init DTB
+    if (k_dtb_addr) {
+        DtbManager::init(k_dtb_addr);
+    }
+    printfYellow("filesystem_init: DTB initialized at 0x%lx\n", k_dtb_addr);
+    uint64 start = 0, end = 0;
+    int root_dev_id = ROOTDEV; // Default
+    
+    if (DtbManager::get_initrd(start, end) && start != 0) {
+        printfYellow("Found Initrd: 0x%lx - 0x%lx, size: %ld\n", start, end, end - start);
+        // Using new to avoid static destructor registration (__dso_handle issue)
+        dev::RamDisk* ramdisk = new dev::RamDisk(start, end - start);
+        if (ramdisk) {
+            root_dev_id = dev::k_devm.register_block_device(ramdisk, "ramdisk");
+            printfYellow("Registered RamDisk as device %d\n", root_dev_id);
+        } else {
+             printfRed("Failed to allocate RamDisk!\n");
+        }
+    } else {
+        printfRed("Initrd not found, using default ROOTDEV\n");
+    }
+
     static char root_path[] = "/";
-    fs_mount(ROOTDEV, EXT4, root_path, 0, NULL); // 挂载文件系统
+    printfYellow("===========Mounted EXT4 on %s (dev %d)\n", root_path, root_dev_id);
+    fs_mount(root_dev_id, EXT4, root_path, 0, NULL); // 挂载文件系统
     dir_init();
+    
+    static char fat32_path[] = "/fat32";
+    int a =vfs_mkdir(fat32_path, 0777);
+    int r =vfs_is_file_exist(fat32_path) ;
+    printfYellow("vfs_mkdir /fat32 result: %d, exist check: %d\n", a, r);
+    if (a==0 || r== 1) {
+        // Mount FAT32 on device 0
+        fs_mount(0, FAT32, fat32_path, 0, NULL);
+        printf("Mounted FAT32 on %s\n", fat32_path);
+    }
 }
 
 void dir_init(void)

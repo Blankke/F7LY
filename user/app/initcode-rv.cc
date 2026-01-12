@@ -7,8 +7,8 @@ extern "C"
         // init_env("/");
         // 现场赛测例
         // git_test("/musl");
-        vim_h();
-        gcc_test();
+        // vim_h();
+        // gcc_test();
       // rustc_test();
         // 运行交互式shell
 

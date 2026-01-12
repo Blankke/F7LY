@@ -9,13 +9,6 @@
 #define T_SOCK    7   // Socket
 #define T_UNKNOWN 8
 
-// struct stat {
-//   int dev;     // File system's disk device
-//   uint ino;    // Inode number
-//   short type;  // Type of file
-//   short nlink; // Number of links to file
-//   uint64 size; // Size of file in bytes
-// };
 
 //文件状态
 struct Kstat {
