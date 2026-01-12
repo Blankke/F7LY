@@ -174,7 +174,13 @@ endif
 .PHONY: all clean dirs build riscv loongarch run debug initcode build-la
 
 
-all: riscv
+all: 
+	apt-get install -y g++-11-riscv64-linux-gnu
+	ln -sf /usr/bin/riscv64-linux-gnu-g++-11 /usr/bin/riscv64-linux-gnu-g++
+	ln -sf /usr/bin/riscv64-linux-gnu-gcc-11 /usr/bin/riscv64-linux-gnu-gcc
+	@$(MAKE) riscv
+	@if [ -f rootfs.img.back ]; then cp rootfs.img.back rootfs.img; fi
+
 
 riscv:
 	@$(MAKE) ARCH=riscv build
@@ -233,7 +239,7 @@ $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a:
 
 
 run: build
-	@if [ -f rootfs.img.back ]; then cp rootfs.img.back rootfs.img; fi
+	@if [ -f rootfs.img.back ]; then cp rootfs.img.back initrd.img; fi
 ifeq ($(ARCH),riscv)
 	$(MAKE) run-riscv ARCH=$(ARCH)
 else ifeq ($(ARCH),loongarch)
