@@ -7,6 +7,8 @@
 #include "fs/vfs/file/device_file.hh"
 #include "fs/vfs/file/pipe_file.hh"
 #include "fs/vfs/file/directory_file.hh"
+#include "fs/vfs/file/fat32_file.hh"
+#include "fs/fat32/fat32.hh"
 #include "fs/vfs/fifo_manager.hh"
 #include "proc_manager.hh" // 用于访问当前进程的umask
 #include "fs/lwext4/ext4.hh"
@@ -1122,6 +1124,7 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
 
 int vfs_mkdir(const char *path, uint64_t mode)
 {
+    printfYellow("vfs_mkdir: creating directory: %s with mode: 0%o\n", path, mode);
     /* Check if the directory already exists */
     if (vfs_is_file_exist(path) == 1)
     {

@@ -10,6 +10,7 @@ extern "C"
         gcc_test();
         vim_h();
       // run_test("/usr/bin/vim", bb_sh, 0);
+      // rustc_test();
         // 运行交互式shell
 
         shutdown();

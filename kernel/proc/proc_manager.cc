@@ -336,7 +336,6 @@ namespace proc
             //             /// @todo 这里暂时修改进程的工作目录为fat的挂载点
             //             proc->_cwd = fs::ramfs::k_ramfs.getRoot()->EntrySearch("mnt");
             //             proc->_cwd_name = "/mnt/";
-
             filesystem_init();
             // filesystem2_init(); // 这个滚蛋
             printf("[forkret] into forkret , cur_pid=%d, cur_tid=%d\n", _cur_pid, _cur_tid);
