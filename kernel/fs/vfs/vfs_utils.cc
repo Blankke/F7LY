@@ -376,6 +376,7 @@ static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file
 
     return mode;
 }
+
 int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mode)
 {
     // printfYellow("[vfs_openat] : absolute_path=%s, flags=%o, mode=0%o\n", absolute_path.c_str(), flags, mode);
@@ -419,6 +420,70 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
     if (resolved_path.back() != '/')
         resolved_path += "/";
     resolved_path += filename;
+
+    // 检查是否为 FAT32 分区
+    struct filesystem *fs = get_fs_from_path(resolved_path.c_str());
+    if (fs && fs->type == FAT32) {
+         const char* rel_path = resolved_path.c_str();
+         if (strcmp(fs->path, "/") != 0) {
+             size_t mplen = strlen(fs->path);
+             if (strncmp(rel_path, fs->path, mplen) == 0) {
+                 if (rel_path[mplen] == '\0') rel_path = "/";
+                 else if (rel_path[mplen] == '/') rel_path += mplen;
+             }
+         }
+         struct fat32_entry *ep = ename((char*)rel_path);
+         
+         if (!ep && (flags & O_CREAT)) {
+             // Create file
+             // Need to find parent entry first
+             char name_buf[FAT32_MAX_FILENAME + 1];
+             struct fat32_entry *dp = enameparent((char*)rel_path, name_buf);
+             if (dp) {
+                 elock(dp);
+                 int attr = 0;
+                 if (flags & O_DIRECTORY) attr = ATTR_DIRECTORY;
+                 ep = ealloc(dp, name_buf, attr);
+                 eunlock(dp);
+                 eput(dp);
+             }
+         }
+         
+         if (ep) {
+             // Check directory if O_DIRECTORY set
+             if ((flags & O_DIRECTORY) && !(ep->attribute & ATTR_DIRECTORY)) {
+                  eput(ep);
+                  return -ENOTDIR;
+             }
+             
+             // Create file object
+             fs::FileAttrs attrs;
+             if (ep->attribute & ATTR_DIRECTORY) attrs.filetype = fs::FileTypes::FT_DIRECT;
+             else attrs.filetype = fs::FileTypes::FT_NORMAL;
+             
+             // Determine mode (simplified for FAT32)
+             mode_t file_mode = determine_file_mode(flags, attrs.filetype, true, mode);
+             attrs._value = file_mode;
+             
+             file = new fs::fat32_file(attrs, resolved_path, ep);
+             
+             // Handle O_TRUNC
+             if ((flags & O_TRUNC) && !(ep->attribute & ATTR_DIRECTORY)) {
+                 elock(ep);
+                 etrunc(ep);
+                 eunlock(ep);
+             }
+             
+             // Handle O_APPEND
+             if ((flags & O_APPEND) && !(ep->attribute & ATTR_DIRECTORY)) {
+                  file->lseek(0, SEEK_END);
+             }
+
+             return EOK;
+         } else {
+             return -ENOENT;
+         }
+    }
 
     // 如果没有 O_NOFOLLOW 标志，还要解析最终的文件名（如果它是符号链接）
     if (!(flags & O_NOFOLLOW))
@@ -861,6 +926,24 @@ int vfs_is_dir(eastl::string &absolute_path)
 
 int vfs_path2filetype(eastl::string &absolute_path)
 {
+    struct filesystem *fs = get_fs_from_path(absolute_path.c_str());
+    if (fs && fs->type == FAT32) {
+        const char* rel_path = absolute_path.c_str();
+        if (strcmp(fs->path, "/") != 0) {
+             size_t mplen = strlen(fs->path);
+             if (strncmp(rel_path, fs->path, mplen) == 0) {
+                 if (rel_path[mplen] == '\0') rel_path = "/";
+                 else if (rel_path[mplen] == '/') rel_path += mplen;
+             }
+        }
+        struct fat32_entry *ep = ename((char*)rel_path);
+        if (!ep) return -1;
+        int type = fs::FileTypes::FT_NORMAL;
+        if (ep->attribute & ATTR_DIRECTORY) type = fs::FileTypes::FT_DIRECT;
+        eput(ep);
+        return type;
+    }
+
     struct ext4_inode inode;
     uint32 ino;
     if (ext4_raw_inode_fill(absolute_path.c_str(), &ino, &inode) == EOK)
@@ -940,9 +1023,6 @@ int create_and_write_file(const char *path, const char *data)
 
 int vfs_is_file_exist(const char *path)
 {
-    struct ext4_inode inode;
-    uint32_t ino;
-    
     // 先解析符号链接
     eastl::string resolved_path;
     int res = resolve_symlinks(eastl::string(path), resolved_path);
@@ -950,6 +1030,29 @@ int vfs_is_file_exist(const char *path)
         printfRed("vfs_is_file_exist: failed to resolve symlinks for path: %s\n", path);
         return 0;
     }
+
+    struct filesystem *fs = get_fs_from_path(resolved_path.c_str());
+    if (fs && fs->type == FAT32) {
+        const char* rel_path = resolved_path.c_str();
+        if (strcmp(fs->path, "/") != 0) {
+             size_t mplen = strlen(fs->path);
+             if (strncmp(rel_path, fs->path, mplen) == 0) {
+                 if (rel_path[mplen] == '\0') rel_path = "/";
+                 else if (rel_path[mplen] == '/') rel_path += mplen;
+             }
+        }
+        printfCyan("vfs_is_file_exist: checking FAT32 path: %s -> %s (rel: %s)\n", path, resolved_path.c_str(), rel_path);
+        struct fat32_entry *ep = ename((char*)rel_path);
+        printfCyan("vfs_is_file_exist: ename returned: %p for path: %s\n", ep, path);
+        if (ep) {
+            eput(ep);
+            return 1;
+        }
+        return 0;
+    }
+
+    struct ext4_inode inode;
+    uint32_t ino;
     
     // printfYellow("vfs_is_file_exist: checking path: %s -> %s\n", path, resolved_path.c_str());
     // 尝试获取文件的inode信息
@@ -996,6 +1099,26 @@ uint vfs_read_file(const char *path, uint64 buffer_addr, size_t offset, size_t s
         return res;
     }
     
+    struct filesystem *fs = get_fs_from_path(resolved_path.c_str());
+    if (fs && fs->type == FAT32) {
+         const char* rel_path = resolved_path.c_str();
+         if (strcmp(fs->path, "/") != 0) {
+             size_t mplen = strlen(fs->path);
+             if (strncmp(rel_path, fs->path, mplen) == 0) {
+                 if (rel_path[mplen] == '\0') rel_path = "/";
+                 else if (rel_path[mplen] == '/') rel_path += mplen;
+             }
+         }
+         struct fat32_entry *ep = ename((char*)rel_path);
+         if (!ep) return -ENOENT;
+         
+         elock(ep);
+         int n = eread(ep, 0, buffer_addr, offset, size);
+         eunlock(ep);
+         eput(ep);
+         return n;
+    }
+
     // printfCyan("vfs_read_file: resolved path %s -> %s\n", path, resolved_path.c_str());
 
     // 打开文件（只读模式）
@@ -1042,6 +1165,77 @@ uint vfs_read_file(const char *path, uint64 buffer_addr, size_t offset, size_t s
 
 int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
 {
+    // FAT32 support
+    if (file && file->_attrs.filetype == fs::FileTypes::FT_DIRECT) {
+        struct filesystem *fs = get_fs_from_path(file->_path_name.c_str());
+        if (fs && fs->type == FAT32) {
+             fs::fat32_file *fat_f = (fs::fat32_file*)file;
+             if (!fat_f || !fat_f->fat_info.entry) return -EINVAL;
+             
+             struct fat32_entry *dp = fat_f->fat_info.entry;
+             elock(dp);
+             
+             [[maybe_unused]]int index = 0;
+             struct linux_dirent64 *d = dirp;
+             int totlen = 0;
+             uint32 off = file->_file_ptr; // Use file pointer as offset in directory entries
+             
+             printfYellow("[vfs_getdents] FAT32 dir: %s, off: %u, count: %u\n", file->_path_name.c_str(), off, count);
+
+             struct fat32_entry ep_store;
+             struct fat32_entry *ep = &ep_store;
+             int ent_count = 0;
+             int type;
+             
+             while (totlen + sizeof(struct linux_dirent64) <= count) {
+                  ep->valid = 0;
+                  // printfYellow("[vfs_getdents] calling enext with off=%u\n", off);
+                  type = enext(dp, ep, off, &ent_count);
+                  
+                  if (type == -1) {
+                      printfRed("[vfs_getdents] enext returned -1 (end of dir) at off=%u\n", off);
+                      break; // End of directory
+                  }
+                  
+                  off += ent_count * 32; // Advance offset by consumed 32-byte entries
+                  
+                  if (type == 0) { // Empty entry
+                       // printfCyan("[vfs_getdents] enext returned 0 (empty) at off=%u\n", off - ent_count*32);
+                       continue;
+                  }
+                  
+                  printfGreen("[vfs_getdents] Found entry: %s at off=%u\n", ep->filename, off - ent_count*32);
+
+                  int namelen = strlen(ep->filename);
+                  uint reclen = sizeof(d->d_ino) + sizeof(d->d_off) + sizeof(d->d_reclen) + sizeof(d->d_type) + namelen + 1;
+                  if (reclen % 8) reclen = reclen - reclen % 8 + 8;
+                  if (reclen < sizeof(struct linux_dirent64)) reclen = sizeof(struct linux_dirent64);
+                  
+                  if (totlen + reclen > count) {
+                      off -= ent_count * 32;
+                      printfYellow("[vfs_getdents] buffer full, stopping\n");
+                      break; 
+                  }
+                  
+                  strncpy(d->d_name, ep->filename, namelen + 1);
+                  d->d_ino = 0; 
+                  d->d_off = off;
+                  d->d_reclen = reclen;
+                  
+                  if (ep->attribute & ATTR_DIRECTORY) d->d_type = T_DIR;
+                  else d->d_type = T_FILE;
+                  
+                  totlen += reclen;
+                  d = (struct linux_dirent64 *)((char *)d + reclen);
+             }
+             
+             file->_file_ptr = off; // Update file pointer
+             eunlock(dp);
+             printfYellow("[vfs_getdents] returning totlen=%d, new off=%u\n", totlen, off);
+             return totlen;
+        }
+    }
+
     int index = 0;
     struct linux_dirent64 *d;
     const ext4_direntry *rentry;
@@ -1130,6 +1324,38 @@ int vfs_mkdir(const char *path, uint64_t mode)
     {
         printfRed("vfs_mkdir: directory already exists: %s\n", path);
         return -EEXIST;
+    }
+
+    struct filesystem *fs = get_fs_from_path(path);
+    if (fs && fs->type == FAT32) {
+         const char* rel_path = path;
+         if (strcmp(fs->path, "/") != 0) {
+             size_t mplen = strlen(fs->path);
+             if (strncmp(rel_path, fs->path, mplen) == 0) {
+                 if (rel_path[mplen] == '\0') rel_path = "/";
+                 else if (rel_path[mplen] == '/') rel_path += mplen;
+             }
+         }
+         
+         char name_buf[FAT32_MAX_FILENAME + 1];
+         struct fat32_entry *dp = enameparent((char*)rel_path, name_buf);
+         if (!dp) {
+             printfRed("vfs_mkdir: parent not found for %s\n", path);
+             return -ENOENT;
+         }
+         
+         elock(dp);
+         struct fat32_entry *ep = ealloc(dp, name_buf, ATTR_DIRECTORY);
+         eunlock(dp);
+         eput(dp);
+         
+         if (ep) {
+             eput(ep);
+             printfGreen("vfs_mkdir: created FAT32 directory %s\n", path);
+             return EOK;
+         }
+         printfRed("vfs_mkdir: failed to create FAT32 directory %s\n", path);
+         return -EIO;
     }
 
     /* Create the directory. */
@@ -1265,6 +1491,41 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
         printfCyan("vfs_fstat: symlink mode: 0%o, size: %u\n", st->mode, st->size);
         return EOK;
     }
+
+    struct filesystem *fs = get_fs_from_path(f->_path_name.c_str());
+    if (fs && fs->type == FAT32) {
+         fs::fat32_file *fat_f = (fs::fat32_file*)f;
+         if (fat_f && fat_f->fat_info.entry) {
+             struct fat32_entry *ep = fat_f->fat_info.entry;
+             memset(st, 0, sizeof(fs::Kstat));
+             
+             st->ino = (uint64)ep; 
+             st->dev = fs->dev;
+             
+             st->mode = 0;
+             if (ep->attribute & ATTR_DIRECTORY) st->mode |= S_IFDIR;
+             else st->mode |= S_IFREG;
+             
+             st->mode |= 0755;
+             if (ep->attribute & ATTR_READ_ONLY) st->mode &= ~0222;
+             
+             st->nlink = 1;
+             st->uid = 0;
+             st->gid = 0;
+             st->rdev = 0;
+             st->size = ep->file_size;
+             
+             struct mntfs *mnt = (struct mntfs *)fs->fs_data;
+             if (mnt) st->blksize = mnt->byts_per_clus;
+             else st->blksize = 512;
+             
+             st->blocks = (st->size + 511) / 512;
+             
+             printfCyan("vfs_fstat: fat32 file: %s mode: 0%o size: %u\n", f->_path_name.c_str(), st->mode, st->size);
+             return EOK;
+         }
+    }
+
     struct ext4_inode inode;
     uint32 inode_num = 0;
     const char *file_path = f->_path_name.c_str();
@@ -1367,6 +1628,47 @@ int vfs_path_stat(const char *path, fs::Kstat *st, bool follow_symlinks)
     if (vfs_is_file_exist(path) != 1)
     {
         return -ENOENT;
+    }
+
+    struct filesystem *fs = get_fs_from_path(path);
+    if (fs && fs->type == FAT32) {
+         const char* rel_path = path;
+         if (strcmp(fs->path, "/") != 0) {
+             size_t mplen = strlen(fs->path);
+             if (strncmp(rel_path, fs->path, mplen) == 0) {
+                 if (rel_path[mplen] == '\0') rel_path = "/";
+                 else if (rel_path[mplen] == '/') rel_path += mplen;
+             }
+         }
+         struct fat32_entry *ep = ename((char*)rel_path);
+         if (!ep) return -ENOENT;
+         
+         memset(st, 0, sizeof(fs::Kstat));
+         st->ino = (uint64)ep;
+         st->dev = fs->dev;
+         
+         st->mode = 0;
+         if (ep->attribute & ATTR_DIRECTORY) st->mode |= S_IFDIR;
+         else st->mode |= S_IFREG;
+         
+         st->mode |= 0755;
+         if (ep->attribute & ATTR_READ_ONLY) st->mode &= ~0222;
+             
+         st->nlink = 1;
+         st->uid = 0;
+         st->gid = 0;
+         st->size = ep->file_size;
+         
+         struct mntfs *mnt = (struct mntfs *)fs->fs_data;
+         if (mnt) st->blksize = mnt->byts_per_clus;
+         else st->blksize = 4096;
+         
+         st->blocks = (st->size + 511) / 512;
+         
+         eput(ep);
+         
+         printfCyan("vfs_path_stat: fat32 path: %s mode: 0%o size: %u\n", path, st->mode, st->size);
+         return EOK;
     }
 
     struct ext4_inode inode;
@@ -1897,6 +2199,26 @@ int vfs_write_file(const char *path, uint64 buffer_addr, size_t offset, size_t s
     {
         printfRed("File does not exist: %s\n", path);
         return -ENOENT;
+    }
+
+    struct filesystem *fs = get_fs_from_path(path);
+    if (fs && fs->type == FAT32) {
+         const char* rel_path = path;
+         if (strcmp(fs->path, "/") != 0) {
+             size_t mplen = strlen(fs->path);
+             if (strncmp(rel_path, fs->path, mplen) == 0) {
+                 if (rel_path[mplen] == '\0') rel_path = "/";
+                 else if (rel_path[mplen] == '/') rel_path += mplen;
+             }
+         }
+         struct fat32_entry *ep = ename((char*)rel_path);
+         if (!ep) return -ENOENT;
+         
+         elock(ep);
+         int n = ewrite(ep, 0, buffer_addr, offset, size);
+         eunlock(ep);
+         eput(ep);
+         return n;
     }
 
     int res;

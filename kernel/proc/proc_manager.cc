@@ -2167,7 +2167,7 @@ namespace proc
         int err = fs::k_vfs.openat(path, p->_ofile->_ofile_ptr[fd], flags, mode);
         if (err < 0)
         {
-            printfRed("[open] failed for path: %s\n", path.c_str());
+            printfRed("[open] failed for path: %s,err:%d\n", path.c_str(),err);
             return err; // 文件不存在或打开失败
         }
         p->_ofile->_ofile_ptr[fd]->_lock.l_pid = p->_pid; // 设置文件描述符的锁定进程 ID
