@@ -711,6 +711,291 @@ F7LY内核目前仅支持ext4文件系统，但由于系统状态文件（如`pr
   caption: [两层封装的文件操作],
 ) <fig:file-operation>
 
+=== 多文件系统支持
+
+==== DTB Manager与文件系统初始化
+
+F7LY通过设备树（Device Tree Blob, DTB）获取硬件信息和启动参数，实现了灵活的文件系统初始化机制。DTB Manager负责解析设备树，提取关键信息（如initrd地址范围），为文件系统的挂载提供必要的资源。
+
+*设备树初始化流程*
+
+在系统启动时，Bootloader会将设备树的物理地址传递给内核（存储在全局变量`k_dtb_addr`中）。文件系统初始化函数`filesystem_init()`首先调用`DtbManager::init(k_dtb_addr)`来解析设备树：
+
+```cpp
+void filesystem_init(void)
+{
+    // 初始化DTB Manager
+    if (k_dtb_addr) {
+        DtbManager::init(k_dtb_addr);
+    }
+    printfYellow("filesystem_init: DTB initialized at 0x%lx\n", k_dtb_addr);
+    
+    uint64 start = 0, end = 0;
+    int root_dev_id = ROOTDEV; // 默认根设备
+    
+    // 从设备树中获取initrd信息
+    if (DtbManager::get_initrd(start, end) && start != 0) {
+        printfYellow("Found Initrd: 0x%lx - 0x%lx, size: %ld\n", 
+                     start, end, end - start);
+        // 创建RamDisk设备
+        dev::RamDisk* ramdisk = new dev::RamDisk(start, end - start);
+        if (ramdisk) {
+            root_dev_id = dev::k_devm.register_block_device(ramdisk, "ramdisk");
+            printfYellow("Registered RamDisk as device %d\n", root_dev_id);
+        }
+    }
+    
+    // 挂载EXT4根文件系统
+    static char root_path[] = "/";
+    fs_mount(root_dev_id, EXT4, root_path, 0, NULL);
+    // ... 后续初始化
+}
+```
+
+#text()[#h(2em)]这一机制使得F7LY能够灵活地从不同的存储介质（如内存中的initrd镜像、物理磁盘等）加载根文件系统，增强了系统的可移植性和适应性。
+
+*RamDisk设备*
+
+当检测到initrd时，F7LY会创建一个RamDisk设备，将内存中的文件系统镜像封装为块设备接口。RamDisk类实现了`BlockDevice`接口，提供统一的块设备操作方法（如`read()`、`write()`），使得文件系统层可以透明地访问内存中的数据，无需关心底层存储介质的差异。
+
+==== EXT4与FAT32双文件系统架构
+
+F7LY支持同时挂载EXT4和FAT32两种文件系统，通过VFS层统一管理不同文件系统的操作接口，实现了"多文件系统共存"的设计目标。
+
+*文件系统表管理*
+
+F7LY维护一个全局的文件系统表`fs_table`，每个表项记录一个已挂载文件系统的信息：
+
+```cpp
+filesystem_t *fs_table[VFS_MAX_FS];
+filesystem_op_t *fs_ops_table[VFS_MAX_FS] = {
+    NULL,
+    &fat32_fs_op,  // FAT32操作函数表
+    &ext4_fs_op,   // EXT4操作函数表
+    NULL,
+};
+
+filesystem_t ext4_fs;   // EXT4文件系统实例
+filesystem_t fat32_fs;  // FAT32文件系统实例
+```
+
+#text()[#h(2em)]每个文件系统实例包含以下关键信息：
+- `dev`：设备号，标识文件系统所在的块设备
+- `type`：文件系统类型（EXT4或FAT32）
+- `path`：挂载点路径（如`"/"`或`"/fat32"`）
+- `fs_op`：指向文件系统操作函数表的指针
+
+*EXT4根文件系统*
+
+EXT4作为F7LY的主要文件系统，挂载在根目录`"/"`上，用于存储系统关键文件、用户程序和数据。初始化流程如下：
+
+```cpp
+// 挂载EXT4根文件系统
+static char root_path[] = "/";
+printfYellow("===========Mounted EXT4 on %s (dev %d)\n", root_path, root_dev_id);
+fs_mount(root_dev_id, EXT4, root_path, 0, NULL);
+dir_init();  // 初始化目录结构
+```
+
+*FAT32文件系统挂载*
+
+在根文件系统挂载完成后，F7LY会尝试在`"/fat32"`目录下挂载FAT32文件系统：
+
+```cpp
+// 创建挂载点目录
+static char fat32_path[] = "/fat32";
+int result = vfs_mkdir(fat32_path, 0777);
+int exist = vfs_is_file_exist(fat32_path);
+printfYellow("vfs_mkdir /fat32 result: %d, exist check: %d\n", result, exist);
+
+if (result == 0 || exist == 1) {
+    // 挂载FAT32到设备0
+    fs_mount(0, FAT32, fat32_path, 0, NULL);
+    printf("Mounted FAT32 on %s\n", fat32_path);
+}
+```
+
+#text()[#h(2em)]这里，FAT32文件系统挂载在设备0上（通常对应第一块物理磁盘或虚拟磁盘），挂载点为`"/fat32"`。系统首先尝试创建挂载点目录，若目录已存在或创建成功，则执行挂载操作。
+
+==== FAT32文件系统实现
+
+F7LY对FAT32的支持基于自主实现的FAT32驱动，能够读写FAT32格式的磁盘分区。
+
+*FAT32核心数据结构*
+
+FAT32驱动维护全局的文件系统参数和缓存结构：
+
+```cpp
+// FAT32文件系统核心参数
+static struct {
+    uint32 dev;                 // 设备号
+    uint32 first_data_sec;      // 第一个数据扇区编号
+    uint32 data_sec_cnt;        // 数据区总扇区数
+    uint32 data_clus_cnt;       // 数据区总簇数
+    uint32 byts_per_clus;       // 每簇字节数
+    
+    struct {
+        uint16 byts_per_sec;    // 每扇区字节数
+        uint8  sec_per_clus;    // 每簇扇区数
+        uint16 rsvd_sec_cnt;    // 保留扇区数
+        uint8  fat_cnt;         // FAT表数量
+        uint32 hidd_sec;        // 隐藏扇区数
+        uint32 tot_sec;         // 总扇区数
+        uint32 fat_sz;          // FAT表大小
+        uint32 root_clus;       // 根目录起始簇号
+    } bpb;  // BIOS参数块
+} fat;
+```
+
+*FAT32初始化流程*
+
+当挂载FAT32文件系统时，驱动会读取引导扇区（第0扇区），解析BIOS参数块（BPB），并计算文件系统的关键参数：
+
+```cpp
+int fat32_init_internal(uint32 dev)
+{
+    fat.dev = dev;
+    struct buf *b = bread(fat.dev, 0);  // 读取引导扇区
+    
+    // 校验FAT32标识
+    if (strncmp((char const*)(b->data + 82), "FAT32", 5))
+        panic("not FAT32 volume");
+    
+    // 读取BPB参数
+    memmove(&fat.bpb.byts_per_sec, b->data + 11, 2);
+    fat.bpb.sec_per_clus = *(b->data + 13);
+    fat.bpb.rsvd_sec_cnt = *(uint16 *)(b->data + 14);
+    // ... 其他参数读取
+    
+    // 计算数据区起始位置和大小
+    fat.first_data_sec = fat.bpb.rsvd_sec_cnt + fat.bpb.fat_cnt * fat.bpb.fat_sz;
+    fat.data_sec_cnt = fat.bpb.tot_sec - fat.first_data_sec;
+    fat.data_clus_cnt = fat.data_sec_cnt / fat.bpb.sec_per_clus;
+    fat.byts_per_clus = fat.bpb.sec_per_clus * fat.bpb.byts_per_sec;
+    
+    brelse(b);
+    return 0;
+}
+```
+
+*FAT32文件操作*
+
+FAT32文件通过`fat32_file`类进行管理，该类继承自`file`基类，实现了FAT32特定的读写操作。F7LY支持FAT32的长文件名（LFN）和短文件名（8.3格式），能够正确解析和操作FAT32目录项。
+
+==== VFS路径解析与文件系统选择
+
+F7LY的VFS层通过路径匹配机制自动选择正确的文件系统进行操作。当用户程序调用`open()`、`read()`、`write()`等系统调用时，VFS会根据文件路径确定目标文件所在的文件系统，并调用相应的操作函数。
+
+*路径到文件系统的映射*
+
+核心函数`get_fs_from_path()`负责将文件路径映射到对应的文件系统：
+
+```cpp
+struct filesystem *get_fs_from_path(const char *path)
+{
+    char abs_path[MAXPATH] = {0};
+    get_absolute_path(path, "/", abs_path);  // 转换为绝对路径
+    
+    // 优先检查完全匹配的挂载点
+    filesystem_t *exact_fs = get_fs_by_mount_point(abs_path);
+    if (exact_fs) {
+        return exact_fs;
+    }
+    
+    // 逐级向上查找匹配的挂载点
+    size_t len = strlen(abs_path);
+    char *pstart = abs_path, *pend = abs_path + len - 1;
+    while (pend > pstart) {
+        if (*pend == '/') {
+            *pend = '\0';
+            filesystem_t *fs = get_fs_by_mount_point(pstart);
+            if (fs) {
+                return fs;
+            }
+        }
+        pend--;
+    }
+    
+    // 默认返回根文件系统
+    if (pend == pstart) {
+        return get_fs_by_mount_point("/");
+    }
+    
+    return NULL;
+}
+```
+
+#text()[#h(2em)]该函数采用"最长前缀匹配"策略：
+1. 将相对路径转换为绝对路径
+2. 检查路径是否完全匹配某个挂载点
+3. 若不匹配，逐级向上截取父目录，查找匹配的挂载点
+4. 若未找到任何匹配，返回根文件系统（`"/"`）
+
+*文件操作的路径转换*
+
+以`vfs_path_stat()`函数为例，说明VFS如何根据路径选择不同的文件系统操作：
+
+```cpp
+int vfs_path_stat(const char *path, fs::Kstat *st, bool follow_symlinks)
+{
+    if (vfs_is_file_exist(path) != 1)
+        return -ENOENT;
+    
+    // 根据路径获取文件系统
+    struct filesystem *fs = get_fs_from_path(path);
+    
+    // 如果是FAT32文件系统
+    if (fs && fs->type == FAT32) {
+        const char* rel_path = path;
+        // 计算相对于挂载点的路径
+        if (strcmp(fs->path, "/") != 0) {
+            size_t mplen = strlen(fs->path);
+            if (strncmp(rel_path, fs->path, mplen) == 0) {
+                if (rel_path[mplen] == '\0') 
+                    rel_path = "/";
+                else if (rel_path[mplen] == '/') 
+                    rel_path += mplen;
+            }
+        }
+        
+        // 调用FAT32的目录项查找函数
+        struct fat32_entry *ep = ename((char*)rel_path);
+        if (!ep) return -ENOENT;
+        
+        // 填充stat结构（FAT32特定逻辑）
+        memset(st, 0, sizeof(fs::Kstat));
+        st->ino = (uint64)ep;
+        st->dev = fs->dev;
+        st->mode = (ep->attribute & ATTR_DIRECTORY) ? S_IFDIR : S_IFREG;
+        st->size = ep->file_size;
+        // ...
+        
+        eput(ep);
+        return EOK;
+    }
+    
+    // 如果是EXT4文件系统，调用EXT4的操作函数
+    struct ext4_inode inode;
+    uint32 inode_num = 0;
+    int status = ext4_raw_inode_fill(path, &inode_num, &inode);
+    // ...
+    return status;
+}
+```
+
+#text()[#h(2em)]通过这种机制，F7LY实现了透明的多文件系统支持：
+- 访问`"/bin/ls"`会自动路由到EXT4文件系统
+- 访问`"/fat32/data.txt"`会自动路由到FAT32文件系统
+- 用户程序无需关心底层文件系统类型，统一使用POSIX接口
+
+*VFS统一接口的优势*
+
+F7LY的多文件系统架构具有以下优势：
+1. *透明性*：用户程序通过统一的系统调用接口访问不同文件系统，无需修改代码
+2. *可扩展性*：新增文件系统类型只需实现相应的操作函数表，注册到VFS即可
+3. *灵活性*：支持多个文件系统同时挂载，满足不同的存储需求（如EXT4用于系统文件，FAT32用于数据交换）
+4. *兼容性*：FAT32的支持使得F7LY能够读写Windows、Linux等多种操作系统创建的磁盘分区
+
 === VFS核心元数据结构剖析
 
 ==== Buffer
