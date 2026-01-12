@@ -13,7 +13,7 @@ namespace mem
 {
 	HeapMemoryManager k_hmm;
 
-	void HeapMemoryManager::init( const char *lock_name ,uint64_t heap_start)
+	void HeapMemoryManager::init( const char *lock_name ,uint64_t heap_start, uint64_t heap_size)
 	{
 		_lock.init( lock_name );
 
@@ -26,7 +26,12 @@ namespace mem
         heap_start += BSSIZE * PGSIZE;
         memset(_k_allocator_coarse, 0, BSSIZE * PGSIZE);
 
-        _k_allocator_coarse->Initialize(heap_start);
+        uint64 heap_pages = heap_size / PGSIZE;
+        if (heap_pages == 0)
+        {
+            panic("[hmm] heap size too small");
+        }
+        _k_allocator_coarse->Initialize(heap_start, heap_pages);
 		/*在原本的hmm中初始化时，粗粒度的buddy是紧耦合在hmm上的，
 		它的初始化会把堆区域的内存全部初始化（也就是虚拟地址映射到物理地址上），
 		但是这里我们不需要这样做，我们需要把堆内存初始化的时间改到vmm中，这里就不需要初始化*/

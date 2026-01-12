@@ -11,6 +11,7 @@
 #include "common.hh"
 #include "printer.hh"
 #include "platform.hh"
+#include "physical_memory_manager.hh"
 namespace mem
 {
 // ________________________________________________________________
@@ -36,7 +37,7 @@ namespace mem
 			printfYellow( "L-allocator : Try to allocate 0 byte memory. Null will be returned." );
 			return nullptr;
 		}
-		if ( size >= ( int64 ) vm_kernel_heap_size )
+		if ( size >= ( int64 ) k_pmm.get_heap_allocator_size() )
 		{
 			printfYellow( "L-allocator : request size too big : %d Bytes", size );
 			return nullptr;

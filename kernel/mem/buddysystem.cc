@@ -26,21 +26,20 @@ namespace mem
         return x + 1;
     }
 
-    void BuddySystem::Initialize(uint64 baseptr)
+    void BuddySystem::Initialize(uint64 baseptr, uint32 total_pages)
     {
         // 初始化buddy系统，baseptr是buddy系统的起始地址
         // 原本的buddy是用来管理物理内存的，所以并没有初始化它管理的内存的操作
         // 这里解耦合，buddy同时用于管理pm和hm，这里的buddy初始化时不用初始化内存
         base_ptr = reinterpret_cast<uint8 *>(baseptr);
-
+        page_count = total_pages ? total_pages : 1;
         printfGreen("[mem] Buddy System Init\n");
         // printf("[BuddySystem] base_ptr: %p\n", base_ptr);
         tree = base_ptr - BSSIZE * PGSIZE + sizeof(BuddySystem);
         level = 0;
-        while (!((1 << level) & PGNUM))
-        {
+        capacity_pages = NextPowerOfTwo(page_count);
+        while ((1u << level) < capacity_pages)
             level++;
-        }
         // 计算所需的树节点数量
         int max_nodes = (1 << (level + 1)) - 1;
         int available_bytes = BSSIZE * PGSIZE - sizeof(BuddySystem);
@@ -62,15 +61,59 @@ namespace mem
 
         // 计算并打印实际管辖的内存区域
         uint64 managed_start = reinterpret_cast<uint64>(base_ptr);
-        uint64 managed_end = managed_start + (static_cast<uint64>(PGNUM) * PGSIZE);
-        uint64 managed_size_mb = (static_cast<uint64>(PGNUM) * PGSIZE) / (1024 * 1024);
+        uint64 managed_end = managed_start + (static_cast<uint64>(capacity_pages) * PGSIZE);
+        uint64 managed_size_mb = (static_cast<uint64>(capacity_pages) * PGSIZE) / (1024 * 1024);
         
         printf("[BuddySystem] Managed memory region: 0x%lx - 0x%lx (%lu MB, %d pages)\n",
-               managed_start, managed_end, managed_size_mb, PGNUM);
+               managed_start, managed_end, managed_size_mb, page_count);
         printf("[BuddySystem] Tree structure location: %p (size: %d bytes)\n", 
                tree, max_nodes);
 
-        printfGreen("[mem] Buddy System Init with %d pages, level=%d\n", PGNUM, level);
+        mark_unusable_leaves();
+        rebuild_parent_states();
+
+        printfGreen("[mem] Buddy System Init with %d pages (capacity %d), level=%d\n", page_count, capacity_pages, level);
+    }
+
+    void BuddySystem::mark_unusable_leaves()
+    {
+        int max_nodes = (1 << (level + 1)) - 1;
+        int leaf_start = (1 << level) - 1;
+        for (uint32 i = 0; i < capacity_pages; i++)
+        {
+            int idx = leaf_start + i;
+            if (i >= page_count)
+                tree[idx] = NODE_FULL;
+            else
+                tree[idx] = NODE_UNUSED;
+        }
+        for (int idx = leaf_start + capacity_pages; idx < max_nodes; ++idx)
+        {
+            tree[idx] = NODE_FULL;
+        }
+    }
+
+    void BuddySystem::rebuild_parent_states()
+    {
+        int max_nodes = (1 << (level + 1)) - 1;
+        for (int idx = (1 << level) - 2; idx >= 0; --idx)
+        {
+            int left = idx * 2 + 1;
+            int right = left + 1;
+            if (left >= max_nodes || right >= max_nodes)
+            {
+                tree[idx] = NODE_FULL;
+                continue;
+            }
+            uint8 l = tree[left];
+            uint8 r = tree[right];
+            if (l == NODE_FULL && r == NODE_FULL)
+                tree[idx] = NODE_FULL;
+            else if (l == NODE_UNUSED && r == NODE_UNUSED)
+                tree[idx] = NODE_UNUSED;
+            else
+                tree[idx] = NODE_SPLIT;
+        }
     }
 
     int BuddySystem::IndexOffset(int index, int level, int max_level) const
@@ -116,7 +159,7 @@ namespace mem
         int actual_size = size == 0 ? 1 : NextPowerOfTwo(size);
         int length = 1 << level; // length变量表示当前结点对应的块的大小
 
-        if (actual_size > length)
+        if (actual_size > length || actual_size > (int)capacity_pages)
         {
             printfRed("[BuddySystem] Alloc failed, request too many pages\n");
             return -1;
@@ -137,6 +180,12 @@ namespace mem
                     tree[index] = NODE_USED;
                     MarkParent(index);
                     int result = IndexOffset(index, current_level, level);
+                    if (result >= (int)page_count)
+                    {
+                        tree[index] = NODE_FULL;
+                        rebuild_parent_states();
+                        continue;
+                    }
                     // 添加调试信息
                     // printfYellow("[BuddySystem] Found block: index=%d, current_level=%d, level=%d, result=%d\n",
                     //              index, current_level, level, result);
@@ -224,6 +273,12 @@ namespace mem
         int length = 1 << level; // 当前 index 所表示的块的大小（从整块开始）
         int index = 0;           // 从根节点开始遍历 buddy 树
 
+        if (offset < 0 || offset >= (int)page_count)
+        {
+            printfRed("[BuddySystem] Freeing invalid page offset=%d (page_count=%d)\n", offset, page_count);
+            return;
+        }
+
         while (true)
         {
 
@@ -254,9 +309,7 @@ namespace mem
 
     void *BuddySystem::alloc_pages(int count)
     {
-        // 这里base_ptr是buddy管理的内存的开始地址，alloc返回的是偏移量，
-        // 这个偏移量就是相对基址的偏移量，所以这里需要加上基址才是实际的内存地址。
-        // 我们包装的alloc_pages函数，返回的是实际的内存地址，
+        // base_ptr points to the beginning of the managed region
         int offset = Alloc(count);
         if (offset == -1)
         {
