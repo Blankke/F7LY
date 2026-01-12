@@ -91,7 +91,7 @@ namespace __cxxabiv1
 			return 0;
 		};
 
-		void __cxa_finalize( void *d )
+		int __cxa_finalize( void *d )
 		{
 			atexit_func_entry_t* fentry = __atexit_func_entry_busy_list._next_entry;
 			Info(
@@ -113,7 +113,7 @@ namespace __cxxabiv1
 					}
 					fentry = next_entry;
 				}
-				return;
+				return 0;
 			}
 
 			while ( fentry != &__atexit_func_entry_busy_list )
@@ -128,7 +128,16 @@ namespace __cxxabiv1
 				}
 				fentry = next_entry;
 			}
+			return 0;
 		};
 
+/* **************** cxa pure virtual **************** */
+
+	void __cxa_pure_virtual()
+	{
+		panic( "Pure virtual function called!" );
 	}
+
+
+}
 } // namespace __cxxabiv1

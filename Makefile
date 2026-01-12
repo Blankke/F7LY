@@ -24,12 +24,12 @@ r riscv l loongarch:
 
 
 ifeq ($(ARCH),riscv)
-  CROSS_COMPILE := riscv64-linux-gnu-
+  CROSS_COMPILE := riscv64-linux-musl-
   ARCH_CFLAGS := -DRISCV -mcmodel=medany
   OUTPUT_PREFIX := riscv
   QEMU_CMD := qemu-system-riscv64 -machine virt -m 128M -nographic -smp 1 -bios default -hdb ${KERNEL_PREFIX}/sdcard-rv-onsite.img -kernel
 else ifeq ($(ARCH),loongarch)
-  CROSS_COMPILE := loongarch64-linux-gnu-
+  CROSS_COMPILE := loongarch64-linux-musl-
   ARCH_CFLAGS := -DLOONGARCH -mcmodel=normal -Wno-error=use-after-free
   OUTPUT_PREFIX := loongarch
   QEMU_CMD := qemu-system-loongarch64 -machine virt -cpu la464-loongarch-cpu
@@ -66,12 +66,12 @@ ifeq ($(ARCH),riscv)
 else ifeq ($(ARCH),loongarch)
   EA_PLATFORM := -DEA_PROCESSOR_LOONGARCH64
 endif
-CXXFLAGS := $(CFLAGS) -std=c++23 -nostdlib \
+CXXFLAGS := $(CFLAGS) -std=c++20 -nostdlib \
 			-DEA_PLATFORM_LINUX -DEA_PLATFORM_POSIX \
             $(EA_PLATFORM) -DEA_ENDIAN_LITTLE=1 \
             -Wno-deprecated-declarations -Wno-strict-aliasing \
             -fno-exceptions -fno-rtti -Wno-maybe-uninitialized \
-			-Wno-volatile
+			-Wno-volatile -Wno-unused-variable
 
 LDFLAGS := -static -nostdlib -nostartfiles -nodefaultlibs -Wl,-z,max-page-size=4096 -Wl,-T,$(LINK_SCRIPT) -Wl,--gc-sections
 # 包含头文件路径：架构特定目录 + 通用目录 + 有架构子目录的文件夹根目录
@@ -175,6 +175,7 @@ endif
 
 
 all: riscv
+	@if [ -f rootfs.img.back ]; then cp rootfs.img.back initrd.img; fi
 
 riscv:
 	@$(MAKE) ARCH=riscv build
@@ -233,7 +234,7 @@ $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a:
 
 
 run: build
-	@if [ -f rootfs.img.back ]; then cp rootfs.img.back rootfs.img; fi
+
 ifeq ($(ARCH),riscv)
 	$(MAKE) run-riscv ARCH=$(ARCH)
 else ifeq ($(ARCH),loongarch)
@@ -256,7 +257,7 @@ run-riscv:
 		-device virtio-net-device,netdev=net \
 		-netdev user,id=net \
 		-rtc base=utc \
-		-initrd rootfs.img
+		-initrd initrd.img
 
 
 run-loongarch:
@@ -343,9 +344,9 @@ $(INITCODE_ELF): $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(USER_TEST_OBJ)
 	$(LD) $(INITCODE_LDFLAGS) -o $@ $^
 
 ifeq ($(ARCH),riscv)
-  OBJDUMP_INITCODE := riscv64-unknown-elf-objdump -D -b binary -m riscv:rv64 -EL
+  OBJDUMP_INITCODE := riscv64-linux-musl-objdump -D -b binary -m riscv:rv64 -EL
 else ifeq ($(ARCH),loongarch)
-  OBJDUMP_INITCODE := loongarch64-linux-gnu-objdump -D -b binary -m loongarch64
+  OBJDUMP_INITCODE := loongarch64-linux-musl-objdump -D -b binary -m loongarch64
 endif
 
 # 生成二进制 initcode 文件 + 反汇编
@@ -360,6 +361,6 @@ clean:
 	$(MAKE) clean -C thirdparty/EASTL
 	rm -f user/initcode-*
 	rm -f user/disasm_initcode.asm, kernel.asm
-
+	rm initrd.img
 
 -include $(DEPS)

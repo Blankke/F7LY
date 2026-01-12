@@ -8,11 +8,10 @@
 
 #pragma once 
 
+#include <functional>
+
+// Compatibility layer for musl libc
 namespace std
 {
-	extern void __throw_bad_function_call();
-
+	// __throw_bad_function_call is defined in <functional>
 } // namespace std
-
-#include <bits/std_function.h>
-#include <functional>

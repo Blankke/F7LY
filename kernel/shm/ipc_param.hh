@@ -30,25 +30,25 @@ typedef unsigned long shmatt_t;
 
 struct	shminfo
   {
-    __syscall_ulong_t shmmax;
-    __syscall_ulong_t shmmin;
-    __syscall_ulong_t shmmni;
-    __syscall_ulong_t shmseg;
-    __syscall_ulong_t shmall;
-    __syscall_ulong_t __glibc_reserved1;
-    __syscall_ulong_t __glibc_reserved2;
-    __syscall_ulong_t __glibc_reserved3;
-    __syscall_ulong_t __glibc_reserved4;
+    unsigned long shmmax;
+    unsigned long shmmin;
+    unsigned long shmmni;
+    unsigned long shmseg;
+    unsigned long shmall;
+    unsigned long __glibc_reserved1;
+    unsigned long __glibc_reserved2;
+    unsigned long __glibc_reserved3;
+    unsigned long __glibc_reserved4;
   };
 
 struct shm_info
   {
     int used_ids;
-    __syscall_ulong_t shm_tot;	/* total allocated shm */
-    __syscall_ulong_t shm_rss;	/* total resident shm */
-    __syscall_ulong_t shm_swp;	/* total swapped shm */
-    __syscall_ulong_t swap_attempts;
-    __syscall_ulong_t swap_successes;
+    unsigned long shm_tot;	/* total allocated shm */
+    unsigned long shm_rss;	/* total resident shm */
+    unsigned long shm_swp;	/* total swapped shm */
+    unsigned long swap_attempts;
+    unsigned long swap_successes;
   };
 
   /* Mode bits for `msgget', `semget', and `shmget'.  */
@@ -57,7 +57,7 @@ struct shm_info
 #define IPC_NOWAIT	04000		/* Return error on wait.  */
 
 /* Special key values */
-#define IPC_PRIVATE	((__key_t) 0)	/* Private key */
+#define IPC_PRIVATE	((key_t) 0)	/* Private key */
 
 /* Control commands for `msgctl', `semctl', and `shmctl'.  */
 #define IPC_RMID	0		/* Remove identifier.  */
@@ -68,16 +68,16 @@ struct shm_info
 
 struct ipc_perm
 {
-  __key_t __key;				/* Key.  */
-  __uid_t uid;					/* Owner's user ID.  */
-  __gid_t gid;					/* Owner's group ID.  */
-  __uid_t cuid;					/* Creator's user ID.  */
-  __gid_t cgid;					/* Creator's group ID.  */
-  __mode_t mode;				/* Read/write permission.  */
+  key_t __key;				/* Key.  */
+  uid_t uid;					/* Owner's user ID.  */
+  gid_t gid;					/* Owner's group ID.  */
+  uid_t cuid;					/* Creator's user ID.  */
+  gid_t cgid;					/* Creator's group ID.  */
+  mode_t mode;				/* Read/write permission.  */
   unsigned short int __seq;			/* Sequence number.  */
   unsigned short int __pad2;
-  __syscall_ulong_t __glibc_reserved1;
-  __syscall_ulong_t __glibc_reserved2;
+  unsigned long __glibc_reserved1;
+  unsigned long __glibc_reserved2;
 };
 
 struct shmid_ds
@@ -85,13 +85,13 @@ struct shmid_ds
     struct ipc_perm shm_perm;		/* operation permission struct */
     size_t shm_segsz;			/* size of segment in bytes */
 
-    __time_t shm_atime;			/* time of last shmat() */
-    __time_t shm_dtime;			/* time of last shmdt() */
-    __time_t shm_ctime;			/* time of last change by shmctl() */
+    time_t shm_atime;			/* time of last shmat() */
+    time_t shm_dtime;			/* time of last shmdt() */
+    time_t shm_ctime;			/* time of last change by shmctl() */
 
-    __pid_t shm_cpid;			/* pid of creator */
-    __pid_t shm_lpid;			/* pid of last shmop */
+    pid_t shm_cpid;			/* pid of creator */
+    pid_t shm_lpid;			/* pid of last shmop */
     shmatt_t shm_nattch;		/* number of current attaches */
-    __syscall_ulong_t __glibc_reserved5;
-    __syscall_ulong_t __glibc_reserved6;
+    unsigned long __glibc_reserved5;
+    unsigned long __glibc_reserved6;
   };

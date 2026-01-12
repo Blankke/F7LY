@@ -87,5 +87,6 @@ struct statx
 //   int iov_len;
 // };
 
-#define UTIME_NOW ((1l << 30) - 1l)
-#define UTIME_OMIT ((1l << 30) - 2l)
+// Note: UTIME_NOW and UTIME_OMIT are already defined in sys/stat.h
+// #define UTIME_NOW ((1l << 30) - 1l)
+// #define UTIME_OMIT ((1l << 30) - 2l)

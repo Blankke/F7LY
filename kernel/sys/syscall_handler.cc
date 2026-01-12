@@ -12,6 +12,19 @@
 // Extended attributes flags
 #define XATTR_CREATE 0x1  // set value, fail if attr already exists
 #define XATTR_REPLACE 0x2 // set value, fail if attr does not exist
+
+// Missing macros in musl libc
+#ifndef CLOCKS_PER_SEC
+#define CLOCKS_PER_SEC 100
+#endif
+
+#ifndef LOCK_SH
+#define LOCK_SH 1  /* shared lock */
+#define LOCK_EX 2  /* exclusive lock */
+#define LOCK_UN 8  /* unlock */
+#define LOCK_NB 4  /* non-blocking */
+#endif
+
 #ifdef RISCV
 #include "riscv/pagetable.hh"
 #elif defined(LOONGARCH)
@@ -28,7 +41,7 @@
 #include <asm-generic/statfs.h>
 #include "fs/ioctl.hh"
 #include <asm-generic/poll.h>
-#include <bits/time.h>
+#include <sys/time.h>
 #include <linux/sysinfo.h>
 #include <linux/fs.h>
 #include "fs/vfs/file/normal_file.hh"
@@ -13766,11 +13779,12 @@ namespace syscall
         }
 
         // 验证 which 参数是否有效
-        constexpr int ITIMER_REAL = 0;    // 实时定时器（墙钟时间）
-        constexpr int ITIMER_VIRTUAL = 1; // 虚拟定时器（用户态运行时间）
-        constexpr int ITIMER_PROF = 2;    // 性能分析定时器（用户态+内核态运行时间）
+        // ITIMER_REAL, ITIMER_VIRTUAL, ITIMER_PROF are defined in sys/time.h
+        constexpr int ITIMER_REAL_VAL = 0;    // 实时定时器（墙钟时间）
+        constexpr int ITIMER_VIRTUAL_VAL = 1; // 虚拟定时器（用户态运行时间）
+        constexpr int ITIMER_PROF_VAL = 2;    // 性能分析定时器（用户态+内核态运行时间）
 
-        if (which < ITIMER_REAL || which > ITIMER_PROF)
+        if (which < ITIMER_REAL_VAL || which > ITIMER_PROF_VAL)
         {
             printfRed("[SyscallHandler::sys_getitimer] Invalid which: %d\n", which);
             return SYS_EINVAL;

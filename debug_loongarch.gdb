@@ -1,5 +1,5 @@
 # GDB 配置文件用于调试 LoongArch 内核
-# loongarch64-linux-gnu-gdb build/loongarch/kernel.elf -x debug_loongarch.gdb
+# loongarch64-linux-musl-gdb build/loongarch/kernel.elf -x debug_loongarch.gdb
 
 file tmp/ld-linux-loongarch-lp64d.so.1
 set substitute-path /home/airxs/user/gnu/build-cross-tools-hf/glibc-2.38/ /home/kidszz/glibc-2.38

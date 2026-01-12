@@ -86,13 +86,15 @@ static inline uint16_t reorder16(uint16_t n) { return ((n & 0xff) << 8) | ((n & 
     (s, f, v) do { (s)->f = (v); }                                                                                     \
     while (0)
 
-#ifdef __GNUC__
+// Note: Don't define __unused to avoid conflicts with system headers (musl libc)
+// GCC already supports __attribute__((__unused__)) directly
 #ifndef __unused
+#ifdef __GNUC__
 #define __unused __attribute__((__unused__))
-#endif
 #else
 #define __unused
 #endif
+#endif  /* __unused */
 
 #ifndef offsetof
 #define offsetof(type, field) ((size_t) (&(((type *) 0)->field)))

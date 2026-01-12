@@ -7,8 +7,24 @@
 //
 
 #pragma once
+// Undefine __unused before including sys/stat.h to avoid conflicts with musl
+#ifdef __unused
+#undef __unused
+#endif
+
 #include "types.hh"
 #include <fcntl.h>
+#include <sys/stat.h>
+
+// Redefine __unused after including system headers
+#ifndef __unused
+#ifdef __GNUC__
+#define __unused __attribute__((__unused__))
+#else
+#define __unused
+#endif
+#endif
+
 namespace fs
 {
 
