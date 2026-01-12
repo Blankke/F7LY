@@ -2248,7 +2248,7 @@ namespace syscall
         if (result == MAP_FAILED)
         {
             printfRed("[SyscallHandler::sys_mmap] mmap failed with errno: %d\n", mmap_errno);
-            return -mmap_errno; // 返回负的错误码
+            return (uint64)MAP_FAILED; // 按约定返回MAP_FAILED
         }
         // if(addr==0&&map_size==1024&&prot==2&&flags==2&&fd==3&&offset==0)
         // return -1;

@@ -1799,6 +1799,94 @@ int vfs_link(const char *oldpath, const char *newpath)
     return EOK;
 }
 
+int vfs_unlink_path(const char *path, bool remove_dir)
+{
+    struct filesystem *fs = get_fs_from_path(path);
+    if (fs && fs->type == FAT32)
+    {
+        const char *rel_path = path;
+        if (strcmp(fs->path, "/") != 0)
+        {
+            size_t mplen = strlen(fs->path);
+            if (strncmp(rel_path, fs->path, mplen) == 0)
+            {
+                if (rel_path[mplen] == '\0')
+                    rel_path = "/";
+                else if (rel_path[mplen] == '/')
+                    rel_path += mplen;
+            }
+        }
+
+        struct fat32_entry *ep = ename((char *)rel_path);
+        if (!ep)
+        {
+            return -ENOENT;
+        }
+
+        if (remove_dir)
+        {
+            if (!(ep->attribute & ATTR_DIRECTORY))
+            {
+                eput(ep);
+                return -ENOTDIR;
+            }
+
+            elock(ep);
+            // 检查目录是否为空
+            struct fat32_entry child = {};
+            uint off = 0;
+            int cnt = 0;
+            bool nonempty = false;
+            while (true)
+            {
+                memset(&child, 0, sizeof(child));
+                int type = enext(ep, &child, off, &cnt);
+                if (type == -1)
+                    break;
+                if (type == 1)
+                {
+                    nonempty = true;
+                    break;
+                }
+                off += (cnt ? cnt : 1) << 5;
+            }
+            if (nonempty)
+            {
+                eunlock(ep);
+                eput(ep);
+                return -ENOTEMPTY;
+            }
+            eremove(ep);
+            eunlock(ep);
+            eput(ep);
+            return 0;
+        }
+
+        if (ep->attribute & ATTR_DIRECTORY)
+        {
+            eput(ep);
+            return -EISDIR;
+        }
+
+        if (ep->parent)
+            elock(ep->parent);
+        elock(ep);
+        etrunc(ep);
+        eremove(ep);
+        eunlock(ep);
+        if (ep->parent)
+            eunlock(ep->parent);
+        eput(ep);
+        return 0;
+    }
+
+    if (remove_dir)
+    {
+        return vfs_ext_rmdir(path);
+    }
+    return vfs_ext_unlink(path);
+}
+
 int vfs_truncate(fs::file *f, size_t length)
 {
     if (f == nullptr)

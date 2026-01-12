@@ -1422,7 +1422,7 @@ namespace proc
             return true; // 非共享或不可写，无需写回
         }
 
-        int result = vma_entry.vfile->write(vma_entry.addr, vma_entry.len);
+        int result = vma_entry.vfile->write(vma_entry.addr, vma_entry.len, vma_entry.offset, false);
         return result >= 0;
     }
 
