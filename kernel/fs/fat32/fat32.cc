@@ -345,13 +345,23 @@ static uint rw_clus(uint32 cluster, int write, int user, uint64 data, uint off, 
             m = n - tot;
         }
         if (write) {
+            // printf("[DEBUG] rw_clus WRITE: cluster=%u sec=%u off=%u len=%u\n", cluster, sec, off, m);
             // 写操作：从用户/内核地址拷贝到缓冲区
             if ((bad = either_copyin(bp->data + (off % BSIZE), user, data, m)) != -1) {
+                if (!user && m == 32) {
+                     unsigned char *d = (unsigned char *)data;
+                     // Only debug if looks like dir entry
+                     printf("[DEBUG] rw_clus WRITE ENTRY: %02x %02x %02x ... at sec %u off %u\n", d[0], d[11], d[12], sec, (uint)(off % BSIZE));
+                }
                 bwrite(bp); // 写回磁盘
             }
         } else {
             // 读操作：从缓冲区拷贝到用户/内核地址
             bad = either_copyout(user, data, bp->data + (off % BSIZE), m);
+            if (!user && m == 32) {
+                 unsigned char *d = (unsigned char *)data;
+                 printf("[DEBUG] rw_clus READ ENTRY: %02x ... at sec %u off %u\n", d[0], sec, (uint)(off % BSIZE));
+            }
         }
         brelse(bp);
         if (bad == -1) { // 拷贝失败，终止
@@ -639,70 +649,84 @@ void emake(struct fat32_entry *dp, struct fat32_entry *ep, uint off)
 
     union dentry de;
     memset(&de, 0, sizeof(de));
-    // 处理目录的"./"和"../"项（偏移0和32）
-    if (off <= 32) {
-        if (off == 0) {
-            strncpy(de.sne.name, ".          ", sizeof(de.sne.name)); // "."项
-        } else {
-            strncpy(de.sne.name, "..         ", sizeof(de.sne.name)); // ".."项
-        }
+    
+    // Check if we are writing special "." or ".." entries based on filename
+    // instead of relying on offset.
+    if (strncmp(ep->filename, ".", FAT32_MAX_FILENAME) == 0) {
+        strncpy(de.sne.name, ".          ", sizeof(de.sne.name)); // "."项
         de.sne.attr = ATTR_DIRECTORY; // 标记为目录
         de.sne.fst_clus_hi = (uint16)(ep->first_clus >> 16); // 起始簇号高16位
         de.sne.fst_clus_lo = (uint16)(ep->first_clus & 0xffff); // 起始簇号低16位
-        de.sne.file_size = 0; // 目录大小为0（后续更新）
-        // 定位到父目录的对应偏移，写入目录项
+        de.sne.file_size = 0; 
+        
+        printf("[DEBUG] emake: writing special entry . at off %u\n", off);
         off = reloc_clus(dp, off, 1);
         rw_clus(dp->cur_clus, 1, 0, (uint64)&de, off, sizeof(de));
-    } else {
-        // 处理普通文件/目录（长文件名+短文件名）
-        // 计算需要的长文件名项数
-        int entcnt = (strlen(ep->filename) + CHAR_LONG_NAME - 1) / CHAR_LONG_NAME;   
-        char shortname[CHAR_SHORT_NAME + 1];
-        memset(shortname, 0, sizeof(shortname));
-        generate_shortname(shortname, ep->filename); // 生成短文件名
-        de.lne.checksum = cal_checksum((uchar *)shortname); // 计算校验和
-        de.lne.attr = ATTR_LONG_NAME; // 标记为长文件名项
-
-        // 写入所有长文件名项（倒序）
-        for (int i = entcnt; i > 0; i--) {
-            if ((de.lne.order = i) == entcnt) {
-                de.lne.order |= LAST_LONG_ENTRY; // 标记最后一个长文件名项
-            }
-            char *p = ep->filename + (i - 1) * CHAR_LONG_NAME;
-            uint8 *w = (uint8 *)de.lne.name1;
-            int end = 0;
-            // 填充长文件名的宽字符
-            for (int j = 1; j <= CHAR_LONG_NAME; j++) {
-                if (end) {
-                    *w++ = 0xff; // 未使用的宽字符填0xffff
-                    *w++ = 0xff;
-                } else { 
-                    if ((*w++ = *p++) == 0) {
-                        end = 1;
-                    }
-                    *w++ = 0;
-                }
-                // 切换到不同的名字段
-                switch (j) {
-                    case 5:     w = (uint8 *)de.lne.name2; break;
-                    case 11:    w = (uint8 *)de.lne.name3; break;
-                }
-            }
-            // 写入长文件名项
-            uint off2 = reloc_clus(dp, off, 1);
-            rw_clus(dp->cur_clus, 1, 0, (uint64)&de, off2, sizeof(de));
-            off += sizeof(de);
-        }
-        // 写入短文件名项
-        memset(&de, 0, sizeof(de));
-        strncpy(de.sne.name, shortname, sizeof(de.sne.name));
-        de.sne.attr = ep->attribute; // 文件属性
-        de.sne.fst_clus_hi = (uint16)(ep->first_clus >> 16);
-        de.sne.fst_clus_lo = (uint16)(ep->first_clus & 0xffff);
-        de.sne.file_size = ep->file_size; // 文件大小
+        return;
+    } else if (strncmp(ep->filename, "..", FAT32_MAX_FILENAME) == 0) {
+        strncpy(de.sne.name, "..         ", sizeof(de.sne.name)); // ".."项
+        de.sne.attr = ATTR_DIRECTORY; // 标记为目录
+        de.sne.fst_clus_hi = (uint16)(ep->first_clus >> 16); // 起始簇号高16位
+        de.sne.fst_clus_lo = (uint16)(ep->first_clus & 0xffff); // 起始簇号低16位
+        de.sne.file_size = 0; 
+        
+        printf("[DEBUG] emake: writing special entry .. at off %u\n", off);
         off = reloc_clus(dp, off, 1);
         rw_clus(dp->cur_clus, 1, 0, (uint64)&de, off, sizeof(de));
+        return;
     }
+
+    // Normal file/directory entry
+    // 计算需要的长文件名项数
+    int entcnt = (strlen(ep->filename) + CHAR_LONG_NAME - 1) / CHAR_LONG_NAME;   
+    char shortname[CHAR_SHORT_NAME + 1];
+    memset(shortname, 0, sizeof(shortname));
+    generate_shortname(shortname, ep->filename); // 生成短文件名
+    de.lne.checksum = cal_checksum((uchar *)shortname); // 计算校验和
+    de.lne.attr = ATTR_LONG_NAME; // 标记为长文件名项
+
+    printf("[DEBUG] emake: writing entry %s (short: %s) at off %u\n", ep->filename, shortname, off);
+
+    // 写入所有长文件名项（倒序）
+    for (int i = entcnt; i > 0; i--) {
+        if ((de.lne.order = i) == entcnt) {
+            de.lne.order |= LAST_LONG_ENTRY; // 标记最后一个长文件名项
+        }
+        char *p = ep->filename + (i - 1) * CHAR_LONG_NAME;
+        uint8 *w = (uint8 *)de.lne.name1;
+        int end = 0;
+        // 填充长文件名的宽字符
+        for (int j = 1; j <= CHAR_LONG_NAME; j++) {
+            if (end) {
+                *w++ = 0xff; // 未使用的宽字符填0xffff
+                *w++ = 0xff;
+            } else { 
+                if ((*w++ = *p++) == 0) {
+                    end = 1;
+                }
+                *w++ = 0;
+            }
+            // 切换到不同的名字段
+            switch (j) {
+                case 5:     w = (uint8 *)de.lne.name2; break;
+                case 11:    w = (uint8 *)de.lne.name3; break;
+            }
+        }
+        // 写入长文件名项
+        uint off2 = reloc_clus(dp, off, 1);
+        rw_clus(dp->cur_clus, 1, 0, (uint64)&de, off2, sizeof(de));
+        off += sizeof(de);
+    }
+    // 写入短文件名项
+    memset(&de, 0, sizeof(de));
+    strncpy(de.sne.name, shortname, sizeof(de.sne.name));
+    de.sne.attr = ep->attribute; // 文件属性
+    de.sne.fst_clus_hi = (uint16)(ep->first_clus >> 16);
+    de.sne.fst_clus_lo = (uint16)(ep->first_clus & 0xffff);
+    de.sne.file_size = ep->file_size; // 文件大小
+    
+    uint off2 = reloc_clus(dp, off, 1);
+    rw_clus(dp->cur_clus, 1, 0, (uint64)&de, off2, sizeof(de));
 }
 
 /**
@@ -747,8 +771,20 @@ struct fat32_entry *ealloc(struct fat32_entry *dp, char *name, int attr)
     if (attr == ATTR_DIRECTORY) {    
         ep->attribute |= ATTR_DIRECTORY;
         ep->cur_clus = ep->first_clus = alloc_clus(dp->dev); // 分配目录的第一个簇
-        emake(ep, ep, 0);  // 创建"./"项
-        emake(ep, dp, 32); // 创建"../"项
+        
+        // Manually create special entries for new directory
+        struct fat32_entry dot;
+        memset(&dot, 0, sizeof(dot));
+        strncpy(dot.filename, ".", FAT32_MAX_FILENAME);
+        dot.first_clus = ep->first_clus;
+        emake(ep, &dot, 0);  // 创建"./"项
+        
+        struct fat32_entry dotdot;
+        memset(&dotdot, 0, sizeof(dotdot));
+        strncpy(dotdot.filename, "..", FAT32_MAX_FILENAME);
+        // Correctly handle parent cluster for root
+        dotdot.first_clus = (dp == &root) ? 0 : dp->first_clus;
+        emake(ep, &dotdot, 32); // 创建"../"项
     } else {
         ep->attribute |= ATTR_ARCHIVE; // 文件标记为归档属性
     }
@@ -1026,6 +1062,7 @@ int enext(struct fat32_entry *dp, struct fat32_entry *ep, uint off, int *count)
     for (int off2; (off2 = reloc_clus(dp, off, 0)) != -1; off += 32) {
         // 读取32字节目录项
         if (rw_clus(dp->cur_clus, 0, 0, (uint64)&de, off2, 32) != 32 || de.lne.order == END_OF_ENTRY) {
+            printf("[DEBUG] enext: hit END_OF_ENTRY at off %d (cluster %d off2 %d). Byte: 0x%02x\n", off, dp->cur_clus, off2, (uint8)de.lne.order);
             return -1;
         }
         // 空目录项：计数+1
@@ -1050,6 +1087,7 @@ int enext(struct fat32_entry *dp, struct fat32_entry *ep, uint off, int *count)
                 read_entry_name(ep->filename, &de);
             }
             read_entry_info(ep, &de);
+            printf("[DEBUG] enext: found entry %s at off %d\n", ep->filename, off);
             return 1;
         }
     }
@@ -1149,6 +1187,7 @@ static char *skipelem(char *path, char *name)
 // FAT32版本的路径查找函数（对应xv6原始文件系统的namex）
 static struct fat32_entry *lookup_path(char *path, int parent, char *name)
 {
+    printf("[DEBUG] lookup_path: %s, parent=%d\n", path, parent);
     struct fat32_entry *entry, *next;
     // 初始化起始目录：绝对路径→根目录，相对路径→当前工作目录
     if (*path == '/') {
@@ -1162,6 +1201,7 @@ static struct fat32_entry *lookup_path(char *path, int parent, char *name)
     }
     // 逐段解析路径
     while ((path = skipelem(path, name)) != 0) {
+        printf("[DEBUG] lookup_path: elem=%s\n", name);
         elock(entry);
         // 当前项不是目录 → 失败
         if (!(entry->attribute & ATTR_DIRECTORY)) {
@@ -1176,6 +1216,7 @@ static struct fat32_entry *lookup_path(char *path, int parent, char *name)
         }
         // 查找下一个路径元素
         if ((next = dirlookup(entry, name, 0)) == 0) {
+            printf("[DEBUG] lookup_path: elem %s not found in entry %s\n", name, entry->filename);
             eunlock(entry);
             eput(entry);
             return NULL;

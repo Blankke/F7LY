@@ -193,6 +193,13 @@ struct filesystem *get_fs_from_path(const char *path)
     char abs_path[MAXPATH] = {0};
     get_absolute_path(path, "/", abs_path);
 
+    // 优先检查完全匹配挂载点的情况
+    filesystem_t *exact_fs = get_fs_by_mount_point(abs_path);
+    if (exact_fs)
+    {
+        return exact_fs;
+    }
+
     size_t len = strlen(abs_path);
     char *pstart = abs_path, *pend = abs_path + len - 1;
     while (pend > pstart)
