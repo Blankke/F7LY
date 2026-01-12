@@ -174,7 +174,7 @@ endif
 .PHONY: all clean dirs build riscv loongarch run debug initcode build-la
 
 
-all: loongarch riscv
+all: riscv
 
 riscv:
 	@$(MAKE) ARCH=riscv build
@@ -233,6 +233,7 @@ $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a:
 
 
 run: build
+	@if [ -f rootfs.img.back ]; then cp rootfs.img.back rootfs.img; fi
 ifeq ($(ARCH),riscv)
 	$(MAKE) run-riscv ARCH=$(ARCH)
 else ifeq ($(ARCH),loongarch)
