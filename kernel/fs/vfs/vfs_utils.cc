@@ -1179,8 +1179,6 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
              struct linux_dirent64 *d = dirp;
              int totlen = 0;
              uint32 off = file->_file_ptr; // Use file pointer as offset in directory entries
-             
-             printfYellow("[vfs_getdents] FAT32 dir: %s, off: %u, count: %u\n", file->_path_name.c_str(), off, count);
 
              struct fat32_entry ep_store;
              struct fat32_entry *ep = &ep_store;
@@ -1189,22 +1187,17 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
              
              while (totlen + sizeof(struct linux_dirent64) <= count) {
                   ep->valid = 0;
-                  // printfYellow("[vfs_getdents] calling enext with off=%u\n", off);
                   type = enext(dp, ep, off, &ent_count);
                   
                   if (type == -1) {
-                      printfRed("[vfs_getdents] enext returned -1 (end of dir) at off=%u\n", off);
                       break; // End of directory
                   }
                   
                   off += ent_count * 32; // Advance offset by consumed 32-byte entries
                   
                   if (type == 0) { // Empty entry
-                       // printfCyan("[vfs_getdents] enext returned 0 (empty) at off=%u\n", off - ent_count*32);
                        continue;
                   }
-                  
-                  printfGreen("[vfs_getdents] Found entry: %s at off=%u\n", ep->filename, off - ent_count*32);
 
                   int namelen = strlen(ep->filename);
                   uint reclen = sizeof(d->d_ino) + sizeof(d->d_off) + sizeof(d->d_reclen) + sizeof(d->d_type) + namelen + 1;
@@ -1213,7 +1206,6 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
                   
                   if (totlen + reclen > count) {
                       off -= ent_count * 32;
-                      printfYellow("[vfs_getdents] buffer full, stopping\n");
                       break; 
                   }
                   
