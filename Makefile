@@ -124,8 +124,8 @@ DEPS := $(OBJS:.o=.d)
 
 # ===== 输出目标 =====
 ifeq ($(ARCH),riscv)
-  KERNEL_ELF := kernel-rv
-  KERNEL_BIN := build/$(OUTPUT_PREFIX)/kernel-rv.bin
+  KERNEL_ELF := kernel-qemu
+  KERNEL_BIN := build/$(OUTPUT_PREFIX)/kernel-qemu.bin
 else ifeq ($(ARCH),loongarch)
   KERNEL_ELF := kernel-la
   KERNEL_BIN := build/$(OUTPUT_PREFIX)/kernel-la.bin
@@ -252,7 +252,7 @@ run-riscv:
 	qemu-system-riscv64 \
 		-machine virt \
 		-kernel $(KERNEL_ELF) \
-		-m 1G \
+		-m 128M \
 		-nographic \
 		-smp 1 \
 		-bios default \
@@ -262,7 +262,7 @@ run-riscv:
 		-device virtio-net-device,netdev=net \
 		-netdev user,id=net \
 		-rtc base=utc \
-		-initrd rootfs.img
+		-initrd initrd.img
 
 
 run-loongarch:
