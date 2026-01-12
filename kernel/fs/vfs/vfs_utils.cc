@@ -1491,7 +1491,13 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
              struct fat32_entry *ep = fat_f->fat_info.entry;
              memset(st, 0, sizeof(fs::Kstat));
              
-             st->ino = (uint64)ep; 
+             // Use the first cluster number as a stable, non-negative inode id
+             uint64 cluster_id = ep->first_clus;
+             if (cluster_id == 0)
+                 cluster_id = ep->off;
+             if (cluster_id == 0)
+                 cluster_id = ((uint64)ep) & 0x7fffffff;
+             st->ino = cluster_id;
              st->dev = fs->dev;
              
              st->mode = 0;
