@@ -3,6 +3,11 @@
 .section .text
 .global _entry
 _entry:
+        # LoongArch QEMU 启动时寄存器约定：
+        # $a0 = EFI Boot Services Handle (通常为 0)
+        # $a1 = 内核命令行参数字符串指针
+        # $a2 = DTB (FDT) 物理地址 <-- 关键！
+        move        $s0, $a1                    # Save DTB pointer
 
         # entry只对每个CPU设定自己的栈空间，然后跳转到main函数
 
@@ -38,6 +43,11 @@ _entry:
 	# jump to main in main.c
         li.d        $t0, 0x1
         cpucfg      $t1, $t0                    # read the CFG
+        
+        # 准备调用 main(hartid, dtb_addr) 的参数：
+        csrrd       $a0, LOONGARCH_CSR_CPUID    # $a0 = hartid (从 CPUID CSR 读取)
+        andi        $a0, $a0, 0x1ff             # 取低9位作为 Core ID
+        move        $a1, $s0                    # $a1 = dtb (从 $a2 保存的值)
         bl          main
 spin:
         b           spin

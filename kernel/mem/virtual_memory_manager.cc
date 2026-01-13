@@ -1134,7 +1134,16 @@ namespace mem
         // 初始化堆内存
         kvmmap(pt, vm_kernel_heap_start, mem::k_pmm.get_heap_area_start(), mem::k_pmm.get_heap_area_size(), PTE_R | PTE_W);
 #elif defined(LOONGARCH)
+        // Map kernel text and data (包括堆区域，因为堆在 etext 到 PHYSTOP 范围内)
         kvmmap(pt, ((uint64)etext) & (~(DMWIN_MASK)), (uint64)etext, PHYSTOP - (uint64)etext, PTE_R | PTE_W);
+        
+        // Map DTB if it exists
+        if (k_dtb_addr != 0) {
+            uint64 dtb_size = PGROUNDUP(0x10000); // Assume 64KB for DTB
+            uint64 dtb_va = k_dtb_addr & (~(DMWIN_MASK));
+            kvmmap(pt, dtb_va, k_dtb_addr, dtb_size, PTE_R | PTE_W);
+            printfGreen("[vmm] Mapped DTB at va=%p pa=%p, size=%p\n", dtb_va, k_dtb_addr, dtb_size);
+        }
 
 #endif
         return pt;

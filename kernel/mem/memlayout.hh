@@ -115,8 +115,8 @@
 // the kernel expects there to be RAM
 // for use by user pages
 // from physical address 0x90000000 to PHYSTOP.
-#define PHYSBASE (0x90000000UL | DMWIN_MASK)
-#define PHYSTOP (PHYSBASE + 512*1024*1024) //512MB physical memory
+#define PHYSBASE (0x0UL | DMWIN_MASK)
+#define PHYSTOP (PHYSBASE + 128*1024*1024) //128MB physical memory
 
 #define TRAPFRAME ((MAXVA>>1 )- PGSIZE) //64TB
 

@@ -4,8 +4,8 @@ extern "C"
 {
     int main()
     {
-
-        vim_h();
+        chdir("/fat32");
+        basic_glibc_test();
         shutdown();
         return 0;
     }
