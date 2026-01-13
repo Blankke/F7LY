@@ -4,7 +4,8 @@ extern "C"
 {
     int main()
     {
-        gcc_test();
+        chdir("/fat32");
+        basic_glibc_test();
         shutdown();
         return 0;
     }

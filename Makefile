@@ -175,9 +175,6 @@ endif
 
 
 all: 
-	apt-get install -y g++-11-riscv64-linux-gnu
-	ln -sf /usr/bin/riscv64-linux-gnu-g++-11 /usr/bin/riscv64-linux-gnu-g++
-	ln -sf /usr/bin/riscv64-linux-gnu-gcc-11 /usr/bin/riscv64-linux-gnu-gcc
 	@$(MAKE) riscv
 	@if [ -f rootfs.img.back ]; then cp rootfs.img.back rootfs.img; fi
 
@@ -269,15 +266,16 @@ run-loongarch:
 	qemu-system-loongarch64 \
 	    -machine virt \
 	    -kernel $(KERNEL_ELF) \
-	    -m 1G \
+	    -m 128M \
 	    -nographic \
 	    -smp 1 \
-		-drive file=$(KERNEL_PREFIX)/sdcard-la-onsite.img,if=none,format=raw,id=x0 \
+		-drive file=$(KERNEL_PREFIX)/sdcard.img,if=none,format=raw,id=x0 \
 		-device virtio-blk-pci,drive=x0 \
 		-netdev user,id=net \
 		-device virtio-net-pci,netdev=net \
 		-no-reboot \
 		-rtc base=utc \
+		-initrd initrd.img
 
 
 

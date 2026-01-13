@@ -26,10 +26,16 @@
 #include "fs/vfs/fifo_manager.hh"
 #ifdef LOONGARCH
 
-extern "C" void main()
+uint64 k_dtb_addr = 0;
+
+extern "C" void main(uint64 hartid, uint64 dtb_addr)
 {
+    k_dtb_addr = dtb_addr;
     k_printer.init();
     printfYellow("Hello, World!\n");
+    printfMagenta("[main] hartid=%lu, dtb_addr=%p\n", hartid, dtb_addr);
+    
+    // 验证 DTB magic number (应该是 0xd00dfeed，大端序)
 
     apic_init();
     extioi_init();

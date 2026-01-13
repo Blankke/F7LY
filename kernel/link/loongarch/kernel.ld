@@ -4,13 +4,13 @@ ENTRY( _entry )
 
 SECTIONS
 {
-  . = 0x9000000080000000;
+  . = 0x9000000000200000;
 
   kernel_start = .;
 
   . = ALIGN(4K);
 
-  .text : {
+  .text : AT(0x200000) {
     *(.text .text.*)
     . = ALIGN(0x1000);
     _keentry = .;

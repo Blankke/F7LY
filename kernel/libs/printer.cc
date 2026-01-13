@@ -10,7 +10,7 @@ Printer k_printer;
 
 // 使用匿名命名空间限制 disable_printf 变量的作用域
 namespace {
-    bool disable_printf_flag = true;  // 默认关闭 printf
+    bool disable_printf_flag = false;  // 默认关闭 printf
 }
 
 
