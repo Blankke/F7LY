@@ -210,10 +210,12 @@ static int blockdev_write(struct ext4_blockdev *bdev, const void *buf, uint64_t 
 
 //For rootfs
  int blockdev_read2(struct ext4_blockdev *bdev, void *buf, uint64_t blk_id, uint32_t blk_cnt) {
+    struct vfs_ext4_blockdev *vbdev = vfs_ext4_blockdev_from_bd(bdev);
+    int dev = vbdev ? vbdev->dev : 0;
     uint64 buf_ptr = (uint64)buf;
     for(int i = 0; i < (int)blk_cnt; i++) {
         // printf("[blockdev_bread] blk_id: %d, blk_cnt: %d\n", blk_id + i, blk_cnt);
-        struct buf *b = bread(1, blk_id + i);
+        struct buf *b = bread(dev, blk_id + i);
         memmove((void*)buf_ptr, b->data, BSIZE);
         buf_ptr += BSIZE;
         brelse(b);
@@ -222,10 +224,12 @@ static int blockdev_write(struct ext4_blockdev *bdev, const void *buf, uint64_t 
 }
 
  int blockdev_write2(struct ext4_blockdev *bdev, const void *buf, uint64_t blk_id, uint32_t blk_cnt) {
+    struct vfs_ext4_blockdev *vbdev = vfs_ext4_blockdev_from_bd(bdev);
+    int dev = vbdev ? vbdev->dev : 0;
     uint64 buf_ptr = (uint64)buf;
     for(int i = 0; i < (int)blk_cnt; i++) {
         // printf("[blockdev_bwrite] blk_id: %d, blk_cnt: %d\n", blk_id + i, blk_cnt);
-        struct buf *b = bget(1, blk_id + i);
+        struct buf *b = bget(dev, blk_id + i);
         memmove(b->data, (void*)buf_ptr, BSIZE);
         bwrite(b);
         buf_ptr += BSIZE;
