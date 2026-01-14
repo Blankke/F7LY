@@ -26,7 +26,7 @@ namespace proc
         _sche_lock.init(name);
     }
 
-    int Scheduler::get_highest_proirity()
+    int Scheduler::get_highest_priority()
     {
         _sche_lock.acquire();
         int prio = lowest_proc_prio;
@@ -56,7 +56,7 @@ namespace proc
 
             cpu->interrupt_on();
 
-            priority = get_highest_proirity();
+            priority = get_highest_priority();
 
             for (p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
             {

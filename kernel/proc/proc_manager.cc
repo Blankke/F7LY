@@ -5,7 +5,6 @@
 #include "klib.hh"
 #include "virtual_memory_manager.hh"
 #include "scheduler.hh"
-#include "libs/klib.hh"
 #include "mem/memlayout.hh" // 内核栈配置常量
 #ifdef RISCV
 #include "riscv/trap.hh"
@@ -41,7 +40,6 @@
 #include "fs/lwext4/ext4.hh"
 #include <EASTL/map.h>
 #include "fs/vfs/vfs_utils.hh"
-#include "sys/syscall_defs.hh"
 #include "fs/vfs/fs.hh"
 #include "fs/vfs/virtual_fs.hh"
 #include "sys/syscall_defs.hh"
@@ -161,7 +159,7 @@ namespace proc
                 p->_priority = default_proc_prio;
 
                 // 初始化CPU亲和性掩码：默认可以在任何CPU上运行
-                p->_cpu_mask = CpuMask((1ULL << NUMCPU) - 1);
+                p->_cpu_mask.fill();
 
                 /****************************************************************************************
                  * 内存管理初始化
@@ -249,6 +247,7 @@ namespace proc
                 p->_user_ticks = 0;            // 用户态累计时钟节拍数
                 p->_last_user_tick = 0;        // 上次进入用户态的时钟节拍数
                 p->_kernel_entry_tick = 0;     // 进入内核态的时钟节拍数
+                p->_utime = 0;                 // 用户态时间
                 p->_stime = 0;                 // 系统态时间
                 p->_cutime = 0;                // 子进程用户态时间累计
                 p->_cstime = 0;                // 子进程系统态时间累计
@@ -331,8 +330,7 @@ namespace proc
          ****************************************************************************************/
 
         // 验证进程状态：ZOMBIE（正常退出）、UNUSED（初始状态）、USED（创建失败清理）状态的进程才能被freeproc
-        // if (p->_state != ProcState::ZOMBIE && p->_state != ProcState::UNUSED && p->_state != ProcState::USED)
-        if (p->_state != ProcState::ZOMBIE)
+        if (p->_state != ProcState::ZOMBIE && p->_state != ProcState::UNUSED && p->_state != ProcState::USED)
         {
             panic("freeproc: process not in valid state for cleanup, current state: %d", (int)p->_state);
         }
@@ -374,7 +372,7 @@ namespace proc
         p->_priority = 0; // 重置优先级
 
         // 重新初始化CPU亲和性掩码：默认可以在任何CPU上运行
-        p->_cpu_mask = CpuMask((1ULL << NUMCPU) - 1);
+        p->_cpu_mask.fill();
 
         /****************************************************************************************
          * 文件系统和I/O管理清理
@@ -422,6 +420,7 @@ namespace proc
         p->_user_ticks = 0;        // 清零用户态累计时间
         p->_last_user_tick = 0;    // 清零上次进入用户态时间
         p->_kernel_entry_tick = 0; // 清零进入内核态时间
+        p->_utime = 0;             // 清零用户态时间
         p->_stime = 0;             // 清零系统态时间
         p->_cutime = 0;            // 清零子进程用户态时间累计
         p->_cstime = 0;            // 清零子进程系统态时间累计
