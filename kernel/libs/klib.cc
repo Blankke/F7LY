@@ -14,13 +14,22 @@ void *memset(void *s, int c, size_t n) noexcept(true)
 
 void *memmove(void *dst, const void *src, size_t n) noexcept(true)
 {
-	// may overlap
-	if (n <= 0)
+	if (dst == src || n == 0)
 		return dst;
-	const char *i = (const char *)src;
-	char *j = (char *)dst;
-	for (i += n - 1, j += n - 1; i >= (const char *)src; i--, j--)
-		*j = *i;
+
+	const auto *s = static_cast<const unsigned char *>(src);
+	auto *d = static_cast<unsigned char *>(dst);
+
+	if (d < s)
+	{
+		for (size_t i = 0; i < n; ++i)
+			d[i] = s[i];
+	}
+	else
+	{
+		for (size_t i = n; i > 0; --i)
+			d[i - 1] = s[i - 1];
+	}
 	return dst;
 }
 
@@ -35,16 +44,22 @@ void *memcpy(void *out, const void *in, size_t n) noexcept(true)
 
 int memcmp(const void *s1, const void *s2, size_t n) noexcept(true)
 {
-	size_t cnt = 1;
-	const unsigned char *i = (const unsigned char *)s1, *j = (const unsigned char *)s2;
-	if (n == 0)
+	if (n == 0 || s1 == s2)
 		return 0;
-	for (; *i == *j; i++, j++, cnt++)
+	if (s1 == nullptr)
+		return -1;
+	if (s2 == nullptr)
+		return 1;
+
+	const auto *i = static_cast<const unsigned char *>(s1);
+	const auto *j = static_cast<const unsigned char *>(s2);
+
+	for (size_t idx = 0; idx < n; ++idx, ++i, ++j)
 	{
-		if (!*i || cnt >= n)
-			return 0;
+		if (*i != *j)
+			return (*i < *j) ? -1 : 1;
 	}
-	return *i < *j ? -1 : 1;
+	return 0;
 }
 
 const void *

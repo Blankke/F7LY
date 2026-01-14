@@ -1,18 +1,9 @@
-//
-// Copied from Li Shuang ( pseudonym ) on 2024-04-23 
-// --------------------------------------------------------------
-// | Note: This code file just for study, not for commercial use 
-// | Contact Author: lishuang.mk@whu.edu.cn 
-// --------------------------------------------------------------
-//
+#pragma once
 
-#pragma once 
+#include <functional>
 
+// 在内核态没有异常支持，std::function 仍会依赖该符号。
 namespace std
 {
-	extern void __throw_bad_function_call();
-
+	[[noreturn]] void __throw_bad_function_call();
 } // namespace std
-
-#include <bits/std_function.h>
-#include <functional>
