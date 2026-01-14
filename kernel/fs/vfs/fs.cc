@@ -57,6 +57,8 @@ void fs_init(filesystem_t *fs, int dev, fs_t fs_type, char *path)
 }
 
 extern uint64 k_dtb_addr;
+extern uint64 k_initrd_start;
+extern uint64 k_initrd_end;
 
 void filesystem_init(void)
 {
@@ -65,18 +67,38 @@ void filesystem_init(void)
         DtbManager::init(k_dtb_addr);
     }
     printfYellow("filesystem_init: DTB initialized at 0x%lx\n", k_dtb_addr);
+    printfYellow("DEBUG: k_initrd_start=0x%lx, k_initrd_end=0x%lx\n", k_initrd_start, k_initrd_end);
+    
     uint64 start = 0, end = 0;
     int root_dev_id = ROOTDEV; // Default
     
     if (DtbManager::get_initrd(start, end) && start != 0) {
         printfYellow("Found Initrd: 0x%lx - 0x%lx, size: %ld\n", start, end, end - start);
         // Using new to avoid static destructor registration (__dso_handle issue)
-        dev::RamDisk* ramdisk = new dev::RamDisk(start, end - start);
+        uint64 ramdisk_start = start;
+        #ifdef LOONGARCH
+        ramdisk_start = to_vir(start);
+        #endif
+        dev::RamDisk* ramdisk = new dev::RamDisk(ramdisk_start, end - start);
         if (ramdisk) {
             root_dev_id = dev::k_devm.register_block_device(ramdisk, "ramdisk");
             printfYellow("Registered RamDisk as device %d\n", root_dev_id);
         } else {
              printfRed("Failed to allocate RamDisk!\n");
+        }
+    } else if (k_initrd_start != 0 && k_initrd_end > k_initrd_start) {
+        printfYellow("DtbManager failed, but Scanned Initrd found: 0x%lx - 0x%lx\n", k_initrd_start, k_initrd_end);
+        start = k_initrd_start;
+        end = k_initrd_end;
+        
+        uint64 ramdisk_start = start;
+        #ifdef LOONGARCH
+        ramdisk_start = to_vir(start);
+        #endif
+        dev::RamDisk* ramdisk = new dev::RamDisk(ramdisk_start, end - start);
+        if (ramdisk) {
+            root_dev_id = dev::k_devm.register_block_device(ramdisk, "ramdisk");
+            printfYellow("Registered Scanned RamDisk as device %d\n", root_dev_id);
         }
     } else {
         printfRed("Initrd not found, using default ROOTDEV\n");

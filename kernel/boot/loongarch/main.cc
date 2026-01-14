@@ -12,6 +12,7 @@
 #include "device_manager.hh"
 #include "disk_driver.hh"
 #include "devs/console1.hh"
+#include "devs/dtb.hh"
 #include "loongarch/disk_driver.hh"
 #include "tm/timer_manager.hh"
 #include "syscall_handler.hh"
@@ -26,16 +27,18 @@
 #include "fs/vfs/fifo_manager.hh"
 #ifdef LOONGARCH
 
-uint64 k_dtb_addr = 0;
+extern char end[];
 
 extern "C" void main(uint64 hartid, uint64 dtb_addr)
 {
-    k_dtb_addr = dtb_addr;
     k_printer.init();
     printfYellow("Hello, World!\n");
-    printfMagenta("[main] hartid=%lu, dtb_addr=%p\n", hartid, dtb_addr);
+
+    // Initialize DTB and scan Initrd if necessary
+    uint64 kernel_end_phys = ((uint64)end) & 0x0FFFFFFFFFFFFFFFUL;
+    DtbManager::find_dtb_and_initrd(dtb_addr, kernel_end_phys);
     
-    // 验证 DTB magic number (应该是 0xd00dfeed，大端序)
+    printfMagenta("[main] Using hartid=%lu, k_dtb_addr=0x%lx\n", hartid, k_dtb_addr);
 
     apic_init();
     extioi_init();
