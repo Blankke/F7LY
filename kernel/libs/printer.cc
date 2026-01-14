@@ -11,7 +11,7 @@ Printer k_printer;
 namespace
 {
 
-bool disable_printf_flag = false;
+bool disable_printf_flag = true;
 
 struct ConsoleWriter
 {
