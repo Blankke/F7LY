@@ -5,9 +5,8 @@
 _entry:
         # LoongArch QEMU 启动时寄存器约定：
         # $a0 = EFI Boot Services Handle (通常为 0)
-        # $a1 = 内核命令行参数字符串指针
-        # $a2 = DTB (FDT) 物理地址 <-- 关键！
-        move        $s0, $a2                    # Save DTB pointer
+        # $a1 = DTB (FDT) 物理地址
+        move        $s0, $a1                    # Save DTB pointer
 
         # entry只对每个CPU设定自己的栈空间，然后跳转到main函数
 
