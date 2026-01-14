@@ -15,7 +15,7 @@ namespace proc
 		void add_thread();
 		void remove_thread();
 		void switch_to_proc(Pcb *p);
-		int  get_highest_proirity();
+		int  get_highest_priority();
 		void start_schedule();
 		// void switch_to_proc( pm::Pcb *p );
 

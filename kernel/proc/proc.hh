@@ -13,7 +13,6 @@
 #include "prlimit.hh"
 #include "futex.hh"
 #include "fs/vfs/file/file.hh"
-#include "signal.hh"
 #include "process_memory_manager.hh"
 #include "cpu.hh"
 #include "param.h"
