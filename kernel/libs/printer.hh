@@ -79,6 +79,16 @@ public:
 	void init();
 	inline int is_panic() { return _panicked; }
 
+	// 内部状态访问器（仅供同文件内辅助函数使用）
+	inline bool locking_enabled() const { return _locking != 0; }
+	inline void set_locking(bool enabled) { _locking = enabled ? 1 : 0; }
+	inline void acquire_lock() { _lock.acquire(); }
+	inline void release_lock() { _lock.release(); }
+	inline dev::Console *get_console() const { return _console; }
+	inline void set_panicked() { _panicked = 1; }
+	static inline const char *lower_digits() { return _lower_digits; }
+	static inline const char *upper_digits() { return _upper_digits; }
+
 	// 控制 printf 输出的方法
 	static void enable_printf();
 	static void disable_printf();

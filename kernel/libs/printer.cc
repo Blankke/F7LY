@@ -8,12 +8,230 @@
 // 全局打印器实例
 Printer k_printer;
 
-// 使用匿名命名空间限制 disable_printf 变量的作用域
-namespace {
-    bool disable_printf_flag = false;  // 默认关闭 printf
+namespace
+{
+
+bool disable_printf_flag = false;
+
+struct ConsoleWriter
+{
+	dev::Console *console;
+
+	// 封装控制台输出，便于与 BufferWriter 共用格式化流程
+	void putc(char ch) { if (console) console->console_putc(ch); }
+};
+
+struct BufferWriter
+{
+	char *cur;
+	char *limit;
+	int total;
+
+	// 只在容量内写入，同时累计总输出长度（便于上层获知是否被截断）
+	void putc(char ch)
+	{
+		if (cur < limit) *cur++ = ch;
+		++total;
+	}
+
+	void finish() { *cur = '\0'; }
+};
+
+enum class LengthModifier
+{
+	Default,
+	LongInt,
+	SizeT,
+};
+
+// 全局数字缓冲区大小，避免魔数散落
+constexpr int kNumericBufferSize = 64;
+
+template <typename Writer>
+void write_string(Writer &writer, const char *str)
+{
+	if (str == nullptr) str = "(null)";
+	while (*str) writer.putc(*str++);
 }
 
+template <typename Writer>
+void write_unsigned(Writer &writer, uint64 value, uint base, bool uppercase, int width)
+{
+	char buf[kNumericBufferSize];
+	int idx = 0;
+	const char *digits = uppercase ? Printer::upper_digits() : Printer::lower_digits();
 
+	do
+	{
+		buf[idx++] = digits[value % base];
+		value /= base;
+	} while (value && idx < kNumericBufferSize);
+
+	if (width > kNumericBufferSize - 1) width = kNumericBufferSize - 1;
+	while (idx < width && idx < kNumericBufferSize) buf[idx++] = '0';
+	while (--idx >= 0) writer.putc(buf[idx]);
+}
+
+template <typename Writer>
+void write_signed(Writer &writer, int64 value, uint base, int width)
+{
+	if (value < 0)
+	{
+		writer.putc('-');
+		write_unsigned(writer, static_cast<uint64>(-value), base, false, width);
+	}
+	else
+	{
+		write_unsigned(writer, static_cast<uint64>(value), base, false, width);
+	}
+}
+
+template <typename Writer>
+void write_pointer(Writer &writer, uint64 value)
+{
+	writer.putc('0');
+	writer.putc('x');
+	for (int i = 0; i < static_cast<int>(sizeof(uint64) * 2); ++i, value <<= 4)
+	{
+		writer.putc(Printer::lower_digits()[value >> 60]);
+	}
+}
+
+template <typename Writer>
+void vformat_to_writer(Writer &writer, const char *fmt, va_list ap)
+{
+	for (size_t i = 0; fmt && fmt[i]; ++i)
+	{
+		char c = fmt[i];
+		if (c != '%')
+		{
+			writer.putc(c);
+			continue;
+		}
+
+		++i; // skip '%'
+		int width = 0;
+		while (fmt[i] >= '0' && fmt[i] <= '9')
+		{
+			width = width * 10 + (fmt[i] - '0');
+			++i;
+		}
+
+		LengthModifier length = LengthModifier::Default;
+		if (fmt[i] == 'l')
+		{
+			length = LengthModifier::LongInt;
+			++i;
+		}
+		else if (fmt[i] == 'z')
+		{
+			length = LengthModifier::SizeT;
+			++i;
+		}
+
+		c = fmt[i];
+		switch (c)
+		{
+		case 'b':
+			write_signed(writer, va_arg(ap, int), 2, width);
+			break;
+		case 'd':
+			if (length == LengthModifier::LongInt)
+				write_signed(writer, va_arg(ap, long), 10, width);
+			else
+				write_signed(writer, va_arg(ap, int), 10, width);
+			break;
+		case 'u':
+			if (length == LengthModifier::LongInt)
+				write_unsigned(writer, va_arg(ap, unsigned long), 10, false, width);
+			else if (length == LengthModifier::SizeT)
+				write_unsigned(writer, va_arg(ap, size_t), 10, false, width);
+			else
+				write_unsigned(writer, va_arg(ap, unsigned int), 10, false, width);
+			break;
+		case 'x':
+			if (length == LengthModifier::LongInt)
+				write_unsigned(writer, va_arg(ap, unsigned long), 16, false, width);
+			else
+				write_unsigned(writer, va_arg(ap, unsigned int), 16, false, width);
+			break;
+		case 'X':
+			if (length == LengthModifier::LongInt)
+				write_unsigned(writer, va_arg(ap, unsigned long), 16, true, width);
+			else
+				write_unsigned(writer, va_arg(ap, unsigned int), 16, true, width);
+			break;
+		case 'o':
+			if (length == LengthModifier::LongInt)
+				write_unsigned(writer, va_arg(ap, unsigned long), 8, false, width);
+			else
+				write_unsigned(writer, va_arg(ap, unsigned int), 8, false, width);
+			break;
+		case 'p':
+			write_pointer(writer, va_arg(ap, uint64));
+			break;
+		case 's':
+			write_string(writer, va_arg(ap, const char *));
+			break;
+		case 'c':
+			writer.putc(static_cast<char>(va_arg(ap, int)));
+			break;
+		case '%':
+			writer.putc('%');
+			break;
+		default:
+			writer.putc('%');
+			writer.putc(c);
+			break;
+		}
+	}
+}
+
+void log_with_prefix(const char *tag, const char *f, uint l, const char *info, va_list ap)
+{
+	if (disable_printf_flag || info == nullptr) return;
+
+	const int need_lock = k_printer.locking_enabled();
+	if (need_lock) k_printer.acquire_lock();
+
+	ConsoleWriter writer { k_printer.get_console() };
+	write_string(writer, "[");
+	write_string(writer, tag);
+	write_string(writer, "] ");
+	write_string(writer, f);
+	writer.putc(':');
+	write_unsigned(writer, l, 10, false, 0);
+	write_string(writer, ": ");
+	vformat_to_writer(writer, info, ap);
+	writer.putc('\n');
+
+	if (need_lock) k_printer.release_lock();
+}
+
+[[noreturn]] void panic_impl(const char *f, uint l, const char *info, va_list ap)
+{
+	ConsoleWriter writer { k_printer.get_console() };
+	write_string(writer, "panic: ");
+	write_string(writer, f);
+	writer.putc(':');
+	write_unsigned(writer, l, 10, false, 0);
+	write_string(writer, ": ");
+	if (info) vformat_to_writer(writer, info, ap);
+	writer.putc('\n');
+
+	k_printer.set_panicked(); // freeze uart output from other CPUs
+
+#ifdef RISCV
+	sbi_shutdown();
+#elif defined(LOONGARCH)
+	*(volatile uint8 *)(0x8000000000000000 | 0x100E001C) = 0x34;
+#endif
+
+	for (;;)
+		;
+}
+
+} // namespace
 
 int	 Printer::_trace_flag	  = 0;
 char Printer::_lower_digits[] = "0123456789abcdef";
@@ -23,755 +241,180 @@ void Printer::init()
 {
 	_lock.init("printer");
 	_locking = 1;
-	
+
 	// 初始化控制台并关联
 	dev::kConsole.init();
 	_console = &dev::kConsole;
 	_type = out_type::console;
 	printf("Printer::init end\n");
-
 }
 
 // printf 控制函数实现
 void Printer::enable_printf()
 {
-    disable_printf_flag = false;
+	disable_printf_flag = false;
 }
 
 void Printer::disable_printf()
 {
-    disable_printf_flag = true;
+	disable_printf_flag = true;
 }
 
 bool Printer::is_printf_disabled()
 {
-    return disable_printf_flag;
+	return disable_printf_flag;
 }
 
-void Printer::printint( int xx, int base, int sign )
+void Printer::printint(int xx, int base, int sign)
 {
-    	char buf[16];
-		int	 i;
-		uint x;
+	if (_type != out_type::console || _console == nullptr) return;
 
-		if ( sign && ( sign = xx < 0 ) )
-			x = -xx;
-		else
-			x = xx;
-
-		i = 0;
-		do {
-			buf[i++] = _lower_digits[x % base];
-		}
-		while ( ( x /= base ) != 0 );
-
-		if ( sign ) buf[i++] = '-';
-
-		if ( _type == out_type::console && _console )
-			while ( --i >= 0 ) _console->console_putc( buf[i] );
+	ConsoleWriter writer { _console };
+	if (sign)
+		write_signed(writer, xx, base, 0);
+	else
+		write_unsigned(writer, static_cast<uint>(xx), base, false, 0);
 }
 
-void Printer::printbyte( uint8 x )
+void Printer::printbyte(uint8 x)
 {
-    if ( _type == out_type::console && _console )
-        _console->console_putc(x);
+	if (_type != out_type::console || _console == nullptr) return;
+	_console->console_putc(x);
 }
 
-void Printer::printptr( uint64 x )
+void Printer::printptr(uint64 x)
 {
-    if ( _type == out_type::console && _console )
-        {
-              unsigned int i;
-                _console->console_putc('0');
-                _console->console_putc('x');
-                for (i = 0; i < (sizeof(uint64) * 2); i++, x <<= 4)
-                {
-                    _console->console_putc(_lower_digits[x >> 60]);
-                }
-        }
+	if (_type != out_type::console || _console == nullptr) return;
+	ConsoleWriter writer { _console };
+	write_pointer(writer, x);
 }
 
-void Printer::print( const char *fmt, ... )
+void Printer::print(const char *fmt, ...)
 {
-  // 如果禁用了 printf 输出，则直接返回
-  if (disable_printf_flag) {
-    // 仍需要处理可变参数以避免潜在问题
-    va_list ap1;
-    va_start(ap1, fmt);
-    va_end(ap1);
-    return;
-  }
+	if (disable_printf_flag) return;
+	if (fmt == nullptr) k_panic(__FILE__, __LINE__, "null fmt");
 
-  va_list ap;
-  int i, c, tmp_locking;
-  const char *s;
+	const int tmp_locking = _locking;
+	if (tmp_locking) _lock.acquire();
 
-  tmp_locking = this->_locking;
-  if (tmp_locking)
-    _lock.acquire();
+	va_list ap;
+	va_start(ap, fmt);
+	ConsoleWriter writer { _console };
+	vformat_to_writer(writer, fmt, ap);
+	va_end(ap);
 
-  if (fmt == 0)
-    k_panic(__FILE__, __LINE__, "null fmt");
-
-  va_start(ap, fmt);
-  for (i = 0; (c = fmt[i] & 0xff) != 0; ) {
-    if (c != '%') {
-      _console->console_putc(c);
-      i++;
-      continue;
-    }
-    i++; // skip '%'
-    int width = 0;
-    // Parse width (e.g., %04x)
-    while (fmt[i] >= '0' && fmt[i] <= '9') {
-      width = width * 10 + (fmt[i] - '0');
-      i++;
-    }
-    
-    // Parse length modifiers
-    bool is_long = false;
-    bool is_size_t = false;
-    if (fmt[i] == 'l') {
-      is_long = true;
-      i++;
-    } else if (fmt[i] == 'z') {
-      is_size_t = true;
-      i++;
-    }
-    
-    c = fmt[i] & 0xff;
-    if (c == 0)
-      break;
-    switch (c) {
-    case 'b':
-      printint(va_arg(ap, int), 2, 1);
-      break;
-    case 'd':
-      if (is_long) {
-        // %ld - long int
-        long val = va_arg(ap, long);
-        char buf[32];
-        int j = 0;
-        int sign = 0;
-        unsigned long uval;
-        
-        if (val < 0) {
-          sign = 1;
-          uval = -val;
-        } else {
-          uval = val;
-        }
-        
-        do {
-          buf[j++] = _lower_digits[uval % 10];
-        } while ((uval /= 10) != 0);
-        
-        if (sign) buf[j++] = '-';
-        
-        while (--j >= 0)
-          _console->console_putc(buf[j]);
-      } else {
-        printint(va_arg(ap, int), 10, 1);
-      }
-      break;
-    case 'u':
-      if (is_long) {
-        // %lu - unsigned long
-        unsigned long val = va_arg(ap, unsigned long);
-        char buf[32];
-        int j = 0;
-        
-        do {
-          buf[j++] = _lower_digits[val % 10];
-        } while ((val /= 10) != 0);
-        
-        while (--j >= 0)
-          _console->console_putc(buf[j]);
-      } else if (is_size_t) {
-        // %zu - size_t
-        size_t val = va_arg(ap, size_t);
-        char buf[32];
-        int j = 0;
-        
-        do {
-          buf[j++] = _lower_digits[val % 10];
-        } while ((val /= 10) != 0);
-        
-        while (--j >= 0)
-          _console->console_putc(buf[j]);
-      } else {
-        printint(va_arg(ap, uint), 10, 0);
-      }
-      break;
-    case 'x': {
-      // 打印无符号16进制
-      uint64 val;
-      if (is_long) {
-        // %lx - unsigned long hex
-        val = va_arg(ap, unsigned long);
-      } else {
-        val = va_arg(ap, uint64);
-      }
-      char buf[16];
-      int j = 0;
-      do {
-        buf[j++] = _lower_digits[val % 16];
-      } while ((val /= 16) != 0);
-      // Padding with '0' if width > j
-      for (int k = j; k < width; k++)
-        _console->console_putc('0');
-      while (--j >= 0)
-        _console->console_putc(buf[j]);
-      break;
-    }
-    case 'X': {
-      // 打印大写无符号16进制
-      uint64 val;
-      if (is_long) {
-        // %lX - unsigned long hex (uppercase)
-        val = va_arg(ap, unsigned long);
-      } else {
-        val = va_arg(ap, uint64);
-      }
-      char buf[16];
-      int j = 0;
-      do {
-        buf[j++] = _upper_digits[val % 16];
-      } while ((val /= 16) != 0);
-      for (int k = j; k < width; k++)
-        _console->console_putc('0');
-      while (--j >= 0)
-        _console->console_putc(buf[j]);
-      break;
-    }
-        case 'o': {
-      // 打印大写无符号8进制（64位）
-      uint64 val = va_arg(ap, uint64);
-      char buf[16];
-      int j = 0;
-      do {
-        buf[j++] = _upper_digits[val % 8];
-      } while ((val /= 8) != 0);
-      for (int k = j; k < width; k++)
-        _console->console_putc('0');
-      while (--j >= 0)
-        _console->console_putc(buf[j]);
-      break;
-    }
-    case 'p':
-      printptr(va_arg(ap, uint64));
-      break;
-    case 's':
-      if ((s = va_arg(ap, const char *)) == 0)
-        s = "(null)";
-      for (; *s; s++)
-        _console->console_putc(*s);
-      break;
-    case 'c': {
-      int ch = va_arg(ap, int);
-      _console->console_putc(ch);
-      break;
-    }
-    case '%':
-      _console->console_putc('%');
-      break;
-    default:
-      // Print unknown % sequence to draw attention.
-      _console->console_putc('%');
-      _console->console_putc(c);
-      break;
-    }
-    i++;
-  }
-  va_end(ap);
-
-  if (tmp_locking)
-    _lock.release();
+	if (tmp_locking) _lock.release();
 }
 
 int Printer::snprint(char *buffer, size_t size, const char *fmt, ...)
 {
-  if (buffer == nullptr || size == 0 || fmt == nullptr)
-    return -1;
+	if (buffer == nullptr || size == 0 || fmt == nullptr) return -1;
 
-  va_list ap;
-  int i, c;
-  const char *s;
-  char *buf_ptr = buffer;
-  char *buf_end = buffer + size - 1; // 为 '\0' 留一个位置
-  int total_written = 0;
+	BufferWriter writer { buffer, buffer + size - 1, 0 };
 
-  // 内部函数：向缓冲区写入一个字符
-  auto write_char = [&](char ch) -> bool {
-    if (buf_ptr < buf_end) {
-      *buf_ptr++ = ch;
-      total_written++;
-      return true;
-    }
-    total_written++;  // 仍然计数，即使没有写入
-    return false;
-  };
+	va_list ap;
+	va_start(ap, fmt);
+	vformat_to_writer(writer, fmt, ap);
+	va_end(ap);
 
-  // 内部函数：向缓冲区写入整数
-  auto write_int = [&](int xx, int base, int sign) {
-    char int_buf[16];
-    int idx = 0;
-    uint x;
-
-    if (sign && (sign = xx < 0))
-      x = -xx;
-    else
-      x = xx;
-
-    do {
-      int_buf[idx++] = _lower_digits[x % base];
-    } while ((x /= base) != 0);
-
-    if (sign) int_buf[idx++] = '-';
-
-    while (--idx >= 0) {
-      write_char(int_buf[idx]);
-    }
-  };
-
-  // 内部函数：向缓冲区写入长整数
-  auto write_long = [&](long xx, int base, int sign) {
-    char long_buf[32];
-    int idx = 0;
-    unsigned long x;
-
-    if (sign && (sign = xx < 0))
-      x = -xx;
-    else
-      x = xx;
-
-    do {
-      long_buf[idx++] = _lower_digits[x % base];
-    } while ((x /= base) != 0);
-
-    if (sign) long_buf[idx++] = '-';
-
-    while (--idx >= 0) {
-      write_char(long_buf[idx]);
-    }
-  };
-
-  // 内部函数：向缓冲区写入无符号长整数
-  auto write_ulong = [&](unsigned long val, int base) {
-    char ulong_buf[32];
-    int idx = 0;
-
-    do {
-      ulong_buf[idx++] = _lower_digits[val % base];
-    } while ((val /= base) != 0);
-
-    while (--idx >= 0) {
-      write_char(ulong_buf[idx]);
-    }
-  };
-
-  // 内部函数：向缓冲区写入size_t
-  auto write_size_t = [&](size_t val, int base) {
-    char size_buf[32];
-    int idx = 0;
-
-    do {
-      size_buf[idx++] = _lower_digits[val % base];
-    } while ((val /= base) != 0);
-
-    while (--idx >= 0) {
-      write_char(size_buf[idx]);
-    }
-  };
-
-  // 内部函数：向缓冲区写入十六进制数
-  auto write_hex = [&](uint64 val, int width, bool uppercase) {
-    char hex_buf[16];
-    int j = 0;
-    char *digits = uppercase ? _upper_digits : _lower_digits;
-    
-    do {
-      hex_buf[j++] = digits[val % 16];
-    } while ((val /= 16) != 0);
-    
-    // Padding with '0' if width > j
-    for (int k = j; k < width; k++)
-      write_char('0');
-    
-    while (--j >= 0)
-      write_char(hex_buf[j]);
-  };
-
-  va_start(ap, fmt);
-  for (i = 0; (c = fmt[i] & 0xff) != 0; ) {
-    if (c != '%') {
-      write_char(c);
-      i++;
-      continue;
-    }
-    i++; // skip '%'
-    int width = 0;
-    // Parse width (e.g., %04x)
-    while (fmt[i] >= '0' && fmt[i] <= '9') {
-      width = width * 10 + (fmt[i] - '0');
-      i++;
-    }
-    
-    // Parse length modifiers
-    bool is_long = false;
-    bool is_size_t = false;
-    if (fmt[i] == 'l') {
-      is_long = true;
-      i++;
-    } else if (fmt[i] == 'z') {
-      is_size_t = true;
-      i++;
-    }
-    
-    c = fmt[i] & 0xff;
-    if (c == 0)
-      break;
-    switch (c) {
-    case 'b':
-      write_int(va_arg(ap, int), 2, 1);
-      break;
-    case 'd':
-      if (is_long) {
-        write_long(va_arg(ap, long), 10, 1);
-      } else {
-        write_int(va_arg(ap, int), 10, 1);
-      }
-      break;
-    case 'u':
-      if (is_long) {
-        write_ulong(va_arg(ap, unsigned long), 10);
-      } else if (is_size_t) {
-        write_size_t(va_arg(ap, size_t), 10);
-      } else {
-        write_int(va_arg(ap, uint), 10, 0);
-      }
-      break;
-    case 'x':
-      if (is_long) {
-        write_hex(va_arg(ap, unsigned long), width, false);
-      } else {
-        write_hex(va_arg(ap, uint64), width, false);
-      }
-      break;
-    case 'X':
-      if (is_long) {
-        write_hex(va_arg(ap, unsigned long), width, true);
-      } else {
-        write_hex(va_arg(ap, uint64), width, true);
-      }
-      break;
-    case 'o': {
-      uint64 val = va_arg(ap, uint64);
-      char oct_buf[16];
-      int j = 0;
-      do {
-        oct_buf[j++] = _upper_digits[val % 8];
-      } while ((val /= 8) != 0);
-      for (int k = j; k < width; k++)
-        write_char('0');
-      while (--j >= 0)
-        write_char(oct_buf[j]);
-      break;
-    }
-    case 'p': {
-      write_char('0');
-      write_char('x');
-      uint64 val = va_arg(ap, uint64);
-      for (int k = 0; (uint)k < (sizeof(uint64) * 2); k++, val <<= 4) {
-        write_char(_lower_digits[val >> 60]);
-      }
-      break;
-    }
-    case 's':
-      if ((s = va_arg(ap, const char *)) == 0)
-        s = "(null)";
-      for (; *s; s++)
-        write_char(*s);
-      break;
-    case 'c': {
-      int ch = va_arg(ap, int);
-      write_char(ch);
-      break;
-    }
-    case '%':
-      write_char('%');
-      break;
-    default:
-      // Print unknown % sequence to draw attention.
-      write_char('%');
-      write_char(c);
-      break;
-    }
-    i++;
-  }
-  va_end(ap);
-
-  // 添加字符串结束符
-  *buf_ptr = '\0';
-
-  return total_written;
+	writer.finish();
+	return writer.total;
 }
 
-void Printer::k_panic( const char *f, uint l, const char *info, ... )
+void Printer::k_panic(const char *f, uint l, const char *info, ...)
 {
-  // 直接使用控制台输出，不依赖 printf，以确保在 DIS_PRINTF 宏定义时也能正常输出 panic 信息
-  va_list ap;
-  va_start( ap, info );
-  
-  // 输出 "panic: "
-  const char* panic_str = "panic: ";
-  for (const char* p = panic_str; *p; p++) {
-    if (k_printer._console) k_printer._console->console_putc(*p);
-  }
-  
-  // 输出文件名:行号:
-  for (const char* p = f; *p; p++) {
-    if (k_printer._console) k_printer._console->console_putc(*p);
-  }
-  if (k_printer._console) k_printer._console->console_putc(':');
-  
-  // 输出行号
-  char line_buf[16];
-  int line_idx = 0;
-  uint line_num = l;
-  do {
-    line_buf[line_idx++] = k_printer._lower_digits[line_num % 10];
-  } while ((line_num /= 10) != 0);
-  while (--line_idx >= 0) {
-    if (k_printer._console) k_printer._console->console_putc(line_buf[line_idx]);
-  }
-  
-  if (k_printer._console) k_printer._console->console_putc(':');
-  if (k_printer._console) k_printer._console->console_putc(' ');
-  
-  // 格式化输出 info 字符串
-  if (info) {
-    int i, c;
-    const char *s;
-    
-    for (i = 0; (c = info[i] & 0xff) != 0; ) {
-      if (c != '%') {
-        if (k_printer._console) k_printer._console->console_putc(c);
-        i++;
-        continue;
-      }
-      i++; // skip '%'
-      int width = 0;
-      // Parse width (e.g., %04x)
-      while (info[i] >= '0' && info[i] <= '9') {
-        width = width * 10 + (info[i] - '0');
-        i++;
-      }
-      
-      // Parse length modifiers
-      bool is_long = false;
-      bool is_size_t = false;
-      if (info[i] == 'l') {
-        is_long = true;
-        i++;
-      } else if (info[i] == 'z') {
-        is_size_t = true;
-        i++;
-      }
-      
-      c = info[i] & 0xff;
-      if (c == 0)
-        break;
-      switch (c) {
-      case 'b':
-        k_printer.printint(va_arg(ap, int), 2, 1);
-        break;
-      case 'd':
-        if (is_long) {
-          // %ld - long int
-          long val = va_arg(ap, long);
-          char buf[32];
-          int j = 0;
-          int sign = 0;
-          unsigned long uval;
-          
-          if (val < 0) {
-            sign = 1;
-            uval = -val;
-          } else {
-            uval = val;
-          }
-          
-          do {
-            buf[j++] = k_printer._lower_digits[uval % 10];
-          } while ((uval /= 10) != 0);
-          
-          if (sign) buf[j++] = '-';
-          
-          while (--j >= 0)
-            if (k_printer._console) k_printer._console->console_putc(buf[j]);
-        } else {
-          k_printer.printint(va_arg(ap, int), 10, 1);
-        }
-        break;
-      case 'u':
-        if (is_long) {
-          // %lu - unsigned long
-          unsigned long val = va_arg(ap, unsigned long);
-          char buf[32];
-          int j = 0;
-          
-          do {
-            buf[j++] = k_printer._lower_digits[val % 10];
-          } while ((val /= 10) != 0);
-          
-          while (--j >= 0)
-            if (k_printer._console) k_printer._console->console_putc(buf[j]);
-        } else if (is_size_t) {
-          // %zu - size_t
-          size_t val = va_arg(ap, size_t);
-          char buf[32];
-          int j = 0;
-          
-          do {
-            buf[j++] = k_printer._lower_digits[val % 10];
-          } while ((val /= 10) != 0);
-          
-          while (--j >= 0)
-            if (k_printer._console) k_printer._console->console_putc(buf[j]);
-        } else {
-          k_printer.printint(va_arg(ap, uint), 10, 0);
-        }
-        break;
-      case 'x': {
-        // 打印无符号16进制
-        uint64 val;
-        if (is_long) {
-          // %lx - unsigned long hex
-          val = va_arg(ap, unsigned long);
-        } else {
-          val = va_arg(ap, uint64);
-        }
-        char buf[16];
-        int j = 0;
-        do {
-          buf[j++] = k_printer._lower_digits[val % 16];
-        } while ((val /= 16) != 0);
-        // Padding with '0' if width > j
-        for (int k = j; k < width; k++)
-          if (k_printer._console) k_printer._console->console_putc('0');
-        while (--j >= 0)
-          if (k_printer._console) k_printer._console->console_putc(buf[j]);
-        break;
-      }
-      case 'X': {
-        // 打印大写无符号16进制
-        uint64 val;
-        if (is_long) {
-          // %lX - unsigned long hex (uppercase)
-          val = va_arg(ap, unsigned long);
-        } else {
-          val = va_arg(ap, uint64);
-        }
-        char buf[16];
-        int j = 0;
-        do {
-          buf[j++] = k_printer._upper_digits[val % 16];
-        } while ((val /= 16) != 0);
-        for (int k = j; k < width; k++)
-          if (k_printer._console) k_printer._console->console_putc('0');
-        while (--j >= 0)
-          if (k_printer._console) k_printer._console->console_putc(buf[j]);
-        break;
-      }
-      case 'o': {
-        // 打印大写无符号8进制（64位）
-        uint64 val = va_arg(ap, uint64);
-        char buf[16];
-        int j = 0;
-        do {
-          buf[j++] = k_printer._upper_digits[val % 8];
-        } while ((val /= 8) != 0);
-        for (int k = j; k < width; k++)
-          if (k_printer._console) k_printer._console->console_putc('0');
-        while (--j >= 0)
-          if (k_printer._console) k_printer._console->console_putc(buf[j]);
-        break;
-      }
-      case 'p':
-        k_printer.printptr(va_arg(ap, uint64));
-        break;
-      case 's':
-        if ((s = va_arg(ap, const char *)) == 0)
-          s = "(null)";
-        for (; *s; s++)
-          if (k_printer._console) k_printer._console->console_putc(*s);
-        break;
-      case 'c': {
-        int ch = va_arg(ap, int);
-        if (k_printer._console) k_printer._console->console_putc(ch);
-        break;
-      }
-      case '%':
-        if (k_printer._console) k_printer._console->console_putc('%');
-        break;
-      default:
-        // Print unknown % sequence to draw attention.
-        if (k_printer._console) k_printer._console->console_putc('%');
-        if (k_printer._console) k_printer._console->console_putc(c);
-        break;
-      }
-      i++;
-    }
-  }
-  
-  if (k_printer._console) k_printer._console->console_putc('\n');
-  va_end( ap );
-  k_printer._panicked = 1; // freeze uart output from other CPUs
-  
-  // 根据不同架构执行不同的关机代码
-#ifdef RISCV
-  sbi_shutdown();
-#elif defined(LOONGARCH)
-        *(volatile uint8 *)(0x8000000000000000 | 0x100E001C) = 0x34;
-  // 龙芯架构的关机方法
-  // 暂时使用无限循环，后续可实现具体的关机代码
-  // TODO: 实现龙芯架构的关机方法
+	va_list ap;
+	va_start(ap, info);
+	panic_impl(f, l, info, ap);
+}
+
+void Printer::panic_va(const char *f, uint l, const char *info, va_list ap)
+{
+	panic_impl(f, l, info, ap);
+}
+
+void Printer::error(const char *f, uint l, const char *info, ...)
+{
+	va_list ap;
+	va_start(ap, info);
+	error_va(f, l, info, ap);
+	va_end(ap);
+}
+
+void Printer::error_va(const char *f, uint l, const char *info, va_list ap)
+{
+	log_with_prefix("error", f, l, info, ap);
+}
+
+void Printer::warn(const char *f, uint l, const char *info, ...)
+{
+	va_list ap;
+	va_start(ap, info);
+	warn_va(f, l, info, ap);
+	va_end(ap);
+}
+
+void Printer::warn_va(const char *f, uint l, const char *info, va_list ap)
+{
+	log_with_prefix("warn", f, l, info, ap);
+}
+
+void Printer::info(const char *f, uint l, const char *info, ...)
+{
+	va_list ap;
+	va_start(ap, info);
+	info_va(f, l, info, ap);
+	va_end(ap);
+}
+
+void Printer::info_va(const char *f, uint l, const char *info, va_list ap)
+{
+	log_with_prefix("info", f, l, info, ap);
+}
+
+void Printer::trace(const char *f, uint l, const char *info, ...)
+{
+	va_list ap;
+	va_start(ap, info);
+	trace_va(f, l, info, ap);
+	va_end(ap);
+}
+
+void Printer::trace_va(const char *f, uint l, const char *info, va_list ap)
+{
+	if (_trace_flag == 0) return;
+	log_with_prefix("trace", f, l, info, ap);
+}
+
+void Printer::assrt(const char *f, uint l, const char *expr, const char *detail, ...)
+{
+	// 避免锁在 panic 路径上造成死锁
+	k_printer.set_locking(false);
+
+	ConsoleWriter writer { k_printer.get_console() };
+#ifdef LINUX_BUILD
+	write_string(writer, "\033[91m[ assert ]=> ");
+#else
+	write_string(writer, "[ assert ]=> ");
+#endif
+	write_string(writer, f);
+	write_string(writer, " : ");
+	write_unsigned(writer, l, 10, false, 0);
+	write_string(writer, " :\n\t     assert fail for '");
+	write_string(writer, expr);
+	write_string(writer, "'\n[detail] ");
+
+	va_list ap;
+	va_start(ap, detail);
+	vformat_to_writer(writer, detail, ap);
+	va_end(ap);
+
+#ifdef LINUX_BUILD
+	write_string(writer, "\033[0m\n");
+#else
+	write_string(writer, "\n");
 #endif
 
-  // 无论什么架构，最后都会进入无限循环
-  for(;;)
-      ;
+	k_printer.set_locking(true);
+	panic(f, l, "assert fail for above reason.");
 }
-
-void Printer::assrt( const char *f, uint l, const char *expr, const char *detail, ... )
-	{
-		k_printer._locking = 0;
-#ifdef LINUX_BUILD
-		printf( "\033[91m[ assert ]=> " );
-#else 
-		printf( "[ assert ]=> " );
-#endif 
-		printf( f );
-		printf( " : " );
-		printf( "%d", l );
-		printf( " :\n\t     " );
-		_trace_flag = 1;
-		printf( "assert fail for '" );
-		printf( expr );
-		printf( "'\n[detail] " );
-		va_list ap;
-		va_start( ap, detail );
-		printf( detail, ap );
-		va_end( ap );
-		_trace_flag = 0;
-#ifdef LINUX_BUILD
-		printf( "\033[0m\n" );
-#else 
-		printf( "\n" );
-#endif 
-		k_printer._locking = 1;
-
-		panic( f, l, "assert fail for above reason." );
-	}
-
