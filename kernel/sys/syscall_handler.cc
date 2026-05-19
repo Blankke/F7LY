@@ -335,7 +335,6 @@ namespace syscall
 
         if (!(sys_num == 64 && p->_trapframe->a0 == 1) && !(sys_num == 66 && p->_trapframe->a0 == 1))
         {
-            printf("------------------------------------------------------------------------------------------------------------------------------------\n");
             // printfMagenta("[Pcb::get_open_file] pid: %d\n", p->_pid);
             printfGreen("[invoke_syscaller]sys_num: %d sys_name: \t%s\n", sys_num, _syscall_name[sys_num]);
         }
@@ -2140,7 +2139,7 @@ namespace syscall
         long result = proc::k_pm.brk(n);
         if (n == 0)
         {
-            printf("[SyscallHandler::sys_brk] brk(0) = 0x%x (query current break)\n", result);
+            printfBlue("[SyscallHandler::sys_brk] brk(0) = 0x%x (query current break)\n", result);
         }
         return result;
     }

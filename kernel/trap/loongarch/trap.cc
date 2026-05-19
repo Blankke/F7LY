@@ -61,6 +61,8 @@ void trap_manager::inithart()
 // 处理外部中断和软件中断
 int trap_manager::devintr()
 {
+  static bool uart_irq_warned = false;
+  static bool pcie_irq_warned = false;
 
   uint32 estat = r_csr_estat();
   uint32 ecfg = r_csr_ecfg();
@@ -75,17 +77,12 @@ int trap_manager::devintr()
     // 处理串口中断
     if (irq & (1UL << UART0_IRQ))
     {
-      TODO("处理串口中断");
-      panic("处理串口中断未实现");
-      // int c = sbi_console_getchar();
-      // if (-1 != c)
-      // {
-      //   dev::kConsole.console_intr(c);
-      // }
-
-      // tell the apic the device is
-      // now allowed to interrupt again.
-
+      if (!uart_irq_warned)
+      {
+        uart_irq_warned = true;
+        printfYellow("[trap] UART0 中断尚未接入驱动，先记录并继续运行\n");
+      }
+      apic_complete(1UL << UART0_IRQ);
       extioi_complete(1UL << UART0_IRQ);
     }
     else if (irq & (1UL << PCIE_IRQ))
@@ -93,7 +90,14 @@ int trap_manager::devintr()
       // TODO
       // intr_stats::k_intr_stats.record_interrupt(PCIE_IRQ);
       // loongarch::qemu::disk_driver.handle_intr();
-      panic("未实现PCIE_IRQ中断处理,不过好像跟riscv不一样，跟蒙老师也不一样，现在好像不用这个\n");
+            if (!pcie_irq_warned)
+      {
+        pcie_irq_warned = true;
+        printfYellow("[trap] PCIE 中断当前未走内核分发路径，先确认并放行\n");
+      }
+      apic_complete(1UL << PCIE_IRQ);
+      extioi_complete(1UL << PCIE_IRQ);
+      printfYellow("未实现PCIE_IRQ中断处理,不过好像跟riscv不一样，跟蒙老师也不一样，现在好像不用这个\n");
     }
     else if (irq)
     {

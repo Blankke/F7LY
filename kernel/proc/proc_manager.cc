@@ -324,7 +324,8 @@ namespace proc
 
     void ProcessManager::freeproc(Pcb *p)
     {
-        printf("[freeproc] PCB for process global_id %d pid %d  tid %d successfully reclaimed\n", p->_global_id, p->_pid, p->_tid);
+        printfBlue("[freeproc] PCB for process global_id %d pid %d  tid %d successfully reclaimed\n",
+                   p->_global_id, p->_pid, p->_tid);
         /****************************************************************************************
          内存资源已在 exit_proc() 中释放，这里只清理PCB字段
          ****************************************************************************************/
@@ -432,7 +433,7 @@ namespace proc
          ****************************************************************************************/
         memset(&p->_context, 0, sizeof(p->_context)); // 清空上下文信息
 
-        printf("[freeproc] free proc complete\n");
+        printfBlue("[freeproc] free proc complete\n");
     }
 
     void ProcessManager::freeproc_creation_failed(Pcb *p)
@@ -1365,7 +1366,8 @@ namespace proc
     {
         // debug_process_states();
         Pcb *p = k_pm.get_cur_pcb();
-        printf("[wait4] pid: %d child_pid: %d, addr: %p, option: %d\n", p->_pid, child_pid, (void *)addr, option);
+        printfBlue("[wait4] pid: %d child_pid: %d, addr: %p, option: %d\n",
+                   p->_pid, child_pid, (void *)addr, option);
 
         // 检查不支持的选项标志
         const int supported_options = syscall::WNOHANG | syscall::WUNTRACED;
@@ -1443,7 +1445,7 @@ namespace proc
                         return -1;
                     }
 
-                    printf("[wait4] freeproc child pid: %d tid: %d\n", np->_pid, np->_tid);
+                    printfBlue("[wait4] freeproc child pid: %d tid: %d\n", np->_pid, np->_tid);
                     k_pm.freeproc(np);
                     np->_lock.release();
 
@@ -1454,7 +1456,7 @@ namespace proc
                         if (!has_remaining_threads(p, child_pid))
                         {
                             _wait_lock.release();
-                            printf("[wait4] all threads of pid %d have exited\n", child_pid);
+                            printfBlue("[wait4] all threads of pid %d have exited\n", child_pid);
                             return returned_pid; // 所有线程都已回收
                         }
                         // 还有线程未退出，继续等待
@@ -1599,7 +1601,7 @@ namespace proc
         if (p == _init_proc)
             panic("init exiting"); // 保护机制：init 进程不能退出
 
-        printf("[exit_proc] proc %s pid %d exiting\n", p->_name, p->_pid);
+        printfBlue("[exit_proc] proc %s pid %d exiting\n", p->_name, p->_pid);
 
         /****************************************************************************************
          * Phase 1: 处理父子进程关系和进程状态
@@ -1625,7 +1627,8 @@ namespace proc
             {
                 // 如果进程组还有其他活跃进程，向它们发送SIGHUP和SIGCONT信号
                 // 这是孤儿进程组的标准处理
-                printf("[exit_proc] Process group leader %d exiting, signaling remaining processes\n", p->_pid);
+                printfBlue("[exit_proc] Process group leader %d exiting, signaling remaining processes\n",
+                           p->_pid);
                 for (uint i = 0; i < num_process; i++)
                 {
                     Pcb &other = k_proc_pool[i];
@@ -1712,7 +1715,7 @@ namespace proc
         // 设置正常退出状态
         p->_xstate = state << 8; // 存储退出状态（通常高字节存状态）
 
-        printf("[do_exit] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
+        printfBlue("[do_exit] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
 
         // 调用底层退出逻辑
         exit_proc(p);
@@ -1732,8 +1735,8 @@ namespace proc
             p->_xstate |= 0x80; // 第8位设置core dump标志
         }
 
-        printf("[do_signal_exit] proc %s pid %d killed by signal %d (coredump=%s)\n",
-               p->_name, p->_pid, signal_num, coredump ? "yes" : "no");
+        printfBlue("[do_signal_exit] proc %s pid %d killed by signal %d (coredump=%s)\n",
+                   p->_name, p->_pid, signal_num, coredump ? "yes" : "no");
 
         // 调用底层退出逻辑
         exit_proc(p);
@@ -1764,7 +1767,8 @@ namespace proc
     void ProcessManager::exit(int state)
     {
         Pcb *p = get_cur_pcb();
-        printf("[exit] proc %s pid %d tid %d exiting with state %d\n", p->_name, p->_pid, p->_tid, state);
+        printfBlue("[exit] proc %s pid %d tid %d exiting with state %d\n",
+                   p->_name, p->_pid, p->_tid, state);
         do_exit(p, state);
     }
 

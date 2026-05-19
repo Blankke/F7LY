@@ -18,35 +18,47 @@
 #ifndef COLOR_PRINT
 #define COLOR_PRINT
 
-#define printfRed(format, ...) k_printer.print("\33[1;31m" format "\33[0m", ##__VA_ARGS__)
-#define printfGreen(format, ...) k_printer.print("\33[1;32m" format "\33[0m", ##__VA_ARGS__)
-#define printfBlue(format, ...) k_printer.print("\33[1;34m" format "\33[0m", ##__VA_ARGS__)
-#define printfCyan(format, ...) k_printer.print("\33[1;36m" format "\33[0m", ##__VA_ARGS__)
-#define printfYellow(format, ...) k_printer.print("\33[1;33m" format "\33[0m", ##__VA_ARGS__)
-#define printfWhite(format, ...) k_printer.print("\33[1;37m" format "\33[0m", ##__VA_ARGS__)
-#define printfMagenta(format, ...) k_printer.print("\33[1;35m" format "\33[0m", ##__VA_ARGS__)
+#define __PRINTF_WARN_COLOR(color, format, ...) \
+    do {                                        \
+        if (Printer::warn_group_enabled())      \
+            k_printer.print(color format "\33[0m", ##__VA_ARGS__); \
+    } while (0)
+
+#define __PRINTF_INFO_COLOR(color, format, ...) \
+    do {                                        \
+        if (Printer::info_group_enabled())      \
+            k_printer.print(color format "\33[0m", ##__VA_ARGS__); \
+    } while (0)
+
+#define printfRed(format, ...) __PRINTF_WARN_COLOR("\33[1;31m", format, ##__VA_ARGS__)
+#define printfGreen(format, ...) __PRINTF_INFO_COLOR("\33[1;32m", format, ##__VA_ARGS__)
+#define printfBlue(format, ...) __PRINTF_INFO_COLOR("\33[1;34m", format, ##__VA_ARGS__)
+#define printfCyan(format, ...) __PRINTF_INFO_COLOR("\33[1;36m", format, ##__VA_ARGS__)
+#define printfYellow(format, ...) __PRINTF_WARN_COLOR("\33[1;33m", format, ##__VA_ARGS__)
+#define printfWhite(format, ...) __PRINTF_INFO_COLOR("\33[1;37m", format, ##__VA_ARGS__)
+#define printfMagenta(format, ...) __PRINTF_INFO_COLOR("\33[1;35m", format, ##__VA_ARGS__)
 
 // 颜色太少了，我给你加几个
-#define printfBlack(format, ...) k_printer.print("\33[1;30m" format "\33[0m", ##__VA_ARGS__)
-#define printfOrange(format, ...) k_printer.print("\33[1;38;5;208m" format "\33[0m", ##__VA_ARGS__)
-#define printfPurple(format, ...) k_printer.print("\33[1;38;5;129m" format "\33[0m", ##__VA_ARGS__)
-#define printfPink(format, ...) k_printer.print("\33[1;38;5;205m" format "\33[0m", ##__VA_ARGS__)
-#define printfBrown(format, ...) k_printer.print("\33[1;38;5;94m" format "\33[0m", ##__VA_ARGS__)
-#define printfGray(format, ...) k_printer.print("\33[1;90m" format "\33[0m", ##__VA_ARGS__)
-#define printfLightRed(format, ...) k_printer.print("\33[0;91m" format "\33[0m", ##__VA_ARGS__)
-#define printfLightGreen(format, ...) k_printer.print("\33[0;92m" format "\33[0m", ##__VA_ARGS__)
-#define printfLightBlue(format, ...) k_printer.print("\33[0;94m" format "\33[0m", ##__VA_ARGS__)
-#define printfLightCyan(format, ...) k_printer.print("\33[0;96m" format "\33[0m", ##__VA_ARGS__)
-#define printfLightYellow(format, ...) k_printer.print("\33[0;93m" format "\33[0m", ##__VA_ARGS__)
-#define printfLightMagenta(format, ...) k_printer.print("\33[0;95m" format "\33[0m", ##__VA_ARGS__)
+#define printfBlack(format, ...) __PRINTF_INFO_COLOR("\33[1;30m", format, ##__VA_ARGS__)
+#define printfOrange(format, ...) __PRINTF_WARN_COLOR("\33[1;38;5;208m", format, ##__VA_ARGS__)
+#define printfPurple(format, ...) __PRINTF_INFO_COLOR("\33[1;38;5;129m", format, ##__VA_ARGS__)
+#define printfPink(format, ...) __PRINTF_WARN_COLOR("\33[1;38;5;205m", format, ##__VA_ARGS__)
+#define printfBrown(format, ...) __PRINTF_WARN_COLOR("\33[1;38;5;94m", format, ##__VA_ARGS__)
+#define printfGray(format, ...) __PRINTF_INFO_COLOR("\33[1;90m", format, ##__VA_ARGS__)
+#define printfLightRed(format, ...) __PRINTF_WARN_COLOR("\33[0;91m", format, ##__VA_ARGS__)
+#define printfLightGreen(format, ...) __PRINTF_INFO_COLOR("\33[0;92m", format, ##__VA_ARGS__)
+#define printfLightBlue(format, ...) __PRINTF_INFO_COLOR("\33[0;94m", format, ##__VA_ARGS__)
+#define printfLightCyan(format, ...) __PRINTF_INFO_COLOR("\33[0;96m", format, ##__VA_ARGS__)
+#define printfLightYellow(format, ...) __PRINTF_WARN_COLOR("\33[0;93m", format, ##__VA_ARGS__)
+#define printfLightMagenta(format, ...) __PRINTF_INFO_COLOR("\33[0;95m", format, ##__VA_ARGS__)
 
 // Background colors
-#define printfBgRed(format, ...) k_printer.print("\33[1;41m" format "\33[0m", ##__VA_ARGS__)
-#define printfBgGreen(format, ...) k_printer.print("\33[1;42m" format "\33[0m", ##__VA_ARGS__)
-#define printfBgBlue(format, ...) k_printer.print("\33[1;44m" format "\33[0m", ##__VA_ARGS__)
-#define printfBgYellow(format, ...) k_printer.print("\33[1;43m" format "\33[0m", ##__VA_ARGS__)
-#define printfBgCyan(format, ...) k_printer.print("\33[1;46m" format "\33[0m", ##__VA_ARGS__)
-#define printfBgMagenta(format, ...) k_printer.print("\33[1;45m" format "\33[0m", ##__VA_ARGS__)
+#define printfBgRed(format, ...) __PRINTF_WARN_COLOR("\33[1;41m", format, ##__VA_ARGS__)
+#define printfBgGreen(format, ...) __PRINTF_INFO_COLOR("\33[1;42m", format, ##__VA_ARGS__)
+#define printfBgBlue(format, ...) __PRINTF_INFO_COLOR("\33[1;44m", format, ##__VA_ARGS__)
+#define printfBgYellow(format, ...) __PRINTF_WARN_COLOR("\33[1;43m", format, ##__VA_ARGS__)
+#define printfBgCyan(format, ...) __PRINTF_INFO_COLOR("\33[1;46m", format, ##__VA_ARGS__)
+#define printfBgMagenta(format, ...) __PRINTF_INFO_COLOR("\33[1;45m", format, ##__VA_ARGS__)
 // Info print macros
 #define Info(fmt, ...) printf("[INFO] => " fmt "", ##__VA_ARGS__)
 #define Info_R(fmt, ...) printfRed("[INFO] => " fmt "", ##__VA_ARGS__)
@@ -93,6 +105,12 @@ public:
 	static void enable_printf();
 	static void disable_printf();
 	static bool is_printf_disabled();
+	static void enable_warn_group();
+	static void disable_warn_group();
+	static bool warn_group_enabled();
+	static void enable_info_group();
+	static void disable_info_group();
+	static bool info_group_enabled();
 
 	void print(const char *fmt, ...);
 	int snprint(char *buffer, size_t size, const char *fmt, ...);
