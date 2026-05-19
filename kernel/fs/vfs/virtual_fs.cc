@@ -522,7 +522,7 @@ namespace fs
         if (f->is_virtual)
         {
             // 如果是虚拟文件，使用虚拟文件系统的fstat处理
-            printf("[VirtualFileSystem] ::fstat: calling vfile_fstat for virtual file: %s\n", f->_path_name.c_str());
+            printfBlue("[VirtualFileSystem] ::fstat: calling vfile_fstat for virtual file: %s\n", f->_path_name.c_str());
             int result = vfile_fstat(f, st);
             if (result < 0)
             {
@@ -531,7 +531,7 @@ namespace fs
             else
             {
                 printfGreen("[VirtualFileSystem] ::fstat: vfile_fstat succeeded for %s\n", f->_path_name.c_str());
-                printf("[SyscallHandler::sys_fstat] Kstat: ino=%p, size=%p, mode=0%o, nlink=%u, uid=%u, gid=%u, rdev=%p, blksize=%u, blocks=%p\n",
+                printfBlue("[SyscallHandler::sys_fstat] Kstat: ino=%p, size=%p, mode=0%o, nlink=%u, uid=%u, gid=%u, rdev=%p, blksize=%u, blocks=%p\n",
                        st->ino, st->size, st->mode, st->nlink, st->uid, st->gid, st->rdev, st->blksize, st->blocks);
             }
             return result;

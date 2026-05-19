@@ -34,29 +34,80 @@ size_t strlen(const char *s) noexcept(true)
         s++, len++;
     return len;
 }
+
+static int decode_wait_status(int raw_status, bool &exited_normally)
+{
+    exited_normally = (raw_status & 0x7f) == 0;
+    if (exited_normally)
+    {
+        return (raw_status >> 8) & 0xff;
+    }
+    return -(raw_status & 0x7f);
+}
+
+static int change_dir_checked(const char *path)
+{
+    int ret = chdir(path);
+    if (ret != 0)
+    {
+        printf("[FAIL] chdir(%s) 失败: %d\n", path, ret);
+    }
+    return ret;
+}
+
 int run_test(const char *path, char *argv[], char *envp[])
 {
+    char *default_argv[2] = {0};
+    if (argv == 0)
+    {
+        default_argv[0] = (char *)path;
+        argv = default_argv;
+    }
 
+    // printf("[RUN ] %s\n", path);
     int pid = fork();
     if (pid < 0)
     {
-        printf("fork failed");
+        printf("[FAIL] %s: fork 失败\n", path);
+        return -1;
     }
     else if (pid == 0)
     {
         if (execve(path, argv, envp) < 0)
         {
-            printf("execve failed\n");
+            printf("[FAIL] %s: execve 失败\n", path);
+            exit(127);
         }
-        exit(0);
+        exit(127);
     }
     else
     {
-        int child_exit_state = -100;
-        if (wait(&child_exit_state) < 0)
-            printf("wait fail\n");
+        int child_exit_state = -1;
+        if (waitpid(pid, &child_exit_state, 0) < 0)
+        {
+            // printf("[FAIL] %s: waitpid 失败\n", path);
+            return -1;
+        }
+
+        bool exited_normally = false;
+        int result = decode_wait_status(child_exit_state, exited_normally);
+        if (result == 0)
+        {
+            // printf("[PASS] %s (exit=0)\n", path);
+            return 0;
+        }
+
+        if (exited_normally)
+        {
+            printf("[FAIL] %s (exit=%d, raw=0x%x)\n", path, result, child_exit_state);
+        }
+        else
+        {
+            printf("[FAIL] %s (signal=%d, raw=0x%x)\n", path, -result, child_exit_state);
+        }
+        return result;
     }
-    return 0;
+    return -1;
 }
 
 void init_env(const char *path = musl_dir)
@@ -73,8 +124,14 @@ void init_env(const char *path = musl_dir)
 int basic_test(const char *path = musl_dir)
 {
     [[maybe_unused]] int pid;
-    // chdir(path);
-    // chdir("basic");
+    if (change_dir_checked(path) != 0)
+    {
+        return -1;
+    }
+    if (change_dir_checked("basic") != 0)
+    {
+        return -1;
+    }
     if (strcmp(path, musl_dir) == 0)
     {
         printf("#### OS COMP TEST GROUP START basic-musl ####\n");
@@ -255,7 +312,10 @@ int lmbench_test(const char *path = musl_dir)
 
 int ltp_test(bool is_musl)
 {
-    chdir(is_musl ? "/musl/ltp/testcases/bin" : "/glibc/ltp/testcases/bin");
+    if (change_dir_checked(is_musl ? "/musl/ltp/testcases/bin" : "/glibc/ltp/testcases/bin") != 0)
+    {
+        return -1;
+    }
     printf("#### OS COMP TEST GROUP START ltp-%s ####\n", is_musl ? "musl" : "glibc");
     char *bb_sh[8] = {0};
     char *envp[] = {
@@ -289,7 +349,10 @@ int ltp_test(bool is_musl)
         printf("RUN LTP CASE %s\n", ltp_testcases[i].name);
         bb_sh[0] = (char *)ltp_testcases[i].name;
         result = run_test(ltp_testcases[i].name, bb_sh, envp);
-        printf("FAIL LTP CASE %s: %d\n", ltp_testcases[i].name, result);
+        if (result != 0)
+        {
+            printf("FAIL LTP CASE %s: %d\n", ltp_testcases[i].name, result);
+        }
     }
     printf("#### OS COMP TEST GROUP END ltp-%s ####\n", is_musl ? "musl" : "glibc");
     return 0;

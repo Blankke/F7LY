@@ -113,45 +113,89 @@ struct mntfs devs[8];
 int idx = 0;
 
 /**
+ * 读取 FAT32 引导扇区并抽取挂载元数据。
+ * 这里只负责“能不能识别为 FAT32”以及核心参数解析，调用方再决定是否继续挂载。
+ */
+static int fat32_load_mount_info(uint32 dev, struct mntfs *mnt, int sync_global)
+{
+    if (mnt == nullptr) {
+        return -3;
+    }
+
+    struct buf *b = bread(dev, 0);
+    if (b == nullptr) {
+        return -3;
+    }
+
+    if (strncmp((char const *)(b->data + 82), "FAT32", 5) != 0) {
+        brelse(b);
+        return -1;
+    }
+
+    memset(mnt, 0, sizeof(*mnt));
+    memmove(&mnt->bpb.byts_per_sec, b->data + 11, 2);
+    mnt->bpb.sec_per_clus = *(b->data + 13);
+    mnt->bpb.rsvd_sec_cnt = *(uint16 *)(b->data + 14);
+    mnt->bpb.fat_cnt = *(b->data + 16);
+    mnt->bpb.hidd_sec = *(uint32 *)(b->data + 28);
+    mnt->bpb.tot_sec = *(uint32 *)(b->data + 32);
+    mnt->bpb.fat_sz = *(uint32 *)(b->data + 36);
+    mnt->bpb.root_clus = *(uint32 *)(b->data + 44);
+    mnt->first_data_sec = mnt->bpb.rsvd_sec_cnt + mnt->bpb.fat_cnt * mnt->bpb.fat_sz;
+    mnt->data_sec_cnt = mnt->bpb.tot_sec - mnt->first_data_sec;
+    mnt->data_clus_cnt = mnt->data_sec_cnt / mnt->bpb.sec_per_clus;
+    mnt->byts_per_clus = mnt->bpb.sec_per_clus * mnt->bpb.byts_per_sec;
+    brelse(b);
+
+    if (BSIZE != mnt->bpb.byts_per_sec) {
+        return -2;
+    }
+
+    if (sync_global) {
+        fat.dev = dev;
+        fat.first_data_sec = mnt->first_data_sec;
+        fat.data_sec_cnt = mnt->data_sec_cnt;
+        fat.data_clus_cnt = mnt->data_clus_cnt;
+        fat.byts_per_clus = mnt->byts_per_clus;
+        fat.bpb.byts_per_sec = mnt->bpb.byts_per_sec;
+        fat.bpb.sec_per_clus = mnt->bpb.sec_per_clus;
+        fat.bpb.rsvd_sec_cnt = mnt->bpb.rsvd_sec_cnt;
+        fat.bpb.fat_cnt = mnt->bpb.fat_cnt;
+        fat.bpb.hidd_sec = mnt->bpb.hidd_sec;
+        fat.bpb.tot_sec = mnt->bpb.tot_sec;
+        fat.bpb.fat_sz = mnt->bpb.fat_sz;
+        fat.bpb.root_clus = mnt->bpb.root_clus;
+    }
+
+    return 0;
+}
+
+int fat32_probe_device(uint32 dev)
+{
+    struct mntfs probe;
+    return fat32_load_mount_info(dev, &probe, 0);
+}
+
+/**
  * 读取FAT32的BIOS参数块（BPB）并初始化文件系统
  * @return  0       成功
  *          -1      失败
  */
 int fat32_init_internal(uint32 dev)
 {
-    fat.dev = dev;
-    printf("[fat32_init] Initializing FAT32 on device %u\n", dev);
-    // 读取引导扇区（第0个设备的第0个扇区）
-    struct buf *b = bread(fat.dev, 0);
-    
-    // 打印引导扇区前100字节，验证是否真正读取到数据
-    printf("[fat32_init] Boot sector first 16 bytes:");
-    for (int i = 0; i < 16; i++) {
-        printf(" %02x", (unsigned char)b->data[i]);
+    struct mntfs meta;
+    int ret = fat32_load_mount_info(dev, &meta, 1);
+    if (ret < 0) {
+        if (ret == -1) {
+            printfRed("[fat32] 设备 %u 不是 FAT32 卷，取消 FAT32 挂载\n", dev);
+        } else if (ret == -2) {
+            printfRed("[fat32] 设备 %u 的扇区大小 %u 与内核块大小 %u 不匹配\n",
+                      dev, meta.bpb.byts_per_sec, BSIZE);
+        } else {
+            printfRed("[fat32] 读取设备 %u 的引导扇区失败\n", dev);
+        }
+        return ret;
     }
-    printf("\n");
-    printf("[fat32_init] FAT32 signature at offset 82: %.5s\n", (char*)(b->data + 82));
-    
-    // 校验FAT32标识（引导扇区偏移82处应为"FAT32"）
-    if (strncmp((char const*)(b->data + 82), "FAT32", 5))
-        panic("not FAT32 volume");
-    
-    // 从引导扇区读取BPB参数（memmove避免K210的非对齐内存访问错误）
-    memmove(&fat.bpb.byts_per_sec, b->data + 11, 2);            
-    fat.bpb.sec_per_clus = *(b->data + 13);
-    fat.bpb.rsvd_sec_cnt = *(uint16 *)(b->data + 14);
-    fat.bpb.fat_cnt = *(b->data + 16);
-    fat.bpb.hidd_sec = *(uint32 *)(b->data + 28);
-    fat.bpb.tot_sec = *(uint32 *)(b->data + 32);
-    fat.bpb.fat_sz = *(uint32 *)(b->data + 36);
-    fat.bpb.root_clus = *(uint32 *)(b->data + 44);
-    
-    // 计算FAT32核心参数
-    fat.first_data_sec = fat.bpb.rsvd_sec_cnt + fat.bpb.fat_cnt * fat.bpb.fat_sz;
-    fat.data_sec_cnt = fat.bpb.tot_sec - fat.first_data_sec;
-    fat.data_clus_cnt = fat.data_sec_cnt / fat.bpb.sec_per_clus;
-    fat.byts_per_clus = fat.bpb.sec_per_clus * fat.bpb.byts_per_sec;
-    brelse(b); // 释放缓冲区
 
     #ifdef DEBUG
     printf("[FAT32 init]byts_per_sec: %d\n", fat.bpb.byts_per_sec);
@@ -161,10 +205,6 @@ int fat32_init_internal(uint32 dev)
     printf("[FAT32 init]fat_sz: %d\n", fat.bpb.fat_sz);
     printf("[FAT32 init]first_data_sec: %d\n", fat.first_data_sec);
     #endif
-
-    // 校验扇区大小是否与系统定义的BSIZE一致（必须相等）
-    if (BSIZE != fat.bpb.byts_per_sec)
-        panic("byts_per_sec != BSIZE");
     
     // 初始化目录项缓存锁
     ecache.lock.init("ecache");
@@ -176,6 +216,8 @@ int fat32_init_internal(uint32 dev)
     root.valid = 1;                              // 有效标记
     root.prev = &root;                           // 双向链表自环（缓存链表）
     root.next = &root;
+    root.filename[0] = '/';
+    root.filename[1] = '\0';
     
     // 初始化目录项缓存：将所有缓存项加入根目录的双向链表
     for(struct fat32_entry *de = ecache.entries; de < ecache.entries + ENTRY_CACHE_NUM; de++) {
@@ -1273,50 +1315,49 @@ struct fat32_entry *enameparent(char *path, char *name)
  */
 int mount(struct fat32_entry *dev, struct fat32_entry *mnt)
 {
-    // 找到空闲的挂载项
-    while (devs[idx].vaild != 0){
-        idx++;
-        idx = idx % 8;
+    int slot = -1;
+    for (int i = 0; i < 8; i++) {
+        int candidate = (idx + i) % 8;
+        if (devs[candidate].vaild == 0) {
+            slot = candidate;
+            break;
+        }
+    }
+    if (slot < 0) {
+        printfRed("[fat32] 没有可用的挂载槽位\n");
+        return -1;
     }
 
-    // 读取设备的引导扇区，校验FAT32
-    struct buf *b = bread(dev->dev, 0);
-    if (strncmp((char const *)(b->data + 82), "FAT32", 5))
-        panic("not FAT32 volume");
-    // 读取BPB参数
-    memmove(&devs[idx].bpb.byts_per_sec, b->data + 11, 2); 
-    devs[idx].bpb.sec_per_clus = *(b->data + 13);
-    devs[idx].bpb.rsvd_sec_cnt = *(uint16 *)(b->data + 14);
-    devs[idx].bpb.fat_cnt = *(b->data + 16);
-    devs[idx].bpb.hidd_sec = *(uint32 *)(b->data + 28);
-    devs[idx].bpb.tot_sec = *(uint32 *)(b->data + 32);
-    devs[idx].bpb.fat_sz = *(uint32 *)(b->data + 36);
-    devs[idx].bpb.root_clus = *(uint32 *)(b->data + 44);
-    // 计算核心参数
-    devs[idx].first_data_sec = fat.bpb.rsvd_sec_cnt + fat.bpb.fat_cnt * fat.bpb.fat_sz;
-    devs[idx].data_sec_cnt = fat.bpb.tot_sec - fat.first_data_sec;
-    devs[idx].data_clus_cnt = fat.data_sec_cnt / fat.bpb.sec_per_clus;
-    devs[idx].byts_per_clus = fat.bpb.sec_per_clus * fat.bpb.byts_per_sec;
-    brelse(b);
+    int ret = fat32_load_mount_info(dev->dev, &devs[slot], 0);
+    if (ret < 0) {
+        if (ret == -1) {
+            printfRed("[fat32] 设备 %u 不是 FAT32 卷，挂载失败\n", dev->dev);
+        } else if (ret == -2) {
+            printfRed("[fat32] 设备 %u 的扇区大小 %u 与内核块大小 %u 不匹配\n",
+                      dev->dev, devs[slot].bpb.byts_per_sec, BSIZE);
+        } else {
+            printfRed("[fat32] 读取设备 %u 的引导扇区失败\n", dev->dev);
+        }
+        return ret;
+    }
 
-    // 校验扇区大小
-    if (BSIZE != devs[idx].bpb.byts_per_sec)
-        panic("byts_per_sec != BSIZE");
     ecache.lock.init("ecache");
     // 初始化挂载设备的根目录
-    memset(&devs[idx].root, 0, sizeof(devs[idx].root));
-    root.lock.init("entry", "entry");
-    devs[idx].root.attribute = (ATTR_DIRECTORY | ATTR_SYSTEM);
-    devs[idx].root.first_clus = devs[idx].root.cur_clus = devs[idx].bpb.root_clus;
-    devs[idx].root.valid = 1;
-    devs[idx].root.prev = &devs[idx].root;
-    devs[idx].root.next = &devs[idx].root;
-    devs[idx].root.filename[0] = '/';
-    devs[idx].root.filename[1] = '\0';
+    memset(&devs[slot].root, 0, sizeof(devs[slot].root));
+    devs[slot].root.lock.init("entry", "entry");
+    devs[slot].root.attribute = (ATTR_DIRECTORY | ATTR_SYSTEM);
+    devs[slot].root.first_clus = devs[slot].root.cur_clus = devs[slot].bpb.root_clus;
+    devs[slot].root.valid = 1;
+    devs[slot].root.prev = &devs[slot].root;
+    devs[slot].root.next = &devs[slot].root;
+    devs[slot].root.filename[0] = '/';
+    devs[slot].root.filename[1] = '\0';
     // 标记为已挂载
-    devs[idx].mount_mode = 1;
+    devs[slot].mount_mode = 1;
+    devs[slot].vaild = 1;
     mnt->mount_flag = 1;
-    mnt->dev = idx;
+    mnt->dev = slot;
+    idx = (slot + 1) % 8;
     return 0;
 }
 

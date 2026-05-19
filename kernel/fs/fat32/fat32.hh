@@ -79,6 +79,7 @@ struct mntfs
 #include "fs/vfs/fs.hh"
 
 int             fat32_init_internal(uint32 dev);
+int             fat32_probe_device(uint32 dev);
 struct fat32_entry*  dirlookup(struct fat32_entry *entry, char *filename, uint *poff);
 char*           formatname(char *name);
 void            emake(struct fat32_entry *dp, struct fat32_entry *ep, uint off);

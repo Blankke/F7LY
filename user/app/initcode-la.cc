@@ -1,11 +1,11 @@
 #include "user.hh"
 
+
 extern "C"
 {
-    int main()
+    __attribute__((section(".text.startup"))) int main()
     {
-        chdir("/fat32");
-        basic_glibc_test();
+        basic_musl_test();
         shutdown();
         return 0;
     }

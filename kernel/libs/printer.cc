@@ -11,7 +11,9 @@ Printer k_printer;
 namespace
 {
 
-bool disable_printf_flag = true;
+bool disable_printf_flag = false;
+bool warn_group_flag = false;
+bool info_group_flag = false;
 
 struct ConsoleWriter
 {
@@ -187,14 +189,16 @@ void vformat_to_writer(Writer &writer, const char *fmt, va_list ap)
 	}
 }
 
-void log_with_prefix(const char *tag, const char *f, uint l, const char *info, va_list ap)
+void log_with_prefix(const char *color, bool enabled, const char *tag, const char *f, uint l,
+					 const char *info, va_list ap)
 {
-	if (disable_printf_flag || info == nullptr) return;
+	if (disable_printf_flag || info == nullptr || !enabled) return;
 
 	const int need_lock = k_printer.locking_enabled();
 	if (need_lock) k_printer.acquire_lock();
 
 	ConsoleWriter writer { k_printer.get_console() };
+	write_string(writer, color);
 	write_string(writer, "[");
 	write_string(writer, tag);
 	write_string(writer, "] ");
@@ -203,6 +207,7 @@ void log_with_prefix(const char *tag, const char *f, uint l, const char *info, v
 	write_unsigned(writer, l, 10, false, 0);
 	write_string(writer, ": ");
 	vformat_to_writer(writer, info, ap);
+	write_string(writer, "\33[0m");
 	writer.putc('\n');
 
 	if (need_lock) k_printer.release_lock();
@@ -211,12 +216,14 @@ void log_with_prefix(const char *tag, const char *f, uint l, const char *info, v
 [[noreturn]] void panic_impl(const char *f, uint l, const char *info, va_list ap)
 {
 	ConsoleWriter writer { k_printer.get_console() };
+	write_string(writer, "\33[1;31m");
 	write_string(writer, "panic: ");
 	write_string(writer, f);
 	writer.putc(':');
 	write_unsigned(writer, l, 10, false, 0);
 	write_string(writer, ": ");
 	if (info) vformat_to_writer(writer, info, ap);
+	write_string(writer, "\33[0m");
 	writer.putc('\n');
 
 	k_printer.set_panicked(); // freeze uart output from other CPUs
@@ -263,6 +270,36 @@ void Printer::disable_printf()
 bool Printer::is_printf_disabled()
 {
 	return disable_printf_flag;
+}
+
+void Printer::enable_warn_group()
+{
+	warn_group_flag = true;
+}
+
+void Printer::disable_warn_group()
+{
+	warn_group_flag = false;
+}
+
+bool Printer::warn_group_enabled()
+{
+	return warn_group_flag;
+}
+
+void Printer::enable_info_group()
+{
+	info_group_flag = true;
+}
+
+void Printer::disable_info_group()
+{
+	info_group_flag = false;
+}
+
+bool Printer::info_group_enabled()
+{
+	return info_group_flag;
 }
 
 void Printer::printint(int xx, int base, int sign)
@@ -343,7 +380,7 @@ void Printer::error(const char *f, uint l, const char *info, ...)
 
 void Printer::error_va(const char *f, uint l, const char *info, va_list ap)
 {
-	log_with_prefix("error", f, l, info, ap);
+	log_with_prefix("\33[1;31m", warn_group_flag, "error", f, l, info, ap);
 }
 
 void Printer::warn(const char *f, uint l, const char *info, ...)
@@ -356,7 +393,7 @@ void Printer::warn(const char *f, uint l, const char *info, ...)
 
 void Printer::warn_va(const char *f, uint l, const char *info, va_list ap)
 {
-	log_with_prefix("warn", f, l, info, ap);
+	log_with_prefix("\33[1;33m", warn_group_flag, "warn", f, l, info, ap);
 }
 
 void Printer::info(const char *f, uint l, const char *info, ...)
@@ -369,7 +406,7 @@ void Printer::info(const char *f, uint l, const char *info, ...)
 
 void Printer::info_va(const char *f, uint l, const char *info, va_list ap)
 {
-	log_with_prefix("info", f, l, info, ap);
+	log_with_prefix("\33[1;34m", info_group_flag, "info", f, l, info, ap);
 }
 
 void Printer::trace(const char *f, uint l, const char *info, ...)
@@ -383,7 +420,7 @@ void Printer::trace(const char *f, uint l, const char *info, ...)
 void Printer::trace_va(const char *f, uint l, const char *info, va_list ap)
 {
 	if (_trace_flag == 0) return;
-	log_with_prefix("trace", f, l, info, ap);
+	log_with_prefix("\33[1;32m", info_group_flag, "trace", f, l, info, ap);
 }
 
 void Printer::assrt(const char *f, uint l, const char *expr, const char *detail, ...)
@@ -416,5 +453,5 @@ void Printer::assrt(const char *f, uint l, const char *expr, const char *detail,
 #endif
 
 	k_printer.set_locking(true);
-	panic(f, l, "assert fail for above reason.");
+	Printer::k_panic(f, l, "assert fail for above reason.");
 }
