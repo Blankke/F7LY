@@ -34,6 +34,26 @@ int mmap_handler(uint64 va, int cause);
 // 创建一个静态对象
 trap_manager trap_mgr;
 
+namespace
+{
+  // LoongArch 异常信息拆分：一级编码在 ESTAT[21:16]，二级编码在 ESTAT[30:22]。
+  // 之前把 ecode=8 直接当成缺页，会把 ADEM（访存地址错误）误送进 mmap 懒分配路径。
+  inline uint32 loongarch_exception_code(uint32 estat)
+  {
+    return (estat & CSR_ESTAT_ECODE) >> 16;
+  }
+
+  inline uint32 loongarch_exception_subcode(uint32 estat)
+  {
+    return (estat >> 22) & 0x1ffU;
+  }
+
+  inline bool is_loongarch_page_fault_code(uint32 ecode)
+  {
+    return ecode >= 0x1 && ecode <= 0x7;
+  }
+}
+
 // 初始化锁
 void trap_manager::init()
 {
@@ -180,7 +200,11 @@ void trap_manager::usertrap()
   // save user program counter.
   p->_trapframe->era = r_csr_era();
 
-  if (((r_csr_estat() & CSR_ESTAT_ECODE) >> 16) == 0xb)
+  uint32 estat = r_csr_estat();
+  uint32 ecode = loongarch_exception_code(estat);
+  uint32 esubcode = loongarch_exception_subcode(estat);
+
+  if (ecode == 0xb)
   {
     // system call
 
@@ -198,19 +222,76 @@ void trap_manager::usertrap()
     syscall::k_syscall_handler.invoke_syscaller();
   }
 
-  else if (((r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x1 || (r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x2)
-  ||(r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x8  ||(r_csr_estat() & CSR_ESTAT_ECODE) >> 16 == 0x3)
+  else if (is_loongarch_page_fault_code(ecode))
   {
     // printfRed("p->_trapframe->sp: %p,fault_va: %p,p->sz:%p\n", p->_trapframe->sp, r_csr_badv(), p->_sz);
-    if (mmap_handler(r_csr_badv(), (r_csr_estat() & CSR_ESTAT_ECODE) >> 16) != 0)
+    mem::Pte fault_pte = p->get_pagetable()->walk(r_csr_badv(), false);
+    if (fault_pte.is_null())
+    {
+      printfRed("usertrap(): badv=%p has null pte slot\n", r_csr_badv());
+    }
+    else
+    {
+      printfYellow("usertrap(): badv=%p pte=%p valid=%d present=%d user=%d read=%d write=%d exec=%d plv=%d\n",
+                   r_csr_badv(),
+                   (void *)fault_pte.get_data(),
+                   (int)fault_pte.is_valid(),
+                   (int)fault_pte.is_present(),
+                   (int)!fault_pte.is_super_plv(),
+                   (int)fault_pte.is_readable(),
+                   (int)fault_pte.is_writable(),
+                   (int)fault_pte.is_executable(),
+                   (int)fault_pte.plv());
+      printfYellow("usertrap(): regs ra=%p sp=%p fp=%p s0=%p s1=%p s2=%p s3=%p s4=%p t0=%p t1=%p a0=%p a1=%p a2=%p\n",
+                   (void *)p->_trapframe->ra,
+                   (void *)p->_trapframe->sp,
+                   (void *)p->_trapframe->fp,
+                   (void *)p->_trapframe->s0,
+                   (void *)p->_trapframe->s1,
+                   (void *)p->_trapframe->s2,
+                   (void *)p->_trapframe->s3,
+                   (void *)p->_trapframe->s4,
+                   (void *)p->_trapframe->t0,
+                   (void *)p->_trapframe->t1,
+                   (void *)p->_trapframe->a0,
+                   (void *)p->_trapframe->a1,
+                   (void *)p->_trapframe->a2);
+    }
+    if (mmap_handler(r_csr_badv(), ecode) != 0)
     {
       // 缺页异常处理失败，发送SIGSEGV信号
       printfRed("usertrap(): page fault at %p, sending SIGSEGV to pid=%d\n", r_csr_badv(), p->_pid);
       p->add_signal(proc::ipc::signal::SIGSEGV);
 
-      printf("usertrap(): unexpected trapcause 0x%x pid=%d\n", r_csr_estat(), p->_pid);
+      printf("usertrap(): unexpected trapcause 0x%x pid=%d ecode=%u esubcode=%u\n",
+             estat, p->_pid, ecode, esubcode);
       printf("            era=%p badi=%x\n", r_csr_era(), r_csr_badi());
     }
+  }
+  else if (ecode == 0x8 || ecode == 0x9)
+  {
+    // LoongArch 手册：
+    //   ecode=0x8, esubcode=0 => ADEF（取指地址错误）
+    //   ecode=0x8, esubcode=1 => ADEM（访存地址错误）
+    //   ecode=0x9            => ALE（地址对齐错误）
+    // 这些都不是“缺页可补”的场景，直接按用户态同步地址错误送信号。
+    printfRed("usertrap(): address error pid=%d ecode=%u esubcode=%u era=%p badv=%p badi=%x\n",
+              p->_pid, ecode, esubcode, r_csr_era(), r_csr_badv(), r_csr_badi());
+    printfYellow("usertrap(): address-error regs ra=%p sp=%p fp=%p s0=%p s1=%p s2=%p s3=%p s4=%p t0=%p t1=%p a0=%p a1=%p a2=%p\n",
+                 (void *)p->_trapframe->ra,
+                 (void *)p->_trapframe->sp,
+                 (void *)p->_trapframe->fp,
+                 (void *)p->_trapframe->s0,
+                 (void *)p->_trapframe->s1,
+                 (void *)p->_trapframe->s2,
+                 (void *)p->_trapframe->s3,
+                 (void *)p->_trapframe->s4,
+                 (void *)p->_trapframe->t0,
+                 (void *)p->_trapframe->t1,
+                 (void *)p->_trapframe->a0,
+                 (void *)p->_trapframe->a1,
+                 (void *)p->_trapframe->a2);
+    p->add_signal(proc::ipc::signal::SIGSEGV);
   }
   else if ((which_dev = devintr()) != 0)
   {

@@ -59,4 +59,14 @@ SECTIONS
 
     . = ALIGN(8);
     PROVIDE(end = .);
+
+    /*
+     * LoongArch 的内核镜像同样需要在生成 raw binary 前丢弃 build-id，
+     * 否则 objcopy 会尝试保留这个 NOTE 段并在高地址布局下报 file truncated。
+     * 这里和 RISC-V 保持一致，确保 make build/run l 的产物链稳定。
+     */
+    /DISCARD/ : {
+        *(.note.gnu.build-id)
+        *(.comment)
+    }
 }

@@ -138,8 +138,10 @@ endif
 
 ifeq ($(ARCH),riscv)
   INITCODE_SRC := user/app/initcode-rv.cc
+  INITCODE_LINK_SCRIPT := user/user-riscv.ld
 else ifeq ($(ARCH),loongarch)
   INITCODE_SRC := user/app/initcode-la.cc
+  INITCODE_LINK_SCRIPT := user/user-loongarch.ld
 endif
 INITCODE_OBJ := build/$(OUTPUT_PREFIX)/initcode.o
 INITCODE_ELF := build/$(OUTPUT_PREFIX)/initcode.elf
@@ -169,9 +171,9 @@ USER_TEST_OBJ := build/$(OUTPUT_PREFIX)/user_test.o
 
 INITCODE_CFLAGS := -Wall -O -fno-builtin -fno-exceptions -fno-rtti -fno-stack-protector -nostdlib -ffreestanding $(ARCH_CFLAGS) -Iuser/deps -Iuser/syscall_lib -Iuser/syscall_lib/arch/$(ARCH) -Ikernel/sys -Ikernel
 ifeq ($(ARCH),riscv)
-INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dynamic-linker,-T,user/user-riscv.ld
+INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dynamic-linker,-T,$(INITCODE_LINK_SCRIPT)
 else ifeq ($(ARCH),loongarch)
-INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dynamic-linker,-T,user/user-loongarch.ld
+INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dynamic-linker,-T,$(INITCODE_LINK_SCRIPT)
 endif
 .PHONY: all clean dirs build riscv loongarch run debug initcode build-la
 
@@ -222,7 +224,7 @@ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.s
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
-$(KERNEL_ELF): $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
+$(KERNEL_ELF): $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a $(LINK_SCRIPT)
 	$(LD) $(LDFLAGS) -o $@ $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
 	$(SIZE) $@
 # 	$(OBJDUMP) -D $@ > kernel.asm
@@ -234,7 +236,7 @@ $(KERNEL_ELF): $(INITCODE_BIN)
 
 
 $(KERNEL_BIN): $(KERNEL_ELF) 
-	$(OBJCOPY) -O binary $< $@
+	$(OBJCOPY) -R .note.gnu.build-id -R .comment -O binary $< $@
 
 export BUILDPATH := $(BUILD_DIR)
 $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a:
@@ -349,8 +351,8 @@ $(USER_TEST_OBJ): $(USER_TEST_SRC)
 	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
 
 # 链接生成 initcode.elf
-$(INITCODE_ELF): $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(USER_TEST_OBJ)
-	$(LD) $(INITCODE_LDFLAGS) -o $@ $^
+$(INITCODE_ELF): $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(USER_TEST_OBJ) $(INITCODE_LINK_SCRIPT)
+	$(LD) $(INITCODE_LDFLAGS) -o $@ $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(USER_TEST_OBJ)
 
 ifeq ($(ARCH),riscv)
   OBJDUMP_INITCODE := riscv64-unknown-elf-objdump -D -b binary -m riscv:rv64 -EL
@@ -360,7 +362,7 @@ endif
 
 # 生成二进制 initcode 文件 + 反汇编
 $(INITCODE_BIN): $(INITCODE_ELF)
-	$(OBJCOPY) -S -O binary $< $@
+	$(OBJCOPY) -S -R .note.gnu.build-id -R .note.GNU-stack -R .comment -O binary $< $@
 	# $(OBJDUMP_INITCODE) $@ > user/disasm_initcode.asm
 
 
