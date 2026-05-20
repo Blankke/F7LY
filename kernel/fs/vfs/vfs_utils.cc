@@ -1250,16 +1250,6 @@ uint vfs_read_file(const char *path, uint64 buffer_addr, size_t offset, size_t s
 
 int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
 {
-    const bool trace_busybox_du =
-        file != nullptr &&
-        (file->_path_name.find("ltp/testcases/bin") != eastl::string::npos ||
-         file->_path_name.find("datafiles") != eastl::string::npos);
-    if (trace_busybox_du)
-    {
-        printf("[du-getdents] enter path=%s count=%u file_ptr=%ld next_off=%lu\n",
-               file->_path_name.c_str(), count, file->_file_ptr, file->lwext4_dir_struct.next_off);
-    }
-
     if (file && file->is_virtual && file->_attrs.filetype == fs::FileTypes::FT_DIRECT)
     {
         eastl::vector<eastl::string> entries;
@@ -1469,12 +1459,6 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
         }
 
         memcpy(d->d_name, name, copy_len + 1);
-        if (trace_busybox_du)
-        {
-            printf("[du-getdents] entry path=%s name=%s ino=%u type=%u reclen=%u next_off=%lu\n",
-                   file->_path_name.c_str(), name, rentry->inode, rentry->inode_type, reclen,
-                   file->lwext4_dir_struct.next_off);
-        }
 
         if (rentry->inode_type == EXT4_DE_DIR)
         {
@@ -1501,11 +1485,6 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
         d = (struct linux_dirent64 *)((char *)d + d->d_reclen);
     }
 
-    if (trace_busybox_du)
-    {
-        printf("[du-getdents] leave path=%s totlen=%d next_off=%lu\n",
-               file->_path_name.c_str(), totlen, file->lwext4_dir_struct.next_off);
-    }
     return totlen;
 }
 

@@ -4,10 +4,8 @@ extern "C"
 {
     __attribute__((section(".text.startup"))) int main()
     {
-        userdebug3();
-        init_env("/glibc/");
-        char *du_args[] = {(char *)"busybox", (char *)"du", 0};
-        run_test("busybox", du_args, 0);
+        userdebug4();
+        regression_suite_4d1444_riscv();
         shutdown();
         return 0;
     }
