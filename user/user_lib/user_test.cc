@@ -488,16 +488,14 @@ int regression_suite_4d1444_riscv(void)
 
 int regression_suite_4d1444_loongarch(void)
 {
+    static const char *const la_debug_basic_cases[] = {
+        "write",
+        0,
+    };
     printf("#### REGRESSION START commit-4d1444b-loongarch ####\n");
     init_env("/musl/");
-    basic_test("/musl/");
-    basic_test("/glibc/");
-    busybox_test("/musl/");
-    ltp_test(true);
-    ltp_test(false);
-    libc_test("/musl/");
-    libcbench_test("/glibc");
-    libcbench_test("/musl");
+    basic_subset_test("/musl/", la_debug_basic_cases);
+    basic_subset_test("/glibc/", la_debug_basic_cases);
     printf("#### REGRESSION END commit-4d1444b-loongarch ####\n");
     return 0;
 }

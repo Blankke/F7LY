@@ -69,6 +69,24 @@ namespace proc
 #endif
         constexpr uint32 k_max_reasonable_file_refcnt = num_process * max_open_files;
 
+        inline uint64 align_up_pow2(uint64 value, uint64 alignment)
+        {
+            if (alignment == 0)
+            {
+                return value;
+            }
+            return (value + alignment - 1) & ~(alignment - 1);
+        }
+
+        inline uint64 align_down_pow2(uint64 value, uint64 alignment)
+        {
+            if (alignment == 0)
+            {
+                return value;
+            }
+            return value & ~(alignment - 1);
+        }
+
         inline bool is_kernel_mapped_file_range(uint64 addr, uint64 size)
         {
             if (addr < k_min_kernel_file_ptr || size == 0)
@@ -3184,6 +3202,20 @@ namespace proc
             }
         }
 
+        // LoongArch 的 TLB refill 入口假定目标虚拟地址的页表层级已经存在。
+        // mmap 仅记录 VMA、把叶子页留给后续缺页惰性分配时，如果这里完全不预建页表层级，
+        // 首次访问高地址匿名/文件映射时会直接沿着空层级走出诡异的 ADEM。
+        // 这里仅分配页表层级和最终叶子槽位，不提前建立叶子 PTE，因此不会破坏 lazy allocation。
+        for (uint64 va = map_addr; va < map_addr + aligned_length; va += PGSIZE)
+        {
+            mem::Pte pte_slot = p->get_pagetable()->walk(va, true);
+            if (pte_slot.is_null())
+            {
+                printfRed("[mmap] Failed to precreate page-table hierarchy for va=%p\n", (void *)va);
+                return fail_mmap(ENOMEM);
+            }
+        }
+
         // 初始化VMA
         struct vma *vm = &p->get_vma()->_vm[vma_idx];
         vm->used = 1;
@@ -4051,6 +4083,7 @@ namespace proc
         elf::elfhdr interp_elf;
         uint64 interp_base = 0;
         uint64 highest_addr = 0; // 记录最高地址，用于堆初始化
+        uint64 user_page_granule = PGSIZE; // 记录用户态 ABI 期待的页粒度，供 auxv/动态链接器使用
         // ========== 第一阶段：路径解析和文件查找 ==========
 
         // 构建绝对路径
@@ -4297,6 +4330,11 @@ namespace proc
                 if (ph.type != elf::elfEnum::ELF_PROG_LOAD)
                     continue;
 
+                if (ph.align > user_page_granule)
+                {
+                    user_page_granule = ph.align;
+                }
+
                 // 验证程序段的合法性
                 if (ph.memsz < ph.filesz)
                 {
@@ -4333,9 +4371,32 @@ namespace proc
 #endif
                 // printfRed("execve: loading segment %d, type: %d, startva: %p, endva: %p, memsz: %p, filesz: %p, flags: %d\n", i, ph.type, (void *)ph.vaddr, (void *)(ph.vaddr + ph.memsz), (void *)ph.memsz, (void *)ph.filesz, ph.flags);
 
-                // 为当前段分配虚拟内存空间，从段的虚拟地址开始
-                uint64 segment_start = PGROUNDDOWN(ph.vaddr);
-                uint64 segment_end = PGROUNDUP(ph.vaddr + ph.memsz);
+                // 为当前段分配虚拟内存空间。LoongArch 用户态镜像存在 16K 对齐的 LOAD 段，
+                // 这里必须尊重 ELF 自带的 p_align，不能强行退化成 4K。
+                uint64 segment_align = ph.align;
+                if (segment_align < PGSIZE)
+                {
+                    segment_align = PGSIZE;
+                }
+                uint64 segment_start = align_down_pow2(ph.vaddr, segment_align);
+                uint64 segment_end = align_up_pow2(ph.vaddr + ph.memsz, segment_align);
+                uint64 segment_prefix = ph.vaddr - segment_start;
+                if (ph.off < segment_prefix)
+                {
+                    printfRed("execve: invalid ELF segment, file offset underflow\n");
+                    exec_error = -ENOEXEC;
+                    load_bad = true;
+                    break;
+                }
+                uint64 segment_file_offset = ph.off - segment_prefix;
+                uint64 segment_file_size = ph.filesz + segment_prefix;
+                if (segment_file_size < ph.filesz || segment_file_size > segment_end - segment_start)
+                {
+                    printfRed("execve: invalid ELF segment, file size overflow after align\n");
+                    exec_error = -ENOEXEC;
+                    load_bad = true;
+                    break;
+                }
                 // printfCyan("segment_start: %p, segment_end: %p\n", segment_start, segment_end);
                 // printfPink("checkpoint 2.1 %d\n", i);
 
@@ -4356,7 +4417,7 @@ namespace proc
                 // }
 
                 // 从文件加载段内容到内存
-                if (load_seg(new_pt, ph.vaddr, ab_path, ph.off, ph.filesz) < 0)
+                if (load_seg(new_pt, segment_start, ab_path, segment_file_offset, segment_file_size) < 0)
                 {
                     printfRed("execve: load segment data failed\n");
                     exec_error = -EIO;
@@ -4376,8 +4437,8 @@ namespace proc
                 }
 
                 // 直接添加段信息到 ProcessMemoryManager，确保页对齐
-                uint64 aligned_start = PGROUNDDOWN(ph.vaddr);
-                uint64 aligned_end = PGROUNDUP(ph.vaddr + ph.memsz);
+                uint64 aligned_start = segment_start;
+                uint64 aligned_end = segment_end;
 
                 // 根据段的标志位设置调试名称
                 const char *section_name = nullptr;
@@ -4448,12 +4509,65 @@ namespace proc
                 }
                 printfCyan("execve: dynamic linker ELF magic: %x\n", interp_elf.magic);
 
-                // **重构：动态链接器基址选择不再依赖new_sz**
-                // 选择动态链接器的加载基址，使用最高地址
-                interp_base = PGROUNDUP(highest_addr);
+                // LoongArch 的 glibc 解释器要求按 ELF Program Header 的 p_align 装载。
+                // 之前直接按 4K 对齐塞到 highest_addr 之后，会把 16K 对齐的解释器放到错误基址，
+                // 导致动态链接器内部通过 load bias 推导出来的可写地址跑偏到只读段。
+                uint64 interp_load_align = PGSIZE;
+                uint64 interp_min_vaddr = UINT64_MAX;
+
+                elf::proghdr interp_align_ph;
+                for (int j = 0, interp_off = interp_elf.phoff; j < interp_elf.phnum; j++, interp_off += sizeof(interp_align_ph))
+                {
+                    if (vfs_read_file(interpreter_path.c_str(), reinterpret_cast<uint64>(&interp_align_ph), interp_off, sizeof(interp_align_ph)) != sizeof(interp_align_ph))
+                    {
+                        printfRed("execve: failed to read dynamic linker align header %d: %s\n",
+                                  j, interpreter_path.c_str());
+                        CLEANUP_AND_RETURN(-EIO);
+                    }
+
+                    if (interp_align_ph.type != elf::elfEnum::ELF_PROG_LOAD)
+                    {
+                        continue;
+                    }
+
+                    if (interp_align_ph.align > interp_load_align)
+                    {
+                        interp_load_align = interp_align_ph.align;
+                    }
+
+                    if (interp_align_ph.align > user_page_granule)
+                    {
+                        user_page_granule = interp_align_ph.align;
+                    }
+
+                    uint64 segment_align = interp_align_ph.align;
+                    if (segment_align < PGSIZE)
+                    {
+                        segment_align = PGSIZE;
+                    }
+
+                    uint64 aligned_vaddr = align_down_pow2(interp_align_ph.vaddr, segment_align);
+                    if (aligned_vaddr < interp_min_vaddr)
+                    {
+                        interp_min_vaddr = aligned_vaddr;
+                    }
+                }
+
+                if (interp_min_vaddr == UINT64_MAX)
+                {
+                    interp_min_vaddr = 0;
+                }
+
+                interp_base = align_up_pow2(highest_addr - interp_min_vaddr, interp_load_align);
+                printfCyan("execve: dynamic linker base align=%p min_vaddr=%p chosen_base=%p\n",
+                           (void *)interp_load_align,
+                           (void *)interp_min_vaddr,
+                           (void *)interp_base);
 
                 // 加载动态链接器的程序段
                 elf::proghdr interp_ph;
+                uint64 linker_text_start = 0;
+                uint64 linker_text_end = 0;
                 for (int j = 0, interp_off = interp_elf.phoff; j < interp_elf.phnum; j++, interp_off += sizeof(interp_ph))
                 {
                     if (vfs_read_file(interpreter_path.c_str(), reinterpret_cast<uint64>(&interp_ph), interp_off, sizeof(interp_ph)) != sizeof(interp_ph))
@@ -4487,9 +4601,32 @@ namespace proc
                         seg_flag |= PTE_NR;
 #endif
 
+                    // 解释器的 LOAD 段也必须按 p_align 对齐到运行时地址，否则 RW LOAD 会整体错位。
+                    uint64 linker_segment_align = interp_ph.align;
+                    if (linker_segment_align < PGSIZE)
+                    {
+                        linker_segment_align = PGSIZE;
+                    }
+                    uint64 linker_file_segment_start = align_down_pow2(interp_ph.vaddr, linker_segment_align);
+                    uint64 linker_file_segment_end = align_up_pow2(interp_ph.vaddr + interp_ph.memsz, linker_segment_align);
+                    uint64 linker_segment_prefix = interp_ph.vaddr - linker_file_segment_start;
+                    if (interp_ph.off < linker_segment_prefix)
+                    {
+                        printfRed("execve: invalid dynamic linker segment, file offset underflow\n");
+                        CLEANUP_AND_RETURN(-ENOEXEC);
+                    }
+                    uint64 linker_file_offset = interp_ph.off - linker_segment_prefix;
+                    uint64 linker_file_size = interp_ph.filesz + linker_segment_prefix;
+                    if (linker_file_size < interp_ph.filesz ||
+                        linker_file_size > linker_file_segment_end - linker_file_segment_start)
+                    {
+                        printfRed("execve: invalid dynamic linker segment, file size overflow after align\n");
+                        CLEANUP_AND_RETURN(-ENOEXEC);
+                    }
+
                     // **重构：为动态链接器段分配独立的虚拟内存**
-                    uint64 linker_segment_start = PGROUNDDOWN(load_addr);
-                    uint64 linker_segment_end = PGROUNDUP(load_addr + interp_ph.memsz);
+                    uint64 linker_segment_start = interp_base + linker_file_segment_start;
+                    uint64 linker_segment_end = interp_base + linker_file_segment_end;
 
                     if (mem::k_vmm.vmalloc(new_pt, linker_segment_start, linker_segment_end, seg_flag) == 0)
                     {
@@ -4507,7 +4644,7 @@ namespace proc
                     // 加载动态链接器段内容
                     printfCyan("execve: loading dynamic linker segment %d, vaddr: %p, memsz: %p, offset: %p\n",
                                j, (void *)interp_ph.vaddr, (void *)interp_ph.memsz, (void *)interp_ph.off);
-                    if (load_seg(new_pt, load_addr, interpreter_path, interp_ph.off, interp_ph.filesz) < 0)
+                    if (load_seg(new_pt, linker_segment_start, interpreter_path, linker_file_offset, linker_file_size) < 0)
                     {
                         printfRed("execve: load dynamic linker segment failed\n");
                         CLEANUP_AND_RETURN(-EIO);
@@ -4515,14 +4652,16 @@ namespace proc
 
                     // **新增：记录动态链接器段信息**
                     // 记录动态链接器段信息，确保页对齐
-                    uint64 linker_aligned_start = PGROUNDDOWN(load_addr);
-                    uint64 linker_aligned_end = PGROUNDUP(load_addr + interp_ph.memsz);
+                    uint64 linker_aligned_start = linker_segment_start;
+                    uint64 linker_aligned_end = linker_segment_end;
 
                     // 为动态链接器段设置调试名称
                     const char *linker_section_name = nullptr;
                     if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC)
                     {
                         linker_section_name = "linker_text";
+                        linker_text_start = linker_aligned_start;
+                        linker_text_end = linker_aligned_end;
                     }
                     else if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
                     {
@@ -4552,6 +4691,33 @@ namespace proc
                 interp_entry = interp_base + interp_elf.entry;
                 printfCyan("execve: dynamic linker loaded at base: %p, entry: %p\n",
                            (void *)interp_base, (void *)interp_entry);
+
+#ifdef LOONGARCH
+                // LoongArch 动态链当前仍在定位阶段，这里额外核对解释器代码段每一页的 PTE，
+                // 便于区分“页表没建全”还是“用户态跳转到了错误地址”。
+                if (linker_text_start != 0 && linker_text_end > linker_text_start)
+                {
+                    int missing_linker_text_pages = 0;
+                    for (uint64 check_va = linker_text_start; check_va < linker_text_end; check_va += PGSIZE)
+                    {
+                        mem::Pte check_pte = new_pt.walk(check_va, false);
+                        if (check_pte.is_null() || !check_pte.is_valid() || check_pte.is_super_plv() || !check_pte.is_executable())
+                        {
+                            ++missing_linker_text_pages;
+                            printfRed("execve: invalid linker text pte va=%p raw=%p valid=%d user=%d exec=%d\n",
+                                      (void *)check_va,
+                                      check_pte.is_null() ? 0 : (void *)check_pte.get_data(),
+                                      check_pte.is_null() ? 0 : (int)check_pte.is_valid(),
+                                      check_pte.is_null() ? 0 : (int)!check_pte.is_super_plv(),
+                                      check_pte.is_null() ? 0 : (int)check_pte.is_executable());
+                        }
+                    }
+                    printfCyan("execve: linker text pte check done, start=%p end=%p missing=%d\n",
+                               (void *)linker_text_start,
+                               (void *)linker_text_end,
+                               missing_linker_text_pages);
+                }
+#endif
             }
 
             // **新增：段加载完成后的统计信息**
@@ -4745,7 +4911,10 @@ namespace proc
             [[maybe_unused]] int index = 0;
 
             ADD_AUXV(AT_HWCAP, 0);             // 硬件功能标志
-            ADD_AUXV(AT_PAGESZ, PGSIZE);       // 页面大小
+            // AT_PAGESZ 必须反映内核真实页大小，而不是 ELF 的 p_align / common page size。
+            // LoongArch glibc 会同时处理“运行时页大小”和“共享对象最大对齐”这两件事；
+            // 如果把 16K p_align 冒充成 AT_PAGESZ，会把 mmap/PHDR 计算一起带偏。
+            ADD_AUXV(AT_PAGESZ, PGSIZE);
             ADD_AUXV(AT_RANDOM, rd_pos);       // 随机数地址
             ADD_AUXV(AT_PHDR, phdr);           // 程序头表偏移
             ADD_AUXV(AT_PHENT, elf.phentsize); // 程序头表项大小
