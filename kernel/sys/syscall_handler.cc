@@ -662,6 +662,10 @@ namespace syscall
             printfRed("[SyscallHandler::_arg_str]arg_n is out of range");
             return -EFAULT; // 错误地址
         }
+        if (addr == 0)
+        {
+            return -EFAULT;
+        }
         return _fetch_str(addr, buf, max);
     }
 
@@ -1520,26 +1524,14 @@ namespace syscall
                 return SYS_EBADF;
             }
 
-            // 对于 /proc/self/fd/ 路径，应该直接复制文件描述符而不是重新打开
-            // 这相当于 dup() 操作，但需要处理某些标志
-            // 处理 O_TRUNC 标志 - 这个标志需要执行，因为它会影响文件大小
+            // /proc/self/fd/N 在 Linux 上更接近“重新 open 同一个底层对象”，
+            // 不是简单 dup()；这会影响访问模式、文件偏移以及 memfd 的 seal 语义。
             if (flags & O_TRUNC)
             {
-                if (target_file->_seals & F_SEAL_SHRINK)
+                if (target_file->is_memfd() && (target_file->memfd_seals() & F_SEAL_SHRINK))
                 {
                     printfRed("[SyscallHandler::sys_openat] File is sealed with F_SEAL_SHRINK, cannot truncate\n");
                     return -EPERM; // 文件被封印，
-                }
-                // 截断文件到0字节
-                if (target_file->lwext4_file_struct.fsize > 0)
-                {
-                    // 使用 vfs_truncate 函数支持文件扩展和收缩
-                    int ret = vfs_truncate(target_file, 0);
-                    if (ret != 0)
-                    {
-                        printfRed("[SyscallHandler::sys_openat] Failed to truncate file: %d\n", ret);
-                        return -EIO;
-                    }
                 }
             }
 
@@ -1551,7 +1543,38 @@ namespace syscall
                 flags &= ~(O_CREAT | O_EXCL);
             }
 
-            // 分配新的文件描述符并复制文件
+            bool can_reopen = !target_file->is_virtual &&
+                              target_file->_attrs.filetype == fs::FileTypes::FT_NORMAL &&
+                              !target_file->backing_path().empty();
+            if (can_reopen)
+            {
+                fs::file *reopened_file = nullptr;
+                int reopen_err = fs::k_vfs.openat(target_file->backing_path(), reopened_file, flags, mode);
+                if (reopen_err < 0 || reopened_file == nullptr)
+                {
+                    printfRed("[SyscallHandler::sys_openat] Failed to reopen %s via /proc/self/fd: %d\n",
+                              target_file->backing_path().c_str(), reopen_err);
+                    return reopen_err < 0 ? reopen_err : -EIO;
+                }
+
+                if (target_file->is_memfd())
+                {
+                    reopened_file->_path_name = target_file->_path_name;
+                    reopened_file->attach_memfd_state(target_file->shared_memfd_state());
+                    reopened_file->sync_memfd_size_from_file();
+                }
+
+                int new_fd = proc::k_pm.alloc_fd(p, reopened_file);
+                if (new_fd < 0)
+                {
+                    reopened_file->free_file();
+                    printfRed("[SyscallHandler::sys_openat] Error allocating reopened fd for /proc/self/fd/ path\n");
+                    return SYS_EMFILE;
+                }
+                return new_fd;
+            }
+
+            // 无法重开的对象退回旧的 dup 语义，至少保证功能可用。
             int new_fd = proc::k_pm.alloc_fd(p, target_file);
             if (new_fd < 0)
             {
@@ -2433,12 +2456,12 @@ namespace syscall
         if (!(flags & MAP_ANONYMOUS) && f != nullptr)
         {
             // 检查是否是 memfd 文件
-            if (f->_path_name.find("memfd:") == 0)
+            if (f->is_memfd())
             {
                 printfCyan("[SyscallHandler::sys_mmap] Handling memfd file: %s\n", f->_path_name.c_str());
 
                 // 检查 memfd 的 seals
-                if ((flags & MAP_SHARED) && (prot & PROT_WRITE) && (f->_seals & F_SEAL_WRITE))
+                if ((flags & MAP_SHARED) && (prot & PROT_WRITE) && (f->memfd_seals() & F_SEAL_WRITE))
                 {
                     printfRed("[SyscallHandler::sys_mmap] memfd文件被F_SEAL_WRITE密封，无法创建共享写映射\n");
                     return -EPERM;
@@ -2448,14 +2471,15 @@ namespace syscall
                 // 因为 memfd 文件的路径在文件系统中不存在
 
                 // 验证偏移量和大小
-                if (offset > f->lwext4_file_struct.fsize)
+                uint64_t memfd_size = f->memfd_size();
+                if (offset > memfd_size)
                 {
                     printfRed("[SyscallHandler::sys_mmap] offset %zu exceeds file size %llu\n",
-                              offset, f->lwext4_file_struct.fsize);
+                              offset, memfd_size);
                     return -ENXIO;
                 }
 
-                if (offset + map_size > f->lwext4_file_struct.fsize)
+                if (offset + map_size > memfd_size)
                 {
                     printfYellow("[SyscallHandler::sys_mmap] mapping extends beyond file size, will be zero-filled\n");
                 }
@@ -3113,6 +3137,59 @@ namespace syscall
 
         // printfCyan("[SyscallHandler::sys_fstatat] 绝对路径: %s\n", abs_pathname.c_str());
 
+        // 先检查父目录链上的搜索权限，lstat/fstatat 在路径遍历阶段也必须返回 EACCES。
+        size_t last_slash = abs_pathname.find_last_of('/');
+        if (last_slash != eastl::string::npos && last_slash > 0)
+        {
+            eastl::string parent_path = abs_pathname.substr(0, last_slash);
+            eastl::string current_path = "";
+
+            size_t start = 1; // 跳过根路径 '/'
+            while (start < parent_path.length())
+            {
+                size_t end = parent_path.find('/', start);
+                if (end == eastl::string::npos)
+                    end = parent_path.length();
+
+                current_path += "/" + parent_path.substr(start, end - start);
+
+                if (!fs::k_vfs.is_file_exist(current_path.c_str()))
+                    break;
+
+                int comp_type = fs::k_vfs.path2filetype(current_path);
+                if (comp_type != fs::FileTypes::FT_DIRECT)
+                    break;
+
+                uint32_t dir_mode = 0;
+                uint32_t dir_uid = 0, dir_gid = 0;
+                if (vfs_mode_get(current_path, dir_mode, true) == EOK &&
+                    vfs_owner_get(current_path, dir_uid, dir_gid, true) == EOK)
+                {
+                    uint32_t proc_uid = p->get_euid();
+                    uint32_t proc_gid = p->get_egid();
+
+                    bool has_search_permission = false;
+                    if (proc_uid == 0)
+                        has_search_permission = true;
+                    else if (proc_uid == dir_uid)
+                        has_search_permission = (dir_mode & S_IXUSR) != 0;
+                    else if (proc_gid == dir_gid)
+                        has_search_permission = (dir_mode & S_IXGRP) != 0;
+                    else
+                        has_search_permission = (dir_mode & S_IXOTH) != 0;
+
+                    if (!has_search_permission)
+                    {
+                        printfRed("[SyscallHandler::sys_fstatat] Search permission denied for directory: %s\n",
+                                  current_path.c_str());
+                        return SYS_EACCES;
+                    }
+                }
+
+                start = end + 1;
+            }
+        }
+
         // 普通文件优先走“按路径直接取属性”的快路径，避免为每次 stat 都构造 file 对象并打开文件。
         // 只有虚拟文件才回退到 openat + fstat，因为它们没有 ext4/fat32 的真实 inode 可直接查询。
         fs::vfile_msg vfile = fs::k_vfs.get_vfile_msg(abs_pathname);
@@ -3148,10 +3225,10 @@ namespace syscall
             // 成功路径直接 openat + fstat，避免对海量 stat/fstatat 请求重复做多次路径遍历。
             // 只有 open 失败时，才回退到逐层检查，补齐更准确的 ENOENT / ENOTDIR 语义。
             eastl::string path_to_check = abs_pathname;
-            size_t last_slash = path_to_check.find_last_of('/');
-            if (last_slash != eastl::string::npos && last_slash > 0)
+            size_t path_last_slash = path_to_check.find_last_of('/');
+            if (path_last_slash != eastl::string::npos && path_last_slash > 0)
             {
-                eastl::string parent_path = path_to_check.substr(0, last_slash);
+                eastl::string parent_path = path_to_check.substr(0, path_last_slash);
                 eastl::string current_path = "";
 
                 size_t start = 1; // 跳过根路径 '/'
@@ -3221,7 +3298,7 @@ namespace syscall
             // 释放文件对象
             if (file_obj)
             {
-                delete file_obj;
+                file_obj->free_file();
             }
             return -1;
         }
@@ -3229,7 +3306,7 @@ namespace syscall
         // 释放文件对象
         if (file_obj)
         {
-            delete file_obj;
+            file_obj->free_file();
         }
 
         // 将结果拷贝到用户空间
@@ -5252,18 +5329,19 @@ namespace syscall
             if (_arg_addr(2, arg) < 0)
                 return SYS_EFAULT;
             uint32_t add = (uint32_t)arg;
-            // only memfd supports sealing: identified by path_name prefix
-            if (f->_path_name.find("memfd:") != 0)
+            if (!f->is_memfd())
                 return SYS_EINVAL;
             // can't add seals if not allowed
-            if (!f->_sealing_allowed)
+            if (!f->memfd_sealing_allowed())
+                return SYS_EPERM;
+            if ((f->lwext4_file_struct.flags & O_ACCMODE) == O_RDONLY)
                 return SYS_EPERM;
             // unknown bits
             uint32_t known = F_SEAL_SEAL | F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE;
             if (add & ~known)
                 return SYS_EINVAL;
             // if F_SEAL_SEAL already set, no further seals can be added
-            if (f->_seals & F_SEAL_SEAL)
+            if (f->memfd_seals() & F_SEAL_SEAL)
                 return SYS_EPERM;
             // If adding F_SEAL_WRITE, ensure no active MAP_SHARED|PROT_WRITE mappings exist for this file
             if (add & F_SEAL_WRITE)
@@ -5285,11 +5363,11 @@ namespace syscall
                 }
             }
             // merging existing seals
-            f->_seals |= add;
+            f->add_memfd_seals(add);
             if (add & F_SEAL_SEAL)
             {
                 // Once F_SEAL_SEAL is set, disallow future additions explicitly
-                f->_sealing_allowed = false;
+                f->set_memfd_sealing_allowed(false);
             }
             return 0;
         }
@@ -5297,9 +5375,9 @@ namespace syscall
         case F_GET_SEALS:
         {
             // only memfd supports sealing
-            if (f->_path_name.find("memfd:") != 0)
+            if (!f->is_memfd())
                 return 0; // regular files report 0
-            return f->_seals;
+            return f->memfd_seals();
         }
 
         default:
@@ -6427,13 +6505,13 @@ namespace syscall
         }
 
         // Enforce memfd sealing rules
-        if (f->_path_name.find("memfd:") == 0)
+        if (f->is_memfd())
         {
 
-            uint64_t cur_size = f->lwext4_file_struct.fsize;
-            if ((uint64_t)length < cur_size && (f->_seals & F_SEAL_SHRINK))
+            uint64_t cur_size = f->memfd_size();
+            if ((uint64_t)length < cur_size && (f->memfd_seals() & F_SEAL_SHRINK))
                 return SYS_EPERM;
-            if ((uint64_t)length > cur_size && (f->_seals & F_SEAL_GROW))
+            if ((uint64_t)length > cur_size && (f->memfd_seals() & F_SEAL_GROW))
                 return SYS_EPERM;
         }
         if (f->_attrs.filetype == fs::FT_SOCKET)
@@ -6501,12 +6579,13 @@ namespace syscall
         uint64 buf;
         uint64 count;
         int offset;
-        if (_arg_fd(0, &fd, nullptr) < 0)
-            if (_arg_addr(1, buf) < 0 ||
-                _arg_addr(2, count) < 0 || _arg_int(3, offset) < 0)
-            {
-                return -EINVAL; // Invalid arguments
-            }
+        if (_arg_fd(0, &fd, nullptr) < 0 ||
+            _arg_addr(1, buf) < 0 ||
+            _arg_addr(2, count) < 0 ||
+            _arg_int(3, offset) < 0)
+        {
+            return -EINVAL; // Invalid arguments
+        }
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         fs::file *f = p->get_open_file(fd);
         if (!f)
@@ -7538,26 +7617,9 @@ namespace syscall
         }
         else if (domain == AF_INET)
         {
-            // 使用onps创建网络socket
-            EN_ONPSERR enErr = ERRNO;
-            onps_socket = socket(domain, type, protocol, &enErr);
-
-            if (onps_socket == INVALID_SOCKET)
-            {
-                printfRed("[SyscallHandler::sys_socket] onps创建socket失败: %d\n", enErr);
-                // 将onps错误码转换为系统错误码
-                switch (enErr)
-                {
-                case ERRADDRFAMILIES:
-                    return SYS_EAFNOSUPPORT;
-                case ERRSOCKETTYPE:
-                    return SYS_EINVAL;
-                case ERRNOFREEMEM:
-                    return SYS_ENOMEM;
-                default:
-                    return SYS_EINVAL;
-                }
-            }
+            // AF_INET 先只分配 file description，底层 onps socket 延迟到 bind/connect 等真正需要时再创建。
+            // 这样像 splice07 这类“只需要拿到一个合法 socket fd”的测例就不会被网络栈资源分配卡住。
+            printfCyan("[SyscallHandler::sys_socket] AF_INET socket will lazily create onps handle\n");
         }
 
         // 创建socket文件对象
@@ -9031,10 +9093,10 @@ namespace syscall
             if ((!(old_prot & PROT_WRITE)) && (prot & PROT_WRITE))
             {
                 // 对于 memfd 文件，检查是否被 F_SEAL_WRITE 密封
-                if (vm->vfile->_path_name.find("memfd:") == 0)
+                if (vm->vfile->is_memfd())
                 {
                     fs::file *file = proc::k_pm.get_cur_pcb()->get_open_file(vm->vfd);
-                    if (file && (file->_seals & F_SEAL_WRITE))
+                    if (file && (file->memfd_seals() & F_SEAL_WRITE))
                     {
                         printfRed("[sys_mprotect] EPERM: Cannot add write permission to F_SEAL_WRITE sealed memfd\n");
                         return syscall::SYS_EPERM;
@@ -10630,23 +10692,23 @@ namespace syscall
         }
 
         // 对于 memfd 文件，检查密封状态
-        if (file->_path_name.find("memfd:") == 0)
+        if (file->is_memfd())
         {
-            if (file->_seals & F_SEAL_WRITE)
+            if (file->memfd_seals() & F_SEAL_WRITE)
             {
                 printfRed("[SyscallHandler::sys_truncate] EPERM: memfd sealed with F_SEAL_WRITE\n");
                 proc::k_pm.close(fd);
                 return SYS_EPERM;
             }
 
-            if (length > (off_t)file->lwext4_file_struct.fsize && (file->_seals & F_SEAL_GROW))
+            if (length > (off_t)file->memfd_size() && (file->memfd_seals() & F_SEAL_GROW))
             {
                 printfRed("[SyscallHandler::sys_truncate] EPERM: memfd sealed with F_SEAL_GROW, cannot extend\n");
                 proc::k_pm.close(fd);
                 return SYS_EPERM;
             }
 
-            if (length < (off_t)file->lwext4_file_struct.fsize && (file->_seals & F_SEAL_SHRINK))
+            if (length < (off_t)file->memfd_size() && (file->memfd_seals() & F_SEAL_SHRINK))
             {
                 printfRed("[SyscallHandler::sys_truncate] EPERM: memfd sealed with F_SEAL_SHRINK, cannot shrink\n");
                 proc::k_pm.close(fd);
@@ -10714,18 +10776,18 @@ namespace syscall
         }
 
         // Enforce memfd sealing
-        if (f->_path_name.find("memfd:") == 0)
+        if (f->is_memfd())
         {
             // F_SEAL_WRITE affects fallocate only in combination with FALLOC_FL_PUNCH_HOLE flag
-            if ((f->_seals & F_SEAL_WRITE) && (mode & 0x02)) // FALLOC_FL_PUNCH_HOLE = 0x02
+            if ((f->memfd_seals() & F_SEAL_WRITE) && (mode & 0x02)) // FALLOC_FL_PUNCH_HOLE = 0x02
             {
                 printfRed("[SyscallHandler::sys_fallocate] memfd文件被F_SEAL_WRITE密封，无法使用FALLOC_FL_PUNCH_HOLE: %s\n", f->_path_name.c_str());
                 return SYS_EPERM;
             }
             // Determine growth
             uint64_t end = (uint64_t)offset + (uint64_t)len;
-            uint64_t cur = f->lwext4_file_struct.fsize;
-            if (end > cur && (f->_seals & F_SEAL_GROW))
+            uint64_t cur = f->memfd_size();
+            if (end > cur && (f->memfd_seals() & F_SEAL_GROW))
             {
                 printfRed("[SyscallHandler::sys_fallocate] memfd文件被F_SEAL_GROW密封，无法扩展: %s\n", f->_path_name.c_str());
                 return SYS_EPERM;
@@ -13295,18 +13357,16 @@ namespace syscall
         if (p->_ofile && p->_ofile->_ofile_ptr[fd])
         {
             fs::file *f = p->_ofile->_ofile_ptr[fd];
+            eastl::string backing_path = f->_path_name;
             f->_path_name = eastl::string("memfd:") + name;
-            // initialize sealing state: allowed only when flag set
-            f->_seals = 0;
             if (flags & MFD_ALLOW_SEALING)
             {
-                f->_sealing_allowed = true;
+                f->create_memfd_state(backing_path, 0, true);
             }
             else
             {
                 // When sealing is not allowed, Linux sets F_SEAL_SEAL by default
-                f->_sealing_allowed = false;
-                f->_seals |= F_SEAL_SEAL;
+                f->create_memfd_state(backing_path, F_SEAL_SEAL, false);
             }
         }
 

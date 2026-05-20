@@ -129,6 +129,15 @@ namespace fs
 
 	extern file_pool k_file_table;
 
+	struct memfd_shared_state
+	{
+		uint32_t refcnt = 1;
+		uint32_t seals = 0;
+		bool sealing_allowed = false;
+		uint64_t size = 0;
+		eastl::string backing_path;
+	};
+
 	class file
 	{
 	public:
@@ -138,31 +147,124 @@ namespace fs
 		Kstat _stat;
 		long _file_ptr = 0;		  // file read header's offset correponding to the start of the file
 		eastl::string _path_name; // file's path, used for readlink
+		eastl::string _backing_path; // 底层真实路径；memfd 对外名字与真实路径分离时使用
 		struct ext4_file lwext4_file_struct;
 		struct ext4_dir lwext4_dir_struct;
 		flock _lock; // file lock, used for flock
-	// memfd sealing state
-	uint32_t _seals = 0;             // bitmask of F_SEAL_*
-	bool _sealing_allowed = false;   // whether F_ADD_SEALS is permitted
+		memfd_shared_state *_memfd_state = nullptr;
+		// 这两个字段保留给旧逻辑/调试输出使用，真实语义优先走共享状态。
+		uint32_t _seals = 0;           // bitmask of F_SEAL_*
+		bool _sealing_allowed = false; // whether F_ADD_SEALS is permitted
 	public:
-		file() : is_virtual(false), refcnt(0), _file_ptr(0) {}
+		file() : is_virtual(false), _attrs(FileTypes::FT_NONE, 0), refcnt(0), _stat(FileTypes::FT_NONE), _file_ptr(0)
+		{
+			// 这些内嵌的 ext4 运行时结构会被 sys_read/sys_open 等通路直接查看。
+			// 如果不做显式清零，虚拟文件/设备文件就可能读到随机 flags，表现成偶发的 EBADF/O_DIRECT。
+			memset(&lwext4_file_struct, 0, sizeof(lwext4_file_struct));
+			memset(&lwext4_dir_struct, 0, sizeof(lwext4_dir_struct));
+			_lock.l_len = 0;
+			_lock.l_start = 0;
+			_lock.l_whence = SEEK_SET;
+			_lock.l_type = F_UNLCK;
+			_lock.l_pid = 0;
+		}
 		file(FileAttrs attrs) : is_virtual(false), _attrs(attrs), refcnt(0), _stat(_attrs.filetype)
 		{
+			memset(&lwext4_file_struct, 0, sizeof(lwext4_file_struct));
+			memset(&lwext4_dir_struct, 0, sizeof(lwext4_dir_struct));
 			_lock.l_len = 0;
 			_lock.l_start = 0;
 			_lock.l_whence = SEEK_SET;
 			_lock.l_type = F_UNLCK; // 默认没有锁
 			_lock.l_pid = 0;        // 默认没有进程ID
 		}
-		file(FileAttrs attrs, eastl::string path) : is_virtual(false), _attrs(attrs), refcnt(0), _stat(_attrs.filetype), _path_name(path)
+		file(FileAttrs attrs, eastl::string path)
+			: is_virtual(false), _attrs(attrs), refcnt(0), _stat(_attrs.filetype), _path_name(path), _backing_path(path)
 		{
+			memset(&lwext4_file_struct, 0, sizeof(lwext4_file_struct));
+			memset(&lwext4_dir_struct, 0, sizeof(lwext4_dir_struct));
 			_lock.l_len = 0;
 			_lock.l_start = 0;
 			_lock.l_whence = SEEK_SET;
 			_lock.l_type = F_UNLCK; // 默认没有锁
 			_lock.l_pid = 0;        // 默认没有进程ID
 		}
-		virtual ~file() = default;
+		virtual ~file()
+		{
+			release_memfd_state();
+		}
+		bool is_memfd() const { return _memfd_state != nullptr || _path_name.find("memfd:") == 0; }
+		uint32_t memfd_seals() const { return _memfd_state ? _memfd_state->seals : _seals; }
+		bool memfd_sealing_allowed() const { return _memfd_state ? _memfd_state->sealing_allowed : _sealing_allowed; }
+		const eastl::string &backing_path() const
+		{
+			if (_memfd_state != nullptr && !_memfd_state->backing_path.empty())
+				return _memfd_state->backing_path;
+			if (!_backing_path.empty())
+				return _backing_path;
+			return _path_name;
+		}
+		memfd_shared_state *shared_memfd_state() const { return _memfd_state; }
+		void set_backing_path(const eastl::string &path)
+		{
+			_backing_path = path;
+			if (_memfd_state != nullptr)
+				_memfd_state->backing_path = path;
+		}
+		void create_memfd_state(const eastl::string &backing_path, uint32_t seals, bool sealing_allowed)
+		{
+			release_memfd_state();
+			_memfd_state = new memfd_shared_state();
+			_memfd_state->backing_path = backing_path;
+			_memfd_state->seals = seals;
+			_memfd_state->sealing_allowed = sealing_allowed;
+			_memfd_state->size = lwext4_file_struct.fsize;
+			_backing_path = backing_path;
+			_seals = seals;
+			_sealing_allowed = sealing_allowed;
+		}
+		void attach_memfd_state(memfd_shared_state *state)
+		{
+			release_memfd_state();
+			if (state == nullptr)
+				return;
+			_memfd_state = state;
+			_memfd_state->refcnt++;
+			_backing_path = state->backing_path;
+			_seals = state->seals;
+			_sealing_allowed = state->sealing_allowed;
+			lwext4_file_struct.fsize = state->size;
+		}
+		void set_memfd_seals(uint32_t seals)
+		{
+			if (_memfd_state != nullptr)
+				_memfd_state->seals = seals;
+			_seals = seals;
+		}
+		void add_memfd_seals(uint32_t seals)
+		{
+			set_memfd_seals(memfd_seals() | seals);
+		}
+		void set_memfd_sealing_allowed(bool sealing_allowed)
+		{
+			if (_memfd_state != nullptr)
+				_memfd_state->sealing_allowed = sealing_allowed;
+			_sealing_allowed = sealing_allowed;
+		}
+		uint64_t memfd_size() const
+		{
+			return _memfd_state != nullptr ? _memfd_state->size : lwext4_file_struct.fsize;
+		}
+		void sync_memfd_size_from_file()
+		{
+			if (_memfd_state != nullptr)
+				_memfd_state->size = lwext4_file_struct.fsize;
+		}
+		void sync_file_size_from_memfd()
+		{
+			if (_memfd_state != nullptr)
+				lwext4_file_struct.fsize = _memfd_state->size;
+		}
 		virtual void free_file()
 		{
 			refcnt--;
@@ -189,6 +291,15 @@ namespace fs
 
 		int utimeset(const struct timespec *times);
 		// virtual int readlink( uint64 buf, size_t len ) = 0;
+	private:
+		void release_memfd_state()
+		{
+			if (_memfd_state == nullptr)
+				return;
+			if (--_memfd_state->refcnt == 0)
+				delete _memfd_state;
+			_memfd_state = nullptr;
+		}
 	};
 
 } // namespace fs

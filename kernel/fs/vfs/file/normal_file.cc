@@ -16,6 +16,8 @@ namespace fs
 	{
 		// 获取文件睡眠锁，确保读写操作的一致性
 		_file_lock.acquire();
+		if (is_memfd())
+			sync_file_size_from_memfd();
 		
 		// printfGreen("normal_file::read called with buf: %p, len: %u, off: %d, upgrade: %d\n", (void *)buf, len, off, upgrade);
 		ulong cnt = -1;
@@ -83,6 +85,8 @@ namespace fs
 		// 获取文件睡眠锁，防止多进程并发写入竞态
 		// 睡眠锁允许在持有锁期间进行I/O等可能阻塞的操作
 		_file_lock.acquire();
+		if (is_memfd())
+			sync_file_size_from_memfd();
 		
 		// printfGreen("normal_file::write called with buf: %p, len: %zu, off: %ld, upgrade: %d\n", (void *)buf, len, off, upgrade);
 		uint64 ret = 0;
@@ -109,6 +113,7 @@ namespace fs
 			mem::k_pmm.free_page(zero_buf);
 			// 更新文件大小
 			lwext4_file_struct.fsize = off;
+			sync_memfd_size_from_file();
 		}
 
 		printfYellow("normal file offset: %d, requested offset: %d\n", current_pos, off);
@@ -178,15 +183,21 @@ namespace fs
 			}
 		}
 
-		// Enforce memfd write seal
-		if (_path_name.find("memfd:") == 0)
+		// memfd 的 seal 是 inode 级共享状态；这里要同时约束写封印和扩容封印。
+		if (is_memfd())
 		{
-			if ((_seals & F_SEAL_WRITE) != 0)
+			uint32_t seals = memfd_seals();
+			if ((seals & F_SEAL_WRITE) != 0)
 			{
 				_file_lock.release();
 				return -EPERM;
 			}
-			// If shrink/grow seals are set, writing is still allowed as long as size constraints are respected
+			uint64_t end_off = static_cast<uint64_t>(off) + len;
+			if (end_off > lwext4_file_struct.fsize && (seals & F_SEAL_GROW) != 0)
+			{
+				_file_lock.release();
+				return -EPERM;
+			}
 		}
 
 		if (off != _file_ptr)
@@ -213,12 +224,14 @@ namespace fs
 		{
 			printfGreen("normal_file::write: ext4_fwrite success, ret: %d\n", ret);
 			_file_ptr = off + ret;
+			sync_memfd_size_from_file();
 		}
 		else
 		{
 			// 如果不升级指针，恢复到原来的位置
 			_file_ptr = current_pos;
 			ext4_fseek(&lwext4_file_struct, current_pos, SEEK_SET);
+			sync_memfd_size_from_file();
 		}
 
 		_file_lock.release(); // 释放锁
@@ -257,6 +270,8 @@ namespace fs
 
 	off_t normal_file::lseek(off_t offset, int whence)
 	{
+		if (is_memfd())
+			sync_file_size_from_memfd();
 		printfYellow("normal_file::lseek called with offset: %d, whence: %d\n", offset, whence);
 		printfYellow("normal_file::lseek: _stat.size=%ld, lwext4_file_struct.fsize=%ld\n",
 					 _stat.size, (long)lwext4_file_struct.fsize);
