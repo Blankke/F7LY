@@ -39,6 +39,7 @@ static char **ltp_envp(bool is_musl)
     static char *glibc_envp[] = {
         (char *)"PATH=/bin",
         (char *)"LD_LIBRARY_PATH=/glibc/lib",
+        (char *)"LD_BIND_NOW=1",
         NULL};
     return is_musl ? musl_envp : glibc_envp;
 }

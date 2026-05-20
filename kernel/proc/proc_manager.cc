@@ -168,6 +168,81 @@ namespace proc
                            entry->_path_name.c_str());
             }
         }
+
+        inline bool is_exec_whitespace(char ch)
+        {
+            return ch == ' ' || ch == '\t';
+        }
+
+        bool parse_shebang_line(const char *buffer, int len,
+                                char *interpreter_path, size_t interpreter_path_cap,
+                                char *interpreter_arg, size_t interpreter_arg_cap)
+        {
+            if (buffer == nullptr || len < 2 || buffer[0] != '#' || buffer[1] != '!')
+            {
+                return false;
+            }
+            if (interpreter_path == nullptr || interpreter_arg == nullptr ||
+                interpreter_path_cap == 0 || interpreter_arg_cap == 0)
+            {
+                return false;
+            }
+
+            interpreter_path[0] = '\0';
+            interpreter_arg[0] = '\0';
+
+            int cursor = 2;
+            while (cursor < len && is_exec_whitespace(buffer[cursor]))
+            {
+                ++cursor;
+            }
+
+            size_t interpreter_len = 0;
+            while (cursor < len)
+            {
+                char ch = buffer[cursor];
+                if (ch == '\0' || ch == '\n' || ch == '\r' || is_exec_whitespace(ch))
+                {
+                    break;
+                }
+                if (interpreter_len + 1 >= interpreter_path_cap)
+                {
+                    return false;
+                }
+                interpreter_path[interpreter_len++] = ch;
+                ++cursor;
+            }
+            interpreter_path[interpreter_len] = '\0';
+
+            while (cursor < len && is_exec_whitespace(buffer[cursor]))
+            {
+                ++cursor;
+            }
+
+            size_t interpreter_arg_len = 0;
+            while (cursor < len)
+            {
+                char ch = buffer[cursor];
+                if (ch == '\0' || ch == '\n' || ch == '\r')
+                {
+                    break;
+                }
+                if (interpreter_arg_len + 1 >= interpreter_arg_cap)
+                {
+                    return false;
+                }
+                interpreter_arg[interpreter_arg_len++] = ch;
+                ++cursor;
+            }
+            interpreter_arg[interpreter_arg_len] = '\0';
+
+            while (interpreter_arg_len > 0 && is_exec_whitespace(interpreter_arg[interpreter_arg_len - 1]))
+            {
+                interpreter_arg[--interpreter_arg_len] = '\0';
+            }
+
+            return interpreter_len > 0;
+        }
     }
 
     ProcessManager k_pm;
@@ -3918,6 +3993,10 @@ namespace proc
         return 0;
     }
 
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuninitialized"
+#endif
     int ProcessManager::execve(eastl::string path, eastl::vector<eastl::string> argv, eastl::vector<eastl::string> envs)
     {
         // char buf[1000];
@@ -3935,7 +4014,7 @@ namespace proc
         uint64 sp;             // 栈指针
         uint64 stackbase;      // 栈基地址
         mem::PageTable new_pt; // 暂存页表, 防止加载过程中破坏原进程映像
-        elf::elfhdr elf;       // ELF 文件头
+        elf::elfhdr elf = {};  // ELF 文件头
         elf::proghdr ph = {};  // 程序头
         // fs::dentry *de;            // 目录项
         int i, off; // 循环变量和偏移量
@@ -3961,27 +4040,66 @@ namespace proc
         if (path[0] == '/')
             ab_path = path; // 已经是绝对路径
         else
-            ab_path = proc->_cwd_name + path; // 相对路径，添加当前工作目录前缀
+            ab_path = get_absolute_path(path.c_str(), proc->_cwd_name.c_str()); // 相对路径统一走规范化解析
 
         printfCyan("execve file : %s\n", ab_path.c_str());
 
-        // 解析路径并查找文件
-        if (vfs_is_file_exist(ab_path.c_str()) != 1)
+        // 先把脚本 shebang 解析成“解释器 + 脚本路径 + 原参数”，再复用现有 ELF 装载流程。
+        bool has_shebang = false;
+        char shebang_interpreter[MAXPATH] = {0};
+        char shebang_optional_arg[128] = {0};
+        char shebang_script_path[MAXPATH] = {0};
+        for (;;)
         {
-            printfRed("execve: cannot find file");
-            return -ENOENT;
-        }
+            if (vfs_is_file_exist(ab_path.c_str()) != 1)
+            {
+                printfRed("execve: cannot find file");
+                return -ENOENT;
+            }
 
-        // 读取ELF文件头，验证文件格式
-        if (vfs_read_file(ab_path.c_str(), reinterpret_cast<uint64>(&elf), 0, sizeof(elf)) != sizeof(elf))
-        {
-            printfRed("execve: failed to read ELF header for %s\n", ab_path.c_str());
-            return -EIO;
-        }
-        if (elf.magic != elf::elfEnum::ELF_MAGIC) // 检查ELF魔数
-        {
-            printfRed("execve: invalid ELF magic=%x path=%s\n", elf.magic, ab_path.c_str());
-            return -ENOEXEC;
+            char exec_head[256] = {};
+            int head_len = vfs_read_file(ab_path.c_str(), reinterpret_cast<uint64>(exec_head), 0, sizeof(exec_head) - 1);
+            if (head_len < 0)
+            {
+                printfRed("execve: failed to read executable header for %s\n", ab_path.c_str());
+                return -EIO;
+            }
+
+            if (head_len >= (int)sizeof(elf))
+            {
+                memmove(&elf, exec_head, sizeof(elf));
+                if (elf.magic == elf::elfEnum::ELF_MAGIC)
+                {
+                    break;
+                }
+            }
+
+            if (!parse_shebang_line(exec_head, head_len,
+                                    shebang_interpreter, sizeof(shebang_interpreter),
+                                    shebang_optional_arg, sizeof(shebang_optional_arg)))
+            {
+                printfRed("execve: invalid ELF magic=%x path=%s\n", elf.magic, ab_path.c_str());
+                return -ENOEXEC;
+            }
+            if (has_shebang)
+            {
+                printfRed("execve: too many shebang redirects for %s\n", ab_path.c_str());
+                return -ELOOP;
+            }
+            if (shebang_interpreter[0] != '/')
+            {
+                printfRed("execve: shebang interpreter must be absolute, got %s\n", shebang_interpreter);
+                return -ENOEXEC;
+            }
+            if (ab_path.length() >= sizeof(shebang_script_path))
+            {
+                printfRed("execve: shebang script path too long: %s\n", ab_path.c_str());
+                return -ENAMETOOLONG;
+            }
+            safestrcpy(shebang_script_path, ab_path.c_str(), sizeof(shebang_script_path));
+            printfCyan("execve: shebang %s -> %s\n", ab_path.c_str(), shebang_interpreter);
+            has_shebang = true;
+            ab_path = shebang_interpreter;
         }
         // printf("execve: ELF file magic: %x\n", elf.magic);
         // **新增：检查是否需要动态链接**
@@ -4514,29 +4632,81 @@ namespace proc
 
         // 3. 压入命令行参数字符串
         uint64 uargv[MAXARG]; // 命令行参数指针数组
-        uint64 argc;          // 命令行参数数量
-        for (argc = 0; argc < argv.size(); argc++)
+        uint64 argc = 0;      // 命令行参数数量
+        auto copy_exec_arg = [&](const char *arg_text) -> int
         {
             if (argc >= MAXARG)
-            { // 检查参数数量限制
-                printfRed("execve: too many args\n");
-                CLEANUP_AND_RETURN(-E2BIG);
+            {
+                return -E2BIG;
             }
-            sp -= argv[argc].size() + 1; // 为参数字符串预留空间(包括null)
-            sp -= sp % 16;               // 对齐到16字节
+            size_t arg_len = strlen(arg_text);
+            sp -= arg_len + 1; // 为参数字符串预留空间(包括null)
+            sp -= sp % 16;     // 对齐到16字节
             if (sp < stackbase + PGSIZE)
             {
-                printfRed("execve: stack overflow while copying args\n");
-                CLEANUP_AND_RETURN(-E2BIG);
+                return -E2BIG;
             }
-            if (mem::k_vmm.copy_out(new_pt, sp, argv[argc].c_str(), argv[argc].size() + 1) < 0)
+            if (mem::k_vmm.copy_out(new_pt, sp, arg_text, arg_len + 1) < 0)
             {
-                printfRed("execve: copy args failed\n");
-                CLEANUP_AND_RETURN(-EFAULT);
+                return -EFAULT;
             }
-            uargv[argc] = sp; // 记录字符串地址
+            uargv[argc++] = sp;
+            return 0;
+        };
 
-            // panic("[execve] argv[%d] = \"%s\", user_stack_addr = 0x%p\n", argc, argv[argc].c_str(), sp);
+        if (has_shebang)
+        {
+            int arg_ret = copy_exec_arg(shebang_interpreter);
+            if (arg_ret < 0)
+            {
+                printfRed("execve: copy shebang interpreter arg failed\n");
+                CLEANUP_AND_RETURN(arg_ret);
+            }
+            if (shebang_optional_arg[0] != '\0')
+            {
+                arg_ret = copy_exec_arg(shebang_optional_arg);
+                if (arg_ret < 0)
+                {
+                    printfRed("execve: copy shebang optional arg failed\n");
+                    CLEANUP_AND_RETURN(arg_ret);
+                }
+            }
+            arg_ret = copy_exec_arg(shebang_script_path);
+            if (arg_ret < 0)
+            {
+                printfRed("execve: copy shebang script path failed\n");
+                CLEANUP_AND_RETURN(arg_ret);
+            }
+            for (size_t arg_index = 1; arg_index < argv.size(); ++arg_index)
+            {
+                arg_ret = copy_exec_arg(argv[arg_index].c_str());
+                if (arg_ret < 0)
+                {
+                    printfRed("execve: copy rewritten argv failed\n");
+                    CLEANUP_AND_RETURN(arg_ret);
+                }
+            }
+        }
+        else if (argv.empty())
+        {
+            int arg_ret = copy_exec_arg(path.c_str());
+            if (arg_ret < 0)
+            {
+                printfRed("execve: copy fallback argv failed\n");
+                CLEANUP_AND_RETURN(arg_ret);
+            }
+        }
+        else
+        {
+            for (size_t arg_index = 0; arg_index < argv.size(); ++arg_index)
+            {
+                int arg_ret = copy_exec_arg(argv[arg_index].c_str());
+                if (arg_ret < 0)
+                {
+                    printfRed("execve: copy args failed\n");
+                    CLEANUP_AND_RETURN(arg_ret);
+                }
+            }
         }
         uargv[argc] = 0; // argv数组以NULL结尾
 
@@ -4734,4 +4904,7 @@ namespace proc
 #undef CLEANUP_AND_RETURN
         return 0; // 返回参数个数，表示成功执行
     };
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 } // namespace proc

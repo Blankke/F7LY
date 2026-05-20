@@ -233,7 +233,8 @@ namespace fs
 			_backing_path = state->backing_path;
 			_seals = state->seals;
 			_sealing_allowed = state->sealing_allowed;
-			lwext4_file_struct.fsize = state->size;
+			// reopen /proc/self/fd/<n> 时，新的 ext4_file 里可能已经包含 O_TRUNC 之后的真实大小。
+			// 这里不能再把旧共享 size 倒灌回来，否则会把刚刚生效的 truncate 结果覆盖掉。
 		}
 		void set_memfd_seals(uint32_t seals)
 		{

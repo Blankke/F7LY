@@ -1780,6 +1780,54 @@ int vfs_path_stat(const char *path, fs::Kstat *st, bool follow_symlinks)
             return resolve_ret;
         }
     }
+    else
+    {
+        // lstat/fstatat(AT_SYMLINK_NOFOLLOW) 只是不跟最终组件，
+        // 但路径前缀里的符号链接仍然必须按正常路径遍历规则解析。
+        // 否则像 ".../test_eloop/..." 这样的前缀环会直接落进底层 ext4 路径打开逻辑，
+        // 本该返回 ELOOP 的场景就可能退化成异常甚至 panic。
+        size_t last_slash = effective_path.find_last_of('/');
+        eastl::string parent_dir;
+        eastl::string filename;
+
+        if (last_slash == eastl::string::npos)
+        {
+            parent_dir = ".";
+            filename = effective_path;
+        }
+        else if (last_slash == 0)
+        {
+            parent_dir = "/";
+            if (effective_path.length() > 1)
+                filename = effective_path.substr(1);
+        }
+        else
+        {
+            parent_dir = effective_path.substr(0, last_slash);
+            filename = effective_path.substr(last_slash + 1);
+        }
+
+        eastl::string resolved_parent;
+        int resolve_ret = resolve_symlinks(parent_dir, resolved_parent);
+        if (resolve_ret < 0)
+        {
+            return resolve_ret;
+        }
+
+        if (filename.empty())
+        {
+            effective_path = resolved_parent;
+        }
+        else
+        {
+            effective_path = resolved_parent;
+            if (effective_path.empty())
+                effective_path = ".";
+            if (effective_path.back() != '/')
+                effective_path += "/";
+            effective_path += filename;
+        }
+    }
 
     struct filesystem *fs = get_fs_from_path(effective_path.c_str());
     if (fs && fs->type == FAT32) {
@@ -2041,12 +2089,19 @@ int vfs_truncate(fs::file *f, size_t length)
         return -EINVAL;
     }
 
+    // memfd 的大小在多个 open file description 之间共享。
+    // 进入真正的 ext4 截断逻辑前，先把当前 file object 的本地缓存 size
+    // 与共享状态对齐，避免 /proc/self/fd 重开后的跨 fd truncate 导致旧缓存继续生效。
+    f->sync_file_size_from_memfd();
+
     // 获取当前文件大小
     uint64_t current_size = ext4_fsize(&f->lwext4_file_struct);
 
     // 如果新大小等于当前大小，无需操作
     if (length == current_size)
     {
+        f->_stat.size = current_size;
+        f->sync_memfd_size_from_file();
         return EOK;
     }
 
@@ -2159,6 +2214,9 @@ int vfs_fallocate(fs::file *f, off_t offset, size_t length)
         printfRed("vfs_fallocate: file is null\n");
         return -EINVAL;
     }
+
+    // 与 vfs_truncate 同理，memfd 进入 size-sensitive 逻辑前先同步共享大小。
+    f->sync_file_size_from_memfd();
 
     // 检查参数合法性
     if (offset < 0 || length <= 0)
