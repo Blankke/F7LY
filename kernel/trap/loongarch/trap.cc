@@ -224,16 +224,16 @@ void trap_manager::usertrap()
 
   else if (is_loongarch_page_fault_code(ecode))
   {
-    // printfRed("p->_trapframe->sp: %p,fault_va: %p,p->sz:%p\n", p->_trapframe->sp, r_csr_badv(), p->_sz);
     mem::Pte fault_pte = p->get_pagetable()->walk(r_csr_badv(), false);
     if (fault_pte.is_null())
     {
       printfRed("usertrap(): badv=%p has null pte slot\n", r_csr_badv());
     }
-    else
+    if (mmap_handler(r_csr_badv(), ecode) != 0)
     {
-      printfYellow("usertrap(): badv=%p pte=%p valid=%d present=%d user=%d read=%d write=%d exec=%d plv=%d\n",
-                   r_csr_badv(),
+      // 正常的惰性缺页不需要刷日志；只有补页失败时才展开上下文，方便定位真实异常。
+      printfRed("usertrap(): page fault at %p, sending SIGSEGV to pid=%d\n", r_csr_badv(), p->_pid);
+      printfYellow("usertrap(): fault pte=%p valid=%d present=%d user=%d read=%d write=%d exec=%d plv=%d\n",
                    (void *)fault_pte.get_data(),
                    (int)fault_pte.is_valid(),
                    (int)fault_pte.is_present(),
@@ -256,11 +256,6 @@ void trap_manager::usertrap()
                    (void *)p->_trapframe->a0,
                    (void *)p->_trapframe->a1,
                    (void *)p->_trapframe->a2);
-    }
-    if (mmap_handler(r_csr_badv(), ecode) != 0)
-    {
-      // 缺页异常处理失败，发送SIGSEGV信号
-      printfRed("usertrap(): page fault at %p, sending SIGSEGV to pid=%d\n", r_csr_badv(), p->_pid);
       p->add_signal(proc::ipc::signal::SIGSEGV);
 
       printf("usertrap(): unexpected trapcause 0x%x pid=%d ecode=%u esubcode=%u\n",

@@ -179,7 +179,7 @@ endif
 
 
 all: 
-	@$(MAKE) riscv
+	@$(MAKE) riscv loongarch
 	@if [ -f rootfs.img.back ]; then cp rootfs.img.back rootfs.img; fi
 
 
