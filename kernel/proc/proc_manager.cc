@@ -398,8 +398,8 @@ namespace proc
             filesystem_init(); // <-- This calls fs.cc:filesystem_init
 
             // filesystem2_init(); // 这个滚蛋
-            fs::device_file *f_in = new fs::device_file();
-            // fs::device_file *f_err = new fs::device_file();
+            fs::FileAttrs fAttrsin = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0666);
+            fs::device_file *f_in = new fs::device_file(fAttrsin, "/dev/stdin", 0);
             eastl::string pathout("/dev/stdout");
             fs::FileAttrs fAttrsout = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0222); // only write
             fs::device_file *f_out =
@@ -409,11 +409,8 @@ namespace proc
             fs::FileAttrs fAttrserr = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0222); // only write
             fs::device_file *f_err = new fs::device_file(fAttrserr, patherr, 2);
             proc->_ofile->_ofile_ptr[0] = f_in;
-            proc->_ofile->_ofile_ptr[0]->refcnt++;
             proc->_ofile->_ofile_ptr[1] = f_out;
-            proc->_ofile->_ofile_ptr[1]->refcnt++;
             proc->_ofile->_ofile_ptr[2] = f_err;
-            proc->_ofile->_ofile_ptr[2]->refcnt++;
             /// 你好
             /// 这是重定向uart的代码
             /// commented out by @gkq
@@ -2748,9 +2745,9 @@ namespace proc
             vfile = f;
             printfCyan("[mmap] File mapping: %s\n", f->_path_name.c_str());
             // Respect memfd write seal: disallow shared writable mappings
-            if (f->_path_name.find("memfd:") == 0)
+            if (f->is_memfd())
             {
-                if ((flags & MAP_SHARED) && (prot & PROT_WRITE) && (f->_seals & F_SEAL_WRITE))
+                if ((flags & MAP_SHARED) && (prot & PROT_WRITE) && (f->memfd_seals() & F_SEAL_WRITE))
                 {
                     if (errno)
                         *errno = EPERM;
@@ -2761,7 +2758,7 @@ namespace proc
             // 普通文件映射使用独立 backing handle，避免 fd 关闭后把 VMA 持有的 file 对象一并回收。
             bool can_reopen_for_vma = !f->is_virtual &&
                                       f->_attrs.filetype == fs::FileTypes::FT_NORMAL &&
-                                      f->_path_name.find("memfd:") != 0;
+                                      !f->is_memfd();
             if (can_reopen_for_vma)
             {
                 fs::file *mapping_file = nullptr;

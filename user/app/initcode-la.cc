@@ -5,10 +5,8 @@ extern "C"
 {
     __attribute__((section(".text.startup"))) int main()
     {
-        static const char *const debug_basic_cases[] = {"write", 0};
-        userdebug3();
-        init_env("/musl/");
-        basic_subset_test("/musl/", debug_basic_cases);
+        userdebug4();
+        regression_suite_4d1444_loongarch();
         shutdown();
         return 0;
     }

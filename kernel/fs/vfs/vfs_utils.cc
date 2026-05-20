@@ -1518,20 +1518,20 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
         return EOK;
     }
 
-    // 检查是否是 memfd 文件（路径以 "memfd:" 开头）
-    if (f->_path_name.find("memfd:") == 0)
+    // 检查是否是 memfd 文件（对外名字和底层匿名临时文件路径是分离的）
+    if (f->is_memfd())
     {
         // 为 memfd 文件创建合成的 stat 信息
         memset(st, 0, sizeof(fs::Kstat));
 
         st->dev = 0;                            // 设备号
-        st->ino = (uint64)f;                    // 使用文件对象地址作为伪 inode 号
+        st->ino = f->shared_memfd_state() ? (uint64)f->shared_memfd_state() : (uint64)f;
         st->mode = S_IFREG | 0600;              // 常规文件，拥有者读写权限
         st->nlink = 1;                          // 链接数
         st->uid = 0;                            // 用户 ID (root)
         st->gid = 0;                            // 组 ID (root)
         st->rdev = 0;                           // 设备 ID
-        st->size = f->lwext4_file_struct.fsize; // 从 lwext4 结构获取大小
+        st->size = f->memfd_size();
         st->blksize = 4096;                     // 块大小
         st->blocks = (st->size + 511) / 512;    // 512字节块数
 
@@ -2061,6 +2061,7 @@ int vfs_truncate(fs::file *f, size_t length)
             return -status;
         }
         f->_stat.size = length;
+        f->sync_memfd_size_from_file();
         return EOK;
     }
 
@@ -2124,6 +2125,7 @@ int vfs_truncate(fs::file *f, size_t length)
 
     // 更新文件大小
     f->_stat.size = length;
+    f->sync_memfd_size_from_file();
 
     printfGreen("vfs_truncate: successfully extended file %s from %llu to %zu bytes with zero-fill\n",
                 f->_path_name.c_str(), current_size, length);
@@ -2191,6 +2193,7 @@ int vfs_fallocate(fs::file *f, off_t offset, size_t length)
 
     // 更新文件大小信息
     f->_stat.size = target_size;
+    f->sync_memfd_size_from_file();
 
     printfGreen("vfs_fallocate: successfully allocated space for file %s, new size: %u\n",
                 f->_path_name.c_str(), target_size);

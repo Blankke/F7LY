@@ -48,27 +48,30 @@ namespace mem
 
 	void * HeapMemoryManager::allocate( uint64 size )
 	{
-        int x = _k_allocator_coarse->Alloc(0);
+		// 全局 new/delete 需要服务普通 C++ 对象和 EASTL 容器，
+		// 这里必须使用细粒度分配器，不能再把每个对象都当成整页来分配/释放。
+		// 否则一旦释放路径遇到非页对齐对象，就会在 kfree! 处直接崩掉。
+		if (size == 0)
+		{
+			size = 1;
+		}
 
-        if(x == -1)
-        {
-            panic("[hmm] alloc_page failed");
-        }
-		void *pa = reinterpret_cast<void *>(static_cast<uint64>(x) * PGSIZE + reinterpret_cast<uint64>(_k_allocator_coarse->get_base_ptr()));
-        // printfCyan("分配物理页:  %p\n", pa);
-        memset(pa, 0, PGSIZE);
-        return pa;
-
+		void *ptr = _k_allocator_fine.malloc(size);
+		if (ptr == nullptr)
+		{
+			panic("[hmm] alloc failed, size=%p", (void *)size);
+		}
+		return ptr;
 	}
 
 	void HeapMemoryManager::free( void *p )
 	{
-		        auto addr = reinterpret_cast<uint64>(p);
-        if (addr % PGSIZE != 0)
-        {
-            panic("kfree!");
-        }
-        int x=(addr - reinterpret_cast<uint64>(_k_allocator_coarse->get_base_ptr())) / PGSIZE;
-        _k_allocator_coarse->Free(x);
+		if (p == nullptr)
+		{
+			return;
+		}
+
+		// 与 allocate() 配对，统一交给细粒度分配器回收。
+		_k_allocator_fine.free(p);
 	}
 } // namespace mem

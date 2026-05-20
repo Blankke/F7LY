@@ -20,7 +20,7 @@ namespace fs
 		uint _dev_num;
 
 	public:
-		device_file() = default;
+		device_file() : file(FileAttrs(FileTypes::FT_DEVICE, 0666), "/dev/stdin"), path_name("/dev/stdin"), _dev_num(0) { dup(); }
 		/// @brief 设备文件的构造函数，初始化文件属性、设备号和目录项指针，并增加引用计数。
 		/// @param attrs 文件属性，用于初始化基类 file。
 		/// @param dev 设备号（当前参数已废弃，实际设备号应从 node 中获取）。
