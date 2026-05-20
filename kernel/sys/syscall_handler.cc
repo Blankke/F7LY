@@ -1561,6 +1561,22 @@ namespace syscall
                 {
                     reopened_file->_path_name = target_file->_path_name;
                     reopened_file->attach_memfd_state(target_file->shared_memfd_state());
+                    // memfd 需要把“重新 open”后的底层 inode 结果广播到共享状态。
+                    // 对 O_TRUNC 尤其要显式兜底，否则旧 fd 可能继续看到过期 size。
+                    if (flags & O_TRUNC)
+                    {
+                        int trunc_status = vfs_truncate(reopened_file, 0);
+                        if (trunc_status < 0)
+                        {
+                            reopened_file->free_file();
+                            printfRed("[SyscallHandler::sys_openat] Failed to truncate reopened memfd via /proc/self/fd: %d\n",
+                                      trunc_status);
+                            return trunc_status;
+                        }
+                    }
+
+                    // 重新 open 可能已经改变了底层 inode（例如 O_TRUNC 把大小置 0），
+                    // 此时要把“新打开文件对象看到的真实结果”同步回共享状态。
                     reopened_file->sync_memfd_size_from_file();
                 }
 
@@ -3204,6 +3220,14 @@ namespace syscall
                     return -1;
                 }
                 return 0;
+            }
+
+            // 对于明确的路径遍历错误，直接保留 vfs_path_stat 的权威结果；
+            // 对于 ENOENT/ENOTDIR 这类需要逐层判别的情况，继续走下面的 open+路径检查回退，
+            // 让它把“目标不存在”和“中间组件不是目录”区分开。
+            if (stat_ret == -ELOOP || stat_ret == -EACCES || stat_ret == -EFAULT || stat_ret == -ENAMETOOLONG)
+            {
+                return stat_ret;
             }
         }
 

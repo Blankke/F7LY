@@ -200,6 +200,10 @@ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
+# GCC 在这个编译单元里会对 EASTL string 的 vendor 模板触发 uninitialized 误报，
+# 这里只对 proc_manager.cc 做局部豁免，保留其余文件的 -Werror 约束。
+$(BUILD_DIR)/proc/proc_manager.o: CXXFLAGS += -Wno-error=uninitialized -Wno-uninitialized
+
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.cc
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
