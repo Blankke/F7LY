@@ -132,7 +132,7 @@ namespace fs
 	class file
 	{
 	public:
-		bool is_virtual;
+		bool is_virtual = false;
 		FileAttrs _attrs;
 		uint32 refcnt;
 		Kstat _stat;
@@ -145,8 +145,8 @@ namespace fs
 	uint32_t _seals = 0;             // bitmask of F_SEAL_*
 	bool _sealing_allowed = false;   // whether F_ADD_SEALS is permitted
 	public:
-		file() = default;
-		file(FileAttrs attrs) : _attrs(attrs), refcnt(0), _stat(_attrs.filetype)
+		file() : is_virtual(false), refcnt(0), _file_ptr(0) {}
+		file(FileAttrs attrs) : is_virtual(false), _attrs(attrs), refcnt(0), _stat(_attrs.filetype)
 		{
 			_lock.l_len = 0;
 			_lock.l_start = 0;
@@ -154,7 +154,7 @@ namespace fs
 			_lock.l_type = F_UNLCK; // 默认没有锁
 			_lock.l_pid = 0;        // 默认没有进程ID
 		}
-		file(FileAttrs attrs, eastl::string path) : _attrs(attrs), refcnt(0), _stat(_attrs.filetype), _path_name(path)
+		file(FileAttrs attrs, eastl::string path) : is_virtual(false), _attrs(attrs), refcnt(0), _stat(_attrs.filetype), _path_name(path)
 		{
 			_lock.l_len = 0;
 			_lock.l_start = 0;
@@ -178,6 +178,8 @@ namespace fs
 		virtual bool read_ready() = 0;
 		virtual bool write_ready() = 0;
 		virtual off_t lseek(off_t offset, int whence) = 0;
+		// 供匿名内核文件（如 epoll）在不依赖 RTTI 的情况下做类型识别。
+		virtual bool is_epoll_file() const { return false; }
 		virtual eastl::string read_symlink_target();
 		using ubuf = mem::UserspaceStream;
 		virtual size_t read_sub_dir(ubuf &dst) = 0;

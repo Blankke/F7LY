@@ -209,6 +209,8 @@ namespace proc
         void cleanup_sighand(); // 释放sighand_struct资源的方法
         void cleanup_memory_manager(); // 释放ProcessMemoryManager资源
         void set_memory_manager(ProcessMemoryManager* mm); // 设置新的内存管理器
+        // 仅重置内存管理器指针，不执行 cleanup；用于 PCB 复用或失败回滚时切断历史脏指针。
+        void reset_memory_manager_ptr(ProcessMemoryManager* mm = nullptr) { _memory_manager = mm; }
         ProcessMemoryManager* get_memory_manager() { return _memory_manager; } // 获取内存管理器
         void map_kstack(mem::PageTable &pt);
         fs::dentry *get_cwd() { return _cwd; }
@@ -356,6 +358,10 @@ namespace proc
         { 
             return _memory_manager ? (_memory_manager->heap_end - _memory_manager->heap_start) : 0;
         }
+        uint64 get_mmap_cursor() const
+        {
+            return _memory_manager ? _memory_manager->mmap_cursor : 0;
+        }
         void set_heap_start(uint64 start_addr) 
         { 
             if (_memory_manager) {
@@ -366,6 +372,12 @@ namespace proc
         { 
             if (_memory_manager) {
                 _memory_manager->heap_end = end_addr;
+            }
+        }
+        void set_mmap_cursor(uint64 next_addr)
+        {
+            if (_memory_manager) {
+                _memory_manager->mmap_cursor = next_addr;
             }
         }
 

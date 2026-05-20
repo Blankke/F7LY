@@ -38,6 +38,8 @@
 #define printfWhite(format, ...) __PRINTF_INFO_COLOR("\33[1;37m", format, ##__VA_ARGS__)
 #define printfMagenta(format, ...) __PRINTF_INFO_COLOR("\33[1;35m", format, ##__VA_ARGS__)
 
+#define tracef(info, args...) Printer::trace(__FILE__, __LINE__, info, ##args)
+
 // 颜色太少了，我给你加几个
 #define printfBlack(format, ...) __PRINTF_INFO_COLOR("\33[1;30m", format, ##__VA_ARGS__)
 #define printfOrange(format, ...) __PRINTF_WARN_COLOR("\33[1;38;5;208m", format, ##__VA_ARGS__)
@@ -111,6 +113,9 @@ public:
 	static void enable_info_group();
 	static void disable_info_group();
 	static bool info_group_enabled();
+	static void enable_trace_group();
+	static void disable_trace_group();
+	static bool trace_group_enabled();
 
 	void print(const char *fmt, ...);
 	int snprint(char *buffer, size_t size, const char *fmt, ...);

@@ -11,6 +11,13 @@
 namespace mem
 {
     PageTable k_pagetable;
+    namespace
+    {
+        bool is_sane_pagetable_base(uint64 base)
+        {
+            return base >= KERNBASE && base < PHYSTOP && is_page_align(base);
+        }
+    }
 
     // 阶段1注释：移除分散的页表引用计数管理，统一使用ProcessMemoryManager
     /*
@@ -137,9 +144,23 @@ namespace mem
 
             if (pte.is_valid())
             {
+                if (pte.is_leaf())
+                {
+                    printfRed("[PageTable::walk] 在 level=%d 遇到高层叶子 PTE，va=%p pte=%p\n",
+                              level, va, pte.get_data());
+                    return Pte(nullptr);
+                }
+
                 // 有效PTE：创建新页表对象指向下一级
                 PageTable next_level;
-                next_level.set_base(PTE2PA(pte.get_data()));
+                uint64 next_base = PTE2PA(pte.get_data());
+                if (!is_sane_pagetable_base(next_base))
+                {
+                    printfRed("[PageTable::walk] 下一层页表基址异常，level=%d va=%p next_base=%p pte=%p\n",
+                              level, va, next_base, pte.get_data());
+                    return Pte(nullptr);
+                }
+                next_level.set_base(next_base);
                 current_pt = next_level;
 
                 // // DEBUG:
@@ -180,6 +201,11 @@ namespace mem
         }
 
         // 返回最终层级的PTE
+        if (!is_sane_pagetable_base(current_pt.get_base()))
+        {
+            printfRed("[PageTable::walk] 最终页表基址异常，va=%p base=%p\n", va, current_pt.get_base());
+            return Pte(nullptr);
+        }
         return_pte.set_addr((uint64 *)(current_pt.get_base() + 8 * PX(0, va)));
         // printf("return_pte_addr: %p, 对应的va为：%p\n", (uint64 *)(current_pt.get_base() + 8 * PX(0, va)), va);
         // return_pte.set_data(PTE2PA(current_pt.get_base()) | PTE_V);

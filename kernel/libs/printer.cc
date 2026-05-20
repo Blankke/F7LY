@@ -11,7 +11,7 @@ Printer k_printer;
 namespace
 {
 
-bool disable_printf_flag = false;
+bool disable_printf_flag = true;
 bool warn_group_flag = false;
 bool info_group_flag = false;
 
@@ -300,6 +300,21 @@ void Printer::disable_info_group()
 bool Printer::info_group_enabled()
 {
 	return info_group_flag;
+}
+
+void Printer::enable_trace_group()
+{
+	_trace_flag = 1;
+}
+
+void Printer::disable_trace_group()
+{
+	_trace_flag = 0;
+}
+
+bool Printer::trace_group_enabled()
+{
+	return _trace_flag != 0;
 }
 
 void Printer::printint(int xx, int base, int sign)

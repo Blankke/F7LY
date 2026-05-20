@@ -24,6 +24,7 @@
 #include "timer_manager.hh"
 // #include "fs/vfs/path.hh"
 #include "fs/vfs/file/device_file.hh"
+#include "fs/vfs/file/epoll_file.hh"
 // #include <asm-generic/ioctls.h>
 #include <asm-generic/statfs.h>
 #include "fs/ioctl.hh"
@@ -31,6 +32,8 @@
 #include <bits/time.h>
 #include <linux/sysinfo.h>
 #include <linux/fs.h>
+#include <linux/rtc.h>
+#include <termios.h>
 #include "fs/vfs/file/normal_file.hh"
 #include "fs/vfs/file/pipe_file.hh"
 #include "fs/lwext4/ext4_inode.hh"
@@ -63,8 +66,182 @@
 #include "EASTL/vector.h"
 #include "fs/debug.hh"
 #include "interrupt_stats.hh"
+#include "mem/memlayout.hh"
 namespace syscall
 {
+    namespace
+    {
+#ifdef RISCV
+        constexpr uint64 k_min_kernel_file_ptr = KERNBASE;
+        constexpr uint64 k_min_user_pagetable_base = KERNBASE;
+#elif defined(LOONGARCH)
+        constexpr uint64 k_min_kernel_file_ptr = PHYSBASE;
+        constexpr uint64 k_min_user_pagetable_base = PHYSBASE;
+#endif
+
+        constexpr int k_epoll_ctl_add = 1;
+        constexpr int k_epoll_ctl_del = 2;
+        constexpr int k_epoll_ctl_mod = 3;
+
+        struct KernelEpollEvent
+        {
+            uint32 events;
+            uint64 data;
+        } __attribute__((packed));
+
+        inline bool is_kernel_mapped_file_range(uint64 addr, uint64 size)
+        {
+            if (addr < k_min_kernel_file_ptr || size == 0)
+            {
+                return false;
+            }
+
+            uint64 end = addr + size - 1;
+            if (end < addr)
+            {
+                return false;
+            }
+
+            return mem::k_pagetable.kwalk_addr(addr) != 0 &&
+                   mem::k_pagetable.kwalk_addr(end) != 0;
+        }
+
+        inline bool is_sane_user_pagetable_base(uint64 base)
+        {
+            return base != 0 && is_page_align(base) &&
+                   base >= k_min_user_pagetable_base && base < PHYSTOP;
+        }
+
+        inline bool is_probably_live_file_object(fs::file *file_obj)
+        {
+            if (file_obj == nullptr)
+            {
+                return false;
+            }
+
+            if (!is_kernel_mapped_file_range((uint64)file_obj, sizeof(fs::file)))
+            {
+                return false;
+            }
+
+            uint64 vtable_addr = *(uint64 *)file_obj;
+            return is_kernel_mapped_file_range(vtable_addr, sizeof(void *));
+        }
+
+        bool is_rtc_device_path(const eastl::string &path)
+        {
+            return path == "/dev/rtc" || path == "/dev/rtc0" || path == "/dev/misc/rtc";
+        }
+
+        bool is_leap_year(int year)
+        {
+            return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+        }
+
+        void fill_rtc_time_from_epoch(uint64 epoch_sec, rtc_time &rt)
+        {
+            static const int days_in_month[12] = {
+                31, 28, 31, 30, 31, 30,
+                31, 31, 30, 31, 30, 31,
+            };
+
+            memset(&rt, 0, sizeof(rt));
+
+            uint64 days = epoch_sec / 86400ULL;
+            uint64 rem = epoch_sec % 86400ULL;
+
+            rt.tm_hour = rem / 3600ULL;
+            rem %= 3600ULL;
+            rt.tm_min = rem / 60ULL;
+            rt.tm_sec = rem % 60ULL;
+            rt.tm_wday = (days + 4) % 7; // 1970-01-01 是星期四
+
+            int year = 1970;
+            while (true)
+            {
+                const int year_days = is_leap_year(year) ? 366 : 365;
+                if (days < (uint64)year_days)
+                {
+                    break;
+                }
+                days -= year_days;
+                ++year;
+            }
+
+            rt.tm_year = year - 1900;
+            rt.tm_yday = days;
+
+            int month = 0;
+            while (month < 12)
+            {
+                int dim = days_in_month[month];
+                if (month == 1 && is_leap_year(year))
+                {
+                    dim = 29;
+                }
+                if (days < (uint64)dim)
+                {
+                    break;
+                }
+                days -= dim;
+                ++month;
+            }
+
+            rt.tm_mon = month;
+            rt.tm_mday = (int)days + 1;
+            rt.tm_isdst = 0;
+        }
+
+        int get_path_kstat(const eastl::string &path, fs::Kstat &st, bool follow_symlinks)
+        {
+            fs::vfile_tree_node *node = fs::k_vfs.get_virtual_node(path);
+            if (node != nullptr)
+            {
+                fs::file *vf = nullptr;
+                int open_flags = O_RDONLY;
+                if (!follow_symlinks)
+                {
+                    open_flags |= O_NOFOLLOW;
+                }
+
+                int open_ret = fs::k_vfs.openat(path, vf, open_flags);
+                if (open_ret < 0)
+                {
+                    return open_ret;
+                }
+
+                memset(&st, 0, sizeof(st));
+                int stat_ret = fs::k_vfs.fstat(vf, &st);
+                if (vf != nullptr)
+                {
+                    vf->free_file();
+                }
+                if (stat_ret < 0)
+                {
+                    return stat_ret;
+                }
+                return 0;
+            }
+
+            memset(&st, 0, sizeof(st));
+            return vfs_path_stat(path.c_str(), &st, follow_symlinks);
+        }
+
+        int get_path_mode_owner(const eastl::string &path, uint32_t &mode, uint32_t &uid, uint32_t &gid, bool follow_symlinks)
+        {
+            fs::Kstat st;
+            int stat_ret = get_path_kstat(path, st, follow_symlinks);
+            if (stat_ret < 0)
+            {
+                return stat_ret;
+            }
+            mode = st.mode;
+            uid = st.uid;
+            gid = st.gid;
+            return 0;
+        }
+    }
+
     // 创建全局的 SyscallHandler 实例
     SyscallHandler k_syscall_handler;
 
@@ -77,8 +254,8 @@ namespace syscall
     // private: uint64 _default_syscall_impl();
     uint64 SyscallHandler::_default_syscall_impl()
     {
-        panic("Syscall not implemented\n");
-        return 0;
+        printfRed("[SyscallHandler] Unimplemented syscall invoked, returning ENOSYS\n");
+        return SYS_ENOSYS;
     }
 
     void SyscallHandler::init()
@@ -361,6 +538,19 @@ namespace syscall
                 // if (!(sys_num == 64) && !(sys_num == 66))
                 printfCyan("[SyscallHandler::invoke_syscaller]syscall name: %s ret: %d\n", _syscall_name[sys_num], ret);
             debug_fd_4();
+            mem::PageTable *pt = p->get_pagetable();
+            if (pt != nullptr && !is_sane_user_pagetable_base(pt->get_base()))
+            {
+                panic("invoke_syscaller: pagetable base corrupted after syscall %s(%d), pid=%d tid=%d state=%d pt=%p base=%p ret=%p",
+                      _syscall_name[sys_num],
+                      sys_num,
+                      p->_pid,
+                      p->_tid,
+                      (int)p->_state,
+                      pt,
+                      (void *)pt->get_base(),
+                      (void *)ret);
+            }
             p->_trapframe->a0 = ret; // 设置返回值
         }
         //     if (sys_num != 64 && sys_num != 66)
@@ -494,6 +684,20 @@ namespace syscall
             printfRed("cannot get file from fd %d\n", fd);
             return SYS_EBADF;
         }
+        if (!is_probably_live_file_object(f))
+        {
+            printfRed("[SyscallHandler::_arg_fd] stale file pointer: pid=%d tid=%d fd=%d file=%p\n",
+                      p ? p->_pid : -1,
+                      p ? p->_tid : -1,
+                      fd,
+                      f);
+            if (p != nullptr && p->_ofile != nullptr)
+            {
+                p->_ofile->_ofile_ptr[fd] = nullptr;
+                p->_ofile->_fl_cloexec[fd] = false;
+            }
+            return SYS_EBADF;
+        }
         if (out_fd)
             *out_fd = fd;
         if (out_f)
@@ -502,7 +706,7 @@ namespace syscall
     }
     int SyscallHandler::argfd(int n, int *pfd, struct file **pf)
     {
-        panic("未实现该系统调用");
+        printfRed("[SyscallHandler::argfd] legacy argfd helper is not supported, use _arg_fd instead (n=%d)\n", n);
 #ifdef FIX_FS_COMPLETELY
         int fd;
         struct file *f;
@@ -515,7 +719,7 @@ namespace syscall
         if (pf)
             *pf = f;
 #endif
-        return 0;
+        return -1;
     }
     bool SyscallHandler::is_bad_addr(uint64 addr)
     {
@@ -528,23 +732,13 @@ namespace syscall
     // ---------------- syscall functions ----------------
     uint64 SyscallHandler::sys_exec()
     {
-        panic("未实现该系统调用");
-        TODO("sys_exec");
-        printfYellow("sys_exec\n");
-        return 0;
+        printfRed("[SyscallHandler::sys_exec] sys_exec 未实现，返回 ENOSYS\n");
+        return SYS_ENOSYS;
     }
     uint64 SyscallHandler::sys_fork()
     {
-        panic("未实现该系统调用");
-        TODO(uint64 usp;
-             if (_arg_addr(1, usp) < 0) {
-                 printfRed("[SyscallHandler::sys_fork] Error fetching usp argument\n");
-                 return -1;
-             } return proc::k_pm.fork(usp); // 调用进程管理器的 fork 函数
-        )
-        TODO("sys_fork");
-        printfYellow("sys_fork\n");
-        return 0;
+        printfRed("[SyscallHandler::sys_fork] sys_fork 未实现，返回 ENOSYS\n");
+        return SYS_ENOSYS;
     }
     uint64 SyscallHandler::sys_exit()
     {
@@ -815,9 +1009,19 @@ namespace syscall
         uint64 uargv, uenvp;
 
         eastl::string path;
-        if (_arg_str(0, path, PGSIZE) < 0 ||
-            _arg_addr(1, uargv) < 0 || _arg_addr(2, uenvp) < 0)
-            return -1;
+        int path_ret = _arg_str(0, path, PGSIZE);
+        if (path_ret < 0)
+        {
+            printfRed("[sys_execve] 获取 path 失败: ret=%d user_path=%p\n",
+                      path_ret, (void *)_arg_raw(0));
+            return path_ret;
+        }
+        if (_arg_addr(1, uargv) < 0 || _arg_addr(2, uenvp) < 0)
+        {
+            printfRed("[sys_execve] 获取 argv/envp 地址失败: argv=%p envp=%p\n",
+                      (void *)_arg_raw(1), (void *)_arg_raw(2));
+            return -EFAULT;
+        }
 
         eastl::vector<eastl::string> argv;
         uint64 uarg;
@@ -826,10 +1030,17 @@ namespace syscall
             for (uint64 i = 0, puarg = uargv;; i++, puarg += sizeof(char *))
             {
                 if (i >= max_arg_num)
-                    return -1;
+                {
+                    printfRed("[sys_execve] argv 数量超限\n");
+                    return -E2BIG;
+                }
 
                 if (_fetch_addr(puarg, uarg) < 0)
-                    return -1;
+                {
+                    printfRed("[sys_execve] 获取 argv[%d] 指针失败: user_slot=%p\n",
+                              i, (void *)puarg);
+                    return -EFAULT;
+                }
 
                 if (uarg == 0)
                     break;
@@ -837,8 +1048,13 @@ namespace syscall
                 // printfCyan( "execve get arga[%d] = %p\n", i, uarg );
 
                 argv.emplace_back(eastl::string());
-                if (_fetch_str(uarg, argv[i], PGSIZE) < 0)
-                    return -1;
+                int arg_ret = _fetch_str(uarg, argv[i], PGSIZE);
+                if (arg_ret < 0)
+                {
+                    printfRed("[sys_execve] 获取 argv[%d] 字符串失败: user_str=%p ret=%d\n",
+                              i, (void *)uarg, arg_ret);
+                    return arg_ret;
+                }
                 // printfCyan("execve get arga[%d] = %s\n", i, argv[i].c_str());
             }
         }
@@ -850,17 +1066,29 @@ namespace syscall
             for (ulong i = 0, puenv = uenvp;; i++, puenv += sizeof(char *))
             {
                 if (i >= max_arg_num)
-                    return -2;
+                {
+                    printfRed("[sys_execve] envp 数量超限\n");
+                    return -E2BIG;
+                }
 
                 if (_fetch_addr(puenv, uenv) < 0)
-                    return -2;
+                {
+                    printfRed("[sys_execve] 获取 envp[%d] 指针失败: user_slot=%p\n",
+                              (int)i, (void *)puenv);
+                    return -EFAULT;
+                }
 
                 if (uenv == 0)
                     break;
 
                 envp.emplace_back(eastl::string());
-                if (_fetch_str(uenv, envp[i], PGSIZE) < 0)
-                    return -2;
+                int env_ret = _fetch_str(uenv, envp[i], PGSIZE);
+                if (env_ret < 0)
+                {
+                    printfRed("[sys_execve] 获取 envp[%d] 字符串失败: user_str=%p ret=%d\n",
+                              (int)i, (void *)uenv, env_ret);
+                    return env_ret;
+                }
                 // printfCyan("execve get envp[%d] = %s\n", i, envp[i].c_str());
             }
         }
@@ -879,7 +1107,6 @@ namespace syscall
             printfRed("[SyscallHandler::sys_fstat] Error fetching arguments\n");
             return -EINVAL;
         }
-        printfGreen("[SyscallHandler::sys_fstat] fd: %d, kst_addr: %p\n", fd, (void *)kst_addr);
         int status = proc::k_pm.fstat(fd, &kst);
         if (status < 0)
         {
@@ -1092,9 +1319,8 @@ namespace syscall
                 }
             }
 
-            // 使用 vfs_path_stat 获取文件信息，根据 flags 决定是否跟随符号链接
             bool follow_symlinks = !(flags & AT_SYMLINK_NOFOLLOW);
-            result = vfs_path_stat(absolute_path.c_str(), &kst, follow_symlinks);
+            result = get_path_kstat(absolute_path, kst, follow_symlinks);
             if (result < 0)
             {
                 return result; // 返回错误码
@@ -1274,8 +1500,6 @@ namespace syscall
             }
         }
 
-        printfCyan("[SyscallHandler::sys_openat] 绝对路径: %s, mode: 0%o\n", abs_pathname.c_str(), mode);
-
         // 检查是否是 /proc/self/fd/ 路径
         if (abs_pathname.find("/proc/self/fd/") == 0)
         {
@@ -1298,8 +1522,6 @@ namespace syscall
 
             // 对于 /proc/self/fd/ 路径，应该直接复制文件描述符而不是重新打开
             // 这相当于 dup() 操作，但需要处理某些标志
-            printfCyan("[SyscallHandler::sys_openat] duplicating fd %d for /proc/self/fd/%d\n", target_fd, target_fd);
-
             // 处理 O_TRUNC 标志 - 这个标志需要执行，因为它会影响文件大小
             if (flags & O_TRUNC)
             {
@@ -1308,7 +1530,6 @@ namespace syscall
                     printfRed("[SyscallHandler::sys_openat] File is sealed with F_SEAL_SHRINK, cannot truncate\n");
                     return -EPERM; // 文件被封印，
                 }
-                printfCyan("[SyscallHandler::sys_openat] truncating file for /proc/self/fd/ path with O_TRUNC flag\n");
                 // 截断文件到0字节
                 if (target_file->lwext4_file_struct.fsize > 0)
                 {
@@ -1319,7 +1540,6 @@ namespace syscall
                         printfRed("[SyscallHandler::sys_openat] Failed to truncate file: %d\n", ret);
                         return -EIO;
                     }
-                    printfCyan("[SyscallHandler::sys_openat] File successfully truncated to 0 bytes\n");
                 }
             }
 
@@ -2145,7 +2365,8 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_readahead()
     {
-        panic("未实现");
+        printfRed("[SyscallHandler::sys_readahead] readahead 未实现，返回 ENOSYS\n");
+        return SYS_ENOSYS;
     }
     uint64 SyscallHandler::sys_munmap()
     {
@@ -2156,7 +2377,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_munmap] Error fetching munmap arguments\n");
             return -EINVAL;
         }
-        printfYellow("[SyscallHandler::sys_munmap] start: %p, size: %zu\n", (void *)start, size);
+        printfBlue("[sys_munmap] start=%p size=%zu\n", (void *)start, size);
         int result = proc::k_pm.munmap((void *)start, size);
         if (result < 0)
         {
@@ -2465,125 +2686,91 @@ namespace syscall
             return 0;
         }
         
-        // 限制缓冲区大小，避免栈溢出
-        const uint64 max_buf_size = 4096; // 4KB 栈缓冲区
+        // getdents64 允许分批返回目录项。
+        // 这里固定使用一页 scratch buffer，避免在高频目录遍历路径上走内核堆，
+        // 否则一旦堆分配器元数据被污染，就会把当前进程的 mm/page table 一起写坏。
+        const uint64 max_buf_size = PGSIZE;
         if (buf_len > max_buf_size) {
             buf_len = max_buf_size;
         }
-        
-        // 在栈上分配内核缓冲区
-        char kernel_buf[max_buf_size];
+
+        char *kernel_buf = reinterpret_cast<char *>(mem::k_pmm.alloc_page());
+        if (kernel_buf == nullptr) {
+            printfRed("[sys_getdents64] FAILED - Cannot allocate kernel buffer, len=%lu\n", buf_len);
+            return -ENOMEM;
+        }
+        memset(kernel_buf, 0, PGSIZE);
         struct linux_dirent64 *dirp = (struct linux_dirent64 *)kernel_buf;
         
         // 调用底层VFS函数获取目录项
         int result = vfs_getdents(f, dirp, buf_len);
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+
+        if (pt != nullptr && !is_sane_user_pagetable_base(pt->get_base()))
+        {
+            mem::k_pmm.free_page(kernel_buf);
+            panic("[sys_getdents64] pagetable base corrupted before copy_out, path=%s fd=%p buf_len=%p result=%d pid=%d tid=%d pt=%p base=%p",
+                  f ? f->_path_name.c_str() : "(null)",
+                  f,
+                  (void *)buf_len,
+                  result,
+                  p ? p->_pid : -1,
+                  p ? p->_tid : -1,
+                  pt,
+                  (void *)pt->get_base());
+        }
         
         if (result < 0) {
+            mem::k_pmm.free_page(kernel_buf);
             printfRed("[sys_getdents64] FAILED - vfs_getdents returned error: %d\n", result);
             return result;
         }
-        
-        // 调试输出：打印获取到的目录项信息
-        if (result > 0) {
-            printfCyan("[sys_getdents64] DEBUG - Total bytes read: %d\n", result);
-            printfCyan("[sys_getdents64] DEBUG - Parsing directory entries:\n");
-            
+
+        // 目录遍历是高频热路径，逐项日志默认不输出。
+        // 需要深挖 readdir/getdents 问题时，可单独打开 trace 级别观察实际返回内容。
+        if (result > 0 && Printer::trace_group_enabled()) {
+            tracef("[sys_getdents64] bytes=%d fd-path=%s\n", result, f ? f->_path_name.c_str() : "(null)");
+
             char *buf_ptr = kernel_buf;
             int bytes_processed = 0;
             int entry_count = 0;
-            
+
             while (bytes_processed < result) {
                 struct linux_dirent64 *entry = (struct linux_dirent64 *)(buf_ptr + bytes_processed);
-                
-                // 检查条目的有效性
                 if (entry->d_reclen == 0 || bytes_processed + entry->d_reclen > result) {
-                    printfRed("[sys_getdents64] DEBUG - Invalid entry at offset %d, reclen=%d\n", 
-                             bytes_processed, entry->d_reclen);
+                    printfRed("[sys_getdents64] trace 发现损坏目录项: off=%d reclen=%d result=%d\n",
+                              bytes_processed, entry->d_reclen, result);
                     break;
                 }
-                
-                entry_count++;
-                
-                // 打印条目详细信息
-                printfCyan("[sys_getdents64] DEBUG - Entry %d:\n", entry_count);
-                printfCyan("  d_ino: %lu\n", entry->d_ino);
-                printfCyan("  d_off: %ld\n", entry->d_off);
-                printfCyan("  d_reclen: %u\n", entry->d_reclen);
-                printfCyan("  d_type: %u (", entry->d_type);
-                
-                // 打印文件类型的可读名称
-                switch (entry->d_type) {
-                    case T_DIR:
-                        printfCyan("Directory");
-                        break;
-                    case T_FILE:
-                        printfCyan("Regular File");
-                        break;
-                    case T_CHR:
-                        printfCyan("Character Device");
-                        break;
-                    case T_BLK:
-                        printfCyan("Block Device");
-                        break;
-                    case T_FIFO:
-                        printfCyan("FIFO/Pipe");
-                        break;
-                    case T_SOCK:
-                        printfCyan("Socket");
-                        break;
-                    case T_UNKNOWN:
-                    default:
-                        printfCyan("Unknown");
-                        break;
-                }
-                printfCyan(")\n");
-                
-                // 打印文件名（使用正确的长度计算方法）
-                // linux_dirent64结构: d_ino(8) + d_off(8) + d_reclen(2) + d_type(1) + d_name[0]
-                int name_start_offset = sizeof(uint64) + sizeof(int64) + sizeof(unsigned short) + sizeof(unsigned char);
-                int name_len = entry->d_reclen - name_start_offset;
-                
-                // 尝试使用strlen来获取实际的字符串长度
-                int actual_name_len = strlen(entry->d_name);
-                if (actual_name_len > 0 && actual_name_len < name_len && actual_name_len < 256) {
-                    printfCyan("  d_name: \"%s\" (strlen=%d, calc_len=%d)\n", 
-                              entry->d_name, actual_name_len, name_len);
-                } else if (name_len > 0 && name_len < 256) {
-                    // 如果strlen不可靠，使用计算的长度但确保安全
-                    char name_buf[256];
-                    int safe_len = (name_len > 255) ? 255 : name_len;
-                    strncpy(name_buf, entry->d_name, safe_len);
-                    name_buf[safe_len] = '\0'; // 确保字符串结尾
-                    printfCyan("  d_name: \"%s\" (safe_copy, len=%d)\n", name_buf, safe_len);
-                } else {
-                    printfCyan("  d_name: <invalid name length %d, name_start_offset=%d>\n", 
-                              name_len, name_start_offset);
-                }
-                
-                printfCyan("  Entry ends at offset: %d\n", bytes_processed + entry->d_reclen);
-                
+
+                ++entry_count;
+                tracef("[sys_getdents64] entry=%d ino=%lu off=%ld reclen=%u type=%u name=%s\n",
+                       entry_count, entry->d_ino, entry->d_off, entry->d_reclen,
+                       entry->d_type, entry->d_name);
                 bytes_processed += entry->d_reclen;
             }
-            
-            printfCyan("[sys_getdents64] DEBUG - Total entries processed: %d\n", entry_count);
-            printfCyan("[sys_getdents64] DEBUG - Total bytes processed: %d/%d\n", bytes_processed, result);
-        } else {
-            printfYellow("[sys_getdents64] DEBUG - No entries returned (result=0)\n");
+
+            tracef("[sys_getdents64] entries=%d processed=%d/%d\n",
+                   entry_count, bytes_processed, result);
         }
-        
+
         // 将结果复制到用户空间
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        mem::PageTable *pt = p->get_pagetable();
-        
         if (result > 0) {
             int copy_result = mem::k_vmm.copy_out(*pt, buf_addr, kernel_buf, result);
             if (copy_result < 0) {
-                printfRed("[sys_getdents64] FAILED - Cannot copy to user space\n");
+                mem::k_pmm.free_page(kernel_buf);
+                printfRed("[sys_getdents64] FAILED - Cannot copy to user space, path=%s fd=%p buf_addr=%p result=%d pt=%p base=%p\n",
+                          f ? f->_path_name.c_str() : "(null)",
+                          f,
+                          (void *)buf_addr,
+                          result,
+                          pt,
+                          pt ? (void *)pt->get_base() : nullptr);
                 return -EFAULT;
             }
         }
-        
-        printfYellow("[sys_getdents64] SUCCESS - Read %d bytes from directory\n", result);
+        mem::k_pmm.free_page(kernel_buf);
         return result;
     }
     uint64 SyscallHandler::sys_shutdown()
@@ -2842,9 +3029,6 @@ namespace syscall
             return -1;
         }
 
-        printfCyan("[SyscallHandler::sys_fstatat] dirfd: %d, pathname: %s, kst_addr: %p, flags: %d\n",
-                   dirfd, pathname.c_str(), (void *)kst_addr, flags);
-
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
 
@@ -2873,7 +3057,6 @@ namespace syscall
                 return -1;
             }
 
-            printfGreen("[SyscallHandler::sys_fstatat] AT_EMPTY_PATH success for dirfd: %d\n", dirfd);
             return 0;
         }
         else if (pathname.empty())
@@ -2930,58 +3113,31 @@ namespace syscall
 
         // printfCyan("[SyscallHandler::sys_fstatat] 绝对路径: %s\n", abs_pathname.c_str());
 
-        // 首先验证路径中的每个父目录都是目录
-        eastl::string path_to_check = abs_pathname;
-        size_t last_slash = path_to_check.find_last_of('/');
-        if (last_slash != eastl::string::npos && last_slash > 0)
+        // 普通文件优先走“按路径直接取属性”的快路径，避免为每次 stat 都构造 file 对象并打开文件。
+        // 只有虚拟文件才回退到 openat + fstat，因为它们没有 ext4/fat32 的真实 inode 可直接查询。
+        fs::vfile_msg vfile = fs::k_vfs.get_vfile_msg(abs_pathname);
+        if (!vfile.is_virtual)
         {
-            eastl::string parent_path = path_to_check.substr(0, last_slash);
-            eastl::string current_path = "";
-
-            // 逐段检查路径
-            size_t start = 1; // 跳过第一个 '/'
-            while (start < parent_path.length())
+            int stat_ret = vfs_path_stat(abs_pathname.c_str(), &kst, (flags & AT_SYMLINK_NOFOLLOW) == 0);
+            if (stat_ret == 0)
             {
-                size_t end = parent_path.find('/', start);
-                if (end == eastl::string::npos)
-                    end = parent_path.length();
-
-                current_path += "/" + parent_path.substr(start, end - start);
-
-                if (fs::k_vfs.is_file_exist(current_path.c_str()) == 1)
+                if (mem::k_vmm.copy_out(*pt, kst_addr, &kst, sizeof(kst)) < 0)
                 {
-                    int file_type = fs::k_vfs.path2filetype(current_path);
-                    if (file_type != fs::FileTypes::FT_DIRECT)
-                    {
-                        printfRed("[SyscallHandler::sys_fstatat] 路径中的组件不是目录: %s\n", current_path.c_str());
-                        return SYS_ENOTDIR; // 不是目录
-                    }
+                    printfRed("[SyscallHandler::sys_fstatat] Error copying out kstat\n");
+                    return -1;
                 }
-                else if (fs::k_vfs.is_file_exist(current_path.c_str()) == 0)
-                {
-                    printfRed("[SyscallHandler::sys_fstatat] 路径中的目录不存在: %s\n", current_path.c_str());
-                    return SYS_ENOENT; // 目录不存在
-                }
-
-                start = end + 1;
+                return 0;
             }
         }
 
-        // 现在检查目标文件是否存在
-        if (fs::k_vfs.is_file_exist(abs_pathname.c_str()) != 1)
-        {
-            printfRed("[SyscallHandler::sys_fstatat] 文件不存在: %s\n", abs_pathname.c_str());
-            return SYS_ENOENT; // 文件不存在
-        }
-
-        // 使用 k_vfs.openat 来获取文件对象，这样可以处理虚拟文件
+        // 使用 k_vfs.openat 来获取文件对象，这样可以处理虚拟文件，
+        // 也给上面的直接 stat 快路径留一个安全回退。
         fs::file *file_obj = nullptr;
         uint open_flags = O_RDONLY;
 
         // 对于 AT_SYMLINK_NOFOLLOW 标志，添加 O_NOFOLLOW 标志
         if (flags & AT_SYMLINK_NOFOLLOW)
         {
-            printfYellow("[SyscallHandler::sys_fstatat] AT_SYMLINK_NOFOLLOW set, adding O_NOFOLLOW flag\n");
             open_flags |= O_NOFOLLOW;
         }
 
@@ -2989,8 +3145,73 @@ namespace syscall
         int open_result = fs::k_vfs.openat(abs_pathname, file_obj, open_flags);
         if (open_result < 0)
         {
-            printfRed("[SyscallHandler::sys_fstatat] Failed to open file: %s, error: %d\n", abs_pathname.c_str(), open_result);
+            // 成功路径直接 openat + fstat，避免对海量 stat/fstatat 请求重复做多次路径遍历。
+            // 只有 open 失败时，才回退到逐层检查，补齐更准确的 ENOENT / ENOTDIR 语义。
+            eastl::string path_to_check = abs_pathname;
+            size_t last_slash = path_to_check.find_last_of('/');
+            if (last_slash != eastl::string::npos && last_slash > 0)
+            {
+                eastl::string parent_path = path_to_check.substr(0, last_slash);
+                eastl::string current_path = "";
+
+                size_t start = 1; // 跳过根路径 '/'
+                while (start < parent_path.length())
+                {
+                    size_t end = parent_path.find('/', start);
+                    if (end == eastl::string::npos)
+                        end = parent_path.length();
+
+                    current_path += "/" + parent_path.substr(start, end - start);
+
+                    int exists = fs::k_vfs.is_file_exist(current_path.c_str());
+                    if (exists == 1)
+                    {
+                        int file_type = fs::k_vfs.path2filetype(current_path);
+                        if (file_type != fs::FileTypes::FT_DIRECT)
+                        {
+                            printfRed("[SyscallHandler::sys_fstatat] 路径中的组件不是目录: %s\n", current_path.c_str());
+                            return SYS_ENOTDIR;
+                        }
+                    }
+                    else if (exists == 0)
+                    {
+                        printfRed("[SyscallHandler::sys_fstatat] 路径中的目录不存在: %s\n", current_path.c_str());
+                        return SYS_ENOENT;
+                    }
+                    else if (exists < 0)
+                    {
+                        printfRed("[SyscallHandler::sys_fstatat] 路径检查失败: %s, error=%d\n",
+                                  current_path.c_str(), exists);
+                        return exists;
+                    }
+
+                    start = end + 1;
+                }
+            }
+
+            int target_exists = fs::k_vfs.is_file_exist(abs_pathname.c_str());
+            if (target_exists == 0)
+            {
+                printfRed("[SyscallHandler::sys_fstatat] 文件不存在: %s\n", abs_pathname.c_str());
+                return SYS_ENOENT;
+            }
+            if (target_exists < 0)
+            {
+                printfRed("[SyscallHandler::sys_fstatat] 文件路径检查失败: %s, error=%d\n",
+                          abs_pathname.c_str(), target_exists);
+                return target_exists;
+            }
+
+            printfRed("[SyscallHandler::sys_fstatat] Failed to open file: %s, error: %d\n",
+                      abs_pathname.c_str(), open_result);
             return open_result;
+        }
+
+        if (!is_probably_live_file_object(file_obj))
+        {
+            printfRed("[SyscallHandler::sys_fstatat] openat 返回异常文件对象: path=%s file=%p flags=0x%x\n",
+                      abs_pathname.c_str(), file_obj, open_flags);
+            return -EBADF;
         }
 
         // 使用 k_vfs.fstat 获取文件状态，这会正确处理虚拟文件
@@ -3760,7 +3981,7 @@ namespace syscall
             f->_attrs.filetype != fs::FileTypes::FT_NORMAL)
         {
             printfRed("[SyscallHandler::sys_ioctl] File type not supported for ioctl\n");
-            // return SYS_ENOTTY; // 不支持的文件类型
+            return SYS_ENOTTY;
         }
         u32 cmd;
         if (_arg_int(1, tmp) < 0)
@@ -3782,28 +4003,63 @@ namespace syscall
                    fd, cmd, (void *)arg);
         /// @todo not implement
 
+        if (is_rtc_device_path(f->_path_name))
+        {
+            switch (cmd)
+            {
+            case RTC_RD_TIME:
+            {
+                tmm::timespec now_ts{};
+                if (tmm::k_tm.clock_gettime(static_cast<tmm::SystemClockId>(CLOCK_REALTIME), &now_ts) < 0)
+                {
+                    printfRed("[SyscallHandler::sys_ioctl] RTC_RD_TIME 获取当前时间失败\n");
+                    return SYS_EIO;
+                }
+
+                rtc_time rtc{};
+                fill_rtc_time_from_epoch((uint64)now_ts.tv_sec, rtc);
+
+                mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+                if (mem::k_vmm.copy_out(*pt, arg, &rtc, sizeof(rtc)) < 0)
+                {
+                    printfRed("[SyscallHandler::sys_ioctl] RTC_RD_TIME 回写用户空间失败\n");
+                    return SYS_EFAULT;
+                }
+                return 0;
+            }
+            default:
+                return SYS_ENOTTY;
+            }
+        }
+
         if ((cmd & 0xFFFF) == TCGETS)
         {
             fs::device_file *df = (fs::device_file *)f;
+            termios ts{};
+            int ret = df->tcgetattr(&ts);
+            if (ret < 0)
+            {
+                return ret;
+            }
+
             mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
-#ifdef RISCV
-            termios *ts = (termios *)pt->walk_addr(arg);
-#elif defined(LOONGARCH)
-            termios *ts =
-                (termios *)to_vir((ulong)pt->walk_addr(arg));
-#endif
-            return df->tcgetattr(ts);
+            if (mem::k_vmm.copy_out(*pt, arg, &ts, sizeof(ts)) < 0)
+            {
+                printfRed("[SyscallHandler::sys_ioctl] TCGETS copy_out failed\n");
+                return SYS_EFAULT;
+            }
+            return 0;
         }
 
         if ((cmd & 0XFFFF) == TIOCGPGRP)
         {
+            int pgrp = 1;
             mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
-#ifdef RISCV
-            int *p_pgrp = (int *)pt->walk_addr(arg);
-#elif defined(LOONGARCH)
-            int *p_pgrp = (int *)to_vir((uint64)pt->walk_addr(arg));
-#endif
-            *p_pgrp = 1;
+            if (mem::k_vmm.copy_out(*pt, arg, &pgrp, sizeof(pgrp)) < 0)
+            {
+                printfRed("[SyscallHandler::sys_ioctl] TIOCGPGRP copy_out failed\n");
+                return SYS_EFAULT;
+            }
             return 0;
         }
 
@@ -3823,29 +4079,31 @@ namespace syscall
 
         if ((cmd & 0xFFFF) == FIONREAD || (cmd & 0xFFFF) == TIOCINQ)
         {
-            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
-#ifdef RISCV
-            int *bytes_available = (int *)pt->walk_addr(arg);
-#elif defined(LOONGARCH)
-            int *bytes_available = (int *)to_vir((uint64)pt->walk_addr(arg));
-#endif
+            int bytes_available = 0;
 
             if (f->_attrs.filetype == fs::FileTypes::FT_PIPE)
             {
                 // 对于管道文件，获取管道中可读的字节数
                 fs::pipe_file *pf = (fs::pipe_file *)f;
-                *bytes_available = pf->get_available_bytes();
+                bytes_available = pf->get_available_bytes();
             }
             else if (f->_attrs.filetype == fs::FileTypes::FT_DEVICE)
             {
                 // 对于设备文件（如终端），获取输入缓冲区中的字节数
                 fs::device_file *df = (fs::device_file *)f;
                 int result = df->get_input_buffer_bytes();
-                *bytes_available = (result < 0) ? 0 : result;
+                bytes_available = (result < 0) ? 0 : result;
             }
             else
             {
-                *bytes_available = 0;
+                bytes_available = 0;
+            }
+
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+            if (mem::k_vmm.copy_out(*pt, arg, &bytes_available, sizeof(bytes_available)) < 0)
+            {
+                printfRed("[SyscallHandler::sys_ioctl] FIONREAD/TIOCINQ copy_out failed\n");
+                return SYS_EFAULT;
             }
             return 0;
         }
@@ -4620,7 +4878,7 @@ namespace syscall
                 {
                     printf("[SyscallHandler::sys_fcntl] Duplicating file descriptor %d to %d\n", fd, retfd);
                     printf("cur proc:%d\n", p->_pid);
-                    p->_ofile->_ofile_ptr[retfd] = p->_ofile->_ofile_ptr[arg]; // 将文件指针添加到新的文件描述符
+                    p->_ofile->_ofile_ptr[retfd] = f; // 复制的是旧 fd 对应的文件，而不是起始搜索下标 arg
                     f->refcnt++;
                     p->_ofile->_fl_cloexec[retfd] = false; // 新的文件描述符默认不设置 CLOEXEC
                     break;
@@ -5147,21 +5405,14 @@ namespace syscall
                         return SYS_ENOTDIR; // 不是目录
                     }
 
-                    // 检查目录的执行权限
-                    uint32_t dir_mode;
-                    int r = ext4_mode_get(current_path.c_str(), &dir_mode);
-                    if (r != EOK)
+                    // 检查目录的执行权限。这里不能再假设路径一定来自 ext4；
+                    // /dev、/proc 一类虚拟目录也必须参与正常的权限判断。
+                    uint32_t dir_mode, dir_uid, dir_gid;
+                    int r = get_path_mode_owner(current_path, dir_mode, dir_uid, dir_gid, true);
+                    if (r < 0)
                     {
-                        printfRed("[SyscallHandler::sys_faccessat] 无法获取目录权限: %s, error: %d\n", current_path.c_str(), r);
-                        return -r;
-                    }
-
-                    uint32_t dir_uid, dir_gid;
-                    r = ext4_owner_get(current_path.c_str(), &dir_uid, &dir_gid);
-                    if (r != EOK)
-                    {
-                        printfRed("[SyscallHandler::sys_faccessat] 无法获取目录所有者信息: %s, error: %d\n", current_path.c_str(), r);
-                        return -r;
+                        printfRed("[SyscallHandler::sys_faccessat] 无法获取目录属性: %s, error: %d\n", current_path.c_str(), r);
+                        return r;
                     }
 
                     // 检查目录执行权限
@@ -5212,22 +5463,15 @@ namespace syscall
             printfRed("[SyscallHandler::sys_faccessat] 文件不存在: %s\n", abs_pathname.c_str());
             return SYS_ENOENT; // 文件不存在
         }
-        // 获取文件的权限信息
-        uint32_t file_mode;
-        int r = ext4_mode_get(abs_pathname.c_str(), &file_mode);
-        if (r != EOK)
+        // 获取目标路径的权限/owner 信息，统一覆盖普通文件与虚拟文件。
+        uint32_t file_mode, file_uid, file_gid;
+        int r = get_path_mode_owner(abs_pathname, file_mode, file_uid, file_gid,
+                                    (flags & AT_SYMLINK_NOFOLLOW) == 0);
+        if (r < 0)
         {
-            printfRed("[SyscallHandler::sys_faccessat] 无法获取文件权限: %s, error: %d\n", abs_pathname.c_str(), r);
-            return -r;
-        }
-
-        // 获取文件的owner和group信息
-        uint32_t file_uid, file_gid;
-        r = ext4_owner_get(abs_pathname.c_str(), &file_uid, &file_gid);
-        if (r != EOK)
-        {
-            printfRed("[SyscallHandler::sys_faccessat] 无法获取文件所有者信息: %s, error: %d\n", abs_pathname.c_str(), r);
-            return -r;
+            printfRed("[SyscallHandler::sys_faccessat] 无法获取文件属性: %s, error: %d\n",
+                      abs_pathname.c_str(), r);
+            return r;
         }
 
         // 获取当前进程的用户信息
@@ -6076,7 +6320,7 @@ namespace syscall
         if (fs::k_vfs.is_file_exist(pathname.c_str()) != 1)
         {
             printfRed("[sys_statfs] 路径不存在: %s\n", pathname.c_str());
-            return SYS_ENOTDIR;
+            return SYS_ENOENT;
         }
 
         // 获取文件/目录信息以检查权限
@@ -6085,7 +6329,11 @@ namespace syscall
 
         if (status != EOK || !file)
         {
-            printfRed("[sys_statfs] 无法访问路径: %s\n", pathname.c_str());
+            printfRed("[sys_statfs] 无法访问路径: %s, status=%d\n", pathname.c_str(), status);
+            if (status < 0)
+            {
+                return status;
+            }
             return SYS_EACCES;
         }
 
@@ -6557,7 +6805,6 @@ namespace syscall
     uint64 SyscallHandler::sys_sync()
     {
         return 0; // copy from 唐老师
-        panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_fsync()
     {
@@ -8949,6 +9196,9 @@ namespace syscall
 
                     // 清零VMA结构
                     memset(cleanup_vm, 0, sizeof(proc::vma));
+                    cleanup_vm->backing_kind = proc::VMA_BACKING_NONE;
+                    cleanup_vm->backing_shmid = -1;
+                    cleanup_vm->backing_base = 0;
 
                     printfYellow("[sys_mprotect] Cleaned up VMA[%d] during rollback\n", idx);
                 }
@@ -10925,11 +11175,13 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_preadv()
     {
-        panic("未实现该系统调用");
+        printfRed("[SyscallHandler::sys_preadv] preadv 未实现，返回 ENOSYS\n");
+        return SYS_ENOSYS;
     }
     uint64 SyscallHandler::sys_pwritev()
     {
-        panic("未实现该系统调用");
+        printfRed("[SyscallHandler::sys_pwritev] pwritev 未实现，返回 ENOSYS\n");
+        return SYS_ENOSYS;
     }
     uint64 SyscallHandler::sys_sync_file_range()
     {
@@ -12266,21 +12518,13 @@ namespace syscall
                         return SYS_ENOTDIR; // 不是目录
                     }
 
-                    // 检查目录的执行权限
-                    uint32_t dir_mode;
-                    int r = ext4_mode_get(current_path.c_str(), &dir_mode);
-                    if (r != EOK)
+                    // 检查目录的执行权限，支持 /dev、/proc 等虚拟目录。
+                    uint32_t dir_mode, dir_uid, dir_gid;
+                    int r = get_path_mode_owner(current_path, dir_mode, dir_uid, dir_gid, true);
+                    if (r < 0)
                     {
-                        printfRed("[SyscallHandler::sys_faccessat2] 无法获取目录权限: %s, error: %d\n", current_path.c_str(), r);
-                        return -r;
-                    }
-
-                    uint32_t dir_uid, dir_gid;
-                    r = ext4_owner_get(current_path.c_str(), &dir_uid, &dir_gid);
-                    if (r != EOK)
-                    {
-                        printfRed("[SyscallHandler::sys_faccessat2] 无法获取目录所有者信息: %s, error: %d\n", current_path.c_str(), r);
-                        return -r;
+                        printfRed("[SyscallHandler::sys_faccessat2] 无法获取目录属性: %s, error: %d\n", current_path.c_str(), r);
+                        return r;
                     }
 
                     // 检查目录执行权限
@@ -12332,14 +12576,15 @@ namespace syscall
             return SYS_ENOENT; // 文件不存在
         }
 
-        // 处理访问权限检查
-        // 获取文件的权限信息
-        uint32_t file_mode;
-        int r = ext4_mode_get(abs_pathname.c_str(), &file_mode);
-        if (r != EOK)
+        // 处理访问权限检查，统一从 stat 结果提取 mode/uid/gid。
+        uint32_t file_mode, file_uid, file_gid;
+        int r = get_path_mode_owner(abs_pathname, file_mode, file_uid, file_gid,
+                                    (flags & AT_SYMLINK_NOFOLLOW_FAT2) == 0);
+        if (r < 0)
         {
-            printfRed("[SyscallHandler::sys_faccessat2] 无法获取文件权限: %s, error: %d\n", abs_pathname.c_str(), r);
-            return -r;
+            printfRed("[SyscallHandler::sys_faccessat2] 无法获取文件属性: %s, error: %d\n",
+                      abs_pathname.c_str(), r);
+            return r;
         }
 
         // 获取当前进程的用户信息
@@ -12359,15 +12604,6 @@ namespace syscall
             current_uid = current_proc->_uid; // 实际用户ID
             current_gid = current_proc->_gid; // 实际组ID
             // printfCyan("[SyscallHandler::sys_faccessat2] 使用实际用户ID进行访问检查: uid=%u, gid=%u\n", current_uid, current_gid);
-        }
-
-        // 获取文件的owner和group信息
-        uint32_t file_uid, file_gid;
-        r = ext4_owner_get(abs_pathname.c_str(), &file_uid, &file_gid);
-        if (r != EOK)
-        {
-            printfRed("[SyscallHandler::sys_faccessat2] 无法获取文件所有者信息: %s, error: %d\n", abs_pathname.c_str(), r);
-            return -r;
         }
 
         // 提取权限位
@@ -13589,12 +13825,118 @@ namespace syscall
 
     uint64 SyscallHandler::sys_epoll_create1()
     {
-        return 0;
+        int flags = 0;
+        if (_arg_int(0, flags) < 0)
+        {
+            return SYS_EINVAL;
+        }
+
+        if ((flags & ~O_CLOEXEC) != 0)
+        {
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (p == nullptr)
+        {
+            return SYS_EINVAL;
+        }
+        mem::PageTable *pt = p->get_pagetable();
+        if (pt == nullptr)
+        {
+            return SYS_EINVAL;
+        }
+
+        auto *epoll_obj = new fs::epoll_file(flags);
+        if (epoll_obj == nullptr)
+        {
+            return SYS_ENOMEM;
+        }
+
+        int fd = proc::k_pm.alloc_fd(p, epoll_obj);
+        if (fd < 0)
+        {
+            epoll_obj->free_file();
+            return fd;
+        }
+
+        if (p->_ofile != nullptr && (flags & O_CLOEXEC) != 0)
+        {
+            p->_ofile->_fl_cloexec[fd] = true;
+        }
+
+        return fd;
     }
 
     uint64 SyscallHandler::sys_epoll_ctl()
     {
-        return 0;
+        int epfd = -1;
+        int op = 0;
+        int fd = -1;
+        uint64 event_addr = 0;
+
+        if (_arg_int(0, epfd) < 0 || _arg_int(1, op) < 0 || _arg_int(2, fd) < 0 || _arg_addr(3, event_addr) < 0)
+        {
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (p == nullptr)
+        {
+            return SYS_EINVAL;
+        }
+        mem::PageTable *pt = p->get_pagetable();
+        if (pt == nullptr)
+        {
+            return SYS_EFAULT;
+        }
+
+        fs::file *epoll_base = p->get_open_file(epfd);
+        if (epoll_base == nullptr)
+        {
+            return SYS_EBADF;
+        }
+        if (!epoll_base->is_epoll_file())
+        {
+            return SYS_EINVAL;
+        }
+
+        fs::file *target_file = p->get_open_file(fd);
+        if (target_file == nullptr)
+        {
+            return SYS_EBADF;
+        }
+        if (epfd == fd || target_file->is_epoll_file())
+        {
+            return SYS_EINVAL;
+        }
+
+        fs::epoll_file *epoll_obj = static_cast<fs::epoll_file *>(epoll_base);
+        KernelEpollEvent kev = {};
+
+        if (op != k_epoll_ctl_del)
+        {
+            if (event_addr == 0)
+            {
+                return SYS_EFAULT;
+            }
+            if (mem::k_vmm.copy_in(*pt, &kev, event_addr, sizeof(kev)) < 0)
+            {
+                return SYS_EFAULT;
+            }
+        }
+
+        switch (op)
+        {
+        case k_epoll_ctl_add:
+            return epoll_obj->add_watch(fd, kev.events, kev.data);
+        case k_epoll_ctl_mod:
+            return epoll_obj->mod_watch(fd, kev.events, kev.data);
+        case k_epoll_ctl_del:
+            return epoll_obj->del_watch(fd);
+        default:
+            return SYS_EINVAL;
+        }
     }
     uint64 SyscallHandler::sys_eventfd2()
     {
@@ -13615,10 +13957,14 @@ namespace syscall
     uint64 SyscallHandler::sys_userdebug3()
     {
         enable_printf();
+        Printer::enable_warn_group();
+        Printer::enable_info_group();
         return 0;
     }
     uint64 SyscallHandler::sys_userdebug4()
     {
+        Printer::disable_info_group();
+        Printer::disable_warn_group();
         disable_printf();
         return 0;
     }

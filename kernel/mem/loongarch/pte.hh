@@ -33,8 +33,10 @@ namespace mem
 		void set_addr( pte_t *addr ) { _data_addr = addr; }
 		bool is_null() { return _data_addr == 0; }
 
-		bool is_super_plv() { return ( *_data_addr & loongarch::pte_plv_m ) == plv_super; }
-		bool is_user_plv() { return ( *_data_addr & loongarch::pte_plv_m ) == plv_user; }
+		// LoongArch 的 PLV 字段存放在 [3:2]，这里必须先右移再比较，
+		// 否则像 0x...19f 这种合法用户页会被误判成“不是用户页”。
+		bool is_super_plv() { return ( ( *_data_addr & loongarch::pte_plv_m ) >> loongarch::pte_plv_s ) == plv_super; }
+		bool is_user_plv() { return ( ( *_data_addr & loongarch::pte_plv_m ) >> loongarch::pte_plv_s ) == plv_user; }
 		bool is_valid() { return ( ( *_data_addr & loongarch::pte_valid_m ) != 0 ); }
 		bool is_dir_page() { return ( *_data_addr & loongarch::pte_b_flags_m ) == map_dir_page_flags(); }
 		bool is_dirty() { return ( ( *_data_addr & loongarch::pte_dirty_m ) != 0 ); }

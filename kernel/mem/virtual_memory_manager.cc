@@ -13,6 +13,7 @@
 #include "printer.hh"
 #include "fs/vfs/vfs_ext4_ext.hh" // 添加vfs_ext_get_filesize函数
 #include "proc/signal.hh"         // 添加信号处理
+#include "proc/process_memory_manager.hh"
 #include "proc/proc_manager.hh"   // 添加进程管理
 #include "fs/lwext4/ext4_errno.hh"
 #include "proc/proc.hh"
@@ -38,6 +39,26 @@ void tlbinit(void)
 namespace mem
 {
     VirtualMemoryManager k_vmm;
+
+    namespace
+    {
+        inline bool ranges_overlap(uint64 lhs_addr, uint64 lhs_size, uint64 rhs_addr, uint64 rhs_size)
+        {
+            if (lhs_size == 0 || rhs_size == 0)
+            {
+                return false;
+            }
+
+            uint64 lhs_end = lhs_addr + lhs_size;
+            uint64 rhs_end = rhs_addr + rhs_size;
+            if (lhs_end <= lhs_addr || rhs_end <= rhs_addr)
+            {
+                return false;
+            }
+
+            return lhs_addr < rhs_end && rhs_addr < lhs_end;
+        }
+    } // namespace
 
     uint64 VirtualMemoryManager::kstack_vm_from_global_id(uint global_id)
     {
@@ -308,6 +329,9 @@ namespace mem
         {
             va = PGROUNDDOWN(src_va);
             pa = (uint64)pt.walk_addr(va);
+#ifdef LOONGARCH
+            pa = to_vir((uint64)pt.walk_addr(va));
+#endif
             if (pa == 0)
             {
                 // 检查是否在VMA范围内，如果是则进行懒分配
@@ -338,6 +362,9 @@ namespace mem
                     }
                     // 重新获取物理地址
                     pa = (uint64)pt.walk_addr(va);
+#ifdef LOONGARCH
+                    pa = to_vir((uint64)pt.walk_addr(va));
+#endif
                     if (pa == 0)
                     {
                         printfRed("[copy_str_in] pa still 0 after allocate_vma_page\n");
@@ -445,11 +472,6 @@ namespace mem
                     return -EFAULT;
                 }
             }
-#ifdef RISCV
-
-#elif defined(LOONGARCH)
-            pa = to_vir(pa);
-#endif
             n = PGSIZE - (src_va - va);
             if (n > max)
                 n = max;
@@ -613,6 +635,43 @@ namespace mem
         pte_flags |= PTE_MAT; // 内存访问类型
 #endif
 
+        uint64 page_va = PGROUNDDOWN(va);
+
+        // 共享段后端在 MAP_SHARED / fork 后的缺页场景下，不应该重新分配私有物理页，
+        // 否则会把“共享映射”错误降级成私有页，还会在 unlink 后继续依赖原始文件路径。
+        // 正确做法是直接把共享段已经分配好的物理页重新映射进当前页表。
+        if (vm->backing_kind == proc::VMA_BACKING_SHM && vm->backing_shmid >= 0)
+        {
+            shm::shm_segment seg = shm::k_smm.get_seg_info(vm->backing_shmid);
+            if (seg.shmid < 0)
+            {
+                printfRed("[allocate_vma_page] invalid shared backing shmid=%d for va=%p\n",
+                          vm->backing_shmid, va);
+                return -1;
+            }
+
+            uint64 backing_start = PGROUNDDOWN(vm->backing_base != 0 ? vm->backing_base : vm->addr);
+            uint64 page_offset = page_va - backing_start;
+            if (page_offset >= seg.real_size)
+            {
+                printfRed("[allocate_vma_page] shared page offset out of range: shmid=%d va=%p offset=%p real_size=%p\n",
+                          vm->backing_shmid, (void *)va, (void *)page_offset, (void *)seg.real_size);
+                return -1;
+            }
+
+            uint64 shared_pa = seg.phy_addrs + page_offset;
+            if (!this->map_pages(pt, page_va, PGSIZE, shared_pa, pte_flags))
+            {
+                printfRed("[allocate_vma_page] map shared page failed: shmid=%d va=%p pa=%p\n",
+                          vm->backing_shmid, (void *)page_va, (void *)shared_pa);
+                return -1;
+            }
+
+            printfGreen("[allocate_vma_page] remapped shared page shmid=%d va=%p pa=%p\n",
+                        vm->backing_shmid, (void *)page_va, (void *)shared_pa);
+            return 0;
+        }
+
         // 分配物理页面
         void *pa = k_pmm.alloc_page();
         if (pa == nullptr)
@@ -629,7 +688,6 @@ namespace mem
         if (vf != nullptr && vm->vfd != -1)
         {
             // 文件映射：需要检查是否访问超出文件大小的区域
-            uint64 page_va = PGROUNDDOWN(va);
             int offset = vm->offset + (page_va - vm->addr);
 
             // 获取文件实际大小
@@ -680,7 +738,6 @@ namespace mem
         }
 
         // 添加页面映射
-        uint64 page_va = PGROUNDDOWN(va);
         if (!this->map_pages(pt, page_va, PGSIZE, (uint64)pa, pte_flags))
         {
             printfRed("[allocate_vma_page] map_pages failed\n");
@@ -755,6 +812,22 @@ namespace mem
                 return -1;
             }
 
+            // copy_out 只能写入用户可写页；否则会把目录项等数据误写进 guard page
+            // 甚至误写到被错误映射的内核页上，最终把当前进程元数据一并带坏。
+            if (!pte.is_valid() || !pte.is_user() || !pte.is_writable())
+            {
+                printfRed("[copy_out] invalid user destination va=%p pte=%p valid=%d user=%d writable=%d pt_base=%p pid=%d tid=%d\n",
+                          (void *)a,
+                          (void *)pte.get_data(),
+                          pte.is_valid(),
+                          pte.is_user(),
+                          pte.is_writable(),
+                          (void *)pt.get_base(),
+                          proc ? proc->_pid : -1,
+                          proc ? proc->_tid : -1);
+                return -1;
+            }
+
             pa = reinterpret_cast<uint64>(pte.pa());
             if (pa == 0)
             {
@@ -765,6 +838,27 @@ namespace mem
             n = PGSIZE - (va - a);
             if (n > len)
                 n = len;
+
+            if (proc != nullptr)
+            {
+                proc::ProcessMemoryManager *mm = proc->get_memory_manager();
+                uint64 write_start = pa + (va - a);
+                if ((mm != nullptr && ranges_overlap(write_start, n, (uint64)mm, sizeof(proc::ProcessMemoryManager))) ||
+                    ranges_overlap(write_start, n, (uint64)proc, sizeof(proc::Pcb)) ||
+                    ranges_overlap(write_start, n, (uint64)proc->get_trapframe(), sizeof(TrapFrame)) ||
+                    ranges_overlap(write_start, n, pt.get_base(), PGSIZE))
+                {
+                    panic("[copy_out] user buffer aliases kernel object va=%p pa=%p len=%p pid=%d tid=%d mm=%p pt_base=%p trapframe=%p",
+                          (void *)va,
+                          (void *)write_start,
+                          (void *)n,
+                          proc->_pid,
+                          proc->_tid,
+                          mm,
+                          (void *)pt.get_base(),
+                          proc->get_trapframe());
+                }
+            }
             memmove((void *)(pa + (va - a)), p, n);
 
             len -= n;
@@ -822,6 +916,20 @@ namespace mem
                 return -1;
             }
 
+            if (!pte.is_valid() || !pte.is_user_plv() || !pte.is_writable())
+            {
+                printfRed("[copy_out] invalid user destination va=%p pte=%p valid=%d user=%d writable=%d pt_base=%p pid=%d tid=%d\n",
+                          (void *)a,
+                          (void *)pte.get_data(),
+                          pte.is_valid(),
+                          pte.is_user_plv(),
+                          pte.is_writable(),
+                          (void *)pt.get_base(),
+                          proc ? proc->_pid : -1,
+                          proc ? proc->_tid : -1);
+                return -1;
+            }
+
             pa = reinterpret_cast<uint64>(pte.pa());
             if (pa == 0)
                 return -1;
@@ -829,6 +937,27 @@ namespace mem
             if (n > len)
                 n = len;
             pa = to_vir(pa);
+
+            if (proc != nullptr)
+            {
+                proc::ProcessMemoryManager *mm = proc->get_memory_manager();
+                uint64 write_start = pa + (va - a);
+                if ((mm != nullptr && ranges_overlap(write_start, n, (uint64)mm, sizeof(proc::ProcessMemoryManager))) ||
+                    ranges_overlap(write_start, n, (uint64)proc, sizeof(proc::Pcb)) ||
+                    ranges_overlap(write_start, n, (uint64)proc->get_trapframe(), sizeof(TrapFrame)) ||
+                    ranges_overlap(write_start, n, to_vir(pt.get_base()), PGSIZE))
+                {
+                    panic("[copy_out] user buffer aliases kernel object va=%p pa=%p len=%p pid=%d tid=%d mm=%p pt_base=%p trapframe=%p",
+                          (void *)va,
+                          (void *)write_start,
+                          (void *)n,
+                          proc->_pid,
+                          proc->_tid,
+                          mm,
+                          (void *)pt.get_base(),
+                          proc->get_trapframe());
+                }
+            }
             memmove((void *)((pa + (va - a))), p, n);
 
             len -= n;
@@ -850,6 +979,26 @@ namespace mem
 
         for (a = va; a < va + npages * PGSIZE; a += PGSIZE)
         {
+#ifdef RISCV
+            bool is_reserved_page = (a == TRAMPOLINE || a == SIG_TRAMPOLINE ||
+                                     (a == TRAPFRAME && !(va == TRAPFRAME && npages == 1 && do_free == 0)));
+#elif defined(LOONGARCH)
+            bool is_reserved_page = (a == SIG_TRAMPOLINE ||
+                                     (a == TRAPFRAME && !(va == TRAPFRAME && npages == 1 && do_free == 0)));
+#endif
+            if (is_reserved_page)
+            {
+                proc::Pcb *cur = proc::k_pm.get_cur_pcb();
+                printf("\33[1;31m[vmunmap] 触碰保留页 va=%p req_start=%p npages=%p do_free=%d cur_pid=%d cur_tid=%d state=%d pt_base=%p\33[0m\n",
+                       (void *)a,
+                       (void *)va,
+                       (void *)npages,
+                       do_free,
+                       cur ? cur->_pid : -1,
+                       cur ? cur->_tid : -1,
+                       cur ? (int)cur->_state : -1,
+                       (void *)pt.get_base());
+            }
             if ((pte = pt.walk(a, 0)).is_null())
                 continue;
             // panic("vmunmap: walk");
@@ -892,20 +1041,30 @@ namespace mem
         uint64 flags;
         void *mem;
 
-        if (!is_page_align(start) || !is_page_align(size))
+        if (size == 0)
         {
-            panic("uvmcopy: start or size not page aligned");
-            return -1;
+            return 0;
         }
 
-        va_end = start + size;
+        uint64 copy_start = PGROUNDDOWN(start);
+        va_end = PGROUNDUP(start + size);
+        if (va_end < copy_start)
+        {
+            printfRed("uvmcopy: address range overflow, start=%p size=%p\n",
+                      (void *)start, (void *)size);
+            return -1;
+        }
+        if (copy_start != start || PGROUNDUP(size) != size)
+        {
+            printfYellow("uvmcopy: 自动对齐复制范围 start=%p size=%p -> [%p, %p)\n",
+                         (void *)start, (void *)size, (void *)copy_start, (void *)va_end);
+        }
 
-        for (va = start; va < va_end; va += PGSIZE)
+        for (va = copy_start; va < va_end; va += PGSIZE)
         {
             if ((pte = old_pt.walk(va, false)).is_null())
             {
                 continue;
-                panic("uvmcopy: pte should exist for va: %p", va);
             }
             if (pte.is_valid() == 0)
                 continue;

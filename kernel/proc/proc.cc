@@ -21,9 +21,68 @@
 #include "klib.hh"
 #include "printer.hh"
 #include "prlimit.hh"
+#include "shm_manager.hh"
+#include "memlayout.hh"
 
 namespace proc
 {
+    namespace
+    {
+#ifdef RISCV
+        constexpr uint64 k_min_kernel_mm_ptr = KERNBASE;
+#elif defined(LOONGARCH)
+        constexpr uint64 k_min_kernel_mm_ptr = PHYSBASE;
+#endif
+        constexpr uint32 k_max_reasonable_file_refcnt = num_process * max_open_files;
+
+        inline bool is_kernel_mapped_range(uint64 addr, uint64 size)
+        {
+            if (addr < k_min_kernel_mm_ptr || size == 0)
+            {
+                return false;
+            }
+
+            uint64 end = addr + size - 1;
+            if (end < addr)
+            {
+                return false;
+            }
+
+            return mem::k_pagetable.kwalk_addr(addr) != 0 &&
+                   mem::k_pagetable.kwalk_addr(end) != 0;
+        }
+
+        inline bool is_probably_live_mm_object(ProcessMemoryManager *mm)
+        {
+            return mm != nullptr &&
+                   is_kernel_mapped_range((uint64)mm, sizeof(ProcessMemoryManager));
+        }
+
+        inline bool is_probably_live_file_object(fs::file *file_obj)
+        {
+            if (file_obj == nullptr)
+            {
+                return false;
+            }
+
+            uint64 file_addr = (uint64)file_obj;
+            if (!is_kernel_mapped_range(file_addr, sizeof(fs::file)))
+            {
+                return false;
+            }
+
+            // 先验证对象自身映射，再读取虚表与引用计数，避免坏指针直接触发页故障。
+            uint64 vtable_addr = *(uint64 *)file_obj;
+            if (!is_kernel_mapped_range(vtable_addr, sizeof(void *)))
+            {
+                return false;
+            }
+
+            uint32 refcnt = file_obj->refcnt;
+            return refcnt > 0 && refcnt <= k_max_reasonable_file_refcnt;
+        }
+    }
+
     Pcb k_proc_pool[num_process]; // 全局进程池，存储所有进程的PCB
 
     Pcb::Pcb()
@@ -194,14 +253,36 @@ namespace proc
     {
         if (_memory_manager != nullptr)
         {
+            if (!is_probably_live_mm_object(_memory_manager))
+            {
+                printfRed("[cleanup_memory_manager] 检测到异常 mm 指针，直接丢弃: pcb=%p pid=%d tid=%d mm=%p\n",
+                          this, _pid, _tid, _memory_manager);
+                _memory_manager = nullptr;
+                return;
+            }
+
+            printf("[cleanup_memory_manager] pcb=%p pid=%d tid=%d mm=%p ref=%d\n",
+                   this, _pid, _tid, _memory_manager, _memory_manager->get_ref_count());
+            if (_memory_manager->get_ref_count() <= 1)
+            {
+                // 只在最后一个地址空间持有者退出时清理非 VMA 管理的共享段附加记录（如 shmat）。
+                shm::k_smm.detach_all_for_process(this, true, false);
+            }
+
             // 直接调用 free_all_memory()，它内部会检查和减少引用计数
             _memory_manager->free_all_memory();
+            printf("[cleanup_memory_manager] free_all_memory done: pcb=%p pid=%d tid=%d mm=%p ref=%d\n",
+                   this, _pid, _tid, _memory_manager, _memory_manager->get_ref_count());
             
             // free_all_memory() 减少了引用计数，如果原来的引用计数<=1，则资源已被释放
             // 现在检查当前引用计数，如果<=0则删除对象
             if (_memory_manager->get_ref_count() <= 0)
             {
+                printf("[cleanup_memory_manager] delete mm: pcb=%p pid=%d tid=%d mm=%p\n",
+                       this, _pid, _tid, _memory_manager);
                 delete _memory_manager;
+                printf("[cleanup_memory_manager] delete mm complete: pcb=%p pid=%d tid=%d\n",
+                       this, _pid, _tid);
             }
             _memory_manager = nullptr;
         }
@@ -221,22 +302,92 @@ namespace proc
     {
         if (_ofile != nullptr)
         {
+            if (!is_kernel_mapped_range((uint64)_ofile, sizeof(ofile)))
+            {
+                printfRed("[cleanup_ofile] 检测到异常 ofile 指针，直接丢弃: pcb=%p pid=%d ofile=%p\n",
+                          this, _pid, _ofile);
+                _ofile = nullptr;
+                return;
+            }
+
             // 减少打开文件表的引用计数
             _ofile->_shared_ref_cnt--;
 
             // 如果引用计数降到0或以下，关闭所有打开的文件
             if (_ofile->_shared_ref_cnt <= 0)
             {
-                // 遍历所有文件描述符，关闭打开的文件
+                fs::file *unique_files[max_open_files];
+                int release_counts[max_open_files];
+                int unique_count = 0;
+
+                memset(unique_files, 0, sizeof(unique_files));
+                memset(release_counts, 0, sizeof(release_counts));
+
+                // 先按唯一 file* 聚合，避免同一文件对象在同一张表里被重复释放时出现过度减引用。
                 for (uint64 i = 0; i < max_open_files; ++i)
                 {
-                    if (_ofile->_ofile_ptr[i] != nullptr)
+                    fs::file *file_obj = _ofile->_ofile_ptr[i];
+                    if (file_obj != nullptr)
                     {
-                        // 释放文件对象资源
-                        _ofile->_ofile_ptr[i]->free_file();
+                        if (!is_probably_live_file_object(file_obj))
+                        {
+                            printfRed("[cleanup_ofile] 检测到异常文件指针，直接丢弃: pcb=%p pid=%d fd=%d file=%p\n",
+                                      this, _pid, (int)i, file_obj);
+                            _ofile->_ofile_ptr[i] = nullptr;
+                            _ofile->_fl_cloexec[i] = false;
+                            continue;
+                        }
+
+                        int slot = -1;
+                        for (int j = 0; j < unique_count; ++j)
+                        {
+                            if (unique_files[j] == file_obj)
+                            {
+                                slot = j;
+                                break;
+                            }
+                        }
+                        if (slot < 0)
+                        {
+                            unique_files[unique_count] = file_obj;
+                            release_counts[unique_count] = 1;
+                            unique_count++;
+                        }
+                        else
+                        {
+                            release_counts[slot]++;
+                        }
+
                         _ofile->_ofile_ptr[i] = nullptr;
+                        _ofile->_fl_cloexec[i] = false;
                     }
                 }
+
+                for (int i = 0; i < unique_count; ++i)
+                {
+                    fs::file *file_obj = unique_files[i];
+                    if (!is_probably_live_file_object(file_obj))
+                    {
+                        printfRed("[cleanup_ofile] 聚合释放前再次发现异常文件对象，跳过: pcb=%p pid=%d file=%p\n",
+                                  this, _pid, file_obj);
+                        continue;
+                    }
+
+                    uint32 ref_before = file_obj->refcnt;
+                    int release_count = release_counts[i];
+                    if ((uint32)release_count > ref_before)
+                    {
+                        printfYellow("[cleanup_ofile] 文件引用计数异常，按当前 refcnt 截断释放: pcb=%p pid=%d file=%p release=%d ref=%d\n",
+                                     this, _pid, file_obj, release_count, (int)ref_before);
+                        release_count = (int)ref_before;
+                    }
+
+                    for (int k = 0; k < release_count; ++k)
+                    {
+                        file_obj->free_file();
+                    }
+                }
+
                 // 释放打开文件表结构本身
                 delete _ofile;
             }

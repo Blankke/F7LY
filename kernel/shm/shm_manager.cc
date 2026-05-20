@@ -12,6 +12,32 @@
 namespace shm
 {
     ShmManager k_smm; // 全局共享内存管理器实例
+
+    namespace
+    {
+        inline bool is_vma_backed_shared_attachment(proc::Pcb *proc, uint64 addr)
+        {
+            if (proc == nullptr || proc->get_vma() == nullptr)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < proc::NVMA; ++i)
+            {
+                const proc::vma &vm = proc->get_vma()->_vm[i];
+                if (!vm.used || vm.backing_kind != proc::VMA_BACKING_SHM)
+                {
+                    continue;
+                }
+                if (vm.backing_base == addr)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+    } // namespace
+
     void ShmManager::init(uint64 base, uint64 size)
     {
         shm_base = base;
@@ -170,25 +196,13 @@ namespace shm
 
     uint64 ShmManager::find_available_address(proc::Pcb* proc, size_t size)
     {
-        // 从堆结束位置之后开始查找，避免与程序段和堆冲突
-        uint64 start_addr = PGROUNDUP(proc->get_heap_end());
-        
-        // 确保地址对齐到SHMLBA
-        start_addr = PGROUNDUP(start_addr);
-        if (start_addr % SHMLBA != 0) {
-            start_addr = ((start_addr / SHMLBA) + 1) * SHMLBA;
+        if (proc == nullptr || proc->get_memory_manager() == nullptr)
+        {
+            return 0;
         }
-        proc->set_heap_end(start_addr + size); // 更新堆结束位置
-        // // 检查地址范围合法性（简化：假设用户空间上限为0x40000000）
-        // const uint64 USER_SPACE_LIMIT = 0x40000000ULL;
-        // if (start_addr + size > USER_SPACE_LIMIT) {
-        //     printfRed("[ShmManager] Address 0x%x + size 0x%x exceeds user space limit\n", 
-        //              start_addr, size);
-        //     return 0;
-        // }
-        
-        // TODO: 应该检查与现有VMA的冲突，这里简化处理
-        return start_addr;
+
+        // 共享段也统一从 mmap 区域分配地址，避免再和 brk 堆边界互相踩踏。
+        return proc->get_memory_manager()->reserve_mmap_region(size, SHMLBA);
     }
 
     bool ShmManager::is_valid_attach_address(uint64 addr, size_t size, bool rounded)
@@ -377,6 +391,21 @@ namespace shm
         }
     }
     
+    int ShmManager::find_seg_by_key(key_t key)
+    {
+        if (key == IPC_PRIVATE || segments == nullptr || segments->empty())
+        {
+            return -1;
+        }
+
+        auto it = find_segment_by_key(key);
+        if (it == segments->end())
+        {
+            return -1;
+        }
+        return it->second.shmid;
+    }
+
     int ShmManager::create_new_segment(key_t key, size_t size, int shmflg)
     {
         // 验证大小限制
@@ -742,7 +771,7 @@ namespace shm
                     if (size) {
                         *size = seg.real_size;
                     }
-                    return e.tid;  // 返回找到的共享内存段ID
+                    return seg.shmid;  // 返回真实的共享内存段ID
                 }
             }
         }
@@ -1147,12 +1176,17 @@ namespace shm {
         bool duplicated = false;
         for (auto &pair : *segments) {
             shm_segment &seg = pair.second;
+            eastl::vector<void *> copied_addrs;
             for (const auto &e : seg.attached_addrs) {
                 if (e.tid == parent_tid) {
-                    seg.attached_addrs.push_back(attached_entry{child_tid, e.addr});
-                    seg.nattch++;
-                    duplicated = true;
+                    copied_addrs.push_back(e.addr);
                 }
+            }
+            for (void *addr : copied_addrs)
+            {
+                seg.attached_addrs.push_back(attached_entry{child_tid, addr});
+                seg.nattch++;
+                duplicated = true;
             }
         }
         if (duplicated) {
@@ -1160,5 +1194,85 @@ namespace shm {
             printfCyan("[ShmManager] Fork: duplicated attachments from tid=%d to tid=%d\n", parent_tid, child_tid);
         }
         return duplicated;
+    }
+
+    int ShmManager::detach_all_for_process(proc::Pcb *proc, bool unmap_pages, bool match_tid_only)
+    {
+        if (proc == nullptr)
+        {
+            return 0;
+        }
+
+        mem::PageTable *pt = proc->get_pagetable();
+        const uint target_tid = proc->get_tid();
+        int detached_count = 0;
+        eastl::vector<int> pending_delete;
+
+        for (auto &pair : *segments)
+        {
+            shm_segment &seg = pair.second;
+            for (auto it = seg.attached_addrs.begin(); it != seg.attached_addrs.end();)
+            {
+                bool vma_backed_attachment = is_vma_backed_shared_attachment(proc, (uint64)it->addr);
+
+                // VMA 管理的共享映射交给 mmap/munmap/free_all_vma 的生命周期统一收口。
+                // 这里专门清理 shmat 一类“没有 VMA 托管”的附件，避免 exit 路径双重 detach。
+                if (vma_backed_attachment)
+                {
+                    ++it;
+                    continue;
+                }
+
+                bool owned_by_process = false;
+                if (it->tid == target_tid)
+                {
+                    owned_by_process = true;
+                }
+                else if (!match_tid_only && pt != nullptr)
+                {
+                    mem::Pte pte = pt->walk((uint64)it->addr, 0);
+                    if (!pte.is_null() && pte.is_valid() && (uint64)pte.pa() == seg.phy_addrs)
+                    {
+                        owned_by_process = true;
+                    }
+                }
+
+                if (!owned_by_process)
+                {
+                    ++it;
+                    continue;
+                }
+
+                if (unmap_pages && pt != nullptr)
+                {
+                    mem::Pte pte = pt->walk((uint64)it->addr, 0);
+                    if (!pte.is_null() && pte.is_valid())
+                    {
+                        mem::k_vmm.vmunmap(*pt, (uint64)it->addr, seg.real_size / PGSIZE, 0);
+                    }
+                }
+
+                it = seg.attached_addrs.erase(it);
+                seg.dtime = tmm::k_tm.clock_gettime_sec(tmm::CLOCK_REALTIME);
+                seg.last_pid = proc->_pid;
+                if (seg.nattch > 0)
+                {
+                    seg.nattch--;
+                }
+                detached_count++;
+            }
+
+            if ((seg.mode & SHM_DEST) && seg.nattch == 0)
+            {
+                pending_delete.push_back(seg.shmid);
+            }
+        }
+
+        for (int shmid : pending_delete)
+        {
+            delete_seg(shmid);
+        }
+
+        return detached_count;
     }
 }

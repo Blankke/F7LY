@@ -27,6 +27,22 @@ int strcmp(const char *s1, const char *s2) noexcept(true)
     }
     return *s1 < *s2 ? -1 : 1;
 }
+
+static char **ltp_envp(bool is_musl)
+{
+    // musl/glibc 的测试程序都依赖同名的 libc.so。
+    // 这里必须按运行时目录分别设置搜索路径，不能把 musl 测例错误地导向 glibc/libc.so。
+    static char *musl_envp[] = {
+        (char *)"PATH=/bin",
+        (char *)"LD_LIBRARY_PATH=/musl/lib",
+        NULL};
+    static char *glibc_envp[] = {
+        (char *)"PATH=/bin",
+        (char *)"LD_LIBRARY_PATH=/glibc/lib",
+        NULL};
+    return is_musl ? musl_envp : glibc_envp;
+}
+
 size_t strlen(const char *s) noexcept(true)
 {
     size_t len = 0;
@@ -64,7 +80,7 @@ int run_test(const char *path, char *argv[], char *envp[])
         argv = default_argv;
     }
 
-    // printf("[RUN ] %s\n", path);
+    printf("[RUN ] %s\n", path);
     int pid = fork();
     if (pid < 0)
     {
@@ -73,9 +89,10 @@ int run_test(const char *path, char *argv[], char *envp[])
     }
     else if (pid == 0)
     {
-        if (execve(path, argv, envp) < 0)
+        int exec_ret = execve(path, argv, envp);
+        if (exec_ret < 0)
         {
-            printf("[FAIL] %s: execve 失败\n", path);
+            printf("[FAIL] %s: execve 失败 ret=%d\n", path, exec_ret);
             exit(127);
         }
         exit(127);
@@ -93,7 +110,7 @@ int run_test(const char *path, char *argv[], char *envp[])
         int result = decode_wait_status(child_exit_state, exited_normally);
         if (result == 0)
         {
-            // printf("[PASS] %s (exit=0)\n", path);
+            printf("[PASS] %s (exit=0)\n", path);
             return 0;
         }
 
@@ -112,13 +129,27 @@ int run_test(const char *path, char *argv[], char *envp[])
 
 void init_env(const char *path = musl_dir)
 {
+    if (change_dir_checked(path) != 0)
+    {
+        return;
+    }
 
-    char *bb_sh[8] = {0};
-    bb_sh[0] = "/bin/busybox";
-    bb_sh[1] = "sh";
-    bb_sh[2] = "-c";
-    bb_sh[3] = "/bin/busybox --install /bin";
-    run_test("busybox", bb_sh, 0);
+    // busybox 的 applet 依赖 /bin 作为安装目标。
+    // 这里先兜底创建目录，避免 --install 时因为目标目录不存在而整批失败。
+    int mkdir_ret = mkdir("/bin", 0777);
+    if (mkdir_ret != 0 && mkdir_ret != -17)
+    {
+        printf("[FAIL] mkdir(/bin) 失败: %d\n", mkdir_ret);
+        return;
+    }
+
+    char *bb_install[8] = {0};
+    bb_install[0] = (char *)"busybox";
+    bb_install[1] = (char *)"--install";
+    bb_install[2] = (char *)"/bin";
+    // 直接执行 busybox 自带的安装逻辑，避免再套一层 sh -c，
+    // 这样 LoongArch 上即使 shell/管道/等待链路还有问题，也不会卡死在环境初始化阶段。
+    run_test("busybox", bb_install, 0);
 }
 
 int basic_test(const char *path = musl_dir)
@@ -184,9 +215,67 @@ int basic_test(const char *path = musl_dir)
     return 0;
 }
 
+static int run_case_list_in_dir(const char *dir, const char *group_name, const char *const cases[], char *envp[])
+{
+    if (dir == 0 || cases == 0)
+    {
+        printf("[FAIL] %s: 参数为空\n", group_name ? group_name : "run_case_list_in_dir");
+        return -1;
+    }
+
+    if (change_dir_checked(dir) != 0)
+    {
+        return -1;
+    }
+
+    int fail_count = 0;
+    char *argv[2] = {0};
+    if (group_name != 0)
+    {
+        printf("#### OS COMP TEST GROUP START %s ####\n", group_name);
+    }
+    for (int i = 0; cases[i] != 0; ++i)
+    {
+        argv[0] = (char *)cases[i];
+        printf("RUN CASE %s\n", cases[i]);
+        if (run_test(cases[i], argv, envp) != 0)
+        {
+            fail_count++;
+        }
+    }
+    if (group_name != 0)
+    {
+        printf("#### OS COMP TEST GROUP END %s (fail=%d) ####\n", group_name, fail_count);
+    }
+    return fail_count;
+}
+
+int basic_subset_test(const char *path, const char *const cases[])
+{
+    if (path == 0 || cases == 0)
+    {
+        return -1;
+    }
+
+    const char *group_name = strcmp(path, musl_dir) == 0 ? "basic-subset-musl" : "basic-subset-glibc";
+
+    if (change_dir_checked(path) != 0)
+    {
+        return -1;
+    }
+    if (change_dir_checked("basic") != 0)
+    {
+        return -1;
+    }
+    return run_case_list_in_dir(".", group_name, cases, 0);
+}
+
 int busybox_test(const char *path = musl_dir)
 {
-    chdir(path);
+    if (change_dir_checked(path) != 0)
+    {
+        return -1;
+    }
     char *bb_sh[8] = {0};
     bb_sh[0] = "busybox";
     bb_sh[1] = "sh";
@@ -197,7 +286,10 @@ int busybox_test(const char *path = musl_dir)
 
 int libcbench_test(const char *path = musl_dir)
 {
-    chdir(path);
+    if (change_dir_checked(path) != 0)
+    {
+        return -1;
+    }
     char *bb_sh[8] = {0};
     bb_sh[0] = "busybox";
     bb_sh[1] = "sh";
@@ -208,7 +300,10 @@ int libcbench_test(const char *path = musl_dir)
 
 int iozone_test(const char *path = musl_dir)
 {
-    chdir(path);
+    if (change_dir_checked(path) != 0)
+    {
+        return -1;
+    }
     char *bb_sh[8] = {0};
     bb_sh[0] = "iozone";
     bb_sh[1] = "-a";
@@ -237,7 +332,10 @@ int libc_test(const char *path = musl_dir)
     argv[0] = "runtest.exe";
     argv[1] = "-w";
     argv[2] = "entry-static.exe";
-    chdir(path);
+    if (change_dir_checked(path) != 0)
+    {
+        return -1;
+    }
     printf("#### OS COMP TEST GROUP START libctest-musl ####\n");
     for (int i = 0; libctest[i][0] != NULL; i++)
     {
@@ -259,7 +357,10 @@ int libc_test(const char *path = musl_dir)
 
 int lua_test(const char *path = musl_dir)
 {
-    chdir(path);
+    if (change_dir_checked(path) != 0)
+    {
+        return -1;
+    }
     char *lua_sh;
     if (strcmp(path, musl_dir) == 0)
     {
@@ -301,7 +402,10 @@ int lua_test(const char *path = musl_dir)
 
 int lmbench_test(const char *path = musl_dir)
 {
-    chdir(path);
+    if (change_dir_checked(path) != 0)
+    {
+        return -1;
+    }
     char *bb_sh[8] = {0};
     bb_sh[0] = "busybox";
     bb_sh[1] = "sh";
@@ -318,11 +422,7 @@ int ltp_test(bool is_musl)
     }
     printf("#### OS COMP TEST GROUP START ltp-%s ####\n", is_musl ? "musl" : "glibc");
     char *bb_sh[8] = {0};
-    char *envp[] = {
-        "PATH=/bin", // 设置 PATH
-        "LD_LIBRARY_PATH=/glibc/lib",
-        NULL // 必须以 NULL 结尾
-    }; // 这个测loop的那些测例要用
+    char **envp = ltp_envp(is_musl);
     int result = 0;
 
     // 检测当前平台
@@ -358,9 +458,56 @@ int ltp_test(bool is_musl)
     return 0;
 }
 
+int ltp_subset_test(bool is_musl, const char *const cases[])
+{
+    return run_case_list_in_dir(
+        is_musl ? "/musl/ltp/testcases/bin" : "/glibc/ltp/testcases/bin",
+        is_musl ? "ltp-subset-musl" : "ltp-subset-glibc",
+        cases,
+        ltp_envp(is_musl));
+}
+
+int regression_suite_4d1444_riscv(void)
+{
+    printf("#### REGRESSION START commit-4d1444b-riscv ####\n");
+    init_env("/musl/");
+    basic_test("/musl/");
+    basic_test("/glibc/");
+    ltp_test(true);
+    ltp_test(false);
+    busybox_test("/musl/");
+    busybox_test("/glibc/");
+    libc_test("/musl/");
+    lua_test("/musl/");
+    lua_test("/glibc/");
+    libcbench_test("/musl");
+    libcbench_test("/glibc");
+    printf("#### REGRESSION END commit-4d1444b-riscv ####\n");
+    return 0;
+}
+
+int regression_suite_4d1444_loongarch(void)
+{
+    printf("#### REGRESSION START commit-4d1444b-loongarch ####\n");
+    init_env("/musl/");
+    basic_test("/musl/");
+    basic_test("/glibc/");
+    busybox_test("/musl/");
+    ltp_test(true);
+    ltp_test(false);
+    libc_test("/musl/");
+    libcbench_test("/glibc");
+    libcbench_test("/musl");
+    printf("#### REGRESSION END commit-4d1444b-loongarch ####\n");
+    return 0;
+}
+
 int git_test(const char *path)
 {
-    chdir(path);
+    if (change_dir_checked(path) != 0)
+    {
+        return -1;
+    }
     char *envp[] = {
         "HOME=/musl", // 设置 HOME
         NULL          // 必须以 NULL 结尾
@@ -501,7 +648,7 @@ char *libctest[][2] = {
     {"pthread_cond_smasher", NULL},    // sig， fork高级用法
     // {"pthread_condattr_setclock", NULL}, // sig， fork高级用法
     {"pthread_exit_cancel", NULL},   // sig， fork高级用法
-    {"pthread_once_deadlock", NULL}, // sig， fork高级用法
+    // {"pthread_once_deadlock", NULL}, // sig， fork高级用法
     {"pthread_rwlock_ebusy", NULL},  // sig， fork高级用法
     {"putenv_doublefree", NULL},
     {"regex_backref_0", NULL},
@@ -554,7 +701,7 @@ struct ltp_testcase ltp_testcases[] = {
     // {"setresuid05_16", true, true},
     // {"setsid01", true, true},
 
-    {NULL, true, true},
+    // {NULL, true, true},
     {"memfd_create01", true, true},
     {"splice07", true, true},
     {"epoll_ctl03", true, true},

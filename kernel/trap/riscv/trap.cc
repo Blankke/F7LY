@@ -173,9 +173,23 @@ void trap_manager::kerneltrap()
 
   if ((which_dev = devintr()) == 0)
   {
-    printf("scause %p\n", scause);
-    printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
-    panic("kerneltrap");
+    proc::Pcb *cur = Cpu::get_cpu()->get_cur_proc();
+    if (cur != nullptr)
+    {
+      panic("kerneltrap: scause=%p sepc=%p stval=%p sstatus=%p proc=%s pid=%d tid=%d state=%d mm=%p pt=%p",
+            scause,
+            r_sepc(),
+            r_stval(),
+            sstatus,
+            cur->_name,
+            cur->_pid,
+            cur->_tid,
+            cur->_state,
+            cur->get_memory_manager(),
+            cur->get_pagetable());
+    }
+    panic("kerneltrap: scause=%p sepc=%p stval=%p sstatus=%p no-current-proc",
+          scause, r_sepc(), r_stval(), sstatus);
   }
 
   if (which_dev == 2 && Cpu::get_cpu()->get_cur_proc() != nullptr && Cpu::get_cpu()->get_cur_proc()->_state == proc::RUNNING)
@@ -351,7 +365,20 @@ void trap_manager::usertrapret()
   mem::Pte pte = p->get_pagetable()->walk(TRAMPOLINE, 0);
   if (pte.is_null() || pte.is_valid() == 0)
   {
-    panic("trampoline not mapped in user pagetable!");
+    proc::ProcessMemoryManager *mm = p->get_memory_manager();
+    mem::PageTable *pt = p->get_pagetable();
+    uint64 pt_base = (pt != nullptr) ? pt->get_base() : 0;
+    panic("trampoline not mapped in user pagetable! pid=%d tid=%d state=%d signal=%d mm=%p pt=%p pt_base=%p trapframe=%p epc=%p sp=%p",
+          p ? p->_pid : -1,
+          p ? p->_tid : -1,
+          p ? (int)p->_state : -1,
+          p ? p->_signal : -1,
+          mm,
+          pt,
+          (void *)pt_base,
+          p ? p->get_trapframe() : nullptr,
+          p ? (void *)p->_trapframe->epc : nullptr,
+          p ? (void *)p->_trapframe->sp : nullptr);
   }
 
   // we're about to switch the destination of traps from

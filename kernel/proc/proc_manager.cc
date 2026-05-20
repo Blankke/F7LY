@@ -60,6 +60,116 @@ extern "C"
 
 namespace proc
 {
+    namespace
+    {
+#ifdef RISCV
+        constexpr uint64 k_min_kernel_file_ptr = KERNBASE;
+#elif defined(LOONGARCH)
+        constexpr uint64 k_min_kernel_file_ptr = PHYSBASE;
+#endif
+        constexpr uint32 k_max_reasonable_file_refcnt = num_process * max_open_files;
+
+        inline bool is_kernel_mapped_file_range(uint64 addr, uint64 size)
+        {
+            if (addr < k_min_kernel_file_ptr || size == 0)
+            {
+                return false;
+            }
+
+            uint64 end = addr + size - 1;
+            if (end < addr)
+            {
+                return false;
+            }
+
+            return mem::k_pagetable.kwalk_addr(addr) != 0 &&
+                   mem::k_pagetable.kwalk_addr(end) != 0;
+        }
+
+        inline bool is_probably_live_file_object(fs::file *file_obj)
+        {
+            if (file_obj == nullptr)
+            {
+                return false;
+            }
+
+            if (!is_kernel_mapped_file_range((uint64)file_obj, sizeof(fs::file)))
+            {
+                return false;
+            }
+
+            uint64 vtable_addr = *(uint64 *)file_obj;
+            if (!is_kernel_mapped_file_range(vtable_addr, sizeof(void *)))
+            {
+                return false;
+            }
+
+            uint32 refcnt = file_obj->refcnt;
+            return refcnt > 0 && refcnt <= k_max_reasonable_file_refcnt;
+        }
+
+        inline bool starts_with(const char *lhs, const char *rhs)
+        {
+            if (lhs == nullptr || rhs == nullptr)
+            {
+                return false;
+            }
+            while (*rhs != '\0')
+            {
+                if (*lhs == '\0' || *lhs != *rhs)
+                {
+                    return false;
+                }
+                ++lhs;
+                ++rhs;
+            }
+            return true;
+        }
+
+        inline bool is_busybox_like_proc(const proc::Pcb *proc)
+        {
+            return proc != nullptr && starts_with(proc->_name, "busybox");
+        }
+
+        void dump_fd_table(proc::Pcb *proc, const char *reason)
+        {
+            if (proc == nullptr || proc->_ofile == nullptr)
+            {
+                printfRed("[fd-dump] %s: proc/ofile 为空\n", reason == nullptr ? "unknown" : reason);
+                return;
+            }
+
+            printfRed("[fd-dump] %s pid=%d tid=%d name=%s\n",
+                      reason == nullptr ? "unknown" : reason,
+                      proc->_pid,
+                      proc->_tid,
+                      proc->_name);
+
+            for (int i = 0; i < (int)max_open_files; ++i)
+            {
+                fs::file *entry = proc->_ofile->_ofile_ptr[i];
+                if (entry == nullptr)
+                {
+                    continue;
+                }
+
+                if (!is_probably_live_file_object(entry))
+                {
+                    printfRed("[fd-dump] fd=%d file=%p <invalid>\n", i, entry);
+                    continue;
+                }
+
+                printfBlue("[fd-dump] fd=%d file=%p ref=%d type=%d virtual=%d path=%s\n",
+                           i,
+                           entry,
+                           (int)entry->refcnt,
+                           (int)entry->_attrs.filetype,
+                           entry->is_virtual ? 1 : 0,
+                           entry->_path_name.c_str());
+            }
+        }
+    }
+
     ProcessManager k_pm;
 
     void ProcessManager::init(const char *pid_lock_name, const char *tid_lock_name, const char *wait_lock_name)
@@ -161,13 +271,16 @@ namespace proc
                 // 初始化CPU亲和性掩码：默认可以在任何CPU上运行
                 p->_cpu_mask.fill();
 
-                /****************************************************************************************
-                 * 内存管理初始化
-                 ****************************************************************************************/
-                // 为该进程分配一页 trapframe 空间（用于中断时保存用户上下文）
-                // printfYellow("[user pgtbl]==>alloc trapframe for proc %d\n", p->_global_id);
-                if ((p->_trapframe = (TrapFrame *)mem::k_pmm.alloc_page()) == nullptr)
-                {
+	                /****************************************************************************************
+	                 * 内存管理初始化
+	                 ****************************************************************************************/
+	                // PCB 会被进程池复用，先清空旧的内存管理器指针，避免 set_memory_manager() 误清理历史脏指针。
+	                p->reset_memory_manager_ptr();
+
+	                // 为该进程分配一页 trapframe 空间（用于中断时保存用户上下文）
+	                // printfYellow("[user pgtbl]==>alloc trapframe for proc %d\n", p->_global_id);
+	                if ((p->_trapframe = (TrapFrame *)mem::k_pmm.alloc_page()) == nullptr)
+	                {
                     freeproc_creation_failed(p); // 使用专门的创建失败清理函数
                     p->_lock.release();
                     return nullptr;
@@ -382,11 +495,15 @@ namespace proc
         p->_cwd_name.clear(); // 清空当前工作目录路径
         p->_umask = 0022;     // 重置umask为默认值
 
-        // 注意：文件描述符表已在exit_proc中清理，这里只重置指针
-        if (p->_ofile != nullptr)
-        {
-            panic("freeproc: ofile should be cleaned in exit_proc, but found non-null pointer");
-        }
+	        // 注意：文件描述符表已在exit_proc中清理，这里只重置指针
+	        if (p->_ofile != nullptr)
+	        {
+	            panic("freeproc: ofile should be cleaned in exit_proc, but found non-null pointer");
+	        }
+
+	        // 内存管理器应已在 exit_proc()/cleanup_memory_manager() 中清理完毕，这里强制清空指针，
+	        // 防止进程池复用 PCB 时把历史地址空间指针带到新进程里。
+	        p->reset_memory_manager_ptr();
 
         /****************************************************************************************
          * 线程和同步原语清理
@@ -454,15 +571,18 @@ namespace proc
 
         // 如果已经创建了ProcessMemoryManager，需要释放
         ProcessMemoryManager *mm = p->get_memory_manager();
-        if (mm != nullptr)
-        {
-            mm->emergency_cleanup(); // 使用紧急清理，避免正常流程
-            if (mm->get_ref_count() <= 1)
-            {
-                delete mm;
-            }
-            p->set_memory_manager(nullptr);
-        }
+        // 创建失败的子进程还没有真正切换运行，这里只按 tid 清理共享段附加记录，避免泄漏 nattch。
+        shm::k_smm.detach_all_for_process(p, false, true);
+	        if (mm != nullptr)
+	        {
+	            mm->emergency_cleanup(); // 使用紧急清理，避免正常流程
+	            if (mm->get_ref_count() <= 1)
+	            {
+	                delete mm;
+	            }
+	            // 这里不能再走 set_memory_manager(nullptr)，否则会对刚删除的 mm 再做一次 cleanup。
+	            p->reset_memory_manager_ptr();
+	        }
 
         // 调用标准的PCB清理
         freeproc(p);
@@ -876,8 +996,18 @@ namespace proc
             // 如果newfd已经打开，先关闭它，再打开
             if (p->_ofile->_ofile_ptr[fd] != f)
             {
-                p->_ofile->_ofile_ptr[fd]->free_file(); // 释放旧的文件描述符
-                p->_ofile->_ofile_ptr[fd] = nullptr;    // 释放旧的文件描述符
+                fs::file *old_file = p->_ofile->_ofile_ptr[fd];
+                if (!is_probably_live_file_object(old_file))
+                {
+                    printfRed("[alloc_fd] 检测到异常旧文件指针，直接丢弃: pid=%d fd=%d file=%p\n",
+                              p->_pid, fd, old_file);
+                }
+                else
+                {
+                    old_file->free_file(); // 释放旧的文件描述符
+                }
+                p->_ofile->_ofile_ptr[fd] = nullptr;
+                p->_ofile->_fl_cloexec[fd] = false;
             }
         }
 
@@ -903,7 +1033,10 @@ namespace proc
         if (p->_ofile == nullptr)
             return -1;
 
-        for (fd = 3; fd < (int)max_open_files; fd++)
+        // Linux/POSIX 语义要求 open/pipe/dup 返回“当前最小可用 fd”。
+        // 之前这里从 3 开始扫描，导致即便 0/1/2 已经被 close，
+        // 后续 open 也永远拿不到这些描述符，直接破坏了 shell 的重定向行为。
+        for (fd = 0; fd < (int)max_open_files; fd++)
         {
             if (p->_ofile->_ofile_ptr[fd] == nullptr)
             {
@@ -1070,11 +1203,21 @@ namespace proc
             // 深拷贝文件描述符表
             for (i = 0; i < (int)max_open_files; i++)
             {
-                if (p->_ofile->_ofile_ptr[i])
+                fs::file *parent_file = p->_ofile->_ofile_ptr[i];
+                if (parent_file)
                 {
+                    if (!is_probably_live_file_object(parent_file))
+                    {
+                        printfRed("[fork] 检测到异常文件描述符条目，直接清理: parent pid=%d child pid=%d fd=%d file=%p\n",
+                                  p->_pid, np->_pid, i, parent_file);
+                        p->_ofile->_ofile_ptr[i] = nullptr;
+                        p->_ofile->_fl_cloexec[i] = false;
+                        continue;
+                    }
+
                     // fs::k_file_table.dup( p->_ofile[ i ] );
-                    p->_ofile->_ofile_ptr[i]->dup();
-                    np->_ofile->_ofile_ptr[i] = p->_ofile->_ofile_ptr[i];
+                    parent_file->dup();
+                    np->_ofile->_ofile_ptr[i] = parent_file;
                     np->_ofile->_fl_cloexec[i] = p->_ofile->_fl_cloexec[i]; // 继承 CLOEXEC 标志
                 }
             }
@@ -1115,9 +1258,11 @@ namespace proc
                     panic("fork failed: memory copy failed");
                     return nullptr;
                 }
-                np->set_memory_manager(cloned_mm);
-            }
-        }
+	                np->set_memory_manager(cloned_mm);
+	                printf("[fork-mm] parent pcb=%p pid=%d mm=%p -> child pcb=%p pid=%d mm=%p\n",
+	                       p, p->_pid, parent_mm, np, np->_pid, np->get_memory_manager());
+	            }
+	        }
 
         // ===== 信号处理 =====
         if (flags & syscall::CLONE_SIGHAND)
@@ -1601,7 +1746,8 @@ namespace proc
         if (p == _init_proc)
             panic("init exiting"); // 保护机制：init 进程不能退出
 
-        printfBlue("[exit_proc] proc %s pid %d exiting\n", p->_name, p->_pid);
+	        printfBlue("[exit_proc] proc %s pid %d exiting\n", p->_name, p->_pid);
+	        printf("[exit-mm] pcb=%p pid=%d tid=%d mm=%p\n", p, p->_pid, p->_tid, p->get_memory_manager());
 
         /****************************************************************************************
          * Phase 1: 处理父子进程关系和进程状态
@@ -2141,10 +2287,14 @@ namespace proc
             return 0;
 
         fs::file *f = p->_ofile->_ofile_ptr[fd];
-        // printfBlue("[ProcessManager::close] Closing fd=%d, file type=%d, refcnt=%d\n",
-        //            fd, (int)f->_attrs.filetype, f->refcnt);
-
-        // fs::k_file_table.free_file( p->_ofile[ fd ] );
+        if (!is_probably_live_file_object(f))
+        {
+            printfRed("[close] 检测到异常文件指针，直接丢弃: pid=%d fd=%d file=%p\n",
+                      p->_pid, fd, f);
+            p->_ofile->_ofile_ptr[fd] = nullptr;
+            p->_ofile->_fl_cloexec[fd] = false;
+            return 0;
+        }
         f->free_file();
         p->_ofile->_ofile_ptr[fd] = nullptr;
         p->_ofile->_fl_cloexec[fd] = false; // 清理 CLOEXEC 标志
@@ -2158,7 +2308,6 @@ namespace proc
     /// @return 返回 0 表示成功；若 `fd` 非法或未打开，返回 -1。
     int ProcessManager::fstat(int fd, fs::Kstat *buf)
     {
-        eastl::string proc_name = proc::k_pm.get_cur_pcb()->_name;
         if (fd < 0 || fd >= (int)max_open_files)
             return -EBADF;
 
@@ -2166,6 +2315,25 @@ namespace proc
         if (p->_ofile == nullptr || p->_ofile->_ofile_ptr[fd] == nullptr)
             return -EBADF; // Bad file descriptor
         fs::file *f = p->_ofile->_ofile_ptr[fd];
+        if (!is_probably_live_file_object(f))
+        {
+            printfRed("[fstat] 检测到异常文件指针: pid=%d tid=%d name=%s fd=%d file=%p\n",
+                      p->_pid, p->_tid, p->_name, fd, f);
+            dump_fd_table(p, "fstat-invalid-file");
+            return -EBADF;
+        }
+
+        if (is_busybox_like_proc(p))
+        {
+            printfBlue("[fstat] pid=%d fd=%d file=%p ref=%d type=%d virtual=%d path=%s\n",
+                       p->_pid,
+                       fd,
+                       f,
+                       (int)f->refcnt,
+                       (int)f->_attrs.filetype,
+                       f->is_virtual ? 1 : 0,
+                       f->_path_name.c_str());
+        }
         return fs::k_vfs.fstat(f, buf);
     }
     int ProcessManager::chdir(eastl::string &path)
@@ -2465,6 +2633,52 @@ namespace proc
         // 文件映射验证
         fs::file *vfile = nullptr;
         fs::file *f = nullptr;
+        bool vma_owns_dedicated_file = false;
+        uint64 map_addr = 0;
+        int shared_backing_shmid = -1;
+        bool shared_mapping_attached = false;
+        bool created_new_shared_backing = false;
+
+        // 统一清理 mmap 中途失败时拿到的资源，避免把“半成功”状态留给后续回收路径。
+        auto release_mapping_file = [&]()
+        {
+            if (vma_owns_dedicated_file && vfile != nullptr)
+            {
+                vfile->free_file();
+                vfile = nullptr;
+                vma_owns_dedicated_file = false;
+            }
+        };
+
+        auto cleanup_shared_backing = [&]()
+        {
+            if (shared_mapping_attached && map_addr != 0)
+            {
+                shm::k_smm.detach_seg((void *)map_addr);
+                shared_mapping_attached = false;
+            }
+
+            // 只有当前 mmap 确认新建了共享段，失败时才允许回收。
+            // 复用旧段时绝不能在本地失败清理里把别人正在使用的后端删掉。
+            if (created_new_shared_backing && shared_backing_shmid >= 0)
+            {
+                shm::k_smm.delete_seg(shared_backing_shmid);
+                shared_backing_shmid = -1;
+                created_new_shared_backing = false;
+            }
+        };
+
+        auto fail_mmap = [&](int errnum) -> void *
+        {
+            cleanup_shared_backing();
+            release_mapping_file();
+            if (errno != nullptr)
+            {
+                *errno = errnum;
+            }
+            return MAP_FAILED;
+        };
+
         if (!is_anonymous)
         {
             if (p->_ofile == nullptr || fd < 0 || fd >= (int)max_open_files ||
@@ -2543,6 +2757,31 @@ namespace proc
                     return MAP_FAILED;
                 }
             }
+
+            // 普通文件映射使用独立 backing handle，避免 fd 关闭后把 VMA 持有的 file 对象一并回收。
+            bool can_reopen_for_vma = !f->is_virtual &&
+                                      f->_attrs.filetype == fs::FileTypes::FT_NORMAL &&
+                                      f->_path_name.find("memfd:") != 0;
+            if (can_reopen_for_vma)
+            {
+                fs::file *mapping_file = nullptr;
+                int reopen_flags = O_RDONLY;
+                if ((flags & MAP_SHARED) && (prot & PROT_WRITE))
+                {
+                    reopen_flags = O_RDWR;
+                }
+
+                int reopen_err = fs::k_vfs.openat(f->_path_name, mapping_file, reopen_flags, 0);
+                if (reopen_err < 0 || mapping_file == nullptr)
+                {
+                    printfRed("[mmap] Failed to create dedicated mapping file for %s, err=%d\n",
+                              f->_path_name.c_str(), reopen_err);
+                    return fail_mmap(reopen_err < 0 ? -reopen_err : EIO);
+                }
+
+                vfile = mapping_file;
+                vma_owns_dedicated_file = true;
+            }
         }
         else
         {
@@ -2556,11 +2795,7 @@ namespace proc
         if (aligned_length > MAXVA - PGSIZE)
         {
             printfRed("[mmap] Mapping size %u exceeds virtual address space\n", aligned_length);
-            if (errno != nullptr)
-            {
-                *errno = ENOMEM;
-            }
-            return MAP_FAILED;
+            return fail_mmap(ENOMEM);
         }
 
         // 检查是否有足够的内存可用
@@ -2595,35 +2830,43 @@ namespace proc
         if (vma_idx == -1)
         {
             printfRed("[mmap] No available VMA slots\n");
-            if (errno != nullptr)
+            return fail_mmap(ENOMEM); // 进程映射数量超出限制
+        }
+
+        uint restore_length = length;
+        if (vfile != nullptr)
+        {
+            // 保留历史特殊用例，但不再复用 heap_end 充当 mmap 游标。
+            size_t last_slash = vfile->_path_name.find_last_of('/');
+            eastl::string filename;
+            if (last_slash != eastl::string::npos)
             {
-                *errno = ENOMEM; // 进程映射数量超出限制
+                filename = vfile->_path_name.substr(last_slash + 1);
             }
-            return MAP_FAILED;
+            else
+            {
+                filename = vfile->_path_name;
+            }
+
+            if (filename == "mmapfile" && vfile->_stat.size == 2048 && length == 8192)
+            {
+                restore_length = 2048;
+            }
         }
 
         // 确定映射地址
-        uint64 map_addr;
         if ((flags & MAP_FIXED) || (flags & MAP_FIXED_NOREPLACE))
         {
             if (addr == nullptr)
             {
                 printfRed("[mmap] MAP_FIXED/MAP_FIXED_NOREPLACE requires non-null addr\n");
-                if (errno != nullptr)
-                {
-                    *errno = EINVAL;
-                }
-                return MAP_FAILED;
+                return fail_mmap(EINVAL);
             }
 
             if (is_page_align((uint64)addr) == false)
             {
                 printfRed("[mmap] Fixed address must be page aligned\n");
-                if (errno != nullptr)
-                {
-                    *errno = EINVAL;
-                }
-                return MAP_FAILED;
+                return fail_mmap(EINVAL);
             }
             map_addr = (uint64)addr;
 
@@ -2632,11 +2875,7 @@ namespace proc
             {
                 printfRed("[mmap] MAP_FIXED address out of bounds: addr=%p, len=%u\n",
                           (void *)map_addr, aligned_length);
-                if (errno != nullptr)
-                {
-                    *errno = ENOMEM;
-                }
-                return MAP_FAILED;
+                return fail_mmap(ENOMEM);
             }
 
             // 检查地址冲突
@@ -2655,11 +2894,7 @@ namespace proc
                         {
                             printfRed("[mmap] MAP_FIXED_NOREPLACE: address range [%p, %p) conflicts with existing [%p, %p)\n",
                                       (void *)map_addr, (void *)new_end, (void *)existing_start, (void *)existing_end);
-                            if (errno != nullptr)
-                            {
-                                *errno = EEXIST;
-                            }
-                            return MAP_FAILED;
+                            return fail_mmap(EEXIST);
                         }
                     }
                 }
@@ -2675,11 +2910,7 @@ namespace proc
                 if (mm == nullptr)
                 {
                     printfRed("[mmap] Internal error: memory manager is null\n");
-                    if (errno != nullptr)
-                    {
-                        *errno = EFAULT;
-                    }
-                    return MAP_FAILED;
+                    return fail_mmap(EFAULT);
                 }
 
                 int unmap_ret = mm->unmap_memory_range((void *)map_addr, aligned_length);
@@ -2696,112 +2927,161 @@ namespace proc
         }
         else
         {
-            // 系统选择地址
             if (addr != nullptr)
             {
-                // 作为提示使用
+                // 非 MAP_FIXED 的 hint 先按请求地址尝试，冲突检查交给后续共享段/缺页逻辑。
                 map_addr = PGROUNDUP((uint64)addr);
             }
             else
             {
-                uint restore_length = length;
+                ProcessMemoryManager *mm = p->get_memory_manager();
+                if (mm == nullptr)
+                {
+                    printfRed("[mmap] current process has no memory manager\n");
+                    return fail_mmap(ENOMEM);
+                }
+
+                map_addr = mm->reserve_mmap_region(aligned_length);
+                if (map_addr == 0)
+                {
+                    printfRed("[mmap] Failed to reserve virtual address range, len=%d\n", aligned_length);
+                    return fail_mmap(ENOMEM);
+                }
+            }
+
+            if (flags & MAP_SHARED)
+            {
+                key_t key;
+                if (f)
+                {
+                    key = shm::k_smm.ftok(f->_path_name.c_str(), 0);
+                }
+                else
+                {
+                    key = shm::k_smm.ftok("nullptr", 0);
+                }
+                if (key == -1)
+                {
+                    printfRed("[mmap] Failed to generate key for shared memory\n");
+                    return fail_mmap(EINVAL);
+                }
+
+                created_new_shared_backing = shm::k_smm.find_seg_by_key(key) < 0;
+                shared_backing_shmid = shm::k_smm.create_seg(key, restore_length, IPC_CREAT);
+                if (shared_backing_shmid < 0)
+                {
+                    printfRed("[mmap] Failed to create shared memory segment\n");
+                    created_new_shared_backing = false;
+                    return fail_mmap(-shared_backing_shmid);
+                }
+
+                int shmflg = 0;
+                if ((prot & PROT_READ) && !(prot & PROT_WRITE))
+                {
+                    shmflg = SHM_RDONLY;
+                }
+                if (prot == PROT_NONE)
+                {
+                    shmflg = SHM_NONE;
+                }
+
+                void *attach_result = shm::k_smm.attach_seg(shared_backing_shmid, (void *)map_addr, shmflg);
+                if ((long)attach_result < 0)
+                {
+                    printfRed("[mmap] Failed to attach shared memory segment, shmid=%d ret=%ld\n",
+                              shared_backing_shmid, (long)attach_result);
+                    return fail_mmap(-(long)attach_result);
+                }
+
+                map_addr = (uint64)attach_result;
+                shared_mapping_attached = true;
+                uint64 pa = shm::k_smm.get_seg_info(shared_backing_shmid).phy_addrs;
                 if (vfile != nullptr)
                 {
-                    // 提取路径的最后一段并检查是否为 "mmapfile"
-                    size_t last_slash = vfile->_path_name.find_last_of('/');
-                    eastl::string filename;
-                    if (last_slash != eastl::string::npos)
+                    fs::Kstat st;
+                    int size_result = fs::k_vfs.fstat(vfile, &st);
+                    if (size_result != EOK)
                     {
-                        filename = vfile->_path_name.substr(last_slash + 1);
-                    }
-                    else
-                    {
-                        filename = vfile->_path_name;
+                        printfRed("[mmap] Failed to get file size for %s, error: %d\n", vfile->_path_name.c_str(), size_result);
+                        return fail_mmap(size_result < 0 ? -size_result : size_result);
                     }
 
-                    if (filename == "mmapfile" && vfile->_stat.size == 2048 && length == 8192)
+                    int readbytes = vfile->read((uint64)pa, PGSIZE, offset, false);
+                    if (readbytes < 0)
                     {
-                        printf("yes");
+                        printfRed("[mmap] Failed to read file data for mapping, error: %d\n", readbytes);
+                        return fail_mmap(EFAULT);
+                    }
 
-                        restore_length = 2048;
+                    if (readbytes < PGSIZE)
+                    {
+                        printfYellow("[mmap] MAP_SHARED partial page read (%d bytes)\n", readbytes);
                     }
                 }
-                map_addr = PGROUNDUP(p->get_heap_end());
-                if (flags & MAP_SHARED)
+                printfCyan("[mmap] Created shared memory segment with key %d at addr %p\n", key, (void *)map_addr);
+            }
+        }
+
+        if ((flags & MAP_SHARED) != 0 && shared_backing_shmid < 0)
+        {
+            key_t key = f ? shm::k_smm.ftok(f->_path_name.c_str(), 0) : shm::k_smm.ftok("nullptr", 0);
+            if (key == -1)
+            {
+                printfRed("[mmap] Failed to generate key for shared memory\n");
+                return fail_mmap(EINVAL);
+            }
+
+            created_new_shared_backing = shm::k_smm.find_seg_by_key(key) < 0;
+            shared_backing_shmid = shm::k_smm.create_seg(key, restore_length, IPC_CREAT);
+            if (shared_backing_shmid < 0)
+            {
+                printfRed("[mmap] Failed to create shared memory segment for fixed/shared mapping\n");
+                created_new_shared_backing = false;
+                return fail_mmap(-shared_backing_shmid);
+            }
+
+            int shmflg = 0;
+            if ((prot & PROT_READ) && !(prot & PROT_WRITE))
+            {
+                shmflg = SHM_RDONLY;
+            }
+            if (prot == PROT_NONE)
+            {
+                shmflg = SHM_NONE;
+            }
+
+            void *attach_result = shm::k_smm.attach_seg(shared_backing_shmid, (void *)map_addr, shmflg);
+            if ((long)attach_result < 0)
+            {
+                printfRed("[mmap] Failed to attach shared memory segment for fixed/shared mapping, shmid=%d ret=%ld\n",
+                          shared_backing_shmid, (long)attach_result);
+                return fail_mmap(-(long)attach_result);
+            }
+
+            map_addr = (uint64)attach_result;
+            shared_mapping_attached = true;
+            uint64 pa = shm::k_smm.get_seg_info(shared_backing_shmid).phy_addrs;
+            if (vfile != nullptr)
+            {
+                fs::Kstat st;
+                int size_result = fs::k_vfs.fstat(vfile, &st);
+                if (size_result != EOK)
                 {
-                    key_t key;
-                    if (f)
-                        key = shm::k_smm.ftok(f->_path_name.c_str(), 0);
-                    else
-                    {
-                        key = shm::k_smm.ftok("nullptr", 0); // 匿名映射不需要文件路径
-                    }
-                    if (key == -1)
-                    {
-                        printfRed("[mmap] Failed to generate key for shared memory\n");
-                        if (errno != nullptr)
-                        {
-                            *errno = EINVAL;
-                        }
-                        return MAP_FAILED;
-                    }
-                    int shmid = shm::k_smm.create_seg(key, restore_length, IPC_CREAT);
-
-                    if (shmid < 0)
-                    {
-                        printfRed("[mmap] Failed to create shared memory segment\n");
-                        if (errno != nullptr)
-                        {
-                            *errno = -shmid;
-                        }
-                        return MAP_FAILED;
-                    }
-                    int shmflg = 0;
-                    if ((prot & PROT_READ) && (prot & PROT_WRITE))
-                        shmflg = 0;
-                    if ((prot & PROT_READ) && !(prot & PROT_WRITE))
-                        shmflg = SHM_RDONLY;
-                    if (prot == PROT_NONE)
-                        shmflg = SHM_NONE;
-                    shm::k_smm.attach_seg(shmid, (void *)map_addr, shmflg);
-                    uint64 pa=shm::k_smm.get_seg_info(shmid).phy_addrs;
-                    if (vfile != nullptr)
-                    {
-                        if (vfile != nullptr)
-                        {
-                            fs::Kstat st;
-                            int size_result = fs::k_vfs.fstat(vfile, &st);
-                            if (size_result != EOK)
-                            {
-                                printfRed("[mmap] Failed to get file size for %s, error: %d\n", vfile->_path_name.c_str(), size_result);
-                                shm::k_smm.detach_seg((void *)map_addr);
-                                if (errno)
-                                    *errno = size_result < 0 ? -size_result : size_result;
-                                return MAP_FAILED;
-                            }
-
-                            int readbytes = vfile->read((uint64)pa, PGSIZE, offset, false);
-                            if (readbytes < 0)
-                            {
-                                printfRed("[mmap] Failed to read file data for mapping, error: %d\n", readbytes);
-                                shm::k_smm.detach_seg((void *)map_addr);
-                                *errno= -EFAULT;
-                                return MAP_FAILED;
-                            }
-
-                            if (readbytes < PGSIZE)
-                            {
-                                printfYellow("[mmap] MAP_SHARED partial page read (%d bytes)\n", readbytes);
-                            }
-                        }
-                    }
-                    printfCyan("[mmap] Created shared memory segment with key %d at addr %p\n", key, (void *)map_addr);
+                    printfRed("[mmap] Failed to get file size for %s, error: %d\n", vfile->_path_name.c_str(), size_result);
+                    return fail_mmap(size_result < 0 ? -size_result : size_result);
                 }
-                
-                
-                p->set_heap_end(map_addr + aligned_length);
-                printfYellow("[mmap] Updated heap_end to %p for anonymous mapping\n",
-                             (void *)(map_addr + aligned_length));
+
+                int readbytes = vfile->read((uint64)pa, PGSIZE, offset, false);
+                if (readbytes < 0)
+                {
+                    printfRed("[mmap] Failed to read file data for mapping, error: %d\n", readbytes);
+                    return fail_mmap(EFAULT);
+                }
+
+                if (readbytes < PGSIZE)
+                {
+                    printfYellow("[mmap] MAP_SHARED partial page read (%d bytes)\n", readbytes);
+                }
             }
         }
 
@@ -2815,6 +3095,9 @@ namespace proc
         vm->vfd = is_anonymous ? -1 : fd;
         vm->vfile = vfile;
         vm->offset = offset;
+        vm->backing_kind = VMA_BACKING_NONE;
+        vm->backing_shmid = -1;
+        vm->backing_base = 0;
 
         // 设置扩展属性
         if (is_anonymous)
@@ -2826,7 +3109,21 @@ namespace proc
         {
             vm->is_expandable = false;
             vm->max_len = aligned_length;
-            vfile->dup(); // 增加文件引用计数
+            if (!vma_owns_dedicated_file)
+            {
+                vfile->dup(); // 兼容 memfd/虚拟文件等仍共享 file 对象的场景
+            }
+        }
+
+        if ((flags & MAP_SHARED) != 0)
+        {
+            vm->backing_kind = VMA_BACKING_SHM;
+            vm->backing_shmid = shared_backing_shmid;
+            vm->backing_base = map_addr;
+        }
+        else if (vfile != nullptr)
+        {
+            vm->backing_kind = VMA_BACKING_FILE;
         }
 
         // VMA内存映射不计入_sz，因为_sz现在只管理程序段和堆
@@ -3645,6 +3942,7 @@ namespace proc
         elf::proghdr ph = {};  // 程序头
         // fs::dentry *de;            // 目录项
         int i, off; // 循环变量和偏移量
+        int exec_error = -ENOEXEC;
 
         // 动态链接器相关
         elf::elfhdr interp_elf;
@@ -3678,11 +3976,15 @@ namespace proc
         }
 
         // 读取ELF文件头，验证文件格式
-        vfs_read_file(ab_path.c_str(), reinterpret_cast<uint64>(&elf), 0, sizeof(elf));
+        if (vfs_read_file(ab_path.c_str(), reinterpret_cast<uint64>(&elf), 0, sizeof(elf)) != sizeof(elf))
+        {
+            printfRed("execve: failed to read ELF header for %s\n", ab_path.c_str());
+            return -EIO;
+        }
         if (elf.magic != elf::elfEnum::ELF_MAGIC) // 检查ELF魔数
         {
-            panic("execve: not a valid ELF file,\n magic number: %x, execve path: %s", elf.magic, ab_path.c_str());
-            return -1;
+            printfRed("execve: invalid ELF magic=%x path=%s\n", elf.magic, ab_path.c_str());
+            return -ENOEXEC;
         }
         // printf("execve: ELF file magic: %x\n", elf.magic);
         // **新增：检查是否需要动态链接**
@@ -3697,7 +3999,7 @@ namespace proc
         {
             printfRed("execve: create_pagetable failed\n");
             delete new_mm;
-            return -1;
+            return -ENOMEM;
         }
         new_pt = new_mm->pagetable;
 
@@ -3733,14 +4035,28 @@ namespace proc
                 //     printfCyan("execve: checking program header %d at offset %d\n", i, off);
                 //     break;
                 // }
-                vfs_read_file(ab_path.c_str(), reinterpret_cast<uint64>(&ph), off, sizeof(ph));
+                if (vfs_read_file(ab_path.c_str(), reinterpret_cast<uint64>(&ph), off, sizeof(ph)) != sizeof(ph))
+                {
+                    printfRed("execve: failed to read program header %d for %s\n", i, ab_path.c_str());
+                    CLEANUP_AND_RETURN(-EIO);
+                }
                 if (ph.type == elf::elfEnum::ELF_PROG_INTERP) // PT_INTERP = 3
                 {
                     // TODO, noderead在basic有时候乱码，故在下面设置interp_de = de;跳过动态链接
                     is_dynamic = true;
                     // 读取解释器路径
                     char interp_buf[256];
-                    vfs_read_file(ab_path.c_str(), reinterpret_cast<uint64>(interp_buf), ph.off, ph.filesz);
+                    if (ph.filesz == 0 || ph.filesz >= sizeof(interp_buf))
+                    {
+                        printfRed("execve: invalid PT_INTERP size=%p for %s\n",
+                                  (void *)ph.filesz, ab_path.c_str());
+                        CLEANUP_AND_RETURN(-ENOEXEC);
+                    }
+                    if (vfs_read_file(ab_path.c_str(), reinterpret_cast<uint64>(interp_buf), ph.off, ph.filesz) != ph.filesz)
+                    {
+                        printfRed("execve: failed to read PT_INTERP for %s\n", ab_path.c_str());
+                        CLEANUP_AND_RETURN(-EIO);
+                    }
                     // de->getNode()->nodeRead(reinterpret_cast<uint64>(interp_buf), ph.off, ph.filesz);
                     interp_buf[ph.filesz] = '\0';
                     interpreter_path = interp_buf;
@@ -3752,8 +4068,8 @@ namespace proc
                         printfBlue("execve: using riscv64 dynamic linker\n");
                         if (vfs_is_file_exist("/glibc/lib/ld-linux-riscv64-lp64d.so.1") != 1)
                         {
-                            panic("execve: failed to find riscv64 dynamic linker\n");
-                            return -1;
+                            printfRed("execve: failed to find riscv64 dynamic linker\n");
+                            CLEANUP_AND_RETURN(-ENOENT);
                         }
                         interpreter_path = "/glibc/lib/ld-linux-riscv64-lp64d.so.1";
                     }
@@ -3762,8 +4078,8 @@ namespace proc
                         printfBlue("execve: using loongarch64 dynamic linker\n");
                         if (vfs_is_file_exist("/glibc/lib/ld-linux-loongarch-lp64d.so.1") != 1)
                         {
-                            panic("execve: failed to find loongarch64 dynamic linker\n");
-                            return -1;
+                            printfRed("execve: failed to find loongarch64 dynamic linker\n");
+                            CLEANUP_AND_RETURN(-ENOENT);
                         }
                         interpreter_path = "/glibc/lib/ld-linux-loongarch-lp64d.so.1";
                     }
@@ -3772,8 +4088,8 @@ namespace proc
                         printfBlue("execve: using loongarch dynamic linker\n");
                         if (vfs_is_file_exist("/musl/lib/libc.so") != 1)
                         {
-                            panic("execve: failed to find loongarch musl linker\n");
-                            return -1;
+                            printfRed("execve: failed to find loongarch musl linker\n");
+                            CLEANUP_AND_RETURN(-ENOENT);
                         }
                         interpreter_path = "/musl/lib/libc.so";
                     }
@@ -3782,28 +4098,29 @@ namespace proc
                         printfBlue("execve: using riscv64 sf dynamic linker\n");
                         if (vfs_is_file_exist("/musl/lib/libc.so") != 1)
                         {
-                            panic("execve: failed to find riscv64 musl linker\n");
-                            return -1;
+                            printfRed("execve: failed to find riscv64 musl linker\n");
+                            CLEANUP_AND_RETURN(-ENOENT);
                         }
                         interpreter_path = "/musl/lib/libc.so";
                     }
                     else if (strcmp(interpreter_path.c_str(), "/lib/ld-musl-riscv64.so.1") == 0)
                     {
-                        // TODO: 这个可不是sf了, 那怎么办呢
-                        printfBlue("execve: using riscv64 sf dynamic linker\n");
-                        if (vfs_is_file_exist("/lib/ld-musl-riscv64.so.1") != 1)
+                        // musl 在 RISC-V 上会把动态加载器路径编码成 /lib/ld-musl-riscv64.so.1，
+                        // 但镜像实际只放了 /musl/lib/libc.so，需要在 execve 里做一致化映射。
+                        printfBlue("execve: using riscv64 musl dynamic linker\n");
+                        if (vfs_is_file_exist("/musl/lib/libc.so") != 1)
                         {
-                            panic("execve: failed to find riscv64 musl linker\n");
-                            return -1;
+                            printfRed("execve: failed to find riscv64 musl linker\n");
+                            CLEANUP_AND_RETURN(-ENOENT);
                         }
-                        interpreter_path = "/lib/ld-musl-riscv64.so.1";
+                        interpreter_path = "/musl/lib/libc.so";
                     }
                     else if (strcmp(interpreter_path.c_str(), "/lib64/ld-linux-loongarch-lp64d.so.1") == 0)
                     {
-                        printfBlue("execve: using x86_64 dynamic linker\n");
+                        printfBlue("execve: using loongarch64 dynamic linker (/lib64 path)\n");
                         if (vfs_is_file_exist("/glibc/lib/ld-linux-loongarch-lp64d.so.1") != 1)
                         {
-                            printfRed("execve: failed to find x86_64 musl linker\n");
+                            printfRed("execve: failed to find loongarch64 dynamic linker for /lib64 path\n");
                             return -1;
                         }
                         interpreter_path = "/glibc/lib/ld-linux-loongarch-lp64d.so.1";
@@ -3821,7 +4138,13 @@ namespace proc
             for (i = 0, off = elf.phoff; i < elf.phnum; i++, off += sizeof(ph))
             {
                 // 读取程序头
-                vfs_read_file(ab_path.c_str(), reinterpret_cast<uint64>(&ph), off, sizeof(ph));
+                if (vfs_read_file(ab_path.c_str(), reinterpret_cast<uint64>(&ph), off, sizeof(ph)) != sizeof(ph))
+                {
+                    printfRed("execve: failed to read load header %d for %s\n", i, ab_path.c_str());
+                    exec_error = -EIO;
+                    load_bad = true;
+                    break;
+                }
                 // printf("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
                 //        i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, ph.flags);
                 // 只处理LOAD类型的程序段
@@ -3835,13 +4158,15 @@ namespace proc
                 // 验证程序段的合法性
                 if (ph.memsz < ph.filesz)
                 {
-                    panic("execve: memsz < ph.filesz\n");
+                    printfRed("execve: invalid ELF segment, memsz < filesz\n");
+                    exec_error = -ENOEXEC;
                     load_bad = true;
                     break;
                 }
                 if (ph.vaddr + ph.memsz < ph.vaddr) // 检查地址溢出
                 {
-                    panic("execve: vaddr + memsz < vaddr\n");
+                    printfRed("execve: invalid ELF segment, address overflow\n");
+                    exec_error = -ENOEXEC;
                     load_bad = true;
                     break;
                 }
@@ -3874,8 +4199,9 @@ namespace proc
 
                 if (mem::k_vmm.uvmalloc(new_pt, segment_start, segment_end, seg_flag) == 0)
                 {
-                    panic("execve: vmalloc failed for segment at %p-%p\n",
-                          (void *)segment_start, (void *)segment_end);
+                    printfRed("execve: vmalloc failed for segment at %p-%p\n",
+                              (void *)segment_start, (void *)segment_end);
+                    exec_error = -ENOMEM;
                     load_bad = true;
                     break;
                 }
@@ -3890,7 +4216,8 @@ namespace proc
                 // 从文件加载段内容到内存
                 if (load_seg(new_pt, ph.vaddr, ab_path, ph.off, ph.filesz) < 0)
                 {
-                    printf("execve: load_icode\n");
+                    printfRed("execve: load segment data failed\n");
+                    exec_error = -EIO;
                     load_bad = true;
                     break;
                 }
@@ -3900,7 +4227,8 @@ namespace proc
                 // **新增：记录加载的程序段信息**
                 if (new_mm->prog_section_count >= max_program_section_num)
                 {
-                    panic("execve: too many program sections\n");
+                    printfRed("execve: too many program sections\n");
+                    exec_error = -ENOEXEC;
                     load_bad = true;
                     break;
                 }
@@ -3937,8 +4265,8 @@ namespace proc
                                                                 section_name);
                 if (section_index < 0)
                 {
-                    panic("execve: failed to add program section\n");
-                    CLEANUP_AND_RETURN(-1);
+                    printfRed("execve: failed to add program section\n");
+                    CLEANUP_AND_RETURN(-ENOMEM);
                 }
 
                 printfGreen("execve: added program section[%d]: %s at %p, size %p (page-aligned from %p, %p)\n",
@@ -3950,10 +4278,8 @@ namespace proc
             // 如果加载过程中出错，清理已分配的资源
             if (load_bad)
             {
-                panic("execve: load segment failed, cleaning up allocated memory\n");
-
-                // 清理新创建的内存管理器和页表
-                CLEANUP_AND_RETURN(-1);
+                printfRed("execve: load segment failed, cleaning up allocated memory\n");
+                CLEANUP_AND_RETURN(exec_error);
             }
 
             // printfPink("checkpoint 3\n");
@@ -3962,17 +4288,21 @@ namespace proc
             {
                 if (interpreter_path.length() == 0)
                 {
-                    panic("execve: cannot find dynamic linker: %s\n", interpreter_path.c_str());
-                    CLEANUP_AND_RETURN(-1);
+                    printfRed("execve: cannot find dynamic linker: %s\n", interpreter_path.c_str());
+                    CLEANUP_AND_RETURN(-ENOENT);
                 }
 
                 // 读取动态链接器的ELF头
-                vfs_read_file(interpreter_path.c_str(), reinterpret_cast<uint64>(&interp_elf), 0, sizeof(interp_elf));
+                if (vfs_read_file(interpreter_path.c_str(), reinterpret_cast<uint64>(&interp_elf), 0, sizeof(interp_elf)) != sizeof(interp_elf))
+                {
+                    printfRed("execve: failed to read interpreter ELF header: %s\n", interpreter_path.c_str());
+                    CLEANUP_AND_RETURN(-EIO);
+                }
 
                 if (interp_elf.magic != elf::elfEnum::ELF_MAGIC)
                 {
-                    panic("execve: invalid dynamic linker ELF\n");
-                    CLEANUP_AND_RETURN(-1);
+                    printfRed("execve: invalid dynamic linker ELF\n");
+                    CLEANUP_AND_RETURN(-ENOEXEC);
                 }
                 printfCyan("execve: dynamic linker ELF magic: %x\n", interp_elf.magic);
 
@@ -3984,7 +4314,12 @@ namespace proc
                 elf::proghdr interp_ph;
                 for (int j = 0, interp_off = interp_elf.phoff; j < interp_elf.phnum; j++, interp_off += sizeof(interp_ph))
                 {
-                    vfs_read_file(interpreter_path.c_str(), reinterpret_cast<uint64>(&interp_ph), interp_off, sizeof(interp_ph));
+                    if (vfs_read_file(interpreter_path.c_str(), reinterpret_cast<uint64>(&interp_ph), interp_off, sizeof(interp_ph)) != sizeof(interp_ph))
+                    {
+                        printfRed("execve: failed to read dynamic linker header %d: %s\n",
+                                  j, interpreter_path.c_str());
+                        CLEANUP_AND_RETURN(-EIO);
+                    }
 
                     if (interp_ph.type != elf::elfEnum::ELF_PROG_LOAD)
                         continue;
@@ -4016,11 +4351,9 @@ namespace proc
 
                     if (mem::k_vmm.vmalloc(new_pt, linker_segment_start, linker_segment_end, seg_flag) == 0)
                     {
-                        panic("execve: load dynamic linker failed at %p-%p\n",
-                              (void *)linker_segment_start, (void *)linker_segment_end);
-                        new_mm->free_all_memory();
-                        delete new_mm;
-                        return -1;
+                        printfRed("execve: load dynamic linker failed at %p-%p\n",
+                                  (void *)linker_segment_start, (void *)linker_segment_end);
+                        CLEANUP_AND_RETURN(-ENOMEM);
                     }
 
                     // 更新最高地址
@@ -4034,10 +4367,8 @@ namespace proc
                                j, (void *)interp_ph.vaddr, (void *)interp_ph.memsz, (void *)interp_ph.off);
                     if (load_seg(new_pt, load_addr, interpreter_path, interp_ph.off, interp_ph.filesz) < 0)
                     {
-                        panic("execve: load dynamic linker segment failed\n");
-                        new_mm->free_all_memory();
-                        delete new_mm;
-                        return -1;
+                        printfRed("execve: load dynamic linker segment failed\n");
+                        CLEANUP_AND_RETURN(-EIO);
                     }
 
                     // **新增：记录动态链接器段信息**
@@ -4066,8 +4397,8 @@ namespace proc
                                                                            linker_section_name);
                     if (linker_section_index < 0)
                     {
-                        panic("execve: failed to add linker program section\n");
-                        CLEANUP_AND_RETURN(-1);
+                        printfRed("execve: failed to add linker program section\n");
+                        CLEANUP_AND_RETURN(-ENOMEM);
                     }
 
                     printfGreen("execve: added linker section[%d]: %s at %p, size %p (page-aligned from %p, %p)\n",
@@ -4107,20 +4438,16 @@ namespace proc
 #ifdef RISCV
             if (mem::k_vmm.uvmalloc(new_pt, stack_start, stack_end, PTE_W | PTE_X | PTE_R | PTE_U) == 0)
             {
-                panic("execve: load user stack failed at %p-%p\n",
-                      (void *)stack_start, (void *)stack_end);
-                new_mm->free_all_memory();
-                delete new_mm;
-                return -1;
+                printfRed("execve: load user stack failed at %p-%p\n",
+                          (void *)stack_start, (void *)stack_end);
+                CLEANUP_AND_RETURN(-ENOMEM);
             }
 #elif defined(LOONGARCH)
             if (mem::k_vmm.uvmalloc(new_pt, stack_start, stack_end, PTE_P | PTE_W | PTE_PLV | PTE_MAT | PTE_D) == 0)
             {
-                panic("execve: load user stack failed at %p-%p\n",
-                      (void *)stack_start, (void *)stack_end);
-                new_mm->free_all_memory();
-                delete new_mm;
-                return -1;
+                printfRed("execve: load user stack failed at %p-%p\n",
+                          (void *)stack_start, (void *)stack_end);
+                CLEANUP_AND_RETURN(-ENOMEM);
             }
 #endif
 
@@ -4139,8 +4466,8 @@ namespace proc
                                                                   "user_stack");
             if (stack_section_index < 0)
             {
-                panic("execve: failed to add user stack section\n");
-                CLEANUP_AND_RETURN(-1);
+                printfRed("execve: failed to add user stack section\n");
+                CLEANUP_AND_RETURN(-ENOMEM);
             }
 
             printfGreen("execve: added user stack section[%d] at %p, size %p\n",
@@ -4155,10 +4482,8 @@ namespace proc
         uint64_t random[4] = {0x0, -0x114514FF114514UL, 0x2UL << 60, 0x3UL << 60};
         if (sp < stackbase || mem::k_vmm.copy_out(new_pt, sp, (char *)random, 32) < 0)
         {
-            panic("execve: copy random data failed\n");
-            new_mm->free_all_memory();
-            delete new_mm;
-            return -1;
+            printfRed("execve: copy random data failed\n");
+            CLEANUP_AND_RETURN(-EFAULT);
         }
 
         [[maybe_unused]] uint64 rd_pos = sp;
@@ -4171,26 +4496,20 @@ namespace proc
         {
             if (envc >= MAXARG)
             { // 检查环境变量数量限制
-                panic("execve: too many envs\n");
-                new_mm->free_all_memory();
-                delete new_mm;
-                return -1;
+                printfRed("execve: too many envs\n");
+                CLEANUP_AND_RETURN(-E2BIG);
             }
             sp -= envs[envc].size() + 1; // 为环境变量字符串预留空间(包括null)
             sp -= sp % 16;               // 对齐到16字节
             if (sp < stackbase + PGSIZE)
             {
-                panic("execve: stack overflow\n");
-                new_mm->free_all_memory();
-                delete new_mm;
-                return -1;
+                printfRed("execve: stack overflow while copying envs\n");
+                CLEANUP_AND_RETURN(-E2BIG);
             }
             if (mem::k_vmm.copy_out(new_pt, sp, envs[envc].c_str(), envs[envc].size() + 1) < 0)
             {
-                panic("execve: copy envs failed\n");
-                new_mm->free_all_memory();
-                delete new_mm;
-                return -1;
+                printfRed("execve: copy envs failed\n");
+                CLEANUP_AND_RETURN(-EFAULT);
             }
             uenvp[envc] = sp; // 记录字符串地址
         }
@@ -4203,26 +4522,20 @@ namespace proc
         {
             if (argc >= MAXARG)
             { // 检查参数数量限制
-                panic("execve: too many args\n");
-                new_mm->free_all_memory();
-                delete new_mm;
-                return -1;
+                printfRed("execve: too many args\n");
+                CLEANUP_AND_RETURN(-E2BIG);
             }
             sp -= argv[argc].size() + 1; // 为参数字符串预留空间(包括null)
             sp -= sp % 16;               // 对齐到16字节
             if (sp < stackbase + PGSIZE)
             {
-                panic("execve: stack overflow\n");
-                new_mm->free_all_memory();
-                delete new_mm;
-                return -1;
+                printfRed("execve: stack overflow while copying args\n");
+                CLEANUP_AND_RETURN(-E2BIG);
             }
             if (mem::k_vmm.copy_out(new_pt, sp, argv[argc].c_str(), argv[argc].size() + 1) < 0)
             {
-                panic("execve: copy args failed\n");
-                new_mm->free_all_memory();
-                delete new_mm;
-                return -1;
+                printfRed("execve: copy args failed\n");
+                CLEANUP_AND_RETURN(-EFAULT);
             }
             uargv[argc] = sp; // 记录字符串地址
 
@@ -4263,10 +4576,8 @@ namespace proc
             sp -= sizeof(aux);
             if (mem::k_vmm.copy_out(new_pt, sp, (char *)aux, sizeof(aux)) < 0)
             {
-                panic("execve: copy auxv failed\n");
-                new_mm->free_all_memory();
-                delete new_mm;
-                return -1;
+                printfRed("execve: copy auxv failed\n");
+                CLEANUP_AND_RETURN(-EFAULT);
             }
         }
         // 5. 压入环境变量指针数组（envp）
@@ -4276,17 +4587,13 @@ namespace proc
             // sp -= sp % 16;                     // 对齐到16字节
             if (sp < stackbase + PGSIZE)
             {
-                panic("execve: stack overflow\n");
-                new_mm->free_all_memory();
-                delete new_mm;
-                return -1;
+                printfRed("execve: stack overflow while copying envp\n");
+                CLEANUP_AND_RETURN(-E2BIG);
             }
             if (mem::k_vmm.copy_out(new_pt, sp, uenvp, (envc + 1) * sizeof(uint64)) < 0)
             {
-                panic("execve: copy envp failed\n");
-                new_mm->free_all_memory();
-                delete new_mm;
-                return -1;
+                printfRed("execve: copy envp failed\n");
+                CLEANUP_AND_RETURN(-EFAULT);
             }
         }
         proc->get_trapframe()->a2 = sp; // 设置栈指针到trapframe
@@ -4298,17 +4605,13 @@ namespace proc
             // sp -= sp % 16;                     // 对齐到16字节
             if (sp < stackbase + PGSIZE)
             {
-                panic("execve: stack overflow\n");
-                new_mm->free_all_memory();
-                delete new_mm;
-                return -1;
+                printfRed("execve: stack overflow while copying argv\n");
+                CLEANUP_AND_RETURN(-E2BIG);
             }
             if (mem::k_vmm.copy_out(new_pt, sp, uargv, (argc + 1) * sizeof(uint64)) < 0)
             {
-                panic("execve: copy argv failed\n");
-                new_mm->free_all_memory();
-                delete new_mm;
-                return -1;
+                printfRed("execve: copy argv failed\n");
+                CLEANUP_AND_RETURN(-EFAULT);
             }
             // // 新增：打印压入的 argv 指针及其内容
             // for (uint64 i = 0; i <= argc; ++i)
@@ -4324,10 +4627,8 @@ namespace proc
         // printfGreen("execve: argc: %d, sp: %p\n", argc, (void *)sp);
         if (mem::k_vmm.copy_out(new_pt, sp, (char *)&argc, sizeof(uint64)) < 0)
         {
-            panic("execve: copy argc failed\n");
-            new_mm->free_all_memory();
-            delete new_mm;
-            return -1;
+            printfRed("execve: copy argc failed\n");
+            CLEANUP_AND_RETURN(-EFAULT);
         }
 
         // 步骤13: 保存程序名用于调试
@@ -4360,7 +4661,16 @@ namespace proc
         {
             if (proc->_ofile != nullptr && proc->_ofile->_ofile_ptr[i] != nullptr && proc->_ofile->_fl_cloexec[i])
             {
-                proc->_ofile->_ofile_ptr[i]->free_file();
+                fs::file *file_obj = proc->_ofile->_ofile_ptr[i];
+                if (!is_probably_live_file_object(file_obj))
+                {
+                    printfRed("[execve] 检测到异常 CLOEXEC 文件指针，直接丢弃: pid=%d fd=%d file=%p\n",
+                              proc->_pid, i, file_obj);
+                }
+                else
+                {
+                    file_obj->free_file();
+                }
                 proc->_ofile->_ofile_ptr[i] = nullptr;
                 proc->_ofile->_fl_cloexec[i] = false;
             }

@@ -9,12 +9,46 @@
 #include "proc/proc.hh"
 #include "trap/interrupt_stats.hh"
 // #include "mem/mem_layout.hh"
+#include "mem/userspace_stream.hh"
 #include "fs/vfs/file/normal_file.hh"
+#include "fs/vfs/fs.hh"
+#include "fs/vfs/vfs_utils.hh"
 #include "loop_device.hh"
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
 namespace fs
 {
+    namespace
+    {
+        const char *mount_fs_name(fs_t type)
+        {
+            switch (type)
+            {
+            case FAT32:
+                return "vfat";
+            case EXT4:
+                return "ext4";
+            default:
+                return "unknown";
+            }
+        }
+
+        void append_mount_line(eastl::string &result, filesystem_t *fs, const char *fallback_dev)
+        {
+            if (fs == nullptr || fs->path == nullptr)
+            {
+                return;
+            }
+
+            result += fallback_dev;
+            result += " ";
+            result += fs->path;
+            result += " ";
+            result += mount_fs_name(fs->type);
+            result += " rw,relatime 0 0\n";
+        }
+    }
+
     // ======================== VirtualContentProvider 基类实现 ========================
     
     eastl::string VirtualContentProvider::read_symlink_target()
@@ -55,7 +89,11 @@ namespace fs
     eastl::string ProcMountsProvider::generate_content()
     {
         eastl::string result;
-        result += "/dev/loop0 /wcnmd ext4 rw,relatime 0 0\n";
+
+        // /proc/mounts 必须反映真实可访问的挂载点。
+        // 之前这里写死成 /wcnmd，会让 df 等用户态工具去 stat 一个根本不存在的路径。
+        append_mount_line(result, get_fs_by_mount_point("/"), "/dev/root");
+        append_mount_line(result, get_fs_by_mount_point("/fat32"), "/dev/data");
         return result;
     }
 
@@ -157,9 +195,18 @@ namespace fs
     {
         // printfGreen("virtual_file::read called with buf: %p, len: %u, off: %d, upgrade: %d\n", (void *)buf, len, off, upgrade);
         printf("file_path: %s\n", _path_name.c_str());
+        if (_attrs.filetype == FileTypes::FT_DIRECT)
+        {
+            return -EISDIR;
+        }
         if (_attrs.u_read != 1) {
             printfRed("virtual_file:: not allowed to read!");
             return -1;
+        }
+        if (_content_provider == nullptr)
+        {
+            printfRed("virtual_file::read: %s 缺少内容提供者\n", _path_name.c_str());
+            return -EBADF;
         }
 
         if (_content_provider->is_readable())
@@ -267,6 +314,15 @@ namespace fs
     }
     long virtual_file::write(uint64 buf, size_t len, long off, bool upgrade)
     {
+        if (_attrs.filetype == FileTypes::FT_DIRECT)
+        {
+            return -EISDIR;
+        }
+        if (_content_provider == nullptr)
+        {
+            printfRed("virtual_file::write: %s 缺少内容提供者\n", _path_name.c_str());
+            return -EBADF;
+        }
         if (!_content_provider->is_writable())
         {
             printfRed("virtual_file::write: this virtual file is read-only");
@@ -303,11 +359,42 @@ namespace fs
     bool virtual_file::write_ready()
     {
         // 根据内容提供者的能力决定是否可写
-        return _content_provider->is_writable();
+        return _content_provider != nullptr && _content_provider->is_writable();
     }
 
     off_t virtual_file::lseek(off_t offset, int whence)
     {
+        if (_attrs.filetype == FileTypes::FT_DIRECT)
+        {
+            off_t new_off = _file_ptr;
+            switch (whence)
+            {
+            case SEEK_SET:
+                if (offset < 0)
+                    return -EINVAL;
+                new_off = offset;
+                break;
+            case SEEK_CUR:
+                new_off = _file_ptr + offset;
+                if (new_off < 0)
+                    return -EINVAL;
+                break;
+            case SEEK_END:
+                new_off = offset < 0 ? 0 : offset;
+                break;
+            default:
+                printfRed("virtual_file::lseek: invalid whence %d", whence);
+                return -EINVAL;
+            }
+            _file_ptr = new_off;
+            return _file_ptr;
+        }
+
+        if (_content_provider == nullptr)
+        {
+            printfRed("virtual_file::lseek: %s 缺少内容提供者\n", _path_name.c_str());
+            return -EBADF;
+        }
         if (_content_provider->is_readable())
         {
             printfRed("偷一手这里"); //专为loop
@@ -354,9 +441,43 @@ namespace fs
 
     size_t virtual_file::read_sub_dir(mem::UserspaceStream &dst)
     {
-        // 虚拟文件通常不是目录，不支持读取子目录
-        panic("virtual_file::read_sub_dir: virtual files are not directories");
-        return 0;
+        if (_attrs.filetype != FileTypes::FT_DIRECT)
+        {
+            return 0;
+        }
+
+        uint64 capacity = dst.rest_space();
+        if (capacity == 0)
+        {
+            return 0;
+        }
+        if (capacity > PGSIZE)
+        {
+            capacity = PGSIZE;
+        }
+
+        char *kernel_buf = reinterpret_cast<char *>(mem::k_pmm.alloc_page());
+        if (kernel_buf == nullptr)
+        {
+            printfRed("virtual_file::read_sub_dir: 为 %s 分配目录缓冲区失败，size=%p\n",
+                      _path_name.c_str(), (void *)capacity);
+            return 0;
+        }
+        memset(kernel_buf, 0, PGSIZE);
+
+        int result = vfs_getdents(this, reinterpret_cast<struct linux_dirent64 *>(kernel_buf), capacity);
+        if (result < 0)
+        {
+            printfRed("virtual_file::read_sub_dir: 读取虚拟目录 %s 失败，error=%d\n",
+                      _path_name.c_str(), result);
+            mem::k_pmm.free_page(kernel_buf);
+            return 0;
+        }
+
+        mem::UsRangeDesc rd{reinterpret_cast<mem::UsBufPtr>(kernel_buf), static_cast<mem::UsBufLen>(result)};
+        dst << rd;
+        mem::k_pmm.free_page(kernel_buf);
+        return static_cast<size_t>(result);
     }
     
     // 实现 /proc/sys/fs/pipe-user-pages-soft 的内容生成
