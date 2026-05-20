@@ -27,6 +27,34 @@ namespace
 #elif defined(LOONGARCH)
     constexpr uint64 k_min_kernel_file_ptr = PHYSBASE;
 #endif
+    constexpr size_t k_linux_path_max = 4096;
+    constexpr size_t k_linux_name_max = 255;
+
+    int validate_linux_path_length(const eastl::string &path)
+    {
+        if (path.length() >= k_linux_path_max)
+        {
+            return -ENAMETOOLONG;
+        }
+
+        size_t component_len = 0;
+        for (size_t i = 0; i < path.length(); ++i)
+        {
+            if (path[i] == '/')
+            {
+                component_len = 0;
+                continue;
+            }
+
+            ++component_len;
+            if (component_len > k_linux_name_max)
+            {
+                return -ENAMETOOLONG;
+            }
+        }
+
+        return EOK;
+    }
 
     inline bool is_kernel_mapped_file_range(uint64 addr, uint64 size)
     {
@@ -424,6 +452,12 @@ static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file
 int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mode)
 {
     // printfYellow("[vfs_openat] : absolute_path=%s, flags=%o, mode=0%o\n", absolute_path.c_str(), flags, mode);
+    int length_ret = validate_linux_path_length(absolute_path);
+    if (length_ret != EOK)
+    {
+        printfRed("vfs_openat: path too long: len=%u\n", (uint32)absolute_path.length());
+        return length_ret;
+    }
 
     // 解析路径中的符号链接
     eastl::string resolved_path = absolute_path;
@@ -464,6 +498,12 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
     if (resolved_path.back() != '/')
         resolved_path += "/";
     resolved_path += filename;
+    length_ret = validate_linux_path_length(resolved_path);
+    if (length_ret != EOK)
+    {
+        printfRed("vfs_openat: resolved path too long: len=%u\n", (uint32)resolved_path.length());
+        return length_ret;
+    }
 
     // 检查是否为 FAT32 分区
     struct filesystem *fs = get_fs_from_path(resolved_path.c_str());
@@ -1210,6 +1250,16 @@ uint vfs_read_file(const char *path, uint64 buffer_addr, size_t offset, size_t s
 
 int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
 {
+    const bool trace_busybox_du =
+        file != nullptr &&
+        (file->_path_name.find("ltp/testcases/bin") != eastl::string::npos ||
+         file->_path_name.find("datafiles") != eastl::string::npos);
+    if (trace_busybox_du)
+    {
+        printf("[du-getdents] enter path=%s count=%u file_ptr=%ld next_off=%lu\n",
+               file->_path_name.c_str(), count, file->_file_ptr, file->lwext4_dir_struct.next_off);
+    }
+
     if (file && file->is_virtual && file->_attrs.filetype == fs::FileTypes::FT_DIRECT)
     {
         eastl::vector<eastl::string> entries;
@@ -1419,6 +1469,12 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
         }
 
         memcpy(d->d_name, name, copy_len + 1);
+        if (trace_busybox_du)
+        {
+            printf("[du-getdents] entry path=%s name=%s ino=%u type=%u reclen=%u next_off=%lu\n",
+                   file->_path_name.c_str(), name, rentry->inode, rentry->inode_type, reclen,
+                   file->lwext4_dir_struct.next_off);
+        }
 
         if (rentry->inode_type == EXT4_DE_DIR)
         {
@@ -1445,6 +1501,11 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
         d = (struct linux_dirent64 *)((char *)d + d->d_reclen);
     }
 
+    if (trace_busybox_du)
+    {
+        printf("[du-getdents] leave path=%s totlen=%d next_off=%lu\n",
+               file->_path_name.c_str(), totlen, file->lwext4_dir_struct.next_off);
+    }
     return totlen;
 }
 
@@ -1771,13 +1832,31 @@ int vfs_frename(const char *oldpath, const char *newpath)
 
 int vfs_path_stat(const char *path, fs::Kstat *st, bool follow_symlinks)
 {
+    if (path == nullptr || st == nullptr)
+    {
+        return -EFAULT;
+    }
+
     eastl::string effective_path(path);
+    int length_ret = validate_linux_path_length(effective_path);
+    if (length_ret != EOK)
+    {
+        printfRed("vfs_path_stat: path too long: len=%u\n", (uint32)effective_path.length());
+        return length_ret;
+    }
+
     if (follow_symlinks)
     {
         int resolve_ret = resolve_symlinks(effective_path, effective_path);
         if (resolve_ret < 0)
         {
             return resolve_ret;
+        }
+        length_ret = validate_linux_path_length(effective_path);
+        if (length_ret != EOK)
+        {
+            printfRed("vfs_path_stat: resolved path too long: len=%u\n", (uint32)effective_path.length());
+            return length_ret;
         }
     }
     else
@@ -1826,6 +1905,13 @@ int vfs_path_stat(const char *path, fs::Kstat *st, bool follow_symlinks)
             if (effective_path.back() != '/')
                 effective_path += "/";
             effective_path += filename;
+        }
+
+        length_ret = validate_linux_path_length(effective_path);
+        if (length_ret != EOK)
+        {
+            printfRed("vfs_path_stat: resolved path too long: len=%u\n", (uint32)effective_path.length());
+            return length_ret;
         }
     }
 

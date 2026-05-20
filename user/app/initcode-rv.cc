@@ -5,12 +5,9 @@ extern "C"
     __attribute__((section(".text.startup"))) int main()
     {
         userdebug3();
-        static const char *const ltp_cases[] = {
-            "access02",
-            NULL,
-        };
-        init_env("/musl/");
-        ltp_subset_test(false, ltp_cases);
+        init_env("/glibc/");
+        char *du_args[] = {(char *)"busybox", (char *)"du", 0};
+        run_test("busybox", du_args, 0);
         shutdown();
         return 0;
     }
