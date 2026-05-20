@@ -89,6 +89,17 @@ namespace syscall
             uint64 data;
         } __attribute__((packed));
 
+        struct KernelTermios
+        {
+            uint32 c_iflag;
+            uint32 c_oflag;
+            uint32 c_cflag;
+            uint32 c_lflag;
+            unsigned char c_line;
+            unsigned char c_cc[19];
+        };
+        static_assert(sizeof(KernelTermios) == 36, "TCGETS must use Linux kernel termios ABI");
+
         inline bool is_kernel_mapped_file_range(uint64 addr, uint64 size)
         {
             if (addr < k_min_kernel_file_ptr || size == 0)
@@ -4135,13 +4146,13 @@ namespace syscall
 
         if ((cmd & 0xFFFF) == TCGETS)
         {
-            fs::device_file *df = (fs::device_file *)f;
-            termios ts{};
-            int ret = df->tcgetattr(&ts);
-            if (ret < 0)
+            if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
             {
-                return ret;
+                return SYS_ENOTTY;
             }
+            // TCGETS 使用的是 Linux 内核 UAPI 的 asm-generic termios（36字节），
+            // 不能把 libc 的 struct termios（RISC-V glibc 下为60字节）直接回写给用户栈。
+            KernelTermios ts{};
 
             mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
             if (mem::k_vmm.copy_out(*pt, arg, &ts, sizeof(ts)) < 0)
@@ -4154,6 +4165,10 @@ namespace syscall
 
         if ((cmd & 0XFFFF) == TIOCGPGRP)
         {
+            if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+            {
+                return SYS_ENOTTY;
+            }
             int pgrp = 1;
             mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
             if (mem::k_vmm.copy_out(*pt, arg, &pgrp, sizeof(pgrp)) < 0)
@@ -4166,6 +4181,10 @@ namespace syscall
 
         if ((cmd & 0xFFFF) == TIOCGWINSZ)
         {
+            if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+            {
+                return SYS_ENOTTY;
+            }
             struct winsize ws;
             ws.ws_col = 80;
             ws.ws_row = 24;
@@ -4211,28 +4230,29 @@ namespace syscall
 
         if ((cmd & 0xFFFF) == TIOCOUTQ)
         {
-            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
-#ifdef RISCV
-            int *bytes_in_output = (int *)pt->walk_addr(arg);
-#elif defined(LOONGARCH)
-            int *bytes_in_output = (int *)to_vir((uint64)pt->walk_addr(arg));
-#endif
+            int bytes_in_output = 0;
 
             if (f->_attrs.filetype == fs::FileTypes::FT_PIPE)
             {
                 // 对于管道文件，输出缓冲区概念不适用，返回0
-                *bytes_in_output = 0;
+                bytes_in_output = 0;
             }
             else if (f->_attrs.filetype == fs::FileTypes::FT_DEVICE)
             {
                 // 对于设备文件（如终端），获取输出缓冲区中的字节数
                 fs::device_file *df = (fs::device_file *)f;
                 int result = df->get_output_buffer_bytes();
-                *bytes_in_output = (result < 0) ? 0 : result;
+                bytes_in_output = (result < 0) ? 0 : result;
             }
             else
             {
-                *bytes_in_output = 0;
+                return SYS_ENOTTY;
+            }
+
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+            if (mem::k_vmm.copy_out(*pt, arg, &bytes_in_output, sizeof(bytes_in_output)) < 0)
+            {
+                return SYS_EFAULT;
             }
             return 0;
         }
@@ -4272,13 +4292,6 @@ namespace syscall
 
         if ((cmd & 0xFFFF) == TIOCSERGETLSR)
         {
-            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
-#ifdef RISCV
-            int *lsr_status = (int *)pt->walk_addr(arg);
-#elif defined(LOONGARCH)
-            int *lsr_status = (int *)to_vir((uint64)pt->walk_addr(arg));
-#endif
-
             if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
             {
                 return SYS_ENOTTY; // 只有串行设备支持此操作
@@ -4291,7 +4304,12 @@ namespace syscall
             {
                 return SYS_EIO; // I/O 错误
             }
-            *lsr_status = lsr_value;
+
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+            if (mem::k_vmm.copy_out(*pt, arg, &lsr_value, sizeof(lsr_value)) < 0)
+            {
+                return SYS_EFAULT;
+            }
 
             return 0;
         }

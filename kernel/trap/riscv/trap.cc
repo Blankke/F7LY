@@ -240,17 +240,6 @@ void trap_manager::usertrap()
 
   if (cause == 8)
   {
-    uint64 syscall_num = p->get_trapframe()->a7;
-    bool trace_access02_ioctl = (syscall_num == 29 && strcmp(p->_name, "access02") == 0);
-    if (trace_access02_ioctl)
-    {
-      printfYellow("[access02-ioctl] before syscall: epc=%p s1=%p a0=%p a1=%p a2=%p\n",
-                   (void *)p->_trapframe->epc,
-                   (void *)p->_trapframe->s1,
-                   (void *)p->_trapframe->a0,
-                   (void *)p->_trapframe->a1,
-                   (void *)p->_trapframe->a2);
-    }
     if (p->is_killed())
       proc::k_pm.exit(-1);
     // printfYellow("p->_trapframe->epc: %p\n", p->_trapframe->epc);
@@ -258,15 +247,6 @@ void trap_manager::usertrap()
     // printfYellow("p->_trapframe->epc: %p\n", p->_trapframe->epc);
     intr_on();
     syscall::k_syscall_handler.invoke_syscaller();
-    if (trace_access02_ioctl)
-    {
-      printfYellow("[access02-ioctl] after syscall: epc=%p s1=%p a0=%p a1=%p a2=%p\n",
-                   (void *)p->_trapframe->epc,
-                   (void *)p->_trapframe->s1,
-                   (void *)p->_trapframe->a0,
-                   (void *)p->_trapframe->a1,
-                   (void *)p->_trapframe->a2);
-    }
   }
   else if ((which_dev = devintr()) != 0)
   {

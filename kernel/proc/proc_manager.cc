@@ -1159,7 +1159,26 @@ namespace proc
                 panic("clone: parent process is null");
             }
         }
+        if (flags & syscall::CLONE_VFORK)
+        {
+            // CLONE_VFORK 语义：父进程必须等到子进程 execve 或 exit 释放共享地址空间后
+            // 才能继续运行。否则父进程可能先 munmap 掉传给子进程的共享用户栈，
+            // glibc posix_spawn/system 路径会随机在子进程栈上 SIGSEGV。
+            np->_vfork_parent = p;
+        }
         np->_lock.release();
+
+        if (flags & syscall::CLONE_VFORK)
+        {
+            _wait_lock.acquire();
+            while (np->_vfork_parent == p &&
+                   np->_state != ProcState::UNUSED &&
+                   np->_state != ProcState::ZOMBIE)
+            {
+                sleep(np, &_wait_lock);
+            }
+            _wait_lock.release();
+        }
         return new_pid;
     }
 
@@ -1425,7 +1444,10 @@ namespace proc
             // 如果设置了 CLONE_CHILD_SETTID，则设置子进程的线程 ID
             if (ctid != 0)
             {
-                if (mem::k_vmm.copy_out(*p->get_pagetable(), ctid, &np->_tid, sizeof(np->_tid)) < 0)
+                // Linux 语义要求写入“子进程地址空间”中的 child_tid。
+                // 对非 CLONE_VM 的 fork/clone，父子页表已经分离，写父页表会让子进程
+                // 看到未初始化的 tid 字段，进而破坏 glibc/pthread 的运行时状态。
+                if (mem::k_vmm.copy_out(*np->get_pagetable(), ctid, &np->_tid, sizeof(np->_tid)) < 0)
                 {
                     freeproc_creation_failed(np); // 使用专门的创建失败清理函数
                     np->_lock.release();
@@ -1904,6 +1926,11 @@ namespace proc
 
         // 设置ZOMBIE状态（不设置xstate，由调用者负责）
         p->_state = ProcState::ZOMBIE; // 标记为 zombie，等待父进程回收
+        if (p->_vfork_parent != nullptr)
+        {
+            p->_vfork_parent = nullptr;
+            wakeup(p);
+        }
 
         // 如果有父进程，将当前进程的时间累计到父进程中
         if (p->_parent != nullptr)
@@ -4898,6 +4925,13 @@ namespace proc
         printfGreen("execve succeed, new process size: %p\n", proc->get_size());
         printfGreen("execve: process '%s' loaded with %d program sections\n",
                     proc->get_name(), proc->get_prog_section_count());
+        if (proc->_vfork_parent != nullptr)
+        {
+            _wait_lock.acquire();
+            proc->_vfork_parent = nullptr;
+            wakeup(proc);
+            _wait_lock.release();
+        }
         proc->print_detailed_memory_info();
         // 写成0为了适配glibc的rtld_fini需求
 

@@ -437,6 +437,31 @@ namespace proc
             {
                 vma_data._vm[i].vfile->dup(); // 增加引用计数
             }
+
+            // fork 必须保留父进程已经驻留的私有 VMA 页。
+            // 动态链接器会在 MAP_PRIVATE 的 libc/ld.so GOT 页上写入重定位结果；
+            // 如果这里只复制 VMA 元数据，子进程缺页时会重新从文件读原始 GOT，
+            // 导致 _rtld_global 等指针退回 0 并在 glibc __fork 子分支崩溃。
+            // 未驻留页仍保持惰性加载；MAP_SHARED/SHM 页由共享后端负责重新映射。
+            if (!is_shared_backed_vma(vma_data._vm[i]))
+            {
+                uint64 vma_start = PGROUNDDOWN(vma_data._vm[i].addr);
+                uint64 vma_end = PGROUNDUP(vma_data._vm[i].addr + (uint64)vma_data._vm[i].len);
+                if (vma_end < vma_start)
+                {
+                    printfRed("[clone_for_fork] skip overflow VMA copy %d addr=%p len=%d\n",
+                              i, (void *)vma_data._vm[i].addr, vma_data._vm[i].len);
+                    continue;
+                }
+
+                if (mem::k_vmm.vm_copy(pagetable, new_mgr->pagetable, vma_start, vma_end - vma_start) < 0)
+                {
+                    printfRed("[clone_for_fork] copy VMA %d failed addr=%p len=%d\n",
+                              i, (void *)vma_data._vm[i].addr, vma_data._vm[i].len);
+                    delete new_mgr;
+                    return nullptr;
+                }
+            }
         }
 
         return new_mgr;

@@ -9,6 +9,8 @@ MAKEFLAGS += -j$(NPROC)
 ARCH ?= riscv
 KERNEL_PREFIX=`pwd`
 DIS_PRINTF ?= 0
+QEMU_MEM ?= 1G
+QEMU_DEBUG_MEM ?= 1G
 
 # 检查是否通过目标名称指定架构
 ifneq (,$(filter l loongarch,$(MAKECMDGOALS)))
@@ -27,7 +29,7 @@ ifeq ($(ARCH),riscv)
   CROSS_COMPILE := riscv64-linux-gnu-
   ARCH_CFLAGS := -DRISCV -mcmodel=medany
   OUTPUT_PREFIX := riscv
-  QEMU_CMD := qemu-system-riscv64 -machine virt -m 128M -nographic -smp 1 -bios default -hdb ${KERNEL_PREFIX}/sdcard-rv.img -kernel
+  QEMU_CMD := qemu-system-riscv64 -machine virt -m $(QEMU_MEM) -nographic -smp 1 -bios default -hdb ${KERNEL_PREFIX}/sdcard-rv.img -kernel
 else ifeq ($(ARCH),loongarch)
   CROSS_COMPILE := loongarch64-linux-gnu-
   ARCH_CFLAGS := -DLOONGARCH -march=loongarch64 -mabi=lp64d -mcmodel=normal -Wno-error=use-after-free
@@ -253,7 +255,7 @@ run-riscv:
 	qemu-system-riscv64 \
 		-machine virt \
 		-kernel $(KERNEL_ELF) \
-		-m 128M \
+		-m $(QEMU_MEM) \
 		-nographic \
 		-smp 1 \
 		-bios default \
@@ -270,7 +272,7 @@ run-loongarch:
 	qemu-system-loongarch64 \
 	    -machine virt \
 	    -kernel $(KERNEL_ELF) \
-	    -m 128M \
+	    -m $(QEMU_MEM) \
 	    -nographic \
 	    -smp 1 \
 		-drive file=$(KERNEL_PREFIX)/sdcard-la.img,if=none,format=raw,id=x0 \
@@ -295,7 +297,7 @@ debug-riscv:
 	qemu-system-riscv64 \
 		-machine virt \
 		-kernel $(KERNEL_ELF) \
-		-m 1G \
+		-m $(QEMU_DEBUG_MEM) \
 		-nographic \
 		-smp 1 \
 		-bios default \
@@ -311,7 +313,7 @@ debug-loongarch:
 	qemu-system-loongarch64 \
 	    -machine virt \
 	    -kernel $(KERNEL_ELF) \
-	    -m 1G \
+	    -m $(QEMU_DEBUG_MEM) \
 	    -nographic \
 	    -smp 1 \
 		-drive file=$(KERNEL_PREFIX)/sdcard-la.img,if=none,format=raw,id=x0 \

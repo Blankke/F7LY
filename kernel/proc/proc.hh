@@ -148,6 +148,7 @@ namespace proc
         void *_futex_addr;                        // futex等待地址，用于用户态同步原语
         uint64 _clear_tid_addr = 0;               // 线程退出的时候清除该地址的值(8字节)
         robust_list_head *_robust_list = nullptr; // 健壮futex链表头，用于线程退出时清理
+        Pcb *_vfork_parent = nullptr;             // CLONE_VFORK 子进程释放地址空间前需要唤醒的父进程
 
         /****************************************************************************************
          * 进程间通信(IPC)
