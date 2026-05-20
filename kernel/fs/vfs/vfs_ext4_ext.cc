@@ -538,10 +538,15 @@ int vfs_ext_rmdir(const char *path) {
         int entry_count = 0;
         
         while ((rentry = ext4_dir_entry_next(&(var.dir))) != NULL) {
-            const char *name = (const char *)rentry->name;
+            const uint16_t name_len = rentry->name_length;
+            if (name_len == 0 || name_len > EXT4_DIRECTORY_FILENAME_LEN) {
+                (void) ext4_dir_close(&(var.dir));
+                return -EIO;
+            }
             
             // Skip "." and ".." entries
-            if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
+            if ((name_len == 1 && memcmp(rentry->name, ".", 1) == 0) ||
+                (name_len == 2 && memcmp(rentry->name, "..", 2) == 0)) {
                 continue;
             }
             
@@ -716,15 +721,21 @@ int vfs_ext_getdents(struct file *f, struct linux_dirent64 *dirp, int count) {
             break;
         }
 
-        int namelen = strlen((const char *)rentry->name);
+        const uint16_t raw_namelen = rentry->name_length;
+        if (raw_namelen == 0 || raw_namelen > EXT4_DIRECTORY_FILENAME_LEN) {
+            return -EIO;
+        }
+        int namelen = raw_namelen;
         int reclen = sizeof d->d_ino + sizeof d->d_off + sizeof d->d_reclen + sizeof d->d_type + namelen + 1;
         if (reclen < (int)sizeof(struct linux_dirent64)) {
             reclen = sizeof(struct linux_dirent64);
         }
-        if (totlen + reclen >= count) {
+        if (totlen + reclen > count) {
             break;
         }
-        strncpy(d->d_name, (const char *)rentry->name, MAXPATH);
+        const size_t copy_len = namelen < MAXPATH - 1 ? (size_t)namelen : (size_t)(MAXPATH - 1);
+        memcpy(d->d_name, rentry->name, copy_len);
+        d->d_name[copy_len] = '\0';
         if (rentry->inode_type == EXT4_DE_DIR) {
             d->d_type = T_DIR;
         } else if (rentry->inode_type == EXT4_DE_REG_FILE) {

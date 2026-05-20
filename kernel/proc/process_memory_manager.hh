@@ -73,6 +73,7 @@ namespace proc
         // 堆内存管理
         uint64 heap_start;
         uint64 heap_end;
+        uint64 mmap_cursor;
 
         // 页表管理（移除分散的引用计数）
         mem::PageTable pagetable;
@@ -185,6 +186,8 @@ namespace proc
          * @param start_addr 堆的起始地址
          */
         void init_heap(uint64 start_addr);
+        void reset_mmap_cursor(uint64 minimum_start);
+        uint64 reserve_mmap_region(uint64 size, uint64 alignment = PGSIZE);
 
         /**
          * @brief 扩展堆内存
@@ -443,6 +446,7 @@ namespace proc
          * @return true 已映射，false 未映射
          */
         bool is_page_mapped(uint64 va);
+        bool range_overlaps_used_vma(uint64 start_addr, uint64 end_addr) const;
         
         /**
          * @brief 写回文件映射的数据

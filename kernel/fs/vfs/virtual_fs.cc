@@ -5,6 +5,41 @@
 #include "proc/proc_manager.hh"
 namespace fs
 {
+    namespace
+    {
+        mode_t virtual_default_mode(fs::FileTypes file_type)
+        {
+            switch (file_type)
+            {
+            case fs::FileTypes::FT_DIRECT:
+                return S_IFDIR | 0755;
+            case fs::FileTypes::FT_SYMLINK:
+                return S_IFLNK | 0777;
+            case fs::FileTypes::FT_DEVICE:
+                return S_IFCHR | 0666;
+            case fs::FileTypes::FT_PIPE:
+                return S_IFIFO | 0666;
+            case fs::FileTypes::FT_NORMAL:
+            default:
+                return S_IFREG | 0644;
+            }
+        }
+
+        void fill_virtual_kstat_defaults(fs::Kstat *st, mode_t mode, uint64 ino, uint64 rdev, uint32_t nlink)
+        {
+            st->dev = 0x1;
+            st->ino = ino;
+            st->mode = mode;
+            st->nlink = nlink;
+            st->uid = 0;
+            st->gid = 0;
+            st->rdev = rdev;
+            st->size = 0;
+            st->blksize = 4096;
+            st->blocks = 0;
+        }
+    }
+
     // 构造函数
     VirtualFileSystem::VirtualFileSystem()
     {
@@ -350,6 +385,11 @@ namespace fs
         add_virtual_file("/dev/null", fs::FileTypes::FT_DEVICE,
                          eastl::make_unique<DevNullProvider>());
 
+        // /dev/rtc* (RTC 设备)
+        add_virtual_file("/dev/rtc", fs::FileTypes::FT_DEVICE, nullptr);
+        add_virtual_file("/dev/rtc0", fs::FileTypes::FT_DEVICE, nullptr);
+        add_virtual_file("/dev/misc/rtc", fs::FileTypes::FT_DEVICE, nullptr);
+
         // /proc/sys/kernel/shmmax (共享内存最大值)
         add_virtual_file("/proc/sys/kernel/shmmax", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcSysKernelShmmaxProvider>());
@@ -436,7 +476,21 @@ namespace fs
 
         fs::FileAttrs attrs;
         attrs.filetype = (fs::FileTypes)vf_msg.file_type;
-        attrs._value = 0777;
+        switch (attrs.filetype)
+        {
+        case fs::FileTypes::FT_DIRECT:
+            attrs._value = 0755;
+            break;
+        case fs::FileTypes::FT_SYMLINK:
+            attrs._value = 0777;
+            break;
+        case fs::FileTypes::FT_DEVICE:
+            attrs._value = 0666;
+            break;
+        default:
+            attrs._value = 0644;
+            break;
+        }
         file = new virtual_file(attrs, absolute_path, eastl::move(vf_msg.provider));
         return 0;
     }
@@ -522,34 +576,30 @@ namespace fs
         if (f->is_virtual)
         {
             // 如果是虚拟文件，使用虚拟文件系统的fstat处理
-            printfBlue("[VirtualFileSystem] ::fstat: calling vfile_fstat for virtual file: %s\n", f->_path_name.c_str());
             int result = vfile_fstat(f, st);
             if (result < 0)
             {
                 printfRed("[VirtualFileSystem] ::fstat: vfile_fstat failed for %s with error %d\n", f->_path_name.c_str(), result);
             }
-            else
+            else if (Printer::trace_group_enabled())
             {
-                printfGreen("[VirtualFileSystem] ::fstat: vfile_fstat succeeded for %s\n", f->_path_name.c_str());
-                printfBlue("[SyscallHandler::sys_fstat] Kstat: ino=%p, size=%p, mode=0%o, nlink=%u, uid=%u, gid=%u, rdev=%p, blksize=%u, blocks=%p\n",
-                       st->ino, st->size, st->mode, st->nlink, st->uid, st->gid, st->rdev, st->blksize, st->blocks);
+                tracef("[VirtualFileSystem::fstat] virtual path=%s ino=%p size=%p mode=0%o\n",
+                       f->_path_name.c_str(), st->ino, st->size, st->mode);
             }
             return result;
         }
         else
         {
             // 调用常规的fstat处理
-            printfCyan("[VirtualFileSystem] ::fstat: calling vfs_fstat for non-virtual file\n");
             int result = vfs_fstat(f, st);
             if (result < 0)
             {
                 printfRed("[VirtualFileSystem] ::fstat: vfile_fstat failed for %s with error %d\n", f->_path_name.c_str(), result);
             }
-            else
+            else if (Printer::trace_group_enabled())
             {
-                printfGreen("[VirtualFileSystem] ::fstat: vfile_fstat succeeded for %s\n", f->_path_name.c_str());
-                printf("[SyscallHandler::sys_fstat] Kstat: ino=%p, size=%p, mode=0%o, nlink=%u, uid=%u, gid=%u, rdev=%p, blksize=%u, blocks=%p\n",
-                       st->ino, st->size, st->mode, st->nlink, st->uid, st->gid, st->rdev, st->blksize, st->blocks);
+                tracef("[VirtualFileSystem::fstat] path=%s ino=%p size=%p mode=0%o\n",
+                       f->_path_name.c_str(), st->ino, st->size, st->mode);
             }
             return result;
         }
@@ -557,6 +607,8 @@ namespace fs
 
     int VirtualFileSystem::vfile_fstat(fs::file *f, fs::Kstat *st)
     {
+        memset(st, 0, sizeof(*st));
+
         // 获取虚拟文件的路径，用于判断具体的设备类型
         const eastl::string &path = f->_path_name;
 
@@ -564,58 +616,29 @@ namespace fs
         if (path == "/dev/null")
         {
             // /dev/null 字符设备的标准属性
-            st->dev = 0x5;             // Device: 5h/5d
-            st->ino = 3;               // Inode: 3 (标准/dev/null的inode)
-            st->mode = 0666 | S_IFCHR; // character special file, mode: 0666
-            st->nlink = 1;             // Links: 1
-            st->uid = 0;               // Uid: 0 (root)
-            st->gid = 0;               // Gid: 0 (root)
-            st->rdev = (1 << 8) | 3;   // Device type: 1,3 (标准/dev/null的设备号)
-            st->size = 0;              // Size: 0
-            st->blksize = 4096;        // IO Block: 4096
-            st->blocks = 0;            // Blocks: 0
+            fill_virtual_kstat_defaults(st, 0666 | S_IFCHR, 3, (1 << 8) | 3, 1);
+            st->dev = 0x5; // Device: 5h/5d
         }
         else if (path == "/dev/zero")
         {
             // /dev/zero 字符设备的标准属性
-            st->dev = 0x5;             // Device: 5h/5d
-            st->ino = 5;               // Inode: 5 (标准/dev/zero的inode)
-            st->mode = 0666 | S_IFCHR; // character special file, mode: 0666
-            st->nlink = 1;             // Links: 1
-            st->uid = 0;               // Uid: 0 (root)
-            st->gid = 0;               // Gid: 0 (root)
-            st->rdev = (1 << 8) | 5;   // Device type: 1,5 (标准/dev/zero的设备号)
-            st->size = 0;              // Size: 0
-            st->blksize = 4096;        // IO Block: 4096
-            st->blocks = 0;            // Blocks: 0
+            fill_virtual_kstat_defaults(st, 0666 | S_IFCHR, 5, (1 << 8) | 5, 1);
+            st->dev = 0x5; // Device: 5h/5d
         }
         else if (path.find("/dev/loop") == 0)
         {
             // 原有的loop设备处理逻辑
-            st->dev = 0x5;             // Device: 5h/5d
-            st->ino = 124;             // Inode: 124
-            st->mode = 0660 | S_IFBLK; // block special file, mode: 0660 + block device
-            st->nlink = 1;             // Links: 1
-            st->uid = 0;               // Uid: 0 (root)
-            st->gid = 6;               // Gid: 6 (disk)
-            st->rdev = 7;              // Device type: 7,0
-            st->size = 0;              // Size: 0
-            st->blksize = 4096;        // IO Block: 4096
-            st->blocks = 0;            // Blocks: 0
+            fill_virtual_kstat_defaults(st, 0660 | S_IFBLK, 124, 7, 1);
+            st->dev = 0x5; // Device: 5h/5d
+            st->gid = 6;   // Gid: 6 (disk)
         }
         else
         {
-            // 其他虚拟文件的默认处理
-            st->dev = 0x1;             // Device: 1h/1d
-            st->ino = 1;               // Inode: 1
-            st->mode = 0644 | S_IFREG; // regular file, mode: 0644
-            st->nlink = 1;             // Links: 1
-            st->uid = 0;               // Uid: 0 (root)
-            st->gid = 0;               // Gid: 0 (root)
-            st->rdev = 0;              // Device type: 0
-            st->size = 0;              // Size: 0 (动态文件大小在读取时确定)
-            st->blksize = 4096;        // IO Block: 4096
-            st->blocks = 0;            // Blocks: 0
+            // 其他虚拟节点按自身文件类型回填，避免把 /dev、/proc 这类目录错误报成普通文件。
+            const mode_t default_mode = virtual_default_mode(f->_attrs.filetype);
+            const uint32_t nlink = (f->_attrs.filetype == fs::FileTypes::FT_DIRECT) ? 2 : 1;
+            const uint64 ino = reinterpret_cast<uintptr_t>(f) & 0xffffffffu;
+            fill_virtual_kstat_defaults(st, default_mode, ino == 0 ? 1 : ino, 0, nlink);
         }
 
         // 设置时间戳（所有虚拟文件使用相同的时间戳）

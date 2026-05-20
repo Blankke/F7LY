@@ -30,8 +30,8 @@ namespace fs
 		/// @param dev 设备编号，用于标识具体的设备。
 		/// @param den 指向目录项（dentry）的指针，表示该设备文件在文件系统中的位置。
 		// device_file( uint dev, dentry *den ) : device_file( FileAttrs( FileTypes::FT_DEVICE, 0777 ), dev, den ) { dup();};
-		device_file(FileAttrs attrs, eastl::string path) : file(attrs), path_name(path) { dup(); };
-		device_file(FileAttrs attrs, eastl::string path, uint dev_num) : file(attrs), path_name(path), _dev_num(dev_num) { dup(); };
+		device_file(FileAttrs attrs, eastl::string path) : file(attrs, path), path_name(path) { dup(); };
+		device_file(FileAttrs attrs, eastl::string path, uint dev_num) : file(attrs, path), path_name(path), _dev_num(dev_num) { dup(); };
 		~device_file() = default;
 
 		/// @brief 从设备文件中读取数据到指定缓冲区。

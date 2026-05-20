@@ -10,6 +10,13 @@ namespace fs
 
 namespace proc
 {
+    enum VmaBackingKind : int
+    {
+        VMA_BACKING_NONE = 0,
+        VMA_BACKING_FILE = 1,
+        VMA_BACKING_SHM = 2,
+    };
+
     struct Context
     {
 #ifdef RISCV
@@ -60,5 +67,8 @@ namespace proc
         int offset;             // 文件偏移
         uint64 max_len;         // 新增：最大可扩展长度
         bool is_expandable;     // 新增：是否可扩展
+        int backing_kind;       // 映射后端类型：普通/文件/共享段
+        int backing_shmid;      // 共享段映射时记录真实 shmid，私有映射固定为 -1
+        uint64 backing_base;    // 共享段映射时记录原始 attach 基址
     };
 }

@@ -10,13 +10,57 @@
 #include "fs/vfs/file/fat32_file.hh"
 #include "fs/fat32/fat32.hh"
 #include "fs/vfs/fifo_manager.hh"
+#include "fs/vfs/virtual_fs.hh"
 #include "proc_manager.hh" // 用于访问当前进程的umask
 #include "fs/lwext4/ext4.hh"
 #include "fs/vfs/vfs_ext4_ext.hh" // 包含 NS_to_S 宏
 #include "tm/time.h"              // 包含 TIME2NS 宏
+#include "mem/memlayout.hh"
 #include <EASTL/vector.h>
 #include <EASTL/algorithm.h>
 #include <libs/string.hh>
+
+namespace
+{
+#ifdef RISCV
+    constexpr uint64 k_min_kernel_file_ptr = KERNBASE;
+#elif defined(LOONGARCH)
+    constexpr uint64 k_min_kernel_file_ptr = PHYSBASE;
+#endif
+
+    inline bool is_kernel_mapped_file_range(uint64 addr, uint64 size)
+    {
+        if (addr < k_min_kernel_file_ptr || size == 0)
+        {
+            return false;
+        }
+
+        uint64 end = addr + size - 1;
+        if (end < addr)
+        {
+            return false;
+        }
+
+        return mem::k_pagetable.kwalk_addr(addr) != 0 &&
+               mem::k_pagetable.kwalk_addr(end) != 0;
+    }
+
+    inline bool is_probably_live_file_object(fs::file *file_obj)
+    {
+        if (file_obj == nullptr)
+        {
+            return false;
+        }
+
+        if (!is_kernel_mapped_file_range((uint64)file_obj, sizeof(fs::file)))
+        {
+            return false;
+        }
+
+        uint64 vtable_addr = *(uint64 *)file_obj;
+        return is_kernel_mapped_file_range(vtable_addr, sizeof(void *));
+    }
+}
 
 // 路径规范化函数：处理 . 和 ..
 eastl::string normalize_path(const eastl::string &path)
@@ -1041,9 +1085,10 @@ int vfs_is_file_exist(const char *path)
                  else if (rel_path[mplen] == '/') rel_path += mplen;
              }
         }
-        printfCyan("vfs_is_file_exist: checking FAT32 path: %s -> %s (rel: %s)\n", path, resolved_path.c_str(), rel_path);
         struct fat32_entry *ep = ename((char*)rel_path);
-        printfCyan("vfs_is_file_exist: ename returned: %p for path: %s\n", ep, path);
+        if (Printer::trace_group_enabled())
+            tracef("[vfs_is_file_exist] fat32 path=%s resolved=%s rel=%s entry=%p\n",
+                   path, resolved_path.c_str(), rel_path, ep);
         if (ep) {
             eput(ep);
             return 1;
@@ -1165,6 +1210,92 @@ uint vfs_read_file(const char *path, uint64 buffer_addr, size_t offset, size_t s
 
 int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
 {
+    if (file && file->is_virtual && file->_attrs.filetype == fs::FileTypes::FT_DIRECT)
+    {
+        eastl::vector<eastl::string> entries;
+        entries.push_back(".");
+        entries.push_back("..");
+
+        eastl::vector<eastl::string> virtual_children;
+        fs::k_vfs.list_virtual_files(file->_path_name, virtual_children);
+        for (const auto &name : virtual_children)
+        {
+            if (eastl::find(entries.begin(), entries.end(), name) == entries.end())
+            {
+                entries.push_back(name);
+            }
+        }
+
+        // /proc 需要暴露当前活跃 PID 目录，否则 ps/top 一类工具看不到进程。
+        if (file->_path_name == "/proc")
+        {
+            for (const proc::Pcb &pcb : proc::k_proc_pool)
+            {
+                if (pcb._state == proc::ProcState::UNUSED || pcb._pid <= 0)
+                    continue;
+
+                char pid_buf[16];
+                snprintf(pid_buf, sizeof(pid_buf), "%d", pcb._pid);
+                eastl::string pid_name(pid_buf);
+                if (eastl::find(entries.begin(), entries.end(), pid_name) == entries.end())
+                {
+                    entries.push_back(pid_name);
+                }
+            }
+        }
+
+        size_t index = static_cast<size_t>(file->_file_ptr);
+        struct linux_dirent64 *d = dirp;
+        int totlen = 0;
+
+        while (index < entries.size())
+        {
+            const eastl::string &name = entries[index];
+            uint reclen = sizeof(d->d_ino) + sizeof(d->d_off) + sizeof(d->d_reclen) + sizeof(d->d_type) + name.size() + 1;
+            if (reclen % 8)
+                reclen = reclen - reclen % 8 + 8;
+            if (reclen < sizeof(struct linux_dirent64))
+                reclen = sizeof(struct linux_dirent64);
+            if (totlen + (int)reclen > (int)count)
+                break;
+
+            memset(d, 0, reclen);
+            strncpy(d->d_name, name.c_str(), name.size() + 1);
+            d->d_ino = index + 1;
+            d->d_off = index + 1;
+            d->d_reclen = reclen;
+
+            if (name == "." || name == "..")
+            {
+                d->d_type = T_DIR;
+            }
+            else if (file->_path_name == "/proc" && name.size() > 0 && name[0] >= '0' && name[0] <= '9')
+            {
+                d->d_type = T_DIR;
+            }
+            else
+            {
+                eastl::string child_path = file->_path_name;
+                if (child_path.empty() || child_path.back() != '/')
+                    child_path += "/";
+                child_path += name;
+
+                fs::vfile_tree_node *node = fs::k_vfs.get_virtual_node(child_path);
+                if (node && node->file_type == fs::FileTypes::FT_DIRECT)
+                    d->d_type = T_DIR;
+                else
+                    d->d_type = T_FILE;
+            }
+
+            totlen += reclen;
+            d = (struct linux_dirent64 *)((char *)d + reclen);
+            ++index;
+        }
+
+        file->_file_ptr = index;
+        return totlen;
+    }
+
     // FAT32 support
     if (file && file->_attrs.filetype == fs::FileTypes::FT_DIRECT) {
         struct filesystem *fs = get_fs_from_path(file->_path_name.c_str());
@@ -1253,7 +1384,15 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
         if (rentry == NULL)
             break;
 
-        int namelen = strlen((const char *)rentry->name);
+        // ext4 目录项名不是以 '\0' 结尾的 C 字符串，必须使用目录项自带长度。
+        const uint16_t raw_namelen = rentry->name_length;
+        if (raw_namelen == 0 || raw_namelen > EXT4_DIRECTORY_FILENAME_LEN)
+        {
+            printfRed("[vfs_getdents] 遇到异常 ext4 目录项长度: %u\n", raw_namelen);
+            return -EIO;
+        }
+
+        const uint16_t namelen = raw_namelen;
         /*
          * 长度是前四项的19加上namelen(字符串长度包括结尾的\0)
          * reclen是namelen+2,如果是+1会错误。原因是没考虑name[]开头的'\'
@@ -1264,12 +1403,13 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
         if (reclen < sizeof(struct linux_dirent64))
             reclen = sizeof(struct linux_dirent64);
 
-        if (totlen + reclen >= count)
+        if (totlen + (int)reclen > (int)count)
             break;
 
         char name[MAXPATH] = {0};
-        // name[0] = '/';
-        strcat(name, (const char *)rentry->name); //< 追加，二者应该都以'/'开头
+        const size_t copy_len = eastl::min<size_t>(namelen, MAXPATH - 1);
+        memcpy(name, rentry->name, copy_len);
+        name[copy_len] = '\0';
 
         // 过滤掉 O_TMPFILE 创建的临时文件，让它们在目录遍历时不可见
         if (strncmp(name, ".tmpfile_", 9) == 0)
@@ -1278,7 +1418,7 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
             continue; // 跳过这个条目，不返回给用户空间
         }
 
-        strncpy(d->d_name, name, MAXPATH);
+        memcpy(d->d_name, name, copy_len + 1);
 
         if (rentry->inode_type == EXT4_DE_DIR)
         {
@@ -1363,19 +1503,24 @@ int vfs_mkdir(const char *path, uint64_t mode)
 
 int vfs_fstat(fs::file *f, fs::Kstat *st)
 {
+    if (!is_probably_live_file_object(f))
+    {
+        printfRed("[vfs_fstat] 检测到异常文件对象: file=%p\n", f);
+        return -EBADF;
+    }
+
     // 检查是否是 pipe_file，如果是，直接使用其内部的 _stat
     if (f->_attrs.filetype == fs::FileTypes::FT_PIPE)
     {
         *st = f->_stat;
-        printfCyan("vfs_fstat: pipe file, mode: 0%o\n", st->mode);
+        if (Printer::trace_group_enabled())
+            tracef("[vfs_fstat] pipe mode=0%o\n", st->mode);
         return EOK;
     }
 
     // 检查是否是 memfd 文件（路径以 "memfd:" 开头）
     if (f->_path_name.find("memfd:") == 0)
     {
-        printfCyan("vfs_fstat: memfd file, using synthetic stat information\n");
-
         // 为 memfd 文件创建合成的 stat 信息
         memset(st, 0, sizeof(fs::Kstat));
 
@@ -1400,15 +1545,14 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
         st->st_mtime_nsec = 0;
         st->mnt_id = 0;
 
-        printfCyan("vfs_fstat: memfd file size: %u bytes\n", st->size);
+        if (Printer::trace_group_enabled())
+            tracef("[vfs_fstat] memfd path=%s size=%u\n", f->_path_name.c_str(), st->size);
         return EOK;
     }
 
     // 检查是否是设备文件
     if (f->_attrs.filetype == fs::FileTypes::FT_DEVICE)
     {
-        printfCyan("vfs_fstat: device file, using synthetic stat information\n");
-        
         // 为设备文件创建合成的stat信息
         memset(st, 0, sizeof(fs::Kstat));
         
@@ -1436,15 +1580,14 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
         st->st_mtime_nsec = 0;
         st->mnt_id = 0;
         
-        printfCyan("vfs_fstat: device file, rdev: %u\n", st->rdev);
+        if (Printer::trace_group_enabled())
+            tracef("[vfs_fstat] device path=%s rdev=%u\n", f->_path_name.c_str(), st->rdev);
         return EOK;
     }
 
     // 检查是否是符号链接文件
     if (f->_attrs.filetype == fs::FileTypes::FT_SYMLINK)
     {
-        printfCyan("vfs_fstat: symlink file, getting symlink attributes\n");
-
         struct ext4_inode inode;
         uint32 inode_num = 0;
         const char *file_path = f->_path_name.c_str();
@@ -1480,7 +1623,9 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
         st->st_mtime_nsec = (inode.mtime_extra >> 2) & 0x3FFFFFFF;
         st->mnt_id = 0;
 
-        printfCyan("vfs_fstat: symlink mode: 0%o, size: %u\n", st->mode, st->size);
+        if (Printer::trace_group_enabled())
+            tracef("[vfs_fstat] symlink path=%s mode=0%o size=%u\n",
+                   f->_path_name.c_str(), st->mode, st->size);
         return EOK;
     }
 
@@ -1519,7 +1664,9 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
              
              st->blocks = (st->size + 511) / 512;
              
-             printfCyan("vfs_fstat: fat32 file: %s mode: 0%o size: %u\n", f->_path_name.c_str(), st->mode, st->size);
+             if (Printer::trace_group_enabled())
+                 tracef("[vfs_fstat] fat32 path=%s mode=0%o size=%u\n",
+                        f->_path_name.c_str(), st->mode, st->size);
              return EOK;
          }
     }
@@ -1570,7 +1717,9 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
 
     st->rdev = ext4_inode_get_dev(&inode);
     st->size = ext4_inode_get_size(sb, &inode);
-    printfCyan("vfs_fstat: file size: %u bytes\n", st->size);
+    if (Printer::trace_group_enabled())
+        tracef("[vfs_fstat] ext4 path=%s size=%u mode=0%o\n",
+               f->_path_name.c_str(), st->size, st->mode);
     // 修复 blksize 计算：避免除零错误，使用标准块大小
     st->blksize = 4096; // 使用标准 4KB 块大小
 
@@ -1622,15 +1771,19 @@ int vfs_frename(const char *oldpath, const char *newpath)
 
 int vfs_path_stat(const char *path, fs::Kstat *st, bool follow_symlinks)
 {
-    // 检查文件是否存在
-    if (vfs_is_file_exist(path) != 1)
+    eastl::string effective_path(path);
+    if (follow_symlinks)
     {
-        return -ENOENT;
+        int resolve_ret = resolve_symlinks(effective_path, effective_path);
+        if (resolve_ret < 0)
+        {
+            return resolve_ret;
+        }
     }
 
-    struct filesystem *fs = get_fs_from_path(path);
+    struct filesystem *fs = get_fs_from_path(effective_path.c_str());
     if (fs && fs->type == FAT32) {
-         const char* rel_path = path;
+         const char* rel_path = effective_path.c_str();
          if (strcmp(fs->path, "/") != 0) {
              size_t mplen = strlen(fs->path);
              if (strncmp(rel_path, fs->path, mplen) == 0) {
@@ -1665,39 +1818,25 @@ int vfs_path_stat(const char *path, fs::Kstat *st, bool follow_symlinks)
          
          eput(ep);
          
-         printfCyan("vfs_path_stat: fat32 path: %s mode: 0%o size: %u\n", path, st->mode, st->size);
+         if (Printer::trace_group_enabled())
+             tracef("[vfs_path_stat] fat32 path=%s mode=0%o size=%u\n", path, st->mode, st->size);
          return EOK;
     }
 
     struct ext4_inode inode;
     uint32 inode_num = 0;
-    int status = ext4_raw_inode_fill(path, &inode_num, &inode);
+    int status = ext4_raw_inode_fill(effective_path.c_str(), &inode_num, &inode);
     if (status != EOK)
     {
-        printfRed("vfs_path_stat: ext4_raw_inode_fill failed for %s, error: %d\n", path, status);
+        printfRed("vfs_path_stat: ext4_raw_inode_fill failed for %s, error: %d\n",
+                  effective_path.c_str(), status);
         return -status;
     }
 
     struct ext4_sblock *sb = NULL;
-    status = ext4_get_sblock(path, &sb);
+    status = ext4_get_sblock(effective_path.c_str(), &sb);
     if (status != EOK)
         return -status;
-
-    // 检查是否是符号链接
-    int file_type = ext4_inode_type(sb, &inode);
-    if (file_type == EXT4_INODE_MODE_SOFTLINK && follow_symlinks)
-    {
-        // 如果是符号链接且需要跟随，先解析符号链接
-        eastl::string resolved_path;
-        status = resolve_symlinks(eastl::string(path), resolved_path);
-        if (status < 0)
-        {
-            return status;
-        }
-
-        // 递归调用获取目标文件的属性
-        return vfs_path_stat(resolved_path.c_str(), st, true);
-    }
 
     // 填充 stat 结构
     st->dev = 0;
@@ -1756,8 +1895,9 @@ int vfs_path_stat(const char *path, fs::Kstat *st, bool follow_symlinks)
     st->st_mtime_nsec = (inode.mtime_extra >> 2) & 0x3FFFFFFF;
     st->mnt_id = 0;
 
-    printfCyan("vfs_path_stat: path: %s, mode: 0%o, size: %u, follow_symlinks: %s\n",
-               path, st->mode, st->size, follow_symlinks ? "true" : "false");
+    if (Printer::trace_group_enabled())
+        tracef("[vfs_path_stat] path=%s mode=0%o size=%u follow_symlinks=%s\n",
+               effective_path.c_str(), st->mode, st->size, follow_symlinks ? "true" : "false");
 
     return EOK;
 }

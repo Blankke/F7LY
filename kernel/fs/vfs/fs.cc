@@ -248,8 +248,10 @@ void dir_init(void)
 {
     struct inode *ip;
 
-    if ((ip = namei((char *)"/dev/misc/rtc")) == NULL)
-        vfs_ext_mkdir((char *)"/dev/misc/rtc", 0777);
+    // /dev/misc 需要作为目录存在，/dev/misc/rtc 本身应该是设备节点，
+    // 不能再被误建成目录，否则用户态会把 RTC 当成目录打开。
+    if ((ip = namei((char *)"/dev/misc")) == NULL)
+        vfs_ext_mkdir((char *)"/dev/misc", 0777);
     else
         free_inode(ip);
 

@@ -107,6 +107,11 @@ namespace shm
         // 创建共享内存段
         int create_seg(key_t key, size_t size, int shmflg);
 
+        // 通过 key 查询现有共享段。
+        // 这里专门给 mmap(MAP_SHARED) 的失败清理路径使用，
+        // 用来区分“当前调用新建的段”和“复用了历史段”，避免误删其他映射正在使用的后端。
+        int find_seg_by_key(key_t key);
+
         // 删除共享内存段
         int delete_seg(int shmid);
 
@@ -133,6 +138,10 @@ namespace shm
     // 在 fork 结束时，把父线程 tid 的所有附加记录复制一份给子线程 tid
     // 返回是否有任何记录被复制
         bool duplicate_attachments_for_fork(uint parent_tid, uint child_tid);
+
+        // 按进程清理共享内存附加记录。
+        // match_tid_only=true 时只按 tid 删除，适合创建失败的僵尸子进程清理。
+        int detach_all_for_process(proc::Pcb *proc, bool unmap_pages = true, bool match_tid_only = false);
 
         // 控制共享内存段 (标准shmctl接口)
         // cmd可以是: IPC_STAT, IPC_SET, IPC_RMID
