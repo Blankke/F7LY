@@ -49,12 +49,12 @@ namespace proc
         ZOMBIE
     };
 
-    constexpr uint num_process = 90;      // 系统中允许的最大进程数量
-    constexpr int default_proc_prio = 10; // 默认进程优先级
-    constexpr int lowest_proc_prio = 19;  // 最低进程优先级
-    constexpr int highest_proc_prio = 0;  // 最高进程优先级
-    constexpr uint max_open_files = 128;  // 每个进程最多可以打开的文件数量
-    constexpr uint pid_max = 1000;        // 系统最大PID值
+    constexpr uint num_process = 90;       // 系统中允许的最大进程数量
+    constexpr int default_proc_prio = 0;   // 默认 nice 值
+    constexpr int lowest_proc_prio = 19;   // 最低优先级对应的 nice 值
+    constexpr int highest_proc_prio = -20; // 最高优先级对应的 nice 值
+    constexpr uint max_open_files = 128;   // 每个进程最多可以打开的文件数量
+    constexpr uint pid_max = 1000;         // 系统最大PID值
     constexpr int k_interval_timer_count = 3; // ITIMER_REAL / ITIMER_VIRTUAL / ITIMER_PROF
     struct ofile
     {
@@ -123,7 +123,7 @@ namespace proc
 
         // 调度相关字段
         int _slot;     // 当前时间片剩余量 @todo: 应使用更精确的时间单位
-        int _priority; // 进程优先级 (0最高，19最低)，符合Linux nice值规范
+        int _priority; // 进程 nice 值，范围为 [-20, 19]，数值越小优先级越高
 
         // CPU亲和性字段
         CpuMask _cpu_mask; // CPU亲和性掩码，每个位表示一个CPU核心

@@ -283,6 +283,39 @@ namespace proc
         printfGreen("[proc] Process Manager Init\n");
     }
 
+    void ProcessManager::set_slot(Pcb *p, int slot)
+    {
+        if (p == nullptr)
+        {
+            return;
+        }
+
+        p->_lock.acquire();
+        p->_slot = slot;
+        p->_lock.release();
+    }
+
+    void ProcessManager::set_priority(Pcb *p, int priority)
+    {
+        if (p == nullptr)
+        {
+            return;
+        }
+
+        if (priority < highest_proc_prio)
+        {
+            priority = highest_proc_prio;
+        }
+        else if (priority > lowest_proc_prio)
+        {
+            priority = lowest_proc_prio;
+        }
+
+        p->_lock.acquire();
+        p->_priority = priority;
+        p->_lock.release();
+    }
+
     Pcb *ProcessManager::get_cur_pcb()
     {
         Cpu::push_intr_off();
@@ -575,8 +608,8 @@ namespace proc
         p->_xstate = 0;                // 清除退出状态码
         p->_state = ProcState::UNUSED; // 标记进程控制块为未使用
 
-        p->_slot = 0;     // 重置时间片
-        p->_priority = 0; // 重置优先级
+        p->_slot = 0;                 // 重置时间片
+        p->_priority = default_proc_prio; // 重置 nice 值，避免 PCB 复用带出历史优先级
 
         // 重新初始化CPU亲和性掩码：默认可以在任何CPU上运行
         p->_cpu_mask.fill();

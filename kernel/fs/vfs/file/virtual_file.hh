@@ -191,6 +191,16 @@ namespace fs
         }
     };
 
+    // /etc/group 内容提供者
+    class EtcGroupProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<EtcGroupProvider>();
+        }
+    };
+
     // /dev/block/X:Y 内容提供者
     class DevBlockProvider : public VirtualContentProvider
     {

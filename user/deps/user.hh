@@ -13,6 +13,13 @@
 #define AT_SYMLINK_FOLLOW 0x400
 #define AT_EMPTY_PATH 0x1000
 
+// getpriority/setpriority 的 which 参数
+#define PRIO_PROCESS 0
+#define PRIO_PGRP 1
+#define PRIO_USER 2
+
+extern int errno;
+
 int openat(int dirfd, const char *path, int flags);
 int close(int fd);
 ssize_t read(int fd, void *buf, size_t len);
@@ -20,6 +27,8 @@ ssize_t write(int fd, const void *buf, size_t len);
 pid_t getpid(void);
 pid_t getppid(void);
 int sched_yield(void);
+int setpriority(int which, int who, int prio);
+int getpriority(int which, int who);
 pid_t clone(int (*fn)(void *arg), void *arg, void *stack, size_t stack_size, unsigned long flags);
 void exit(int code);
 int waitpid(int pid, int *code, int options);
@@ -86,6 +95,7 @@ int libc_test(const char *path);
 int ltp_test(bool is_musl);
 int basic_subset_test(const char *path, const char *const cases[]);
 int ltp_subset_test(bool is_musl, const char *const cases[]);
+int priority_ltp_regression_riscv(void);
 int regression_suite_4d1444_riscv(void);
 int regression_suite_4d1444_loongarch(void);
 int final_test_musl(void);
