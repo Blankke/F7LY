@@ -3359,6 +3359,7 @@ namespace proc
     int ProcessManager::mremap(void *old_address, size_t old_size, size_t new_size, int flags, void *new_address, void **result_addr)
     {
         *result_addr = MAP_FAILED;
+        constexpr size_t k_mremap_copy_chunk_size = 64 * 1024;
 
         // EINVAL: 基本参数验证
         if (!old_address)
@@ -3456,6 +3457,50 @@ namespace proc
             printfRed("[mremap] Internal error: No current process\n");
             return syscall::SYS_EFAULT;
         }
+
+        auto copy_mapping_in_chunks = [&](uint64 src, uint64 dst, size_t len) -> int
+        {
+            size_t chunk_size = len < k_mremap_copy_chunk_size ? len : k_mremap_copy_chunk_size;
+            if (chunk_size == 0)
+            {
+                return 0;
+            }
+
+            char *temp_buffer = (char *)mem::k_pmm.kmalloc(chunk_size);
+            if (temp_buffer == nullptr)
+            {
+                printfRed("[mremap] ENOMEM: Failed to allocate temporary chunk buffer\n");
+                return syscall::SYS_ENOMEM;
+            }
+
+            size_t done = 0;
+            while (done < len)
+            {
+                size_t current = len - done;
+                if (current > chunk_size)
+                {
+                    current = chunk_size;
+                }
+
+                if (mem::k_vmm.copy_in(*pcb->get_pagetable(), temp_buffer, src + done, current) < 0)
+                {
+                    mem::k_pmm.free_page(temp_buffer);
+                    printfRed("[mremap] EFAULT: Failed to read source mapping chunk\n");
+                    return syscall::SYS_EFAULT;
+                }
+
+                if (mem::k_vmm.copy_out(*pcb->get_pagetable(), dst + done, temp_buffer, current) < 0)
+                {
+                    mem::k_pmm.free_page(temp_buffer);
+                    printfRed("[mremap] EFAULT: Failed to write target mapping chunk\n");
+                    return syscall::SYS_EFAULT;
+                }
+                done += current;
+            }
+
+            mem::k_pmm.free_page(temp_buffer);
+            return 0;
+        };
 
         uint64 old_start = (uint64)old_address;
         uint64 old_end = old_start + old_size;
@@ -3689,38 +3734,12 @@ namespace proc
                     }
                 }
 
-                // 复制旧数据到新位置
-                // 创建临时缓冲区来中转数据
-                void *temp_buffer = new char[old_size];
-                if (!temp_buffer)
+                int copy_ret = copy_mapping_in_chunks(old_start, (uint64)target_addr, old_size);
+                if (copy_ret != 0)
                 {
-                    // ENOMEM: 临时缓冲区分配失败
-                    printfRed("[mremap] ENOMEM: Failed to allocate temporary buffer\n");
                     munmap(target_addr, new_size);
-                    return syscall::SYS_ENOMEM;
+                    return copy_ret;
                 }
-
-                // 从旧地址读取数据到临时缓冲区
-                if (mem::k_vmm.copy_in(*pcb->get_pagetable(), temp_buffer, old_start, old_size) < 0)
-                {
-                    // EFAULT: 无法读取旧数据
-                    printfRed("[mremap] EFAULT: Failed to read data from old location\n");
-                    delete[] (char *)temp_buffer;
-                    munmap(target_addr, new_size);
-                    return syscall::SYS_EFAULT;
-                }
-
-                // 从临时缓冲区写入数据到新地址
-                if (mem::k_vmm.copy_out(*pcb->get_pagetable(), (uint64)target_addr, temp_buffer, old_size) < 0)
-                {
-                    // EFAULT: 无法写入新数据
-                    printfRed("[mremap] EFAULT: Failed to write data to new location\n");
-                    delete[] (char *)temp_buffer;
-                    munmap(target_addr, new_size);
-                    return syscall::SYS_EFAULT;
-                }
-
-                delete[] (char *)temp_buffer;
 
                 // 如果不是 MREMAP_DONTUNMAP，则释放旧映射
                 if (!(flags & MREMAP_DONTUNMAP))
@@ -3753,29 +3772,12 @@ namespace proc
                         // ENOMEM: 无法在指定地址映射
                         return syscall::SYS_ENOMEM;
                     }
-                    // 创建临时缓冲区用于数据转移
-                    void *temp_buffer = new char[old_size];
-                    if (!temp_buffer)
+                    int copy_ret = copy_mapping_in_chunks(old_start, (uint64)new_address, old_size);
+                    if (copy_ret != 0)
                     {
                         munmap(new_address, new_size);
-                        return syscall::SYS_ENOMEM;
+                        return copy_ret;
                     }
-
-                    if (mem::k_vmm.copy_in(*pcb->get_pagetable(), temp_buffer, old_start, old_size) < 0)
-                    {
-                        delete[] (char *)temp_buffer;
-                        munmap(new_address, new_size);
-                        return syscall::SYS_EFAULT;
-                    }
-
-                    if (mem::k_vmm.copy_out(*pcb->get_pagetable(), (uint64)new_address, temp_buffer, old_size) < 0)
-                    {
-                        delete[] (char *)temp_buffer;
-                        munmap(new_address, new_size);
-                        return syscall::SYS_EFAULT;
-                    }
-
-                    delete[] (char *)temp_buffer;
 
                     if (!(flags & MREMAP_DONTUNMAP))
                     {

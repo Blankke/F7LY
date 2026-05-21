@@ -17,6 +17,7 @@ namespace mem
         static void *kcalloc(uint n, size_t size);
         void clear_page(void *pa);
         static uint64 get_phys_top() { return phys_top; }
+        static uint64 get_kernel_linear_top() { return kernel_linear_top; }
         static uint64 get_heap_area_start() { return heap_area_start; }
         static uint64 get_heap_area_size() { return heap_area_size; }
         static uint64 get_heap_allocator_size() { return heap_allocator_size; }
@@ -32,6 +33,7 @@ namespace mem
         static uint32 page_count;
         static uint32 heap_page_count;
         static uint64 phys_top;
+        static uint64 kernel_linear_top;
         static uint64 heap_area_start;
         static uint64 heap_area_size;
         static uint64 heap_allocator_size;

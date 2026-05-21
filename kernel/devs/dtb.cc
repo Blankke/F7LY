@@ -28,6 +28,112 @@ struct fdt_header {
 #define FDT_NOP 0x4
 #define FDT_END 0x9
 
+static inline uint32 bswap32(uint32 x);
+static inline uint64 bswap64(uint64 x);
+
+namespace
+{
+    // LoongArch 下 QEMU 传进来的 DTB 地址是物理地址；内核后续既可能在启用分页前访问，
+    // 也可能在启用分页后再次解析 DTB。为了让这两种时机都能稳定访问，
+    // 这里统一把 DTB 规范化为 DMWIN 直映地址保存到 _dtb_addr；
+    // k_dtb_addr 仍继续保留物理地址，给页表映射等场景使用。
+    static uint64 normalize_dtb_addr_for_kernel(uint64 dtb_addr)
+    {
+#ifdef LOONGARCH
+        if (dtb_addr != 0 && (dtb_addr & VIRT_DMWIN_MASK) == 0)
+        {
+            return dtb_addr | DMWIN_MASK;
+        }
+#endif
+        return dtb_addr;
+    }
+
+    struct FdtCursor
+    {
+        char *struct_base = nullptr;
+        char *strings_base = nullptr;
+        uint32 struct_size = 0;
+    };
+
+    static bool load_fdt_cursor(uint64 dtb_addr, FdtCursor &cursor)
+    {
+        if (dtb_addr == 0)
+        {
+            return false;
+        }
+
+        fdt_header *hdr = (fdt_header *)dtb_addr;
+        if (bswap32(hdr->magic) != FDT_MAGIC)
+        {
+            return false;
+        }
+
+        uint32 off_struct = bswap32(hdr->off_dt_struct);
+        uint32 off_strings = bswap32(hdr->off_dt_strings);
+
+        cursor.struct_base = (char *)dtb_addr + off_struct;
+        cursor.strings_base = (char *)dtb_addr + off_strings;
+        cursor.struct_size = bswap32(hdr->size_dt_struct);
+        return true;
+    }
+
+    static uint32 read_fdt_u32(char *p)
+    {
+        return bswap32(*(uint32 *)p);
+    }
+
+    static uint64 read_fdt_cells(const char *data, int cells)
+    {
+        uint64 value = 0;
+        for (int i = 0; i < cells; ++i)
+        {
+            value = (value << 32) | bswap32(*(const uint32 *)(data + i * 4));
+        }
+        return value;
+    }
+
+    static bool parse_node_unit_address(const char *node_name, uint64 &addr)
+    {
+        if (node_name == nullptr)
+        {
+            return false;
+        }
+
+        const char *at = strchr(node_name, '@');
+        if (at == nullptr || *(at + 1) == '\0')
+        {
+            return false;
+        }
+
+        uint64 value = 0;
+        for (const char *p = at + 1; *p != '\0'; ++p)
+        {
+            char c = *p;
+            uint64 digit = 0;
+            if (c >= '0' && c <= '9')
+            {
+                digit = (uint64)(c - '0');
+            }
+            else if (c >= 'a' && c <= 'f')
+            {
+                digit = (uint64)(c - 'a' + 10);
+            }
+            else if (c >= 'A' && c <= 'F')
+            {
+                digit = (uint64)(c - 'A' + 10);
+            }
+            else
+            {
+                return false;
+            }
+            value = (value << 4) | digit;
+        }
+
+        addr = value;
+        return true;
+    }
+} // namespace
+
 static inline uint32 bswap32(uint32 x) {
     return ((x << 24) & 0xff000000) |
            ((x << 8) & 0x00ff0000) |
@@ -42,7 +148,195 @@ static inline uint64 bswap64(uint64 x) {
 }
 
 void DtbManager::init(uint64 dtb_addr) {
-    _dtb_addr = dtb_addr;
+    _dtb_addr = normalize_dtb_addr_for_kernel(dtb_addr);
+}
+
+int DtbManager::get_memory_regions(DtbMemoryRegion *regions, int max_regions)
+{
+    if (regions == nullptr || max_regions <= 0)
+    {
+        return 0;
+    }
+
+    FdtCursor cursor{};
+    if (!load_fdt_cursor(_dtb_addr, cursor))
+    {
+        return 0;
+    }
+
+    char *p = cursor.struct_base;
+    char *struct_end = cursor.struct_base + cursor.struct_size;
+    int depth = 0;
+    int root_addr_cells = 2;
+    int root_size_cells = 2;
+    int region_count = 0;
+
+    bool in_memory_node = false;
+    int memory_depth = -1;
+    bool memory_device_type_ok = false;
+    uint64 memory_node_addr = 0;
+    bool memory_node_addr_valid = false;
+
+    while (p < struct_end)
+    {
+        while (((uint64)p % 4) != 0)
+        {
+            ++p;
+        }
+
+        uint32 token = read_fdt_u32(p);
+        p += 4;
+
+        if (token == FDT_END)
+        {
+            break;
+        }
+
+        if (token == FDT_BEGIN_NODE)
+        {
+            char *name = p;
+            p += strlen(name) + 1;
+
+            if (depth == 0)
+            {
+                in_memory_node = false;
+                memory_depth = -1;
+                memory_device_type_ok = false;
+                memory_node_addr = 0;
+                memory_node_addr_valid = false;
+            }
+            else if (depth == 1)
+            {
+                in_memory_node = strncmp(name, "memory", 6) == 0;
+                memory_depth = in_memory_node ? depth : -1;
+                memory_device_type_ok = !in_memory_node;
+                memory_node_addr = 0;
+                memory_node_addr_valid = parse_node_unit_address(name, memory_node_addr);
+            }
+
+            ++depth;
+            continue;
+        }
+
+        if (token == FDT_END_NODE)
+        {
+            --depth;
+            if (memory_depth == depth)
+            {
+                in_memory_node = false;
+                memory_depth = -1;
+                memory_device_type_ok = false;
+                memory_node_addr = 0;
+                memory_node_addr_valid = false;
+            }
+            continue;
+        }
+
+        if (token == FDT_NOP)
+        {
+            continue;
+        }
+
+        if (token != FDT_PROP)
+        {
+            break;
+        }
+
+        uint32 len = read_fdt_u32(p);
+        p += 4;
+        uint32 nameoff = read_fdt_u32(p);
+        p += 4;
+
+        char *prop_name = cursor.strings_base + nameoff;
+        char *prop_val = p;
+        p += len;
+
+        if (depth == 1)
+        {
+            if (strcmp(prop_name, "#address-cells") == 0 && len >= 4)
+            {
+                root_addr_cells = (int)read_fdt_u32(prop_val);
+            }
+            else if (strcmp(prop_name, "#size-cells") == 0 && len >= 4)
+            {
+                root_size_cells = (int)read_fdt_u32(prop_val);
+            }
+        }
+
+        if (!in_memory_node)
+        {
+            continue;
+        }
+
+        if (strcmp(prop_name, "device_type") == 0)
+        {
+            memory_device_type_ok = strcmp(prop_val, "memory") == 0;
+            continue;
+        }
+
+        if (!memory_device_type_ok || strcmp(prop_name, "reg") != 0)
+        {
+            continue;
+        }
+
+        int entry_cells = root_addr_cells + root_size_cells;
+        int total_cells = (int)len / 4;
+        if (entry_cells <= 0 || total_cells < entry_cells)
+        {
+            continue;
+        }
+
+        for (int cell_index = 0; cell_index + entry_cells <= total_cells; cell_index += entry_cells)
+        {
+            uint64 base = read_fdt_cells(prop_val + cell_index * 4, root_addr_cells);
+            uint64 size = read_fdt_cells(prop_val + (cell_index + root_addr_cells) * 4, root_size_cells);
+
+            // QEMU LoongArch virt 的 memory 节点名称仍然使用真实的 32-bit 物理基址，
+            // 但 reg 高 32 位会带一个并不参与当前内核物理寻址的标记值。
+            // 如果直接把 64-bit 拼接值当地址，会得到与实际执行完全不一致的假地址，
+            // 从而误判内存不连续。这里在“节点名地址”和 reg 低 32 位一致时，
+            // 退回到节点名给出的真实物理基址，并同样按低 32 位读取 size。
+            if (memory_node_addr_valid &&
+                base > 0xFFFFFFFFULL &&
+                (base & 0xFFFFFFFFULL) == memory_node_addr)
+            {
+                base = memory_node_addr;
+                size = size & 0xFFFFFFFFULL;
+            }
+
+            if (base == 0 && memory_node_addr_valid && memory_node_addr != 0)
+            {
+                base = memory_node_addr;
+            }
+
+            if (size == 0)
+            {
+                continue;
+            }
+
+            if (region_count < max_regions)
+            {
+                regions[region_count].base = base;
+                regions[region_count].size = size;
+            }
+            ++region_count;
+        }
+    }
+
+    int stored = region_count < max_regions ? region_count : max_regions;
+    for (int i = 0; i < stored; ++i)
+    {
+        for (int j = i + 1; j < stored; ++j)
+        {
+            if (regions[j].base < regions[i].base)
+            {
+                DtbMemoryRegion tmp = regions[i];
+                regions[i] = regions[j];
+                regions[j] = tmp;
+            }
+        }
+    }
+    return stored;
 }
 
 bool DtbManager::get_initrd(uint64& start, uint64& end) {

@@ -973,15 +973,22 @@ static int validate_lookup_prefix_permissions(const eastl::string &absolute_path
             end = parent_path.length();
 
         eastl::string current_path = parent_path.substr(0, end);
+        eastl::string resolved_current;
+        int resolve_ret = resolve_symlinks(current_path, resolved_current);
+        if (resolve_ret < 0)
+            return resolve_ret;
 
-        int exists = vfs_is_file_exist(current_path.c_str());
+        eastl::string lookup_current = resolved_current;
+        select_runtime_alias_path(resolved_current, lookup_current, false);
+
+        int exists = raw_vfs_is_file_exist(lookup_current);
         if (exists < 0)
             return exists;
         if (exists == 0)
             return -ENOENT;
 
         fs::Kstat st;
-        int stat_ret = vfs_path_stat(current_path.c_str(), &st, true);
+        int stat_ret = raw_vfs_path_stat(lookup_current, &st);
         if (stat_ret < 0)
             return stat_ret;
         if ((st.mode & S_IFMT) != S_IFDIR)
@@ -2424,6 +2431,12 @@ int vfs_path_stat(const char *path, fs::Kstat *st, bool follow_symlinks)
             printfRed("vfs_path_stat: resolved path too long: len=%u\n", (uint32)effective_path.length());
             return length_ret;
         }
+    }
+
+    int prefix_permission_ret = validate_lookup_prefix_permissions(effective_path);
+    if (prefix_permission_ret < 0)
+    {
+        return prefix_permission_ret;
     }
 
     select_runtime_alias_path(effective_path, effective_path, false);

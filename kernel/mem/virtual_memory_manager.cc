@@ -1275,8 +1275,24 @@ namespace mem
         // 初始化堆内存
         kvmmap(pt, vm_kernel_heap_start, mem::k_pmm.get_heap_area_start(), mem::k_pmm.get_heap_area_size(), PTE_R | PTE_W);
 #elif defined(LOONGARCH)
-        // Map kernel text and data (包括堆区域，因为堆在 etext 到 PHYSTOP 范围内)
-        kvmmap(pt, ((uint64)etext) & (~(DMWIN_MASK)), (uint64)etext, PHYSTOP - (uint64)etext, PTE_R | PTE_W);
+        // LoongArch virt 既可能是单段低端 RAM，也可能像 QEMU 1G 那样拆成低/高两段。
+        // 因此这里不再假设 “etext 到 PHYSTOP” 是一整段连续内存：
+        // 1. 先映射包含内核镜像的低端连续区；
+        // 2. 再按需单独映射高端的 heap/shm 区。
+        uint64 low_map_top = mem::k_pmm.get_kernel_linear_top();
+        if (low_map_top <= (uint64)etext)
+        {
+            panic("[vmm] invalid low_map_top %p vs etext %p", low_map_top, etext);
+        }
+        kvmmap(pt, ((uint64)etext) & (~(DMWIN_MASK)), (uint64)etext, low_map_top - (uint64)etext, PTE_R | PTE_W);
+
+        uint64 heap_start = mem::k_pmm.get_heap_area_start();
+        uint64 heap_size = mem::k_pmm.get_heap_area_size();
+        uint64 low_map_start_va = (uint64)etext;
+        if (!(heap_start >= low_map_start_va && heap_start + heap_size <= low_map_top))
+        {
+            kvmmap(pt, heap_start & (~(DMWIN_MASK)), heap_start, heap_size, PTE_R | PTE_W);
+        }
         
         // Map DTB if it exists
         if (k_dtb_addr != 0) {

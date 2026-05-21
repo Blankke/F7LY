@@ -66,14 +66,15 @@ namespace mem
 		L_Allocator() {};
 		void init( const char *lock_name, BuddySystem * base_alloc );
 
-		void *malloc( uint64 size );
-		void *realloc( void *ptr, uint64 size );
-		void *calloc( uint n, uint64 size );
-		void free( void *ptr );
+			void *malloc( uint64 size );
+			void *realloc( void *ptr, uint64 size );
+			void *calloc( uint n, uint64 size );
+			void free( void *ptr );
+			void get_stats(uint64 &cache_size, uint64 &used_size, uint32 &chunk_count);
 
-	private:
-		L_TagMajor * _allocate_new_chunk( uint64 size );
-		void _align( void * &p );
+		private:
+			L_TagMajor * _allocate_new_chunk( uint64 size );
+			void _align( void * &p );
 		void _unalign( void * &p );
 	};
 } // namespace kernellib

@@ -8,6 +8,7 @@
 #include "memlayout.hh"
 #include "klib.hh"
 #include "printer.hh"
+#include "physical_memory_manager.hh"
 
 namespace mem
 {
@@ -46,8 +47,8 @@ namespace mem
 		printfGreen("[hmm] Heap Memory Manager Init at %p\n", this);
 	}
 
-	void * HeapMemoryManager::allocate( uint64 size )
-	{
+		void * HeapMemoryManager::allocate( uint64 size )
+		{
 		// 全局 new/delete 需要服务普通 C++ 对象和 EASTL 容器，
 		// 这里必须使用细粒度分配器，不能再把每个对象都当成整页来分配/释放。
 		// 否则一旦释放路径遇到非页对齐对象，就会在 kfree! 处直接崩掉。
@@ -56,13 +57,26 @@ namespace mem
 			size = 1;
 		}
 
-		void *ptr = _k_allocator_fine.malloc(size);
-		if (ptr == nullptr)
-		{
-			panic("[hmm] alloc failed, size=%p", (void *)size);
+			void *ptr = _k_allocator_fine.malloc(size);
+			if (ptr == nullptr)
+			{
+				uint64 cache_size = 0;
+				uint64 used_size = 0;
+				uint32 chunk_count = 0;
+				uint64 coarse_free_pages = 0;
+				uint32 coarse_max_block_pages = 0;
+				get_stats(cache_size, used_size, chunk_count, coarse_free_pages, coarse_max_block_pages);
+				panic("[hmm] alloc failed, size=%p, heap_total=%p, heap_used=%p, heap_cached=%p, chunks=%d, coarse_free_pages=%p, coarse_max_block_bytes=%p",
+				      (void *)size,
+				      (void *)mem::k_pmm.get_heap_allocator_size(),
+				      (void *)used_size,
+				      (void *)cache_size,
+				      chunk_count,
+				      (void *)coarse_free_pages,
+				      (void *)(static_cast<uint64>(coarse_max_block_pages) * PGSIZE));
+			}
+			return ptr;
 		}
-		return ptr;
-	}
 
 	void HeapMemoryManager::free( void *p )
 	{
@@ -71,7 +85,14 @@ namespace mem
 			return;
 		}
 
-		// 与 allocate() 配对，统一交给细粒度分配器回收。
-		_k_allocator_fine.free(p);
-	}
-} // namespace mem
+			// 与 allocate() 配对，统一交给细粒度分配器回收。
+			_k_allocator_fine.free(p);
+		}
+
+		void HeapMemoryManager::get_stats(uint64 &cache_size, uint64 &used_size, uint32 &chunk_count, uint64 &coarse_free_pages, uint32 &coarse_max_block_pages)
+		{
+			_k_allocator_fine.get_stats(cache_size, used_size, chunk_count);
+			coarse_free_pages = _k_allocator_coarse->get_free_page_count();
+			coarse_max_block_pages = _k_allocator_coarse->get_max_free_block_pages();
+		}
+	} // namespace mem

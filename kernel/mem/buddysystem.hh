@@ -22,6 +22,8 @@ public:
     void free_pages(void* ptr);
     void* get_base_ptr() const { return base_ptr; }
     uint32 get_page_count() const { return page_count; }
+    uint32 get_max_free_block_pages() const;
+    uint64 get_free_page_count() const;
 private:
 
     BuddySystem() = default;
@@ -35,6 +37,8 @@ private:
 
     void mark_unusable_leaves();
     void rebuild_parent_states();
+    uint32 max_free_block_pages_from_node(int index, uint32 block_pages) const;
+    uint64 free_page_count_from_node(int index, uint32 block_pages) const;
 
     uint32 page_count;
     uint32 capacity_pages;

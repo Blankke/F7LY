@@ -330,4 +330,49 @@ namespace mem
         }
         Free((addr - (uint64)base_ptr) / PGSIZE);
     }
+
+    uint32 BuddySystem::max_free_block_pages_from_node(int index, uint32 block_pages) const
+    {
+        uint8 state = tree[index];
+        if (state == NODE_UNUSED)
+        {
+            return block_pages;
+        }
+        if (state == NODE_USED || state == NODE_FULL || block_pages == 0)
+        {
+            return 0;
+        }
+
+        uint32 child_block_pages = block_pages / 2;
+        uint32 left = max_free_block_pages_from_node(index * 2 + 1, child_block_pages);
+        uint32 right = max_free_block_pages_from_node(index * 2 + 2, child_block_pages);
+        return left > right ? left : right;
+    }
+
+    uint64 BuddySystem::free_page_count_from_node(int index, uint32 block_pages) const
+    {
+        uint8 state = tree[index];
+        if (state == NODE_UNUSED)
+        {
+            return block_pages;
+        }
+        if (state == NODE_USED || state == NODE_FULL || block_pages == 0)
+        {
+            return 0;
+        }
+
+        uint32 child_block_pages = block_pages / 2;
+        return free_page_count_from_node(index * 2 + 1, child_block_pages) +
+               free_page_count_from_node(index * 2 + 2, child_block_pages);
+    }
+
+    uint32 BuddySystem::get_max_free_block_pages() const
+    {
+        return max_free_block_pages_from_node(0, capacity_pages);
+    }
+
+    uint64 BuddySystem::get_free_page_count() const
+    {
+        return free_page_count_from_node(0, capacity_pages);
+    }
 } // namespace mem
