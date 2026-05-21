@@ -1,4 +1,5 @@
 #include <stddef.h>
+#include <stdint.h>
 // #include <unistd.h>
 #include <syscall_def.hh>
 #include <user.hh>
@@ -53,11 +54,33 @@ pid_t fork(void)
 
 pid_t clone(int (*fn)(void *arg), void *arg, void *stack, size_t stack_size, unsigned long flags)
 {
-    if (stack)
-        stack += stack_size;
+    struct clone_start_args
+    {
+        int (*fn)(void *);
+        void *arg;
+    };
 
-    // return __clone(fn, stack, flags, NULL, NULL, NULL);
-    return syscall(syscall::SYS_clone, fn, stack, flags, NULL, NULL, NULL);
+    if (!fn || !stack || stack_size < sizeof(clone_start_args))
+    {
+        return -1;
+    }
+
+    uintptr_t stack_top = (uintptr_t)stack + stack_size;
+    stack_top &= ~(uintptr_t)0xf;
+    auto *start = (clone_start_args *)(stack_top - sizeof(clone_start_args));
+    start->fn = fn;
+    start->arg = arg;
+
+    long ret = syscall(syscall::SYS_clone, flags, start, NULL, NULL, NULL);
+    if (ret == 0)
+    {
+        // 子任务会从新的用户栈继续执行这里，直接从当前 sp 取出封装参数。
+        register uintptr_t child_sp __asm__("sp");
+        auto *child = (clone_start_args *)child_sp;
+        int code = child->fn(child->arg);
+        exit(code);
+    }
+    return ret;
 }
 void exit(int code)
 {

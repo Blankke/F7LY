@@ -56,7 +56,9 @@ namespace mem
 		bool is_leaf() { return ( ( PTE_FLAGS( *_data_addr ) ) != 1 ); }
 	    static pte_t map_dir_page_flags() { return valid_flag(); }
 		static pte_t valid_flag() { return loongarch::pte_valid_m; }
-		void set_data( uint64 data ) { *_data_addr |= data; }
+		// set_data() 需要覆盖整个 PTE。
+		// 这里若用按位或，会导致权限降级（例如清掉 user/write/exec）永远不生效。
+		void set_data( uint64 data ) { *_data_addr = data; }
 
 		// 慎用！！！这个函数会使PTE的值清零！
 		void clear_data() { *_data_addr = 0; }

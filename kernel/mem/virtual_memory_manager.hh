@@ -130,7 +130,7 @@ void pci_map(int bus, int dev, int func, void *pages);
 		/// @return total allocated virtual memory size
 		uint64 uvmfirst(PageTable &pt, uint64 src, uint64 sz);
 
-		int protectpages(PageTable &pt, uint64 va, uint64 size, int perm, bool is_vma = false);
+		int protectpages(PageTable &pt, uint64 va, uint64 size, int prot, bool is_vma = false);
 
 	private:
 	};

@@ -11,12 +11,16 @@ namespace fs
 	private:
 		uint64 _off = 0;
 		proc::ipc::Pipe *_pipe;
-		bool is_write = false;//读端还是写端
+		bool _can_read = true;
+		bool _can_write = false;
+		bool _close_read_end = true;
+		bool _close_write_end = false;
 		eastl::string _fifo_path; // 用于 FIFO 文件的路径跟踪
 		int _pipe_flags = 0; // 管道标志，默认为0
 	public:
 		pipe_file(FileAttrs attrs, Pipe *pipe_, bool is_write, const eastl::string& fifo_path = "") : 
-			file(attrs), _pipe(pipe_), is_write(is_write), _fifo_path(fifo_path)
+			file(attrs), _pipe(pipe_), _can_read(!is_write), _can_write(is_write),
+			_close_read_end(!is_write), _close_write_end(is_write), _fifo_path(fifo_path)
 		{
 			new (&_stat) Kstat(_pipe);
 			// 设置正确的文件模式：FIFO 类型 + 权限位
@@ -42,8 +46,7 @@ namespace fs
 		/// @note pipe read 没有偏移的概念
 		long read(uint64 buf, size_t len, long off, bool upgrade) override
 		{
-			// printfRed("pipe_file::write called, is_write: %d\n", is_write);
-			if (is_write)
+			if (!_can_read)
 			{
 				return syscall::SYS_EBADF;
 			}
@@ -53,7 +56,7 @@ namespace fs
 		/// @note pipe write 没有偏移的概念
 		long write(uint64 buf, size_t len, long off, bool upgrade) override 
 		{ 
-			if (!is_write)
+			if (!_can_write)
 			{
 				return syscall::SYS_EBADF;
 			}
@@ -62,15 +65,15 @@ namespace fs
 
 		int write_in_kernel(uint64 buf, size_t len) 
 		{
-			if (!is_write)
+			if (!_can_write)
 			{
 				return syscall::SYS_EBADF;
 			}
 			return _pipe->write_in_kernel(buf, len); 
 		}
 
-		virtual bool read_ready() override { return _pipe->read_is_open(); }
-		virtual bool write_ready() override { return _pipe->write_is_open(); }
+		virtual bool read_ready() override { return _can_read && _pipe->read_is_open(); }
+		virtual bool write_ready() override { return _can_write && _pipe->write_is_open(); }
 		virtual off_t lseek(off_t offset, int whence) override { return -ESPIPE; }
 		
 		// 获取管道大小
@@ -92,16 +95,40 @@ namespace fs
 		/// @param dst 目标用户空间流对象。
 		/// @return 实际读取的字节数。
 		size_t read_sub_dir(ubuf &dst) override {panic("pipe_file::read_sub_dir: not implemented yet"); return 0; };
-		void set_is_write(bool is_write_) { is_write = is_write_; }
+		void set_is_write(bool is_write_)
+		{
+			_can_read = !is_write_;
+			_can_write = is_write_;
+			_close_read_end = !is_write_;
+			_close_write_end = is_write_;
+		}
+
+		// FIFO 以 O_RDWR 打开时，一个文件描述符同时代表读端和写端。
+		void set_duplex_mode()
+		{
+			_can_read = true;
+			_can_write = true;
+			_close_read_end = true;
+			_close_write_end = true;
+		}
 		
 		/// @brief 手动关闭管道，用于在文件描述符关闭时调用
 		void close_pipe() { 
 			if (!_fifo_path.empty()) {
 				// 对于 FIFO 文件，使用全局管理器进行清理
-				fs::k_fifo_manager.close_fifo(_fifo_path, is_write);
+				if (_close_read_end) {
+					fs::k_fifo_manager.close_fifo(_fifo_path, false);
+				}
+				if (_close_write_end) {
+					fs::k_fifo_manager.close_fifo(_fifo_path, true);
+				}
 			} else {
-				// 对于普通管道，直接关闭
-				_pipe->close(is_write);
+				if (_close_read_end) {
+					_pipe->close(false);
+				}
+				if (_close_write_end) {
+					_pipe->close(true);
+				}
 			}
 		}
 	};

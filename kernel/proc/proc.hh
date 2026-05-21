@@ -55,6 +55,7 @@ namespace proc
     constexpr int highest_proc_prio = 0;  // 最高进程优先级
     constexpr uint max_open_files = 128;  // 每个进程最多可以打开的文件数量
     constexpr uint pid_max = 1000;        // 系统最大PID值
+    constexpr int k_interval_timer_count = 3; // ITIMER_REAL / ITIMER_VIRTUAL / ITIMER_PROF
     struct ofile
     {
         fs::file *_ofile_ptr[max_open_files]; // 进程打开的文件列表 (文件描述符 -> 文件结构)
@@ -72,6 +73,14 @@ namespace proc
         rlim_t rlim_cur;
         /* The hard limit.  */
         rlim_t rlim_max;
+    };
+    struct interval_timer_state
+    {
+        // 这里统一用微秒保存状态，sys_setitimer()/sys_getitimer() 再做 sec/usec 转换，
+        // 这样可以把 REAL/VIRTUAL/PROF 三种计时源收敛到同一套核心逻辑里。
+        bool armed = false;
+        uint64 interval_us = 0;
+        uint64 expiry_us = 0;
     };
     class Pcb
     {
@@ -202,6 +211,7 @@ namespace proc
         uint64 _cstime;         // 子进程系统态时间累计
         uint64 _start_time;     // 进程启动时间 (绝对时间戳)
         uint64 _start_boottime; // 自系统启动以来的启动时间
+        interval_timer_state _itimer[k_interval_timer_count]; // 每进程 interval timer 状态
 
     public:
         Pcb();
