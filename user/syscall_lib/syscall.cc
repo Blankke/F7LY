@@ -6,6 +6,8 @@
 
 #include "syscall_base.hh"
 
+int errno = 0;
+
 // int open(const char *path, int flags)
 // {
 //     return syscall(syscall::SYS_openat, AT_FDCWD, path, flags, O_RDWR);
@@ -44,6 +46,32 @@ pid_t getppid(void)
 int sched_yield(void)
 {
     return syscall(syscall::SYS_sched_yield);
+}
+
+int setpriority(int which, int who, int prio)
+{
+    long ret = syscall(syscall::SYS_setpriority, which, who, prio);
+    if (ret < 0)
+    {
+        errno = (int)-ret;
+        return -1;
+    }
+    errno = 0;
+    return 0;
+}
+
+int getpriority(int which, int who)
+{
+    long ret = syscall(syscall::SYS_getpriority, which, who);
+    if (ret < 0)
+    {
+        errno = (int)-ret;
+        return -1;
+    }
+
+    errno = 0;
+    // Linux 内核 ABI 返回 40..1，用户态再还原到 [-20, 19] 的 nice 值。
+    return 20 - (int)ret;
 }
 
 pid_t fork(void)

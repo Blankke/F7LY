@@ -362,6 +362,10 @@ namespace fs
         add_virtual_file("/etc/passwd", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<EtcPasswdProvider>());
 
+        // /etc/group
+        add_virtual_file("/etc/group", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<EtcGroupProvider>());
+
         // /proc/sys/fs/pipe-user-pages-soft
         add_virtual_file("/proc/sys/fs/pipe-user-pages-soft", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcSysFsPipeUserPagesSoftProvider>());

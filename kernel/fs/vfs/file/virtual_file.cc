@@ -128,6 +128,19 @@ namespace fs
         return result;
     }
 
+    eastl::string EtcGroupProvider::generate_content()
+    {
+        eastl::string result;
+        // 提供最小稳定的组数据库，避免依赖外部镜像预置内容。
+        result += "root:x:0:\n";
+        result += "daemon:x:1:\n";
+        result += "bin:x:2:\n";
+        result += "sys:x:3:\n";
+        result += "nogroup:x:65534:\n";
+        result += "nobody:x:65534:\n";
+        return result;
+    }
+
     eastl::string DevBlockProvider::generate_content()
     {
         // 块设备文件通常不包含文本内容，但可以返回设备信息
@@ -652,10 +665,11 @@ namespace fs
         result += int_to_string(pcb->_cstime) + " ";
         
         // 18. priority (进程优先级)
-        result += int_to_string(20) + " ";  // 默认优先级20
-        
+        // 对普通任务按 Linux 惯例导出为 nice + 20。
+        result += int_to_string((long)pcb->_priority + 20) + " ";
+
         // 19. nice (nice值)
-        result += int_to_string(0) + " ";   // 默认nice值0
+        result += int_to_string(pcb->_priority) + " ";
         
         // 20. num_threads (线程数)
         result += "1 ";

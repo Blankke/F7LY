@@ -467,6 +467,23 @@ int ltp_subset_test(bool is_musl, const char *const cases[])
         ltp_envp(is_musl));
 }
 
+int priority_ltp_regression_riscv(void)
+{
+    static const char *const priority_cases[] = {
+        "getpriority01",
+        "getpriority02",
+        "setpriority02",
+        NULL,
+    };
+
+    printf("#### PRIORITY REGRESSION START riscv ####\n");
+    init_env("/musl/");
+    ltp_subset_test(true, priority_cases);
+    ltp_subset_test(false, priority_cases);
+    printf("#### PRIORITY REGRESSION END riscv ####\n");
+    return 0;
+}
+
 int regression_suite_4d1444_riscv(void)
 {
     printf("#### REGRESSION START commit-4d1444b-riscv ####\n");
@@ -682,6 +699,9 @@ struct ltp_testcase ltp_testcases[] = {
     // 下面继续保留的注释清单只作为候选记录，想打开哪个测例就把它挪到结束标记前面。
     // 新开以前完全没跑过的测例时，优先按 ltp_judge/ltp_rank.txt 的 total count 从高到低推进。
     {"personality02", true, true},
+    {"getpriority01", true, false},
+    {"getpriority02", true, false},
+    {"setpriority02", true, false},
     {NULL, false, false},
     {"memfd_create01", true, true},
     {"splice07", true, true},
@@ -2687,7 +2707,7 @@ struct ltp_testcase ltp_testcases[] = {
     // {"setpgid02", true, true}, // pass
     // {"setpgid03", true, true}, // 要完善sid逻辑, 而且现在退不出去, 先不修
     // {"setpgid03_child", true, true},
-    // {"setpriority01", true, true},
+    // {"setpriority01", true, true}, // 原始 LTP 用例依赖 useradd/userdel；当前按约束不补用户管理命令，因此不接入默认回归
     // {"setpriority02", true, true},
     // {"setregid01_16", true, true},
     // {"setregid02_16", true, true},

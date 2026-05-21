@@ -115,6 +115,11 @@ namespace syscall
 
         constexpr uint64 k_usec_per_sec = 1000000ULL;
         constexpr uint64 k_clone_args_size_ver0 = 64ULL;
+        constexpr int k_prio_process = 0;
+        constexpr int k_prio_pgrp = 1;
+        constexpr int k_prio_user = 2;
+        constexpr int k_linux_nice_min = proc::highest_proc_prio;
+        constexpr int k_linux_nice_max = proc::lowest_proc_prio;
 
         bool is_valid_user_write_range(uint64 addr, uint64 len)
         {
@@ -127,6 +132,79 @@ namespace syscall
                 return false;
             }
             return true;
+        }
+
+        int clamp_linux_nice(int nice)
+        {
+            if (nice < k_linux_nice_min)
+            {
+                return k_linux_nice_min;
+            }
+            if (nice > k_linux_nice_max)
+            {
+                return k_linux_nice_max;
+            }
+            return nice;
+        }
+
+        bool is_live_priority_target(const proc::Pcb &target)
+        {
+            return target._state != proc::ProcState::UNUSED && target._pid != 0;
+        }
+
+        int resolve_priority_selector(int which, int who, proc::Pcb *current, int &selector)
+        {
+            if (current == nullptr)
+            {
+                return SYS_ESRCH;
+            }
+
+            switch (which)
+            {
+            case k_prio_process:
+                selector = (who == 0) ? (int)current->get_pid() : who;
+                return 0;
+            case k_prio_pgrp:
+                selector = (who == 0) ? (int)current->get_pgid() : who;
+                return 0;
+            case k_prio_user:
+                selector = (who == 0) ? (int)current->get_uid() : who;
+                return 0;
+            default:
+                return SYS_EINVAL;
+            }
+        }
+
+        bool priority_target_matches(const proc::Pcb &target, int which, int selector)
+        {
+            switch (which)
+            {
+            case k_prio_process:
+                return (int)target.get_pid() == selector;
+            case k_prio_pgrp:
+                return (int)target.get_pgid() == selector;
+            case k_prio_user:
+                return (int)target.get_uid() == selector;
+            default:
+                return false;
+            }
+        }
+
+        bool can_modify_target_priority(const proc::Pcb &caller, const proc::Pcb &target)
+        {
+            if (caller.get_euid() == 0)
+            {
+                return true;
+            }
+
+            return caller.get_euid() == target.get_uid() ||
+                   caller.get_euid() == target.get_euid();
+        }
+
+        int encode_getpriority_result(int nice)
+        {
+            // Linux 内核 ABI 使用 40..1 编码，供 libc 包装层恢复成 [-20, 19]。
+            return 20 - nice;
         }
 
         void fill_default_statfs(struct statfs &st)
@@ -13774,11 +13852,114 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_setpriority()
     {
-        panic("未实现该系统调用");
+        int which = 0;
+        int who = 0;
+        int prio = 0;
+        if (_arg_int(0, which) < 0 || _arg_int(1, who) < 0 || _arg_int(2, prio) < 0)
+        {
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *current = proc::k_pm.get_cur_pcb();
+        int selector = 0;
+        int resolve_ret = resolve_priority_selector(which, who, current, selector);
+        if (resolve_ret != 0)
+        {
+            return resolve_ret;
+        }
+
+        const int clamped_prio = clamp_linux_nice(prio);
+        bool matched = false;
+        bool permission_denied = false;
+        bool need_privileged_raise = false;
+
+        for (proc::Pcb *target = proc::k_proc_pool; target < &proc::k_proc_pool[proc::num_process]; ++target)
+        {
+            if (!is_live_priority_target(*target) ||
+                !priority_target_matches(*target, which, selector))
+            {
+                continue;
+            }
+
+            matched = true;
+            if (!can_modify_target_priority(*current, *target))
+            {
+                permission_denied = true;
+                break;
+            }
+
+            if (current->get_euid() != 0 && clamped_prio < target->get_priority())
+            {
+                need_privileged_raise = true;
+            }
+        }
+
+        if (!matched)
+        {
+            return SYS_ESRCH;
+        }
+        if (permission_denied)
+        {
+            return SYS_EPERM;
+        }
+        if (need_privileged_raise)
+        {
+            return SYS_EACCES;
+        }
+
+        for (proc::Pcb *target = proc::k_proc_pool; target < &proc::k_proc_pool[proc::num_process]; ++target)
+        {
+            if (!is_live_priority_target(*target) ||
+                !priority_target_matches(*target, which, selector))
+            {
+                continue;
+            }
+            proc::k_pm.set_priority(target, clamped_prio);
+        }
+
+        return 0;
     }
     uint64 SyscallHandler::sys_getpriority()
     {
-        panic("未实现该系统调用");
+        int which = 0;
+        int who = 0;
+        if (_arg_int(0, which) < 0 || _arg_int(1, who) < 0)
+        {
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *current = proc::k_pm.get_cur_pcb();
+        int selector = 0;
+        int resolve_ret = resolve_priority_selector(which, who, current, selector);
+        if (resolve_ret != 0)
+        {
+            return resolve_ret;
+        }
+
+        bool matched = false;
+        int best_nice = proc::lowest_proc_prio;
+        for (proc::Pcb *target = proc::k_proc_pool; target < &proc::k_proc_pool[proc::num_process]; ++target)
+        {
+            if (!is_live_priority_target(*target) ||
+                !priority_target_matches(*target, which, selector))
+            {
+                continue;
+            }
+
+            const int current_nice = target->get_priority();
+            if (!matched || current_nice < best_nice)
+            {
+                best_nice = current_nice;
+                matched = true;
+            }
+        }
+
+        if (!matched)
+        {
+            return SYS_ESRCH;
+        }
+
+        return encode_getpriority_result(best_nice);
     }
     uint64 SyscallHandler::sys_reboot()
     {
