@@ -2339,7 +2339,10 @@ namespace proc
         }
 
         // 调用VFS层的mkdir函数，自动选择底层文件系统
-        int result = vfs_mkdir(full_path.c_str(), mode & 0777);
+        // mkdir(2) 需要保留 sticky/setgid/setuid 这三类特殊权限位，
+        // 不能在进入 VFS 之前就把高 3 位掐掉，否则 rmdir03/open10 一类
+        // 依赖目录特殊位语义的测例会被整体带偏。
+        int result = vfs_mkdir(full_path.c_str(), mode & 07777);
 
         return result;
     }

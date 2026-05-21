@@ -2119,6 +2119,16 @@ namespace syscall
             return c1pres;
         }
 
+        // Linux linkat(): 未指定 AT_EMPTY_PATH 时，空 oldpath/newpath 都应返回 ENOENT。
+        if (!(flags & AT_EMPTY_PATH) && oldpath.empty())
+        {
+            return -ENOENT;
+        }
+        if (newpath.empty())
+        {
+            return -ENOENT;
+        }
+
         printfCyan("sys_linkat: olddirfd=%d, oldpath=%s, newdirfd=%d, newpath=%s, flags=0x%x\n",
                    olddirfd, oldpath.c_str(), newdirfd, newpath.c_str(), flags);
 
@@ -3963,7 +3973,7 @@ namespace syscall
 
         uint64 buf;
         if (_arg_addr(2, buf) < 0)
-            return -EINVAL;
+            return -EFAULT;
 
         size_t buf_size;
         if (_arg_addr(3, buf_size) < 0)
@@ -3973,6 +3983,12 @@ namespace syscall
         {
             printfRed("[sys_readlinkat] bufsiz must be greater than 0");
             return SYS_EINVAL;
+        }
+
+        // readlink() 对无效用户缓冲区应优先返回 EFAULT。
+        if (buf == 0 || is_bad_addr(buf))
+        {
+            return SYS_EFAULT;
         }
 
         // 特殊路径处理
@@ -10966,6 +10982,11 @@ namespace syscall
             return cpres;
         }
 
+        if (linkpath.empty())
+        {
+            return SYS_ENOENT;
+        }
+
         eastl::string abs_linkpath;
 
         // 处理linkpath：如果是绝对路径，忽略newdirfd；如果是相对路径，需要处理newdirfd
@@ -11005,6 +11026,12 @@ namespace syscall
 
         printfCyan("[sys_symlinkat] Creating symlink: %s -> %s\n", abs_linkpath.c_str(), target.c_str());
 
+        int prefix_perm_ret = check_directory_search_permission(abs_linkpath);
+        if (prefix_perm_ret < 0)
+        {
+            return prefix_perm_ret;
+        }
+
         // 检查linkpath是否已经存在
         if (fs::k_vfs.is_file_exist(abs_linkpath))
         {
@@ -11037,6 +11064,33 @@ namespace syscall
         {
             printfRed("[sys_symlinkat] Parent path is not a directory: %s (type: %d)\n", parent_dir.c_str(), parent_type);
             return SYS_ENOTDIR;
+        }
+
+        uint32_t parent_mode = 0;
+        uint32_t parent_uid = 0;
+        uint32_t parent_gid = 0;
+        int parent_info_ret = get_path_mode_owner(parent_dir, parent_mode, parent_uid, parent_gid, true);
+        if (parent_info_ret < 0)
+        {
+            return parent_info_ret;
+        }
+
+        uint32_t fsuid = p->get_fsuid();
+        uint32_t fsgid = p->get_fsgid();
+        if (fsuid != 0)
+        {
+            uint32_t perms = 0;
+            if (fsuid == parent_uid)
+                perms = (parent_mode >> 6) & 0x7;
+            else if (fsgid == parent_gid)
+                perms = (parent_mode >> 3) & 0x7;
+            else
+                perms = parent_mode & 0x7;
+
+            if (!(perms & 0x2) || !(perms & 0x1))
+            {
+                return SYS_EACCES;
+            }
         }
 
         // 检查是否为虚拟文件系统路径

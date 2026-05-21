@@ -86,6 +86,7 @@ int libc_test(const char *path);
 int ltp_test(bool is_musl);
 int basic_subset_test(const char *path, const char *const cases[]);
 int ltp_subset_test(bool is_musl, const char *const cases[]);
+int regression_rank_probe(void);
 int regression_suite_4d1444_riscv(void);
 int regression_suite_4d1444_loongarch(void);
 int final_test_musl(void);
