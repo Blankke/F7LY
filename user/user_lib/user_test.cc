@@ -488,47 +488,19 @@ int regression_suite_4d1444_riscv(void)
 
 int regression_suite_4d1444_loongarch(void)
 {
-    // 先保留已经打通的核心语义用例，确保基础稳定性不会回退。
-    static const char *const ltp_core_cases[] = {
-        "fchmodat02",
-        "fchown02",
-        "fstat02",
-        "fstat02_64",
-        "open02",
-        "access04",
-        "getitimer01",
-        "getitimer02",
-        "setitimer01",
-        "select01",
-        "select03",
-        "chmod06",
-        "creat06",
-        "fchown04",
-        NULL};
-
-    // 第二组专门盯会打断链路的进程/定时器/身份切换路径。
-    // 这些用例即使不一定都是最容易 TPASS 的，也最值得优先和 RV 行为对齐。
-    static const char *const ltp_stability_cases[] = {
-        "timer_settime02",
-        "clone01",
-        "clone06",
-        "clone302",
-        "execve01",
-        "getpid01",
-        "getppid01",
-        "gettimeofday01",
-        "setregid02",
-        "setfsgid01",
-        "setresuid04",
-        "setreuid07",
-        NULL};
-
     printf("#### REGRESSION START commit-4d1444b-loongarch ####\n");
     init_env("/musl/");
-    ltp_subset_test(true, ltp_core_cases);
-    ltp_subset_test(false, ltp_core_cases);
-    ltp_subset_test(true, ltp_stability_cases);
-    ltp_subset_test(false, ltp_stability_cases);
+    basic_test("/musl/");
+    basic_test("/glibc/");
+    ltp_test(true);
+    ltp_test(false);
+    busybox_test("/musl/");
+    busybox_test("/glibc/");
+    libc_test("/musl/");
+    lua_test("/musl/");
+    lua_test("/glibc/");
+    libcbench_test("/musl");
+    libcbench_test("/glibc");
     printf("#### REGRESSION END commit-4d1444b-loongarch ####\n");
     return 0;
 }

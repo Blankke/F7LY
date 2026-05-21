@@ -263,10 +263,10 @@ namespace mem
 	} // L_Allocator::malloc()
 
 
-	void L_Allocator::free( void *ptr )
-	{
-		if ( ptr == nullptr )
-			return;
+		void L_Allocator::free( void *ptr )
+		{
+			if ( ptr == nullptr )
+				return;
 
 		_unalign( ptr );
 
@@ -341,10 +341,23 @@ namespace mem
 
 		_lock.release();
 
-	} // L_Allocator::free()
+		} // L_Allocator::free()
+
+		void L_Allocator::get_stats(uint64 &cache_size, uint64 &used_size, uint32 &chunk_count)
+		{
+			_lock.acquire();
+			cache_size = _cach_size;
+			used_size = _used_size;
+			chunk_count = 0;
+			for (L_TagMajor *maj = _mem_root; maj != nullptr; maj = maj->next)
+			{
+				++chunk_count;
+			}
+			_lock.release();
+		}
 
 
-// -------- private helper function -------- 
+	// -------- private helper function -------- 
 
 	L_TagMajor * L_Allocator::_allocate_new_chunk( uint64 size )
 	{

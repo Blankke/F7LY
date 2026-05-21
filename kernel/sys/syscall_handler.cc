@@ -116,6 +116,38 @@ namespace syscall
         constexpr uint64 k_usec_per_sec = 1000000ULL;
         constexpr uint64 k_clone_args_size_ver0 = 64ULL;
 
+        bool is_valid_user_write_range(uint64 addr, uint64 len)
+        {
+            if (addr == 0 || len == 0)
+            {
+                return false;
+            }
+            if (addr >= MAXVA || addr + len < addr || addr + len > MAXVA)
+            {
+                return false;
+            }
+            return true;
+        }
+
+        void fill_default_statfs(struct statfs &st)
+        {
+            memset(&st, 0, sizeof(st));
+
+            // 当前内核只挂了统一的 ext4 根文件系统，这里先返回稳定一致的基础属性。
+            st.f_type = 0xEF53;     // EXT4_SUPER_MAGIC
+            st.f_bsize = PGSIZE;    // 传输块大小
+            st.f_blocks = 1UL << 20;
+            st.f_bfree = 1UL << 19;
+            st.f_bavail = 1UL << 18;
+            st.f_files = 1UL << 16;
+            st.f_ffree = 1UL << 15;
+            st.f_fsid.val[0] = 0xF7;
+            st.f_fsid.val[1] = 0x1A;
+            st.f_namelen = 255;     // ext4 文件名上限
+            st.f_frsize = PGSIZE;   // 片段大小
+            st.f_flags = 0;
+        }
+
         bool timeval_to_usec_checked(const KernelTimeValOld &tv, uint64 &total_us)
         {
             if (tv.tv_sec < 0 || tv.tv_usec < 0 || tv.tv_usec >= (long)k_usec_per_sec)
@@ -139,6 +171,30 @@ namespace syscall
             tv.tv_sec = (long)(total_us / k_usec_per_sec);
             tv.tv_usec = (long)(total_us % k_usec_per_sec);
             return tv;
+        }
+
+        constexpr size_t k_syscall_io_chunk_size = 64 * 1024;
+
+        inline size_t min_size(size_t lhs, size_t rhs)
+        {
+            return lhs < rhs ? lhs : rhs;
+        }
+
+        void *alloc_syscall_temp_buffer(size_t size)
+        {
+            if (size == 0)
+            {
+                size = 1;
+            }
+            return mem::k_pmm.kmalloc(size);
+        }
+
+        void free_syscall_temp_buffer(void *ptr)
+        {
+            if (ptr != nullptr)
+            {
+                mem::k_pmm.free_page(ptr);
+            }
         }
 
         int validate_linux_clone_flags(uint64 flags)
@@ -193,7 +249,7 @@ namespace syscall
         inline bool is_sane_user_pagetable_base(uint64 base)
         {
             return base != 0 && is_page_align(base) &&
-                   base >= k_min_user_pagetable_base && base < PHYSTOP;
+                   base >= k_min_user_pagetable_base && base < mem::k_pmm.get_phys_top();
         }
 
         inline bool is_probably_live_file_object(fs::file *file_obj)
@@ -4236,33 +4292,30 @@ namespace syscall
         if (!use_random && buflen > (32 * 1024 * 1024 - 1))
             buflen = 32 * 1024 * 1024 - 1;
 
-        char *k_buf = new char[buflen];
-        if (!k_buf)
-            return SYS_ENOMEM;
-
         // For now, we use a simple deterministic random source
         // In a real implementation, this would interface with the entropy pool
         ulong random = 0x4249'4C47'4B43'5546UL;
         size_t random_size = sizeof(random);
+        char temp[64];
+        size_t generated = 0;
 
-        for (size_t i = 0; i < static_cast<size_t>(buflen); i += random_size)
+        while (generated < (size_t)buflen)
         {
-            // Add some variation based on current time and iteration
-            random = random * 1103515245UL + 12345UL + i;
+            size_t chunk = min_size((size_t)buflen - generated, sizeof(temp));
+            for (size_t i = 0; i < chunk; i += random_size)
+            {
+                // 这里按小块生成并直接 copy_out，避免用户给一个超大 buflen 时先在内核堆里做整块缓存。
+                random = random * 1103515245UL + 12345UL + generated + i;
+                size_t copy_size = min_size(random_size, chunk - i);
+                memcpy(temp + i, &random, copy_size);
+            }
 
-            size_t copy_size = (i + random_size) <= static_cast<size_t>(buflen)
-                                   ? random_size
-                                   : buflen - i;
-            memcpy(k_buf + i, &random, copy_size);
+            if (mem::k_vmm.copy_out(*pt, bufaddr + generated, temp, chunk) < 0)
+            {
+                return SYS_EFAULT;
+            }
+            generated += chunk;
         }
-
-        if (mem::k_vmm.copy_out(*pt, bufaddr, k_buf, buflen) < 0)
-        {
-            delete[] k_buf;
-            return SYS_EFAULT;
-        }
-
-        delete[] k_buf;
 
         printfCyan("[sys_getrandom] Generated %d random bytes, flags=0x%x\n", buflen, flags);
         return buflen;
@@ -6038,22 +6091,20 @@ namespace syscall
         if (fds_addr == 0 && nfds > 0)
             return -EFAULT;
 
-        // 分配pollfd数组
+        if (nfds > (int)proc::max_open_files)
+            return -EINVAL;
+
+        // 分配 pollfd 数组。这里改为页分配器临时缓冲，避免用户传大 nfds 时把堆打爆。
         if (nfds > 0) {
-            fds = new pollfd[nfds];
+            size_t fds_bytes = (size_t)nfds * sizeof(pollfd);
+            fds = (pollfd *)alloc_syscall_temp_buffer(fds_bytes);
             if (fds == nullptr)
                 return -ENOMEM;
 
-            // 复制用户空间的pollfd数组
-            for (int i = 0; i < nfds; i++)
+            if (mem::k_vmm.copy_in(*pt, fds, fds_addr, fds_bytes) < 0)
             {
-                if (mem::k_vmm.copy_in(*pt, &fds[i],
-                                       fds_addr + i * sizeof(pollfd),
-                                       sizeof(pollfd)) < 0)
-                {
-                    delete[] fds;
-                    return -EFAULT;
-                }
+                free_syscall_temp_buffer(fds);
+                return -EFAULT;
             }
         }
 
@@ -6062,14 +6113,14 @@ namespace syscall
         {
             if (mem::k_vmm.copy_in(*pt, &tm, timeout_addr, sizeof(tm)) < 0)
             {
-                delete[] fds;
+                free_syscall_temp_buffer(fds);
                 return -EFAULT;
             }
             
             // 检查timespec是否有效
             if (tm.tv_sec < 0 || tm.tv_nsec < 0 || tm.tv_nsec >= 1000000000)
             {
-                delete[] fds;
+                free_syscall_temp_buffer(fds);
                 return -EINVAL;
             }
             
@@ -6090,7 +6141,7 @@ namespace syscall
         {
             if (mem::k_vmm.copy_in(*pt, &sigmask, sigmask_addr, sizeof(sigset_t)) < 0)
             {
-                delete[] fds;
+                free_syscall_temp_buffer(fds);
                 return -EFAULT;
             }
             
@@ -6210,13 +6261,12 @@ namespace syscall
         {
             if (mem::k_vmm.copy_out(*pt, fds_addr, fds, nfds * sizeof(pollfd)) < 0)
             {
-                delete[] fds;
+                free_syscall_temp_buffer(fds);
                 return -EFAULT;
             }
         }
 
-        if (fds != nullptr)
-            delete[] fds;
+        free_syscall_temp_buffer(fds);
             
         return ret;
     }
@@ -6226,53 +6276,123 @@ namespace syscall
         int in_fd, out_fd;
         fs::file *in_f, *out_f;
         if (_arg_fd(0, &out_fd, &out_f) < 0)
-            return -1;
+            return syscall::SYS_EBADF;
         if (_arg_fd(1, &in_fd, &in_f) < 0)
-            return -2;
+            return syscall::SYS_EBADF;
 
-        ulong addr;
-        ulong *p_off = nullptr;
-        p_off = p_off;
+        ulong addr = 0;
         if (_arg_addr(2, addr) < 0)
-            return -3;
+            return syscall::SYS_EFAULT;
 
         mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
-        if (addr != 0)
-            p_off = (ulong *)pt->walk_addr(addr); // TODO：TBD原来这里有to_vir
-#ifdef LOONGARCH
-        if (addr != 0)
-            p_off = (ulong *)to_vir((ulong)pt->walk_addr(addr)); // TODO：TBD原来这里有to_vir
-
-#endif
         size_t count;
         if (_arg_addr(3, count) < 0)
-            return -4;
+            return syscall::SYS_EFAULT;
 
-        /// @todo sendfile
+        if (count == 0)
+            return 0;
 
-        ulong start_off = in_f->get_file_offset();
-        if (p_off != nullptr)
-            start_off = *p_off;
-
-        char *buf = new char[count + 1];
-        if (buf == nullptr)
-            return -5;
-
-        int readcnt = in_f->read((ulong)buf, count, start_off, true);
-        int writecnt = 0;
-        if (out_f->_attrs.filetype == fs::FileTypes::FT_PIPE)
-            writecnt = ((fs::pipe_file *)out_f)
-                           ->write_in_kernel((ulong)buf, readcnt);
+        bool use_explicit_offset = (addr != 0);
+        ulong in_off = 0;
+        if (use_explicit_offset)
+        {
+            if (in_f->lseek(0, SEEK_CUR) < 0)
+            {
+                return -ESPIPE;
+            }
+            if (mem::k_vmm.copy_in(*pt, &in_off, addr, sizeof(in_off)) < 0)
+            {
+                return syscall::SYS_EFAULT;
+            }
+        }
         else
-            writecnt = out_f->write((ulong)buf, readcnt,
-                                    out_f->get_file_offset(), true);
+        {
+            in_off = in_f->get_file_offset();
+        }
 
-        delete[] buf;
+        size_t chunk_size = min_size(count, k_syscall_io_chunk_size);
+        char *buf = (char *)alloc_syscall_temp_buffer(chunk_size);
+        if (buf == nullptr)
+        {
+            return syscall::SYS_ENOMEM;
+        }
 
-        if (p_off != nullptr)
-            *p_off += writecnt;
+        ssize_t total_sent = 0;
+        long final_error = 0;
+        size_t remaining = count;
 
-        return writecnt;
+        while (remaining > 0)
+        {
+            size_t want = min_size(remaining, chunk_size);
+            long readcnt = in_f->read((ulong)buf, want, in_off, false);
+            if (readcnt < 0)
+            {
+                final_error = readcnt;
+                break;
+            }
+            if (readcnt == 0)
+            {
+                break;
+            }
+
+            size_t produced = 0;
+            while (produced < (size_t)readcnt)
+            {
+                long writecnt = 0;
+                if (out_f->_attrs.filetype == fs::FileTypes::FT_PIPE)
+                {
+                    writecnt = ((fs::pipe_file *)out_f)->write_in_kernel((ulong)(buf + produced),
+                                                                         (size_t)readcnt - produced);
+                }
+                else
+                {
+                    writecnt = out_f->write((ulong)(buf + produced),
+                                            (size_t)readcnt - produced,
+                                            out_f->get_file_offset(),
+                                            true);
+                }
+
+                if (writecnt < 0)
+                {
+                    final_error = writecnt;
+                    break;
+                }
+                if (writecnt == 0)
+                {
+                    break;
+                }
+                produced += (size_t)writecnt;
+            }
+
+            in_off += produced;
+            total_sent += (ssize_t)produced;
+            remaining -= produced;
+
+            if (produced < (size_t)readcnt || final_error < 0)
+            {
+                break;
+            }
+        }
+
+        free_syscall_temp_buffer(buf);
+
+        if (use_explicit_offset)
+        {
+            if (mem::k_vmm.copy_out(*pt, addr, &in_off, sizeof(in_off)) < 0)
+            {
+                return syscall::SYS_EFAULT;
+            }
+        }
+        else if (total_sent > 0)
+        {
+            in_f->lseek((off_t)in_off, SEEK_SET);
+        }
+
+        if (total_sent > 0)
+        {
+            return total_sent;
+        }
+        return final_error < 0 ? final_error : 0;
     }
     uint64 SyscallHandler::sys_readv()
     {
@@ -6317,15 +6437,15 @@ namespace syscall
             void *iov_base;
             size_t iov_len;
         };
-        size_t totsize = sizeof(iovec) * iovcnt;
-        iovec *vec = new iovec[iovcnt];
+        size_t totsize = sizeof(iovec) * (size_t)iovcnt;
+        iovec *vec = (iovec *)alloc_syscall_temp_buffer(totsize);
         if (!vec)
             return SYS_ENOMEM; // Out of memory
 
         // 从用户空间拷贝iovec数组
         if (mem::k_vmm.copy_in(*pt, vec, iov_ptr, totsize) < 0)
         {
-            delete[] vec;
+            free_syscall_temp_buffer(vec);
             return SYS_EFAULT; // Bad address
         }
 
@@ -6335,10 +6455,17 @@ namespace syscall
         {
             if (vec[i].iov_len > (size_t)0x7FFFFFFF - total_len)
             { // SSIZE_MAX equivalent
-                delete[] vec;
+                free_syscall_temp_buffer(vec);
                 return SYS_EINVAL; // Total length would overflow
             }
             total_len += vec[i].iov_len;
+        }
+
+        char *k_buf = (char *)alloc_syscall_temp_buffer(k_syscall_io_chunk_size);
+        if (k_buf == nullptr)
+        {
+            free_syscall_temp_buffer(vec);
+            return SYS_ENOMEM;
         }
 
         int nread = 0;
@@ -6346,41 +6473,48 @@ namespace syscall
         {
             if (vec[i].iov_len == 0)
                 continue;
-            char *k_buf = new char[vec[i].iov_len];
-            if (!k_buf)
+
+            size_t iov_done = 0;
+            while (iov_done < vec[i].iov_len)
             {
-                delete[] vec;
-                return SYS_ENOMEM; // Out of memory
-            }
-            int ret = f->read((uint64)k_buf, vec[i].iov_len, f->get_file_offset(), true);
-            if (ret < 0)
-            {
-                delete[] k_buf;
-                delete[] vec;
-                return ret; // Return the actual error from file read
-            }
-            if (ret > 0)
-            { // Only copy if we actually read something
-                if (mem::k_vmm.copy_out(*pt, (uint64)vec[i].iov_base, k_buf, ret) < 0)
+                size_t want = min_size(vec[i].iov_len - iov_done, k_syscall_io_chunk_size);
+                int ret = f->read((uint64)k_buf, want, f->get_file_offset(), true);
+                if (ret < 0)
                 {
-                    delete[] k_buf;
-                    delete[] vec;
-                    return SYS_EFAULT; // Bad address
+                    free_syscall_temp_buffer(k_buf);
+                    free_syscall_temp_buffer(vec);
+                    return nread > 0 ? nread : ret;
+                }
+                if (ret == 0)
+                {
+                    free_syscall_temp_buffer(k_buf);
+                    free_syscall_temp_buffer(vec);
+                    return nread;
+                }
+                if (mem::k_vmm.copy_out(*pt,
+                                        (uint64)vec[i].iov_base + iov_done,
+                                        k_buf,
+                                        ret) < 0)
+                {
+                    free_syscall_temp_buffer(k_buf);
+                    free_syscall_temp_buffer(vec);
+                    return SYS_EFAULT;
+                }
+                nread += ret;
+                iov_done += (size_t)ret;
+
+                // 短读意味着 EOF 或底层已无更多数据，本次 readv 应直接返回已读字节数。
+                if ((size_t)ret < want)
+                {
+                    free_syscall_temp_buffer(k_buf);
+                    free_syscall_temp_buffer(vec);
+                    return nread;
                 }
             }
-            nread += ret;
-            delete[] k_buf;
-
-            // If we read less than requested, we've likely hit EOF or an error,
-            // so stop processing remaining buffers
-            if (ret < (int)vec[i].iov_len)
-            {
-                break;
-            }
-            // 文件偏移量已在f->read内部更新
         }
 
-        delete[] vec;
+        free_syscall_temp_buffer(k_buf);
+        free_syscall_temp_buffer(vec);
         return nread;
     }
     uint64 SyscallHandler::sys_geteuid()
@@ -6725,125 +6859,55 @@ namespace syscall
         uint64 path_addr, buf_addr;
         eastl::string pathname;
 
-        // 获取参数
-        if (_arg_addr(0, path_addr) < 0 || _arg_addr(1, buf_addr) < 0)
+        int path_arg_ret = _arg_addr(0, path_addr);
+        if (path_arg_ret < 0)
         {
-            printfRed("[sys_statfs] 参数错误\n");
-            return SYS_EINVAL;
+            return SYS_EFAULT;
         }
-
-        // 检查buf地址是否有效
-        if (buf_addr == 0)
+        int buf_arg_ret = _arg_addr(1, buf_addr);
+        if (buf_arg_ret < 0)
         {
-            printfRed("[sys_statfs] buf地址无效\n");
             return SYS_EFAULT;
         }
 
-        // 从用户空间拷贝路径字符串
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        mem::PageTable *pt = p->get_pagetable();
-
-        int cpres = mem::k_vmm.copy_str_in(*pt, pathname, path_addr, PATH_MAX);
-        if (cpres < 0)
+        if (!is_valid_user_write_range(buf_addr, sizeof(struct statfs)))
         {
-            printfRed("[sys_statfs] Error copying path from user space\n");
-            return cpres;
+            return SYS_EFAULT;
         }
 
-        printfCyan("[sys_statfs] path: %s, buf_addr: %p\n", pathname.c_str(), (void *)buf_addr);
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        int path_ret = _fetch_str(path_addr, pathname, PATH_MAX);
+        if (path_ret < 0)
+        {
+            return path_ret;
+        }
 
-        // 检查路径长度
+        // Linux 对空字符串路径返回 ENOENT，而不是把它当成 cwd。
+        if (pathname.empty())
+        {
+            return SYS_ENOENT;
+        }
         if (pathname.length() >= MAXPATH)
         {
-            printfRed("[sys_statfs] 路径名过长\n");
             return SYS_ENAMETOOLONG;
         }
 
-        // 将相对路径转换为绝对路径
         pathname = get_absolute_path(pathname.c_str(), p->_cwd_name.c_str());
-
-        // 检查路径是否存在
-        if (fs::k_vfs.is_file_exist(pathname.c_str()) != 1)
+        fs::Kstat ignored_st{};
+        int stat_ret = vfs_path_stat(pathname.c_str(), &ignored_st, true);
+        if (stat_ret < 0)
         {
-            printfRed("[sys_statfs] 路径不存在: %s\n", pathname.c_str());
-            return SYS_ENOENT;
+            return stat_ret;
         }
 
-        // 获取文件/目录信息以检查权限
-        fs::file *file = nullptr;
-        int status = fs::k_vfs.openat(pathname, file, O_RDONLY);
-
-        if (status != EOK || !file)
-        {
-            printfRed("[sys_statfs] 无法访问路径: %s, status=%d\n", pathname.c_str(), status);
-            if (status < 0)
-            {
-                return status;
-            }
-            return SYS_EACCES;
-        }
-
-        // 检查是否有搜索权限（对于目录路径中的组件）
-        if (!file->_attrs.u_read)
-        {
-            printfRed("[sys_statfs] 搜索权限被拒绝: %s\n", pathname.c_str());
-            file->free_file();
-            return SYS_EACCES;
-        }
-
-        file->free_file();
-
-        // 填充statfs结构体
-        struct statfs st;
-
-        // 文件系统类型 - 使用EXT4的magic number
-        st.f_type = 0xEF53; // EXT4_SUPER_MAGIC
-
-        // 块大小 - 使用页面大小作为优化的传输块大小
-        st.f_bsize = PGSIZE;
-
-        // 文件系统总块数
-        st.f_blocks = 1UL << 20; // 1M blocks
-
-        // 空闲块数
-        st.f_bfree = 1UL << 19; // 512K free blocks
-
-        // 非特权用户可用的空闲块数
-        st.f_bavail = 1UL << 18; // 256K available to unprivileged users
-
-        // 文件系统总inode数
-        st.f_files = 1UL << 16; // 64K inodes
-
-        // 空闲inode数
-        st.f_ffree = 1UL << 15; // 32K free inodes
-
-        // 文件系统ID - 简单设置为固定值
-        st.f_fsid.val[0] = 0xF7;
-        st.f_fsid.val[1] = 0x1A;
-
-        // 文件名最大长度
-        st.f_namelen = 255; // EXT4 standard
-
-        // 碎片大小（Linux 2.6+）
-        st.f_frsize = PGSIZE;
-
-        // 挂载标志（Linux 2.6.36+）
-        st.f_flags = 0; // 没有特殊挂载标志
-
-        // 预留空间清零
-        for (int i = 0; i < 4; i++)
-        {
-            st.f_spare[i] = 0;
-        }
-
-        // 将结果拷贝到用户空间
+        struct statfs st{};
+        fill_default_statfs(st);
         if (mem::k_vmm.copy_out(*pt, buf_addr, &st, sizeof(st)) < 0)
         {
-            printfRed("[sys_statfs] 结果拷贝到用户空间失败\n");
             return SYS_EFAULT;
         }
 
-        printfGreen("[sys_statfs] 成功获取文件系统信息: %s\n", pathname.c_str());
         return 0;
     }
     uint64 SyscallHandler::sys_ftruncate()
@@ -6916,30 +6980,47 @@ namespace syscall
         auto old_off = f->get_file_offset();
         f->lseek(offset, SEEK_SET);
 
-        char *kbuf = (char *)mem::k_pmm.kmalloc(count);
+        size_t chunk_size = min_size((size_t)count, k_syscall_io_chunk_size);
+        char *kbuf = (char *)alloc_syscall_temp_buffer(chunk_size);
         if (!kbuf)
         {
             f->lseek(old_off, SEEK_SET);
             return -ENOMEM; // Out of memory
         }
-        long rc = f->read((ulong)kbuf, count, f->get_file_offset(), true);
-        if (rc < 0)
-        {
-            mem::k_pmm.free_page(kbuf);
-            f->lseek(old_off, SEEK_SET);
-            return rc;
-        }
 
-        if (mem::k_vmm.copy_out(*p->get_pagetable(), buf, kbuf, rc) < 0)
+        uint64 done = 0;
+        while (done < count)
         {
-            mem::k_pmm.free_page(kbuf);
-            f->lseek(old_off, SEEK_SET);
-            return -1;
+            size_t want = min_size((size_t)(count - done), chunk_size);
+            long rc = f->read((ulong)kbuf, want, offset + done, false);
+            if (rc < 0)
+            {
+                free_syscall_temp_buffer(kbuf);
+                f->lseek(old_off, SEEK_SET);
+                return done > 0 ? (long)done : rc;
+            }
+            if (rc == 0)
+            {
+                break;
+            }
+
+            if (mem::k_vmm.copy_out(*p->get_pagetable(), buf + done, kbuf, rc) < 0)
+            {
+                free_syscall_temp_buffer(kbuf);
+                f->lseek(old_off, SEEK_SET);
+                return done > 0 ? (long)done : -EFAULT;
+            }
+
+            done += (uint64)rc;
+            if ((size_t)rc < want)
+            {
+                break;
+            }
         }
 
         f->lseek(old_off, SEEK_SET);
-        mem::k_pmm.free_page(kbuf);
-        return rc;
+        free_syscall_temp_buffer(kbuf);
+        return (long)done;
     }
     uint64 SyscallHandler::sys_pwrite64()
     {
@@ -6963,18 +7044,46 @@ namespace syscall
         auto old_off = f->get_file_offset();
         f->lseek(offset, SEEK_SET);
 
-        char *kbuf = new char[count];
-        if (mem::k_vmm.copy_in(*p->get_pagetable(), kbuf, buf, count) < 0)
+        size_t chunk_size = min_size((size_t)count, k_syscall_io_chunk_size);
+        char *kbuf = (char *)alloc_syscall_temp_buffer(chunk_size);
+        if (kbuf == nullptr)
         {
-            delete[] kbuf;
             f->lseek(old_off, SEEK_SET);
-            return -1;
+            return -ENOMEM;
         }
 
-        long rc = f->write((ulong)kbuf, count, f->get_file_offset(), true);
-        delete[] kbuf;
+        uint64 done = 0;
+        while (done < count)
+        {
+            size_t want = min_size((size_t)(count - done), chunk_size);
+            if (mem::k_vmm.copy_in(*p->get_pagetable(), kbuf, buf + done, want) < 0)
+            {
+                free_syscall_temp_buffer(kbuf);
+                f->lseek(old_off, SEEK_SET);
+                return done > 0 ? (long)done : -EFAULT;
+            }
+
+            long rc = f->write((ulong)kbuf, want, offset + done, false);
+            if (rc < 0)
+            {
+                free_syscall_temp_buffer(kbuf);
+                f->lseek(old_off, SEEK_SET);
+                return done > 0 ? (long)done : rc;
+            }
+            if (rc == 0)
+            {
+                break;
+            }
+            done += (uint64)rc;
+            if ((size_t)rc < want)
+            {
+                break;
+            }
+        }
+
+        free_syscall_temp_buffer(kbuf);
         f->lseek(old_off, SEEK_SET);
-        return rc < 0 ? rc : rc;
+        return (long)done;
     }
     uint64 SyscallHandler::sys_pselect6()
     {
@@ -10922,85 +11031,35 @@ namespace syscall
         int fd;
         uint64 buf_addr;
 
-        // 获取参数
-        if (_arg_int(0, fd) < 0 || _arg_addr(1, buf_addr) < 0)
+        if (_arg_int(0, fd) < 0)
         {
-            printfRed("[sys_fstatfs] 参数错误\n");
             return SYS_EINVAL;
         }
-
-        // 检查buf地址是否有效
-        if (buf_addr == 0)
+        if (_arg_addr(1, buf_addr) < 0)
         {
-            printfRed("[sys_fstatfs] buf地址无效\n");
             return SYS_EFAULT;
         }
 
-        printfCyan("[sys_fstatfs] fd: %d, buf_addr: %p\n", fd, (void *)buf_addr);
+        if (!is_valid_user_write_range(buf_addr, sizeof(struct statfs)))
+        {
+            return SYS_EFAULT;
+        }
 
-        // 获取当前进程
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-
-        // 检查文件描述符是否有效
         fs::file *f = p->get_open_file(fd);
         if (!f)
         {
-            printfRed("[sys_fstatfs] 无效的文件描述符: %d\n", fd);
             return SYS_EBADF;
         }
 
-        // 填充statfs结构体 - 与sys_statfs使用相同的文件系统信息
-        struct statfs st;
-
-        // 文件系统类型 - 使用EXT4的magic number
-        st.f_type = 0xEF53; // EXT4_SUPER_MAGIC
-
-        // 块大小 - 使用页面大小作为优化的传输块大小
-        st.f_bsize = PGSIZE;
-
-        // 文件系统总块数
-        st.f_blocks = 1UL << 20; // 1M blocks
-
-        // 空闲块数
-        st.f_bfree = 1UL << 19; // 512K free blocks
-
-        // 非特权用户可用的空闲块数
-        st.f_bavail = 1UL << 18; // 256K available to unprivileged users
-
-        // 文件系统总inode数
-        st.f_files = 1UL << 16; // 64K inodes
-
-        // 空闲inode数
-        st.f_ffree = 1UL << 15; // 32K free inodes
-
-        // 文件系统ID - 简单设置为固定值
-        st.f_fsid.val[0] = 0xF7;
-        st.f_fsid.val[1] = 0x1A;
-
-        // 文件名最大长度
-        st.f_namelen = 255; // EXT4 standard
-
-        // 碎片大小（Linux 2.6+）
-        st.f_frsize = PGSIZE;
-
-        // 挂载标志（Linux 2.6.36+）
-        st.f_flags = 0; // 没有特殊挂载标志
-
-        // 预留空间清零
-        for (int i = 0; i < 4; i++)
-        {
-            st.f_spare[i] = 0;
-        }
-
-        // 将结果拷贝到用户空间
+        struct statfs st{};
+        fill_default_statfs(st);
         mem::PageTable *pt = p->get_pagetable();
         if (mem::k_vmm.copy_out(*pt, buf_addr, &st, sizeof(st)) < 0)
         {
-            printfRed("[sys_fstatfs] 结果拷贝到用户空间失败\n");
             return SYS_EFAULT;
         }
 
-        printfGreen("[sys_fstatfs] 成功获取文件描述符 %d 的文件系统信息\n", fd);
         return 0;
     }
     uint64 SyscallHandler::sys_truncate()

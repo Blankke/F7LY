@@ -7,6 +7,7 @@
 #include "klib.hh"
 #include "slab.hh"
 #include "platform.hh"
+#include "devs/dtb.hh"
 extern "C" char end[]; // 来自链接脚本
 #ifdef RISCV
 extern uint64 k_dtb_addr;
@@ -21,6 +22,7 @@ namespace mem
     uint32 PhysicalMemoryManager::page_count;
     uint32 PhysicalMemoryManager::heap_page_count;
     uint64 PhysicalMemoryManager::phys_top;
+    uint64 PhysicalMemoryManager::kernel_linear_top;
     uint64 PhysicalMemoryManager::heap_area_start;
     uint64 PhysicalMemoryManager::heap_area_size;
     uint64 PhysicalMemoryManager::heap_allocator_size;
@@ -62,16 +64,96 @@ namespace mem
         _buddy = reinterpret_cast<BuddySystem *>(pa_start);
         pa_start += BSSIZE * PGSIZE;
         memset(_buddy, 0, BSSIZE * PGSIZE);
-        // 计算可用物理内存的上界，优先使用 dtb 位置作为上限以避免踩到 dtb
+        uint64 heap_meta_bytes = BSSIZE * PGSIZE;
+        uint64 min_heap_region = heap_meta_bytes + (_1M * 8);
+        uint64 max_heap_region = heap_meta_bytes + vm_kernel_heap_size + SHM_SIZE;
         uint64 usable_top = PHYSTOP;
+        bool use_split_heap_region = false;
 #ifdef RISCV
+        // 计算可用物理内存的上界，优先使用 dtb 位置作为上限以避免踩到 dtb
         if (k_dtb_addr && k_dtb_addr < usable_top)
         {
             usable_top = PGROUNDDOWN(k_dtb_addr);
         }
+#elif defined(LOONGARCH)
+        uint64 kernel_end_phys = VIRT2PHY(reinterpret_cast<uint64>(end));
+        DtbMemoryRegion regions[DtbManager::k_max_memory_regions]{};
+        int region_count = DtbManager::get_memory_regions(regions, DtbManager::k_max_memory_regions);
+        int kernel_region_index = -1;
+        int heap_region_index = -1;
+
+        for (int i = 0; i < region_count; ++i)
+        {
+            uint64 region_base = regions[i].base;
+            uint64 region_top = region_base + regions[i].size;
+            printfGreen("[pmm] dtb memory region[%d]: base=%p size=%p top=%p\n",
+                        i, region_base, regions[i].size, region_top);
+            if (kernel_region_index < 0 &&
+                kernel_end_phys >= region_base &&
+                kernel_end_phys < region_top)
+            {
+                kernel_region_index = i;
+            }
+        }
+
+        if (kernel_region_index >= 0)
+        {
+            kernel_linear_top = to_vir(regions[kernel_region_index].base + regions[kernel_region_index].size);
+            usable_top = PGROUNDDOWN(kernel_linear_top);
+        }
+        else
+        {
+            kernel_linear_top = PGROUNDDOWN(PHYSTOP);
+        }
+
+        // LoongArch virt 的 1G 内存通常被拆成低端 RAM + 0x90000000 以上的高端 RAM。
+        // 以前内核把整个物理空间强行当成一段连续区间，只能退化为 128MB 低端内存。
+        // 这里保持页分配器继续使用“包含内核镜像的低端连续区”，
+        // 同时把高端连续区整段拿来做 kernel heap/shm，避免把 PCI/内存空洞错误纳入 buddy。
+        for (int i = region_count - 1; i >= 0; --i)
+        {
+            if (i == kernel_region_index)
+            {
+                continue;
+            }
+            if (regions[i].size >= min_heap_region)
+            {
+                heap_region_index = i;
+                break;
+            }
+        }
+
+        if (heap_region_index >= 0)
+        {
+            uint64 heap_region_phys_base = PGROUNDUP(regions[heap_region_index].base);
+            uint64 heap_region_skip = heap_region_phys_base - regions[heap_region_index].base;
+            if (regions[heap_region_index].size <= heap_region_skip)
+            {
+                panic("[pmm] split heap region alignment overflow");
+            }
+            uint64 heap_region_size = PGROUNDDOWN(regions[heap_region_index].size - heap_region_skip);
+            if (heap_region_size > max_heap_region)
+            {
+                heap_region_size = max_heap_region;
+            }
+            if (heap_region_size < min_heap_region)
+            {
+                panic("[pmm] split heap region too small: %p", heap_region_size);
+            }
+
+            heap_area_start = to_vir(heap_region_phys_base);
+            heap_area_size = heap_region_size;
+            use_split_heap_region = true;
+            printfGreen("[pmm] using split heap region: base=%p size=%p\n",
+                        heap_area_start, heap_area_size);
+        }
 #endif
 
         phys_top = usable_top;
+        if (kernel_linear_top == 0)
+        {
+            kernel_linear_top = usable_top;
+        }
 
         if (usable_top <= pa_start + PGSIZE * 4)
         {
@@ -79,24 +161,27 @@ namespace mem
         }
 
         uint64 available_bytes = usable_top - pa_start;
+        if (available_bytes < PGSIZE * 16)
+        {
+            panic("[pmm] insufficient low memory for page allocator: %p", available_bytes);
+        }
 
-        // 为堆和共享内存预留一部分空间，这里按 1/3 留给堆/共享内存，2/3 留给物理页分配
-        uint64 heap_region_bytes = available_bytes / 3;
-        uint64 heap_meta_bytes = BSSIZE * PGSIZE;
-        uint64 min_heap_region = heap_meta_bytes + (_1M * 8);
-        uint64 max_heap_region = heap_meta_bytes + vm_kernel_heap_size + SHM_SIZE;
+        if (!use_split_heap_region)
+        {
+            // 为堆和共享内存预留一部分空间，这里按 1/3 留给堆/共享内存，2/3 留给物理页分配
+            uint64 heap_region_bytes = available_bytes / 3;
+            if (heap_region_bytes < min_heap_region)
+                heap_region_bytes = min_heap_region;
+            if (heap_region_bytes > max_heap_region)
+                heap_region_bytes = max_heap_region;
+            if (heap_region_bytes + PGSIZE * 16 > available_bytes)
+                heap_region_bytes = available_bytes > PGSIZE * 32 ? available_bytes - PGSIZE * 16 : available_bytes / 2;
 
-        if (heap_region_bytes < min_heap_region)
-            heap_region_bytes = min_heap_region;
-        if (heap_region_bytes > max_heap_region)
-            heap_region_bytes = max_heap_region;
-        if (heap_region_bytes + PGSIZE * 16 > available_bytes)
-            heap_region_bytes = available_bytes > PGSIZE * 32 ? available_bytes - PGSIZE * 16 : available_bytes / 2;
+            heap_area_start = PGROUNDDOWN(usable_top - heap_region_bytes);
+            heap_area_size = usable_top - heap_area_start;
+        }
 
-        heap_area_start = PGROUNDDOWN(usable_top - heap_region_bytes);
-        heap_area_size = usable_top - heap_area_start;
-
-        uint64 pmm_bytes = heap_area_start - pa_start;
+        uint64 pmm_bytes = use_split_heap_region ? (usable_top - pa_start) : (heap_area_start - pa_start);
         if (pmm_bytes < PGSIZE * 16)
         {
             panic("[pmm] not enough space for page allocator: %p bytes", pmm_bytes);
@@ -135,7 +220,9 @@ namespace mem
         }
 
         _buddy->Initialize(pa_start, page_count);
-        printfGreen("[pmm] buddy system initialized, pa_start: %p, pages: %d\n", pa_start, page_count);
+        printfGreen("[pmm] buddy system initialized, pa_start: %p, phys_top: %p, pages: %d\n",
+                    pa_start, phys_top, page_count);
+        printfGreen("[pmm] kernel linear top: %p\n", kernel_linear_top);
         printfGreen("[pmm] heap region: start=%p size=%p (usable=%p), heap_pages=%d\n",
                     heap_area_start, heap_area_size, heap_allocator_size, heap_page_count);
         printfGreen("[pmm] shm region: start=%p size=%p\n", shm_start, shm_size);
@@ -211,7 +298,9 @@ namespace mem
             }
             
             void *pa = pgnm2pa(x);
-            memset(pa, 0, PGSIZE);
+            // kmalloc() 可能一次拿到多页；这里需要把整段临时缓冲区都清零，
+            // 否则后续按“已初始化内核缓冲”使用时会把旧数据带进系统调用语义里。
+            memset(pa, 0, (size_t)page_num * PGSIZE);
             return pa;
         }
         // }
@@ -230,6 +319,10 @@ namespace mem
     void *PhysicalMemoryManager::kcalloc(uint n, size_t size)
     {
         void *pa = kmalloc(n * size);
+        if (pa == nullptr)
+        {
+            return nullptr;
+        }
         memset(pa, 0, n * size);
         return pa;
     }
