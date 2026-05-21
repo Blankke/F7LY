@@ -3,6 +3,24 @@
 #include "types.hh"
 #include "tm/timer_manager.hh"
 
+namespace proc
+{
+    class Pcb;
+
+    struct interval_timer_snapshot
+    {
+        uint64 value_us;
+        uint64 interval_us;
+    };
+
+    bool is_valid_interval_timer_kind(int which);
+    void reset_interval_timers(Pcb *p);
+    interval_timer_snapshot read_interval_timer(Pcb *p, int which);
+    void set_interval_timer(Pcb *p, int which, uint64 value_us, uint64 interval_us,
+                            interval_timer_snapshot *old_timer);
+    void check_interval_timers(Pcb *current_proc);
+} // namespace proc
+
 // 扩展的定时器结构体定义
 struct extended_posix_timer
 {
@@ -29,5 +47,5 @@ extern extended_posix_timer g_timers[32];
 extern int g_next_timer_id;
 extern bool g_timers_initialized;
 
-// 检查过期定时器的函数声明
+// 检查全局 POSIX timer_create()/timer_settime() 定时器
 void check_expired_timers();

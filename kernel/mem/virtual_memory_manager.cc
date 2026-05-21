@@ -58,6 +58,89 @@ namespace mem
 
             return lhs_addr < rhs_end && rhs_addr < lhs_end;
         }
+
+        proc::vma *find_vma_covering_va(proc::Pcb *proc, uint64 va)
+        {
+            if (proc == nullptr || proc->get_vma() == nullptr)
+            {
+                return nullptr;
+            }
+
+            for (int i = 0; i < proc::NVMA; ++i)
+            {
+                proc::vma *vm = &proc->get_vma()->_vm[i];
+                if (vm->used && va >= vm->addr && va < vm->addr + vm->len)
+                {
+                    return vm;
+                }
+            }
+
+            return nullptr;
+        }
+
+        bool pte_allows_user_read(Pte &pte)
+        {
+#ifdef RISCV
+            return pte.is_valid() && pte.is_user() && pte.is_readable();
+#elif defined(LOONGARCH)
+            return pte.is_valid() && pte.is_user_plv() && pte.is_readable();
+#else
+            return false;
+#endif
+        }
+
+        int resolve_user_read_pa(PageTable &pt, proc::Pcb *proc, uint64 user_va, uint64 &out_pa)
+        {
+            uint64 page_va = PGROUNDDOWN(user_va);
+            proc::vma *target_vm = find_vma_covering_va(proc, user_va);
+            Pte pte = pt.walk(page_va, false);
+
+            if ((pte.is_null() || pte.get_data() == 0) && target_vm != nullptr)
+            {
+                // 读取用户空间时，允许对合法 VMA 做一次按需补页，
+                // 但补页后仍必须检查用户态读权限，不能把 PROT_NONE 之类的映射误当成可读。
+                if (k_vmm.allocate_vma_page(pt, user_va, target_vm, 0) != 0)
+                {
+                    printfRed("[resolve_user_read_pa] allocate_vma_page failed for va: %p\n", user_va);
+                    return -1;
+                }
+                pte = pt.walk(page_va, false);
+            }
+            else if (pte.is_null() || pte.get_data() == 0)
+            {
+                printfRed("[resolve_user_read_pa] walk failed for va: %p\n", user_va);
+                return -1;
+            }
+
+            if (pte.is_null() || pte.get_data() == 0)
+            {
+                printfRed("[resolve_user_read_pa] walk still invalid after lazy allocation, va: %p\n", user_va);
+                return -1;
+            }
+
+            if (!pte_allows_user_read(pte))
+            {
+                printfRed("[resolve_user_read_pa] unreadable user page va=%p pte=%p valid=%d pt_base=%p pid=%d tid=%d\n",
+                          (void *)page_va,
+                          (void *)(pte.is_null() ? 0 : pte.get_data()),
+                          pte.is_valid(),
+                          (void *)pt.get_base(),
+                          proc ? proc->_pid : -1,
+                          proc ? proc->_tid : -1);
+                return -1;
+            }
+
+            out_pa = reinterpret_cast<uint64>(pte.pa());
+            if (out_pa == 0)
+            {
+                printfRed("[resolve_user_read_pa] pa == 0 for va: %p\n", user_va);
+                return -1;
+            }
+#ifdef LOONGARCH
+            out_pa = to_vir(out_pa);
+#endif
+            return 0;
+        }
     } // namespace
 
     uint64 VirtualMemoryManager::kstack_vm_from_global_id(uint global_id)
@@ -256,55 +339,8 @@ namespace mem
         while (len > 0)
         {
             va = PGROUNDDOWN(src_va);
-            pa = (uint64)pt.walk_addr(va);
-#ifdef LOONGARCH
-            pa = to_vir((uint64)pt.walk_addr(va));
-#endif
-            if (pa == 0)
-            {
-                // 检查是否在VMA范围内，如果是则进行懒分配
-                proc::vma *target_vm = nullptr;
-                if (proc && proc->get_vma())
-                {
-                    for (int i = 0; i < proc::NVMA; ++i)
-                    {
-                        if (proc->get_vma()->_vm[i].used)
-                        {
-                            if (src_va >= proc->get_vma()->_vm[i].addr &&
-                                src_va < proc->get_vma()->_vm[i].addr + proc->get_vma()->_vm[i].len)
-                            {
-                                target_vm = &proc->get_vma()->_vm[i];
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                if (target_vm != nullptr)
-                {
-                    // 在VMA范围内，进行懒分配
-                    if (allocate_vma_page(pt, src_va, target_vm, 0) != 0) // 0表示读取操作
-                    {
-                        printfRed("[copy_in] allocate_vma_page failed for va: %p\n", src_va);
-                        return -1;
-                    }
-                    // 重新获取物理地址
-                    pa = (uint64)pt.walk_addr(va);
-#ifdef LOONGARCH
-                    pa = to_vir((uint64)pt.walk_addr(va));
-#endif
-                    if (pa == 0)
-                    {
-                        printfRed("[copy_in] pa still 0 after allocate_vma_page\n");
-                        return -1;
-                    }
-                }
-                else
-                {
-                    printfRed("[copy_in] pa == 0! walk failed and not in VMA\n");
-                    return -1;
-                }
-            }
+            if (resolve_user_read_pa(pt, proc, src_va, pa) != 0)
+                return -1;
             n = PGSIZE - (src_va - va);
             if (n > len)
                 n = len;
@@ -328,55 +364,8 @@ namespace mem
         while (got_null == 0 && max > 0)
         {
             va = PGROUNDDOWN(src_va);
-            pa = (uint64)pt.walk_addr(va);
-#ifdef LOONGARCH
-            pa = to_vir((uint64)pt.walk_addr(va));
-#endif
-            if (pa == 0)
-            {
-                // 检查是否在VMA范围内，如果是则进行懒分配
-                proc::vma *target_vm = nullptr;
-                if (proc && proc->get_vma())
-                {
-                    for (int i = 0; i < proc::NVMA; ++i)
-                    {
-                        if (proc->get_vma()->_vm[i].used)
-                        {
-                            if (src_va >= proc->get_vma()->_vm[i].addr &&
-                                src_va < proc->get_vma()->_vm[i].addr + proc->get_vma()->_vm[i].len)
-                            {
-                                target_vm = &proc->get_vma()->_vm[i];
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                if (target_vm != nullptr)
-                {
-                    // 在VMA范围内，进行懒分配
-                    if (allocate_vma_page(pt, src_va, target_vm, 0) != 0) // 0表示读取操作
-                    {
-                        printfRed("[copy_str_in] allocate_vma_page failed for va: %p\n", src_va);
-                        return -1;
-                    }
-                    // 重新获取物理地址
-                    pa = (uint64)pt.walk_addr(va);
-#ifdef LOONGARCH
-                    pa = to_vir((uint64)pt.walk_addr(va));
-#endif
-                    if (pa == 0)
-                    {
-                        printfRed("[copy_str_in] pa still 0 after allocate_vma_page\n");
-                        return -1;
-                    }
-                }
-                else
-                {
-                    printfRed("[copy_str_in] pa == 0! walk failed and not in VMA\n");
-                    return -1;
-                }
-            }
+            if (resolve_user_read_pa(pt, proc, src_va, pa) != 0)
+                return -1;
             n = PGSIZE - (src_va - va);
             if (n > max)
                 n = max;
@@ -423,55 +412,8 @@ namespace mem
         while (got_null == 0 && max > 0)
         {
             va = PGROUNDDOWN(src_va);
-            pa = (uint64)pt.walk_addr(va);
-#ifdef LOONGARCH
-            pa = to_vir((uint64)pt.walk_addr(va));
-#endif
-            if (pa == 0)
-            {
-                // 检查是否在VMA范围内，如果是则进行懒分配
-                proc::vma *target_vm = nullptr;
-                if (proc && proc->get_vma())
-                {
-                    for (int i = 0; i < proc::NVMA; ++i)
-                    {
-                        if (proc->get_vma()->_vm[i].used)
-                        {
-                            if (src_va >= proc->get_vma()->_vm[i].addr &&
-                                src_va < proc->get_vma()->_vm[i].addr + proc->get_vma()->_vm[i].len)
-                            {
-                                target_vm = &proc->get_vma()->_vm[i];
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                if (target_vm != nullptr)
-                {
-                    // 在VMA范围内，进行懒分配
-                    if (allocate_vma_page(pt, src_va, target_vm, 0) != 0) // 0表示读取操作
-                    {
-                        printfRed("[copy_str_in] allocate_vma_page failed for va: %p\n", src_va);
-                        return -EFAULT;
-                    }
-                    // 重新获取物理地址
-                    pa = (uint64)pt.walk_addr(va);
-#ifdef LOONGARCH
-                    pa = to_vir((uint64)pt.walk_addr(va));
-#endif
-                    if (pa == 0)
-                    {
-                        printfRed("[copy_str_in] pa still 0 after allocate_vma_page\n");
-                        return -EFAULT;
-                    }
-                }
-                else
-                {
-                    printfRed("[copy_str_in] pa == 0! walk failed and not in VMA\n");
-                    return -EFAULT;
-                }
-            }
+            if (resolve_user_read_pa(pt, proc, src_va, pa) != 0)
+                return -EFAULT;
             n = PGSIZE - (src_va - va);
             if (n > max)
                 n = max;
@@ -571,6 +513,48 @@ namespace mem
     /// @return 成功返回0，失败返回-1
     int VirtualMemoryManager::allocate_vma_page(PageTable &pt, uint64 va, proc::vma *vm, int access_type)
     {
+        uint64 page_va = PGROUNDDOWN(va);
+
+        // LoongArch 上可能会先以 fault 形式把“已经存在的用户页”带进来，
+        // 比如 clone 子任务第一次碰到刚复制好的 guarded stack。
+        // 这时如果继续走 map_pages()，就会把正常可恢复的 fault 升级成 remap panic。
+        // 因此先检查叶子 PTE；若映射已经存在且权限满足，直接复用即可。
+        Pte existing_pte = pt.walk(page_va, false);
+        if (!existing_pte.is_null() && existing_pte.is_valid())
+        {
+#ifdef RISCV
+            bool user_ok = existing_pte.is_user();
+#elif defined(LOONGARCH)
+            bool user_ok = existing_pte.is_user_plv();
+#endif
+            bool access_ok = false;
+            switch (access_type)
+            {
+            case 0:
+                access_ok = existing_pte.is_readable();
+                break;
+            case 1:
+                access_ok = existing_pte.is_writable();
+                break;
+            case 2:
+                access_ok = existing_pte.is_executable();
+                break;
+            default:
+                access_ok = false;
+                break;
+            }
+
+            if (user_ok && access_ok)
+            {
+                return 0;
+            }
+
+            if (user_ok)
+            {
+                printfRed("[allocate_vma_page] existing mapping lacks requested permission va=%p access=%d pte=%p\n",
+                          (void *)page_va, access_type, (void *)existing_pte.get_data());
+            }
+        }
 
         // 检查VMA权限
         if (vm->prot == PROT_NONE)
@@ -634,8 +618,6 @@ namespace mem
             pte_flags |= PTE_X;
         pte_flags |= PTE_MAT; // 内存访问类型
 #endif
-
-        uint64 page_va = PGROUNDDOWN(va);
 
         // 共享段后端在 MAP_SHARED / fork 后的缺页场景下，不应该重新分配私有物理页，
         // 否则会把“共享映射”错误降级成私有页，还会在 unlink 后继续依赖原始文件路径。
@@ -1392,7 +1374,7 @@ namespace mem
 #endif
     }
 
-    int VirtualMemoryManager::protectpages(PageTable &pt, uint64 va, uint64 size, int perm, bool is_vma)
+    int VirtualMemoryManager::protectpages(PageTable &pt, uint64 va, uint64 size, int prot, bool is_vma)
     {
         uint64 a, last;
         Pte pte;
@@ -1424,13 +1406,42 @@ namespace mem
 
             if (pte.get_data() & PTE_V)
             {
-                // 清除旧的权限位，保留其他标志位，然后设置新的权限
                 uint64 old_data = pte.get_data();
-                uint64 new_data = (old_data & ~(PTE_R | PTE_W | PTE_X)) | perm | PTE_V | PTE_U;
+#ifdef RISCV
+                // RISC-V 直接以 R/W/X 三个位表达权限。
+                uint64 new_data = old_data &
+                                  ~(riscv::PteEnum::pte_readable_m |
+                                    riscv::PteEnum::pte_writable_m |
+                                    riscv::PteEnum::pte_executable_m);
+                if (prot & PROT_READ)
+                    new_data |= riscv::PteEnum::pte_readable_m;
+                if (prot & PROT_WRITE)
+                    new_data |= riscv::PteEnum::pte_writable_m;
+                if (prot & PROT_EXEC)
+                    new_data |= riscv::PteEnum::pte_executable_m;
+                new_data |= riscv::PteEnum::pte_valid_m | riscv::PteEnum::pte_user_m;
+#elif defined(LOONGARCH)
+                // LoongArch 的读/执行权限是“禁止位”(NR/NX)，而不是正向的 R/X 位。
+                // mprotect(PROT_NONE) / 取消执行权限都必须显式写回 NR/NX。
+                uint64 new_data = old_data & ~(PTE_W | PTE_NR | PTE_NX | PTE_PLV);
+                new_data |= PTE_V | PTE_U;
+                if (prot & PROT_WRITE)
+                    new_data |= PTE_W;
+                if (!(prot & PROT_READ))
+                    new_data |= PTE_NR;
+                if (!(prot & PROT_EXEC))
+                    new_data |= PTE_NX;
+#endif
                 pte.set_data(new_data);
             }
             else
+            {
+#ifdef RISCV
+                pte.set_data(pte.get_data() | riscv::PteEnum::pte_user_m);
+#elif defined(LOONGARCH)
                 pte.set_data(pte.get_data() | PTE_U);
+#endif
+            }
         }
         return 0;
     }

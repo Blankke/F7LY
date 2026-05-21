@@ -30,6 +30,7 @@
 #include "param.h"
 #include "timer_manager.hh"
 #include "timer_interface.hh"
+#include "posix_timers.hh"
 #include "fs/vfs/elf.hh"
 #include "fs/vfs/file/normal_file.hh"
 #include "mem.hh"
@@ -459,6 +460,7 @@ namespace proc
                 p->_cstime = 0;                // 子进程系统态时间累计
                 p->_start_time = cur_tick;     // 进程启动时间
                 p->_start_boottime = cur_tick; // 自系统启动以来的启动时间
+                reset_interval_timers(p);      // interval timer 不能把上一个进程残留到复用的 PCB 上
 
                 // 更新上次分配的位置，轮转分配策略
                 _last_alloc_proc_gid = p->_global_id;
@@ -634,6 +636,7 @@ namespace proc
         p->_cstime = 0;            // 清零子进程系统态时间累计
         p->_start_time = 0;        // 清零进程启动时间
         p->_start_boottime = 0;    // 清零自系统启动以来的启动时间
+        reset_interval_timers(p);  // 清空 interval timer，避免 PCB 复用时带出历史状态
 
         /****************************************************************************************
          * 上下文清理
@@ -1414,46 +1417,60 @@ namespace proc
         else
         {
             // TODO: 共享信号掩码
-            np->_tgid = np->_pid;   // 新进程的线程组 ID 等于自己的 PID
-            np->_trapframe->a0 = 0; // fork 返回值为 0
+            np->_tgid = np->_pid; // 新进程的线程组 ID 等于自己的 PID
             // pid已经在 alloc_proc 中设置了
             // 定时器已经设置过了
         }
+
+        // Linux fork/clone 语义：子任务从系统调用返回时 a0/rax 等返回值寄存器为 0。
+        // 这个约束与是否创建线程无关，后续如果用户态需要在子任务里跑 trampoline，
+        // 也应由 libc 封装，而不是由内核擅自改 PC/参数寄存器。
+        np->_trapframe->a0 = 0;
         if (stack_ptr != 0)
         {
-            // 如果指定了栈指针，则设置子进程的用户栈指针
+            // clone()/clone3() 的 child_stack 只是“子任务返回到用户态时使用的栈顶”。
+            // 内核不应窥探用户栈里的函数指针/参数，也不应把 PC 改成用户自定义入口；
+            // 这些都是 libc clone 封装层的职责。LoongArch 上之前的做法会直接把
+            // glibc/LTP 的 clone 子任务跳到错误地址，最终在用户态 SIGSEGV。
             np->_trapframe->sp = stack_ptr;
-            if (is_clone3)
+            if ((flags & syscall::CLONE_VM) == 0)
             {
-                // 如果是 clone3 调用，设置用户栈指针
-                np->_trapframe->a0 = 0;
-            }
-            else
-            {
-                uint64 entry_point = 0;
-                mem::k_vmm.copy_in(*p->get_pagetable(), &entry_point, stack_ptr, sizeof(uint64));
-                if (entry_point == 0)
+                // glibc/musl 的 clone 封装都会把 fn/arg 压到 child_stack 顶部，
+                // 子任务返回用户态后立刻从这块新栈里取入口和参数。
+                // 仅靠“程序段/堆/VMA 元数据复制”有时会漏掉这块临时子栈的驻留页，
+                // 于是子任务会在第一条 ld.d / jirl 前就读到空页或旧内容而 SIGSEGV。
+                // 这里额外把 child_stack 顶部附近两页强制复制过去，保证 clone 子栈
+                // 的入口数据和最初几层调用栈在子进程里可见。
+                uint64 stack_copy_end = PGROUNDUP(stack_ptr + sizeof(uint64) * 2);
+                uint64 stack_copy_start = PGROUNDDOWN(stack_ptr >= PGSIZE ? stack_ptr - PGSIZE : 0);
+                if (stack_copy_end > stack_copy_start)
                 {
-                    panic("fork: copy_in failed for stack pointer");
-                    freeproc_creation_failed(np); // 使用专门的创建失败清理函数
-                    np->_lock.release();
-                    return nullptr;
+                    bool stack_copy_ok = true;
+                    for (uint64 copy_va = stack_copy_start; copy_va < stack_copy_end; copy_va += PGSIZE)
+                    {
+                        mem::Pte child_pte = np->get_pagetable()->walk(copy_va, false);
+                        if (!child_pte.is_null() && child_pte.is_valid())
+                        {
+                            continue;
+                        }
+
+                        if (mem::k_vmm.vm_copy(*p->get_pagetable(),
+                                               *np->get_pagetable(),
+                                               copy_va,
+                                               PGSIZE) < 0)
+                        {
+                            stack_copy_ok = false;
+                            break;
+                        }
+                    }
+
+                    if (!stack_copy_ok)
+                    {
+                        freeproc_creation_failed(np);
+                        np->_lock.release();
+                        return nullptr;
+                    }
                 }
-                uint64 arg = 0;
-                if (mem::k_vmm.copy_in(*p->get_pagetable(), &arg, (stack_ptr + 8), sizeof(uint64)) != 0)
-                {
-                    panic("fork: copy_in failed for stack pointer arg");
-                    freeproc_creation_failed(np); // 使用专门的创建失败清理函数
-                    np->_lock.release();
-                    return nullptr;
-                }
-                printf("fork: stack_ptr: %p, entry_point: %p arg: %p\n", stack_ptr, entry_point, arg);
-#ifdef RISCV
-                np->_trapframe->epc = entry_point; // 设置程序计数器为栈顶地址
-#elif LOONGARCH
-                np->_trapframe->era = entry_point; // 设置程序计数器为栈顶地址
-#endif
-                np->_trapframe->a0 = arg; // 设置第一个参数为栈顶地址的下一个地址
             }
         }
 
@@ -2377,14 +2394,6 @@ namespace proc
             printfRed("[open] alloc_fd failed for path: %s,pid:%d\n", path.c_str(), p->_pid);
             return -EMFILE; // 分配文件描述符失败
         }
-        // 下面这个就是套的第二层，这一层的意义似乎只在于分配文件描述符
-        if (path == "/lib/riscv64-linux-gnu/libc.so.6")
-            path = "/glibc/lib/libc.so.6";
-        // if (path == "/lib/riscv64-linux-gnu/tls/libc.so.6")
-        //     path = "/glibc/lib/libc.so.6";
-        // if (path == "/lib")
-        //     path = "/glibc/lib";
-        
         int err = fs::k_vfs.openat(path, p->_ofile->_ofile_ptr[fd], flags, mode);
         if (err < 0)
         {

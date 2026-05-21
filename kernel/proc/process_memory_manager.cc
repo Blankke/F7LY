@@ -163,6 +163,41 @@ namespace proc
             return true;
         }
 
+#ifdef LOONGARCH
+        bool ensure_user_pagetable_hierarchy(mem::PageTable &pt, uint64 start, uint64 size)
+        {
+            if (size == 0)
+            {
+                return true;
+            }
+
+            uint64 range_start = PGROUNDDOWN(start);
+            uint64 range_end = PGROUNDUP(start + size);
+            if (range_end < range_start || range_start >= TRAPFRAME || range_end > TRAPFRAME)
+            {
+                printfRed("[clone_for_fork] invalid hierarchy-prebuild range [%p, %p)\n",
+                          (void *)range_start, (void *)range_end);
+                return false;
+            }
+
+            // LoongArch 的 tlbr refill 入口要求页表中间层级已经存在。
+            // fork/clone 只复制“已驻留页”时，像 guarded stack 这种合法但尚未驻留的页
+            // 会在子进程第一次触达时直接踩进架构相关异常，而不是走正常懒缺页。
+            for (uint64 va = range_start; va < range_end; va += PGSIZE)
+            {
+                mem::Pte pte_slot = pt.walk(va, true);
+                if (pte_slot.is_null())
+                {
+                    printfRed("[clone_for_fork] prebuild pagetable hierarchy failed for va=%p\n",
+                              (void *)va);
+                    return false;
+                }
+            }
+
+            return true;
+        }
+#endif
+
         inline bool is_probably_kernel_object_ptr(const void *ptr)
         {
             return (uint64)ptr >= k_min_kernel_object_ptr;
@@ -362,6 +397,35 @@ namespace proc
         // fork操作不共享虚拟内存，设置为false
         new_mgr->shared_vm = false;
 
+#ifdef LOONGARCH
+        // 先把子进程合法用户区间的页表层级补齐，但不提前建立叶子映射。
+        // 这样 LoongArch 的 tlbr refill 能稳定落到懒缺页路径，同时不破坏 lazy allocation。
+        for (int i = 0; i < new_mgr->prog_section_count; ++i)
+        {
+            uint64 start = (uint64)new_mgr->prog_sections[i]._sec_start;
+            uint64 size = new_mgr->prog_sections[i]._sec_size;
+            if (!ensure_user_pagetable_hierarchy(new_mgr->pagetable, start, size))
+            {
+                delete new_mgr;
+                return nullptr;
+            }
+        }
+
+        if (new_mgr->heap_end > new_mgr->heap_start)
+        {
+            uint64 heap_copy_start = PGROUNDDOWN(new_mgr->heap_start);
+            uint64 heap_copy_end = PGROUNDUP(new_mgr->heap_end);
+            if (heap_copy_end > heap_copy_start &&
+                !ensure_user_pagetable_hierarchy(new_mgr->pagetable,
+                                                 heap_copy_start,
+                                                 heap_copy_end - heap_copy_start))
+            {
+                delete new_mgr;
+                return nullptr;
+            }
+        }
+#endif
+
         // 复制进程的所有内存段
         bool copy_success = true;
 
@@ -431,6 +495,16 @@ namespace proc
             }
 
             new_mgr->vma_data._vm[i] = vma_data._vm[i];
+
+#ifdef LOONGARCH
+            if (!ensure_user_pagetable_hierarchy(new_mgr->pagetable,
+                                                 new_mgr->vma_data._vm[i].addr,
+                                                 new_mgr->vma_data._vm[i].len))
+            {
+                delete new_mgr;
+                return nullptr;
+            }
+#endif
 
             // 只对文件映射增加引用计数
             if (vma_data._vm[i].vfile != nullptr)

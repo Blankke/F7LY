@@ -240,6 +240,8 @@ namespace fs
 
 	bool normal_file::read_ready()
 	{
+		if (_attrs.filetype == FileTypes::FT_NORMAL)
+			return true;
 		if (_attrs.filetype == FileTypes::FT_DIRECT)
 			return false;
 		if (_attrs.filetype == FileTypes::FT_NONE)
@@ -250,6 +252,8 @@ namespace fs
 
 	bool normal_file::write_ready()
 	{
+		if (_attrs.filetype == FileTypes::FT_NORMAL)
+			return true;
 		if (_attrs.filetype == FileTypes::FT_DIRECT)
 			return false;
 		if (_attrs.filetype == FileTypes::FT_NONE)

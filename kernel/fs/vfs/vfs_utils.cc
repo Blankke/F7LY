@@ -30,6 +30,61 @@ namespace
     constexpr size_t k_linux_path_max = 4096;
     constexpr size_t k_linux_name_max = 255;
 
+    struct MountOverride
+    {
+        eastl::string path;
+        bool read_only = false;
+    };
+
+    eastl::vector<MountOverride> g_mount_overrides;
+
+    bool path_matches_mount_prefix(const eastl::string &path, const eastl::string &mount_path)
+    {
+        if (mount_path.empty())
+        {
+            return false;
+        }
+
+        if (mount_path == "/")
+        {
+            return !path.empty() && path[0] == '/';
+        }
+
+        if (path.compare(0, mount_path.size(), mount_path) != 0)
+        {
+            return false;
+        }
+
+        return path.size() == mount_path.size() || path[mount_path.size()] == '/';
+    }
+
+    const MountOverride *find_mount_override(const eastl::string &path)
+    {
+        const MountOverride *best = nullptr;
+
+        for (const auto &entry : g_mount_overrides)
+        {
+            if (!path_matches_mount_prefix(path, entry.path))
+            {
+                continue;
+            }
+
+            if (best == nullptr || entry.path.size() > best->path.size())
+            {
+                best = &entry;
+            }
+        }
+
+        return best;
+    }
+
+    bool open_wants_write_access(uint flags)
+    {
+        int access_mode = flags & O_ACCMODE;
+        return access_mode != O_RDONLY ||
+               (flags & (O_CREAT | O_TRUNC | O_TMPFILE)) != 0;
+    }
+
     int validate_linux_path_length(const eastl::string &path)
     {
         if (path.length() >= k_linux_path_max)
@@ -54,6 +109,85 @@ namespace
         }
 
         return EOK;
+    }
+
+    int required_open_access_mask(uint flags)
+    {
+        int access_mask = 0;
+        switch (flags & O_ACCMODE)
+        {
+        case O_WRONLY:
+            access_mask |= W_OK;
+            break;
+        case O_RDWR:
+            access_mask |= (R_OK | W_OK);
+            break;
+        case O_RDONLY:
+        default:
+            access_mask |= R_OK;
+            break;
+        }
+
+        if (flags & O_TRUNC)
+        {
+            access_mask |= W_OK;
+        }
+
+        return access_mask;
+    }
+
+    int check_mode_bits_with_fsids(uint32 mode, uint32 owner_uid, uint32 owner_gid,
+                                   uint32 fsuid, uint32 fsgid, int requested_mask)
+    {
+        if (fsuid == 0)
+        {
+            return 0;
+        }
+
+        uint32 perms = 0;
+        if (fsuid == owner_uid)
+        {
+            perms = (mode >> 6) & 0x7;
+        }
+        else if (fsgid == owner_gid)
+        {
+            perms = (mode >> 3) & 0x7;
+        }
+        else
+        {
+            perms = mode & 0x7;
+        }
+
+        if ((requested_mask & R_OK) && !(perms & 0x4))
+            return -EACCES;
+        if ((requested_mask & W_OK) && !(perms & 0x2))
+            return -EACCES;
+        if ((requested_mask & X_OK) && !(perms & 0x1))
+            return -EACCES;
+        return 0;
+    }
+
+    int validate_existing_open_permissions(const eastl::string &absolute_path, uint flags)
+    {
+        proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+        if (current_proc == nullptr)
+        {
+            return -EFAULT;
+        }
+
+        fs::Kstat st;
+        int stat_ret = vfs_path_stat(absolute_path.c_str(), &st, true);
+        if (stat_ret < 0)
+        {
+            return stat_ret;
+        }
+
+        return check_mode_bits_with_fsids(st.mode,
+                                          st.uid,
+                                          st.gid,
+                                          current_proc->get_fsuid(),
+                                          current_proc->get_fsgid(),
+                                          required_open_access_mask(flags));
     }
 
     inline bool is_kernel_mapped_file_range(uint64 addr, uint64 size)
@@ -87,6 +221,349 @@ namespace
 
         uint64 vtable_addr = *(uint64 *)file_obj;
         return is_kernel_mapped_file_range(vtable_addr, sizeof(void *));
+    }
+
+    inline bool path_equals_or_has_child(const eastl::string &path, const char *prefix)
+    {
+        if (prefix == nullptr)
+        {
+            return false;
+        }
+
+        size_t prefix_len = strlen(prefix);
+        if (path.length() < prefix_len || path.compare(0, prefix_len, prefix) != 0)
+        {
+            return false;
+        }
+
+        return path.length() == prefix_len || path[prefix_len] == '/';
+    }
+
+    bool remap_glibc_runtime_path(const eastl::string &path, eastl::string &remapped_path)
+    {
+        struct PrefixAlias
+        {
+            const char *from;
+            const char *to;
+        };
+
+        static const PrefixAlias k_prefix_aliases[] = {
+            {"/lib/riscv64-linux-gnu", "/glibc/lib"},
+            {"/lib/loongarch64-linux-gnu", "/glibc/lib"},
+            {"/usr/lib/riscv64-linux-gnu", "/glibc/lib"},
+            {"/usr/lib/loongarch64-linux-gnu", "/glibc/lib"},
+            {"/lib64", "/glibc/lib"},
+            {"/usr/lib64", "/glibc/lib"},
+        };
+
+        static const PrefixAlias k_exact_aliases[] = {
+            {"/lib/ld-linux-riscv64-lp64d.so.1", "/glibc/lib/ld-linux-riscv64-lp64d.so.1"},
+            {"/lib64/ld-linux-riscv64-lp64d.so.1", "/glibc/lib/ld-linux-riscv64-lp64d.so.1"},
+            {"/lib/ld-linux-loongarch-lp64d.so.1", "/glibc/lib/ld-linux-loongarch-lp64d.so.1"},
+            {"/lib64/ld-linux-loongarch-lp64d.so.1", "/glibc/lib/ld-linux-loongarch-lp64d.so.1"},
+        };
+
+        for (const auto &alias : k_exact_aliases)
+        {
+            if (path == alias.from)
+            {
+                remapped_path = alias.to;
+                return true;
+            }
+        }
+
+        for (const auto &alias : k_prefix_aliases)
+        {
+            if (!path_equals_or_has_child(path, alias.from))
+            {
+                continue;
+            }
+
+            remapped_path = alias.to;
+            if (path.length() > strlen(alias.from))
+            {
+                remapped_path += path.c_str() + strlen(alias.from);
+            }
+            return true;
+        }
+
+        return false;
+    }
+
+    eastl::string get_parent_path(const eastl::string &path)
+    {
+        size_t last_slash = path.find_last_of('/');
+        if (last_slash == eastl::string::npos)
+        {
+            return ".";
+        }
+        if (last_slash == 0)
+        {
+            return "/";
+        }
+        return path.substr(0, last_slash);
+    }
+
+    int raw_vfs_is_file_exist(const eastl::string &path)
+    {
+        struct filesystem *fs = get_fs_from_path(path.c_str());
+        if (fs && fs->type == FAT32)
+        {
+            const char *rel_path = path.c_str();
+            if (strcmp(fs->path, "/") != 0)
+            {
+                size_t mplen = strlen(fs->path);
+                if (strncmp(rel_path, fs->path, mplen) == 0)
+                {
+                    if (rel_path[mplen] == '\0')
+                        rel_path = "/";
+                    else if (rel_path[mplen] == '/')
+                        rel_path += mplen;
+                }
+            }
+            struct fat32_entry *ep = ename((char *)rel_path);
+            if (Printer::trace_group_enabled())
+                tracef("[raw_vfs_is_file_exist] fat32 path=%s rel=%s entry=%p\n",
+                       path.c_str(), rel_path, ep);
+            if (ep != nullptr)
+            {
+                eput(ep);
+                return 1;
+            }
+            return 0;
+        }
+
+        struct ext4_inode inode;
+        uint32_t ino;
+        int res = ext4_raw_inode_fill(path.c_str(), &ino, &inode);
+        if (res == EOK)
+        {
+            return 1;
+        }
+        if (res == ENOENT)
+        {
+            return 0;
+        }
+        return -res;
+    }
+
+    int raw_vfs_path2filetype(const eastl::string &path)
+    {
+        struct filesystem *fs = get_fs_from_path(path.c_str());
+        if (fs && fs->type == FAT32)
+        {
+            const char *rel_path = path.c_str();
+            if (strcmp(fs->path, "/") != 0)
+            {
+                size_t mplen = strlen(fs->path);
+                if (strncmp(rel_path, fs->path, mplen) == 0)
+                {
+                    if (rel_path[mplen] == '\0')
+                        rel_path = "/";
+                    else if (rel_path[mplen] == '/')
+                        rel_path += mplen;
+                }
+            }
+            struct fat32_entry *ep = ename((char *)rel_path);
+            if (!ep)
+                return -1;
+            int type = fs::FileTypes::FT_NORMAL;
+            if (ep->attribute & ATTR_DIRECTORY)
+                type = fs::FileTypes::FT_DIRECT;
+            eput(ep);
+            return type;
+        }
+
+        struct ext4_inode inode;
+        uint32 ino;
+        if (ext4_raw_inode_fill(path.c_str(), &ino, &inode) != EOK)
+        {
+            return -1;
+        }
+
+        struct ext4_sblock *sb = NULL;
+        ext4_get_sblock(path.c_str(), &sb);
+        if (sb == NULL)
+        {
+            return -1;
+        }
+
+        switch (ext4_inode_type(sb, &inode))
+        {
+        case EXT4_INODE_MODE_CHARDEV:
+            return fs::FileTypes::FT_DEVICE;
+        case EXT4_INODE_MODE_DIRECTORY:
+            return fs::FileTypes::FT_DIRECT;
+        case EXT4_INODE_MODE_FILE:
+            return fs::FileTypes::FT_NORMAL;
+        case EXT4_INODE_MODE_SOFTLINK:
+            return fs::FileTypes::FT_SYMLINK;
+        case EXT4_INODE_MODE_FIFO:
+            return fs::FileTypes::FT_PIPE;
+        case EXT4_INODE_MODE_SOCKET:
+            return fs::FileTypes::FT_DEVICE;
+        default:
+            printfRed("raw_vfs_path2filetype: unknown file type for path: %s\n", path.c_str());
+            return -1;
+        }
+    }
+
+    int raw_vfs_path_stat(const eastl::string &path, fs::Kstat *st)
+    {
+        struct filesystem *fs = get_fs_from_path(path.c_str());
+        if (fs && fs->type == FAT32)
+        {
+            const char *rel_path = path.c_str();
+            if (strcmp(fs->path, "/") != 0)
+            {
+                size_t mplen = strlen(fs->path);
+                if (strncmp(rel_path, fs->path, mplen) == 0)
+                {
+                    if (rel_path[mplen] == '\0')
+                        rel_path = "/";
+                    else if (rel_path[mplen] == '/')
+                        rel_path += mplen;
+                }
+            }
+            struct fat32_entry *ep = ename((char *)rel_path);
+            if (!ep)
+                return -ENOENT;
+
+            memset(st, 0, sizeof(fs::Kstat));
+            st->ino = (uint64)ep;
+            st->dev = fs->dev;
+            st->mode = 0;
+            if (ep->attribute & ATTR_DIRECTORY)
+                st->mode |= S_IFDIR;
+            else
+                st->mode |= S_IFREG;
+
+            st->mode |= 0755;
+            if (ep->attribute & ATTR_READ_ONLY)
+                st->mode &= ~0222;
+
+            st->nlink = 1;
+            st->uid = 0;
+            st->gid = 0;
+            st->size = ep->file_size;
+
+            struct mntfs *mnt = (struct mntfs *)fs->fs_data;
+            st->blksize = mnt ? mnt->byts_per_clus : 4096;
+            st->blocks = (st->size + 511) / 512;
+
+            eput(ep);
+            return EOK;
+        }
+
+        struct ext4_inode inode;
+        uint32 inode_num = 0;
+        int status = ext4_raw_inode_fill(path.c_str(), &inode_num, &inode);
+        if (status != EOK)
+        {
+            printfRed("vfs_path_stat: ext4_raw_inode_fill failed for %s, error: %d\n",
+                      path.c_str(), status);
+            return -status;
+        }
+
+        struct ext4_sblock *sb = NULL;
+        status = ext4_get_sblock(path.c_str(), &sb);
+        if (status != EOK)
+        {
+            return -status;
+        }
+
+        st->dev = 0;
+        st->ino = inode_num;
+        st->mode = ext4_inode_get_mode(sb, &inode);
+        st->nlink = ext4_inode_get_links_cnt(&inode);
+
+        uint32_t raw_uid = ext4_inode_get_uid(&inode);
+        uint32_t raw_gid = ext4_inode_get_gid(&inode);
+        if (raw_uid > 65535)
+        {
+            st->uid = 0;
+            printfRed("vfs_path_stat: invalid uid %u, using 0\n", raw_uid);
+        }
+        else
+        {
+            st->uid = raw_uid;
+        }
+
+        if (raw_gid > 65535)
+        {
+            st->gid = 0;
+            printfRed("vfs_path_stat: invalid gid %u, using 0\n", raw_gid);
+        }
+        else
+        {
+            st->gid = raw_gid;
+        }
+
+        st->rdev = ext4_inode_get_dev(&inode);
+        st->size = inode.size_lo;
+        st->blksize = 4096;
+        if (st->size == 0)
+        {
+            st->blocks = 0;
+        }
+        else
+        {
+            st->blocks = (st->size + 511) / 512;
+            if (st->blocks == 0 && st->size > 0)
+            {
+                st->blocks = 1;
+            }
+        }
+
+        st->st_atime_sec = ext4_inode_get_access_time(&inode);
+        st->st_atime_nsec = (inode.atime_extra >> 2) & 0x3FFFFFFF;
+        st->st_ctime_sec = ext4_inode_get_change_inode_time(&inode);
+        st->st_ctime_nsec = (inode.ctime_extra >> 2) & 0x3FFFFFFF;
+        st->st_mtime_sec = ext4_inode_get_modif_time(&inode);
+        st->st_mtime_nsec = (inode.mtime_extra >> 2) & 0x3FFFFFFF;
+        st->mnt_id = 0;
+
+        return EOK;
+    }
+
+    bool select_runtime_alias_path(const eastl::string &requested_path,
+                                   eastl::string &selected_path,
+                                   bool allow_parent_fallback)
+    {
+        selected_path = requested_path;
+
+        eastl::string remapped_path;
+        if (!remap_glibc_runtime_path(requested_path, remapped_path) || remapped_path == requested_path)
+        {
+            return false;
+        }
+
+        if (raw_vfs_is_file_exist(requested_path) == 1)
+        {
+            return false;
+        }
+
+        if (raw_vfs_is_file_exist(remapped_path) == 1)
+        {
+            selected_path = remapped_path;
+            return true;
+        }
+
+        if (!allow_parent_fallback)
+        {
+            return false;
+        }
+
+        eastl::string requested_parent = get_parent_path(requested_path);
+        eastl::string remapped_parent = get_parent_path(remapped_path);
+        if (raw_vfs_is_file_exist(requested_parent) != 1 &&
+            raw_vfs_is_file_exist(remapped_parent) == 1)
+        {
+            selected_path = remapped_path;
+            return true;
+        }
+
+        return false;
     }
 }
 
@@ -449,6 +926,89 @@ static mode_t determine_file_mode(uint flags, fs::FileTypes file_type, bool file
     return mode;
 }
 
+// 新建 inode 的权限应该只来源于调用者传入的 mode 与 umask，
+// 不能被这次 open() 的 O_RDONLY/O_WRONLY/O_RDWR 访问模式污染。
+static mode_t determine_created_inode_mode(fs::FileTypes file_type, int requested_mode)
+{
+    switch (file_type)
+    {
+    case fs::FileTypes::FT_NORMAL:
+        return apply_umask(requested_mode);
+    case fs::FileTypes::FT_PIPE:
+        return apply_umask(0644);
+    case fs::FileTypes::FT_DIRECT:
+        return apply_umask(0755);
+    case fs::FileTypes::FT_DEVICE:
+        return 0666;
+    default:
+        return apply_umask(requested_mode);
+    }
+}
+
+static int validate_lookup_prefix_permissions(const eastl::string &absolute_path)
+{
+    if (absolute_path.empty() || absolute_path[0] != '/')
+    {
+        return EOK;
+    }
+
+    size_t last_slash = absolute_path.find_last_of('/');
+    if (last_slash == eastl::string::npos || last_slash == 0)
+    {
+        return EOK;
+    }
+
+    proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+    if (current_proc == nullptr)
+    {
+        return -EFAULT;
+    }
+
+    eastl::string parent_path = absolute_path.substr(0, last_slash);
+
+    for (size_t start = 1; start < parent_path.length();)
+    {
+        size_t end = parent_path.find('/', start);
+        if (end == eastl::string::npos)
+            end = parent_path.length();
+
+        eastl::string current_path = parent_path.substr(0, end);
+
+        int exists = vfs_is_file_exist(current_path.c_str());
+        if (exists < 0)
+            return exists;
+        if (exists == 0)
+            return -ENOENT;
+
+        fs::Kstat st;
+        int stat_ret = vfs_path_stat(current_path.c_str(), &st, true);
+        if (stat_ret < 0)
+            return stat_ret;
+        if ((st.mode & S_IFMT) != S_IFDIR)
+            return -ENOTDIR;
+
+        uint32_t fsuid = current_proc->get_fsuid();
+        uint32_t fsgid = current_proc->get_fsgid();
+        if (fsuid != 0)
+        {
+            bool has_search_permission = false;
+            if (fsuid == st.uid)
+                has_search_permission = (st.mode & S_IXUSR) != 0;
+            else if (fsgid == st.gid)
+                has_search_permission = (st.mode & S_IXGRP) != 0;
+            else
+                has_search_permission = (st.mode & S_IXOTH) != 0;
+
+            if (!has_search_permission)
+                return -EACCES;
+        }
+
+        start = end + 1;
+    }
+
+    return EOK;
+}
+
 int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mode)
 {
     // printfYellow("[vfs_openat] : absolute_path=%s, flags=%o, mode=0%o\n", absolute_path.c_str(), flags, mode);
@@ -582,13 +1142,41 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
         }
     }
 
-    bool file_exists = (vfs_is_file_exist(resolved_path.c_str()) == 1);
+    eastl::string lookup_path = resolved_path;
+    select_runtime_alias_path(resolved_path, lookup_path, true);
+
+    int prefix_permission_ret = validate_lookup_prefix_permissions(lookup_path);
+    if (prefix_permission_ret < 0)
+    {
+        printfRed("vfs_openat: prefix permission/path check failed for %s, error: %d\n",
+                  lookup_path.c_str(), prefix_permission_ret);
+        return prefix_permission_ret;
+    }
+
+    bool file_exists = (vfs_is_file_exist(lookup_path.c_str()) == 1);
+
+    if (open_wants_write_access(flags) && vfs_is_readonly_path(lookup_path))
+    {
+        printfRed("vfs_openat: readonly mount rejects write-like open for %s\n", lookup_path.c_str());
+        return -EROFS;
+    }
 
     // 处理 O_EXCL + O_CREAT 组合：如果文件存在，应该失败
     if ((flags & O_CREAT) && (flags & O_EXCL) && file_exists)
     {
-        printfRed("vfs_openat: file %s already exists with O_CREAT|O_EXCL\n", resolved_path.c_str());
+        printfRed("vfs_openat: file %s already exists with O_CREAT|O_EXCL\n", lookup_path.c_str());
         return -EEXIST;
+    }
+
+    if (file_exists)
+    {
+        int perm_ret = validate_existing_open_permissions(lookup_path, flags);
+        if (perm_ret < 0)
+        {
+            printfRed("vfs_openat: permission denied for %s, flags=%s, err=%d\n",
+                      lookup_path.c_str(), flags_to_string(flags).c_str(), perm_ret);
+            return perm_ret;
+        }
     }
 
     // 处理 O_TMPFILE：创建匿名临时文件
@@ -646,6 +1234,7 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
             temp_flags |= O_CREAT | O_EXCL; // 确保创建新文件
 
             mode_t file_mode = determine_file_mode(temp_flags, fs::FileTypes::FT_NORMAL, false, mode);
+            mode_t inode_mode = determine_created_inode_mode(fs::FileTypes::FT_NORMAL, mode);
 
             fs::FileAttrs attrs;
             attrs.filetype = fs::FileTypes::FT_NORMAL;
@@ -675,14 +1264,14 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
             // }
 
             // 设置文件权限
-            status = ext4_mode_set(tmp_path.c_str(), file_mode);
+            status = ext4_mode_set(tmp_path.c_str(), inode_mode);
             if (status != EOK)
             {
                 printfGreen("vfs_openat: ext4_mode_set skipped for O_TMPFILE\n");
                 // 对于临时文件，这是正常的
             }
 
-            printfGreen("vfs_openat: created O_TMPFILE file, mode: 0%o\n", file_mode);
+            printfGreen("vfs_openat: created O_TMPFILE file, mode: 0%o\n", inode_mode);
 
             file = temp_file;
             return EOK;
@@ -692,17 +1281,17 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
     // 如果文件不存在且没有O_CREAT标志，返回错误
     if (!file_exists && (flags & O_CREAT) == 0)
     {
-        printfRed("vfs_openat: file %s does not exist, flags: %d\n", resolved_path.c_str(), flags);
+        printfRed("vfs_openat: file %s does not exist, flags: %d\n", lookup_path.c_str(), flags);
         return -ENOENT; // 文件不存在
     }
 
     // 确定要使用的实际路径和文件类型
-    eastl::string actual_path = resolved_path;
+    eastl::string actual_path = lookup_path;
     int type = -1;
 
     if (file_exists)
     {
-        type = vfs_path2filetype(resolved_path);
+        type = vfs_path2filetype(actual_path);
     }
     else
     {
@@ -758,6 +1347,7 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
         // 根据flags和文件类型确定适当的权限
         // 专门重写了个函数来确定这个权限
         mode_t file_mode = determine_file_mode(flags, fs::FileTypes::FT_NORMAL, file_exists, mode);
+        mode_t inode_mode = determine_created_inode_mode(fs::FileTypes::FT_NORMAL, mode);
 
         fs::FileAttrs attrs;
         attrs.filetype = fs::FileTypes::FT_NORMAL;
@@ -773,14 +1363,14 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
         {
             delete temp_file;
             printfRed("ext4_fopen2 failed with status: %d for path: %s\n", status, actual_path.c_str());
-            return -ENOMEM;
+            return -status;
         }
 
         // 如果是新创建的文件，设置文件权限到 ext4 inode
         bool is_newly_created = !file_exists && (flags & O_CREAT);
         if (is_newly_created)
         {
-            status = ext4_mode_set(actual_path.c_str(), file_mode);
+            status = ext4_mode_set(actual_path.c_str(), inode_mode);
             if (status != EOK)
             {
                 printfRed("ext4_mode_set failed for %s, status: %d\n", actual_path.c_str(), status);
@@ -799,10 +1389,10 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
 
             if (current_proc != nullptr)
             {
-                // 使用进程的有效用户ID和组ID来设置文件的所有者
-                // 这符合Linux的文件创建行为：新文件的owner是创建进程的euid/egid
-                current_uid = current_proc->_euid; // 使用有效用户ID
-                current_gid = current_proc->_egid; // 使用有效组ID
+                // Linux 文件系统相关操作应使用 fsuid/fsgid，而不是 euid/egid。
+                // 这样 setfsuid/setfsgid、setreuid/setregid 之后的访问控制才会正确。
+                current_uid = current_proc->get_fsuid();
+                current_gid = current_proc->get_fsgid();
             }
 
             // 设置文件的 uid 和 gid
@@ -937,7 +1527,8 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
         }
         else
         {
-            // O_RDWR - 这种情况下我们默认创建读端，实际应用中可能需要特殊处理
+            // O_RDWR 需要像 Linux FIFO 一样同时保留读端和写端，
+            // 否则同一个 fd 上的写入会被误判成 EBADF。
             is_write_end = false;
         }
 
@@ -945,7 +1536,16 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
         fs::pipe_file *temp_file = new fs::pipe_file(attrs, pipe, is_write_end, absolute_path);
 
         // 注册到全局管理器
-        fs::k_fifo_manager.open_fifo(absolute_path, is_write_end);
+        if (access_mode == O_RDWR)
+        {
+            temp_file->set_duplex_mode();
+            fs::k_fifo_manager.open_fifo(absolute_path, false);
+            fs::k_fifo_manager.open_fifo(absolute_path, true);
+        }
+        else
+        {
+            fs::k_fifo_manager.open_fifo(absolute_path, is_write_end);
+        }
 
         printfCyan("vfs_openat: Created FIFO/pipe file: %s, write_end: %d, mode: 0%o\n",
                    absolute_path.c_str(), is_write_end, temp_file->_stat.mode);
@@ -1010,56 +1610,9 @@ int vfs_is_dir(eastl::string &absolute_path)
 
 int vfs_path2filetype(eastl::string &absolute_path)
 {
-    struct filesystem *fs = get_fs_from_path(absolute_path.c_str());
-    if (fs && fs->type == FAT32) {
-        const char* rel_path = absolute_path.c_str();
-        if (strcmp(fs->path, "/") != 0) {
-             size_t mplen = strlen(fs->path);
-             if (strncmp(rel_path, fs->path, mplen) == 0) {
-                 if (rel_path[mplen] == '\0') rel_path = "/";
-                 else if (rel_path[mplen] == '/') rel_path += mplen;
-             }
-        }
-        struct fat32_entry *ep = ename((char*)rel_path);
-        if (!ep) return -1;
-        int type = fs::FileTypes::FT_NORMAL;
-        if (ep->attribute & ATTR_DIRECTORY) type = fs::FileTypes::FT_DIRECT;
-        eput(ep);
-        return type;
-    }
-
-    struct ext4_inode inode;
-    uint32 ino;
-    if (ext4_raw_inode_fill(absolute_path.c_str(), &ino, &inode) == EOK)
-    {
-        struct ext4_sblock *sb = NULL;
-        ext4_get_sblock(absolute_path.c_str(), &sb);
-        int type = -1;
-        type = ext4_inode_type(sb, &inode);
-        if (sb != NULL)
-        {
-            switch (type)
-            {
-            case EXT4_INODE_MODE_CHARDEV:
-                return fs::FileTypes::FT_DEVICE;
-            case EXT4_INODE_MODE_DIRECTORY:
-                return fs::FileTypes::FT_DIRECT;
-            case EXT4_INODE_MODE_FILE:
-                return fs::FileTypes::FT_NORMAL;
-            case EXT4_INODE_MODE_SOFTLINK:
-                return fs::FileTypes::FT_SYMLINK;
-            case EXT4_INODE_MODE_FIFO:
-                return fs::FileTypes::FT_PIPE;
-            case EXT4_INODE_MODE_SOCKET:
-                return fs::FileTypes::FT_DEVICE;
-            default:
-                printfRed("vfs_path2filetype: unknown file type %d for path: %s\n", type, absolute_path.c_str());
-                // panic("一直游到海水变蓝.");
-            }
-        }
-    }
-    // printfMagenta("path2filetype: %s not found\n", absolute_path.c_str());
-    return -1;
+    eastl::string lookup_path = absolute_path;
+    select_runtime_alias_path(absolute_path, lookup_path, false);
+    return raw_vfs_path2filetype(lookup_path);
 }
 
 int create_and_write_file(const char *path, const char *data)
@@ -1115,55 +1668,32 @@ int vfs_is_file_exist(const char *path)
         return 0;
     }
 
-    struct filesystem *fs = get_fs_from_path(resolved_path.c_str());
-    if (fs && fs->type == FAT32) {
-        const char* rel_path = resolved_path.c_str();
-        if (strcmp(fs->path, "/") != 0) {
-             size_t mplen = strlen(fs->path);
-             if (strncmp(rel_path, fs->path, mplen) == 0) {
-                 if (rel_path[mplen] == '\0') rel_path = "/";
-                 else if (rel_path[mplen] == '/') rel_path += mplen;
-             }
-        }
-        struct fat32_entry *ep = ename((char*)rel_path);
-        if (Printer::trace_group_enabled())
-            tracef("[vfs_is_file_exist] fat32 path=%s resolved=%s rel=%s entry=%p\n",
-                   path, resolved_path.c_str(), rel_path, ep);
-        if (ep) {
-            eput(ep);
-            return 1;
-        }
-        return 0;
-    }
-
-    struct ext4_inode inode;
-    uint32_t ino;
-    
-    // printfYellow("vfs_is_file_exist: checking path: %s -> %s\n", path, resolved_path.c_str());
-    // 尝试获取文件的inode信息
-    res = ext4_raw_inode_fill(resolved_path.c_str(), &ino, &inode);
-    // printfYellow("vfs_is_file_exist: ext4_raw_inode_fill returned: %d for path: %s\n", res, path);
-    // TODO : 这里有个特别诡异的现象，加了print下面这行会爆炸
-    //  printf("res:%p\n", res);
-
-    if (res == EOK)
+    int exists = raw_vfs_is_file_exist(resolved_path);
+    if (exists == 1)
     {
-        // 文件存在
-        // printfGreen("vfs_is_file_exist: file exists: %s\n", path);
         return 1;
     }
-    else if (res == ENOENT)
+
+    eastl::string remapped_path;
+    if (exists == 0 &&
+        remap_glibc_runtime_path(resolved_path, remapped_path) &&
+        remapped_path != resolved_path)
     {
-        // 文件不存在
+        exists = raw_vfs_is_file_exist(remapped_path);
+        if (exists == 1)
+        {
+            return 1;
+        }
+    }
+
+    if (exists == 0)
+    {
         printfRed("vfs_is_file_exist: file not found: %s\n", path);
         return 0;
     }
-    else
-    {
-        // 其他错误（如权限问题、路径错误等）
-        printfRed("vfs_is_file_exist: error %d for path: %s\n", res, path);
-        return -res; // 返回负的错误码
-    }
+
+    printfRed("vfs_is_file_exist: error %d for path: %s\n", -exists, path);
+    return exists;
 }
 uint vfs_read_file(const char *path, uint64 buffer_addr, size_t offset, size_t size)
 {
@@ -1183,6 +1713,8 @@ uint vfs_read_file(const char *path, uint64 buffer_addr, size_t offset, size_t s
         printfRed("Failed to resolve symlinks for path: %s, error: %d\n", path, res);
         return res;
     }
+
+    select_runtime_alias_path(resolved_path, resolved_path, false);
     
     struct filesystem *fs = get_fs_from_path(resolved_path.c_str());
     if (fs && fs->type == FAT32) {
@@ -1894,119 +2426,13 @@ int vfs_path_stat(const char *path, fs::Kstat *st, bool follow_symlinks)
         }
     }
 
-    struct filesystem *fs = get_fs_from_path(effective_path.c_str());
-    if (fs && fs->type == FAT32) {
-         const char* rel_path = effective_path.c_str();
-         if (strcmp(fs->path, "/") != 0) {
-             size_t mplen = strlen(fs->path);
-             if (strncmp(rel_path, fs->path, mplen) == 0) {
-                 if (rel_path[mplen] == '\0') rel_path = "/";
-                 else if (rel_path[mplen] == '/') rel_path += mplen;
-             }
-         }
-         struct fat32_entry *ep = ename((char*)rel_path);
-         if (!ep) return -ENOENT;
-         
-         memset(st, 0, sizeof(fs::Kstat));
-         st->ino = (uint64)ep;
-         st->dev = fs->dev;
-         
-         st->mode = 0;
-         if (ep->attribute & ATTR_DIRECTORY) st->mode |= S_IFDIR;
-         else st->mode |= S_IFREG;
-         
-         st->mode |= 0755;
-         if (ep->attribute & ATTR_READ_ONLY) st->mode &= ~0222;
-             
-         st->nlink = 1;
-         st->uid = 0;
-         st->gid = 0;
-         st->size = ep->file_size;
-         
-         struct mntfs *mnt = (struct mntfs *)fs->fs_data;
-         if (mnt) st->blksize = mnt->byts_per_clus;
-         else st->blksize = 4096;
-         
-         st->blocks = (st->size + 511) / 512;
-         
-         eput(ep);
-         
-         if (Printer::trace_group_enabled())
-             tracef("[vfs_path_stat] fat32 path=%s mode=0%o size=%u\n", path, st->mode, st->size);
-         return EOK;
-    }
+    select_runtime_alias_path(effective_path, effective_path, false);
 
-    struct ext4_inode inode;
-    uint32 inode_num = 0;
-    int status = ext4_raw_inode_fill(effective_path.c_str(), &inode_num, &inode);
+    int status = raw_vfs_path_stat(effective_path, st);
     if (status != EOK)
     {
-        printfRed("vfs_path_stat: ext4_raw_inode_fill failed for %s, error: %d\n",
-                  effective_path.c_str(), status);
-        return -status;
+        return status;
     }
-
-    struct ext4_sblock *sb = NULL;
-    status = ext4_get_sblock(effective_path.c_str(), &sb);
-    if (status != EOK)
-        return -status;
-
-    // 填充 stat 结构
-    st->dev = 0;
-    st->ino = inode_num;
-    st->mode = ext4_inode_get_mode(sb, &inode);
-    st->nlink = ext4_inode_get_links_cnt(&inode);
-
-    // 获取原始 uid 和 gid，进行范围检查
-    uint32_t raw_uid = ext4_inode_get_uid(&inode);
-    uint32_t raw_gid = ext4_inode_get_gid(&inode);
-
-    // 检查是否有异常值，如果有则使用默认值
-    if (raw_uid > 65535)
-    {
-        st->uid = 0; // 默认 root
-        printfRed("vfs_path_stat: invalid uid %u, using 0\n", raw_uid);
-    }
-    else
-    {
-        st->uid = raw_uid;
-    }
-
-    if (raw_gid > 65535)
-    {
-        st->gid = 0; // 默认 root group
-        printfRed("vfs_path_stat: invalid gid %u, using 0\n", raw_gid);
-    }
-    else
-    {
-        st->gid = raw_gid;
-    }
-
-    st->rdev = ext4_inode_get_dev(&inode);
-    st->size = inode.size_lo;
-    st->blksize = 4096;
-
-    // 计算所需的512字节块数
-    if (st->size == 0)
-    {
-        st->blocks = 0;
-    }
-    else
-    {
-        st->blocks = (st->size + 511) / 512;
-        if (st->blocks == 0 && st->size > 0)
-        {
-            st->blocks = 1;
-        }
-    }
-
-    st->st_atime_sec = ext4_inode_get_access_time(&inode);
-    st->st_atime_nsec = (inode.atime_extra >> 2) & 0x3FFFFFFF;
-    st->st_ctime_sec = ext4_inode_get_change_inode_time(&inode);
-    st->st_ctime_nsec = (inode.ctime_extra >> 2) & 0x3FFFFFFF;
-    st->st_mtime_sec = ext4_inode_get_modif_time(&inode);
-    st->st_mtime_nsec = (inode.mtime_extra >> 2) & 0x3FFFFFFF;
-    st->mnt_id = 0;
 
     if (Printer::trace_group_enabled())
         tracef("[vfs_path_stat] path=%s mode=0%o size=%u follow_symlinks=%s\n",
@@ -2254,6 +2680,10 @@ int vfs_truncate(fs::file *f, size_t length)
 }
 int vfs_chmod(eastl::string pathname, mode_t mode)
 {
+    if (vfs_is_readonly_path(pathname))
+    {
+        return -EROFS;
+    }
 
     if (vfs_is_file_exist(pathname.c_str()) != 1)
     {
@@ -2333,6 +2763,11 @@ int vfs_free_file(fs::file *file)
 
 int vfs_chown(const eastl::string &pathname, int owner, int group, bool follow_symlinks)
 {
+    if (vfs_is_readonly_path(pathname))
+    {
+        return -EROFS;
+    }
+
     // Basic existence check
     if (vfs_is_file_exist(pathname.c_str()) != 1)
     {
@@ -2439,6 +2874,8 @@ int vfs_mode_get(const eastl::string &pathname, uint32_t &mode, bool follow_syml
 
 int vfs_mode_set(const eastl::string &pathname, uint32_t mode, bool follow_symlinks)
 {
+    if (vfs_is_readonly_path(pathname))
+        return -EROFS;
     if (vfs_is_file_exist(pathname.c_str()) != 1)
         return -ENOENT;
     eastl::string target_path = pathname;
@@ -2461,6 +2898,65 @@ int vfs_mode_set(const eastl::string &pathname, uint32_t mode, bool follow_symli
         return -EACCES;
     }
     return 0;
+}
+
+int vfs_register_mount(const eastl::string &mount_path, bool read_only)
+{
+    if (mount_path.empty())
+        return -EINVAL;
+
+    eastl::string normalized_path = normalize_path(mount_path);
+    if (normalized_path.empty())
+        normalized_path = "/";
+
+    for (auto &entry : g_mount_overrides)
+    {
+        if (entry.path == normalized_path)
+        {
+            entry.read_only = read_only;
+            return 0;
+        }
+    }
+
+    MountOverride entry;
+    entry.path = normalized_path;
+    entry.read_only = read_only;
+    g_mount_overrides.push_back(entry);
+    return 0;
+}
+
+int vfs_unregister_mount(const eastl::string &mount_path)
+{
+    if (mount_path.empty())
+        return -EINVAL;
+
+    eastl::string normalized_path = normalize_path(mount_path);
+    if (normalized_path.empty())
+        normalized_path = "/";
+
+    for (auto it = g_mount_overrides.begin(); it != g_mount_overrides.end(); ++it)
+    {
+        if (it->path == normalized_path)
+        {
+            g_mount_overrides.erase(it);
+            return 0;
+        }
+    }
+
+    return -ENOENT;
+}
+
+bool vfs_is_readonly_path(const eastl::string &path)
+{
+    if (path.empty())
+        return false;
+
+    eastl::string normalized_path = normalize_path(path);
+    if (normalized_path.empty())
+        normalized_path = "/";
+
+    const MountOverride *entry = find_mount_override(normalized_path);
+    return entry != nullptr && entry->read_only;
 }
 
 bool is_lock_conflict(const struct flock &existing_lock, const struct flock &new_lock)

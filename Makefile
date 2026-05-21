@@ -208,6 +208,10 @@ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.c
 # 这里只对 proc_manager.cc 做局部豁免，保留其余文件的 -Werror 约束。
 $(BUILD_DIR)/proc/proc_manager.o: CXXFLAGS += -Wno-error=uninitialized -Wno-uninitialized
 
+# syscall_handler.cc 里同样会被 EASTL string 的 vendor 模板误报击中，
+# 继续做文件级豁免，避免把第三方模板假阳性扩散成全局降级。
+$(BUILD_DIR)/sys/syscall_handler.o: CXXFLAGS += -Wno-error=uninitialized -Wno-uninitialized
+
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.cc
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@

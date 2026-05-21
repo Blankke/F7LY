@@ -136,7 +136,9 @@ namespace mem
             printfRed("[Pte::set_data] 非法 PTE 指针: %p\n", _data_addr);
             return;
         }
-        *_data_addr |= data;
+        // set_data() 的语义应该是“覆盖整个 PTE”，而不是“按位追加”。
+        // 否则像 mprotect()/uvmclear() 这类需要清权限位的路径会静默失效。
+        *_data_addr = data;
     }
 
     uint64 Pte::get_flags()

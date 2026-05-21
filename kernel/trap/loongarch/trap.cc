@@ -67,7 +67,10 @@ void trap_manager::init()
 void trap_manager::inithart()
 {
   uint32 ecfg = (0U << CSR_ECFG_VS_SHIFT) | HWI_VEC | TI_VEC;
-  uint64 tcfg = 0x1000000UL | CSR_TCFG_EN | CSR_TCFG_PER;
+  // LoongArch 的 timer CSR 直接按周期数编程。这里必须与 tmm::cycles_per_tick()
+  // 保持一致，否则 sleep()/CPU 计时/interval timer 会共同漂移，LTP 的
+  // setitimer01 就会从毫秒级拖成几十秒。
+  uint64 tcfg = tmm::cycles_per_tick() | CSR_TCFG_EN | CSR_TCFG_PER;
 
   w_csr_ecfg(ecfg);
   w_csr_tcfg(tcfg);
@@ -165,6 +168,7 @@ void trap_manager::timertick()
 
   // Check for expired POSIX timers and send signals
   check_expired_timers();
+  proc::check_interval_timers(proc::k_pm.get_cur_pcb());
 
   // release the lock
   tickslock.release();
@@ -297,6 +301,14 @@ void trap_manager::usertrap()
     printf("usertrap(): unexpected trapcause %x pid=%d\n", r_csr_estat(), p->_pid);
     printf("            era=%p badi=%x,badv=%p\n", r_csr_era(), r_csr_badi(), r_csr_badv());
     p->_killed = 1; // loongarch这里先不改, riscv的改为使用scuase判断信号 @todo
+  }
+
+  if (which_dev == 2 && p->_last_user_tick > 0 && cur_tick == p->_last_user_tick)
+  {
+    // LoongArch 这里和 RISC-V 一样，timer tick 是在 devintr() 里推进的。
+    // 不补这一拍，用户态 CPU 时间不会随定时中断累计，VIRTUAL/PROF timer 会卡死。
+    p->_user_ticks += 1;
+    p->_kernel_entry_tick = tmm::get_ticks();
   }
 
   if (p->_killed)

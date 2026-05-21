@@ -32,6 +32,7 @@
 #include <bits/time.h>
 #include <linux/sysinfo.h>
 #include <linux/fs.h>
+#include <linux/mount.h>
 #include <linux/rtc.h>
 #include <termios.h>
 #include "fs/vfs/file/normal_file.hh"
@@ -99,6 +100,78 @@ namespace syscall
             unsigned char c_cc[19];
         };
         static_assert(sizeof(KernelTermios) == 36, "TCGETS must use Linux kernel termios ABI");
+
+        struct KernelTimeValOld
+        {
+            long tv_sec;
+            long tv_usec;
+        };
+
+        struct KernelITimerValOld
+        {
+            KernelTimeValOld it_interval;
+            KernelTimeValOld it_value;
+        };
+
+        constexpr uint64 k_usec_per_sec = 1000000ULL;
+        constexpr uint64 k_clone_args_size_ver0 = 64ULL;
+
+        bool timeval_to_usec_checked(const KernelTimeValOld &tv, uint64 &total_us)
+        {
+            if (tv.tv_sec < 0 || tv.tv_usec < 0 || tv.tv_usec >= (long)k_usec_per_sec)
+            {
+                return false;
+            }
+
+            uint64 sec = (uint64)tv.tv_sec;
+            if (sec > UINT64_MAX / k_usec_per_sec)
+            {
+                return false;
+            }
+
+            total_us = sec * k_usec_per_sec + (uint64)tv.tv_usec;
+            return true;
+        }
+
+        KernelTimeValOld usec_to_timeval(uint64 total_us)
+        {
+            KernelTimeValOld tv{};
+            tv.tv_sec = (long)(total_us / k_usec_per_sec);
+            tv.tv_usec = (long)(total_us % k_usec_per_sec);
+            return tv;
+        }
+
+        int validate_linux_clone_flags(uint64 flags)
+        {
+            // Linux 对 clone/clone3 的标志组合有几条硬约束：
+            // 1. 共享 signal handlers 必须同时共享地址空间；
+            // 2. 线程一定意味着共享 sighand + VM；
+            // 3. 共享 FS 状态与创建新 mount namespace 互斥。
+            if ((flags & CLONE_SIGHAND) && !(flags & CLONE_VM))
+            {
+                return -EINVAL;
+            }
+            if ((flags & CLONE_THREAD) && !(flags & CLONE_SIGHAND))
+            {
+                return -EINVAL;
+            }
+            if ((flags & CLONE_THREAD) && !(flags & CLONE_VM))
+            {
+                return -EINVAL;
+            }
+            if ((flags & CLONE_FS) && (flags & CLONE_NEWNS))
+            {
+                return -EINVAL;
+            }
+            return 0;
+        }
+
+        void fill_itimerval_from_snapshot(const proc::interval_timer_snapshot &snapshot,
+                                          KernelITimerValOld &dst)
+        {
+            dst.it_value = usec_to_timeval(snapshot.value_us);
+            dst.it_interval = usec_to_timeval(snapshot.interval_us);
+        }
 
         inline bool is_kernel_mapped_file_range(uint64 addr, uint64 size)
         {
@@ -250,6 +323,204 @@ namespace syscall
             uid = st.uid;
             gid = st.gid;
             return 0;
+        }
+
+        int check_directory_search_permission(const eastl::string &abs_path)
+        {
+            if (abs_path.empty() || abs_path[0] != '/')
+            {
+                return 0;
+            }
+
+            size_t last_slash = abs_path.find_last_of('/');
+            if (last_slash == eastl::string::npos || last_slash == 0)
+            {
+                return 0;
+            }
+
+            proc::Pcb *p = proc::k_pm.get_cur_pcb();
+            if (p == nullptr)
+            {
+                return -EFAULT;
+            }
+
+            const char *raw_path = abs_path.c_str();
+            for (size_t end = abs_path.find('/', 1);
+                 end != eastl::string::npos && end <= last_slash;
+                 end = abs_path.find('/', end + 1))
+            {
+                if (end == 0 || end > MAXPATH)
+                {
+                    return -ENAMETOOLONG;
+                }
+
+                char current_path[MAXPATH + 1] = {0};
+                memcpy(current_path, raw_path, end);
+                current_path[end] = '\0';
+
+                fs::Kstat st;
+                int stat_ret = vfs_path_stat(current_path, &st, true);
+                if (stat_ret < 0)
+                    return stat_ret;
+
+                if ((st.mode & S_IFMT) != S_IFDIR)
+                    return -ENOTDIR;
+
+                uint32_t fsuid = p->get_fsuid();
+                uint32_t fsgid = p->get_fsgid();
+                if (fsuid != 0)
+                {
+                    bool has_search_permission = false;
+                    if (fsuid == st.uid)
+                        has_search_permission = (st.mode & S_IXUSR) != 0;
+                    else if (fsgid == st.gid)
+                        has_search_permission = (st.mode & S_IXGRP) != 0;
+                    else
+                        has_search_permission = (st.mode & S_IXOTH) != 0;
+
+                    if (!has_search_permission)
+                        return -EACCES;
+                }
+            }
+
+            return 0;
+        }
+
+        int ensure_chmod_permission(const eastl::string &path, bool follow_symlinks)
+        {
+            proc::Pcb *p = proc::k_pm.get_cur_pcb();
+            if (p == nullptr)
+            {
+                return -EFAULT;
+            }
+            if (p->get_euid() == 0)
+            {
+                return 0;
+            }
+
+            uint32_t mode = 0;
+            uint32_t uid = 0;
+            uint32_t gid = 0;
+            int stat_ret = get_path_mode_owner(path, mode, uid, gid, follow_symlinks);
+            if (stat_ret < 0)
+            {
+                return stat_ret;
+            }
+
+            return p->get_euid() == uid ? 0 : -EPERM;
+        }
+
+        int clear_chown_mode_bits(const eastl::string &path, bool follow_symlinks)
+        {
+            uint32_t mode = 0;
+            int mode_ret = vfs_mode_get(path, mode, follow_symlinks);
+            if (mode_ret < 0)
+            {
+                return mode_ret;
+            }
+
+            if ((mode & S_IFMT) != S_IFREG)
+            {
+                return 0;
+            }
+
+            uint32_t new_mode = mode & ~S_ISUID;
+            if (mode & S_IXGRP)
+            {
+                new_mode &= ~S_ISGID;
+            }
+
+            if (new_mode == mode)
+            {
+                return 0;
+            }
+
+            return vfs_mode_set(path, new_mode, follow_symlinks);
+        }
+
+        int do_fchmodat(int dirfd, const eastl::string &pathname, mode_t mode, int flags)
+        {
+            if (flags != 0)
+            {
+                return -EINVAL;
+            }
+            if (pathname.empty())
+            {
+                return -ENOENT;
+            }
+
+            proc::Pcb *p = proc::k_pm.get_cur_pcb();
+            if (p == nullptr)
+            {
+                return -EFAULT;
+            }
+
+            eastl::string abs_pathname;
+            if (pathname[0] == '/')
+            {
+                abs_pathname = pathname;
+            }
+            else if (dirfd == AT_FDCWD)
+            {
+                abs_pathname = get_absolute_path(pathname.c_str(), p->_cwd_name.c_str());
+            }
+            else
+            {
+                fs::file *dir_file = p->get_open_file(dirfd);
+                if (!dir_file)
+                {
+                    return SYS_EBADF;
+                }
+                if (dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
+                {
+                    return SYS_ENOTDIR;
+                }
+                abs_pathname = get_absolute_path(pathname.c_str(), dir_file->_path_name.c_str());
+            }
+
+            if (abs_pathname.find("/proc/self/fd/") == 0)
+            {
+                eastl::string fd_str = abs_pathname.substr(14);
+                int fd = 0;
+                for (size_t i = 0; i < fd_str.size(); ++i)
+                {
+                    if (fd_str[i] < '0' || fd_str[i] > '9')
+                        break;
+                    fd = fd * 10 + (fd_str[i] - '0');
+                }
+
+                fs::file *target_file = p->get_open_file(fd);
+                if (!target_file)
+                {
+                    return SYS_EBADF;
+                }
+                if (target_file->lwext4_file_struct.flags & O_PATH)
+                {
+                    return SYS_EBADF;
+                }
+                abs_pathname = target_file->_path_name;
+            }
+
+            int prefix_perm_ret = check_directory_search_permission(abs_pathname);
+            if (prefix_perm_ret < 0)
+            {
+                return prefix_perm_ret;
+            }
+
+            fs::Kstat st;
+            int stat_ret = get_path_kstat(abs_pathname, st, true);
+            if (stat_ret < 0)
+            {
+                return stat_ret;
+            }
+
+            int perm_ret = ensure_chmod_permission(abs_pathname, true);
+            if (perm_ret < 0)
+            {
+                return perm_ret;
+            }
+
+            return vfs_chmod(abs_pathname, mode);
         }
     }
 
@@ -657,6 +928,10 @@ namespace syscall
     int SyscallHandler::_arg_addr(int arg_n, uint64 &out_addr)
     {
         uint64 raw_val = _arg_raw(arg_n);
+        if (raw_val >= MAXVA)
+        {
+            return -EFAULT;
+        }
         out_addr = raw_val;
         // if(is_bad_addr(raw_val))
         // {
@@ -1140,13 +1415,6 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_statx()
     {
-#ifdef LOONGARCH
-        eastl::string proc_name = proc::k_pm.get_cur_pcb()->_name;
-        if (proc_name.substr(0, 4) == "busy")
-        {
-            return 0;
-        }
-#endif
         using __u16 = uint16;
         using __u32 = uint32;
         using __s64 = int64;
@@ -1469,6 +1737,10 @@ namespace syscall
             printfRed("[sys_openat] Error copying path from user space\n");
             return cpres;
         }
+        if (pathname.empty())
+        {
+            return SYS_ENOENT;
+        }
 
         // 处理dirfd和路径
         eastl::string abs_pathname;
@@ -1495,12 +1767,6 @@ namespace syscall
                 {
                     printfRed("[SyscallHandler::sys_openat] 无效的dirfd: %d\n", dir_fd);
                     return SYS_EBADF; // 无效的文件描述符
-                }
-
-                // 检查dirfd是否以 O_PATH 标志打开
-                if (dir_file->lwext4_file_struct.flags & O_PATH)
-                {
-                    return -EBADF;
                 }
 
                 // 检查dirfd是否指向一个目录
@@ -1611,6 +1877,21 @@ namespace syscall
 
             target_file->dup(); // 增加引用计数
             return new_fd;
+        }
+
+        if ((flags & O_NOATIME) && fs::k_vfs.is_file_exist(abs_pathname.c_str()) == 1)
+        {
+            uint32_t file_uid = 0;
+            uint32_t file_gid = 0;
+            int owner_ret = vfs_owner_get(abs_pathname, file_uid, file_gid, true);
+            if (owner_ret < 0)
+            {
+                return owner_ret;
+            }
+            if (p->get_euid() != 0 && p->get_euid() != file_uid)
+            {
+                return -EPERM;
+            }
         }
 
         // 不知道什么套娃设计，这个b函数套了两层
@@ -2290,6 +2571,11 @@ namespace syscall
         uint64 clone_pid;
         printfCyan("[SyscallHandler::sys_clone] flags: %p, stack: %p, ptid: %p, tls: %p, ctid: %p\n",
                    flags, (void *)stack, (void *)ptid, (void *)tls, (void *)ctid);
+        int flag_ret = validate_linux_clone_flags((uint64)flags);
+        if (flag_ret < 0)
+        {
+            return flag_ret;
+        }
         clone_pid = proc::k_pm.clone(flags, stack, ptid, tls, ctid);
         // printfRed("[SyscallHandler::sys_clone] pid: [%d] tid: [%d] name: %s clone_pid: [%d]\n", proc::k_pm.get_cur_pcb()->_pid, proc::k_pm.get_cur_pcb()->_tid, proc::k_pm.get_cur_pcb()->_name, clone_pid);
         return clone_pid;
@@ -2317,9 +2603,8 @@ namespace syscall
             return cpres;
         }
 
-        // fs::Path specialpath(special);
-        // return specialpath.umount(flags);
-        ///@todo 先偷一手，同mount。
+        eastl::string abs_path = get_absolute_path(special.c_str(), cur->_cwd_name.c_str());
+        vfs_unregister_mount(abs_path);
         return 0; // 未实现
     }
     uint64 SyscallHandler::sys_mount()
@@ -2347,23 +2632,32 @@ namespace syscall
         if (_arg_addr(2, fstype_addr) < 0)
             return -1;
 
-        int cpres = mem::k_vmm.copy_str_in(*pt, dev, dev_addr, 100);
-        if (cpres < 0)
+        int cpres = 0;
+        if (dev_addr != 0)
         {
-            printfRed("[sys_mount Error copying old path from user space\n");
-            return cpres;
+            cpres = mem::k_vmm.copy_str_in(*pt, dev, dev_addr, 100);
+            if (cpres < 0)
+            {
+                printfRed("[sys_mount] Error copying source path from user space\n");
+                return cpres;
+            }
         }
+        if (mnt_addr == 0)
+            return -EFAULT;
         cpres = mem::k_vmm.copy_str_in(*pt, mnt, mnt_addr, 100);
         if (cpres < 0)
         {
-            printfRed("[sys_mount] Error copying old path from user space\n");
+            printfRed("[sys_mount] Error copying mount path from user space\n");
             return cpres;
         }
-        cpres = mem::k_vmm.copy_str_in(*pt, fstype, fstype_addr, 100);
-        if (cpres < 0)
+        if (fstype_addr != 0)
         {
-            printfRed("[sys_mount] Error copying old path from user space\n");
-            return cpres;
+            cpres = mem::k_vmm.copy_str_in(*pt, fstype, fstype_addr, 100);
+            if (cpres < 0)
+            {
+                printfRed("[sys_mount] Error copying filesystem type from user space\n");
+                return cpres;
+            }
         }
 
         if (_arg_int(3, flags) < 0)
@@ -2385,6 +2679,13 @@ namespace syscall
             return SYS_ENODEV; // 这个错误码实际上是不对的，只是为了偷loop相关测例
         }
         eastl::string abs_path = get_absolute_path(mnt.c_str(), p->_cwd_name.c_str()); //< 获取绝对路径
+        if (fs::k_vfs.is_file_exist(abs_path.c_str()) != 1)
+            return -ENOENT;
+        if (fs::k_vfs.path2filetype(abs_path) != fs::FileTypes::FT_DIRECT)
+            return -ENOTDIR;
+
+        bool read_only = (flags & MS_RDONLY) != 0;
+        vfs_register_mount(abs_path, read_only);
 
         // int ret = fs_mount(TMPDEV, EXT4, (char*)abs_path.c_str(), flags, (void*)data); //< 挂载
         ///@todo 没修好，直接return 0
@@ -3001,25 +3302,37 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_setgid()
     {
-        uint32_t gid; // 改为 uint32_t 类型
-        if (_arg_int(0, (int &)gid) < 0)
+        int gid_raw;
+        if (_arg_int(0, gid_raw) < 0 || gid_raw < 0)
             return -EINVAL;
+        uint32_t gid = (uint32_t)gid_raw;
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
 
-        // 权限检查：只有root或者设置为当前有效组ID才允许
-        if (p->_euid != 0 && gid != p->_egid && gid != p->_gid)
+        if (p->_euid == 0)
+        {
+            // Linux setgid(): 特权进程一次性更新 real/effective/saved/fs gid。
+            p->_gid = gid;
+            p->_egid = gid;
+            p->_sgid = gid;
+            p->_fsgid = gid;
+            return 0;
+        }
+
+        // 非特权进程只能把 effective gid 切换到 real/effective/saved gid 之一。
+        if (gid != p->_gid && gid != p->_egid && gid != p->_sgid)
             return -EPERM;
 
-        p->_gid = gid;
         p->_egid = gid;
+        p->_fsgid = gid;
         return 0;
     }
     uint64 SyscallHandler::sys_setuid()
     {
-        uint32_t uid; // 改为 uint32_t 类型
-        if (_arg_int(0, (int &)uid) < 0)
+        int uid_raw;
+        if (_arg_int(0, uid_raw) < 0 || uid_raw < 0)
             return -EINVAL;
+        uint32_t uid = (uint32_t)uid_raw;
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
 
@@ -3030,15 +3343,17 @@ namespace syscall
             p->_uid = uid;
             p->_euid = uid;
             p->_suid = uid; // 设置saved UID
+            p->_fsuid = uid;
         }
         else
         {
-            // 非特权用户只能设置为当前的real UID或effective UID
-            if (uid != p->_uid && uid != p->_euid)
+            // 非特权用户只能把 effective uid 切换到 real/effective/saved uid 之一。
+            if (uid != p->_uid && uid != p->_euid && uid != p->_suid)
                 return -EPERM;
 
             // 只设置effective UID，real UID和saved UID保持不变
             p->_euid = uid;
+            p->_fsuid = uid;
         }
 
         return 0;
@@ -3142,12 +3457,6 @@ namespace syscall
                 {
                     printfRed("[SyscallHandler::sys_fstatat] 无效的dirfd: %d\n", dirfd);
                     return SYS_EBADF; // 无效的文件描述符
-                }
-
-                // 检查dirfd是否以 O_PATH 标志打开
-                if (dir_file->lwext4_file_struct.flags & O_PATH)
-                {
-                    return -EBADF;
                 }
 
                 // 检查dirfd是否指向一个目录
@@ -5432,18 +5741,26 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_faccessat()
     {
-        // panic("未实现");
-        // #ifdef FS_FIX_COMPLETELY
-        int dirfd, mode, flags;
+        // Linux 原始 faccessat 系统调用只有 3 个参数：
+        //   faccessat(dirfd, pathname, mode)
+        // access() 在部分 glibc/LoongArch 组合下会直接走这条 raw syscall。
+        // 这里如果误把第 4 个寄存器当成 flags 读取，就会把垃圾值带进权限判断。
+        int dirfd, mode;
+        const int flags = 0;
         eastl::string pathname;
-        if (_arg_int(0, dirfd) < 0 || _arg_int(2, mode) < 0 || _arg_int(3, flags) < 0)
+        if (_arg_int(0, dirfd) < 0 || _arg_int(2, mode) < 0)
         {
             return -EFAULT; // 参数错误
         }
-        if (_arg_str(1, pathname, MAXPATH) < 0)
+        int path_ret = _arg_str(1, pathname, MAXPATH);
+        if (path_ret < 0)
         {
-            return -EFAULT; // 参数错误
+            return path_ret;
         }
+        if (pathname.empty())
+            return -ENOENT;
+        if (mode & ~(R_OK | W_OK | X_OK))
+            return -EINVAL;
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         // 处理dirfd和路径
         eastl::string abs_pathname;
@@ -5470,12 +5787,6 @@ namespace syscall
                 {
                     printfRed("[SyscallHandler::sys_faccessat] 无效的dirfd: %d\n", dirfd);
                     return SYS_EBADF; // 无效的文件描述符
-                }
-
-                // 检查dirfd是否以 O_PATH 标志打开
-                if (dir_file->lwext4_file_struct.flags & O_PATH)
-                {
-                    return -EBADF;
                 }
 
                 // 检查dirfd是否指向一个目录
@@ -5577,12 +5888,6 @@ namespace syscall
             }
         }
 
-        // 现在检查目标文件是否存在
-        if (fs::k_vfs.is_file_exist(abs_pathname.c_str()) != 1)
-        {
-            printfRed("[SyscallHandler::sys_faccessat] 文件不存在: %s\n", abs_pathname.c_str());
-            return SYS_ENOENT; // 文件不存在
-        }
         // 获取目标路径的权限/owner 信息，统一覆盖普通文件与虚拟文件。
         uint32_t file_mode, file_uid, file_gid;
         int r = get_path_mode_owner(abs_pathname, file_mode, file_uid, file_gid,
@@ -5592,6 +5897,10 @@ namespace syscall
             printfRed("[SyscallHandler::sys_faccessat] 无法获取文件属性: %s, error: %d\n",
                       abs_pathname.c_str(), r);
             return r;
+        }
+        if ((mode & W_OK) && vfs_is_readonly_path(abs_pathname))
+        {
+            return -EROFS;
         }
 
         // 获取当前进程的用户信息
@@ -6392,7 +6701,24 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_fchmodat2()
     {
-        return uint64();
+        int dirfd;
+        eastl::string pathname;
+        long mode_long;
+        int flags;
+
+        if (_arg_int(0, dirfd) < 0 ||
+            _arg_long(2, mode_long) < 0 ||
+            _arg_int(3, flags) < 0)
+        {
+            return SYS_EINVAL;
+        }
+        int rs = _arg_str(1, pathname, MAXPATH);
+        if (rs < 0)
+        {
+            return rs;
+        }
+
+        return do_fchmodat(dirfd, pathname, (mode_t)mode_long, flags);
     }
     uint64 SyscallHandler::sys_statfs()
     {
@@ -6854,7 +7180,16 @@ namespace syscall
                     }
                 }
 
-                // exceptfds暂时不支持，保持为空
+                if (exceptfds_addr != 0 && (orig_exceptfds[fd / 8] & (1 << (fd % 8))))
+                {
+                    fs::file *f = p->get_open_file(fd);
+                    if (f == nullptr)
+                    {
+                        printfRed("[SyscallHandler::sys_pselect6] Invalid exception fd: %d\n", fd);
+                        p->_sigmask = orig_sigmask;
+                        return SYS_EBADF;
+                    }
+                }
             }
 
             // 如果有就绪的文件描述符，退出循环
@@ -7133,8 +7468,68 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_setitimer()
     {
+        int which;
+        uint64 new_value_addr;
+        uint64 old_value_addr;
+
+        if (_arg_int(0, which) < 0)
+        {
+            return SYS_EINVAL;
+        }
+        if (_arg_addr(1, new_value_addr) < 0 || _arg_addr(2, old_value_addr) < 0)
+        {
+            return SYS_EFAULT;
+        }
+        if (!proc::is_valid_interval_timer_kind(which))
+        {
+            return SYS_EINVAL;
+        }
+        if (new_value_addr == 0)
+        {
+            return SYS_EFAULT;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (p == nullptr)
+        {
+            return SYS_ESRCH;
+        }
+
+        mem::PageTable *pt = p->get_pagetable();
+        if (pt == nullptr)
+        {
+            return SYS_EFAULT;
+        }
+
+        KernelITimerValOld new_timer{};
+        if (mem::k_vmm.copy_in(*pt, &new_timer, new_value_addr, sizeof(new_timer)) < 0)
+        {
+            return SYS_EFAULT;
+        }
+
+        uint64 value_us = 0;
+        uint64 interval_us = 0;
+        if (!timeval_to_usec_checked(new_timer.it_value, value_us) ||
+            !timeval_to_usec_checked(new_timer.it_interval, interval_us))
+        {
+            return SYS_EINVAL;
+        }
+
+        proc::interval_timer_snapshot old_timer{};
+        proc::set_interval_timer(p, which, value_us, interval_us,
+                                 old_value_addr != 0 ? &old_timer : nullptr);
+
+        if (old_value_addr != 0)
+        {
+            KernelITimerValOld old_timer_user{};
+            fill_itimerval_from_snapshot(old_timer, old_timer_user);
+            if (mem::k_vmm.copy_out(*pt, old_value_addr, &old_timer_user, sizeof(old_timer_user)) < 0)
+            {
+                return SYS_EFAULT;
+            }
+        }
+
         return 0;
-        panic("未实现该系统调用");
     }
     uint64 SyscallHandler::sys_sched_getaffinity()
     {
@@ -9083,23 +9478,14 @@ namespace syscall
             }
         }
 
-        // 构建页表权限标志
-        int perm = 0;
-        if (prot & PROT_READ)
-            perm |= PTE_R;
-        if (prot & PROT_WRITE)
-            perm |= PTE_W;
-        if (prot & PROT_EXEC)
-            perm |= PTE_X;
-
         if (vma_index == -1)
         {
             // 地址不在任何VMA中，直接调用protectpages修改页表权限
             printfYellow("[sys_mprotect] Address range [%p, %p) not found in any VMA, using protectpages\n",
                          (void *)addr, (void *)end_addr);
 
-            // 直接调用protectpages修改页表权限（非VMA上下文）
-            if (mem::k_vmm.protectpages(*pcb->get_pagetable(), addr, aligned_len, perm, false) < 0)
+            // 直接调用 protectpages() 按 POSIX prot 翻译页表权限（非 VMA 上下文）。
+            if (mem::k_vmm.protectpages(*pcb->get_pagetable(), addr, aligned_len, prot, false) < 0)
             {
                 printfRed("[sys_mprotect] protectpages failed for range [%p, %p)\n",
                           (void *)addr, (void *)end_addr);
@@ -9275,7 +9661,7 @@ namespace syscall
         }
 
         // 更新页表权限（VMA上下文，考虑懒分配）
-        if (mem::k_vmm.protectpages(*pcb->get_pagetable(), addr, aligned_len, perm, true) < 0)
+        if (mem::k_vmm.protectpages(*pcb->get_pagetable(), addr, aligned_len, prot, true) < 0)
         {
             printfRed("[sys_mprotect] protectpages failed for range [%p, %p), rolling back VMA changes\n",
                       (void *)addr, (void *)end_addr);
@@ -9363,6 +9749,49 @@ namespace syscall
         uint64 cgroup;       // cgroup 文件描述符
     };
 
+    static int copy_clone3_args_from_user(mem::PageTable &pt, uint64 args_addr, uint64 args_size, struct clone_args &args)
+    {
+        if (args_size < k_clone_args_size_ver0)
+        {
+            return SYS_EINVAL;
+        }
+
+        memset(&args, 0, sizeof(args));
+        uint64 copy_size = args_size < sizeof(args) ? args_size : sizeof(args);
+        if (mem::k_vmm.copy_in(pt, &args, args_addr, copy_size) != 0)
+        {
+            return SYS_EFAULT;
+        }
+
+        if (args_size > sizeof(args))
+        {
+            // Linux clone3 支持更大的用户结构体，但要求尾部额外字节全为 0。
+            // 如果尾部不可访问，应返回 EFAULT；如果非 0，则返回 E2BIG。
+            uint64 extra_addr = args_addr + sizeof(args);
+            uint64 extra_size = args_size - sizeof(args);
+            unsigned char extra_buf[32];
+            while (extra_size > 0)
+            {
+                size_t chunk = extra_size > sizeof(extra_buf) ? sizeof(extra_buf) : (size_t)extra_size;
+                if (mem::k_vmm.copy_in(pt, extra_buf, extra_addr, chunk) != 0)
+                {
+                    return SYS_EFAULT;
+                }
+                for (size_t i = 0; i < chunk; ++i)
+                {
+                    if (extra_buf[i] != 0)
+                    {
+                        return SYS_E2BIG;
+                    }
+                }
+                extra_addr += chunk;
+                extra_size -= chunk;
+            }
+        }
+
+        return 0;
+    }
+
     uint64 SyscallHandler::sys_clone3()
     {
         // panic("未实现该系统调用");
@@ -9385,31 +9814,15 @@ namespace syscall
             return SYS_EFAULT;
         }
         printf("[SyscallHandler::sys_clone3] args_addr: %p, args_size: %lu\n", args_addr, args_size);
-        // 验证参数大小
-        if (args_size < sizeof(uint64))
-        { // 至少要有 flags 字段
-            printfRed("[SyscallHandler::sys_clone3] Invalid args_size: %llu\n", args_size);
-            return SYS_EINVAL;
-        }
-
-        if (args_size > sizeof(struct clone_args))
-        {
-            printfRed("[SyscallHandler::sys_clone3] args_size too large: %llu\n", args_size);
-            return SYS_E2BIG;
-        }
-
-        // 从用户空间复制 clone_args 结构体
         proc::Pcb *cur = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = cur->get_pagetable();
 
-        // 初始化 args 结构体为 0
-        memset(&args, 0, sizeof(args));
-
-        // 只复制用户提供的大小，避免越界
-        if (mem::k_vmm.copy_in(*pt, &args, args_addr, args_size) != 0)
+        int copy_ret = copy_clone3_args_from_user(*pt, args_addr, args_size, args);
+        if (copy_ret < 0)
         {
-            printfRed("[SyscallHandler::sys_clone3] Error copying clone_args from user space\n");
-            return SYS_EFAULT;
+            printfRed("[SyscallHandler::sys_clone3] Invalid clone_args from user space: size=%llu ret=%d\n",
+                      args_size, copy_ret);
+            return copy_ret;
         }
 
         printfCyan("[SyscallHandler::sys_clone3] flags: 0x%lx, stack: %p, child_tid: %p, parent_tid: %p, tls: %p\n",
@@ -9427,6 +9840,13 @@ namespace syscall
         {
             printfRed("[SyscallHandler::sys_clone3] Invalid flags: 0x%lx\n", args.flags);
             return SYS_EINVAL;
+        }
+
+        int flag_ret = validate_linux_clone_flags(args.flags);
+        if (flag_ret < 0)
+        {
+            printfRed("[SyscallHandler::sys_clone3] Invalid flag combination: 0x%lx\n", args.flags);
+            return flag_ret;
         }
 
         // 暂时不支持某些复杂特性
@@ -10897,6 +11317,12 @@ namespace syscall
             return -EBADF;
         }
 
+        int perm_ret = ensure_chmod_permission(pathname, true);
+        if (perm_ret < 0)
+        {
+            return perm_ret;
+        }
+
         return vfs_chmod(pathname, mode);
     }
 
@@ -10905,10 +11331,8 @@ namespace syscall
         int dirfd;
         eastl::string pathname;
         long mode_long;
-        int flags;
         if (_arg_int(0, dirfd) < 0 ||
-            _arg_long(2, mode_long) < 0 ||
-            _arg_int(3, flags) < 0)
+            _arg_long(2, mode_long) < 0)
         {
             printfRed("[SyscallHandler::sys_fchmodat] 参数错误\n");
             return SYS_EINVAL; // 参数错误
@@ -10918,109 +11342,7 @@ namespace syscall
         {
             return rs; // 参数错误
         }
-        mode_t mode = (mode_t)mode_long;
-        printfCyan("[SyscallHandler::sys_fchmodat] dirfd=%d, pathname=%s, mode=%d, flags=%o\n", dirfd, pathname.c_str(), mode, flags);
-
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-
-        // 处理dirfd和路径
-        eastl::string abs_pathname;
-        // 检查是否为绝对路径
-        if (pathname[0] == '/')
-        {
-            // 绝对路径，忽略dirfd
-            abs_pathname = pathname;
-        }
-        else
-        {
-            // 相对路径，需要处理dirfd
-            if (dirfd == AT_FDCWD)
-            {
-                // 使用当前工作目录
-                abs_pathname = get_absolute_path(pathname.c_str(), p->_cwd_name.c_str());
-            }
-            else
-            {
-                // 使用dirfd指向的目录
-                fs::file *dir_file = p->get_open_file(dirfd);
-                if (!dir_file)
-                {
-                    printfRed("[SyscallHandler::sys_fchmodat] 无效的dirfd: %d\n", dirfd);
-                    return SYS_EBADF; // 无效的文件描述符
-                }
-                if (dir_file && dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
-                {
-                    printfRed("[SyscallHandler::sys_fchmodat] dirfd %d不是目录，文件类型: %d\n", dirfd, (int)dir_file->_attrs.filetype);
-                    return SYS_ENOTDIR; // 不是目录
-                }
-                // 检查dirfd是否以 O_PATH 标志打开
-                if (dir_file->lwext4_file_struct.flags & O_PATH)
-                {
-                    return -EBADF;
-                }
-
-                // 使用dirfd对应的路径作为基准目录
-                abs_pathname = get_absolute_path(pathname.c_str(), dir_file->_path_name.c_str());
-            }
-        }
-
-        printfCyan("[SyscallHandler::sys_fchmodat] 绝对路径: %s\n", abs_pathname.c_str());
-
-        // 检查是否是 /proc/self/fd/ 路径
-        if (abs_pathname.find("/proc/self/fd/") == 0)
-        {
-            // 解析文件描述符
-            eastl::string fd_str = abs_pathname.substr(14); // 跳过 "/proc/self/fd/"
-            int fd = 0;
-            for (size_t i = 0; i < fd_str.size(); ++i)
-            {
-                if (fd_str[i] < '0' || fd_str[i] > '9')
-                    break;
-                fd = fd * 10 + (fd_str[i] - '0');
-            }
-
-            fs::file *target_file = p->get_open_file(fd);
-            if (!target_file)
-            {
-                printfRed("[SyscallHandler::sys_fchmodat] 无效的文件描述符: %d\n", fd);
-                return SYS_EBADF;
-            }
-
-            // 检查是否以 O_PATH 标志打开，如果是则返回 EBADF
-            if (target_file->lwext4_file_struct.flags & O_PATH)
-            {
-                printfRed("[SyscallHandler::sys_fchmodat] O_PATH标志打开的文件不允许修改权限\n");
-                return SYS_EBADF;
-            }
-
-            // 使用实际文件路径
-            abs_pathname = target_file->_path_name;
-        }
-
-        fs::file *file = nullptr;
-        int res = fs::k_vfs.openat(abs_pathname, file, O_RDONLY);
-        if (res < 0)
-        {
-            printfRed("[SyscallHandler::sys_fchmodat] 无法打开文件: %s, 错误码: %d\n", abs_pathname.c_str(), res);
-            return res; // 返回错误码
-        }
-        proc::Pcb *cur_pcb = proc::k_pm.get_cur_pcb();
-        if (cur_pcb->_uid != 0 && cur_pcb->_uid != file->lwext4_file_struct.flags)
-            if (file->lwext4_file_struct.flags & O_PATH)
-            {
-                printfRed("[SyscallHandler::sys_fchmodat] O_PATH标志打开的文件不允许修改权限\n");
-                file->free_file();
-                return SYS_EBADF; // 无效的文件描述符
-            }
-        // 检查文件是否存在
-
-        file->free_file();
-        if (fs::k_vfs.is_file_exist(abs_pathname.c_str()) != 1)
-        {
-            printfRed("[SyscallHandler::sys_fchmodat] 文件不存在: %s\n", abs_pathname.c_str());
-            return SYS_ENOENT; // 文件不存在
-        }
-        return vfs_chmod(abs_pathname, mode);
+        return do_fchmodat(dirfd, pathname, (mode_t)mode_long, 0);
     }
     uint64 SyscallHandler::sys_fchownat()
     {
@@ -11075,6 +11397,14 @@ namespace syscall
                 target_path = f->_path_name;
             }
 
+            if (!target_path.empty() && target_path[0] != '/')
+            {
+                target_path = get_absolute_path(target_path.c_str(), p->_cwd_name.c_str());
+            }
+
+            if (vfs_is_readonly_path(target_path))
+                return SYS_EROFS;
+
             // 权限与语义检查
             bool privileged = (p && p->get_euid() == 0);
             // 如果要修改owner且非特权，返回EPERM
@@ -11098,20 +11428,9 @@ namespace syscall
             if (rc < 0)
                 return rc;
 
-            // 非特权变更：清除 S_ISUID 和条件清除 S_ISGID
-            if (!privileged)
-            {
-                uint32_t mode = 0;
-                int mg = vfs_mode_get(target_path, mode, /*follow_symlinks*/ true);
-                if (mg == EOK)
-                {
-                    uint32_t new_mode = mode & ~S_ISUID;
-                    if (mode & S_IXGRP)
-                        new_mode &= ~S_ISGID;
-                    if (new_mode != mode)
-                        vfs_mode_set(target_path, new_mode, /*follow_symlinks*/ true);
-                }
-            }
+            int clear_ret = clear_chown_mode_bits(target_path, /*follow_symlinks*/ true);
+            if (clear_ret < 0)
+                return clear_ret;
             return 0;
         }
 
@@ -11140,7 +11459,6 @@ namespace syscall
                     printfRed("[SyscallHandler::sys_fchownat] dirfd %d不是目录，文件类型: %d\n", dirfd, (int)dir_file->_attrs.filetype);
                     return SYS_ENOTDIR;
                 }
-                // 允许 O_PATH 作为基目录
                 abs_pathname = get_absolute_path(pathname.c_str(), dir_file->_path_name.c_str());
             }
         }
@@ -11161,6 +11479,14 @@ namespace syscall
                 return SYS_EBADF;
             abs_pathname = target_file->_path_name; // 允许 O_PATH
         }
+
+        if (!abs_pathname.empty() && abs_pathname[0] != '/')
+        {
+            abs_pathname = get_absolute_path(abs_pathname.c_str(), p->_cwd_name.c_str());
+        }
+
+        if (vfs_is_readonly_path(abs_pathname))
+            return SYS_EROFS;
 
         // 权限判断
         bool privileged = (p && p->get_euid() == 0);
@@ -11184,19 +11510,9 @@ namespace syscall
         if (rc < 0)
             return rc;
 
-        if (!privileged)
-        {
-            uint32_t mode = 0;
-            int mg = vfs_mode_get(abs_pathname, mode, /*follow_symlinks*/ !(flags & AT_SYMLINK_NOFOLLOW));
-            if (mg == EOK)
-            {
-                uint32_t new_mode = mode & ~S_ISUID;
-                if (mode & S_IXGRP)
-                    new_mode &= ~S_ISGID;
-                if (new_mode != mode)
-                    vfs_mode_set(abs_pathname, new_mode, /*follow_symlinks*/ !(flags & AT_SYMLINK_NOFOLLOW));
-            }
-        }
+        int clear_ret = clear_chown_mode_bits(abs_pathname, /*follow_symlinks*/ !(flags & AT_SYMLINK_NOFOLLOW));
+        if (clear_ret < 0)
+            return clear_ret;
         return 0;
     }
     uint64 SyscallHandler::sys_fchown()
@@ -11236,13 +11552,18 @@ namespace syscall
         if (uid == -1 && gid == -1)
             return 0;
 
-        // owner 变更需要特权
-        if (uid != -1 && !privileged)
-            return -EPERM;
-
         eastl::string path = f->_path_name;
         if (path.empty())
             return -EBADF;
+        if (path[0] != '/')
+            path = get_absolute_path(path.c_str(), p->_cwd_name.c_str());
+
+        if (vfs_is_readonly_path(path))
+            return -EROFS;
+
+        // owner 变更需要特权
+        if (uid != -1 && !privileged)
+            return -EPERM;
 
         // group 变更：非特权要求调用者是文件所有者，且组属于调用者
         if (gid != -1 && !privileged)
@@ -11261,20 +11582,9 @@ namespace syscall
         if (rc < 0)
             return rc;
 
-        // 非特权变更清位
-        if (!privileged)
-        {
-            uint32_t mode = 0;
-            int mg = vfs_mode_get(path, mode, /*follow_symlinks*/ true);
-            if (mg == EOK)
-            {
-                uint32_t new_mode = mode & ~S_ISUID;
-                if (mode & S_IXGRP)
-                    new_mode &= ~S_ISGID;
-                if (new_mode != mode)
-                    vfs_mode_set(path, new_mode, /*follow_symlinks*/ true);
-            }
-        }
+        int clear_ret = clear_chown_mode_bits(path, /*follow_symlinks*/ true);
+        if (clear_ret < 0)
+            return clear_ret;
         return 0;
     }
     uint64 SyscallHandler::sys_preadv()
@@ -11339,10 +11649,10 @@ namespace syscall
 
         case SYS_CLOCK_REALTIME_COARSE:
         case SYS_CLOCK_MONOTONIC_COARSE:
-            // 粗粒度时钟：较低精度但更高性能
-            // 通常使用jiffies，设为1毫秒
+            // 粗粒度时钟应返回真实的 tick 分辨率，而不是伪造的 1ms。
+            // 这样 LTP/用户态库才能按当前内核的时间基准推导容忍范围。
             resolution.tv_sec = 0;
-            resolution.tv_nsec = 1000000; // 1毫秒 = 1,000,000纳秒
+            resolution.tv_nsec = (long)tmm::ms_per_tick * 1000000L;
             break;
 
         case SYS_CLOCK_REALTIME_ALARM:
@@ -11698,6 +12008,7 @@ namespace syscall
         p->set_uid(new_ruid);
         p->set_euid(new_euid);
         p->set_suid(new_suid);
+        p->set_fsuid(new_euid);
 
         printfGreen("[SyscallHandler::sys_setreuid] 成功设置用户ID: ruid=%u, euid=%u, suid=%u\n",
                     new_ruid, new_euid, new_suid);
@@ -11931,8 +12242,8 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_setfsuid()
     {
-        uint32_t fsuid;
-        if (_arg_int(0, (int &)fsuid) < 0)
+        int fsuid_raw;
+        if (_arg_int(0, fsuid_raw) < 0)
             return -EINVAL;
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
@@ -11940,6 +12251,13 @@ namespace syscall
             return -ESRCH;
 
         uint32_t old_fsuid = p->_fsuid;
+
+        if (fsuid_raw == -1)
+        {
+            return old_fsuid;
+        }
+
+        uint32_t fsuid = (uint32_t)fsuid_raw;
 
         // 根据 Linux 标准：
         // 1. root 用户可以设置任意值
@@ -11957,8 +12275,8 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_setfsgid()
     {
-        uint32_t fsgid;
-        if (_arg_int(0, (int &)fsgid) < 0)
+        int fsgid_raw;
+        if (_arg_int(0, fsgid_raw) < 0)
             return -EINVAL;
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
@@ -11966,6 +12284,13 @@ namespace syscall
             return -ESRCH;
 
         uint32_t old_fsgid = p->_fsgid;
+
+        if (fsgid_raw == -1)
+        {
+            return old_fsgid;
+        }
+
+        uint32_t fsgid = (uint32_t)fsgid_raw;
 
         // 根据 Linux 标准：
         // 1. root 用户可以设置任意值
@@ -12521,10 +12846,15 @@ namespace syscall
         {
             return -EINVAL; // 参数错误
         }
-        if (_arg_str(1, pathname, MAXPATH) < 0)
+        int path_ret = _arg_str(1, pathname, MAXPATH);
+        if (path_ret < 0)
         {
-            return -EINVAL; // 参数错误
+            return path_ret;
         }
+        if (pathname.empty())
+            return -ENOENT;
+        if (mode & ~(R_OK | W_OK | X_OK))
+            return -EINVAL;
 
         // 检查 flags 参数的有效性
 #define AT_EACCESS 0x200               // Use effective user and group IDs for access checks
@@ -12562,12 +12892,6 @@ namespace syscall
                 {
                     printfRed("[SyscallHandler::sys_faccessat2] 无效的dirfd: %d\n", dirfd);
                     return SYS_EBADF; // 无效的文件描述符
-                }
-
-                // 检查dirfd是否以 O_PATH 标志打开
-                if (dir_file->lwext4_file_struct.flags & O_PATH)
-                {
-                    return -EBADF;
                 }
 
                 // 使用dirfd对应的路径作为基准目录
@@ -12673,13 +12997,6 @@ namespace syscall
             }
         }
 
-        // 现在检查目标文件是否存在
-        if (fs::k_vfs.is_file_exist(abs_pathname.c_str()) != 1)
-        {
-            printfRed("[SyscallHandler::sys_faccessat2] 文件不存在: %s\n", abs_pathname.c_str());
-            return SYS_ENOENT; // 文件不存在
-        }
-
         // 处理访问权限检查，统一从 stat 结果提取 mode/uid/gid。
         uint32_t file_mode, file_uid, file_gid;
         int r = get_path_mode_owner(abs_pathname, file_mode, file_uid, file_gid,
@@ -12689,6 +13006,10 @@ namespace syscall
             printfRed("[SyscallHandler::sys_faccessat2] 无法获取文件属性: %s, error: %d\n",
                       abs_pathname.c_str(), r);
             return r;
+        }
+        if ((mode & W_OK) && vfs_is_readonly_path(abs_pathname))
+        {
+            return -EROFS;
         }
 
         // 获取当前进程的用户信息
@@ -13729,7 +14050,10 @@ namespace syscall
             return SYS_EINVAL;
         }
 
-        // 保存旧的定时器规格（如果需要返回）
+        // 保存旧的定时器规格（如果需要返回）。
+        // 这里必须先把 old_value 安全拷回用户态，再提交新的定时器状态；
+        // 否则 old_value 指针坏掉时，Linux 应返回 EFAULT，但我们会错误地留下
+        // 一个已武装的定时器，最终把 LTP 用例异步打成 SIGALRM。
         tmm::itimerspec old_timer_spec;
         if (old_value_addr != 0)
         {
@@ -13743,28 +14067,27 @@ namespace syscall
                 old_timer_spec.it_interval.tv_sec = 0;
                 old_timer_spec.it_interval.tv_nsec = 0;
             }
+            if (mem::k_vmm.copy_out(*pt, old_value_addr, &old_timer_spec, sizeof(tmm::itimerspec)) < 0)
+            {
+                printfRed("[SyscallHandler::sys_timer_settime] Error copying old_value to user space\n");
+                return SYS_EFAULT;
+            }
         }
 
-        // 设置新的定时器规格
+        // 只有所有用户态地址都验证通过后，才真正提交新的定时器状态。
         g_timers[timer_slot].spec = new_timer_spec;
 
-        // 检查是否解除定时器（it_value 为零）
         if (new_timer_spec.it_value.tv_sec == 0 && new_timer_spec.it_value.tv_nsec == 0)
         {
-            // 解除定时器
             g_timers[timer_slot].armed = false;
             printfCyan("[SyscallHandler::sys_timer_settime] Timer %d disarmed\n", timerid);
         }
         else
         {
-            // 武装定时器
             g_timers[timer_slot].armed = true;
 
-            // 计算绝对过期时间
             tmm::timespec current_time;
             int clockid = g_timers[timer_slot].clockid;
-
-            // 获取当前时间（简化实现）
             if (tmm::k_tm.clock_gettime(static_cast<tmm::SystemClockId>(clockid), &current_time) < 0)
             {
                 printfRed("[SyscallHandler::sys_timer_settime] Failed to get current time\n");
@@ -13773,16 +14096,12 @@ namespace syscall
 
             if (flags & TIMER_ABSTIME)
             {
-                // 绝对时间模式：直接使用 it_value 作为过期时间
                 g_timers[timer_slot].expiry_time = new_timer_spec.it_value;
             }
             else
             {
-                // 相对时间模式：当前时间 + it_value
                 g_timers[timer_slot].expiry_time.tv_sec = current_time.tv_sec + new_timer_spec.it_value.tv_sec;
                 g_timers[timer_slot].expiry_time.tv_nsec = current_time.tv_nsec + new_timer_spec.it_value.tv_nsec;
-
-                // 处理纳秒溢出
                 if (g_timers[timer_slot].expiry_time.tv_nsec >= 1000000000)
                 {
                     g_timers[timer_slot].expiry_time.tv_sec++;
@@ -13793,16 +14112,6 @@ namespace syscall
             printfCyan("[SyscallHandler::sys_timer_settime] Timer %d armed, expires at %ld.%09ld\n",
                        timerid, g_timers[timer_slot].expiry_time.tv_sec,
                        g_timers[timer_slot].expiry_time.tv_nsec);
-        }
-
-        // 如果请求返回旧值，将其拷贝到用户空间
-        if (old_value_addr != 0)
-        {
-            if (mem::k_vmm.copy_out(*pt, old_value_addr, &old_timer_spec, sizeof(tmm::itimerspec)) < 0)
-            {
-                printfRed("[SyscallHandler::sys_timer_settime] Error copying old_value to user space\n");
-                return SYS_EFAULT;
-            }
         }
 
         printfCyan("[SyscallHandler::sys_timer_settime] Timer %d settime completed, flags: %d\n", timerid, flags);
@@ -14189,97 +14498,46 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_getitimer()
     {
-        // https://www.man7.org/linux/man-pages/man2/getitimer.2.html
         int which;
         uint64 curr_value_addr;
 
-        // 获取参数
         if (_arg_int(0, which) < 0)
         {
-            printfRed("[SyscallHandler::sys_getitimer] Error fetching which argument\n");
             return SYS_EINVAL;
         }
         if (_arg_addr(1, curr_value_addr) < 0)
         {
-            printfRed("[SyscallHandler::sys_getitimer] Error fetching curr_value argument\n");
-            return SYS_EINVAL;
+            return SYS_EFAULT;
         }
-
-        // 检查 curr_value 指针是否有效（不能为 NULL）
         if (curr_value_addr == 0)
         {
-            printfRed("[SyscallHandler::sys_getitimer] curr_value cannot be NULL\n");
-            return SYS_EINVAL;
+            return SYS_EFAULT;
         }
-
-        // 验证 which 参数是否有效
-        constexpr int ITIMER_REAL = 0;    // 实时定时器（墙钟时间）
-        constexpr int ITIMER_VIRTUAL = 1; // 虚拟定时器（用户态运行时间）
-        constexpr int ITIMER_PROF = 2;    // 性能分析定时器（用户态+内核态运行时间）
-
-        if (which < ITIMER_REAL || which > ITIMER_PROF)
+        if (!proc::is_valid_interval_timer_kind(which))
         {
-            printfRed("[SyscallHandler::sys_getitimer] Invalid which: %d\n", which);
             return SYS_EINVAL;
         }
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         if (p == nullptr)
         {
-            panic("[SyscallHandler::sys_getitimer] Current process is null\n");
             return SYS_ESRCH;
         }
-
-        // 定义 itimerval 结构体（Linux兼容）
-        struct itimerval
-        {
-            struct timeval it_interval; // 定时器间隔
-            struct timeval it_value;    // 当前值
-        };
-
-        struct timeval
-        {
-            long tv_sec;  // 秒
-            long tv_usec; // 微秒
-        };
-
-        itimerval curr_timer;
-
-        // 目前简化实现：所有定时器都返回零值
-        // 在完整实现中，应该从进程的定时器状态中获取实际值
-        curr_timer.it_interval.tv_sec = 0;
-        curr_timer.it_interval.tv_usec = 0;
-        curr_timer.it_value.tv_sec = 0;
-        curr_timer.it_value.tv_usec = 0;
-
-        // TODO: 实际实现应该根据定时器类型获取正确的值
-        switch (which)
-        {
-        case ITIMER_REAL:
-            // 实时定时器：基于墙钟时间，通常使用 SIGALRM 信号
-            printfCyan("[SyscallHandler::sys_getitimer] Getting ITIMER_REAL timer\n");
-            break;
-        case ITIMER_VIRTUAL:
-            // 虚拟定时器：仅在用户态运行时递减，使用 SIGVTALRM 信号
-            printfCyan("[SyscallHandler::sys_getitimer] Getting ITIMER_VIRTUAL timer\n");
-            break;
-        case ITIMER_PROF:
-            // 性能分析定时器：在用户态和内核态运行时都递减，使用 SIGPROF 信号
-            printfCyan("[SyscallHandler::sys_getitimer] Getting ITIMER_PROF timer\n");
-            break;
-        }
-
-        // 将定时器值拷贝到用户空间
         mem::PageTable *pt = p->get_pagetable();
-        if (mem::k_vmm.copy_out(*pt, curr_value_addr, &curr_timer, sizeof(itimerval)) < 0)
+        if (pt == nullptr)
         {
-            printfRed("[SyscallHandler::sys_getitimer] Error copying timer value to user space\n");
             return SYS_EFAULT;
         }
 
-        printfCyan("[SyscallHandler::sys_getitimer] Successfully returned timer values for which=%d\n", which);
+        proc::interval_timer_snapshot snapshot = proc::read_interval_timer(p, which);
+        KernelITimerValOld curr_timer{};
+        fill_itimerval_from_snapshot(snapshot, curr_timer);
+        if (mem::k_vmm.copy_out(*pt, curr_value_addr, &curr_timer, sizeof(curr_timer)) < 0)
+        {
+            return SYS_EFAULT;
+        }
 
-        return 0; // 成功
+        return 0;
     }
 
     // splice 辅助函数实现

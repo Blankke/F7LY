@@ -140,6 +140,7 @@ void trap_manager::timertick()
 
   // Check for expired POSIX timers and send signals
   check_expired_timers();
+  proc::check_interval_timers(proc::k_pm.get_cur_pcb());
 
   // printfCyan("[tm]  timertick here,p->addr:%x \n",Cpu::get_cpu()->get_cur_proc());
   // release the lock
@@ -307,6 +308,15 @@ void trap_manager::usertrap()
       proc::ipc::signal::handle_sync_signal();
       break;
     }
+  }
+
+  if (which_dev == 2 && p->_last_user_tick > 0 && cur_tick == p->_last_user_tick)
+  {
+    // 用户态时钟中断是在 devintr()/timertick() 里才把 ticks 加一。
+    // 如果按进入 usertrap() 时的旧 ticks 记账，这一整个时间片会被吃掉，
+    // ITIMER_VIRTUAL/ITIMER_PROF 与 times()/getrusage() 都会长期偏小甚至不前进。
+    p->_user_ticks += 1;
+    p->_kernel_entry_tick = tmm::get_ticks();
   }
 
   if (p->is_killed())

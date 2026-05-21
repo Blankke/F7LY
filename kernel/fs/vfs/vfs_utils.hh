@@ -27,6 +27,9 @@ int vfs_link(const char *oldpath, const char *newpath);
 int vfs_unlink_path(const char *path, bool remove_dir);
 int vfs_truncate(fs::file *f, size_t length);
 int vfs_chmod(eastl::string pathname, mode_t mode);
+int vfs_register_mount(const eastl::string &mount_path, bool read_only);
+int vfs_unregister_mount(const eastl::string &mount_path);
+bool vfs_is_readonly_path(const eastl::string &path);
 // Change owner/group for a path. If follow_symlinks is true, operate on the target of symlink
 // else operate on the link itself (lchown-like). Returns 0 on success, negative errno on error.
 int vfs_chown(const eastl::string &pathname, int owner, int group, bool follow_symlinks);
