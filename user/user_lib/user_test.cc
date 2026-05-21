@@ -467,27 +467,6 @@ int ltp_subset_test(bool is_musl, const char *const cases[])
         ltp_envp(is_musl));
 }
 
-int regression_rank_probe(void)
-{
-    // 按 total count 选一小批高分候选，做四组合定向复测。
-    static const char *const probe_cases[] = {
-        "mq_timedsend01",
-        "mq_timedreceive01",
-        "getaddrinfo_01",
-        "ppoll01",
-        "personality01",
-        "statvfs01",
-        NULL,
-    };
-
-    printf("#### RANK PROBE START ####\n");
-    init_env("/musl/");
-    ltp_subset_test(true, probe_cases);
-    ltp_subset_test(false, probe_cases);
-    printf("#### RANK PROBE END ####\n");
-    return 0;
-}
-
 int regression_suite_4d1444_riscv(void)
 {
     printf("#### REGRESSION START commit-4d1444b-riscv ####\n");
@@ -702,6 +681,8 @@ struct ltp_testcase ltp_testcases[] = {
     // 约定：第一个 {NULL, false, false} 就是当前默认跑测例的结束标记。
     // 下面继续保留的注释清单只作为候选记录，想打开哪个测例就把它挪到结束标记前面。
     // 新开以前完全没跑过的测例时，优先按 ltp_judge/ltp_rank.txt 的 total count 从高到低推进。
+    {"personality02", true, true},
+    {NULL, false, false},
     {"memfd_create01", true, true},
     {"splice07", true, true},
     {"epoll_ctl03", true, true},
@@ -923,6 +904,7 @@ struct ltp_testcase ltp_testcases[] = {
     {"openat01", true, true},     // pass
     {"pathconf01", true, true},   // pass
     {"pathconf02", true, true},   // pass1 fail5
+    {"personality01", true, true}, // 2026-05-21: personality(2) 补齐后四组合定向复测通过，total=18
     {"pipe01", true, true},       // 完全PASS
     {"pipe03", true, true},       // 完全PASS
     {"pipe06", true, true},       // 完全PASS
@@ -1019,7 +1001,6 @@ struct ltp_testcase ltp_testcases[] = {
 
     // 以下补齐历史完整 LTP 清单，默认全部保持注释状态。
 
-    // {"getrlimit03", true, true}, // 2026-05-21: 四组合定向复测失败，__NR_getrlimit 仍返回 ENOSYS
     // {"stream01", true, true}, // pass
     // {"stream02", true, true}, // pass
     // {"stream03", true, true}, // pass
@@ -1698,7 +1679,7 @@ struct ltp_testcase ltp_testcases[] = {
     // {"get_mempolicy01", true, true},
     // {"get_mempolicy02", true, true},
     // {"get_robust_list01", true, true},
-    // {"getaddrinfo_01", true, true},
+    // {"getaddrinfo_01", true, true}, // 2026-05-21: 四组合定向复测为 TCONF，/etc/hosts 缺失
     // {"getcontext01", true, true},
     // {"getcpu01", true, true}, //sched_setaffinity
     // {"getcwd04", true, true}, // Test needs at least 2 CPUs online 这个是因为 sched_getaffinity返回0，说不定它不用两个CPU
@@ -1736,7 +1717,7 @@ struct ltp_testcase ltp_testcases[] = {
     // {"getresuid03", true, true},
     // {"getresuid03_16", true, true},
     // {"getrlimit02", true, true}, //爆了
-    // {"getrlimit03", true, true},
+    // {"getrlimit03", true, true}, // 2026-05-21: 四组合定向复测失败，__NR_getrlimit 仍返回 ENOSYS
     // {"getrusage01", true, true},
     // {"getrusage02", true, true},
     // {"getrusage03", true, true},
@@ -2205,8 +2186,8 @@ struct ltp_testcase ltp_testcases[] = {
     // {"mq_notify02", true, true},
     // {"mq_notify03", true, true},
     // {"mq_open01", true, true},
-    // {"mq_timedreceive01", true, true},
-    // {"mq_timedsend01", true, true},
+    // {"mq_timedreceive01", true, true}, // 2026-05-21: 四组合定向复测失败，mq_open 仍返回 ENOSYS
+    // {"mq_timedsend01", true, true}, // 2026-05-21: 四组合定向复测失败，mq_open 仍返回 ENOSYS
     // {"mq_unlink01", true, true},
     // {"mqns_01", true, true},
     // {"mqns_02", true, true},
@@ -2346,7 +2327,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"perf_event_open01", true, true},
     // {"perf_event_open02", true, true},
     // {"perf_event_open03", true, true},
-    // {"personality01", true, true},
     // {"personality02", true, true},
     // {"pidfd_getfd01", true, true},
     // {"pidfd_getfd02", true, true},
@@ -2401,7 +2381,7 @@ struct ltp_testcase ltp_testcases[] = {
     // {"poll02", true, true},
     // {"posix_fadvise04", true, true},
     // {"posix_fadvise04_64", true, true},
-    // {"ppoll01", true, true},
+    // {"ppoll01", true, true}, // 2026-05-21: 四组合定向复测异常，RV 在 MASK_SIGNAL 子场景卡住，LA 在同子场景 kerneltrap
     // {"prctl01", true, true},
     // {"prctl02", true, true},
     // {"prctl03", true, true},

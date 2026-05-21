@@ -651,6 +651,7 @@ namespace syscall
         BIND_SYSCALL(fsync);     // todo
         BIND_SYSCALL(fdatasync); // todo
         BIND_SYSCALL(utimensat);
+        BIND_SYSCALL(personality);
         BIND_SYSCALL(exit);
         BIND_SYSCALL(exit_group);
         BIND_SYSCALL(set_tid_address);
@@ -12458,6 +12459,32 @@ namespace syscall
         // 返回旧的 umask 值
         return (uint64)old_umask;
     }
+
+    uint64 SyscallHandler::sys_personality()
+    {
+        constexpr uint32 k_query_personality = 0xffffffffU;
+
+        proc::Pcb *current = proc::k_pm.get_cur_pcb();
+        if (current == nullptr)
+        {
+            return -ESRCH;
+        }
+
+        // personality(2) 在这里先实现 LTP 需要的核心语义：
+        // - 返回修改前的 personality
+        // - 0xffffffff 仅查询、不修改
+        // - 其余值原样保存为当前进程 personality
+        uint32 old_personality = current->get_personality();
+        uint32 new_personality = (uint32)(_arg_raw(0) & 0xffffffffU);
+
+        if (new_personality != k_query_personality)
+        {
+            current->set_personality(new_personality);
+        }
+
+        return old_personality;
+    }
+
     uint64 SyscallHandler::sys_adjtimex()
     {
         panic("未实现该系统调用");

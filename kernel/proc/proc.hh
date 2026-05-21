@@ -150,6 +150,7 @@ namespace proc
         eastl::string _cwd_name; // 当前工作目录的路径字符串 @todo: 与_cwd冗余，需要统一
         ofile *_ofile;           // 打开文件描述符表，包含文件指针和close-on-exec标志
         mode_t _umask;           // 文件模式创建掩码，用于屏蔽新创建文件的权限位
+        uint32 _personality;     // 当前进程的 Linux personality(2) 状态
 
         /****************************************************************************************
          * 线程和同步原语
@@ -223,6 +224,8 @@ namespace proc
         // 仅重置内存管理器指针，不执行 cleanup；用于 PCB 复用或失败回滚时切断历史脏指针。
         void reset_memory_manager_ptr(ProcessMemoryManager* mm = nullptr) { _memory_manager = mm; }
         ProcessMemoryManager* get_memory_manager() { return _memory_manager; } // 获取内存管理器
+        uint32 get_personality() const { return _personality; }
+        void set_personality(uint32 personality) { _personality = personality; }
         void map_kstack(mem::PageTable &pt);
         fs::dentry *get_cwd() { return _cwd; }
         int get_priority();
