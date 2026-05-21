@@ -142,6 +142,7 @@ namespace proc
         _cwd_name.clear(); // 当前工作目录路径字符串
         _ofile = nullptr;  // 打开文件描述符表
         _umask = 0022;     // 默认umask值 (octal 022)
+        _personality = 0;  // 默认 personality 为 PER_LINUX
 
         /****************************************************************************************
          * 线程和同步原语

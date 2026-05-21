@@ -118,6 +118,7 @@ namespace syscall
         uint64 sys_madvise();
         uint64 sys_mremap();
         uint64 sys_lseek();
+        uint64 sys_personality();
         uint64 sys_renameat2();
         uint64 sys_readv();
         uint64 sys_clock_nanosleep();

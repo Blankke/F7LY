@@ -83,6 +83,7 @@ namespace syscall
         SYS_timerfd_create = 85,  // from rocket
         SYS_utimensat = 88,
         SYS_acct = 89, // from rocket
+        SYS_personality = 92,
         SYS_exit = 93,
         SYS_exit_group = 94,
         SYS_waitid = 95,

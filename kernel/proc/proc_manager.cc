@@ -401,6 +401,7 @@ namespace proc
                  ****************************************************************************************/
                 p->_cwd = nullptr;    // 当前工作目录（在具体使用时设置）
                 p->_cwd_name.clear(); // 清空当前工作目录路径
+                p->_personality = 0;  // 新进程默认使用 PER_LINUX
 
                 // 初始化文件描述符表
                 p->_ofile = new ofile();
@@ -586,6 +587,7 @@ namespace proc
         p->_cwd = nullptr;    // 清空当前工作目录
         p->_cwd_name.clear(); // 清空当前工作目录路径
         p->_umask = 0022;     // 重置umask为默认值
+        p->_personality = 0;  // 重置 personality，避免 PCB 复用带出历史状态
 
 	        // 注意：文件描述符表已在exit_proc中清理，这里只重置指针
 	        if (p->_ofile != nullptr)
@@ -1246,6 +1248,7 @@ namespace proc
         np->_cwd = p->_cwd;           // 继承当前工作目录
         np->_cwd_name = p->_cwd_name; // 继承当前工作目录名称
         np->_umask = p->_umask;       // 继承文件模式创建掩码
+        np->_personality = p->_personality; // 继承 personality，保持与 Linux 一致
 
         // ===== 身份信息和进程关系设置 =====
         // 继承父进程的身份信息
