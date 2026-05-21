@@ -945,6 +945,53 @@ static mode_t determine_created_inode_mode(fs::FileTypes file_type, int requeste
     }
 }
 
+// 新建 inode 后，owner/group 应继承当前进程的 fsuid/fsgid。
+// 这既符合 Linux 文件系统权限语义，也能避免“当前用户刚创建目录，
+// 但随后 chmod()/stat() 相关测例又被误判成非 owner”的问题。
+static int set_created_inode_owner_from_current_proc(const char *path)
+{
+    if (path == nullptr)
+    {
+        return -EFAULT;
+    }
+
+    proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+    uint32_t current_uid = 0;
+    uint32_t current_gid = 0;
+    uint32_t inherited_gid = 0;
+
+    if (current_proc != nullptr)
+    {
+        current_uid = current_proc->get_fsuid();
+        current_gid = current_proc->get_fsgid();
+        inherited_gid = current_gid;
+    }
+
+    // Linux 在 setgid 目录下创建新 inode 时，需要继承父目录的 gid。
+    // 这条规则直接影响 open10 这类测例里“父目录组归属是否被正确继承”。
+    eastl::string parent_path = get_parent_path(path);
+    if (!parent_path.empty())
+    {
+        eastl::string resolved_parent;
+        int resolve_ret = resolve_symlinks(parent_path, resolved_parent);
+        if (resolve_ret == EOK)
+        {
+            select_runtime_alias_path(resolved_parent, resolved_parent, false);
+
+            fs::Kstat parent_st{};
+            int parent_stat_ret = raw_vfs_path_stat(resolved_parent, &parent_st);
+            if (parent_stat_ret == EOK &&
+                (parent_st.mode & S_IFMT) == S_IFDIR &&
+                (parent_st.mode & S_ISGID) != 0)
+            {
+                inherited_gid = parent_st.gid;
+            }
+        }
+    }
+
+    return ext4_owner_set(path, current_uid, inherited_gid);
+}
+
 static int validate_lookup_prefix_permissions(const eastl::string &absolute_path)
 {
     if (absolute_path.empty() || absolute_path[0] != '/')
@@ -1389,29 +1436,14 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
             }
 
             // 设置文件所有者和组
-            // 获取当前进程的 uid 和 gid
-            proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
-            uint32_t current_uid = 0; // 默认值
-            uint32_t current_gid = 0; // 默认值
-
-            if (current_proc != nullptr)
-            {
-                // Linux 文件系统相关操作应使用 fsuid/fsgid，而不是 euid/egid。
-                // 这样 setfsuid/setfsgid、setreuid/setregid 之后的访问控制才会正确。
-                current_uid = current_proc->get_fsuid();
-                current_gid = current_proc->get_fsgid();
-            }
-
-            // 设置文件的 uid 和 gid
-            status = ext4_owner_set(actual_path.c_str(), current_uid, current_gid);
+            status = set_created_inode_owner_from_current_proc(actual_path.c_str());
             if (status != EOK)
             {
                 printfRed("ext4_owner_set failed for %s, status: %d\n", actual_path.c_str(), status);
             }
             else
             {
-                printfGreen("ext4_owner_set success for %s, uid: %u, gid: %u\n",
-                            actual_path.c_str(), current_uid, current_gid);
+                printfGreen("ext4_owner_set success for %s\n", actual_path.c_str());
             }
         }
 
@@ -2077,7 +2109,19 @@ int vfs_mkdir(const char *path, uint64_t mode)
     /* Apply umask to the mode and set directory permissions. */
     mode_t final_mode = apply_umask(mode);
     status = ext4_mode_set(path, final_mode);
-    return -status;
+    if (status != EOK)
+    {
+        return -status;
+    }
+
+    status = set_created_inode_owner_from_current_proc(path);
+    if (status != EOK)
+    {
+        printfRed("vfs_mkdir: ext4_owner_set failed for %s, status: %d\n", path, status);
+        return -status;
+    }
+
+    return EOK;
 }
 
 int vfs_fstat(fs::file *f, fs::Kstat *st)
@@ -2456,32 +2500,67 @@ int vfs_path_stat(const char *path, fs::Kstat *st, bool follow_symlinks)
 
 int vfs_link(const char *oldpath, const char *newpath)
 {
-    printfYellow("vfs_link: checking source file existence: %s\n", oldpath);
-
-    // 检查源文件是否存在
-    int file_exists = vfs_is_file_exist(oldpath);
-    printfYellow("vfs_link: vfs_is_file_exist returned: %d for path: %s\n", file_exists, oldpath);
-
-    if (file_exists != 1)
+    if (oldpath == nullptr || newpath == nullptr)
     {
-        printfRed("vfs_link: source file %s does not exist\n", oldpath);
+        return -EFAULT;
+    }
+
+    eastl::string old_path_str(oldpath);
+    eastl::string new_path_str(newpath);
+    if (old_path_str.empty() || new_path_str.empty())
+    {
         return -ENOENT;
     }
 
-    // 检查目标文件是否已存在
+    // hard link 默认不跟随最后一个符号链接组件。
+    // 这样 oldpath 是符号链接本身时，行为才能和 Linux 保持一致。
+    fs::Kstat source_st{};
+    int source_stat_ret = vfs_path_stat(oldpath, &source_st, false);
+    if (source_stat_ret < 0)
+    {
+        return source_stat_ret;
+    }
+
+    if ((source_st.mode & S_IFMT) == S_IFDIR)
+    {
+        printfRed("vfs_link: cannot create hard link to directory %s\n", oldpath);
+        return -EPERM;
+    }
+
+    // 创建目录项前，父目录至少要同时具备 search/write 权限。
+    // 这里仅在父目录可以可靠解析时提前拦截 EACCES，其余 ENOENT/ENOTDIR
+    // 仍交给底层 ext4_flink() 保持 Linux 的 errno 细节。
+    eastl::string new_parent_path = get_parent_path(new_path_str);
+    fs::Kstat new_parent_st{};
+    int new_parent_ret = vfs_path_stat(new_parent_path.c_str(), &new_parent_st, true);
+    if (new_parent_ret == EOK && (new_parent_st.mode & S_IFMT) == S_IFDIR)
+    {
+        proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+        if (current_proc == nullptr)
+        {
+            return -EFAULT;
+        }
+
+        int perm_ret = check_mode_bits_with_fsids(new_parent_st.mode,
+                                                  new_parent_st.uid,
+                                                  new_parent_st.gid,
+                                                  current_proc->get_fsuid(),
+                                                  current_proc->get_fsgid(),
+                                                  W_OK | X_OK);
+        if (perm_ret < 0)
+        {
+            return perm_ret;
+        }
+    }
+    else if (new_parent_ret == -EACCES || new_parent_ret == -ELOOP || new_parent_ret == -ENAMETOOLONG)
+    {
+        return new_parent_ret;
+    }
+
     if (vfs_is_file_exist(newpath) == 1)
     {
         printfRed("vfs_link: target file %s already exists\n", newpath);
         return -EEXIST;
-    }
-
-    // 检查源文件是否为目录
-    eastl::string old_path_str(oldpath);
-    int source_type = vfs_path2filetype(old_path_str);
-    if (source_type == fs::FileTypes::FT_DIRECT)
-    {
-        printfRed("vfs_link: cannot create hard link to directory %s\n", oldpath);
-        return -EPERM;
     }
 
     // 使用 ext4_flink 创建硬链接
@@ -2499,6 +2578,77 @@ int vfs_link(const char *oldpath, const char *newpath)
 
 int vfs_unlink_path(const char *path, bool remove_dir)
 {
+    if (path == nullptr)
+    {
+        return -EFAULT;
+    }
+
+    eastl::string absolute_path(path);
+    if (absolute_path.empty())
+    {
+        return -ENOENT;
+    }
+
+    // 删除目录项前，先按 Linux 语义检查：
+    // 1. 目标本身是否存在/类型是否匹配；
+    // 2. 父目录是否具备 write+search 权限；
+    // 3. sticky 目录下是否有权删除该条目。
+    fs::Kstat target_st{};
+    int target_stat_ret = vfs_path_stat(path, &target_st, false);
+    if (target_stat_ret < 0)
+    {
+        return target_stat_ret;
+    }
+
+    if (remove_dir)
+    {
+        if ((target_st.mode & S_IFMT) != S_IFDIR)
+        {
+            return -ENOTDIR;
+        }
+    }
+    else if ((target_st.mode & S_IFMT) == S_IFDIR)
+    {
+        return -EISDIR;
+    }
+
+    eastl::string parent_path = get_parent_path(absolute_path);
+    fs::Kstat parent_st{};
+    int parent_stat_ret = vfs_path_stat(parent_path.c_str(), &parent_st, true);
+    if (parent_stat_ret < 0)
+    {
+        return parent_stat_ret;
+    }
+
+    if ((parent_st.mode & S_IFMT) != S_IFDIR)
+    {
+        return -ENOTDIR;
+    }
+
+    proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+    if (current_proc == nullptr)
+    {
+        return -EFAULT;
+    }
+
+    int parent_perm_ret = check_mode_bits_with_fsids(parent_st.mode,
+                                                     parent_st.uid,
+                                                     parent_st.gid,
+                                                     current_proc->get_fsuid(),
+                                                     current_proc->get_fsgid(),
+                                                     W_OK | X_OK);
+    if (parent_perm_ret < 0)
+    {
+        return parent_perm_ret;
+    }
+
+    if ((parent_st.mode & S_ISVTX) != 0 && current_proc->get_fsuid() != 0 &&
+        current_proc->get_fsuid() != parent_st.uid &&
+        current_proc->get_fsuid() != target_st.uid)
+    {
+        return -EPERM;
+    }
+
     struct filesystem *fs = get_fs_from_path(path);
     if (fs && fs->type == FAT32)
     {
