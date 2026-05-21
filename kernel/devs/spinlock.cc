@@ -22,8 +22,7 @@
 		cpu->push_intr_off();
 
 		if ( is_held() ){
-			printf("lock name %s is already held\n", _name);
-			panic( "spinlock acquire" );
+			panic( "spinlock acquire: lock=%s cpu=%p", _name ? _name : "(unnamed)", cpu );
 		}
 		
 		eastl::atomic_thread_fence( eastl::memory_order_acq_rel );
@@ -36,8 +35,7 @@
 	void SpinLock::release()
 	{
 		if ( !is_held() ){
-			printf("lock name %s is already released\n", _name);
-			panic( "spinlock released." );
+			panic( "spinlock released: lock=%s cpu=%p owner=%p", _name ? _name : "(unnamed)", Cpu::get_cpu(), _locked.load() );
 		}
 		// _locked.store( nullptr, eastl::memory_order_acq_rel );
 		Cpu * cpu = Cpu::get_cpu();
@@ -51,5 +49,4 @@
 	{
 		return ( _locked.load() == Cpu::get_cpu() );
 	}
-
 

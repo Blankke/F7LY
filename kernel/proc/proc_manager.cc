@@ -885,6 +885,13 @@ namespace proc
         Pcb *p;
         int count = 0; // 记录发送信号的进程数量
         printfCyan("kill_signal: pid=%d, sig=%d\n", pid, sig);
+        auto wake_if_signal_interruptible = [](Pcb *target) {
+            if (target->_state == ProcState::SLEEPING &&
+                proc::ipc::signal::has_unmasked_signal_pending(target))
+            {
+                target->_state = ProcState::RUNNABLE;
+            }
+        };
 
         if (pid > 0)
         {
@@ -895,6 +902,7 @@ namespace proc
                 if (p->_pid == pid && p->_state != ProcState::UNUSED)
                 {
                     p->add_signal(sig);
+                    wake_if_signal_interruptible(p);
                     p->_lock.release();
                     return 0;
                 }
@@ -916,6 +924,7 @@ namespace proc
                 if (p->_pgid == target_pgid && p->_state != ProcState::UNUSED)
                 {
                     p->add_signal(sig);
+                    wake_if_signal_interruptible(p);
                     count++;
                 }
                 p->_lock.release();
@@ -937,6 +946,7 @@ namespace proc
                     (p->_uid == current->_euid || current->_euid == 0)) // 权限检查
                 {
                     p->add_signal(sig);
+                    wake_if_signal_interruptible(p);
                     count++;
                 }
                 p->_lock.release();
@@ -958,6 +968,7 @@ namespace proc
                     (p->_uid == current->_euid || current->_euid == 0)) // 权限检查
                 {
                     p->add_signal(sig);
+                    wake_if_signal_interruptible(p);
                     count++;
                 }
                 p->_lock.release();
@@ -1878,6 +1889,15 @@ namespace proc
 	        printfBlue("[exit_proc] proc %s pid %d exiting\n", p->_name, p->_pid);
 	        printf("[exit-mm] pcb=%p pid=%d tid=%d mm=%p\n", p, p->_pid, p->_tid, p->get_memory_manager());
 
+        // 这里要特别防住“长线才会踩中的退出竞态”：
+        // 进程在退出时会先清理 mm/ofile/sighand，再切到调度器。
+        // 如果这段窗口里被 timer interrupt 抢进 kerneltrap()，当前进程依旧是 RUNNING，
+        // 甚至可能被 yield() 走，半清理状态就会被别的内核路径观察到。
+        // 对 busybox 后台 sleep 被 kill 这类场景，这正是最像真实根因的长线窗口。
+        // 因此先手工关中断，直到拿到 p->_lock 并准备 call_sched() 为止，
+        // 最后把嵌套层数收敛回“只剩 p->_lock 的 push_intr_off()”。
+        Cpu::push_intr_off();
+
         /****************************************************************************************
          * Phase 1: 处理父子进程关系和进程状态
          ****************************************************************************************/
@@ -1980,6 +2000,7 @@ namespace proc
         }
 
         _wait_lock.release();
+        Cpu::pop_intr_off();
 
         printfYellow("[exit_proc] proc %s pid %d became zombie, memory freed\n", p->_name, p->_pid);
 

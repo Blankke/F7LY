@@ -8,6 +8,8 @@
 
 #include "tm/timer_manager.hh"
 #include "proc/proc_manager.hh"
+#include "proc/signal.hh"
+#include "sys/syscall_defs.hh"
 #include "klib.hh"
 #include "trap/riscv/trap.hh"
 #include "timer_interface.hh"
@@ -102,22 +104,30 @@ namespace tmm
 
 		tick_tmp = trap_mgr.ticks; // 记录开始时的tick值
 		
-		// 循环等待直到经过了n个tick
-		while ((int)trap_mgr.ticks - (int)tick_tmp < (int)n)
-		{
-			// printfGreen("ticks now:%d,ticks left:%d\n",(int)trap_mgr.ticks,(int)tick_tmp);
-			
-			// 检查进程是否被杀死
-			if (p->is_killed())
+			// 循环等待直到经过了n个tick
+			while ((int)trap_mgr.ticks - (int)tick_tmp < (int)n)
 			{
+				// printfGreen("ticks now:%d,ticks left:%d\n",(int)trap_mgr.ticks,(int)tick_tmp);
+				
+				// Linux/POSIX 语义下，未屏蔽信号应当打断可中断睡眠，
+				// 不能把已经收到终止信号的线程继续挂在 tick 睡眠队列里。
+				if (proc::ipc::signal::has_unmasked_signal_pending(p))
+				{
+					_lock.release();
+					return syscall::SYS_EINTR;
+				}
+
+				// 检查进程是否被杀死
+				if (p->is_killed())
+				{
 				_lock.release();
 				return -2; 
 			}
 			
-			// 进入睡眠状态，等待tick更新时被唤醒
-			// 当定时器中断发生时，会调用wakeup(&trap_mgr.ticks)来唤醒等待的进程
-			proc::k_pm.sleep(&trap_mgr.ticks, &_lock);
-		}
+				// 进入睡眠状态，等待tick更新时被唤醒
+				// 当定时器中断发生时，会调用wakeup(&trap_mgr.ticks)来唤醒等待的进程
+				proc::k_pm.sleep(&trap_mgr.ticks, &_lock);
+			}
 		_lock.release();
 
 		return 0;

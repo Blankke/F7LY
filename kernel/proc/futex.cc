@@ -10,32 +10,6 @@
 #include "proc/signal.hh"       // 添加信号处理定义
 namespace proc
 {
-    // 辅助函数：检查是否有未被屏蔽的致命信号需要处理
-    static bool has_fatal_signal_pending(Pcb *p)
-    {
-        if (p->_signal == 0) {
-            return false; // 没有待处理信号
-        }
-        
-        // 检查致命信号（无法被屏蔽的信号）
-        // SIGKILL 和 SIGSTOP 无法被屏蔽或忽略
-        using namespace ipc::signal;
-        return (p->_signal & (1ULL << (SIGKILL - 1))) != 0 ||
-               (p->_signal & (1ULL << (SIGSTOP - 1))) != 0;
-    }
-    
-    // 辅助函数：检查是否有可中断的信号需要处理
-    static bool has_interruptible_signal_pending(Pcb *p)
-    {
-        if (p->_signal == 0) {
-            return false; // 没有待处理信号
-        }
-        
-        // 检查所有未被屏蔽的信号
-        uint64 unmasked_signals = p->_signal & ~p->_sigmask;
-        return unmasked_signals != 0;
-    }
-
     void futex_sleep(void *chan, void *futex_addr)
     {
         Pcb *p = k_pm.get_cur_pcb();
@@ -55,7 +29,7 @@ namespace proc
         p->_chan = 0;
         
         // 如果被信号唤醒，清理futex_addr以便调用者知道这是信号中断
-        if (has_fatal_signal_pending(p) || has_interruptible_signal_pending(p)) {
+        if (ipc::signal::has_fatal_signal_pending(p) || ipc::signal::has_unmasked_signal_pending(p)) {
             p->_futex_addr = 0;
         }
     }
@@ -93,7 +67,7 @@ namespace proc
             while (rdtime() - timestamp < n)
             {
                 // 检查致命信号（无法屏蔽的信号如SIGKILL）
-                if (has_fatal_signal_pending(p))
+                if (ipc::signal::has_fatal_signal_pending(p))
                 {
                     // 被致命信号中断，清理状态
                     p->_futex_addr = 0;
@@ -102,7 +76,7 @@ namespace proc
                 }
                 
                 // 检查其他可中断的信号（考虑信号屏蔽）
-                if (has_interruptible_signal_pending(p))
+                if (ipc::signal::has_unmasked_signal_pending(p))
                 {
                     // 被可中断信号中断，清理状态
                     p->_futex_addr = 0;
@@ -135,7 +109,7 @@ namespace proc
         if (p->_futex_addr == 0)
         {
             // 检查是否是因为信号而被清零
-            if (has_fatal_signal_pending(p) || has_interruptible_signal_pending(p))
+            if (ipc::signal::has_fatal_signal_pending(p) || ipc::signal::has_unmasked_signal_pending(p))
             {
                 p->_lock.release();
                 return syscall::SYS_EINTR;  // 被信号中断

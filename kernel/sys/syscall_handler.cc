@@ -3000,36 +3000,69 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_nanosleep()
     {
-
-        int clockid;
-        int flags;
         timespec dur;
         uint64 dur_addr;
-        timespec rem;
         uint64 rem_addr;
-        if (_arg_int(0, clockid) < 0 || _arg_int(1, flags) < 0 ||
-            _arg_addr(0, dur_addr) < 0 || _arg_addr(1, rem_addr) < 0)
+        if (_arg_addr(0, dur_addr) < 0 || _arg_addr(1, rem_addr) < 0)
         {
             printfRed("[SyscallHandler::sys_nanosleep] Error fetching nanosleep arguments\n");
-            return -1;
+            return SYS_EFAULT;
         }
 
         proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = cur_proc->get_pagetable();
 
         if (dur_addr != 0)
+        {
             if (mem::k_vmm.copy_in(*pt, &dur, dur_addr, sizeof(dur)) < 0)
-                return -1;
-        // printfCyan("into nano sleep,dur_addr:%p.rem_addr:%p\n", dur_addr, rem_addr);
-        if (rem_addr != 0)
-            if (mem::k_vmm.copy_in(*pt, &rem, rem_addr, sizeof(rem)) < 0)
-                return -1;
+            {
+                return SYS_EFAULT;
+            }
+        }
+        else
+        {
+            return 0;
+        }
+
+        if (dur.tv_sec < 0 || dur.tv_nsec < 0 || dur.tv_nsec >= 1000000000L)
+        {
+            return SYS_EINVAL;
+        }
 
         tmm::timeval tm_;
         tm_.tv_sec = dur.tv_sec;
         tm_.tv_usec = dur.tv_nsec / 1000;
+        const uint64 requested_ns = static_cast<uint64>(dur.tv_sec) * 1000000000ULL +
+                                    static_cast<uint64>(dur.tv_nsec);
+        auto start_tv = tmm::k_tm.get_time_val();
+        const uint64 start_ns = static_cast<uint64>(start_tv.tv_sec) * 1000000000ULL +
+                                static_cast<uint64>(start_tv.tv_usec) * 1000ULL;
 
-        tmm::k_tm.sleep_from_tv(tm_);
+        int sleep_ret = tmm::k_tm.sleep_from_tv(tm_);
+        if (sleep_ret == syscall::SYS_EINTR)
+        {
+            if (rem_addr != 0)
+            {
+                auto now_tv = tmm::k_tm.get_time_val();
+                const uint64 now_ns = static_cast<uint64>(now_tv.tv_sec) * 1000000000ULL +
+                                      static_cast<uint64>(now_tv.tv_usec) * 1000ULL;
+                const uint64 elapsed_ns = now_ns > start_ns ? now_ns - start_ns : 0;
+                const uint64 remaining_ns = elapsed_ns >= requested_ns ? 0 : (requested_ns - elapsed_ns);
+                tmm::timespec rem_ts{};
+                rem_ts.tv_sec = remaining_ns / 1000000000ULL;
+                rem_ts.tv_nsec = remaining_ns % 1000000000ULL;
+                if (mem::k_vmm.copy_out(*pt, rem_addr, &rem_ts, sizeof(rem_ts)) < 0)
+                {
+                    return SYS_EFAULT;
+                }
+            }
+            return SYS_EINTR;
+        }
+
+        if (sleep_ret < 0)
+        {
+            return sleep_ret;
+        }
 
         return 0;
     }
@@ -6773,6 +6806,11 @@ namespace syscall
             return 0;
         }
 
+        if (req_ts.tv_sec < 0 || req_ts.tv_nsec < 0 || req_ts.tv_nsec >= 1000000000L)
+        {
+            return SYS_EINVAL;
+        }
+
         // 计算目标时间（纳秒）
         uint64 requested_ns = ((uint64)req_ts.tv_sec * 1000000000ULL) + req_ts.tv_nsec;
         // 用 get_time_val() 替换 get_time_ns()
@@ -6788,40 +6826,36 @@ namespace syscall
             total_ns = requested_ns - current_ns;
         }
 
+        tmm::timeval sleep_tv{};
+        sleep_tv.tv_sec = total_ns / 1000000000ULL;
+        sleep_tv.tv_usec = (total_ns % 1000000000ULL) / 1000ULL;
+
         auto start_tv = tmm::k_tm.get_time_val();
         uint64 start_ns = start_tv.tv_sec * 1000000000ULL + start_tv.tv_usec * 1000ULL;
-        while (true)
+        int sleep_ret = tmm::k_tm.sleep_from_tv(sleep_tv);
+        if (sleep_ret == syscall::SYS_EINTR)
         {
-            // 信号相关代码已忽略
-            // if (proc::k_pm.has_pending_signal(proc::k_pm.get_cur_pcb()))
-            // {
-            //     if (rem_addr != 0)
-            //     {
-            //         tmm::timespec rem_ts;
-            //         uint64 used = tmm::k_tm.get_time_ns() - start_ns;
-            //         if (used >= total_ns)
-            //         {
-            //             rem_ts.tv_sec = 0;
-            //             rem_ts.tv_nsec = 0;
-            //         }
-            //         else
-            //         {
-            //             uint64 left = total_ns - used;
-            //             rem_ts.tv_sec = left / 1000000000ULL;
-            //             rem_ts.tv_nsec = left % 1000000000ULL;
-            //         }
-            //         mem::k_vmm.copy_out(*proc::k_pm.get_cur_pcb()->get_pagetable(),
-            //                             rem_addr, &rem_ts, sizeof(rem_ts));
-            //     }
-            //     return SYS_EINTR;
-            // }
+            if ((flags & TIMER_ABSTIME) == 0 && rem_addr != 0)
+            {
+                auto now_tv = tmm::k_tm.get_time_val();
+                uint64 now_ns = now_tv.tv_sec * 1000000000ULL + now_tv.tv_usec * 1000ULL;
+                uint64 elapsed_ns = now_ns > start_ns ? now_ns - start_ns : 0;
+                uint64 remaining_ns = elapsed_ns >= total_ns ? 0 : (total_ns - elapsed_ns);
+                tmm::timespec rem_ts{};
+                rem_ts.tv_sec = remaining_ns / 1000000000ULL;
+                rem_ts.tv_nsec = remaining_ns % 1000000000ULL;
+                if (mem::k_vmm.copy_out(*proc::k_pm.get_cur_pcb()->get_pagetable(),
+                                        rem_addr, &rem_ts, sizeof(rem_ts)) < 0)
+                {
+                    return SYS_EFAULT;
+                }
+            }
+            return SYS_EINTR;
+        }
 
-            auto now_tv = tmm::k_tm.get_time_val();
-            uint64 now_ns = now_tv.tv_sec * 1000000000ULL + now_tv.tv_usec * 1000ULL;
-            if (now_ns - start_ns >= total_ns)
-                break;
-            // 暂时放弃 CPU
-            proc::k_scheduler.yield();
+        if (sleep_ret < 0)
+        {
+            return sleep_ret;
         }
 
         // 正常返回
@@ -11132,56 +11166,21 @@ namespace syscall
         pathname = get_absolute_path(pathname.c_str(), p->_cwd_name.c_str());
         printfCyan("[SyscallHandler::sys_truncate] pathname: %s, length: %ld\n", pathname.c_str(), length);
 
-        // 验证路径中的每个父目录都存在且是目录
-        eastl::string path_to_check = pathname;
-        size_t last_slash = path_to_check.find_last_of('/');
-        if (last_slash != eastl::string::npos && last_slash > 0)
+        int prefix_perm_ret = check_directory_search_permission(pathname);
+        if (prefix_perm_ret < 0)
         {
-            eastl::string parent_path = path_to_check.substr(0, last_slash);
-            eastl::string current_path = "";
-
-            size_t start = 1; // 跳过第一个 '/'
-            while (start < parent_path.length())
-            {
-                size_t end = parent_path.find('/', start);
-                if (end == eastl::string::npos)
-                    end = parent_path.length();
-
-                current_path += "/" + parent_path.substr(start, end - start);
-
-                int exists = fs::k_vfs.is_file_exist(current_path.c_str());
-                if (exists == 0)
-                {
-                    printfRed("[SyscallHandler::sys_truncate] ENOENT: directory component does not exist: %s\n", current_path.c_str());
-                    return SYS_ENOENT;
-                }
-                else if (exists == 1)
-                {
-                    int file_type = fs::k_vfs.path2filetype(current_path);
-                    if (file_type != fs::FileTypes::FT_DIRECT)
-                    {
-                        printfRed("[SyscallHandler::sys_truncate] ENOTDIR: component is not a directory: %s\n", current_path.c_str());
-                        return SYS_ENOTDIR;
-                    }
-                }
-
-                start = end + 1;
-            }
+            return prefix_perm_ret;
         }
 
-        // 检查目标文件是否存在
-        int file_exists = fs::k_vfs.is_file_exist(pathname.c_str());
-        if (file_exists != 1)
+        fs::Kstat st;
+        int stat_ret = get_path_kstat(pathname, st, true);
+        if (stat_ret < 0)
         {
-            printfRed("[SyscallHandler::sys_truncate] ENOENT: file does not exist: %s\n", pathname.c_str());
-            return SYS_ENOENT;
+            return stat_ret;
         }
 
-        // 检查目标是否是目录
-        int file_type = fs::k_vfs.path2filetype(pathname);
-        if (file_type == fs::FileTypes::FT_DIRECT)
+        if ((st.mode & S_IFMT) == S_IFDIR)
         {
-            printfRed("[SyscallHandler::sys_truncate] EISDIR: target is a directory: %s\n", pathname.c_str());
             return SYS_EISDIR;
         }
 

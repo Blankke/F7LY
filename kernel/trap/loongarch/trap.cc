@@ -19,6 +19,7 @@
 #include "cpu.hh"
 #include "physical_memory_manager.hh"
 #include "virtual_memory_manager.hh"
+#include "heap_memory_manager.hh"
 #include "vfs/file/normal_file.hh"
 #include "devs/loongarch/disk_driver.hh"
 #include "trap/interrupt_stats.hh"
@@ -416,9 +417,71 @@ void trap_manager::kerneltrap()
 
   if ((which_dev = devintr()) == 0)
   {
-    printf("estat %x\n", r_csr_estat());
-    printf("era=%p eentry=%p\n", r_csr_era(), r_csr_eentry());
-    panic("kerneltrap");
+    uint32 estat = r_csr_estat();
+    uint32 ecode = loongarch_exception_code(estat);
+    uint32 esubcode = loongarch_exception_subcode(estat);
+    uint64 badv = r_csr_badv();
+    uint32 badi = r_csr_badi();
+    uint32 crmd = r_csr_crmd();
+    uint32 ecfg = r_csr_ecfg();
+    uint64 extioi_isr = read_itr_cfg_64b(LOONGARCH_IOCSR_EXTIOI_ISR_BASE);
+    uint64 ls7a_status = *(volatile uint64 *)(LS7A_INT_STATUS_REG);
+    uint64 heap_cache = 0;
+    uint64 heap_used = 0;
+    uint32 heap_chunks = 0;
+    uint64 heap_free_pages = 0;
+    uint32 heap_max_block_pages = 0;
+    mem::k_hmm.get_stats(heap_cache, heap_used, heap_chunks, heap_free_pages, heap_max_block_pages);
+    proc::Pcb *cur = Cpu::get_cpu()->get_cur_proc();
+
+    if (cur != nullptr)
+    {
+      panic("kerneltrap: estat=%x ecode=%d esub=%d era=%p eentry=%p badv=%p badi=%x crmd=%x prmd=%x ecfg=%x pgdl=%p extioi=%p ls7a=%p proc=%s pid=%d tid=%d state=%d pt=%p mm=%p heap_used=%p heap_cache=%p heap_chunks=%d heap_free_pages=%p heap_max_block_bytes=%p",
+            estat,
+            ecode,
+            esubcode,
+            r_csr_era(),
+            r_csr_eentry(),
+            (void *)badv,
+            badi,
+            crmd,
+            prmd,
+            ecfg,
+            (void *)r_csr_pgdl(),
+            (void *)extioi_isr,
+            (void *)ls7a_status,
+            cur->_name,
+            cur->_pid,
+            cur->_tid,
+            cur->_state,
+            cur->get_pagetable(),
+            cur->get_memory_manager(),
+            (void *)heap_used,
+            (void *)heap_cache,
+            heap_chunks,
+            (void *)heap_free_pages,
+            (void *)(static_cast<uint64>(heap_max_block_pages) * PGSIZE));
+    }
+
+    panic("kerneltrap: estat=%x ecode=%d esub=%d era=%p eentry=%p badv=%p badi=%x crmd=%x prmd=%x ecfg=%x pgdl=%p extioi=%p ls7a=%p no-current-proc heap_used=%p heap_cache=%p heap_chunks=%d heap_free_pages=%p heap_max_block_bytes=%p",
+          estat,
+          ecode,
+          esubcode,
+          r_csr_era(),
+          r_csr_eentry(),
+          (void *)badv,
+          badi,
+          crmd,
+          prmd,
+          ecfg,
+          (void *)r_csr_pgdl(),
+          (void *)extioi_isr,
+          (void *)ls7a_status,
+          (void *)heap_used,
+          (void *)heap_cache,
+          heap_chunks,
+          (void *)heap_free_pages,
+          (void *)(static_cast<uint64>(heap_max_block_pages) * PGSIZE));
   }
 
   ///@todo!! 写完进程后修改
