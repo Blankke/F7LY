@@ -158,6 +158,8 @@ namespace proc
             void add_signal(proc::Pcb *p, int sig);
             void do_handle(proc::Pcb *p, int signum, sigaction *act);
             void sig_return();
+            bool has_fatal_signal_pending(Pcb *p);
+            bool has_unmasked_signal_pending(Pcb *p);
 
             // tool
             bool is_valid(int sig);

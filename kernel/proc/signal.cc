@@ -283,6 +283,27 @@ namespace proc
                 return 0;
             }
 
+            bool has_fatal_signal_pending(Pcb *p)
+            {
+                if (p == nullptr || p->_signal == 0)
+                {
+                    return false;
+                }
+
+                return (p->_signal & (1ULL << (SIGKILL - 1))) != 0 ||
+                       (p->_signal & (1ULL << (SIGSTOP - 1))) != 0;
+            }
+
+            bool has_unmasked_signal_pending(Pcb *p)
+            {
+                if (p == nullptr || p->_signal == 0)
+                {
+                    return false;
+                }
+
+                return (p->_signal & ~p->_sigmask) != 0;
+            }
+
             // 获取信号的默认行为
             SignalAction get_default_signal_action(int signum)
             {

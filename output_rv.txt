@@ -15273,3 +15273,1324 @@ testcase busybox dmesg success
 5	./ltp/scenario_groups
 29	./ltp/testscripts
 37	./ltp/testcases/bin/ftrace_stress
+2638	./ltp/testcases/bin/datafiles
+1604868	./ltp/testcases/bin
+7	./ltp/testcases/data/ar01
+43	./ltp/testcases/data/file01
+7	./ltp/testcases/data/ld01
+63	./ltp/testcases/data/ldd01
+59	./ltp/testcases/data/nm01
+7	./ltp/testcases/data/unzip01
+5	./ltp/testcases/data/binfmt_misc02
+5	./ltp/testcases/data/ima_kexec
+6	./ltp/testcases/data/ima_keys
+5	./ltp/testcases/data/ima_policy
+5	./ltp/testcases/data/ima_selinux
+9	./ltp/testcases/data/lvm
+5	./ltp/testcases/data/mc_member
+227	./ltp/testcases/data
+1605099	./ltp/testcases
+182	./ltp/libkirk
+526	./ltp/metadata
+1606439	./ltp
+1621956	.
+testcase busybox du success
+2
+testcase busybox expr 1 + 1 success
+testcase busybox false success
+testcase busybox true success
+/bin/ls
+testcase busybox which ls success
+Linux
+testcase busybox uname success
+ 03:37:36 up 0 min,  0 users,  load average: 0.00, 0.00, 0.00
+testcase busybox uptime success
+abcntestcase busybox printf "abcn" success
+PID   USER     TIME  COMMAND
+testcase busybox ps success
+/glibc
+testcase busybox pwd success
+              total        used        free      shared  buff/cache   available
+Mem:              0 18014398499090000           0           0    10391984    16445440
+-/+ buffers/cache:  18014398499090000    10391984
+Swap:             0           0           0
+testcase busybox free success
+Thu Jan  1 03:37:50 1970  0.000000 seconds
+testcase busybox hwclock success
+testcase busybox sh -c 'sleep 5' & ./busybox kill $! success
+[1;32marithoh[m                 [1;32miperf3[m                  [1;34mltp[m
+[1;34mbasic[m                   [1;32miperf_testcode.sh[m       [1;32mltp_testcode.sh[m
+[1;32mbasic_testcode.sh[m       [1;32mlat_cmd[m                 [1;32mlua[m
+[1;32mbusy[m                    [1;32mlat_connect[m             [1;32mlua_testcode.sh[m
+[1;32mbusybox[m                 [1;32mlat_ctx[m                 [1;32mmax_min.lua[m
+[0;0mbusybox_cmd.txt[m         [1;32mlat_dram_page[m           [1;32mmemsize[m
+[1;32mbusybox_testcode.sh[m     [1;32mlat_fcntl[m               [1;32mmhz[m
+[1;32mbw_file_rd[m              [1;32mlat_fifo[m                [1;32mmsleep[m
+[1;32mbw_mem[m                  [1;32mlat_fs[m                  [0;0mmulti.sh[m
+[1;32mbw_mmap_rd[m              [1;32mlat_http[m                [1;32mnetperf[m
+[1;32mbw_pipe[m                 [1;32mlat_mem_rd[m              [1;32mnetperf_testcode.sh[m
+[1;32mbw_tcp[m                  [1;32mlat_mmap[m                [1;32mnetserver[m
+[1;32mbw_unix[m                 [1;32mlat_ops[m                 [1;32mpar_mem[m
+[1;32mcache[m                   [1;32mlat_pagefault[m           [1;32mpar_ops[m
+[1;32mclock[m                   [1;32mlat_pipe[m                [1;32mpipe[m
+[1;32mcontext1[m                [1;32mlat_pmake[m               [1;32mrandom.lua[m
+[1;32mcyclictest[m              [1;32mlat_proc[m                [1;32mregister[m
+[1;32mcyclictest_testcode.sh[m  [1;32mlat_rand[m                [1;32mremove.lua[m
+[1;32mdate.lua[m                [1;32mlat_rpc[m                 [1;32mrhttp[m
+[1;32mdhry2[m                   [1;32mlat_select[m              [1;32mround_num.lua[m
+[1;32mdhry2reg[m                [1;32mlat_sem[m                 [1;32mrun-dynamic.sh[m
+[1;32mdisk[m                    [1;32mlat_sig[m                 [1;32mrun-static.sh[m
+[1;32mdlopen_dso.so[m           [1;32mlat_syscall[m             [1;32mruntest.exe[m
+[1;32mdouble[m                  [1;32mlat_tcp[m                 [1;32mseek[m
+[1;32menough[m                  [1;32mlat_udp[m                 [1;32mshort[m
+[1;32mentry-dynamic.exe[m       [1;32mlat_unix[m                [1;32msin30.lua[m
+[1;32mentry-static.exe[m        [1;32mlat_unix_connect[m        [1;32msort.lua[m
+[1;32mexecl[m                   [1;32mlat_usleep[m              [1;32mspawn[m
+[1;32mfile_io.lua[m             [1;34mlib[m                     [1;32mstream[m
+[1;32mfloat[m                   [1;32mlibc-bench[m              [1;32mstrings.lua[m
+[1;32mflushdisk[m               [1;32mlibcbench_testcode.sh[m   [1;32msyscall[m
+[1;32mfstime[m                  [1;32mlibctest_testcode.sh[m    [1;32mtest.sh[m
+[1;32mgetopt[m                  [1;32mline[m                    [1;32mtiming_o[m
+[0;0mgfx-x11[m                 [1;32mlmbench[m                 [1;32mtlb[m
+[1;32mhackbench[m               [1;32mlmbench_all[m             [1;32mtls_get_new-dtv_dso.so[m
+[1;32mhanoi[m                   [1;32mlmbench_testcode.sh[m     [0;0mtst.sh[m
+[1;32mhello[m                   [1;32mlmdd[m                    [0;0munixbench.logo[m
+[0;0mindex.base[m              [1;32mlmhttp[m                  [1;32munixbench_testcode.sh[m
+[1;32mint[m                     [1;32mlong[m                    [1;32mwhetstone-double[m
+[1;32miozone[m                  [1;32mloop_o[m
+[1;32miozone_testcode.sh[m      [1;32mlooper[m
+testcase busybox ls success
+testcase busybox sleep 1 success
+#### file opration test
+testcase busybox echo "#### file opration test" success
+testcase busybox touch test.txt success
+testcase busybox echo "hello world" > test.txt success
+hello world
+testcase busybox cat test.txt success
+l
+testcase busybox cut -c 3 test.txt success
+0000000 062550 066154 020157 067567 066162 005144
+0000014
+testcase busybox od test.txt success
+hello world
+testcase busybox head test.txt success
+hello world
+testcase busybox tail test.txt success
+00000000  68 65 6c 6c 6f 20 77 6f  72 6c 64 0a              |hello world.|
+0000000c
+testcase busybox hexdump -C test.txt success
+6f5902ac237024bdd0c176cb93063dc4  test.txt
+testcase busybox md5sum test.txt success
+testcase busybox echo "ccccccc" >> test.txt success
+testcase busybox echo "bbbbbbb" >> test.txt success
+testcase busybox echo "aaaaaaa" >> test.txt success
+testcase busybox echo "2222222" >> test.txt success
+testcase busybox echo "1111111" >> test.txt success
+testcase busybox echo "bbbbbbb" >> test.txt success
+1111111
+2222222
+aaaaaaa
+bbbbbbb
+ccccccc
+hello world
+testcase busybox sort test.txt | ./busybox uniq success
+  File: test.txt
+  Size: 60        	Blocks: 1          IO Block: 4096   regular file
+Device: 0h/0d	Inode: 3442        Links: 1
+Access: (0666/-rw-rw-rw-)  Uid: (    0/    root)   Gid: (    0/ UNKNOWN)
+Access: 1970-01-01 00:00:00.000000000 +0000
+Modify: 1970-01-01 00:00:00.000000000 +0000
+Change: 1970-01-01 00:00:00.000000000 +0000
+testcase busybox stat test.txt success
+hello world
+ccccccc
+bbbbbbb
+aaaaaaa
+2222222
+1111111
+bbbbbbb
+testcase busybox strings test.txt success
+        7         8        60 test.txt
+testcase busybox wc test.txt success
+testcase busybox [ -f test.txt ] success
+hello world
+ccccccc
+bbbbbbb
+aaaaaaa
+2222222
+1111111
+bbbbbbb
+testcase busybox more test.txt success
+testcase busybox rm test.txt success
+testcase busybox mkdir test_dir success
+testcase busybox mv test_dir test success
+testcase busybox rmdir test success
+echo "hello world" > test.txt
+grep hello busybox_cmd.txt
+testcase busybox grep hello busybox_cmd.txt success
+testcase busybox cp busybox_cmd.txt busybox_cmd.bak success
+testcase busybox rm busybox_cmd.bak success
+./busybox_cmd.txt
+testcase busybox find -name "busybox_cmd.txt" success
+#### OS COMP TEST GROUP END busybox-glibc ####
+[PASS] busybox (exit=0)
+#### OS COMP TEST GROUP START libctest-musl ####
+[RUN ] runtest.exe
+========== START entry-static.exe argv ==========
+Pass!
+========== END entry-static.exe argv ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe basename ==========
+Pass!
+========== END entry-static.exe basename ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe clocale_mbfuncs ==========
+Pass!
+========== END entry-static.exe clocale_mbfuncs ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe clock_gettime ==========
+Pass!
+========== END entry-static.exe clock_gettime ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe dirname ==========
+Pass!
+========== END entry-static.exe dirname ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe env ==========
+Pass!
+========== END entry-static.exe env ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe fdopen ==========
+Pass!
+========== END entry-static.exe fdopen ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe fnmatch ==========
+Pass!
+========== END entry-static.exe fnmatch ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe fscanf ==========
+Pass!
+========== END entry-static.exe fscanf ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe fwscanf ==========
+Pass!
+========== END entry-static.exe fwscanf ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe iconv_open ==========
+Pass!
+========== END entry-static.exe iconv_open ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe inet_pton ==========
+Pass!
+========== END entry-static.exe inet_pton ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe mbc ==========
+Pass!
+========== END entry-static.exe mbc ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe memstream ==========
+Pass!
+========== END entry-static.exe memstream ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe pthread_cancel_points ==========
+src/functional/pthread_cancel-points.c:144: res != PTHREAD_CANCELED failed (shm_open, canceled thread exit status)
+Pass!
+========== END entry-static.exe pthread_cancel_points ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe pthread_cancel ==========
+Pass!
+========== END entry-static.exe pthread_cancel ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe pthread_cond ==========
+Pass!
+========== END entry-static.exe pthread_cond ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe pthread_tsd ==========
+Pass!
+========== END entry-static.exe pthread_tsd ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe qsort ==========
+Pass!
+========== END entry-static.exe qsort ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe random ==========
+Pass!
+========== END entry-static.exe random ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe search_hsearch ==========
+Pass!
+========== END entry-static.exe search_hsearch ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe search_insque ==========
+Pass!
+========== END entry-static.exe search_insque ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe search_lsearch ==========
+Pass!
+========== END entry-static.exe search_lsearch ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe search_tsearch ==========
+Pass!
+========== END entry-static.exe search_tsearch ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe setjmp ==========
+Pass!
+========== END entry-static.exe setjmp ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe snprintf ==========
+Pass!
+========== END entry-static.exe snprintf ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe sscanf ==========
+Pass!
+========== END entry-static.exe sscanf ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe strftime ==========
+Pass!
+========== END entry-static.exe strftime ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe string ==========
+Pass!
+========== END entry-static.exe string ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe string_memcpy ==========
+Pass!
+========== END entry-static.exe string_memcpy ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe string_memmem ==========
+Pass!
+========== END entry-static.exe string_memmem ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe string_memset ==========
+Pass!
+========== END entry-static.exe string_memset ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe string_strchr ==========
+Pass!
+========== END entry-static.exe string_strchr ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe string_strcspn ==========
+Pass!
+========== END entry-static.exe string_strcspn ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe string_strstr ==========
+Pass!
+========== END entry-static.exe string_strstr ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe strptime ==========
+Pass!
+========== END entry-static.exe strptime ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe strtod ==========
+Pass!
+========== END entry-static.exe strtod ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe strtod_simple ==========
+Pass!
+========== END entry-static.exe strtod_simple ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe strtof ==========
+Pass!
+========== END entry-static.exe strtof ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe strtol ==========
+Pass!
+========== END entry-static.exe strtol ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe strtold ==========
+Pass!
+========== END entry-static.exe strtold ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe swprintf ==========
+Pass!
+========== END entry-static.exe swprintf ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe tgmath ==========
+Pass!
+========== END entry-static.exe tgmath ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe time ==========
+Pass!
+========== END entry-static.exe time ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe tls_align ==========
+Pass!
+========== END entry-static.exe tls_align ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe udiv ==========
+Pass!
+========== END entry-static.exe udiv ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe ungetc ==========
+Pass!
+========== END entry-static.exe ungetc ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe wcsstr ==========
+Pass!
+========== END entry-static.exe wcsstr ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe wcstol ==========
+Pass!
+========== END entry-static.exe wcstol ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe daemon_failure ==========
+Pass!
+========== END entry-static.exe daemon_failure ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe dn_expand_empty ==========
+Pass!
+========== END entry-static.exe dn_expand_empty ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe dn_expand_ptr_0 ==========
+Pass!
+========== END entry-static.exe dn_expand_ptr_0 ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe fgets_eof ==========
+Pass!
+========== END entry-static.exe fgets_eof ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe fgetwc_buffering ==========
+Pass!
+========== END entry-static.exe fgetwc_buffering ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe fpclassify_invalid_ld80 ==========
+Pass!
+========== END entry-static.exe fpclassify_invalid_ld80 ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe ftello_unflushed_append ==========
+Pass!
+========== END entry-static.exe ftello_unflushed_append ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe getpwnam_r_crash ==========
+Pass!
+========== END entry-static.exe getpwnam_r_crash ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe getpwnam_r_errno ==========
+Pass!
+========== END entry-static.exe getpwnam_r_errno ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe iconv_roundtrips ==========
+Pass!
+========== END entry-static.exe iconv_roundtrips ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe inet_ntop_v4mapped ==========
+Pass!
+========== END entry-static.exe inet_ntop_v4mapped ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe inet_pton_empty_last_field ==========
+Pass!
+========== END entry-static.exe inet_pton_empty_last_field ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe iswspace_null ==========
+Pass!
+========== END entry-static.exe iswspace_null ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe lrand48_signextend ==========
+Pass!
+========== END entry-static.exe lrand48_signextend ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe lseek_large ==========
+Pass!
+========== END entry-static.exe lseek_large ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe malloc_0 ==========
+Pass!
+========== END entry-static.exe malloc_0 ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe mbsrtowcs_overflow ==========
+Pass!
+========== END entry-static.exe mbsrtowcs_overflow ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe memmem_oob_read ==========
+Pass!
+========== END entry-static.exe memmem_oob_read ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe memmem_oob ==========
+Pass!
+========== END entry-static.exe memmem_oob ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe mkdtemp_failure ==========
+Pass!
+========== END entry-static.exe mkdtemp_failure ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe mkstemp_failure ==========
+Pass!
+========== END entry-static.exe mkstemp_failure ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe printf_1e9_oob ==========
+Pass!
+========== END entry-static.exe printf_1e9_oob ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe printf_fmt_g_round ==========
+Pass!
+========== END entry-static.exe printf_fmt_g_round ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe printf_fmt_g_zeros ==========
+Pass!
+========== END entry-static.exe printf_fmt_g_zeros ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe printf_fmt_n ==========
+Pass!
+========== END entry-static.exe printf_fmt_n ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe pthread_cancel_sem_wait ==========
+Pass!
+========== END entry-static.exe pthread_cancel_sem_wait ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe pthread_cond_smasher ==========
+Pass!
+========== END entry-static.exe pthread_cond_smasher ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe pthread_exit_cancel ==========
+Pass!
+========== END entry-static.exe pthread_exit_cancel ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe pthread_rwlock_ebusy ==========
+Pass!
+========== END entry-static.exe pthread_rwlock_ebusy ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe putenv_doublefree ==========
+Pass!
+========== END entry-static.exe putenv_doublefree ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe regex_backref_0 ==========
+Pass!
+========== END entry-static.exe regex_backref_0 ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe regex_bracket_icase ==========
+Pass!
+========== END entry-static.exe regex_bracket_icase ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe regex_ere_backref ==========
+Pass!
+========== END entry-static.exe regex_ere_backref ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe regex_escaped_high_byte ==========
+Pass!
+========== END entry-static.exe regex_escaped_high_byte ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe regex_negated_range ==========
+Pass!
+========== END entry-static.exe regex_negated_range ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe regexec_nosub ==========
+Pass!
+========== END entry-static.exe regexec_nosub ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe scanf_bytes_consumed ==========
+Pass!
+========== END entry-static.exe scanf_bytes_consumed ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe scanf_match_literal_eof ==========
+Pass!
+========== END entry-static.exe scanf_match_literal_eof ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe scanf_nullbyte_char ==========
+Pass!
+========== END entry-static.exe scanf_nullbyte_char ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe setvbuf_unget ==========
+Pass!
+========== END entry-static.exe setvbuf_unget ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe sigprocmask_internal ==========
+Pass!
+========== END entry-static.exe sigprocmask_internal ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe sscanf_eof ==========
+Pass!
+========== END entry-static.exe sscanf_eof ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe statvfs ==========
+Pass!
+========== END entry-static.exe statvfs ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe strverscmp ==========
+Pass!
+========== END entry-static.exe strverscmp ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe syscall_sign_extend ==========
+Pass!
+========== END entry-static.exe syscall_sign_extend ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe uselocale_0 ==========
+Pass!
+========== END entry-static.exe uselocale_0 ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe wcsncpy_read_overflow ==========
+Pass!
+========== END entry-static.exe wcsncpy_read_overflow ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-static.exe wcsstr_false_negative ==========
+Pass!
+========== END entry-static.exe wcsstr_false_negative ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe argv ==========
+Pass!
+========== END entry-dynamic.exe argv ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe basename ==========
+Pass!
+========== END entry-dynamic.exe basename ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe clocale_mbfuncs ==========
+Pass!
+========== END entry-dynamic.exe clocale_mbfuncs ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe clock_gettime ==========
+Pass!
+========== END entry-dynamic.exe clock_gettime ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe dirname ==========
+Pass!
+========== END entry-dynamic.exe dirname ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe env ==========
+Pass!
+========== END entry-dynamic.exe env ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe fdopen ==========
+Pass!
+========== END entry-dynamic.exe fdopen ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe fnmatch ==========
+Pass!
+========== END entry-dynamic.exe fnmatch ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe fscanf ==========
+Pass!
+========== END entry-dynamic.exe fscanf ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe fwscanf ==========
+Pass!
+========== END entry-dynamic.exe fwscanf ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe iconv_open ==========
+Pass!
+========== END entry-dynamic.exe iconv_open ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe inet_pton ==========
+Pass!
+========== END entry-dynamic.exe inet_pton ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe mbc ==========
+Pass!
+========== END entry-dynamic.exe mbc ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe memstream ==========
+Pass!
+========== END entry-dynamic.exe memstream ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe pthread_cancel_points ==========
+src/functional/pthread_cancel-points.c:144: res != PTHREAD_CANCELED failed (shm_open, canceled thread exit status)
+Pass!
+========== END entry-dynamic.exe pthread_cancel_points ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe pthread_cancel ==========
+Pass!
+========== END entry-dynamic.exe pthread_cancel ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe pthread_cond ==========
+Pass!
+========== END entry-dynamic.exe pthread_cond ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe pthread_tsd ==========
+Pass!
+========== END entry-dynamic.exe pthread_tsd ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe qsort ==========
+Pass!
+========== END entry-dynamic.exe qsort ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe random ==========
+Pass!
+========== END entry-dynamic.exe random ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe search_hsearch ==========
+Pass!
+========== END entry-dynamic.exe search_hsearch ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe search_insque ==========
+Pass!
+========== END entry-dynamic.exe search_insque ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe search_lsearch ==========
+Pass!
+========== END entry-dynamic.exe search_lsearch ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe search_tsearch ==========
+Pass!
+========== END entry-dynamic.exe search_tsearch ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe setjmp ==========
+Pass!
+========== END entry-dynamic.exe setjmp ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe snprintf ==========
+Pass!
+========== END entry-dynamic.exe snprintf ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe sscanf ==========
+Pass!
+========== END entry-dynamic.exe sscanf ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe strftime ==========
+Pass!
+========== END entry-dynamic.exe strftime ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe string ==========
+Pass!
+========== END entry-dynamic.exe string ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe string_memcpy ==========
+Pass!
+========== END entry-dynamic.exe string_memcpy ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe string_memmem ==========
+Pass!
+========== END entry-dynamic.exe string_memmem ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe string_memset ==========
+Pass!
+========== END entry-dynamic.exe string_memset ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe string_strchr ==========
+Pass!
+========== END entry-dynamic.exe string_strchr ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe string_strcspn ==========
+Pass!
+========== END entry-dynamic.exe string_strcspn ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe string_strstr ==========
+Pass!
+========== END entry-dynamic.exe string_strstr ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe strptime ==========
+Pass!
+========== END entry-dynamic.exe strptime ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe strtod ==========
+Pass!
+========== END entry-dynamic.exe strtod ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe strtod_simple ==========
+Pass!
+========== END entry-dynamic.exe strtod_simple ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe strtof ==========
+Pass!
+========== END entry-dynamic.exe strtof ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe strtol ==========
+Pass!
+========== END entry-dynamic.exe strtol ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe strtold ==========
+Pass!
+========== END entry-dynamic.exe strtold ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe swprintf ==========
+Pass!
+========== END entry-dynamic.exe swprintf ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe tgmath ==========
+Pass!
+========== END entry-dynamic.exe tgmath ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe time ==========
+Pass!
+========== END entry-dynamic.exe time ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe tls_align ==========
+FAIL tls_align [status 255]
+========== END entry-dynamic.exe tls_align ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe udiv ==========
+Pass!
+========== END entry-dynamic.exe udiv ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe ungetc ==========
+Pass!
+========== END entry-dynamic.exe ungetc ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe wcsstr ==========
+Pass!
+========== END entry-dynamic.exe wcsstr ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe wcstol ==========
+Pass!
+========== END entry-dynamic.exe wcstol ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe daemon_failure ==========
+Pass!
+========== END entry-dynamic.exe daemon_failure ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe dn_expand_empty ==========
+Pass!
+========== END entry-dynamic.exe dn_expand_empty ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe dn_expand_ptr_0 ==========
+Pass!
+========== END entry-dynamic.exe dn_expand_ptr_0 ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe fgets_eof ==========
+Pass!
+========== END entry-dynamic.exe fgets_eof ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe fgetwc_buffering ==========
+Pass!
+========== END entry-dynamic.exe fgetwc_buffering ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe fpclassify_invalid_ld80 ==========
+Pass!
+========== END entry-dynamic.exe fpclassify_invalid_ld80 ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe ftello_unflushed_append ==========
+Pass!
+========== END entry-dynamic.exe ftello_unflushed_append ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe getpwnam_r_crash ==========
+Pass!
+========== END entry-dynamic.exe getpwnam_r_crash ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe getpwnam_r_errno ==========
+Pass!
+========== END entry-dynamic.exe getpwnam_r_errno ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe iconv_roundtrips ==========
+Pass!
+========== END entry-dynamic.exe iconv_roundtrips ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe inet_ntop_v4mapped ==========
+Pass!
+========== END entry-dynamic.exe inet_ntop_v4mapped ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe inet_pton_empty_last_field ==========
+Pass!
+========== END entry-dynamic.exe inet_pton_empty_last_field ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe iswspace_null ==========
+Pass!
+========== END entry-dynamic.exe iswspace_null ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe lrand48_signextend ==========
+Pass!
+========== END entry-dynamic.exe lrand48_signextend ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe lseek_large ==========
+Pass!
+========== END entry-dynamic.exe lseek_large ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe malloc_0 ==========
+Pass!
+========== END entry-dynamic.exe malloc_0 ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe mbsrtowcs_overflow ==========
+Pass!
+========== END entry-dynamic.exe mbsrtowcs_overflow ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe memmem_oob_read ==========
+Pass!
+========== END entry-dynamic.exe memmem_oob_read ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe memmem_oob ==========
+Pass!
+========== END entry-dynamic.exe memmem_oob ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe mkdtemp_failure ==========
+Pass!
+========== END entry-dynamic.exe mkdtemp_failure ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe mkstemp_failure ==========
+Pass!
+========== END entry-dynamic.exe mkstemp_failure ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe printf_1e9_oob ==========
+Pass!
+========== END entry-dynamic.exe printf_1e9_oob ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe printf_fmt_g_round ==========
+Pass!
+========== END entry-dynamic.exe printf_fmt_g_round ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe printf_fmt_g_zeros ==========
+Pass!
+========== END entry-dynamic.exe printf_fmt_g_zeros ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe printf_fmt_n ==========
+Pass!
+========== END entry-dynamic.exe printf_fmt_n ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe pthread_cancel_sem_wait ==========
+FAIL pthread_cancel_sem_wait [status 255]
+========== END entry-dynamic.exe pthread_cancel_sem_wait ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe pthread_cond_smasher ==========
+Pass!
+========== END entry-dynamic.exe pthread_cond_smasher ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe pthread_exit_cancel ==========
+Pass!
+========== END entry-dynamic.exe pthread_exit_cancel ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe pthread_rwlock_ebusy ==========
+Pass!
+========== END entry-dynamic.exe pthread_rwlock_ebusy ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe putenv_doublefree ==========
+Pass!
+========== END entry-dynamic.exe putenv_doublefree ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe regex_backref_0 ==========
+Pass!
+========== END entry-dynamic.exe regex_backref_0 ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe regex_bracket_icase ==========
+Pass!
+========== END entry-dynamic.exe regex_bracket_icase ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe regex_ere_backref ==========
+Pass!
+========== END entry-dynamic.exe regex_ere_backref ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe regex_escaped_high_byte ==========
+Pass!
+========== END entry-dynamic.exe regex_escaped_high_byte ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe regex_negated_range ==========
+Pass!
+========== END entry-dynamic.exe regex_negated_range ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe regexec_nosub ==========
+Pass!
+========== END entry-dynamic.exe regexec_nosub ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe scanf_bytes_consumed ==========
+Pass!
+========== END entry-dynamic.exe scanf_bytes_consumed ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe scanf_match_literal_eof ==========
+Pass!
+========== END entry-dynamic.exe scanf_match_literal_eof ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe scanf_nullbyte_char ==========
+Pass!
+========== END entry-dynamic.exe scanf_nullbyte_char ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe setvbuf_unget ==========
+Pass!
+========== END entry-dynamic.exe setvbuf_unget ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe sigprocmask_internal ==========
+Pass!
+========== END entry-dynamic.exe sigprocmask_internal ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe sscanf_eof ==========
+Pass!
+========== END entry-dynamic.exe sscanf_eof ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe statvfs ==========
+Pass!
+========== END entry-dynamic.exe statvfs ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe strverscmp ==========
+Pass!
+========== END entry-dynamic.exe strverscmp ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe syscall_sign_extend ==========
+Pass!
+========== END entry-dynamic.exe syscall_sign_extend ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe uselocale_0 ==========
+Pass!
+========== END entry-dynamic.exe uselocale_0 ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe wcsncpy_read_overflow ==========
+Pass!
+========== END entry-dynamic.exe wcsncpy_read_overflow ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+[RUN ] runtest.exe
+========== START entry-dynamic.exe wcsstr_false_negative ==========
+Pass!
+========== END entry-dynamic.exe wcsstr_false_negative ==========
+[FAIL] runtest.exe (exit=1, raw=0x100)
+#### OS COMP TEST GROUP END libctest-musl ####
+[RUN ] busybox
+#### OS COMP TEST GROUP START lua-musl ####
+testcase lua date.lua success
+testcase lua file_io.lua success
+testcase lua max_min.lua success
+testcase lua random.lua success
+testcase lua remove.lua success
+testcase lua round_num.lua success
+testcase lua sin30.lua success
+testcase lua sort.lua success
+testcase lua strings.lua success
+#### OS COMP TEST GROUP END lua-musl ####
+[PASS] busybox (exit=0)
+[RUN ] busybox
+#### OS COMP TEST GROUP START lua-glibc ####
+testcase lua date.lua success
+testcase lua file_io.lua success
+testcase lua max_min.lua success
+testcase lua random.lua success
+testcase lua remove.lua success
+testcase lua round_num.lua success
+testcase lua sin30.lua success
+testcase lua sort.lua success
+testcase lua strings.lua success
+#### OS COMP TEST GROUP END lua-glibc ####
+[PASS] busybox (exit=0)
+[RUN ] busybox
+#### OS COMP TEST GROUP START libcbench-musl ####
+b_malloc_sparse (0)
+  time: 2.456906240, virt: 0, res: 0, dirty: 0
+
+b_malloc_bubble (0)
+  time: 1.659616960, virt: 0, res: 0, dirty: 0
+
+b_malloc_tiny1 (0)
+  time: 0.052552320, virt: 0, res: 0, dirty: 0
+
+b_malloc_tiny2 (0)
+  time: 0.041483520, virt: 0, res: 0, dirty: 0
+
+b_malloc_big1 (0)
+  time: 1.000188800, virt: 0, res: 0, dirty: 0
+
+b_malloc_big2 (0)
+  time: 0.974096000, virt: 0, res: 0, dirty: 0
+
+b_malloc_thread_stress (0)
+  time: 0.446827520, virt: 0, res: 0, dirty: 0
+
+b_malloc_thread_local (0)
+  time: 0.445136960, virt: 0, res: 0, dirty: 0
+
+b_string_strstr ("abcdefghijklmnopqrstuvwxyz")
+  time: 0.077643840, virt: 0, res: 0, dirty: 0
+
+b_string_strstr ("azbycxdwevfugthsirjqkplomn")
+  time: 0.100741760, virt: 0, res: 0, dirty: 0
+
+b_string_strstr ("aaaaaaaaaaaaaacccccccccccc")
+  time: 0.074529600, virt: 0, res: 0, dirty: 0
+
+b_string_strstr ("aaaaaaaaaaaaaaaaaaaaaaaaac")
+  time: 0.075407040, virt: 0, res: 0, dirty: 0
+
+b_string_strstr ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac")
+  time: 0.091350720, virt: 0, res: 0, dirty: 0
+
+b_string_memset (0)
+  time: 0.043677440, virt: 0, res: 0, dirty: 0
+
+b_string_strchr (0)
+  time: 0.082265280, virt: 0, res: 0, dirty: 0
+
+b_string_strlen (0)
+  time: 0.068956800, virt: 0, res: 0, dirty: 0
+
+b_pthread_createjoin_serial1 (0)
+b_pthread_createjoin_serial2 (0)
+b_pthread_create_serial1 (0)
+  time: 3.044295360, virt: 0, res: 0, dirty: 0
+
+b_pthread_uselesslock (0)
+  time: 0.004299840, virt: 0, res: 0, dirty: 0
+
+b_utf8_bigbuf (0)
+  time: 0.222586880, virt: 0, res: 0, dirty: 0
+
+b_utf8_onebyone (0)
+  time: 0.628491520, virt: 0, res: 0, dirty: 0
+
+b_stdio_putcgetc (0)
+  time: 244.612460480, virt: 0, res: 0, dirty: 0
+
+b_stdio_putcgetc_unlocked (0)
+  time: 245.120888640, virt: 0, res: 0, dirty: 0
+
+b_regex_compile ("(a|b|c)*d*b")
+  time: 0.409143040, virt: 0, res: 0, dirty: 0
+
+b_regex_search ("(a|b|c)*d*b")
+b_regex_search ("a{25}b")
+#### OS COMP TEST GROUP END libcbench-musl ####
+[PASS] busybox (exit=0)
+[RUN ] busybox
+#### OS COMP TEST GROUP START libcbench-glibc ####
+b_malloc_sparse (0)
+  time: 0.599017600, virt: 0, res: 0, dirty: 0
+
+b_malloc_bubble (0)
+  time: 0.501831040, virt: 0, res: 0, dirty: 0
+
+b_malloc_tiny1 (0)
+  time: 0.018746240, virt: 0, res: 0, dirty: 0
+
+b_malloc_tiny2 (0)
+  time: 0.015729280, virt: 0, res: 0, dirty: 0
+
+b_malloc_big1 (0)
+  time: 1.014048960, virt: 0, res: 0, dirty: 0
+
+b_malloc_big2 (0)
+  time: 0.838138560, virt: 0, res: 0, dirty: 0
+
+b_malloc_thread_stress (0)
+  time: 0.073207360, virt: 0, res: 0, dirty: 0
+
+b_malloc_thread_local (0)
+  time: 0.008387520, virt: 0, res: 0, dirty: 0
+
+b_string_strstr ("abcdefghijklmnopqrstuvwxyz")
+  time: 0.049798720, virt: 0, res: 0, dirty: 0
+
+b_string_strstr ("azbycxdwevfugthsirjqkplomn")
+  time: 0.047943680, virt: 0, res: 0, dirty: 0
+
+b_string_strstr ("aaaaaaaaaaaaaacccccccccccc")
+  time: 0.095799680, virt: 0, res: 0, dirty: 0
+
+b_string_strstr ("aaaaaaaaaaaaaaaaaaaaaaaaac")
+  time: 0.048100800, virt: 0, res: 0, dirty: 0
+
+b_string_strstr ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac")
+  time: 0.056239040, virt: 0, res: 0, dirty: 0
+
+b_string_memset (0)
+  time: 0.102561920, virt: 0, res: 0, dirty: 0
+
+b_string_strchr (0)
+  time: 0.062663680, virt: 0, res: 0, dirty: 0
+
+b_string_strlen (0)
+  time: 0.072273920, virt: 0, res: 0, dirty: 0
+
+b_pthread_createjoin_serial1 (0)
+  time: 1.752940160, virt: 0, res: 0, dirty: 0
+
+b_pthread_createjoin_serial2 (0)
+  time: 1.742178240, virt: 0, res: 0, dirty: 0
+
+b_pthread_create_serial1 (0)
+  time: 1.669875840, virt: 0, res: 0, dirty: 0
+
+b_pthread_uselesslock (0)
+  time: 0.007224640, virt: 0, res: 0, dirty: 0
+
+b_utf8_bigbuf (0)
+  time: 2.197912000, virt: 0, res: 0, dirty: 0
+
+b_utf8_onebyone (0)
+  time: 2.062408640, virt: 0, res: 0, dirty: 0
+
+b_stdio_putcgetc (0)
+  time: 88.740822080, virt: 0, res: 0, dirty: 0
+
+b_stdio_putcgetc_unlocked (0)
+  time: 88.732988800, virt: 0, res: 0, dirty: 0
+
+b_regex_compile ("(a|b|c)*d*b")
+  time: 0.186586880, virt: 0, res: 0, dirty: 0
+
+b_regex_search ("(a|b|c)*d*b")
+b_regex_search ("a{25}b")
+#### OS COMP TEST GROUP END libcbench-glibc ####
+[PASS] busybox (exit=0)
+#### REGRESSION END commit-4d1444b-riscv ####
+make[1]: 离开目录“/home/starrys/F7LY”
