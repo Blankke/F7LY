@@ -1,4 +1,7 @@
-/*
+/**
+ * @file iozone_research.cc
+ * @brief iozone mClock 研究入口与工具函数
+ *
  * 用法说明：
  * 1. 构建：make ARCH=riscv build
  * 2. 运行：make ARCH=riscv run
@@ -13,36 +16,39 @@
 
 namespace
 {
-    // iozone_job: 描述一个 iozone 子任务的参数集合
-    // - tag: 子任务标签，用于日志区分
-    // - file_path: 子任务要操作的文件路径
-    // - size_arg: 传递给 iozone 的大小参数字符串（如 "8m"）
-    // - nice_value: 进程优先级 (nice 值)，范围通常是 -20..19
+    /**
+     * @brief 描述一个 iozone 子任务的参数集合
+     *
+     * @note 字段说明见各成员后的注释
+     */
     struct iozone_job
     {
-        const char *tag;
-        const char *file_path;
-        const char *size_arg;
-        int nice_value;
+        const char *tag;       ///< 子任务标签，用于日志区分
+        const char *file_path; ///< 子任务要操作的文件路径
+        const char *size_arg;  ///< 传递给 iozone 的大小参数字符串（如 "8m"）
+        int nice_value;        ///< 进程优先级 (nice 值)，范围通常是 -20..19
     };
 
-    // child_result: 保存由 fork/exec 启动的子进程的运行结果和计时信息
-    // - pid: 子进程 PID
-    // - wait_status: waitpid 返回的原始状态码
-    // - start_us: 子进程启动时间(us)
-    // - finish_us: 子进程结束时间(us)
-    // - job: 指向触发该子进程的 iozone_job 配置
+    /**
+     * @brief 保存由 fork/exec 启动的子进程的运行结果和计时信息
+     *
+     * @note 字段说明见各成员后的注释
+     */
     struct child_result
     {
-        int pid;
-        int wait_status;
-        unsigned long long start_us;
-        unsigned long long finish_us;
-        const iozone_job *job;
+        int pid;                           ///< 子进程 PID
+        int wait_status;                   ///< waitpid 返回的原始状态码
+        unsigned long long start_us;       ///< 子进程启动时间（微秒）
+        unsigned long long finish_us;      ///< 子进程结束时间（微秒）
+        const iozone_job *job;             ///< 指向触发该子进程的 iozone_job 配置
     };
 
-    // now_usec: 获取当前时间，精度为微秒（返回自纪元以来的微秒数）
-    // 返回 0 表示获取时间失败
+    /**
+     * @brief 获取当前时间（微秒）
+     *
+     * 返回自纪元以来的微秒数；若 gettimeofday 失败则返回 0
+     * @return 当前时间（微秒）或 0 表示失败
+     */
     unsigned long long now_usec()
     {
         user_timeval tv = {};
@@ -53,14 +59,24 @@ namespace
         return (unsigned long long)tv.tv_sec * 1000000ULL + (unsigned long long)tv.tv_usec;
     }
 
-    // mib_to_bytes: 将 MiB 单位转换为字节数
+    /**
+     * @brief 将 MiB 单位转换为字节数
+     *
+     * @param mib MiB 数
+     * @return 对应的字节数
+     */
     unsigned long long mib_to_bytes(unsigned long long mib)
     {
         return mib * 1024ULL * 1024ULL;
     }
 
-    // parse_size_mib: 从类似 "8m" 的字符串中解析出数值部分，返回 MiB 数
-    // 只解析前导的十进制数字，遇到非数字字符则停止
+    /**
+     * @brief 从字符串（例如 "8m"）中解析出 MiB 数值部分
+     *
+     * 只解析前导的十进制数字，遇到非数字字符则停止解析。
+     * @param size_arg 大小参数字符串
+     * @return 解析得到的 MiB 数
+     */
     unsigned long long parse_size_mib(const char *size_arg)
     {
         unsigned long long value = 0;
@@ -77,8 +93,12 @@ namespace
         return value;
     }
 
-    // print_result: 打印单个子任务运行结果的摘要
-    // - 计算运行时长、总字节数、近似吞吐（MiB/s）并以可读格式输出
+    /**
+     * @brief 打印单个子任务运行结果的摘要
+     *
+     * 计算运行时长、传输字节数以及近似吞吐并打印日志
+     * @param result 子进程运行结果信息
+     */
     void print_result(const child_result &result)
     {
         unsigned long long duration_us = result.finish_us > result.start_us
@@ -109,9 +129,12 @@ namespace
                (int)bytes);
     }
 
-    // spawn_iozone_child: fork 并在子进程中通过 execve 启动 iozone
-    // - job: 要传递给子进程的 iozone_job 配置
-    // 返回值: 在父进程中返回子进程 PID；在子进程中不会返回（失败则 exit）
+    /**
+     * @brief fork 并在子进程中通过 execve 启动 iozone 可执行程序
+     *
+     * @param job 要传递给子进程的 iozone_job 配置
+     * @return 在父进程中返回子进程 PID；子进程成功时不会返回（失败会调用 exit）
+     */
     int spawn_iozone_child(const iozone_job &job)
     {
         int pid = fork();
@@ -150,9 +173,12 @@ namespace
         return -1;
     }
 
-    // run_single_job: 以单进程方式运行一个 iozone 子任务并等待其结束
-    // - scenario_name: 场景描述，用于日志输出
-    // - job: 要运行的 iozone_job
+    /**
+     * @brief 以单进程方式运行一个 iozone 子任务并等待其结束
+     *
+     * @param scenario_name 场景描述，用于日志输出
+     * @param job 要运行的 iozone_job
+     */
     void run_single_job(const char *scenario_name, const iozone_job &job)
     {
         printf("==== IOZONE 场景开始：%s ====\n", scenario_name);
@@ -168,10 +194,14 @@ namespace
         printf("==== IOZONE 场景结束：%s ====\n", scenario_name);
     }
 
-    // run_pair_jobs: 同时启动两个 iozone 子任务用于并发行为测试
-    // - scenario_name: 场景描述日志
-    // - job_a/job_b: 两个要并发运行的任务描述
-    // 注意：本函数顺序等待两个子进程，先等待 job_a 再等待 job_b
+    /**
+     * @brief 同时启动两个 iozone 子任务用于并发行为测试
+     *
+     * @param scenario_name 场景描述，用于日志输出
+     * @param job_a 第一个任务描述
+     * @param job_b 第二个任务描述
+     * @note 本函数依次等待两个子进程：先等待 job_a，再等待 job_b
+     */
     void run_pair_jobs(const char *scenario_name, const iozone_job &job_a, const iozone_job &job_b)
     {
         printf("==== IOZONE 场景开始：%s ====\n", scenario_name);
@@ -198,9 +228,13 @@ namespace
     }
 }
 
-// iozone_mclock_research_riscv: 研究用的入口函数，按一组预定义场景运行 iozone
-// - 该函数在用户空间 initcode 中被直接调用以启动研究流程
-// - 主要工作：初始化运行环境、创建测试文件、依次运行单流/并发场景并记录结果
+/**
+ * @brief iozone mclock 研究入口函数（riscv）
+ *
+ * 在用户空间 initcode 中可直接调用该函数启动研究流程。
+ * 主要工作：初始化运行环境、创建测试文件、依次运行单流/并发场景并记录结果
+ * @return 0 成功
+ */
 int iozone_mclock_research_riscv(void)
 {
     printf("#### IOZONE MCLOCK RESEARCH START riscv ####\n");
