@@ -140,6 +140,11 @@ clock_t times(void *mytimes)
     return syscall(syscall::SYS_times, mytimes);
 }
 
+int gettimeofday(struct user_timeval *tv, int tz)
+{
+    return syscall(syscall::SYS_gettimeofday, tv, tz);
+}
+
 // int64 get_time()
 // {
 //     TimeVal time;

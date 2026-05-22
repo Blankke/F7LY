@@ -6,6 +6,7 @@ extern "C"
     {
         // userdebug4(); 
         priority_ltp_regression_riscv();
+        iozone_mclock_research_riscv();
         shutdown();
         return 0;
     }

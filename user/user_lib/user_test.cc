@@ -318,13 +318,13 @@ int iozone_test(const char *path = musl_dir)
     bb_sh[3] = "1k";
     bb_sh[4] = "-s";
     bb_sh[5] = "4m";
-    if (path == musl_dir)
+    if (strcmp(path, musl_dir) == 0)
         printf("#### OS COMP TEST GROUP START iozone-musl ####\n");
     else
         printf("#### OS COMP TEST GROUP START iozone-glibc ####\n");
     printf("iozone automatic measurements\n");
     run_test("iozone", bb_sh, 0);
-    if (path == musl_dir)
+    if (strcmp(path, musl_dir) == 0)
         printf("#### OS COMP TEST GROUP end iozone-musl ####\n");
     else
         printf("#### OS COMP TEST GROUP end iozone-glibc ####\n");

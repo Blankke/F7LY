@@ -166,6 +166,8 @@ PRINTF_OBJ := build/$(OUTPUT_PREFIX)/printf.o
 
 USER_TEST_SRC := user/user_lib/user_test.cc
 USER_TEST_OBJ := build/$(OUTPUT_PREFIX)/user_test.o
+IOZONE_RESEARCH_SRC := user/research/iozone/iozone_research.cc
+IOZONE_RESEARCH_OBJ := build/$(OUTPUT_PREFIX)/iozone_research.o
 
 # 编译参数
 
@@ -354,9 +356,14 @@ $(USER_TEST_OBJ): $(USER_TEST_SRC)
 	@mkdir -p $(dir $@)
 	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
 
+# 编译 iozone 研究入口
+$(IOZONE_RESEARCH_OBJ): $(IOZONE_RESEARCH_SRC)
+	@mkdir -p $(dir $@)
+	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
+
 # 链接生成 initcode.elf
-$(INITCODE_ELF): $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(USER_TEST_OBJ) $(INITCODE_LINK_SCRIPT)
-	$(LD) $(INITCODE_LDFLAGS) -o $@ $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(USER_TEST_OBJ)
+$(INITCODE_ELF): $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(USER_TEST_OBJ) $(IOZONE_RESEARCH_OBJ) $(INITCODE_LINK_SCRIPT)
+	$(LD) $(INITCODE_LDFLAGS) -o $@ $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(USER_TEST_OBJ) $(IOZONE_RESEARCH_OBJ)
 
 ifeq ($(ARCH),riscv)
   OBJDUMP_INITCODE := riscv64-unknown-elf-objdump -D -b binary -m riscv:rv64 -EL

@@ -5,7 +5,7 @@ extern "C"
     __attribute__((section(".text.startup"))) int main()
     {
         // userdebug4();
-        regression_suite_4d1444_loongarch();
+        basic_musl_test();
         shutdown();
         return 0;
     }

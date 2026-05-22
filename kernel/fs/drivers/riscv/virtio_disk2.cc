@@ -18,12 +18,111 @@
 #include "libs/string.hh"
 #include "virtual_memory_manager.hh"
 #include "proc_manager.hh"
+#include "tm/timer_manager.hh"
 // the address of virtio mmio register r.
 #ifdef RISCV
 #define R(r) ((volatile uint32 *)(VIRTIO0 + (r)))
 #define R2(r) ((volatile uint32 *)(VIRTIO1 + (r)))
 
+namespace
+{
+  // mclock 策略总览：
+  // 本文件实现了一个基于服务类（service class）的带宽调度器（mclock），目的是
+  // 在 block IO 层对不同优先级的进程提供带宽保底、基于权重的公平共享，以及可选的限速。
+  // 调度概念核心：每个请求在入队时计算三类时间标签（微秒单位）：
+  //  - r_tag (reservation tag)：用于实现保底带宽（reservation_bps），保底到期的请求优先被服务。
+  //  - w_tag (weight tag)：用于按 class 权重进行共享调度，较小的 w_tag 表示较早可服务。
+  //  - l_tag (limit tag)：用于对超额消费进行限流（limit_bps），若 l_tag 在未来才到，则该请求暂时不可服务。
+  // 调度顺序：优先选择满足 r_tag（保底）的请求；若不存在，则选择最小 w_tag 的请求（权重调度）；
+  // 同时使用 ewma_bps（对近期完成 IO 的带宽做指数加权移动平均）作为权重调度时的带宽估计基线。
 
+  constexpr int k_mclock_class_count = 8;
+  // 微秒每秒
+  constexpr uint64 k_usec_per_sec = 1000000ULL;
+  // 表示不限速（带宽值为 0 表示无限制）
+  constexpr uint64 k_unlimited_bps = 0;
+  // EWMA 带宽的默认初始值（64 MiB/s），用于权重时间窗口计算的基线
+  constexpr uint64 k_default_ewma_bps = 64ULL * 1024ULL * 1024ULL;
+  // 每个服务类的权重（用于权重调度，weight 越大表示该类应该获得越多共享带宽）
+  constexpr uint32 k_class_weight[k_mclock_class_count] = {256, 192, 128, 96, 64, 32, 16, 8};
+  // 每个服务类的带宽保底（字节/秒），用于计算 r_tag 增量，以保证最低带宽
+  constexpr uint64 k_class_reservation_bps[k_mclock_class_count] = {
+      24ULL * 1024ULL * 1024ULL,
+      16ULL * 1024ULL * 1024ULL,
+      8ULL * 1024ULL * 1024ULL,
+      4ULL * 1024ULL * 1024ULL,
+      2ULL * 1024ULL * 1024ULL,
+      1ULL * 1024ULL * 1024ULL,
+      512ULL * 1024ULL,
+      256ULL * 1024ULL};
+  // 每个服务类的带宽上限（0 表示无限制）
+  constexpr uint64 k_class_limit_bps[k_mclock_class_count] = {
+      k_unlimited_bps, k_unlimited_bps, k_unlimited_bps, k_unlimited_bps,
+      k_unlimited_bps, k_unlimited_bps, k_unlimited_bps, k_unlimited_bps};
+  // 权重总和（用于将不同 weight 缩放到统一基准）
+  constexpr uint32 k_total_weight = 792;
+
+  // 每个服务类维护的队列状态
+  struct mclock_queue_state
+  {
+    // head/tail: 队列头尾，用于维护该服务类的等待 buf 链表
+    struct buf *head;
+    struct buf *tail;
+    // last_*_tag_us: 记录该类上一次分配对应标签的时间点（微秒），用于新的请求计算其 tag
+    uint64 last_r_tag_us;
+    uint64 last_w_tag_us;
+    uint64 last_l_tag_us;
+  };
+
+  // 向上取整的 64 位除法
+  inline uint64 ceil_div_u64(uint64 numerator, uint64 denominator)
+  {
+    return denominator == 0 ? 0 : (numerator + denominator - 1) / denominator;
+  }
+
+  // 获取 mclock 使用的当前时间（微秒）
+  inline uint64 mclock_now_us()
+  {
+    tmm::timeval tv = tmm::k_tm.get_time_val();
+    return tv.tv_sec * k_usec_per_sec + tv.tv_usec;
+  }
+
+  // bytes_to_service_us: 计算传输指定字节数在给定带宽（字节/秒）下所需的微秒数
+  // 返回值至少为 1 微秒以避免零时间窗口；对于 bps == 0（无限制）返回 0
+  inline uint64 bytes_to_service_us(uint64 bytes, uint64 bps)
+  {
+    if (bps == 0)
+    {
+      return 0;
+    }
+    uint64 usec = ceil_div_u64(bytes * k_usec_per_sec, bps);
+    return usec == 0 ? 1 : usec;
+  }
+
+  // weighted_service_us: 将 bytes 按类权重扩展到统一的权重基准后，基于 ewma_bps 计算服务所需时间
+  // 这样不同权重的请求可以用同一带宽估计进行比较
+  inline uint64 weighted_service_us(uint64 bytes, uint32 weight, uint64 ewma_bps)
+  {
+    uint64 scaled_bytes = ceil_div_u64(bytes * k_total_weight, weight == 0 ? 1 : weight);
+    return bytes_to_service_us(scaled_bytes, ewma_bps == 0 ? k_default_ewma_bps : ewma_bps);
+  }
+
+  // 将进程的 nice 值映射到服务类索引（较低的 nice -> 更高优先级的 class）
+  // 映射方法：先裁剪 nice 到合法范围，然后按每 5 个 nice 值划分一个服务类
+  inline int nice_to_service_class(int nice)
+  {
+    int clamped = nice;
+    if (clamped < proc::highest_proc_prio)
+    {
+      clamped = proc::highest_proc_prio;
+    }
+    else if (clamped > proc::lowest_proc_prio)
+    {
+      clamped = proc::lowest_proc_prio;
+    }
+    return (clamped - proc::highest_proc_prio) / 5;
+  }
+}
 
 static struct disk {
  // memory for virtio descriptors &c for queue 0.
@@ -43,13 +142,32 @@ static struct disk {
   // for use when completion interrupt arrives.
   // indexed by first descriptor index of chain.
   struct {
-    struct buf *b;
-    char status;
+    struct buf *b;              // 指向请求对应的 buf
+    struct virtio_blk_req header; // virtio 请求头（type/reserved/sector）
+    char status;                // 设备返回的 1 字节状态
+    uint64 dispatch_us;         // 发出请求的时间（微秒），用于计算瞬时带宽
   } info[NUM];
 
+  // mclock 调度相关字段：
+  // - class_queue: 每个服务类的等待链表与上次 tag 时间
+  // - inflight_b/inflight_idx: 当前正在设备上排队但未完成的 buf 与对应的 desc 索引
+  // - ewma_bps: 对完成 IO 的瞬时带宽做 EWMA（指数加权移动平均），用于权重时间窗口计算
+  mclock_queue_state class_queue[k_mclock_class_count];
+  struct buf *inflight_b;
+  int inflight_idx;
+  uint64 ewma_bps;
+
+  // 保护 virtio disk 状态的自旋锁
   SpinLock vdisk_lock;
 
 } __attribute__ ((aligned (PGSIZE))) disk, disk2;
+
+static void mclock_reset_primary_state();
+static void mclock_enqueue_primary_locked(struct buf *b, int write);
+static struct buf *mclock_pop_primary_head_locked(int service_class);
+static struct buf *mclock_pick_primary_locked(uint64 now_us, uint64 *next_gate_us);
+static void mclock_submit_primary_locked(struct buf *b);
+static bool mclock_dispatch_primary_locked(uint64 *next_gate_us);
 
 void
 virtio_disk_init(void)
@@ -113,6 +231,7 @@ virtio_disk_init(void)
 
   for(int i = 0; i < NUM; i++)
     disk.free[i] = 1;
+  mclock_reset_primary_state();
 
   // plic.c and trap.c arrange for interrupts from VIRTIO0_IRQ.
   #ifdef DEBUG
@@ -302,94 +421,259 @@ alloc3_desc2(int *idx)
   return 0;
 }
 
-
-void
-virtio_disk_rw(struct buf *b, int write)
+// mclock_reset_primary_state: 重置 mclock 的运行时状态
+// - 清除当前 inflight 状态，重置 ewma 带宽到默认值
+// - 清空每个服务类的队列与上次 tag 时间，供初始化或恢复使用
+static void
+mclock_reset_primary_state()
 {
-  // printf("[virtio_disk_rw] virtio disk rw, cpuid: %d\n", cpuid());
-  uint64 sector = b->blockno;
+  disk.inflight_b = nullptr;
+  disk.inflight_idx = -1;
+  disk.ewma_bps = k_default_ewma_bps;
+  for (int i = 0; i < k_mclock_class_count; ++i)
+  {
+    disk.class_queue[i].head = nullptr;
+    disk.class_queue[i].tail = nullptr;
+    disk.class_queue[i].last_r_tag_us = 0;
+    disk.class_queue[i].last_w_tag_us = 0;
+    disk.class_queue[i].last_l_tag_us = 0;
+  }
+}
 
-  disk.vdisk_lock.acquire();
+// mclock_enqueue_primary_locked: 在持锁情况下将 buf 入队到对应服务类
+// - 计算 submit_nice -> service_class
+// - 为 buf 计算并设置 io_r_tag_us/io_w_tag_us/io_l_tag_us（三类标签），基于队列的 last_*_tag_us
+// - 将 buf 挂到 class_queue 的尾部
+// - 标记 buf->disk = 1 表示已入队等待调度
+static void
+mclock_enqueue_primary_locked(struct buf *b, int write)
+{
+  proc::Pcb *current = proc::k_pm.get_cur_pcb();
+  int submit_nice = current ? current->get_priority() : proc::default_proc_prio;
+  int service_class = nice_to_service_class(submit_nice);
+  uint64 now_us = mclock_now_us();
+  uint64 bytes = BSIZE;
+  mclock_queue_state &queue = disk.class_queue[service_class];
 
-  // the spec says that legacy block operations use three
-  // descriptors: one for type/reserved/sector, one for
-  // the data, one for a 1-byte status result.
+  b->io_write = write;
+  b->io_service_class = service_class;
+  b->io_submit_pid = current ? current->get_pid() : 0;
+  b->io_submit_nice = submit_nice;
+  b->io_enqueue_us = now_us;
+  b->io_request_bytes = bytes;
+  b->io_next = nullptr;
 
-  // allocate the three descriptors.
-  int idx[3];
-  while(1){
-    if(alloc3_desc(idx) == 0) {
-      break;
-    }
-    proc::k_pm.sleep(&disk.free[0], &disk.vdisk_lock);
+  uint64 reservation_start = queue.last_r_tag_us > now_us ? queue.last_r_tag_us : now_us;
+  b->io_r_tag_us = reservation_start;
+  queue.last_r_tag_us = reservation_start + bytes_to_service_us(bytes, k_class_reservation_bps[service_class]);
+
+  uint64 weight_start = queue.last_w_tag_us > now_us ? queue.last_w_tag_us : now_us;
+  b->io_w_tag_us = weight_start;
+  queue.last_w_tag_us = weight_start + weighted_service_us(bytes, k_class_weight[service_class], disk.ewma_bps);
+
+  if (k_class_limit_bps[service_class] == k_unlimited_bps)
+  {
+    b->io_l_tag_us = now_us;
+    queue.last_l_tag_us = now_us;
+  }
+  else
+  {
+    uint64 limit_start = queue.last_l_tag_us > now_us ? queue.last_l_tag_us : now_us;
+    b->io_l_tag_us = limit_start;
+    queue.last_l_tag_us = limit_start + bytes_to_service_us(bytes, k_class_limit_bps[service_class]);
   }
 
-  // format the three descriptors.
-  // qemu's virtio-blk.c reads them.
-
-  struct virtio_blk_outhdr {
-    uint32 type;
-    uint32 reserved;
-    uint64 sector;
-  } buf0;
-
-  if(write)
-    buf0.type = VIRTIO_BLK_T_OUT; // write the disk
+  if (queue.tail == nullptr)
+  {
+    queue.head = b;
+    queue.tail = b;
+  }
   else
-    buf0.type = VIRTIO_BLK_T_IN; // read the disk
-  buf0.reserved = 0;
-  buf0.sector = sector;
+  {
+    queue.tail->io_next = b;
+    queue.tail = b;
+  }
 
-  // buf0 is on a kernel stack, which is not direct mapped,
-  // thus the call to kvmpa().
-  // disk.desc[idx[0]].addr = (uint64)mem::k_pagetable.kwalkaddr((uint64) &buf0).get_data();
-  disk.desc[idx[0]].addr = (uint64) mem::k_pagetable.kwalk_addr((uint64)&buf0);
-  // disk.desc[idx[0]].addr = (uint64) &buf0;
-  disk.desc[idx[0]].len = sizeof(buf0);
+  b->disk = 1;
+}
+
+// mclock_pop_primary_head_locked: 从指定服务类队列头弹出一个 buf 并返回
+// - 该函数不加锁（假定调用者已持锁）
+static struct buf *
+mclock_pop_primary_head_locked(int service_class)
+{
+  mclock_queue_state &queue = disk.class_queue[service_class];
+  struct buf *b = queue.head;
+  if (b == nullptr)
+  {
+    return nullptr;
+  }
+
+  queue.head = b->io_next;
+  if (queue.head == nullptr)
+  {
+    queue.tail = nullptr;
+  }
+  b->io_next = nullptr;
+  return b;
+}
+
+// mclock_pick_primary_locked: 在所有服务类中选择下一个可调度的 buf
+// - 优先选择满足 r_tag 的请求（保底），在多个保底候选中选择最早的 r_tag，再按 w_tag 比较
+// - 若没有保底候选，则在未被 limit 阻挡的请求中选择最小 w_tag 的请求（权重公平）
+// - 如果所有候选都被 limit 阻挡，则返回 nullptr，并通过 next_gate_us 返回最早的 l_tag
+static struct buf *
+mclock_pick_primary_locked(uint64 now_us, uint64 *next_gate_us)
+{
+  struct buf *best_reservation = nullptr;
+  struct buf *best_weight = nullptr;
+  uint64 earliest_gate = ~0ULL;
+
+  for (int i = 0; i < k_mclock_class_count; ++i)
+  {
+    struct buf *candidate = disk.class_queue[i].head;
+    if (candidate == nullptr)
+    {
+      continue;
+    }
+
+    if (candidate->io_l_tag_us > now_us)
+    {
+      if (candidate->io_l_tag_us < earliest_gate)
+      {
+        earliest_gate = candidate->io_l_tag_us;
+      }
+      continue;
+    }
+
+    if (candidate->io_r_tag_us <= now_us)
+    {
+      if (best_reservation == nullptr ||
+          candidate->io_r_tag_us < best_reservation->io_r_tag_us ||
+          (candidate->io_r_tag_us == best_reservation->io_r_tag_us &&
+           candidate->io_w_tag_us < best_reservation->io_w_tag_us))
+      {
+        best_reservation = candidate;
+      }
+      continue;
+    }
+
+    if (best_weight == nullptr ||
+        candidate->io_w_tag_us < best_weight->io_w_tag_us ||
+        (candidate->io_w_tag_us == best_weight->io_w_tag_us &&
+         candidate->io_r_tag_us < best_weight->io_r_tag_us))
+    {
+      best_weight = candidate;
+    }
+  }
+
+  if (next_gate_us != nullptr)
+  {
+    *next_gate_us = earliest_gate;
+  }
+  return best_reservation ? best_reservation : best_weight;
+}
+
+// mclock_submit_primary_locked: 将选中的 buf 构造为 virtio 描述符链并通知设备
+// - 分配 3 个描述符并填充 header/data/status
+// - 记录 dispatch_us、inflight_b 和 inflight_idx，随后写 avail 并触发队列通知
+static void
+mclock_submit_primary_locked(struct buf *b)
+{
+  int idx[3];
+  if (alloc3_desc(idx) != 0)
+  {
+    panic("mclock_submit_primary_locked: no descriptor");
+  }
+
+  disk.info[idx[0]].header.type = b->io_write ? VIRTIO_BLK_T_OUT : VIRTIO_BLK_T_IN;
+  disk.info[idx[0]].header.reserved = 0;
+  disk.info[idx[0]].header.sector = b->blockno;
+  disk.info[idx[0]].status = 0;
+  disk.info[idx[0]].dispatch_us = mclock_now_us();
+  disk.info[idx[0]].b = b;
+
+  disk.desc[idx[0]].addr = (uint64)mem::k_pagetable.kwalk_addr((uint64)&disk.info[idx[0]].header);
+  disk.desc[idx[0]].len = sizeof(disk.info[idx[0]].header);
   disk.desc[idx[0]].flags = VRING_DESC_F_NEXT;
   disk.desc[idx[0]].next = idx[1];
 
   disk.desc[idx[1]].addr = (uint64)b->data;
   disk.desc[idx[1]].len = BSIZE;
-  disk.desc[idx[1]].flags = write ? 0 : VRING_DESC_F_WRITE;
+  disk.desc[idx[1]].flags = b->io_write ? 0 : VRING_DESC_F_WRITE;
   disk.desc[idx[1]].flags |= VRING_DESC_F_NEXT;
   disk.desc[idx[1]].next = idx[2];
 
-  disk.info[idx[0]].status = 0;
-  disk.desc[idx[2]].addr = (uint64) &disk.info[idx[0]].status;
+  disk.desc[idx[2]].addr = (uint64)&disk.info[idx[0]].status;
   disk.desc[idx[2]].len = 1;
-  disk.desc[idx[2]].flags = VRING_DESC_F_WRITE; // device writes the status
+  disk.desc[idx[2]].flags = VRING_DESC_F_WRITE;
   disk.desc[idx[2]].next = 0;
 
-  // record struct buf for virtio_disk_intr().
-  b->disk = 1;
-  disk.info[idx[0]].b = b;
+  disk.inflight_b = b;
+  disk.inflight_idx = idx[0];
 
-  // avail[0] is flags
-  // avail[1] tells the device how far to look in avail[2...].
-  // avail[2...] are desc[] indices the device should process.
-  // we only tell device the first index in our chain of descriptors.
   disk.avail[2 + (disk.avail[1] % NUM)] = idx[0];
   __sync_synchronize();
   disk.avail[1] = disk.avail[1] + 1;
+  *R(VIRTIO_MMIO_QUEUE_NOTIFY) = 0;
+}
 
-  *R(VIRTIO_MMIO_QUEUE_NOTIFY) = 0; // value is queue number
-
-  // Wait for virtio_disk_intr() to say request has finished.
-  while(b->disk == 1) {
-    proc::k_pm.sleep(b, &disk.vdisk_lock);
+// mclock_dispatch_primary_locked: 如果没有正在进行的请求，则尝试从队列中调度一个
+// - 使用 mclock_pick_primary_locked 选择请求并提交
+// - 返回 true 表示已调度一个请求，false 表示未调度（可能因为 inflight 或队列空或受限）
+static bool
+mclock_dispatch_primary_locked(uint64 *next_gate_us)
+{
+  if (disk.inflight_b != nullptr)
+  {
+    if (next_gate_us != nullptr)
+    {
+      *next_gate_us = 0;
+    }
+    return false;
   }
 
-  disk.info[idx[0]].b = 0;
-  free_chain(idx[0]);
+  uint64 now_us = mclock_now_us();
+  struct buf *selected = mclock_pick_primary_locked(now_us, next_gate_us);
+  if (selected == nullptr)
+  {
+    return false;
+  }
 
-  // printf("b->data: %p, b->blockno: %d\n", b->data, b->blockno);
-  // for (int i = 0; i < BSIZE; ++i) {
-  //   printfMagenta("%02x ", ((unsigned char*)b->data)[i]);
-  //   if ((i + 1) % 16 == 0) printf("\n");
-  // }
+  struct buf *queued = mclock_pop_primary_head_locked(selected->io_service_class);
+  if (queued != selected)
+  {
+    panic("mclock_dispatch_primary_locked: queue mismatch");
+  }
+
+  mclock_submit_primary_locked(selected);
+  if (next_gate_us != nullptr)
+  {
+    *next_gate_us = 0;
+  }
+  return true;
+}
+
+
+void
+virtio_disk_rw(struct buf *b, int write)
+{
+  disk.vdisk_lock.acquire();
+  mclock_enqueue_primary_locked(b, write);
+  while (b->disk == 1) {
+    uint64 next_gate_us = 0;
+    if (!mclock_dispatch_primary_locked(&next_gate_us)) {
+      if (b->disk != 1) {
+        break;
+      }
+      proc::k_pm.sleep(b, &disk.vdisk_lock);
+      continue;
+    }
+    if (b->disk == 1) {
+      proc::k_pm.sleep(b, &disk.vdisk_lock);
+    }
+  }
   disk.vdisk_lock.release();
-  // printf("[virtio_disk_rw] done, cpuid: %d\n", cpuid());
 }
 
 void
@@ -481,7 +765,6 @@ virtio_disk_rw2(struct buf *b, int write)
 void
 virtio_disk_intr()
 {
-  // printf("[virtio_disk_intr] virtio_disk_intr!\n");
   disk.vdisk_lock.acquire();
 
   while((disk.used_idx % NUM) != (disk.used->id % NUM)){
@@ -490,15 +773,41 @@ virtio_disk_intr()
     if(disk.info[id].status != 0)
       panic("virtio_disk_intr status");
 
-    disk.info[id].b->disk = 0;   // disk is done with buf
-    proc::k_pm.wakeup(disk.info[id].b);
+    struct buf *done = disk.info[id].b;
+    uint64 finish_us = mclock_now_us();
+    // 更新 EWMA 带宽估计：当请求完成且有有效 dispatch 时间时，计算该请求的瞬时带宽
+    // instant_bps = bytes / elapsed_seconds，然后用 7/8 老值 + 1/8 新值的方式平滑到 disk.ewma_bps
+    // 该估计用于后续的权重调度时间窗计算（weighted_service_us）
+    if (done != nullptr && disk.info[id].dispatch_us != 0 && finish_us > disk.info[id].dispatch_us)
+    {
+      uint64 elapsed_us = finish_us - disk.info[id].dispatch_us;
+      uint64 instant_bps = ceil_div_u64(done->io_request_bytes * k_usec_per_sec, elapsed_us);
+      if (instant_bps != 0)
+      {
+        disk.ewma_bps = (disk.ewma_bps * 7 + instant_bps) / 8;
+      }
+    }
+
+    if (done != nullptr)
+    {
+      done->disk = 0;
+    }
+    disk.info[id].b = 0;
+    disk.info[id].dispatch_us = 0;
+    free_chain(id);
+    disk.inflight_b = nullptr;
+    disk.inflight_idx = -1;
 
     disk.used_idx = (disk.used_idx + 1) % NUM;
+    mclock_dispatch_primary_locked(nullptr);
+    if (done != nullptr)
+    {
+      proc::k_pm.wakeup(done);
+    }
   }
   *R(VIRTIO_MMIO_INTERRUPT_ACK) = *R(VIRTIO_MMIO_INTERRUPT_STATUS) & 0x3;
 
   disk.vdisk_lock.release();
-  // printf("[virtio_disk_intr] done!\n");
 }
 
 void
