@@ -89,6 +89,13 @@ int run_test(const char *path, char *argv[], char *envp[])
     }
     else if (pid == 0)
     {
+        // 每个测例都放进独立进程组里运行。
+        // LTP 有些超时清理路径会对当前进程组发信号（例如 kill(0, SIGKILL)）。
+        // 如果继续和回归主进程共用同一个 pgid，单个测例超时就可能把 init 一起打死，
+        // 最后表现成“内核 panic: init exiting”，把整条长跑链路直接掐断。
+        // 这里即便 setpgid 失败，也继续尝试 exec，让语义问题留给测例本身暴露。
+        setpgid(0, 0);
+
         int exec_ret = execve(path, argv, envp);
         if (exec_ret < 0)
         {
@@ -490,10 +497,10 @@ int regression_suite_4d1444_riscv(void)
     init_env("/musl/");
     basic_test("/musl/");
     basic_test("/glibc/");
-    ltp_test(true);
-    ltp_test(false);
     busybox_test("/musl/");
     busybox_test("/glibc/");
+    ltp_test(true);
+    ltp_test(false);
     libc_test("/musl/");
     lua_test("/musl/");
     lua_test("/glibc/");
