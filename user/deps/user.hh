@@ -25,6 +25,7 @@ void exit(int code);
 int waitpid(int pid, int *code, int options);
 int exec(char *name);
 int execve(const char *name, char *const argv[], char *const argp[]);
+int setpgid(pid_t pid, pid_t pgid);
 clock_t times(void *mytimes);
 int munmap(void *start, size_t len);
 int wait(int *code);

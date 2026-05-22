@@ -90,6 +90,17 @@ int trap_manager::devintr()
 
   uint32 estat = r_csr_estat();
   uint32 ecfg = r_csr_ecfg();
+  uint32 ecode = loongarch_exception_code(estat);
+
+  // LoongArch 的 ESTAT 同时混合了“异常编码”和“中断待处理位”。
+  // 如果只盯 pending bit，不检查 ecode，内核在处理别的同步异常时，
+  // 只要此刻恰好挂着一个 timer pending，就会被误判成时钟中断，
+  // 然后重入 timertick()，最终在 tickslock 上表现成同核递归拿锁。
+  // 这里先确保当前 trap 的一级编码确实是“中断”场景，再进入中断分发。
+  if (ecode != 0)
+  {
+    return 0;
+  }
 
   if (estat & ecfg & HWI_VEC)
   {
@@ -135,18 +146,15 @@ int trap_manager::devintr()
   }
   else if (estat & ecfg & TI_VEC)
   {
-    // timer interrupt,
-    // TODO
-    // intr_stats::k_intr_stats.record_interrupt(5);
-    // printfCyan("[trap] timer interrupt\n");
+    // timer interrupt.
+    // 先清 pending，再做较重的 tick/唤醒/定时器检查，避免中途再进一次 trap
+    // 时又把这同一个 pending timer 误当成“新的时钟中断”。
+    w_csr_ticlr(r_csr_ticlr() | CSR_TICLR_CLR);
+
     if (proc::k_pm.get_cur_cpuid() == 0)
     {
       timertick();
     }
-
-    // acknowledge the timer interrupt by clearing
-    // the TI bit in TICLR.
-    w_csr_ticlr(r_csr_ticlr() | CSR_TICLR_CLR);
 
     return 2;
   }
@@ -158,21 +166,17 @@ int trap_manager::devintr()
 
 void trap_manager::timertick()
 {
-  // acquire the lock to protect ticks
+  // tickslock 只保护全局 tick 计数本身，复杂逻辑尽量放到锁外，
+  // 降低中断路径里持锁时间，也减少后续异常把现场糊成“递归拿 tickslock”的概率。
   tickslock.acquire();
-
-  // increment the ticks count
   ticks++;
+  tickslock.release();
 
-  // !!写完进城后修改
   proc::k_pm.wakeup(&ticks);
 
   // Check for expired POSIX timers and send signals
   check_expired_timers();
   proc::check_interval_timers(proc::k_pm.get_cur_pcb());
-
-  // release the lock
-  tickslock.release();
 }
 
 // !!写完进程后修改
@@ -424,6 +428,8 @@ void trap_manager::kerneltrap()
     uint32 badi = r_csr_badi();
     uint32 crmd = r_csr_crmd();
     uint32 ecfg = r_csr_ecfg();
+    uint64 save1 = r_csr_save1();
+    uint64 save2 = r_csr_save2();
     uint64 extioi_isr = read_itr_cfg_64b(LOONGARCH_IOCSR_EXTIOI_ISR_BASE);
     uint64 ls7a_status = *(volatile uint64 *)(LS7A_INT_STATUS_REG);
     uint64 heap_cache = 0;
@@ -436,7 +442,7 @@ void trap_manager::kerneltrap()
 
     if (cur != nullptr)
     {
-      panic("kerneltrap: estat=%x ecode=%d esub=%d era=%p eentry=%p badv=%p badi=%x crmd=%x prmd=%x ecfg=%x pgdl=%p extioi=%p ls7a=%p proc=%s pid=%d tid=%d state=%d pt=%p mm=%p heap_used=%p heap_cache=%p heap_chunks=%d heap_free_pages=%p heap_max_block_bytes=%p",
+      panic("kerneltrap: estat=%x ecode=%d esub=%d era=%p eentry=%p badv=%p badi=%x crmd=%x prmd=%x ecfg=%x save1=%p save2=%p pgdl=%p extioi=%p ls7a=%p proc=%s pid=%d tid=%d state=%d pt=%p mm=%p heap_used=%p heap_cache=%p heap_chunks=%d heap_free_pages=%p heap_max_block_bytes=%p",
             estat,
             ecode,
             esubcode,
@@ -447,6 +453,8 @@ void trap_manager::kerneltrap()
             crmd,
             prmd,
             ecfg,
+            (void *)save1,
+            (void *)save2,
             (void *)r_csr_pgdl(),
             (void *)extioi_isr,
             (void *)ls7a_status,
@@ -463,7 +471,7 @@ void trap_manager::kerneltrap()
             (void *)(static_cast<uint64>(heap_max_block_pages) * PGSIZE));
     }
 
-    panic("kerneltrap: estat=%x ecode=%d esub=%d era=%p eentry=%p badv=%p badi=%x crmd=%x prmd=%x ecfg=%x pgdl=%p extioi=%p ls7a=%p no-current-proc heap_used=%p heap_cache=%p heap_chunks=%d heap_free_pages=%p heap_max_block_bytes=%p",
+    panic("kerneltrap: estat=%x ecode=%d esub=%d era=%p eentry=%p badv=%p badi=%x crmd=%x prmd=%x ecfg=%x save1=%p save2=%p pgdl=%p extioi=%p ls7a=%p no-current-proc heap_used=%p heap_cache=%p heap_chunks=%d heap_free_pages=%p heap_max_block_bytes=%p",
           estat,
           ecode,
           esubcode,
@@ -474,6 +482,8 @@ void trap_manager::kerneltrap()
           crmd,
           prmd,
           ecfg,
+          (void *)save1,
+          (void *)save2,
           (void *)r_csr_pgdl(),
           (void *)extioi_isr,
           (void *)ls7a_status,
