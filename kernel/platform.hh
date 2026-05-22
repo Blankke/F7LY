@@ -537,6 +537,22 @@ r_csr_eentry()
 }
 
 static inline uint64
+r_csr_save1()
+{
+  uint64 x;
+  asm volatile("csrrd %0, 0x31" : "=r"(x));
+  return x;
+}
+
+static inline uint64
+r_csr_save2()
+{
+  uint64 x;
+  asm volatile("csrrd %0, 0x32" : "=r"(x));
+  return x;
+}
+
+static inline uint64
 r_csr_tlbrelo0()
 {
   uint64 x;

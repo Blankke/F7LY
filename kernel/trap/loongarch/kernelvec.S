@@ -3,6 +3,7 @@
         # push all registers, call kerneltrap(), restore, return.
         #
         #ifdef LOONGARCH
+#include "asm.hh"
 .section k_eentry
 .globl kerneltrap
 .globl kernelvec
@@ -45,6 +46,11 @@ kernelvec:
         st.d $s8, $sp, 240
 
 	// call the C trap handler in trap.c
+        // userret() 收尾阶段会在 ertn 前短暂恢复用户寄存器。
+        // 一旦这个极窄窗口里再来一次内核态异常/中断，tp 可能已经不是内核 hartid。
+        // 这里在进 C 之前强制从 CSR 重新取一次 cpuid，避免 kerneltrap() 里
+        // 通过 tp 取 Cpu::get_cpu() 时读到用户 TLS 指针。
+        csrrd $tp, LOONGARCH_CSR_CPUID
         bl wrap_kerneltrap
 
         // restore register
