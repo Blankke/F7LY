@@ -86,6 +86,14 @@ uservec:
 DBG_BREAK_READ_ESTAT:
 	    # csrrd  $a0, 0x5		# read estat 
 
+            # 正常用户态 trap 一旦成功落到 uservec，就把返回窗口残留的 scratch CSR 清掉。
+            # 后面如果还在 kernelvec 上炸，并且 SAVE1/SAVE2 仍然不是 0，
+            # 就说明这次根本没经过 uservec。
+            li.d   $t1, 0
+            li.d   $t2, 0
+            csrwr  $t1, LOONGARCH_CSR_SAVE1
+            csrwr  $t2, LOONGARCH_CSR_SAVE2
+
 	    # jump to usertrap(), which does not return
 	    jirl   $zero ,$t0, 0
 
@@ -107,9 +115,11 @@ userret:
         csrwr  $t0, LOONGARCH_CSR_SAVE0
 
         # restore all but a0 from TRAPFRAME
+        # 注意把 t0/t1/t2/tp/sp 放到最后统一恢复。
+        # 目标是：一旦开始恢复用户 sp，就不再触碰任何用户态映射页，
+        # 这样即使长跑里时序很差，也不会在“内核态但已拿着用户栈”时
+        # 又因为读 trapframe 触发新的 kerneltrap。
         ld.d   $ra, $a0, 0
-        ld.d   $tp, $a0, 8
-        ld.d   $sp, $a0, 16
         ld.d   $a1, $a0, 32
         ld.d   $a2, $a0, 40
         ld.d   $a3, $a0, 48
@@ -117,9 +127,6 @@ userret:
         ld.d   $a5, $a0, 64
         ld.d   $a6, $a0, 72
         ld.d   $a7, $a0, 80
-        ld.d   $t0, $a0, 88
-        ld.d   $t1, $a0, 96
-        ld.d   $t2, $a0, 104
         ld.d   $t3, $a0, 112
         ld.d   $t4, $a0, 120
         ld.d   $t5, $a0, 128
@@ -138,8 +145,26 @@ userret:
         ld.d   $s7, $a0, 232
         ld.d   $s8, $a0, 240
 
+	# 把 trapframe 基址暂存在 SAVE1 里，并把用户 t0 暂存在 SAVE2。
+        # 这样最后可以用 CSR 临时寄存器收尾，不必在恢复用户 sp 之后再访问 trapframe。
+        addi.d $t0, $a0, 0
+        csrwr  $t0, LOONGARCH_CSR_SAVE1
+        csrrd  $t0, LOONGARCH_CSR_SAVE1
+        ld.d   $t1, $t0, 88
+        csrwr  $t1, LOONGARCH_CSR_SAVE2
+
 	# restore user a0, and save TRAPFRAME in SAVE0
         csrwr  $a0, LOONGARCH_CSR_SAVE0
+
+        # 从这里开始只剩最后一批寄存器恢复。
+        # 先取回 trapframe 基址，再把剩余用户寄存器一次性装完；
+        # 真正恢复用户 sp 之后，不再访问任何用户页。
+        csrrd  $t0, LOONGARCH_CSR_SAVE1
+        ld.d   $t1, $t0, 96
+        ld.d   $t2, $t0, 104
+        ld.d   $tp, $t0, 8
+        ld.d   $sp, $t0, 16
+        csrrd  $t0, LOONGARCH_CSR_SAVE2
 
         # return to user mode and user pc.
         # usertrapret() set up prmd and era.

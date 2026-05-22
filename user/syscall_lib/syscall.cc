@@ -130,6 +130,11 @@ int execve(const char *name, char *const argv[], char *const argp[])
     return syscall(syscall::SYS_execve, name, argv, argp);
 }
 
+int setpgid(pid_t pid, pid_t pgid)
+{
+    return syscall(syscall::SYS_setpgid, pid, pgid);
+}
+
 clock_t times(void *mytimes)
 {
     return syscall(syscall::SYS_times, mytimes);

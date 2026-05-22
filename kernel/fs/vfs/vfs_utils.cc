@@ -666,48 +666,59 @@ static int resolve_symlinks(const eastl::string &input_path, eastl::string &reso
         return -ELOOP; // 符号链接嵌套太深
     }
 
-    resolved_path = input_path;
+    // 这里改成显式迭代而不是递归。
+    // link08 这种深路径 + 符号链接环在 LoongArch 上会把递归栈一层层压进内核栈 guard page，
+    // 最终不是返回 ELOOP，而是在下一次 trap/save 现场时直接 kerneltrap。
+    // 迭代化后，最多只保留一层解析栈帧，跨架构行为也会更稳定。
+    eastl::string pending_path = input_path;
 
-    // 按 '/' 分割路径
-    eastl::vector<eastl::string> path_parts;
-    eastl::string current_part;
-
-    for (size_t i = 0; i < input_path.length(); i++)
+    for (int remaining_depth = max_depth; remaining_depth > 0; --remaining_depth)
     {
-        if (input_path[i] == '/')
+        resolved_path = pending_path;
+
+        // 按 '/' 分割路径
+        eastl::vector<eastl::string> path_parts;
+        eastl::string current_part;
+
+        for (size_t i = 0; i < pending_path.length(); i++)
         {
-            if (!current_part.empty())
+            if (pending_path[i] == '/')
             {
-                path_parts.push_back(current_part);
-                current_part.clear();
+                if (!current_part.empty())
+                {
+                    path_parts.push_back(current_part);
+                    current_part.clear();
+                }
+            }
+            else
+            {
+                current_part += pending_path[i];
             }
         }
-        else
+        if (!current_part.empty())
         {
-            current_part += input_path[i];
+            path_parts.push_back(current_part);
         }
-    }
-    if (!current_part.empty())
-    {
-        path_parts.push_back(current_part);
-    }
 
-    // 重新构建路径，逐步检查每个组件是否为符号链接
-    eastl::string current_path = "/";
+        // 重新构建路径，逐步检查每个组件是否为符号链接
+        eastl::string current_path = "/";
+        bool expanded_symlink = false;
 
-    for (size_t i = 0; i < path_parts.size(); i++)
-    {
-        if (current_path.back() != '/')
+        for (size_t i = 0; i < path_parts.size(); i++)
         {
-            current_path += "/";
-        }
-        current_path += path_parts[i];
-        // printfYellow("Checking path component: %s\n", current_path.c_str());
-        // 检查当前路径是否为符号链接
-        int type = vfs_path2filetype(current_path);
-        if (type == fs::FileTypes::FT_SYMLINK)
-        {
-            // 读取符号链接内容
+            if (current_path.back() != '/')
+            {
+                current_path += "/";
+            }
+            current_path += path_parts[i];
+
+            // 检查当前路径是否为符号链接
+            int type = vfs_path2filetype(current_path);
+            if (type != fs::FileTypes::FT_SYMLINK)
+            {
+                continue;
+            }
+
             char link_target[256];
             size_t link_len;
             int r = ext4_readlink(current_path.c_str(), link_target, sizeof(link_target) - 1, &link_len);
@@ -718,11 +729,10 @@ static int resolve_symlinks(const eastl::string &input_path, eastl::string &reso
             link_target[link_len] = '\0';
 
             eastl::string link_path(link_target);
-
             eastl::string new_path;
 
             // 如果符号链接是绝对路径，重新开始
-            if (link_path[0] == '/')
+            if (!link_path.empty() && link_path[0] == '/')
             {
                 new_path = link_path;
             }
@@ -750,19 +760,19 @@ static int resolve_symlinks(const eastl::string &input_path, eastl::string &reso
                 new_path += path_parts[j];
             }
 
-            // 标准化路径，处理 . 和 .. 组件
-            new_path = normalize_path(new_path);
+            pending_path = normalize_path(new_path);
+            expanded_symlink = true;
+            break;
+        }
 
-            // printfYellow("Resolving symlink %s -> %s, final path: %s\n",
-            //              current_path.c_str(), link_path.c_str(), new_path.c_str());
-
-            // 递归解析剩余的符号链接
-            return resolve_symlinks(new_path, resolved_path, max_depth - 1);
+        if (!expanded_symlink)
+        {
+            resolved_path = current_path;
+            return 0;
         }
     }
 
-    resolved_path = current_path;
-    return 0;
+    return -ELOOP;
 }
 
 // 将flags转换为可读的字符串表示
