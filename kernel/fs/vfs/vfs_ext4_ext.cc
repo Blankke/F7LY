@@ -89,7 +89,13 @@ int vfs_ext_mount(struct filesystem *fs, uint64_t rwflag, void *data) {
         vfs_ext4_blockdev_destroy(vbdev);
         goto out;
     } else {
-        // ext4_mount_setup_locks(fs->path, &ext4_lock_ops);
+        // 为 lwext4 挂载点接入全局锁，避免并发文件操作直接裸跑
+        // 到内部的块缓存引用计数路径，导致 refctr 断言。
+        r = ext4_mount_setup_locks(fs->path, &ext4_lock_ops);
+        if (r != EOK) {
+            vfs_ext4_blockdev_destroy(vbdev);
+            goto out;
+        }
         //获得ext4文件系统的超级块
         // ext4_get_sblock(fs->path, (struct ext4_sblock **)(&(fs->fs_data)));
     }
@@ -117,7 +123,12 @@ int vfs_ext_mount2(struct filesystem *fs, uint64_t rwflag, void *data) {
         vfs_ext4_blockdev_destroy(vbdev);
         goto out;
     } else {
-        // ext4_mount_setup_locks(fs->path, &ext4_lock_ops);
+        // rootfs 也接入同样的挂载点锁，保持两套 ext4 设备一致。
+        r = ext4_mount_setup_locks(fs->path, &ext4_lock_ops);
+        if (r != EOK) {
+            vfs_ext4_blockdev_destroy(vbdev);
+            goto out;
+        }
         //获得ext4文件系统的超级块
         // ext4_get_sblock(fs->path, (struct ext4_sblock **)(&(fs->fs_data)));
     }

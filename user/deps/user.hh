@@ -20,6 +20,12 @@
 
 extern int errno;
 
+struct user_timeval
+{
+    long tv_sec;
+    long tv_usec;
+};
+
 int openat(int dirfd, const char *path, int flags);
 int close(int fd);
 ssize_t read(int fd, void *buf, size_t len);
@@ -36,6 +42,7 @@ int exec(char *name);
 int execve(const char *name, char *const argv[], char *const argp[]);
 int setpgid(pid_t pid, pid_t pgid);
 clock_t times(void *mytimes);
+int gettimeofday(struct user_timeval *tv, int tz);
 int munmap(void *start, size_t len);
 int wait(int *code);
 int sys_linkat(int olddirfd, char *oldpath, int newdirfd, char *newpath, unsigned int flags);
@@ -99,6 +106,7 @@ int ltp_subset_test(bool is_musl, const char *const cases[]);
 int priority_ltp_regression_riscv(void);
 int regression_suite_4d1444_riscv(void);
 int regression_suite_4d1444_loongarch(void);
+int iozone_mclock_research_riscv(void);
 int final_test_musl(void);
 int final_test_glibc(void);
 int git_test(const char *path);
