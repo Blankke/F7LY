@@ -168,6 +168,11 @@ namespace tmm
 		/// @note tick是系统时间的基本单位
 		uint64 get_ticks() ;
 
+		/// @brief 获取“每个 tick 都会被唤醒”的等待通道地址
+		/// @return 可作为 sleep/wakeup 通道使用的稳定地址
+		/// @note 供 futex/超时等待等内核逻辑复用，避免各处自行拼接错误的通道值
+		void *get_tick_wait_channel();
+
 		int clock_gettime_msec(SystemClockId clockid);
 	};
 

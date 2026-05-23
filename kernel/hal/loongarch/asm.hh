@@ -64,6 +64,12 @@
 #define LOONGARCH_CSR_SAVE0		    0x30    /* Kscratch registers */
 #define LOONGARCH_CSR_SAVE1		    0x31
 #define LOONGARCH_CSR_SAVE2		    0x32
+#define LOONGARCH_CSR_SAVE3		    0x33
+#define LOONGARCH_CSR_SAVE4		    0x34
+#define LOONGARCH_CSR_SAVE5		    0x35
+#define LOONGARCH_CSR_SAVE6		    0x36
+#define LOONGARCH_CSR_SAVE7		    0x37
+#define LOONGARCH_CSR_LLBCTL        0x60    /* LLBit controller */
 
 #define LOONGARCH_CSR_TID   		0x40	/* Timer ID */
 #define LOONGARCH_CSR_TCFG          0x41    /* Timer config */
@@ -74,6 +80,10 @@
 #define LOONGARCH_CSR_DMWIN3		0x183	/* 64 direct map win3: MEM */
 
 #define LOONGARCH_CSR_TLBEHI		0x11	/* TLB EntryHi */
+#define LOONGARCH_CSR_TLBELO0      0x12    /* TLB EntryLo0 */
+#define LOONGARCH_CSR_TLBELO1      0x13    /* TLB EntryLo1 */
+#define LOONGARCH_CSR_TLBIDX       0x10    /* TLB Index */
+#define LOONGARCH_CSR_ASID         0x18    /* Address Space Identifier */
 #define LOONGARCH_CSR_PGDL          0x19
 #define LOONGARCH_CSR_PGDH          0x1a
 #define LOONGARCH_CSR_PGD           0x1b

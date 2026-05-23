@@ -27,8 +27,15 @@
 #include "virtual_memory_manager.hh"
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
-//TODO：测试成功后替换为信号量
+// 这里使用一个全局的可重入 ext4 挂载锁。
+// lwext4 自身允许上层注入 mount 级别的串行化，但当前工程里之前一直没真正接上，
+// 长跑时多个进程交错做 open/stat/readdir/link/unlink，会把同一个 mount 的缓存状态
+// 和目录迭代状态同时揉在一起，最终表现成 RV 上 find 长时间卡住、LA 上 bcache 树损坏。
+// 另外，部分 ext4 公共接口之间存在有限的同进程嵌套调用，因此这里不能直接用裸信号量，
+// 否则同一进程递归进入 ext4 会把自己锁死。
 struct semaphore extlock;
+static proc::Pcb *extlock_owner = nullptr;
+static int extlock_depth = 0;
 [[maybe_unused]] static void ext4_lock(void);
 [[maybe_unused]] static void ext4_unlock(void);
 
@@ -44,10 +51,26 @@ int vfs_ext4_init(void) {
 }
 
 static void ext4_lock() {
+    proc::Pcb *current = proc::k_pm.get_cur_pcb();
+    if (extlock_owner == current && current != nullptr) {
+        extlock_depth++;
+        return;
+    }
+
     sem_p(&extlock);
+    extlock_owner = current;
+    extlock_depth = 1;
 }
 
 static void ext4_unlock() {
+    proc::Pcb *current = proc::k_pm.get_cur_pcb();
+    if (extlock_owner == current && extlock_depth > 1) {
+        extlock_depth--;
+        return;
+    }
+
+    extlock_owner = nullptr;
+    extlock_depth = 0;
     sem_v(&extlock);
 }
 
@@ -89,7 +112,12 @@ int vfs_ext_mount(struct filesystem *fs, uint64_t rwflag, void *data) {
         vfs_ext4_blockdev_destroy(vbdev);
         goto out;
     } else {
-        // ext4_mount_setup_locks(fs->path, &ext4_lock_ops);
+        r = ext4_mount_setup_locks(fs->path, &ext4_lock_ops);
+        if (r != EOK) {
+            ext4_umount(fs->path);
+            vfs_ext4_blockdev_destroy(vbdev);
+            goto out;
+        }
         //获得ext4文件系统的超级块
         // ext4_get_sblock(fs->path, (struct ext4_sblock **)(&(fs->fs_data)));
     }
@@ -117,7 +145,12 @@ int vfs_ext_mount2(struct filesystem *fs, uint64_t rwflag, void *data) {
         vfs_ext4_blockdev_destroy(vbdev);
         goto out;
     } else {
-        // ext4_mount_setup_locks(fs->path, &ext4_lock_ops);
+        r = ext4_mount_setup_locks(fs->path, &ext4_lock_ops);
+        if (r != EOK) {
+            ext4_umount(fs->path);
+            vfs_ext4_blockdev_destroy(vbdev);
+            goto out;
+        }
         //获得ext4文件系统的超级块
         // ext4_get_sblock(fs->path, (struct ext4_sblock **)(&(fs->fs_data)));
     }

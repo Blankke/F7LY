@@ -904,9 +904,11 @@ int ext4_xattr_get(struct ext4_inode_ref *inode_ref, uint8_t name_index, const c
     struct ext4_xattr_info i;
     size_t value_len = 0;
     size_t value_offs = 0;
-    struct ext4_fs *fs = inode_ref->fs;
     ext4_fsblk_t xattr_block;
-    xattr_block = ext4_inode_get_file_acl(inode_ref->inode, &fs->sb);
+    {
+        struct ext4_fs *fs = inode_ref->fs;
+        xattr_block = ext4_inode_get_file_acl(inode_ref->inode, &fs->sb);
+    }
 
     i.name_index = name_index;
     i.name = name;
@@ -930,6 +932,7 @@ int ext4_xattr_get(struct ext4_inode_ref *inode_ref, uint8_t name_index, const c
         }
     } else {
         struct ext4_block block;
+        struct ext4_fs *fs = inode_ref->fs;
 
         /* Return ENODATA if there is no EA block */
         if (!xattr_block) {
@@ -937,6 +940,9 @@ int ext4_xattr_get(struct ext4_inode_ref *inode_ref, uint8_t name_index, const c
             goto out;
         }
 
+        // 这里不要把 fs 指针跨过前面的 inode xattr 查找子调用长期保存在寄存器里。
+        // LoongArch 长跑里这里曾出现过子调用返回后寄存器中的旧 fs 值被破坏，
+        // 但 inode_ref 本身仍然有效；改成现用现取，优先保证 xattr 读路径稳健。
         block_finder.i = i;
         ret = ext4_trans_block_get(fs->bdev, &block, xattr_block);
         if (ret != EOK)

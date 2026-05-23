@@ -705,11 +705,7 @@ struct ltp_testcase ltp_testcases[] = {
     // 约定：第一个 {NULL, false, false} 就是当前默认跑测例的结束标记。
     // 下面继续保留的注释清单只作为候选记录，想打开哪个测例就把它挪到结束标记前面。
     // 新开以前完全没跑过的测例时，优先按 ltp_judge/ltp_rank.txt 的 total count 从高到低推进。
-    {"personality02", true, true},
-    {"getpriority01", true, false},
-    {"getpriority02", true, false},
-    {"setpriority02", true, false},
-    {NULL, false, false},
+    // {NULL, false, false},
     {"memfd_create01", true, true},
     {"splice07", true, true},
     {"epoll_ctl03", true, true},
@@ -939,6 +935,7 @@ struct ltp_testcase ltp_testcases[] = {
     {"pipe12", true, true},       // pass
     {"pipe14", true, true},       // 完全PASS
     {"exit02", true, true},       // pass
+    {"personality02", true, true},
     {"poll01", true, true},       // pass
     {"pread01", true, true},      // pass
     {"pread01_64", true, true},   // pass
@@ -1010,7 +1007,9 @@ struct ltp_testcase ltp_testcases[] = {
     {"execvp01", true, true},  // PASS
     {"gettid01", true, false}, // PASS
     {"set_tid_address01", true, false},
-
+    {"getpriority01", true, false},
+    {"getpriority02", true, false},
+    {"setpriority02", true, false},
     {NULL, false, false}, // 已验证并默认随回归运行的测例，到这里结束
 
     // 当前工作区里已经登记、但暂不默认开启的测例。

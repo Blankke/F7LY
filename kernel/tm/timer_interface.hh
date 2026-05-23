@@ -76,4 +76,10 @@ namespace tmm
 	 */
 	extern ulong usec_to_time_stamp( ulong us );
 
+	/**
+	 * @brief 获取“每个 tick 都会被唤醒”的内核等待通道
+	 * @return 可直接作为 sleep/wakeup 键使用的稳定地址
+	 */
+	extern void *get_tick_wait_channel();
+
 } // namespace tmm

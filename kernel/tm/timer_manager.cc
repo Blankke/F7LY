@@ -361,6 +361,12 @@ namespace tmm
 	/// @note tick是系统时间的基本单位，由定时器中断驱动递增
 	uint64 TimerManager::get_ticks() { return trap_mgr.ticks; };
 
+	void *TimerManager::get_tick_wait_channel()
+	{
+		// 统一暴露 tick 睡眠通道，避免调用方把“当前 tick 数值”误当成通道地址。
+		return &trap_mgr.ticks;
+	}
+
 	/// @brief 获取指定时钟的当前时间（仅秒数部分）
 	/// @param clockid 时钟类型ID
 	/// @return 成功返回秒数，失败返回-1

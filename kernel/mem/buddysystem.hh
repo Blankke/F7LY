@@ -15,6 +15,16 @@ enum NodeState {
 
 class BuddySystem {
 public:
+    struct PageQueryResult {
+        bool in_range;
+        bool is_free;
+        uint8 node_state;
+        uint32 block_pages;
+        int node_index;
+        int node_level;
+        uint32 block_offset;
+    };
+
     void Initialize(uint64 baseptr, uint32 total_pages);
     int Alloc(int size);
     void Free(int offset);
@@ -24,6 +34,7 @@ public:
     uint32 get_page_count() const { return page_count; }
     uint32 get_max_free_block_pages() const;
     uint64 get_free_page_count() const;
+    PageQueryResult query_page(uint32 page_offset) const;
 private:
 
     BuddySystem() = default;
@@ -31,6 +42,8 @@ private:
     void MarkParent(int index);
     void Combine(int index);
     uint32 NextPowerOfTwo(uint32 x);
+    PageQueryResult query_page_from_node(int index, int level, uint32 block_offset,
+                                         uint32 block_pages, uint32 page_offset) const;
 
     // 内存管理相关
     constexpr uint64 AlignUp(uint64 addr, uint64 align);

@@ -49,6 +49,11 @@ namespace tmm
 		return tmm::k_tm.get_ticks();
 	}
 
+	void *get_tick_wait_channel()
+	{
+		return tmm::k_tm.get_tick_wait_channel();
+	}
+
 	/**
 	 * @brief 模块说明
 	 * 

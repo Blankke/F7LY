@@ -9,6 +9,15 @@ namespace mem
     class PhysicalMemoryManager
     {
     public:
+        struct PageDebugInfo
+        {
+            bool managed = false;
+            bool aligned = false;
+            uint64 page_offset = 0;
+            uint64 page_pa = 0;
+            BuddySystem::PageQueryResult buddy{};
+        };
+
         static void init();
         static void *alloc_page(); // 分配单个物理页
         static void free_page(void *pa); // 释放单个物理页
@@ -16,6 +25,7 @@ namespace mem
         static void *kmalloc(size_t size); // 分配任意大小的内存块
         static void *kcalloc(uint n, size_t size);
         void clear_page(void *pa);
+        static PageDebugInfo debug_query_page(void *pa);
         static uint64 get_phys_top() { return phys_top; }
         static uint64 get_kernel_linear_top() { return kernel_linear_top; }
         static uint64 get_heap_area_start() { return heap_area_start; }
