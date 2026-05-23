@@ -29,9 +29,26 @@ namespace mem
     uint64 PhysicalMemoryManager::shm_start;
     uint64 PhysicalMemoryManager::shm_size;
 
+    namespace
+    {
+        inline uint64 normalize_managed_page_addr(uint64 addr)
+        {
+#ifdef LOONGARCH
+            // LoongArch 页表叶子里记录的是纯物理地址，但 PMM/buddy 管的是 DMWIN 直映地址。
+            // 如果这里不统一折算，释放用户页时就会把错误页号塞回 buddy，长跑下会表现成
+            // “仍在使用的用户页被重新分配给 trapframe/kstack”。
+            if (addr != 0 && addr < PHYSBASE)
+            {
+                addr = to_vir(addr);
+            }
+#endif
+            return addr;
+        }
+    } // namespace
+
     uint64 PhysicalMemoryManager::pa2pgnm(void *pa)
     {
-        auto addr = reinterpret_cast<uint64>(pa);
+        auto addr = normalize_managed_page_addr(reinterpret_cast<uint64>(pa));
         if (addr % PGSIZE != 0)
         {
             panic("pa2pgnm: address is not page-aligned");
@@ -325,6 +342,44 @@ namespace mem
         }
         memset(pa, 0, n * size);
         return pa;
+    }
+
+    PhysicalMemoryManager::PageDebugInfo PhysicalMemoryManager::debug_query_page(void *pa)
+    {
+        PageDebugInfo info{};
+        if (pa == nullptr)
+        {
+            return info;
+        }
+
+        uint64 input_addr = reinterpret_cast<uint64>(pa);
+        info.page_pa = PGROUNDDOWN(input_addr);
+        info.aligned = (input_addr % PGSIZE) == 0;
+
+        if (_buddy == nullptr)
+        {
+            return info;
+        }
+
+        uint64 managed_addr = info.page_pa;
+#ifdef LOONGARCH
+        // LoongArch 页表里拿到的是物理地址，而 buddy/PMM 管的是 DMWIN 直映虚拟地址。
+        // 调试查询时统一折算成内核线性地址，再判断是否落在 buddy 管辖范围内。
+        if (managed_addr < PHYSBASE)
+        {
+            managed_addr = to_vir(managed_addr);
+        }
+#endif
+
+        if (managed_addr < pa_start || managed_addr >= phys_top)
+        {
+            return info;
+        }
+
+        info.managed = true;
+        info.page_offset = (managed_addr - pa_start) / PGSIZE;
+        info.buddy = _buddy->query_page(static_cast<uint32>(info.page_offset));
+        return info;
     }
 
 }

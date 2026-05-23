@@ -6,6 +6,92 @@
 #include "sys/syscall_defs.hh"
 #include "klib.hh"
 
+namespace
+{
+#ifdef LOONGARCH
+    constexpr uint64 k_signal_stack_align = 16;
+
+    uint64 align_down(uint64 value, uint64 align)
+    {
+        return value & ~(align - 1);
+    }
+
+    void fill_loongarch_user_mcontext(proc::ipc::signal::machinecontext &mctx, const TrapFrame &tf)
+    {
+        memset(&mctx, 0, sizeof(mctx));
+        mctx.pc = tf.era;
+        mctx.gregs[0] = 0;
+        mctx.gregs[1] = tf.ra;
+        mctx.gregs[2] = tf.tp;
+        mctx.gregs[3] = tf.sp;
+        mctx.gregs[4] = tf.a0;
+        mctx.gregs[5] = tf.a1;
+        mctx.gregs[6] = tf.a2;
+        mctx.gregs[7] = tf.a3;
+        mctx.gregs[8] = tf.a4;
+        mctx.gregs[9] = tf.a5;
+        mctx.gregs[10] = tf.a6;
+        mctx.gregs[11] = tf.a7;
+        mctx.gregs[12] = tf.t0;
+        mctx.gregs[13] = tf.t1;
+        mctx.gregs[14] = tf.t2;
+        mctx.gregs[15] = tf.t3;
+        mctx.gregs[16] = tf.t4;
+        mctx.gregs[17] = tf.t5;
+        mctx.gregs[18] = tf.t6;
+        mctx.gregs[19] = tf.t7;
+        mctx.gregs[20] = tf.t8;
+        mctx.gregs[21] = tf.r21;
+        mctx.gregs[22] = tf.fp;
+        mctx.gregs[23] = tf.s0;
+        mctx.gregs[24] = tf.s1;
+        mctx.gregs[25] = tf.s2;
+        mctx.gregs[26] = tf.s3;
+        mctx.gregs[27] = tf.s4;
+        mctx.gregs[28] = tf.s5;
+        mctx.gregs[29] = tf.s6;
+        mctx.gregs[30] = tf.s7;
+        mctx.gregs[31] = tf.s8;
+    }
+
+    void restore_loongarch_trapframe_from_ucontext(TrapFrame &tf, const proc::ipc::signal::usercontext &uctx)
+    {
+        tf.era = uctx.mcontext.pc;
+        tf.ra = uctx.mcontext.gregs[1];
+        tf.tp = uctx.mcontext.gregs[2];
+        tf.sp = uctx.mcontext.gregs[3];
+        tf.a0 = uctx.mcontext.gregs[4];
+        tf.a1 = uctx.mcontext.gregs[5];
+        tf.a2 = uctx.mcontext.gregs[6];
+        tf.a3 = uctx.mcontext.gregs[7];
+        tf.a4 = uctx.mcontext.gregs[8];
+        tf.a5 = uctx.mcontext.gregs[9];
+        tf.a6 = uctx.mcontext.gregs[10];
+        tf.a7 = uctx.mcontext.gregs[11];
+        tf.t0 = uctx.mcontext.gregs[12];
+        tf.t1 = uctx.mcontext.gregs[13];
+        tf.t2 = uctx.mcontext.gregs[14];
+        tf.t3 = uctx.mcontext.gregs[15];
+        tf.t4 = uctx.mcontext.gregs[16];
+        tf.t5 = uctx.mcontext.gregs[17];
+        tf.t6 = uctx.mcontext.gregs[18];
+        tf.t7 = uctx.mcontext.gregs[19];
+        tf.t8 = uctx.mcontext.gregs[20];
+        tf.r21 = uctx.mcontext.gregs[21];
+        tf.fp = uctx.mcontext.gregs[22];
+        tf.s0 = uctx.mcontext.gregs[23];
+        tf.s1 = uctx.mcontext.gregs[24];
+        tf.s2 = uctx.mcontext.gregs[25];
+        tf.s3 = uctx.mcontext.gregs[26];
+        tf.s4 = uctx.mcontext.gregs[27];
+        tf.s5 = uctx.mcontext.gregs[28];
+        tf.s6 = uctx.mcontext.gregs[29];
+        tf.s7 = uctx.mcontext.gregs[30];
+        tf.s8 = uctx.mcontext.gregs[31];
+    }
+#endif
+}
+
 namespace proc
 {
     namespace ipc
@@ -42,7 +128,7 @@ namespace proc
                     if (cur_proc->_sigactions->actions[flag])
                         *oldact = *(cur_proc->_sigactions->actions[flag]);
                     else
-                        *oldact = {SIG_DFL, 0, 0, {{0}}}; // 正确初始化所有字段，包括 sa_mask
+                        *oldact = {SIG_DFL, 0, {{0}}}; // 正确初始化所有字段，包括 sa_mask
                 }
                 if (newact != nullptr)
                 {
@@ -708,9 +794,16 @@ namespace proc
                         sig_size = 5 * PGSIZE; // 预留空间，确保足够大
                     }
 
-                    // 计算栈上的地址
-                    uint64 usercontext_sp = stack_sp - PGSIZE - sizeof(usercontext);
-                    uint64 linuxinfo_sp = usercontext_sp - sizeof(LinuxSigInfo);
+                    // 计算栈上的地址。
+                    // 信号帧应当直接从当前 sp / altstack 栈顶向下扣减并按 ABI 对齐，
+                    // 不能再额外空出一整页；否则像 pthread_cancel_points 这种使用
+                    // SA_SIGINFO 的路径，会把 ucontext 写到未映射的栈下方页面里。
+                    uint64 frame_bytes = sizeof(uint64) * 2 + sizeof(LinuxSigInfo) + sizeof(usercontext);
+                    uint64 frame_sp = align_down(stack_sp - frame_bytes, k_signal_stack_align);
+                    uint64 guard_sp = frame_sp;
+                    uint64 marker_sp = guard_sp + sizeof(uint64);
+                    uint64 linuxinfo_sp = marker_sp + sizeof(uint64);
+                    uint64 usercontext_sp = linuxinfo_sp + sizeof(LinuxSigInfo);
 
                     // 构造 ustack 结构
                     usercontext uctx;
@@ -718,11 +811,12 @@ namespace proc
                     uctx.flags = 0;
                     uctx.link = 0;
                     uctx.stack = {(void*)linuxinfo_sp, 0, sig_size};
-                    uctx.sigmask = p->_sigmask;
 #ifdef RISCV
+                    uctx.sigmask = p->_sigmask;
                     uctx.mcontext.gp.x[17] = p->_trapframe->epc; // epc(TODO)
 #elif LOONGARCH
-                    uctx.mcontext.gp.x[17] = p->_trapframe->era;
+                    uctx.sigmask.sig[0] = p->_sigmask;
+                    fill_loongarch_user_mcontext(uctx.mcontext, frame->tf);
 #endif
                     // mcontext 已经通过 memset 初始化为0了
                     // printf("[debug] uctx[176] = %p\n",(char*)&uctx + 176);
@@ -738,11 +832,10 @@ namespace proc
 
                     // 构造 LinuxSigInfo 结构
                     LinuxSigInfo siginfo = {
-                        .si_signo = (uint32)signum,
+                        .si_signo = (int32)signum,
                         .si_errno = 0,
                         .si_code = 0,
-                        ._pad = {0},
-                        ._align = 0};
+                        ._pad = {0}};
                     printf("[do_handle] LinuxSigInfo constructed: sp: %p usercontext_sp=%p, linuxinfo_sp=%p\n",
                            p->_trapframe->sp, usercontext_sp, linuxinfo_sp);
                     // 将结构写入用户空间
@@ -764,12 +857,11 @@ namespace proc
                     p->_trapframe->a2 = usercontext_sp; // 第三个参数：ucontext_t*
 
                     // 调整栈指针
-                    p->_trapframe->sp = linuxinfo_sp;
-                    p->_trapframe->sp -= sizeof(uint64); // 为返回地址预留空间
+                    p->_trapframe->sp = marker_sp;
 
                     // 在栈顶写入返回地址标记
                     uint64 ret_marker = UINT64_MAX;
-                    if (mem::k_vmm.copy_out(*p->get_pagetable(), p->get_trapframe()->sp, &ret_marker, sizeof(uint64)) < 0)
+                    if (mem::k_vmm.copy_out(*p->get_pagetable(), marker_sp, &ret_marker, sizeof(uint64)) < 0)
                     {
                         panic("[do_handle] Failed to write return marker to user stack");
                         return;
@@ -804,7 +896,9 @@ namespace proc
                         stack_sp = p->_trapframe->sp;
                     }
                     
-                    p->_trapframe->sp = stack_sp - PGSIZE;
+                    // 单参数信号帧同样直接贴着当前栈顶落下，保持与 Linux 的栈增长
+                    // 语义一致，避免因为额外跳过一页而误落到未映射区域。
+                    p->_trapframe->sp = stack_sp - sizeof(uint64);
                     
                     // 在栈顶写入返回地址标记
                     uint64 ret_marker = 0;
@@ -822,9 +916,10 @@ namespace proc
                 p->_trapframe->era = (uint64)(act->sa_handler);
 #endif
                 // 哨兵
-                p->_trapframe->sp -= sizeof(uint64); // 为返回地址预留空间
+                uint64 guard_sp = p->get_trapframe()->sp - sizeof(uint64);
+                p->_trapframe->sp = guard_sp;
 
-                if (mem::k_vmm.copy_out(*p->get_pagetable(), p->get_trapframe()->sp, &guard, sizeof(guard)) < 0)
+                if (mem::k_vmm.copy_out(*p->get_pagetable(), guard_sp, &guard, sizeof(guard)) < 0)
                 {
                     panic("[do_handle] Failed to write return marker to user stack");
                     return;
@@ -898,7 +993,7 @@ namespace proc
                         return;
                     }
                     signal_frame *frame = p->sig_frame;
-                    p->_sigmask = frame->mask.sig[0];                        // 恢复信号掩码
+                    p->_sigmask = frame->mask.sig[0];                        // 默认先回到进入信号前的内核保存值
                     memmove(p->_trapframe, &(frame->tf), sizeof(TrapFrame)); // 恢复陷阱帧
                     p->sig_frame = frame->next;                              // 移除当前信号帧
                     
@@ -909,7 +1004,8 @@ namespace proc
 #ifdef RISCV
                     p->_trapframe->epc = uctx.mcontext.gp.x[17];
 #elif LOONGARCH
-                    p->_trapframe->era = uctx.mcontext.gp.x[17];
+                    p->_sigmask = uctx.sigmask.sig[0];
+                    restore_loongarch_trapframe_from_ucontext(*p->_trapframe, uctx);
 #endif
                 }
             }

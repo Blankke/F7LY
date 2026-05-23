@@ -16,6 +16,7 @@
 #include "fs/lwext4/ext4_errno.hh"
 #include "fs/lwext4/misc/queue.hh"
 #include "libs/string.hh"
+#include "semaphore.hh"
 
 static int blockdev_lock(struct ext4_blockdev *bdev);
 
@@ -30,7 +31,12 @@ static int blockdev_write(struct ext4_blockdev *bdev, const void *buf, uint64_t 
 static int blockdev_close(struct ext4_blockdev *bdev);
 
 
-[[maybe_unused]]static int bdevice_lock = 0;
+// lwext4 的 blockdev 接口里有一块共享的物理块缓冲区 ph_bbuf，
+// 还会在读写路径里复用同一个设备描述符状态。以前这里的 lock/unlock 是空实现，
+// 一旦多个进程交错执行 readbytes/writebytes 或 mount 期间的辅助操作，就可能把
+// 共享缓冲踩坏。这里补上实际可睡眠的串行化，避免在磁盘 I/O 路径里拿自旋锁。
+static sem g_blockdev_sem;
+static bool g_blockdev_sem_inited = false;
 //只有一个vbd
 struct ext4_blockdev_iface biface;
 struct vfs_ext4_blockdev bvbdev;
@@ -51,6 +57,11 @@ static int vfs_ext4_blockdev_init(struct vfs_ext4_blockdev *vbdev, int dev) {
     //TODO: 支持动态内存分配
     //struct ext4_blockdev_iface *iface = NULL;
     struct ext4_blockdev_iface *iface = &biface;
+
+    if (!g_blockdev_sem_inited) {
+        sem_init(&g_blockdev_sem, 1, const_cast<char *>("ext4_bdev_sem"));
+        g_blockdev_sem_inited = true;
+    }
 
     if (vbdev) {
         vbdev->dev = dev;
@@ -87,6 +98,11 @@ static int vfs_ext4_blockdev_init2(struct vfs_ext4_blockdev *vbdev, int dev) {
     //TODO: 支持动态内存分配
     //struct ext4_blockdev_iface *iface = NULL;
     struct ext4_blockdev_iface *iface = &biface2;
+
+    if (!g_blockdev_sem_inited) {
+        sem_init(&g_blockdev_sem, 1, const_cast<char *>("ext4_bdev_sem"));
+        g_blockdev_sem_inited = true;
+    }
 
     if (vbdev) {
         vbdev->dev = dev;
@@ -163,15 +179,14 @@ int vfs_ext4_blockdev_destroy(struct vfs_ext4_blockdev *vbdev) {
 }
 
 static int blockdev_lock(struct ext4_blockdev *bdev) {
-    // acquire(&bdevice_lock);
-    // while (__sync_lock_test_and_set(&bdevice_lock, 1) != 0) {
-    // }
-
+    (void)bdev;
+    sem_p(&g_blockdev_sem);
     return EOK;
 }
 
 static int blockdev_unlock(struct ext4_blockdev *bdev) {
-    // __sync_lock_release(&bdevice_lock);
+    (void)bdev;
+    sem_v(&g_blockdev_sem);
     return EOK;
 }
 

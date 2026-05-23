@@ -1170,6 +1170,9 @@ namespace proc
                         // 页面已分配，需要写回到文件
                         uint64 pa = (uint64)pte.pa();
                         int file_offset = vm_entry.offset + (va - vma_start);
+#ifdef LOONGARCH
+                        pa = to_vir(pa);
+#endif
 
                         // 写回数据到文件
                         int write_result = vm_entry.vfile->write(pa, PGSIZE, file_offset, false);

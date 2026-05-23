@@ -926,7 +926,6 @@ namespace syscall
         // intr_stats::k_intr_stats.record_interrupt(666);
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
         uint64 sys_num = p->get_trapframe()->a7; // 获取系统调用号
-
         if (!(sys_num == 64 && p->_trapframe->a0 == 1) && !(sys_num == 66 && p->_trapframe->a0 == 1))
         {
             // printfMagenta("[Pcb::get_open_file] pid: %d\n", p->_pid);
@@ -3366,11 +3365,13 @@ namespace syscall
     {
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
         [[maybe_unused]] mem::PageTable *pt = proc->get_pagetable();
-        [[maybe_unused]] proc::ipc::signal::sigaction a_newact, a_oldact;
-        // a_newact = nullptr;
-        // a_oldact = nullptr;
+        proc::ipc::signal::sigaction a_newact{};
+        proc::ipc::signal::sigaction a_oldact{};
+        proc::ipc::signal::kernel_sigaction_abi u_newact{};
+        proc::ipc::signal::kernel_sigaction_abi u_oldact{};
         uint64 newactaddr, oldactaddr;
         int signum;
+        int sigsetsize;
         int ret = -1;
 
         if (_arg_int(0, signum) < 0)
@@ -3381,14 +3382,31 @@ namespace syscall
 
         if (_arg_addr(2, oldactaddr) < 0)
             return -1;
+        if (_arg_int(3, sigsetsize) < 0)
+            return -1;
+
+        // rt_sigaction(2) 的第四个参数必须是内核信号掩码大小。
+        // 当前内核内部只支持 64 个信号位，因此这里要求 8 字节，
+        // 与 asm-generic rt_sigaction ABI 保持一致。
+        if (sigsetsize != (int)sizeof(proc::ipc::signal::sigset_t))
+        {
+            return syscall::SYS_EINVAL;
+        }
         // printf("[SyscallHandler::sys_rt_sigaction] signum: %d, newactaddr: %p, oldactaddr: %p\n",
         //        signum, (void *)newactaddr, (void *)oldactaddr);
 
         if (newactaddr != 0)
         {
-            if (mem::k_vmm.copy_in(*pt, &a_newact, newactaddr,
-                                   sizeof(proc::ipc::signal::sigaction)) < 0)
+            // 注意：rt_sigaction(2) 看到的是 libc 重新打包后的内核 ABI 结构，
+            // 不是应用层 struct sigaction。当前支持的 asm-generic 架构布局为
+            // handler -> flags -> restorer -> mask；如果按 libc 可见布局解包，
+            // SA_SIGINFO/SA_ONSTACK/SA_RESTART 和 sa_mask 都会错位。
+            if (mem::k_vmm.copy_in(*pt, &u_newact, newactaddr,
+                                   sizeof(proc::ipc::signal::kernel_sigaction_abi)) < 0)
                 return -1;
+            a_newact.sa_handler = u_newact.sa_handler;
+            a_newact.sa_flags = u_newact.sa_flags;
+            a_newact.sa_mask.sig[0] = u_newact.sa_mask.sig[0];
             ret = proc::ipc::signal::sigAction(signum, &a_newact, &a_oldact);
         }
         else
@@ -3397,8 +3415,12 @@ namespace syscall
         }
         if (ret == 0 && oldactaddr != 0)
         {
-            if (mem::k_vmm.copy_out(*pt, oldactaddr, &a_oldact,
-                                    sizeof(proc::ipc::signal::sigaction)) < 0)
+            memset(&u_oldact, 0, sizeof(u_oldact));
+            u_oldact.sa_handler = a_oldact.sa_handler;
+            u_oldact.sa_flags = a_oldact.sa_flags;
+            u_oldact.sa_mask.sig[0] = a_oldact.sa_mask.sig[0];
+            if (mem::k_vmm.copy_out(*pt, oldactaddr, &u_oldact,
+                                    sizeof(proc::ipc::signal::kernel_sigaction_abi)) < 0)
                 return -1;
         }
         return ret;

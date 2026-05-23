@@ -1697,10 +1697,7 @@ static int ext4_ftruncate_no_lock(ext4_file *file, uint64_t size)
 
     r = ext4_fs_get_inode_ref(&file->mp->fs, file->inode, &ref);
     if (r != EOK)
-    {
-        EXT4_MP_UNLOCK(file->mp);
         return r;
-    }
 
     /*Sync file size*/
     file->fsize = ext4_inode_get_size(&file->mp->fs.sb, ref.inode);
@@ -2941,7 +2938,7 @@ int ext4_removexattr(const char *path, const char *name, size_t name_len)
     r = ext4_generic_open2(&f, path, O_RDONLY, EXT4_DE_UNKNOWN, NULL, NULL);
     if (r != EOK)
     {
-        EXT4_MP_LOCK(mp);
+        EXT4_MP_UNLOCK(mp);
         return r;
     }
 

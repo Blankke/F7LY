@@ -1021,6 +1021,15 @@ namespace proc
             if (p->_tid == tid)
             {
                 p->add_signal(sig);
+                // 线程定向信号和 kill(2) 一样，都需要把“可被信号中断的睡眠”及时唤醒。
+                // pthread_cancel() 最终会走到 pthread_kill/tgkill/tkill；如果这里只是记账信号，
+                // 但不把卡在 futex/rt_sigsuspend 等等待里的目标线程改回 RUNNABLE，
+                // 取消请求就会永远堆在 _signal 里，表现成用户态 join/sem_wait 长时间卡死。
+                if (p->_state == ProcState::SLEEPING &&
+                    proc::ipc::signal::has_unmasked_signal_pending(p))
+                {
+                    p->_state = ProcState::RUNNABLE;
+                }
                 p->_lock.release();
                 return 0;
             }
@@ -1038,6 +1047,14 @@ namespace proc
             if (p->_tid == tid && p->_tgid == tgid)
             {
                 p->add_signal(sig);
+                // tgkill(2) 是线程取消/定向信号的核心路径。
+                // 保持和 kill_signal() 一致：只要目标线程当前睡眠且存在未屏蔽待处理信号，
+                // 就要把它唤醒，让阻塞中的系统调用有机会返回 EINTR。
+                if (p->_state == ProcState::SLEEPING &&
+                    proc::ipc::signal::has_unmasked_signal_pending(p))
+                {
+                    p->_state = ProcState::RUNNABLE;
+                }
                 p->_lock.release();
                 return 0;
             }
@@ -1200,14 +1217,53 @@ namespace proc
         {
             return -1; // EAGAIN: Out of memory
         }
-        uint64 new_tid = np->_tid;
+        int new_tid = np->_tid;
         uint64 new_pid = np->_pid;
+
+#ifdef LOONGARCH
+        if ((flags & syscall::CLONE_THREAD) && p->get_pagetable() != nullptr)
+        {
+            uint64 trapframe_pa = VIRT2PHY((uint64)np->_trapframe);
+            auto check_user_alias = [&](uint64 user_addr, const char *label) {
+                if (user_addr == 0)
+                {
+                    return;
+                }
+                mem::Pte user_pte = p->get_pagetable()->walk(PGROUNDDOWN(user_addr), false);
+                if (!user_pte.is_null() && user_pte.is_valid())
+                {
+                    uint64 user_pa = (uint64)user_pte.pa();
+                    if (user_pa == trapframe_pa)
+                    {
+                        panic("debug clone trapframe alias: parent pid=%d tid=%d child tid=%d label=%s user=%p user_pa=%p trapframe=%p trapframe_pa=%p stack=%p tls=%p ctid=%p",
+                              p->_pid,
+                              p->_tid,
+                              np->_tid,
+                              label,
+                              (void *)user_addr,
+                              (void *)user_pa,
+                              np->_trapframe,
+                              (void *)trapframe_pa,
+                              (void *)stack_ptr,
+                              (void *)tls,
+                              (void *)ctid);
+                    }
+                }
+            };
+            check_user_alias(stack_ptr, "stack");
+            check_user_alias(tls, "tls");
+            check_user_alias(ctid, "ctid");
+        }
+#endif
+
         if (flags & syscall::CLONE_SETTLS)
         {
             np->_trapframe->tp = tls; // 设置线程局部存储指针
         }
         if (flags & syscall::CLONE_PARENT_SETTID)
         {
+            // parent_tid 指向的是 pid_t，必须按 4 字节写。
+            // 之前按 8 字节写会把线程库紧邻的状态字段一并覆盖掉。
             if (mem::k_vmm.copy_out(*p->get_pagetable(), ptid, &new_tid, sizeof(new_tid)) < 0)
             {
                 freeproc_creation_failed(np); // 使用专门的创建失败清理函数
@@ -1246,7 +1302,8 @@ namespace proc
             }
             _wait_lock.release();
         }
-        return new_pid;
+        // Linux clone()/clone3() 在线程语义下返回新线程 tid，而不是线程组 pid。
+        return (flags & syscall::CLONE_THREAD) ? (uint64)(uint32)new_tid : new_pid;
     }
 
     // 这个函数主要用提供clone的底层支持
@@ -1529,7 +1586,8 @@ namespace proc
                 // Linux 语义要求写入“子进程地址空间”中的 child_tid。
                 // 对非 CLONE_VM 的 fork/clone，父子页表已经分离，写父页表会让子进程
                 // 看到未初始化的 tid 字段，进而破坏 glibc/pthread 的运行时状态。
-                if (mem::k_vmm.copy_out(*np->get_pagetable(), ctid, &np->_tid, sizeof(np->_tid)) < 0)
+                int child_tid = np->_tid;
+                if (mem::k_vmm.copy_out(*np->get_pagetable(), ctid, &child_tid, sizeof(child_tid)) < 0)
                 {
                     freeproc_creation_failed(np); // 使用专门的创建失败清理函数
                     np->_lock.release();
@@ -1980,10 +2038,21 @@ namespace proc
         // 处理线程退出时的清理地址
         if (p->_clear_tid_addr)
         {
-            uint64 temp0 = 0;
-            if (mem::k_vmm.copy_out(*p->get_pagetable(), p->_clear_tid_addr, &temp0, sizeof(temp0)) < 0)
+            int clear_tid = 0;
+            // Linux 的 clear_child_tid / set_tid_address 目标类型是 pid_t*，即 4 字节整数。
+            // 这里如果按 8 字节写零，musl 的 __thread_list_lock 这类相邻静态字段会被连带清掉，
+            // 线程退出后 join / 线程链表同步就会莫名卡死。
+            if (mem::k_vmm.copy_out(*p->get_pagetable(), p->_clear_tid_addr, &clear_tid, sizeof(clear_tid)) < 0)
             {
                 printfRed("exit_proc: copy out ctid failed\n");
+            }
+            else
+            {
+                // Linux 线程退出语义：CLONE_CHILD_CLEARTID / set_tid_address 指定的地址
+                // 在被清零后，还必须做一次 FUTEX_WAKE。pthread_join()、libc 的线程回收
+                // 和一批取消点测试都依赖这一下；只清零不唤醒会让 join 方永远睡在
+                // 对应 futex 上，长跑里表现成 pthread_cancel_points 卡死。
+                proc::futex_wakeup(p->_clear_tid_addr, 1, nullptr, 0);
             }
         }
 
@@ -4431,7 +4500,7 @@ namespace proc
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ)
                     seg_flag |= riscv::PteEnum::pte_readable_m;
 #elif defined(LOONGARCH)
-                seg_flag |= PTE_P | PTE_D | PTE_PLV; // PTE_P: Present bit, segment is present in memory
+                seg_flag |= PTE_P | PTE_D | PTE_PLV | PTE_MAT; // PTE_P: Present bit, segment is present in memory
                 // PTE_D: Dirty bit, segment is dirty (modified)
                 if (!(ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC))
                     seg_flag |= PTE_NX; // not executable
@@ -4663,7 +4732,7 @@ namespace proc
                     if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ)
                         seg_flag |= riscv::PteEnum::pte_readable_m;
 #elif defined(LOONGARCH)
-                    seg_flag |= PTE_P | PTE_D | PTE_PLV;
+                    seg_flag |= PTE_P | PTE_D | PTE_PLV | PTE_MAT;
                     if (!(interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC))
                         seg_flag |= PTE_NX;
                     if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)

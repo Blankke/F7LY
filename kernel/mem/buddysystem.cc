@@ -375,4 +375,62 @@ namespace mem
     {
         return free_page_count_from_node(0, capacity_pages);
     }
+
+    BuddySystem::PageQueryResult BuddySystem::query_page(uint32 page_offset) const
+    {
+        PageQueryResult result{};
+        if (page_offset >= page_count)
+        {
+            return result;
+        }
+        return query_page_from_node(0, 0, 0, capacity_pages, page_offset);
+    }
+
+    BuddySystem::PageQueryResult BuddySystem::query_page_from_node(int index, int current_level,
+                                                                   uint32 block_offset, uint32 block_pages,
+                                                                   uint32 page_offset) const
+    {
+        PageQueryResult result{};
+        result.in_range = page_offset < page_count;
+        result.node_index = index;
+        result.node_level = current_level;
+        result.block_offset = block_offset;
+        result.block_pages = block_pages;
+
+        if (!result.in_range || index < 0 || block_pages == 0)
+        {
+            return result;
+        }
+
+        uint8 state = tree[index];
+        result.node_state = state;
+
+        if (state == NODE_UNUSED)
+        {
+            result.is_free = true;
+            return result;
+        }
+
+        if (state == NODE_USED || block_pages == 1)
+        {
+            result.is_free = false;
+            return result;
+        }
+
+        uint32 child_block_pages = block_pages / 2;
+        if (child_block_pages == 0)
+        {
+            result.is_free = false;
+            return result;
+        }
+
+        if (page_offset < block_offset + child_block_pages)
+        {
+            return query_page_from_node(index * 2 + 1, current_level + 1, block_offset,
+                                        child_block_pages, page_offset);
+        }
+        return query_page_from_node(index * 2 + 2, current_level + 1,
+                                    block_offset + child_block_pages, child_block_pages,
+                                    page_offset);
+    }
 } // namespace mem

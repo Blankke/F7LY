@@ -8,6 +8,29 @@
 #include "platform.hh"
 #include "sys/syscall_defs.hh"  // 添加syscall错误码定义
 #include "proc/signal.hh"       // 添加信号处理定义
+
+namespace
+{
+    constexpr long k_nsec_per_sec = 1000000000L;
+
+    // 将相对超时时间转换为硬件周期数。
+    // futex(FUTEX_WAIT) 的 timeout 语义是相对时间，必须按 Linux/POSIX 直接使用，
+    // 不能偷偷追加额外秒数，也不能把“当前 tick 数值”当成睡眠通道。
+    bool futex_timeout_to_cycles(const tmm::timespec &ts, uint64 &cycles)
+    {
+        if (ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= k_nsec_per_sec)
+        {
+            return false;
+        }
+
+        uint64 freq = tmm::get_main_frequence();
+        uint64 sec_cycles = static_cast<uint64>(ts.tv_sec) * freq;
+        uint64 nsec_cycles = (static_cast<uint64>(ts.tv_nsec) * freq) / k_nsec_per_sec;
+        cycles = sec_cycles + nsec_cycles;
+        return true;
+    }
+}
+
 namespace proc
 {
     void futex_sleep(void *chan, void *futex_addr)
@@ -59,12 +82,25 @@ namespace proc
         // 处理超时等待
         if (ts)
         {
-            uint64 n;
-            n = (ts->tv_sec + 3) * tmm::qemu_fre + (ts->tv_nsec * tmm::qemu_fre) / 1000000000;
-            uint64 timestamp;
-            timestamp = rdtime();
+            uint64 timeout_cycles = 0;
+            if (!futex_timeout_to_cycles(*ts, timeout_cycles))
+            {
+                p->_lock.release();
+                return syscall::SYS_EINVAL;
+            }
 
-            while (rdtime() - timestamp < n)
+            uint64 now = tmm::get_hw_time_stamp();
+            uint64 deadline = now + timeout_cycles;
+
+            // 零超时是合法输入，语义上应立即返回 ETIMEDOUT。
+            if (timeout_cycles == 0)
+            {
+                p->_futex_addr = 0;
+                p->_lock.release();
+                return syscall::SYS_ETIMEDOUT;
+            }
+
+            while (true)
             {
                 // 检查致命信号（无法屏蔽的信号如SIGKILL）
                 if (ipc::signal::has_fatal_signal_pending(p))
@@ -84,21 +120,34 @@ namespace proc
                     return syscall::SYS_EINTR;  // 系统调用被信号中断
                 }
 
-                // futex_sleep会管理锁的释放和重新获取
-                futex_sleep((void *)tmm::k_tm.get_ticks(), (void *)uaddr);
+                now = tmm::get_hw_time_stamp();
+                if (now >= deadline)
+                {
+                    p->_futex_addr = 0;
+                    p->_lock.release();
+                    return syscall::SYS_ETIMEDOUT;
+                }
 
-                // 检查是否被正常唤醒（futex_addr被清零表示正常唤醒）
+                // 让超时 futex 睡在真正会被 timer tick 唤醒的公共通道上。
+                // 被 tick 唤醒后重新检查 deadline；被 futex_wakeup/信号唤醒时仍走原有分支。
+                futex_sleep(tmm::k_tm.get_tick_wait_channel(), (void *)uaddr);
+
+                // futex_wakeup() 和“被信号打断”都会把 _futex_addr 清零。
+                // 这里必须先判信号，再判正常唤醒；否则 sem_timedwait/pthread_join
+                // 这类带超时或内部走 timed futex 的取消点会把 EINTR 误报成成功，
+                // 用户态随后继续执行，长跑里就容易卡在取消点测例上。
                 if (p->_futex_addr == 0)
                 {
+                    if (ipc::signal::has_fatal_signal_pending(p) ||
+                        ipc::signal::has_unmasked_signal_pending(p))
+                    {
+                        p->_lock.release();
+                        return syscall::SYS_EINTR;
+                    }
                     p->_lock.release();
                     return 0;  // 成功被唤醒
                 }
             }
-
-            // 超时处理：清理状态并返回
-            p->_futex_addr = 0;
-            p->_lock.release();
-            return syscall::SYS_ETIMEDOUT;  // 操作超时
         }
 
         // 无超时的等待

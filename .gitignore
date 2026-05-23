@@ -47,7 +47,7 @@ sdcard-rv-onsite.img
 kernel-rv
 kernel-la
 output-more.txt
-output*
+output*.txt
 output
 ref.txt
 sdcard-rv.zip

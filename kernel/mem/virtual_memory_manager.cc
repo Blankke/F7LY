@@ -42,6 +42,15 @@ namespace mem
 
     namespace
     {
+        inline void *page_pa_to_kernel_ptr(uint64 pa)
+        {
+#ifdef LOONGARCH
+            return reinterpret_cast<void *>(to_vir(pa));
+#else
+            return reinterpret_cast<void *>(pa);
+#endif
+        }
+
         inline bool ranges_overlap(uint64 lhs_addr, uint64 lhs_size, uint64 rhs_addr, uint64 rhs_size)
         {
             if (lhs_size == 0 || rhs_size == 0)
@@ -293,8 +302,10 @@ namespace mem
                 return 0;
             }
             k_pmm.clear_page(mem);
-            if (map_pages(pt, a, PGSIZE, (uint64)mem,
-                          PTE_R | PTE_U | flags) == false)
+            // LoongArch 用户态普通页默认应保持可缓存，避免 ELF/堆/BSS 上的
+            // ll/sc 原子在数据页上长期失败，表现成 pthread 类用例卡在用户态自旋。
+            uint64 pte_flags = PTE_R | PTE_U | PTE_MAT | flags;
+            if (map_pages(pt, a, PGSIZE, (uint64)mem, pte_flags) == false)
             {
                 printfRed("vmalloc: map_pages failed\n");
                 k_pmm.free_page(mem);
@@ -994,7 +1005,7 @@ namespace mem
             if (do_free)
             {
                 // printfMagenta("vmunmap: free va: %p, pa: %p\n", a, pte.pa());
-                k_pmm.free_page(pte.pa());
+                k_pmm.free_page(page_pa_to_kernel_ptr(reinterpret_cast<uint64>(pte.pa())));
             }
             // printfMagenta("vmunmap: unmap va: %p, pa: %p\n", a, pte.pa());
             pte.clear_data();
@@ -1079,7 +1090,7 @@ namespace mem
                     vmunmap(new_pt, 0, va / PGSIZE, 1);
                     return -1;
                 }
-                memmove(mem, (const char *)pa, PGSIZE);
+                memmove(mem, page_pa_to_kernel_ptr(pa), PGSIZE);
                 // printfYellow("[vm_copy] Copying memory for VA=%p -> new PA=%p (private memory)\n", va, (uint64)mem);
                 if (map_pages(new_pt, va, PGSIZE, (uint64)mem, flags) == false)
                 {
@@ -1152,7 +1163,9 @@ namespace mem
                 return 0;
             }
             memset(mem, 0, PGSIZE);
-            if (map_pages(pt, a, PGSIZE, (uint64)mem, flags | PTE_U | PTE_D) == 0)
+            // 统一补齐 MAT，避免调用方漏传时只有 LA 的 exec/brk 数据页不可缓存。
+            uint64 pte_flags = flags | PTE_U | PTE_D | PTE_MAT;
+            if (map_pages(pt, a, PGSIZE, (uint64)mem, pte_flags) == 0)
             {
                 // printfCyan("[vmalloc] map page failed, oldsz: %p, newsz: %p\n", oldsz, newsz);
                 k_pmm.free_page(mem);

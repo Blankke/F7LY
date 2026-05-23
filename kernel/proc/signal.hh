@@ -55,8 +55,14 @@ namespace proc
             constexpr int SS_AUTODISARM = 4;
             
             // Signal stack size constants
+#ifdef LOONGARCH
+            // LoongArch 的 musl/glibc 用户 ABI 约定更大的最小信号栈。
+            constexpr size_t MINSIGSTKSZ = 4096;
+            constexpr size_t SIGSTKSZ = 16384;
+#else
             constexpr size_t MINSIGSTKSZ = 2048;
             constexpr size_t SIGSTKSZ = 8192;
+#endif
             
             // Signal handler type
             typedef void (*__sighandler_t)(int);
@@ -99,6 +105,49 @@ namespace proc
                 size_t ss_size;  // Number of bytes in stack
             };
 
+            // rt_sigaction(2) 进入内核时看到的不是 libc 暴露给应用的 struct sigaction，
+            // 而是 libc 按 Linux syscall ABI 重新打包后的 k_sigaction。
+            // 对于当前支持的 asm-generic 架构（RISC-V/LoongArch），布局固定为：
+            //   handler -> flags -> restorer -> mask
+            // 其中 mask 只占内核 sigset_t 的 8 字节，而不是 libc 用户 ABI 的 128 字节。
+            struct kernel_sigaction_abi
+            {
+                union
+                {
+                    __sighandler_t sa_handler;
+                    void (*sa_sigaction)(int, void *, void *);
+                };
+                uint64 sa_flags;
+                void (*sa_restorer)(void);
+                sigset_t sa_mask;
+            };
+
+#ifdef LOONGARCH
+            constexpr size_t k_user_sigset_words = 16; // musl/glibc loongarch64: 128-byte sigset_t
+
+            struct user_sigset
+            {
+                uint64 sig[k_user_sigset_words];
+            };
+
+            struct machinecontext
+            {
+                uint64 pc;         // 对应用户态 ucontext_t.uc_mcontext.__pc / MC_PC
+                uint64 gregs[32];  // 对应 __gregs[32]
+                uint32 flags;      // 对应 __flags
+                uint32 padding;    // 保持后续扩展上下文的 16 字节对齐
+            };
+
+            struct usercontext
+            {
+                uint64 flags;
+                usercontext *link;
+                signalstack stack;
+                user_sigset sigmask;
+                long uc_pad;
+                machinecontext mcontext;
+            };
+#else
             struct generalregs{
                 uint64 x[23]; // 通用寄存器 x0-x31
             };
@@ -115,30 +164,29 @@ namespace proc
             // ustack
             struct usercontext
             {
-                uint64 flags;            // 0x00 标志位，用于描述信号处理相关的状态。
-                usercontext* link;            // 0x08 链接到下一个信号栈的指针（如有嵌套信号处理）。
-                signalstack stack;       // 0x10 信号处理时使用的备用栈信息结构体。
-                machinecontext mcontext; // 0x28 保存信号发生时的机器上下文（寄存器等），大小 0x208
-                uint64 sigmask;          // 0x230 信号屏蔽字，指示当前被屏蔽的信号集合。
+                uint64 flags;                 // 0x00 标志位，用于描述信号处理相关的状态。
+                usercontext *link;            // 0x08 链接到下一个信号栈的指针（如有嵌套信号处理）。
+                signalstack stack;            // 0x10 信号处理时使用的备用栈信息结构体。
+                machinecontext mcontext;      // 0x28 保存信号发生时的机器上下文（寄存器等），大小 0x208
+                uint64 sigmask;               // 0x230 信号屏蔽字，指示当前被屏蔽的信号集合。
             };
+#endif
 
             // LinuxSigInfo
             struct LinuxSigInfo
             {
-                uint32 si_signo;   // 0x00
-                uint32 si_errno;   // 0x04
-                uint32 si_code;    // 0x08
-                uint32 _pad[29];   // 0x0C
-                uint64 _align;     // 0x80
+                int32 si_signo;
+                int32 si_errno;
+                int32 si_code;
+                uint8 _pad[128 - 3 * sizeof(int32)];
             };
 
             // 简化版 sigaction
             typedef struct sigaction
             {
                 __sighandler_t sa_handler; // 信号处理函数
-                uint64 sa_flags;         // 行为标志
-                uint64 sa_restorer;      // 恢复函数
-                sigset_t sa_mask;        // 处理期间阻塞的信号
+                uint64 sa_flags;          // 行为标志（匹配 rt_sigaction 原始 ABI）
+                sigset_t sa_mask;         // 处理期间阻塞的信号
             } sigaction;
             
             // 信号默认行为结构体

@@ -110,6 +110,15 @@ namespace proc
 
 				if (_count >= _pipe_size)
 				{
+					// Linux 语义下，阻塞管道写是可被未屏蔽信号打断的取消点。
+					// 如果线程已经收到了 pthread_cancel/tgkill 之类的定向信号，
+					// 这里不能继续无条件睡回去；否则用户态 join/取消点测试会永久卡住。
+					if (proc::ipc::signal::has_unmasked_signal_pending(pr))
+					{
+						_lock.release();
+						return i > 0 ? i : syscall::SYS_EINTR;
+					}
+
 					// 非阻塞模式：如果管道已满，立即返回
 					if (_nonblock)
 					{
@@ -199,6 +208,14 @@ namespace proc
 					printfRed("pipe 缓冲区为空，非阻塞模式\n");
 					_lock.release();
 					return syscall::SYS_EAGAIN; // 返回 EAGAIN 错误，表示没有数据可读
+				}
+				// 阻塞管道读同样必须是可中断睡眠。
+				// pthread_cancel_points 会把线程挂在这里，然后用定向信号取消；
+				// 若醒来后不检查 pending signal，就会重新回到 while 里继续傻等。
+				if (proc::ipc::signal::has_unmasked_signal_pending(pr))
+				{
+					_lock.release();
+					return syscall::SYS_EINTR;
 				}
 				printfRed("pipe 缓冲区为空，阻塞模式\n");
 				// 阻塞模式：让当前进程进入休眠状态，等待写端唤醒
