@@ -98,6 +98,14 @@ namespace mem
 #endif
         }
 
+#ifdef LOONGARCH
+        inline void invalidate_loongarch_user_page_pair(uint64 va)
+        {
+            uint64 pair_base = va & ~((PGSIZE << 1) - 1);
+            asm volatile("invtlb 0x6, $zero, %0" : : "r"(pair_base) : "memory");
+        }
+#endif
+
         int resolve_user_read_pa(PageTable &pt, proc::Pcb *proc, uint64 user_va, uint64 &out_pa)
         {
             uint64 page_va = PGROUNDDOWN(user_va);
@@ -557,6 +565,25 @@ namespace mem
 
             if (user_ok && access_ok)
             {
+#ifdef LOONGARCH
+                uint64 repaired_pte = existing_pte.get_data();
+                bool need_repair = false;
+                if (!existing_pte.is_present())
+                {
+                    repaired_pte |= PTE_P;
+                    need_repair = true;
+                }
+                if (access_type == 1 && !existing_pte.is_dirty())
+                {
+                    repaired_pte |= PTE_D;
+                    need_repair = true;
+                }
+                if (need_repair)
+                {
+                    existing_pte.set_data(repaired_pte);
+                    invalidate_loongarch_user_page_pair(page_va);
+                }
+#endif
                 return 0;
             }
 
@@ -620,7 +647,7 @@ namespace mem
             pte_flags |= riscv::PteEnum::pte_executable_m;
         }
 #elif defined(LOONGARCH)
-        pte_flags = PTE_U | PTE_D; // 用户可访问
+        pte_flags = PTE_U | PTE_D | PTE_P; // 用户可访问，且页已实际驻留
         if (vm->prot & PROT_READ)
             pte_flags |= PTE_R;
         if (vm->prot & PROT_WRITE)
@@ -737,6 +764,12 @@ namespace mem
             k_pmm.free_page(pa);
             return -1;
         }
+
+#ifdef LOONGARCH
+        // LoongArch 的 TLB 可能保留着这页先前 fault 下来的无效表项。
+        // 新页表项补好后立刻按对失效一次，避免用户态回去后还在原指令上反复 fault。
+        invalidate_loongarch_user_page_pair(page_va);
+#endif
 
         printfGreen("[allocate_vma_page] successfully mapped page at va=%p, pa=%p, pte_flags=0x%x\n",
                     page_va, pa, pte_flags);

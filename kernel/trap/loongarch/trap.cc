@@ -64,6 +64,16 @@ namespace
     asm volatile("invtlb 0x6, $zero, %0" : : "r"(pair_base) : "memory");
   }
 
+  inline void loongarch_ack_timer_interrupt()
+  {
+    // TICLR/TINTCLR 是“写 1 清中断”的专用寄存器，按 Linux 的做法直接写清除位即可。
+    // 这里不要先读再 OR 回写：
+    // 1. 该寄存器本身没有需要保留的状态位；
+    // 2. 读值可能是未定义/瞬时值，反而容易把 timer pending 留到 userret 窗口里，
+    //    让同一个时钟中断在刚返回用户态时又立刻打回来。
+    w_csr_ticlr(CSR_TICLR_CLR);
+  }
+
   inline bool loongarch_can_retry_present_user_fault(mem::Pte pte, uint32 ecode)
   {
     if (pte.is_null() || !pte.is_valid() || !pte.is_present() || pte.is_super_plv())
@@ -490,6 +500,126 @@ namespace
           (void *)p->_trapframe->s0);
   }
 
+  void debug_entry_static_user_stall(proc::Pcb *p)
+  {
+    static uint64 same_pc_ticks = 0;
+    static uint64 last_tid = 0;
+    static uint64 last_pc = 0;
+
+    constexpr uint64 k_stall_ticks = 1200;
+
+    if (!is_entry_static_thread(p) || p == nullptr || p->_trapframe == nullptr || p->get_memory_manager() == nullptr)
+    {
+      same_pc_ticks = 0;
+      last_tid = 0;
+      last_pc = 0;
+      return;
+    }
+
+    uint64 pc = p->_trapframe->era;
+    if (last_tid == (uint64)p->_tid && last_pc == pc)
+    {
+      same_pc_ticks++;
+    }
+    else
+    {
+      last_tid = p->_tid;
+      last_pc = pc;
+      same_pc_ticks = 1;
+    }
+
+    if (same_pc_ticks < k_stall_ticks)
+    {
+      return;
+    }
+
+    int pc_section_index = -1;
+    const char *pc_section_name = find_mm_section_name(p->get_memory_manager(), pc, pc_section_index);
+    int sp_section_index = -1;
+    const char *sp_section_name = find_mm_section_name(p->get_memory_manager(), p->_trapframe->sp, sp_section_index);
+
+    int sibling_count = 0;
+    int sibling_tid = -1;
+    int sibling_state = -1;
+    int sibling_killed = 0;
+    uint64 sibling_chan = 0;
+    uint64 sibling_futex_addr = 0;
+    uint64 sibling_clear_tid = 0;
+    uint64 sibling_era = 0;
+    uint64 sibling_sp = 0;
+    uint64 sibling_tp = 0;
+
+    for (uint i = 0; i < proc::num_process; ++i)
+    {
+      proc::Pcb &candidate = proc::k_proc_pool[i];
+      if (&candidate == p || candidate._state == proc::ProcState::UNUSED)
+      {
+        continue;
+      }
+      if (candidate._tgid != p->_tgid)
+      {
+        continue;
+      }
+
+      ++sibling_count;
+      if (sibling_tid == -1)
+      {
+        sibling_tid = candidate._tid;
+        sibling_state = candidate._state;
+        sibling_killed = candidate._killed;
+        sibling_chan = (uint64)candidate._chan;
+        sibling_futex_addr = (uint64)candidate._futex_addr;
+        sibling_clear_tid = candidate._clear_tid_addr;
+        if (candidate._trapframe != nullptr)
+        {
+          sibling_era = candidate._trapframe->era;
+          sibling_sp = candidate._trapframe->sp;
+          sibling_tp = candidate._trapframe->tp;
+        }
+      }
+    }
+
+    panic("debug entry-static stall: pid=%d tid=%d tgid=%d same_pc_ticks=%p era=%p pc_sec=%d/%s sp=%p sp_sec=%d/%s tp=%p ra=%p a0=%p a1=%p a2=%p a3=%p t0=%p t1=%p t2=%p t3=%p s0=%p s1=%p state=%d chan=%p futex=%p clear_tid=%p sigmask=%p signal=%p sibling_count=%d sibling_tid=%d sibling_state=%d sibling_killed=%d sibling_chan=%p sibling_futex=%p sibling_clear_tid=%p sibling_era=%p sibling_sp=%p sibling_tp=%p",
+          p->_pid,
+          p->_tid,
+          p->_tgid,
+          (void *)same_pc_ticks,
+          (void *)pc,
+          pc_section_index,
+          pc_section_name ? pc_section_name : "(none)",
+          (void *)p->_trapframe->sp,
+          sp_section_index,
+          sp_section_name ? sp_section_name : "(none)",
+          (void *)p->_trapframe->tp,
+          (void *)p->_trapframe->ra,
+          (void *)p->_trapframe->a0,
+          (void *)p->_trapframe->a1,
+          (void *)p->_trapframe->a2,
+          (void *)p->_trapframe->a3,
+          (void *)p->_trapframe->t0,
+          (void *)p->_trapframe->t1,
+          (void *)p->_trapframe->t2,
+          (void *)p->_trapframe->t3,
+          (void *)p->_trapframe->s0,
+          (void *)p->_trapframe->s1,
+          p->_state,
+          (void *)p->_chan,
+          (void *)p->_futex_addr,
+          (void *)p->_clear_tid_addr,
+          (void *)p->_sigmask,
+          (void *)p->_signal,
+          sibling_count,
+          sibling_tid,
+          sibling_state,
+          sibling_killed,
+          (void *)sibling_chan,
+          (void *)sibling_futex_addr,
+          (void *)sibling_clear_tid,
+          (void *)sibling_era,
+          (void *)sibling_sp,
+          (void *)sibling_tp);
+  }
+
 }
 
 // 初始化锁
@@ -586,7 +716,7 @@ int trap_manager::devintr()
     // timer interrupt.
     // 先清 pending，再做较重的 tick/唤醒/定时器检查，避免中途再进一次 trap
     // 时又把这同一个 pending timer 误当成“新的时钟中断”。
-    w_csr_ticlr(r_csr_ticlr() | CSR_TICLR_CLR);
+    loongarch_ack_timer_interrupt();
 
     if (proc::k_pm.get_cur_cpuid() == 0)
     {
@@ -672,6 +802,33 @@ void trap_manager::usertrap()
     uint64 badv = r_csr_badv();
     mem::Pte fault_pte = p->get_pagetable()->walk(badv, false);
     uint64 fault_pte_raw = fault_pte.is_null() ? 0 : fault_pte.get_data();
+    if (is_entry_static_thread(p) &&
+        p->_trapframe != nullptr &&
+        p->_trapframe->era >= 0x1200354a8ULL &&
+        p->_trapframe->era <= 0x1200354c4ULL)
+    {
+      panic("debug entry-static llsc fault: pid=%d tid=%d tgid=%d ecode=%u esub=%u era=%p badv=%p pte=%p valid=%d present=%d write=%d user=%d dirty=%d tl_lock=%p t0=%p t1=%p t2=%p t3=%p sp=%p tp=%p",
+            p->_pid,
+            p->_tid,
+            p->_tgid,
+            ecode,
+            esubcode,
+            (void *)p->_trapframe->era,
+            (void *)badv,
+            (void *)fault_pte_raw,
+            (int)!fault_pte.is_null() && fault_pte.is_valid(),
+            (int)!fault_pte.is_null() && fault_pte.is_present(),
+            (int)!fault_pte.is_null() && fault_pte.is_writable(),
+            (int)!fault_pte.is_null() && !fault_pte.is_super_plv(),
+            (int)!fault_pte.is_null() && fault_pte.is_dirty(),
+            (void *)p->_trapframe->t2,
+            (void *)p->_trapframe->t0,
+            (void *)p->_trapframe->t1,
+            (void *)p->_trapframe->t2,
+            (void *)p->_trapframe->t3,
+            (void *)p->_trapframe->sp,
+            (void *)p->_trapframe->tp);
+    }
     if (fault_pte.is_null())
     {
       printfRed("usertrap(): badv=%p has null pte slot\n", badv);
@@ -797,6 +954,7 @@ void trap_manager::usertrap()
   if (which_dev == 2)
   {
     debug_pthread_exit_robust_loop(p);
+    debug_entry_static_user_stall(p);
   }
 
   // give up the CPU if this is a timer interrupt.
@@ -833,24 +991,38 @@ void trap_manager::usertrapret(void)
   // 记录进入用户态的时间点
   p->_last_user_tick = cur_tick;
 
-  // 统一在usertrapret时动态映射trapframe
-  // 取消当前trapframe的映射
-  mem::k_vmm.vmunmap(*p->get_pagetable(), TRAPFRAME, 1, 0);
-
-  // 重新映射当前进程的trapframe
-  if (mem::k_vmm.map_pages(*p->get_pagetable(), TRAPFRAME, PGSIZE, (uint64)(p->get_trapframe()),
-                           PTE_V | PTE_NX | PTE_P | PTE_W | PTE_R | PTE_MAT | PTE_D) == 0)
+  // LoongArch 下同一地址空间内线程共享 PGDL，但各自拥有独立 trapframe 物理页。
+  // 这里不要每次返回用户态都无条件 remap + invtlb：
+  // 同线程的普通 syscall/timer 往返若反复碰 invtlb，会把 LL/SC 的保留窗口打碎。
+  // 只有当当前 TRAPFRAME 的页表落点不是“这个线程自己的 trapframe 页”时，才重绑它。
+  bool need_remap_trapframe = true;
+  mem::Pte trapframe_pte = p->get_pagetable()->walk(TRAPFRAME, false);
+  if (!trapframe_pte.is_null() && trapframe_pte.is_valid() && trapframe_pte.is_present())
   {
-    panic("usertrapret: failed to dynamically map trapframe");
+    uint64 current_trapframe_pa = (uint64)trapframe_pte.pa();
+    uint64 target_trapframe_pa = PGROUNDDOWN((uint64)p->get_trapframe());
+    if (current_trapframe_pa == target_trapframe_pa)
+    {
+      need_remap_trapframe = false;
+    }
   }
 
+  if (need_remap_trapframe)
+  {
+    mem::k_vmm.vmunmap(*p->get_pagetable(), TRAPFRAME, 1, 0);
+
+    if (mem::k_vmm.map_pages(*p->get_pagetable(), TRAPFRAME, PGSIZE, (uint64)(p->get_trapframe()),
+                             PTE_V | PTE_NX | PTE_P | PTE_W | PTE_R | PTE_MAT | PTE_D) == 0)
+    {
+      panic("usertrapret: failed to dynamically map trapframe");
+    }
+
 #ifdef LOONGARCH
-  // LoongArch 的同一地址空间内线程共享 PGDL，但每个线程都有各自的 trapframe 物理页。
-  // usertrapret() 每次都会把固定虚拟地址 TRAPFRAME 重绑到“当前线程”的 trapframe。
-  // 若这里不主动失效这对用户态 TLB，后续同 PGDL 的线程再次陷入 uservec 时，
-  // 硬件可能还拿着上一个线程残留的 TRAPFRAME 映射，把寄存器写进错误的 trapframe 页。
-  loongarch_invalidate_user_tlb_page(TRAPFRAME);
+    // 仅在 trapframe 真正切到“别的物理页”时做一次按对失效，避免同 PGDL 多线程
+    // 继续沿用上一个线程残留的 TRAPFRAME TLB。
+    loongarch_invalidate_user_tlb_page(TRAPFRAME);
 #endif
+  }
 
   intr_off();
 

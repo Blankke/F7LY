@@ -82,12 +82,12 @@ kernelvec:
         ld.d $s3, $sp, 200
         ld.d $s4, $sp, 208
         ld.d $s5, $sp, 216
-        ld.d $s6, $sp, 224
-        ld.d $s7, $sp, 232
-        ld.d $s8, $sp, 240
+	        ld.d $s6, $sp, 224
+	        ld.d $s7, $sp, 232
+	        ld.d $s8, $sp, 240
 
-        addi.d $sp, $sp, 256
+	        addi.d $sp, $sp, 256
 
-        // return to whatever we were doing in the kernel.
+	        // return to whatever we were doing in the kernel.
         ertn
 #endif

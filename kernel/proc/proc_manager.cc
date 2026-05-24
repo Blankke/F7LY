@@ -466,6 +466,10 @@ namespace proc
                 p->_sigmask = 0;        // 清空信号屏蔽掩码
                 p->_signal = 0;         // 清空待处理信号掩码
                 p->sig_frame = nullptr; // 清空信号处理栈帧
+                p->_alt_stack.ss_sp = nullptr;                 // 备用信号栈地址必须重置
+                p->_alt_stack.ss_flags = ipc::signal::SS_DISABLE; // 默认禁用备用信号栈
+                p->_alt_stack.ss_size = 0;
+                p->_on_sigstack = false;
 
                 /****************************************************************************************
                  * 资源限制初始化
@@ -647,6 +651,10 @@ namespace proc
         p->sig_frame = nullptr;   // 清空信号处理帧指针
         p->_signal = 0;           // 清空待处理信号掩码
         p->_sigmask = 0;          // 清空信号屏蔽掩码
+        p->_alt_stack.ss_sp = nullptr;
+        p->_alt_stack.ss_flags = ipc::signal::SS_DISABLE;
+        p->_alt_stack.ss_size = 0;
+        p->_on_sigstack = false;
 
         /****************************************************************************************
          * 资源限制清理
@@ -1510,6 +1518,22 @@ namespace proc
                 }
             }
         }
+
+        // Linux 语义：
+        // 1. fork()/普通 clone 继承父任务当前的备用信号栈设置；
+        // 2. 但 CLONE_VM 且不是 CLONE_VFORK 的线程语义下，child 的备用信号栈必须禁用，
+        //    否则新线程会错误复用父线程的 altstack 元数据。
+        if ((flags & syscall::CLONE_VM) && !(flags & syscall::CLONE_VFORK))
+        {
+            np->_alt_stack.ss_sp = nullptr;
+            np->_alt_stack.ss_flags = ipc::signal::SS_DISABLE;
+            np->_alt_stack.ss_size = 0;
+        }
+        else
+        {
+            np->_alt_stack = p->_alt_stack;
+        }
+        np->_on_sigstack = false;
 
         if (flags & syscall::CLONE_THREAD)
         {

@@ -1,4 +1,5 @@
 #include "user.hh"
+#include "syscall_def.hh"
 
 static volatile int g_probe = 0;
 static volatile int g_sig_handled = 0;
@@ -111,6 +112,26 @@ static int llsc_inc(volatile int *ptr)
     return result;
 }
 
+static int llsc_inc_with_syscall0(volatile int *ptr, long sys_nr, long *sys_ret_out)
+{
+    register long a0 __asm__("a0") = 0;
+    register long a7 __asm__("a7") = sys_nr;
+    int sc_result;
+    __asm__ __volatile__(
+        "ll.w %[sc], %[mem]\n"
+        "addi.w %[sc], %[sc], 1\n"
+        "syscall 0\n"
+        "sc.w %[sc], %[mem]\n"
+        : [sc] "=&r"(sc_result), [mem] "+ZC"(*ptr), "+r"(a0)
+        : "r"(a7)
+        : "memory");
+    if (sys_ret_out)
+    {
+        *sys_ret_out = a0;
+    }
+    return sc_result;
+}
+
 static int run_llsc_loop(const char *tag)
 {
     int stack_probe = 0;
@@ -136,6 +157,34 @@ static int run_llsc_loop(const char *tag)
             stack_sc == 1 && stack_probe == k_llsc_iters)
                ? 0
                : 1;
+}
+
+static int run_llsc_syscall_loop(const char *tag, long sys_nr, int iters)
+{
+    int probe = 0;
+    int success = 0;
+    int fail = 0;
+        int last_sys_ret = 0;
+    for (int i = 0; i < iters; ++i)
+    {
+        long sys_ret = 0;
+        int sc = llsc_inc_with_syscall0(&probe, sys_nr, &sys_ret);
+        last_sys_ret = (int)sys_ret;
+        if (sc == 1)
+        {
+            ++success;
+            continue;
+        }
+        ++fail;
+        if (fail <= 5)
+        {
+            printf("[llsc-exec-probe] %s sc failed at i=%d probe=%d sys_ret=%d\n",
+                   tag, i, probe, (int)sys_ret);
+        }
+    }
+    printf("[llsc-exec-probe] %s success=%d fail=%d final_probe=%d last_sys_ret=%d\n",
+           tag, success, fail, probe, last_sys_ret);
+    return fail == 0 ? 0 : 20 + fail;
 }
 
 extern "C"
@@ -169,6 +218,16 @@ extern "C"
         if (run_llsc_loop("plain-signal") != 0)
         {
             exit(10);
+        }
+
+        if (run_llsc_syscall_loop("syscall-getpid", syscall::SYS_getpid, 2000) != 0)
+        {
+            exit(11);
+        }
+
+        if (run_llsc_syscall_loop("syscall-sched_yield", syscall::SYS_sched_yield, 200) != 0)
+        {
+            exit(12);
         }
 
         kernel_sigaction_abi rewrite_sa{};
