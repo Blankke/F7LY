@@ -166,6 +166,8 @@ loongarch64-linux-gnu-gdb -x debug/gdb/loongarch.gdb
 - `docs/dev-notes/`：历史排障记录，适合补背景，但当前事实以源码和 Git 记录为准。
 - `docs/report-src/`：Typst 文档撰写源文件与配套图片。
 - `docs/assets/`：README 等长期文档使用的图片资源。
+- `ref/ltp/`：上游 LTP 参考源码仓库；当前应 checkout 到 `20240524` tag，用作镜像内 LTP 测例的原文件参考。
+- `ref/testsuits-for-oskernel/`：basic、busybox、lua、libcbench 等非 LTP 用户态测例参考源码。
 
 ## 内核模块总览
 
@@ -650,6 +652,9 @@ futex：
 
 - RISC-V 和 LoongArch 当前目标都是跑测例，而不是进入交互 shell。
 - 测例大类包括 basic、busybox、ltp、lua、libcbench 等。
+- LTP 测例源码参考 `ref/ltp`；该仓库应保持在 detached HEAD 的 `20240524` tag，因为当前镜像/历史输出标明的 LTP 版本是 `20240524`。
+- 查当前 LTP 测例对应原文件时，可以直接在 `ref/ltp` 工作区搜索；如果发现 `ref/ltp/VERSION` 不是 `20240524`，先执行 `git -C ref/ltp checkout 20240524`。
+- 当前 `ltp_testcases[]` 中打开的 LTP 测例名均能在 `ref/ltp` 的 `runtest` 或 `testcases` 中找到；`*_64` 测例通常由同目录 Makefile 通过 `-D_FILE_OFFSET_BITS=64` 从同源文件生成。
 - 除 LTP 以外，basic/busybox/lua/libcbench 等测例源码来自 `ref/testsuits-for-oskernel`。
 - 如果 `ref/testsuits-for-oskernel` 不存在，可以按需求从 GitHub 下载对应仓库，统一放在 `ref/` 目录下；不要把外部参考源码散放到项目根目录。
 - 当前自写用户态入口在 `user/app/initcode-rv.cc` 和 `user/app/initcode-la.cc`，它们选择调用对应架构的 regression suite。
