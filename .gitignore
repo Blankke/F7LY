@@ -53,3 +53,14 @@ ref.txt
 sdcard-rv.zip
 testsuits/
 kernel-qemu
+ref/
+images/rootfs.img
+images/initrd.img
+images/sdcard-*.img
+images/sdcard-bak/
+logs/run/
+logs/tmp/
+!logs/
+!logs/legacy/
+!logs/legacy/output_la.txt
+!logs/legacy/output_rv.txt

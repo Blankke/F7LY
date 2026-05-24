@@ -1,4 +1,11 @@
 EASTL_DIR := thirdparty/EASTL
+PROJECT_ROOT := $(shell pwd)
+IMAGE_DIR := $(PROJECT_ROOT)/images
+ROOTFS_BACKUP := $(IMAGE_DIR)/rootfs.img.back
+ROOTFS_IMAGE := $(IMAGE_DIR)/rootfs.img
+INITRD_IMAGE := $(IMAGE_DIR)/initrd.img
+RISCV_SDCARD := $(IMAGE_DIR)/sdcard-rv.img
+LOONGARCH_SDCARD := $(IMAGE_DIR)/sdcard-la.img
 
 # ===== 并行编译配置 =====
 # 默认使用所有可用 CPU 核心进行并行编译
@@ -7,7 +14,6 @@ MAKEFLAGS += -j$(NPROC)
 
 # ===== 架构选择 =====
 ARCH ?= riscv
-KERNEL_PREFIX=`pwd`
 DIS_PRINTF ?= 0
 QEMU_MEM ?= 1G
 QEMU_DEBUG_MEM ?= 1G
@@ -29,12 +35,12 @@ ifeq ($(ARCH),riscv)
   CROSS_COMPILE := riscv64-linux-gnu-
   ARCH_CFLAGS := -DRISCV -mcmodel=medany
   OUTPUT_PREFIX := riscv
-  QEMU_CMD := qemu-system-riscv64 -machine virt -m $(QEMU_MEM) -nographic -smp 1 -bios default -hdb ${KERNEL_PREFIX}/sdcard-rv.img -kernel
+  QEMU_CMD := qemu-system-riscv64 -machine virt -m $(QEMU_MEM) -nographic -smp 1 -bios default -hdb $(RISCV_SDCARD) -kernel
 else ifeq ($(ARCH),loongarch)
   CROSS_COMPILE := loongarch64-linux-gnu-
   ARCH_CFLAGS := -DLOONGARCH -march=loongarch64 -mabi=lp64d -mcmodel=normal -Wno-error=use-after-free
   OUTPUT_PREFIX := loongarch
-  QEMU_CMD := qemu-system-loongarch64 -machine virt -cpu la464-loongarch-cpu -drive file=${KERNEL_PREFIX}/sdcard-la.img,if=none,format=raw,id=x0
+  QEMU_CMD := qemu-system-loongarch64 -machine virt -cpu la464-loongarch-cpu -drive file=$(LOONGARCH_SDCARD),if=none,format=raw,id=x0
 else
   $(error 不支持的架构: $(ARCH)，请使用 make riscv 或 make loongarch)
 endif
@@ -127,10 +133,10 @@ LOONGARCH_LIBCTEST_PATCHER := tools/patch_loongarch_libctest_llsc.sh
 
 # ===== 输出目标 =====
 ifeq ($(ARCH),riscv)
-  KERNEL_ELF := kernel-qemu
+  KERNEL_ELF := build/$(OUTPUT_PREFIX)/kernel-qemu
   KERNEL_BIN := build/$(OUTPUT_PREFIX)/kernel-qemu.bin
 else ifeq ($(ARCH),loongarch)
-  KERNEL_ELF := kernel-la
+  KERNEL_ELF := build/$(OUTPUT_PREFIX)/kernel-la
   KERNEL_BIN := build/$(OUTPUT_PREFIX)/kernel-la.bin
 endif
 
@@ -181,7 +187,7 @@ endif
 
 all: 
 	@$(MAKE) riscv loongarch
-	@if [ -f rootfs.img.back ]; then cp rootfs.img.back rootfs.img; fi
+	@if [ -f $(ROOTFS_BACKUP) ]; then cp $(ROOTFS_BACKUP) $(ROOTFS_IMAGE); fi
 
 
 riscv:
@@ -230,6 +236,7 @@ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.s
 	$(CC) $(CFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
 $(KERNEL_ELF): $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a $(LINK_SCRIPT)
+	@mkdir -p $(dir $@)
 	$(LD) $(LDFLAGS) -o $@ $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
 	$(SIZE) $@
 # 	$(OBJDUMP) -D $@ > kernel.asm
@@ -249,7 +256,7 @@ $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a:
 
 
 run: build
-	@if [ -f rootfs.img.back ]; then cp rootfs.img.back initrd.img; fi
+	@if [ -f $(ROOTFS_BACKUP) ]; then cp $(ROOTFS_BACKUP) $(INITRD_IMAGE); fi
 ifeq ($(ARCH),riscv)
 	$(MAKE) run-riscv ARCH=$(ARCH)
 else ifeq ($(ARCH),loongarch)
@@ -259,7 +266,7 @@ else
 endif
 
 prepare-loongarch-image:
-	@$(LOONGARCH_LIBCTEST_PATCHER) $(KERNEL_PREFIX)/sdcard-la.img
+	@$(LOONGARCH_LIBCTEST_PATCHER) $(LOONGARCH_SDCARD)
 
 run-riscv:
 	qemu-system-riscv64 \
@@ -269,13 +276,13 @@ run-riscv:
 		-nographic \
 		-smp 1 \
 		-bios default \
-		-drive file=$(KERNEL_PREFIX)/sdcard-rv.img,if=none,format=raw,id=x0 \
+		-drive file=$(RISCV_SDCARD),if=none,format=raw,id=x0 \
 		-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 \
 		-no-reboot \
 		-device virtio-net-device,netdev=net \
 		-netdev user,id=net \
 		-rtc base=utc \
-		-initrd initrd.img
+		-initrd $(INITRD_IMAGE)
 
 
 run-loongarch: prepare-loongarch-image
@@ -285,13 +292,13 @@ run-loongarch: prepare-loongarch-image
 	    -m $(QEMU_MEM) \
 	    -nographic \
 	    -smp 1 \
-		-drive file=$(KERNEL_PREFIX)/sdcard-la.img,if=none,format=raw,id=x0 \
+		-drive file=$(LOONGARCH_SDCARD),if=none,format=raw,id=x0 \
 		-device virtio-blk-pci,drive=x0 \
 		-netdev user,id=net \
 		-device virtio-net-pci,netdev=net \
 		-no-reboot \
 		-rtc base=utc \
-		-initrd initrd.img
+		-initrd $(INITRD_IMAGE)
 
 
 
@@ -311,7 +318,7 @@ debug-riscv:
 		-nographic \
 		-smp 1 \
 		-bios default \
-		-drive file=$(KERNEL_PREFIX)/sdcard-rv.img,if=none,format=raw,id=x0 \
+		-drive file=$(RISCV_SDCARD),if=none,format=raw,id=x0 \
 		-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 \
 		-no-reboot \
 		-device virtio-net-device,netdev=net \
@@ -326,7 +333,7 @@ debug-loongarch: prepare-loongarch-image
 	    -m $(QEMU_DEBUG_MEM) \
 	    -nographic \
 	    -smp 1 \
-		-drive file=$(KERNEL_PREFIX)/sdcard-la.img,if=none,format=raw,id=x0 \
+		-drive file=$(LOONGARCH_SDCARD),if=none,format=raw,id=x0 \
 		-device virtio-blk-pci,drive=x0 \
 		-no-reboot \
 		-rtc base=utc \
