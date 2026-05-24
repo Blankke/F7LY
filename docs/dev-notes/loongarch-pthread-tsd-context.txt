@@ -1,0 +1,86 @@
+我先把上下文整理成“下一个人接手就能继续”的状态了，而且我这轮没有停在整理上，还继续把复现又缩窄了一层。
+
+先说现在最关键的结论。
+
+1. 这个问题已经可以稳定缩成 LA 上的“普通线程退出路径”问题了，不再只是 `pthread_cancel_points`
+我把 [user/app/initcode-la.cc](/home/starrys/F7LY/user/app/initcode-la.cc:29) 临时改成先跑 `/llsc_exec_probe`，再只跑：
+`entry-static.exe pthread_tsd`
+
+当前最小复现日志：
+`build/loongarch/logs/run-la-pthread-tsd-current-clean.log`
+
+现象非常稳定：
+- `/llsc_exec_probe` 通过
+- 一进入 `========== START entry-static.exe pthread_tsd ==========` 就会在
+  `era=0x1200354a8`
+  也就是 `__pthread_exit -> __vm_lock()` 的 `ll/sc` 自旋处卡死
+- 我们的调试 panic 现在会把现场完整打印出来
+
+也就是说，这已经不是“取消点特有问题”，而是 LoongArch 多线程下更通用的线程退出问题。
+
+2. 这轮新证伪掉的方向
+我继续排了几条很像、但现在可以先放下的分支：
+
+- 不是 self 页 / trapframe 页撞车
+  日志里现在明确有：
+  `self_pa=0x684000`
+  `trapframe_pa=0x687000`
+  不相等
+
+- 不是用户页被错误多重映射
+  我在 [kernel/trap/loongarch/trap.cc](/home/starrys/F7LY/kernel/trap/loongarch/trap.cc:204) 里把 alias 统计补成了“扫整棵用户页表”，当前日志里：
+  `self_all_leaf_alias=1`
+  `tl_all_leaf_alias=1`
+
+- 不是“同 PGDL 跳过 TLB flush”单点导致
+  我试过把 `userret` 暂时改成每次都 `invtlb 0x0`，`pthread_tsd` 还是原地卡死。这个无效改动我已经撤回了，当前树不是那个状态。
+
+- 不是“普通 signal return / PC rewrite / 单线程 ll/sc”坏了
+  [user/app/llsc_exec_probe.cc](/home/starrys/F7LY/user/app/llsc_exec_probe.cc:1) 现在仍然稳定通过：
+  - plain signal 后 1000000 次 global/stack `ll/sc`
+  - signal handler 里改 PC 后再跑 1000000 次 `ll/sc`
+
+3. 这轮我实际保留在树上的、对接手有用的东西
+- [user/app/initcode-la.cc](/home/starrys/F7LY/user/app/initcode-la.cc:29)
+  现在是更窄的 `pthread_tsd` 复现入口，比 `pthread_cancel_points` 更适合继续查
+
+- [kernel/trap/loongarch/trap.cc](/home/starrys/F7LY/kernel/trap/loongarch/trap.cc:204)
+  `debug_pthread_exit_robust_loop()` 现在会打印：
+  - `trapframe_pa`
+  - `self_pa`
+  - `self_all_leaf_alias`
+  - `tl_all_leaf_alias`
+  - TLB 命中与表项
+  - sibling 线程状态
+  这套信息对下一个人继续排很有用
+
+- [user/app/llsc_exec_probe.cc](/home/starrys/F7LY/user/app/llsc_exec_probe.cc:1)
+  这是已经验证过的“普通 signal/PC rewrite/单线程 llsc 没坏”的对照探针
+
+4. 这轮我试过但已经撤掉、不建议继续沿着走的分支
+- `userret` 强制全量 flush TLB
+- `swtch` 里直接清 LLBit
+
+这两条我都实际试跑过，没把 `pthread_tsd` 拉出来，所以我已经撤回，避免把后面的人带偏。
+
+5. 当前最值得继续盯的方向
+现在剩下最像根因的是：
+“LoongArch 多线程切换后，用户态 `ll/sc` 在某个线程退出相关路径上仍然会失效，但不是页复用、不是普通 signal return、也不是简单 TLB 陈旧。”
+
+换句话说，下一步应该继续盯：
+- 多线程场景下的 LA 用户态原子序列语义
+- 线程切换前后，是否还有某个只在 `pthread_exit/__vm_lock` 上会踩中的架构状态没处理对
+- 如果要再加探针，优先围绕 `pthread_tsd` 这条更窄的复现链做
+
+复现命令我留这两条就够：
+```bash
+make build ARCH=loongarch
+timeout 20s make run l QEMU_MEM=1G </dev/null > build/loongarch/logs/run-la-pthread-tsd-current-clean.log 2>&1
+```
+
+看关键结论：
+```bash
+rg -n "pthread_tsd|panic:|self_pa|trapframe_pa|self_all_leaf_alias|tl_all_leaf_alias|llbctl" build/loongarch/logs/run-la-pthread-tsd-current-clean.log
+```
+
+这轮我没有创建任何总结文件，整理都在这里了。构建我也重新验过了：`make build ARCH=loongarch` 通过

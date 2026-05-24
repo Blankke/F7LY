@@ -1,6 +1,6 @@
 === LTP Test Cases Ranking ===
 Analysis time: Fri Aug 15 10:38:15 CST 2025
-Source: /home/kidszz/F7LY/ltp_judge/Riscv输出 (6).txt
+Source: tools/ltp/judge/Riscv输出 (6).txt
 
 Test Case Name                 | Pass Count | Total Count | Pass Rate 
 ============================================================================

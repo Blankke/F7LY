@@ -1,5 +1,5 @@
 === Analysis of LTP Test Output ===
-Source file: /home/kidszz/F7LY/ltp_judge/Riscv输出 (6).txt
+Source file: tools/ltp/judge/Riscv输出 (6).txt
 Analysis time: Fri Aug 15 10:39:53 CST 2025
 
 === Test Cases Found ===
