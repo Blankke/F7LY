@@ -74,8 +74,6 @@ static int vfs_ext4_blockdev_init(struct vfs_ext4_blockdev *vbdev, int dev) {
 
         iface->ph_bbuf = ph_bbuf;
         iface->ph_bcnt = bd->part_size / (uint64) bd->bdif->ph_bsize;
-
-        printf("vfs_ext4_blockdev_init: ph_bsize=%p, ph_bcnt=%p\n", iface->ph_bsize, iface->ph_bcnt);
     }
     return EOK;
 }
@@ -111,8 +109,6 @@ static int vfs_ext4_blockdev_init2(struct vfs_ext4_blockdev *vbdev, int dev) {
 
         iface->ph_bbuf = ph_bbuf;
         iface->ph_bcnt = bd->part_size / (uint64) bd->bdif->ph_bsize;
-
-        printf("vfs_ext4_blockdev_init: ph_bsize=%p, ph_bcnt=%p\n", iface->ph_bsize, iface->ph_bcnt);
     }
     return EOK;
 }

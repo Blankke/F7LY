@@ -73,6 +73,8 @@ namespace proc
 			bool write_is_open() { return _write_is_open; }
 			uint32 get_pipe_size() const { return _pipe_size; }
 			uint32 size() const { return _count; } // 获取管道中当前数据量
+			bool can_read_without_blocking();
+			bool can_write_without_blocking();
 
 			// 设置和获取非阻塞模式
 			void set_nonblock(bool nonblock) { _nonblock = nonblock; }

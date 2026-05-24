@@ -927,12 +927,6 @@ namespace syscall
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
         uint64 sys_num = p->get_trapframe()->a7; // 获取系统调用号
 
-        if (!(sys_num == 64 && p->_trapframe->a0 == 1) && !(sys_num == 66 && p->_trapframe->a0 == 1))
-        {
-            // printfMagenta("[Pcb::get_open_file] pid: %d\n", p->_pid);
-            printfGreen("[invoke_syscaller]sys_num: %d sys_name: \t%s\n", sys_num, _syscall_name[sys_num]);
-        }
-
         if (sys_num >= max_syscall_funcs_num || sys_num < 0 || _syscall_funcs[sys_num] == nullptr)
         {
             printfRed("[SyscallHandler::invoke_syscaller]sys_num is out of range\n");
@@ -941,19 +935,8 @@ namespace syscall
         }
         else
         {
-            if (!(sys_num == 64 && p->_trapframe->a0 == 1) && !(sys_num == 66 && p->_trapframe->a0 == 1))
-            {
-                // 打印寄存器中保存的值
-                // printfCyan("[SyscallHandler::invoke_syscaller]sys_num: %d, syscall_name: %s\n", sys_num, _syscall_name[sys_num]);
-                // printfCyan("[SyscallHandler::invoke_syscaller]a0: %p, a1: %p, a2: %p, a3: %p, a4: %p, a5: %p\n",
-                //            p->_trapframe->a0, p->_trapframe->a1, p->_trapframe->a2,
-                //            p->_trapframe->a3, p->_trapframe->a4, p->_trapframe->a5);
-            }
             // 调用对应的系统调用函数
             uint64 ret = (this->*_syscall_funcs[sys_num])();
-            if (!(sys_num == 64 && p->_trapframe->a0 == 1) && !(sys_num == 66 && p->_trapframe->a0 == 1))
-                // if (!(sys_num == 64) && !(sys_num == 66))
-                printfCyan("[SyscallHandler::invoke_syscaller]syscall name: %s ret: %d\n", _syscall_name[sys_num], ret);
             debug_fd_4();
             mem::PageTable *pt = p->get_pagetable();
             if (pt != nullptr && !is_sane_user_pagetable_base(pt->get_base()))

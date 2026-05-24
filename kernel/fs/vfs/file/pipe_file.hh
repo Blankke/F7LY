@@ -72,8 +72,18 @@ namespace fs
 			return _pipe->write_in_kernel(buf, len); 
 		}
 
-		virtual bool read_ready() override { return _can_read && _pipe->read_is_open(); }
-		virtual bool write_ready() override { return _can_write && _pipe->write_is_open(); }
+		virtual bool read_ready() override
+		{
+			// pipe/select 的就绪语义必须以“这次 read 会不会阻塞”为准，
+			// 不能只看端点是否还开着。
+			return _can_read && _pipe->can_read_without_blocking();
+		}
+		virtual bool write_ready() override
+		{
+			// write 端同理，只有当前写入能够立即推进或立即返回错误时，
+			// 才应当报告为 ready。
+			return _can_write && _pipe->can_write_without_blocking();
+		}
 		virtual off_t lseek(off_t offset, int whence) override { return -ESPIPE; }
 		
 		// 获取管道大小

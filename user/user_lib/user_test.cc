@@ -71,6 +71,13 @@ static int change_dir_checked(const char *path)
     return ret;
 }
 
+static bool is_musl_test_root(const char *path)
+{
+    // 有些入口传 "/musl"，有些传 "/musl/"，这里统一视为同一个目录，
+    // 避免测试标签被误打印成 glibc，影响后续排查。
+    return strcmp(path, "/musl") == 0 || strcmp(path, musl_dir) == 0;
+}
+
 int run_test(const char *path, char *argv[], char *envp[])
 {
     char *default_argv[2] = {0};
@@ -311,24 +318,38 @@ int iozone_test(const char *path = musl_dir)
     {
         return -1;
     }
-    char *bb_sh[8] = {0};
-    bb_sh[0] = "iozone";
-    bb_sh[1] = "-a";
-    bb_sh[2] = "-r";
-    bb_sh[3] = "1k";
-    bb_sh[4] = "-s";
-    bb_sh[5] = "4m";
-    if (strcmp(path, musl_dir) == 0)
-        printf("#### OS COMP TEST GROUP START iozone-musl ####\n");
-    else
-        printf("#### OS COMP TEST GROUP START iozone-glibc ####\n");
+    const char *group_name = is_musl_test_root(path) ? "iozone-musl" : "iozone-glibc";
+    int fail_count = 0;
+
+    // 将iozone testcode里面所有子测试全部搞出来一起测了。之前那个只有一个
+    char *auto_measure[8] = {(char *)"iozone", (char *)"-a", (char *)"-r", (char *)"1k", (char *)"-s", (char *)"4m", 0};
+    char *write_read[16] = {(char *)"iozone", (char *)"-t", (char *)"4", (char *)"-i", (char *)"0", (char *)"-i", (char *)"1", (char *)"-r", (char *)"1k", (char *)"-s", (char *)"1m", 0};
+    char *random_read[16] = {(char *)"iozone", (char *)"-t", (char *)"4", (char *)"-i", (char *)"0", (char *)"-i", (char *)"2", (char *)"-r", (char *)"1k", (char *)"-s", (char *)"1m", 0};
+    char *read_backwards[16] = {(char *)"iozone", (char *)"-t", (char *)"4", (char *)"-i", (char *)"0", (char *)"-i", (char *)"3", (char *)"-r", (char *)"1k", (char *)"-s", (char *)"1m", 0};
+    char *stride_read[16] = {(char *)"iozone", (char *)"-t", (char *)"4", (char *)"-i", (char *)"0", (char *)"-i", (char *)"5", (char *)"-r", (char *)"1k", (char *)"-s", (char *)"1m", 0};
+    char *fwrite_fread[16] = {(char *)"iozone", (char *)"-t", (char *)"4", (char *)"-i", (char *)"6", (char *)"-i", (char *)"7", (char *)"-r", (char *)"1k", (char *)"-s", (char *)"1m", 0};
+    char *pwrite_pread[16] = {(char *)"iozone", (char *)"-t", (char *)"4", (char *)"-i", (char *)"9", (char *)"-i", (char *)"10", (char *)"-r", (char *)"1k", (char *)"-s", (char *)"1m", 0};
+    char *pwritev_preadv[16] = {(char *)"iozone", (char *)"-t", (char *)"4", (char *)"-i", (char *)"11", (char *)"-i", (char *)"12", (char *)"-r", (char *)"1k", (char *)"-s", (char *)"1m", 0};
+
+    printf("#### OS COMP TEST GROUP START %s ####\n", group_name);
     printf("iozone automatic measurements\n");
-    run_test("iozone", bb_sh, 0);
-    if (strcmp(path, musl_dir) == 0)
-        printf("#### OS COMP TEST GROUP end iozone-musl ####\n");
-    else
-        printf("#### OS COMP TEST GROUP end iozone-glibc ####\n");
-    return 0;
+    fail_count += run_test("iozone", auto_measure, 0) != 0;
+    printf("iozone throughput write/read measurements\n");
+    fail_count += run_test("iozone", write_read, 0) != 0;
+    printf("iozone throughput random-read measurements\n");
+    fail_count += run_test("iozone", random_read, 0) != 0;
+    printf("iozone throughput read-backwards measurements\n");
+    fail_count += run_test("iozone", read_backwards, 0) != 0;
+    printf("iozone throughput stride-read measurements\n");
+    fail_count += run_test("iozone", stride_read, 0) != 0;
+    printf("iozone throughput fwrite/fread measurements\n");
+    fail_count += run_test("iozone", fwrite_fread, 0) != 0;
+    printf("iozone throughput pwrite/pread measurements\n");
+    fail_count += run_test("iozone", pwrite_pread, 0) != 0;
+    printf("iozone throughtput pwritev/preadv measurements\n");
+    fail_count += run_test("iozone", pwritev_preadv, 0) != 0;
+    printf("#### OS COMP TEST GROUP END %s ####\n", group_name);
+    return fail_count == 0 ? 0 : -1;
 }
 
 int libc_test(const char *path = musl_dir)

@@ -20,7 +20,7 @@ struct buf {
   uint64 io_r_tag_us;         // reservation 标签
   uint64 io_w_tag_us;         // weight 标签
   uint64 io_l_tag_us;         // limit 标签
-  struct buf *io_next;        // 软件调度队列链指针
+  struct buf *io_flow_next;   // 同一 flow 内的请求链指针
   uchar data[BSIZE];
 };
 
