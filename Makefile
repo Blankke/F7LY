@@ -123,6 +123,7 @@ OBJS += $(patsubst $(KERNEL_DIR)/%.s,   $(BUILD_DIR)/%.o, $(filter %.s,   $(SRCS
 ENTRY_OBJ := $(BUILD_DIR)/boot/$(ARCH)/entry.o
 OBJS_NO_ENTRY := $(filter-out $(ENTRY_OBJ), $(OBJS))
 DEPS := $(OBJS:.o=.d)
+LOONGARCH_LIBCTEST_PATCHER := tools/patch_loongarch_libctest_llsc.sh
 
 # ===== 输出目标 =====
 ifeq ($(ARCH),riscv)
@@ -175,7 +176,7 @@ INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dy
 else ifeq ($(ARCH),loongarch)
 INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dynamic-linker,-T,$(INITCODE_LINK_SCRIPT)
 endif
-.PHONY: all clean dirs build riscv loongarch run debug initcode build-la
+.PHONY: all clean dirs build riscv loongarch run debug initcode build-la prepare-loongarch-image
 
 
 all: 
@@ -190,7 +191,7 @@ loongarch:
 	@$(MAKE) ARCH=loongarch build-la
 
 build: initcode dirs $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a $(KERNEL_BIN)
-build-la: dirs $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a $(KERNEL_BIN)
+build-la: initcode dirs $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a $(KERNEL_BIN)
 
 
 dirs:
@@ -257,6 +258,9 @@ else
 	$(error Unsupported ARCH=$(ARCH))
 endif
 
+prepare-loongarch-image:
+	@$(LOONGARCH_LIBCTEST_PATCHER) $(KERNEL_PREFIX)/sdcard-la.img
+
 run-riscv:
 	qemu-system-riscv64 \
 		-machine virt \
@@ -274,7 +278,7 @@ run-riscv:
 		-initrd initrd.img
 
 
-run-loongarch:
+run-loongarch: prepare-loongarch-image
 	qemu-system-loongarch64 \
 	    -machine virt \
 	    -kernel $(KERNEL_ELF) \
@@ -315,7 +319,7 @@ debug-riscv:
 		-rtc base=utc \
 		-S -gdb tcp::1234;
 
-debug-loongarch:
+debug-loongarch: prepare-loongarch-image
 	qemu-system-loongarch64 \
 	    -machine virt \
 	    -kernel $(KERNEL_ELF) \

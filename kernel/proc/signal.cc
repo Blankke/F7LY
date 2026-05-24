@@ -8,7 +8,6 @@
 
 namespace
 {
-#ifdef LOONGARCH
     constexpr uint64 k_signal_stack_align = 16;
 
     uint64 align_down(uint64 value, uint64 align)
@@ -16,6 +15,45 @@ namespace
         return value & ~(align - 1);
     }
 
+    proc::vma *find_vma_covering(proc::Pcb *p, uint64 addr, int *out_idx = nullptr)
+    {
+        if (p == nullptr || p->get_vma() == nullptr)
+        {
+            return nullptr;
+        }
+
+        for (int i = 0; i < proc::NVMA; ++i)
+        {
+            proc::vma &vm = p->get_vma()->_vm[i];
+            if (!vm.used)
+            {
+                continue;
+            }
+            uint64 vm_start = vm.addr;
+            uint64 vm_end = vm.addr + (uint64)vm.len;
+            if (addr >= vm_start && addr < vm_end)
+            {
+                if (out_idx != nullptr)
+                {
+                    *out_idx = i;
+                }
+                return &vm;
+            }
+        }
+        return nullptr;
+    }
+
+    uint64 safe_pte_data(mem::Pte pte)
+    {
+        return pte.is_null() ? 0 : pte.get_data();
+    }
+
+    int safe_pte_valid(mem::Pte pte)
+    {
+        return pte.is_null() ? 0 : pte.is_valid();
+    }
+
+#ifdef LOONGARCH
     void fill_loongarch_user_mcontext(proc::ipc::signal::machinecontext &mctx, const TrapFrame &tf)
     {
         memset(&mctx, 0, sizeof(mctx));
@@ -801,8 +839,8 @@ namespace proc
                     uint64 frame_bytes = sizeof(uint64) * 2 + sizeof(LinuxSigInfo) + sizeof(usercontext);
                     uint64 frame_sp = align_down(stack_sp - frame_bytes, k_signal_stack_align);
                     uint64 guard_sp = frame_sp;
-                    uint64 marker_sp = guard_sp + sizeof(uint64);
-                    uint64 linuxinfo_sp = marker_sp + sizeof(uint64);
+                    uint64 has_siginfo_sp = guard_sp + sizeof(uint64);
+                    uint64 linuxinfo_sp = has_siginfo_sp + sizeof(uint64);
                     uint64 usercontext_sp = linuxinfo_sp + sizeof(LinuxSigInfo);
 
                     // 构造 ustack 结构
@@ -810,7 +848,7 @@ namespace proc
                     memset(&uctx, 0, sizeof(usercontext)); // 全部初始化为0
                     uctx.flags = 0;
                     uctx.link = 0;
-                    uctx.stack = {(void*)linuxinfo_sp, 0, sig_size};
+                    uctx.stack = {(void *)stack_sp, 0, sig_size};
 #ifdef RISCV
                     uctx.sigmask = p->_sigmask;
                     uctx.mcontext.gp.x[17] = p->_trapframe->epc; // epc(TODO)
@@ -841,7 +879,32 @@ namespace proc
                     // 将结构写入用户空间
                     if (mem::k_vmm.copy_out(*p->get_pagetable(), usercontext_sp, &uctx, sizeof(usercontext)) < 0)
                     {
-                        panic("[do_handle] Failed to copy ustack to user space");
+                        int frame_vma_idx = -1;
+                        int uctx_vma_idx = -1;
+                        proc::vma *frame_vm = find_vma_covering(p, frame_sp, &frame_vma_idx);
+                        proc::vma *uctx_vm = find_vma_covering(p, usercontext_sp, &uctx_vma_idx);
+                        mem::Pte frame_pte = p->get_pagetable()->walk(PGROUNDDOWN(frame_sp), 0);
+                        mem::Pte uctx_pte = p->get_pagetable()->walk(PGROUNDDOWN(usercontext_sp), 0);
+                        panic("[do_handle] Failed to copy ustack: sig=%d pid=%d tid=%d old_sp=%p stack_sp=%p frame_sp=%p uctx_sp=%p frame_bytes=%p uctx_size=%p frame_vma=%d[%p,%p) uctx_vma=%d[%p,%p) frame_pte=%p frame_valid=%d uctx_pte=%p uctx_valid=%d",
+                              signum,
+                              p->_pid,
+                              p->_tid,
+                              (void *)p->_trapframe->sp,
+                              (void *)stack_sp,
+                              (void *)frame_sp,
+                              (void *)usercontext_sp,
+                              (void *)frame_bytes,
+                              (void *)sizeof(usercontext),
+                              frame_vma_idx,
+                              frame_vm ? (void *)frame_vm->addr : nullptr,
+                              frame_vm ? (void *)(frame_vm->addr + (uint64)frame_vm->len) : nullptr,
+                              uctx_vma_idx,
+                              uctx_vm ? (void *)uctx_vm->addr : nullptr,
+                              uctx_vm ? (void *)(uctx_vm->addr + (uint64)uctx_vm->len) : nullptr,
+                              (void *)safe_pte_data(frame_pte),
+                              safe_pte_valid(frame_pte),
+                              (void *)safe_pte_data(uctx_pte),
+                              safe_pte_valid(uctx_pte));
                         return;
                     }
 
@@ -857,13 +920,18 @@ namespace proc
                     p->_trapframe->a2 = usercontext_sp; // 第三个参数：ucontext_t*
 
                     // 调整栈指针
-                    p->_trapframe->sp = marker_sp;
+                    p->_trapframe->sp = guard_sp;
 
-                    // 在栈顶写入返回地址标记
-                    uint64 ret_marker = UINT64_MAX;
-                    if (mem::k_vmm.copy_out(*p->get_pagetable(), marker_sp, &ret_marker, sizeof(uint64)) < 0)
+                    if (mem::k_vmm.copy_out(*p->get_pagetable(), guard_sp, &guard, sizeof(uint64)) < 0)
                     {
-                        panic("[do_handle] Failed to write return marker to user stack");
+                        panic("[do_handle] Failed to write sigframe guard");
+                        return;
+                    }
+
+                    uint64 has_siginfo = UINT64_MAX;
+                    if (mem::k_vmm.copy_out(*p->get_pagetable(), has_siginfo_sp, &has_siginfo, sizeof(uint64)) < 0)
+                    {
+                        panic("[do_handle] Failed to write has_siginfo marker");
                         return;
                     }
 

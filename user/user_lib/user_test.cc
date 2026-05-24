@@ -354,9 +354,6 @@ int libc_test(const char *path = musl_dir)
     {
         argv[3] = libctest[i][0];
         run_test("runtest.exe", argv, 0);
-#ifdef LOONGARCH
-        sleep(10);
-#endif
     }
     printf("#### OS COMP TEST GROUP END libctest-musl ####\n");
     return 0;
