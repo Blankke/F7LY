@@ -25,7 +25,7 @@
 小分文件继续列出具体测例：
 
 ```text
-测例 | 状态 | 默认回归 | 命令 | 来源 | 备注
+测例 | 是否通过 | 备注
 ```
 
 ## 目录结构
@@ -47,12 +47,7 @@ scoreboard/
 - `README.md`：该组合的小分汇总。
 - `basic.md`、`ltp.md`、`libctest-static.md` 等小分文件。
 
-小分文件中的测例名链接到挂载磁盘里的实际测例文件，例如：
-
-```text
-/mnt/sdcard-rv/musl/basic/brk
-/mnt/sdcard-la/glibc/ltp/testcases/bin/accept01
-```
+小分文件是协作状态表，不放命令、来源、链接等测例元信息。测例来源由生成器从挂载磁盘扫描，agent 只在表里维护是否通过和备注。
 
 ## 生成与刷新
 
@@ -82,13 +77,13 @@ python scoreboard/generate_scoreboard.py
 
 - 扫描四组合磁盘测例。
 - 生成或刷新小分 Markdown 文件。
-- 保留已有小分文件中 `状态` 列的非空值。
+- 保留已有小分文件中 `是否通过` 和 `备注` 的非空值。
 - 重新计算顶层和组合 README 中的 `Pass测例`。
 - 清理旧版 `scoreboard/out/` HTML/JSON 目录。
 
-## 状态列约定
+## 是否通过列约定
 
-`状态` 列建议只使用这些值：
+`是否通过` 列建议只使用这些值：
 
 - 空：未确认或未运行。
 - `PASS`：该测例在对应架构/libc 组合下已确认通过。
@@ -96,7 +91,7 @@ python scoreboard/generate_scoreboard.py
 - `SKIP`：明确跳过。
 - `BLOCKED`：被其他问题阻塞，不能独立判定。
 
-顶层 `Pass测例` 只统计状态严格等于 `PASS` 的行。大小写由生成器按大写判断，但建议统一写 `PASS`。
+顶层 `Pass测例` 只统计 `是否通过` 严格等于 `PASS` 的行。大小写由生成器按大写判断，但建议统一写 `PASS`。
 
 ## Agent 更新流程
 
@@ -104,7 +99,7 @@ python scoreboard/generate_scoreboard.py
 
 1. 找到对应小分文件，例如 `scoreboard/riscv/musl/ltp.md`。
 2. 找到具体测例行。
-3. 将 `状态` 改为 `PASS`、`FAIL`、`SKIP` 或 `BLOCKED`。
+3. 将 `是否通过` 改为 `PASS`、`FAIL`、`SKIP` 或 `BLOCKED`。
 4. 在 `备注` 写短信息：日期、日志文件名、关键原因或依赖。
 5. 重新运行生成器刷新顶层汇总。
 6. 汇报时说明更新了哪些组合、小分、测例和依据日志。
@@ -112,10 +107,10 @@ python scoreboard/generate_scoreboard.py
 示例：
 
 ```markdown
-| [accept01](/mnt/sdcard-rv/musl/ltp/testcases/bin/accept01) | PASS |  | `accept01` | disk-ltp-bin | 2026-05-25 output_r_xxx.txt |
+| accept01 | PASS | 2026-05-25 output_r_xxx.txt |
 ```
 
-不要在没有运行证据时把状态改成 `PASS`。
+不要在没有运行证据时把 `是否通过` 改成 `PASS`。
 
 ## 从日志更新 scoreboard 的原则
 
@@ -148,7 +143,7 @@ python scoreboard/generate_scoreboard.py
 - 对 LTP，优先用 `ltp_subset_test()` 跑目标列表。
 - 对 basic，优先用 `basic_subset_test()` 或临时缩小 `basic_testcases[]`。
 - 每次从 FAIL 变 PASS 后，更新 scoreboard 对应行。
-- 如果发现 scoreboard 里测例路径失效，先确认镜像是否挂载；不要直接删行。
+- 如果发现 scoreboard 测例列表缺失，先确认镜像是否挂载；不要直接删行。
 
 ## 验证 scoreboard 工具
 

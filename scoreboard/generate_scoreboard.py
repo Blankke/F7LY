@@ -323,13 +323,6 @@ def relative_link(from_file: Path, target: Path) -> str:
         return target.resolve().as_posix()
 
 
-def case_link(case: ScoreCase) -> str:
-    path = Path(case.path)
-    if path.exists():
-        return md_link(case.name, path.resolve().as_posix())
-    return md_escape(case.name)
-
-
 def markdown_link_label(cell: str) -> str:
     cell = cell.strip()
     if cell.startswith("[") and "](" in cell:
@@ -337,8 +330,8 @@ def markdown_link_label(cell: str) -> str:
     return cell
 
 
-def read_existing_statuses(out_dir: Path) -> dict[tuple[str, str, str, str], str]:
-    statuses: dict[tuple[str, str, str, str], str] = {}
+def read_existing_case_notes(out_dir: Path) -> dict[tuple[str, str, str, str], tuple[str, str]]:
+    case_notes: dict[tuple[str, str, str, str], tuple[str, str]] = {}
     for arch in ARCH_MOUNT_DEFAULTS:
         for libc in LIBC_NAMES:
             libc_dir = out_dir / arch / libc
@@ -349,26 +342,31 @@ def read_existing_statuses(out_dir: Path) -> dict[tuple[str, str, str, str], str
                     continue
                 group = page.stem
                 lines = read_lines(page)
-                header_seen = False
+                header: list[str] = []
                 for line in lines:
-                    if line.startswith("| 测例 | 状态 |"):
-                        header_seen = True
+                    if line.startswith("| 测例 |"):
+                        header = [part.strip() for part in line.strip().strip("|").split("|")]
                         continue
-                    if not header_seen or not line.startswith("|"):
+                    if not header or not line.startswith("|"):
                         continue
                     parts = [part.strip() for part in line.strip().strip("|").split("|")]
-                    if len(parts) < 2 or parts[0] == "---":
+                    if len(parts) < len(header) or parts[0] == "---":
                         continue
                     name = markdown_link_label(parts[0])
-                    status = parts[1]
-                    if status:
-                        statuses[(arch, libc, group, name)] = status
-    return statuses
+                    status_index = 1
+                    note_index = header.index("备注") if "备注" in header else -1
+                    status = parts[status_index]
+                    note = parts[note_index] if note_index >= 0 else ""
+                    if status or note:
+                        case_notes[(arch, libc, group, name)] = (status, note)
+    return case_notes
 
 
-def apply_existing_statuses(cases: list[ScoreCase], statuses: dict[tuple[str, str, str, str], str]) -> None:
+def apply_existing_case_notes(cases: list[ScoreCase], case_notes: dict[tuple[str, str, str, str], tuple[str, str]]) -> None:
     for case in cases:
-        case.status = statuses.get((case.arch, case.libc, case.group, case.name), case.status)
+        status, note = case_notes.get((case.arch, case.libc, case.group, case.name), (case.status, case.note))
+        case.status = status
+        case.note = note
 
 
 def is_pass_status(status: str) -> bool:
@@ -377,20 +375,16 @@ def is_pass_status(status: str) -> bool:
 
 def render_case_table(cases: list[ScoreCase]) -> str:
     lines = [
-        "| 测例 | 状态 | 默认回归 | 命令 | 来源 | 备注 |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| 测例 | 是否通过 | 备注 |",
+        "| --- | --- | --- |",
     ]
     for case in cases:
-        default = "是" if case.project_default else ""
         lines.append(
             "| "
             + " | ".join(
                 [
-                    case_link(case),
+                    md_escape(case.name),
                     md_escape(case.status),
-                    default,
-                    f"`{md_escape(case.command)}`",
-                    md_escape(case.source),
                     md_escape(case.note),
                 ]
             )
@@ -438,7 +432,7 @@ def write_outputs(out_dir: Path, cases: list[ScoreCase], summary: dict[str, obje
         shutil.rmtree(stale_html_dir)
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    apply_existing_statuses(cases, read_existing_statuses(out_dir))
+    apply_existing_case_notes(cases, read_existing_case_notes(out_dir))
 
     cases_by_group: dict[tuple[str, str, str], list[ScoreCase]] = {}
     for case in cases:
@@ -484,10 +478,10 @@ def write_outputs(out_dir: Path, cases: list[ScoreCase], summary: dict[str, obje
         "# F7LY Test Scoreboard",
         "",
         "这个目录是从已挂载的大赛磁盘抽取出来的 Markdown scoreboard。",
-        "它只记录测例结构、当前项目默认回归标记和小测例文件导航，不负责执行测例。",
+        "它只记录测例结构和协作状态，不负责执行测例。",
         "",
-        "顶层直接汇总四个组合；每个小分链接到对应 Markdown 文件，小分文件内再链接到挂载磁盘里的具体测例文件。",
-        "Pass测例按小分文件中状态列的 `PASS` 数统计。没有真实运行结果时不会自动标 PASS。",
+        "顶层直接汇总四个组合；每个小分链接到对应 Markdown 文件。",
+        "Pass测例按小分文件中“是否通过”列的 `PASS` 数统计。没有真实运行结果时不会自动标 PASS。",
         "",
     ]
     for arch in ARCH_MOUNT_DEFAULTS:
@@ -514,7 +508,7 @@ def write_outputs(out_dir: Path, cases: list[ScoreCase], summary: dict[str, obje
             "## 当前项目默认回归",
             "",
             "当前 `regression_suite_4d1444()` 默认开启 `musl/basic` 和 `musl/libctest`。",
-            "表格里的“默认回归”列用于快速区分当前 initcode 会跑的测例和磁盘中存在但未默认开启的测例。",
+            "小分文件只记录协作状态；测例命令和来源由生成器从挂载磁盘重新扫描。",
             "",
         ]
     )

@@ -2,33 +2,33 @@
 
 测例数量：28
 
-| 测例 | 状态 | 默认回归 | 命令 | 来源 | 备注 |
-| --- | --- | --- | --- | --- | --- |
-| [01-busybox](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./busybox echo "#### OS COMP TEST GROUP START unixbench-musl ####"` | disk-testcode-script |  |
-| [02-dhry2reg](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./dhry2reg 10 \| ./busybox grep -o "COUNT\|[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench DHRY2 test(lps): "$0}'` | disk-testcode-script |  |
-| [03-whetstone-double](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./whetstone-double 10 \| ./busybox grep -o "COUNT\|[[:digit:]]\\+.[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+.[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench WHETSTONE test(MFLOPS): "$0}'` | disk-testcode-script |  |
-| [04-syscall](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./syscall 10 \| ./busybox grep -o "COUNT\|[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench SYSCALL test(lps): "$0}'` | disk-testcode-script |  |
-| [05-context1](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./context1 10 \| ./busybox grep -o "COUNT\|[[:digit:]]\\+\|" \| ./busybox tail -n1 \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench CONTEXT test(lps): "$0}'` | disk-testcode-script |  |
-| [06-pipe](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./pipe 10 \| ./busybox grep -o "COUNT\|[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench PIPE test(lps): "$0}'` | disk-testcode-script |  |
-| [07-spawn](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./spawn 10 \| ./busybox grep -o "COUNT\|[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench SPAWN test(lps): "$0}'` | disk-testcode-script |  |
-| [08-fstime](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./fstime -w -t 20 -b 256 -m 500 \| ./busybox grep -o "WRITE COUNT\|[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench FS_WRITE_SMALL test(KBps): "$0}'` | disk-testcode-script |  |
-| [09-fstime](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./fstime -r -t 20 -b 256 -m 500 \| ./busybox grep -o "READ COUNT\|[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench FS_READ_SMALL test(KBps): "$0}'` | disk-testcode-script |  |
-| [10-fstime](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./fstime -c -t 20 -b 256 -m 500 \| ./busybox grep -o "COPY COUNT\|[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench FS_COPY_SMALL test(KBps): "$0}'` | disk-testcode-script |  |
-| [11-fstime](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./fstime -w -t 20 -b 1024 -m 2000 \| ./busybox grep -o "WRITE COUNT\|[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench FS_WRITE_MIDDLE test(KBps): "$0}'` | disk-testcode-script |  |
-| [12-fstime](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./fstime -r -t 20 -b 1024 -m 2000 \| ./busybox grep -o "READ COUNT\|[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench FS_READ_MIDDLE test(KBps): "$0}'` | disk-testcode-script |  |
-| [13-fstime](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./fstime -c -t 20 -b 1024 -m 2000 \| ./busybox grep -o "COPY COUNT\|[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench FS_COPY_MIDDLE test(KBps): "$0}'` | disk-testcode-script |  |
-| [14-fstime](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./fstime -w -t 20 -b 4096 -m 8000 \| ./busybox grep -o "WRITE COUNT\|[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench FS_WRITE_BIG test(KBps): "$0}'` | disk-testcode-script |  |
-| [15-fstime](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./fstime -r -t 20 -b 4096 -m 8000 \| ./busybox grep -o "READ COUNT\|[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench FS_READ_BIG test(KBps): "$0}'` | disk-testcode-script |  |
-| [16-fstime](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./fstime -c -t 20 -b 4096 -m 8000 \| ./busybox grep -o "COPY COUNT\|[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench FS_COPY_BIG test(KBps): "$0}'` | disk-testcode-script |  |
-| [17-looper](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./looper 20 ./multi.sh 1 \| ./busybox grep -o "COUNT\|[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench SHELL1 test(lpm): "$0}'` | disk-testcode-script |  |
-| [18-looper](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./looper 20 ./multi.sh 8 \| ./busybox grep -o "COUNT\|[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench SHELL8 test(lpm): "$0}'` | disk-testcode-script |  |
-| [19-looper](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./looper 20 ./multi.sh 16 \| ./busybox grep -o "COUNT\|[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench SHELL16 test(lpm): "$0}'` | disk-testcode-script |  |
-| [20-arithoh](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./arithoh 10 \| ./busybox grep -o "COUNT\|[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench ARITHOH test(lps): "$0}'` | disk-testcode-script |  |
-| [21-short](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./short 10 \| ./busybox grep -o "COUNT\|[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench SHORT test(lps): "$0}'` | disk-testcode-script |  |
-| [22-int](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./int 10 \| ./busybox grep -o "COUNT\|[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench INT test(lps): "$0}'` | disk-testcode-script |  |
-| [23-long](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./long 10 \| ./busybox grep -o "COUNT\|[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench LONG test(lps): "$0}'` | disk-testcode-script |  |
-| [24-float](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./float 10 \| ./busybox grep -o "COUNT\|[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench FLOAT test(lps): "$0}'` | disk-testcode-script |  |
-| [25-double](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./double 10 \| ./busybox grep -o "COUNT\|[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench DOUBLE test(lps): "$0}'` | disk-testcode-script |  |
-| [26-hanoi](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./hanoi 10 \| ./busybox grep -o "COUNT\|[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench HANOI test(lps): "$0}'` | disk-testcode-script |  |
-| [27-syscall](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./syscall 10 exec \| ./busybox grep -o "COUNT\|[[:digit:]]\\+\|" \| ./busybox grep -o "[[:digit:]]\\+" \| ./busybox awk '{print "Unixbench EXEC test(lps): "$0}'` | disk-testcode-script |  |
-| [28-busybox](/mnt/sdcard-la/musl/unixbench_testcode.sh) |  |  | `./busybox echo "#### OS COMP TEST GROUP END unixbench-musl ####"` | disk-testcode-script |  |
+| 测例 | 是否通过 | 备注 |
+| --- | --- | --- |
+| 01-busybox |  |  |
+| 02-dhry2reg |  | [[:digit:]]\\\\+\\ |
+| 03-whetstone-double |  | [[:digit:]]\\\\+.[[:digit:]]\\\\+\\ |
+| 04-syscall |  | [[:digit:]]\\\\+\\ |
+| 05-context1 |  | [[:digit:]]\\\\+\\ |
+| 06-pipe |  | [[:digit:]]\\\\+\\ |
+| 07-spawn |  | [[:digit:]]\\\\+\\ |
+| 08-fstime |  | [[:digit:]]\\\\+\\ |
+| 09-fstime |  | [[:digit:]]\\\\+\\ |
+| 10-fstime |  | [[:digit:]]\\\\+\\ |
+| 11-fstime |  | [[:digit:]]\\\\+\\ |
+| 12-fstime |  | [[:digit:]]\\\\+\\ |
+| 13-fstime |  | [[:digit:]]\\\\+\\ |
+| 14-fstime |  | [[:digit:]]\\\\+\\ |
+| 15-fstime |  | [[:digit:]]\\\\+\\ |
+| 16-fstime |  | [[:digit:]]\\\\+\\ |
+| 17-looper |  | [[:digit:]]\\\\+\\ |
+| 18-looper |  | [[:digit:]]\\\\+\\ |
+| 19-looper |  | [[:digit:]]\\\\+\\ |
+| 20-arithoh |  | [[:digit:]]\\\\+\\ |
+| 21-short |  | [[:digit:]]\\\\+\\ |
+| 22-int |  | [[:digit:]]\\\\+\\ |
+| 23-long |  | [[:digit:]]\\\\+\\ |
+| 24-float |  | [[:digit:]]\\\\+\\ |
+| 25-double |  | [[:digit:]]\\\\+\\ |
+| 26-hanoi |  | [[:digit:]]\\\\+\\ |
+| 27-syscall |  | [[:digit:]]\\\\+\\ |
+| 28-busybox |  |  |
