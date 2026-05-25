@@ -20,7 +20,7 @@
 #include "slab.hh"
 #include "trap/interrupt_stats.hh"
 #include "shm/shm_manager.hh"
-#include "fs/drivers/riscv/virtio2.hh"
+#include "fs/drivers/virtio_blk.hh"
 #include "fs/vfs/vfs_ext4_ext.hh"
 #include "fs/vfs/virtual_fs.hh"
 #include "loop_device.hh"

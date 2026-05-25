@@ -109,8 +109,13 @@ SRCS += $(shell find $(KERNEL_DIR)/proc -maxdepth 1 -type f \
 SRCS += $(shell find $(KERNEL_DIR)/boot -maxdepth 1 -type f \
         \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
 
-# 收集 fs 目录中的所有文件（fs 没有架构特定子目录）
+# 收集 fs 目录中的通用文件，并按当前架构只纳入对应的块驱动适配层。
+# 这样可以避免 riscv/loongarch 互相编译对方驱动，降低跨架构耦合。
 SRCS += $(shell find $(KERNEL_DIR)/fs -type f \
+        ! -path "$(KERNEL_DIR)/fs/drivers/riscv/*" \
+        ! -path "$(KERNEL_DIR)/fs/drivers/loongarch/*" \
+        \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
+SRCS += $(shell find $(KERNEL_DIR)/fs/drivers/$(ARCH) -type f \
         \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
 
 # 收集 net 目录中的所有文件（net 没有架构特定子目录）
@@ -173,6 +178,8 @@ PRINTF_OBJ := build/$(OUTPUT_PREFIX)/printf.o
 
 USER_TEST_SRC := user/user_lib/user_test.cc
 USER_TEST_OBJ := build/$(OUTPUT_PREFIX)/user_test.o
+IOZONE_RESEARCH_SRC := user/research/iozone/iozone_research.cc
+IOZONE_RESEARCH_OBJ := build/$(OUTPUT_PREFIX)/iozone_research.o
 
 # 编译参数
 
@@ -365,9 +372,14 @@ $(USER_TEST_OBJ): $(USER_TEST_SRC)
 	@mkdir -p $(dir $@)
 	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
 
+# 编译 iozone 研究入口
+$(IOZONE_RESEARCH_OBJ): $(IOZONE_RESEARCH_SRC)
+	@mkdir -p $(dir $@)
+	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
+
 # 链接生成 initcode.elf
-$(INITCODE_ELF): $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(USER_TEST_OBJ) $(INITCODE_LINK_SCRIPT)
-	$(LD) $(INITCODE_LDFLAGS) -o $@ $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(USER_TEST_OBJ)
+$(INITCODE_ELF): $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(USER_TEST_OBJ) $(IOZONE_RESEARCH_OBJ) $(INITCODE_LINK_SCRIPT)
+	$(LD) $(INITCODE_LDFLAGS) -o $@ $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(USER_TEST_OBJ) $(IOZONE_RESEARCH_OBJ)
 
 ifeq ($(ARCH),riscv)
   OBJDUMP_INITCODE := riscv64-unknown-elf-objdump -D -b binary -m riscv:rv64 -EL

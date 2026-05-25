@@ -42,6 +42,7 @@ static int extlock_depth = 0;
 [[maybe_unused]] static struct ext4_lock ext4_lock_ops = {ext4_lock, ext4_unlock};
 
 [[maybe_unused]] static uint vfs_ext4_filetype(uint filetype);
+static int vfs_ext4_finish_mount(const char *mount_path, struct vfs_ext4_blockdev *vbdev);
 
 int vfs_ext4_init(void) {
     sem_init(&extlock, 1, const_cast<char*>("ext4_sem"));
@@ -87,6 +88,31 @@ static void ext4_unlock() {
     }
 }
 
+static int vfs_ext4_finish_mount(const char *mount_path, struct vfs_ext4_blockdev *vbdev)
+{
+    // 默认开启 lwext4 的块缓存 write-back，避免 iozone 这类小块密集写场景
+    // 被同步刷盘完全拖垮；这也是 iozone 分支里已经验证过的关键优化。
+    int r = ext4_cache_write_back(mount_path, true);
+    if (r != EOK)
+    {
+        ext4_umount(mount_path);
+        vfs_ext4_blockdev_destroy(vbdev);
+        return r;
+    }
+
+    // 同时接入 mount 级锁，避免多个进程并发进入 lwext4 内部缓存路径时
+    // 破坏引用计数和目录迭代状态。
+    r = ext4_mount_setup_locks(mount_path, &ext4_lock_ops);
+    if (r != EOK)
+    {
+        ext4_umount(mount_path);
+        vfs_ext4_blockdev_destroy(vbdev);
+        return r;
+    }
+
+    return EOK;
+}
+
 int vfs_ext_mount(struct filesystem *fs, uint64_t rwflag, void *data) {
     int r = 0;
     [[maybe_unused]] struct ext4_blockdev *bdev = NULL;
@@ -97,25 +123,15 @@ int vfs_ext_mount(struct filesystem *fs, uint64_t rwflag, void *data) {
         goto out;
     }
 
-    printf("MOUNT BEGIN %s\n", fs->path);
     bdev = &vbdev->bd;
     r = ext4_mount(DEV_NAME, fs->path, false);
-    printf("EXT4 mount result: %d\n", r);
-
-    // r = ext4_cache_write_back(fs->path, true);
-    // if (r != EOK) {
-    //     printf("EXT4 cache write back error! r=%d\n", r);
-    //     return -1;
-    // }
 
     if (r != EOK) {
         vfs_ext4_blockdev_destroy(vbdev);
         goto out;
     } else {
-        r = ext4_mount_setup_locks(fs->path, &ext4_lock_ops);
+        r = vfs_ext4_finish_mount(fs->path, vbdev);
         if (r != EOK) {
-            ext4_umount(fs->path);
-            vfs_ext4_blockdev_destroy(vbdev);
             goto out;
         }
         //获得ext4文件系统的超级块
@@ -136,19 +152,15 @@ int vfs_ext_mount2(struct filesystem *fs, uint64_t rwflag, void *data) {
         goto out;
     }
 
-    printf("MOUNT BEGIN %s\n", fs->path);
     bdev = &vbdev->bd;
     r = ext4_mount("root_fs", fs->path, false);
-    printf("EXT4 mount result: %d\n", r);
 
     if (r != EOK) {
         vfs_ext4_blockdev_destroy(vbdev);
         goto out;
     } else {
-        r = ext4_mount_setup_locks(fs->path, &ext4_lock_ops);
+        r = vfs_ext4_finish_mount(fs->path, vbdev);
         if (r != EOK) {
-            ext4_umount(fs->path);
-            vfs_ext4_blockdev_destroy(vbdev);
             goto out;
         }
         //获得ext4文件系统的超级块

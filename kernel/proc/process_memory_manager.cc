@@ -68,6 +68,94 @@ namespace proc
             return entry.used && entry.backing_kind == VMA_BACKING_SHM && entry.backing_shmid >= 0;
         }
 
+        inline uint64 build_user_pte_flags_from_vma(const vma &entry)
+        {
+            uint64 pte_flags = 0;
+#ifdef RISCV
+            pte_flags = riscv::PteEnum::pte_user_m;
+            if (entry.prot & PROT_READ)
+            {
+                pte_flags |= riscv::PteEnum::pte_readable_m;
+            }
+            if (entry.prot & PROT_WRITE)
+            {
+                pte_flags |= riscv::PteEnum::pte_writable_m;
+                pte_flags |= riscv::PteEnum::pte_readable_m;
+            }
+            if (entry.prot & PROT_EXEC)
+            {
+                pte_flags |= riscv::PteEnum::pte_executable_m;
+            }
+#elif defined(LOONGARCH)
+            pte_flags = PTE_U | PTE_D | PTE_MAT;
+            if (entry.prot & PROT_READ)
+            {
+                pte_flags |= PTE_R;
+            }
+            if (entry.prot & PROT_WRITE)
+            {
+                pte_flags |= PTE_W;
+            }
+            if (entry.prot & PROT_EXEC)
+            {
+                pte_flags |= PTE_X;
+            }
+#endif
+            return pte_flags;
+        }
+
+        bool remap_shared_backed_vma(ProcessMemoryManager &target_mm, const vma &entry)
+        {
+            if (!is_shared_backed_vma(entry))
+            {
+                return true;
+            }
+
+            if (entry.prot == PROT_NONE)
+            {
+                return true;
+            }
+
+            shm::shm_segment seg = shm::k_smm.get_seg_info(entry.backing_shmid);
+            if (seg.shmid < 0)
+            {
+                printfRed("[clone_for_fork] invalid shared backing shmid=%d addr=%p len=%d\n",
+                          entry.backing_shmid, (void *)entry.addr, entry.len);
+                return false;
+            }
+
+            uint64 map_start = PGROUNDDOWN(entry.backing_base != 0 ? entry.backing_base : entry.addr);
+            uint64 map_end = PGROUNDUP(entry.addr + (uint64)entry.len);
+            if (map_end < map_start)
+            {
+                printfRed("[clone_for_fork] shared VMA range overflow shmid=%d addr=%p len=%d\n",
+                          entry.backing_shmid, (void *)entry.addr, entry.len);
+                return false;
+            }
+
+            uint64 pte_flags = build_user_pte_flags_from_vma(entry);
+            for (uint64 va = map_start; va < map_end; va += PGSIZE)
+            {
+                uint64 page_offset = va - map_start;
+                if (page_offset >= seg.real_size)
+                {
+                    printfRed("[clone_for_fork] shared VMA remap overflow shmid=%d va=%p offset=%p real_size=%p\n",
+                              entry.backing_shmid, (void *)va, (void *)page_offset, (void *)seg.real_size);
+                    return false;
+                }
+
+                uint64 pa = seg.phy_addrs + page_offset;
+                if (!mem::k_vmm.map_pages(target_mm.pagetable, va, PGSIZE, pa, pte_flags))
+                {
+                    printfRed("[clone_for_fork] remap shared VMA failed shmid=%d va=%p pa=%p\n",
+                              entry.backing_shmid, (void *)va, (void *)pa);
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         inline bool is_same_shared_backing(const vma &lhs, const vma &rhs)
         {
             return is_shared_backed_vma(lhs) &&
@@ -517,7 +605,15 @@ namespace proc
             // 如果这里只复制 VMA 元数据，子进程缺页时会重新从文件读原始 GOT，
             // 导致 _rtld_global 等指针退回 0 并在 glibc __fork 子分支崩溃。
             // 未驻留页仍保持惰性加载；MAP_SHARED/SHM 页由共享后端负责重新映射。
-            if (!is_shared_backed_vma(vma_data._vm[i]))
+            if (is_shared_backed_vma(vma_data._vm[i]))
+            {
+                if (!remap_shared_backed_vma(*new_mgr, vma_data._vm[i]))
+                {
+                    delete new_mgr;
+                    return nullptr;
+                }
+            }
+            else
             {
                 uint64 vma_start = PGROUNDDOWN(vma_data._vm[i].addr);
                 uint64 vma_end = PGROUNDUP(vma_data._vm[i].addr + (uint64)vma_data._vm[i].len);
@@ -1234,6 +1330,108 @@ namespace proc
         }
 
         return 0;
+    }
+
+    bool ProcessMemoryManager::register_shared_attachment_vma(uint64 addr,
+                                                              size_t length,
+                                                              int prot,
+                                                              int flags,
+                                                              int shmid,
+                                                              uint64 backing_base)
+    {
+        uint64 aligned_addr = PGROUNDDOWN(addr);
+        uint64 aligned_len = PGROUNDUP(length);
+        if (aligned_addr == 0 || aligned_len == 0)
+        {
+            printfRed("ProcessMemoryManager: register_shared_attachment_vma 参数非法 addr=%p len=%p\n",
+                      (void *)addr, (void *)length);
+            return false;
+        }
+
+        uint64 end_addr = aligned_addr + aligned_len;
+        if (end_addr < aligned_addr || end_addr > MAXVA)
+        {
+            printfRed("ProcessMemoryManager: register_shared_attachment_vma 地址范围非法 [%p, %p)\n",
+                      (void *)aligned_addr, (void *)end_addr);
+            return false;
+        }
+
+        int free_idx = -1;
+        for (int i = 0; i < NVMA; ++i)
+        {
+            vma &entry = vma_data._vm[i];
+            if (!entry.used)
+            {
+                if (free_idx < 0)
+                {
+                    free_idx = i;
+                }
+                continue;
+            }
+
+            uint64 vm_start = entry.addr;
+            uint64 vm_end = entry.addr + (uint64)entry.len;
+            if (vm_end <= vm_start)
+            {
+                continue;
+            }
+
+            if (aligned_addr < vm_end && end_addr > vm_start)
+            {
+                printfRed("ProcessMemoryManager: 共享附件 VMA 与现有 VMA 冲突 idx=%d [%p, %p) vs [%p, %p)\n",
+                          i,
+                          (void *)aligned_addr,
+                          (void *)end_addr,
+                          (void *)vm_start,
+                          (void *)vm_end);
+                return false;
+            }
+        }
+
+        if (free_idx < 0)
+        {
+            printfRed("ProcessMemoryManager: 没有空闲 VMA 槽位可登记共享附件 addr=%p len=%p\n",
+                      (void *)aligned_addr, (void *)aligned_len);
+            return false;
+        }
+
+        vma &vm = vma_data._vm[free_idx];
+        reset_vma_entry(vm);
+        vm.used = 1;
+        vm.addr = aligned_addr;
+        vm.len = static_cast<int>(aligned_len);
+        vm.prot = prot;
+        vm.flags = flags;
+        vm.vfd = -1;
+        vm.vfile = nullptr;
+        vm.offset = 0;
+        vm.max_len = aligned_len;
+        vm.is_expandable = false;
+        vm.backing_kind = VMA_BACKING_SHM;
+        vm.backing_shmid = shmid;
+        vm.backing_base = backing_base;
+        return true;
+    }
+
+    int ProcessMemoryManager::clear_shared_attachment_vmas(int shmid, uint64 backing_base)
+    {
+        int cleared = 0;
+        for (int i = 0; i < NVMA; ++i)
+        {
+            vma &entry = vma_data._vm[i];
+            if (!entry.used || entry.backing_kind != VMA_BACKING_SHM)
+            {
+                continue;
+            }
+            if (entry.backing_shmid != shmid || entry.backing_base != backing_base)
+            {
+                continue;
+            }
+
+            reset_vma_entry(entry);
+            ++cleared;
+        }
+        return cleared;
     }
     /// @brief 不修改堆顶的unmap
     /// @param addr 

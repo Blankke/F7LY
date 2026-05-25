@@ -22,7 +22,7 @@
 #include "virtual_memory_manager.hh"
 #include "timer_interface.hh"
 #include "timer_manager.hh"
-#include "fs/drivers/riscv/virtio2.hh"
+#include "fs/drivers/virtio_blk.hh"
 #include "trap/interrupt_stats.hh"
 #include "proc/posix_timers.hh"
 
@@ -58,8 +58,10 @@ void trap_manager::inithart()
 // 时钟到期后, 重新设置下次超时
 void trap_manager::set_next_timeout()
 {
-
-  sbi_set_timer(r_time() + INTERVAL);
+  // RISC-V 的 OpenSBI/ACLINT timer 频率是固定硬件计数器。
+  // 这里统一使用时间子系统给出的每 tick 周期数，避免再维护一套
+  // 与 LoongArch 不一致的独立 INTERVAL 常量。
+  sbi_set_timer(r_time() + tmm::cycles_per_tick());
 }
 
 // 处理外部中断和软件中断
@@ -447,7 +449,6 @@ int mmap_handler(uint64 va, int cause)
       // 检查是否在当前VMA范围内
       if (va >= p->get_vma()->_vm[i].addr && va < p->get_vma()->_vm[i].addr + p->get_vma()->_vm[i].len)
       {
-        printfGreen("mmap_handler: found VMA %d for va %p\n", i, va);
         break; // 在当前VMA范围内
       }
     }
@@ -466,17 +467,11 @@ int mmap_handler(uint64 va, int cause)
   int access_type = 0; // 默认读取
   if (cause == 15)
   { // Store page fault
-    printfRed("mmap_handler: store page fault at %p\n", va);
     access_type = 1; // 写入
   }
   else if (cause == 12)
   {                  // Instruction page fault
-    printfRed("mmap_handler: instruction page fault at %p\n", va);
     access_type = 2; // 执行
-  }
-  else
-  {
-    printfRed("mmap_handler: load page fault at %p\n", va);
   }
   // 使用统一的VMA页面分配函数
   return mem::k_vmm.allocate_vma_page(*p->get_pagetable(), va, vm, access_type);

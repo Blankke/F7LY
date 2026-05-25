@@ -22,90 +22,71 @@ namespace proc
 	{
 		int Pipe::write(uint64 addr, int n)
 		{
-			panic("不是哥们为什么有两个write，貌似现在用的是write_in_kernel");
-			// printfRed("write pipe file\n");
 			int i = 0;
-			Pcb *pr = k_pm.get_cur_pcb(); // 获取当前进程的 PCB 指针
+			Pcb *pr = k_pm.get_cur_pcb();
 
-			_lock.acquire(); // 加锁以保护共享资源 _data
+			_lock.acquire();
 
-			while (i < n) // 尝试写入 n 个字节
+			while (i < n)
 			{
 				if (!_read_is_open || pr->is_killed())
 				{
-					// 如果读端已关闭，或者当前进程已被标记为 killed，则写失败
 					_lock.release();
+					if (!_read_is_open && !pr->is_killed())
+					{
+						proc::ipc::signal::add_signal(pr, proc::ipc::signal::SIGPIPE);
+						return syscall::SYS_EPIPE;
+					}
 					return -1;
 				}
 
 				if (_count >= _pipe_size)
 				{
-					printfRed("Pipe buffer full, cannot write more data\n");
-					_lock.release();
-					if(i > 0)
+					if (_nonblock)
 					{
-						return i; // 返回已写入的字节数, 虽然满了，但是部分写入成功，返回成功写入的字节数
+						_lock.release();
+						return i > 0 ? i : syscall::SYS_EAGAIN;
 					}
-					return syscall::SYS_EAGAIN; // 管道已满，完全无法写入，返回 EAGAIN 错误
-					// 如果管道缓冲区满了，不能继续写入
-					// 唤醒等待读取的进程，让其读走数据
 					k_pm.wakeup(&_read_sleep);
-
-					// 当前进程进入睡眠，等待空间释放
 					k_pm.sleep(&_write_sleep, &_lock);
+					continue;
 				}
-				else
+
+				char ch;
+				mem::PageTable *pt = pr->get_pagetable();
+				if (mem::k_vmm.copy_in(*pt, &ch, addr + i, 1) == -1)
 				{
-					char ch;
-
-					mem::PageTable *pt = pr->get_pagetable(); // 获取页表对象的地址（风险点）
-
-					// 从用户空间地址 addr + i 拷贝一个字节到内核空间的 ch 中
-					if (mem::k_vmm.copy_in(*pt, &ch, addr + i, 1) == -1)
-						break; // 如果拷贝失败（例如地址非法），退出循环
-					// // printfYellow("Pipe write char: %c\n", ch); // 调试输出写入的字符
-					push((uint8)ch); // 将字符写入管道缓冲区
-					i++;			// 写入计数加一
+					break;
 				}
+				push((uint8)ch);
+				i++;
 			}
 
-			// // printf("Pipe buffer: ");
-			// for (auto q = _data; !q.empty(); q.pop())
-			// {
-			// 	// printf("%c", q.front());
-			// }
-			// // printf("\n");
-
-			// 写完后唤醒读者进程
 			k_pm.wakeup(&_read_sleep);
-			_lock.release(); // 释放锁
+			_lock.release();
 
-			return i; // 返回实际写入的字节数
+			return i;
 		}
 		int Pipe::write_in_kernel(uint64 addr, int n)
 		{
 			int i = 0;
-			Pcb *pr = k_pm.get_cur_pcb(); // 获取当前运行的进程控制块（虽然这函数是内核态用的，但可能用于判死等）
+			Pcb *pr = k_pm.get_cur_pcb();
 
-			_lock.acquire(); // 获取锁，防止多进程并发写入管道缓冲区
+			_lock.acquire();
 
-			// printfBlue("write_in_kernel buf: %s\n", (char *)addr);
-			// printfYellow("write_in_kernel n: %d\n", n);
-			while (i < n) // 写入 n 个字节
+			while (i < n)
 			{
 				if (!_read_is_open || pr->is_killed())
 				{
-					// printfRed("Pipe write failed: read end closed or process killed\n");
-					// 如果读端已关闭，或者当前进程被终止，提前退出
 					_lock.release();
 					
-					// 如果读端已关闭且进程没有被杀死，发送SIGPIPE信号
 					if (!_read_is_open && !pr->is_killed())
 					{
 						proc::ipc::signal::add_signal(pr, proc::ipc::signal::SIGPIPE);
+						return syscall::SYS_EPIPE;
 					}
 					
-					return syscall::SYS_EPIPE; 
+					return -1;
 				}
 
 				if (_count >= _pipe_size)
@@ -119,95 +100,52 @@ namespace proc
 						return i > 0 ? i : syscall::SYS_EINTR;
 					}
 
-					// 非阻塞模式：如果管道已满，立即返回
 					if (_nonblock)
 					{
-						printfRed("Pipe buffer full, 非阻塞模式\n");
 						_lock.release();
 						if (i > 0)
 						{
-							return i; // 返回已写入的字节数
+							return i;
 						}
-						return syscall::SYS_EAGAIN; // 管道已满，返回 EAGAIN 错误
+						return syscall::SYS_EAGAIN;
 					}
-					else
-					{
-						// 阻塞模式：等待读端消费数据
-						// 唤醒读端（可能已阻塞）
-						k_pm.wakeup(&_read_sleep);
-						// 当前写入进程挂起，等待读端消费数据后唤醒
-						k_pm.sleep(&_write_sleep, &_lock);
-					}
-					
+					k_pm.wakeup(&_read_sleep);
+					k_pm.sleep(&_write_sleep, &_lock);
 				}
 				else
 				{
-					char ch;
-
-					// 内核态地址直接解引用：从addr+i的位置取一个字节
-					ch = *(char *)(addr + i);
-
-					// 将该字节推入管道缓冲区
-					// printf("Pipe write char: %c\n", ch); // 调试输出写入的字符
-
-					// for (auto q = _data; !q.empty(); q.pop())
-					// {
-					// 	// printf("%c", q.front());
-					// }
-					// printf("current queue\n"); // 调试输出写入的字符
-					// printf("pipe size:%d,pipe buffer size: %d\n",pipe_size, _count);
+					char ch = *(char *)(addr + i);
 					push((uint8)ch);
-					// printf("pipe size:%d,pipe buffer size: %d\n",pipe_size, _count);
 					i++;
 				}
-				// Info(" i: %d\n", i);
-				// Info("Pipe buffer size: %d\n", _count);
-				// Info("Pipe buffer: ");
-				// for (auto q = _data; !q.empty(); q.pop())
-				// {
-				// 	// printf("%c", q.front());
-				// }
-				// // printf("\n");
 			}
 
-			// 写完后唤醒读者，防止其继续阻塞
 			k_pm.wakeup(&_read_sleep);
-			_lock.release(); // 释放写锁
+			_lock.release();
 
-			return i; // 返回成功写入的字节数
+			return i;
 		}
 
 		int Pipe::read(uint64 addr, int n)
 		{
-			// // printf("Pipe buffer: ");
-			// for (auto q = _data; !q.empty(); q.pop())
-			// {
-			// 	// printf("%c", q.front());
-			// }
-			// // printf("\n");
-			// printfMagenta("it is a pipe file\n");
 			int i;
-			Pcb *pr = k_pm.get_cur_pcb(); // 获取当前运行进程的 PCB
+			Pcb *pr = k_pm.get_cur_pcb();
 			char ch;
 
-			_lock.acquire(); // 加锁保护 _data 缓冲区
+			_lock.acquire();
 
-			// 如果缓冲区为空，且写端还未关闭，当前读者进程必须等待
 			while (_count == 0 && _write_is_open)
-			{ // DOC: pipe-empty
+			{
 				if (pr->is_killed())
 				{
-					// 如果进程被杀死，则放弃等待，直接返回 -1
 					_lock.release();
 					return -1;
 				}
 				
-				// 非阻塞模式：如果没有数据可读，立即返回EAGAIN
 				if (_nonblock)
 				{
-					printfRed("pipe 缓冲区为空，非阻塞模式\n");
 					_lock.release();
-					return syscall::SYS_EAGAIN; // 返回 EAGAIN 错误，表示没有数据可读
+					return syscall::SYS_EAGAIN;
 				}
 				// 阻塞管道读同样必须是可中断睡眠。
 				// pthread_cancel_points 会把线程挂在这里，然后用定向信号取消；
@@ -217,86 +155,85 @@ namespace proc
 					_lock.release();
 					return syscall::SYS_EINTR;
 				}
-				printfRed("pipe 缓冲区为空，阻塞模式\n");
-				// 阻塞模式：让当前进程进入休眠状态，等待写端唤醒
-				// 进程睡眠，等待写端写入数据后唤醒
+				k_pm.sleep(&_read_sleep, &_lock);
+				// 阻塞模式：让当前进程进入休眠状态，等待写端写入数据后唤醒。
 				k_pm.sleep(&_read_sleep, &_lock); // DOC: piperead-sleep
 			}
 
-			// 退出等待状态后，开始实际读取数据
 			for (i = 0; i < n; i++)
-			{ // DOC: piperead-copy
+			{
 				if (_count == 0)
-					break; // 如果缓冲区已经没有数据，则提前结束读取
+					break;
 
-				ch = pop(); // 读取并弹出字符
+				ch = pop();
 
-				// printfYellow("Pipe read char: %c\n", ch); // 调试输出读取的字符
-				*(((char *)addr) + i) = ch;				  // 将读取的字符写入用户态缓冲区
-														  // ⚠️注意：这里是直接解引用写入，如果addr是用户态地址，
-														  // 需要确保这个函数运行在内核地址空间能访问用户地址。
-														  // 否则应使用 copy_out 函数，这里可能有安全隐患
+				*(((char *)addr) + i) = ch;
 			}
 
-			// 唤醒阻塞在写端的进程，提示缓冲区已有空间
-			k_pm.wakeup(&_write_sleep); // DOC: piperead-wakeup
+			k_pm.wakeup(&_write_sleep);
 
-			_lock.release(); // 释放互斥锁
+			_lock.release();
 
-			return i; // 返回成功读取的字节数
+			return i;
 		}
 
 		int Pipe::alloc(fs::pipe_file *&f0, fs::pipe_file *&f1)
 		{
-			// printfRed("[Pipe::alloc] Allocating pipe files...\n");
-			// if ( ( f0 = fs::k_file_table.alloc_file() ) == nullptr
-			// 	|| ( f1 = fs::k_file_table.alloc_file() ) == nullptr )
-			// 	retur n -1; // allocate file failed
-
-			// init pipe
 			_read_is_open = true;
 			_write_is_open = true;
 			_head = 0;
 			_tail = 0;
 			_count = 0;
 
-			// set file
 			fs::FileAttrs attrs = fs::FileAttrs(fs::FileTypes::FT_PIPE, 0771);
 			f0 = new fs::pipe_file(attrs, this, false);
-			// f0->type = fs::FileTypes::FT_PIPE;
-			// new ( &f0->data ) fs::File::Data( this );
-			// new ( &f0->ops  ) fs::FileOps( 1 ); //readonly
 
 			attrs = fs::FileAttrs(fs::FileTypes::FT_PIPE, 0772);
 			f1 = new fs::pipe_file(attrs, this, true);
-			// f1->type = fs::FileTypes::FT_PIPE;
-			// new ( &f1->data ) fs::File::Data( this );
-			// new ( &f1->ops ) fs::FileOps( 2 ); //writeonly
 
 			return 0;
 		}
 
+		bool Pipe::can_read_without_blocking()
+		{
+			_lock.acquire();
+			// 语义对齐 select/pselect:
+			// 1. 管道里已有数据时，读一定不会阻塞；
+			// 2. 即便没有数据，只要写端已关闭，read 也会立刻返回 0(EOF)，
+			//    这同样应当被视为“可读就绪”。
+			bool ready = (_count > 0) || !_write_is_open;
+			_lock.release();
+			return ready;
+		}
+
+		bool Pipe::can_write_without_blocking()
+		{
+			_lock.acquire();
+			// 语义对齐 select/pselect:
+			// 1. 读端还在且缓冲区有空位时，写不会阻塞；
+			// 2. 读端已关闭时，write 会立刻返回 EPIPE/SIGPIPE，
+			//    这也是“立即返回”的状态，因此仍按可写就绪处理。
+			bool ready = !_read_is_open || (_count < _pipe_size);
+			_lock.release();
+			return ready;
+		}
+
 		void Pipe::close(bool is_write)
 		{
-			printfCyan("[Pipe::close] Closing pipe, is_write=%d\n", is_write);
 			_lock.acquire();
 			if (is_write)
 			{
-				printfCyan("[Pipe::close] Closing write end\n");
 				_write_is_open = false;
 				k_pm.wakeup(&_read_sleep);
 			}
 			else
 			{
-				printfCyan("[Pipe::close] Closing read end\n");
 				_read_is_open = false;
 				k_pm.wakeup(&_write_sleep);
 			}
 
-			printfCyan("[Pipe::close] Pipe state: read_open=%d, write_open=%d\n", _read_is_open, _write_is_open);
 			if (!_read_is_open && !_write_is_open)
 			{
-				printfCyan("[Pipe::close] Both ends closed, deleting pipe\n");
 				_lock.release();
 				delete this;
 			}

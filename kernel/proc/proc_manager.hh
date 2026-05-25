@@ -92,6 +92,9 @@ namespace proc
         int chdir(eastl::string &path);
         int getcwd(char *out_buf);
         int pipe(int *fd, int);
+        int reserve_fd(Pcb *p);
+        int install_fd(Pcb *p, fs::file *f, int fd);
+        void release_fd(Pcb *p, int fd);
         int alloc_fd(Pcb *p, fs::file *f);
         int alloc_fd(Pcb *p, fs::file *f, int fd);
 

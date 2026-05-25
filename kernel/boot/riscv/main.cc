@@ -30,7 +30,7 @@
 #include "mem/userspace_stream.hh"
 #include "trap/interrupt_stats.hh"
 // #include "fs/dev/acpi_controller.hh"
-#include "fs/drivers/riscv/virtio2.hh"
+#include "fs/drivers/virtio_blk.hh"
 #include "fs/vfs/fs.hh"
 #include "fs/buf.hh"
 #include "fs/vfs/vfs_ext4_ext.hh"

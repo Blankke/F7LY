@@ -1,6 +1,7 @@
 #include "ipc_param.hh"
 #include <EASTL/unordered_map.h>
 #include <EASTL/vector.h>
+#include "devs/spinlock.hh"
 #include "proc.hh"
 namespace shm
 {
@@ -82,6 +83,7 @@ namespace shm
         int next_shmid; // 下一个可用的shmid,分配后更新这个值
         uint64 shm_base;
         uint64 shm_size;
+        mutable SpinLock shm_lock_; // 保护共享段容器、附加记录与空闲块元数据
         
         // 空闲内存块管理 - 使用vector来存储空闲块，保持按地址排序
         eastl::vector<free_block> free_blocks;
@@ -92,8 +94,9 @@ namespace shm
         void merge_adjacent_blocks();  // 合并相邻的空闲块
         
         // 私有辅助方法
-        int create_new_segment(key_t key, size_t size, int shmflg);  // 创建新的共享内存段
-        eastl::unordered_map<int, shm_segment>::iterator find_segment_by_key(key_t key);  // 根据key查找段
+        int create_new_segment_locked(key_t key, size_t size, int shmflg);  // 需要在持锁状态下创建共享段
+        int delete_seg_locked(int shmid);  // 需要在持锁状态下删除共享段
+        eastl::unordered_map<int, shm_segment>::iterator find_segment_by_key_locked(key_t key);  // 需要在持锁状态下按 key 查找段
         bool check_segment_permission(const shm_segment& seg, uid_t uid, gid_t gid, mode_t requested_mode);  // 检查权限
         bool check_segment_read_permission(const shm_segment& seg, uid_t uid, gid_t gid);  // 检查读权限
         bool check_segment_attach_permission(const shm_segment& seg, uid_t uid, gid_t gid, bool need_write);  // 检查附加权限

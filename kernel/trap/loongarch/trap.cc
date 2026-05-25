@@ -1199,7 +1199,6 @@ int mmap_handler(uint64 va, int cause)
       // 检查是否在当前VMA范围内
       if (va >= p->get_vma()->_vm[i].addr && va < p->get_vma()->_vm[i].addr + p->get_vma()->_vm[i].len)
       {
-        printfGreen("mmap_handler: found VMA %d for va %p\n", i, va);
         break; // 在当前VMA范围内
       }
     }
@@ -1218,16 +1217,11 @@ int mmap_handler(uint64 va, int cause)
   int access_type = 0; // 默认读取
   if (cause == 2)
   {                  // Store page fault
-    printfOrange("[mmap_handler] Store page fault at va: %p\n", va);
     access_type = 1; // 写入
   }
   else if (cause == 8||cause == 3)
   {                  // Instruction page fault
-    printfOrange("[mmap_handler] Instruction page fault at va: %p\n", va);
     access_type = 2; // 执行
-  }
-  else{
-    printfRed("[mmap_handler] Load page fault cause: %d at va: %p\n", cause, va);
   }
 
   // 使用统一的VMA页面分配函数
