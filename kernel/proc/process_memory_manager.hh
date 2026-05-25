@@ -257,6 +257,31 @@ namespace proc
          */
         int unmap_memory_range(void *addr, size_t length);
         int unmap_memory_range_fix(void *addr, size_t length);
+
+        /**
+         * @brief 为 SysV SHM / 其他外部共享后端登记共享 VMA。
+         *
+         * 这类映射不是通过 mmap() 进入的，但它们同样需要：
+         * 1. 在 fork() 时被 clone_for_fork() 正确继承；
+         * 2. 在 exit()/free_all_vma() 时走统一的共享段回收逻辑；
+         * 3. 避免 shmat 路径在页表里“裸映射”却没有任何元数据。
+         */
+        bool register_shared_attachment_vma(uint64 addr,
+                                            size_t length,
+                                            int prot,
+                                            int flags,
+                                            int shmid,
+                                            uint64 backing_base);
+
+        /**
+         * @brief 清理与指定共享段附件匹配的全部 VMA 片段。
+         *
+         * shmdt() 语义是按 attach 基址整段拆除共享映射；如果此前发生过 split/trim，
+         * 同一段共享内存可能已经在 VMA 表里分裂成多个片段，这里统一一次性清掉。
+         *
+         * @return 实际清理掉的 VMA 片段数量
+         */
+        int clear_shared_attachment_vmas(int shmid, uint64 backing_base);
         /**
          * @brief 查找覆盖指定地址范围的VMA
          * @param start_addr 起始地址

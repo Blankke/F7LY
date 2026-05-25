@@ -174,7 +174,7 @@ int ext4_block_cache_shake(struct ext4_blockdev *bdev) {
 
     bdev->bc->dont_shake = true;
 
-    while (!RB_EMPTY(&bdev->bc->lru_root) && ext4_bcache_is_full(bdev->bc)) {
+    while (!TAILQ_EMPTY(&bdev->bc->lru_list) && ext4_bcache_is_full(bdev->bc)) {
 
         buf = ext4_buf_lowest_lru(bdev->bc);
         ext4_assert(buf);

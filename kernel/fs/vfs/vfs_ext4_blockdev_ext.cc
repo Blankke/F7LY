@@ -5,18 +5,27 @@
 #include "libs/clist.h"
 #include "spinlock.hh"
 #include "fs/vfs/fs.hh"
-#include "fs/buf.hh"
-
-// #if defined(QEMU)
-// #include "dev/virtio.h"
-// #endif
-
+#include "devs/device_manager.hh"
+#include "devs/block_device.hh"
+#include "fs/drivers/virtio_blk.hh"
 #include "fs/lwext4/ext4.hh"
 #include "fs/lwext4/ext4_blockdev.hh"
 #include "fs/lwext4/ext4_errno.hh"
 #include "fs/lwext4/misc/queue.hh"
 #include "libs/string.hh"
-#include "semaphore.hh"
+#include "mem/physical_memory_manager.hh"
+#ifdef RISCV
+#include "fs/drivers/riscv/disk.hh"
+#endif
+
+namespace
+{
+    constexpr uint32 k_ext4_physical_block_size = 4096;
+    constexpr uint32 k_ext4_sector_per_block = k_ext4_physical_block_size / BSIZE;
+    constexpr uint32 k_ext4_dma_bounce_pages = 32;
+    constexpr uint32 k_ext4_dma_bounce_bytes = k_ext4_dma_bounce_pages * PGSIZE;
+    constexpr uint32 k_ext4_dma_bounce_block_capacity = k_ext4_dma_bounce_bytes / k_ext4_physical_block_size;
+} // namespace
 
 static int blockdev_lock(struct ext4_blockdev *bdev);
 
@@ -28,15 +37,12 @@ static int blockdev_read(struct ext4_blockdev *bdev, void *buf, uint64_t blk_id,
 
 static int blockdev_write(struct ext4_blockdev *bdev, const void *buf, uint64_t blk_id, uint32_t blk_cnt);
 
+static int blockdev_rw_common(struct ext4_blockdev *bdev, void *buf, uint64_t blk_id, uint32_t blk_cnt, bool write);
+
 static int blockdev_close(struct ext4_blockdev *bdev);
 
 
-// lwext4 的 blockdev 接口里有一块共享的物理块缓冲区 ph_bbuf，
-// 还会在读写路径里复用同一个设备描述符状态。以前这里的 lock/unlock 是空实现，
-// 一旦多个进程交错执行 readbytes/writebytes 或 mount 期间的辅助操作，就可能把
-// 共享缓冲踩坏。这里补上实际可睡眠的串行化，避免在磁盘 I/O 路径里拿自旋锁。
-static sem g_blockdev_sem;
-static bool g_blockdev_sem_inited = false;
+[[maybe_unused]]static int bdevice_lock = 0;
 //只有一个vbd
 struct ext4_blockdev_iface biface;
 struct vfs_ext4_blockdev bvbdev;
@@ -58,20 +64,18 @@ static int vfs_ext4_blockdev_init(struct vfs_ext4_blockdev *vbdev, int dev) {
     //struct ext4_blockdev_iface *iface = NULL;
     struct ext4_blockdev_iface *iface = &biface;
 
-    if (!g_blockdev_sem_inited) {
-        sem_init(&g_blockdev_sem, 1, const_cast<char *>("ext4_bdev_sem"));
-        g_blockdev_sem_inited = true;
-    }
-
     if (vbdev) {
         vbdev->dev = dev;
+        sem_init(&vbdev->io_sem, 1, const_cast<char *>("ext4_bdev_io"));
+        vbdev->ph_bbuf_page_count = k_ext4_dma_bounce_pages;
+        vbdev->ph_bbuf = reinterpret_cast<uint8 *>(mem::k_pmm.alloc_pages((int)vbdev->ph_bbuf_page_count));
 
         bd = &vbdev->bd;
         bd->bdif = iface;
         bd->part_offset = 0;
 
         bd->part_size = (uint64)(512ull * 8ull * 1024ull * 1024ull );
-        ph_bbuf = &vbdev->ph_bbuf[0];
+        ph_bbuf = vbdev->ph_bbuf;
 
         iface->lock = blockdev_lock;
         iface->unlock = blockdev_unlock;
@@ -81,12 +85,10 @@ static int vfs_ext4_blockdev_init(struct vfs_ext4_blockdev *vbdev, int dev) {
         iface->close = blockdev_close;
 
 
-        iface -> ph_bsize = BSIZE;
+        iface->ph_bsize = k_ext4_physical_block_size;
 
         iface->ph_bbuf = ph_bbuf;
         iface->ph_bcnt = bd->part_size / (uint64) bd->bdif->ph_bsize;
-
-        printf("vfs_ext4_blockdev_init: ph_bsize=%p, ph_bcnt=%p\n", iface->ph_bsize, iface->ph_bcnt);
     }
     return EOK;
 }
@@ -99,13 +101,11 @@ static int vfs_ext4_blockdev_init2(struct vfs_ext4_blockdev *vbdev, int dev) {
     //struct ext4_blockdev_iface *iface = NULL;
     struct ext4_blockdev_iface *iface = &biface2;
 
-    if (!g_blockdev_sem_inited) {
-        sem_init(&g_blockdev_sem, 1, const_cast<char *>("ext4_bdev_sem"));
-        g_blockdev_sem_inited = true;
-    }
-
     if (vbdev) {
         vbdev->dev = dev;
+        sem_init(&vbdev->io_sem, 1, const_cast<char *>("ext4_bdev_io_root"));
+        vbdev->ph_bbuf_page_count = k_ext4_dma_bounce_pages;
+        vbdev->ph_bbuf = reinterpret_cast<uint8 *>(mem::k_pmm.alloc_pages((int)vbdev->ph_bbuf_page_count));
 
         bd = &vbdev->bd;
         bd->bdif = iface;
@@ -113,7 +113,7 @@ static int vfs_ext4_blockdev_init2(struct vfs_ext4_blockdev *vbdev, int dev) {
 
         bd->part_size = 768 * 1024 * 1024;
 
-        ph_bbuf = &vbdev->ph_bbuf[0];
+        ph_bbuf = vbdev->ph_bbuf;
 
         iface->lock = blockdev_lock;
         iface->unlock = blockdev_unlock;
@@ -123,12 +123,10 @@ static int vfs_ext4_blockdev_init2(struct vfs_ext4_blockdev *vbdev, int dev) {
         iface->close = blockdev_close;
 
 
-        iface -> ph_bsize = BSIZE;
+        iface->ph_bsize = k_ext4_physical_block_size;
 
         iface->ph_bbuf = ph_bbuf;
         iface->ph_bcnt = bd->part_size / (uint64) bd->bdif->ph_bsize;
-
-        printf("vfs_ext4_blockdev_init: ph_bsize=%p, ph_bcnt=%p\n", iface->ph_bsize, iface->ph_bcnt);
     }
     return EOK;
 }
@@ -174,19 +172,30 @@ struct vfs_ext4_blockdev *vfs_ext4_blockdev_create2(int dev) {
 int vfs_ext4_blockdev_destroy(struct vfs_ext4_blockdev *vbdev) {
     if (vbdev == NULL)
         return -EINVAL;
-    //暂时什么都不干
+    if (vbdev->ph_bbuf != nullptr)
+    {
+        mem::k_pmm.free_pages(vbdev->ph_bbuf);
+        vbdev->ph_bbuf = nullptr;
+        vbdev->ph_bbuf_page_count = 0;
+    }
     return EOK;
 }
 
 static int blockdev_lock(struct ext4_blockdev *bdev) {
-    (void)bdev;
-    sem_p(&g_blockdev_sem);
+    struct vfs_ext4_blockdev *vbdev = vfs_ext4_blockdev_from_bd(bdev);
+    if (vbdev == NULL) {
+        return -EINVAL;
+    }
+    sem_p(&vbdev->io_sem);
     return EOK;
 }
 
 static int blockdev_unlock(struct ext4_blockdev *bdev) {
-    (void)bdev;
-    sem_v(&g_blockdev_sem);
+    struct vfs_ext4_blockdev *vbdev = vfs_ext4_blockdev_from_bd(bdev);
+    if (vbdev == NULL) {
+        return -EINVAL;
+    }
+    sem_v(&vbdev->io_sem);
     return EOK;
 }
 
@@ -194,73 +203,97 @@ static int blockdev_open(struct ext4_blockdev *bdev) { return EOK; }
 
 static int blockdev_close(struct ext4_blockdev *bdev) { return EOK; }
 
-static int blockdev_read(struct ext4_blockdev *bdev, void *buf, uint64_t blk_id, uint32_t blk_cnt) {
-    struct vfs_ext4_blockdev *vbdev = vfs_ext4_blockdev_from_bd(bdev);
-    int dev = vbdev ? vbdev->dev : 0;
-    uint64 buf_ptr = (uint64)buf;
-    for(int i = 0; i <(int) blk_cnt; i++) {
-        // printf("[blockdev_bread] blk_id: %d, blk_cnt: %d\n", blk_id + i, blk_cnt);
-        struct buf *b = bread(dev, blk_id + i);
-        memmove((void*)buf_ptr, b->data, BSIZE);
-        buf_ptr += BSIZE;
-        brelse(b);
+namespace
+{
+    int submit_sector_transfer(int dev, void *buf, uint64 start_sector, uint32 sector_count, bool write)
+    {
+        dev::VirtualDevice *vdev = dev::k_devm.get_device(dev);
+        if (vdev != nullptr && vdev->type() == dev::DeviceType::dev_block)
+        {
+            auto *bd = static_cast<dev::BlockDevice *>(vdev);
+            dev::BufferDescriptor desc = {
+                .buf_addr = reinterpret_cast<uint64>(buf),
+                .buf_size = sector_count * BSIZE,
+            };
+            if (write)
+            {
+                return bd->write_blocks(start_sector, sector_count, &desc, 1);
+            }
+            return bd->read_blocks(start_sector, sector_count, &desc, 1);
+        }
+
+#ifdef RISCV
+        return disk_rw_sectors(dev, buf, start_sector, sector_count, write);
+#else
+        return virtio_disk_rw_sectors(dev, buf, start_sector, sector_count, write ? 1 : 0);
+#endif
     }
+} // namespace
+
+static int blockdev_rw_common(struct ext4_blockdev *bdev, void *buf, uint64_t blk_id, uint32_t blk_cnt, bool write) {
+    struct vfs_ext4_blockdev *vbdev = vfs_ext4_blockdev_from_bd(bdev);
+    if (vbdev == nullptr) {
+        return EIO;
+    }
+
+    if (vbdev->ph_bbuf == nullptr || vbdev->ph_bbuf_page_count == 0) {
+        return EIO;
+    }
+
+    uint8 *cursor = reinterpret_cast<uint8 *>(buf);
+    uint64 sector_id = blk_id * k_ext4_sector_per_block;
+    uint32 remaining_blocks = blk_cnt;
+
+    while (remaining_blocks > 0) {
+        uint32 chunk_blocks = remaining_blocks > k_ext4_dma_bounce_block_capacity
+                                  ? k_ext4_dma_bounce_block_capacity
+                                  : remaining_blocks;
+        uint32 chunk_bytes = chunk_blocks * k_ext4_physical_block_size;
+        uint32 chunk_sectors = chunk_blocks * k_ext4_sector_per_block;
+
+        /*
+         * 当前 virtio blk 公共队列仍以“单数据段 DMA”建模。
+         * 为了跨页时也保证物理连续，我们统一用连续页 bounce buffer 承载一次 chunk，
+         * 这样 ext4 能把多个 4KiB 块合并成一次真正的块层传输，而不是 4KiB 一次地同步提交。
+         */
+        if (write) {
+            memmove(vbdev->ph_bbuf, cursor, chunk_bytes);
+        }
+
+        int rc = submit_sector_transfer(vbdev->dev,
+                                        vbdev->ph_bbuf,
+                                        sector_id,
+                                        chunk_sectors,
+                                        write);
+        if (rc != 0) {
+            return rc;
+        }
+
+        if (!write) {
+            memmove(cursor, vbdev->ph_bbuf, chunk_bytes);
+        }
+
+        cursor += chunk_bytes;
+        sector_id += chunk_sectors;
+        remaining_blocks -= chunk_blocks;
+    }
+
     return EOK;
 }
 
+static int blockdev_read(struct ext4_blockdev *bdev, void *buf, uint64_t blk_id, uint32_t blk_cnt) {
+    return blockdev_rw_common(bdev, buf, blk_id, blk_cnt, false);
+}
+
 static int blockdev_write(struct ext4_blockdev *bdev, const void *buf, uint64_t blk_id, uint32_t blk_cnt) {
-    struct vfs_ext4_blockdev *vbdev = vfs_ext4_blockdev_from_bd(bdev);
-    int dev = vbdev ? vbdev->dev : 0;
-	uint64 buf_ptr = (uint64)buf;
-	for(int i = 0; i <(int) blk_cnt; i++) {
-		// printf("[blockdev_bwrite] blk_id: %d, blk_cnt: %d\n", blk_id + i, blk_cnt);
-		struct buf *b = bget(dev, blk_id + i);
-		memmove(b->data, (void*)buf_ptr, BSIZE);
-		bwrite(b);
-		buf_ptr += BSIZE;
-		brelse(b);
-	}
-	return EOK;
+	return blockdev_rw_common(bdev, const_cast<void *>(buf), blk_id, blk_cnt, true);
 }
 
 //For rootfs
  int blockdev_read2(struct ext4_blockdev *bdev, void *buf, uint64_t blk_id, uint32_t blk_cnt) {
-    struct vfs_ext4_blockdev *vbdev = vfs_ext4_blockdev_from_bd(bdev);
-    int dev = vbdev ? vbdev->dev : 0;
-    uint64 buf_ptr = (uint64)buf;
-    for(int i = 0; i < (int)blk_cnt; i++) {
-        // printf("[blockdev_bread] blk_id: %d, blk_cnt: %d\n", blk_id + i, blk_cnt);
-        struct buf *b = bread(dev, blk_id + i);
-        memmove((void*)buf_ptr, b->data, BSIZE);
-        buf_ptr += BSIZE;
-        brelse(b);
-    }
-    return EOK;
+    return blockdev_rw_common(bdev, buf, blk_id, blk_cnt, false);
 }
 
  int blockdev_write2(struct ext4_blockdev *bdev, const void *buf, uint64_t blk_id, uint32_t blk_cnt) {
-    struct vfs_ext4_blockdev *vbdev = vfs_ext4_blockdev_from_bd(bdev);
-    int dev = vbdev ? vbdev->dev : 0;
-    uint64 buf_ptr = (uint64)buf;
-    for(int i = 0; i < (int)blk_cnt; i++) {
-        // printf("[blockdev_bwrite] blk_id: %d, blk_cnt: %d\n", blk_id + i, blk_cnt);
-        struct buf *b = bget(dev, blk_id + i);
-        memmove(b->data, (void*)buf_ptr, BSIZE);
-        bwrite(b);
-        buf_ptr += BSIZE;
-        brelse(b);
-    }
-    return EOK;
+    return blockdev_rw_common(bdev, const_cast<void *>(buf), blk_id, blk_cnt, true);
 }
-
-
-
-
-
-
-
-
-
-
-
-

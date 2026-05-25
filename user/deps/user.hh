@@ -18,7 +18,47 @@
 #define PRIO_PGRP 1
 #define PRIO_USER 2
 
+// SysV SHM / IPC 常量，供内置研究程序与最小复现使用
+#define IPC_CREAT 01000
+#define IPC_EXCL 02000
+#define IPC_PRIVATE 0
+#define IPC_RMID 0
+
+#define SHM_RDONLY 010000
+#define SHM_RND 020000
+
+// mmap/prot/map 标志，和内核实现保持一致
+#define PROT_NONE 0
+#define PROT_READ 1
+#define PROT_WRITE 2
+#define PROT_EXEC 4
+
+#define MAP_SHARED 0x01
+#define MAP_PRIVATE 0x02
+#define MAP_FIXED 0x10
+#define MAP_ANONYMOUS 0x20
+#define MAP_ANON MAP_ANONYMOUS
+
+#define MAP_FAILED ((void *)-1)
+
+// 常用 open/lseek 标志，和内核/posix 语义保持一致
+#define O_RDONLY 00
+#define O_WRONLY 01
+#define O_RDWR 02
+#define O_CREAT 0100
+#define O_TRUNC 01000
+
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
+
 extern int errno;
+
+struct user_timeval
+{
+    long tv_sec;
+    long tv_usec;
+};
 
 int openat(int dirfd, const char *path, int flags);
 int close(int fd);
@@ -29,6 +69,10 @@ pid_t getppid(void);
 int sched_yield(void);
 int setpriority(int which, int who, int prio);
 int getpriority(int which, int who);
+int shmget(int key, size_t size, int shmflg);
+int shmctl(int shmid, int cmd, void *buf);
+void *shmat(int shmid, const void *shmaddr, int shmflg);
+int shmdt(const void *shmaddr);
 pid_t clone(int (*fn)(void *arg), void *arg, void *stack, size_t stack_size, unsigned long flags);
 void exit(int code);
 int waitpid(int pid, int *code, int options);
@@ -36,6 +80,8 @@ int exec(char *name);
 int execve(const char *name, char *const argv[], char *const argp[]);
 int setpgid(pid_t pid, pid_t pgid);
 clock_t times(void *mytimes);
+int gettimeofday(struct user_timeval *tv, int tz);
+void *mmap(void *start, size_t len, int prot, int flags, int fd, off_t off);
 int munmap(void *start, size_t len);
 int wait(int *code);
 int sys_linkat(int olddirfd, char *oldpath, int newdirfd, char *newpath, unsigned int flags);
@@ -99,6 +145,7 @@ int ltp_subset_test(bool is_musl, const char *const cases[]);
 int priority_ltp_regression_riscv(void);
 int regression_suite_4d1444_riscv(void);
 int regression_suite_4d1444_loongarch(void);
+int iozone_mclock_research(void);
 int final_test_musl(void);
 int final_test_glibc(void);
 int git_test(const char *path);

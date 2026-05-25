@@ -126,16 +126,8 @@ next:
 
     if (hw->common_cfg == NULL || hw->notify_cfg == NULL ||
 	    hw->device_cfg == NULL    || hw->isr_cfg == NULL) {
-		printf("no modern virtio pci device found.\n");
 		return -1;
 	}
-
-    printf("found modern virtio pci device.\n");
-    printf("use_msix: %d\n", hw->use_msix);
-	printf("common cfg mapped at: %p\n", hw->common_cfg);
-    printf("isr cfg mapped at: %p\n", hw->isr_cfg);
-	printf("device cfg mapped at: %p\n", hw->device_cfg);
-	printf("notify base: %p, notify off multiplier: %d\n", hw->notify_cfg, hw->notify_off_multiplier);
 
     return 0;
 }

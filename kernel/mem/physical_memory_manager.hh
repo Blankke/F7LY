@@ -20,7 +20,9 @@ namespace mem
 
         static void init();
         static void *alloc_page(); // 分配单个物理页
+        static void *alloc_pages(int count); // 分配连续多个物理页
         static void free_page(void *pa); // 释放单个物理页
+        static void free_pages(void *pa); // 释放连续多个物理页
         static void free_page1(void *pa, uint64 size); // 释放单个物理页
         static void *kmalloc(size_t size); // 分配任意大小的内存块
         static void *kcalloc(uint n, size_t size);

@@ -74,6 +74,54 @@ int getpriority(int which, int who)
     return 20 - (int)ret;
 }
 
+int shmget(int key, size_t size, int shmflg)
+{
+    long ret = syscall(syscall::SYS_shmget, key, size, shmflg);
+    if (ret < 0)
+    {
+        errno = (int)-ret;
+        return -1;
+    }
+    errno = 0;
+    return (int)ret;
+}
+
+int shmctl(int shmid, int cmd, void *buf)
+{
+    long ret = syscall(syscall::SYS_shmctl, shmid, cmd, buf);
+    if (ret < 0)
+    {
+        errno = (int)-ret;
+        return -1;
+    }
+    errno = 0;
+    return (int)ret;
+}
+
+void *shmat(int shmid, const void *shmaddr, int shmflg)
+{
+    long ret = syscall(syscall::SYS_shmat, shmid, shmaddr, shmflg);
+    if (ret < 0)
+    {
+        errno = (int)-ret;
+        return (void *)-1;
+    }
+    errno = 0;
+    return (void *)ret;
+}
+
+int shmdt(const void *shmaddr)
+{
+    long ret = syscall(syscall::SYS_shmdt, shmaddr);
+    if (ret < 0)
+    {
+        errno = (int)-ret;
+        return -1;
+    }
+    errno = 0;
+    return 0;
+}
+
 pid_t fork(void)
 {
 
@@ -140,6 +188,11 @@ clock_t times(void *mytimes)
     return syscall(syscall::SYS_times, mytimes);
 }
 
+int gettimeofday(struct user_timeval *tv, int tz)
+{
+    return syscall(syscall::SYS_gettimeofday, tv, tz);
+}
+
 // int64 get_time()
 // {
 //     TimeVal time;
@@ -166,15 +219,17 @@ int sleep(unsigned int time)
     return 0;
 }
 
-// int set_priority(int prio)
-// {
-//     return syscall(syscall::SYS_setpriority, prio);
-// }
-
-// void *mmap(void *start, size_t len, int prot, int flags, int fd, off_t off)
-// {
-//     return syscall(syscall::SYS_mmap, start, len, prot, flags, fd, off);
-// }
+void *mmap(void *start, size_t len, int prot, int flags, int fd, off_t off)
+{
+    long ret = syscall(syscall::SYS_mmap, start, len, prot, flags, fd, off);
+    if (ret < 0)
+    {
+        errno = (int)-ret;
+        return MAP_FAILED;
+    }
+    errno = 0;
+    return (void *)ret;
+}
 
 int munmap(void *start, size_t len)
 {

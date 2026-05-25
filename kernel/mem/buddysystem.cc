@@ -116,194 +116,189 @@ namespace mem
         }
     }
 
-    int BuddySystem::IndexOffset(int index, int level, int max_level) const
+    int BuddySystem::node_depth(int index) const
     {
-        // 计算该 index 在完全二叉树中的真实层级 L（根为 0）
-        int x = index + 1; // 完全二叉堆性质：层级由 index+1 的最高位决定
-        int L = 0;
-        while ((1 << (L + 1)) <= x)
-            ++L;
-
-        // 若传入的 level 与实际层级不一致，给出提示，便于调试
-        if (L != level)
+        int x = index + 1;
+        int depth = 0;
+        while ((1 << (depth + 1)) <= x)
         {
-            // printfYellow("[BuddySystem] IndexOffset level mismatch: index=%d, passed_level=%d, computed_level=%d\n",
-            //              index, level, L);
+            ++depth;
         }
-
-        int pos = x - (1 << L);               // 该层内的位置
-        int result = pos << (max_level - L);   // 映射到叶子层的起始页号
-        return result;
+        return depth;
     }
 
-    void BuddySystem::MarkParent(int index)
+    int BuddySystem::node_offset_pages(int index) const
     {
-        while (true)
+        const int depth = node_depth(index);
+        const int pos = (index + 1) - (1 << depth);
+        return pos << (level - depth);
+    }
+
+    uint32 BuddySystem::node_block_pages(int depth) const
+    {
+        return capacity_pages >> depth;
+    }
+
+    void BuddySystem::split_unused_node(int index)
+    {
+        if (tree[index] != NODE_UNUSED)
         {
-            int buddy = index - 1 + (index & 1) * 2;
-            if (buddy > 0 && (tree[buddy] == NODE_USED || tree[buddy] == NODE_FULL))
-            {
-                index = (index + 1) / 2 - 1;
-                tree[index] = NODE_FULL;
-            }
-            else
-            {
-                return;
-            }
+            return;
         }
+
+        tree[index] = NODE_SPLIT;
+        tree[index * 2 + 1] = NODE_UNUSED;
+        tree[index * 2 + 2] = NODE_UNUSED;
+    }
+
+    uint8 BuddySystem::summarize_children_state(int index) const
+    {
+        const int left = index * 2 + 1;
+        const int right = left + 1;
+        const uint8 l = tree[left];
+        const uint8 r = tree[right];
+
+        const bool left_unavailable = (l == NODE_USED || l == NODE_FULL);
+        const bool right_unavailable = (r == NODE_USED || r == NODE_FULL);
+        if (left_unavailable && right_unavailable)
+        {
+            return NODE_FULL;
+        }
+        if (l == NODE_UNUSED && r == NODE_UNUSED)
+        {
+            return NODE_UNUSED;
+        }
+        return NODE_SPLIT;
+    }
+
+    int BuddySystem::allocate_from_node(int index, int depth, uint32 actual_pages)
+    {
+        const uint32 block_pages = node_block_pages(depth);
+        if (actual_pages > block_pages)
+        {
+            return -1;
+        }
+
+        const uint8 state = tree[index];
+        if (state == NODE_USED || state == NODE_FULL)
+        {
+            return -1;
+        }
+
+        if (block_pages == actual_pages)
+        {
+            if (state != NODE_UNUSED)
+            {
+                return -1;
+            }
+            tree[index] = NODE_USED;
+            return index;
+        }
+
+        if (state == NODE_UNUSED)
+        {
+            split_unused_node(index);
+        }
+
+        if (tree[index] != NODE_SPLIT)
+        {
+            return -1;
+        }
+
+        const int left = index * 2 + 1;
+        int allocated = allocate_from_node(left, depth + 1, actual_pages);
+        if (allocated == -1)
+        {
+            allocated = allocate_from_node(left + 1, depth + 1, actual_pages);
+        }
+
+        tree[index] = summarize_children_state(index);
+        return allocated;
+    }
+
+    bool BuddySystem::free_from_node(int index, int depth, int target_offset)
+    {
+        const int offset = node_offset_pages(index);
+        const uint32 block_pages = node_block_pages(depth);
+        if (target_offset < offset || target_offset >= offset + static_cast<int>(block_pages))
+        {
+            return false;
+        }
+
+        if (tree[index] == NODE_USED)
+        {
+            if (offset != target_offset)
+            {
+                return false;
+            }
+            tree[index] = NODE_UNUSED;
+            return true;
+        }
+
+        if (tree[index] == NODE_UNUSED)
+        {
+            return false;
+        }
+
+        const int left = index * 2 + 1;
+        const int midpoint = offset + static_cast<int>(block_pages / 2);
+        bool released = false;
+        if (target_offset < midpoint)
+        {
+            released = free_from_node(left, depth + 1, target_offset);
+        }
+        else
+        {
+            released = free_from_node(left + 1, depth + 1, target_offset);
+        }
+
+        if (!released)
+        {
+            return false;
+        }
+
+        tree[index] = summarize_children_state(index);
+        return true;
     }
 
     int BuddySystem::Alloc(int size)
     {
-        // buddy的单位是页，而不是页面大小，这个size的意思是页的数量
-        int actual_size = size == 0 ? 1 : NextPowerOfTwo(size);
-        int length = 1 << level; // length变量表示当前结点对应的块的大小
-
-        if (actual_size > length || actual_size > (int)capacity_pages)
+        // buddy 的最小分配单位是页；为了保证块对齐，内部按 2 的幂页数分配。
+        const uint32 requested_pages = size <= 0 ? 1u : static_cast<uint32>(size);
+        const uint32 actual_pages = NextPowerOfTwo(requested_pages);
+        if (actual_pages > capacity_pages)
         {
             printfRed("[BuddySystem] Alloc failed, request too many pages\n");
             return -1;
         }
-        int index = 0;
-        int current_level = 0;
-
-        while (index >= 0)
+        const int node = allocate_from_node(0, 0, actual_pages);
+        if (node < 0)
         {
-
-            // if(current_level > - 30)
-            // printf("[BuddySystem] index: %d, level: %d, current_level: %d,length: %d\n", index, level, current_level,length);
-            if (actual_size == length)
-            {
-
-                if (tree[index] == NODE_UNUSED)
-                {
-                    tree[index] = NODE_USED;
-                    MarkParent(index);
-                    int result = IndexOffset(index, current_level, level);
-                    if (result >= (int)page_count)
-                    {
-                        tree[index] = NODE_FULL;
-                        rebuild_parent_states();
-                        continue;
-                    }
-                    // 添加调试信息
-                    // printfYellow("[BuddySystem] Found block: index=%d, current_level=%d, level=%d, result=%d\n",
-                    //              index, current_level, level, result);
-                    return result;
-                }
-            }
-            else
-            {
-                // printfBlue("%d", tree[index]);
-                switch (tree[index])
-                {
-                case NODE_USED:
-                case NODE_FULL:
-                    break;
-                case NODE_UNUSED:
-                    // printfCyan("1");
-                    tree[index] = NODE_SPLIT;
-                    tree[index * 2 + 1] = NODE_UNUSED;
-                    tree[index * 2 + 2] = NODE_UNUSED;
-                    // printfCyan("2");
-                    [[fallthrough]]; // 默认行为是向下执行
-                default:
-                    index = index * 2 + 1;
-                    length /= 2;
-                    current_level++;
-
-                    continue;
-                }
-            }
-
-            // if (index % 2 == 0) {
-            //     ++index;
-            //     continue;
-            // }
-            if (index & 1) // index是左孩子，变换到右孩子
-            {
-                ++index;
-                continue;
-            }
-
-            for (;;)
-            {
-                current_level--;
-                length *= 2;
-                index = (index + 1) / 2 - 1; // 回溯到父节点
-                if (index < 0)
-                {
-                    printfRed("[BuddySystem] Alloc failed, no suitable block found\n");
-                    return -1; // 遍历完了没有找到合适的块，失败
-                }
-                if (index % 2 == 0)
-                { // 当前是左孩子，变换到右孩子开始继续寻找。
-                    ++index;
-                    break;
-                }
-            }
+            printfRed("[BuddySystem] Alloc failed, no suitable block found\n");
+            return -1;
         }
-        // printfRed("[BuddySystem] Alloc failed, no suitable block found\n");
-        return -1;
-    }
 
-    void BuddySystem::Combine(int index)
-    {
-        while (true)
+        const int offset = node_offset_pages(node);
+        if (offset < 0 || offset >= static_cast<int>(page_count))
         {
-            int buddy = index - 1 + (index & 1) * 2;
-            if (buddy < 0 || tree[buddy] != NODE_UNUSED)
-            {
-                tree[index] = NODE_UNUSED;
-                while ((index = (index + 1) / 2 - 1) >= 0 && tree[index] == NODE_FULL)
-                {
-                    tree[index] = NODE_SPLIT;
-                }
-                return;
-            }
-            index = (index + 1) / 2 - 1;
+            panic("[BuddySystem] Alloc produced invalid offset=%d (page_count=%d)", offset, page_count);
         }
+        return offset;
     }
 
     void BuddySystem::Free(int offset)
     {
         // buddy的单位是页，而不是页面大小，这个offset的意思是页的数量的偏移量
         // 这里需要把offset转换为页的偏移量，也就是offset*PGSIZE+base_ptr才是实际的内存地址
-        int left = 0;
-        int length = 1 << level; // 当前 index 所表示的块的大小（从整块开始）
-        int index = 0;           // 从根节点开始遍历 buddy 树
 
         if (offset < 0 || offset >= (int)page_count)
         {
             printfRed("[BuddySystem] Freeing invalid page offset=%d (page_count=%d)\n", offset, page_count);
             return;
         }
-
-        while (true)
+        if (!free_from_node(0, 0, offset))
         {
-
-            // printf("[BuddySystem] Freeing page at address: %p, left: %d, length: %d,offset :%d\n", base_ptr + index * PGSIZE, left, length,offset);
-            switch (tree[index])
-            {
-            case NODE_USED:
-                Combine(index);
-                return;
-            case NODE_UNUSED:
-                // panic("[BuddySystem] Freeing invalid page\n");
-                return;
-            default:
-                length /= 2;
-                if (offset < left + length)
-                {
-                    index = index * 2 + 1;
-                }
-                else
-                {
-                    left += length;
-                    index = index * 2 + 2;
-                }
-                break;
-            }
+            printfRed("[BuddySystem] Freeing unknown page offset=%d\n", offset);
         }
     }
 
