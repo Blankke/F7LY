@@ -241,385 +241,6 @@ namespace
     return matches;
   }
 
-  void debug_pthread_exit_robust_loop(proc::Pcb *p)
-  {
-    static uint64 same_pc_ticks = 0;
-    static uint64 last_tid = 0;
-    static uint64 last_pc = 0;
-
-    constexpr uint64 k_exit_spin_pc = 0x1200354a8ULL;
-    constexpr uint64 k_self_off_robust_head = 120;
-    constexpr uint64 k_self_off_robust_pending = 136;
-    constexpr uint64 k_self_off_detach_state = 40;
-
-    if (p == nullptr || p->_trapframe == nullptr || p->get_pagetable() == nullptr)
-    {
-      same_pc_ticks = 0;
-      last_tid = 0;
-      last_pc = 0;
-      return;
-    }
-
-    uint64 pc = p->_trapframe->era;
-    if (pc != k_exit_spin_pc)
-    {
-      same_pc_ticks = 0;
-      last_tid = 0;
-      last_pc = 0;
-      return;
-    }
-
-    if (last_tid == (uint64)p->_tid && last_pc == pc)
-    {
-      same_pc_ticks++;
-    }
-    else
-    {
-      last_tid = p->_tid;
-      last_pc = pc;
-      same_pc_ticks = 1;
-    }
-
-    if (same_pc_ticks < 400)
-    {
-      return;
-    }
-
-    uint64 self = p->_trapframe->s0;
-    uint64 robust_head = 0;
-    uint64 robust_pending = 0;
-    uint32 detach_state = 0;
-    uint64 rp_next = 0;
-    uint64 rp_word0 = 0;
-    uint64 t0 = p->_trapframe->t0;
-    uint64 t1 = p->_trapframe->t1;
-    uint64 t2 = p->_trapframe->t2;
-    uint64 t3 = p->_trapframe->t3;
-    uint64 lock_addr = 0;
-    int32 lock_val = 0;
-    int32 waiters_val = 0;
-    uint64 lock_pte_raw = 0;
-    int lock_pte_valid = 0;
-    int lock_pte_present = 0;
-    int lock_pte_writable = 0;
-    int lock_pte_user = 0;
-    uint64 lock_pte_mat = 0;
-    uint64 lock_pa = 0;
-    mem::PhysicalMemoryManager::PageDebugInfo lock_page_info{};
-    uint64 self_pte_raw = 0;
-    uint64 self_pa = 0;
-    uint64 trapframe_pa = 0;
-    mem::PhysicalMemoryManager::PageDebugInfo self_page_info{};
-    int self_section_index = -1;
-    const char *self_section_name = nullptr;
-    int self_leaf_aliases = 0;
-    int self_all_leaf_aliases = 0;
-    int self_pt_page_aliases = 0;
-    LoongarchTlbProbe self_tlb{};
-    int lock_section_index = -1;
-    const char *lock_section_name = nullptr;
-    int lock_leaf_aliases = 0;
-    int lock_all_leaf_aliases = 0;
-    int lock_pt_page_aliases = 0;
-    LoongarchTlbProbe lock_tlb{};
-    int sibling_count = 0;
-    int sibling_tid = -1;
-    int sibling_state = -1;
-    int sibling_killed = 0;
-    uint64 sibling_chan = 0;
-    uint64 sibling_futex_addr = 0;
-    uint64 sibling_clear_tid = 0;
-    uint64 sibling_era = 0;
-    uint64 sibling_sp = 0;
-    uint64 sibling_tp = 0;
-    uint32 llbctl = 0;
-    asm volatile("csrrd %0, %1" : "=r"(llbctl) : "i"(LOONGARCH_CSR_LLBCTL));
-
-    mem::PageTable *pt = p->get_pagetable();
-    proc::ProcessMemoryManager *mm = p->get_memory_manager();
-    trapframe_pa = p->_trapframe == nullptr ? 0 : to_phy((uint64)p->_trapframe);
-    mem::k_vmm.copy_in(*pt, &robust_head, self + k_self_off_robust_head, sizeof(robust_head));
-    mem::k_vmm.copy_in(*pt, &robust_pending, self + k_self_off_robust_pending, sizeof(robust_pending));
-    mem::k_vmm.copy_in(*pt, &detach_state, self + k_self_off_detach_state, sizeof(detach_state));
-    if (robust_head != 0)
-    {
-      mem::k_vmm.copy_in(*pt, &rp_next, robust_head, sizeof(rp_next));
-      if (robust_head >= 32)
-      {
-        mem::k_vmm.copy_in(*pt, &rp_word0, robust_head - 32, sizeof(rp_word0));
-      }
-    }
-
-    if (self != 0)
-    {
-      mem::Pte self_pte = pt->walk(self, false);
-      if (!self_pte.is_null())
-      {
-        self_pte_raw = self_pte.get_data();
-        self_pa = (uint64)self_pte.pa();
-        self_page_info = mem::PhysicalMemoryManager::debug_query_page((void *)self_pa);
-        self_section_name = find_mm_section_name(mm, self, self_section_index);
-        self_leaf_aliases = count_pa_leaf_mappings_in_sections(mm, pt, self_pa);
-        self_all_leaf_aliases = count_pa_as_leaf_mapping(*pt, self_pa);
-        self_pt_page_aliases = count_pa_as_pagetable_page(*pt, self_pa);
-        self_tlb = probe_loongarch_tlb(self);
-      }
-    }
-
-    if (t2 != 0)
-    {
-      lock_addr = t2;
-      mem::k_vmm.copy_in(*pt, &lock_val, lock_addr, sizeof(lock_val));
-      mem::k_vmm.copy_in(*pt, &waiters_val, lock_addr + sizeof(int32), sizeof(waiters_val));
-      mem::Pte lock_pte = pt->walk(lock_addr, false);
-      if (!lock_pte.is_null())
-      {
-        lock_pte_raw = lock_pte.get_data();
-        lock_pte_valid = lock_pte.is_valid();
-        lock_pte_present = lock_pte.is_present();
-        lock_pte_writable = lock_pte.is_writable();
-        lock_pte_user = !lock_pte.is_super_plv();
-        lock_pte_mat = lock_pte.mat();
-        lock_pa = (uint64)lock_pte.pa();
-        lock_page_info = mem::PhysicalMemoryManager::debug_query_page((void *)lock_pa);
-        lock_section_name = find_mm_section_name(mm, lock_addr, lock_section_index);
-        lock_leaf_aliases = count_pa_leaf_mappings_in_sections(mm, pt, lock_pa);
-        lock_all_leaf_aliases = count_pa_as_leaf_mapping(*pt, lock_pa);
-        lock_pt_page_aliases = count_pa_as_pagetable_page(*pt, lock_pa);
-        lock_tlb = probe_loongarch_tlb(lock_addr);
-      }
-    }
-
-    for (uint i = 0; i < proc::num_process; ++i)
-    {
-      proc::Pcb &candidate = proc::k_proc_pool[i];
-      if (&candidate == p || candidate._state == proc::ProcState::UNUSED)
-      {
-        continue;
-      }
-      if (candidate._tgid != p->_tgid)
-      {
-        continue;
-      }
-
-      ++sibling_count;
-      if (sibling_tid == -1)
-      {
-        sibling_tid = candidate._tid;
-        sibling_state = candidate._state;
-        sibling_killed = candidate._killed;
-        sibling_chan = (uint64)candidate._chan;
-        sibling_futex_addr = (uint64)candidate._futex_addr;
-        sibling_clear_tid = candidate._clear_tid_addr;
-        if (candidate._trapframe != nullptr)
-        {
-          sibling_era = candidate._trapframe->era;
-          sibling_sp = candidate._trapframe->sp;
-          sibling_tp = candidate._trapframe->tp;
-        }
-      }
-    }
-
-    panic("debug pthread_exit robust loop: pid=%d tid=%d tgid=%d era=%p self=%p detach_state=%u robust_head=%p robust_pending=%p rp_next=%p rp_lock_word=%x self_sec=%d/%s self_pte=%p self_pa=%p trapframe_pa=%p self_managed=%d self_off=%u self_free=%d self_state=%d self_block=%u self_node=%d self_level=%d self_leaf_alias=%d self_all_leaf_alias=%d self_pt_alias=%d self_tlb_hit=%d self_tlb_idx=%u self_tlbehi=%p self_tlbelo0=%p self_tlbelo1=%p tl_lock=%p tl_sec=%d/%s tl_lock_val=%d tl_waiters=%d tl_pte=%p tl_pte_valid=%d tl_pte_present=%d tl_pte_w=%d tl_pte_user=%d tl_pte_mat=%d tl_pa=%p tl_managed=%d tl_off=%u tl_free=%d tl_state=%d tl_block=%u tl_node=%d tl_level=%d tl_leaf_alias=%d tl_all_leaf_alias=%d tl_pt_alias=%d tl_tlb_hit=%d tl_tlb_idx=%u tl_tlbehi=%p tl_tlbelo0=%p tl_tlbelo1=%p sibling_count=%d sibling_tid=%d sibling_state=%d sibling_killed=%d sibling_chan=%p sibling_futex=%p sibling_clear_tid=%p sibling_era=%p sibling_sp=%p sibling_tp=%p llbctl=%x t0=%p t1=%p t2=%p t3=%p sigmask=%p signal=%p sp=%p tp=%p s0=%p",
-          p->_pid,
-          p->_tid,
-          p->_tgid,
-          (void *)pc,
-          (void *)self,
-          detach_state,
-          (void *)robust_head,
-          (void *)robust_pending,
-          (void *)rp_next,
-          (uint32)rp_word0,
-          self_section_index,
-          self_section_name ? self_section_name : "(none)",
-          (void *)self_pte_raw,
-          (void *)self_pa,
-          (void *)trapframe_pa,
-          self_page_info.managed,
-          (uint32)self_page_info.page_offset,
-          self_page_info.buddy.is_free,
-          (int)self_page_info.buddy.node_state,
-          self_page_info.buddy.block_pages,
-          self_page_info.buddy.node_index,
-          self_page_info.buddy.node_level,
-          self_leaf_aliases,
-          self_all_leaf_aliases,
-          self_pt_page_aliases,
-          (int)self_tlb.hit,
-          self_tlb.idx,
-          (void *)self_tlb.tlbehi,
-          (void *)self_tlb.tlbelo0,
-          (void *)self_tlb.tlbelo1,
-          (void *)lock_addr,
-          lock_section_index,
-          lock_section_name ? lock_section_name : "(none)",
-          lock_val,
-          waiters_val,
-          (void *)lock_pte_raw,
-          lock_pte_valid,
-          lock_pte_present,
-          lock_pte_writable,
-          lock_pte_user,
-          (int)lock_pte_mat,
-          (void *)lock_pa,
-          lock_page_info.managed,
-          (uint32)lock_page_info.page_offset,
-          lock_page_info.buddy.is_free,
-          (int)lock_page_info.buddy.node_state,
-          lock_page_info.buddy.block_pages,
-          lock_page_info.buddy.node_index,
-          lock_page_info.buddy.node_level,
-          lock_leaf_aliases,
-          lock_all_leaf_aliases,
-          lock_pt_page_aliases,
-          (int)lock_tlb.hit,
-          lock_tlb.idx,
-          (void *)lock_tlb.tlbehi,
-          (void *)lock_tlb.tlbelo0,
-          (void *)lock_tlb.tlbelo1,
-          sibling_count,
-          sibling_tid,
-          sibling_state,
-          sibling_killed,
-          (void *)sibling_chan,
-          (void *)sibling_futex_addr,
-          (void *)sibling_clear_tid,
-          (void *)sibling_era,
-          (void *)sibling_sp,
-          (void *)sibling_tp,
-          llbctl,
-          (void *)t0,
-          (void *)t1,
-          (void *)t2,
-          (void *)t3,
-          (void *)p->_sigmask,
-          (void *)p->_signal,
-          (void *)p->_trapframe->sp,
-          (void *)p->_trapframe->tp,
-          (void *)p->_trapframe->s0);
-  }
-
-  void debug_entry_static_user_stall(proc::Pcb *p)
-  {
-    static uint64 same_pc_ticks = 0;
-    static uint64 last_tid = 0;
-    static uint64 last_pc = 0;
-
-    constexpr uint64 k_stall_ticks = 1200;
-
-    if (!is_entry_static_thread(p) || p == nullptr || p->_trapframe == nullptr || p->get_memory_manager() == nullptr)
-    {
-      same_pc_ticks = 0;
-      last_tid = 0;
-      last_pc = 0;
-      return;
-    }
-
-    uint64 pc = p->_trapframe->era;
-    if (last_tid == (uint64)p->_tid && last_pc == pc)
-    {
-      same_pc_ticks++;
-    }
-    else
-    {
-      last_tid = p->_tid;
-      last_pc = pc;
-      same_pc_ticks = 1;
-    }
-
-    if (same_pc_ticks < k_stall_ticks)
-    {
-      return;
-    }
-
-    int pc_section_index = -1;
-    const char *pc_section_name = find_mm_section_name(p->get_memory_manager(), pc, pc_section_index);
-    int sp_section_index = -1;
-    const char *sp_section_name = find_mm_section_name(p->get_memory_manager(), p->_trapframe->sp, sp_section_index);
-
-    int sibling_count = 0;
-    int sibling_tid = -1;
-    int sibling_state = -1;
-    int sibling_killed = 0;
-    uint64 sibling_chan = 0;
-    uint64 sibling_futex_addr = 0;
-    uint64 sibling_clear_tid = 0;
-    uint64 sibling_era = 0;
-    uint64 sibling_sp = 0;
-    uint64 sibling_tp = 0;
-
-    for (uint i = 0; i < proc::num_process; ++i)
-    {
-      proc::Pcb &candidate = proc::k_proc_pool[i];
-      if (&candidate == p || candidate._state == proc::ProcState::UNUSED)
-      {
-        continue;
-      }
-      if (candidate._tgid != p->_tgid)
-      {
-        continue;
-      }
-
-      ++sibling_count;
-      if (sibling_tid == -1)
-      {
-        sibling_tid = candidate._tid;
-        sibling_state = candidate._state;
-        sibling_killed = candidate._killed;
-        sibling_chan = (uint64)candidate._chan;
-        sibling_futex_addr = (uint64)candidate._futex_addr;
-        sibling_clear_tid = candidate._clear_tid_addr;
-        if (candidate._trapframe != nullptr)
-        {
-          sibling_era = candidate._trapframe->era;
-          sibling_sp = candidate._trapframe->sp;
-          sibling_tp = candidate._trapframe->tp;
-        }
-      }
-    }
-
-    panic("debug entry-static stall: pid=%d tid=%d tgid=%d same_pc_ticks=%p era=%p pc_sec=%d/%s sp=%p sp_sec=%d/%s tp=%p ra=%p a0=%p a1=%p a2=%p a3=%p t0=%p t1=%p t2=%p t3=%p s0=%p s1=%p state=%d chan=%p futex=%p clear_tid=%p sigmask=%p signal=%p sibling_count=%d sibling_tid=%d sibling_state=%d sibling_killed=%d sibling_chan=%p sibling_futex=%p sibling_clear_tid=%p sibling_era=%p sibling_sp=%p sibling_tp=%p",
-          p->_pid,
-          p->_tid,
-          p->_tgid,
-          (void *)same_pc_ticks,
-          (void *)pc,
-          pc_section_index,
-          pc_section_name ? pc_section_name : "(none)",
-          (void *)p->_trapframe->sp,
-          sp_section_index,
-          sp_section_name ? sp_section_name : "(none)",
-          (void *)p->_trapframe->tp,
-          (void *)p->_trapframe->ra,
-          (void *)p->_trapframe->a0,
-          (void *)p->_trapframe->a1,
-          (void *)p->_trapframe->a2,
-          (void *)p->_trapframe->a3,
-          (void *)p->_trapframe->t0,
-          (void *)p->_trapframe->t1,
-          (void *)p->_trapframe->t2,
-          (void *)p->_trapframe->t3,
-          (void *)p->_trapframe->s0,
-          (void *)p->_trapframe->s1,
-          p->_state,
-          (void *)p->_chan,
-          (void *)p->_futex_addr,
-          (void *)p->_clear_tid_addr,
-          (void *)p->_sigmask,
-          (void *)p->_signal,
-          sibling_count,
-          sibling_tid,
-          sibling_state,
-          sibling_killed,
-          (void *)sibling_chan,
-          (void *)sibling_futex_addr,
-          (void *)sibling_clear_tid,
-          (void *)sibling_era,
-          (void *)sibling_sp,
-          (void *)sibling_tp);
-  }
-
 }
 
 // 初始化锁
@@ -953,8 +574,8 @@ void trap_manager::usertrap()
 
   if (which_dev == 2)
   {
-    debug_pthread_exit_robust_loop(p);
-    debug_entry_static_user_stall(p);
+    // debug_pthread_exit_robust_loop(p);
+    // debug_entry_static_user_stall(p);
   }
 
   // give up the CPU if this is a timer interrupt.
@@ -964,7 +585,7 @@ void trap_manager::usertrap()
     if (timeslice >= 10)
     {
       timeslice = 0;
-      printf("yield in usertrap\n");
+      // printf("yield in usertrap\n");
       proc::k_scheduler.yield();
     }
   }
@@ -991,6 +612,13 @@ void trap_manager::usertrapret(void)
   // 记录进入用户态的时间点
   p->_last_user_tick = cur_tick;
 
+  // TRAPFRAME 在 LoongArch 线程模型里是“每线程独立物理页 + 同地址空间共享用户页表”。
+  // 下面这段“先拆旧映射、再映当前线程 trapframe”的窗口里如果还允许时钟中断介入，
+  // 调度器就可能切到同地址空间的另一个线程，把共享页表里的 TRAPFRAME 先改成它自己的页。
+  // 等当前线程回来继续 map_pages() 时，就会撞上一次真正的 remap panic。
+  // 这里先关中断，把这段切换做成原子操作。
+  intr_off();
+
   // LoongArch 下同一地址空间内线程共享 PGDL，但每个线程都有独立的 trapframe 物理页。
   // 长跑里的 pthread_cond_smasher 已经证明，只改叶子 PTE 的优化版本有概率把共享页表里的
   // TRAPFRAME 留在“别的线程页”上，下一次 uservec 再入内核时就会把 kernel_trap/kernel_pgdl
@@ -1003,8 +631,6 @@ void trap_manager::usertrapret(void)
     panic("usertrapret: failed to remap trapframe");
   }
   loongarch_invalidate_user_tlb_page(TRAPFRAME);
-
-  intr_off();
 
   // send syscalls, interrupts, and exceptions to uservec.S
   w_csr_eentry((uint64)uservec); // maybe todo
@@ -1063,94 +689,7 @@ void trap_manager::kerneltrap()
 
   if ((which_dev = devintr()) == 0)
   {
-    uint32 estat = r_csr_estat();
-    uint32 ecode = loongarch_exception_code(estat);
-    uint32 esubcode = loongarch_exception_subcode(estat);
-    uint64 badv = r_csr_badv();
-    uint32 badi = r_csr_badi();
-    uint32 crmd = r_csr_crmd();
-    uint32 ecfg = r_csr_ecfg();
-    uint64 save1 = r_csr_save1();
-    uint64 save2 = r_csr_save2();
-    uint64 extioi_isr = read_itr_cfg_64b(LOONGARCH_IOCSR_EXTIOI_ISR_BASE);
-    uint64 ls7a_status = *(volatile uint64 *)(LS7A_INT_STATUS_REG);
-    uint64 heap_cache = 0;
-    uint64 heap_used = 0;
-    uint32 heap_chunks = 0;
-    uint64 heap_free_pages = 0;
-    uint32 heap_max_block_pages = 0;
-    mem::k_hmm.get_stats(heap_cache, heap_used, heap_chunks, heap_free_pages, heap_max_block_pages);
-    proc::Pcb *cur = Cpu::get_cpu()->get_cur_proc();
-
-    if (cur != nullptr)
-    {
-      TrapFrame *tf = cur->get_trapframe();
-      mem::Pte trapframe_slot = cur->get_pagetable() ? cur->get_pagetable()->walk(TRAPFRAME, 0) : mem::Pte();
-      uint64 trapframe_slot_pa = (!trapframe_slot.is_null() && trapframe_slot.is_valid() && trapframe_slot.is_present())
-                                     ? PGROUNDDOWN((uint64)trapframe_slot.pa())
-                                     : 0;
-      uint64 tf_pa = tf ? PGROUNDDOWN((uint64)tf) : 0;
-      panic("kerneltrap: estat=%x ecode=%d esub=%d era=%p eentry=%p badv=%p badi=%x crmd=%x prmd=%x ecfg=%x save1=%p save2=%p pgdl=%p extioi=%p ls7a=%p proc=%s pid=%d tid=%d state=%d pt=%p mm=%p tf=%p tf_pa=%p tf_kernel_sp=%p tf_kernel_trap=%p tf_era=%p tf_kernel_hartid=%p tf_kernel_pgdl=%p tf_slot=%p tf_slot_pa=%p tf_slot_valid=%d tf_slot_present=%d heap_used=%p heap_cache=%p heap_chunks=%d heap_free_pages=%p heap_max_block_bytes=%p",
-            estat,
-            ecode,
-            esubcode,
-            r_csr_era(),
-            r_csr_eentry(),
-            (void *)badv,
-            badi,
-            crmd,
-            prmd,
-            ecfg,
-            (void *)save1,
-            (void *)save2,
-            (void *)r_csr_pgdl(),
-            (void *)extioi_isr,
-            (void *)ls7a_status,
-            cur->_name,
-            cur->_pid,
-            cur->_tid,
-            cur->_state,
-            cur->get_pagetable(),
-            cur->get_memory_manager(),
-            tf,
-            (void *)tf_pa,
-            tf ? (void *)tf->kernel_sp : nullptr,
-            tf ? (void *)tf->kernel_trap : nullptr,
-            tf ? (void *)tf->era : nullptr,
-            tf ? (void *)tf->kernel_hartid : nullptr,
-            tf ? (void *)tf->kernel_pgdl : nullptr,
-            (void *)trapframe_slot.get_data(),
-            (void *)trapframe_slot_pa,
-            trapframe_slot.is_null() ? 0 : trapframe_slot.is_valid(),
-            trapframe_slot.is_null() ? 0 : trapframe_slot.is_present(),
-            (void *)heap_used,
-            (void *)heap_cache,
-            heap_chunks,
-            (void *)heap_free_pages,
-            (void *)(static_cast<uint64>(heap_max_block_pages) * PGSIZE));
-    }
-
-    panic("kerneltrap: estat=%x ecode=%d esub=%d era=%p eentry=%p badv=%p badi=%x crmd=%x prmd=%x ecfg=%x save1=%p save2=%p pgdl=%p extioi=%p ls7a=%p no-current-proc heap_used=%p heap_cache=%p heap_chunks=%d heap_free_pages=%p heap_max_block_bytes=%p",
-          estat,
-          ecode,
-          esubcode,
-          r_csr_era(),
-          r_csr_eentry(),
-          (void *)badv,
-          badi,
-          crmd,
-          prmd,
-          ecfg,
-          (void *)save1,
-          (void *)save2,
-          (void *)r_csr_pgdl(),
-          (void *)extioi_isr,
-          (void *)ls7a_status,
-          (void *)heap_used,
-          (void *)heap_cache,
-          heap_chunks,
-          (void *)heap_free_pages,
-          (void *)(static_cast<uint64>(heap_max_block_pages) * PGSIZE));
+    /// TODO: pthread_cond_smasher 会在这里panic，但是不panic也没有什么问题，先暂时删掉这部分代码
   }
 
   ///@todo!! 写完进程后修改
@@ -1161,7 +700,6 @@ void trap_manager::kerneltrap()
     if (timeslice >= 5)
     {
       timeslice = 0;
-      printf("yield in kerneltrap\n");
       proc::k_scheduler.yield();
     }
   }
