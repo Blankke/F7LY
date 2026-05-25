@@ -509,14 +509,12 @@ int priority_ltp_regression_riscv(void)
     return 0;
 }
 
-int regression_suite_4d1444_riscv(void)
+int regression_suite_4d1444(void)
 {
     printf("#### REGRESSION START commit-4d1444b-riscv ####\n");
     init_env("/musl/");
     basic_test("/musl/");
     basic_test("/glibc/");
-    busybox_test("/musl/");
-    busybox_test("/glibc/");
     ltp_test(true);
     ltp_test(false);
     libc_test("/musl/");
@@ -524,28 +522,14 @@ int regression_suite_4d1444_riscv(void)
     lua_test("/glibc/");
     libcbench_test("/musl");
     libcbench_test("/glibc");
+    iozone_test("/musl");
+    iozone_test("/glibc");
+    busybox_test("/musl/");
+    busybox_test("/glibc/");
     printf("#### REGRESSION END commit-4d1444b-riscv ####\n");
     return 0;
 }
 
-int regression_suite_4d1444_loongarch(void)
-{
-    printf("#### REGRESSION START commit-4d1444b-loongarch ####\n");
-    init_env("/musl/");
-    basic_test("/musl/");
-    basic_test("/glibc/");
-    ltp_test(true);
-    ltp_test(false);
-    busybox_test("/musl/");
-    busybox_test("/glibc/");
-    libc_test("/musl/");
-    lua_test("/musl/");
-    lua_test("/glibc/");
-    libcbench_test("/musl");
-    libcbench_test("/glibc");
-    printf("#### REGRESSION END commit-4d1444b-loongarch ####\n");
-    return 0;
-}
 
 int git_test(const char *path)
 {

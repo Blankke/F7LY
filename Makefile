@@ -134,7 +134,6 @@ OBJS += $(patsubst $(KERNEL_DIR)/%.s,   $(BUILD_DIR)/%.o, $(filter %.s,   $(SRCS
 ENTRY_OBJ := $(BUILD_DIR)/boot/$(ARCH)/entry.o
 OBJS_NO_ENTRY := $(filter-out $(ENTRY_OBJ), $(OBJS))
 DEPS := $(OBJS:.o=.d)
-LOONGARCH_LIBCTEST_PATCHER := tools/patch_loongarch_libctest_llsc.sh
 
 # ===== 输出目标 =====
 ifeq ($(ARCH),riscv)
@@ -189,7 +188,7 @@ INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dy
 else ifeq ($(ARCH),loongarch)
 INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dynamic-linker,-T,$(INITCODE_LINK_SCRIPT)
 endif
-.PHONY: all clean dirs build riscv loongarch run debug initcode build-la prepare-loongarch-image
+.PHONY: all clean dirs build riscv loongarch run debug initcode build-la
 
 
 all: 
@@ -272,9 +271,6 @@ else
 	$(error Unsupported ARCH=$(ARCH))
 endif
 
-prepare-loongarch-image:
-	@$(LOONGARCH_LIBCTEST_PATCHER) $(LOONGARCH_SDCARD)
-
 run-riscv:
 	qemu-system-riscv64 \
 		-machine virt \
@@ -292,7 +288,7 @@ run-riscv:
 		-initrd $(INITRD_IMAGE)
 
 
-run-loongarch: prepare-loongarch-image
+run-loongarch:
 	qemu-system-loongarch64 \
 	    -machine virt \
 	    -kernel $(KERNEL_ELF) \
@@ -333,7 +329,7 @@ debug-riscv:
 		-rtc base=utc \
 		-S -gdb tcp::1234;
 
-debug-loongarch: prepare-loongarch-image
+debug-loongarch:
 	qemu-system-loongarch64 \
 	    -machine virt \
 	    -kernel $(KERNEL_ELF) \
