@@ -71,7 +71,9 @@ namespace proc
 		robust_list *list_op_pending;
 	};
 
-	int futex_wait(uint64 uaddr, int val, tmm::timespec *timeout);
+	int futex_wait(uint64 uaddr, int val, tmm::timespec *timeout,
+	               bool timeout_is_absolute = false,
+	               bool use_realtime_clock = false);
 	int futex_wakeup(uint64 uaddr, int val, void *uaddr2, int val2);
 	void futex_cleanup_robust_list(struct robust_list_head *head);
 

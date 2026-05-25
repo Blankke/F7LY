@@ -255,6 +255,14 @@ void dir_init(void)
     else
         free_inode(ip);
 
+    // POSIX shm_open/sem_open 约定走 /dev/shm。
+    // 没有这个目录时，musl 会在打开共享内存对象前就直接 ENOENT，
+    // pthread_cancel_points 里的 shm_open 场景也会因此被异常路径干扰。
+    if ((ip = namei((char *)"/dev/shm")) == NULL)
+        vfs_ext_mkdir((char *)"/dev/shm", 0777);
+    else
+        free_inode(ip);
+
 
     if ((ip = namei((char *)"/tmp")) != NULL)
     {

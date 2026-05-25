@@ -17,6 +17,14 @@
 namespace tmm
 {
 	TimerManager k_tm;
+	namespace
+	{
+		// 根文件系统镜像会保留宿主机构建/调试时写入的 ext4 时间戳；如果 CLOCK_REALTIME 只返回“开机到现在”，
+		// stat/utimens 这类测试就会看到镜像文件“来自未来”。
+		// 当前工作区里 RISC-V 镜像已经出现 2026-05 的时间戳，因此把 realtime 基准抬到
+		// 2026-07-01 00:00:00 UTC，保证墙钟时间稳定晚于镜像元数据，同时不影响 monotonic 语义。
+		constexpr uint64 k_realtime_epoch_base_sec = 1782864000ULL; // 2026-07-01 00:00:00 UTC
+	}
 
 	/// @brief 初始化定时器管理器
 	/// @param lock_name 锁的名称，用于调试和标识
@@ -64,21 +72,13 @@ namespace tmm
 	/// @note 主要用于gettimeofday系统调用
 	timeval TimerManager::get_time_val()
 	{
-		uint64 t_val;
+		timespec ts{};
 		// uint64 cpt = tmm::cycles_per_tick(); // 暂时不使用tick计算
 
-		// 获取硬件时间戳（原子操作，需要加锁保护）
-		_lock.acquire();
-		t_val = tmm::get_hw_time_stamp();
-		// t_val += trap_mgr.ticks * cpt; // 暂时不加上tick偏移
-		_lock.release();
-
 		timeval tv;
-		// 转换为秒和微秒
-		tv.tv_sec = t_val / tmm::get_main_frequence();
-		tv.tv_usec = t_val % tmm::get_main_frequence();
-		// 将剩余周期转换为微秒
-		tv.tv_usec = tmm::time_stamp_to_usec(tv.tv_usec);
+		clock_gettime(CLOCK_REALTIME, &ts);
+		tv.tv_sec = ts.tv_sec;
+		tv.tv_usec = ts.tv_nsec / 1000;
 
 		// 备用计算方法（基于tick的毫秒计算）：
 		// tv.tv_sec = trap_mgr.trap_mgr.ticks * ms_per_tick / 1000;
@@ -187,7 +187,7 @@ namespace tmm
 				_lock.release();
 
 				// 转换为秒和纳秒
-				tp->tv_sec = (long)(t_val / freq);
+				tp->tv_sec = (long)(k_realtime_epoch_base_sec + (t_val / freq));
 				ulong rest_cyc = t_val % freq;
 
 				// 计算纳秒部分：rest_cyc * 1,000,000,000 / freq
@@ -266,7 +266,7 @@ namespace tmm
 				t_val += trap_mgr.ticks * cpt;
 				_lock.release();
 
-				tp->tv_sec = (long)(t_val / freq);
+				tp->tv_sec = (long)(k_realtime_epoch_base_sec + (t_val / freq));
 				ulong rest_cyc = t_val % freq;
 				const int64 nsec_max = 1000000000L;
 				tp->tv_nsec = (long)((rest_cyc * nsec_max) / freq);
@@ -309,7 +309,7 @@ namespace tmm
 				t_val += trap_mgr.ticks * cpt;
 				_lock.release();
 
-				tp->tv_sec = (long)(t_val / freq);
+				tp->tv_sec = (long)(k_realtime_epoch_base_sec + (t_val / freq));
 				ulong rest_cyc = t_val % freq;
 				const int64 nsec_max = 1000000000L;
 				tp->tv_nsec = (long)((rest_cyc * nsec_max) / freq);

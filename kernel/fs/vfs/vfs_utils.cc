@@ -2304,6 +2304,78 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
          }
     }
 
+    // 对已 unlink 但仍被打开的 ext4 文件（如 tmpfile），不能再按路径回查 inode。
+    // 优先使用打开时保存的 ext4 inode 句柄，这样匿名临时文件和 O_TMPFILE 都能正确 fstat。
+    if (f->lwext4_file_struct.mp != nullptr && f->lwext4_file_struct.inode > 0)
+    {
+        struct ext4_inode_ref inode_ref;
+        int result = ext4_fs_get_inode_ref(&f->lwext4_file_struct.mp->fs,
+                                           f->lwext4_file_struct.inode,
+                                           &inode_ref);
+        if (result == EOK)
+        {
+            memset(st, 0, sizeof(fs::Kstat));
+            st->dev = 0;
+            st->ino = inode_ref.index;
+            st->mode = ext4_inode_get_mode(&f->lwext4_file_struct.mp->fs.sb, inode_ref.inode);
+            st->nlink = ext4_inode_get_links_cnt(inode_ref.inode);
+
+            uint32 raw_uid = ext4_inode_get_uid(inode_ref.inode);
+            uint32 raw_gid = ext4_inode_get_gid(inode_ref.inode);
+            st->uid = raw_uid > 65535 ? 0 : raw_uid;
+            st->gid = raw_gid > 65535 ? 0 : raw_gid;
+            st->rdev = ext4_inode_get_dev(inode_ref.inode);
+            uint64 inode_size = ext4_inode_get_size(&f->lwext4_file_struct.mp->fs.sb, inode_ref.inode);
+            st->size = inode_size;
+            if (f->lwext4_file_struct.fsize > st->size)
+            {
+                st->size = f->lwext4_file_struct.fsize;
+            }
+            // 对已经打开的普通文件，内核 file 对象里维护的逻辑大小可能比 inode 更“新”：
+            // 例如 stdio/fflush 刚经过 write 路径、但 ext4 侧元数据尚未被本次 fstat 看到时，
+            // 直接信 inode 容易把 st_size 报成 0。这里取三者最大值，和 RV 行为保持一致。
+            if (f->_stat.size > st->size)
+            {
+                st->size = f->_stat.size;
+            }
+            st->blksize = 4096;
+
+            if (st->size == 0)
+            {
+                st->blocks = 0;
+            }
+            else
+            {
+                st->blocks = (st->size + 511) / 512;
+                uint64 ext4_blocks_512 = ((uint64)inode_ref.inode->blocks_count_lo * 4096) / 512;
+                if (ext4_blocks_512 > 0 && ext4_blocks_512 < st->blocks)
+                {
+                    st->blocks = ext4_blocks_512;
+                }
+                if (st->blocks == 0)
+                {
+                    st->blocks = 1;
+                }
+            }
+
+            st->st_atime_sec = ext4_inode_get_access_time(inode_ref.inode);
+            st->st_atime_nsec = (inode_ref.inode->atime_extra >> 2) & 0x3FFFFFFF;
+            st->st_ctime_sec = ext4_inode_get_change_inode_time(inode_ref.inode);
+            st->st_ctime_nsec = (inode_ref.inode->ctime_extra >> 2) & 0x3FFFFFFF;
+            st->st_mtime_sec = ext4_inode_get_modif_time(inode_ref.inode);
+            st->st_mtime_nsec = (inode_ref.inode->mtime_extra >> 2) & 0x3FFFFFFF;
+            st->mnt_id = 0;
+            ext4_fs_put_inode_ref(&inode_ref);
+
+            if (Printer::trace_group_enabled())
+            {
+                tracef("[vfs_fstat] ext4-open-file path=%s ino=%u size=%u mode=0%o\n",
+                       f->_path_name.c_str(), st->ino, st->size, st->mode);
+            }
+            return EOK;
+        }
+    }
+
     struct ext4_inode inode;
     uint32 inode_num = 0;
     const char *file_path = f->_path_name.c_str();
