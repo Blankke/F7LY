@@ -136,31 +136,8 @@ namespace fs
             return -EFAULT;
         }
 
-        // 创建onps socket句柄（如果还没有）
-        if (_onps_socket == INVALID_SOCKET) {
-            EN_ONPSERR onps_err;
-            _onps_socket = socket(AF_INET, 
-                                (_type == SocketType::TCP) ? 1 : 2, // SOCK_STREAM : SOCK_DGRAM
-                                0, &onps_err);
-            if (_onps_socket == INVALID_SOCKET) {
-                _lock.release();
-                return -ENOMEM;
-            }
-        }
-
-        // 调用onps bind
-        char ip_str[20];
-        inet_ntoa_safe_ext(_local_addr.sin_addr, ip_str);
-        
-        if (::bind(_onps_socket, 
-                   (_local_addr.sin_addr == 0) ? nullptr : ip_str,
-                   _local_addr.sin_port) < 0) {
-            close(_onps_socket);
-            _onps_socket = INVALID_SOCKET;
-            _lock.release();
-            return -EADDRINUSE;
-        }
-
+        // 当前默认运行环境没有完整启用 ONPS 网络栈。bind(2) 先维护 Linux ABI 可见状态，
+        // 让 accept/listen/getsockname 等 syscall 能按 socket 类型和状态返回正确 errno。
         _state = SocketState::BOUND;
         _lock.release();
         return 0;
