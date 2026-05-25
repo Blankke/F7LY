@@ -52,22 +52,16 @@ int ext4_bcache_lba_compare(struct ext4_buf *a, struct ext4_buf *b) {
     return 0;
 }
 
-int ext4_bcache_lru_compare(struct ext4_buf *a, struct ext4_buf *b) {
-    if (a->lru_id > b->lru_id)
-        return 1;
-    else if (a->lru_id < b->lru_id)
-        return -1;
-    return 0;
-}
-
 //原本是INTERNAL的函数，因为c语言作用域问题，此处改成了全局的。
 RB_GENERATE(ext4_buf_lba_tree, ext4_buf, lba_node, ext4_bcache_lba_compare)
-RB_GENERATE(ext4_buf_lru_tree, ext4_buf, lru_node, ext4_bcache_lru_compare)
 
 int ext4_bcache_init_dynamic(struct ext4_bcache *bc, uint32_t cnt, uint32_t itemsize) {
     ext4_assert(bc && cnt && itemsize);
 
     memset(bc, 0, sizeof(struct ext4_bcache));
+    RB_INIT(&bc->lba_root);
+    TAILQ_INIT(&bc->lru_list);
+    SLIST_INIT(&bc->dirty_list);
 
     bc->cnt = cnt;
     bc->itemsize = itemsize;
@@ -97,15 +91,16 @@ int ext4_bcache_fini_dynamic(struct ext4_bcache *bc) {
  *  Buffers in a bcache are sorted by their LBA and stored in a
  *  RB-Tree(lba_root).
  *
- *  Bcache also maintains another RB-Tree(lru_root) right now, where
- *  buffers are sorted by their LRU id.
+ *  Bcache 还维护一条未引用缓冲区的 LRU 队列：
+ *  - 队首是最久未使用的块；
+ *  - 队尾是最近刚释放引用的块。
  *
  *  A singly-linked list is used to track those dirty buffers which are
  *  ready to be flushed. (Those buffers which are dirty but also referenced
  *  are not considered ready to be flushed.)
  *
  *  When a buffer is not referenced, it will be stored in both lba_root
- *  and lru_root, while it will only be stored in lba_root when it is
+ *  and lru_list, while it will only be stored in lba_root when it is
  *  referenced.
  */
 
@@ -125,6 +120,9 @@ static struct ext4_buf *ext4_buf_alloc(struct ext4_bcache *bc, uint64_t lba) {
     buf->lba = lba;
     buf->data = (uint8_t *)data;
     buf->bc = bc;
+    buf->on_dirty_list = false;
+    buf->on_lba_tree = false;
+    buf->on_lru_list = false;
     return buf;
 }
 
@@ -139,7 +137,7 @@ static struct ext4_buf *ext4_buf_lookup(struct ext4_bcache *bc, uint64_t lba) {
     return RB_FIND(ext4_buf_lba_tree, &bc->lba_root, &tmp);
 }
 
-struct ext4_buf *ext4_buf_lowest_lru(struct ext4_bcache *bc) { return RB_MIN(ext4_buf_lru_tree, &bc->lru_root); }
+struct ext4_buf *ext4_buf_lowest_lru(struct ext4_bcache *bc) { return TAILQ_FIRST(&bc->lru_list); }
 
 void ext4_bcache_drop_buf(struct ext4_bcache *bc, struct ext4_buf *buf) {
     /* Warn on dropping any referenced buffers.*/
@@ -148,10 +146,15 @@ void ext4_bcache_drop_buf(struct ext4_bcache *bc, struct ext4_buf *buf) {
                  DBG_WARN "Buffer is still referenced. "
                           "lba: %" PRIu64 ", refctr: %" PRIu32 "\n",
                  buf->lba, buf->refctr);
-    } else
-        RB_REMOVE(ext4_buf_lru_tree, &bc->lru_root, buf);
+    } else if (buf->on_lru_list) {
+        TAILQ_REMOVE(&bc->lru_list, buf, lru_link);
+        buf->on_lru_list = false;
+    }
 
-    RB_REMOVE(ext4_buf_lba_tree, &bc->lba_root, buf);
+    if (buf->on_lba_tree) {
+        RB_REMOVE(ext4_buf_lba_tree, &bc->lba_root, buf);
+        buf->on_lba_tree = false;
+    }
 
     /*Forcibly drop dirty buffer.*/
     if (ext4_bcache_test_flag(buf, BC_DIRTY))
@@ -188,10 +191,10 @@ struct ext4_buf *ext4_bcache_find_get(struct ext4_bcache *bc, struct ext4_block 
     if (buf) {
         /* If buffer is not referenced. */
         if (!buf->refctr) {
-            /* Assign new value to LRU id and increment LRU counter
-             * by 1*/
-            buf->lru_id = ++bc->lru_ctr;
-            RB_REMOVE(ext4_buf_lru_tree, &bc->lru_root, buf);
+            if (buf->on_lru_list) {
+                TAILQ_REMOVE(&bc->lru_list, buf, lru_link);
+                buf->on_lru_list = false;
+            }
             if (ext4_bcache_test_flag(buf, BC_DIRTY))
                 ext4_bcache_remove_dirty_node(bc, buf);
         }
@@ -219,6 +222,7 @@ int ext4_bcache_alloc(struct ext4_bcache *bc, struct ext4_block *b, bool *is_new
         return ENOMEM;
 
     RB_INSERT(ext4_buf_lba_tree, &bc->lba_root, buf);
+    buf->on_lba_tree = true;
     /* One more buffer in bcache now. :-) */
     bc->ref_blocks++;
 
@@ -228,9 +232,6 @@ int ext4_bcache_alloc(struct ext4_bcache *bc, struct ext4_block *b, bool *is_new
 
 
     ext4_bcache_inc_ref(buf);
-    /* Assign new value to LRU id and increment LRU counter
-     * by 1*/
-    buf->lru_id = ++bc->lru_ctr;
 
     b->buf = buf;
     b->data = buf->data;
@@ -262,7 +263,14 @@ int ext4_bcache_free(struct ext4_bcache *bc, struct ext4_block *b) {
 
     /* We are the last one touching this buffer, do the cleanups. */
     if (!buf->refctr) {
-        RB_INSERT(ext4_buf_lru_tree, &bc->lru_root, buf);
+        /*
+         * 释放到 0 引用时再挂回 LRU 队尾，语义上更贴近“最近一次真实使用”
+         * 的完成时刻，也避免维护第二棵红黑树带来的复杂性。
+         */
+        if (!buf->on_lru_list) {
+            TAILQ_INSERT_TAIL(&bc->lru_list, buf, lru_link);
+            buf->on_lru_list = true;
+        }
         /* This buffer is ready to be flushed. */
         if (ext4_bcache_test_flag(buf, BC_DIRTY) && ext4_bcache_test_flag(buf, BC_UPTODATE)) {
             if (bc->bdev->cache_write_back && !ext4_bcache_test_flag(buf, BC_FLUSH) &&

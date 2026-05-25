@@ -4,7 +4,8 @@
 #include "trap/loongarch/pci.h"
 #include "virtio_pci.hh"
 #include "fs/buf.hh"
-#include "fs/drivers/riscv/virtio2.hh"
+#include "fs/drivers/virtio_blk.hh"
+#include "fs/drivers/loongarch/virtio_blk_pci_state.hh"
 
 
 pci_device_t pci_device_table[PCI_MAX_DEVICE_NR];/*存储设备信息的结构体数组*/
@@ -183,9 +184,6 @@ void pci_scan_device(unsigned char bus, unsigned char device, unsigned char func
 		pci_dev->irq_line = irq;
 		pci_dev->irq_pin = (val >> 8)& 0xff;
 	}
-	if (vendor_id == virtio_blk_vendor && device_id == virtio_blk_device) {
-		printf("%d %d\n", pci_dev->irq_line, pci_dev->irq_pin);
-	}
 	pci_dev->min_gnt = (val >> 16) & 0xff;
 	pci_dev->max_lat = (val >> 24) & 0xff;
 }
@@ -204,7 +202,6 @@ void pci_scan_buses()
             }
         }
     }
-    printf("pci_scan_buses done\n");
 }
 
 pci_device_t* pci_get_device(unsigned int vendor_id, unsigned int device_id)
@@ -245,7 +242,6 @@ pci_device_t* pci_get_device_by_bus(unsigned int bus, unsigned int dev,unsigned 
 
 void pci_init()
 {
-    printf("pci_init start\n");
     /*初始化pci设备信息结构体*/
     int i;
     for (i = 0; i < PCI_MAX_DEVICE_NR; i++) {
@@ -253,7 +249,6 @@ void pci_init()
     }
     /*扫描所有总线设备*/
     pci_scan_buses();
-    printf("scan done\n");
 }
 
 //----------------------------
@@ -362,7 +357,6 @@ uint64 pci_device_probe(uint16 vendor_id, uint16 device_id)
         		}
         	}
 
-        	printf("%d %d %d\n", bus, dev, func);
         	goto out;
 
         }

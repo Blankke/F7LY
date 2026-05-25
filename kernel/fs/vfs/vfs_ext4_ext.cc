@@ -77,16 +77,16 @@ int vfs_ext_mount(struct filesystem *fs, uint64_t rwflag, void *data) {
     bdev = &vbdev->bd;
     r = ext4_mount(DEV_NAME, fs->path, false);
 
-    // r = ext4_cache_write_back(fs->path, true);
-    // if (r != EOK) {
-    //     printf("EXT4 cache write back error! r=%d\n", r);
-    //     return -1;
-    // }
-
     if (r != EOK) {
         vfs_ext4_blockdev_destroy(vbdev);
         goto out;
     } else {
+        // 默认开启 lwext4 的块缓存 write-back，避免小块写场景被同步刷盘拖垮。
+        r = ext4_cache_write_back(fs->path, true);
+        if (r != EOK) {
+            vfs_ext4_blockdev_destroy(vbdev);
+            goto out;
+        }
         // 为 lwext4 挂载点接入全局锁，避免并发文件操作直接裸跑
         // 到内部的块缓存引用计数路径，导致 refctr 断言。
         r = ext4_mount_setup_locks(fs->path, &ext4_lock_ops);
@@ -119,6 +119,12 @@ int vfs_ext_mount2(struct filesystem *fs, uint64_t rwflag, void *data) {
         vfs_ext4_blockdev_destroy(vbdev);
         goto out;
     } else {
+        // rootfs 也保持同样的 write-back 策略，避免两块设备语义不一致。
+        r = ext4_cache_write_back(fs->path, true);
+        if (r != EOK) {
+            vfs_ext4_blockdev_destroy(vbdev);
+            goto out;
+        }
         // rootfs 也接入同样的挂载点锁，保持两套 ext4 设备一致。
         r = ext4_mount_setup_locks(fs->path, &ext4_lock_ops);
         if (r != EOK) {

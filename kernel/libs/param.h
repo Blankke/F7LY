@@ -12,7 +12,9 @@
 #define MAXENV        8  // max exec environment
 #define MAXOPBLOCKS  20  // max # of blocks any FS op writes
 #define LOGSIZE      (MAXOPBLOCKS*3)  // max data blocks in on-disk log
-#define NBUF         (MAXOPBLOCKS*3)  // size of disk block cache
+// iozone 的 1KiB 并发读写会把 512B 块缓存打得非常碎，缓存过浅会导致
+// buffer cache 与块层来回抖动。这里直接把缓存深度提升到工程上可用的量级。
+#define NBUF         1024  // size of disk block cache
 #define FSSIZE       2000  // size of file system in blocks
 #define MAXPATH      260   // maximum file path name
 #define VFS_MAX_FS   4     // VFS 中最多的fs个数

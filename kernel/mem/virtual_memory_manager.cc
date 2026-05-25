@@ -595,12 +595,10 @@ namespace mem
         pte_flags = riscv::PteEnum::pte_user_m; // 用户可访问
         if (vm->prot & PROT_READ)
         {
-            printfGreen("[allocate_vma_page] readable page at %p\n", va);
             pte_flags |= riscv::PteEnum::pte_readable_m;
         }
         if (vm->prot & PROT_WRITE)
         {
-            printfGreen("[allocate_vma_page] writable page at %p\n", va);
             pte_flags |= riscv::PteEnum::pte_writable_m;
             pte_flags |= riscv::PteEnum::pte_readable_m;
         }
@@ -648,9 +646,6 @@ namespace mem
                           vm->backing_shmid, (void *)page_va, (void *)shared_pa);
                 return -1;
             }
-
-            printfGreen("[allocate_vma_page] remapped shared page shmid=%d va=%p pa=%p\n",
-                        vm->backing_shmid, (void *)page_va, (void *)shared_pa);
             return 0;
         }
 
@@ -682,7 +677,6 @@ namespace mem
                 k_pmm.free_page(pa);
                 return size_result;
             }
-            printfRed("[allocate_vma_page] offset: %d, file_size: %lu\n", offset, file_size);
             // 检查访问是否超出文件大小
             if (offset >= (int)file_size)
             {

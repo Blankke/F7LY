@@ -1936,6 +1936,8 @@ int ext4_fwrite(ext4_file *file, const void *buf, size_t size, size_t *wcnt)
     struct ext4_inode_ref ref;
     const uint8_t *u8_buf = (uint8_t *)buf;
     int r, rr = EOK;
+    int cache_r = EOK;
+    bool write_back_enabled = false;
 
     ext4_assert(file && file->mp);
 
@@ -1974,6 +1976,12 @@ int ext4_fwrite(ext4_file *file, const void *buf, size_t size, size_t *wcnt)
 
     unalg = (file->fpos) % block_size;
 
+    /* 小块写场景同样需要被 write-back 覆盖，否则 tail/unaligned 写会退化为同步刷盘。 */
+    r = ext4_block_cache_write_back(file->mp->fs.bdev, 1);
+    if (r != EOK)
+        goto Finish;
+    write_back_enabled = true;
+
     if (unalg)
     {
         size_t len = size;
@@ -1993,17 +2001,11 @@ int ext4_fwrite(ext4_file *file, const void *buf, size_t size, size_t *wcnt)
         u8_buf += len;
         size -= len;
         file->fpos += len;
-        printf("ext4_fwrite: unaligned write, fpos=%" PRIu64 ", size=%zu, len=%zu,f->size=%zu\n", file->fpos, size, len, file->fsize);
         if (wcnt)
             *wcnt += len;
 
         iblk_idx++;
     }
-
-    /*Start write back cache mode.*/
-    r = ext4_block_cache_write_back(file->mp->fs.bdev, 1);
-    if (r != EOK)
-        goto Finish;
 
     fblock_start = 0;
     fblock_count = 0;
@@ -2067,12 +2069,6 @@ int ext4_fwrite(ext4_file *file, const void *buf, size_t size, size_t *wcnt)
         }
     }
 
-    /*Stop write back cache mode*/
-    ext4_block_cache_write_back(file->mp->fs.bdev, 0);
-
-    if (r != EOK)
-        goto Finish;
-
     if (size)
     {
         uint64_t off;
@@ -2110,6 +2106,13 @@ out_fsize:
     }
 
 Finish:
+    if (write_back_enabled)
+    {
+        cache_r = ext4_block_cache_write_back(file->mp->fs.bdev, 0);
+        if (r == EOK && cache_r != EOK)
+            r = cache_r;
+    }
+
     r = ext4_fs_put_inode_ref(&ref);
 
     if (r != EOK)

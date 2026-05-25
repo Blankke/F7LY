@@ -59,7 +59,11 @@
 
 /**@brief   Cache size of block device.*/
 #ifndef CONFIG_BLOCK_DEV_CACHE_SIZE
-#define CONFIG_BLOCK_DEV_CACHE_SIZE 8
+/* 并发小块 IO 对 block cache 深度非常敏感。256 个 4KiB 缓存页在
+ * iozone 的多进程 1KiB 吞吐场景下很容易被 metadata/data 混合流量打穿，
+ * 导致 ext4 bcache 频繁回收和重复回源。这里提升到 1024，给并发读写
+ * 留出更稳妥的缓存工作集。 */
+#define CONFIG_BLOCK_DEV_CACHE_SIZE 1024
 #endif
 
 

@@ -58,9 +58,23 @@ namespace proc
     constexpr int k_interval_timer_count = 3; // ITIMER_REAL / ITIMER_VIRTUAL / ITIMER_PROF
     struct ofile
     {
+        SpinLock _lock;                         // 共享 fd 表锁，保护并发 open/close/dup
         fs::file *_ofile_ptr[max_open_files]; // 进程打开的文件列表 (文件描述符 -> 文件结构)
+        bool _reserved[max_open_files];       // 预留槽位，避免并发 open 在文件真正创建前重复抢同一个 fd
         int _shared_ref_cnt;
         bool _fl_cloexec[max_open_files]; // 记录每个文件描述符的 close-on-exec 标志
+
+        void init(const char *lock_name)
+        {
+            _lock.init(lock_name);
+            _shared_ref_cnt = 1;
+            for (uint i = 0; i < max_open_files; ++i)
+            {
+                _ofile_ptr[i] = nullptr;
+                _reserved[i] = false;
+                _fl_cloexec[i] = false;
+            }
+        }
     };
     struct sighand_struct
     {

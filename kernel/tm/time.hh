@@ -117,15 +117,23 @@ namespace tmm
 	/// @}
 	
 	/**
-	 * @brief QEMU模拟器时钟频率配置
-	 * 
-	 * 根据实际测试和CPUCFG.4寄存器的值进行调整：
-	 * - 理论频率：12.5MHz（参考测例说明）
-	 * - 实际测试：约为理论值的1/4
-	 * - CPUCFG.4值：100,000,000Hz
-	 * - 当前使用：3.125MHz（3,125,000Hz）
+	 * @brief 当前架构用于时间换算的硬件计时器频率。
+	 *
+	 * RISC-V 在 QEMU virt + OpenSBI 下暴露的 ACLINT timer 频率为 10MHz；
+	 * LoongArch 这边仍沿用项目内已有的 3.125MHz 经验值。
+	 *
+	 * 之前这里统一写死成 3.125MHz，会导致：
+	 * 1. RISC-V 的 gettimeofday/clock_gettime 走时明显失真；
+	 * 2. 基于 timeval 的短超时等待被严重放大或缩小；
+	 * 3. 双架构的调度/超时行为缺乏可比性。
 	 */
+#ifdef RISCV
+	constexpr uint64 qemu_fre = 10 * _1M_dec;
+#elif defined(LOONGARCH)
 	constexpr uint64 qemu_fre = 3 * _1M_dec + 125 * _1K_dec;
+#else
+	constexpr uint64 qemu_fre = 10 * _1M_dec;
+#endif
 	
 	/**
 	 * @brief 硬件周期数转微秒
@@ -148,22 +156,28 @@ namespace tmm
 	}
 
 	/**
-	 * @brief 定时器分频配置
-	 * 
-	 * 系统tick的生成配置：
-	 * - 原始频率：3.125MHz
-	 * - 分频值：200K >> 2 = 50K（低两位由硬件补齐为200K）
-	 * - 实际分频：200K
-	 * - tick频率：3.125MHz / 200K ≈ 15.625Hz
-	 * - tick周期：1/15.625 ≈ 64ms
+	 * @brief 统一的内核调度 tick 周期（微秒）。
+	 *
+	 * 之前项目里 tick 大约在 64ms（LoongArch）到 195ms（RISC-V）之间，
+	 * 对 `select/poll` 短超时、sleep 精度和单核多进程调度都过于粗糙。
+	 * 这里统一收敛到 10ms，既能显著改善交互与并发响应，也不会把定时器中断频率拉得过高。
 	 */
-	constexpr uint div_fre = ( 200 * _1K_dec ) >> 2; ///< 分频值，低两位由硬件补齐
+	constexpr uint64 tick_period_us = 10 * _1K_dec;
+
+	/**
+	 * @brief 硬件计数器视角下的每 tick 周期数。
+	 *
+	 * LoongArch 的定时器 CSR 低两位由硬件补齐，因此继续保留“右移再左移”的编码方式。
+	 * RISC-V 侧虽然最终不会直接使用 div_fre 写寄存器，但仍通过 cycles_per_tick()
+	 * 与其他共享代码保持同一套语义。
+	 */
+	constexpr uint div_fre = static_cast<uint>(qemu_fre_cal_cycles(tick_period_us) >> 2);
 	
 	/**
 	 * @brief 每个tick对应的毫秒数
 	 * 计算公式：(分频值 * 1000) / 时钟频率
 	 */
-	constexpr uint ms_per_tick = div_fre * _1K_dec / qemu_fre;
+	constexpr uint ms_per_tick = static_cast<uint>(tick_period_us / _1K_dec);
 	
 	/**
 	 * @brief 获取主时钟频率
