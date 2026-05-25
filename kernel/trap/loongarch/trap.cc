@@ -991,38 +991,18 @@ void trap_manager::usertrapret(void)
   // 记录进入用户态的时间点
   p->_last_user_tick = cur_tick;
 
-  // LoongArch 下同一地址空间内线程共享 PGDL，但各自拥有独立 trapframe 物理页。
-  // 这里不要每次返回用户态都无条件 remap + invtlb：
-  // 同线程的普通 syscall/timer 往返若反复碰 invtlb，会把 LL/SC 的保留窗口打碎。
-  // 只有当当前 TRAPFRAME 的页表落点不是“这个线程自己的 trapframe 页”时，才重绑它。
-  bool need_remap_trapframe = true;
-  mem::Pte trapframe_pte = p->get_pagetable()->walk(TRAPFRAME, false);
-  if (!trapframe_pte.is_null() && trapframe_pte.is_valid() && trapframe_pte.is_present())
+  // LoongArch 下同一地址空间内线程共享 PGDL，但每个线程都有独立的 trapframe 物理页。
+  // 长跑里的 pthread_cond_smasher 已经证明，只改叶子 PTE 的优化版本有概率把共享页表里的
+  // TRAPFRAME 留在“别的线程页”上，下一次 uservec 再入内核时就会把 kernel_trap/kernel_pgdl
+  // 从旧 trapframe 里读出来，最终直接在 kernel 态跳到 0。
+  // 这里优先保证“每次返回用户态前，TRAPFRAME 一定明确指向当前线程”，哪怕代价是多一次 remap。
+  mem::k_vmm.vmunmap(*p->get_pagetable(), TRAPFRAME, 1, 0);
+  if (!mem::k_vmm.map_pages(*p->get_pagetable(), TRAPFRAME, PGSIZE, (uint64)p->get_trapframe(),
+                            PTE_V | PTE_NX | PTE_P | PTE_W | PTE_R | PTE_MAT | PTE_D))
   {
-    uint64 current_trapframe_pa = (uint64)trapframe_pte.pa();
-    uint64 target_trapframe_pa = PGROUNDDOWN((uint64)p->get_trapframe());
-    if (current_trapframe_pa == target_trapframe_pa)
-    {
-      need_remap_trapframe = false;
-    }
+    panic("usertrapret: failed to remap trapframe");
   }
-
-  if (need_remap_trapframe)
-  {
-    mem::k_vmm.vmunmap(*p->get_pagetable(), TRAPFRAME, 1, 0);
-
-    if (mem::k_vmm.map_pages(*p->get_pagetable(), TRAPFRAME, PGSIZE, (uint64)(p->get_trapframe()),
-                             PTE_V | PTE_NX | PTE_P | PTE_W | PTE_R | PTE_MAT | PTE_D) == 0)
-    {
-      panic("usertrapret: failed to dynamically map trapframe");
-    }
-
-#ifdef LOONGARCH
-    // 仅在 trapframe 真正切到“别的物理页”时做一次按对失效，避免同 PGDL 多线程
-    // 继续沿用上一个线程残留的 TRAPFRAME TLB。
-    loongarch_invalidate_user_tlb_page(TRAPFRAME);
-#endif
-  }
+  loongarch_invalidate_user_tlb_page(TRAPFRAME);
 
   intr_off();
 
@@ -1035,7 +1015,10 @@ void trap_manager::usertrapret(void)
   p->get_trapframe()->kernel_sp = p->get_kstack() + KSTACK_SIZE; // process's kernel stack
   p->get_trapframe()->kernel_trap = (uint64)wrap_usertrap;
   //   printf("usertrapret: p->get_trapframe()->kernel_trap: %p\n", p->get_trapframe()->kernel_trap);
-  p->get_trapframe()->kernel_hartid = r_tp(); // hartid for cpuid()
+  // LoongArch 长跑下，tp 在极窄的 trap 返回窗口里可能暂时不是内核 cpuid。
+  // 这里给下一次 uservec 入口保存的 hartid 必须直接来自 CSR_CPUID，
+  // 否则后续再进内核时就可能把用户 TLS/栈附近的值误当成 current cpu 标识。
+  p->get_trapframe()->kernel_hartid = r_csr_cpuid();
 
   // set up the registers that uservec.S's ertn will use
   // to get to user space.
@@ -1101,7 +1084,13 @@ void trap_manager::kerneltrap()
 
     if (cur != nullptr)
     {
-      panic("kerneltrap: estat=%x ecode=%d esub=%d era=%p eentry=%p badv=%p badi=%x crmd=%x prmd=%x ecfg=%x save1=%p save2=%p pgdl=%p extioi=%p ls7a=%p proc=%s pid=%d tid=%d state=%d pt=%p mm=%p heap_used=%p heap_cache=%p heap_chunks=%d heap_free_pages=%p heap_max_block_bytes=%p",
+      TrapFrame *tf = cur->get_trapframe();
+      mem::Pte trapframe_slot = cur->get_pagetable() ? cur->get_pagetable()->walk(TRAPFRAME, 0) : mem::Pte();
+      uint64 trapframe_slot_pa = (!trapframe_slot.is_null() && trapframe_slot.is_valid() && trapframe_slot.is_present())
+                                     ? PGROUNDDOWN((uint64)trapframe_slot.pa())
+                                     : 0;
+      uint64 tf_pa = tf ? PGROUNDDOWN((uint64)tf) : 0;
+      panic("kerneltrap: estat=%x ecode=%d esub=%d era=%p eentry=%p badv=%p badi=%x crmd=%x prmd=%x ecfg=%x save1=%p save2=%p pgdl=%p extioi=%p ls7a=%p proc=%s pid=%d tid=%d state=%d pt=%p mm=%p tf=%p tf_pa=%p tf_kernel_sp=%p tf_kernel_trap=%p tf_era=%p tf_kernel_hartid=%p tf_kernel_pgdl=%p tf_slot=%p tf_slot_pa=%p tf_slot_valid=%d tf_slot_present=%d heap_used=%p heap_cache=%p heap_chunks=%d heap_free_pages=%p heap_max_block_bytes=%p",
             estat,
             ecode,
             esubcode,
@@ -1123,6 +1112,17 @@ void trap_manager::kerneltrap()
             cur->_state,
             cur->get_pagetable(),
             cur->get_memory_manager(),
+            tf,
+            (void *)tf_pa,
+            tf ? (void *)tf->kernel_sp : nullptr,
+            tf ? (void *)tf->kernel_trap : nullptr,
+            tf ? (void *)tf->era : nullptr,
+            tf ? (void *)tf->kernel_hartid : nullptr,
+            tf ? (void *)tf->kernel_pgdl : nullptr,
+            (void *)trapframe_slot.get_data(),
+            (void *)trapframe_slot_pa,
+            trapframe_slot.is_null() ? 0 : trapframe_slot.is_valid(),
+            trapframe_slot.is_null() ? 0 : trapframe_slot.is_present(),
             (void *)heap_used,
             (void *)heap_cache,
             heap_chunks,

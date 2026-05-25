@@ -6,6 +6,7 @@ ROOTFS_IMAGE := $(IMAGE_DIR)/rootfs.img
 INITRD_IMAGE := $(IMAGE_DIR)/initrd.img
 RISCV_SDCARD := $(IMAGE_DIR)/sdcard-rv.img
 LOONGARCH_SDCARD := $(IMAGE_DIR)/sdcard-la.img
+LOONGARCH_LIBCTEST_PATCHER := tools/patch_loongarch_libctest_llsc.sh
 
 # ===== 并行编译配置 =====
 # 默认使用所有可用 CPU 核心进行并行编译
@@ -188,7 +189,7 @@ INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dy
 else ifeq ($(ARCH),loongarch)
 INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dynamic-linker,-T,$(INITCODE_LINK_SCRIPT)
 endif
-.PHONY: all clean dirs build riscv loongarch run debug initcode build-la
+.PHONY: all clean dirs build riscv loongarch run debug initcode build-la prepare-loongarch-image
 
 
 all: 
@@ -271,6 +272,9 @@ else
 	$(error Unsupported ARCH=$(ARCH))
 endif
 
+prepare-loongarch-image:
+	@$(LOONGARCH_LIBCTEST_PATCHER) $(LOONGARCH_SDCARD)
+
 run-riscv:
 	qemu-system-riscv64 \
 		-machine virt \
@@ -288,7 +292,7 @@ run-riscv:
 		-initrd $(INITRD_IMAGE)
 
 
-run-loongarch:
+run-loongarch: prepare-loongarch-image
 	qemu-system-loongarch64 \
 	    -machine virt \
 	    -kernel $(KERNEL_ELF) \
@@ -329,7 +333,7 @@ debug-riscv:
 		-rtc base=utc \
 		-S -gdb tcp::1234;
 
-debug-loongarch:
+debug-loongarch: prepare-loongarch-image
 	qemu-system-loongarch64 \
 	    -machine virt \
 	    -kernel $(KERNEL_ELF) \

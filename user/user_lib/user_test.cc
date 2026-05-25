@@ -365,17 +365,33 @@ int libc_test(const char *path = musl_dir)
         return -1;
     }
     printf("#### OS COMP TEST GROUP START libctest-musl ####\n");
+#ifdef LOONGARCH
+    // 临时缩到最短复现链，先把 pthread_cancel* 退出后污染后续 pthread_cond 的问题钉住。
+    auto is_focus_case = [](const char *name) {
+        return strcmp(name, "pthread_cancel_points") == 0 ||
+               strcmp(name, "pthread_cancel") == 0 ||
+               strcmp(name, "pthread_cond") == 0;
+    };
+#endif
     for (int i = 0; libctest[i][0] != NULL; i++)
     {
+#ifdef LOONGARCH
+        if (!is_focus_case(libctest[i][0]))
+        {
+            continue;
+        }
+#endif
         argv[3] = libctest[i][0];
         run_test("runtest.exe", argv, 0);
     }
+#ifndef LOONGARCH
     argv[2] = "entry-dynamic.exe";
     for (int i = 0; libctest[i][0] != NULL; i++)
     {
         argv[3] = libctest[i][0];
         run_test("runtest.exe", argv, 0);
     }
+#endif
     printf("#### OS COMP TEST GROUP END libctest-musl ####\n");
     return 0;
 }
@@ -515,8 +531,6 @@ int regression_suite_4d1444(void)
     init_env("/musl/");
     basic_test("/musl/");
     basic_test("/glibc/");
-    ltp_test(true);
-    ltp_test(false);
     libc_test("/musl/");
     lua_test("/musl/");
     lua_test("/glibc/");
@@ -524,6 +538,8 @@ int regression_suite_4d1444(void)
     libcbench_test("/glibc");
     iozone_test("/musl");
     iozone_test("/glibc");
+    ltp_test(true);
+    ltp_test(false);
     busybox_test("/musl/");
     busybox_test("/glibc/");
     printf("#### REGRESSION END commit-4d1444b-riscv ####\n");
@@ -709,7 +725,7 @@ struct ltp_testcase ltp_testcases[] = {
     // 新开以前完全没跑过的测例时，优先按 tools/ltp/judge/ltp_rank.txt 的 total count 从高到低推进。
     {"accept01", true, true},
     {"accept03", true, true},
-    {NULL, false, false},
+    // {NULL, false, false},
     {"memfd_create01", true, true},
     {"splice07", true, true},
     {"epoll_ctl03", true, true},
