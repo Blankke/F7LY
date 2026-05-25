@@ -4,7 +4,9 @@ extern "C"
 {
     __attribute__((section(".text.startup"))) int main()
     {
-        iozone_mclock_research();
+        // userdebug4();
+        regression_suite_4d1444();
+        // iozone_test("/musl");
         shutdown();
         return 0;
     }
