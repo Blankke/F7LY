@@ -129,6 +129,11 @@ namespace fs
 
 	extern file_pool k_file_table;
 
+	class file;
+	void init_bsd_flock_table();
+	int apply_bsd_flock(file *owner, int operation);
+	void release_bsd_flock(file *owner);
+
 	struct memfd_shared_state
 	{
 		uint32_t refcnt = 1;
@@ -272,6 +277,7 @@ namespace fs
 			// printfGreen("[file::free_file] refcnt decreased to %d\n", refcnt);
 			if (refcnt == 0) {
 				// printfGreen("[file::free_file] refcnt is 0, calling delete this\n");
+				release_bsd_flock(this);
 				delete this;
 			}
 		};

@@ -2307,12 +2307,16 @@ namespace proc
         for (p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
         {
             p->_lock.acquire();
-            if (p->_state == SLEEPING && (uint64)p->_futex_addr == uaddr)
+            bool is_futex_waiter = (uint64)p->_futex_addr == uaddr &&
+                                   (p->_state == SLEEPING || p->_state == RUNNABLE);
+            if (is_futex_waiter)
             {
                 if (count1 < val)
                 {
-                    // printf("[wakeup2] proc %s pid %d waking up on uaddr: %p\n", p->_name, p->_pid, uaddr);
-                    p->_state = RUNNABLE;
+                    // 带超时的 futex 会睡在 tick 通道上；若 timer 先把它唤成 RUNNABLE，
+                    // 这里仍要消费这次 FUTEX_WAKE，否则用户态 checkpoint 会反复丢唤醒。
+                    if (p->_state == SLEEPING)
+                        p->_state = RUNNABLE;
                     p->_futex_addr = 0;
                     count1++;
                 }

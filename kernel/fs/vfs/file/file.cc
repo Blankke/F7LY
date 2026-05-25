@@ -5,6 +5,7 @@
 
 #include "klib.hh"
 #include "types.hh"
+#include "syscall_defs.hh"
 
 #include <EASTL/string.h>
 
@@ -40,6 +41,206 @@ namespace fs
     }
 
     file_pool k_file_table;
+
+    namespace
+    {
+        constexpr int kMaxBsdFlockEntries = 128;
+        constexpr int kMaxBsdFlockSharedOwners = 16;
+
+        struct BsdFlockEntry
+        {
+            bool used = false;
+            eastl::string path;
+            file *exclusive_owner = nullptr;
+            file *shared_owners[kMaxBsdFlockSharedOwners] = {};
+            int shared_count = 0;
+        };
+
+        SpinLock g_bsd_flock_lock;
+        BsdFlockEntry g_bsd_flock_entries[kMaxBsdFlockEntries];
+        bool g_bsd_flock_ready = false;
+
+        int find_shared_owner(const BsdFlockEntry &entry, file *owner)
+        {
+            for (int i = 0; i < entry.shared_count; ++i)
+            {
+                if (entry.shared_owners[i] == owner)
+                    return i;
+            }
+            return -1;
+        }
+
+        void remove_shared_owner(BsdFlockEntry &entry, file *owner)
+        {
+            int index = find_shared_owner(entry, owner);
+            if (index < 0)
+                return;
+
+            for (int i = index; i + 1 < entry.shared_count; ++i)
+                entry.shared_owners[i] = entry.shared_owners[i + 1];
+            entry.shared_count--;
+            entry.shared_owners[entry.shared_count] = nullptr;
+        }
+
+        bool add_shared_owner(BsdFlockEntry &entry, file *owner)
+        {
+            if (find_shared_owner(entry, owner) >= 0)
+                return true;
+            if (entry.shared_count >= kMaxBsdFlockSharedOwners)
+                return false;
+            entry.shared_owners[entry.shared_count++] = owner;
+            return true;
+        }
+
+        void cleanup_entry_if_empty(BsdFlockEntry &entry)
+        {
+            if (entry.exclusive_owner != nullptr || entry.shared_count != 0)
+                return;
+            entry.used = false;
+            entry.path.clear();
+        }
+
+        BsdFlockEntry *find_flock_entry(const eastl::string &path)
+        {
+            for (auto &entry : g_bsd_flock_entries)
+            {
+                if (entry.used && entry.path == path)
+                    return &entry;
+            }
+            return nullptr;
+        }
+
+        BsdFlockEntry *alloc_flock_entry(const eastl::string &path)
+        {
+            for (auto &entry : g_bsd_flock_entries)
+            {
+                if (!entry.used)
+                {
+                    entry.used = true;
+                    entry.path = path;
+                    entry.exclusive_owner = nullptr;
+                    entry.shared_count = 0;
+                    for (auto &owner : entry.shared_owners)
+                        owner = nullptr;
+                    return &entry;
+                }
+            }
+            return nullptr;
+        }
+
+        void release_owner_locked(file *owner)
+        {
+            for (auto &entry : g_bsd_flock_entries)
+            {
+                if (!entry.used)
+                    continue;
+
+                if (entry.exclusive_owner == owner)
+                    entry.exclusive_owner = nullptr;
+                remove_shared_owner(entry, owner);
+                cleanup_entry_if_empty(entry);
+            }
+        }
+    }
+
+    void init_bsd_flock_table()
+    {
+        g_bsd_flock_lock.init("bsd_flock_table");
+        for (auto &entry : g_bsd_flock_entries)
+        {
+            entry.used = false;
+            entry.path.clear();
+            entry.exclusive_owner = nullptr;
+            entry.shared_count = 0;
+            for (auto &owner : entry.shared_owners)
+                owner = nullptr;
+        }
+        g_bsd_flock_ready = true;
+    }
+
+    int apply_bsd_flock(file *owner, int operation)
+    {
+        if (owner == nullptr)
+            return syscall::SYS_EBADF;
+
+        // LOCK_NB 是修饰位，真正的锁模式必须且只能是 SH/EX/UN 之一。
+        int mode = operation & ~LOCK_NB;
+        if ((operation & ~(LOCK_SH | LOCK_EX | LOCK_UN | LOCK_NB)) != 0 ||
+            (mode != LOCK_SH && mode != LOCK_EX && mode != LOCK_UN))
+        {
+            return syscall::SYS_EINVAL;
+        }
+
+        if (!g_bsd_flock_ready)
+            return syscall::SYS_EINVAL;
+
+        const eastl::string &path = owner->backing_path();
+        if (path.empty())
+            return 0;
+
+        g_bsd_flock_lock.acquire();
+
+        if (mode == LOCK_UN)
+        {
+            release_owner_locked(owner);
+            g_bsd_flock_lock.release();
+            return 0;
+        }
+
+        BsdFlockEntry *entry = find_flock_entry(path);
+        if (entry == nullptr)
+        {
+            entry = alloc_flock_entry(path);
+            if (entry == nullptr)
+            {
+                g_bsd_flock_lock.release();
+                return syscall::SYS_ENFILE;
+            }
+        }
+
+        if (mode == LOCK_SH)
+        {
+            if (entry->exclusive_owner != nullptr && entry->exclusive_owner != owner)
+            {
+                g_bsd_flock_lock.release();
+                return syscall::SYS_EAGAIN;
+            }
+
+            // 同一 open file description 从独占锁降级为共享锁。
+            if (entry->exclusive_owner == owner)
+                entry->exclusive_owner = nullptr;
+            if (!add_shared_owner(*entry, owner))
+            {
+                g_bsd_flock_lock.release();
+                return syscall::SYS_ENFILE;
+            }
+            g_bsd_flock_lock.release();
+            return 0;
+        }
+
+        int owner_shared_index = find_shared_owner(*entry, owner);
+        int other_shared_count = entry->shared_count - (owner_shared_index >= 0 ? 1 : 0);
+        if ((entry->exclusive_owner != nullptr && entry->exclusive_owner != owner) || other_shared_count > 0)
+        {
+            g_bsd_flock_lock.release();
+            return syscall::SYS_EAGAIN;
+        }
+
+        // 同一 open file description 从共享锁升级为独占锁。
+        remove_shared_owner(*entry, owner);
+        entry->exclusive_owner = owner;
+        g_bsd_flock_lock.release();
+        return 0;
+    }
+
+    void release_bsd_flock(file *owner)
+    {
+        if (!g_bsd_flock_ready || owner == nullptr)
+            return;
+        g_bsd_flock_lock.acquire();
+        release_owner_locked(owner);
+        g_bsd_flock_lock.release();
+    }
 
     void file_pool::init()
     {

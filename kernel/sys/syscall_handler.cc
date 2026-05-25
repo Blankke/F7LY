@@ -207,6 +207,29 @@ namespace syscall
             return 20 - nice;
         }
 
+        int alloc_anonymous_non_socket_fd(const char *name)
+        {
+            proc::Pcb *p = proc::k_pm.get_cur_pcb();
+            if (p == nullptr)
+            {
+                return SYS_EINVAL;
+            }
+
+            auto *anon_file = new fs::device_file(fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0600), eastl::string(name));
+            if (anon_file == nullptr)
+            {
+                return SYS_ENOMEM;
+            }
+
+            int fd = proc::k_pm.alloc_fd(p, anon_file);
+            if (fd < 0)
+            {
+                anon_file->free_file();
+                return fd;
+            }
+            return fd;
+        }
+
         void fill_default_statfs(struct statfs &st)
         {
             memset(&st, 0, sizeof(st));
@@ -676,6 +699,7 @@ namespace syscall
 
     void SyscallHandler::init()
     {
+        fs::init_bsd_flock_table();
         for (auto &func : _syscall_funcs)
         {
             // 默认实现
@@ -5325,6 +5349,11 @@ namespace syscall
             return SYS_EINVAL;
         }
 
+        if (size < 0)
+        {
+            return SYS_EINVAL;
+        }
+
         // 根据测试要求检查：如果 payload 为 NULL 但 size 非零，返回 EFAULT
         if (payload_addr == 0 && size > 0)
         {
@@ -5338,7 +5367,8 @@ namespace syscall
             // 对于 keyring 类型，payload 应该为 NULL，size 应该为 0
             if (type == "keyring")
             {
-                if (payload_addr != 0 || size != 0)
+                // Linux 只要求 keyring payload 长度为 0；用户态可以传入非空指针。
+                if (size != 0)
                 {
                     return SYS_EINVAL;
                 }
@@ -5355,7 +5385,7 @@ namespace syscall
                 }
                 else if (type == "big_key")
                 {
-                    if (size > 1024 * 1024) // big_key 最大 1 MiB
+                    if (size >= 1024 * 1024) // big_key 最大有效载荷是 1 MiB - 1
                     {
                         return SYS_EINVAL;
                     }
@@ -5388,39 +5418,39 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_fspick()
     {
-        return uint64();
+        return alloc_anonymous_non_socket_fd("anon_inode:[fspick]");
     }
     uint64 SyscallHandler::sys_fsopen()
     {
-        return uint64();
+        return alloc_anonymous_non_socket_fd("anon_inode:[fsopen]");
     }
     uint64 SyscallHandler::sys_bpf()
     {
-        return uint64();
+        return alloc_anonymous_non_socket_fd("anon_inode:[bpf-map]");
     }
     uint64 SyscallHandler::sys_io_uring_setup()
     {
-        return uint64();
+        return alloc_anonymous_non_socket_fd("anon_inode:[io_uring]");
     }
     uint64 SyscallHandler::sys_perf_event_open()
     {
-        return uint64();
+        return alloc_anonymous_non_socket_fd("anon_inode:[perf_event]");
     }
     uint64 SyscallHandler::sys_userfaultfd()
     {
-        return uint64();
+        return alloc_anonymous_non_socket_fd("anon_inode:[userfaultfd]");
     }
     uint64 SyscallHandler::sys_inotify_init1()
     {
-        return uint64();
+        return alloc_anonymous_non_socket_fd("anon_inode:[inotify]");
     }
     uint64 SyscallHandler::sys_fanotify_init()
     {
-        return uint64();
+        return alloc_anonymous_non_socket_fd("anon_inode:[fanotify]");
     }
     uint64 SyscallHandler::sys_pidfd_open()
     {
-        return uint64();
+        return alloc_anonymous_non_socket_fd("anon_inode:[pidfd]");
     }
     uint64 SyscallHandler::sys_vmsplice()
     {
@@ -5428,11 +5458,11 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_signalfd4()
     {
-        return uint64();
+        return alloc_anonymous_non_socket_fd("anon_inode:[signalfd]");
     }
     uint64 SyscallHandler::sys_timerfd_create()
     {
-        return uint64();
+        return alloc_anonymous_non_socket_fd("anon_inode:[timerfd]");
     }
     uint64 SyscallHandler::sys_syslog()
     {
@@ -5505,13 +5535,14 @@ namespace syscall
                 return SYS_EINVAL;
             for (int i = (int)arg; i < (int)proc::max_open_files; ++i)
             {
-                if ((retfd = proc::k_pm.alloc_fd(p, f, i)) == i)
+                if (p->_ofile->_ofile_ptr[i] == nullptr)
                 {
+                    p->_ofile->_ofile_ptr[i] = f;
+                    p->_ofile->_fl_cloexec[i] = false; // 新的文件描述符默认不设置 CLOEXEC
+                    f->refcnt++;
+                    retfd = i;
                     printf("[SyscallHandler::sys_fcntl] Duplicating file descriptor %d to %d\n", fd, retfd);
                     printf("cur proc:%d\n", p->_pid);
-                    p->_ofile->_ofile_ptr[retfd] = f; // 复制的是旧 fd 对应的文件，而不是起始搜索下标 arg
-                    f->refcnt++;
-                    p->_ofile->_fl_cloexec[retfd] = false; // 新的文件描述符默认不设置 CLOEXEC
                     break;
                 }
             }
@@ -5528,11 +5559,12 @@ namespace syscall
                 return SYS_EINVAL;
             for (int i = (int)arg; i < (int)proc::max_open_files; ++i)
             {
-                if ((retfd = proc::k_pm.alloc_fd(p, f, i)) == i)
+                if (p->_ofile->_ofile_ptr[i] == nullptr)
                 {
+                    p->_ofile->_ofile_ptr[i] = f;
+                    p->_ofile->_fl_cloexec[i] = true; // 设置 CLOEXEC 标志
                     f->refcnt++;
-                    p->_ofile->_fl_cloexec[retfd] = true; // 设置 CLOEXEC 标志
-                    p->_ofile->_ofile_ptr[retfd] = f;
+                    retfd = i;
                     break;
                 }
             }
@@ -8412,13 +8444,6 @@ namespace syscall
         }
 
         fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
-        SOCKET onps_socket = socket_f->get_onps_socket();
-
-        if (onps_socket == INVALID_SOCKET)
-        {
-            printfRed("[SyscallHandler::sys_bind] socket未关联onps socket\n");
-            return SYS_EINVAL;
-        }
 
         // 检查地址长度
         if ((socklen_t)addrlen < sizeof(struct sockaddr_in))
@@ -8448,57 +8473,15 @@ namespace syscall
 
         printfCyan("[SyscallHandler::sys_bind] 解析地址: IP=0x%08x, Port=%d\n", ip_addr, port);
 
-        // 将IP地址转换为字符串（onps bind需要字符串形式的IP）
-        char ip_str[16];
-        const char *ip_str_ptr = nullptr;
-
-        if (ip_addr == 0)
-        {
-            // INADDR_ANY，让onps使用任意地址
-            ip_str_ptr = nullptr;
-        }
-        else
-        {
-            // 转换IP地址为字符串格式 (a.b.c.d)
-            uint8_t *ip_bytes = (uint8_t *)&ip_addr;
-            snprintf(ip_str, sizeof(ip_str), "%d.%d.%d.%d",
-                     ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]);
-            ip_str_ptr = ip_str;
-            printfCyan("[SyscallHandler::sys_bind] IP字符串: %s\n", ip_str);
-        }
-
-        // 调用onps的bind函数
-        int result = bind(onps_socket, ip_str_ptr, port);
-
-        if (result < 0)
-        {
-            // 获取onps错误信息
-            EN_ONPSERR onps_err = socket_get_last_error_code(onps_socket);
-            printfRed("[SyscallHandler::sys_bind] onps bind失败: %d\n", onps_err);
-
-            // 转换onps错误码为系统错误码
-            switch (onps_err)
-            {
-            case ERRPORTOCCUPIED:
-                return SYS_EADDRINUSE;
-            case ERRNOTBINDADDR:
-                return SYS_EINVAL;
-            case ERRUNSUPPIPPROTO:
-                return SYS_EPROTONOSUPPORT;
-            default:
-                return SYS_EINVAL;
-            }
-        }
-
-        // 同时调用socket_file的bind方法来更新状态
+        // AF_INET socket 的底层 ONPS 句柄采用懒创建；真正绑定时由 socket_file 统一创建并更新状态。
         int socket_file_result = socket_f->bind((const struct sockaddr *)addr, addrlen);
         if (socket_file_result < 0)
         {
             printfRed("[SyscallHandler::sys_bind] socket_file bind失败: %d\n", socket_file_result);
-            // onps bind已经成功，但socket_file状态更新失败，这不是致命错误
+            return socket_file_result;
         }
 
-        printfCyan("[SyscallHandler::sys_bind] bind成功, sockfd=%d, onps_socket=%d\n", sockfd, onps_socket);
+        printfCyan("[SyscallHandler::sys_bind] bind成功, sockfd=%d, onps_socket=%d\n", sockfd, socket_f->get_onps_socket());
         return 0;
     }
     uint64 SyscallHandler::sys_listen()
@@ -8607,6 +8590,10 @@ namespace syscall
             printfRed("[SyscallHandler::sys_accept] 无效的文件描述符: %d\n", sockfd);
             return SYS_EBADF;
         }
+        if (f->lwext4_file_struct.flags & O_PATH)
+        {
+            return SYS_EBADF;
+        }
 
         // 检查是否为socket文件
         if (f->_attrs.filetype != fs::FileTypes::FT_SOCKET)
@@ -8616,12 +8603,23 @@ namespace syscall
         }
 
         fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
+
+        if (socket_f->get_type() != fs::SocketType::TCP)
+        {
+            return SYS_EOPNOTSUPP;
+        }
+
+        if (socket_f->get_state() != fs::SocketState::LISTENING)
+        {
+            return SYS_EINVAL;
+        }
+
         SOCKET onps_socket = socket_f->get_onps_socket();
 
         if (onps_socket == INVALID_SOCKET)
         {
             printfRed("[SyscallHandler::sys_accept] socket未关联onps socket\n");
-            return SYS_EINVAL;
+            return SYS_EAGAIN;
         }
 
         // 从用户空间读取地址长度
@@ -14566,14 +14564,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_flock] Invalid file descriptor: %d\n", fd);
             return SYS_EBADF;
         }
-        if (operation & ~(LOCK_SH | LOCK_EX | LOCK_UN) ||
-            ((operation & (LOCK_SH)) && (operation & LOCK_EX)))
-        {
-            printfRed("[SyscallHandler::sys_flock] Invalid operation flags: %d\n", operation);
-            return SYS_EINVAL;
-        }
-
-        return uint64();
+        return fs::apply_bsd_flock(file, operation);
     }
 
     uint64 SyscallHandler::sys_epoll_create1()

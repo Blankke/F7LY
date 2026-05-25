@@ -702,7 +702,9 @@ struct ltp_testcase ltp_testcases[] = {
     // 约定：第一个 {NULL, false, false} 就是当前默认跑测例的结束标记。
     // 下面继续保留的注释清单只作为候选记录，想打开哪个测例就把它挪到结束标记前面。
     // 新开以前完全没跑过的测例时，优先按 tools/ltp/judge/ltp_rank.txt 的 total count 从高到低推进。
-    // {NULL, false, false},
+    {"accept01", true, true},
+    {"accept03", true, true},
+    {NULL, false, false},
     {"memfd_create01", true, true},
     {"splice07", true, true},
     {"epoll_ctl03", true, true},
