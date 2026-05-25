@@ -70,21 +70,11 @@ uservec:
         # load the address of usertrap(), p->trapframe->kernel_trap
         ld.d   $t0, $a0, 256
 
-        # 记住这次 trap 进入前正在使用的用户 PGDL。
-        # 返回用户态时如果还是同一个 PGDL，就不必整机 flush TLB；
-        # 这样同进程的 timer/syscall 往返不会反复把用户页 TLB 打空，
-        # LL/SC 也就不至于被这种“同地址空间来回切换”拖死。
-        csrrd  $t2, LOONGARCH_CSR_PGDL
-        csrwr  $t2, LOONGARCH_CSR_SAVE7
-
         # restore kernel page table from p->trapframe->kernel_pgdl
         ld.d   $t1, $a0, 280
         csrwr  $t1, LOONGARCH_CSR_PGDL
+        invtlb 0x0,$zero,$zero
 	    li.d   $fp, 0
-
-	    # csrrd  $t1, 0x0 
-	    # ori    $t1, $t1, 0x4 
-	    # csrwr  $t1, 0x0
 
 DBG_BREAK_READ_ESTAT:
 	    # csrrd  $a0, 0x5		# read estat 
@@ -110,10 +100,7 @@ userret:
 
         # switch to the user page table.
         csrwr  $a1, LOONGARCH_CSR_PGDL
-        csrrd  $t0, LOONGARCH_CSR_SAVE7
-        beq    $t0, $a1, 1f
         invtlb 0x0,$zero,$zero
-1:
 
         # put the saved user a0 in SAVE0, so we
         # can swap it with our a0 (TRAPFRAME) in the last step.
@@ -121,11 +108,9 @@ userret:
         csrwr  $t0, LOONGARCH_CSR_SAVE0
 
         # restore all but a0 from TRAPFRAME
-        # 注意把 t0/t1/t2/tp/sp 放到最后统一恢复。
-        # 目标是：一旦开始恢复用户 sp，就不再触碰任何用户态映射页，
-        # 这样即使长跑里时序很差，也不会在“内核态但已拿着用户栈”时
-        # 又因为读 trapframe 触发新的 kerneltrap。
         ld.d   $ra, $a0, 0
+        ld.d   $tp, $a0, 8
+        ld.d   $sp, $a0, 16
         ld.d   $a1, $a0, 32
         ld.d   $a2, $a0, 40
         ld.d   $a3, $a0, 48
@@ -133,6 +118,9 @@ userret:
         ld.d   $a5, $a0, 64
         ld.d   $a6, $a0, 72
         ld.d   $a7, $a0, 80
+        ld.d   $t0, $a0, 88
+        ld.d   $t1, $a0, 96
+        ld.d   $t2, $a0, 104
         ld.d   $t3, $a0, 112
         ld.d   $t4, $a0, 120
         ld.d   $t5, $a0, 128
@@ -151,38 +139,8 @@ userret:
         ld.d   $s7, $a0, 232
         ld.d   $s8, $a0, 240
 
-	# 把最后一批用户寄存器暂存在 scratch CSR。
-        # 这样在恢复用户 sp 之后不需要再访问 trapframe，也不会为了设置 LLBCTL
-        # 误覆盖用户 t0/t1/t2 之类的临时寄存器。
-        ld.d   $t0, $a0, 88
-        csrwr  $t0, LOONGARCH_CSR_SAVE2
-        ld.d   $t0, $a0, 96
-        csrwr  $t0, LOONGARCH_CSR_SAVE3
-        ld.d   $t0, $a0, 104
-        csrwr  $t0, LOONGARCH_CSR_SAVE4
-        ld.d   $t0, $a0, 8
-        csrwr  $t0, LOONGARCH_CSR_SAVE5
-        ld.d   $t0, $a0, 16
-        csrwr  $t0, LOONGARCH_CSR_SAVE6
-
 	# restore user a0, and save TRAPFRAME in SAVE0
         csrwr  $a0, LOONGARCH_CSR_SAVE0
-
-        # 从这里开始只做 CSR 到通用寄存器的搬运，不再触碰用户页。
-        # 为了缩短“置 KLO 到真正 ertn”之间的窗口，先恢复除 t0 外的最后一批寄存器，
-        # 再在临门一脚时置 KLO，最后只剩 1 条 csrrd + ertn。
-        # 这样即使长跑里刚好在用户态 ll/sc 的极窄窗口被 timer trap 打断，
-        # 也更不容易在返回用户态前把这次保留机会提前耗掉。
-        csrrd  $t1, LOONGARCH_CSR_SAVE3
-        csrrd  $t2, LOONGARCH_CSR_SAVE4
-        csrrd  $tp, LOONGARCH_CSR_SAVE5
-        csrrd  $sp, LOONGARCH_CSR_SAVE6
-
-        # LoongArch 的 ERTN 默认会清 LLBit。KLO 必须放在“所有用户页访问都结束”之后，
-        # 同时也要尽量贴近最终的 ertn。
-        li.d   $t0, 0x4
-        csrxchg $t0, $t0, LOONGARCH_CSR_LLBCTL
-        csrrd  $t0, LOONGARCH_CSR_SAVE2
 
         # return to user mode and user pc.
         # usertrapret() set up prmd and era.

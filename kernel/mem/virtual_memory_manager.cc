@@ -241,7 +241,23 @@ namespace mem
                 return false;
             }
             if (pte.is_valid())
+            {
+                bool is_kernel_pt = !k_pagetable.is_null() && pt.get_base() == k_pagetable.get_base();
+                bool is_user_va = a < TRAPFRAME;
+                if (!is_kernel_pt && is_user_va)
+                {
+                    proc::Pcb *cur = proc::k_pm.get_cur_pcb();
+                    printfRed("[mappages] reject user remap: va=%p new_pa=%p old_pte=%p pid=%d tid=%d pt=%p\n",
+                              (void *)a,
+                              (void *)pa,
+                              (void *)pte.get_data(),
+                              cur ? cur->_pid : -1,
+                              cur ? cur->_tid : -1,
+                              (void *)pt.get_base());
+                    return false;
+                }
                 panic("mappages: remap, va=0x%x, pa=0x%x, PteData:%x", a, pa, pte.get_data());
+            }
 #ifdef RISCV
             pte.set_data(PA2PTE(PGROUNDDOWN(riscv::virt_to_phy_address(pa))) |
                          flags |
@@ -534,13 +550,15 @@ namespace mem
     {
         uint64 page_va = PGROUNDDOWN(va);
 
-        // LoongArch 上可能会先以 fault 形式把“已经存在的用户页”带进来，
-        // 比如 clone 子任务第一次碰到刚复制好的 guarded stack。
-        // 这时如果继续走 map_pages()，就会把正常可恢复的 fault 升级成 remap panic。
-        // 因此先检查叶子 PTE；若映射已经存在且权限满足，直接复用即可。
-        Pte existing_pte = pt.walk(page_va, false);
-        if (!existing_pte.is_null() && existing_pte.is_valid())
-        {
+        // 线程并发 fault 同一页时，另一个线程可能已经先一步把叶子 PTE 补好了。
+        // 这类场景不应该升级成 remap panic，而应该把当前 fault 视为“已经有人补完页”。
+        auto reuse_existing_mapping_if_ready = [&]() -> bool {
+            Pte existing_pte = pt.walk(page_va, false);
+            if (existing_pte.is_null() || !existing_pte.is_valid())
+            {
+                return false;
+            }
+
 #ifdef RISCV
             bool user_ok = existing_pte.is_user();
 #elif defined(LOONGARCH)
@@ -584,7 +602,7 @@ namespace mem
                     invalidate_loongarch_user_page_pair(page_va);
                 }
 #endif
-                return 0;
+                return true;
             }
 
             if (user_ok)
@@ -592,6 +610,16 @@ namespace mem
                 printfRed("[allocate_vma_page] existing mapping lacks requested permission va=%p access=%d pte=%p\n",
                           (void *)page_va, access_type, (void *)existing_pte.get_data());
             }
+            return false;
+        };
+
+        // LoongArch 上可能会先以 fault 形式把“已经存在的用户页”带进来，
+        // 比如 clone 子任务第一次碰到刚复制好的 guarded stack。
+        // 这时如果继续走 map_pages()，就会把正常可恢复的 fault 升级成 remap panic。
+        // 因此先检查叶子 PTE；若映射已经存在且权限满足，直接复用即可。
+        if (reuse_existing_mapping_if_ready())
+        {
+            return 0;
         }
 
         // 检查VMA权限
@@ -678,6 +706,10 @@ namespace mem
             }
 
             uint64 shared_pa = seg.phy_addrs + page_offset;
+            if (reuse_existing_mapping_if_ready())
+            {
+                return 0;
+            }
             if (!this->map_pages(pt, page_va, PGSIZE, shared_pa, pte_flags))
             {
                 printfRed("[allocate_vma_page] map shared page failed: shmid=%d va=%p pa=%p\n",
@@ -749,6 +781,14 @@ namespace mem
             // 匿名映射：页面已通过clear_page初始化为0
 
             printfCyan("[allocate_vma_page] handling anonymous mapping at %p\n", va);
+        }
+
+        // 在本线程分配/读盘期间，另一个线程可能已经把同一页补好了。
+        // 这时直接复用现有映射，并回收掉本次多余分配的物理页。
+        if (reuse_existing_mapping_if_ready())
+        {
+            k_pmm.free_page(pa);
+            return 0;
         }
 
         // 添加页面映射

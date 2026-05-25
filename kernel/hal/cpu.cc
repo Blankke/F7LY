@@ -9,7 +9,15 @@ Cpu k_cpus[NUMCPU];
 // ---- public:
 Cpu *Cpu::get_cpu()
 {
-	uint64 x = read_tp();
+	uint64 x;
+#ifdef RISCV
+	x = read_tp();
+#elif defined(LOONGARCH)
+	// LoongArch 长跑里，tp 在 userret/信号返回等极窄窗口可能暂时带着用户 TLS。
+	// 当前 CPU 槽位必须直接按 CSR_CPUID 取，避免把这个瞬时寄存器态扩散到
+	// get_cur_pcb()/锁 owner/中断嵌套计数等通用路径上。
+	x = r_csr_cpuid();
+#endif
 	return &k_cpus[x];
 }
 

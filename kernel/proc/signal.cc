@@ -10,6 +10,11 @@ namespace
 {
     constexpr uint64 k_signal_stack_align = 16;
 
+    bool is_entry_static_task(const proc::Pcb *p)
+    {
+        return p != nullptr && strncmp(p->_name, "entry-static.exe", 16) == 0;
+    }
+
     uint64 align_down(uint64 value, uint64 align)
     {
         return value & ~(align - 1);
@@ -787,12 +792,29 @@ namespace proc
                     return;
                 }
                 frame->tf = *(p->_trapframe);
+                if (is_entry_static_task(p))
+                {
+#ifdef RISCV
+                    void *saved_pc = (void *)frame->tf.epc;
+#elif defined(LOONGARCH)
+                    void *saved_pc = (void *)frame->tf.era;
+#endif
+                    printfYellow("[do_handle] entry-static signal: pid=%d tid=%d sig=%d handler=%p flags=%p saved_pc=%p saved_sp=%p\n",
+                                 p->_pid,
+                                 p->_tid,
+                                 signum,
+                                 act->sa_handler,
+                                 (void *)act->sa_flags,
+                                 saved_pc,
+                                 (void *)frame->tf.sp);
+                }
 #ifdef RISCV
                 p->_trapframe->ra = (uint64)(SIG_TRAMPOLINE + ((uint64)sig_handler - (uint64)sig_trampoline));
 #elif LOONGARCH
                 p->_trapframe->ra = (uint64)SIG_TRAMPOLINE;
-                printf("sig: %p\n", SIG_TRAMPOLINE);
 #endif
+
+                bool sigframe_already_finalized = false;
 
                 // 检查是否需要三参数信号处理 (SA_SIGINFO)
                 if (act->sa_flags & (uint64)SigActionFlags::SIGINFO)
@@ -937,6 +959,7 @@ namespace proc
 
                     printf("[do_handle] SA_SIGINFO setup complete: sp=%p, a1=%p, a2=%p\n",
                            p->_trapframe->sp, linuxinfo_sp, usercontext_sp);
+                    sigframe_already_finalized = true;
                 }
                 else
                 {
@@ -983,14 +1006,20 @@ namespace proc
 #elif LOONGARCH
                 p->_trapframe->era = (uint64)(act->sa_handler);
 #endif
-                // 哨兵
-                uint64 guard_sp = p->get_trapframe()->sp - sizeof(uint64);
-                p->_trapframe->sp = guard_sp;
-
-                if (mem::k_vmm.copy_out(*p->get_pagetable(), guard_sp, &guard, sizeof(guard)) < 0)
+                // 单参数信号的返回标记在这里统一补齐。
+                // SA_SIGINFO 路径前面已经把 guard/has_siginfo/ucontext 全部铺好，
+                // 这里如果再额外压一个 guard，会把 sig_return() 的判别槽位顶歪，
+                // 最终把三参数信号误判成普通信号返回路径。
+                if (!sigframe_already_finalized)
                 {
-                    panic("[do_handle] Failed to write return marker to user stack");
-                    return;
+                    uint64 guard_sp = p->get_trapframe()->sp - sizeof(uint64);
+                    p->_trapframe->sp = guard_sp;
+
+                    if (mem::k_vmm.copy_out(*p->get_pagetable(), guard_sp, &guard, sizeof(guard)) < 0)
+                    {
+                        panic("[do_handle] Failed to write return marker to user stack");
+                        return;
+                    }
                 }
                 if (p->sig_frame)
                 {
@@ -1072,6 +1101,32 @@ namespace proc
 #ifdef RISCV
                     p->_trapframe->epc = uctx.mcontext.gp.x[17];
 #elif LOONGARCH
+                    // 某些取消/条件变量压力测里，如果用户态栈上的 ucontext 已经被破坏，
+                    // 这里继续照抄一个 pc=0 的上下文只会把线程立刻送去地址 0 再次 fault。
+                    // 为了保持内核与后续回归链的鲁棒性，显式识别这类“明显非法”的恢复目标，
+                    // 并回退到内核在送信号前保存的 trapframe。
+                    if (uctx.mcontext.pc == 0 || uctx.mcontext.gregs[3] == 0)
+                    {
+                        printfRed("[sig_return] invalid loongarch ucontext, fallback to saved trapframe: pid=%d tid=%d pc=%p sp=%p saved_pc=%p saved_sp=%p cur_user_sp=%p\n",
+                                  p->_pid,
+                                  p->_tid,
+                                  (void *)uctx.mcontext.pc,
+                                  (void *)uctx.mcontext.gregs[3],
+                                  (void *)p->_trapframe->era,
+                                  (void *)p->_trapframe->sp,
+                                  (void *)user_sp);
+                        return;
+                    }
+                    if (is_entry_static_task(p))
+                    {
+                        printfYellow("[sig_return] entry-static restore: pid=%d tid=%d pc=%p sp=%p sigmask=%p cur_user_sp=%p\n",
+                                     p->_pid,
+                                     p->_tid,
+                                     (void *)uctx.mcontext.pc,
+                                     (void *)uctx.mcontext.gregs[3],
+                                     (void *)uctx.sigmask.sig[0],
+                                     (void *)user_sp);
+                    }
                     p->_sigmask = uctx.sigmask.sig[0];
                     restore_loongarch_trapframe_from_ucontext(*p->_trapframe, uctx);
 #endif

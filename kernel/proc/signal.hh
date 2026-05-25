@@ -2,6 +2,7 @@
 
 #include "types.hh"
 #include "trapframe.hh"
+#include <stddef.h>
 
 namespace proc
 {
@@ -135,7 +136,11 @@ namespace proc
                 uint64 pc;         // 对应用户态 ucontext_t.uc_mcontext.__pc / MC_PC
                 uint64 gregs[32];  // 对应 __gregs[32]
                 uint32 flags;      // 对应 __flags
-                uint32 padding;    // 保持后续扩展上下文的 16 字节对齐
+                // Linux LoongArch ABI 在这里不是额外的 pad 字段，而是一个按 16 字节对齐
+                // 的可扩展上下文尾部。当前我们不保存 FPU/LSX/LASX 扩展上下文，但布局
+                // 仍要和用户态头文件保持完全一致，否则 pthread/signal 相关测例读取
+                // ucontext_t 时会把 mcontext 解析错位。
+                uint64 extcontext[0] __attribute__((aligned(16)));
             };
 
             struct usercontext
@@ -144,9 +149,18 @@ namespace proc
                 usercontext *link;
                 signalstack stack;
                 user_sigset sigmask;
+                // musl 的 loongarch64 头文件显式保留了这个 pad 字段；
+                // glibc 虽然字段名不同，但最终也会在 uc_mcontext 前留出同样的
+                // 8 字节空洞，以满足 16 字节对齐要求。
                 long uc_pad;
                 machinecontext mcontext;
             };
+
+            static_assert(sizeof(signalstack) == 24, "LoongArch signalstack ABI mismatch");
+            static_assert(sizeof(user_sigset) == 128, "LoongArch sigset ABI mismatch");
+            static_assert(sizeof(machinecontext) == 272, "LoongArch mcontext ABI mismatch");
+            static_assert(offsetof(usercontext, mcontext) == 176, "LoongArch ucontext mcontext offset mismatch");
+            static_assert(sizeof(usercontext) == 448, "LoongArch ucontext ABI mismatch");
 #else
             struct generalregs{
                 uint64 x[23]; // 通用寄存器 x0-x31

@@ -764,9 +764,24 @@ namespace proc
                 continue;
             }
 
-            printf("Process[%d]: pid=%d tid=%d name='%s' state=%d parent_pid=%d pgid=%d sid=%d\n",
-                   i, p._pid, p._tid, p._name, (int)p._state,
-                   p._parent ? p._parent->_pid : -1, p._pgid, p._sid);
+            void *user_pc = nullptr;
+            if (p.get_trapframe())
+            {
+#ifdef LOONGARCH
+                user_pc = (void *)p.get_trapframe()->era;
+#else
+                user_pc = (void *)p.get_trapframe()->epc;
+#endif
+            }
+
+            printf("Process[%d]: pid=%d tid=%d tgid=%d name='%s' state=%d parent_pid=%d pgid=%d sid=%d mm=%p tf=%p era=%p futex=%p clear_tid=%p\n",
+                   i, p._pid, p._tid, p._tgid, p._name, (int)p._state,
+                   p._parent ? p._parent->_pid : -1, p._pgid, p._sid,
+                   p.get_memory_manager(),
+                   p.get_trapframe(),
+                   user_pc,
+                   p._futex_addr,
+                   (void *)p._clear_tid_addr);
 
             switch (p._state)
             {
@@ -776,15 +791,15 @@ namespace proc
                 break;
             case ProcState::RUNNABLE:
                 running_count++;
-                printf("  -> RUNNABLE\n");
+                printf("  -> RUNNABLE: chan=%p futex=%p\n", p._chan, p._futex_addr);
                 break;
             case ProcState::RUNNING:
                 running_count++;
-                printf("  -> RUNNING\n");
+                printf("  -> RUNNING: chan=%p futex=%p\n", p._chan, p._futex_addr);
                 break;
             case ProcState::SLEEPING:
                 sleeping_count++;
-                printf("  -> SLEEPING: chan=%p\n", p._chan);
+                printf("  -> SLEEPING: chan=%p futex=%p\n", p._chan, p._futex_addr);
                 break;
             case ProcState::USED:
                 used_count++;
@@ -821,7 +836,14 @@ namespace proc
 
     int ProcessManager::get_cur_cpuid()
     {
+#ifdef LOONGARCH
+        // LoongArch 下 tp 主要被我们借作“当前 hart 索引”使用，
+        // 但在 userret 的极窄窗口里它可能短暂带着用户线程指针。
+        // 对外暴露当前 CPU 编号时直接读 CSR_CPUID，避免把这个瞬时值传播出去。
+        return static_cast<int>(r_csr_cpuid());
+#else
         return r_tp();
+#endif
     }
 
     void ProcessManager::user_init()
@@ -2340,10 +2362,9 @@ namespace proc
     }
     void ProcessManager::wakeup(void *chan)
     {
-        Pcb *p;
-
-        for (p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
+        for (uint i = 0; i < num_process; ++i)
         {
+            Pcb *p = &k_proc_pool[i];
             if (p != k_pm.get_cur_pcb() && p->_state != ProcState::UNUSED)
             {
                 p->_lock.acquire();
@@ -2357,10 +2378,10 @@ namespace proc
     }
     int ProcessManager::wakeup2(uint64 uaddr, int val, void *uaddr2, int val2)
     {
-        Pcb *p;
         int count1 = 0, count2 = 0;
-        for (p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
+        for (uint i = 0; i < num_process; ++i)
         {
+            Pcb *p = &k_proc_pool[i];
             p->_lock.acquire();
             bool is_futex_waiter = (uint64)p->_futex_addr == uaddr &&
                                    (p->_state == SLEEPING || p->_state == RUNNABLE);

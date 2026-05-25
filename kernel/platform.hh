@@ -439,6 +439,14 @@ r_tp()
 }
 
 static inline uint32
+r_csr_cpuid()
+{
+  uint32 x;
+  asm volatile("csrrd %0, 0x20" : "=r"(x));
+  return x;
+}
+
+static inline uint32
 r_csr_crmd()
 {
   uint32 x;
