@@ -24,11 +24,7 @@
 #include "fs/buf.hh"
 #include "devs/device_manager.hh"
 #include "devs/block_device.hh"
-#ifdef RISCV
-#include "fs/drivers/riscv/virtio2.hh"
-#elif defined LOONGARCH
-#include "fs/drivers/riscv/virtio2.hh"
-#endif
+#include "fs/drivers/virtio_blk.hh"
 struct {
   SpinLock lock;
   struct buf buf[NBUF];
@@ -194,5 +190,4 @@ bunpin(struct buf *b) {
   b->refcnt--;
   bcache.lock.release();
 }
-
 

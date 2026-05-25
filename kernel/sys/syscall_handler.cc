@@ -118,6 +118,115 @@ namespace syscall
         constexpr int k_prio_process = 0;
         constexpr int k_prio_pgrp = 1;
         constexpr int k_prio_user = 2;
+
+        constexpr int64 k_short_timeout_busy_wait_us = static_cast<int64>(tmm::tick_period_us);
+
+        /**
+         * @brief 在“超时极短但不能整整睡一个 tick”时，使用高分辨率 deadline 做短暂让步等待。
+         *
+         * iozone 的 throughput barrier 会反复调用 `select(0, ..., 1us)`。
+         * 如果把这类等待直接向上取整成一个完整 tick，在当前内核里会从微秒级
+         * 被放大到毫秒甚至百毫秒级，最终表现为多进程测试“像卡死一样慢”。
+         */
+        int wait_short_timeout(proc::Pcb *proc, uint64 timeout_us)
+        {
+            if (timeout_us == 0)
+            {
+                return 0;
+            }
+
+            uint64 start_cycles = tmm::get_hw_time_stamp();
+            uint64 budget_cycles = tmm::usec_to_time_stamp(timeout_us);
+            if (budget_cycles == 0)
+            {
+                budget_cycles = 1;
+            }
+
+            while (true)
+            {
+                if ((proc->_signal & ~proc->_sigmask) != 0)
+                {
+                    return SYS_EINTR;
+                }
+
+                uint64 now_cycles = tmm::get_hw_time_stamp();
+                if (now_cycles - start_cycles >= budget_cycles)
+                {
+                    return 0;
+                }
+
+                proc::k_scheduler.yield();
+            }
+        }
+
+        /**
+         * @brief 为 select/pselect/ppoll 的“纯超时等待”场景提供统一睡眠逻辑。
+         *
+         * 这里区分两类超时：
+         * 1. 小于一个 tick 的短等待：走高分辨率 deadline + yield，避免被粗粒度 tick 放大；
+         * 2. 更长的等待：先按 tick 粗睡，再用高分辨率尾巴补齐剩余时间。
+         */
+        int wait_timeout_or_signal(proc::Pcb *proc, int64 timeout_us)
+        {
+            if (proc == nullptr)
+            {
+                return SYS_ESRCH;
+            }
+
+            if (timeout_us == 0)
+            {
+                return 0;
+            }
+
+            if (timeout_us < 0)
+            {
+                while ((proc->_signal & ~proc->_sigmask) == 0)
+                {
+                    int sleep_ret = tmm::k_tm.sleep_n_ticks(1);
+                    if (sleep_ret == SYS_EINTR || (proc->_signal & ~proc->_sigmask) != 0)
+                    {
+                        return SYS_EINTR;
+                    }
+                    if (sleep_ret < 0 && sleep_ret != -2)
+                    {
+                        return sleep_ret;
+                    }
+                }
+                return SYS_EINTR;
+            }
+
+            if (timeout_us <= k_short_timeout_busy_wait_us)
+            {
+                return wait_short_timeout(proc, static_cast<uint64>(timeout_us));
+            }
+
+            uint64 coarse_ticks = static_cast<uint64>(timeout_us) / tmm::tick_period_us;
+            if (coarse_ticks > 0)
+            {
+                if (coarse_ticks > static_cast<uint64>(INT_MAX))
+                {
+                    coarse_ticks = static_cast<uint64>(INT_MAX);
+                }
+
+                int sleep_ret = tmm::k_tm.sleep_n_ticks(static_cast<int>(coarse_ticks));
+                if (sleep_ret == SYS_EINTR || (proc->_signal & ~proc->_sigmask) != 0)
+                {
+                    return SYS_EINTR;
+                }
+                if (sleep_ret < 0 && sleep_ret != -2)
+                {
+                    return sleep_ret;
+                }
+                timeout_us -= static_cast<int64>(coarse_ticks * tmm::tick_period_us);
+            }
+
+            if (timeout_us <= 0)
+            {
+                return 0;
+            }
+
+            return wait_short_timeout(proc, static_cast<uint64>(timeout_us));
+        }
         constexpr int k_linux_nice_min = proc::highest_proc_prio;
         constexpr int k_linux_nice_max = proc::lowest_proc_prio;
 
@@ -252,6 +361,7 @@ namespace syscall
         }
 
         constexpr size_t k_syscall_io_chunk_size = 64 * 1024;
+        constexpr size_t k_syscall_io_inline_buffer_size = 2 * 1024;
 
         inline size_t min_size(size_t lhs, size_t rhs)
         {
@@ -273,6 +383,188 @@ namespace syscall
             {
                 mem::k_pmm.free_page(ptr);
             }
+        }
+
+        struct KernelIovec
+        {
+            uint64 base;
+            size_t len;
+        };
+
+        class ScopedSyscallBuffer
+        {
+        public:
+            explicit ScopedSyscallBuffer(size_t size)
+            {
+                if (size == 0)
+                {
+                    size = 1;
+                }
+
+                if (size <= k_syscall_io_inline_buffer_size)
+                {
+                    data_ = inline_buffer_;
+                    heap_backed_ = false;
+                }
+                else
+                {
+                    data_ = static_cast<char *>(alloc_syscall_temp_buffer(size));
+                    heap_backed_ = true;
+                }
+            }
+
+            ~ScopedSyscallBuffer()
+            {
+                if (heap_backed_)
+                {
+                    free_syscall_temp_buffer(data_);
+                }
+            }
+
+            bool valid() const
+            {
+                return data_ != nullptr;
+            }
+
+            char *data()
+            {
+                return data_;
+            }
+
+        private:
+            alignas(16) char inline_buffer_[k_syscall_io_inline_buffer_size] = {};
+            char *data_ = nullptr;
+            bool heap_backed_ = false;
+        };
+
+        int copy_user_iovecs(mem::PageTable &pt, uint64 iov_ptr, int iovcnt, KernelIovec *iovecs, size_t *total_len)
+        {
+            size_t bytes = 0;
+            struct UserIovec
+            {
+                uint64 iov_base;
+                size_t iov_len;
+            };
+
+            for (int i = 0; i < iovcnt; ++i)
+            {
+                UserIovec user_iov{};
+                uint64 user_iov_addr = iov_ptr + static_cast<uint64>(i) * sizeof(UserIovec);
+                if (mem::k_vmm.copy_in(pt, &user_iov, user_iov_addr, sizeof(user_iov)) < 0)
+                {
+                    return -EFAULT;
+                }
+                if (user_iov.iov_len > static_cast<size_t>(0x7FFFFFFF) - bytes)
+                {
+                    return -EINVAL;
+                }
+
+                iovecs[i].base = user_iov.iov_base;
+                iovecs[i].len = user_iov.iov_len;
+                bytes += user_iov.iov_len;
+            }
+
+            if (total_len != nullptr)
+            {
+                *total_len = bytes;
+            }
+            return 0;
+        }
+
+        long write_from_user_iovecs(fs::file *f, mem::PageTable &pt, const KernelIovec *iovecs, int iovcnt, long *explicit_off)
+        {
+            ScopedSyscallBuffer buffer(k_syscall_io_chunk_size);
+            if (!buffer.valid())
+            {
+                return -ENOMEM;
+            }
+
+            long total_written = 0;
+            for (int i = 0; i < iovcnt; ++i)
+            {
+                size_t iov_done = 0;
+                while (iov_done < iovecs[i].len)
+                {
+                    size_t want = min_size(iovecs[i].len - iov_done, k_syscall_io_chunk_size);
+                    if (mem::k_vmm.copy_in(pt, buffer.data(), iovecs[i].base + iov_done, want) < 0)
+                    {
+                        return total_written > 0 ? total_written : -EFAULT;
+                    }
+
+                    long write_off = explicit_off == nullptr ? -1 : *explicit_off;
+                    bool upgrade = explicit_off == nullptr;
+                    long rc = f->write(reinterpret_cast<ulong>(buffer.data()), want, write_off, upgrade);
+                    if (rc < 0)
+                    {
+                        return total_written > 0 ? total_written : rc;
+                    }
+                    if (rc == 0)
+                    {
+                        return total_written;
+                    }
+
+                    total_written += rc;
+                    iov_done += static_cast<size_t>(rc);
+                    if (explicit_off != nullptr)
+                    {
+                        *explicit_off += rc;
+                    }
+                    if (static_cast<size_t>(rc) < want)
+                    {
+                        return total_written;
+                    }
+                }
+            }
+
+            return total_written;
+        }
+
+        long read_to_user_iovecs(fs::file *f, mem::PageTable &pt, const KernelIovec *iovecs, int iovcnt, long *explicit_off)
+        {
+            ScopedSyscallBuffer buffer(k_syscall_io_chunk_size);
+            if (!buffer.valid())
+            {
+                return -ENOMEM;
+            }
+
+            long total_read = 0;
+            for (int i = 0; i < iovcnt; ++i)
+            {
+                size_t iov_done = 0;
+                while (iov_done < iovecs[i].len)
+                {
+                    size_t want = min_size(iovecs[i].len - iov_done, k_syscall_io_chunk_size);
+                    long read_off = explicit_off == nullptr ? f->get_file_offset() : *explicit_off;
+                    bool upgrade = explicit_off == nullptr;
+                    long rc = f->read(reinterpret_cast<uint64>(buffer.data()), want, read_off, upgrade);
+                    if (rc < 0)
+                    {
+                        return total_read > 0 ? total_read : rc;
+                    }
+                    if (rc == 0)
+                    {
+                        return total_read;
+                    }
+
+                    if (mem::k_vmm.copy_out(pt, iovecs[i].base + iov_done, buffer.data(), rc) < 0)
+                    {
+                        return total_read > 0 ? total_read : -EFAULT;
+                    }
+
+                    total_read += rc;
+                    iov_done += static_cast<size_t>(rc);
+                    if (explicit_off != nullptr)
+                    {
+                        *explicit_off += rc;
+                    }
+                    if (static_cast<size_t>(rc) < want)
+                    {
+                        return total_read;
+                    }
+                }
+            }
+
+            return total_read;
         }
 
         int validate_linux_clone_flags(uint64 flags)
@@ -1374,33 +1666,10 @@ namespace syscall
             return -EAGAIN; // 操作被文件锁阻止
         }
 
-        // printfGreen("[sys_read] fd: %d, n: %d, buf: %p\n", fd, n, buf);
-        // printfCyan("[sys_read] Try read,f:%x,buf:%x", f, f);
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
-
-        char *k_buf = (char *)mem::k_pmm.kmalloc(n + 10);
-        if (!k_buf)
-        {
-            printfRed("[SyscallHandler::sys_read] Error allocating kernel buffer\n");
-            return -ENOMEM; // 内存不足
-        }
-        int ret = f->read((uint64)k_buf, n, f->get_file_offset(), true);
-        if (ret < 0)
-        {
-            printfRed("[SyscallHandler::sys_read] Error reading file descriptor %d: %d\n", fd, ret);
-            mem::k_pmm.free_page(k_buf);
-            return ret;
-        }
-        static int string_length = 0;
-        string_length += strlen(k_buf);
-        // printf("[sys_read] read %d characters in total\n", string_length);
-
-        if (mem::k_vmm.copy_out(*pt, buf, k_buf, ret) < 0)
-            return -EFAULT;
-
-        mem::k_pmm.free_page(k_buf);
-        return ret;
+        KernelIovec iovec = {buf, static_cast<size_t>(n)};
+        return read_to_user_iovecs(f, *pt, &iovec, 1, nullptr);
     }
     uint64 SyscallHandler::sys_kill()
     {
@@ -2072,35 +2341,10 @@ namespace syscall
             return SYS_EAGAIN; // 操作被文件锁阻止
         }
 
-        // if (fd > 2)
-        //     printfRed("invoke sys_write\n");
-        // printf("syscall_write: fd: %d, p: %p, n: %d\n", fd, (void *)p, n);
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = proc->get_pagetable();
-        char *buf = (char *)mem::k_pmm.kmalloc(n + 10);
-        if (!buf)
-        {
-            printfRed("[SyscallHandler::sys_write] Error allocating memory for buffer\n");
-            return -ENOMEM; // 内存分配失败
-        }
-        // {
-        //     mem::UserspaceStream uspace((void *)p, n + 1, pt);
-        //     uspace.open();
-        //     mem::UsRangeDesc urd = std::make_tuple((u8 *)buf, (ulong)n + 1);
-        //     uspace >> urd;
-        //     uspace.close();
-        // }
-        // 这个实现也可以
-        if (mem::k_vmm.copy_in(*pt, buf, p, n) < 0)
-        {
-            printfRed("[SyscallHandler::sys_write] Error copying data from user space\n");
-            mem::k_pmm.free_page(buf);
-            return -1;
-        }
-
-        long rc = f->write((ulong)buf, n, -1, true);
-        mem::k_pmm.free_page(buf);
-        return rc;
+        KernelIovec iovec = {p, static_cast<size_t>(n)};
+        return write_from_user_iovecs(f, *pt, &iovec, 1, nullptr);
     }
 
     uint64 SyscallHandler::sys_unlinkat()
@@ -2649,7 +2893,6 @@ namespace syscall
         int fd;
         if (_arg_int(0, fd) < 0)
             return -1;
-        printfCyan("[SyscallHandler::sys_close] fd: %d\n", fd);
         return proc::k_pm.close(fd);
     }
     uint64 SyscallHandler::sys_mknod()
@@ -2675,8 +2918,6 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_clone()
     {
-        TODO("TBF")
-        // printfYellow("sys_clone\n");
         int flags;
         uint64 stack, tls, ctid, ptid;
         _arg_int(0, flags);
@@ -2697,15 +2938,12 @@ namespace syscall
         tls = cgtls;
 
         uint64 clone_pid;
-        printfCyan("[SyscallHandler::sys_clone] flags: %p, stack: %p, ptid: %p, tls: %p, ctid: %p\n",
-                   flags, (void *)stack, (void *)ptid, (void *)tls, (void *)ctid);
         int flag_ret = validate_linux_clone_flags((uint64)flags);
         if (flag_ret < 0)
         {
             return flag_ret;
         }
         clone_pid = proc::k_pm.clone(flags, stack, ptid, tls, ctid);
-        // printfRed("[SyscallHandler::sys_clone] pid: [%d] tid: [%d] name: %s clone_pid: [%d]\n", proc::k_pm.get_cur_pcb()->_pid, proc::k_pm.get_cur_pcb()->_tid, proc::k_pm.get_cur_pcb()->_name, clone_pid);
         return clone_pid;
     }
     uint64 SyscallHandler::sys_umount2()
@@ -2880,8 +3118,6 @@ namespace syscall
             printfRed("[SyscallHandler::sys_mmap] Error fetching mmap arguments\n");
             return -syscall::SYS_EINVAL;
         }
-        printfYellow("[SyscallHandler::sys_mmap] addr: %p, map_size: %u, prot: %d, flags: %d, fd: %d, offset: %u\n",
-                     (void *)addr, map_size, prot, flags, fd, offset);
         fs::file *f = nullptr;
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         f = p->get_open_file(fd);
@@ -2914,8 +3150,6 @@ namespace syscall
             // 检查是否是 memfd 文件
             if (f->is_memfd())
             {
-                printfCyan("[SyscallHandler::sys_mmap] Handling memfd file: %s\n", f->_path_name.c_str());
-
                 // 检查 memfd 的 seals
                 if ((flags & MAP_SHARED) && (prot & PROT_WRITE) && (f->memfd_seals() & F_SEAL_WRITE))
                 {
@@ -2937,7 +3171,6 @@ namespace syscall
 
                 if (offset + map_size > memfd_size)
                 {
-                    printfYellow("[SyscallHandler::sys_mmap] mapping extends beyond file size, will be zero-filled\n");
                 }
             }
         }
@@ -3898,76 +4131,23 @@ namespace syscall
         //             fd, (void *)iov_ptr, iovcnt);
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = proc->get_pagetable();
-
-        // Check for overflow in total length and validate iovec entries
-        size_t total_len = 0;
-        for (int i = 0; i < iovcnt; i++)
+        size_t vec_bytes = sizeof(KernelIovec) * static_cast<size_t>(iovcnt);
+        KernelIovec *iovecs = static_cast<KernelIovec *>(alloc_syscall_temp_buffer(vec_bytes));
+        if (iovecs == nullptr)
         {
-            struct iovec iov;
-            uint64 iov_addr = iov_ptr + i * sizeof(struct iovec);
-
-            // Read iovec structure from user space
-            if (mem::k_vmm.copy_in(*pt, &iov, iov_addr, sizeof(struct iovec)) < 0)
-            {
-                return SYS_EFAULT; // Bad address
-            }
-
-            // Check for overflow in total length
-            if (iov.iov_len > (size_t)0x7FFFFFFF - total_len)
-            {
-                return SYS_EINVAL; // Total length would overflow
-            }
-            total_len += iov.iov_len;
+            return SYS_ENOMEM;
         }
 
-        uint64 writebytes = 0;
-
-        for (int i = 0; i < iovcnt; i++)
+        int copy_ret = copy_user_iovecs(*pt, iov_ptr, iovcnt, iovecs, nullptr);
+        if (copy_ret < 0)
         {
-            struct iovec iov;
-            uint64 iov_addr = iov_ptr + i * sizeof(struct iovec);
-
-            // Read iovec structure from user space (again, but this time for actual processing)
-            if (mem::k_vmm.copy_in(*pt, &iov, iov_addr, sizeof(struct iovec)) < 0)
-            {
-                return SYS_EFAULT; // Bad address
-            }
-
-            if (iov.iov_len == 0)
-                continue;
-
-            char *buf = (char *)mem::k_pmm.kmalloc(iov.iov_len);
-            if (!buf)
-            {
-                return SYS_ENOMEM; // Out of memory
-            }
-
-            // Copy data from user space
-            if (mem::k_vmm.copy_in(*pt, buf, (uint64)iov.iov_base, iov.iov_len) < 0)
-            {
-                mem::k_pmm.free_page(buf);
-                return SYS_EFAULT; // Bad address
-            }
-
-            long rc = f->write((ulong)buf, iov.iov_len, f->get_file_offset(), true);
-            mem::k_pmm.free_page(buf);
-
-            if (rc < 0)
-            {
-                printfRed("[SyscallHandler::sys_writev] 写入文件失败\n");
-                return rc; // Return the actual error from file write
-            }
-
-            writebytes += rc;
-
-            // If we wrote less than requested, stop processing remaining buffers
-            if (rc < (long)iov.iov_len)
-            {
-                break;
-            }
+            free_syscall_temp_buffer(iovecs);
+            return copy_ret;
         }
 
-        return writebytes;
+        long ret = write_from_user_iovecs(f, *pt, iovecs, iovcnt, nullptr);
+        free_syscall_temp_buffer(iovecs);
+        return ret;
     }
     uint64 SyscallHandler::SyscallHandler::sys_prlimit64()
     {
@@ -6263,6 +6443,23 @@ namespace syscall
             sigmask_changed = true;
         }
 
+        // poll/ppoll 在 nfds==0 时等价于“纯超时睡眠直到信号或超时”。
+        // 这里直接走定时器睡眠，避免退化成单核上的 yield 自旋。
+        if (nfds == 0)
+        {
+            int wait_ret = wait_timeout_or_signal(proc,
+                                                  timeout_ms < 0 ? -1 : static_cast<int64>(timeout_ms) * 1000LL);
+            if (sigmask_changed)
+            {
+                proc->_sigmask = old_sigmask.sig[0];
+            }
+            if (wait_ret == SYS_EINTR)
+            {
+                return -EINTR;
+            }
+            return 0;
+        }
+
         // 轮询循环
         uint64 start_time = tmm::k_tm.get_ticks();
         uint64 timeout_ticks = (timeout_ms == -1) ? UINT64_MAX : 
@@ -6357,7 +6554,8 @@ namespace syscall
                 break;
             }
 
-            // 让出CPU，等待一段时间
+            // 当前实现还没有通用的 fd 级等待队列，这里先保守地让出 CPU。
+            // 对 iozone 这类 nfds==0 的纯超时路径，上面的快速分支已经避免了忙轮询。
             proc::k_scheduler.yield();
         }
 
@@ -6541,92 +6739,23 @@ namespace syscall
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
-
-        // 分配内核缓冲区存放iovec数组
-        struct iovec
+        size_t vec_bytes = sizeof(KernelIovec) * static_cast<size_t>(iovcnt);
+        KernelIovec *iovecs = static_cast<KernelIovec *>(alloc_syscall_temp_buffer(vec_bytes));
+        if (iovecs == nullptr)
         {
-            void *iov_base;
-            size_t iov_len;
-        };
-        size_t totsize = sizeof(iovec) * (size_t)iovcnt;
-        iovec *vec = (iovec *)alloc_syscall_temp_buffer(totsize);
-        if (!vec)
-            return SYS_ENOMEM; // Out of memory
-
-        // 从用户空间拷贝iovec数组
-        if (mem::k_vmm.copy_in(*pt, vec, iov_ptr, totsize) < 0)
-        {
-            free_syscall_temp_buffer(vec);
-            return SYS_EFAULT; // Bad address
-        }
-
-        // Check for overflow in total length
-        size_t total_len = 0;
-        for (int i = 0; i < iovcnt; ++i)
-        {
-            if (vec[i].iov_len > (size_t)0x7FFFFFFF - total_len)
-            { // SSIZE_MAX equivalent
-                free_syscall_temp_buffer(vec);
-                return SYS_EINVAL; // Total length would overflow
-            }
-            total_len += vec[i].iov_len;
-        }
-
-        char *k_buf = (char *)alloc_syscall_temp_buffer(k_syscall_io_chunk_size);
-        if (k_buf == nullptr)
-        {
-            free_syscall_temp_buffer(vec);
             return SYS_ENOMEM;
         }
 
-        int nread = 0;
-        for (int i = 0; i < iovcnt; ++i)
+        int copy_ret = copy_user_iovecs(*pt, iov_ptr, iovcnt, iovecs, nullptr);
+        if (copy_ret < 0)
         {
-            if (vec[i].iov_len == 0)
-                continue;
-
-            size_t iov_done = 0;
-            while (iov_done < vec[i].iov_len)
-            {
-                size_t want = min_size(vec[i].iov_len - iov_done, k_syscall_io_chunk_size);
-                int ret = f->read((uint64)k_buf, want, f->get_file_offset(), true);
-                if (ret < 0)
-                {
-                    free_syscall_temp_buffer(k_buf);
-                    free_syscall_temp_buffer(vec);
-                    return nread > 0 ? nread : ret;
-                }
-                if (ret == 0)
-                {
-                    free_syscall_temp_buffer(k_buf);
-                    free_syscall_temp_buffer(vec);
-                    return nread;
-                }
-                if (mem::k_vmm.copy_out(*pt,
-                                        (uint64)vec[i].iov_base + iov_done,
-                                        k_buf,
-                                        ret) < 0)
-                {
-                    free_syscall_temp_buffer(k_buf);
-                    free_syscall_temp_buffer(vec);
-                    return SYS_EFAULT;
-                }
-                nread += ret;
-                iov_done += (size_t)ret;
-
-                // 短读意味着 EOF 或底层已无更多数据，本次 readv 应直接返回已读字节数。
-                if ((size_t)ret < want)
-                {
-                    free_syscall_temp_buffer(k_buf);
-                    free_syscall_temp_buffer(vec);
-                    return nread;
-                }
-            }
+            free_syscall_temp_buffer(iovecs);
+            return copy_ret;
         }
 
-        free_syscall_temp_buffer(k_buf);
-        free_syscall_temp_buffer(vec);
-        return nread;
+        long ret = read_to_user_iovecs(f, *pt, iovecs, iovcnt, nullptr);
+        free_syscall_temp_buffer(iovecs);
+        return ret;
     }
     uint64 SyscallHandler::sys_geteuid()
     {
@@ -7089,50 +7218,9 @@ namespace syscall
             return -EBADF; // Bad file descriptor
         if (f->_attrs.filetype == fs::FT_PIPE)
             return -ESPIPE; // Illegal seek on a pipe
-        auto old_off = f->get_file_offset();
-        f->lseek(offset, SEEK_SET);
-
-        size_t chunk_size = min_size((size_t)count, k_syscall_io_chunk_size);
-        char *kbuf = (char *)alloc_syscall_temp_buffer(chunk_size);
-        if (!kbuf)
-        {
-            f->lseek(old_off, SEEK_SET);
-            return -ENOMEM; // Out of memory
-        }
-
-        uint64 done = 0;
-        while (done < count)
-        {
-            size_t want = min_size((size_t)(count - done), chunk_size);
-            long rc = f->read((ulong)kbuf, want, offset + done, false);
-            if (rc < 0)
-            {
-                free_syscall_temp_buffer(kbuf);
-                f->lseek(old_off, SEEK_SET);
-                return done > 0 ? (long)done : rc;
-            }
-            if (rc == 0)
-            {
-                break;
-            }
-
-            if (mem::k_vmm.copy_out(*p->get_pagetable(), buf + done, kbuf, rc) < 0)
-            {
-                free_syscall_temp_buffer(kbuf);
-                f->lseek(old_off, SEEK_SET);
-                return done > 0 ? (long)done : -EFAULT;
-            }
-
-            done += (uint64)rc;
-            if ((size_t)rc < want)
-            {
-                break;
-            }
-        }
-
-        f->lseek(old_off, SEEK_SET);
-        free_syscall_temp_buffer(kbuf);
-        return (long)done;
+        long read_off = offset;
+        KernelIovec iovec = {buf, static_cast<size_t>(count)};
+        return read_to_user_iovecs(f, *p->get_pagetable(), &iovec, 1, &read_off);
     }
     uint64 SyscallHandler::sys_pwrite64()
     {
@@ -7151,51 +7239,12 @@ namespace syscall
         fs::file *f = p->get_open_file(fd);
         if (!f)
             return -EBADF;
-        printfCyan("[SyscallHandler::sys_pwrite64] fd: %d, buf: %p, count: %lu, offset: %d\n",
-                   fd, (void *)buf, count, offset);
-        auto old_off = f->get_file_offset();
-        f->lseek(offset, SEEK_SET);
+        if (f->_attrs.filetype == fs::FT_PIPE)
+            return -ESPIPE;
 
-        size_t chunk_size = min_size((size_t)count, k_syscall_io_chunk_size);
-        char *kbuf = (char *)alloc_syscall_temp_buffer(chunk_size);
-        if (kbuf == nullptr)
-        {
-            f->lseek(old_off, SEEK_SET);
-            return -ENOMEM;
-        }
-
-        uint64 done = 0;
-        while (done < count)
-        {
-            size_t want = min_size((size_t)(count - done), chunk_size);
-            if (mem::k_vmm.copy_in(*p->get_pagetable(), kbuf, buf + done, want) < 0)
-            {
-                free_syscall_temp_buffer(kbuf);
-                f->lseek(old_off, SEEK_SET);
-                return done > 0 ? (long)done : -EFAULT;
-            }
-
-            long rc = f->write((ulong)kbuf, want, offset + done, false);
-            if (rc < 0)
-            {
-                free_syscall_temp_buffer(kbuf);
-                f->lseek(old_off, SEEK_SET);
-                return done > 0 ? (long)done : rc;
-            }
-            if (rc == 0)
-            {
-                break;
-            }
-            done += (uint64)rc;
-            if ((size_t)rc < want)
-            {
-                break;
-            }
-        }
-
-        free_syscall_temp_buffer(kbuf);
-        f->lseek(old_off, SEEK_SET);
-        return (long)done;
+        long write_off = offset;
+        KernelIovec iovec = {buf, static_cast<size_t>(count)};
+        return write_from_user_iovecs(f, *p->get_pagetable(), &iovec, 1, &write_off);
     }
     uint64 SyscallHandler::sys_pselect6()
     {
@@ -7299,6 +7348,24 @@ namespace syscall
                 return SYS_EFAULT;
             }
             p->_sigmask = new_sigmask;
+        }
+
+        // select/pselect 在 nfds==0 时是一个纯粹的可中断超时等待。
+        // iozone 的线程 barrier 高频使用这一路径，如果退化成 yield 轮询，
+        // 会让本应是“微秒级短睡眠”的 Poll() 被放大成极慢的单核忙等。
+        if (nfds == 0)
+        {
+            int wait_ret = wait_timeout_or_signal(p, timeout_us);
+            p->_sigmask = orig_sigmask;
+            if (wait_ret == SYS_EINTR)
+            {
+                return SYS_EINTR;
+            }
+            if (wait_ret < 0)
+            {
+                return wait_ret;
+            }
+            return 0;
         }
 
         // fd_set位图大小(字节数)
@@ -7442,7 +7509,8 @@ namespace syscall
                 return SYS_EINTR;
             }
 
-            // 让出CPU
+            // 当前缺少通用 fd 事件等待队列，这里先保守地让出 CPU。
+            // 高频纯超时等待已在上面的 nfds==0 快路径中转成真正睡眠。
             proc::k_scheduler.yield();
         }
 
@@ -7669,8 +7737,6 @@ namespace syscall
             _arg_int(3, val2);
         }
 
-        printf("sys_futex: uaddr=%p, op=%d, val=%d, timeout=%p, uaddr2=%p, val3=%d\n", uaddr, op, val, timeout_ptr, uaddr2, val3);
-        // printf("paddr: %p\n", proc::k_pm.get_cur_pcb()->_pt.walk_addr(uaddr));
         switch (op)
         {
         case FUTEX_WAIT:
@@ -8119,7 +8185,8 @@ namespace syscall
         int shmid;
         int cmd;
         uint64 buf_addr;
-        struct shmid_ds buf;
+        struct shmid_ds buf = {};
+        struct shmid_ds *buf_ptr = nullptr;
 
         if (_arg_int(0, shmid) < 0 ||
             _arg_int(1, cmd) < 0 ||
@@ -8128,18 +8195,24 @@ namespace syscall
             printfRed("[SyscallHandler::sys_shmctl] 参数错误\n");
             return SYS_EINVAL; // 参数错误
         }
-        // 从用户空间拷贝 shmid_ds 结构体
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        mem::PageTable *pt = p->get_pagetable();
-#ifdef LOONGARCH
-#endif
-        if (mem::k_vmm.copy_in(*pt, &buf, buf_addr, sizeof(buf)) < 0)
+        if (cmd == IPC_SET)
         {
-            printfRed("[SyscallHandler::sys_shmctl] 拷贝 shmid_ds 结构体失败\n");
-            return SYS_EFAULT; // 拷贝失败
+            if (buf_addr == 0)
+            {
+                return SYS_EFAULT;
+            }
+
+            proc::Pcb *p = proc::k_pm.get_cur_pcb();
+            mem::PageTable *pt = p->get_pagetable();
+            if (mem::k_vmm.copy_in(*pt, &buf, buf_addr, sizeof(buf)) < 0)
+            {
+                printfRed("[SyscallHandler::sys_shmctl] 拷贝 shmid_ds 结构体失败\n");
+                return SYS_EFAULT; // 拷贝失败
+            }
+            buf_ptr = &buf;
         }
-        printfCyan("[SyscallHandler::sys_shmctl] shmid: %d, cmd: %d, buf_addr: %p\n", shmid, cmd, (void *)buf_addr);
-        return shm::k_smm.shmctl(shmid, cmd, &buf, buf_addr);
+
+        return shm::k_smm.shmctl(shmid, cmd, buf_ptr, buf_addr);
     }
     uint64 SyscallHandler::sys_shmat()
     {
@@ -8154,7 +8227,6 @@ namespace syscall
             printfRed("[SyscallHandler::sys_shmat] 参数错误\n");
             return SYS_EINVAL; // 参数错误
         }
-        printfCyan("[SyscallHandler::sys_shmat] shmid: %d, shmaddr: %p, shmflg: %d\n", shmid, (void *)shmaddr, shmflg);
         return (uint64)shm::k_smm.attach_seg(shmid, (void *)shmaddr, shmflg);
     }
     uint64 SyscallHandler::sys_shmdt()
@@ -8167,7 +8239,6 @@ namespace syscall
             printfRed("[SyscallHandler::sys_shmdt] 参数错误\n");
             return SYS_EINVAL; // 参数错误
         }
-        printfCyan("[SyscallHandler::sys_shmdt] attempting to detach addr: %p\n", (void *)shmaddr);
         // 调用共享内存管理器的分离函数
         return shm::k_smm.detach_seg((void *)shmaddr);
     }
@@ -11763,13 +11834,111 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_preadv()
     {
-        printfRed("[SyscallHandler::sys_preadv] preadv 未实现，返回 ENOSYS\n");
-        return SYS_ENOSYS;
+        int fd = -1;
+        uint64 iov_ptr = 0;
+        int iovcnt = 0;
+        int offset = 0;
+
+        if (_arg_fd(0, &fd, nullptr) < 0 ||
+            _arg_addr(1, iov_ptr) < 0 ||
+            _arg_int(2, iovcnt) < 0 ||
+            _arg_int(3, offset) < 0)
+        {
+            return -EINVAL;
+        }
+
+        if (iovcnt < 0 || iovcnt > 1024)
+        {
+            return -EINVAL;
+        }
+        if (iovcnt == 0)
+        {
+            return 0;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        fs::file *f = p->get_open_file(fd);
+        if (f == nullptr)
+        {
+            return -EBADF;
+        }
+        if (f->_attrs.filetype == fs::FT_PIPE)
+        {
+            return -ESPIPE;
+        }
+
+        size_t vec_bytes = sizeof(KernelIovec) * static_cast<size_t>(iovcnt);
+        KernelIovec *iovecs = static_cast<KernelIovec *>(alloc_syscall_temp_buffer(vec_bytes));
+        if (iovecs == nullptr)
+        {
+            return -ENOMEM;
+        }
+
+        int copy_ret = copy_user_iovecs(*p->get_pagetable(), iov_ptr, iovcnt, iovecs, nullptr);
+        if (copy_ret < 0)
+        {
+            free_syscall_temp_buffer(iovecs);
+            return copy_ret;
+        }
+
+        long read_off = offset;
+        long ret = read_to_user_iovecs(f, *p->get_pagetable(), iovecs, iovcnt, &read_off);
+        free_syscall_temp_buffer(iovecs);
+        return ret;
     }
     uint64 SyscallHandler::sys_pwritev()
     {
-        printfRed("[SyscallHandler::sys_pwritev] pwritev 未实现，返回 ENOSYS\n");
-        return SYS_ENOSYS;
+        int fd = -1;
+        uint64 iov_ptr = 0;
+        int iovcnt = 0;
+        int offset = 0;
+
+        if (_arg_fd(0, &fd, nullptr) < 0 ||
+            _arg_addr(1, iov_ptr) < 0 ||
+            _arg_int(2, iovcnt) < 0 ||
+            _arg_int(3, offset) < 0)
+        {
+            return -EINVAL;
+        }
+
+        if (iovcnt < 0 || iovcnt > 1024)
+        {
+            return -EINVAL;
+        }
+        if (iovcnt == 0)
+        {
+            return 0;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        fs::file *f = p->get_open_file(fd);
+        if (f == nullptr)
+        {
+            return -EBADF;
+        }
+        if (f->_attrs.filetype == fs::FT_PIPE)
+        {
+            return -ESPIPE;
+        }
+
+        size_t vec_bytes = sizeof(KernelIovec) * static_cast<size_t>(iovcnt);
+        KernelIovec *iovecs = static_cast<KernelIovec *>(alloc_syscall_temp_buffer(vec_bytes));
+        if (iovecs == nullptr)
+        {
+            return -ENOMEM;
+        }
+
+        int copy_ret = copy_user_iovecs(*p->get_pagetable(), iov_ptr, iovcnt, iovecs, nullptr);
+        if (copy_ret < 0)
+        {
+            free_syscall_temp_buffer(iovecs);
+            return copy_ret;
+        }
+
+        long write_off = offset;
+        long ret = write_from_user_iovecs(f, *p->get_pagetable(), iovecs, iovcnt, &write_off);
+        free_syscall_temp_buffer(iovecs);
+        return ret;
     }
     uint64 SyscallHandler::sys_sync_file_range()
     {

@@ -103,8 +103,13 @@ SRCS += $(shell find $(KERNEL_DIR)/proc -maxdepth 1 -type f \
 SRCS += $(shell find $(KERNEL_DIR)/boot -maxdepth 1 -type f \
         \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
 
-# 收集 fs 目录中的所有文件（fs 没有架构特定子目录）
+# 收集 fs 目录中的通用文件，并按当前架构只纳入对应的块驱动适配层。
+# 这样可以避免 riscv/loongarch 互相编译对方驱动，降低跨架构耦合。
 SRCS += $(shell find $(KERNEL_DIR)/fs -type f \
+        ! -path "$(KERNEL_DIR)/fs/drivers/riscv/*" \
+        ! -path "$(KERNEL_DIR)/fs/drivers/loongarch/*" \
+        \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
+SRCS += $(shell find $(KERNEL_DIR)/fs/drivers/$(ARCH) -type f \
         \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
 
 # 收集 net 目录中的所有文件（net 没有架构特定子目录）

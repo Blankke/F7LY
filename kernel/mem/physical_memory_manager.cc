@@ -243,6 +243,23 @@ namespace mem
         return pa;
     }
 
+    void *PhysicalMemoryManager::alloc_pages(int count)
+    {
+        if (count <= 0)
+        {
+            return nullptr;
+        }
+
+        void *pa = _buddy->alloc_pages(count);
+        if (pa == nullptr)
+        {
+            panic("[pmm] alloc_pages failed, count=%d", count);
+        }
+
+        memset(pa, 0, static_cast<size_t>(count) * PGSIZE);
+        return pa;
+    }
+
     void PhysicalMemoryManager::free_page1(void *pa, uint64 size)
     {
 
@@ -261,6 +278,22 @@ namespace mem
     {
         // printfCyan("释放物理页:  %p\n", pa);
         _buddy->Free(pa2pgnm(pa));
+    }
+
+    void PhysicalMemoryManager::free_pages(void *pa)
+    {
+        if (pa == nullptr)
+        {
+            return;
+        }
+
+        auto addr = reinterpret_cast<uint64>(pa);
+        if (addr % PGSIZE != 0)
+        {
+            panic("[pmm] free_pages requires page-aligned address: %p", pa);
+        }
+
+        _buddy->free_pages(pa);
     }
     void PhysicalMemoryManager::clear_page(void *pa)
     {

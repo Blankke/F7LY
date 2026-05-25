@@ -4,7 +4,7 @@ extern "C"
 {
     __attribute__((section(".text.startup"))) int main()
     {
-        iozone_test("/musl");
+        iozone_test("/musl/");
         shutdown();
         return 0;
     }

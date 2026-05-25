@@ -15,9 +15,9 @@
 // Forward declaration
 struct ext4_buf;
 
-// Global RB tree type definitions
+// LBA 查询仍使用红黑树；LRU 回收改为双向队列，避免维护第二棵树带来的复杂状态。
 RB_HEAD(ext4_buf_lba_tree, ext4_buf);
-RB_HEAD(ext4_buf_lru_tree, ext4_buf);
+TAILQ_HEAD(ext4_buf_lru_list, ext4_buf);
 
 #define EXT4_BLOCK_ZERO() {.lb_id = 0, .data = 0}
 
@@ -46,12 +46,6 @@ struct ext4_buf {
     /**@brief   Data buffer.*/
     uint8_t *data;
 
-    /**@brief   LRU priority. (unused) */
-    uint32_t lru_prio;
-
-    /**@brief   LRU id.*/
-    uint32_t lru_id;
-
     /**@brief   Reference count table*/
     uint32_t refctr;
 
@@ -61,11 +55,17 @@ struct ext4_buf {
     /**@brief   Whether or not buffer is on dirty list.*/
     bool on_dirty_list;
 
+    /**@brief   Whether the buffer is currently linked in lba_root.*/
+    bool on_lba_tree;
+
+    /**@brief   Whether the buffer is currently linked in lru_list.*/
+    bool on_lru_list;
+
     /**@brief   LBA tree node*/
     RB_ENTRY(ext4_buf) lba_node;
 
-    /**@brief   LRU tree node*/
-    RB_ENTRY(ext4_buf) lru_node;
+    /**@brief   LRU list node*/
+    TAILQ_ENTRY(ext4_buf) lru_link;
 
     /**@brief   Dirty list node*/
     SLIST_ENTRY(ext4_buf) dirty_node;
@@ -91,9 +91,6 @@ struct ext4_bcache {
     /**@brief   Item size in block cache*/
     uint32_t itemsize;
 
-    /**@brief   Last recently used counter*/
-    uint32_t lru_ctr;
-
     /**@brief   Currently referenced datablocks*/
     uint32_t ref_blocks;
 
@@ -109,8 +106,8 @@ struct ext4_bcache {
     /**@brief   A tree holding all bufs*/
     struct ext4_buf_lba_tree lba_root;
 
-    /**@brief   A tree holding unreferenced bufs*/
-    struct ext4_buf_lru_tree lru_root;
+    /**@brief   A list holding unreferenced bufs in LRU order（头最老，尾最新）*/
+    struct ext4_buf_lru_list lru_list;
 
     /**@brief   A singly-linked list holding dirty buffers*/
     SLIST_HEAD(ext4_buf_dirty, ext4_buf) dirty_list;
@@ -238,11 +235,8 @@ bool ext4_bcache_is_full(struct ext4_bcache *bc);
 
 // Forward declarations for comparison functions
 int ext4_bcache_lba_compare(struct ext4_buf *a, struct ext4_buf *b);
-int ext4_bcache_lru_compare(struct ext4_buf *a, struct ext4_buf *b);
-
 // RB tree function prototypes
 RB_PROTOTYPE(ext4_buf_lba_tree, ext4_buf, lba_node, ext4_bcache_lba_compare)
-RB_PROTOTYPE(ext4_buf_lru_tree, ext4_buf, lru_node, ext4_bcache_lru_compare)
 
 #endif /* EXT4_BCACHE_H_ */
 

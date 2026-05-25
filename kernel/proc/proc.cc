@@ -312,6 +312,7 @@ namespace proc
                 return;
             }
 
+            _ofile->_lock.acquire();
             // 减少打开文件表的引用计数
             _ofile->_shared_ref_cnt--;
 
@@ -336,6 +337,7 @@ namespace proc
                             printfRed("[cleanup_ofile] 检测到异常文件指针，直接丢弃: pcb=%p pid=%d fd=%d file=%p\n",
                                       this, _pid, (int)i, file_obj);
                             _ofile->_ofile_ptr[i] = nullptr;
+                            _ofile->_reserved[i] = false;
                             _ofile->_fl_cloexec[i] = false;
                             continue;
                         }
@@ -361,9 +363,12 @@ namespace proc
                         }
 
                         _ofile->_ofile_ptr[i] = nullptr;
+                        _ofile->_reserved[i] = false;
                         _ofile->_fl_cloexec[i] = false;
                     }
                 }
+
+                _ofile->_lock.release();
 
                 for (int i = 0; i < unique_count; ++i)
                 {
@@ -392,6 +397,10 @@ namespace proc
 
                 // 释放打开文件表结构本身
                 delete _ofile;
+            }
+            else
+            {
+                _ofile->_lock.release();
             }
             // 清空当前进程的文件表指针
             _ofile = nullptr;

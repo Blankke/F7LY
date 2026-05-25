@@ -27,9 +27,6 @@ public:
 private:
 
     BuddySystem() = default;
-    int IndexOffset(int index, int level, int max_level) const;
-    void MarkParent(int index);
-    void Combine(int index);
     uint32 NextPowerOfTwo(uint32 x);
 
     // 内存管理相关
@@ -37,6 +34,13 @@ private:
 
     void mark_unusable_leaves();
     void rebuild_parent_states();
+    int node_depth(int index) const;
+    int node_offset_pages(int index) const;
+    uint32 node_block_pages(int depth) const;
+    void split_unused_node(int index);
+    uint8 summarize_children_state(int index) const;
+    int allocate_from_node(int index, int depth, uint32 actual_pages);
+    bool free_from_node(int index, int depth, int target_offset);
     uint32 max_free_block_pages_from_node(int index, uint32 block_pages) const;
     uint64 free_page_count_from_node(int index, uint32 block_pages) const;
 

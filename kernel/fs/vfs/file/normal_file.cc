@@ -1,155 +1,322 @@
 #include "fs/vfs/file/normal_file.hh"
-#include "fs/lwext4/ext4_errno.hh"
+
 #include "fs/lwext4/ext4.hh"
-#include "fs/lwext4/ext4_inode.hh"
+#include "fs/lwext4/ext4_errno.hh"
 #include "fs/lwext4/ext4_fs.hh"
+#include "fs/lwext4/ext4_inode.hh"
 #include "fs/lwext4/ext4_types.hh"
+#include "libs/string.hh"
+#include "mem/heap_memory_manager.hh"
 #include "mem/userspace_stream.hh"
-#include "proc_manager.hh"
-#include "proc/signal.hh"
 #include "proc/prlimit.hh"
+#include "proc/signal.hh"
+#include "proc_manager.hh"
 
 #define min(a, b) ((a) < (b) ? (a) : (b))
+
 namespace fs
 {
-	long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
+	bool normal_file::ensure_write_combine_buffer_locked()
 	{
-		// 获取文件睡眠锁，确保读写操作的一致性
-		_file_lock.acquire();
-		if (is_memfd())
-			sync_file_size_from_memfd();
-		
-		// printfGreen("normal_file::read called with buf: %p, len: %u, off: %d, upgrade: %d\n", (void *)buf, len, off, upgrade);
-		ulong cnt = -1;
-		if (_attrs.u_read != 1)
+		if (_write_combine_buffer != nullptr)
 		{
-			// 对于 O_TMPFILE 创建的文件，即使权限是 0，也允许文件所有者读取
-			if (lwext4_file_struct.flags & O_TMPFILE)
-			{
-				printfYellow("normal_file::read: allowing read from O_TMPFILE despite permissions\n");
-			}
-			else
-			{
-				printfRed("normal_file:: not allowed to read! ");
-				_file_lock.release(); // 释放锁
-				return -1;
-			}
+			return true;
 		}
 
-		// 处理偏移量参数
-		if (off < 0)
-			off = _file_ptr;
+		/*
+		 * 这里显式使用内核堆分配器，而不是 `new[]/delete[]`：
+		 * 1. 这块缓冲区本质上只是原始字节存储，不需要数组析构语义；
+		 * 2. freestanding 内核里 `new[]` 的数组 cookie/对齐 ABI 容易和自定义分配器互相踩踏；
+		 * 3. 统一走 `k_hmm.allocate/free`，释放路径更可控，也更容易跨架构保持一致。
+		 */
+		_write_combine_buffer = reinterpret_cast<uint8 *>(mem::k_hmm.allocate(k_write_combine_capacity));
+		return _write_combine_buffer != nullptr;
+	}
 
-		// 保存当前文件位置，用于之后恢复
-		long current_pos = _file_ptr;
-		printfYellow("normal file offset: %d, requested offset: %d\n", current_pos, off);
-		// 如果指定的偏移量与当前文件指针不同，需要设置文件位置
-		if (off != _file_ptr)
+	uint64 normal_file::logical_file_size_locked() const
+	{
+		uint64 logical_size = lwext4_file_struct.fsize;
+		if (_write_combine_dirty)
+		{
+			uint64 buffered_end = _write_combine_base + _write_combine_size;
+			if (buffered_end > logical_size)
+			{
+				logical_size = buffered_end;
+			}
+		}
+		return logical_size;
+	}
+
+	void normal_file::reset_write_combine_locked()
+	{
+		_write_combine_dirty = false;
+		_write_combine_base = 0;
+		_write_combine_size = 0;
+	}
+
+	normal_file::~normal_file()
+	{
+		_file_lock.acquire();
+		(void)flush_write_combine_locked();
+		if (lwext4_file_struct.mp != nullptr)
+		{
+			(void)ext4_fclose(&lwext4_file_struct);
+		}
+		mem::k_hmm.free(_write_combine_buffer);
+		_write_combine_buffer = nullptr;
+		_file_lock.release();
+	}
+
+	int normal_file::write_direct_locked(const char *kbuf, size_t len, long off, bool upgrade, size_t *written)
+	{
+		if (written != nullptr)
+		{
+			*written = 0;
+		}
+		if (len == 0)
+		{
+			return EOK;
+		}
+
+		const long logical_pos = _file_ptr;
+		if (static_cast<long>(lwext4_file_struct.fpos) != off)
 		{
 			int seek_status = ext4_fseek(&lwext4_file_struct, off, SEEK_SET);
 			if (seek_status != EOK)
 			{
-				printfRed("normal_file::read: ext4_fseek failed with status %d", seek_status);
-				_file_lock.release(); // 释放锁
+				return seek_status;
+			}
+		}
+
+		size_t actual_written = 0;
+		int status = ext4_fwrite(&lwext4_file_struct, kbuf, len, &actual_written);
+		if (written != nullptr)
+		{
+			*written = actual_written;
+		}
+		if (status != EOK)
+		{
+			return status;
+		}
+		if (actual_written != len)
+		{
+			return EIO;
+		}
+
+		if (upgrade)
+		{
+			_file_ptr = off + static_cast<long>(actual_written);
+		}
+		else if (static_cast<long>(lwext4_file_struct.fpos) != logical_pos)
+		{
+			int seek_status = ext4_fseek(&lwext4_file_struct, logical_pos, SEEK_SET);
+			if (seek_status != EOK)
+			{
+				return seek_status;
+			}
+			_file_ptr = logical_pos;
+		}
+
+		if (static_cast<uint64>(off + static_cast<long>(actual_written)) > lwext4_file_struct.fsize)
+		{
+			lwext4_file_struct.fsize = off + actual_written;
+		}
+
+		_stat.size = lwext4_file_struct.fsize;
+		sync_memfd_size_from_file();
+		return EOK;
+	}
+
+	int normal_file::flush_write_combine_locked()
+	{
+		if (!_write_combine_dirty)
+		{
+			return EOK;
+		}
+
+		const uint64 flush_base = _write_combine_base;
+		const size_t flush_size = _write_combine_size;
+		int status = write_direct_locked(reinterpret_cast<const char *>(_write_combine_buffer),
+										 flush_size,
+										 static_cast<long>(flush_base),
+										 false);
+		if (status == EOK)
+		{
+			reset_write_combine_locked();
+		}
+		return status;
+	}
+
+	int normal_file::zero_fill_gap_locked(long target_off)
+	{
+		if (target_off <= static_cast<long>(logical_file_size_locked()))
+		{
+			return EOK;
+		}
+
+		int flush_status = flush_write_combine_locked();
+		if (flush_status != EOK)
+		{
+			return flush_status;
+		}
+
+		if (!ensure_write_combine_buffer_locked())
+		{
+			return ENOMEM;
+		}
+
+		memset(_write_combine_buffer, 0, k_write_combine_capacity);
+		const long logical_pos = _file_ptr;
+		long cursor = static_cast<long>(lwext4_file_struct.fsize);
+		while (cursor < target_off)
+		{
+			size_t chunk = min(static_cast<size_t>(target_off - cursor), k_write_combine_capacity);
+			int status = write_direct_locked(reinterpret_cast<const char *>(_write_combine_buffer),
+											 chunk,
+											 cursor,
+											 true);
+			if (status != EOK)
+			{
+				return status;
+			}
+			cursor += static_cast<long>(chunk);
+		}
+
+		lwext4_file_struct.fsize = target_off;
+		_stat.size = lwext4_file_struct.fsize;
+		_file_ptr = logical_pos;
+		if (static_cast<uint64>(logical_pos) <= lwext4_file_struct.fsize)
+		{
+			int seek_status = ext4_fseek(&lwext4_file_struct, logical_pos, SEEK_SET);
+			if (seek_status != EOK)
+			{
+				return seek_status;
+			}
+		}
+		sync_memfd_size_from_file();
+		return EOK;
+	}
+
+	bool normal_file::can_append_write_combine_locked(long off, size_t len) const
+	{
+		if (off < 0 || len == 0 || len > k_write_combine_capacity)
+		{
+			return false;
+		}
+
+		if (!_write_combine_dirty)
+		{
+			return true;
+		}
+
+		return static_cast<uint64>(off) == (_write_combine_base + _write_combine_size) &&
+			   (_write_combine_size + len) <= k_write_combine_capacity;
+	}
+
+	long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
+	{
+		_file_lock.acquire();
+
+		if (is_memfd())
+		{
+			sync_file_size_from_memfd();
+		}
+
+		if (_attrs.u_read != 1)
+		{
+			if (!(lwext4_file_struct.flags & O_TMPFILE))
+			{
+				_file_lock.release();
 				return -1;
 			}
 		}
 
-		// 执行读取操作
-		int status = ext4_fread(&lwext4_file_struct, (char *)buf, len, &cnt);
+		if (off < 0)
+		{
+			off = _file_ptr;
+		}
+
+		if (static_cast<uint64>(off) >= logical_file_size_locked())
+		{
+			_file_lock.release();
+			return 0;
+		}
+
+		const long current_pos = _file_ptr;
+		int flush_status = flush_write_combine_locked();
+		if (flush_status != EOK)
+		{
+			_file_lock.release();
+			return -flush_status;
+		}
+
+		if (static_cast<long>(lwext4_file_struct.fpos) != off)
+		{
+			int seek_status = ext4_fseek(&lwext4_file_struct, off, SEEK_SET);
+			if (seek_status != EOK)
+			{
+				_file_lock.release();
+				return -seek_status;
+			}
+		}
+
+		size_t cnt = 0;
+		int status = ext4_fread(&lwext4_file_struct, reinterpret_cast<char *>(buf), len, &cnt);
 		if (status != EOK)
 		{
-			printfRed("normal_file::read: ext4_fread failed with status %d", status);
-			// 恢复原来的文件位置
-			ext4_fseek(&lwext4_file_struct, current_pos, SEEK_SET);
-			_file_lock.release(); // 释放锁
+			(void)ext4_fseek(&lwext4_file_struct, current_pos, SEEK_SET);
+			_file_lock.release();
 			return -status;
 		}
 
-		// 如果upgrade为true，更新文件指针
-		if (cnt >= 0 && upgrade)
+		if (upgrade)
 		{
-			_file_ptr = off + cnt;
+			_file_ptr = off + static_cast<long>(cnt);
 		}
 		else
 		{
-			// 如果不升级指针，恢复到原来的位置
-			ext4_fseek(&lwext4_file_struct, current_pos, SEEK_SET);
+			(void)ext4_fseek(&lwext4_file_struct, current_pos, SEEK_SET);
+			_file_ptr = current_pos;
 		}
 
-		_file_lock.release(); // 释放锁
-		return cnt;
+		_file_lock.release();
+		return static_cast<long>(cnt);
 	}
+
 	long normal_file::write(uint64 buf, size_t len, long off, bool upgrade)
 	{
-		// 获取文件睡眠锁，防止多进程并发写入竞态
-		// 睡眠锁允许在持有锁期间进行I/O等可能阻塞的操作
 		_file_lock.acquire();
+
 		if (is_memfd())
-			sync_file_size_from_memfd();
-		
-		// printfGreen("normal_file::write called with buf: %p, len: %zu, off: %ld, upgrade: %d\n", (void *)buf, len, off, upgrade);
-		uint64 ret = 0;
-		// 处理偏移量参数
-		if (off < 0)
-		off = _file_ptr;
-		// 保存当前文件位置，用于之后恢复
-		long current_pos = _file_ptr;
-		if (off > (long)lwext4_file_struct.fsize)
 		{
-			// 如果偏移量大于文件大小，先写入0填充到该位置
-			char *zero_buf = (char*)mem::k_pmm.kmalloc(off - lwext4_file_struct.fsize);
-			if(zero_buf == nullptr)
-			{
-				printfRed("normal_file::write: Failed to allocate memory for zero buffer\n");
-				return -ENOMEM; // 内存分配失败
-			}
-			memset(zero_buf, 0, off - lwext4_file_struct.fsize);
-			printfYellow("normal_file::write: padding with zeros to offset %ld, size %zu\n", off, off - lwext4_file_struct.fsize);
-			_file_lock.release(); // 释放锁，允许其他操作
-			write((uint64)zero_buf, off - lwext4_file_struct.fsize, lwext4_file_struct.fsize, true);
-			_file_lock.acquire(); // 重新获取锁
-			printfGreen("normal_file::write: padding with zeros to offset %ld, size %zu\n", off, off - lwext4_file_struct.fsize);
-			mem::k_pmm.free_page(zero_buf);
-			// 更新文件大小
-			lwext4_file_struct.fsize = off;
-			sync_memfd_size_from_file();
+			sync_file_size_from_memfd();
 		}
 
-		printfYellow("normal file offset: %d, requested offset: %d\n", current_pos, off);
-		// 检查文件大小限制 (RLIMIT_FSIZE)
+		if (off < 0)
+		{
+			off = _file_ptr;
+		}
+		const long current_pos = _file_ptr;
+
 		proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
 		uint64 fsize_limit = current_proc->get_fsize_limit();
-		if (fsize_limit != proc::ResourceLimitId::RLIM_INFINITY)
+		if (fsize_limit != proc::ResourceLimitId::RLIM_INFINITY &&
+			static_cast<uint64>(off) + len > fsize_limit)
 		{
-			// 检查写入是否会超过文件大小限制
-			if ((uint64)off + len > fsize_limit)
-			{
-				printfRed("normal_file::write: Write would exceed file size limit (offset: %ld, len: %zu, limit: %lu)\n",
-						  off, len, fsize_limit);
-				// 发送 SIGXFSZ 信号给进程
-				current_proc->add_signal(proc::ipc::signal::SIGXFSZ);
-				_file_lock.release(); // 释放锁
-				return -EFBIG;
-			}
+			current_proc->add_signal(proc::ipc::signal::SIGXFSZ);
+			_file_lock.release();
+			return -EFBIG;
 		}
 
 		if (_attrs.u_write != 1)
 		{
-			// 对于 O_TMPFILE 创建的文件，即使权限是 0，也允许文件所有者写入
-			if (lwext4_file_struct.flags & O_TMPFILE)
+			if (!(lwext4_file_struct.flags & O_TMPFILE))
 			{
-				printfYellow("normal_file::write: allowing write to O_TMPFILE despite permissions\n");
-			}
-			else
-			{
-				printfRed("normal_file:: not allowed to write! ");
-				_file_lock.release(); // 释放锁
+				_file_lock.release();
 				return -EBADF;
 			}
 		}
 
-		// Check if file has immutable or append-only flags
 		if (lwext4_file_struct.mp && lwext4_file_struct.inode > 0)
 		{
 			struct ext4_inode_ref inode_ref;
@@ -161,29 +328,20 @@ namespace fs
 				uint32_t inode_flags = ext4_inode_get_flags(inode_ref.inode);
 				ext4_fs_put_inode_ref(&inode_ref);
 
-				// Check immutable flag
 				if (inode_flags & EXT4_INODE_FLAG_IMMUTABLE)
 				{
-					printfRed("normal_file::write: File is immutable, cannot write\n");
-					_file_lock.release(); // 释放锁
+					_file_lock.release();
 					return -EPERM;
 				}
-
-				// Check append-only flag - only allow writes at end of file
-				if (inode_flags & EXT4_INODE_FLAG_APPEND)
+				if ((inode_flags & EXT4_INODE_FLAG_APPEND) &&
+					off != static_cast<long>(lwext4_file_struct.fsize))
 				{
-					uint64_t file_size = lwext4_file_struct.fsize;
-					if (off != (long)file_size)
-					{
-						printfRed("normal_file::write: File is append-only, can only write at end\n");
-						_file_lock.release(); // 释放锁
-						return -EPERM;
-					}
+					_file_lock.release();
+					return -EPERM;
 				}
 			}
 		}
 
-		// memfd 的 seal 是 inode 级共享状态；这里要同时约束写封印和扩容封印。
 		if (is_memfd())
 		{
 			uint32_t seals = memfd_seals();
@@ -192,50 +350,103 @@ namespace fs
 				_file_lock.release();
 				return -EPERM;
 			}
-			uint64_t end_off = static_cast<uint64_t>(off) + len;
-			if (end_off > lwext4_file_struct.fsize && (seals & F_SEAL_GROW) != 0)
+			uint64 end_off = static_cast<uint64>(off) + len;
+			if (end_off > logical_file_size_locked() && (seals & F_SEAL_GROW) != 0)
 			{
 				_file_lock.release();
 				return -EPERM;
 			}
 		}
 
-		if (off != _file_ptr)
+		if (off > static_cast<long>(logical_file_size_locked()))
 		{
-			int seek_status = ext4_fseek(&lwext4_file_struct, off, SEEK_SET);
-			if (seek_status != EOK)
+			int zero_status = zero_fill_gap_locked(off);
+			if (zero_status != EOK)
 			{
-				printfRed("normal_file::write: ext4_fseek failed with status %d", seek_status);
-				_file_lock.release(); // 释放锁
-				return -EFAULT;
+				_file_lock.release();
+				return -zero_status;
 			}
 		}
 
-		struct ext4_file *ext4_f = (struct ext4_file *)&lwext4_file_struct;
-		char *kbuf = (char *)buf;
-		// printfBgGreen("normal_file::write: calling ext4_fwrite with buf: %p, len: %zu, off: %ld\n", kbuf, len, off);
-		// printfBgGreen("normal_file::write: current file path: %s\n", _path_name.c_str());
-		int status = ext4_fwrite(ext4_f, kbuf, len, &ret);
-		if (status != EOK) {
-			_file_lock.release(); // 释放锁
-			return -EFAULT;
-		}
-		if (ret >= 0 && upgrade)
+		const char *kbuf = reinterpret_cast<const char *>(buf);
+		if (!can_append_write_combine_locked(off, len))
 		{
-			printfGreen("normal_file::write: ext4_fwrite success, ret: %d\n", ret);
-			_file_ptr = off + ret;
-			sync_memfd_size_from_file();
-		}
-		else
-		{
-			// 如果不升级指针，恢复到原来的位置
-			_file_ptr = current_pos;
-			ext4_fseek(&lwext4_file_struct, current_pos, SEEK_SET);
-			sync_memfd_size_from_file();
+			int flush_status = flush_write_combine_locked();
+			if (flush_status != EOK)
+			{
+				_file_lock.release();
+				return -flush_status;
+			}
 		}
 
-		_file_lock.release(); // 释放锁
-		return ret;
+		if (can_append_write_combine_locked(off, len))
+		{
+			if (!ensure_write_combine_buffer_locked())
+			{
+				_file_lock.release();
+				return -ENOMEM;
+			}
+
+			if (!_write_combine_dirty)
+			{
+				_write_combine_base = static_cast<uint64>(off);
+				_write_combine_size = 0;
+			}
+
+			memmove(_write_combine_buffer + _write_combine_size, kbuf, len);
+			_write_combine_size += len;
+			_write_combine_dirty = true;
+
+			if (upgrade)
+			{
+				_file_ptr = off + static_cast<long>(len);
+			}
+			else
+			{
+				_file_ptr = current_pos;
+			}
+
+			uint64 logical_size = logical_file_size_locked();
+			uint64 write_end = static_cast<uint64>(off) + len;
+			if (write_end > logical_size)
+			{
+				logical_size = write_end;
+			}
+			_stat.size = logical_size;
+			if (_memfd_state != nullptr)
+			{
+				_memfd_state->size = logical_size;
+			}
+
+			if (_write_combine_size == k_write_combine_capacity)
+			{
+				int flush_status = flush_write_combine_locked();
+				if (flush_status != EOK)
+				{
+					_file_lock.release();
+					return -flush_status;
+				}
+			}
+
+			_file_lock.release();
+			return static_cast<long>(len);
+		}
+
+		size_t written = 0;
+		int status = write_direct_locked(kbuf, len, off, upgrade, &written);
+		if (status != EOK)
+		{
+			_file_lock.release();
+			return -status;
+		}
+
+		if (!upgrade)
+		{
+			_file_ptr = current_pos;
+		}
+
+		_file_lock.release();
+		return static_cast<long>(written);
 	}
 
 	bool normal_file::read_ready()
@@ -264,63 +475,73 @@ namespace fs
 
 	size_t normal_file::read_sub_dir(ubuf &dst)
 	{
-		// Inode *ind = _den->getNode();
-		// size_t rlen = ind->readSubDir(dst, _file_ptr);
-		// _file_ptr += rlen;
 		panic("normal_file::read_sub_dir: not implemented yet");
-		size_t rlen = 0; // Placeholder for actual read length
+		size_t rlen = 0;
 		return rlen;
 	}
 
 	off_t normal_file::lseek(off_t offset, int whence)
 	{
 		if (is_memfd())
+		{
 			sync_file_size_from_memfd();
-		printfYellow("normal_file::lseek called with offset: %d, whence: %d\n", offset, whence);
-		printfYellow("normal_file::lseek: _stat.size=%ld, lwext4_file_struct.fsize=%ld\n",
-					 _stat.size, (long)lwext4_file_struct.fsize);
+		}
 
-		[[maybe_unused]] off_t new_off;
+		_file_lock.acquire();
+		int flush_status = flush_write_combine_locked();
+		if (flush_status != EOK)
+		{
+			_file_lock.release();
+			return -flush_status;
+		}
+
+		off_t new_off = 0;
 		switch (whence)
 		{
 		case SEEK_SET:
-			// 支持稀疏文件：允许seek到文件末尾之后
-			// 这使得可以通过lseek()将文件指针移动到超出文件末尾的位置
-			// 后续写入将创建稀疏文件（中间的空洞会被自动用0填充）
 			if (offset < 0)
+			{
+				_file_lock.release();
 				return -EINVAL;
-			_file_ptr = offset;
-			if ((uint64)offset > lwext4_file_struct.fsize)
-				return _file_ptr;
+			}
+			new_off = offset;
 			break;
 		case SEEK_CUR:
 			new_off = _file_ptr + offset;
 			if (new_off < 0)
+			{
+				_file_lock.release();
 				return -EINVAL;
-			_file_ptr = new_off;
-			if ((uint64)_file_ptr> lwext4_file_struct.fsize)
-				return _file_ptr;
+			}
 			break;
 		case SEEK_END:
-			// 使用实际的文件大小而不是_stat.size
-			new_off = (off_t)lwext4_file_struct.fsize + offset;
+			new_off = static_cast<off_t>(lwext4_file_struct.fsize) + offset;
 			if (new_off < 0)
+			{
+				_file_lock.release();
 				return -EINVAL;
-			_file_ptr = new_off;
+			}
 			break;
 		default:
-			printfRed("normal_file::lseek: invalid whence %d", whence);
+			_file_lock.release();
 			return -EINVAL;
 		}
 
-		int seek_status = ext4_fseek(&lwext4_file_struct, _file_ptr, SEEK_SET);
+		_file_ptr = new_off;
+		if (static_cast<uint64>(new_off) > lwext4_file_struct.fsize)
+		{
+			_file_lock.release();
+			return _file_ptr;
+		}
 
+		int seek_status = ext4_fseek(&lwext4_file_struct, _file_ptr, SEEK_SET);
 		if (seek_status != EOK)
 		{
-			printfRed("normal_file::lseek: ext4_fseek failed with status %d", seek_status);
-			return -1;
+			_file_lock.release();
+			return -seek_status;
 		}
-		printfYellow("normal_file::lseek: returning new position: %ld\n", _file_ptr);
+
+		_file_lock.release();
 		return _file_ptr;
 	}
 

@@ -127,6 +127,29 @@ namespace proc
             return refcnt > 0 && refcnt <= k_max_reasonable_file_refcnt;
         }
 
+        struct SharedBackingSelection
+        {
+            key_t key;
+            bool always_new_segment;
+        };
+
+        /**
+         * @brief 为 mmap(MAP_SHARED) 选择共享后端。
+         *
+         * 文件共享映射需要按文件身份复用后端，匿名共享映射则必须每次都拿到独立段。
+         * 之前匿名映射错误地复用了同一个固定 key，会让互不相关的 MAP_SHARED|MAP_ANONYMOUS
+         * 互相别名，直接破坏像 iozone barrier 这类依赖共享页布局的程序语义。
+         */
+        inline SharedBackingSelection select_shared_backing(fs::file *file_obj, bool is_anonymous)
+        {
+            if (is_anonymous || file_obj == nullptr)
+            {
+                return {IPC_PRIVATE, true};
+            }
+
+            return {shm::k_smm.ftok(file_obj->_path_name.c_str(), 0), false};
+        }
+
         inline bool starts_with(const char *lhs, const char *rhs)
         {
             if (lhs == nullptr || rhs == nullptr)
@@ -438,12 +461,7 @@ namespace proc
 
                 // 初始化文件描述符表
                 p->_ofile = new ofile();
-                p->_ofile->_shared_ref_cnt = 1;
-                for (uint64 i = 0; i < max_open_files; ++i)
-                {
-                    p->_ofile->_ofile_ptr[i] = nullptr;
-                    p->_ofile->_fl_cloexec[i] = false;
-                }
+                p->_ofile->init("ofile");
 
                 /****************************************************************************************
                  * 线程和同步原语初始化
@@ -1126,32 +1144,32 @@ namespace proc
     /// @return
     int ProcessManager::alloc_fd(Pcb *p, fs::file *f, int fd)
     {
-        // 越界检查
         if (fd < 0 || fd >= (int)max_open_files || f == nullptr || p->_ofile == nullptr)
             return -1;
-        // 不为空先释放资源
-        if (p->_ofile->_ofile_ptr[fd] != nullptr)
+
+        fs::file *old_file = nullptr;
+        p->_ofile->_lock.acquire();
+        if (p->_ofile->_ofile_ptr[fd] != nullptr && p->_ofile->_ofile_ptr[fd] != f)
         {
-            // 如果newfd已经打开，先关闭它，再打开
-            if (p->_ofile->_ofile_ptr[fd] != f)
+            old_file = p->_ofile->_ofile_ptr[fd];
+        }
+        p->_ofile->_ofile_ptr[fd] = f;
+        p->_ofile->_reserved[fd] = false;
+        p->_ofile->_fl_cloexec[fd] = false; // 默认不设置 CLOEXEC
+        p->_ofile->_lock.release();
+
+        if (old_file != nullptr)
+        {
+            if (!is_probably_live_file_object(old_file))
             {
-                fs::file *old_file = p->_ofile->_ofile_ptr[fd];
-                if (!is_probably_live_file_object(old_file))
-                {
-                    printfRed("[alloc_fd] 检测到异常旧文件指针，直接丢弃: pid=%d fd=%d file=%p\n",
-                              p->_pid, fd, old_file);
-                }
-                else
-                {
-                    old_file->free_file(); // 释放旧的文件描述符
-                }
-                p->_ofile->_ofile_ptr[fd] = nullptr;
-                p->_ofile->_fl_cloexec[fd] = false;
+                printfRed("[alloc_fd] 检测到异常旧文件指针，直接丢弃: pid=%d fd=%d file=%p\n",
+                          p->_pid, fd, old_file);
+            }
+            else
+            {
+                old_file->free_file();
             }
         }
-
-        p->_ofile->_ofile_ptr[fd] = f;
-        p->_ofile->_fl_cloexec[fd] = false; // 默认不设置 CLOEXEC
 
         return fd;
     }
@@ -1169,23 +1187,64 @@ namespace proc
     {
         int fd;
 
-        if (p->_ofile == nullptr)
+        if (p->_ofile == nullptr || f == nullptr)
             return -1;
 
-        // Linux/POSIX 语义要求 open/pipe/dup 返回“当前最小可用 fd”。
-        // 之前这里从 3 开始扫描，导致即便 0/1/2 已经被 close，
-        // 后续 open 也永远拿不到这些描述符，直接破坏了 shell 的重定向行为。
+        p->_ofile->_lock.acquire();
         for (fd = 0; fd < (int)max_open_files; fd++)
         {
-            if (p->_ofile->_ofile_ptr[fd] == nullptr)
+            if (p->_ofile->_ofile_ptr[fd] == nullptr && !p->_ofile->_reserved[fd])
             {
                 p->_ofile->_ofile_ptr[fd] = f;
+                p->_ofile->_reserved[fd] = false;
                 p->_ofile->_fl_cloexec[fd] = false; // 默认不设置 CLOEXEC
-                // 注意：这里不调用 f->dup()，因为调用者通常已经为新分配的文件描述符准备了正确的引用计数
+                p->_ofile->_lock.release();
                 return fd;
             }
         }
+        p->_ofile->_lock.release();
         return syscall::SYS_EMFILE;
+    }
+
+    int ProcessManager::reserve_fd(Pcb *p)
+    {
+        if (p == nullptr || p->_ofile == nullptr)
+        {
+            return -1;
+        }
+
+        p->_ofile->_lock.acquire();
+        for (int fd = 0; fd < (int)max_open_files; ++fd)
+        {
+            if (p->_ofile->_ofile_ptr[fd] == nullptr && !p->_ofile->_reserved[fd])
+            {
+                p->_ofile->_reserved[fd] = true;
+                p->_ofile->_fl_cloexec[fd] = false;
+                p->_ofile->_lock.release();
+                return fd;
+            }
+        }
+        p->_ofile->_lock.release();
+        return syscall::SYS_EMFILE;
+    }
+
+    int ProcessManager::install_fd(Pcb *p, fs::file *f, int fd)
+    {
+        return alloc_fd(p, f, fd);
+    }
+
+    void ProcessManager::release_fd(Pcb *p, int fd)
+    {
+        if (p == nullptr || p->_ofile == nullptr || fd < 0 || fd >= (int)max_open_files)
+        {
+            return;
+        }
+
+        p->_ofile->_lock.acquire();
+        p->_ofile->_ofile_ptr[fd] = nullptr;
+        p->_ofile->_reserved[fd] = false;
+        p->_ofile->_fl_cloexec[fd] = false;
+        p->_ofile->_lock.release();
     }
 
     int ProcessManager::clone(uint64 flags, uint64 stack_ptr, uint64 ptid, uint64 tls, uint64 ctid, bool is_clone3)
@@ -1390,8 +1449,6 @@ namespace proc
             if (parent_mm != nullptr)
             {
                 np->set_memory_manager(parent_mm->share_for_thread());
-                printfCyan("[clone] Using shared memory manager for process %d (parent %d)\n",
-                           np->_pid, p->_pid);
             }
             else
             {
@@ -1417,11 +1474,9 @@ namespace proc
                     panic("fork failed: memory copy failed");
                     return nullptr;
                 }
-	                np->set_memory_manager(cloned_mm);
-	                printf("[fork-mm] parent pcb=%p pid=%d mm=%p -> child pcb=%p pid=%d mm=%p\n",
-	                       p, p->_pid, parent_mm, np, np->_pid, np->get_memory_manager());
-	            }
-	        }
+                np->set_memory_manager(cloned_mm);
+            }
+        }
 
         // ===== 信号处理 =====
         if (flags & syscall::CLONE_SIGHAND)
@@ -2441,27 +2496,29 @@ namespace proc
     /// @return fd
     int ProcessManager::open(int dir_fd, eastl::string path, uint flags, int mode)
     {
-        printfCyan("[open] dir_fd: %d, path: %s, flags: %s, mode: 0%o\n", dir_fd, path.c_str(), flags_to_string(flags).c_str(), mode);
-
         Pcb *p = get_cur_pcb();
-        // fs::file *file = nullptr;
-
-        // struct filesystem *fs = get_fs_from_path(path.c_str());
         fs::file *file = nullptr;
-        int fd = alloc_fd(p, file);
+        int fd = reserve_fd(p);
         if (fd < 0)
         {
             printfRed("[open] alloc_fd failed for path: %s,pid:%d\n", path.c_str(), p->_pid);
             return -EMFILE; // 分配文件描述符失败
         }
-        int err = fs::k_vfs.openat(path, p->_ofile->_ofile_ptr[fd], flags, mode);
+        int err = fs::k_vfs.openat(path, file, flags, mode);
         if (err < 0)
         {
-            printfRed("[open] failed for path: %s,err:%d\n", path.c_str(),err);
+            release_fd(p, fd);
+            printfRed("[open] failed for path: %s,err:%d\n", path.c_str(), err);
             return err; // 文件不存在或打开失败
         }
-        p->_ofile->_ofile_ptr[fd]->_lock.l_pid = p->_pid; // 设置文件描述符的锁定进程 ID
-        return fd;                                        // 返回分配的文件描述符
+        if (install_fd(p, file, fd) < 0)
+        {
+            file->free_file();
+            release_fd(p, fd);
+            return -EMFILE;
+        }
+        file->_lock.l_pid = p->_pid; // 设置文件描述符的锁定进程 ID
+        return fd;                   // 返回分配的文件描述符
     }
 
     int ProcessManager::close(int fd)
@@ -2469,21 +2526,27 @@ namespace proc
         if (fd < 0 || fd >= (int)max_open_files)
             return -1;
         Pcb *p = get_cur_pcb();
-        if (p->_ofile == nullptr || p->_ofile->_ofile_ptr[fd] == nullptr)
+        if (p->_ofile == nullptr)
             return 0;
 
+        p->_ofile->_lock.acquire();
         fs::file *f = p->_ofile->_ofile_ptr[fd];
+        p->_ofile->_ofile_ptr[fd] = nullptr;
+        p->_ofile->_reserved[fd] = false;
+        p->_ofile->_fl_cloexec[fd] = false;
+        p->_ofile->_lock.release();
+
+        if (f == nullptr)
+        {
+            return 0;
+        }
         if (!is_probably_live_file_object(f))
         {
             printfRed("[close] 检测到异常文件指针，直接丢弃: pid=%d fd=%d file=%p\n",
                       p->_pid, fd, f);
-            p->_ofile->_ofile_ptr[fd] = nullptr;
-            p->_ofile->_fl_cloexec[fd] = false;
             return 0;
         }
         f->free_file();
-        p->_ofile->_ofile_ptr[fd] = nullptr;
-        p->_ofile->_fl_cloexec[fd] = false; // 清理 CLOEXEC 标志
         return 0;
     }
     /// @brief 获取指定文件描述符对应文件的状态信息。
@@ -2775,9 +2838,6 @@ namespace proc
     /// @return 成功返回映射地址，失败返回MAP_FAILED
     void *ProcessManager::mmap(void *addr, size_t length, int prot, int flags, int fd, int offset, int *errno)
     {
-        printfYellow("[mmap] addr: %p, length: %u, prot: %d, flags: %d, fd: %d, offset: %d\n",
-                     addr, length, prot, flags, fd, offset);
-            // proc::k_pm.get_cur_pcb()->print_detailed_memory_info();
         // 初始化错误码
         if (errno != nullptr)
         {
@@ -2932,7 +2992,6 @@ namespace proc
             }
 
             vfile = f;
-            printfCyan("[mmap] File mapping: %s\n", f->_path_name.c_str());
             // Respect memfd write seal: disallow shared writable mappings
             if (f->is_memfd())
             {
@@ -2971,7 +3030,6 @@ namespace proc
         }
         else
         {
-            printfCyan("[mmap] Anonymous mapping\n");
         }
 
         // 地址对齐
@@ -3137,23 +3195,16 @@ namespace proc
 
             if (flags & MAP_SHARED)
             {
-                key_t key;
-                if (f)
-                {
-                    key = shm::k_smm.ftok(f->_path_name.c_str(), 0);
-                }
-                else
-                {
-                    key = shm::k_smm.ftok("nullptr", 0);
-                }
-                if (key == -1)
+                SharedBackingSelection shared_backing = select_shared_backing(vfile, is_anonymous);
+                if (shared_backing.key == -1)
                 {
                     printfRed("[mmap] Failed to generate key for shared memory\n");
                     return fail_mmap(EINVAL);
                 }
 
-                created_new_shared_backing = shm::k_smm.find_seg_by_key(key) < 0;
-                shared_backing_shmid = shm::k_smm.create_seg(key, restore_length, IPC_CREAT);
+                created_new_shared_backing = shared_backing.always_new_segment ||
+                                             shm::k_smm.find_seg_by_key(shared_backing.key) < 0;
+                shared_backing_shmid = shm::k_smm.create_seg(shared_backing.key, restore_length, IPC_CREAT);
                 if (shared_backing_shmid < 0)
                 {
                     printfRed("[mmap] Failed to create shared memory segment\n");
@@ -3204,21 +3255,21 @@ namespace proc
                         printfYellow("[mmap] MAP_SHARED partial page read (%d bytes)\n", readbytes);
                     }
                 }
-                printfCyan("[mmap] Created shared memory segment with key %d at addr %p\n", key, (void *)map_addr);
             }
         }
 
         if ((flags & MAP_SHARED) != 0 && shared_backing_shmid < 0)
         {
-            key_t key = f ? shm::k_smm.ftok(f->_path_name.c_str(), 0) : shm::k_smm.ftok("nullptr", 0);
-            if (key == -1)
+            SharedBackingSelection shared_backing = select_shared_backing(vfile, is_anonymous);
+            if (shared_backing.key == -1)
             {
                 printfRed("[mmap] Failed to generate key for shared memory\n");
                 return fail_mmap(EINVAL);
             }
 
-            created_new_shared_backing = shm::k_smm.find_seg_by_key(key) < 0;
-            shared_backing_shmid = shm::k_smm.create_seg(key, restore_length, IPC_CREAT);
+            created_new_shared_backing = shared_backing.always_new_segment ||
+                                         shm::k_smm.find_seg_by_key(shared_backing.key) < 0;
+            shared_backing_shmid = shm::k_smm.create_seg(shared_backing.key, restore_length, IPC_CREAT);
             if (shared_backing_shmid < 0)
             {
                 printfRed("[mmap] Failed to create shared memory segment for fixed/shared mapping\n");
@@ -3333,18 +3384,12 @@ namespace proc
         if (flags & MAP_POPULATE)
         {
             // TODO: 预分配页面
-            printfCyan("[mmap] MAP_POPULATE: will prefault pages\n");
         }
 
         if (flags & MAP_LOCKED)
         {
             // TODO: 锁定页面在内存中
-            printfCyan("[mmap] MAP_LOCKED: pages will be locked in memory\n");
         }
-
-        printfGreen("[mmap] Success: addr=%p, len=%d, prot=%d, flags=%d,vma[%d]\n",
-                    (void *)map_addr, aligned_length, prot, flags,vma_idx);
-            // proc::k_pm.get_cur_pcb()->print_detailed_memory_info();
         return (void *)map_addr;
     }
     /// @brief 取消内存映射，符合POSIX标准的munmap实现
