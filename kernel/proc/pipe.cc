@@ -155,9 +155,10 @@ namespace proc
 					_lock.release();
 					return syscall::SYS_EINTR;
 				}
-				k_pm.sleep(&_read_sleep, &_lock);
-				// 阻塞模式：让当前进程进入休眠状态，等待写端写入数据后唤醒。
-				k_pm.sleep(&_read_sleep, &_lock); // DOC: piperead-sleep
+					// 阻塞模式下只睡一次，等待写端写入数据或关闭写端后被唤醒。
+					// 这里如果重复 sleep，会把一次正常 wakeup 又重新睡回去，
+					// 在“父进程写完就 wait、稍后才 close 写端”的场景里容易形成永久卡死。
+					k_pm.sleep(&_read_sleep, &_lock); // DOC: piperead-sleep
 			}
 
 			for (i = 0; i < n; i++)
