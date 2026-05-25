@@ -113,6 +113,253 @@ namespace syscall
             KernelTimeValOld it_value;
         };
 
+        struct UserTimespec64
+        {
+            long tv_sec;
+            long tv_nsec;
+        };
+
+#ifdef LOONGARCH
+        struct UserStatLayout
+        {
+            dev_t st_dev;
+            int __pad1[3];
+            ino_t st_ino;
+            mode_t st_mode;
+            uint32 st_nlink;
+            uint32 st_uid;
+            uint32 st_gid;
+            dev_t st_rdev;
+            uint32 __pad2[2];
+            off_t st_size;
+            int __pad3;
+            UserTimespec64 st_atim;
+            UserTimespec64 st_mtim;
+            UserTimespec64 st_ctim;
+            long st_blksize;
+            uint32 __pad4;
+            long st_blocks;
+            int __pad5[14];
+        };
+#elif defined(RISCV)
+        struct UserStatLayout
+        {
+            uint64 st_dev;
+            uint64 st_ino;
+            uint32 st_mode;
+            uint32 st_nlink;
+            uint32 st_uid;
+            uint32 st_gid;
+            uint64 st_rdev;
+            uint64 __pad;
+            int64 st_size;
+            int32 st_blksize;
+            int32 __pad2;
+            int64 st_blocks;
+            UserTimespec64 st_atim;
+            UserTimespec64 st_mtim;
+            UserTimespec64 st_ctim;
+            uint32 stat_unused[2];
+        };
+#else
+        struct UserStatLayout
+        {
+            dev_t st_dev;
+            ino_t st_ino;
+            mode_t st_mode;
+            uint32 st_nlink;
+            uint32 st_uid;
+            uint32 st_gid;
+            dev_t st_rdev;
+            unsigned long __pad;
+            off_t st_size;
+            long st_blksize;
+            int __pad2;
+            long st_blocks;
+            UserTimespec64 st_atim;
+            UserTimespec64 st_mtim;
+            UserTimespec64 st_ctim;
+            unsigned int stat_unused[2];
+        };
+#endif
+
+        static void fill_user_stat_layout(const fs::Kstat &src, UserStatLayout &dst)
+        {
+            memset(&dst, 0, sizeof(dst));
+            dst.st_dev = src.dev;
+            dst.st_ino = src.ino;
+            dst.st_mode = src.mode;
+            dst.st_nlink = src.nlink;
+            dst.st_uid = src.uid;
+            dst.st_gid = src.gid;
+            dst.st_rdev = src.rdev;
+            dst.st_size = src.size;
+            dst.st_blksize = src.blksize;
+            dst.st_blocks = src.blocks;
+            dst.st_atim.tv_sec = src.st_atime_sec;
+            dst.st_atim.tv_nsec = src.st_atime_nsec;
+            dst.st_mtim.tv_sec = src.st_mtime_sec;
+            dst.st_mtim.tv_nsec = src.st_mtime_nsec;
+            dst.st_ctim.tv_sec = src.st_ctime_sec;
+            dst.st_ctim.tv_nsec = src.st_ctime_nsec;
+        }
+
+        static int copy_out_user_stat(mem::PageTable &pt, uint64 user_addr, const fs::Kstat &kst)
+        {
+            UserStatLayout stat_buf;
+            fill_user_stat_layout(kst, stat_buf);
+            return mem::k_vmm.copy_out(pt, user_addr, &stat_buf, sizeof(stat_buf));
+        }
+
+        static bool is_valid_utimens_nsec(long tv_nsec)
+        {
+            return tv_nsec == UTIME_NOW || tv_nsec == UTIME_OMIT ||
+                   (tv_nsec >= 0 && tv_nsec < 1000000000L);
+        }
+
+        static uint64 current_realtime_seconds()
+        {
+            tmm::timespec now{};
+            if (tmm::k_tm.clock_gettime(static_cast<tmm::SystemClockId>(0), &now) < 0)
+            {
+                return 0;
+            }
+            return static_cast<uint64>(now.tv_sec);
+        }
+
+        static int apply_ext4_times_to_open_file(fs::file *f, const timespec *times)
+        {
+            if (f == nullptr || f->lwext4_file_struct.mp == nullptr || f->lwext4_file_struct.inode == 0)
+            {
+                return -EINVAL;
+            }
+
+            struct ext4_inode_ref inode_ref;
+            int result = ext4_fs_get_inode_ref(&f->lwext4_file_struct.mp->fs,
+                                               f->lwext4_file_struct.inode,
+                                               &inode_ref);
+            if (result != EOK)
+            {
+                return -result;
+            }
+
+            const uint64 now = current_realtime_seconds();
+            if (times == nullptr)
+            {
+                ext4_inode_set_access_time(inode_ref.inode, now);
+                ext4_inode_set_modif_time(inode_ref.inode, now);
+            }
+            else
+            {
+                if (times[0].tv_nsec == UTIME_NOW)
+                {
+                    ext4_inode_set_access_time(inode_ref.inode, now);
+                }
+                else if (times[0].tv_nsec != UTIME_OMIT)
+                {
+                    ext4_inode_set_access_time(inode_ref.inode, times[0].tv_sec);
+                }
+
+                if (times[1].tv_nsec == UTIME_NOW)
+                {
+                    ext4_inode_set_modif_time(inode_ref.inode, now);
+                }
+                else if (times[1].tv_nsec != UTIME_OMIT)
+                {
+                    ext4_inode_set_modif_time(inode_ref.inode, times[1].tv_sec);
+                }
+            }
+
+            ext4_inode_set_change_inode_time(inode_ref.inode, now);
+            inode_ref.dirty = true;
+            result = ext4_fs_put_inode_ref(&inode_ref);
+            if (result != EOK)
+            {
+                return -result;
+            }
+            return 0;
+        }
+
+        static int resolve_utimens_path(int dirfd, const eastl::string &pathname, eastl::string &absolute_path)
+        {
+            proc::Pcb *p = proc::k_pm.get_cur_pcb();
+            if (pathname.empty())
+            {
+                return -ENOENT;
+            }
+
+            if (pathname[0] == '/')
+            {
+                absolute_path = pathname;
+                return 0;
+            }
+
+            if (dirfd == AT_FDCWD)
+            {
+                absolute_path = get_absolute_path(pathname.c_str(), p->_cwd_name.c_str());
+                return 0;
+            }
+
+            fs::file *dir_file = p->get_open_file(dirfd);
+            if (dir_file == nullptr)
+            {
+                return -EBADF;
+            }
+            if (dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
+            {
+                return -ENOTDIR;
+            }
+
+            absolute_path = get_absolute_path(pathname.c_str(), dir_file->_path_name.c_str());
+            return 0;
+        }
+
+        static int classify_utimens_path_error(const eastl::string &absolute_path)
+        {
+            size_t last_slash = absolute_path.find_last_of('/');
+            if (last_slash != eastl::string::npos && last_slash > 0)
+            {
+                eastl::string current_path = "";
+                size_t start = 1;
+                while (start < last_slash)
+                {
+                    size_t end = absolute_path.find('/', start);
+                    if (end == eastl::string::npos || end > last_slash)
+                    {
+                        end = last_slash;
+                    }
+
+                    current_path += "/" + absolute_path.substr(start, end - start);
+                    int exists = fs::k_vfs.is_file_exist(current_path.c_str());
+                    if (exists == 0)
+                    {
+                        return -ENOENT;
+                    }
+                    if (exists < 0)
+                    {
+                        return exists;
+                    }
+                    if (fs::k_vfs.path2filetype(current_path) != fs::FileTypes::FT_DIRECT)
+                    {
+                        return -ENOTDIR;
+                    }
+
+                    start = end + 1;
+                }
+            }
+
+            int target_exists = fs::k_vfs.is_file_exist(absolute_path.c_str());
+            if (target_exists == 0)
+            {
+                return -ENOENT;
+            }
+            if (target_exists < 0)
+            {
+                return target_exists;
+            }
+            return -EINVAL;
+        }
+
         constexpr uint64 k_usec_per_sec = 1000000ULL;
         constexpr uint64 k_clone_args_size_ver0 = 64ULL;
         constexpr int k_prio_process = 0;
@@ -1815,8 +2062,8 @@ namespace syscall
             return status;
         }
         mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
-        // 检查 kst_addr 是否在用户空间
-        if (mem::k_vmm.copy_out(*pt, kst_addr, &kst, sizeof(kst)) < 0)
+        // 按用户态 ABI 布局导出 struct stat，避免 LoongArch 上字段错位。
+        if (copy_out_user_stat(*pt, kst_addr, kst) < 0)
         {
             printfRed("[SyscallHandler::sys_fstat] Error copying out kstat\n");
             return -EFAULT;
@@ -3097,7 +3344,21 @@ namespace syscall
             return -1;
         }
 
+        proc::Pcb *cur = proc::k_pm.get_cur_pcb();
         long result = proc::k_pm.brk(n);
+        static int brk_trace_budget = 64;
+        if (cur != nullptr && n != 0 && brk_trace_budget > 0)
+        {
+            --brk_trace_budget;
+            printf("[sys_brk][trace] proc=%s pid=%d tid=%d req=%p ret=%p heap=[%p,%p)\n",
+                   cur->_name,
+                   cur->_pid,
+                   cur->_tid,
+                   (void *)n,
+                   (void *)result,
+                   (void *)cur->get_heap_start(),
+                   (void *)cur->get_heap_end());
+        }
         if (n == 0)
         {
             printfBlue("[SyscallHandler::sys_brk] brk(0) = 0x%x (query current break)\n", result);
@@ -3200,12 +3461,44 @@ namespace syscall
         }
 
         int mmap_errno = 0;
+        proc::Pcb *cur = proc::k_pm.get_cur_pcb();
         void *result = proc::k_pm.mmap((void *)addr, map_size, prot, flags, fd, offset, &mmap_errno);
 
+        static int mmap_trace_budget = 64;
         if (result == MAP_FAILED)
         {
+            if (cur != nullptr && mmap_trace_budget > 0)
+            {
+                --mmap_trace_budget;
+                printf("[sys_mmap][trace] proc=%s pid=%d tid=%d fail addr=%p len=%p prot=0x%x flags=0x%x fd=%d off=%p errno=%d\n",
+                       cur->_name,
+                       cur->_pid,
+                       cur->_tid,
+                       (void *)addr,
+                       (void *)map_size,
+                       prot,
+                       flags,
+                       fd,
+                       (void *)offset,
+                       mmap_errno);
+            }
             printfRed("[SyscallHandler::sys_mmap] mmap failed with errno: %d\n", mmap_errno);
             return (uint64)MAP_FAILED; // 按约定返回MAP_FAILED
+        }
+        if (cur != nullptr && mmap_trace_budget > 0)
+        {
+            --mmap_trace_budget;
+            printf("[sys_mmap][trace] proc=%s pid=%d tid=%d ok addr=%p len=%p prot=0x%x flags=0x%x fd=%d off=%p -> %p\n",
+                   cur->_name,
+                   cur->_pid,
+                   cur->_tid,
+                   (void *)addr,
+                   (void *)map_size,
+                   prot,
+                   flags,
+                   fd,
+                   (void *)offset,
+                   result);
         }
         // if(addr==0&&map_size==1024&&prot==2&&flags==2&&fd==3&&offset==0)
         // return -1;
@@ -3858,7 +4151,7 @@ namespace syscall
             }
 
             // 将结果拷贝到用户空间
-            if (mem::k_vmm.copy_out(*pt, kst_addr, &kst, sizeof(kst)) < 0)
+            if (copy_out_user_stat(*pt, kst_addr, kst) < 0)
             {
                 printfRed("[SyscallHandler::sys_fstatat] Error copying out kstat\n");
                 return -1;
@@ -3975,7 +4268,7 @@ namespace syscall
             int stat_ret = vfs_path_stat(abs_pathname.c_str(), &kst, (flags & AT_SYMLINK_NOFOLLOW) == 0);
             if (stat_ret == 0)
             {
-                if (mem::k_vmm.copy_out(*pt, kst_addr, &kst, sizeof(kst)) < 0)
+                if (copy_out_user_stat(*pt, kst_addr, kst) < 0)
                 {
                     printfRed("[SyscallHandler::sys_fstatat] Error copying out kstat\n");
                     return -1;
@@ -4095,7 +4388,7 @@ namespace syscall
         }
 
         // 将结果拷贝到用户空间
-        if (mem::k_vmm.copy_out(*pt, kst_addr, &kst, sizeof(kst)) < 0)
+        if (copy_out_user_stat(*pt, kst_addr, kst) < 0)
         {
             printfRed("[SyscallHandler::sys_fstatat] Error copying out kstat\n");
             return -1;
@@ -4134,7 +4427,12 @@ namespace syscall
         if (head == nullptr)
             return -10;
 
-        return proc::k_pm.set_robust_list(head, len); // 调用进程管理器的 set_robust_list 函数
+        int ret = proc::k_pm.set_robust_list(head, len); // 调用进程管理器的 set_robust_list 函数
+        if (ret == 0)
+        {
+            p->_robust_list_user_addr = addr;
+        }
+        return ret;
     }
     uint64 SyscallHandler::sys_gettid()
     {
@@ -6910,74 +7208,98 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_utimensat()
     {
-        // TODO: 这个完全是骗的
-        //  panic("未实现");
-        // #ifdef FS_FIX_COMPLETELY
         int dirfd;
         uint64 pathaddr;
         eastl::string pathname;
         uint64 timespecaddr;
-        timespec atime;
-        timespec mtime;
+        timespec utimes[2];
         int flags;
 
         if (_arg_int(0, dirfd) < 0)
-            return -1;
+            return -EINVAL;
 
         if (_arg_addr(1, pathaddr) < 0)
-            return -1;
+            return -EINVAL;
 
         if (_arg_addr(2, timespecaddr) < 0)
-            return -1;
+            return -EINVAL;
 
         if (_arg_int(3, flags) < 0)
-            return -1;
+            return -EINVAL;
 
         proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = cur_proc->get_pagetable();
-        // fs::dentry *base;
 
-        // if (dirfd == AT_FDCWD)
-        //     base = cur_proc->_cwd;
-        // else
-        // {
-        //     fs::file *ofile = cur_proc->get_open_file(dirfd);
-        //     if (ofile == nullptr || ofile->_attrs.filetype != fs::FileTypes::FT_NORMAL)
-        //         return -1;
-        //     base = static_cast<fs::normal_file *>(ofile)->getDentry();
-        // }
-
-        int cpres = mem::k_vmm.copy_str_in(*pt, pathname, pathaddr, PATH_MAX);
-        if (cpres < 0)
+        const timespec *times = nullptr;
+        if (timespecaddr != 0)
         {
-            printfRed("[sys_utimensat] Error copying old path from user space\n");
-            return cpres;
+            if (mem::k_vmm.copy_in(*pt, &utimes[0], timespecaddr, sizeof(utimes[0])) < 0 ||
+                mem::k_vmm.copy_in(*pt, &utimes[1], timespecaddr + sizeof(utimes[0]), sizeof(utimes[1])) < 0)
+            {
+                return -EFAULT;
+            }
+            if (!is_valid_utimens_nsec(utimes[0].tv_nsec) || !is_valid_utimens_nsec(utimes[1].tv_nsec))
+            {
+                return -EINVAL;
+            }
+            times = utimes;
         }
 
-        if (timespecaddr == 0)
+        bool use_fd_only = false;
+        if (pathaddr == 0)
         {
-            // @todo: 设置为当前时间
-            // atime = NOW;
-            // mtime = NOw;
+            use_fd_only = true;
         }
         else
         {
-            if (mem::k_vmm.copy_in(*pt, &atime, timespecaddr, sizeof(atime)) < 0)
-                return -1;
-
-            if (mem::k_vmm.copy_in(*pt, &mtime, timespecaddr + sizeof(atime), sizeof(mtime)) < 0)
-                return -1;
+            int cpres = mem::k_vmm.copy_str_in(*pt, pathname, pathaddr, PATH_MAX);
+            if (cpres < 0)
+            {
+                printfRed("[sys_utimensat] Error copying path from user space\n");
+                return cpres;
+            }
+            if (pathname.empty() && (flags & AT_EMPTY_PATH))
+            {
+                use_fd_only = true;
+            }
         }
 
-        if (_arg_int(3, flags) < 0)
-            return -1;
-        pathname = get_absolute_path(pathname.c_str(), cur_proc->_cwd_name.c_str());
-        if (fs::k_vfs.is_file_exist(pathname.c_str()) != 1)
-            return SYS_ENOENT;
+        if (use_fd_only)
+        {
+            if (dirfd < 0)
+            {
+                return -EBADF;
+            }
 
-        // int fd = path.open();
-        // #endif
-        return 0;
+            fs::file *f = cur_proc->get_open_file(dirfd);
+            if (f == nullptr)
+            {
+                return -EBADF;
+            }
+
+            int result = apply_ext4_times_to_open_file(f, times);
+            if (result == -EINVAL && !f->_path_name.empty())
+            {
+                result = vfs_ext_utimens(f->_path_name.c_str(),
+                                         reinterpret_cast<const timespecc *>(times));
+            }
+            return result;
+        }
+
+        eastl::string absolute_path;
+        int resolve_ret = resolve_utimens_path(dirfd, pathname, absolute_path);
+        if (resolve_ret < 0)
+        {
+            return resolve_ret;
+        }
+
+        if (fs::k_vfs.is_file_exist(absolute_path.c_str()) != 1)
+        {
+            return classify_utimens_path_error(absolute_path);
+        }
+
+        return vfs_ext_utimens(absolute_path.c_str(),
+                               reinterpret_cast<const timespecc *>(times));
     }
     uint64 SyscallHandler::sys_renameat2()
     {
@@ -7763,50 +8085,101 @@ namespace syscall
         uint64 timeout_addr;
         uint64 uaddr2;
         int val3;
-        // printf("sys_futex\n");
-        _arg_addr(0, uaddr);
-        _arg_int(1, op);
-        _arg_int(2, val);
-        _arg_addr(3, timeout_addr);
-        _arg_addr(4, uaddr2);
-        _arg_int(5, val3);
+        if (_arg_addr(0, uaddr) < 0 ||
+            _arg_int(1, op) < 0 ||
+            _arg_int(2, val) < 0 ||
+            _arg_addr(3, timeout_addr) < 0 ||
+            _arg_addr(4, uaddr2) < 0 ||
+            _arg_int(5, val3) < 0)
+        {
+            return -EINVAL;
+        }
         op &= ~FUTEX_PRIVATE_FLAG;
 
         tmm::timespec timeout;
         tmm::timespec *timeout_ptr = NULL;
 
-        int val2;
+        int val2 = 0;
         int cmd = op & FUTEX_CMD_MASK;
 
-        if (timeout_addr && op == FUTEX_WAIT)
+        if (timeout_addr && (cmd == FUTEX_WAIT || cmd == FUTEX_WAIT_BITSET))
         {
             if (mem::k_vmm.copy_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), (char *)&timeout, timeout_addr, sizeof(timeout)) < 0)
             {
-                return -1;
+                return -EFAULT;
             }
             timeout_ptr = &timeout;
         }
 
         if (cmd == FUTEX_REQUEUE || cmd == FUTEX_CMP_REQUEUE || cmd == FUTEX_CMP_REQUEUE_PI || cmd == FUTEX_WAKE_OP)
         {
-            _arg_int(3, val2);
+            if (_arg_int(3, val2) < 0)
+            {
+                return -EINVAL;
+            }
         }
 
-        switch (op)
+        switch (cmd)
         {
         case FUTEX_WAIT:
             return proc::futex_wait(uaddr, val, timeout_ptr);
+        case FUTEX_WAIT_BITSET:
+            return proc::futex_wait(uaddr, val, timeout_ptr,
+                                    true,
+                                    (op & FUTEX_CLOCK_REALTIME) != 0);
         case FUTEX_WAKE:
+        case FUTEX_WAKE_BITSET:
             return proc::futex_wakeup(uaddr, val, NULL, 0);
         case FUTEX_REQUEUE:
-            return proc::futex_wakeup(uaddr, val, (void *)uaddr2, val3);
+            return proc::futex_wakeup(uaddr, val, (void *)uaddr2, val2);
+        case FUTEX_CMP_REQUEUE:
+        {
+            proc::Pcb *cur = proc::k_pm.get_cur_pcb();
+            int current_val = 0;
+            if (mem::k_vmm.copy_in(*cur->get_pagetable(), (char *)&current_val, uaddr, sizeof(current_val)) < 0)
+            {
+                return -EFAULT;
+            }
+            if (current_val != val3)
+            {
+                return -EAGAIN;
+            }
+            return proc::futex_wakeup(uaddr, val, (void *)uaddr2, val2);
+        }
         default:
-            return 0;
+            return -ENOSYS;
         }
     }
     uint64 SyscallHandler::sys_get_robust_list()
     {
-        panic("未实现该系统调用");
+        int pid;
+        uint64 head_ptr_addr;
+        uint64 len_ptr_addr;
+        if (_arg_int(0, pid) < 0 || _arg_addr(1, head_ptr_addr) < 0 || _arg_addr(2, len_ptr_addr) < 0)
+        {
+            return -EINVAL;
+        }
+
+        proc::Pcb *current = proc::k_pm.get_cur_pcb();
+        proc::Pcb *target = nullptr;
+        if (pid == 0 || pid == static_cast<int>(current->get_tid()))
+        {
+            target = current;
+        }
+        else
+        {
+            return -ESRCH;
+        }
+
+        uint64 head_addr = target->_robust_list_user_addr;
+        size_t len = sizeof(proc::robust_list_head);
+        mem::PageTable *pt = current->get_pagetable();
+        if (mem::k_vmm.copy_out(*pt, head_ptr_addr, &head_addr, sizeof(head_addr)) < 0 ||
+            mem::k_vmm.copy_out(*pt, len_ptr_addr, &len, sizeof(len)) < 0)
+        {
+            return -EFAULT;
+        }
+        return 0;
     }
     uint64 SyscallHandler::sys_setitimer()
     {

@@ -58,6 +58,81 @@ namespace
         return pte.is_null() ? 0 : pte.is_valid();
     }
 
+#ifdef RISCV
+    void fill_riscv_user_mcontext(proc::ipc::signal::machinecontext &mctx, const TrapFrame &tf)
+    {
+        memset(&mctx, 0, sizeof(mctx));
+        mctx.gregs[0] = tf.epc;
+        mctx.gregs[1] = tf.ra;
+        mctx.gregs[2] = tf.sp;
+        mctx.gregs[3] = tf.gp;
+        mctx.gregs[4] = tf.tp;
+        mctx.gregs[5] = tf.t0;
+        mctx.gregs[6] = tf.t1;
+        mctx.gregs[7] = tf.t2;
+        mctx.gregs[8] = tf.s0;
+        mctx.gregs[9] = tf.s1;
+        mctx.gregs[10] = tf.a0;
+        mctx.gregs[11] = tf.a1;
+        mctx.gregs[12] = tf.a2;
+        mctx.gregs[13] = tf.a3;
+        mctx.gregs[14] = tf.a4;
+        mctx.gregs[15] = tf.a5;
+        mctx.gregs[16] = tf.a6;
+        mctx.gregs[17] = tf.a7;
+        mctx.gregs[18] = tf.s2;
+        mctx.gregs[19] = tf.s3;
+        mctx.gregs[20] = tf.s4;
+        mctx.gregs[21] = tf.s5;
+        mctx.gregs[22] = tf.s6;
+        mctx.gregs[23] = tf.s7;
+        mctx.gregs[24] = tf.s8;
+        mctx.gregs[25] = tf.s9;
+        mctx.gregs[26] = tf.s10;
+        mctx.gregs[27] = tf.s11;
+        mctx.gregs[28] = tf.t3;
+        mctx.gregs[29] = tf.t4;
+        mctx.gregs[30] = tf.t5;
+        mctx.gregs[31] = tf.t6;
+    }
+
+    void restore_riscv_trapframe_from_ucontext(TrapFrame &tf, const proc::ipc::signal::usercontext &uctx)
+    {
+        tf.epc = uctx.mcontext.gregs[0];
+        tf.ra = uctx.mcontext.gregs[1];
+        tf.sp = uctx.mcontext.gregs[2];
+        tf.gp = uctx.mcontext.gregs[3];
+        tf.tp = uctx.mcontext.gregs[4];
+        tf.t0 = uctx.mcontext.gregs[5];
+        tf.t1 = uctx.mcontext.gregs[6];
+        tf.t2 = uctx.mcontext.gregs[7];
+        tf.s0 = uctx.mcontext.gregs[8];
+        tf.s1 = uctx.mcontext.gregs[9];
+        tf.a0 = uctx.mcontext.gregs[10];
+        tf.a1 = uctx.mcontext.gregs[11];
+        tf.a2 = uctx.mcontext.gregs[12];
+        tf.a3 = uctx.mcontext.gregs[13];
+        tf.a4 = uctx.mcontext.gregs[14];
+        tf.a5 = uctx.mcontext.gregs[15];
+        tf.a6 = uctx.mcontext.gregs[16];
+        tf.a7 = uctx.mcontext.gregs[17];
+        tf.s2 = uctx.mcontext.gregs[18];
+        tf.s3 = uctx.mcontext.gregs[19];
+        tf.s4 = uctx.mcontext.gregs[20];
+        tf.s5 = uctx.mcontext.gregs[21];
+        tf.s6 = uctx.mcontext.gregs[22];
+        tf.s7 = uctx.mcontext.gregs[23];
+        tf.s8 = uctx.mcontext.gregs[24];
+        tf.s9 = uctx.mcontext.gregs[25];
+        tf.s10 = uctx.mcontext.gregs[26];
+        tf.s11 = uctx.mcontext.gregs[27];
+        tf.t3 = uctx.mcontext.gregs[28];
+        tf.t4 = uctx.mcontext.gregs[29];
+        tf.t5 = uctx.mcontext.gregs[30];
+        tf.t6 = uctx.mcontext.gregs[31];
+    }
+#endif
+
 #ifdef LOONGARCH
     void fill_loongarch_user_mcontext(proc::ipc::signal::machinecontext &mctx, const TrapFrame &tf)
     {
@@ -294,7 +369,8 @@ namespace proc
 
                 // 确保关键信号不会被屏蔽
                 uint64 unmaskable_signals = (1UL << (signal::SIGKILL - 1)) |
-                                            (1UL << (signal::SIGSTOP - 1));
+                                            (1UL << (signal::SIGSTOP - 1)) |
+                                            (1UL << (signal::SIGCANCEL - 1));
                 cur_proc->_sigmask &= ~unmaskable_signals;
 
                 return 0;
@@ -430,7 +506,8 @@ namespace proc
                     return false;
                 }
 
-                return (p->_signal & ~p->_sigmask) != 0;
+                uint64 internal_unmaskable = (1ULL << (signal::SIGCANCEL - 1));
+                return (p->_signal & (~p->_sigmask | internal_unmaskable)) != 0;
             }
 
             // 获取信号的默认行为
@@ -711,7 +788,7 @@ namespace proc
                 
                 // 如果进程正在sigsuspend中等待，并且这个信号没有被阻塞，则唤醒它
                 uint64 sig_mask = (1UL << (sig - 1));
-                if ((p->_sigmask & sig_mask) == 0) { // 信号没有被阻塞
+                if ((p->_sigmask & sig_mask) == 0 || sig == signal::SIGCANCEL) {
                     // 使用特殊的sigsuspend睡眠通道来唤醒等待中的进程
                     void *sigsuspend_chan = (void*)((uint64)p + 0x1000);
                     // 检查进程是否正在特定的sigsuspend通道上睡眠
@@ -872,8 +949,8 @@ namespace proc
                     uctx.link = 0;
                     uctx.stack = {(void *)stack_sp, 0, sig_size};
 #ifdef RISCV
-                    uctx.sigmask = p->_sigmask;
-                    uctx.mcontext.gp.x[17] = p->_trapframe->epc; // epc(TODO)
+                    uctx.sigmask.sig[0] = p->_sigmask;
+                    fill_riscv_user_mcontext(uctx.mcontext, frame->tf);
 #elif LOONGARCH
                     uctx.sigmask.sig[0] = p->_sigmask;
                     fill_loongarch_user_mcontext(uctx.mcontext, frame->tf);
@@ -1099,7 +1176,8 @@ namespace proc
                     
                     mem::k_pmm.free_page(frame);
 #ifdef RISCV
-                    p->_trapframe->epc = uctx.mcontext.gp.x[17];
+                    p->_sigmask = uctx.sigmask.sig[0];
+                    restore_riscv_trapframe_from_ucontext(*p->_trapframe, uctx);
 #elif LOONGARCH
                     // 某些取消/条件变量压力测里，如果用户态栈上的 ucontext 已经被破坏，
                     // 这里继续照抄一个 pc=0 的上下文只会把线程立刻送去地址 0 再次 fault。
@@ -1152,6 +1230,10 @@ namespace proc
 
             bool is_ignored(Pcb *now_p, int sig)
             {
+                if (sig == signal::SIGCANCEL)
+                {
+                    return false;
+                }
                 return sig_is_member(now_p->_sigmask, sig);
             }
 

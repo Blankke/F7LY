@@ -150,6 +150,7 @@ namespace proc
         _futex_addr = nullptr;  // futex等待地址
         _clear_tid_addr = 0;    // 线程退出时清除的地址
         _robust_list = nullptr; // 健壮futex链表头
+        _robust_list_user_addr = 0; // 健壮futex链表头用户地址
         _vfork_parent = nullptr; // vfork 父进程等待通道
 
         /****************************************************************************************

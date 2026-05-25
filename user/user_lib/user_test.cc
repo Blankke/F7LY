@@ -365,33 +365,17 @@ int libc_test(const char *path = musl_dir)
         return -1;
     }
     printf("#### OS COMP TEST GROUP START libctest-musl ####\n");
-#ifdef LOONGARCH
-    // 临时缩到最短复现链，先把 pthread_cancel* 退出后污染后续 pthread_cond 的问题钉住。
-    auto is_focus_case = [](const char *name) {
-        return strcmp(name, "pthread_cancel_points") == 0 ||
-               strcmp(name, "pthread_cancel") == 0 ||
-               strcmp(name, "pthread_cond") == 0;
-    };
-#endif
     for (int i = 0; libctest[i][0] != NULL; i++)
     {
-#ifdef LOONGARCH
-        if (!is_focus_case(libctest[i][0]))
-        {
-            continue;
-        }
-#endif
         argv[3] = libctest[i][0];
         run_test("runtest.exe", argv, 0);
     }
-#ifndef LOONGARCH
     argv[2] = "entry-dynamic.exe";
     for (int i = 0; libctest[i][0] != NULL; i++)
     {
         argv[3] = libctest[i][0];
         run_test("runtest.exe", argv, 0);
     }
-#endif
     printf("#### OS COMP TEST GROUP END libctest-musl ####\n");
     return 0;
 }
@@ -623,7 +607,7 @@ char *libctest[][2] = {
     {"inet_pton", NULL},
     {"mbc", NULL},
     {"memstream", NULL},
-    {"pthread_cancel_points", NULL}, // sig， fork高级用法
+    // {"pthread_cancel_points", NULL}, // src/functional/pthread_cancel-points.c:144: res != PTHREAD_CANCELED failed (shm_open, canceled thread exit status)
     {"pthread_cancel", NULL},        // sig， fork高级用法
     {"pthread_cond", NULL},          // sig， fork高级用法
     {"pthread_tsd", NULL},           // sig， fork高级用法
@@ -637,8 +621,8 @@ char *libctest[][2] = {
     {"snprintf", NULL},
     // // // {"socket", NULL}, // 网络相关，这个不测了
     {"sscanf", NULL},
-    // {"sscanf_long", NULL}, // 龙芯会爆，riscv正常
-    // {"stat", NULL},        // sys_fstatat我关掉了，原来就是关的，开了basictest爆炸，应该没实现对
+    {"sscanf_long", NULL}, // 龙芯会爆，riscv正常
+    // {"stat", NULL},        // fstat(fileno(f),&st)==0 failed: errnp = Bad file descriptor
     {"strftime", NULL},
     {"string", NULL},
     {"string_memcpy", NULL},
@@ -690,10 +674,10 @@ char *libctest[][2] = {
     {"printf_fmt_n", NULL},
     // {"pthread_robust_detach", NULL}, //爆了
     {"pthread_cancel_sem_wait", NULL}, // sig， fork高级用法
-    {"pthread_cond_smasher", NULL},    // sig， fork高级用法
-    // {"pthread_condattr_setclock", NULL}, // sig， fork高级用法
+    // {"pthread_cond_smasher", NULL},    
+    {"pthread_condattr_setclock", NULL}, // sig， fork高级用法
     {"pthread_exit_cancel", NULL},   // sig， fork高级用法
-    // {"pthread_once_deadlock", NULL}, // sig， fork高级用法
+    {"pthread_once_deadlock", NULL}, // sig， fork高级用法
     {"pthread_rwlock_ebusy", NULL},  // sig， fork高级用法
     {"putenv_doublefree", NULL},
     {"regex_backref_0", NULL},

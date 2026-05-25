@@ -117,28 +117,42 @@ void ext4_inode_set_csum(struct ext4_sblock *sb, struct ext4_inode *inode, uint3
         inode->checksum_hi = to_le16(checksum >> 16);
 }
 
+static uint64_t ext4_decode_inode_time(uint32_t sec_lo, uint32_t extra)
+{
+    // ext4 extra timestamp 字段的低 2 位是 epoch 高位，剩余 30 位是纳秒。
+    return ((uint64_t)(extra & 0x3) << 32) | sec_lo;
+}
+
+static uint32_t ext4_encode_inode_time_extra(uint64_t time)
+{
+    // 当前内核还没有完整维护纳秒精度，因此写回时保留 epoch 高位、清零纳秒部分。
+    return (uint32_t)((time >> 32) & 0x3);
+}
+
 uint64_t ext4_inode_get_access_time(struct ext4_inode *inode) {
-    return inode->access_time | ((uint64_t) inode->atime_extra << 32);
+    return ext4_decode_inode_time(to_le32(inode->access_time), to_le32(inode->atime_extra));
 }
 void ext4_inode_set_access_time(struct ext4_inode *inode, uint64_t time) {
-    inode->access_time = to_le32(time);
-    inode->atime_extra = time >> 32;
+    inode->access_time = to_le32((uint32_t)time);
+    inode->atime_extra = to_le32(ext4_encode_inode_time_extra(time));
 }
 
 
-uint64_t ext4_inode_get_change_inode_time(struct ext4_inode *inode) { return to_le32(inode->change_inode_time); }
+uint64_t ext4_inode_get_change_inode_time(struct ext4_inode *inode) {
+    return ext4_decode_inode_time(to_le32(inode->change_inode_time), to_le32(inode->ctime_extra));
+}
 void ext4_inode_set_change_inode_time(struct ext4_inode *inode, uint64_t time) {
-    inode->change_inode_time = to_le32(time);
-    inode->ctime_extra = time >> 32;
+    inode->change_inode_time = to_le32((uint32_t)time);
+    inode->ctime_extra = to_le32(ext4_encode_inode_time_extra(time));
 }
 
 uint64_t ext4_inode_get_modif_time(struct ext4_inode *inode) {
-    return inode->modification_time | ((uint64_t) inode->mtime_extra << 32);
+    return ext4_decode_inode_time(to_le32(inode->modification_time), to_le32(inode->mtime_extra));
 }
 
 void ext4_inode_set_modif_time(struct ext4_inode *inode, uint64_t time) {
-    inode->modification_time = to_le32(time);
-    inode->mtime_extra = time >> 32;
+    inode->modification_time = to_le32((uint32_t)time);
+    inode->mtime_extra = to_le32(ext4_encode_inode_time_extra(time));
 }
 
 uint32_t ext4_inode_get_del_time(struct ext4_inode *inode) { return to_le32(inode->deletion_time); }

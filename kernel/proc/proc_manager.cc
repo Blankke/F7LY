@@ -173,6 +173,21 @@ namespace proc
             return proc != nullptr && starts_with(proc->_name, "busybox");
         }
 
+        inline int effective_fd_limit(const proc::Pcb *proc)
+        {
+            if (proc == nullptr)
+            {
+                return 0;
+            }
+
+            uint64 limit = proc->get_nofile_limit();
+            if (limit >= max_open_files)
+            {
+                return static_cast<int>(max_open_files);
+            }
+            return static_cast<int>(limit);
+        }
+
         void dump_fd_table(proc::Pcb *proc, const char *reason)
         {
             if (proc == nullptr || proc->_ofile == nullptr)
@@ -469,6 +484,7 @@ namespace proc
                 p->_futex_addr = nullptr;  // 清空futex等待地址
                 p->_clear_tid_addr = 0;    // 清空线程退出时需要清理的地址
                 p->_robust_list = nullptr; // 清空健壮futex链表
+                p->_robust_list_user_addr = 0;
 
                 /****************************************************************************************
                  * 信号处理初始化
@@ -660,6 +676,7 @@ namespace proc
         p->_futex_addr = nullptr;  // 清空futex等待地址
         p->_clear_tid_addr = 0;    // 清空线程退出时需要清理的地址
         p->_robust_list = nullptr; // 清空健壮futex链表
+        p->_robust_list_user_addr = 0;
 
         /****************************************************************************************
          * 信号处理清理
@@ -1191,7 +1208,8 @@ namespace proc
     /// @return
     int ProcessManager::alloc_fd(Pcb *p, fs::file *f, int fd)
     {
-        if (fd < 0 || fd >= (int)max_open_files || f == nullptr || p->_ofile == nullptr)
+        int fd_limit = effective_fd_limit(p);
+        if (fd < 0 || fd >= fd_limit || f == nullptr || p->_ofile == nullptr)
             return -1;
 
         fs::file *old_file = nullptr;
@@ -1237,8 +1255,9 @@ namespace proc
         if (p->_ofile == nullptr || f == nullptr)
             return -1;
 
+        int fd_limit = effective_fd_limit(p);
         p->_ofile->_lock.acquire();
-        for (fd = 0; fd < (int)max_open_files; fd++)
+        for (fd = 0; fd < fd_limit; fd++)
         {
             if (p->_ofile->_ofile_ptr[fd] == nullptr && !p->_ofile->_reserved[fd])
             {
@@ -1260,8 +1279,9 @@ namespace proc
             return -1;
         }
 
+        int fd_limit = effective_fd_limit(p);
         p->_ofile->_lock.acquire();
-        for (int fd = 0; fd < (int)max_open_files; ++fd)
+        for (int fd = 0; fd < fd_limit; ++fd)
         {
             if (p->_ofile->_ofile_ptr[fd] == nullptr && !p->_ofile->_reserved[fd])
             {
@@ -1888,6 +1908,9 @@ namespace proc
         }
 
         _wait_lock.acquire();
+        bool have_group_status = false;
+        bool group_status_from_leader = false;
+        int group_status = 0;
 
         for (;;)
         {
@@ -1912,17 +1935,20 @@ namespace proc
                 if (np->get_state() == ProcState::ZOMBIE)
                 {
                     returned_pid = np->_pid;
+                    int zombie_xstate = np->_xstate;
 
-                    // 释放wait_lock进行内存拷贝
-                    _wait_lock.release();
-
-                    // 拷贝退出状态
-                    if (addr != 0 &&
-                        mem::k_vmm.copy_out(*p->get_pagetable(), addr,
-                                            (const char *)&np->_xstate, sizeof(np->_xstate)) < 0)
+                    if (child_pid > 0)
                     {
-                        np->_lock.release();
-                        return -1;
+                        // waitpid(leader_pid, ...) 等的是整个线程组完成后的“进程退出状态”。
+                        // 不能在回收每个线程时都覆盖一次状态，否则后面被 exit_group 杀掉的
+                        // 辅助线程（常见为 xstate=-1）会把组长原本正确的退出码冲掉。
+                        bool is_group_leader = np->_pid == np->_tid;
+                        if (!have_group_status || (is_group_leader && !group_status_from_leader))
+                        {
+                            group_status = zombie_xstate;
+                            have_group_status = true;
+                            group_status_from_leader = is_group_leader;
+                        }
                     }
 
                     printfBlue("[wait4] freeproc child pid: %d tid: %d\n", np->_pid, np->_tid);
@@ -1932,10 +1958,15 @@ namespace proc
                     // 对于特定PID，检查是否还有其他同PID的线程
                     if (child_pid > 0)
                     {
-                        _wait_lock.acquire();
                         if (!has_remaining_threads(p, child_pid))
                         {
                             _wait_lock.release();
+                            if (addr != 0 && have_group_status &&
+                                mem::k_vmm.copy_out(*p->get_pagetable(), addr,
+                                                    (const char *)&group_status, sizeof(group_status)) < 0)
+                            {
+                                return -1;
+                            }
                             printfBlue("[wait4] all threads of pid %d have exited\n", child_pid);
                             return returned_pid; // 所有线程都已回收
                         }
@@ -1945,6 +1976,13 @@ namespace proc
                     }
                     else
                     {
+                        _wait_lock.release();
+                        if (addr != 0 &&
+                            mem::k_vmm.copy_out(*p->get_pagetable(), addr,
+                                                (const char *)&zombie_xstate, sizeof(zombie_xstate)) < 0)
+                        {
+                            return -1;
+                        }
                         return returned_pid; // 非特定PID情况，回收一个就返回
                     }
                 }
@@ -2157,6 +2195,13 @@ namespace proc
             }
         }
 
+        // detached/abnormal 线程退出时，robust mutex 的 owner-died 语义必须在地址空间释放前完成。
+        // 否则等待方只会一直超时，看起来就像 pthread_robust_detach 死锁。
+        if (p->_robust_list != nullptr)
+        {
+            proc::futex_cleanup_robust_list(p->_robust_list);
+        }
+
         /****************************************************************************************
          * Phase 2: 释放进程内存和资源（在所有用户态写入操作完成后）
          ****************************************************************************************/
@@ -2181,6 +2226,7 @@ namespace proc
         // 清理线程相关资源
         p->_futex_addr = nullptr;  // 清空futex等待地址
         p->_robust_list = nullptr; // 清空健壮futex链表
+        p->_robust_list_user_addr = 0;
 
         _wait_lock.acquire(); // 只在需要修改父子关系时获取锁
         p->_lock.acquire();
@@ -2387,12 +2433,13 @@ namespace proc
                                    (p->_state == SLEEPING || p->_state == RUNNABLE);
             if (is_futex_waiter)
             {
-                if (count1 < val)
+                if (p->_state == RUNNABLE)
                 {
-                    // 带超时的 futex 会睡在 tick 通道上；若 timer 先把它唤成 RUNNABLE，
-                    // 这里仍要消费这次 FUTEX_WAKE，否则用户态 checkpoint 会反复丢唤醒。
-                    if (p->_state == SLEEPING)
-                        p->_state = RUNNABLE;
+                    p->_futex_addr = 0;
+                }
+                else if (count1 < val)
+                {
+                    p->_state = RUNNABLE;
                     p->_futex_addr = 0;
                     count1++;
                 }
@@ -3178,21 +3225,15 @@ namespace proc
         //     return MAP_FAILED;
         // }
 
-        // 查找空闲VMA
-        int vma_idx = -1;
+        // 先记住一个空闲 VMA 槽位；如果后面能和相邻匿名映射合并，就不再消耗新槽位。
+        int free_vma_idx = -1;
         for (int i = 0; i < NVMA; ++i)
         {
             if (!p->get_vma()->_vm[i].used)
             {
-                vma_idx = i;
+                free_vma_idx = i;
                 break;
             }
-        }
-
-        if (vma_idx == -1)
-        {
-            printfRed("[mmap] No available VMA slots\n");
-            return fail_mmap(ENOMEM); // 进程映射数量超出限制
         }
 
         uint restore_length = length;
@@ -3452,6 +3493,81 @@ namespace proc
                 printfRed("[mmap] Failed to precreate page-table hierarchy for va=%p\n", (void *)va);
                 return fail_mmap(ENOMEM);
             }
+        }
+
+        int vma_idx = -1;
+        // musl 的 malloc 在 LoongArch 上会连续申请一串同属性匿名私有映射。
+        // 如果这里每次都硬占一个新 VMA 槽位，很快就会因为 NVMA 太小而失败。
+        // 对于首尾相接、权限/标志完全一致、且无共享/文件后端的匿名映射，直接并入前一段。
+        if (is_anonymous &&
+            (flags & MAP_PRIVATE) != 0 &&
+            (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) == 0)
+        {
+            for (int i = 0; i < NVMA; ++i)
+            {
+                vma &existing = p->get_vma()->_vm[i];
+                if (!existing.used)
+                {
+                    continue;
+                }
+                if (existing.addr + (uint64)existing.len != map_addr)
+                {
+                    continue;
+                }
+                if (existing.prot != prot || existing.flags != flags)
+                {
+                    continue;
+                }
+                if (existing.vfd != -1 || existing.vfile != nullptr)
+                {
+                    continue;
+                }
+                if (existing.backing_kind != VMA_BACKING_NONE)
+                {
+                    continue;
+                }
+
+                existing.len += static_cast<int>(aligned_length);
+                if (existing.max_len < static_cast<uint64>(existing.len))
+                {
+                    existing.max_len = static_cast<uint64>(existing.len);
+                }
+                return (void *)map_addr;
+            }
+        }
+
+        vma_idx = free_vma_idx;
+        if (vma_idx == -1)
+        {
+            printfRed("[mmap] No available VMA slots\n");
+            if (p != nullptr && strcmp(p->_name, "libc-bench-child") == 0)
+            {
+                printfYellow("[mmap][libc-bench-child] slot exhaustion req_len=%p prot=0x%x flags=0x%x heap=[%p,%p)\n",
+                             (void *)aligned_length,
+                             prot,
+                             flags,
+                             (void *)p->get_heap_start(),
+                             (void *)p->get_heap_end());
+                for (int i = 0; i < NVMA; ++i)
+                {
+                    const vma &dbg_vm = p->get_vma()->_vm[i];
+                    if (!dbg_vm.used)
+                    {
+                        continue;
+                    }
+                    printfYellow("[mmap][libc-bench-child] vma[%d]=[%p,%p) len=%d prot=0x%x flags=0x%x fd=%d expandable=%d backing=%d\n",
+                                 i,
+                                 (void *)dbg_vm.addr,
+                                 (void *)(dbg_vm.addr + (uint64)dbg_vm.len),
+                                 dbg_vm.len,
+                                 dbg_vm.prot,
+                                 dbg_vm.flags,
+                                 dbg_vm.vfd,
+                                 dbg_vm.is_expandable,
+                                 dbg_vm.backing_kind);
+                }
+            }
+            return fail_mmap(ENOMEM);
         }
 
         // 初始化VMA

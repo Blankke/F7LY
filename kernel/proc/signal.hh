@@ -44,6 +44,10 @@ namespace proc
             constexpr int SIGPOLL = 29;  // Also known as SIGIO
             constexpr int SIGPWR = 30;
             constexpr int SIGSYS = 31;   // Also known as SIGUNUSED
+            // 线程库内部保留信号。musl 的 pthread_cancel 依赖 33 号实时信号打断取消点。
+            // 这类内部信号不能被应用真正屏蔽，否则 tkill(SIGCANCEL) 只会挂成 pending，
+            // 阻塞中的目标线程永远不会被唤醒。
+            constexpr int SIGCANCEL = 33;
             constexpr int SIGRTMAX = 64;
             
             constexpr int SIG_BLOCK = 0;
@@ -162,28 +166,60 @@ namespace proc
             static_assert(offsetof(usercontext, mcontext) == 176, "LoongArch ucontext mcontext offset mismatch");
             static_assert(sizeof(usercontext) == 448, "LoongArch ucontext ABI mismatch");
 #else
-            struct generalregs{
-                uint64 x[23]; // 通用寄存器 x0-x31
+            constexpr size_t k_user_sigset_words = 16; // musl/glibc riscv64: 128-byte sigset_t
+
+            struct user_sigset
+            {
+                uint64 sig[k_user_sigset_words];
             };
-            struct floatregs{
-                uint64 f[23]; // 浮点寄存器 f0-f31
-                uint32 fcsr; // 浮点控制和状态寄存器
+
+            typedef uint64 gregset_t[32];
+
+            struct riscv_f_ext_state
+            {
+                uint32 f[32];
+                uint32 fcsr;
+            };
+
+            struct riscv_d_ext_state
+            {
+                uint64 f[32];
+                uint32 fcsr;
+            };
+
+            struct riscv_q_ext_state
+            {
+                uint64 f[64] __attribute__((aligned(16)));
+                uint32 fcsr;
+                uint32 reserved[3];
+            };
+
+            union riscv_fp_state
+            {
+                riscv_f_ext_state f;
+                riscv_d_ext_state d;
+                riscv_q_ext_state q;
             };
 
             struct machinecontext
             {
-                generalregs gp; // gerneral purpose registers,  offset 0x00, size 0x100
-                floatregs fp;   // floating point registers,    offset 0x100, size 0x108
+                // musl/glibc 的 riscv64 ucontext 约定 gregs[0] 保存 PC，
+                // 后续 1..31 按 RISC-V 通用寄存器编号对应 x1..x31。
+                gregset_t gregs;
+                riscv_fp_state fpregs;
             };
-            // ustack
+
             struct usercontext
             {
-                uint64 flags;                 // 0x00 标志位，用于描述信号处理相关的状态。
-                usercontext *link;            // 0x08 链接到下一个信号栈的指针（如有嵌套信号处理）。
-                signalstack stack;            // 0x10 信号处理时使用的备用栈信息结构体。
-                machinecontext mcontext;      // 0x28 保存信号发生时的机器上下文（寄存器等），大小 0x208
-                uint64 sigmask;               // 0x230 信号屏蔽字，指示当前被屏蔽的信号集合。
+                uint64 flags;
+                usercontext *link;
+                signalstack stack;
+                user_sigset sigmask;
+                machinecontext mcontext;
             };
+
+            static_assert(sizeof(user_sigset) == 128, "RISC-V sigset ABI mismatch");
+            static_assert(offsetof(usercontext, mcontext) == 176, "RISC-V ucontext mcontext offset mismatch");
 #endif
 
             // LinuxSigInfo
