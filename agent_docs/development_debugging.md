@@ -80,13 +80,14 @@ which python
 
 ## QEMU 运行与日志保存
 
-不要把 QEMU 长输出直接刷进聊天。所有运行输出写入 `output_*.txt`，这些文件已被 `.gitignore` 覆盖。
+不要把 QEMU 长输出直接刷进聊天。所有运行输出写入 `logs/output_*.txt`，不要直接写到项目根目录；模板会先创建 `logs/`，这些输出文件已被 `.gitignore` 覆盖。
 
 完整 RISC-V 回归日志：
 
 ```bash
 ts=$(date +%Y%m%d-%H%M%S)
-log="output_r_${ts}_make-run-r_QEMU_MEM-1G_timeout-40m.txt"
+mkdir -p logs
+log="logs/output_r_${ts}_make-run-r_QEMU_MEM-1G_timeout-40m.txt"
 {
   echo "run_at=${ts}"
   echo "arch=riscv"
@@ -104,7 +105,8 @@ echo "$log"
 
 ```bash
 ts=$(date +%Y%m%d-%H%M%S)
-log="output_l_${ts}_make-run-l_QEMU_MEM-1G_timeout-40m.txt"
+mkdir -p logs
+log="logs/output_l_${ts}_make-run-l_QEMU_MEM-1G_timeout-40m.txt"
 {
   echo "run_at=${ts}"
   echo "arch=loongarch"
@@ -136,7 +138,8 @@ RISC-V 单测日志模板：
 
 ```bash
 ts=$(date +%Y%m%d-%H%M%S)
-log="output_r_${ts}_single-target_QEMU_MEM-1G_timeout-5m.txt"
+mkdir -p logs
+log="logs/output_r_${ts}_single-target_QEMU_MEM-1G_timeout-5m.txt"
 {
   echo "run_at=${ts}"
   echo "arch=riscv"
@@ -155,7 +158,8 @@ LoongArch 单测日志模板：
 
 ```bash
 ts=$(date +%Y%m%d-%H%M%S)
-log="output_l_${ts}_single-target_QEMU_MEM-1G_timeout-5m.txt"
+mkdir -p logs
+log="logs/output_l_${ts}_single-target_QEMU_MEM-1G_timeout-5m.txt"
 {
   echo "run_at=${ts}"
   echo "arch=loongarch"
