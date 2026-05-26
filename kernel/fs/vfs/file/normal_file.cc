@@ -5,14 +5,106 @@
 #include "fs/lwext4/ext4_fs.hh"
 #include "fs/lwext4/ext4_inode.hh"
 #include "fs/lwext4/ext4_types.hh"
+#include "devs/spinlock.hh"
 #include "libs/string.hh"
-#include "mem/heap_memory_manager.hh"
+#include "mem/physical_memory_manager.hh"
 #include "mem/userspace_stream.hh"
 #include "proc/prlimit.hh"
 #include "proc/signal.hh"
 #include "proc_manager.hh"
 
 #define min(a, b) ((a) < (b) ? (a) : (b))
+
+namespace
+{
+	constexpr size_t k_write_combine_pool_capacity = 1024 * 1024;
+	constexpr int k_write_combine_pool_slots = 32;
+	constexpr int k_write_combine_pool_pages = static_cast<int>(k_write_combine_pool_capacity / PGSIZE);
+
+	SpinLock k_write_combine_pool_lock;
+	bool k_write_combine_pool_lock_ready = false;
+	bool k_write_combine_pool_ready = false;
+	uint8 *k_write_combine_pool[k_write_combine_pool_slots] = {};
+	bool k_write_combine_pool_used[k_write_combine_pool_slots] = {};
+	uint8 k_zero_fill_page[PGSIZE] = {};
+
+	void ensure_write_combine_pool_lock_ready()
+	{
+		if (!k_write_combine_pool_lock_ready)
+		{
+			k_write_combine_pool_lock.init("normal_file_write_combine_pool");
+			k_write_combine_pool_lock_ready = true;
+		}
+	}
+
+	void warm_write_combine_pool_locked()
+	{
+		if (k_write_combine_pool_ready)
+		{
+			return;
+		}
+
+		/*
+		 * 1MiB 顺序写合并是 iozone 的性能关键，但连续 256 页不能在长回归中
+		 * 反复申请/释放。这里在第一次需要时集中预热固定池，后续只借还指针，
+		 * 避免把 buddy 系统切碎到后段 LTP 再也拿不到 1MiB 连续块。
+		 */
+		for (int i = 0; i < k_write_combine_pool_slots; ++i)
+		{
+			k_write_combine_pool[i] = reinterpret_cast<uint8 *>(
+				mem::k_pmm.alloc_pages(k_write_combine_pool_pages));
+			k_write_combine_pool_used[i] = false;
+		}
+		k_write_combine_pool_ready = true;
+	}
+
+	uint8 *acquire_write_combine_buffer()
+	{
+		ensure_write_combine_pool_lock_ready();
+		k_write_combine_pool_lock.acquire();
+		warm_write_combine_pool_locked();
+		for (int i = 0; i < k_write_combine_pool_slots; ++i)
+		{
+			if (!k_write_combine_pool_used[i])
+			{
+				if (k_write_combine_pool[i] == nullptr)
+				{
+					continue;
+				}
+				k_write_combine_pool_used[i] = true;
+				uint8 *buffer = k_write_combine_pool[i];
+				k_write_combine_pool_lock.release();
+				return buffer;
+			}
+		}
+		k_write_combine_pool_lock.release();
+		return nullptr;
+	}
+
+	void release_write_combine_buffer(uint8 *buffer)
+	{
+		if (buffer == nullptr)
+		{
+			return;
+		}
+
+		ensure_write_combine_pool_lock_ready();
+		k_write_combine_pool_lock.acquire();
+		for (int i = 0; i < k_write_combine_pool_slots; ++i)
+		{
+			if (k_write_combine_pool[i] == buffer)
+			{
+				k_write_combine_pool_used[i] = false;
+				k_write_combine_pool_lock.release();
+				return;
+			}
+		}
+		k_write_combine_pool_lock.release();
+
+		// 理论上不会走到这里；保底释放非池化来源，避免异常路径泄漏。
+		mem::k_pmm.free_pages(buffer);
+	}
+}
 
 namespace fs
 {
@@ -23,13 +115,7 @@ namespace fs
 			return true;
 		}
 
-		/*
-		 * 这里显式使用内核堆分配器，而不是 `new[]/delete[]`：
-		 * 1. 这块缓冲区本质上只是原始字节存储，不需要数组析构语义；
-		 * 2. freestanding 内核里 `new[]` 的数组 cookie/对齐 ABI 容易和自定义分配器互相踩踏；
-		 * 3. 统一走 `k_hmm.allocate/free`，释放路径更可控，也更容易跨架构保持一致。
-		 */
-		_write_combine_buffer = reinterpret_cast<uint8 *>(mem::k_hmm.allocate(k_write_combine_capacity));
+		_write_combine_buffer = acquire_write_combine_buffer();
 		return _write_combine_buffer != nullptr;
 	}
 
@@ -47,11 +133,53 @@ namespace fs
 		return logical_size;
 	}
 
+	void normal_file::refresh_ext4_file_size_locked()
+	{
+		if (is_memfd())
+		{
+			sync_file_size_from_memfd();
+			return;
+		}
+
+		if (_write_combine_dirty || lwext4_file_struct.mp == nullptr || lwext4_file_struct.inode == 0)
+		{
+			return;
+		}
+
+		ext4_inode_ref inode_ref;
+		int status = ext4_fs_get_inode_ref(&lwext4_file_struct.mp->fs,
+									   lwext4_file_struct.inode,
+									   &inode_ref);
+		if (status != EOK)
+		{
+			return;
+		}
+
+		uint64 inode_size = ext4_inode_get_size(&lwext4_file_struct.mp->fs.sb,
+									 inode_ref.inode);
+		lwext4_file_struct.fsize = inode_size;
+		_stat.size = inode_size;
+		(void)ext4_fs_put_inode_ref(&inode_ref);
+	}
+
 	void normal_file::reset_write_combine_locked()
 	{
 		_write_combine_dirty = false;
 		_write_combine_base = 0;
 		_write_combine_size = 0;
+	}
+
+	void normal_file::release_clean_write_combine_buffer_locked()
+	{
+		if (_write_combine_dirty || _write_combine_buffer == nullptr)
+		{
+			return;
+		}
+
+		// 写合并缓冲只在脏数据暂存时必须绑定到 file；写回后立即归还，
+		// 避免 libcbench/iozone 长回归里大量短生命周期文件把固定池占满。
+		release_write_combine_buffer(_write_combine_buffer);
+		_write_combine_buffer = nullptr;
 	}
 
 	normal_file::~normal_file()
@@ -62,7 +190,7 @@ namespace fs
 		{
 			(void)ext4_fclose(&lwext4_file_struct);
 		}
-		mem::k_hmm.free(_write_combine_buffer);
+		release_write_combine_buffer(_write_combine_buffer);
 		_write_combine_buffer = nullptr;
 		_file_lock.release();
 	}
@@ -131,6 +259,7 @@ namespace fs
 	{
 		if (!_write_combine_dirty)
 		{
+			release_clean_write_combine_buffer_locked();
 			return EOK;
 		}
 
@@ -143,6 +272,7 @@ namespace fs
 		if (status == EOK)
 		{
 			reset_write_combine_locked();
+			release_clean_write_combine_buffer_locked();
 		}
 		return status;
 	}
@@ -162,7 +292,34 @@ namespace fs
 
 		if (!ensure_write_combine_buffer_locked())
 		{
-			return ENOMEM;
+			const long logical_pos = _file_ptr;
+			long cursor = static_cast<long>(lwext4_file_struct.fsize);
+			while (cursor < target_off)
+			{
+				size_t chunk = min(static_cast<size_t>(target_off - cursor), sizeof(k_zero_fill_page));
+				int status = write_direct_locked(reinterpret_cast<const char *>(k_zero_fill_page),
+												 chunk,
+												 cursor,
+												 true);
+				if (status != EOK)
+				{
+					return status;
+				}
+				cursor += static_cast<long>(chunk);
+			}
+			lwext4_file_struct.fsize = target_off;
+			_stat.size = lwext4_file_struct.fsize;
+			_file_ptr = logical_pos;
+			if (static_cast<uint64>(logical_pos) <= lwext4_file_struct.fsize)
+			{
+				int seek_status = ext4_fseek(&lwext4_file_struct, logical_pos, SEEK_SET);
+				if (seek_status != EOK)
+				{
+					return seek_status;
+				}
+			}
+			sync_memfd_size_from_file();
+			return EOK;
 		}
 
 		memset(_write_combine_buffer, 0, k_write_combine_capacity);
@@ -194,6 +351,7 @@ namespace fs
 			}
 		}
 		sync_memfd_size_from_file();
+		release_clean_write_combine_buffer_locked();
 		return EOK;
 	}
 
@@ -220,6 +378,10 @@ namespace fs
 		if (is_memfd())
 		{
 			sync_file_size_from_memfd();
+		}
+		else
+		{
+			refresh_ext4_file_size_locked();
 		}
 
 		if (_attrs.u_read != 1)
@@ -383,8 +545,14 @@ namespace fs
 		{
 			if (!ensure_write_combine_buffer_locked())
 			{
+				size_t direct_written = 0;
+				int direct_status = write_direct_locked(kbuf, len, off, upgrade, &direct_written);
+				if (!upgrade)
+				{
+					_file_ptr = current_pos;
+				}
 				_file_lock.release();
-				return -ENOMEM;
+				return direct_status == EOK ? static_cast<long>(direct_written) : -direct_status;
 			}
 
 			if (!_write_combine_dirty)

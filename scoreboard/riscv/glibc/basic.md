@@ -4,35 +4,35 @@
 
 | 测例 | 是否通过 | 备注 |
 | --- | --- | --- |
-| brk |  |  |
-| chdir |  |  |
-| clone |  |  |
-| close |  |  |
-| dup |  |  |
-| dup2 |  |  |
-| execve |  |  |
-| exit |  |  |
-| fork |  |  |
-| fstat |  |  |
-| getcwd |  |  |
-| getdents |  |  |
-| getpid |  |  |
-| getppid |  |  |
-| gettimeofday |  |  |
-| mkdir_ |  |  |
-| mmap |  |  |
-| mount |  |  |
-| munmap |  |  |
-| open |  |  |
-| openat |  |  |
-| pipe |  |  |
-| read |  |  |
-| sleep |  |  |
-| times |  |  |
-| umount |  |  |
-| uname |  |  |
-| unlink |  |  |
-| wait |  |  |
-| waitpid |  |  |
-| write |  |  |
-| yield |  |  |
+| brk | PASS | null |
+| chdir | PASS | null |
+| clone | PASS | null |
+| close | PASS | null |
+| dup | PASS | null |
+| dup2 | PASS | null |
+| execve | PASS | null |
+| exit | PASS | null |
+| fork | PASS | null |
+| fstat | PASS | null |
+| getcwd | PASS | null |
+| getdents | PASS | null |
+| getpid | PASS | null |
+| getppid | PASS | null |
+| gettimeofday | PASS | null |
+| mkdir_ | PASS | null |
+| mmap | PASS | null |
+| mount | PASS | null |
+| munmap | PASS | null |
+| open | PASS | null |
+| openat | PASS | null |
+| pipe | PASS | null |
+| read | PASS | null |
+| sleep | PASS | null |
+| times | PASS | null |
+| umount | PASS | null |
+| uname | PASS | null |
+| unlink | PASS | null |
+| wait | PASS | null |
+| waitpid | PASS | null |
+| write | PASS | null |
+| yield | PASS | null |

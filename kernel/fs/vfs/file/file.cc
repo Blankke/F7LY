@@ -7,6 +7,7 @@
 #include "types.hh"
 #include "syscall_defs.hh"
 
+#include <limits.h>
 #include <EASTL/string.h>
 
 namespace fs
@@ -46,6 +47,7 @@ namespace fs
     {
         constexpr int kMaxBsdFlockEntries = 128;
         constexpr int kMaxBsdFlockSharedOwners = 16;
+        constexpr int kMaxPosixRecordLocks = 256;
 
         struct BsdFlockEntry
         {
@@ -56,8 +58,18 @@ namespace fs
             int shared_count = 0;
         };
 
+        struct PosixRecordLockEntry
+        {
+            bool used = false;
+            eastl::string path;
+            int pid = 0;
+            struct flock lock = {};
+        };
+
         SpinLock g_bsd_flock_lock;
         BsdFlockEntry g_bsd_flock_entries[kMaxBsdFlockEntries];
+        SpinLock g_posix_record_lock;
+        PosixRecordLockEntry g_posix_record_locks[kMaxPosixRecordLocks];
         bool g_bsd_flock_ready = false;
 
         int find_shared_owner(const BsdFlockEntry &entry, file *owner)
@@ -141,6 +153,50 @@ namespace fs
                 cleanup_entry_if_empty(entry);
             }
         }
+
+        bool posix_lock_ranges_overlap(const struct flock &existing_lock, const struct flock &new_lock)
+        {
+            off_t existing_start = existing_lock.l_start;
+            off_t existing_end = existing_lock.l_len == 0 ? LONG_MAX : existing_start + existing_lock.l_len;
+            off_t new_start = new_lock.l_start;
+            off_t new_end = new_lock.l_len == 0 ? LONG_MAX : new_start + new_lock.l_len;
+            return existing_start < new_end && new_start < existing_end;
+        }
+
+        bool posix_lock_conflicts(const struct flock &existing_lock, int existing_pid,
+                                  const struct flock &new_lock, int new_pid)
+        {
+            if (existing_lock.l_type == F_UNLCK || new_lock.l_type == F_UNLCK)
+                return false;
+            if (existing_pid == new_pid)
+                return false;
+            if (!posix_lock_ranges_overlap(existing_lock, new_lock))
+                return false;
+
+            return existing_lock.l_type == F_WRLCK || new_lock.l_type == F_WRLCK;
+        }
+
+        void clear_posix_record_lock(PosixRecordLockEntry &entry)
+        {
+            entry.used = false;
+            entry.path.clear();
+            entry.pid = 0;
+            memset(&entry.lock, 0, sizeof(entry.lock));
+        }
+
+        void remove_overlapping_posix_locks_locked(const eastl::string &path, int pid, const struct flock &request)
+        {
+            for (auto &entry : g_posix_record_locks)
+            {
+                if (!entry.used || entry.pid != pid || entry.path != path)
+                    continue;
+
+                if (!posix_lock_ranges_overlap(entry.lock, request))
+                    continue;
+
+                clear_posix_record_lock(entry);
+            }
+        }
     }
 
     void init_bsd_flock_table()
@@ -155,6 +211,9 @@ namespace fs
             for (auto &owner : entry.shared_owners)
                 owner = nullptr;
         }
+        g_posix_record_lock.init("posix_record_lock_table");
+        for (auto &entry : g_posix_record_locks)
+            clear_posix_record_lock(entry);
         g_bsd_flock_ready = true;
     }
 
@@ -240,6 +299,116 @@ namespace fs
         g_bsd_flock_lock.acquire();
         release_owner_locked(owner);
         g_bsd_flock_lock.release();
+    }
+
+    int apply_posix_record_lock(file *owner, int pid, const struct flock &lock)
+    {
+        if (!g_bsd_flock_ready)
+            return syscall::SYS_EINVAL;
+        if (owner == nullptr)
+            return syscall::SYS_EBADF;
+
+        const eastl::string &path = owner->backing_path();
+        if (path.empty())
+            return 0;
+
+        g_posix_record_lock.acquire();
+        if (lock.l_type == F_UNLCK)
+        {
+            remove_overlapping_posix_locks_locked(path, pid, lock);
+            g_posix_record_lock.release();
+            return 0;
+        }
+
+        for (const auto &entry : g_posix_record_locks)
+        {
+            if (!entry.used || entry.path != path)
+                continue;
+            if (posix_lock_conflicts(entry.lock, entry.pid, lock, pid))
+            {
+                g_posix_record_lock.release();
+                return syscall::SYS_EAGAIN;
+            }
+        }
+
+        // POSIX record lock 归属进程而不是 fd；同进程重叠锁用新请求替换。
+        remove_overlapping_posix_locks_locked(path, pid, lock);
+        for (auto &entry : g_posix_record_locks)
+        {
+            if (!entry.used)
+            {
+                entry.used = true;
+                entry.path = path;
+                entry.pid = pid;
+                entry.lock = lock;
+                g_posix_record_lock.release();
+                return 0;
+            }
+        }
+
+        g_posix_record_lock.release();
+        return syscall::SYS_ENFILE;
+    }
+
+    int query_posix_record_lock(file *owner, int pid, struct flock &lock)
+    {
+        if (!g_bsd_flock_ready)
+            return syscall::SYS_EINVAL;
+        if (owner == nullptr)
+            return syscall::SYS_EBADF;
+
+        const eastl::string &path = owner->backing_path();
+        if (path.empty())
+        {
+            lock.l_type = F_UNLCK;
+            return 0;
+        }
+
+        g_posix_record_lock.acquire();
+        for (const auto &entry : g_posix_record_locks)
+        {
+            if (!entry.used || entry.path != path)
+                continue;
+            if (posix_lock_conflicts(entry.lock, entry.pid, lock, pid))
+            {
+                lock = entry.lock;
+                lock.l_pid = entry.pid;
+                g_posix_record_lock.release();
+                return 0;
+            }
+        }
+        g_posix_record_lock.release();
+
+        lock.l_type = F_UNLCK;
+        return 0;
+    }
+
+    void release_posix_record_locks_for_path(const eastl::string &path, int pid)
+    {
+        if (!g_bsd_flock_ready || path.empty())
+            return;
+
+        g_posix_record_lock.acquire();
+        for (auto &entry : g_posix_record_locks)
+        {
+            if (entry.used && entry.pid == pid && entry.path == path)
+                clear_posix_record_lock(entry);
+        }
+        g_posix_record_lock.release();
+    }
+
+    void release_posix_record_locks_for_pid(int pid)
+    {
+        if (!g_bsd_flock_ready)
+            return;
+
+        g_posix_record_lock.acquire();
+        for (auto &entry : g_posix_record_locks)
+        {
+            if (entry.used && entry.pid == pid)
+                clear_posix_record_lock(entry);
+        }
+        g_posix_record_lock.release();
     }
 
     void file_pool::init()

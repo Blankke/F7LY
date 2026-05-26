@@ -377,6 +377,10 @@ void trap_manager::usertrap()
   if ((r_csr_prmd() & PRMD_PPLV) == 0)
     panic("usertrap: not from user mode");
 
+  // 用户态不会合法持有内核自旋锁；每次从用户态进入内核时归一化
+  // 软件中断嵌套计数，避免跨调度残留影响 wait/sleep/sched 路径。
+  Cpu::get_cpu()->reset_intr_off_depth();
+
   // send interrupts and exceptions to kerneltrap(),
   // since we're now in the kernel.
   w_csr_eentry((uint64)kernelvec);
@@ -572,7 +576,7 @@ void trap_manager::usertrap()
   if (p->_killed)
     proc::k_pm.exit(-1);
 
-  if (which_dev == 2)
+  if (which_dev == 2 && !p->_exiting)
   {
     // debug_pthread_exit_robust_loop(p);
     // debug_entry_static_user_stall(p);
@@ -694,7 +698,9 @@ void trap_manager::kerneltrap()
 
   ///@todo!! 写完进程后修改
   // give up the CPU if this is a timer interrupt.
-  if (which_dev == 2 && Cpu::get_cpu()->get_cur_proc() != nullptr && Cpu::get_cpu()->get_cur_proc()->_state == proc::RUNNING)
+  if (which_dev == 2 && Cpu::get_cpu()->get_cur_proc() != nullptr &&
+      Cpu::get_cpu()->get_cur_proc()->_state == proc::RUNNING &&
+      !Cpu::get_cpu()->get_cur_proc()->_exiting)
   {
     timeslice++; // 让一个进程连续执行若干时间片，printf线程不安全
     if (timeslice >= 5)
@@ -753,7 +759,7 @@ int mmap_handler(uint64 va, int cause)
 
   // 确定访问类型 (LoongArch的异常码)
   int access_type = 0; // 默认读取
-  if (cause == 2)
+  if (cause == 2 || cause == 4)
   {                  // Store page fault
     access_type = 1; // 写入
   }

@@ -16,6 +16,25 @@ constexpr int k_interval_timer_real = 0;
 constexpr int k_interval_timer_virtual = 1;
 constexpr int k_interval_timer_prof = 2;
 
+bool timespec_less_or_equal(const tmm::timespec &lhs, const tmm::timespec &rhs)
+{
+  return lhs.tv_sec < rhs.tv_sec ||
+         (lhs.tv_sec == rhs.tv_sec && lhs.tv_nsec <= rhs.tv_nsec);
+}
+
+tmm::timespec timespec_add(const tmm::timespec &base, const tmm::timespec &delta)
+{
+  tmm::timespec result{};
+  result.tv_sec = base.tv_sec + delta.tv_sec;
+  result.tv_nsec = base.tv_nsec + delta.tv_nsec;
+  if (result.tv_nsec >= 1000000000L)
+  {
+    result.tv_sec += result.tv_nsec / 1000000000L;
+    result.tv_nsec %= 1000000000L;
+  }
+  return result;
+}
+
 uint64 ticks_to_usec(uint64 ticks)
 {
   uint64 cycles = ticks * tmm::cycles_per_tick();
@@ -206,28 +225,19 @@ void check_expired_timers()
     return;  // No timers to check
   }
   
-  // Get current time
-  tmm::timespec current_time;
-  if (tmm::k_tm.clock_gettime(tmm::SystemClockId::CLOCK_REALTIME, &current_time) != 0) {
-    return;  // Can't get current time
-  }
-  
   // Check each timer for expiration
   for (int i = 0; i < 32; i++) {
     if (!g_timers[i].active || !g_timers[i].armed) {
       continue;  // Skip inactive or disarmed timers
     }
-    
-    // Check if this timer has expired
-    bool expired = false;
-    if (g_timers[i].expiry_time.tv_sec < current_time.tv_sec) {
-      expired = true;
-    } else if (g_timers[i].expiry_time.tv_sec == current_time.tv_sec && 
-               g_timers[i].expiry_time.tv_nsec <= current_time.tv_nsec) {
-      expired = true;
+
+    tmm::timespec current_time;
+    tmm::SystemClockId clockid = static_cast<tmm::SystemClockId>(g_timers[i].clockid);
+    if (tmm::k_tm.clock_gettime(clockid, &current_time) != 0) {
+      continue;  // 当前时钟不可读时不要误触发别的时钟域定时器。
     }
     
-    if (expired) {
+    if (timespec_less_or_equal(g_timers[i].expiry_time, current_time)) {
       printfCyan("[TIMER] Timer %d expired, sending signal %d\n", 
                  g_timers[i].timer_id, g_timers[i].event.sigev_signo);
       
@@ -241,15 +251,10 @@ void check_expired_timers()
       
       // Handle periodic timers
       if (g_timers[i].spec.it_interval.tv_sec > 0 || g_timers[i].spec.it_interval.tv_nsec > 0) {
-        // Rearm the timer with the interval
-        g_timers[i].expiry_time.tv_sec = current_time.tv_sec + g_timers[i].spec.it_interval.tv_sec;
-        g_timers[i].expiry_time.tv_nsec = current_time.tv_nsec + g_timers[i].spec.it_interval.tv_nsec;
-        
-        // Handle nanosecond overflow
-        if (g_timers[i].expiry_time.tv_nsec >= 1000000000) {
-          g_timers[i].expiry_time.tv_sec++;
-          g_timers[i].expiry_time.tv_nsec -= 1000000000;
-        }
+        // 周期 timer 沿用自己的时钟域递推，避免 BOOTTIME/REALTIME 混用导致 timer_gettime 返回异常剩余时间。
+        do {
+          g_timers[i].expiry_time = timespec_add(g_timers[i].expiry_time, g_timers[i].spec.it_interval);
+        } while (timespec_less_or_equal(g_timers[i].expiry_time, current_time));
         
         printfCyan("[TIMER] Timer %d rearmed for next interval at %ld.%09ld\n", 
                    g_timers[i].timer_id, 

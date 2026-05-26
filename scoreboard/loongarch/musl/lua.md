@@ -4,12 +4,12 @@
 
 | 测例 | 是否通过 | 备注 |
 | --- | --- | --- |
-| date.lua |  |  |
-| file_io.lua |  |  |
-| max_min.lua |  |  |
-| random.lua |  |  |
-| remove.lua |  |  |
-| round_num.lua |  |  |
-| sin30.lua |  |  |
-| sort.lua |  |  |
-| strings.lua |  |  |
+| date.lua | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| file_io.lua | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| max_min.lua | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| random.lua | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| remove.lua | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| round_num.lua | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| sin30.lua | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| sort.lua | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| strings.lua | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |

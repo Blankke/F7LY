@@ -260,7 +260,8 @@ namespace syscall
         CLONE_NEWPID = 0x20000000,         // New pid namespace.
         CLONE_NEWNET = 0x40000000,         // New network namespace.
         CLONE_IO = 0x80000000,             // Clone I/O context.
-        CLONE_NEWTIME = 0x00000080         // New time namespace
+        CLONE_NEWTIME = 0x00000080,        // New time namespace
+        CLONE_CLEAR_SIGHAND = 0x100000000ULL // clone3: reset signal handlers in child
     };
     enum SYS_wait
     {

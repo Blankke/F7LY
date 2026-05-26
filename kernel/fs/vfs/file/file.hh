@@ -133,6 +133,10 @@ namespace fs
 	void init_bsd_flock_table();
 	int apply_bsd_flock(file *owner, int operation);
 	void release_bsd_flock(file *owner);
+	int apply_posix_record_lock(file *owner, int pid, const struct flock &lock);
+	int query_posix_record_lock(file *owner, int pid, struct flock &lock);
+	void release_posix_record_locks_for_path(const eastl::string &path, int pid);
+	void release_posix_record_locks_for_pid(int pid);
 
 	struct memfd_shared_state
 	{

@@ -4,12 +4,12 @@
 
 | 测例 | 是否通过 | 备注 |
 | --- | --- | --- |
-| date.lua |  |  |
-| file_io.lua |  |  |
-| max_min.lua |  |  |
-| random.lua |  |  |
-| remove.lua |  |  |
-| round_num.lua |  |  |
-| sin30.lua |  |  |
-| sort.lua |  |  |
-| strings.lua |  |  |
+| date.lua | PASS | null |
+| file_io.lua | PASS | null |
+| max_min.lua | PASS | null |
+| random.lua | PASS | null |
+| remove.lua | PASS | null |
+| round_num.lua | PASS | null |
+| sin30.lua | PASS | null |
+| sort.lua | PASS | null |
+| strings.lua | PASS | null |

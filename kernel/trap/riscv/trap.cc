@@ -195,7 +195,9 @@ void trap_manager::kerneltrap()
           scause, r_sepc(), r_stval(), sstatus);
   }
 
-  if (which_dev == 2 && Cpu::get_cpu()->get_cur_proc() != nullptr && Cpu::get_cpu()->get_cur_proc()->_state == proc::RUNNING)
+  if (which_dev == 2 && Cpu::get_cpu()->get_cur_proc() != nullptr &&
+      Cpu::get_cpu()->get_cur_proc()->_state == proc::RUNNING &&
+      !Cpu::get_cpu()->get_cur_proc()->_exiting)
   {
     timeslice++; // 让一个进程连续执行若干时间片，printf线程不安全
     // printf("timeslice: %d\n", timeslice);
@@ -222,6 +224,9 @@ void trap_manager::usertrap()
 
   if (intr_get() != 0)
     panic("usertrap: interrupts enabled");
+  // 用户态不能持有内核锁；进入新的 trap/syscall 时重置软件中断嵌套计数，
+  // 防止上一轮调度残留的 noff 污染 sleep()/sched() 不变量。
+  Cpu::get_cpu()->reset_intr_off_depth();
   w_stvec((uint64)kernelvec);
 
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
@@ -324,7 +329,7 @@ void trap_manager::usertrap()
     proc::k_pm.exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if (which_dev == 2)
+  if (which_dev == 2 && !p->_exiting)
   {
     timeslice++; // 让一个进程连续执行若干时间片，printf线程不安全
     if (timeslice >= 5)
@@ -363,6 +368,12 @@ void trap_manager::usertrapret()
   // Debug
   //  printfYellow("[usertrapret] trampoline addr %p\n", trampoline);
 
+  // TRAPFRAME 是“每线程独立物理页 + 同地址空间共享用户页表”。
+  // 线程并发返回用户态时，如果先拆旧映射、再映当前线程 trapframe 的窗口里被时钟中断切走，
+  // 另一个线程可能先把共享页表里的 TRAPFRAME 改成它自己的页，当前线程恢复后就会 remap panic。
+  // 这里和 LoongArch 保持一致：返回用户态前先关中断，把 TRAPFRAME 切换做成原子操作。
+  intr_off();
+
   // 统一在usertrapret时动态映射trapframe
   // 取消当前trapframe的映射(有可能原来没映射, 但是无所谓)
   mem::k_vmm.vmunmap(*p->get_pagetable(), TRAPFRAME, 1, 0);
@@ -393,9 +404,8 @@ void trap_manager::usertrapret()
   }
 
   // we're about to switch the destination of traps from
-  // kerneltrap() to usertrap(), so turn off interrupts until
+  // kerneltrap() to usertrap(), interrupts are already off until
   // we're back in user space, where usertrap() is correct.
-  intr_off();
   w_stvec(TRAMPOLINE + (uservec - trampoline));
   // set up trapframe values that uservec will need when
   // the process next re-enters the kernel.

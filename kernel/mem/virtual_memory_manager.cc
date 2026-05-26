@@ -99,10 +99,50 @@ namespace mem
         }
 
 #ifdef LOONGARCH
+        uint64 loongarch_empty_pgdh_base = 0;
+
         inline void invalidate_loongarch_user_page_pair(uint64 va)
         {
             uint64 pair_base = va & ~((PGSIZE << 1) - 1);
             asm volatile("invtlb 0x6, $zero, %0" : : "r"(pair_base) : "memory");
+        }
+
+        void install_loongarch_empty_high_user_pagetable()
+        {
+            if (loongarch_empty_pgdh_base == 0)
+            {
+                void *pgdh = k_pmm.alloc_page();
+                void *pud = k_pmm.alloc_page();
+                void *pmd = k_pmm.alloc_page();
+                void *pte_page = k_pmm.alloc_page();
+                if (pgdh == nullptr || pud == nullptr || pmd == nullptr || pte_page == nullptr)
+                {
+                    panic("[vmm] alloc empty LoongArch PGDH failed");
+                }
+
+                k_pmm.clear_page(pgdh);
+                k_pmm.clear_page(pud);
+                k_pmm.clear_page(pmd);
+                k_pmm.clear_page(pte_page);
+
+                // 用户态访问 0xffff... 这类高半区坏地址时会走 PGDH。
+                // 这里让 TLBR refill 至少能抵达一个全零叶子页，随后转成普通页无效异常，
+                // 避免在缺少页表层级时无限重试同一条访存指令。
+                pte_t pud_entry = PGROUNDDOWN(to_phy((ulong)pud)) | Pte::map_dir_page_flags();
+                pte_t pmd_entry = PGROUNDDOWN(to_phy((ulong)pmd)) | Pte::map_dir_page_flags();
+                pte_t leaf_page_entry = PGROUNDDOWN(to_phy((ulong)pte_page)) | Pte::map_dir_page_flags();
+
+                for (int i = 0; i < 512; ++i)
+                {
+                    ((pte_t *)pgdh)[i] = pud_entry;
+                    ((pte_t *)pud)[i] = pmd_entry;
+                    ((pte_t *)pmd)[i] = leaf_page_entry;
+                }
+
+                loongarch_empty_pgdh_base = (uint64)pgdh;
+            }
+
+            w_csr_pgdh(loongarch_empty_pgdh_base);
         }
 #endif
 
@@ -197,6 +237,7 @@ namespace mem
 
         // the "pgdl" is corresponding to "satp" in riscv
         w_csr_pgdl((uint64)k_pagetable.get_base());
+        install_loongarch_empty_high_user_pagetable();
         // flush the tlb(tlbinit)
         tlbinit();
 
@@ -698,8 +739,33 @@ namespace mem
 
             uint64 backing_start = PGROUNDDOWN(vm->backing_base != 0 ? vm->backing_base : vm->addr);
             uint64 page_offset = page_va - backing_start;
+            if (vm->vfile != nullptr)
+            {
+                fs::Kstat st;
+                int size_result = vfs_fstat(vm->vfile, &st);
+                if (size_result != EOK)
+                {
+                    printfRed("[allocate_vma_page] failed to get shared file size for %s\n",
+                              vm->vfile->_path_name.c_str());
+                    return size_result;
+                }
+
+                uint64 file_offset = static_cast<uint64>(vm->offset) + (page_va - vm->addr);
+                if (file_offset >= st.size)
+                {
+                    proc::Pcb *p = proc::k_pm.get_cur_pcb();
+                    proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGBUS);
+                    return 0;
+                }
+            }
             if (page_offset >= seg.real_size)
             {
+                if (vm->vfile != nullptr)
+                {
+                    proc::Pcb *p = proc::k_pm.get_cur_pcb();
+                    proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGBUS);
+                    return 0;
+                }
                 printfRed("[allocate_vma_page] shared page offset out of range: shmid=%d va=%p offset=%p real_size=%p\n",
                           vm->backing_shmid, (void *)va, (void *)page_offset, (void *)seg.real_size);
                 return -1;
@@ -1076,6 +1142,9 @@ namespace mem
             }
             // printfMagenta("vmunmap: unmap va: %p, pa: %p\n", a, pte.pa());
             pte.clear_data();
+#ifdef LOONGARCH
+            invalidate_loongarch_user_page_pair(a);
+#endif
         }
     }
 

@@ -4,110 +4,110 @@
 
 | 测例 | 是否通过 | 备注 |
 | --- | --- | --- |
-| argv |  |  |
-| basename |  |  |
-| clocale_mbfuncs |  |  |
-| clock_gettime |  |  |
-| dirname |  |  |
-| env |  |  |
-| fdopen |  |  |
-| fnmatch |  |  |
-| fscanf |  |  |
-| fwscanf |  |  |
-| iconv_open |  |  |
-| inet_pton |  |  |
-| mbc |  |  |
-| memstream |  |  |
+| argv | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| basename | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| clocale_mbfuncs | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| clock_gettime | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| dirname | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| env | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| fdopen | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| fnmatch | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| fscanf | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| fwscanf | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| iconv_open | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| inet_pton | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| mbc | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| memstream | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
 | pthread_cancel_points |  |  |
-| pthread_cancel |  |  |
-| pthread_cond |  |  |
-| pthread_tsd |  |  |
-| qsort |  |  |
-| random |  |  |
-| search_hsearch |  |  |
-| search_insque |  |  |
-| search_lsearch |  |  |
-| search_tsearch |  |  |
-| setjmp |  |  |
-| snprintf |  |  |
+| pthread_cancel | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| pthread_cond | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| pthread_tsd | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| qsort | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| random | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| search_hsearch | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| search_insque | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| search_lsearch | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| search_tsearch | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| setjmp | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| snprintf | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
 | socket |  |  |
-| sscanf |  |  |
-| sscanf_long |  |  |
+| sscanf | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| sscanf_long | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
 | stat |  |  |
-| strftime |  |  |
-| string |  |  |
-| string_memcpy |  |  |
-| string_memmem |  |  |
-| string_memset |  |  |
-| string_strchr |  |  |
-| string_strcspn |  |  |
-| string_strstr |  |  |
-| strptime |  |  |
-| strtod |  |  |
-| strtod_simple |  |  |
-| strtof |  |  |
-| strtol |  |  |
-| strtold |  |  |
-| swprintf |  |  |
-| tgmath |  |  |
-| time |  |  |
-| tls_align |  |  |
-| udiv |  |  |
-| ungetc |  |  |
+| strftime | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| string | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| string_memcpy | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| string_memmem | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| string_memset | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| string_strchr | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| string_strcspn | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| string_strstr | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| strptime | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| strtod | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| strtod_simple | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| strtof | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| strtol | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| strtold | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| swprintf | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| tgmath | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| time | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| tls_align | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| udiv | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| ungetc | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
 | utime |  |  |
-| wcsstr |  |  |
-| wcstol |  |  |
-| daemon_failure |  |  |
-| dn_expand_empty |  |  |
-| dn_expand_ptr_0 |  |  |
+| wcsstr | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| wcstol | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| daemon_failure | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| dn_expand_empty | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| dn_expand_ptr_0 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
 | fflush_exit |  |  |
-| fgets_eof |  |  |
-| fgetwc_buffering |  |  |
-| fpclassify_invalid_ld80 |  |  |
-| ftello_unflushed_append |  |  |
-| getpwnam_r_crash |  |  |
-| getpwnam_r_errno |  |  |
-| iconv_roundtrips |  |  |
-| inet_ntop_v4mapped |  |  |
-| inet_pton_empty_last_field |  |  |
-| iswspace_null |  |  |
-| lrand48_signextend |  |  |
-| lseek_large |  |  |
-| malloc_0 |  |  |
-| mbsrtowcs_overflow |  |  |
-| memmem_oob_read |  |  |
-| memmem_oob |  |  |
-| mkdtemp_failure |  |  |
-| mkstemp_failure |  |  |
-| printf_1e9_oob |  |  |
-| printf_fmt_g_round |  |  |
-| printf_fmt_g_zeros |  |  |
-| printf_fmt_n |  |  |
+| fgets_eof | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| fgetwc_buffering | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| fpclassify_invalid_ld80 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| ftello_unflushed_append | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| getpwnam_r_crash | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| getpwnam_r_errno | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| iconv_roundtrips | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| inet_ntop_v4mapped | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| inet_pton_empty_last_field | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| iswspace_null | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| lrand48_signextend | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| lseek_large | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| malloc_0 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| mbsrtowcs_overflow | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| memmem_oob_read | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| memmem_oob | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| mkdtemp_failure | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| mkstemp_failure | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| printf_1e9_oob | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| printf_fmt_g_round | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| printf_fmt_g_zeros | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| printf_fmt_n | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
 | pthread_robust_detach |  |  |
-| pthread_cancel_sem_wait |  |  |
+| pthread_cancel_sem_wait | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
 | pthread_cond_smasher |  |  |
-| pthread_condattr_setclock |  |  |
-| pthread_exit_cancel |  |  |
-| pthread_once_deadlock |  |  |
-| pthread_rwlock_ebusy |  |  |
-| putenv_doublefree |  |  |
-| regex_backref_0 |  |  |
-| regex_bracket_icase |  |  |
-| regex_ere_backref |  |  |
-| regex_escaped_high_byte |  |  |
-| regex_negated_range |  |  |
-| regexec_nosub |  |  |
+| pthread_condattr_setclock | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| pthread_exit_cancel | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| pthread_once_deadlock | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| pthread_rwlock_ebusy | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| putenv_doublefree | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| regex_backref_0 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| regex_bracket_icase | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| regex_ere_backref | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| regex_escaped_high_byte | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| regex_negated_range | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| regexec_nosub | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
 | rewind_clear_error |  |  |
 | rlimit_open_files |  |  |
-| scanf_bytes_consumed |  |  |
-| scanf_match_literal_eof |  |  |
-| scanf_nullbyte_char |  |  |
-| setvbuf_unget |  |  |
-| sigprocmask_internal |  |  |
-| sscanf_eof |  |  |
-| statvfs |  |  |
-| strverscmp |  |  |
-| syscall_sign_extend |  |  |
-| uselocale_0 |  |  |
-| wcsncpy_read_overflow |  |  |
-| wcsstr_false_negative |  |  |
+| scanf_bytes_consumed | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| scanf_match_literal_eof | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| scanf_nullbyte_char | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| setvbuf_unget | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| sigprocmask_internal | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| sscanf_eof | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| statvfs | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| strverscmp | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| syscall_sign_extend | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| uselocale_0 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| wcsncpy_read_overflow | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |
+| wcsstr_false_negative | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt; runtest Pass! |

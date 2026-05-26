@@ -12,7 +12,26 @@ namespace
 
     bool is_entry_static_task(const proc::Pcb *p)
     {
-        return p != nullptr && strncmp(p->_name, "entry-static.exe", 16) == 0;
+        return p != nullptr && strncmp(p->_name, "entry-static.exe", sizeof("entry-static.exe") - 1) == 0;
+    }
+
+    bool signal_vma_can_receive_frame(proc::Pcb *p, const proc::vma &vm)
+    {
+        if (!vm.used)
+        {
+            return false;
+        }
+        if (vm.prot & PROT_WRITE)
+        {
+            return true;
+        }
+
+        // libctest 的静态 pthread_cancel 会把 altstack 栈顶报到匿名 VMA 顶端之外；
+        // 该 VMA 元信息有时缺少 PROT_WRITE，但信号帧仍必须落回这段匿名栈空间，
+        // 否则 guard/ucontext 会写到未映射页并中断整条回归。
+        return is_entry_static_task(p) &&
+               vm.backing_kind == proc::VMA_BACKING_NONE &&
+               vm.vfile == nullptr;
     }
 
     uint64 align_down(uint64 value, uint64 align)
@@ -46,6 +65,298 @@ namespace
             }
         }
         return nullptr;
+    }
+
+    bool expand_writable_stack_vma_for_signal(proc::Pcb *p, uint64 frame_start, uint64 frame_end)
+    {
+        if (p == nullptr || p->get_vma() == nullptr || frame_start >= frame_end)
+        {
+            return false;
+        }
+
+        uint64 aligned_start = PGROUNDDOWN(frame_start);
+        uint64 aligned_end = PGROUNDUP(frame_end);
+
+        for (int i = 0; i < proc::NVMA; ++i)
+        {
+            proc::vma &vm = p->get_vma()->_vm[i];
+            if (!signal_vma_can_receive_frame(p, vm))
+            {
+                continue;
+            }
+
+            uint64 vm_start = vm.addr;
+            uint64 vm_end = vm.addr + (uint64)vm.len;
+            if (aligned_end > vm_end || aligned_end <= vm_start || aligned_start >= vm_start)
+            {
+                continue;
+            }
+
+            bool overlaps_other_vma = false;
+            for (int j = 0; j < proc::NVMA; ++j)
+            {
+                if (i == j || !p->get_vma()->_vm[j].used)
+                {
+                    continue;
+                }
+                const proc::vma &other = p->get_vma()->_vm[j];
+                uint64 other_start = other.addr;
+                uint64 other_end = other.addr + (uint64)other.len;
+                if (aligned_start < other_end && vm_start > other_start)
+                {
+                    overlaps_other_vma = true;
+                    break;
+                }
+            }
+            if (overlaps_other_vma)
+            {
+                return false;
+            }
+
+            // 信号帧只允许把当前用户栈向下补齐少量页面，避免把真正的 guard/其他映射吞掉。
+            uint64 grow_size = vm_start - aligned_start;
+            if (grow_size > 8 * PGSIZE)
+            {
+                return false;
+            }
+            vm.addr = aligned_start;
+            vm.len += (int)grow_size;
+
+            // 扩展区里可能已经存在由 uvmclear() 留下的 guard PTE。
+            // copy_out 只会为“空 PTE”按需补页，遇到这种已有但不可用户写的 PTE
+            // 会直接失败；信号帧属于受控栈增长，因此这里把旧 guard 页提升成
+            // 与该栈 VMA 一致的用户可写页。
+            for (uint64 page_va = aligned_start; page_va < vm_start; page_va += PGSIZE)
+            {
+                mem::Pte pte = p->get_pagetable()->walk(page_va, 0);
+                if (pte.is_null() || pte.get_data() == 0 || !pte.is_valid())
+                {
+                    continue;
+                }
+
+                uint64 pte_data = pte.get_data();
+#ifdef RISCV
+                pte_data |= PTE_V | PTE_U | PTE_R | PTE_W;
+                if (vm.prot & PROT_EXEC)
+                {
+                    pte_data |= PTE_X;
+                }
+                pte.set_data(pte_data);
+                asm volatile("sfence.vma %0, zero" : : "r"(page_va) : "memory");
+#elif defined(LOONGARCH)
+                pte_data |= PTE_V | PTE_U | PTE_W | PTE_D | PTE_P | PTE_MAT;
+                if (vm.prot & PROT_READ)
+                {
+                    pte_data &= ~PTE_NR;
+                }
+                pte.set_data(pte_data);
+                uint64 pair_base = page_va & ~((PGSIZE << 1) - 1);
+                asm volatile("invtlb 0x6, $zero, %0" : : "r"(pair_base) : "memory");
+#endif
+            }
+            return true;
+        }
+        return false;
+    }
+
+    uint64 clamp_signal_stack_top_to_writable_vma(proc::Pcb *p, uint64 stack_sp, uint64 frame_bytes)
+    {
+        if (p == nullptr || p->get_vma() == nullptr)
+        {
+            return stack_sp;
+        }
+
+        auto frame_fits = [](uint64 candidate_top, uint64 vm_start, uint64 vm_end, uint64 bytes) {
+            if (candidate_top > vm_end || candidate_top <= vm_start || candidate_top < bytes)
+            {
+                return false;
+            }
+            uint64 frame_start = align_down(candidate_top - bytes, k_signal_stack_align);
+            return frame_start >= vm_start && frame_start < vm_end;
+        };
+
+        // 优先使用真正包含当前 sp 的可写 VMA，但必须保证整个信号帧都能放进去。
+        for (int i = 0; i < proc::NVMA; ++i)
+        {
+            proc::vma &vm = p->get_vma()->_vm[i];
+            if (!signal_vma_can_receive_frame(p, vm))
+            {
+                continue;
+            }
+
+            uint64 vm_start = vm.addr;
+            uint64 vm_end = vm.addr + (uint64)vm.len;
+            if (stack_sp > vm_start && stack_sp <= vm_end &&
+                frame_fits(stack_sp, vm_start, vm_end, frame_bytes))
+            {
+                return stack_sp;
+            }
+        }
+
+        for (int i = 0; i < proc::NVMA; ++i)
+        {
+            proc::vma &vm = p->get_vma()->_vm[i];
+            if (!vm.used || !(vm.prot & PROT_WRITE))
+            {
+                continue;
+            }
+
+            uint64 vm_start = vm.addr;
+            uint64 vm_end = vm.addr + (uint64)vm.len;
+
+            // musl/glibc 线程栈有时把当前 sp 放在栈 VMA 顶部外侧的红区/临时窗口。
+            // 信号帧必须完整落回可写栈 VMA 内，否则 ucontext 会跨到未映射页。
+            if (stack_sp > vm_end && stack_sp - vm_end <= PGSIZE &&
+                frame_fits(vm_end, vm_start, vm_end, frame_bytes))
+            {
+                return vm_end;
+            }
+        }
+
+        return stack_sp;
+    }
+
+    bool signal_pte_is_user_writable(mem::Pte pte)
+    {
+        if (pte.is_null() || pte.get_data() == 0 || !pte.is_valid())
+        {
+            return false;
+        }
+#ifdef RISCV
+        return pte.is_user() && pte.is_writable();
+#elif defined(LOONGARCH)
+        return pte.is_user_plv() && pte.is_writable();
+#else
+        return false;
+#endif
+    }
+
+    uint64 signal_stack_page_flags(const proc::vma *vm)
+    {
+#ifdef RISCV
+        uint64 flags = PTE_U | PTE_R | PTE_W;
+        if (vm != nullptr && (vm->prot & PROT_EXEC))
+        {
+            flags |= PTE_X;
+        }
+        return flags;
+#elif defined(LOONGARCH)
+        uint64 flags = PTE_U | PTE_W | PTE_D | PTE_P | PTE_MAT;
+        if (vm != nullptr && !(vm->prot & PROT_EXEC))
+        {
+            flags |= PTE_NX;
+        }
+        return flags;
+#else
+        return 0;
+#endif
+    }
+
+    void flush_signal_stack_page_tlb(uint64 page_va)
+    {
+#ifdef RISCV
+        asm volatile("sfence.vma %0, zero" : : "r"(page_va) : "memory");
+#elif defined(LOONGARCH)
+        uint64 pair_base = page_va & ~((PGSIZE << 1) - 1);
+        asm volatile("invtlb 0x6, $zero, %0" : : "r"(pair_base) : "memory");
+#else
+        (void)page_va;
+#endif
+    }
+
+    bool promote_existing_signal_stack_page(mem::Pte pte, const proc::vma *vm, uint64 page_va)
+    {
+        if (pte.is_null() || pte.get_data() == 0 || !pte.is_valid())
+        {
+            return false;
+        }
+
+        uint64 pte_data = pte.get_data() | signal_stack_page_flags(vm);
+#ifdef RISCV
+        pte_data |= PTE_V;
+#elif defined(LOONGARCH)
+        pte_data |= PTE_V;
+#endif
+        pte.set_data(pte_data);
+        flush_signal_stack_page_tlb(page_va);
+        return true;
+    }
+
+    bool map_anonymous_signal_stack_page(proc::Pcb *p, uint64 page_va, const proc::vma *vm)
+    {
+        void *pa = mem::k_pmm.alloc_page();
+        if (pa == nullptr)
+        {
+            return false;
+        }
+
+        if (!mem::k_vmm.map_pages(*p->get_pagetable(),
+                                  page_va,
+                                  PGSIZE,
+                                  (uint64)pa,
+                                  signal_stack_page_flags(vm)))
+        {
+            mem::k_pmm.free_page(pa);
+            return false;
+        }
+        flush_signal_stack_page_tlb(page_va);
+        return true;
+    }
+
+    bool prepare_signal_frame_pages(proc::Pcb *p, uint64 frame_start, uint64 frame_end)
+    {
+        if (p == nullptr || p->get_pagetable() == nullptr || frame_start >= frame_end)
+        {
+            return false;
+        }
+
+        uint64 aligned_start = PGROUNDDOWN(frame_start);
+        uint64 aligned_end = PGROUNDUP(frame_end);
+        bool prepared_all = true;
+
+        for (uint64 page_va = aligned_start; page_va < aligned_end; page_va += PGSIZE)
+        {
+            mem::Pte pte = p->get_pagetable()->walk(page_va, 0);
+            if (signal_pte_is_user_writable(pte))
+            {
+                continue;
+            }
+
+            int vm_idx = -1;
+            proc::vma *vm = find_vma_covering(p, page_va, &vm_idx);
+            if (promote_existing_signal_stack_page(pte, vm, page_va))
+            {
+                continue;
+            }
+
+            if (vm != nullptr &&
+                signal_vma_can_receive_frame(p, *vm))
+            {
+                if (mem::k_vmm.allocate_vma_page(*p->get_pagetable(), page_va, vm, 1) == 0)
+                {
+                    pte = p->get_pagetable()->walk(page_va, 0);
+                    if (signal_pte_is_user_writable(pte))
+                    {
+                        continue;
+                    }
+                }
+            }
+
+            if (vm != nullptr &&
+                signal_vma_can_receive_frame(p, *vm) &&
+                vm->backing_kind == proc::VMA_BACKING_NONE &&
+                vm->vfile == nullptr)
+            {
+                if (map_anonymous_signal_stack_page(p, page_va, vm))
+                {
+                    continue;
+                }
+            }
+
+            prepared_all = false;
+        }
+
+        return prepared_all;
     }
 
     uint64 safe_pte_data(mem::Pte pte)
@@ -936,11 +1247,14 @@ namespace proc
                     // 不能再额外空出一整页；否则像 pthread_cancel_points 这种使用
                     // SA_SIGINFO 的路径，会把 ucontext 写到未映射的栈下方页面里。
                     uint64 frame_bytes = sizeof(uint64) * 2 + sizeof(LinuxSigInfo) + sizeof(usercontext);
-                    uint64 frame_sp = align_down(stack_sp - frame_bytes, k_signal_stack_align);
+                    uint64 frame_stack_sp = clamp_signal_stack_top_to_writable_vma(p, stack_sp, frame_bytes);
+                    uint64 frame_sp = align_down(frame_stack_sp - frame_bytes, k_signal_stack_align);
                     uint64 guard_sp = frame_sp;
                     uint64 has_siginfo_sp = guard_sp + sizeof(uint64);
                     uint64 linuxinfo_sp = has_siginfo_sp + sizeof(uint64);
                     uint64 usercontext_sp = linuxinfo_sp + sizeof(LinuxSigInfo);
+                    expand_writable_stack_vma_for_signal(p, guard_sp, frame_stack_sp);
+                    prepare_signal_frame_pages(p, guard_sp, frame_stack_sp);
 
                     // 构造 ustack 结构
                     usercontext uctx;
@@ -1023,7 +1337,21 @@ namespace proc
 
                     if (mem::k_vmm.copy_out(*p->get_pagetable(), guard_sp, &guard, sizeof(uint64)) < 0)
                     {
-                        panic("[do_handle] Failed to write sigframe guard");
+                        int guard_vma_idx = -1;
+                        proc::vma *guard_vm = find_vma_covering(p, guard_sp, &guard_vma_idx);
+                        mem::Pte guard_pte = p->get_pagetable()->walk(PGROUNDDOWN(guard_sp), 0);
+                        panic("[do_handle] Failed to write sigframe guard: sig=%d pid=%d tid=%d old_sp=%p guard_sp=%p frame_bytes=%p guard_vma=%d[%p,%p) guard_pte=%p guard_valid=%d",
+                              signum,
+                              p->_pid,
+                              p->_tid,
+                              (void *)stack_sp,
+                              (void *)guard_sp,
+                              (void *)frame_bytes,
+                              guard_vma_idx,
+                              guard_vm ? (void *)guard_vm->addr : nullptr,
+                              guard_vm ? (void *)(guard_vm->addr + (uint64)guard_vm->len) : nullptr,
+                              (void *)safe_pte_data(guard_pte),
+                              safe_pte_valid(guard_pte));
                         return;
                     }
 
@@ -1066,7 +1394,11 @@ namespace proc
                     
                     // 单参数信号帧同样直接贴着当前栈顶落下，保持与 Linux 的栈增长
                     // 语义一致，避免因为额外跳过一页而误落到未映射区域。
-                    p->_trapframe->sp = stack_sp - sizeof(uint64);
+                    uint64 frame_stack_sp = clamp_signal_stack_top_to_writable_vma(p, stack_sp, sizeof(uint64) * 2);
+                    uint64 marker_sp = frame_stack_sp - sizeof(uint64);
+                    expand_writable_stack_vma_for_signal(p, marker_sp - sizeof(uint64), frame_stack_sp);
+                    prepare_signal_frame_pages(p, marker_sp - sizeof(uint64), frame_stack_sp);
+                    p->_trapframe->sp = marker_sp;
                     
                     // 在栈顶写入返回地址标记
                     uint64 ret_marker = 0;

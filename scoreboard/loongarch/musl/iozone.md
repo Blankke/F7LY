@@ -4,11 +4,11 @@
 
 | 测例 | 是否通过 | 备注 |
 | --- | --- | --- |
-| 01-iozone |  |  |
-| 02-iozone |  |  |
-| 03-iozone |  |  |
-| 04-iozone |  |  |
-| 05-iozone |  |  |
-| 06-iozone |  |  |
-| 07-iozone |  |  |
-| 08-iozone |  |  |
+| 01-iozone | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| 02-iozone | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| 03-iozone | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| 04-iozone | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| 05-iozone | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| 06-iozone | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| 07-iozone | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| 08-iozone | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |

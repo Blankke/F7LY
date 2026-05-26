@@ -19,6 +19,8 @@
 #define SOCK_DGRAM      2       /* datagram socket */
 #define SOCK_RAW        3       /* raw-protocol interface */
 #define SOCK_SEQPACKET  5       /* sequenced packet stream */
+#define SOCK_CLOEXEC    02000000
+#define SOCK_NONBLOCK   00004000
 
 // Socket level
 #define SOL_SOCKET      1       /* socket level */

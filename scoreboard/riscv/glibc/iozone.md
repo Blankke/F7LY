@@ -4,11 +4,11 @@
 
 | 测例 | 是否通过 | 备注 |
 | --- | --- | --- |
-| 01-iozone |  |  |
-| 02-iozone |  |  |
-| 03-iozone |  |  |
-| 04-iozone |  |  |
-| 05-iozone |  |  |
-| 06-iozone |  |  |
-| 07-iozone |  |  |
-| 08-iozone |  |  |
+| 01-iozone | PASS | null |
+| 02-iozone | PASS | null |
+| 03-iozone | PASS | null |
+| 04-iozone | PASS | null |
+| 05-iozone | PASS | null |
+| 06-iozone | PASS | null |
+| 07-iozone | PASS | null |
+| 08-iozone | PASS | null |

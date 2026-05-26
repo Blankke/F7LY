@@ -4,4 +4,4 @@
 
 | 测例 | 是否通过 | 备注 |
 | --- | --- | --- |
-| 01-libc-bench |  |  |
+| 01-libc-bench | PASS | null |
