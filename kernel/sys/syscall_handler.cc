@@ -1346,6 +1346,7 @@ namespace syscall
         BIND_SYSCALL(recvfrom);    // todo
         BIND_SYSCALL(setsockopt);  // todo
         BIND_SYSCALL(getsockopt);  // todo
+        BIND_SYSCALL(shutdown_socket);
         BIND_SYSCALL(sendmsg);     // todo
         BIND_SYSCALL(brk);
         BIND_SYSCALL(readahead); // todo
@@ -6071,6 +6072,16 @@ namespace syscall
 
                 return flags;
             }
+            if (f->_attrs.filetype == fs::FileTypes::FT_SOCKET)
+            {
+                fs::socket_file *sf = static_cast<fs::socket_file *>(f);
+                uint32_t flags = f->lwext4_file_struct.flags;
+                if (sf->get_nonblock())
+                    flags |= O_NONBLOCK;
+                else
+                    flags &= ~O_NONBLOCK;
+                return flags;
+            }
             // 返回文件访问模式和状态标志
             return f->lwext4_file_struct.flags;
 
@@ -6094,6 +6105,11 @@ namespace syscall
                 bool nonblock = (new_flags & O_NONBLOCK) != 0;
                 pf->set_nonblock(nonblock);
                 printfCyan("[F_SETFL] Set pipe nonblock mode: %s\n", nonblock ? "true" : "false");
+            }
+            else if (f->_attrs.filetype == fs::FileTypes::FT_SOCKET)
+            {
+                fs::socket_file *sf = static_cast<fs::socket_file *>(f);
+                sf->set_nonblock((new_flags & O_NONBLOCK) != 0);
             }
 
             // 同步设置 lwext4_file_struct 和 _attrs (根据用户说明，二者需要同步)
@@ -8695,6 +8711,13 @@ namespace syscall
         printfCyan("[SyscallHandler::sys_socket] 创建socket: domain=%d, type=%d, protocol=%d\n",
                    domain, type, protocol);
 
+        const int socket_flags = type & (O_CLOEXEC | O_NONBLOCK);
+        const int base_type = type & ~(O_CLOEXEC | O_NONBLOCK);
+        if ((type & ~(O_CLOEXEC | O_NONBLOCK | 0b111)) != 0)
+        {
+            return SYS_EINVAL;
+        }
+
         // 检查协议族有效性
         switch (domain)
         {
@@ -8722,17 +8745,17 @@ namespace syscall
             return SYS_EAFNOSUPPORT;
         }
 
-        // 检查socket类型有效性
-        if (!(type & SOCK_STREAM) && !(type & SOCK_DGRAM) && !(type & SOCK_RAW) && !(type & SOCK_SEQPACKET))
+        // 检查socket类型有效性。type 低三位是 socket 类型，高位是 CLOEXEC/NONBLOCK。
+        if (base_type != SOCK_STREAM && base_type != SOCK_DGRAM)
         {
-            printfRed("[SyscallHandler::sys_socket] 不支持的socket类型: %d\n", type);
-            return SYS_EINVAL;
+            printfRed("[SyscallHandler::sys_socket] 不支持的socket类型: %d\n", base_type);
+            return SYS_EPROTONOSUPPORT;
         }
 
         // 检查协议和类型的兼容性 (针对AF_INET)
         if (domain == AF_INET)
         {
-            switch (type & 0b111)
+            switch (base_type)
             {
             case SOCK_STREAM:
                 // TCP stream socket
@@ -8752,81 +8775,124 @@ namespace syscall
                 }
                 break;
 
-            case SOCK_RAW:
-                // RAW socket需要root权限
-                printfRed("[SyscallHandler::sys_socket] RAW socket需要root权限\n");
-                return SYS_EPROTONOSUPPORT;
-
             default:
                 // 其他类型暂不支持
-                printfRed("[SyscallHandler::sys_socket] AF_INET不支持socket类型%d\n", type);
+                printfRed("[SyscallHandler::sys_socket] AF_INET不支持socket类型%d\n", base_type);
                 return SYS_EINVAL;
             }
         }
-
-        // 针对不同协议族的特殊处理
-        SOCKET onps_socket = INVALID_SOCKET;
-
-        if (domain == AF_UNIX) // AF_LOCAL 等同于 AF_UNIX
+        else if (domain == AF_UNIX)
         {
-            // Unix域套接字不需要onps，直接创建socket_file
-            printfCyan("[SyscallHandler::sys_socket] Unix域套接字无需网络栈支持\n");
-        }
-        else if (domain == AF_INET)
-        {
-            // AF_INET 先只分配 file description，底层 onps socket 延迟到 bind/connect 等真正需要时再创建。
-            // 这样像 splice07 这类“只需要拿到一个合法 socket fd”的测例就不会被网络栈资源分配卡住。
-            printfCyan("[SyscallHandler::sys_socket] AF_INET socket will lazily create onps handle\n");
+            if (protocol != 0)
+            {
+                return SYS_EPROTONOSUPPORT;
+            }
         }
 
         // 创建socket文件对象
-        fs::socket_file *socket_f = new fs::socket_file(domain, type, protocol);
+        fs::socket_file *socket_f = new fs::socket_file(domain, base_type, protocol);
         if (!socket_f)
         {
-            if (onps_socket != INVALID_SOCKET)
-            {
-                close(onps_socket); // 关闭onps socket
-            }
             printfRed("[SyscallHandler::sys_socket] 创建socket_file失败\n");
             return SYS_ENOMEM;
         }
-
-        // 将onps socket句柄关联到socket_file (仅对网络socket)
-        if (onps_socket != INVALID_SOCKET)
-        {
-            socket_f->set_onps_socket(onps_socket);
-        }
+        socket_f->lwext4_file_struct.flags = O_RDWR | socket_flags;
+        socket_f->set_nonblock((socket_flags & O_NONBLOCK) != 0);
 
         // 分配文件描述符
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         int fd = proc::k_pm.alloc_fd(p, socket_f);
         if (fd < 0)
         {
-            if (onps_socket != INVALID_SOCKET)
-            {
-                close(onps_socket); // 关闭onps socket
-            }
-            delete socket_f;
+            socket_f->free_file();
             printfRed("[SyscallHandler::sys_socket] 分配文件描述符失败\n");
             return SYS_EMFILE;
         }
+        if (p->_ofile != nullptr && (socket_flags & O_CLOEXEC))
+        {
+            p->_ofile->_fl_cloexec[fd] = true;
+        }
 
-        if (domain == AF_UNIX) // AF_LOCAL 等同于 AF_UNIX
-        {
-            printfCyan("[SyscallHandler::sys_socket] Unix域套接字创建成功, fd=%d, domain=%d, type=%d, protocol=%d\n",
-                       fd, domain, type, protocol);
-        }
-        else
-        {
-            printfCyan("[SyscallHandler::sys_socket] 网络套接字创建成功, fd=%d, onps_socket=%d, domain=%d, type=%d, protocol=%d\n",
-                       fd, onps_socket, domain, type, protocol);
-        }
+        printfCyan("[SyscallHandler::sys_socket] socket创建成功, fd=%d, domain=%d, type=%d, flags=0x%x, protocol=%d\n",
+                   fd, domain, base_type, socket_flags, protocol);
 
         return fd;
     }
     uint64 SyscallHandler::sys_socketpair()
     {
-        panic("未实现该系统调用");
+        int domain, type, protocol;
+        uint64 sv_addr;
+        if (_arg_int(0, domain) < 0 || _arg_int(1, type) < 0 ||
+            _arg_int(2, protocol) < 0 || _arg_addr(3, sv_addr) < 0)
+        {
+            return SYS_EINVAL;
+        }
+        if (domain != AF_UNIX && domain != AF_LOCAL)
+        {
+            return SYS_EAFNOSUPPORT;
+        }
+
+        const int socket_flags = type & (O_CLOEXEC | O_NONBLOCK);
+        const int base_type = type & ~(O_CLOEXEC | O_NONBLOCK);
+        if ((type & ~(O_CLOEXEC | O_NONBLOCK | 0b111)) != 0)
+        {
+            return SYS_EINVAL;
+        }
+        if (base_type != SOCK_STREAM && base_type != SOCK_DGRAM)
+        {
+            return SYS_EPROTONOSUPPORT;
+        }
+        if (protocol != 0)
+        {
+            return SYS_EPROTONOSUPPORT;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        fs::socket_file *left = new fs::socket_file(AF_UNIX, base_type, protocol);
+        fs::socket_file *right = new fs::socket_file(AF_UNIX, base_type, protocol);
+        if (left == nullptr || right == nullptr)
+        {
+            if (left)
+                left->free_file();
+            if (right)
+                right->free_file();
+            return SYS_ENOMEM;
+        }
+        left->lwext4_file_struct.flags = O_RDWR | socket_flags;
+        right->lwext4_file_struct.flags = O_RDWR | socket_flags;
+        left->set_nonblock((socket_flags & O_NONBLOCK) != 0);
+        right->set_nonblock((socket_flags & O_NONBLOCK) != 0);
+        left->attach_loopback_peer(right);
+        right->attach_loopback_peer(left);
+
+        int fds[2] = {-1, -1};
+        fds[0] = proc::k_pm.alloc_fd(p, left);
+        if (fds[0] < 0)
+        {
+            left->free_file();
+            right->free_file();
+            return SYS_EMFILE;
+        }
+        fds[1] = proc::k_pm.alloc_fd(p, right);
+        if (fds[1] < 0)
+        {
+            proc::k_pm.close(fds[0]);
+            right->free_file();
+            return SYS_EMFILE;
+        }
+        if (socket_flags & O_CLOEXEC)
+        {
+            p->_ofile->_fl_cloexec[fds[0]] = true;
+            p->_ofile->_fl_cloexec[fds[1]] = true;
+        }
+        if (mem::k_vmm.copy_out(*pt, sv_addr, fds, sizeof(fds)) < 0)
+        {
+            proc::k_pm.close(fds[0]);
+            proc::k_pm.close(fds[1]);
+            return SYS_EFAULT;
+        }
+        return 0;
     }
     uint64 SyscallHandler::sys_bind()
     {
@@ -8873,6 +8939,32 @@ namespace syscall
 
         fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
 
+        if (socket_f->get_family() == fs::SocketFamily::UNIX)
+        {
+            if ((socklen_t)addrlen < sizeof(struct sockaddr_un))
+            {
+                return SYS_EINVAL;
+            }
+
+            struct sockaddr_un unix_addr;
+            if (mem::k_vmm.copy_in(*pt, &unix_addr, addr, sizeof(unix_addr)) < 0)
+            {
+                return SYS_EFAULT;
+            }
+            if (unix_addr.sun_family != AF_UNIX)
+            {
+                return SYS_EAFNOSUPPORT;
+            }
+
+            int socket_file_result = socket_f->bind((const struct sockaddr *)&unix_addr, addrlen);
+            if (socket_file_result < 0)
+            {
+                printfRed("[SyscallHandler::sys_bind] AF_UNIX socket_file bind失败: %d\n", socket_file_result);
+                return socket_file_result;
+            }
+            return 0;
+        }
+
         // 检查地址长度
         if ((socklen_t)addrlen < sizeof(struct sockaddr_in))
         {
@@ -8901,15 +8993,15 @@ namespace syscall
 
         printfCyan("[SyscallHandler::sys_bind] 解析地址: IP=0x%08x, Port=%d\n", ip_addr, port);
 
-        // AF_INET socket 的底层 ONPS 句柄采用懒创建；真正绑定时由 socket_file 统一创建并更新状态。
-        int socket_file_result = socket_f->bind((const struct sockaddr *)addr, addrlen);
+        // AF_INET loopback 的端口占用与状态转换统一交给 socket_file，避免 syscall/后端双写状态。
+        int socket_file_result = socket_f->bind((const struct sockaddr *)&sock_addr, addrlen);
         if (socket_file_result < 0)
         {
             printfRed("[SyscallHandler::sys_bind] socket_file bind失败: %d\n", socket_file_result);
             return socket_file_result;
         }
 
-        printfCyan("[SyscallHandler::sys_bind] bind成功, sockfd=%d, onps_socket=%d\n", sockfd, socket_f->get_onps_socket());
+        printfCyan("[SyscallHandler::sys_bind] bind成功, sockfd=%d\n", sockfd);
         return 0;
     }
     uint64 SyscallHandler::sys_listen()
@@ -8948,28 +9040,12 @@ namespace syscall
         }
 
         fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
-        SOCKET onps_socket = socket_f->get_onps_socket();
-
-        if (onps_socket == INVALID_SOCKET)
-        {
-            printfRed("[SyscallHandler::sys_listen] socket未关联onps socket\n");
-            return SYS_EINVAL;
-        }
 
         // 检查backlog是否合理
         if (backlog < 0)
         {
             printfRed("[SyscallHandler::sys_listen] 无效的backlog: %d\n", backlog);
             return SYS_EINVAL;
-        }
-
-        // 调用onps的listen函数
-        int onps_result = ::listen(onps_socket, (USHORT)backlog);
-        if (onps_result != 0)
-        {
-            printfRed("[SyscallHandler::sys_listen] onps listen失败: %d\n", onps_result);
-            // 将onps错误码转换为系统错误码
-            return SYS_EOPNOTSUPP; // 可以根据具体错误码进行细化
         }
 
         // 更新socket_file的状态
@@ -8980,8 +9056,8 @@ namespace syscall
             return socket_file_result;
         }
 
-        printfCyan("[SyscallHandler::sys_listen] listen成功, sockfd=%d, onps_socket=%d, backlog=%d\n",
-                   sockfd, onps_socket, backlog);
+        printfCyan("[SyscallHandler::sys_listen] listen成功, sockfd=%d, backlog=%d\n",
+                   sockfd, backlog);
         return 0;
     }
     uint64 SyscallHandler::sys_accept()
@@ -9042,14 +9118,6 @@ namespace syscall
             return SYS_EINVAL;
         }
 
-        SOCKET onps_socket = socket_f->get_onps_socket();
-
-        if (onps_socket == INVALID_SOCKET)
-        {
-            printfRed("[SyscallHandler::sys_accept] socket未关联onps socket\n");
-            return SYS_EAGAIN;
-        }
-
         // 从用户空间读取地址长度
         socklen_t user_addrlen = 0;
         if (addr != 0 && addrlen_ptr != 0)
@@ -9061,48 +9129,22 @@ namespace syscall
             }
         }
 
-        // 准备客户端地址信息
-        in_addr_t client_ip = 0;
-        USHORT client_port = 0;
-        EN_ONPSERR onps_err;
-
-        // 调用onps的accept函数，阻塞等待连接
-        SOCKET client_socket = ::accept(onps_socket, &client_ip, &client_port, 0, &onps_err);
-        if (client_socket == INVALID_SOCKET)
+        uint8_t client_addr_storage[sizeof(struct sockaddr_un)];
+        memset(client_addr_storage, 0, sizeof(client_addr_storage));
+        socklen_t kernel_addrlen = sizeof(client_addr_storage);
+        fs::socket_file *client_socket_f = socket_f->accept(
+            addr != 0 ? reinterpret_cast<struct sockaddr *>(client_addr_storage) : nullptr,
+            (addr != 0 && addrlen_ptr != 0) ? &kernel_addrlen : nullptr);
+        if (client_socket_f == nullptr)
         {
-            printfRed("[SyscallHandler::sys_accept] onps accept失败, 错误: %d\n", onps_err);
-            // 将onps错误码转换为系统错误码
-            if (onps_err == ERRTCPNOLISTEN)
-                return SYS_EINVAL; // 没有监听
-            else if (onps_err == ERRNOTBINDADDR)
-                return SYS_EINVAL; // 没有绑定地址
-            else
-                return SYS_EAGAIN; // 其他错误，通常是没有连接可接受
+            return SYS_EAGAIN;
         }
-
-        // 创建新的socket_file对象用于客户端连接
-        // 继承服务器socket的属性
-        int domain = (int)socket_f->get_family();
-        int type = (int)socket_f->get_type();
-        int protocol = socket_f->get_protocol();
-
-        fs::socket_file *client_socket_f = new fs::socket_file(domain, type, protocol);
-        if (!client_socket_f)
-        {
-            close(client_socket); // 关闭onps socket
-            printfRed("[SyscallHandler::sys_accept] 创建客户端socket_file失败\n");
-            return SYS_ENOMEM;
-        }
-
-        // 将onps客户端socket句柄关联到socket_file
-        client_socket_f->set_onps_socket(client_socket);
 
         // 为新的客户端socket分配文件描述符
         int client_fd = proc::k_pm.alloc_fd(p, client_socket_f);
         if (client_fd < 0)
         {
-            close(client_socket); // 关闭onps socket
-            delete client_socket_f;
+            client_socket_f->free_file();
             printfRed("[SyscallHandler::sys_accept] 分配客户端文件描述符失败\n");
             return SYS_EMFILE;
         }
@@ -9110,33 +9152,28 @@ namespace syscall
         // 如果用户提供了地址缓冲区，填充客户端地址信息
         if (addr != 0 && user_addrlen > 0)
         {
-            struct sockaddr_in client_addr;
-            memset(&client_addr, 0, sizeof(client_addr));
-            client_addr.sin_family = AF_INET;
-            client_addr.sin_addr = htonl(client_ip);
-            client_addr.sin_port = htons(client_port);
-
             // 确定要复制的大小
-            socklen_t copy_len = (user_addrlen < sizeof(struct sockaddr_in)) ? user_addrlen : sizeof(struct sockaddr_in);
+            socklen_t copy_len = eastl::min(user_addrlen, kernel_addrlen);
 
             // 复制地址到用户空间
-            if (mem::k_vmm.copy_out(*pt, addr, &client_addr, copy_len) < 0)
+            if (mem::k_vmm.copy_out(*pt, addr, client_addr_storage, copy_len) < 0)
             {
                 printfRed("[SyscallHandler::sys_accept] 复制客户端地址到用户空间失败\n");
-                // 不是致命错误，继续执行
+                proc::k_pm.close(client_fd);
+                return SYS_EFAULT;
             }
 
             // 更新实际地址长度
-            socklen_t actual_len = sizeof(struct sockaddr_in);
-            if (mem::k_vmm.copy_out(*pt, addrlen_ptr, &actual_len, sizeof(socklen_t)) < 0)
+            if (mem::k_vmm.copy_out(*pt, addrlen_ptr, &kernel_addrlen, sizeof(socklen_t)) < 0)
             {
                 printfRed("[SyscallHandler::sys_accept] 复制地址长度到用户空间失败\n");
-                // 不是致命错误，继续执行
+                proc::k_pm.close(client_fd);
+                return SYS_EFAULT;
             }
         }
 
-        printfCyan("[SyscallHandler::sys_accept] accept成功, sockfd=%d, client_fd=%d, client_ip=0x%08x, client_port=%d\n",
-                   sockfd, client_fd, client_ip, client_port);
+        printfCyan("[SyscallHandler::sys_accept] accept成功, sockfd=%d, client_fd=%d\n",
+                   sockfd, client_fd);
         return client_fd;
     }
     uint64 SyscallHandler::sys_connect()
@@ -9154,7 +9191,7 @@ namespace syscall
         if (_arg_addr(1, addr) < 0)
         {
             printfRed("[SyscallHandler::sys_connect] 参数错误: addr\n");
-            return SYS_EINVAL;
+            return SYS_EFAULT;
         }
 
         if (_arg_int(2, addrlen) < 0)
@@ -9221,14 +9258,6 @@ namespace syscall
                 return SYS_EFAULT;
             }
 
-            // 获取onps socket句柄
-            SOCKET onps_socket = socket_f->get_onps_socket();
-            if (onps_socket == INVALID_SOCKET)
-            {
-                printfRed("[SyscallHandler::sys_connect] IPv4 socket未关联onps socket\n");
-                return SYS_EINVAL;
-            }
-
             // 提取IP地址和端口
             uint32_t ip_addr = sock_addr_in.sin_addr;
             uint16_t port = ENDIAN_CONVERTER_USHORT(sock_addr_in.sin_port); // 转换网络字节序到主机字节序
@@ -9248,39 +9277,12 @@ namespace syscall
             //     return SYS_EINVAL;
             // }
 
-            // 调用onps的connect_ext函数，使用默认超时时间
-            int result = connect_ext(onps_socket, &ip_addr, port, TCP_CONN_TIMEOUT);
-
-            if (result != 0)
-            {
-                // 获取onps错误信息
-                EN_ONPSERR onps_err = socket_get_last_error_code(onps_socket);
-                printfRed("[SyscallHandler::sys_connect] onps connect失败, result=%d, 错误: %d\n", result, onps_err);
-
-                // 将onps错误码转换为系统错误码
-                switch (onps_err)
-                {
-                case ERRTCPCONNTIMEOUT:
-                    return SYS_ETIMEDOUT; // 连接超时
-                case ERRTCPCONNRESET:
-                    return SYS_ECONNRESET; // 连接被重置
-                case ERRADDRFAMILIES:
-                    return SYS_EAFNOSUPPORT; // 不支持的地址族
-                case ERRUNSUPPIPPROTO:
-                    return SYS_EPROTONOSUPPORT; // 不支持的协议
-                case ERRNOTBINDADDR:
-                    return SYS_EADDRNOTAVAIL; // 地址不可用
-                default:
-                    return SYS_ECONNREFUSED; // 连接被拒绝（默认错误）
-                }
-            }
-
-            // 更新socket_file的状态
+            // 真实 loopback 连接由 socket_file 统一处理。这里不再提前检查 ONPS 句柄。
             int socket_file_result = socket_f->connect((const struct sockaddr *)&sock_addr_in, addrlen);
             if (socket_file_result < 0)
             {
                 printfRed("[SyscallHandler::sys_connect] socket_file connect失败: %d\n", socket_file_result);
-                // 这里不返回错误，因为onps连接已经成功了，socket_file的connect主要是状态更新
+                return socket_file_result;
             }
 
             printfCyan("[SyscallHandler::sys_connect] IPv4连接成功, sockfd=%d, 目标: %d.%d.%d.%d:%d\n",
@@ -9318,17 +9320,7 @@ namespace syscall
             if (socket_file_result < 0)
             {
                 printfRed("[SyscallHandler::sys_connect] Unix域套接字连接失败: %d\n", socket_file_result);
-                switch (socket_file_result)
-                {
-                case -1:
-                    return SYS_ECONNREFUSED; // 连接被拒绝
-                case -2:
-                    return SYS_ENOENT; // 路径不存在
-                case -3:
-                    return SYS_EACCES; // 权限不足
-                default:
-                    return SYS_EINVAL; // 其他错误
-                }
+                return socket_file_result;
             }
 
             printfCyan("[SyscallHandler::sys_connect] Unix域套接字连接成功, sockfd=%d, 路径: %s\n",
@@ -9380,7 +9372,6 @@ namespace syscall
         }
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        mem::PageTable *pt = p->get_pagetable();
         fs::file *f = p->get_open_file(sockfd);
         if (!f)
         {
@@ -9396,75 +9387,18 @@ namespace syscall
         }
 
         fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
-        SOCKET onps_socket = socket_f->get_onps_socket();
-
-        if (onps_socket == INVALID_SOCKET)
+        int result = socket_f->getsockname(reinterpret_cast<struct sockaddr *>(addr),
+                                           reinterpret_cast<socklen_t *>(addrlen_ptr));
+        if (result < 0)
         {
-            printfRed("[SyscallHandler::sys_getsockname] socket未关联onps socket\n");
-            return SYS_EINVAL;
+            return result;
         }
 
-        // 从用户空间读取地址长度
-        socklen_t user_addrlen;
-        if (mem::k_vmm.copy_in(*pt, &user_addrlen, addrlen_ptr, sizeof(socklen_t)) < 0)
-        {
-            printfRed("[SyscallHandler::sys_getsockname] 读取地址长度失败\n");
-            return SYS_EFAULT;
-        }
-
-        // 通过onps获取socket地址信息
-        EN_ONPSERR onps_err;
-        PST_TCPUDP_HANDLE pstHandle;
-        if (!onps_input_get(onps_socket, IOPT_GETTCPUDPADDR, &pstHandle, &onps_err))
-        {
-            printfRed("[SyscallHandler::sys_getsockname] 无法获取socket地址信息, onps错误: %d\n", onps_err);
-            return SYS_EINVAL;
-        }
-
-        // 构造sockaddr_in结构
-        struct sockaddr_in local_addr;
-        memset(&local_addr, 0, sizeof(local_addr));
-        local_addr.sin_family = AF_INET;
-#if SUPPORT_IPV6
-        if (pstHandle->bFamily == AF_INET)
-        {
-            local_addr.sin_addr = pstHandle->stSockAddr.saddr_ipv4;
-        }
-        else
-        {
-            printfRed("[SyscallHandler::sys_getsockname] IPv6暂不支持\n");
-            return SYS_EAFNOSUPPORT;
-        }
-#else
-        local_addr.sin_addr = pstHandle->stSockAddr.saddr_ipv4;
-#endif
-        local_addr.sin_port = htons(pstHandle->stSockAddr.usPort);
-
-        // 确定要复制的大小
-        socklen_t copy_len = (user_addrlen < sizeof(struct sockaddr_in)) ? user_addrlen : sizeof(struct sockaddr_in);
-
-        // 复制地址到用户空间
-        if (mem::k_vmm.copy_out(*pt, addr, &local_addr, copy_len) < 0)
-        {
-            printfRed("[SyscallHandler::sys_getsockname] 复制地址到用户空间失败\n");
-            return SYS_EFAULT;
-        }
-
-        // 更新实际地址长度
-        socklen_t actual_len = sizeof(struct sockaddr_in);
-        if (mem::k_vmm.copy_out(*pt, addrlen_ptr, &actual_len, sizeof(socklen_t)) < 0)
-        {
-            printfRed("[SyscallHandler::sys_getsockname] 复制地址长度到用户空间失败\n");
-            return SYS_EFAULT;
-        }
-
-        printfCyan("[SyscallHandler::sys_getsockname] getsockname成功, sockfd=%d, port=%d\n",
-                   sockfd, pstHandle->stSockAddr.usPort);
+        printfCyan("[SyscallHandler::sys_getsockname] getsockname成功, sockfd=%d\n", sockfd);
         return 0;
     }
     uint64 SyscallHandler::sys_getpeername()
     {
-        printfRed("这个是乱写的，用了就寄");
         int sockfd;
         uint64 addr;
         uint64 addrlen_ptr;
@@ -9532,7 +9466,7 @@ namespace syscall
         if (_arg_addr(1, buf_ptr) < 0)
         {
             printfRed("[SyscallHandler::sys_sendto] 参数错误: buf\n");
-            return SYS_EINVAL;
+            return SYS_EFAULT;
         }
 
         if (_arg_addr(2, len) < 0)
@@ -9550,7 +9484,7 @@ namespace syscall
         if (_arg_addr(4, dest_addr_ptr) < 0)
         {
             printfRed("[SyscallHandler::sys_sendto] 参数错误: dest_addr\n");
-            return SYS_EINVAL;
+            return SYS_EFAULT;
         }
 
         int addrlen_tmp;
@@ -9560,6 +9494,10 @@ namespace syscall
             return SYS_EINVAL;
         }
         addrlen = (socklen_t)addrlen_tmp;
+        if (addrlen_tmp < 0)
+        {
+            return SYS_EINVAL;
+        }
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         fs::file *f = p->get_open_file(sockfd);
@@ -9587,12 +9525,16 @@ namespace syscall
             return SYS_EFAULT;
         }
 
-        // 复制目标地址
-        struct sockaddr dest_addr;
+        // 复制目标地址。sockaddr_in 必须完整保留端口/IP，不能只拷贝通用 sockaddr。
+        struct sockaddr_in dest_addr;
         if (dest_addr_ptr && addrlen > 0)
         {
+            if (addrlen < sizeof(struct sockaddr_in))
+            {
+                return SYS_EINVAL;
+            }
             if (mem::k_vmm.copy_in(*pt, &dest_addr, dest_addr_ptr,
-                                   eastl::min((size_t)addrlen, sizeof(dest_addr))) < 0)
+                                   sizeof(dest_addr)) < 0)
             {
                 printfRed("[SyscallHandler::sys_sendto] 复制目标地址失败\n");
                 return SYS_EFAULT;
@@ -9603,7 +9545,9 @@ namespace syscall
         int result;
         if (dest_addr_ptr && addrlen > 0)
         {
-            result = socket_f->sendto(kernel_buf.data(), len, flags, &dest_addr, addrlen);
+            result = socket_f->sendto(kernel_buf.data(), len, flags,
+                                      reinterpret_cast<struct sockaddr *>(&dest_addr),
+                                      sizeof(dest_addr));
         }
         else
         {
@@ -9639,7 +9583,7 @@ namespace syscall
         if (_arg_addr(1, buf_ptr) < 0)
         {
             printfRed("[SyscallHandler::sys_recvfrom] 参数错误: buf\n");
-            return SYS_EINVAL;
+            return SYS_EFAULT;
         }
 
         if (_arg_addr(2, len) < 0)
@@ -9654,17 +9598,8 @@ namespace syscall
             return SYS_EINVAL;
         }
 
-        if (_arg_addr(4, src_addr_ptr) < 0)
-        {
-            printfRed("[SyscallHandler::sys_recvfrom] 参数错误: src_addr\n");
-            return SYS_EINVAL;
-        }
-
-        if (_arg_addr(5, addrlen_ptr) < 0)
-        {
-            printfRed("[SyscallHandler::sys_recvfrom] 参数错误: addrlen\n");
-            return SYS_EINVAL;
-        }
+        src_addr_ptr = _arg_raw(4);
+        addrlen_ptr = _arg_raw(5);
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         fs::file *f = p->get_open_file(sockfd);
@@ -9696,6 +9631,10 @@ namespace syscall
                 printfRed("[SyscallHandler::sys_recvfrom] 复制addrlen失败\n");
                 return SYS_EFAULT;
             }
+            if (addrlen > 4096)
+            {
+                return SYS_EINVAL;
+            }
         }
 
         // 准备源地址缓冲区
@@ -9703,9 +9642,10 @@ namespace syscall
         socklen_t orig_addrlen = addrlen;
 
         // 调用socket的recvfrom方法
+        bool copy_source_addr = src_addr_ptr != 0 && socket_f->get_type() == fs::SocketType::UDP;
         int result = socket_f->recvfrom(kernel_buf.data(), len, flags,
-                                        src_addr_ptr ? &src_addr : nullptr,
-                                        src_addr_ptr ? &addrlen : nullptr);
+                                        copy_source_addr ? &src_addr : nullptr,
+                                        copy_source_addr ? &addrlen : nullptr);
 
         if (result < 0)
         {
@@ -9721,7 +9661,7 @@ namespace syscall
         }
 
         // 复制源地址到用户空间（如果请求了）
-        if (src_addr_ptr && addrlen > 0)
+        if (copy_source_addr && addrlen > 0)
         {
             size_t copy_len = eastl::min((size_t)addrlen, (size_t)orig_addrlen);
             if (mem::k_vmm.copy_out(*pt, src_addr_ptr, &src_addr, copy_len) < 0)
@@ -9777,6 +9717,10 @@ namespace syscall
         if (_arg_int(4, optlen_tmp) < 0)
         {
             printfRed("[SyscallHandler::sys_setsockopt] 参数错误: optlen\n");
+            return SYS_EINVAL;
+        }
+        if (optlen_tmp <= 0)
+        {
             return SYS_EINVAL;
         }
 
@@ -9861,6 +9805,10 @@ namespace syscall
             printfRed("[SyscallHandler::sys_getsockopt] 参数错误: optlen\n");
             return SYS_EINVAL;
         }
+        if (optval_ptr == 0 || optlen_ptr == 0)
+        {
+            return SYS_EFAULT;
+        }
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         fs::file *f = p->get_open_file(sockfd);
@@ -9886,6 +9834,10 @@ namespace syscall
         {
             printfRed("[SyscallHandler::sys_getsockopt] 复制optlen失败\n");
             return SYS_EFAULT;
+        }
+        if (optlen == 0 || optlen > 4096)
+        {
+            return SYS_EINVAL;
         }
 
         // 分配内核缓冲区
@@ -13116,7 +13068,113 @@ namespace syscall
 
     uint64 SyscallHandler::sys_recvmsg()
     {
-        panic("未实现该系统调用");
+        int sockfd;
+        uint64 msg_ptr;
+        int flags;
+        if (_arg_int(0, sockfd) < 0 || _arg_addr(1, msg_ptr) < 0 || _arg_int(2, flags) < 0)
+        {
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        fs::file *f = p->get_open_file(sockfd);
+        if (f == nullptr)
+        {
+            return SYS_EBADF;
+        }
+        if (f->_attrs.filetype != fs::FileTypes::FT_SOCKET)
+        {
+            return SYS_ENOTSOCK;
+        }
+
+        struct msghdr user_msg;
+        if (mem::k_vmm.copy_in(*pt, &user_msg, msg_ptr, sizeof(user_msg)) < 0)
+        {
+            return SYS_EFAULT;
+        }
+        if (user_msg.msg_iovlen > IOV_MAX)
+        {
+            return SYS_EMSGSIZE;
+        }
+        if (user_msg.msg_iovlen > 0 && user_msg.msg_iov == nullptr)
+        {
+            return SYS_EFAULT;
+        }
+
+        eastl::vector<struct iovec> kernel_iov(user_msg.msg_iovlen);
+        if (user_msg.msg_iovlen > 0 &&
+            mem::k_vmm.copy_in(*pt, kernel_iov.data(), (uint64)user_msg.msg_iov,
+                               user_msg.msg_iovlen * sizeof(struct iovec)) < 0)
+        {
+            return SYS_EFAULT;
+        }
+
+        eastl::vector<struct iovec> original_iov = kernel_iov;
+        eastl::vector<eastl::vector<uint8_t>> buffers(user_msg.msg_iovlen);
+        for (size_t i = 0; i < user_msg.msg_iovlen; ++i)
+        {
+            if (kernel_iov[i].iov_len > 0)
+            {
+                buffers[i].resize(kernel_iov[i].iov_len);
+                kernel_iov[i].iov_base = buffers[i].data();
+            }
+        }
+
+        struct sockaddr_in kernel_name;
+        memset(&kernel_name, 0, sizeof(kernel_name));
+        struct msghdr kernel_msg = user_msg;
+        kernel_msg.msg_iov = kernel_iov.data();
+        if (user_msg.msg_name != nullptr && user_msg.msg_namelen > 0)
+        {
+            kernel_msg.msg_name = &kernel_name;
+            kernel_msg.msg_namelen = sizeof(kernel_name);
+        }
+        else
+        {
+            kernel_msg.msg_name = nullptr;
+            kernel_msg.msg_namelen = 0;
+        }
+
+        fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
+        int result = socket_f->recvmsg(&kernel_msg, flags);
+        if (result < 0)
+        {
+            return result;
+        }
+
+        size_t remaining = result;
+        for (size_t i = 0; i < user_msg.msg_iovlen && remaining > 0; ++i)
+        {
+            size_t copy_len = eastl::min(original_iov[i].iov_len, remaining);
+            if (copy_len > 0 &&
+                mem::k_vmm.copy_out(*pt, (uint64)original_iov[i].iov_base,
+                                    buffers[i].data(), copy_len) < 0)
+            {
+                return SYS_EFAULT;
+            }
+            remaining -= copy_len;
+        }
+
+        if (user_msg.msg_name != nullptr && user_msg.msg_namelen > 0)
+        {
+            socklen_t copy_len = eastl::min(user_msg.msg_namelen, kernel_msg.msg_namelen);
+            if (copy_len > 0 &&
+                mem::k_vmm.copy_out(*pt, (uint64)user_msg.msg_name, &kernel_name, copy_len) < 0)
+            {
+                return SYS_EFAULT;
+            }
+        }
+
+        struct msghdr updated_msg = user_msg;
+        updated_msg.msg_namelen = kernel_msg.msg_namelen;
+        updated_msg.msg_flags = kernel_msg.msg_flags;
+        if (mem::k_vmm.copy_out(*pt, msg_ptr, &updated_msg, sizeof(updated_msg)) < 0)
+        {
+            return SYS_EFAULT;
+        }
+
+        return result;
     }
     uint64 SyscallHandler::sys_fadvise64()
     {
@@ -13353,7 +13411,92 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_accept4()
     {
-        panic("未实现该系统调用");
+        int sockfd;
+        uint64 addr;
+        uint64 addrlen_ptr;
+        int flags;
+        if (_arg_int(0, sockfd) < 0 || _arg_addr(1, addr) < 0 ||
+            _arg_addr(2, addrlen_ptr) < 0 || _arg_int(3, flags) < 0)
+        {
+            return SYS_EINVAL;
+        }
+        if ((flags & ~(O_CLOEXEC | O_NONBLOCK)) != 0)
+        {
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        fs::file *f = p->get_open_file(sockfd);
+        if (f == nullptr)
+        {
+            return SYS_EBADF;
+        }
+        if (f->_attrs.filetype != fs::FileTypes::FT_SOCKET)
+        {
+            return SYS_ENOTSOCK;
+        }
+
+        fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
+        if (socket_f->get_type() != fs::SocketType::TCP)
+        {
+            return SYS_EOPNOTSUPP;
+        }
+        if (socket_f->get_state() != fs::SocketState::LISTENING)
+        {
+            return SYS_EINVAL;
+        }
+
+        socklen_t user_addrlen = 0;
+        if (addr != 0 && addrlen_ptr != 0)
+        {
+            if (mem::k_vmm.copy_in(*pt, &user_addrlen, addrlen_ptr, sizeof(socklen_t)) < 0)
+            {
+                return SYS_EFAULT;
+            }
+        }
+
+        uint8_t client_addr_storage[sizeof(struct sockaddr_un)];
+        memset(client_addr_storage, 0, sizeof(client_addr_storage));
+        socklen_t kernel_addrlen = sizeof(client_addr_storage);
+        fs::socket_file *client_socket_f = socket_f->accept(
+            addr != 0 ? reinterpret_cast<struct sockaddr *>(client_addr_storage) : nullptr,
+            (addr != 0 && addrlen_ptr != 0) ? &kernel_addrlen : nullptr);
+        if (client_socket_f == nullptr)
+        {
+            return SYS_EAGAIN;
+        }
+
+        client_socket_f->lwext4_file_struct.flags = O_RDWR | (flags & O_NONBLOCK);
+        client_socket_f->set_nonblock((flags & O_NONBLOCK) != 0);
+        int client_fd = proc::k_pm.alloc_fd(p, client_socket_f);
+        if (client_fd < 0)
+        {
+            client_socket_f->free_file();
+            return SYS_EMFILE;
+        }
+        if (flags & O_CLOEXEC)
+        {
+            p->_ofile->_fl_cloexec[client_fd] = true;
+        }
+
+        if (addr != 0 && user_addrlen > 0)
+        {
+            socklen_t copy_len = eastl::min(user_addrlen, kernel_addrlen);
+            if (mem::k_vmm.copy_out(*pt, addr, client_addr_storage, copy_len) < 0)
+            {
+                proc::k_pm.close(client_fd);
+                return SYS_EFAULT;
+            }
+            if (addrlen_ptr != 0 &&
+                mem::k_vmm.copy_out(*pt, addrlen_ptr, &kernel_addrlen, sizeof(socklen_t)) < 0)
+            {
+                proc::k_pm.close(client_fd);
+                return SYS_EFAULT;
+            }
+        }
+
+        return client_fd;
     }
     uint64 SyscallHandler::sys_clockadjtime()
     {

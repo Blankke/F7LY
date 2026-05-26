@@ -41,6 +41,12 @@ namespace fs
     class socket_file : public file
     {
     private:
+        struct loopback_datagram
+        {
+            struct sockaddr_in src_addr;
+            eastl::vector<uint8_t> data;
+        };
+
         SocketState _state;
         SocketType _type;
         SocketFamily _family;
@@ -52,18 +58,28 @@ namespace fs
         // 地址信息
         struct sockaddr_in _local_addr;
         struct sockaddr_in _remote_addr;
+        struct sockaddr_un _local_unix_addr;
+        struct sockaddr_un _remote_unix_addr;
+        eastl::string _unix_path;
         
         // TCP连接队列
         eastl::vector<socket_file*> _pending_connections;
         int _backlog;
+        socket_file *_peer;
         
         // 数据缓冲区
         eastl::vector<uint8_t> _recv_buffer;
         eastl::vector<uint8_t> _send_buffer;
+        eastl::vector<loopback_datagram> _datagram_queue;
         
         // 标志位
         bool _blocking;
         bool _reuse_addr;
+        bool _loopback_registered;
+        bool _unix_registered;
+        bool _read_shutdown;
+        bool _write_shutdown;
+        bool _peer_closed;
         
         SpinLock _lock;
 
@@ -109,9 +125,16 @@ namespace fs
         SocketFamily get_family() const { return _family; }
         int get_protocol() const { return _protocol; }
         bool is_blocking() const { return _blocking; }
+        void set_nonblock(bool nonblock) { _blocking = !nonblock; }
+        bool get_nonblock() const { return !_blocking; }
+        void attach_loopback_peer(socket_file *peer);
 
         // 内部辅助函数
     private:
+        bool is_nonblocking_request(int flags) const;
+        int ensure_loopback_bound_locked();
+        int enqueue_stream_data(const uint8_t *data, size_t len);
+        int enqueue_datagram(const struct sockaddr_in *src_addr, const uint8_t *data, size_t len);
         bool is_valid_address(const struct sockaddr *addr, socklen_t addrlen);
         int copy_sockaddr_to_user(struct sockaddr *user_addr, socklen_t *user_addrlen,
                                  const struct sockaddr_in *kernel_addr);
