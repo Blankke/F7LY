@@ -1,0 +1,316 @@
+# F7LY 网络模块修复计划
+
+## 1. 总体目标
+
+将当前“面向测例返回值”的网络实现，修复为可真实收发数据的网络子系统。第一优先级不是外部网卡通信，而是先跑通 127.0.0.1 本机 TCP/UDP，因为当前 iperf 和 netperf 评测脚本都以 loopback 为目标。
+
+当前网络实现分为三层但没有闭环：
+
+- Linux socket syscall/fd 层：已有大量接口，但状态机和错误语义不一致。
+- ONPS 协议栈：代码存在，但默认没有初始化，且与 syscall/socket_file 分裂。
+- virtio-net 驱动：收包、中断、LoongArch PCI、RISC-V MMIO 地址都不可靠。
+
+最终判定标准：不能只看 socket()、bind() 返回 0，也不能只看 errno 型 LTP 测例通过；必须看到真实 payload 从 client 到 server，并通过 iperf/netperf 单项日志证明。
+
+## 2. 阶段性修复目标
+
+### 阶段 0：建立基线和观测
+
+目标：明确当前失败点，避免继续“看似通过”。
+
+工作内容：
+
+- 单独运行 socket 相关 LTP 小集合，例如 socket01/socket02/accept01/accept03/accept4_01/bind01/listen01/connect01/sendto01/recvfrom01/recvmsg01/socketpair02。
+- 单独运行项目内自测 `network_loopback_smoke()` 和 `network_fork_loopback_smoke()`，确认 TCP/UDP payload 真的能收发。
+- 单独运行 iperf 的 BASIC_UDP/BASIC_TCP 和 netperf 的 UDP_STREAM/TCP_STREAM。注意 scoreboard 里的 `iperf` 行不是可执行文件名，真实脚本使用 `/musl/iperf3`。
+- 日志必须写入 output_*.txt，不要把 QEMU 长日志刷进聊天。
+- 在后续代码修复时加入最小可观测计数：socket 状态转换、ONPS handle 创建、loopback 连接数、TCP/UDP payload 收发计数。
+
+验收标准：
+
+- 能清楚指出每个测例失败在 syscall 参数、socket 状态机、loopback、ONPS、virtio 还是中断。
+- 不把 accept01/accept03 这类 errno 型 PASS 当成真实网络可用。
+
+### 阶段 1：统一 Linux socket fd 契约
+
+目标：先让 socket syscall 层语义一致，不再一部分走 fake state，一部分走 ONPS。
+
+工作内容：
+
+- 修正 socket() 对 SOCK_CLOEXEC、SOCK_NONBLOCK 的处理。
+- 绑定 Linux shutdown(2) syscall，不要只保留自定义关机 syscall。
+- 实现基础 accept4()，至少支持 SOCK_CLOEXEC/SOCK_NONBLOCK。
+- 将 bind/listen/connect/accept/send/recv/sendto/recvfrom 的状态机统一到一个权威后端。
+- 删除“syscall_handler 先调用 ONPS，socket_file 再调用 ONPS”的双路径分裂。
+- 对暂不支持的协议族/类型返回稳定 Linux errno，不能 panic。
+
+验收标准：
+
+- LTP socket ABI 小集合稳定通过。
+- socket -> bind -> listen 不再因为 ONPS handle 未创建而自相矛盾失败。
+- connect() 不再在进入 socket_file::connect() 前就因为 handle 无效失败。
+
+### 阶段 2：实现真实 loopback TCP/UDP
+
+目标：先跑通 127.0.0.1，这是当前网络评测的核心路径。
+
+推荐实现：
+
+- 在 socket 层实现内核内 loopback transport。
+- 维护本机端口表：区分 TCP listener、TCP established pair、UDP bound socket。
+- TCP loopback 支持 bind/listen/accept/connect、backlog 队列、accepted socket pair、send/recv/read/write、close/shutdown 唤醒对端。
+- UDP loopback 支持 bind、sendto/recvfrom、datagram queue、源地址和源端口回填。
+- 先不依赖 virtio-net，也不依赖外部 ONPS 路由。
+
+验收标准：
+
+- 自测 TCP：server bind/listen/accept/read，client connect/write，server 收到准确 payload。
+- 自测 UDP：server bind/recvfrom，client sendto，server 收到准确 payload 并拿到源地址。
+- iperf BASIC_UDP 和 iperf BASIC_TCP 至少在 riscv musl 下输出 success。
+- LTP `sendmmsg01` 或 `recvmmsg01` 这类真实 UDP loopback 收发测例通过后，才能认为 UDP 批量消息路径初步可用。
+
+### 阶段 3：完善阻塞、非阻塞和就绪通知
+
+目标：支持 iperf/netperf 并发、反向模式和事件等待。
+
+工作内容：
+
+- 支持 fd 级 O_NONBLOCK 和调用级 MSG_DONTWAIT。
+- 阻塞读写必须 sleep/wakeup，不允许忙等。
+- close/shutdown 必须唤醒阻塞中的 peer。
+- poll/select/epoll 的 read_ready/write_ready 必须基于真实队列。
+- 修正错误码：无连接、对端关闭、非阻塞无数据、无监听端口分别返回合理 errno。
+
+验收标准：
+
+- iperf PARALLEL_UDP/PARALLEL_TCP 通过。
+- iperf REVERSE_UDP/REVERSE_TCP 通过。
+- netperf UDP_STREAM/TCP_STREAM/UDP_RR/TCP_RR 通过。
+- 长时间重复运行不出现 socket 队列泄漏、fd 泄漏或死锁。
+
+### 阶段 4：修复 virtio-net 外部网络链路
+
+目标：loopback 稳定后，再恢复真实网卡收发。
+
+RISC-V 工作内容：
+
+- 确认 QEMU virtio-net MMIO base，优先核对 VIRTIO1=0x10002000 与当前 0x10008000 的差异。
+- 将 VIRTIO1_IRQ 接入 virtio_net_intr()，不能继续 panic。
+- 实现 virtio-net RX pump，把收到的 Ethernet frame 送入协议栈。
+- 修复 TX completion 回收，避免 8 个 descriptor 后耗尽。
+- 读取或设置可信 MAC 地址，不再只写死测试 MAC。
+
+LoongArch 工作内容：
+
+- 启用 virtio-net PCI probe。
+- 接入 PCIE/MSI-X 或可靠 polling fallback。
+- 将 PCI 中断分发到 virtio-net 驱动。
+- 确认 QEMU virtio-net-pci device id 和现代 virtio PCI capability 解析。
+
+验收标准：
+
+- RISC-V 能看到 virtio RX/TX packet counters 增长。
+- 能完成最小 ARP/ICMP 或 UDP echo 测试。
+- 外部 TCP/UDP echo 成功后，再考虑将 ONPS 与 Linux socket 后端合流。
+
+### 阶段 5：四组合评测和 scoreboard 更新
+
+目标：从“能跑一次”变成“可持续评测”。
+
+工作内容：
+
+- 优先顺序：riscv musl -> riscv glibc -> loongarch musl -> loongarch glibc。
+- 每个 PASS 必须有当前代码对应的 output_*.txt 证据。
+- 只更新对应组合、对应小分的 scoreboard。
+- 不跨架构、不跨 libc 推断 PASS。
+- 逐步扩大到完整 iperf.md、netperf.md 和 LTP socket 相关测例。
+
+验收标准：
+
+- scoreboard/riscv/musl/iperf.md 8 项逐步 PASS。
+- scoreboard/riscv/musl/netperf.md 6 项逐步 PASS。
+- LTP socket 相关测例不回退。
+- 重复运行不会出现 descriptor exhaustion、panic、死锁或无法关机。
+
+## 3. 测例检查点分层
+
+这些检查点按“能定位问题”的顺序使用。早期不要直接上完整 LTP network stress，否则失败原因会混在环境、工具、远端服务、协议栈多个层面里。
+
+### 检查点 0：当前基础回归
+
+用途：证明已有修复没有退回到“只返回成功、不传数据”。
+
+推荐测例：
+
+- `network_loopback_smoke()`
+- `network_fork_loopback_smoke()`
+- LTP 小集合：socket01/socket02/accept01/accept03/accept4_01/bind01/listen01/connect01/sendto01/recvfrom01/recvmsg01/socketpair02
+
+通过含义：
+
+- TCP/UDP loopback payload 已经能真实收发。
+- 基础 Linux socket syscall、fd flag、errno 没有明显回退。
+
+不能代表：
+
+- 不能代表外部网卡、ARP/IP、DNS、HTTP 已经可用。
+- 不能代表 iperf/netperf 这种并发和压力测试已经稳定。
+
+当前已有证据：
+
+- `logs/output_r_20260526-134750_network-loopback-smoke_QEMU_MEM-1G_timeout-5m.txt`
+- `logs/output_r_20260526-134912_network-ltp-socket-subset_QEMU_MEM-1G_timeout-5m.txt`
+- `logs/output_r_20260526-135203_network-fork-loopback-smoke_QEMU_MEM-1G_timeout-5m.txt`
+
+### 检查点 1：Socket ABI 扩展
+
+用途：扩大 Linux socket 接口语义覆盖面，防止后续接 ONPS/virtio-net 时把 syscall 契约写坏。
+
+推荐测例：
+
+- `recv01`
+- `send01`
+- `getsockname01`
+- `getsockopt01`
+- `setsockopt01`
+- `sockioctl01`
+- `socketpair01`
+
+通过含义：
+
+- 更多 errno、地址回填、socket option、socket ioctl 语义可用。
+- fd 和非 socket 文件的错误处理更接近 Linux。
+
+注意：
+
+- 这些仍主要是 ABI/错误码检查，不是外网检查。
+- `setsockopt02` 到 `setsockopt10` 要逐个看源码后再纳入，部分可能涉及内核不支持的高级选项。
+
+### 检查点 2：Loopback 真实通信增强
+
+用途：验证本机网络不只是单包 smoke，而是能支持更真实的消息模型。
+
+推荐测例：
+
+- `sendmmsg01`
+- `recvmmsg01`
+- `send02`
+- 可选：`bind05` 中的 IPv4 UDP loopback 子项
+
+通过含义：
+
+- UDP 批量发送/接收路径可用。
+- `MSG_MORE`、`MSG_DONTWAIT`、多轮连接和收发更接近真实应用。
+
+注意：
+
+- `bind05` 同时覆盖 AF_UNIX、IPv6、UDP-Lite，当前阶段可先把 IPv4 UDP loopback 子路径作为目标，不要强行要求所有子项一次通过。
+- `sendto02` 是 SCTP 回归测例，当前协议栈不支持 SCTP 时不应作为门禁。
+
+### 检查点 3：Loopback 并发和吞吐
+
+用途：验证阻塞/非阻塞、后台 server、多连接、反向传输和队列稳定性。
+
+推荐测例：
+
+- scoreboard `riscv/musl/iperf.md` 中 8 项
+- scoreboard `riscv/musl/netperf.md` 中 6 项
+
+真实执行来源：
+
+- `/mnt/sdcard-rv/musl/iperf_testcode.sh`
+- `/mnt/sdcard-rv/musl/netperf_testcode.sh`
+
+注意：
+
+- `iperf_testcode.sh` 使用 `host=127.0.0.1`、`port=5001`、`iperf=./iperf3`，不是直接执行名为 `iperf` 的程序。
+- `netperf_testcode.sh` 使用 `netserver` 和 `127.0.0.1:12865`。
+- 这两个小分主要证明 loopback 并发/吞吐稳定，不证明外网已经打通。
+
+### 检查点 4：libc 和解析入口
+
+用途：验证用户态 libc、动态链接、hosts/resolver 文件路径没有挡住网络应用。
+
+推荐测例：
+
+- libctest static/dynamic 的 `socket`
+- LTP `getaddrinfo_01`
+
+通过含义：
+
+- libc socket 封装能正常调用内核。
+- `/etc/hosts` 可写/可读时，`getaddrinfo()` 的 hosts 解析路径可用。
+
+注意：
+
+- `getaddrinfo_01` 会写 `/etc/hosts`，主要测 hosts 解析，不是 DNS 出网。
+- 如果它因为 `/etc/hosts` 缺失 TCONF，应优先补虚拟 `/etc/hosts`，不要误判为协议栈失败。
+
+### 检查点 5：真实网卡和 IP 层
+
+用途：验证 virtio-net、ARP/ICMP、guest 到 host 或 guest 到外部网络的链路。
+
+推荐测例：
+
+- 自写 `network_http_gateway_smoke()`
+- 自写 `network_http_external_ip_smoke()`
+- LTP `ping01.sh`
+- LTP `arping01.sh`
+
+使用顺序：
+
+1. 先跑 `network_http_gateway_smoke()`，目标 `10.0.2.2:18080`，只验证 guest -> host。
+2. 再跑 `network_http_external_ip_smoke()`，目标公网 IPv4:80，验证真实出网。
+3. 最后考虑 `ping01.sh`、`arping01.sh`，因为它们依赖 LTP 网络环境、命令和 root 能力。
+
+### 检查点 6：DNS、HTTP 压力和完整网络环境
+
+用途：后期验证完整网络环境，而不是早期定位。
+
+后期候选：
+
+- LTP `dns-stress.sh`
+- LTP `http-stress.sh`
+- LTP `netstress`
+- LTP `tcp4-uni-*`、`tcp4-multi-*`
+- lmbench 中 `lat_udp`、`lat_tcp`、`lat_connect`、`bw_tcp`、`lat_http`
+
+不建议当前阶段作为门禁：
+
+- `tcp6-*`：需要 IPv6。
+- `sctp*`：需要 SCTP。
+- `dccp*`：需要 DCCP。
+- `mc_*`、`mcast-*`：需要 multicast。
+- `iptables*`、`route*`、`netns*`、`dhcp*`：需要更完整的 Linux 网络管理能力。
+- `ftp*`、`ssh-stress.sh`、`nfs*`：需要额外服务端和复杂环境。
+- `sendfile*`、`mbind*`、`mq_timedsend*`、`pidfd_send_signal*`：名字里有 send/bind，但不是网络核心检查点。
+
+## 4. 关键判定规则
+
+不能作为网络已修好的证据：
+
+- 只改了 kernel/net。
+- socket() 能返回 fd。
+- bind() 返回 0。
+- accept01/accept03 通过。
+- QEMU 没有 panic。
+- scoreboard 里某个 errno 型测例 PASS。
+
+可以作为阶段性有效证据：
+
+- TCP client 发送的 payload 被 server 正确读取。
+- UDP sendto 的 datagram 被 recvfrom 正确读取，并能回填源地址。
+- iperf 单项打印 success。
+- netperf 单项正常结束并打印结果。
+- poll/select/epoll 被真实 socket 队列驱动。
+- virtio-net RX/TX counter 增长，且 TX descriptor 会回收。
+- scoreboard 更新有明确 output_*.txt 日志依据。
+
+## 5. 默认实施假设
+
+- 计划文件路径：plan_docs/network_repair_plan.txt。
+- 第一阶段实现优先做 loopback，不先修外部 virtio-net。
+- loopback 初版可以在 socket 层实现，不强制走 ONPS。
+- Demo 不考虑向后兼容：旧 fake socket 逻辑应统一删除，不保留双套路径。
+- 每次代码修改后必须至少做语法/构建/目标测例验证。
+- 不创建额外总结类 .md 文件；任务汇报放在聊天中。
