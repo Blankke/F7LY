@@ -284,6 +284,188 @@ int basic_subset_test(const char *path, const char *const cases[])
     return run_case_list_in_dir(".", group_name, cases, 0);
 }
 
+static int expect_equal_bytes(const char *label, const char *actual, const char *expected, int len)
+{
+    for (int i = 0; i < len; ++i)
+    {
+        if (actual[i] != expected[i])
+        {
+            printf("[FAIL] %s: payload mismatch at %d, got=%d expected=%d\n",
+                   label, i, actual[i], expected[i]);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static sockaddr_in loopback_addr(unsigned short port)
+{
+    sockaddr_in addr;
+    addr.sin_family = AF_INET;
+    addr.sin_port = port;
+    addr.sin_addr = 0x0100007f;
+    for (int i = 0; i < 8; ++i)
+    {
+        addr.sin_zero[i] = 0;
+    }
+    return addr;
+}
+
+static int network_loopback_tcp_smoke(void)
+{
+    const char payload[] = "f7ly-loopback-tcp";
+    char recv_buf[sizeof(payload)] = {};
+    sockaddr_in bind_addr = loopback_addr(0);
+    sockaddr_in server_addr;
+    socklen_t server_len = sizeof(server_addr);
+
+    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    int client_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd < 0 || client_fd < 0)
+    {
+        printf("[FAIL] loopback tcp: socket failed server=%d client=%d\n", server_fd, client_fd);
+        return -1;
+    }
+
+    if (bind(server_fd, (sockaddr *)&bind_addr, sizeof(bind_addr)) < 0 ||
+        listen(server_fd, 4) < 0 ||
+        getsockname(server_fd, (sockaddr *)&server_addr, &server_len) < 0)
+    {
+        printf("[FAIL] loopback tcp: bind/listen/getsockname failed\n");
+        close(server_fd);
+        close(client_fd);
+        return -1;
+    }
+
+    server_addr.sin_addr = 0x0100007f;
+    if (connect(client_fd, (sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+    {
+        printf("[FAIL] loopback tcp: connect failed\n");
+        close(server_fd);
+        close(client_fd);
+        return -1;
+    }
+
+    sockaddr_in peer_addr;
+    socklen_t peer_len = sizeof(peer_addr);
+    int accepted_fd = accept(server_fd, (sockaddr *)&peer_addr, &peer_len);
+    if (accepted_fd < 0)
+    {
+        printf("[FAIL] loopback tcp: accept failed ret=%d\n", accepted_fd);
+        close(server_fd);
+        close(client_fd);
+        return -1;
+    }
+
+    int sent = write(client_fd, payload, sizeof(payload));
+    int received = read(accepted_fd, recv_buf, sizeof(recv_buf));
+    if (sent != (int)sizeof(payload) || received != (int)sizeof(payload) ||
+        expect_equal_bytes("loopback tcp", recv_buf, payload, sizeof(payload)) != 0)
+    {
+        printf("[FAIL] loopback tcp: sent=%d received=%d\n", sent, received);
+        close(accepted_fd);
+        close(server_fd);
+        close(client_fd);
+        return -1;
+    }
+
+    close(accepted_fd);
+    close(server_fd);
+    close(client_fd);
+    printf("[PASS] loopback tcp payload\n");
+    return 0;
+}
+
+static int network_loopback_udp_smoke(void)
+{
+    const char payload[] = "f7ly-loopback-udp";
+    char recv_buf[sizeof(payload)] = {};
+    sockaddr_in server_addr = loopback_addr(0);
+    sockaddr_in actual_server_addr;
+    sockaddr_in src_addr;
+    socklen_t actual_server_len = sizeof(actual_server_addr);
+    socklen_t src_len = sizeof(src_addr);
+
+    int server_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    int client_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (server_fd < 0 || client_fd < 0)
+    {
+        printf("[FAIL] loopback udp: socket failed server=%d client=%d\n", server_fd, client_fd);
+        return -1;
+    }
+
+    if (bind(server_fd, (sockaddr *)&server_addr, sizeof(server_addr)) < 0 ||
+        getsockname(server_fd, (sockaddr *)&actual_server_addr, &actual_server_len) < 0)
+    {
+        printf("[FAIL] loopback udp: bind/getsockname failed\n");
+        close(server_fd);
+        close(client_fd);
+        return -1;
+    }
+
+    actual_server_addr.sin_addr = 0x0100007f;
+    int sent = sendto(client_fd, payload, sizeof(payload), 0,
+                      (sockaddr *)&actual_server_addr, sizeof(actual_server_addr));
+    int received = recvfrom(server_fd, recv_buf, sizeof(recv_buf), 0,
+                            (sockaddr *)&src_addr, &src_len);
+    if (sent != (int)sizeof(payload) || received != (int)sizeof(payload) ||
+        src_len != sizeof(sockaddr_in) || src_addr.sin_port == 0 ||
+        expect_equal_bytes("loopback udp", recv_buf, payload, sizeof(payload)) != 0)
+    {
+        printf("[FAIL] loopback udp: sent=%d received=%d src_len=%u src_port=%u\n",
+               sent, received, src_len, src_addr.sin_port);
+        close(server_fd);
+        close(client_fd);
+        return -1;
+    }
+
+    close(server_fd);
+    close(client_fd);
+    printf("[PASS] loopback udp payload\n");
+    return 0;
+}
+
+int network_loopback_smoke(void)
+{
+    int fail_count = 0;
+    printf("#### NETWORK LOOPBACK SMOKE START ####\n");
+    if (network_loopback_tcp_smoke() != 0)
+    {
+        fail_count++;
+    }
+    if (network_loopback_udp_smoke() != 0)
+    {
+        fail_count++;
+    }
+    printf("#### NETWORK LOOPBACK SMOKE END fail=%d ####\n", fail_count);
+    return fail_count == 0 ? 0 : -1;
+}
+
+int network_ltp_socket_subset(void)
+{
+    static const char *const socket_cases[] = {
+        "socket01",
+        "socket02",
+        "accept01",
+        "accept03",
+        "accept4_01",
+        "bind01",
+        "listen01",
+        "connect01",
+        "sendto01",
+        "recvfrom01",
+        "recvmsg01",
+        "socketpair02",
+        NULL,
+    };
+
+    printf("#### NETWORK LTP SOCKET SUBSET START ####\n");
+    init_env("/musl/");
+    int fail_count = ltp_subset_test(true, socket_cases);
+    printf("#### NETWORK LTP SOCKET SUBSET END fail=%d ####\n", fail_count);
+    return fail_count == 0 ? 0 : -1;
+}
+
 int busybox_test(const char *path = musl_dir)
 {
     if (change_dir_checked(path) != 0)
@@ -709,7 +891,7 @@ struct ltp_testcase ltp_testcases[] = {
     // 新开以前完全没跑过的测例时，优先按 tools/ltp/judge/ltp_rank.txt 的 total count 从高到低推进。
     {"accept01", true, true},
     {"accept03", true, true},
-    // {NULL, false, false},
+    {NULL, false, false},
     {"memfd_create01", true, true},
     {"splice07", true, true},
     {"epoll_ctl03", true, true},

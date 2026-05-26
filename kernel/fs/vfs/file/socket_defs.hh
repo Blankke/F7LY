@@ -25,9 +25,36 @@
 
 // Socket options
 #define SO_REUSEADDR    2       /* reuse address */
+#ifndef SO_TYPE
+#define SO_TYPE         3       /* get socket type */
+#endif
+#ifndef SO_ERROR
+#define SO_ERROR        4       /* get and clear error status */
+#endif
+#ifndef SO_BROADCAST
+#define SO_BROADCAST    6       /* permit sending broadcast messages */
+#endif
+#ifndef SO_SNDBUF
+#define SO_SNDBUF       7       /* send buffer size */
+#endif
+#ifndef SO_RCVBUF
+#define SO_RCVBUF       8       /* receive buffer size */
+#endif
 #define SO_REUSEPORT    15      /* reuse port */
+#ifndef SO_OOBINLINE
+#define SO_OOBINLINE    10      /* leave received OOB data in line */
+#endif
 #define SO_KEEPALIVE    9       /* keep connections alive */
 #define SO_LINGER       13      /* linger on close if data present */
+#ifndef SO_ACCEPTCONN
+#define SO_ACCEPTCONN   30      /* socket has had listen() */
+#endif
+#ifndef SO_PROTOCOL
+#define SO_PROTOCOL     38      /* get socket protocol */
+#endif
+#ifndef SO_DOMAIN
+#define SO_DOMAIN       39      /* get socket domain */
+#endif
 
 // Shutdown options
 #define SHUT_RD         0       /* shut down the reading side */
@@ -114,3 +141,4 @@ struct msghdr {
 #define MSG_TRUNC       0x20    /* data truncated */
 #define MSG_DONTWAIT    0x40    /* nonblocking request */
 #define MSG_WAITALL     0x100   /* wait for full request or error */
+#define MSG_ERRQUEUE    0x2000  /* fetch queued errors */

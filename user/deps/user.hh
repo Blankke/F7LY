@@ -5,6 +5,7 @@
 
 #include <stdarg.h>
 #include "types.hh"
+#include "fs/vfs/file/socket_defs.hh"
 
 // AT_* constants for *at system calls
 #define AT_FDCWD -100
@@ -95,6 +96,21 @@ int mkdir(const char *path, mode_t mode);
 int getdents64(int fd, struct linux_dirent64 *dirp64, unsigned long len);
 int pipe(int fd[2]);
 int dup(int fd);
+int socket(int domain, int type, int protocol);
+int socketpair(int domain, int type, int protocol, int sv[2]);
+int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+int listen(int sockfd, int backlog);
+int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+int getsockname(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+int getpeername(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+ssize_t send(int sockfd, const void *buf, size_t len, int flags);
+ssize_t recv(int sockfd, void *buf, size_t len, int flags);
+ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
+               const struct sockaddr *dest_addr, socklen_t addrlen);
+ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
+                 struct sockaddr *src_addr, socklen_t *addrlen);
+int shutdown_socket(int sockfd, int how);
 int mount(const char *special, const char *dir, const char *fstype, unsigned long flags, const void *data);
 int umount(const char *special);
 int fork(void);
@@ -145,6 +161,8 @@ int basic_subset_test(const char *path, const char *const cases[]);
 int ltp_subset_test(bool is_musl, const char *const cases[]);
 int priority_ltp_regression_riscv(void);
 int regression_suite_4d1444(void);
+int network_loopback_smoke(void);
+int network_ltp_socket_subset(void);
 int iozone_mclock_research(void);
 int final_test_musl(void);
 int final_test_glibc(void);
