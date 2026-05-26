@@ -1,0 +1,1143 @@
+# F7LY 外部网页访问网络实现计划
+
+> 给 agent/工程师执行时使用：建议按任务顺序逐项推进。每个任务完成后先跑本任务验收命令，再继续下一项。不要未经用户允许提交 commit。
+
+**目标：** 在当前已经跑通 127.0.0.1 TCP/UDP loopback 的基础上，做出一条能从用户态访问外部 HTTP 网页并读取数据的完整网络链路。
+
+**架构：** 保留当前 socket_file 的 loopback 快路径，用于本机 127.0.0.1 和现有 LTP/iperf/netperf loopback 测试；把非 loopback IPv4 客户端连接接到 ONPS 协议栈；ONPS 再通过 virtio-net 驱动收发真实以太网帧。第一目标是 RISC-V + QEMU user networking 下的 HTTP GET，随后扩展 DNS、BusyBox wget、LoongArch。
+
+**技术栈：** F7LY C++23 freestanding 内核、Linux socket ABI、fs::socket_file、kernel/net/onpstack、virtio-net、QEMU user net、用户态 initcode 回归测试。
+
+---
+
+## 0. 当前事实和边界
+
+### 已经有的能力
+
+- RISC-V/musl 下 127.0.0.1 TCP payload 已经能真实传输。
+- RISC-V/musl 下 127.0.0.1 UDP payload 已经能真实传输。
+- LTP socket 小集合已经能通过：socket01/socket02/accept01/accept03/accept4_01/bind01/listen01/connect01/sendto01/recvfrom01/recvmsg01/socketpair02。
+
+### 当前不能访问外网的原因
+
+- `kernel/proc/proc_manager.cc` 中 `net::init_network_stack()` 仍是注释状态，ONPS/virtio-net 默认不会启动。
+- `kernel/fs/vfs/file/socket_file.cc` 目前把 AF_INET 基本限制在 loopback/0.0.0.0，非 127.0.0.1 的 connect 会返回 `-ENETUNREACH`。
+- `kernel/net/drivers/virtio_net_adapter.cc` 的 `virtio_recv_thread()` 目前打印“未实现”，没有把 virtio-net 收到的 Ethernet frame 交给 ONPS。
+- `kernel/net/drivers/virtio_net.cc` 的 TX/RX descriptor 回收、中断/轮询、MAC 读取、MMIO 地址都需要重新验证。
+- `kernel/net/drivers/virtio_net_adapter.cc` 现在写死 `192.168.1.2/24`、网关 `192.168.1.1`、DNS `8.8.8.8`，这和 QEMU `-netdev user` 默认网络不匹配。QEMU user net 最小静态配置应优先使用：
+  - guest IP：`10.0.2.15`
+  - netmask：`255.255.255.0`
+  - gateway：`10.0.2.2`
+  - DNS：`10.0.2.3`
+- HTTPS 不属于第一阶段目标。先支持 HTTP 明文网页数据；HTTPS 需要 TLS、证书、时间等用户态能力，放到后续。
+
+### 最小成功标准
+
+第一阶段成功不要定义成“wget 全部可用”，而是定义成：
+
+- 用户态 `socket(AF_INET, SOCK_STREAM, 0)` 成功。
+- 用户态 `connect()` 到非 loopback IPv4:80 成功。
+- 用户态 `send()` 发出 HTTP GET。
+- 用户态 `recv()` 收到以 `HTTP/` 开头的数据，且长度大于 0。
+- QEMU 日志里能看到 virtio-net TX/RX 计数增长。
+
+### 测例检查点使用原则
+
+外网实现过程中，测例要分层使用：
+
+- 先用项目自写 smoke 证明单个能力点，例如 loopback payload、HTTP gateway、HTTP external IP。
+- 再用 LTP socket syscall 类测例证明 Linux ABI 没写歪。
+- 再用 iperf/netperf 证明 loopback 并发和吞吐稳定。
+- 最后再用 LTP network stress、DNS stress、HTTP stress 这类环境依赖很重的测例。
+
+不要把 `accept01`、`bind01` 这类 errno 型 PASS 当成外网可用；也不要把 `dns-stress.sh`、`http-stress.sh` 这类后期压力脚本放到早期门禁里。
+
+当前建议保留为每次网络改动后的基础门禁：
+
+- `network_loopback_smoke()`
+- `network_fork_loopback_smoke()`
+- LTP socket 小集合：socket01/socket02/accept01/accept03/accept4_01/bind01/listen01/connect01/sendto01/recvfrom01/recvmsg01/socketpair02
+
+当前已有 RISC-V/musl 证据：
+
+- `logs/output_r_20260526-134750_network-loopback-smoke_QEMU_MEM-1G_timeout-5m.txt`
+- `logs/output_r_20260526-134912_network-ltp-socket-subset_QEMU_MEM-1G_timeout-5m.txt`
+- `logs/output_r_20260526-135203_network-fork-loopback-smoke_QEMU_MEM-1G_timeout-5m.txt`
+
+---
+
+## 1. 文件职责规划
+
+### 需要修改的内核文件
+
+- `kernel/proc/proc_manager.cc`
+  - 在第一个普通进程上下文中启动网络栈。
+  - 当前合适位置是 `ProcessManager::fork_ret()` 中 `filesystem_init()` 后面，那里已经有注释掉的 `net::init_network_stack()`。
+
+- `kernel/net/f7ly_network.hh`
+- `kernel/net/f7ly_network.cc`
+  - 作为网络栈总入口，负责初始化 ONPS、virtio-net adapter、状态查询、计数器输出。
+  - 增加“初始化成功/失败原因”和“是否已经可用于外部 socket”的查询接口。
+
+- `kernel/net/network_config.hh`
+- `kernel/net/network_config.cc`
+  - 新增文件。
+  - 保存默认 IPv4 配置，先支持 QEMU user net 静态配置。
+  - 后续如要支持 DHCP，只替换这里和 adapter 配置来源。
+
+- `kernel/net/drivers/virtio_net.hh`
+- `kernel/net/drivers/virtio_net.cc`
+  - 修复 RISC-V virtio-net 初始化、TX、RX、descriptor 回收。
+  - 优先实现 polling fallback，再接中断。
+  - 增加最小计数器：tx_submitted、tx_completed、rx_received、rx_dropped、rx_recycled、send_errors。
+
+- `kernel/net/drivers/virtio_net_adapter.hh`
+- `kernel/net/drivers/virtio_net_adapter.cc`
+  - 把 virtio-net 驱动接到 ONPS Ethernet 层。
+  - 实现 RX pump：从 virtio-net 取帧，调用 `ethernet_ii_recv(netif, packet, len)`。
+  - 使用 `network_config` 的 QEMU user net 配置，不再写死 `192.168.1.x`。
+
+- `kernel/devs/dtb.hh`
+- `kernel/devs/dtb.cc`
+  - 增加查找 virtio-mmio net 设备的辅助函数。
+  - 目标是避免长期依赖 `VIRTIO_NET_MMIO_BASE 0x10008000` 这种猜测值。
+
+- `kernel/mem/memlayout.hh`
+- `kernel/mem/virtual_memory_manager.cc`
+  - 如果最终确认 virtio-net MMIO 地址固定或来自 DTB，需要保证对应 MMIO 页被映射。
+  - 短期可继续映射 `VIRTIO1`/探测出的 net MMIO；长期以 DTB 结果为准。
+
+- `kernel/trap/riscv/plic.cc`
+- `kernel/trap/riscv/trap.cc`
+  - 第二阶段接 virtio-net 中断时修改。
+  - 第一阶段允许 polling 跑通 HTTP，不强制先接中断。
+
+- `kernel/fs/vfs/file/socket_file.hh`
+- `kernel/fs/vfs/file/socket_file.cc`
+  - 增加 socket backend 概念：loopback backend 和 onps backend。
+  - loopback 地址继续走当前内核内队列。
+  - 非 loopback IPv4 客户端 TCP/UDP 走 ONPS。
+
+- `kernel/sys/syscall_handler.cc`
+  - 原则上少改 syscall 层；参数拷贝和 Linux errno 仍留在这里。
+  - 不要在 syscall 层直接操作 ONPS，避免重新出现 syscall/socket_file 双路径分裂。
+
+- `kernel/fs/vfs/virtual_fs.cc`
+- `kernel/fs/vfs/file/virtual_file.hh`
+- `kernel/fs/vfs/file/virtual_file.cc`
+  - DNS 阶段增加 `/etc/resolv.conf` 和必要的 `/etc/hosts` 虚拟文件，方便 musl/glibc 的 `getaddrinfo()` 和 BusyBox `wget`。
+
+### 需要修改的用户态文件
+
+- `user/deps/user.hh`
+  - 声明新增网络 smoke 测试函数。
+
+- `user/syscall_lib/syscall.cc`
+  - 如果已有 socket/send/recv/connect 封装够用，则不新增。
+  - 如果缺少 `getaddrinfo` 无关的简单测试 helper，可只在 `user_test.cc` 内部写。
+
+- `user/user_lib/user_test.cc`
+  - 新增 `network_http_gateway_smoke()`：连宿主机 `10.0.2.2:18080`，用于确定 virtio/QEMU user net 的 guest->host 链路。
+  - 新增 `network_http_external_ip_smoke()`：连一个外部 HTTP IP:80，验证真实出网。
+  - 新增 `network_http_dns_smoke()`：通过域名访问 HTTP，验证 DNS/`getaddrinfo`/UDP。
+
+- `user/app/initcode-rv.cc`
+  - 调试时临时切入口跑单项测试。
+  - 每次跑完必须恢复原入口，避免污染回归。
+
+- `user/app/initcode-la.cc`
+  - LoongArch 阶段使用。
+  - 当前宿主环境还缺 `debugfs`，要先解决运行环境再跑 LoongArch。
+
+### 可选修改
+
+- `Makefile`
+  - 增加 `QEMU_NETDEV_ARGS` 或 `QEMU_NET_MODE`，方便在 user net、hostfwd、tap 之间切换。
+  - 第一阶段可以不改 Makefile，继续用现有 `-netdev user,id=net`。
+
+---
+
+## 2. 阶段 A：建立可重复的外网测试入口
+
+目标：先写出会失败的测试，明确当前失败点。不要直接修代码后再补测试。
+
+### Task A1：新增 HTTP by IP 测试函数
+
+**文件：**
+
+- 修改：`user/user_lib/user_test.cc`
+- 修改：`user/deps/user.hh`
+
+**实现思路：**
+
+在 `user/user_lib/user_test.cc` 增加一个小工具函数，流程固定为：
+
+1. `socket(AF_INET, SOCK_STREAM, 0)`
+2. `connect(ip, port)`
+3. `send("GET / HTTP/1.0\r\nHost: host.local\r\nConnection: close\r\n\r\n")`
+4. 循环 `recv()`，只要读到任意 `HTTP/` 开头的数据就 PASS
+5. 超过固定次数还没读到数据就 FAIL
+
+建议函数名：
+
+- `int network_http_gateway_smoke(void);`
+- `int network_http_external_ip_smoke(void);`
+
+第一版只做 IPv4 数字地址，不做 DNS。
+
+`network_http_gateway_smoke()` 默认目标：
+
+- IP：`10.0.2.2`
+- Port：`18080`
+- Host header：`host.local`
+
+这个目标用于配合宿主机本地 HTTP server，验证 guest -> host 网络链路。它不等于真实外网，但非常稳定，适合作为第一道门。
+
+`network_http_external_ip_smoke()` 默认目标：
+
+- 目标：HTTP 明文网站的 IPv4 地址，端口 80
+- Host header：该网站域名
+- PASS 条件：收到 `HTTP/` 状态行或任意非空 HTTP 响应头
+
+不要把某个公共网站 IP 写死成唯一真理。外部网站 IP 可能变化，测试函数里要把失败日志打印清楚：目标 IP、connect 返回值、send 返回值、recv 返回值。
+
+**验收命令：**
+
+临时把 `user/app/initcode-rv.cc` 改为：
+
+```cpp
+#include "user.hh"
+
+extern "C"
+{
+    __attribute__((section(".text.startup"))) int main()
+    {
+        network_http_gateway_smoke();
+        shutdown();
+        return 0;
+    }
+}
+```
+
+然后执行：
+
+```bash
+make build ARCH=riscv
+```
+
+预期：
+
+- 当前还没有外部网络实现时，build 应通过。
+- 运行测试大概率会失败在 `connect()`，这正是后续任务要修的红灯。
+
+运行日志模板：
+
+```bash
+ts=$(date +%Y%m%d-%H%M%S)
+mkdir -p logs
+log="logs/output_r_${ts}_network-http-gateway-smoke_QEMU_MEM-1G_timeout-5m.txt"
+{
+  echo "run_at=${ts}"
+  echo "arch=riscv"
+  echo "scope=network-http-gateway-smoke"
+  echo "cmd=timeout 5m make run r QEMU_MEM=1G"
+  echo "git_branch=$(git branch --show-current 2>/dev/null || true)"
+  echo "git_head=$(git rev-parse --short HEAD 2>/dev/null || true)"
+  echo "---- output ----"
+  timeout 5m make run r QEMU_MEM=1G
+  echo "exit_code=$?"
+} > "$log" 2>&1
+echo "$log"
+```
+
+注意：如果要在宿主机起本地 HTTP server，按项目 Python 规则，需要先准备并激活 venv：
+
+```bash
+uv venv
+source .venv/bin/activate
+which python
+python -m http.server 18080 --bind 0.0.0.0
+```
+
+### Task A2：给测试输出加明确标记
+
+**文件：**
+
+- 修改：`user/user_lib/user_test.cc`
+
+**要求：**
+
+测试日志必须包含这些标记，便于 `rg` 抽取：
+
+- `#### NETWORK HTTP GATEWAY SMOKE START ####`
+- `[PASS] http gateway received data`
+- `[FAIL] http gateway connect ret=-101`
+- `[FAIL] http gateway recv ret=-11`
+- `#### NETWORK HTTP GATEWAY SMOKE END fail=N ####`
+
+外部 IP 测试同理：
+
+- `#### NETWORK HTTP EXTERNAL IP SMOKE START ####`
+- `[PASS] http external ip received data`
+- `#### NETWORK HTTP EXTERNAL IP SMOKE END fail=N ####`
+
+---
+
+## 3. 阶段 B：让网络栈能启动，但不破坏现有 loopback
+
+目标：ONPS 和 virtio-net 能初始化；现有 loopback 测试不能回退。
+
+### Task B1：新增网络配置模块
+
+**文件：**
+
+- 新建：`kernel/net/network_config.hh`
+- 新建：`kernel/net/network_config.cc`
+- 修改：`kernel/net/drivers/virtio_net_adapter.cc`
+
+**内容：**
+
+定义一个简单配置结构：
+
+```cpp
+namespace net
+{
+    struct Ipv4NetworkConfig
+    {
+        uint32 addr;
+        uint32 netmask;
+        uint32 gateway;
+        uint32 dns_primary;
+        uint32 dns_secondary;
+        uint32 broadcast;
+    };
+
+    const Ipv4NetworkConfig &default_qemu_user_ipv4_config();
+}
+```
+
+默认值使用 QEMU user net：
+
+- `10.0.2.15`
+- `255.255.255.0`
+- `10.0.2.2`
+- `10.0.2.3`
+- `0.0.0.0` secondary DNS
+- `10.0.2.255`
+
+`virtio_net_adapter.cc` 中原来写死的：
+
+```cpp
+ipv4_config.unAddr = inet_addr_small("192.168.1.2");
+ipv4_config.unSubnetMask = inet_addr_small("255.255.255.0");
+ipv4_config.unGateway = inet_addr_small("192.168.1.1");
+ipv4_config.unPrimaryDNS = inet_addr_small("8.8.8.8");
+ipv4_config.unBroadcast = inet_addr_small("192.168.1.255");
+```
+
+改成从 `default_qemu_user_ipv4_config()` 读取。
+
+**验收：**
+
+```bash
+make build ARCH=riscv
+make build ARCH=loongarch
+```
+
+预期：
+
+- 双架构 build 通过。
+- 还不要求 HTTP 成功。
+
+### Task B2：启用网络栈初始化
+
+**文件：**
+
+- 修改：`kernel/proc/proc_manager.cc`
+- 修改：`kernel/net/f7ly_network.cc`
+
+**步骤：**
+
+1. 在 `kernel/proc/proc_manager.cc` 引入 `net/f7ly_network.hh`。
+2. 在 `ProcessManager::fork_ret()` 第一次进入、`filesystem_init()` 和 stdio device 初始化之后调用：
+
+```cpp
+if (!net::init_network_stack())
+{
+    printfYellow("[net] network stack init failed, external network disabled\n");
+}
+```
+
+3. `net::init_network_stack()` 必须保持幂等，重复调用直接返回当前状态。
+4. 初始化失败不能 panic，除非是明确的内核内存破坏；因为外网失败不能影响普通回归启动。
+
+**验收：**
+
+临时跑一个只启动后 shutdown 的 initcode，日志中应该看到：
+
+- ONPS 初始化开始
+- virtio-net adapter 初始化开始
+- 如果 virtio-net 设备找不到，要明确打印设备探测失败原因
+- 系统仍能 `shutdown()`
+
+### Task B3：保护 loopback 不回退
+
+**文件：**
+
+- 修改：`kernel/fs/vfs/file/socket_file.cc`
+
+**要求：**
+
+ONPS 启动后，下面这些地址仍然走当前 loopback 实现：
+
+- `127.0.0.1`
+- `0x0100007f`
+- `0x7f000001`
+- bind 到 `0.0.0.0` 后被本机 loopback connect 命中
+
+非 loopback 的 IPv4 才进入 ONPS backend。
+
+**验收：**
+
+复跑已有测试：
+
+- `network_loopback_smoke()`
+- `network_ltp_socket_subset()`
+- `network_fork_loopback_smoke()`
+
+预期：
+
+- 三个 RISC-V 测试仍然全部 PASS。
+- 如果网络栈初始化失败，也不能让 loopback 失败。
+
+### Task B4：补充 socket ABI 检查点
+
+**目标：**
+
+ONPS 和 virtio-net 初始化接入后，确认 Linux socket ABI 没被破坏。
+
+**建议纳入的 LTP 测例：**
+
+- `recv01`
+- `send01`
+- `getsockname01`
+- `getsockopt01`
+- `setsockopt01`
+- `sockioctl01`
+- `socketpair01`
+
+**验收：**
+
+使用 `ltp_subset_test()` 跑上述测例。预期：
+
+- 已有 socket 小集合不回退。
+- 新增测例如果失败，要区分是 errno 语义问题、socket option 未支持、ioctl 未支持，还是测试环境缺失。
+- 不因为这些 ABI 测例通过就宣称外网已经可用。
+
+---
+
+## 4. 阶段 C：修通 RISC-V virtio-net 收发
+
+目标：能从 guest 发出以太网帧，也能收到返回帧。先用 polling，后接中断。
+
+### Task C1：确认 virtio-net MMIO 地址来源
+
+**文件：**
+
+- 修改：`kernel/devs/dtb.hh`
+- 修改：`kernel/devs/dtb.cc`
+- 修改：`kernel/net/drivers/virtio_net.cc`
+- 修改：`kernel/net/drivers/virtio_net.hh`
+
+**实现要求：**
+
+优先从 DTB 查找 `virtio,mmio` 节点：
+
+- 读取节点 `reg`
+- 读取节点 `interrupts`
+- 读取 MMIO magic/version/device_id
+- 选择 `device_id == 1` 的节点作为 virtio-net
+- `device_id == 2` 是 virtio-blk，不要误用
+
+如果 DTB 辅助函数暂时没写完，短期允许 fallback 到 `VIRTIO1 0x10002000`，但必须打印：
+
+```text
+[virtio_net] DTB probe failed, fallback to VIRTIO1=0x10002000
+```
+
+不要长期使用当前 `0x10008000` 作为唯一地址，除非日志证明 QEMU DTB 里 net 设备确实在这里。
+
+**验收：**
+
+日志中必须能看到：
+
+- virtio-net 使用的 MMIO base
+- magic/version/device_id/vendor_id
+- RX/TX queue size
+- negotiated features
+- `DRIVER_OK`
+
+### Task C2：修正 virtqueue 初始化和物理地址
+
+**文件：**
+
+- 修改：`kernel/net/drivers/virtio_net.cc`
+- 修改：`kernel/net/drivers/virtio_net.hh`
+
+**检查点：**
+
+- RX queue 和 TX queue 的 desc/avail/used 地址必须按 virtio legacy 要求对齐。
+- 写 `QUEUE_PFN` 时必须使用物理地址，不要把高地址内核虚拟地址右移后直接塞进去。
+- buffer descriptor 的 `addr` 也必须是设备能 DMA 的物理地址。
+- 关闭不支持的 offload：CSUM/GUEST_CSUM/TSO/MRG_RXBUF/INDIRECT/EVENT_IDX。
+- 如果启用 `VIRTIO_NET_F_MAC`，从 config space `0x100` 起读取 MAC；读不到时使用本地管理地址，例如 `52:54:00:12:34:56`，并打印 fallback。
+
+**验收：**
+
+增加 `virtio_net_debug_status()` 输出：
+
+- queue ready 状态
+- rx_avail idx / rx_used idx
+- tx_avail idx / tx_used idx
+- MAC
+- counters
+
+### Task C3：实现 TX completion polling
+
+**文件：**
+
+- 修改：`kernel/net/drivers/virtio_net.cc`
+- 修改：`kernel/net/drivers/virtio_net.hh`
+
+**实现要求：**
+
+新增内部函数：
+
+```cpp
+static void virtio_net_reclaim_tx_locked();
+```
+
+调用位置：
+
+- `virtio_net_send()` 分配 TX descriptor 前调用一次，回收已完成 descriptor。
+- `virtio_net_send()` notify 后可以短轮询几次，避免没有中断时 8 个 descriptor 很快耗尽。
+- `virtio_net_intr()` 中也调用同一个回收函数。
+
+**验收：**
+
+用一个内核测试循环发送多于 `NUM_NET_DESC` 的短包，预期：
+
+- 不会在第 9 个包后永久 `No free TX descriptors`
+- `tx_completed` 会增长
+
+### Task C4：实现 RX polling 和 adapter pump
+
+**文件：**
+
+- 修改：`kernel/net/drivers/virtio_net.cc`
+- 修改：`kernel/net/drivers/virtio_net_adapter.cc`
+
+**实现要求：**
+
+1. `virtio_net_recv()` 保持非阻塞语义：
+   - 没包返回负值
+   - 有包复制 Ethernet frame，不包含 virtio-net header
+   - 回收 RX descriptor
+   - 立即补一个新的 RX descriptor
+
+2. `virtio_net_adapter.cc` 实现循环：
+
+```cpp
+while (recv_thread_running)
+{
+    uint32 packet_len = sizeof(packet_buffer);
+    int ret = net::virtio_net_recv(packet_buffer, &packet_len);
+    if (ret == 0 && packet_len > 0)
+    {
+        ethernet_ii_recv(netif, packet_buffer, packet_len);
+        continue;
+    }
+    os_sleep_ms(1);
+}
+```
+
+3. 注意 `ethernet_add()` 的 receive thread starter 不能把初始化路径永久卡住。如果 `start_recv_thread_wrapper()` 会被同步调用，就不能直接在里面进入无限循环。需要创建真正的内核线程，或者改成只记录 netif，由网络栈统一启动 RX pump。
+
+建议做法：
+
+- 新增 `net::start_adapter_rx_pump(PST_NETIF netif)`。
+- 内部使用一个内核线程辅助函数启动 RX pump。
+- 如果暂时没有通用 kernel thread API，可以先抽出 `kernel/net/onpstack/port/os_adapter.cc` 里创建内核线程的逻辑，形成小型公共 helper，避免复制粘贴。
+
+**验收：**
+
+用 QEMU user net 运行时，日志应该看到：
+
+- RX pump started
+- 收到 ARP/IP/TCP 相关 frame 时 `rx_received` 增长
+- 没有忙等刷屏
+
+### Task C5：先不强依赖中断，后接 RISC-V PLIC
+
+**文件：**
+
+- 修改：`kernel/trap/riscv/plic.cc`
+- 修改：`kernel/trap/riscv/trap.cc`
+- 修改：`kernel/net/drivers/virtio_net.cc`
+
+**第一阶段：**
+
+使用 RX polling + TX polling 跑通 HTTP。
+
+**第二阶段：**
+
+把 virtio-net IRQ 接入 PLIC：
+
+- 从 DTB 读取 virtio-net interrupt id。
+- `plicinit()` enable 对应 IRQ。
+- `devintr()` 收到该 IRQ 时调用 `net::virtio_net_intr()`。
+
+**验收：**
+
+- polling 模式 HTTP 已经 PASS。
+- 开启中断后 HTTP 仍 PASS。
+- 中断日志不能刷屏，正常模式下只保留计数器。
+
+---
+
+## 5. 阶段 D：把非 loopback socket 接到 ONPS
+
+目标：用户态 Linux socket API 对非 loopback IPv4 TCP client 可用。
+
+### Task D1：给 socket_file 增加 backend 状态
+
+**文件：**
+
+- 修改：`kernel/fs/vfs/file/socket_file.hh`
+- 修改：`kernel/fs/vfs/file/socket_file.cc`
+
+**设计：**
+
+新增枚举：
+
+```cpp
+enum class SocketBackend
+{
+    NONE,
+    LOOPBACK,
+    ONPS
+};
+```
+
+`socket_file` 增加字段：
+
+```cpp
+SocketBackend _backend;
+int _last_error;
+```
+
+规则：
+
+- AF_UNIX：继续走现有 UNIX socket 逻辑。
+- AF_INET + loopback：`_backend = LOOPBACK`。
+- AF_INET + 非 loopback：`_backend = ONPS`。
+- backend 一旦进入 CONNECTED/BOUND/LISTENING 后不能随意切换。
+
+### Task D2：封装 ONPS socket 创建和错误映射
+
+**文件：**
+
+- 修改：`kernel/fs/vfs/file/socket_file.cc`
+
+**新增私有函数：**
+
+```cpp
+int ensure_onps_socket_locked();
+int map_onps_error_to_errno(int onps_error) const;
+bool should_use_loopback(const struct sockaddr_in &addr) const;
+```
+
+`ensure_onps_socket_locked()` 行为：
+
+- 如果 `_onps_socket != INVALID_SOCKET`，直接返回 0。
+- TCP socket 调 ONPS `socket(AF_INET, SOCK_STREAM, 0, &err)`。
+- UDP socket 调 ONPS `socket(AF_INET, SOCK_DGRAM, 0, &err)`。
+- 失败时保存 `_last_error`，返回 Linux 负 errno。
+
+错误映射第一版：
+
+- 地址族不支持 -> `-EAFNOSUPPORT`
+- socket 类型不支持 -> `-EPROTONOSUPPORT`
+- 连接超时 -> `-ETIMEDOUT`
+- 连接被重置 -> `-ECONNRESET`
+- 未连接 -> `-ENOTCONN`
+- 无数据且非阻塞 -> `-EAGAIN`
+- 其他 -> `-EIO`
+
+### Task D3：实现非 loopback TCP connect/send/recv
+
+**文件：**
+
+- 修改：`kernel/fs/vfs/file/socket_file.cc`
+
+**connect 规则：**
+
+- 如果目标是 loopback，保持现有逻辑。
+- 如果目标是非 loopback：
+  - 确保网络栈已初始化；未初始化返回 `-ENETDOWN`。
+  - `ensure_onps_socket_locked()`。
+  - 调 ONPS `connect_ext(_onps_socket, &remote_addr.sin_addr, remote_port, timeout)`。
+  - 成功后设置 `_remote_addr`、`_state = CONNECTED`、`_backend = ONPS`。
+
+注意端口字节序必须用测试确认：
+
+- Linux `sockaddr_in.sin_port` 是网络字节序。
+- ONPS 的 `connect_ext()` 参数 `USHORT srv_port` 需要确认是主机序还是网络序。
+- 计划执行时必须用抓包/日志确认 SYN 发往正确端口 80，而不是 20480。
+
+**send 规则：**
+
+- `_backend == LOOPBACK`：保持现有逻辑。
+- `_backend == ONPS`：
+  - TCP 用 ONPS `send()` 或 `send_nb()`。
+  - 第一版阻塞 socket 可以使用带 ACK timeout 的 `send()`。
+  - 非阻塞 socket 使用 `send_nb()`，缓冲区满返回 `-EAGAIN`。
+
+**recv 规则：**
+
+- `_backend == LOOPBACK`：保持现有逻辑。
+- `_backend == ONPS`：
+  - 根据 `_blocking` 设置 ONPS receive timeout。
+  - blocking：可以短超时循环等待，但要能被 close/shutdown 唤醒。
+  - nonblocking/`MSG_DONTWAIT`：无数据返回 `-EAGAIN`。
+
+**验收：**
+
+跑 `network_http_gateway_smoke()`。
+
+预期：
+
+- 如果宿主机 HTTP server 已启动，guest 能连到 `10.0.2.2:18080` 并收到 `HTTP/`。
+- 日志中 TX/RX counters 增长。
+
+### Task D4：实现非 loopback UDP sendto/recvfrom
+
+**文件：**
+
+- 修改：`kernel/fs/vfs/file/socket_file.cc`
+
+**为什么要做：**
+
+DNS 需要 UDP。即使第一阶段 HTTP by IP 不需要 DNS，后面 BusyBox `wget http://example.com/` 会走 libc resolver，resolver 会用 UDP 访问 DNS。
+
+**sendto 规则：**
+
+- loopback 目标继续走当前 UDP datagram queue。
+- 非 loopback 目标：
+  - `ensure_onps_socket_locked()`
+  - ONPS `sendto(_onps_socket, ip_string 或 ip_ext, port, data, len)`
+  - 返回实际发送字节数。
+
+**recvfrom 规则：**
+
+- loopback 保持现有逻辑。
+- ONPS UDP 调 `recvfrom()`，把来源 IP/port 回填给用户。
+
+**验收：**
+
+- 写一个 DNS UDP smoke：向 `10.0.2.3:53` 发送一个 A 记录查询。
+- 只要求收到合法 DNS response，不要求一开始就接入 libc `getaddrinfo()`。
+
+### Task D5：loopback 并发检查点
+
+**目标：**
+
+在非 loopback backend 接入后，确认已经跑通的 loopback 后端仍能承受并发和吞吐，不被 ONPS 路径影响。
+
+**推荐测例：**
+
+- `sendmmsg01`
+- `recvmmsg01`
+- `send02`
+- scoreboard `iperf.md` 里的 8 项
+- scoreboard `netperf.md` 里的 6 项
+
+**真实脚本来源：**
+
+- `/mnt/sdcard-rv/musl/iperf_testcode.sh`
+- `/mnt/sdcard-rv/musl/netperf_testcode.sh`
+
+**注意：**
+
+- `iperf_testcode.sh` 使用 `./iperf3`，不是名为 `iperf` 的二进制。
+- `iperf` 和 `netperf` 脚本都以 `127.0.0.1` 为目标，主要验证 loopback 并发和吞吐，不验证真实外网。
+- 如果 `netperf` timeout，要先看是后台 `netserver`、poll/select、阻塞唤醒、还是 socket 队列问题，不要直接归因到 virtio-net。
+
+---
+
+## 6. 阶段 E：DNS 和 BusyBox wget
+
+目标：从“能用 IP 访问 HTTP”升级到“能用域名访问 HTTP”。
+
+### Task E1：补 `/etc/resolv.conf` 和 `/etc/hosts`
+
+**文件：**
+
+- 修改：`kernel/fs/vfs/virtual_fs.cc`
+- 修改：`kernel/fs/vfs/file/virtual_file.hh`
+- 修改：`kernel/fs/vfs/file/virtual_file.cc`
+
+**新增虚拟文件：**
+
+`/etc/resolv.conf` 内容：
+
+```text
+nameserver 10.0.2.3
+options timeout:2 attempts:1
+```
+
+`/etc/hosts` 内容：
+
+```text
+127.0.0.1 localhost
+::1 localhost
+```
+
+说明：
+
+- musl/glibc 的 resolver 会读这些文件。
+- 之前 `getaddrinfo_01` 备注里提到 `/etc/hosts` 缺失，这里顺便补齐。
+
+**验收：**
+
+- 用户态能 `open/read /etc/resolv.conf`。
+- 用户态能 `open/read /etc/hosts`。
+- 原有虚拟 `/etc/passwd`、`/etc/group` 不回退。
+
+### Task E2：跑 getaddrinfo 和 DNS smoke
+
+**文件：**
+
+- 修改：`user/user_lib/user_test.cc`
+- 修改：`user/deps/user.hh`
+
+**测试：**
+
+- `network_dns_smoke()`：
+  - 调用一个动态程序或 BusyBox 工具触发 `getaddrinfo("example.com")`。
+  - 如果当前 initcode 静态环境不方便直接调 libc `getaddrinfo()`，先用 DNS UDP smoke 验证内核路径，再用 BusyBox `wget` 验证 libc resolver。
+
+**验收：**
+
+- DNS UDP smoke 收到 response。
+- `getaddrinfo_01` 不再因为 `/etc/hosts` 缺失 TCONF。
+- `getaddrinfo_01` 通过只能说明 hosts/libc resolver 基础路径可用；它不是 DNS 出网证明，因为该测例会写 `/etc/hosts`。
+
+### Task E3：跑 BusyBox wget
+
+**文件：**
+
+- 临时修改：`user/app/initcode-rv.cc`
+
+**测试命令思路：**
+
+通过 `run_test()` 执行 BusyBox 或镜像里的 wget：
+
+- `busybox wget -O - http://example.com/`
+- 或镜像已有 `wget` 时直接 `wget -O - http://example.com/`
+
+如果 `run_test()` 当前不方便传复杂 argv，需要新增一个专用 helper，例如：
+
+```cpp
+int run_http_wget_smoke(void)
+```
+
+它 fork 后 exec：
+
+```text
+/musl/bin/busybox wget -O - http://example.com/
+```
+
+**验收：**
+
+- 进程退出码 0。
+- 日志出现 HTTP 响应内容。
+- 如果 wget 因 HTTPS 跳转失败，换成明确支持 HTTP 的目标，第一阶段不追 HTTPS。
+
+---
+
+## 7. 阶段 F：外部真实网页访问验收
+
+目标：证明不是只访问宿主机，也不是只发包不收包。
+
+### Task F1：HTTP by external IP
+
+**文件：**
+
+- 修改：`user/user_lib/user_test.cc`
+- 临时修改：`user/app/initcode-rv.cc`
+
+**验收标准：**
+
+- `connect()` 到公网 IPv4:80 成功。
+- `send()` 返回请求长度。
+- `recv()` 收到大于 0 字节。
+- 响应前 5 字节是 `HTTP/`，或响应包含明显 HTTP header。
+
+**日志：**
+
+```bash
+logs/output_r_20260526-000000_network-http-external-ip-smoke_QEMU_MEM-1G_timeout-5m.txt
+```
+
+### Task F2：HTTP by domain
+
+**文件：**
+
+- 修改：`user/user_lib/user_test.cc`
+- 临时修改：`user/app/initcode-rv.cc`
+
+**验收标准：**
+
+- DNS 查询成功。
+- `connect()` 到解析出的 IPv4 成功。
+- 收到 HTTP 响应。
+
+**日志：**
+
+```bash
+logs/output_r_20260526-000000_network-http-domain-smoke_QEMU_MEM-1G_timeout-5m.txt
+```
+
+### Task F3：BusyBox wget
+
+**验收标准：**
+
+- `busybox wget -O - http://example.com/` 能退出 0。
+- 如果目标返回 301/302，只要 wget 能读取响应并退出成功即可。
+- 如果 wget 默认转 HTTPS，换 HTTP-only 目标；HTTPS 不纳入本阶段。
+
+---
+
+## 8. 阶段 G：LoongArch 和长期稳定性
+
+### Task G1：先解决 LoongArch 运行环境
+
+当前 `make run l` 失败点不是网络，而是宿主机缺 `debugfs`：
+
+```text
+[patch-loongarch-libctest] 找不到 debugfs
+```
+
+先安装/暴露 `debugfs`，否则 LoongArch 无法进入 QEMU，不能验证网络。
+
+### Task G2：启用 LoongArch virtio-net PCI
+
+**文件：**
+
+- 修改：`kernel/net/drivers/virtio_net.cc`
+- 修改：`kernel/net/drivers/virtio_net.hh`
+- 修改：`kernel/fs/drivers/loongarch/virtio_pci.cc`
+- 修改：`kernel/fs/drivers/loongarch/virtio_pci.hh`
+
+**当前问题：**
+
+`virtio_net_init()` 里 LoongArch 分支现在是：
+
+```cpp
+// virtio_net_init_pci();
+printfRed("loongarch virtio net未实现");
+```
+
+需要恢复 `virtio_net_init_pci()`，并确认：
+
+- PCI probe 能找到 `virtio-net-pci`
+- common cfg / notify cfg / isr cfg / device cfg 地址正确
+- queue enable 正确
+- DMA 地址可被设备访问
+
+### Task G3：四组合验证
+
+优先顺序：
+
+1. `riscv/musl`
+2. `riscv/glibc`
+3. `loongarch/musl`
+4. `loongarch/glibc`
+
+每个组合至少跑：
+
+- loopback smoke
+- LTP socket subset
+- LTP socket ABI 扩展检查点：recv01/send01/getsockname01/getsockopt01/setsockopt01/sockioctl01/socketpair01
+- HTTP gateway smoke
+- HTTP external IP smoke
+- DNS/domain smoke
+- BusyBox wget smoke
+
+不要用 RISC-V PASS 推断 LoongArch PASS。
+
+---
+
+## 9. 推荐执行顺序
+
+- [ ] A1：新增 HTTP gateway/external IP 用户态 smoke 测试。
+- [ ] A2：加清晰 PASS/FAIL 日志标记。
+- [ ] B1：新增 QEMU user net 静态网络配置模块。
+- [ ] B2：启用 `net::init_network_stack()`，失败不 panic。
+- [ ] B3：复跑 loopback，确认不回退。
+- [ ] B4：补充 socket ABI 检查点，确认 syscall 语义不回退。
+- [ ] C1：用 DTB 或可靠 fallback 找到 virtio-net MMIO base。
+- [ ] C2：修 virtqueue 初始化和物理地址。
+- [ ] C3：实现 TX completion polling。
+- [ ] C4：实现 RX polling 和 ONPS adapter pump。
+- [ ] D1：给 `socket_file` 增加 backend 状态。
+- [ ] D2：封装 ONPS socket 创建和错误映射。
+- [ ] D3：实现非 loopback TCP connect/send/recv。
+- [ ] D4：实现非 loopback UDP sendto/recvfrom。
+- [ ] D5：跑 loopback 并发检查点，确认 iperf/netperf 路径不回退。
+- [ ] E1：补 `/etc/resolv.conf` 和 `/etc/hosts`。
+- [ ] E2：跑 DNS smoke/getaddrinfo。
+- [ ] E3：跑 BusyBox wget。
+- [ ] F1：跑公网 HTTP by IP。
+- [ ] F2：跑公网 HTTP by domain。
+- [ ] F3：跑 BusyBox wget 访问 HTTP 域名。
+- [ ] G1：解决 LoongArch `debugfs` 环境。
+- [ ] G2：启用 LoongArch virtio-net PCI。
+- [ ] G3：四组合验证。
+
+---
+
+## 10. 每阶段必跑验证命令
+
+### 代码格式和构建
+
+```bash
+git diff --check
+make build ARCH=riscv
+make build ARCH=loongarch
+```
+
+### RISC-V 单项 QEMU 日志模板
+
+```bash
+ts=$(date +%Y%m%d-%H%M%S)
+mkdir -p logs
+scope="network-http-gateway-smoke"
+log="logs/output_r_${ts}_${scope}_QEMU_MEM-1G_timeout-5m.txt"
+{
+  echo "run_at=${ts}"
+  echo "arch=riscv"
+  echo "scope=${scope}"
+  echo "cmd=timeout 5m make run r QEMU_MEM=1G"
+  echo "git_branch=$(git branch --show-current 2>/dev/null || true)"
+  echo "git_head=$(git rev-parse --short HEAD 2>/dev/null || true)"
+  echo "---- output ----"
+  timeout 5m make run r QEMU_MEM=1G
+  echo "exit_code=$?"
+} > "$log" 2>&1
+echo "$log"
+```
+
+### 日志抽取命令
+
+```bash
+rg -n "NETWORK HTTP|NETWORK LOOPBACK|\\[PASS\\]|\\[FAIL\\]|virtio_net|f7ly_network|onps|panic|PANIC|Exception|exit_code" logs/output_r_20260526-000000_network-http-gateway-smoke_QEMU_MEM-1G_timeout-5m.txt
+```
+
+### 建议检查点矩阵
+
+| 阶段 | 优先测例 | 证明什么 | 不证明什么 |
+| --- | --- | --- | --- |
+| loopback 基础 | `network_loopback_smoke()`、`network_fork_loopback_smoke()` | TCP/UDP payload 真实收发 | 不证明 virtio-net 或外网 |
+| socket ABI | socket01/socket02/accept01/accept03/accept4_01/bind01/listen01/connect01/sendto01/recvfrom01/recvmsg01/socketpair02 | Linux socket syscall 基础语义 | 不证明吞吐和外网 |
+| socket ABI 扩展 | recv01/send01/getsockname01/getsockopt01/setsockopt01/sockioctl01/socketpair01 | 更多 errno、option、ioctl、地址回填 | 不证明 HTTP 可用 |
+| loopback 批量通信 | sendmmsg01/recvmmsg01/send02 | UDP 批量收发、MSG_MORE、非阻塞边界 | 不证明真实网卡 |
+| loopback 压力 | iperf/netperf 脚本 | 并发、反向传输、吞吐和阻塞唤醒 | 不证明外部网页 |
+| guest 到 host | `network_http_gateway_smoke()` | virtio-net + ONPS + TCP client 基础链路 | 不证明公网或 DNS |
+| 公网 by IP | `network_http_external_ip_smoke()` | 不经 DNS 的外部 HTTP 数据可读 | 不证明域名解析 |
+| DNS 和域名 | DNS UDP smoke、`network_http_domain_smoke()`、BusyBox wget | UDP DNS、resolver、HTTP 域名访问 | 不证明 HTTPS |
+| 后期压力 | dns-stress/http-stress/netstress/tcp4-* | 更完整网络环境和长时间稳定性 | 不适合早期定位 |
+
+### 暂不作为当前门禁的测例
+
+- `tcp6-*`：需要 IPv6。
+- `sctp*`：需要 SCTP。
+- `dccp*`：需要 DCCP。
+- `mc_*`、`mcast-*`：需要 multicast。
+- `iptables*`、`route*`、`netns*`、`dhcp*`：需要完整 Linux 网络管理能力。
+- `ftp*`、`ssh-stress.sh`、`nfs*`：需要额外服务端和复杂环境。
+- `sendfile*`、`mbind*`、`mq_timedsend*`、`pidfd_send_signal*`：名字里有 send/bind，但不是网络核心检查点。
+
+### 临时 initcode 恢复规则
+
+RISC-V 测试后必须恢复：
+
+```cpp
+#include "user.hh"
+
+extern "C"
+{
+    __attribute__((section(".text.startup"))) int main()
+    {
+        regression_suite_4d1444();
+        shutdown();
+        return 0;
+    }
+}
+```
+
+LoongArch 测试后必须恢复当前项目默认入口，不要把 smoke 入口留在工作区。
+
+恢复后检查：
+
+```bash
+git diff -- user/app/initcode-rv.cc user/app/initcode-la.cc
+```
+
+预期：无输出。
+
+---
+
+## 11. 风险和取舍
+
+### 不先做 HTTPS
+
+访问网页数据第一阶段只做 HTTP。HTTPS 需要 TLS 库、证书、随机数、时间和更多 libc/文件系统支持，不是“网络能收发数据”的最小闭环。
+
+### 不先做 DHCP
+
+QEMU user net 下静态 `10.0.2.15/24` 足够跑通第一阶段。DHCP 是后续易用性任务，不应挡住 HTTP by IP。
+
+### 不把 ONPS 用于 loopback
+
+当前 loopback 已经有真实 payload 证据，贸然替换会让已通过测试回退。短期保留 loopback backend，非 loopback 才走 ONPS。
+
+### 不把 syscall_handler 重新写成 ONPS 大杂烩
+
+`syscall_handler.cc` 只负责 Linux ABI 参数、fd、copy_in/copy_out、errno。真实 socket 状态和后端选择放在 `socket_file`，避免再出现两套状态机互相打架。
+
+### 第一阶段允许 polling
+
+中断是性能和干净架构需要，但不是“能访问到网页数据”的必要条件。先用 polling 跑通，再接 PLIC/PCI 中断，风险更低。
+
+---
+
+## 12. 最终完成定义
+
+可以说“至少能正常访问外部网页”的条件：
+
+- RISC-V/musl 下 `network_http_external_ip_smoke()` PASS。
+- RISC-V/musl 下 `network_http_domain_smoke()` PASS。
+- RISC-V/musl 下 BusyBox `wget -O - http://example.com/` PASS。
+- 日志显示 `connect/send/recv` 都成功，不只是 socket 返回 fd。
+- virtio-net TX/RX counters 都增长。
+- 现有 loopback smoke 和 LTP socket subset 不回退。
+- `make build ARCH=riscv` 和 `make build ARCH=loongarch` 通过。
+
+可以说“完整网络阶段性完成”的条件：
+
+- 上述 RISC-V/musl HTTP 能力通过。
+- RISC-V/glibc 同样通过。
+- LoongArch 环境修好后，LoongArch/musl 和 LoongArch/glibc 至少 HTTP gateway smoke 通过。
+- iperf/netperf runner 路径问题解决后，scoreboard 中对应项有日志证据再更新 PASS。
