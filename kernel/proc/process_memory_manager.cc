@@ -61,6 +61,41 @@ namespace proc
             entry.backing_kind = VMA_BACKING_NONE;
             entry.backing_shmid = -1;
             entry.backing_base = 0;
+            entry.wipe_on_fork = false;
+        }
+
+        inline void *user_page_kernel_ptr(uint64 pa)
+        {
+#ifdef LOONGARCH
+            return reinterpret_cast<void *>(to_vir(pa));
+#else
+            return reinterpret_cast<void *>(pa);
+#endif
+        }
+
+        void wipe_child_vma_pages(mem::PageTable &child_pt, uint64 start, uint64 len)
+        {
+            if (len == 0)
+            {
+                return;
+            }
+
+            uint64 begin = PGROUNDDOWN(start);
+            uint64 end = PGROUNDUP(start + len);
+            if (end < begin)
+            {
+                return;
+            }
+
+            for (uint64 va = begin; va < end; va += PGSIZE)
+            {
+                mem::Pte pte = child_pt.walk(va, false);
+                if (pte.is_null() || !pte.is_valid())
+                {
+                    continue;
+                }
+                memset(user_page_kernel_ptr((uint64)pte.pa()), 0, PGSIZE);
+            }
         }
 
         inline bool is_shared_backed_vma(const vma &entry)
@@ -87,14 +122,14 @@ namespace proc
                 pte_flags |= riscv::PteEnum::pte_executable_m;
             }
 #elif defined(LOONGARCH)
-            pte_flags = PTE_U | PTE_D | PTE_MAT;
+            pte_flags = PTE_U | PTE_P | PTE_MAT;
             if (entry.prot & PROT_READ)
             {
                 pte_flags |= PTE_R;
             }
             if (entry.prot & PROT_WRITE)
             {
-                pte_flags |= PTE_W;
+                pte_flags |= PTE_W | PTE_D;
             }
             if (entry.prot & PROT_EXEC)
             {
@@ -630,6 +665,13 @@ namespace proc
                               i, (void *)vma_data._vm[i].addr, vma_data._vm[i].len);
                     delete new_mgr;
                     return nullptr;
+                }
+
+                if (vma_data._vm[i].wipe_on_fork)
+                {
+                    wipe_child_vma_pages(new_mgr->pagetable,
+                                         vma_data._vm[i].addr,
+                                         static_cast<uint64>(vma_data._vm[i].len));
                 }
             }
         }

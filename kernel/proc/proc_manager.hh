@@ -125,6 +125,7 @@ namespace proc
         // 私有辅助函数
         bool is_target_child(Pcb *child, Pcb *parent, int child_pid);
         bool has_remaining_threads(Pcb *parent, int target_pid);
+        void mark_thread_group_killed(Pcb *current);
     };
 
     extern ProcessManager k_pm; // 全局进程管理器实例

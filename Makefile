@@ -6,7 +6,6 @@ ROOTFS_IMAGE := $(IMAGE_DIR)/rootfs.img
 INITRD_IMAGE := $(IMAGE_DIR)/initrd.img
 RISCV_SDCARD := $(IMAGE_DIR)/sdcard-rv.img
 LOONGARCH_SDCARD := $(IMAGE_DIR)/sdcard-la.img
-LOONGARCH_LIBCTEST_PATCHER := tools/patch_loongarch_libctest_llsc.sh
 
 # ===== 并行编译配置 =====
 # 默认使用所有可用 CPU 核心进行并行编译
@@ -18,6 +17,8 @@ ARCH ?= riscv
 DIS_PRINTF ?= 0
 QEMU_MEM ?= 1G
 QEMU_DEBUG_MEM ?= 1G
+# 默认使用 QEMU 临时写入层运行评测，避免污染官方原始磁盘镜像。
+QEMU_SNAPSHOT ?= -snapshot
 
 # 检查是否通过目标名称指定架构
 ifneq (,$(filter l loongarch,$(MAKECMDGOALS)))
@@ -189,7 +190,7 @@ INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dy
 else ifeq ($(ARCH),loongarch)
 INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dynamic-linker,-T,$(INITCODE_LINK_SCRIPT)
 endif
-.PHONY: all clean dirs build riscv loongarch run debug initcode build-la prepare-loongarch-image
+.PHONY: all clean dirs build riscv loongarch run debug initcode build-la
 
 
 all: 
@@ -272,9 +273,6 @@ else
 	$(error Unsupported ARCH=$(ARCH))
 endif
 
-prepare-loongarch-image:
-	@$(LOONGARCH_LIBCTEST_PATCHER) $(LOONGARCH_SDCARD)
-
 run-riscv:
 	qemu-system-riscv64 \
 		-machine virt \
@@ -283,6 +281,7 @@ run-riscv:
 		-nographic \
 		-smp 1 \
 		-bios default \
+		$(QEMU_SNAPSHOT) \
 		-drive file=$(RISCV_SDCARD),if=none,format=raw,id=x0 \
 		-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 \
 		-no-reboot \
@@ -292,13 +291,14 @@ run-riscv:
 		-initrd $(INITRD_IMAGE)
 
 
-run-loongarch: prepare-loongarch-image
+run-loongarch:
 	qemu-system-loongarch64 \
 	    -machine virt \
 	    -kernel $(KERNEL_ELF) \
 	    -m $(QEMU_MEM) \
 	    -nographic \
 	    -smp 1 \
+		$(QEMU_SNAPSHOT) \
 		-drive file=$(LOONGARCH_SDCARD),if=none,format=raw,id=x0 \
 		-device virtio-blk-pci,drive=x0 \
 		-netdev user,id=net \
@@ -325,6 +325,7 @@ debug-riscv:
 		-nographic \
 		-smp 1 \
 		-bios default \
+		$(QEMU_SNAPSHOT) \
 		-drive file=$(RISCV_SDCARD),if=none,format=raw,id=x0 \
 		-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 \
 		-no-reboot \
@@ -333,13 +334,14 @@ debug-riscv:
 		-rtc base=utc \
 		-S -gdb tcp::1234;
 
-debug-loongarch: prepare-loongarch-image
+debug-loongarch:
 	qemu-system-loongarch64 \
 	    -machine virt \
 	    -kernel $(KERNEL_ELF) \
 	    -m $(QEMU_DEBUG_MEM) \
 	    -nographic \
 	    -smp 1 \
+		$(QEMU_SNAPSHOT) \
 		-drive file=$(LOONGARCH_SDCARD),if=none,format=raw,id=x0 \
 		-device virtio-blk-pci,drive=x0 \
 		-no-reboot \

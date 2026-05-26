@@ -264,11 +264,12 @@ void dir_init(void)
         free_inode(ip);
 
 
-    if ((ip = namei((char *)"/tmp")) != NULL)
-    {
-        vfs_ext_rm((char *)"tmp");
+    // libc 的 tmpfile/mkstemp 等接口默认依赖 /tmp。
+    // 官方评测镜像必须原样使用，启动时只能补齐运行环境，不能删除镜像内已有目录。
+    if ((ip = namei((char *)"/tmp")) == NULL)
+        vfs_ext_mkdir((char *)"/tmp", 01777);
+    else
         free_inode(ip);
-    }
 
     if ((ip = namei((char *)"/usr")) == NULL)
         vfs_ext_mkdir((char *)"/usr", 0777);

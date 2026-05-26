@@ -1,7 +1,15 @@
 #include "types.hh"
 typedef unsigned long shmatt_t;
-/* Shared memory attach boundary - typically page size */
-#define SHMLBA		PGSIZE		/* segment attach address boundary */
+/*
+ * 共享内存 attach 对齐边界需要跟用户态 ABI 一致。
+ * LoongArch 的 glibc/musl 暴露 SHMLBA=64KiB，若内核只按 4KiB 对齐，
+ * shmat(..., SHM_RND) 会返回用户态认为错误的地址。
+ */
+#ifdef LOONGARCH
+#define SHMLBA		0x10000UL
+#else
+#define SHMLBA		PGSIZE
+#endif
 
 /* Permission flag for shmget.  */
 #define SHM_R		0400		/* or S_IRUGO from <linux/stat.h> */

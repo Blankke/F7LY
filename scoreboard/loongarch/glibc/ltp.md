@@ -6,23 +6,23 @@
 | --- | --- | --- |
 | abort01 |  |  |
 | abs01 |  |  |
-| accept01 |  |  |
+| accept01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | accept02 |  |  |
-| accept03 |  |  |
+| accept03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | accept4_01 |  |  |
-| access01 |  |  |
-| access02 |  |  |
-| access03 |  |  |
-| access04 |  |  |
+| access01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| access02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| access03 | SKIP | 2026-05-26 四组合开关未运行 |
+| access04 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | acct01 |  |  |
 | acct02 |  |  |
 | acct02_helper |  |  |
 | acl1 |  |  |
 | add_ipv6addr |  |  |
-| add_key01 |  |  |
-| add_key02 |  |  |
-| add_key03 |  |  |
-| add_key04 |  |  |
+| add_key01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| add_key02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| add_key03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| add_key04 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | add_key05 |  |  |
 | adjtimex01 |  |  |
 | adjtimex02 |  |  |
@@ -134,10 +134,10 @@
 | check_pe |  |  |
 | check_setkey |  |  |
 | check_simple_capset |  |  |
-| chmod01 |  |  |
-| chmod03 |  |  |
+| chmod01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| chmod03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | chmod05 |  |  |
-| chmod06 |  |  |
+| chmod06 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | chmod07 |  |  |
 | chown01 |  |  |
 | chown01_16 |  |  |
@@ -156,9 +156,9 @@
 | cleanup_lvm.sh |  |  |
 | clock_adjtime01 |  |  |
 | clock_adjtime02 |  |  |
-| clock_getres01 |  |  |
+| clock_getres01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | clock_gettime01 |  |  |
-| clock_gettime02 |  |  |
+| clock_gettime02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | clock_gettime03 |  |  |
 | clock_gettime04 |  |  |
 | clock_nanosleep01 |  |  |
@@ -168,17 +168,17 @@
 | clock_settime01 |  |  |
 | clock_settime02 |  |  |
 | clock_settime03 |  |  |
-| clone01 |  |  |
+| clone01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | clone02 |  |  |
-| clone03 |  |  |
+| clone03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | clone04 |  |  |
 | clone05 |  |  |
-| clone06 |  |  |
+| clone06 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | clone07 |  |  |
 | clone08 |  |  |
 | clone09 |  |  |
 | clone301 |  |  |
-| clone302 |  |  |
+| clone302 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | clone303 |  |  |
 | close01 |  |  |
 | close02 |  |  |
@@ -186,7 +186,7 @@
 | close_range02 |  |  |
 | cmdlib.sh |  |  |
 | cn_pec.sh |  |  |
-| confstr01 |  |  |
+| confstr01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | connect01 |  |  |
 | connect02 |  |  |
 | copy_file_range01 |  |  |
@@ -245,11 +245,11 @@
 | cpuset_syscall_testset.sh |  |  |
 | crash01 |  |  |
 | crash02 |  |  |
-| creat01 |  |  |
+| creat01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | creat03 |  |  |
 | creat04 |  |  |
 | creat05 |  |  |
-| creat06 |  |  |
+| creat06 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | creat07 |  |  |
 | creat07_child |  |  |
 | creat08 |  |  |
@@ -306,19 +306,19 @@
 | dnsmasq_tests.sh |  |  |
 | doio |  |  |
 | du01.sh |  |  |
-| dup01 |  |  |
-| dup02 |  |  |
-| dup03 |  |  |
-| dup04 |  |  |
-| dup05 |  |  |
-| dup06 |  |  |
-| dup07 |  |  |
-| dup201 |  |  |
-| dup202 |  |  |
-| dup203 |  |  |
-| dup204 |  |  |
-| dup205 |  |  |
-| dup206 |  |  |
+| dup01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| dup02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| dup03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| dup04 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| dup05 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| dup06 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| dup07 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| dup201 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| dup202 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| dup203 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| dup204 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| dup205 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| dup206 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | dup207 |  |  |
 | dup3_01 |  |  |
 | dup3_02 |  |  |
@@ -328,13 +328,13 @@
 | eject_check_tray |  |  |
 | endian_switch01 |  |  |
 | epoll-ltp |  |  |
-| epoll_create01 |  |  |
+| epoll_create01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | epoll_create02 |  |  |
-| epoll_create1_01 |  |  |
+| epoll_create1_01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | epoll_create1_02 |  |  |
 | epoll_ctl01 |  |  |
 | epoll_ctl02 |  |  |
-| epoll_ctl03 |  |  |
+| epoll_ctl03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | epoll_ctl04 |  |  |
 | epoll_ctl05 |  |  |
 | epoll_pwait01 |  |  |
@@ -362,15 +362,15 @@
 | evm_overlay.sh |  |  |
 | exec_with_inh |  |  |
 | exec_without_inh |  |  |
-| execl01 |  |  |
+| execl01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | execl01_child |  |  |
-| execle01 |  |  |
+| execle01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | execle01_child |  |  |
-| execlp01 |  |  |
+| execlp01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | execlp01_child |  |  |
-| execv01 |  |  |
+| execv01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | execv01_child |  |  |
-| execve01 |  |  |
+| execve01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | execve01_child |  |  |
 | execve02 |  |  |
 | execve03 |  |  |
@@ -384,15 +384,15 @@
 | execveat03 |  |  |
 | execveat_child |  |  |
 | execveat_errno |  |  |
-| execvp01 |  |  |
+| execvp01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | execvp01_child |  |  |
 | exit01 |  |  |
-| exit02 |  |  |
+| exit02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | exit_group01 |  |  |
 | f00f |  |  |
-| faccessat01 |  |  |
-| faccessat02 |  |  |
-| faccessat201 |  |  |
+| faccessat01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| faccessat02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| faccessat201 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | faccessat202 |  |  |
 | fallocate01 |  |  |
 | fallocate02 |  |  |
@@ -425,57 +425,57 @@
 | fanotify23 |  |  |
 | fanotify_child |  |  |
 | fanout01 |  |  |
-| fchdir01 |  |  |
-| fchdir02 |  |  |
+| fchdir01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| fchdir02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | fchdir03 |  |  |
-| fchmod01 |  |  |
+| fchmod01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | fchmod02 |  |  |
-| fchmod03 |  |  |
-| fchmod04 |  |  |
+| fchmod03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| fchmod04 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | fchmod05 |  |  |
 | fchmod06 |  |  |
-| fchmodat01 |  |  |
-| fchmodat02 |  |  |
-| fchown01 |  |  |
+| fchmodat01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| fchmodat02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| fchown01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | fchown01_16 |  |  |
-| fchown02 |  |  |
+| fchown02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | fchown02_16 |  |  |
-| fchown03 |  |  |
+| fchown03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | fchown03_16 |  |  |
-| fchown04 |  |  |
+| fchown04 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | fchown04_16 |  |  |
-| fchown05 |  |  |
+| fchown05 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | fchown05_16 |  |  |
 | fchownat01 |  |  |
 | fchownat02 |  |  |
 | fcntl01 |  |  |
 | fcntl01_64 |  |  |
-| fcntl02 |  |  |
-| fcntl02_64 |  |  |
-| fcntl03 |  |  |
-| fcntl03_64 |  |  |
-| fcntl04 |  |  |
-| fcntl04_64 |  |  |
-| fcntl05 |  |  |
-| fcntl05_64 |  |  |
+| fcntl02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| fcntl02_64 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| fcntl03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| fcntl03_64 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| fcntl04 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| fcntl04_64 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| fcntl05 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| fcntl05_64 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | fcntl07 |  |  |
 | fcntl07_64 |  |  |
-| fcntl08 |  |  |
-| fcntl08_64 |  |  |
-| fcntl09 |  |  |
-| fcntl09_64 |  |  |
-| fcntl10 |  |  |
-| fcntl10_64 |  |  |
+| fcntl08 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| fcntl08_64 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| fcntl09 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| fcntl09_64 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| fcntl10 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| fcntl10_64 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | fcntl11 |  |  |
 | fcntl11_64 |  |  |
 | fcntl12 |  |  |
 | fcntl12_64 |  |  |
-| fcntl13 |  |  |
-| fcntl13_64 |  |  |
+| fcntl13 | SKIP | 2026-05-26 pass // la 会把用户态printf干爆 |
+| fcntl13_64 | SKIP | 2026-05-26 pass // la 会把用户态printf干爆 |
 | fcntl14 |  |  |
 | fcntl14_64 |  |  |
-| fcntl15 |  |  |
-| fcntl15_64 |  |  |
+| fcntl15 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| fcntl15_64 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | fcntl16 |  |  |
 | fcntl16_64 |  |  |
 | fcntl17 |  |  |
@@ -533,19 +533,19 @@
 | find_portbundle |  |  |
 | finit_module01 |  |  |
 | finit_module02 |  |  |
-| flistxattr01 |  |  |
-| flistxattr02 |  |  |
-| flistxattr03 |  |  |
+| flistxattr01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| flistxattr02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| flistxattr03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | float_bessel |  |  |
 | float_exp_log |  |  |
 | float_iperb |  |  |
 | float_power |  |  |
 | float_trigo |  |  |
-| flock01 |  |  |
-| flock02 |  |  |
-| flock03 |  |  |
-| flock04 |  |  |
-| flock06 |  |  |
+| flock01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| flock02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| flock03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| flock04 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| flock06 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | force_erase.sh |  |  |
 | fork01 |  |  |
 | fork03 |  |  |
@@ -561,7 +561,7 @@
 | fork_freeze.sh |  |  |
 | fork_procs |  |  |
 | fou01.sh |  |  |
-| fpathconf01 |  |  |
+| fpathconf01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | fptest01 |  |  |
 | fptest02 |  |  |
 | frag |  |  |
@@ -696,20 +696,20 @@
 | fspick01 |  |  |
 | fspick02 |  |  |
 | fsstress |  |  |
-| fstat02 |  |  |
-| fstat02_64 |  |  |
-| fstat03 |  |  |
-| fstat03_64 |  |  |
+| fstat02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| fstat02_64 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| fstat03 | SKIP | 2026-05-26 pass2 |
+| fstat03_64 | SKIP | 2026-05-26 pass2 |
 | fstatat01 |  |  |
 | fstatfs01 |  |  |
 | fstatfs01_64 |  |  |
-| fstatfs02 |  |  |
-| fstatfs02_64 |  |  |
+| fstatfs02 | SKIP | 2026-05-26 pass 2 |
+| fstatfs02_64 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | fsx-linux |  |  |
 | fsx.sh |  |  |
 | fsync01 |  |  |
-| fsync02 |  |  |
-| fsync03 |  |  |
+| fsync02 | SKIP | 2026-05-26 pass |
+| fsync03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | fsync04 |  |  |
 | ftest01 |  |  |
 | ftest02 |  |  |
@@ -730,9 +730,9 @@
 | ftrace_regression01.sh |  |  |
 | ftrace_regression02.sh |  |  |
 | ftrace_stress_test.sh |  |  |
-| ftruncate01 |  |  |
-| ftruncate01_64 |  |  |
-| ftruncate03 |  |  |
+| ftruncate01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| ftruncate01_64 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| ftruncate03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | ftruncate03_64 |  |  |
 | ftruncate04 |  |  |
 | ftruncate04_64 |  |  |
@@ -798,24 +798,24 @@
 | getaddrinfo_01 |  |  |
 | getcontext01 |  |  |
 | getcpu01 |  |  |
-| getcwd01 |  |  |
-| getcwd02 |  |  |
-| getcwd03 |  |  |
+| getcwd01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| getcwd02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| getcwd03 | SKIP | 2026-05-26 pass |
 | getcwd04 |  |  |
 | getdents01 |  |  |
 | getdents02 |  |  |
 | getdomainname01 |  |  |
-| getegid01 |  |  |
+| getegid01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | getegid01_16 |  |  |
-| getegid02 |  |  |
+| getegid02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | getegid02_16 |  |  |
-| geteuid01 |  |  |
+| geteuid01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | geteuid01_16 |  |  |
-| geteuid02 |  |  |
+| geteuid02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | geteuid02_16 |  |  |
-| getgid01 |  |  |
+| getgid01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | getgid01_16 |  |  |
-| getgid03 |  |  |
+| getgid03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | getgid03_16 |  |  |
 | getgroups01 |  |  |
 | getgroups01_16 |  |  |
@@ -825,24 +825,24 @@
 | gethostid01 |  |  |
 | gethostname01 |  |  |
 | gethostname02 |  |  |
-| getitimer01 |  |  |
-| getitimer02 |  |  |
+| getitimer01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| getitimer02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | getpagesize01 |  |  |
 | getpeername01 |  |  |
-| getpgid01 |  |  |
-| getpgid02 |  |  |
-| getpgrp01 |  |  |
-| getpid01 |  |  |
-| getpid02 |  |  |
-| getppid01 |  |  |
-| getppid02 |  |  |
-| getpriority01 |  |  |
-| getpriority02 |  |  |
-| getrandom01 |  |  |
-| getrandom02 |  |  |
-| getrandom03 |  |  |
-| getrandom04 |  |  |
-| getrandom05 |  |  |
+| getpgid01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| getpgid02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| getpgrp01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| getpid01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| getpid02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| getppid01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| getppid02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| getpriority01 | SKIP | 2026-05-26 四组合开关未运行 |
+| getpriority02 | SKIP | 2026-05-26 四组合开关未运行 |
+| getrandom01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| getrandom02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| getrandom03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| getrandom04 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| getrandom05 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | getresgid01 |  |  |
 | getresgid01_16 |  |  |
 | getresgid02 |  |  |
@@ -855,7 +855,7 @@
 | getresuid02_16 |  |  |
 | getresuid03 |  |  |
 | getresuid03_16 |  |  |
-| getrlimit01 |  |  |
+| getrlimit01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | getrlimit02 |  |  |
 | getrlimit03 |  |  |
 | getrusage01 |  |  |
@@ -863,18 +863,18 @@
 | getrusage03 |  |  |
 | getrusage03_child |  |  |
 | getrusage04 |  |  |
-| getsid01 |  |  |
-| getsid02 |  |  |
+| getsid01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| getsid02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | getsockname01 |  |  |
 | getsockopt01 |  |  |
 | getsockopt02 |  |  |
-| gettid01 |  |  |
+| gettid01 | SKIP | 2026-05-26 PASS |
 | gettid02 |  |  |
-| gettimeofday01 |  |  |
+| gettimeofday01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | gettimeofday02 |  |  |
-| getuid01 |  |  |
+| getuid01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | getuid01_16 |  |  |
-| getuid03 |  |  |
+| getuid03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | getuid03_16 |  |  |
 | getxattr01 |  |  |
 | getxattr02 |  |  |
@@ -1092,14 +1092,14 @@
 | keyctl08 |  |  |
 | keyctl09 |  |  |
 | kill02 |  |  |
-| kill03 |  |  |
+| kill03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | kill05 |  |  |
 | kill06 |  |  |
 | kill07 |  |  |
 | kill08 |  |  |
 | kill09 |  |  |
 | kill10 |  |  |
-| kill11 |  |  |
+| kill11 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | kill12 |  |  |
 | kill13 |  |  |
 | killall_icmp_traffic |  |  |
@@ -1126,10 +1126,10 @@
 | lgetxattr01 |  |  |
 | lgetxattr02 |  |  |
 | libcgroup_freezer |  |  |
-| link02 |  |  |
-| link04 |  |  |
+| link02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| link04 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | link05 |  |  |
-| link08 |  |  |
+| link08 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | linkat01 |  |  |
 | linkat02 |  |  |
 | linktest.sh |  |  |
@@ -1140,23 +1140,23 @@
 | llistxattr01 |  |  |
 | llistxattr02 |  |  |
 | llistxattr03 |  |  |
-| llseek01 |  |  |
-| llseek02 |  |  |
-| llseek03 |  |  |
+| llseek01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| llseek02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| llseek03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | ln_tests.sh |  |  |
 | lock_torture.sh |  |  |
 | locktests |  |  |
 | logrotate_tests.sh |  |  |
 | lremovexattr01 |  |  |
-| lseek01 |  |  |
-| lseek02 |  |  |
-| lseek07 |  |  |
+| lseek01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| lseek02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| lseek07 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | lseek11 |  |  |
 | lsmod01.sh |  |  |
-| lstat01 |  |  |
-| lstat01_64 |  |  |
-| lstat02 |  |  |
-| lstat02_64 |  |  |
+| lstat01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| lstat01_64 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| lstat02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| lstat02_64 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | ltpClient |  |  |
 | ltpServer |  |  |
 | ltpSockets.sh |  |  |
@@ -1167,15 +1167,15 @@
 | macsec_lib.sh |  |  |
 | macvlan01.sh |  |  |
 | macvtap01.sh |  |  |
-| madvise01 |  |  |
+| madvise01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | madvise02 |  |  |
 | madvise03 |  |  |
-| madvise05 |  |  |
+| madvise05 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | madvise06 |  |  |
 | madvise07 |  |  |
 | madvise08 |  |  |
 | madvise09 |  |  |
-| madvise10 |  |  |
+| madvise10 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | madvise11 |  |  |
 | mallinfo01 |  |  |
 | mallinfo02 |  |  |
@@ -1242,7 +1242,7 @@
 | memcontrol04 |  |  |
 | memcpy01 |  |  |
 | memctl_test01 |  |  |
-| memfd_create01 |  |  |
+| memfd_create01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | memfd_create02 |  |  |
 | memfd_create03 |  |  |
 | memfd_create04 |  |  |
@@ -1258,23 +1258,23 @@
 | mincore03 |  |  |
 | mincore04 |  |  |
 | mkdir02 |  |  |
-| mkdir03 |  |  |
+| mkdir03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | mkdir04 |  |  |
 | mkdir05 |  |  |
 | mkdir09 |  |  |
 | mkdir_tests.sh |  |  |
 | mkdirat01 |  |  |
-| mkdirat02 |  |  |
+| mkdirat02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | mkfs01.sh |  |  |
 | mknod01 |  |  |
-| mknod02 |  |  |
+| mknod02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | mknod03 |  |  |
 | mknod04 |  |  |
 | mknod05 |  |  |
 | mknod06 |  |  |
 | mknod07 |  |  |
 | mknod08 |  |  |
-| mknod09 |  |  |
+| mknod09 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | mknodat01 |  |  |
 | mknodat02 |  |  |
 | mkswap01.sh |  |  |
@@ -1292,26 +1292,26 @@
 | mmap-corruption01 |  |  |
 | mmap001 |  |  |
 | mmap01 |  |  |
-| mmap02 |  |  |
+| mmap02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | mmap03 |  |  |
 | mmap04 |  |  |
-| mmap05 |  |  |
-| mmap06 |  |  |
-| mmap08 |  |  |
-| mmap09 |  |  |
+| mmap05 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| mmap06 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| mmap08 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| mmap09 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | mmap1 |  |  |
 | mmap10 |  |  |
 | mmap11 |  |  |
 | mmap12 |  |  |
-| mmap13 |  |  |
+| mmap13 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | mmap14 |  |  |
-| mmap15 |  |  |
+| mmap15 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | mmap16 |  |  |
-| mmap17 |  |  |
+| mmap17 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | mmap18 |  |  |
-| mmap19 |  |  |
+| mmap19 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | mmap2 |  |  |
-| mmap20 |  |  |
+| mmap20 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | mmap3 |  |  |
 | mmapstress01 |  |  |
 | mmapstress02 |  |  |
@@ -1480,16 +1480,16 @@
 | oom03 |  |  |
 | oom04 |  |  |
 | oom05 |  |  |
-| open01 |  |  |
-| open02 |  |  |
-| open03 |  |  |
-| open04 |  |  |
-| open06 |  |  |
-| open07 |  |  |
-| open08 |  |  |
-| open09 |  |  |
-| open10 |  |  |
-| open11 |  |  |
+| open01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| open02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| open03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| open04 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| open06 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| open07 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| open08 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| open09 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| open10 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| open11 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | open12 |  |  |
 | open12_child |  |  |
 | open13 |  |  |
@@ -1498,7 +1498,7 @@
 | open_by_handle_at02 |  |  |
 | open_tree01 |  |  |
 | open_tree02 |  |  |
-| openat01 |  |  |
+| openat01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | openat02 |  |  |
 | openat02_child |  |  |
 | openat03 |  |  |
@@ -1512,8 +1512,8 @@
 | page01 |  |  |
 | page02 |  |  |
 | parameters.sh |  |  |
-| pathconf01 |  |  |
-| pathconf02 |  |  |
+| pathconf01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| pathconf02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | pause01 |  |  |
 | pause02 |  |  |
 | pause03 |  |  |
@@ -1522,8 +1522,8 @@
 | perf_event_open01 |  |  |
 | perf_event_open02 |  |  |
 | perf_event_open03 |  |  |
-| personality01 |  |  |
-| personality02 |  |  |
+| personality01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| personality02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | pidfd_getfd01 |  |  |
 | pidfd_getfd02 |  |  |
 | pidfd_open01 |  |  |
@@ -1553,20 +1553,20 @@
 | pids_task2 |  |  |
 | ping01.sh |  |  |
 | ping02.sh |  |  |
-| pipe01 |  |  |
+| pipe01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | pipe02 |  |  |
-| pipe03 |  |  |
+| pipe03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | pipe04 |  |  |
 | pipe05 |  |  |
-| pipe06 |  |  |
+| pipe06 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | pipe07 |  |  |
 | pipe08 |  |  |
 | pipe09 |  |  |
-| pipe10 |  |  |
-| pipe11 |  |  |
-| pipe12 |  |  |
+| pipe10 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| pipe11 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| pipe12 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | pipe13 |  |  |
-| pipe14 |  |  |
+| pipe14 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | pipe15 |  |  |
 | pipe2_01 |  |  |
 | pipe2_02 |  |  |
@@ -1581,14 +1581,14 @@
 | pm_include.sh |  |  |
 | pm_sched_domain.py |  |  |
 | pm_sched_mc.py |  |  |
-| poll01 |  |  |
+| poll01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | poll02 |  |  |
-| posix_fadvise01 |  |  |
-| posix_fadvise01_64 |  |  |
-| posix_fadvise02 |  |  |
-| posix_fadvise02_64 |  |  |
-| posix_fadvise03 |  |  |
-| posix_fadvise03_64 |  |  |
+| posix_fadvise01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| posix_fadvise01_64 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| posix_fadvise02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| posix_fadvise02_64 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| posix_fadvise03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| posix_fadvise03_64 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | posix_fadvise04 |  |  |
 | posix_fadvise04_64 |  |  |
 | ppoll01 |  |  |
@@ -1603,8 +1603,8 @@
 | prctl08 |  |  |
 | prctl09 |  |  |
 | prctl10 |  |  |
-| pread01 |  |  |
-| pread01_64 |  |  |
+| pread01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| pread01_64 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | pread02 |  |  |
 | pread02_64 |  |  |
 | preadv01 |  |  |
@@ -1632,10 +1632,10 @@
 | prot_hsymlinks |  |  |
 | pselect01 |  |  |
 | pselect01_64 |  |  |
-| pselect02 |  |  |
-| pselect02_64 |  |  |
-| pselect03 |  |  |
-| pselect03_64 |  |  |
+| pselect02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| pselect02_64 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| pselect03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| pselect03_64 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | pt_test |  |  |
 | ptem01 |  |  |
 | pth_str01 |  |  |
@@ -1661,8 +1661,8 @@
 | pty05 |  |  |
 | pty06 |  |  |
 | pty07 |  |  |
-| pwrite01 |  |  |
-| pwrite01_64 |  |  |
+| pwrite01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| pwrite01_64 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | pwrite02 |  |  |
 | pwrite02_64 |  |  |
 | pwrite03 |  |  |
@@ -1690,21 +1690,21 @@
 | quotactl08 |  |  |
 | quotactl09 |  |  |
 | rcu_torture.sh |  |  |
-| read01 |  |  |
-| read02 |  |  |
-| read03 |  |  |
-| read04 |  |  |
+| read01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| read02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| read03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| read04 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | read_all |  |  |
 | readahead01 |  |  |
 | readahead02 |  |  |
 | readdir01 |  |  |
 | readdir21 |  |  |
-| readlink01 |  |  |
-| readlink03 |  |  |
+| readlink01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| readlink03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | readlinkat01 |  |  |
-| readlinkat02 |  |  |
-| readv01 |  |  |
-| readv02 |  |  |
+| readlinkat02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| readv01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| readv02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | realpath01 |  |  |
 | reboot01 |  |  |
 | reboot02 |  |  |
@@ -1740,9 +1740,9 @@
 | request_key03 |  |  |
 | request_key04 |  |  |
 | request_key05 |  |  |
-| rmdir01 |  |  |
-| rmdir02 |  |  |
-| rmdir03 |  |  |
+| rmdir01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| rmdir02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| rmdir03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | route-change-dst.sh |  |  |
 | route-change-gw.sh |  |  |
 | route-change-if.sh |  |  |
@@ -1826,9 +1826,9 @@
 | sctp_big_chunk |  |  |
 | sctp_ipsec.sh |  |  |
 | sctp_ipsec_vti.sh |  |  |
-| select01 |  |  |
+| select01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | select02 |  |  |
-| select03 |  |  |
+| select03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | select04 |  |  |
 | sem_comm |  |  |
 | sem_nstest |  |  |
@@ -1885,31 +1885,31 @@
 | set_mempolicy05 |  |  |
 | set_robust_list01 |  |  |
 | set_thread_area01 |  |  |
-| set_tid_address01 |  |  |
+| set_tid_address01 | SKIP | 2026-05-26 四组合开关未运行 |
 | setdomainname01 |  |  |
 | setdomainname02 |  |  |
 | setdomainname03 |  |  |
-| setegid01 |  |  |
-| setegid02 |  |  |
-| setfsgid01 |  |  |
+| setegid01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| setegid02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| setfsgid01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setfsgid01_16 |  |  |
-| setfsgid02 |  |  |
+| setfsgid02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setfsgid02_16 |  |  |
 | setfsgid03 |  |  |
 | setfsgid03_16 |  |  |
-| setfsuid01 |  |  |
+| setfsuid01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setfsuid01_16 |  |  |
 | setfsuid02 |  |  |
 | setfsuid02_16 |  |  |
-| setfsuid03 |  |  |
+| setfsuid03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setfsuid03_16 |  |  |
 | setfsuid04 |  |  |
 | setfsuid04_16 |  |  |
-| setgid01 |  |  |
+| setgid01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setgid01_16 |  |  |
-| setgid02 |  |  |
+| setgid02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setgid02_16 |  |  |
-| setgid03 |  |  |
+| setgid03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setgid03_16 |  |  |
 | setgroups01 |  |  |
 | setgroups01_16 |  |  |
@@ -1930,54 +1930,54 @@
 | setpgid02 |  |  |
 | setpgid03 |  |  |
 | setpgid03_child |  |  |
-| setpgrp01 |  |  |
-| setpgrp02 |  |  |
+| setpgrp01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| setpgrp02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setpriority01 |  |  |
-| setpriority02 |  |  |
-| setregid01 |  |  |
+| setpriority02 | SKIP | 2026-05-26 四组合开关未运行 |
+| setregid01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setregid01_16 |  |  |
-| setregid02 |  |  |
+| setregid02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setregid02_16 |  |  |
-| setregid03 |  |  |
+| setregid03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setregid03_16 |  |  |
-| setregid04 |  |  |
+| setregid04 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setregid04_16 |  |  |
-| setresgid01 |  |  |
+| setresgid01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setresgid01_16 |  |  |
-| setresgid02 |  |  |
+| setresgid02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setresgid02_16 |  |  |
-| setresgid03 |  |  |
+| setresgid03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setresgid03_16 |  |  |
-| setresgid04 |  |  |
+| setresgid04 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setresgid04_16 |  |  |
-| setresuid01 |  |  |
+| setresuid01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setresuid01_16 |  |  |
-| setresuid02 |  |  |
+| setresuid02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setresuid02_16 |  |  |
-| setresuid03 |  |  |
+| setresuid03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setresuid03_16 |  |  |
-| setresuid04 |  |  |
+| setresuid04 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setresuid04_16 |  |  |
-| setresuid05 |  |  |
+| setresuid05 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setresuid05_16 |  |  |
-| setreuid01 |  |  |
+| setreuid01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setreuid01_16 |  |  |
-| setreuid02 |  |  |
+| setreuid02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setreuid02_16 |  |  |
-| setreuid03 |  |  |
+| setreuid03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setreuid03_16 |  |  |
-| setreuid04 |  |  |
+| setreuid04 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setreuid04_16 |  |  |
-| setreuid05 |  |  |
+| setreuid05 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setreuid05_16 |  |  |
-| setreuid06 |  |  |
+| setreuid06 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setreuid06_16 |  |  |
-| setreuid07 |  |  |
+| setreuid07 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setreuid07_16 |  |  |
 | setrlimit01 |  |  |
 | setrlimit02 |  |  |
 | setrlimit03 |  |  |
-| setrlimit04 |  |  |
+| setrlimit04 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setrlimit05 |  |  |
 | setrlimit06 |  |  |
 | setsid01 |  |  |
@@ -1993,9 +1993,9 @@
 | setsockopt10 |  |  |
 | settimeofday01 |  |  |
 | settimeofday02 |  |  |
-| setuid01 |  |  |
+| setuid01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setuid01_16 |  |  |
-| setuid03 |  |  |
+| setuid03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | setuid03_16 |  |  |
 | setuid04 |  |  |
 | setuid04_16 |  |  |
@@ -2006,21 +2006,21 @@
 | shell_pipe01.sh |  |  |
 | shm_comm |  |  |
 | shm_test |  |  |
-| shmat01 |  |  |
+| shmat01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | shmat02 |  |  |
-| shmat03 |  |  |
-| shmat04 |  |  |
+| shmat03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| shmat04 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | shmat1 |  |  |
 | shmctl01 |  |  |
-| shmctl02 |  |  |
+| shmctl02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | shmctl03 |  |  |
 | shmctl04 |  |  |
 | shmctl05 |  |  |
 | shmctl06 |  |  |
-| shmctl07 |  |  |
-| shmctl08 |  |  |
-| shmdt01 |  |  |
-| shmdt02 |  |  |
+| shmctl07 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| shmctl08 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| shmdt01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| shmdt02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | shmem_2nstest |  |  |
 | shmget02 |  |  |
 | shmget03 |  |  |
@@ -2044,9 +2044,9 @@
 | sighold02 |  |  |
 | signal01 |  |  |
 | signal02 |  |  |
-| signal03 |  |  |
-| signal04 |  |  |
-| signal05 |  |  |
+| signal03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| signal04 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| signal05 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | signal06 |  |  |
 | signalfd01 |  |  |
 | signalfd4_01 |  |  |
@@ -2075,8 +2075,8 @@
 | smt_smp_enabled.sh |  |  |
 | snd_seq01 |  |  |
 | snd_timer01 |  |  |
-| socket01 |  |  |
-| socket02 |  |  |
+| socket01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| socket02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | socketcall01 |  |  |
 | socketcall02 |  |  |
 | socketcall03 |  |  |
@@ -2089,7 +2089,7 @@
 | splice04 |  |  |
 | splice05 |  |  |
 | splice06 |  |  |
-| splice07 |  |  |
+| splice07 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | splice08 |  |  |
 | splice09 |  |  |
 | squashfs01 |  |  |
@@ -2098,23 +2098,23 @@
 | stack_clash |  |  |
 | stack_space |  |  |
 | starvation |  |  |
-| stat01 |  |  |
-| stat01_64 |  |  |
+| stat01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| stat01_64 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | stat02 |  |  |
 | stat02_64 |  |  |
-| stat03 |  |  |
-| stat03_64 |  |  |
+| stat03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| stat03_64 | SKIP | 2026-05-26 pass4 fail2 |
 | statfs01 |  |  |
 | statfs01_64 |  |  |
-| statfs02 |  |  |
-| statfs02_64 |  |  |
+| statfs02 | SKIP | 2026-05-26 pass3fail3 |
+| statfs02_64 | SKIP | 2026-05-26 pass3fail3 |
 | statfs03 |  |  |
 | statfs03_64 |  |  |
 | statvfs01 |  |  |
 | statvfs02 |  |  |
-| statx01 |  |  |
-| statx02 |  |  |
-| statx03 |  |  |
+| statx01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| statx02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| statx03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | statx04 |  |  |
 | statx05 |  |  |
 | statx06 |  |  |
@@ -2143,15 +2143,15 @@
 | swapon03 |  |  |
 | swapping01 |  |  |
 | symlink01 |  |  |
-| symlink02 |  |  |
-| symlink03 |  |  |
-| symlink04 |  |  |
+| symlink02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| symlink03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| symlink04 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | symlinkat01 |  |  |
 | sync01 |  |  |
 | sync_file_range01 |  |  |
 | sync_file_range02 |  |  |
 | syncfs01 |  |  |
-| syscall01 |  |  |
+| syscall01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | sysconf01 |  |  |
 | sysctl01 |  |  |
 | sysctl01.sh |  |  |
@@ -2544,15 +2544,15 @@
 | thp03 |  |  |
 | thp04 |  |  |
 | time-schedule |  |  |
-| time01 |  |  |
+| time01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | timed_forkbomb |  |  |
 | timens01 |  |  |
 | timer_delete01 |  |  |
 | timer_delete02 |  |  |
 | timer_getoverrun01 |  |  |
 | timer_gettime01 |  |  |
-| timer_settime01 |  |  |
-| timer_settime02 |  |  |
+| timer_settime01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| timer_settime02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | timer_settime03 |  |  |
 | timerfd01 |  |  |
 | timerfd02 |  |  |
@@ -2609,10 +2609,10 @@
 | trace_sched |  |  |
 | tracepath01.sh |  |  |
 | traceroute01.sh |  |  |
-| truncate02 |  |  |
-| truncate02_64 |  |  |
-| truncate03 |  |  |
-| truncate03_64 |  |  |
+| truncate02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| truncate02_64 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| truncate03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| truncate03_64 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | tst_ansi_color.sh |  |  |
 | tst_brk |  |  |
 | tst_brkm |  |  |
@@ -2722,14 +2722,14 @@
 | umount03 |  |  |
 | umount2_01 |  |  |
 | umount2_02 |  |  |
-| uname01 |  |  |
-| uname02 |  |  |
+| uname01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| uname02 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | uname04 |  |  |
-| unlink05 |  |  |
-| unlink07 |  |  |
-| unlink08 |  |  |
-| unlink09 |  |  |
-| unlinkat01 |  |  |
+| unlink05 | SKIP | 2026-05-26 pass |
+| unlink07 | SKIP | 2026-05-26 pass |
+| unlink08 | SKIP | 2026-05-26 pass2fail2 |
+| unlink09 | SKIP | 2026-05-26 pass |
+| unlinkat01 | SKIP | 2026-05-26 passed   7 |
 | unshare01 |  |  |
 | unshare01.sh |  |  |
 | unshare02 |  |  |
@@ -2801,13 +2801,13 @@
 | waitid09 |  |  |
 | waitid10 |  |  |
 | waitid11 |  |  |
-| waitpid01 |  |  |
-| waitpid03 |  |  |
-| waitpid04 |  |  |
-| waitpid06 |  |  |
-| waitpid07 |  |  |
+| waitpid01 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| waitpid03 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| waitpid04 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| waitpid06 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
+| waitpid07 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | waitpid08 |  |  |
-| waitpid09 |  |  |
+| waitpid09 | PASS | 2026-05-26 output_l_20260526-154450_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | waitpid10 |  |  |
 | waitpid11 |  |  |
 | waitpid12 |  |  |
@@ -2826,19 +2826,19 @@
 | wqueue07 |  |  |
 | wqueue08 |  |  |
 | wqueue09 |  |  |
-| write01 |  |  |
-| write02 |  |  |
-| write03 |  |  |
-| write04 |  |  |
-| write05 |  |  |
+| write01 | SKIP | 2026-05-26 完全PASS |
+| write02 | SKIP | 2026-05-26 pass |
+| write03 | SKIP | 2026-05-26 完全PASS |
+| write04 | SKIP | 2026-05-26 四组合开关未运行 |
+| write05 | SKIP | 2026-05-26 passed   3 |
 | write06 |  |  |
 | write_freezing.sh |  |  |
 | writetest |  |  |
 | writev01 |  |  |
 | writev02 |  |  |
 | writev03 |  |  |
-| writev05 |  |  |
-| writev06 |  |  |
+| writev05 | SKIP | 2026-05-26 完全PASS |
+| writev06 | SKIP | 2026-05-26 完全PASS |
 | writev07 |  |  |
 | zram01.sh |  |  |
 | zram02.sh |  |  |

@@ -117,6 +117,7 @@ namespace proc
         _state = UNUSED; // 进程状态初始化为未使用
         _chan = nullptr; // 睡眠等待通道
         _killed = 0;     // 进程终止标志
+        _exiting = false; // 尚未进入退出清理流程
         _xstate = 0;     // 进程退出状态码
 
         // 调度相关字段
@@ -303,6 +304,7 @@ namespace proc
 
     void Pcb::cleanup_ofile()
     {
+        fs::release_posix_record_locks_for_pid(_pid);
         if (_ofile != nullptr)
         {
             if (!is_kernel_mapped_range((uint64)_ofile, sizeof(ofile)))

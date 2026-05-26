@@ -255,8 +255,18 @@ int ext4_bcache_free(struct ext4_bcache *bc, struct ext4_block *b) {
     /*Block should have a valid pointer to ext4_buf.*/
     ext4_assert(buf);
 
-    /*Check if someone don't try free unreferenced block cache.*/
-    ext4_assert(buf->refctr);
+    /*
+     * 上层错误回滚/清理路径可能重复释放同一个 ext4_block 句柄。
+     * refctr 已经为 0 时说明该引用已经归还，继续递减只会下溢并破坏 bcache。
+     * 这里把释放做成幂等操作，同时清空句柄，避免长回归在 iozone 并发读写后
+     * 因旧 lb_id/buf 被二次清理而 panic。
+     */
+    if (!buf->refctr) {
+        b->lb_id = 0;
+        b->buf = nullptr;
+        b->data = nullptr;
+        return EOK;
+    }
 
     /*Just decrease reference counter*/
     ext4_bcache_dec_ref(buf);
@@ -288,7 +298,8 @@ int ext4_bcache_free(struct ext4_bcache *bc, struct ext4_block *b) {
     }
 
     b->lb_id = 0;
-    b->data = 0;
+    b->buf = nullptr;
+    b->data = nullptr;
 
     return EOK;
 }

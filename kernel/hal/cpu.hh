@@ -77,6 +77,9 @@ public:
 
         static void push_intr_off();
         static void pop_intr_off();
+        // 从用户态进入内核时，用户态不可能持有内核自旋锁；
+        // 这里用于清理跨调度残留的关中断嵌套计数，避免污染新的 syscall/trap。
+        void reset_intr_off_depth();
         static void enable_fpu();
 
         // 不用这个，太傻逼了，不如w_csr()，以后再删

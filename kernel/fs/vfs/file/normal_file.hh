@@ -14,12 +14,14 @@ namespace fs
 	protected:
 		// 针对 iozone 这类 1KiB 连续小写场景，维护一段顺序写回缓存，
 		// 将大量小 syscall 聚合成较大的 ext4_fwrite，减少事务/锁开销。
+		// iozone 的 1MiB/1KiB 顺序写场景对 flush 次数非常敏感；
+		// 保持 1MiB 能把单个 worker 的整段小写聚合成一次 ext4 写回。
 		static constexpr size_t k_write_combine_capacity = 1024 * 1024;
 
 		dentry *_den;
 		mutable proc::SleepLock _file_lock; // 文件级睡眠锁，用于防止并发写入竞态
-		// 缓冲区改为按需申请，避免把 normal_file 对象本体膨胀到 1MiB 以上，
-		// 降低打开/关闭普通文件时的堆压力，也避免大对象带来的潜在布局问题。
+		// 缓冲区从全局池借用，避免 normal_file 本体膨胀到 1MiB 以上；
+		// 脏数据写回后立即归还到池中复用，避免长回归里短生命周期文件占满池。
 		uint8 *_write_combine_buffer = nullptr;
 		bool _write_combine_dirty = false;
 		uint64 _write_combine_base = 0;
@@ -27,7 +29,9 @@ namespace fs
 
 		bool ensure_write_combine_buffer_locked();
 		uint64 logical_file_size_locked() const;
+		void refresh_ext4_file_size_locked();
 		void reset_write_combine_locked();
+		void release_clean_write_combine_buffer_locked();
 		int flush_write_combine_locked();
 		int write_direct_locked(const char *kbuf, size_t len, long off, bool upgrade, size_t *written = nullptr);
 		int zero_fill_gap_locked(long target_off);

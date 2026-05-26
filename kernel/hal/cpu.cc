@@ -54,6 +54,12 @@ void Cpu::pop_intr_off()
 		_intr_on();
 }
 
+void Cpu::reset_intr_off_depth()
+{
+	_num_off = 0;
+	_int_ena = 0;
+}
+
 // RISC-V 中类似的操作是使能浮点单元（FPU），通常通过设置 mstatus 寄存器的 FS (Floating-point Status) 位。
 // 例如，可以这样实现：
 

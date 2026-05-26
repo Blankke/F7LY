@@ -605,7 +605,7 @@ namespace shm
 #ifdef RISCV
         flags |= PTE_U; // 用户可访问
 #elif defined(LOONGARCH)
-        flags |= PTE_MAT | PTE_PLV | PTE_D | PTE_P; // 用户可访问
+        flags |= PTE_MAT | PTE_PLV | PTE_P; // 用户可访问，dirty 只授予可写映射
 #endif
 
         // 根据shmflg和权限设置读写权限
@@ -620,6 +620,9 @@ namespace shm
         else
         {
             flags |= PTE_R | PTE_W; // 读写权限
+#ifdef LOONGARCH
+            flags |= PTE_D;
+#endif
         }
 
         // 建立物理内存和虚拟内存的映射 - 使用实际分配的页对齐大小
@@ -904,7 +907,7 @@ namespace shm
 
                 // 权限检查 (SHM_STAT_ANY 不需要权限检查)
                 if (cmd != SHM_STAT_ANY) {
-                    if (!check_segment_read_permission(seg, current_proc->_uid, current_proc->_gid)) {
+                    if (!check_segment_read_permission(seg, current_proc->_euid, current_proc->_egid)) {
                         printfRed("[ShmManager] Read permission denied for shmid=%d\n", 
                                  cmd == SHM_STAT ? it->second.shmid : shmid);
                         return -EACCES;

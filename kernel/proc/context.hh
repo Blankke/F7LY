@@ -70,5 +70,6 @@ namespace proc
         int backing_kind;       // 映射后端类型：普通/文件/共享段
         int backing_shmid;      // 共享段映射时记录真实 shmid，私有映射固定为 -1
         uint64 backing_base;    // 共享段映射时记录原始 attach 基址
+        bool wipe_on_fork;      // MADV_WIPEONFORK：fork 后子进程对应页清零
     };
 }

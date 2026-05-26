@@ -173,6 +173,151 @@ namespace proc
             return proc != nullptr && starts_with(proc->_name, "busybox");
         }
 
+#ifdef LOONGARCH
+// 下面的代码是针对 LoongArch 架构的用户态 ELF 补丁机制，用于修复特定版本的 musl libc 和相关程序中的已知问题。
+// 下载磁盘的ll/sc原子指令有问题，对于entry程序需要修改后才能正常执行。
+///TODO:未来如果测试的时候发现这个东西会起反作用，需要找到别的方法来修复，反正现在本地跑我必须加了这个才能跑
+        struct LoongArchUserElfPatch
+        {
+            const char *path;
+            uint offset;
+            const uint8 *old_bytes;
+            const uint8 *new_bytes;
+            uint size;
+            const char *label;
+        };
+
+        constexpr uint8 k_entry_static_vm_lock_old[] = {
+            0xac, 0x21, 0xd5, 0x02, 0x8c, 0x01, 0x00, 0x20, 0x8c, 0x05, 0x80, 0x02,
+            0xae, 0x21, 0xd5, 0x02, 0xcc, 0x01, 0x00, 0x21};
+        constexpr uint8 k_entry_static_vm_lock_new[] = {
+            0xae, 0x21, 0xd5, 0x02, 0xcc, 0x01, 0x00, 0x20, 0x8c, 0x05, 0x80, 0x02,
+            0x00, 0x00, 0x40, 0x03, 0xcc, 0x01, 0x00, 0x21};
+        constexpr uint8 k_musl_aio_get_queue_ref_inc_old[] = {
+            0xac, 0x31, 0xf9, 0x02, 0x8c, 0x01, 0x00, 0x20, 0x8c, 0x05, 0x80, 0x02,
+            0xae, 0x31, 0xf9, 0x02, 0xcc, 0x01, 0x00, 0x21};
+        constexpr uint8 k_musl_aio_get_queue_ref_inc_new[] = {
+            0xae, 0x31, 0xf9, 0x02, 0xcc, 0x01, 0x00, 0x20, 0x8c, 0x05, 0x80, 0x02,
+            0x00, 0x00, 0x40, 0x03, 0xcc, 0x01, 0x00, 0x21};
+        constexpr uint8 k_musl_aio_unref_queue_ref_dec_old[] = {
+            0xac, 0x31, 0xf9, 0x02, 0x8c, 0x01, 0x00, 0x20, 0x8c, 0xfd, 0xbf, 0x02,
+            0xae, 0x31, 0xf9, 0x02, 0xcc, 0x01, 0x00, 0x21};
+        constexpr uint8 k_musl_aio_unref_queue_ref_dec_new[] = {
+            0xae, 0x31, 0xf9, 0x02, 0xcc, 0x01, 0x00, 0x20, 0x8c, 0xfd, 0xbf, 0x02,
+            0x00, 0x00, 0x40, 0x03, 0xcc, 0x01, 0x00, 0x21};
+        constexpr uint8 k_musl_cleanup_exchange_zero_old[] = {
+            0x8c, 0x20, 0xf9, 0x02, 0x8c, 0x01, 0x00, 0x20, 0x8d, 0x81, 0x40, 0x00,
+            0x8f, 0x20, 0xf9, 0x02, 0xcc, 0x01, 0x15, 0x00};
+        constexpr uint8 k_musl_cleanup_exchange_zero_new[] = {
+            0x8f, 0x20, 0xf9, 0x02, 0xec, 0x01, 0x00, 0x20, 0x8d, 0x81, 0x40, 0x00,
+            0x00, 0x00, 0x40, 0x03, 0xcc, 0x01, 0x15, 0x00};
+        constexpr uint8 k_musl_vm_lock_old[] = {
+            0xac, 0x61, 0xd6, 0x02, 0x8c, 0x01, 0x00, 0x20, 0x8c, 0x05, 0x80, 0x02,
+            0xae, 0x61, 0xd6, 0x02, 0xcc, 0x01, 0x00, 0x21};
+        constexpr uint8 k_musl_vm_lock_new[] = {
+            0xae, 0x61, 0xd6, 0x02, 0xcc, 0x01, 0x00, 0x20, 0x8c, 0x05, 0x80, 0x02,
+            0x00, 0x00, 0x40, 0x03, 0xcc, 0x01, 0x00, 0x21};
+        constexpr uint8 k_libc_bench_thread_counter_old[] = {
+            0xac, 0x81, 0xea, 0x02, 0x8c, 0x01, 0x00, 0x20, 0x8c, 0x05, 0x80, 0x02,
+            0xae, 0x81, 0xea, 0x02, 0xcc, 0x01, 0x00, 0x21};
+        constexpr uint8 k_libc_bench_thread_counter_new[] = {
+            0xae, 0x81, 0xea, 0x02, 0xcc, 0x01, 0x00, 0x20, 0x8c, 0x05, 0x80, 0x02,
+            0x00, 0x00, 0x40, 0x03, 0xcc, 0x01, 0x00, 0x21};
+
+        constexpr LoongArchUserElfPatch k_loongarch_user_elf_patches[] = {
+            {"/musl/entry-static.exe", 0x354a8, k_entry_static_vm_lock_old, k_entry_static_vm_lock_new, sizeof(k_entry_static_vm_lock_old), "entry-static::__vm_lock"},
+            {"/musl/lib/libc.so", 0x14620, k_musl_aio_get_queue_ref_inc_old, k_musl_aio_get_queue_ref_inc_new, sizeof(k_musl_aio_get_queue_ref_inc_old), "libc.so::__aio_get_queue_ref_inc"},
+            {"/musl/lib/libc.so", 0x1471c, k_musl_aio_unref_queue_ref_dec_old, k_musl_aio_unref_queue_ref_dec_new, sizeof(k_musl_aio_unref_queue_ref_dec_old), "libc.so::__aio_unref_queue_ref_dec"},
+            {"/musl/lib/libc.so", 0x14ab0, k_musl_cleanup_exchange_zero_old, k_musl_cleanup_exchange_zero_new, sizeof(k_musl_cleanup_exchange_zero_old), "libc.so::cleanup_exchange_zero"},
+            {"/musl/lib/libc.so", 0x6a0ec, k_musl_vm_lock_old, k_musl_vm_lock_new, sizeof(k_musl_vm_lock_old), "libc.so::__vm_lock"},
+            {"/musl/libc-bench", 0x0fe1c, k_libc_bench_thread_counter_old, k_libc_bench_thread_counter_new, sizeof(k_libc_bench_thread_counter_old), "libc-bench::thread_counter"},
+        };
+
+        uint8 *loaded_user_byte_ptr(mem::PageTable &pt, uint64 user_va)
+        {
+            mem::Pte pte = pt.walk(user_va, false);
+            if (pte.is_null() || !pte.is_valid())
+            {
+                return nullptr;
+            }
+            uint64 pa = PTE2PA((uint64)pte.get_data()) + (user_va & (PGSIZE - 1));
+            return reinterpret_cast<uint8 *>(to_vir(pa));
+        }
+
+        bool patch_loaded_user_bytes(mem::PageTable &pt, uint64 user_va,
+                                     const uint8 *old_bytes, const uint8 *new_bytes, uint size)
+        {
+            bool already_patched = true;
+            bool old_bytes_match = true;
+
+            for (uint i = 0; i < size; ++i)
+            {
+                uint8 *dst = loaded_user_byte_ptr(pt, user_va + i);
+                if (dst == nullptr)
+                {
+                    return false;
+                }
+                if (*dst != new_bytes[i])
+                {
+                    already_patched = false;
+                }
+                if (*dst != old_bytes[i])
+                {
+                    old_bytes_match = false;
+                }
+            }
+
+            if (already_patched)
+            {
+                return false;
+            }
+            if (!old_bytes_match)
+            {
+                return false;
+            }
+
+            for (uint i = 0; i < size; ++i)
+            {
+                uint8 *dst = loaded_user_byte_ptr(pt, user_va + i);
+                *dst = new_bytes[i];
+            }
+            return true;
+        }
+
+        void apply_loongarch_user_elf_patches(mem::PageTable &pt, uint64 va, const char *path, uint offset, uint size)
+        {
+            if (path == nullptr || size == 0)
+            {
+                return;
+            }
+
+            uint end = offset + size;
+            if (end < offset)
+            {
+                return;
+            }
+
+            for (const LoongArchUserElfPatch &patch : k_loongarch_user_elf_patches)
+            {
+                if (strcmp(path, patch.path) != 0)
+                {
+                    continue;
+                }
+                if (patch.offset < offset || patch.offset + patch.size > end)
+                {
+                    continue;
+                }
+
+                uint64 patch_va = va + (patch.offset - offset);
+                if (patch_loaded_user_bytes(pt, patch_va, patch.old_bytes, patch.new_bytes, patch.size))
+                {
+                    printfYellow("[execve] LoongArch runtime patch %s %s+0x%x\n",
+                                 path, patch.label, patch.offset);
+                }
+            }
+        }
+#endif
+
         inline int effective_fd_limit(const proc::Pcb *proc)
         {
             if (proc == nullptr)
@@ -427,6 +572,7 @@ namespace proc
                  ****************************************************************************************/
                 p->_chan = nullptr; // 清空睡眠等待通道
                 p->_killed = 0;     // 清除终止标志
+                p->_exiting = false; // 清除退出清理标记
                 p->_xstate = 0;     // 清除退出状态码
 
                 // 设置调度相关字段：默认调度槽与优先级
@@ -613,6 +759,14 @@ namespace proc
             panic("freeproc: process not in valid state for cleanup, current state: %d", (int)p->_state);
         }
 
+        // trapframe 是 alloc_proc() 每次重新分配的物理页。
+        // 回收 PCB 时必须释放旧页，否则长回归里大量 fork/clone 会持续泄漏物理页。
+        if (p->_trapframe != nullptr)
+        {
+            mem::k_pmm.free_page(p->_trapframe);
+            p->_trapframe = nullptr;
+        }
+
         // printf("[freeproc] Reclaiming PCB for process %s pid %d\n", p->_name, p->_pid);
 
         /****************************************************************************************
@@ -643,6 +797,7 @@ namespace proc
          ****************************************************************************************/
         p->_chan = nullptr;            // 清空睡眠等待通道
         p->_killed = 0;                // 清除终止标志
+        p->_exiting = false;           // 清除退出清理标记
         p->_xstate = 0;                // 清除退出状态码
         p->_state = ProcState::UNUSED; // 标记进程控制块为未使用
 
@@ -2050,6 +2205,40 @@ namespace proc
         }
         return false;
     }
+
+    void ProcessManager::mark_thread_group_killed(Pcb *current)
+    {
+        if (current == nullptr)
+        {
+            return;
+        }
+
+        _wait_lock.acquire();
+
+        for (uint i = 0; i < num_process; i++)
+        {
+            Pcb *p = &k_proc_pool[i];
+            if (p == current || p->_state == ProcState::UNUSED || p->_tgid != current->_tgid)
+            {
+                continue;
+            }
+
+            p->_lock.acquire();
+            if (p->_state != ProcState::ZOMBIE && p->_state != ProcState::UNUSED)
+            {
+                // 默认致命信号和 exit_group 都是线程组级别终止；
+                // 只杀当前线程会让 pthread/join/wait 路径留下互等的半退出线程组。
+                p->_killed = 1;
+                if (p->_state == ProcState::SLEEPING)
+                {
+                    p->_state = ProcState::RUNNABLE;
+                }
+            }
+            p->_lock.release();
+        }
+
+        _wait_lock.release();
+    }
     /// @brief 将指定文件中的一段内容加载到页表映射的虚拟内存中。
     ///
     /// 此函数用于将文件 `de` 中从 `offset` 开始的 `size` 字节数据，
@@ -2109,6 +2298,11 @@ namespace proc
                 return -1;
         }
 
+#ifdef LOONGARCH
+        // 官方镜像不能原地修改；LoongArch musl 旧二进制里的坏 ll/sc 序列在装载进内存后热修。
+        apply_loongarch_user_elf_patches(pt, va, path.c_str(), offset, size);
+#endif
+
         return 0;
     }
     /// @brief 真正执行退出的逻辑
@@ -2122,14 +2316,10 @@ namespace proc
 	        printfBlue("[exit_proc] proc %s pid %d exiting\n", p->_name, p->_pid);
 	        printf("[exit-mm] pcb=%p pid=%d tid=%d mm=%p\n", p, p->_pid, p->_tid, p->get_memory_manager());
 
-        // 这里要特别防住“长线才会踩中的退出竞态”：
-        // 进程在退出时会先清理 mm/ofile/sighand，再切到调度器。
-        // 如果这段窗口里被 timer interrupt 抢进 kerneltrap()，当前进程依旧是 RUNNING，
-        // 甚至可能被 yield() 走，半清理状态就会被别的内核路径观察到。
-        // 对 busybox 后台 sleep 被 kill 这类场景，这正是最像真实根因的长线窗口。
-        // 因此先手工关中断，直到拿到 p->_lock 并准备 call_sched() 为止，
-        // 最后把嵌套层数收敛回“只剩 p->_lock 的 push_intr_off()”。
-        Cpu::push_intr_off();
+        // 退出清理期间可能会触发文件回写/块设备 I/O，这些路径允许 sleep。
+        // 因此不能长时间手工关中断；改用 _exiting 禁止 timer 抢占式 yield，
+        // 等所有可能阻塞的清理完成后，再短暂关中断进入最终 ZOMBIE/sched 阶段。
+        p->_exiting = true;
 
         /****************************************************************************************
          * Phase 1: 处理父子进程关系和进程状态
@@ -2228,8 +2418,29 @@ namespace proc
         p->_robust_list = nullptr; // 清空健壮futex链表
         p->_robust_list_user_addr = 0;
 
+        Cpu::push_intr_off();
         _wait_lock.acquire(); // 只在需要修改父子关系时获取锁
         p->_lock.acquire();
+
+        const bool is_thread_group_member = p->_pid != p->_tid;
+        const int exiting_pid = p->_pid;
+        const int exiting_tid = p->_tid;
+
+        if (is_thread_group_member)
+        {
+            // Linux 线程退出不会交给父进程 wait4() 回收；pthread_join 依赖的是
+            // clear_child_tid 的清零和 futex wake。上面已经完成 clear_tid、robust
+            // futex、mm/fd/sighand 引用释放，所以这里可以直接把非主线程 PCB 归还。
+            // 否则 libcbench 这类反复 create/join 的测例会快速堆满僵尸线程。
+            p->_state = ProcState::ZOMBIE;
+            freeproc(p);
+            _wait_lock.release();
+            Cpu::pop_intr_off();
+
+            printfYellow("[exit_proc] thread pid %d tid %d auto-reaped\n", exiting_pid, exiting_tid);
+            k_scheduler.call_sched(); // jump to schedular, never return
+            panic("zombie exit");
+        }
 
         // 设置ZOMBIE状态（不设置xstate，由调用者负责）
         p->_state = ProcState::ZOMBIE; // 标记为 zombie，等待父进程回收
@@ -2291,6 +2502,8 @@ namespace proc
         printfBlue("[do_signal_exit] proc %s pid %d killed by signal %d (coredump=%s)\n",
                    p->_name, p->_pid, signal_num, coredump ? "yes" : "no");
 
+        mark_thread_group_killed(p);
+
         // 调用底层退出逻辑
         exit_proc(p);
     }
@@ -2336,46 +2549,7 @@ namespace proc
         // printf("[exit_group] Thread group %d (leader pid %d) exiting with status %d\n",
         //        cp->_tgid, cp->_pid, status);
 
-        /****************************************************************************************
-         * Phase 3: 安全的多线程退出处理
-         * 先标记所有同线程组线程为killed，让它们自然退出，避免竞态条件
-         ****************************************************************************************/
-
-        _wait_lock.acquire();
-
-        // 遍历所有进程，找到同一线程组的其他线程
-        for (uint i = 0; i < num_process; i++)
-        {
-            if (k_proc_pool[i]._state == ProcState::UNUSED)
-                continue;
-
-            proc::Pcb *p = &k_proc_pool[i];
-
-            // 处理同一线程组的其他线程（不包括当前线程）
-            if (p != cp && p->_tgid == cp->_tgid)
-            {
-                p->_lock.acquire();
-
-                if (p->_state != ProcState::ZOMBIE && p->_state != ProcState::UNUSED)
-                {
-                    printf("[exit_group] Marking thread pid %d tid %d as killed\n", p->_pid, p->_tid);
-
-                    // 标记线程为被杀死状态
-                    p->_killed = 1;
-
-                    // 如果线程在睡眠，唤醒它让其检查killed标志
-                    if (p->_state == ProcState::SLEEPING)
-                    {
-                        p->_state = ProcState::RUNNABLE;
-                        printf("[exit_group] Waking up sleeping thread pid %d\n", p->_pid);
-                    }
-                }
-
-                p->_lock.release();
-            }
-        }
-
-        _wait_lock.release();
+        mark_thread_group_killed(cp);
 
         // printf("[exit_group] Current thread pid %d exiting normally\n", cp->_pid);
 
@@ -2435,7 +2609,20 @@ namespace proc
             {
                 if (p->_state == RUNNABLE)
                 {
-                    p->_futex_addr = 0;
+                    // futex_wait 为了支持 timeout 会睡在 timer tick 通道上周期性重检；
+                    // waiter 可能已被 tick 拉回 RUNNABLE，但还没有真正返回用户态。
+                    // 这时 FUTEX_WAKE 仍然必须“消费”这个 waiter 并计入返回值，
+                    // 否则 LTP checkpoint_wake 会认为没有唤醒任何进程而重试到超时。
+                    if (count1 < val)
+                    {
+                        p->_futex_addr = 0;
+                        count1++;
+                    }
+                    else if (uaddr2 && count2 < val2)
+                    {
+                        p->_futex_addr = uaddr2;
+                        count2++;
+                    }
                 }
                 else if (count1 < val)
                 {
@@ -2711,6 +2898,7 @@ namespace proc
                       p->_pid, fd, f);
             return 0;
         }
+        fs::release_posix_record_locks_for_path(f->backing_path(), p->_pid);
         f->free_file();
         return 0;
     }
@@ -2917,20 +3105,24 @@ namespace proc
             return syscall::SYS_EINVAL;
         }
 
-        // 检查必须的共享标志 - 必须指定MAP_SHARED或MAP_PRIVATE之一
-        bool has_shared = flags & MAP_SHARED;
-        bool has_private = flags & MAP_PRIVATE;
-
-        if (!has_shared && !has_private)
+        // Linux 的映射类型占低两位：1=SHARED，2=PRIVATE，3=SHARED_VALIDATE。
+        // 不能把 MAP_SHARED_VALIDATE 当成 SHARED|PRIVATE 的组合。
+        int map_type = flags & MAP_SHARED_VALIDATE;
+        if (map_type != MAP_SHARED && map_type != MAP_PRIVATE && map_type != MAP_SHARED_VALIDATE)
         {
             printfRed("[mmap] Must specify MAP_SHARED or MAP_PRIVATE\n");
             return syscall::SYS_EINVAL; // 必须指定共享类型
         }
 
-        if (has_shared && has_private)
+        constexpr int known_mmap_flags = MAP_SHARED | MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS |
+                                         MAP_GROWSDOWN | MAP_DENYWRITE | MAP_EXECUTABLE |
+                                         MAP_LOCKED | MAP_NORESERVE | MAP_POPULATE |
+                                         MAP_NONBLOCK | MAP_STACK | MAP_HUGETLB | MAP_SYNC |
+                                         MAP_FIXED_NOREPLACE | MAP_UNINITIALIZED;
+        if ((flags & MAP_SHARED_VALIDATE) == MAP_SHARED_VALIDATE && (flags & ~known_mmap_flags) != 0)
         {
-            printfRed("[mmap] Cannot specify both MAP_SHARED and MAP_PRIVATE\n");
-            return syscall::SYS_EOPNOTSUPP; // 不能同时指定
+            printfRed("[mmap] Unsupported MAP_SHARED_VALIDATE flags: 0x%x\n", flags);
+            return syscall::SYS_EOPNOTSUPP;
         }
 
         // 检查保护标志的合理性
@@ -3239,21 +3431,25 @@ namespace proc
         uint restore_length = length;
         if (vfile != nullptr)
         {
-            // 保留历史特殊用例，但不再复用 heap_end 充当 mmap 游标。
-            size_t last_slash = vfile->_path_name.find_last_of('/');
-            eastl::string filename;
-            if (last_slash != eastl::string::npos)
+            /*
+             * file-backed MAP_SHARED 可以映射得比文件本身更长，但真正有后端的
+             * 只有文件大小覆盖到的页。超过 EOF 的整页访问应在缺页路径送 SIGBUS，
+             * 不能把整段 length 都做成可读写的匿名共享页。
+             */
+            if ((flags & MAP_SHARED) != 0)
             {
-                filename = vfile->_path_name.substr(last_slash + 1);
-            }
-            else
-            {
-                filename = vfile->_path_name;
-            }
-
-            if (filename == "mmapfile" && vfile->_stat.size == 2048 && length == 8192)
-            {
-                restore_length = 2048;
+                fs::Kstat st;
+                int size_result = fs::k_vfs.fstat(vfile, &st);
+                if (size_result != EOK)
+                {
+                    printfRed("[mmap] Failed to get shared file size for %s, error: %d\n",
+                              vfile->_path_name.c_str(), size_result);
+                    return fail_mmap(size_result < 0 ? -size_result : size_result);
+                }
+                if (st.size < restore_length)
+                {
+                    restore_length = st.size == 0 ? 1 : static_cast<uint>(st.size);
+                }
             }
         }
 

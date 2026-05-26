@@ -39,7 +39,10 @@ namespace proc
         const char *_debug_name = nullptr;
     };
 
-    constexpr int NVMA = 50; // 每个进程最多的虚拟内存区域数量
+    // pthread/libcbench 会同时保留几十个线程栈；动态链接器、堆、guard page
+    // 和 mprotect 拆分也都会消耗 VMA 槽位。这里保留教学内核的静态数组模型，
+    // 但把容量提升到能覆盖回归压测的规模，避免 pthread_create 因元数据槽位耗尽后卡住 join。
+    constexpr int NVMA = 256; // 每个进程最多的虚拟内存区域数量
 
     // VMA结构体定义（从proc.hh移动过来）
     struct VMA

@@ -54,7 +54,7 @@ namespace proc
     constexpr int lowest_proc_prio = 19;   // 最低优先级对应的 nice 值
     constexpr int highest_proc_prio = -20; // 最高优先级对应的 nice 值
     constexpr uint max_open_files = 128;   // 每个进程最多可以打开的文件数量
-    constexpr uint pid_max = 1000;         // 系统最大PID值
+    constexpr uint pid_max = 4194304;      // Linux 默认级别的 PID 上限，供 /proc/sys/kernel/pid_max 和范围校验使用
     constexpr int k_interval_timer_count = 3; // ITIMER_REAL / ITIMER_VIRTUAL / ITIMER_PROF
     struct ofile
     {
@@ -133,6 +133,7 @@ namespace proc
         enum ProcState _state; // 进程当前状态 (unused, used, sleeping, runnable, running, zombie)
         void *_chan;           // 进程睡眠时等待的通道，指向等待的资源或事件
         int _killed;           // 进程终止标志位，非零表示进程被标记为终止
+        bool _exiting;         // 已进入退出清理流程，禁止 timer 抢占式 yield
         int _xstate;           // 进程退出状态码，供父进程通过wait()系统调用获取
 
         // 调度相关字段

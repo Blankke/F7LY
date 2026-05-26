@@ -129,7 +129,16 @@ namespace proc
         Cpu::get_cpu()->pop_intr_off();
 
         assert(p->_lock.is_held(), "sched: proc lock not held");
-        assert(cpu->get_num_off() == 1, "sched: proc locks");
+        assert(cpu->get_num_off() == 1,
+               "sched: proc locks num_off=%d intr=%d intena=%d pid=%d tid=%d state=%d chan=%p name=%s",
+               cpu->get_num_off(),
+               cpu->get_intr_stat(),
+               cpu->get_int_ena(),
+               p != nullptr ? p->_pid : -1,
+               p != nullptr ? p->_tid : -1,
+               p != nullptr ? (int)p->_state : -1,
+               p != nullptr ? p->_chan : nullptr,
+               p != nullptr ? p->_name : "(null)");
         assert(p->_state != ProcState::RUNNING, "sched: proc is running");
         assert(cpu->get_intr_stat() == false, "sched: interruptible");
 
