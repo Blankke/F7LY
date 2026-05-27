@@ -10,10 +10,19 @@ LOONGARCH_SDCARD := $(IMAGE_DIR)/sdcard-la.img
 # ===== 并行编译配置 =====
 # 默认使用所有可用 CPU 核心进行并行编译
 NPROC := $(shell nproc)
-MAKEFLAGS += -j$(NPROC)
+# 交互式 QEMU 运行目标需要独占宿主机 stdin；如果顶层 make 全局强制 -j，
+# GNU make 可能会把配方的标准输入重定向掉，导致 shell 模式下 guest 完全收不到按键。
+# 因此只对纯构建目标启用并行，run/shell/debug 自己在子 make 中显式并行编译。
+PARALLEL_BUILD_GOALS := all build build-la riscv loongarch clean dirs initcode
+ifeq ($(strip $(MAKECMDGOALS)),)
+  MAKEFLAGS += -j$(NPROC)
+else ifneq ($(filter $(PARALLEL_BUILD_GOALS),$(MAKECMDGOALS)),)
+  MAKEFLAGS += -j$(NPROC)
+endif
 
 # ===== 架构选择 =====
 ARCH ?= riscv
+INITCODE_MODE ?= evaluation
 DIS_PRINTF ?= 0
 QEMU_MEM ?= 1G
 QEMU_DEBUG_MEM ?= 1G
@@ -45,6 +54,18 @@ else ifeq ($(ARCH),loongarch)
   QEMU_CMD := qemu-system-loongarch64 -machine virt -cpu la464-loongarch-cpu -drive file=$(LOONGARCH_SDCARD),if=none,format=raw,id=x0
 else
   $(error 不支持的架构: $(ARCH)，请使用 make riscv 或 make loongarch)
+endif
+
+ifeq ($(INITCODE_MODE),shell)
+  OUTPUT_PREFIX := $(OUTPUT_PREFIX)-shell
+  KERNEL_NAME_SUFFIX := -shell
+  # 交互式 shell 必须让 guest 串口直接绑定宿主机 stdio，不能复用回归场景的 nographic/mux 配置。
+  QEMU_CONSOLE_ARGS := -display none -serial stdio -monitor none
+else ifeq ($(INITCODE_MODE),evaluation)
+  KERNEL_NAME_SUFFIX :=
+  QEMU_CONSOLE_ARGS := -nographic
+else
+  $(error 不支持的 INITCODE_MODE=$(INITCODE_MODE)，请使用 evaluation 或 shell)
 endif
 
 ifeq ($(DIS_PRINTF),1)
@@ -139,33 +160,41 @@ DEPS := $(OBJS:.o=.d)
 
 # ===== 输出目标 =====
 ifeq ($(ARCH),riscv)
-  KERNEL_ELF := kernel-rv
-  KERNEL_BIN := kernel-rv.bin
+  KERNEL_ELF := kernel-rv$(KERNEL_NAME_SUFFIX)
+  KERNEL_BIN := kernel-rv$(KERNEL_NAME_SUFFIX).bin
 else ifeq ($(ARCH),loongarch)
-  KERNEL_ELF := kernel-la
-  KERNEL_BIN := kernel-la.bin
+  KERNEL_ELF := kernel-la$(KERNEL_NAME_SUFFIX)
+  KERNEL_BIN := kernel-la$(KERNEL_NAME_SUFFIX).bin
 endif
 
 # ===== initcode 用户进程编译相关 =====
 # 支持 riscv 和 loongarch 架构，自动选择交叉工具链和参数
 
 ifeq ($(ARCH),riscv)
-  INITCODE_SRC := user/app/initcode-rv.cc
+  ifeq ($(INITCODE_MODE),shell)
+    INITCODE_SRC := user/app/shell.cc
+    INITCODE_BIN := user/shell-initcode-rv
+    INITCODE_INCBIN := ../../user/shell-initcode-rv
+  else
+    INITCODE_SRC := user/app/initcode-rv.cc
+    INITCODE_BIN := user/initcode-rv
+    INITCODE_INCBIN := ../../user/initcode-rv
+  endif
   INITCODE_LINK_SCRIPT := user/user-riscv.ld
 else ifeq ($(ARCH),loongarch)
-  INITCODE_SRC := user/app/initcode-la.cc
+  ifeq ($(INITCODE_MODE),shell)
+    INITCODE_SRC := user/app/shell.cc
+    INITCODE_BIN := user/shell-initcode-la
+    INITCODE_INCBIN := ../../user/shell-initcode-la
+  else
+    INITCODE_SRC := user/app/initcode-la.cc
+    INITCODE_BIN := user/initcode-la
+    INITCODE_INCBIN := ../../user/initcode-la
+  endif
   INITCODE_LINK_SCRIPT := user/user-loongarch.ld
 endif
 INITCODE_OBJ := build/$(OUTPUT_PREFIX)/initcode.o
 INITCODE_ELF := build/$(OUTPUT_PREFIX)/initcode.elf
-
-
-# 根据架构选择不同的输出文件名
-ifeq ($(ARCH),riscv)
-  INITCODE_BIN := user/initcode-rv
-else ifeq ($(ARCH),loongarch)
-  INITCODE_BIN := user/initcode-la
-endif
 
 # 新增 syscall 编译规则
 SYSCALL_SRC := user/syscall_lib/syscall.cc
@@ -181,16 +210,22 @@ USER_TEST_SRC := user/user_lib/user_test.cc
 USER_TEST_OBJ := build/$(OUTPUT_PREFIX)/user_test.o
 IOZONE_RESEARCH_SRC := user/research/iozone/iozone_research.cc
 IOZONE_RESEARCH_OBJ := build/$(OUTPUT_PREFIX)/iozone_research.o
+ifeq ($(INITCODE_MODE),evaluation)
+  INITCODE_EXTRA_OBJS := $(USER_TEST_OBJ) $(IOZONE_RESEARCH_OBJ)
+else
+  INITCODE_EXTRA_OBJS :=
+endif
 
 # 编译参数
 
 INITCODE_CFLAGS := -Wall -O -fno-builtin -fno-exceptions -fno-rtti -fno-stack-protector -nostdlib -ffreestanding $(ARCH_CFLAGS) -Iuser/deps -Iuser/syscall_lib -Iuser/syscall_lib/arch/$(ARCH) -Ikernel/sys -Ikernel
+CFLAGS += -DINITCODE_BIN_PATH=\"$(INITCODE_INCBIN)\"
 ifeq ($(ARCH),riscv)
 INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dynamic-linker,-T,$(INITCODE_LINK_SCRIPT)
 else ifeq ($(ARCH),loongarch)
 INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dynamic-linker,-T,$(INITCODE_LINK_SCRIPT)
 endif
-.PHONY: all clean dirs build riscv loongarch run debug initcode build-la
+.PHONY: all clean dirs build riscv loongarch run shell debug initcode build-la
 
 
 all: 
@@ -263,7 +298,8 @@ $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a:
 	@$(MAKE) -C $(EASTL_DIR) CROSS_COMPILE=$(CROSS_COMPILE) -j$(NPROC)
 
 
-run: build
+run:
+	@$(MAKE) -j$(NPROC) ARCH=$(ARCH) INITCODE_MODE=$(INITCODE_MODE) build
 	@if [ -f $(ROOTFS_BACKUP) ]; then cp $(ROOTFS_BACKUP) $(INITRD_IMAGE); fi
 ifeq ($(ARCH),riscv)
 	$(MAKE) run-riscv ARCH=$(ARCH)
@@ -273,12 +309,23 @@ else
 	$(error Unsupported ARCH=$(ARCH))
 endif
 
+shell:
+	@$(MAKE) -j$(NPROC) ARCH=$(ARCH) INITCODE_MODE=shell build
+	@if [ -f $(ROOTFS_BACKUP) ]; then cp $(ROOTFS_BACKUP) $(INITRD_IMAGE); fi
+ifeq ($(ARCH),riscv)
+	$(MAKE) ARCH=$(ARCH) INITCODE_MODE=shell run-riscv
+else ifeq ($(ARCH),loongarch)
+	$(MAKE) ARCH=$(ARCH) INITCODE_MODE=shell run-loongarch
+else
+	$(error Unsupported ARCH=$(ARCH))
+endif
+
 run-riscv:
 	qemu-system-riscv64 \
 		-machine virt \
 		-kernel $(KERNEL_ELF) \
 		-m $(QEMU_MEM) \
-		-nographic \
+		$(QEMU_CONSOLE_ARGS) \
 		-smp 1 \
 		-bios default \
 		$(QEMU_SNAPSHOT) \
@@ -296,7 +343,7 @@ run-loongarch:
 	    -machine virt \
 	    -kernel $(KERNEL_ELF) \
 	    -m $(QEMU_MEM) \
-	    -nographic \
+	    $(QEMU_CONSOLE_ARGS) \
 	    -smp 1 \
 		$(QEMU_SNAPSHOT) \
 		-drive file=$(LOONGARCH_SDCARD),if=none,format=raw,id=x0 \
@@ -309,8 +356,8 @@ run-loongarch:
 
 
 
-
-debug: build
+debug:
+	@$(MAKE) -j$(NPROC) ARCH=$(ARCH) INITCODE_MODE=$(INITCODE_MODE) build
 	@if [ "$(ARCH)" = "riscv" ]; then \
 	$(MAKE) debug-riscv ARCH=$(ARCH);\
 	elif [ "$(ARCH)" = "loongarch" ]; then \
@@ -380,8 +427,8 @@ $(IOZONE_RESEARCH_OBJ): $(IOZONE_RESEARCH_SRC)
 	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
 
 # 链接生成 initcode.elf
-$(INITCODE_ELF): $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(USER_TEST_OBJ) $(IOZONE_RESEARCH_OBJ) $(INITCODE_LINK_SCRIPT)
-	$(LD) $(INITCODE_LDFLAGS) -o $@ $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(USER_TEST_OBJ) $(IOZONE_RESEARCH_OBJ)
+$(INITCODE_ELF): $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(INITCODE_EXTRA_OBJS) $(INITCODE_LINK_SCRIPT)
+	$(LD) $(INITCODE_LDFLAGS) -o $@ $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(INITCODE_EXTRA_OBJS)
 
 ifeq ($(ARCH),riscv)
   OBJDUMP_INITCODE := riscv64-unknown-elf-objdump -D -b binary -m riscv:rv64 -EL
@@ -400,8 +447,10 @@ clean:
 	find . -name "*.o" -o -name "*.d" -exec rm -f {} \;
 	$(MAKE) clean -C thirdparty/EASTL
 	rm -f user/initcode-*
+	rm -f user/shell-initcode-*
 	rm -f user/disasm_initcode.asm, kernel.asm
 	rm -f $(KERNEL_ELF) $(KERNEL_BIN)
 	rm -f kernel-la kernel-rv kernel-la.bin kernel-rv.bin
+	rm -f kernel-la-shell kernel-rv-shell kernel-la-shell.bin kernel-rv-shell.bin
 
 -include $(DEPS)

@@ -17,13 +17,25 @@ class Console
         int w_idx;
         int e_idx; // 输入缓冲区中最后一个字符的索引
         UartManager uart;
+        bool _canonical_mode;
+        bool _echo_enabled;
+        bool _map_cr_to_nl;
+        unsigned char _erase_char;
+        unsigned char _kill_char;
+        unsigned char _eof_char;
     public:
         Console();
         void init();
         void console_putc(int c);
         int console_write(uint64 src, int n);
         int console_read(int user_dst, uint64 dst, int n);
+        int console_read_kernel(void *dst, int n);
         int console_intr(int c);
+        int buffered_input_size();
+        void flush_input();
+        void set_line_discipline(bool canonical_mode, bool echo_enabled,
+                                 bool map_cr_to_nl, unsigned char erase_char,
+                                 unsigned char kill_char, unsigned char eof_char);
 };
 
 extern Console kConsole; // 全局控制台对象

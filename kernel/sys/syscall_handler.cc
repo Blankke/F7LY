@@ -63,6 +63,7 @@
 #include "shm/shm_manager.hh"
 #include "devs/loop_device.hh"
 #include "devs/block_device.hh"
+#include "devs/console.hh"
 #include "EASTL/map.h"
 #include "EASTL/vector.h"
 #include "fs/debug.hh"
@@ -100,6 +101,73 @@ namespace syscall
             unsigned char c_cc[19];
         };
         static_assert(sizeof(KernelTermios) == 36, "TCGETS must use Linux kernel termios ABI");
+
+        KernelTermios make_default_console_termios()
+        {
+            KernelTermios ts{};
+            ts.c_iflag = BRKINT | ICRNL | IXON;
+#ifdef IMAXBEL
+            ts.c_iflag |= IMAXBEL;
+#endif
+            ts.c_oflag = OPOST | ONLCR;
+            ts.c_cflag = B38400 | CS8 | CREAD;
+            ts.c_lflag = ISIG | ICANON | ECHO | ECHOE | ECHOK | IEXTEN;
+#ifdef ECHOCTL
+            ts.c_lflag |= ECHOCTL;
+#endif
+#ifdef ECHOKE
+            ts.c_lflag |= ECHOKE;
+#endif
+            ts.c_cc[VINTR] = 3;    // Ctrl-C
+            ts.c_cc[VQUIT] = 28;   // Ctrl-backslash
+            ts.c_cc[VERASE] = 127; // DEL
+            ts.c_cc[VKILL] = 21;   // Ctrl-U
+            ts.c_cc[VEOF] = 4;     // Ctrl-D
+            ts.c_cc[VTIME] = 0;
+            ts.c_cc[VMIN] = 1;
+#ifdef VSTART
+            ts.c_cc[VSTART] = 17; // Ctrl-Q
+#endif
+#ifdef VSTOP
+            ts.c_cc[VSTOP] = 19; // Ctrl-S
+#endif
+#ifdef VSUSP
+            ts.c_cc[VSUSP] = 26; // Ctrl-Z
+#endif
+#ifdef VEOL
+            ts.c_cc[VEOL] = 0;
+#endif
+#ifdef VREPRINT
+            ts.c_cc[VREPRINT] = 18; // Ctrl-R
+#endif
+#ifdef VDISCARD
+            ts.c_cc[VDISCARD] = 15; // Ctrl-O
+#endif
+#ifdef VWERASE
+            ts.c_cc[VWERASE] = 23; // Ctrl-W
+#endif
+#ifdef VLNEXT
+            ts.c_cc[VLNEXT] = 22; // Ctrl-V
+#endif
+#ifdef VEOL2
+            ts.c_cc[VEOL2] = 0;
+#endif
+            return ts;
+        }
+
+        void sync_console_termios_to_line_discipline(const KernelTermios &ts)
+        {
+            dev::kConsole.set_line_discipline((ts.c_lflag & ICANON) != 0,
+                                              (ts.c_lflag & ECHO) != 0,
+                                              (ts.c_iflag & ICRNL) != 0,
+                                              ts.c_cc[VERASE],
+                                              ts.c_cc[VKILL],
+                                              ts.c_cc[VEOF]);
+        }
+
+        // 当前只有一个 console tty，先维护一个全局前台进程组，满足 busybox ash 的作业控制探测。
+        int g_console_foreground_pgrp = 0;
+        KernelTermios g_console_termios = make_default_console_termios();
 
         struct KernelTimeValOld
         {
@@ -3392,7 +3460,7 @@ namespace syscall
         if (cur != nullptr && n != 0 && brk_trace_budget > 0)
         {
             --brk_trace_budget;
-            printf("[sys_brk][trace] proc=%s pid=%d tid=%d req=%p ret=%p heap=[%p,%p)\n",
+            printfYellow("[sys_brk][trace] proc=%s pid=%d tid=%d req=%p ret=%p heap=[%p,%p)\n",
                    cur->_name,
                    cur->_pid,
                    cur->_tid,
@@ -5248,7 +5316,7 @@ namespace syscall
             }
             // TCGETS 使用的是 Linux 内核 UAPI 的 asm-generic termios（36字节），
             // 不能把 libc 的 struct termios（RISC-V glibc 下为60字节）直接回写给用户栈。
-            KernelTermios ts{};
+            KernelTermios ts = g_console_termios;
 
             mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
             if (mem::k_vmm.copy_out(*pt, arg, &ts, sizeof(ts)) < 0)
@@ -5259,18 +5327,116 @@ namespace syscall
             return 0;
         }
 
+        if ((cmd & 0xFFFF) == TCSETS ||
+            (cmd & 0xFFFF) == TCSETSW ||
+            (cmd & 0xFFFF) == TCSETSF)
+        {
+            if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+            {
+                return SYS_ENOTTY;
+            }
+            KernelTermios new_ts{};
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+            if (mem::k_vmm.copy_in(*pt, &new_ts, arg, sizeof(new_ts)) < 0)
+            {
+                printfRed("[SyscallHandler::sys_ioctl] TCSETS copy_in failed\n");
+                return SYS_EFAULT;
+            }
+            // 当前 console 先把 termios 状态保存下来，满足 busybox ash 等交互程序的
+            // raw/cooked 模式切换探测。更完整的 tty line discipline 可以后续继续补，
+            // 但至少不能再把用户态的 termios 视图一直固定成全 0。
+            g_console_termios = new_ts;
+            sync_console_termios_to_line_discipline(g_console_termios);
+            return 0;
+        }
+
         if ((cmd & 0XFFFF) == TIOCGPGRP)
         {
             if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
             {
                 return SYS_ENOTTY;
             }
-            int pgrp = 1;
-            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+            proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+            if (current_proc == nullptr)
+            {
+                return SYS_ESRCH;
+            }
+            int pgrp = g_console_foreground_pgrp;
+            if (pgrp <= 0)
+            {
+                pgrp = current_proc->get_pgid();
+            }
+            if (pgrp <= 0)
+            {
+                pgrp = 1;
+            }
+            mem::PageTable *pt = current_proc->get_pagetable();
             if (mem::k_vmm.copy_out(*pt, arg, &pgrp, sizeof(pgrp)) < 0)
             {
                 printfRed("[SyscallHandler::sys_ioctl] TIOCGPGRP copy_out failed\n");
                 return SYS_EFAULT;
+            }
+            return 0;
+        }
+
+        if ((cmd & 0xFFFF) == TIOCSPGRP)
+        {
+            if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+            {
+                return SYS_ENOTTY;
+            }
+
+            proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+            if (current_proc == nullptr)
+            {
+                return SYS_ESRCH;
+            }
+            int pgrp = 0;
+            mem::PageTable *pt = current_proc->get_pagetable();
+            if (mem::k_vmm.copy_in(*pt, &pgrp, arg, sizeof(pgrp)) < 0)
+            {
+                printfRed("[SyscallHandler::sys_ioctl] TIOCSPGRP copy_in failed\n");
+                return SYS_EFAULT;
+            }
+            if (pgrp <= 0)
+            {
+                return SYS_EINVAL;
+            }
+            g_console_foreground_pgrp = pgrp;
+            return 0;
+        }
+
+        if ((cmd & 0xFFFF) == TIOCGSID)
+        {
+            if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+            {
+                return SYS_ENOTTY;
+            }
+            proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+            if (current_proc == nullptr)
+            {
+                return SYS_ESRCH;
+            }
+            int sid = current_proc->get_sid();
+            mem::PageTable *pt = current_proc->get_pagetable();
+            if (mem::k_vmm.copy_out(*pt, arg, &sid, sizeof(sid)) < 0)
+            {
+                printfRed("[SyscallHandler::sys_ioctl] TIOCGSID copy_out failed\n");
+                return SYS_EFAULT;
+            }
+            return 0;
+        }
+
+        if ((cmd & 0xFFFF) == TIOCSCTTY)
+        {
+            if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+            {
+                return SYS_ENOTTY;
+            }
+            proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+            if (current_proc != nullptr && g_console_foreground_pgrp <= 0)
+            {
+                g_console_foreground_pgrp = current_proc->get_pgid();
             }
             return 0;
         }

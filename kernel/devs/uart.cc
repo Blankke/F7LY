@@ -157,7 +157,6 @@ namespace dev
 			
 			// 从硬件读取字符
 			u8 c = _read_reg(UartReg::RHR);
-			
 			// 放入读缓冲区
 			if (!_read_buffer_full()) {
 				_read_buffer_put(c);

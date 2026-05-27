@@ -2314,7 +2314,7 @@ namespace proc
             panic("init exiting"); // 保护机制：init 进程不能退出
 
 	        printfBlue("[exit_proc] proc %s pid %d exiting\n", p->_name, p->_pid);
-	        printf("[exit-mm] pcb=%p pid=%d tid=%d mm=%p\n", p, p->_pid, p->_tid, p->get_memory_manager());
+	        printfYellow("[exit-mm] pcb=%p pid=%d tid=%d mm=%p\n", p, p->_pid, p->_tid, p->get_memory_manager());
 
         // 退出清理期间可能会触发文件回写/块设备 I/O，这些路径允许 sleep。
         // 因此不能长时间手工关中断；改用 _exiting 禁止 timer 抢占式 yield，

@@ -53,4 +53,32 @@ namespace dev
 		return 0;
 	}
 
+	int StreamDevice::get_input_buffer_size()
+	{
+		if ( _stream != nullptr )
+			return _stream->get_input_buffer_size();
+		return 0;
+	}
+
+	int StreamDevice::get_output_buffer_size()
+	{
+		if ( _stream != nullptr )
+			return _stream->get_output_buffer_size();
+		return 0;
+	}
+
+	int StreamDevice::flush_buffer(int queue)
+	{
+		if ( _stream != nullptr )
+			return _stream->flush_buffer(queue);
+		return 0;
+	}
+
+	int StreamDevice::get_line_status()
+	{
+		if ( _stream != nullptr )
+			return _stream->get_line_status();
+		return 0x01;
+	}
+
 } // namespace dev

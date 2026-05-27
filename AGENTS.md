@@ -80,3 +80,7 @@ F7LY OS 是一个基于 xv6 思路扩展的教学/比赛用内核。主线目标
 - 维护 LTP 默认回归清单时，统一使用 `ltp_testcase` 表项中的四组合开关
   `{测例名, RV+musl, RV+glibc, LA+musl, LA+glibc}` 控制是否运行；不要在表外新增隐藏黑名单函数。
   若某组合暂不运行，直接把对应开关置为 `false`，并在该表项注释中写清原因和覆盖关系。
+
+# 测例入口
+sdcard下载地址为https://github.com/oscomp/testsuits-for-oskernel/releases/download/pre-20250615/sdcard-la.img.xz
+若认为本地磁盘运行的行为与远端评测机不符，请重新下载并使用该镜像进行测试。注意解压后镜像文件较大，所以请不要经常做此操作，仓库中请只保留一份位于images文件下

@@ -21,6 +21,7 @@ sdcard-rv-final.img
 sdcard-la-final.img
 user/disasm_initcode.asm
 user/initcode-rv
+user/shell-initcode-*
 output.txt
 out.txt
 disasm_busybox.asm
@@ -46,6 +47,8 @@ sdcard-la-onsite.img
 sdcard-rv-onsite.img
 kernel-rv
 kernel-la
+kernel-rv-shell
+kernel-la-shell
 output-more.txt
 output*.txt
 output

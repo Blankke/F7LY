@@ -32,20 +32,20 @@ namespace dev
 		
 		/// @brief 获取输入缓冲区中的字节数
 		/// @return 输入缓冲区字节数，失败返回-1
-		virtual int get_input_buffer_size() { return 0; } // 默认实现返回0
+		virtual int get_input_buffer_size() override;
 		
 		/// @brief 获取输出缓冲区中的字节数  
 		/// @return 输出缓冲区字节数，失败返回-1
-		virtual int get_output_buffer_size() { return 0; } // 默认实现返回0
+		virtual int get_output_buffer_size() override;
 		
 		/// @brief 刷新指定的缓冲区
 		/// @param queue 缓冲区类型 (TCIFLUSH/TCOFLUSH/TCIOFLUSH)
 		/// @return 成功返回0，失败返回-1
-		virtual int flush_buffer(int queue) { return 0; } // 默认实现返回成功
+		virtual int flush_buffer(int queue) override;
 		
 		/// @brief 获取线路状态寄存器
 		/// @return LSR状态，失败返回-1
-		virtual int get_line_status() { return 0x01; } // 默认返回 TIOCSER_TEMT
+		virtual int get_line_status() override;
 
 	public:
 		int redirect_stream( CharDevice * dev );
