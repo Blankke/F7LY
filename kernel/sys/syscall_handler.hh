@@ -176,6 +176,9 @@ namespace syscall
         uint64 sys_getsockopt();
         uint64 sys_shutdown_socket();
         uint64 sys_sendmsg();
+        uint64 sys_sendmmsg();
+        uint64 sys_recvmmsg();
+        uint64 sys_recvmmsg_time64();
         uint64 sys_mprotect();
         uint64 sys_membarrier();
         uint64 sys_clone3();

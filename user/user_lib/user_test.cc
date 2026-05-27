@@ -466,6 +466,41 @@ int network_ltp_socket_subset(void)
     return fail_count == 0 ? 0 : -1;
 }
 
+int network_ltp_socket_abi_subset(void)
+{
+    static const char *const socket_abi_cases[] = {
+        "recv01",
+        "send01",
+        "getsockname01",
+        "getsockopt01",
+        "setsockopt01",
+        "sockioctl01",
+        "socketpair01",
+        NULL,
+    };
+
+    printf("#### NETWORK LTP SOCKET ABI SUBSET START ####\n");
+    init_env("/musl/");
+    int fail_count = ltp_subset_test(true, socket_abi_cases);
+    printf("#### NETWORK LTP SOCKET ABI SUBSET END fail=%d ####\n", fail_count);
+    return fail_count == 0 ? 0 : -1;
+}
+
+int network_ltp_socket_batch_subset(void)
+{
+    static const char *const socket_batch_cases[] = {
+        "sendmmsg01",
+        "send02",
+        NULL,
+    };
+
+    printf("#### NETWORK LTP SOCKET BATCH SUBSET START ####\n");
+    init_env("/musl/");
+    int fail_count = ltp_subset_test(true, socket_batch_cases);
+    printf("#### NETWORK LTP SOCKET BATCH SUBSET END fail=%d ####\n", fail_count);
+    return fail_count == 0 ? 0 : -1;
+}
+
 int busybox_test(const char *path = musl_dir)
 {
     if (change_dir_checked(path) != 0)
