@@ -59,8 +59,8 @@ endif
 ifeq ($(INITCODE_MODE),shell)
   OUTPUT_PREFIX := $(OUTPUT_PREFIX)-shell
   KERNEL_NAME_SUFFIX := -shell
-  # 交互式 shell 必须让 guest 串口直接绑定宿主机 stdio，不能复用回归场景的 nographic/mux 配置。
-  QEMU_CONSOLE_ARGS := -display none -serial stdio -monitor none
+  # shell 模式下关闭 stdio 的宿主信号截获，让 Ctrl-C 进入 guest tty，而不是直接杀掉 QEMU。
+  QEMU_CONSOLE_ARGS := -display none -chardev stdio,id=shell_stdio,signal=off -serial chardev:shell_stdio -monitor none
 else ifeq ($(INITCODE_MODE),evaluation)
   KERNEL_NAME_SUFFIX :=
   QEMU_CONSOLE_ARGS := -nographic
@@ -145,8 +145,10 @@ SRCS += $(shell find $(KERNEL_DIR)/fs/drivers/$(ARCH) -type f \
 SRCS += $(shell find $(KERNEL_DIR)/net -type f \
         \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
 
+ifeq ($(VERBOSE_SRCS),1)
 $(info === SRCS collected ===)
 $(info $(SRCS))
+endif
 
 OBJS := $(patsubst $(KERNEL_DIR)/%.c,   $(BUILD_DIR)/%.o, $(filter %.c,   $(SRCS)))
 OBJS += $(patsubst $(KERNEL_DIR)/%.cc,  $(BUILD_DIR)/%.o, $(filter %.cc,  $(SRCS)))

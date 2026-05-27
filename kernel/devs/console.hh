@@ -20,9 +20,12 @@ class Console
         bool _canonical_mode;
         bool _echo_enabled;
         bool _map_cr_to_nl;
+        bool _signal_enabled;
         unsigned char _erase_char;
         unsigned char _kill_char;
         unsigned char _eof_char;
+        unsigned char _intr_char;
+        int _foreground_pgrp;
     public:
         Console();
         void init();
@@ -35,7 +38,10 @@ class Console
         void flush_input();
         void set_line_discipline(bool canonical_mode, bool echo_enabled,
                                  bool map_cr_to_nl, unsigned char erase_char,
-                                 unsigned char kill_char, unsigned char eof_char);
+                                 unsigned char kill_char, unsigned char eof_char,
+                                 bool signal_enabled, unsigned char intr_char);
+        void set_foreground_pgrp(int pgrp);
+        int foreground_pgrp();
 };
 
 extern Console kConsole; // 全局控制台对象
