@@ -22,7 +22,7 @@ namespace dev
 	public:
 		UartManager() {}
 		UartManager(uint64 reg_base) : _uart_base((u64)reg_base) {}
-		virtual bool read_ready() override { return !_read_buffer_empty(); }
+		virtual bool read_ready() override { return !_read_buffer_empty() || (read_lsr() & UartLSR::rx_ready) != 0; }
 		virtual bool write_ready() override { return !_read_buffer_full(); }
 
 		void init(uint64 u_addr);

@@ -1,5 +1,9 @@
 .globl initcode_start, initcode_end
 
+#ifndef INITCODE_BIN_PATH
+#define INITCODE_BIN_PATH "../../user/initcode-rv"
+#endif
+
 initcode_start:
-.incbin "../../user/initcode-rv"
+.incbin INITCODE_BIN_PATH
 initcode_end:

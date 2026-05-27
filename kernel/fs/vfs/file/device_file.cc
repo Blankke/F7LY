@@ -42,30 +42,14 @@ namespace fs
 			return -1;
 		}
 
-		// 为设备读取分配内核缓冲区
-		char *k_buf = (char *)mem::k_pmm.kmalloc(len);
-		if (!k_buf) {
-			printfRed("device_file::read: failed to allocate kernel buffer\n");
-			return -ENOMEM;
-		}
-
-		// 从设备读取数据
-		ret = stream_device->read(k_buf, len);
+		// VFS 层的 read() 约定和普通文件一致：buf 指向的是内核临时缓冲区，
+		// 最终再由 syscall 层统一 copy_out 到用户地址。设备文件这里不能再
+		// 把它误当成用户地址二次 copy_out，否则 stdin 一有数据就会返回 -EFAULT。
+		ret = stream_device->read(reinterpret_cast<void *>(buf), len);
 		if (ret < 0) {
 			printfRed("device_file::read: device read failed with error %d\n", ret);
-			mem::k_pmm.free_page(k_buf);
 			return ret;
 		}
-
-		// 将数据复制到用户空间
-		proc::Pcb *p = proc::k_pm.get_cur_pcb();
-		if (mem::k_vmm.copy_out(*p->get_pagetable(), buf, k_buf, ret) < 0) {
-			printfRed("device_file::read: failed to copy data to user space\n");
-			mem::k_pmm.free_page(k_buf);
-			return -EFAULT;
-		}
-
-		mem::k_pmm.free_page(k_buf);
 
 		/// @note 对于设备文件，根据upgrade参数决定是否更新文件指针
 		if ( ret >= 0 && upgrade )

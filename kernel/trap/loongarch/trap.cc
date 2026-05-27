@@ -273,7 +273,6 @@ void trap_manager::inithart()
 // 处理外部中断和软件中断
 int trap_manager::devintr()
 {
-  static bool uart_irq_warned = false;
   static bool pcie_irq_warned = false;
 
   uint32 estat = r_csr_estat();
@@ -298,17 +297,18 @@ int trap_manager::devintr()
     uint64 irq = extioi_claim();
     // printf("%d\n", irq);
     // 处理串口中断
+    uint64 handled_irq_mask = 0;
     if (irq & (1UL << UART0_IRQ))
     {
-      if (!uart_irq_warned)
-      {
-        uart_irq_warned = true;
-        printfYellow("[trap] UART0 中断尚未接入驱动，先记录并继续运行\n");
-      }
+      // 交互式 shell/stdin 依赖串口 RX 中断把字符推进 console 行规程；
+      // 这里只做 ack 会导致输出正常、输入永远到不了 kConsole。
+      dev::k_uart.handle_intr();
+      handled_irq_mask |= (1UL << UART0_IRQ);
       apic_complete(1UL << UART0_IRQ);
       extioi_complete(1UL << UART0_IRQ);
     }
-    else if (irq & (1UL << PCIE_IRQ))
+
+    if (irq & (1UL << PCIE_IRQ))
     {
       // TODO
       // intr_stats::k_intr_stats.record_interrupt(PCIE_IRQ);
@@ -318,16 +318,19 @@ int trap_manager::devintr()
         pcie_irq_warned = true;
         printfYellow("[trap] PCIE 中断当前未走内核分发路径，先确认并放行\n");
       }
+      handled_irq_mask |= (1UL << PCIE_IRQ);
       apic_complete(1UL << PCIE_IRQ);
       extioi_complete(1UL << PCIE_IRQ);
       printfYellow("未实现PCIE_IRQ中断处理,不过好像跟riscv不一样，跟蒙老师也不一样，现在好像不用这个\n");
     }
-    else if (irq)
-    {
-      printf("unexpected interrupt irq=%d\n", irq);
 
-      apic_complete(irq);
-      extioi_complete(irq);
+    uint64 remaining_irq = irq & ~handled_irq_mask;
+    if (remaining_irq)
+    {
+      printf("unexpected interrupt irq=%d\n", remaining_irq);
+
+      apic_complete(remaining_irq);
+      extioi_complete(remaining_irq);
     }
 
     return 1;

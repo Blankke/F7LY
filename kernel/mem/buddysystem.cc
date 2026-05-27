@@ -34,7 +34,7 @@ namespace mem
         base_ptr = reinterpret_cast<uint8 *>(baseptr);
         page_count = total_pages ? total_pages : 1;
         printfGreen("[mem] Buddy System Init\n");
-        // printf("[BuddySystem] base_ptr: %p\n", base_ptr);
+        //  printfBlue("[BuddySystem] base_ptr: %p\n", base_ptr);
         tree = base_ptr - BSSIZE * PGSIZE + sizeof(BuddySystem);
         level = 0;
         capacity_pages = NextPowerOfTwo(page_count);
@@ -44,7 +44,7 @@ namespace mem
         int max_nodes = (1 << (level + 1)) - 1;
         int available_bytes = BSSIZE * PGSIZE - sizeof(BuddySystem);
 
-        printf("[BuddySystem] level=%d, max_nodes=%d, available_bytes=%d\n",
+         printfBlue("[BuddySystem] level=%d, max_nodes=%d, available_bytes=%d\n",
                level, max_nodes, available_bytes);
 
         if (max_nodes > available_bytes)
@@ -64,9 +64,9 @@ namespace mem
         uint64 managed_end = managed_start + (static_cast<uint64>(capacity_pages) * PGSIZE);
         uint64 managed_size_mb = (static_cast<uint64>(capacity_pages) * PGSIZE) / (1024 * 1024);
         
-        printf("[BuddySystem] Managed memory region: 0x%lx - 0x%lx (%lu MB, %d pages)\n",
+         printfBlue("[BuddySystem] Managed memory region: 0x%lx - 0x%lx (%lu MB, %d pages)\n",
                managed_start, managed_end, managed_size_mb, page_count);
-        printf("[BuddySystem] Tree structure location: %p (size: %d bytes)\n", 
+         printfBlue("[BuddySystem] Tree structure location: %p (size: %d bytes)\n", 
                tree, max_nodes);
 
         mark_unusable_leaves();

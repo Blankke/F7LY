@@ -5,9 +5,11 @@ extern "C"
     __attribute__((section(".text.startup"))) int main()
     {
         init_env("/musl/");
+        iozone_test("/musl");
+        iozone_test("/glibc");
+        libc_test("/musl/");
         basic_test("/musl/");
         basic_test("/glibc/");
-        libc_test("/musl/");
         lua_test("/musl/");
         lua_test("/glibc/");
         libcbench_test("/musl");
@@ -16,8 +18,6 @@ extern "C"
         ltp_test(false);
         busybox_test("/musl/");
         busybox_test("/glibc/");
-        iozone_test("/musl");
-        iozone_test("/glibc");
         shutdown();
         return 0;
     }

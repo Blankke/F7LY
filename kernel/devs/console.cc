@@ -1,15 +1,23 @@
 #include "console.hh"
+#include "proc_manager.hh"
+#ifdef RISCV
 #include "../mem/memlayout.hh"
 #include "../hal/riscv/sbi.hh"
-#include "printer.hh"
+#endif
 #include "virtual_memory_manager.hh"
-#include "proc_manager.hh"
 namespace dev
 {
   Console kConsole; // 全局控制台对象
 
   Console::Console()
   {
+    r_idx = w_idx = e_idx = 0;
+    _canonical_mode = true;
+    _echo_enabled = true;
+    _map_cr_to_nl = true;
+    _erase_char = 0x7f;
+    _kill_char = CTRL_('U');
+    _eof_char = CTRL_('D');
   }
 
   void Console::init()
@@ -22,142 +30,204 @@ namespace dev
   {
     if (c == BACKSPACE)
     {
-      #ifdef RISCV
+#ifdef RISCV
       sbi_console_putchar('\b');
       sbi_console_putchar(' ');
       sbi_console_putchar('\b');
-      #elif defined(LOONGARCH)
+#elif defined(LOONGARCH)
       uart.put_char_sync('\b');
       uart.put_char_sync(' ');
       uart.put_char_sync('\b');
-      #endif
+#endif
     }
     else if (c == '\n' || c == '\r')
     {
-      #ifdef RISCV
+#ifdef RISCV
       sbi_console_putchar('\n');
-      #elif defined(LOONGARCH)
+#elif defined(LOONGARCH)
       uart.put_char_sync('\n');
-      #endif
+#endif
     }
     else
     {
-      #ifdef RISCV
+#ifdef RISCV
       sbi_console_putchar(c);
-      #elif defined(LOONGARCH)
+#elif defined(LOONGARCH)
       uart.put_char_sync(c);
-      #endif
+#endif
     }
   }
 
   int Console::console_write(uint64 src, int n)
   {
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < n; i++)
+    {
       char c;
-      // either_copyin
       if (mem::k_vmm.copy_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), &c, src + i, 1) == -1)
+      {
         break;
-      #ifdef RISCV
+      }
+#ifdef RISCV
       sbi_console_putchar(c);
-      #elif defined(LOONGARCH)
+#elif defined(LOONGARCH)
       uart.put_char_sync(c);
-      #endif
+#endif
     }
     return 0;
   }
 
   int Console::console_read(int user_dst, uint64 dst, int n)
   {
+    (void)user_dst;
     _lock.acquire();
-    int target = n;
     int copied = 0;
-    
-    // 等待直到有输入或遇到换行符
-    while (copied < target) {
-      // 如果读缓冲区为空且没有数据，等待输入
-      if (r_idx == w_idx) {
-        _lock.release();
-        // TODO: 这里应该等待输入事件，目前先返回已读取的字节数
-        return copied;
-      }
-      
-      char c = input_buf[r_idx % INPUT_BUF_SIZE];
-      r_idx++;
-      
-      // 将字符复制到用户空间
-      if (mem::k_vmm.copy_out(*proc::k_pm.get_cur_pcb()->get_pagetable(), dst + copied, &c, 1) < 0) {
+    while (copied < n && r_idx != w_idx)
+    {
+      char c = input_buf[r_idx++ % INPUT_BUF_SIZE];
+      if (mem::k_vmm.copy_out(*proc::k_pm.get_cur_pcb()->get_pagetable(),
+                              dst + copied, &c, 1) < 0)
+      {
         _lock.release();
         return copied > 0 ? copied : -1;
       }
-      
-      copied++;
-      
-      // 如果遇到换行符，结束读取
-      if (c == '\n') {
+      ++copied;
+      if (_canonical_mode && c == '\n')
+      {
         break;
       }
     }
-    
     _lock.release();
     return copied;
   }
+
+  int Console::console_read_kernel(void *dst, int n)
+  {
+    if (dst == nullptr || n <= 0)
+    {
+      return 0;
+    }
+
+    _lock.acquire();
+    int copied = 0;
+    char *out = reinterpret_cast<char *>(dst);
+    while (copied < n)
+    {
+      if (r_idx == w_idx)
+      {
+        break;
+      }
+
+      char c = input_buf[r_idx % INPUT_BUF_SIZE];
+      r_idx++;
+      out[copied++] = c;
+
+      if (_canonical_mode && c == '\n')
+      {
+        break;
+      }
+    }
+    _lock.release();
+    return copied;
+  }
+
+  int Console::buffered_input_size()
+  {
+    _lock.acquire();
+    int available = w_idx - r_idx;
+    _lock.release();
+    return available;
+  }
+
+  void Console::flush_input()
+  {
+    _lock.acquire();
+    r_idx = w_idx = e_idx = 0;
+    _lock.release();
+  }
+
+  void Console::set_line_discipline(bool canonical_mode, bool echo_enabled,
+                                    bool map_cr_to_nl, unsigned char erase_char,
+                                    unsigned char kill_char, unsigned char eof_char)
+  {
+    _lock.acquire();
+    _canonical_mode = canonical_mode;
+    _echo_enabled = echo_enabled;
+    _map_cr_to_nl = map_cr_to_nl;
+    _erase_char = erase_char;
+    _kill_char = kill_char;
+    _eof_char = eof_char;
+    _lock.release();
+  }
+
   int Console::console_intr(int c)
   {
     // TODO
     _lock.acquire();
 
-    switch (c)
+    if (_map_cr_to_nl && c == '\r')
     {
-    case CTRL_('P'): // Print process list.
-      // TODO:procdump();
-      break;
-    case CTRL_('U'): // Kill line.
-      while (e_idx != w_idx &&
-             input_buf[(e_idx - 1) % INPUT_BUF_SIZE] != '\n')
+      c = '\n';
+    }
+
+    if (_canonical_mode)
+    {
+      switch (c)
       {
-        e_idx--;
-        #ifdef RISCV
-        sbi_console_putchar((u8)BACKSPACE);
-        #elif defined(LOONGARCH)
-        uart.put_char_sync((u8)BACKSPACE);
-        #endif
+      case CTRL_('P'): // Print process list.
+        // TODO:procdump();
+        break;
+      default:
+        if (c == _kill_char)
+        {
+          while (e_idx != w_idx &&
+                 input_buf[(e_idx - 1) % INPUT_BUF_SIZE] != '\n')
+          {
+            e_idx--;
+            if (_echo_enabled)
+            {
+              console_putc(BACKSPACE);
+            }
+          }
+          break;
+        }
+        if (c == CTRL_('H') || c == '\x7f' || c == _erase_char)
+        {
+          if (e_idx != w_idx)
+          {
+            e_idx--;
+          if (_echo_enabled)
+          {
+            console_putc(BACKSPACE);
+            }
+          }
+          break;
+        }
+        if (c != 0 && e_idx - r_idx < INPUT_BUF_SIZE)
+        {
+          if (_echo_enabled)
+          {
+            console_putc(c);
+          }
+          input_buf[e_idx++ % INPUT_BUF_SIZE] = c;
+          if (c == '\n' || c == _eof_char || e_idx - r_idx == INPUT_BUF_SIZE)
+          {
+            w_idx = e_idx;
+          }
+        }
+        break;
       }
-      break;
-    case CTRL_('H'): // Backspace
-    case '\x7f':     // Delete key
-      if (e_idx != w_idx)
-      {
-        e_idx--;
-        #ifdef RISCV
-        sbi_console_putchar((u8)BACKSPACE);
-        #elif defined(LOONGARCH)
-        uart.put_char_sync((u8)BACKSPACE);
-        #endif
-      }
-      break;
-    default:
+    }
+    else
+    {
       if (c != 0 && e_idx - r_idx < INPUT_BUF_SIZE)
       {
-        c = (c == '\r') ? '\n' : c;
-
-        // echo back to the user.
-        #ifdef RISCV
-        sbi_console_putchar(c);
-        #elif defined(LOONGARCH)
-        uart.put_char_sync(c);
-        #endif
-        // store for consumption by consoleread().
-        input_buf[e_idx++ % INPUT_BUF_SIZE] = c;
-
-        if (c == '\n' || c == CTRL_('D') || e_idx - r_idx == INPUT_BUF_SIZE)
+        if (_echo_enabled)
         {
-          // wake up consoleread() if a whole line (or end-of-file)
-          // has arrived.
-          w_idx = e_idx;
-          // wakeup(&r_idx);
+          console_putc(c);
         }
+        input_buf[e_idx++ % INPUT_BUF_SIZE] = c;
+        w_idx = e_idx;
       }
-      break;
     }
 
     _lock.release();

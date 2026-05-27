@@ -18,11 +18,11 @@ namespace dev
 	public:
 		virtual long write( void * src, long n_bytes ) override;
 		virtual long read( void * dst, long n_bytes ) override;
+		virtual int get_input_buffer_size() override;
+		virtual int flush_buffer(int queue) override;
 		virtual bool read_ready() override
 		{
-			if ( _stream == nullptr )
-				return false;
-			return _stream->read_ready();
+			return get_input_buffer_size() > 0;
 		}
 		virtual bool write_ready() override { return false; }
 	};
