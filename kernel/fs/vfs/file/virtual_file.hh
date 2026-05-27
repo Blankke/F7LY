@@ -120,6 +120,7 @@ namespace fs
     {
     public:
         virtual eastl::string generate_content() override;
+        virtual eastl::string read_symlink_target() override;
         virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
             return eastl::make_unique<ProcSelfExeProvider>();
         }

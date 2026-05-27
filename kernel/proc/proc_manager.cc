@@ -1601,6 +1601,7 @@ namespace proc
         // 继承文件系统相关属性
         np->_cwd = p->_cwd;           // 继承当前工作目录
         np->_cwd_name = p->_cwd_name; // 继承当前工作目录名称
+        np->exe = p->exe;             // 继承真实可执行文件路径，保持 /proc/self/exe 语义稳定
         np->_umask = p->_umask;       // 继承文件模式创建掩码
         np->_personality = p->_personality; // 继承 personality，保持与 Linux 一致
 
@@ -4663,17 +4664,25 @@ namespace proc
         char shebang_script_path[MAXPATH] = {0};
         for (;;)
         {
-            if (vfs_is_file_exist(ab_path.c_str()) != 1)
+            eastl::string resolved_exec_path;
+            int resolve_ret = vfs_resolve_path(ab_path, resolved_exec_path);
+            if (resolve_ret < 0)
+            {
+                printfRed("execve: failed to resolve %s, error=%d\n", ab_path.c_str(), resolve_ret);
+                return resolve_ret == -ENOENT ? -ENOENT : resolve_ret;
+            }
+
+            if (vfs_is_file_exist(resolved_exec_path.c_str()) != 1)
             {
                 printfRed("execve: cannot find file");
                 return -ENOENT;
             }
 
             char exec_head[256] = {};
-            int head_len = vfs_read_file(ab_path.c_str(), reinterpret_cast<uint64>(exec_head), 0, sizeof(exec_head) - 1);
+            int head_len = vfs_read_file(resolved_exec_path.c_str(), reinterpret_cast<uint64>(exec_head), 0, sizeof(exec_head) - 1);
             if (head_len < 0)
             {
-                printfRed("execve: failed to read executable header for %s\n", ab_path.c_str());
+                printfRed("execve: failed to read executable header for %s\n", resolved_exec_path.c_str());
                 return -EIO;
             }
 
@@ -4682,6 +4691,7 @@ namespace proc
                 memmove(&elf, exec_head, sizeof(elf));
                 if (elf.magic == elf::elfEnum::ELF_MAGIC)
                 {
+                    ab_path = resolved_exec_path;
                     break;
                 }
             }
@@ -4708,8 +4718,8 @@ namespace proc
                 printfRed("execve: shebang script path too long: %s\n", ab_path.c_str());
                 return -ENAMETOOLONG;
             }
-            safestrcpy(shebang_script_path, ab_path.c_str(), sizeof(shebang_script_path));
-            printfCyan("execve: shebang %s -> %s\n", ab_path.c_str(), shebang_interpreter);
+            safestrcpy(shebang_script_path, resolved_exec_path.c_str(), sizeof(shebang_script_path));
+            printfCyan("execve: shebang %s -> %s\n", resolved_exec_path.c_str(), shebang_interpreter);
             has_shebang = true;
             ab_path = shebang_interpreter;
         }
@@ -5562,6 +5572,7 @@ namespace proc
         // 使用safestrcpy将文件名安全地拷贝到进程名称中
         // 注意：由于Pcb类没有提供set_name()函数，这里直接访问_name成员
         safestrcpy(proc->_name, filename.c_str(), sizeof(proc->_name));
+        proc->exe = ab_path;
 
         // printfGreen("execve: process name set to '%s'\n", proc->get_name());
 

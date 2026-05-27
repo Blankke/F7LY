@@ -4747,8 +4747,12 @@ namespace syscall
         // 特殊路径处理
         if (path == "/proc/self/exe")
         {
-            eastl::string exe_path = proc::k_pm.get_cur_pcb()->_cwd_name + "busybox";
-            char *buffer = (char *)exe_path.c_str();
+            eastl::string exe_path = p->exe;
+            if (exe_path.empty())
+            {
+                return -ENOENT;
+            }
+            const char *buffer = exe_path.c_str();
             ret = exe_path.size();
             if (mem::k_vmm.copy_out(*pt, buf, buffer, ret) < 0)
             {
