@@ -204,9 +204,10 @@ SYSCALL_OBJ := build/$(OUTPUT_PREFIX)/syscall.o
 PRINTF_SRC := user/syscall_lib/printf.cc
 PRINTF_OBJ := build/$(OUTPUT_PREFIX)/printf.o
 
+FUCKYOU_SRC := user/user_lib/fuckyou.cc
+FUCKYOU_OBJ := build/$(OUTPUT_PREFIX)/fuckyou.o
 
-
-USER_TEST_SRC := user/user_lib/user_test.cc
+USER_TEST_SRC := user/user_lib/user_test.cc 
 USER_TEST_OBJ := build/$(OUTPUT_PREFIX)/user_test.o
 IOZONE_RESEARCH_SRC := user/research/iozone/iozone_research.cc
 IOZONE_RESEARCH_OBJ := build/$(OUTPUT_PREFIX)/iozone_research.o
@@ -416,6 +417,11 @@ $(PRINTF_OBJ): $(PRINTF_SRC)
 	@mkdir -p $(dir $@)
 	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
 
+# 编译 fuckyou.o
+$(FUCKYOU_OBJ): $(FUCKYOU_SRC)
+	@mkdir -p $(dir $@)
+	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
+
 # 编译 user_test.o
 $(USER_TEST_OBJ): $(USER_TEST_SRC)
 	@mkdir -p $(dir $@)
@@ -427,8 +433,8 @@ $(IOZONE_RESEARCH_OBJ): $(IOZONE_RESEARCH_SRC)
 	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
 
 # 链接生成 initcode.elf
-$(INITCODE_ELF): $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(INITCODE_EXTRA_OBJS) $(INITCODE_LINK_SCRIPT)
-	$(LD) $(INITCODE_LDFLAGS) -o $@ $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(INITCODE_EXTRA_OBJS)
+$(INITCODE_ELF): $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(FUCKYOU_OBJ) $(INITCODE_EXTRA_OBJS) $(INITCODE_LINK_SCRIPT)
+	$(LD) $(INITCODE_LDFLAGS) -o $@ $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(FUCKYOU_OBJ)	 $(INITCODE_EXTRA_OBJS)
 
 ifeq ($(ARCH),riscv)
   OBJDUMP_INITCODE := riscv64-unknown-elf-objdump -D -b binary -m riscv:rv64 -EL
