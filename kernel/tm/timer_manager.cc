@@ -24,6 +24,14 @@ namespace tmm
 		// 当前工作区里 RISC-V 镜像已经出现 2026-05 的时间戳，因此把 realtime 基准抬到
 		// 2026-07-01 00:00:00 UTC，保证墙钟时间稳定晚于镜像元数据，同时不影响 monotonic 语义。
 		constexpr uint64 k_realtime_epoch_base_sec = 1782864000ULL; // 2026-07-01 00:00:00 UTC
+
+		void cycles_to_timespec(uint64 cycles, uint64 sec_base, timespec *tp)
+		{
+			uint64 freq = tmm::get_main_frequence();
+			tp->tv_sec = (long)(sec_base + cycles / freq);
+			uint64 rest_cyc = cycles % freq;
+			tp->tv_nsec = (long)((rest_cyc * tmm::_1G_dec) / freq);
+		}
 	}
 
 	/// @brief 初始化定时器管理器
@@ -180,33 +188,14 @@ namespace tmm
 			case CLOCK_REALTIME: // 系统实时时钟（墙上时钟时间）
 			case CLOCK_REALTIME_COARSE: // 粗粒度实时时钟
 			{
-				// 获取硬件时间戳并加上tick计数
+				// 硬件计数器本身就是从启动开始单调递增的绝对周期数。
+				// 不能再叠加 ticks * cycles_per_tick，否则 gettimeofday 会约等于双倍走时，
+				// iozone/lmbench 这类用 wall clock 算吞吐的程序会直接偏离基准量级。
 				_lock.acquire();
 				t_val = tmm::get_hw_time_stamp();
-				t_val += trap_mgr.ticks * cpt;
 				_lock.release();
 
-				// 转换为秒和纳秒
-				tp->tv_sec = (long)(k_realtime_epoch_base_sec + (t_val / freq));
-				ulong rest_cyc = t_val % freq;
-
-				// 计算纳秒部分：rest_cyc * 1,000,000,000 / freq
-				const int64 nsec_max = 1000000000L;
-				tp->tv_nsec = (long)((rest_cyc * nsec_max) / freq);
-
-				// 处理纳秒溢出（确保纳秒值在有效范围内）
-				while (tp->tv_nsec >= (long)nsec_max)
-				{
-					tp->tv_sec++;
-					tp->tv_nsec -= (long)nsec_max;
-				}
-				
-				// 处理纳秒为负数的情况
-				while (tp->tv_nsec < 0)
-				{
-					tp->tv_sec--;
-					tp->tv_nsec += nsec_max;
-				}
+				cycles_to_timespec(t_val, k_realtime_epoch_base_sec, tp);
 				break;
 			}
 			
@@ -215,16 +204,12 @@ namespace tmm
 			case CLOCK_MONOTONIC_COARSE: // 粗粒度单调时钟
 			case CLOCK_BOOTTIME: // 启动时间时钟
 			{
-				// 基于系统tick计数获取单调时间
+				// 单调时钟同样直接来自硬件计数器，保留 sub-tick 精度。
 				_lock.acquire();
-				uint64 ticks = trap_mgr.ticks;
+				t_val = tmm::get_hw_time_stamp();
 				_lock.release();
 				
-				uint64 total_cycles = ticks * cpt;
-				tp->tv_sec = (long)(total_cycles / freq);
-				ulong rest_cyc = total_cycles % freq;
-				const int64 nsec_max = 1000000000L;
-				tp->tv_nsec = (long)((rest_cyc * nsec_max) / freq);
+				cycles_to_timespec(t_val, 0, tp);
 				break;
 			}
 			
@@ -263,25 +248,9 @@ namespace tmm
 				// 但需要特殊权限检查（在上层调用中处理）
 				_lock.acquire();
 				t_val = tmm::get_hw_time_stamp();
-				t_val += trap_mgr.ticks * cpt;
 				_lock.release();
 
-				tp->tv_sec = (long)(k_realtime_epoch_base_sec + (t_val / freq));
-				ulong rest_cyc = t_val % freq;
-				const int64 nsec_max = 1000000000L;
-				tp->tv_nsec = (long)((rest_cyc * nsec_max) / freq);
-
-				// 处理纳秒溢出
-				while (tp->tv_nsec >= (long)nsec_max)
-				{
-					tp->tv_sec++;
-					tp->tv_nsec -= (long)nsec_max;
-				}
-				while (tp->tv_nsec < 0)
-				{
-					tp->tv_sec--;
-					tp->tv_nsec += nsec_max;
-				}
+				cycles_to_timespec(t_val, k_realtime_epoch_base_sec, tp);
 				break;
 			}
 			
@@ -289,14 +258,10 @@ namespace tmm
 			{
 				// 对于启动时间闹钟，使用与 CLOCK_BOOTTIME 相同的时间基准
 				_lock.acquire();
-				uint64 ticks = trap_mgr.ticks;
+				t_val = tmm::get_hw_time_stamp();
 				_lock.release();
 				
-				uint64 total_cycles = ticks * cpt;
-				tp->tv_sec = (long)(total_cycles / freq);
-				ulong rest_cyc = total_cycles % freq;
-				const int64 nsec_max = 1000000000L;
-				tp->tv_nsec = (long)((rest_cyc * nsec_max) / freq);
+				cycles_to_timespec(t_val, 0, tp);
 				break;
 			}
 			
@@ -306,25 +271,9 @@ namespace tmm
 				// 在简化实现中，我们使用与 CLOCK_REALTIME 相同的时间基准
 				_lock.acquire();
 				t_val = tmm::get_hw_time_stamp();
-				t_val += trap_mgr.ticks * cpt;
 				_lock.release();
 
-				tp->tv_sec = (long)(k_realtime_epoch_base_sec + (t_val / freq));
-				ulong rest_cyc = t_val % freq;
-				const int64 nsec_max = 1000000000L;
-				tp->tv_nsec = (long)((rest_cyc * nsec_max) / freq);
-
-				// 处理纳秒溢出
-				while (tp->tv_nsec >= (long)nsec_max)
-				{
-					tp->tv_sec++;
-					tp->tv_nsec -= (long)nsec_max;
-				}
-				while (tp->tv_nsec < 0)
-				{
-					tp->tv_sec--;
-					tp->tv_nsec += nsec_max;
-				}
+				cycles_to_timespec(t_val, k_realtime_epoch_base_sec, tp);
 				break;
 			}
 			
@@ -332,14 +281,10 @@ namespace tmm
 			{
 				// SGI周期计数器已废弃，返回单调时钟时间作为兼容性支持
 				_lock.acquire();
-				uint64 ticks = trap_mgr.ticks;
+				t_val = tmm::get_hw_time_stamp();
 				_lock.release();
 				
-				uint64 total_cycles = ticks * cpt;
-				tp->tv_sec = (long)(total_cycles / freq);
-				ulong rest_cyc = total_cycles % freq;
-				const int64 nsec_max = 1000000000L;
-				tp->tv_nsec = (long)((rest_cyc * nsec_max) / freq);
+				cycles_to_timespec(t_val, 0, tp);
 				break;
 			}
 			

@@ -139,11 +139,11 @@ DEPS := $(OBJS:.o=.d)
 
 # ===== 输出目标 =====
 ifeq ($(ARCH),riscv)
-  KERNEL_ELF := build/$(OUTPUT_PREFIX)/kernel-qemu
-  KERNEL_BIN := build/$(OUTPUT_PREFIX)/kernel-qemu.bin
+  KERNEL_ELF := kernel-rv
+  KERNEL_BIN := kernel-rv.bin
 else ifeq ($(ARCH),loongarch)
-  KERNEL_ELF := build/$(OUTPUT_PREFIX)/kernel-la
-  KERNEL_BIN := build/$(OUTPUT_PREFIX)/kernel-la.bin
+  KERNEL_ELF := kernel-la
+  KERNEL_BIN := kernel-la.bin
 endif
 
 # ===== initcode 用户进程编译相关 =====
@@ -401,6 +401,7 @@ clean:
 	$(MAKE) clean -C thirdparty/EASTL
 	rm -f user/initcode-*
 	rm -f user/disasm_initcode.asm, kernel.asm
-
+	rm -f $(KERNEL_ELF) $(KERNEL_BIN)
+	rm -f kernel-la kernel-rv kernel-la.bin kernel-rv.bin
 
 -include $(DEPS)

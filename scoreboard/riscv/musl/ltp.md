@@ -40,11 +40,11 @@
 | aiocp |  |  |
 | aiodio_append |  |  |
 | aiodio_sparse |  |  |
-| alarm02 |  |  |
-| alarm03 |  |  |
+| alarm02 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
+| alarm03 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | alarm05 |  |  |
 | alarm06 |  |  |
-| alarm07 |  |  |
+| alarm07 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | ar01.sh |  |  |
 | arch_prctl01 |  |  |
 | arping01.sh |  |  |
@@ -77,8 +77,8 @@
 | bpf_prog05 |  |  |
 | bpf_prog06 |  |  |
 | bpf_prog07 |  |  |
-| brk01 |  |  |
-| brk02 |  |  |
+| brk01 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
+| brk02 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | broken_ip-checksum.sh |  |  |
 | broken_ip-dstaddr.sh |  |  |
 | broken_ip-fragment.sh |  |  |
@@ -125,7 +125,7 @@
 | cgroup_xattr |  |  |
 | change_password.sh |  |  |
 | chdir01 |  |  |
-| chdir04 |  |  |
+| chdir04 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | check_envval |  |  |
 | check_icmpv4_connectivity |  |  |
 | check_icmpv6_connectivity |  |  |
@@ -138,16 +138,16 @@
 | chmod03 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | chmod05 |  |  |
 | chmod06 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
-| chmod07 |  |  |
-| chown01 |  |  |
+| chmod07 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
+| chown01 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | chown01_16 |  |  |
-| chown02 |  |  |
+| chown02 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | chown02_16 |  |  |
-| chown03 |  |  |
+| chown03 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | chown03_16 |  |  |
 | chown04 |  |  |
 | chown04_16 |  |  |
-| chown05 |  |  |
+| chown05 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | chown05_16 |  |  |
 | chroot01 |  |  |
 | chroot02 |  |  |
@@ -164,7 +164,7 @@
 | clock_nanosleep01 |  |  |
 | clock_nanosleep02 |  |  |
 | clock_nanosleep03 |  |  |
-| clock_nanosleep04 |  |  |
+| clock_nanosleep04 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | clock_settime01 |  |  |
 | clock_settime02 |  |  |
 | clock_settime03 |  |  |
@@ -180,7 +180,7 @@
 | clone301 |  |  |
 | clone302 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | clone303 |  |  |
-| close01 |  |  |
+| close01 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | close02 |  |  |
 | close_range01 |  |  |
 | close_range02 |  |  |
@@ -226,9 +226,9 @@
 | crash01 |  |  |
 | crash02 |  |  |
 | creat01 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
-| creat03 |  |  |
+| creat03 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | creat04 |  |  |
-| creat05 |  |  |
+| creat05 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | creat06 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | creat07 |  |  |
 | creat07_child |  |  |
@@ -299,9 +299,9 @@
 | dup204 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | dup205 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | dup206 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
-| dup207 |  |  |
+| dup207 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | dup3_01 |  |  |
-| dup3_02 |  |  |
+| dup3_02 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | dynamic_debug01.sh |  |  |
 | ebizzy |  |  |
 | eject-tests.sh |  |  |
@@ -311,7 +311,7 @@
 | epoll_create01 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | epoll_create02 |  |  |
 | epoll_create1_01 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
-| epoll_create1_02 |  |  |
+| epoll_create1_02 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | epoll_ctl01 |  |  |
 | epoll_ctl02 |  |  |
 | epoll_ctl03 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
@@ -368,7 +368,7 @@
 | execvp01_child |  |  |
 | exit01 |  |  |
 | exit02 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
-| exit_group01 |  |  |
+| exit_group01 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | f00f |  |  |
 | faccessat01 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | faccessat02 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
@@ -409,7 +409,7 @@
 | fchdir02 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | fchdir03 |  |  |
 | fchmod01 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
-| fchmod02 |  |  |
+| fchmod02 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | fchmod03 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | fchmod04 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | fchmod05 |  |  |
@@ -527,8 +527,8 @@
 | flock04 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | flock06 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | force_erase.sh |  |  |
-| fork01 |  |  |
-| fork03 |  |  |
+| fork01 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
+| fork03 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | fork04 |  |  |
 | fork05 |  |  |
 | fork07 |  |  |
@@ -718,16 +718,16 @@
 | ftruncate04_64 |  |  |
 | futex_cmp_requeue01 |  |  |
 | futex_cmp_requeue02 |  |  |
-| futex_wait01 |  |  |
+| futex_wait01 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | futex_wait02 |  |  |
 | futex_wait03 |  |  |
-| futex_wait04 |  |  |
+| futex_wait04 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | futex_wait05 |  |  |
-| futex_wait_bitset01 |  |  |
+| futex_wait_bitset01 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | futex_waitv01 |  |  |
 | futex_waitv02 |  |  |
 | futex_waitv03 |  |  |
-| futex_wake01 |  |  |
+| futex_wake01 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | futex_wake02 |  |  |
 | futex_wake03 |  |  |
 | futex_wake04 |  |  |
@@ -803,11 +803,11 @@
 | getgroups03_16 |  |  |
 | gethostbyname_r01 |  |  |
 | gethostid01 |  |  |
-| gethostname01 |  |  |
+| gethostname01 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | gethostname02 |  |  |
 | getitimer01 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | getitimer02 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
-| getpagesize01 |  |  |
+| getpagesize01 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | getpeername01 |  |  |
 | getpgid01 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | getpgid02 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
@@ -851,7 +851,7 @@
 | gettid01 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | gettid02 |  |  |
 | gettimeofday01 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
-| gettimeofday02 |  |  |
+| gettimeofday02 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | getuid01 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | getuid01_16 |  |  |
 | getuid03 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
@@ -1108,7 +1108,7 @@
 | libcgroup_freezer |  |  |
 | link02 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | link04 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
-| link05 |  |  |
+| link05 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | link08 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | linkat01 |  |  |
 | linkat02 |  |  |
@@ -1403,7 +1403,7 @@
 | name_to_handle_at02 |  |  |
 | nanosleep01 |  |  |
 | nanosleep02 |  |  |
-| nanosleep04 |  |  |
+| nanosleep04 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | net_cmdlib.sh |  |  |
 | netns_breakns.sh |  |  |
 | netns_comm.sh |  |  |
@@ -1435,8 +1435,8 @@
 | nft02 |  |  |
 | nftw01 |  |  |
 | nftw6401 |  |  |
-| nice01 |  |  |
-| nice02 |  |  |
+| nice01 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
+| nice02 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | nice03 |  |  |
 | nice04 |  |  |
 | nice05 |  |  |
@@ -1540,7 +1540,7 @@
 | pipe05 |  |  |
 | pipe06 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | pipe07 |  |  |
-| pipe08 |  |  |
+| pipe08 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | pipe09 |  |  |
 | pipe10 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | pipe11 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
@@ -1548,7 +1548,7 @@
 | pipe13 |  |  |
 | pipe14 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | pipe15 |  |  |
-| pipe2_01 |  |  |
+| pipe2_01 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | pipe2_02 |  |  |
 | pipe2_02_child |  |  |
 | pipe2_04 |  |  |
@@ -2023,7 +2023,7 @@
 | sigaltstack02 |  |  |
 | sighold02 |  |  |
 | signal01 |  |  |
-| signal02 |  |  |
+| signal02 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | signal03 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | signal04 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | signal05 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
@@ -2080,8 +2080,8 @@
 | starvation |  |  |
 | stat01 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | stat01_64 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
-| stat02 |  |  |
-| stat02_64 |  |  |
+| stat02 | PASS | 2026-05-26 output_r_20260526-210810_full-regression_after-active-ltp-iozone-lmbench-timefix_timeout-40m.txt |
+| stat02_64 | PASS | 2026-05-26 output_r_20260526-210810_full-regression_after-active-ltp-iozone-lmbench-timefix_timeout-40m.txt |
 | stat03 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | stat03_64 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | statfs01 |  |  |
@@ -2541,9 +2541,9 @@
 | timerfd_gettime01 |  |  |
 | timerfd_settime01 |  |  |
 | timerfd_settime02 |  |  |
-| times01 |  |  |
+| times01 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | times03 |  |  |
-| tkill01 |  |  |
+| tkill01 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | tkill02 |  |  |
 | tpci |  |  |
 | tpm_changeauth_tests.sh |  |  |
@@ -2704,7 +2704,7 @@
 | umount2_02 |  |  |
 | uname01 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | uname02 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
-| uname04 |  |  |
+| uname04 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | unlink05 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | unlink07 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | unlink08 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
@@ -2765,10 +2765,10 @@
 | vxlan02.sh |  |  |
 | vxlan03.sh |  |  |
 | vxlan04.sh |  |  |
-| wait01 |  |  |
+| wait01 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | wait02 |  |  |
 | wait401 |  |  |
-| wait402 |  |  |
+| wait402 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | wait403 |  |  |
 | waitid01 |  |  |
 | waitid02 |  |  |
@@ -2819,7 +2819,7 @@
 | writev03 |  |  |
 | writev05 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
 | writev06 | PASS | 2026-05-26 output_r_20260526-152903_full-regression_after-ltp-combo-table_snapshot_timeout-40m.txt |
-| writev07 |  |  |
+| writev07 | PASS | 2026-05-27 output_r_20260527-070750_ltp-probe-extra-no-clockgettime01-mlock-waitid_REGRESSION_ENTRY-ltp_probe_extra_regression_timeout-20m.txt |
 | zram01.sh |  |  |
 | zram02.sh |  |  |
 | zram03 |  |  |
