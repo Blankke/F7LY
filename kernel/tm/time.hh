@@ -120,17 +120,20 @@ namespace tmm
 	 * @brief 当前架构用于时间换算的硬件计时器频率。
 	 *
 	 * RISC-V 在 QEMU virt + OpenSBI 下暴露的 ACLINT timer 频率为 10MHz；
-	 * LoongArch 这边仍沿用项目内已有的 3.125MHz 经验值。
+	 * LoongArch QEMU virt 的 constant timer/rdtime.d 频率按 100MHz 解释。
 	 *
 	 * 之前这里统一写死成 3.125MHz，会导致：
 	 * 1. RISC-V 的 gettimeofday/clock_gettime 走时明显失真；
 	 * 2. 基于 timeval 的短超时等待被严重放大或缩小；
 	 * 3. 双架构的调度/超时行为缺乏可比性。
+	 *
+	 * LoongArch 之前沿用 3.125MHz 会把 rdtime.d 读数放大约 32 倍，iozone/lmbench
+	 * 这类以 wall clock 反推吞吐的 benchmark 会被压低到 baseline 的一个数量级之外。
 	 */
 #ifdef RISCV
 	constexpr uint64 qemu_fre = 10 * _1M_dec;
 #elif defined(LOONGARCH)
-	constexpr uint64 qemu_fre = 3 * _1M_dec + 125 * _1K_dec;
+	constexpr uint64 qemu_fre = 100 * _1M_dec;
 #else
 	constexpr uint64 qemu_fre = 10 * _1M_dec;
 #endif
@@ -139,20 +142,24 @@ namespace tmm
 	 * @brief 硬件周期数转微秒
 	 * @param cycles 硬件时钟周期数
 	 * @return 对应的微秒数
-	 * @note 转换公式：cycles * 1000000 / 3125000 = cycles * 8 / 25
+	 *
+	 * RISC-V 与 LoongArch 的 QEMU 计时器频率不同，换算必须统一使用
+	 * qemu_fre。这里先拆成“整秒 + 余数”再相乘，避免长时间运行后
+	 * cycles * 1000000 发生 64 位溢出。
 	 */
-	constexpr inline uint64 qemu_fre_cal_usec( uint64 cycles ) { 
-		return cycles * 8 / 25; 
+	constexpr inline uint64 qemu_fre_cal_usec( uint64 cycles ) {
+		return ( cycles / qemu_fre ) * _1M_dec +
+		       ( ( cycles % qemu_fre ) * _1M_dec ) / qemu_fre;
 	}
 	
 	/**
 	 * @brief 微秒转硬件周期数
 	 * @param usec 微秒数
 	 * @return 对应的硬件时钟周期数
-	 * @note 转换公式：usec * 3125000 / 1000000 = usec * 25 / 8
 	 */
-	constexpr inline uint64 qemu_fre_cal_cycles( uint64 usec ) { 
-		return usec * 25 / 8; 
+	constexpr inline uint64 qemu_fre_cal_cycles( uint64 usec ) {
+		return ( usec / _1M_dec ) * qemu_fre +
+		       ( ( usec % _1M_dec ) * qemu_fre ) / _1M_dec;
 	}
 
 	/**

@@ -13,8 +13,8 @@
 | [libctest-dynamic](libctest-dynamic.md) | 110 | 96 | [libctest-dynamic.md](libctest-dynamic.md) |
 | [libctest-static](libctest-static.md) | 107 | 98 | [libctest-static.md](libctest-static.md) |
 | [lmbench](lmbench.md) | 24 | 0 | [lmbench.md](lmbench.md) |
-| [ltp](ltp.md) | 2820 | 297 | [ltp.md](ltp.md) |
+| [ltp](ltp.md) | 2820 | 341 | [ltp.md](ltp.md) |
 | [lua](lua.md) | 9 | 9 | [lua.md](lua.md) |
 | [netperf](netperf.md) | 6 | 0 | [netperf.md](netperf.md) |
 | [unixbench](unixbench.md) | 28 | 0 | [unixbench.md](unixbench.md) |
-| **合计** | **3213** | **596** |  |
+| **合计** | **3213** | **640** |  |

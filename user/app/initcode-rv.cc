@@ -4,7 +4,20 @@ extern "C"
 {
     __attribute__((section(".text.startup"))) int main()
     {
-        regression_suite_4d1444();
+        init_env("/musl/");
+        basic_test("/musl/");
+        basic_test("/glibc/");
+        iozone_test("/musl");
+        iozone_test("/glibc");
+        libc_test("/musl/");
+        lua_test("/musl/");
+        lua_test("/glibc/");
+        libcbench_test("/musl");
+        libcbench_test("/glibc");
+        ltp_test(true);
+        ltp_test(false);
+        busybox_test("/musl/");
+        busybox_test("/glibc/");
         shutdown();
         return 0;
     }

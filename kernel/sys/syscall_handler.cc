@@ -676,6 +676,20 @@ namespace syscall
             size_t len;
         };
 
+        size_t syscall_iovec_buffer_size(const KernelIovec *iovecs, int iovcnt)
+        {
+            size_t buffer_size = 1;
+            for (int i = 0; i < iovcnt; ++i)
+            {
+                size_t need = min_size(iovecs[i].len, k_syscall_io_chunk_size);
+                if (need > buffer_size)
+                {
+                    buffer_size = need;
+                }
+            }
+            return buffer_size;
+        }
+
         class ScopedSyscallBuffer
         {
         public:
@@ -758,7 +772,9 @@ namespace syscall
 
         long write_from_user_iovecs(fs::file *f, mem::PageTable &pt, const KernelIovec *iovecs, int iovcnt, long *explicit_off)
         {
-            ScopedSyscallBuffer buffer(k_syscall_io_chunk_size);
+            // iozone/lmbench 大量使用 1KiB 小 I/O；按实际 iovec 上限建缓冲，
+            // 让小 I/O 走内联数组，避免每个 syscall 都申请/释放 64KiB 临时页。
+            ScopedSyscallBuffer buffer(syscall_iovec_buffer_size(iovecs, iovcnt));
             if (!buffer.valid())
             {
                 return -ENOMEM;
@@ -806,7 +822,8 @@ namespace syscall
 
         long read_to_user_iovecs(fs::file *f, mem::PageTable &pt, const KernelIovec *iovecs, int iovcnt, long *explicit_off)
         {
-            ScopedSyscallBuffer buffer(k_syscall_io_chunk_size);
+            // 与写路径保持一致：小块 pread/read 不应为固定 64KiB 分块付出分配成本。
+            ScopedSyscallBuffer buffer(syscall_iovec_buffer_size(iovecs, iovcnt));
             if (!buffer.valid())
             {
                 return -ENOMEM;
@@ -3655,7 +3672,6 @@ namespace syscall
         //     return SYS_EFAULT;
         // }
         tv = tmm::k_tm.get_time_val();
-        printf("[SyscallHandler::sys_gettimeofday] tv: %d.%d\n", tv.tv_sec, tv.tv_usec);
 
         if (tz_addr != 0)
         {
@@ -12455,9 +12471,7 @@ namespace syscall
         case SYS_CLOCK_PROCESS_CPUTIME_ID:
         case SYS_CLOCK_THREAD_CPUTIME_ID:
         case SYS_CLOCK_TAI:
-            // 高精度时钟：基于硬件定时器频率 3.125MHz
-            // 理论分辨率: 1 / 3,125,000 ≈ 320纳秒
-            // 实际上设为1纳秒以匹配Linux行为
+            // 高精度时钟直接来自架构硬件计数器；对外按 Linux 常见行为报告 1ns 分辨率。
             resolution.tv_sec = 0;
             resolution.tv_nsec = 1;
             break;
@@ -12517,9 +12531,6 @@ namespace syscall
             printfRed("[SyscallHandler::sys_clock_getres] Error copying resolution to user space\n");
             return SYS_EFAULT;
         }
-
-        printfCyan("[SyscallHandler::sys_clock_getres] clock_id: %d, resolution: %ld.%09ld\n",
-                   clock_id, resolution.tv_sec, resolution.tv_nsec);
 
         return 0;
     }
