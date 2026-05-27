@@ -3055,6 +3055,12 @@ namespace proc
         {
             cwd.pop_back();
         }
+        // 根目录内部保存成 "/"，上面的通用去尾斜杠逻辑会把它抹成空串。
+        // BusyBox ash 在展开 \w 时要求 getcwd() 返回绝对路径，因此这里要把根目录还原回 "/".
+        if (cwd.empty())
+        {
+            cwd = "/";
+        }
         uint i = 0;
         for (; i < cwd.size(); ++i)
             out_buf[i] = cwd[i];

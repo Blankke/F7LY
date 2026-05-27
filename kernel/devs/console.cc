@@ -14,9 +14,12 @@ namespace dev
     _canonical_mode = true;
     _echo_enabled = true;
     _map_cr_to_nl = true;
+    _signal_enabled = true;
     _erase_char = 0x7f;
     _kill_char = CTRL_('U');
     _eof_char = CTRL_('D');
+    _intr_char = CTRL_('C');
+    _foreground_pgrp = 0;
   }
 
   void Console::init()
@@ -139,16 +142,34 @@ namespace dev
 
   void Console::set_line_discipline(bool canonical_mode, bool echo_enabled,
                                     bool map_cr_to_nl, unsigned char erase_char,
-                                    unsigned char kill_char, unsigned char eof_char)
+                                    unsigned char kill_char, unsigned char eof_char,
+                                    bool signal_enabled, unsigned char intr_char)
   {
     _lock.acquire();
     _canonical_mode = canonical_mode;
     _echo_enabled = echo_enabled;
     _map_cr_to_nl = map_cr_to_nl;
+    _signal_enabled = signal_enabled;
     _erase_char = erase_char;
     _kill_char = kill_char;
     _eof_char = eof_char;
+    _intr_char = intr_char;
     _lock.release();
+  }
+
+  void Console::set_foreground_pgrp(int pgrp)
+  {
+    _lock.acquire();
+    _foreground_pgrp = pgrp;
+    _lock.release();
+  }
+
+  int Console::foreground_pgrp()
+  {
+    _lock.acquire();
+    int pgrp = _foreground_pgrp;
+    _lock.release();
+    return pgrp;
   }
 
   int Console::console_intr(int c)
@@ -159,6 +180,31 @@ namespace dev
     if (_map_cr_to_nl && c == '\r')
     {
       c = '\n';
+    }
+
+    // 交互式 shell 需要把 Ctrl-C 送给当前前台进程组，而不是仅仅把字节塞进输入缓冲。
+    if (_signal_enabled && _intr_char != 0 && c == _intr_char)
+    {
+      int target_pgrp = _foreground_pgrp;
+      if (_echo_enabled)
+      {
+        uart.put_char_sync('^');
+        uart.put_char_sync('C');
+        uart.put_char_sync('\n');
+      }
+      r_idx = w_idx = e_idx = 0;
+      _lock.release();
+
+      proc::Pcb *cur = proc::k_pm.get_cur_pcb();
+      if (target_pgrp <= 0 && cur != nullptr)
+      {
+        target_pgrp = static_cast<int>(cur->get_pgid());
+      }
+      if (target_pgrp > 0)
+      {
+        proc::k_pm.kill_signal(-target_pgrp, proc::ipc::signal::SIGINT);
+      }
+      return 0;
     }
 
     if (_canonical_mode)

@@ -100,7 +100,23 @@ F7LY$
 ```
 可以看到当前路径是/proc，ls命令只能看到dev、etc和proc三个目录，无法看到其他目录了。可以检查一下文件系统的挂载和路径解析的问题，我们挂载的文件系统应该包含了sdcard，然后当前这个shell应该能够访问到sdcard中的文件和目录。可以通过在shell中添加一些调试输出，来确认文件系统是否正确地挂载了，以及路径解析是否正确地工作了。另外，也可以检查一下shell的初始化过程，看看是否有遗漏或者错误的地方，导致文件系统没有被正确地挂载或者路径解析没有正确地设置。
 另外，本来在initcode中会调用void init_env(const char *path = musl_dir)函数初始化bin文件夹，但是当前shell中不能直接调用，否则会报错找不到函数定义，这应该是构建的时候没有正确包含的问题，但是也不能直接执行这个函数后执行busybox ash，需要有参考逻辑写一个新的shell初始化函数。
-
-目标
+还有一点错误是：
+        printf("#### F7LY INTERACTIVE SHELL END ret=%d ####\n", shell_ret);
+这一句终端结束后的输出我想不到场景能够打出来，目前的交互式终端在键盘按下ctrl+c后退出，退出只会打出
+#### F7LY INTERACTIVE SHELL START ####
+F7LY$ qemu-system-riscv64: terminating on signal 2
+make: *** [Makefile:316: shell] Interrupt
+我认为这不是正确的，应该让那句end可以打出，也就是shell退出后还能执行main函数后面的部分。
+顺手修一个现象，makefile的一些小问题，我们无论make什么目标都会有很长一段SRCS collected，这不是很对。需要修复一下
+```
+zc@dcstars:~/F7LY$ make
+=== SRCS collected ===
+kernel/boot/riscv/entry.S kernel/boot/riscv/initcode.S   kernel/mem/riscv/sig_trampoline.S kernel/mem/riscv/trampoline.S kernel/proc/riscv/swtch.S kernel/trap/riscv/kernelvec.S                 kernel/boot/riscv/fuckyou.cc kernel/boot/riscv/main.cc kernel/boot/riscv/start.cc   kernel/mem/riscv/pagetable.cc kernel/mem/riscv/pte.cc  kernel/trap/riscv/plic.cc kernel/trap/riscv/trap.cc kernel/trap/riscv/trap_func_wrapper.cc  kernel/libs/__cxx_abi.cc kernel/libs/common.cc kernel/libs/function.cc kernel/libs/global_operator.cc kernel/libs/klib.cc kernel/libs/liballoc_allocator.cc kernel/libs/printer.cc kernel/libs/qsort.cc kernel/libs/semaphore.cc kernel/libs/string.cc kernel/tm/timer_interface.cc kernel/tm/timer_manager.cc kernel/sys/syscall_handler.cc kernel/shm/shm_manager.cc kernel/mem/virtual_memory_manager.cc kernel/mem/physical_memory_manager.cc kernel/mem/slab.cc kernel/mem/heap_memory_manager.cc kernel/mem/buddysystem.cc kernel/mem/userspace_stream.cc kernel/devs/uart.cc kernel/devs/console1.cc kernel/devs/dtb.cc kernel/devs/console.cc kernel/devs/ramdisk.cc kernel/devs/spinlock.cc kernel/devs/loop_device.cc kernel/devs/device_manager.cc kernel/devs/stream_device.cc kernel/trap/interrupt_stats.cc kernel/hal/cpu.cc kernel/proc/signal.cc kernel/proc/process_memory_manager.cc kernel/proc/proc_manager.cc kernel/proc/pipe.cc kernel/proc/futex.cc kernel/proc/scheduler.cc kernel/proc/proc.cc kernel/proc/sleeplock.cc kernel/proc/posix_timers.cc kernel/fs/fat32/fat32.cc kernel/fs/drivers/virtio_blk_device.cc kernel/fs/drivers/virtio_mclock_scheduler.cc kernel/fs/drivers/virtio_blk_queue.cc kernel/fs/bio.cc kernel/fs/lwext4/ext4_bcache.cc kernel/fs/lwext4/ext4_fs.cc kernel/fs/lwext4/ext4_xattr.cc kernel/fs/lwext4/ext4_journal.cc kernel/fs/lwext4/ext4_dir.cc kernel/fs/lwext4/ext4_inode.cc kernel/fs/lwext4/ext4.cc kernel/fs/lwext4/ext4_hash.cc kernel/fs/lwext4/ext4_mbr.cc kernel/fs/lwext4/ext4_blockdev.cc kernel/fs/lwext4/ext4_bitmap.cc kernel/fs/lwext4/ext4_crc32.cc kernel/fs/lwext4/ext4_balloc.cc kernel/fs/lwext4/ext4_super.cc kernel/fs/lwext4/ext4_mkfs.cc kernel/fs/lwext4/ext4_dir_idx.cc kernel/fs/lwext4/ext4_block_group.cc kernel/fs/lwext4/ext4_trans.cc kernel/fs/lwext4/ext4_extent.cc kernel/fs/lwext4/ext4_ialloc.cc kernel/fs/vfs/fs.cc kernel/fs/vfs/ops.cc kernel/fs/vfs/vfs_utils.cc kernel/fs/vfs/vfs_ext4_blockdev_ext.cc kernel/fs/vfs/file.cc kernel/fs/vfs/vfs_ext4_ext.cc kernel/fs/vfs/file/pipe_file.cc kernel/fs/vfs/file/directory_file.cc kernel/fs/vfs/file/virtual_file.cc kernel/fs/vfs/file/fat32_file.cc kernel/fs/vfs/file/file.cc kernel/fs/vfs/file/socket_file.cc kernel/fs/vfs/file/normal_file.cc kernel/fs/vfs/file/device_file.cc kernel/fs/vfs/fifo_manager.cc kernel/fs/vfs/inode.cc kernel/fs/vfs/virtual_fs.cc kernel/fs/drivers/riscv/virtio_disk2.cc kernel/net/drivers/virtio_net_adapter.cc kernel/net/drivers/virtio_net.cc kernel/net/f7ly_network.cc kernel/net/onpstack/mmu/buf_list.cc kernel/net/onpstack/mmu/buddy.cc kernel/net/onpstack/onps_utils.cc kernel/net/onpstack/onps_input.cc kernel/net/onpstack/one_shot_timer.cc kernel/net/onpstack/port/os_adapter.cc kernel/net/onpstack/ethernet/arp.cc kernel/net/onpstack/ethernet/ethernet.cc kernel/net/onpstack/ip/ip.cc kernel/net/onpstack/ip/tcp.cc kernel/net/onpstack/ip/tcp_link.cc kernel/net/onpstack/ip/tcp_options.cc kernel/net/onpstack/ip/udp_link.cc kernel/net/onpstack/ip/udp.cc kernel/net/onpstack/ip/icmp.cc kernel/net/onpstack/bsd/socket.cc kernel/net/onpstack/netif/route.cc kernel/net/onpstack/netif/netif.cc kernel/net/onpstack/onps_entry.cc kernel/net/onpstack/onps_errors.cc
+make: Nothing to be done for 'r'.
+```
+## 目标
 1、修复当前shell中路径问题，能够正确访问到sdcard中的文件和目录。
 2、编写一个新的shell初始化函数，正确地初始化环境变量和文件系统。
+3、正确处理shell退出
+4、处理makefile格式小问题
+处理完后验证并删除你的调试。

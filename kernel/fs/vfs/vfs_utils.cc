@@ -16,6 +16,7 @@
 #include "fs/vfs/vfs_ext4_ext.hh" // 包含 NS_to_S 宏
 #include "tm/time.h"              // 包含 TIME2NS 宏
 #include "mem/memlayout.hh"
+#include "physical_memory_manager.hh"
 #include <EASTL/vector.h>
 #include <EASTL/algorithm.h>
 #include <libs/string.hh>
@@ -36,7 +37,115 @@ namespace
         bool read_only = false;
     };
 
+    struct DirentSnapshot
+    {
+        eastl::string name;
+        unsigned char type = T_UNKNOWN;
+    };
+
     eastl::vector<MountOverride> g_mount_overrides;
+
+    bool dirent_exists(const eastl::vector<DirentSnapshot> &entries, const eastl::string &name)
+    {
+        return eastl::find_if(entries.begin(), entries.end(),
+                              [&](const DirentSnapshot &entry)
+                              {
+                                  return entry.name == name;
+                              }) != entries.end();
+    }
+
+    void append_dirent_snapshot(eastl::vector<DirentSnapshot> &entries,
+                                const eastl::string &name,
+                                unsigned char type)
+    {
+        if (name.empty() || dirent_exists(entries, name))
+        {
+            return;
+        }
+        entries.push_back({name, type});
+    }
+
+    int collect_real_directory_entries(const eastl::string &path,
+                                       eastl::vector<DirentSnapshot> &entries)
+    {
+        fs::file *real_dir = nullptr;
+        int open_ret = vfs_openat(path, real_dir, O_RDONLY, 0);
+        if (open_ret != EOK)
+        {
+            return open_ret;
+        }
+        if (real_dir == nullptr)
+        {
+            return -ENOENT;
+        }
+
+        auto cleanup_real_dir = [&]()
+        {
+            if (real_dir == nullptr)
+            {
+                return;
+            }
+            filesystem_t *fs = get_fs_from_path(path.c_str());
+            if (fs != nullptr && fs->type == EXT4 && real_dir->_attrs.filetype == fs::FileTypes::FT_DIRECT)
+            {
+                ext4_dir_close(&real_dir->lwext4_dir_struct);
+            }
+            real_dir->free_file();
+            real_dir = nullptr;
+        };
+
+        if (real_dir->is_virtual || real_dir->_attrs.filetype != fs::FileTypes::FT_DIRECT)
+        {
+            cleanup_real_dir();
+            return 0;
+        }
+
+        char *kernel_buf = reinterpret_cast<char *>(mem::k_pmm.alloc_page());
+        if (kernel_buf == nullptr)
+        {
+            cleanup_real_dir();
+            return -ENOMEM;
+        }
+
+        int ret = 0;
+        while (true)
+        {
+            int read_bytes = vfs_getdents(real_dir,
+                                          reinterpret_cast<struct linux_dirent64 *>(kernel_buf),
+                                          PGSIZE);
+            if (read_bytes <= 0)
+            {
+                ret = read_bytes;
+                break;
+            }
+
+            size_t offset = 0;
+            while (offset < static_cast<size_t>(read_bytes))
+            {
+                auto *entry = reinterpret_cast<struct linux_dirent64 *>(kernel_buf + offset);
+                if (entry->d_reclen < sizeof(struct linux_dirent64) ||
+                    offset + entry->d_reclen > static_cast<size_t>(read_bytes))
+                {
+                    ret = -EIO;
+                    goto done_collect_real_dirents;
+                }
+
+                if (entry->d_name[0] != '\0' &&
+                    strcmp(entry->d_name, ".") != 0 &&
+                    strcmp(entry->d_name, "..") != 0)
+                {
+                    append_dirent_snapshot(entries, entry->d_name, entry->d_type);
+                }
+
+                offset += entry->d_reclen;
+            }
+        }
+
+    done_collect_real_dirents:
+        mem::k_pmm.free_page(kernel_buf);
+        cleanup_real_dir();
+        return ret;
+    }
 
     bool path_matches_mount_prefix(const eastl::string &path, const eastl::string &mount_path)
     {
@@ -1833,18 +1942,24 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
 {
     if (file && file->is_virtual && file->_attrs.filetype == fs::FileTypes::FT_DIRECT)
     {
-        eastl::vector<eastl::string> entries;
-        entries.push_back(".");
-        entries.push_back("..");
+        eastl::vector<DirentSnapshot> entries;
+        append_dirent_snapshot(entries, ".", T_DIR);
+        append_dirent_snapshot(entries, "..", T_DIR);
 
         eastl::vector<eastl::string> virtual_children;
         fs::k_vfs.list_virtual_files(file->_path_name, virtual_children);
         for (const auto &name : virtual_children)
         {
-            if (eastl::find(entries.begin(), entries.end(), name) == entries.end())
-            {
-                entries.push_back(name);
-            }
+            eastl::string child_path = file->_path_name;
+            if (child_path.empty() || child_path.back() != '/')
+                child_path += "/";
+            child_path += name;
+
+            unsigned char dtype = T_FILE;
+            fs::vfile_tree_node *node = fs::k_vfs.get_virtual_node(child_path);
+            if (node && node->file_type == fs::FileTypes::FT_DIRECT)
+                dtype = T_DIR;
+            append_dirent_snapshot(entries, name, dtype);
         }
 
         // /proc 需要暴露当前活跃 PID 目录，否则 ps/top 一类工具看不到进程。
@@ -1857,12 +1972,14 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
 
                 char pid_buf[16];
                 snprintf(pid_buf, sizeof(pid_buf), "%d", pcb._pid);
-                eastl::string pid_name(pid_buf);
-                if (eastl::find(entries.begin(), entries.end(), pid_name) == entries.end())
-                {
-                    entries.push_back(pid_name);
-                }
+                append_dirent_snapshot(entries, eastl::string(pid_buf), T_DIR);
             }
+        }
+
+        int real_dir_ret = collect_real_directory_entries(file->_path_name, entries);
+        if (real_dir_ret < 0 && real_dir_ret != -ENOENT && real_dir_ret != -ENOTDIR)
+        {
+            return real_dir_ret;
         }
 
         size_t index = static_cast<size_t>(file->_file_ptr);
@@ -1871,7 +1988,8 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
 
         while (index < entries.size())
         {
-            const eastl::string &name = entries[index];
+            const DirentSnapshot &entry = entries[index];
+            const eastl::string &name = entry.name;
             uint reclen = sizeof(d->d_ino) + sizeof(d->d_off) + sizeof(d->d_reclen) + sizeof(d->d_type) + name.size() + 1;
             if (reclen % 8)
                 reclen = reclen - reclen % 8 + 8;
@@ -1885,28 +2003,7 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
             d->d_ino = index + 1;
             d->d_off = index + 1;
             d->d_reclen = reclen;
-
-            if (name == "." || name == "..")
-            {
-                d->d_type = T_DIR;
-            }
-            else if (file->_path_name == "/proc" && name.size() > 0 && name[0] >= '0' && name[0] <= '9')
-            {
-                d->d_type = T_DIR;
-            }
-            else
-            {
-                eastl::string child_path = file->_path_name;
-                if (child_path.empty() || child_path.back() != '/')
-                    child_path += "/";
-                child_path += name;
-
-                fs::vfile_tree_node *node = fs::k_vfs.get_virtual_node(child_path);
-                if (node && node->file_type == fs::FileTypes::FT_DIRECT)
-                    d->d_type = T_DIR;
-                else
-                    d->d_type = T_FILE;
-            }
+            d->d_type = entry.type;
 
             totlen += reclen;
             d = (struct linux_dirent64 *)((char *)d + reclen);

@@ -162,11 +162,11 @@ namespace syscall
                                               (ts.c_iflag & ICRNL) != 0,
                                               ts.c_cc[VERASE],
                                               ts.c_cc[VKILL],
-                                              ts.c_cc[VEOF]);
+                                              ts.c_cc[VEOF],
+                                              (ts.c_lflag & ISIG) != 0,
+                                              ts.c_cc[VINTR]);
         }
 
-        // 当前只有一个 console tty，先维护一个全局前台进程组，满足 busybox ash 的作业控制探测。
-        int g_console_foreground_pgrp = 0;
         KernelTermios g_console_termios = make_default_console_termios();
 
         struct KernelTimeValOld
@@ -5361,7 +5361,7 @@ namespace syscall
             {
                 return SYS_ESRCH;
             }
-            int pgrp = g_console_foreground_pgrp;
+            int pgrp = dev::kConsole.foreground_pgrp();
             if (pgrp <= 0)
             {
                 pgrp = current_proc->get_pgid();
@@ -5402,7 +5402,7 @@ namespace syscall
             {
                 return SYS_EINVAL;
             }
-            g_console_foreground_pgrp = pgrp;
+            dev::kConsole.set_foreground_pgrp(pgrp);
             return 0;
         }
 
@@ -5434,9 +5434,9 @@ namespace syscall
                 return SYS_ENOTTY;
             }
             proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
-            if (current_proc != nullptr && g_console_foreground_pgrp <= 0)
+            if (current_proc != nullptr && dev::kConsole.foreground_pgrp() <= 0)
             {
-                g_console_foreground_pgrp = current_proc->get_pgid();
+                dev::kConsole.set_foreground_pgrp(current_proc->get_pgid());
             }
             return 0;
         }
