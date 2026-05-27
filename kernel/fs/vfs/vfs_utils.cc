@@ -65,6 +65,32 @@ namespace
         entries.push_back({name, type});
     }
 
+    int read_symlink_target_for_path(const eastl::string &path, eastl::string &target_path)
+    {
+        fs::vfile_tree_node *virtual_node = fs::k_vfs.get_virtual_node(path);
+        if (virtual_node != nullptr && virtual_node->file_type == fs::FileTypes::FT_SYMLINK)
+        {
+            if (!virtual_node->provider)
+            {
+                return -ENOENT;
+            }
+            target_path = virtual_node->provider->read_symlink_target();
+            return target_path.empty() ? -ENOENT : 0;
+        }
+
+        char link_target[256];
+        size_t link_len = 0;
+        int read_ret = ext4_readlink(path.c_str(), link_target, sizeof(link_target) - 1, &link_len);
+        if (read_ret != EOK)
+        {
+            return read_ret == ENOENT ? -ENOENT : -read_ret;
+        }
+
+        link_target[link_len] = '\0';
+        target_path = link_target;
+        return 0;
+    }
+
     int collect_real_directory_entries(const eastl::string &path,
                                        eastl::vector<DirentSnapshot> &entries)
     {
@@ -822,22 +848,18 @@ static int resolve_symlinks(const eastl::string &input_path, eastl::string &reso
             current_path += path_parts[i];
 
             // 检查当前路径是否为符号链接
-            int type = vfs_path2filetype(current_path);
+            int type = fs::k_vfs.path2filetype(current_path);
             if (type != fs::FileTypes::FT_SYMLINK)
             {
                 continue;
             }
 
-            char link_target[256];
-            size_t link_len;
-            int r = ext4_readlink(current_path.c_str(), link_target, sizeof(link_target) - 1, &link_len);
+            eastl::string link_path;
+            int r = read_symlink_target_for_path(current_path, link_path);
             if (r != EOK)
             {
-                return -ENOENT;
+                return r;
             }
-            link_target[link_len] = '\0';
-
-            eastl::string link_path(link_target);
             eastl::string new_path;
 
             // 如果符号链接是绝对路径，重新开始
@@ -882,6 +904,11 @@ static int resolve_symlinks(const eastl::string &input_path, eastl::string &reso
     }
 
     return -ELOOP;
+}
+
+int vfs_resolve_path(const eastl::string &input_path, eastl::string &resolved_path)
+{
+    return resolve_symlinks(input_path, resolved_path);
 }
 
 // 将flags转换为可读的字符串表示

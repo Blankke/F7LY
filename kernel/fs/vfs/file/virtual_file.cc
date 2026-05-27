@@ -62,9 +62,19 @@ namespace fs
     
     eastl::string ProcSelfExeProvider::generate_content()
     {
-        // /proc/self/exe 返回当前进程的可执行文件路径
-        eastl::string exe_path = proc::k_pm.get_cur_pcb()->_cwd_name + "busybox";
-        return exe_path;
+        return read_symlink_target();
+    }
+
+    eastl::string ProcSelfExeProvider::read_symlink_target()
+    {
+        proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
+        if (pcb == nullptr)
+        {
+            return "";
+        }
+        // /proc/self/exe 必须指向当前进程真实装载的可执行文件，
+        // 这样 ash 在 ENOEXEC 回退时才能重新 exec 自己来解释脚本。
+        return pcb->exe;
     }
 
     eastl::string ProcMeminfoProvider::generate_content()
