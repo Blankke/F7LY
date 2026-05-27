@@ -1,5 +1,5 @@
 #include "user.hh"
-
+#include "fuckyou.hh"
 static int decode_wait_status(int raw_status)
 {
     if ((raw_status & 0x7f) == 0)
@@ -81,8 +81,9 @@ extern "C"
             0,
         };
         prepare_busybox_applets(envp);
-
-        printf("#### F7LY INTERACTIVE SHELL START ####\n");
+        // print_f7ly();
+        print_fuckyou();
+        printfMagenta("#### F7LY INTERACTIVE SHELL START ####\n");
         char *shell_argv[] = {
             (char *)"busybox",
             (char *)"ash",
