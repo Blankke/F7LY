@@ -198,11 +198,13 @@ namespace syscall
         SYS_get_mempolicy = 236,    // from rocket
         SYS_perf_event_open = 241,
         SYS_accept4 = 242, // from rocket
+        SYS_recvmmsg = 243,
         SYS_wait4 = 260,
         SYS_prlimit64 = 261,
         SYS_fanotify_init = 262,
         SYS_clockadjtime = 266, // from rocket
         SYS_setns = 268,
+        SYS_sendmmsg = 269,
         SYS_renameat2 = 276,
         SYS_getrandom = 278,
         SYS_memfd_create = 279,
@@ -214,6 +216,7 @@ namespace syscall
         SYS_strerror = 300, // from rocket
         SYS_perror = 301,   // from rocket
         SYS_io_uring_setup = 425,
+        SYS_recvmmsg_time64 = 417,
         SYS_open_tree = 428,
         SYS_fsopen = 430,
         SYS_fspick = 433,

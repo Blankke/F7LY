@@ -70,6 +70,7 @@ namespace fs
         // 数据缓冲区
         eastl::vector<uint8_t> _recv_buffer;
         eastl::vector<uint8_t> _send_buffer;
+        struct sockaddr_in _pending_send_addr;
         eastl::vector<loopback_datagram> _datagram_queue;
         
         // 标志位
@@ -80,6 +81,7 @@ namespace fs
         bool _read_shutdown;
         bool _write_shutdown;
         bool _peer_closed;
+        bool _pending_send_has_addr;
         
         SpinLock _lock;
 
@@ -133,6 +135,9 @@ namespace fs
     private:
         bool is_nonblocking_request(int flags) const;
         int ensure_loopback_bound_locked();
+        int append_pending_send_locked(const uint8_t *data, size_t len,
+                                       const struct sockaddr_in *dest_addr);
+        bool pending_send_destination_matches_locked(const struct sockaddr_in *dest_addr) const;
         int enqueue_stream_data(const uint8_t *data, size_t len);
         int enqueue_datagram(const struct sockaddr_in *src_addr, const uint8_t *data, size_t len);
         bool is_valid_address(const struct sockaddr *addr, socklen_t addrlen);

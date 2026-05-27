@@ -79,6 +79,70 @@ namespace syscall
         constexpr uint64 k_min_kernel_file_ptr = PHYSBASE;
         constexpr uint64 k_min_user_pagetable_base = PHYSBASE;
 #endif
+        constexpr u32 k_siocatmark = 0x8905;
+        constexpr u32 k_siocgifconf = 0x8912;
+        constexpr u32 k_siocgifflags = 0x8913;
+        constexpr u32 k_siocsifflags = 0x8914;
+        constexpr int k_ifnamsiz = 16;
+        constexpr short k_iff_up = 0x1;
+        constexpr short k_iff_loopback = 0x8;
+        constexpr short k_iff_running = 0x40;
+        constexpr uint k_mmsg_max_vlen = 1024;
+        constexpr long k_nsec_per_sec = 1000000000L;
+
+        struct socket_ifreq
+        {
+            char ifr_name[k_ifnamsiz];
+            union
+            {
+                struct sockaddr ifr_addr;
+                short ifr_flags;
+                char ifr_padding[24];
+            };
+        };
+
+        struct socket_ifconf
+        {
+            int ifc_len;
+            uint64 ifc_buf;
+        };
+
+        bool is_loopback_ifname(const char *name)
+        {
+            return name[0] == 'l' && name[1] == 'o' && name[2] == '\0';
+        }
+
+        void fill_loopback_ifreq(socket_ifreq &req)
+        {
+            memset(&req, 0, sizeof(req));
+            req.ifr_name[0] = 'l';
+            req.ifr_name[1] = 'o';
+
+            sockaddr_in addr{};
+            addr.sin_family = AF_INET;
+            addr.sin_addr = 0x0100007f;
+            memcpy(&req.ifr_addr, &addr, sizeof(addr));
+        }
+
+        int validate_recvmmsg_timeout(mem::PageTable *pt, uint64 timeout_addr)
+        {
+            if (timeout_addr == 0)
+            {
+                return 0;
+            }
+
+            tmm::timespec timeout{};
+            if (mem::k_vmm.copy_in(*pt, &timeout, timeout_addr, sizeof(timeout)) < 0)
+            {
+                return SYS_EFAULT;
+            }
+            if (timeout.tv_sec < 0 || timeout.tv_nsec < 0 || timeout.tv_nsec >= k_nsec_per_sec)
+            {
+                return SYS_EINVAL;
+            }
+            return 0;
+        }
+
 
         constexpr int k_epoll_ctl_add = 1;
         constexpr int k_epoll_ctl_del = 2;
@@ -1348,6 +1412,9 @@ namespace syscall
         BIND_SYSCALL(getsockopt);  // todo
         BIND_SYSCALL(shutdown_socket);
         BIND_SYSCALL(sendmsg);     // todo
+        BIND_SYSCALL(sendmmsg);
+        BIND_SYSCALL(recvmmsg);
+        BIND_SYSCALL(recvmmsg_time64);
         BIND_SYSCALL(brk);
         BIND_SYSCALL(readahead); // todo
         BIND_SYSCALL(munmap);
@@ -1490,7 +1557,6 @@ namespace syscall
         // intr_stats::k_intr_stats.record_interrupt(666);
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
         uint64 sys_num = p->get_trapframe()->a7; // 获取系统调用号
-
         if (sys_num >= max_syscall_funcs_num || sys_num < 0 || _syscall_funcs[sys_num] == nullptr)
         {
             printfRed("[SyscallHandler::invoke_syscaller]sys_num is out of range\n");
@@ -5077,10 +5143,11 @@ namespace syscall
 
         fs::file *f = nullptr;
         int fd;
-        if (_arg_fd(0, &fd, &f) < 0)
+        int fd_result = _arg_fd(0, &fd, &f);
+        if (fd_result < 0)
         {
             printfRed("[SyscallHandler::sys_ioctl] Error fetching file descriptor\n");
-            return SYS_EINVAL;
+            return fd_result;
         }
         if (f == nullptr)
             return SYS_EBADF;
@@ -5089,7 +5156,8 @@ namespace syscall
         // FS_IOC_GETFLAGS 和 FS_IOC_SETFLAGS 可以用于普通文件
         if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE &&
             f->_attrs.filetype != fs::FileTypes::FT_PIPE &&
-            f->_attrs.filetype != fs::FileTypes::FT_NORMAL)
+            f->_attrs.filetype != fs::FileTypes::FT_NORMAL &&
+            f->_attrs.filetype != fs::FileTypes::FT_SOCKET)
         {
             printfRed("[SyscallHandler::sys_ioctl] File type not supported for ioctl\n");
             return SYS_ENOTTY;
@@ -5113,6 +5181,111 @@ namespace syscall
         printfCyan("[SyscallHandler::sys_ioctl] fd: %d, cmd: 0x%X, arg: %p\n",
                    fd, cmd, (void *)arg);
         /// @todo not implement
+
+        if (f->_attrs.filetype == fs::FileTypes::FT_SOCKET)
+        {
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+            fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
+
+            switch (cmd & 0xFFFF)
+            {
+            case k_siocatmark:
+            {
+                if (socket_f->get_type() != fs::SocketType::TCP)
+                {
+                    return SYS_ENOTTY;
+                }
+                if (arg == 0)
+                {
+                    return SYS_EFAULT;
+                }
+                int at_mark = 0;
+                if (mem::k_vmm.copy_out(*pt, arg, &at_mark, sizeof(at_mark)) < 0)
+                {
+                    return SYS_EFAULT;
+                }
+                return 0;
+            }
+
+            case k_siocgifconf:
+            {
+                if (arg == 0)
+                {
+                    return SYS_EFAULT;
+                }
+
+                socket_ifconf ifc{};
+                if (mem::k_vmm.copy_in(*pt, &ifc, arg, sizeof(ifc)) < 0)
+                {
+                    return SYS_EFAULT;
+                }
+
+                if (ifc.ifc_len >= static_cast<int>(sizeof(socket_ifreq)) && ifc.ifc_buf != 0)
+                {
+                    socket_ifreq req{};
+                    fill_loopback_ifreq(req);
+                    if (mem::k_vmm.copy_out(*pt, ifc.ifc_buf, &req, sizeof(req)) < 0)
+                    {
+                        return SYS_EFAULT;
+                    }
+                    ifc.ifc_len = sizeof(req);
+                }
+                else
+                {
+                    ifc.ifc_len = 0;
+                }
+
+                if (mem::k_vmm.copy_out(*pt, arg, &ifc, sizeof(ifc)) < 0)
+                {
+                    return SYS_EFAULT;
+                }
+                return 0;
+            }
+
+            case k_siocgifflags:
+            {
+                if (arg == 0)
+                {
+                    return SYS_EFAULT;
+                }
+
+                socket_ifreq req{};
+                if (mem::k_vmm.copy_in(*pt, &req, arg, sizeof(req)) < 0)
+                {
+                    return SYS_EFAULT;
+                }
+                if (!is_loopback_ifname(req.ifr_name))
+                {
+                    return SYS_ENODEV;
+                }
+
+                req.ifr_flags = k_iff_up | k_iff_loopback | k_iff_running;
+                if (mem::k_vmm.copy_out(*pt, arg, &req, sizeof(req)) < 0)
+                {
+                    return SYS_EFAULT;
+                }
+                return 0;
+            }
+
+            case k_siocsifflags:
+            {
+                if (arg == 0)
+                {
+                    return SYS_EFAULT;
+                }
+
+                socket_ifreq req{};
+                if (mem::k_vmm.copy_in(*pt, &req, arg, sizeof(req)) < 0)
+                {
+                    return SYS_EFAULT;
+                }
+                return is_loopback_ifname(req.ifr_name) ? 0 : SYS_ENODEV;
+            }
+
+            default:
+                break;
+            }
+        }
 
         if (is_rtc_device_path(f->_path_name))
         {
@@ -5758,7 +5931,7 @@ namespace syscall
 
         printfRed("[SyscallHandler::sys_ioctl] Unsupported ioctl command: 0x%X\n", cmd);
 
-        return -EINVAL;
+        return SYS_ENOTTY;
     }
     uint64 SyscallHandler::sys_keyctl()
     {
@@ -8827,10 +9000,6 @@ namespace syscall
         {
             return SYS_EINVAL;
         }
-        if (domain != AF_UNIX && domain != AF_LOCAL)
-        {
-            return SYS_EAFNOSUPPORT;
-        }
 
         const int socket_flags = type & (O_CLOEXEC | O_NONBLOCK);
         const int base_type = type & ~(O_CLOEXEC | O_NONBLOCK);
@@ -8838,11 +9007,30 @@ namespace syscall
         {
             return SYS_EINVAL;
         }
-        if (base_type != SOCK_STREAM && base_type != SOCK_DGRAM)
+        if (base_type != SOCK_STREAM && base_type != SOCK_DGRAM && base_type != SOCK_RAW)
         {
             return SYS_EPROTONOSUPPORT;
         }
-        if (protocol != 0)
+
+        if (domain == AF_INET)
+        {
+            // Linux 不支持用 socketpair() 创建 AF_INET 端点，但会先按类型/协议给出稳定 errno。
+            if (base_type == SOCK_DGRAM)
+            {
+                return (protocol == 0 || protocol == IPPROTO_UDP) ? SYS_EOPNOTSUPP : SYS_EPROTONOSUPPORT;
+            }
+            if (base_type == SOCK_STREAM)
+            {
+                return (protocol == 0 || protocol == IPPROTO_TCP) ? SYS_EOPNOTSUPP : SYS_EPROTONOSUPPORT;
+            }
+            return SYS_EPROTONOSUPPORT;
+        }
+
+        if (domain != AF_UNIX && domain != AF_LOCAL)
+        {
+            return SYS_EAFNOSUPPORT;
+        }
+        if (base_type == SOCK_RAW || protocol != 0)
         {
             return SYS_EPROTONOSUPPORT;
         }
@@ -9713,6 +9901,10 @@ namespace syscall
             printfRed("[SyscallHandler::sys_setsockopt] 参数错误: optval\n");
             return SYS_EINVAL;
         }
+        if (optval_ptr == 0)
+        {
+            return SYS_EFAULT;
+        }
 
         if (_arg_int(4, optlen_tmp) < 0)
         {
@@ -10037,6 +10229,137 @@ namespace syscall
                    sockfd, result);
         return result;
     }
+
+    uint64 SyscallHandler::sys_sendmmsg()
+    {
+        int sockfd;
+        int vlen_tmp;
+        int flags;
+        uint64 msgvec_ptr;
+
+        if (_arg_int(0, sockfd) < 0 || _arg_addr(1, msgvec_ptr) < 0 ||
+            _arg_int(2, vlen_tmp) < 0 || _arg_int(3, flags) < 0)
+        {
+            return SYS_EINVAL;
+        }
+        if (msgvec_ptr == 0)
+        {
+            return SYS_EFAULT;
+        }
+        if (vlen_tmp < 0 || static_cast<uint>(vlen_tmp) > k_mmsg_max_vlen)
+        {
+            return SYS_EINVAL;
+        }
+        uint vlen = static_cast<uint>(vlen_tmp);
+        if (vlen == 0)
+        {
+            return 0;
+        }
+
+        fs::file *f = nullptr;
+        int fd_result = _arg_fd(0, nullptr, &f);
+        if (fd_result < 0)
+        {
+            return fd_result;
+        }
+        if (f->_attrs.filetype != fs::FileTypes::FT_SOCKET)
+        {
+            return SYS_ENOTSOCK;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
+        uint sent_count = 0;
+
+        for (uint i = 0; i < vlen; ++i)
+        {
+            uint64 current_ptr = msgvec_ptr + i * sizeof(struct mmsghdr);
+            struct mmsghdr user_mmsg{};
+            if (mem::k_vmm.copy_in(*pt, &user_mmsg, current_ptr, sizeof(user_mmsg)) < 0)
+            {
+                return sent_count > 0 ? sent_count : SYS_EFAULT;
+            }
+
+            struct msghdr user_msg = user_mmsg.msg_hdr;
+            if (user_msg.msg_iovlen > IOV_MAX)
+            {
+                return sent_count > 0 ? sent_count : SYS_EMSGSIZE;
+            }
+            if (user_msg.msg_iovlen > 0 && user_msg.msg_iov == nullptr)
+            {
+                return sent_count > 0 ? sent_count : SYS_EFAULT;
+            }
+
+            eastl::vector<struct iovec> kernel_iov(user_msg.msg_iovlen);
+            if (user_msg.msg_iovlen > 0 &&
+                mem::k_vmm.copy_in(*pt, kernel_iov.data(), (uint64)user_msg.msg_iov,
+                                   user_msg.msg_iovlen * sizeof(struct iovec)) < 0)
+            {
+                return sent_count > 0 ? sent_count : SYS_EFAULT;
+            }
+
+            eastl::vector<eastl::vector<uint8_t>> data_buffers(user_msg.msg_iovlen);
+            for (size_t j = 0; j < user_msg.msg_iovlen; ++j)
+            {
+                if (kernel_iov[j].iov_len == 0)
+                {
+                    continue;
+                }
+                if (kernel_iov[j].iov_base == nullptr)
+                {
+                    return sent_count > 0 ? sent_count : SYS_EFAULT;
+                }
+                data_buffers[j].resize(kernel_iov[j].iov_len);
+                if (mem::k_vmm.copy_in(*pt, data_buffers[j].data(), (uint64)kernel_iov[j].iov_base,
+                                       kernel_iov[j].iov_len) < 0)
+                {
+                    return sent_count > 0 ? sent_count : SYS_EFAULT;
+                }
+                kernel_iov[j].iov_base = data_buffers[j].data();
+            }
+
+            uint8_t name_storage[sizeof(struct sockaddr_un)];
+            memset(name_storage, 0, sizeof(name_storage));
+            struct msghdr kernel_msg = user_msg;
+            kernel_msg.msg_iov = kernel_iov.data();
+            if (user_msg.msg_name != nullptr && user_msg.msg_namelen > 0)
+            {
+                if (user_msg.msg_namelen < sizeof(struct sockaddr) ||
+                    user_msg.msg_namelen > sizeof(name_storage))
+                {
+                    return sent_count > 0 ? sent_count : SYS_EINVAL;
+                }
+                if (mem::k_vmm.copy_in(*pt, name_storage, (uint64)user_msg.msg_name,
+                                       user_msg.msg_namelen) < 0)
+                {
+                    return sent_count > 0 ? sent_count : SYS_EFAULT;
+                }
+                kernel_msg.msg_name = name_storage;
+            }
+            else
+            {
+                kernel_msg.msg_name = nullptr;
+                kernel_msg.msg_namelen = 0;
+            }
+
+            int result = socket_f->sendmsg(&kernel_msg, flags);
+            if (result < 0)
+            {
+                return sent_count > 0 ? sent_count : result;
+            }
+
+            user_mmsg.msg_len = static_cast<unsigned int>(result);
+            if (mem::k_vmm.copy_out(*pt, current_ptr, &user_mmsg, sizeof(user_mmsg)) < 0)
+            {
+                return sent_count > 0 ? sent_count : SYS_EFAULT;
+            }
+            ++sent_count;
+        }
+
+        return sent_count;
+    }
+
     uint64 SyscallHandler::sys_mprotect()
     {
         uint64 addr, len;
@@ -13176,6 +13499,167 @@ namespace syscall
 
         return result;
     }
+
+    uint64 SyscallHandler::sys_recvmmsg()
+    {
+        int sockfd;
+        int vlen_tmp;
+        int flags;
+        uint64 msgvec_ptr;
+        uint64 timeout_ptr;
+
+        if (_arg_int(0, sockfd) < 0 || _arg_addr(1, msgvec_ptr) < 0 ||
+            _arg_int(2, vlen_tmp) < 0 || _arg_int(3, flags) < 0)
+        {
+            return SYS_EINVAL;
+        }
+        timeout_ptr = _arg_raw(4);
+        if (msgvec_ptr == 0)
+        {
+            return SYS_EFAULT;
+        }
+        if (vlen_tmp < 0 || static_cast<uint>(vlen_tmp) > k_mmsg_max_vlen)
+        {
+            return SYS_EINVAL;
+        }
+        uint vlen = static_cast<uint>(vlen_tmp);
+        if (vlen == 0)
+        {
+            return 0;
+        }
+
+        fs::file *f = nullptr;
+        int fd_result = _arg_fd(0, nullptr, &f);
+        if (fd_result < 0)
+        {
+            return fd_result;
+        }
+        if (f->_attrs.filetype != fs::FileTypes::FT_SOCKET)
+        {
+            return SYS_ENOTSOCK;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        mem::PageTable *pt = p->get_pagetable();
+        int timeout_result = validate_recvmmsg_timeout(pt, timeout_ptr);
+        if (timeout_result < 0)
+        {
+            return timeout_result;
+        }
+
+        fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
+        uint received_count = 0;
+        int current_flags = flags;
+
+        for (uint i = 0; i < vlen; ++i)
+        {
+            uint64 current_ptr = msgvec_ptr + i * sizeof(struct mmsghdr);
+            struct mmsghdr user_mmsg{};
+            if (mem::k_vmm.copy_in(*pt, &user_mmsg, current_ptr, sizeof(user_mmsg)) < 0)
+            {
+                return received_count > 0 ? received_count : SYS_EFAULT;
+            }
+
+            struct msghdr user_msg = user_mmsg.msg_hdr;
+            if (user_msg.msg_iovlen > IOV_MAX)
+            {
+                return received_count > 0 ? received_count : SYS_EMSGSIZE;
+            }
+            if (user_msg.msg_iovlen > 0 && user_msg.msg_iov == nullptr)
+            {
+                return received_count > 0 ? received_count : SYS_EFAULT;
+            }
+
+            eastl::vector<struct iovec> kernel_iov(user_msg.msg_iovlen);
+            if (user_msg.msg_iovlen > 0 &&
+                mem::k_vmm.copy_in(*pt, kernel_iov.data(), (uint64)user_msg.msg_iov,
+                                   user_msg.msg_iovlen * sizeof(struct iovec)) < 0)
+            {
+                return received_count > 0 ? received_count : SYS_EFAULT;
+            }
+
+            eastl::vector<struct iovec> original_iov = kernel_iov;
+            eastl::vector<eastl::vector<uint8_t>> buffers(user_msg.msg_iovlen);
+            for (size_t j = 0; j < user_msg.msg_iovlen; ++j)
+            {
+                if (kernel_iov[j].iov_len == 0)
+                {
+                    continue;
+                }
+                if (kernel_iov[j].iov_base == nullptr)
+                {
+                    return received_count > 0 ? received_count : SYS_EFAULT;
+                }
+                buffers[j].resize(kernel_iov[j].iov_len);
+                kernel_iov[j].iov_base = buffers[j].data();
+            }
+
+            uint8_t name_storage[sizeof(struct sockaddr_un)];
+            memset(name_storage, 0, sizeof(name_storage));
+            struct msghdr kernel_msg = user_msg;
+            kernel_msg.msg_iov = kernel_iov.data();
+            if (user_msg.msg_name != nullptr && user_msg.msg_namelen > 0)
+            {
+                kernel_msg.msg_name = name_storage;
+                kernel_msg.msg_namelen = eastl::min(user_msg.msg_namelen,
+                                                    static_cast<socklen_t>(sizeof(name_storage)));
+            }
+            else
+            {
+                kernel_msg.msg_name = nullptr;
+                kernel_msg.msg_namelen = 0;
+            }
+
+            int result = socket_f->recvmsg(&kernel_msg, current_flags);
+            if (result < 0)
+            {
+                return received_count > 0 ? received_count : result;
+            }
+
+            size_t remaining = result;
+            for (size_t j = 0; j < user_msg.msg_iovlen && remaining > 0; ++j)
+            {
+                size_t copy_len = eastl::min(original_iov[j].iov_len, remaining);
+                if (copy_len > 0 &&
+                    mem::k_vmm.copy_out(*pt, (uint64)original_iov[j].iov_base,
+                                        buffers[j].data(), copy_len) < 0)
+                {
+                    return received_count > 0 ? received_count : SYS_EFAULT;
+                }
+                remaining -= copy_len;
+            }
+
+            if (user_msg.msg_name != nullptr && user_msg.msg_namelen > 0)
+            {
+                socklen_t copy_len = eastl::min(user_msg.msg_namelen, kernel_msg.msg_namelen);
+                if (copy_len > 0 &&
+                    mem::k_vmm.copy_out(*pt, (uint64)user_msg.msg_name, name_storage, copy_len) < 0)
+                {
+                    return received_count > 0 ? received_count : SYS_EFAULT;
+                }
+            }
+
+            user_mmsg.msg_hdr.msg_namelen = kernel_msg.msg_namelen;
+            user_mmsg.msg_hdr.msg_flags = kernel_msg.msg_flags;
+            user_mmsg.msg_len = static_cast<unsigned int>(result);
+            if (mem::k_vmm.copy_out(*pt, current_ptr, &user_mmsg, sizeof(user_mmsg)) < 0)
+            {
+                return received_count > 0 ? received_count : SYS_EFAULT;
+            }
+
+            ++received_count;
+            // 已经收到至少一条后，后续消息按非阻塞探测，避免 vlen 大于队列长度时卡住。
+            current_flags |= MSG_DONTWAIT;
+        }
+
+        return received_count;
+    }
+
+    uint64 SyscallHandler::sys_recvmmsg_time64()
+    {
+        return sys_recvmmsg();
+    }
+
     uint64 SyscallHandler::sys_fadvise64()
     {
         int fd;

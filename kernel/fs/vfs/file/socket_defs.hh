@@ -133,6 +133,12 @@ struct msghdr {
     int msg_flags;              /* flags on received message */
 };
 
+// Multiple-message header used by sendmmsg/recvmmsg.
+struct mmsghdr {
+    struct msghdr msg_hdr;
+    unsigned int msg_len;
+};
+
 // sendmsg/recvmsg flags
 #define MSG_OOB         0x01    /* process out-of-band data */
 #define MSG_PEEK        0x02    /* peek at incoming message */
@@ -142,3 +148,4 @@ struct msghdr {
 #define MSG_DONTWAIT    0x40    /* nonblocking request */
 #define MSG_WAITALL     0x100   /* wait for full request or error */
 #define MSG_ERRQUEUE    0x2000  /* fetch queued errors */
+#define MSG_MORE        0x8000  /* sender will send more */

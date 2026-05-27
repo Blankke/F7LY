@@ -19,6 +19,7 @@ namespace fs
         constexpr int k_protocol_tcp = 6;
         constexpr int k_protocol_udp = 17;
         constexpr int k_default_socket_buffer_size = 64 * 1024;
+        constexpr socklen_t k_max_user_sockaddr_len = 4096;
         constexpr int k_unix_binding_max = 256;
         constexpr int k_at_fdcwd = -100;
 
@@ -59,6 +60,13 @@ namespace fs
         bool is_loopback_or_any(uint32 addr)
         {
             return addr == 0 || addr == k_loopback_addr || addr == 0x7f000001;
+        }
+
+        bool same_sockaddr_in(const struct sockaddr_in &lhs, const struct sockaddr_in &rhs)
+        {
+            return lhs.sin_family == rhs.sin_family &&
+                   lhs.sin_port == rhs.sin_port &&
+                   lhs.sin_addr == rhs.sin_addr;
         }
 
         void ensure_loopback_table()
@@ -245,10 +253,12 @@ namespace fs
         , _read_shutdown(false)
         , _write_shutdown(false)
         , _peer_closed(false)
+        , _pending_send_has_addr(false)
     {
         new(&_stat) Kstat(FT_SOCKET);
         memset(&_local_addr, 0, sizeof(_local_addr));
         memset(&_remote_addr, 0, sizeof(_remote_addr));
+        memset(&_pending_send_addr, 0, sizeof(_pending_send_addr));
         memset(&_local_unix_addr, 0, sizeof(_local_unix_addr));
         memset(&_remote_unix_addr, 0, sizeof(_remote_unix_addr));
         lwext4_file_struct.flags = O_RDWR;
@@ -287,6 +297,8 @@ namespace fs
     {
         _lock.acquire();
         _state = SocketState::CLOSED;
+        _send_buffer.clear();
+        _pending_send_has_addr = false;
         proc::k_pm.wakeup(&_pending_connections);
         proc::k_pm.wakeup(&_recv_buffer);
         proc::k_pm.wakeup(&_datagram_queue);
@@ -788,6 +800,25 @@ namespace fs
                 return -EPIPE;
             }
             socket_file *peer = _peer;
+            eastl::vector<uint8_t> flush_buffer;
+            const uint8_t *send_data = data;
+            size_t send_len = len;
+
+            if (flags & MSG_MORE) {
+                int append_result = append_pending_send_locked(data, len, nullptr);
+                _lock.release();
+                return append_result;
+            }
+
+            if (!_send_buffer.empty()) {
+                flush_buffer.reserve(_send_buffer.size() + len);
+                flush_buffer.insert(flush_buffer.end(), _send_buffer.begin(), _send_buffer.end());
+                flush_buffer.insert(flush_buffer.end(), data, data + len);
+                _send_buffer.clear();
+                _pending_send_has_addr = false;
+                send_data = flush_buffer.data();
+                send_len = flush_buffer.size();
+            }
             _lock.release();
 
             // 只在本端锁内读取连接状态；实际入队时只持有对端锁，避免双向 send 互相等待。
@@ -798,8 +829,8 @@ namespace fs
                 return -EPIPE;
             }
             size_t old_size = peer->_recv_buffer.size();
-            peer->_recv_buffer.resize(old_size + len);
-            memcpy(peer->_recv_buffer.data() + old_size, data, len);
+            peer->_recv_buffer.resize(old_size + send_len);
+            memcpy(peer->_recv_buffer.data() + old_size, send_data, send_len);
             proc::k_pm.wakeup(&peer->_recv_buffer);
             peer->_lock.release();
             return static_cast<int>(len);
@@ -941,18 +972,47 @@ namespace fs
             if (src.sin_addr == 0) {
                 src.sin_addr = k_loopback_addr;
             }
+            eastl::vector<uint8_t> flush_buffer;
+            const uint8_t *send_data = data;
+            size_t send_len = len;
+            struct sockaddr_in send_dest = dest;
+
+            if (flags & MSG_MORE) {
+                int append_result = append_pending_send_locked(data, len, &dest);
+                _lock.release();
+                return append_result;
+            }
+
+            if (!_send_buffer.empty()) {
+                if (!pending_send_destination_matches_locked(&dest)) {
+                    _lock.release();
+                    return -EINVAL;
+                }
+                if (_send_buffer.size() + len > static_cast<size_t>(k_default_socket_buffer_size)) {
+                    _lock.release();
+                    return -EMSGSIZE;
+                }
+                send_dest = _pending_send_addr;
+                flush_buffer.reserve(_send_buffer.size() + len);
+                flush_buffer.insert(flush_buffer.end(), _send_buffer.begin(), _send_buffer.end());
+                flush_buffer.insert(flush_buffer.end(), data, data + len);
+                _send_buffer.clear();
+                _pending_send_has_addr = false;
+                send_data = flush_buffer.data();
+                send_len = flush_buffer.size();
+            }
 
             _lock.release();
 
             socket_file *target = nullptr;
             g_loopback_lock.acquire();
-            loopback_binding *binding = find_loopback_binding(SocketType::UDP, dest.sin_port);
+            loopback_binding *binding = find_loopback_binding(SocketType::UDP, send_dest.sin_port);
             target = binding ? binding->socket : nullptr;
             g_loopback_lock.release();
 
             if (target != nullptr) {
                 target->_lock.acquire();
-                target->enqueue_datagram(&src, data, len);
+                target->enqueue_datagram(&src, send_data, send_len);
                 target->_lock.release();
             }
             return static_cast<int>(len);
@@ -1065,12 +1125,16 @@ namespace fs
                 break;
             case 1: // SHUT_WR
                 _write_shutdown = true;
+                _send_buffer.clear();
+                _pending_send_has_addr = false;
                 break;
             case 2: // SHUT_RDWR
                 _read_shutdown = true;
                 _write_shutdown = true;
                 _recv_buffer.clear();
+                _send_buffer.clear();
                 _datagram_queue.clear();
+                _pending_send_has_addr = false;
                 _state = SocketState::CLOSED;
                 break;
             default:
@@ -1247,6 +1311,9 @@ namespace fs
         if (!addr || !addrlen) {
             return -EFAULT;
         }
+        if ((uint64)addr < sizeof(struct sockaddr) || (uint64)addrlen < sizeof(socklen_t)) {
+            return -EFAULT;
+        }
 
         _lock.acquire();
         if (_family == SocketFamily::UNIX) {
@@ -1256,6 +1323,10 @@ namespace fs
             if (mem::k_vmm.copy_in(*pt, &requested_len, (uint64)addrlen, sizeof(socklen_t)) < 0) {
                 _lock.release();
                 return -EFAULT;
+            }
+            if (requested_len > k_max_user_sockaddr_len) {
+                _lock.release();
+                return -EINVAL;
             }
             socklen_t copy_len = eastl::min(requested_len, static_cast<socklen_t>(sizeof(struct sockaddr_un)));
             if (mem::k_vmm.copy_out(*pt, (uint64)addr, &_local_unix_addr, copy_len) < 0) {
@@ -1280,6 +1351,9 @@ namespace fs
         if (!addr || !addrlen) {
             return -EFAULT;
         }
+        if ((uint64)addr < sizeof(struct sockaddr) || (uint64)addrlen < sizeof(socklen_t)) {
+            return -EFAULT;
+        }
 
         _lock.acquire();
         
@@ -1295,6 +1369,10 @@ namespace fs
             if (mem::k_vmm.copy_in(*pt, &requested_len, (uint64)addrlen, sizeof(socklen_t)) < 0) {
                 _lock.release();
                 return -EFAULT;
+            }
+            if (requested_len > k_max_user_sockaddr_len) {
+                _lock.release();
+                return -EINVAL;
             }
             socklen_t copy_len = eastl::min(requested_len, static_cast<socklen_t>(sizeof(struct sockaddr_un)));
             if (mem::k_vmm.copy_out(*pt, (uint64)addr, &_remote_unix_addr, copy_len) < 0) {
@@ -1319,6 +1397,38 @@ namespace fs
     bool socket_file::is_nonblocking_request(int flags) const
     {
         return !_blocking || (flags & MSG_DONTWAIT);
+    }
+
+    int socket_file::append_pending_send_locked(const uint8_t *data, size_t len,
+                                                const struct sockaddr_in *dest_addr)
+    {
+        if (data == nullptr) {
+            return -EFAULT;
+        }
+        if (_type == SocketType::UDP && dest_addr != nullptr) {
+            if (!_pending_send_has_addr) {
+                _pending_send_addr = *dest_addr;
+                _pending_send_has_addr = true;
+            } else if (!pending_send_destination_matches_locked(dest_addr)) {
+                return -EINVAL;
+            }
+        }
+        if (_send_buffer.size() + len > static_cast<size_t>(k_default_socket_buffer_size)) {
+            return -EMSGSIZE;
+        }
+
+        size_t old_size = _send_buffer.size();
+        _send_buffer.resize(old_size + len);
+        memcpy(_send_buffer.data() + old_size, data, len);
+        return static_cast<int>(len);
+    }
+
+    bool socket_file::pending_send_destination_matches_locked(const struct sockaddr_in *dest_addr) const
+    {
+        if (!_pending_send_has_addr || dest_addr == nullptr) {
+            return true;
+        }
+        return same_sockaddr_in(_pending_send_addr, *dest_addr);
     }
 
     int socket_file::ensure_loopback_bound_locked()
@@ -1436,6 +1546,9 @@ namespace fs
         if (!user_addr || !user_addrlen) {
             return -EFAULT;
         }
+        if ((uint64)user_addr < sizeof(struct sockaddr) || (uint64)user_addrlen < sizeof(socklen_t)) {
+            return -EFAULT;
+        }
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
@@ -1443,6 +1556,9 @@ namespace fs
         socklen_t requested_len = 0;
         if (mem::k_vmm.copy_in(*pt, &requested_len, (uint64)user_addrlen, sizeof(socklen_t)) < 0) {
             return -EFAULT;
+        }
+        if (requested_len > k_max_user_sockaddr_len) {
+            return -EINVAL;
         }
 
         socklen_t copy_len = eastl::min(requested_len, static_cast<socklen_t>(sizeof(struct sockaddr_in)));

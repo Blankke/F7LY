@@ -163,6 +163,8 @@ int priority_ltp_regression_riscv(void);
 int regression_suite_4d1444(void);
 int network_loopback_smoke(void);
 int network_ltp_socket_subset(void);
+int network_ltp_socket_abi_subset(void);
+int network_ltp_socket_batch_subset(void);
 int iozone_mclock_research(void);
 int final_test_musl(void);
 int final_test_glibc(void);
