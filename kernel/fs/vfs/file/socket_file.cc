@@ -535,6 +535,21 @@ namespace fs
         return result;
     }
 
+    bool socket_file::epoll_rdhup_ready() const
+    {
+        auto *self = const_cast<socket_file *>(this);
+        self->_lock.acquire();
+        // EPOLLRDHUP 只对面向连接的字节流语义有意义：
+        // 1. 本端 shutdown(SHUT_RD) 后，读半边已经挂起；
+        // 2. 对端关闭写半边/连接后，本端会看到 peer closed。
+        // LTP epoll_wait05 就依赖这两类状态都能被 epoll 观察到。
+        bool ready = _state == SocketState::CONNECTED &&
+                     _type == SocketType::TCP &&
+                     (_read_shutdown || _peer_closed);
+        self->_lock.release();
+        return ready;
+    }
+
     off_t socket_file::lseek(off_t offset, int whence)
     {
         // Socket不支持seek操作
@@ -785,11 +800,12 @@ namespace fs
         }
         // 根据 socket 族类型处理不同的连接方式
         if (_family == SocketFamily::UNIX) {
-            if (_type != SocketType::TCP) {
-                _lock.release();
-                return -EOPNOTSUPP;
-            }
-            if (addrlen < sizeof(struct sockaddr_un)) {
+            // Unix domain socket 连接
+            constexpr socklen_t k_unix_addr_prefix_len =
+                static_cast<socklen_t>(offsetof(struct sockaddr_un, sun_path));
+            // Linux 允许只传“family + 实际路径长度”这一段 sockaddr_un。
+            // 这里不能强行要求满 108 字节 sun_path，否则 musl 的 nscd 探测会直接得到 EINVAL。
+            if (addrlen < k_unix_addr_prefix_len + 1) {
                 _lock.release();
                 return -EINVAL;
             }

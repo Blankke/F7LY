@@ -26,6 +26,7 @@ struct extended_posix_timer
 {
     int timer_id;               // 定时器 ID
     int clockid;                // 时钟类型
+    proc::Pcb *owner;           // 定时器所属进程，过期时应向它投递通知
     struct sigevent
     {
         int sigev_notify;

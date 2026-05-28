@@ -12,6 +12,8 @@ namespace fs
         int fd;
         uint32 events;
         uint64 data;
+        uint32 last_ready_events = 0;
+        bool oneshot_disabled = false;
     };
 
     class epoll_file : public file
@@ -54,7 +56,7 @@ namespace fs
                 return -EEXIST;
             }
 
-            _watch_list.push_back(epoll_watch_entry{fd, events, data});
+            _watch_list.push_back(epoll_watch_entry{fd, events, data, 0, false});
             return 0;
         }
 
@@ -70,6 +72,8 @@ namespace fs
 
             it->events = events;
             it->data = data;
+            it->last_ready_events = 0;
+            it->oneshot_disabled = false;
             return 0;
         }
 
@@ -89,5 +93,7 @@ namespace fs
 
         int create_flags() const { return _create_flags; }
         size_t watch_count() const { return _watch_list.size(); }
+        eastl::vector<epoll_watch_entry> &watch_list() { return _watch_list; }
+        const eastl::vector<epoll_watch_entry> &watch_list() const { return _watch_list; }
     };
 } // namespace fs

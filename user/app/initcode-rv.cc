@@ -5,21 +5,21 @@ extern "C"
     __attribute__((section(".text.startup"))) int main()
     {
         init_env("/musl/");
-        ltp_test(true);
         // netperf_test("/musl/");
         // netperf_test("/glibc/");
         // iperf_test("/musl/");
         // iperf_test("/glibc/");
-        // basic_test("/musl/");
-        // basic_test("/glibc/");
         // iozone_test("/musl");
         // iozone_test("/glibc");
         // libc_test("/musl/");
+        // basic_test("/musl/");
+        // basic_test("/glibc/");
         // lua_test("/musl/");
         // lua_test("/glibc/");
         // libcbench_test("/musl");
         // libcbench_test("/glibc");
-        // ltp_test(false);
+        ltp_test(true);
+        ltp_test(false);
         // busybox_test("/musl/");
         // busybox_test("/glibc/");
         shutdown();

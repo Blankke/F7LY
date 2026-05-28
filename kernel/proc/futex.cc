@@ -12,6 +12,7 @@
 namespace
 {
     constexpr long k_nsec_per_sec = 1000000000L;
+    constexpr uint64 k_futex_key_invalid = 0;
     SpinLock g_futex_wait_lock;
     bool g_futex_wait_lock_ready = false;
 
@@ -77,45 +78,56 @@ namespace
         }
         return 0;
     }
+
+    // futex 的真正匹配对象应该是底层共享页，而不是裸的用户虚拟地址。
+    // 这里按“当前映射到的物理地址 + 页内偏移”构造键，先把 LTP checkpoint
+    // 这类多进程共享映射场景对齐到正确语义。
+    uint64 resolve_futex_key(proc::Pcb *p, uint64 uaddr)
+    {
+        if (p == nullptr || p->get_pagetable() == nullptr || uaddr == 0)
+        {
+            return k_futex_key_invalid;
+        }
+
+        void *pa = p->get_pagetable()->walk_addr(uaddr);
+        if (pa == nullptr)
+        {
+            return k_futex_key_invalid;
+        }
+        return reinterpret_cast<uint64>(pa);
+    }
 }
 
 namespace proc
 {
-    void futex_sleep(void *chan, void *futex_addr)
+    void futex_sleep(void *chan, void *futex_addr, uint64 futex_key)
     {
         Pcb *p = k_pm.get_cur_pcb();
 
-        // 注意：调用者应该已经持有进程锁
-        // 设置等待通道和futex地址
         p->_chan = chan;
-        if (p->_futex_addr == 0)
-        {
-            p->_futex_addr = futex_addr;
-        }
+        p->_futex_addr = futex_addr;
+        p->_futex_key = futex_key;
         p->_state = SLEEPING;
 
         k_scheduler.call_sched();
 
-        // 清理等待通道
         p->_chan = 0;
-        
-        // 如果被信号唤醒，清理futex_addr以便调用者知道这是信号中断
-        if (ipc::signal::has_fatal_signal_pending(p) || ipc::signal::has_unmasked_signal_pending(p)) {
+        if (ipc::signal::has_fatal_signal_pending(p) || ipc::signal::has_unmasked_signal_pending(p))
+        {
             p->_futex_addr = 0;
+            p->_futex_key = 0;
         }
     }
 
-    static void futex_sleep_with_interlock(void *chan, void *futex_addr, SpinLock &interlock)
+    static void futex_sleep_with_interlock(void *chan, void *futex_addr, uint64 futex_key, SpinLock &interlock)
     {
         Pcb *p = k_pm.get_cur_pcb();
 
         // futex WAIT 的“比较值”和“入睡”必须与 FUTEX_WAKE 串行化，
         // 否则 wake 可能刚好发生在两者之间，最终把等待线程永远丢在睡眠队列里。
         p->_chan = chan;
-        if (p->_futex_addr == 0)
-        {
-            p->_futex_addr = futex_addr;
-        }
+        p->_futex_addr = futex_addr;
+        p->_futex_key = futex_key;
         p->_state = SLEEPING;
 
         interlock.release();
@@ -125,6 +137,7 @@ namespace proc
         if (ipc::signal::has_fatal_signal_pending(p) || ipc::signal::has_unmasked_signal_pending(p))
         {
             p->_futex_addr = 0;
+            p->_futex_key = 0;
         }
     }
 
@@ -133,13 +146,37 @@ namespace proc
                    bool use_realtime_clock)
     {
         Pcb *p = k_pm.get_cur_pcb();
-        int current_val;
+        int current_val = 0;
         bool has_slept = false;
 
         ensure_futex_wait_lock_ready();
         p->_lock.acquire();
 
-        // 处理超时等待
+        auto clear_wait_state = [&]() {
+            p->_futex_addr = 0;
+            p->_futex_key = 0;
+        };
+
+        auto load_and_resolve = [&](uint64 &futex_key) -> int {
+            if (mem::k_vmm.copy_in(*p->get_pagetable(), (char *)&current_val, uaddr, sizeof(int)))
+            {
+                clear_wait_state();
+                return syscall::SYS_EFAULT;
+            }
+            if (current_val != val)
+            {
+                clear_wait_state();
+                return has_slept ? 0 : syscall::SYS_EAGAIN;
+            }
+            futex_key = resolve_futex_key(p, uaddr);
+            if (futex_key == k_futex_key_invalid)
+            {
+                clear_wait_state();
+                return syscall::SYS_EFAULT;
+            }
+            return 0;
+        };
+
         if (ts)
         {
             if (!futex_timespec_is_valid(*ts))
@@ -163,7 +200,7 @@ namespace proc
                 }
                 if (compare_timespec(now_ts, absolute_deadline) >= 0)
                 {
-                    p->_futex_addr = 0;
+                    clear_wait_state();
                     p->_lock.release();
                     return syscall::SYS_ETIMEDOUT;
                 }
@@ -176,37 +213,23 @@ namespace proc
                     p->_lock.release();
                     return syscall::SYS_EINVAL;
                 }
-
-                // 零超时是合法输入，语义上应立即返回 ETIMEDOUT。
                 if (timeout_cycles == 0)
                 {
-                    p->_futex_addr = 0;
+                    clear_wait_state();
                     p->_lock.release();
                     return syscall::SYS_ETIMEDOUT;
                 }
-
-                uint64 now = tmm::get_hw_time_stamp();
-                deadline = now + timeout_cycles;
+                deadline = tmm::get_hw_time_stamp() + timeout_cycles;
             }
 
             while (true)
             {
-                // 检查致命信号（无法屏蔽的信号如SIGKILL）
-                if (ipc::signal::has_fatal_signal_pending(p))
+                if (ipc::signal::has_fatal_signal_pending(p) ||
+                    ipc::signal::has_unmasked_signal_pending(p))
                 {
-                    // 被致命信号中断，清理状态
-                    p->_futex_addr = 0;
+                    clear_wait_state();
                     p->_lock.release();
-                    return syscall::SYS_EINTR;  // 系统调用被信号中断
-                }
-                
-                // 检查其他可中断的信号（考虑信号屏蔽）
-                if (ipc::signal::has_unmasked_signal_pending(p))
-                {
-                    // 被可中断信号中断，清理状态
-                    p->_futex_addr = 0;
-                    p->_lock.release();
-                    return syscall::SYS_EINTR;  // 系统调用被信号中断
+                    return syscall::SYS_EINTR;
                 }
 
                 if (timeout_is_absolute)
@@ -215,57 +238,41 @@ namespace proc
                     tmm::timespec now_ts{};
                     if (tmm::k_tm.clock_gettime(clock_id, &now_ts) != 0)
                     {
-                        p->_futex_addr = 0;
+                        clear_wait_state();
                         p->_lock.release();
                         return syscall::SYS_EINVAL;
                     }
                     if (compare_timespec(now_ts, absolute_deadline) >= 0)
                     {
-                        p->_futex_addr = 0;
+                        clear_wait_state();
                         p->_lock.release();
                         return syscall::SYS_ETIMEDOUT;
                     }
                 }
-                else
+                else if (tmm::get_hw_time_stamp() >= deadline)
                 {
-                    uint64 now = tmm::get_hw_time_stamp();
-                    if (now >= deadline)
-                    {
-                        p->_futex_addr = 0;
-                        p->_lock.release();
-                        return syscall::SYS_ETIMEDOUT;
-                    }
+                    clear_wait_state();
+                    p->_lock.release();
+                    return syscall::SYS_ETIMEDOUT;
                 }
 
-                // 让超时 futex 睡在真正会被 timer tick 唤醒的公共通道上。
-                // 被 tick 唤醒后重新检查 deadline；被 futex_wakeup/信号唤醒时仍走原有分支。
                 g_futex_wait_lock.acquire();
-                if (mem::k_vmm.copy_in(*p->get_pagetable(),
-                                       (char *)&current_val,
-                                       uaddr,
-                                       sizeof(int)))
+                uint64 futex_key = 0;
+                int load_ret = load_and_resolve(futex_key);
+                if (load_ret != 0)
                 {
                     g_futex_wait_lock.release();
-                    p->_futex_addr = 0;
                     p->_lock.release();
-                    return syscall::SYS_EFAULT;
-                }
-                if (current_val != val)
-                {
-                    g_futex_wait_lock.release();
-                    p->_futex_addr = 0;
-                    p->_lock.release();
-                    return has_slept ? 0 : syscall::SYS_EAGAIN;
+                    return load_ret;
                 }
 
-                futex_sleep_with_interlock(tmm::k_tm.get_tick_wait_channel(), (void *)uaddr, g_futex_wait_lock);
+                futex_sleep_with_interlock(tmm::k_tm.get_tick_wait_channel(),
+                                           (void *)uaddr,
+                                           futex_key,
+                                           g_futex_wait_lock);
                 has_slept = true;
 
-                // futex_wakeup() 和“被信号打断”都会把 _futex_addr 清零。
-                // 这里必须先判信号，再判正常唤醒；否则 sem_timedwait/pthread_join
-                // 这类带超时或内部走 timed futex 的取消点会把 EINTR 误报成成功，
-                // 用户态随后继续执行，长跑里就容易卡在取消点测例上。
-                if (p->_futex_addr == 0)
+                if (p->_futex_key == 0)
                 {
                     if (ipc::signal::has_fatal_signal_pending(p) ||
                         ipc::signal::has_unmasked_signal_pending(p))
@@ -274,37 +281,32 @@ namespace proc
                         return syscall::SYS_EINTR;
                     }
                     p->_lock.release();
-                    return 0;  // 成功被唤醒
+                    return 0;
                 }
             }
         }
 
-        // 无超时的等待
-        // 和 timeout 路径一样，必须把“比较值”和“真正睡下去”串起来，
-        // 否则 sem_wait/pthread_join 这类常见路径会偶发丢 wake。
         while (true)
         {
             g_futex_wait_lock.acquire();
-            if (mem::k_vmm.copy_in(*p->get_pagetable(), (char *)&current_val, uaddr, sizeof(int)))
+            uint64 futex_key = 0;
+            int load_ret = load_and_resolve(futex_key);
+            if (load_ret != 0)
             {
                 g_futex_wait_lock.release();
                 p->_lock.release();
-                return syscall::SYS_EFAULT;
-            }
-            if (current_val != val)
-            {
-                g_futex_wait_lock.release();
-                p->_futex_addr = 0;
-                p->_lock.release();
-                return has_slept ? 0 : syscall::SYS_EAGAIN;
+                return load_ret;
             }
 
             // 无超时等待也走 tick 通道周期性重检，避免用户态值已经变化、
             // 但由于历史库实现或竞态没有显式 FUTEX_WAKE 时永久挂死。
-            futex_sleep_with_interlock(tmm::k_tm.get_tick_wait_channel(), (void *)uaddr, g_futex_wait_lock);
+            futex_sleep_with_interlock(tmm::k_tm.get_tick_wait_channel(),
+                                       (void *)uaddr,
+                                       futex_key,
+                                       g_futex_wait_lock);
             has_slept = true;
 
-            if (p->_futex_addr == 0)
+            if (p->_futex_key == 0)
             {
                 if (ipc::signal::has_fatal_signal_pending(p) || ipc::signal::has_unmasked_signal_pending(p))
                 {
@@ -321,29 +323,40 @@ namespace proc
     {
         ensure_futex_wait_lock_ready();
 
-        // 参数验证
         if (val < 0)
         {
-            return syscall::SYS_EINVAL;  // 无效参数
+            return syscall::SYS_EINVAL;
         }
-        
-        if (uaddr2 && (val2 < 0))
+        if (uaddr2 && val2 < 0)
         {
-            return syscall::SYS_EINVAL;  // 无效参数
+            return syscall::SYS_EINVAL;
         }
-
-        // 基本的地址有效性检查（用户地址应该在用户空间范围内）
         if (uaddr == 0 || (uaddr2 && (uint64)uaddr2 == 0))
         {
-            return syscall::SYS_EFAULT;  // 无效的地址
+            return syscall::SYS_EFAULT;
+        }
+
+        Pcb *cur = k_pm.get_cur_pcb();
+        uint64 futex_key = resolve_futex_key(cur, uaddr);
+        if (futex_key == k_futex_key_invalid)
+        {
+            return syscall::SYS_EFAULT;
+        }
+
+        uint64 futex_key2 = 0;
+        if (uaddr2 != nullptr)
+        {
+            futex_key2 = resolve_futex_key(cur, reinterpret_cast<uint64>(uaddr2));
+            if (futex_key2 == k_futex_key_invalid)
+            {
+                return syscall::SYS_EFAULT;
+            }
         }
 
         g_futex_wait_lock.acquire();
-        int woken = proc::k_pm.wakeup2(uaddr, val, uaddr2, val2);
+        int woken = proc::k_pm.wakeup2(uaddr, futex_key, val, uaddr2, futex_key2, val2);
         g_futex_wait_lock.release();
-        
-        // wakeup2返回实际唤醒的进程数，这是成功的情况
-        return woken >= 0 ? woken : syscall::SYS_ESRCH;  // 如果返回负数表示没找到进程
+        return woken >= 0 ? woken : syscall::SYS_ESRCH;
     }
 
     void futex_cleanup_robust_list(struct robust_list_head *head)

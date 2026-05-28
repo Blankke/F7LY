@@ -810,6 +810,41 @@ namespace proc
                        (p->_signal & (1ULL << (SIGSTOP - 1))) != 0;
             }
 
+            bool signal_is_ignored_for_interrupt(Pcb *p, int signum)
+            {
+                if (p == nullptr)
+                {
+                    return true;
+                }
+
+                if (p->_sigactions != nullptr && p->_sigactions->actions[signum] != nullptr)
+                {
+                    sigaction *act = p->_sigactions->actions[signum];
+                    if (act->sa_handler == SIG_IGN)
+                    {
+                        return true;
+                    }
+                    if (act->sa_handler != nullptr && act->sa_handler != SIG_DFL)
+                    {
+                        return false;
+                    }
+                }
+
+                // 这些信号在当前内核里按 Linux 的“默认忽略”语义处理。
+                // 它们可以保持 pending，等返回用户态后再被安静清掉，
+                // 但不应该把 epoll_pwait/futex/pipe 阻塞读之类等待直接打成 EINTR。
+                switch (signum)
+                {
+                case signal::SIGCHLD:
+                case signal::SIGCONT:
+                case signal::SIGURG:
+                case signal::SIGWINCH:
+                    return true;
+                default:
+                    return false;
+                }
+            }
+
             bool has_unmasked_signal_pending(Pcb *p)
             {
                 if (p == nullptr || p->_signal == 0)
@@ -817,8 +852,31 @@ namespace proc
                     return false;
                 }
 
-                uint64 internal_unmaskable = (1ULL << (signal::SIGCANCEL - 1));
-                return (p->_signal & (~p->_sigmask | internal_unmaskable)) != 0;
+                for (int signum = 1; signum <= signal::SIGRTMAX; ++signum)
+                {
+                    uint64 bit = 1ULL << (signum - 1);
+                    if ((p->_signal & bit) == 0)
+                    {
+                        continue;
+                    }
+
+                    if (signum == signal::SIGCANCEL)
+                    {
+                        return true;
+                    }
+
+                    if ((p->_sigmask & bit) != 0)
+                    {
+                        continue;
+                    }
+
+                    if (!signal_is_ignored_for_interrupt(p, signum))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
             }
 
             // 获取信号的默认行为
@@ -1082,7 +1140,7 @@ namespace proc
                 
             }
 
-            void add_signal(proc::Pcb *p, int sig)
+            void add_signal(proc::Pcb *p, int sig, const LinuxSigInfo *info)
             {
                 if (sig <= 0 || sig > proc::ipc::signal::SIGRTMAX)
                 {
@@ -1096,6 +1154,11 @@ namespace proc
                 //     return;
                 // }
                 p->_signal |= (1UL << (sig - 1));
+                if (info != nullptr)
+                {
+                    p->_queued_siginfo[sig] = *info;
+                    p->_siginfo_mask |= (1ULL << (sig - 1));
+                }
                 
                 // 如果进程正在sigsuspend中等待，并且这个信号没有被阻塞，则唤醒它
                 uint64 sig_mask = (1UL << (sig - 1));
@@ -1282,11 +1345,20 @@ namespace proc
                     //    p->_trapframe->epc);
 
                     // 构造 LinuxSigInfo 结构
-                    LinuxSigInfo siginfo = {
-                        .si_signo = (int32)signum,
-                        .si_errno = 0,
-                        .si_code = 0,
-                        ._pad = {0}};
+                    LinuxSigInfo siginfo{};
+                    if ((p->_siginfo_mask & (1ULL << (signum - 1))) != 0)
+                    {
+                        siginfo = p->_queued_siginfo[signum];
+                    }
+                    else
+                    {
+                        siginfo.si_signo = (int32)signum;
+                        siginfo.si_errno = 0;
+                        siginfo.si_code = 0;
+                        siginfo.si_pid = 0;
+                        siginfo.si_uid = 0;
+                        siginfo.si_value.sival_ptr = 0;
+                    }
                     printf("[do_handle] LinuxSigInfo constructed: sp: %p usercontext_sp=%p, linuxinfo_sp=%p\n",
                            p->_trapframe->sp, usercontext_sp, linuxinfo_sp);
                     // 将结构写入用户空间
@@ -1582,6 +1654,8 @@ namespace proc
                     return;
                 }
                 now_p->_signal &= ~(1UL << (sig - 1));
+                now_p->_siginfo_mask &= ~(1ULL << (sig - 1));
+                memset(&now_p->_queued_siginfo[sig], 0, sizeof(now_p->_queued_siginfo[sig]));
             }
 
         } // namespace signal
