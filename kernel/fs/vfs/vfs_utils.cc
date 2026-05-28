@@ -2954,8 +2954,24 @@ int vfs_truncate(fs::file *f, size_t length)
     // 与共享状态对齐，避免 /proc/self/fd 重开后的跨 fd truncate 导致旧缓存继续生效。
     f->sync_file_size_from_memfd();
 
-    // 获取当前文件大小
+    // 获取当前文件大小。这里不能只信 file object 里的 fsize 缓存：
+    // ftruncate/fallocate 可能在同一 inode 的不同 fd 之间交错执行，缓存一旦旧于
+    // inode，truncate 与后续读写就会围绕错误的 EOF 做决策。
     uint64_t current_size = ext4_fsize(&f->lwext4_file_struct);
+    if (f->lwext4_file_struct.mp != nullptr && f->lwext4_file_struct.inode > 0)
+    {
+        struct ext4_inode_ref inode_ref;
+        int result = ext4_fs_get_inode_ref(&f->lwext4_file_struct.mp->fs,
+                                           f->lwext4_file_struct.inode,
+                                           &inode_ref);
+        if (result == EOK)
+        {
+            current_size = ext4_inode_get_size(&f->lwext4_file_struct.mp->fs.sb, inode_ref.inode);
+            f->lwext4_file_struct.fsize = current_size;
+            f->_stat.size = current_size;
+            ext4_fs_put_inode_ref(&inode_ref);
+        }
+    }
 
     // 如果新大小等于当前大小，无需操作
     if (length == current_size)
@@ -2965,8 +2981,15 @@ int vfs_truncate(fs::file *f, size_t length)
         return EOK;
     }
 
-    // 如果新大小小于当前大小，执行收缩操作
-    if (length < current_size)
+    /*
+     * 普通文件 truncate 的权威语义交给 lwext4：
+     * - 收缩释放超出范围的数据块；
+     * - 扩展只更新 inode size，形成稀疏洞，读路径再把洞读成 0。
+     * 这里不能通过写零模拟扩展，否则 iperf 这类频繁 ftruncate(128KiB)
+     * 的程序会把截断语义绑定到块分配和 I/O 成功，甚至在 EOF 缓存不同步时
+     * 触发底层写路径越界读。
+     */
+    if (length != current_size)
     {
         int status = ext4_ftruncate(&f->lwext4_file_struct, length);
         if (status != EOK)
@@ -2976,75 +2999,10 @@ int vfs_truncate(fs::file *f, size_t length)
             return -status;
         }
         f->_stat.size = length;
+        f->lwext4_file_struct.fsize = length;
         f->sync_memfd_size_from_file();
         return EOK;
     }
-
-    // 如果新大小大于当前大小，需要扩展文件并零填充
-    // 首先保存当前文件位置
-    uint64_t original_pos = ext4_ftell(&f->lwext4_file_struct);
-
-    // 定位到文件末尾开始零填充
-    int seek_status = ext4_fseek(&f->lwext4_file_struct, current_size, SEEK_SET);
-    if (seek_status != EOK)
-    {
-        printfRed("vfs_truncate: failed to seek to position %llu in file %s, error: %d\n",
-                  current_size, f->_path_name.c_str(), seek_status);
-        return -seek_status;
-    }
-
-    // 计算需要零填充的字节数
-    size_t zero_fill_size = length - current_size;
-
-    // 分块写入零数据，避免一次性分配过大的缓冲区
-    const size_t chunk_size = 4096; // 4KB chunks
-    char zero_buffer[chunk_size];
-    memset(zero_buffer, 0, chunk_size);
-
-    size_t bytes_written_total = 0;
-    while (bytes_written_total < zero_fill_size)
-    {
-        size_t bytes_to_write = eastl::min(chunk_size, zero_fill_size - bytes_written_total);
-        size_t bytes_written = 0;
-
-        int write_status = ext4_fwrite(&f->lwext4_file_struct, zero_buffer, bytes_to_write, &bytes_written);
-        if (write_status != EOK)
-        {
-            printfRed("vfs_truncate: failed to write zeros during file extension for %s, error: %d\n",
-                      f->_path_name.c_str(), write_status);
-            // 尝试恢复原始文件位置
-            ext4_fseek(&f->lwext4_file_struct, original_pos, SEEK_SET);
-            return -write_status;
-        }
-
-        if (bytes_written == 0)
-        {
-            printfRed("vfs_truncate: no bytes written during zero-fill for file %s\n", f->_path_name.c_str());
-            ext4_fseek(&f->lwext4_file_struct, original_pos, SEEK_SET);
-            return -EIO;
-        }
-
-        bytes_written_total += bytes_written;
-    }
-
-    // 恢复原始文件位置（如果原始位置仍在有效范围内）
-    if (original_pos <= length)
-    {
-        ext4_fseek(&f->lwext4_file_struct, original_pos, SEEK_SET);
-    }
-    else
-    {
-        // 如果原始位置超出新文件大小，设置到文件末尾
-        ext4_fseek(&f->lwext4_file_struct, length, SEEK_SET);
-    }
-
-    // 更新文件大小
-    f->_stat.size = length;
-    f->sync_memfd_size_from_file();
-
-    printfGreen("vfs_truncate: successfully extended file %s from %llu to %zu bytes with zero-fill\n",
-                f->_path_name.c_str(), current_size, length);
-
     return EOK;
 }
 int vfs_chmod(eastl::string pathname, mode_t mode)

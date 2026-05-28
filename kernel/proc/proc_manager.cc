@@ -3367,10 +3367,16 @@ namespace proc
                 }
             }
 
-            // 普通文件映射使用独立 backing handle，避免 fd 关闭后把 VMA 持有的 file 对象一并回收。
+            // 普通文件映射优先使用独立 backing handle，避免 fd 关闭后把 VMA
+            // 持有的 file 对象一并回收。但 mkstemp()+unlink()+mmap() 是
+            // iperf/glibc 等程序常见路径；文件已经从目录摘除后不能再按路径
+            // 重新打开，只能让 VMA 持有当前打开文件对象的引用。
+            const eastl::string &mapping_path = f->backing_path();
             bool can_reopen_for_vma = !f->is_virtual &&
                                       f->_attrs.filetype == fs::FileTypes::FT_NORMAL &&
-                                      !f->is_memfd();
+                                      !f->is_memfd() &&
+                                      !mapping_path.empty() &&
+                                      fs::k_vfs.is_file_exist(mapping_path.c_str()) == 1;
             if (can_reopen_for_vma)
             {
                 fs::file *mapping_file = nullptr;
@@ -3380,11 +3386,11 @@ namespace proc
                     reopen_flags = O_RDWR;
                 }
 
-                int reopen_err = fs::k_vfs.openat(f->_path_name, mapping_file, reopen_flags, 0);
+                int reopen_err = fs::k_vfs.openat(mapping_path, mapping_file, reopen_flags, 0);
                 if (reopen_err < 0 || mapping_file == nullptr)
                 {
                     printfRed("[mmap] Failed to create dedicated mapping file for %s, err=%d\n",
-                              f->_path_name.c_str(), reopen_err);
+                              mapping_path.c_str(), reopen_err);
                     return fail_mmap(reopen_err < 0 ? -reopen_err : EIO);
                 }
 

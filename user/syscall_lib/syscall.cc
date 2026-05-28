@@ -241,6 +241,78 @@ int wait(int *code)
     return waitpid((int)-1, code, 0);
 }
 
+int socket(int domain, int type, int protocol)
+{
+    return syscall(syscall::SYS_socket, domain, type, protocol);
+}
+
+int socketpair(int domain, int type, int protocol, int sv[2])
+{
+    return syscall(syscall::SYS_socketpair, domain, type, protocol, sv);
+}
+
+int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen)
+{
+    return syscall(syscall::SYS_bind, sockfd, addr, addrlen);
+}
+
+int listen(int sockfd, int backlog)
+{
+    return syscall(syscall::SYS_listen, sockfd, backlog);
+}
+
+int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen)
+{
+    return syscall(syscall::SYS_accept, sockfd, addr, addrlen);
+}
+
+int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen)
+{
+    return syscall(syscall::SYS_connect, sockfd, addr, addrlen);
+}
+
+int getsockname(int sockfd, struct sockaddr *addr, socklen_t *addrlen)
+{
+    return syscall(syscall::SYS_getsockname, sockfd, addr, addrlen);
+}
+
+int getpeername(int sockfd, struct sockaddr *addr, socklen_t *addrlen)
+{
+    return syscall(syscall::SYS_getpeername, sockfd, addr, addrlen);
+}
+
+int getsockopt(int sockfd, int level, int optname, void *optval, socklen_t *optlen)
+{
+    return syscall(syscall::SYS_getsockopt, sockfd, level, optname, optval, optlen);
+}
+
+ssize_t send(int sockfd, const void *buf, size_t len, int flags)
+{
+    return syscall(syscall::SYS_sendto, sockfd, buf, len, flags, 0, 0);
+}
+
+ssize_t recv(int sockfd, void *buf, size_t len, int flags)
+{
+    return syscall(syscall::SYS_recvfrom, sockfd, buf, len, flags, 0, 0);
+}
+
+ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
+               const struct sockaddr *dest_addr, socklen_t addrlen)
+{
+    return syscall(syscall::SYS_sendto, sockfd, buf, len, flags, dest_addr, addrlen);
+}
+
+ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
+                 struct sockaddr *src_addr, socklen_t *addrlen)
+{
+    return syscall(syscall::SYS_recvfrom, sockfd, buf, len, flags, src_addr, addrlen);
+}
+
+int shutdown_socket(int sockfd, int how)
+{
+    return syscall(syscall::SYS_shutdown_socket, sockfd, how);
+}
+
 // int fstat(int fd, struct kstat *st)
 // {
 // #ifdef SYS_fstat

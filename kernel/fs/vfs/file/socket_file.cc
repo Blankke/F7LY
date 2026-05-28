@@ -1,32 +1,381 @@
 #include "fs/vfs/file/socket_file.hh"
+#include "fs/vfs/ops.hh"
+#include "fs/vfs/vfs_utils.hh"
 #include "mem/virtual_memory_manager.hh"
 #include "proc/proc.hh"
 #include "proc/proc_manager.hh"
-#include "net/onpstack/include/onps.hh"
-#include "net/onpstack/include/ip/tcp_link.hh"
-#include "net/onpstack/include/ip/tcp.hh"
-#include "net/onpstack/include/ip/udp.hh"
-#include "net/onpstack/include/bsd/socket.hh"
+#include "proc/scheduler.hh"
+#include "proc/signal.hh"
 #include <errno.h>
 #include "fs/vfs/virtual_fs.hh"
-// 注意：不包含arpa/inet.h，避免冲突
 
 namespace fs
 {
+    namespace
+    {
+        constexpr int k_loopback_binding_max = 256;
+        constexpr uint32 k_loopback_addr = 0x0100007f; // 127.0.0.1 的网络字节序整数表示
+        constexpr uint16 k_ephemeral_port_start = 20000;
+        constexpr uint16 k_ephemeral_port_end = 60999;
+        constexpr int k_protocol_ip = 0;
+        constexpr int k_protocol_tcp = 6;
+        constexpr int k_protocol_udp = 17;
+        constexpr int k_protocol_ipv6 = 41;
+        constexpr int k_ip_recverr = 11;
+        constexpr int k_tcp_nodelay = 1;
+        constexpr int k_tcp_maxseg = 2;
+        constexpr int k_tcp_cork = 3;
+        constexpr int k_tcp_keepidle = 4;
+        constexpr int k_tcp_keepintvl = 5;
+        constexpr int k_tcp_keepcnt = 6;
+        constexpr int k_tcp_syncnt = 7;
+        constexpr int k_tcp_linger2 = 8;
+        constexpr int k_tcp_defer_accept = 9;
+        constexpr int k_tcp_window_clamp = 10;
+        constexpr int k_tcp_info = 11;
+        constexpr int k_tcp_quickack = 12;
+        constexpr int k_tcp_congestion = 13;
+        constexpr int k_tcp_user_timeout = 18;
+        constexpr int k_tcp_default_maxseg = 1460;
+        constexpr int k_default_socket_buffer_size = 64 * 1024;
+        constexpr size_t k_tcp_recv_buffer_max_bytes = 512 * 1024;
+        constexpr size_t k_udp_queue_max_bytes = 256 * 1024;
+        constexpr size_t k_udp_queue_max_packets = 256;
+        constexpr socklen_t k_max_user_sockaddr_len = 4096;
+        constexpr int k_loopback_somaxconn = 4096;
+        constexpr int k_tcp_connect_listener_wait_yields = 64;
+        constexpr int k_unix_binding_max = 256;
+        constexpr int k_at_fdcwd = -100;
+
+        struct loopback_binding
+        {
+            bool used = false;
+            uint16 port = 0; // 始终保存 sockaddr_in.sin_port 的网络字节序值
+            SocketType type = SocketType::TCP;
+            socket_file *socket = nullptr;
+        };
+
+        struct unix_binding
+        {
+            bool used = false;
+            eastl::string path;
+            socket_file *socket = nullptr;
+        };
+
+        SpinLock g_loopback_lock;
+        bool g_loopback_ready = false;
+        uint16 g_next_ephemeral_port = k_ephemeral_port_start;
+        loopback_binding g_loopback_bindings[k_loopback_binding_max];
+
+        SpinLock g_unix_lock;
+        bool g_unix_ready = false;
+        unix_binding g_unix_bindings[k_unix_binding_max];
+
+        uint16 to_network_u16(uint16 value)
+        {
+            return static_cast<uint16>(((value & 0x00ff) << 8) | ((value & 0xff00) >> 8));
+        }
+
+        int copy_socket_int_option(void *optval, socklen_t *optlen, int value)
+        {
+            if (*optlen < sizeof(int))
+            {
+                return -EINVAL;
+            }
+            *static_cast<int *>(optval) = value;
+            *optlen = sizeof(int);
+            return 0;
+        }
+
+        int normalize_socket_type(int type)
+        {
+            return type & 0b111;
+        }
+
+        bool is_loopback_or_any(uint32 addr)
+        {
+            return addr == 0 || addr == k_loopback_addr || addr == 0x7f000001;
+        }
+
+        bool is_ipv6_any(const struct in6_addr &addr)
+        {
+            for (int i = 0; i < 16; ++i)
+            {
+                if (addr.s6_addr[i] != 0)
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        bool is_ipv6_loopback(const struct in6_addr &addr)
+        {
+            for (int i = 0; i < 15; ++i)
+            {
+                if (addr.s6_addr[i] != 0)
+                {
+                    return false;
+                }
+            }
+            return addr.s6_addr[15] == 1;
+        }
+
+        bool is_ipv4_mapped_ipv6(const struct in6_addr &addr)
+        {
+            for (int i = 0; i < 10; ++i)
+            {
+                if (addr.s6_addr[i] != 0)
+                {
+                    return false;
+                }
+            }
+            return addr.s6_addr[10] == 0xff && addr.s6_addr[11] == 0xff;
+        }
+
+        bool sockaddr_in6_to_loopback_in(const struct sockaddr_in6 &addr6, struct sockaddr_in &addr4)
+        {
+            memset(&addr4, 0, sizeof(addr4));
+            addr4.sin_family = AF_INET;
+            addr4.sin_port = addr6.sin6_port;
+
+            if (is_ipv6_any(addr6.sin6_addr))
+            {
+                addr4.sin_addr = 0;
+                return true;
+            }
+            if (is_ipv6_loopback(addr6.sin6_addr))
+            {
+                addr4.sin_addr = k_loopback_addr;
+                return true;
+            }
+            if (is_ipv4_mapped_ipv6(addr6.sin6_addr))
+            {
+                memcpy(&addr4.sin_addr, &addr6.sin6_addr.s6_addr[12], sizeof(addr4.sin_addr));
+                return is_loopback_or_any(addr4.sin_addr);
+            }
+            return false;
+        }
+
+        bool same_sockaddr_in(const struct sockaddr_in &lhs, const struct sockaddr_in &rhs)
+        {
+            return lhs.sin_family == rhs.sin_family &&
+                   lhs.sin_port == rhs.sin_port &&
+                   lhs.sin_addr == rhs.sin_addr;
+        }
+
+        void ensure_loopback_table()
+        {
+            if (!g_loopback_ready)
+            {
+                g_loopback_lock.init("loopback_socket_table");
+                g_loopback_ready = true;
+            }
+        }
+
+        void ensure_unix_table()
+        {
+            if (!g_unix_ready)
+            {
+                g_unix_lock.init("unix_socket_table");
+                g_unix_ready = true;
+            }
+        }
+
+        loopback_binding *find_loopback_binding(SocketType type, uint16 port)
+        {
+            for (auto &binding : g_loopback_bindings)
+            {
+                if (binding.used && binding.type == type && binding.port == port)
+                {
+                    return &binding;
+                }
+            }
+            return nullptr;
+        }
+
+        int register_loopback_binding(SocketType type, uint16 port, socket_file *socket)
+        {
+            bool has_same_port = false;
+            for (auto &binding : g_loopback_bindings)
+            {
+                if (!binding.used || binding.type != type || binding.port != port)
+                {
+                    continue;
+                }
+                has_same_port = true;
+                // iperf3 UDP server 会把旧 listener connect() 到客户端后，
+                // 立即在同一端口创建新的 UDP listener。Linux 允许“已连接
+                // UDP socket + 未连接 listener”共用本地端口；但普通重复
+                // bind 仍必须返回 EADDRINUSE。
+                if (type != SocketType::UDP || binding.socket == nullptr ||
+                    binding.socket->get_state() != SocketState::CONNECTED)
+                {
+                    return -EADDRINUSE;
+                }
+            }
+            if (has_same_port && type != SocketType::UDP)
+            {
+                return -EADDRINUSE;
+            }
+
+            for (auto &binding : g_loopback_bindings)
+            {
+                if (!binding.used)
+                {
+                    binding.used = true;
+                    binding.type = type;
+                    binding.port = port;
+                    binding.socket = socket;
+                    return 0;
+                }
+            }
+            return -ENFILE;
+        }
+
+        void unregister_loopback_binding(SocketType type, uint16 port, socket_file *socket)
+        {
+            for (auto &binding : g_loopback_bindings)
+            {
+                if (binding.used && binding.type == type && binding.port == port && binding.socket == socket)
+                {
+                    binding.used = false;
+                    binding.socket = nullptr;
+                    binding.port = 0;
+                    return;
+                }
+            }
+        }
+
+        uint16 allocate_ephemeral_port(SocketType type)
+        {
+            for (uint32 tries = 0; tries <= (uint32)(k_ephemeral_port_end - k_ephemeral_port_start); ++tries)
+            {
+                uint16 host_port = g_next_ephemeral_port++;
+                if (g_next_ephemeral_port > k_ephemeral_port_end)
+                {
+                    g_next_ephemeral_port = k_ephemeral_port_start;
+                }
+
+                uint16 net_port = to_network_u16(host_port);
+                if (find_loopback_binding(type, net_port) == nullptr)
+                {
+                    return net_port;
+                }
+            }
+            return 0;
+        }
+
+        eastl::string unix_path_from_sockaddr(const struct sockaddr_un &addr)
+        {
+            eastl::string path;
+            for (size_t i = 0; i < sizeof(addr.sun_path) && addr.sun_path[i] != '\0'; ++i)
+            {
+                path += addr.sun_path[i];
+            }
+            return path;
+        }
+
+        eastl::string absolute_unix_path(const eastl::string &path)
+        {
+            proc::Pcb *p = proc::k_pm.get_cur_pcb();
+            const char *cwd = p != nullptr ? p->_cwd_name.c_str() : "/";
+            return get_absolute_path(path.c_str(), cwd);
+        }
+
+        unix_binding *find_unix_binding(const eastl::string &path)
+        {
+            for (auto &binding : g_unix_bindings)
+            {
+                if (binding.used && binding.path == path)
+                {
+                    return &binding;
+                }
+            }
+            return nullptr;
+        }
+
+        int register_unix_binding(const eastl::string &path, socket_file *socket)
+        {
+            if (find_unix_binding(path) != nullptr)
+            {
+                return -EADDRINUSE;
+            }
+
+            for (auto &binding : g_unix_bindings)
+            {
+                if (!binding.used)
+                {
+                    binding.used = true;
+                    binding.path = path;
+                    binding.socket = socket;
+                    return 0;
+                }
+            }
+            return -ENFILE;
+        }
+
+        void unregister_unix_binding(const eastl::string &path, socket_file *socket)
+        {
+            for (auto &binding : g_unix_bindings)
+            {
+                if (binding.used && binding.path == path && binding.socket == socket)
+                {
+                    binding.used = false;
+                    binding.path.clear();
+                    binding.socket = nullptr;
+                    return;
+                }
+            }
+        }
+
+        int unix_path_prefix_error(const eastl::string &absolute_path)
+        {
+            size_t slash = absolute_path.find('/', 1);
+            while (slash != eastl::string::npos)
+            {
+                eastl::string prefix = absolute_path.substr(0, slash);
+                int type = vfs_path2filetype(prefix);
+                if (type >= 0 && type != fs::FileTypes::FT_DIRECT)
+                {
+                    return -ENOTDIR;
+                }
+                if (type < 0)
+                {
+                    return -ENOENT;
+                }
+                slash = absolute_path.find('/', slash + 1);
+            }
+            return 0;
+        }
+    }
+
     socket_file::socket_file(int domain, int type, int protocol)
         : file(FileAttrs(FT_SOCKET, 0777))
         , _state(SocketState::CREATED)
-        , _type(static_cast<SocketType>(type))
+        , _type(static_cast<SocketType>(normalize_socket_type(type)))
         , _family(static_cast<SocketFamily>(domain))
         , _protocol(protocol)
         , _onps_socket(INVALID_SOCKET)
         , _backlog(0)
+        , _peer(nullptr)
+        , _datagram_queue_bytes(0)
         , _blocking(true)
         , _reuse_addr(false)
+        , _loopback_registered(false)
+        , _unix_registered(false)
+        , _read_shutdown(false)
+        , _write_shutdown(false)
+        , _peer_closed(false)
+        , _pending_send_has_addr(false)
     {
         new(&_stat) Kstat(FT_SOCKET);
         memset(&_local_addr, 0, sizeof(_local_addr));
         memset(&_remote_addr, 0, sizeof(_remote_addr));
+        memset(&_pending_send_addr, 0, sizeof(_pending_send_addr));
+        memset(&_local_unix_addr, 0, sizeof(_local_unix_addr));
+        memset(&_remote_unix_addr, 0, sizeof(_remote_unix_addr));
+        lwext4_file_struct.flags = O_RDWR;
         _lock.init("socket_lock");
         dup();
     }
@@ -34,27 +383,74 @@ namespace fs
     socket_file::socket_file(FileAttrs attrs, int domain, int type, int protocol)
         : file(attrs)
         , _state(SocketState::CREATED)
-        , _type(static_cast<SocketType>(type))
+        , _type(static_cast<SocketType>(normalize_socket_type(type)))
         , _family(static_cast<SocketFamily>(domain))
         , _protocol(protocol)
         , _onps_socket(INVALID_SOCKET)
         , _backlog(0)
+        , _peer(nullptr)
+        , _datagram_queue_bytes(0)
         , _blocking(true)
         , _reuse_addr(false)
+        , _loopback_registered(false)
+        , _unix_registered(false)
+        , _read_shutdown(false)
+        , _write_shutdown(false)
+        , _peer_closed(false)
+        , _pending_send_has_addr(false)
     {
         new(&_stat) Kstat(FT_SOCKET);
         memset(&_local_addr, 0, sizeof(_local_addr));
         memset(&_remote_addr, 0, sizeof(_remote_addr));
+        memset(&_local_unix_addr, 0, sizeof(_local_unix_addr));
+        memset(&_remote_unix_addr, 0, sizeof(_remote_unix_addr));
+        lwext4_file_struct.flags = O_RDWR;
         _lock.init("socket_lock");
         dup();
     }
 
     socket_file::~socket_file()
     {
-        // 关闭onps socket
-        if (_onps_socket != INVALID_SOCKET) {
-            close(_onps_socket);
-            _onps_socket = INVALID_SOCKET;
+        _lock.acquire();
+        _state = SocketState::CLOSED;
+        _send_buffer.clear();
+        _pending_send_has_addr = false;
+        proc::k_pm.wakeup(&_pending_connections);
+        proc::k_pm.wakeup(&_recv_buffer);
+        proc::k_pm.wakeup(&_datagram_queue);
+        _lock.release();
+
+        ensure_loopback_table();
+        if (_loopback_registered)
+        {
+            g_loopback_lock.acquire();
+            unregister_loopback_binding(_type, _local_addr.sin_port, this);
+            g_loopback_lock.release();
+            _loopback_registered = false;
+        }
+
+        ensure_unix_table();
+        if (_unix_registered)
+        {
+            g_unix_lock.acquire();
+            unregister_unix_binding(_unix_path, this);
+            g_unix_lock.release();
+            _unix_registered = false;
+        }
+
+        // fd 关闭时通知对端，阻塞在 recv/accept 的进程需要被唤醒。
+        if (_peer != nullptr)
+        {
+            _peer->_lock.acquire();
+            if (_peer->_peer == this)
+            {
+                _peer->_peer = nullptr;
+            }
+            _peer->_peer_closed = true;
+            proc::k_pm.wakeup(&_peer->_recv_buffer);
+            proc::k_pm.wakeup(&_peer->_datagram_queue);
+            _peer->_lock.release();
+            _peer = nullptr;
         }
         
         // 清理待处理的连接
@@ -82,10 +478,20 @@ namespace fs
         bool result;
         switch (_state) {
             case SocketState::CONNECTED:
-                result = !_recv_buffer.empty();
+                if (_type == SocketType::UDP)
+                {
+                    result = !_datagram_queue.empty();
+                }
+                else
+                {
+                    result = !_recv_buffer.empty() || _peer_closed || _read_shutdown;
+                }
                 break;
             case SocketState::LISTENING:
                 result = !_pending_connections.empty();
+                break;
+            case SocketState::BOUND:
+                result = _type == SocketType::UDP && !_datagram_queue.empty();
                 break;
             default:
                 result = false;
@@ -98,7 +504,33 @@ namespace fs
     bool socket_file::write_ready()
     {
         _lock.acquire();
-        bool result = (_state == SocketState::CONNECTED);
+        bool result = false;
+        if (_state == SocketState::CONNECTED)
+        {
+            if (_type == SocketType::TCP)
+            {
+                socket_file *peer = _peer;
+                bool local_ready = !_write_shutdown && !_peer_closed && peer != nullptr;
+                _lock.release();
+                if (!local_ready)
+                {
+                    return false;
+                }
+
+                peer->_lock.acquire();
+                // TCP 写就绪必须反映对端接收队列空间；否则 poll/select 会在队列已满时
+                // 继续驱动写入，iperf 这类吞吐工具会把内核堆推到无限扩容。
+                result = peer->_read_shutdown || peer->_state == SocketState::CLOSED ||
+                         peer->_recv_buffer.size() < k_tcp_recv_buffer_max_bytes;
+                peer->_lock.release();
+                return result;
+            }
+            result = !_write_shutdown && !_peer_closed && (_type == SocketType::UDP || _peer != nullptr);
+        }
+        else if (_type == SocketType::UDP && (_state == SocketState::CREATED || _state == SocketState::BOUND))
+        {
+            result = !_write_shutdown;
+        }
         _lock.release();
         return result;
     }
@@ -129,16 +561,117 @@ namespace fs
             return -EINVAL;
         }
 
-        // 复制地址信息
-        int result = copy_sockaddr_from_user(&_local_addr, addr, addrlen);
-        if (result < 0) {
+        if (_family != SocketFamily::INET && _family != SocketFamily::INET6) {
+            if (_family != SocketFamily::UNIX) {
+                _lock.release();
+                return -EAFNOSUPPORT;
+            }
+            if (_type != SocketType::TCP) {
+                _lock.release();
+                return -EOPNOTSUPP;
+            }
+            if (addrlen < sizeof(struct sockaddr_un)) {
+                _lock.release();
+                return -EINVAL;
+            }
+
+            struct sockaddr_un local_unix_addr;
+            memcpy(&local_unix_addr, addr, sizeof(local_unix_addr));
+            if (local_unix_addr.sun_family != AF_UNIX) {
+                _lock.release();
+                return -EAFNOSUPPORT;
+            }
+
+            eastl::string relative_path = unix_path_from_sockaddr(local_unix_addr);
+            if (relative_path.empty()) {
+                _lock.release();
+                return -EINVAL;
+            }
+            eastl::string absolute_path = absolute_unix_path(relative_path);
             _lock.release();
-            return -EFAULT;
+
+            int prefix_error = unix_path_prefix_error(absolute_path);
+            if (prefix_error < 0) {
+                return prefix_error;
+            }
+
+            // pathname AF_UNIX bind 在文件系统中有可 unlink 的 socket 节点；
+            // recvmsg01 的 cleanup 依赖这个节点真实存在。
+            int node_result = proc::k_pm.mknod(k_at_fdcwd, relative_path, S_IFSOCK | 0777, 0);
+            if (node_result < 0) {
+                return node_result == -EEXIST ? -EADDRINUSE : node_result;
+            }
+
+            ensure_unix_table();
+            g_unix_lock.acquire();
+            int register_result = register_unix_binding(absolute_path, this);
+            g_unix_lock.release();
+            if (register_result < 0) {
+                proc::k_pm.unlink(k_at_fdcwd, relative_path, 0);
+                return register_result;
+            }
+
+            _lock.acquire();
+            if (_state != SocketState::CREATED) {
+                _lock.release();
+                g_unix_lock.acquire();
+                unregister_unix_binding(absolute_path, this);
+                g_unix_lock.release();
+                proc::k_pm.unlink(k_at_fdcwd, relative_path, 0);
+                return -EINVAL;
+            }
+            _local_unix_addr = local_unix_addr;
+            _unix_path = absolute_path;
+            _unix_registered = true;
+            _state = SocketState::BOUND;
+            _lock.release();
+            return 0;
         }
 
-        // 当前默认运行环境没有完整启用 ONPS 网络栈。bind(2) 先维护 Linux ABI 可见状态，
-        // 让 accept/listen/getsockname 等 syscall 能按 socket 类型和状态返回正确 errno。
+        struct sockaddr_in local_addr;
+        if (_family == SocketFamily::INET6) {
+            struct sockaddr_in6 local_addr6;
+            memcpy(&local_addr6, addr, sizeof(local_addr6));
+            if (local_addr6.sin6_family != AF_INET6 ||
+                !sockaddr_in6_to_loopback_in(local_addr6, local_addr)) {
+                _lock.release();
+                return -EAFNOSUPPORT;
+            }
+        } else {
+            memcpy(&local_addr, addr, sizeof(local_addr));
+            if (local_addr.sin_family != AF_INET) {
+                _lock.release();
+                return -EAFNOSUPPORT;
+            }
+        }
+        if (!is_loopback_or_any(local_addr.sin_addr)) {
+            _lock.release();
+            return -EADDRNOTAVAIL;
+        }
+
+        ensure_loopback_table();
+        g_loopback_lock.acquire();
+
+        if (local_addr.sin_port == 0) {
+            local_addr.sin_port = allocate_ephemeral_port(_type);
+            if (local_addr.sin_port == 0) {
+                g_loopback_lock.release();
+                _lock.release();
+                return -EADDRINUSE;
+            }
+        }
+
+        int result = register_loopback_binding(_type, local_addr.sin_port, this);
+        if (result < 0) {
+            g_loopback_lock.release();
+            _lock.release();
+            return result;
+        }
+
+        _local_addr = local_addr;
+        _loopback_registered = true;
         _state = SocketState::BOUND;
+        g_loopback_lock.release();
         _lock.release();
         return 0;
     }
@@ -147,17 +680,30 @@ namespace fs
     {
         _lock.acquire();
         
-        if (_state != SocketState::BOUND) {
-            _lock.release();
-            return -EINVAL;
-        }
-
         if (_type != SocketType::TCP) {
             _lock.release();
             return -EOPNOTSUPP;
         }
 
+        if (_state == SocketState::CREATED) {
+            int bind_result = ensure_loopback_bound_locked();
+            if (bind_result < 0) {
+                _lock.release();
+                return bind_result;
+            }
+        }
+
+        if (_state != SocketState::BOUND) {
+            _lock.release();
+            return -EINVAL;
+        }
+
+        // Linux 会把超大 backlog 静默截到 somaxconn。iperf 等程序常传入
+        // INT_MAX，如果直接 reserve(backlog) 会把用户参数放大成巨额内核堆申请。
         _backlog = backlog > 0 ? backlog : 1;
+        if (_backlog > k_loopback_somaxconn) {
+            _backlog = k_loopback_somaxconn;
+        }
         _state = SocketState::LISTENING;
         _pending_connections.reserve(_backlog);
         
@@ -165,23 +711,37 @@ namespace fs
         return 0;
     }
 
-    socket_file* socket_file::accept(struct sockaddr *addr, socklen_t *addrlen)
+    int socket_file::accept(struct sockaddr *addr, socklen_t *addrlen, socket_file **accepted_socket)
     {
+        if (accepted_socket == nullptr) {
+            return -EFAULT;
+        }
+        *accepted_socket = nullptr;
+
         _lock.acquire();
         
         if (_state != SocketState::LISTENING) {
             _lock.release();
-            return nullptr;
+            return -EINVAL;
         }
 
+        proc::Pcb *cur = proc::k_pm.get_cur_pcb();
         // 检查是否有待处理的连接
-        if (_pending_connections.empty()) {
-            _lock.release();
-            if (_blocking) {
-                // 在实际实现中，这里应该等待连接
-                return nullptr;
-            } else {
-                return nullptr;
+        while (_pending_connections.empty()) {
+            // accept(2) 是信号可中断的阻塞系统调用。netperf TCP_CRR 的
+            // server 依赖 ITIMER_REAL/SIGALRM 打断这里的空队列等待后汇报结果。
+            if (cur != nullptr && proc::ipc::signal::has_unmasked_signal_pending(cur)) {
+                _lock.release();
+                return -EINTR;
+            }
+            if (!_blocking) {
+                _lock.release();
+                return -EAGAIN;
+            }
+            proc::k_pm.sleep(&_pending_connections, &_lock);
+            if (_state != SocketState::LISTENING) {
+                _lock.release();
+                return -EINVAL;
             }
         }
 
@@ -189,22 +749,31 @@ namespace fs
         socket_file* client_socket = get_from_pending_queue();
         if (!client_socket) {
             _lock.release();
-            return nullptr;
+            return -EAGAIN;
         }
 
         // 如果用户提供了地址缓冲区，复制远程地址
         if (addr && addrlen) {
-            copy_sockaddr_to_user(addr, addrlen, &client_socket->_remote_addr);
+            if (_family == SocketFamily::UNIX) {
+                socklen_t copy_len = eastl::min(*addrlen, static_cast<socklen_t>(sizeof(struct sockaddr_un)));
+                memcpy(addr, &client_socket->_remote_unix_addr, copy_len);
+                *addrlen = sizeof(struct sockaddr_un);
+            } else {
+                socklen_t copy_len = eastl::min(*addrlen, static_cast<socklen_t>(sizeof(struct sockaddr_in)));
+                memcpy(addr, &client_socket->_remote_addr, copy_len);
+                *addrlen = sizeof(struct sockaddr_in);
+            }
         }
 
         client_socket->_state = SocketState::CONNECTED;
+        *accepted_socket = client_socket;
         _lock.release();
-        return client_socket;
+        return 0;
     }
 
     int socket_file::connect(const struct sockaddr *addr, socklen_t addrlen)
     {
-        if (!is_valid_address(addr, addrlen)) {
+        if (!addr || addrlen < sizeof(struct sockaddr)) {
             return -EINVAL;
         }
 
@@ -216,86 +785,201 @@ namespace fs
         }
         // 根据 socket 族类型处理不同的连接方式
         if (_family == SocketFamily::UNIX) {
-            // Unix domain socket 连接
+            if (_type != SocketType::TCP) {
+                _lock.release();
+                return -EOPNOTSUPP;
+            }
             if (addrlen < sizeof(struct sockaddr_un)) {
                 _lock.release();
                 return -EINVAL;
             }
 
-            // proc::Pcb *p = proc::k_pm.get_cur_pcb();
-            // mem::PageTable *pt = p->get_pagetable();
-
-            struct sockaddr_un *unix_addr = (struct sockaddr_un *)addr;
-
-
-            if (unix_addr->sun_family != AF_UNIX) {
+            struct sockaddr_un remote_unix_addr;
+            memcpy(&remote_unix_addr, addr, sizeof(remote_unix_addr));
+            if (remote_unix_addr.sun_family != AF_UNIX) {
                 _lock.release();
                 return -EAFNOSUPPORT;
             }
 
-            // Unix domain socket 连接逻辑
-            // 这里应该根据路径查找对应的 socket 文件或者建立 IPC 连接
-            // 目前简化处理：检查路径是否有效
-            if (unix_addr->sun_path[0] == '\0') {
-                // 抽象命名空间 socket (以空字符开头)
-                printfCyan("[socket_file::connect] 抽象 Unix socket: %s\n", &unix_addr->sun_path[1]);
-            } else {
-                // 文件系统路径 socket
-                printfCyan("[socket_file::connect] Unix socket 路径: %s\n", unix_addr->sun_path);
-                
-                // TODO: 这里应该检查路径是否存在，是否为 socket 文件等
-                // 简化实现：假设连接成功
-                // Unix域套接字连接逻辑在此处应该实现
-                printfRed("先实现文件检查逻辑\n");
+            eastl::string relative_path = unix_path_from_sockaddr(remote_unix_addr);
+            if (relative_path.empty()) {
                 _lock.release();
-                return -2;
-                printfRed("UNIX IPC未实现\n");
+                return -EINVAL;
+            }
+            eastl::string absolute_path = absolute_unix_path(relative_path);
+
+            ensure_unix_table();
+            g_unix_lock.acquire();
+            unix_binding *binding = find_unix_binding(absolute_path);
+            socket_file *listener = binding ? binding->socket : nullptr;
+            if (listener == nullptr) {
+                g_unix_lock.release();
+                _lock.release();
+                return -ENOENT;
             }
 
+            listener->_lock.acquire();
+            if (listener->_state != SocketState::LISTENING || !listener->can_accept_connection()) {
+                listener->_lock.release();
+                g_unix_lock.release();
+                _lock.release();
+                return -ECONNREFUSED;
+            }
+
+            socket_file *server_side = new socket_file(AF_UNIX, SOCK_STREAM, _protocol);
+            if (server_side == nullptr) {
+                listener->_lock.release();
+                g_unix_lock.release();
+                _lock.release();
+                return -ENOMEM;
+            }
+
+            memset(&_local_unix_addr, 0, sizeof(_local_unix_addr));
+            _local_unix_addr.sun_family = AF_UNIX;
+            _remote_unix_addr = remote_unix_addr;
+            server_side->_local_unix_addr = listener->_local_unix_addr;
+            server_side->_remote_unix_addr = _local_unix_addr;
+            server_side->_state = SocketState::CONNECTED;
+            server_side->_peer = this;
+
+            _peer = server_side;
+            _peer_closed = false;
             _state = SocketState::CONNECTED;
+            listener->add_to_pending_queue(server_side);
+            proc::k_pm.wakeup(&listener->_pending_connections);
+            listener->_lock.release();
+            g_unix_lock.release();
             _lock.release();
             return 0;
 
-        } else if (_family == SocketFamily::INET) {
-            // 网络 socket 连接 (原有逻辑)
-            printfRed("这玩意儿好像写错了，不用copy in\n");
-            // 复制远程地址
-            int result = copy_sockaddr_from_user(&_remote_addr, addr, addrlen);
-            if (result < 0) {
+        } else if (_family == SocketFamily::INET || _family == SocketFamily::INET6) {
+            struct sockaddr generic_addr;
+            memcpy(&generic_addr, addr, sizeof(generic_addr));
+            struct sockaddr_in remote_addr;
+            if (_family == SocketFamily::INET6 && generic_addr.sa_family == AF_INET) {
+                // 双栈 IPv6 socket 在 UDP accept 路径中可能会对 IPv4 peer
+                // 调用 connect()。loopback 后端统一落到 IPv4 端口表，因此这里
+                // 接受 AF_INET peer，避免把合法的 127.0.0.1 源地址误判为 EINVAL。
+                if (addrlen < sizeof(struct sockaddr_in)) {
+                    _lock.release();
+                    return -EINVAL;
+                }
+                memcpy(&remote_addr, addr, sizeof(remote_addr));
+            } else if (_family == SocketFamily::INET6) {
+                if (addrlen < sizeof(struct sockaddr_in6)) {
+                    _lock.release();
+                    return -EINVAL;
+                }
+                struct sockaddr_in6 remote_addr6;
+                memcpy(&remote_addr6, addr, sizeof(remote_addr6));
+                if (remote_addr6.sin6_family != AF_INET6 ||
+                    !sockaddr_in6_to_loopback_in(remote_addr6, remote_addr)) {
+                    _lock.release();
+                    return -EAFNOSUPPORT;
+                }
+            } else {
+                if (addrlen < sizeof(struct sockaddr_in)) {
+                    _lock.release();
+                    return -EINVAL;
+                }
+                memcpy(&remote_addr, addr, sizeof(remote_addr));
+                if (remote_addr.sin_family != AF_INET) {
+                    _lock.release();
+                    return -EAFNOSUPPORT;
+                }
+            }
+            if (!is_loopback_or_any(remote_addr.sin_addr)) {
                 _lock.release();
-                return -EFAULT;
+                return -ENETUNREACH;
             }
 
-            // 创建onps socket句柄（如果还没有）
-            if (_onps_socket == INVALID_SOCKET) {
-                EN_ONPSERR onps_err;
-                _onps_socket = socket(AF_INET, 
-                                    (_type == SocketType::TCP) ? 1 : 2, // SOCK_STREAM : SOCK_DGRAM
-                                    0, &onps_err);
-                if (_onps_socket == INVALID_SOCKET) {
+            if (_state == SocketState::CREATED) {
+                int bind_result = ensure_loopback_bound_locked();
+                if (bind_result < 0) {
                     _lock.release();
-                    return -ENOMEM;
+                    return bind_result;
                 }
             }
 
-            // 进行连接
-            if (_type == SocketType::TCP) {
-                // TCP连接
-                char ip_str[20];
-                inet_ntoa_safe_ext(_remote_addr.sin_addr, ip_str);
-                
-                if (::connect(_onps_socket, ip_str, _remote_addr.sin_port, 5) < 0) {
-                    close(_onps_socket);
-                    _onps_socket = INVALID_SOCKET;
+            _remote_addr = remote_addr;
+
+            if (_type == SocketType::UDP) {
+                _state = SocketState::CONNECTED;
+                _lock.release();
+                return 0;
+            }
+
+            if (_type != SocketType::TCP) {
+                _lock.release();
+                return -EOPNOTSUPP;
+            }
+
+            ensure_loopback_table();
+            socket_file *listener = nullptr;
+            for (int attempt = 0; attempt <= k_tcp_connect_listener_wait_yields; ++attempt) {
+                g_loopback_lock.acquire();
+                loopback_binding *binding = find_loopback_binding(SocketType::TCP, remote_addr.sin_port);
+                listener = binding ? binding->socket : nullptr;
+                if (listener != nullptr) {
+                    listener->_lock.acquire();
+                    if (listener->_state == SocketState::LISTENING && listener->can_accept_connection()) {
+                        break;
+                    }
+                    listener->_lock.release();
+                    listener = nullptr;
+                }
+                g_loopback_lock.release();
+
+                if (!_blocking || attempt == k_tcp_connect_listener_wait_yields) {
                     _lock.release();
                     return -ECONNREFUSED;
                 }
-            } else if (_type == SocketType::UDP) {
-                // UDP "连接"（实际上是设置默认目标地址）
-                // UDP socket 不需要真正的连接，只是记录远程地址
+
+                proc::Pcb *cur = proc::k_pm.get_cur_pcb();
+                if (cur != nullptr && proc::ipc::signal::has_unmasked_signal_pending(cur)) {
+                    _lock.release();
+                    return -EINTR;
+                }
+
+                // netperf/iperf 这类脚本会用“后台 server & 前台 client”的模式。
+                // 当前调度粒度下，前台 connect 可能先于后台 listen 抢到 CPU；
+                // 对阻塞 TCP connect 做有限让出，既不改变最终无监听端口的 errno，
+                // 也避免把脚本启动竞态误判成协议不可用。
+                _lock.release();
+                proc::k_scheduler.yield();
+                _lock.acquire();
+                if (_state != SocketState::CREATED && _state != SocketState::BOUND) {
+                    _lock.release();
+                    return _state == SocketState::CONNECTED ? -EISCONN : -ECONNABORTED;
+                }
             }
 
+            socket_file *server_side = new socket_file(AF_INET, SOCK_STREAM, _protocol);
+            if (server_side == nullptr) {
+                listener->_lock.release();
+                g_loopback_lock.release();
+                _lock.release();
+                return -ENOMEM;
+            }
+
+            if (_local_addr.sin_addr == 0) {
+                _local_addr.sin_addr = k_loopback_addr;
+            }
+            server_side->_local_addr = listener->_local_addr;
+            if (server_side->_local_addr.sin_addr == 0) {
+                server_side->_local_addr.sin_addr = k_loopback_addr;
+            }
+            server_side->_remote_addr = _local_addr;
+            server_side->_state = SocketState::CONNECTED;
+            server_side->_peer = this;
+
+            _peer = server_side;
+            _peer_closed = false;
             _state = SocketState::CONNECTED;
+            listener->add_to_pending_queue(server_side);
+            proc::k_pm.wakeup(&listener->_pending_connections);
+            listener->_lock.release();
+            g_loopback_lock.release();
             _lock.release();
             return 0;
 
@@ -308,210 +992,402 @@ namespace fs
 
     int socket_file::send(const void *buf, size_t len, int flags)
     {
-        if (!buf || len == 0) {
-            return -EINVAL;
+        if (len == 0) {
+            return 0;
+        }
+        if (!buf) {
+            return -EFAULT;
         }
 
         _lock.acquire();
-        
-        // 检查socket是否已创建onps句柄
-        if (_onps_socket == INVALID_SOCKET) {
-            _lock.release();
-            return -ENOTCONN;
-        }
 
-        int result = 0;
         const uint8_t* data = static_cast<const uint8_t*>(buf);
 
         if (_type == SocketType::TCP) {
-            // TCP send
             if (_state != SocketState::CONNECTED) {
                 _lock.release();
                 return -ENOTCONN;
             }
-
-            // 使用onps TCP发送
-            result = ::send(_onps_socket, const_cast<UCHAR*>(data), (INT)len, 3);
-            if (result < 0) {
+            if (_write_shutdown || _peer == nullptr || _peer_closed) {
                 _lock.release();
-                return -EIO;
+                return -EPIPE;
             }
+            socket_file *peer = _peer;
+            eastl::vector<uint8_t> flush_buffer;
+            const uint8_t *send_data = data;
+            size_t send_len = len;
+            size_t pending_len = 0;
+            bool had_pending = false;
+            bool nonblocking = is_nonblocking_request(flags);
+
+            if (flags & MSG_MORE) {
+                int append_result = append_pending_send_locked(data, len, nullptr);
+                _lock.release();
+                return append_result;
+            }
+
+            if (!_send_buffer.empty()) {
+                pending_len = _send_buffer.size();
+                had_pending = true;
+                flush_buffer.reserve(_send_buffer.size() + len);
+                flush_buffer.insert(flush_buffer.end(), _send_buffer.begin(), _send_buffer.end());
+                flush_buffer.insert(flush_buffer.end(), data, data + len);
+                send_data = flush_buffer.data();
+                send_len = flush_buffer.size();
+            }
+            _lock.release();
+
+            if (had_pending && nonblocking)
+            {
+                peer->_lock.acquire();
+                bool peer_broken = peer->_read_shutdown || peer->_state == SocketState::CLOSED;
+                size_t used = peer->_recv_buffer.size();
+                bool can_flush_now = !peer_broken && used <= k_tcp_recv_buffer_max_bytes &&
+                                     send_len <= k_tcp_recv_buffer_max_bytes - used;
+                peer->_lock.release();
+                if (peer_broken)
+                {
+                    return -EPIPE;
+                }
+                if (!can_flush_now)
+                {
+                    return -EAGAIN;
+                }
+            }
+
+            if (had_pending)
+            {
+                _lock.acquire();
+                _send_buffer.clear();
+                _pending_send_has_addr = false;
+                _lock.release();
+            }
+
+            // 只在本端锁内读取连接状态；实际入队时只持有对端锁，避免双向 send 互相等待。
+            int queued = enqueue_stream_data_to_peer(peer, send_data, send_len, nonblocking);
+            if (queued < 0)
+            {
+                return queued;
+            }
+            if (!had_pending)
+            {
+                return queued;
+            }
+            if (static_cast<size_t>(queued) >= send_len)
+            {
+                return static_cast<int>(len);
+            }
+            if (static_cast<size_t>(queued) > pending_len)
+            {
+                return static_cast<int>(static_cast<size_t>(queued) - pending_len);
+            }
+            return -EPIPE;
         } else if (_type == SocketType::UDP) {
-            // UDP send (需要已连接的socket)
+            if (_write_shutdown) {
+                _lock.release();
+                return -EPIPE;
+            }
+            if (_peer != nullptr) {
+                struct sockaddr_in src = _local_addr;
+                if (src.sin_addr == 0) {
+                    src.sin_addr = k_loopback_addr;
+                }
+                socket_file *peer = _peer;
+                _lock.release();
+
+                peer->_lock.acquire();
+                int result = peer->enqueue_datagram(&src, data, len);
+                peer->_lock.release();
+                return result;
+            }
             if (_state != SocketState::CONNECTED) {
                 _lock.release();
-                return -ENOTCONN;
+                return -EDESTADDRREQ;
             }
-
-            // 使用onps UDP发送
-            result = udp_send(_onps_socket, const_cast<UCHAR*>(data), (INT)len);
-            if (result < 0) {
-                _lock.release();
-                return -EIO;
-            }
+            struct sockaddr_in remote = _remote_addr;
+            _lock.release();
+            return sendto(buf, len, flags, reinterpret_cast<const struct sockaddr *>(&remote), sizeof(remote));
         } else {
             _lock.release();
             return -EOPNOTSUPP;
         }
-
-        _lock.release();
-        return result;
     }
 
     int socket_file::recv(void *buf, size_t len, int flags)
     {
-        if (!buf || len == 0) {
-            return -EINVAL;
+        if (len == 0) {
+            return 0;
+        }
+        if (!buf) {
+            return -EFAULT;
         }
 
         _lock.acquire();
-        
-        // 检查socket是否已创建onps句柄
-        if (_onps_socket == INVALID_SOCKET) {
-            _lock.release();
-            return -ENOTCONN;
-        }
 
-        int result = 0;
         uint8_t* data = static_cast<uint8_t*>(buf);
 
         if (_type == SocketType::TCP) {
-            // TCP recv
             if (_state != SocketState::CONNECTED) {
                 _lock.release();
                 return -ENOTCONN;
             }
 
-            // 使用onps TCP接收
-            result = ::recv(_onps_socket, data, (INT)len);
-            if (result < 0) {
-                _lock.release();
-                return -EIO;
+            while (_recv_buffer.empty() && !_peer_closed && !_read_shutdown) {
+                if (is_nonblocking_request(flags)) {
+                    _lock.release();
+                    return -EAGAIN;
+                }
+                proc::k_pm.sleep(&_recv_buffer, &_lock);
             }
+
+            if (_recv_buffer.empty()) {
+                _lock.release();
+                return 0;
+            }
+
+            size_t copy_len = eastl::min(len, _recv_buffer.size());
+            memcpy(data, _recv_buffer.data(), copy_len);
+            if (!(flags & MSG_PEEK)) {
+                _recv_buffer.erase(_recv_buffer.begin(), _recv_buffer.begin() + copy_len);
+                // 读端释放接收队列空间后唤醒阻塞写端，形成 TCP loopback 背压闭环。
+                proc::k_pm.wakeup(&_recv_buffer);
+            }
+            _lock.release();
+            return static_cast<int>(copy_len);
         } else if (_type == SocketType::UDP) {
-            // UDP recv (不获取源地址)
-            result = udp_recv_upper(_onps_socket, data, len, nullptr, nullptr, -1);
-            if (result < 0) {
-                _lock.release();
-                return -EIO;
-            }
+            _lock.release();
+            int result = recvfrom(buf, len, flags, nullptr, nullptr);
+            return result;
         } else {
             _lock.release();
             return -EOPNOTSUPP;
         }
-
-        _lock.release();
-        return result;
     }
 
     int socket_file::sendto(const void *buf, size_t len, int flags,
                            const struct sockaddr *dest_addr, socklen_t addrlen)
     {
-        if (!buf || len == 0) {
-            return -EINVAL;
+        if (len > 0 && !buf) {
+            return -EFAULT;
+        }
+        if (flags & MSG_OOB) {
+            return _type == SocketType::UDP ? -EOPNOTSUPP : -EINVAL;
         }
 
         _lock.acquire();
 
-        // 检查socket是否已创建onps句柄
-        if (_onps_socket == INVALID_SOCKET) {
-            _lock.release();
-            return -ENOTCONN;
-        }
-
-        int result = 0;
         const uint8_t* data = static_cast<const uint8_t*>(buf);
 
         if (_type == SocketType::UDP) {
-            // UDP sendto - 需要目标地址
-            if (!dest_addr || addrlen < sizeof(struct sockaddr_in)) {
+            if (len > k_default_socket_buffer_size) {
                 _lock.release();
-                return -EINVAL;
+                return -EMSGSIZE;
+            }
+            struct sockaddr_in dest;
+            if (dest_addr != nullptr) {
+                if (addrlen < sizeof(struct sockaddr_in)) {
+                    _lock.release();
+                    return -EINVAL;
+                }
+                memcpy(&dest, dest_addr, sizeof(dest));
+                if (dest.sin_family != AF_INET) {
+                    _lock.release();
+                    return -EAFNOSUPPORT;
+                }
+            } else {
+                if (_state != SocketState::CONNECTED) {
+                    _lock.release();
+                    return -EDESTADDRREQ;
+                }
+                dest = _remote_addr;
             }
 
-            const struct sockaddr_in* dest_addr_in = 
-                reinterpret_cast<const struct sockaddr_in*>(dest_addr);
-            
-            if (dest_addr_in->sin_family != AF_INET) {
+            if (!is_loopback_or_any(dest.sin_addr)) {
                 _lock.release();
-                return -EAFNOSUPPORT;
+                return -ENETUNREACH;
             }
 
-            // 使用onps UDP sendto
-            char dest_ip_str[20];
-            inet_ntoa_safe_ext(dest_addr_in->sin_addr, dest_ip_str);
-            
-            result = ::sendto(_onps_socket, dest_ip_str, dest_addr_in->sin_port,
-                            const_cast<UCHAR*>(data), (INT)len);
-            
-            if (result < 0) {
-                _lock.release();
-                return -EIO;
+            if (_state == SocketState::CREATED) {
+                int bind_result = ensure_loopback_bound_locked();
+                if (bind_result < 0) {
+                    _lock.release();
+                    return bind_result;
+                }
             }
-        } else if (_type == SocketType::TCP) {
-            // TCP 不支持sendto，应该使用send
-            printfRed("[socket_file::sendto] TCP socket does not support sendto\n");
+
+            struct sockaddr_in src = _local_addr;
+            if (src.sin_addr == 0) {
+                src.sin_addr = k_loopback_addr;
+            }
+            eastl::vector<uint8_t> flush_buffer;
+            const uint8_t *send_data = data;
+            size_t send_len = len;
+            struct sockaddr_in send_dest = dest;
+
+            if (flags & MSG_MORE) {
+                int append_result = append_pending_send_locked(data, len, &dest);
+                _lock.release();
+                return append_result;
+            }
+
+            if (!_send_buffer.empty()) {
+                if (!pending_send_destination_matches_locked(&dest)) {
+                    _lock.release();
+                    return -EINVAL;
+                }
+                if (_send_buffer.size() + len > static_cast<size_t>(k_default_socket_buffer_size)) {
+                    _lock.release();
+                    return -EMSGSIZE;
+                }
+                send_dest = _pending_send_addr;
+                flush_buffer.reserve(_send_buffer.size() + len);
+                flush_buffer.insert(flush_buffer.end(), _send_buffer.begin(), _send_buffer.end());
+                flush_buffer.insert(flush_buffer.end(), data, data + len);
+                _send_buffer.clear();
+                _pending_send_has_addr = false;
+                send_data = flush_buffer.data();
+                send_len = flush_buffer.size();
+            }
+
             _lock.release();
-            return -EFAULT;
+
+            socket_file *target = nullptr;
+            g_loopback_lock.acquire();
+            socket_file *fallback_listener = nullptr;
+            struct sockaddr_in normalized_src = src;
+            if (normalized_src.sin_addr == 0) {
+                normalized_src.sin_addr = k_loopback_addr;
+            }
+            for (auto &binding : g_loopback_bindings) {
+                if (!binding.used || binding.type != SocketType::UDP ||
+                    binding.port != send_dest.sin_port || binding.socket == nullptr) {
+                    continue;
+                }
+
+                socket_file *candidate = binding.socket;
+                if (candidate->_state == SocketState::CONNECTED) {
+                    struct sockaddr_in remote = candidate->_remote_addr;
+                    if (remote.sin_addr == 0) {
+                        remote.sin_addr = k_loopback_addr;
+                    }
+                    if (remote.sin_port == normalized_src.sin_port &&
+                        is_loopback_or_any(remote.sin_addr) &&
+                        is_loopback_or_any(normalized_src.sin_addr)) {
+                        target = candidate;
+                        break;
+                    }
+                    continue;
+                }
+
+                if (fallback_listener == nullptr) {
+                    fallback_listener = candidate;
+                }
+            }
+            if (target == nullptr) {
+                target = fallback_listener;
+            }
+            g_loopback_lock.release();
+
+            if (target != nullptr) {
+                target->_lock.acquire();
+                target->enqueue_datagram(&src, send_data, send_len);
+                target->_lock.release();
+            }
+            return static_cast<int>(len);
+        } else if (_type == SocketType::TCP) {
+            if (_state != SocketState::CONNECTED) {
+                _lock.release();
+                return -EPIPE;
+            }
+            _lock.release();
+            return send(buf, len, flags);
         } else {
             _lock.release();
             return -EOPNOTSUPP;
         }
-
-        _lock.release();
-        return result;
     }
 
     int socket_file::recvfrom(void *buf, size_t len, int flags,
                              struct sockaddr *src_addr, socklen_t *addrlen)
     {
-        if (!buf || len == 0) {
+        if (len == 0) {
+            return 0;
+        }
+        if (!buf) {
+            return -EFAULT;
+        }
+        if (flags & MSG_OOB) {
             return -EINVAL;
+        }
+        if (flags & MSG_ERRQUEUE) {
+            return -EAGAIN;
         }
 
         _lock.acquire();
 
-        // 检查socket是否已创建onps句柄
-        if (_onps_socket == INVALID_SOCKET) {
-            _lock.release();
-            return -ENOTCONN;
-        }
-
-        int result = 0;
         uint8_t* data = static_cast<uint8_t*>(buf);
 
         if (_type == SocketType::UDP) {
-            // UDP recvfrom - 获取源地址
-            UINT from_ip = 0;
-            USHORT from_port = 0;
-            
-            result = ::recvfrom(_onps_socket, data, (INT)len, &from_ip, &from_port);
-            
-            if (result < 0) {
+            if (_state != SocketState::BOUND && _state != SocketState::CONNECTED) {
                 _lock.release();
-                return -EIO;
+                return -EINVAL;
             }
 
-            // 如果用户提供了地址缓冲区，填充源地址
-            if (result > 0 && src_addr && addrlen && *addrlen >= sizeof(struct sockaddr_in)) {
-                struct sockaddr_in* src_addr_in = reinterpret_cast<struct sockaddr_in*>(src_addr);
-                memset(src_addr_in, 0, sizeof(struct sockaddr_in));
-                src_addr_in->sin_family = AF_INET;
-                src_addr_in->sin_addr = from_ip;
-                src_addr_in->sin_port = from_port;
+            while (_datagram_queue.empty() && !_read_shutdown) {
+                if (is_nonblocking_request(flags)) {
+                    _lock.release();
+                    return -EAGAIN;
+                }
+                proc::k_pm.sleep(&_datagram_queue, &_lock);
+            }
+
+            if (_datagram_queue.empty()) {
+                _lock.release();
+                return 0;
+            }
+
+            loopback_datagram &packet = _datagram_queue.front();
+            size_t copy_len = eastl::min(len, packet.data.size());
+            memcpy(data, packet.data.data(), copy_len);
+
+            if (src_addr && addrlen && *addrlen > 0) {
+                socklen_t copy_addr_len = eastl::min(*addrlen, static_cast<socklen_t>(sizeof(struct sockaddr_in)));
+                memcpy(src_addr, &packet.src_addr, copy_addr_len);
                 *addrlen = sizeof(struct sockaddr_in);
             }
-        } else if (_type == SocketType::TCP) {
-            // TCP 不支持recvfrom，应该使用recv
+
+            if (!(flags & MSG_PEEK)) {
+                if (_datagram_queue_bytes >= packet.data.size()) {
+                    _datagram_queue_bytes -= packet.data.size();
+                } else {
+                    _datagram_queue_bytes = 0;
+                }
+                _datagram_queue.erase(_datagram_queue.begin());
+            }
             _lock.release();
-            return -EOPNOTSUPP;
+            return static_cast<int>(copy_len);
+        } else if (_type == SocketType::TCP) {
+            struct sockaddr_in peer_addr = _remote_addr;
+            struct sockaddr_un peer_unix_addr = _remote_unix_addr;
+            bool unix_socket = _family == SocketFamily::UNIX;
+            _lock.release();
+            int result = recv(buf, len, flags);
+            if (result >= 0 && src_addr && addrlen && *addrlen > 0) {
+                if (unix_socket) {
+                    socklen_t copy_addr_len = eastl::min(*addrlen, static_cast<socklen_t>(sizeof(struct sockaddr_un)));
+                    memcpy(src_addr, &peer_unix_addr, copy_addr_len);
+                    *addrlen = sizeof(struct sockaddr_un);
+                } else {
+                    socklen_t copy_addr_len = eastl::min(*addrlen, static_cast<socklen_t>(sizeof(struct sockaddr_in)));
+                    memcpy(src_addr, &peer_addr, copy_addr_len);
+                    *addrlen = sizeof(struct sockaddr_in);
+                }
+            }
+            return result;
         } else {
             _lock.release();
             return -EOPNOTSUPP;
         }
-
-        _lock.release();
-        return result;
     }
 
     int socket_file::shutdown(int how)
@@ -526,13 +1402,22 @@ namespace fs
         // 在实际实现中，这里应该根据how参数关闭读/写/双向
         switch (how) {
             case 0: // SHUT_RD
-                // 关闭读
+                _read_shutdown = true;
+                _recv_buffer.clear();
+                _datagram_queue.clear();
                 break;
             case 1: // SHUT_WR
-                // 关闭写
+                _write_shutdown = true;
+                _send_buffer.clear();
+                _pending_send_has_addr = false;
                 break;
             case 2: // SHUT_RDWR
-                // 关闭读写
+                _read_shutdown = true;
+                _write_shutdown = true;
+                _recv_buffer.clear();
+                _send_buffer.clear();
+                _datagram_queue.clear();
+                _pending_send_has_addr = false;
                 _state = SocketState::CLOSED;
                 break;
             default:
@@ -540,13 +1425,31 @@ namespace fs
                 return -EINVAL;
         }
 
+        socket_file *peer = nullptr;
+        if ((how == SHUT_WR || how == SHUT_RDWR) && _peer != nullptr) {
+            peer = _peer;
+        }
+
+        proc::k_pm.wakeup(&_recv_buffer);
+        proc::k_pm.wakeup(&_datagram_queue);
         _lock.release();
+
+        if (peer != nullptr) {
+            peer->_lock.acquire();
+            peer->_peer_closed = true;
+            proc::k_pm.wakeup(&peer->_recv_buffer);
+            proc::k_pm.wakeup(&peer->_datagram_queue);
+            peer->_lock.release();
+        }
         return 0;
     }
 
     int socket_file::setsockopt(int level, int optname, const void *optval, socklen_t optlen)
     {
         if (!optval) {
+            return -EFAULT;
+        }
+        if (optlen == 0) {
             return -EINVAL;
         }
 
@@ -555,6 +1458,7 @@ namespace fs
         if (level == SOL_SOCKET) {
             switch (optname) {
                 case SO_REUSEADDR:
+                case SO_REUSEPORT:
                     if (optlen != sizeof(int)) {
                         _lock.release();
                         return -EINVAL;
@@ -562,16 +1466,59 @@ namespace fs
                     _reuse_addr = *static_cast<const int*>(optval) != 0;
                     _lock.release();
                     return 0;
-                    
-                case SO_REUSEPORT:
-                    // 暂不支持
+
+                case SO_KEEPALIVE:
+                case SO_DONTROUTE:
+                case SO_BROADCAST:
+                case SO_OOBINLINE:
+                case SO_SNDBUF:
+                case SO_RCVBUF:
+                    // loopback 初版没有真实网卡缓存和带外数据；常见调优项接受为 no-op，
+                    // 避免 iperf/netperf 在初始化阶段因非核心选项失败而退出。
+                    if (optlen < sizeof(int)) {
+                        _lock.release();
+                        return -EINVAL;
+                    }
                     _lock.release();
-                    return -ENOPROTOOPT;
-                    
+                    return 0;
+
                 default:
                     _lock.release();
                     return -ENOPROTOOPT;
             }
+        }
+        else if (level == k_protocol_tcp) {
+            // TCP_NODELAY 等 TCP 调优项在内核 loopback 中没有 Nagle/拥塞控制语义，先稳定 no-op。
+            if (_type != SocketType::TCP || optname < 0 || optlen < sizeof(int)) {
+                _lock.release();
+                return -ENOPROTOOPT;
+            }
+            _lock.release();
+            return 0;
+        }
+        else if (level == k_protocol_ipv6) {
+            // AF_INET6 在 loopback 初版中只作为双栈监听兼容入口，IPV6_V6ONLY
+            // 等选项不改变底层端口表行为，按 no-op 接受以兼容 iperf3 初始化。
+            if (_family != SocketFamily::INET6 || optlen < sizeof(int)) {
+                _lock.release();
+                return -ENOPROTOOPT;
+            }
+            _lock.release();
+            return 0;
+        }
+        else if (level == k_protocol_ip) {
+            // IP_RECVERR 只影响真实 IP 错误队列；当前 loopback 后端没有异步
+            // ICMP 错误来源，按 no-op 接受可兼容 netperf 的初始化路径。
+            if (optname == k_ip_recverr && optlen >= sizeof(int)) {
+                _lock.release();
+                return 0;
+            }
+            _lock.release();
+            return -ENOPROTOOPT;
+        }
+        else if (level == k_protocol_udp) {
+            _lock.release();
+            return -ENOPROTOOPT;
         }
         
         _lock.release();
@@ -587,25 +1534,158 @@ namespace fs
         _lock.acquire();
         
         if (level == SOL_SOCKET) {
+            if (*optlen < sizeof(int)) {
+                _lock.release();
+                return -EINVAL;
+            }
+
             switch (optname) {
                 case SO_REUSEADDR:
-                    if (*optlen < sizeof(int)) {
-                        _lock.release();
-                        return -EINVAL;
-                    }
                     *static_cast<int*>(optval) = _reuse_addr ? 1 : 0;
                     *optlen = sizeof(int);
                     _lock.release();
                     return 0;
-                    
+
+                case SO_TYPE:
+                    *static_cast<int*>(optval) = static_cast<int>(_type);
+                    *optlen = sizeof(int);
+                    _lock.release();
+                    return 0;
+
+                case SO_ERROR:
+                    *static_cast<int*>(optval) = 0;
+                    *optlen = sizeof(int);
+                    _lock.release();
+                    return 0;
+
+                case SO_ACCEPTCONN:
+                    *static_cast<int*>(optval) = _state == SocketState::LISTENING ? 1 : 0;
+                    *optlen = sizeof(int);
+                    _lock.release();
+                    return 0;
+
+                case SO_SNDBUF:
+                case SO_RCVBUF:
+                    *static_cast<int*>(optval) = k_default_socket_buffer_size;
+                    *optlen = sizeof(int);
+                    _lock.release();
+                    return 0;
+
+                case SO_KEEPALIVE:
+                case SO_DONTROUTE:
+                case SO_BROADCAST:
+                case SO_OOBINLINE:
+                case SO_REUSEPORT:
+                    *static_cast<int*>(optval) = 0;
+                    *optlen = sizeof(int);
+                    _lock.release();
+                    return 0;
+
+                case SO_PROTOCOL:
+                    *static_cast<int*>(optval) = _protocol;
+                    *optlen = sizeof(int);
+                    _lock.release();
+                    return 0;
+
+                case SO_DOMAIN:
+                    *static_cast<int*>(optval) = static_cast<int>(_family);
+                    *optlen = sizeof(int);
+                    _lock.release();
+                    return 0;
+
                 default:
                     _lock.release();
                     return -ENOPROTOOPT;
             }
         }
+        else if (level == k_protocol_ipv6) {
+            if (_family != SocketFamily::INET6 || *optlen < sizeof(int)) {
+                _lock.release();
+                return -ENOPROTOOPT;
+            }
+            *static_cast<int*>(optval) = 0;
+            *optlen = sizeof(int);
+            _lock.release();
+            return 0;
+        }
+        else if (level == k_protocol_tcp) {
+            if (_type != SocketType::TCP) {
+                _lock.release();
+                return -ENOPROTOOPT;
+            }
+
+            if (optname == k_tcp_info) {
+                // netperf 会读取 TCP_INFO 做统计。loopback 后端没有真实 RTT/拥塞窗口，
+                // 但应按 Linux ABI 返回一块可读结构，并至少填出 tcpi_state。
+                unsigned char state = 7; // TCP_CLOSE
+                if (_state == SocketState::CONNECTED && !_peer_closed) {
+                    state = 1; // TCP_ESTABLISHED
+                } else if (_state == SocketState::LISTENING) {
+                    state = 10; // TCP_LISTEN
+                }
+                memset(optval, 0, *optlen);
+                if (*optlen > 0) {
+                    static_cast<unsigned char *>(optval)[0] = state;
+                }
+                _lock.release();
+                return 0;
+            }
+
+            if (optname == k_tcp_congestion) {
+                static const char congestion[] = "cubic";
+                socklen_t copy_len = eastl::min(*optlen, static_cast<socklen_t>(sizeof(congestion)));
+                if (copy_len > 0) {
+                    memcpy(optval, congestion, copy_len);
+                }
+                *optlen = copy_len;
+                _lock.release();
+                return 0;
+            }
+
+            int value = 0;
+            switch (optname) {
+                case k_tcp_maxseg:
+                    value = k_tcp_default_maxseg;
+                    break;
+                case k_tcp_keepidle:
+                    value = 7200;
+                    break;
+                case k_tcp_keepintvl:
+                    value = 75;
+                    break;
+                case k_tcp_keepcnt:
+                    value = 9;
+                    break;
+                case k_tcp_nodelay:
+                case k_tcp_cork:
+                case k_tcp_syncnt:
+                case k_tcp_linger2:
+                case k_tcp_defer_accept:
+                case k_tcp_window_clamp:
+                case k_tcp_quickack:
+                case k_tcp_user_timeout:
+                    value = 0;
+                    break;
+                default:
+                    _lock.release();
+                    return -ENOPROTOOPT;
+            }
+
+            int result = copy_socket_int_option(optval, optlen, value);
+            _lock.release();
+            return result;
+        }
+        else if (level == k_protocol_ip) {
+            _lock.release();
+            return -ENOPROTOOPT;
+        }
+        else if (level == k_protocol_udp) {
+            _lock.release();
+            return -EOPNOTSUPP;
+        }
         
         _lock.release();
-        return -ENOPROTOOPT;
+        return -EOPNOTSUPP;
     }
 
     int socket_file::getsockname(struct sockaddr *addr, socklen_t *addrlen)
@@ -613,8 +1693,36 @@ namespace fs
         if (!addr || !addrlen) {
             return -EFAULT;
         }
+        if ((uint64)addr < sizeof(struct sockaddr) || (uint64)addrlen < sizeof(socklen_t)) {
+            return -EFAULT;
+        }
 
         _lock.acquire();
+        if (_family == SocketFamily::UNIX) {
+            proc::Pcb *p = proc::k_pm.get_cur_pcb();
+            mem::PageTable *pt = p->get_pagetable();
+            socklen_t requested_len = 0;
+            if (mem::k_vmm.copy_in(*pt, &requested_len, (uint64)addrlen, sizeof(socklen_t)) < 0) {
+                _lock.release();
+                return -EFAULT;
+            }
+            if (requested_len > k_max_user_sockaddr_len) {
+                _lock.release();
+                return -EINVAL;
+            }
+            socklen_t copy_len = eastl::min(requested_len, static_cast<socklen_t>(sizeof(struct sockaddr_un)));
+            if (mem::k_vmm.copy_out(*pt, (uint64)addr, &_local_unix_addr, copy_len) < 0) {
+                _lock.release();
+                return -EFAULT;
+            }
+            socklen_t actual_len = sizeof(struct sockaddr_un);
+            if (mem::k_vmm.copy_out(*pt, (uint64)addrlen, &actual_len, sizeof(socklen_t)) < 0) {
+                _lock.release();
+                return -EFAULT;
+            }
+            _lock.release();
+            return 0;
+        }
         int result = copy_sockaddr_to_user(addr, addrlen, &_local_addr);
         _lock.release();
         return result;
@@ -625,6 +1733,9 @@ namespace fs
         if (!addr || !addrlen) {
             return -EFAULT;
         }
+        if ((uint64)addr < sizeof(struct sockaddr) || (uint64)addrlen < sizeof(socklen_t)) {
+            return -EFAULT;
+        }
 
         _lock.acquire();
         
@@ -633,62 +1744,232 @@ namespace fs
             return -ENOTCONN;
         }
 
-        // 如果是 TCP socket，从 onps 获取真实的远程地址
-        if (_protocol == IPPROTO_TCP && _onps_socket >= 0) {
-            // 获取输入句柄
-            INT input_handle;
-            EN_ONPSERR onps_err;
-            if (!onps_input_get(_onps_socket, IOPT_GETATTACH, &input_handle, &onps_err)) {
+        if (_family == SocketFamily::UNIX) {
+            proc::Pcb *p = proc::k_pm.get_cur_pcb();
+            mem::PageTable *pt = p->get_pagetable();
+            socklen_t requested_len = 0;
+            if (mem::k_vmm.copy_in(*pt, &requested_len, (uint64)addrlen, sizeof(socklen_t)) < 0) {
+                _lock.release();
+                return -EFAULT;
+            }
+            if (requested_len > k_max_user_sockaddr_len) {
                 _lock.release();
                 return -EINVAL;
             }
-            
-            // 获取 TCP 链路
-            PST_TCPLINK tcp_link;
-            if (!onps_input_get(input_handle, IOPT_GETTCPUDPLINK, &tcp_link, &onps_err)) {
+            socklen_t copy_len = eastl::min(requested_len, static_cast<socklen_t>(sizeof(struct sockaddr_un)));
+            if (mem::k_vmm.copy_out(*pt, (uint64)addr, &_remote_unix_addr, copy_len) < 0) {
                 _lock.release();
-                return -ENOTCONN;
+                return -EFAULT;
             }
-            
-            if (!tcp_link) {
+            socklen_t actual_len = sizeof(struct sockaddr_un);
+            if (mem::k_vmm.copy_out(*pt, (uint64)addrlen, &actual_len, sizeof(socklen_t)) < 0) {
                 _lock.release();
-                return -ENOTCONN;
+                return -EFAULT;
             }
-            
-            // 检查连接状态
-            if (tcp_link->bState != TLSCONNECTED) {
-                _lock.release();
-                return -ENOTCONN;
-            }
-            
-            // 构造地址结构
-            struct sockaddr_in peer_addr;
-            memset(&peer_addr, 0, sizeof(peer_addr));
-            peer_addr.sin_family = AF_INET;
-            
-#if SUPPORT_IPV6
-            // IPv6 支持待添加
             _lock.release();
-            return -EAFNOSUPPORT;
-#else
-            peer_addr.sin_addr = tcp_link->stPeer.stSockAddr.unIp;
-            peer_addr.sin_port = tcp_link->stPeer.stSockAddr.usPort;
-#endif
-            
-            // 复制到用户空间
-            int result = copy_sockaddr_to_user(addr, addrlen, &peer_addr);
-            _lock.release();
-            return result;
+            return 0;
         }
 
-        // 对于非 TCP socket 或者没有 onps socket，使用存储的远程地址
-        printfRed("非 TCP socket，使用存储的远程地址\n");
         int result = copy_sockaddr_to_user(addr, addrlen, &_remote_addr);
         _lock.release();
         return result;
     }
 
     // 私有辅助函数实现
+    bool socket_file::is_nonblocking_request(int flags) const
+    {
+        return !_blocking || (flags & MSG_DONTWAIT);
+    }
+
+    int socket_file::append_pending_send_locked(const uint8_t *data, size_t len,
+                                                const struct sockaddr_in *dest_addr)
+    {
+        if (len > 0 && data == nullptr) {
+            return -EFAULT;
+        }
+        if (_type == SocketType::UDP && dest_addr != nullptr) {
+            if (!_pending_send_has_addr) {
+                _pending_send_addr = *dest_addr;
+                _pending_send_has_addr = true;
+            } else if (!pending_send_destination_matches_locked(dest_addr)) {
+                return -EINVAL;
+            }
+        }
+        if (_send_buffer.size() + len > static_cast<size_t>(k_default_socket_buffer_size)) {
+            return -EMSGSIZE;
+        }
+
+        size_t old_size = _send_buffer.size();
+        _send_buffer.resize(old_size + len);
+        if (len > 0) {
+            memcpy(_send_buffer.data() + old_size, data, len);
+        }
+        return static_cast<int>(len);
+    }
+
+    bool socket_file::pending_send_destination_matches_locked(const struct sockaddr_in *dest_addr) const
+    {
+        if (!_pending_send_has_addr || dest_addr == nullptr) {
+            return true;
+        }
+        return same_sockaddr_in(_pending_send_addr, *dest_addr);
+    }
+
+    int socket_file::ensure_loopback_bound_locked()
+    {
+        if (_loopback_registered)
+        {
+            return 0;
+        }
+        if (_family != SocketFamily::INET && _family != SocketFamily::INET6)
+        {
+            return -EAFNOSUPPORT;
+        }
+
+        ensure_loopback_table();
+        g_loopback_lock.acquire();
+        uint16 port = allocate_ephemeral_port(_type);
+        if (port == 0)
+        {
+            g_loopback_lock.release();
+            return -EADDRINUSE;
+        }
+
+        int result = register_loopback_binding(_type, port, this);
+        if (result < 0)
+        {
+            g_loopback_lock.release();
+            return result;
+        }
+
+        memset(&_local_addr, 0, sizeof(_local_addr));
+        _local_addr.sin_family = AF_INET;
+        _local_addr.sin_addr = k_loopback_addr;
+        _local_addr.sin_port = port;
+        _loopback_registered = true;
+        _state = SocketState::BOUND;
+        g_loopback_lock.release();
+        return 0;
+    }
+
+    int socket_file::enqueue_stream_data_to_peer(socket_file *peer, const uint8_t *data,
+                                                 size_t len, bool nonblocking)
+    {
+        if (peer == nullptr)
+        {
+            return -EPIPE;
+        }
+        if (data == nullptr)
+        {
+            return -EFAULT;
+        }
+        if (len == 0)
+        {
+            return 0;
+        }
+
+        size_t queued = 0;
+        while (queued < len)
+        {
+            peer->_lock.acquire();
+            while (peer->_recv_buffer.size() >= k_tcp_recv_buffer_max_bytes &&
+                   !peer->_read_shutdown && peer->_state != SocketState::CLOSED)
+            {
+                if (nonblocking)
+                {
+                    peer->_lock.release();
+                    return queued > 0 ? static_cast<int>(queued) : -EAGAIN;
+                }
+                proc::k_pm.sleep(&peer->_recv_buffer, &peer->_lock);
+            }
+
+            if (peer->_read_shutdown || peer->_state == SocketState::CLOSED)
+            {
+                peer->_lock.release();
+                return queued > 0 ? static_cast<int>(queued) : -EPIPE;
+            }
+
+            size_t used = peer->_recv_buffer.size();
+            size_t space = used < k_tcp_recv_buffer_max_bytes
+                               ? k_tcp_recv_buffer_max_bytes - used
+                               : 0;
+            if (space == 0)
+            {
+                peer->_lock.release();
+                continue;
+            }
+
+            size_t chunk = eastl::min(len - queued, space);
+            size_t old_size = peer->_recv_buffer.size();
+            peer->_recv_buffer.resize(old_size + chunk);
+            memcpy(peer->_recv_buffer.data() + old_size, data + queued, chunk);
+            queued += chunk;
+
+            // 新数据入队唤醒读端；同一等待点也被读端用于释放空间后的写端唤醒。
+            proc::k_pm.wakeup(&peer->_recv_buffer);
+            peer->_lock.release();
+
+            if (nonblocking)
+            {
+                break;
+            }
+        }
+
+        return static_cast<int>(queued);
+    }
+
+    int socket_file::enqueue_stream_data(const uint8_t *data, size_t len)
+    {
+        if (_peer == nullptr || _peer_closed)
+        {
+            return -EPIPE;
+        }
+
+        return enqueue_stream_data_to_peer(_peer, data, len, !_blocking);
+    }
+
+    int socket_file::enqueue_datagram(const struct sockaddr_in *src_addr, const uint8_t *data, size_t len)
+    {
+        if (_read_shutdown || _state == SocketState::CLOSED)
+        {
+            return -EPIPE;
+        }
+
+        // loopback UDP 也必须像真实内核一样有接收队列上限。iperf 的
+        // 1000G 发送目标会远超 demo 内核处理速度；队列满时丢弃新包，
+        // sendto 仍按 UDP 语义返回成功，避免无限分配内核内存。
+        if (_datagram_queue.size() >= k_udp_queue_max_packets ||
+            _datagram_queue_bytes + len > k_udp_queue_max_bytes)
+        {
+            return static_cast<int>(len);
+        }
+
+        loopback_datagram packet;
+        memset(&packet.src_addr, 0, sizeof(packet.src_addr));
+        if (src_addr != nullptr)
+        {
+            packet.src_addr = *src_addr;
+        }
+        packet.data.resize(len);
+        if (len > 0)
+        {
+            memcpy(packet.data.data(), data, len);
+        }
+        _datagram_queue_bytes += len;
+        _datagram_queue.push_back(packet);
+        proc::k_pm.wakeup(&_datagram_queue);
+        return static_cast<int>(len);
+    }
+
+    void socket_file::attach_loopback_peer(socket_file *peer)
+    {
+        _lock.acquire();
+        _peer = peer;
+        _peer_closed = peer == nullptr;
+        _state = peer == nullptr ? SocketState::CLOSED : SocketState::CONNECTED;
+        _lock.release();
+    }
+
     bool socket_file::is_valid_address(const struct sockaddr *addr, socklen_t addrlen)
     {
         if (!addr || addrlen < sizeof(struct sockaddr)) {
@@ -696,6 +1977,14 @@ namespace fs
         }
 
         if (_family == SocketFamily::INET && addrlen < sizeof(struct sockaddr_in)) {
+            return false;
+        }
+
+        if (_family == SocketFamily::INET6 && addrlen < sizeof(struct sockaddr_in6)) {
+            return false;
+        }
+
+        if (_family == SocketFamily::UNIX && addrlen < sizeof(struct sockaddr_un)) {
             return false;
         }
 
@@ -708,11 +1997,22 @@ namespace fs
         if (!user_addr || !user_addrlen) {
             return -EFAULT;
         }
+        if ((uint64)user_addr < sizeof(struct sockaddr) || (uint64)user_addrlen < sizeof(socklen_t)) {
+            return -EFAULT;
+        }
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
 
-        socklen_t copy_len = eastl::min(*user_addrlen, static_cast<socklen_t>(sizeof(struct sockaddr_in)));
+        socklen_t requested_len = 0;
+        if (mem::k_vmm.copy_in(*pt, &requested_len, (uint64)user_addrlen, sizeof(socklen_t)) < 0) {
+            return -EFAULT;
+        }
+        if (requested_len > k_max_user_sockaddr_len) {
+            return -EINVAL;
+        }
+
+        socklen_t copy_len = eastl::min(requested_len, static_cast<socklen_t>(sizeof(struct sockaddr_in)));
         
         if (mem::k_vmm.copy_out(*pt, (uint64)user_addr, kernel_addr, copy_len) < 0) {
             return -EFAULT;
@@ -776,17 +2076,8 @@ namespace fs
             return -EFAULT;
         }
 
-        _lock.acquire();
-
-        // 检查 socket 状态
-        if (_state != SocketState::CONNECTED && _state != SocketState::BOUND) {
-            _lock.release();
-            return -ENOTCONN;
-        }
-
         // 检查 iovec 参数
         if (!msg->msg_iov || msg->msg_iovlen == 0) {
-            _lock.release();
             return -EINVAL;
         }
 
@@ -794,114 +2085,76 @@ namespace fs
         size_t total_len = 0;
         for (size_t i = 0; i < msg->msg_iovlen; i++) {
             if (!msg->msg_iov[i].iov_base) {
-                _lock.release();
                 return -EFAULT;
             }
             total_len += msg->msg_iov[i].iov_len;
         }
 
         if (total_len == 0) {
-            _lock.release();
             return 0;
         }
 
-        int result = 0;
-        EN_ONPSERR onps_err;
-
-        // 根据协议类型选择发送方式
-        if (_protocol == IPPROTO_TCP && _onps_socket >= 0) {
-            // TCP 发送：需要将所有 iovec 数据合并后发送
-            eastl::vector<uint8_t> buffer;
-            buffer.reserve(total_len);
-
-            // 收集所有数据到一个缓冲区
-            for (size_t i = 0; i < msg->msg_iovlen; i++) {
-                const uint8_t* data = static_cast<const uint8_t*>(msg->msg_iov[i].iov_base);
-                buffer.insert(buffer.end(), data, data + msg->msg_iov[i].iov_len);
-            }
-
-            // 获取输入句柄
-            INT input_handle;
-            if (!onps_input_get(_onps_socket, IOPT_GETATTACH, &input_handle, &onps_err)) {
-                _lock.release();
-                return -EINVAL;
-            }
-
-            // 使用 onps TCP 发送数据
-            int sent = tcp_send_data(input_handle, buffer.data(), buffer.size(), 3);
-            if (sent < 0) {
-                _lock.release();
-                return -EIO;
-            }
-            result = sent;
-
-        } else if (_protocol == IPPROTO_UDP && _onps_socket >= 0) {
-            // UDP 发送：需要目标地址
-            if (!msg->msg_name || msg->msg_namelen < sizeof(struct sockaddr_in)) {
-                _lock.release();
-                return -EDESTADDRREQ;
-            }
-
-            struct sockaddr_in* dest_addr = static_cast<struct sockaddr_in*>(msg->msg_name);
-            if (dest_addr->sin_family != AF_INET) {
-                _lock.release();
-                return -EAFNOSUPPORT;
-            }
-
-            // 获取输入句柄
-            INT input_handle;
-            if (!onps_input_get(_onps_socket, IOPT_GETATTACH, &input_handle, &onps_err)) {
-                _lock.release();
-                return -EINVAL;
-            }
-
-            // UDP 逐个发送每个 iovec 项（或者合并发送）
-            eastl::vector<uint8_t> buffer;
-            buffer.reserve(total_len);
-
-            for (size_t i = 0; i < msg->msg_iovlen; i++) {
-                const uint8_t* data = static_cast<const uint8_t*>(msg->msg_iov[i].iov_base);
-                buffer.insert(buffer.end(), data, data + msg->msg_iov[i].iov_len);
-            }
-
-            // 使用 onps UDP 发送数据
-            int sent = udp_sendto(input_handle, dest_addr->sin_addr, 
-                                dest_addr->sin_port, buffer.data(), buffer.size());
-            if (sent < 0) {
-                _lock.release();
-                return -EIO;
-            }
-            result = sent;
-
-        } else {
-            // 回退到简单实现：将数据添加到发送缓冲区
-            for (size_t i = 0; i < msg->msg_iovlen; i++) {
-                const uint8_t* data = static_cast<const uint8_t*>(msg->msg_iov[i].iov_base);
-                size_t len = msg->msg_iov[i].iov_len;
-                
-                size_t old_size = _send_buffer.size();
-                _send_buffer.resize(old_size + len);
-                if (_send_buffer.size() != old_size + len) {
-                    _send_buffer.resize(old_size);
-                    _lock.release();
-                    return -ENOMEM;
-                }
-                
-                memcpy(_send_buffer.data() + old_size, data, len);
-            }
-            
-            // 假设立即发送完成
-            _send_buffer.clear();
-            result = total_len;
+        eastl::vector<uint8_t> buffer;
+        buffer.reserve(total_len);
+        for (size_t i = 0; i < msg->msg_iovlen; i++) {
+            const uint8_t* data = static_cast<const uint8_t*>(msg->msg_iov[i].iov_base);
+            buffer.insert(buffer.end(), data, data + msg->msg_iov[i].iov_len);
         }
 
-        _lock.release();
-        return result;
+        if (msg->msg_name != nullptr && msg->msg_namelen > 0) {
+            return sendto(buffer.data(), buffer.size(), flags,
+                          static_cast<const struct sockaddr *>(msg->msg_name),
+                          msg->msg_namelen);
+        }
+
+        return send(buffer.data(), buffer.size(), flags);
     }
 
     int socket_file::recvmsg(struct msghdr *msg, int flags)
     {
-        // TODO: 实现 recvmsg
-        return -ENOSYS;
+        if (!msg) {
+            return -EFAULT;
+        }
+        if (!msg->msg_iov || msg->msg_iovlen == 0) {
+            return -EINVAL;
+        }
+
+        size_t total_len = 0;
+        for (size_t i = 0; i < msg->msg_iovlen; i++) {
+            if (!msg->msg_iov[i].iov_base) {
+                return -EFAULT;
+            }
+            total_len += msg->msg_iov[i].iov_len;
+        }
+        if (total_len == 0) {
+            return 0;
+        }
+
+        eastl::vector<uint8_t> buffer(total_len);
+        struct sockaddr_in src_addr;
+        memset(&src_addr, 0, sizeof(src_addr));
+        socklen_t src_len = sizeof(src_addr);
+
+        int received = recvfrom(buffer.data(), buffer.size(), flags,
+                                msg->msg_name ? reinterpret_cast<struct sockaddr *>(&src_addr) : nullptr,
+                                msg->msg_name ? &src_len : nullptr);
+        if (received < 0) {
+            return received;
+        }
+
+        size_t copied = 0;
+        for (size_t i = 0; i < msg->msg_iovlen && copied < static_cast<size_t>(received); i++) {
+            size_t part = eastl::min(msg->msg_iov[i].iov_len, static_cast<size_t>(received) - copied);
+            memcpy(msg->msg_iov[i].iov_base, buffer.data() + copied, part);
+            copied += part;
+        }
+
+        if (msg->msg_name != nullptr) {
+            socklen_t copy_len = eastl::min(msg->msg_namelen, static_cast<socklen_t>(sizeof(src_addr)));
+            memcpy(msg->msg_name, &src_addr, copy_len);
+            msg->msg_namelen = sizeof(src_addr);
+        }
+        msg->msg_flags = 0;
+        return received;
     }
 }
