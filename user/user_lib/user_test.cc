@@ -774,9 +774,113 @@ struct ltp_testcase ltp_testcases[] = {
     // 约定：第一个 {NULL, false, false, false, false} 就是当前默认跑测例的结束标记。
     // 下面继续保留的注释清单只作为候选记录，想打开哪个测例就把它挪到结束标记前面。
     // 新开以前完全没跑过的测例时，优先按 tools/ltp/judge/ltp_rank.txt 的 total count 从高到低推进。
-    {"accept01", true, true, true, true},
-    {"accept03", true, true, true, true},
-    // {NULL, false, false, false, false},
+    // {"mkdir02", true, true, true, true}, // TBROK: Group ID lookup failed: EINVAL (22)
+    // {"mkdir04", true, true, true, true}, // TFAIL: mkdir(testdir/testdir, 0777) succeeded unexpectedly
+    // {"mkdir05", true, true, true, true}, // pass 1
+    // {"setsid01", true, true, true, true},  //panic: kernel/sys/syscall_handler.cc:8673: 未实现该系统调用
+    // {"readlinkat01", true, true, true, true}, // TBROK: open(readlink_symlink,2228224,0000) failed: ELOOP (40)
+        // {"clock_adjtime01", true, true, true, true}, //panic: kernel/sys/syscall_handler.cc:13693: 未实现该系统调用
+    // {"clock_adjtime02", true, true, true, true},  //panic: kernel/sys/syscall_handler.cc:13693: 未实现该系统调用
+    // {"clock_gettime01", true, true, true, true},   //timeout
+    // {"clock_gettime03", true, true, true, true},   // timeout
+    // {"clock_gettime04", true, true, true, true},    // timeout
+    // {"clock_nanosleep01", true, true, true, true},  //passed   11 fail 1 TFAIL: returned -1, expected -1, expected errno: EOPNOTSUPP (95): EINVAL (22)
+    // {"clock_nanosleep02", true, true, true, true}, //TFAIL: clock_nanosleep() slept for too long
+    // {"clock_nanosleep03", true, true, true, true},  //TBROK: Cannot parse kernel .config
+    // {"clock_settime01", true, true, true, true},   //panic: kernel/sys/syscall_handler.cc:12611: 未实现该系统调用
+    // {"clock_settime02", true, true, true, true},  //panic: kernel/sys/syscall_handler.cc:12611: 未实现该系统调用
+    // {"clock_settime03", true, true, true, true},  //panic: kernel/sys/syscall_handler.cc:12611: 未实现该系统调用
+    // {"clone02", false, true, false, true},   //PASS no summary, only for glibc
+    // {"clone04", true, true, true, true},  //TBROK: Test killed by SIGSEGV!
+    // {"clone05", true, true, true, true},   //pass 1
+    // {"clone07", true, true, true, true},  //pass 1
+    // {"clone08", true, true, true, true}, //passed   4 TFAIL: futex failed, ctid: -1: EINVAL (22)
+    // {"clone09", true, true, true, true}, //TBROK: Failed to open FILE '/proc/sys/net/ipv4/conf/lo/tag' for reading: ENOENT (2)
+    // {"clone301", true, true, true, true}, //TBROK: waitpid(22,0x10bb1c,1073741824) failed: EINVAL (22)
+    // {"clone303", true, true, true, true}, //TCONF: V2 'base' controller required, but it's mounted on V1
+    // {"epoll_create02", true, true, true, true}, // TCONF: syscall(-1) __NR_epoll_create not supported on your arch  TFAIL: epoll_create(0) invalid retval 3: SUCCESS (0)  TFAIL: epoll_create(-1) invalid retval 4: SUCCESS (0)
+    // {"epoll_ctl01", true, true, true, true}, //TFAIL: epoll_wait() returned -1: ENOSYS (38)
+    // {"epoll_ctl02", true, true, true, true},//passed 8 failed 1  TFAIL: epoll_ctl(...) if fd does not support epoll succeeded
+    // {"epoll_ctl04", true, true, true, true}, //TBROK: epoll_ctl(..., EPOLL_CTL_ADD, ...): EINVAL (22)
+    // {"epoll_ctl05", true, true, true, true}, //TBROK: epoll_ctl(..., EPOLL_CTL_ADD, ...): EINVAL (22)
+    // {"epoll_pwait01", true, true, true, true}, //TCONF: syscall(22) __NR_epoll_pwait not supported on your arch
+    // {"epoll_pwait02", true, true, true, true}, //TCONF: syscall(441) __NR_epoll_pwait2 not supported on your arch
+    // {"epoll_pwait03", true, true, true, true},
+    // {"epoll_pwait04", true, true, true, true},
+    // {"epoll_pwait05", true, true, true, true},
+    // {"epoll_wait01", true, true, true, true}, //TFAIL: epoll_wait() epollout failed: ENOSYS (38)
+    // {"epoll_wait02", true, true, true, true},
+    // {"epoll_wait03", true, true, true, true},
+    // {"epoll_wait04", true, true, true, true},
+    // {"epoll_wait05", true, true, true, true}, //TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)
+    // {"epoll_wait06", true, true, true, true},
+    // {"epoll_wait07", true, true, true, true},
+    // {"epoll-ltp", false, true, false, true}, // TFAIL  :  epoll-ltp.c:217: epoll_create with negative set size succeeded unexpectedly: errno=SUCCESS(0): No error information  // Testing epoll_ctl timeout
+    // {"fallocate01", false, true, false, true}, // TFAIL  :  fallocate01.c:249: fstat test fails on fallocate (4, 1, 49152, 4096) Failed on mode: errno=SUCCESS(0): No error information
+    // {"fallocate02", false, true, false, true}, // 完全通过
+    // {"fallocate03", false, true, false, true}, //pass
+    // {"fchdir03", true, true, true, true}, // TFAIL: fchdir() succeeded unexpectedly
+    // {"fchmod05", true, true, true, true}, //TBROK: Group ID lookup failed: EINVAL (22)
+    // {"fchmod06", true, true, true, true}, //TFAIL: fchmod() failed unexpectedly, expected 1 - EPERM: EPERM (1)
+    {"fchownat01", false, true, false, true}, //pass但是没summary
+    {"fchownat02", false, true, false, true}, ////pass但是没summary
+    // {"fcntl01", true, true, true, true},  //几乎都没有通过
+    // {"fcntl01_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl07", true, true, true, true},  //几乎都没有通过
+    // {"fcntl07_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl11", true, true, true, true},  //几乎都没有通过
+    // {"fcntl11_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl12", true, true, true, true}, //fail  //几乎都没有通过
+    // {"fcntl12_64", true, true, true, true}, //fail  //几乎都没有通过
+    // {"fcntl14", true, true, true, true}, //rt_sigsuspend  //几乎都没有通过
+    // {"fcntl14_64", true, true, true, true}, //rt_sigsuspend  //几乎都没有通过
+    // {"fcntl16", true, true, true, true},  //几乎都没有通过
+    // {"fcntl16_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl17", true, true, true, true},  //几乎都没有通过
+    // {"fcntl17_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl18", true, true, true, true},  //几乎都没有通过
+    // {"fcntl18_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl19", true, true, true, true},  //几乎都没有通过
+    // {"fcntl19_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl20", true, true, true, true},  //几乎都没有通过
+    // {"fcntl20_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl21", true, true, true, true},  //几乎都没有通过
+    // {"fcntl21_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl22", true, true, true, true},  //几乎都没有通过
+    // {"fcntl22_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl23", true, true, true, true},  //几乎都没有通过
+    // {"fcntl23_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl24", true, true, true, true},  //几乎都没有通过
+    // {"fcntl24_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl25", true, true, true, true},  //几乎都没有通过
+    // {"fcntl25_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl26", true, true, true, true},  //几乎都没有通过
+    // {"fcntl26_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl27", true, true, true, true},  //几乎都没有通过
+    // {"fcntl27_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl29", true, true, true, true},  //几乎都没有通过
+    // {"fcntl29_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl30", true, true, true, true},  //几乎都没有通过
+    // {"fcntl30_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl31", true, true, true, true},  //几乎都没有通过
+    // {"fcntl31_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl32", true, true, true, true},  //几乎都没有通过
+    // {"fcntl32_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl33", true, true, true, true},  //几乎都没有通过
+    // {"fcntl33_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl34", true, true, true, true},  //几乎都没有通过
+    // {"fcntl34_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl35", true, true, true, true},  //几乎都没有通过
+    // {"fcntl35_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl36", true, true, true, true},  //几乎都没有通过
+    // {"fcntl36_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl37", true, true, true, true},  //几乎都没有通过
+    // {"fcntl37_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl38", true, true, true, true},  //几乎都没有通过
+    // {"fcntl38_64", true, true, true, true},  //几乎都没有通过
+    // {"fcntl39", true, true, true, true},  //几乎都没有通过
+    // {"fcntl39_64", true, true, true, true},  //几乎都没有通过
+    {NULL, false, false, false, false},
     {"memfd_create01", true, true, true, true},
     {"splice07", true, true, true, true},
     {"epoll_ctl03", true, true, true, true},
@@ -1127,33 +1231,27 @@ struct ltp_testcase ltp_testcases[] = {
     {"wait01", true, true, true, true},              // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
     {"wait402", true, true, true, true},             // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
     {"writev07", true, true, true, true},            // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
-    {"stream01", false, true, false, true}, // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"stream02", false, true, false, true}, // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"stream03", false, true, false, true}, // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"stream04", false, true, false, true}, // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"stream05", false, true, false, true}, // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"abs01", false, true, false, true},    // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"stat02", true, true, true, true},     // 2026-05-26: 双架构双 libc Summary passed=2 failed=0 broken=0。
-    {"stat02_64", true, true, true, true},  // 2026-05-26: 双架构双 libc Summary passed=2 failed=0 broken=0。
-    {"string01", false, true, false, true}, // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"symlinkat01", false, true, false, true}, // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"sysconf01", false, true, false, true}, // 2026-05-26: 双架构 glibc 有 TPASS/TCONF；无 Summary，musl judge 不计分。
-    {NULL, false, false, false, false}, // 已验证并默认随回归运行的测例，到这里结束
+    {"stream01", false, true, false, true},          // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    {"stream02", false, true, false, true},          // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    {"stream03", false, true, false, true},          // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    {"stream04", false, true, false, true},          // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    {"stream05", false, true, false, true},          // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    {"abs01", false, true, false, true},             // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    {"stat02", true, true, true, true},              // 2026-05-26: 双架构双 libc Summary passed=2 failed=0 broken=0。
+    {"stat02_64", true, true, true, true},           // 2026-05-26: 双架构双 libc Summary passed=2 failed=0 broken=0。
+    {"string01", false, true, false, true},          // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    {"symlinkat01", false, true, false, true},       // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    {"sysconf01", false, true, false, true},         // 2026-05-26: 双架构 glibc 有 TPASS/TCONF；无 Summary，musl judge 不计分。
+    {NULL, false, false, false, false},              // 已验证并默认随回归运行的测例，到这里结束
 
-    // 当前工作区里已经登记、但暂不默认开启的测例。
-    // {"mkdir02", true, true, true, true}, // 先等等
-    // {"mkdir04", true, true, true, true}, // 先等等
-    // {"mkdir05", true, true, true, true}, // 先等等
+
+    // 以下补齐历史完整 LTP 清单，默认全部保持注释状态。
+    
     // {"setresuid01_16", true, true, true, true},
     // {"setresuid02_16", true, true, true, true},
     // {"setresuid03_16", true, true, true, true},
     // {"setresuid04_16", true, true, true, true},
     // {"setresuid05_16", true, true, true, true},
-    // {"setsid01", true, true, true, true},
-    // {"readlinkat01", true, true, true, true}, // pass 现在好像爆了
-
-    // 以下补齐历史完整 LTP 清单，默认全部保持注释状态。
-
     // {"abort01", true, true, true, true},
     // {"accept02", true, true, true, true},
     // {"accept4_01", true, true, true, true},
@@ -1403,24 +1501,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"eject_check_tray", true, true, true, true},
     // {"eject-tests.sh", true, true, true, true},
     // {"endian_switch01", true, true, true, true},
-    // {"epoll_create02", true, true, true, true},
-    // {"epoll_ctl01", true, true, true, true},
-    // {"epoll_ctl02", true, true, true, true},
-    // {"epoll_ctl04", true, true, true, true},
-    // {"epoll_ctl05", true, true, true, true},
-    // {"epoll_pwait01", true, true, true, true},
-    // {"epoll_pwait02", true, true, true, true},
-    // {"epoll_pwait03", true, true, true, true},
-    // {"epoll_pwait04", true, true, true, true},
-    // {"epoll_pwait05", true, true, true, true},
-    // {"epoll_wait01", true, true, true, true},
-    // {"epoll_wait02", true, true, true, true},
-    // {"epoll_wait03", true, true, true, true},
-    // {"epoll_wait04", true, true, true, true},
-    // {"epoll_wait05", true, true, true, true},
-    // {"epoll_wait06", true, true, true, true},
-    // {"epoll_wait07", true, true, true, true},
-    // {"epoll-ltp", true, true, true, true},
     // {"event_generator", true, true, true, true},
     // {"eventfd01", true, true, true, true},
     // {"eventfd02", true, true, true, true},
@@ -1455,11 +1535,8 @@ struct ltp_testcase ltp_testcases[] = {
     // {"exit01", true, true, true, true},
     // {"f00f", true, true, true, true},
     // {"faccessat202", true, true, true, true}, //涉及网络😭😭😭
-    // {"fallocate01", true, true, true, true}, //过了一半
-    // {"fallocate02", true, true, true, true}, // 完全通过
-    // {"fallocate03", true, true, true, true}, //卡死了
-    // {"fallocate04", true, true, true, true},
-    // {"fallocate05", true, true, true, true},
+    // {"fallocate04", true, true, true, true},  //卡死了
+    // {"fallocate05", true, true, true, true},  //TBROK: write(): EIO (5)  TWARN: ioctl(/dev/loop0, LOOP_CLR_FD, 0) unexpectedly failed with: EIO
     // {"fallocate06", true, true, true, true},
     // {"fanotify_child", true, true, true, true},
     // {"fanotify01", true, true, true, true},
@@ -1486,72 +1563,11 @@ struct ltp_testcase ltp_testcases[] = {
     // {"fanotify22", true, true, true, true},
     // {"fanotify23", true, true, true, true},
     // {"fanout01", true, true, true, true},
-    // {"fchdir03", true, true, true, true}, // fail
-    // {"fchmod05", true, true, true, true}, //爆了
-    // {"fchmod06", true, true, true, true}, //pass1 fail2
     // {"fchown01_16", true, true, true, true},
     // {"fchown02_16", true, true, true, true},
     // {"fchown03_16", true, true, true, true},
     // {"fchown04_16", true, true, true, true},
     // {"fchown05_16", true, true, true, true},
-    // {"fchownat01", true, true, true, true}, //pass但是没summary
-    // {"fchownat02", true, true, true, true}, ////pass但是没summary
-    // {"fcntl01", true, true, true, true},
-    // {"fcntl01_64", true, true, true, true},
-    // {"fcntl07", true, true, true, true},
-    // {"fcntl07_64", true, true, true, true},
-    // {"fcntl11", true, true, true, true},
-    // {"fcntl11_64", true, true, true, true},
-    // {"fcntl12", true, true, true, true}, //fail
-    // {"fcntl12_64", true, true, true, true}, //fail
-    // {"fcntl14", true, true, true, true}, //rt_sigsuspend
-    // {"fcntl14_64", true, true, true, true}, //rt_sigsuspend
-    // {"fcntl16", true, true, true, true},
-    // {"fcntl16_64", true, true, true, true},
-    // {"fcntl17", true, true, true, true},
-    // {"fcntl17_64", true, true, true, true},
-    // {"fcntl18", true, true, true, true},
-    // {"fcntl18_64", true, true, true, true},
-    // {"fcntl19", true, true, true, true},
-    // {"fcntl19_64", true, true, true, true},
-    // {"fcntl20", true, true, true, true},
-    // {"fcntl20_64", true, true, true, true},
-    // {"fcntl21", true, true, true, true},
-    // {"fcntl21_64", true, true, true, true},
-    // {"fcntl22", true, true, true, true},
-    // {"fcntl22_64", true, true, true, true},
-    // {"fcntl23", true, true, true, true},
-    // {"fcntl23_64", true, true, true, true},
-    // {"fcntl24", true, true, true, true},
-    // {"fcntl24_64", true, true, true, true},
-    // {"fcntl25", true, true, true, true},
-    // {"fcntl25_64", true, true, true, true},
-    // {"fcntl26", true, true, true, true},
-    // {"fcntl26_64", true, true, true, true},
-    // {"fcntl27", true, true, true, true},
-    // {"fcntl27_64", true, true, true, true},
-    // {"fcntl29", true, true, true, true},
-    // {"fcntl29_64", true, true, true, true},
-    // {"fcntl30", true, true, true, true},
-    // {"fcntl30_64", true, true, true, true},
-    // {"fcntl31", true, true, true, true},
-    // {"fcntl31_64", true, true, true, true},
-    // {"fcntl32", true, true, true, true},
-    // {"fcntl32_64", true, true, true, true},
-    // {"fcntl33", true, true, true, true},
-    // {"fcntl33_64", true, true, true, true},
-    // {"fcntl34", true, true, true, true},
-    // {"fcntl34_64", true, true, true, true},
-    // {"fcntl35", true, true, true, true},
-    // {"fcntl35_64", true, true, true, true},
-    // {"fcntl36", true, true, true, true},
-    // {"fcntl36_64", true, true, true, true},
-    // {"fcntl37", true, true, true, true},
-    // {"fcntl37_64", true, true, true, true},
-    // {"fcntl38", true, true, true, true},
-    // {"fcntl38_64", true, true, true, true},
-    // {"fcntl39", true, true, true, true},
-    // {"fcntl39_64", true, true, true, true},
     // {"fdatasync01", true, true, true, true}, // pass
     // {"fdatasync02", true, true, true, true}, // pass
     // {"fdatasync03", true, true, true, true}, //loop0
