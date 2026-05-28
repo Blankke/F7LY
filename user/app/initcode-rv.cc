@@ -6,6 +6,10 @@ extern "C"
     {
         init_env("/musl/");
         ltp_test(true);
+        // netperf_test("/musl/");
+        // netperf_test("/glibc/");
+        // iperf_test("/musl/");
+        // iperf_test("/glibc/");
         // basic_test("/musl/");
         // basic_test("/glibc/");
         // iozone_test("/musl");
