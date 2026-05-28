@@ -108,6 +108,13 @@ void maybe_fire_interval_timer(proc::Pcb *p, int which, uint64 now_us)
   if (signo > 0)
   {
     p->add_signal(signo);
+    // ITIMER_REAL/SIGALRM 必须能打断 accept/read/select 等普通阻塞睡眠。
+    // 具体 syscall 醒来后会检查 pending signal 并返回 EINTR。
+    if (proc::ipc::signal::has_unmasked_signal_pending(p) &&
+        p->_state == proc::ProcState::SLEEPING)
+    {
+      p->_state = proc::ProcState::RUNNABLE;
+    }
   }
 
   if (timer.interval_us == 0)
