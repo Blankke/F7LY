@@ -4,8 +4,8 @@
 #include "mem/virtual_memory_manager.hh"
 #include "proc/proc.hh"
 #include "proc/proc_manager.hh"
-#include "proc/scheduler.hh"
 #include "proc/signal.hh"
+#include "tm/timer_manager.hh"
 #include <errno.h>
 #include "fs/vfs/virtual_fs.hh"
 
@@ -43,7 +43,7 @@ namespace fs
         constexpr size_t k_udp_queue_max_packets = 256;
         constexpr socklen_t k_max_user_sockaddr_len = 4096;
         constexpr int k_loopback_somaxconn = 4096;
-        constexpr int k_tcp_connect_listener_wait_yields = 64;
+        constexpr uint64 k_tcp_connect_listener_wait_ticks = 100;
         constexpr int k_unix_binding_max = 256;
         constexpr int k_at_fdcwd = -100;
 
@@ -916,7 +916,8 @@ namespace fs
 
             ensure_loopback_table();
             socket_file *listener = nullptr;
-            for (int attempt = 0; attempt <= k_tcp_connect_listener_wait_yields; ++attempt) {
+            const uint64 listener_wait_start_tick = tmm::k_tm.get_ticks();
+            for (;;) {
                 g_loopback_lock.acquire();
                 loopback_binding *binding = find_loopback_binding(SocketType::TCP, remote_addr.sin_port);
                 listener = binding ? binding->socket : nullptr;
@@ -930,7 +931,8 @@ namespace fs
                 }
                 g_loopback_lock.release();
 
-                if (!_blocking || attempt == k_tcp_connect_listener_wait_yields) {
+                uint64 waited_ticks = tmm::k_tm.get_ticks() - listener_wait_start_tick;
+                if (!_blocking || waited_ticks >= k_tcp_connect_listener_wait_ticks) {
                     _lock.release();
                     return -ECONNREFUSED;
                 }
@@ -942,12 +944,10 @@ namespace fs
                 }
 
                 // netperf/iperf 这类脚本会用“后台 server & 前台 client”的模式。
-                // 当前调度粒度下，前台 connect 可能先于后台 listen 抢到 CPU；
-                // 对阻塞 TCP connect 做有限让出，既不改变最终无监听端口的 errno，
-                // 也避免把脚本启动竞态误判成协议不可用。
-                _lock.release();
-                proc::k_scheduler.yield();
-                _lock.acquire();
+                // 只 yield 时，当前进程可能马上再次被选中，后台 netserver 还没
+                // 完成 exec/bind/listen；这里睡到下一个 tick，让启动方真正获得
+                // 运行窗口。等待仍有上限，无监听端口最终保持 ECONNREFUSED。
+                proc::k_pm.sleep(tmm::k_tm.get_tick_wait_channel(), &_lock);
                 if (_state != SocketState::CREATED && _state != SocketState::BOUND) {
                     _lock.release();
                     return _state == SocketState::CONNECTED ? -EISCONN : -ECONNABORTED;
@@ -1132,7 +1132,12 @@ namespace fs
                 return -ENOTCONN;
             }
 
+            proc::Pcb *cur = proc::k_pm.get_cur_pcb();
             while (_recv_buffer.empty() && !_peer_closed && !_read_shutdown) {
+                if (cur != nullptr && proc::ipc::signal::has_unmasked_signal_pending(cur)) {
+                    _lock.release();
+                    return -EINTR;
+                }
                 if (is_nonblocking_request(flags)) {
                     _lock.release();
                     return -EAGAIN;
@@ -1333,7 +1338,12 @@ namespace fs
                 return -EINVAL;
             }
 
+            proc::Pcb *cur = proc::k_pm.get_cur_pcb();
             while (_datagram_queue.empty() && !_read_shutdown) {
+                if (cur != nullptr && proc::ipc::signal::has_unmasked_signal_pending(cur)) {
+                    _lock.release();
+                    return -EINTR;
+                }
                 if (is_nonblocking_request(flags)) {
                     _lock.release();
                     return -EAGAIN;
