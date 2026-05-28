@@ -68,6 +68,24 @@ namespace proc
             return entry.used && entry.backing_kind == VMA_BACKING_SHM && entry.backing_shmid >= 0;
         }
 
+        inline uint64 pte_data_kernel_addr(mem::Pte &pte)
+        {
+            uint64 pa = reinterpret_cast<uint64>(pte.pa());
+#ifdef LOONGARCH
+            pa = to_vir(pa);
+#endif
+            return pa;
+        }
+
+        inline bool pte_allows_user_access(mem::Pte &pte)
+        {
+#ifdef RISCV
+            return pte.is_user();
+#elif defined(LOONGARCH)
+            return pte.is_user_plv();
+#endif
+        }
+
         inline uint64 build_user_pte_flags_from_vma(const vma &entry)
         {
             uint64 pte_flags = 0;
@@ -1255,28 +1273,9 @@ namespace proc
                 (vm_entry.prot & PROT_WRITE) != 0)
             {
                 printfCyan("ProcessMemoryManager: writing back shared file mapping\n");
-                // 内联writeback_vma逻辑
-                uint64 vma_start = PGROUNDDOWN(vm_entry.addr);
-                uint64 vma_end = PGROUNDUP(vma_start + vm_entry.len);
-                for (uint64 va = vma_start; va < vma_end; va += PGSIZE)
+                if (!writeback_file_mapping(vm_entry))
                 {
-                    mem::Pte pte = pagetable.walk(va, 0);
-                    if (!pte.is_null() && pte.is_valid())
-                    {
-                        // 页面已分配，需要写回到文件
-                        uint64 pa = (uint64)pte.pa();
-                        int file_offset = vm_entry.offset + (va - vma_start);
-#ifdef LOONGARCH
-                        pa = to_vir(pa);
-#endif
-
-                        // 写回数据到文件
-                        int write_result = vm_entry.vfile->write(pa, PGSIZE, file_offset, false);
-                        if (write_result < 0)
-                        {
-                            printfRed("[ProcessMemoryManager] Failed to write back page at va=%p\n", (void *)va);
-                        }
-                    }
+                    return -1;
                 }
             }
             bool full_unmap = (unmap_start == vma_start && unmap_end == vma_end);
@@ -2081,8 +2080,64 @@ namespace proc
             return true; // 非共享或不可写，无需写回
         }
 
-        int result = vma_entry.vfile->write(vma_entry.addr, vma_entry.len, vma_entry.offset, false);
-        return result >= 0;
+        const uint64 vma_start = vma_entry.addr;
+        const uint64 vma_end = vma_entry.addr + vma_entry.len;
+        const uint64 page_start = PGROUNDDOWN(vma_start);
+        const uint64 page_end = PGROUNDUP(vma_end);
+
+        for (uint64 va = page_start; va < page_end; va += PGSIZE)
+        {
+            mem::Pte pte = pagetable.walk(va, 0);
+            if (pte.is_null() || !pte.is_valid())
+            {
+                continue; // 惰性 mmap 未驻留页没有脏数据可写回
+            }
+
+            if (!pte_allows_user_access(pte))
+            {
+                printfRed("[ProcessMemoryManager] skip non-user file mapping page va=%p\n",
+                          reinterpret_cast<void *>(va));
+                return false;
+            }
+
+            uint64 write_start = va;
+            if (write_start < vma_start)
+            {
+                write_start = vma_start;
+            }
+            uint64 write_end = va + PGSIZE;
+            if (write_end > vma_end)
+            {
+                write_end = vma_end;
+            }
+            if (write_end <= write_start)
+            {
+                continue;
+            }
+
+            const size_t write_len = static_cast<size_t>(write_end - write_start);
+            const uint64 page_offset = write_start - va;
+            const uint64 file_offset = vma_entry.offset + (write_start - vma_start);
+            const uint64 kernel_buf = pte_data_kernel_addr(pte) + page_offset;
+
+            // file::write 只接受内核可直接访问的缓冲区。MAP_SHARED 写回必须
+            // 逐页把用户 VA 转成页表里的真实物理页，不能把 VMA 地址当指针。
+            long result = vma_entry.vfile->write(kernel_buf,
+                                                 write_len,
+                                                 static_cast<long>(file_offset),
+                                                 false);
+            if (result < 0 || static_cast<size_t>(result) != write_len)
+            {
+                printfRed("[ProcessMemoryManager] Failed to write back file mapping va=%p len=%zu off=%p result=%ld\n",
+                          reinterpret_cast<void *>(write_start),
+                          write_len,
+                          file_offset,
+                          result);
+                return false;
+            }
+        }
+
+        return true;
     }
 
     bool ProcessMemoryManager::is_vma_valid(int vma_index) const

@@ -366,6 +366,12 @@ namespace fs
         add_virtual_file("/etc/group", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<EtcGroupProvider>());
 
+        // /etc/hosts 与 /etc/protocols：支撑 libc 的本机名解析和协议名查询。
+        add_virtual_file("/etc/hosts", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<EtcHostsProvider>());
+        add_virtual_file("/etc/protocols", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<EtcProtocolsProvider>());
+
         // /proc/sys/fs/pipe-user-pages-soft
         add_virtual_file("/proc/sys/fs/pipe-user-pages-soft", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcSysFsPipeUserPagesSoftProvider>());
@@ -388,6 +394,10 @@ namespace fs
         // /dev/null (空设备)
         add_virtual_file("/dev/null", fs::FileTypes::FT_DEVICE,
                          eastl::make_unique<DevNullProvider>());
+
+        // /dev/urandom (非阻塞伪随机字节设备)
+        add_virtual_file("/dev/urandom", fs::FileTypes::FT_DEVICE,
+                         eastl::make_unique<DevUrandomProvider>());
 
         // /dev/rtc* (RTC 设备)
         add_virtual_file("/dev/rtc", fs::FileTypes::FT_DEVICE, nullptr);
@@ -627,6 +637,12 @@ namespace fs
         {
             // /dev/zero 字符设备的标准属性
             fill_virtual_kstat_defaults(st, 0666 | S_IFCHR, 5, (1 << 8) | 5, 1);
+            st->dev = 0x5; // Device: 5h/5d
+        }
+        else if (path == "/dev/urandom")
+        {
+            // /dev/urandom 字符设备的标准属性：major=1, minor=9
+            fill_virtual_kstat_defaults(st, 0666 | S_IFCHR, 9, (1 << 8) | 9, 1);
             st->dev = 0x5; // Device: 5h/5d
         }
         else if (path.find("/dev/loop") == 0)
