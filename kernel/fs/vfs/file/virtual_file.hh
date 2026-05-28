@@ -18,6 +18,7 @@ namespace fs
         GENERIC,
         DEV_ZERO,
         DEV_NULL,
+        DEV_URANDOM,
         PROC_SELF_EXE,
         PROC_MEMINFO,
         // 可以根据需要添加更多类型
@@ -201,6 +202,26 @@ namespace fs
         }
     };
 
+    // /etc/hosts 内容提供者
+    class EtcHostsProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<EtcHostsProvider>();
+        }
+    };
+
+    // /etc/protocols 内容提供者
+    class EtcProtocolsProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<EtcProtocolsProvider>();
+        }
+    };
+
     // /dev/block/X:Y 内容提供者
     class DevBlockProvider : public VirtualContentProvider
     {
@@ -321,6 +342,22 @@ namespace fs
         virtual VirtualProviderType get_provider_type() const override { return VirtualProviderType::DEV_NULL; }
         virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
             return eastl::make_unique<DevNullProvider>();
+        }
+    };
+
+    // /dev/urandom 内容提供者
+    class DevUrandomProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_dynamic() const override { return true; }
+        virtual bool is_writable() const override { return true; } // Linux 允许写入熵池；这里按丢弃处理
+        virtual bool is_readable() const override { return true; }
+        virtual long handle_read(uint64 buf, size_t len, long off) override;
+        virtual long handle_write(uint64 buf, size_t len, long off) override;
+        virtual VirtualProviderType get_provider_type() const override { return VirtualProviderType::DEV_URANDOM; }
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<DevUrandomProvider>();
         }
     };
 

@@ -1701,8 +1701,20 @@ static int ext4_ftruncate_no_lock(ext4_file *file, uint64_t size)
 
     /*Sync file size*/
     file->fsize = ext4_inode_get_size(&file->mp->fs.sb, ref.inode);
-    if (file->fsize <= size)
+    if (file->fsize == size)
     {
+        r = EOK;
+        goto Finish;
+    }
+    if (file->fsize < size)
+    {
+        /*
+         * Linux ftruncate() 扩展普通文件时创建稀疏洞，不要求立即分配
+         * 并写满零块。后续 read 路径负责把未分配块读成 0。
+         */
+        file->fsize = size;
+        ext4_inode_set_size(ref.inode, file->fsize);
+        ref.dirty = true;
         r = EOK;
         goto Finish;
     }
@@ -1727,7 +1739,9 @@ static int ext4_ftruncate_no_lock(ext4_file *file, uint64_t size)
         goto Finish;
 
 Finish:
-    ext4_fs_put_inode_ref(&ref);
+    int put_inode_r = ext4_fs_put_inode_ref(&ref);
+    if (r == EOK)
+        r = put_inode_r;
     return r;
 }
 
@@ -1796,6 +1810,12 @@ int ext4_fread(ext4_file *file, void *buf, size_t size, size_t *rcnt)
     /*Sync file size*/
     file->fsize = ext4_inode_get_size(sb, ref.inode);
 
+    if (file->fpos >= file->fsize)
+    {
+        r = EOK;
+        goto Finish;
+    }
+
     block_size = ext4_sb_get_block_size(sb);
     size = ((uint64_t)size > (file->fsize - file->fpos)) ? ((size_t)(file->fsize - file->fpos)) : size;
 
@@ -1858,22 +1878,35 @@ int ext4_fread(ext4_file *file, void *buf, size_t size, size_t *rcnt)
         iblock_idx++;
     }
 
-    fblock_start = 0;
-    fblock_count = 0;
     while (size >= block_size)
     {
-        while (iblock_idx < iblock_last)
+        r = ext4_fs_get_inode_dblk_idx(&ref, iblock_idx, &fblock, true);
+        if (r != EOK)
+            goto Finish;
+
+        if (fblock == 0)
         {
-            r = ext4_fs_get_inode_dblk_idx(&ref, iblock_idx, &fblock, true);
+            memset(u8_buf, 0, block_size);
+            size -= block_size;
+            u8_buf += block_size;
+            file->fpos += block_size;
+            iblock_idx++;
+            if (rcnt)
+                *rcnt += block_size;
+            continue;
+        }
+
+        fblock_start = fblock;
+        fblock_count = 1;
+        while (fblock_count < size / block_size &&
+               iblock_idx + fblock_count < iblock_last)
+        {
+            ext4_fsblk_t next_fblock;
+            r = ext4_fs_get_inode_dblk_idx(&ref, iblock_idx + fblock_count, &next_fblock, true);
             if (r != EOK)
                 goto Finish;
 
-            iblock_idx++;
-
-            if (!fblock_start)
-                fblock_start = fblock;
-
-            if ((fblock_start + fblock_count) != fblock)
+            if (next_fblock == 0 || (fblock_start + fblock_count) != next_fblock)
                 break;
 
             fblock_count++;
@@ -1883,15 +1916,14 @@ int ext4_fread(ext4_file *file, void *buf, size_t size, size_t *rcnt)
         if (r != EOK)
             goto Finish;
 
-        size -= block_size * fblock_count;
-        u8_buf += block_size * fblock_count;
-        file->fpos += block_size * fblock_count;
+        const size_t transfer_bytes = static_cast<size_t>(block_size) * fblock_count;
+        size -= transfer_bytes;
+        u8_buf += transfer_bytes;
+        file->fpos += transfer_bytes;
+        iblock_idx += fblock_count;
 
         if (rcnt)
-            *rcnt += block_size * fblock_count;
-
-        fblock_start = fblock;
-        fblock_count = 1;
+            *rcnt += transfer_bytes;
     }
 
     if (size)
@@ -1902,9 +1934,16 @@ int ext4_fread(ext4_file *file, void *buf, size_t size, size_t *rcnt)
             goto Finish;
 
         off = fblock * block_size;
-        r = ext4_block_readbytes(file->mp->fs.bdev, off, u8_buf, size);
-        if (r != EOK)
-            goto Finish;
+        if (fblock != 0)
+        {
+            r = ext4_block_readbytes(file->mp->fs.bdev, off, u8_buf, size);
+            if (r != EOK)
+                goto Finish;
+        }
+        else
+        {
+            memset(u8_buf, 0, size);
+        }
 
         file->fpos += size;
 
@@ -1966,6 +2005,16 @@ int ext4_fwrite(ext4_file *file, const void *buf, size_t size, size_t *wcnt)
 
     /*Sync file size*/
     file->fsize = ext4_inode_get_size(sb, ref.inode);
+    if (file->fpos > file->fsize)
+    {
+        /*
+         * ext4_fwrite() 只能写当前 EOF 以内或从 EOF 追加的数据。
+         * 稀疏扩展/洞填零必须由上层 VFS 先完成，否则这里会在追加洞块时
+         * 用调用者的一小段源缓冲覆盖多个块，造成越界读。
+         */
+        r = EINVAL;
+        goto Finish;
+    }
     block_size = ext4_sb_get_block_size(sb);
     iblock_last = (uint32_t)((file->fpos + size) / block_size);
     iblk_idx = (uint32_t)(file->fpos / block_size);
@@ -2042,16 +2091,24 @@ int ext4_fwrite(ext4_file *file, const void *buf, size_t size, size_t *wcnt)
             fblock_count++;
         }
 
+        uint32_t remaining_full_blocks = static_cast<uint32_t>(size / block_size);
+        if (fblock_count == 0 || fblock_count > remaining_full_blocks)
+        {
+            r = EIO;
+            goto Finish;
+        }
+
         r = ext4_blocks_set_direct(file->mp->fs.bdev, u8_buf, fblock_start, fblock_count);
         if (r != EOK)
             break;
 
-        size -= block_size * fblock_count;
-        u8_buf += block_size * fblock_count;
-        file->fpos += block_size * fblock_count;
+        const size_t transfer_bytes = static_cast<size_t>(block_size) * fblock_count;
+        size -= transfer_bytes;
+        u8_buf += transfer_bytes;
+        file->fpos += transfer_bytes;
 
         if (wcnt)
-            *wcnt += block_size * fblock_count;
+            *wcnt += transfer_bytes;
 
         fblock_start = fblk;
         fblock_count = 1;
@@ -2110,7 +2167,9 @@ Finish:
             r = cache_r;
     }
 
-    r = ext4_fs_put_inode_ref(&ref);
+    int put_inode_r = ext4_fs_put_inode_ref(&ref);
+    if (r == EOK)
+        r = put_inode_r;
 
     if (r != EOK)
         ext4_trans_abort(file->mp);

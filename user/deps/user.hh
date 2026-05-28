@@ -104,6 +104,7 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
 int getsockname(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 int getpeername(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+int getsockopt(int sockfd, int level, int optname, void *optval, socklen_t *optlen);
 ssize_t send(int sockfd, const void *buf, size_t len, int flags);
 ssize_t recv(int sockfd, void *buf, size_t len, int flags);
 ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
@@ -150,6 +151,8 @@ int libc_musl_test(void);
 int start_shell(void);
 int libcbench_test(const char *path);
 int iozone_test(const char *path);
+int iperf_test(const char *path);
+int netperf_test(const char *path);
 int lmbench_test(const char *path);
 int lua_test(const char *path);
 int basic_test(const char *path);

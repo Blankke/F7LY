@@ -141,6 +141,36 @@ namespace fs
         return result;
     }
 
+    eastl::string EtcHostsProvider::generate_content()
+    {
+        eastl::string result;
+        // libc 的 hosts 解析路径会读取这里；先提供 loopback 的最小权威内容。
+        result += "127.0.0.1\tlocalhost localhost.localdomain\n";
+        result += "::1\tlocalhost ip6-localhost ip6-loopback\n";
+        return result;
+    }
+
+    eastl::string EtcProtocolsProvider::generate_content()
+    {
+        eastl::string result;
+        // glibc/netperf 会通过 getprotobyname 查询 tcp/udp 协议号。
+        // 保留常见基础协议，避免用户态因为缺少协议数据库走到降级 warning。
+        result += "ip 0 IP\n";
+        result += "icmp 1 ICMP\n";
+        result += "igmp 2 IGMP\n";
+        result += "tcp 6 TCP\n";
+        result += "udp 17 UDP\n";
+        result += "ipv6 41 IPv6\n";
+        result += "ipv6-route 43 IPv6-Route\n";
+        result += "ipv6-frag 44 IPv6-Frag\n";
+        result += "esp 50 ESP\n";
+        result += "ah 51 AH\n";
+        result += "ipv6-icmp 58 IPv6-ICMP\n";
+        result += "ipv6-nonxt 59 IPv6-NoNxt\n";
+        result += "ipv6-opts 60 IPv6-Opts\n";
+        return result;
+    }
+
     eastl::string DevBlockProvider::generate_content()
     {
         // 块设备文件通常不包含文本内容，但可以返回设备信息
@@ -833,6 +863,52 @@ namespace fs
         (void)buf;  // 忽略缓冲区内容
         (void)off;  // 忽略偏移量
         return len; // 假装写入了所有数据
+    }
+
+    // ======================== DevUrandomProvider 实现 ========================
+
+    eastl::string DevUrandomProvider::generate_content()
+    {
+        // /dev/urandom 是无限流式设备，不通过字符串缓存生成内容。
+        return "";
+    }
+
+    long DevUrandomProvider::handle_read(uint64 buf, size_t len, long off)
+    {
+        char *dst_buf = reinterpret_cast<char *>(buf);
+        proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
+        uint64 seed = 0x9E37'79B9'7F4A'7C15UL ^ reinterpret_cast<uint64>(this) ^ buf;
+        if (off > 0)
+        {
+            seed ^= static_cast<uint64>(off) * 0xBF58'476D'1CE4'E5B9UL;
+        }
+        if (pcb != nullptr)
+        {
+            seed ^= static_cast<uint64>(pcb->get_pid()) << 32;
+            seed ^= static_cast<uint64>(pcb->get_tid());
+        }
+
+        // Demo 内核目前没有真实熵池。这里用 SplitMix64 风格的伪随机流，
+        // 只保证非阻塞产出足量字节以满足 libc/iperf 等用户态工具初始化需求，
+        // 不提供密码学安全保证。
+        for (size_t i = 0; i < len; ++i)
+        {
+            seed += 0x9E37'79B9'7F4A'7C15UL;
+            uint64 mixed = seed;
+            mixed = (mixed ^ (mixed >> 30)) * 0xBF58'476D'1CE4'E5B9UL;
+            mixed = (mixed ^ (mixed >> 27)) * 0x94D0'49BB'1331'11EBUL;
+            mixed ^= mixed >> 31;
+            dst_buf[i] = static_cast<char>(mixed & 0xff);
+        }
+        return len;
+    }
+
+    long DevUrandomProvider::handle_write(uint64 buf, size_t len, long off)
+    {
+        // 简化语义：接受写入但不维护熵池，与 /dev/null 类似丢弃数据。
+        (void)buf;
+        (void)off;
+        return len;
     }
 
     // ======================== ProcSelfMapsProvider 实现 ========================

@@ -281,6 +281,11 @@ int getpeername(int sockfd, struct sockaddr *addr, socklen_t *addrlen)
     return syscall(syscall::SYS_getpeername, sockfd, addr, addrlen);
 }
 
+int getsockopt(int sockfd, int level, int optname, void *optval, socklen_t *optlen)
+{
+    return syscall(syscall::SYS_getsockopt, sockfd, level, optname, optval, optlen);
+}
+
 ssize_t send(int sockfd, const void *buf, size_t len, int flags)
 {
     return syscall(syscall::SYS_sendto, sockfd, buf, len, flags, 0, 0);

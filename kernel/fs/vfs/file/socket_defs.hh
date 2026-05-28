@@ -31,6 +31,9 @@
 #ifndef SO_ERROR
 #define SO_ERROR        4       /* get and clear error status */
 #endif
+#ifndef SO_DONTROUTE
+#define SO_DONTROUTE    5       /* send without using routing tables */
+#endif
 #ifndef SO_BROADCAST
 #define SO_BROADCAST    6       /* permit sending broadcast messages */
 #endif

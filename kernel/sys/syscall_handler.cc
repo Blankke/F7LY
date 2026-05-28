@@ -2007,7 +2007,8 @@ namespace syscall
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
         KernelIovec iovec = {buf, static_cast<size_t>(n)};
-        return read_to_user_iovecs(f, *pt, &iovec, 1, nullptr);
+        long result = read_to_user_iovecs(f, *pt, &iovec, 1, nullptr);
+        return result;
     }
     uint64 SyscallHandler::sys_kill()
     {
@@ -2682,7 +2683,8 @@ namespace syscall
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = proc->get_pagetable();
         KernelIovec iovec = {p, static_cast<size_t>(n)};
-        return write_from_user_iovecs(f, *pt, &iovec, 1, nullptr);
+        long result = write_from_user_iovecs(f, *pt, &iovec, 1, nullptr);
+        return result;
     }
 
     uint64 SyscallHandler::sys_unlinkat()
@@ -3534,6 +3536,7 @@ namespace syscall
         static int mmap_trace_budget = 64;
         if (result == MAP_FAILED)
         {
+            int err = mmap_errno != 0 ? mmap_errno : ENOMEM;
             if (cur != nullptr && mmap_trace_budget > 0)
             {
                 --mmap_trace_budget;
@@ -3550,7 +3553,10 @@ namespace syscall
                        mmap_errno);
             }
             printfRed("[SyscallHandler::sys_mmap] mmap failed with errno: %d\n", mmap_errno);
-            return (uint64)MAP_FAILED; // 按约定返回MAP_FAILED
+            // 内核 syscall ABI 必须返回负 errno；MAP_FAILED 是 libc 包装层
+            // 看到负 errno 后给用户态返回的指针值。直接返回 -1 会把所有
+            // mmap 失败误报成 EPERM，掩盖真实原因。
+            return -err;
         }
         if (cur != nullptr && mmap_trace_budget > 0)
         {
@@ -7852,10 +7858,13 @@ namespace syscall
             return SYS_EFAULT;
         }
 
-        // 参数验证
-        if (nfds < 0 || nfds > NOFILE)
+        // Linux 程序常按 libc 的 FD_SETSIZE(通常是 1024) 传 nfds，
+        // 即使本内核当前真实 fd 表还只有 proc::max_open_files 个槽。
+        // 这里只拒绝 fd_set 本身无法表达的范围；高位 fd 若实际置位，
+        // 在扫描阶段按 EBADF 返回。
+        if (nfds < 0 || nfds > FD_SETSIZE)
         {
-            printfRed("[SyscallHandler::sys_pselect6] Invalid nfds: %d (max: %d)\n", nfds, NOFILE);
+            printfRed("[SyscallHandler::sys_pselect6] Invalid nfds: %d (max: %d)\n", nfds, FD_SETSIZE);
             return SYS_EINVAL;
         }
 
@@ -8000,8 +8009,23 @@ namespace syscall
             // 检查每个文件描述符
             for (int fd = 0; fd < nfds; fd++)
             {
+                bool read_requested = readfds_addr != 0 && (orig_readfds[fd / 8] & (1 << (fd % 8)));
+                bool write_requested = writefds_addr != 0 && (orig_writefds[fd / 8] & (1 << (fd % 8)));
+                bool except_requested = exceptfds_addr != 0 && (orig_exceptfds[fd / 8] & (1 << (fd % 8)));
+
+                if (fd >= (int)proc::max_open_files)
+                {
+                    if (read_requested || write_requested || except_requested)
+                    {
+                        printfRed("[SyscallHandler::sys_pselect6] Invalid high file descriptor: %d\n", fd);
+                        p->_sigmask = orig_sigmask;
+                        return SYS_EBADF;
+                    }
+                    continue;
+                }
+
                 // 检查读fd_set
-                if (readfds_addr != 0 && (orig_readfds[fd / 8] & (1 << (fd % 8))))
+                if (read_requested)
                 {
                     fs::file *f = p->get_open_file(fd);
                     if (f == nullptr)
@@ -8018,7 +8042,7 @@ namespace syscall
                 }
 
                 // 检查写fd_set
-                if (writefds_addr != 0 && (orig_writefds[fd / 8] & (1 << (fd % 8))))
+                if (write_requested)
                 {
                     fs::file *f = p->get_open_file(fd);
                     if (f == nullptr)
@@ -8034,7 +8058,7 @@ namespace syscall
                     }
                 }
 
-                if (exceptfds_addr != 0 && (orig_exceptfds[fd / 8] & (1 << (fd % 8))))
+                if (except_requested)
                 {
                     fs::file *f = p->get_open_file(fd);
                     if (f == nullptr)
@@ -8630,7 +8654,24 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_setsid()
     {
-        panic("未实现该系统调用");
+        proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+        if (current_proc == nullptr)
+        {
+            return SYS_ESRCH;
+        }
+
+        // Linux 要求进程组 leader 不能创建新 session，否则会破坏
+        // pid == pgid 的进程组不变量。BusyBox 的 setsid applet 会在
+        // 收到 EPERM 时 fork 后重试，因此这里按标准返回错误即可。
+        int pid = current_proc->get_pid();
+        if (static_cast<int>(current_proc->get_pgid()) == pid)
+        {
+            return SYS_EPERM;
+        }
+
+        current_proc->set_sid(pid);
+        current_proc->set_pgid(pid);
+        return pid;
     }
 
     uint64 SyscallHandler::sys_getsid()
@@ -8909,9 +8950,11 @@ namespace syscall
             break;
 
         case AF_INET6:
-            // AF_INET6 暂不支持
-            printfYellow("[SyscallHandler::sys_socket] IPv6协议族暂不支持: %d\n", domain);
-            return SYS_EAFNOSUPPORT;
+            // 当前 loopback 后端尚未实现完整 IPv6 协议栈，但 iperf3
+            // 会用 AF_INET6 socket 做双栈监听。这里允许创建，再由
+            // socket_file 将 ::/::1/IPv4-mapped 地址映射到 IPv4 loopback。
+            printfCyan("[SyscallHandler::sys_socket] 创建IPv6兼容loopback套接字\n");
+            break;
 
         default:
             printfRed("[SyscallHandler::sys_socket] 未知的协议族: %d\n", domain);
@@ -8925,8 +8968,8 @@ namespace syscall
             return SYS_EPROTONOSUPPORT;
         }
 
-        // 检查协议和类型的兼容性 (针对AF_INET)
-        if (domain == AF_INET)
+        // 检查协议和类型的兼容性 (针对AF_INET/AF_INET6)
+        if (domain == AF_INET || domain == AF_INET6)
         {
             switch (base_type)
             {
@@ -9153,6 +9196,35 @@ namespace syscall
             return 0;
         }
 
+        if (socket_f->get_family() == fs::SocketFamily::INET6)
+        {
+            if ((socklen_t)addrlen < sizeof(struct sockaddr_in6))
+            {
+                printfRed("[SyscallHandler::sys_bind] IPv6地址长度不足: %d\n", addrlen);
+                return SYS_EINVAL;
+            }
+
+            struct sockaddr_in6 sock_addr6;
+            if (mem::k_vmm.copy_in(*pt, &sock_addr6, addr, sizeof(sock_addr6)) < 0)
+            {
+                printfRed("[SyscallHandler::sys_bind] 复制sockaddr_in6失败\n");
+                return SYS_EFAULT;
+            }
+            if (sock_addr6.sin6_family != AF_INET6)
+            {
+                printfRed("[SyscallHandler::sys_bind] IPv6 socket 收到错误地址族: %d\n", sock_addr6.sin6_family);
+                return SYS_EAFNOSUPPORT;
+            }
+
+            int socket_file_result = socket_f->bind((const struct sockaddr *)&sock_addr6, addrlen);
+            if (socket_file_result < 0)
+            {
+                printfRed("[SyscallHandler::sys_bind] AF_INET6 socket_file bind失败: %d\n", socket_file_result);
+                return socket_file_result;
+            }
+            return 0;
+        }
+
         // 检查地址长度
         if ((socklen_t)addrlen < sizeof(struct sockaddr_in))
         {
@@ -9320,12 +9392,14 @@ namespace syscall
         uint8_t client_addr_storage[sizeof(struct sockaddr_un)];
         memset(client_addr_storage, 0, sizeof(client_addr_storage));
         socklen_t kernel_addrlen = sizeof(client_addr_storage);
-        fs::socket_file *client_socket_f = socket_f->accept(
+        fs::socket_file *client_socket_f = nullptr;
+        int accept_result = socket_f->accept(
             addr != 0 ? reinterpret_cast<struct sockaddr *>(client_addr_storage) : nullptr,
-            (addr != 0 && addrlen_ptr != 0) ? &kernel_addrlen : nullptr);
-        if (client_socket_f == nullptr)
+            (addr != 0 && addrlen_ptr != 0) ? &kernel_addrlen : nullptr,
+            &client_socket_f);
+        if (accept_result < 0)
         {
-            return SYS_EAGAIN;
+            return accept_result;
         }
 
         // 为新的客户端socket分配文件描述符
@@ -9518,8 +9592,26 @@ namespace syscall
 
         case AF_INET6:
         {
-            printfYellow("[SyscallHandler::sys_connect] IPv6协议族暂不支持: %d\n", generic_addr.sa_family);
-            return SYS_EAFNOSUPPORT;
+            if ((socklen_t)addrlen < sizeof(struct sockaddr_in6))
+            {
+                printfRed("[SyscallHandler::sys_connect] IPv6地址长度不足: %d\n", addrlen);
+                return SYS_EINVAL;
+            }
+
+            struct sockaddr_in6 sock_addr6;
+            if (mem::k_vmm.copy_in(*pt, &sock_addr6, addr, sizeof(sock_addr6)) < 0)
+            {
+                printfRed("[SyscallHandler::sys_connect] 复制sockaddr_in6失败\n");
+                return SYS_EFAULT;
+            }
+
+            int socket_file_result = socket_f->connect((const struct sockaddr *)&sock_addr6, addrlen);
+            if (socket_file_result < 0)
+            {
+                printfRed("[SyscallHandler::sys_connect] IPv6兼容loopback连接失败: %d\n", socket_file_result);
+                return socket_file_result;
+            }
+            return 0;
         }
 
         case AF_UNSPEC:
@@ -9704,10 +9796,16 @@ namespace syscall
             return SYS_ENOTSOCK;
         }
 
-        // 分配内核缓冲区并复制数据
-        eastl::vector<uint8_t> kernel_buf(len);
+        if (buf_ptr == 0 && len > 0)
+        {
+            return SYS_EFAULT;
+        }
+
+        // 零长度 sendto 合法，且 UDP 仍需要生成一枚零长度 datagram。
+        // 因此只在 len>0 时读取用户缓冲，避免空 vector 的 data() 被误判为坏地址。
+        eastl::vector<uint8_t> kernel_buf(len > 0 ? len : 1);
         mem::PageTable *pt = p->get_pagetable();
-        if (mem::k_vmm.copy_in(*pt, kernel_buf.data(), buf_ptr, len) < 0)
+        if (len > 0 && mem::k_vmm.copy_in(*pt, kernel_buf.data(), buf_ptr, len) < 0)
         {
             printfRed("[SyscallHandler::sys_sendto] 复制数据失败\n");
             return SYS_EFAULT;
@@ -9806,8 +9904,13 @@ namespace syscall
             return SYS_ENOTSOCK;
         }
 
-        // 分配内核缓冲区
-        eastl::vector<uint8_t> kernel_buf(len);
+        if (buf_ptr == 0 && len > 0)
+        {
+            return SYS_EFAULT;
+        }
+
+        // 零长度 recvfrom 不读取用户缓冲，但仍可能消费一枚零长度 datagram。
+        eastl::vector<uint8_t> kernel_buf(len > 0 ? len : 1);
         mem::PageTable *pt = p->get_pagetable();
 
         // 获取地址长度
@@ -9842,7 +9945,7 @@ namespace syscall
         }
 
         // 复制数据到用户空间
-        if (mem::k_vmm.copy_out(*pt, buf_ptr, kernel_buf.data(), result) < 0)
+        if (result > 0 && mem::k_vmm.copy_out(*pt, buf_ptr, kernel_buf.data(), result) < 0)
         {
             printfRed("[SyscallHandler::sys_recvfrom] 复制数据到用户空间失败\n");
             return SYS_EFAULT;
@@ -13943,12 +14046,14 @@ namespace syscall
         uint8_t client_addr_storage[sizeof(struct sockaddr_un)];
         memset(client_addr_storage, 0, sizeof(client_addr_storage));
         socklen_t kernel_addrlen = sizeof(client_addr_storage);
-        fs::socket_file *client_socket_f = socket_f->accept(
+        fs::socket_file *client_socket_f = nullptr;
+        int accept_result = socket_f->accept(
             addr != 0 ? reinterpret_cast<struct sockaddr *>(client_addr_storage) : nullptr,
-            (addr != 0 && addrlen_ptr != 0) ? &kernel_addrlen : nullptr);
-        if (client_socket_f == nullptr)
+            (addr != 0 && addrlen_ptr != 0) ? &kernel_addrlen : nullptr,
+            &client_socket_f);
+        if (accept_result < 0)
         {
-            return SYS_EAGAIN;
+            return accept_result;
         }
 
         client_socket_f->lwext4_file_struct.flags = O_RDWR | (flags & O_NONBLOCK);

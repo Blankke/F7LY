@@ -72,6 +72,7 @@ namespace fs
         eastl::vector<uint8_t> _send_buffer;
         struct sockaddr_in _pending_send_addr;
         eastl::vector<loopback_datagram> _datagram_queue;
+        size_t _datagram_queue_bytes;
         
         // 标志位
         bool _blocking;
@@ -105,7 +106,7 @@ namespace fs
         // Socket特有的操作
         int bind(const struct sockaddr *addr, socklen_t addrlen);
         int listen(int backlog);
-        socket_file* accept(struct sockaddr *addr, socklen_t *addrlen);
+        int accept(struct sockaddr *addr, socklen_t *addrlen, socket_file **accepted_socket);
         int connect(const struct sockaddr *addr, socklen_t addrlen);
         int send(const void *buf, size_t len, int flags);
         int recv(void *buf, size_t len, int flags);
@@ -138,6 +139,8 @@ namespace fs
         int append_pending_send_locked(const uint8_t *data, size_t len,
                                        const struct sockaddr_in *dest_addr);
         bool pending_send_destination_matches_locked(const struct sockaddr_in *dest_addr) const;
+        int enqueue_stream_data_to_peer(socket_file *peer, const uint8_t *data,
+                                        size_t len, bool nonblocking);
         int enqueue_stream_data(const uint8_t *data, size_t len);
         int enqueue_datagram(const struct sockaddr_in *src_addr, const uint8_t *data, size_t len);
         bool is_valid_address(const struct sockaddr *addr, socklen_t addrlen);
