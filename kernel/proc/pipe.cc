@@ -20,6 +20,37 @@ namespace proc
 {
 	namespace ipc
 	{
+		namespace
+		{
+			// Linux asm-generic fcntl 把 O_ASYNC 定义成八进制 020000（十六进制 0x2000）。
+			// 之前这里写成 0x4000，会让 fcntl(F_SETFL, O_ASYNC) 后的异步通知分支永远进不来。
+			constexpr int k_pipe_async_flag = 0x2000;
+		}
+
+		void Pipe::notify_async_reader_locked()
+		{
+			if ((pipe_flags & k_pipe_async_flag) == 0 || _async_owner_type == PIPE_ASYNC_OWNER_NONE)
+			{
+				return;
+			}
+
+			int signo = _async_signal > 0 ? _async_signal : proc::ipc::signal::SIGPOLL;
+			switch (_async_owner_type)
+			{
+			case PIPE_ASYNC_OWNER_TID:
+				(void)k_pm.tkill(_async_owner_id, signo);
+				break;
+			case PIPE_ASYNC_OWNER_PID:
+				(void)k_pm.kill_signal(_async_owner_id, signo);
+				break;
+			case PIPE_ASYNC_OWNER_PGRP:
+				(void)k_pm.kill_signal(-_async_owner_id, signo);
+				break;
+			default:
+				break;
+			}
+		}
+
 		int Pipe::write(uint64 addr, int n)
 		{
 			int i = 0;
@@ -63,6 +94,12 @@ namespace proc
 			}
 
 			k_pm.wakeup(&_read_sleep);
+			if (i > 0)
+			{
+				// 只补 LTP fcntl31 依赖的最小 SIGIO/SIGUSR1 语义：
+				// 管道从写端写入新数据后，向通过 F_SETOWN/F_SETSIG 订阅的读端 owner 发异步信号。
+				notify_async_reader_locked();
+			}
 			_lock.release();
 
 			return i;
@@ -121,6 +158,10 @@ namespace proc
 			}
 
 			k_pm.wakeup(&_read_sleep);
+			if (i > 0)
+			{
+				notify_async_reader_locked();
+			}
 			_lock.release();
 
 			return i;
@@ -210,11 +251,26 @@ namespace proc
 		bool Pipe::can_write_without_blocking()
 		{
 			_lock.acquire();
-			// 语义对齐 select/pselect:
-			// 1. 读端还在且缓冲区有空位时，写不会阻塞；
-			// 2. 读端已关闭时，write 会立刻返回 EPIPE/SIGPIPE，
-			//    这也是“立即返回”的状态，因此仍按可写就绪处理。
+			// Linux 语义下，pipe 只要还没写满就应当对 poll/epoll 报告可写；
+			// 读端关闭时 write 也会立刻以 EPIPE/SIGPIPE 返回，同样算“不会阻塞”。
+			// ET 抑制由 epoll 层基于 last_ready_events 完成，不应在这里再额外
+			// 通过人为阈值把“有空位”的 pipe 伪装成不可写。
 			bool ready = !_read_is_open || (_count < _pipe_size);
+			_lock.release();
+			return ready;
+		}
+
+		bool Pipe::can_write_for_epollet()
+		{
+			_lock.acquire();
+			// epoll ET 的写端测试希望“只有腾出至少 PIPE_BUF 空间时，才重新产生
+			// 一次稳定的 EPOLLOUT 边沿”。普通 level-triggered poll/epoll 仍然
+			// 使用 can_write_without_blocking() 的“有空位即可写”语义。
+			uint32 free_space = _pipe_size - _count;
+			uint32 writable_threshold = _pipe_size < pipe_epollet_write_threshold
+			                                ? _pipe_size
+			                                : pipe_epollet_write_threshold;
+			bool ready = !_read_is_open || (free_space >= writable_threshold);
 			_lock.release();
 			return ready;
 		}

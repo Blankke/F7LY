@@ -66,8 +66,10 @@ namespace proc
         int exec(eastl::string path, eastl::vector<eastl::string> argv);
         int execve(eastl::string path, eastl::vector<eastl::string> argv, eastl::vector<eastl::string> envs);
         int load_seg(mem::PageTable &pt, uint64 va, eastl::string &path, uint offset, uint size);
-        int clone(uint64 flags, uint64 stack_ptr, uint64 ptid, uint64 tls, uint64 ctid,bool is_clone3 = false);
-        Pcb *fork(Pcb *p, uint64 flags, uint64 stack_ptr, uint64 ctid, bool is_clone3);
+        int clone(uint64 flags, uint64 stack_ptr, uint64 ptid, uint64 tls, uint64 ctid,
+                  bool is_clone3 = false, int exit_signal = -1);
+        Pcb *fork(Pcb *p, uint64 flags, uint64 stack_ptr, uint64 ctid,
+                  bool is_clone3, int exit_signal = -1);
         void fork_ret();
         void exit_proc(Pcb *p);           // 底层退出逻辑，不设置xstate
         void do_exit(Pcb *p, int state);  // 正常退出，设置xstate后调用exit_proc
@@ -80,7 +82,7 @@ namespace proc
         // ==================== 进程调度与同步 ====================
         void sleep(void *chan, SpinLock *lock);
         void wakeup(void *chan);
-        int wakeup2(uint64 uaddr, int val, void *uaddr2, int val2);
+        int wakeup2(uint64 uaddr, uint64 futex_key, int val, void *uaddr2, uint64 futex_key2, int val2);
 
         // ==================== 文件系统相关 ====================
         int open(int dir_fd, eastl::string path, uint flags, int mode = 0644);
@@ -99,9 +101,9 @@ namespace proc
         int alloc_fd(Pcb *p, fs::file *f, int fd);
 
         // ==================== 信号处理 ====================
-        int kill_signal(int pid, int sig);
-        int tkill(int tid, int sig);
-        int tgkill(int tgid, int tid, int sig);
+        int kill_signal(int pid, int sig, const ipc::signal::LinuxSigInfo *info = nullptr);
+        int tkill(int tid, int sig, const ipc::signal::LinuxSigInfo *info = nullptr);
+        int tgkill(int tgid, int tid, int sig, const ipc::signal::LinuxSigInfo *info = nullptr);
         void kill_proc(Pcb *p) { p->_killed = 1; }
         int kill_proc(int pid);
 

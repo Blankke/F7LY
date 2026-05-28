@@ -23,9 +23,22 @@ namespace proc
 
 	namespace ipc
 	{
+		// Linux 缺省 pipe 容量对无特权用户通常是 4K。
+		// LTP fcntl35/_64 会直接校验这个初始值，因此这里保持默认 4K，
+		// 而不是靠放大默认容量去兼容 epoll。
 		constexpr uint default_pipe_size = 4096;
+		constexpr uint privileged_default_pipe_size = 65536;
 		constexpr uint min_pipe_size = 256;
-		constexpr uint max_pipe_size = 16384;  // 16KB 最大管道大小
+		constexpr uint max_pipe_size = 65536;  // 允许 LTP 调整到更接近 Linux 的范围
+		constexpr uint pipe_epollet_write_threshold = 4096;
+
+		enum PipeAsyncOwnerType
+		{
+			PIPE_ASYNC_OWNER_NONE = 0,
+			PIPE_ASYNC_OWNER_TID = 1,
+			PIPE_ASYNC_OWNER_PID = 2,
+			PIPE_ASYNC_OWNER_PGRP = 3,
+		};
 
 		class Pipe
 		{
@@ -45,6 +58,9 @@ namespace proc
 			uint8 _read_sleep;
 			uint8 _write_sleep;
 			int pipe_flags; // 管道标志
+			int _async_owner_type;
+			int _async_owner_id;
+			int _async_signal;
 
 		public:
 			Pipe()
@@ -57,6 +73,9 @@ namespace proc
 				, _write_is_open( false )
 				, _nonblock( false )
 				, pipe_flags( 0 )
+				, _async_owner_type( PIPE_ASYNC_OWNER_NONE )
+				, _async_owner_id( 0 )
+				, _async_signal( 0 )
 			{
 				_lock.init( "pipe" );
 				_buffer = new uint8[_pipe_size];
@@ -75,12 +94,18 @@ namespace proc
 			uint32 size() const { return _count; } // 获取管道中当前数据量
 			bool can_read_without_blocking();
 			bool can_write_without_blocking();
+			bool can_write_for_epollet();
 
 			// 设置和获取非阻塞模式
 			void set_nonblock(bool nonblock) { _nonblock = nonblock; }
 			bool get_nonblock() const { return _nonblock; }
 			int get_pipe_flags() const { return pipe_flags; }
 			void set_pipe_flags(int flags) { pipe_flags = flags; }
+			void set_async_owner(int type, int id) { _async_owner_type = type; _async_owner_id = id; }
+			int get_async_owner_type() const { return _async_owner_type; }
+			int get_async_owner_id() const { return _async_owner_id; }
+			void set_async_signal(int sig) { _async_signal = sig; }
+			int get_async_signal() const { return _async_signal; }
 
 			// 设置管道大小，返回实际设置的大小，失败返回-1
 			int set_pipe_size(uint32 new_size);
@@ -95,6 +120,8 @@ namespace proc
 			void close( bool is_write );
 
 		private:
+			void notify_async_reader_locked();
+
 			// 循环缓冲区辅助方法
 			bool is_full() const { return _count >= _pipe_size; }
 			bool is_empty() const { return _count == 0; }

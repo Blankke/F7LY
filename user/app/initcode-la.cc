@@ -18,8 +18,8 @@ extern "C"
         // lua_test("/glibc/");
         // libcbench_test("/musl");
         // libcbench_test("/glibc");
-        // ltp_test(true);
-        // ltp_test(false);
+        ltp_test(true);
+        ltp_test(false);
         // busybox_test("/musl/");
         // busybox_test("/glibc/");
         shutdown();

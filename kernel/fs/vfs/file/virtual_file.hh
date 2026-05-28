@@ -50,6 +50,11 @@ namespace fs
         virtual VirtualProviderType get_provider_type() const { return VirtualProviderType::GENERIC; }
 
         virtual bool is_readable() const { return false; }
+        virtual bool get_time_namespace_snapshot(time_namespace_snapshot &snapshot) const
+        {
+            (void)snapshot;
+            return false;
+        }
 
         // @brief 这个设计很狗屎，handle_read本来应该跟 generate_content类似的，但是content这玩意儿首先它常驻内存，比较狗屎。
         // content设计之初只是为了一些非常简单的，内容很少的虚拟文件，甚至返回值都是eastl::string。
@@ -103,6 +108,7 @@ namespace fs
         virtual bool write_ready() override;
         virtual off_t lseek(off_t offset, int whence) override;
         virtual eastl::string read_symlink_target() override;
+        virtual bool get_time_namespace_snapshot(time_namespace_snapshot &snapshot) const override;
 
         using ubuf = mem::UserspaceStream;
         virtual size_t read_sub_dir(ubuf &dst) override;
@@ -158,6 +164,15 @@ namespace fs
         }
     };
 
+    class KernelConfigProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<KernelConfigProvider>();
+        }
+    };
+
     // /proc/mounts 内容提供者
     class ProcMountsProvider : public VirtualContentProvider
     {
@@ -180,6 +195,42 @@ namespace fs
         virtual eastl::string read_symlink_target() override;
         virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
             return eastl::make_unique<ProcSelfFdProvider>(_fd_num);
+        }
+    };
+
+    class ProcSelfTimeNamespaceProvider : public VirtualContentProvider
+    {
+    private:
+        time_namespace_snapshot _snapshot;
+        bool _for_children = false;
+
+    public:
+        ProcSelfTimeNamespaceProvider(bool for_children = false,
+                                      time_namespace_snapshot snapshot = {})
+            : _snapshot(snapshot), _for_children(for_children) {}
+        virtual eastl::string generate_content() override;
+        virtual bool get_time_namespace_snapshot(time_namespace_snapshot &snapshot) const override
+        {
+            snapshot = _snapshot;
+            return true;
+        }
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcSelfTimeNamespaceProvider>(_for_children, _snapshot);
+        }
+    };
+
+    class ProcSelfTimensOffsetsProvider : public VirtualContentProvider
+    {
+    private:
+        eastl::string _write_buffer;
+
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_dynamic() const override { return true; }
+        virtual bool is_writable() const override { return true; }
+        virtual long handle_write(uint64 buf, size_t len, long off) override;
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcSelfTimensOffsetsProvider>();
         }
     };
 
@@ -274,6 +325,44 @@ namespace fs
         virtual bool is_writable() const override { return true; } // 允许写入
         virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
             return eastl::make_unique<ProcSysFsPipeUserPagesSoftProvider>();
+        }
+    };
+
+    class ProcSysFsPipeMaxSizeProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_writable() const override { return true; }
+        virtual long handle_write(uint64 buf, size_t len, long off) override;
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcSysFsPipeMaxSizeProvider>();
+        }
+    };
+
+    class ProcSysFsLeaseBreakTimeProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_writable() const override { return true; }
+        virtual long handle_write(uint64 buf, size_t len, long off) override;
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcSysFsLeaseBreakTimeProvider>();
+        }
+    };
+
+    class ProcSysNetIpv4TagProvider : public VirtualContentProvider
+    {
+    private:
+        bool _is_default = false;
+
+    public:
+        explicit ProcSysNetIpv4TagProvider(bool is_default) : _is_default(is_default) {}
+        virtual eastl::string generate_content() override;
+        virtual bool is_dynamic() const override { return true; }
+        virtual bool is_writable() const override { return true; }
+        virtual long handle_write(uint64 buf, size_t len, long off) override;
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcSysNetIpv4TagProvider>(_is_default);
         }
     };
 

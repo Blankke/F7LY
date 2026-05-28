@@ -146,20 +146,40 @@ namespace fs
 			return;
 		}
 
-		ext4_inode_ref inode_ref;
-		int status = ext4_fs_get_inode_ref(&lwext4_file_struct.mp->fs,
-									   lwext4_file_struct.inode,
-									   &inode_ref);
-		if (status != EOK)
+		// 这里读取的是“其他 open file description 可能刚刚扩展过”的真实 inode 大小。
+		// 必须走 lwext4 的挂载锁，否则像 fcntl34 这种并发 close/write 后立刻 read 的场景，
+		// 当前 fd 可能一直拿着旧 fsize，被上层过早判成 EOF。
+		ext4_mountpoint *mp = lwext4_file_struct.mp;
+		if (mp == nullptr)
 		{
 			return;
 		}
 
-		uint64 inode_size = ext4_inode_get_size(&lwext4_file_struct.mp->fs.sb,
-									 inode_ref.inode);
+		ext4_inode_ref inode_ref;
+		if (mp->os_locks)
+		{
+			mp->os_locks->lock();
+		}
+		int status = ext4_fs_get_inode_ref(&mp->fs,
+									   lwext4_file_struct.inode,
+									   &inode_ref);
+		if (status != EOK)
+		{
+			if (mp->os_locks)
+			{
+				mp->os_locks->unlock();
+			}
+			return;
+		}
+
+		uint64 inode_size = ext4_inode_get_size(&mp->fs.sb, inode_ref.inode);
 		lwext4_file_struct.fsize = inode_size;
 		_stat.size = inode_size;
 		(void)ext4_fs_put_inode_ref(&inode_ref);
+		if (mp->os_locks)
+		{
+			mp->os_locks->unlock();
+		}
 	}
 
 	void normal_file::reset_write_combine_locked()
@@ -375,15 +395,6 @@ namespace fs
 	{
 		_file_lock.acquire();
 
-		if (is_memfd())
-		{
-			sync_file_size_from_memfd();
-		}
-		else
-		{
-			refresh_ext4_file_size_locked();
-		}
-
 		if (_attrs.u_read != 1)
 		{
 			if (!(lwext4_file_struct.flags & O_TMPFILE))
@@ -398,18 +409,33 @@ namespace fs
 			off = _file_ptr;
 		}
 
-		if (static_cast<uint64>(off) >= logical_file_size_locked())
-		{
-			_file_lock.release();
-			return 0;
-		}
-
 		const long current_pos = _file_ptr;
 		int flush_status = flush_write_combine_locked();
 		if (flush_status != EOK)
 		{
 			_file_lock.release();
 			return -flush_status;
+		}
+
+		if (is_memfd())
+		{
+			sync_file_size_from_memfd();
+		}
+		else
+		{
+			refresh_ext4_file_size_locked();
+		}
+
+		bool allow_ext4_resync_read =
+			!is_memfd() &&
+			lwext4_file_struct.mp != nullptr &&
+			lwext4_file_struct.inode != 0 &&
+			static_cast<long>(lwext4_file_struct.fpos) == off;
+
+		if (static_cast<uint64>(off) >= logical_file_size_locked() && !allow_ext4_resync_read)
+		{
+			_file_lock.release();
+			return 0;
 		}
 
 		if (static_cast<long>(lwext4_file_struct.fpos) != off)
@@ -682,10 +708,14 @@ namespace fs
 				return -EINVAL;
 			}
 			break;
-		case SEEK_END:
-			new_off = static_cast<off_t>(lwext4_file_struct.fsize) + offset;
-			if (new_off < 0)
-			{
+			case SEEK_END:
+				// 不同 open file description 会各自缓存 lwext4_file_struct.fsize。
+				// 像 fcntl34 这种多线程分别 open 同一文件、靠 SEEK_END 追加写入的场景，
+				// 如果这里不先刷新 inode 真实大小，就会拿着过期 EOF 互相覆盖。
+				refresh_ext4_file_size_locked();
+				new_off = static_cast<off_t>(lwext4_file_struct.fsize) + offset;
+				if (new_off < 0)
+				{
 				_file_lock.release();
 				return -EINVAL;
 			}
@@ -711,6 +741,14 @@ namespace fs
 
 		_file_lock.release();
 		return _file_ptr;
+	}
+
+	int normal_file::flush_visibility_state()
+	{
+		_file_lock.acquire();
+		int status = flush_write_combine_locked();
+		_file_lock.release();
+		return status == EOK ? 0 : -status;
 	}
 
 	void normal_file::setAppend()

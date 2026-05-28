@@ -248,12 +248,12 @@ void check_expired_timers()
       printfCyan("[TIMER] Timer %d expired, sending signal %d\n", 
                  g_timers[i].timer_id, g_timers[i].event.sigev_signo);
       
-      // Send the signal to all processes (simplified implementation)
-      // In a real implementation, you would send to the specific process that owns the timer
-      proc::Pcb *current_process = proc::k_pm.get_cur_pcb();
-      if (current_process) {
-        // Send SIGALRM signal
-        proc::ipc::signal::add_signal(current_process, g_timers[i].event.sigev_signo);
+      // POSIX timer 必须把通知投递回创建它的那个进程，而不是“当前恰好正在运行的进程”。
+      // 否则一旦 owner 在线程/进程睡眠期间让出 CPU，信号就会丢给 idle/别的任务，
+      // clock_settime03 这类 sigwait() 场景就会永远等不到定时器信号。
+      proc::Pcb *owner = g_timers[i].owner;
+      if (owner != nullptr && owner->_state != proc::ProcState::UNUSED) {
+        proc::ipc::signal::add_signal(owner, g_timers[i].event.sigev_signo);
       }
       
       // Handle periodic timers

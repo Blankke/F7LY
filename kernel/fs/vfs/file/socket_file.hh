@@ -100,6 +100,7 @@ namespace fs
         virtual long write(uint64 buf, size_t len, long off, bool upgrade) override;
         virtual bool read_ready() override;
         virtual bool write_ready() override;
+        bool epoll_rdhup_ready() const;
         virtual off_t lseek(off_t offset, int whence) override;
         virtual size_t read_sub_dir(ubuf &dst) override;
 

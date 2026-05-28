@@ -228,8 +228,17 @@ namespace proc
                 int32 si_signo;
                 int32 si_errno;
                 int32 si_code;
-                uint8 _pad[128 - 3 * sizeof(int32)];
+                int32 si_pid;
+                uint32 si_uid;
+                uint32 _si_value_align;
+                union
+                {
+                    int32 sival_int;
+                    uint64 sival_ptr;
+                } si_value;
+                uint8 _pad[128 - 32];
             };
+            static_assert(sizeof(LinuxSigInfo) == 128, "LinuxSigInfo ABI mismatch");
 
             // 简化版 sigaction
             typedef struct sigaction
@@ -253,7 +262,7 @@ namespace proc
             void handle_sync_signal();
             void default_handle(Pcb *p, int signum);
             SignalAction get_default_signal_action(int signum);
-            void add_signal(proc::Pcb *p, int sig);
+            void add_signal(proc::Pcb *p, int sig, const LinuxSigInfo *info = nullptr);
             void do_handle(proc::Pcb *p, int signum, sigaction *act);
             void sig_return();
             bool has_fatal_signal_pending(Pcb *p);

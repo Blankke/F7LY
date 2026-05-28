@@ -119,6 +119,7 @@ namespace proc
         _killed = 0;     // 进程终止标志
         _exiting = false; // 尚未进入退出清理流程
         _xstate = 0;     // 进程退出状态码
+        _parent_exit_signal = proc::ipc::signal::SIGCHLD;
 
         // 调度相关字段
         _slot = 0;                     // 时间片剩余量
@@ -149,6 +150,7 @@ namespace proc
          * 线程和同步原语
          ****************************************************************************************/
         _futex_addr = nullptr;  // futex等待地址
+        _futex_key = 0;         // futex匹配键
         _clear_tid_addr = 0;    // 线程退出时清除的地址
         _robust_list = nullptr; // 健壮futex链表头
         _robust_list_user_addr = 0; // 健壮futex链表头用户地址
@@ -160,6 +162,8 @@ namespace proc
         _sigactions = nullptr; // 信号处理函数表
         _sigmask = 0;          // 信号屏蔽掩码
         _signal = 0;           // 待处理信号掩码
+        _siginfo_mask = 0;     // 默认没有附带 siginfo 的 pending signal
+        memset(_queued_siginfo, 0, sizeof(_queued_siginfo));
         sig_frame = nullptr;   // 信号处理栈帧
         
         // 初始化信号栈
@@ -193,6 +197,9 @@ namespace proc
         _cstime = 0;         // 子进程系统态时间累计
         _start_time = 0;     // 进程启动时间(绝对时间戳)
         _start_boottime = 0; // 自系统启动以来的启动时间
+        _timens_current = {};
+        _timens_children = {};
+        _netns = {};
 
         /****************************************************************************************
          * 资源限制初始化
