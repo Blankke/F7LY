@@ -164,6 +164,8 @@ namespace proc
         _signal = 0;           // 待处理信号掩码
         _siginfo_mask = 0;     // 默认没有附带 siginfo 的 pending signal
         memset(_queued_siginfo, 0, sizeof(_queued_siginfo));
+        _sigsuspend_restore_pending = false;
+        _sigsuspend_saved_sigmask = 0;
         sig_frame = nullptr;   // 信号处理栈帧
         
         // 初始化信号栈

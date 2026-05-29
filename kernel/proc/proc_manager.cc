@@ -768,6 +768,8 @@ namespace proc
                 p->_signal = 0;         // 清空待处理信号掩码
                 p->_siginfo_mask = 0;   // 清空附带 siginfo 的 pending signal 标记
                 memset(p->_queued_siginfo, 0, sizeof(p->_queued_siginfo));
+                p->_sigsuspend_restore_pending = false;
+                p->_sigsuspend_saved_sigmask = 0;
                 p->sig_frame = nullptr; // 清空信号处理栈帧
                 p->_alt_stack.ss_sp = nullptr;                 // 备用信号栈地址必须重置
                 p->_alt_stack.ss_flags = ipc::signal::SS_DISABLE; // 默认禁用备用信号栈
@@ -970,6 +972,8 @@ namespace proc
         p->_sigmask = 0;          // 清空信号屏蔽掩码
         p->_siginfo_mask = 0;
         memset(p->_queued_siginfo, 0, sizeof(p->_queued_siginfo));
+        p->_sigsuspend_restore_pending = false;
+        p->_sigsuspend_saved_sigmask = 0;
         p->_alt_stack.ss_sp = nullptr;
         p->_alt_stack.ss_flags = ipc::signal::SS_DISABLE;
         p->_alt_stack.ss_size = 0;
@@ -2572,6 +2576,8 @@ namespace proc
             p->sig_frame = next_frame;          // 移动到下一个帧
         }
         p->sig_frame = nullptr; // 清空信号处理帧指针
+        p->_sigsuspend_restore_pending = false;
+        p->_sigsuspend_saved_sigmask = 0;
 
         // 清理线程相关资源
         p->_futex_addr = nullptr;  // 清空futex等待地址
