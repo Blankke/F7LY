@@ -210,6 +210,8 @@ namespace proc
         uint64 _signal = 0;                             // 待处理信号掩码
         uint64 _siginfo_mask = 0;                       // 哪些 pending signal 还携带一份最小 siginfo
         ipc::signal::LinuxSigInfo _queued_siginfo[ipc::signal::SIGRTMAX + 1]; // 每个 signal 只保留最后一份排队信息
+        bool _sigsuspend_restore_pending = false;       // sigsuspend 临时 mask 生效后，等待信号返回时恢复旧 mask
+        uint64 _sigsuspend_saved_sigmask = 0;            // sigsuspend 进入前的原始信号屏蔽掩码
         ipc::signal::signal_frame *sig_frame = nullptr; // 信号处理栈帧，保存信号处理上下文
         ipc::signal::signalstack _alt_stack;           // 信号处理备用栈
         bool _on_sigstack = false;                      // 当前是否在信号栈上执行

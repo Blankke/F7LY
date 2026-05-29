@@ -1197,8 +1197,8 @@ struct ltp_testcase ltp_testcases[] = {
     // {"fcntl11_64", true, true, true, true},        // 2026-05-28: RV+musl/glibc 均 ret=0，仅输出 TINFO，无 summary。
     {"fcntl12", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
     {"fcntl12_64", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
-    {"fcntl14", false, true, false, true},    /// TODO: 2026-05-28: RV+musl 6/271、RV+glibc 7/274；LA+musl 11/262、LA+glibc 8/232。GETLK pid/type 与冲突 SETLK 仍错误。
-    {"fcntl14_64", false, true, false, true}, /// TODO:这分很高 2026-05-28: RV+musl 7/253、RV+glibc 7/254；LA+musl 8/253、LA+glibc 7/238。GETLK pid/type 与冲突 SETLK 仍错误。
+    {"fcntl14", false, true, false, true},    /// pass
+    {"fcntl14_64", false, true, false, true}, /// pass
     {"fcntl16", false, true, false, true},    // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
     {"fcntl16_64", false, true, false, true}, // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
     {"fcntl17", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
