@@ -58,6 +58,7 @@ F7LY OS 是一个基于 xv6 思路扩展的教学/比赛用内核。主线目标
 - 架构定位、模块边界、核心设计思路：读 [agent_docs/project_architecture.md](agent_docs/project_architecture.md)。
 - 构建、运行、日志保存、挂载镜像、单测调试：读 [agent_docs/development_debugging.md](agent_docs/development_debugging.md)。
 - 查看评测进度、维护 Pass 状态、更新 scoreboard：读 [agent_docs/scoreboard.md](agent_docs/scoreboard.md) 和 [scoreboard/README.md](scoreboard/README.md)。
+- 任务文档：读plan_docs目录下会包含当前或曾经我们做下的计划任务。每次完成的任务若来源于此，需要添加最简单的标记已完成待验收在文档相应位置。
 
 ## 常用入口速查
 
