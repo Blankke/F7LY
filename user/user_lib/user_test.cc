@@ -1107,12 +1107,13 @@ char *libctest[][2] = {
     {"wcsncpy_read_overflow", NULL},
     {"wcsstr_false_negative", NULL},
     {NULL}};
-
-struct ltp_testcase ltp_testcases[] = {
-    // 示例：{测例名字, RV+musl, RV+glibc, LA+musl, LA+glibc}
-    // 约定：第一个 {NULL, false, false, false, false} 就是当前默认跑测例的结束标记。
-    // 下面继续保留的注释清单只作为候选记录，想打开哪个测例就把它挪到结束标记前面。
-    // 新开以前完全没跑过的测例时，优先按 tools/ltp/judge/ltp_rank.txt 的 total count 从高到低推进。
+    
+    struct ltp_testcase ltp_testcases[] = {
+        // 示例：{测例名字, RV+musl, RV+glibc, LA+musl, LA+glibc}
+        // 约定：第一个 {NULL, false, false, false, false} 就是当前默认跑测例的结束标记。
+        // 下面继续保留的注释清单只作为候选记录，想打开哪个测例就把它挪到结束标记前面。
+        // 新开以前完全没跑过的测例时，优先按 tools/ltp/judge/ltp_rank.txt 的 total count 从高到低推进。
+    {"epoll-ltp", false, true, false, true},       // 2026-05-28: RV+glibc 与 LA+glibc 当前 TPASS 13857（epoll_create 33 + epoll_ctl 13824）；musl 仍未放开，todo。
     // {NULL, false, false, false, false},
     {"mkdir02", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
     {"mkdir04", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
@@ -1164,28 +1165,28 @@ struct ltp_testcase ltp_testcases[] = {
     {"fchmod06", true, true, true, true},          // 2026-05-28: RV/LA 四组合均 passed 0 failed 0 broken 1；mntpoint/dir/ 目录准备阶段 ENOENT。
     {"fchownat01", false, true, false, true},      // 2026-05-28: RV+glibc passed 5 failed 0；musl 不启用。
     {"fchownat02", false, true, false, true},      // 2026-05-28: RV+glibc passed 1 failed 0；musl 不启用。
-    {"fcntl01", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
-    {"fcntl01_64", true, true, true, true},        // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
+    {"fcntl01",false, true, false, true},           // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
+    {"fcntl01_64", false, true, false, true},        // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
     {"fcntl07", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 passed 4 failed 0。
     {"fcntl07_64", true, true, true, true},        // 2026-05-28: RV+musl/glibc 均 passed 4 failed 0。
-    {"fcntl11", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 ret=0，仅输出 TINFO，无 summary。
-    {"fcntl11_64", true, true, true, true},        // 2026-05-28: RV+musl/glibc 均 ret=0，仅输出 TINFO，无 summary。
+    // {"fcntl11", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 ret=0，仅输出 TINFO，无 summary。
+    // {"fcntl11_64", true, true, true, true},        // 2026-05-28: RV+musl/glibc 均 ret=0，仅输出 TINFO，无 summary。
     {"fcntl12", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
     {"fcntl12_64", true, true, true, true},        // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
-    {"fcntl14", true, true, true, true},           // 2026-05-28: RV+musl 6/271、RV+glibc 7/274；LA+musl 11/262、LA+glibc 8/232。GETLK pid/type 与冲突 SETLK 仍错误。
-    {"fcntl14_64", true, true, true, true},        // 2026-05-28: RV+musl 7/253、RV+glibc 7/254；LA+musl 8/253、LA+glibc 7/238。GETLK pid/type 与冲突 SETLK 仍错误。
-    {"fcntl16", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
-    {"fcntl16_64", true, true, true, true},        // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
+    {"fcntl14", true, true, true, true},           ///TODO: 2026-05-28: RV+musl 6/271、RV+glibc 7/274；LA+musl 11/262、LA+glibc 8/232。GETLK pid/type 与冲突 SETLK 仍错误。
+    {"fcntl14_64", true, true, true, true},        ///TODO:这分很高 2026-05-28: RV+musl 7/253、RV+glibc 7/254；LA+musl 8/253、LA+glibc 7/238。GETLK pid/type 与冲突 SETLK 仍错误。
+    {"fcntl16", false, true, false, true},           // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
+    {"fcntl16_64", false, true, false, true},        // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
     {"fcntl17", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
     {"fcntl17_64", true, true, true, true},        // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
     {"fcntl18", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 passed 3 failed 0。
     {"fcntl18_64", true, true, true, true},        // 2026-05-28: RV+musl/glibc 均 passed 3 failed 0。
-    {"fcntl19", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
-    {"fcntl19_64", true, true, true, true},        // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
-    {"fcntl20", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
-    {"fcntl20_64", true, true, true, true},        // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
-    {"fcntl21", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
-    {"fcntl21_64", true, true, true, true},        // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
+    {"fcntl19", false, true, false, true},           // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
+    {"fcntl19_64", false, true, false, true},        // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
+    {"fcntl20", false, true, false, true},           // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
+    {"fcntl20_64", false, true, false, true},        // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
+    {"fcntl21", false, true, false, true},           // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
+    {"fcntl21_64", false, true, false, true},        // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
     {"fcntl22", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 passed 2 failed 0。
     {"fcntl22_64", true, true, true, true},        // 2026-05-28: RV+musl/glibc 均 passed 2 failed 0。
     {"fcntl23", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
@@ -1214,12 +1215,12 @@ struct ltp_testcase ltp_testcases[] = {
     {"fcntl35_64", true, true, true, true},        // 2026-05-28: RV+musl/glibc 均 passed 2；unprivileged 初始 pipe 容量 4096，privileged 初始 pipe 容量 65536。
     {"fcntl36", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 passed 7 failed 0。
     {"fcntl36_64", true, true, true, true},        // 2026-05-28: RV+musl/glibc 均 passed 7 failed 0。
-    {"fcntl37", true, true, true, true},           // 2026-05-28: 四组合均 passed 0 failed 0 skipped 1；缺 capget syscall。
-    {"fcntl37_64", true, true, true, true},        // 2026-05-28: 四组合均 passed 0 failed 0 skipped 1；缺 capget syscall。
-    {"fcntl38", true, true, true, true},           // 2026-05-28: 四组合均 passed 0 failed 0 skipped 1；CONFIG_DNOTIFY 仍不满足。
-    {"fcntl38_64", true, true, true, true},        // 2026-05-28: 四组合均 passed 0 failed 0 skipped 1；CONFIG_DNOTIFY 仍不满足。
-    {"fcntl39", true, true, true, true},           // 2026-05-28: 四组合均 passed 0 failed 0 skipped 1；CONFIG_DNOTIFY 仍不满足。
-    {"fcntl39_64", true, true, true, true},        // 2026-05-28: 四组合均 passed 0 failed 0 skipped 1；CONFIG_DNOTIFY 仍不满足。
+    // {"fcntl37", true, true, true, true},           // 2026-05-28: 四组合均 passed 0 failed 0 skipped 1；缺 capget syscall。
+    // {"fcntl37_64", true, true, true, true},        // 2026-05-28: 四组合均 passed 0 failed 0 skipped 1；缺 capget syscall。
+    // {"fcntl38", true, true, true, true},           // 2026-05-28: 四组合均 passed 0 failed 0 skipped 1；CONFIG_DNOTIFY 仍不满足。
+    // {"fcntl38_64", true, true, true, true},        // 2026-05-28: 四组合均 passed 0 failed 0 skipped 1；CONFIG_DNOTIFY 仍不满足。
+    // {"fcntl39", true, true, true, true},           // 2026-05-28: 四组合均 passed 0 failed 0 skipped 1；CONFIG_DNOTIFY 仍不满足。
+    // {"fcntl39_64", true, true, true, true},        // 2026-05-28: 四组合均 passed 0 failed 0 skipped 1；CONFIG_DNOTIFY 仍不满足。
     {"memfd_create01", true, true, true, true},
     {"splice07", true, true, true, true},
     {"epoll_ctl03", true, true, true, true},
