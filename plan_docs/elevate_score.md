@@ -54,3 +54,38 @@
     {"shmt10", false, true, false, true}, //pass 无summary
 ```
 上述为新增的测试未解决测例部分，其中shm_test和shmat1不作要求，保持注释状态，其余注释状态的测例均书写了fail原因，需要自行复现上述测例并完成修复
+
+
+## 待完成 2026 5.30 11:30
+此任务并非ltp测例，但是也需要按照基本的验证步骤进行。
+一些偏基础的测例没有通过,按照我给你的标签你去usertest.cc的对应测试用例中找到这些测例，启用它们，复现失败的情况，并进行修复，直到这些测例全部通过为止。
+
+- basic：test_mmap
+这个测试似乎是因为后面我们修改了mmap的行为后与basic的行为不一致了，我们也需要保持后面很多mmap的测试，比如ltp的mmap相关测试通过，然后分析有没有办法兼容这个basic测例也通过。不能因小失大。
+这个测例完成后复测一下后面的mmap相关的测例，确保没有因为兼容这个basic测例而导致后面mmap相关的测例不通过。
+
+- busybox:busybox kill 10
+这个测试可能与后面我们的kill信号处理相关，我们需要分析一下这个测例的行为，看看它是如何调用kill的，为什么会失败，然后进行修复，确保这个测例通过。
+
+- libctest：
+ dynamic crypt
+ dynamic dlopen
+  dynamic fflush_exit
+  dynamic pthread_cancel
+  dynamic pthread_cancel_points
+  dynamic pthread_cond_smasher
+   dynamic pthread_robust_detach
+   dynamic rewind_clear_error
+   dynamic rlimit_open_files
+   dynamic sem_init
+    dynamic socket
+     dynamic tls_init
+     dynamic tls_local_exec
+     static pleval
+    以及上述dynamic对应的static测例
+
+libctest失败的分为两部分，第一部分是pthread信号相关的测例，当时在la架构卡死的情况较多，在commit（979ac9b905d1102dc253ce0ea9230cc2ecb4ba9e）中我们似乎处理了这部分libctest的问题，但是在现在最新的regression分支又证明为没有通过。需要分析后续我们对信号做了什么，复现一下这几个测例，看看它们是如何调用信号的，为什么会失败，然后进行修复，确保这几个测例通过。
+
+另一部分是网络相关，或者一部分当时没有修好的测例，这些是因为net架构还没有合并进来，现在已经完成合并后可能已经修好了，我们需要复测一下这些测例，看看它们是如何调用网络相关的系统调用的，为什么会失败，然后进行修复，确保这些测例通过。
+
+上述三项ltp以外的测试测例完成后需要进行一次完整的测试，确保没有期望之外的测例不通过为止。验收要求与ltp一致，为完整跑完所有的测试测例，并且没有期望之外的测例不通过。
