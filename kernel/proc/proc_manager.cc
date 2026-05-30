@@ -3614,6 +3614,17 @@ namespace proc
             }
 
             vfile = f;
+            // 文件映射如果要按路径重新打开一份专用 backing file，
+            // 必须先把原 open file description 上尚未落盘/尚未对外可见的写合并内容刷出去。
+            // 否则像 basic/test_mmap 这种“刚写完就 mmap 同一个文件”的场景，
+            // 重新打开后看到的还是旧内容，缺页时就会读到 0 字节。
+            int flush_visibility_ret = f->flush_visibility_state();
+            if (flush_visibility_ret != 0)
+            {
+                printfRed("[mmap] Failed to flush file visibility state before reopening mapping file: %d\n",
+                          flush_visibility_ret);
+                return fail_mmap(flush_visibility_ret < 0 ? -flush_visibility_ret : flush_visibility_ret);
+            }
             // Respect memfd write seal: disallow shared writable mappings
             if (f->is_memfd())
             {
