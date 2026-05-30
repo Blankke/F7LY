@@ -1113,6 +1113,41 @@ struct ltp_testcase ltp_testcases[] = {
     // 约定：第一个 {NULL, false, false, false, false} 就是当前默认跑测例的结束标记。
     // 下面继续保留的注释清单只作为候选记录，想打开哪个测例就把它挪到结束标记前面。
     // 新开以前完全没跑过的测例时，优先按 tools/ltp/judge/ltp_rank.txt 的 total count 从高到低推进。
+    {"mmap02", true, true, true, true},
+    {"mmap05", true, true, true, true},        // pass1 但是panic关了一个
+    {"mmap06", true, true, true, true},        // pass6 fail 2
+    {"mmap08", true, true, true, true},        // pass
+    {"mmap09", true, true, true, false},       // LA+glibc: LTP 内部 5min timeout；RV 和 LA+musl 继续覆盖
+    {"mmap13", true, true, true, true},        // pass
+    {"mmap15", true, true, true, true},        // pass
+    {"mmap17", true, true, true, true},        // pass
+    {"mmap19", true, true, true, true},        // pass
+    {"mmap20", true, true, true, true},        // pass
+    {"mmap001", true, true, true, true}, // pass.
+    {"mmap01", true, true, true, true}, //bin/sh
+    {"mmap03", false, true, false, true}, //无所谓，没summary
+    {"mmap04", true, true, true, true},
+    {"mmap1", true, true, true, true},
+    {"mmap10", false, true, false, true}, //无所谓，没summary
+    {"mmap11", true, true, true, true}, //pass不能和别的一起跑
+    {"mmap12", true, true, true, true},
+    {"mmap14", true, true, true, true},
+    {"mmap16", true, true, true, true},
+    {"mmap18", true, true, true, true},
+    {"mmap2", true, true, true, true},
+    {"mmap3", true, true, true, true},
+    {"mmap-corruption01", true, true, true, true},
+    {"mmapstress01", true, true, true, true},
+    {"mmapstress02", true, true, true, true},
+    {"mmapstress03", true, true, true, true},
+    {"mmapstress04", true, true, true, true},
+    {"mmapstress05", true, true, true, true},
+    {"mmapstress06", true, true, true, true},
+    {"mmapstress07", true, true, true, true},
+    {"mmapstress08", true, true, true, true},
+    {"mmapstress09", true, true, true, true},
+    {"mmapstress10", true, true, true, true},
+    {NULL, false, false, false, false}, // 待完成 2026 5.31 16：30
     // {"shm_comm", true, true, true, true},//TFAIL: shared memory leak between namespaces
     // {"shm_test", true, true, true, true},//啥比
     {"shmat02", true, true, true, true},  //pass3
@@ -1138,7 +1173,7 @@ struct ltp_testcase ltp_testcases[] = {
     {"shmt08", false, true, false, true}, //pass 无summary
     {"shmt09", false, true, false, true}, //sbrk 无summary  TFAIL  :  shmt09.c:173: Error: sbrk succeeded!  ret = 0xf0180, curbrk = 0xffffffffffffffff, 
     {"shmt10", false, true, false, true}, //pass 无summary
-    {NULL, false, false, false, false},
+    {NULL, false, false, false, false},  //待完成 2026.5.29 12:16分隔
     {"mkdir02", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
     {"mkdir04", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
     {"mkdir05", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
@@ -1441,16 +1476,6 @@ struct ltp_testcase ltp_testcases[] = {
     {"mkdir03", true, true, true, true},   // pass
     {"mknod02", true, true, true, true},
     {"mknod09", true, true, true, true},
-    {"mmap02", true, true, true, true},
-    {"mmap05", true, true, true, true},        // pass1 但是panic关了一个
-    {"mmap06", true, true, true, true},        // pass6 fail 2
-    {"mmap08", true, true, true, true},        // pass
-    {"mmap09", true, true, true, false},       // LA+glibc: LTP 内部 5min timeout；RV 和 LA+musl 继续覆盖
-    {"mmap13", true, true, true, true},        // pass
-    {"mmap15", true, true, true, true},        // pass
-    {"mmap17", true, true, true, true},        // pass
-    {"mmap19", true, true, true, true},        // pass
-    {"mmap20", true, true, true, true},        // pass
     {"open01", true, true, true, true},        // pass
     {"open02", true, true, true, true},        // pass1 fail1
     {"open03", true, true, true, true},        // 完全PASS
@@ -2741,30 +2766,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"mlockall01", true, true, true, true},
     // {"mlockall02", true, true, true, true},
     // {"mlockall03", true, true, true, true},
-    // {"mmap001", true, true, true, true}, // pass.
-    // {"mmap01", true, true, true, true}, //bin/sh
-    // {"mmap03", true, true, true, true}, //无所谓，没summary
-    // {"mmap04", true, true, true, true},
-    // {"mmap1", true, true, true, true},
-    // {"mmap10", true, true, true, true}, //无所谓，没summary
-    // {"mmap11", true, true, true, true}, //pass不能和别的一起跑
-    // {"mmap12", true, true, true, true},
-    // {"mmap14", true, true, true, true},
-    // {"mmap16", true, true, true, true},
-    // {"mmap18", true, true, true, true},
-    // {"mmap2", true, true, true, true},
-    // {"mmap3", true, true, true, true},
-    // {"mmap-corruption01", true, true, true, true},
-    // {"mmapstress01", true, true, true, true},
-    // {"mmapstress02", true, true, true, true},
-    // {"mmapstress03", true, true, true, true},
-    // {"mmapstress04", true, true, true, true},
-    // {"mmapstress05", true, true, true, true},
-    // {"mmapstress06", true, true, true, true},
-    // {"mmapstress07", true, true, true, true},
-    // {"mmapstress08", true, true, true, true},
-    // {"mmapstress09", true, true, true, true},
-    // {"mmapstress10", true, true, true, true},
     // {"mmstress", true, true, true, true},
     // {"mmstress_dummy", true, true, true, true},
     // {"modify_ldt01", true, true, true, true},
