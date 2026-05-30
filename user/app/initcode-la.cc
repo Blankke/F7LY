@@ -18,8 +18,9 @@ extern "C"
         // lua_test("/glibc/");
         // libcbench_test("/musl");
         // libcbench_test("/glibc");
-        ltp_test(true);
-        ltp_test(false);
+        // ltp_test(true);
+        // ltp_test(false);
+        iozone_priority_borrow_research();
         // busybox_test("/musl/");
         // busybox_test("/glibc/");
         shutdown();

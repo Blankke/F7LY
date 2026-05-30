@@ -185,7 +185,7 @@ namespace
 /**
  * @brief iozone 研究入口
  */
-int iozone_mclock_research(void)
+int iozone_priority_borrow_research(void)
 {
     init_env("/musl/");
     mkdir("/tmp", 0777);
