@@ -18,6 +18,30 @@ namespace virtio_blk
         return denominator == 0 ? 0 : (numerator + denominator - 1) / denominator;
     }
 
+    int VirtioBlkQueue::first_pending_class(uint32 pending_mask)
+    {
+        for (int service_class = 0; service_class < PriorityBorrowScheduler::k_class_count; ++service_class)
+        {
+            if ((pending_mask & (1U << service_class)) != 0)
+            {
+                return service_class;
+            }
+        }
+        return -1;
+    }
+
+    bool VirtioBlkQueue::has_lower_pending_class(uint32 pending_mask, int service_class)
+    {
+        for (int lower_class = service_class + 1; lower_class < PriorityBorrowScheduler::k_class_count; ++lower_class)
+        {
+            if ((pending_mask & (1U << lower_class)) != 0)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void VirtioBlkQueue::initialize(const InitArgs &args)
     {
         lock_.init(args.lock_name);
@@ -36,8 +60,9 @@ namespace virtio_blk
     {
         used_idx_ = 0;
         inflight_count_ = 0;
-        ewma_bps_ = MClockScheduler::default_ewma_bps();
         scheduler_.reset();
+        reset_bandwidth_stats_locked();
+        reset_priority_trace_locked();
 
         for (int i = 0; i < k_queue_size; ++i)
         {
@@ -57,6 +82,117 @@ namespace virtio_blk
         {
             used_->flags = 0;
             used_->id = 0;
+        }
+    }
+
+    void VirtioBlkQueue::reset_bandwidth_stats_locked()
+    {
+        for (int i = 0; i < PriorityBorrowScheduler::k_class_count; ++i)
+        {
+            class_stats_[i].completed_bytes = 0;
+            class_stats_[i].completed_requests = 0;
+            class_stats_[i].window_start_us = 0;
+            class_stats_[i].ewma_bps = 0;
+        }
+    }
+
+    void VirtioBlkQueue::reset_priority_trace_locked()
+    {
+        priority_trace_.contended_dispatches = 0;
+        priority_trace_.high_wins = 0;
+        priority_trace_.low_while_high_pending = 0;
+        priority_trace_.last_report_contended = 0;
+        for (int i = 0; i < PriorityBorrowScheduler::k_class_count; ++i)
+        {
+            priority_trace_.selected_by_class[i] = 0;
+        }
+    }
+
+    void VirtioBlkQueue::record_priority_trace_locked(uint32 pending_mask, const IoRequest *request)
+    {
+        if (request == nullptr)
+        {
+            return;
+        }
+
+        int highest_class = first_pending_class(pending_mask);
+        if (highest_class < 0 || !has_lower_pending_class(pending_mask, highest_class))
+        {
+            return;
+        }
+
+        int selected_class = request->service_class;
+        ++priority_trace_.contended_dispatches;
+        if (selected_class >= 0 && selected_class < PriorityBorrowScheduler::k_class_count)
+        {
+            ++priority_trace_.selected_by_class[selected_class];
+        }
+
+        if (selected_class == highest_class)
+        {
+            ++priority_trace_.high_wins;
+        }
+        else if (selected_class > highest_class)
+        {
+            ++priority_trace_.low_while_high_pending;
+        }
+
+        constexpr uint64 k_report_interval = 8;
+        bool should_report = priority_trace_.contended_dispatches == 1 ||
+                             priority_trace_.contended_dispatches - priority_trace_.last_report_contended >= k_report_interval ||
+                             priority_trace_.low_while_high_pending != 0;
+        if (!should_report)
+        {
+            return;
+        }
+
+        priority_trace_.last_report_contended = priority_trace_.contended_dispatches;
+        printf("[priority-borrow] TRACE contended=%lu high_wins=%lu low_while_high=%lu "
+               "class0=%lu class1=%lu class2=%lu class3=%lu class4=%lu class5=%lu class6=%lu class7=%lu\n",
+               (unsigned long)priority_trace_.contended_dispatches,
+               (unsigned long)priority_trace_.high_wins,
+               (unsigned long)priority_trace_.low_while_high_pending,
+               (unsigned long)priority_trace_.selected_by_class[0],
+               (unsigned long)priority_trace_.selected_by_class[1],
+               (unsigned long)priority_trace_.selected_by_class[2],
+               (unsigned long)priority_trace_.selected_by_class[3],
+               (unsigned long)priority_trace_.selected_by_class[4],
+               (unsigned long)priority_trace_.selected_by_class[5],
+               (unsigned long)priority_trace_.selected_by_class[6],
+               (unsigned long)priority_trace_.selected_by_class[7]);
+    }
+
+    void VirtioBlkQueue::record_completion_stats_locked(const IoRequest *request,
+                                                        uint64 dispatch_us,
+                                                        uint64 finish_us)
+    {
+        if (request == nullptr)
+        {
+            return;
+        }
+
+        int service_class = request->service_class;
+        if (service_class < 0 || service_class >= PriorityBorrowScheduler::k_class_count)
+        {
+            return;
+        }
+
+        ClassBandwidthStats &stats = class_stats_[service_class];
+        if (stats.window_start_us == 0)
+        {
+            stats.window_start_us = finish_us;
+        }
+        stats.completed_bytes += request->request_bytes;
+        stats.completed_requests += 1;
+
+        if (dispatch_us != 0 && finish_us > dispatch_us)
+        {
+            uint64 elapsed_us = finish_us - dispatch_us;
+            uint64 instant_bps = ceil_div_u64(request->request_bytes * 1000000ULL, elapsed_us);
+            if (instant_bps != 0)
+            {
+                stats.ewma_bps = stats.ewma_bps == 0 ? instant_bps : (stats.ewma_bps * 7 + instant_bps) / 8;
+            }
         }
     }
 
@@ -202,21 +338,22 @@ namespace virtio_blk
         return true;
     }
 
-    bool VirtioBlkQueue::dispatch_pending_locked(uint64 *next_gate_us)
+    bool VirtioBlkQueue::dispatch_pending_locked()
     {
         bool submitted = false;
-        uint64 local_next_gate = 0;
 
         while (has_free_desc_chain_locked())
         {
-            MClockScheduler::DispatchDecision decision = scheduler_.dequeue_next(now_us());
-            if (decision.request == nullptr)
+            uint32 pending_mask = scheduler_.pending_class_mask();
+            IoRequest *request = scheduler_.dequeue_next();
+            if (request == nullptr)
             {
-                local_next_gate = decision.next_gate_us;
                 break;
             }
 
-            if (!submit_one_locked(decision.request))
+            record_priority_trace_locked(pending_mask, request);
+
+            if (!submit_one_locked(request))
             {
                 panic("VirtioBlkQueue::dispatch_pending_locked: descriptor accounting mismatch");
             }
@@ -224,10 +361,6 @@ namespace virtio_blk
             submitted = true;
         }
 
-        if (next_gate_us != nullptr)
-        {
-            *next_gate_us = local_next_gate;
-        }
         return submitted;
     }
 
@@ -250,15 +383,7 @@ namespace virtio_blk
 
             IoRequest *done = info_[id].request;
             uint64 finish_us = now_us();
-            if (done != nullptr && info_[id].dispatch_us != 0 && finish_us > info_[id].dispatch_us)
-            {
-                uint64 elapsed_us = finish_us - info_[id].dispatch_us;
-                uint64 instant_bps = ceil_div_u64(done->request_bytes * 1000000ULL, elapsed_us);
-                if (instant_bps != 0)
-                {
-                    ewma_bps_ = (ewma_bps_ * 7 + instant_bps) / 8;
-                }
-            }
+            record_completion_stats_locked(done, info_[id].dispatch_us, finish_us);
 
             if (done != nullptr)
             {
@@ -278,14 +403,14 @@ namespace virtio_blk
             ++used_idx_;
         }
 
-        dispatch_pending_locked(nullptr);
+        dispatch_pending_locked();
     }
 
     void VirtioBlkQueue::submit_request_and_wait(IoRequest &request)
     {
         lock_.acquire();
-        scheduler_.enqueue(&request, now_us(), ewma_bps_);
-        dispatch_pending_locked(nullptr);
+        scheduler_.enqueue(&request);
+        dispatch_pending_locked();
 
         while (!request.completed)
         {
@@ -295,18 +420,9 @@ namespace virtio_blk
                 break;
             }
 
-            uint64 next_gate_us = 0;
-            dispatch_pending_locked(&next_gate_us);
+            dispatch_pending_locked();
 
             if (transport_->polling_wait())
-            {
-                lock_.release();
-                proc::k_scheduler.yield();
-                lock_.acquire();
-                continue;
-            }
-
-            if (next_gate_us != 0 && inflight_count_ == 0)
             {
                 lock_.release();
                 proc::k_scheduler.yield();

@@ -15,6 +15,7 @@
 #include "fs/vfs/file/normal_file.hh"
 #include "fs/vfs/fs.hh"
 #include "fs/vfs/vfs_utils.hh"
+#include "fs/drivers/virtio_blk.hh"
 #include "loop_device.hh"
 #include "tm/time.hh"
 #define min(a, b) ((a) < (b) ? (a) : (b))
@@ -26,6 +27,7 @@ namespace fs
         constexpr int64 k_nsec_per_sec = 1000000000LL;
         constexpr int64 k_max_timens_offset_sec = 9223372036LL;
         constexpr int64 k_min_timens_offset_sec = -9223372036LL;
+        constexpr uint64 k_dev_block_8_0_size = 512ull * 8ull * 1024ull * 1024ull;
         int g_proc_sys_fs_pipe_max_size = proc::ipc::max_pipe_size;
         int g_proc_sys_fs_lease_break_time_sec = 45;
 
@@ -418,14 +420,61 @@ namespace fs
 
     eastl::string DevBlockProvider::generate_content()
     {
-        // 块设备文件通常不包含文本内容，但可以返回设备信息
         eastl::string result;
         result += "Block device ";
-        result += "8";
+        result += (_major == 8 ? "8" : "unknown");
         result += ":";
-        result += "0";
+        result += (_minor == 0 ? "0" : "unknown");
         result += "\n";
         return result;
+    }
+
+    uint64 DevBlockProvider::read_size() const
+    {
+        if (_major == 8 && _minor == 0)
+        {
+            return k_dev_block_8_0_size;
+        }
+        return 0;
+    }
+
+    long DevBlockProvider::handle_read(uint64 buf, size_t len, long off)
+    {
+        if (_major != 8 || _minor != 0)
+        {
+            return -ENODEV;
+        }
+        if (off < 0)
+        {
+            return -EINVAL;
+        }
+        if (len == 0)
+        {
+            return 0;
+        }
+        if ((static_cast<uint64>(off) % BSIZE) != 0 || (len % BSIZE) != 0)
+        {
+            return -EINVAL;
+        }
+
+        uint64 device_size = read_size();
+        if (static_cast<uint64>(off) >= device_size)
+        {
+            return 0;
+        }
+
+        uint64 remaining = device_size - static_cast<uint64>(off);
+        uint64 bytes = len < remaining ? static_cast<uint64>(len) : remaining;
+        bytes -= bytes % BSIZE;
+        if (bytes == 0)
+        {
+            return 0;
+        }
+
+        uint64 start_sector = static_cast<uint64>(off) / BSIZE;
+        uint32 sector_count = static_cast<uint32>(bytes / BSIZE);
+        int rc = virtio_disk_rw_sectors(0, reinterpret_cast<void *>(buf), start_sector, sector_count, 0);
+        return rc == 0 ? static_cast<long>(bytes) : -EIO;
     }
 
     eastl::string DevLoopProvider::generate_content()
@@ -482,7 +531,6 @@ namespace fs
     long virtual_file::read(uint64 buf, size_t len, long off, bool upgrade)
     {
         // printfGreen("virtual_file::read called with buf: %p, len: %u, off: %d, upgrade: %d\n", (void *)buf, len, off, upgrade);
-        printf("file_path: %s\n", _path_name.c_str());
         if (_attrs.filetype == FileTypes::FT_DIRECT)
         {
             return -EISDIR;
@@ -499,13 +547,11 @@ namespace fs
 
         if (_content_provider->is_readable())
         {
-            // md，纯屎山我服了。为loop定制
-            long result = _content_provider->handle_read(buf, len, off);
-
             if (off < 0)
             {
                 off = _file_ptr;
             }
+            long result = _content_provider->handle_read(buf, len, off);
 
             if (result > 0 && upgrade)
             {
@@ -694,8 +740,40 @@ namespace fs
         }
         if (_content_provider->is_readable())
         {
-            printfRed("偷一手这里"); //专为loop
-            return 64 * 1024;
+            off_t new_off = _file_ptr;
+            switch (whence)
+            {
+            case SEEK_SET:
+                if (offset < 0)
+                {
+                    return -EINVAL;
+                }
+                new_off = offset;
+                break;
+            case SEEK_CUR:
+                new_off = _file_ptr + offset;
+                if (new_off < 0)
+                {
+                    return -EINVAL;
+                }
+                break;
+            case SEEK_END:
+                if (!_content_provider->has_read_size())
+                {
+                    return -EINVAL;
+                }
+                new_off = static_cast<off_t>(_content_provider->read_size()) + offset;
+                if (new_off < 0)
+                {
+                    return -EINVAL;
+                }
+                break;
+            default:
+                printfRed("virtual_file::lseek: invalid whence %d", whence);
+                return -EINVAL;
+            }
+            _file_ptr = new_off;
+            return _file_ptr;
         }
         // 对于动态内容，确保获得最新的文件大小
         if (_content_provider->is_dynamic()) {
