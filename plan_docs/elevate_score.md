@@ -15,16 +15,8 @@
 - ltp需要更新scoreboard
 - 你可以按照null这个获取subset的方式，或任意你喜欢的方式，但是达成目标后应该恢复到原来的样子，删除所有调试的函数语句。
 
-## 可借鉴代码
-- Falcore
-    - https://gitlab.eduxiji.net/T2026104869910452/oskernel2026-falcores.git
-    - 这个LTP有4000分，我们当前只有3000分，差距还是比较大的，需要学习这个项目LTP跑了什么测试用例比我们多1000分，然后我们慢慢追上
-- A20
-    - https://gitlab.eduxiji.net/T202610486999803/oskernel2025-a20.git
-    - 这个队伍的LTP实现似乎有问题，排行榜上出现了26000分，这应该是共享内存爆了让测例出错。但是他们的netperf是可以跑的，iperf也能跑，并且他们的libcbench分数也不低。我们需要参考他们我提到的这几个测例是如何跑的，尽量达到他们的水平。
-
 # 任务板
-这里会记录每次手工评测后未通过的事项，下面的所有修复任务需要根据修复步骤一节提到的方式解决，完成后将“待完成”字样改为“待验收”。
+这里会记录每次手工评测后未通过的事项，下面的所有修复任务需要根据修复步骤一节提到的方式解决，完成后将“待完成”字样改为“待验收”。单次的ltp修复测例会放在ltp_testcases的开头处，用`{NULL, false, false, false, false}`分隔分割，修复完成后会移到ltp_testcases的中间部分。
 ## 待完成 2026.5.29 12:16：
 ```c
     // {"shm_comm", true, true, true, true},//TFAIL: shared memory leak between namespaces
@@ -52,6 +44,7 @@
     {"shmt08", false, true, false, true}, //pass 无summary
     {"shmt09", false, true, false, true}, //sbrk 无summary  TFAIL  :  shmt09.c:173: Error: sbrk succeeded!  ret = 0xf0180, curbrk = 0xffffffffffffffff, 
     {"shmt10", false, true, false, true}, //pass 无summary
+    {NULL, false, false, false, false},  //待完成 2026.5.29 12:16分隔
 ```
 上述为新增的测试未解决测例部分，其中shm_test和shmat1不作要求，保持注释状态，其余注释状态的测例均书写了fail原因，需要自行复现上述测例并完成修复
 
@@ -60,12 +53,10 @@
 此任务并非ltp测例，但是也需要按照基本的验证步骤进行。
 一些偏基础的测例没有通过,按照我给你的标签你去usertest.cc的对应测试用例中找到这些测例，启用它们，复现失败的情况，并进行修复，直到这些测例全部通过为止。
 
-- basic：test_mmap
+- basic：test_mmap **已完成**
 这个测试似乎是因为后面我们修改了mmap的行为后与basic的行为不一致了，我们也需要保持后面很多mmap的测试，比如ltp的mmap相关测试通过，然后分析有没有办法兼容这个basic测例也通过。不能因小失大。
 这个测例完成后复测一下后面的mmap相关的测例，确保没有因为兼容这个basic测例而导致后面mmap相关的测例不通过。
 
-- busybox:busybox kill 10
-这个测试可能与后面我们的kill信号处理相关，我们需要分析一下这个测例的行为，看看它是如何调用kill的，为什么会失败，然后进行修复，确保这个测例通过。
 
 - libctest：
  dynamic crypt
@@ -84,8 +75,38 @@
      static pleval
     以及上述dynamic对应的static测例
 
-libctest失败的分为两部分，第一部分是pthread信号相关的测例，当时在la架构卡死的情况较多，在commit（979ac9b905d1102dc253ce0ea9230cc2ecb4ba9e）中我们似乎处理了这部分libctest的问题，但是在现在最新的regression分支又证明为没有通过。需要分析后续我们对信号做了什么，复现一下这几个测例，看看它们是如何调用信号的，为什么会失败，然后进行修复，确保这几个测例通过。
+libctest失败的分为两部分，第一部分是pthread信号相关的测例，当时在la架构卡死的情况较多，在commit（979ac9b905d1102dc253ce0ea9230cc2ecb4ba9e）中我们似乎处理了这部分libctest的问题，但是在现在最新的regression分支又证明为没有通过。需要分析后续我们对信号做了什么，复现一下这几个测例，看看它们是如何调用信号的，为什么会失败，然后进行修复，确保这几个测例通过。不过可能磁盘里根本没有这个测例，如果你检查到这种情况，请直接跳过。
 
 另一部分是网络相关，或者一部分当时没有修好的测例，这些是因为net架构还没有合并进来，现在已经完成合并后可能已经修好了，我们需要复测一下这些测例，看看它们是如何调用网络相关的系统调用的，为什么会失败，然后进行修复，确保这些测例通过。
 
 上述三项ltp以外的测试测例完成后需要进行一次完整的测试，确保没有期望之外的测例不通过为止。验收要求与ltp一致，为完整跑完所有的测试测例，并且没有期望之外的测例不通过。
+
+## 待完成 2026 5.31 16：30
+ltpcases的顶部添加了mmap没有完善的部分，上面标记了pass的mmap是之前我们已经测试通过的mmap相关测例。
+```c
+    {"mmap01", true, true, true, true}, //bin/sh
+    {"mmap03", false, true, false, true}, //无所谓，没summary
+    {"mmap04", true, true, true, true},
+    {"mmap1", true, true, true, true},
+    {"mmap10", false, true, false, true}, //无所谓，没summary
+    {"mmap11", true, true, true, true}, //pass不能和别的一起跑
+    {"mmap12", true, true, true, true},
+    {"mmap14", true, true, true, true},
+    {"mmap16", true, true, true, true},
+    {"mmap18", true, true, true, true},
+    {"mmap2", true, true, true, true},
+    {"mmap3", true, true, true, true},
+    {"mmap-corruption01", true, true, true, true},
+    {"mmapstress01", true, true, true, true},
+    {"mmapstress02", true, true, true, true},
+    {"mmapstress03", true, true, true, true},
+    {"mmapstress04", true, true, true, true},
+    {"mmapstress05", true, true, true, true},
+    {"mmapstress06", true, true, true, true},
+    {"mmapstress07", true, true, true, true},
+    {"mmapstress08", true, true, true, true},
+    {"mmapstress09", true, true, true, true},
+    {"mmapstress10", true, true, true, true},
+    {NULL, false, false, false, false}, // 待完成 2026 5.31 16：30
+```
+而上面这些，是还没有完全测试通过的mmap相关测例，按照之前的修复步骤进行修复，完成后需要进行一次完整的测试，确保没有期望之外的测例不通过为止。验收要求与ltp一致，为完整跑完所有的测试测例，并且没有期望之外的测例不通过。无summary的测例可以不要求musl通过，但是glibc必须通过。
