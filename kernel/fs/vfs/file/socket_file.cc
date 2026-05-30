@@ -1499,6 +1499,8 @@ namespace fs
                 case SO_OOBINLINE:
                 case SO_SNDBUF:
                 case SO_RCVBUF:
+                case SO_SNDBUFFORCE:
+                case SO_RCVBUFFORCE:
                     // loopback 初版没有真实网卡缓存和带外数据；常见调优项接受为 no-op，
                     // 避免 iperf/netperf 在初始化阶段因非核心选项失败而退出。
                     if (optlen < sizeof(int)) {

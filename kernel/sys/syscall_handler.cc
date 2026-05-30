@@ -10950,6 +10950,12 @@ namespace syscall
                 printfRed("[SyscallHandler::sys_bind] IPv6 socket 收到错误地址族: %d\n", sock_addr6.sin6_family);
                 return SYS_EAFNOSUPPORT;
             }
+            uint16_t port = htons(sock_addr6.sin6_port);
+            // Linux 将 1..1023 视为特权端口，非 root 绑定必须拒绝。
+            if (port != 0 && port < 1024 && p->get_euid() != 0)
+            {
+                return SYS_EACCES;
+            }
 
             int socket_file_result = socket_f->bind((const struct sockaddr *)&sock_addr6, addrlen);
             if (socket_file_result < 0)
@@ -10987,6 +10993,11 @@ namespace syscall
         uint16_t port = htons(sock_addr.sin_port);
 
         printfCyan("[SyscallHandler::sys_bind] 解析地址: IP=0x%08x, Port=%d\n", ip_addr, port);
+        // Linux 将 1..1023 视为特权端口，非 root 绑定必须拒绝。
+        if (port != 0 && port < 1024 && p->get_euid() != 0)
+        {
+            return SYS_EACCES;
+        }
 
         // AF_INET loopback 的端口占用与状态转换统一交给 socket_file，避免 syscall/后端双写状态。
         int socket_file_result = socket_f->bind((const struct sockaddr *)&sock_addr, addrlen);
@@ -11432,13 +11443,13 @@ namespace syscall
         if (_arg_addr(1, addr) < 0)
         {
             printfRed("[SyscallHandler::sys_getpeername] 参数错误: addr\n");
-            return SYS_EINVAL;
+            return SYS_EFAULT;
         }
 
         if (_arg_addr(2, addrlen_ptr) < 0)
         {
             printfRed("[SyscallHandler::sys_getpeername] 参数错误: addrlen\n");
-            return SYS_EINVAL;
+            return SYS_EFAULT;
         }
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();

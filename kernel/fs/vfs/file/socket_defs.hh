@@ -45,6 +45,12 @@
 #ifndef SO_RCVBUF
 #define SO_RCVBUF       8       /* receive buffer size */
 #endif
+#ifndef SO_SNDBUFFORCE
+#define SO_SNDBUFFORCE  32      /* force send buffer size */
+#endif
+#ifndef SO_RCVBUFFORCE
+#define SO_RCVBUFFORCE  33      /* force receive buffer size */
+#endif
 #define SO_REUSEPORT    15      /* reuse port */
 #ifndef SO_OOBINLINE
 #define SO_OOBINLINE    10      /* leave received OOB data in line */
