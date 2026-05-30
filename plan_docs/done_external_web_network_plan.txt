@@ -1141,3 +1141,5 @@ QEMU user net 下静态 `10.0.2.15/24` 足够跑通第一阶段。DHCP 是后续
 - RISC-V/glibc 同样通过。
 - LoongArch 环境修好后，LoongArch/musl 和 LoongArch/glibc 至少 HTTP gateway smoke 通过。
 - iperf/netperf runner 路径问题解决后，scoreboard 中对应项有日志证据再更新 PASS。
+
+已完成上述任务
