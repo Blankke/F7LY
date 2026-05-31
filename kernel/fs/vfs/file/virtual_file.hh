@@ -285,8 +285,10 @@ namespace fs
     public:
         DevBlockProvider(int major, int minor) : _major(major), _minor(minor) {}
         virtual eastl::string generate_content() override;
+        virtual bool is_writable() const override { return true; }
         virtual bool is_readable() const override { return true; }
         virtual long handle_read(uint64 buf, size_t len, long off) override;
+        virtual long handle_write(uint64 buf, size_t len, long off) override;
         virtual bool has_read_size() const override { return true; }
         virtual uint64 read_size() const override;
         virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {

@@ -116,7 +116,7 @@ int mount(const char *special, const char *dir, const char *fstype, unsigned lon
 int umount(const char *special);
 int fork(void);
 char *getcwd(char *buf, size_t size);
-int lseek(int fd, off_t offset, int whence);
+off_t lseek(int fd, off_t offset, int whence);
 
 // proc
 int shutdown();
@@ -133,6 +133,7 @@ int userdebug1();
 int userdebug2();
 int userdebug3();
 int userdebug4();
+int userdebug5(int value);
 
 
 
@@ -168,7 +169,8 @@ int network_loopback_smoke(void);
 int network_ltp_socket_subset(void);
 int network_ltp_socket_abi_subset(void);
 int network_ltp_socket_batch_subset(void);
-int iozone_priority_borrow_research(void);
+int priority_borrow_research(void);
+int iozone_glibc_random_read_repro(void);
 int final_test_musl(void);
 int final_test_glibc(void);
 int git_test(const char *path);

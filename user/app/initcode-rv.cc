@@ -4,8 +4,6 @@ extern "C"
 {
     __attribute__((section(".text.startup"))) int main()
     {
-        // 临时只跑 RISC-V musl 的 libcbench，用 syscall/page fault trace 缩小崩溃路径。
-        init_env("/musl/");
         // netperf_test("/musl/");
         // netperf_test("/glibc/");
         // iperf_test("/musl/");
@@ -21,10 +19,11 @@ extern "C"
         // libcbench_test("/glibc");
         // ltp_test(true);
         // ltp_test(false);
-        // iozone_priority_borrow_research();
+        priority_borrow_research();
+        // iozone_glibc_random_read_repro();
         // busybox_test("/musl/");
         // busybox_test("/glibc/");
-        libcbench_test("/musl");
+        // bench_refine_suite();
         shutdown();
         return 0;
     }

@@ -6,6 +6,10 @@
 namespace virtio_blk
 {
     constexpr uint16 k_queue_size = 128;
+    constexpr int k_priority_borrow_experiment_dispatch_window = 1;
+
+    void set_priority_borrow_experiment_mode(bool enabled);
+    bool priority_borrow_experiment_mode_enabled();
 
     struct VRingDesc
     {

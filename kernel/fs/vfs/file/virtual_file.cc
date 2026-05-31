@@ -477,6 +477,45 @@ namespace fs
         return rc == 0 ? static_cast<long>(bytes) : -EIO;
     }
 
+    long DevBlockProvider::handle_write(uint64 buf, size_t len, long off)
+    {
+        if (_major != 8 || _minor != 0)
+        {
+            return -ENODEV;
+        }
+        if (off < 0)
+        {
+            return -EINVAL;
+        }
+        if (len == 0)
+        {
+            return 0;
+        }
+        if ((static_cast<uint64>(off) % BSIZE) != 0 || (len % BSIZE) != 0)
+        {
+            return -EINVAL;
+        }
+
+        uint64 device_size = read_size();
+        if (static_cast<uint64>(off) >= device_size)
+        {
+            return -ENOSPC;
+        }
+
+        uint64 remaining = device_size - static_cast<uint64>(off);
+        uint64 bytes = len < remaining ? static_cast<uint64>(len) : remaining;
+        bytes -= bytes % BSIZE;
+        if (bytes == 0)
+        {
+            return -ENOSPC;
+        }
+
+        uint64 start_sector = static_cast<uint64>(off) / BSIZE;
+        uint32 sector_count = static_cast<uint32>(bytes / BSIZE);
+        int rc = virtio_disk_rw_sectors(0, reinterpret_cast<void *>(buf), start_sector, sector_count, 1);
+        return rc == 0 ? static_cast<long>(bytes) : -EIO;
+    }
+
     eastl::string DevLoopProvider::generate_content()
     {
         printfRed("未实现xxxxxxxxxxx");
