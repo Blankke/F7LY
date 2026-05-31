@@ -20,9 +20,10 @@ extern "C"
         // libcbench_test("/glibc");
         // ltp_test(true);
         // ltp_test(false);
-        iozone_priority_borrow_research();
+        // iozone_priority_borrow_research();
         // busybox_test("/musl/");
         // busybox_test("/glibc/");
+        bench_refine_suite();
         shutdown();
         return 0;
     }

@@ -2898,7 +2898,38 @@ namespace syscall
 
         // printf("[SyscallHandler::sys_wait4] pid: %d, wstatus_addr: %p, option: %d\n",
         //    pid, wstatus_addr, option);
+        proc::Pcb *cur = proc::k_pm.get_cur_pcb();
+        static int libcbench_wait4_trace_budget = 32;
+        bool trace_libcbench_wait4 =
+            cur != nullptr &&
+            libcbench_wait4_trace_budget > 0 &&
+            strcmp(cur->_name, "libc-bench") == 0;
+        if (trace_libcbench_wait4)
+        {
+            --libcbench_wait4_trace_budget;
+            printf("[sys_wait4][trace] proc=%s pid=%d tid=%d wait_pid=%d wstatus=%p option=0x%x epc=%p sp=%p ra=%p\n",
+                   cur->_name,
+                   cur->_pid,
+                   cur->_tid,
+                   pid,
+                   (void *)wstatus_addr,
+                   option,
+                   (void *)cur->_trapframe->epc,
+                   (void *)cur->_trapframe->sp,
+                   (void *)cur->_trapframe->ra);
+        }
         int waitret = proc::k_pm.wait4(pid, wstatus_addr, option);
+        if (trace_libcbench_wait4)
+        {
+            printf("[sys_wait4][trace] proc=%s pid=%d tid=%d -> ret=%d epc=%p sp=%p ra=%p\n",
+                   cur->_name,
+                   cur->_pid,
+                   cur->_tid,
+                   waitret,
+                   (void *)cur->_trapframe->epc,
+                   (void *)cur->_trapframe->sp,
+                   (void *)cur->_trapframe->ra);
+        }
         // printf("[SyscallHandler::sys_wait4] waitret: %d\n",waitret);
         return waitret;
     }
@@ -4367,7 +4398,34 @@ namespace syscall
         {
             return flag_ret;
         }
+        proc::Pcb *cur = proc::k_pm.get_cur_pcb();
+        static int libcbench_clone_trace_budget = 64;
+        bool trace_libcbench_clone =
+            cur != nullptr &&
+            libcbench_clone_trace_budget > 0 &&
+            (strcmp(cur->_name, "libc-bench") == 0 || strcmp(cur->_name, "libc-bench-child") == 0);
+        if (trace_libcbench_clone)
+        {
+            --libcbench_clone_trace_budget;
+            printf("[sys_clone][trace] proc=%s pid=%d tid=%d flags=0x%x stack=%p ptid=%p tls=%p ctid=%p\n",
+                   cur->_name,
+                   cur->_pid,
+                   cur->_tid,
+                   flags,
+                   (void *)stack,
+                   (void *)ptid,
+                   (void *)tls,
+                   (void *)ctid);
+        }
         clone_pid = proc::k_pm.clone(flags, stack, ptid, tls, ctid);
+        if (trace_libcbench_clone)
+        {
+            printf("[sys_clone][trace] proc=%s pid=%d tid=%d -> ret=%ld\n",
+                   cur->_name,
+                   cur->_pid,
+                   cur->_tid,
+                   (long)clone_pid);
+        }
         return clone_pid;
     }
     uint64 SyscallHandler::sys_umount2()
@@ -4499,11 +4557,11 @@ namespace syscall
 
         proc::Pcb *cur = proc::k_pm.get_cur_pcb();
         long result = proc::k_pm.brk(n);
-        static int brk_trace_budget = 64;
+        static int brk_trace_budget = 256;
         if (cur != nullptr && n != 0 && brk_trace_budget > 0)
         {
             --brk_trace_budget;
-            printfYellow("[sys_brk][trace] proc=%s pid=%d tid=%d req=%p ret=%p heap=[%p,%p)\n",
+            printf("[sys_brk][trace] proc=%s pid=%d tid=%d req=%p ret=%p heap=[%p,%p)\n",
                    cur->_name,
                    cur->_pid,
                    cur->_tid,
@@ -4532,7 +4590,18 @@ namespace syscall
             printfRed("[SyscallHandler::sys_munmap] Error fetching munmap arguments\n");
             return -EINVAL;
         }
-        printfBlue("[sys_munmap] start=%p size=%zu\n", (void *)start, size);
+        proc::Pcb *cur = proc::k_pm.get_cur_pcb();
+        static int munmap_trace_budget = 256;
+        if (munmap_trace_budget > 0)
+        {
+            --munmap_trace_budget;
+            printf("[sys_munmap][trace] proc=%s pid=%d tid=%d start=%p size=%zu\n",
+                   cur ? cur->_name : "(null)",
+                   cur ? cur->_pid : -1,
+                   cur ? cur->_tid : -1,
+                   (void *)start,
+                   size);
+        }
         int result = proc::k_pm.munmap((void *)start, size);
         if (result < 0)
         {
@@ -4642,7 +4711,23 @@ namespace syscall
         proc::Pcb *cur = proc::k_pm.get_cur_pcb();
         void *result = proc::k_pm.mmap((void *)addr, map_size, prot, flags, fd, offset, &mmap_errno);
 
-        static int mmap_trace_budget = 64;
+        static int mmap_trace_budget = 256;
+        if (cur != nullptr && mmap_trace_budget > 0)
+        {
+            --mmap_trace_budget;
+            printf("[sys_mmap][trace] proc=%s pid=%d tid=%d addr=%p len=%p prot=0x%x flags=0x%x fd=%d off=%p -> %p errno=%d\n",
+                   cur->_name,
+                   cur->_pid,
+                   cur->_tid,
+                   (void *)addr,
+                   (void *)map_size,
+                   prot,
+                   flags,
+                   fd,
+                   (void *)offset,
+                   result,
+                   mmap_errno);
+        }
         if (result == MAP_FAILED)
         {
             int err = mmap_errno != 0 ? mmap_errno : ENOMEM;
@@ -12642,6 +12727,26 @@ namespace syscall
 
         printfCyan("[SyscallHandler::sys_clone3] flags: 0x%lx, stack: %p, child_tid: %p, parent_tid: %p, tls: %p\n",
                    args.flags, (void *)args.stack, (void *)args.child_tid, (void *)args.parent_tid, (void *)args.tls);
+        static int libcbench_clone3_trace_budget = 32;
+        bool trace_libcbench_clone3 =
+            cur != nullptr &&
+            libcbench_clone3_trace_budget > 0 &&
+            (strcmp(cur->_name, "libc-bench") == 0 || strcmp(cur->_name, "libc-bench-child") == 0);
+        if (trace_libcbench_clone3)
+        {
+            --libcbench_clone3_trace_budget;
+            printf("[sys_clone3][trace] proc=%s pid=%d tid=%d flags=0x%lx stack=%p stack_size=%p child_tid=%p parent_tid=%p tls=%p exit_signal=%lu\n",
+                   cur->_name,
+                   cur->_pid,
+                   cur->_tid,
+                   args.flags,
+                   (void *)args.stack,
+                   (void *)args.stack_size,
+                   (void *)args.child_tid,
+                   (void *)args.parent_tid,
+                   (void *)args.tls,
+                   args.exit_signal);
+        }
 
         if (args.exit_signal > static_cast<uint64>(proc::ipc::signal::SIGRTMAX))
         {
@@ -12708,6 +12813,14 @@ namespace syscall
         uint64 clone_pid = proc::k_pm.clone(args.flags, child_stack, args.parent_tid,
                                             args.tls, args.child_tid, true,
                                             static_cast<int>(args.exit_signal));
+        if (trace_libcbench_clone3)
+        {
+            printf("[sys_clone3][trace] proc=%s pid=%d tid=%d -> ret=%ld\n",
+                   cur->_name,
+                   cur->_pid,
+                   cur->_tid,
+                   (long)clone_pid);
+        }
 
         if ((int64)clone_pid < 0)
         {

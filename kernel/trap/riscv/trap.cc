@@ -265,6 +265,19 @@ void trap_manager::usertrap()
     TODO("pagefault_handler");
     ///@brief 此处处理mmap的缺页异常
     // printfRed("p->_trapframe->sp: %p,printf fault_va:%p, p->_sz:%p\n", PGROUNDUP(p->_trapframe->sp) - 1, fault_va, p->_sz);
+    static int user_page_fault_trace_budget = 256;
+    if (user_page_fault_trace_budget > 0)
+    {
+      --user_page_fault_trace_budget;
+      printf("[usertrap][pf] proc=%s pid=%d tid=%d cause=%p sepc=%p stval=%p sp=%p\n",
+             p->_name,
+             p->_pid,
+             p->_tid,
+             (void *)cause,
+             (void *)r_sepc(),
+             (void *)r_stval(),
+             (void *)p->_trapframe->sp);
+    }
 
     if (mmap_handler(r_stval(), cause) != 0)
     {
@@ -353,6 +366,22 @@ void trap_manager::usertrapret()
 
   // 优先处理同步信号(紧急信号) - 在返回用户态之前检查并处理
   proc::ipc::signal::handle_sync_signal();
+
+  static int libcbench_usertrapret_trace_budget = 64;
+  if (libcbench_usertrapret_trace_budget > 0 &&
+      strcmp(p->_name, "libc-bench") == 0)
+  {
+    --libcbench_usertrapret_trace_budget;
+    printf("[usertrapret][trace] proc=%s pid=%d tid=%d epc=%p sp=%p ra=%p a0=%p signal=0x%x\n",
+           p->_name,
+           p->_pid,
+           p->_tid,
+           (void *)p->_trapframe->epc,
+           (void *)p->_trapframe->sp,
+           (void *)p->_trapframe->ra,
+           (void *)p->_trapframe->a0,
+           p->_signal);
+  }
 
   // 时间统计：从内核态切换到用户态
   uint64 cur_tick = tmm::get_ticks();
