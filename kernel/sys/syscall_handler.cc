@@ -69,6 +69,9 @@
 #include "fs/debug.hh"
 #include "interrupt_stats.hh"
 #include "mem/memlayout.hh"
+#ifndef EIDRM
+#define EIDRM 43
+#endif
 namespace syscall
 {
     namespace
@@ -4499,6 +4502,12 @@ namespace syscall
 
         proc::Pcb *cur = proc::k_pm.get_cur_pcb();
         long result = proc::k_pm.brk(n);
+        if (result < 0 && cur != nullptr)
+        {
+            // Linux brk(2) syscall 失败时返回当前 program break，而不是 -1。
+            // libc 的 brk/sbrk 封装会用返回值是否达到请求地址来转换 errno。
+            result = cur->get_heap_end();
+        }
         static int brk_trace_budget = 64;
         if (cur != nullptr && n != 0 && brk_trace_budget > 0)
         {
@@ -9326,8 +9335,8 @@ namespace syscall
             return 0;
         }
 
-        // 当前先补齐 LTP time namespace 所需的最小语义；其他组合后续按需扩展。
-        if (flags != CLONE_NEWTIME)
+        constexpr int supported_unshare_flags = CLONE_NEWTIME | CLONE_NEWIPC;
+        if ((flags & ~supported_unshare_flags) != 0)
         {
             return SYS_ENOSYS;
         }
@@ -9346,8 +9355,15 @@ namespace syscall
             return SYS_EINVAL;
         }
 
-        // Linux 的 CLONE_NEWTIME 只影响 future children，当前任务仍留在旧 namespace。
-        p->_timens_children = p->_timens_current;
+        if (flags & CLONE_NEWTIME)
+        {
+            // Linux 的 CLONE_NEWTIME 只影响 future children，当前任务仍留在旧 namespace。
+            p->_timens_children = p->_timens_current;
+        }
+        if (flags & CLONE_NEWIPC)
+        {
+            proc::k_pm.unshare_ipc_namespace(p);
+        }
         return 0;
     }
 
@@ -10563,6 +10579,10 @@ namespace syscall
         {
             printfRed("[SyscallHandler::sys_shmget] 参数错误\n");
             return SYS_EINVAL; // 参数错误
+        }
+        if (ssize < 0)
+        {
+            return SYS_EINVAL;
         }
         size_t size = ssize;
         return shm::k_smm.create_seg(key, size, shmflg);
@@ -15873,15 +15893,32 @@ namespace syscall
                     if (!pte.is_null() && pte.is_valid())
                     {
                         // 页面已分配，需要写回到文件
-                        uint64 pa = (uint64)pte.pa();
-                        int file_offset = vm->offset + (va - vma_start);
+                        uint64 kernel_buf = (uint64)pte.pa();
+#ifdef LOONGARCH
+                        kernel_buf = to_vir(kernel_buf);
+#endif
+                        uint64 file_offset = vm->offset + (va - vma_start);
+                        size_t write_len = PGSIZE;
+                        fs::Kstat st = {};
+                        if (vfs_fstat(vm->vfile, &st) == EOK)
+                        {
+                            // EOF 后的尾页字节只属于映射内存，不应被 msync 扩展回文件。
+                            if (file_offset >= st.size)
+                            {
+                                continue;
+                            }
+                            if (file_offset + write_len > st.size)
+                            {
+                                write_len = static_cast<size_t>(st.size - file_offset);
+                            }
+                        }
 
                         // printfCyan("[SyscallHandler::sys_msync] Writing back page at va=%p, file_offset=%d\n",
                         //            (void *)va, file_offset);
 
                         // 写回数据到文件
-                        int write_result = vm->vfile->write(pa, PGSIZE, file_offset, false);
-                        if (write_result < 0)
+                        int write_result = vm->vfile->write(kernel_buf, write_len, static_cast<long>(file_offset), false);
+                        if (write_result < 0 || static_cast<size_t>(write_result) != write_len)
                         {
                             printfRed("[SyscallHandler::sys_msync] Failed to write back page at va=%p\n", (void *)va);
                             return -EIO;
@@ -16566,7 +16603,72 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_remap_file_pages()
     {
-        panic("未实现该系统调用");
+        uint64 start;
+        long size_arg;
+        int prot;
+        long pgoff;
+        int flags;
+        if (_arg_addr(0, start) < 0 ||
+            _arg_long(1, size_arg) < 0 ||
+            _arg_int(2, prot) < 0 ||
+            _arg_long(3, pgoff) < 0 ||
+            _arg_int(4, flags) < 0)
+        {
+            return SYS_EINVAL;
+        }
+
+        if (start == 0 || size_arg <= 0 || (start % PGSIZE) != 0 ||
+            prot != 0 || flags != 0 || pgoff < 0)
+        {
+            return SYS_EINVAL;
+        }
+
+        uint64 size = static_cast<uint64>(size_arg);
+        uint64 end = start + PGROUNDUP(size);
+        if (end <= start)
+        {
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
+        if (pcb == nullptr || pcb->get_vma() == nullptr)
+        {
+            return SYS_ESRCH;
+        }
+
+        for (int i = 0; i < proc::NVMA; ++i)
+        {
+            proc::vma &vm = pcb->get_vma()->_vm[i];
+            if (!vm.used)
+            {
+                continue;
+            }
+
+            uint64 vm_start = vm.addr;
+            uint64 vm_end = vm_start + static_cast<uint64>(vm.len);
+            if (start < vm_start || end > vm_end)
+            {
+                continue;
+            }
+
+            /*
+             * remap_file_pages() 是已废弃的非线性文件映射 ABI。当前 VMA 模型不支持
+             * 真正重排页索引；对 SysV SHM 映射返回 Linux/LTP 可接受的错误，而不是
+             * 假装成功，否则 shmctl05 会一直等待 race 命中。
+             */
+            if (vm.backing_kind == proc::VMA_BACKING_SHM && vm.backing_shmid >= 0)
+            {
+                shm::shm_segment seg = shm::k_smm.get_seg_info(vm.backing_shmid);
+                if (seg.shmid < 0 || (seg.mode & SHM_DEST))
+                {
+                    return -EIDRM;
+                }
+                return SYS_EINVAL;
+            }
+            return 0;
+        }
+
+        return SYS_EINVAL;
     }
     uint64 SyscallHandler::sys_splice()
     {

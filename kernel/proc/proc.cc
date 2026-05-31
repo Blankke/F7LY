@@ -202,6 +202,7 @@ namespace proc
         _timens_current = {};
         _timens_children = {};
         _netns = {};
+        _ipc_ns_id = k_initial_ipc_namespace_id;
 
         /****************************************************************************************
          * 资源限制初始化

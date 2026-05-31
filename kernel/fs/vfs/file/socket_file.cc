@@ -44,8 +44,15 @@ namespace fs
         constexpr socklen_t k_max_user_sockaddr_len = 4096;
         constexpr int k_loopback_somaxconn = 4096;
         constexpr uint64 k_tcp_connect_listener_wait_ticks = 100;
+        constexpr uint64 k_socket_usec_per_sec = 1000000ULL;
         constexpr int k_unix_binding_max = 256;
         constexpr int k_at_fdcwd = -100;
+
+        struct socket_timeval
+        {
+            long tv_sec;
+            long tv_usec;
+        };
 
         struct loopback_binding
         {
@@ -84,6 +91,58 @@ namespace fs
             }
             *static_cast<int *>(optval) = value;
             *optlen = sizeof(int);
+            return 0;
+        }
+
+        bool is_receive_timeout_option(int optname)
+        {
+            return optname == SO_RCVTIMEO ||
+                   optname == SO_RCVTIMEO_OLD ||
+                   optname == SO_RCVTIMEO_NEW;
+        }
+
+        bool is_send_timeout_option(int optname)
+        {
+            return optname == SO_SNDTIMEO ||
+                   optname == SO_SNDTIMEO_OLD ||
+                   optname == SO_SNDTIMEO_NEW;
+        }
+
+        bool socket_timeout_to_usec(long sec, long usec, uint64 &timeout_us)
+        {
+            if (sec < 0 || usec < 0 || usec >= static_cast<long>(k_socket_usec_per_sec))
+            {
+                return false;
+            }
+            if (static_cast<uint64>(sec) > UINT64_MAX / k_socket_usec_per_sec)
+            {
+                timeout_us = UINT64_MAX;
+                return true;
+            }
+            uint64 base = static_cast<uint64>(sec) * k_socket_usec_per_sec;
+            timeout_us = base > UINT64_MAX - static_cast<uint64>(usec)
+                             ? UINT64_MAX
+                             : base + static_cast<uint64>(usec);
+            return true;
+        }
+
+        uint64 socket_now_usec()
+        {
+            tmm::timeval tv = tmm::k_tm.get_time_val();
+            return tv.tv_sec * k_socket_usec_per_sec + tv.tv_usec;
+        }
+
+        int copy_socket_timeval_option(void *optval, socklen_t *optlen, long sec, long usec)
+        {
+            if (*optlen < sizeof(socket_timeval))
+            {
+                return -EINVAL;
+            }
+            socket_timeval value{};
+            value.tv_sec = sec;
+            value.tv_usec = usec;
+            memcpy(optval, &value, sizeof(value));
+            *optlen = sizeof(value);
             return 0;
         }
 
@@ -368,6 +427,10 @@ namespace fs
         , _write_shutdown(false)
         , _peer_closed(false)
         , _pending_send_has_addr(false)
+        , _recv_timeout_sec(0)
+        , _recv_timeout_usec(0)
+        , _send_timeout_sec(0)
+        , _send_timeout_usec(0)
     {
         new(&_stat) Kstat(FT_SOCKET);
         memset(&_local_addr, 0, sizeof(_local_addr));
@@ -398,6 +461,10 @@ namespace fs
         , _write_shutdown(false)
         , _peer_closed(false)
         , _pending_send_has_addr(false)
+        , _recv_timeout_sec(0)
+        , _recv_timeout_usec(0)
+        , _send_timeout_sec(0)
+        , _send_timeout_usec(0)
     {
         new(&_stat) Kstat(FT_SOCKET);
         memset(&_local_addr, 0, sizeof(_local_addr));
@@ -1149,6 +1216,10 @@ namespace fs
             }
 
             proc::Pcb *cur = proc::k_pm.get_cur_pcb();
+            uint64 timeout_us = 0;
+            bool has_timeout = socket_timeout_to_usec(_recv_timeout_sec, _recv_timeout_usec, timeout_us) &&
+                               timeout_us > 0;
+            uint64 deadline_us = has_timeout ? socket_now_usec() + timeout_us : 0;
             while (_recv_buffer.empty() && !_peer_closed && !_read_shutdown) {
                 if (cur != nullptr && proc::ipc::signal::has_unmasked_signal_pending(cur)) {
                     _lock.release();
@@ -1158,7 +1229,16 @@ namespace fs
                     _lock.release();
                     return -EAGAIN;
                 }
-                proc::k_pm.sleep(&_recv_buffer, &_lock);
+                if (has_timeout) {
+                    if (socket_now_usec() >= deadline_us) {
+                        _lock.release();
+                        return -EAGAIN;
+                    }
+                    // SO_RCVTIMEO 需要超时唤醒；睡 tick 通道可避免无数据时永久挂住。
+                    proc::k_pm.sleep(tmm::k_tm.get_tick_wait_channel(), &_lock);
+                } else {
+                    proc::k_pm.sleep(&_recv_buffer, &_lock);
+                }
             }
 
             if (_recv_buffer.empty()) {
@@ -1355,6 +1435,10 @@ namespace fs
             }
 
             proc::Pcb *cur = proc::k_pm.get_cur_pcb();
+            uint64 timeout_us = 0;
+            bool has_timeout = socket_timeout_to_usec(_recv_timeout_sec, _recv_timeout_usec, timeout_us) &&
+                               timeout_us > 0;
+            uint64 deadline_us = has_timeout ? socket_now_usec() + timeout_us : 0;
             while (_datagram_queue.empty() && !_read_shutdown) {
                 if (cur != nullptr && proc::ipc::signal::has_unmasked_signal_pending(cur)) {
                     _lock.release();
@@ -1364,7 +1448,15 @@ namespace fs
                     _lock.release();
                     return -EAGAIN;
                 }
-                proc::k_pm.sleep(&_datagram_queue, &_lock);
+                if (has_timeout) {
+                    if (socket_now_usec() >= deadline_us) {
+                        _lock.release();
+                        return -EAGAIN;
+                    }
+                    proc::k_pm.sleep(tmm::k_tm.get_tick_wait_channel(), &_lock);
+                } else {
+                    proc::k_pm.sleep(&_datagram_queue, &_lock);
+                }
             }
 
             if (_datagram_queue.empty()) {
@@ -1482,6 +1574,33 @@ namespace fs
         _lock.acquire();
         
         if (level == SOL_SOCKET) {
+            if (is_receive_timeout_option(optname) || is_send_timeout_option(optname)) {
+                if (optlen < sizeof(socket_timeval)) {
+                    _lock.release();
+                    return -EINVAL;
+                }
+
+                socket_timeval timeout{};
+                memcpy(&timeout, optval, sizeof(timeout));
+                uint64 timeout_us = 0;
+                if (!socket_timeout_to_usec(timeout.tv_sec, timeout.tv_usec, timeout_us)) {
+                    _lock.release();
+                    return -EDOM;
+                }
+
+                // 64 位 Linux 上 musl/glibc 仍会使用 OLD 编号 20/21；
+                // 同时接受 NEW 编号，避免后续 time64 ABI 测例再落到 ENOPROTOOPT。
+                if (is_receive_timeout_option(optname)) {
+                    _recv_timeout_sec = timeout.tv_sec;
+                    _recv_timeout_usec = timeout.tv_usec;
+                } else {
+                    _send_timeout_sec = timeout.tv_sec;
+                    _send_timeout_usec = timeout.tv_usec;
+                }
+                _lock.release();
+                return 0;
+            }
+
             switch (optname) {
                 case SO_REUSEADDR:
                 case SO_REUSEPORT:
@@ -1565,6 +1684,22 @@ namespace fs
             if (*optlen < sizeof(int)) {
                 _lock.release();
                 return -EINVAL;
+            }
+
+            if (is_receive_timeout_option(optname)) {
+                int result = copy_socket_timeval_option(optval, optlen,
+                                                        _recv_timeout_sec,
+                                                        _recv_timeout_usec);
+                _lock.release();
+                return result;
+            }
+
+            if (is_send_timeout_option(optname)) {
+                int result = copy_socket_timeval_option(optval, optlen,
+                                                        _send_timeout_sec,
+                                                        _send_timeout_usec);
+                _lock.release();
+                return result;
             }
 
             switch (optname) {

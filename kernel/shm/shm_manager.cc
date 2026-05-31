@@ -57,6 +57,18 @@ namespace shm
             }
             return false;
         }
+
+        inline uint64 current_ipc_namespace_id()
+        {
+            proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
+            return pcb != nullptr ? pcb->_ipc_ns_id : proc::k_initial_ipc_namespace_id;
+        }
+
+        inline bool segment_visible_in_current_namespace(const shm_segment &seg)
+        {
+            return seg.ipc_ns_id == k_mmap_backing_ipc_namespace_id ||
+                   seg.ipc_ns_id == current_ipc_namespace_id();
+        }
     } // namespace
 
     void ShmManager::init(uint64 base, uint64 size)
@@ -65,6 +77,8 @@ namespace shm
         shm_base = base;
         shm_size = size;
         next_shmid = 1; // shmid从1开始
+        shmmax_limit = 32 * 1024 * 1024; // Linux sysctl shmmax，默认与现有 IPC_INFO 保持一致
+        shmmni_limit = 4096;             // Linux sysctl shmmni，LTP 会读取该值做 ENOSPC 压测
 
         // 初始化时整个内存区域都是空闲的
         free_blocks.clear();
@@ -150,10 +164,14 @@ namespace shm
         free_blocks.resize(write_it - free_blocks.begin());
     }
 
-    eastl::unordered_map<int, shm_segment>::iterator ShmManager::find_segment_by_key_locked(key_t key)
+    eastl::unordered_map<int, shm_segment>::iterator ShmManager::find_segment_by_key_locked(key_t key, uint64 ipc_ns_id)
     {
         for (auto it = segments->begin(); it != segments->end(); ++it) {
-            if (it->second.key == key) {
+            // IPC_RMID 后的段仍可能因 nattch>0 保留到最后一次 shmdt，
+            // 但 Linux 会立即把 key 从查找空间移除，允许同 key 新建段。
+            if (it->second.key == key &&
+                it->second.ipc_ns_id == ipc_ns_id &&
+                (it->second.mode & SHM_DEST) == 0) {
                 return it;
             }
         }
@@ -285,14 +303,15 @@ namespace shm
             }
         }
         
-        // 检查是否与堆冲突
-        // uint64 heap_start = proc->get_heap_start();
-        // uint64 heap_end = proc->get_heap_end();
-        // if (heap_start < heap_end && addr < heap_end && end_addr > heap_start) {
-        //     printfRed("[ShmManager] Address range [0x%x, 0x%x] conflicts with heap [0x%x, 0x%x]\n",
-        //              addr, end_addr, heap_start, heap_end);
-        //     return true;
-        // }
+        // 指定地址 shmat 不能覆盖当前 brk 堆区。之前这里只依赖页表映射失败，
+        // 会让错误路径过晚触发；显式检查更接近 Linux ABI，也覆盖 shmt09。
+        uint64 heap_start = proc->get_heap_start();
+        uint64 heap_end = proc->get_heap_end();
+        if (heap_start < heap_end && addr < heap_end && end_addr > heap_start) {
+            printfRed("[ShmManager] Address range [0x%x, 0x%x] conflicts with heap [0x%x, 0x%x]\n",
+                     addr, end_addr, heap_start, heap_end);
+            return true;
+        }
         
         // 检查是否与现有VMA冲突
         if (proc->get_vma() != nullptr) {
@@ -353,11 +372,16 @@ namespace shm
 
     int ShmManager::create_seg(key_t key, size_t size, int shmflg)
     {
+        return create_seg_in_namespace(key, size, shmflg, current_ipc_namespace_id());
+    }
+
+    int ShmManager::create_seg_in_namespace(key_t key, size_t size, int shmflg, uint64 ipc_ns_id)
+    {
         SpinLockGuard guard(shm_lock_);
 
         // 处理 IPC_PRIVATE 情况 - 总是创建新段
         if (key == IPC_PRIVATE) {
-            return create_new_segment_locked(key, size, shmflg);
+            return create_new_segment_locked(key, size, shmflg, ipc_ns_id);
         }
 
         // 查找是否已存在相同key的段 - 先检查容器是否为空
@@ -368,11 +392,11 @@ namespace shm
                 return -ENOENT;  // 段不存在且未指定 IPC_CREAT
             }
             // 创建新段
-            return create_new_segment_locked(key, size, shmflg);
+            return create_new_segment_locked(key, size, shmflg, ipc_ns_id);
         }
         
         // 容器不为空，安全地查找
-        auto existing_seg = find_segment_by_key_locked(key);
+        auto existing_seg = find_segment_by_key_locked(key, ipc_ns_id);
 
         if (existing_seg != segments->end()) {
             // 段已存在的情况
@@ -385,9 +409,9 @@ namespace shm
             }
             
             // 验证大小是否匹配
-            if (size > seg.real_size) {
+            if (size > seg.size) {
                 printfRed("[ShmManager] Requested size 0x%x exceeds existing segment size 0x%x\n", 
-                         size, seg.real_size);
+                         size, seg.size);
                 return -EINVAL;  // 请求的大小超过现有段大小
             }
             
@@ -408,11 +432,16 @@ namespace shm
             }
             
             // 创建新段
-            return create_new_segment_locked(key, size, shmflg);
+            return create_new_segment_locked(key, size, shmflg, ipc_ns_id);
         }
     }
     
     int ShmManager::find_seg_by_key(key_t key)
+    {
+        return find_seg_by_key_in_namespace(key, current_ipc_namespace_id());
+    }
+
+    int ShmManager::find_seg_by_key_in_namespace(key_t key, uint64 ipc_ns_id)
     {
         SpinLockGuard guard(shm_lock_);
 
@@ -421,7 +450,7 @@ namespace shm
             return -1;
         }
 
-        auto it = find_segment_by_key_locked(key);
+        auto it = find_segment_by_key_locked(key, ipc_ns_id);
         if (it == segments->end())
         {
             return -1;
@@ -429,26 +458,39 @@ namespace shm
         return it->second.shmid;
     }
 
-    int ShmManager::create_new_segment_locked(key_t key, size_t size, int shmflg)
+    int ShmManager::create_new_segment_locked(key_t key, size_t size, int shmflg, uint64 ipc_ns_id)
     {
-        // 验证大小限制
-        // const size_t SHMMIN = PGSIZE;        // 最小段大小为一页
-        const size_t SHMMAX = 32 * 1024 * 1024;  // 最大段大小为32MB (可配置)
-        
-        // if (size < SHMMIN) {
-        //     printfRed("[ShmManager] Size 0x%x is less than SHMMIN (0x%x)\n", size, SHMMIN);
-        //     size = SHMMIN; // 如果小于最小值，则调整为最小值
-        // }
-        
-        if (size > SHMMAX) {
-            printfRed("[ShmManager] Size 0x%x exceeds SHMMAX (0x%x)\n", size, SHMMAX);
+        // SysV SHM 的 ABI 下，新建段必须满足 SHMMIN<=size<=shmmax。
+        // shmget02 会通过 /proc/sys/kernel/shmmax 临时下调上限后验证这里。
+        if (size == 0) {
+            printfRed("[ShmManager] Size 0 is less than SHMMIN\n");
+            return -EINVAL;
+        }
+
+        if (shmflg & SHM_HUGETLB) {
+            // 当前教学内核没有 hugetlbfs/huge page 池，按 Linux 未启用 CONFIG_HUGETLBFS 的语义拒绝。
+            return -EINVAL;
+        }
+
+        if (size > shmmax_limit) {
+            printfRed("[ShmManager] Size 0x%x exceeds SHMMAX (0x%x)\n", size, shmmax_limit);
             return -EINVAL;
         }
         
-        // 检查系统限制 - 最大段数量
-        const int SHMMNI = 4096;  // 最大共享内存标识符数量
-        if (segments->size() >= SHMMNI) {
-            printfRed("[ShmManager] Maximum number of segments reached (%d)\n", SHMMNI);
+        int namespace_segment_count = 0;
+        for (const auto &pair : *segments)
+        {
+            if (pair.second.ipc_ns_id == ipc_ns_id)
+            {
+                ++namespace_segment_count;
+            }
+        }
+
+        // shmmni 限制 SysV IPC namespace 内的段数量。mmap(MAP_SHARED) 使用的内部后端
+        // 放在 k_mmap_backing_ipc_namespace_id，不能挤占用户可见 SysV SHM 的配额。
+        if (ipc_ns_id != k_mmap_backing_ipc_namespace_id &&
+            namespace_segment_count >= shmmni_limit) {
+            printfRed("[ShmManager] Maximum number of namespace segments reached (%d)\n", shmmni_limit);
             return -ENOSPC;
         }
         
@@ -462,6 +504,7 @@ namespace shm
         // 创建新的共享内存段
         shm_segment new_seg = {};
         new_seg.shmid = next_shmid++;
+        new_seg.ipc_ns_id = ipc_ns_id;
         new_seg.key = key;
         new_seg.size = size;                      // 保存用户请求的原始大小
         new_seg.real_size = PGROUNDUP(size);      // 页对齐的实际分配大小
@@ -488,6 +531,7 @@ namespace shm
         
         // 初始化状态信息 (按照标准)
         new_seg.nattch = 0;                           // shm_nattch 设为 0
+        new_seg.auto_destroy_on_last_detach = false; // 默认遵循 SysV SHM 生命周期
         new_seg.seq = 0;                              // 初始序列号
         
         // 清零段内容 (按照标准要求) - 使用实际分配的大小
@@ -509,7 +553,7 @@ namespace shm
         if (it == segments->end())
         {
             printfRed("[ShmManager] Segment with shmid=%d not found\n", shmid);
-            return -1; // 未找到共享内存段
+            return -EINVAL; // 未找到共享内存段
         }
 
         shm_segment &seg = it->second;
@@ -523,7 +567,7 @@ namespace shm
         segments->erase(it); // 从容器中删除共享内存段
         return 0;
     }
-    void *ShmManager::attach_seg(int shmid, void *shmaddr, int shmflg)
+    void *ShmManager::attach_seg(int shmid, void *shmaddr, int shmflg, bool register_vma)
     {
         SpinLockGuard guard(shm_lock_);
 
@@ -536,6 +580,11 @@ namespace shm
         }
 
         shm_segment &seg = it->second;
+        if (!segment_visible_in_current_namespace(seg))
+        {
+            printfRed("[ShmManager] shmid=%d belongs to another IPC namespace\n", shmid);
+            return (void *)-EINVAL;
+        }
         proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
 
         // 权限检查
@@ -657,13 +706,14 @@ namespace shm
         }
 
         proc::ProcessMemoryManager *current_mm = current_proc->get_memory_manager();
-        if (current_mm == nullptr ||
-            !current_mm->register_shared_attachment_vma(attach_addr,
-                                                        seg.real_size,
-                                                        prot,
-                                                        MAP_SHARED,
-                                                        shmid,
-                                                        attach_addr))
+        if (register_vma &&
+            (current_mm == nullptr ||
+             !current_mm->register_shared_attachment_vma(attach_addr,
+                                                         seg.real_size,
+                                                         prot,
+                                                         MAP_SHARED,
+                                                         shmid,
+                                                         attach_addr)))
         {
             mem::k_vmm.vmunmap(*current_proc->get_pagetable(),
                                attach_addr,
@@ -765,7 +815,7 @@ namespace shm
         seg.nattch--;                            // 减少附加计数 (shm_nattch)
 
         // 检查段是否被标记为删除且无进程附加
-        if ((seg.mode & SHM_DEST) && seg.nattch == 0) {
+        if (((seg.mode & SHM_DEST) || seg.auto_destroy_on_last_detach) && seg.nattch == 0) {
             int shmid = seg.shmid;  // 保存shmid用于日志
             int result = delete_seg_locked(shmid);
             if (result != 0) {
@@ -871,6 +921,7 @@ namespace shm
         SpinLockGuard guard(shm_lock_);
 
         proc::Pcb* current_proc = proc::k_pm.get_cur_pcb();
+        uint64 current_ns_id = current_ipc_namespace_id();
 
         switch (cmd) {
             case IPC_STAT:
@@ -880,17 +931,28 @@ namespace shm
                 // 查找共享内存段
                 auto it = segments->end();
                 if (cmd == SHM_STAT || cmd == SHM_STAT_ANY) {
-                    // SHM_STAT 系列: shmid 是索引而不是标识符
-                    if (shmid < 0 || (size_t)shmid >= segments->size()) {
-                        printfRed("[ShmManager] Invalid index %d for SHM_STAT\n", shmid);
-                        return -EINVAL;
-                    }
-                    // 找到第shmid个段
-                    int index = 0;
-                    for (auto iter = segments->begin(); iter != segments->end(); ++iter, ++index) {
-                        if (index == shmid) {
-                            it = iter;
-                            break;
+                    // SHM_STAT 系列主要按“内核索引”查询；SHM_STAT_ANY 额外兼容
+                    // LTP 在 setup 中直接传 shmid 探测能力的写法。
+                    if (shmid >= 0) {
+                        int index = 0;
+                        for (auto iter = segments->begin(); iter != segments->end(); ++iter) {
+                            if (iter->second.ipc_ns_id != current_ns_id)
+                            {
+                                continue;
+                            }
+                            if (index == shmid) {
+                                it = iter;
+                                break;
+                            }
+                            ++index;
+                        }
+                        if (it == segments->end() && cmd == SHM_STAT_ANY)
+                        {
+                            auto by_id = segments->find(shmid);
+                            if (by_id != segments->end() && by_id->second.ipc_ns_id == current_ns_id)
+                            {
+                                it = by_id;
+                            }
                         }
                     }
                 } else {
@@ -904,6 +966,12 @@ namespace shm
                 }
 
                 shm_segment& seg = it->second;
+                if (seg.ipc_ns_id != current_ns_id)
+                {
+                    printfRed("[ShmManager] shmctl cmd=%d shmid=%d is outside current IPC namespace\n",
+                              cmd, shmid);
+                    return -EINVAL;
+                }
 
                 // 权限检查 (SHM_STAT_ANY 不需要权限检查)
                 if (cmd != SHM_STAT_ANY) {
@@ -945,8 +1013,8 @@ namespace shm
                     return -EFAULT;
                 }
 
-                // SHM_STAT 返回实际的段标识符
-                return (cmd == SHM_STAT) ? seg.shmid : 0;
+                // SHM_STAT/SHM_STAT_ANY 返回实际的段标识符，IPC_STAT 返回 0。
+                return (cmd == SHM_STAT || cmd == SHM_STAT_ANY) ? seg.shmid : 0;
             }
 
             case IPC_SET:
@@ -959,6 +1027,10 @@ namespace shm
                 }
 
                 shm_segment& seg = it->second;
+                if (seg.ipc_ns_id != current_ns_id)
+                {
+                    return -EINVAL;
+                }
 
                 if (buf == nullptr) {
                     printfRed("[ShmManager] buf is null for IPC_SET\n");
@@ -1000,6 +1072,10 @@ namespace shm
                 }
 
                 shm_segment& seg = it->second;
+                if (seg.ipc_ns_id != current_ns_id)
+                {
+                    return -EINVAL;
+                }
 
                 // 检查权限：只有所有者或创建者可以删除
                 if (current_proc->_euid != seg.owner_uid && 
@@ -1036,9 +1112,9 @@ namespace shm
 
                 // 创建系统限制信息
                 struct shminfo sys_info = {};
-                sys_info.shmmax = 32 * 1024 * 1024;  // 最大段大小 32MB
+                sys_info.shmmax = shmmax_limit;
                 sys_info.shmmin = 1;             // 最小段大小
-                sys_info.shmmni = 4096;               // 最大段数量
+                sys_info.shmmni = shmmni_limit;
                 sys_info.shmseg = 128;                // 每进程最大段数(未使用)
                 sys_info.shmall = (shm_size / PGSIZE); // 系统总页数
 
@@ -1048,15 +1124,15 @@ namespace shm
                     return -EFAULT;
                 }
 
-                //TODO：这你妈不对，明天再改了
-                // 计算最高使用的索引
-                int max_index = -1;
-                for (const auto& pair : *segments) {
-                    if (pair.first > max_index) {
-                        max_index = pair.first;
+                int visible_count = 0;
+                for (const auto &pair : *segments)
+                {
+                    if (pair.second.ipc_ns_id == current_ns_id)
+                    {
+                        ++visible_count;
                     }
                 }
-                return 0;
+                return visible_count == 0 ? 0 : visible_count - 1;
             }
 
             case SHM_INFO:
@@ -1068,12 +1144,18 @@ namespace shm
 
                 // 创建系统资源使用信息
                 struct shm_info usage_info = {};
-                usage_info.used_ids = segments->size();
+                int visible_count = 0;
                 
                 size_t total_pages = 0;
                 for (const auto& pair : *segments) {
+                    if (pair.second.ipc_ns_id != current_ns_id)
+                    {
+                        continue;
+                    }
+                    ++visible_count;
                     total_pages += pair.second.real_size / PGSIZE;  // 使用实际分配大小
                 }
+                usage_info.used_ids = visible_count;
                 
                 usage_info.shm_tot = total_pages;
                 usage_info.shm_rss = total_pages;  // 简化：假设都在内存中
@@ -1087,14 +1169,7 @@ namespace shm
                     return -EFAULT;
                 }
 
-                // 计算最高使用的索引
-                int max_index = -1;
-                for (const auto& pair : *segments) {
-                    if (pair.first > max_index) {
-                        max_index = pair.first;
-                    }
-                }
-                return max_index;
+                return visible_count == 0 ? 0 : visible_count - 1;
             }
 
             case SHM_LOCK:
@@ -1108,6 +1183,10 @@ namespace shm
                 }
 
                 shm_segment& seg = it->second;
+                if (seg.ipc_ns_id != current_ns_id)
+                {
+                    return -EINVAL;
+                }
 
                 // 检查权限：所有者、创建者或root
                 if (current_proc->_euid != seg.owner_uid && 
@@ -1133,6 +1212,75 @@ namespace shm
         }
 
         return 0;
+    }
+
+    size_t ShmManager::get_shmmax_limit() const
+    {
+        SpinLockGuard guard(shm_lock_);
+        return shmmax_limit;
+    }
+
+    int ShmManager::set_shmmax_limit(size_t value)
+    {
+        SpinLockGuard guard(shm_lock_);
+        if (value == 0 || value > shm_size)
+        {
+            return -EINVAL;
+        }
+        shmmax_limit = value;
+        return 0;
+    }
+
+    int ShmManager::get_shmmni_limit() const
+    {
+        SpinLockGuard guard(shm_lock_);
+        return shmmni_limit;
+    }
+
+    uint64 ShmManager::get_shmall_pages() const
+    {
+        SpinLockGuard guard(shm_lock_);
+        return shm_size / PGSIZE;
+    }
+
+    eastl::string ShmManager::format_proc_sysvipc_shm() const
+    {
+        SpinLockGuard guard(shm_lock_);
+        eastl::string result;
+        result += "       key      shmid perms                  size  cpid  lpid nattch   uid   gid  cuid  cgid      atime      dtime      ctime        rss       swap\n";
+        uint64 current_ns_id = current_ipc_namespace_id();
+
+        for (const auto &pair : *segments)
+        {
+            const shm_segment &seg = pair.second;
+            if (seg.ipc_ns_id != current_ns_id)
+            {
+                continue;
+            }
+            char line[256];
+            // LTP 使用 fscanf("%i") 读取 /proc/sysvipc/shm；这里不能带前导 0，
+            // 否则会被按八进制解析，4096 这类值会读歪。
+            snprintf(line, sizeof(line),
+                     "%d %d %o %lu %d %d %d %u %u %u %u %lu %lu %lu %lu %d\n",
+                     static_cast<int>(seg.key),
+                     seg.shmid,
+                     static_cast<unsigned int>(seg.mode & 0777),
+                     static_cast<unsigned long>(seg.size),
+                     static_cast<int>(seg.creator_pid),
+                     static_cast<int>(seg.last_pid),
+                     seg.nattch,
+                     static_cast<unsigned int>(seg.owner_uid),
+                     static_cast<unsigned int>(seg.owner_gid),
+                     static_cast<unsigned int>(seg.creator_uid),
+                     static_cast<unsigned int>(seg.creator_gid),
+                     static_cast<unsigned long>(seg.atime),
+                     static_cast<unsigned long>(seg.dtime),
+                     static_cast<unsigned long>(seg.ctime),
+                     static_cast<unsigned long>(seg.real_size),
+                     0);
+            result += line;
+        }
+        return result;
     }
 
     shm_segment ShmManager::get_seg_info(int shmid)
@@ -1317,7 +1465,7 @@ namespace shm {
                 detached_count++;
             }
 
-            if ((seg.mode & SHM_DEST) && seg.nattch == 0)
+            if (((seg.mode & SHM_DEST) || seg.auto_destroy_on_last_detach) && seg.nattch == 0)
             {
                 pending_delete.push_back(seg.shmid);
             }

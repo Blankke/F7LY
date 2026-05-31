@@ -1,10 +1,13 @@
 #include "ipc_param.hh"
 #include <EASTL/unordered_map.h>
 #include <EASTL/vector.h>
+#include <EASTL/string.h>
 #include "devs/spinlock.hh"
 #include "proc.hh"
 namespace shm
 {
+    constexpr uint64 k_mmap_backing_ipc_namespace_id = 0;
+
     struct attached_entry
     {
         uint tid;     // 线程ID（全局唯一标识线程）
@@ -14,6 +17,7 @@ namespace shm
     struct shm_segment
     {
         int shmid;         // 共享内存段ID
+        uint64 ipc_ns_id;  // 所属 IPC namespace；mmap 内部后端使用 0，不参与 SysV key 隔离
         key_t key;         // 共享内存段键值
         size_t size;       // 用户请求的原始大小（POSIX标准要求）
         size_t real_size;  // 实际分配的页对齐大小（用于内存管理）
@@ -56,6 +60,10 @@ namespace shm
         
         // 附加计数
         int nattch;        // 当前附加的进程数量
+
+        // mmap(MAP_SHARED) 借用 SysV SHM 作为后端时，希望“最后一个映射离开后自动销毁”。
+        // 这和真正的 shmget/shmat 生命周期不同，所以单独记一位，避免把 SysV 共享段也误删。
+        bool auto_destroy_on_last_detach;
         
         // 序列号
         unsigned short seq; // 序列号
@@ -87,6 +95,8 @@ namespace shm
         
         // 空闲内存块管理 - 使用vector来存储空闲块，保持按地址排序
         eastl::vector<free_block> free_blocks;
+        size_t shmmax_limit; // /proc/sys/kernel/shmmax，可由 LTP save_restore 临时调整
+        int shmmni_limit;    // /proc/sys/kernel/shmmni，限制系统共享段数量
         
         // 私有内存管理方法
         uint64 allocate_memory(size_t size);  // 从空闲块中分配内存
@@ -94,9 +104,9 @@ namespace shm
         void merge_adjacent_blocks();  // 合并相邻的空闲块
         
         // 私有辅助方法
-        int create_new_segment_locked(key_t key, size_t size, int shmflg);  // 需要在持锁状态下创建共享段
+        int create_new_segment_locked(key_t key, size_t size, int shmflg, uint64 ipc_ns_id);  // 需要在持锁状态下创建共享段
         int delete_seg_locked(int shmid);  // 需要在持锁状态下删除共享段
-        eastl::unordered_map<int, shm_segment>::iterator find_segment_by_key_locked(key_t key);  // 需要在持锁状态下按 key 查找段
+        eastl::unordered_map<int, shm_segment>::iterator find_segment_by_key_locked(key_t key, uint64 ipc_ns_id);  // 需要在持锁状态下按 key 查找段
         bool check_segment_permission(const shm_segment& seg, uid_t uid, gid_t gid, mode_t requested_mode);  // 检查权限
         bool check_segment_read_permission(const shm_segment& seg, uid_t uid, gid_t gid);  // 检查读权限
         bool check_segment_attach_permission(const shm_segment& seg, uid_t uid, gid_t gid, bool need_write);  // 检查附加权限
@@ -109,11 +119,13 @@ namespace shm
 
         // 创建共享内存段
         int create_seg(key_t key, size_t size, int shmflg);
+        int create_seg_in_namespace(key_t key, size_t size, int shmflg, uint64 ipc_ns_id);
 
         // 通过 key 查询现有共享段。
         // 这里专门给 mmap(MAP_SHARED) 的失败清理路径使用，
         // 用来区分“当前调用新建的段”和“复用了历史段”，避免误删其他映射正在使用的后端。
         int find_seg_by_key(key_t key);
+        int find_seg_by_key_in_namespace(key_t key, uint64 ipc_ns_id);
 
         // 删除共享内存段
         int delete_seg(int shmid);
@@ -124,7 +136,7 @@ namespace shm
         //   char* shmaddr = (char*)attach_seg(shmid, (void*)0x1000, 0);  // 指定地址
         //   char* shmaddr = (char*)attach_seg(shmid, (void*)0x1234, SHM_RND); // 地址向下对齐
         //   char* shmaddr = (char*)attach_seg(shmid, nullptr, SHM_RDONLY);    // 只读映射
-        void *attach_seg(int shmid, void *shmaddr = nullptr, int shmflg = 0);
+        void *attach_seg(int shmid, void *shmaddr = nullptr, int shmflg = 0, bool register_vma = true);
 
         // 解除映射共享内存段
         int detach_seg(void *addr);
@@ -161,6 +173,12 @@ namespace shm
         int set_seg_info(int shmid, const shm_segment &seg_info);
 
         key_t ftok(const char *__pathname, int __proj_id);
+
+        size_t get_shmmax_limit() const;
+        int set_shmmax_limit(size_t value);
+        int get_shmmni_limit() const;
+        uint64 get_shmall_pages() const;
+        eastl::string format_proc_sysvipc_shm() const;
         
         // 调试和监控方法
         void print_memory_status() const;  // 打印内存使用状况

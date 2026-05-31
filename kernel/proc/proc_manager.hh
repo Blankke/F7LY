@@ -21,8 +21,10 @@ namespace proc
         SpinLock _pid_lock;        // 进程ID锁
         SpinLock _tid_lock;        // 线程ID锁
         SpinLock _wait_lock;       // 等待锁
+        SpinLock _ns_lock;         // namespace ID 分配锁
         int _cur_pid;              // 当前分配的最大PID
         int _cur_tid;              // 当前分配的最大TID
+        uint64 _next_ipc_ns_id;    // 下一个 SysV IPC namespace ID
         Pcb *_init_proc;           // 用户init进程
         uint _last_alloc_proc_gid; // 上次分配的进程组ID
 
@@ -38,6 +40,8 @@ namespace proc
         bool change_state(Pcb *p, ProcState state);
         void alloc_pid(Pcb *p);
         void alloc_tid(Pcb *p);
+        uint64 alloc_ipc_namespace_id();
+        void unshare_ipc_namespace(Pcb *p);
         Pcb *alloc_proc();
         void freeproc(Pcb *p);
         void freeproc_creation_failed(Pcb *p);
@@ -88,6 +92,7 @@ namespace proc
         int open(int dir_fd, eastl::string path, uint flags, int mode = 0644);
         int close(int fd);
         int fstat(int fd, fs::Kstat *buf);
+        int flush_open_files_for_path(const eastl::string &path);
         int mkdir(int dir_fd, eastl::string path, uint mode);
         int mknod(int dir_fd, eastl::string path, mode_t mode, dev_t dev);
         int unlink(int fd, eastl::string path, int flags);
@@ -127,7 +132,7 @@ namespace proc
         // 私有辅助函数
         bool is_target_child(Pcb *child, Pcb *parent, int child_pid);
         bool has_remaining_threads(Pcb *parent, int target_pid);
-        void mark_thread_group_killed(Pcb *current);
+        void mark_thread_group_killed(Pcb *current, int fatal_signal = 0);
     };
 
     extern ProcessManager k_pm; // 全局进程管理器实例

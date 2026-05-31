@@ -17,6 +17,7 @@
 #include "fs/vfs/vfs_utils.hh"
 #include "loop_device.hh"
 #include "tm/time.hh"
+#include "shm/shm_manager.hh"
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
 namespace fs
@@ -694,8 +695,30 @@ namespace fs
         }
         if (_content_provider->is_readable())
         {
-            printfRed("偷一手这里"); //专为loop
-            return 64 * 1024;
+            off_t new_off = _file_ptr;
+            switch (whence)
+            {
+            case SEEK_SET:
+                if (offset < 0)
+                    return -EINVAL;
+                new_off = offset;
+                break;
+            case SEEK_CUR:
+                new_off = _file_ptr + offset;
+                if (new_off < 0)
+                    return -EINVAL;
+                break;
+            case SEEK_END:
+                if (offset < 0)
+                    return -EINVAL;
+                new_off = offset;
+                break;
+            default:
+                printfRed("virtual_file::lseek: invalid whence %d", whence);
+                return -EINVAL;
+            }
+            _file_ptr = new_off;
+            return _file_ptr;
         }
         // 对于动态内容，确保获得最新的文件大小
         if (_content_provider->is_dynamic()) {
@@ -1257,7 +1280,7 @@ namespace fs
             
             // 地址范围 (start-end)
             char addr_buf[64];
-            snprintf(addr_buf, sizeof(addr_buf), "%016lx-%016lx ", 
+            snprintf(addr_buf, sizeof(addr_buf), "%lx-%lx ",
                     (unsigned long)vm.addr, (unsigned long)(vm.addr + vm.len));
             result += addr_buf;
             
@@ -1310,7 +1333,7 @@ namespace fs
             
             result += "\n";
         }
-        
+
         return result;
     }
 
@@ -1318,106 +1341,89 @@ namespace fs
     
     eastl::string ProcSelfPagemapProvider::generate_content()
     {
+        return "";
+    }
+
+    long ProcSelfPagemapProvider::handle_read(uint64 buf, size_t len, long off)
+    {
         proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
-        if (!pcb) {
-            return "";
+        if (pcb == nullptr || buf == 0 || len == 0 || off < 0)
+        {
+            return -EINVAL;
         }
 
-        // /proc/self/pagemap 是二进制文件，每个虚拟页面对应8字节
-        // 由于当前virtual_file只支持文本，我们先返回二进制数据的字符串表示
-        // 在真实实现中，这应该生成二进制数据并支持二进制读取
-        
-        eastl::string result;
-        
-        // 获取进程的页表
         mem::PageTable *pt_ptr = pcb->get_pagetable();
-        if (!pt_ptr || !pt_ptr->get_base()) {
-            return ""; // 页表不存在
-        }
-        mem::PageTable &pt = *pt_ptr;
-        
-        // 遍历所有VMA区域，只检查已映射的虚拟页面
         proc::VMA *vma_data = pcb->get_vma();
-        if (!vma_data) {
-            return "";
+        if (pt_ptr == nullptr || !pt_ptr->get_base() || vma_data == nullptr)
+        {
+            return 0;
         }
-        
-        // 计算需要的总页面数
-        uint64 total_pages = 0;
-        for (int i = 0; i < proc::NVMA; i++) {
-            proc::vma &vm = vma_data->_vm[i];
-            if (vm.used) {
-                uint64 vma_pages = (vm.len + PGSIZE - 1) / PGSIZE;
-                total_pages += vma_pages;
-            }
+
+        // /proc/self/pagemap 是稀疏二进制文件：偏移=(虚拟页号 * 8)。
+        // mmap12 会直接 seek 到映射地址对应的条目，所以这里不能像普通文本 proc 节点那样
+        // 把“已有 VMA”压缩成一段连续 buffer，而要按 off 反推虚拟页号现算现读。
+        if ((off % (long)sizeof(uint64_t)) != 0)
+        {
+            return -EINVAL;
         }
-        
-        // 预分配空间
-        result.reserve(total_pages * 8);
-        
-        // 遍历每个VMA区域
-        for (int i = 0; i < proc::NVMA; i++) {
-            proc::vma &vm = vma_data->_vm[i];
-            if (!vm.used) {
-                continue;
-            }
-            
-            // 遍历VMA中的每一页
-            uint64 vma_start = PGROUNDDOWN(vm.addr);
-            uint64 vma_end = PGROUNDUP(vm.addr + vm.len);
-            
-            for (uint64 va = vma_start; va < vma_end; va += PGSIZE) {
-                uint64 pagemap_entry = 0;
-                
-                // 获取页表项
-                mem::Pte pte = pt.walk(va, false); // 不分配新页面
-                
-                if (!pte.is_null() && pte.is_valid()) {
-                    // 页面存在
-                    void *pa = pte.pa();
-                    uint64 pfn = (uint64)pa >> 12; // 页帧号 = 物理地址 >> 12
-                    
-                    // 构造pagemap条目
-                    // 位0-54: 页面帧号(PFN)
-                    pagemap_entry |= (pfn & 0x7FFFFFFFFFFFFFULL);
-                    
-                    // 位55: 软脏位 (暂时设为0)
-                    // 位56: 页面独占映射 (暂时设为1，表示进程独占)
-                    pagemap_entry |= (1ULL << 56);
-                    
-                    // 位57: uffd-wp写保护位 (暂时设为0)
-                    // 位58-60: 零
-                    
-                    // 位61: 页面是文件页或共享匿名页
-                    bool is_file_page = false;
-                    if (vm.vfile && vm.vfd != -1) {
-                        is_file_page = true; // 文件映射
-                    }
-                    if (vm.flags & MAP_SHARED) {
-                        is_file_page = true; // 共享匿名页
-                    }
-                    if (is_file_page) {
-                        pagemap_entry |= (1ULL << 61);
-                    }
-                    
-                    // 位62: 页面已交换 (暂时设为0，我们没有交换)
-                    // 位63: 页面存在
-                    pagemap_entry |= (1ULL << 63);
-                } else {
-                    // 页面不存在或无效，pagemap_entry保持为0
+
+        char *dst = reinterpret_cast<char *>(buf);
+        size_t done = 0;
+        while (done + sizeof(uint64_t) <= len)
+        {
+            uint64 page_index = (static_cast<uint64>(off) + done) / sizeof(uint64_t);
+            uint64 va = page_index * PGSIZE;
+            uint64 pagemap_entry = 0;
+
+            proc::vma *covering_vm = nullptr;
+            for (int i = 0; i < proc::NVMA; ++i)
+            {
+                proc::vma &vm = vma_data->_vm[i];
+                if (!vm.used)
+                {
+                    continue;
                 }
-                
-                // 将8字节的pagemap条目作为二进制数据添加到结果中
-                // 注意：这里我们将二进制数据转换为字符串，实际应该是二进制
-                char entry_bytes[8];
-                for (int j = 0; j < 8; j++) {
-                    entry_bytes[j] = (char)((pagemap_entry >> (j * 8)) & 0xFF);
+                uint64 vm_start = PGROUNDDOWN(vm.addr);
+                uint64 vm_end = PGROUNDUP(vm.addr + vm.len);
+                if (va >= vm_start && va < vm_end)
+                {
+                    covering_vm = &vm;
+                    break;
                 }
-                result.append(entry_bytes, 8);
             }
+
+            mem::Pte pte = pt_ptr->walk(va, false);
+            if (covering_vm != nullptr && !pte.is_null() && pte.is_valid())
+            {
+                uint64 pfn = reinterpret_cast<uint64>(pte.pa()) >> 12;
+                pagemap_entry |= (pfn & 0x7FFFFFFFFFFFFFULL);
+                pagemap_entry |= (1ULL << 56); // 独占映射位，当前先按最小可用语义返回 1
+
+                bool is_file_or_shared = false;
+                if (covering_vm->vfile != nullptr && covering_vm->vfd != -1)
+                {
+                    is_file_or_shared = true;
+                }
+                if (covering_vm->flags & MAP_SHARED)
+                {
+                    is_file_or_shared = true;
+                }
+                if (is_file_or_shared)
+                {
+                    pagemap_entry |= (1ULL << 61);
+                }
+
+                pagemap_entry |= (1ULL << 63); // present
+            }
+
+            for (int byte = 0; byte < 8; ++byte)
+            {
+                dst[done + byte] = static_cast<char>((pagemap_entry >> (byte * 8)) & 0xff);
+            }
+            done += sizeof(uint64_t);
         }
-        
-        return result;
+
+        return static_cast<long>(done);
     }
 
     // ======================== ProcSelfStatusProvider 实现 ========================
@@ -1497,11 +1503,29 @@ namespace fs
         
         // VmPeak, VmSize: 虚拟内存大小（KB）
         uint64 vm_size_kb = pcb->get_size() / 1024;
+        uint64 vm_locked_kb = 0;
+        proc::VMA *vma_data = pcb->get_vma();
+        if (vma_data != nullptr)
+        {
+            for (int i = 0; i < proc::NVMA; ++i)
+            {
+                proc::vma &vm = vma_data->_vm[i];
+                if (!vm.used)
+                {
+                    continue;
+                }
+                vm_size_kb += static_cast<uint64>(PGROUNDUP(vm.len)) / 1024;
+                if (vm.flags & MAP_LOCKED)
+                {
+                    vm_locked_kb += static_cast<uint64>(PGROUNDUP(vm.len)) / 1024;
+                }
+            }
+        }
         result += "VmPeak:\t" + int_to_string(vm_size_kb) + " kB\n";
         result += "VmSize:\t" + int_to_string(vm_size_kb) + " kB\n";
         
-        // VmLck, VmPin, VmHWM, VmRSS（暂时设为0或简化值）
-        result += "VmLck:\t0 kB\n";
+        // VmLck 至少要把 MAP_LOCKED 的 VMA 统计出来，mmap14 会据此验收。
+        result += "VmLck:\t" + int_to_string(vm_locked_kb) + " kB\n";
         result += "VmPin:\t0 kB\n"; 
         result += "VmHWM:\t" + int_to_string(vm_size_kb) + " kB\n";
         result += "VmRSS:\t" + int_to_string(vm_size_kb) + " kB\n";
@@ -1522,12 +1546,12 @@ namespace fs
         
         // SigPnd, ShdPnd: 待处理信号掩码
         char sig_buf[32];
-        // sprintf(sig_buf, "%016lx", pcb->_signal);
+        snprintf(sig_buf, sizeof(sig_buf), "%016lx", static_cast<unsigned long>(pcb->_signal));
         result += "SigPnd:\t" + eastl::string(sig_buf) + "\n";
         result += "ShdPnd:\t0000000000000000\n";
         
         // SigBlk: 阻塞信号掩码
-        // sprintf(sig_buf, "%016lx", pcb->_sigmask);
+        snprintf(sig_buf, sizeof(sig_buf), "%016lx", static_cast<unsigned long>(pcb->_sigmask));
         result += "SigBlk:\t" + eastl::string(sig_buf) + "\n";
         result += "SigIgn:\t0000000000000000\n";
         result += "SigCgt:\t0000000000000000\n";
@@ -1566,19 +1590,35 @@ namespace fs
     // ======================== shmmax提供者实现 ========================
     eastl::string ProcSysKernelShmmaxProvider::generate_content()
     {
-        // 返回系统共享内存段的最大大小，单位为字节
-        // 这里假设最大值为 32MB
-        const uint64 shmmax = 32 * 1024 * 1024; // 32MB
+        // 返回系统共享内存段的最大大小，单位为字节；LTP 会临时写入该 sysctl。
+        const uint64 shmmax = shm::k_smm.get_shmmax_limit();
         char _buffer[32];
         snprintf(_buffer, sizeof(_buffer), "%lu\n", shmmax);
         eastl::string result(_buffer);
         return result;
     }
+
+    long ProcSysKernelShmmaxProvider::handle_write(uint64 buf, size_t len, long off)
+    {
+        int value = 0;
+        long ret = parse_single_int_from_user(buf, len, off, &value);
+        if (ret < 0)
+        {
+            return ret;
+        }
+        int set_ret = shm::k_smm.set_shmmax_limit(static_cast<size_t>(value));
+        return set_ret < 0 ? set_ret : ret;
+    }
+
+    eastl::string ProcSysvipcShmProvider::generate_content()
+    {
+        return shm::k_smm.format_proc_sysvipc_shm();
+    }
+
     eastl::string ProcSysKernelShmmniProvider::generate_content()
     {
-        // 返回系统共享内存段的最小大小，单位为字节
-        // 这里假设最大值为 32MB
-        const uint64 shmmax = 4 * 1024; // 4KB
+        // 返回系统共享内存标识符数量上限，单位为段。
+        const uint64 shmmax = shm::k_smm.get_shmmni_limit();
         char _buffer[32];
         snprintf(_buffer, sizeof(_buffer), "%lu\n", shmmax);
         eastl::string result(_buffer);
@@ -1586,9 +1626,8 @@ namespace fs
     }
     eastl::string ProcSysKernelShmallProvider::generate_content()
     {
-        // 返回系统共享内存段的总大小，单位为字节
-        // 这里假设最大值为 32MB
-        const uint64 shmall = 16384;
+        // 返回系统共享内存总页数。
+        const uint64 shmall = shm::k_smm.get_shmall_pages();
         char _buffer[32];
         snprintf(_buffer, sizeof(_buffer), "%lu\n", shmall);
         eastl::string result(_buffer);
