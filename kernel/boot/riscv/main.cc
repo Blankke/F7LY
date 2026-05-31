@@ -51,8 +51,6 @@ extern "C" void main(uint64 hartid, uint64 dtb_addr)
     // riscv::r_mstatus();
 
     k_printer.init(); // 这里也初始化了console和uart
-    enable_printf();
-
     printfWhite("\n\n"); // 留出顶部空白
     print_f7ly();
     print_fuckyou();

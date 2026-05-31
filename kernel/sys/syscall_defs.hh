@@ -236,7 +236,8 @@ namespace syscall
         SYS_userdebug2 = 2022,
         SYS_userdebug3 = 2023,
         SYS_userdebug4 = 2024,
-        SYS_shutdown = 2025
+        SYS_userdebug5 = 2025,
+        SYS_shutdown = 2026
     };
 
     enum SYS_clone

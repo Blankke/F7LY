@@ -1114,16 +1114,8 @@ namespace mem
 #endif
             if (is_reserved_page)
             {
-                proc::Pcb *cur = proc::k_pm.get_cur_pcb();
-                printf("\33[1;31m[vmunmap] 触碰保留页 va=%p req_start=%p npages=%p do_free=%d cur_pid=%d cur_tid=%d state=%d pt_base=%p\33[0m\n",
-                       (void *)a,
-                       (void *)va,
-                       (void *)npages,
-                       do_free,
-                       cur ? cur->_pid : -1,
-                       cur ? cur->_tid : -1,
-                       cur ? (int)cur->_state : -1,
-                       (void *)pt.get_base());
+                // 这些保留页由专门路径管理。
+                // 统一清理流程允许调用者把它们一起带进来，但这属于正常退出场景，不应反复打印告警。
             }
             if ((pte = pt.walk(a, 0)).is_null())
                 continue;

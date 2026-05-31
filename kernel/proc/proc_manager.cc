@@ -698,6 +698,8 @@ namespace proc
                 // 设置调度相关字段：默认调度槽与优先级
                 p->_slot = default_proc_slot;
                 p->_priority = default_proc_prio;
+                p->_io_priority_override = default_proc_prio;
+                p->_has_io_priority_override = false;
 
                 // 初始化CPU亲和性掩码：默认可以在任何CPU上运行
                 p->_cpu_mask.fill();
@@ -930,7 +932,9 @@ namespace proc
         p->_state = ProcState::UNUSED; // 标记进程控制块为未使用
 
         p->_slot = 0;                 // 重置时间片
-        p->_priority = default_proc_prio; // 重置 nice 值，避免 PCB 复用带出历史优先级
+                p->_priority = default_proc_prio; // 重置 nice 值，避免 PCB 复用带出历史优先级
+                p->_io_priority_override = default_proc_prio;
+                p->_has_io_priority_override = false;
 
         // 重新初始化CPU亲和性掩码：默认可以在任何CPU上运行
         p->_cpu_mask.fill();

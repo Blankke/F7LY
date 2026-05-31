@@ -67,3 +67,4 @@ logs/tmp/
 !logs/legacy/
 !logs/legacy/output_la.txt
 !logs/legacy/output_rv.txt
+.venv/

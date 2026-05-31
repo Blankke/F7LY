@@ -7,6 +7,21 @@
 
 namespace virtio_blk
 {
+    namespace
+    {
+        bool g_priority_borrow_experiment_mode = false;
+    }
+
+    void set_priority_borrow_experiment_mode(bool enabled)
+    {
+        g_priority_borrow_experiment_mode = enabled;
+    }
+
+    bool priority_borrow_experiment_mode_enabled()
+    {
+        return g_priority_borrow_experiment_mode;
+    }
+
     uint64 VirtioBlkQueue::now_us()
     {
         tmm::timeval tv = tmm::k_tm.get_time_val();
@@ -28,6 +43,11 @@ namespace virtio_blk
             }
         }
         return -1;
+    }
+
+    bool VirtioBlkQueue::has_multiple_pending_class(uint32 pending_mask)
+    {
+        return pending_mask != 0 && (pending_mask & (pending_mask - 1U)) != 0;
     }
 
     bool VirtioBlkQueue::has_lower_pending_class(uint32 pending_mask, int service_class)
@@ -63,6 +83,7 @@ namespace virtio_blk
         scheduler_.reset();
         reset_bandwidth_stats_locked();
         reset_priority_trace_locked();
+        memset(inflight_by_class_, 0, sizeof(inflight_by_class_));
 
         for (int i = 0; i < k_queue_size; ++i)
         {
@@ -98,14 +119,28 @@ namespace virtio_blk
 
     void VirtioBlkQueue::reset_priority_trace_locked()
     {
+        priority_trace_.total_dispatches = 0;
         priority_trace_.contended_dispatches = 0;
         priority_trace_.high_wins = 0;
         priority_trace_.low_while_high_pending = 0;
-        priority_trace_.last_report_contended = 0;
+        priority_trace_.last_report_dispatch = 0;
         for (int i = 0; i < PriorityBorrowScheduler::k_class_count; ++i)
         {
             priority_trace_.selected_by_class[i] = 0;
         }
+    }
+
+    uint32 VirtioBlkQueue::inflight_class_mask_locked() const
+    {
+        uint32 mask = 0;
+        for (int service_class = 0; service_class < PriorityBorrowScheduler::k_class_count; ++service_class)
+        {
+            if (inflight_by_class_[service_class] != 0)
+            {
+                mask |= (1U << service_class);
+            }
+        }
+        return mask;
     }
 
     void VirtioBlkQueue::record_priority_trace_locked(uint32 pending_mask, const IoRequest *request)
@@ -115,51 +150,55 @@ namespace virtio_blk
             return;
         }
 
-        int highest_class = first_pending_class(pending_mask);
-        if (highest_class < 0 || !has_lower_pending_class(pending_mask, highest_class))
-        {
-            return;
-        }
-
+        uint32 inflight_mask = inflight_class_mask_locked();
+        uint32 combined_mask = pending_mask | inflight_mask;
+        int highest_class = first_pending_class(combined_mask);
         int selected_class = request->service_class;
-        ++priority_trace_.contended_dispatches;
+        ++priority_trace_.total_dispatches;
         if (selected_class >= 0 && selected_class < PriorityBorrowScheduler::k_class_count)
         {
             ++priority_trace_.selected_by_class[selected_class];
         }
 
-        if (selected_class == highest_class)
+        bool combined_contended = highest_class >= 0 && has_lower_pending_class(combined_mask, highest_class);
+        if (combined_contended)
         {
-            ++priority_trace_.high_wins;
-        }
-        else if (selected_class > highest_class)
-        {
-            ++priority_trace_.low_while_high_pending;
+            ++priority_trace_.contended_dispatches;
+            if (selected_class == highest_class)
+            {
+                ++priority_trace_.high_wins;
+            }
+            else if (selected_class > highest_class)
+            {
+                ++priority_trace_.low_while_high_pending;
+            }
         }
 
-        constexpr uint64 k_report_interval = 8;
-        bool should_report = priority_trace_.contended_dispatches == 1 ||
-                             priority_trace_.contended_dispatches - priority_trace_.last_report_contended >= k_report_interval ||
+        constexpr uint64 k_bootstrap_dispatch_reports = 48;
+        constexpr uint64 k_report_interval = 128;
+        bool should_report = combined_contended ||
+                             priority_trace_.total_dispatches <= k_bootstrap_dispatch_reports ||
+                             (priority_trace_.total_dispatches - priority_trace_.last_report_dispatch) >= k_report_interval ||
                              priority_trace_.low_while_high_pending != 0;
         if (!should_report)
         {
             return;
         }
 
-        priority_trace_.last_report_contended = priority_trace_.contended_dispatches;
-        printf("[priority-borrow] TRACE contended=%lu high_wins=%lu low_while_high=%lu "
-               "class0=%lu class1=%lu class2=%lu class3=%lu class4=%lu class5=%lu class6=%lu class7=%lu\n",
+        priority_trace_.last_report_dispatch = priority_trace_.total_dispatches;
+        printf("[priority-borrow] TRACE seq=%lu pending=0x%x inflight=0x%x combined=0x%x choose=%d "
+               "pid=%u nice=%d bytes=%lu contended=%lu high_wins=%lu low_while_high=%lu\n",
+               (unsigned long)priority_trace_.total_dispatches,
+               pending_mask,
+               inflight_mask,
+               combined_mask,
+               selected_class,
+               request->submit_pid,
+               request->submit_nice,
+               (unsigned long)request->request_bytes,
                (unsigned long)priority_trace_.contended_dispatches,
                (unsigned long)priority_trace_.high_wins,
-               (unsigned long)priority_trace_.low_while_high_pending,
-               (unsigned long)priority_trace_.selected_by_class[0],
-               (unsigned long)priority_trace_.selected_by_class[1],
-               (unsigned long)priority_trace_.selected_by_class[2],
-               (unsigned long)priority_trace_.selected_by_class[3],
-               (unsigned long)priority_trace_.selected_by_class[4],
-               (unsigned long)priority_trace_.selected_by_class[5],
-               (unsigned long)priority_trace_.selected_by_class[6],
-               (unsigned long)priority_trace_.selected_by_class[7]);
+               (unsigned long)priority_trace_.low_while_high_pending);
     }
 
     void VirtioBlkQueue::record_completion_stats_locked(const IoRequest *request,
@@ -333,6 +372,10 @@ namespace virtio_blk
         __sync_synchronize();
         avail_[1] = static_cast<uint16>(avail_[1] + 1);
 
+        if (request->service_class >= 0 && request->service_class < PriorityBorrowScheduler::k_class_count)
+        {
+            ++inflight_by_class_[request->service_class];
+        }
         ++inflight_count_;
         transport_->notify_queue(0);
         return true;
@@ -341,8 +384,10 @@ namespace virtio_blk
     bool VirtioBlkQueue::dispatch_pending_locked()
     {
         bool submitted = false;
+        const int dispatch_window =
+            priority_borrow_experiment_mode_enabled() ? k_priority_borrow_experiment_dispatch_window : k_queue_size;
 
-        while (has_free_desc_chain_locked())
+        while (inflight_count_ < dispatch_window && has_free_desc_chain_locked())
         {
             uint32 pending_mask = scheduler_.pending_class_mask();
             IoRequest *request = scheduler_.dequeue_next();
@@ -387,6 +432,12 @@ namespace virtio_blk
 
             if (done != nullptr)
             {
+                if (done->service_class >= 0 &&
+                    done->service_class < PriorityBorrowScheduler::k_class_count &&
+                    inflight_by_class_[done->service_class] != 0)
+                {
+                    --inflight_by_class_[done->service_class];
+                }
                 done->io_status = 0;
                 done->completed = true;
                 if (done->completion_type == IoCompletionType::BufferCache && done->owner_buf != nullptr)
@@ -447,7 +498,7 @@ namespace virtio_blk
         request.write = write != 0;
         request.request_bytes = BSIZE;
         request.submit_pid = current ? current->get_pid() : 0;
-        request.submit_nice = current ? current->get_priority() : proc::default_proc_prio;
+        request.submit_nice = current ? current->get_io_priority() : proc::default_proc_prio;
         request.wait_channel = b;
         request.completion_type = IoCompletionType::BufferCache;
         request.owner_buf = b;
@@ -469,7 +520,7 @@ namespace virtio_blk
         request.write = write;
         request.request_bytes = data_len;
         request.submit_pid = current ? current->get_pid() : 0;
-        request.submit_nice = current ? current->get_priority() : proc::default_proc_prio;
+        request.submit_nice = current ? current->get_io_priority() : proc::default_proc_prio;
         request.wait_channel = &request;
         request.completion_type = IoCompletionType::CallerWait;
         request.owner_buf = nullptr;

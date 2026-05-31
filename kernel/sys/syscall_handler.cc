@@ -60,6 +60,7 @@
 #include "net/onpstack/include/onps.hh"
 #include "net/onpstack/include/onps_utils.hh"
 #include "fs/vfs/virtual_fs.hh"
+#include "fs/drivers/virtio_blk.hh"
 #include "shm/shm_manager.hh"
 #include "devs/loop_device.hh"
 #include "devs/block_device.hh"
@@ -2623,6 +2624,7 @@ namespace syscall
         BIND_SYSCALL(userdebug2);
         BIND_SYSCALL(userdebug3);
         BIND_SYSCALL(userdebug4);
+        BIND_SYSCALL(userdebug5);
 
         printfGreen("[SyscallHandler::init]SyscallHandler initialized with %d syscall functions\n", max_syscall_funcs_num);
     }
@@ -2898,38 +2900,7 @@ namespace syscall
 
         // printf("[SyscallHandler::sys_wait4] pid: %d, wstatus_addr: %p, option: %d\n",
         //    pid, wstatus_addr, option);
-        proc::Pcb *cur = proc::k_pm.get_cur_pcb();
-        static int libcbench_wait4_trace_budget = 32;
-        bool trace_libcbench_wait4 =
-            cur != nullptr &&
-            libcbench_wait4_trace_budget > 0 &&
-            strcmp(cur->_name, "libc-bench") == 0;
-        if (trace_libcbench_wait4)
-        {
-            --libcbench_wait4_trace_budget;
-            printf("[sys_wait4][trace] proc=%s pid=%d tid=%d wait_pid=%d wstatus=%p option=0x%x epc=%p sp=%p ra=%p\n",
-                   cur->_name,
-                   cur->_pid,
-                   cur->_tid,
-                   pid,
-                   (void *)wstatus_addr,
-                   option,
-                   (void *)cur->_trapframe->epc,
-                   (void *)cur->_trapframe->sp,
-                   (void *)cur->_trapframe->ra);
-        }
         int waitret = proc::k_pm.wait4(pid, wstatus_addr, option);
-        if (trace_libcbench_wait4)
-        {
-            printf("[sys_wait4][trace] proc=%s pid=%d tid=%d -> ret=%d epc=%p sp=%p ra=%p\n",
-                   cur->_name,
-                   cur->_pid,
-                   cur->_tid,
-                   waitret,
-                   (void *)cur->_trapframe->epc,
-                   (void *)cur->_trapframe->sp,
-                   (void *)cur->_trapframe->ra);
-        }
         // printf("[SyscallHandler::sys_wait4] waitret: %d\n",waitret);
         return waitret;
     }
@@ -4398,34 +4369,7 @@ namespace syscall
         {
             return flag_ret;
         }
-        proc::Pcb *cur = proc::k_pm.get_cur_pcb();
-        static int libcbench_clone_trace_budget = 64;
-        bool trace_libcbench_clone =
-            cur != nullptr &&
-            libcbench_clone_trace_budget > 0 &&
-            (strcmp(cur->_name, "libc-bench") == 0 || strcmp(cur->_name, "libc-bench-child") == 0);
-        if (trace_libcbench_clone)
-        {
-            --libcbench_clone_trace_budget;
-            printf("[sys_clone][trace] proc=%s pid=%d tid=%d flags=0x%x stack=%p ptid=%p tls=%p ctid=%p\n",
-                   cur->_name,
-                   cur->_pid,
-                   cur->_tid,
-                   flags,
-                   (void *)stack,
-                   (void *)ptid,
-                   (void *)tls,
-                   (void *)ctid);
-        }
         clone_pid = proc::k_pm.clone(flags, stack, ptid, tls, ctid);
-        if (trace_libcbench_clone)
-        {
-            printf("[sys_clone][trace] proc=%s pid=%d tid=%d -> ret=%ld\n",
-                   cur->_name,
-                   cur->_pid,
-                   cur->_tid,
-                   (long)clone_pid);
-        }
         return clone_pid;
     }
     uint64 SyscallHandler::sys_umount2()
@@ -4557,11 +4501,11 @@ namespace syscall
 
         proc::Pcb *cur = proc::k_pm.get_cur_pcb();
         long result = proc::k_pm.brk(n);
-        static int brk_trace_budget = 256;
+        static int brk_trace_budget = 64;
         if (cur != nullptr && n != 0 && brk_trace_budget > 0)
         {
             --brk_trace_budget;
-            printf("[sys_brk][trace] proc=%s pid=%d tid=%d req=%p ret=%p heap=[%p,%p)\n",
+            printfYellow("[sys_brk][trace] proc=%s pid=%d tid=%d req=%p ret=%p heap=[%p,%p)\n",
                    cur->_name,
                    cur->_pid,
                    cur->_tid,
@@ -4589,18 +4533,6 @@ namespace syscall
         {
             printfRed("[SyscallHandler::sys_munmap] Error fetching munmap arguments\n");
             return -EINVAL;
-        }
-        proc::Pcb *cur = proc::k_pm.get_cur_pcb();
-        static int munmap_trace_budget = 256;
-        if (munmap_trace_budget > 0)
-        {
-            --munmap_trace_budget;
-            printf("[sys_munmap][trace] proc=%s pid=%d tid=%d start=%p size=%zu\n",
-                   cur ? cur->_name : "(null)",
-                   cur ? cur->_pid : -1,
-                   cur ? cur->_tid : -1,
-                   (void *)start,
-                   size);
         }
         int result = proc::k_pm.munmap((void *)start, size);
         if (result < 0)
@@ -4708,64 +4640,15 @@ namespace syscall
         }
 
         int mmap_errno = 0;
-        proc::Pcb *cur = proc::k_pm.get_cur_pcb();
         void *result = proc::k_pm.mmap((void *)addr, map_size, prot, flags, fd, offset, &mmap_errno);
-
-        static int mmap_trace_budget = 256;
-        if (cur != nullptr && mmap_trace_budget > 0)
-        {
-            --mmap_trace_budget;
-            printf("[sys_mmap][trace] proc=%s pid=%d tid=%d addr=%p len=%p prot=0x%x flags=0x%x fd=%d off=%p -> %p errno=%d\n",
-                   cur->_name,
-                   cur->_pid,
-                   cur->_tid,
-                   (void *)addr,
-                   (void *)map_size,
-                   prot,
-                   flags,
-                   fd,
-                   (void *)offset,
-                   result,
-                   mmap_errno);
-        }
         if (result == MAP_FAILED)
         {
             int err = mmap_errno != 0 ? mmap_errno : ENOMEM;
-            if (cur != nullptr && mmap_trace_budget > 0)
-            {
-                --mmap_trace_budget;
-                printf("[sys_mmap][trace] proc=%s pid=%d tid=%d fail addr=%p len=%p prot=0x%x flags=0x%x fd=%d off=%p errno=%d\n",
-                       cur->_name,
-                       cur->_pid,
-                       cur->_tid,
-                       (void *)addr,
-                       (void *)map_size,
-                       prot,
-                       flags,
-                       fd,
-                       (void *)offset,
-                       mmap_errno);
-            }
             printfRed("[SyscallHandler::sys_mmap] mmap failed with errno: %d\n", mmap_errno);
             // 内核 syscall ABI 必须返回负 errno；MAP_FAILED 是 libc 包装层
             // 看到负 errno 后给用户态返回的指针值。直接返回 -1 会把所有
             // mmap 失败误报成 EPERM，掩盖真实原因。
             return -err;
-        }
-        if (cur != nullptr && mmap_trace_budget > 0)
-        {
-            --mmap_trace_budget;
-            printf("[sys_mmap][trace] proc=%s pid=%d tid=%d ok addr=%p len=%p prot=0x%x flags=0x%x fd=%d off=%p -> %p\n",
-                   cur->_name,
-                   cur->_pid,
-                   cur->_tid,
-                   (void *)addr,
-                   (void *)map_size,
-                   prot,
-                   flags,
-                   fd,
-                   (void *)offset,
-                   result);
         }
         // if(addr==0&&map_size==1024&&prot==2&&flags==2&&fd==3&&offset==0)
         // return -1;
@@ -12727,26 +12610,6 @@ namespace syscall
 
         printfCyan("[SyscallHandler::sys_clone3] flags: 0x%lx, stack: %p, child_tid: %p, parent_tid: %p, tls: %p\n",
                    args.flags, (void *)args.stack, (void *)args.child_tid, (void *)args.parent_tid, (void *)args.tls);
-        static int libcbench_clone3_trace_budget = 32;
-        bool trace_libcbench_clone3 =
-            cur != nullptr &&
-            libcbench_clone3_trace_budget > 0 &&
-            (strcmp(cur->_name, "libc-bench") == 0 || strcmp(cur->_name, "libc-bench-child") == 0);
-        if (trace_libcbench_clone3)
-        {
-            --libcbench_clone3_trace_budget;
-            printf("[sys_clone3][trace] proc=%s pid=%d tid=%d flags=0x%lx stack=%p stack_size=%p child_tid=%p parent_tid=%p tls=%p exit_signal=%lu\n",
-                   cur->_name,
-                   cur->_pid,
-                   cur->_tid,
-                   args.flags,
-                   (void *)args.stack,
-                   (void *)args.stack_size,
-                   (void *)args.child_tid,
-                   (void *)args.parent_tid,
-                   (void *)args.tls,
-                   args.exit_signal);
-        }
 
         if (args.exit_signal > static_cast<uint64>(proc::ipc::signal::SIGRTMAX))
         {
@@ -12813,14 +12676,6 @@ namespace syscall
         uint64 clone_pid = proc::k_pm.clone(args.flags, child_stack, args.parent_tid,
                                             args.tls, args.child_tid, true,
                                             static_cast<int>(args.exit_signal));
-        if (trace_libcbench_clone3)
-        {
-            printf("[sys_clone3][trace] proc=%s pid=%d tid=%d -> ret=%ld\n",
-                   cur->_name,
-                   cur->_pid,
-                   cur->_tid,
-                   (long)clone_pid);
-        }
 
         if ((int64)clone_pid < 0)
         {
@@ -18284,7 +18139,10 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_userdebug2()
     {
-        panic("未实现该系统调用");
+        // 只打开普通 printf，便于研究场景按需采集 plain trace，
+        // 又不会把 info/warn 分组里的大量彩色调试输出一起放出来。
+        virtio_blk::set_priority_borrow_experiment_mode(true);
+        enable_printf();
         return 0;
     }
     uint64 SyscallHandler::sys_userdebug3()
@@ -18296,10 +18154,28 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_userdebug4()
     {
+        virtio_blk::set_priority_borrow_experiment_mode(false);
         Printer::disable_info_group();
         Printer::disable_warn_group();
         disable_printf();
         return 0;
+    }
+    uint64 SyscallHandler::sys_userdebug5()
+    {
+        int io_priority = proc::default_proc_prio;
+        if (_arg_int(0, io_priority) < 0)
+        {
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (p == nullptr)
+        {
+            return SYS_EINVAL;
+        }
+
+        p->set_io_priority_override(io_priority);
+        return static_cast<uint64>(p->get_io_priority());
     }
 
     uint64 SyscallHandler::sys_timer_gettime()

@@ -63,11 +63,12 @@ namespace virtio_blk
 
         struct PriorityBorrowTraceStats
         {
+            uint64 total_dispatches;
             uint64 contended_dispatches;
             uint64 high_wins;
             uint64 low_while_high_pending;
             uint64 selected_by_class[PriorityBorrowScheduler::k_class_count];
-            uint64 last_report_contended;
+            uint64 last_report_dispatch;
         };
 
         struct DescChain
@@ -80,11 +81,13 @@ namespace virtio_blk
         static uint64 now_us();
         static uint64 ceil_div_u64(uint64 numerator, uint64 denominator);
         static int first_pending_class(uint32 pending_mask);
+        static bool has_multiple_pending_class(uint32 pending_mask);
         static bool has_lower_pending_class(uint32 pending_mask, int service_class);
 
         void reset_runtime();
         void reset_bandwidth_stats_locked();
         void reset_priority_trace_locked();
+        uint32 inflight_class_mask_locked() const;
         void record_priority_trace_locked(uint32 pending_mask, const IoRequest *request);
         void record_completion_stats_locked(const IoRequest *request, uint64 dispatch_us, uint64 finish_us);
         bool has_free_desc_chain_locked() const;
@@ -104,6 +107,7 @@ namespace virtio_blk
         uint16 used_idx_;
         int owner_token_;
         int inflight_count_;
+        uint16 inflight_by_class_[PriorityBorrowScheduler::k_class_count];
         ClassBandwidthStats class_stats_[PriorityBorrowScheduler::k_class_count];
         PriorityBorrowTraceStats priority_trace_;
         RequestInfo info_[k_queue_size];
