@@ -421,16 +421,17 @@ namespace fs
 		{
 			sync_file_size_from_memfd();
 		}
-		else
-		{
-			refresh_ext4_file_size_locked();
-		}
 
 		bool allow_ext4_resync_read =
 			!is_memfd() &&
 			lwext4_file_struct.mp != nullptr &&
-			lwext4_file_struct.inode != 0 &&
-			static_cast<long>(lwext4_file_struct.fpos) == off;
+			lwext4_file_struct.inode != 0;
+
+		/*
+		 * ext4_fread() 自身会在拿到 mount 锁后刷新 inode size。
+		 * 这里不要为每次 1KiB 读都额外做一轮 refresh；只要在“缓存视角已经到 EOF”
+		 * 时允许继续落到 ext4_fread()，就能同时覆盖并发扩容可见性和 iozone 小读吞吐。
+		 */
 
 		if (static_cast<uint64>(off) >= logical_file_size_locked() && !allow_ext4_resync_read)
 		{

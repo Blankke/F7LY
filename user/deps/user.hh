@@ -150,6 +150,7 @@ int busybox_glibc_test(void);
 int libc_musl_test(void);
 int libcbench_test(const char *path);
 int iozone_test(const char *path);
+int bench_refine_suite(void);
 int iperf_test(const char *path);
 int netperf_test(const char *path);
 int lmbench_test(const char *path);
