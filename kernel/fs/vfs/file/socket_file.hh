@@ -83,6 +83,10 @@ namespace fs
         bool _write_shutdown;
         bool _peer_closed;
         bool _pending_send_has_addr;
+        long _recv_timeout_sec;
+        long _recv_timeout_usec;
+        long _send_timeout_sec;
+        long _send_timeout_usec;
         
         SpinLock _lock;
 

@@ -467,6 +467,8 @@ namespace fs
     {
     public:
         virtual eastl::string generate_content() override;
+        virtual bool is_readable() const override { return true; }
+        virtual long handle_read(uint64 buf, size_t len, long off) override;
         virtual bool is_dynamic() const override { return true; } // 页面映射信息需要实时更新
         virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
             return eastl::make_unique<ProcSelfPagemapProvider>();
@@ -488,9 +490,20 @@ namespace fs
     {
     public:
         virtual eastl::string generate_content() override;
-        virtual bool is_writable() const override { return false; } // 允许写入
+        virtual bool is_writable() const override { return true; }
+        virtual long handle_write(uint64 buf, size_t len, long off) override;
         virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
             return eastl::make_unique<ProcSysKernelShmmaxProvider>();
+        }
+    };
+    // /proc/sysvipc/shm
+    class ProcSysvipcShmProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_dynamic() const override { return true; }
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcSysvipcShmProvider>();
         }
     };
         // /proc/sys/kernel/shmmni

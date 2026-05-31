@@ -2726,6 +2726,14 @@ int vfs_path_stat(const char *path, fs::Kstat *st, bool follow_symlinks)
 
     select_runtime_alias_path(effective_path, effective_path, false);
 
+    // path-based stat 必须看见当前进程/其他进程已经写入但仍留在写合并缓冲里的数据。
+    // 典型场景是 LTP mmap01：write(fd) 后立刻 stat(path)，若不刷新会把 st_size 误报为 0。
+    int flush_ret = proc::k_pm.flush_open_files_for_path(effective_path);
+    if (flush_ret < 0)
+    {
+        return flush_ret;
+    }
+
     int status = raw_vfs_path_stat(effective_path, st);
     if (status != EOK)
     {

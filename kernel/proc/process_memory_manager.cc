@@ -21,6 +21,7 @@
 #include "platform.hh" // 为MAX/MIN宏
 #include "memlayout.hh"
 #include "fs/vfs/file/normal_file.hh"
+#include "fs/vfs/vfs_utils.hh"
 #include "shm/shm_manager.hh"
 
 // 外部符号声明
@@ -1067,39 +1068,100 @@ namespace proc
             return current_end;
         }
 
-        if (range_overlaps_used_vma(current_end, new_end))
+        auto vma_covering_page = [&](uint64 page_va) -> const vma *
         {
-            printfRed("ProcessMemoryManager: heap grow would overlap existing VMA [%p, %p)\n",
-                      (void *)current_end, (void *)new_end);
-            return current_end;
-        }
-
-        for (uint64 va = PGROUNDDOWN(current_end); va < PGROUNDUP(new_end); va += PGSIZE)
-        {
-            void *shm_start_addr = nullptr;
-            size_t shm_size = 0;
-            if (find_shared_backed_vma_covering(vma_data, va, &shm_start_addr, &shm_size))
+            for (int i = 0; i < NVMA; ++i)
             {
-                printfRed("ProcessMemoryManager: heap grow would overlap shared mapping at %p\n", shm_start_addr);
-                return current_end;
-            }
-        }
+                const vma &vm_entry = vma_data._vm[i];
+                if (!vm_entry.used)
+                {
+                    continue;
+                }
 
-        // 使用虚拟内存管理器分配新的堆内存
-        mem::PageTable &pt = pagetable;
-        uint64 result;
+                uint64 vma_start = PGROUNDDOWN(vm_entry.addr);
+                uint64 vma_end = PGROUNDUP(vm_entry.addr + vm_entry.len);
+                if (page_va >= vma_start && page_va < vma_end)
+                {
+                    return &vm_entry;
+                }
+            }
+            return nullptr;
+        };
+
+        auto map_heap_page = [&](uint64 page_va) -> bool
+        {
+            if (is_page_mapped(page_va))
+            {
+                return true;
+            }
+
+            void *mem = mem::PhysicalMemoryManager::alloc_page();
+            if (mem == nullptr)
+            {
+                return false;
+            }
+            mem::k_pmm.clear_page(mem);
 
 #ifdef RISCV
-        result = mem::k_vmm.vmalloc(pt, current_end, new_end, PTE_W | PTE_R | PTE_U);
+            uint64 flags = PTE_W | PTE_R | PTE_U;
 #elif defined(LOONGARCH)
-        result = mem::k_vmm.vmalloc(pt, current_end, new_end, PTE_P | PTE_W | PTE_PLV | PTE_MAT | PTE_D);
+            uint64 flags = PTE_P | PTE_R | PTE_W | PTE_U | PTE_MAT | PTE_D;
 #endif
+            if (!mem::k_vmm.map_pages(pagetable, page_va, PGSIZE, (uint64)mem, flags))
+            {
+                mem::k_pmm.free_page(mem);
+                return false;
+            }
+            return true;
+        };
 
-        if (result < new_end)
+        uint64 first_page = PGROUNDDOWN(current_end);
+        if (first_page < current_end)
         {
-            // 分配失败
-            printfRed("ProcessMemoryManager: heap grow failed, vmalloc returned %p\n", (void *)result);
-            return current_end;
+            first_page += PGSIZE;
+        }
+        auto rollback_heap_pages = [&](uint64 rollback_end)
+        {
+            for (uint64 rollback_va = first_page; rollback_va < rollback_end; rollback_va += PGSIZE)
+            {
+                if (vma_covering_page(rollback_va) != nullptr)
+                {
+                    continue;
+                }
+                if (is_page_mapped(rollback_va))
+                {
+                    mem::k_vmm.vmunmap(pagetable, rollback_va, 1, true);
+                }
+            }
+        };
+
+        for (uint64 va = first_page; va < PGROUNDUP(new_end); va += PGSIZE)
+        {
+            const vma *covering_vm = vma_covering_page(va);
+            if (covering_vm != nullptr)
+            {
+                if (covering_vm->backing_kind == VMA_BACKING_SHM)
+                {
+                    printfRed("ProcessMemoryManager: heap grow would cross shared VMA [%p, %p)\n",
+                              (void *)covering_vm->addr,
+                              (void *)(covering_vm->addr + (uint64)covering_vm->len));
+                    rollback_heap_pages(va);
+                    return current_end;
+                }
+                // brk 可以把“堆顶”推进到已有 MAP_FIXED 私有映射之后；这类页仍归 VMA 管，
+                // 堆只更新边界，不抢占页表映射。mmapstress03 专门覆盖这种带洞 brk 形态。
+                // SysV SHM 共享映射已在上面拦截，shmt09 要求 brk 不能越过它。
+                continue;
+            }
+
+            if (!map_heap_page(va))
+            {
+                printfRed("ProcessMemoryManager: heap grow failed at page %p\n", (void *)va);
+                // 内核栈只有 8KB，不能在这里维护一个“已分配页数组”。失败时重新遍历
+                // 本次扩展过的区间，释放非 VMA 覆盖的 heap 页即可。
+                rollback_heap_pages(va);
+                return current_end;
+            }
         }
 
         // 更新ProcessMemoryManager中的堆结束地址
@@ -2126,6 +2188,14 @@ namespace proc
         const uint64 vma_end = vma_entry.addr + vma_entry.len;
         const uint64 page_start = PGROUNDDOWN(vma_start);
         const uint64 page_end = PGROUNDUP(vma_end);
+        uint64 file_size = 0;
+        bool has_file_size = false;
+        fs::Kstat st = {};
+        if (vfs_fstat(vma_entry.vfile, &st) == 0)
+        {
+            file_size = st.size;
+            has_file_size = true;
+        }
 
         for (uint64 va = page_start; va < page_end; va += PGSIZE)
         {
@@ -2160,19 +2230,31 @@ namespace proc
             const size_t write_len = static_cast<size_t>(write_end - write_start);
             const uint64 page_offset = write_start - va;
             const uint64 file_offset = vma_entry.offset + (write_start - vma_start);
+            if (has_file_size && file_offset >= file_size)
+            {
+                continue;
+            }
+
+            size_t bounded_write_len = write_len;
+            if (has_file_size && file_offset + bounded_write_len > file_size)
+            {
+                // 文件尾页 EOF 之后的 MAP_SHARED 字节必须保持“内存可写、文件不可见”。
+                // Linux 不会因为 msync/munmap 把这些尾部脏字节扩展进文件。
+                bounded_write_len = static_cast<size_t>(file_size - file_offset);
+            }
             const uint64 kernel_buf = pte_data_kernel_addr(pte) + page_offset;
 
             // file::write 只接受内核可直接访问的缓冲区。MAP_SHARED 写回必须
             // 逐页把用户 VA 转成页表里的真实物理页，不能把 VMA 地址当指针。
             long result = vma_entry.vfile->write(kernel_buf,
-                                                 write_len,
+                                                 bounded_write_len,
                                                  static_cast<long>(file_offset),
                                                  false);
-            if (result < 0 || static_cast<size_t>(result) != write_len)
+            if (result < 0 || static_cast<size_t>(result) != bounded_write_len)
             {
                 printfRed("[ProcessMemoryManager] Failed to write back file mapping va=%p len=%zu off=%p result=%ld\n",
                           reinterpret_cast<void *>(write_start),
-                          write_len,
+                          bounded_write_len,
                           file_offset,
                           result);
                 return false;

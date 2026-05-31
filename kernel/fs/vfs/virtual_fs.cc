@@ -431,6 +431,10 @@ namespace fs
         add_virtual_file("/proc/sys/kernel/shmmax", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcSysKernelShmmaxProvider>());
 
+        // /proc/sysvipc/shm (当前 SysV 共享内存段表)
+        add_virtual_file("/proc/sysvipc/shm", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcSysvipcShmProvider>());
+
         // /proc/sys/kernel/shmmni (共享内存最大值)
         add_virtual_file("/proc/sys/kernel/shmmni", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcSysKernelShmmniProvider>());

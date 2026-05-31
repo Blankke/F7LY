@@ -7,6 +7,7 @@ debug.sh
 ls2k_debug.sh
 ls2k_release.sh
 build/**
+.venv/
 .vscode/
 .vscode/*
 *.bin
@@ -67,3 +68,4 @@ logs/tmp/
 !logs/legacy/
 !logs/legacy/output_la.txt
 !logs/legacy/output_rv.txt
+.venv/
