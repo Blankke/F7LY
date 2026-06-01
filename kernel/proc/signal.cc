@@ -39,6 +39,42 @@ namespace
         return value & ~(align - 1);
     }
 
+    uint64 unmaskable_signal_mask()
+    {
+        using namespace proc::ipc::signal;
+        return (1ULL << (SIGKILL - 1)) |
+               (1ULL << (SIGSTOP - 1)) |
+               (1ULL << (SIGCANCEL - 1));
+    }
+
+    uint64 sanitize_signal_mask(uint64 mask)
+    {
+        return mask & ~unmaskable_signal_mask();
+    }
+
+    uint64 consume_signal_restore_mask(proc::Pcb *p)
+    {
+        if (p->_sigsuspend_restore_pending)
+        {
+            uint64 saved_mask = sanitize_signal_mask(p->_sigsuspend_saved_sigmask);
+            p->_sigsuspend_restore_pending = false;
+            p->_sigsuspend_saved_sigmask = 0;
+            return saved_mask;
+        }
+        return sanitize_signal_mask(p->_sigmask);
+    }
+
+    void restore_sigsuspend_mask_now(proc::Pcb *p)
+    {
+        if (!p->_sigsuspend_restore_pending)
+        {
+            return;
+        }
+        p->_sigmask = sanitize_signal_mask(p->_sigsuspend_saved_sigmask);
+        p->_sigsuspend_restore_pending = false;
+        p->_sigsuspend_saved_sigmask = 0;
+    }
+
     proc::vma *find_vma_covering(proc::Pcb *p, uint64 addr, int *out_idx = nullptr)
     {
         if (p == nullptr || p->get_vma() == nullptr)
@@ -679,10 +715,7 @@ namespace proc
                 }
 
                 // 确保关键信号不会被屏蔽
-                uint64 unmaskable_signals = (1UL << (signal::SIGKILL - 1)) |
-                                            (1UL << (signal::SIGSTOP - 1)) |
-                                            (1UL << (signal::SIGCANCEL - 1));
-                cur_proc->_sigmask &= ~unmaskable_signals;
+                cur_proc->_sigmask = sanitize_signal_mask(cur_proc->_sigmask);
 
                 return 0;
             }
@@ -696,21 +729,20 @@ namespace proc
 
                 proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
                 
-                // 保存当前的信号掩码
-                uint64 old_sigmask = cur_proc->_sigmask;
+                // sigsuspend 的临时 mask 要一直保持到信号真正投递；
+                // 旧 mask 由信号返回路径恢复，不能在 syscall 返回前提前恢复。
+                cur_proc->_sigsuspend_saved_sigmask = sanitize_signal_mask(cur_proc->_sigmask);
+                cur_proc->_sigsuspend_restore_pending = true;
 
                 // 设置新的信号掩码，但不能阻塞SIGKILL和SIGSTOP
-                uint64 unmaskable_signals = (1UL << (signal::SIGKILL - 1)) |
-                                            (1UL << (signal::SIGSTOP - 1));
-                cur_proc->_sigmask = mask->sig[0] & ~unmaskable_signals;
+                cur_proc->_sigmask = sanitize_signal_mask(mask->sig[0]);
 
                 // 检查是否已经有未被阻塞的待处理信号
                 uint64 pending_unblocked = cur_proc->_signal & ~cur_proc->_sigmask;
                 
                 if (pending_unblocked != 0)
                 {
-                    // 有未被阻塞的待处理信号，恢复原掩码并立即返回
-                    cur_proc->_sigmask = old_sigmask;
+                    // 有未被阻塞的待处理信号，直接返回给 trap 返回路径投递信号。
                     return syscall::SYS_EINTR; // EINTR - 被信号中断
                 }
 
@@ -725,9 +757,7 @@ namespace proc
                 sigsuspend_lock.acquire();
                 proc::k_pm.sleep(sigsuspend_chan, &sigsuspend_lock);
                 
-                // 当从sleep返回时，说明有信号到达
-                // 恢复原来的信号掩码
-                cur_proc->_sigmask = old_sigmask;
+                // 当从sleep返回时，说明有未屏蔽信号到达；旧 mask 仍留给 sig_return 恢复。
 
                 // sigsuspend总是返回-1并设置errno为EINTR
                 return syscall::SYS_EINTR; // EINTR
@@ -810,6 +840,41 @@ namespace proc
                        (p->_signal & (1ULL << (SIGSTOP - 1))) != 0;
             }
 
+            bool signal_is_ignored_for_interrupt(Pcb *p, int signum)
+            {
+                if (p == nullptr)
+                {
+                    return true;
+                }
+
+                if (p->_sigactions != nullptr && p->_sigactions->actions[signum] != nullptr)
+                {
+                    sigaction *act = p->_sigactions->actions[signum];
+                    if (act->sa_handler == SIG_IGN)
+                    {
+                        return true;
+                    }
+                    if (act->sa_handler != nullptr && act->sa_handler != SIG_DFL)
+                    {
+                        return false;
+                    }
+                }
+
+                // 这些信号在当前内核里按 Linux 的“默认忽略”语义处理。
+                // 它们可以保持 pending，等返回用户态后再被安静清掉，
+                // 但不应该把 epoll_pwait/futex/pipe 阻塞读之类等待直接打成 EINTR。
+                switch (signum)
+                {
+                case signal::SIGCHLD:
+                case signal::SIGCONT:
+                case signal::SIGURG:
+                case signal::SIGWINCH:
+                    return true;
+                default:
+                    return false;
+                }
+            }
+
             bool has_unmasked_signal_pending(Pcb *p)
             {
                 if (p == nullptr || p->_signal == 0)
@@ -817,8 +882,31 @@ namespace proc
                     return false;
                 }
 
-                uint64 internal_unmaskable = (1ULL << (signal::SIGCANCEL - 1));
-                return (p->_signal & (~p->_sigmask | internal_unmaskable)) != 0;
+                for (int signum = 1; signum <= signal::SIGRTMAX; ++signum)
+                {
+                    uint64 bit = 1ULL << (signum - 1);
+                    if ((p->_signal & bit) == 0)
+                    {
+                        continue;
+                    }
+
+                    if (signum == signal::SIGCANCEL)
+                    {
+                        return true;
+                    }
+
+                    if ((p->_sigmask & bit) != 0)
+                    {
+                        continue;
+                    }
+
+                    if (!signal_is_ignored_for_interrupt(p, signum))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
             }
 
             // 获取信号的默认行为
@@ -937,11 +1025,13 @@ namespace proc
                     if (act == nullptr || act->sa_handler == nullptr || act->sa_handler == SIG_DFL)
                     {
                         printf("[handle_signal] Signal %d has no handler or SIG_DFL, using default handler\n", signum);
+                        restore_sigsuspend_mask_now(p);
                         default_handle(p, signum);
                     }
                     else if (act->sa_handler == SIG_IGN)
                     {
                         printf("[handle_signal] Signal %d is ignored (SIG_IGN)\n", signum);
+                        restore_sigsuspend_mask_now(p);
                         // 直接清除信号，不做任何处理
                     }
                     else
@@ -1007,11 +1097,13 @@ namespace proc
                     if (act == nullptr || act->sa_handler == nullptr || act->sa_handler == SIG_DFL)
                     {
                         printf("[handle_sync_signal] Sync signal %d has no handler or SIG_DFL, using default handler\n", signum);
+                        restore_sigsuspend_mask_now(p);
                         default_handle(p, signum);
                     }
                     else if (act->sa_handler == SIG_IGN)
                     {
                         printf("[handle_sync_signal] Sync signal %d is ignored (SIG_IGN)\n", signum);
+                        restore_sigsuspend_mask_now(p);
                         // 对于同步信号，通常不应该被忽略，但仍然尊重用户设置
                     }
                     else
@@ -1069,11 +1161,13 @@ namespace proc
                     if (act == nullptr || act->sa_handler == nullptr || act->sa_handler == SIG_DFL)
                     {
                         printf("[handle_signal] Signal %d has no handler or SIG_DFL, using default handler\n", signum);
+                        restore_sigsuspend_mask_now(p);
                         default_handle(p, signum);
                     }
                     else if (act->sa_handler == SIG_IGN)
                     {
                         printf("[handle_signal] Signal %d is ignored (SIG_IGN)\n", signum);
+                        restore_sigsuspend_mask_now(p);
                         // 直接清除信号，不做任何处理
                     }
                     clear_signal(p, signum);
@@ -1082,7 +1176,7 @@ namespace proc
                 
             }
 
-            void add_signal(proc::Pcb *p, int sig)
+            void add_signal(proc::Pcb *p, int sig, const LinuxSigInfo *info)
             {
                 if (sig <= 0 || sig > proc::ipc::signal::SIGRTMAX)
                 {
@@ -1096,6 +1190,11 @@ namespace proc
                 //     return;
                 // }
                 p->_signal |= (1UL << (sig - 1));
+                if (info != nullptr)
+                {
+                    p->_queued_siginfo[sig] = *info;
+                    p->_siginfo_mask |= (1ULL << (sig - 1));
+                }
                 
                 // 如果进程正在sigsuspend中等待，并且这个信号没有被阻塞，则唤醒它
                 uint64 sig_mask = (1UL << (sig - 1));
@@ -1154,7 +1253,8 @@ namespace proc
                     panic("[do_handle] Failed to allocate memory for signal frame");
                     return;
                 }
-                frame->mask.sig[0] = p->_sigmask; // 保存当前信号掩码
+                uint64 restore_sigmask = consume_signal_restore_mask(p);
+                frame->mask.sig[0] = restore_sigmask; // 保存 handler 返回后需要恢复的信号掩码
 
                 // 处理 sa_mask：在信号处理期间临时阻塞额外的信号
                 [[maybe_unused]] uint64 old_sigmask = p->_sigmask;
@@ -1166,10 +1266,8 @@ namespace proc
                     p->_sigmask |= (1UL << (signum - 1)); // 默认阻塞当前信号
                 }
 
-                // 永远不能屏蔽 SIGKILL, SIGSTOP
-                p->_sigmask &= ~((1UL << (signal::SIGKILL - 1)) |
-                                 (1UL << (signal::SIGSTOP - 1))
-                                );
+                // 永远不能屏蔽 SIGKILL、SIGSTOP 以及线程库内部取消信号。
+                p->_sigmask = sanitize_signal_mask(p->_sigmask);
 
                 // printf("[do_handle] Signal mask updated: old=0x%x, new=0x%x, sa_mask=0x%x\n",
                 //        old_sigmask, p->_sigmask, act->sa_mask.sig[0]);
@@ -1263,10 +1361,10 @@ namespace proc
                     uctx.link = 0;
                     uctx.stack = {(void *)stack_sp, 0, sig_size};
 #ifdef RISCV
-                    uctx.sigmask.sig[0] = p->_sigmask;
+                    uctx.sigmask.sig[0] = restore_sigmask;
                     fill_riscv_user_mcontext(uctx.mcontext, frame->tf);
 #elif LOONGARCH
-                    uctx.sigmask.sig[0] = p->_sigmask;
+                    uctx.sigmask.sig[0] = restore_sigmask;
                     fill_loongarch_user_mcontext(uctx.mcontext, frame->tf);
 #endif
                     // mcontext 已经通过 memset 初始化为0了
@@ -1282,11 +1380,20 @@ namespace proc
                     //    p->_trapframe->epc);
 
                     // 构造 LinuxSigInfo 结构
-                    LinuxSigInfo siginfo = {
-                        .si_signo = (int32)signum,
-                        .si_errno = 0,
-                        .si_code = 0,
-                        ._pad = {0}};
+                    LinuxSigInfo siginfo{};
+                    if ((p->_siginfo_mask & (1ULL << (signum - 1))) != 0)
+                    {
+                        siginfo = p->_queued_siginfo[signum];
+                    }
+                    else
+                    {
+                        siginfo.si_signo = (int32)signum;
+                        siginfo.si_errno = 0;
+                        siginfo.si_code = 0;
+                        siginfo.si_pid = 0;
+                        siginfo.si_uid = 0;
+                        siginfo.si_value.sival_ptr = 0;
+                    }
                     printf("[do_handle] LinuxSigInfo constructed: sp: %p usercontext_sp=%p, linuxinfo_sp=%p\n",
                            p->_trapframe->sp, usercontext_sp, linuxinfo_sp);
                     // 将结构写入用户空间
@@ -1473,7 +1580,7 @@ namespace proc
                         return;
                     }
                     signal_frame *frame = p->sig_frame;
-                    p->_sigmask = frame->mask.sig[0];                        // 恢复信号掩码
+                    p->_sigmask = sanitize_signal_mask(frame->mask.sig[0]);   // 恢复信号掩码
                     memmove(p->_trapframe, &(frame->tf), sizeof(TrapFrame)); // 恢复陷阱帧
                     p->sig_frame = frame->next;                              // 移除当前信号帧
                     
@@ -1499,7 +1606,7 @@ namespace proc
                         return;
                     }
                     signal_frame *frame = p->sig_frame;
-                    p->_sigmask = frame->mask.sig[0];                        // 默认先回到进入信号前的内核保存值
+                    p->_sigmask = sanitize_signal_mask(frame->mask.sig[0]);   // 默认先回到进入信号前的内核保存值
                     memmove(p->_trapframe, &(frame->tf), sizeof(TrapFrame)); // 恢复陷阱帧
                     p->sig_frame = frame->next;                              // 移除当前信号帧
                     
@@ -1508,7 +1615,7 @@ namespace proc
                     
                     mem::k_pmm.free_page(frame);
 #ifdef RISCV
-                    p->_sigmask = uctx.sigmask.sig[0];
+                    p->_sigmask = sanitize_signal_mask(uctx.sigmask.sig[0]);
                     restore_riscv_trapframe_from_ucontext(*p->_trapframe, uctx);
 #elif LOONGARCH
                     // 某些取消/条件变量压力测里，如果用户态栈上的 ucontext 已经被破坏，
@@ -1537,7 +1644,7 @@ namespace proc
                                      (void *)uctx.sigmask.sig[0],
                                      (void *)user_sp);
                     }
-                    p->_sigmask = uctx.sigmask.sig[0];
+                    p->_sigmask = sanitize_signal_mask(uctx.sigmask.sig[0]);
                     restore_loongarch_trapframe_from_ucontext(*p->_trapframe, uctx);
 #endif
                 }
@@ -1582,6 +1689,8 @@ namespace proc
                     return;
                 }
                 now_p->_signal &= ~(1UL << (sig - 1));
+                now_p->_siginfo_mask &= ~(1ULL << (sig - 1));
+                memset(&now_p->_queued_siginfo[sig], 0, sizeof(now_p->_queued_siginfo[sig]));
             }
 
         } // namespace signal

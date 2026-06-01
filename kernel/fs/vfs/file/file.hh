@@ -24,6 +24,12 @@ namespace proc
 using namespace proc::ipc;
 namespace fs
 {
+	struct time_namespace_snapshot
+	{
+		int64 monotonic_offset_ns = 0;
+		int64 boottime_offset_ns = 0;
+	};
+
 	class dentry;
 	class file_pool;
 	class File
@@ -133,10 +139,14 @@ namespace fs
 	void init_bsd_flock_table();
 	int apply_bsd_flock(file *owner, int operation);
 	void release_bsd_flock(file *owner);
-	int apply_posix_record_lock(file *owner, int pid, const struct flock &lock);
+	int apply_posix_record_lock(file *owner, int pid, const struct flock &lock, int *conflict_pid = nullptr);
 	int query_posix_record_lock(file *owner, int pid, struct flock &lock);
+	int note_posix_record_lock_wait(file *owner, int pid, const struct flock &lock, int blocked_by_pid);
+	int apply_ofd_record_lock(file *owner, const struct flock &lock);
+	int query_ofd_record_lock(file *owner, struct flock &lock);
 	void release_posix_record_locks_for_path(const eastl::string &path, int pid);
 	void release_posix_record_locks_for_pid(int pid);
+	void release_ofd_record_locks_for_owner(file *owner);
 
 	struct memfd_shared_state
 	{
@@ -158,9 +168,13 @@ namespace fs
 		eastl::string _path_name; // file's path, used for readlink
 		eastl::string _backing_path; // 底层真实路径；memfd 对外名字与真实路径分离时使用
 		struct ext4_file lwext4_file_struct;
-		struct ext4_dir lwext4_dir_struct;
-		flock _lock; // file lock, used for flock
-		memfd_shared_state *_memfd_state = nullptr;
+			struct ext4_dir lwext4_dir_struct;
+			flock _lock; // file lock, used for flock
+			short _lease_type = F_UNLCK; // 当前 open file description 持有的 lease 类型
+			int _lease_owner_pid = 0; // 记录最近一次 F_SETLEASE 的持有者，供冲突 open/truncate 发送 SIGIO
+			int _lease_waiting_readers = 0; // 被 lease 挡住、正在等待重新 open 的只读 breaker 数
+			int _lease_waiting_writers = 0; // 被 lease 挡住、正在等待重新 open/truncate 的写 breaker 数
+			memfd_shared_state *_memfd_state = nullptr;
 		// 这两个字段保留给旧逻辑/调试输出使用，真实语义优先走共享状态。
 		uint32_t _seals = 0;           // bitmask of F_SEAL_*
 		bool _sealing_allowed = false; // whether F_ADD_SEALS is permitted
@@ -277,22 +291,31 @@ namespace fs
 		}
 		virtual void free_file()
 		{
-			refcnt--;
-			// printfGreen("[file::free_file] refcnt decreased to %d\n", refcnt);
-			if (refcnt == 0) {
-				// printfGreen("[file::free_file] refcnt is 0, calling delete this\n");
-				release_bsd_flock(this);
-				delete this;
-			}
-		};
+				refcnt--;
+				// printfGreen("[file::free_file] refcnt decreased to %d\n", refcnt);
+				if (refcnt == 0) {
+					// printfGreen("[file::free_file] refcnt is 0, calling delete this\n");
+					release_bsd_flock(this);
+					release_ofd_record_locks_for_owner(this);
+					delete this;
+				}
+			};
 		virtual long read(uint64 buf, size_t len, long off, bool upgrade_off) = 0;
 		virtual long write(uint64 buf, size_t len, long off, bool upgrade_off) = 0;
 		virtual void dup() { refcnt++; }; // 增加引用计数
 		virtual bool read_ready() = 0;
 		virtual bool write_ready() = 0;
 		virtual off_t lseek(off_t offset, int whence) = 0;
+		// 供解锁/可见性边界前刷新延迟写。默认无额外动作。
+		virtual int flush_visibility_state() { return 0; }
 		// 供匿名内核文件（如 epoll）在不依赖 RTTI 的情况下做类型识别。
 		virtual bool is_epoll_file() const { return false; }
+		// 供 setns(CLONE_NEWTIME) 从 namespace 文件里取回目标时钟偏移。
+		virtual bool get_time_namespace_snapshot(time_namespace_snapshot &snapshot) const
+		{
+			(void)snapshot;
+			return false;
+		}
 		virtual eastl::string read_symlink_target();
 		using ubuf = mem::UserspaceStream;
 		virtual size_t read_sub_dir(ubuf &dst) = 0;

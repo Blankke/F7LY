@@ -105,11 +105,11 @@ namespace proc
                    mem::k_pagetable.kwalk_addr(end) != 0;
         }
 
-        inline bool is_probably_live_file_object(fs::file *file_obj)
-        {
-            if (file_obj == nullptr)
-            {
-                return false;
+	        inline bool is_probably_live_file_object(fs::file *file_obj)
+	        {
+	            if (file_obj == nullptr)
+	            {
+	                return false;
             }
 
             if (!is_kernel_mapped_file_range((uint64)file_obj, sizeof(fs::file)))
@@ -123,12 +123,131 @@ namespace proc
                 return false;
             }
 
-            uint32 refcnt = file_obj->refcnt;
-            return refcnt > 0 && refcnt <= k_max_reasonable_file_refcnt;
-        }
+	            uint32 refcnt = file_obj->refcnt;
+	            return refcnt > 0 && refcnt <= k_max_reasonable_file_refcnt;
+	        }
 
-        struct SharedBackingSelection
-        {
+	        inline bool open_request_has_write(uint flags)
+	        {
+	            int accmode = flags & O_ACCMODE;
+	            return accmode == O_WRONLY || accmode == O_RDWR;
+	        }
+
+	        inline bool lease_conflicts_with_open(short lease_type, uint flags)
+	        {
+	            if (lease_type == F_WRLCK)
+	            {
+	                return true;
+	            }
+	            if (lease_type == F_RDLCK)
+	            {
+	                return open_request_has_write(flags);
+	            }
+	            return false;
+	        }
+
+	        fs::file *find_conflicting_lease_holder(const eastl::string &path, uint flags)
+	        {
+	            eastl::vector<fs::file *> seen;
+	            seen.reserve(num_process);
+
+	            for (uint i = 0; i < num_process; ++i)
+	            {
+	                Pcb *pcb = &k_proc_pool[i];
+	                if (pcb->_state == ProcState::UNUSED || pcb->_ofile == nullptr)
+	                {
+	                    continue;
+	                }
+
+	                for (uint fd = 0; fd < max_open_files; ++fd)
+	                {
+	                    fs::file *candidate = pcb->_ofile->_ofile_ptr[fd];
+	                    if (candidate == nullptr || candidate->backing_path() != path)
+	                    {
+	                        continue;
+	                    }
+
+	                    bool already_seen = false;
+	                    for (fs::file *existing : seen)
+	                    {
+	                        if (existing == candidate)
+	                        {
+	                            already_seen = true;
+	                            break;
+	                        }
+	                    }
+	                    if (already_seen)
+	                    {
+	                        continue;
+	                    }
+	                    seen.push_back(candidate);
+
+	                    if (candidate->_lease_type != F_UNLCK &&
+	                        lease_conflicts_with_open(candidate->_lease_type, flags))
+	                    {
+	                        return candidate;
+	                    }
+	                }
+	            }
+
+	            return nullptr;
+	        }
+
+	        int wait_for_conflicting_lease(const eastl::string &path, uint flags)
+	        {
+	            bool notified = false;
+	            bool writer_waiter = open_request_has_write(flags);
+	            fs::file *registered_holder = nullptr;
+	            auto update_wait_registration = [&](fs::file *new_holder)
+	            {
+	                if (registered_holder == new_holder)
+	                {
+	                    return;
+	                }
+
+	                if (registered_holder != nullptr)
+	                {
+	                    int &old_counter = writer_waiter ? registered_holder->_lease_waiting_writers
+	                                                     : registered_holder->_lease_waiting_readers;
+	                    if (old_counter > 0)
+	                    {
+	                        old_counter--;
+	                    }
+	                }
+
+	                registered_holder = new_holder;
+	                if (registered_holder != nullptr)
+	                {
+	                    int &new_counter = writer_waiter ? registered_holder->_lease_waiting_writers
+	                                                     : registered_holder->_lease_waiting_readers;
+	                    new_counter++;
+	                }
+	            };
+
+	            while (true)
+	            {
+	                fs::file *holder = find_conflicting_lease_holder(path, flags);
+	                if (holder == nullptr)
+	                {
+	                    update_wait_registration(nullptr);
+	                    return 0;
+	                }
+	                update_wait_registration(holder);
+
+	                if (!notified && holder->_lease_owner_pid > 0)
+	                {
+	                    // 先补 LTP fcntl33 需要的最小 lease-break 语义：
+	                    // breaker 遇到冲突 lease 时，通知持有者再等待它降级/释放。
+	                    (void)k_pm.kill_signal(holder->_lease_owner_pid, ipc::signal::SIGPOLL);
+	                    notified = true;
+	                }
+
+	                k_scheduler.yield();
+	            }
+	        }
+
+	        struct SharedBackingSelection
+	        {
             key_t key;
             bool always_new_segment;
         };
@@ -147,7 +266,11 @@ namespace proc
                 return {IPC_PRIVATE, true};
             }
 
-            return {shm::k_smm.ftok(file_obj->_path_name.c_str(), 0), false};
+            // 文件共享映射的 key 必须跟真实 backing path 绑定。
+            // 之前直接拿 _path_name，会把不同 tmpdir 下同名相对路径误折叠到同一个共享段，
+            // mmap01 这种“每轮都新建临时文件”的用例就会读到前一轮残留页尾数据。
+            const eastl::string &backing_path = file_obj->backing_path();
+            return {shm::k_smm.ftok(backing_path.c_str(), 0), false};
         }
 
         inline bool starts_with(const char *lhs, const char *rhs)
@@ -455,6 +578,7 @@ namespace proc
         _pid_lock.init(pid_lock_name);
         _tid_lock.init(tid_lock_name);
         _wait_lock.init(wait_lock_name);
+        _ns_lock.init("namespace");
         for (uint i = 0; i < num_process; ++i)
         {
             Pcb &p = k_proc_pool[i];
@@ -462,6 +586,7 @@ namespace proc
         }
         _cur_pid = 1;
         _cur_tid = 1;
+        _next_ipc_ns_id = k_initial_ipc_namespace_id + 1;
         _last_alloc_proc_gid = num_process - 1;
         printfGreen("[proc] Process Manager Init\n");
     }
@@ -530,6 +655,26 @@ namespace proc
         _tid_lock.release();
     }
 
+    uint64 ProcessManager::alloc_ipc_namespace_id()
+    {
+        _ns_lock.acquire();
+        uint64 ns_id = _next_ipc_ns_id++;
+        _ns_lock.release();
+        return ns_id;
+    }
+
+    void ProcessManager::unshare_ipc_namespace(Pcb *p)
+    {
+        if (p == nullptr)
+        {
+            return;
+        }
+
+        // CLONE_NEWIPC 只需要给当前任务换一份 SysV IPC key 空间；
+        // 已经拿到的 shmid/VMA 继续按 shmid 生命周期清理，不迁移到新 namespace。
+        p->_ipc_ns_id = alloc_ipc_namespace_id();
+    }
+
     Pcb *ProcessManager::alloc_proc()
     {
         Pcb *p;
@@ -574,6 +719,7 @@ namespace proc
                 p->_killed = 0;     // 清除终止标志
                 p->_exiting = false; // 清除退出清理标记
                 p->_xstate = 0;     // 清除退出状态码
+                p->_parent_exit_signal = ipc::signal::SIGCHLD;
 
                 // 设置调度相关字段：默认调度槽与优先级
                 p->_slot = default_proc_slot;
@@ -628,6 +774,7 @@ namespace proc
                  * 线程和同步原语初始化
                  ****************************************************************************************/
                 p->_futex_addr = nullptr;  // 清空futex等待地址
+                p->_futex_key = 0;         // 清空futex匹配键
                 p->_clear_tid_addr = 0;    // 清空线程退出时需要清理的地址
                 p->_robust_list = nullptr; // 清空健壮futex链表
                 p->_robust_list_user_addr = 0;
@@ -645,6 +792,10 @@ namespace proc
 
                 p->_sigmask = 0;        // 清空信号屏蔽掩码
                 p->_signal = 0;         // 清空待处理信号掩码
+                p->_siginfo_mask = 0;   // 清空附带 siginfo 的 pending signal 标记
+                memset(p->_queued_siginfo, 0, sizeof(p->_queued_siginfo));
+                p->_sigsuspend_restore_pending = false;
+                p->_sigsuspend_saved_sigmask = 0;
                 p->sig_frame = nullptr; // 清空信号处理栈帧
                 p->_alt_stack.ss_sp = nullptr;                 // 备用信号栈地址必须重置
                 p->_alt_stack.ss_flags = ipc::signal::SS_DISABLE; // 默认禁用备用信号栈
@@ -678,6 +829,9 @@ namespace proc
                 p->_cstime = 0;                // 子进程系统态时间累计
                 p->_start_time = cur_tick;     // 进程启动时间
                 p->_start_boottime = cur_tick; // 自系统启动以来的启动时间
+                p->_timens_current = {};
+                p->_timens_children = {};
+                p->_ipc_ns_id = k_initial_ipc_namespace_id;
                 reset_interval_timers(p);      // interval timer 不能把上一个进程残留到复用的 PCB 上
 
                 // 更新上次分配的位置，轮转分配策略
@@ -799,6 +953,7 @@ namespace proc
         p->_killed = 0;                // 清除终止标志
         p->_exiting = false;           // 清除退出清理标记
         p->_xstate = 0;                // 清除退出状态码
+        p->_parent_exit_signal = ipc::signal::SIGCHLD;
         p->_state = ProcState::UNUSED; // 标记进程控制块为未使用
 
         p->_slot = 0;                 // 重置时间片
@@ -829,6 +984,7 @@ namespace proc
          * 线程和同步原语清理
          ****************************************************************************************/
         p->_futex_addr = nullptr;  // 清空futex等待地址
+        p->_futex_key = 0;         // 清空futex匹配键
         p->_clear_tid_addr = 0;    // 清空线程退出时需要清理的地址
         p->_robust_list = nullptr; // 清空健壮futex链表
         p->_robust_list_user_addr = 0;
@@ -841,6 +997,10 @@ namespace proc
         p->sig_frame = nullptr;   // 清空信号处理帧指针
         p->_signal = 0;           // 清空待处理信号掩码
         p->_sigmask = 0;          // 清空信号屏蔽掩码
+        p->_siginfo_mask = 0;
+        memset(p->_queued_siginfo, 0, sizeof(p->_queued_siginfo));
+        p->_sigsuspend_restore_pending = false;
+        p->_sigsuspend_saved_sigmask = 0;
         p->_alt_stack.ss_sp = nullptr;
         p->_alt_stack.ss_flags = ipc::signal::SS_DISABLE;
         p->_alt_stack.ss_size = 0;
@@ -869,6 +1029,9 @@ namespace proc
         p->_cstime = 0;            // 清零子进程系统态时间累计
         p->_start_time = 0;        // 清零进程启动时间
         p->_start_boottime = 0;    // 清零自系统启动以来的启动时间
+        p->_timens_current = {};
+        p->_timens_children = {};
+        p->_netns = {};
         reset_interval_timers(p);  // 清空 interval timer，避免 PCB 复用时带出历史状态
 
         /****************************************************************************************
@@ -1135,7 +1298,7 @@ namespace proc
         return -1; // 没找到对应 pid 的进程
     }
 
-    int ProcessManager::kill_signal(int pid, int sig)
+    int ProcessManager::kill_signal(int pid, int sig, const ipc::signal::LinuxSigInfo *info)
     {
         Pcb *p;
         int count = 0; // 记录发送信号的进程数量
@@ -1156,7 +1319,7 @@ namespace proc
                 p->_lock.acquire();
                 if (p->_pid == pid && p->_state != ProcState::UNUSED)
                 {
-                    p->add_signal(sig);
+                    p->add_signal(sig, info);
                     wake_if_signal_interruptible(p);
                     p->_lock.release();
                     return 0;
@@ -1178,7 +1341,7 @@ namespace proc
                 p->_lock.acquire();
                 if (p->_pgid == target_pgid && p->_state != ProcState::UNUSED)
                 {
-                    p->add_signal(sig);
+                    p->add_signal(sig, info);
                     wake_if_signal_interruptible(p);
                     count++;
                 }
@@ -1200,7 +1363,7 @@ namespace proc
                 if (p->_pid > 1 && p->_state != ProcState::UNUSED &&    // 跳过init进程
                     (p->_uid == current->_euid || current->_euid == 0)) // 权限检查
                 {
-                    p->add_signal(sig);
+                    p->add_signal(sig, info);
                     wake_if_signal_interruptible(p);
                     count++;
                 }
@@ -1222,7 +1385,7 @@ namespace proc
                 if (p->_pgid == target_pgid && p->_state != ProcState::UNUSED &&
                     (p->_uid == current->_euid || current->_euid == 0)) // 权限检查
                 {
-                    p->add_signal(sig);
+                    p->add_signal(sig, info);
                     wake_if_signal_interruptible(p);
                     count++;
                 }
@@ -1232,7 +1395,7 @@ namespace proc
         }
     }
 
-    int ProcessManager::tkill(int tid, int sig)
+    int ProcessManager::tkill(int tid, int sig, const ipc::signal::LinuxSigInfo *info)
     {
         Pcb *p;
         for (p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
@@ -1240,7 +1403,7 @@ namespace proc
             p->_lock.acquire();
             if (p->_tid == tid)
             {
-                p->add_signal(sig);
+                p->add_signal(sig, info);
                 // 线程定向信号和 kill(2) 一样，都需要把“可被信号中断的睡眠”及时唤醒。
                 // pthread_cancel() 最终会走到 pthread_kill/tgkill/tkill；如果这里只是记账信号，
                 // 但不把卡在 futex/rt_sigsuspend 等等待里的目标线程改回 RUNNABLE，
@@ -1258,7 +1421,7 @@ namespace proc
         return -1;
     }
 
-    int ProcessManager::tgkill(int tgid, int tid, int sig)
+    int ProcessManager::tgkill(int tgid, int tid, int sig, const ipc::signal::LinuxSigInfo *info)
     {
         Pcb *p;
         for (p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
@@ -1266,7 +1429,7 @@ namespace proc
             p->_lock.acquire();
             if (p->_tid == tid && p->_tgid == tgid)
             {
-                p->add_signal(sig);
+                p->add_signal(sig, info);
                 // tgkill(2) 是线程取消/定向信号的核心路径。
                 // 保持和 kill_signal() 一致：只要目标线程当前睡眠且存在未屏蔽待处理信号，
                 // 就要把它唤醒，让阻塞中的系统调用有机会返回 EINTR。
@@ -1469,14 +1632,11 @@ namespace proc
         p->_ofile->_lock.release();
     }
 
-    int ProcessManager::clone(uint64 flags, uint64 stack_ptr, uint64 ptid, uint64 tls, uint64 ctid, bool is_clone3)
+    int ProcessManager::clone(uint64 flags, uint64 stack_ptr, uint64 ptid, uint64 tls,
+                              uint64 ctid, bool is_clone3, int exit_signal)
     {
-        if (flags == 0)
-        {
-            return 22; // EINVAL: Invalid argument
-        }
         Pcb *p = get_cur_pcb();
-        Pcb *np = fork(p, flags, stack_ptr, ctid, is_clone3);
+        Pcb *np = fork(p, flags, stack_ptr, ctid, is_clone3, exit_signal);
         if (np == nullptr)
         {
             return -1; // EAGAIN: Out of memory
@@ -1571,7 +1731,8 @@ namespace proc
     }
 
     // 这个函数主要用提供clone的底层支持
-    Pcb *ProcessManager::fork(Pcb *p, uint64 flags, uint64 stack_ptr, uint64 ctid, bool is_clone3)
+    Pcb *ProcessManager::fork(Pcb *p, uint64 flags, uint64 stack_ptr,
+                              uint64 ctid, bool is_clone3, int exit_signal)
     {
         TODO("copy on write fork");
 
@@ -1616,6 +1777,38 @@ namespace proc
         np->_egid = p->_egid;
         np->_sgid = p->_sgid;
         np->_fsgid = p->_fsgid;
+        np->_parent_exit_signal = exit_signal >= 0
+                                      ? exit_signal
+                                      : static_cast<int>(flags & syscall::CSIGNAL);
+        if (flags & syscall::CLONE_THREAD)
+        {
+            // 线程退出不应该向父进程额外发送“子进程退出信号”，join 走的是 tid/futex 语义。
+            np->_parent_exit_signal = 0;
+        }
+        if (flags & syscall::CLONE_THREAD)
+        {
+            // 线程创建不切换当前 time namespace，只继承父线程已经在看的那一份。
+            np->_timens_current = p->_timens_current;
+        }
+        else
+        {
+            // 普通 fork/clone 子进程进入 parent 的 time_for_children namespace。
+            np->_timens_current = p->_timens_children;
+        }
+        np->_timens_children = np->_timens_current;
+        np->_netns = p->_netns;
+        np->_ipc_ns_id = p->_ipc_ns_id;
+        if (flags & syscall::CLONE_NEWIPC)
+        {
+            np->_ipc_ns_id = alloc_ipc_namespace_id();
+        }
+        if (flags & syscall::CLONE_NEWNET)
+        {
+            // 当前先补最小 netns 语义：
+            // 1. 新 namespace 继承 default/tag 作为模板；
+            // 2. lo/tag 重新按 default/tag 初始化，不能继续沿用 parent 的 lo/tag。
+            np->_netns.ipv4_conf_lo_tag = p->_netns.ipv4_conf_default_tag;
+        }
 
         // 进程组ID继承逻辑：
         // 1. 对于普通fork()，子进程继承父进程的进程组
@@ -2026,7 +2219,9 @@ namespace proc
                    p->_pid, child_pid, (void *)addr, option);
 
         // 检查不支持的选项标志
-        const int supported_options = syscall::WNOHANG | syscall::WUNTRACED;
+        const int supported_options = syscall::WNOHANG | syscall::WUNTRACED |
+                                      syscall::__WNOTHREAD | syscall::__WALL |
+                                      syscall::__WCLONE;
         const int unsupported_options = option & ~supported_options;
         if (unsupported_options != 0)
         {
@@ -2207,7 +2402,7 @@ namespace proc
         return false;
     }
 
-    void ProcessManager::mark_thread_group_killed(Pcb *current)
+    void ProcessManager::mark_thread_group_killed(Pcb *current, int fatal_signal)
     {
         if (current == nullptr)
         {
@@ -2227,9 +2422,22 @@ namespace proc
             p->_lock.acquire();
             if (p->_state != ProcState::ZOMBIE && p->_state != ProcState::UNUSED)
             {
-                // 默认致命信号和 exit_group 都是线程组级别终止；
-                // 只杀当前线程会让 pthread/join/wait 路径留下互等的半退出线程组。
-                p->_killed = 1;
+                // 默认致命信号和 exit_group 都是线程组级别终止。信号退出时不能只置
+                // _killed，否则线程从 futex/join 醒来后会按普通 exit(-1) 退出，父进程
+                // wait4() 看不到 WIFSIGNALED；这里要把同一个致命信号投递给线程组成员。
+                if (fatal_signal > 0)
+                {
+                    p->add_signal(fatal_signal);
+                }
+                else
+                {
+                    p->_killed = 1;
+                }
+
+                // futex_wait 以 _futex_key 作为被唤醒/重试的判据。线程组正在终止时，
+                // 必须打断这个等待状态，否则 pthread_join 一类路径可能被唤醒后又睡回去。
+                p->_futex_addr = nullptr;
+                p->_futex_key = 0;
                 if (p->_state == ProcState::SLEEPING)
                 {
                     p->_state = ProcState::RUNNABLE;
@@ -2326,42 +2534,9 @@ namespace proc
          * Phase 1: 处理父子进程关系和进程状态
          ****************************************************************************************/
 
-        // 检查进程组生命周期管理
-        if (p->_pgid == p->_pid)
-        {
-            // 当前进程是进程组领导者，检查是否有其他进程在同一进程组
-            bool has_other_processes = false;
-            for (uint i = 0; i < num_process; i++)
-            {
-                Pcb &other = k_proc_pool[i];
-                if (other._pgid == p->_pgid && other._pid != p->_pid &&
-                    other._state != ProcState::UNUSED && other._state != ProcState::ZOMBIE)
-                {
-                    has_other_processes = true;
-                    break;
-                }
-            }
-
-            if (has_other_processes)
-            {
-                // 如果进程组还有其他活跃进程，向它们发送SIGHUP和SIGCONT信号
-                // 这是孤儿进程组的标准处理
-                printfBlue("[exit_proc] Process group leader %d exiting, signaling remaining processes\n",
-                           p->_pid);
-                for (uint i = 0; i < num_process; i++)
-                {
-                    Pcb &other = k_proc_pool[i];
-                    if (other._pgid == p->_pgid && other._pid != p->_pid &&
-                        other._state != ProcState::UNUSED && other._state != ProcState::ZOMBIE)
-                    {
-                        other._lock.acquire();
-                        other.add_signal(1);  // SIGHUP
-                        other.add_signal(18); // SIGCONT
-                        other._lock.release();
-                    }
-                }
-            }
-        }
+        // 当前内核尚未建模控制终端和完整 job control。Linux 不会因为普通进程组
+        // leader 退出就无条件向同组进程广播 SIGHUP/SIGCONT；旧逻辑会把 mmap10
+        // 里仍在 munmap 的 fork 子进程误杀成 TBROK。
 
         reparent(p); // 将 p 的所有子进程交给 init 进程收养
 
@@ -2413,9 +2588,12 @@ namespace proc
             p->sig_frame = next_frame;          // 移动到下一个帧
         }
         p->sig_frame = nullptr; // 清空信号处理帧指针
+        p->_sigsuspend_restore_pending = false;
+        p->_sigsuspend_saved_sigmask = 0;
 
         // 清理线程相关资源
         p->_futex_addr = nullptr;  // 清空futex等待地址
+        p->_futex_key = 0;         // 清空futex匹配键
         p->_robust_list = nullptr; // 清空健壮futex链表
         p->_robust_list_user_addr = 0;
 
@@ -2457,6 +2635,11 @@ namespace proc
             p->_parent->_lock.acquire();
             p->_parent->_cutime += p->_user_ticks + p->_cutime;
             p->_parent->_cstime += p->_stime + p->_cstime;
+            if (p->_parent_exit_signal > 0)
+            {
+                // clone3/clone 的 exit_signal 语义：非线程子任务退出后，向其父任务投递指定信号。
+                p->_parent->add_signal(p->_parent_exit_signal);
+            }
             p->_parent->_lock.release();
 
             // 唤醒父进程（可能在 wait() 中阻塞）
@@ -2503,7 +2686,7 @@ namespace proc
         printfBlue("[do_signal_exit] proc %s pid %d killed by signal %d (coredump=%s)\n",
                    p->_name, p->_pid, signal_num, coredump ? "yes" : "no");
 
-        mark_thread_group_killed(p);
+        mark_thread_group_killed(p, signal_num);
 
         // 调用底层退出逻辑
         exit_proc(p);
@@ -2597,14 +2780,14 @@ namespace proc
             }
         }
     }
-    int ProcessManager::wakeup2(uint64 uaddr, int val, void *uaddr2, int val2)
+    int ProcessManager::wakeup2(uint64 uaddr, uint64 futex_key, int val, void *uaddr2, uint64 futex_key2, int val2)
     {
         int count1 = 0, count2 = 0;
         for (uint i = 0; i < num_process; ++i)
         {
             Pcb *p = &k_proc_pool[i];
             p->_lock.acquire();
-            bool is_futex_waiter = (uint64)p->_futex_addr == uaddr &&
+            bool is_futex_waiter = p->_futex_key == futex_key &&
                                    (p->_state == SLEEPING || p->_state == RUNNABLE);
             if (is_futex_waiter)
             {
@@ -2617,11 +2800,13 @@ namespace proc
                     if (count1 < val)
                     {
                         p->_futex_addr = 0;
+                        p->_futex_key = 0;
                         count1++;
                     }
                     else if (uaddr2 && count2 < val2)
                     {
                         p->_futex_addr = uaddr2;
+                        p->_futex_key = futex_key2;
                         count2++;
                     }
                 }
@@ -2629,11 +2814,13 @@ namespace proc
                 {
                     p->_state = RUNNABLE;
                     p->_futex_addr = 0;
+                    p->_futex_key = 0;
                     count1++;
                 }
                 else if (uaddr2 && count2 < val2)
                 {
                     p->_futex_addr = uaddr2;
+                    p->_futex_key = futex_key2;
                     count2++;
                 }
             }
@@ -2722,6 +2909,84 @@ namespace proc
         if (full_path.length() >= 2 && full_path[0] == '.' && full_path[1] == '/')
         {
             full_path = full_path.substr(2);
+        }
+
+        // mkdir(2) 不只是最终路径存在性判断，父目录链也必须逐级满足：
+        // 1. 每一级都真实存在且是目录；
+        // 2. 中间祖先目录需要搜索权限（x）；
+        // 3. 直接父目录还需要写权限（w），否则应返回 EACCES。
+        auto check_parent_directory_permissions = [&](const eastl::string &target_path) -> int
+        {
+            size_t last_slash = target_path.find_last_of('/');
+            if (last_slash == eastl::string::npos)
+            {
+                return -ENOENT;
+            }
+
+            eastl::string parent_path = last_slash == 0 ? "/" : target_path.substr(0, last_slash);
+            if (parent_path.empty())
+            {
+                parent_path = "/";
+            }
+
+            if (!vfs_is_file_exist(parent_path.c_str()))
+            {
+                return -ENOENT;
+            }
+
+            uint32_t fsuid = p->get_fsuid();
+            uint32_t fsgid = p->get_fsgid();
+
+            for (size_t end = target_path.find('/', 1);
+                 end != eastl::string::npos && end <= last_slash;
+                 end = target_path.find('/', end + 1))
+            {
+                eastl::string current_path = end == 0 ? "/" : target_path.substr(0, end);
+                if (current_path.empty())
+                {
+                    current_path = "/";
+                }
+
+                fs::Kstat st{};
+                int stat_ret = vfs_path_stat(current_path.c_str(), &st, true);
+                if (stat_ret < 0)
+                {
+                    return stat_ret;
+                }
+
+                if ((st.mode & S_IFMT) != S_IFDIR)
+                {
+                    return -ENOTDIR;
+                }
+
+                if (fsuid == 0)
+                {
+                    continue;
+                }
+
+                bool is_owner = fsuid == st.uid;
+                bool in_group = fsgid == st.gid;
+                bool need_write = current_path == parent_path;
+                bool has_exec = is_owner ? ((st.mode & S_IXUSR) != 0)
+                                         : (in_group ? ((st.mode & S_IXGRP) != 0)
+                                                     : ((st.mode & S_IXOTH) != 0));
+                bool has_write = is_owner ? ((st.mode & S_IWUSR) != 0)
+                                          : (in_group ? ((st.mode & S_IWGRP) != 0)
+                                                      : ((st.mode & S_IWOTH) != 0));
+
+                if (!has_exec || (need_write && !has_write))
+                {
+                    return -EACCES;
+                }
+            }
+
+            return 0;
+        };
+
+        int parent_perm_ret = check_parent_directory_permissions(full_path);
+        if (parent_perm_ret < 0)
+        {
+            return parent_perm_ret;
         }
 
         // 检查符号链接循环 -> ELOOP
@@ -2847,13 +3112,18 @@ namespace proc
     /// @param flags 打开方式（如只读、只写、创建等）
     /// @param mode 文件权限模式（当使用O_CREAT时）
     /// @return fd
-    int ProcessManager::open(int dir_fd, eastl::string path, uint flags, int mode)
-    {
-        Pcb *p = get_cur_pcb();
-        fs::file *file = nullptr;
-        int fd = reserve_fd(p);
-        if (fd < 0)
-        {
+	    int ProcessManager::open(int dir_fd, eastl::string path, uint flags, int mode)
+	    {
+	        Pcb *p = get_cur_pcb();
+	        fs::file *file = nullptr;
+	        int lease_ret = wait_for_conflicting_lease(path, flags);
+	        if (lease_ret < 0)
+	        {
+	            return lease_ret;
+	        }
+	        int fd = reserve_fd(p);
+	        if (fd < 0)
+	        {
             printfRed("[open] alloc_fd failed for path: %s,pid:%d\n", path.c_str(), p->_pid);
             return -EMFILE; // 分配文件描述符失败
         }
@@ -2903,6 +3173,65 @@ namespace proc
         f->free_file();
         return 0;
     }
+
+    int ProcessManager::flush_open_files_for_path(const eastl::string &path)
+    {
+        if (path.empty())
+        {
+            return 0;
+        }
+
+        eastl::vector<fs::file *> flushed_files;
+        flushed_files.reserve(num_process);
+
+        for (uint i = 0; i < num_process; ++i)
+        {
+            Pcb *pcb = &k_proc_pool[i];
+            if (pcb->_state == ProcState::UNUSED || pcb->_ofile == nullptr)
+            {
+                continue;
+            }
+
+            for (uint fd = 0; fd < max_open_files; ++fd)
+            {
+                fs::file *file_obj = pcb->_ofile->_ofile_ptr[fd];
+                if (file_obj == nullptr || file_obj->backing_path() != path)
+                {
+                    continue;
+                }
+
+                bool already_flushed = false;
+                for (fs::file *seen_file : flushed_files)
+                {
+                    if (seen_file == file_obj)
+                    {
+                        already_flushed = true;
+                        break;
+                    }
+                }
+                if (already_flushed)
+                {
+                    continue;
+                }
+
+                // path-based stat/open 会绕过当前 fd；先把同一路径的写合并缓冲刷入 inode，
+                // 保证另一个 open file description 能看到刚写入的大小和内容。
+                int flush_ret = file_obj->flush_visibility_state();
+                if (flush_ret < 0)
+                {
+                    return flush_ret;
+                }
+                if (flush_ret > 0)
+                {
+                    return -flush_ret;
+                }
+                flushed_files.push_back(file_obj);
+            }
+        }
+
+        return 0;
+    }
+
     /// @brief 获取指定文件描述符对应文件的状态信息。
     /// @details 此函数会从当前进程的打开文件表中查找给定文件描述符 `fd`，
     /// 如果合法且已打开，则将其对应的文件状态信息拷贝到 `buf` 指向的结构中。
@@ -3289,6 +3618,74 @@ namespace proc
             return MAP_FAILED;
         };
 
+        auto shared_backing_kernel_addr = [](uint64 pa) -> uint64
+        {
+#ifdef LOONGARCH
+            return to_vir(pa);
+#else
+            return pa;
+#endif
+        };
+
+        auto prepare_mmap_shared_segment = [&](int shmid, size_t bytes_to_copy) -> int
+        {
+            shm::shm_segment seg_info = shm::k_smm.get_seg_info(shmid);
+            if (seg_info.shmid < 0)
+            {
+                printfRed("[mmap] Failed to query shared backing shmid=%d\n", shmid);
+                return EINVAL;
+            }
+
+            // mmap 借道共享段实现，但它的生命周期应当跟最后一个映射一起结束。
+            if (!seg_info.auto_destroy_on_last_detach)
+            {
+                seg_info.auto_destroy_on_last_detach = true;
+                if (shm::k_smm.set_seg_info(shmid, seg_info) != 0)
+                {
+                    printfRed("[mmap] Failed to mark shared backing shmid=%d as auto-destroy\n", shmid);
+                    return EIO;
+                }
+            }
+
+            if (vfile == nullptr || bytes_to_copy == 0 || !created_new_shared_backing)
+            {
+                return 0;
+            }
+
+            // 新建出来的 mmap 共享后端需要先按文件内容灌满整段；否则只有第一页被初始化，
+            // 其余页会一直保持 0，后续多页文件映射会读到错误数据。
+            uint64 kernel_addr = shared_backing_kernel_addr(seg_info.phy_addrs);
+            memset(reinterpret_cast<void *>(kernel_addr), 0, seg_info.real_size);
+
+            size_t copied = 0;
+            while (copied < bytes_to_copy)
+            {
+                size_t chunk = bytes_to_copy - copied;
+                if (chunk > 64 * 1024)
+                {
+                    chunk = 64 * 1024;
+                }
+
+                int readbytes = vfile->read(kernel_addr + copied,
+                                            chunk,
+                                            offset + static_cast<int>(copied),
+                                            false);
+                if (readbytes < 0)
+                {
+                    printfRed("[mmap] Failed to prefill shared file mapping, shmid=%d off=%d ret=%d\n",
+                              shmid, offset + static_cast<int>(copied), readbytes);
+                    return EIO;
+                }
+                if (readbytes == 0)
+                {
+                    break;
+                }
+                copied += static_cast<size_t>(readbytes);
+            }
+
+            return 0;
+        };
+
         if (!is_anonymous)
         {
             if (p->_ofile == nullptr || fd < 0 || fd >= (int)max_open_files ||
@@ -3303,6 +3700,18 @@ namespace proc
             }
 
             f = p->get_open_file(fd);
+            if ((flags & MAP_PRIVATE) != 0 && f != nullptr && f->backing_path() == "/dev/zero")
+            {
+                // Linux 把 MAP_PRIVATE /dev/zero 当作匿名零页映射处理。
+                // 若继续走普通文件 VMA，缺页路径会用“文件大小为 0”误判 EOF 后访问并投递 SIGBUS。
+                is_anonymous = true;
+                vfile = nullptr;
+                f = nullptr;
+            }
+        }
+
+        if (!is_anonymous && f != nullptr)
+        {
             // 支持不同类型的文件映射
             //  if (f->_attrs.filetype != fs::FileTypes::FT_NORMAL||
             //      f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
@@ -3356,6 +3765,17 @@ namespace proc
             }
 
             vfile = f;
+            // 文件映射如果要按路径重新打开一份专用 backing file，
+            // 必须先把原 open file description 上尚未落盘/尚未对外可见的写合并内容刷出去。
+            // 否则像 basic/test_mmap 这种“刚写完就 mmap 同一个文件”的场景，
+            // 重新打开后看到的还是旧内容，缺页时就会读到 0 字节。
+            int flush_visibility_ret = f->flush_visibility_state();
+            if (flush_visibility_ret != 0)
+            {
+                printfRed("[mmap] Failed to flush file visibility state before reopening mapping file: %d\n",
+                          flush_visibility_ret);
+                return fail_mmap(flush_visibility_ret < 0 ? -flush_visibility_ret : flush_visibility_ret);
+            }
             // Respect memfd write seal: disallow shared writable mappings
             if (f->is_memfd())
             {
@@ -3397,9 +3817,6 @@ namespace proc
                 vfile = mapping_file;
                 vma_owns_dedicated_file = true;
             }
-        }
-        else
-        {
         }
 
         // 地址对齐
@@ -3571,8 +3988,11 @@ namespace proc
                 }
 
                 created_new_shared_backing = shared_backing.always_new_segment ||
-                                             shm::k_smm.find_seg_by_key(shared_backing.key) < 0;
-                shared_backing_shmid = shm::k_smm.create_seg(shared_backing.key, restore_length, IPC_CREAT);
+                                             shm::k_smm.find_seg_by_key_in_namespace(shared_backing.key, shm::k_mmap_backing_ipc_namespace_id) < 0;
+                shared_backing_shmid = shm::k_smm.create_seg_in_namespace(shared_backing.key,
+                                                                          restore_length,
+                                                                          IPC_CREAT,
+                                                                          shm::k_mmap_backing_ipc_namespace_id);
                 if (shared_backing_shmid < 0)
                 {
                     printfRed("[mmap] Failed to create shared memory segment\n");
@@ -3590,17 +4010,7 @@ namespace proc
                     shmflg = SHM_NONE;
                 }
 
-                void *attach_result = shm::k_smm.attach_seg(shared_backing_shmid, (void *)map_addr, shmflg);
-                if ((long)attach_result < 0)
-                {
-                    printfRed("[mmap] Failed to attach shared memory segment, shmid=%d ret=%ld\n",
-                              shared_backing_shmid, (long)attach_result);
-                    return fail_mmap(-(long)attach_result);
-                }
-
-                map_addr = (uint64)attach_result;
-                shared_mapping_attached = true;
-                uint64 pa = shm::k_smm.get_seg_info(shared_backing_shmid).phy_addrs;
+                size_t shared_copy_bytes = 0;
                 if (vfile != nullptr)
                 {
                     fs::Kstat st;
@@ -3611,18 +4021,32 @@ namespace proc
                         return fail_mmap(size_result < 0 ? -size_result : size_result);
                     }
 
-                    int readbytes = vfile->read((uint64)pa, PGSIZE, offset, false);
-                    if (readbytes < 0)
+                    if (static_cast<uint64>(offset) < st.size)
                     {
-                        printfRed("[mmap] Failed to read file data for mapping, error: %d\n", readbytes);
-                        return fail_mmap(EFAULT);
-                    }
-
-                    if (readbytes < PGSIZE)
-                    {
-                        printfYellow("[mmap] MAP_SHARED partial page read (%d bytes)\n", readbytes);
+                        shared_copy_bytes = st.size - static_cast<uint64>(offset);
+                        if (shared_copy_bytes > aligned_length)
+                        {
+                            shared_copy_bytes = aligned_length;
+                        }
                     }
                 }
+
+                int shared_prepare_ret = prepare_mmap_shared_segment(shared_backing_shmid, shared_copy_bytes);
+                if (shared_prepare_ret != 0)
+                {
+                    return fail_mmap(shared_prepare_ret);
+                }
+
+                void *attach_result = shm::k_smm.attach_seg(shared_backing_shmid, (void *)map_addr, shmflg, false);
+                if ((long)attach_result < 0)
+                {
+                    printfRed("[mmap] Failed to attach shared memory segment, shmid=%d ret=%ld\n",
+                              shared_backing_shmid, (long)attach_result);
+                    return fail_mmap(-(long)attach_result);
+                }
+
+                map_addr = (uint64)attach_result;
+                shared_mapping_attached = true;
             }
         }
 
@@ -3636,8 +4060,11 @@ namespace proc
             }
 
             created_new_shared_backing = shared_backing.always_new_segment ||
-                                         shm::k_smm.find_seg_by_key(shared_backing.key) < 0;
-            shared_backing_shmid = shm::k_smm.create_seg(shared_backing.key, restore_length, IPC_CREAT);
+                                         shm::k_smm.find_seg_by_key_in_namespace(shared_backing.key, shm::k_mmap_backing_ipc_namespace_id) < 0;
+            shared_backing_shmid = shm::k_smm.create_seg_in_namespace(shared_backing.key,
+                                                                      restore_length,
+                                                                      IPC_CREAT,
+                                                                      shm::k_mmap_backing_ipc_namespace_id);
             if (shared_backing_shmid < 0)
             {
                 printfRed("[mmap] Failed to create shared memory segment for fixed/shared mapping\n");
@@ -3655,17 +4082,7 @@ namespace proc
                 shmflg = SHM_NONE;
             }
 
-            void *attach_result = shm::k_smm.attach_seg(shared_backing_shmid, (void *)map_addr, shmflg);
-            if ((long)attach_result < 0)
-            {
-                printfRed("[mmap] Failed to attach shared memory segment for fixed/shared mapping, shmid=%d ret=%ld\n",
-                          shared_backing_shmid, (long)attach_result);
-                return fail_mmap(-(long)attach_result);
-            }
-
-            map_addr = (uint64)attach_result;
-            shared_mapping_attached = true;
-            uint64 pa = shm::k_smm.get_seg_info(shared_backing_shmid).phy_addrs;
+            size_t shared_copy_bytes = 0;
             if (vfile != nullptr)
             {
                 fs::Kstat st;
@@ -3676,18 +4093,32 @@ namespace proc
                     return fail_mmap(size_result < 0 ? -size_result : size_result);
                 }
 
-                int readbytes = vfile->read((uint64)pa, PGSIZE, offset, false);
-                if (readbytes < 0)
+                if (static_cast<uint64>(offset) < st.size)
                 {
-                    printfRed("[mmap] Failed to read file data for mapping, error: %d\n", readbytes);
-                    return fail_mmap(EFAULT);
-                }
-
-                if (readbytes < PGSIZE)
-                {
-                    printfYellow("[mmap] MAP_SHARED partial page read (%d bytes)\n", readbytes);
+                    shared_copy_bytes = st.size - static_cast<uint64>(offset);
+                    if (shared_copy_bytes > aligned_length)
+                    {
+                        shared_copy_bytes = aligned_length;
+                    }
                 }
             }
+
+            int shared_prepare_ret = prepare_mmap_shared_segment(shared_backing_shmid, shared_copy_bytes);
+            if (shared_prepare_ret != 0)
+            {
+                return fail_mmap(shared_prepare_ret);
+            }
+
+            void *attach_result = shm::k_smm.attach_seg(shared_backing_shmid, (void *)map_addr, shmflg, false);
+            if ((long)attach_result < 0)
+            {
+                printfRed("[mmap] Failed to attach shared memory segment for fixed/shared mapping, shmid=%d ret=%ld\n",
+                          shared_backing_shmid, (long)attach_result);
+                return fail_mmap(-(long)attach_result);
+            }
+
+            map_addr = (uint64)attach_result;
+            shared_mapping_attached = true;
         }
 
         // LoongArch 的 TLB refill 入口假定目标虚拟地址的页表层级已经存在。
@@ -3701,6 +4132,34 @@ namespace proc
             {
                 printfRed("[mmap] Failed to precreate page-table hierarchy for va=%p\n", (void *)va);
                 return fail_mmap(ENOMEM);
+            }
+        }
+
+        if ((flags & (MAP_POPULATE | MAP_LOCKED)) != 0 && prot != PROT_NONE)
+        {
+            vma populate_vm = {};
+            populate_vm.used = 1;
+            populate_vm.addr = map_addr;
+            populate_vm.len = aligned_length;
+            populate_vm.prot = prot;
+            populate_vm.flags = flags;
+            populate_vm.vfd = is_anonymous ? -1 : fd;
+            populate_vm.vfile = vfile;
+            populate_vm.offset = offset;
+            populate_vm.backing_kind = ((flags & MAP_SHARED) != 0) ? VMA_BACKING_SHM :
+                                       (vfile != nullptr ? VMA_BACKING_FILE : VMA_BACKING_NONE);
+            populate_vm.backing_shmid = ((flags & MAP_SHARED) != 0) ? shared_backing_shmid : -1;
+            populate_vm.backing_base = ((flags & MAP_SHARED) != 0) ? map_addr : 0;
+
+            int populate_access = (prot & PROT_READ) ? 0 : ((prot & PROT_WRITE) ? 1 : 2);
+            for (uint64 va = map_addr; va < map_addr + aligned_length; va += PGSIZE)
+            {
+                if (mem::k_vmm.allocate_vma_page(*p->get_pagetable(), va, &populate_vm, populate_access) != 0)
+                {
+                    printfRed("[mmap] Failed to pre-populate mapping va=%p len=%p flags=0x%x\n",
+                              (void *)va, (void *)aligned_length, flags);
+                    return fail_mmap(EFAULT);
+                }
             }
         }
 
@@ -3796,8 +4255,18 @@ namespace proc
         // 设置扩展属性
         if (is_anonymous)
         {
-            vm->is_expandable = !(flags & MAP_FIXED);
-            vm->max_len = (flags & MAP_FIXED) ? aligned_length : (MAXVA - map_addr);
+            if (flags & MAP_GROWSDOWN)
+            {
+                // MAP_GROWSDOWN 即使配合 MAP_FIXED，也需要在缺页时允许向低地址扩展。
+                // mmap18 会把一小段固定映射作为线程栈顶，再依赖 guard page fault 逐页长出栈。
+                vm->is_expandable = true;
+                vm->max_len = MAXVA - PGSIZE;
+            }
+            else
+            {
+                vm->is_expandable = !(flags & MAP_FIXED);
+                vm->max_len = (flags & MAP_FIXED) ? aligned_length : (MAXVA - map_addr);
+            }
         }
         else
         {
@@ -4524,6 +4993,12 @@ namespace proc
 
         ipc::Pipe *pipe_ = new ipc::Pipe();
         pipe_->set_pipe_flags(flags);
+        if (p != nullptr && p->get_euid() == 0)
+        {
+            // Linux 会给特权创建者更大的缺省 pipe 容量；LTP fcntl35/_64
+            // 会同时校验 root 与无特权用户两种初始大小。
+            (void)pipe_->set_pipe_size(ipc::privileged_default_pipe_size);
+        }
         // 处理O_NONBLOCK标志 - 设置管道的非阻塞属性
         if (flags & O_NONBLOCK)
         {
@@ -5307,7 +5782,11 @@ namespace proc
         // ========== 第五阶段：分配用户栈空间 ==========
 
         { // **重构：基于最高地址分配用户栈空间**
-            int stack_pgnum = 32;
+            // root 场景下 LTP epoll_wait01 会在同一帧里放两块 64K 的栈缓冲区。
+            // 旧的 32 页栈里还有 1 页 guard，可用空间只有 31 * 4K，不足以容纳
+            // 这类 Linux 合法工作负载，会把本来正确的 pipe 语义误炸成 EFAULT。
+            // 这里把默认用户栈提高到 64 页，先与当前回归规模对齐。
+            int stack_pgnum = 64;
             uint64 stack_start = PGROUNDUP(highest_addr); // 在最高地址之上分配栈
             uint64 stack_end = stack_start + stack_pgnum * PGSIZE;
 

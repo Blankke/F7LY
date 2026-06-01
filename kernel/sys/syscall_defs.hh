@@ -26,6 +26,7 @@ namespace syscall
         SYS_eventfd2 = 19,
         SYS_epoll_create1 = 20,
         SYS_epoll_ctl = 21,
+        SYS_epoll_pwait = 22,
         SYS_dup = 23,
         SYS_dup3 = 24,
         SYS_fcntl = 25,
@@ -88,6 +89,7 @@ namespace syscall
         SYS_exit_group = 94,
         SYS_waitid = 95,
         SYS_set_tid_address = 96,
+        SYS_unshare = 97,
         SYS_futex = 98, // form tsh
         SYS_set_robust_list = 99,
         SYS_get_robust_list = 100, // form tsh
@@ -215,6 +217,7 @@ namespace syscall
         SYS_statx = 291,
         SYS_strerror = 300, // from rocket
         SYS_perror = 301,   // from rocket
+        SYS_pidfd_send_signal = 424,
         SYS_io_uring_setup = 425,
         SYS_recvmmsg_time64 = 417,
         SYS_open_tree = 428,
@@ -225,6 +228,7 @@ namespace syscall
         SYS_close_range = 436, // from rocket
         SYS_openat2 = 437,     // from rocket
         SYS_faccessat2 = 439,  // from rocket
+        SYS_epoll_pwait2 = 441,
         SYS_memfd_secret = 447,
         SYS_fchmodat2 = 452,
 

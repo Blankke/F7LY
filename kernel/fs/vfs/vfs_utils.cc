@@ -1498,8 +1498,13 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
         type = fs::FileTypes::FT_NORMAL; // 新文件默认为普通文件
     }
 
+    const bool open_symlink_itself =
+        file_exists && type == fs::FileTypes::FT_SYMLINK &&
+        (flags & O_NOFOLLOW) && (flags & O_PATH);
+
     // 处理 O_NOFOLLOW：如果最终路径是符号链接，应该返回错误
-    if ((flags & O_NOFOLLOW) && file_exists && type == fs::FileTypes::FT_SYMLINK)
+    if ((flags & O_NOFOLLOW) && file_exists && type == fs::FileTypes::FT_SYMLINK &&
+        !open_symlink_itself)
     {
         printfRed("vfs_openat: O_NOFOLLOW specified but %s is a symlink\n", resolved_path.c_str());
         return -ELOOP; // 符号链接循环错误
@@ -1536,9 +1541,19 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
         }
     }
 
-    // 注意：符号链接处理已经在函数开头完成
-    // 如果到这里 type 还是 FT_SYMLINK，说明有 O_NOFOLLOW 标志
-    // 但我们已经在上面检查过了，所以这里不应该再有符号链接
+    // Linux 允许 open(path, O_PATH | O_NOFOLLOW) 获取“符号链接本体”的 fd。
+    // readlinkat01 正是依赖这条语义来覆盖空路径 readlinkat(fd, "", ...)。
+    if (open_symlink_itself)
+    {
+        fs::FileAttrs attrs;
+        attrs.filetype = fs::FileTypes::FT_SYMLINK;
+        attrs._value = 0777;
+
+        fs::normal_file *temp_file = new fs::normal_file(attrs, actual_path);
+        temp_file->lwext4_file_struct.flags = flags;
+        file = temp_file;
+        return EOK;
+    }
 
     int status = -100;
 
@@ -2242,6 +2257,26 @@ int vfs_mkdir(const char *path, uint64_t mode)
 
     /* Apply umask to the mode and set directory permissions. */
     mode_t final_mode = apply_umask(mode);
+    // Linux 会让“在 setgid 父目录里新建的子目录”自动继承 S_ISGID。
+    // mkdir02 依赖这条语义来验证组继承和目录 setgid 传播。
+    eastl::string parent_path = get_parent_path(path);
+    if (!parent_path.empty())
+    {
+        eastl::string resolved_parent;
+        int resolve_ret = resolve_symlinks(parent_path, resolved_parent);
+        if (resolve_ret == EOK)
+        {
+            select_runtime_alias_path(resolved_parent, resolved_parent, false);
+            fs::Kstat parent_st{};
+            int parent_stat_ret = raw_vfs_path_stat(resolved_parent, &parent_st);
+            if (parent_stat_ret == EOK &&
+                (parent_st.mode & S_IFMT) == S_IFDIR &&
+                (parent_st.mode & S_ISGID) != 0)
+            {
+                final_mode |= S_ISGID;
+            }
+        }
+    }
     status = ext4_mode_set(path, final_mode);
     if (status != EOK)
     {
@@ -2690,6 +2725,14 @@ int vfs_path_stat(const char *path, fs::Kstat *st, bool follow_symlinks)
     }
 
     select_runtime_alias_path(effective_path, effective_path, false);
+
+    // path-based stat 必须看见当前进程/其他进程已经写入但仍留在写合并缓冲里的数据。
+    // 典型场景是 LTP mmap01：write(fd) 后立刻 stat(path)，若不刷新会把 st_size 误报为 0。
+    int flush_ret = proc::k_pm.flush_open_files_for_path(effective_path);
+    if (flush_ret < 0)
+    {
+        return flush_ret;
+    }
 
     int status = raw_vfs_path_stat(effective_path, st);
     if (status != EOK)

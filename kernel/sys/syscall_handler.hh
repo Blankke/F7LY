@@ -94,6 +94,7 @@ namespace syscall
 
         // busybox
         uint64 sys_set_tid_address();
+        uint64 sys_unshare();
         uint64 sys_getuid();
         uint64 sys_getgid();
         uint64 sys_setgid();
@@ -136,6 +137,7 @@ namespace syscall
         uint64 sys_userfaultfd();
         uint64 sys_inotify_init1();
         uint64 sys_fanotify_init();
+        uint64 sys_pidfd_send_signal();
         uint64 sys_pidfd_open();
         uint64 sys_vmsplice();
         uint64 sys_signalfd4();
@@ -266,6 +268,8 @@ namespace syscall
         uint64 sys_flock();
         uint64 sys_epoll_create1();
         uint64 sys_epoll_ctl();
+        uint64 sys_epoll_pwait();
+        uint64 sys_epoll_pwait2();
         uint64 sys_eventfd2();
         uint64 sys_waitid();
         uint64 sys_memfd_create();

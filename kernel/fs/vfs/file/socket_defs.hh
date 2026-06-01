@@ -45,6 +45,30 @@
 #ifndef SO_RCVBUF
 #define SO_RCVBUF       8       /* receive buffer size */
 #endif
+#ifndef SO_SNDBUFFORCE
+#define SO_SNDBUFFORCE  32      /* force send buffer size */
+#endif
+#ifndef SO_RCVBUFFORCE
+#define SO_RCVBUFFORCE  33      /* force receive buffer size */
+#endif
+#ifndef SO_RCVTIMEO_OLD
+#define SO_RCVTIMEO_OLD 20      /* receive timeout, 64-bit timeval ABI */
+#endif
+#ifndef SO_SNDTIMEO_OLD
+#define SO_SNDTIMEO_OLD 21      /* send timeout, 64-bit timeval ABI */
+#endif
+#ifndef SO_RCVTIMEO_NEW
+#define SO_RCVTIMEO_NEW 66      /* receive timeout, time64 ABI */
+#endif
+#ifndef SO_SNDTIMEO_NEW
+#define SO_SNDTIMEO_NEW 67      /* send timeout, time64 ABI */
+#endif
+#ifndef SO_RCVTIMEO
+#define SO_RCVTIMEO     SO_RCVTIMEO_OLD
+#endif
+#ifndef SO_SNDTIMEO
+#define SO_SNDTIMEO     SO_SNDTIMEO_OLD
+#endif
 #define SO_REUSEPORT    15      /* reuse port */
 #ifndef SO_OOBINLINE
 #define SO_OOBINLINE    10      /* leave received OOB data in line */

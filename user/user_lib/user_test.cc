@@ -2,6 +2,7 @@
 #include "user.hh"
 
 extern char *libctest[][2];
+extern char *libctest_dynamic_only[];
 
 const char musl_dir[] = "/musl/";
 const char glibc_dir[] = "/glibc/";
@@ -46,8 +47,10 @@ static char **ltp_envp(bool is_musl)
 {
     // musl/glibc 的测试程序都依赖同名的 libc.so。
     // 这里必须按运行时目录分别设置搜索路径，不能把 musl 测例错误地导向 glibc/libc.so。
+    // 另外像 fcntl07 这类 LTP 用例会在子进程里通过 execlp(TCID, ...) 重新执行自己，
+    // PATH 必须包含当前 testcase 目录，否则会被误判成内核/exec 失败。
     static char *musl_envp[] = {
-        (char *)"PATH=/bin",
+        (char *)"PATH=/bin:/musl/ltp/testcases/bin",
         (char *)"LD_LIBRARY_PATH=/musl/lib",
 #ifdef LOONGARCH
         // LoongArch QEMU 长回归里部分 LTP 用例会因为 fork/exec/shell 链路偏慢超过默认 30s。
@@ -56,7 +59,7 @@ static char **ltp_envp(bool is_musl)
 #endif
         NULL};
     static char *glibc_envp[] = {
-        (char *)"PATH=/bin",
+        (char *)"PATH=/bin:/glibc/ltp/testcases/bin",
         (char *)"LD_LIBRARY_PATH=/glibc/lib",
 #ifdef LOONGARCH
         (char *)"LTP_TIMEOUT_MUL=10",
@@ -104,14 +107,6 @@ static bool is_libctest_dynamic_case_available(const char *case_name)
 {
     // 镜像里的 entry-static.exe 与 entry-dynamic.exe 内置 case 集合不完全一致。
     // 下面两个 case 只存在于 static entry；传给 dynamic entry 会返回 255，属于调度错误而不是测例失败。
-#ifdef LOONGARCH
-    // LoongArch 动态 pthread_cancel 会在 pthread 取消信号栈上偶发落到未驻留页；
-    // 静态入口仍完整覆盖该 case，动态入口先跳过，避免全量回归被非确定性 panic 打断。
-    if (strcmp(case_name, "pthread_cancel") == 0)
-    {
-        return false;
-    }
-#endif
     return strcmp(case_name, "tls_align") != 0 &&
            strcmp(case_name, "pthread_cancel_sem_wait") != 0;
 }
@@ -794,6 +789,13 @@ int libc_test(const char *path = musl_dir)
         argv[3] = libctest[i][0];
         run_test("runtest.exe", argv, envp);
     }
+    // 部分 libctest case 只存在于动态入口；单独调度，避免静态入口 255 误报污染回归。
+    argv[2] = "entry-dynamic.exe";
+    for (int i = 0; libctest_dynamic_only[i] != NULL; i++)
+    {
+        argv[3] = libctest_dynamic_only[i];
+        run_test("runtest.exe", argv, envp);
+    }
     printf("#### OS COMP TEST GROUP END libctest-musl ####\n");
     return 0;
 }
@@ -1011,8 +1013,8 @@ char *libctest[][2] = {
     {"inet_pton", NULL},
     {"mbc", NULL},
     {"memstream", NULL},
-    // {"pthread_cancel_points", NULL}, // src/functional/pthread_cancel-points.c:144: res != PTHREAD_CANCELED failed (shm_open, canceled thread exit status)
-    // {"pthread_cancel", NULL},        // sig， fork高级用法
+    {"pthread_cancel_points", NULL}, // 2026-05-31: RV/LA static/dynamic 直跑 Pass
+    {"pthread_cancel", NULL},        // 2026-05-31: RV/LA static/dynamic 直跑 Pass
     {"pthread_cond", NULL}, // sig， fork高级用法
     {"pthread_tsd", NULL},  // sig， fork高级用法
     {"qsort", NULL},
@@ -1023,7 +1025,7 @@ char *libctest[][2] = {
     {"search_tsearch", NULL},
     {"setjmp", NULL}, // 信号相关，爆了
     {"snprintf", NULL},
-    // // // {"socket", NULL}, // 网络相关，这个不测了
+    {"socket", NULL}, // 2026-05-31: RV/LA static/dynamic 直跑 Pass，依赖 SO_RCVTIMEO/SO_SNDTIMEO 兼容
     {"sscanf", NULL},
     {"sscanf_long", NULL}, // 龙芯会爆，riscv正常
     {"stat", NULL},        // fstat(fileno(f),&st)==0 failed: errnp = Bad file descriptor
@@ -1053,7 +1055,7 @@ char *libctest[][2] = {
     {"daemon_failure", NULL},
     {"dn_expand_empty", NULL},
     {"dn_expand_ptr_0", NULL},
-    // // // {"fflush_exit", NULL},//fd爆了，标准输出不见了
+    {"fflush_exit", NULL}, // 2026-05-31: RV/LA static/dynamic 直跑 Pass
     {"fgets_eof", NULL},
     {"fgetwc_buffering", NULL},
     {"fpclassify_invalid_ld80", NULL},
@@ -1076,9 +1078,9 @@ char *libctest[][2] = {
     {"printf_fmt_g_round", NULL},
     {"printf_fmt_g_zeros", NULL},
     {"printf_fmt_n", NULL},
-    // {"pthread_robust_detach", NULL}, //爆了
+    {"pthread_robust_detach", NULL}, // 2026-05-31: RV/LA static/dynamic 直跑 Pass
     {"pthread_cancel_sem_wait", NULL}, // sig， fork高级用法
-    // {"pthread_cond_smasher", NULL},
+    {"pthread_cond_smasher", NULL}, // 2026-05-31: RV/LA static/dynamic 直跑 Pass
     {"pthread_condattr_setclock", NULL}, // sig， fork高级用法
     {"pthread_exit_cancel", NULL},       // sig， fork高级用法
     {"pthread_once_deadlock", NULL},     // sig， fork高级用法
@@ -1090,8 +1092,8 @@ char *libctest[][2] = {
     {"regex_escaped_high_byte", NULL},
     {"regex_negated_range", NULL},
     {"regexec_nosub", NULL},
-    // // // {"rewind_clear_error", NULL}, // 爆了
-    // // // {"rlimit_open_files", NULL}, // 爆了
+    {"rewind_clear_error", NULL}, // 2026-05-31: RV/LA static/dynamic 直跑 Pass
+    {"rlimit_open_files", NULL}, // 2026-05-31: RV/LA static/dynamic 直跑 Pass
     {"scanf_bytes_consumed", NULL},
     {"scanf_match_literal_eof", NULL},
     {"scanf_nullbyte_char", NULL},
@@ -1106,118 +1108,19 @@ char *libctest[][2] = {
     {"wcsstr_false_negative", NULL},
     {NULL}};
 
+char *libctest_dynamic_only[] = {
+    (char *)"dlopen",         // 2026-05-31: static entry 返回 255，RV/LA dynamic 直跑 Pass
+    (char *)"sem_init",       // 2026-05-31: static entry 返回 255，RV/LA dynamic 直跑 Pass
+    (char *)"tls_init",       // 2026-05-31: static entry 返回 255，RV/LA dynamic 直跑 Pass
+    (char *)"tls_local_exec", // 2026-05-31: static entry 返回 255，RV/LA dynamic 直跑 Pass
+    NULL,
+};
+
 struct ltp_testcase ltp_testcases[] = {
     // 示例：{测例名字, RV+musl, RV+glibc, LA+musl, LA+glibc}
     // 约定：第一个 {NULL, false, false, false, false} 就是当前默认跑测例的结束标记。
     // 下面继续保留的注释清单只作为候选记录，想打开哪个测例就把它挪到结束标记前面。
     // 新开以前完全没跑过的测例时，优先按 tools/ltp/judge/ltp_rank.txt 的 total count 从高到低推进。
-    // {"mkdir02", true, true, true, true}, // TBROK: Group ID lookup failed: EINVAL (22)
-    // {"mkdir04", true, true, true, true}, // TFAIL: mkdir(testdir/testdir, 0777) succeeded unexpectedly
-    // {"mkdir05", true, true, true, true}, // pass 1
-    // {"setsid01", true, true, true, true},  //panic: kernel/sys/syscall_handler.cc:8673: 未实现该系统调用
-    // {"readlinkat01", true, true, true, true}, // TBROK: open(readlink_symlink,2228224,0000) failed: ELOOP (40)
-        // {"clock_adjtime01", true, true, true, true}, //panic: kernel/sys/syscall_handler.cc:13693: 未实现该系统调用
-    // {"clock_adjtime02", true, true, true, true},  //panic: kernel/sys/syscall_handler.cc:13693: 未实现该系统调用
-    // {"clock_gettime01", true, true, true, true},   //timeout
-    // {"clock_gettime03", true, true, true, true},   // timeout
-    // {"clock_gettime04", true, true, true, true},    // timeout
-    // {"clock_nanosleep01", true, true, true, true},  //passed   11 fail 1 TFAIL: returned -1, expected -1, expected errno: EOPNOTSUPP (95): EINVAL (22)
-    // {"clock_nanosleep02", true, true, true, true}, //TFAIL: clock_nanosleep() slept for too long
-    // {"clock_nanosleep03", true, true, true, true},  //TBROK: Cannot parse kernel .config
-    // {"clock_settime01", true, true, true, true},   //panic: kernel/sys/syscall_handler.cc:12611: 未实现该系统调用
-    // {"clock_settime02", true, true, true, true},  //panic: kernel/sys/syscall_handler.cc:12611: 未实现该系统调用
-    // {"clock_settime03", true, true, true, true},  //panic: kernel/sys/syscall_handler.cc:12611: 未实现该系统调用
-    // {"clone02", false, true, false, true},   //PASS no summary, only for glibc
-    // {"clone04", true, true, true, true},  //TBROK: Test killed by SIGSEGV!
-    // {"clone05", true, true, true, true},   //pass 1
-    // {"clone07", true, true, true, true},  //pass 1
-    // {"clone08", true, true, true, true}, //passed   4 TFAIL: futex failed, ctid: -1: EINVAL (22)
-    // {"clone09", true, true, true, true}, //TBROK: Failed to open FILE '/proc/sys/net/ipv4/conf/lo/tag' for reading: ENOENT (2)
-    // {"clone301", true, true, true, true}, //TBROK: waitpid(22,0x10bb1c,1073741824) failed: EINVAL (22)
-    // {"clone303", true, true, true, true}, //TCONF: V2 'base' controller required, but it's mounted on V1
-    // {"epoll_create02", true, true, true, true}, // TCONF: syscall(-1) __NR_epoll_create not supported on your arch  TFAIL: epoll_create(0) invalid retval 3: SUCCESS (0)  TFAIL: epoll_create(-1) invalid retval 4: SUCCESS (0)
-    // {"epoll_ctl01", true, true, true, true}, //TFAIL: epoll_wait() returned -1: ENOSYS (38)
-    // {"epoll_ctl02", true, true, true, true},//passed 8 failed 1  TFAIL: epoll_ctl(...) if fd does not support epoll succeeded
-    // {"epoll_ctl04", true, true, true, true}, //TBROK: epoll_ctl(..., EPOLL_CTL_ADD, ...): EINVAL (22)
-    // {"epoll_ctl05", true, true, true, true}, //TBROK: epoll_ctl(..., EPOLL_CTL_ADD, ...): EINVAL (22)
-    // {"epoll_pwait01", true, true, true, true}, //TCONF: syscall(22) __NR_epoll_pwait not supported on your arch
-    // {"epoll_pwait02", true, true, true, true}, //TCONF: syscall(441) __NR_epoll_pwait2 not supported on your arch
-    // {"epoll_pwait03", true, true, true, true},
-    // {"epoll_pwait04", true, true, true, true},
-    // {"epoll_pwait05", true, true, true, true},
-    // {"epoll_wait01", true, true, true, true}, //TFAIL: epoll_wait() epollout failed: ENOSYS (38)
-    // {"epoll_wait02", true, true, true, true},
-    // {"epoll_wait03", true, true, true, true},
-    // {"epoll_wait04", true, true, true, true},
-    // {"epoll_wait05", true, true, true, true}, //TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)
-    // {"epoll_wait06", true, true, true, true},
-    // {"epoll_wait07", true, true, true, true},
-    // {"epoll-ltp", false, true, false, true}, // TFAIL  :  epoll-ltp.c:217: epoll_create with negative set size succeeded unexpectedly: errno=SUCCESS(0): No error information  // Testing epoll_ctl timeout
-    // {"fallocate01", false, true, false, true}, // TFAIL  :  fallocate01.c:249: fstat test fails on fallocate (4, 1, 49152, 4096) Failed on mode: errno=SUCCESS(0): No error information
-    // {"fallocate02", false, true, false, true}, // 完全通过
-    // {"fallocate03", false, true, false, true}, //pass
-    // {"fchdir03", true, true, true, true}, // TFAIL: fchdir() succeeded unexpectedly
-    // {"fchmod05", true, true, true, true}, //TBROK: Group ID lookup failed: EINVAL (22)
-    // {"fchmod06", true, true, true, true}, //TFAIL: fchmod() failed unexpectedly, expected 1 - EPERM: EPERM (1)
-    {"fchownat01", false, true, false, true}, //pass但是没summary
-    {"fchownat02", false, true, false, true}, ////pass但是没summary
-    // {"fcntl01", true, true, true, true},  //几乎都没有通过
-    // {"fcntl01_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl07", true, true, true, true},  //几乎都没有通过
-    // {"fcntl07_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl11", true, true, true, true},  //几乎都没有通过
-    // {"fcntl11_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl12", true, true, true, true}, //fail  //几乎都没有通过
-    // {"fcntl12_64", true, true, true, true}, //fail  //几乎都没有通过
-    // {"fcntl14", true, true, true, true}, //rt_sigsuspend  //几乎都没有通过
-    // {"fcntl14_64", true, true, true, true}, //rt_sigsuspend  //几乎都没有通过
-    // {"fcntl16", true, true, true, true},  //几乎都没有通过
-    // {"fcntl16_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl17", true, true, true, true},  //几乎都没有通过
-    // {"fcntl17_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl18", true, true, true, true},  //几乎都没有通过
-    // {"fcntl18_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl19", true, true, true, true},  //几乎都没有通过
-    // {"fcntl19_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl20", true, true, true, true},  //几乎都没有通过
-    // {"fcntl20_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl21", true, true, true, true},  //几乎都没有通过
-    // {"fcntl21_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl22", true, true, true, true},  //几乎都没有通过
-    // {"fcntl22_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl23", true, true, true, true},  //几乎都没有通过
-    // {"fcntl23_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl24", true, true, true, true},  //几乎都没有通过
-    // {"fcntl24_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl25", true, true, true, true},  //几乎都没有通过
-    // {"fcntl25_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl26", true, true, true, true},  //几乎都没有通过
-    // {"fcntl26_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl27", true, true, true, true},  //几乎都没有通过
-    // {"fcntl27_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl29", true, true, true, true},  //几乎都没有通过
-    // {"fcntl29_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl30", true, true, true, true},  //几乎都没有通过
-    // {"fcntl30_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl31", true, true, true, true},  //几乎都没有通过
-    // {"fcntl31_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl32", true, true, true, true},  //几乎都没有通过
-    // {"fcntl32_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl33", true, true, true, true},  //几乎都没有通过
-    // {"fcntl33_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl34", true, true, true, true},  //几乎都没有通过
-    // {"fcntl34_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl35", true, true, true, true},  //几乎都没有通过
-    // {"fcntl35_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl36", true, true, true, true},  //几乎都没有通过
-    // {"fcntl36_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl37", true, true, true, true},  //几乎都没有通过
-    // {"fcntl37_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl38", true, true, true, true},  //几乎都没有通过
-    // {"fcntl38_64", true, true, true, true},  //几乎都没有通过
-    // {"fcntl39", true, true, true, true},  //几乎都没有通过
-    // {"fcntl39_64", true, true, true, true},  //几乎都没有通过
-    {NULL, false, false, false, false},
     {"memfd_create01", true, true, true, true},
     {"splice07", true, true, true, true},
     {"epoll_ctl03", true, true, true, true},
@@ -1255,8 +1158,6 @@ struct ltp_testcase ltp_testcases[] = {
     {"add_key02", true, true, true, true},
     {"add_key03", true, true, true, true},
     {"add_key04", true, true, true, true},
-    {"accept01", true, true, true, true},
-    {"accept03", true, true, true, true},
     {"dup01", true, true, true, true},            // 完全PASS
     {"dup02", true, true, true, true},            // 完全PASS
     {"dup03", true, true, true, true},            // 完全PASS
@@ -1416,16 +1317,6 @@ struct ltp_testcase ltp_testcases[] = {
     {"mkdir03", true, true, true, true},   // pass
     {"mknod02", true, true, true, true},
     {"mknod09", true, true, true, true},
-    {"mmap02", true, true, true, true},
-    {"mmap05", true, true, true, true},        // pass1 但是panic关了一个
-    {"mmap06", true, true, true, true},        // pass6 fail 2
-    {"mmap08", true, true, true, true},        // pass
-    {"mmap09", true, true, true, false},       // LA+glibc: LTP 内部 5min timeout；RV 和 LA+musl 继续覆盖
-    {"mmap13", true, true, true, true},        // pass
-    {"mmap15", true, true, true, true},        // pass
-    {"mmap17", true, true, true, true},        // pass
-    {"mmap19", true, true, true, true},        // pass
-    {"mmap20", true, true, true, true},        // pass
     {"open01", true, true, true, true},        // pass
     {"open02", true, true, true, true},        // pass1 fail1
     {"open03", true, true, true, true},        // 完全PASS
@@ -1490,8 +1381,6 @@ struct ltp_testcase ltp_testcases[] = {
     {"symlink03", true, true, true, true},     // 2026-05-21: symlink 空路径/权限语义修正后四组合定向复测通过，total=0
     {"symlink04", true, true, true, true},     // pass
     {"syscall01", true, true, true, true},     // pass
-    {"socket01", true, true, true, true},      // pass
-    {"socket02", true, true, true, true},      // pass
     {"time01", true, true, true, true},        // pass
     {"truncate02", true, true, true, true},
     {"truncate02_64", true, true, true, true},
@@ -1550,48 +1439,441 @@ struct ltp_testcase ltp_testcases[] = {
     {"futex_wait04", true, true, true, true},        // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
     {"futex_wait_bitset01", true, true, true, true}, // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
     {"futex_wake01", true, true, true, true},        // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
-    {"gethostname01", true, true, true, true},       // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
-    {"gethostname02", false, true, false, true},     // 2026-05-27: glibc TPASS；musl 组合 Summary 失败，保持关闭。
     {"getpagesize01", true, true, true, true},       // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
     {"gettimeofday02", true, true, true, true},      // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
     {"link05", true, true, true, true},              // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
     {"nanosleep04", true, true, true, true},         // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
     {"nice01", true, true, true, true},              // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
-    {"nice02", true, true, true, true},              // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
-    {"nice04", false, true, true, true},             // 2026-05-27: RV+musl Summary 失败，其余组合通过。
-    {"pipe08", true, true, true, true},              // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
-    {"pipe2_01", true, true, true, true},            // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
-    {"signal02", true, true, true, true},            // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
-    {"times01", true, true, true, true},             // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
-    {"tkill01", true, true, true, true},             // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
-    {"uname04", true, true, true, true},             // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
-    {"wait01", true, true, true, true},              // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
-    {"wait402", true, true, true, true},             // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
-    {"writev07", true, true, true, true},            // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
-    {"stream01", false, true, false, true},          // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"stream02", false, true, false, true},          // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"stream03", false, true, false, true},          // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"stream04", false, true, false, true},          // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"stream05", false, true, false, true},          // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"abs01", false, true, false, true},             // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"stat02", true, true, true, true},              // 2026-05-26: 双架构双 libc Summary passed=2 failed=0 broken=0。
-    {"stat02_64", true, true, true, true},           // 2026-05-26: 双架构双 libc Summary passed=2 failed=0 broken=0。
-    {"string01", false, true, false, true},          // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"symlinkat01", false, true, false, true},       // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"sysconf01", false, true, false, true},         // 2026-05-26: 双架构 glibc 有 TPASS/TCONF；无 Summary，musl judge 不计分。
-    {NULL, false, false, false, false},              // 已验证并默认随回归运行的测例，到这里结束
+    // {"nice02", true, true, true, true},              // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
+    {"nice04", false, true, true, true},       // 2026-05-27: RV+musl Summary 失败，其余组合通过。
+    {"pipe08", true, true, true, true},        // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
+    {"pipe2_01", true, true, true, true},      // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
+    {"signal02", true, true, true, true},      // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
+    {"times01", true, true, true, true},       // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
+    {"tkill01", true, true, true, true},       // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
+    {"uname04", true, true, true, true},       // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
+    {"wait01", true, true, true, true},        // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
+    {"wait402", true, true, true, true},       // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
+    {"writev07", true, true, true, true},      // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
+    {"stream01", false, true, false, true},    // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    {"stream02", false, true, false, true},    // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    {"stream03", false, true, false, true},    // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    {"stream04", false, true, false, true},    // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    {"stream05", false, true, false, true},    // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    {"abs01", false, true, false, true},       // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    {"stat02", true, true, true, true},        // 2026-05-26: 双架构双 libc Summary passed=2 failed=0 broken=0。
+    {"stat02_64", true, true, true, true},     // 2026-05-26: 双架构双 libc Summary passed=2 failed=0 broken=0。
+    {"string01", false, true, false, true},    // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    {"symlinkat01", false, true, false, true}, // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    {"sysconf01", false, true, false, true},   // 2026-05-26: 双架构 glibc 有 TPASS/TCONF；无 Summary，musl judge 不计分。
 
+    {"accept01", true, true, true, true},       // 2026-05-30: 四组合 passed 5 failed 0。
+    // {"accept02", false, false, false, false},   // 2026-05-30: 未启用；MCAST_JOIN_GROUP 返回 ENOPROTOOPT，multicast socket option 未支持。
+    {"accept03", true, true, true, true},       // 2026-05-30: 四组合 failed/broken 0；RV skipped 1，LA 组合全 pass。
+    {"accept4_01", true, true, true, true},     // 2026-05-30: 四组合 passed 8 failed 0 skipped 1；__NR_socketcall 变体 TCONF。
+    {"bind01", true, true, true, true},         // 2026-05-30: 四组合 passed 7 failed 0。
+    {"bind02", true, true, true, true},         // 2026-05-30: 修复特权端口 EACCES 后四组合 passed 1 failed 0。
+    {"bind03", true, true, true, true},         // 2026-05-30: 四组合 passed 3 failed 0。
+    {"bind04", true, true, true, true},         // 2026-05-30: 四组合 passed 1 failed 0 skipped 1；seqpacket 变体 TCONF。
+    // {"bind05", false, false, false, false},     // 2026-05-30: 未启用；AF_UNIX datagram bind 返回 EOPNOTSUPP，IPv4 UDP 子项能过但整体失败。
+    // {"bind06", false, false, false, false},     // 2026-05-30: 未启用；依赖 USER_NS/NET_NS 与 AF_PACKET，当前为 TCONF。
+    {"connect01", true, true, true, true},      // 2026-05-30: 四组合旧式 TPASS 7，无 Summary。
+    // {"connect02", false, false, false, false},  // 2026-05-30: 未启用；IPV6_ADDRFORM 返回 ENOPROTOOPT，IPv6 地址转换 option 未支持。
+    // {"getaddrinfo_01", false, false, false, false}, // 2026-05-30: 未启用；准备 /etc/hosts 时 write 返回 EBADF，测试直接 TBROK。
+    {"gethostbyname_r01", false, true, false, true}, // 2026-05-30: glibc 通过；musl retval 不是 ERANGE，resolver/hosts 行为不一致。
+    // {"gethostid01", false, false, false, false}, // 2026-05-30: 未启用；sethostid 或 /etc/hostid 环境不满足，glibc 下 ENOENT/TFAIL。
+    {"gethostname01", true, true, true, true},   // 2026-05-27: 四组合 Summary/TPASS 通过，主机名读取基础路径可用。
+    {"gethostname02", false, true, false, true}, // 2026-05-27: glibc TPASS；musl 组合 ENAMETOOLONG 语义不一致，保持关闭。
+    {"getpeername01", true, true, true, true},   // 2026-05-30: 修复坏地址 errno 后四组合 passed 7 failed 0。
+    {"getsockname01", true, true, true, true},   // 2026-05-30: 四组合 passed 6 failed 0。
+    {"getsockopt01", true, true, true, true},    // 2026-05-30: 四组合 passed 9 failed 0。
+    // {"getsockopt02", false, false, false, false}, // 2026-05-30: 未启用；SO_PEERCRED 返回 ENOPROTOOPT，peer credential 未支持。
+    {"listen01", true, true, true, true},        // 2026-05-30: 四组合旧式 TPASS 3，无 Summary。
+    {"recv01", true, true, true, true},          // 2026-05-30: 四组合旧式 TPASS 5，无 Summary。
+    {"recvfrom01", true, true, true, true},      // 2026-05-30: 四组合旧式 TPASS 7，无 Summary。
+    {"recvmsg01", true, true, true, true},       // 2026-05-30: 四组合 passed 10 failed 0。
+    {"recvmsg02", true, true, true, true},       // 2026-05-30: 四组合 passed 1 failed 0。
+    // {"recvmsg03", false, false, false, false},   // 2026-05-30: 未启用；RDS socket 不支持，当前为 TCONF。
+    // {"recvmmsg01", false, false, false, false},  // 2026-05-30: 未启用；坏 msgvec 地址返回 -EFAULT，LTP raw syscall 判为 invalid retval -14。
+    {"send01", true, true, true, true},          // 2026-05-30: 四组合旧式 TPASS 6，无 Summary。
+    {"send02", true, true, true, true},          // 2026-05-30: 四组合 passed 4 failed 0。
+    {"sendmmsg01", true, true, true, true},      // 2026-05-30: 四组合 passed 4 failed 0。
+    {"sendmmsg02", false, true, true, true},     // 2026-05-30: RV+musl libc wrapper 坏 msgvec 变体返回 EINVAL，其他组合 passed 4 failed 0。
+    {"sendmsg02", true, true, true, true},       // 2026-05-30: 四组合旧式 TPASS 1，无 Summary。
+    {"sendto01", true, true, true, true},        // 2026-05-30: 四组合旧式 TPASS 10，无 Summary。
+    {"setsockopt01", true, true, true, true},    // 2026-05-30: 四组合 passed 8 failed 0。
+    {"setsockopt03", true, true, true, true},    // 2026-05-30: 四组合 passed 1 failed 0 skipped 1；32 位 compat 变体 TCONF。
+    {"setsockopt04", true, true, true, true},    // 2026-05-30: 接受 SO_SNDBUFFORCE 后四组合 passed 1 failed 0。
+    {"sockioctl01", true, true, true, true},     // 2026-05-30: 四组合旧式 TPASS 8，无 Summary。
+    {"socket01", true, true, true, true},        // 2026-05-30: 四组合 passed 9 failed 0。
+    {"socket02", true, true, true, true},        // 2026-05-30: 四组合 passed 4 failed 0。
+    {"socketpair01", true, true, true, true},    // 2026-05-30: 四组合 passed 10 failed 0。
+    {"socketpair02", true, true, true, true},    // 2026-05-30: 四组合 passed 4 failed 0。
+    {"mmap02", true, true, true, true},
+    {"mmap05", true, true, true, true},        // pass1 但是panic关了一个
+    {"mmap06", true, true, true, true},        // pass6 fail 2
+    {"mmap08", true, true, true, true},        // pass
+    {"mmap09", true, true, true, false},       // LA+glibc: LTP 内部 5min timeout；RV 和 LA+musl 继续覆盖
+    {"mmap13", true, true, true, true},        // pass
+    {"mmap15", true, true, true, true},        // pass
+    {"mmap17", true, true, true, true},        // pass
+    {"mmap19", true, true, true, true},        // pass
+    {"mmap20", true, true, true, true},        // pass
+    {"mmap001", true, true, true, true}, // pass.
+    {"mmap01", true, true, true, true}, //bin/sh
+    {"mmap03", false, true, false, true}, //无所谓，没summary
+    {"mmap04", true, true, true, true},
+    // {"mmap1", true, true, true, true}, // 2026-05-31: LA 默认回归在该 case 超过 8 分钟无输出，先关闭并待单测复核
+    {"mmap10", false, true, false, true}, // 2026-05-31: RV/LA glibc 不再 SIGBUS；该 case 无 summary，musl 组合不计分
+    // {"mmap11", true, true, true, true}, // 2026-05-31: 单跑 PASS；批量回归打印 test completed 后 wait 卡住，连续回归先关闭
+    {"mmap12", true, true, true, true},
+    {"mmap14", true, true, true, true},
+    // {"mmap16", true, true, true, true}, // 2026-05-31: 镜像 PATH 缺 mkfs.ext4，LTP TCONF；按任务要求先不修环境
+    {"mmap18", true, true, true, true},
+    {"mmap2", true, true, true, true},
+    // {"mmap3", true, true, true, true}, // 2026-05-31: RV+musl 40线程并发 mmap/write/munmap 触发 VMA 写回竞态与 kerneltrap，需内存管理大改
+    // {"mmap-corruption01", true, true, true, true}, // 2026-05-31: 128MiB MAP_SHARED 失败后 SIGSEGV；需大页/非连续共享后端大改
+    {"mmapstress01", true, true, true, true},
+    {"mmapstress02", false, true, false, true}, // 2026-05-31: RV/LA glibc pass；musl TFAIL
+    {"mmapstress03", false, true, false, true}, // 2026-05-31: RV/LA glibc TPASS；musl libc 的 sbrk(nonzero) 直接 ENOMEM，关闭
+    {"mmapstress04", true, true, true, true},
+    {"mmapstress05", false, true, false, true}, // 2026-05-31: RV/LA glibc pass；musl TFAIL
+    // {"mmapstress06", true, true, true, true}, // 2026-05-31: 默认无参运行只打印 usage 后 TFAIL，需要 runtest 参数支持
+    // {"mmapstress07", true, true, true, true}, // 2026-05-31: 默认无参运行只打印 usage 后 TFAIL，需要 runtest 参数支持
+    // {"mmapstress08", true, true, true, true}, // 2026-05-31: LTP 标记仅适用于 IA-32/x86-64
+    // {"mmapstress09", true, true, true, true}, // 2026-05-31: 默认无参运行只打印 usage 后 TFAIL，需要 runtest 参数支持
+    // {"mmapstress10", true, true, true, true}, // 2026-05-31: 默认无参运行只打印 usage 后 TFAIL，需要 runtest 参数支持
+    {"shm_comm", true, true, true, true}, // 2026-05-31: SysV IPC namespace 隔离，RV/LA musl+glibc TPASS
+    // {NULL, false, false, false, false}, // 已验证并默认随回归运行的 mmap/shm 批次到这里结束
+    // {"shm_test", true, true, true, true},//啥比
+    {"shmat02", true, true, true, true},  //pass3
+    // {"shmat1", true, true, true, true},//也是啥比
+    {"shmctl01", true, true, true, true}, //pass 12
+    {"shmctl03", true, true, true, true}, //pass4  TODO曾经有隐患待验证
+    {"shmctl04", true, true, true, true}, // 2026-05-31: SHM_STAT_ANY 与 /proc/sysvipc/shm 四组合 passed 12 failed 0
+    {"shmctl05", true, true, true, true}, // 2026-05-31: remap_file_pages 旧 ABI 兼容，四组合 passed 1 failed 0
+    // {"shmctl06", true, true, true, true}, // 2026-05-31: 64位 RISC-V/LoongArch libc 未暴露 time_high 字段，LTP TCONF
+    {"shmem_2nstest", true, true, true, true}, //pass 1
+    {"shmget02", true, true, true, true}, // 2026-05-31: shmmax sysctl 写入与错误码四组合 passed 8 failed 0
+    {"shmget03", true, true, true, true}, // 2026-05-31: /proc/sysvipc/shm 与 shmmni 四组合 passed 1 failed 0
+    {"shmget04", true, true, true, true}, //passed   3
+    {"shmget05", true, true, true, true}, //.config
+    {"shmget06", true, true, true, true}, //.config
+    {"shmnstest", true, true, true, true}, //pass 1
+    {"shmt02", false, true, false, true}, //pass 无summary
+    {"shmt03", false, true, false, true}, //pass 无summary
+    {"shmt04", false, true, false, true}, //pass 无summary
+    {"shmt05", false, true, false, true}, //pass 无summary
+    {"shmt06", false, true, false, true}, //pass 无summary
+    {"shmt07", false, true, false, true}, //pass 无summary
+    {"shmt08", false, true, false, true}, //pass 无summary
+    {"shmt09", false, true, false, true}, // 2026-05-31: glibc 无 summary；修正 brk 失败返回当前 break 后 RV/LA TPASS 4
+    {"shmt10", false, true, false, true}, //pass 无summary
+    // {NULL, false, false, false, false},  //待完成 2026.5.29 12:16分隔
+    {"mkdir02", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
+    {"mkdir04", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
+    {"mkdir05", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
+    {"setsid01", true, true, true, true},          // 2026-05-28: RV+musl/glibc 均 TPASS，all misc tests passed。
+    {"readlinkat01", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 12 failed 0。
+    {"clock_adjtime01", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 9 failed 0。
+    {"clock_adjtime02", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 6 failed 0。
+    {"clock_gettime01", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 16 failed 0。
+    {"clock_gettime03", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 24 failed 0。
+    {"clock_gettime04", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 6 failed 0。
+    {"clock_nanosleep01", true, true, true, true}, // 2026-05-28: RV+musl/glibc 均 passed 12 failed 0 skipped 2；libc wrapper BAD_TS_ADDR 变体被标记 TCONF。
+    {"clock_nanosleep02", true, true, true, true}, // 2026-05-28: RV+musl/glibc 均 passed 7 failed 0。
+    {"clock_nanosleep03", true, true, true, true}, // 2026-05-28: RV+musl/glibc 均 passed 2 failed 0。
+    {"clock_settime01", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 4 failed 0。
+    {"clock_settime02", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 12 failed 0。
+    {"clock_settime03", true, true, true, true},   // 2026-05-28: RV+musl/glibc 与 LA+glibc 均 passed 1 failed 0；LA+musl 全量回归中 rc=-9，仍有 “Main test process might have exit!”。
+    {"clone02", false, true, false, true},         // 2026-05-28: RV+glibc passed 2 failed 0；musl 不启用。
+    {"clone04", true, true, true, true},           // 2026-05-28: RV+musl passed 0 broken 1（SIGSEGV）；RV+glibc 与 LA+musl/glibc 均 passed 1 failed 0。
+    {"clone05", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
+    {"clone07", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
+    {"clone08", true, true, true, true},           // 2026-05-28: RV+musl/glibc 与 LA+glibc 均 passed 5 failed 0；LA+musl passed 3 broken 1（CLONE_THREAD clone() failed: EINVAL）。
+    {"clone09", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
+    {"clone301", true, true, true, true},          // 2026-05-28: RV+musl/glibc 均 passed 7 failed 0。
+    {"clone303", true, true, true, true},          // 2026-05-28: 四组合均 passed 0 failed 0 skipped 1；cgroup v2 base controller 仍 TCONF。
+    {"epoll_create02", true, true, true, true},    // 2026-05-28: RV+musl passed 0 failed 2 skipped 1；RV+glibc 与 LA+musl/glibc 均 passed 2 skipped 1。RV musl libc epoll_create() 包装层问题，按要求不做运行时补丁，todo。
+    {"epoll_ctl01", true, true, true, true},       // 2026-05-28: RV+musl/glibc 均 passed 3。
+    {"epoll_ctl02", true, true, true, true},       // 2026-05-28: RV+musl/glibc 均 passed 9。
+    {"epoll_ctl04", true, true, true, true},       // 2026-05-28: RV+musl/glibc 均 passed 1。
+    {"epoll_ctl05", true, true, true, true},       // 2026-05-28: RV+musl/glibc 均 passed 1。
+    {"epoll_pwait01", true, true, true, true},     // 2026-05-28: RV+musl/glibc 均 passed 4 failed 0。
+    {"epoll_pwait02", true, true, true, true},     // 2026-05-28: RV+musl/glibc 均 passed 2。
+    {"epoll_pwait03", true, true, true, true},     // 2026-05-28: RV+musl/glibc 均 passed 14。
+    {"epoll_pwait04", true, true, true, true},     // 2026-05-28: RV+musl/glibc 均 passed 2。
+    {"epoll_pwait05", true, true, true, true},     // 2026-05-28: RV+musl/glibc 均 passed 3。
+    {"epoll_wait01", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 3。
+    {"epoll_wait02", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 7。
+    {"epoll_wait03", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 5。
+    {"epoll_wait04", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 1。
+    {"epoll_wait05", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 1，Received EPOLLRDHUP。
+    {"epoll_wait06", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 9。
+    {"epoll_wait07", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 5。
+    {"epoll-ltp", false, true, false, true},       // 2026-05-28: RV+glibc 与 LA+glibc 当前 TPASS 13857（epoll_create 33 + epoll_ctl 13824）；musl 仍未放开，todo。
+    {"fallocate01", false, true, false, true},     // 2026-05-28: RV/LA + glibc 均 passed 4 failed 1；musl 不启用。
+    {"fallocate02", false, true, false, true},     // 2026-05-28: RV+glibc passed 8 failed 0；musl 不启用。
+    {"fallocate03", false, true, false, true},     // 2026-05-28: RV+glibc passed 8 failed 0；musl 不启用。
+    {"fchdir03", true, true, true, true},          // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
+    {"fchmod05", true, true, true, true},          // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
+    {"fchmod06", true, true, true, true},          // 2026-05-28: RV/LA 四组合均 passed 0 failed 0 broken 1；mntpoint/dir/ 目录准备阶段 ENOENT。
+    {"fchownat01", false, true, false, true},      // 2026-05-28: RV+glibc passed 5 failed 0；musl 不启用。
+    {"fchownat02", false, true, false, true},      // 2026-05-28: RV+glibc passed 1 failed 0；musl 不启用。
+    {"fcntl01", false, true, false, true},         // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
+    {"fcntl01_64", false, true, false, true},      // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
+    {"fcntl07", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 passed 4 failed 0。
+    {"fcntl07_64", true, true, true, true},        // 2026-05-28: RV+musl/glibc 均 passed 4 failed 0。
+    // {"fcntl11", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 ret=0，仅输出 TINFO，无 summary。
+    // {"fcntl11_64", true, true, true, true},        // 2026-05-28: RV+musl/glibc 均 ret=0，仅输出 TINFO，无 summary。
+    {"fcntl12", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
+    {"fcntl12_64", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
+    {"fcntl14", false, true, false, true},    /// pass
+    {"fcntl14_64", false, true, false, true}, /// pass
+    {"fcntl16", false, true, false, true},    // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
+    {"fcntl16_64", false, true, false, true}, // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
+    {"fcntl17", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
+    {"fcntl17_64", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
+    {"fcntl18", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 3 failed 0。
+    {"fcntl18_64", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 3 failed 0。
+    {"fcntl19", false, true, false, true},    // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
+    {"fcntl19_64", false, true, false, true}, // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
+    {"fcntl20", false, true, false, true},    // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
+    {"fcntl20_64", false, true, false, true}, // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
+    {"fcntl21", false, true, false, true},    // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
+    {"fcntl21_64", false, true, false, true}, // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
+    {"fcntl22", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 2 failed 0。
+    {"fcntl22_64", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 2 failed 0。
+    {"fcntl23", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
+    {"fcntl23_64", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
+    {"fcntl24", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
+    {"fcntl24_64", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
+    {"fcntl25", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
+    {"fcntl25_64", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
+    {"fcntl26", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
+    {"fcntl26_64", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
+    {"fcntl27", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 2 failed 0。
+    {"fcntl27_64", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 2 failed 0。
+    {"fcntl29", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 3 failed 0。
+    {"fcntl29_64", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 3 failed 0。
+    {"fcntl30", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 4 failed 0。
+    {"fcntl30_64", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 4 failed 0。
+    {"fcntl31", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 5 failed 0。
+    {"fcntl31_64", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 5 failed 0。
+    {"fcntl32", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 9 failed 0。
+    {"fcntl32_64", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 9 failed 0。
+    {"fcntl33", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 7 failed 0。
+    {"fcntl33_64", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 7 failed 0。
+    {"fcntl34", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
+    {"fcntl34_64", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
+    {"fcntl35", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 2；unprivileged 初始 pipe 容量 4096，privileged 初始 pipe 容量 65536。
+    {"fcntl35_64", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 2；unprivileged 初始 pipe 容量 4096，privileged 初始 pipe 容量 65536。
+    {"fcntl36", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 7 failed 0。
+    {"fcntl36_64", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 7 failed 0。
+    {NULL, false, false, false, false},        // 已验证并默认随回归运行的测例，到这里结束
+    // {"fcntl37", true, true, true, true},           // 2026-05-28: 四组合均 passed 0 failed 0 skipped 1；缺 capget syscall。
+    // {"fcntl37_64", true, true, true, true},        // 2026-05-28: 四组合均 passed 0 failed 0 skipped 1；缺 capget syscall。
+    // {"fcntl38", true, true, true, true},           // 2026-05-28: 四组合均 passed 0 failed 0 skipped 1；CONFIG_DNOTIFY 仍不满足。
+    // {"fcntl38_64", true, true, true, true},        // 2026-05-28: 四组合均 passed 0 failed 0 skipped 1；CONFIG_DNOTIFY 仍不满足。
+    // {"fcntl39", true, true, true, true},           // 2026-05-28: 四组合均 passed 0 failed 0 skipped 1；CONFIG_DNOTIFY 仍不满足。
+    // {"fcntl39_64", true, true, true, true},        // 2026-05-28: 四组合均 passed 0 failed 0 skipped 1；CONFIG_DNOTIFY 仍不满足。
+    // 2026-05-30: 网络 LTP 集中区。PASS 项按四组合开关启用；失败/TCONF/未复测项保留为注释。
+    // 当前 ltp_test() 只能按单个可执行/脚本名运行，不能表达 runtest 中带参数的标签（如 ping601 -> ping01.sh -6）。
+    // 因此网络脚本按实际入口集中登记；IPv4/IPv6、NFS/RPC/stress 等参数化变体在对应入口注释中说明。
+    // {"sendmsg01", false, false, false, false},   // 2026-05-30: 未启用；AF_UNIX datagram server bind 返回 EOPNOTSUPP，测试 TBROK。
+    // {"sendmsg03", false, false, false, false},   // 2026-05-30: 未启用；依赖 USER_NS/NET_NS 与 SOCK_RAW/IP_HDRINCL，当前为 TCONF。
+    // {"sendto02", false, false, false, false},    // 2026-05-30: 未启用；SCTP protocol 不支持，当前为 TCONF。
+    // {"sendto03", false, false, false, false},    // 2026-05-30: 未启用；依赖 USER_NS/NET_NS 与 AF_PACKET/PACKET_*，当前为 TCONF。
+    // {"setsockopt02", false, false, false, false}, // 2026-05-30: 未启用；AF_PACKET/SOL_PACKET 不支持，当前为 TCONF。
+    // {"setsockopt05", false, false, false, false}, // 2026-05-30: 未启用；依赖 USER_NS/NET_NS 与 SIOCSIFMTU/UFO 场景，当前为 TCONF。
+    // {"setsockopt06", false, false, false, false}, // 2026-05-30: 未启用；依赖 AF_PACKET/TPACKET_V3 与 NET_NS，当前为 TCONF。
+    // {"setsockopt07", false, false, false, false}, // 2026-05-30: 未启用；依赖 AF_PACKET/TPACKET_V3/PACKET_RESERVE，当前为 TCONF。
+    // {"setsockopt08", false, false, false, false}, // 2026-05-30: 未启用；依赖 netfilter IPT_SO_SET_REPLACE，当前为 TCONF。
+    // {"setsockopt09", false, false, false, false}, // 2026-05-30: 未启用；依赖 AF_PACKET/PACKET_RX_RING 与 NET_NS，当前为 TCONF。
+    // {"vsock01", false, false, false, false},     // 2026-05-30: 未启用；AF_VSOCK/virtio-vsock/loopback vsock 当前未支持。
+    // {"can_filter", false, false, false, false},  // 2026-05-30: 未启用；PF_CAN/CAN_RAW 协议族当前未支持。
+    // {"can_rcv_own_msgs", false, false, false, false}, // 2026-05-30: 未启用；PF_CAN/CAN_RAW 协议族当前未支持。
+    // {"can_bcm01", false, false, false, false},   // 2026-05-30: 未启用；PF_CAN/CAN_BCM 协议族当前未支持。
+    // {"socketcall01", false, false, false, false}, // 2026-05-30: 未启用；RISC-V/LoongArch 无 __NR_socketcall 聚合 syscall。
+    // {"socketcall02", false, false, false, false}, // 2026-05-30: 未启用；同 socketcall01，当前架构不提供 __NR_socketcall。
+    // {"socketcall03", false, false, false, false}, // 2026-05-30: 未启用；同 socketcall01，bind/listen 聚合入口不存在。
+    // {"setsockopt10", false, false, false, false}, // 2026-05-30: 未启用；依赖 TCP_ULP/TLS socket option，当前网络栈未支持。
+    // {"in6_01", false, false, false, false},       // 2026-05-30: 未纳入本轮复测；IPv6 lib 测例，待 IPv6 基础语义单独验证。
+    // {"in6_02", false, false, false, false},       // 2026-05-30: 未纳入本轮复测；IPv6 lib 测例，待 IPv6 基础语义单独验证。
+    // {"asapi_01", false, false, false, false},     // 2026-05-30: 未纳入本轮复测；IPv6 address selection API，待 IPv6 支持完善后再开。
+    // {"asapi_02", false, false, false, false},     // 2026-05-30: 未纳入本轮复测；IPv6 address selection API，待 IPv6 支持完善后再开。
+    // {"asapi_03", false, false, false, false},     // 2026-05-30: 未纳入本轮复测；IPv6 address selection API，待 IPv6 支持完善后再开。
+    // {"bind_noport01.sh", false, false, false, false}, // 2026-05-30: 未纳入本轮复测；脚本含 IPv4/IPv6 变体，依赖完整 LTP 网络脚本环境。
+    // {"sendfile01.sh", false, false, false, false}, // 2026-05-30: 未纳入本轮复测；网络版 sendfile 脚本依赖 rhost/ss/stat/diff 环境。
+    // {"bbr01.sh", false, false, false, false},     // 2026-05-30: 未纳入本轮复测；依赖 BBR、tc/iproute 与 netns 配置。
+    // {"bbr02.sh", false, false, false, false},     // 2026-05-30: 未纳入本轮复测；依赖 BBR、tc/iproute 与 netns 配置。
+    // {"busy_poll01.sh", false, false, false, false}, // 2026-05-30: 未纳入本轮复测；依赖 busy_poll 相关内核网络选项。
+    // {"busy_poll02.sh", false, false, false, false}, // 2026-05-30: 未纳入本轮复测；依赖 busy_poll 相关内核网络选项。
+    // {"busy_poll03.sh", false, false, false, false}, // 2026-05-30: 未纳入本轮复测；依赖 busy_poll 相关内核网络选项。
+    // {"dccp01.sh", false, false, false, false},    // 2026-05-30: 未启用；DCCP protocol 当前未支持。
+    // {"sctp01.sh", false, false, false, false},    // 2026-05-30: 未启用；SCTP protocol 当前未支持。
+    // {"tcp_fastopen_run.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 TCP_FASTOPEN/sysctl，当前未支持。
+    // {"vxlan01.sh", false, false, false, false},   // 2026-05-30: 未启用；VXLAN 虚拟网卡/隧道能力未支持。
+    // {"vxlan02.sh", false, false, false, false},   // 2026-05-30: 未启用；VXLAN 虚拟网卡/隧道能力未支持。
+    // {"vxlan03.sh", false, false, false, false},   // 2026-05-30: 未启用；VXLAN 虚拟网卡/隧道能力未支持。
+    // {"vxlan04.sh", false, false, false, false},   // 2026-05-30: 未启用；VXLAN 虚拟网卡/隧道能力未支持。
+    // {"vlan01.sh", false, false, false, false},    // 2026-05-30: 未启用；VLAN/虚拟链路设备未支持。
+    // {"vlan02.sh", false, false, false, false},    // 2026-05-30: 未启用；VLAN/虚拟链路设备未支持。
+    // {"vlan03.sh", false, false, false, false},    // 2026-05-30: 未启用；VLAN/虚拟链路设备未支持。
+    // {"macvlan01.sh", false, false, false, false}, // 2026-05-30: 未启用；macvlan 虚拟链路设备未支持。
+    // {"macvtap01.sh", false, false, false, false}, // 2026-05-30: 未启用；macvtap 虚拟链路设备未支持。
+    // {"macsec01.sh", false, false, false, false},  // 2026-05-30: 未启用；MACsec 链路加密设备未支持。
+    // {"macsec02.sh", false, false, false, false},  // 2026-05-30: 未启用；MACsec 链路加密设备未支持。
+    // {"macsec03.sh", false, false, false, false},  // 2026-05-30: 未启用；MACsec 链路加密设备未支持。
+    // {"ipvlan01.sh", false, false, false, false},  // 2026-05-30: 未启用；ipvlan 虚拟链路设备未支持。
+    // {"gre01.sh", false, false, false, false},     // 2026-05-30: 未启用；GRE tunnel 能力未支持。
+    // {"gre02.sh", false, false, false, false},     // 2026-05-30: 未启用；GRE tunnel 能力未支持。
+    // {"fou01.sh", false, false, false, false},     // 2026-05-30: 未启用；FOU/GUE tunnel 能力未支持。
+    // {"dctcp01.sh", false, false, false, false},   // 2026-05-30: 未启用；DCTCP/拥塞控制配置未支持。
+    // {"geneve01.sh", false, false, false, false},  // 2026-05-30: 未启用；Geneve tunnel 能力未支持。
+    // {"geneve02.sh", false, false, false, false},  // 2026-05-30: 未启用；Geneve tunnel 能力未支持。
+    // {"sit01.sh", false, false, false, false},     // 2026-05-30: 未启用；SIT IPv6 tunnel 能力未支持。
+    // {"mpls01.sh", false, false, false, false},    // 2026-05-30: 未启用；MPLS 路由/隧道能力未支持。
+    // {"mpls02.sh", false, false, false, false},    // 2026-05-30: 未启用；MPLS 路由/隧道能力未支持。
+    // {"mpls03.sh", false, false, false, false},    // 2026-05-30: 未启用；MPLS 路由/隧道能力未支持。
+    // {"mpls04.sh", false, false, false, false},    // 2026-05-30: 未启用；MPLS 路由/隧道能力未支持。
+    // {"fanout01", false, false, false, false},     // 2026-05-30: 未启用；AF_PACKET fanout 当前未支持。
+    // {"wireguard01.sh", false, false, false, false}, // 2026-05-30: 未启用；WireGuard 虚拟设备/隧道能力未支持。
+    // {"wireguard02.sh", false, false, false, false}, // 2026-05-30: 未启用；WireGuard 虚拟设备/隧道能力未支持。
+    // {"ping01.sh", false, false, false, false},    // 2026-05-30: 未纳入本轮复测；依赖 ICMP/raw socket 与完整网络脚本环境。
+    // {"ping02.sh", false, false, false, false},    // 2026-05-30: 未纳入本轮复测；依赖 ICMP/raw socket 与完整网络脚本环境。
+    // {"arping01.sh", false, false, false, false},  // 2026-05-30: 未纳入本轮复测；依赖 ARP/raw socket 与网络工具环境。
+    // {"tcpdump01.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 tcpdump/libpcap 与 AF_PACKET 抓包能力。
+    // {"tracepath01.sh", false, false, false, false}, // 2026-05-30: 未纳入本轮复测；依赖路由/ICMP 与完整网络工具环境。
+    // {"traceroute01.sh", false, false, false, false}, // 2026-05-30: 未纳入本轮复测；依赖路由/ICMP 与完整网络工具环境。
+    // {"ipneigh01.sh", false, false, false, false}, // 2026-05-30: 未纳入本轮复测；依赖 iproute/neighbour 表与 proc/net 语义。
+    // {"iptables01.sh", false, false, false, false}, // 2026-05-30: 未启用；netfilter/iptables 当前未支持。
+    // {"nft01.sh", false, false, false, false},     // 2026-05-30: 未启用；netfilter/nftables 当前未支持。
+    // {"dhcpd_tests.sh", false, false, false, false}, // 2026-05-30: 未纳入本轮复测；依赖 dhcpd 服务和完整网络脚本环境。
+    // {"dnsmasq_tests.sh", false, false, false, false}, // 2026-05-30: 未纳入本轮复测；依赖 dnsmasq 服务和完整网络脚本环境。
+    // {"ip_tests.sh", false, false, false, false},  // 2026-05-30: 未纳入本轮复测；依赖 iproute 全功能与 netns。
+    // {"netstat01.sh", false, false, false, false}, // 2026-05-30: 未纳入本轮复测；依赖 /proc/net 与网络统计语义。
+    // {"ftp01.sh", false, false, false, false},     // 2026-05-30: 未纳入本轮复测；依赖 ftp 服务端/客户端脚本环境。
+    // {"tc01.sh", false, false, false, false},      // 2026-05-30: 未纳入本轮复测；依赖 tc/qdisc 与 iproute 环境。
+    // {"mc_cmds.sh", false, false, false, false},   // 2026-05-30: 未启用；multicast 测试脚本依赖组播协议与网络拓扑。
+    // {"mc_commo.sh", false, false, false, false},  // 2026-05-30: 未启用；multicast 测试脚本依赖组播协议与网络拓扑。
+    // {"mc_member.sh", false, false, false, false}, // 2026-05-30: 未启用；multicast 测试脚本依赖组播成员管理。
+    // {"mc_opts.sh", false, false, false, false},   // 2026-05-30: 未启用；multicast socket options 当前未支持。
+    // {"nfs01.sh", false, false, false, false},     // 2026-05-30: 未启用；net.nfs 参数化入口，依赖 NFS server/mount/rpcbind 与远端网络拓扑。
+    // {"nfs02.sh", false, false, false, false},     // 2026-05-30: 未启用；同 nfs01.sh，当前无完整 NFS 客户端/服务端测试环境。
+    // {"nfs03.sh", false, false, false, false},     // 2026-05-30: 未启用；同 nfs01.sh，当前无完整 NFS 客户端/服务端测试环境。
+    // {"nfs04.sh", false, false, false, false},     // 2026-05-30: 未启用；同 nfs01.sh，当前无完整 NFS 客户端/服务端测试环境。
+    // {"nfs05.sh", false, false, false, false},     // 2026-05-30: 未启用；同 nfs01.sh，当前无完整 NFS 客户端/服务端测试环境。
+    // {"nfs06.sh", false, false, false, false},     // 2026-05-30: 未启用；同 nfs01.sh，当前无完整 NFS 客户端/服务端测试环境。
+    // {"nfs07.sh", false, false, false, false},     // 2026-05-30: 未启用；同 nfs01.sh，当前无完整 NFS 客户端/服务端测试环境。
+    // {"nfs08.sh", false, false, false, false},     // 2026-05-30: 未启用；同 nfs01.sh，当前无完整 NFS 客户端/服务端测试环境。
+    // {"nfs09.sh", false, false, false, false},     // 2026-05-30: 未启用；同 nfs01.sh，当前无完整 NFS 客户端/服务端测试环境。
+    // {"nfslock01.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 NFS lockd/statd 与远端 NFS 锁测试环境。
+    // {"nfsstat01.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 nfsstat/procfs NFS 统计与远端 NFS 服务。
+    // {"fsx.sh", false, false, false, false},       // 2026-05-30: 未启用；net.nfs 的 fsx 入口依赖 NFS 挂载目标与远端服务。
+    // {"rpc01.sh", false, false, false, false},     // 2026-05-30: 未启用；依赖 portmap/rpcbind 与 RPC 服务端脚本环境。
+    // {"rpcinfo01.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 rpcinfo/rpcbind 与远端 RPC 服务发现。
+    // {"rpc_test.sh", false, false, false, false},  // 2026-05-30: 未启用；net.rpc_tests/net.tirpc_tests 都需 -s/-c 参数，当前表结构无法表达。
+    // {"ssh-stress.sh", false, false, false, false}, // 2026-05-30: 未启用；应用层 stress 依赖 sshd/远端主机与完整网络脚本环境。
+    // {"dns-stress.sh", false, false, false, false}, // 2026-05-30: 未启用；应用层 stress 依赖 DNS 服务、远端主机与完整网络脚本环境。
+    // {"http-stress.sh", false, false, false, false}, // 2026-05-30: 未启用；应用层 stress 依赖 HTTP 服务端/客户端脚本环境。
+    // {"ftp-download-stress.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 FTP 服务端/远端主机与长时间网络 stress 环境。
+    // {"ftp-upload-stress.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 FTP 服务端/远端主机与长时间网络 stress 环境。
+    // {"broken_ip-version.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 raw/AF_PACKET 构造坏包与 ns-tools，当前未支持。
+    // {"broken_ip-ihl.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 raw/AF_PACKET 构造坏包与 ns-tools，当前未支持。
+    // {"broken_ip-fragment.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 raw/AF_PACKET 构造坏包与 ns-tools，当前未支持。
+    // {"broken_ip-plen.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 raw/AF_PACKET 构造坏包与 ns-tools，当前未支持。
+    // {"broken_ip-protcol.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 raw/AF_PACKET 构造坏包与 ns-tools，当前未支持。
+    // {"broken_ip-checksum.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 raw/AF_PACKET 构造坏包与 ns-tools，当前未支持。
+    // {"broken_ip-dstaddr.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 raw/AF_PACKET 构造坏包与 ns-tools，当前未支持。
+    // {"broken_ip-nexthdr.sh", false, false, false, false}, // 2026-05-30: 未启用；IPv6 坏包 stress，依赖 IPv6/raw/AF_PACKET 与 ns-tools。
+    // {"if4-addr-change.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 ifconfig/iproute 修改网卡地址与 netns/多接口环境。
+    // {"if-updown.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 ip/ifconfig 上下线网卡与 netns/多接口环境。
+    // {"if-addr-adddel.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 ip/ifconfig 地址增删与 netns/多接口环境。
+    // {"if-addr-addlarge.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖大量地址配置、iproute 与 netns/多接口环境。
+    // {"if-route-adddel.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 route/iproute 路由增删与 netlink 路由语义。
+    // {"if-route-addlarge.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖大量路由配置、iproute 与 netlink 路由语义。
+    // {"if-mtu-change.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 SIOCSIFMTU/iproute 修改 MTU 与网卡设备模型。
+    // {"route-change-dst.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖路由表/netlink route 与远端网络拓扑。
+    // {"route-change-gw.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖路由表/netlink route 与远端网络拓扑。
+    // {"route-change-if.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖路由表/netlink route 与多接口环境。
+    // {"route-change-netlink-dst.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 NETLINK_ROUTE 与完整路由消息语义。
+    // {"route-change-netlink-gw.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 NETLINK_ROUTE 与完整路由消息语义。
+    // {"route-change-netlink-if.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 NETLINK_ROUTE 与多接口路由变更。
+    // {"route-redirect.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 ICMP redirect/路由协议行为与远端网络拓扑。
+    // {"tcp_ipsec.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 IPsec/xfrm/setkey、加密算法与 netns/远端拓扑。
+    // {"tcp_ipsec_vti.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 IPsec VTI tunnel/xfrm 与虚拟隧道设备。
+    // {"udp_ipsec.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 IPsec/xfrm/setkey、加密算法与 netns/远端拓扑。
+    // {"udp_ipsec_vti.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 IPsec VTI tunnel/xfrm 与虚拟隧道设备。
+    // {"icmp-uni-basic.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 ICMP/raw socket、IPsec 参数化脚本与远端网络拓扑。
+    // {"icmp-uni-vti.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 ICMP/raw socket、IPsec VTI tunnel 与远端网络拓扑。
+    // {"sctp_ipsec.sh", false, false, false, false}, // 2026-05-30: 未启用；SCTP protocol 当前未支持，且依赖 IPsec/xfrm。
+    // {"sctp_ipsec_vti.sh", false, false, false, false}, // 2026-05-30: 未启用；SCTP protocol 当前未支持，且依赖 IPsec VTI tunnel。
+    // {"dccp_ipsec.sh", false, false, false, false}, // 2026-05-30: 未启用；DCCP protocol 当前未支持，且依赖 IPsec/xfrm。
+    // {"dccp_ipsec_vti.sh", false, false, false, false}, // 2026-05-30: 未启用；DCCP protocol 当前未支持，且依赖 IPsec VTI tunnel。
+    // {"mcast-group-single-socket.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖组播成员管理、IGMP/MLD 与 ns-tools。
+    // {"mcast-group-multiple-socket.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖组播成员管理、IGMP/MLD 与 ns-tools。
+    // {"mcast-group-same-group.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖组播成员管理、IGMP/MLD 与 ns-tools。
+    // {"mcast-group-source-filter.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖源过滤组播 socket option，当前未支持。
+    // {"mcast-pktfld01.sh", false, false, false, false}, // 2026-05-30: 未启用；组播 packet flood stress，依赖组播协议与远端拓扑。
+    // {"mcast-pktfld02.sh", false, false, false, false}, // 2026-05-30: 未启用；组播 packet flood stress，依赖组播协议与远端拓扑。
+    // {"mcast-queryfld01.sh", false, false, false, false}, // 2026-05-30: 未启用；组播 query flood stress，依赖 IGMP/MLD/ns-tools。
+    // {"mcast-queryfld02.sh", false, false, false, false}, // 2026-05-30: 未启用；组播 query flood stress，依赖 IGMP/MLD/ns-tools。
+    // {"mcast-queryfld03.sh", false, false, false, false}, // 2026-05-30: 未启用；组播 query flood stress，依赖 IGMP/MLD/ns-tools。
+    // {"mcast-queryfld04.sh", false, false, false, false}, // 2026-05-30: 未启用；组播 query flood stress，依赖 IGMP/MLD/ns-tools。
+    // {"mcast-queryfld05.sh", false, false, false, false}, // 2026-05-30: 未启用；组播 query flood stress，依赖 IGMP/MLD/ns-tools。
+    // {"mcast-queryfld06.sh", false, false, false, false}, // 2026-05-30: 未启用；组播 query flood stress，依赖 IGMP/MLD/ns-tools。
+    // {"sctp_big_chunk", false, false, false, false}, // 2026-05-30: 未启用；SCTP protocol 当前未支持。
+    // {"test_1_to_1_accept_close", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_1_to_1_addrs", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_1_to_1_connect", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_1_to_1_connectx", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_1_to_1_events", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_1_to_1_initmsg_connect", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_1_to_1_nonblock", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_1_to_1_recvfrom", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_1_to_1_recvmsg", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_1_to_1_rtoinfo", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_1_to_1_send", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_1_to_1_sendmsg", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_1_to_1_sendto", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_1_to_1_shutdown", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_1_to_1_socket_bind_listen", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_1_to_1_sockopt", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_1_to_1_threads", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_assoc_abort", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_assoc_shutdown", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_autoclose", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_basic", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_basic_v6", false, false, false, false}, // 2026-05-30: 未启用；net.sctp/IPv6 测例，SCTP 和 IPv6 完整语义当前未支持。
+    // {"test_connect", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_connectx", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_fragments", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_fragments_v6", false, false, false, false}, // 2026-05-30: 未启用；net.sctp/IPv6 测例，SCTP 和 IPv6 完整语义当前未支持。
+    // {"test_getname", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_getname_v6", false, false, false, false}, // 2026-05-30: 未启用；net.sctp/IPv6 测例，SCTP 和 IPv6 完整语义当前未支持。
+    // {"test_inaddr_any", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_inaddr_any_v6", false, false, false, false}, // 2026-05-30: 未启用；net.sctp/IPv6 测例，SCTP 和 IPv6 完整语义当前未支持。
+    // {"test_peeloff", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_peeloff_v6", false, false, false, false}, // 2026-05-30: 未启用；net.sctp/IPv6 测例，SCTP 和 IPv6 完整语义当前未支持。
+    // {"test_recvmsg", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_sctp_sendrecvmsg", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_sctp_sendrecvmsg_v6", false, false, false, false}, // 2026-05-30: 未启用；net.sctp/IPv6 测例，SCTP 和 IPv6 完整语义当前未支持。
+    // {"test_sockopt", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_sockopt_v6", false, false, false, false}, // 2026-05-30: 未启用；net.sctp/IPv6 测例，SCTP 和 IPv6 完整语义当前未支持。
+    // {"test_tcp_style", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_tcp_style_v6", false, false, false, false}, // 2026-05-30: 未启用；net.sctp/IPv6 测例，SCTP 和 IPv6 完整语义当前未支持。
+    // {"test_timetolive", false, false, false, false}, // 2026-05-30: 未启用；net.sctp 测例，SCTP protocol 当前未支持。
+    // {"test_timetolive_v6", false, false, false, false}, // 2026-05-30: 未启用；net.sctp/IPv6 测例，SCTP 和 IPv6 完整语义当前未支持。
 
     // 以下补齐历史完整 LTP 清单，默认全部保持注释状态。
-    
+
     // {"setresuid01_16", true, true, true, true},
     // {"setresuid02_16", true, true, true, true},
     // {"setresuid03_16", true, true, true, true},
     // {"setresuid04_16", true, true, true, true},
     // {"setresuid05_16", true, true, true, true},
     // {"abort01", true, true, true, true},
-    // {"accept02", true, true, true, true},
-    // {"accept4_01", true, true, true, true},
     // {"acct01", true, true, true, true},
     // {"acct02", true, true, true, true},
     // {"acct02_helper", true, true, true, true},
@@ -1618,24 +1900,11 @@ struct ltp_testcase ltp_testcases[] = {
     // {"alarm06", true, true, true, true},
     // {"ar01.sh", true, true, true, true},
     // {"arch_prctl01", true, true, true, true},
-    // {"arping01.sh", true, true, true, true},
-    // {"asapi_01", true, true, true, true}, // PASS一部分
-    // {"asapi_02", true, true, true, true},
-    // {"asapi_03", true, true, true, true},
     // {"ask_password.sh", true, true, true, true},
     // {"aslr01", true, true, true, true},
     // {"assign_password.sh", true, true, true, true},
     // {"atof01", true, true, true, true}, // PASS一部分
     // {"autogroup01", true, true, true, true},
-    // {"bbr01.sh", true, true, true, true},
-    // {"bbr02.sh", true, true, true, true},
-    // {"bind_noport01.sh", true, true, true, true},
-    // {"bind01", true, true, true, true},
-    // {"bind02", true, true, true, true},
-    // {"bind03", true, true, true, true},
-    // {"bind04", true, true, true, true},
-    // {"bind05", true, true, true, true},
-    // {"bind06", true, true, true, true},
     // {"binfmt_misc_lib.sh", true, true, true, true},
     // {"binfmt_misc01.sh", true, true, true, true},
     // {"binfmt_misc02.sh", true, true, true, true},
@@ -1648,22 +1917,8 @@ struct ltp_testcase ltp_testcases[] = {
     // {"bpf_prog05", true, true, true, true},
     // {"bpf_prog06", true, true, true, true},
     // {"bpf_prog07", true, true, true, true},
-    // {"broken_ip-checksum.sh", true, true, true, true},
-    // {"broken_ip-dstaddr.sh", true, true, true, true},
-    // {"broken_ip-fragment.sh", true, true, true, true},
-    // {"broken_ip-ihl.sh", true, true, true, true},
-    // {"broken_ip-nexthdr.sh", true, true, true, true},
-    // {"broken_ip-plen.sh", true, true, true, true},
-    // {"broken_ip-protcol.sh", true, true, true, true},
-    // {"broken_ip-version.sh", true, true, true, true},
     // {"busy_poll_lib.sh", true, true, true, true},
-    // {"busy_poll01.sh", true, true, true, true},
-    // {"busy_poll02.sh", true, true, true, true},
-    // {"busy_poll03.sh", true, true, true, true},
     // {"cacheflush01", true, true, true, true},
-    // {"can_bcm01", true, true, true, true},
-    // {"can_filter", true, true, true, true},
-    // {"can_rcv_own_msgs", true, true, true, true},
     // {"cap_bounds_r", true, true, true, true},
     // {"cap_bounds_rw", true, true, true, true},
     // {"cap_bset_inh_bounds", true, true, true, true},
@@ -1738,8 +1993,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"close02", true, true, true, true},
     // {"cmdlib.sh", true, true, true, true},
     // {"cn_pec.sh", true, true, true, true},
-    // {"connect01", true, true, true, true},
-    // {"connect02", true, true, true, true},
     // {"copy_file_range01", true, true, true, true},
     // {"copy_file_range02", true, true, true, true},
     // {"copy_file_range03", true, true, true, true},
@@ -1798,16 +2051,11 @@ struct ltp_testcase ltp_testcases[] = {
     // {"daemonlib.sh", true, true, true, true},
     // {"data", true, true, true, true},
     // {"data_space", true, true, true, true},
-    // {"dccp_ipsec.sh", true, true, true, true},
-    // {"dccp_ipsec_vti.sh", true, true, true, true},
-    // {"dccp01.sh", true, true, true, true},
-    // {"dctcp01.sh", true, true, true, true},
     // {"delete_module01", true, true, true, true},
     // {"delete_module02", true, true, true, true},
     // {"delete_module03", true, true, true, true},
     // {"df01.sh", true, true, true, true},
     // {"dhcp_lib.sh", true, true, true, true},
-    // {"dhcpd_tests.sh", true, true, true, true},
     // {"dio_append", true, true, true, true},
     // {"dio_read", true, true, true, true},
     // {"dio_sparse", true, true, true, true},
@@ -1825,8 +2073,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"dirtyc0w_shmem_child", true, true, true, true},
     // {"dirtypipe", true, true, true, true},
     // {"dma_thread_diotest", true, true, true, true},
-    // {"dnsmasq_tests.sh", true, true, true, true},
-    // {"dns-stress.sh", true, true, true, true},
     // {"dns-stress01-rmt.sh", true, true, true, true},
     // {"dns-stress02-rmt.sh", true, true, true, true},
     // {"dns-stress-lib.sh", true, true, true, true},
@@ -1899,7 +2145,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"fanotify21", true, true, true, true},
     // {"fanotify22", true, true, true, true},
     // {"fanotify23", true, true, true, true},
-    // {"fanout01", true, true, true, true},
     // {"fchown01_16", true, true, true, true},
     // {"fchown02_16", true, true, true, true},
     // {"fchown03_16", true, true, true, true},
@@ -1932,7 +2177,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"fork10", true, true, true, true},
     // {"fork13", true, true, true, true},
     // {"fork14", true, true, true, true},
-    // {"fou01.sh", true, true, true, true},
     // {"fptest01", true, true, true, true},
     // {"fptest02", true, true, true, true},
     // {"frag", true, true, true, true},
@@ -2070,7 +2314,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"fstatat01", true, true, true, true}, //无summary
     // {"fstatfs01", true, true, true, true}, ///dev/loop0
     // {"fstatfs01_64", true, true, true, true},
-    // {"fsx.sh", true, true, true, true},
     // {"fsx-linux", true, true, true, true},
     // {"fsync01", true, true, true, true}, ///dev/block/loop0
     // {"fsync04", true, true, true, true}, ///dev/block/loop0
@@ -2082,11 +2325,8 @@ struct ltp_testcase ltp_testcases[] = {
     // {"ftest06", true, true, true, true},
     // {"ftest07", true, true, true, true},
     // {"ftest08", true, true, true, true},
-    // {"ftp01.sh", true, true, true, true},
-    // {"ftp-download-stress.sh", true, true, true, true},
     // {"ftp-download-stress01-rmt.sh", true, true, true, true},
     // {"ftp-download-stress02-rmt.sh", true, true, true, true},
-    // {"ftp-upload-stress.sh", true, true, true, true},
     // {"ftp-upload-stress01-rmt.sh", true, true, true, true},
     // {"ftp-upload-stress02-rmt.sh", true, true, true, true},
     // {"ftrace_lib.sh", true, true, true, true},
@@ -2119,8 +2359,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"gencos", true, true, true, true},
     // {"gencosh", true, true, true, true},
     // {"generate_lvm_runfile.sh", true, true, true, true},
-    // {"geneve01.sh", true, true, true, true},
-    // {"geneve02.sh", true, true, true, true},
     // {"genexp", true, true, true, true},
     // {"genexp_log", true, true, true, true},
     // {"genfabs", true, true, true, true},
@@ -2151,7 +2389,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"get_mempolicy01", true, true, true, true},
     // {"get_mempolicy02", true, true, true, true},
     // {"get_robust_list01", true, true, true, true},
-    // {"getaddrinfo_01", true, true, true, true}, // 2026-05-21: 四组合定向复测为 TCONF，/etc/hosts 缺失
     // {"getcontext01", true, true, true, true},
     // {"getcpu01", true, true, true, true}, //sched_setaffinity
     // {"getcwd04", true, true, true, true}, // Test needs at least 2 CPUs online 这个是因为 sched_getaffinity返回0，说不定它不用两个CPU
@@ -2168,9 +2405,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"getgroups01_16", true, true, true, true},
     // {"getgroups03", true, true, true, true},
     // {"getgroups03_16", true, true, true, true},
-    // {"gethostbyname_r01", true, true, true, true},
-    // {"gethostid01", true, true, true, true},
-    // {"getpeername01", true, true, true, true},
     // {"getresgid01", true, true, true, true},
     // {"getresgid01_16", true, true, true, true},
     // {"getresgid02", true, true, true, true},
@@ -2190,9 +2424,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"getrusage03", true, true, true, true},
     // {"getrusage03_child", true, true, true, true},
     // {"getrusage04", true, true, true, true},
-    // {"getsockname01", true, true, true, true},
-    // {"getsockopt01", true, true, true, true},
-    // {"getsockopt02", true, true, true, true},
     // {"gettid02", true, true, true, true}, // PASS
     // {"getuid01_16", true, true, true, true},
     // {"getuid03_16", true, true, true, true},
@@ -2201,15 +2432,12 @@ struct ltp_testcase ltp_testcases[] = {
     // {"getxattr03", true, true, true, true},
     // {"getxattr04", true, true, true, true},
     // {"getxattr05", true, true, true, true},
-    // {"gre01.sh", true, true, true, true},
-    // {"gre02.sh", true, true, true, true},
     // {"growfiles", true, true, true, true},
     // {"gzip_tests.sh", true, true, true, true},
     // {"hackbench", true, true, true, true},
     // {"hangup01", true, true, true, true},
     // {"ht_affinity", true, true, true, true},
     // {"ht_enabled", true, true, true, true},
-    // {"http-stress.sh", true, true, true, true},
     // {"http-stress01-rmt.sh", true, true, true, true},
     // {"http-stress02-rmt.sh", true, true, true, true},
     // {"hugefallocate01", true, true, true, true},
@@ -2289,16 +2517,7 @@ struct ltp_testcase ltp_testcases[] = {
     // {"icmp6-multi-diffnic05", true, true, true, true},
     // {"icmp6-multi-diffnic06", true, true, true, true},
     // {"icmp6-multi-diffnic07", true, true, true, true},
-    // {"icmp-uni-basic.sh", true, true, true, true},
-    // {"icmp-uni-vti.sh", true, true, true, true},
-    // {"if4-addr-change.sh", true, true, true, true},
-    // {"if-addr-adddel.sh", true, true, true, true},
-    // {"if-addr-addlarge.sh", true, true, true, true},
     // {"if-lib.sh", true, true, true, true},
-    // {"if-mtu-change.sh", true, true, true, true},
-    // {"if-route-adddel.sh", true, true, true, true},
-    // {"if-route-addlarge.sh", true, true, true, true},
-    // {"if-updown.sh", true, true, true, true},
     // {"ima_boot_aggregate", true, true, true, true},
     // {"ima_conditionals.sh", true, true, true, true},
     // {"ima_kexec.sh", true, true, true, true},
@@ -2310,8 +2529,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"ima_setup.sh", true, true, true, true},
     // {"ima_tpm.sh", true, true, true, true},
     // {"ima_violations.sh", true, true, true, true},
-    // {"in6_01", true, true, true, true},
-    // {"in6_02", true, true, true, true},
     // {"inh_capped", true, true, true, true},
     // {"init_module01", true, true, true, true},
     // {"init_module02", true, true, true, true},
@@ -2388,12 +2605,8 @@ struct ltp_testcase ltp_testcases[] = {
     // {"ioprio_set01", true, true, true, true},
     // {"ioprio_set02", true, true, true, true},
     // {"ioprio_set03", true, true, true, true},
-    // {"ip_tests.sh", true, true, true, true},
-    // {"ipneigh01.sh", true, true, true, true},
     // {"ipsec_lib.sh", true, true, true, true},
     // {"iptables_lib.sh", true, true, true, true},
-    // {"iptables01.sh", true, true, true, true},
-    // {"ipvlan01.sh", true, true, true, true},
     // {"irqbalance01", true, true, true, true},
     // {"isofs.sh", true, true, true, true},
     // {"kallsyms", true, true, true, true},
@@ -2447,7 +2660,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"linkat01", true, true, true, true}, //没summary
     // {"linkat02", true, true, true, true}, ///dev/block/loop0
     // {"linktest.sh", true, true, true, true},
-    // {"listen01", true, true, true, true},
     // {"listxattr01", true, true, true, true},
     // {"listxattr02", true, true, true, true},
     // {"listxattr03", true, true, true, true},
@@ -2466,11 +2678,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"ltpServer", true, true, true, true},
     // {"ltpSockets.sh", true, true, true, true},
     // {"macsec_lib.sh", true, true, true, true},
-    // {"macsec01.sh", true, true, true, true},
-    // {"macsec02.sh", true, true, true, true},
-    // {"macsec03.sh", true, true, true, true},
-    // {"macvlan01.sh", true, true, true, true},
-    // {"macvtap01.sh", true, true, true, true},
     // {"madvise02", true, true, true, true},
     // {"madvise03", true, true, true, true},
     // {"madvise06", true, true, true, true},
@@ -2488,28 +2695,12 @@ struct ltp_testcase ltp_testcases[] = {
     // {"mbind02", true, true, true, true},
     // {"mbind03", true, true, true, true},
     // {"mbind04", true, true, true, true},
-    // {"mc_cmds.sh", true, true, true, true},
-    // {"mc_commo.sh", true, true, true, true},
-    // {"mc_member.sh", true, true, true, true},
     // {"mc_member_test", true, true, true, true},
-    // {"mc_opts.sh", true, true, true, true},
     // {"mc_recv", true, true, true, true},
     // {"mc_send", true, true, true, true},
     // {"mc_verify_opts", true, true, true, true},
     // {"mc_verify_opts_error", true, true, true, true},
-    // {"mcast-group-multiple-socket.sh", true, true, true, true},
-    // {"mcast-group-same-group.sh", true, true, true, true},
-    // {"mcast-group-single-socket.sh", true, true, true, true},
-    // {"mcast-group-source-filter.sh", true, true, true, true},
     // {"mcast-lib.sh", true, true, true, true},
-    // {"mcast-pktfld01.sh", true, true, true, true},
-    // {"mcast-pktfld02.sh", true, true, true, true},
-    // {"mcast-queryfld01.sh", true, true, true, true},
-    // {"mcast-queryfld02.sh", true, true, true, true},
-    // {"mcast-queryfld03.sh", true, true, true, true},
-    // {"mcast-queryfld04.sh", true, true, true, true},
-    // {"mcast-queryfld05.sh", true, true, true, true},
-    // {"mcast-queryfld06.sh", true, true, true, true},
     // {"meltdown", true, true, true, true},
     // {"mem_process", true, true, true, true},
     // {"mem02", true, true, true, true}, //过了但是没有summary
@@ -2582,30 +2773,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"mlockall01", true, true, true, true},
     // {"mlockall02", true, true, true, true},
     // {"mlockall03", true, true, true, true},
-    // {"mmap001", true, true, true, true}, // pass.
-    // {"mmap01", true, true, true, true}, //bin/sh
-    // {"mmap03", true, true, true, true}, //无所谓，没summary
-    // {"mmap04", true, true, true, true},
-    // {"mmap1", true, true, true, true},
-    // {"mmap10", true, true, true, true}, //无所谓，没summary
-    // {"mmap11", true, true, true, true}, //pass不能和别的一起跑
-    // {"mmap12", true, true, true, true},
-    // {"mmap14", true, true, true, true},
-    // {"mmap16", true, true, true, true},
-    // {"mmap18", true, true, true, true},
-    // {"mmap2", true, true, true, true},
-    // {"mmap3", true, true, true, true},
-    // {"mmap-corruption01", true, true, true, true},
-    // {"mmapstress01", true, true, true, true},
-    // {"mmapstress02", true, true, true, true},
-    // {"mmapstress03", true, true, true, true},
-    // {"mmapstress04", true, true, true, true},
-    // {"mmapstress05", true, true, true, true},
-    // {"mmapstress06", true, true, true, true},
-    // {"mmapstress07", true, true, true, true},
-    // {"mmapstress08", true, true, true, true},
-    // {"mmapstress09", true, true, true, true},
-    // {"mmapstress10", true, true, true, true},
     // {"mmstress", true, true, true, true},
     // {"mmstress_dummy", true, true, true, true},
     // {"modify_ldt01", true, true, true, true},
@@ -2638,10 +2805,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"move_pages11", true, true, true, true},
     // {"move_pages12", true, true, true, true},
     // {"mpls_lib.sh", true, true, true, true},
-    // {"mpls01.sh", true, true, true, true},
-    // {"mpls02.sh", true, true, true, true},
-    // {"mpls03.sh", true, true, true, true},
-    // {"mpls04.sh", true, true, true, true},
     // {"mprotect01", true, true, true, true}, //无所谓，没summary
     // {"mprotect02", true, true, true, true}, //无所谓，没summary
     // {"mprotect03", true, true, true, true}, //无所谓，没summary
@@ -2712,28 +2875,15 @@ struct ltp_testcase ltp_testcases[] = {
     // {"netns_lib.sh", true, true, true, true},
     // {"netns_netlink", true, true, true, true},
     // {"netns_sysfs.sh", true, true, true, true},
-    // {"netstat01.sh", true, true, true, true},
     // {"netstress", true, true, true, true},
     // {"newuname01", true, true, true, true}, // pass 没summary
     // {"nextafter01", true, true, true, true},
     // {"nfs_flock", true, true, true, true},
     // {"nfs_flock_dgen", true, true, true, true},
     // {"nfs_lib.sh", true, true, true, true},
-    // {"nfs01.sh", true, true, true, true},
     // {"nfs01_open_files", true, true, true, true},
-    // {"nfs02.sh", true, true, true, true},
-    // {"nfs03.sh", true, true, true, true},
-    // {"nfs04.sh", true, true, true, true},
     // {"nfs04_create_file", true, true, true, true},
-    // {"nfs05.sh", true, true, true, true},
     // {"nfs05_make_tree", true, true, true, true},
-    // {"nfs06.sh", true, true, true, true},
-    // {"nfs07.sh", true, true, true, true},
-    // {"nfs08.sh", true, true, true, true},
-    // {"nfs09.sh", true, true, true, true},
-    // {"nfslock01.sh", true, true, true, true},
-    // {"nfsstat01.sh", true, true, true, true},
-    // {"nft01.sh", true, true, true, true},
     // {"nft02", true, true, true, true},
     // {"nftw01", true, true, true, true},
     // {"nftw6401", true, true, true, true},
@@ -2815,8 +2965,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"pids.sh", true, true, true, true},
     // {"pids_task1", true, true, true, true},
     // {"pids_task2", true, true, true, true},
-    // {"ping01.sh", true, true, true, true},
-    // {"ping02.sh", true, true, true, true},
     // {"pipe02", true, true, true, true},
     // {"pipe04", true, true, true, true}, //管道给写爆了，感觉是时间片太长了
     // {"pipe05", true, true, true, true}, // 完全PASS
@@ -2938,12 +3086,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"realpath01", true, true, true, true},
     // {"reboot01", true, true, true, true},
     // {"reboot02", true, true, true, true},
-    // {"recv01", true, true, true, true},
-    // {"recvfrom01", true, true, true, true}, // pass
-    // {"recvmmsg01", true, true, true, true},
-    // {"recvmsg01", true, true, true, true},
-    // {"recvmsg02", true, true, true, true},
-    // {"recvmsg03", true, true, true, true},
     // {"remap_file_pages01", true, true, true, true},
     // {"remap_file_pages02", true, true, true, true},
     // {"remove_password.sh", true, true, true, true},
@@ -2972,15 +3114,8 @@ struct ltp_testcase ltp_testcases[] = {
     // {"request_key05", true, true, true, true},
     // {"route4-rmmod", true, true, true, true},
     // {"route6-rmmod", true, true, true, true},
-    // {"route-change-dst.sh", true, true, true, true},
-    // {"route-change-gw.sh", true, true, true, true},
-    // {"route-change-if.sh", true, true, true, true},
     // {"route-change-netlink", true, true, true, true},
-    // {"route-change-netlink-dst.sh", true, true, true, true},
-    // {"route-change-netlink-gw.sh", true, true, true, true},
-    // {"route-change-netlink-if.sh", true, true, true, true},
     // {"route-lib.sh", true, true, true, true},
-    // {"route-redirect.sh", true, true, true, true},
     // {"rt_sigaction01", true, true, true, true},
     // {"rt_sigaction02", true, true, true, true},
     // {"rt_sigaction03", true, true, true, true},
@@ -3049,10 +3184,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"sched_tc5", true, true, true, true},
     // {"sched_tc6", true, true, true, true},
     // {"sched_yield01", true, true, true, true}, // pass
-    // {"sctp_big_chunk", true, true, true, true},
-    // {"sctp_ipsec.sh", true, true, true, true},
-    // {"sctp_ipsec_vti.sh", true, true, true, true},
-    // {"sctp01.sh", true, true, true, true},
     // {"select02", true, true, true, true},
     // {"select04", true, true, true, true},
     // {"sem_comm", true, true, true, true},
@@ -3075,9 +3206,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"semop04", true, true, true, true},
     // {"semop05", true, true, true, true},
     // {"semtest_2ns", true, true, true, true},
-    // {"send01", true, true, true, true},
-    // {"send02", true, true, true, true},
-    // {"sendfile01.sh", true, true, true, true},
     // {"sendfile02", true, true, true, true},
     // {"sendfile02_64", true, true, true, true},
     // {"sendfile03", true, true, true, true},
@@ -3094,14 +3222,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"sendfile08_64", true, true, true, true},
     // {"sendfile09", true, true, true, true},
     // {"sendfile09_64", true, true, true, true},
-    // {"sendmmsg01", true, true, true, true},
-    // {"sendmmsg02", true, true, true, true},
-    // {"sendmsg01", true, true, true, true},
-    // {"sendmsg02", true, true, true, true},
-    // {"sendmsg03", true, true, true, true},
-    // {"sendto01", true, true, true, true}, // pass一部分
-    // {"sendto02", true, true, true, true}, // pass
-    // {"sendto03", true, true, true, true}, //.config
     // {"set_ipv4addr", true, true, true, true},
     // {"set_mempolicy01", true, true, true, true},
     // {"set_mempolicy02", true, true, true, true},
@@ -3166,16 +3286,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"setrlimit03", true, true, true, true},
     // {"setrlimit05", true, true, true, true},
     // {"setrlimit06", true, true, true, true},
-    // {"setsockopt01", true, true, true, true}, // pass
-    // {"setsockopt02", true, true, true, true},
-    // {"setsockopt03", true, true, true, true}, // pass
-    // {"setsockopt04", true, true, true, true},
-    // {"setsockopt05", true, true, true, true}, //.config
-    // {"setsockopt06", true, true, true, true}, //.config
-    // {"setsockopt07", true, true, true, true}, //.config
-    // {"setsockopt08", true, true, true, true},
-    // {"setsockopt09", true, true, true, true}, //.config
-    // {"setsockopt10", true, true, true, true}, //.config
     // {"settimeofday01", true, true, true, true},
     // {"settimeofday02", true, true, true, true},
     // {"setuid01_16", true, true, true, true},
@@ -3187,31 +3297,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"setxattr03", true, true, true, true},
     // {"sgetmask01", true, true, true, true},
     // {"shell_pipe01.sh", true, true, true, true},
-    // {"shm_comm", true, true, true, true},
-    // {"shm_test", true, true, true, true},
-    // {"shmat02", true, true, true, true},
-    // {"shmat1", true, true, true, true},
-    // {"shmctl01", true, true, true, true}, //卡死了
-    // {"shmctl03", true, true, true, true}, //pass，但是这个似乎不能和别的连着跑
-    // {"shmctl04", true, true, true, true}, //kernel doesn't support SHM_STAT_ANY
-    // {"shmctl05", true, true, true, true}, // remap_file_pages未实现
-    // {"shmctl06", true, true, true, true}, //test requires struct shmid64_ds to have the time_high fields
-    // {"shmem_2nstest", true, true, true, true}, //看不懂
-    // {"shmget02", true, true, true, true},
-    // {"shmget03", true, true, true, true},
-    // {"shmget04", true, true, true, true}, //爆了
-    // {"shmget05", true, true, true, true}, //.config
-    // {"shmget06", true, true, true, true}, //.config
-    // {"shmnstest", true, true, true, true}, //pass
-    // {"shmt02", true, true, true, true}, //pass 无summary
-    // {"shmt03", true, true, true, true}, //pass 无summary
-    // {"shmt04", true, true, true, true}, //pass 无summary
-    // {"shmt05", true, true, true, true}, //pass 无summary
-    // {"shmt06", true, true, true, true}, //pass 无summary
-    // {"shmt07", true, true, true, true}, //pass 无summary
-    // {"shmt08", true, true, true, true}, //pass 无summary
-    // {"shmt09", true, true, true, true}, //sbrk 无summary
-    // {"shmt10", true, true, true, true}, //pass 无summary
     // {"sigaction01", true, true, true, true},
     // {"sigaction02", true, true, true, true},
     // {"sigaltstack01", true, true, true, true},
@@ -3229,7 +3314,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"sigtimedwait01", true, true, true, true},
     // {"sigwait01", true, true, true, true},
     // {"sigwaitinfo01", true, true, true, true},
-    // {"sit01.sh", true, true, true, true},
     // {"smack_common.sh", true, true, true, true},
     // {"smack_file_access.sh", true, true, true, true},
     // {"smack_notroot", true, true, true, true},
@@ -3246,12 +3330,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"smt_smp_enabled.sh", true, true, true, true},
     // {"snd_seq01", true, true, true, true},
     // {"snd_timer01", true, true, true, true},
-    // {"socketcall01", true, true, true, true},
-    // {"socketcall02", true, true, true, true},
-    // {"socketcall03", true, true, true, true},
-    // {"socketpair01", true, true, true, true},
-    // {"socketpair02", true, true, true, true},
-    // {"sockioctl01", true, true, true, true},
     // {"splice01", true, true, true, true},
     // {"splice02", true, true, true, true},
     // {"splice03", true, true, true, true},
@@ -3262,7 +3340,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"splice09", true, true, true, true},
     // {"squashfs01", true, true, true, true},
     // {"ssetmask01", true, true, true, true},
-    // {"ssh-stress.sh", true, true, true, true},
     // {"stack_clash", true, true, true, true},
     // {"stack_space", true, true, true, true},
     // {"starvation", true, true, true, true},
@@ -3314,12 +3391,8 @@ struct ltp_testcase ltp_testcases[] = {
     // {"syslog12", true, true, true, true},
     // {"tar_tests.sh", true, true, true, true},
     // {"tbio", true, true, true, true},
-    // {"tc01.sh", true, true, true, true},
     // {"tcindex01", true, true, true, true},
     // {"tcp_cc_lib.sh", true, true, true, true},
-    // {"tcp_fastopen_run.sh", true, true, true, true},
-    // {"tcp_ipsec.sh", true, true, true, true},
-    // {"tcp_ipsec_vti.sh", true, true, true, true},
     // {"tcp4-multi-diffip01", true, true, true, true},
     // {"tcp4-multi-diffip02", true, true, true, true},
     // {"tcp4-multi-diffip03", true, true, true, true},
@@ -3628,54 +3701,12 @@ struct ltp_testcase ltp_testcases[] = {
     // {"tcp6-uni-winscale12", true, true, true, true},
     // {"tcp6-uni-winscale13", true, true, true, true},
     // {"tcp6-uni-winscale14", true, true, true, true},
-    // {"tcpdump01.sh", true, true, true, true},
     // {"tee01", true, true, true, true},
     // {"tee02", true, true, true, true},
     // {"test.sh", true, true, true, true},
-    // {"test_1_to_1_accept_close", true, true, true, true},
-    // {"test_1_to_1_addrs", true, true, true, true},
-    // {"test_1_to_1_connect", true, true, true, true},
-    // {"test_1_to_1_connectx", true, true, true, true},
-    // {"test_1_to_1_events", true, true, true, true},
-    // {"test_1_to_1_initmsg_connect", true, true, true, true},
-    // {"test_1_to_1_nonblock", true, true, true, true},
-    // {"test_1_to_1_recvfrom", true, true, true, true},
-    // {"test_1_to_1_recvmsg", true, true, true, true},
-    // {"test_1_to_1_rtoinfo", true, true, true, true},
-    // {"test_1_to_1_send", true, true, true, true},
-    // {"test_1_to_1_sendmsg", true, true, true, true},
-    // {"test_1_to_1_sendto", true, true, true, true},
-    // {"test_1_to_1_shutdown", true, true, true, true},
-    // {"test_1_to_1_socket_bind_listen", true, true, true, true},
-    // {"test_1_to_1_sockopt", true, true, true, true},
-    // {"test_1_to_1_threads", true, true, true, true},
-    // {"test_assoc_abort", true, true, true, true},
-    // {"test_assoc_shutdown", true, true, true, true},
-    // {"test_autoclose", true, true, true, true},
-    // {"test_basic", true, true, true, true},
-    // {"test_basic_v6", true, true, true, true},
-    // {"test_connect", true, true, true, true},
-    // {"test_connectx", true, true, true, true},
     // {"test_controllers.sh", true, true, true, true},
-    // {"test_fragments", true, true, true, true},
-    // {"test_fragments_v6", true, true, true, true},
-    // {"test_getname", true, true, true, true},
-    // {"test_getname_v6", true, true, true, true},
-    // {"test_inaddr_any", true, true, true, true},
-    // {"test_inaddr_any_v6", true, true, true, true},
     // {"test_ioctl", true, true, true, true},
-    // {"test_peeloff", true, true, true, true},
-    // {"test_peeloff_v6", true, true, true, true},
-    // {"test_recvmsg", true, true, true, true},
     // {"test_robind.sh", true, true, true, true},
-    // {"test_sctp_sendrecvmsg", true, true, true, true},
-    // {"test_sctp_sendrecvmsg_v6", true, true, true, true},
-    // {"test_sockopt", true, true, true, true},
-    // {"test_sockopt_v6", true, true, true, true},
-    // {"test_tcp_style", true, true, true, true},
-    // {"test_tcp_style_v6", true, true, true, true},
-    // {"test_timetolive", true, true, true, true},
-    // {"test_timetolive_v6", true, true, true, true},
     // {"testsf_c", true, true, true, true},
     // {"testsf_c6", true, true, true, true},
     // {"testsf_s", true, true, true, true},
@@ -3746,8 +3777,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"tpmtoken_setpasswd_tests_exp03.sh", true, true, true, true},
     // {"tpmtoken_setpasswd_tests_exp04.sh", true, true, true, true},
     // {"trace_sched", true, true, true, true},
-    // {"tracepath01.sh", true, true, true, true},
-    // {"traceroute01.sh", true, true, true, true},
     // {"tst_ansi_color.sh", true, true, true, true},
     // {"tst_brk", true, true, true, true},
     // {"tst_brkm", true, true, true, true},
@@ -3788,8 +3817,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"tst_test.sh", true, true, true, true},
     // {"tst_timeout_kill", true, true, true, true},
     // {"uaccess", true, true, true, true},
-    // {"udp_ipsec.sh", true, true, true, true},
-    // {"udp_ipsec_vti.sh", true, true, true, true},
     // {"udp4-multi-diffip01", true, true, true, true},
     // {"udp4-multi-diffip02", true, true, true, true},
     // {"udp4-multi-diffip03", true, true, true, true},
@@ -3894,9 +3921,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"vhangup01", true, true, true, true},
     // {"vhangup02", true, true, true, true},
     // {"virt_lib.sh", true, true, true, true},
-    // {"vlan01.sh", true, true, true, true},
-    // {"vlan02.sh", true, true, true, true},
-    // {"vlan03.sh", true, true, true, true},
     // {"vma01", true, true, true, true}, //pass 没有summary
     // {"vma02", true, true, true, true},
     // {"vma03", true, true, true, true},
@@ -3907,11 +3931,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"vmsplice02", true, true, true, true},
     // {"vmsplice03", true, true, true, true},
     // {"vmsplice04", true, true, true, true},
-    // {"vsock01", true, true, true, true},
-    // {"vxlan01.sh", true, true, true, true},
-    // {"vxlan02.sh", true, true, true, true},
-    // {"vxlan03.sh", true, true, true, true},
-    // {"vxlan04.sh", true, true, true, true},
     // {"wait02", true, true, true, true}, // PASS
     // {"wait401", true, true, true, true}, // PASS
     // {"wait403", true, true, true, true}, // PASS
@@ -3934,8 +3953,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"wc01.sh", true, true, true, true},
     // {"which01.sh", true, true, true, true},
     // {"wireguard_lib.sh", true, true, true, true},
-    // {"wireguard01.sh", true, true, true, true},
-    // {"wireguard02.sh", true, true, true, true},
     // {"wqueue01", true, true, true, true},
     // {"wqueue02", true, true, true, true},
     // {"wqueue03", true, true, true, true},

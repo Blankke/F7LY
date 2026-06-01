@@ -21,8 +21,10 @@ namespace proc
         SpinLock _pid_lock;        // 进程ID锁
         SpinLock _tid_lock;        // 线程ID锁
         SpinLock _wait_lock;       // 等待锁
+        SpinLock _ns_lock;         // namespace ID 分配锁
         int _cur_pid;              // 当前分配的最大PID
         int _cur_tid;              // 当前分配的最大TID
+        uint64 _next_ipc_ns_id;    // 下一个 SysV IPC namespace ID
         Pcb *_init_proc;           // 用户init进程
         uint _last_alloc_proc_gid; // 上次分配的进程组ID
 
@@ -38,6 +40,8 @@ namespace proc
         bool change_state(Pcb *p, ProcState state);
         void alloc_pid(Pcb *p);
         void alloc_tid(Pcb *p);
+        uint64 alloc_ipc_namespace_id();
+        void unshare_ipc_namespace(Pcb *p);
         Pcb *alloc_proc();
         void freeproc(Pcb *p);
         void freeproc_creation_failed(Pcb *p);
@@ -66,8 +70,10 @@ namespace proc
         int exec(eastl::string path, eastl::vector<eastl::string> argv);
         int execve(eastl::string path, eastl::vector<eastl::string> argv, eastl::vector<eastl::string> envs);
         int load_seg(mem::PageTable &pt, uint64 va, eastl::string &path, uint offset, uint size);
-        int clone(uint64 flags, uint64 stack_ptr, uint64 ptid, uint64 tls, uint64 ctid,bool is_clone3 = false);
-        Pcb *fork(Pcb *p, uint64 flags, uint64 stack_ptr, uint64 ctid, bool is_clone3);
+        int clone(uint64 flags, uint64 stack_ptr, uint64 ptid, uint64 tls, uint64 ctid,
+                  bool is_clone3 = false, int exit_signal = -1);
+        Pcb *fork(Pcb *p, uint64 flags, uint64 stack_ptr, uint64 ctid,
+                  bool is_clone3, int exit_signal = -1);
         void fork_ret();
         void exit_proc(Pcb *p);           // 底层退出逻辑，不设置xstate
         void do_exit(Pcb *p, int state);  // 正常退出，设置xstate后调用exit_proc
@@ -80,12 +86,13 @@ namespace proc
         // ==================== 进程调度与同步 ====================
         void sleep(void *chan, SpinLock *lock);
         void wakeup(void *chan);
-        int wakeup2(uint64 uaddr, int val, void *uaddr2, int val2);
+        int wakeup2(uint64 uaddr, uint64 futex_key, int val, void *uaddr2, uint64 futex_key2, int val2);
 
         // ==================== 文件系统相关 ====================
         int open(int dir_fd, eastl::string path, uint flags, int mode = 0644);
         int close(int fd);
         int fstat(int fd, fs::Kstat *buf);
+        int flush_open_files_for_path(const eastl::string &path);
         int mkdir(int dir_fd, eastl::string path, uint mode);
         int mknod(int dir_fd, eastl::string path, mode_t mode, dev_t dev);
         int unlink(int fd, eastl::string path, int flags);
@@ -99,9 +106,9 @@ namespace proc
         int alloc_fd(Pcb *p, fs::file *f, int fd);
 
         // ==================== 信号处理 ====================
-        int kill_signal(int pid, int sig);
-        int tkill(int tid, int sig);
-        int tgkill(int tgid, int tid, int sig);
+        int kill_signal(int pid, int sig, const ipc::signal::LinuxSigInfo *info = nullptr);
+        int tkill(int tid, int sig, const ipc::signal::LinuxSigInfo *info = nullptr);
+        int tgkill(int tgid, int tid, int sig, const ipc::signal::LinuxSigInfo *info = nullptr);
         void kill_proc(Pcb *p) { p->_killed = 1; }
         int kill_proc(int pid);
 
@@ -125,7 +132,7 @@ namespace proc
         // 私有辅助函数
         bool is_target_child(Pcb *child, Pcb *parent, int child_pid);
         bool has_remaining_threads(Pcb *parent, int target_pid);
-        void mark_thread_group_killed(Pcb *current);
+        void mark_thread_group_killed(Pcb *current, int fatal_signal = 0);
     };
 
     extern ProcessManager k_pm; // 全局进程管理器实例

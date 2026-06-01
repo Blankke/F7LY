@@ -96,6 +96,23 @@ namespace proc
         uint64 interval_us = 0;
         uint64 expiry_us = 0;
     };
+    struct time_namespace_offsets
+    {
+        // time namespace 只给单调/boottime 时钟加偏移，不影响 CLOCK_REALTIME。
+        int64 monotonic_offset_ns = 0;
+        int64 boottime_offset_ns = 0;
+    };
+
+    struct net_namespace_state
+    {
+        // 当前仅补 LTP clone09 依赖的最小 /proc/sys/net/ipv4/conf/*/tag 语义。
+        // default/tag 代表新 netns 初始化模板，lo/tag 是当前 namespace 的 loopback 参数。
+        int ipv4_conf_default_tag = 0;
+        int ipv4_conf_lo_tag = 0;
+    };
+
+    constexpr uint64 k_initial_ipc_namespace_id = 1;
+
     class Pcb
     {
 
@@ -135,6 +152,7 @@ namespace proc
         int _killed;           // 进程终止标志位，非零表示进程被标记为终止
         bool _exiting;         // 已进入退出清理流程，禁止 timer 抢占式 yield
         int _xstate;           // 进程退出状态码，供父进程通过wait()系统调用获取
+        int _parent_exit_signal; // 非线程子任务退出时需要发送给父进程的信号，0 表示不发送
 
         // 调度相关字段
         int _slot;     // 当前时间片剩余量 @todo: 应使用更精确的时间单位
@@ -170,7 +188,8 @@ namespace proc
         /****************************************************************************************
          * 线程和同步原语
          ****************************************************************************************/
-        void *_futex_addr;                        // futex等待地址，用于用户态同步原语
+        void *_futex_addr;                        // futex等待地址，仅用于调试和错误诊断
+        uint64 _futex_key = 0;                   // futex匹配键，按当前映射到的物理地址计算
         uint64 _clear_tid_addr = 0;               // 线程退出的时候清除该地址的值(8字节)
         robust_list_head *_robust_list = nullptr; // 健壮futex链表头，用于线程退出时清理
         uint64 _robust_list_user_addr = 0;        // 健壮futex链表头的原始用户虚拟地址，用于 get_robust_list ABI
@@ -192,6 +211,10 @@ namespace proc
         sighand_struct *_sigactions = nullptr;          // 信号处理函数表，类似Linux的sighand_struct
         uint64 _sigmask = 0;                            // 信号屏蔽掩码，阻塞指定信号
         uint64 _signal = 0;                             // 待处理信号掩码
+        uint64 _siginfo_mask = 0;                       // 哪些 pending signal 还携带一份最小 siginfo
+        ipc::signal::LinuxSigInfo _queued_siginfo[ipc::signal::SIGRTMAX + 1]; // 每个 signal 只保留最后一份排队信息
+        bool _sigsuspend_restore_pending = false;       // sigsuspend 临时 mask 生效后，等待信号返回时恢复旧 mask
+        uint64 _sigsuspend_saved_sigmask = 0;            // sigsuspend 进入前的原始信号屏蔽掩码
         ipc::signal::signal_frame *sig_frame = nullptr; // 信号处理栈帧，保存信号处理上下文
         ipc::signal::signalstack _alt_stack;           // 信号处理备用栈
         bool _on_sigstack = false;                      // 当前是否在信号栈上执行
@@ -229,6 +252,10 @@ namespace proc
         uint64 _start_time;     // 进程启动时间 (绝对时间戳)
         uint64 _start_boottime; // 自系统启动以来的启动时间
         interval_timer_state _itimer[k_interval_timer_count]; // 每进程 interval timer 状态
+        time_namespace_offsets _timens_current;  // 当前任务看到的 time namespace 偏移
+        time_namespace_offsets _timens_children; // fork/clone 后子任务应继承的 time namespace 偏移
+        net_namespace_state _netns; // 最小网络 namespace 视图（当前只覆盖 clone09 所需 sysctl）
+        uint64 _ipc_ns_id = k_initial_ipc_namespace_id; // SysV IPC namespace，隔离 shmget key 空间
 
     public:
         Pcb();
@@ -446,9 +473,9 @@ namespace proc
             return _rlim_vec[ResourceLimitId::RLIMIT_FSIZE].rlim_cur;
         }
 
-        void add_signal(int sig)
+        void add_signal(int sig, const ipc::signal::LinuxSigInfo *info = nullptr)
         {
-            ipc::signal::add_signal(this, sig);
+            ipc::signal::add_signal(this, sig, info);
         }
 
         void set_last_user_tick(uint64 tick) { _last_user_tick = tick; }
