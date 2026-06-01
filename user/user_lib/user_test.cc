@@ -937,6 +937,19 @@ int regression_suite_4d1444(void)
     return 0;
 }
 
+int bench_refine_suite(void)
+{
+    // 专用入口只保留 iozone 与 libcbench 四组合，缩短单轮验证时间。
+    printf("#### BENCH REFINE SUITE START ####\n");
+    init_env("/musl/");
+    iozone_test("/musl");
+    iozone_test("/glibc");
+    libcbench_test("/musl");
+    libcbench_test("/glibc");
+    printf("#### BENCH REFINE SUITE END ####\n");
+    return 0;
+}
+
 int git_test(const char *path)
 {
     if (change_dir_checked(path) != 0)

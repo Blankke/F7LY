@@ -21,8 +21,8 @@ namespace virtio_blk
     /**
      * @brief 统一的 virtio 块层请求对象。
      *
-     * 设计上将“传输参数”“调度元数据”“完成同步状态”统一封装，
-     * 避免把 mClock 标签直接污染到 `struct buf` 或架构驱动实现中。
+     * 设计上将“传输参数”“优先级调度元数据”“完成同步状态”统一封装，
+     * 避免把调度细节直接污染到 `struct buf` 或架构驱动实现中。
      */
     struct IoRequest
     {
@@ -42,10 +42,6 @@ namespace virtio_blk
         int io_status;
 
         int service_class;
-        uint64 enqueue_us;
-        uint64 r_tag_us;
-        uint64 w_tag_us;
-        uint64 l_tag_us;
         IoRequest *flow_next;
     };
 } // namespace virtio_blk

@@ -124,6 +124,19 @@ namespace proc
         int get_ref_count() const;
 
         /**
+         * @brief 加锁保护当前地址空间的 VMA、堆边界和 mmap 游标。
+         *
+         * 多线程进程会共享同一个 ProcessMemoryManager，glibc malloc/pthread
+         * 会并发调用 brk/mmap/munmap；这些元数据必须串行更新。
+         */
+        void lock_memory();
+
+        /**
+         * @brief 释放地址空间元数据锁。
+         */
+        void unlock_memory();
+
+        /**
          * @brief 为线程创建共享内存（增加引用计数）
          * @return 返回当前对象指针，引用计数+1
          */

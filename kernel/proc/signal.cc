@@ -972,18 +972,6 @@ namespace proc
                         printf("[default_handle] Signal %d: Terminating process %d\n", signum, p->_pid);
                     }
                     proc::k_pm.do_signal_exit(p, signum, action.coredump);
-                } else {
-                    // 信号被忽略
-                    const char* signal_name = "";
-                    switch (signum) {
-                        case signal::SIGCONT: signal_name = "SIGCONT"; break;
-                        case signal::SIGCHLD: signal_name = "SIGCHLD"; break;
-                        case signal::SIGWINCH: signal_name = "SIGWINCH"; break;
-                        case signal::SIGURG: signal_name = "SIGURG"; break;
-                        case signal::SIGPWR: signal_name = "SIGPWR"; break;
-                        default: signal_name = "Unknown"; break;
-                    }
-                    printf("[default_handle] %s (%d): Ignored for process %d\n", signal_name, signum, p->_pid);
                 }
             }
 
@@ -1004,10 +992,8 @@ namespace proc
                         continue; // 该信号未被设置
                     }
                     int signum = i;
-                    printf("[handle_signal] Handling signal %d\n", signum);
                     if (is_ignored(p, signum))
                     {
-                        printf("[handle_signal] Signal %d is ignored, sigmask=0x%x\n", signum, p->_sigmask);
                         continue; // 跳过被屏蔽的信号，继续处理其他信号
                     }
 
@@ -1019,18 +1005,15 @@ namespace proc
                     }
                     else
                     {
-                        printf("[handle_signal] No user handler for signal %d\n", signum);
                     }
 
                     if (act == nullptr || act->sa_handler == nullptr || act->sa_handler == SIG_DFL)
                     {
-                        printf("[handle_signal] Signal %d has no handler or SIG_DFL, using default handler\n", signum);
                         restore_sigsuspend_mask_now(p);
                         default_handle(p, signum);
                     }
                     else if (act->sa_handler == SIG_IGN)
                     {
-                        printf("[handle_signal] Signal %d is ignored (SIG_IGN)\n", signum);
                         restore_sigsuspend_mask_now(p);
                         // 直接清除信号，不做任何处理
                     }
@@ -1091,24 +1074,20 @@ namespace proc
                     if (p->_sigactions != nullptr && p->_sigactions->actions[signum] != nullptr)
                     {
                         act = p->_sigactions->actions[signum];
-                        printf("[handle_sync_signal] Found handler for sync signal %d: %p\n", signum, act->sa_handler);
                     }
 
                     if (act == nullptr || act->sa_handler == nullptr || act->sa_handler == SIG_DFL)
                     {
-                        printf("[handle_sync_signal] Sync signal %d has no handler or SIG_DFL, using default handler\n", signum);
                         restore_sigsuspend_mask_now(p);
                         default_handle(p, signum);
                     }
                     else if (act->sa_handler == SIG_IGN)
                     {
-                        printf("[handle_sync_signal] Sync signal %d is ignored (SIG_IGN)\n", signum);
                         restore_sigsuspend_mask_now(p);
                         // 对于同步信号，通常不应该被忽略，但仍然尊重用户设置
                     }
                     else
                     {
-                        printf("[handle_sync_signal] Calling do_handle for sync signal %d\n", signum);
                         do_handle(p, signum, act);
 
                         // 处理 SA_RESETHAND 标志：执行后重置为默认处理
@@ -1143,7 +1122,6 @@ namespace proc
                     // printf("[handle_signal] Handling signal %d\n", signum);
                     if (is_ignored(p, signum))
                     {
-                        printf("[handle_signal] Signal %d is ignored, sigmask=0x%x\n", signum, p->_sigmask);
                         continue; // 跳过被屏蔽的信号，继续处理其他信号
                     }
 
@@ -1155,18 +1133,15 @@ namespace proc
                     }
                     else
                     {
-                        printf("[handle_signal] No user handler for signal %d\n", signum);
                     }
 
                     if (act == nullptr || act->sa_handler == nullptr || act->sa_handler == SIG_DFL)
                     {
-                        printf("[handle_signal] Signal %d has no handler or SIG_DFL, using default handler\n", signum);
                         restore_sigsuspend_mask_now(p);
                         default_handle(p, signum);
                     }
                     else if (act->sa_handler == SIG_IGN)
                     {
-                        printf("[handle_signal] Signal %d is ignored (SIG_IGN)\n", signum);
                         restore_sigsuspend_mask_now(p);
                         // 直接清除信号，不做任何处理
                     }

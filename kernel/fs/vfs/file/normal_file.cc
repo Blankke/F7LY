@@ -119,6 +119,17 @@ namespace fs
 		return _write_combine_buffer != nullptr;
 	}
 
+	bool normal_file::ensure_read_snapshot_buffer_locked()
+	{
+		if (_read_snapshot_buffer != nullptr)
+		{
+			return true;
+		}
+
+		_read_snapshot_buffer = acquire_write_combine_buffer();
+		return _read_snapshot_buffer != nullptr;
+	}
+
 	uint64 normal_file::logical_file_size_locked() const
 	{
 		uint64 logical_size = lwext4_file_struct.fsize;
@@ -189,6 +200,14 @@ namespace fs
 		_write_combine_size = 0;
 	}
 
+	void normal_file::invalidate_read_snapshot_locked()
+	{
+		_read_snapshot_valid = false;
+		_read_snapshot_size = 0;
+		release_write_combine_buffer(_read_snapshot_buffer);
+		_read_snapshot_buffer = nullptr;
+	}
+
 	void normal_file::release_clean_write_combine_buffer_locked()
 	{
 		if (_write_combine_dirty || _write_combine_buffer == nullptr)
@@ -202,6 +221,77 @@ namespace fs
 		_write_combine_buffer = nullptr;
 	}
 
+	bool normal_file::can_use_read_snapshot_locked(long off) const
+	{
+		if (off < 0 || is_memfd() || _attrs.u_read != 1 || _attrs.u_write == 1)
+		{
+			return false;
+		}
+
+		if (_write_combine_dirty || lwext4_file_struct.mp == nullptr || lwext4_file_struct.inode == 0)
+		{
+			return false;
+		}
+
+		uint64 file_size = logical_file_size_locked();
+		return file_size != 0 && file_size <= k_write_combine_capacity;
+	}
+
+	bool normal_file::populate_read_snapshot_locked()
+	{
+		if (_read_snapshot_valid)
+		{
+			return true;
+		}
+
+		if (!can_use_read_snapshot_locked(0))
+		{
+			return false;
+		}
+
+		refresh_ext4_file_size_locked();
+		uint64 file_size = lwext4_file_struct.fsize;
+		if (file_size == 0 || file_size > k_write_combine_capacity)
+		{
+			return false;
+		}
+
+		if (!ensure_read_snapshot_buffer_locked())
+		{
+			return false;
+		}
+
+		long saved_ext4_pos = static_cast<long>(lwext4_file_struct.fpos);
+		if (saved_ext4_pos != 0)
+		{
+			int seek_status = ext4_fseek(&lwext4_file_struct, 0, SEEK_SET);
+			if (seek_status != EOK)
+			{
+				invalidate_read_snapshot_locked();
+				return false;
+			}
+		}
+
+		size_t read_cnt = 0;
+		int status = ext4_fread(&lwext4_file_struct,
+								reinterpret_cast<char *>(_read_snapshot_buffer),
+								static_cast<size_t>(file_size),
+								&read_cnt);
+		if (saved_ext4_pos != 0)
+		{
+			(void)ext4_fseek(&lwext4_file_struct, saved_ext4_pos, SEEK_SET);
+		}
+		if (status != EOK || read_cnt != file_size)
+		{
+			invalidate_read_snapshot_locked();
+			return false;
+		}
+
+		_read_snapshot_valid = true;
+		_read_snapshot_size = read_cnt;
+		return true;
+	}
+
 	normal_file::~normal_file()
 	{
 		_file_lock.acquire();
@@ -212,6 +302,7 @@ namespace fs
 		}
 		release_write_combine_buffer(_write_combine_buffer);
 		_write_combine_buffer = nullptr;
+		invalidate_read_snapshot_locked();
 		_file_lock.release();
 	}
 
@@ -421,16 +512,47 @@ namespace fs
 		{
 			sync_file_size_from_memfd();
 		}
-		else
+
+		if (can_use_read_snapshot_locked(off) && populate_read_snapshot_locked())
 		{
-			refresh_ext4_file_size_locked();
+			if (static_cast<uint64>(off) >= _read_snapshot_size)
+			{
+				// 小文件快照主要服务当前这一轮读；读到 EOF 后立即归还 1MiB 缓冲，
+				// 避免长回归里多个 iozone 子阶段把快照长期挂在 file 对象上。
+				invalidate_read_snapshot_locked();
+				_file_lock.release();
+				return 0;
+			}
+
+			size_t cnt = min(len, _read_snapshot_size - static_cast<size_t>(off));
+			memmove(reinterpret_cast<void *>(buf), _read_snapshot_buffer + off, cnt);
+			if (upgrade)
+			{
+				_file_ptr = off + static_cast<long>(cnt);
+			}
+			else
+			{
+				_file_ptr = current_pos;
+			}
+			if (static_cast<size_t>(off) + cnt >= _read_snapshot_size)
+			{
+				// 最后一个分片已经交给用户态，后续若还要重读再按需重新构建快照即可。
+				invalidate_read_snapshot_locked();
+			}
+			_file_lock.release();
+			return static_cast<long>(cnt);
 		}
 
 		bool allow_ext4_resync_read =
 			!is_memfd() &&
 			lwext4_file_struct.mp != nullptr &&
-			lwext4_file_struct.inode != 0 &&
-			static_cast<long>(lwext4_file_struct.fpos) == off;
+			lwext4_file_struct.inode != 0;
+
+		/*
+		 * ext4_fread() 自身会在拿到 mount 锁后刷新 inode size。
+		 * 这里不要为每次 1KiB 读都额外做一轮 refresh；只要在“缓存视角已经到 EOF”
+		 * 时允许继续落到 ext4_fread()，就能同时覆盖并发扩容可见性和 iozone 小读吞吐。
+		 */
 
 		if (static_cast<uint64>(off) >= logical_file_size_locked() && !allow_ext4_resync_read)
 		{
@@ -479,6 +601,7 @@ namespace fs
 		{
 			sync_file_size_from_memfd();
 		}
+		invalidate_read_snapshot_locked();
 
 		if (off < 0)
 		{

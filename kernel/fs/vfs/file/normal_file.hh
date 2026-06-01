@@ -26,12 +26,21 @@ namespace fs
 		bool _write_combine_dirty = false;
 		uint64 _write_combine_base = 0;
 		size_t _write_combine_size = 0;
+		// iozone 的 4 进程读项每个文件只有 1MiB，反复走 ext4_fread(1KiB) 的锁/路径开销极大。
+		// 这里给“只读且不超过 1MiB 的稳定文件”保留一份快照缓存，把小读退化成内存拷贝。
+		uint8 *_read_snapshot_buffer = nullptr;
+		bool _read_snapshot_valid = false;
+		size_t _read_snapshot_size = 0;
 
 		bool ensure_write_combine_buffer_locked();
+		bool ensure_read_snapshot_buffer_locked();
 		uint64 logical_file_size_locked() const;
 		void refresh_ext4_file_size_locked();
 		void reset_write_combine_locked();
+		void invalidate_read_snapshot_locked();
 		void release_clean_write_combine_buffer_locked();
+		bool can_use_read_snapshot_locked(long off) const;
+		bool populate_read_snapshot_locked();
 		int flush_write_combine_locked();
 		int write_direct_locked(const char *kbuf, size_t len, long off, bool upgrade, size_t *written = nullptr);
 		int zero_fill_gap_locked(long target_off);

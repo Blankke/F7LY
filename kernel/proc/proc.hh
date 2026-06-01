@@ -156,7 +156,9 @@ namespace proc
 
         // 调度相关字段
         int _slot;     // 当前时间片剩余量 @todo: 应使用更精确的时间单位
-        int _priority; // 进程 nice 值，范围为 [-20, 19]，数值越小优先级越高
+        int _priority; // CPU 调度使用的 nice 值，范围为 [-20, 19]，数值越小优先级越高
+        int _io_priority_override; // 研究/后续 ioprio 扩展使用的块层优先级覆盖值
+        bool _has_io_priority_override; // false 时块层默认跟随 _priority，true 时使用覆盖值
 
         // CPU亲和性字段
         CpuMask _cpu_mask; // CPU亲和性掩码，每个位表示一个CPU核心
@@ -272,6 +274,9 @@ namespace proc
         void map_kstack(mem::PageTable &pt);
         fs::dentry *get_cwd() { return _cwd; }
         int get_priority();
+        int get_io_priority();
+        void set_io_priority_override(int priority);
+        void clear_io_priority_override();
 
         // 程序段管理方法
         int add_program_section(void *start, ulong size, const char *name = nullptr);
