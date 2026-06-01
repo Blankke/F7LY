@@ -18,7 +18,7 @@
 #include "types.hh"
 #include "proc.hh"
 #include "mem.hh" // 为MAP_SHARED、PROT_WRITE等常量
-#include "devs/spinlock.hh"
+#include "sleeplock.hh"
 #include <EASTL/atomic.h>
 #ifdef RISCV
 #include "mem/riscv/pagetable.hh"
@@ -474,7 +474,9 @@ namespace proc
          * 引用计数和线程支持
          ****************************************************************************************/
         eastl::atomic<int> ref_count; // 原子引用计数，用于线程间安全共享
-        SpinLock memory_lock;         // 内存操作锁，保护并发访问
+        // VMA/堆元数据路径会在 munmap/MAP_FIXED 时触发文件映射写回和文件引用释放，
+        // 这些后端可能进入 ext4/virtio 并睡眠；因此这里必须使用睡眠锁，不能用自旋锁。
+        SleepLock memory_lock;        // 内存操作锁，保护并发访问
 
     private:
         /****************************************************************************************

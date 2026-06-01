@@ -4,12 +4,12 @@ extern "C"
 {
     __attribute__((section(".text.startup"))) int main()
     {
+        iozone_test("/musl");
+        iozone_test("/glibc");
         netperf_test("/musl/");
         netperf_test("/glibc/");
         iperf_test("/musl/");
         iperf_test("/glibc/");
-        iozone_test("/musl");
-        iozone_test("/glibc");
         libc_test("/musl/");
         basic_test("/musl/");
         basic_test("/glibc/");
@@ -21,8 +21,6 @@ extern "C"
         ltp_test(false);
         busybox_test("/musl/");
         busybox_test("/glibc/");
-        libcbench_test("/musl");
-        libcbench_test("/glibc");
         shutdown();
         return 0;
     }

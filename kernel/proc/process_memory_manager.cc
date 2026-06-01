@@ -445,7 +445,7 @@ namespace proc
           total_memory_size(0), ref_count(1)
     {
         // 初始化内存锁
-        memory_lock.init("process_memory_lock");
+        memory_lock.init("process_memory_lock_guard", "process_memory_lock");
 
         // 初始化程序段数组
         for (int i = 0; i < max_program_section_num; i++)

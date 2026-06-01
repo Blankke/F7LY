@@ -9871,6 +9871,11 @@ namespace syscall
         // 对于普通文件，执行文件系统级别的同步
         if (f->_attrs.filetype == fs::FileTypes::FT_NORMAL)
         {
+            int visibility_ret = f->flush_visibility_state();
+            if (visibility_ret < 0)
+            {
+                return visibility_ret;
+            }
             // 首先尝试获取文件系统对象
             struct filesystem *fs = get_fs_from_path(f->_path_name.c_str());
             if (fs != nullptr)

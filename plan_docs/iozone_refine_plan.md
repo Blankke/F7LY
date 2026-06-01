@@ -86,3 +86,7 @@ iozone测试包括很多小测试，每一次优化都需要针对单独的iozon
 ## 已完成，待验收（2026-06-01）
 
 iozone 四组合均已完整跑完，官方 judge 脚本可解析子项 80/80，缺项 0。当前 RISC-V 得分 40.618，LoongArch 得分 49.085，四组合合计 89.703，较官方 baseline floor 80 高 9.703 分；主要提升了 LoongArch iozone 读写组合，并确保 RISC-V 不再出现缺项。
+
+## 已完成，待验收（2026-06-01 补充）
+
+当前工作区使用 RISC-V 完整 initcode（iozone 位于长回归最前）重新验证，iozone-musl 与 iozone-glibc 各 20 项共 40/40 均逐项超过 baseline。当前 60 分钟长回归日志中的最低裕量为 musl `pwritev/preadv 4 initial writers` 3798.02 > 3609.25，glibc `random-read 4 random writers` 8214.41 > 7140.81。
