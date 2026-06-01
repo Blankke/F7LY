@@ -737,6 +737,7 @@ int mmap_handler(uint64 va, int cause)
 {
   int i;
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
+  uint64 fault_page = PGROUNDDOWN(va);
 
   // 根据地址查找属于哪一个VMA
   for (i = 0; i < proc::NVMA; ++i)
@@ -753,8 +754,61 @@ int mmap_handler(uint64 va, int cause)
 
   if (i == proc::NVMA)
   {
-    printfRed("mmap_handler: no VMA found for va %p\n", va);
-    return -1;
+    uint64 user_sp = p->get_trapframe() != nullptr ? p->get_trapframe()->sp : 0;
+    for (i = 0; i < proc::NVMA; ++i)
+    {
+      proc::vma &candidate = p->get_vma()->_vm[i];
+      if (!candidate.used || (candidate.flags & MAP_GROWSDOWN) == 0)
+      {
+        continue;
+      }
+      if (fault_page >= candidate.addr)
+      {
+        continue;
+      }
+      if (!(user_sp >= fault_page && user_sp < candidate.addr + PGSIZE))
+      {
+        continue;
+      }
+
+      uint64 grow_len = candidate.addr - fault_page;
+      uint64 new_len = static_cast<uint64>(candidate.len) + grow_len;
+      if (!candidate.is_expandable || new_len > candidate.max_len || new_len > 0x7fffffffULL)
+      {
+        return -1;
+      }
+
+      for (int j = 0; j < proc::NVMA; ++j)
+      {
+        if (j == i || !p->get_vma()->_vm[j].used)
+        {
+          continue;
+        }
+        uint64 other_start = p->get_vma()->_vm[j].addr;
+        uint64 other_end = other_start + p->get_vma()->_vm[j].len;
+        constexpr uint64 growdown_guard_gap = 256 * PGSIZE;
+        if (other_end <= candidate.addr && other_end + growdown_guard_gap > other_end &&
+            fault_page < other_end + growdown_guard_gap)
+        {
+          return -1;
+        }
+        if (fault_page < other_end && candidate.addr > other_start)
+        {
+          return -1;
+        }
+      }
+
+      // grow-down VMA 的权限和 backing 不变，只把描述区间向低地址扩展；
+      // 真正物理页仍交给 allocate_vma_page 按 fault page 懒分配。
+      candidate.addr = fault_page;
+      candidate.len = static_cast<int>(new_len);
+      break;
+    }
+    if (i == proc::NVMA)
+    {
+      printfRed("mmap_handler: no VMA found for va %p\n", va);
+      return -1;
+    }
   }
 
   // 获取VMA结构

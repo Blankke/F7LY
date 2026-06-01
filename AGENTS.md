@@ -58,6 +58,7 @@ F7LY OS 是一个基于 xv6 思路扩展的教学/比赛用内核。主线目标
 - 架构定位、模块边界、核心设计思路：读 [agent_docs/project_architecture.md](agent_docs/project_architecture.md)。
 - 构建、运行、日志保存、挂载镜像、单测调试：读 [agent_docs/development_debugging.md](agent_docs/development_debugging.md)。
 - 查看评测进度、维护 Pass 状态、更新 scoreboard：读 [agent_docs/scoreboard.md](agent_docs/scoreboard.md) 和 [scoreboard/README.md](scoreboard/README.md)。
+- 任务文档：读plan_docs目录下会包含当前或曾经我们做下的计划任务。每次完成的任务若来源于此，需要添加最简单的标记已完成待验收在文档相应位置。
 
 ## 常用入口速查
 
@@ -67,7 +68,7 @@ F7LY OS 是一个基于 xv6 思路扩展的教学/比赛用内核。主线目标
 - 回归调度逻辑：`user/user_lib/user_test.cc`
 - 系统调用定义：`kernel/sys/syscall_defs.hh`
 - 系统调用实现与分发：`kernel/sys/syscall_handler.cc`
-- LTP 参考源码：`ref/ltp/`
+- LTP 参考源码：`ref/ltp/`或系统中`testsuits-for-oskernel/ltp-full-20240524/`目录
 - scoreboard 入口：`scoreboard/README.md`
 
 ## Agent 工作流程建议
@@ -75,7 +76,7 @@ F7LY OS 是一个基于 xv6 思路扩展的教学/比赛用内核。主线目标
 - 开始新任务时先读 `git status --short` 和最近 5 个 commit 摘要。
 - 了解历史决策优先看 Git commit；必要时再看 README、`docs/dev-notes/` 和源码。
 - 调试测例时先缩小到单条或小集合，不要一上来跑完整长回归。
-- QEMU 长输出必须写入 `output_*.txt` 日志文件，不要直接刷进聊天。
+- QEMU 长输出必须写入 `logs/run/output_*.txt` 日志文件，不要直接刷进聊天。
 - 修改评测通过状态时，优先更新 scoreboard 对应小分文件的 `状态` 列，再重新生成顶层汇总。
 - 维护 LTP 默认回归清单时，统一使用 `ltp_testcase` 表项中的四组合开关
   `{测例名, RV+musl, RV+glibc, LA+musl, LA+glibc}` 控制是否运行；不要在表外新增隐藏黑名单函数。

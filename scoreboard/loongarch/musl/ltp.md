@@ -1270,11 +1270,11 @@
 | mlockall02 |  |  |
 | mlockall03 |  |  |
 | mmap-corruption01 |  |  |
-| mmap001 |  |  |
-| mmap01 |  |  |
+| mmap001 | PASS | 2026-05-31 output_l_20260531-mmap-subset-after-mmap1-off_QEMU_MEM-1G_timeout-12m.txt |
+| mmap01 | PASS | 2026-05-31 output_l_20260531-mmap-subset-after-mmap1-off_QEMU_MEM-1G_timeout-12m.txt |
 | mmap02 | PASS |   |
 | mmap03 |  |  |
-| mmap04 |  |  |
+| mmap04 | PASS | 2026-05-31 output_l_20260531-mmap-subset-after-mmap1-off_QEMU_MEM-1G_timeout-12m.txt |
 | mmap05 | PASS |   |
 | mmap06 | PASS |   |
 | mmap08 | PASS |   |
@@ -1282,21 +1282,21 @@
 | mmap1 |  |  |
 | mmap10 |  |  |
 | mmap11 |  |  |
-| mmap12 |  |  |
+| mmap12 | PASS | 2026-05-31 output_l_20260531-mmap-subset-after-mmap1-off_QEMU_MEM-1G_timeout-12m.txt |
 | mmap13 | PASS |   |
-| mmap14 |  |  |
+| mmap14 | PASS | 2026-05-31 output_l_20260531-mmap-subset-after-mmap1-off_QEMU_MEM-1G_timeout-12m.txt |
 | mmap15 | PASS |   |
 | mmap16 |  |  |
 | mmap17 | PASS |   |
-| mmap18 |  |  |
+| mmap18 | PASS | 2026-05-31 output_l_20260531-mmap-subset-after-mmap1-off_QEMU_MEM-1G_timeout-12m.txt |
 | mmap19 | PASS |   |
 | mmap2 |  |  |
 | mmap20 | PASS |   |
 | mmap3 |  |  |
-| mmapstress01 |  |  |
+| mmapstress01 | PASS | 2026-05-31 output_l_20260531-mmap-subset-after-mmap1-off_QEMU_MEM-1G_timeout-12m.txt |
 | mmapstress02 |  |  |
 | mmapstress03 |  |  |
-| mmapstress04 |  |  |
+| mmapstress04 | PASS | 2026-05-31 output_l_20260531-mmap-subset-after-mmap1-off_QEMU_MEM-1G_timeout-12m.txt |
 | mmapstress05 |  |  |
 | mmapstress06 |  |  |
 | mmapstress07 |  |  |
@@ -1984,7 +1984,7 @@
 | setxattr03 |  |  |
 | sgetmask01 |  |  |
 | shell_pipe01.sh |  |  |
-| shm_comm |  |  |
+| shm_comm | PASS | 2026-05-31 output_l_20260531-182507_shm-mmap10-mmapstress03-after-sighup-fix_QEMU_MEM-1G_timeout-8m.txt |
 | shm_test |  |  |
 | shmat01 | PASS |   |
 | shmat02 |  |  |
@@ -1994,16 +1994,16 @@
 | shmctl01 |  |  |
 | shmctl02 | PASS |   |
 | shmctl03 |  |  |
-| shmctl04 |  |  |
-| shmctl05 |  |  |
+| shmctl04 | PASS | 2026-05-31 output_l_20260531-shm-core-after-proc-remap-fix_QEMU_MEM-1G_timeout-8m.txt |
+| shmctl05 | PASS | 2026-05-31 output_l_20260531-shm-core-after-proc-remap-fix_QEMU_MEM-1G_timeout-8m.txt |
 | shmctl06 |  |  |
 | shmctl07 | PASS |   |
 | shmctl08 | PASS |   |
 | shmdt01 | PASS |   |
 | shmdt02 | PASS |   |
 | shmem_2nstest |  |  |
-| shmget02 |  |  |
-| shmget03 |  |  |
+| shmget02 | PASS | 2026-05-31 output_l_20260531-shm-core-after-proc-remap-fix_QEMU_MEM-1G_timeout-8m.txt |
+| shmget03 | PASS | 2026-05-31 output_l_20260531-shm-core-after-proc-remap-fix_QEMU_MEM-1G_timeout-8m.txt |
 | shmget04 |  |  |
 | shmget05 |  |  |
 | shmget06 |  |  |

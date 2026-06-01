@@ -84,6 +84,15 @@ namespace fs
 			// 才应当报告为 ready。
 			return _can_write && _pipe->can_write_without_blocking();
 		}
+		bool epoll_write_ready(bool edge_triggered) const
+		{
+			if (!_can_write)
+			{
+				return false;
+			}
+			return edge_triggered ? _pipe->can_write_for_epollet()
+			                      : _pipe->can_write_without_blocking();
+		}
 		virtual off_t lseek(off_t offset, int whence) override { return -ESPIPE; }
 		
 		// 获取管道大小
@@ -98,6 +107,7 @@ namespace fs
 		
 		int get_pipe_flags() const { return _pipe->get_pipe_flags(); }
 		void set_pipe_flags(int flags) { _pipe->set_pipe_flags(flags); }
+		proc::ipc::Pipe *get_pipe() const { return _pipe; }
 		// 设置管道大小，返回实际设置的大小，失败返回-1
 		int set_pipe_size(uint32 new_size) { return _pipe->set_pipe_size(new_size); }
 		

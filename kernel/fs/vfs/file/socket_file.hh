@@ -83,6 +83,10 @@ namespace fs
         bool _write_shutdown;
         bool _peer_closed;
         bool _pending_send_has_addr;
+        long _recv_timeout_sec;
+        long _recv_timeout_usec;
+        long _send_timeout_sec;
+        long _send_timeout_usec;
         
         SpinLock _lock;
 
@@ -100,6 +104,7 @@ namespace fs
         virtual long write(uint64 buf, size_t len, long off, bool upgrade) override;
         virtual bool read_ready() override;
         virtual bool write_ready() override;
+        bool epoll_rdhup_ready() const;
         virtual off_t lseek(off_t offset, int whence) override;
         virtual size_t read_sub_dir(ubuf &dst) override;
 

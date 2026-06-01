@@ -296,6 +296,13 @@ namespace fs
         add_virtual_file("/proc/version", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcVersionProvider>());
 
+        // /boot/config-* 供 LTP 的 tst_kconfig() 读取。当前 sys_uname() 返回 6.17.0，
+        // 但 /proc/version 里仍保留 F7LY 自定义版本串，因此这里两个入口都挂同一份最小配置。
+        add_virtual_file("/boot/config-6.17.0", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<KernelConfigProvider>());
+        add_virtual_file("/boot/config-5.15.0-F7LY", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<KernelConfigProvider>());
+
         // 兼容 glibc 动态链接器：/etc/ld.so.preload 与 /etc/ld.so.cache
         // 两者常被访问；前者通常为空表示不预加载库，后者若不可用则回退到目录扫描。
         add_virtual_file("/etc/ld.so.preload", fs::FileTypes::FT_NORMAL,
@@ -338,6 +345,14 @@ namespace fs
         add_virtual_file("/proc/self/status", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcSelfStatusProvider>());
 
+        // time namespace 相关的 /proc 节点。
+        add_virtual_file("/proc/self/ns/time", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcSelfTimeNamespaceProvider>(false));
+        add_virtual_file("/proc/self/ns/time_for_children", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcSelfTimeNamespaceProvider>(true));
+        add_virtual_file("/proc/self/timens_offsets", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcSelfTimensOffsetsProvider>());
+
         // ======================== Loop 设备节点 ========================
         // 添加 /dev/loop-control 控制设备
         add_virtual_file("/dev/loop-control", fs::FileTypes::FT_DEVICE,
@@ -375,6 +390,14 @@ namespace fs
         // /proc/sys/fs/pipe-user-pages-soft
         add_virtual_file("/proc/sys/fs/pipe-user-pages-soft", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcSysFsPipeUserPagesSoftProvider>());
+        add_virtual_file("/proc/sys/fs/pipe-max-size", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcSysFsPipeMaxSizeProvider>());
+        add_virtual_file("/proc/sys/fs/lease-break-time", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcSysFsLeaseBreakTimeProvider>());
+        add_virtual_file("/proc/sys/net/ipv4/conf/default/tag", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcSysNetIpv4TagProvider>(true));
+        add_virtual_file("/proc/sys/net/ipv4/conf/lo/tag", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcSysNetIpv4TagProvider>(false));
 
         // /dev/loop
         add_virtual_file("/dev/loop-control", fs::FileTypes::FT_DEVICE,
@@ -407,6 +430,10 @@ namespace fs
         // /proc/sys/kernel/shmmax (共享内存最大值)
         add_virtual_file("/proc/sys/kernel/shmmax", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcSysKernelShmmaxProvider>());
+
+        // /proc/sysvipc/shm (当前 SysV 共享内存段表)
+        add_virtual_file("/proc/sysvipc/shm", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcSysvipcShmProvider>());
 
         // /proc/sys/kernel/shmmni (共享内存最大值)
         add_virtual_file("/proc/sys/kernel/shmmni", fs::FileTypes::FT_NORMAL,
@@ -450,6 +477,43 @@ namespace fs
         int err;
         vfile_tree_node *node = find_node_by_path(absolute_path);
 
+        if (absolute_path == "/proc/self/ns/time" ||
+            absolute_path == "/proc/self/ns/time_for_children")
+        {
+            proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
+            if (pcb == nullptr)
+            {
+                return -ESRCH;
+            }
+
+            fs::FileAttrs attrs;
+            attrs.filetype = fs::FileTypes::FT_NORMAL;
+            attrs._value = 0444;
+            time_namespace_snapshot snapshot =
+                (absolute_path == "/proc/self/ns/time_for_children")
+                    ? time_namespace_snapshot{pcb->_timens_children.monotonic_offset_ns,
+                                              pcb->_timens_children.boottime_offset_ns}
+                    : time_namespace_snapshot{pcb->_timens_current.monotonic_offset_ns,
+                                              pcb->_timens_current.boottime_offset_ns};
+            file = new virtual_file(attrs, absolute_path,
+                                    eastl::make_unique<ProcSelfTimeNamespaceProvider>(
+                                        absolute_path == "/proc/self/ns/time_for_children",
+                                        snapshot));
+            file->lwext4_file_struct.flags = flags;
+            return 0;
+        }
+
+        if (absolute_path == "/proc/self/timens_offsets")
+        {
+            fs::FileAttrs attrs;
+            attrs.filetype = fs::FileTypes::FT_NORMAL;
+            attrs._value = 0644;
+            file = new virtual_file(attrs, absolute_path,
+                                    eastl::make_unique<ProcSelfTimensOffsetsProvider>());
+            file->lwext4_file_struct.flags = flags;
+            return 0;
+        }
+
         // 检查是否是 /proc/<pid>/stat 格式的路径
         if (!node && is_proc_pid_stat_path(absolute_path))
         {
@@ -467,6 +531,7 @@ namespace fs
                     attrs._value = 0644;
                     file = new virtual_file(attrs, absolute_path,
                                             eastl::make_unique<ProcPidStatProvider>(pid));
+                    file->lwext4_file_struct.flags = flags;
                     return 0;
                 }
             }
@@ -506,6 +571,7 @@ namespace fs
             break;
         }
         file = new virtual_file(attrs, absolute_path, eastl::move(vf_msg.provider));
+        file->lwext4_file_struct.flags = flags;
         return 0;
     }
     eastl::vector<eastl::string> VirtualFileSystem::path_split(const eastl::string &path) const
