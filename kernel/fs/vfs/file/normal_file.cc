@@ -18,7 +18,9 @@
 namespace
 {
 	constexpr size_t k_write_combine_pool_capacity = 1024 * 1024;
-	constexpr int k_write_combine_pool_slots = 32;
+	// iozone 每个阶段会同时跑 4 个 worker；musl/glibc 动态装载、测试文件读快照、
+	// 小写合并会短时间并发借用 1MiB 缓冲。64 个槽能避免偶发退回 1KiB ext4 路径。
+	constexpr int k_write_combine_pool_slots = 64;
 	constexpr int k_write_combine_pool_pages = static_cast<int>(k_write_combine_pool_capacity / PGSIZE);
 
 	SpinLock k_write_combine_pool_lock;
@@ -223,7 +225,7 @@ namespace fs
 
 	bool normal_file::can_use_read_snapshot_locked(long off) const
 	{
-		if (off < 0 || is_memfd() || _attrs.u_read != 1 || _attrs.u_write == 1)
+		if (off < 0 || is_memfd() || _attrs.u_read != 1)
 		{
 			return false;
 		}
@@ -292,10 +294,111 @@ namespace fs
 		return true;
 	}
 
+	bool normal_file::can_cache_small_write_locked(long off, size_t len) const
+	{
+		if (off < 0 || is_memfd() || len == 0 || len > k_write_combine_capacity)
+		{
+			return false;
+		}
+
+		uint64 end = static_cast<uint64>(off) + len;
+		if (end < static_cast<uint64>(off) || end > k_write_combine_capacity)
+		{
+			return false;
+		}
+
+		if (_write_combine_dirty)
+		{
+			return _write_combine_buffer != nullptr &&
+				   _write_combine_base == 0 &&
+				   end <= k_write_combine_capacity;
+		}
+
+		return true;
+	}
+
+	int normal_file::prepare_small_write_cache_locked(long off, size_t len)
+	{
+		if (!can_cache_small_write_locked(off, len))
+		{
+			return EINVAL;
+		}
+		if (_write_combine_dirty)
+		{
+			return EOK;
+		}
+		if (!ensure_write_combine_buffer_locked())
+		{
+			return ENOMEM;
+		}
+
+		uint64 file_size = lwext4_file_struct.fsize;
+		if (!(file_size == 0 && _stat.size == 0 && off == 0))
+		{
+			refresh_ext4_file_size_locked();
+			file_size = lwext4_file_struct.fsize;
+		}
+		size_t preload_size = static_cast<size_t>(min(file_size, static_cast<uint64>(k_write_combine_capacity)));
+		if (_attrs.u_read != 1)
+		{
+			if (preload_size > 0 && off > 0)
+			{
+				// 写-only fd 不能用 ext4_fread 预读旧内容；已有文件的 EOF 追加/中间覆盖
+				// 交给后面的 append 合并或直接写路径，避免 fflush 被误报 EPERM。
+				reset_write_combine_locked();
+				release_clean_write_combine_buffer_locked();
+				return ENOMEM;
+			}
+			preload_size = 0;
+		}
+
+		if (preload_size > 0)
+		{
+			long saved_ext4_pos = static_cast<long>(lwext4_file_struct.fpos);
+			if (saved_ext4_pos != 0)
+			{
+				int seek_status = ext4_fseek(&lwext4_file_struct, 0, SEEK_SET);
+				if (seek_status != EOK)
+				{
+					reset_write_combine_locked();
+					release_clean_write_combine_buffer_locked();
+					return seek_status;
+				}
+			}
+
+			size_t read_cnt = 0;
+			int status = ext4_fread(&lwext4_file_struct,
+									reinterpret_cast<char *>(_write_combine_buffer),
+									preload_size,
+									&read_cnt);
+			if (saved_ext4_pos != 0)
+			{
+				(void)ext4_fseek(&lwext4_file_struct, saved_ext4_pos, SEEK_SET);
+			}
+			if (status != EOK)
+			{
+				reset_write_combine_locked();
+				release_clean_write_combine_buffer_locked();
+				return status;
+			}
+			if (read_cnt != preload_size)
+			{
+				reset_write_combine_locked();
+				release_clean_write_combine_buffer_locked();
+				return EIO;
+			}
+		}
+
+		_write_combine_base = 0;
+		_write_combine_size = preload_size;
+		_stat.size = file_size;
+		return EOK;
+	}
+
 	normal_file::~normal_file()
 	{
 		_file_lock.acquire();
-		(void)flush_write_combine_locked();
+		(void)flush_write_combine_locked(false);
 		if (lwext4_file_struct.mp != nullptr)
 		{
 			(void)ext4_fclose(&lwext4_file_struct);
@@ -366,7 +469,7 @@ namespace fs
 		return EOK;
 	}
 
-	int normal_file::flush_write_combine_locked()
+	int normal_file::flush_write_combine_locked(bool preserve_offset)
 	{
 		if (!_write_combine_dirty)
 		{
@@ -379,7 +482,7 @@ namespace fs
 		int status = write_direct_locked(reinterpret_cast<const char *>(_write_combine_buffer),
 										 flush_size,
 										 static_cast<long>(flush_base),
-										 false);
+										 !preserve_offset);
 		if (status == EOK)
 		{
 			reset_write_combine_locked();
@@ -484,6 +587,54 @@ namespace fs
 
 	long normal_file::read(uint64 buf, size_t len, long off, bool upgrade)
 	{
+		if (len == 0)
+		{
+			return 0;
+		}
+
+		long fast_off = off < 0 ? _file_ptr : off;
+		const long fast_current_pos = _file_ptr;
+		if (refcnt == 1)
+		{
+			if (fast_off >= 0 && _write_combine_dirty && _write_combine_buffer != nullptr)
+			{
+				uint64 logical_size = logical_file_size_locked();
+				if (static_cast<uint64>(fast_off) >= logical_size)
+				{
+					return 0;
+				}
+
+				uint64 cache_begin = _write_combine_base;
+				uint64 cache_end = _write_combine_base + _write_combine_size;
+				size_t cnt = min(len, logical_size - static_cast<uint64>(fast_off));
+				if (static_cast<uint64>(fast_off) >= cache_begin &&
+					static_cast<uint64>(fast_off) + cnt <= cache_end)
+				{
+					memmove(reinterpret_cast<void *>(buf),
+							_write_combine_buffer + (static_cast<uint64>(fast_off) - cache_begin),
+							cnt);
+					_file_ptr = upgrade ? fast_off + static_cast<long>(cnt) : fast_current_pos;
+					return static_cast<long>(cnt);
+				}
+			}
+		}
+
+		if ((refcnt == 1 || _read_snapshot_valid) &&
+			fast_off >= 0 &&
+			_read_snapshot_valid &&
+			_read_snapshot_buffer != nullptr &&
+			_attrs.u_read == 1)
+		{
+			if (static_cast<uint64>(fast_off) >= _read_snapshot_size)
+			{
+				return 0;
+			}
+			size_t cnt = min(len, _read_snapshot_size - static_cast<size_t>(fast_off));
+			memmove(reinterpret_cast<void *>(buf), _read_snapshot_buffer + fast_off, cnt);
+			_file_ptr = upgrade ? fast_off + static_cast<long>(cnt) : fast_current_pos;
+			return static_cast<long>(cnt);
+		}
+
 		_file_lock.acquire();
 
 		if (_attrs.u_read != 1)
@@ -501,6 +652,37 @@ namespace fs
 		}
 
 		const long current_pos = _file_ptr;
+		if (_write_combine_dirty && _write_combine_buffer != nullptr)
+		{
+			uint64 logical_size = logical_file_size_locked();
+			if (static_cast<uint64>(off) >= logical_size)
+			{
+				_file_lock.release();
+				return 0;
+			}
+
+			uint64 cache_begin = _write_combine_base;
+			uint64 cache_end = _write_combine_base + _write_combine_size;
+			size_t cnt = min(len, logical_size - static_cast<uint64>(off));
+			if (static_cast<uint64>(off) >= cache_begin &&
+				static_cast<uint64>(off) + cnt <= cache_end)
+			{
+				memmove(reinterpret_cast<void *>(buf),
+						_write_combine_buffer + (static_cast<uint64>(off) - cache_begin),
+						cnt);
+				if (upgrade)
+				{
+					_file_ptr = off + static_cast<long>(cnt);
+				}
+				else
+				{
+					_file_ptr = current_pos;
+				}
+				_file_lock.release();
+				return static_cast<long>(cnt);
+			}
+		}
+
 		int flush_status = flush_write_combine_locked();
 		if (flush_status != EOK)
 		{
@@ -513,13 +695,22 @@ namespace fs
 			sync_file_size_from_memfd();
 		}
 
+		if (!_read_snapshot_valid &&
+			!is_memfd() &&
+			_attrs.u_read == 1 &&
+			lwext4_file_struct.mp != nullptr &&
+			lwext4_file_struct.inode != 0 &&
+			lwext4_file_struct.fsize <= k_write_combine_capacity)
+		{
+			refresh_ext4_file_size_locked();
+		}
+
 		if (can_use_read_snapshot_locked(off) && populate_read_snapshot_locked())
 		{
 			if (static_cast<uint64>(off) >= _read_snapshot_size)
 			{
-				// 小文件快照主要服务当前这一轮读；读到 EOF 后立即归还 1MiB 缓冲，
-				// 避免长回归里多个 iozone 子阶段把快照长期挂在 file 对象上。
-				invalidate_read_snapshot_locked();
+				// EOF 探测不能丢掉快照；iozone 的 stride/random reader 会频繁
+				// lseek+read，保留快照才能让后续分片继续走内存路径。
 				_file_lock.release();
 				return 0;
 			}
@@ -533,11 +724,6 @@ namespace fs
 			else
 			{
 				_file_ptr = current_pos;
-			}
-			if (static_cast<size_t>(off) + cnt >= _read_snapshot_size)
-			{
-				// 最后一个分片已经交给用户态，后续若还要重读再按需重新构建快照即可。
-				invalidate_read_snapshot_locked();
 			}
 			_file_lock.release();
 			return static_cast<long>(cnt);
@@ -608,6 +794,14 @@ namespace fs
 			off = _file_ptr;
 		}
 		const long current_pos = _file_ptr;
+		if ((lwext4_file_struct.flags & O_APPEND) != 0)
+		{
+			if (!_write_combine_dirty)
+			{
+				refresh_ext4_file_size_locked();
+			}
+			off = static_cast<long>(logical_file_size_locked());
+		}
 
 		proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
 		uint64 fsize_limit = current_proc->get_fsize_limit();
@@ -628,10 +822,19 @@ namespace fs
 			}
 		}
 
-		if (lwext4_file_struct.mp && lwext4_file_struct.inode > 0)
+		bool need_inode_write_flag_check = !(_write_combine_dirty && can_cache_small_write_locked(off, len));
+		ext4_mountpoint *mp = lwext4_file_struct.mp;
+		if (need_inode_write_flag_check && mp && lwext4_file_struct.inode > 0)
 		{
 			struct ext4_inode_ref inode_ref;
-			int result = ext4_fs_get_inode_ref(&lwext4_file_struct.mp->fs,
+			int write_flag_error = EOK;
+			// inode flags 属于 ext4 元数据，必须跟其它 ext4 路径一样在挂载锁下读取；
+			// 否则长回归中并发 open/close/write 可能读到不稳定状态，把普通追加写误判成 EPERM。
+			if (mp->os_locks)
+			{
+				mp->os_locks->lock();
+			}
+			int result = ext4_fs_get_inode_ref(&mp->fs,
 											   lwext4_file_struct.inode,
 											   &inode_ref);
 			if (result == EOK)
@@ -641,15 +844,22 @@ namespace fs
 
 				if (inode_flags & EXT4_INODE_FLAG_IMMUTABLE)
 				{
-					_file_lock.release();
-					return -EPERM;
+					write_flag_error = EPERM;
 				}
 				if ((inode_flags & EXT4_INODE_FLAG_APPEND) &&
-					off != static_cast<long>(lwext4_file_struct.fsize))
+					static_cast<uint64>(off) != logical_file_size_locked())
 				{
-					_file_lock.release();
-					return -EPERM;
+					write_flag_error = EPERM;
 				}
+			}
+			if (mp->os_locks)
+			{
+				mp->os_locks->unlock();
+			}
+			if (write_flag_error != EOK)
+			{
+				_file_lock.release();
+				return -write_flag_error;
 			}
 		}
 
@@ -669,6 +879,57 @@ namespace fs
 			}
 		}
 
+		const char *kbuf = reinterpret_cast<const char *>(buf);
+		if (can_cache_small_write_locked(off, len))
+		{
+			int cache_status = prepare_small_write_cache_locked(off, len);
+			if (cache_status == EOK)
+			{
+				uint64 cache_offset = static_cast<uint64>(off) - _write_combine_base;
+				uint64 write_end = cache_offset + len;
+				if (write_end > _write_combine_size)
+				{
+					if (cache_offset > _write_combine_size)
+					{
+						memset(_write_combine_buffer + _write_combine_size,
+							   0,
+							   static_cast<size_t>(cache_offset - _write_combine_size));
+					}
+					_write_combine_size = static_cast<size_t>(write_end);
+				}
+
+				memmove(_write_combine_buffer + cache_offset, kbuf, len);
+				_write_combine_dirty = true;
+
+				if (upgrade)
+				{
+					_file_ptr = off + static_cast<long>(len);
+				}
+				else
+				{
+					_file_ptr = current_pos;
+				}
+
+				uint64 logical_size = logical_file_size_locked();
+				if (logical_size > _stat.size)
+				{
+					_stat.size = logical_size;
+				}
+				if (_memfd_state != nullptr)
+				{
+					_memfd_state->size = logical_size;
+				}
+
+				_file_lock.release();
+				return static_cast<long>(len);
+			}
+			if (cache_status != ENOMEM)
+			{
+				_file_lock.release();
+				return -cache_status;
+			}
+		}
+
 		if (off > static_cast<long>(logical_file_size_locked()))
 		{
 			int zero_status = zero_fill_gap_locked(off);
@@ -679,7 +940,6 @@ namespace fs
 			}
 		}
 
-		const char *kbuf = reinterpret_cast<const char *>(buf);
 		if (!can_append_write_combine_locked(off, len))
 		{
 			int flush_status = flush_write_combine_locked();
@@ -799,17 +1059,39 @@ namespace fs
 
 	off_t normal_file::lseek(off_t offset, int whence)
 	{
-		if (is_memfd())
+		if (!is_memfd() && (refcnt == 1 || _read_snapshot_valid))
 		{
-			sync_file_size_from_memfd();
+			if (whence == SEEK_SET)
+			{
+				if (offset < 0)
+				{
+					return -EINVAL;
+				}
+				_file_ptr = offset;
+				return _file_ptr;
+			}
+			if (whence == SEEK_CUR)
+			{
+				off_t new_off = _file_ptr + offset;
+				if (new_off < 0)
+				{
+					return -EINVAL;
+				}
+				_file_ptr = new_off;
+				return _file_ptr;
+			}
 		}
 
 		_file_lock.acquire();
-		int flush_status = flush_write_combine_locked();
-		if (flush_status != EOK)
+		if (is_memfd())
 		{
-			_file_lock.release();
-			return -flush_status;
+			sync_file_size_from_memfd();
+			int flush_status = flush_write_combine_locked();
+			if (flush_status != EOK)
+			{
+				_file_lock.release();
+				return -flush_status;
+			}
 		}
 
 		off_t new_off = 0;
@@ -831,14 +1113,17 @@ namespace fs
 				return -EINVAL;
 			}
 			break;
-			case SEEK_END:
-				// 不同 open file description 会各自缓存 lwext4_file_struct.fsize。
-				// 像 fcntl34 这种多线程分别 open 同一文件、靠 SEEK_END 追加写入的场景，
-				// 如果这里不先刷新 inode 真实大小，就会拿着过期 EOF 互相覆盖。
+		case SEEK_END:
+			// 不同 open file description 会各自缓存 lwext4_file_struct.fsize。
+			// 像 fcntl34 这种多线程分别 open 同一文件、靠 SEEK_END 追加写入的场景，
+			// 如果这里不先刷新 inode 真实大小，就会拿着过期 EOF 互相覆盖。
+			if (!_write_combine_dirty)
+			{
 				refresh_ext4_file_size_locked();
-				new_off = static_cast<off_t>(lwext4_file_struct.fsize) + offset;
-				if (new_off < 0)
-				{
+			}
+			new_off = static_cast<off_t>(logical_file_size_locked()) + offset;
+			if (new_off < 0)
+			{
 				_file_lock.release();
 				return -EINVAL;
 			}
@@ -849,19 +1134,9 @@ namespace fs
 		}
 
 		_file_ptr = new_off;
-		if (static_cast<uint64>(new_off) > lwext4_file_struct.fsize)
-		{
-			_file_lock.release();
-			return _file_ptr;
-		}
-
-		int seek_status = ext4_fseek(&lwext4_file_struct, _file_ptr, SEEK_SET);
-		if (seek_status != EOK)
-		{
-			_file_lock.release();
-			return -seek_status;
-		}
-
+		// lseek 只改变 open file description 的逻辑偏移；真正进入 ext4 的读写路径
+		// 会按本次 off 再决定是否 ext4_fseek。避免 iozone 随机/逆序/stride 读在
+		// 每个 1KiB 分片前都做一次无意义的 ext4 seek。
 		_file_lock.release();
 		return _file_ptr;
 	}
