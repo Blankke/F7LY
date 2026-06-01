@@ -1,6 +1,6 @@
 /**
  * @file priority_borrow_research.cc
- * @brief priority-borrow 调度实验入口：使用手写长时直写 worker 验证优先级压制与带宽借用
+ * @brief priority-borrow 调度实验入口：使用手写长时块设备 worker 验证优先级压制与带宽借用
  *
  * 使用示例：
  * 1. 在 `user/app/initcode-rv.cc` 中启用 `priority_borrow_research();`
@@ -8,8 +8,9 @@
  * 3. 运行：`make run r QEMU_MEM=1G`
  *
  * 说明：
- * - 这里不依赖 iozone/FIO 产生 IO，而是直接在用户态持续发起对齐 write 请求。
- * - 每个 worker 按固定时长持续写自己的块设备区域，更贴近“长时间并发争用同一设备”的题意。
+ * - 这里不依赖 iozone/FIO 产生 IO，而是直接在用户态持续发起对齐 read/write 请求。
+ * - 默认使用原始块设备 read 作为实验负载，既能压到 virtio 块层队列，又不会破坏 ext4 镜像。
+ * - 每个 worker 按固定时长持续访问自己的块设备区域，更贴近“长时间并发争用同一设备”的题意。
  * - A/B 的 CPU nice 被固定为同级，只通过独立的 IO nice 让块层看到优先级差异。
  */
 
@@ -31,13 +32,14 @@ namespace
     {
         const char *tag;                     ///< worker 标签，仅用于日志
         const char *file_path;               ///< 目标文件或块设备路径
-        bool use_direct_device;              ///< true 表示直接写块设备
+        bool use_direct_device;              ///< true 表示直接访问块设备
+        bool write_request;                  ///< true 表示写请求，false 表示读请求
         unsigned long long start_offset_bytes; ///< 本 worker 的起始偏移
         unsigned long long region_bytes;     ///< 本 worker 可循环覆盖的独占区域大小
         unsigned long long runtime_usec;     ///< 持续发起 IO 的总时长
         int nice_value;                      ///< 块层优先级（IO nice）
         int pause_usec_after_chunk;          ///< 每个 chunk 之后的额外停顿，用于模拟“未吃满配额”
-        char fill_byte;                      ///< 便于区分不同 worker 写入内容
+        char fill_byte;                      ///< 写请求用于区分不同 worker 内容，读请求不关心
     };
 
     struct io_report
@@ -48,7 +50,7 @@ namespace
         int requested_nice;                  ///< 请求设置的 IO nice
         int observed_nice;                   ///< 实际应用的 IO nice
         int observed_cpu_nice;               ///< 实际 CPU nice，用于确认 CPU 调度不再干扰实验
-        unsigned long long bytes_written;    ///< 该 worker 在持续时间窗口内完成的总写入字节数
+        unsigned long long bytes_completed;  ///< 该 worker 在持续时间窗口内完成的总 IO 字节数
         unsigned long long start_us;         ///< 真正开始发起 IO 的时刻
         unsigned long long finish_us;        ///< 停止发起 IO 的时刻
     };
@@ -73,7 +75,8 @@ namespace
         const char *tag;                       ///< A/B 组标签
         const char *file_prefix;               ///< 直接块设备模式下即目标设备路径
         int workers;                           ///< 组内 worker 数，必须 <= k_max_group_workers
-        bool use_direct_device;                ///< true 表示直接对块设备发起对齐写请求
+        bool use_direct_device;                ///< true 表示直接对块设备发起对齐请求
+        bool write_request;                    ///< true 表示写请求，false 表示读请求
         unsigned long long base_offset_bytes;  ///< 第 0 个 worker 的起始偏移
         unsigned long long worker_stride_bytes; ///< 相邻 worker 的偏移步长
         unsigned long long worker_region_bytes; ///< 每个 worker 独占区域大小
@@ -374,7 +377,7 @@ namespace
         report.requested_nice = ctx.job.nice_value;
         report.observed_nice = 0;
         report.observed_cpu_nice = getpriority(PRIO_PROCESS, 0);
-        report.bytes_written = 0;
+        report.bytes_completed = 0;
         report.start_us = 0;
         report.finish_us = 0;
 
@@ -409,7 +412,9 @@ namespace
         }
         int fd = openat(AT_FDCWD,
                         ctx.job.file_path,
-                        ctx.job.use_direct_device ? O_RDWR : (O_CREAT | O_TRUNC | O_RDWR));
+                        ctx.job.use_direct_device
+                            ? (ctx.job.write_request ? O_RDWR : O_RDONLY)
+                            : (ctx.job.write_request ? (O_CREAT | O_TRUNC | O_RDWR) : O_RDONLY));
         if (fd < 0)
         {
             report.status_code = -20;
@@ -430,7 +435,10 @@ namespace
             report.sys_errno = errno;
             return write_report_and_exit(ctx, report, 125);
         }
-        fill_write_buffer(ctx.job.fill_byte);
+        if (ctx.job.write_request)
+        {
+            fill_write_buffer(ctx.job.fill_byte);
+        }
 
         char ready = 'R';
         if (write_exact(ctx.ready_w, &ready, 1) != 1)
@@ -470,14 +478,17 @@ namespace
                 current_offset = region_start;
             }
 
-            if (write_exact(fd, g_write_buffer, k_direct_chunk_bytes) != k_direct_chunk_bytes)
+            int io_rc = ctx.job.write_request
+                            ? write_exact(fd, g_write_buffer, k_direct_chunk_bytes)
+                            : read_exact(fd, g_write_buffer, k_direct_chunk_bytes);
+            if (io_rc != k_direct_chunk_bytes)
             {
                 close(fd);
                 report.status_code = -50;
                 report.sys_errno = errno;
                 return write_report_and_exit(ctx, report, 150);
             }
-            if (!ctx.job.use_direct_device && fdatasync(fd) != 0)
+            if (ctx.job.write_request && !ctx.job.use_direct_device && fdatasync(fd) != 0)
             {
                 close(fd);
                 report.status_code = -60;
@@ -485,7 +496,7 @@ namespace
                 return write_report_and_exit(ctx, report, 160);
             }
 
-            report.bytes_written += static_cast<unsigned long long>(k_direct_chunk_bytes);
+            report.bytes_completed += static_cast<unsigned long long>(k_direct_chunk_bytes);
             current_offset += static_cast<unsigned long long>(k_direct_chunk_bytes);
 
             if (ctx.job.pause_usec_after_chunk > 0)
@@ -602,6 +613,7 @@ namespace
                 ctx.tag_storage[i],
                 ctx.path_storage[i],
                 ctx.job.use_direct_device,
+                ctx.job.write_request,
                 ctx.job.base_offset_bytes + static_cast<unsigned long long>(i) * ctx.job.worker_stride_bytes,
                 ctx.job.worker_region_bytes,
                 ctx.job.runtime_usec,
@@ -663,18 +675,15 @@ namespace
 
     void send_group_go_interleaved(group_ctx &a_ctx, group_ctx &b_ctx)
     {
-        const int max_workers = a_ctx.job.workers > b_ctx.job.workers ? a_ctx.job.workers : b_ctx.job.workers;
-        for (int i = 0; i < max_workers; ++i)
-        {
-            if (i < a_ctx.job.workers)
-            {
-                send_child_go(a_ctx.workers[i]);
-            }
-            if (i < b_ctx.job.workers)
-            {
-                send_child_go(b_ctx.workers[i]);
-            }
-        }
+        /*
+         * 同步 read/write worker 每个进程一次只会挂一个块层请求。
+         * 为了稳定复现“高优先级 backlog 存在时低优先级被压制”，先让 A 组预热出
+         * 一批 pending 请求，再放行 B 组。两个组的运行窗口仍然长时间重叠，
+         * 吞吐统计按各自 worker 的真实开始/结束时间计算。
+         */
+        send_group_go(a_ctx);
+        sleep_usec_approx(200000);
+        send_group_go(b_ctx);
     }
 
     void print_group_worker_failures(const char *scenario_name, const group_ctx &ctx)
@@ -697,7 +706,7 @@ namespace
                        worker.job.nice_value,
                        worker.has_report ? worker.report.observed_nice : 0,
                        worker.has_report ? worker.report.observed_cpu_nice : 0,
-                       worker.has_report ? static_cast<int>(worker.report.bytes_written / k_mib_bytes) : 0,
+                       worker.has_report ? static_cast<int>(worker.report.bytes_completed / k_mib_bytes) : 0,
                        worker.has_report ? worker.report.status_code : -999,
                        worker.has_report ? worker.report.sys_errno : 0,
                        worker.wait_status);
@@ -737,7 +746,7 @@ namespace
             }
 
             ++report.successful_workers;
-            report.total_bytes += worker.report.bytes_written;
+            report.total_bytes += worker.report.bytes_completed;
             if (report.earliest_start_us == 0 || worker.report.start_us < report.earliest_start_us)
             {
                 report.earliest_start_us = worker.report.start_us;
@@ -782,9 +791,10 @@ namespace
 
     void print_group_result(const char *scenario_name, const io_group_job &job, const io_group_report &report)
     {
-        printf("[priority-borrow] 场景=%s group=%s workers=%d runtime=%ds io(req=%d got=%d..%d) cpu=%d..%d 成功=%d/%d 总写入=%dMiB 吞吐=",
+        printf("[priority-borrow] 场景=%s group=%s op=%s workers=%d runtime=%ds io(req=%d got=%d..%d) cpu=%d..%d 成功=%d/%d 总IO=%dMiB 吞吐=",
                scenario_name,
                job.tag,
+               job.write_request ? "write" : "read",
                job.workers,
                static_cast<int>(job.runtime_usec / k_usec_per_sec),
                job.nice_value,
@@ -960,6 +970,29 @@ namespace
         printf("MiB/s, B 单独=");
         print_x100(b_alone_x100);
         printf("MiB/s\n");
+
+        const unsigned long long full_pressure_ratio = ratio_x100(a_contended_x100, b_contended_x100);
+        const unsigned long long borrow_vs_contended = ratio_x100(b_borrow_x100, b_contended_x100);
+        const unsigned long long borrow_vs_alone = ratio_x100(b_borrow_x100, b_alone_x100);
+        const unsigned long long after_vs_alone = ratio_x100(b_after_x100, b_alone_x100);
+
+        /*
+         * 这些阈值只用于让日志自动给出 PASS/FAIL：
+         * 目标 1 要求 A 在满载并发时明显压过 B；
+         * 目标 2 要求 A 轻载时 B 比满载争抢时拿到更多带宽，同时不能离单独基线太远；
+         * 目标 3 用 A 只运行 1 秒、B 运行 6 秒的长窗口验证 A 停止后 B 能接近独占。
+         */
+        const bool goal1_pass = full_pressure_ratio >= 150ULL;
+        const bool goal2_pass = borrow_vs_contended >= 150ULL && borrow_vs_alone >= 50ULL;
+        const bool goal3_pass = after_vs_alone >= 70ULL;
+        printf("[priority-borrow][验收] 目标1=%s 目标2=%s 目标3=%s borrow/contended=",
+               goal1_pass ? "PASS" : "FAIL",
+               goal2_pass ? "PASS" : "FAIL",
+               goal3_pass ? "PASS" : "FAIL");
+        print_x100(borrow_vs_contended);
+        printf(" after/alone=");
+        print_x100(after_vs_alone);
+        printf("\n");
     }
 } // namespace
 
@@ -971,7 +1004,7 @@ int priority_borrow_research(void)
     userdebug4();
 
     /**
-     * @brief 预留给 A/B 的两个大区间，避免不同组在长时间实验中互相覆盖。
+     * @brief 预留给 A/B 的两个大区间，避免不同组在长时间实验中互相踩同一段缓存/设备区域。
      *
      * 这里依赖 64 位 `lseek` wrapper，可以安全使用 2GiB 以上偏移。
      */
@@ -980,45 +1013,45 @@ int priority_borrow_research(void)
     constexpr unsigned long long k_worker_region_bytes = 32ULL * k_mib_bytes;
     constexpr unsigned long long k_worker_stride_bytes = k_worker_region_bytes;
     constexpr unsigned long long k_long_runtime_usec = 6ULL * k_usec_per_sec;
-    constexpr unsigned long long k_short_runtime_usec = 2ULL * k_usec_per_sec;
+    constexpr unsigned long long k_short_runtime_usec = 1ULL * k_usec_per_sec;
     constexpr int k_workers = 16;
 
     /**
-     * @brief 采用“固定时长”而不是“固定总写量”。
+     * @brief 采用“固定时长”而不是“固定总 IO 量”。
      *
      * 这样 A/B 会在同一时间窗口内持续争抢设备，B 不会在 A 提前跑完后再把吞吐补回来，
      * 更利于观察题目要求的“压制”“借用”“独占”三种行为。
      */
     const io_group_job a_alone_job = {
-        "A-alone", "/dev/block/8:0", k_workers, true,
+        "A-alone", "/dev/block/8:0", k_workers, true, false,
         k_raw_device_a_base, k_worker_stride_bytes, k_worker_region_bytes,
         k_long_runtime_usec, 0, 0, 'A'};
     const io_group_job b_alone_job = {
-        "B-alone", "/dev/block/8:0", k_workers, true,
+        "B-alone", "/dev/block/8:0", k_workers, true, false,
         k_raw_device_b_base, k_worker_stride_bytes, k_worker_region_bytes,
         k_long_runtime_usec, 19, 0, 'a'};
     const io_group_job a_contended_job = {
-        "A-high", "/dev/block/8:0", k_workers, true,
+        "A-high", "/dev/block/8:0", k_workers, true, false,
         k_raw_device_a_base, k_worker_stride_bytes, k_worker_region_bytes,
         k_long_runtime_usec, 0, 0, 'q'};
     const io_group_job b_contended_job = {
-        "B-low", "/dev/block/8:0", k_workers, true,
+        "B-low", "/dev/block/8:0", k_workers, true, false,
         k_raw_device_b_base, k_worker_stride_bytes, k_worker_region_bytes,
         k_long_runtime_usec, 19, 0, 'Q'};
     const io_group_job a_light_job = {
-        "A-light", "/dev/block/8:0", k_workers, true,
+        "A-light", "/dev/block/8:0", 2, true, false,
         k_raw_device_a_base, k_worker_stride_bytes, k_worker_region_bytes,
-        k_long_runtime_usec, 0, 2000, 'g'};
+        k_long_runtime_usec, 0, 8000, 'g'};
     const io_group_job b_borrow_job = {
-        "B-borrow", "/dev/block/8:0", k_workers, true,
+        "B-borrow", "/dev/block/8:0", k_workers, true, false,
         k_raw_device_b_base, k_worker_stride_bytes, k_worker_region_bytes,
         k_long_runtime_usec, 19, 0, 'G'};
     const io_group_job a_short_job = {
-        "A-short", "/dev/block/8:0", k_workers, true,
+        "A-short", "/dev/block/8:0", k_workers, true, false,
         k_raw_device_a_base, k_worker_stride_bytes, k_worker_region_bytes,
         k_short_runtime_usec, 0, 0, 'm'};
     const io_group_job b_after_job = {
-        "B-after", "/dev/block/8:0", k_workers, true,
+        "B-after", "/dev/block/8:0", k_workers, true, false,
         k_raw_device_b_base, k_worker_stride_bytes, k_worker_region_bytes,
         k_long_runtime_usec, 19, 0, 'M'};
 
@@ -1047,7 +1080,7 @@ int priority_borrow_research(void)
     {
         return -1;
     }
-    if (run_pair_group_scenario("A/B 两组同时满载写盘", a_contended_job, b_contended_job, a_contended, b_contended) != 0)
+    if (run_pair_group_scenario("A/B 两组长时满载读盘", a_contended_job, b_contended_job, a_contended, b_contended) != 0)
     {
         return -1;
     }
