@@ -9992,11 +9992,17 @@ namespace syscall
             {
                 return -EINVAL;
             }
-            if (mem::k_vmm.copy_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), (char *)&timeout, timeout_addr, sizeof(timeout)) < 0)
+            // Linux futex 允许 timeout 为空，表示无限期等待。glibc 的 pthread
+            // 创建/回收路径会使用这种形式，不能把空指针当成用户地址 0 去读。
+            if (timeout_addr != 0 &&
+                mem::k_vmm.copy_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), (char *)&timeout, timeout_addr, sizeof(timeout)) < 0)
             {
                 return -EFAULT;
             }
-            timeout_ptr = &timeout;
+            if (timeout_addr != 0)
+            {
+                timeout_ptr = &timeout;
+            }
         }
 
         if (cmd == FUTEX_REQUEUE || cmd == FUTEX_CMP_REQUEUE || cmd == FUTEX_CMP_REQUEUE_PI || cmd == FUTEX_WAKE_OP)

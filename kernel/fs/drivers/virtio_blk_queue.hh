@@ -87,6 +87,9 @@ namespace virtio_blk
         void reset_runtime();
         void reset_bandwidth_stats_locked();
         void reset_priority_trace_locked();
+        bool has_recent_higher_activity_locked(int service_class, uint64 now_us) const;
+        uint64 reserve_lower_class_submit_time_locked(int service_class, uint64 now_us);
+        void throttle_lower_class_submit_if_needed(int service_class);
         uint32 inflight_class_mask_locked() const;
         void record_priority_trace_locked(uint32 pending_mask, const IoRequest *request);
         void record_completion_stats_locked(const IoRequest *request, uint64 dispatch_us, uint64 finish_us);
@@ -108,6 +111,8 @@ namespace virtio_blk
         int owner_token_;
         int inflight_count_;
         uint16 inflight_by_class_[PriorityBorrowScheduler::k_class_count];
+        uint64 last_activity_us_by_class_[PriorityBorrowScheduler::k_class_count];
+        uint64 next_borrow_submit_us_by_class_[PriorityBorrowScheduler::k_class_count];
         ClassBandwidthStats class_stats_[PriorityBorrowScheduler::k_class_count];
         PriorityBorrowTraceStats priority_trace_;
         RequestInfo info_[k_queue_size];

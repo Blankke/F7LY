@@ -19,11 +19,13 @@ extern "C"
         // libcbench_test("/glibc");
         // ltp_test(true);
         // ltp_test(false);
-        priority_borrow_research();
+        // priority_borrow_research();
         // iozone_glibc_random_read_repro();
         // busybox_test("/musl/");
         // busybox_test("/glibc/");
-        // bench_refine_suite();
+        // libcbench_test("/musl");
+        // libcbench_test("/glibc");
+        bench_refine_suite();
         shutdown();
         return 0;
     }

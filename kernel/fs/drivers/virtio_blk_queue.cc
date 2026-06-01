@@ -10,6 +10,8 @@ namespace virtio_blk
     namespace
     {
         bool g_priority_borrow_experiment_mode = false;
+        constexpr uint64 k_priority_active_window_us = 5000;
+        constexpr uint64 k_low_class_borrow_spacing_us = 8000;
     }
 
     void set_priority_borrow_experiment_mode(bool enabled)
@@ -84,6 +86,8 @@ namespace virtio_blk
         reset_bandwidth_stats_locked();
         reset_priority_trace_locked();
         memset(inflight_by_class_, 0, sizeof(inflight_by_class_));
+        memset(last_activity_us_by_class_, 0, sizeof(last_activity_us_by_class_));
+        memset(next_borrow_submit_us_by_class_, 0, sizeof(next_borrow_submit_us_by_class_));
 
         for (int i = 0; i < k_queue_size; ++i)
         {
@@ -127,6 +131,70 @@ namespace virtio_blk
         for (int i = 0; i < PriorityBorrowScheduler::k_class_count; ++i)
         {
             priority_trace_.selected_by_class[i] = 0;
+        }
+    }
+
+    bool VirtioBlkQueue::has_recent_higher_activity_locked(int service_class, uint64 now) const
+    {
+        if (service_class <= 0)
+        {
+            return false;
+        }
+
+        for (int higher_class = 0; higher_class < service_class; ++higher_class)
+        {
+            uint64 last_activity = last_activity_us_by_class_[higher_class];
+            if (last_activity != 0 && now >= last_activity &&
+                now - last_activity <= k_priority_active_window_us)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    uint64 VirtioBlkQueue::reserve_lower_class_submit_time_locked(int service_class, uint64 now)
+    {
+        if (service_class <= 0 || !has_recent_higher_activity_locked(service_class, now))
+        {
+            if (service_class >= 0 && service_class < PriorityBorrowScheduler::k_class_count)
+            {
+                next_borrow_submit_us_by_class_[service_class] = 0;
+            }
+            return now;
+        }
+
+        /*
+         * 优先级借用不是硬限速：高优先级 class 活跃时，低优先级 class 仍按固定间隔
+         * 获得借用机会；高优先级停止或产生空窗后，下面会立即清掉节流状态。
+         */
+        uint64 reserved = next_borrow_submit_us_by_class_[service_class];
+        if (reserved < now)
+        {
+            reserved = now;
+        }
+        next_borrow_submit_us_by_class_[service_class] = reserved + k_low_class_borrow_spacing_us;
+        return reserved;
+    }
+
+    void VirtioBlkQueue::throttle_lower_class_submit_if_needed(int service_class)
+    {
+        if (!priority_borrow_experiment_mode_enabled() ||
+            service_class <= 0 ||
+            service_class >= PriorityBorrowScheduler::k_class_count)
+        {
+            return;
+        }
+
+        lock_.acquire();
+        uint64 now = now_us();
+        uint64 submit_after = reserve_lower_class_submit_time_locked(service_class, now);
+        lock_.release();
+
+        while (now < submit_after)
+        {
+            proc::k_scheduler.yield();
+            now = now_us();
         }
     }
 
@@ -217,6 +285,7 @@ namespace virtio_blk
         }
 
         ClassBandwidthStats &stats = class_stats_[service_class];
+        last_activity_us_by_class_[service_class] = finish_us;
         if (stats.window_start_us == 0)
         {
             stats.window_start_us = finish_us;
@@ -459,7 +528,11 @@ namespace virtio_blk
 
     void VirtioBlkQueue::submit_request_and_wait(IoRequest &request)
     {
+        int submit_class = PriorityBorrowScheduler::nice_to_service_class(request.submit_nice);
+        throttle_lower_class_submit_if_needed(submit_class);
+
         lock_.acquire();
+        last_activity_us_by_class_[submit_class] = now_us();
         scheduler_.enqueue(&request);
         dispatch_pending_locked();
 

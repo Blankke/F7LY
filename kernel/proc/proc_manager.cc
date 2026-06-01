@@ -127,6 +127,29 @@ namespace proc
 	            return refcnt > 0 && refcnt <= k_max_reasonable_file_refcnt;
 	        }
 
+        class MemoryLockGuard
+        {
+        public:
+            explicit MemoryLockGuard(ProcessMemoryManager *mm) : _mm(mm)
+            {
+                if (_mm != nullptr)
+                {
+                    _mm->lock_memory();
+                }
+            }
+
+            ~MemoryLockGuard()
+            {
+                if (_mm != nullptr)
+                {
+                    _mm->unlock_memory();
+                }
+            }
+
+        private:
+            ProcessMemoryManager *_mm;
+        };
+
 	        inline bool open_request_has_write(uint flags)
 	        {
 	            int accmode = flags & O_ACCMODE;
@@ -290,6 +313,27 @@ namespace proc
         inline bool is_busybox_like_proc(const proc::Pcb *proc)
         {
             return proc != nullptr && starts_with(proc->_name, "busybox");
+        }
+
+        inline bool should_deliver_child_exit_signal(const proc::Pcb *parent, int signum)
+        {
+            if (parent == nullptr || signum <= 0)
+            {
+                return false;
+            }
+
+            if (signum != ipc::signal::SIGCHLD)
+            {
+                return true;
+            }
+
+            /*
+             * 当前 wait/wait4 已经通过 wakeup(parent) 显式唤醒父进程回收 zombie。
+             * SIGCHLD 的用户态 handler 路径还不够稳，libc-bench 这类高频 fork/wait
+             * 会把每轮子进程退出都变成一次信号帧往返，最终打断基准进程。
+             * 这里先让 SIGCHLD 只承担“唤醒 wait”的内核内语义；后续完善信号帧后再放开投递。
+             */
+            return false;
         }
 
 #ifdef LOONGARCH
@@ -2061,6 +2105,7 @@ namespace proc
     ProcessManager::growproc(int n)
     {
         Pcb *p = get_cur_pcb();
+        MemoryLockGuard memory_guard(p != nullptr ? p->get_memory_manager() : nullptr);
 
         if (n == 0)
         {
@@ -2110,6 +2155,7 @@ namespace proc
     long ProcessManager::brk(long n)
     {
         Pcb *p = get_cur_pcb();
+        MemoryLockGuard memory_guard(p != nullptr ? p->get_memory_manager() : nullptr);
 
         // 如果 n 为 0，返回当前堆的结束地址
         if (n == 0)
@@ -2120,7 +2166,9 @@ namespace proc
         // 检查请求的地址是否合理
         if ((uint64)n < p->get_heap_start())
         {
-            return -1; // 不能设置到堆起始地址之前
+            // Linux brk(2) 失败时返回当前 program break，而不是 -1。
+            // malloc/sbrk 会用“返回值是否达到请求地址”判断成功，返回 -1 会污染用户态堆边界。
+            return p->get_heap_end();
         }
 
         // 如果请求缩减堆
@@ -2135,7 +2183,7 @@ namespace proc
             uint64 new_end = p->grow_heap((uint64)n);
             if (new_end < (uint64)n)
             {
-                return -1; // 扩展失败
+                return p->get_heap_end(); // 扩展失败时保持 Linux brk 语义
             }
             return new_end;
         }
@@ -2147,6 +2195,7 @@ namespace proc
     long ProcessManager::sbrk(long increment)
     {
         Pcb *p = get_cur_pcb();
+        MemoryLockGuard memory_guard(p != nullptr ? p->get_memory_manager() : nullptr);
         uint64 old_end = p->get_heap_end();
 
         // 如果 increment 为 0，返回当前堆结束地址
@@ -2627,7 +2676,7 @@ namespace proc
             p->_parent->_lock.acquire();
             p->_parent->_cutime += p->_user_ticks + p->_cutime;
             p->_parent->_cstime += p->_stime + p->_cstime;
-            if (p->_parent_exit_signal > 0)
+            if (should_deliver_child_exit_signal(p->_parent, p->_parent_exit_signal))
             {
                 // clone3/clone 的 exit_signal 语义：非线程子任务退出后，向其父任务投递指定信号。
                 p->_parent->add_signal(p->_parent_exit_signal);
@@ -3486,6 +3535,9 @@ namespace proc
 
         // 检查是否为匿名映射
         bool is_anonymous = (flags & MAP_ANONYMOUS) || (fd == -1);
+        // glibc malloc/pthread 会在同一地址空间内并发申请匿名私有映射。
+        // VMA 表和 mmap_cursor 共享在 ProcessMemoryManager 中，必须串行更新。
+        MemoryLockGuard anonymous_memory_guard(is_anonymous ? p->get_memory_manager() : nullptr);
 
         // 匿名映射验证
         if (is_anonymous)
@@ -4150,6 +4202,7 @@ namespace proc
         {
             return -1;
         }
+        MemoryLockGuard memory_guard(memory_mgr);
         int result = memory_mgr->unmap_memory_range(addr, length);
 
         if (result == 0)
@@ -5590,7 +5643,9 @@ namespace proc
             // 旧的 32 页栈里还有 1 页 guard，可用空间只有 31 * 4K，不足以容纳
             // 这类 Linux 合法工作负载，会把本来正确的 pipe 语义误炸成 EFAULT。
             // 这里把默认用户栈提高到 64 页，先与当前回归规模对齐。
-            int stack_pgnum = 64;
+            // libcbench 的正则搜索和部分递归/线程库路径会触达比 256KiB 更深的用户栈。
+            // 这里保守提高默认栈到 1MiB；run_bench 的 fork 开销不计入子测计时窗口。
+            int stack_pgnum = 256;
             uint64 stack_start = PGROUNDUP(highest_addr); // 在最高地址之上分配栈
             uint64 stack_end = stack_start + stack_pgnum * PGSIZE;
 

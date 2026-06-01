@@ -489,6 +489,16 @@ namespace proc
         return ref_count.load(eastl::memory_order_acquire);
     }
 
+    void ProcessMemoryManager::lock_memory()
+    {
+        memory_lock.acquire();
+    }
+
+    void ProcessMemoryManager::unlock_memory()
+    {
+        memory_lock.release();
+    }
+
     ProcessMemoryManager *ProcessMemoryManager::share_for_thread()
     {
         // 线程共享：增加引用计数并返回当前对象
