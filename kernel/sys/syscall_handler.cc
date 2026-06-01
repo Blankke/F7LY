@@ -12691,10 +12691,16 @@ namespace syscall
             return SYS_EINVAL;
         }
 
-        // clone3 的 stack 字段是用户栈区间低地址，stack_size 给出长度；
-        // 旧 clone 的 stack 参数才是直接作为子任务 SP 的栈顶地址。
-        uint64 child_stack = args.stack;
-        if (child_stack != 0 && args.stack_size != 0)
+        // clone3 的 stack 字段是用户栈区间低地址，stack_size 给出长度。
+        // Linux 要求二者同为 0 表示沿用当前栈；只给其中一个属于无效参数。
+        uint64 child_stack = 0;
+        if ((args.stack == 0) != (args.stack_size == 0))
+        {
+            printfRed("[SyscallHandler::sys_clone3] Invalid stack pair: stack=%p stack_size=%llu\n",
+                      (void *)args.stack, args.stack_size);
+            return SYS_EINVAL;
+        }
+        if (args.stack != 0)
         {
             if (args.stack + args.stack_size < args.stack)
             {
