@@ -60,6 +60,7 @@
 #include "net/onpstack/include/onps.hh"
 #include "net/onpstack/include/onps_utils.hh"
 #include "fs/vfs/virtual_fs.hh"
+#include "fs/drivers/virtio_blk.hh"
 #include "shm/shm_manager.hh"
 #include "devs/loop_device.hh"
 #include "devs/block_device.hh"
@@ -2626,6 +2627,7 @@ namespace syscall
         BIND_SYSCALL(userdebug2);
         BIND_SYSCALL(userdebug3);
         BIND_SYSCALL(userdebug4);
+        BIND_SYSCALL(userdebug5);
 
         printfGreen("[SyscallHandler::init]SyscallHandler initialized with %d syscall functions\n", max_syscall_funcs_num);
     }
@@ -4541,7 +4543,6 @@ namespace syscall
             printfRed("[SyscallHandler::sys_munmap] Error fetching munmap arguments\n");
             return -EINVAL;
         }
-        printfBlue("[sys_munmap] start=%p size=%zu\n", (void *)start, size);
         int result = proc::k_pm.munmap((void *)start, size);
         if (result < 0)
         {
@@ -4648,48 +4649,15 @@ namespace syscall
         }
 
         int mmap_errno = 0;
-        proc::Pcb *cur = proc::k_pm.get_cur_pcb();
         void *result = proc::k_pm.mmap((void *)addr, map_size, prot, flags, fd, offset, &mmap_errno);
-
-        static int mmap_trace_budget = 64;
         if (result == MAP_FAILED)
         {
             int err = mmap_errno != 0 ? mmap_errno : ENOMEM;
-            if (cur != nullptr && mmap_trace_budget > 0)
-            {
-                --mmap_trace_budget;
-                printf("[sys_mmap][trace] proc=%s pid=%d tid=%d fail addr=%p len=%p prot=0x%x flags=0x%x fd=%d off=%p errno=%d\n",
-                       cur->_name,
-                       cur->_pid,
-                       cur->_tid,
-                       (void *)addr,
-                       (void *)map_size,
-                       prot,
-                       flags,
-                       fd,
-                       (void *)offset,
-                       mmap_errno);
-            }
             printfRed("[SyscallHandler::sys_mmap] mmap failed with errno: %d\n", mmap_errno);
             // 内核 syscall ABI 必须返回负 errno；MAP_FAILED 是 libc 包装层
             // 看到负 errno 后给用户态返回的指针值。直接返回 -1 会把所有
             // mmap 失败误报成 EPERM，掩盖真实原因。
             return -err;
-        }
-        if (cur != nullptr && mmap_trace_budget > 0)
-        {
-            --mmap_trace_budget;
-            printf("[sys_mmap][trace] proc=%s pid=%d tid=%d ok addr=%p len=%p prot=0x%x flags=0x%x fd=%d off=%p -> %p\n",
-                   cur->_name,
-                   cur->_pid,
-                   cur->_tid,
-                   (void *)addr,
-                   (void *)map_size,
-                   prot,
-                   flags,
-                   fd,
-                   (void *)offset,
-                   result);
         }
         // if(addr==0&&map_size==1024&&prot==2&&flags==2&&fd==3&&offset==0)
         // return -1;
@@ -10040,11 +10008,17 @@ namespace syscall
             {
                 return -EINVAL;
             }
-            if (mem::k_vmm.copy_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), (char *)&timeout, timeout_addr, sizeof(timeout)) < 0)
+            // Linux futex 允许 timeout 为空，表示无限期等待。glibc 的 pthread
+            // 创建/回收路径会使用这种形式，不能把空指针当成用户地址 0 去读。
+            if (timeout_addr != 0 &&
+                mem::k_vmm.copy_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), (char *)&timeout, timeout_addr, sizeof(timeout)) < 0)
             {
                 return -EFAULT;
             }
-            timeout_ptr = &timeout;
+            if (timeout_addr != 0)
+            {
+                timeout_ptr = &timeout;
+            }
         }
 
         if (cmd == FUTEX_REQUEUE || cmd == FUTEX_CMP_REQUEUE || cmd == FUTEX_CMP_REQUEUE_PI || cmd == FUTEX_WAKE_OP)
@@ -18273,7 +18247,10 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_userdebug2()
     {
-        panic("未实现该系统调用");
+        // 只打开普通 printf，便于研究场景按需采集 plain trace，
+        // 又不会把 info/warn 分组里的大量彩色调试输出一起放出来。
+        virtio_blk::set_priority_borrow_experiment_mode(true);
+        enable_printf();
         return 0;
     }
     uint64 SyscallHandler::sys_userdebug3()
@@ -18285,10 +18262,28 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_userdebug4()
     {
+        virtio_blk::set_priority_borrow_experiment_mode(false);
         Printer::disable_info_group();
         Printer::disable_warn_group();
         disable_printf();
         return 0;
+    }
+    uint64 SyscallHandler::sys_userdebug5()
+    {
+        int io_priority = proc::default_proc_prio;
+        if (_arg_int(0, io_priority) < 0)
+        {
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (p == nullptr)
+        {
+            return SYS_EINVAL;
+        }
+
+        p->set_io_priority_override(io_priority);
+        return static_cast<uint64>(p->get_io_priority());
     }
 
     uint64 SyscallHandler::sys_timer_gettime()

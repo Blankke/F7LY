@@ -122,8 +122,10 @@ namespace proc
         _parent_exit_signal = proc::ipc::signal::SIGCHLD;
 
         // 调度相关字段
-        _slot = 0;                     // 时间片剩余量
-        _priority = default_proc_prio; // 默认进程优先级
+        _slot = 0;                          // 时间片剩余量
+        _priority = default_proc_prio;      // 默认 CPU 优先级
+        _io_priority_override = default_proc_prio; // 默认块层优先级覆盖值
+        _has_io_priority_override = false;  // 默认让块层优先级跟随 CPU nice
         
         // CPU亲和性初始化：默认可以在任何CPU上运行
         _cpu_mask.fill(); // 设置所有可用CPU位
@@ -275,8 +277,6 @@ namespace proc
                 return;
             }
 
-            printf("[cleanup_memory_manager] pcb=%p pid=%d tid=%d mm=%p ref=%d\n",
-                   this, _pid, _tid, _memory_manager, _memory_manager->get_ref_count());
             if (_memory_manager->get_ref_count() <= 1)
             {
                 // 只在最后一个地址空间持有者退出时清理非 VMA 管理的共享段附加记录（如 shmat）。
@@ -285,18 +285,12 @@ namespace proc
 
             // 直接调用 free_all_memory()，它内部会检查和减少引用计数
             _memory_manager->free_all_memory();
-            printf("[cleanup_memory_manager] free_all_memory done: pcb=%p pid=%d tid=%d mm=%p ref=%d\n",
-                   this, _pid, _tid, _memory_manager, _memory_manager->get_ref_count());
             
             // free_all_memory() 减少了引用计数，如果原来的引用计数<=1，则资源已被释放
             // 现在检查当前引用计数，如果<=0则删除对象
             if (_memory_manager->get_ref_count() <= 0)
             {
-                printf("[cleanup_memory_manager] delete mm: pcb=%p pid=%d tid=%d mm=%p\n",
-                       this, _pid, _tid, _memory_manager);
                 delete _memory_manager;
-                printf("[cleanup_memory_manager] delete mm complete: pcb=%p pid=%d tid=%d\n",
-                       this, _pid, _tid);
             }
             _memory_manager = nullptr;
         }
@@ -461,6 +455,39 @@ namespace proc
         int priority = _priority;
         _lock.release();
         return priority;
+    }
+
+    int Pcb::get_io_priority()
+    {
+        _lock.acquire();
+        int priority = _has_io_priority_override ? _io_priority_override : _priority;
+        _lock.release();
+        return priority;
+    }
+
+    void Pcb::set_io_priority_override(int priority)
+    {
+        if (priority < highest_proc_prio)
+        {
+            priority = highest_proc_prio;
+        }
+        else if (priority > lowest_proc_prio)
+        {
+            priority = lowest_proc_prio;
+        }
+
+        _lock.acquire();
+        _io_priority_override = priority;
+        _has_io_priority_override = true;
+        _lock.release();
+    }
+
+    void Pcb::clear_io_priority_override()
+    {
+        _lock.acquire();
+        _io_priority_override = _priority;
+        _has_io_priority_override = false;
+        _lock.release();
     }
 
     /****************************************************************************************

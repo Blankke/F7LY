@@ -62,6 +62,8 @@ namespace fs
         //
         // 总之，content这个设计太屎山了，一时难以重构，引入read过渡一下。
         virtual long handle_read(uint64 buf, size_t len, long off) { return -1; }
+        virtual bool has_read_size() const { return false; }
+        virtual uint64 read_size() const { return 0; }
     };
 
     class virtual_file : public file
@@ -283,6 +285,12 @@ namespace fs
     public:
         DevBlockProvider(int major, int minor) : _major(major), _minor(minor) {}
         virtual eastl::string generate_content() override;
+        virtual bool is_writable() const override { return true; }
+        virtual bool is_readable() const override { return true; }
+        virtual long handle_read(uint64 buf, size_t len, long off) override;
+        virtual long handle_write(uint64 buf, size_t len, long off) override;
+        virtual bool has_read_size() const override { return true; }
+        virtual uint64 read_size() const override;
         virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
             return eastl::make_unique<DevBlockProvider>(_major, _minor);
         }

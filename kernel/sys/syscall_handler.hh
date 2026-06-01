@@ -279,6 +279,7 @@ namespace syscall
         uint64 sys_userdebug2();
         uint64 sys_userdebug3();
         uint64 sys_userdebug4();
+        uint64 sys_userdebug5();
     };
 
     extern SyscallHandler k_syscall_handler;

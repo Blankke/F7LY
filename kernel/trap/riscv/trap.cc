@@ -265,7 +265,6 @@ void trap_manager::usertrap()
     TODO("pagefault_handler");
     ///@brief 此处处理mmap的缺页异常
     // printfRed("p->_trapframe->sp: %p,printf fault_va:%p, p->_sz:%p\n", PGROUNDUP(p->_trapframe->sp) - 1, fault_va, p->_sz);
-
     if (mmap_handler(r_stval(), cause) != 0)
     {
       // 缺页异常处理失败，发送SIGSEGV信号
