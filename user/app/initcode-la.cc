@@ -4,6 +4,7 @@ extern "C"
 {
     __attribute__((section(".text.startup"))) int main()
     {
+        init_env("/musl/");
         netperf_test("/musl/");
         netperf_test("/glibc/");
         iperf_test("/musl/");

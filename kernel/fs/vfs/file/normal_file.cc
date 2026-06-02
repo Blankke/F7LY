@@ -625,14 +625,15 @@ namespace fs
 			_read_snapshot_buffer != nullptr &&
 			_attrs.u_read == 1)
 		{
-			if (static_cast<uint64>(fast_off) >= _read_snapshot_size)
+			if (static_cast<uint64>(fast_off) < _read_snapshot_size)
 			{
-				return 0;
+				size_t cnt = min(len, _read_snapshot_size - static_cast<size_t>(fast_off));
+				memmove(reinterpret_cast<void *>(buf), _read_snapshot_buffer + fast_off, cnt);
+				_file_ptr = upgrade ? fast_off + static_cast<long>(cnt) : fast_current_pos;
+				return static_cast<long>(cnt);
 			}
-			size_t cnt = min(len, _read_snapshot_size - static_cast<size_t>(fast_off));
-			memmove(reinterpret_cast<void *>(buf), _read_snapshot_buffer + fast_off, cnt);
-			_file_ptr = upgrade ? fast_off + static_cast<long>(cnt) : fast_current_pos;
-			return static_cast<long>(cnt);
+			// 快照 EOF 可能已经被同 inode 的另一个 fd/path truncate 扩展打破。
+			// 落到加锁慢路径刷新 inode size，不能直接把旧快照大小当成权威 EOF。
 		}
 
 		_file_lock.acquire();
@@ -709,24 +710,32 @@ namespace fs
 		{
 			if (static_cast<uint64>(off) >= _read_snapshot_size)
 			{
-				// EOF 探测不能丢掉快照；iozone 的 stride/random reader 会频繁
-				// lseek+read，保留快照才能让后续分片继续走内存路径。
-				_file_lock.release();
-				return 0;
-			}
-
-			size_t cnt = min(len, _read_snapshot_size - static_cast<size_t>(off));
-			memmove(reinterpret_cast<void *>(buf), _read_snapshot_buffer + off, cnt);
-			if (upgrade)
-			{
-				_file_ptr = off + static_cast<long>(cnt);
+				// EOF 探测通常可以保留快照，但 truncate/ftruncate 可能经由同 inode
+				// 的另一个 file object 扩展文件。先刷新真实 inode size，若已经变大，
+				// 丢弃旧快照并回到 ext4_fread()，让新洞区按 0 读取。
+				refresh_ext4_file_size_locked();
+				if (lwext4_file_struct.fsize <= _read_snapshot_size)
+				{
+					_file_lock.release();
+					return 0;
+				}
+				invalidate_read_snapshot_locked();
 			}
 			else
 			{
-				_file_ptr = current_pos;
+				size_t cnt = min(len, _read_snapshot_size - static_cast<size_t>(off));
+				memmove(reinterpret_cast<void *>(buf), _read_snapshot_buffer + off, cnt);
+				if (upgrade)
+				{
+					_file_ptr = off + static_cast<long>(cnt);
+				}
+				else
+				{
+					_file_ptr = current_pos;
+				}
+				_file_lock.release();
+				return static_cast<long>(cnt);
 			}
-			_file_lock.release();
-			return static_cast<long>(cnt);
 		}
 
 		bool allow_ext4_resync_read =
@@ -1147,6 +1156,13 @@ namespace fs
 		int status = flush_write_combine_locked();
 		_file_lock.release();
 		return status == EOK ? 0 : -status;
+	}
+
+	void normal_file::invalidate_cached_file_data()
+	{
+		_file_lock.acquire();
+		invalidate_read_snapshot_locked();
+		_file_lock.release();
 	}
 
 	void normal_file::setAppend()

@@ -11,7 +11,6 @@ bool g_timers_initialized = false;
 
 namespace
 {
-constexpr uint64 k_usec_per_sec = 1000000ULL;
 constexpr int k_interval_timer_real = 0;
 constexpr int k_interval_timer_virtual = 1;
 constexpr int k_interval_timer_prof = 2;
@@ -43,8 +42,10 @@ uint64 ticks_to_usec(uint64 ticks)
 
 uint64 realtime_now_usec()
 {
-  tmm::timeval now = tmm::k_tm.get_time_val();
-  return now.tv_sec * k_usec_per_sec + now.tv_usec;
+  // ITIMER_REAL 统计的是“真实经过时间”，Linux 不会因为 clock_settime(CLOCK_REALTIME)
+  // 把墙钟跳到未来就立刻触发 SIGALRM。LTP clock_settime03 会临时设置 2038 年时间，
+  // 若这里使用墙钟，测试框架自己的 timeout 会抢在被测 POSIX timer 前触发。
+  return tmm::time_stamp_to_usec(tmm::get_hw_time_stamp());
 }
 
 int timer_signal_for_kind(int which)
@@ -273,5 +274,35 @@ void check_expired_timers()
         printfCyan("[TIMER] One-shot timer %d disarmed\n", g_timers[i].timer_id);
       }
     }
+  }
+}
+
+void cleanup_posix_timers_for_owner(proc::Pcb *owner)
+{
+  if (!g_timers_initialized || owner == nullptr) {
+    return;
+  }
+
+  for (int i = 0; i < 32; i++) {
+    if (!g_timers[i].active || g_timers[i].owner != owner) {
+      continue;
+    }
+
+    // Linux 在进程退出时会删除该进程拥有的 POSIX timer。这里必须同时清掉 owner，
+    // 否则全局 timer 槽里保存的 PCB 指针可能在后续测例复用后误投递信号。
+    g_timers[i].active = false;
+    g_timers[i].armed = false;
+    g_timers[i].timer_id = 0;
+    g_timers[i].clockid = 0;
+    g_timers[i].owner = nullptr;
+    g_timers[i].event.sigev_notify = 0;
+    g_timers[i].event.sigev_signo = 0;
+    g_timers[i].event.sigev_value.sival_int = 0;
+    g_timers[i].spec.it_value.tv_sec = 0;
+    g_timers[i].spec.it_value.tv_nsec = 0;
+    g_timers[i].spec.it_interval.tv_sec = 0;
+    g_timers[i].spec.it_interval.tv_nsec = 0;
+    g_timers[i].expiry_time.tv_sec = 0;
+    g_timers[i].expiry_time.tv_nsec = 0;
   }
 }

@@ -2995,6 +2995,11 @@ int vfs_truncate(fs::file *f, size_t length)
     // memfd 的大小在多个 open file description 之间共享。
     // 进入真正的 ext4 截断逻辑前，先把当前 file object 的本地缓存 size
     // 与共享状态对齐，避免 /proc/self/fd 重开后的跨 fd truncate 导致旧缓存继续生效。
+    int visibility_status = f->flush_visibility_state();
+    if (visibility_status != 0)
+    {
+        return visibility_status;
+    }
     f->sync_file_size_from_memfd();
 
     // 获取当前文件大小。这里不能只信 file object 里的 fsize 缓存：
@@ -3020,6 +3025,7 @@ int vfs_truncate(fs::file *f, size_t length)
     if (length == current_size)
     {
         f->_stat.size = current_size;
+        f->invalidate_cached_file_data();
         f->sync_memfd_size_from_file();
         return EOK;
     }
@@ -3043,6 +3049,7 @@ int vfs_truncate(fs::file *f, size_t length)
         }
         f->_stat.size = length;
         f->lwext4_file_struct.fsize = length;
+        f->invalidate_cached_file_data();
         f->sync_memfd_size_from_file();
         return EOK;
     }
@@ -3072,13 +3079,23 @@ int vfs_chmod(eastl::string pathname, mode_t mode)
     return EOK;
 }
 
-int vfs_fallocate(fs::file *f, off_t offset, size_t length)
+int vfs_fallocate(fs::file *f, int mode, off_t offset, size_t length)
 {
     if (f == nullptr)
     {
         printfRed("vfs_fallocate: file is null\n");
         return -EINVAL;
     }
+
+    constexpr int kFallocKeepSize = 0x01;
+    constexpr int kFallocPunchHole = 0x02;
+    constexpr int kFallocCollapseRange = 0x08;
+    constexpr int kFallocZeroRange = 0x10;
+    constexpr int kFallocInsertRange = 0x20;
+    constexpr int kFallocUnshareRange = 0x40;
+    constexpr int kFallocSupported =
+        kFallocKeepSize | kFallocPunchHole | kFallocCollapseRange |
+        kFallocZeroRange | kFallocInsertRange | kFallocUnshareRange;
 
     // 与 vfs_truncate 同理，memfd 进入 size-sensitive 逻辑前先同步共享大小。
     f->sync_file_size_from_memfd();
@@ -3089,6 +3106,11 @@ int vfs_fallocate(fs::file *f, off_t offset, size_t length)
         printfRed("vfs_fallocate: invalid offset or length\n");
         return -EINVAL;
     }
+    if ((mode & ~kFallocSupported) != 0)
+    {
+        printfRed("vfs_fallocate: unsupported mode flags: %d\n", mode);
+        return -ENOTSUP;
+    }
 
     // 获取当前文件大小
     uint64_t current_size = ext4_fsize(&f->lwext4_file_struct);
@@ -3098,6 +3120,14 @@ int vfs_fallocate(fs::file *f, off_t offset, size_t length)
         printfRed("vfs_fallocate: target size exceeds maximum file size\n");
         return -EFBIG; // 文件过大
     }
+
+    // FALLOC_FL_KEEP_SIZE 只预留空间，不改变 st_size。当前 ext4 适配层没有独立的
+    // 预分配块接口；保留稀疏文件语义并返回成功，后续写入仍会按普通写扩展文件。
+    if ((mode & kFallocKeepSize) != 0)
+    {
+        return EOK;
+    }
+
     // 如果目标大小小于等于当前大小，不需要分配空间
     if (target_size <= current_size)
     {
