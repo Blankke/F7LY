@@ -40,7 +40,7 @@ int vfs_owner_get(const eastl::string &pathname, uint32_t &uid, uint32_t &gid, b
 int vfs_mode_get(const eastl::string &pathname, uint32_t &mode, bool follow_symlinks);
 // Set file mode for a path. follow_symlinks controls final symlink resolution.
 int vfs_mode_set(const eastl::string &pathname, uint32_t mode, bool follow_symlinks);
-int vfs_fallocate(fs::file *f,off_t offset, size_t length);
+int vfs_fallocate(fs::file *f, int mode, off_t offset, size_t length);
 int vfs_free_file(struct fs::file *file);
 int vfs_copy_file_range(int f_in,off_t offset_in, int f_out,off_t offset_out,size_t size,uint flags);
 bool is_lock_conflict(const struct flock &existing_lock, const struct flock &new_lock);

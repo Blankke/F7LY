@@ -1100,15 +1100,18 @@ namespace syscall
                     remaining_us = 1;
                 }
 
-                if (remaining_us <= k_short_timeout_busy_wait_us)
+                if (remaining_us <= static_cast<uint64>(k_short_timeout_busy_wait_us) * 2)
                 {
                     return wait_short_timeout(proc, remaining_us);
                 }
 
-                uint64 coarse_ticks = remaining_us / tmm::tick_period_us;
+                // 粗粒度 tick 睡眠可能因为 tick 对齐和调度延迟多睡接近一个 tick。
+                // 长超时也保留一个 tick 给高分辨率尾段，避免 LTP timer/epoll
+                // 在 100ms/1s 样本上被偶发 oversleep 判失败。
+                uint64 coarse_ticks = (remaining_us - static_cast<uint64>(k_short_timeout_busy_wait_us)) / tmm::tick_period_us;
                 if (coarse_ticks == 0)
                 {
-                    coarse_ticks = 1;
+                    return wait_short_timeout(proc, remaining_us);
                 }
                 if (coarse_ticks > static_cast<uint64>(INT_MAX))
                 {
@@ -1163,12 +1166,14 @@ namespace syscall
                 return SYS_EINTR;
             }
 
-            if (timeout_us <= k_short_timeout_busy_wait_us)
+            if (timeout_us <= k_short_timeout_busy_wait_us * 2)
             {
                 return wait_short_timeout(proc, static_cast<uint64>(timeout_us));
             }
 
-            uint64 coarse_ticks = static_cast<uint64>(timeout_us) / tmm::tick_period_us;
+            // 与 sleep_relative_timeout_or_signal() 保持同一条 deadline 语义：
+            // tick 睡眠只负责主体，最后一个 tick 交给高精度尾段兑现。
+            uint64 coarse_ticks = (static_cast<uint64>(timeout_us) - static_cast<uint64>(k_short_timeout_busy_wait_us)) / tmm::tick_period_us;
             if (coarse_ticks > 0)
             {
                 if (coarse_ticks > static_cast<uint64>(INT_MAX))
@@ -2345,6 +2350,11 @@ namespace syscall
             if (stat_ret < 0)
             {
                 return stat_ret;
+            }
+
+            if (vfs_is_readonly_path(abs_pathname))
+            {
+                return -EROFS;
             }
 
             int perm_ret = ensure_chmod_permission(abs_pathname, true);
@@ -4365,6 +4375,15 @@ namespace syscall
 #endif
         ctid = cgctid;
         tls = cgtls;
+
+        // 旧 clone(2) 的 fork 形态会传 flags=SIGCHLD、stack=0，表示复制当前用户栈；
+        // 但无退出信号或共享 VM/线程形态没有独立栈会破坏用户态执行，LTP clone04 覆盖该错误路径。
+        if (stack == 0 &&
+            ((static_cast<uint64>(flags) & CSIGNAL) == 0 ||
+             (static_cast<uint64>(flags) & (CLONE_VM | CLONE_THREAD)) != 0))
+        {
+            return SYS_EINVAL;
+        }
 
         uint64 clone_pid;
         int flag_ret = validate_linux_clone_flags((uint64)flags);
@@ -14077,15 +14096,16 @@ namespace syscall
                 return SYS_EPERM;
             }
             // Determine growth
+            constexpr int kFallocKeepSize = 0x01;
             uint64_t end = (uint64_t)offset + (uint64_t)len;
             uint64_t cur = f->memfd_size();
-            if (end > cur && (f->memfd_seals() & F_SEAL_GROW))
+            if ((mode & kFallocKeepSize) == 0 && end > cur && (f->memfd_seals() & F_SEAL_GROW))
             {
                 printfRed("[SyscallHandler::sys_fallocate] memfd文件被F_SEAL_GROW密封，无法扩展: %s\n", f->_path_name.c_str());
                 return SYS_EPERM;
             }
         }
-        return vfs_fallocate(f, offset, len);
+        return vfs_fallocate(f, mode, offset, len);
     }
     uint64 SyscallHandler::sys_fchdir()
     {
@@ -14154,6 +14174,12 @@ namespace syscall
         {
             printfRed("[SyscallHandler::sys_fchmod] 文件路径为空\n");
             return -EBADF;
+        }
+
+        // Linux 优先报告只读文件系统错误；fchmod06 会在降权后对 rofs fd 调用 fchmod。
+        if (vfs_is_readonly_path(pathname))
+        {
+            return -EROFS;
         }
 
         int perm_ret = ensure_chmod_permission(pathname, true);

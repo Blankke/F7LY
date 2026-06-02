@@ -1703,15 +1703,67 @@ static int ext4_ftruncate_no_lock(ext4_file *file, uint64_t size)
     file->fsize = ext4_inode_get_size(&file->mp->fs.sb, ref.inode);
     if (file->fsize == size)
     {
-        r = EOK;
-        goto Finish;
+        return ext4_fs_put_inode_ref(&ref);
     }
+
+    auto zero_existing_tail = [&](uint64_t from, uint64_t to) -> int
+    {
+        if (from >= to)
+            return EOK;
+
+        static const uint8_t zero_buf[512] = {};
+        uint32_t block_size = ext4_sb_get_block_size(&file->mp->fs.sb);
+
+        while (from < to)
+        {
+            ext4_fsblk_t fblock = 0;
+            uint64_t block_index = from / block_size;
+            uint64_t in_block = from % block_size;
+            uint64_t block_end = (block_index + 1) * block_size;
+            uint64_t range_end = to < block_end ? to : block_end;
+
+            r = ext4_fs_get_inode_dblk_idx(&ref, static_cast<ext4_lblk_t>(block_index), &fblock, true);
+            if (r != EOK)
+                return r;
+
+            if (fblock != 0)
+            {
+                uint64_t disk_off = fblock * block_size + in_block;
+                uint64_t remain = range_end - from;
+                while (remain > 0)
+                {
+                    size_t chunk = remain < sizeof(zero_buf) ? static_cast<size_t>(remain) : sizeof(zero_buf);
+                    r = ext4_block_writebytes(file->mp->fs.bdev, disk_off, zero_buf, chunk);
+                    if (r != EOK)
+                        return r;
+                    disk_off += chunk;
+                    remain -= chunk;
+                }
+            }
+
+            from = range_end;
+        }
+
+        return EOK;
+    };
+
     if (file->fsize < size)
     {
         /*
          * Linux ftruncate() 扩展普通文件时创建稀疏洞，不要求立即分配
-         * 并写满零块。后续 read 路径负责把未分配块读成 0。
+         * 并写满零块。若 EOF 落在已经分配的最后一个块中，则必须先把
+         * 旧 EOF 到新 EOF/块尾之间清零，避免 shrink 后再 grow 读出旧数据。
          */
+        uint32_t block_size = ext4_sb_get_block_size(&file->mp->fs.sb);
+        uint64_t old_size = file->fsize;
+        if ((old_size % block_size) != 0)
+        {
+            uint64_t tail_end = ((old_size / block_size) + 1) * block_size;
+            uint64_t zero_end = size < tail_end ? size : tail_end;
+            r = zero_existing_tail(old_size, zero_end);
+            if (r != EOK)
+                goto Finish;
+        }
         file->fsize = size;
         ext4_inode_set_size(ref.inode, file->fsize);
         ref.dirty = true;
@@ -1723,6 +1775,20 @@ static int ext4_ftruncate_no_lock(ext4_file *file, uint64_t size)
     r = ext4_block_cache_write_back(file->mp->fs.bdev, 1);
     if (r != EOK)
         goto Finish;
+
+    {
+        // 收缩文件时保留的最后一个数据块可能还有旧 EOF 之后的数据。
+        // 后续再扩展文件时这些字节必须表现为 0，不能泄露旧内容。
+        uint32_t block_size = ext4_sb_get_block_size(&file->mp->fs.sb);
+        if ((size % block_size) != 0)
+        {
+            uint64_t tail_end = ((size / block_size) + 1) * block_size;
+            uint64_t zero_end = file->fsize < tail_end ? file->fsize : tail_end;
+            r = zero_existing_tail(size, zero_end);
+            if (r != EOK)
+                goto Finish;
+        }
+    }
 
     r = ext4_trunc_inode(file->mp, ref.index, size);
     if (r != EOK)

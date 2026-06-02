@@ -319,7 +319,7 @@ namespace proc
             return proc != nullptr && starts_with(proc->_name, "busybox");
         }
 
-        inline bool should_deliver_child_exit_signal(const proc::Pcb *parent, int signum)
+        inline bool should_deliver_child_exit_signal(const proc::Pcb *parent, int signum, bool explicit_signal)
         {
             if (parent == nullptr || signum <= 0)
             {
@@ -335,9 +335,22 @@ namespace proc
              * 当前 wait/wait4 已经通过 wakeup(parent) 显式唤醒父进程回收 zombie。
              * SIGCHLD 的用户态 handler 路径还不够稳，libc-bench 这类高频 fork/wait
              * 会把每轮子进程退出都变成一次信号帧往返，最终打断基准进程。
-             * 这里先让 SIGCHLD 只承担“唤醒 wait”的内核内语义；后续完善信号帧后再放开投递。
+             * 但 clone3 允许用户显式设置 exit_signal 并依赖 SIGCHLD 投递结果。
+             * 因此普通 fork/旧 clone 的 SIGCHLD 仍只承担 wait 唤醒语义；
+             * clone3 显式 exit_signal 场景按 Linux 投递，覆盖 clone301。
              */
-            return false;
+            if (!explicit_signal)
+            {
+                return false;
+            }
+
+            auto *sigchld_action = parent->_sigactions != nullptr
+                                       ? parent->_sigactions->actions[ipc::signal::SIGCHLD]
+                                       : nullptr;
+            using signal_handler_t = ipc::signal::__sighandler_t;
+            return sigchld_action != nullptr &&
+                   sigchld_action->sa_handler != nullptr &&
+                   sigchld_action->sa_handler != reinterpret_cast<signal_handler_t>(1);
         }
 
 #ifdef LOONGARCH
@@ -764,6 +777,7 @@ namespace proc
                 p->_exiting = false; // 清除退出清理标记
                 p->_xstate = 0;     // 清除退出状态码
                 p->_parent_exit_signal = ipc::signal::SIGCHLD;
+                p->_parent_exit_signal_explicit = false;
 
                 // 设置调度相关字段：默认调度槽与优先级
                 p->_slot = default_proc_slot;
@@ -1000,6 +1014,7 @@ namespace proc
         p->_exiting = false;           // 清除退出清理标记
         p->_xstate = 0;                // 清除退出状态码
         p->_parent_exit_signal = ipc::signal::SIGCHLD;
+        p->_parent_exit_signal_explicit = false;
         p->_state = ProcState::UNUSED; // 标记进程控制块为未使用
 
         p->_slot = 0;                 // 重置时间片
@@ -1828,10 +1843,12 @@ namespace proc
         np->_parent_exit_signal = exit_signal >= 0
                                       ? exit_signal
                                       : static_cast<int>(flags & syscall::CSIGNAL);
+        np->_parent_exit_signal_explicit = is_clone3 && exit_signal > 0;
         if (flags & syscall::CLONE_THREAD)
         {
             // 线程退出不应该向父进程额外发送“子进程退出信号”，join 走的是 tid/futex 语义。
             np->_parent_exit_signal = 0;
+            np->_parent_exit_signal_explicit = false;
         }
         if (flags & syscall::CLONE_THREAD)
         {
@@ -2582,6 +2599,7 @@ namespace proc
         // 因此不能长时间手工关中断；改用 _exiting 禁止 timer 抢占式 yield，
         // 等所有可能阻塞的清理完成后，再短暂关中断进入最终 ZOMBIE/sched 阶段。
         p->_exiting = true;
+        cleanup_posix_timers_for_owner(p);
 
         /****************************************************************************************
          * Phase 1: 处理父子进程关系和进程状态
@@ -2688,7 +2706,9 @@ namespace proc
             p->_parent->_lock.acquire();
             p->_parent->_cutime += p->_user_ticks + p->_cutime;
             p->_parent->_cstime += p->_stime + p->_cstime;
-            if (should_deliver_child_exit_signal(p->_parent, p->_parent_exit_signal))
+            if (should_deliver_child_exit_signal(p->_parent,
+                                                 p->_parent_exit_signal,
+                                                 p->_parent_exit_signal_explicit))
             {
                 // clone3/clone 的 exit_signal 语义：非线程子任务退出后，向其父任务投递指定信号。
                 p->_parent->add_signal(p->_parent_exit_signal);
@@ -2902,9 +2922,17 @@ namespace proc
             return -EFAULT;
         }
 
+        // Linux 接受 mkdir("dir/") 这类带尾部斜杠的目录路径。
+        // 父目录检查前先规整尾部斜杠，否则会把目标目录本身误当成父目录，
+        // 导致 LTP 的 mntpoint/、mntpoint/dir/ 准备阶段被误判为 ENOENT。
+        while (path.length() > 1 && path.back() == '/')
+        {
+            path.pop_back();
+        }
+
         // 处理dirfd参数
         eastl::string base_dir;
-        if (path[0] == '.')
+        if (path.length() >= 2 && path[0] == '.' && path[1] == '/')
         {
             base_dir = p->_cwd_name;
             path = path.substr(2); // 去掉"./"前缀

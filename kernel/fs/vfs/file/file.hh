@@ -308,6 +308,8 @@ namespace fs
 		virtual off_t lseek(off_t offset, int whence) = 0;
 		// 供解锁/可见性边界前刷新延迟写。默认无额外动作。
 		virtual int flush_visibility_state() { return 0; }
+		// truncate/ftruncate 会改变文件内容边界；默认文件类型没有额外缓存。
+		virtual void invalidate_cached_file_data() {}
 		// 供匿名内核文件（如 epoll）在不依赖 RTTI 的情况下做类型识别。
 		virtual bool is_epoll_file() const { return false; }
 		// 供 setns(CLONE_NEWTIME) 从 namespace 文件里取回目标时钟偏移。

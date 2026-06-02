@@ -50,3 +50,5 @@ extern bool g_timers_initialized;
 
 // 检查全局 POSIX timer_create()/timer_settime() 定时器
 void check_expired_timers();
+// 进程退出时删除它创建的 POSIX timer，避免 PCB 复用后旧 timer 把信号投递给后续测例。
+void cleanup_posix_timers_for_owner(proc::Pcb *owner);
