@@ -1652,8 +1652,8 @@ struct ltp_testcase ltp_testcases[] = {
     {"fcntl17_64", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
     {"fcntl18", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 3 failed 0。
     {"fcntl18_64", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 3 failed 0。
-    {"fcntl19", false, true, false, true},    // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
-    {"fcntl19_64", false, true, false, true}, // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
+    {"fcntl19", false, false, false, false},    // 能过,但是一个tpass都没有
+    {"fcntl19_64", false, false, false, false}, // 能过,但是一个tpass都没有
     {"fcntl20", false, true, false, true},    // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
     {"fcntl20_64", false, true, false, true}, // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
     {"fcntl21", false, true, false, true},    // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
