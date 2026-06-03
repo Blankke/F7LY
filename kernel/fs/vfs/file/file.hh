@@ -11,6 +11,10 @@
 #include <EASTL/string.h>
 #include <asm-generic/errno-base.h>
 #include "mem/userspace_stream.hh"
+namespace mem
+{
+	class PageTable;
+}
 namespace proc
 {
 	namespace ipc
@@ -301,7 +305,15 @@ namespace fs
 				}
 			};
 		virtual long read(uint64 buf, size_t len, long off, bool upgrade_off) = 0;
+		virtual long read_to_user(mem::PageTable &, uint64, size_t, long, bool)
+		{
+			return -38; // ENOSYS：该文件类型未实现直接读到用户缓冲，syscall 层回退旧路径。
+		}
 		virtual long write(uint64 buf, size_t len, long off, bool upgrade_off) = 0;
+		virtual long write_from_user(mem::PageTable &, uint64, size_t, long, bool)
+		{
+			return -38; // ENOSYS：该文件类型未实现直接从用户缓冲写入，syscall 层回退旧路径。
+		}
 		virtual void dup() { refcnt++; }; // 增加引用计数
 		virtual bool read_ready() = 0;
 		virtual bool write_ready() = 0;

@@ -9,6 +9,7 @@
 #include "libs/string.hh"
 #include "mem/physical_memory_manager.hh"
 #include "mem/userspace_stream.hh"
+#include "virtual_memory_manager.hh"
 #include "proc/prlimit.hh"
 #include "proc/signal.hh"
 #include "proc_manager.hh"
@@ -29,6 +30,14 @@ namespace
 	uint8 *k_write_combine_pool[k_write_combine_pool_slots] = {};
 	bool k_write_combine_pool_used[k_write_combine_pool_slots] = {};
 	uint8 k_zero_fill_page[PGSIZE] = {};
+
+	struct DirtyPathRef
+	{
+		eastl::string path;
+		int count = 0;
+	};
+
+	eastl::vector<DirtyPathRef> k_write_combine_dirty_paths;
 
 	void ensure_write_combine_pool_lock_ready()
 	{
@@ -106,10 +115,84 @@ namespace
 		// 理论上不会走到这里；保底释放非池化来源，避免异常路径泄漏。
 		mem::k_pmm.free_pages(buffer);
 	}
+
+	void note_write_combine_dirty_file(const eastl::string &path)
+	{
+		if (path.empty())
+		{
+			return;
+		}
+		ensure_write_combine_pool_lock_ready();
+		k_write_combine_pool_lock.acquire();
+		for (auto &entry : k_write_combine_dirty_paths)
+		{
+			if (entry.path == path)
+			{
+				++entry.count;
+				k_write_combine_pool_lock.release();
+				return;
+			}
+		}
+		k_write_combine_dirty_paths.push_back({path, 1});
+		k_write_combine_pool_lock.release();
+	}
+
+	void note_write_combine_clean_file(const eastl::string &path)
+	{
+		if (path.empty())
+		{
+			return;
+		}
+		ensure_write_combine_pool_lock_ready();
+		k_write_combine_pool_lock.acquire();
+		for (auto it = k_write_combine_dirty_paths.begin(); it != k_write_combine_dirty_paths.end(); ++it)
+		{
+			if (it->path != path)
+			{
+				continue;
+			}
+			if (it->count > 1)
+			{
+				--it->count;
+			}
+			else
+			{
+				k_write_combine_dirty_paths.erase(it);
+			}
+			break;
+		}
+		k_write_combine_pool_lock.release();
+	}
+
+	bool has_write_combine_dirty_file(const eastl::string &path)
+	{
+		if (path.empty())
+		{
+			return false;
+		}
+		ensure_write_combine_pool_lock_ready();
+		k_write_combine_pool_lock.acquire();
+		bool has_dirty = false;
+		for (const auto &entry : k_write_combine_dirty_paths)
+		{
+			if (entry.path == path && entry.count > 0)
+			{
+				has_dirty = true;
+				break;
+			}
+		}
+		k_write_combine_pool_lock.release();
+		return has_dirty;
+	}
 }
 
 namespace fs
 {
+	bool normal_file_has_delayed_visibility_state(const eastl::string &path)
+	{
+		return has_write_combine_dirty_file(path);
+	}
+
 	bool normal_file::ensure_write_combine_buffer_locked()
 	{
 		if (_write_combine_buffer != nullptr)
@@ -197,9 +280,22 @@ namespace fs
 
 	void normal_file::reset_write_combine_locked()
 	{
+		if (_write_combine_dirty)
+		{
+			note_write_combine_clean_file(backing_path());
+		}
 		_write_combine_dirty = false;
 		_write_combine_base = 0;
 		_write_combine_size = 0;
+	}
+
+	void normal_file::mark_write_combine_dirty_locked()
+	{
+		if (!_write_combine_dirty)
+		{
+			note_write_combine_dirty_file(backing_path());
+		}
+		_write_combine_dirty = true;
 	}
 
 	void normal_file::invalidate_read_snapshot_locked()
@@ -398,7 +494,13 @@ namespace fs
 	normal_file::~normal_file()
 	{
 		_file_lock.acquire();
-		(void)flush_write_combine_locked(false);
+		int flush_status = flush_write_combine_locked(false);
+		if (flush_status != EOK && _write_combine_dirty)
+		{
+			// 析构路径无法继续保留这个 file 对象；计数必须同步清理，避免后续 stat
+			// 误以为仍有延迟写需要全局扫描。
+			reset_write_combine_locked();
+		}
 		if (lwext4_file_struct.mp != nullptr)
 		{
 			(void)ext4_fclose(&lwext4_file_struct);
@@ -788,6 +890,160 @@ namespace fs
 		return static_cast<long>(cnt);
 	}
 
+	long normal_file::read_to_user(mem::PageTable &pt, uint64 user_buf, size_t len, long off, bool upgrade)
+	{
+		if (len == 0)
+		{
+			return 0;
+		}
+
+		long fast_off = off < 0 ? _file_ptr : off;
+		const long fast_current_pos = _file_ptr;
+		if (refcnt == 1)
+		{
+			if (fast_off >= 0 && _write_combine_dirty && _write_combine_buffer != nullptr)
+			{
+				uint64 logical_size = logical_file_size_locked();
+				if (static_cast<uint64>(fast_off) >= logical_size)
+				{
+					return 0;
+				}
+
+				uint64 cache_begin = _write_combine_base;
+				uint64 cache_end = _write_combine_base + _write_combine_size;
+				size_t cnt = min(len, logical_size - static_cast<uint64>(fast_off));
+				if (static_cast<uint64>(fast_off) >= cache_begin &&
+					static_cast<uint64>(fast_off) + cnt <= cache_end)
+				{
+					if (mem::k_vmm.copy_out(pt,
+											user_buf,
+											_write_combine_buffer + (static_cast<uint64>(fast_off) - cache_begin),
+											cnt) < 0)
+					{
+						return -EFAULT;
+					}
+					_file_ptr = upgrade ? fast_off + static_cast<long>(cnt) : fast_current_pos;
+					return static_cast<long>(cnt);
+				}
+			}
+		}
+
+		if ((refcnt == 1 || _read_snapshot_valid) &&
+			fast_off >= 0 &&
+			_read_snapshot_valid &&
+			_read_snapshot_buffer != nullptr &&
+			_attrs.u_read == 1)
+		{
+			if (static_cast<uint64>(fast_off) < _read_snapshot_size)
+			{
+				size_t cnt = min(len, _read_snapshot_size - static_cast<size_t>(fast_off));
+				if (mem::k_vmm.copy_out(pt, user_buf, _read_snapshot_buffer + fast_off, cnt) < 0)
+				{
+					return -EFAULT;
+				}
+				_file_ptr = upgrade ? fast_off + static_cast<long>(cnt) : fast_current_pos;
+				return static_cast<long>(cnt);
+			}
+		}
+
+		_file_lock.acquire();
+
+		if (_attrs.u_read != 1)
+		{
+			if (!(lwext4_file_struct.flags & O_TMPFILE))
+			{
+				_file_lock.release();
+				return -1;
+			}
+		}
+
+		if (off < 0)
+		{
+			off = _file_ptr;
+		}
+
+		const long current_pos = _file_ptr;
+		if (_write_combine_dirty && _write_combine_buffer != nullptr)
+		{
+			uint64 logical_size = logical_file_size_locked();
+			if (static_cast<uint64>(off) >= logical_size)
+			{
+				_file_lock.release();
+				return 0;
+			}
+
+			uint64 cache_begin = _write_combine_base;
+			uint64 cache_end = _write_combine_base + _write_combine_size;
+			size_t cnt = min(len, logical_size - static_cast<uint64>(off));
+			if (static_cast<uint64>(off) >= cache_begin &&
+				static_cast<uint64>(off) + cnt <= cache_end)
+			{
+				if (mem::k_vmm.copy_out(pt,
+										user_buf,
+										_write_combine_buffer + (static_cast<uint64>(off) - cache_begin),
+										cnt) < 0)
+				{
+					_file_lock.release();
+					return -EFAULT;
+				}
+				_file_ptr = upgrade ? off + static_cast<long>(cnt) : current_pos;
+				_file_lock.release();
+				return static_cast<long>(cnt);
+			}
+		}
+
+		int flush_status = flush_write_combine_locked();
+		if (flush_status != EOK)
+		{
+			_file_lock.release();
+			return -flush_status;
+		}
+
+		if (is_memfd())
+		{
+			sync_file_size_from_memfd();
+		}
+
+		if (!_read_snapshot_valid &&
+			!is_memfd() &&
+			_attrs.u_read == 1 &&
+			lwext4_file_struct.mp != nullptr &&
+			lwext4_file_struct.inode != 0 &&
+			lwext4_file_struct.fsize <= k_write_combine_capacity)
+		{
+			refresh_ext4_file_size_locked();
+		}
+
+		if (can_use_read_snapshot_locked(off) && populate_read_snapshot_locked())
+		{
+			if (static_cast<uint64>(off) >= _read_snapshot_size)
+			{
+				refresh_ext4_file_size_locked();
+				if (lwext4_file_struct.fsize <= _read_snapshot_size)
+				{
+					_file_lock.release();
+					return 0;
+				}
+				invalidate_read_snapshot_locked();
+			}
+			else
+			{
+				size_t cnt = min(len, _read_snapshot_size - static_cast<size_t>(off));
+				if (mem::k_vmm.copy_out(pt, user_buf, _read_snapshot_buffer + off, cnt) < 0)
+				{
+					_file_lock.release();
+					return -EFAULT;
+				}
+				_file_ptr = upgrade ? off + static_cast<long>(cnt) : current_pos;
+				_file_lock.release();
+				return static_cast<long>(cnt);
+			}
+		}
+
+		_file_lock.release();
+		return -38; // ENOSYS：不适合快路径时交给 syscall 层原有内核中转读。
+	}
+
 	long normal_file::write(uint64 buf, size_t len, long off, bool upgrade)
 	{
 		_file_lock.acquire();
@@ -908,7 +1164,7 @@ namespace fs
 				}
 
 				memmove(_write_combine_buffer + cache_offset, kbuf, len);
-				_write_combine_dirty = true;
+				mark_write_combine_dirty_locked();
 
 				if (upgrade)
 				{
@@ -981,7 +1237,7 @@ namespace fs
 
 			memmove(_write_combine_buffer + _write_combine_size, kbuf, len);
 			_write_combine_size += len;
-			_write_combine_dirty = true;
+			mark_write_combine_dirty_locked();
 
 			if (upgrade)
 			{

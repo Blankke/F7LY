@@ -42,8 +42,8 @@ namespace mem
 		bool is_dirty() { return ( ( *_data_addr & loongarch::pte_dirty_m ) != 0 ); }
 		uint64 plv() { return ( ( *_data_addr & loongarch::pte_plv_m ) >> loongarch::pte_plv_s ); }
 		uint64 mat() { return ( ( *_data_addr & loongarch::pte_mat_m ) >> loongarch::pte_mat_s ); }
-		uint64 flags() { return *_data_addr & loongarch::pte_b_flags_m; }
-		uint64 get_flags() { return *_data_addr & loongarch::pte_b_flags_m; } // 兼容接口
+		uint64 flags() { return PTE_FLAGS( *_data_addr ); }
+		uint64 get_flags() { return PTE_FLAGS( *_data_addr ); } // 兼容接口，保留软件 COW 位
 		void set_plv() { *_data_addr |= loongarch::pte_plv_m; }
 		void unset_plv() { *_data_addr &= ~loongarch::pte_plv_m; }
 		bool is_global() { return ( ( *_data_addr & loongarch::pte_b_global_m ) != 0 ); }

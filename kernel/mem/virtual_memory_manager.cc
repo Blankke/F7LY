@@ -51,6 +51,29 @@ namespace mem
 #endif
         }
 
+#ifdef RISCV
+        constexpr uint64 k_riscv_pte_cow = 1UL << 8; // RSW bit 0，硬件忽略，软件用于 COW。
+
+        inline bool pte_is_cow(Pte &pte)
+        {
+            return !pte.is_null() &&
+                   pte.is_valid() &&
+                   ((pte.get_data() & k_riscv_pte_cow) != 0);
+        }
+
+        inline void flush_riscv_user_page(uint64 va)
+        {
+            asm volatile("sfence.vma %0, zero" : : "r"(PGROUNDDOWN(va)) : "memory");
+        }
+#elif defined(LOONGARCH)
+        inline bool pte_is_cow(Pte &pte)
+        {
+            return !pte.is_null() &&
+                   pte.is_valid() &&
+                   ((pte.get_data() & PTE_COW) != 0);
+        }
+#endif
+
         inline bool ranges_overlap(uint64 lhs_addr, uint64 lhs_size, uint64 rhs_addr, uint64 rhs_size)
         {
             if (lhs_size == 0 || rhs_size == 0)
@@ -67,6 +90,10 @@ namespace mem
 
             return lhs_addr < rhs_end && rhs_addr < lhs_end;
         }
+
+        // copy_out 的内核对象重叠检测只用于排查页表错误；lmbench 的 read/pipe
+        // 热路径会高频经过这里，默认关闭这段诊断检查，保留权限和 COW 校验。
+        constexpr bool k_enable_copy_out_alias_guard = false;
 
         proc::vma *find_vma_covering_va(proc::Pcb *proc, uint64 va)
         {
@@ -149,11 +176,17 @@ namespace mem
         int resolve_user_read_pa(PageTable &pt, proc::Pcb *proc, uint64 user_va, uint64 &out_pa)
         {
             uint64 page_va = PGROUNDDOWN(user_va);
-            proc::vma *target_vm = find_vma_covering_va(proc, user_va);
             Pte pte = pt.walk(page_va, false);
 
-            if ((pte.is_null() || pte.get_data() == 0) && target_vm != nullptr)
+            if (pte.is_null() || pte.get_data() == 0)
             {
+                proc::vma *target_vm = find_vma_covering_va(proc, user_va);
+                if (target_vm == nullptr)
+                {
+                    printfRed("[resolve_user_read_pa] walk failed for va: %p\n", user_va);
+                    return -1;
+                }
+
                 // 读取用户空间时，允许对合法 VMA 做一次按需补页，
                 // 但补页后仍必须检查用户态读权限，不能把 PROT_NONE 之类的映射误当成可读。
                 if (k_vmm.allocate_vma_page(pt, user_va, target_vm, 0) != 0)
@@ -162,11 +195,6 @@ namespace mem
                     return -1;
                 }
                 pte = pt.walk(page_va, false);
-            }
-            else if (pte.is_null() || pte.get_data() == 0)
-            {
-                printfRed("[resolve_user_read_pa] walk failed for va: %p\n", user_va);
-                return -1;
             }
 
             if (pte.is_null() || pte.get_data() == 0)
@@ -660,6 +688,7 @@ namespace mem
         // 因此先检查叶子 PTE；若映射已经存在且权限满足，直接复用即可。
         if (reuse_existing_mapping_if_ready())
         {
+            vm->has_resident_pages = true;
             return 0;
         }
 
@@ -782,6 +811,7 @@ namespace mem
                           vm->backing_shmid, (void *)page_va, (void *)shared_pa);
                 return -1;
             }
+            vm->has_resident_pages = true;
             return 0;
         }
 
@@ -792,9 +822,6 @@ namespace mem
             printfRed("[allocate_vma_page] alloc_page failed for va: %p\n", va);
             return -1;
         }
-
-        // 初始化页面内容
-        k_pmm.clear_page(pa);
 
         // 检查是否为文件映射
         fs::file *vf = vm->vfile;
@@ -839,12 +866,16 @@ namespace mem
 
             if (readbytes < PGSIZE)
             {
+                // 文件短页必须按 mmap 语义补零；完整文件页不需要预先清零，
+                // 否则 lmbench 的 pagefault/mmap 会在每次缺页上多刷一遍 4K。
+                memset((char *)pa + readbytes, 0, PGSIZE - readbytes);
                 printfYellow("[allocate_vma_page] partial page read (%d bytes)\n", readbytes);
             }
         }
         else
         {
-            // 匿名映射：页面已通过clear_page初始化为0
+            // 匿名映射仍然需要提供全零页面。
+            k_pmm.clear_page(pa);
 
             printfCyan("[allocate_vma_page] handling anonymous mapping at %p\n", va);
         }
@@ -853,6 +884,7 @@ namespace mem
         // 这时直接复用现有映射，并回收掉本次多余分配的物理页。
         if (reuse_existing_mapping_if_ready())
         {
+            vm->has_resident_pages = true;
             k_pmm.free_page(pa);
             return 0;
         }
@@ -864,6 +896,7 @@ namespace mem
             k_pmm.free_page(pa);
             return -1;
         }
+        vm->has_resident_pages = true;
 
 #ifdef LOONGARCH
         // LoongArch 的 TLB 可能保留着这页先前 fault 下来的无效表项。
@@ -902,25 +935,17 @@ namespace mem
         while (len > 0)
         {
             a = PGROUNDDOWN(va);
-            proc::vma *target_vm = nullptr;
-
-            // 查找对应的VMA
-            for (int i = 0; i < proc::NVMA; ++i)
-            {
-                if (proc->get_vma()->_vm[i].used)
-                {
-                    // 检查是否在当前VMA范围内
-                    if (va >= proc->get_vma()->_vm[i].addr && va < proc->get_vma()->_vm[i].addr + proc->get_vma()->_vm[i].len)
-                    {
-                        target_vm = &proc->get_vma()->_vm[i];
-                        break;
-                    }
-                }
-            }
-
             Pte pte = pt.walk(a, 0);
-            if ((pte.is_null() || pte.get_data() == 0) && target_vm != nullptr)
+            if (pte.is_null() || pte.get_data() == 0)
             {
+                proc::vma *target_vm = find_vma_covering_va(proc, va);
+                if (target_vm == nullptr)
+                {
+                    // 如果页表项无效且不在VMA范围内，则返回错误
+                    printfRed("[copy_out] walk failed for va: %p\n", va);
+                    return -1;
+                }
+
                 // 如果页表项无效且在VMA范围内，使用统一的页面分配逻辑
                 // copy_out 是写操作，需要写权限
                 if (allocate_vma_page(pt, va, target_vm, 1) != 0)
@@ -931,15 +956,18 @@ namespace mem
                 // 重新获取页表项
                 pte = pt.walk(a, 0);
             }
-            else if (pte.is_null() || pte.get_data() == 0)
-            {
-                // 如果页表项无效且不在VMA范围内，则返回错误
-                printfRed("[copy_out] walk failed for va: %p\n", va);
-                return -1;
-            }
 
             // copy_out 只能写入用户可写页；否则会把目录项等数据误写进 guard page
             // 甚至误写到被错误映射的内核页上，最终把当前进程元数据一并带坏。
+            if (pte.is_valid() && pte.is_user() && !pte.is_writable() && pte_is_cow(pte))
+            {
+                if (resolve_cow_page(pt, a) != 0)
+                {
+                    return -1;
+                }
+                pte = pt.walk(a, 0);
+            }
+
             if (!pte.is_valid() || !pte.is_user() || !pte.is_writable())
             {
                 printfRed("[copy_out] invalid user destination va=%p pte=%p valid=%d user=%d writable=%d pt_base=%p pid=%d tid=%d\n",
@@ -965,24 +993,27 @@ namespace mem
             if (n > len)
                 n = len;
 
-            if (proc != nullptr)
+            if constexpr (k_enable_copy_out_alias_guard)
             {
-                proc::ProcessMemoryManager *mm = proc->get_memory_manager();
-                uint64 write_start = pa + (va - a);
-                if ((mm != nullptr && ranges_overlap(write_start, n, (uint64)mm, sizeof(proc::ProcessMemoryManager))) ||
-                    ranges_overlap(write_start, n, (uint64)proc, sizeof(proc::Pcb)) ||
-                    ranges_overlap(write_start, n, (uint64)proc->get_trapframe(), sizeof(TrapFrame)) ||
-                    ranges_overlap(write_start, n, pt.get_base(), PGSIZE))
+                if (proc != nullptr)
                 {
-                    panic("[copy_out] user buffer aliases kernel object va=%p pa=%p len=%p pid=%d tid=%d mm=%p pt_base=%p trapframe=%p",
-                          (void *)va,
-                          (void *)write_start,
-                          (void *)n,
-                          proc->_pid,
-                          proc->_tid,
-                          mm,
-                          (void *)pt.get_base(),
-                          proc->get_trapframe());
+                    proc::ProcessMemoryManager *mm = proc->get_memory_manager();
+                    uint64 write_start = pa + (va - a);
+                    if ((mm != nullptr && ranges_overlap(write_start, n, (uint64)mm, sizeof(proc::ProcessMemoryManager))) ||
+                        ranges_overlap(write_start, n, (uint64)proc, sizeof(proc::Pcb)) ||
+                        ranges_overlap(write_start, n, (uint64)proc->get_trapframe(), sizeof(TrapFrame)) ||
+                        ranges_overlap(write_start, n, pt.get_base(), PGSIZE))
+                    {
+                        panic("[copy_out] user buffer aliases kernel object va=%p pa=%p len=%p pid=%d tid=%d mm=%p pt_base=%p trapframe=%p",
+                              (void *)va,
+                              (void *)write_start,
+                              (void *)n,
+                              proc->_pid,
+                              proc->_tid,
+                              mm,
+                              (void *)pt.get_base(),
+                              proc->get_trapframe());
+                    }
                 }
             }
             memmove((void *)(pa + (va - a)), p, n);
@@ -1006,25 +1037,17 @@ namespace mem
         while (len > 0)
         {
             a = PGROUNDDOWN(va);
-            proc::vma *target_vm = nullptr;
-
-            // 查找对应的VMA
-            for (int i = 0; i < proc::NVMA; ++i)
-            {
-                if (proc->get_vma()->_vm[i].used)
-                {
-                    // 检查是否在当前VMA范围内
-                    if (va >= proc->get_vma()->_vm[i].addr && va < proc->get_vma()->_vm[i].addr + proc->get_vma()->_vm[i].len)
-                    {
-                        target_vm = &proc->get_vma()->_vm[i];
-                        break;
-                    }
-                }
-            }
-
             Pte pte = pt.walk(a, 0);
-            if ((pte.is_null() || pte.get_data() == 0) && target_vm != nullptr)
+            if (pte.is_null() || pte.get_data() == 0)
             {
+                proc::vma *target_vm = find_vma_covering_va(proc, va);
+                if (target_vm == nullptr)
+                {
+                    // 如果页表项无效且不在VMA范围内，则返回错误
+                    printfRed("[copy_out] walk failed for va: %p (not in any VMA)\n", va);
+                    return -1;
+                }
+
                 // 如果页表项无效且在VMA范围内，使用统一的页面分配逻辑
                 // copy_out 是写操作，需要写权限
                 if (allocate_vma_page(pt, va, target_vm, 1) != 0)
@@ -1035,11 +1058,16 @@ namespace mem
                 // 重新获取页表项
                 pte = pt.walk(a, 0);
             }
-            else if (pte.is_null() || pte.get_data() == 0)
+
+            // fork 后的私有页在 LoongArch 上同样可能是 COW 只读页。
+            // 内核 copy_out 写用户缓冲时需要先拆页，否则会把合法写入误判成权限错误。
+            if (pte.is_valid() && pte.is_user_plv() && !pte.is_writable() && pte_is_cow(pte))
             {
-                // 如果页表项无效且不在VMA范围内，则返回错误
-                printfRed("[copy_out] walk failed for va: %p (not in any VMA)\n", va);
-                return -1;
+                if (resolve_cow_page(pt, a) != 0)
+                {
+                    return -1;
+                }
+                pte = pt.walk(a, 0);
             }
 
             if (!pte.is_valid() || !pte.is_user_plv() || !pte.is_writable())
@@ -1064,24 +1092,27 @@ namespace mem
                 n = len;
             pa = to_vir(pa);
 
-            if (proc != nullptr)
+            if constexpr (k_enable_copy_out_alias_guard)
             {
-                proc::ProcessMemoryManager *mm = proc->get_memory_manager();
-                uint64 write_start = pa + (va - a);
-                if ((mm != nullptr && ranges_overlap(write_start, n, (uint64)mm, sizeof(proc::ProcessMemoryManager))) ||
-                    ranges_overlap(write_start, n, (uint64)proc, sizeof(proc::Pcb)) ||
-                    ranges_overlap(write_start, n, (uint64)proc->get_trapframe(), sizeof(TrapFrame)) ||
-                    ranges_overlap(write_start, n, to_vir(pt.get_base()), PGSIZE))
+                if (proc != nullptr)
                 {
-                    panic("[copy_out] user buffer aliases kernel object va=%p pa=%p len=%p pid=%d tid=%d mm=%p pt_base=%p trapframe=%p",
-                          (void *)va,
-                          (void *)write_start,
-                          (void *)n,
-                          proc->_pid,
-                          proc->_tid,
-                          mm,
-                          (void *)pt.get_base(),
-                          proc->get_trapframe());
+                    proc::ProcessMemoryManager *mm = proc->get_memory_manager();
+                    uint64 write_start = pa + (va - a);
+                    if ((mm != nullptr && ranges_overlap(write_start, n, (uint64)mm, sizeof(proc::ProcessMemoryManager))) ||
+                        ranges_overlap(write_start, n, (uint64)proc, sizeof(proc::Pcb)) ||
+                        ranges_overlap(write_start, n, (uint64)proc->get_trapframe(), sizeof(TrapFrame)) ||
+                        ranges_overlap(write_start, n, to_vir(pt.get_base()), PGSIZE))
+                    {
+                        panic("[copy_out] user buffer aliases kernel object va=%p pa=%p len=%p pid=%d tid=%d mm=%p pt_base=%p trapframe=%p",
+                              (void *)va,
+                              (void *)write_start,
+                              (void *)n,
+                              proc->_pid,
+                              proc->_tid,
+                              mm,
+                              (void *)pt.get_base(),
+                              proc->get_trapframe());
+                    }
                 }
             }
             memmove((void *)((pa + (va - a))), p, n);
@@ -1091,6 +1122,97 @@ namespace mem
             va = a + PGSIZE;
         }
         return 0;
+#endif
+    }
+
+    int VirtualMemoryManager::resolve_cow_page(PageTable &pt, uint64 va)
+    {
+        uint64 page_va = PGROUNDDOWN(va);
+        Pte pte = pt.walk(page_va, false);
+#ifdef RISCV
+        if (pte.is_null() || !pte.is_valid() || !pte.is_user() || !pte_is_cow(pte))
+        {
+            return -1;
+        }
+
+        uint64 old_pa = reinterpret_cast<uint64>(pte.pa());
+        void *old_page = page_pa_to_kernel_ptr(old_pa);
+        if (!k_pmm.is_managed_page(old_page))
+        {
+            return -1;
+        }
+
+        uint64 new_flags = (pte.get_flags() | riscv::PteEnum::pte_writable_m) & ~k_riscv_pte_cow;
+        uint16 refcount = k_pmm.page_ref_count(old_page);
+        if (refcount == 0)
+        {
+            return -1;
+        }
+
+        if (refcount == 1)
+        {
+            pte.set_data(PA2PTE(PGROUNDDOWN(old_pa)) |
+                         new_flags |
+                         riscv::PteEnum::pte_valid_m);
+            flush_riscv_user_page(page_va);
+            return 0;
+        }
+
+        void *new_page = k_pmm.alloc_page();
+        if (new_page == nullptr)
+        {
+            return -1;
+        }
+        memmove(new_page, old_page, PGSIZE);
+        pte.set_data(PA2PTE(PGROUNDDOWN(riscv::virt_to_phy_address(reinterpret_cast<uint64>(new_page)))) |
+                     new_flags |
+                     riscv::PteEnum::pte_valid_m);
+        k_pmm.free_page(old_page);
+        flush_riscv_user_page(page_va);
+        return 0;
+#elif defined(LOONGARCH)
+        if (pte.is_null() || !pte.is_valid() || !pte.is_user_plv() || !pte_is_cow(pte))
+        {
+            return -1;
+        }
+
+        uint64 old_pa = reinterpret_cast<uint64>(pte.pa());
+        void *old_page = page_pa_to_kernel_ptr(old_pa);
+        if (!k_pmm.is_managed_page(old_page))
+        {
+            return -1;
+        }
+
+        uint64 new_flags = (pte.get_flags() | PTE_W | PTE_D | PTE_P | PTE_U | PTE_MAT) & ~PTE_COW;
+        uint16 refcount = k_pmm.page_ref_count(old_page);
+        if (refcount == 0)
+        {
+            return -1;
+        }
+
+        if (refcount == 1)
+        {
+            pte.set_data(PA2PTE(PGROUNDDOWN(old_pa)) |
+                         new_flags |
+                         PTE_V);
+            invalidate_loongarch_user_page_pair(page_va);
+            return 0;
+        }
+
+        void *new_page = k_pmm.alloc_page();
+        if (new_page == nullptr)
+        {
+            return -1;
+        }
+        memmove(new_page, old_page, PGSIZE);
+        pte.set_data(PA2PTE(PGROUNDDOWN(to_phy(reinterpret_cast<uint64>(new_page)))) |
+                     new_flags |
+                     PTE_V);
+        k_pmm.free_page(old_page);
+        invalidate_loongarch_user_page_pair(page_va);
+        return 0;
+#else
+        return -1;
 #endif
     }
 
@@ -1181,6 +1303,10 @@ namespace mem
                          (void *)start, (void *)size, (void *)copy_start, (void *)va_end);
         }
 
+#if defined(RISCV) || defined(LOONGARCH)
+        bool parent_cow_changed = false;
+#endif
+
         for (va = copy_start; va < va_end; va += PGSIZE)
         {
             if ((pte = old_pt.walk(va, false)).is_null())
@@ -1212,6 +1338,62 @@ namespace mem
             }
             else
             {
+#ifdef RISCV
+                void *old_page = page_pa_to_kernel_ptr(pa);
+                if (k_pmm.is_managed_page(old_page) && k_pmm.retain_page(old_page))
+                {
+                    uint64 child_flags = flags;
+                    uint64 original_data = pte.get_data();
+                    if ((flags & riscv::PteEnum::pte_writable_m) != 0 ||
+                        (flags & k_riscv_pte_cow) != 0)
+                    {
+                        child_flags = (flags & ~riscv::PteEnum::pte_writable_m) | k_riscv_pte_cow;
+                        if ((flags & riscv::PteEnum::pte_writable_m) != 0)
+                        {
+                            pte.set_data((original_data & ~riscv::PteEnum::pte_writable_m) |
+                                         k_riscv_pte_cow);
+                            parent_cow_changed = true;
+                        }
+                    }
+
+                    if (map_pages(new_pt, va, PGSIZE, pa, child_flags) == false)
+                    {
+                        k_pmm.free_page(old_page);
+                        pte.set_data(original_data);
+                        vmunmap(new_pt, 0, va / PGSIZE, 1);
+                        return -1;
+                    }
+                    continue;
+                }
+#elif defined(LOONGARCH)
+                void *old_page = page_pa_to_kernel_ptr(pa);
+                if (k_pmm.is_managed_page(old_page) && k_pmm.retain_page(old_page))
+                {
+                    uint64 child_flags = flags;
+                    uint64 original_data = pte.get_data();
+                    if ((flags & (PTE_W | PTE_D)) != 0 || (original_data & PTE_COW) != 0)
+                    {
+                        child_flags = (flags & ~(PTE_W | PTE_D)) | PTE_COW;
+                        if ((flags & (PTE_W | PTE_D)) != 0)
+                        {
+                            // 父子页表都降为只读 COW，之后由写异常拆页。
+                            pte.set_data((original_data & ~(PTE_W | PTE_D)) | PTE_COW);
+                            invalidate_loongarch_user_page_pair(va);
+                            parent_cow_changed = true;
+                        }
+                    }
+
+                    if (map_pages(new_pt, va, PGSIZE, pa, child_flags) == false)
+                    {
+                        k_pmm.free_page(old_page);
+                        pte.set_data(original_data);
+                        invalidate_loongarch_user_page_pair(va);
+                        vmunmap(new_pt, 0, va / PGSIZE, 1);
+                        return -1;
+                    }
+                    continue;
+                }
+#endif
                 // 对于普通内存，分配新页面并复制内容
                 if ((mem = mem::PhysicalMemoryManager::alloc_page()) == nullptr)
                 {
@@ -1228,6 +1410,17 @@ namespace mem
                 }
             }
         }
+#ifdef RISCV
+        if (parent_cow_changed)
+        {
+            sfence_vma();
+        }
+#elif defined(LOONGARCH)
+        if (parent_cow_changed)
+        {
+            asm volatile("invtlb 0x0, $zero, $zero" : : : "memory");
+        }
+#endif
         return 0;
     }
 
@@ -1569,21 +1762,44 @@ namespace mem
                 uint64 new_data = old_data &
                                   ~(riscv::PteEnum::pte_readable_m |
                                     riscv::PteEnum::pte_writable_m |
-                                    riscv::PteEnum::pte_executable_m);
+                                    riscv::PteEnum::pte_executable_m |
+                                    k_riscv_pte_cow);
                 if (prot & PROT_READ)
                     new_data |= riscv::PteEnum::pte_readable_m;
                 if (prot & PROT_WRITE)
-                    new_data |= riscv::PteEnum::pte_writable_m;
+                {
+                    void *page = page_pa_to_kernel_ptr(reinterpret_cast<uint64>(pte.pa()));
+                    if (k_pmm.is_managed_page(page) && k_pmm.page_ref_count(page) > 1)
+                    {
+                        // 共享页不能被 mprotect 直接改成可写，否则会绕过 COW。
+                        new_data |= k_riscv_pte_cow;
+                    }
+                    else
+                    {
+                        new_data |= riscv::PteEnum::pte_writable_m;
+                    }
+                }
                 if (prot & PROT_EXEC)
                     new_data |= riscv::PteEnum::pte_executable_m;
                 new_data |= riscv::PteEnum::pte_valid_m | riscv::PteEnum::pte_user_m;
 #elif defined(LOONGARCH)
                 // LoongArch 的读/执行权限是“禁止位”(NR/NX)，而不是正向的 R/X 位。
                 // mprotect(PROT_NONE) / 取消执行权限都必须显式写回 NR/NX。
-                uint64 new_data = old_data & ~(PTE_W | PTE_NR | PTE_NX | PTE_PLV);
+                uint64 new_data = old_data & ~(PTE_W | PTE_D | PTE_NR | PTE_NX | PTE_PLV | PTE_COW);
                 new_data |= PTE_V | PTE_U;
                 if (prot & PROT_WRITE)
-                    new_data |= PTE_W;
+                {
+                    void *page = page_pa_to_kernel_ptr(reinterpret_cast<uint64>(pte.pa()));
+                    if (k_pmm.is_managed_page(page) && k_pmm.page_ref_count(page) > 1)
+                    {
+                        // 共享页不能直接恢复写权限，否则会绕过 fork COW。
+                        new_data |= PTE_COW;
+                    }
+                    else
+                    {
+                        new_data |= PTE_W | PTE_D;
+                    }
+                }
                 if (!(prot & PROT_READ))
                     new_data |= PTE_NR;
                 if (!(prot & PROT_EXEC))

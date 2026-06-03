@@ -1672,6 +1672,9 @@ namespace syscall
 
         constexpr size_t k_syscall_io_chunk_size = 64 * 1024;
         constexpr size_t k_syscall_io_inline_buffer_size = 2 * 1024;
+        constexpr long k_direct_user_io_unimplemented = -38;
+        constexpr long k_direct_user_read_unimplemented = k_direct_user_io_unimplemented;
+        constexpr long k_direct_user_write_unimplemented = k_direct_user_io_unimplemented;
 
         inline size_t min_size(size_t lhs, size_t rhs)
         {
@@ -1718,23 +1721,11 @@ namespace syscall
         class ScopedSyscallBuffer
         {
         public:
+            ScopedSyscallBuffer() = default;
+
             explicit ScopedSyscallBuffer(size_t size)
             {
-                if (size == 0)
-                {
-                    size = 1;
-                }
-
-                if (size <= k_syscall_io_inline_buffer_size)
-                {
-                    data_ = inline_buffer_;
-                    heap_backed_ = false;
-                }
-                else
-                {
-                    data_ = static_cast<char *>(alloc_syscall_temp_buffer(size));
-                    heap_backed_ = true;
-                }
+                ensure(size);
             }
 
             ~ScopedSyscallBuffer()
@@ -1750,13 +1741,37 @@ namespace syscall
                 return data_ != nullptr;
             }
 
+            bool ensure(size_t size)
+            {
+                if (data_ != nullptr)
+                {
+                    return true;
+                }
+                if (size == 0)
+                {
+                    size = 1;
+                }
+
+                if (size <= k_syscall_io_inline_buffer_size)
+                {
+                    data_ = inline_buffer_;
+                    heap_backed_ = false;
+                }
+                else
+                {
+                    data_ = static_cast<char *>(alloc_syscall_temp_buffer(size));
+                    heap_backed_ = true;
+                }
+                return data_ != nullptr;
+            }
+
             char *data()
             {
                 return data_;
             }
 
         private:
-            alignas(16) char inline_buffer_[k_syscall_io_inline_buffer_size] = {};
+            alignas(16) char inline_buffer_[k_syscall_io_inline_buffer_size];
             char *data_ = nullptr;
             bool heap_backed_ = false;
         };
@@ -1797,14 +1812,8 @@ namespace syscall
 
         long write_from_user_iovecs(fs::file *f, mem::PageTable &pt, const KernelIovec *iovecs, int iovcnt, long *explicit_off)
         {
-            // iozone/lmbench 大量使用 1KiB 小 I/O；按实际 iovec 上限建缓冲，
-            // 让小 I/O 走内联数组，避免每个 syscall 都申请/释放 64KiB 临时页。
-            ScopedSyscallBuffer buffer(syscall_iovec_buffer_size(iovecs, iovcnt));
-            if (!buffer.valid())
-            {
-                return -ENOMEM;
-            }
-
+            ScopedSyscallBuffer buffer;
+            size_t fallback_buffer_size = 0;
             long total_written = 0;
             for (int i = 0; i < iovcnt; ++i)
             {
@@ -1812,14 +1821,26 @@ namespace syscall
                 while (iov_done < iovecs[i].len)
                 {
                     size_t want = min_size(iovecs[i].len - iov_done, k_syscall_io_chunk_size);
-                    if (mem::k_vmm.copy_in(pt, buffer.data(), iovecs[i].base + iov_done, want) < 0)
-                    {
-                        return total_written > 0 ? total_written : -EFAULT;
-                    }
-
                     long write_off = explicit_off == nullptr ? -1 : *explicit_off;
                     bool upgrade = explicit_off == nullptr;
-                    long rc = f->write(reinterpret_cast<ulong>(buffer.data()), want, write_off, upgrade);
+                    long rc = f->write_from_user(pt, iovecs[i].base + iov_done, want, write_off, upgrade);
+                    if (rc == k_direct_user_write_unimplemented)
+                    {
+                        if (fallback_buffer_size == 0)
+                        {
+                            fallback_buffer_size = syscall_iovec_buffer_size(iovecs, iovcnt);
+                        }
+                        if (!buffer.ensure(fallback_buffer_size))
+                        {
+                            return total_written > 0 ? total_written : -ENOMEM;
+                        }
+                        if (mem::k_vmm.copy_in(pt, buffer.data(), iovecs[i].base + iov_done, want) < 0)
+                        {
+                            return total_written > 0 ? total_written : -EFAULT;
+                        }
+
+                        rc = f->write(reinterpret_cast<ulong>(buffer.data()), want, write_off, upgrade);
+                    }
                     if (rc < 0)
                     {
                         return total_written > 0 ? total_written : rc;
@@ -1847,13 +1868,6 @@ namespace syscall
 
         long read_to_user_iovecs(fs::file *f, mem::PageTable &pt, const KernelIovec *iovecs, int iovcnt, long *explicit_off)
         {
-            // 与写路径保持一致：小块 pread/read 不应为固定 64KiB 分块付出分配成本。
-            ScopedSyscallBuffer buffer(syscall_iovec_buffer_size(iovecs, iovcnt));
-            if (!buffer.valid())
-            {
-                return -ENOMEM;
-            }
-
             long total_read = 0;
             for (int i = 0; i < iovcnt; ++i)
             {
@@ -1863,7 +1877,24 @@ namespace syscall
                     size_t want = min_size(iovecs[i].len - iov_done, k_syscall_io_chunk_size);
                     long read_off = explicit_off == nullptr ? f->get_file_offset() : *explicit_off;
                     bool upgrade = explicit_off == nullptr;
-                    long rc = f->read(reinterpret_cast<uint64>(buffer.data()), want, read_off, upgrade);
+                    long rc = f->read_to_user(pt, iovecs[i].base + iov_done, want, read_off, upgrade);
+                    if (rc == k_direct_user_read_unimplemented)
+                    {
+                        // 普通文件的 read snapshot 可以直接 copy_out 到用户缓冲；
+                        // 未实现该快路径的文件类型仍走旧的内核中转读，保持语义不变。
+                        ScopedSyscallBuffer buffer(want);
+                        if (!buffer.valid())
+                        {
+                            return total_read > 0 ? total_read : -ENOMEM;
+                        }
+
+                        rc = f->read(reinterpret_cast<uint64>(buffer.data()), want, read_off, upgrade);
+                        if (rc > 0 &&
+                            mem::k_vmm.copy_out(pt, iovecs[i].base + iov_done, buffer.data(), rc) < 0)
+                        {
+                            return total_read > 0 ? total_read : -EFAULT;
+                        }
+                    }
                     if (rc < 0)
                     {
                         return total_read > 0 ? total_read : rc;
@@ -1871,11 +1902,6 @@ namespace syscall
                     if (rc == 0)
                     {
                         return total_read;
-                    }
-
-                    if (mem::k_vmm.copy_out(pt, iovecs[i].base + iov_done, buffer.data(), rc) < 0)
-                    {
-                        return total_read > 0 ? total_read : -EFAULT;
                     }
 
                     total_read += rc;
@@ -2852,7 +2878,9 @@ namespace syscall
     {
         if (addr == 0)
             return true; // 0地址通常被视为无效地址
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        proc::Pcb *p = Cpu::get_cpu()->get_cur_proc();
+        if (p == nullptr)
+            return true;
         mem::PageTable *pt = p->get_pagetable();
         return !pt->walk_addr(addr);
     }
@@ -2919,11 +2947,13 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_getppid()
     {
-        return proc::k_pm.get_cur_pcb()->get_ppid();
+        proc::Pcb *p = Cpu::get_cpu()->get_cur_proc();
+        return p == nullptr ? 0 : p->get_ppid();
     }
     uint64 SyscallHandler::sys_getpid()
     {
-        return proc::k_pm.get_cur_pcb()->get_pid();
+        proc::Pcb *p = Cpu::get_cpu()->get_cur_proc();
+        return p == nullptr ? 0 : p->get_pid();
     }
     uint64 SyscallHandler::sys_pipe2()
     {
@@ -3093,7 +3123,7 @@ namespace syscall
             return -EAGAIN; // 操作被文件锁阻止
         }
 
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        proc::Pcb *p = Cpu::get_cpu()->get_cur_proc();
         mem::PageTable *pt = p->get_pagetable();
         KernelIovec iovec = {buf, static_cast<size_t>(n)};
         long result = read_to_user_iovecs(f, *pt, &iovec, 1, nullptr);
@@ -3224,7 +3254,8 @@ namespace syscall
             printfRed("[SyscallHandler::sys_fstat] Error fetching file status\n");
             return status;
         }
-        mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+        proc::Pcb *p = Cpu::get_cpu()->get_cur_proc();
+        mem::PageTable *pt = p->get_pagetable();
         // 按用户态 ABI 布局导出 struct stat，避免 LoongArch 上字段错位。
         if (copy_out_user_stat(*pt, kst_addr, kst) < 0)
         {
@@ -3745,15 +3776,14 @@ namespace syscall
             printfRed("[SyscallHandler::sys_write] Error fetching n argument\n");
             return SYS_EFAULT;
         }
-        if (n == 0)
+        if (n <= 0)
         {
-            printfYellow("[SyscallHandler::sys_write] Write size is zero, returning 0\n");
-            return 0;
-        }
-        if (is_bad_addr(p))
-        {
-            printfRed("[SyscallHandler::sys_write] Invalid address: %p\n", (void *)p);
-            return SYS_EFAULT;
+            if (n == 0)
+            {
+                printfYellow("[SyscallHandler::sys_write] Write size is zero, returning 0\n");
+                return 0;
+            }
+            return -EINVAL;
         }
         // printfGreen("[SyscallHandler::sys_write] fd: %d, p: %p, n: %d\n", fd, (void *)p, n);
         // 检查文件是否以 O_PATH 标志打开，O_PATH 文件不允许读取
@@ -3769,13 +3799,27 @@ namespace syscall
             return SYS_EBADF;
         }
 
+        // /dev/null 和 /dev/zero 写入不读取用户缓冲区，权限确认后可以直接丢弃。
+        // lmbench 的 Simple write 会高频写 1 字节到 /dev/null，这里避免一次页表查询。
+        if (f->is_virtual &&
+            (f->_path_name == "/dev/null" || f->_path_name == "/dev/zero"))
+        {
+            return n;
+        }
+
+        if (is_bad_addr(p))
+        {
+            printfRed("[SyscallHandler::sys_write] Invalid address: %p\n", (void *)p);
+            return SYS_EFAULT;
+        }
+
         // 检查文件锁是否允许写操作
         if (!check_file_lock_access(f->_lock, f->get_file_offset(), n, true))
         {
             return SYS_EAGAIN; // 操作被文件锁阻止
         }
 
-        proc::Pcb *proc = proc::k_pm.get_cur_pcb();
+        proc::Pcb *proc = Cpu::get_cpu()->get_cur_proc();
         mem::PageTable *pt = proc->get_pagetable();
         KernelIovec iovec = {p, static_cast<size_t>(n)};
         long result = write_from_user_iovecs(f, *pt, &iovec, 1, nullptr);
@@ -5488,7 +5532,7 @@ namespace syscall
 
         // 先检查父目录链上的搜索权限，lstat/fstatat 在路径遍历阶段也必须返回 EACCES。
         size_t last_slash = abs_pathname.find_last_of('/');
-        if (last_slash != eastl::string::npos && last_slash > 0)
+        if (p->get_euid() != 0 && last_slash != eastl::string::npos && last_slash > 0)
         {
             eastl::string parent_path = abs_pathname.substr(0, last_slash);
             eastl::string current_path = "";
@@ -9651,12 +9695,14 @@ namespace syscall
             return 0;
         }
 
-        // fd_set位图大小(字节数)
-        const int fdset_bytes = (FD_SETSIZE + 7) / 8;
+        // fd_set 的用户态对象容量仍按 FD_SETSIZE 保留，但 select/pselect
+        // 语义只检查 [0, nfds)；lmbench -n 100 这类热路径不需要每次搬运 1024 位。
+        constexpr int fdset_capacity_bytes = (FD_SETSIZE + 7) / 8;
+        const int fdset_bytes = (nfds + 7) / 8;
 
         // 从用户空间拷贝fd_set
-        uint8 readfds[fdset_bytes], writefds[fdset_bytes], exceptfds[fdset_bytes];
-        uint8 orig_readfds[fdset_bytes], orig_writefds[fdset_bytes], orig_exceptfds[fdset_bytes];
+        uint8 readfds[fdset_capacity_bytes], writefds[fdset_capacity_bytes], exceptfds[fdset_capacity_bytes];
+        uint8 orig_readfds[fdset_capacity_bytes], orig_writefds[fdset_capacity_bytes], orig_exceptfds[fdset_capacity_bytes];
 
         memset(readfds, 0, fdset_bytes);
         memset(writefds, 0, fdset_bytes);
@@ -9703,6 +9749,22 @@ namespace syscall
         uint64 start_us = start_time.tv_sec * 1000000ULL + start_time.tv_usec;
 
         int ready_count = 0;
+        auto select_read_ready = [](fs::file *f) -> bool {
+            if (f->_attrs.filetype == fs::FileTypes::FT_NORMAL ||
+                f->_attrs.filetype == fs::FileTypes::FT_NONE)
+            {
+                return true;
+            }
+            return f->read_ready();
+        };
+        auto select_write_ready = [](fs::file *f) -> bool {
+            if (f->_attrs.filetype == fs::FileTypes::FT_NORMAL ||
+                f->_attrs.filetype == fs::FileTypes::FT_NONE)
+            {
+                return true;
+            }
+            return f->write_ready();
+        };
 
         // 主循环：检查文件描述符状态
         while (true)
@@ -9742,7 +9804,7 @@ namespace syscall
                         p->_sigmask = orig_sigmask;
                         return SYS_EBADF;
                     }
-                    if (f->read_ready())
+                    if (select_read_ready(f))
                     {
                         readfds[fd / 8] |= (1 << (fd % 8));
                         ready_count++;
@@ -9759,7 +9821,7 @@ namespace syscall
                         p->_sigmask = orig_sigmask;
                         return SYS_EBADF;
                     }
-                    if (f->write_ready())
+                    if (select_write_ready(f))
                     {
                         writefds[fd / 8] |= (1 << (fd % 8));
                         ready_count++;
@@ -15833,8 +15895,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_msync] Invalid flags: 0x%x\n", flags);
             return -EINVAL;
         }
-        printfCyan("[SyscallHandler::sys_msync] addr=%p, length=%zu, flags=0x%x\n",
-                   (void *)addr, length, flags);
+        // lmbench 会密集调用 msync；保留错误日志即可，避免调试输出污染串口耗时。
         // MS_ASYNC 和 MS_SYNC 不能同时设置，且必须设置其中一个
         bool has_async = (flags & MS_ASYNC) != 0;
         bool has_sync = (flags & MS_SYNC) != 0;
@@ -15846,11 +15907,11 @@ namespace syscall
         }
 
         bool invalidate = (flags & MS_INVALIDATE) != 0;
-        if (invalidate)
-        {
-            printfRed("[SyscallHandler::sys_msync]   EBUSY  MS_INVALIDATE was specified in flags, and a memory lock exists for the specified address range. \n");
-            return -EBUSY;
-        }
+        /*
+         * Linux 只有在 MS_INVALIDATE 覆盖到被 mlock 锁住的页面时才返回 EBUSY。
+         * 当前内核还没有实现有效的 mlock 状态，因此不能把所有 invalidate 请求
+         * 都拒掉；lmbench 的 lat_pagefault 会使用该路径并期望继续完成测量。
+         */
         // printfCyan("[SyscallHandler::sys_msync] addr=%p, length=%u, flags=0x%x (async=%s, sync=%s, invalidate=%s)\n",
         //            (void *)addr, length, flags,
         //            has_async ? "true" : "false",
@@ -15890,6 +15951,13 @@ namespace syscall
             // 处理MAP_SHARED文件映射的同步
             if ((vm->flags & MAP_SHARED) && vm->vfile != nullptr)
             {
+                if ((vm->prot & PROT_WRITE) == 0)
+                {
+                    // 只读共享映射没有可写脏页。Linux 允许对它 msync/MS_INVALIDATE
+                    // 并返回成功，不能误走 file::write 造成 EIO。
+                    continue;
+                }
+
                 // printfCyan("[SyscallHandler::sys_msync] Syncing MAP_SHARED file mapping: %s\n",
                 //            vm->vfile->_path_name.c_str());
 

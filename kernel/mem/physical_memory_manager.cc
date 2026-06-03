@@ -31,6 +31,9 @@ namespace mem
 
     namespace
     {
+        constexpr uint32 k_max_refcount_pages = 262144; // 覆盖 1GiB/4KiB 的页数上限。
+        uint16 k_page_refcounts[k_max_refcount_pages] = {};
+
         inline uint64 normalize_managed_page_addr(uint64 addr)
         {
 #ifdef LOONGARCH
@@ -43,6 +46,12 @@ namespace mem
             }
 #endif
             return addr;
+        }
+
+        inline bool page_index_in_range(uint64 page_index)
+        {
+            return page_index < PhysicalMemoryManager::get_page_count() &&
+                   page_index < k_max_refcount_pages;
         }
     } // namespace
 
@@ -205,6 +214,11 @@ namespace mem
         }
 
         page_count = pmm_bytes / PGSIZE;
+        if (page_count > k_max_refcount_pages)
+        {
+            panic("[pmm] page refcount table too small: pages=%d max=%d",
+                  page_count, k_max_refcount_pages);
+        }
 
         // 拆分堆区域：metadata + 普通堆 + 共享内存
         if (heap_area_size <= heap_meta_bytes)
@@ -255,6 +269,9 @@ namespace mem
             panic("[pmm] alloc_page failed");
         }
         void *pa = pgnm2pa(x);
+        memlock.acquire();
+        k_page_refcounts[x] = 1;
+        memlock.release();
         // printfCyan("分配物理页:  %p\n", pa);
         memset(pa, 0, PGSIZE);
         return pa;
@@ -294,7 +311,31 @@ namespace mem
     void PhysicalMemoryManager::free_page(void *pa)
     {
         // printfCyan("释放物理页:  %p\n", pa);
-        _buddy->Free(pa2pgnm(pa));
+        uint64 page_index = pa2pgnm(pa);
+        if (!page_index_in_range(page_index))
+        {
+            printfRed("[pmm] free_page out of managed range: pa=%p index=%d pages=%d\n",
+                      pa, static_cast<int>(page_index), page_count);
+            return;
+        }
+
+        bool should_free = true;
+        memlock.acquire();
+        if (k_page_refcounts[page_index] > 1)
+        {
+            --k_page_refcounts[page_index];
+            should_free = false;
+        }
+        else
+        {
+            k_page_refcounts[page_index] = 0;
+        }
+        memlock.release();
+
+        if (should_free)
+        {
+            _buddy->Free(page_index);
+        }
     }
 
     void PhysicalMemoryManager::free_pages(void *pa)
@@ -311,6 +352,53 @@ namespace mem
         }
 
         _buddy->free_pages(pa);
+    }
+
+    bool PhysicalMemoryManager::retain_page(void *pa)
+    {
+        uint64 page_index = pa2pgnm(pa);
+        if (!page_index_in_range(page_index))
+        {
+            return false;
+        }
+
+        memlock.acquire();
+        if (k_page_refcounts[page_index] == 0 || k_page_refcounts[page_index] == UINT16_MAX)
+        {
+            memlock.release();
+            return false;
+        }
+        ++k_page_refcounts[page_index];
+        memlock.release();
+        return true;
+    }
+
+    uint16 PhysicalMemoryManager::page_ref_count(void *pa)
+    {
+        uint64 page_index = pa2pgnm(pa);
+        if (!page_index_in_range(page_index))
+        {
+            return 0;
+        }
+
+        memlock.acquire();
+        uint16 refcount = k_page_refcounts[page_index];
+        memlock.release();
+        return refcount;
+    }
+
+    bool PhysicalMemoryManager::is_managed_page(void *pa)
+    {
+        uint64 addr = normalize_managed_page_addr(reinterpret_cast<uint64>(pa));
+        if (addr < pa_start || addr >= pa_start + static_cast<uint64>(page_count) * PGSIZE)
+        {
+            return false;
+        }
+        if ((addr % PGSIZE) != 0)
+        {
+            return false;
+        }
+        return ((addr - pa_start) / PGSIZE) < k_max_refcount_pages;
     }
     void PhysicalMemoryManager::clear_page(void *pa)
     {

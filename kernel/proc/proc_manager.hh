@@ -86,6 +86,7 @@ namespace proc
         // ==================== 进程调度与同步 ====================
         void sleep(void *chan, SpinLock *lock);
         void wakeup(void *chan);
+        void wakeup_one(Pcb *target, void *chan);
         int wakeup2(uint64 uaddr, uint64 futex_key, int val, void *uaddr2, uint64 futex_key2, int val2);
 
         // ==================== 文件系统相关 ====================

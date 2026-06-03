@@ -808,6 +808,7 @@ intr_off()
 #define PTE_MAT (1L << 4)    // memory access type
 #define PTE_P (1L << 7)      // physical page exists
 #define PTE_W (1L << 8)      // writeable
+#define PTE_COW (1L << 9)    // 软件位：fork 写时复制，硬件忽略
 #define PTE_NX (1UL << 62)   // non executable
 #define PTE_NR (1L << 61)    // non readable
 #define PTE_RPLV (1UL << 63) // restricted privilege level enable
@@ -818,7 +819,7 @@ intr_off()
 #define PTE2PA(pte) (pte & PAMASK)
 // shift a physical address to the right place for a PTE.
 #define PA2PTE(pa) (((uint64)pa) & PAMASK)
-#define PTE_FLAGS(pte) ((pte) & 0xE0000000000001FFUL)
+#define PTE_FLAGS(pte) ((pte) & 0xE0000000000003FFUL)
 
 // extract the three 9-bit page table indices from a virtual address.
 #define PXMASK 0x1FF // 9 bits

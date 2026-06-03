@@ -678,6 +678,68 @@ namespace fs
         return to_read;
     }
 
+    long virtual_file::read_to_user(mem::PageTable &pt, uint64 user_buf, size_t len, long off, bool upgrade)
+    {
+        if (_attrs.filetype == FileTypes::FT_DIRECT)
+        {
+            return -EISDIR;
+        }
+        if (_attrs.u_read != 1)
+        {
+            return -EBADF;
+        }
+        if (_content_provider == nullptr)
+        {
+            return -EBADF;
+        }
+
+        VirtualProviderType provider_type = _content_provider->get_provider_type();
+        if (provider_type == VirtualProviderType::DEV_NULL)
+        {
+            if (off < 0)
+            {
+                off = _file_ptr;
+            }
+            if (upgrade)
+            {
+                _file_ptr = off;
+            }
+            return 0;
+        }
+
+        if (provider_type != VirtualProviderType::DEV_ZERO)
+        {
+            return -38; // 其他虚拟文件保留旧的内核中转路径。
+        }
+
+        if (off < 0)
+        {
+            off = _file_ptr;
+        }
+
+        static const char zero_chunk[256] = {};
+        size_t copied = 0;
+        while (copied < len)
+        {
+            size_t chunk = len - copied;
+            if (chunk > sizeof(zero_chunk))
+            {
+                chunk = sizeof(zero_chunk);
+            }
+            if (mem::k_vmm.copy_out(pt, user_buf + copied, zero_chunk, chunk) < 0)
+            {
+                return copied > 0 ? static_cast<long>(copied) : -EFAULT;
+            }
+            copied += chunk;
+        }
+
+        if (upgrade)
+        {
+            _file_ptr = off + static_cast<long>(len);
+        }
+        return static_cast<long>(len);
+    }
+
 
     eastl::string virtual_file::read_symlink_target()
     {
@@ -731,6 +793,46 @@ namespace fs
         }
 
         return result;
+    }
+
+    long virtual_file::write_from_user(mem::PageTable &pt, uint64 user_buf, size_t len, long off, bool upgrade)
+    {
+        (void)pt;
+        (void)user_buf;
+
+        if (_attrs.filetype == FileTypes::FT_DIRECT)
+        {
+            return -EISDIR;
+        }
+        if (_attrs.u_write != 1)
+        {
+            return -EBADF;
+        }
+        if (_content_provider == nullptr)
+        {
+            return -EBADF;
+        }
+        if (!_content_provider->is_writable())
+        {
+            return -EBADF;
+        }
+
+        VirtualProviderType provider_type = _content_provider->get_provider_type();
+        if (provider_type != VirtualProviderType::DEV_NULL &&
+            provider_type != VirtualProviderType::DEV_ZERO)
+        {
+            return -38; // 其他虚拟文件可能需要解析用户内容，交给旧路径 copy_in 后处理。
+        }
+
+        if (off < 0)
+        {
+            off = _file_ptr;
+        }
+        if (upgrade)
+        {
+            _file_ptr = off + static_cast<long>(len);
+        }
+        return static_cast<long>(len);
     }
 
     bool virtual_file::read_ready()

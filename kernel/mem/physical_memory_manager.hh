@@ -23,6 +23,9 @@ namespace mem
         static void *alloc_pages(int count); // 分配连续多个物理页
         static void free_page(void *pa); // 释放单个物理页
         static void free_pages(void *pa); // 释放连续多个物理页
+        static bool retain_page(void *pa); // 增加单页引用计数，用于 fork COW 共享
+        static uint16 page_ref_count(void *pa); // 查询单页引用计数
+        static bool is_managed_page(void *pa); // 判断地址是否属于单页分配器管理范围
         static void free_page1(void *pa, uint64 size); // 释放单个物理页
         static void *kmalloc(size_t size); // 分配任意大小的内存块
         static void *kcalloc(uint n, size_t size);

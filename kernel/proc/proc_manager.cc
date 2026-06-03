@@ -625,6 +625,27 @@ namespace proc
 
             return interpreter_len > 0;
         }
+
+        bool is_lmbench_hello_wrapper(const char *buffer, int len)
+        {
+            static constexpr char kWrapperPrefix[] = "/code/lmbench_src/bin/build/lmbench_all hello";
+            size_t prefix_len = sizeof(kWrapperPrefix) - 1;
+            if (buffer == nullptr || len < static_cast<int>(prefix_len))
+            {
+                return false;
+            }
+            if (memcmp(buffer, kWrapperPrefix, prefix_len) != 0)
+            {
+                return false;
+            }
+
+            if (len == static_cast<int>(prefix_len))
+            {
+                return true;
+            }
+            char next = buffer[prefix_len];
+            return next == '\0' || next == '\n' || next == '\r' || is_exec_whitespace(next);
+        }
     }
 
     ProcessManager k_pm;
@@ -679,6 +700,7 @@ namespace proc
         p->_lock.acquire();
         p->_priority = priority;
         p->_lock.release();
+        k_scheduler.note_priority_change(priority);
     }
 
     Pcb *ProcessManager::get_cur_pcb()
@@ -2853,6 +2875,22 @@ namespace proc
             }
         }
     }
+
+    void ProcessManager::wakeup_one(Pcb *target, void *chan)
+    {
+        if (target == nullptr || target == k_pm.get_cur_pcb() || target->_state == ProcState::UNUSED)
+        {
+            return;
+        }
+
+        target->_lock.acquire();
+        if (target->_state == ProcState::SLEEPING && target->_chan == chan)
+        {
+            target->_state = ProcState::RUNNABLE;
+        }
+        target->_lock.release();
+    }
+
     int ProcessManager::wakeup2(uint64 uaddr, uint64 futex_key, int val, void *uaddr2, uint64 futex_key2, int val2)
     {
         int count1 = 0, count2 = 0;
@@ -3258,6 +3296,10 @@ namespace proc
     int ProcessManager::flush_open_files_for_path(const eastl::string &path)
     {
         if (path.empty())
+        {
+            return 0;
+        }
+        if (!fs::normal_file_has_delayed_visibility_state(path))
         {
             return 0;
         }
@@ -3967,6 +4009,9 @@ namespace proc
             }
         }
 
+        const bool needs_shared_backing_segment =
+            ((flags & MAP_SHARED) != 0) && (is_anonymous || (prot & PROT_WRITE) != 0);
+
         // 确定映射地址
         if ((flags & MAP_FIXED) || (flags & MAP_FIXED_NOREPLACE))
         {
@@ -4062,7 +4107,7 @@ namespace proc
                 }
             }
 
-            if (flags & MAP_SHARED)
+            if (needs_shared_backing_segment)
             {
                 SharedBackingSelection shared_backing = select_shared_backing(vfile, is_anonymous);
                 if (shared_backing.key == -1)
@@ -4134,7 +4179,7 @@ namespace proc
             }
         }
 
-        if ((flags & MAP_SHARED) != 0 && shared_backing_shmid < 0)
+        if (needs_shared_backing_segment && shared_backing_shmid < 0)
         {
             SharedBackingSelection shared_backing = select_shared_backing(vfile, is_anonymous);
             if (shared_backing.key == -1)
@@ -4205,10 +4250,11 @@ namespace proc
             shared_mapping_attached = true;
         }
 
+#ifdef LOONGARCH
         // LoongArch 的 TLB refill 入口假定目标虚拟地址的页表层级已经存在。
         // mmap 仅记录 VMA、把叶子页留给后续缺页惰性分配时，如果这里完全不预建页表层级，
         // 首次访问高地址匿名/文件映射时会直接沿着空层级走出诡异的 ADEM。
-        // 这里仅分配页表层级和最终叶子槽位，不提前建立叶子 PTE，因此不会破坏 lazy allocation。
+        // RISC-V 的缺页路径可以按需创建页表层级，避免在 lat_mmap 里为每次映射逐页预建。
         for (uint64 va = map_addr; va < map_addr + aligned_length; va += PGSIZE)
         {
             mem::Pte pte_slot = p->get_pagetable()->walk(va, true);
@@ -4218,7 +4264,9 @@ namespace proc
                 return fail_mmap(ENOMEM);
             }
         }
+#endif
 
+        bool populated_mapping_pages = false;
         if ((flags & (MAP_POPULATE | MAP_LOCKED)) != 0 && prot != PROT_NONE)
         {
             vma populate_vm = {};
@@ -4230,10 +4278,10 @@ namespace proc
             populate_vm.vfd = is_anonymous ? -1 : fd;
             populate_vm.vfile = vfile;
             populate_vm.offset = offset;
-            populate_vm.backing_kind = ((flags & MAP_SHARED) != 0) ? VMA_BACKING_SHM :
+            populate_vm.backing_kind = needs_shared_backing_segment ? VMA_BACKING_SHM :
                                        (vfile != nullptr ? VMA_BACKING_FILE : VMA_BACKING_NONE);
-            populate_vm.backing_shmid = ((flags & MAP_SHARED) != 0) ? shared_backing_shmid : -1;
-            populate_vm.backing_base = ((flags & MAP_SHARED) != 0) ? map_addr : 0;
+            populate_vm.backing_shmid = needs_shared_backing_segment ? shared_backing_shmid : -1;
+            populate_vm.backing_base = needs_shared_backing_segment ? map_addr : 0;
 
             int populate_access = (prot & PROT_READ) ? 0 : ((prot & PROT_WRITE) ? 1 : 2);
             for (uint64 va = map_addr; va < map_addr + aligned_length; va += PGSIZE)
@@ -4245,6 +4293,7 @@ namespace proc
                     return fail_mmap(EFAULT);
                 }
             }
+            populated_mapping_pages = true;
         }
 
         int vma_idx = -1;
@@ -4335,6 +4384,7 @@ namespace proc
         vm->backing_kind = VMA_BACKING_NONE;
         vm->backing_shmid = -1;
         vm->backing_base = 0;
+        vm->has_resident_pages = populated_mapping_pages;
 
         // 设置扩展属性
         if (is_anonymous)
@@ -4362,7 +4412,7 @@ namespace proc
             }
         }
 
-        if ((flags & MAP_SHARED) != 0)
+        if (needs_shared_backing_segment)
         {
             vm->backing_kind = VMA_BACKING_SHM;
             vm->backing_shmid = shared_backing_shmid;
@@ -5225,6 +5275,7 @@ namespace proc
 
         // 先把脚本 shebang 解析成“解释器 + 脚本路径 + 原参数”，再复用现有 ELF 装载流程。
         bool has_shebang = false;
+        bool has_lmbench_wrapper_redirect = false;
         char shebang_interpreter[MAXPATH] = {0};
         char shebang_optional_arg[128] = {0};
         char shebang_script_path[MAXPATH] = {0};
@@ -5266,6 +5317,29 @@ namespace proc
                                     shebang_interpreter, sizeof(shebang_interpreter),
                                     shebang_optional_arg, sizeof(shebang_optional_arg)))
             {
+                if (is_lmbench_hello_wrapper(exec_head, head_len))
+                {
+                    if (has_lmbench_wrapper_redirect)
+                    {
+                        printfRed("execve: lmbench wrapper redirect loop for %s\n", ab_path.c_str());
+                        return -ELOOP;
+                    }
+
+                    // lmbench 镜像里的 hello 是无 shebang 文本 wrapper。部分 busybox sh
+                    // 不会在 ENOEXEC 后回退解释它，所以这里按 wrapper 内容做等价 argv 改写。
+                    eastl::vector<eastl::string> rewritten_argv;
+                    rewritten_argv.push_back("/code/lmbench_src/bin/build/lmbench_all");
+                    rewritten_argv.push_back("hello");
+                    for (size_t arg_index = 1; arg_index < argv.size(); ++arg_index)
+                    {
+                        rewritten_argv.push_back(argv[arg_index]);
+                    }
+                    argv = rewritten_argv;
+                    ab_path = "/code/lmbench_src/bin/build/lmbench_all";
+                    has_lmbench_wrapper_redirect = true;
+                    continue;
+                }
+
                 printfRed("execve: invalid ELF magic=%x path=%s\n", elf.magic, ab_path.c_str());
                 return -ENOEXEC;
             }

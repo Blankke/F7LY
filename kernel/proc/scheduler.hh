@@ -9,9 +9,11 @@ namespace proc
 	{
 	private:
 		SpinLock _sche_lock;
+		bool _has_non_default_priority = false;
 	public:
 		Scheduler() = default;
 		void init( const char *name );
+		void note_priority_change(int priority);
 		void add_thread();
 		void remove_thread();
 		void switch_to_proc(Pcb *p);

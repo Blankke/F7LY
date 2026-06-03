@@ -62,6 +62,7 @@ namespace proc
             entry.backing_kind = VMA_BACKING_NONE;
             entry.backing_shmid = -1;
             entry.backing_base = 0;
+            entry.has_resident_pages = false;
             entry.wipe_on_fork = false;
         }
 
@@ -94,6 +95,20 @@ namespace proc
                 if (pte.is_null() || !pte.is_valid())
                 {
                     continue;
+                }
+                if (!pte.is_writable())
+                {
+                    // fork COW 后 child 的私有页可能暂时只读；清零前必须先拆页，
+                    // 否则会把父进程共享的物理页也一起擦掉。
+                    if (mem::k_vmm.resolve_cow_page(child_pt, va) != 0)
+                    {
+                        continue;
+                    }
+                    pte = child_pt.walk(va, false);
+                    if (pte.is_null() || !pte.is_valid())
+                    {
+                        continue;
+                    }
                 }
                 memset(user_page_kernel_ptr((uint64)pte.pa()), 0, PGSIZE);
             }
@@ -1028,21 +1043,6 @@ namespace proc
 
             if (!conflict)
             {
-                for (uint64 va = candidate; va < candidate_end; va += PGSIZE)
-                {
-                    void *shm_start_addr = nullptr;
-                    size_t shm_size = 0;
-                    if (find_shared_backed_vma_covering(vma_data, va, &shm_start_addr, &shm_size))
-                    {
-                        candidate = align_up_with_granularity((uint64)shm_start_addr + shm_size + PGSIZE, alignment);
-                        conflict = true;
-                        break;
-                    }
-                }
-            }
-
-            if (!conflict)
-            {
                 mmap_cursor = candidate_end;
                 return candidate;
             }
@@ -1305,7 +1305,10 @@ namespace proc
         {
             uint64 va_start = PGROUNDDOWN(vm_entry.addr);
             uint64 va_end = PGROUNDUP(vm_entry.addr + vm_entry.len);
-            safe_vmunmap(va_start, va_end, true);
+            if (vm_entry.has_resident_pages)
+            {
+                safe_vmunmap(va_start, va_end, true);
+            }
         }
 
         reset_vma_entry(vm_entry);
@@ -1405,12 +1408,18 @@ namespace proc
                 }
                 else
                 {
-                    safe_vmunmap(unmap_start, unmap_end, true);
+                    if (vm_entry.has_resident_pages)
+                    {
+                        safe_vmunmap(unmap_start, unmap_end, true);
+                    }
                 }
             }
             else
             {
-                safe_vmunmap(unmap_start, unmap_end, true);
+                if (vm_entry.has_resident_pages)
+                {
+                    safe_vmunmap(unmap_start, unmap_end, true);
+                }
             }
             // 处理VMA条目的更新
             if (full_unmap)

@@ -24,11 +24,28 @@ namespace proc
     void Scheduler::init(const char *name)
     {
         _sche_lock.init(name);
+        _has_non_default_priority = false;
+    }
+
+    void Scheduler::note_priority_change(int priority)
+    {
+        if (priority == default_proc_prio)
+        {
+            return;
+        }
+        _sche_lock.acquire();
+        _has_non_default_priority = true;
+        _sche_lock.release();
     }
 
     int Scheduler::get_highest_priority()
     {
         _sche_lock.acquire();
+        if (!_has_non_default_priority)
+        {
+            _sche_lock.release();
+            return default_proc_prio;
+        }
         int prio = lowest_proc_prio;
         for (Pcb &p : k_proc_pool)
         {

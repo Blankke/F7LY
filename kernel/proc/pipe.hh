@@ -17,8 +17,13 @@ namespace fs{
 	class FifoManager;
 	
 }
+namespace mem
+{
+	class PageTable;
+}
 namespace proc
 {
+	class Pcb;
 	class ProcessManager;
 
 	namespace ipc
@@ -57,6 +62,10 @@ namespace proc
 			bool _nonblock; // 非阻塞模式标志
 			uint8 _read_sleep;
 			uint8 _write_sleep;
+			Pcb *_read_waiter;
+			Pcb *_write_waiter;
+			uint32 _read_waiter_count;
+			uint32 _write_waiter_count;
 			int pipe_flags; // 管道标志
 			int _async_owner_type;
 			int _async_owner_id;
@@ -72,6 +81,10 @@ namespace proc
 				, _read_is_open( false )
 				, _write_is_open( false )
 				, _nonblock( false )
+				, _read_waiter( nullptr )
+				, _write_waiter( nullptr )
+				, _read_waiter_count( 0 )
+				, _write_waiter_count( 0 )
 				, pipe_flags( 0 )
 				, _async_owner_type( PIPE_ASYNC_OWNER_NONE )
 				, _async_owner_id( 0 )
@@ -112,8 +125,10 @@ namespace proc
 
 			int write( uint64 addr, int n );
 			int write_in_kernel( uint64 addr, int n );
+			int write_from_user(mem::PageTable &pt, uint64 addr, int n);
 
 			int read( uint64 addr, int n );
+			int read_to_user(mem::PageTable &pt, uint64 addr, int n);
 
 			int alloc( fs::pipe_file * &f0, fs::pipe_file * &f1);
 
@@ -121,6 +136,9 @@ namespace proc
 
 		private:
 			void notify_async_reader_locked();
+			void note_waiter_locked(bool waiting_for_read, Pcb *waiter);
+			void forget_waiter_locked(bool waiting_for_read, Pcb *waiter);
+			bool wake_waiters_locked(bool wake_readers);
 
 			// 循环缓冲区辅助方法
 			bool is_full() const { return _count >= _pipe_size; }

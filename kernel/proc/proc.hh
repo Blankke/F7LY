@@ -49,11 +49,11 @@ namespace proc
         ZOMBIE
     };
 
-    constexpr uint num_process = 90;       // 系统中允许的最大进程数量
+    constexpr uint num_process = 128;      // 系统中允许的最大进程数量；lmbench lat_ctx 需要至少 96 个子进程槽位。
     constexpr int default_proc_prio = 0;   // 默认 nice 值
     constexpr int lowest_proc_prio = 19;   // 最低优先级对应的 nice 值
     constexpr int highest_proc_prio = -20; // 最高优先级对应的 nice 值
-    constexpr uint max_open_files = 128;   // 每个进程最多可以打开的文件数量
+    constexpr uint max_open_files = 256;   // 每个进程最多可以打开的文件数量；lmbench lat_ctx 96 需要至少 192 个 pipe fd。
     constexpr uint pid_max = 4194304;      // Linux 默认级别的 PID 上限，供 /proc/sys/kernel/pid_max 和范围校验使用
     constexpr int k_interval_timer_count = 3; // ITIMER_REAL / ITIMER_VIRTUAL / ITIMER_PROF
     struct ofile
