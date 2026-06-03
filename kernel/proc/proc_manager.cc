@@ -319,40 +319,6 @@ namespace proc
             return proc != nullptr && starts_with(proc->_name, "busybox");
         }
 
-        inline bool should_deliver_child_exit_signal(const proc::Pcb *parent, int signum, bool explicit_signal)
-        {
-            if (parent == nullptr || signum <= 0)
-            {
-                return false;
-            }
-
-            if (signum != ipc::signal::SIGCHLD)
-            {
-                return true;
-            }
-
-            /*
-             * 当前 wait/wait4 已经通过 wakeup(parent) 显式唤醒父进程回收 zombie。
-             * SIGCHLD 的用户态 handler 路径还不够稳，libc-bench 这类高频 fork/wait
-             * 会把每轮子进程退出都变成一次信号帧往返，最终打断基准进程。
-             * 但 clone3 允许用户显式设置 exit_signal 并依赖 SIGCHLD 投递结果。
-             * 因此普通 fork/旧 clone 的 SIGCHLD 仍只承担 wait 唤醒语义；
-             * clone3 显式 exit_signal 场景按 Linux 投递，覆盖 clone301。
-             */
-            if (!explicit_signal)
-            {
-                return false;
-            }
-
-            auto *sigchld_action = parent->_sigactions != nullptr
-                                       ? parent->_sigactions->actions[ipc::signal::SIGCHLD]
-                                       : nullptr;
-            using signal_handler_t = ipc::signal::__sighandler_t;
-            return sigchld_action != nullptr &&
-                   sigchld_action->sa_handler != nullptr &&
-                   sigchld_action->sa_handler != reinterpret_cast<signal_handler_t>(1);
-        }
-
 #ifdef LOONGARCH
 // 下面的代码是针对 LoongArch 架构的用户态 ELF 补丁机制，用于修复特定版本的 musl libc 和相关程序中的已知问题。
 // 下载磁盘的ll/sc原子指令有问题，对于entry程序需要修改后才能正常执行。
@@ -799,7 +765,6 @@ namespace proc
                 p->_exiting = false; // 清除退出清理标记
                 p->_xstate = 0;     // 清除退出状态码
                 p->_parent_exit_signal = ipc::signal::SIGCHLD;
-                p->_parent_exit_signal_explicit = false;
 
                 // 设置调度相关字段：默认调度槽与优先级
                 p->_slot = default_proc_slot;
@@ -1036,7 +1001,6 @@ namespace proc
         p->_exiting = false;           // 清除退出清理标记
         p->_xstate = 0;                // 清除退出状态码
         p->_parent_exit_signal = ipc::signal::SIGCHLD;
-        p->_parent_exit_signal_explicit = false;
         p->_state = ProcState::UNUSED; // 标记进程控制块为未使用
 
         p->_slot = 0;                 // 重置时间片
@@ -1865,12 +1829,10 @@ namespace proc
         np->_parent_exit_signal = exit_signal >= 0
                                       ? exit_signal
                                       : static_cast<int>(flags & syscall::CSIGNAL);
-        np->_parent_exit_signal_explicit = is_clone3 && exit_signal > 0;
         if (flags & syscall::CLONE_THREAD)
         {
             // 线程退出不应该向父进程额外发送“子进程退出信号”，join 走的是 tid/futex 语义。
             np->_parent_exit_signal = 0;
-            np->_parent_exit_signal_explicit = false;
         }
         if (flags & syscall::CLONE_THREAD)
         {
@@ -2728,11 +2690,10 @@ namespace proc
             p->_parent->_lock.acquire();
             p->_parent->_cutime += p->_user_ticks + p->_cutime;
             p->_parent->_cstime += p->_stime + p->_cstime;
-            if (should_deliver_child_exit_signal(p->_parent,
-                                                 p->_parent_exit_signal,
-                                                 p->_parent_exit_signal_explicit))
+            if (p->_parent_exit_signal > 0)
             {
-                // clone3/clone 的 exit_signal 语义：非线程子任务退出后，向其父任务投递指定信号。
+                // 非线程子任务退出后必须按 exit_signal 投递父进程信号；
+                // wait/wait4 的 wakeup 只能唤醒内核等待，不能替代用户态 SIGCHLD 语义。
                 p->_parent->add_signal(p->_parent_exit_signal);
             }
             p->_parent->_lock.release();

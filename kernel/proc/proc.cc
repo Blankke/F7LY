@@ -120,7 +120,6 @@ namespace proc
         _exiting = false; // 尚未进入退出清理流程
         _xstate = 0;     // 进程退出状态码
         _parent_exit_signal = proc::ipc::signal::SIGCHLD;
-        _parent_exit_signal_explicit = false;
 
         // 调度相关字段
         _slot = 0;                          // 时间片剩余量
