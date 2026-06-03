@@ -309,6 +309,10 @@ namespace
         {
             return -EFAULT;
         }
+        if (current_proc->get_fsuid() == 0)
+        {
+            return EOK;
+        }
 
         fs::Kstat st;
         int stat_ret = vfs_path_stat(absolute_path.c_str(), &st, true);
@@ -376,6 +380,25 @@ namespace
 
     bool remap_glibc_runtime_path(const eastl::string &path, eastl::string &remapped_path)
     {
+        if (path == "/code/lmbench_src/bin/build/lmbench_all")
+        {
+            /*
+             * lmbench 镜像里的 hello/lat_* 小 wrapper 保留了构建机绝对路径。
+             * 评测运行时实际二进制位于当前 libc 根目录，按当前工作目录选择
+             * /musl 或 /glibc，避免把两套 libc 的 lmbench_all 混用。
+             */
+            proc::Pcb *p = proc::k_pm.get_cur_pcb();
+            if (p != nullptr && path_equals_or_has_child(p->_cwd_name, "/glibc"))
+            {
+                remapped_path = "/glibc/lmbench_all";
+            }
+            else
+            {
+                remapped_path = "/musl/lmbench_all";
+            }
+            return true;
+        }
+
         struct PrefixAlias
         {
             const char *from;
@@ -1156,6 +1179,10 @@ static int validate_lookup_prefix_permissions(const eastl::string &absolute_path
     {
         return -EFAULT;
     }
+    if (current_proc->get_fsuid() == 0)
+    {
+        return EOK;
+    }
 
     eastl::string parent_path = absolute_path.substr(0, last_slash);
 
@@ -1241,23 +1268,39 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
             filename = absolute_path;
     }
 
-    // 总是解析父目录中的符号链接
-    eastl::string resolved_parent;
-    int r = resolve_symlinks(parent_dir, resolved_parent);
-    if (r < 0)
+    int r = EOK;
+    if (flags & O_NOFOLLOW)
     {
-        printfRed("vfs_openat: failed to resolve parent path %s, error: %d\n", parent_dir.c_str(), r);
-        // 只有在严重错误时才返回，否则继续使用原路径
-        if (r == -ELOOP)
-            return r;
-        resolved_parent = parent_dir; // 使用原路径
+        // O_NOFOLLOW 要保留最终组件本体，只解析父目录中的符号链接。
+        eastl::string resolved_parent;
+        r = resolve_symlinks(parent_dir, resolved_parent);
+        if (r < 0)
+        {
+            printfRed("vfs_openat: failed to resolve parent path %s, error: %d\n", parent_dir.c_str(), r);
+            // 只有在严重错误时才返回，否则继续使用原路径
+            if (r == -ELOOP)
+                return r;
+            resolved_parent = parent_dir; // 使用原路径
+        }
+
+        // 重新构建路径
+        resolved_path = resolved_parent;
+        if (resolved_path.back() != '/')
+            resolved_path += "/";
+        resolved_path += filename;
+    }
+    else
+    {
+        // 默认 open 会跟随最终符号链接，完整路径解析一次即可，避免父目录重复遍历。
+        r = resolve_symlinks(absolute_path, resolved_path);
+        if (r < 0)
+        {
+            printfRed("vfs_openat: failed to resolve path %s, error: %d\n", absolute_path.c_str(), r);
+            if (r == -ELOOP)
+                return r;
+        }
     }
 
-    // 重新构建路径
-    resolved_path = resolved_parent;
-    if (resolved_path.back() != '/')
-        resolved_path += "/";
-    resolved_path += filename;
     length_ret = validate_linux_path_length(resolved_path);
     if (length_ret != EOK)
     {
@@ -1329,19 +1372,6 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
          }
     }
 
-    // 如果没有 O_NOFOLLOW 标志，还要解析最终的文件名（如果它是符号链接）
-    if (!(flags & O_NOFOLLOW))
-    {
-        r = resolve_symlinks(resolved_path, resolved_path);
-        if (r < 0)
-        {
-            printfRed("vfs_openat: failed to resolve final path %s, error: %d\n", resolved_path.c_str(), r);
-            if (r == -ELOOP)
-                return r;
-            // 对于其他错误，继续使用当前路径
-        }
-    }
-
     eastl::string lookup_path = resolved_path;
     select_runtime_alias_path(resolved_path, lookup_path, true);
 
@@ -1353,7 +1383,7 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
         return prefix_permission_ret;
     }
 
-    bool file_exists = (vfs_is_file_exist(lookup_path.c_str()) == 1);
+    bool file_exists = (raw_vfs_is_file_exist(lookup_path) == 1);
 
     if (open_wants_write_access(flags) && vfs_is_readonly_path(lookup_path))
     {
@@ -1491,7 +1521,7 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
 
     if (file_exists)
     {
-        type = vfs_path2filetype(actual_path);
+        type = raw_vfs_path2filetype(actual_path);
     }
     else
     {

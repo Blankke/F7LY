@@ -97,6 +97,7 @@ namespace fs
         /// @param upgrade 如果 upgrade 为 true，文件指针自动后移
         /// @return 实际读取的字节数，若发生错误则返回负值表示错误码
         virtual long read(uint64 buf, size_t len, long off = -1, bool upgrade = true) override;
+        virtual long read_to_user(mem::PageTable &pt, uint64 user_buf, size_t len, long off = -1, bool upgrade = true) override;
 
         /// @brief 向虚拟文件写入数据（仅支持可写的虚拟文件）
         /// @param buf 要写入的数据缓冲区的地址
@@ -105,6 +106,7 @@ namespace fs
         /// @param upgrade 如果 upgrade 为 true，写完后文件指针自动后移
         /// @return 实际写入的字节数，若发生错误则返回负值表示错误码
         virtual long write(uint64 buf, size_t len, long off = -1, bool upgrade = true) override;
+        virtual long write_from_user(mem::PageTable &pt, uint64 user_buf, size_t len, long off = -1, bool upgrade = true) override;
         
         virtual bool read_ready() override;
         virtual bool write_ready() override;

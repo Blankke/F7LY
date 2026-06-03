@@ -96,6 +96,10 @@ void pci_map(int bus, int dev, int func, void *pages);
 		/// @return 0 if success, -1 if failed
 		int copy_out( PageTable &pt, uint64 va, const void *p, uint64 len );
 
+		/// @brief 处理 fork COW 写时复制页。
+		/// @return 成功拆页/恢复写权限返回0；不是 COW 页或失败返回-1。
+		int resolve_cow_page(PageTable &pt, uint64 va);
+
 		/// @brief 为VMA惰性分配页面，统一处理mmap的各种标志和权限
 		/// @param pt 页表
 		/// @param va 虚拟地址

@@ -450,6 +450,11 @@ int mmap_handler(uint64 va, int cause)
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
   uint64 fault_page = PGROUNDDOWN(va);
 
+  if (cause == 15 && mem::k_vmm.resolve_cow_page(*p->get_pagetable(), fault_page) == 0)
+  {
+    return 0;
+  }
+
   // 根据地址查找属于哪一个VMA
   for (i = 0; i < proc::NVMA; ++i)
   {

@@ -9,6 +9,8 @@ namespace mem
 
 namespace fs
 {
+	bool normal_file_has_delayed_visibility_state(const eastl::string &path);
+
 	class normal_file : public file
 	{
 	protected:
@@ -36,6 +38,7 @@ namespace fs
 		uint64 logical_file_size_locked() const;
 		void refresh_ext4_file_size_locked();
 		void reset_write_combine_locked();
+		void mark_write_combine_dirty_locked();
 		void invalidate_read_snapshot_locked();
 		void release_clean_write_combine_buffer_locked();
 		bool can_use_read_snapshot_locked(long off) const;
@@ -67,6 +70,7 @@ namespace fs
 		/// @param upgrade 如果 upgrade 为 true，文件指针自动后移。
 		/// @return 实际读取的字节数，若发生错误则返回负值表示错误码。
 		virtual long read(uint64 buf, size_t len, long off = -1, bool upgrade = true) override;
+		virtual long read_to_user(mem::PageTable &pt, uint64 user_buf, size_t len, long off = -1, bool upgrade = true) override;
 
 		/// @brief 向文件写入数据的虚函数。可以选择指定写入偏移量，并支持升级写入操作。
 		/// @param buf 要写入的数据缓冲区的地址（以 uint64 表示）。

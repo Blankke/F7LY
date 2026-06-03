@@ -52,6 +52,14 @@ namespace fs
 			}
 			return _pipe->read(buf, len);
 		};
+		long read_to_user(mem::PageTable &pt, uint64 user_buf, size_t len, long off, bool upgrade) override
+		{
+			if (!_can_read)
+			{
+				return syscall::SYS_EBADF;
+			}
+			return _pipe->read_to_user(pt, user_buf, static_cast<int>(len));
+		}
 
 		/// @note pipe write 没有偏移的概念
 		long write(uint64 buf, size_t len, long off, bool upgrade) override 
@@ -62,6 +70,14 @@ namespace fs
 			}
 			return _pipe->write_in_kernel(buf, len); 
 		};
+		long write_from_user(mem::PageTable &pt, uint64 user_buf, size_t len, long off, bool upgrade) override
+		{
+			if (!_can_write)
+			{
+				return syscall::SYS_EBADF;
+			}
+			return _pipe->write_from_user(pt, user_buf, static_cast<int>(len));
+		}
 
 		int write_in_kernel(uint64 buf, size_t len) 
 		{

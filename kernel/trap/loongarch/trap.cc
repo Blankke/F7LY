@@ -462,6 +462,12 @@ void trap_manager::usertrap()
       printfRed("usertrap(): badv=%p has null pte slot\n", badv);
     }
 
+    if ((ecode == 0x2 || ecode == 0x4) &&
+        mem::k_vmm.resolve_cow_page(*p->get_pagetable(), badv) == 0)
+    {
+      goto usertrap_page_fault_done;
+    }
+
     // LoongArch 的软件 TLB 路径里，已映射用户页也可能因为 TLB 里残着 V=0 /
     // 旧权限状态而先打到 TLBL/TLBS/TLBI/TLBM。对于这种“PTE 已经合法存在”的页，
     // 先做一次按页失效，让硬件重走 refill；不要误丢进 mmap 懒分配分支。
@@ -738,6 +744,12 @@ int mmap_handler(uint64 va, int cause)
   int i;
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
   uint64 fault_page = PGROUNDDOWN(va);
+
+  if ((cause == 2 || cause == 4) &&
+      mem::k_vmm.resolve_cow_page(*p->get_pagetable(), fault_page) == 0)
+  {
+    return 0;
+  }
 
   // 根据地址查找属于哪一个VMA
   for (i = 0; i < proc::NVMA; ++i)
