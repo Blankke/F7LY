@@ -1044,6 +1044,195 @@ namespace fs
 		return -38; // ENOSYS：不适合快路径时交给 syscall 层原有内核中转读。
 	}
 
+	long normal_file::write_from_user(mem::PageTable &pt, uint64 user_buf, size_t len, long off, bool upgrade)
+	{
+		if (len == 0)
+		{
+			return 0;
+		}
+
+		_file_lock.acquire();
+
+		if (is_memfd())
+		{
+			sync_file_size_from_memfd();
+		}
+
+		if (off < 0)
+		{
+			off = _file_ptr;
+		}
+		const long current_pos = _file_ptr;
+		if ((lwext4_file_struct.flags & O_APPEND) != 0)
+		{
+			if (!_write_combine_dirty)
+			{
+				refresh_ext4_file_size_locked();
+			}
+			off = static_cast<long>(logical_file_size_locked());
+		}
+
+		// 这里只接管能完整落入写合并缓存的普通小写；其它情况交回 syscall 中转路径。
+		if (!can_cache_small_write_locked(off, len))
+		{
+			_file_lock.release();
+			return -38;
+		}
+
+		proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+		uint64 fsize_limit = current_proc->get_fsize_limit();
+		if (fsize_limit != proc::ResourceLimitId::RLIM_INFINITY &&
+			static_cast<uint64>(off) + len > fsize_limit)
+		{
+			current_proc->add_signal(proc::ipc::signal::SIGXFSZ);
+			_file_lock.release();
+			return -EFBIG;
+		}
+
+		if (_attrs.u_write != 1)
+		{
+			if (!(lwext4_file_struct.flags & O_TMPFILE))
+			{
+				_file_lock.release();
+				return -EBADF;
+			}
+		}
+
+		bool need_inode_write_flag_check = !(_write_combine_dirty && can_cache_small_write_locked(off, len));
+		ext4_mountpoint *mp = lwext4_file_struct.mp;
+		if (need_inode_write_flag_check && mp && lwext4_file_struct.inode > 0)
+		{
+			struct ext4_inode_ref inode_ref;
+			int write_flag_error = EOK;
+			if (mp->os_locks)
+			{
+				mp->os_locks->lock();
+			}
+			int result = ext4_fs_get_inode_ref(&mp->fs,
+											   lwext4_file_struct.inode,
+											   &inode_ref);
+			if (result == EOK)
+			{
+				uint32_t inode_flags = ext4_inode_get_flags(inode_ref.inode);
+				ext4_fs_put_inode_ref(&inode_ref);
+
+				if (inode_flags & EXT4_INODE_FLAG_IMMUTABLE)
+				{
+					write_flag_error = EPERM;
+				}
+				if ((inode_flags & EXT4_INODE_FLAG_APPEND) &&
+					static_cast<uint64>(off) != logical_file_size_locked())
+				{
+					write_flag_error = EPERM;
+				}
+			}
+			if (mp->os_locks)
+			{
+				mp->os_locks->unlock();
+			}
+			if (write_flag_error != EOK)
+			{
+				_file_lock.release();
+				return -write_flag_error;
+			}
+		}
+
+		if (is_memfd())
+		{
+			uint32_t seals = memfd_seals();
+			if ((seals & F_SEAL_WRITE) != 0)
+			{
+				_file_lock.release();
+				return -EPERM;
+			}
+			uint64 end_off = static_cast<uint64>(off) + len;
+			if (end_off > logical_file_size_locked() && (seals & F_SEAL_GROW) != 0)
+			{
+				_file_lock.release();
+				return -EPERM;
+			}
+		}
+
+		uint64 single_page_user_src = 0;
+		bool use_single_page_copy = false;
+		uint64 user_end = user_buf + len - 1;
+		if (user_end >= user_buf && PGROUNDDOWN(user_buf) == PGROUNDDOWN(user_end))
+		{
+			if (mem::k_vmm.user_read_kernel_address(pt, user_buf, single_page_user_src) < 0)
+			{
+				_file_lock.release();
+				return -EFAULT;
+			}
+			use_single_page_copy = true;
+		}
+		else if (mem::k_vmm.ensure_user_read_range(pt, user_buf, len) < 0)
+		{
+			_file_lock.release();
+			return -EFAULT;
+		}
+
+		int cache_status = prepare_small_write_cache_locked(off, len);
+		if (cache_status == ENOMEM)
+		{
+			_file_lock.release();
+			return -38;
+		}
+		if (cache_status != EOK)
+		{
+			_file_lock.release();
+			return -cache_status;
+		}
+
+		invalidate_read_snapshot_locked();
+		uint64 cache_offset = static_cast<uint64>(off) - _write_combine_base;
+		uint64 write_end = cache_offset + len;
+		if (write_end > _write_combine_size)
+		{
+			if (cache_offset > _write_combine_size)
+			{
+				memset(_write_combine_buffer + _write_combine_size,
+					   0,
+					   static_cast<size_t>(cache_offset - _write_combine_size));
+			}
+			_write_combine_size = static_cast<size_t>(write_end);
+		}
+
+		if (use_single_page_copy)
+		{
+			memmove(_write_combine_buffer + cache_offset,
+					reinterpret_cast<const void *>(single_page_user_src),
+					len);
+		}
+		else if (mem::k_vmm.copy_in(pt, _write_combine_buffer + cache_offset, user_buf, len) < 0)
+		{
+			_file_lock.release();
+			return -EFAULT;
+		}
+		mark_write_combine_dirty_locked();
+
+		if (upgrade)
+		{
+			_file_ptr = off + static_cast<long>(len);
+		}
+		else
+		{
+			_file_ptr = current_pos;
+		}
+
+		uint64 logical_size = logical_file_size_locked();
+		if (logical_size > _stat.size)
+		{
+			_stat.size = logical_size;
+		}
+		if (_memfd_state != nullptr)
+		{
+			_memfd_state->size = logical_size;
+		}
+
+		_file_lock.release();
+		return static_cast<long>(len);
+	}
+
 	long normal_file::write(uint64 buf, size_t len, long off, bool upgrade)
 	{
 		_file_lock.acquire();

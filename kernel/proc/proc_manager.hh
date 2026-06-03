@@ -124,10 +124,8 @@ namespace proc
         void get_cur_proc_tms(tmm::tms *tsv);
         int get_cur_cpuid();
 
-        // ==================== 调试与验证 ====================
+        // ==================== 调试辅助 ====================
         void procdump();
-        void debug_process_states();
-        bool verify_process_cleanup(int pid);
 
     private:
         // 私有辅助函数
