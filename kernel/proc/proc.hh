@@ -153,7 +153,6 @@ namespace proc
         bool _exiting;         // 已进入退出清理流程，禁止 timer 抢占式 yield
         int _xstate;           // 进程退出状态码，供父进程通过wait()系统调用获取
         int _parent_exit_signal; // 非线程子任务退出时需要发送给父进程的信号，0 表示不发送
-        bool _parent_exit_signal_explicit; // true 表示来自 clone3 显式 exit_signal，需要按信号语义投递
 
         // 调度相关字段
         int _slot;     // 当前时间片剩余量 @todo: 应使用更精确的时间单位
