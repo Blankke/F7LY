@@ -1672,6 +1672,7 @@ namespace syscall
 
         constexpr size_t k_syscall_io_chunk_size = 64 * 1024;
         constexpr size_t k_syscall_io_inline_buffer_size = 2 * 1024;
+        constexpr int k_syscall_iovec_inline_count = 16;
         constexpr long k_direct_user_io_unimplemented = -38;
         constexpr long k_direct_user_read_unimplemented = k_direct_user_io_unimplemented;
         constexpr long k_direct_user_write_unimplemented = k_direct_user_io_unimplemented;
@@ -1702,6 +1703,46 @@ namespace syscall
         {
             uint64 base;
             size_t len;
+        };
+
+        class ScopedKernelIovecArray
+        {
+        public:
+            explicit ScopedKernelIovecArray(int count)
+            {
+                if (count <= k_syscall_iovec_inline_count)
+                {
+                    data_ = inline_iovecs_;
+                    return;
+                }
+
+                size_t bytes = sizeof(KernelIovec) * static_cast<size_t>(count);
+                data_ = static_cast<KernelIovec *>(alloc_syscall_temp_buffer(bytes));
+                heap_backed_ = true;
+            }
+
+            ~ScopedKernelIovecArray()
+            {
+                if (heap_backed_)
+                {
+                    free_syscall_temp_buffer(data_);
+                }
+            }
+
+            bool valid() const
+            {
+                return data_ != nullptr;
+            }
+
+            KernelIovec *data()
+            {
+                return data_;
+            }
+
+        private:
+            KernelIovec inline_iovecs_[k_syscall_iovec_inline_count];
+            KernelIovec *data_ = nullptr;
+            bool heap_backed_ = false;
         };
 
         size_t syscall_iovec_buffer_size(const KernelIovec *iovecs, int iovcnt)
@@ -5825,23 +5866,19 @@ namespace syscall
         //             fd, (void *)iov_ptr, iovcnt);
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = proc->get_pagetable();
-        size_t vec_bytes = sizeof(KernelIovec) * static_cast<size_t>(iovcnt);
-        KernelIovec *iovecs = static_cast<KernelIovec *>(alloc_syscall_temp_buffer(vec_bytes));
-        if (iovecs == nullptr)
+        ScopedKernelIovecArray iovecs(iovcnt);
+        if (!iovecs.valid())
         {
             return SYS_ENOMEM;
         }
 
-        int copy_ret = copy_user_iovecs(*pt, iov_ptr, iovcnt, iovecs, nullptr);
+        int copy_ret = copy_user_iovecs(*pt, iov_ptr, iovcnt, iovecs.data(), nullptr);
         if (copy_ret < 0)
         {
-            free_syscall_temp_buffer(iovecs);
             return copy_ret;
         }
 
-        long ret = write_from_user_iovecs(f, *pt, iovecs, iovcnt, nullptr);
-        free_syscall_temp_buffer(iovecs);
-        return ret;
+        return write_from_user_iovecs(f, *pt, iovecs.data(), iovcnt, nullptr);
     }
     uint64 SyscallHandler::SyscallHandler::sys_prlimit64()
     {
@@ -8918,23 +8955,19 @@ namespace syscall
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
-        size_t vec_bytes = sizeof(KernelIovec) * static_cast<size_t>(iovcnt);
-        KernelIovec *iovecs = static_cast<KernelIovec *>(alloc_syscall_temp_buffer(vec_bytes));
-        if (iovecs == nullptr)
+        ScopedKernelIovecArray iovecs(iovcnt);
+        if (!iovecs.valid())
         {
             return SYS_ENOMEM;
         }
 
-        int copy_ret = copy_user_iovecs(*pt, iov_ptr, iovcnt, iovecs, nullptr);
+        int copy_ret = copy_user_iovecs(*pt, iov_ptr, iovcnt, iovecs.data(), nullptr);
         if (copy_ret < 0)
         {
-            free_syscall_temp_buffer(iovecs);
             return copy_ret;
         }
 
-        long ret = read_to_user_iovecs(f, *pt, iovecs, iovcnt, nullptr);
-        free_syscall_temp_buffer(iovecs);
-        return ret;
+        return read_to_user_iovecs(f, *pt, iovecs.data(), iovcnt, nullptr);
     }
     uint64 SyscallHandler::sys_geteuid()
     {
@@ -10411,7 +10444,6 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_getpgid()
     {
-        // proc::k_pm.debug_process_states();
         int pid;
 
         // 获取参数
@@ -14562,24 +14594,20 @@ namespace syscall
             return -ESPIPE;
         }
 
-        size_t vec_bytes = sizeof(KernelIovec) * static_cast<size_t>(iovcnt);
-        KernelIovec *iovecs = static_cast<KernelIovec *>(alloc_syscall_temp_buffer(vec_bytes));
-        if (iovecs == nullptr)
+        ScopedKernelIovecArray iovecs(iovcnt);
+        if (!iovecs.valid())
         {
             return -ENOMEM;
         }
 
-        int copy_ret = copy_user_iovecs(*p->get_pagetable(), iov_ptr, iovcnt, iovecs, nullptr);
+        int copy_ret = copy_user_iovecs(*p->get_pagetable(), iov_ptr, iovcnt, iovecs.data(), nullptr);
         if (copy_ret < 0)
         {
-            free_syscall_temp_buffer(iovecs);
             return copy_ret;
         }
 
         long read_off = offset;
-        long ret = read_to_user_iovecs(f, *p->get_pagetable(), iovecs, iovcnt, &read_off);
-        free_syscall_temp_buffer(iovecs);
-        return ret;
+        return read_to_user_iovecs(f, *p->get_pagetable(), iovecs.data(), iovcnt, &read_off);
     }
     uint64 SyscallHandler::sys_pwritev()
     {
@@ -14628,24 +14656,20 @@ namespace syscall
             return -ESPIPE;
         }
 
-        size_t vec_bytes = sizeof(KernelIovec) * static_cast<size_t>(iovcnt);
-        KernelIovec *iovecs = static_cast<KernelIovec *>(alloc_syscall_temp_buffer(vec_bytes));
-        if (iovecs == nullptr)
+        ScopedKernelIovecArray iovecs(iovcnt);
+        if (!iovecs.valid())
         {
             return -ENOMEM;
         }
 
-        int copy_ret = copy_user_iovecs(*p->get_pagetable(), iov_ptr, iovcnt, iovecs, nullptr);
+        int copy_ret = copy_user_iovecs(*p->get_pagetable(), iov_ptr, iovcnt, iovecs.data(), nullptr);
         if (copy_ret < 0)
         {
-            free_syscall_temp_buffer(iovecs);
             return copy_ret;
         }
 
         long write_off = offset;
-        long ret = write_from_user_iovecs(f, *p->get_pagetable(), iovecs, iovcnt, &write_off);
-        free_syscall_temp_buffer(iovecs);
-        return ret;
+        return write_from_user_iovecs(f, *p->get_pagetable(), iovecs.data(), iovcnt, &write_off);
     }
     uint64 SyscallHandler::sys_sync_file_range()
     {
@@ -18347,7 +18371,6 @@ namespace syscall
 
     uint64 SyscallHandler::sys_userdebug1()
     {
-        proc::k_pm.debug_process_states();
         return 0;
     }
     uint64 SyscallHandler::sys_userdebug2()

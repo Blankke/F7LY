@@ -296,27 +296,38 @@ namespace proc
             return {shm::k_smm.ftok(backing_path.c_str(), 0), false};
         }
 
-        inline bool starts_with(const char *lhs, const char *rhs)
+        inline bool should_deliver_child_exit_signal(const proc::Pcb *parent, int signum, bool explicit_signal)
         {
-            if (lhs == nullptr || rhs == nullptr)
+            if (parent == nullptr || signum <= 0)
             {
                 return false;
             }
-            while (*rhs != '\0')
-            {
-                if (*lhs == '\0' || *lhs != *rhs)
-                {
-                    return false;
-                }
-                ++lhs;
-                ++rhs;
-            }
-            return true;
-        }
 
-        inline bool is_busybox_like_proc(const proc::Pcb *proc)
-        {
-            return proc != nullptr && starts_with(proc->_name, "busybox");
+            if (signum != ipc::signal::SIGCHLD)
+            {
+                return true;
+            }
+
+            /*
+             * 当前 wait/wait4 已经通过 wakeup(parent) 显式唤醒父进程回收 zombie。
+             * SIGCHLD 的用户态 handler 路径还不够稳，libc-bench 这类高频 fork/wait
+             * 会把每轮子进程退出都变成一次信号帧往返，最终打断基准进程。
+             * 但 clone3 允许用户显式设置 exit_signal 并依赖 SIGCHLD 投递结果。
+             * 因此普通 fork/旧 clone 的 SIGCHLD 仍只承担 wait 唤醒语义；
+             * clone3 显式 exit_signal 场景按 Linux 投递，覆盖 clone301。
+             */
+            if (!explicit_signal)
+            {
+                return false;
+            }
+
+            auto *sigchld_action = parent->_sigactions != nullptr
+                                       ? parent->_sigactions->actions[ipc::signal::SIGCHLD]
+                                       : nullptr;
+            using signal_handler_t = ipc::signal::__sighandler_t;
+            return sigchld_action != nullptr &&
+                   sigchld_action->sa_handler != nullptr &&
+                   sigchld_action->sa_handler != reinterpret_cast<signal_handler_t>(1);
         }
 
 #ifdef LOONGARCH
@@ -477,44 +488,6 @@ namespace proc
                 return static_cast<int>(max_open_files);
             }
             return static_cast<int>(limit);
-        }
-
-        void dump_fd_table(proc::Pcb *proc, const char *reason)
-        {
-            if (proc == nullptr || proc->_ofile == nullptr)
-            {
-                printfRed("[fd-dump] %s: proc/ofile 为空\n", reason == nullptr ? "unknown" : reason);
-                return;
-            }
-
-            printfRed("[fd-dump] %s pid=%d tid=%d name=%s\n",
-                      reason == nullptr ? "unknown" : reason,
-                      proc->_pid,
-                      proc->_tid,
-                      proc->_name);
-
-            for (int i = 0; i < (int)max_open_files; ++i)
-            {
-                fs::file *entry = proc->_ofile->_ofile_ptr[i];
-                if (entry == nullptr)
-                {
-                    continue;
-                }
-
-                if (!is_probably_live_file_object(entry))
-                {
-                    printfRed("[fd-dump] fd=%d file=%p <invalid>\n", i, entry);
-                    continue;
-                }
-
-                printfBlue("[fd-dump] fd=%d file=%p ref=%d type=%d virtual=%d path=%s\n",
-                           i,
-                           entry,
-                           (int)entry->refcnt,
-                           (int)entry->_attrs.filetype,
-                           entry->is_virtual ? 1 : 0,
-                           entry->_path_name.c_str());
-            }
         }
 
         inline bool is_exec_whitespace(char ch)
@@ -1124,98 +1097,6 @@ namespace proc
 
         // 调用标准的PCB清理
         freeproc(p);
-    }
-
-    void ProcessManager::debug_process_states()
-    {
-        /****************************************************************************************
-         * 调试函数：打印所有进程的状态信息
-         ****************************************************************************************/
-        printf("\n========== Process State Debug Info ==========\n");
-
-        int zombie_count = 0;
-        int running_count = 0;
-        int sleeping_count = 0;
-        int unused_count = 0;
-        int used_count = 0;
-
-        for (uint i = 0; i < num_process; i++)
-        {
-            Pcb &p = k_proc_pool[i];
-            if (p._state == ProcState::UNUSED)
-            {
-                unused_count++;
-                continue;
-            }
-
-            void *user_pc = nullptr;
-            if (p.get_trapframe())
-            {
-#ifdef LOONGARCH
-                user_pc = (void *)p.get_trapframe()->era;
-#else
-                user_pc = (void *)p.get_trapframe()->epc;
-#endif
-            }
-
-            printf("Process[%d]: pid=%d tid=%d tgid=%d name='%s' state=%d parent_pid=%d pgid=%d sid=%d mm=%p tf=%p era=%p futex=%p clear_tid=%p\n",
-                   i, p._pid, p._tid, p._tgid, p._name, (int)p._state,
-                   p._parent ? p._parent->_pid : -1, p._pgid, p._sid,
-                   p.get_memory_manager(),
-                   p.get_trapframe(),
-                   user_pc,
-                   p._futex_addr,
-                   (void *)p._clear_tid_addr);
-
-            switch (p._state)
-            {
-            case ProcState::ZOMBIE:
-                zombie_count++;
-                printf("  -> ZOMBIE: xstate=%d, waiting for parent to collect\n", p._xstate);
-                break;
-            case ProcState::RUNNABLE:
-                running_count++;
-                printf("  -> RUNNABLE: chan=%p futex=%p\n", p._chan, p._futex_addr);
-                break;
-            case ProcState::RUNNING:
-                running_count++;
-                printf("  -> RUNNING: chan=%p futex=%p\n", p._chan, p._futex_addr);
-                break;
-            case ProcState::SLEEPING:
-                sleeping_count++;
-                printf("  -> SLEEPING: chan=%p futex=%p\n", p._chan, p._futex_addr);
-                break;
-            case ProcState::USED:
-                used_count++;
-                break;
-            default:
-                printf("  -> UNKNOWN STATE: %d\n", (int)p._state);
-                break;
-            }
-        }
-
-        printf("Summary: UNUSED=%d, USED=%d, RUNNABLE=%d, SLEEPING=%d, ZOMBIE=%d\n",
-               unused_count, used_count, running_count, sleeping_count, zombie_count);
-        printf("===============================================\n\n");
-    }
-
-    bool ProcessManager::verify_process_cleanup(int pid)
-    {
-        /****************************************************************************************
-         * 验证函数：检查指定PID的进程是否正确清理
-         ****************************************************************************************/
-        for (uint i = 0; i < num_process; i++)
-        {
-            Pcb &p = k_proc_pool[i];
-            if (p._pid == pid && p._state != ProcState::UNUSED)
-            {
-                printf("[ERROR] Process pid %d still exists in state %d after cleanup\n",
-                       pid, (int)p._state);
-                return false;
-            }
-        }
-        printf("[OK] Process pid %d successfully cleaned up\n", pid);
-        return true;
     }
 
     int ProcessManager::get_cur_cpuid()
@@ -2267,7 +2148,6 @@ namespace proc
 
     int ProcessManager::wait4(int child_pid, uint64 addr, int option)
     {
-        // debug_process_states();
         Pcb *p = k_pm.get_cur_pcb();
         printfBlue("[wait4] pid: %d child_pid: %d, addr: %p, option: %d\n",
                    p->_pid, child_pid, (void *)addr, option);
@@ -2442,7 +2322,6 @@ namespace proc
     // 辅助函数：检查特定PID是否还有剩余线程
     bool ProcessManager::has_remaining_threads(Pcb *parent, int target_pid)
     {
-        // debug_process_states();
         for (uint i = 0; i < num_process; i++)
         {
             Pcb *np = &k_proc_pool[i];
@@ -2783,7 +2662,6 @@ namespace proc
     /// https://man7.org/linux/man-pages/man2/exit_group.2.html
     void ProcessManager::exit_group(int status)
     {
-        // debug_process_states();
         proc::Pcb *cp = get_cur_pcb();
 
         // printf("[exit_group] Thread group %d (leader pid %d) exiting with status %d\n",
@@ -2792,8 +2670,6 @@ namespace proc
         mark_thread_group_killed(cp);
 
         // printf("[exit_group] Current thread pid %d exiting normally\n", cp->_pid);
-
-        // debug_process_states();
 
         // 当前线程正常退出，其他线程会在调度时检查killed标志并自行退出
         do_exit(cp, status);
@@ -3333,23 +3209,9 @@ namespace proc
         fs::file *f = p->_ofile->_ofile_ptr[fd];
         if (!is_probably_live_file_object(f))
         {
-            printfRed("[fstat] 检测到异常文件指针: pid=%d tid=%d name=%s fd=%d file=%p\n",
-                      p->_pid, p->_tid, p->_name, fd, f);
-            dump_fd_table(p, "fstat-invalid-file");
             return -EBADF;
         }
 
-        if (is_busybox_like_proc(p))
-        {
-            printfBlue("[fstat] pid=%d fd=%d file=%p ref=%d type=%d virtual=%d path=%s\n",
-                       p->_pid,
-                       fd,
-                       f,
-                       (int)f->refcnt,
-                       (int)f->_attrs.filetype,
-                       f->is_virtual ? 1 : 0,
-                       f->_path_name.c_str());
-        }
         return fs::k_vfs.fstat(f, buf);
     }
     int ProcessManager::chdir(eastl::string &path)

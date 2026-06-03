@@ -457,6 +457,52 @@ namespace mem
         return 0;
     }
 
+    int VirtualMemoryManager::ensure_user_read_range(PageTable &pt, uint64 src_va, uint64 len)
+    {
+        if (len == 0)
+        {
+            return 0;
+        }
+        if (src_va + len < src_va)
+        {
+            return -1;
+        }
+
+        proc::Pcb *proc = proc::k_pm.get_cur_pcb();
+        uint64 cursor = src_va;
+        uint64 remaining = len;
+        while (remaining > 0)
+        {
+            uint64 page_va = PGROUNDDOWN(cursor);
+            uint64 ignored_pa = 0;
+            if (resolve_user_read_pa(pt, proc, cursor, ignored_pa) != 0)
+            {
+                return -1;
+            }
+
+            uint64 chunk = PGSIZE - (cursor - page_va);
+            if (chunk > remaining)
+            {
+                chunk = remaining;
+            }
+            cursor += chunk;
+            remaining -= chunk;
+        }
+        return 0;
+    }
+
+    int VirtualMemoryManager::user_read_kernel_address(PageTable &pt, uint64 src_va, uint64 &kernel_addr)
+    {
+        proc::Pcb *proc = proc::k_pm.get_cur_pcb();
+        uint64 page_addr = 0;
+        if (resolve_user_read_pa(pt, proc, src_va, page_addr) != 0)
+        {
+            return -1;
+        }
+        kernel_addr = page_addr + (src_va - PGROUNDDOWN(src_va));
+        return 0;
+    }
+
     int VirtualMemoryManager::copy_str_in(PageTable &pt, void *dst,
                                           uint64 src_va, uint64 max)
     {
