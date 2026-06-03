@@ -296,38 +296,84 @@ namespace proc
             return {shm::k_smm.ftok(backing_path.c_str(), 0), false};
         }
 
-        inline bool should_deliver_child_exit_signal(const proc::Pcb *parent, int signum, bool explicit_signal)
+        inline bool is_ignored_signal_action(const ipc::signal::sigaction *act)
         {
-            if (parent == nullptr || signum <= 0)
-            {
-                return false;
-            }
+            return act != nullptr &&
+                   act->sa_handler == reinterpret_cast<ipc::signal::__sighandler_t>(1);
+        }
 
-            if (signum != ipc::signal::SIGCHLD)
+        bool reset_signal_state_for_exec(proc::Pcb *proc)
+        {
+            if (proc == nullptr || proc->_sigactions == nullptr)
             {
                 return true;
             }
 
             /*
-             * 当前 wait/wait4 已经通过 wakeup(parent) 显式唤醒父进程回收 zombie。
-             * SIGCHLD 的用户态 handler 路径还不够稳，libc-bench 这类高频 fork/wait
-             * 会把每轮子进程退出都变成一次信号帧往返，最终打断基准进程。
-             * 但 clone3 允许用户显式设置 exit_signal 并依赖 SIGCHLD 投递结果。
-             * 因此普通 fork/旧 clone 的 SIGCHLD 仍只承担 wait 唤醒语义；
-             * clone3 显式 exit_signal 场景按 Linux 投递，覆盖 clone301。
+             * POSIX/Linux execve 只替换进程映像，不继承用户态捕获 handler；
+             * SIG_IGN 需要保留，信号 mask 和 pending signal 继续由原进程状态承载。
+             * 若 sighand 被 CLONE_SIGHAND 共享，先私有化，避免 exec 当前任务时改坏其它共享者。
              */
-            if (!explicit_signal)
+            if (proc->_sigactions->refcnt > 1)
             {
-                return false;
+                sighand_struct *old_actions = proc->_sigactions;
+                sighand_struct *new_actions = new sighand_struct();
+                if (new_actions == nullptr)
+                {
+                    return false;
+                }
+                new_actions->refcnt = 1;
+                for (int sig = 0; sig <= ipc::signal::SIGRTMAX; ++sig)
+                {
+                    new_actions->actions[sig] = nullptr;
+                }
+
+                for (int sig = 1; sig <= ipc::signal::SIGRTMAX; ++sig)
+                {
+                    ipc::signal::sigaction *act = old_actions->actions[sig];
+                    if (!is_ignored_signal_action(act))
+                    {
+                        continue;
+                    }
+
+                    new_actions->actions[sig] = new ipc::signal::sigaction;
+                    if (new_actions->actions[sig] == nullptr)
+                    {
+                        for (int cleanup_sig = 1; cleanup_sig < sig; ++cleanup_sig)
+                        {
+                            delete new_actions->actions[cleanup_sig];
+                            new_actions->actions[cleanup_sig] = nullptr;
+                        }
+                        delete new_actions;
+                        return false;
+                    }
+                    *(new_actions->actions[sig]) = *act;
+                }
+
+                old_actions->refcnt--;
+                proc->_sigactions = new_actions;
+            }
+            else
+            {
+                for (int sig = 1; sig <= ipc::signal::SIGRTMAX; ++sig)
+                {
+                    ipc::signal::sigaction *act = proc->_sigactions->actions[sig];
+                    if (act == nullptr || is_ignored_signal_action(act))
+                    {
+                        continue;
+                    }
+
+                    delete act;
+                    proc->_sigactions->actions[sig] = nullptr;
+                }
             }
 
-            auto *sigchld_action = parent->_sigactions != nullptr
-                                       ? parent->_sigactions->actions[ipc::signal::SIGCHLD]
-                                       : nullptr;
-            using signal_handler_t = ipc::signal::__sighandler_t;
-            return sigchld_action != nullptr &&
-                   sigchld_action->sa_handler != nullptr &&
-                   sigchld_action->sa_handler != reinterpret_cast<signal_handler_t>(1);
+            // sigaltstack 不跨 execve 继承，避免新程序看到旧地址空间中的备用栈元数据。
+            proc->_alt_stack.ss_sp = nullptr;
+            proc->_alt_stack.ss_flags = ipc::signal::SS_DISABLE;
+            proc->_alt_stack.ss_size = 0;
+            proc->_on_sigstack = false;
+            return true;
         }
 
 #ifdef LOONGARCH
@@ -1665,6 +1711,7 @@ namespace proc
                               uint64 ctid, bool is_clone3, int exit_signal)
     {
         TODO("copy on write fork");
+        (void)is_clone3;
 
         // ===== 基础验证和资源分配 =====
         // 参数验证
@@ -2571,8 +2618,7 @@ namespace proc
             p->_parent->_cstime += p->_stime + p->_cstime;
             if (p->_parent_exit_signal > 0)
             {
-                // 非线程子任务退出后必须按 exit_signal 投递父进程信号；
-                // wait/wait4 的 wakeup 只能唤醒内核等待，不能替代用户态 SIGCHLD 语义。
+                // 子任务退出必须生成 exit_signal；默认 SIGCHLD 的忽略/阻塞/handler 由信号层统一处理。
                 p->_parent->add_signal(p->_parent_exit_signal);
             }
             p->_parent->_lock.release();
@@ -6023,6 +6069,11 @@ namespace proc
         {
             printfRed("execve: copy argc failed\n");
             CLEANUP_AND_RETURN(-EFAULT);
+        }
+
+        if (!reset_signal_state_for_exec(proc))
+        {
+            CLEANUP_AND_RETURN(-ENOMEM);
         }
 
         // 步骤13: 保存程序名用于调试
