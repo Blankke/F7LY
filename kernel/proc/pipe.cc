@@ -13,6 +13,7 @@
 
 #include "fs/vfs/file/file.hh"
 #include "fs/vfs/file/pipe_file.hh"
+#include "printer.hh"
 #include "signal.hh"
 #include "scheduler.hh"
 // #include "fs/vfs/fs_defs.hh"
@@ -153,7 +154,9 @@ namespace proc
 				i++;
 			}
 
-			bool should_handoff_reader = n <= 8 && wake_waiters_locked(true);
+			// 无论写入多大，都必须唤醒等待读者；只有小消息 ping-pong 才额外让出 CPU。
+			bool woke_reader = wake_waiters_locked(true);
+			bool should_handoff_reader = n <= 8 && woke_reader;
 			if (i > 0)
 			{
 				// 只补 LTP fcntl31 依赖的最小 SIGIO/SIGUSR1 语义：
@@ -237,7 +240,9 @@ namespace proc
 				}
 			}
 
-			bool should_handoff_reader = n <= 8 && wake_waiters_locked(true);
+			// 无论写入多大，都必须唤醒等待读者；只有小消息 ping-pong 才额外让出 CPU。
+			bool woke_reader = wake_waiters_locked(true);
+			bool should_handoff_reader = n <= 8 && woke_reader;
 			if (i > 0)
 			{
 				notify_async_reader_locked();
@@ -257,11 +262,15 @@ namespace proc
 			Pcb *pr = k_pm.get_cur_pcb();
 
 			_lock.acquire();
+			printf("[pipe-debug] write-enter pid=%d n=%d count=%u size=%u read_open=%d write_open=%d nonblock=%d\n",
+			       pr->_pid, n, _count, _pipe_size, _read_is_open, _write_is_open, _nonblock);
 
 			while (i < n)
 			{
 				if (!_read_is_open || pr->is_killed())
 				{
+					printf("[pipe-debug] write-stop pid=%d done=%d read_open=%d killed=%d\n",
+					       pr->_pid, i, _read_is_open, pr->is_killed());
 					_lock.release();
 					if (!_read_is_open && !pr->is_killed())
 					{
@@ -275,18 +284,26 @@ namespace proc
 				{
 					if (proc::ipc::signal::has_unmasked_signal_pending(pr))
 					{
+						printf("[pipe-debug] write-interrupted pid=%d done=%d count=%u\n",
+						       pr->_pid, i, _count);
 						_lock.release();
 						return i > 0 ? i : syscall::SYS_EINTR;
 					}
 
 					if (_nonblock)
 					{
+						printf("[pipe-debug] write-eagain pid=%d done=%d count=%u\n",
+						       pr->_pid, i, _count);
 						_lock.release();
 						return i > 0 ? i : syscall::SYS_EAGAIN;
 					}
 					wake_waiters_locked(true);
 					note_waiter_locked(false, pr);
+					printf("[pipe-debug] write-sleep pid=%d done=%d count=%u size=%u\n",
+					       pr->_pid, i, _count, _pipe_size);
 					k_pm.sleep(&_write_sleep, &_lock);
+					printf("[pipe-debug] write-wakeup pid=%d done=%d count=%u size=%u\n",
+					       pr->_pid, i, _count, _pipe_size);
 					forget_waiter_locked(false, pr);
 					continue;
 				}
@@ -303,6 +320,8 @@ namespace proc
 				}
 				if (mem::k_vmm.copy_in(pt, _buffer + _tail, addr + i, chunk) < 0)
 				{
+					printf("[pipe-debug] write-copyin-fail pid=%d done=%d chunk=%u\n",
+					       pr->_pid, i, chunk);
 					_lock.release();
 					return i > 0 ? i : syscall::SYS_EFAULT;
 				}
@@ -311,11 +330,15 @@ namespace proc
 				i += static_cast<int>(chunk);
 			}
 
-			bool should_handoff_reader = n <= 8 && wake_waiters_locked(true);
+			// 无论写入多大，都必须唤醒等待读者；只有小消息 ping-pong 才额外让出 CPU。
+			bool woke_reader = wake_waiters_locked(true);
+			bool should_handoff_reader = n <= 8 && woke_reader;
 			if (i > 0)
 			{
 				notify_async_reader_locked();
 			}
+			printf("[pipe-debug] write-return pid=%d ret=%d count=%u handoff=%d\n",
+			       pr->_pid, i, _count, should_handoff_reader);
 			_lock.release();
 			if (i > 0 && should_handoff_reader)
 			{
@@ -391,27 +414,36 @@ namespace proc
 			Pcb *pr = k_pm.get_cur_pcb();
 
 			_lock.acquire();
+			printf("[pipe-debug] read-enter pid=%d n=%d count=%u size=%u read_open=%d write_open=%d nonblock=%d\n",
+			       pr->_pid, n, _count, _pipe_size, _read_is_open, _write_is_open, _nonblock);
 
 			while (_count == 0 && _write_is_open)
 			{
 				if (pr->is_killed())
 				{
+					printf("[pipe-debug] read-killed pid=%d\n", pr->_pid);
 					_lock.release();
 					return -1;
 				}
 
 				if (_nonblock)
 				{
+					printf("[pipe-debug] read-eagain pid=%d count=%u\n", pr->_pid, _count);
 					_lock.release();
 					return syscall::SYS_EAGAIN;
 				}
 				if (proc::ipc::signal::has_unmasked_signal_pending(pr))
 				{
+					printf("[pipe-debug] read-interrupted pid=%d count=%u\n", pr->_pid, _count);
 					_lock.release();
 					return syscall::SYS_EINTR;
 				}
 				note_waiter_locked(true, pr);
+				printf("[pipe-debug] read-sleep pid=%d count=%u write_open=%d\n",
+				       pr->_pid, _count, _write_is_open);
 				k_pm.sleep(&_read_sleep, &_lock);
+				printf("[pipe-debug] read-wakeup pid=%d count=%u write_open=%d\n",
+				       pr->_pid, _count, _write_is_open);
 				forget_waiter_locked(true, pr);
 			}
 
@@ -428,6 +460,8 @@ namespace proc
 				}
 				if (mem::k_vmm.copy_out(pt, addr + i, _buffer + _head, chunk) < 0)
 				{
+					printf("[pipe-debug] read-copyout-fail pid=%d done=%d chunk=%u\n",
+					       pr->_pid, i, chunk);
 					_lock.release();
 					return i > 0 ? i : syscall::SYS_EFAULT;
 				}
@@ -437,6 +471,8 @@ namespace proc
 			}
 
 			wake_waiters_locked(false);
+			printf("[pipe-debug] read-return pid=%d ret=%d count=%u write_open=%d\n",
+			       pr->_pid, i, _count, _write_is_open);
 			_lock.release();
 
 			return i;
@@ -514,7 +550,10 @@ namespace proc
 
 		void Pipe::close(bool is_write)
 		{
+			Pcb *pr = k_pm.get_cur_pcb();
 			_lock.acquire();
+			printf("[pipe-debug] close-enter pid=%d is_write=%d count=%u read_open=%d write_open=%d\n",
+			       pr->_pid, is_write, _count, _read_is_open, _write_is_open);
 			if (is_write)
 			{
 				_write_is_open = false;
@@ -528,10 +567,15 @@ namespace proc
 
 			if (!_read_is_open && !_write_is_open)
 			{
+				printf("[pipe-debug] close-delete pid=%d is_write=%d count=%u\n",
+				       pr->_pid, is_write, _count);
 				_lock.release();
 				delete this;
 			}
-			else{
+			else
+			{
+				printf("[pipe-debug] close-return pid=%d is_write=%d count=%u read_open=%d write_open=%d\n",
+				       pr->_pid, is_write, _count, _read_is_open, _write_is_open);
 				_lock.release();
 			}
 		}
