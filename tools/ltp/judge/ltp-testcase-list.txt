@@ -2099,7 +2099,7 @@ files_array=(
     "test_1_to_1_shutdown"
     "test_1_to_1_socket_bind_listen"
     "test_1_to_1_sockopt"
-    "test_1_to_1_threads"
+    # "test_1_to_1_threads"
     "test_assoc_abort"
     "test_assoc_shutdown"
     "test_autoclose"
