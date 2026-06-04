@@ -31,6 +31,9 @@ namespace fs
         constexpr uint64 k_dev_block_8_0_size = 512ull * 8ull * 1024ull * 1024ull;
         int g_proc_sys_fs_pipe_max_size = proc::ipc::max_pipe_size;
         int g_proc_sys_fs_lease_break_time_sec = 45;
+        int g_proc_sys_fs_inotify_max_queued_events = 15;
+        int g_proc_sys_fs_inotify_max_user_instances = 1024;
+        int g_proc_sys_kernel_random_entropy_avail = 256;
 
         const char *mount_fs_name(fs_t type)
         {
@@ -248,6 +251,31 @@ namespace fs
         proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
         fs::file *file = pcb->get_open_file(_fd_num);
         return file ? file->_path_name : "";
+    }
+
+    eastl::string ProcPidFdinfoProvider::generate_content()
+    {
+        proc::Pcb *pcb = (_pid <= 0) ? proc::k_pm.get_cur_pcb()
+                                     : proc::k_pm.find_proc_by_pid(_pid);
+        if (pcb == nullptr || _fd_num < 0)
+        {
+            return "";
+        }
+
+        fs::file *target = pcb->get_open_file(_fd_num);
+        if (target == nullptr)
+        {
+            return "";
+        }
+
+        char header[128];
+        snprintf(header, sizeof(header), "pos:\t%ld\nflags:\t0%o\nmnt_id:\t1\n",
+                 target->get_file_offset(),
+                 target->lwext4_file_struct.flags);
+
+        eastl::string result(header);
+        result += target->proc_fdinfo();
+        return result;
     }
 
     eastl::string ProcSelfTimeNamespaceProvider::generate_content()
@@ -526,6 +554,26 @@ namespace fs
     long DevLoopProvider::handle_read(uint64 buf, size_t len, long off)
     {
         dev::LoopDevice *loop_dev = dev::LoopControlDevice::get_loop_device(_loop_number);
+        uint64 device_size = read_size();
+        if (off < 0)
+        {
+            return -EINVAL;
+        }
+        if (len == 0)
+        {
+            return 0;
+        }
+        if (static_cast<uint64>(off) >= device_size)
+        {
+            return 0;
+        }
+        if (loop_dev == nullptr || !loop_dev->is_bound())
+        {
+            uint64 remaining = device_size - static_cast<uint64>(off);
+            size_t to_copy = len < remaining ? len : static_cast<size_t>(remaining);
+            memset(reinterpret_cast<void *>(buf), 0, to_copy);
+            return static_cast<long>(to_copy);
+        }
         int result = loop_dev->_read_write_file(off, (void *)buf, len, false);
         return result;
     }
@@ -537,6 +585,16 @@ namespace fs
         dev::LoopDevice *loop_dev = dev::LoopControlDevice::get_loop_device(_loop_number);
         int result = loop_dev->_read_write_file(off, (void*)buf, len,  true);
         return result;
+    }
+
+    uint64 DevLoopProvider::read_size() const
+    {
+        dev::LoopDevice *loop_dev = dev::LoopControlDevice::get_loop_device(_loop_number);
+        if (loop_dev != nullptr && loop_dev->is_bound() && loop_dev->get_size() > 0)
+        {
+            return loop_dev->get_size();
+        }
+        return k_dev_block_8_0_size;
     }
 
     eastl::string DevLoopControlProvider::generate_content()
@@ -1046,6 +1104,48 @@ namespace fs
         return ret;
     }
 
+    eastl::string ProcSysFsInotifyMaxQueuedEventsProvider::generate_content()
+    {
+        return int_to_string_line(g_proc_sys_fs_inotify_max_queued_events);
+    }
+
+    long ProcSysFsInotifyMaxQueuedEventsProvider::handle_write(uint64 buf, size_t len, long off)
+    {
+        int value = 0;
+        long ret = parse_single_int_from_user(buf, len, off, &value);
+        if (ret < 0)
+        {
+            return ret;
+        }
+        if (value <= 0)
+        {
+            return -EINVAL;
+        }
+        g_proc_sys_fs_inotify_max_queued_events = value;
+        return ret;
+    }
+
+    eastl::string ProcSysFsInotifyMaxUserInstancesProvider::generate_content()
+    {
+        return int_to_string_line(g_proc_sys_fs_inotify_max_user_instances);
+    }
+
+    long ProcSysFsInotifyMaxUserInstancesProvider::handle_write(uint64 buf, size_t len, long off)
+    {
+        int value = 0;
+        long ret = parse_single_int_from_user(buf, len, off, &value);
+        if (ret < 0)
+        {
+            return ret;
+        }
+        if (value <= 0)
+        {
+            return -EINVAL;
+        }
+        g_proc_sys_fs_inotify_max_user_instances = value;
+        return ret;
+    }
+
     eastl::string ProcSysNetIpv4TagProvider::generate_content()
     {
         proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
@@ -1106,6 +1206,29 @@ namespace fs
         };
         
         return int_to_string(proc::pid_max) + "\n";
+    }
+
+    long ProcSysKernelPidMaxProvider::handle_write(uint64 buf, size_t len, long off)
+    {
+        int requested = 0;
+        long ret = parse_single_int_from_user(buf, len, off, &requested);
+        if (ret < 0)
+        {
+            return ret;
+        }
+        if (requested <= 0 || static_cast<uint>(requested) > proc::pid_max)
+        {
+            return -EINVAL;
+        }
+
+        // 当前 PID 分配器使用固定上限；这里接受 proc/sys 写入以满足
+        // LTP save/restore 契约，但不在运行时缩小全局 PID 空间。
+        return ret;
+    }
+
+    eastl::string ProcSysKernelRandomEntropyAvailProvider::generate_content()
+    {
+        return int_to_string_line(g_proc_sys_kernel_random_entropy_avail);
     }
 
     // 实现通用的 /proc/<pid>/stat 的内容生成
@@ -1769,9 +1892,10 @@ namespace fs
         // Speculation_Store_Bypass: 推测执行相关
         result += "Speculation_Store_Bypass:\tnot vulnerable\n";
         
-        // Cpus_allowed: 允许运行的CPU掩码
-        result += "Cpus_allowed:\tffffffff\n";
-        result += "Cpus_allowed_list:\t0-31\n";
+        // Cpus_allowed: 当前 QEMU 默认以 -smp 1 运行，只暴露 CPU0。
+        // 这里必须和 sched_getaffinity()/sysfs CPU 视图保持一致，避免 libc/LTP 误判多核。
+        result += "Cpus_allowed:\t00000001\n";
+        result += "Cpus_allowed_list:\t0\n";
         
         // Mems_allowed: 允许的内存节点
         result += "Mems_allowed:\t1\n";

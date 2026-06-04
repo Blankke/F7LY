@@ -16,9 +16,9 @@ struct cpuinfo
     eastl::string cpu_MHz         = "2995.197";
     eastl::string cache_size      = "24576 KB";
     eastl::string physical_id     = "0";
-    eastl::string siblings        = "20";
+    eastl::string siblings        = "1";
     eastl::string core_id         = "0";
-    eastl::string cpu_cores       = "10";
+    eastl::string cpu_cores       = "1";
     eastl::string apicid          = "0";
     eastl::string initial_apicid  = "0";
     eastl::string fpu             = "yes";

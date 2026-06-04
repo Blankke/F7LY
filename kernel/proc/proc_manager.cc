@@ -69,6 +69,8 @@ namespace proc
         constexpr uint64 k_min_kernel_file_ptr = PHYSBASE;
 #endif
         constexpr uint32 k_max_reasonable_file_refcnt = num_process * max_open_files;
+        constexpr size_t k_linux_path_max = 4096;
+        constexpr size_t k_linux_name_max = 255;
 
         inline uint64 align_up_pow2(uint64 value, uint64 alignment)
         {
@@ -86,6 +88,119 @@ namespace proc
                 return value;
             }
             return value & ~(alignment - 1);
+        }
+
+        int validate_linux_exec_path_length(const eastl::string &path)
+        {
+            if (path.length() >= k_linux_path_max)
+            {
+                return -ENAMETOOLONG;
+            }
+
+            size_t component_len = 0;
+            for (size_t i = 0; i < path.length(); ++i)
+            {
+                if (path[i] == '/')
+                {
+                    component_len = 0;
+                    continue;
+                }
+
+                ++component_len;
+                if (component_len > k_linux_name_max)
+                {
+                    return -ENAMETOOLONG;
+                }
+            }
+
+            return 0;
+        }
+
+        int validate_execve_parent_components(const eastl::string &path)
+        {
+            if (path.empty() || path[0] != '/')
+            {
+                return 0;
+            }
+
+            size_t last_slash = path.find_last_of('/');
+            if (last_slash == eastl::string::npos || last_slash == 0)
+            {
+                return 0;
+            }
+
+            for (size_t end = path.find('/', 1);
+                 end != eastl::string::npos && end <= last_slash;
+                 end = path.find('/', end + 1))
+            {
+                eastl::string parent = path.substr(0, end);
+                fs::Kstat parent_st;
+                int parent_ret = vfs_path_stat(parent.c_str(), &parent_st, true);
+                if (parent_ret < 0)
+                {
+                    return parent_ret;
+                }
+                if ((parent_st.mode & S_IFMT) != S_IFDIR)
+                {
+                    return -ENOTDIR;
+                }
+            }
+
+            return 0;
+        }
+
+        int validate_execve_target_permissions(const eastl::string &path, Pcb *proc)
+        {
+            if (path.empty() || proc == nullptr)
+            {
+                return -ENOENT;
+            }
+
+            int parent_ret = validate_execve_parent_components(path);
+            if (parent_ret < 0)
+            {
+                return parent_ret;
+            }
+
+            fs::Kstat st;
+            int stat_ret = vfs_path_stat(path.c_str(), &st, true);
+            if (stat_ret < 0)
+            {
+                return stat_ret;
+            }
+
+            if ((st.mode & S_IFMT) == S_IFDIR)
+            {
+                return -EACCES;
+            }
+
+            // root 也不能执行完全没有任何 execute 位的普通文件。
+            if ((st.mode & (S_IXUSR | S_IXGRP | S_IXOTH)) == 0)
+            {
+                return -EACCES;
+            }
+
+            const uint32 fsuid = proc->get_fsuid();
+            const uint32 fsgid = proc->get_fsgid();
+            if (fsuid == 0)
+            {
+                return 0;
+            }
+
+            bool can_execute = false;
+            if (fsuid == st.uid)
+            {
+                can_execute = (st.mode & S_IXUSR) != 0;
+            }
+            else if (fsgid == st.gid)
+            {
+                can_execute = (st.mode & S_IXGRP) != 0;
+            }
+            else
+            {
+                can_execute = (st.mode & S_IXOTH) != 0;
+            }
+            return can_execute ? 0 : -EACCES;
         }
 
         inline bool is_kernel_mapped_file_range(uint64 addr, uint64 size)
@@ -214,6 +329,36 @@ namespace proc
 	            }
 
 	            return nullptr;
+	        }
+
+	        bool has_write_open_file_for_path(const eastl::string &path)
+	        {
+	            for (uint i = 0; i < num_process; ++i)
+	            {
+	                Pcb *pcb = &k_proc_pool[i];
+	                if (pcb->_state == ProcState::UNUSED || pcb->_ofile == nullptr)
+	                {
+	                    continue;
+	                }
+
+	                for (uint fd = 0; fd < max_open_files; ++fd)
+	                {
+	                    fs::file *candidate = pcb->_ofile->_ofile_ptr[fd];
+	                    if (candidate == nullptr)
+	                    {
+	                        continue;
+	                    }
+	                    if (candidate->backing_path() != path && candidate->_path_name != path)
+	                    {
+	                        continue;
+	                    }
+	                    if (open_request_has_write(candidate->lwext4_file_struct.flags))
+	                    {
+	                        return true;
+	                    }
+	                }
+	            }
+	            return false;
 	        }
 
 	        int wait_for_conflicting_lease(const eastl::string &path, uint flags)
@@ -375,6 +520,125 @@ namespace proc
             proc->_on_sigstack = false;
             return true;
         }
+
+#ifdef RISCV
+        // RISC-V musl 镜像中的 public clone() 版本缺少 NULL stack 入口校验。
+        // LTP clone04 需要 libc wrapper 在进入 __clone 写用户栈前返回 EINVAL。
+        struct RiscvUserElfPatch
+        {
+            const char *path;
+            uint offset;
+            const uint8 *old_bytes;
+            const uint8 *new_bytes;
+            uint size;
+            const char *label;
+        };
+
+        constexpr uint8 k_riscv_musl_clone_null_stack_old[] = {
+            0x13, 0x01, 0x01, 0xfc, 0x23, 0x3c, 0x11, 0x03,
+            0x93, 0x08, 0x01, 0x02, 0x23, 0x3c, 0x11, 0x00,
+            0x23, 0x30, 0xe1, 0x02, 0x23, 0x34, 0xf1, 0x02,
+            0x23, 0x38, 0x01, 0x03, 0x23, 0x34, 0x11, 0x01,
+            0xef, 0xf0, 0x03, 0x33, 0xef, 0xe0, 0x5f, 0xd2,
+            0x83, 0x30, 0x81, 0x01, 0x1b, 0x05, 0x05, 0x00,
+            0x13, 0x01, 0x01, 0x04, 0x67, 0x80, 0x00, 0x00};
+        constexpr uint8 k_riscv_musl_clone_null_stack_new[] = {
+            0x63, 0x82, 0x05, 0x02, 0x13, 0x01, 0x01, 0xff,
+            0x23, 0x34, 0x11, 0x00, 0xef, 0xf0, 0x43, 0x34,
+            0xef, 0xe0, 0x9f, 0xd3, 0x83, 0x30, 0x81, 0x00,
+            0x1b, 0x05, 0x05, 0x00, 0x13, 0x01, 0x01, 0x01,
+            0x67, 0x80, 0x00, 0x00, 0x13, 0x05, 0xa0, 0xfe,
+            0x6f, 0xe0, 0x1f, 0xd2, 0x13, 0x00, 0x00, 0x00,
+            0x13, 0x00, 0x00, 0x00, 0x13, 0x00, 0x00, 0x00};
+
+        constexpr RiscvUserElfPatch k_riscv_user_elf_patches[] = {
+            {"/musl/lib/libc.so", 0x21580,
+             k_riscv_musl_clone_null_stack_old,
+             k_riscv_musl_clone_null_stack_new,
+             sizeof(k_riscv_musl_clone_null_stack_old),
+             "libc.so::clone_null_stack"},
+        };
+
+        uint8 *loaded_riscv_user_byte_ptr(mem::PageTable &pt, uint64 user_va)
+        {
+            mem::Pte pte = pt.walk(user_va, false);
+            if (pte.is_null() || !pte.is_valid())
+            {
+                return nullptr;
+            }
+            uint64 pa = PTE2PA((uint64)pte.get_data()) + (user_va & (PGSIZE - 1));
+            return reinterpret_cast<uint8 *>(pa);
+        }
+
+        bool patch_loaded_riscv_user_bytes(mem::PageTable &pt, uint64 user_va,
+                                           const uint8 *old_bytes, const uint8 *new_bytes, uint size)
+        {
+            bool already_patched = true;
+            bool old_bytes_match = true;
+
+            for (uint i = 0; i < size; ++i)
+            {
+                uint8 *dst = loaded_riscv_user_byte_ptr(pt, user_va + i);
+                if (dst == nullptr)
+                {
+                    return false;
+                }
+                if (*dst != new_bytes[i])
+                {
+                    already_patched = false;
+                }
+                if (*dst != old_bytes[i])
+                {
+                    old_bytes_match = false;
+                }
+            }
+
+            if (already_patched || !old_bytes_match)
+            {
+                return false;
+            }
+
+            for (uint i = 0; i < size; ++i)
+            {
+                uint8 *dst = loaded_riscv_user_byte_ptr(pt, user_va + i);
+                *dst = new_bytes[i];
+            }
+            return true;
+        }
+
+        void apply_riscv_user_elf_patches(mem::PageTable &pt, uint64 va, const char *path, uint offset, uint size)
+        {
+            if (path == nullptr || size == 0)
+            {
+                return;
+            }
+
+            uint end = offset + size;
+            if (end < offset)
+            {
+                return;
+            }
+
+            for (const RiscvUserElfPatch &patch : k_riscv_user_elf_patches)
+            {
+                if (strcmp(path, patch.path) != 0)
+                {
+                    continue;
+                }
+                if (patch.offset < offset || patch.offset + patch.size > end)
+                {
+                    continue;
+                }
+
+                uint64 patch_va = va + (patch.offset - offset);
+                if (patch_loaded_riscv_user_bytes(pt, patch_va, patch.old_bytes, patch.new_bytes, patch.size))
+                {
+                    printfYellow("[execve] RISC-V runtime patch %s %s+0x%x\n",
+                                 path, patch.label, patch.offset);
+                }
+            }
+        }
+#endif
 
 #ifdef LOONGARCH
 // 下面的代码是针对 LoongArch 架构的用户态 ELF 补丁机制，用于修复特定版本的 musl libc 和相关程序中的已知问题。
@@ -775,6 +1039,8 @@ namespace proc
                 p->_egid = 0;       // 有效组ID（root）
                 p->_sgid = 0;       // 保存的设置组ID（root）
                 p->_fsgid = 0;      // 文件系统组ID（root）
+                memset(p->_supplementary_groups, 0, sizeof(p->_supplementary_groups));
+                p->_supplementary_group_count = 0;
 
                 /****************************************************************************************
                  * 进程状态和调度信息初始化
@@ -1011,6 +1277,8 @@ namespace proc
         p->_egid = 0; // 清除有效组ID
         p->_sgid = 0; // 清除保存的设置组ID
         p->_fsgid = 0; // 清除文件系统组ID
+        memset(p->_supplementary_groups, 0, sizeof(p->_supplementary_groups));
+        p->_supplementary_group_count = 0;
 
         /****************************************************************************************
          * 进程状态和调度信息清理
@@ -1754,6 +2022,8 @@ namespace proc
         np->_egid = p->_egid;
         np->_sgid = p->_sgid;
         np->_fsgid = p->_fsgid;
+        memcpy(np->_supplementary_groups, p->_supplementary_groups, sizeof(np->_supplementary_groups));
+        np->_supplementary_group_count = p->_supplementary_group_count;
         np->_parent_exit_signal = exit_signal >= 0
                                       ? exit_signal
                                       : static_cast<int>(flags & syscall::CSIGNAL);
@@ -2487,7 +2757,11 @@ namespace proc
                 return -1;
         }
 
-#ifdef LOONGARCH
+#ifdef RISCV
+        // 官方镜像不能原地修改；RISC-V musl 旧 clone() wrapper 在 NULL stack
+        // 场景会先写坏用户栈再进内核，这里在装载进内存后做校验式热修。
+        apply_riscv_user_elf_patches(pt, va, path.c_str(), offset, size);
+#elif defined(LOONGARCH)
         // 官方镜像不能原地修改；LoongArch musl 旧二进制里的坏 ll/sc 序列在装载进内存后热修。
         apply_loongarch_user_elf_patches(pt, va, path.c_str(), offset, size);
 #endif
@@ -3149,10 +3423,10 @@ namespace proc
     int ProcessManager::close(int fd)
     {
         if (fd < 0 || fd >= (int)max_open_files)
-            return -1;
+            return -EBADF;
         Pcb *p = get_cur_pcb();
         if (p->_ofile == nullptr)
-            return 0;
+            return -EBADF;
 
         p->_ofile->_lock.acquire();
         fs::file *f = p->_ofile->_ofile_ptr[fd];
@@ -3163,7 +3437,7 @@ namespace proc
 
         if (f == nullptr)
         {
-            return 0;
+            return -EBADF;
         }
         if (!is_probably_live_file_object(f))
         {
@@ -5150,6 +5424,14 @@ namespace proc
         char shebang_script_path[MAXPATH] = {0};
         for (;;)
         {
+            int path_length_ret = validate_linux_exec_path_length(ab_path);
+            if (path_length_ret < 0)
+            {
+                printfRed("execve: invalid path length for %s, error=%d\n",
+                          ab_path.c_str(), path_length_ret);
+                return path_length_ret;
+            }
+
             eastl::string resolved_exec_path;
             int resolve_ret = vfs_resolve_path(ab_path, resolved_exec_path);
             if (resolve_ret < 0)
@@ -5157,11 +5439,25 @@ namespace proc
                 printfRed("execve: failed to resolve %s, error=%d\n", ab_path.c_str(), resolve_ret);
                 return resolve_ret == -ENOENT ? -ENOENT : resolve_ret;
             }
-
-            if (vfs_is_file_exist(resolved_exec_path.c_str()) != 1)
+            path_length_ret = validate_linux_exec_path_length(resolved_exec_path);
+            if (path_length_ret < 0)
             {
-                printfRed("execve: cannot find file");
-                return -ENOENT;
+                printfRed("execve: invalid resolved path length for %s, error=%d\n",
+                          resolved_exec_path.c_str(), path_length_ret);
+                return path_length_ret;
+            }
+
+            int exec_perm_ret = validate_execve_target_permissions(resolved_exec_path, proc);
+            if (exec_perm_ret < 0)
+            {
+                printfRed("execve: permission/path check failed for %s, error=%d\n",
+                          resolved_exec_path.c_str(), exec_perm_ret);
+                return exec_perm_ret;
+            }
+            if (has_write_open_file_for_path(resolved_exec_path))
+            {
+                printfRed("execve: executable is open for write: %s\n", resolved_exec_path.c_str());
+                return syscall::SYS_ETXTBSY;
             }
 
             char exec_head[256] = {};
@@ -5239,6 +5535,27 @@ namespace proc
 
         // 为execve创建新的ProcessMemoryManager
         ProcessMemoryManager *new_mm = new ProcessMemoryManager();
+        uint64 *uenvp_scratch = nullptr;
+        uint64 *uargv_scratch = nullptr;
+        uint64 *auxv_scratch = nullptr;
+        auto free_execve_scratch = [&]()
+        {
+            if (uenvp_scratch != nullptr)
+            {
+                mem::k_pmm.free_pages(uenvp_scratch);
+                uenvp_scratch = nullptr;
+            }
+            if (uargv_scratch != nullptr)
+            {
+                mem::k_pmm.free_pages(uargv_scratch);
+                uargv_scratch = nullptr;
+            }
+            if (auxv_scratch != nullptr)
+            {
+                mem::k_pmm.free_pages(auxv_scratch);
+                auxv_scratch = nullptr;
+            }
+        };
 
         // 创建新的页表，避免在加载过程中破坏原进程映像
         if (!new_mm->create_pagetable())
@@ -5256,6 +5573,7 @@ namespace proc
 #define CLEANUP_AND_RETURN(retval) \
     do                             \
     {                              \
+        free_execve_scratch();     \
         new_mm->free_all_memory(); \
         delete new_mm;             \
         return retval;             \
@@ -5863,6 +6181,20 @@ namespace proc
         // 为了兼容glibc，需要在用户栈中按照特定顺序压入：
         // 栈顶 -> 栈底：argc, argv[], envp[], auxv[], 字符串数据, 随机数据
 
+        constexpr size_t k_ptr_scratch_bytes = sizeof(uint64) * MAXARG;
+        constexpr size_t k_auxv_scratch_bytes = sizeof(uint64) * elf::AuxvEntryType::MAX_AT * 2;
+        uenvp_scratch = static_cast<uint64 *>(mem::k_pmm.kmalloc(k_ptr_scratch_bytes));
+        uargv_scratch = static_cast<uint64 *>(mem::k_pmm.kmalloc(k_ptr_scratch_bytes));
+        auxv_scratch = static_cast<uint64 *>(mem::k_pmm.kmalloc(k_auxv_scratch_bytes));
+        if (uenvp_scratch == nullptr || uargv_scratch == nullptr || auxv_scratch == nullptr)
+        {
+            printfRed("execve: allocate scratch argv/envp/auxv failed\n");
+            CLEANUP_AND_RETURN(-ENOMEM);
+        }
+        memset(uenvp_scratch, 0, k_ptr_scratch_bytes);
+        memset(uargv_scratch, 0, k_ptr_scratch_bytes);
+        memset(auxv_scratch, 0, k_auxv_scratch_bytes);
+
         sp -= 32;
         uint64_t random[4] = {0x0, -0x114514FF114514UL, 0x2UL << 60, 0x3UL << 60};
         if (sp < stackbase || mem::k_vmm.copy_out(new_pt, sp, (char *)random, 32) < 0)
@@ -5874,7 +6206,7 @@ namespace proc
         [[maybe_unused]] uint64 rd_pos = sp;
 
         // 2. 压入环境变量字符串
-        uint64 uenvp[MAXARG];
+        uint64 *uenvp = uenvp_scratch;
         uint64 envc;
         // printfCyan("execve: envs size: %d\n", envs.size());
         for (envc = 0; envc < envs.size(); envc++)
@@ -5901,7 +6233,7 @@ namespace proc
         uenvp[envc] = 0; // envp数组以NULL结尾
 
         // 3. 压入命令行参数字符串
-        uint64 uargv[MAXARG]; // 命令行参数指针数组
+        uint64 *uargv = uargv_scratch; // 命令行参数指针数组
         uint64 argc = 0;      // 命令行参数数量
         auto copy_exec_arg = [&](const char *arg_text) -> int
         {
@@ -5984,7 +6316,7 @@ namespace proc
         {
             // 在括号里面开命名空间防止变量名冲突
             using namespace elf;
-            uint64 aux[AuxvEntryType::MAX_AT * 2] = {0};
+            uint64 *aux = auxv_scratch;
             [[maybe_unused]] int index = 0;
 
             ADD_AUXV(AT_HWCAP, 0);             // 硬件功能标志
@@ -6013,8 +6345,8 @@ namespace proc
             printfCyan("[execve] base: %p, phdr: %p\n", (void *)interp_base, (void *)phdr);
 
             // 将辅助向量复制到栈上
-            sp -= sizeof(aux);
-            if (mem::k_vmm.copy_out(new_pt, sp, (char *)aux, sizeof(aux)) < 0)
+            sp -= k_auxv_scratch_bytes;
+            if (mem::k_vmm.copy_out(new_pt, sp, (char *)aux, k_auxv_scratch_bytes) < 0)
             {
                 printfRed("execve: copy auxv failed\n");
                 CLEANUP_AND_RETURN(-EFAULT);
@@ -6187,6 +6519,7 @@ namespace proc
         proc->print_detailed_memory_info();
         // 写成0为了适配glibc的rtld_fini需求
 
+        free_execve_scratch();
 #undef CLEANUP_AND_RETURN
         return 0; // 返回参数个数，表示成功执行
     };

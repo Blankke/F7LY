@@ -75,6 +75,7 @@ namespace syscall
         uint64 sys_readahead();
         uint64 sys_munmap();
         uint64 sys_mmap();
+        uint64 sys_execveat();
         uint64 sys_times();
         uint64 sys_uname();
         uint64 sys_sched_yield();
@@ -131,12 +132,16 @@ namespace syscall
         uint64 sys_open_tree();
         uint64 sys_fspick();
         uint64 sys_fsopen();
+        uint64 sys_fsconfig();
         uint64 sys_bpf();
         uint64 sys_io_uring_setup();
         uint64 sys_perf_event_open();
         uint64 sys_userfaultfd();
         uint64 sys_inotify_init1();
+        uint64 sys_inotify_add_watch();
+        uint64 sys_inotify_rm_watch();
         uint64 sys_fanotify_init();
+        uint64 sys_fanotify_mark();
         uint64 sys_pidfd_send_signal();
         uint64 sys_pidfd_open();
         uint64 sys_vmsplice();

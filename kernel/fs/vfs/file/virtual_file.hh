@@ -137,6 +137,20 @@ namespace fs
         }
     };
 
+    // 固定内容文件提供者，用于 sysfs/procfs 中简单常量节点。
+    class StaticContentProvider : public VirtualContentProvider
+    {
+    private:
+        eastl::string _content;
+
+    public:
+        explicit StaticContentProvider(const eastl::string &content) : _content(content) {}
+        virtual eastl::string generate_content() override { return _content; }
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<StaticContentProvider>(_content);
+        }
+    };
+
     // /proc/meminfo 内容提供者
     class ProcMeminfoProvider : public VirtualContentProvider
     {
@@ -199,6 +213,22 @@ namespace fs
         virtual eastl::string read_symlink_target() override;
         virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
             return eastl::make_unique<ProcSelfFdProvider>(_fd_num);
+        }
+    };
+
+    // /proc/<pid>/fdinfo/<fd> 内容提供者
+    class ProcPidFdinfoProvider : public VirtualContentProvider
+    {
+    private:
+        int _pid;
+        int _fd_num;
+
+    public:
+        ProcPidFdinfoProvider(int pid, int fd_num) : _pid(pid), _fd_num(fd_num) {}
+        virtual eastl::string generate_content() override;
+        virtual bool is_dynamic() const override { return true; }
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcPidFdinfoProvider>(_pid, _fd_num);
         }
     };
 
@@ -314,6 +344,8 @@ namespace fs
         }
         virtual bool is_readable() const override { return true; }
         virtual long handle_read(uint64 buf, size_t len, long off) override;
+        virtual bool has_read_size() const override { return true; }
+        virtual uint64 read_size() const override;
     };
 
     // /dev/loop-control 控制设备提供者
@@ -360,6 +392,28 @@ namespace fs
         }
     };
 
+    class ProcSysFsInotifyMaxQueuedEventsProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_writable() const override { return true; }
+        virtual long handle_write(uint64 buf, size_t len, long off) override;
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcSysFsInotifyMaxQueuedEventsProvider>();
+        }
+    };
+
+    class ProcSysFsInotifyMaxUserInstancesProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_writable() const override { return true; }
+        virtual long handle_write(uint64 buf, size_t len, long off) override;
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcSysFsInotifyMaxUserInstancesProvider>();
+        }
+    };
+
     class ProcSysNetIpv4TagProvider : public VirtualContentProvider
     {
     private:
@@ -382,8 +436,20 @@ namespace fs
     public:
         virtual eastl::string generate_content() override;
         virtual bool is_dynamic() const override { return false; } // 静态内容
+        virtual bool is_writable() const override { return true; }
+        virtual long handle_write(uint64 buf, size_t len, long off) override;
         virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
             return eastl::make_unique<ProcSysKernelPidMaxProvider>();
+        }
+    };
+
+    class ProcSysKernelRandomEntropyAvailProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_dynamic() const override { return true; }
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcSysKernelRandomEntropyAvailProvider>();
         }
     };
 

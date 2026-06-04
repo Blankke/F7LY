@@ -186,6 +186,16 @@ namespace syscall
         };
         static_assert(sizeof(KernelTermios) == 36, "TCGETS must use Linux kernel termios ABI");
 
+        struct KernelTermio
+        {
+            uint16 c_iflag;
+            uint16 c_oflag;
+            uint16 c_cflag;
+            uint16 c_lflag;
+            unsigned char c_line;
+            unsigned char c_cc[8];
+        };
+
         KernelTermios make_default_console_termios()
         {
             KernelTermios ts{};
@@ -252,6 +262,31 @@ namespace syscall
         }
 
         KernelTermios g_console_termios = make_default_console_termios();
+        ulong g_block_device_read_ahead = 0;
+
+        KernelTermio make_kernel_termio(const KernelTermios &ts)
+        {
+            KernelTermio tio{};
+            tio.c_iflag = static_cast<uint16>(ts.c_iflag);
+            tio.c_oflag = static_cast<uint16>(ts.c_oflag);
+            tio.c_cflag = static_cast<uint16>(ts.c_cflag);
+            tio.c_lflag = static_cast<uint16>(ts.c_lflag);
+            tio.c_line = ts.c_line;
+            size_t cc_count = sizeof(tio.c_cc) < sizeof(ts.c_cc) ? sizeof(tio.c_cc) : sizeof(ts.c_cc);
+            memcpy(tio.c_cc, ts.c_cc, cc_count);
+            return tio;
+        }
+
+        void merge_kernel_termio(KernelTermios &ts, const KernelTermio &tio)
+        {
+            ts.c_iflag = tio.c_iflag;
+            ts.c_oflag = tio.c_oflag;
+            ts.c_cflag = tio.c_cflag;
+            ts.c_lflag = tio.c_lflag;
+            ts.c_line = tio.c_line;
+            size_t cc_count = sizeof(tio.c_cc) < sizeof(ts.c_cc) ? sizeof(tio.c_cc) : sizeof(ts.c_cc);
+            memcpy(ts.c_cc, tio.c_cc, cc_count);
+        }
 
         struct KernelTimeValOld
         {
@@ -487,6 +522,10 @@ namespace syscall
             if (f == nullptr)
             {
                 return false;
+            }
+            if (f->is_fanotify_file() || f->is_inotify_file())
+            {
+                return true;
             }
 
             switch (f->_attrs.filetype)
@@ -1544,6 +1583,807 @@ namespace syscall
             return 20 - nice;
         }
 
+        constexpr uint64 kFanAccess = 0x00000001;
+        constexpr uint64 kFanModify = 0x00000002;
+        constexpr uint64 kFanCloseWrite = 0x00000008;
+        constexpr uint64 kFanCloseNowrite = 0x00000010;
+        constexpr uint64 kFanOpen = 0x00000020;
+        constexpr uint64 kFanEventOnChild = 0x08000000;
+        constexpr uint64 kFanOndir = 0x40000000;
+        constexpr uint32 kFanCloexec = 0x00000001;
+        constexpr uint32 kFanNonblock = 0x00000002;
+        constexpr uint32 kFanMarkAdd = 0x00000001;
+        constexpr uint32 kFanMarkRemove = 0x00000002;
+        constexpr uint32 kFanMarkDontFollow = 0x00000004;
+        constexpr uint32 kFanMarkOnlydir = 0x00000008;
+        constexpr uint32 kFanMarkFlush = 0x00000080;
+        constexpr uint8 kFanotifyMetadataVersion = 3;
+        constexpr int kFanNoFd = -1;
+
+        struct KernelFanotifyEventMetadata
+        {
+            uint32 event_len;
+            uint8 vers;
+            uint8 reserved;
+            uint16 metadata_len;
+            uint64 mask;
+            int32 fd;
+            int32 pid;
+        };
+
+        struct FanotifyQueuedEvent
+        {
+            uint64 mask;
+            eastl::string path;
+            bool is_dir;
+        };
+
+        struct FanotifyMark
+        {
+            eastl::string path;
+            uint64 mask;
+            uint32 flags;
+        };
+
+        eastl::string parent_path_of(const eastl::string &path)
+        {
+            size_t slash = path.find_last_of('/');
+            if (slash == eastl::string::npos || slash == 0)
+            {
+                return "/";
+            }
+            return path.substr(0, slash);
+        }
+
+        eastl::string basename_of(const eastl::string &path)
+        {
+            size_t slash = path.find_last_of('/');
+            if (slash == eastl::string::npos)
+            {
+                return path;
+            }
+            return path.substr(slash + 1);
+        }
+
+        eastl::string normalize_watch_path(eastl::string path)
+        {
+            if (path == ".")
+            {
+                return "/";
+            }
+            while (path.size() > 1 && path.back() == '/')
+            {
+                path.resize(path.size() - 1);
+            }
+            while (path.size() > 2 &&
+                   path[path.size() - 2] == '/' &&
+                   path[path.size() - 1] == '.')
+            {
+                path.resize(path.size() - 2);
+                while (path.size() > 1 && path.back() == '/')
+                {
+                    path.resize(path.size() - 1);
+                }
+            }
+            if (path == "/.")
+            {
+                return "/";
+            }
+            return path;
+        }
+
+        void mark_open_files_unlinked_from_dir(const eastl::string &path)
+        {
+            for (uint i = 0; i < proc::num_process; ++i)
+            {
+                proc::Pcb *pcb = &proc::k_proc_pool[i];
+                if (pcb->_state == proc::ProcState::UNUSED || pcb->_ofile == nullptr)
+                {
+                    continue;
+                }
+
+                for (uint fd = 0; fd < proc::max_open_files; ++fd)
+                {
+                    fs::file *candidate = pcb->_ofile->_ofile_ptr[fd];
+                    if (candidate != nullptr &&
+                        normalize_watch_path(candidate->backing_path()) == path)
+                    {
+                        candidate->_unlinked_from_dir = true;
+                    }
+                }
+            }
+        }
+
+        bool path_is_equal_or_child(const eastl::string &path, const eastl::string &parent)
+        {
+            if (path == parent)
+            {
+                return true;
+            }
+            return path.size() > parent.size() &&
+                   path.compare(0, parent.size(), parent) == 0 &&
+                   path[parent.size()] == '/';
+        }
+
+        eastl::vector<fs::file *> g_fanotify_files;
+        eastl::vector<fs::file *> g_inotify_files;
+
+        void register_notify_file(eastl::vector<fs::file *> &registry, fs::file *file)
+        {
+            if (file == nullptr)
+            {
+                return;
+            }
+            if (eastl::find(registry.begin(), registry.end(), file) == registry.end())
+            {
+                registry.push_back(file);
+            }
+        }
+
+        void unregister_notify_file(eastl::vector<fs::file *> &registry, fs::file *file)
+        {
+            auto it = eastl::find(registry.begin(), registry.end(), file);
+            if (it != registry.end())
+            {
+                registry.erase(it);
+            }
+        }
+
+        class FanotifyFile : public fs::file
+        {
+        public:
+            explicit FanotifyFile(uint32 init_flags, uint32 event_flags)
+                : fs::file(fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0600), "anon_inode:[fanotify]"),
+                  _init_flags(init_flags)
+            {
+                dup();
+                new (&_stat) fs::Kstat(_attrs.filetype);
+                _stat.mode = _attrs.transMode();
+                lwext4_file_struct.flags = event_flags;
+                if ((init_flags & kFanNonblock) != 0)
+                {
+                    lwext4_file_struct.flags |= O_NONBLOCK;
+                }
+                register_notify_file(g_fanotify_files, this);
+            }
+
+            ~FanotifyFile() override
+            {
+                unregister_notify_file(g_fanotify_files, this);
+            }
+
+            bool is_fanotify_file() const override { return true; }
+            bool read_ready() override { return !_events.empty(); }
+            bool write_ready() override { return false; }
+            off_t lseek(off_t, int) override { return -ESPIPE; }
+            long write(uint64, size_t, long, bool) override { return -EINVAL; }
+            size_t read_sub_dir(ubuf &) override { return 0; }
+
+            long read(uint64 buf, size_t len, long, bool) override
+            {
+                if (len < sizeof(KernelFanotifyEventMetadata))
+                {
+                    return -EINVAL;
+                }
+                if (_events.empty())
+                {
+                    return (_init_flags & kFanNonblock) ? -EAGAIN : 0;
+                }
+
+                size_t copied = 0;
+                while (!_events.empty() && copied + sizeof(KernelFanotifyEventMetadata) <= len)
+                {
+                    FanotifyQueuedEvent event = _events.front();
+                    _events.erase(_events.begin());
+
+                    proc::Pcb *cur = proc::k_pm.get_cur_pcb();
+                    KernelFanotifyEventMetadata meta{};
+                    meta.event_len = sizeof(KernelFanotifyEventMetadata);
+                    meta.vers = kFanotifyMetadataVersion;
+                    meta.metadata_len = sizeof(KernelFanotifyEventMetadata);
+                    meta.mask = event.mask;
+                    meta.fd = create_event_fd(event.path, event.is_dir);
+                    meta.pid = cur ? cur->_pid : 0;
+
+                    memmove(reinterpret_cast<void *>(buf + copied), &meta, sizeof(meta));
+                    copied += sizeof(meta);
+                }
+                return static_cast<long>(copied);
+            }
+
+            int update_mark(const eastl::string &path, uint32 flags, uint64 mask)
+            {
+                if ((flags & kFanMarkFlush) != 0)
+                {
+                    _marks.clear();
+                    _events.clear();
+                    return 0;
+                }
+
+                if ((flags & kFanMarkAdd) != 0)
+                {
+                    for (FanotifyMark &mark : _marks)
+                    {
+                        if (mark.path == path)
+                        {
+                            mark.mask |= mask;
+                            mark.flags = flags;
+                            return 0;
+                        }
+                    }
+                    _marks.push_back(FanotifyMark{path, mask, flags});
+                    return 0;
+                }
+
+                if ((flags & kFanMarkRemove) != 0)
+                {
+                    for (auto it = _marks.begin(); it != _marks.end(); ++it)
+                    {
+                        if (it->path != path)
+                        {
+                            continue;
+                        }
+                        it->mask &= ~mask;
+                        if (it->mask == 0)
+                        {
+                            _marks.erase(it);
+                        }
+                        return 0;
+                    }
+                    return 0;
+                }
+
+                return -EINVAL;
+            }
+
+            void queue_event_for_path(const eastl::string &path, uint64 event_mask, bool is_dir)
+            {
+                for (const FanotifyMark &mark : _marks)
+                {
+                    if ((mark.mask & event_mask) == 0)
+                    {
+                        continue;
+                    }
+                    if (is_dir && (mark.mask & kFanOndir) == 0)
+                    {
+                        continue;
+                    }
+
+                    bool matched = mark.path == path;
+                    if (!matched && (mark.mask & kFanEventOnChild) != 0)
+                    {
+                        matched = parent_path_of(path) == mark.path;
+                    }
+                    if (!matched)
+                    {
+                        continue;
+                    }
+                    if ((mark.flags & kFanMarkOnlydir) != 0 && !is_dir)
+                    {
+                        continue;
+                    }
+
+                    _events.push_back(FanotifyQueuedEvent{event_mask, path, is_dir});
+                }
+            }
+
+        private:
+            uint32 _init_flags;
+            eastl::vector<FanotifyMark> _marks;
+            eastl::vector<FanotifyQueuedEvent> _events;
+
+            int create_event_fd(const eastl::string &path, bool is_dir)
+            {
+                proc::Pcb *cur = proc::k_pm.get_cur_pcb();
+                if (cur == nullptr || path.empty())
+                {
+                    return kFanNoFd;
+                }
+
+                fs::file *event_file = nullptr;
+                uint open_flags = O_RDONLY;
+                if (is_dir)
+                {
+                    open_flags |= O_DIRECTORY;
+                }
+                int open_ret = fs::k_vfs.openat(path, event_file, open_flags, 0);
+                if (open_ret < 0 || event_file == nullptr)
+                {
+                    return kFanNoFd;
+                }
+                event_file->_suppress_fanotify = true;
+                int fd = proc::k_pm.alloc_fd(cur, event_file);
+                if (fd < 0)
+                {
+                    event_file->free_file();
+                    return kFanNoFd;
+                }
+                return fd;
+            }
+        };
+
+        constexpr uint32 kInAccess = 0x00000001;
+        constexpr uint32 kInModify = 0x00000002;
+        constexpr uint32 kInAttrib = 0x00000004;
+        constexpr uint32 kInCloseWrite = 0x00000008;
+        constexpr uint32 kInCloseNowrite = 0x00000010;
+        constexpr uint32 kInOpen = 0x00000020;
+        constexpr uint32 kInMovedFrom = 0x00000040;
+        constexpr uint32 kInMovedTo = 0x00000080;
+        constexpr uint32 kInCreate = 0x00000100;
+        constexpr uint32 kInDelete = 0x00000200;
+        constexpr uint32 kInDeleteSelf = 0x00000400;
+        constexpr uint32 kInMoveSelf = 0x00000800;
+        constexpr uint32 kInQOverflow = 0x00004000;
+        constexpr uint32 kInIgnored = 0x00008000;
+        constexpr uint32 kInOnlydir = 0x01000000;
+        constexpr uint32 kInDontFollow = 0x02000000;
+        constexpr uint32 kInExclUnlink = 0x04000000;
+        constexpr uint32 kInMaskAdd = 0x20000000;
+        constexpr uint32 kInIsdir = 0x40000000;
+        constexpr uint32 kInOneshot = 0x80000000;
+        constexpr uint32 kInAllEvents = kInAccess | kInModify | kInAttrib |
+                                        kInCloseWrite | kInCloseNowrite | kInOpen |
+                                        kInMovedFrom | kInMovedTo | kInCreate |
+                                        kInDelete | kInDeleteSelf | kInMoveSelf;
+        constexpr uint32 kInSupportedMask = kInAllEvents | kInOnlydir | kInDontFollow |
+                                            kInExclUnlink | kInMaskAdd | kInOneshot;
+        constexpr size_t kInotifyMaxQueuedEvents = 15;
+
+        struct KernelInotifyEvent
+        {
+            int32 wd;
+            uint32 mask;
+            uint32 cookie;
+            uint32 len;
+        };
+
+        struct InotifyQueuedEvent
+        {
+            int32 wd;
+            uint32 mask;
+            uint32 cookie;
+            eastl::string name;
+        };
+
+        struct InotifyMark
+        {
+            int wd;
+            eastl::string path;
+            uint32 mask;
+            bool is_dir;
+        };
+
+        enum class InotifyMatchMode
+        {
+            ExactAndParent,
+            ExactOnly,
+            ParentOnly,
+        };
+
+        class InotifyFile : public fs::file
+        {
+        public:
+            explicit InotifyFile(uint32 flags)
+                : fs::file(fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0600), "anon_inode:[inotify]"),
+                  _init_flags(flags)
+            {
+                dup();
+                new (&_stat) fs::Kstat(_attrs.filetype);
+                _stat.mode = _attrs.transMode();
+                lwext4_file_struct.flags = flags;
+                register_notify_file(g_inotify_files, this);
+            }
+
+            ~InotifyFile() override
+            {
+                unregister_notify_file(g_inotify_files, this);
+            }
+
+            bool is_inotify_file() const override { return true; }
+            bool read_ready() override { return !_events.empty(); }
+            bool write_ready() override { return false; }
+            off_t lseek(off_t, int) override { return -ESPIPE; }
+            long write(uint64, size_t, long, bool) override { return -EINVAL; }
+            size_t read_sub_dir(ubuf &) override { return 0; }
+
+            long read(uint64 buf, size_t len, long, bool) override
+            {
+                if (len < sizeof(KernelInotifyEvent))
+                {
+                    return -EINVAL;
+                }
+                while (_events.empty())
+                {
+                    if ((lwext4_file_struct.flags & O_NONBLOCK) != 0)
+                    {
+                        return -EAGAIN;
+                    }
+
+                    // inotify 的阻塞读必须等待后续文件事件，不能把空队列伪装成 EOF。
+                    proc::Pcb *cur = proc::k_pm.get_cur_pcb();
+                    if (cur == nullptr || cur->is_killed() ||
+                        proc::ipc::signal::has_unmasked_signal_pending(cur))
+                    {
+                        return -EINTR;
+                    }
+                    proc::k_scheduler.yield();
+                }
+
+                size_t copied = 0;
+                while (!_events.empty())
+                {
+                    const InotifyQueuedEvent &event = _events.front();
+                    size_t name_len = event.name.empty() ? 0 : event.name.size() + 1;
+                    size_t event_len = sizeof(KernelInotifyEvent) + name_len;
+                    if (copied + event_len > len)
+                    {
+                        break;
+                    }
+
+                    KernelInotifyEvent kernel_event{};
+                    kernel_event.wd = event.wd;
+                    kernel_event.mask = event.mask;
+                    kernel_event.cookie = event.cookie;
+                    kernel_event.len = static_cast<uint32>(name_len);
+                    memcpy(reinterpret_cast<void *>(buf + copied), &kernel_event, sizeof(kernel_event));
+                    copied += sizeof(kernel_event);
+                    if (name_len != 0)
+                    {
+                        memcpy(reinterpret_cast<void *>(buf + copied), event.name.c_str(), event.name.size());
+                        memset(reinterpret_cast<void *>(buf + copied + event.name.size()), 0, 1);
+                        copied += name_len;
+                    }
+
+                    _events.erase(_events.begin());
+                    if (_events.empty())
+                    {
+                        _overflowed = false;
+                    }
+                }
+
+                return copied == 0 ? -EINVAL : static_cast<long>(copied);
+            }
+
+            int add_watch(const eastl::string &path, uint32 mask, bool is_dir)
+            {
+                if ((mask & ~kInSupportedMask) != 0)
+                {
+                    return -EINVAL;
+                }
+                eastl::string normalized = normalize_watch_path(path);
+                for (InotifyMark &mark : _marks)
+                {
+                    if (mark.path != normalized)
+                    {
+                        continue;
+                    }
+                    if ((mask & kInMaskAdd) != 0)
+                    {
+                        mark.mask |= (mask & ~kInMaskAdd);
+                    }
+                    else
+                    {
+                        mark.mask = mask;
+                    }
+                    mark.is_dir = is_dir;
+                    return mark.wd;
+                }
+
+                int wd = _next_wd++;
+                _marks.push_back(InotifyMark{wd, normalized, mask, is_dir});
+                return wd;
+            }
+
+            int remove_watch(int wd)
+            {
+                for (size_t i = 0; i < _marks.size(); ++i)
+                {
+                    if (_marks[i].wd != wd)
+                    {
+                        continue;
+                    }
+                    enqueue_event(_marks[i].wd, kInIgnored, 0, "");
+                    _marks.erase(_marks.begin() + i);
+                    return 0;
+                }
+                return -EINVAL;
+            }
+
+            void queue_path_event(const eastl::string &raw_path,
+                                  uint32 event_mask,
+                                  bool is_dir,
+                                  uint32 cookie,
+                                  InotifyMatchMode mode,
+                                  bool source_unlinked = false)
+            {
+                eastl::string path = normalize_watch_path(raw_path);
+                eastl::string parent = parent_path_of(path);
+                eastl::string name = basename_of(path);
+
+                for (size_t i = 0; i < _marks.size();)
+                {
+                    InotifyMark &mark = _marks[i];
+                    bool exact = mark.path == path;
+                    bool parent_match = mark.is_dir && mark.path == parent;
+                    if ((mode == InotifyMatchMode::ExactOnly && !exact) ||
+                        (mode == InotifyMatchMode::ParentOnly && !parent_match) ||
+                        (mode == InotifyMatchMode::ExactAndParent && !exact && !parent_match))
+                    {
+                        ++i;
+                        continue;
+                    }
+
+                    uint32 interest_mask = event_mask & kInAllEvents;
+                    if ((mark.mask & interest_mask) == 0)
+                    {
+                        ++i;
+                        continue;
+                    }
+                    if ((mark.mask & kInExclUnlink) != 0 &&
+                        parent_match &&
+                        (source_unlinked || fs::k_file_table.has_unlinked(path)) &&
+                        (interest_mask & (kInAccess | kInModify | kInOpen | kInCloseWrite | kInCloseNowrite)) != 0)
+                    {
+                        ++i;
+                        continue;
+                    }
+
+                    uint32 delivered_mask = event_mask;
+                    eastl::string delivered_name;
+                    if (parent_match)
+                    {
+                        delivered_name = name;
+                    }
+                    if (is_dir && (parent_match || interest_mask == kInAttrib))
+                    {
+                        delivered_mask |= kInIsdir;
+                    }
+
+                    if (queue_mark_event(i, delivered_mask, cookie, delivered_name))
+                    {
+                        continue;
+                    }
+                    ++i;
+                }
+            }
+
+            void queue_delete_self(const eastl::string &raw_path, bool is_dir)
+            {
+                eastl::string path = normalize_watch_path(raw_path);
+                for (size_t i = 0; i < _marks.size();)
+                {
+                    InotifyMark &mark = _marks[i];
+                    if (mark.path != path)
+                    {
+                        ++i;
+                        continue;
+                    }
+                    if ((mark.mask & kInDeleteSelf) != 0)
+                    {
+                        enqueue_event(mark.wd, kInDeleteSelf, 0, "");
+                    }
+                    enqueue_event(mark.wd, kInIgnored, 0, "");
+                    _marks.erase(_marks.begin() + i);
+                    (void)is_dir;
+                }
+            }
+
+            void queue_rename(const eastl::string &old_raw_path,
+                              const eastl::string &new_raw_path,
+                              bool is_dir,
+                              uint32 cookie)
+            {
+                eastl::string old_path = normalize_watch_path(old_raw_path);
+                eastl::string new_path = normalize_watch_path(new_raw_path);
+                queue_path_event(old_path, kInMovedFrom, is_dir, cookie, InotifyMatchMode::ParentOnly);
+                queue_path_event(new_path, kInMovedTo, is_dir, cookie, InotifyMatchMode::ParentOnly);
+                queue_path_event(old_path, kInMoveSelf, is_dir, 0, InotifyMatchMode::ExactOnly);
+
+                for (InotifyMark &mark : _marks)
+                {
+                    if (!path_is_equal_or_child(mark.path, old_path))
+                    {
+                        continue;
+                    }
+                    eastl::string suffix = mark.path.substr(old_path.size());
+                    mark.path = new_path + suffix;
+                }
+            }
+
+            eastl::string proc_fdinfo() const override
+            {
+                eastl::string result;
+                for (const InotifyMark &mark : _marks)
+                {
+                    fs::Kstat st{};
+                    (void)vfs_path_stat(mark.path.c_str(), &st, true);
+                    char line[160];
+                    unsigned int ino = static_cast<unsigned int>(st.ino);
+                    unsigned int sdev = static_cast<unsigned int>(st.dev);
+                    snprintf(line, sizeof(line),
+                             "inotify wd:%d ino:%x sdev:%x mask:%x ignored_mask:0\n",
+                             mark.wd,
+                             ino,
+                             sdev,
+                             mark.mask);
+                    result += line;
+                }
+                return result;
+            }
+
+        private:
+            uint32 _init_flags;
+            int _next_wd = 1;
+            bool _overflowed = false;
+            eastl::vector<InotifyMark> _marks;
+            eastl::vector<InotifyQueuedEvent> _events;
+
+            bool queue_mark_event(size_t mark_index, uint32 mask, uint32 cookie, const eastl::string &name)
+            {
+                InotifyMark mark = _marks[mark_index];
+                enqueue_event(mark.wd, mask, cookie, name);
+                if ((mark.mask & kInOneshot) != 0)
+                {
+                    enqueue_event(mark.wd, kInIgnored, 0, "");
+                    _marks.erase(_marks.begin() + mark_index);
+                    return true;
+                }
+                return false;
+            }
+
+            void enqueue_event(int wd, uint32 mask, uint32 cookie, const eastl::string &name)
+            {
+                if (!_events.empty())
+                {
+                    const InotifyQueuedEvent &last = _events.back();
+                    if (last.wd == wd && last.mask == mask && last.cookie == cookie && last.name == name)
+                    {
+                        return;
+                    }
+                }
+
+                if (_overflowed)
+                {
+                    return;
+                }
+                if (_events.size() >= kInotifyMaxQueuedEvents)
+                {
+                    _events.push_back(InotifyQueuedEvent{-1, kInQOverflow, 0, ""});
+                    _overflowed = true;
+                    return;
+                }
+                _events.push_back(InotifyQueuedEvent{wd, mask, cookie, name});
+            }
+        };
+
+        void notify_fanotify_event(const fs::file *source, const eastl::string &path, uint64 event_mask, bool is_dir)
+        {
+            if (source != nullptr && source->_suppress_fanotify)
+            {
+                return;
+            }
+            if (path.empty())
+            {
+                return;
+            }
+
+            for (fs::file *candidate : g_fanotify_files)
+            {
+                if (candidate == nullptr || !candidate->is_fanotify_file())
+                {
+                    continue;
+                }
+                static_cast<FanotifyFile *>(candidate)->queue_event_for_path(path, event_mask, is_dir);
+            }
+        }
+
+        void notify_inotify_path_event(const eastl::string &path,
+                                       uint32 event_mask,
+                                       bool is_dir,
+                                       uint32 cookie = 0,
+                                       InotifyMatchMode mode = InotifyMatchMode::ExactAndParent,
+                                       bool source_unlinked = false)
+        {
+            if (path.empty())
+            {
+                return;
+            }
+
+            eastl::string normalized = normalize_watch_path(path);
+            for (fs::file *candidate : g_inotify_files)
+            {
+                if (candidate == nullptr || !candidate->is_inotify_file())
+                {
+                    continue;
+                }
+                static_cast<InotifyFile *>(candidate)->queue_path_event(normalized,
+                                                                        event_mask,
+                                                                        is_dir,
+                                                                        cookie,
+                                                                        mode,
+                                                                        source_unlinked);
+            }
+        }
+
+        void notify_inotify_delete_self(const eastl::string &path, bool is_dir)
+        {
+            if (path.empty())
+            {
+                return;
+            }
+
+            eastl::string normalized = normalize_watch_path(path);
+            for (fs::file *candidate : g_inotify_files)
+            {
+                if (candidate == nullptr || !candidate->is_inotify_file())
+                {
+                    continue;
+                }
+                static_cast<InotifyFile *>(candidate)->queue_delete_self(normalized, is_dir);
+            }
+        }
+
+        uint32 next_inotify_cookie()
+        {
+            static uint32 cookie = 1;
+            uint32 current = cookie++;
+            return current == 0 ? cookie++ : current;
+        }
+
+        void notify_inotify_rename(const eastl::string &old_path,
+                                   const eastl::string &new_path,
+                                   bool is_dir,
+                                   uint32 cookie)
+        {
+            if (old_path.empty() || new_path.empty())
+            {
+                return;
+            }
+
+            eastl::string normalized_old = normalize_watch_path(old_path);
+            eastl::string normalized_new = normalize_watch_path(new_path);
+            for (fs::file *candidate : g_inotify_files)
+            {
+                if (candidate == nullptr || !candidate->is_inotify_file())
+                {
+                    continue;
+                }
+                static_cast<InotifyFile *>(candidate)->queue_rename(normalized_old,
+                                                                    normalized_new,
+                                                                    is_dir,
+                                                                    cookie);
+            }
+        }
+
+        void update_process_cwd_after_rename(const eastl::string &old_path, const eastl::string &new_path)
+        {
+            eastl::string normalized_old = normalize_watch_path(old_path);
+            eastl::string normalized_new = normalize_watch_path(new_path);
+            for (uint i = 0; i < proc::num_process; ++i)
+            {
+                proc::Pcb *pcb = &proc::k_proc_pool[i];
+                if (pcb->_state == proc::ProcState::UNUSED || pcb->_cwd_name.empty())
+                {
+                    continue;
+                }
+
+                bool had_trailing_slash = pcb->_cwd_name.size() > 1 && pcb->_cwd_name.back() == '/';
+                eastl::string cwd = normalize_watch_path(pcb->_cwd_name);
+                if (!path_is_equal_or_child(cwd, normalized_old))
+                {
+                    continue;
+                }
+
+                eastl::string suffix = cwd.substr(normalized_old.size());
+                pcb->_cwd_name = normalized_new + suffix;
+                if (had_trailing_slash && pcb->_cwd_name.back() != '/')
+                {
+                    pcb->_cwd_name += "/";
+                }
+            }
+        }
+
         int alloc_anonymous_non_socket_fd(const char *name)
         {
             proc::Pcb *p = proc::k_pm.get_cur_pcb();
@@ -1916,7 +2756,7 @@ namespace syscall
                 while (iov_done < iovecs[i].len)
                 {
                     size_t want = min_size(iovecs[i].len - iov_done, k_syscall_io_chunk_size);
-                    long read_off = explicit_off == nullptr ? f->get_file_offset() : *explicit_off;
+                    long read_off = explicit_off == nullptr ? -1 : *explicit_off;
                     bool upgrade = explicit_off == nullptr;
                     long rc = f->read_to_user(pt, iovecs[i].base + iov_done, want, read_off, upgrade);
                     if (rc == k_direct_user_read_unimplemented)
@@ -2230,6 +3070,22 @@ namespace syscall
             return p->get_euid() == uid ? 0 : -EPERM;
         }
 
+        int validate_chown_target_path(const eastl::string &path, bool follow_symlinks)
+        {
+            if (path.empty())
+            {
+                return -ENOENT;
+            }
+
+            fs::Kstat st;
+            int stat_ret = get_path_kstat(path, st, follow_symlinks);
+            if (stat_ret < 0)
+            {
+                return stat_ret;
+            }
+            return vfs_is_readonly_path(path) ? -EROFS : 0;
+        }
+
         int ensure_directory_enter_permission(const eastl::string &path)
         {
             proc::Pcb *p = proc::k_pm.get_cur_pcb();
@@ -2431,7 +3287,13 @@ namespace syscall
             }
 
             mode = sanitize_chmod_mode_for_current_proc(abs_pathname, mode, true);
-            return vfs_chmod(abs_pathname, mode);
+            bool is_dir = (st.mode & S_IFMT) == S_IFDIR;
+            int chmod_ret = vfs_chmod(abs_pathname, mode);
+            if (chmod_ret == 0)
+            {
+                notify_inotify_path_event(abs_pathname, kInAttrib, is_dir);
+            }
+            return chmod_ret;
         }
     }
 
@@ -2573,6 +3435,7 @@ namespace syscall
         BIND_SYSCALL(mremap);
         BIND_SYSCALL(clone);
         BIND_SYSCALL(execve);
+        BIND_SYSCALL(execveat);
         BIND_SYSCALL(mmap);
         BIND_SYSCALL(mprotect); // todo
         BIND_SYSCALL(madvise);
@@ -2683,12 +3546,16 @@ namespace syscall
         BIND_SYSCALL(pidfd_send_signal);
         BIND_SYSCALL(pidfd_open);
         BIND_SYSCALL(fanotify_init);
+        BIND_SYSCALL(fanotify_mark);
         BIND_SYSCALL(inotify_init1);
+        BIND_SYSCALL(inotify_add_watch);
+        BIND_SYSCALL(inotify_rm_watch);
         BIND_SYSCALL(userfaultfd);
         BIND_SYSCALL(perf_event_open);
         BIND_SYSCALL(io_uring_setup);
         BIND_SYSCALL(bpf);
         BIND_SYSCALL(fsopen);
+        BIND_SYSCALL(fsconfig);
         BIND_SYSCALL(fspick);
         BIND_SYSCALL(open_tree);
         BIND_SYSCALL(memfd_secret);
@@ -3168,6 +4035,19 @@ namespace syscall
         mem::PageTable *pt = p->get_pagetable();
         KernelIovec iovec = {buf, static_cast<size_t>(n)};
         long result = read_to_user_iovecs(f, *pt, &iovec, 1, nullptr);
+        if (result > 0 && !f->is_fanotify_file() && !f->_suppress_fanotify)
+        {
+            notify_fanotify_event(f,
+                                  f->backing_path(),
+                                  kFanAccess,
+                                  f->_attrs.filetype == fs::FileTypes::FT_DIRECT);
+            if (!f->is_inotify_file())
+            {
+                notify_inotify_path_event(f->backing_path(),
+                                          kInAccess,
+                                          f->_attrs.filetype == fs::FileTypes::FT_DIRECT);
+            }
+        }
         return result;
     }
     uint64 SyscallHandler::sys_kill()
@@ -3273,6 +4153,109 @@ namespace syscall
         TODO("sys_execve");
         return 0;
     }
+
+    uint64 SyscallHandler::sys_execveat()
+    {
+        int dirfd;
+        uint64 uargv, uenvp;
+        int flags;
+        eastl::string pathname;
+
+        if (_arg_int(0, dirfd) < 0)
+            return -EINVAL;
+        int path_ret = _arg_str(1, pathname, PGSIZE);
+        if (path_ret < 0)
+            return path_ret;
+        if (_arg_addr(2, uargv) < 0 || _arg_addr(3, uenvp) < 0)
+            return -EFAULT;
+        if (_arg_int(4, flags) < 0)
+            return -EINVAL;
+
+        const int valid_flags = AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW;
+        if ((flags & ~valid_flags) != 0)
+            return -EINVAL;
+
+        eastl::vector<eastl::string> argv;
+        uint64 uarg;
+        if (uargv != 0)
+        {
+            for (uint64 i = 0, puarg = uargv;; i++, puarg += sizeof(char *))
+            {
+                if (i >= max_arg_num)
+                    return -E2BIG;
+                if (_fetch_addr(puarg, uarg) < 0)
+                    return -EFAULT;
+                if (uarg == 0)
+                    break;
+                argv.emplace_back(eastl::string());
+                int arg_ret = _fetch_str(uarg, argv[i], PGSIZE);
+                if (arg_ret < 0)
+                    return arg_ret;
+            }
+        }
+
+        eastl::vector<eastl::string> envp;
+        uint64 uenv;
+        if (uenvp != 0)
+        {
+            for (uint64 i = 0, puenv = uenvp;; i++, puenv += sizeof(char *))
+            {
+                if (i >= max_arg_num)
+                    return -E2BIG;
+                if (_fetch_addr(puenv, uenv) < 0)
+                    return -EFAULT;
+                if (uenv == 0)
+                    break;
+                envp.emplace_back(eastl::string());
+                int env_ret = _fetch_str(uenv, envp[i], PGSIZE);
+                if (env_ret < 0)
+                    return env_ret;
+            }
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (p == nullptr)
+            return -ESRCH;
+
+        eastl::string exec_path;
+        if (pathname.empty())
+        {
+            if ((flags & AT_EMPTY_PATH) == 0)
+                return -ENOENT;
+            fs::file *target_file = p->get_open_file(dirfd);
+            if (target_file == nullptr)
+                return -EBADF;
+            exec_path = target_file->_path_name;
+        }
+        else if (pathname[0] == '/')
+        {
+            exec_path = pathname;
+        }
+        else if (dirfd == AT_FDCWD)
+        {
+            exec_path = get_absolute_path(pathname.c_str(), p->_cwd_name.c_str());
+        }
+        else
+        {
+            fs::file *dir_file = p->get_open_file(dirfd);
+            if (dir_file == nullptr)
+                return -EBADF;
+            if (dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
+                return -ENOTDIR;
+            exec_path = get_absolute_path(pathname.c_str(), dir_file->_path_name.c_str());
+        }
+
+        if ((flags & AT_SYMLINK_NOFOLLOW) != 0)
+        {
+            fs::Kstat st{};
+            int stat_ret = vfs_path_stat(exec_path.c_str(), &st, false);
+            if (stat_ret == 0 && (st.mode & S_IFMT) == S_IFLNK)
+                return -ELOOP;
+        }
+
+        return proc::k_pm.execve(exec_path, argv, envp);
+    }
+
     uint64 SyscallHandler::sys_fstat()
     {
         int fd;
@@ -3787,8 +4770,36 @@ namespace syscall
             }
         }
 
+        bool existed_before_open = fs::k_vfs.is_file_exist(abs_pathname.c_str()) == 1;
+
         // 不知道什么套娃设计，这个b函数套了两层
-        return proc::k_pm.open(dir_fd, abs_pathname, flags, mode);
+        int opened_fd = proc::k_pm.open(dir_fd, abs_pathname, flags, mode);
+        if (opened_fd >= 0)
+        {
+            fs::file *opened_file = p->get_open_file(opened_fd);
+            if (opened_file != nullptr)
+            {
+                const eastl::string &event_path = opened_file->backing_path().empty()
+                                                      ? abs_pathname
+                                                      : opened_file->backing_path();
+                notify_fanotify_event(opened_file,
+                                      event_path,
+                                      kFanOpen,
+                                      opened_file->_attrs.filetype == fs::FileTypes::FT_DIRECT);
+                if ((flags & O_CREAT) != 0 && !existed_before_open)
+                {
+                    notify_inotify_path_event(event_path,
+                                              kInCreate,
+                                              opened_file->_attrs.filetype == fs::FileTypes::FT_DIRECT,
+                                              0,
+                                              InotifyMatchMode::ParentOnly);
+                }
+                notify_inotify_path_event(event_path,
+                                          kInOpen,
+                                          opened_file->_attrs.filetype == fs::FileTypes::FT_DIRECT);
+            }
+        }
+        return opened_fd;
 
         // int res = proc::k_pm.open(dir_fd, path, flags);
         // printfRed("openat filename %s return [fd] is %d file: %p refcnt: %d\n", path.c_str(), res, p->_ofile[res], p->_ofile[res]->refcnt);
@@ -3864,6 +4875,22 @@ namespace syscall
         mem::PageTable *pt = proc->get_pagetable();
         KernelIovec iovec = {p, static_cast<size_t>(n)};
         long result = write_from_user_iovecs(f, *pt, &iovec, 1, nullptr);
+        if (result > 0 && !f->_suppress_fanotify)
+        {
+            notify_fanotify_event(f,
+                                  f->backing_path(),
+                                  kFanModify,
+                                  f->_attrs.filetype == fs::FileTypes::FT_DIRECT);
+            if (!f->is_inotify_file())
+            {
+                notify_inotify_path_event(f->backing_path(),
+                                          kInModify,
+                                          f->_attrs.filetype == fs::FileTypes::FT_DIRECT,
+                                          0,
+                                          InotifyMatchMode::ExactAndParent,
+                                          f->_unlinked_from_dir);
+            }
+        }
         return result;
     }
 
@@ -3889,6 +4916,34 @@ namespace syscall
             return cpres;
         }
         printfCyan("[sys_unlinkat] : fd: %d, path: %s, flags: %d\n", fd, path.c_str(), flags);
+        eastl::string abs_path;
+        if (!path.empty())
+        {
+            if (path[0] == '/')
+            {
+                abs_path = path;
+            }
+            else if (fd == AT_FDCWD)
+            {
+                abs_path = get_absolute_path(path.c_str(), p->_cwd_name.c_str());
+            }
+            else
+            {
+                fs::file *dir_file = p->get_open_file(fd);
+                if (dir_file != nullptr)
+                {
+                    abs_path = get_absolute_path(path.c_str(), dir_file->_path_name.c_str());
+                }
+            }
+            abs_path = normalize_watch_path(abs_path);
+        }
+
+        bool is_dir = (flags & AT_REMOVEDIR) != 0;
+        fs::Kstat removed_stat{};
+        if (!abs_path.empty() && vfs_path_stat(abs_path.c_str(), &removed_stat, true) == 0)
+        {
+            is_dir = (removed_stat.mode & S_IFMT) == S_IFDIR;
+        }
         // for (int i = 0; i < proc::NVMA; i++)
         // {
         //     if (p->get_vma()[i]._vm->vfile->_path_name == path)
@@ -3898,6 +4953,24 @@ namespace syscall
         //     }
         // }
         int res = proc::k_pm.unlink(fd, path, flags);
+        if (res == 0 && !abs_path.empty())
+        {
+            mark_open_files_unlinked_from_dir(abs_path);
+            notify_inotify_path_event(abs_path,
+                                      kInDelete,
+                                      is_dir,
+                                      0,
+                                      InotifyMatchMode::ParentOnly);
+            if (!is_dir)
+            {
+                notify_inotify_path_event(abs_path,
+                                          kInAttrib,
+                                          false,
+                                          0,
+                                          InotifyMatchMode::ExactOnly);
+            }
+            notify_inotify_delete_self(abs_path, is_dir);
+        }
         return res;
     }
     uint64 SyscallHandler::sys_linkat()
@@ -4417,7 +5490,32 @@ namespace syscall
         int fd;
         if (_arg_int(0, fd) < 0)
             return -1;
-        return proc::k_pm.close(fd);
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        fs::file *closing_file = p ? p->get_open_file(fd) : nullptr;
+        eastl::string event_path;
+        bool is_dir = false;
+        bool was_write_open = false;
+        bool suppress_fanotify = true;
+        if (closing_file != nullptr)
+        {
+            event_path = closing_file->backing_path();
+            is_dir = closing_file->_attrs.filetype == fs::FileTypes::FT_DIRECT;
+            was_write_open = file_access_mode_has_write(closing_file->lwext4_file_struct.flags);
+            suppress_fanotify = closing_file->_suppress_fanotify;
+        }
+
+        int ret = proc::k_pm.close(fd);
+        if (ret == 0 && !suppress_fanotify)
+        {
+            notify_fanotify_event(nullptr,
+                                  event_path,
+                                  was_write_open ? kFanCloseWrite : kFanCloseNowrite,
+                                  is_dir);
+            notify_inotify_path_event(event_path,
+                                      was_write_open ? kInCloseWrite : kInCloseNowrite,
+                                      is_dir);
+        }
+        return ret;
     }
     uint64 SyscallHandler::sys_mknod()
     {
@@ -5002,10 +6100,23 @@ namespace syscall
             printfRed("[sys_getdents64] FAILED - File descriptor is not a directory\n");
             return -ENOTDIR;
         }
+
+        if (!f->is_virtual && !f->_path_name.empty()) {
+            fs::Kstat current_dir_stat{};
+            int stat_ret = vfs_path_stat(f->_path_name.c_str(), &current_dir_stat, true);
+            if (stat_ret < 0) {
+                printfRed("[sys_getdents64] FAILED - directory path disappeared: %s ret=%d\n",
+                          f->_path_name.c_str(), stat_ret);
+                return stat_ret;
+            }
+        }
         
         // 检查缓冲区长度
         if (buf_len == 0) {
             return 0;
+        }
+        if (buf_len < sizeof(struct linux_dirent64)) {
+            return -EINVAL;
         }
         
         // getdents64 允许分批返回目录项。
@@ -6500,13 +7611,7 @@ namespace syscall
         cmd = (u32)tmp;
         cmd = cmd;
 
-        ulong arg;
-        if (_arg_addr(2, arg) < 0)
-        {
-            printfRed("[SyscallHandler::sys_ioctl] Error fetching ioctl argument address\n");
-            return SYS_EINVAL;
-        }
-        arg = arg;
+        ulong arg = _arg_raw(2);
         printfCyan("[SyscallHandler::sys_ioctl] fd: %d, cmd: 0x%X, arg: %p\n",
                    fd, cmd, (void *)arg);
         /// @todo not implement
@@ -6645,11 +7750,54 @@ namespace syscall
             }
         }
 
+        if (f->_path_name == "/dev/net/tun" || f->_path_name == "/dev/tun")
+        {
+            constexpr uint32 kTunGetFeatures = 0x800454cf;
+            constexpr uint32 kTunSupportedFeatures = 0x00007173;
+            if (cmd == kTunGetFeatures || (cmd & 0xFFFF) == (kTunGetFeatures & 0xFFFF))
+            {
+                if (arg == 0)
+                {
+                    return SYS_EFAULT;
+                }
+                mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+                if (mem::k_vmm.copy_out(*pt, arg, &kTunSupportedFeatures, sizeof(kTunSupportedFeatures)) < 0)
+                {
+                    return SYS_EFAULT;
+                }
+                return 0;
+            }
+            return SYS_ENOTTY;
+        }
+
+        if ((cmd & 0xFFFF) == TCGETA)
+        {
+            if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+            {
+                return SYS_ENOTTY;
+            }
+            if (arg == 0)
+            {
+                return SYS_EFAULT;
+            }
+            KernelTermio tio = make_kernel_termio(g_console_termios);
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+            if (mem::k_vmm.copy_out(*pt, arg, &tio, sizeof(tio)) < 0)
+            {
+                return SYS_EFAULT;
+            }
+            return 0;
+        }
+
         if ((cmd & 0xFFFF) == TCGETS)
         {
             if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
             {
                 return SYS_ENOTTY;
+            }
+            if (arg == 0)
+            {
+                return SYS_EFAULT;
             }
             // TCGETS 使用的是 Linux 内核 UAPI 的 asm-generic termios（36字节），
             // 不能把 libc 的 struct termios（RISC-V glibc 下为60字节）直接回写给用户栈。
@@ -6664,6 +7812,29 @@ namespace syscall
             return 0;
         }
 
+        if ((cmd & 0xFFFF) == TCSETA ||
+            (cmd & 0xFFFF) == TCSETAW ||
+            (cmd & 0xFFFF) == TCSETAF)
+        {
+            if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+            {
+                return SYS_ENOTTY;
+            }
+            if (arg == 0)
+            {
+                return SYS_EFAULT;
+            }
+            KernelTermio tio{};
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+            if (mem::k_vmm.copy_in(*pt, &tio, arg, sizeof(tio)) < 0)
+            {
+                return SYS_EFAULT;
+            }
+            merge_kernel_termio(g_console_termios, tio);
+            sync_console_termios_to_line_discipline(g_console_termios);
+            return 0;
+        }
+
         if ((cmd & 0xFFFF) == TCSETS ||
             (cmd & 0xFFFF) == TCSETSW ||
             (cmd & 0xFFFF) == TCSETSF)
@@ -6671,6 +7842,10 @@ namespace syscall
             if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
             {
                 return SYS_ENOTTY;
+            }
+            if (arg == 0)
+            {
+                return SYS_EFAULT;
             }
             KernelTermios new_ts{};
             mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
@@ -6684,6 +7859,110 @@ namespace syscall
             // 但至少不能再把用户态的 termios 视图一直固定成全 0。
             g_console_termios = new_ts;
             sync_console_termios_to_line_discipline(g_console_termios);
+            return 0;
+        }
+
+        if ((cmd & 0xFFFF) == (TIOCGPTN & 0xFFFF))
+        {
+            if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+            {
+                return SYS_ENOTTY;
+            }
+            if (arg == 0)
+            {
+                return SYS_EFAULT;
+            }
+            unsigned int pts_no = 0;
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+            if (mem::k_vmm.copy_out(*pt, arg, &pts_no, sizeof(pts_no)) < 0)
+            {
+                return SYS_EFAULT;
+            }
+            return 0;
+        }
+
+        if ((cmd & 0xFFFF) == (TIOCSPTLCK & 0xFFFF))
+        {
+            if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+            {
+                return SYS_ENOTTY;
+            }
+            if (arg == 0)
+            {
+                return SYS_EFAULT;
+            }
+            int lock_state = 0;
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+            if (mem::k_vmm.copy_in(*pt, &lock_state, arg, sizeof(lock_state)) < 0)
+            {
+                return SYS_EFAULT;
+            }
+            return 0;
+        }
+
+        if ((cmd & 0xFFFF) == (TIOCGPTLCK & 0xFFFF))
+        {
+            if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+            {
+                return SYS_ENOTTY;
+            }
+            if (arg == 0)
+            {
+                return SYS_EFAULT;
+            }
+            int lock_state = 0;
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+            if (mem::k_vmm.copy_out(*pt, arg, &lock_state, sizeof(lock_state)) < 0)
+            {
+                return SYS_EFAULT;
+            }
+            return 0;
+        }
+
+        if ((cmd & 0xFFFF) == (TIOCGPTPEER & 0xFFFF))
+        {
+            if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+            {
+                return SYS_ENOTTY;
+            }
+            proc::Pcb *cur = proc::k_pm.get_cur_pcb();
+            if (cur == nullptr)
+            {
+                return SYS_ESRCH;
+            }
+            fs::file *slave = nullptr;
+            int open_ret = fs::k_vfs.openat("/dev/pts/0", slave, static_cast<uint>(arg), 0);
+            if (open_ret < 0 || slave == nullptr)
+            {
+                return open_ret < 0 ? open_ret : SYS_EIO;
+            }
+            int slave_fd = proc::k_pm.alloc_fd(cur, slave);
+            if (slave_fd < 0)
+            {
+                slave->free_file();
+                return slave_fd;
+            }
+            return slave_fd;
+        }
+
+        if ((cmd & 0xFFFF) == (TIOCGDEV & 0xFFFF) ||
+            (cmd & 0xFFFF) == (TIOCGPKT & 0xFFFF) ||
+            (cmd & 0xFFFF) == (TIOCGEXCL & 0xFFFF))
+        {
+            if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+            {
+                return SYS_ENOTTY;
+            }
+            if (arg == 0)
+            {
+                return SYS_EFAULT;
+            }
+            unsigned int value = 0;
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+            if (mem::k_vmm.copy_out(*pt, arg, &value, sizeof(value)) < 0)
+            {
+                return SYS_EFAULT;
+            }
             return 0;
         }
 
@@ -6974,6 +8253,138 @@ namespace syscall
 
             return 0;
         }
+
+        if ((cmd & 0xFFFF) == 0x5200) // RNDGETENTCNT
+        {
+            if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE || f->_path_name != "/dev/urandom")
+            {
+                return SYS_ENOTTY;
+            }
+            if (arg == 0)
+            {
+                return SYS_EFAULT;
+            }
+            int entropy_count = 256;
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+            if (mem::k_vmm.copy_out(*pt, arg, &entropy_count, sizeof(entropy_count)) < 0)
+            {
+                return SYS_EFAULT;
+            }
+            return 0;
+        }
+
+        auto block_device_size_for_ioctl = [&](uint64 &device_size) -> int
+        {
+            if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
+            {
+                return SYS_ENOTTY;
+            }
+
+            const eastl::string &path = f->_path_name;
+            if (path == "/dev/block/8:0")
+            {
+                device_size = 512ull * 8ull * 1024ull * 1024ull;
+                return 0;
+            }
+            if (path.find("/dev/loop") == 0 && path.size() > strlen("/dev/loop") &&
+                path[strlen("/dev/loop")] >= '0' && path[strlen("/dev/loop")] <= '9')
+            {
+                int loop_num = 0;
+                const char *cursor = path.c_str() + strlen("/dev/loop");
+                while (*cursor >= '0' && *cursor <= '9')
+                {
+                    loop_num = loop_num * 10 + (*cursor - '0');
+                    ++cursor;
+                }
+                dev::LoopDevice *loop_dev = dev::LoopControlDevice::get_loop_device(loop_num);
+                if (loop_dev != nullptr && loop_dev->is_bound() && loop_dev->get_size() > 0)
+                {
+                    device_size = loop_dev->get_size();
+                }
+                else
+                {
+                    device_size = 512ull * 8ull * 1024ull * 1024ull;
+                }
+                return 0;
+            }
+            return SYS_ENOTTY;
+        };
+
+        if ((cmd & 0xFFFF) == 0x1260) // BLKGETSIZE: 512-byte sectors
+        {
+            if (arg == 0)
+            {
+                return SYS_EFAULT;
+            }
+            uint64 device_size = 0;
+            int size_ret = block_device_size_for_ioctl(device_size);
+            if (size_ret < 0)
+            {
+                return size_ret;
+            }
+            ulong sectors = static_cast<ulong>(device_size / 512ull);
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+            if (mem::k_vmm.copy_out(*pt, arg, &sectors, sizeof(sectors)) < 0)
+            {
+                return SYS_EFAULT;
+            }
+            return 0;
+        }
+
+        if ((cmd & 0xFFFF) == 0x1272) // BLKGETSIZE64: bytes
+        {
+            if (arg == 0)
+            {
+                return SYS_EFAULT;
+            }
+            uint64 device_size = 0;
+            int size_ret = block_device_size_for_ioctl(device_size);
+            if (size_ret < 0)
+            {
+                return size_ret;
+            }
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+            if (mem::k_vmm.copy_out(*pt, arg, &device_size, sizeof(device_size)) < 0)
+            {
+                return SYS_EFAULT;
+            }
+            return 0;
+        }
+
+        if ((cmd & 0xFFFF) == 0x1263) // BLKRAGET
+        {
+            if (arg == 0)
+            {
+                return SYS_EFAULT;
+            }
+            uint64 device_size = 0;
+            int size_ret = block_device_size_for_ioctl(device_size);
+            if (size_ret < 0)
+            {
+                return size_ret;
+            }
+            (void)device_size;
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+            if (mem::k_vmm.copy_out(*pt, arg, &g_block_device_read_ahead, sizeof(g_block_device_read_ahead)) < 0)
+            {
+                return SYS_EFAULT;
+            }
+            return 0;
+        }
+
+        if ((cmd & 0xFFFF) == 0x1262) // BLKRASET
+        {
+            uint64 device_size = 0;
+            int size_ret = block_device_size_for_ioctl(device_size);
+            if (size_ret < 0)
+            {
+                return size_ret;
+            }
+            (void)device_size;
+            g_block_device_read_ahead = static_cast<ulong>(arg);
+            return 0;
+        }
+
         printfYellow("[SyscallHandler::sys_ioctl] cmd: 0x%X, arg: %u\n", (cmd & 0xFFFF), arg);
         // Handle individual loop device operations
         if ((cmd & 0xFF00) == 0x4C00) // Loop device ioctl commands
@@ -7493,7 +8904,110 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_fsopen()
     {
-        return alloc_anonymous_non_socket_fd("anon_inode:[fsopen]");
+        constexpr uint32 kFsopenCloexec = 0x00000001;
+
+        eastl::string fsname;
+        int flags;
+        int name_ret = _arg_str(0, fsname, 64);
+        if (name_ret < 0)
+        {
+            return name_ret;
+        }
+        if (_arg_int(1, flags) < 0)
+        {
+            return -EINVAL;
+        }
+        if ((static_cast<uint32>(flags) & ~kFsopenCloexec) != 0)
+        {
+            return -EINVAL;
+        }
+        if (fsname != "ext2" && fsname != "ext3" && fsname != "ext4" &&
+            fsname != "vfat" && fsname != "fat" && fsname != "tmpfs")
+        {
+            return -ENODEV;
+        }
+
+        int fd = alloc_anonymous_non_socket_fd("anon_inode:[fsopen]");
+        if (fd >= 0 && (flags & kFsopenCloexec) != 0)
+        {
+            proc::Pcb *p = proc::k_pm.get_cur_pcb();
+            if (p != nullptr && p->_ofile != nullptr && fd < (int)proc::max_open_files)
+            {
+                p->_ofile->_fl_cloexec[fd] = true;
+            }
+        }
+        return fd;
+    }
+    uint64 SyscallHandler::sys_fsconfig()
+    {
+        enum FsconfigCommand
+        {
+            FSCONFIG_SET_FLAG = 0,
+            FSCONFIG_SET_STRING = 1,
+            FSCONFIG_SET_BINARY = 2,
+            FSCONFIG_SET_PATH = 3,
+            FSCONFIG_SET_PATH_EMPTY = 4,
+            FSCONFIG_SET_FD = 5,
+            FSCONFIG_CMD_CREATE = 6,
+            FSCONFIG_CMD_RECONFIGURE = 7,
+        };
+
+        int fd;
+        int cmd;
+        int aux;
+        if (_arg_int(0, fd) < 0 || _arg_int(1, cmd) < 0 || _arg_int(4, aux) < 0)
+        {
+            return -EINVAL;
+        }
+
+        uint64 key_addr = _arg_raw(2);
+        uint64 value_addr = _arg_raw(3);
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        fs::file *ctx_file = (p != nullptr) ? p->get_open_file(fd) : nullptr;
+        if (ctx_file == nullptr || ctx_file->_path_name != "anon_inode:[fsopen]")
+        {
+            return -EINVAL;
+        }
+
+        if (cmd < FSCONFIG_SET_FLAG || cmd > FSCONFIG_CMD_RECONFIGURE)
+        {
+            return -EOPNOTSUPP;
+        }
+
+        bool valid_shape = false;
+        switch (cmd)
+        {
+        case FSCONFIG_SET_FLAG:
+            valid_shape = key_addr != 0 && value_addr == 0 && aux == 0;
+            break;
+        case FSCONFIG_SET_STRING:
+            valid_shape = key_addr != 0 && value_addr != 0 && aux == 0;
+            break;
+        case FSCONFIG_SET_BINARY:
+            valid_shape = key_addr != 0 && value_addr != 0 && aux > 0;
+            break;
+        case FSCONFIG_SET_PATH:
+        case FSCONFIG_SET_PATH_EMPTY:
+            valid_shape = key_addr != 0 && value_addr != 0 &&
+                          (aux == AT_FDCWD || (p != nullptr && p->get_open_file(aux) != nullptr));
+            break;
+        case FSCONFIG_SET_FD:
+            valid_shape = key_addr != 0 && value_addr == 0 &&
+                          (p != nullptr && p->get_open_file(aux) != nullptr);
+            break;
+        case FSCONFIG_CMD_CREATE:
+        case FSCONFIG_CMD_RECONFIGURE:
+            valid_shape = key_addr == 0 && value_addr == 0 && aux == 0;
+            break;
+        }
+        if (!valid_shape)
+        {
+            return -EINVAL;
+        }
+
+        // 当前尚未实现新 mount API 的真实超级块配置；合法形态返回不支持，
+        // 非法形态在上面已经按 Linux ABI 收敛成 EINVAL。
+        return -EOPNOTSUPP;
     }
     uint64 SyscallHandler::sys_bpf()
     {
@@ -7513,11 +9027,222 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_inotify_init1()
     {
-        return alloc_anonymous_non_socket_fd("anon_inode:[inotify]");
+        int flags = 0;
+        if (_arg_int(0, flags) < 0)
+        {
+            return -EINVAL;
+        }
+        if ((flags & ~(O_NONBLOCK | O_CLOEXEC)) != 0)
+        {
+            return -EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (p == nullptr)
+        {
+            return -ESRCH;
+        }
+
+        auto *inotify_file = new InotifyFile(static_cast<uint32>(flags));
+        if (inotify_file == nullptr)
+        {
+            return -ENOMEM;
+        }
+
+        int fd = proc::k_pm.alloc_fd(p, inotify_file);
+        if (fd < 0)
+        {
+            inotify_file->free_file();
+            return fd;
+        }
+        if ((flags & O_CLOEXEC) != 0 && p->_ofile != nullptr && fd >= 0 && fd < (int)proc::max_open_files)
+        {
+            p->_ofile->_fl_cloexec[fd] = true;
+        }
+        return fd;
+    }
+
+    uint64 SyscallHandler::sys_inotify_add_watch()
+    {
+        int inotify_fd = -1;
+        eastl::string pathname;
+        int mask = 0;
+        if (_arg_int(0, inotify_fd) < 0)
+        {
+            return -EINVAL;
+        }
+        int path_ret = _arg_str(1, pathname, PGSIZE);
+        if (path_ret < 0)
+        {
+            return path_ret;
+        }
+        if (_arg_int(2, mask) < 0)
+        {
+            return -EINVAL;
+        }
+        if (pathname.empty())
+        {
+            return -ENOENT;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (p == nullptr)
+        {
+            return -ESRCH;
+        }
+        fs::file *base_file = p->get_open_file(inotify_fd);
+        if (base_file == nullptr || !base_file->is_inotify_file())
+        {
+            return -EINVAL;
+        }
+
+        eastl::string abs_path;
+        if (pathname[0] == '/')
+        {
+            abs_path = pathname;
+        }
+        else
+        {
+            abs_path = get_absolute_path(pathname.c_str(), p->_cwd_name.c_str());
+        }
+        abs_path = normalize_watch_path(abs_path);
+
+        fs::Kstat st{};
+        int stat_ret = vfs_path_stat(abs_path.c_str(), &st, (static_cast<uint32>(mask) & kInDontFollow) == 0);
+        if (stat_ret < 0)
+        {
+            return stat_ret;
+        }
+        bool is_dir = (st.mode & S_IFMT) == S_IFDIR;
+        if ((static_cast<uint32>(mask) & kInOnlydir) != 0 && !is_dir)
+        {
+            return -ENOTDIR;
+        }
+
+        return static_cast<InotifyFile *>(base_file)->add_watch(abs_path, static_cast<uint32>(mask), is_dir);
+    }
+
+    uint64 SyscallHandler::sys_inotify_rm_watch()
+    {
+        int inotify_fd = -1;
+        int wd = -1;
+        if (_arg_int(0, inotify_fd) < 0 || _arg_int(1, wd) < 0)
+        {
+            return -EINVAL;
+        }
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (p == nullptr)
+        {
+            return -ESRCH;
+        }
+        fs::file *base_file = p->get_open_file(inotify_fd);
+        if (base_file == nullptr || !base_file->is_inotify_file())
+        {
+            return -EINVAL;
+        }
+        return static_cast<InotifyFile *>(base_file)->remove_watch(wd);
     }
     uint64 SyscallHandler::sys_fanotify_init()
     {
-        return alloc_anonymous_non_socket_fd("anon_inode:[fanotify]");
+        int flags;
+        int event_f_flags;
+        if (_arg_int(0, flags) < 0 || _arg_int(1, event_f_flags) < 0)
+        {
+            return -EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (p == nullptr)
+        {
+            return -ESRCH;
+        }
+
+        auto *fan_file = new FanotifyFile(static_cast<uint32>(flags), static_cast<uint32>(event_f_flags));
+        if (fan_file == nullptr)
+        {
+            return -ENOMEM;
+        }
+
+        int fd = proc::k_pm.alloc_fd(p, fan_file);
+        if (fd < 0)
+        {
+            fan_file->free_file();
+            return fd;
+        }
+        if ((flags & kFanCloexec) != 0 && p->_ofile != nullptr && fd >= 0 && fd < (int)proc::max_open_files)
+        {
+            p->_ofile->_fl_cloexec[fd] = true;
+        }
+        return fd;
+    }
+
+    uint64 SyscallHandler::sys_fanotify_mark()
+    {
+        int fanotify_fd;
+        int flags;
+        uint64 mask;
+        int dirfd;
+        eastl::string pathname;
+
+        if (_arg_int(0, fanotify_fd) < 0 || _arg_int(1, flags) < 0)
+            return -EINVAL;
+        if (_arg_addr(2, mask) < 0)
+            return -EINVAL;
+        if (_arg_int(3, dirfd) < 0)
+            return -EINVAL;
+        int path_ret = _arg_str(4, pathname, PGSIZE);
+        if (path_ret < 0)
+            return path_ret;
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (p == nullptr)
+            return -ESRCH;
+
+        fs::file *base_file = p->get_open_file(fanotify_fd);
+        if (base_file == nullptr || !base_file->is_fanotify_file())
+            return -EINVAL;
+        auto *fan_file = static_cast<FanotifyFile *>(base_file);
+
+        eastl::string abs_path;
+        if (pathname.empty())
+        {
+            return -ENOENT;
+        }
+        if (pathname[0] == '/')
+        {
+            abs_path = pathname;
+        }
+        else if (dirfd == AT_FDCWD)
+        {
+            abs_path = get_absolute_path(pathname.c_str(), p->_cwd_name.c_str());
+        }
+        else
+        {
+            fs::file *dir_file = p->get_open_file(dirfd);
+            if (dir_file == nullptr)
+                return -EBADF;
+            if (dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
+                return -ENOTDIR;
+            abs_path = get_absolute_path(pathname.c_str(), dir_file->_path_name.c_str());
+        }
+
+        fs::Kstat st{};
+        int stat_ret = vfs_path_stat(abs_path.c_str(), &st, (flags & kFanMarkDontFollow) == 0);
+        if (stat_ret < 0)
+            return stat_ret;
+        if ((flags & kFanMarkOnlydir) != 0 && (st.mode & S_IFMT) != S_IFDIR)
+            return -ENOTDIR;
+        if ((flags & kFanMarkDontFollow) == 0)
+        {
+            eastl::string resolved;
+            int resolve_ret = vfs_resolve_path(abs_path, resolved);
+            if (resolve_ret == 0 && !resolved.empty())
+            {
+                abs_path = resolved;
+            }
+        }
+
+        return fan_file->update_mark(abs_path, static_cast<uint32>(flags), mask);
     }
     uint64 SyscallHandler::sys_pidfd_send_signal()
     {
@@ -9267,12 +10992,23 @@ namespace syscall
 
         printf("[sys_renameat2] old_abs_path: %s, new_abs_path: %s, flags: %d\n",
                old_abs_path.c_str(), new_abs_path.c_str(), flags);
+        old_abs_path = normalize_watch_path(old_abs_path);
+        new_abs_path = normalize_watch_path(new_abs_path);
+        bool moved_is_dir = false;
+        fs::Kstat moved_stat{};
+        if (vfs_path_stat(old_abs_path.c_str(), &moved_stat, true) == 0)
+        {
+            moved_is_dir = (moved_stat.mode & S_IFMT) == S_IFDIR;
+        }
         int ret = 0;
         if ((ret = vfs_frename(old_abs_path.c_str(), new_abs_path.c_str())) < 0)
         {
             printfRed("[sys_renameat2] rename failed: %s -> %s, ret = %d\n", old_abs_path.c_str(), new_abs_path.c_str(), ret);
             return ret;
         }
+        uint32 cookie = next_inotify_cookie();
+        notify_inotify_rename(old_abs_path, new_abs_path, moved_is_dir, cookie);
+        update_process_cwd_after_rename(old_abs_path, new_abs_path);
         return 0;
     }
 
@@ -10345,6 +12081,27 @@ namespace syscall
         mem::PageTable *pt = current_proc->get_pagetable();
 
         // current_proc->print_detailed_memory_info();
+
+        // Linux 会清空用户提供的 cpuset 缓冲区中内核未使用的部分。
+        // LTP 的 tst_ncpus_available() 直接对 CPU_ALLOC() 的未初始化缓冲区调用本系统调用；
+        // 如果只写入前 sizeof(CpuMask) 字节，后面的随机位会让它误判为多核，
+        // 进而在单核 QEMU 上走忙等同步路径，导致 fuzzy-sync 压测长时间无法结束。
+        constexpr size_t k_zero_chunk_size = 64;
+        char zero_chunk[k_zero_chunk_size] = {};
+        for (ulong cleared = 0; cleared < cpusetsize;)
+        {
+            size_t chunk = cpusetsize - cleared;
+            if (chunk > k_zero_chunk_size)
+            {
+                chunk = k_zero_chunk_size;
+            }
+            if (mem::k_vmm.copy_out(*pt, mask_addr + cleared, zero_chunk, chunk) < 0)
+            {
+                printfRed("[sys_sched_getaffinity] failed to clear cpu mask buffer\n");
+                return SYS_EFAULT;
+            }
+            cleared += chunk;
+        }
 
         printfGreen("[sys_sched_getaffinity] Copying CPU mask to user space at address %p\n", (void *)mask_addr);
         if (mem::k_vmm.copy_out(*pt, mask_addr, &cpu_mask, sizeof(CpuMask)) < 0)
@@ -13101,8 +14858,8 @@ namespace syscall
         }
 
         // 验证标志
-        if (flags != 0 && flags != XATTR_CREATE && flags != XATTR_REPLACE &&
-            flags != (XATTR_CREATE | XATTR_REPLACE))
+        if ((flags & ~(XATTR_CREATE | XATTR_REPLACE)) != 0 ||
+            flags == (XATTR_CREATE | XATTR_REPLACE))
         {
             printfRed("[SyscallHandler::sys_fsetxattr] 无效的标志参数: %d\n", flags);
             return -EINVAL;
@@ -13271,8 +15028,8 @@ namespace syscall
             return -ERANGE;
         }
 
-        // Only support flags==0 for now
-        if (flags != 0)
+        if ((flags & ~(XATTR_CREATE | XATTR_REPLACE)) != 0 ||
+            flags == (XATTR_CREATE | XATTR_REPLACE))
             return -EINVAL;
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
@@ -13358,8 +15115,8 @@ namespace syscall
             return -ERANGE;
         }
 
-        // Only support flags==0 for now
-        if (flags != 0)
+        if ((flags & ~(XATTR_CREATE | XATTR_REPLACE)) != 0 ||
+            flags == (XATTR_CREATE | XATTR_REPLACE))
             return -EINVAL;
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
@@ -14311,9 +16068,17 @@ namespace syscall
         int owner;
         int group;
         int flags;
-        if (_arg_int(0, dirfd) < 0 ||
-            _arg_str(1, pathname, MAXPATH) < 0 ||
-            _arg_int(2, owner) < 0 ||
+        if (_arg_int(0, dirfd) < 0)
+        {
+            printfRed("[SyscallHandler::sys_fchownat] dirfd 参数错误\n");
+            return SYS_EINVAL;
+        }
+        int path_ret = _arg_str(1, pathname, MAXPATH);
+        if (path_ret < 0)
+        {
+            return path_ret;
+        }
+        if (_arg_int(2, owner) < 0 ||
             _arg_int(3, group) < 0 ||
             _arg_int(4, flags) < 0)
         {
@@ -14362,8 +16127,9 @@ namespace syscall
                 target_path = get_absolute_path(target_path.c_str(), p->_cwd_name.c_str());
             }
 
-            if (vfs_is_readonly_path(target_path))
-                return SYS_EROFS;
+            int path_check_ret = validate_chown_target_path(target_path, true);
+            if (path_check_ret < 0)
+                return path_check_ret;
 
             // 权限与语义检查
             bool privileged = (p && p->get_euid() == 0);
@@ -14445,8 +16211,10 @@ namespace syscall
             abs_pathname = get_absolute_path(abs_pathname.c_str(), p->_cwd_name.c_str());
         }
 
-        if (vfs_is_readonly_path(abs_pathname))
-            return SYS_EROFS;
+        bool follow = !(flags & AT_SYMLINK_NOFOLLOW);
+        int path_check_ret = validate_chown_target_path(abs_pathname, follow);
+        if (path_check_ret < 0)
+            return path_check_ret;
 
         // 权限判断
         bool privileged = (p && p->get_euid() == 0);
@@ -14464,8 +16232,6 @@ namespace syscall
                 return SYS_EPERM;
         }
 
-        // 是否跟随符号链接
-        bool follow = !(flags & AT_SYMLINK_NOFOLLOW);
         int rc = vfs_chown(abs_pathname, owner, group, follow);
         if (rc < 0)
             return rc;
@@ -15026,11 +16792,12 @@ namespace syscall
         p->_gid = new_rgid;
         p->_egid = new_egid;
 
-        // 根据POSIX标准：如果真实组ID发生改变，保存的设置组ID被设置为新的有效组ID
-        if (rgid != -1 && new_rgid != current_rgid)
+        // Linux setregid(): 只要 real gid 发生显式设置，或 effective gid
+        // 被改成不同于旧 real gid 的值，saved gid 都同步为新的 effective gid。
+        if (rgid != -1 || (egid != -1 && new_egid != current_rgid))
         {
             p->_sgid = new_egid;
-            printfCyan("[SyscallHandler::sys_setregrid] rgid改变，更新 sgid 为: %d\n", p->_sgid);
+            printfCyan("[SyscallHandler::sys_setregrid] 更新 sgid 为: %d\n", p->_sgid);
         }
 
         // 更新文件系统组ID
@@ -15420,8 +17187,29 @@ namespace syscall
             return SYS_EFAULT;
         }
 
-        // 当前内核不维护补充组；Linux 允许返回 0 个补充组。
-        return 0;
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (p == nullptr)
+        {
+            return SYS_ESRCH;
+        }
+
+        int group_count = p->_supplementary_group_count;
+        if (size == 0)
+        {
+            return group_count;
+        }
+        if (size < group_count)
+        {
+            return SYS_EINVAL;
+        }
+        if (group_count > 0 &&
+            mem::k_vmm.copy_out(*p->get_pagetable(), list_addr,
+                                p->_supplementary_groups,
+                                group_count * sizeof(p->_supplementary_groups[0])) < 0)
+        {
+            return SYS_EFAULT;
+        }
+        return group_count;
     }
     uint64 SyscallHandler::sys_setgroups()
     {
@@ -15431,7 +17219,7 @@ namespace syscall
         {
             return SYS_EINVAL;
         }
-        if (size < 0 || size > 65536)
+        if (size < 0 || size > (int)proc::max_supplementary_groups)
         {
             return SYS_EINVAL;
         }
@@ -15451,14 +17239,19 @@ namespace syscall
             {
                 return SYS_EFAULT;
             }
-            uint32_t ignored_gid = 0;
-            if (mem::k_vmm.copy_in(*p->get_pagetable(), &ignored_gid, list_addr, sizeof(ignored_gid)) < 0)
+            if (mem::k_vmm.copy_in(*p->get_pagetable(),
+                                   p->_supplementary_groups,
+                                   list_addr,
+                                   size * sizeof(p->_supplementary_groups[0])) < 0)
             {
                 return SYS_EFAULT;
             }
         }
-
-        // 暂不保存补充组，至少保证 libc/LTP 查询路径不会 panic。
+        else
+        {
+            memset(p->_supplementary_groups, 0, sizeof(p->_supplementary_groups));
+        }
+        p->_supplementary_group_count = size;
         return 0;
     }
     uint64 SyscallHandler::sys_sethostname()

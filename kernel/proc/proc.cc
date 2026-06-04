@@ -110,6 +110,8 @@ namespace proc
         _egid = 0;  // 有效组ID
         _sgid = 0;  // 保存的设置组ID
         _fsgid = 0; // 文件系统组ID
+        memset(_supplementary_groups, 0, sizeof(_supplementary_groups));
+        _supplementary_group_count = 0;
 
         /****************************************************************************************
          * 进程状态和调度信息
