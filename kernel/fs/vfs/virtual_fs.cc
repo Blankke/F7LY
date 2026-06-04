@@ -321,6 +321,8 @@ namespace fs
         // /proc/sys/kernel/pid_max
         add_virtual_file("/proc/sys/kernel/pid_max", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcSysKernelPidMaxProvider>());
+        add_virtual_file("/proc/sys/kernel/random/entropy_avail", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcSysKernelRandomEntropyAvailProvider>());
 
         // 注意：/proc/self/cmdline, /proc/stat, /proc/uptime 等需要相应的 Provider 实现
         // 这里先创建节点，但 provider 为 nullptr，可以后续添加
@@ -328,6 +330,19 @@ namespace fs
         add_virtual_file("/proc/stat", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcStatProvider>());
         add_virtual_file("/proc/uptime", fs::FileTypes::FT_NORMAL, nullptr);
+
+        // 当前默认 QEMU 启动参数是 -smp 1。sysconf()/LTP 会读取这些 sysfs 节点推断
+        // online/present/max CPU，必须和 sched_getaffinity()、/proc/self/status 保持单核一致。
+        add_virtual_file("/sys/devices/system/cpu/online", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<StaticContentProvider>("0\n"));
+        add_virtual_file("/sys/devices/system/cpu/present", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<StaticContentProvider>("0\n"));
+        add_virtual_file("/sys/devices/system/cpu/possible", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<StaticContentProvider>("0\n"));
+        add_virtual_file("/sys/devices/system/cpu/kernel_max", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<StaticContentProvider>("0\n"));
+        add_virtual_file("/sys/devices/system/cpu/cpu0/online", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<StaticContentProvider>("1\n"));
 
         // 添加 /proc/self/stat 文件及其提供者 (使用新的统一provider)
         add_virtual_file("/proc/self/stat", fs::FileTypes::FT_NORMAL,
@@ -358,12 +373,11 @@ namespace fs
         add_virtual_file("/dev/loop-control", fs::FileTypes::FT_DEVICE,
                          eastl::make_unique<DevLoopControlProvider>());
 
-        // 添加预定义的 loop 设备节点 (/dev/loop0 - /dev/loop7)
-        for (int i = 0; i < 8; i++)
+        // LTP 会连续占用多个 loop 设备；这里预注册足够多的节点，避免 /dev/loop8+ stat 失败。
+        for (int i = 0; i < 64; i++)
         {
-            char loop_name[16] = "/dev/loop";
-            loop_name[9] = '0' + i;
-            loop_name[10] = '\0';
+            char loop_name[24];
+            snprintf(loop_name, sizeof(loop_name), "/dev/loop%d", i);
             eastl::string loop_path(loop_name);
             add_virtual_file(loop_path, fs::FileTypes::FT_DEVICE,
                              eastl::make_unique<DevLoopProvider>(i));
@@ -394,17 +408,14 @@ namespace fs
                          eastl::make_unique<ProcSysFsPipeMaxSizeProvider>());
         add_virtual_file("/proc/sys/fs/lease-break-time", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcSysFsLeaseBreakTimeProvider>());
+        add_virtual_file("/proc/sys/fs/inotify/max_queued_events", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcSysFsInotifyMaxQueuedEventsProvider>());
+        add_virtual_file("/proc/sys/fs/inotify/max_user_instances", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcSysFsInotifyMaxUserInstancesProvider>());
         add_virtual_file("/proc/sys/net/ipv4/conf/default/tag", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcSysNetIpv4TagProvider>(true));
         add_virtual_file("/proc/sys/net/ipv4/conf/lo/tag", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcSysNetIpv4TagProvider>(false));
-
-        // /dev/loop
-        add_virtual_file("/dev/loop-control", fs::FileTypes::FT_DEVICE,
-                         eastl::make_unique<DevLoopControlProvider>());
-
-        add_virtual_file("/dev/loop0", fs::FileTypes::FT_DEVICE,
-                         eastl::make_unique<DevLoopProvider>(0));
 
         // /dev/block/8:0 (块设备文件)
         add_virtual_file("/dev/block/8:0", fs::FileTypes::FT_DEVICE,
@@ -421,6 +432,15 @@ namespace fs
         // /dev/urandom (非阻塞伪随机字节设备)
         add_virtual_file("/dev/urandom", fs::FileTypes::FT_DEVICE,
                          eastl::make_unique<DevUrandomProvider>());
+
+        // 最小伪终端节点，支撑 libc openpty()/ptsname() 的探测路径。
+        add_virtual_file("/dev/ptmx", fs::FileTypes::FT_DEVICE, nullptr);
+        add_virtual_file("/dev/pts/0", fs::FileTypes::FT_DEVICE, nullptr);
+
+        // 最小 TUN 设备节点，支撑 LTP ioctl03 的 TUNGETFEATURES 探测。
+        add_virtual_file("/dev/net", fs::FileTypes::FT_DIRECT, nullptr);
+        add_virtual_file("/dev/net/tun", fs::FileTypes::FT_DEVICE, nullptr);
+        add_virtual_file("/dev/tun", fs::FileTypes::FT_DEVICE, nullptr);
 
         // /dev/rtc* (RTC 设备)
         add_virtual_file("/dev/rtc", fs::FileTypes::FT_DEVICE, nullptr);
@@ -537,6 +557,29 @@ namespace fs
             }
         }
 
+        int fdinfo_pid = -1;
+        int fdinfo_fd = -1;
+        if (!node && is_proc_pid_fdinfo_path(absolute_path, fdinfo_pid, fdinfo_fd))
+        {
+            proc::Pcb *target_pcb = proc::k_pm.find_proc_by_pid(fdinfo_pid);
+            if (target_pcb == nullptr)
+            {
+                return -ENOENT;
+            }
+            if (fdinfo_fd < 0 || target_pcb->get_open_file(fdinfo_fd) == nullptr)
+            {
+                return -ENOENT;
+            }
+
+            fs::FileAttrs attrs;
+            attrs.filetype = fs::FileTypes::FT_NORMAL;
+            attrs._value = 0444;
+            file = new virtual_file(attrs, absolute_path,
+                                    eastl::make_unique<ProcPidFdinfoProvider>(fdinfo_pid, fdinfo_fd));
+            file->lwext4_file_struct.flags = flags;
+            return 0;
+        }
+
         if (node)
         {
             printfCyan("[open] using virtual file system for path: %s\n", absolute_path.c_str());
@@ -651,6 +694,56 @@ namespace fs
         return pid;
     }
 
+    bool VirtualFileSystem::is_proc_pid_fdinfo_path(const eastl::string &path, int &pid, int &fd) const
+    {
+        pid = -1;
+        fd = -1;
+
+        eastl::vector<eastl::string> parts = path_split(path);
+        if (parts.size() != 4 || parts[0] != "proc" || parts[2] != "fdinfo")
+        {
+            return false;
+        }
+
+        if (parts[1] == "self")
+        {
+            proc::Pcb *cur = proc::k_pm.get_cur_pcb();
+            if (cur == nullptr)
+            {
+                return false;
+            }
+            pid = cur->_pid;
+        }
+        else
+        {
+            pid = 0;
+            for (char c : parts[1])
+            {
+                if (c < '0' || c > '9')
+                {
+                    return false;
+                }
+                pid = pid * 10 + (c - '0');
+            }
+        }
+
+        fd = 0;
+        if (parts[3].empty())
+        {
+            return false;
+        }
+        for (char c : parts[3])
+        {
+            if (c < '0' || c > '9')
+            {
+                return false;
+            }
+            fd = fd * 10 + (c - '0');
+        }
+
+        return pid > 0;
+    }
+
     int VirtualFileSystem::fstat(fs::file *f, fs::Kstat *st)
     {
         if (f->is_virtual)
@@ -711,10 +804,46 @@ namespace fs
             fill_virtual_kstat_defaults(st, 0666 | S_IFCHR, 9, (1 << 8) | 9, 1);
             st->dev = 0x5; // Device: 5h/5d
         }
+        else if (path == "/dev/ptmx")
+        {
+            fill_virtual_kstat_defaults(st, 0666 | S_IFCHR, 2, (5 << 8) | 2, 1);
+            st->dev = 0x5;
+        }
+        else if (path.find("/dev/pts/") == 0)
+        {
+            int pts_no = 0;
+            const char *num_start = path.c_str() + strlen("/dev/pts/");
+            while (*num_start >= '0' && *num_start <= '9')
+            {
+                pts_no = pts_no * 10 + (*num_start - '0');
+                ++num_start;
+            }
+            fill_virtual_kstat_defaults(st, 0620 | S_IFCHR, 2000 + pts_no, (136 << 8) | pts_no, 1);
+            st->dev = 0x5;
+            st->gid = 5;
+        }
+        else if (path == "/dev/net/tun" || path == "/dev/tun")
+        {
+            // Linux tun 设备通常为 char 10:200；这里只实现 ioctl03 依赖的特性探测。
+            fill_virtual_kstat_defaults(st, 0666 | S_IFCHR, 200, (10 << 8) | 200, 1);
+            st->dev = 0x5;
+        }
+        else if (path == "/dev/loop-control")
+        {
+            fill_virtual_kstat_defaults(st, 0660 | S_IFCHR, 237, (10 << 8) | 237, 1);
+            st->dev = 0x5;
+            st->gid = 6;
+        }
         else if (path.find("/dev/loop") == 0)
         {
-            // 原有的loop设备处理逻辑
-            fill_virtual_kstat_defaults(st, 0660 | S_IFBLK, 124, 7, 1);
+            int loop_no = 0;
+            const char *num_start = path.c_str() + strlen("/dev/loop");
+            while (*num_start >= '0' && *num_start <= '9')
+            {
+                loop_no = loop_no * 10 + (*num_start - '0');
+                ++num_start;
+            }
+            fill_virtual_kstat_defaults(st, 0660 | S_IFBLK, 124 + loop_no, (7 << 8) | loop_no, 1);
             st->dev = 0x5; // Device: 5h/5d
             st->gid = 6;   // Gid: 6 (disk)
         }

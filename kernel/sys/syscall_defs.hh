@@ -31,6 +31,8 @@ namespace syscall
         SYS_dup3 = 24,
         SYS_fcntl = 25,
         SYS_inotify_init1 = 26,
+        SYS_inotify_add_watch = 27,
+        SYS_inotify_rm_watch = 28,
         SYS_ioctl = 29,
         SYS_flock = 32,
         SYS_mknodat = 33, // from rocket
@@ -204,6 +206,7 @@ namespace syscall
         SYS_wait4 = 260,
         SYS_prlimit64 = 261,
         SYS_fanotify_init = 262,
+        SYS_fanotify_mark = 263,
         SYS_clockadjtime = 266, // from rocket
         SYS_setns = 268,
         SYS_sendmmsg = 269,
@@ -211,6 +214,7 @@ namespace syscall
         SYS_getrandom = 278,
         SYS_memfd_create = 279,
         SYS_bpf = 280,
+        SYS_execveat = 281,
         SYS_userfaultfd = 282,
         SYS_membarrier = 283,      // form tsh
         SYS_copy_file_range = 285, // from rocket
@@ -222,6 +226,7 @@ namespace syscall
         SYS_recvmmsg_time64 = 417,
         SYS_open_tree = 428,
         SYS_fsopen = 430,
+        SYS_fsconfig = 431,
         SYS_fspick = 433,
         SYS_pidfd_open = 434,
         SYS_clone3 = 435,      // form tsh

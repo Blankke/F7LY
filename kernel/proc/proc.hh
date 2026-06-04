@@ -54,6 +54,7 @@ namespace proc
     constexpr int lowest_proc_prio = 19;   // 最低优先级对应的 nice 值
     constexpr int highest_proc_prio = -20; // 最高优先级对应的 nice 值
     constexpr uint max_open_files = 256;   // 每个进程最多可以打开的文件数量；lmbench lat_ctx 96 需要至少 192 个 pipe fd。
+    constexpr uint max_supplementary_groups = 64; // LTP 当前只需要少量补充组，固定容量避免凭据路径动态分配。
     constexpr uint pid_max = 4194304;      // Linux 默认级别的 PID 上限，供 /proc/sys/kernel/pid_max 和范围校验使用
     constexpr int k_interval_timer_count = 3; // ITIMER_REAL / ITIMER_VIRTUAL / ITIMER_PROF
     struct ofile
@@ -143,6 +144,8 @@ namespace proc
         uint32 _egid;  // 有效组ID
         uint32 _sgid;  // 保存的设置组ID
         uint32 _fsgid; // 文件系统组ID
+        uint32 _supplementary_groups[max_supplementary_groups]; // setgroups/getgroups 使用的补充组列表
+        int _supplementary_group_count;                         // 当前有效补充组数量
 
         /****************************************************************************************
          * 进程状态和调度信息

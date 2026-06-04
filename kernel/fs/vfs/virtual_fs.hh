@@ -128,6 +128,7 @@ namespace fs
         // 新增：处理动态 /proc/<pid>/stat 路径的辅助方法
         bool is_proc_pid_stat_path(const eastl::string& path) const;
         int extract_pid_from_path(const eastl::string& path) const;
+        bool is_proc_pid_fdinfo_path(const eastl::string& path, int &pid, int &fd) const;
         
     public:
         VirtualFileSystem();

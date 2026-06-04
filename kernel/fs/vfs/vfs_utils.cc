@@ -549,6 +549,7 @@ namespace
         switch (ext4_inode_type(sb, &inode))
         {
         case EXT4_INODE_MODE_CHARDEV:
+        case EXT4_INODE_MODE_BLOCKDEV:
             return fs::FileTypes::FT_DEVICE;
         case EXT4_INODE_MODE_DIRECTORY:
             return fs::FileTypes::FT_DIRECT;
@@ -3597,6 +3598,10 @@ int vfs_getxattr(const eastl::string &pathname, const char *name, void *buf, siz
     if (r == EOK)
     {
         out_size = data_size;
+        if (buf_size != 0 && data_size > buf_size)
+        {
+            return -ERANGE;
+        }
     }
     return map_ext4_err_to_sys(r);
 }
@@ -3652,6 +3657,13 @@ int vfs_fsetxattr(fs::file *f, const char *name, const void *data, size_t size)
         printfRed("vfs_fsetxattr: invalid file or name\n");
         return -EINVAL;
     }
+    if (f->_attrs.filetype == fs::FileTypes::FT_PIPE ||
+        f->_attrs.filetype == fs::FileTypes::FT_DEVICE ||
+        f->_attrs.filetype == fs::FileTypes::FT_SOCKET)
+    {
+        // Linux 的 user.* xattr 只允许普通文件和目录；特殊文件没有该属性。
+        return -ENODATA;
+    }
     return vfs_setxattr(f->_path_name, name, data, size, /*follow_symlinks*/ true);
 }
 
@@ -3659,6 +3671,14 @@ int vfs_fgetxattr(fs::file *f, const char *name, void *buf, size_t buf_size, siz
 {
     if (!f || !name)
         return -EINVAL;
+    if (f->_attrs.filetype == fs::FileTypes::FT_PIPE ||
+        f->_attrs.filetype == fs::FileTypes::FT_DEVICE ||
+        f->_attrs.filetype == fs::FileTypes::FT_SOCKET)
+    {
+        out_size = 0;
+        // 特殊文件没有 user.* xattr，返回 ENODATA 而不是向 ext4 普通文件路径下探。
+        return -ENODATA;
+    }
     return vfs_getxattr(f->_path_name, name, buf, buf_size, out_size, /*follow_symlinks*/ true);
 }
 

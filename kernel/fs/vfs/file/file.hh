@@ -171,6 +171,8 @@ namespace fs
 		long _file_ptr = 0;		  // file read header's offset correponding to the start of the file
 		eastl::string _path_name; // file's path, used for readlink
 		eastl::string _backing_path; // 底层真实路径；memfd 对外名字与真实路径分离时使用
+		bool _suppress_fanotify = false; // fanotify 事件 fd 自身不应再次产生 fanotify 事件
+		bool _unlinked_from_dir = false; // 文件仍由 fd 持有，但对应目录项已被 unlink。
 		struct ext4_file lwext4_file_struct;
 			struct ext4_dir lwext4_dir_struct;
 			flock _lock; // file lock, used for flock
@@ -324,6 +326,10 @@ namespace fs
 		virtual void invalidate_cached_file_data() {}
 		// 供匿名内核文件（如 epoll）在不依赖 RTTI 的情况下做类型识别。
 		virtual bool is_epoll_file() const { return false; }
+		virtual bool is_fanotify_file() const { return false; }
+		virtual bool is_inotify_file() const { return false; }
+		// /proc/<pid>/fdinfo/<fd> 由具体匿名 fd 自己导出调试/状态内容。
+		virtual eastl::string proc_fdinfo() const { return ""; }
 		// 供 setns(CLONE_NEWTIME) 从 namespace 文件里取回目标时钟偏移。
 		virtual bool get_time_namespace_snapshot(time_namespace_snapshot &snapshot) const
 		{

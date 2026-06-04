@@ -721,7 +721,7 @@ namespace fs
 			}
 		}
 
-		if ((refcnt == 1 || _read_snapshot_valid) &&
+		if ((refcnt == 1 || !upgrade) &&
 			fast_off >= 0 &&
 			_read_snapshot_valid &&
 			_read_snapshot_buffer != nullptr &&
@@ -928,7 +928,7 @@ namespace fs
 			}
 		}
 
-		if ((refcnt == 1 || _read_snapshot_valid) &&
+		if ((refcnt == 1 || !upgrade) &&
 			fast_off >= 0 &&
 			_read_snapshot_valid &&
 			_read_snapshot_buffer != nullptr &&
