@@ -18,6 +18,7 @@ namespace fs
         GENERIC,
         DEV_ZERO,
         DEV_NULL,
+        DEV_FULL,
         DEV_URANDOM,
         PROC_SELF_EXE,
         PROC_MEMINFO,
@@ -453,6 +454,19 @@ namespace fs
         }
     };
 
+    // /proc/sys/kernel/domainname 内容提供者
+    class ProcSysKernelDomainnameProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_dynamic() const override { return true; }
+        virtual bool is_writable() const override { return true; }
+        virtual long handle_write(uint64 buf, size_t len, long off) override;
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcSysKernelDomainnameProvider>();
+        }
+    };
+
     // 通用的 /proc/<pid>/stat 内容提供者
     class ProcPidStatProvider : public VirtualContentProvider
     {
@@ -508,6 +522,20 @@ namespace fs
         virtual VirtualProviderType get_provider_type() const override { return VirtualProviderType::DEV_NULL; }
         virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
             return eastl::make_unique<DevNullProvider>();
+        }
+    };
+
+    // /dev/full 内容提供者
+    class DevFullProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_dynamic() const override { return true; }
+        virtual bool is_writable() const override { return true; }
+        virtual long handle_write(uint64 buf, size_t len, long off) override;
+        virtual VirtualProviderType get_provider_type() const override { return VirtualProviderType::DEV_FULL; }
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<DevFullProvider>();
         }
     };
 

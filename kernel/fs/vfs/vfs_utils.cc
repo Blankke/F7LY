@@ -1180,10 +1180,6 @@ static int validate_lookup_prefix_permissions(const eastl::string &absolute_path
     {
         return -EFAULT;
     }
-    if (current_proc->get_fsuid() == 0)
-    {
-        return EOK;
-    }
 
     eastl::string parent_path = absolute_path.substr(0, last_slash);
 
@@ -1202,18 +1198,37 @@ static int validate_lookup_prefix_permissions(const eastl::string &absolute_path
         eastl::string lookup_current = resolved_current;
         select_runtime_alias_path(resolved_current, lookup_current, false);
 
+        fs::vfile_tree_node *virtual_node = fs::k_vfs.get_virtual_node(lookup_current);
+        if (virtual_node != nullptr)
+        {
+            if (virtual_node->file_type != fs::FileTypes::FT_DIRECT)
+            {
+                return -ENOTDIR;
+            }
+            start = end + 1;
+            continue;
+        }
+
         int exists = raw_vfs_is_file_exist(lookup_current);
         if (exists < 0)
+        {
             return exists;
+        }
         if (exists == 0)
+        {
             return -ENOENT;
+        }
 
         fs::Kstat st;
         int stat_ret = raw_vfs_path_stat(lookup_current, &st);
         if (stat_ret < 0)
+        {
             return stat_ret;
+        }
         if ((st.mode & S_IFMT) != S_IFDIR)
+        {
             return -ENOTDIR;
+        }
 
         uint32_t fsuid = current_proc->get_fsuid();
         uint32_t fsgid = current_proc->get_fsgid();

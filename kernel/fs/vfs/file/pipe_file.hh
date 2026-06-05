@@ -100,6 +100,8 @@ namespace fs
 			// 才应当报告为 ready。
 			return _can_write && _pipe->can_write_without_blocking();
 		}
+		bool allows_read_end() const { return _can_read; }
+		bool allows_write_end() const { return _can_write; }
 		bool epoll_write_ready(bool edge_triggered) const
 		{
 			if (!_can_write)

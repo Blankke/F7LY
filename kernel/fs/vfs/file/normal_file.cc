@@ -429,6 +429,21 @@ namespace fs
 		}
 
 		uint64 file_size = lwext4_file_struct.fsize;
+		if (_unlinked_from_dir)
+		{
+			// 目录项已经被 unlink 后，打开的 fd 仍然应该像 Linux 一样继续持有匿名文件。
+			// 此时不能再为了预读旧内容去访问原路径/底层句柄；只维护 fd 内部可见的逻辑大小。
+			size_t preload_size = static_cast<size_t>(min(logical_file_size_locked(),
+														  static_cast<uint64>(k_write_combine_capacity)));
+			if (preload_size > 0)
+			{
+				memset(_write_combine_buffer, 0, preload_size);
+			}
+			_write_combine_base = 0;
+			_write_combine_size = preload_size;
+			_stat.size = logical_file_size_locked();
+			return EOK;
+		}
 		if (!(file_size == 0 && _stat.size == 0 && off == 0))
 		{
 			refresh_ext4_file_size_locked();
@@ -523,6 +538,38 @@ namespace fs
 		}
 
 		const long logical_pos = _file_ptr;
+		if (_unlinked_from_dir)
+		{
+			// Linux 语义要求已 unlink 但仍打开的 fd 可继续写；lwext4 删除最后目录项后
+			// 可能让旧 ext4_file 句柄写回返回 EINVAL，这里把它收束为匿名 fd 的内存态写入。
+			uint64 end_off = static_cast<uint64>(off) + len;
+			if (end_off < static_cast<uint64>(off))
+			{
+				return EINVAL;
+			}
+			if (upgrade)
+			{
+				_file_ptr = off + static_cast<long>(len);
+			}
+			else
+			{
+				_file_ptr = logical_pos;
+			}
+			if (end_off > lwext4_file_struct.fsize)
+			{
+				lwext4_file_struct.fsize = end_off;
+			}
+			if (lwext4_file_struct.fsize > _stat.size)
+			{
+				_stat.size = lwext4_file_struct.fsize;
+			}
+			if (written != nullptr)
+			{
+				*written = len;
+			}
+			sync_memfd_size_from_file();
+			return EOK;
+		}
 		if (static_cast<long>(lwext4_file_struct.fpos) != off)
 		{
 			int seek_status = ext4_fseek(&lwext4_file_struct, off, SEEK_SET);

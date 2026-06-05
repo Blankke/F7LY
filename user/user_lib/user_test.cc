@@ -1140,7 +1140,15 @@ struct ltp_testcase ltp_testcases[] = {
 
     // {NULL,false,false,false,false},  //6.4，todo：修复上述所有测例。
     {"memfd_create01", true, true, true, true},
+    {"splice01", true, true, true, true},
+    {"splice02", true, true, true, true},
+    {"splice03", true, true, true, true},
+    {"splice04", true, true, true, true},
+    {"splice05", true, true, true, true},
+    {"splice06", true, true, true, true},
     {"splice07", true, true, true, true},
+    {"splice08", true, true, true, true},
+    {"splice09", true, true, true, true},
     {"epoll_ctl03", true, true, true, true},
     {"access01", true, true, true, true},
     {"access02", true, true, true, true},
@@ -1704,10 +1712,10 @@ struct ltp_testcase ltp_testcases[] = {
     {"clock_settime02", true, true, true, true},//pass 12
     {"clock_settime03", true, true, true, true},//pass 1
     {"clone02", false, true, false, true}, //pass
-    {"clone04", true, true, true, true}, //TBROK: Test killed by SIGSEGV!
+    {"clone04", false, true, true, true}, // RV+musl 的 clone(NULL stack) 包装器问题已由前方权威条目关闭
     {"clone05", true, true, true, true},//pass
     {"clone07", true, true, true, true}, //pass
-    {"clone08", true, true, true, true},//pass
+    {"clone08", true, true, false, true}, // LA+musl 的 CLONE_THREAD+NULL tls 包装器问题已由前方权威条目关闭
     {"clone09", true, true, true, true}, //pass
     {"clone301", true, true, true, true}, //pass
     {"close02", true, true, true, true}, //TFAIL: close(-1) expected EBADF: EPERM (1)
@@ -3353,14 +3361,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"smt_smp_enabled.sh", true, true, true, true},
     // {"snd_seq01", true, true, true, true},
     // {"snd_timer01", true, true, true, true},
-    // {"splice01", true, true, true, true},
-    // {"splice02", true, true, true, true},
-    // {"splice03", true, true, true, true},
-    // {"splice04", true, true, true, true},
-    // {"splice05", true, true, true, true},
-    // {"splice06", true, true, true, true},
-    // {"splice08", true, true, true, true},
-    // {"splice09", true, true, true, true},
     // {"squashfs01", true, true, true, true},
     // {"ssetmask01", true, true, true, true},
     // {"stack_clash", true, true, true, true},
