@@ -22,6 +22,7 @@
 #include "shm/shm_manager.hh"
 #include "net/drivers/virtio_net.hh"
 #include "fs/vfs/vfs_utils.hh"
+#include "fs/vfs/virtual_fs.hh"
 extern char etext[]; // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
@@ -817,7 +818,7 @@ namespace mem
             if (vm->vfile != nullptr)
             {
                 fs::Kstat st;
-                int size_result = vfs_fstat(vm->vfile, &st);
+                int size_result = fs::k_vfs.fstat(vm->vfile, &st);
                 if (size_result != EOK)
                 {
                     printfRed("[allocate_vma_page] failed to get shared file size for %s\n",
@@ -878,7 +879,7 @@ namespace mem
 
             // 获取文件实际大小
             fs::Kstat st;
-            int size_result = vfs_fstat(vf, &st);
+            int size_result = fs::k_vfs.fstat(vf, &st);
             uint64 file_size = st.size;
             if (size_result != EOK)
             {
