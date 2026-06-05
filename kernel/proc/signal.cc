@@ -170,6 +170,18 @@ namespace
                     continue;
                 }
 
+                // fork 后用户栈页可能仍与子进程以 COW 方式共享。信号帧写入前必须先拆页，
+                // 不能仅把父进程 PTE 提升为可写，否则会直接覆盖子进程的返回栈。
+                if (!pte.is_writable() &&
+                    mem::k_vmm.resolve_cow_page(*p->get_pagetable(), page_va) == 0)
+                {
+                    pte = p->get_pagetable()->walk(page_va, 0);
+                    if (pte.is_null() || pte.get_data() == 0 || !pte.is_valid())
+                    {
+                        continue;
+                    }
+                }
+
                 uint64 pte_data = pte.get_data();
 #ifdef RISCV
                 pte_data |= PTE_V | PTE_U | PTE_R | PTE_W;
@@ -356,6 +368,18 @@ namespace
             if (signal_pte_is_user_writable(pte))
             {
                 continue;
+            }
+
+            // copy_out() 本身能处理 COW，但下面的权限提升路径会先把页改成可写，
+            // 从而掩盖 COW 标志。这里先完成私有化，保证父进程信号帧不会污染 fork 子进程。
+            if (!pte.is_null() && pte.get_data() != 0 && pte.is_valid() &&
+                mem::k_vmm.resolve_cow_page(*p->get_pagetable(), page_va) == 0)
+            {
+                pte = p->get_pagetable()->walk(page_va, 0);
+                if (signal_pte_is_user_writable(pte))
+                {
+                    continue;
+                }
             }
 
             int vm_idx = -1;

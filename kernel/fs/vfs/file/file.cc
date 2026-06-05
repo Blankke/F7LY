@@ -1075,6 +1075,16 @@ namespace fs
     }
     void file_pool::remove(eastl::string path)
     {
+        _lock.acquire();
         _unlink_list.erase_first(path);
+        _lock.release();
+    }
+
+    bool file_pool::has_unlinked(const eastl::string &path)
+    {
+        _lock.acquire();
+        bool found = eastl::find(_unlink_list.begin(), _unlink_list.end(), path) != _unlink_list.end();
+        _lock.release();
+        return found;
     }
 }

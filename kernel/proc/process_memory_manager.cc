@@ -22,6 +22,7 @@
 #include "memlayout.hh"
 #include "fs/vfs/file/normal_file.hh"
 #include "fs/vfs/vfs_utils.hh"
+#include "fs/vfs/virtual_fs.hh"
 #include "shm/shm_manager.hh"
 
 // 外部符号声明
@@ -2210,7 +2211,7 @@ namespace proc
         uint64 file_size = 0;
         bool has_file_size = false;
         fs::Kstat st = {};
-        if (vfs_fstat(vma_entry.vfile, &st) == 0)
+        if (fs::k_vfs.fstat(vma_entry.vfile, &st) == 0)
         {
             file_size = st.size;
             has_file_size = true;

@@ -134,7 +134,7 @@ namespace fs
 		File *find_file(eastl::string path);
 		int unlink(eastl::string path);
 		void remove(eastl::string path);
-		bool has_unlinked(eastl::string path) { return eastl::find(_unlink_list.begin(), _unlink_list.end(), path) != _unlink_list.end(); };
+		bool has_unlinked(const eastl::string &path);
 	};
 
 	extern file_pool k_file_table;

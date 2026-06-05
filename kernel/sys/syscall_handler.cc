@@ -1700,6 +1700,8 @@ namespace syscall
                     continue;
                 }
 
+                // close/dup 会在同一把锁下替换 fd 槽位；遍历期间固定槽位中的 file 指针。
+                pcb->_ofile->_lock.acquire();
                 for (uint fd = 0; fd < proc::max_open_files; ++fd)
                 {
                     fs::file *candidate = pcb->_ofile->_ofile_ptr[fd];
@@ -1709,6 +1711,7 @@ namespace syscall
                         candidate->_unlinked_from_dir = true;
                     }
                 }
+                pcb->_ofile->_lock.release();
             }
         }
 
@@ -1725,8 +1728,9 @@ namespace syscall
 
         eastl::vector<fs::file *> g_fanotify_files;
         eastl::vector<fs::file *> g_inotify_files;
+        SpinLock g_notify_registry_lock;
 
-        void register_notify_file(eastl::vector<fs::file *> &registry, fs::file *file)
+        void register_notify_file_locked(eastl::vector<fs::file *> &registry, fs::file *file)
         {
             if (file == nullptr)
             {
@@ -1738,7 +1742,7 @@ namespace syscall
             }
         }
 
-        void unregister_notify_file(eastl::vector<fs::file *> &registry, fs::file *file)
+        void unregister_notify_file_locked(eastl::vector<fs::file *> &registry, fs::file *file)
         {
             auto it = eastl::find(registry.begin(), registry.end(), file);
             if (it != registry.end())
@@ -1747,14 +1751,89 @@ namespace syscall
             }
         }
 
-        class FanotifyFile : public fs::file
+        eastl::vector<fs::file *> pin_notify_files(eastl::vector<fs::file *> &registry)
+        {
+            eastl::vector<fs::file *> pinned;
+            g_notify_registry_lock.acquire();
+            pinned.reserve(registry.size());
+            for (fs::file *file : registry)
+            {
+                if (file == nullptr || file->refcnt == 0)
+                {
+                    continue;
+                }
+
+                // 与 RegisteredNotifyFile::free_file() 共用注册表锁，保证取引用时对象不会析构。
+                file->refcnt++;
+                pinned.push_back(file);
+            }
+            g_notify_registry_lock.release();
+            return pinned;
+        }
+
+        class RegisteredNotifyFile : public fs::file
+        {
+        public:
+            RegisteredNotifyFile(const char *name,
+                                 eastl::vector<fs::file *> &registry,
+                                 const char *state_lock_name)
+                : fs::file(fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0600), name),
+                  _registry(registry)
+            {
+                _state_lock.init(state_lock_name);
+                refcnt = 1;
+            }
+
+            void activate()
+            {
+                g_notify_registry_lock.acquire();
+                register_notify_file_locked(_registry, this);
+                g_notify_registry_lock.release();
+            }
+
+            void dup() override
+            {
+                g_notify_registry_lock.acquire();
+                assert(refcnt > 0, "notify file: try to dup no reference file");
+                refcnt++;
+                g_notify_registry_lock.release();
+            }
+
+            void free_file() override
+            {
+                bool destroy = false;
+                g_notify_registry_lock.acquire();
+                assert(refcnt > 0, "notify file: try to free no reference file");
+                refcnt--;
+                if (refcnt == 0)
+                {
+                    unregister_notify_file_locked(_registry, this);
+                    destroy = true;
+                }
+                g_notify_registry_lock.release();
+
+                if (destroy)
+                {
+                    release_bsd_flock(this);
+                    release_ofd_record_locks_for_owner(this);
+                    delete this;
+                }
+            }
+
+        protected:
+            mutable SpinLock _state_lock;
+
+        private:
+            eastl::vector<fs::file *> &_registry;
+        };
+
+        class FanotifyFile : public RegisteredNotifyFile
         {
         public:
             explicit FanotifyFile(uint32 init_flags, uint32 event_flags)
-                : fs::file(fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0600), "anon_inode:[fanotify]"),
+                : RegisteredNotifyFile("anon_inode:[fanotify]", g_fanotify_files, "fanotify state"),
                   _init_flags(init_flags)
             {
-                dup();
                 new (&_stat) fs::Kstat(_attrs.filetype);
                 _stat.mode = _attrs.transMode();
                 lwext4_file_struct.flags = event_flags;
@@ -1762,16 +1841,17 @@ namespace syscall
                 {
                     lwext4_file_struct.flags |= O_NONBLOCK;
                 }
-                register_notify_file(g_fanotify_files, this);
-            }
-
-            ~FanotifyFile() override
-            {
-                unregister_notify_file(g_fanotify_files, this);
+                activate();
             }
 
             bool is_fanotify_file() const override { return true; }
-            bool read_ready() override { return !_events.empty(); }
+            bool read_ready() override
+            {
+                _state_lock.acquire();
+                bool ready = !_events.empty();
+                _state_lock.release();
+                return ready;
+            }
             bool write_ready() override { return false; }
             off_t lseek(off_t, int) override { return -ESPIPE; }
             long write(uint64, size_t, long, bool) override { return -EINVAL; }
@@ -1783,8 +1863,15 @@ namespace syscall
                 {
                     return -EINVAL;
                 }
-                while (_events.empty())
+                while (true)
                 {
+                    _state_lock.acquire();
+                    bool has_event = !_events.empty();
+                    _state_lock.release();
+                    if (has_event)
+                    {
+                        break;
+                    }
                     if ((_init_flags & kFanNonblock) != 0)
                     {
                         return -EAGAIN;
@@ -1799,10 +1886,17 @@ namespace syscall
                 }
 
                 size_t copied = 0;
-                while (!_events.empty() && copied + sizeof(KernelFanotifyEventMetadata) <= len)
+                while (copied + sizeof(KernelFanotifyEventMetadata) <= len)
                 {
+                    _state_lock.acquire();
+                    if (_events.empty())
+                    {
+                        _state_lock.release();
+                        break;
+                    }
                     FanotifyQueuedEvent event = _events.front();
                     _events.erase(_events.begin());
+                    _state_lock.release();
 
                     KernelFanotifyEventMetadata meta{};
                     meta.event_len = sizeof(KernelFanotifyEventMetadata);
@@ -1820,10 +1914,12 @@ namespace syscall
 
             int update_mark(const eastl::string &path, uint32 flags, uint64 mask)
             {
+                _state_lock.acquire();
                 if ((flags & kFanMarkFlush) != 0)
                 {
                     _marks.clear();
                     _events.clear();
+                    _state_lock.release();
                     return 0;
                 }
 
@@ -1843,6 +1939,7 @@ namespace syscall
                                 mark.mask |= mask;
                             }
                             mark.flags = flags;
+                            _state_lock.release();
                             return 0;
                         }
                     }
@@ -1850,6 +1947,7 @@ namespace syscall
                                                   update_ignored_mask ? 0 : mask,
                                                   update_ignored_mask ? mask : 0,
                                                   flags});
+                    _state_lock.release();
                     return 0;
                 }
 
@@ -1874,16 +1972,20 @@ namespace syscall
                         {
                             _marks.erase(it);
                         }
+                        _state_lock.release();
                         return 0;
                     }
+                    _state_lock.release();
                     return 0;
                 }
 
+                _state_lock.release();
                 return -EINVAL;
             }
 
             void queue_event_for_path(const eastl::string &path, uint64 event_mask, bool is_dir)
             {
+                _state_lock.acquire();
                 for (const FanotifyMark &mark : _marks)
                 {
                     uint64 effective_event_mask = event_mask;
@@ -1928,6 +2030,7 @@ namespace syscall
                     }
                     _events.push_back(FanotifyQueuedEvent{delivered_mask, path, is_dir, report_pid});
                 }
+                _state_lock.release();
             }
 
         private:
@@ -2024,27 +2127,27 @@ namespace syscall
             ParentOnly,
         };
 
-        class InotifyFile : public fs::file
+        class InotifyFile : public RegisteredNotifyFile
         {
         public:
             explicit InotifyFile(uint32 flags)
-                : fs::file(fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0600), "anon_inode:[inotify]"),
+                : RegisteredNotifyFile("anon_inode:[inotify]", g_inotify_files, "inotify state"),
                   _init_flags(flags)
             {
-                dup();
                 new (&_stat) fs::Kstat(_attrs.filetype);
                 _stat.mode = _attrs.transMode();
                 lwext4_file_struct.flags = flags;
-                register_notify_file(g_inotify_files, this);
-            }
-
-            ~InotifyFile() override
-            {
-                unregister_notify_file(g_inotify_files, this);
+                activate();
             }
 
             bool is_inotify_file() const override { return true; }
-            bool read_ready() override { return !_events.empty(); }
+            bool read_ready() override
+            {
+                _state_lock.acquire();
+                bool ready = !_events.empty();
+                _state_lock.release();
+                return ready;
+            }
             bool write_ready() override { return false; }
             off_t lseek(off_t, int) override { return -ESPIPE; }
             long write(uint64, size_t, long, bool) override { return -EINVAL; }
@@ -2056,8 +2159,15 @@ namespace syscall
                 {
                     return -EINVAL;
                 }
-                while (_events.empty())
+                while (true)
                 {
+                    _state_lock.acquire();
+                    bool has_event = !_events.empty();
+                    _state_lock.release();
+                    if (has_event)
+                    {
+                        break;
+                    }
                     if ((lwext4_file_struct.flags & O_NONBLOCK) != 0)
                     {
                         return -EAGAIN;
@@ -2074,15 +2184,29 @@ namespace syscall
                 }
 
                 size_t copied = 0;
-                while (!_events.empty())
+                while (true)
                 {
-                    const InotifyQueuedEvent &event = _events.front();
+                    _state_lock.acquire();
+                    if (_events.empty())
+                    {
+                        _state_lock.release();
+                        break;
+                    }
+
+                    InotifyQueuedEvent event = _events.front();
                     size_t name_len = event.name.empty() ? 0 : event.name.size() + 1;
                     size_t event_len = sizeof(KernelInotifyEvent) + name_len;
                     if (copied + event_len > len)
                     {
+                        _state_lock.release();
                         break;
                     }
+                    _events.erase(_events.begin());
+                    if (_events.empty())
+                    {
+                        _overflowed = false;
+                    }
+                    _state_lock.release();
 
                     KernelInotifyEvent kernel_event{};
                     kernel_event.wd = event.wd;
@@ -2097,12 +2221,6 @@ namespace syscall
                         memset(reinterpret_cast<void *>(buf + copied + event.name.size()), 0, 1);
                         copied += name_len;
                     }
-
-                    _events.erase(_events.begin());
-                    if (_events.empty())
-                    {
-                        _overflowed = false;
-                    }
                 }
 
                 return copied == 0 ? -EINVAL : static_cast<long>(copied);
@@ -2115,6 +2233,7 @@ namespace syscall
                     return -EINVAL;
                 }
                 eastl::string normalized = normalize_watch_path(path);
+                _state_lock.acquire();
                 for (InotifyMark &mark : _marks)
                 {
                     if (mark.path != normalized)
@@ -2130,26 +2249,31 @@ namespace syscall
                         mark.mask = mask;
                     }
                     mark.is_dir = is_dir;
+                    _state_lock.release();
                     return mark.wd;
                 }
 
                 int wd = _next_wd++;
                 _marks.push_back(InotifyMark{wd, normalized, mask, is_dir});
+                _state_lock.release();
                 return wd;
             }
 
             int remove_watch(int wd)
             {
+                _state_lock.acquire();
                 for (size_t i = 0; i < _marks.size(); ++i)
                 {
                     if (_marks[i].wd != wd)
                     {
                         continue;
                     }
-                    enqueue_event(_marks[i].wd, kInIgnored, 0, "");
+                    enqueue_event_locked(_marks[i].wd, kInIgnored, 0, "");
                     _marks.erase(_marks.begin() + i);
+                    _state_lock.release();
                     return 0;
                 }
+                _state_lock.release();
                 return -EINVAL;
             }
 
@@ -2159,6 +2283,97 @@ namespace syscall
                                   uint32 cookie,
                                   InotifyMatchMode mode,
                                   bool source_unlinked = false)
+            {
+                _state_lock.acquire();
+                queue_path_event_locked(raw_path, event_mask, is_dir, cookie, mode, source_unlinked);
+                _state_lock.release();
+            }
+
+            void queue_delete_self(const eastl::string &raw_path, bool is_dir)
+            {
+                eastl::string path = normalize_watch_path(raw_path);
+                _state_lock.acquire();
+                for (size_t i = 0; i < _marks.size();)
+                {
+                    InotifyMark &mark = _marks[i];
+                    if (mark.path != path)
+                    {
+                        ++i;
+                        continue;
+                    }
+                    if ((mark.mask & kInDeleteSelf) != 0)
+                    {
+                        enqueue_event_locked(mark.wd, kInDeleteSelf, 0, "");
+                    }
+                    enqueue_event_locked(mark.wd, kInIgnored, 0, "");
+                    _marks.erase(_marks.begin() + i);
+                    (void)is_dir;
+                }
+                _state_lock.release();
+            }
+
+            void queue_rename(const eastl::string &old_raw_path,
+                              const eastl::string &new_raw_path,
+                              bool is_dir,
+                              uint32 cookie)
+            {
+                eastl::string old_path = normalize_watch_path(old_raw_path);
+                eastl::string new_path = normalize_watch_path(new_raw_path);
+                _state_lock.acquire();
+                queue_path_event_locked(old_path, kInMovedFrom, is_dir, cookie, InotifyMatchMode::ParentOnly);
+                queue_path_event_locked(new_path, kInMovedTo, is_dir, cookie, InotifyMatchMode::ParentOnly);
+                queue_path_event_locked(old_path, kInMoveSelf, is_dir, 0, InotifyMatchMode::ExactOnly);
+
+                for (InotifyMark &mark : _marks)
+                {
+                    if (!path_is_equal_or_child(mark.path, old_path))
+                    {
+                        continue;
+                    }
+                    eastl::string suffix = mark.path.substr(old_path.size());
+                    mark.path = new_path + suffix;
+                }
+                _state_lock.release();
+            }
+
+            eastl::string proc_fdinfo() const override
+            {
+                _state_lock.acquire();
+                eastl::vector<InotifyMark> marks = _marks;
+                _state_lock.release();
+
+                eastl::string result;
+                for (const InotifyMark &mark : marks)
+                {
+                    fs::Kstat st{};
+                    (void)vfs_path_stat(mark.path.c_str(), &st, true);
+                    char line[160];
+                    unsigned int ino = static_cast<unsigned int>(st.ino);
+                    unsigned int sdev = static_cast<unsigned int>(st.dev);
+                    snprintf(line, sizeof(line),
+                             "inotify wd:%d ino:%x sdev:%x mask:%x ignored_mask:0\n",
+                             mark.wd,
+                             ino,
+                             sdev,
+                             mark.mask);
+                    result += line;
+                }
+                return result;
+            }
+
+        private:
+            uint32 _init_flags;
+            int _next_wd = 1;
+            bool _overflowed = false;
+            eastl::vector<InotifyMark> _marks;
+            eastl::vector<InotifyQueuedEvent> _events;
+
+            void queue_path_event_locked(const eastl::string &raw_path,
+                                         uint32 event_mask,
+                                         bool is_dir,
+                                         uint32 cookie,
+                                         InotifyMatchMode mode,
+                                         bool source_unlinked = false)
             {
                 eastl::string path = normalize_watch_path(raw_path);
                 eastl::string parent = parent_path_of(path);
@@ -2203,7 +2418,7 @@ namespace syscall
                         delivered_mask |= kInIsdir;
                     }
 
-                    if (queue_mark_event(i, delivered_mask, cookie, delivered_name))
+                    if (queue_mark_event_locked(i, delivered_mask, cookie, delivered_name))
                     {
                         continue;
                     }
@@ -2211,91 +2426,23 @@ namespace syscall
                 }
             }
 
-            void queue_delete_self(const eastl::string &raw_path, bool is_dir)
-            {
-                eastl::string path = normalize_watch_path(raw_path);
-                for (size_t i = 0; i < _marks.size();)
-                {
-                    InotifyMark &mark = _marks[i];
-                    if (mark.path != path)
-                    {
-                        ++i;
-                        continue;
-                    }
-                    if ((mark.mask & kInDeleteSelf) != 0)
-                    {
-                        enqueue_event(mark.wd, kInDeleteSelf, 0, "");
-                    }
-                    enqueue_event(mark.wd, kInIgnored, 0, "");
-                    _marks.erase(_marks.begin() + i);
-                    (void)is_dir;
-                }
-            }
-
-            void queue_rename(const eastl::string &old_raw_path,
-                              const eastl::string &new_raw_path,
-                              bool is_dir,
-                              uint32 cookie)
-            {
-                eastl::string old_path = normalize_watch_path(old_raw_path);
-                eastl::string new_path = normalize_watch_path(new_raw_path);
-                queue_path_event(old_path, kInMovedFrom, is_dir, cookie, InotifyMatchMode::ParentOnly);
-                queue_path_event(new_path, kInMovedTo, is_dir, cookie, InotifyMatchMode::ParentOnly);
-                queue_path_event(old_path, kInMoveSelf, is_dir, 0, InotifyMatchMode::ExactOnly);
-
-                for (InotifyMark &mark : _marks)
-                {
-                    if (!path_is_equal_or_child(mark.path, old_path))
-                    {
-                        continue;
-                    }
-                    eastl::string suffix = mark.path.substr(old_path.size());
-                    mark.path = new_path + suffix;
-                }
-            }
-
-            eastl::string proc_fdinfo() const override
-            {
-                eastl::string result;
-                for (const InotifyMark &mark : _marks)
-                {
-                    fs::Kstat st{};
-                    (void)vfs_path_stat(mark.path.c_str(), &st, true);
-                    char line[160];
-                    unsigned int ino = static_cast<unsigned int>(st.ino);
-                    unsigned int sdev = static_cast<unsigned int>(st.dev);
-                    snprintf(line, sizeof(line),
-                             "inotify wd:%d ino:%x sdev:%x mask:%x ignored_mask:0\n",
-                             mark.wd,
-                             ino,
-                             sdev,
-                             mark.mask);
-                    result += line;
-                }
-                return result;
-            }
-
-        private:
-            uint32 _init_flags;
-            int _next_wd = 1;
-            bool _overflowed = false;
-            eastl::vector<InotifyMark> _marks;
-            eastl::vector<InotifyQueuedEvent> _events;
-
-            bool queue_mark_event(size_t mark_index, uint32 mask, uint32 cookie, const eastl::string &name)
+            bool queue_mark_event_locked(size_t mark_index,
+                                         uint32 mask,
+                                         uint32 cookie,
+                                         const eastl::string &name)
             {
                 InotifyMark mark = _marks[mark_index];
-                enqueue_event(mark.wd, mask, cookie, name);
+                enqueue_event_locked(mark.wd, mask, cookie, name);
                 if ((mark.mask & kInOneshot) != 0)
                 {
-                    enqueue_event(mark.wd, kInIgnored, 0, "");
+                    enqueue_event_locked(mark.wd, kInIgnored, 0, "");
                     _marks.erase(_marks.begin() + mark_index);
                     return true;
                 }
                 return false;
             }
 
-            void enqueue_event(int wd, uint32 mask, uint32 cookie, const eastl::string &name)
+            void enqueue_event_locked(int wd, uint32 mask, uint32 cookie, const eastl::string &name)
             {
                 if (!_events.empty())
                 {
@@ -2331,13 +2478,14 @@ namespace syscall
                 return;
             }
 
-            for (fs::file *candidate : g_fanotify_files)
+            eastl::vector<fs::file *> pinned = pin_notify_files(g_fanotify_files);
+            for (fs::file *candidate : pinned)
             {
-                if (candidate == nullptr || !candidate->is_fanotify_file())
+                if (candidate != nullptr && candidate->is_fanotify_file())
                 {
-                    continue;
+                    static_cast<FanotifyFile *>(candidate)->queue_event_for_path(path, event_mask, is_dir);
                 }
-                static_cast<FanotifyFile *>(candidate)->queue_event_for_path(path, event_mask, is_dir);
+                candidate->free_file();
             }
         }
 
@@ -2354,18 +2502,19 @@ namespace syscall
             }
 
             eastl::string normalized = normalize_watch_path(path);
-            for (fs::file *candidate : g_inotify_files)
+            eastl::vector<fs::file *> pinned = pin_notify_files(g_inotify_files);
+            for (fs::file *candidate : pinned)
             {
-                if (candidate == nullptr || !candidate->is_inotify_file())
+                if (candidate != nullptr && candidate->is_inotify_file())
                 {
-                    continue;
+                    static_cast<InotifyFile *>(candidate)->queue_path_event(normalized,
+                                                                            event_mask,
+                                                                            is_dir,
+                                                                            cookie,
+                                                                            mode,
+                                                                            source_unlinked);
                 }
-                static_cast<InotifyFile *>(candidate)->queue_path_event(normalized,
-                                                                        event_mask,
-                                                                        is_dir,
-                                                                        cookie,
-                                                                        mode,
-                                                                        source_unlinked);
+                candidate->free_file();
             }
         }
 
@@ -2377,21 +2526,28 @@ namespace syscall
             }
 
             eastl::string normalized = normalize_watch_path(path);
-            for (fs::file *candidate : g_inotify_files)
+            eastl::vector<fs::file *> pinned = pin_notify_files(g_inotify_files);
+            for (fs::file *candidate : pinned)
             {
-                if (candidate == nullptr || !candidate->is_inotify_file())
+                if (candidate != nullptr && candidate->is_inotify_file())
                 {
-                    continue;
+                    static_cast<InotifyFile *>(candidate)->queue_delete_self(normalized, is_dir);
                 }
-                static_cast<InotifyFile *>(candidate)->queue_delete_self(normalized, is_dir);
+                candidate->free_file();
             }
         }
 
         uint32 next_inotify_cookie()
         {
             static uint32 cookie = 1;
+            g_notify_registry_lock.acquire();
             uint32 current = cookie++;
-            return current == 0 ? cookie++ : current;
+            if (current == 0)
+            {
+                current = cookie++;
+            }
+            g_notify_registry_lock.release();
+            return current;
         }
 
         void notify_inotify_rename(const eastl::string &old_path,
@@ -2406,16 +2562,17 @@ namespace syscall
 
             eastl::string normalized_old = normalize_watch_path(old_path);
             eastl::string normalized_new = normalize_watch_path(new_path);
-            for (fs::file *candidate : g_inotify_files)
+            eastl::vector<fs::file *> pinned = pin_notify_files(g_inotify_files);
+            for (fs::file *candidate : pinned)
             {
-                if (candidate == nullptr || !candidate->is_inotify_file())
+                if (candidate != nullptr && candidate->is_inotify_file())
                 {
-                    continue;
+                    static_cast<InotifyFile *>(candidate)->queue_rename(normalized_old,
+                                                                        normalized_new,
+                                                                        is_dir,
+                                                                        cookie);
                 }
-                static_cast<InotifyFile *>(candidate)->queue_rename(normalized_old,
-                                                                    normalized_new,
-                                                                    is_dir,
-                                                                    cookie);
+                candidate->free_file();
             }
         }
 
@@ -3380,6 +3537,7 @@ namespace syscall
     void SyscallHandler::init()
     {
         fs::init_bsd_flock_table();
+        g_notify_registry_lock.init("notify registry");
         for (auto &func : _syscall_funcs)
         {
             // 默认实现
@@ -17904,7 +18062,7 @@ namespace syscall
                         uint64 file_offset = vm->offset + (va - vma_start);
                         size_t write_len = PGSIZE;
                         fs::Kstat st = {};
-                        if (vfs_fstat(vm->vfile, &st) == EOK)
+                        if (fs::k_vfs.fstat(vm->vfile, &st) == EOK)
                         {
                             // EOF 后的尾页字节只属于映射内存，不应被 msync 扩展回文件。
                             if (file_offset >= st.size)
