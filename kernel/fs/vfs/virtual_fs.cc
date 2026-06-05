@@ -321,6 +321,9 @@ namespace fs
         // /proc/sys/kernel/pid_max
         add_virtual_file("/proc/sys/kernel/pid_max", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcSysKernelPidMaxProvider>());
+        // NIS domain name 节点；LTP splice06 会把它作为普通可读 proc 文件验证 splice 路径。
+        add_virtual_file("/proc/sys/kernel/domainname", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcSysKernelDomainnameProvider>());
         add_virtual_file("/proc/sys/kernel/random/entropy_avail", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcSysKernelRandomEntropyAvailProvider>());
 
@@ -428,6 +431,10 @@ namespace fs
         // /dev/null (空设备)
         add_virtual_file("/dev/null", fs::FileTypes::FT_DEVICE,
                          eastl::make_unique<DevNullProvider>());
+
+        // /dev/full (读出零字节，写入返回 ENOSPC)
+        add_virtual_file("/dev/full", fs::FileTypes::FT_DEVICE,
+                         eastl::make_unique<DevFullProvider>());
 
         // /dev/urandom (非阻塞伪随机字节设备)
         add_virtual_file("/dev/urandom", fs::FileTypes::FT_DEVICE,

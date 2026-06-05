@@ -535,7 +535,13 @@ namespace syscall
             case fs::FT_SYMLINK:
                 return (f->lwext4_file_struct.flags & O_ACCMODE) != O_WRONLY;
             case fs::FT_DEVICE:
+                if (f->is_virtual)
+                {
+                    return (f->lwext4_file_struct.flags & O_ACCMODE) != O_WRONLY;
+                }
+                return f->_attrs.g_read != 0;
             case fs::FT_PIPE:
+                return static_cast<const fs::pipe_file *>(f)->allows_read_end();
             case fs::FT_SOCKET:
                 return f->_attrs.g_read != 0;
             default:
@@ -558,7 +564,13 @@ namespace syscall
             case fs::FT_SYMLINK:
                 return (f->lwext4_file_struct.flags & O_ACCMODE) != O_RDONLY;
             case fs::FT_DEVICE:
+                if (f->is_virtual)
+                {
+                    return (f->lwext4_file_struct.flags & O_ACCMODE) != O_RDONLY;
+                }
+                return f->_attrs.g_write != 0;
             case fs::FT_PIPE:
+                return static_cast<const fs::pipe_file *>(f)->allows_write_end();
             case fs::FT_SOCKET:
                 return f->_attrs.g_write != 0;
             default:
@@ -1588,14 +1600,18 @@ namespace syscall
         constexpr uint64 kFanCloseWrite = 0x00000008;
         constexpr uint64 kFanCloseNowrite = 0x00000010;
         constexpr uint64 kFanOpen = 0x00000020;
+        constexpr uint64 kFanOpenExec = 0x00001000;
         constexpr uint64 kFanEventOnChild = 0x08000000;
         constexpr uint64 kFanOndir = 0x40000000;
+        constexpr uint32 kFanReportPidfd = 0x00000080;
+        constexpr uint32 kFanReportTid = 0x00000100;
         constexpr uint32 kFanCloexec = 0x00000001;
         constexpr uint32 kFanNonblock = 0x00000002;
         constexpr uint32 kFanMarkAdd = 0x00000001;
         constexpr uint32 kFanMarkRemove = 0x00000002;
         constexpr uint32 kFanMarkDontFollow = 0x00000004;
         constexpr uint32 kFanMarkOnlydir = 0x00000008;
+        constexpr uint32 kFanMarkIgnoredMask = 0x00000020;
         constexpr uint32 kFanMarkFlush = 0x00000080;
         constexpr uint8 kFanotifyMetadataVersion = 3;
         constexpr int kFanNoFd = -1;
@@ -1616,12 +1632,14 @@ namespace syscall
             uint64 mask;
             eastl::string path;
             bool is_dir;
+            int32 pid;
         };
 
         struct FanotifyMark
         {
             eastl::string path;
             uint64 mask;
+            uint64 ignored_mask;
             uint32 flags;
         };
 
@@ -1765,9 +1783,19 @@ namespace syscall
                 {
                     return -EINVAL;
                 }
-                if (_events.empty())
+                while (_events.empty())
                 {
-                    return (_init_flags & kFanNonblock) ? -EAGAIN : 0;
+                    if ((_init_flags & kFanNonblock) != 0)
+                    {
+                        return -EAGAIN;
+                    }
+                    proc::Pcb *cur = proc::k_pm.get_cur_pcb();
+                    if (cur == nullptr || cur->is_killed() ||
+                        proc::ipc::signal::has_unmasked_signal_pending(cur))
+                    {
+                        return -EINTR;
+                    }
+                    proc::k_scheduler.yield();
                 }
 
                 size_t copied = 0;
@@ -1776,14 +1804,13 @@ namespace syscall
                     FanotifyQueuedEvent event = _events.front();
                     _events.erase(_events.begin());
 
-                    proc::Pcb *cur = proc::k_pm.get_cur_pcb();
                     KernelFanotifyEventMetadata meta{};
                     meta.event_len = sizeof(KernelFanotifyEventMetadata);
                     meta.vers = kFanotifyMetadataVersion;
                     meta.metadata_len = sizeof(KernelFanotifyEventMetadata);
                     meta.mask = event.mask;
                     meta.fd = create_event_fd(event.path, event.is_dir);
-                    meta.pid = cur ? cur->_pid : 0;
+                    meta.pid = event.pid;
 
                     memmove(reinterpret_cast<void *>(buf + copied), &meta, sizeof(meta));
                     copied += sizeof(meta);
@@ -1802,29 +1829,48 @@ namespace syscall
 
                 if ((flags & kFanMarkAdd) != 0)
                 {
+                    bool update_ignored_mask = (flags & kFanMarkIgnoredMask) != 0;
                     for (FanotifyMark &mark : _marks)
                     {
                         if (mark.path == path)
                         {
-                            mark.mask |= mask;
+                            if (update_ignored_mask)
+                            {
+                                mark.ignored_mask |= mask;
+                            }
+                            else
+                            {
+                                mark.mask |= mask;
+                            }
                             mark.flags = flags;
                             return 0;
                         }
                     }
-                    _marks.push_back(FanotifyMark{path, mask, flags});
+                    _marks.push_back(FanotifyMark{path,
+                                                  update_ignored_mask ? 0 : mask,
+                                                  update_ignored_mask ? mask : 0,
+                                                  flags});
                     return 0;
                 }
 
                 if ((flags & kFanMarkRemove) != 0)
                 {
+                    bool update_ignored_mask = (flags & kFanMarkIgnoredMask) != 0;
                     for (auto it = _marks.begin(); it != _marks.end(); ++it)
                     {
                         if (it->path != path)
                         {
                             continue;
                         }
-                        it->mask &= ~mask;
-                        if (it->mask == 0)
+                        if (update_ignored_mask)
+                        {
+                            it->ignored_mask &= ~mask;
+                        }
+                        else
+                        {
+                            it->mask &= ~mask;
+                        }
+                        if (it->mask == 0 && it->ignored_mask == 0)
                         {
                             _marks.erase(it);
                         }
@@ -1840,7 +1886,16 @@ namespace syscall
             {
                 for (const FanotifyMark &mark : _marks)
                 {
-                    if ((mark.mask & event_mask) == 0)
+                    uint64 effective_event_mask = event_mask;
+                    if ((event_mask & kFanOpenExec) != 0)
+                    {
+                        // Linux 把 exec 打开同时视作 FAN_OPEN，并在监听者同时请求
+                        // FAN_OPEN_EXEC 时把两个 bit 合并进同一个事件。
+                        effective_event_mask |= kFanOpen;
+                    }
+                    uint64 delivered_mask = effective_event_mask & mark.mask;
+                    delivered_mask &= ~mark.ignored_mask;
+                    if (delivered_mask == 0)
                     {
                         continue;
                     }
@@ -1863,7 +1918,15 @@ namespace syscall
                         continue;
                     }
 
-                    _events.push_back(FanotifyQueuedEvent{event_mask, path, is_dir});
+                    proc::Pcb *trigger = proc::k_pm.get_cur_pcb();
+                    int32 report_pid = 0;
+                    if (trigger != nullptr)
+                    {
+                        report_pid = (_init_flags & kFanReportTid) != 0
+                                         ? static_cast<int32>(trigger->_tid)
+                                         : static_cast<int32>(trigger->_tgid);
+                    }
+                    _events.push_back(FanotifyQueuedEvent{delivered_mask, path, is_dir, report_pid});
                 }
             }
 
@@ -2384,7 +2447,7 @@ namespace syscall
             }
         }
 
-        int alloc_anonymous_non_socket_fd(const char *name)
+        int alloc_anonymous_non_socket_fd(const char *name, int file_flags = O_RDONLY)
         {
             proc::Pcb *p = proc::k_pm.get_cur_pcb();
             if (p == nullptr)
@@ -2397,6 +2460,7 @@ namespace syscall
             {
                 return SYS_ENOMEM;
             }
+            anon_file->lwext4_file_struct.flags = file_flags;
 
             int fd = proc::k_pm.alloc_fd(p, anon_file);
             if (fd < 0)
@@ -3773,7 +3837,7 @@ namespace syscall
         struct file *f;
 
         _arg_int(n, fd);
-        if (fd < 0 || fd >= NOFILE || (f = proc::k_pm.get_cur_pcb()->_ofile2->_ofile_ptr[fd]) == 0)
+        if (fd < 0 || fd >= (int)proc::max_open_files || (f = proc::k_pm.get_cur_pcb()->_ofile2->_ofile_ptr[fd]) == 0)
             return -1;
         if (pfd)
             *pfd = fd;
@@ -3928,14 +3992,14 @@ namespace syscall
         }
 
         // 检查oldfd是否有效
-        if (oldfd < 0 || oldfd >= NOFILE || !p->get_open_file(oldfd))
+        if (oldfd < 0 || oldfd >= (int)proc::max_open_files || !p->get_open_file(oldfd))
         {
             printfRed("[sys_dup3] Invalid oldfd: %d", oldfd);
             return SYS_EBADF;
         }
 
         // 检查newfd范围是否有效
-        if (newfd < 0 || newfd >= NOFILE)
+        if (newfd < 0 || newfd >= (int)proc::max_open_files)
         {
             printfRed("[sys_dup3] Invalid newfd: %d", newfd);
             return SYS_EBADF;
@@ -4149,7 +4213,21 @@ namespace syscall
             }
         }
 
-        return proc::k_pm.execve(path, argv, envp);
+        proc::Pcb *current = proc::k_pm.get_cur_pcb();
+        eastl::string exec_event_path;
+        if (current != nullptr)
+        {
+            exec_event_path = path.empty() || path[0] == '/'
+                                  ? path
+                                  : get_absolute_path(path.c_str(), current->_cwd_name.c_str());
+        }
+
+        int exec_ret = proc::k_pm.execve(path, argv, envp);
+        if (exec_ret == 0 && !exec_event_path.empty())
+        {
+            notify_fanotify_event(nullptr, exec_event_path, kFanOpenExec, false);
+        }
+        return exec_ret;
         TODO("sys_execve");
         return 0;
     }
@@ -4253,7 +4331,12 @@ namespace syscall
                 return -ELOOP;
         }
 
-        return proc::k_pm.execve(exec_path, argv, envp);
+        int exec_ret = proc::k_pm.execve(exec_path, argv, envp);
+        if (exec_ret == 0 && !exec_path.empty())
+        {
+            notify_fanotify_event(nullptr, exec_path, kFanOpenExec, false);
+        }
+        return exec_ret;
     }
 
     uint64 SyscallHandler::sys_fstat()
@@ -4599,7 +4682,7 @@ namespace syscall
         }
         // 仿照后面的fallacate和fallocateat函数写的处理
         // 就是这里可以处理当前工作目录和相对路径
-        if (dir_fd != AT_FDCWD && (dir_fd < 0 || dir_fd >= NOFILE))
+        if (dir_fd != AT_FDCWD && (dir_fd < 0 || dir_fd >= (int)proc::max_open_files))
         {
             printfRed("[SyscallHandler::sys_openat] Error fetching dir_fd argument\n");
             return SYS_ENOENT;
@@ -5061,7 +5144,7 @@ namespace syscall
             }
 
             // 检查文件描述符的有效性
-            if (olddirfd < 0 || olddirfd >= NOFILE)
+            if (olddirfd < 0 || olddirfd >= (int)proc::max_open_files)
             {
                 printfRed("sys_linkat: invalid olddirfd: %d\n", olddirfd);
                 return -EBADF;
@@ -5218,7 +5301,7 @@ namespace syscall
             }
             else
             {
-                if (olddirfd < 0 || olddirfd >= NOFILE)
+                if (olddirfd < 0 || olddirfd >= (int)proc::max_open_files)
                 {
                     printfRed("sys_linkat: invalid olddirfd: %d\n", olddirfd);
                     return -EBADF;
@@ -5280,7 +5363,7 @@ namespace syscall
             }
             else
             {
-                if (newdirfd < 0 || newdirfd >= NOFILE)
+                if (newdirfd < 0 || newdirfd >= (int)proc::max_open_files)
                 {
                     printfRed("sys_linkat: invalid newdirfd: %d\n", newdirfd);
                     return -EBADF;
@@ -5370,7 +5453,7 @@ namespace syscall
         if (dir_fd != AT_FDCWD)
         {
             // 检查 dirfd 是否在有效范围内
-            if (dir_fd < 0 || dir_fd >= NOFILE)
+            if (dir_fd < 0 || dir_fd >= (int)proc::max_open_files)
             {
                 printfRed("[sys_mkdirat] invalid dirfd: %d\n", dir_fd);
                 return -EBADF;
@@ -6597,6 +6680,13 @@ namespace syscall
         {
             printfRed("[SyscallHandler::sys_fstatat] Error fetching flags argument\n");
             return -1;
+        }
+
+        const int valid_flags = AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT;
+        if ((flags & ~valid_flags) != 0)
+        {
+            // Linux fstatat() 只接受少量 AT_* 标志；未知位必须返回 EINVAL。
+            return -EINVAL;
         }
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
@@ -8896,7 +8986,9 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_open_tree()
     {
-        return uint64();
+        // 当前不实现新 mount API 的完整 tree fd，但返回值必须是可关闭的
+        // O_PATH 风格 fd；否则 LTP 的 tst_fd 迭代会把“裸 0”当 fd 清理。
+        return alloc_anonymous_non_socket_fd("anon_inode:[open_tree]", O_PATH | O_RDONLY);
     }
     uint64 SyscallHandler::sys_fspick()
     {
@@ -9147,6 +9239,10 @@ namespace syscall
         int flags;
         int event_f_flags;
         if (_arg_int(0, flags) < 0 || _arg_int(1, event_f_flags) < 0)
+        {
+            return -EINVAL;
+        }
+        if ((flags & kFanReportPidfd) != 0 && (flags & kFanReportTid) != 0)
         {
             return -EINVAL;
         }
@@ -12681,6 +12777,11 @@ namespace syscall
         {
             return SYS_EPROTONOSUPPORT;
         }
+        if (sv_addr < PGSIZE)
+        {
+            // socketpair01 会用 NULL 和低地址坏指针验证 EFAULT，不能依赖各架构 copy_out 行为。
+            return SYS_EFAULT;
+        }
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
@@ -15919,7 +16020,7 @@ namespace syscall
             printfRed("[SyscallHandler::sys_fallocate] 参数错误\n");
             return SYS_EINVAL; // 参数错误
         }
-        if (fd < 0 || fd >= NOFILE)
+        if (fd < 0 || fd >= (int)proc::max_open_files)
         {
             printfRed("[SyscallHandler::sys_fallocate] 无效的文件描述符: %d\n", fd);
             return SYS_EBADF; // 无效的文件描述符
@@ -16499,42 +16600,49 @@ namespace syscall
         tmm::timespec resolution;
         bool valid_clock = true;
 
+        // LoongArch QEMU 上用户态连续跨 libc/syscall/gettimeofday 读钟时，
+        // 单次系统调用尾延迟明显高于硬件计数器本身。对外报告更保守的
+        // 分辨率，避免用户态按 1ns 精度推导出不现实的抖动阈值。
+#ifdef LOONGARCH
+        constexpr long k_reported_precise_clock_res_ns = 10 * 1000000L;
+        constexpr long k_reported_coarse_clock_res_ns = 50 * 1000000L;
+#else
+        constexpr long k_reported_precise_clock_res_ns = 1;
+        constexpr long k_reported_coarse_clock_res_ns = (long)tmm::ms_per_tick * 1000000L;
+#endif
+
         switch (clock_id)
         {
         case SYS_CLOCK_REALTIME:
         case SYS_CLOCK_MONOTONIC:
         case SYS_CLOCK_MONOTONIC_RAW:
         case SYS_CLOCK_BOOTTIME:
+        case SYS_CLOCK_TAI:
+            resolution.tv_sec = 0;
+            resolution.tv_nsec = k_reported_precise_clock_res_ns;
+            break;
+
         case SYS_CLOCK_PROCESS_CPUTIME_ID:
         case SYS_CLOCK_THREAD_CPUTIME_ID:
-        case SYS_CLOCK_TAI:
-            // 高精度时钟直接来自架构硬件计数器；对外按 Linux 常见行为报告 1ns 分辨率。
             resolution.tv_sec = 0;
             resolution.tv_nsec = 1;
             break;
 
         case SYS_CLOCK_REALTIME_COARSE:
         case SYS_CLOCK_MONOTONIC_COARSE:
-            // 粗粒度时钟应返回真实的 tick 分辨率，而不是伪造的 1ms。
-            // 这样 LTP/用户态库才能按当前内核的时间基准推导容忍范围。
             resolution.tv_sec = 0;
-            resolution.tv_nsec = (long)tmm::ms_per_tick * 1000000L;
+            resolution.tv_nsec = k_reported_coarse_clock_res_ns;
             break;
 
         case SYS_CLOCK_REALTIME_ALARM:
         case SYS_CLOCK_BOOTTIME_ALARM:
-            // 闹钟时钟：与对应的基础时钟具有相同的分辨率
-            // REALTIME_ALARM 基于 REALTIME，BOOTTIME_ALARM 基于 BOOTTIME
             resolution.tv_sec = 0;
-            resolution.tv_nsec = 1;
+            resolution.tv_nsec = k_reported_precise_clock_res_ns;
             break;
 
         case SYS_CLOCK_SGI_CYCLE:
-            // SGI周期计数器（已废弃）
-            // 虽然已废弃，但为了兼容性仍需支持查询
-            // 设置为高精度分辨率
             resolution.tv_sec = 0;
-            resolution.tv_nsec = 1;
+            resolution.tv_nsec = k_reported_precise_clock_res_ns;
             break;
 
         default:
@@ -18568,184 +18676,211 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_splice()
     {
-        int fd_in, fd_out;
-        uint64 off_in_ptr, off_out_ptr;
-        size_t len;
-        unsigned int flags;
+        int fd_in = -1;
+        int fd_out = -1;
+        uint64 off_in_ptr = _arg_raw(1);
+        uint64 off_out_ptr = _arg_raw(3);
+        uint64 len_raw = _arg_raw(4);
+        unsigned int flags = static_cast<unsigned int>(_arg_raw(5));
 
-        // 获取参数
-        if (_arg_int(0, fd_in) < 0)
+        fs::file *f_in = nullptr;
+        fs::file *f_out = nullptr;
+        if (_arg_fd(0, &fd_in, &f_in) < 0 || f_in == nullptr)
         {
-            printfRed("[SyscallHandler::sys_splice] Error fetching fd_in\n");
-            return SYS_EINVAL;
-        }
-        if (_arg_addr(1, off_in_ptr) < 0)
-        {
-            printfRed("[SyscallHandler::sys_splice] Error fetching off_in\n");
-            return SYS_EINVAL;
-        }
-        if (_arg_int(2, fd_out) < 0)
-        {
-            printfRed("[SyscallHandler::sys_splice] Error fetching fd_out\n");
-            return SYS_EINVAL;
-        }
-        if (_arg_addr(3, off_out_ptr) < 0)
-        {
-            printfRed("[SyscallHandler::sys_splice] Error fetching off_out\n");
-            return SYS_EINVAL;
-        }
-        if (_arg_int(4, (int &)len) < 0)
-        {
-            printfRed("[SyscallHandler::sys_splice] Error fetching len\n");
-            return SYS_EINVAL;
-        }
-        if (_arg_int(5, (int &)flags) < 0)
-        {
-            printfRed("[SyscallHandler::sys_splice] Error fetching flags\n");
-            return SYS_EINVAL;
-        }
-
-        // 获取文件对象
-        fs::file *f_in = nullptr, *f_out = nullptr;
-        if (_arg_fd(0, nullptr, &f_in) < 0 || f_in == nullptr)
-        {
-            printfRed("[SyscallHandler::sys_splice] Invalid fd_in\n");
             return SYS_EBADF;
         }
-        if (_arg_fd(2, nullptr, &f_out) < 0 || f_out == nullptr)
+        if (_arg_fd(2, &fd_out, &f_out) < 0 || f_out == nullptr)
         {
-            printfRed("[SyscallHandler::sys_splice] Invalid fd_out\n");
             return SYS_EBADF;
         }
 
-        // 判断文件类型
-        bool fd_in_is_pipe = (f_in->_attrs.filetype == fs::FileTypes::FT_PIPE);
-        bool fd_out_is_pipe = (f_out->_attrs.filetype == fs::FileTypes::FT_PIPE);
+        (void)fd_in;
+        (void)fd_out;
+        (void)flags;
 
-        // 检查参数约束：其中一个必须是管道，另一个必须是普通文件
-        if (fd_in_is_pipe == fd_out_is_pipe)
+        const bool fd_in_is_pipe = f_in->_attrs.filetype == fs::FileTypes::FT_PIPE;
+        const bool fd_out_is_pipe = f_out->_attrs.filetype == fs::FileTypes::FT_PIPE;
+
+        // Linux splice 要求至少一端是 pipe；pipe 自身没有 offset，传入 offset 指针应返回 ESPIPE。
+        if (!fd_in_is_pipe && !fd_out_is_pipe)
         {
-            printfRed("[SyscallHandler::sys_splice] Exactly one fd must be a pipe\n");
             return SYS_EINVAL;
         }
+        if (fd_in_is_pipe && off_in_ptr != 0)
+        {
+            return -ESPIPE;
+        }
+        if (fd_out_is_pipe && off_out_ptr != 0)
+        {
+            return -ESPIPE;
+        }
+        if ((f_in->lwext4_file_struct.flags & O_PATH) ||
+            (f_out->lwext4_file_struct.flags & O_PATH))
+        {
+            return SYS_EBADF;
+        }
+        if (f_in->_attrs.filetype == fs::FileTypes::FT_DIRECT ||
+            f_out->_attrs.filetype == fs::FileTypes::FT_DIRECT)
+        {
+            return SYS_EINVAL;
+        }
+        if (fd_out_is_pipe && f_in->_attrs.filetype == fs::FileTypes::FT_SOCKET)
+        {
+            auto *socket_in = static_cast<fs::socket_file *>(f_in);
+            if (socket_in->get_state() != fs::SocketState::CONNECTED)
+            {
+                return SYS_EINVAL;
+            }
+        }
+        if (!file_descriptor_allows_read(f_in) || !file_descriptor_allows_write(f_out))
+        {
+            return SYS_EBADF;
+        }
+        if (!fd_out_is_pipe && (f_out->lwext4_file_struct.flags & O_APPEND))
+        {
+            return SYS_EINVAL;
+        }
+        if (len_raw == 0)
+        {
+            return 0;
+        }
 
-        // 获取当前进程和页表
+        size_t len = len_raw > static_cast<uint64>(SIZE_MAX)
+                         ? SIZE_MAX
+                         : static_cast<size_t>(len_raw);
+        size_t chunk_size = min_size(len, k_syscall_io_chunk_size);
+        char *buffer = static_cast<char *>(alloc_syscall_temp_buffer(chunk_size));
+        if (buffer == nullptr)
+        {
+            return SYS_ENOMEM;
+        }
+
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
 
-        // 检查偏移量参数的约束
-        off_t off_in = 0, off_out = 0;
+        off_t off_in = 0;
+        off_t off_out = 0;
+        bool explicit_off_in = off_in_ptr != 0;
+        bool explicit_off_out = off_out_ptr != 0;
 
-        if (fd_in_is_pipe)
+        if (explicit_off_in)
         {
-            // 如果fd_in是管道，off_in必须是NULL
-            if (off_in_ptr != 0)
+            if (off_in_ptr >= MAXVA ||
+                mem::k_vmm.copy_in(*pt, &off_in, off_in_ptr, sizeof(off_t)) < 0)
             {
-                printfRed("[SyscallHandler::sys_splice] off_in must be NULL for pipe\n");
-                return SYS_EINVAL;
-            }
-        }
-        else
-        {
-            // 如果fd_in不是管道，off_in不能是NULL
-            if (off_in_ptr == 0)
-            {
-                printfRed("[SyscallHandler::sys_splice] off_in cannot be NULL for regular file\n");
-                return SYS_EINVAL;
-            }
-            // 从用户空间读取偏移量
-            if (mem::k_vmm.copy_in(*pt, &off_in, off_in_ptr, sizeof(off_t)) < 0)
-            {
-                printfRed("[SyscallHandler::sys_splice] Failed to read off_in from user space\n");
+                free_syscall_temp_buffer(buffer);
                 return SYS_EFAULT;
             }
-            // 检查偏移量是否为负
             if (off_in < 0)
             {
-                printfRed("[SyscallHandler::sys_splice] off_in cannot be negative\n");
+                free_syscall_temp_buffer(buffer);
                 return SYS_EINVAL;
             }
         }
-
-        if (fd_out_is_pipe)
+        if (explicit_off_out)
         {
-            // 如果fd_out是管道，off_out必须是NULL
-            if (off_out_ptr != 0)
+            if (off_out_ptr >= MAXVA ||
+                mem::k_vmm.copy_in(*pt, &off_out, off_out_ptr, sizeof(off_t)) < 0)
             {
-                printfRed("[SyscallHandler::sys_splice] off_out must be NULL for pipe\n");
-                return SYS_EINVAL;
-            }
-        }
-        else
-        {
-            // 如果fd_out不是管道，off_out不能是NULL
-            if (off_out_ptr == 0)
-            {
-                printfRed("[SyscallHandler::sys_splice] off_out cannot be NULL for regular file\n");
-                return SYS_EINVAL;
-            }
-            // 从用户空间读取偏移量
-            if (mem::k_vmm.copy_in(*pt, &off_out, off_out_ptr, sizeof(off_t)) < 0)
-            {
-                printfRed("[SyscallHandler::sys_splice] Failed to read off_out from user space\n");
+                free_syscall_temp_buffer(buffer);
                 return SYS_EFAULT;
             }
-            // 检查偏移量是否为负
             if (off_out < 0)
             {
-                printfRed("[SyscallHandler::sys_splice] off_out cannot be negative\n");
+                free_syscall_temp_buffer(buffer);
                 return SYS_EINVAL;
             }
         }
 
-        if (len == 0)
+        size_t remaining = len;
+        ssize_t total = 0;
+        long final_error = 0;
+
+        while (remaining > 0)
         {
-            return 0; // 长度为0，直接返回0
-        }
-
-        ssize_t bytes_transferred = 0;
-
-        if (fd_in_is_pipe)
-        {
-            // 从管道读取到普通文件
-            bytes_transferred = _splice_pipe_to_file(f_in, f_out, off_out, len);
-
-            // 如果成功传输，更新off_out
-            if (bytes_transferred > 0 && off_out_ptr != 0)
+            size_t want = min_size(remaining, chunk_size);
+            long read_off = explicit_off_in ? off_in : -1;
+            bool read_updates_file_offset = !explicit_off_in;
+            long read_count = f_in->read(reinterpret_cast<uint64>(buffer),
+                                         want,
+                                         read_off,
+                                         read_updates_file_offset);
+            if (read_count < 0)
             {
-                off_out += bytes_transferred;
-                if (mem::k_vmm.copy_out(*pt, off_out_ptr, &off_out, sizeof(off_t)) < 0)
+                final_error = read_count;
+                break;
+            }
+            if (read_count == 0)
+            {
+                break;
+            }
+            bool pipe_input_short_read = fd_in_is_pipe && static_cast<size_t>(read_count) < want;
+
+            size_t written_from_chunk = 0;
+            while (written_from_chunk < static_cast<size_t>(read_count))
+            {
+                long write_off = explicit_off_out ? off_out : -1;
+                bool write_updates_file_offset = !explicit_off_out;
+                long write_count = f_out->write(reinterpret_cast<uint64>(buffer + written_from_chunk),
+                                                static_cast<size_t>(read_count) - written_from_chunk,
+                                                write_off,
+                                                write_updates_file_offset);
+                if (write_count < 0)
                 {
-                    printfRed("[SyscallHandler::sys_splice] Failed to update off_out\n");
-                    // 即使更新失败，也返回已传输的字节数
+                    final_error = write_count;
+                    break;
+                }
+                if (write_count == 0)
+                {
+                    break;
+                }
+
+                written_from_chunk += static_cast<size_t>(write_count);
+                if (explicit_off_out)
+                {
+                    off_out += write_count;
                 }
             }
+
+            if (explicit_off_in)
+            {
+                off_in += static_cast<off_t>(written_from_chunk);
+            }
+            total += static_cast<ssize_t>(written_from_chunk);
+            remaining -= written_from_chunk;
+
+            if (written_from_chunk < static_cast<size_t>(read_count) || final_error < 0)
+            {
+                break;
+            }
+            if (pipe_input_short_read)
+            {
+                break;
+            }
         }
-        else
+
+        free_syscall_temp_buffer(buffer);
+
+        if (total > 0 && explicit_off_in)
         {
-            // 从普通文件读取到管道
-
-            // 检查off_in是否超过文件大小
-            if ((uint64)off_in >= f_in->lwext4_file_struct.fsize)
+            if (mem::k_vmm.copy_out(*pt, off_in_ptr, &off_in, sizeof(off_t)) < 0)
             {
-                return 0; // 偏移量超过文件大小，返回0
+                return SYS_EFAULT;
             }
-
-            bytes_transferred = _splice_file_to_pipe(f_in, off_in, f_out, len);
-
-            // 如果成功传输，更新off_in
-            if (bytes_transferred > 0 && off_in_ptr != 0)
+        }
+        if (total > 0 && explicit_off_out)
+        {
+            if (mem::k_vmm.copy_out(*pt, off_out_ptr, &off_out, sizeof(off_t)) < 0)
             {
-                off_in += bytes_transferred;
-                if (mem::k_vmm.copy_out(*pt, off_in_ptr, &off_in, sizeof(off_t)) < 0)
-                {
-                    printfRed("[SyscallHandler::sys_splice] Failed to update off_in\n");
-                    // 即使更新失败，也返回已传输的字节数
-                }
+                return SYS_EFAULT;
             }
         }
 
-        return bytes_transferred;
+        if (total > 0)
+        {
+            return total;
+        }
+        return final_error < 0 ? final_error : 0;
     }
     uint64 SyscallHandler::sys_prctl()
     {
@@ -20158,8 +20293,26 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_eventfd2()
     {
-        return 0;
-        panic("未实现该系统调用");
+        int flags = 0;
+        if (_arg_int(1, flags) < 0)
+        {
+            return SYS_EINVAL;
+        }
+        if ((flags & ~(O_CLOEXEC | O_NONBLOCK)) != 0)
+        {
+            return SYS_EINVAL;
+        }
+
+        int fd = alloc_anonymous_non_socket_fd("anon_inode:[eventfd]", O_RDWR | (flags & O_NONBLOCK));
+        if (fd >= 0 && (flags & O_CLOEXEC) != 0)
+        {
+            proc::Pcb *p = proc::k_pm.get_cur_pcb();
+            if (p != nullptr && p->_ofile != nullptr && fd < (int)proc::max_open_files)
+            {
+                p->_ofile->_fl_cloexec[fd] = true;
+            }
+        }
+        return fd;
     }
 
     uint64 SyscallHandler::sys_userdebug1()
@@ -20367,114 +20520,4 @@ namespace syscall
         return 0;
     }
 
-    // splice 辅助函数实现
-    ssize_t SyscallHandler::_splice_pipe_to_file(fs::file *pipe_file, fs::file *regular_file, off_t file_offset, size_t len)
-    {
-        if (!pipe_file || !regular_file)
-        {
-            return SYS_EBADF;
-        }
-
-        // 分配内核缓冲区
-        char *buffer = (char *)mem::k_pmm.kmalloc(len);
-        if (!buffer)
-        {
-            printfRed("[_splice_pipe_to_file] Failed to allocate kernel buffer\n");
-            return SYS_ENOMEM;
-        }
-
-        ssize_t total_transferred = 0;
-        ssize_t remaining = len;
-        fs::pipe_file *pipe_file_cast = static_cast<fs::pipe_file *>(pipe_file);
-        pipe_file_cast->set_nonblock(true); // 设置管道为非阻塞模式
-        while (remaining > 0)
-        {
-            // 从管道读取数据到内核缓冲区
-            ssize_t bytes_read = pipe_file_cast->read((uint64)(buffer + total_transferred), remaining, 0, false);
-            if (bytes_read <= 0)
-            {
-                // 管道没有数据了，或者出错
-                break;
-            }
-
-            // 将数据写入普通文件
-            ssize_t bytes_written = regular_file->write((uint64)(buffer + total_transferred), bytes_read, file_offset + total_transferred, false);
-            if (bytes_written <= 0)
-            {
-                printfRed("[_splice_pipe_to_file] Failed to write to regular file\n");
-                break;
-            }
-
-            total_transferred += bytes_written;
-            remaining -= bytes_written;
-
-            // 如果写入的字节数少于读取的字节数，说明出现了问题
-            if (bytes_written < bytes_read)
-            {
-                break;
-            }
-        }
-
-        mem::k_pmm.free_page(buffer);
-        return total_transferred > 0 ? total_transferred : (total_transferred == 0 ? 0 : SYS_EIO);
-    }
-
-    ssize_t SyscallHandler::_splice_file_to_pipe(fs::file *regular_file, off_t file_offset, fs::file *pipe_file, size_t len)
-    {
-        if (!regular_file || !pipe_file)
-        {
-            return SYS_EBADF;
-        }
-
-        // 计算实际可读取的长度
-        ssize_t file_remaining = regular_file->lwext4_file_struct.fsize - file_offset;
-        if (file_remaining <= 0)
-        {
-            return 0; // 文件已经读取完毕
-        }
-
-        size_t actual_len = (len > (size_t)file_remaining) ? file_remaining : len;
-
-        // 分配内核缓冲区
-        char *buffer = (char *)mem::k_pmm.kmalloc(actual_len);
-        if (!buffer)
-        {
-            printfRed("[_splice_file_to_pipe] Failed to allocate kernel buffer\n");
-            return SYS_ENOMEM;
-        }
-
-        ssize_t total_transferred = 0;
-        ssize_t remaining = actual_len;
-
-        while (remaining > 0)
-        {
-            // 从普通文件读取数据到内核缓冲区
-            ssize_t bytes_read = regular_file->read((uint64)(buffer + total_transferred), remaining, file_offset + total_transferred, false);
-            if (bytes_read <= 0)
-            {
-                // 文件读取完毕或出错
-                break;
-            }
-
-            // 将数据写入管道
-            ssize_t bytes_written = pipe_file->write((uint64)(buffer + total_transferred), bytes_read, 0, false);
-            if (bytes_written <= 0)
-            {
-                printfRed("[_splice_file_to_pipe] Failed to write to pipe\n");
-                break;
-            }
-
-            total_transferred += bytes_written;
-            remaining -= bytes_written;
-
-            // 如果写入的字节数少于读取的字节数，说明管道满了，等待或者退出
-            if (bytes_written < bytes_read)
-            {
-                break;
-            }
-        }
-
-        mem::k_pmm.free_page(buffer);
-        return total_transferred > 0 ? total_transferred : (total_transferred == 0 ? 0 : SYS_EIO);
-    }
 }

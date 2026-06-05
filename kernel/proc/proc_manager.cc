@@ -3139,7 +3139,7 @@ namespace proc
         else
         {
             // 验证文件描述符 -> EBADF
-            if (dir_fd < 0 || dir_fd >= NOFILE)
+            if (dir_fd < 0 || dir_fd >= (int)max_open_files)
             {
                 return -EBADF;
             }
@@ -3544,12 +3544,9 @@ namespace proc
             return -ENAMETOOLONG;
         }
         Pcb *p = get_cur_pcb();
-        char temp_path[EXT4_PATH_LONG_MAX];
 
-        get_absolute_path(path.c_str(), p->_cwd_name.c_str(), temp_path);
-
-        // 解析符号链接
-        eastl::string resolved_path = temp_path;
+        // 解析符号链接前先把相对路径规整为绝对路径，避免固定栈缓冲承接长路径。
+        eastl::string resolved_path = get_absolute_path(path.c_str(), p->_cwd_name.c_str());
         int symlink_depth = 0;
         const int MAX_SYMLINK_DEPTH = 40; // 防止无限循环
 
@@ -5148,7 +5145,7 @@ namespace proc
         else
         {
             // 5. 验证文件描述符 -> EBADF
-            if (dirfd < 0 || dirfd >= NOFILE)
+            if (dirfd < 0 || dirfd >= (int)max_open_files)
             {
                 return -EBADF;
             }

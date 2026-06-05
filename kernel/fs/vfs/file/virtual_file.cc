@@ -34,6 +34,7 @@ namespace fs
         int g_proc_sys_fs_inotify_max_queued_events = 15;
         int g_proc_sys_fs_inotify_max_user_instances = 1024;
         int g_proc_sys_kernel_random_entropy_avail = 256;
+        eastl::string g_proc_sys_kernel_domainname = "(none-domain)";
 
         const char *mount_fs_name(fs_t type)
         {
@@ -657,8 +658,10 @@ namespace fs
             }
             return result;
         }
-        // 特殊处理 /dev/zero 设备
-        if (_content_provider && _content_provider->get_provider_type() == VirtualProviderType::DEV_ZERO) {
+        // 特殊处理 /dev/zero 和 /dev/full：读取时都产生零字节。
+        if (_content_provider &&
+            (_content_provider->get_provider_type() == VirtualProviderType::DEV_ZERO ||
+             _content_provider->get_provider_type() == VirtualProviderType::DEV_FULL)) {
             // 处理偏移量参数
             if (off < 0) {
                 off = _file_ptr;
@@ -765,7 +768,8 @@ namespace fs
             return 0;
         }
 
-        if (provider_type != VirtualProviderType::DEV_ZERO)
+        if (provider_type != VirtualProviderType::DEV_ZERO &&
+            provider_type != VirtualProviderType::DEV_FULL)
         {
             return -38; // 其他虚拟文件保留旧的内核中转路径。
         }
@@ -1231,6 +1235,41 @@ namespace fs
         return int_to_string_line(g_proc_sys_kernel_random_entropy_avail);
     }
 
+    eastl::string ProcSysKernelDomainnameProvider::generate_content()
+    {
+        return g_proc_sys_kernel_domainname + "\n";
+    }
+
+    long ProcSysKernelDomainnameProvider::handle_write(uint64 buf, size_t len, long off)
+    {
+        if (buf == 0 || off < 0)
+        {
+            return -EINVAL;
+        }
+
+        const char *src = reinterpret_cast<const char *>(buf);
+        eastl::string incoming(src, len);
+        while (!incoming.empty() && (incoming.back() == '\n' || incoming.back() == '\0'))
+        {
+            incoming.pop_back();
+        }
+
+        if (off == 0)
+        {
+            g_proc_sys_kernel_domainname = incoming;
+        }
+        else
+        {
+            if (static_cast<size_t>(off) > g_proc_sys_kernel_domainname.size())
+            {
+                return -EINVAL;
+            }
+            g_proc_sys_kernel_domainname.replace(static_cast<size_t>(off), incoming.size(), incoming);
+        }
+
+        return static_cast<long>(len);
+    }
+
     // 实现通用的 /proc/<pid>/stat 的内容生成
     eastl::string ProcPidStatProvider::generate_content()
     {
@@ -1529,6 +1568,22 @@ namespace fs
         (void)buf;  // 忽略缓冲区内容
         (void)off;  // 忽略偏移量
         return len; // 假装写入了所有数据
+    }
+
+    // ======================== DevFullProvider 实现 ========================
+
+    eastl::string DevFullProvider::generate_content()
+    {
+        // /dev/full 的读取语义与 /dev/zero 一致，写入语义单独在 handle_write 中返回 ENOSPC。
+        return "";
+    }
+
+    long DevFullProvider::handle_write(uint64 buf, size_t len, long off)
+    {
+        (void)buf;
+        (void)len;
+        (void)off;
+        return -ENOSPC;
     }
 
     // ======================== DevUrandomProvider 实现 ========================

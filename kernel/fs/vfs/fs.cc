@@ -347,36 +347,30 @@ filesystem_t *get_fs_by_mount_point(const char *mp)
 
 struct filesystem *get_fs_from_path(const char *path)
 {
-    char abs_path[MAXPATH] = {0};
-    get_absolute_path(path, "/", abs_path);
+    eastl::string abs_path = get_absolute_path(path, "/");
 
     // 优先检查完全匹配挂载点的情况
-    filesystem_t *exact_fs = get_fs_by_mount_point(abs_path);
+    filesystem_t *exact_fs = get_fs_by_mount_point(abs_path.c_str());
     if (exact_fs)
     {
         return exact_fs;
     }
 
-    size_t len = strlen(abs_path);
-    char *pstart = abs_path, *pend = abs_path + len - 1;
-    while (pend > pstart)
+    while (abs_path != "/")
     {
-        if (*pend == '/')
+        size_t last_slash = abs_path.find_last_of('/');
+        if (last_slash == eastl::string::npos || last_slash == 0)
         {
-            *pend = '\0';
-            filesystem_t *fs = get_fs_by_mount_point(pstart);
-            if (fs)
-            {
-                return fs;
-            }
+            break;
         }
-        pend--;
+
+        abs_path = abs_path.substr(0, last_slash);
+        filesystem_t *fs = get_fs_by_mount_point(abs_path.c_str());
+        if (fs)
+        {
+            return fs;
+        }
     }
 
-    if (pend == pstart)
-    {
-        return get_fs_by_mount_point("/");
-    }
-
-    return NULL;
+    return get_fs_by_mount_point("/");
 }
