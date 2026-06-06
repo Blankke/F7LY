@@ -5624,7 +5624,14 @@ namespace proc
                     // interp_de = de;
                     printfCyan("execve: found dynamic interpreter: %s\n", interpreter_path.c_str());
 
-                    if (strcmp(interpreter_path.c_str(), "/lib/ld-linux-riscv64-lp64d.so.1") == 0)
+                    // 优先尊重 ELF 里原始的解释器路径。
+                    // 这样标准 rootfs 中自带的 /lib/ld-*.so 可以直接工作；
+                    // 只有旧评测盘布局缺失该路径时，才回退到 /musl 或 /glibc 的兼容映射。
+                    if (vfs_is_file_exist(interpreter_path.c_str()) == 1)
+                    {
+                        printfBlue("execve: use in-rootfs interpreter %s\n", interpreter_path.c_str());
+                    }
+                    else if (strcmp(interpreter_path.c_str(), "/lib/ld-linux-riscv64-lp64d.so.1") == 0)
                     {
                         printfBlue("execve: using riscv64 dynamic linker\n");
                         if (vfs_is_file_exist("/glibc/lib/ld-linux-riscv64-lp64d.so.1") != 1)

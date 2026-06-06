@@ -1,6 +1,17 @@
 #include "user.hh"
 #include "fuckyou.hh"
 
+static bool path_exists(const char *path)
+{
+    int fd = openat(AT_FDCWD, path, O_RDONLY);
+    if (fd < 0)
+    {
+        return false;
+    }
+    close(fd);
+    return true;
+}
+
 static int decode_wait_status(int raw_status)
 {
     if ((raw_status & 0x7f) == 0)
@@ -42,32 +53,31 @@ static int run_foreground(const char *path, char *argv[], char *envp[], const ch
     return decode_wait_status(raw_status);
 }
 
-static void init_shell_environment(char *envp[])
+static void enter_shell_workdir()
 {
-    // 交互式 shell 也沿用回归入口的 /bin 约定，但这里不用依赖 user_test.cc 的构建链路，
-    // 直接把 BusyBox applet 安装和 shell 启动目录显式收拢到一个初始化函数里。
-    int mkdir_ret = mkdir("/bin", 0777);
-    if (mkdir_ret != 0 && mkdir_ret != -17)
+    // rootfs 镜像是标准 Linux 目录布局，优先把交互式 shell 放到 /root，
+    // 这样宿主机挂载看到的家目录内容和 guest 内的初始 cwd 保持一致。
+    if (chdir("/root") == 0)
     {
-        printf("[shell] mkdir(/bin) 失败: %d\n", mkdir_ret);
+        return;
     }
-
-    char *install_argv[] = {
-        (char *)"busybox",
-        (char *)"--install",
-        (char *)"/bin",
-        0,
-    };
-    int install_ret = run_foreground("/musl/busybox", install_argv, envp, "/musl/");
-    if (install_ret != 0)
-    {
-        printf("[shell] busybox --install 返回 %d，继续启动 ash\n", install_ret);
-    }
-
     if (chdir("/") != 0)
     {
         printf("[shell] chdir(/) 失败\n");
     }
+}
+
+static bool init_shell_environment()
+{
+    // shell 模式现在直接挂载 rootfs，不能再假设 /musl /glibc /fat32 这些评测盘目录存在。
+    // 这里在进入 shell 前做最小存在性校验，便于快速判断镜像是否挂对。
+    if (!path_exists("/bin/busybox"))
+    {
+        printf("[shell] 缺少 /bin/busybox，当前根文件系统不像是可交互 rootfs\n");
+        return false;
+    }
+    enter_shell_workdir();
+    return true;
 }
 
 extern "C"
@@ -75,11 +85,12 @@ extern "C"
     __attribute__((section(".text.startup"))) int main()
     {
         char *envp[] = {
-            (char *)"PATH=/bin:/musl:/glibc:/fat32/bin:/fat32/usr/bin",
-            (char *)"LD_LIBRARY_PATH=/musl/lib:/glibc/lib",
-            (char *)"HOME=/",
-            (char *)"PWD=/",
-            (char *)"OLDPWD=/",
+            // rootfs 使用标准 FHS 目录，PATH/库路径也按常规 Linux 布局设置。
+            (char *)"PATH=/bin:/sbin:/usr/bin:/usr/sbin",
+            (char *)"LD_LIBRARY_PATH=/lib:/usr/lib",
+            (char *)"HOME=/root",
+            (char *)"PWD=/root",
+            (char *)"OLDPWD=/root",
             (char *)"TERM=vt100",
             (char *)"USER=root",
             (char *)"LOGNAME=root",
@@ -88,19 +99,29 @@ extern "C"
             (char *)"PS1=F7LY:\\w$ ",
             0,
         };
-        init_shell_environment(envp);
+        if (!init_shell_environment())
+        {
+            print_f7ly();
+            printfMagenta("#### F7LY INTERACTIVE SHELL START ####\n");
+            printf("[shell] shell 初始化失败，准备关机\n");
+            printfMagenta("#### F7LY INTERACTIVE SHELL END ret=127 ####\n");
+            print_fuckyou();
+            shutdown();
+            return 127;
+        }
         print_f7ly();
         printfMagenta("#### F7LY INTERACTIVE SHELL START ####\n");
         printfMagenta("type \"exit\" to quit\n");
         char *shell_argv[] = {
-            (char *)"busybox",
-            (char *)"ash",
+            (char *)"sh",
+            (char *)"-i",
             0,
         };
-        int shell_ret = run_foreground("/musl/busybox", shell_argv, envp, "/");
+        // rootfs 沿用标准 /bin/busybox 布局，交互式 shell 直接从这里进入。
+        int shell_ret = run_foreground("/bin/busybox", shell_argv, envp, "/root");
         printfMagenta("#### F7LY INTERACTIVE SHELL END ret=%d ####\n", shell_ret);
         print_fuckyou();
-        
+
         shutdown();
         return 0;
     }

@@ -4,8 +4,10 @@ IMAGE_DIR := $(PROJECT_ROOT)/images
 ROOTFS_BACKUP := $(IMAGE_DIR)/rootfs.img.back
 ROOTFS_IMAGE := $(IMAGE_DIR)/rootfs.img
 INITRD_IMAGE := $(IMAGE_DIR)/initrd.img
-RISCV_SDCARD := $(IMAGE_DIR)/sdcard-rv.img
-LOONGARCH_SDCARD := $(IMAGE_DIR)/sdcard-la.img
+RISCV_EVAL_IMAGE := $(IMAGE_DIR)/sdcard-rv.img
+LOONGARCH_EVAL_IMAGE := $(IMAGE_DIR)/sdcard-la.img
+RISCV_SHELL_IMAGE := $(IMAGE_DIR)/rootfs-riscv64.img
+LOONGARCH_SHELL_IMAGE := $(IMAGE_DIR)/rootfs-loongarch64.img
 
 # ===== 并行编译配置 =====
 # 默认使用所有可用 CPU 核心进行并行编译
@@ -46,12 +48,16 @@ ifeq ($(ARCH),riscv)
   CROSS_COMPILE := riscv64-linux-gnu-
   ARCH_CFLAGS := -DRISCV -mcmodel=medany
   OUTPUT_PREFIX := riscv
-  QEMU_CMD := qemu-system-riscv64 -machine virt -m $(QEMU_MEM) -nographic -smp 1 -bios default -hdb $(RISCV_SDCARD) -kernel
+  QEMU_EVAL_IMAGE := $(RISCV_EVAL_IMAGE)
+  QEMU_SHELL_IMAGE := $(RISCV_SHELL_IMAGE)
+  QEMU_BLOCK_DEVICE_ARGS := -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 else ifeq ($(ARCH),loongarch)
   CROSS_COMPILE := loongarch64-linux-gnu-
   ARCH_CFLAGS := -DLOONGARCH -march=loongarch64 -mabi=lp64d -mcmodel=normal -Wno-error=use-after-free
   OUTPUT_PREFIX := loongarch
-  QEMU_CMD := qemu-system-loongarch64 -machine virt -cpu la464-loongarch-cpu -drive file=$(LOONGARCH_SDCARD),if=none,format=raw,id=x0
+  QEMU_EVAL_IMAGE := $(LOONGARCH_EVAL_IMAGE)
+  QEMU_SHELL_IMAGE := $(LOONGARCH_SHELL_IMAGE)
+  QEMU_BLOCK_DEVICE_ARGS := -device virtio-blk-pci,drive=x0
 else
   $(error 不支持的架构: $(ARCH)，请使用 make riscv 或 make loongarch)
 endif
@@ -61,12 +67,18 @@ ifeq ($(INITCODE_MODE),shell)
   KERNEL_NAME_SUFFIX := -shell
   # shell 模式下关闭 stdio 的宿主信号截获，让 Ctrl-C 进入 guest tty，而不是直接杀掉 QEMU。
   QEMU_CONSOLE_ARGS := -display none -chardev stdio,id=shell_stdio,signal=off -serial chardev:shell_stdio -monitor none
+  QEMU_STORAGE_IMAGE := $(QEMU_SHELL_IMAGE)
 else ifeq ($(INITCODE_MODE),evaluation)
   KERNEL_NAME_SUFFIX :=
   QEMU_CONSOLE_ARGS := -nographic
+  QEMU_STORAGE_IMAGE := $(QEMU_EVAL_IMAGE)
 else
   $(error 不支持的 INITCODE_MODE=$(INITCODE_MODE)，请使用 evaluation 或 shell)
 endif
+
+# 统一把 QEMU 的块设备参数收口到一个变量，run/debug 只依赖这里。
+QEMU_STORAGE_ARGS := -drive file=$(QEMU_STORAGE_IMAGE),if=none,format=raw,id=x0 \
+                     $(QEMU_BLOCK_DEVICE_ARGS)
 
 ifeq ($(DIS_PRINTF),1)
   ARCH_CFLAGS += -DDIS_PRINTF
@@ -334,8 +346,7 @@ run-riscv:
 		-smp 1 \
 		-bios default \
 		$(QEMU_SNAPSHOT) \
-		-drive file=$(RISCV_SDCARD),if=none,format=raw,id=x0 \
-		-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 \
+		$(QEMU_STORAGE_ARGS) \
 		-no-reboot \
 		-device virtio-net-device,netdev=net \
 		-netdev user,id=net \
@@ -347,12 +358,11 @@ run-loongarch:
 	qemu-system-loongarch64 \
 	    -machine virt \
 	    -kernel $(KERNEL_ELF) \
-	    -m $(QEMU_MEM) \
-	    $(QEMU_CONSOLE_ARGS) \
-	    -smp 1 \
+		-m $(QEMU_MEM) \
+		$(QEMU_CONSOLE_ARGS) \
+		-smp 1 \
 		$(QEMU_SNAPSHOT) \
-		-drive file=$(LOONGARCH_SDCARD),if=none,format=raw,id=x0 \
-		-device virtio-blk-pci,drive=x0 \
+		$(QEMU_STORAGE_ARGS) \
 		-netdev user,id=net \
 		-device virtio-net-pci,netdev=net \
 		-no-reboot \
@@ -378,8 +388,7 @@ debug-riscv:
 		-smp 1 \
 		-bios default \
 		$(QEMU_SNAPSHOT) \
-		-drive file=$(RISCV_SDCARD),if=none,format=raw,id=x0 \
-		-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 \
+		$(QEMU_STORAGE_ARGS) \
 		-no-reboot \
 		-device virtio-net-device,netdev=net \
 		-netdev user,id=net \
@@ -394,8 +403,7 @@ debug-loongarch:
 	    -nographic \
 	    -smp 1 \
 		$(QEMU_SNAPSHOT) \
-		-drive file=$(LOONGARCH_SDCARD),if=none,format=raw,id=x0 \
-		-device virtio-blk-pci,drive=x0 \
+		$(QEMU_STORAGE_ARGS) \
 		-no-reboot \
 		-rtc base=utc \
 	    -S -gdb tcp::1234;
