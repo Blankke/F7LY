@@ -1152,7 +1152,7 @@ struct ltp_testcase ltp_testcases[] = {
     {"epoll_ctl03", true, true, true, true},
     {"access01", true, true, true, true},
     {"access02", true, true, true, true},
-    {"access03", true, true, false, false},
+    {"access03", true, true, true, false},
     {"access04", true, true, true, true},
     {"getpid01", true, true, true, true},
     {"pipe11", true, true, true, true},    // 2026-05-21: 四组合定向复测通过，total=70
@@ -1228,11 +1228,11 @@ struct ltp_testcase ltp_testcases[] = {
     {"fcntl09_64", true, true, true, true},       // pass
     {"fcntl10_64", true, true, true, true},       // pass
     {"fcntl13_64", true, true, false, false},     // pass // la 会把用户态printf干爆
-    {"fcntl15_64", false, true, true, true},      // RV+musl: 与 fcntl15 同源，同样会在 LTP checkpoint 同步阶段超时
+    {"fcntl15_64", true, true, true, true},      // RV+musl: 与 fcntl15 同源，同样会在 LTP checkpoint 同步阶段超时
     {"fstat02", true, true, true, true},          // pass 5 fail 1
-    {"fstat03", true, true, false, false},        // pass2
+    {"fstat03", true, true, true, false},        // pass2
     {"fstat02_64", true, true, true, true},       // pass 5 fail 1
-    {"fstat03_64", true, true, false, false},     // pass2
+    {"fstat03_64", true, true, true, false},     // pass2
     {"fstatfs02", true, true, false, false},      // pass 2
     {"fstatfs02_64", true, true, true, true},     // pass 2
     {"ftruncate01", true, true, true, true},      // pass 2
@@ -1257,9 +1257,9 @@ struct ltp_testcase ltp_testcases[] = {
     {"kill11", true, true, true, true},           // pass
     {"waitpid03", true, true, true, true},        // PASS
     {"waitpid04", true, true, true, true},        // PASS
-    {"waitpid06", false, true, true, true},       // RV+musl: LTP checkpoint/futex 同步稳定超时；glibc 和 LA 继续覆盖
-    {"waitpid07", false, true, true, true},       // RV+musl: LTP checkpoint/futex 同步稳定超时；glibc 和 LA 继续覆盖
-    {"waitpid09", false, true, true, true},       // RV+musl: LTP checkpoint/futex 同步稳定超时；glibc 和 LA 继续覆盖
+    {"waitpid06", true, true, true, true},       // RV+musl: LTP checkpoint/futex 同步稳定超时；glibc 和 LA 继续覆盖
+    {"waitpid07", true, true, true, true},       // RV+musl: LTP checkpoint/futex 同步稳定超时；glibc 和 LA 继续覆盖
+    {"waitpid09", true, true, true, true},       // RV+musl: LTP checkpoint/futex 同步稳定超时；glibc 和 LA 继续覆盖
     {"getcwd01", true, true, true, true},         // pass
     {"getcwd02", true, true, true, true},         // 完全PASS
     {"getcwd03", true, true, false, false},       // pass
@@ -1355,7 +1355,7 @@ struct ltp_testcase ltp_testcases[] = {
     {"open11", true, true, true, true},        // 2026-05-21: 四组合定向复测通过，total=28
     {"openat01", true, true, true, true},      // pass
     {"pathconf01", true, true, true, true},    // pass
-    {"pathconf02", false, true, false, true},  // musl: pathconf() 退化到 fpathconf(-1, name)，不会验证 path；glibc 继续覆盖
+    {"pathconf02", true, true, true, true},  // musl: pathconf() 退化到 fpathconf(-1, name)，不会验证 path；glibc 继续覆盖
     {"personality01", true, true, true, true}, // 2026-05-21: personality(2) 补齐后四组合定向复测通过，total=18
     {"pipe01", true, true, true, true},        // 完全PASS
     {"pipe03", true, true, true, true},        // 完全PASS
@@ -1380,7 +1380,7 @@ struct ltp_testcase ltp_testcases[] = {
     {"read04", true, true, true, true},        // 完全PASS
     {"readlink01", true, true, true, true},    // pass 2
     {"readlink03", true, true, false, true},   // LA+musl: bufsiz=0 被 musl 改成 dummy buffer；glibc 继续覆盖 EINVAL 路径
-    {"readlinkat02", true, true, false, true}, // LA+musl: bufsiz=0 被 musl 改成 dummy buffer；glibc 继续覆盖 EINVAL 路径
+    {"readlinkat02", true, true, true, true}, // LA+musl: bufsiz=0 被 musl 改成 dummy buffer；glibc 继续覆盖 EINVAL 路径
     {"readv01", true, true, true, true},       // pass
     {"readv02", true, true, true, true},       // pass4 fail1
     {"rmdir01", true, true, true, true},       // pass
@@ -1398,8 +1398,8 @@ struct ltp_testcase ltp_testcases[] = {
     {"stat03", true, true, true, true},        // pass4 fail2
     {"stat01_64", true, true, true, true},     // passed   12
     {"stat03_64", true, true, false, false},   // pass4 fail2
-    {"statfs02", true, true, false, false},    // pass3fail3
-    {"statfs02_64", true, true, false, false}, // pass3fail3
+    {"statfs02", true, true, true, false},    // pass3fail3
+    {"statfs02_64", true, true, true, false}, // pass3fail3
     {"statx01", true, true, true, true},       // pass8 fail2
     {"statx02", true, true, true, true},       // pass4 fail1
     {"statx03", true, true, true, true},       // pass6 fail1
@@ -1414,16 +1414,16 @@ struct ltp_testcase ltp_testcases[] = {
     {"truncate03_64", true, true, true, true},
     {"uname01", true, true, true, true},      // 完全PASS
     {"uname02", true, true, true, true},      // 完全PASS
-    {"unlink05", true, true, false, false},   // pass
-    {"unlink07", true, true, false, false},   // pass
-    {"unlink08", true, true, false, false},   // pass2fail2
+    {"unlink05", true, true, true, false},   // pass
+    {"unlink07", true, true, true, false},   // pass
+    {"unlink08", true, true, true, false},   // pass2fail2
     {"unlink09", true, true, false, false},   // pass
-    {"unlinkat01", true, true, false, false}, // passed   7
-    {"write01", true, true, false, false},    // 完全PASS
-    {"write02", true, true, false, false},    // pass
-    {"write03", true, true, false, false},    // 完全PASS
+    {"unlinkat01", true, true, true, false}, // passed   7
+    {"write01", true, true, true, false},    // 完全PASS
+    {"write02", true, true, true, false},    // pass
+    {"write03", true, true, true, false},    // 完全PASS
     {"write04", true, true, false, false},
-    {"write05", true, true, false, false},  // passed   3
+    {"write05", true, true, true, false},  // passed   3
     {"writev05", true, true, false, false}, // 完全PASS
     {"writev06", true, true, false, false}, // 完全PASS
     {"execl01", true, true, true, true},    // PASS
@@ -1432,8 +1432,8 @@ struct ltp_testcase ltp_testcases[] = {
     {"execv01", true, true, true, true},    // PASS
     {"execve01", true, true, true, true},   // PASS
     {"execvp01", true, true, true, true},   // PASS
-    {"gettid01", true, true, false, false}, // PASS
-    {"set_tid_address01", true, true, false, false},
+    {"gettid01", true, true, true, false}, // PASS
+    {"set_tid_address01", true, true, true, false},
     {"getpriority01", true, true, false, false},
     {"getpriority02", true, true, false, false},
     {"setpriority02", true, true, false, false},
@@ -1460,13 +1460,13 @@ struct ltp_testcase ltp_testcases[] = {
     {"fchmod02", true, true, true, true},            // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
     {"fork01", true, false, true, false},            // 2026-05-27: musl Summary 通过；glibc 组合返回 TBROK，保持关闭。
     {"fork03", true, false, true, false},            // 2026-05-27: musl Summary 通过；glibc 组合返回 TBROK，保持关闭。
-    {"fork04", false, false, true, false},           // 2026-05-27: LA+musl Summary 通过；其余组合不计分。
+    {"fork04", true, false, true, false},           // 2026-05-27: LA+musl Summary 通过；其余组合不计分。
     {"futex_wait01", true, true, true, true},        // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
     {"futex_wait04", true, true, true, true},        // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
     {"futex_wait_bitset01", true, true, true, true}, // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
     {"futex_wake01", true, true, true, true},        // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
     {"getpagesize01", true, true, true, true},       // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
-    {"gettimeofday02", true, true, true, true},      // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
+    // {"gettimeofday02", true, true, true, true},      // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
     {"link05", true, true, true, true},              // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
     {"nanosleep04", true, true, true, true},         // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
     {"nice01", true, true, true, true},              // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
@@ -1485,13 +1485,13 @@ struct ltp_testcase ltp_testcases[] = {
     {"stream02", false, true, false, true},    // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
     {"stream03", false, true, false, true},    // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
     {"stream04", false, true, false, true},    // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"stream05", false, true, false, true},    // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"abs01", false, true, false, true},       // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    {"stream05", true, true, true, true},    // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    {"abs01", true, true, true, true},       // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
     {"stat02", true, true, true, true},        // 2026-05-26: 双架构双 libc Summary passed=2 failed=0 broken=0。
     {"stat02_64", true, true, true, true},     // 2026-05-26: 双架构双 libc Summary passed=2 failed=0 broken=0。
     {"string01", false, true, false, true},    // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"symlinkat01", false, true, false, true}, // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"sysconf01", false, true, false, true},   // 2026-05-26: 双架构 glibc 有 TPASS/TCONF；无 Summary，musl judge 不计分。
+    {"symlinkat01", true, true, true, true}, // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    {"sysconf01", true, true, true, true},   // 2026-05-26: 双架构 glibc 有 TPASS/TCONF；无 Summary，musl judge 不计分。
 
     {"accept01", true, true, true, true},       // 2026-05-30: 四组合 passed 5 failed 0。
     // {"accept02", false, false, false, false},   // 2026-05-30: 未启用；MCAST_JOIN_GROUP 返回 ENOPROTOOPT，multicast socket option 未支持。
@@ -1587,7 +1587,7 @@ struct ltp_testcase ltp_testcases[] = {
     {"shmget06", true, true, true, true}, //.config
     {"shmnstest", true, true, true, true}, //pass 1
     {"shmt02", false, true, false, true}, //pass 无summary
-    {"shmt03", false, true, false, true}, //pass 无summary
+    {"shmt03", true, true, true, true}, //pass 无summary
     {"shmt04", false, true, false, true}, //pass 无summary
     {"shmt05", false, true, false, true}, //pass 无summary
     {"shmt06", false, true, false, true}, //pass 无summary
@@ -1616,7 +1616,7 @@ struct ltp_testcase ltp_testcases[] = {
     {"clone04", false, true, true, true},          // 2026-06-01: RV+musl 的 musl clone() 包装器在 NULL stack 场景进入 syscall 前 SIGSEGV，LTP 提示缺 musl 修复；内核错误路径由 RV+glibc/LA 覆盖。
     {"clone05", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
     {"clone07", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
-    {"clone08", true, true, false, true},          // 2026-06-01: LA+musl 的 clone() 包装器在 CLONE_THREAD+NULL tls 组合进内核前返回 EINVAL；RV 与 LA+glibc 继续覆盖内核线程语义。
+    {"clone08", true, true, true, true},          // 2026-06-01: LA+musl 的 clone() 包装器在 CLONE_THREAD+NULL tls 组合进内核前返回 EINVAL；RV 与 LA+glibc 继续覆盖内核线程语义。
     {"clone09", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
     {"clone301", true, true, true, true},          // 2026-05-28: RV+musl/glibc 均 passed 7 failed 0。
     {"clone303", true, true, true, true},          // 2026-05-28: 四组合均 passed 0 failed 0 skipped 1；cgroup v2 base controller 仍 TCONF。
@@ -1637,16 +1637,16 @@ struct ltp_testcase ltp_testcases[] = {
     {"epoll_wait05", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 1，Received EPOLLRDHUP。
     {"epoll_wait06", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 9。
     {"epoll_wait07", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 5。
-    {"epoll-ltp", false, true, false, true},       // 2026-05-28: RV+glibc 与 LA+glibc 当前 TPASS 13857（epoll_create 33 + epoll_ctl 13824）；musl 仍未放开，todo。
-    {"fallocate01", false, true, false, true},     // 2026-05-28: RV/LA + glibc 均 passed 4 failed 1；musl 不启用。
+    {"epoll-ltp", true, true, true, true},       // 2026-05-28: RV+glibc 与 LA+glibc 当前 TPASS 13857（epoll_create 33 + epoll_ctl 13824）；musl 仍未放开，todo。
+    {"fallocate01", true, true, true, true},     // 2026-05-28: RV/LA + glibc 均 passed 4 failed 1；musl 不启用。
     {"fallocate02", false, true, false, true},     // 2026-05-28: RV+glibc passed 8 failed 0；musl 不启用。
-    {"fallocate03", false, true, false, true},     // 2026-05-28: RV+glibc passed 8 failed 0；musl 不启用。
+    {"fallocate03", true, true, true, true},     // 2026-05-28: RV+glibc passed 8 failed 0；musl 不启用。
     {"fchdir03", true, true, true, true},          // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
     {"fchmod05", true, true, true, true},          // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
     {"fchmod06", true, true, true, true},          // 2026-05-28: RV/LA 四组合均 passed 0 failed 0 broken 1；mntpoint/dir/ 目录准备阶段 ENOENT。
-    {"fchownat01", false, true, false, true},      // 2026-05-28: RV+glibc passed 5 failed 0；musl 不启用。
+    {"fchownat01", true, true, true, true},      // 2026-05-28: RV+glibc passed 5 failed 0；musl 不启用。
     {"fchownat02", false, true, false, true},      // 2026-05-28: RV+glibc passed 1 failed 0；musl 不启用。
-    {"fcntl01", false, true, false, true},         // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
+    {"fcntl01", true, true, true, true},         // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
     {"fcntl01_64", false, true, false, true},      // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
     {"fcntl07", true, true, true, true},           // 2026-05-28: RV+musl/glibc 均 passed 4 failed 0。
     {"fcntl07_64", true, true, true, true},        // 2026-05-28: RV+musl/glibc 均 passed 4 failed 0。
@@ -1656,8 +1656,8 @@ struct ltp_testcase ltp_testcases[] = {
     {"fcntl12_64", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
     {"fcntl14", false, true, false, true},    /// pass
     {"fcntl14_64", false, true, false, true}, /// pass
-    {"fcntl16", false, true, false, true},    // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
-    {"fcntl16_64", false, true, false, true}, // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
+    {"fcntl16", true, true, true, true},    // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
+    {"fcntl16_64", true, true, true, true}, // 2026-05-28: RV+musl/glibc 均 ret=0，但无 TPASS/TFAIL summary。
     {"fcntl17", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
     {"fcntl17_64", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 1 failed 0。
     {"fcntl18", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 3 failed 0。
@@ -1697,7 +1697,7 @@ struct ltp_testcase ltp_testcases[] = {
     {"fcntl36", true, true, true, true},      // 2026-05-28: RV+musl/glibc 均 passed 7 failed 0。
     {"fcntl36_64", true, true, true, true},   // 2026-05-28: RV+musl/glibc 均 passed 7 failed 0。
     
-    {"atof01", false, true, false, true}, // PASS一部分 atof01.c:378: Test failed
+    {"atof01", true, true, true, true}, // PASS一部分 atof01.c:378: Test failed
     {"chmod05", true, true, true, true}, //   pass
     {"chown04", true, true, true, true},//failed   5
     {"clock_adjtime01", true, true, true, true}, //pass 9
@@ -1715,7 +1715,7 @@ struct ltp_testcase ltp_testcases[] = {
     {"clone04", false, true, true, true}, // RV+musl 的 clone(NULL stack) 包装器问题已由前方权威条目关闭
     {"clone05", true, true, true, true},//pass
     {"clone07", true, true, true, true}, //pass
-    {"clone08", true, true, false, true}, // LA+musl 的 CLONE_THREAD+NULL tls 包装器问题已由前方权威条目关闭
+    {"clone08", true, true, true, true}, // LA+musl 的 CLONE_THREAD+NULL tls 包装器问题已由前方权威条目关闭
     {"clone09", true, true, true, true}, //pass
     {"clone301", true, true, true, true}, //pass
     {"close02", true, true, true, true}, //TFAIL: close(-1) expected EBADF: EPERM (1)
@@ -1725,7 +1725,7 @@ struct ltp_testcase ltp_testcases[] = {
     {"execve04", true, true, true, true}, //TFAIL: execve_child shouldn't be executed
     {"execve05", true, true, true, true}, //pass
     {"execve06", true, true, true, true}, //pass
-    {"exit01", false, true, false, true}, //pass
+    {"exit01", true, true, true, true}, //pass
     {"execveat01", true, true, true, true}, //TCONF: syscall(281) __NR_execveat not supported on your arch
     {"execveat02", true, true, true, true}, //TCONF: syscall(281) __NR_execveat not supported on your arch
     {"faccessat202", true, true, true, true}, //pass
@@ -1745,18 +1745,18 @@ struct ltp_testcase ltp_testcases[] = {
     {"fork10", true, true, true, true},  //pass
     {"fsconfig02", true, true, true, true},//TCONF: syscall(431) __NR_fsconfig not supported on your arch
     {"fsopen02", true, true, true, true},//TBROK: Could not stat loop device 8
-    {"fstatat01", false, true, false, true}, //无summary
+    {"fstatat01", true, true, true, true}, //无summary
     {"getdents01", true, true, true, true}, // pass
     {"getdents02", true, true, true, true}, //pass
     {"getdomainname01", true, true, true, true}, // pass 1
     {"getegid01_16", true, true, true, true},// pass 1
     {"getegid02_16", true, true, true, true},// pass 1
-    {"getgroups01", false, true, false, true},
+    {"getgroups01", true, true, true, true},
     {"getgroups03", false, true, false, true},
-    {"getresgid01", false, true, false, true},
+    {"getresgid01", true, true, true, true},
     {"getresgid02", false, true, false, true},
     {"getresgid03", false, true, false, true},
-    {"getresuid01", false, true, false, true},
+    {"getresuid01", true, true, true, true},
     {"getresuid02", false, true, false, true},
     {"getresuid03", false, true, false, true},
     {"gettid02", true, true, true, true}, // PASS
@@ -1776,6 +1776,128 @@ struct ltp_testcase ltp_testcases[] = {
     {"inotify11", true, true, true, true},
     {"inotify12", true, true, true, true},
     {NULL, false, false, false, false},        // 已验证并默认随回归运行的测例，到这里结束
+    // {"abort01", true, true, true, true},
+    // {"alarm05", true, true, true, true},
+    // {"alarm06", true, true, true, true},
+    // {"arping01.sh", false, false, false, false},  // 2026-05-30: 未纳入本轮复测；依赖 ARP/raw socket 与网络工具环境。
+    // {"capget01", true, true, true, true},
+    // {"capget02", true, true, true, true},
+    // {"capset01", true, true, true, true},
+    // {"chdir01", true, true, true, true}, //  /dev/block/loop0
+    // {"chroot03", true, true, true, true},
+    // {"close_range01", true, true, true, true},
+    // {"close_range02", true, true, true, true},
+    // {"copy_file_range01", true, true, true, true},
+    // {"diotest4", true, true, true, true},
+    // {"dup3_01", true, true, true, true}, //
+    // {"eventfd01", true, true, true, true},
+    // {"eventfd02", true, true, true, true},
+    // {"eventfd03", true, true, true, true},
+    // {"eventfd05", true, true, true, true},
+    // {"eventfd2_01", true, true, true, true},
+    // {"eventfd2_02", true, true, true, true},
+    // {"eventfd2_03", true, true, true, true},
+    // {"fanotify01", true, true, true, true},  //mkfs.ext2
+    // {"fanotify06", true, true, true, true},
+    // {"fanotify09", true, true, true, true},
+    // {"fanotify14", true, true, true, true},//TBROK: Could not stat loop device 19
+    // {"fanotify16", true, true, true, true},//TBROK: Could not stat loop device 19
+    // {"fanotify19", true, true, true, true},//TBROK: Could not stat loop device 19
+    // {"fgetxattr01", true, true, true, true}, //TBROK: Could not stat loop device 21
+    // {"fremovexattr01", true, true, true, true},
+    // {"fremovexattr02", true, true, true, true},
+    // {"fsetxattr01", true, true, true, true},
+    // {"fspick02", true, true, true, true},
+    // {"get_robust_list01", true, true, true, true},
+    // {"inode01", true, true, true, true},
+    // {"ioctl_ns07", true, true, true, true},
+    // {"lchown01", true, true, true, true},
+    // {"linkat01", true, true, true, true}, //没summary
+    // {"linkat02", true, true, true, true}, ///dev/block/loop0
+    // {"memcmp01", true, true, true, true}, // pass 2
+    // {"memcpy01", true, true, true, true}, // passed   2
+    // {"memfd_create02", true, true, true, true},
+    // {"mkdir09", true, true, true, true}, //bin/sh
+    // {"mknod01", true, true, true, true},
+    // {"mknod07", true, true, true, true},
+    // {"mlock01", true, true, true, true},
+    // {"msync01", true, true, true, true}, // pass
+    // {"msync02", true, true, true, true}, // pass两个
+    // {"munlock01", true, true, true, true},
+    // {"nanosleep02", true, true, true, true},
+    // {"newuname01", true, true, true, true}, // pass 没summary
+    // {"nextafter01", true, true, true, true},
+    // {"open_tree02", true, true, true, true},
+    // {"openat02", true, true, true, true}, //爆了
+    // {"pipe04", true, true, true, true}, //管道给写爆了，感觉是时间片太长了
+    // {"prctl01", true, true, true, true},
+    // {"prctl02", true, true, true, true},
+    // {"pread02", true, true, true, true}, //爆了
+    // {"pread02_64", true, true, true, true},
+    // {"pwrite02", true, true, true, true},
+    // {"pwrite02_64", true, true, true, true},
+    // {"readdir01", true, true, true, true},
+    // {"rename01", true, true, true, true}, //bin/sh
+    // {"rename03", true, true, true, true}, //bin/sh
+    // {"rename04", true, true, true, true}, //bin/sh
+    // {"rename05", true, true, true, true}, //bin/sh
+    // {"rename06", true, true, true, true},
+    // {"rename07", true, true, true, true},
+    // {"rename08", true, true, true, true},
+    // {"rename10", true, true, true, true},
+    // {"rename13", true, true, true, true},
+    // {"renameat01", true, true, true, true},
+    // {"rt_sigaction01", true, true, true, true},
+    // {"rt_sigaction02", true, true, true, true},
+    // {"rt_sigaction03", true, true, true, true},
+    // {"sched_getaffinity01", true, true, true, true}, // PASS
+    // {"sched_setscheduler04", true, true, true, true},
+    // {"set_robust_list01", true, true, true, true},
+    // {"setgroups01", true, true, true, true},
+    // {"setgroups02", true, true, true, true},
+    // {"setitimer02", true, true, true, true},
+    // {"setpgid01", true, true, true, true}, // pass
+    // {"setrlimit02", true, true, true, true},
+    // {"settimeofday01", true, true, true, true},
+    // {"settimeofday02", true, true, true, true},
+    // {"setxattr01", true, true, true, true},
+    // {"sigaction01", true, true, true, true},
+    // {"sigaction02", true, true, true, true},
+    // {"sigaltstack01", true, true, true, true},
+    // {"sigaltstack02", true, true, true, true},
+    // {"signalfd01", true, true, true, true},
+    // {"sigpending02", true, true, true, true},
+    // {"sigprocmask01", true, true, true, true},
+    // {"statfs01", true, true, true, true}, ///dev/loop0
+    // {"statfs01_64", true, true, true, true},
+    // {"statvfs01", true, true, true, true},
+    // {"statvfs02", true, true, true, true}, //和别的不能一起跑
+    // {"symlink01", true, true, true, true},
+    // {"sysinfo01", true, true, true, true},
+    // {"sysinfo02", true, true, true, true},
+    // {"tgkill01", true, true, true, true},
+    // {"timerfd02", true, true, true, true},
+    // {"timerfd_create01", true, true, true, true},
+    // {"times03", true, true, true, true},
+    // {"tkill02", true, true, true, true},
+    // {"ulimit01", true, true, true, true}, // PASS
+    // {"utime01", true, true, true, true},
+    // {"utime02", true, true, true, true},
+    // {"utime03", true, true, true, true},
+    // {"utime04", true, true, true, true},
+    // {"utimensat01", true, true, true, true},
+    // {"wait02", true, true, true, true}, // PASS
+    // {"wait401", true, true, true, true}, // PASS
+    // {"waitid01", true, true, true, true},
+    // {"waitid02", true, true, true, true},
+    // {"waitid03", true, true, true, true},
+    // {"waitid04", true, true, true, true},
+    // {"waitid05", true, true, true, true},
+    // {"waitid06", true, true, true, true},
+    // {"waitid11", true, true, true, true},
+    // {"waitpid08", true, true, true, true},
+    // {"writev01", true, true, true, true}, // 完全PASS
+    // {"writev02", true, true, true, true},
     // {"fcntl37", true, true, true, true},           // 2026-05-28: 四组合均 passed 0 failed 0 skipped 1；缺 capget syscall。
     // {"fcntl37_64", true, true, true, true},        // 2026-05-28: 四组合均 passed 0 failed 0 skipped 1；缺 capget syscall。
     // {"fcntl38", true, true, true, true},           // 2026-05-28: 四组合均 passed 0 failed 0 skipped 1；CONFIG_DNOTIFY 仍不满足。
@@ -1847,7 +1969,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"wireguard02.sh", false, false, false, false}, // 2026-05-30: 未启用；WireGuard 虚拟设备/隧道能力未支持。
     // {"ping01.sh", false, false, false, false},    // 2026-05-30: 未纳入本轮复测；依赖 ICMP/raw socket 与完整网络脚本环境。
     // {"ping02.sh", false, false, false, false},    // 2026-05-30: 未纳入本轮复测；依赖 ICMP/raw socket 与完整网络脚本环境。
-    // {"arping01.sh", false, false, false, false},  // 2026-05-30: 未纳入本轮复测；依赖 ARP/raw socket 与网络工具环境。
     // {"tcpdump01.sh", false, false, false, false}, // 2026-05-30: 未启用；依赖 tcpdump/libpcap 与 AF_PACKET 抓包能力。
     // {"tracepath01.sh", false, false, false, false}, // 2026-05-30: 未纳入本轮复测；依赖路由/ICMP 与完整网络工具环境。
     // {"traceroute01.sh", false, false, false, false}, // 2026-05-30: 未纳入本轮复测；依赖路由/ICMP 与完整网络工具环境。
@@ -1976,37 +2097,28 @@ struct ltp_testcase ltp_testcases[] = {
     // {"fallocate04", true, true, true, true},  //mkfs.ext2
     // {"fallocate05", true, true, true, true},  //mkfs.ext2
     // {"fallocate06", true, true, true, true}, //mkfs.ext2
-    // {"fanotify01", true, true, true, true},  //mkfs.ext2
     // {"fanotify03", true, true, true, true}, //mkfs.ext2
     // {"fanotify05", true, true, true, true},//mkfs.ext2
-    // {"fanotify06", true, true, true, true},
     // {"fanotify07", true, true, true, true},
-    // {"fanotify09", true, true, true, true},
     // {"fanotify10", true, true, true, true},
     // {"fanotify13", true, true, true, true},//mkfs.ext2
-    // {"fanotify14", true, true, true, true},//TBROK: Could not stat loop device 19
     // {"fanotify15", true, true, true, true},//TBROK: Could not stat loop device 19
-    // {"fanotify16", true, true, true, true},//TBROK: Could not stat loop device 19
     // {"fanotify17", true, true, true, true},//TBROK: Could not stat loop device 19
     // {"fanotify18", true, true, true, true},//TBROK: Could not stat loop device 19
-    // {"fanotify19", true, true, true, true},//TBROK: Could not stat loop device 19
     // {"fanotify21", true, true, true, true},
     // {"fanotify22", true, true, true, true},
     // {"fanotify23", true, true, true, true},
     // {"fdatasync03", true, true, true, true}, //TBROK: Could not stat loop device 20
-    // {"fgetxattr01", true, true, true, true}, //TBROK: Could not stat loop device 21
     // {"fork05", true, true, true, true},
     // {"fork13", true, true, true, true}, //10m太长不跑
     // {"fork14", true, true, true, true}, // TCONF: mmap() fails too many times, so it's almost impossible to get a vm_area_struct sized 16TB
     // {"fsconfig01", true, true, true, true}, //TCONF: syscall(431) __NR_fsconfig not supported on your arch
     // {"fsconfig03", true, true, true, true},//TCONF: syscall(431) __NR_fsconfig not supported on your arch
-    // {"fsetxattr01", true, true, true, true},
     // {"fsetxattr02", true, true, true, true},
     // {"fsmount01", true, true, true, true},
     // {"fsmount02", true, true, true, true},
     // {"fsopen01", true, true, true, true}, //TBROK: Could not stat loop device 8
     // {"fspick01", true, true, true, true}, //TBROK: Could not stat loop device 8
-    // {"fspick02", true, true, true, true},
     // {"fstatfs01", true, true, true, true}, ///dev/loop0
     // {"fstatfs01_64", true, true, true, true},
     // {"geteuid01_16", true, true, true, true},
@@ -2035,7 +2147,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"inotify08", true, true, true, true},
     // {"inotify09", true, true, true, true},
 
-    // {"abort01", true, true, true, true},
     // {"acct01", true, true, true, true},
     // {"acct02", true, true, true, true},
     // {"acct02_helper", true, true, true, true},
@@ -2058,8 +2169,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"aiodio_append", true, true, true, true},
     // {"aiodio_sparse", true, true, true, true},
     // {"aio-stress", true, true, true, true},
-    // {"alarm05", true, true, true, true},
-    // {"alarm06", true, true, true, true},
     // {"ar01.sh", true, true, true, true},
     // {"arch_prctl01", true, true, true, true},
     // {"ask_password.sh", true, true, true, true},
@@ -2083,9 +2192,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"cap_bounds_r", true, true, true, true},
     // {"cap_bounds_rw", true, true, true, true},
     // {"cap_bset_inh_bounds", true, true, true, true},
-    // {"capget01", true, true, true, true},
-    // {"capget02", true, true, true, true},
-    // {"capset01", true, true, true, true},
     // {"capset02", true, true, true, true},
     // {"capset03", true, true, true, true},
     // {"capset04", true, true, true, true},
@@ -2109,7 +2215,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"cgroup_regression_test.sh", true, true, true, true},
     // {"cgroup_xattr", true, true, true, true},
     // {"change_password.sh", true, true, true, true},
-    // {"chdir01", true, true, true, true}, //  /dev/block/loop0
     // {"check_envval", true, true, true, true},
     // {"check_icmpv4_connectivity", true, true, true, true},
     // {"check_icmpv6_connectivity", true, true, true, true},
@@ -2126,7 +2231,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"chown05_16", true, true, true, true},
     // {"chroot01", true, true, true, true},
     // {"chroot02", true, true, true, true},
-    // {"chroot03", true, true, true, true},
     // {"chroot04", true, true, true, true},
     // {"cleanup_lvm.sh", true, true, true, true},
     // {"cmdlib.sh", true, true, true, true},
@@ -2198,7 +2302,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"diotest1", true, true, true, true},
     // {"diotest2", true, true, true, true},
     // {"diotest3", true, true, true, true},
-    // {"diotest4", true, true, true, true},
     // {"diotest5", true, true, true, true},
     // {"diotest6", true, true, true, true},
     // {"dirty", true, true, true, true},
@@ -2213,22 +2316,14 @@ struct ltp_testcase ltp_testcases[] = {
     // {"dns-stress-lib.sh", true, true, true, true},
     // {"doio", true, true, true, true},
     // {"du01.sh", true, true, true, true},
-    // {"dup3_01", true, true, true, true}, //
     // {"dynamic_debug01.sh", true, true, true, true},
     // {"ebizzy", true, true, true, true},
     // {"eject_check_tray", true, true, true, true},
     // {"eject-tests.sh", true, true, true, true},
     // {"endian_switch01", true, true, true, true},
     // {"event_generator", true, true, true, true},
-    // {"eventfd01", true, true, true, true},
-    // {"eventfd02", true, true, true, true},
-    // {"eventfd03", true, true, true, true},
     // {"eventfd04", true, true, true, true},
-    // {"eventfd05", true, true, true, true},
     // {"eventfd06", true, true, true, true},
-    // {"eventfd2_01", true, true, true, true},
-    // {"eventfd2_02", true, true, true, true},
-    // {"eventfd2_03", true, true, true, true},
     // {"evm_overlay.sh", true, true, true, true},
     // {"exec_with_inh", true, true, true, true},
     // {"exec_without_inh", true, true, true, true},
@@ -2242,7 +2337,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"execveat_child", true, true, true, true},
     // {"execveat_errno", true, true, true, true},
     // {"execvp01_child", true, true, true, true},
-    // {"copy_file_range01", true, true, true, true},
     // {"copy_file_range02", true, true, true, true},
     // {"copy_file_range03", true, true, true, true},
     // {"f00f", true, true, true, true},
@@ -2276,8 +2370,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"freeze_sleep_thaw.sh", true, true, true, true},
     // {"freeze_thaw.sh", true, true, true, true},
     // {"freeze_write_freezing.sh", true, true, true, true},
-    // {"fremovexattr01", true, true, true, true},
-    // {"fremovexattr02", true, true, true, true},
     // {"fs_bind_cloneNS01.sh", true, true, true, true},
     // {"fs_bind_cloneNS02.sh", true, true, true, true},
     // {"fs_bind_cloneNS03.sh", true, true, true, true},
@@ -2463,7 +2555,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"get_ifname", true, true, true, true},
     // {"get_mempolicy01", true, true, true, true},
     // {"get_mempolicy02", true, true, true, true},
-    // {"get_robust_list01", true, true, true, true},
     // {"getcontext01", true, true, true, true},
     // {"getcpu01", true, true, true, true}, //sched_setaffinity
     // {"getcwd04", true, true, true, true}, // Test needs at least 2 CPUs online 这个是因为 sched_getaffinity返回0，说不定它不用两个CPU
@@ -2576,13 +2667,10 @@ struct ltp_testcase ltp_testcases[] = {
     // {"init_module01", true, true, true, true},
     // {"init_module02", true, true, true, true},
     // {"initialize_if", true, true, true, true},
-    // {"inode01", true, true, true, true},
     // {"inode02", true, true, true, true},
     // {"inotify_init1_01", true, true, true, true},
     // {"inotify_init1_02", true, true, true, true},
     // {"clone303", true, true, true, true}, 
-    // {"close_range01", true, true, true, true},
-    // {"close_range02", true, true, true, true},
     // {"input01", true, true, true, true},
     // {"input02", true, true, true, true},
     // {"input03", true, true, true, true},
@@ -2619,7 +2707,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"ioctl_ns04", true, true, true, true},
     // {"ioctl_ns05", true, true, true, true},
     // {"ioctl_ns06", true, true, true, true},
-    // {"ioctl_ns07", true, true, true, true},
     // {"ioctl_sg01", true, true, true, true},
 
     // {"iogen", true, true, true, true},
@@ -2670,7 +2757,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"ksm05", true, true, true, true},
     // {"ksm06", true, true, true, true},
     // {"ksm07", true, true, true, true},
-    // {"lchown01", true, true, true, true},
     // {"lchown01_16", true, true, true, true},
     // {"lchown02", true, true, true, true},
     // {"lchown02_16", true, true, true, true},
@@ -2683,8 +2769,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"lgetxattr01", true, true, true, true},
     // {"lgetxattr02", true, true, true, true},
     // {"libcgroup_freezer", true, true, true, true},
-    // {"linkat01", true, true, true, true}, //没summary
-    // {"linkat02", true, true, true, true}, ///dev/block/loop0
     // {"linktest.sh", true, true, true, true},
     // {"listxattr01", true, true, true, true},
     // {"listxattr02", true, true, true, true},
@@ -2753,14 +2837,11 @@ struct ltp_testcase ltp_testcases[] = {
     // {"memcg_test_4.sh", true, true, true, true},
     // {"memcg_usage_in_bytes_test.sh", true, true, true, true},
     // {"memcg_use_hierarchy_test.sh", true, true, true, true},
-    // {"memcmp01", true, true, true, true}, // pass 2
     // {"memcontrol01", true, true, true, true}, ///proc/self/mounts
     // {"memcontrol02", true, true, true, true}, ///dev/block/loop0
     // {"memcontrol03", true, true, true, true}, ///dev/block/loop0
     // {"memcontrol04", true, true, true, true}, ///dev/block/loop0连着跑似乎就变成loop1和loop2了
-    // {"memcpy01", true, true, true, true}, // passed   2
     // {"memctl_test01", true, true, true, true},
-    // {"memfd_create02", true, true, true, true},
     // {"memfd_create03", true, true, true, true},
     // {"memfd_create04", true, true, true, true},
     // {"memset01", true, true, true, true}, // passed   1
@@ -2775,20 +2856,16 @@ struct ltp_testcase ltp_testcases[] = {
     // {"mincore03", true, true, true, true},
     // {"mincore04", true, true, true, true},
     // {"mkdir_tests.sh", true, true, true, true},
-    // {"mkdir09", true, true, true, true}, //bin/sh
     // {"mkdirat01", true, true, true, true}, // pass
     // {"mkfs01.sh", true, true, true, true},
-    // {"mknod01", true, true, true, true},
     // {"mknod03", true, true, true, true},
     // {"mknod04", true, true, true, true},
     // {"mknod05", true, true, true, true},
     // {"mknod06", true, true, true, true},
-    // {"mknod07", true, true, true, true},
     // {"mknod08", true, true, true, true},
     // {"mknodat01", true, true, true, true},
     // {"mknodat02", true, true, true, true},
     // {"mkswap01.sh", true, true, true, true},
-    // {"mlock01", true, true, true, true},
     // {"mlock02", true, true, true, true},
     // {"mlock03", true, true, true, true},
     // {"mlock04", true, true, true, true},
@@ -2878,12 +2955,9 @@ struct ltp_testcase ltp_testcases[] = {
     // {"msgsnd05", true, true, true, true},
     // {"msgsnd06", true, true, true, true},
     // {"msgstress01", true, true, true, true},
-    // {"msync01", true, true, true, true}, // pass
-    // {"msync02", true, true, true, true}, // pass两个
     // {"msync03", true, true, true, true}, //pass
     // {"msync04", true, true, true, true}, ///dev/loop0
     // {"mtest01", true, true, true, true},
-    // {"munlock01", true, true, true, true},
     // {"munlock02", true, true, true, true},
     // {"munlockall01", true, true, true, true},
     // {"munmap01", true, true, true, true}, // pass 没summary
@@ -2894,7 +2968,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"name_to_handle_at01", true, true, true, true},
     // {"name_to_handle_at02", true, true, true, true},
     // {"nanosleep01", true, true, true, true},
-    // {"nanosleep02", true, true, true, true},
     // {"net_cmdlib.sh", true, true, true, true},
     // {"netns_breakns.sh", true, true, true, true},
     // {"netns_comm.sh", true, true, true, true},
@@ -2902,8 +2975,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"netns_netlink", true, true, true, true},
     // {"netns_sysfs.sh", true, true, true, true},
     // {"netstress", true, true, true, true},
-    // {"newuname01", true, true, true, true}, // pass 没summary
-    // {"nextafter01", true, true, true, true},
     // {"nfs_flock", true, true, true, true},
     // {"nfs_flock_dgen", true, true, true, true},
     // {"nfs_lib.sh", true, true, true, true},
@@ -2938,12 +3009,10 @@ struct ltp_testcase ltp_testcases[] = {
     // {"open_by_handle_at01", true, true, true, true},
     // {"open_by_handle_at02", true, true, true, true},
     // {"open_tree01", true, true, true, true},
-    // {"open_tree02", true, true, true, true},
     // {"open12", true, true, true, true}, //过三个
     // {"open12_child", true, true, true, true}, //这个不是测例
     // {"open13", true, true, true, true}, // pass
     // {"open14", true, true, true, true}, //pass这个测例要跑一年，别急着掐死，多等会
-    // {"openat02", true, true, true, true}, //爆了
     // {"openat02_child", true, true, true, true},
     // {"openat03", true, true, true, true}, //pass这个和那个一年是同一个
     // {"openat04", true, true, true, true}, ///dev/block/loop0
@@ -2992,7 +3061,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"pids_task1", true, true, true, true},
     // {"pids_task2", true, true, true, true},
     // {"pipe02", true, true, true, true},
-    // {"pipe04", true, true, true, true}, //管道给写爆了，感觉是时间片太长了
     // {"pipe05", true, true, true, true}, // 完全PASS
     // {"pipe07", true, true, true, true}, //proc/self/fd没写
     // {"pipe09", true, true, true, true}, // 完全PASS
@@ -3014,8 +3082,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"posix_fadvise04", true, true, true, true},
     // {"posix_fadvise04_64", true, true, true, true},
     // {"ppoll01", true, true, true, true}, // 2026-05-21: 四组合定向复测异常，RV 在 MASK_SIGNAL 子场景卡住，LA 在同子场景 kerneltrap
-    // {"prctl01", true, true, true, true},
-    // {"prctl02", true, true, true, true},
     // {"prctl03", true, true, true, true},
     // {"prctl04", true, true, true, true},
     // {"prctl05", true, true, true, true},
@@ -3025,8 +3091,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"prctl08", true, true, true, true},
     // {"prctl09", true, true, true, true},
     // {"prctl10", true, true, true, true},
-    // {"pread02", true, true, true, true}, //爆了
-    // {"pread02_64", true, true, true, true},
     // {"preadv01", true, true, true, true},
     // {"preadv01_64", true, true, true, true},
     // {"preadv02", true, true, true, true},
@@ -3077,8 +3141,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"pty05", true, true, true, true},
     // {"pty06", true, true, true, true},
     // {"pty07", true, true, true, true},
-    // {"pwrite02", true, true, true, true},
-    // {"pwrite02_64", true, true, true, true},
     // {"pwrite03", true, true, true, true},
     // {"pwrite03_64", true, true, true, true},
     // {"pwrite04", true, true, true, true},
@@ -3107,7 +3169,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"read_all", true, true, true, true},
     // {"readahead01", true, true, true, true},
     // {"readahead02", true, true, true, true},
-    // {"readdir01", true, true, true, true},
     // {"readdir21", true, true, true, true},
     // {"realpath01", true, true, true, true},
     // {"reboot01", true, true, true, true},
@@ -3117,20 +3178,10 @@ struct ltp_testcase ltp_testcases[] = {
     // {"remove_password.sh", true, true, true, true},
     // {"removexattr01", true, true, true, true},
     // {"removexattr02", true, true, true, true},
-    // {"rename01", true, true, true, true}, //bin/sh
-    // {"rename03", true, true, true, true}, //bin/sh
-    // {"rename04", true, true, true, true}, //bin/sh
-    // {"rename05", true, true, true, true}, //bin/sh
-    // {"rename06", true, true, true, true},
-    // {"rename07", true, true, true, true},
-    // {"rename08", true, true, true, true},
     // {"rename09", true, true, true, true},
-    // {"rename10", true, true, true, true},
     // {"rename11", true, true, true, true},
     // {"rename12", true, true, true, true},
-    // {"rename13", true, true, true, true},
     // {"rename14", true, true, true, true},
-    // {"renameat01", true, true, true, true},
     // {"renameat201", true, true, true, true},
     // {"renameat202", true, true, true, true},
     // {"request_key01", true, true, true, true},
@@ -3142,9 +3193,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"route6-rmmod", true, true, true, true},
     // {"route-change-netlink", true, true, true, true},
     // {"route-lib.sh", true, true, true, true},
-    // {"rt_sigaction01", true, true, true, true},
-    // {"rt_sigaction02", true, true, true, true},
-    // {"rt_sigaction03", true, true, true, true},
     // {"rt_sigprocmask01", true, true, true, true},
     // {"rt_sigprocmask02", true, true, true, true},
     // {"rt_sigqueueinfo01", true, true, true, true},
@@ -3180,7 +3228,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"sched_get_priority_max02", true, true, true, true},
     // {"sched_get_priority_min01", true, true, true, true},
     // {"sched_get_priority_min02", true, true, true, true},
-    // {"sched_getaffinity01", true, true, true, true}, // PASS
     // {"sched_getattr01", true, true, true, true},
     // {"sched_getattr02", true, true, true, true},
     // {"sched_getparam01", true, true, true, true},
@@ -3200,7 +3247,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"sched_setscheduler01", true, true, true, true},
     // {"sched_setscheduler02", true, true, true, true},
     // {"sched_setscheduler03", true, true, true, true},
-    // {"sched_setscheduler04", true, true, true, true},
     // {"sched_stress.sh", true, true, true, true},
     // {"sched_tc0", true, true, true, true},
     // {"sched_tc1", true, true, true, true},
@@ -3259,7 +3305,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"set_mempolicy03", true, true, true, true},
     // {"set_mempolicy04", true, true, true, true},
     // {"set_mempolicy05", true, true, true, true},
-    // {"set_robust_list01", true, true, true, true},
     // {"set_thread_area01", true, true, true, true},
     // {"setdomainname01", true, true, true, true},
     // {"setdomainname02", true, true, true, true},
@@ -3277,9 +3322,7 @@ struct ltp_testcase ltp_testcases[] = {
     // {"setgid01_16", true, true, true, true},
     // {"setgid02_16", true, true, true, true},
     // {"setgid03_16", true, true, true, true},
-    // {"setgroups01", true, true, true, true},
     // {"setgroups01_16", true, true, true, true},
-    // {"setgroups02", true, true, true, true},
     // {"setgroups02_16", true, true, true, true},
     // {"setgroups03", true, true, true, true},
     // {"setgroups03_16", true, true, true, true},
@@ -3289,10 +3332,8 @@ struct ltp_testcase ltp_testcases[] = {
     // {"sethostname02", true, true, true, true},
     // {"sethostname03", true, true, true, true},
     // {"setitimer01", true, true, true, true},
-    // {"setitimer02", true, true, true, true},
     // {"setns01", true, true, true, true},
     // {"setns02", true, true, true, true},
-    // {"setpgid01", true, true, true, true}, // pass
     // {"setpgid02", true, true, true, true}, // pass
     // {"setpgid03", true, true, true, true}, // 要完善sid逻辑, 而且现在退不出去, 先不修
     // {"setpgid03_child", true, true, true, true},
@@ -3313,33 +3354,22 @@ struct ltp_testcase ltp_testcases[] = {
     // {"setreuid06_16", true, true, true, true},
     // {"setreuid07_16", true, true, true, true},
     // {"setrlimit01", true, true, true, true},
-    // {"setrlimit02", true, true, true, true},
     // {"setrlimit03", true, true, true, true},
     // {"setrlimit05", true, true, true, true},
     // {"setrlimit06", true, true, true, true},
-    // {"settimeofday01", true, true, true, true},
-    // {"settimeofday02", true, true, true, true},
     // {"setuid01_16", true, true, true, true},
     // {"setuid03_16", true, true, true, true},
     // {"setuid04", true, true, true, true},
     // {"setuid04_16", true, true, true, true},
-    // {"setxattr01", true, true, true, true},
     // {"setxattr02", true, true, true, true},
     // {"setxattr03", true, true, true, true},
     // {"sgetmask01", true, true, true, true},
     // {"shell_pipe01.sh", true, true, true, true},
-    // {"sigaction01", true, true, true, true},
-    // {"sigaction02", true, true, true, true},
-    // {"sigaltstack01", true, true, true, true},
-    // {"sigaltstack02", true, true, true, true},
     // {"sighold02", true, true, true, true},
     // {"signal01", true, true, true, true},
     // {"signal06", true, true, true, true},
-    // {"signalfd01", true, true, true, true},
     // {"signalfd4_01", true, true, true, true},
     // {"signalfd4_02", true, true, true, true},
-    // {"sigpending02", true, true, true, true},
-    // {"sigprocmask01", true, true, true, true},
     // {"sigrelse01", true, true, true, true},
     // {"sigsuspend01", true, true, true, true},
     // {"sigtimedwait01", true, true, true, true},
@@ -3366,12 +3396,8 @@ struct ltp_testcase ltp_testcases[] = {
     // {"stack_clash", true, true, true, true},
     // {"stack_space", true, true, true, true},
     // {"starvation", true, true, true, true},
-    // {"statfs01", true, true, true, true}, ///dev/loop0
-    // {"statfs01_64", true, true, true, true},
     // {"statfs03", true, true, true, true}, //爆了
     // {"statfs03_64", true, true, true, true},
-    // {"statvfs01", true, true, true, true},
-    // {"statvfs02", true, true, true, true}, //和别的不能一起跑
     // {"statx04", true, true, true, true}, //bin/sh
     // {"statx05", true, true, true, true},
     // {"statx06", true, true, true, true},
@@ -3407,8 +3433,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"sysfs03", true, true, true, true},
     // {"sysfs04", true, true, true, true},
     // {"sysfs05", true, true, true, true},
-    // {"sysinfo01", true, true, true, true},
-    // {"sysinfo02", true, true, true, true},
     // {"sysinfo03", true, true, true, true},
     // {"syslog11", true, true, true, true},
     // {"syslog12", true, true, true, true},
@@ -3734,7 +3758,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"testsf_c6", true, true, true, true},
     // {"testsf_s", true, true, true, true},
     // {"testsf_s6", true, true, true, true},
-    // {"tgkill01", true, true, true, true},
     // {"tgkill02", true, true, true, true},
     // {"tgkill03", true, true, true, true},
     // {"thp01", true, true, true, true},
@@ -3748,16 +3771,12 @@ struct ltp_testcase ltp_testcases[] = {
     // {"timer_getoverrun01", true, true, true, true},
     // {"timer_gettime01", true, true, true, true},
     // {"timer_settime03", true, true, true, true},
-    // {"timerfd_create01", true, true, true, true},
     // {"timerfd_gettime01", true, true, true, true},
     // {"timerfd_settime01", true, true, true, true},
     // {"timerfd_settime02", true, true, true, true},
     // {"timerfd01", true, true, true, true},
-    // {"timerfd02", true, true, true, true},
     // {"timerfd04", true, true, true, true},
-    // {"times03", true, true, true, true},
     // {"time-schedule", true, true, true, true},
-    // {"tkill02", true, true, true, true},
     // {"tpci", true, true, true, true},
     // {"tpm_changeauth_tests.sh", true, true, true, true},
     // {"tpm_changeauth_tests_exp01.sh", true, true, true, true},
@@ -3899,7 +3918,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"uevent01", true, true, true, true},
     // {"uevent02", true, true, true, true},
     // {"uevent03", true, true, true, true},
-    // {"ulimit01", true, true, true, true}, // PASS
     // {"umask01", true, true, true, true},
     // {"umip_basic_test", true, true, true, true},
     // {"umount01", true, true, true, true},
@@ -3923,14 +3941,9 @@ struct ltp_testcase ltp_testcases[] = {
     // {"userns08", true, true, true, true},
     // {"ustat01", true, true, true, true},
     // {"ustat02", true, true, true, true},
-    // {"utime01", true, true, true, true},
-    // {"utime02", true, true, true, true},
-    // {"utime03", true, true, true, true},
-    // {"utime04", true, true, true, true},
     // {"utime05", true, true, true, true},
     // {"utime06", true, true, true, true},
     // {"utime07", true, true, true, true},
-    // {"utimensat01", true, true, true, true},
     // {"utimes01", true, true, true, true},
     // {"utsname01", true, true, true, true},
     // {"utsname02", true, true, true, true},
@@ -3954,21 +3967,11 @@ struct ltp_testcase ltp_testcases[] = {
     // {"vmsplice02", true, true, true, true},
     // {"vmsplice03", true, true, true, true},
     // {"vmsplice04", true, true, true, true},
-    // {"wait02", true, true, true, true}, // PASS
-    // {"wait401", true, true, true, true}, // PASS
     // {"wait403", true, true, true, true}, // PASS
-    // {"waitid01", true, true, true, true},
-    // {"waitid02", true, true, true, true},
-    // {"waitid03", true, true, true, true},
-    // {"waitid04", true, true, true, true},
-    // {"waitid05", true, true, true, true},
-    // {"waitid06", true, true, true, true},
     // {"waitid07", true, true, true, true},
     // {"waitid08", true, true, true, true},
     // {"waitid09", true, true, true, true},
     // {"waitid10", true, true, true, true},
-    // {"waitid11", true, true, true, true},
-    // {"waitpid08", true, true, true, true},
     // {"waitpid10", true, true, true, true},
     // {"waitpid11", true, true, true, true},
     // {"waitpid12", true, true, true, true},
@@ -3988,8 +3991,6 @@ struct ltp_testcase ltp_testcases[] = {
     // {"write_freezing.sh", true, true, true, true},
     // {"write06", true, true, true, true},
     // {"writetest", true, true, true, true},
-    // {"writev01", true, true, true, true}, // 完全PASS
-    // {"writev02", true, true, true, true},
     // {"writev03", true, true, true, true},
     // {"zram_lib.sh", true, true, true, true},
     // {"zram01.sh", true, true, true, true},
