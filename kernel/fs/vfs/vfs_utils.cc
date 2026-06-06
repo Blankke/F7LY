@@ -11,6 +11,7 @@
 #include "fs/fat32/fat32.hh"
 #include "fs/vfs/fifo_manager.hh"
 #include "fs/vfs/virtual_fs.hh"
+#include "proc/capability.hh"
 #include "proc_manager.hh" // 用于访问当前进程的umask
 #include "fs/lwext4/ext4.hh"
 #include "fs/vfs/vfs_ext4_ext.hh" // 包含 NS_to_S 宏
@@ -2186,6 +2187,7 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
     d = dirp;
     while (1)
     {
+        const uint64 entry_offset = file->lwext4_dir_struct.next_off;
         rentry = ext4_dir_entry_next(&file->lwext4_dir_struct);
         if (rentry == NULL)
             break;
@@ -2210,7 +2212,11 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
             reclen = sizeof(struct linux_dirent64);
 
         if (totlen + (int)reclen > (int)count)
+        {
+            // 当前目录项尚未复制给用户，下一次 getdents64 必须从同一项重试。
+            file->lwext4_dir_struct.next_off = entry_offset;
             break;
+        }
 
         char name[MAXPATH] = {0};
         const size_t copy_len = eastl::min<size_t>(namelen, MAXPATH - 1);
@@ -2333,6 +2339,183 @@ int vfs_mkdir(const char *path, uint64_t mode)
     if (status != EOK)
     {
         printfRed("vfs_mkdir: ext4_owner_set failed for %s, status: %d\n", path, status);
+        return -status;
+    }
+
+    return EOK;
+}
+
+int vfs_mknod(const eastl::string &path, mode_t mode, dev_t dev)
+{
+    if (path.empty())
+    {
+        return -ENOENT;
+    }
+
+    int length_ret = validate_linux_path_length(path);
+    if (length_ret != EOK)
+    {
+        return length_ret;
+    }
+
+    // mknod 不跟随最后一个路径组件，但必须解析父目录中的符号链接。
+    eastl::string parent_path = get_parent_path(path);
+    size_t last_slash = path.find_last_of('/');
+    eastl::string filename = last_slash == eastl::string::npos
+                                 ? path
+                                 : path.substr(last_slash + 1);
+    if (filename.empty())
+    {
+        return -ENOENT;
+    }
+
+    eastl::string resolved_parent;
+    int resolve_ret = resolve_symlinks(parent_path, resolved_parent);
+    if (resolve_ret < 0)
+    {
+        return resolve_ret;
+    }
+
+    eastl::string effective_path = resolved_parent;
+    if (effective_path.empty())
+    {
+        effective_path = "/";
+    }
+    if (effective_path.back() != '/')
+    {
+        effective_path += "/";
+    }
+    effective_path += filename;
+    effective_path = normalize_path(effective_path);
+
+    length_ret = validate_linux_path_length(effective_path);
+    if (length_ret != EOK)
+    {
+        return length_ret;
+    }
+
+    int prefix_ret = validate_lookup_prefix_permissions(effective_path);
+    if (prefix_ret < 0)
+    {
+        return prefix_ret;
+    }
+
+    // 只读挂载是文件系统级约束，errno 优先于父目录写权限。
+    // 非特权调用者在只读挂载点创建节点时也必须得到 EROFS。
+    if (vfs_is_readonly_path(effective_path))
+    {
+        return -EROFS;
+    }
+
+    fs::Kstat parent_st{};
+    int parent_ret = raw_vfs_path_stat(resolved_parent, &parent_st);
+    if (parent_ret < 0)
+    {
+        return parent_ret;
+    }
+    if ((parent_st.mode & S_IFMT) != S_IFDIR)
+    {
+        return -ENOTDIR;
+    }
+
+    proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+    if (current_proc == nullptr)
+    {
+        return -EFAULT;
+    }
+
+    int permission_ret = check_mode_bits_with_fsids(parent_st.mode,
+                                                     parent_st.uid,
+                                                     parent_st.gid,
+                                                     current_proc->get_fsuid(),
+                                                     current_proc->get_fsgid(),
+                                                     W_OK | X_OK);
+    if (permission_ret < 0)
+    {
+        return permission_ret;
+    }
+
+    int exists = raw_vfs_is_file_exist(effective_path);
+    if (exists < 0)
+    {
+        return exists;
+    }
+    if (exists == 1)
+    {
+        return -EEXIST;
+    }
+
+    const mode_t file_type = mode & S_IFMT;
+    if (file_type == S_IFREG || file_type == 0)
+    {
+        fs::file *created_file = nullptr;
+        int open_ret = vfs_openat(effective_path,
+                                  created_file,
+                                  O_CREAT | O_EXCL | O_WRONLY,
+                                  mode & 07777);
+        if (open_ret < 0)
+        {
+            return open_ret;
+        }
+        if (created_file == nullptr)
+        {
+            return -EIO;
+        }
+        return vfs_free_file(created_file);
+    }
+
+    uint32 internal_mode = 0;
+    switch (file_type)
+    {
+    case S_IFCHR:
+    case S_IFBLK:
+    {
+        constexpr uint32 cap_mknod = 27;
+        bool has_cap_mknod =
+            proc::k_capability.has_effective(current_proc, cap_mknod);
+        if (!has_cap_mknod)
+        {
+            return -EPERM;
+        }
+        internal_mode = file_type == S_IFCHR ? T_CHR : T_BLK;
+        break;
+    }
+    case S_IFIFO:
+        internal_mode = T_FIFO;
+        break;
+    case S_IFSOCK:
+        internal_mode = T_SOCK;
+        break;
+    default:
+        return -EINVAL;
+    }
+
+    filesystem_t *target_fs = get_fs_from_path(effective_path.c_str());
+    if (target_fs == nullptr)
+    {
+        return -ENOENT;
+    }
+    if (target_fs->type != EXT4)
+    {
+        return -ENOTSUP;
+    }
+
+    int create_ret = vfs_ext_mknod(effective_path.c_str(), internal_mode, dev);
+    if (create_ret < 0)
+    {
+        return create_ret;
+    }
+
+    // 特殊文件与普通 O_CREAT 文件遵循同一套 umask、owner/group 初始化规则。
+    int status = ext4_mode_set(effective_path.c_str(), apply_umask(mode & 07777));
+    if (status == EOK)
+    {
+        status = set_created_inode_owner_from_current_proc(effective_path.c_str());
+    }
+    if (status != EOK)
+    {
+        // 元数据初始化失败时撤销目录项，避免向调用者留下半初始化 inode。
+        (void)vfs_ext_unlink(effective_path.c_str());
         return -status;
     }
 
@@ -2672,7 +2855,93 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
 
 int vfs_frename(const char *oldpath, const char *newpath)
 {
-    int status = ext4_frename(oldpath, newpath);
+    if (oldpath == nullptr || newpath == nullptr)
+    {
+        return -EFAULT;
+    }
+
+    eastl::string old_effective = normalize_path(oldpath);
+    eastl::string new_effective = normalize_path(newpath);
+    if (old_effective.empty() || new_effective.empty())
+    {
+        return -ENOENT;
+    }
+
+    int status = validate_linux_path_length(old_effective);
+    if (status != EOK)
+        return status;
+    status = validate_linux_path_length(new_effective);
+    if (status != EOK)
+        return status;
+
+    auto resolve_parent = [](const eastl::string &path, eastl::string &resolved) -> int
+    {
+        eastl::string parent = get_parent_path(path);
+        size_t slash = path.find_last_of('/');
+        eastl::string name = slash == eastl::string::npos ? path : path.substr(slash + 1);
+        if (name.empty())
+            return -ENOENT;
+
+        eastl::string resolved_parent;
+        int ret = resolve_symlinks(parent, resolved_parent);
+        if (ret < 0)
+            return ret;
+
+        resolved = resolved_parent;
+        if (resolved.empty())
+            resolved = "/";
+        if (resolved.back() != '/')
+            resolved += "/";
+        resolved += name;
+        resolved = normalize_path(resolved);
+        return validate_linux_path_length(resolved);
+    };
+
+    status = resolve_parent(old_effective, old_effective);
+    if (status < 0)
+        return status;
+    status = resolve_parent(new_effective, new_effective);
+    if (status < 0)
+        return status;
+
+    status = validate_lookup_prefix_permissions(old_effective);
+    if (status < 0)
+        return status;
+    status = validate_lookup_prefix_permissions(new_effective);
+    if (status < 0)
+        return status;
+
+    if (vfs_is_readonly_path(old_effective) || vfs_is_readonly_path(new_effective))
+        return -EROFS;
+
+    fs::Kstat old_stat{};
+    status = vfs_path_stat(old_effective.c_str(), &old_stat, false);
+    if (status < 0)
+        return status;
+
+    if (old_effective == new_effective)
+        return 0;
+
+    fs::Kstat new_stat{};
+    int new_stat_ret = vfs_path_stat(new_effective.c_str(), &new_stat, false);
+    if (new_stat_ret == 0 &&
+        old_stat.dev == new_stat.dev &&
+        old_stat.ino == new_stat.ino)
+    {
+        return 0;
+    }
+    if (new_stat_ret < 0 && new_stat_ret != -ENOENT)
+        return new_stat_ret;
+
+    if ((old_stat.mode & S_IFMT) == S_IFDIR &&
+        new_effective.size() > old_effective.size() &&
+        new_effective.compare(0, old_effective.size(), old_effective) == 0 &&
+        new_effective[old_effective.size()] == '/')
+    {
+        return -EINVAL;
+    }
+
+    status = ext4_frename(old_effective.c_str(), new_effective.c_str());
     if (status != EOK)
         return -status;
 
@@ -2807,6 +3076,28 @@ int vfs_link(const char *oldpath, const char *newpath)
         return -ENOENT;
     }
 
+    // 虚拟节点没有可持久化的硬链接目录项，不能继续下探到根 ext4。
+    if (fs::k_vfs.get_virtual_node(oldpath) != nullptr)
+    {
+        return -EXDEV;
+    }
+
+    eastl::string new_parent_path = get_parent_path(new_path_str);
+    filesystem_t *source_fs = get_fs_from_path(oldpath);
+    filesystem_t *target_fs = get_fs_from_path(new_parent_path.c_str());
+    if (source_fs == nullptr || target_fs == nullptr)
+    {
+        return -ENOENT;
+    }
+    if (source_fs != target_fs)
+    {
+        return -EXDEV;
+    }
+    if (vfs_is_readonly_path(new_path_str))
+    {
+        return -EROFS;
+    }
+
     // hard link 默认不跟随最后一个符号链接组件。
     // 这样 oldpath 是符号链接本身时，行为才能和 Linux 保持一致。
     fs::Kstat source_st{};
@@ -2825,7 +3116,6 @@ int vfs_link(const char *oldpath, const char *newpath)
     // 创建目录项前，父目录至少要同时具备 search/write 权限。
     // 这里仅在父目录可以可靠解析时提前拦截 EACCES，其余 ENOENT/ENOTDIR
     // 仍交给底层 ext4_flink() 保持 Linux 的 errno 细节。
-    eastl::string new_parent_path = get_parent_path(new_path_str);
     fs::Kstat new_parent_st{};
     int new_parent_ret = vfs_path_stat(new_parent_path.c_str(), &new_parent_st, true);
     if (new_parent_ret == EOK && (new_parent_st.mode & S_IFMT) == S_IFDIR)
@@ -2850,12 +3140,6 @@ int vfs_link(const char *oldpath, const char *newpath)
     else if (new_parent_ret == -EACCES || new_parent_ret == -ELOOP || new_parent_ret == -ENAMETOOLONG)
     {
         return new_parent_ret;
-    }
-
-    if (vfs_is_file_exist(newpath) == 1)
-    {
-        printfRed("vfs_link: target file %s already exists\n", newpath);
-        return -EEXIST;
     }
 
     // 使用 ext4_flink 创建硬链接
@@ -3571,8 +3855,12 @@ static inline int map_ext4_err_to_sys(int r)
     return -r;
 }
 
-int vfs_setxattr(const eastl::string &pathname, const char *name, const void *data, size_t size, bool follow_symlinks)
+int vfs_setxattr(const eastl::string &pathname, const char *name, const void *data,
+                 size_t size, int flags, bool follow_symlinks)
 {
+    constexpr int k_xattr_create = 0x1;
+    constexpr int k_xattr_replace = 0x2;
+
     if (!name)
         return -EINVAL;
     if (pathname.empty())
@@ -3587,6 +3875,17 @@ int vfs_setxattr(const eastl::string &pathname, const char *name, const void *da
         if (!resolved.empty())
             target = resolved;
     }
+
+    size_t existing_size = 0;
+    int query_ret = ext4_getxattr(target.c_str(), name, strlen(name), nullptr, 0, &existing_size);
+    bool exists = query_ret == EOK;
+    if (query_ret != EOK && query_ret != ENODATA)
+        return map_ext4_err_to_sys(query_ret);
+    if ((flags & k_xattr_create) && exists)
+        return -EEXIST;
+    if ((flags & k_xattr_replace) && !exists)
+        return -ENODATA;
+
     int r = ext4_setxattr(target.c_str(), name, strlen(name), data, size);
     return map_ext4_err_to_sys(r);
 }
@@ -3665,7 +3964,7 @@ int vfs_removexattr(const eastl::string &pathname, const char *name, bool follow
     return map_ext4_err_to_sys(r);
 }
 
-int vfs_fsetxattr(fs::file *f, const char *name, const void *data, size_t size)
+int vfs_fsetxattr(fs::file *f, const char *name, const void *data, size_t size, int flags)
 {
     if (!f || !name)
     {
@@ -3679,7 +3978,7 @@ int vfs_fsetxattr(fs::file *f, const char *name, const void *data, size_t size)
         // Linux 的 user.* xattr 只允许普通文件和目录；特殊文件没有该属性。
         return -ENODATA;
     }
-    return vfs_setxattr(f->_path_name, name, data, size, /*follow_symlinks*/ true);
+    return vfs_setxattr(f->_path_name, name, data, size, flags, /*follow_symlinks*/ true);
 }
 
 int vfs_fgetxattr(fs::file *f, const char *name, void *buf, size_t buf_size, size_t &out_size)

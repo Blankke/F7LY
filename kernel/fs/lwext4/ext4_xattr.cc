@@ -689,11 +689,16 @@ static int ext4_xattr_ibody_find_entry(struct ext4_inode_ref *inode_ref, struct 
         return EOK;
     }
 
+    iheader = EXT4_XATTR_IHDR(&fs->sb, inode_ref->inode);
+    if (iheader->h_magic == 0) {
+        finder->s.not_found = true;
+        return EOK;
+    }
+
     /* Check the validity of the buffer */
     if (!ext4_xattr_is_ibody_valid(inode_ref))
         return EIO;
 
-    iheader = EXT4_XATTR_IHDR(&fs->sb, inode_ref->inode);
     finder->s.base = EXT4_XATTR_IFIRST(iheader);
     finder->s.end = (char *) inode_ref->inode + inode_size;
     finder->s.first = EXT4_XATTR_IFIRST(iheader);
@@ -1091,7 +1096,12 @@ int ext4_xattr_remove(struct ext4_inode_ref *inode_ref, uint8_t name_index, cons
     if (ret != EOK)
         goto out;
 
-    if (ibody_finder.s.not_found && xattr_block) {
+    if (ibody_finder.s.not_found) {
+        if (!xattr_block) {
+            ret = ENODATA;
+            goto out;
+        }
+
         ret = ext4_trans_block_get(fs->bdev, &block, xattr_block);
         if (ret != EOK)
             goto out;
@@ -1102,7 +1112,6 @@ int ext4_xattr_remove(struct ext4_inode_ref *inode_ref, uint8_t name_index, cons
         if (ret != EOK)
             goto out;
 
-        /* Return ENODATA if entry is not found */
         if (block_finder.s.not_found) {
             ret = ENODATA;
             goto out;
@@ -1133,7 +1142,9 @@ int ext4_xattr_remove(struct ext4_inode_ref *inode_ref, uint8_t name_index, cons
             goto out;
 
         /* Now remove the entry */
-        ext4_xattr_set_entry(&i, &block_finder.s, false);
+        ret = ext4_xattr_set_entry(&i, &block_finder.s, false);
+        if (ret != EOK)
+            goto out;
 
         if (ext4_xattr_is_empty(&block_finder.s)) {
             ext4_block_set(fs->bdev, &new_block);
@@ -1150,8 +1161,9 @@ int ext4_xattr_remove(struct ext4_inode_ref *inode_ref, uint8_t name_index, cons
         }
 
     } else {
-        /* Now remove the entry */
-        ext4_xattr_set_entry(&i, &block_finder.s, false);
+        ret = ext4_xattr_set_entry(&i, &ibody_finder.s, false);
+        if (ret != EOK)
+            goto out;
         inode_ref->dirty = true;
     }
 out:
@@ -1382,9 +1394,12 @@ int ext4_xattr_set(struct ext4_inode_ref *inode_ref, uint8_t name_index, const c
      * finder is still valid and can be used to insert entry.
      */
     ret = ext4_xattr_ibody_find_entry(inode_ref, &ibody_finder);
-    if (ret != EOK) {
+    struct ext4_xattr_ibody_header *iheader = EXT4_XATTR_IHDR(&fs->sb, inode_ref->inode);
+    if (ret != EOK || (extra_isize && iheader->h_magic == 0)) {
         ext4_xattr_ibody_initialize(inode_ref);
-        ext4_xattr_ibody_find_entry(inode_ref, &ibody_finder);
+        ret = ext4_xattr_ibody_find_entry(inode_ref, &ibody_finder);
+        if (ret != EOK)
+            goto out;
     }
 
     if (ibody_finder.s.not_found) {

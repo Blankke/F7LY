@@ -370,7 +370,7 @@ namespace tmm
 		return 0;
 	}
 
-	int TimerManager::clock_settime(SystemClockId clockid, const timespec *tp)
+	int TimerManager::clock_settime_validate(SystemClockId clockid, const timespec *tp) const
 	{
 		if (tp == nullptr)
 		{
@@ -386,7 +386,19 @@ namespace tmm
 		{
 			return -22;
 		}
+		return 0;
+	}
 
+	int TimerManager::clock_settime(SystemClockId clockid, const timespec *tp)
+	{
+		int validate_ret = clock_settime_validate(clockid, tp);
+		if (validate_ret < 0)
+		{
+			return validate_ret;
+		}
+
+		int64_t requested_ns = 0;
+		timespec_to_ns_checked(*tp, requested_ns);
 		_lock.acquire();
 		int64_t monotonic_ns = cycles_to_ns(tmm::get_hw_time_stamp());
 		g_realtime_offset_ns = requested_ns - monotonic_ns;

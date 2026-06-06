@@ -536,6 +536,9 @@ static int ext4_dir_dx_get_leaf(struct ext4_hash_info *hinfo, struct ext4_inode_
     /* Walk through the index tree */
     while (true)
     {
+        memcpy(&tmp_dx_blk->b, tmp_blk, sizeof(struct ext4_block));
+        *dx_block = tmp_dx_blk;
+
         uint16_t cnt = ext4_dir_dx_climit_get_count((ext4_dir_idx_climit *)entries);
         if ((cnt == 0) || (cnt > limit))
             return EXT4_ERR_BAD_DX_DIR;
@@ -555,8 +558,7 @@ static int ext4_dir_dx_get_leaf(struct ext4_hash_info *hinfo, struct ext4_inode_
 
         at = p - 1;
 
-        /* Write results */
-        memcpy(&tmp_dx_blk->b, tmp_blk, sizeof(struct ext4_block));
+        /* Write search position for the current index level. */
         tmp_dx_blk->entries = entries;
         tmp_dx_blk->position = at;
 
@@ -676,6 +678,8 @@ static int ext4_dir_dx_next_block(struct ext4_inode_ref *inode_ref, uint32_t has
         p++;
 
         /* Don't forget to put old block (prevent memory leak) */
+        if (!p->b.buf)
+            return EIO;
         r = ext4_block_set(inode_ref->fs->bdev, &p->b);
         if (r != EOK)
             return r;
@@ -728,14 +732,18 @@ int ext4_dir_dx_find_entry(struct ext4_dir_search_result *result, struct ext4_in
      * Hardcoded number 2 means maximum height of index tree,
      * specified in the Linux driver.
      */
-    struct ext4_dir_idx_block dx_blocks[2];
-    struct ext4_dir_idx_block *dx_block;
+    struct ext4_dir_idx_block dx_blocks[2]{};
+    struct ext4_dir_idx_block *dx_block = &dx_blocks[0];
     struct ext4_dir_idx_block *tmp;
 
     rc = ext4_dir_dx_get_leaf(&hinfo, inode_ref, &root_block, &dx_block, dx_blocks);
     if (rc != EOK)
     {
-        ext4_block_set(fs->bdev, &root_block);
+        for (tmp = dx_blocks; tmp <= dx_block; ++tmp)
+        {
+            if (tmp->b.buf)
+                ext4_block_set(fs->bdev, &tmp->b);
+        }
         return EXT4_ERR_BAD_DX_DIR;
     }
 
@@ -799,9 +807,12 @@ cleanup:
 
     while (tmp <= dx_block)
     {
-        rc2 = ext4_block_set(fs->bdev, &tmp->b);
-        if (rc == EOK && rc2 != EOK)
-            rc = rc2;
+        if (tmp->b.buf)
+        {
+            rc2 = ext4_block_set(fs->bdev, &tmp->b);
+            if (rc == EOK && rc2 != EOK)
+                rc = rc2;
+        }
         ++tmp;
     }
 
@@ -1213,8 +1224,8 @@ int ext4_dir_dx_add_entry(struct ext4_inode_ref *parent, struct ext4_inode_ref *
     /* Declare all variables at the beginning to avoid goto issues */
     uint32_t leaf_block_idx;
     ext4_fsblk_t leaf_block_addr;
-    struct ext4_block target_block;
-    struct ext4_block new_block;
+    struct ext4_block target_block{};
+    struct ext4_block new_block{};
     uint32_t blk_hash;
 
     /* Get direct block 0 (index root) */
@@ -1224,7 +1235,7 @@ int ext4_dir_dx_add_entry(struct ext4_inode_ref *parent, struct ext4_inode_ref *
         return r;
 
     struct ext4_fs *fs = parent->fs;
-    struct ext4_block root_blk;
+    struct ext4_block root_blk{};
 
     r = ext4_trans_block_get(fs->bdev, &root_blk, rblock_addr);
     if (r != EOK)
@@ -1252,8 +1263,8 @@ int ext4_dir_dx_add_entry(struct ext4_inode_ref *parent, struct ext4_inode_ref *
      * Hardcoded number 2 means maximum height of index
      * tree defined in Linux.
      */
-    struct ext4_dir_idx_block dx_blks[2];
-    struct ext4_dir_idx_block *dx_blk;
+    struct ext4_dir_idx_block dx_blks[2]{};
+    struct ext4_dir_idx_block *dx_blk = &dx_blks[0];
     struct ext4_dir_idx_block *dx_it;
 
     r = ext4_dir_dx_get_leaf(&hinfo, parent, &root_blk, &dx_blk, dx_blks);
@@ -1275,7 +1286,7 @@ int ext4_dir_dx_add_entry(struct ext4_inode_ref *parent, struct ext4_inode_ref *
      */
     r = ext4_dir_dx_split_index(parent, dx_blks, dx_blk, &dx_blk);
     if (r != EOK)
-        goto release_target_index;
+        goto release_index;
 
     r = ext4_trans_block_get(fs->bdev, &target_block, leaf_block_addr);
     if (r != EOK)
@@ -1320,9 +1331,12 @@ int ext4_dir_dx_add_entry(struct ext4_inode_ref *parent, struct ext4_inode_ref *
 release_target_index:
     rc2 = r;
 
-    r = ext4_block_set(fs->bdev, &target_block);
-    if (r != EOK)
-        return r;
+    if (target_block.buf)
+    {
+        r = ext4_block_set(fs->bdev, &target_block);
+        if (r != EOK)
+            return r;
+    }
 
 release_index:
     if (r != EOK)
@@ -1332,9 +1346,12 @@ release_index:
 
     while (dx_it <= dx_blk)
     {
-        r = ext4_block_set(fs->bdev, &dx_it->b);
-        if (r != EOK)
-            return r;
+        if (dx_it->b.buf)
+        {
+            r = ext4_block_set(fs->bdev, &dx_it->b);
+            if (r != EOK)
+                return r;
+        }
 
         dx_it++;
     }

@@ -12,6 +12,17 @@ namespace tmm
 
 namespace proc
 {
+    struct WaitIdResult
+    {
+        bool has_event = false;
+        int pid = 0;
+        uint32 uid = 0;
+        int code = 0;
+        int status = 0;
+        uint64 utime = 0;
+        uint64 stime = 0;
+    };
+
     constexpr int default_proc_slot = 1; // 默认进程槽位
 
     class ProcessManager
@@ -80,7 +91,9 @@ namespace proc
         void do_signal_exit(Pcb *p, int signal_num, bool coredump = false); // 信号退出，设置signal相关xstate后调用exit_proc
         void exit(int state);
         void exit_group(int status);
+        void stop_current(int signal_num);
         int wait4(int child_pid, uint64 addr, int option);
+        int waitid(int idtype, int id, int option, WaitIdResult &result);
         void reparent(Pcb *p);
 
         // ==================== 进程调度与同步 ====================
@@ -115,7 +128,7 @@ namespace proc
 
         // ==================== 系统调用支持 ====================
         int set_tid_address(uint64 tidptr);
-        int set_robust_list(robust_list_head *head, size_t len);
+        int set_robust_list(uint64 user_head_addr, size_t len);
         int prlimit64(int pid, int resource, rlimit64 *new_limit, rlimit64 *old_limit);
         
         // ==================== 工具函数 ====================
@@ -129,8 +142,7 @@ namespace proc
 
     private:
         // 私有辅助函数
-        bool is_target_child(Pcb *child, Pcb *parent, int child_pid);
-        bool has_remaining_threads(Pcb *parent, int target_pid);
+        bool is_target_child(Pcb *child, Pcb *parent, int child_pid, int option);
         void mark_thread_group_killed(Pcb *current, int fatal_signal = 0);
     };
 

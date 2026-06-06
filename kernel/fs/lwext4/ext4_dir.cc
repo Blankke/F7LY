@@ -651,7 +651,7 @@ int ext4_dir_find_in_block(struct ext4_block *block, struct ext4_sblock *sb, siz
 }
 
 int ext4_dir_destroy_result(struct ext4_inode_ref *parent, struct ext4_dir_search_result *result) {
-    if (result->block.lb_id)
+    if (result->block.buf)
         return ext4_block_set(parent->fs->bdev, &result->block);
 
     return EOK;

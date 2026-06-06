@@ -88,6 +88,20 @@
 #define CONFIG_EXT4_MOUNTPOINTS_COUNT 2
 #endif
 
+/**@brief 普通文件允许的最大硬链接数。
+ * F7LY 在单核评测环境中显式限制单 inode 的目录项资源，达到上限时返回
+ * EMLINK；该值仍远高于 POSIX 最低保证，并可由具体构建覆盖。 */
+#ifndef CONFIG_EXT4_REGULAR_FILE_LINK_MAX
+#define CONFIG_EXT4_REGULAR_FILE_LINK_MAX 4096
+#endif
+
+/**@brief 单目录允许的链接计数上限。
+ * 目录的 st_nlink 从 2 开始，每个直接子目录增加 1。该限制高于 POSIX
+ * 最低保证，同时为教学内核的单核目录操作提供确定的资源边界。 */
+#ifndef CONFIG_EXT4_DIRECTORY_LINK_MAX
+#define CONFIG_EXT4_DIRECTORY_LINK_MAX 1024
+#endif
+
 
 /**@brief Maximum single truncate size. Transactions must be limited to reduce
  *        number of allocetions for single transaction*/

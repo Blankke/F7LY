@@ -8,6 +8,8 @@
 #include "proc_manager.hh"
 #include "fs/vfs/ops.hh"
 #include "fs/vfs/vfs_utils.hh"
+#include "fs/lwext4/ext4.hh"
+#include "fs/lwext4/ext4_errno.hh"
 #include "proc/meminfo.hh"
 #include "proc/cpuinfo.hh"
 #include "fs/fat32/fat32.hh"
@@ -19,6 +21,85 @@
 
 namespace
 {
+
+constexpr size_t k_boot_path_capacity = 4096;
+
+/**
+ * 清空启动期临时目录，但保留目录本身。
+ *
+ * /dev/shm 在 Linux 中由 tmpfs 提供，重启后必须为空。当前内核暂时使用
+ * 根 ext4 承载共享映射，因此需要在挂载根文件系统后恢复同样的生命周期语义。
+ * 每轮只取一个目录项并关闭迭代器，再执行删除，避免遍历期间修改目录导致游标失效。
+ */
+int clear_ephemeral_directory(const char *directory)
+{
+    while (true)
+    {
+        ext4_dir dir{};
+        int open_ret = ext4_dir_open(&dir, directory);
+        if (open_ret != EOK)
+            return -open_ret;
+
+        char entry_name[EXT4_DIRECTORY_FILENAME_LEN + 1] = {};
+        bool found = false;
+        const ext4_direntry *entry = nullptr;
+        while ((entry = ext4_dir_entry_next(&dir)) != nullptr)
+        {
+            size_t name_len = entry->name_length;
+            if (name_len == 0 || name_len > EXT4_DIRECTORY_FILENAME_LEN)
+            {
+                (void)ext4_dir_close(&dir);
+                return -EIO;
+            }
+            if ((name_len == 1 && entry->name[0] == '.') ||
+                (name_len == 2 && entry->name[0] == '.' && entry->name[1] == '.'))
+            {
+                continue;
+            }
+
+            memmove(entry_name, entry->name, name_len);
+            entry_name[name_len] = '\0';
+            found = true;
+            break;
+        }
+        (void)ext4_dir_close(&dir);
+
+        if (!found)
+            return EOK;
+
+        size_t directory_len = strlen(directory);
+        size_t entry_len = strlen(entry_name);
+        bool needs_separator = directory_len == 0 || directory[directory_len - 1] != '/';
+        if (directory_len + (needs_separator ? 1 : 0) + entry_len + 1 >
+            k_boot_path_capacity)
+        {
+            return -ENAMETOOLONG;
+        }
+
+        char child_path[k_boot_path_capacity] = {};
+        memmove(child_path, directory, directory_len);
+        size_t offset = directory_len;
+        if (needs_separator)
+            child_path[offset++] = '/';
+        memmove(child_path + offset, entry_name, entry_len);
+        child_path[offset + entry_len] = '\0';
+
+        int unlink_ret = vfs_ext_unlink(child_path);
+        if (unlink_ret == -EISDIR)
+        {
+            int clear_ret = clear_ephemeral_directory(child_path);
+            if (clear_ret < 0)
+                return clear_ret;
+            int rmdir_ret = vfs_ext_rmdir(child_path);
+            if (rmdir_ret < 0)
+                return rmdir_ret;
+        }
+        else if (unlink_ret < 0)
+        {
+            return unlink_ret;
+        }
+    }
+}
 
 enum class block_fs_kind
 {
@@ -262,6 +343,12 @@ void dir_init(void)
         vfs_ext_mkdir((char *)"/dev/shm", 0777);
     else
         free_inode(ip);
+
+    int shm_clear_ret = clear_ephemeral_directory("/dev/shm");
+    if (shm_clear_ret < 0)
+    {
+        printfRed("[fs] 清空 /dev/shm 失败: %d\n", shm_clear_ret);
+    }
 
 
     // libc 的 tmpfile/mkstemp 等接口默认依赖 /tmp。

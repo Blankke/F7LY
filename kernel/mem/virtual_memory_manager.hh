@@ -68,6 +68,8 @@ void pci_map(int bus, int dev, int func, void *pages);
 		int copy_in( PageTable &pt, void *dst, uint64 src_va, uint64 len );
 		// 只确认用户读范围可访问，并按需补齐合法 VMA 页面；不搬运数据。
 		int ensure_user_read_range( PageTable &pt, uint64 src_va, uint64 len );
+		// 只确认用户写范围可访问，必要时完成懒分配/COW；不改写用户数据。
+		int ensure_user_write_range( PageTable &pt, uint64 dst_va, uint64 len );
 		// 解析单个用户读地址到内核可访问地址，用于同页小块拷贝快路径。
 		int user_read_kernel_address( PageTable &pt, uint64 src_va, uint64 &kernel_addr );
 

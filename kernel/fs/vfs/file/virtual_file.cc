@@ -61,7 +61,8 @@ namespace fs
             result += fs->path;
             result += " ";
             result += mount_fs_name(fs->type);
-            result += " rw,relatime 0 0\n";
+            // 普通读取会更新 atime，O_NOATIME 会抑制更新，因此按严格 atime 挂载语义公开。
+            result += " rw 0 0\n";
         }
 
         void skip_spaces(const char *&cursor)
@@ -219,9 +220,9 @@ namespace fs
 
     eastl::string KernelConfigProvider::generate_content()
     {
-        // 先提供当前已实现并且 LTP 明确依赖的最小内核配置集合。
-        // 后续若更多测例通过 tst_kconfig() 卡住，再在这里继续补齐。
-        return "CONFIG_TIME_NS=y\n";
+        // 只声明内核已经提供完整用户可见语义的配置，避免 LTP 因虚假能力声明误判。
+        return "CONFIG_TIME_NS=y\n"
+               "CONFIG_EVENTFD=y\n";
     }
 
     eastl::string ProcMountsProvider::generate_content()
@@ -581,11 +582,19 @@ namespace fs
 
     long DevLoopProvider::handle_write(uint64 buf, size_t len, long off)
     {
-        // 处理对 loop 设备的写入操作
-        // 这里可以实现对 loop 设备的配置，如关联文件等
         dev::LoopDevice *loop_dev = dev::LoopControlDevice::get_loop_device(_loop_number);
-        int result = loop_dev->_read_write_file(off, (void*)buf, len,  true);
-        return result;
+        if (loop_dev == nullptr || !loop_dev->is_bound())
+        {
+            return -ENXIO;
+        }
+        if (off < 0)
+        {
+            return -EINVAL;
+        }
+        return loop_dev->_read_write_file(static_cast<uint64_t>(off),
+                                          reinterpret_cast<void *>(buf),
+                                          len,
+                                          true);
     }
 
     uint64 DevLoopProvider::read_size() const
@@ -595,7 +604,7 @@ namespace fs
         {
             return loop_dev->get_size();
         }
-        return k_dev_block_8_0_size;
+        return 0;
     }
 
     eastl::string DevLoopControlProvider::generate_content()
@@ -1341,6 +1350,9 @@ namespace fs
             case proc::ProcState::SLEEPING:
                 state_char = 'S';
                 break;
+            case proc::ProcState::STOPPED:
+                state_char = 'T';
+                break;
             case proc::ProcState::ZOMBIE:
                 state_char = 'Z';
                 break;
@@ -1825,6 +1837,7 @@ namespace fs
             case proc::ProcState::SLEEPING: result += "S (sleeping)"; break;
             case proc::ProcState::RUNNABLE: result += "R (running)"; break;
             case proc::ProcState::RUNNING: result += "R (running)"; break;
+            case proc::ProcState::STOPPED: result += "T (stopped)"; break;
             case proc::ProcState::ZOMBIE: result += "Z (zombie)"; break;
             default: result += "unknown"; break;
         }
