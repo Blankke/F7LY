@@ -100,7 +100,7 @@ namespace dev
         // 属性访问
         int get_loop_number() const { return _loop_number; }
         bool is_bound() const { return _is_bound; }
-        const eastl::string &get_file_name() const { panic("xxx"); }
+        const eastl::string &get_file_name() const { return _file_name; }
         uint64_t get_size() const;
 
 

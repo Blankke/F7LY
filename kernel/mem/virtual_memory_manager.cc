@@ -227,6 +227,56 @@ namespace mem
 #endif
             return 0;
         }
+
+        int resolve_user_write_pa(PageTable &pt, proc::Pcb *proc, uint64 user_va, uint64 &out_pa)
+        {
+            uint64 page_va = PGROUNDDOWN(user_va);
+            Pte pte = pt.walk(page_va, false);
+            if (pte.is_null() || pte.get_data() == 0)
+            {
+                proc::vma *target_vm = find_vma_covering_va(proc, user_va);
+                if (target_vm == nullptr ||
+                    k_vmm.allocate_vma_page(pt, user_va, target_vm, 1) != 0)
+                {
+                    return -1;
+                }
+                pte = pt.walk(page_va, false);
+            }
+
+#ifdef RISCV
+            bool user_page = !pte.is_null() && pte.is_user();
+#elif defined(LOONGARCH)
+            bool user_page = !pte.is_null() && pte.is_user_plv();
+#endif
+            if (!pte.is_null() && pte.is_valid() && user_page &&
+                !pte.is_writable() && pte_is_cow(pte))
+            {
+                if (k_vmm.resolve_cow_page(pt, page_va) != 0)
+                {
+                    return -1;
+                }
+                pte = pt.walk(page_va, false);
+#ifdef RISCV
+                user_page = !pte.is_null() && pte.is_user();
+#elif defined(LOONGARCH)
+                user_page = !pte.is_null() && pte.is_user_plv();
+#endif
+            }
+
+            if (pte.is_null() || !pte.is_valid() || !user_page || !pte.is_writable())
+            {
+                return -1;
+            }
+            out_pa = reinterpret_cast<uint64>(pte.pa());
+            if (out_pa == 0)
+            {
+                return -1;
+            }
+#ifdef LOONGARCH
+            out_pa = to_vir(out_pa);
+#endif
+            return 0;
+        }
     } // namespace
 
     uint64 VirtualMemoryManager::kstack_vm_from_global_id(uint global_id)
@@ -477,6 +527,40 @@ namespace mem
             uint64 page_va = PGROUNDDOWN(cursor);
             uint64 ignored_pa = 0;
             if (resolve_user_read_pa(pt, proc, cursor, ignored_pa) != 0)
+            {
+                return -1;
+            }
+
+            uint64 chunk = PGSIZE - (cursor - page_va);
+            if (chunk > remaining)
+            {
+                chunk = remaining;
+            }
+            cursor += chunk;
+            remaining -= chunk;
+        }
+        return 0;
+    }
+
+    int VirtualMemoryManager::ensure_user_write_range(PageTable &pt, uint64 dst_va, uint64 len)
+    {
+        if (len == 0)
+        {
+            return 0;
+        }
+        if (dst_va + len < dst_va)
+        {
+            return -1;
+        }
+
+        proc::Pcb *proc = proc::k_pm.get_cur_pcb();
+        uint64 cursor = dst_va;
+        uint64 remaining = len;
+        while (remaining > 0)
+        {
+            uint64 page_va = PGROUNDDOWN(cursor);
+            uint64 ignored_pa = 0;
+            if (resolve_user_write_pa(pt, proc, cursor, ignored_pa) != 0)
             {
                 return -1;
             }

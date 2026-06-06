@@ -52,6 +52,15 @@ namespace
         return mask & ~unmaskable_signal_mask();
     }
 
+    bool is_job_control_stop_signal(int signum)
+    {
+        using namespace proc::ipc::signal;
+        return signum == SIGSTOP ||
+               signum == SIGTSTP ||
+               signum == SIGTTIN ||
+               signum == SIGTTOU;
+    }
+
     uint64 consume_signal_restore_mask(proc::Pcb *p)
     {
         if (p->_sigsuspend_restore_pending)
@@ -717,27 +726,6 @@ namespace proc
                     return -22;
                 }
 
-                int debugsig = 0; // 你可以修改这个变量来指定要查看的信号号
-                if (debugsig > 0 && debugsig <= signal::SIGRTMAX) {
-                    uint64 mask = (1UL << (debugsig - 1));
-                    bool before = (oldset != nullptr && oldset->sig[0] != 0) ? 
-                                  (oldset->sig[0] & mask) != 0 : 
-                                  false; // 如果 oldset 为空，说明没有保存之前的状态
-                    bool after = (cur_proc->_sigmask & mask) != 0;
-                    
-                    switch (how) {
-                        case signal::SIG_BLOCK:
-                            printfCyan("[sigprocmask][DEBUG] SIG_BLOCK: signal %d, before=%d, after=%d\n", debugsig, before, after);
-                            break;
-                        case signal::SIG_UNBLOCK:
-                            printfCyan("[sigprocmask][DEBUG] SIG_UNBLOCK: signal %d, before=%d, after=%d\n", debugsig, before, after);
-                            break;
-                        case signal::SIG_SETMASK:
-                            printfCyan("[sigprocmask][DEBUG] SIG_SETMASK: signal %d, before=%d, after=%d\n", debugsig, before, after);
-                            break;
-                    }
-                }
-
                 // 确保关键信号不会被屏蔽
                 cur_proc->_sigmask = sanitize_signal_mask(cur_proc->_sigmask);
 
@@ -818,11 +806,16 @@ namespace proc
                     return 0;
                 }
 
+                // Linux 只接受 0、SS_DISABLE 或 SS_AUTODISARM 三种输入值。
+                // 必须先检查完整值，不能因为非法值碰巧包含 SS_DISABLE 位就误判为禁用请求。
+                if (ss->ss_flags != 0 &&
+                    ss->ss_flags != SS_DISABLE &&
+                    ss->ss_flags != SS_AUTODISARM)
+                    return syscall::SYS_EINVAL;
+
                 // 检查是否正在信号栈上执行
                 if (cur_proc->_on_sigstack)
-                {
-                    return syscall::SYS_EPERM; // EPERM - 不能在信号栈上改变信号栈
-                }
+                    return syscall::SYS_EPERM;
 
                 // 检查是否要禁用信号栈
                 if (ss->ss_flags & SS_DISABLE)
@@ -837,12 +830,6 @@ namespace proc
                 if (ss->ss_size < MINSIGSTKSZ)
                 {
                     return syscall::SYS_ENOMEM; // ENOMEM - 栈太小
-                }
-
-                // 检查flags是否有效
-                if (ss->ss_flags & ~(SS_AUTODISARM))
-                {
-                    return syscall::SYS_EINVAL; // EINVAL - 无效的flags
                 }
 
                 // 设置新的信号栈
@@ -987,6 +974,12 @@ namespace proc
 
             void default_handle(proc::Pcb *p, int signum)
             {
+                if (is_job_control_stop_signal(signum))
+                {
+                    proc::k_pm.stop_current(signum);
+                    return;
+                }
+
                 SignalAction action = get_default_signal_action(signum);
                 
                 if (action.terminate) {
@@ -1034,7 +1027,17 @@ namespace proc
                     if (act == nullptr || act->sa_handler == nullptr || act->sa_handler == SIG_DFL)
                     {
                         restore_sigsuspend_mask_now(p);
+                        const bool stop_signal = is_job_control_stop_signal(signum);
+                        if (stop_signal)
+                        {
+                            // 停止动作会跨越一次调度。必须先把本次信号出队，
+                            // 否则恢复它的 SIGCONT 会按 Linux 语义清掉 pending
+                            // 停止信号，当前调用栈返回后再次 clear 就会重复消费。
+                            clear_signal(p, signum);
+                        }
                         default_handle(p, signum);
+                        if (stop_signal)
+                            continue;
                     }
                     else if (act->sa_handler == SIG_IGN)
                     {
@@ -1050,8 +1053,9 @@ namespace proc
                         if (act->sa_flags & (uint64)SigActionFlags::RESETHAND)
                         {
                             printf("[handle_signal] SA_RESETHAND set, resetting handler for signal %d\n", signum);
-                            delete p->_sigactions->actions[signum];
-                            p->_sigactions->actions[signum] = nullptr;
+                            // 一次性处理只把 disposition 重置为 SIG_DFL。
+                            // flags/mask 仍保留在 k_sigaction 中，handler 内查询时必须能看到 SA_SIGINFO。
+                            act->sa_handler = SIG_DFL;
                         }
                     }
                     clear_signal(p, signum);
@@ -1070,7 +1074,7 @@ namespace proc
                 }
 
                 // 定义同步信号的优先级数组，按紧急程度排序
-                static const int sync_signals[] = {SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGTRAP, SIGSYS, SIGPIPE};
+                static const int sync_signals[] = {SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGTRAP, SIGSYS};
                 static const int num_sync_signals = sizeof(sync_signals) / sizeof(sync_signals[0]);
 
                 // 按优先级处理同步信号
@@ -1103,7 +1107,14 @@ namespace proc
                     if (act == nullptr || act->sa_handler == nullptr || act->sa_handler == SIG_DFL)
                     {
                         restore_sigsuspend_mask_now(p);
+                        const bool stop_signal = is_job_control_stop_signal(signum);
+                        if (stop_signal)
+                        {
+                            clear_signal(p, signum);
+                        }
                         default_handle(p, signum);
+                        if (stop_signal)
+                            continue;
                     }
                     else if (act->sa_handler == SIG_IGN)
                     {
@@ -1118,8 +1129,7 @@ namespace proc
                         if (act->sa_flags & (uint64)SigActionFlags::RESETHAND)
                         {
                             printf("[handle_sync_signal] SA_RESETHAND set, resetting handler for sync signal %d\n", signum);
-                            delete p->_sigactions->actions[signum];
-                            p->_sigactions->actions[signum] = nullptr;
+                            act->sa_handler = SIG_DFL;
                         }
                     }
                     
@@ -1182,6 +1192,29 @@ namespace proc
                     panic("[add_signal] Invalid signal number: %d", sig);
                     return;
                 }
+
+                constexpr uint64 stop_signal_mask =
+                    (1ULL << (SIGSTOP - 1)) |
+                    (1ULL << (SIGTSTP - 1)) |
+                    (1ULL << (SIGTTIN - 1)) |
+                    (1ULL << (SIGTTOU - 1));
+                constexpr uint64 continue_signal_mask =
+                    1ULL << (SIGCONT - 1);
+
+                // Linux 在生成 SIGCONT 时丢弃尚未投递的停止信号，反向生成任一
+                // job-control 停止信号时也丢弃 pending SIGCONT，避免恢复后再次
+                // 消费已经失效的相反状态转换。
+                if (sig == SIGCONT)
+                {
+                    p->_signal &= ~stop_signal_mask;
+                    p->_siginfo_mask &= ~stop_signal_mask;
+                }
+                else if ((stop_signal_mask & (1ULL << (sig - 1))) != 0)
+                {
+                    p->_signal &= ~continue_signal_mask;
+                    p->_siginfo_mask &= ~continue_signal_mask;
+                }
+
                 // 允许这种情况(所以注释)
                 // if (sig_is_member(p->_signal, sig))
                 // {
@@ -1366,14 +1399,7 @@ namespace proc
                     uctx.sigmask.sig[0] = restore_sigmask;
                     fill_loongarch_user_mcontext(uctx.mcontext, frame->tf);
 #endif
-                    // mcontext 已经通过 memset 初始化为0了
-                    // printf("[debug] uctx[176] = %p\n",(char*)&uctx + 176);
-                    // // 打印 uctx 的所有字节内容
-                    // printf("[debug] uctx bytes: ");
-                    // for (size_t i = 0; i < sizeof(uctx); ++i) {
-                    //     printf("%d=%02x ",i, ((unsigned char*)&uctx)[i]);
-                    // }
-                    // printf("\n");
+                    // mcontext 已经通过 memset 初始化为 0。
 
                     // printf("[do_handle] sepcial handling for SA_SIGINFO: epc=%p\n",
                     //    p->_trapframe->epc);

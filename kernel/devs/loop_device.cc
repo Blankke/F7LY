@@ -46,26 +46,29 @@ namespace dev
     int LoopDevice::set_fd(int fd)
     {
         if (_is_bound) {
-            return -1; // 已绑定
+            return -EBUSY;
         }
 
         // 从当前进程获取文件对象
         auto pcb = proc::k_pm.get_cur_pcb();
         if (!pcb) {
-            return -1;
+            return -ESRCH;
         }
 
         auto file = pcb->get_open_file(fd);
         if (!file) {
-            return -1; // 无效的文件描述符
+            return -EBADF;
+        }
+        if (file->_attrs.filetype != fs::FileTypes::FT_NORMAL)
+        {
+            return -EINVAL;
         }
 
-        // 检查文件类型
-
-        printfGreen("[LoopDevice] Binding file %s to loop device %d\n", file->_path_name.c_str(), _loop_number);
+        // loop 设备必须独立持有后端 open file description；用户关闭原 fd 后设备仍应可用。
+        file->dup();
         _backing_file = file;
         _is_bound = true;
-        _file_name = "unknown"; // 可以后续改进获取文件名
+        _file_name = file->_path_name;
         _file_path = file->_path_name;
 
         return 0;
@@ -74,15 +77,21 @@ namespace dev
     int LoopDevice::clear_fd()
     {
         if (!_is_bound) {
-            return -1; // 未绑定
+            return -ENXIO;
         }
 
+        fs::file *backing_file = _backing_file;
         _backing_file = nullptr;
         _is_bound = false;
         _offset = 0;
         _size_limit = 0;
         _flags = 0;
         _file_name.clear();
+        _file_path.clear();
+        if (backing_file != nullptr)
+        {
+            backing_file->free_file();
+        }
 
         return 0;
     }
@@ -227,7 +236,13 @@ namespace dev
         }
 
         // 否则使用文件大小减去偏移量
-        uint64_t file_size = _backing_file->_stat.size;
+        uint64_t file_size = _backing_file->is_memfd()
+                                 ? _backing_file->memfd_size()
+                                 : _backing_file->_stat.size;
+        if (_backing_file->lwext4_file_struct.fsize > file_size)
+        {
+            file_size = _backing_file->lwext4_file_struct.fsize;
+        }
         if (file_size <= _offset) {
             return 0;
         }
@@ -237,18 +252,45 @@ namespace dev
 
     int LoopDevice::_read_write_file(uint64_t offset, void* buffer, size_t size, bool is_write)
     {
-        if (!_backing_file || !buffer) {
-            return -1;
+        if (!_is_bound || !_backing_file) {
+            return -ENXIO;
         }
-        if(is_write)
-        {
-            return vfs_write_file(_file_path.c_str(), reinterpret_cast<uint64_t>(buffer), offset, size);
+        if (!buffer && size != 0) {
+            return -EFAULT;
         }
-        else
+        if (size == 0)
         {
-            return vfs_read_file(_file_path.c_str(), reinterpret_cast<uint64_t>(buffer), offset, size);
+            return 0;
+        }
+        if (is_write && (_flags & LO_FLAGS_READ_ONLY) != 0)
+        {
+            return -EROFS;
         }
 
+        uint64_t device_size = get_size();
+        if (offset >= device_size)
+        {
+            return is_write ? -ENOSPC : 0;
+        }
+        uint64_t remaining = device_size - offset;
+        size_t transfer_size = size;
+        if (static_cast<uint64_t>(transfer_size) > remaining)
+        {
+            transfer_size = static_cast<size_t>(remaining);
+        }
+
+        uint64_t backing_offset = _offset + offset;
+        if(is_write)
+        {
+            return _backing_file->write(reinterpret_cast<uint64_t>(buffer),
+                                        transfer_size,
+                                        static_cast<long>(backing_offset),
+                                        false);
+        }
+        return _backing_file->read(reinterpret_cast<uint64_t>(buffer),
+                                   transfer_size,
+                                   static_cast<long>(backing_offset),
+                                   false);
     }
 
     uint64_t LoopDevice::_get_file_size()
@@ -257,7 +299,7 @@ namespace dev
             return 0;
         }
         
-        return _backing_file->_stat.size;
+        return get_size();
     }
 
     // LoopControlDevice 实现

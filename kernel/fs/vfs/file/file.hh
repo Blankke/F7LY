@@ -328,6 +328,7 @@ namespace fs
 		virtual bool is_epoll_file() const { return false; }
 		virtual bool is_fanotify_file() const { return false; }
 		virtual bool is_inotify_file() const { return false; }
+		virtual bool is_signalfd_file() const { return false; }
 		// /proc/<pid>/fdinfo/<fd> 由具体匿名 fd 自己导出调试/状态内容。
 		virtual eastl::string proc_fdinfo() const { return ""; }
 		// 供 setns(CLONE_NEWTIME) 从 namespace 文件里取回目标时钟偏移。

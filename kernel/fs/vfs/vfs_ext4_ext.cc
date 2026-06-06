@@ -1,6 +1,7 @@
 
 #include "types.hh"
 
+#include "tm/timer_manager.hh"
 #include "tm/time.h"
 #include "platform.hh"
 #include "fs/vfs/file.hh"
@@ -43,6 +44,14 @@ static int extlock_depth = 0;
 
 [[maybe_unused]] static uint vfs_ext4_filetype(uint filetype);
 static int vfs_ext4_finish_mount(const char *mount_path, struct vfs_ext4_blockdev *vbdev);
+
+static uint64_t vfs_ext_realtime_seconds()
+{
+    tmm::timespec now{};
+    if (tmm::k_tm.clock_gettime(static_cast<tmm::SystemClockId>(0), &now) < 0)
+        return 0;
+    return static_cast<uint64_t>(now.tv_sec);
+}
 
 int vfs_ext4_init(void) {
     sem_init(&extlock, 1, const_cast<char*>("ext4_sem"));
@@ -914,38 +923,51 @@ int vfs_ext_get_filesize(const char *path, uint64_t *size) {
 
 int vfs_ext_utimens(const char *path, const struct timespecc *ts) {
     int resp = EOK;
+    const uint64_t now = vfs_ext_realtime_seconds();
+    bool changed = false;
 
     if (!ts) {
-        resp = ext4_atime_set(path, NS_to_S(TIME2NS(rdtime())));
+        resp = ext4_atime_set(path, now);
         if (resp != EOK)
             return -resp;
-        resp = ext4_mtime_set(path, NS_to_S(TIME2NS(rdtime())));
+        resp = ext4_mtime_set(path, now);
+        if (resp != EOK)
+            return -resp;
+        changed = true;
+    } else {
+        if (ts[0].tv_nsec == UTIME_NOW) {
+            resp = ext4_atime_set(path, now);
+            changed = true;
+        } else if (ts[0].tv_nsec != UTIME_OMIT) {
+            resp = ext4_atime_set(path, NS_to_S(TIMESEPC2NS(ts[0])));
+            changed = true;
+        }
         if (resp != EOK)
             return -resp;
 
-        return EOK;
+        if (ts[1].tv_nsec == UTIME_NOW) {
+            resp = ext4_mtime_set(path, now);
+            changed = true;
+        } else if (ts[1].tv_nsec != UTIME_OMIT) {
+            resp = ext4_mtime_set(path, NS_to_S(TIMESEPC2NS(ts[1])));
+            changed = true;
+        }
+        if (resp != EOK)
+            return -resp;
     }
 
-    if (ts[0].tv_nsec == UTIME_NOW) {
-        resp = ext4_atime_set(path, NS_to_S(TIME2NS(rdtime())));
-    } else if (ts[0].tv_nsec != UTIME_OMIT) {
-        resp = ext4_atime_set(path, NS_to_S(TIMESEPC2NS(ts[0])));
+    if (changed) {
+        resp = ext4_ctime_set(path, now);
+        if (resp != EOK)
+            return -resp;
     }
-    if (resp != EOK)
-        return -resp;
-
-    if (ts[1].tv_nsec == UTIME_NOW) {
-        resp = ext4_mtime_set(path, NS_to_S(TIME2NS(rdtime())));
-    } else if (ts[1].tv_nsec != UTIME_OMIT) {
-        resp = ext4_mtime_set(path, NS_to_S(TIMESEPC2NS(ts[1])));
-    }
-    if (resp != EOK)
-        return -resp;
     return EOK;
 }
 
 int vfs_ext_futimens(struct file *f, const struct timespecc *ts) {
     int resp = EOK;
+    const uint64_t now = vfs_ext_realtime_seconds();
+    bool changed = false;
     struct ext4_file *file = (struct ext4_file *) f->f_extfile;
 
     if (file == NULL) {
@@ -953,30 +975,40 @@ int vfs_ext_futimens(struct file *f, const struct timespecc *ts) {
     }
 
     if (!ts) {
-        resp = ext4_atime_set(f->f_path, NS_to_S(TIME2NS(rdtime())));
+        resp = ext4_atime_set(f->f_path, now);
         if (resp != EOK)
             return -resp;
-        resp = ext4_mtime_set(f->f_path, NS_to_S(TIME2NS(rdtime())));
+        resp = ext4_mtime_set(f->f_path, now);
         if (resp != EOK)
             return -resp;
-        return EOK;
+        changed = true;
+    } else {
+        if (ts[0].tv_nsec == UTIME_NOW) {
+            resp = ext4_atime_set(f->f_path, now);
+            changed = true;
+        } else if (ts[0].tv_nsec != UTIME_OMIT) {
+            resp = ext4_atime_set(f->f_path, NS_to_S(TIMESEPC2NS(ts[0])));
+            changed = true;
+        }
+        if (resp != EOK)
+            return -resp;
+
+        if (ts[1].tv_nsec == UTIME_NOW) {
+            resp = ext4_mtime_set(f->f_path, now);
+            changed = true;
+        } else if (ts[1].tv_nsec != UTIME_OMIT) {
+            resp = ext4_mtime_set(f->f_path, NS_to_S(TIMESEPC2NS(ts[1])));
+            changed = true;
+        }
+        if (resp != EOK)
+            return -resp;
     }
 
-    if (ts[0].tv_nsec == UTIME_NOW) {
-        resp = ext4_atime_set(f->f_path, NS_to_S(TIME2NS(rdtime())));
-    } else if (ts[0].tv_nsec != UTIME_OMIT) {
-        resp = ext4_atime_set(f->f_path, NS_to_S(TIMESEPC2NS(ts[0])));
+    if (changed) {
+        resp = ext4_ctime_set(f->f_path, now);
+        if (resp != EOK)
+            return -resp;
     }
-    if (resp != EOK)
-        return -resp;
-
-    if (ts[1].tv_nsec == UTIME_NOW) {
-        resp = ext4_mtime_set(f->f_path, NS_to_S(TIME2NS(rdtime())));
-    } else if (ts[1].tv_nsec != UTIME_OMIT) {
-        resp = ext4_mtime_set(f->f_path, NS_to_S(TIMESEPC2NS(ts[1])));
-    }
-    if (resp != EOK)
-        return -resp;
     return EOK;
 }
 

@@ -155,6 +155,7 @@ namespace tmm
 		/// @param clockid 当前仅支持 CLOCK_REALTIME
 		/// @param tp 目标时间
 		/// @return 成功返回0，失败返回负数错误码
+		int clock_settime_validate(SystemClockId clockid, const timespec *tp) const;
 		int clock_settime(SystemClockId clockid, const timespec *tp);
 
 		/// @brief 获取指定时钟的当前时间（仅秒数部分）

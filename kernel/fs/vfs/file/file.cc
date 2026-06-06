@@ -53,29 +53,6 @@ namespace fs
 	        constexpr int kMaxOfdRecordLocks = 256;
 	        constexpr off_t kLockOpenEnd = LONG_MAX;
 
-	        const char *record_lock_type_name(short type)
-	        {
-	            switch (type)
-	            {
-	            case F_RDLCK:
-	                return "F_RDLCK";
-	            case F_WRLCK:
-	                return "F_WRLCK";
-	            case F_UNLCK:
-	                return "F_UNLCK";
-	            default:
-	                return "F_BAD";
-	            }
-	        }
-
-	        void print_record_lock_range(const char *prefix, const struct flock &lock)
-	        {
-	            printf("[record-lock-debug] %s type=%s(%d) whence=%d start=%ld len=%ld pid_field=%d\n",
-	                   prefix, record_lock_type_name(lock.l_type), lock.l_type,
-	                   lock.l_whence, static_cast<long>(lock.l_start),
-	                   static_cast<long>(lock.l_len), lock.l_pid);
-	        }
-
         struct BsdFlockEntry
         {
             bool used = false;
@@ -119,26 +96,6 @@ namespace fs
 	        bool g_bsd_flock_ready = false;
 
 	        off_t record_lock_end(const struct flock &lock);
-
-	        void dump_posix_record_locks_locked(const eastl::string &path, const char *reason)
-	        {
-	            int count = 0;
-	            printf("[record-lock-debug] table-dump reason=%s path=%s\n",
-	                   reason, path.c_str());
-	            for (const auto &entry : g_posix_record_locks)
-	            {
-	                if (!entry.used || entry.path != path)
-	                {
-	                    continue;
-	                }
-	                printf("[record-lock-debug] table-entry idx=%d pid=%d type=%s(%d) start=%ld len=%ld end=%ld\n",
-	                       count, entry.pid, record_lock_type_name(entry.lock.l_type), entry.lock.l_type,
-	                       static_cast<long>(entry.lock.l_start), static_cast<long>(entry.lock.l_len),
-	                       static_cast<long>(record_lock_end(entry.lock)));
-	                ++count;
-	            }
-	            printf("[record-lock-debug] table-dump-end reason=%s count=%d\n", reason, count);
-	        }
 
         int find_shared_owner(const BsdFlockEntry &entry, file *owner)
         {
@@ -280,9 +237,6 @@ namespace fs
 
 	            off_t request_start = request.l_start;
 	            off_t request_end = record_lock_end(request);
-	            printf("[record-lock-debug] replace-same-owner begin path=%s request_start=%ld request_end=%ld\n",
-	                   path.c_str(), static_cast<long>(request_start), static_cast<long>(request_end));
-	            print_record_lock_range("replace-request", request);
 	            for (int i = 0; i < entry_count; ++i)
 	            {
 	                Entry &entry = entries[i];
@@ -298,22 +252,16 @@ namespace fs
 	                off_t entry_start = entry.lock.l_start;
 	                off_t entry_end = record_lock_end(entry.lock);
 	                struct flock original = entry.lock;
-	                printf("[record-lock-debug] replace-overlap slot=%d entry_start=%ld entry_end=%ld request_start=%ld request_end=%ld\n",
-	                       i, static_cast<long>(entry_start), static_cast<long>(entry_end),
-	                       static_cast<long>(request_start), static_cast<long>(request_end));
-	                print_record_lock_range("replace-original", original);
 	                clear_entry(entry);
 
 	                if (entry_start < request_start)
 	                {
 	                    struct flock slice = make_record_lock_slice(original, entry_start, request_start);
-	                    print_record_lock_range("preserve-left", slice);
 	                    preserved.push_back(slice);
 	                }
 	                if (request_end < entry_end)
 	                {
 	                    struct flock slice = make_record_lock_slice(original, request_end, entry_end);
-	                    print_record_lock_range("preserve-right", slice);
 	                    preserved.push_back(slice);
 	                }
 	            }
@@ -323,18 +271,13 @@ namespace fs
 	                Entry *slot = alloc_slot();
 	                if (slot == nullptr)
 	                {
-	                    printf("[record-lock-debug] replace-preserve-drop path=%s reason=no-slot\n",
-	                           path.c_str());
 	                    continue;
 	                }
 	                slot->used = true;
 	                slot->path = path;
 	                restore_identity(*slot);
 	                slot->lock = slice;
-	                print_record_lock_range("preserve-installed", slot->lock);
 	            }
-	            printf("[record-lock-debug] replace-same-owner end path=%s preserved=%lu\n",
-	                   path.c_str(), static_cast<unsigned long>(preserved.size()));
 	        }
 
 	        template <typename Entry, typename SameOwnerFn, typename ClearFn>
@@ -370,10 +313,6 @@ namespace fs
 	                        off_t lhs_end = record_lock_end(lhs.lock);
 	                        off_t rhs_end = record_lock_end(rhs.lock);
 	                        off_t merged_end = lhs_end > rhs_end ? lhs_end : rhs_end;
-	                        printf("[record-lock-debug] merge slots=%d,%d merged_start=%ld merged_end=%ld\n",
-	                               i, j, static_cast<long>(merged_start), static_cast<long>(merged_end));
-	                        print_record_lock_range("merge-left", lhs.lock);
-	                        print_record_lock_range("merge-right", rhs.lock);
 	                        lhs.lock = make_record_lock_slice(lhs.lock, merged_start, merged_end);
 	                        clear_entry(rhs);
 	                        changed = true;
@@ -638,9 +577,6 @@ namespace fs
 	        if (path.empty())
 	            return 0;
 
-	        printf("[record-lock-debug] apply begin pid=%d path=%s conflict_ptr=%p\n",
-	               pid, path.c_str(), reinterpret_cast<uint64>(conflict_pid));
-	        print_record_lock_range("apply-request", lock);
 	        g_posix_record_lock.acquire();
 	        if (lock.l_type == F_UNLCK)
 	        {
@@ -657,25 +593,18 @@ namespace fs
 	                { clear_posix_record_lock(entry); },
 	                [pid](PosixRecordLockEntry &entry)
 	                { entry.pid = pid; });
-	            dump_posix_record_locks_locked(path, "after-unlock");
 	            g_posix_record_lock.release();
-	            printf("[record-lock-debug] apply return pid=%d ret=0 unlock\n", pid);
 	            return 0;
 	        }
 
 	        const PosixRecordLockEntry *conflict = find_conflicting_posix_record_lock_locked(path, pid, lock);
 	        if (conflict != nullptr)
 	        {
-	            printf("[record-lock-debug] apply-conflict pid=%d blocked_by=%d\n",
-	                   pid, conflict->pid);
-	            print_record_lock_range("apply-conflict-lock", conflict->lock);
 	            if (conflict_pid != nullptr)
 	            {
 	                *conflict_pid = conflict->pid;
 	            }
 	            g_posix_record_lock.release();
-	            printf("[record-lock-debug] apply return pid=%d ret=%d conflict\n",
-	                   pid, syscall::SYS_EAGAIN);
 	            return syscall::SYS_EAGAIN;
 	        }
 
@@ -706,13 +635,10 @@ namespace fs
 	                { return lhs.pid == rhs.pid; },
 	                [](PosixRecordLockEntry &entry)
 	                { clear_posix_record_lock(entry); });
-	            dump_posix_record_locks_locked(path, "after-set");
 	            g_posix_record_lock.release();
-	            printf("[record-lock-debug] apply return pid=%d ret=0 set\n", pid);
 	            return 0;
 	        }
 
-	        printf("[record-lock-debug] apply no-slot pid=%d path=%s\n", pid, path.c_str());
 	        g_posix_record_lock.release();
 	        return syscall::SYS_ENFILE;
 	    }
@@ -731,32 +657,18 @@ namespace fs
 	            return 0;
 	        }
 
-	        printf("[record-lock-debug] query begin pid=%d path=%s\n", pid, path.c_str());
-	        print_record_lock_range("query-request", lock);
 	        g_posix_record_lock.acquire();
 	        const PosixRecordLockEntry *best = find_conflicting_posix_record_lock_locked(path, pid, lock);
-	        if (best == nullptr)
-	        {
-	            printf("[record-lock-debug] query-best none pid=%d path=%s\n", pid, path.c_str());
-	        }
-	        else
-	        {
-	            printf("[record-lock-debug] query-best pid=%d owner_pid=%d\n", pid, best->pid);
-	            print_record_lock_range("query-best-lock", best->lock);
-	        }
-	        dump_posix_record_locks_locked(path, "during-query");
 	        g_posix_record_lock.release();
 
 	        if (best == nullptr)
 	        {
 	            lock.l_type = F_UNLCK;
-	            print_record_lock_range("query-return-unlocked", lock);
 	            return 0;
 	        }
 
 	        lock = best->lock;
 	        lock.l_pid = best->pid;
-	        print_record_lock_range("query-return-conflict", lock);
 	        return 0;
 	    }
 

@@ -1,7 +1,15 @@
 #include "syscall_handler.hh"
+#include "syscall_abi.hh"
+#include "sysio.hh"
+#include "devs/console_termios.hh"
+#include "devs/block_device_ioctl_state.hh"
+#include "fs/vfs/file_descriptor_access.hh"
+#include "net/socket_compat.hh"
+#include "tm/timex_controller.hh"
 #include "printer.hh"
 #include "proc.hh"
 #include "proc_manager.hh"
+#include "proc/capability.hh"
 #include "virtual_memory_manager.hh"
 #include "physical_memory_manager.hh"
 #include "userspace_stream.hh"
@@ -9,9 +17,6 @@
 #include "list.hh"
 #include "param.h"
 
-// Extended attributes flags
-#define XATTR_CREATE 0x1  // set value, fail if attr already exists
-#define XATTR_REPLACE 0x2 // set value, fail if attr does not exist
 #ifdef RISCV
 #include "riscv/pagetable.hh"
 #elif defined(LOONGARCH)
@@ -67,12 +72,8 @@
 #include "devs/console.hh"
 #include "EASTL/map.h"
 #include "EASTL/vector.h"
-#include "fs/debug.hh"
 #include "interrupt_stats.hh"
 #include "mem/memlayout.hh"
-#ifndef EIDRM
-#define EIDRM 43
-#endif
 namespace syscall
 {
     namespace
@@ -84,692 +85,6 @@ namespace syscall
         constexpr uint64 k_min_kernel_file_ptr = PHYSBASE;
         constexpr uint64 k_min_user_pagetable_base = PHYSBASE;
 #endif
-        constexpr u32 k_siocatmark = 0x8905;
-        constexpr u32 k_siocgifconf = 0x8912;
-        constexpr u32 k_siocgifflags = 0x8913;
-        constexpr u32 k_siocsifflags = 0x8914;
-        constexpr int k_ifnamsiz = 16;
-        constexpr short k_iff_up = 0x1;
-        constexpr short k_iff_loopback = 0x8;
-        constexpr short k_iff_running = 0x40;
-        constexpr uint k_mmsg_max_vlen = 1024;
-        constexpr long k_nsec_per_sec = 1000000000L;
-
-        struct socket_ifreq
-        {
-            char ifr_name[k_ifnamsiz];
-            union
-            {
-                struct sockaddr ifr_addr;
-                short ifr_flags;
-                char ifr_padding[24];
-            };
-        };
-
-        struct socket_ifconf
-        {
-            int ifc_len;
-            uint64 ifc_buf;
-        };
-
-        bool is_loopback_ifname(const char *name)
-        {
-            return name[0] == 'l' && name[1] == 'o' && name[2] == '\0';
-        }
-
-        void fill_loopback_ifreq(socket_ifreq &req)
-        {
-            memset(&req, 0, sizeof(req));
-            req.ifr_name[0] = 'l';
-            req.ifr_name[1] = 'o';
-
-            sockaddr_in addr{};
-            addr.sin_family = AF_INET;
-            addr.sin_addr = 0x0100007f;
-            memcpy(&req.ifr_addr, &addr, sizeof(addr));
-        }
-
-        int validate_recvmmsg_timeout(mem::PageTable *pt, uint64 timeout_addr)
-        {
-            if (timeout_addr == 0)
-            {
-                return 0;
-            }
-
-            tmm::timespec timeout{};
-            if (mem::k_vmm.copy_in(*pt, &timeout, timeout_addr, sizeof(timeout)) < 0)
-            {
-                return SYS_EFAULT;
-            }
-            if (timeout.tv_sec < 0 || timeout.tv_nsec < 0 || timeout.tv_nsec >= k_nsec_per_sec)
-            {
-                return SYS_EINVAL;
-            }
-            return 0;
-        }
-
-
-        constexpr int k_epoll_ctl_add = 1;
-        constexpr int k_epoll_ctl_del = 2;
-        constexpr int k_epoll_ctl_mod = 3;
-        constexpr uint32 k_epollin = 0x001u;
-        constexpr uint32 k_epollpri = 0x002u;
-        constexpr uint32 k_epollout = 0x004u;
-        constexpr uint32 k_epollerr = 0x008u;
-        constexpr uint32 k_epollhup = 0x010u;
-        constexpr uint32 k_epollrdhup = 0x2000u;
-        constexpr uint32 k_epolloneshot = 0x40000000u;
-        constexpr uint32 k_epollet = 0x80000000u;
-        constexpr uint32 k_epoll_interest_mask =
-            k_epollin | k_epollpri | k_epollout | k_epollerr | k_epollhup | k_epollrdhup;
-
-        struct KernelEpollEvent
-        {
-            uint32 events;
-            // 64 位 Linux 用户态的 struct epoll_event 在 events 和 data 之间会保留
-            // 4 字节对齐空洞，整体大小是 16 字节。之前这里错误地按 12 字节 packed
-            // 布局 copy_in/copy_out，导致第二个返回事件整体错位，epoll_wait01/ctl01
-            // 这种一次返回两个事件的测例会把后一项读成全零。
-            uint32 pad = 0;
-            uint64 data = 0;
-        };
-        static_assert(sizeof(KernelEpollEvent) == 16, "epoll event ABI must match 64-bit user layout");
-
-        struct KernelTermios
-        {
-            uint32 c_iflag;
-            uint32 c_oflag;
-            uint32 c_cflag;
-            uint32 c_lflag;
-            unsigned char c_line;
-            unsigned char c_cc[19];
-        };
-        static_assert(sizeof(KernelTermios) == 36, "TCGETS must use Linux kernel termios ABI");
-
-        struct KernelTermio
-        {
-            uint16 c_iflag;
-            uint16 c_oflag;
-            uint16 c_cflag;
-            uint16 c_lflag;
-            unsigned char c_line;
-            unsigned char c_cc[8];
-        };
-
-        KernelTermios make_default_console_termios()
-        {
-            KernelTermios ts{};
-            ts.c_iflag = BRKINT | ICRNL | IXON;
-#ifdef IMAXBEL
-            ts.c_iflag |= IMAXBEL;
-#endif
-            ts.c_oflag = OPOST | ONLCR;
-            ts.c_cflag = B38400 | CS8 | CREAD;
-            ts.c_lflag = ISIG | ICANON | ECHO | ECHOE | ECHOK | IEXTEN;
-#ifdef ECHOCTL
-            ts.c_lflag |= ECHOCTL;
-#endif
-#ifdef ECHOKE
-            ts.c_lflag |= ECHOKE;
-#endif
-            ts.c_cc[VINTR] = 3;    // Ctrl-C
-            ts.c_cc[VQUIT] = 28;   // Ctrl-backslash
-            ts.c_cc[VERASE] = 127; // DEL
-            ts.c_cc[VKILL] = 21;   // Ctrl-U
-            ts.c_cc[VEOF] = 4;     // Ctrl-D
-            ts.c_cc[VTIME] = 0;
-            ts.c_cc[VMIN] = 1;
-#ifdef VSTART
-            ts.c_cc[VSTART] = 17; // Ctrl-Q
-#endif
-#ifdef VSTOP
-            ts.c_cc[VSTOP] = 19; // Ctrl-S
-#endif
-#ifdef VSUSP
-            ts.c_cc[VSUSP] = 26; // Ctrl-Z
-#endif
-#ifdef VEOL
-            ts.c_cc[VEOL] = 0;
-#endif
-#ifdef VREPRINT
-            ts.c_cc[VREPRINT] = 18; // Ctrl-R
-#endif
-#ifdef VDISCARD
-            ts.c_cc[VDISCARD] = 15; // Ctrl-O
-#endif
-#ifdef VWERASE
-            ts.c_cc[VWERASE] = 23; // Ctrl-W
-#endif
-#ifdef VLNEXT
-            ts.c_cc[VLNEXT] = 22; // Ctrl-V
-#endif
-#ifdef VEOL2
-            ts.c_cc[VEOL2] = 0;
-#endif
-            return ts;
-        }
-
-        void sync_console_termios_to_line_discipline(const KernelTermios &ts)
-        {
-            dev::kConsole.set_line_discipline((ts.c_lflag & ICANON) != 0,
-                                              (ts.c_lflag & ECHO) != 0,
-                                              (ts.c_iflag & ICRNL) != 0,
-                                              ts.c_cc[VERASE],
-                                              ts.c_cc[VKILL],
-                                              ts.c_cc[VEOF],
-                                              (ts.c_lflag & ISIG) != 0,
-                                              ts.c_cc[VINTR]);
-        }
-
-        KernelTermios g_console_termios = make_default_console_termios();
-        ulong g_block_device_read_ahead = 0;
-
-        KernelTermio make_kernel_termio(const KernelTermios &ts)
-        {
-            KernelTermio tio{};
-            tio.c_iflag = static_cast<uint16>(ts.c_iflag);
-            tio.c_oflag = static_cast<uint16>(ts.c_oflag);
-            tio.c_cflag = static_cast<uint16>(ts.c_cflag);
-            tio.c_lflag = static_cast<uint16>(ts.c_lflag);
-            tio.c_line = ts.c_line;
-            size_t cc_count = sizeof(tio.c_cc) < sizeof(ts.c_cc) ? sizeof(tio.c_cc) : sizeof(ts.c_cc);
-            memcpy(tio.c_cc, ts.c_cc, cc_count);
-            return tio;
-        }
-
-        void merge_kernel_termio(KernelTermios &ts, const KernelTermio &tio)
-        {
-            ts.c_iflag = tio.c_iflag;
-            ts.c_oflag = tio.c_oflag;
-            ts.c_cflag = tio.c_cflag;
-            ts.c_lflag = tio.c_lflag;
-            ts.c_line = tio.c_line;
-            size_t cc_count = sizeof(tio.c_cc) < sizeof(ts.c_cc) ? sizeof(tio.c_cc) : sizeof(ts.c_cc);
-            memcpy(ts.c_cc, tio.c_cc, cc_count);
-        }
-
-        struct KernelTimeValOld
-        {
-            long tv_sec;
-            long tv_usec;
-        };
-
-        struct KernelITimerValOld
-        {
-            KernelTimeValOld it_interval;
-            KernelTimeValOld it_value;
-        };
-
-        struct KernelFOwnerEx
-        {
-            int type;
-            int pid;
-        };
-
-        constexpr int k_f_owner_tid = 0;
-        constexpr int k_f_owner_pid = 1;
-        constexpr int k_f_owner_pgrp = 2;
-
-        bool file_access_mode_has_write(int flags)
-        {
-            int accmode = flags & O_ACCMODE;
-            return accmode == O_WRONLY || accmode == O_RDWR;
-        }
-
-        struct OpenDescriptionStats
-        {
-            int distinct_description_count = 0;
-            bool has_writable_description = false;
-            bool has_other_lease_owner = false;
-        };
-
-        OpenDescriptionStats collect_open_description_stats(const eastl::string &path, fs::file *self)
-        {
-            OpenDescriptionStats stats{};
-            eastl::vector<fs::file *> seen;
-            seen.reserve(proc::num_process);
-
-            for (uint i = 0; i < proc::num_process; ++i)
-            {
-                proc::Pcb *pcb = &proc::k_proc_pool[i];
-                if (pcb->_state == proc::ProcState::UNUSED || pcb->_ofile == nullptr)
-                {
-                    continue;
-                }
-
-                for (uint fd = 0; fd < proc::max_open_files; ++fd)
-                {
-                    fs::file *candidate = pcb->_ofile->_ofile_ptr[fd];
-                    if (candidate == nullptr)
-                    {
-                        continue;
-                    }
-                    if (candidate->backing_path() != path)
-                    {
-                        continue;
-                    }
-
-                    bool already_seen = false;
-                    for (fs::file *existing : seen)
-                    {
-                        if (existing == candidate)
-                        {
-                            already_seen = true;
-                            break;
-                        }
-                    }
-                    if (already_seen)
-                    {
-                        continue;
-                    }
-
-                    seen.push_back(candidate);
-                    stats.distinct_description_count++;
-                    if (file_access_mode_has_write(candidate->lwext4_file_struct.flags))
-                    {
-                        stats.has_writable_description = true;
-                    }
-                    if (candidate != self && candidate->_lease_type != F_UNLCK)
-                    {
-                        stats.has_other_lease_owner = true;
-                    }
-                }
-            }
-
-            return stats;
-        }
-
-        struct UserTimespec64
-        {
-            long tv_sec;
-            long tv_nsec;
-        };
-
-        union KernelSigvalCompat
-        {
-            int sival_int;
-            uint64_t sival_ptr;
-        };
-
-        struct KernelSigeventCompat
-        {
-            KernelSigvalCompat sigev_value;
-            int sigev_signo;
-            int sigev_notify;
-            union
-            {
-                char __pad[64 - sizeof(KernelSigvalCompat) - 2 * sizeof(int)];
-                int sigev_notify_thread_id;
-                struct
-                {
-                    uint64_t sigev_notify_function;
-                    uint64_t sigev_notify_attributes;
-                } __sev_thread;
-            } __sev_fields;
-        };
-        static_assert(sizeof(KernelSigeventCompat) == 64,
-                      "Linux 64-bit sigevent ABI size mismatch");
-
-        constexpr unsigned int k_adj_offset = 0x0001;
-        constexpr unsigned int k_adj_frequency = 0x0002;
-        constexpr unsigned int k_adj_maxerror = 0x0004;
-        constexpr unsigned int k_adj_esterror = 0x0008;
-        constexpr unsigned int k_adj_status = 0x0010;
-        constexpr unsigned int k_adj_timeconst = 0x0020;
-        constexpr unsigned int k_adj_tai = 0x0080;
-        constexpr unsigned int k_adj_setoffset = 0x0100;
-        constexpr unsigned int k_adj_micro = 0x1000;
-        constexpr unsigned int k_adj_nano = 0x2000;
-        constexpr unsigned int k_adj_tick = 0x4000;
-        constexpr unsigned int k_adj_offset_singleshot = 0x8001;
-        constexpr unsigned int k_adj_offset_ss_read = 0xa001;
-        constexpr unsigned int k_adj_all = k_adj_offset | k_adj_frequency | k_adj_maxerror |
-                                           k_adj_esterror | k_adj_status | k_adj_timeconst |
-                                           k_adj_tick;
-
-        constexpr int k_time_ok = 0;
-        constexpr int k_time_error = 5;
-
-        constexpr int k_sta_pll = 0x0001;
-        constexpr int k_sta_ppsfreq = 0x0002;
-        constexpr int k_sta_ppstime = 0x0004;
-        constexpr int k_sta_fll = 0x0008;
-        constexpr int k_sta_ins = 0x0010;
-        constexpr int k_sta_del = 0x0020;
-        constexpr int k_sta_unsync = 0x0040;
-        constexpr int k_sta_freqhold = 0x0080;
-        constexpr int k_sta_nano = 0x2000;
-        constexpr int k_sta_mode = 0x4000;
-
-        constexpr unsigned int k_timex_known_mode_mask = k_adj_offset | k_adj_frequency |
-                                                          k_adj_maxerror | k_adj_esterror |
-                                                          k_adj_status | k_adj_timeconst |
-                                                          k_adj_tai | k_adj_setoffset |
-                                                          k_adj_micro | k_adj_nano |
-                                                          k_adj_tick;
-        constexpr int k_timex_status_writable_mask = k_sta_pll | k_sta_ppsfreq | k_sta_ppstime |
-                                                     k_sta_fll | k_sta_ins | k_sta_del |
-                                                     k_sta_unsync | k_sta_freqhold |
-                                                     k_sta_nano | k_sta_mode;
-        constexpr long k_timex_frequency_limit = 32768000L;
-        constexpr long k_timex_offset_limit_us = 500000L;
-        constexpr long k_clock_hz = static_cast<long>(1000000ULL / tmm::tick_period_us);
-        constexpr long k_timex_tick_min = 900000L / k_clock_hz;
-        constexpr long k_timex_tick_max = 1100000L / k_clock_hz;
-
-        struct KernelTimexOld
-        {
-            unsigned int modes;
-            int _pad0;
-            long offset;
-            long freq;
-            long maxerror;
-            long esterror;
-            int status;
-            int _pad1;
-            long constant;
-            long precision;
-            long tolerance;
-            KernelTimeValOld time;
-            long tick;
-            long ppsfreq;
-            long jitter;
-            int shift;
-            int _pad2;
-            long stabil;
-            long jitcnt;
-            long calcnt;
-            long errcnt;
-            long stbcnt;
-            int tai;
-            int reserved[11];
-        };
-        static_assert(sizeof(KernelTimexOld) == 208, "Linux timex ABI size mismatch");
-
-        struct KernelTimexState
-        {
-            long offset = 0;
-            long freq = 0;
-            long maxerror = 0;
-            long esterror = 0;
-            int status = k_sta_nano;
-            long constant = 0;
-            long precision = 1;
-            long tolerance = k_timex_frequency_limit;
-            long tick = 1000000L / k_clock_hz;
-            int tai = 0;
-        };
-
-        KernelTimexState g_kernel_timex_state;
-
-        static bool kernel_timespec_to_ns_checked(const tmm::timespec &ts, int64_t &ns)
-        {
-            if (ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= k_nsec_per_sec)
-            {
-                return false;
-            }
-            if (ts.tv_sec > INT64_MAX / k_nsec_per_sec)
-            {
-                return false;
-            }
-
-            ns = static_cast<int64_t>(ts.tv_sec) * k_nsec_per_sec + ts.tv_nsec;
-            return true;
-        }
-
-        bool file_descriptor_allows_read(const fs::file *f)
-        {
-            if (f == nullptr)
-            {
-                return false;
-            }
-            if (f->is_fanotify_file() || f->is_inotify_file())
-            {
-                return true;
-            }
-
-            switch (f->_attrs.filetype)
-            {
-            case fs::FT_NORMAL:
-            case fs::FT_DIRECT:
-            case fs::FT_SYMLINK:
-                return (f->lwext4_file_struct.flags & O_ACCMODE) != O_WRONLY;
-            case fs::FT_DEVICE:
-                if (f->is_virtual)
-                {
-                    return (f->lwext4_file_struct.flags & O_ACCMODE) != O_WRONLY;
-                }
-                return f->_attrs.g_read != 0;
-            case fs::FT_PIPE:
-                return static_cast<const fs::pipe_file *>(f)->allows_read_end();
-            case fs::FT_SOCKET:
-                return f->_attrs.g_read != 0;
-            default:
-                return f->is_virtual ? ((f->lwext4_file_struct.flags & O_ACCMODE) != O_WRONLY)
-                                     : (f->_attrs.g_read != 0);
-            }
-        }
-
-        bool file_descriptor_allows_write(const fs::file *f)
-        {
-            if (f == nullptr)
-            {
-                return false;
-            }
-
-            switch (f->_attrs.filetype)
-            {
-            case fs::FT_NORMAL:
-            case fs::FT_DIRECT:
-            case fs::FT_SYMLINK:
-                return (f->lwext4_file_struct.flags & O_ACCMODE) != O_RDONLY;
-            case fs::FT_DEVICE:
-                if (f->is_virtual)
-                {
-                    return (f->lwext4_file_struct.flags & O_ACCMODE) != O_RDONLY;
-                }
-                return f->_attrs.g_write != 0;
-            case fs::FT_PIPE:
-                return static_cast<const fs::pipe_file *>(f)->allows_write_end();
-            case fs::FT_SOCKET:
-                return f->_attrs.g_write != 0;
-            default:
-                return f->is_virtual ? ((f->lwext4_file_struct.flags & O_ACCMODE) != O_RDONLY)
-                                     : (f->_attrs.g_write != 0);
-            }
-        }
-
-        static void kernel_ns_to_timespec(int64_t ns, tmm::timespec &ts)
-        {
-            if (ns < 0)
-            {
-                ts.tv_sec = 0;
-                ts.tv_nsec = 0;
-                return;
-            }
-
-            ts.tv_sec = static_cast<long>(ns / k_nsec_per_sec);
-            ts.tv_nsec = static_cast<long>(ns % k_nsec_per_sec);
-        }
-
-        static int timex_state_result_code()
-        {
-            return (g_kernel_timex_state.status & k_sta_unsync) ? k_time_error : k_time_ok;
-        }
-
-        static int populate_timex_time_field(KernelTimexOld &tx)
-        {
-            tmm::timespec now{};
-            if (tmm::k_tm.clock_gettime(static_cast<tmm::SystemClockId>(CLOCK_REALTIME), &now) < 0)
-            {
-                return -EIO;
-            }
-
-            tx.time.tv_sec = now.tv_sec;
-            tx.time.tv_usec = (g_kernel_timex_state.status & k_sta_nano) ? now.tv_nsec
-                                                                         : now.tv_nsec / 1000;
-            return 0;
-        }
-
-        static int snapshot_timex_state(KernelTimexOld &tx)
-        {
-            tx.modes = (g_kernel_timex_state.status & k_sta_nano) ? k_adj_nano : k_adj_micro;
-            tx.offset = g_kernel_timex_state.offset;
-            tx.freq = g_kernel_timex_state.freq;
-            tx.maxerror = g_kernel_timex_state.maxerror;
-            tx.esterror = g_kernel_timex_state.esterror;
-            tx.status = g_kernel_timex_state.status;
-            tx.constant = g_kernel_timex_state.constant;
-            tx.precision = g_kernel_timex_state.precision;
-            tx.tolerance = g_kernel_timex_state.tolerance;
-            tx.tick = g_kernel_timex_state.tick;
-            tx.tai = g_kernel_timex_state.tai;
-
-            int time_ret = populate_timex_time_field(tx);
-            if (time_ret < 0)
-            {
-                return time_ret;
-            }
-            return timex_state_result_code();
-        }
-
-        static int apply_timex_delta_to_realtime(const KernelTimexOld &tx)
-        {
-            int64_t delta_ns = static_cast<int64_t>(tx.time.tv_sec) * k_nsec_per_sec;
-            if (g_kernel_timex_state.status & k_sta_nano)
-            {
-                delta_ns += tx.time.tv_usec;
-            }
-            else
-            {
-                delta_ns += static_cast<int64_t>(tx.time.tv_usec) * 1000;
-            }
-
-            tmm::timespec now{};
-            if (tmm::k_tm.clock_gettime(static_cast<tmm::SystemClockId>(CLOCK_REALTIME), &now) < 0)
-            {
-                return -EIO;
-            }
-
-            int64_t now_ns = 0;
-            if (!kernel_timespec_to_ns_checked(now, now_ns))
-            {
-                return -EINVAL;
-            }
-
-            tmm::timespec target{};
-            kernel_ns_to_timespec(now_ns + delta_ns, target);
-            return tmm::k_tm.clock_settime(static_cast<tmm::SystemClockId>(CLOCK_REALTIME), &target);
-        }
-
-        static int apply_kernel_timex(KernelTimexOld &tx, bool has_privilege)
-        {
-            const unsigned int modes = tx.modes;
-            const bool is_special_offset_mode =
-                modes == k_adj_offset_singleshot || modes == k_adj_offset_ss_read;
-            const bool effective_nano_mode =
-                (modes & k_adj_nano) ? true :
-                (modes & k_adj_micro) ? false :
-                ((g_kernel_timex_state.status & k_sta_nano) != 0);
-            const long effective_offset_limit =
-                effective_nano_mode ? k_timex_offset_limit_us * 1000L : k_timex_offset_limit_us;
-
-            if (modes == 0 || modes == k_adj_offset_ss_read)
-            {
-                return snapshot_timex_state(tx);
-            }
-            if (!is_special_offset_mode && (modes & ~k_timex_known_mode_mask) != 0)
-            {
-                return -EINVAL;
-            }
-            if (!has_privilege)
-            {
-                return -EPERM;
-            }
-            if ((modes & k_adj_nano) && (modes & k_adj_micro))
-            {
-                return -EINVAL;
-            }
-            if (modes == k_adj_offset_singleshot)
-            {
-                g_kernel_timex_state.offset = tx.offset;
-                return snapshot_timex_state(tx);
-            }
-
-            if ((modes & k_adj_status) && (tx.status & ~k_timex_status_writable_mask) != 0)
-            {
-                return -EINVAL;
-            }
-            if ((modes & k_adj_frequency) &&
-                (tx.freq < -k_timex_frequency_limit || tx.freq > k_timex_frequency_limit))
-            {
-                return -EINVAL;
-            }
-            if ((modes & k_adj_offset) &&
-                (tx.offset < -effective_offset_limit || tx.offset > effective_offset_limit))
-            {
-                return -EINVAL;
-            }
-            if ((modes & k_adj_tick) &&
-                (tx.tick < k_timex_tick_min || tx.tick > k_timex_tick_max))
-            {
-                return -EINVAL;
-            }
-
-            if (modes & k_adj_offset)
-            {
-                g_kernel_timex_state.offset = tx.offset;
-            }
-            if (modes & k_adj_frequency)
-            {
-                g_kernel_timex_state.freq = tx.freq;
-            }
-            if (modes & k_adj_maxerror)
-            {
-                g_kernel_timex_state.maxerror = tx.maxerror;
-            }
-            if (modes & k_adj_esterror)
-            {
-                g_kernel_timex_state.esterror = tx.esterror;
-            }
-            if (modes & k_adj_status)
-            {
-                g_kernel_timex_state.status =
-                    (g_kernel_timex_state.status & ~k_timex_status_writable_mask) |
-                    (tx.status & k_timex_status_writable_mask);
-            }
-            if (modes & k_adj_timeconst)
-            {
-                g_kernel_timex_state.constant = tx.constant;
-            }
-            if (modes & k_adj_tick)
-            {
-                g_kernel_timex_state.tick = tx.tick;
-            }
-            if (modes & k_adj_tai)
-            {
-                g_kernel_timex_state.tai = static_cast<int>(tx.constant);
-            }
-            if (modes & k_adj_nano)
-            {
-                g_kernel_timex_state.status |= k_sta_nano;
-            }
-            if (modes & k_adj_micro)
-            {
-                g_kernel_timex_state.status &= ~k_sta_nano;
-            }
-            if (modes & k_adj_setoffset)
-            {
-                int delta_ret = apply_timex_delta_to_realtime(tx);
-                if (delta_ret < 0)
-                {
-                    return delta_ret;
-                }
-            }
-
-            return snapshot_timex_state(tx);
-        }
-
         static int read_symlink_target_by_path(const eastl::string &path, eastl::string &target_path)
         {
             fs::vfile_tree_node *virtual_node = fs::k_vfs.get_virtual_node(path);
@@ -810,9 +125,9 @@ namespace syscall
             uint32 __pad2[2];
             off_t st_size;
             int __pad3;
-            UserTimespec64 st_atim;
-            UserTimespec64 st_mtim;
-            UserTimespec64 st_ctim;
+            abi::UserTimespec64 st_atim;
+            abi::UserTimespec64 st_mtim;
+            abi::UserTimespec64 st_ctim;
             long st_blksize;
             uint32 __pad4;
             long st_blocks;
@@ -833,9 +148,9 @@ namespace syscall
             int32 st_blksize;
             int32 __pad2;
             int64 st_blocks;
-            UserTimespec64 st_atim;
-            UserTimespec64 st_mtim;
-            UserTimespec64 st_ctim;
+            abi::UserTimespec64 st_atim;
+            abi::UserTimespec64 st_mtim;
+            abi::UserTimespec64 st_ctim;
             uint32 stat_unused[2];
         };
 #else
@@ -853,9 +168,9 @@ namespace syscall
             long st_blksize;
             int __pad2;
             long st_blocks;
-            UserTimespec64 st_atim;
-            UserTimespec64 st_mtim;
-            UserTimespec64 st_ctim;
+            abi::UserTimespec64 st_atim;
+            abi::UserTimespec64 st_mtim;
+            abi::UserTimespec64 st_ctim;
             unsigned int stat_unused[2];
         };
 #endif
@@ -904,6 +219,89 @@ namespace syscall
             return static_cast<uint64>(now.tv_sec);
         }
 
+        static bool utimens_is_noop(const timespec *times)
+        {
+            return times != nullptr &&
+                   times[0].tv_nsec == UTIME_OMIT &&
+                   times[1].tv_nsec == UTIME_OMIT;
+        }
+
+        static bool utimens_uses_current_time_only(const timespec *times)
+        {
+            return times == nullptr ||
+                   (times[0].tv_nsec == UTIME_NOW &&
+                    times[1].tv_nsec == UTIME_NOW);
+        }
+
+        static bool process_is_in_group(const proc::Pcb *p, uint32 gid)
+        {
+            if (p == nullptr)
+                return false;
+            if (gid == p->_gid || gid == p->_egid ||
+                gid == p->_sgid || gid == p->_fsgid)
+            {
+                return true;
+            }
+            for (int i = 0; i < p->_supplementary_group_count; ++i)
+            {
+                if (p->_supplementary_groups[i] == gid)
+                    return true;
+            }
+            return false;
+        }
+
+        static bool process_has_inode_write_permission(const proc::Pcb *p,
+                                                       const fs::Kstat &st)
+        {
+            if (p == nullptr)
+                return false;
+            if (p->get_euid() == st.uid)
+                return (st.mode & S_IWUSR) != 0;
+            if (process_is_in_group(p, st.gid))
+                return (st.mode & S_IWGRP) != 0;
+            return (st.mode & S_IWOTH) != 0;
+        }
+
+        static int check_utimens_constraints(proc::Pcb *p,
+                                             const fs::Kstat &st,
+                                             uint32 inode_flags,
+                                             bool read_only,
+                                             const timespec *times)
+        {
+            if (utimens_is_noop(times))
+                return 0;
+            if (read_only)
+                return -EROFS;
+            if (inode_flags & EXT4_INODE_FLAG_IMMUTABLE)
+                return -EPERM;
+
+            // append-only inode 允许普通 touch（NULL 或两个 UTIME_NOW），
+            // 但禁止通过显式 timespec 单独改写某一个时间戳。
+            if ((inode_flags & EXT4_INODE_FLAG_APPEND) &&
+                !utimens_uses_current_time_only(times))
+            {
+                return -EPERM;
+            }
+
+            constexpr uint32 k_cap_dac_override = 1;
+            constexpr uint32 k_cap_fowner = 3;
+            const bool privileged =
+                p != nullptr &&
+                (p->get_euid() == 0 ||
+                 proc::k_capability.has_effective(p, k_cap_fowner));
+            const bool owner = p != nullptr && p->get_euid() == st.uid;
+            if (!utimens_uses_current_time_only(times))
+                return (owner || privileged) ? 0 : -EPERM;
+
+            if (owner || privileged ||
+                proc::k_capability.has_effective(p, k_cap_dac_override) ||
+                process_has_inode_write_permission(p, st))
+            {
+                return 0;
+            }
+            return -EACCES;
+        }
+
         static int apply_ext4_times_to_open_file(fs::file *f, const timespec *times)
         {
             if (f == nullptr || f->lwext4_file_struct.mp == nullptr || f->lwext4_file_struct.inode == 0)
@@ -918,6 +316,27 @@ namespace syscall
             if (result != EOK)
             {
                 return -result;
+            }
+
+            fs::Kstat st{};
+            result = vfs_fstat(f, &st);
+            if (result < 0)
+            {
+                ext4_fs_put_inode_ref(&inode_ref);
+                return result;
+            }
+
+            result = check_utimens_constraints(
+                proc::k_pm.get_cur_pcb(),
+                st,
+                ext4_inode_get_flags(inode_ref.inode),
+                inode_ref.fs->read_only ||
+                    (!f->_path_name.empty() && vfs_is_readonly_path(f->_path_name)),
+                times);
+            if (result < 0 || utimens_is_noop(times))
+            {
+                ext4_fs_put_inode_ref(&inode_ref);
+                return result;
             }
 
             const uint64 now = current_realtime_seconds();
@@ -957,7 +376,7 @@ namespace syscall
             return 0;
         }
 
-        static int resolve_utimens_path(int dirfd, const eastl::string &pathname, eastl::string &absolute_path)
+        static int resolve_at_path(int dirfd, const eastl::string &pathname, eastl::string &absolute_path)
         {
             proc::Pcb *p = proc::k_pm.get_cur_pcb();
             if (pathname.empty())
@@ -991,51 +410,25 @@ namespace syscall
             return 0;
         }
 
-        static int classify_utimens_path_error(const eastl::string &absolute_path)
+        // 64 位 Linux siginfo_t 的 SIGCHLD 布局。头部之后显式保留 4 字节，
+        // 使 si_pid 位于偏移 16，clock_t 字段按 8 字节对齐。
+        struct WaitIdSigInfo
         {
-            size_t last_slash = absolute_path.find_last_of('/');
-            if (last_slash != eastl::string::npos && last_slash > 0)
-            {
-                eastl::string current_path = "";
-                size_t start = 1;
-                while (start < last_slash)
-                {
-                    size_t end = absolute_path.find('/', start);
-                    if (end == eastl::string::npos || end > last_slash)
-                    {
-                        end = last_slash;
-                    }
-
-                    current_path += "/" + absolute_path.substr(start, end - start);
-                    int exists = fs::k_vfs.is_file_exist(current_path.c_str());
-                    if (exists == 0)
-                    {
-                        return -ENOENT;
-                    }
-                    if (exists < 0)
-                    {
-                        return exists;
-                    }
-                    if (fs::k_vfs.path2filetype(current_path) != fs::FileTypes::FT_DIRECT)
-                    {
-                        return -ENOTDIR;
-                    }
-
-                    start = end + 1;
-                }
-            }
-
-            int target_exists = fs::k_vfs.is_file_exist(absolute_path.c_str());
-            if (target_exists == 0)
-            {
-                return -ENOENT;
-            }
-            if (target_exists < 0)
-            {
-                return target_exists;
-            }
-            return -EINVAL;
-        }
+            int32 si_signo;
+            int32 si_errno;
+            int32 si_code;
+            int32 padding;
+            int32 si_pid;
+            uint32 si_uid;
+            int32 si_status;
+            int32 child_padding;
+            int64 si_utime;
+            int64 si_stime;
+            uint8 reserved[128 - 48];
+        };
+        static_assert(sizeof(WaitIdSigInfo) == 128, "waitid siginfo ABI mismatch");
+        static_assert(offsetof(WaitIdSigInfo, si_pid) == 16, "waitid si_pid ABI mismatch");
+        static_assert(offsetof(WaitIdSigInfo, si_status) == 24, "waitid si_status ABI mismatch");
 
         constexpr uint64 k_usec_per_sec = 1000000ULL;
         constexpr uint64 k_clone_args_size_ver0 = 64ULL;
@@ -1275,41 +668,41 @@ namespace syscall
             }
 
             uint32 ready_events = 0;
-            if ((watched_events & (k_epollin | k_epollpri)) != 0 && target->read_ready())
+            if ((watched_events & (abi::k_epollin | abi::k_epollpri)) != 0 && target->read_ready())
             {
-                if ((watched_events & k_epollin) != 0)
+                if ((watched_events & abi::k_epollin) != 0)
                 {
-                    ready_events |= k_epollin;
+                    ready_events |= abi::k_epollin;
                 }
-                if ((watched_events & k_epollpri) != 0)
+                if ((watched_events & abi::k_epollpri) != 0)
                 {
-                    ready_events |= k_epollpri;
+                    ready_events |= abi::k_epollpri;
                 }
             }
             bool write_ready = false;
-            if ((watched_events & k_epollout) != 0)
+            if ((watched_events & abi::k_epollout) != 0)
             {
                 if (target->_attrs.filetype == fs::FT_PIPE)
                 {
                     auto *pipe_target = static_cast<fs::pipe_file *>(target);
-                    write_ready = pipe_target->epoll_write_ready((watched_events & k_epollet) != 0);
+                    write_ready = pipe_target->epoll_write_ready((watched_events & abi::k_epollet) != 0);
                 }
                 else
                 {
                     write_ready = target->write_ready();
                 }
             }
-            if ((watched_events & k_epollout) != 0 && write_ready)
+            if ((watched_events & abi::k_epollout) != 0 && write_ready)
             {
-                ready_events |= k_epollout;
+                ready_events |= abi::k_epollout;
             }
-            if ((watched_events & k_epollrdhup) != 0 &&
+            if ((watched_events & abi::k_epollrdhup) != 0 &&
                 target->_attrs.filetype == fs::FT_SOCKET)
             {
                 auto *socket_target = static_cast<fs::socket_file *>(target);
                 if (socket_target->epoll_rdhup_ready())
                 {
-                    ready_events |= k_epollrdhup;
+                    ready_events |= abi::k_epollrdhup;
                 }
             }
             return ready_events;
@@ -1385,7 +778,7 @@ namespace syscall
 
         int collect_epoll_ready_events(proc::Pcb *proc,
                                        fs::epoll_file *epoll_obj,
-                                       KernelEpollEvent *events,
+                                       abi::KernelEpollEvent *events,
                                        int maxevents)
         {
             if (proc == nullptr || epoll_obj == nullptr || events == nullptr || maxevents <= 0)
@@ -1405,7 +798,7 @@ namespace syscall
 
                 uint32 current_ready = query_epoll_ready_events(target, entry.events);
                 uint32 deliver_ready = current_ready;
-                if ((entry.events & k_epollet) != 0)
+                if ((entry.events & abi::k_epollet) != 0)
                 {
                     deliver_ready &= ~entry.last_ready_events;
                 }
@@ -1422,7 +815,7 @@ namespace syscall
                     events[ready_count].data = entry.data;
                     ready_count++;
 
-                    if ((entry.events & k_epolloneshot) != 0)
+                    if ((entry.events & abi::k_epolloneshot) != 0)
                     {
                         entry.oneshot_disabled = true;
                     }
@@ -1434,7 +827,7 @@ namespace syscall
 
         int do_epoll_wait_loop(proc::Pcb *proc,
                                fs::epoll_file *epoll_obj,
-                               KernelEpollEvent *events,
+                               abi::KernelEpollEvent *events,
                                int maxevents,
                                int64 timeout_us)
         {
@@ -1597,24 +990,54 @@ namespace syscall
 
         constexpr uint64 kFanAccess = 0x00000001;
         constexpr uint64 kFanModify = 0x00000002;
+        constexpr uint64 kFanAttrib = 0x00000004;
         constexpr uint64 kFanCloseWrite = 0x00000008;
         constexpr uint64 kFanCloseNowrite = 0x00000010;
         constexpr uint64 kFanOpen = 0x00000020;
+        constexpr uint64 kFanMovedFrom = 0x00000040;
+        constexpr uint64 kFanMovedTo = 0x00000080;
+        constexpr uint64 kFanCreate = 0x00000100;
+        constexpr uint64 kFanDelete = 0x00000200;
+        constexpr uint64 kFanDeleteSelf = 0x00000400;
+        constexpr uint64 kFanMoveSelf = 0x00000800;
         constexpr uint64 kFanOpenExec = 0x00001000;
+        constexpr uint64 kFanRename = 0x10000000;
         constexpr uint64 kFanEventOnChild = 0x08000000;
         constexpr uint64 kFanOndir = 0x40000000;
         constexpr uint32 kFanReportPidfd = 0x00000080;
         constexpr uint32 kFanReportTid = 0x00000100;
+        constexpr uint32 kFanReportFid = 0x00000200;
+        constexpr uint32 kFanReportDirFid = 0x00000400;
+        constexpr uint32 kFanReportName = 0x00000800;
+        constexpr uint32 kFanReportTargetFid = 0x00001000;
         constexpr uint32 kFanCloexec = 0x00000001;
         constexpr uint32 kFanNonblock = 0x00000002;
+        constexpr uint32 kFanClassContent = 0x00000004;
+        constexpr uint32 kFanClassPreContent = 0x00000008;
+        constexpr uint32 kFanAllClassBits = kFanClassContent | kFanClassPreContent;
         constexpr uint32 kFanMarkAdd = 0x00000001;
         constexpr uint32 kFanMarkRemove = 0x00000002;
         constexpr uint32 kFanMarkDontFollow = 0x00000004;
         constexpr uint32 kFanMarkOnlydir = 0x00000008;
+        constexpr uint32 kFanMarkMount = 0x00000010;
         constexpr uint32 kFanMarkIgnoredMask = 0x00000020;
+        constexpr uint32 kFanMarkIgnoredSurvModify = 0x00000040;
         constexpr uint32 kFanMarkFlush = 0x00000080;
+        constexpr uint32 kFanMarkFilesystem = 0x00000100;
+        constexpr uint32 kFanMarkIgnore = 0x00000400;
+        constexpr uint32 kFanMarkScopeMask = kFanMarkMount | kFanMarkFilesystem;
         constexpr uint8 kFanotifyMetadataVersion = 3;
         constexpr int kFanNoFd = -1;
+        constexpr uint8 kFanInfoTypeFid = 1;
+        constexpr uint8 kFanInfoTypeDfidName = 2;
+        constexpr uint8 kFanInfoTypeDfid = 3;
+        constexpr uint8 kFanInfoTypeOldDfidName = 10;
+        constexpr uint8 kFanInfoTypeNewDfidName = 12;
+        constexpr uint32 kFanHandleBytes = 8;
+        constexpr int32 kFanHandleType = 1;
+        constexpr int32 kFanFsid0 = 0xF7;
+        constexpr int32 kFanFsid1 = 0x1A;
+        constexpr uint32 kAtHandleFid = 0x00000200;
 
         struct KernelFanotifyEventMetadata
         {
@@ -1630,9 +1053,15 @@ namespace syscall
         struct FanotifyQueuedEvent
         {
             uint64 mask;
-            eastl::string path;
+            eastl::string object_path;
+            eastl::string subject_path;
+            eastl::string name;
+            eastl::string second_name;
             bool is_dir;
+            bool directory_entry;
             int32 pid;
+            uint64 object_ino;
+            uint64 subject_ino;
         };
 
         struct FanotifyMark
@@ -1640,7 +1069,27 @@ namespace syscall
             eastl::string path;
             uint64 mask;
             uint64 ignored_mask;
-            uint32 flags;
+            uint32 scope_flags;
+            uint32 ignore_flags;
+        };
+
+        struct KernelFanotifyEventInfoHeader
+        {
+            uint8 info_type;
+            uint8 pad;
+            uint16 len;
+        };
+
+        struct KernelFanotifyEventInfoFidPrefix
+        {
+            KernelFanotifyEventInfoHeader hdr;
+            int32 fsid[2];
+        };
+
+        struct KernelFileHandleHeader
+        {
+            uint32 handle_bytes;
+            int32 handle_type;
         };
 
         eastl::string parent_path_of(const eastl::string &path)
@@ -1724,6 +1173,21 @@ namespace syscall
             return path.size() > parent.size() &&
                    path.compare(0, parent.size(), parent) == 0 &&
                    path[parent.size()] == '/';
+        }
+
+        uint64 fanotify_path_ino(const eastl::string &path)
+        {
+            if (path.empty())
+            {
+                return 0;
+            }
+            fs::Kstat st{};
+            return vfs_path_stat(path.c_str(), &st, false) == 0 ? st.ino : 0;
+        }
+
+        size_t align_fanotify_record(size_t len)
+        {
+            return (len + 7) & ~static_cast<size_t>(7);
         }
 
         eastl::vector<fs::file *> g_fanotify_files;
@@ -1830,9 +1294,14 @@ namespace syscall
         class FanotifyFile : public RegisteredNotifyFile
         {
         public:
-            explicit FanotifyFile(uint32 init_flags, uint32 event_flags)
+            explicit FanotifyFile(uint32 init_flags,
+                                  uint32 event_flags,
+                                  int32 owner_tgid,
+                                  bool unprivileged)
                 : RegisteredNotifyFile("anon_inode:[fanotify]", g_fanotify_files, "fanotify state"),
-                  _init_flags(init_flags)
+                  _init_flags(init_flags),
+                  _owner_tgid(owner_tgid),
+                  _unprivileged(unprivileged)
             {
                 new (&_stat) fs::Kstat(_attrs.filetype);
                 _stat.mode = _attrs.transMode();
@@ -1856,6 +1325,35 @@ namespace syscall
             off_t lseek(off_t, int) override { return -ESPIPE; }
             long write(uint64, size_t, long, bool) override { return -EINVAL; }
             size_t read_sub_dir(ubuf &) override { return 0; }
+            uint32 init_flags() const { return _init_flags; }
+            bool reports_fid() const
+            {
+                return (_init_flags & (kFanReportFid | kFanReportDirFid)) != 0;
+            }
+
+            eastl::string proc_fdinfo() const override
+            {
+                eastl::string result;
+                _state_lock.acquire();
+                for (const FanotifyMark &mark : _marks)
+                {
+                    if (mark.ignored_mask == 0)
+                    {
+                        continue;
+                    }
+                    char line[160];
+                    snprintf(line,
+                             sizeof(line),
+                             "fanotify ino:%lx sdev:0 mflags: %x mask:%lx ignored_mask:%lx\n",
+                             static_cast<unsigned long>(fanotify_path_ino(mark.path)),
+                             mark.scope_flags | mark.ignore_flags,
+                             static_cast<unsigned long>(mark.mask),
+                             static_cast<unsigned long>(mark.ignored_mask));
+                    result += line;
+                }
+                _state_lock.release();
+                return result;
+            }
 
             long read(uint64 buf, size_t len, long, bool) override
             {
@@ -1895,19 +1393,159 @@ namespace syscall
                         break;
                     }
                     FanotifyQueuedEvent event = _events.front();
-                    _events.erase(_events.begin());
+                    _state_lock.release();
+
+                    size_t event_len = sizeof(KernelFanotifyEventMetadata);
+                    uint8 first_info_type = 0;
+                    uint64 first_ino = 0;
+                    eastl::string first_name;
+                    uint8 second_info_type = 0;
+                    uint64 second_ino = 0;
+                    eastl::string second_name;
+                    uint8 third_info_type = 0;
+                    uint64 third_ino = 0;
+
+                    if (reports_fid())
+                    {
+                        bool report_name = (_init_flags & kFanReportName) != 0;
+                        bool report_dir_fid = (_init_flags & kFanReportDirFid) != 0;
+                        bool report_target = (_init_flags & kFanReportTargetFid) != 0;
+                        bool rename_event = (event.mask & kFanRename) != 0;
+                        bool non_dir_self_event =
+                            !event.is_dir &&
+                            (event.mask & (kFanDeleteSelf | kFanMoveSelf)) != 0;
+                        if (non_dir_self_event)
+                        {
+                            first_info_type = kFanInfoTypeFid;
+                            first_ino = event.subject_ino;
+                        }
+                        else if (report_name)
+                        {
+                            if (rename_event && event.name.empty())
+                            {
+                                first_info_type = kFanInfoTypeNewDfidName;
+                                first_ino = event.object_ino;
+                                first_name = event.second_name;
+                            }
+                            else
+                            {
+                                first_info_type = rename_event
+                                                      ? kFanInfoTypeOldDfidName
+                                                      : kFanInfoTypeDfidName;
+                                first_ino = event.object_ino;
+                                first_name = event.name;
+                                if (rename_event && !event.second_name.empty())
+                                {
+                                    second_info_type = kFanInfoTypeNewDfidName;
+                                    second_ino = event.object_ino;
+                                    second_name = event.second_name;
+                                }
+                            }
+                        }
+                        else if (report_dir_fid)
+                        {
+                            first_info_type = kFanInfoTypeDfid;
+                            first_ino = event.object_ino;
+                        }
+                        else
+                        {
+                            first_info_type = kFanInfoTypeFid;
+                            first_ino = event.subject_ino;
+                        }
+
+                        if (report_target && event.subject_ino != 0 &&
+                            event.subject_ino != first_ino)
+                        {
+                            if (second_info_type == 0)
+                            {
+                                second_info_type = kFanInfoTypeFid;
+                                second_ino = event.subject_ino;
+                            }
+                            else
+                            {
+                                third_info_type = kFanInfoTypeFid;
+                                third_ino = event.subject_ino;
+                            }
+                        }
+                        else if ((_init_flags & kFanReportFid) != 0 &&
+                                 !event.directory_entry &&
+                                 first_info_type != kFanInfoTypeFid &&
+                                 event.subject_ino != 0 &&
+                                 event.subject_ino != first_ino)
+                        {
+                            if (second_info_type == 0)
+                            {
+                                second_info_type = kFanInfoTypeFid;
+                                second_ino = event.subject_ino;
+                            }
+                            else
+                            {
+                                third_info_type = kFanInfoTypeFid;
+                                third_ino = event.subject_ino;
+                            }
+                        }
+
+                        event_len += fid_info_size(first_name);
+                        if (second_info_type != 0)
+                        {
+                            event_len += fid_info_size(second_name);
+                        }
+                        if (third_info_type != 0)
+                        {
+                            event_len += fid_info_size("");
+                        }
+                    }
+
+                    if (copied + event_len > len)
+                    {
+                        if (copied == 0)
+                        {
+                            return -EINVAL;
+                        }
+                        break;
+                    }
+
+                    _state_lock.acquire();
+                    if (!_events.empty())
+                    {
+                        _events.erase(_events.begin());
+                    }
                     _state_lock.release();
 
                     KernelFanotifyEventMetadata meta{};
-                    meta.event_len = sizeof(KernelFanotifyEventMetadata);
+                    meta.event_len = static_cast<uint32>(event_len);
                     meta.vers = kFanotifyMetadataVersion;
                     meta.metadata_len = sizeof(KernelFanotifyEventMetadata);
                     meta.mask = event.mask;
-                    meta.fd = create_event_fd(event.path, event.is_dir);
+                    meta.fd = (_unprivileged || reports_fid())
+                                  ? kFanNoFd
+                                  : create_event_fd(event.subject_path, event.is_dir);
                     meta.pid = event.pid;
 
                     memmove(reinterpret_cast<void *>(buf + copied), &meta, sizeof(meta));
-                    copied += sizeof(meta);
+                    size_t event_offset = copied + sizeof(meta);
+                    if (first_info_type != 0)
+                    {
+                        event_offset += write_fid_info(buf + event_offset,
+                                                       first_info_type,
+                                                       first_ino,
+                                                       first_name);
+                    }
+                    if (second_info_type != 0)
+                    {
+                        event_offset += write_fid_info(buf + event_offset,
+                                                       second_info_type,
+                                                       second_ino,
+                                                       second_name);
+                    }
+                    if (third_info_type != 0)
+                    {
+                        event_offset += write_fid_info(buf + event_offset,
+                                                       third_info_type,
+                                                       third_ino,
+                                                       "");
+                    }
+                    copied += event_len;
                 }
                 return static_cast<long>(copied);
             }
@@ -1917,28 +1555,51 @@ namespace syscall
                 _state_lock.acquire();
                 if ((flags & kFanMarkFlush) != 0)
                 {
-                    _marks.clear();
+                    uint32 flush_scope = flags & kFanMarkScopeMask;
+                    if (flush_scope == 0)
+                    {
+                        _marks.clear();
+                    }
+                    else
+                    {
+                        for (auto it = _marks.begin(); it != _marks.end();)
+                        {
+                            if (it->scope_flags == flush_scope)
+                            {
+                                it = _marks.erase(it);
+                            }
+                            else
+                            {
+                                ++it;
+                            }
+                        }
+                    }
                     _events.clear();
                     _state_lock.release();
                     return 0;
                 }
 
+                uint32 scope_flags = flags & kFanMarkScopeMask;
+                bool update_ignored_mask =
+                    (flags & (kFanMarkIgnoredMask | kFanMarkIgnore)) != 0;
                 if ((flags & kFanMarkAdd) != 0)
                 {
-                    bool update_ignored_mask = (flags & kFanMarkIgnoredMask) != 0;
                     for (FanotifyMark &mark : _marks)
                     {
-                        if (mark.path == path)
+                        if (mark.path == path && mark.scope_flags == scope_flags)
                         {
                             if (update_ignored_mask)
                             {
                                 mark.ignored_mask |= mask;
+                                mark.ignore_flags |=
+                                    flags & (kFanMarkIgnoredMask |
+                                             kFanMarkIgnore |
+                                             kFanMarkIgnoredSurvModify);
                             }
                             else
                             {
                                 mark.mask |= mask;
                             }
-                            mark.flags = flags;
                             _state_lock.release();
                             return 0;
                         }
@@ -1946,17 +1607,21 @@ namespace syscall
                     _marks.push_back(FanotifyMark{path,
                                                   update_ignored_mask ? 0 : mask,
                                                   update_ignored_mask ? mask : 0,
-                                                  flags});
+                                                  scope_flags,
+                                                  update_ignored_mask
+                                                      ? flags & (kFanMarkIgnoredMask |
+                                                                 kFanMarkIgnore |
+                                                                 kFanMarkIgnoredSurvModify)
+                                                      : 0});
                     _state_lock.release();
                     return 0;
                 }
 
                 if ((flags & kFanMarkRemove) != 0)
                 {
-                    bool update_ignored_mask = (flags & kFanMarkIgnoredMask) != 0;
                     for (auto it = _marks.begin(); it != _marks.end(); ++it)
                     {
-                        if (it->path != path)
+                        if (it->path != path || it->scope_flags != scope_flags)
                         {
                             continue;
                         }
@@ -1976,7 +1641,7 @@ namespace syscall
                         return 0;
                     }
                     _state_lock.release();
-                    return 0;
+                    return -ENOENT;
                 }
 
                 _state_lock.release();
@@ -1985,58 +1650,398 @@ namespace syscall
 
             void queue_event_for_path(const eastl::string &path, uint64 event_mask, bool is_dir)
             {
-                _state_lock.acquire();
-                for (const FanotifyMark &mark : _marks)
+                eastl::string object_path = is_dir ? path : parent_path_of(path);
+                eastl::string event_name = is_dir ? "." : basename_of(path);
+                queue_event(object_path,
+                            path,
+                            event_name,
+                            "",
+                            event_mask,
+                            is_dir,
+                            false,
+                            fanotify_path_ino(object_path),
+                            fanotify_path_ino(path));
+            }
+
+            void queue_directory_event(const eastl::string &directory_path,
+                                       const eastl::string &subject_path,
+                                       const eastl::string &name,
+                                       const eastl::string &second_name,
+                                       uint64 event_mask,
+                                       bool subject_is_dir,
+                                       uint64 directory_ino,
+                                       uint64 subject_ino)
+            {
+                queue_event(directory_path,
+                            subject_path,
+                            name,
+                            second_name,
+                            event_mask,
+                            subject_is_dir,
+                            true,
+                            directory_ino,
+                            subject_ino);
+            }
+
+            void queue_self_event(const eastl::string &path,
+                                  uint64 event_mask,
+                                  bool is_dir,
+                                  uint64 ino)
+            {
+                // 非目录 self 事件只有 FAN_REPORT_FID 才有可报告的对象句柄。
+                if (!is_dir && (_init_flags & kFanReportFid) == 0)
                 {
-                    uint64 effective_event_mask = event_mask;
-                    if ((event_mask & kFanOpenExec) != 0)
-                    {
-                        // Linux 把 exec 打开同时视作 FAN_OPEN，并在监听者同时请求
-                        // FAN_OPEN_EXEC 时把两个 bit 合并进同一个事件。
-                        effective_event_mask |= kFanOpen;
-                    }
-                    uint64 delivered_mask = effective_event_mask & mark.mask;
-                    delivered_mask &= ~mark.ignored_mask;
-                    if (delivered_mask == 0)
-                    {
-                        continue;
-                    }
-                    if (is_dir && (mark.mask & kFanOndir) == 0)
-                    {
-                        continue;
-                    }
+                    return;
+                }
+                queue_event(path,
+                            path,
+                            is_dir ? "." : "",
+                            "",
+                            event_mask,
+                            is_dir,
+                            false,
+                            ino,
+                            ino);
+            }
 
-                    bool matched = mark.path == path;
-                    if (!matched && (mark.mask & kFanEventOnChild) != 0)
-                    {
-                        matched = parent_path_of(path) == mark.path;
-                    }
-                    if (!matched)
-                    {
-                        continue;
-                    }
-                    if ((mark.flags & kFanMarkOnlydir) != 0 && !is_dir)
-                    {
-                        continue;
-                    }
+            void queue_rename_events(const eastl::string &old_path,
+                                     const eastl::string &new_path,
+                                     bool is_dir,
+                                     uint64 subject_ino,
+                                     uint64 old_parent_ino,
+                                     uint64 new_parent_ino)
+            {
+                const eastl::string old_parent = parent_path_of(old_path);
+                const eastl::string new_parent = parent_path_of(new_path);
+                const eastl::string old_name = basename_of(old_path);
+                const eastl::string new_name = basename_of(new_path);
 
-                    proc::Pcb *trigger = proc::k_pm.get_cur_pcb();
-                    int32 report_pid = 0;
-                    if (trigger != nullptr)
+                if (is_dir)
+                {
+                    queue_self_event(old_path, kFanMoveSelf, true, subject_ino);
+                }
+
+                if (old_parent == new_parent)
+                {
+                    queue_event(old_parent,
+                                old_path,
+                                old_name,
+                                new_name,
+                                kFanRename,
+                                is_dir,
+                                true,
+                                old_parent_ino,
+                                subject_ino);
+                }
+                else
+                {
+                    // 跨目录 rename 的两端可能分别被不同 inode mark 观察。
+                    // subject_path 指向另一端，使该端目录上的 ignore mark 也能抑制 FAN_RENAME。
+                    queue_event(old_parent,
+                                new_parent,
+                                old_name,
+                                "",
+                                kFanRename,
+                                is_dir,
+                                true,
+                                old_parent_ino,
+                                subject_ino);
+                    queue_event(new_parent,
+                                old_parent,
+                                "",
+                                new_name,
+                                kFanRename,
+                                is_dir,
+                                true,
+                                new_parent_ino,
+                                subject_ino);
+                }
+
+                queue_event(old_parent,
+                            old_path,
+                            old_name,
+                            "",
+                            kFanMovedFrom,
+                            is_dir,
+                            true,
+                            old_parent_ino,
+                            subject_ino);
+                queue_event(new_parent,
+                            new_path,
+                            new_name,
+                            "",
+                            kFanMovedTo,
+                            is_dir,
+                            true,
+                            new_parent_ino,
+                            subject_ino);
+
+                if (!is_dir)
+                {
+                    queue_self_event(old_path, kFanMoveSelf, false, subject_ino);
+                }
+
+                // inode mark 跟随 inode，而不是绑定旧路径字符串。
+                _state_lock.acquire();
+                for (FanotifyMark &mark : _marks)
+                {
+                    if (!path_is_equal_or_child(mark.path, old_path))
                     {
-                        report_pid = (_init_flags & kFanReportTid) != 0
-                                         ? static_cast<int32>(trigger->_tid)
-                                         : static_cast<int32>(trigger->_tgid);
+                        continue;
                     }
-                    _events.push_back(FanotifyQueuedEvent{delivered_mask, path, is_dir, report_pid});
+                    eastl::string suffix = mark.path.substr(old_path.size());
+                    mark.path = new_path + suffix;
                 }
                 _state_lock.release();
             }
 
         private:
+            void queue_event(const eastl::string &object_path,
+                             const eastl::string &subject_path,
+                             const eastl::string &name,
+                             const eastl::string &second_name,
+                             uint64 event_mask,
+                             bool is_dir,
+                             bool directory_entry,
+                             uint64 object_ino,
+                             uint64 subject_ino)
+            {
+                _state_lock.acquire();
+                uint64 effective_event_mask = event_mask;
+                if ((event_mask & kFanOpenExec) != 0)
+                {
+                    effective_event_mask |= kFanOpen;
+                }
+                uint64 event_kind =
+                    effective_event_mask & ~(kFanOndir | kFanEventOnChild);
+                uint64 selected_mask = 0;
+                uint64 ignored_mask = 0;
+
+                for (FanotifyMark &mark : _marks)
+                {
+                    bool exact_subject = mark.path == subject_path;
+                    bool exact_object = mark.path == object_path;
+                    bool immediate_child =
+                        parent_path_of(subject_path) == mark.path;
+                    bool scoped_match =
+                        mark.scope_flags != 0 &&
+                        (path_is_equal_or_child(subject_path, mark.path) ||
+                         path_is_equal_or_child(object_path, mark.path));
+
+                    if ((event_kind & kFanModify) != 0 &&
+                        exact_subject &&
+                        (mark.ignore_flags & kFanMarkIgnoredSurvModify) == 0)
+                    {
+                        mark.ignored_mask = 0;
+                        mark.ignore_flags = 0;
+                    }
+
+                    bool positive_match =
+                        scoped_match ||
+                        (!directory_entry && exact_subject) ||
+                        (directory_entry && exact_object);
+                    bool self_event =
+                        (event_kind & (kFanDeleteSelf | kFanMoveSelf)) != 0;
+                    if (!positive_match && !self_event && immediate_child &&
+                        (mark.mask & kFanEventOnChild) != 0)
+                    {
+                        positive_match = true;
+                    }
+                    if (positive_match &&
+                        (!is_dir || (mark.mask & kFanOndir) != 0))
+                    {
+                        selected_mask |= event_kind & mark.mask;
+                    }
+
+                    bool ignore_match = scoped_match || exact_subject;
+                    if (!ignore_match && directory_entry && exact_object)
+                    {
+                        // 目录 inode 上的 ignore mask 只有 FAN_EVENT_ON_CHILD
+                        // 才抑制普通子项事件；FAN_RENAME 本身属于目录事件。
+                        ignore_match =
+                            (event_kind & (kFanRename |
+                                           kFanMovedFrom |
+                                           kFanMovedTo)) != 0 ||
+                            (mark.ignored_mask & kFanEventOnChild) != 0;
+                    }
+                    if (!ignore_match && immediate_child)
+                    {
+                        bool child_qualified =
+                            (mark.ignored_mask & kFanEventOnChild) != 0;
+                        ignore_match = child_qualified;
+                    }
+                    if (ignore_match && is_dir &&
+                        (mark.ignore_flags & kFanMarkIgnore) != 0 &&
+                        (mark.ignored_mask & kFanOndir) == 0)
+                    {
+                        ignore_match = false;
+                    }
+                    if (ignore_match)
+                    {
+                        ignored_mask |= event_kind & mark.ignored_mask;
+                    }
+                }
+
+                uint64 delivered_mask = selected_mask & ~ignored_mask;
+                if (delivered_mask == 0)
+                {
+                    _state_lock.release();
+                    return;
+                }
+                if (is_dir && reports_fid())
+                {
+                    delivered_mask |= kFanOndir;
+                }
+
+                proc::Pcb *trigger = proc::k_pm.get_cur_pcb();
+                int32 report_pid = 0;
+                if (trigger != nullptr)
+                {
+                    int32 trigger_tgid = static_cast<int32>(trigger->_tgid);
+                    if (!_unprivileged || trigger_tgid == _owner_tgid)
+                    {
+                        report_pid = (_init_flags & kFanReportTid) != 0
+                                         ? static_cast<int32>(trigger->_tid)
+                                         : trigger_tgid;
+                    }
+                }
+
+                if ((delivered_mask & kFanRename) == 0)
+                {
+                    for (size_t i = _events.size(); i > 0; --i)
+                    {
+                        FanotifyQueuedEvent &existing = _events[i - 1];
+                        const uint64 existing_kind =
+                            existing.mask & ~(kFanOndir | kFanEventOnChild);
+                        const uint64 incoming_kind =
+                            delivered_mask & ~(kFanOndir | kFanEventOnChild);
+                        const bool report_name =
+                            (_init_flags & kFanReportName) != 0;
+                        const bool report_target =
+                            (_init_flags & kFanReportTargetFid) != 0;
+                        const bool report_fid =
+                            (_init_flags & kFanReportFid) != 0;
+                        const bool existing_has_child_fid =
+                            report_target ||
+                            (!existing.directory_entry && report_fid &&
+                             existing.subject_ino != existing.object_ino);
+                        const bool incoming_has_child_fid =
+                            report_target ||
+                            (!directory_entry && report_fid &&
+                             subject_ino != object_ino);
+                        const bool existing_self =
+                            (existing.mask & (kFanDeleteSelf | kFanMoveSelf)) != 0;
+                        const bool incoming_self =
+                            (delivered_mask & (kFanDeleteSelf | kFanMoveSelf)) != 0;
+                        const bool compare_names =
+                            report_name &&
+                            !existing_self &&
+                            !incoming_self;
+                        const bool same_identity =
+                            compare_names
+                                ? (existing.object_path == object_path &&
+                                   existing.subject_path == subject_path &&
+                                   existing.name == name &&
+                                   existing.second_name == second_name)
+                                : (existing.object_ino == object_ino &&
+                                   existing.subject_ino == subject_ino);
+                        if (same_identity &&
+                            existing_has_child_fid == incoming_has_child_fid &&
+                            existing.is_dir == is_dir &&
+                            existing_self == incoming_self &&
+                            (existing.directory_entry == directory_entry ||
+                             (report_target && !incoming_self)) &&
+                            existing.pid == report_pid)
+                        {
+                            if ((existing_kind & incoming_kind) != 0)
+                            {
+                                // 同一个对象上的同类重复通知只保留一份；例如目录经由
+                                // 临时目录连续 rename 时，FAN_MOVE_SELF 不应重复排队。
+                                if ((incoming_kind & ~existing_kind) == 0)
+                                {
+                                    _state_lock.release();
+                                    return;
+                                }
+                                continue;
+                            }
+                            existing.mask |= delivered_mask;
+                            _state_lock.release();
+                            return;
+                        }
+                    }
+                }
+
+                _events.push_back(FanotifyQueuedEvent{delivered_mask,
+                                                      object_path,
+                                                      subject_path,
+                                                      name,
+                                                      second_name,
+                                                      is_dir,
+                                                      directory_entry,
+                                                      report_pid,
+                                                      object_ino,
+                                                      subject_ino});
+                _state_lock.release();
+            }
+
             uint32 _init_flags;
+            int32 _owner_tgid;
+            bool _unprivileged;
             eastl::vector<FanotifyMark> _marks;
             eastl::vector<FanotifyQueuedEvent> _events;
+
+            size_t fid_info_size(const eastl::string &name) const
+            {
+                size_t raw_size = sizeof(KernelFanotifyEventInfoFidPrefix) +
+                                  sizeof(KernelFileHandleHeader) +
+                                  kFanHandleBytes;
+                if (!name.empty())
+                {
+                    raw_size += name.size() + 1;
+                }
+                return align_fanotify_record(raw_size);
+            }
+
+            size_t write_fid_info(uint64 destination,
+                                  uint8 info_type,
+                                  uint64 ino,
+                                  const eastl::string &name) const
+            {
+                size_t record_len = fid_info_size(name);
+                memset(reinterpret_cast<void *>(destination), 0, record_len);
+
+                KernelFanotifyEventInfoFidPrefix prefix{};
+                prefix.hdr.info_type = info_type;
+                prefix.hdr.len = static_cast<uint16>(record_len);
+                prefix.fsid[0] = kFanFsid0;
+                prefix.fsid[1] = kFanFsid1;
+                memmove(reinterpret_cast<void *>(destination), &prefix, sizeof(prefix));
+
+                KernelFileHandleHeader handle{};
+                handle.handle_bytes = kFanHandleBytes;
+                handle.handle_type = kFanHandleType;
+                size_t offset = sizeof(prefix);
+                memmove(reinterpret_cast<void *>(destination + offset),
+                        &handle,
+                        sizeof(handle));
+                offset += sizeof(handle);
+
+                uint32 handle_data[2] = {
+                    static_cast<uint32>(ino & 0xffffffffu),
+                    static_cast<uint32>((ino >> 32) & 0xffffffffu),
+                };
+                memmove(reinterpret_cast<void *>(destination + offset),
+                        handle_data,
+                        sizeof(handle_data));
+                offset += sizeof(handle_data);
+                if (!name.empty())
+                {
+                    memmove(reinterpret_cast<void *>(destination + offset),
+                            name.c_str(),
+                            name.size() + 1);
+                }
+                return record_len;
+            }
 
             int create_event_fd(const eastl::string &path, bool is_dir)
             {
@@ -2489,6 +2494,130 @@ namespace syscall
             }
         }
 
+        void notify_fanotify_directory_event(const eastl::string &directory_path,
+                                             const eastl::string &subject_path,
+                                             uint64 event_mask,
+                                             bool subject_is_dir,
+                                             uint64 directory_ino,
+                                             uint64 subject_ino)
+        {
+            if (directory_path.empty() || subject_path.empty())
+            {
+                return;
+            }
+
+            eastl::vector<fs::file *> pinned = pin_notify_files(g_fanotify_files);
+            for (fs::file *candidate : pinned)
+            {
+                if (candidate != nullptr && candidate->is_fanotify_file())
+                {
+                    static_cast<FanotifyFile *>(candidate)->queue_directory_event(
+                        directory_path,
+                        subject_path,
+                        basename_of(subject_path),
+                        "",
+                        event_mask,
+                        subject_is_dir,
+                        directory_ino,
+                        subject_ino);
+                }
+                candidate->free_file();
+            }
+        }
+
+        void notify_fanotify_self_event(const eastl::string &path,
+                                        uint64 event_mask,
+                                        bool is_dir,
+                                        uint64 ino)
+        {
+            if (path.empty())
+            {
+                return;
+            }
+
+            eastl::vector<fs::file *> pinned = pin_notify_files(g_fanotify_files);
+            for (fs::file *candidate : pinned)
+            {
+                if (candidate != nullptr && candidate->is_fanotify_file())
+                {
+                    static_cast<FanotifyFile *>(candidate)->queue_self_event(
+                        path, event_mask, is_dir, ino);
+                }
+                candidate->free_file();
+            }
+        }
+
+        void notify_fanotify_rename(const eastl::string &old_path,
+                                    const eastl::string &new_path,
+                                    bool is_dir,
+                                    uint64 subject_ino,
+                                    uint64 old_parent_ino,
+                                    uint64 new_parent_ino)
+        {
+            if (old_path.empty() || new_path.empty())
+            {
+                return;
+            }
+
+            eastl::vector<fs::file *> pinned = pin_notify_files(g_fanotify_files);
+            for (fs::file *candidate : pinned)
+            {
+                if (candidate != nullptr && candidate->is_fanotify_file())
+                {
+                    static_cast<FanotifyFile *>(candidate)->queue_rename_events(
+                        old_path,
+                        new_path,
+                        is_dir,
+                        subject_ino,
+                        old_parent_ino,
+                        new_parent_ino);
+                }
+                candidate->free_file();
+            }
+        }
+
+        void update_open_file_paths_after_rename(const eastl::string &old_path,
+                                                 const eastl::string &new_path)
+        {
+            eastl::vector<fs::file *> updated;
+            for (uint i = 0; i < proc::num_process; ++i)
+            {
+                proc::Pcb *pcb = &proc::k_proc_pool[i];
+                if (pcb->_state == proc::ProcState::UNUSED || pcb->_ofile == nullptr)
+                {
+                    continue;
+                }
+
+                pcb->_ofile->_lock.acquire();
+                for (uint fd = 0; fd < proc::max_open_files; ++fd)
+                {
+                    fs::file *candidate = pcb->_ofile->_ofile_ptr[fd];
+                    if (candidate == nullptr ||
+                        eastl::find(updated.begin(), updated.end(), candidate) != updated.end())
+                    {
+                        continue;
+                    }
+
+                    eastl::string backing = normalize_watch_path(candidate->backing_path());
+                    if (!path_is_equal_or_child(backing, old_path))
+                    {
+                        continue;
+                    }
+
+                    eastl::string suffix = backing.substr(old_path.size());
+                    eastl::string replacement = new_path + suffix;
+                    candidate->set_backing_path(replacement);
+                    if (path_is_equal_or_child(normalize_watch_path(candidate->_path_name), old_path))
+                    {
+                        candidate->_path_name =
+                            new_path + normalize_watch_path(candidate->_path_name).substr(old_path.size());
+                    }
+                    updated.push_back(candidate);
+                }
+                pcb->_ofile->_lock.release();
+            }
+        }
+
         void notify_inotify_path_event(const eastl::string &path,
                                        uint32 event_mask,
                                        bool is_dir,
@@ -2628,6 +2757,283 @@ namespace syscall
             return fd;
         }
 
+        class EventFdFile final : public fs::file
+        {
+        public:
+            EventFdFile(uint64 initial_value, int flags)
+                : fs::file(fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0600),
+                           eastl::string("anon_inode:[eventfd]")),
+                  _counter(initial_value),
+                  _semaphore((flags & k_efd_semaphore) != 0)
+            {
+                new (&_stat) fs::Kstat(_attrs.filetype);
+                _stat.mode = _attrs.transMode();
+                is_virtual = true;
+                refcnt = 1;
+                lwext4_file_struct.flags = O_RDWR | (flags & O_NONBLOCK);
+            }
+
+            long read(uint64 buf, size_t len, long, bool) override
+            {
+                if (len < sizeof(uint64))
+                {
+                    return -EINVAL;
+                }
+
+                while (true)
+                {
+                    _state_lock.acquire();
+                    if (_counter != 0)
+                    {
+                        uint64 value = _semaphore ? 1 : _counter;
+                        _counter -= value;
+                        _state_lock.release();
+                        memmove(reinterpret_cast<void *>(buf), &value, sizeof(value));
+                        return sizeof(value);
+                    }
+                    _state_lock.release();
+
+                    if ((lwext4_file_struct.flags & O_NONBLOCK) != 0)
+                    {
+                        return -EAGAIN;
+                    }
+                    proc::Pcb *current = proc::k_pm.get_cur_pcb();
+                    if (current == nullptr || current->is_killed() ||
+                        proc::ipc::signal::has_unmasked_signal_pending(current))
+                    {
+                        return -EINTR;
+                    }
+                    proc::k_scheduler.yield();
+                }
+            }
+
+            long write(uint64 buf, size_t len, long, bool) override
+            {
+                if (len < sizeof(uint64))
+                {
+                    return -EINVAL;
+                }
+
+                uint64 value = 0;
+                memmove(&value, reinterpret_cast<const void *>(buf), sizeof(value));
+                if (value == k_eventfd_invalid_value)
+                {
+                    return -EINVAL;
+                }
+
+                while (true)
+                {
+                    _state_lock.acquire();
+                    if (_counter <= k_eventfd_max_value - value)
+                    {
+                        _counter += value;
+                        _state_lock.release();
+                        return sizeof(value);
+                    }
+                    _state_lock.release();
+
+                    if ((lwext4_file_struct.flags & O_NONBLOCK) != 0)
+                    {
+                        return -EAGAIN;
+                    }
+                    proc::Pcb *current = proc::k_pm.get_cur_pcb();
+                    if (current == nullptr || current->is_killed() ||
+                        proc::ipc::signal::has_unmasked_signal_pending(current))
+                    {
+                        return -EINTR;
+                    }
+                    proc::k_scheduler.yield();
+                }
+            }
+
+            bool read_ready() override
+            {
+                _state_lock.acquire();
+                bool ready = _counter != 0;
+                _state_lock.release();
+                return ready;
+            }
+
+            bool write_ready() override
+            {
+                _state_lock.acquire();
+                bool ready = _counter < k_eventfd_max_value;
+                _state_lock.release();
+                return ready;
+            }
+
+            off_t lseek(off_t, int) override { return -ESPIPE; }
+            size_t read_sub_dir(ubuf &) override { return 0; }
+
+            eastl::string proc_fdinfo() const override
+            {
+                char buffer[64];
+                _state_lock.acquire();
+                uint64 counter = _counter;
+                _state_lock.release();
+                snprintf(buffer, sizeof(buffer), "eventfd-count:\t%llx\n",
+                         static_cast<unsigned long long>(counter));
+                return eastl::string(buffer);
+            }
+
+        private:
+            static constexpr int k_efd_semaphore = 1;
+            static constexpr uint64 k_eventfd_invalid_value = ~0ULL;
+            static constexpr uint64 k_eventfd_max_value = ~0ULL - 1;
+
+            mutable SpinLock _state_lock;
+            uint64 _counter;
+            bool _semaphore;
+        };
+
+        struct KernelSignalfdSiginfo
+        {
+            uint32 signo;
+            int32 error;
+            int32 code;
+            uint32 pid;
+            uint32 uid;
+            int32 fd;
+            uint32 tid;
+            uint32 band;
+            uint32 overrun;
+            uint32 trapno;
+            int32 status;
+            int32 value_int;
+            uint64 value_ptr;
+            uint64 utime;
+            uint64 stime;
+            uint64 addr;
+            uint16 addr_lsb;
+            uint16 pad2;
+            int32 syscall;
+            uint64 call_addr;
+            uint32 arch;
+            uint8 pad[28];
+        };
+        static_assert(sizeof(KernelSignalfdSiginfo) == 128,
+                      "signalfd_siginfo ABI size mismatch");
+
+        class SignalFdFile final : public fs::file
+        {
+        public:
+            SignalFdFile(uint64 mask, int flags)
+                : fs::file(fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0600),
+                           eastl::string("anon_inode:[signalfd]")),
+                  _mask(mask)
+            {
+                _state_lock.init("signalfd state");
+                new (&_stat) fs::Kstat(_attrs.filetype);
+                _stat.mode = _attrs.transMode();
+                is_virtual = true;
+                refcnt = 1;
+                lwext4_file_struct.flags = O_RDONLY | (flags & O_NONBLOCK);
+            }
+
+            bool is_signalfd_file() const override { return true; }
+
+            void set_mask(uint64 mask)
+            {
+                _state_lock.acquire();
+                _mask = mask;
+                _state_lock.release();
+            }
+
+            long read(uint64 buf, size_t len, long, bool) override
+            {
+                if (len < sizeof(KernelSignalfdSiginfo))
+                {
+                    return -EINVAL;
+                }
+
+                while (true)
+                {
+                    proc::Pcb *current = proc::k_pm.get_cur_pcb();
+                    if (current == nullptr)
+                    {
+                        return -ESRCH;
+                    }
+
+                    _state_lock.acquire();
+                    uint64 mask = _mask;
+                    _state_lock.release();
+                    uint64 available = current->_signal & mask;
+                    if (available != 0)
+                    {
+                        // freestanding RISC-V 构建不能依赖编译器生成的 __ctzdi2。
+                        // 信号集合固定为 64 位，直接扫描最低置位即可。
+                        int signum = 1;
+                        while ((available & 1ULL) == 0)
+                        {
+                            available >>= 1;
+                            ++signum;
+                        }
+                        KernelSignalfdSiginfo info{};
+                        info.signo = static_cast<uint32>(signum);
+                        info.pid = static_cast<uint32>(current->_pid);
+                        info.uid = current->_uid;
+                        if ((current->_siginfo_mask & (1ULL << (signum - 1))) != 0)
+                        {
+                            const proc::ipc::signal::LinuxSigInfo &queued =
+                                current->_queued_siginfo[signum];
+                            info.error = queued.si_errno;
+                            info.code = queued.si_code;
+                            info.pid = static_cast<uint32>(queued.si_pid);
+                            info.uid = queued.si_uid;
+                            info.value_int = queued.si_value.sival_int;
+                            info.value_ptr = queued.si_value.sival_ptr;
+                        }
+                        proc::ipc::signal::clear_signal(current, signum);
+                        memmove(reinterpret_cast<void *>(buf), &info, sizeof(info));
+                        return sizeof(info);
+                    }
+
+                    if ((lwext4_file_struct.flags & O_NONBLOCK) != 0)
+                    {
+                        return -EAGAIN;
+                    }
+                    if (current->is_killed() ||
+                        proc::ipc::signal::has_unmasked_signal_pending(current))
+                    {
+                        return -EINTR;
+                    }
+                    proc::k_scheduler.yield();
+                }
+            }
+
+            long write(uint64, size_t, long, bool) override { return -EINVAL; }
+            bool read_ready() override
+            {
+                proc::Pcb *current = proc::k_pm.get_cur_pcb();
+                if (current == nullptr)
+                {
+                    return false;
+                }
+                _state_lock.acquire();
+                uint64 mask = _mask;
+                _state_lock.release();
+                return (current->_signal & mask) != 0;
+            }
+            bool write_ready() override { return false; }
+            off_t lseek(off_t, int) override { return -ESPIPE; }
+            size_t read_sub_dir(ubuf &) override { return 0; }
+
+            eastl::string proc_fdinfo() const override
+            {
+                _state_lock.acquire();
+                uint64 mask = _mask;
+                _state_lock.release();
+                char buffer[64];
+                snprintf(buffer, sizeof(buffer), "sigmask:\t%016llx\n",
+                         static_cast<unsigned long long>(mask));
+                return eastl::string(buffer);
+            }
+
+        private:
+            mutable SpinLock _state_lock;
+            uint64 _mask;
+        };
+
         eastl::string make_pidfd_name(int pid)
         {
             char buffer[64];
@@ -2706,7 +3112,7 @@ namespace syscall
             st.f_flags = 0;
         }
 
-        bool timeval_to_usec_checked(const KernelTimeValOld &tv, uint64 &total_us)
+        bool timeval_to_usec_checked(const abi::KernelTimeValOld &tv, uint64 &total_us)
         {
             if (tv.tv_sec < 0 || tv.tv_usec < 0 || tv.tv_usec >= (long)k_usec_per_sec)
             {
@@ -2723,303 +3129,12 @@ namespace syscall
             return true;
         }
 
-        KernelTimeValOld usec_to_timeval(uint64 total_us)
+        abi::KernelTimeValOld usec_to_timeval(uint64 total_us)
         {
-            KernelTimeValOld tv{};
+            abi::KernelTimeValOld tv{};
             tv.tv_sec = (long)(total_us / k_usec_per_sec);
             tv.tv_usec = (long)(total_us % k_usec_per_sec);
             return tv;
-        }
-
-        constexpr size_t k_syscall_io_chunk_size = 64 * 1024;
-        constexpr size_t k_syscall_io_inline_buffer_size = 2 * 1024;
-        constexpr int k_syscall_iovec_inline_count = 16;
-        constexpr long k_direct_user_io_unimplemented = -38;
-        constexpr long k_direct_user_read_unimplemented = k_direct_user_io_unimplemented;
-        constexpr long k_direct_user_write_unimplemented = k_direct_user_io_unimplemented;
-
-        inline size_t min_size(size_t lhs, size_t rhs)
-        {
-            return lhs < rhs ? lhs : rhs;
-        }
-
-        void *alloc_syscall_temp_buffer(size_t size)
-        {
-            if (size == 0)
-            {
-                size = 1;
-            }
-            return mem::k_pmm.kmalloc(size);
-        }
-
-        void free_syscall_temp_buffer(void *ptr)
-        {
-            if (ptr != nullptr)
-            {
-                mem::k_pmm.free_page(ptr);
-            }
-        }
-
-        struct KernelIovec
-        {
-            uint64 base;
-            size_t len;
-        };
-
-        class ScopedKernelIovecArray
-        {
-        public:
-            explicit ScopedKernelIovecArray(int count)
-            {
-                if (count <= k_syscall_iovec_inline_count)
-                {
-                    data_ = inline_iovecs_;
-                    return;
-                }
-
-                size_t bytes = sizeof(KernelIovec) * static_cast<size_t>(count);
-                data_ = static_cast<KernelIovec *>(alloc_syscall_temp_buffer(bytes));
-                heap_backed_ = true;
-            }
-
-            ~ScopedKernelIovecArray()
-            {
-                if (heap_backed_)
-                {
-                    free_syscall_temp_buffer(data_);
-                }
-            }
-
-            bool valid() const
-            {
-                return data_ != nullptr;
-            }
-
-            KernelIovec *data()
-            {
-                return data_;
-            }
-
-        private:
-            KernelIovec inline_iovecs_[k_syscall_iovec_inline_count];
-            KernelIovec *data_ = nullptr;
-            bool heap_backed_ = false;
-        };
-
-        size_t syscall_iovec_buffer_size(const KernelIovec *iovecs, int iovcnt)
-        {
-            size_t buffer_size = 1;
-            for (int i = 0; i < iovcnt; ++i)
-            {
-                size_t need = min_size(iovecs[i].len, k_syscall_io_chunk_size);
-                if (need > buffer_size)
-                {
-                    buffer_size = need;
-                }
-            }
-            return buffer_size;
-        }
-
-        class ScopedSyscallBuffer
-        {
-        public:
-            ScopedSyscallBuffer() = default;
-
-            explicit ScopedSyscallBuffer(size_t size)
-            {
-                ensure(size);
-            }
-
-            ~ScopedSyscallBuffer()
-            {
-                if (heap_backed_)
-                {
-                    free_syscall_temp_buffer(data_);
-                }
-            }
-
-            bool valid() const
-            {
-                return data_ != nullptr;
-            }
-
-            bool ensure(size_t size)
-            {
-                if (data_ != nullptr)
-                {
-                    return true;
-                }
-                if (size == 0)
-                {
-                    size = 1;
-                }
-
-                if (size <= k_syscall_io_inline_buffer_size)
-                {
-                    data_ = inline_buffer_;
-                    heap_backed_ = false;
-                }
-                else
-                {
-                    data_ = static_cast<char *>(alloc_syscall_temp_buffer(size));
-                    heap_backed_ = true;
-                }
-                return data_ != nullptr;
-            }
-
-            char *data()
-            {
-                return data_;
-            }
-
-        private:
-            alignas(16) char inline_buffer_[k_syscall_io_inline_buffer_size];
-            char *data_ = nullptr;
-            bool heap_backed_ = false;
-        };
-
-        int copy_user_iovecs(mem::PageTable &pt, uint64 iov_ptr, int iovcnt, KernelIovec *iovecs, size_t *total_len)
-        {
-            size_t bytes = 0;
-            struct UserIovec
-            {
-                uint64 iov_base;
-                size_t iov_len;
-            };
-
-            for (int i = 0; i < iovcnt; ++i)
-            {
-                UserIovec user_iov{};
-                uint64 user_iov_addr = iov_ptr + static_cast<uint64>(i) * sizeof(UserIovec);
-                if (mem::k_vmm.copy_in(pt, &user_iov, user_iov_addr, sizeof(user_iov)) < 0)
-                {
-                    return -EFAULT;
-                }
-                if (user_iov.iov_len > static_cast<size_t>(0x7FFFFFFF) - bytes)
-                {
-                    return -EINVAL;
-                }
-
-                iovecs[i].base = user_iov.iov_base;
-                iovecs[i].len = user_iov.iov_len;
-                bytes += user_iov.iov_len;
-            }
-
-            if (total_len != nullptr)
-            {
-                *total_len = bytes;
-            }
-            return 0;
-        }
-
-        long write_from_user_iovecs(fs::file *f, mem::PageTable &pt, const KernelIovec *iovecs, int iovcnt, long *explicit_off)
-        {
-            ScopedSyscallBuffer buffer;
-            size_t fallback_buffer_size = 0;
-            long total_written = 0;
-            for (int i = 0; i < iovcnt; ++i)
-            {
-                size_t iov_done = 0;
-                while (iov_done < iovecs[i].len)
-                {
-                    size_t want = min_size(iovecs[i].len - iov_done, k_syscall_io_chunk_size);
-                    long write_off = explicit_off == nullptr ? -1 : *explicit_off;
-                    bool upgrade = explicit_off == nullptr;
-                    long rc = f->write_from_user(pt, iovecs[i].base + iov_done, want, write_off, upgrade);
-                    if (rc == k_direct_user_write_unimplemented)
-                    {
-                        if (fallback_buffer_size == 0)
-                        {
-                            fallback_buffer_size = syscall_iovec_buffer_size(iovecs, iovcnt);
-                        }
-                        if (!buffer.ensure(fallback_buffer_size))
-                        {
-                            return total_written > 0 ? total_written : -ENOMEM;
-                        }
-                        if (mem::k_vmm.copy_in(pt, buffer.data(), iovecs[i].base + iov_done, want) < 0)
-                        {
-                            return total_written > 0 ? total_written : -EFAULT;
-                        }
-
-                        rc = f->write(reinterpret_cast<ulong>(buffer.data()), want, write_off, upgrade);
-                    }
-                    if (rc < 0)
-                    {
-                        return total_written > 0 ? total_written : rc;
-                    }
-                    if (rc == 0)
-                    {
-                        return total_written;
-                    }
-
-                    total_written += rc;
-                    iov_done += static_cast<size_t>(rc);
-                    if (explicit_off != nullptr)
-                    {
-                        *explicit_off += rc;
-                    }
-                    if (static_cast<size_t>(rc) < want)
-                    {
-                        return total_written;
-                    }
-                }
-            }
-
-            return total_written;
-        }
-
-        long read_to_user_iovecs(fs::file *f, mem::PageTable &pt, const KernelIovec *iovecs, int iovcnt, long *explicit_off)
-        {
-            long total_read = 0;
-            for (int i = 0; i < iovcnt; ++i)
-            {
-                size_t iov_done = 0;
-                while (iov_done < iovecs[i].len)
-                {
-                    size_t want = min_size(iovecs[i].len - iov_done, k_syscall_io_chunk_size);
-                    long read_off = explicit_off == nullptr ? -1 : *explicit_off;
-                    bool upgrade = explicit_off == nullptr;
-                    long rc = f->read_to_user(pt, iovecs[i].base + iov_done, want, read_off, upgrade);
-                    if (rc == k_direct_user_read_unimplemented)
-                    {
-                        // 普通文件的 read snapshot 可以直接 copy_out 到用户缓冲；
-                        // 未实现该快路径的文件类型仍走旧的内核中转读，保持语义不变。
-                        ScopedSyscallBuffer buffer(want);
-                        if (!buffer.valid())
-                        {
-                            return total_read > 0 ? total_read : -ENOMEM;
-                        }
-
-                        rc = f->read(reinterpret_cast<uint64>(buffer.data()), want, read_off, upgrade);
-                        if (rc > 0 &&
-                            mem::k_vmm.copy_out(pt, iovecs[i].base + iov_done, buffer.data(), rc) < 0)
-                        {
-                            return total_read > 0 ? total_read : -EFAULT;
-                        }
-                    }
-                    if (rc < 0)
-                    {
-                        return total_read > 0 ? total_read : rc;
-                    }
-                    if (rc == 0)
-                    {
-                        return total_read;
-                    }
-
-                    total_read += rc;
-                    iov_done += static_cast<size_t>(rc);
-                    if (explicit_off != nullptr)
-                    {
-                        *explicit_off += rc;
-                    }
-                    if (static_cast<size_t>(rc) < want)
-                    {
-                        return total_read;
-                    }
-                }
-            }
-
-            return total_read;
         }
 
         int validate_linux_clone_flags(uint64 flags)
@@ -3048,7 +3163,7 @@ namespace syscall
         }
 
         void fill_itimerval_from_snapshot(const proc::interval_timer_snapshot &snapshot,
-                                          KernelITimerValOld &dst)
+                                          abi::KernelITimerValOld &dst)
         {
             dst.it_value = usec_to_timeval(snapshot.value_us);
             dst.it_interval = usec_to_timeval(snapshot.interval_us);
@@ -3334,8 +3449,8 @@ namespace syscall
             bool can_enter = false;
             if (fsuid == 0)
             {
-                // root 也至少要有某一组 execute/search 位，不能无视目录搜索权限。
-                can_enter = (mode & (S_IXUSR | S_IXGRP | S_IXOTH)) != 0;
+                // CAP_DAC_OVERRIDE 可绕过目录搜索权限；普通文件的执行权限另行校验。
+                can_enter = true;
             }
             else if (fsuid == uid)
             {
@@ -3591,6 +3706,8 @@ namespace syscall
         BIND_SYSCALL(fsync);     // todo
         BIND_SYSCALL(fdatasync); // todo
         BIND_SYSCALL(utimensat);
+        BIND_SYSCALL(capget);
+        BIND_SYSCALL(capset);
         BIND_SYSCALL(personality);
         BIND_SYSCALL(exit);
         BIND_SYSCALL(exit_group);
@@ -3727,6 +3844,7 @@ namespace syscall
         BIND_SYSCALL(fadvise64);          // from rocket
         BIND_SYSCALL(msync);              // from rocket
         BIND_SYSCALL(mlock);              // from rocket
+        BIND_SYSCALL(munlock);
         BIND_SYSCALL(get_mempolicy);      // from rocket
         BIND_SYSCALL(accept4);            // from rocket
         BIND_SYSCALL(clockadjtime);       // from rocket
@@ -3769,6 +3887,7 @@ namespace syscall
         BIND_SYSCALL(pidfd_open);
         BIND_SYSCALL(fanotify_init);
         BIND_SYSCALL(fanotify_mark);
+        BIND_SYSCALL(name_to_handle_at);
         BIND_SYSCALL(inotify_init1);
         BIND_SYSCALL(inotify_add_watch);
         BIND_SYSCALL(inotify_rm_watch);
@@ -3812,7 +3931,6 @@ namespace syscall
         {
             // 调用对应的系统调用函数
             uint64 ret = (this->*_syscall_funcs[sys_num])();
-            debug_fd_4();
             mem::PageTable *pt = p->get_pagetable();
             if (pt != nullptr && !is_sane_user_pagetable_base(pt->get_base()))
             {
@@ -3828,20 +3946,6 @@ namespace syscall
             }
             p->_trapframe->a0 = ret; // 设置返回值
         }
-        //     if (sys_num != 64 && sys_num != 66)
-        //     {
-        //         proc::Pcb *cur_pcb = (proc::Pcb *)proc::k_pm.get_cur_pcb();
-        //         printfMagenta("[Pcb::get_open_file] pid: %d\n", cur_pcb->_pid);
-        //         for (int fd = 0; (uint64)fd < proc::max_open_files; fd++)
-        //         {
-        //             if (cur_pcb->_ofile[fd] != nullptr)
-        //             {
-        //                 printfBlue("[Pcb::get_open_file] fd: [%d], file: %p, _fl_cloexec: %d refcnt: %d\n",
-        //                            fd, cur_pcb->_ofile[fd], cur_pcb->_fl_cloexec[fd], cur_pcb->_ofile[fd]->refcnt);
-        //             }
-        //         }
-        //         printf("----------  end ------------\n");
-        //     }
     }
 
     // ---------------- private helper functions ----------------
@@ -4046,8 +4150,6 @@ namespace syscall
             return -1;
         }
         int waitret = proc::k_pm.wait4(pid, wstatus_addr, 0);
-        printf("[SyscallHandler::sys_wait] waitret: %d",
-               waitret);
         return waitret;
     }
     uint64 SyscallHandler::sys_wait4()
@@ -4074,16 +4176,6 @@ namespace syscall
         int waitret = proc::k_pm.wait4(pid, wstatus_addr, option);
         // printf("[SyscallHandler::sys_wait4] waitret: %d\n",waitret);
         return waitret;
-    }
-    uint64 SyscallHandler::sys_getppid()
-    {
-        proc::Pcb *p = Cpu::get_cpu()->get_cur_proc();
-        return p == nullptr ? 0 : p->get_ppid();
-    }
-    uint64 SyscallHandler::sys_getpid()
-    {
-        proc::Pcb *p = Cpu::get_cpu()->get_cur_proc();
-        return p == nullptr ? 0 : p->get_pid();
     }
     uint64 SyscallHandler::sys_pipe2()
     {
@@ -4166,24 +4258,17 @@ namespace syscall
         // 获取要复制的文件
         fs::file *old_file = p->get_open_file(oldfd);
 
-        // 使用proc_manager的alloc_fd方法来分配指定的fd
+        // 先固定源 open file description；替换 newfd 时即使它与 oldfd 指向同一对象，
+        // 也必须完成一次 close + dup 的引用计数平衡。
+        old_file->dup();
         if (proc::k_pm.alloc_fd(p, old_file, newfd) < 0)
         {
+            old_file->free_file();
             printfRed("[sys_dup3] Failed to allocate fd %d", newfd);
             return SYS_EMFILE;
         }
 
-        // 增加文件引用计数
-        old_file->dup();
-
-        // 处理O_CLOEXEC标志
-        // 注意：在这个实现中，我们假设O_CLOEXEC标志会在exec时由内核处理
-        // 如果需要存储FD_CLOEXEC标志，需要扩展ofile结构
-        if (flags & O_CLOEXEC)
-        {
-            // TODO: 设置FD_CLOEXEC标志，需要在ofile结构中添加支持
-            printfCyan("[sys_dup3] O_CLOEXEC flag set for fd %d", newfd);
-        }
+        p->_ofile->_fl_cloexec[newfd] = (flags & O_CLOEXEC) != 0;
 
         printfCyan("[sys_dup3] Successfully duplicated fd %d to %d", oldfd, newfd);
         return newfd;
@@ -4233,11 +4318,7 @@ namespace syscall
         {
             return SYS_EBADF;
         }
-        if (f->lwext4_file_struct.flags & O_DIRECT)
-        {
-            return SYS_EINVAL;
-        }
-        if (!file_descriptor_allows_read(f))
+        if (!fs::FileDescriptorAccess::allows_read(f))
         {
             printfRed("[SyscallHandler::sys_read] File descriptor %d is not open for reading\n", fd);
             return -EBADF; // 文件描述符未打开或不允许读取
@@ -4247,14 +4328,22 @@ namespace syscall
             printfRed("[SyscallHandler::sys_read] File descriptor %d is a directory, cannot read\n", fd);
             return -EISDIR; // 不能从目录读取
         }
+
+        proc::Pcb *p = Cpu::get_cpu()->get_cur_proc();
+        mem::PageTable *pt = p->get_pagetable();
+        int direct_result = fs::FileDescriptorAccess::validate_direct_io_request(
+            f, *pt, buf, static_cast<size_t>(n), f->get_file_offset(), true);
+        if (direct_result < 0)
+        {
+            return direct_result;
+        }
+
         // 检查文件锁是否允许读操作
         if (!check_file_lock_access(f->_lock, f->get_file_offset(), n, false))
         {
             return -EAGAIN; // 操作被文件锁阻止
         }
 
-        proc::Pcb *p = Cpu::get_cpu()->get_cur_proc();
-        mem::PageTable *pt = p->get_pagetable();
         KernelIovec iovec = {buf, static_cast<size_t>(n)};
         long result = read_to_user_iovecs(f, *pt, &iovec, 1, nullptr);
         if (result > 0 && !f->is_fanotify_file() && !f->_suppress_fanotify)
@@ -5023,6 +5112,17 @@ namespace syscall
                 const eastl::string &event_path = opened_file->backing_path().empty()
                                                       ? abs_pathname
                                                       : opened_file->backing_path();
+                if ((flags & O_CREAT) != 0 && !existed_before_open)
+                {
+                    const eastl::string parent_path = parent_path_of(event_path);
+                    notify_fanotify_directory_event(
+                        parent_path,
+                        event_path,
+                        kFanCreate,
+                        opened_file->_attrs.filetype == fs::FileTypes::FT_DIRECT,
+                        fanotify_path_ino(parent_path),
+                        fanotify_path_ino(event_path));
+                }
                 notify_fanotify_event(opened_file,
                                       event_path,
                                       kFanOpen,
@@ -5086,7 +5186,7 @@ namespace syscall
         // TODO: 文件描述符的flags检查，只读就不能写，返回SYS_EBADF
         // 我用的是lwext4的文件描述符结构体，flags是lwext4_file_struct.flags
         // 好像不太对这样，因为有的文件这个结构体没用到，也没初始化
-        if (!file_descriptor_allows_write(f))
+        if (!fs::FileDescriptorAccess::allows_write(f))
         {
             printfRed("[SyscallHandler::sys_write] File descriptor %d is read-only\n", fd);
             return SYS_EBADF;
@@ -5098,6 +5198,15 @@ namespace syscall
             (f->_path_name == "/dev/null" || f->_path_name == "/dev/zero"))
         {
             return n;
+        }
+
+        proc::Pcb *proc = Cpu::get_cpu()->get_cur_proc();
+        mem::PageTable *pt = proc->get_pagetable();
+        int direct_result = fs::FileDescriptorAccess::validate_direct_io_request(
+            f, *pt, p, static_cast<size_t>(n), f->get_file_offset(), false);
+        if (direct_result < 0)
+        {
+            return direct_result;
         }
 
         if (is_bad_addr(p))
@@ -5112,8 +5221,6 @@ namespace syscall
             return SYS_EAGAIN; // 操作被文件锁阻止
         }
 
-        proc::Pcb *proc = Cpu::get_cpu()->get_cur_proc();
-        mem::PageTable *pt = proc->get_pagetable();
         KernelIovec iovec = {p, static_cast<size_t>(n)};
         long result = write_from_user_iovecs(f, *pt, &iovec, 1, nullptr);
         if (result > 0 && !f->_suppress_fanotify)
@@ -5196,6 +5303,17 @@ namespace syscall
         int res = proc::k_pm.unlink(fd, path, flags);
         if (res == 0 && !abs_path.empty())
         {
+            const eastl::string parent_path = parent_path_of(abs_path);
+            notify_fanotify_directory_event(parent_path,
+                                             abs_path,
+                                             kFanDelete,
+                                             is_dir,
+                                             fanotify_path_ino(parent_path),
+                                             removed_stat.ino);
+            notify_fanotify_self_event(abs_path,
+                                       kFanDeleteSelf,
+                                       is_dir,
+                                       removed_stat.ino);
             mark_open_files_unlinked_from_dir(abs_path);
             notify_inotify_path_event(abs_path,
                                       kInDelete,
@@ -5272,19 +5390,6 @@ namespace syscall
         printfCyan("sys_linkat: olddirfd=%d, oldpath=%s, newdirfd=%d, newpath=%s, flags=0x%x\n",
                    olddirfd, oldpath.c_str(), newdirfd, newpath.c_str(), flags);
 
-        // 检查特定情况：两个路径不位于同一种文件系统中，应返回EXDEV错误
-        if (olddirfd == -100 && oldpath == "mntpoint/file" && newdirfd == -100 && newpath == "testfile" && flags == 0x0)
-        {
-            printfRed("sys_linkat: Cannot create hard link across different filesystems\n");
-            return -EXDEV;
-        }
-
-        // 检查特定情况：源文件路径位于RDONLY的文件系统中，应返回EROFS错误
-        if (olddirfd == -100 && oldpath == "mntpoint/file" && newdirfd == -100 && newpath == "mntpoint/testfile4" && flags == 0x0)
-        {
-            printfRed("sys_linkat: Cannot create hard link on read-only filesystem\n");
-            return -EROFS;
-        }
         // 处理 AT_EMPTY_PATH 标志
         if (flags & AT_EMPTY_PATH)
         {
@@ -5550,34 +5655,11 @@ namespace syscall
         // 处理 AT_SYMLINK_FOLLOW 标志
         if (flags & AT_SYMLINK_FOLLOW)
         {
-            // 如果源文件是符号链接，需要解析到最终目标
-            eastl::string old_path_for_check = abs_oldpath;
-            int source_type = vfs_path2filetype(old_path_for_check);
-            if (source_type == fs::FileTypes::FT_SYMLINK)
-            {
-                // 解析符号链接
-                char link_target[MAXPATH];
-                size_t link_len;
-                int r = ext4_readlink(abs_oldpath.c_str(), link_target, sizeof(link_target) - 1, &link_len);
-                if (r == EOK)
-                {
-                    link_target[link_len] = '\0';
-                    if (link_target[0] == '/')
-                    {
-                        abs_oldpath = link_target;
-                    }
-                    else
-                    {
-                        // 相对路径，相对于符号链接所在目录
-                        size_t last_slash = abs_oldpath.find_last_of('/');
-                        if (last_slash != eastl::string::npos)
-                        {
-                            abs_oldpath = abs_oldpath.substr(0, last_slash + 1) + link_target;
-                        }
-                    }
-                    printfYellow("sys_linkat: AT_SYMLINK_FOLLOW resolved symlink to %s\n", abs_oldpath.c_str());
-                }
-            }
+            eastl::string resolved_oldpath;
+            int resolve_ret = vfs_resolve_path(abs_oldpath, resolved_oldpath);
+            if (resolve_ret < 0)
+                return resolve_ret;
+            abs_oldpath = resolved_oldpath;
         }
 
         // 规范化路径（处理 . 和 .. 等）
@@ -5722,7 +5804,25 @@ namespace syscall
 
         printfMagenta("[SyscallHandler::sys_mkdirat] dir_fd: %d, path: %s, mode: 0%o\n", dir_fd, path.c_str(), mode);
 
+        eastl::string event_path;
+        int resolve_ret = resolve_at_path(dir_fd, path, event_path);
+        if (resolve_ret < 0)
+        {
+            return resolve_ret;
+        }
+        event_path = normalize_watch_path(event_path);
+
         int res = proc::k_pm.mkdir(dir_fd, path, mode);
+        if (res == 0)
+        {
+            const eastl::string parent_path = parent_path_of(event_path);
+            notify_fanotify_directory_event(parent_path,
+                                             event_path,
+                                             kFanCreate,
+                                             true,
+                                             fanotify_path_ino(parent_path),
+                                             fanotify_path_ino(event_path));
+        }
 
         return res;
     }
@@ -5741,7 +5841,7 @@ namespace syscall
         {
             event_path = closing_file->backing_path();
             is_dir = closing_file->_attrs.filetype == fs::FileTypes::FT_DIRECT;
-            was_write_open = file_access_mode_has_write(closing_file->lwext4_file_struct.flags);
+            was_write_open = fs::FileDescriptorAccess::access_mode_has_write(closing_file->lwext4_file_struct.flags);
             suppress_fanotify = closing_file->_suppress_fanotify;
         }
 
@@ -5764,9 +5864,9 @@ namespace syscall
         int imode;
         long idev;
 
-        // 获取参数
-        if (_arg_str(0, pathname, MAXPATH) < 0)
-            return SYS_EFAULT;
+        int path_ret = _arg_str(0, pathname, PATH_MAX);
+        if (path_ret < 0)
+            return path_ret;
         if (_arg_int(1, imode) < 0)
             return SYS_EFAULT;
         if (_arg_long(2, idev) < 0)
@@ -5776,7 +5876,26 @@ namespace syscall
         dev_t dev = idev;
 
         // 调用进程管理器的 mknod 函数，使用 AT_FDCWD 表示当前工作目录
+        eastl::string event_path;
+        int resolve_ret = resolve_at_path(AT_FDCWD, pathname, event_path);
+        if (resolve_ret < 0)
+        {
+            return resolve_ret;
+        }
+        event_path = normalize_watch_path(event_path);
+
         int result = proc::k_pm.mknod(AT_FDCWD, pathname, mode, dev);
+        if (result == 0)
+        {
+            const eastl::string parent_path = parent_path_of(event_path);
+            bool is_dir = (mode & S_IFMT) == S_IFDIR;
+            notify_fanotify_directory_event(parent_path,
+                                             event_path,
+                                             kFanCreate,
+                                             is_dir,
+                                             fanotify_path_ino(parent_path),
+                                             fanotify_path_ino(event_path));
+        }
         return result;
     }
     uint64 SyscallHandler::sys_clone()
@@ -5952,23 +6071,6 @@ namespace syscall
             // Linux brk(2) syscall 失败时返回当前 program break，而不是 -1。
             // libc 的 brk/sbrk 封装会用返回值是否达到请求地址来转换 errno。
             result = cur->get_heap_end();
-        }
-        static int brk_trace_budget = 64;
-        if (cur != nullptr && n != 0 && brk_trace_budget > 0)
-        {
-            --brk_trace_budget;
-            printfYellow("[sys_brk][trace] proc=%s pid=%d tid=%d req=%p ret=%p heap=[%p,%p)\n",
-                   cur->_name,
-                   cur->_pid,
-                   cur->_tid,
-                   (void *)n,
-                   (void *)result,
-                   (void *)cur->get_heap_start(),
-                   (void *)cur->get_heap_end());
-        }
-        if (n == 0)
-        {
-            printfBlue("[SyscallHandler::sys_brk] brk(0) = 0x%x (query current break)\n", result);
         }
         return result;
     }
@@ -6401,34 +6503,6 @@ namespace syscall
             return result;
         }
 
-        // 目录遍历是高频热路径，逐项日志默认不输出。
-        // 需要深挖 readdir/getdents 问题时，可单独打开 trace 级别观察实际返回内容。
-        if (result > 0 && Printer::trace_group_enabled()) {
-            tracef("[sys_getdents64] bytes=%d fd-path=%s\n", result, f ? f->_path_name.c_str() : "(null)");
-
-            char *buf_ptr = kernel_buf;
-            int bytes_processed = 0;
-            int entry_count = 0;
-
-            while (bytes_processed < result) {
-                struct linux_dirent64 *entry = (struct linux_dirent64 *)(buf_ptr + bytes_processed);
-                if (entry->d_reclen == 0 || bytes_processed + entry->d_reclen > result) {
-                    printfRed("[sys_getdents64] trace 发现损坏目录项: off=%d reclen=%d result=%d\n",
-                              bytes_processed, entry->d_reclen, result);
-                    break;
-                }
-
-                ++entry_count;
-                tracef("[sys_getdents64] entry=%d ino=%lu off=%ld reclen=%u type=%u name=%s\n",
-                       entry_count, entry->d_ino, entry->d_off, entry->d_reclen,
-                       entry->d_type, entry->d_name);
-                bytes_processed += entry->d_reclen;
-            }
-
-            tracef("[sys_getdents64] entries=%d processed=%d/%d\n",
-                   entry_count, bytes_processed, result);
-        }
-
         // 将结果复制到用户空间
         if (result > 0) {
             int copy_result = mem::k_vmm.copy_out(*pt, buf_addr, kernel_buf, result);
@@ -6470,7 +6544,7 @@ namespace syscall
         _arg_int(1, sig);
 
         // Check for invalid signal number
-        if (sig < 0 || sig > proc::ipc::signal::SIGRTMAX || sig == 0)
+        if (sig < 0 || sig > proc::ipc::signal::SIGRTMAX)
         {
             return SYS_EINVAL;
         }
@@ -6491,25 +6565,33 @@ namespace syscall
     uint64 SyscallHandler::sys_tkill()
     {
         int tid, sig;
-        _arg_int(0, tid);
-        _arg_int(1, sig);
+        if (_arg_int(0, tid) < 0 || _arg_int(1, sig) < 0)
+            return SYS_EINVAL;
+        if (tid <= 0 || sig < 0 || sig > proc::ipc::signal::SIGRTMAX)
+            return SYS_EINVAL;
         printfCyan("[SyscallHandler::sys_tkill] tid: %d, sig: %d\n", tid, sig);
         return proc::k_pm.tkill(tid, sig);
-        return 0;
     }
     uint64 SyscallHandler::sys_tgkill()
     {
         int tgid, tid, sig;
-        _arg_int(0, tgid);
-        _arg_int(1, tid);
-        _arg_int(2, sig);
+        if (_arg_int(0, tgid) < 0 ||
+            _arg_int(1, tid) < 0 ||
+            _arg_int(2, sig) < 0)
+            return SYS_EINVAL;
+        if (tgid <= 0 || tid <= 0 ||
+            sig < 0 || sig > proc::ipc::signal::SIGRTMAX)
+            return SYS_EINVAL;
         printfCyan("[SyscallHandler::sys_tgkill] tgid: %d, tid: %d, sig: %d\n", tgid, tid, sig);
         return proc::k_pm.tgkill(tgid, tid, sig);
     }
     uint64 SyscallHandler::sys_rt_sigaction()
     {
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
-        [[maybe_unused]] mem::PageTable *pt = proc->get_pagetable();
+        if (proc == nullptr || proc->get_pagetable() == nullptr)
+            return SYS_ESRCH;
+
+        mem::PageTable *pt = proc->get_pagetable();
         proc::ipc::signal::sigaction a_newact{};
         proc::ipc::signal::sigaction a_oldact{};
         proc::ipc::signal::kernel_sigaction_abi u_newact{};
@@ -6520,15 +6602,15 @@ namespace syscall
         int ret = -1;
 
         if (_arg_int(0, signum) < 0)
-            return -1;
+            return SYS_EINVAL;
 
         if (_arg_addr(1, newactaddr) < 0)
-            return -1;
+            return SYS_EFAULT;
 
         if (_arg_addr(2, oldactaddr) < 0)
-            return -1;
+            return SYS_EFAULT;
         if (_arg_int(3, sigsetsize) < 0)
-            return -1;
+            return SYS_EINVAL;
 
         // rt_sigaction(2) 的第四个参数必须是内核信号掩码大小。
         // 当前内核内部只支持 64 个信号位，因此这里要求 8 字节，
@@ -6548,7 +6630,7 @@ namespace syscall
             // SA_SIGINFO/SA_ONSTACK/SA_RESTART 和 sa_mask 都会错位。
             if (mem::k_vmm.copy_in(*pt, &u_newact, newactaddr,
                                    sizeof(proc::ipc::signal::kernel_sigaction_abi)) < 0)
-                return -1;
+                return SYS_EFAULT;
             a_newact.sa_handler = u_newact.sa_handler;
             a_newact.sa_flags = u_newact.sa_flags;
             a_newact.sa_mask.sig[0] = u_newact.sa_mask.sig[0];
@@ -6566,7 +6648,7 @@ namespace syscall
             u_oldact.sa_mask.sig[0] = a_oldact.sa_mask.sig[0];
             if (mem::k_vmm.copy_out(*pt, oldactaddr, &u_oldact,
                                     sizeof(proc::ipc::signal::kernel_sigaction_abi)) < 0)
-                return -1;
+                return SYS_EFAULT;
         }
         return ret;
     }
@@ -6645,7 +6727,7 @@ namespace syscall
         {
             if (mem::k_vmm.copy_in(*pt, &timeout_ts, timeoutaddr, sizeof(timeout_ts)) < 0)
                 return SYS_EFAULT;
-            if (timeout_ts.tv_sec < 0 || timeout_ts.tv_nsec < 0 || timeout_ts.tv_nsec >= k_nsec_per_sec)
+            if (timeout_ts.tv_sec < 0 || timeout_ts.tv_nsec < 0 || timeout_ts.tv_nsec >= abi::k_nsec_per_sec)
                 return SYS_EINVAL;
 
             tmm::timespec now_ts{};
@@ -6654,8 +6736,8 @@ namespace syscall
 
             int64_t now_ns = 0;
             int64_t timeout_ns = 0;
-            if (!kernel_timespec_to_ns_checked(now_ts, now_ns) ||
-                !kernel_timespec_to_ns_checked(timeout_ts, timeout_ns))
+            if (!tmm::k_timex.timespec_to_ns_checked(now_ts, now_ns) ||
+                !tmm::k_timex.timespec_to_ns_checked(timeout_ts, timeout_ns))
             {
                 return SYS_EINVAL;
             }
@@ -6707,7 +6789,7 @@ namespace syscall
                 if (tmm::k_tm.clock_gettime(static_cast<tmm::SystemClockId>(CLOCK_MONOTONIC), &now_ts) < 0)
                     return SYS_EINVAL;
                 int64_t now_ns = 0;
-                if (!kernel_timespec_to_ns_checked(now_ts, now_ns))
+                if (!tmm::k_timex.timespec_to_ns_checked(now_ts, now_ns))
                     return SYS_EINVAL;
                 if (now_ns >= deadline_ns)
                     return SYS_EAGAIN;
@@ -6724,85 +6806,6 @@ namespace syscall
         return p->_trapframe->a0; // 当前架构会把a0覆盖, 所以只能返回回去
     }
 
-    //================================== busybox===================================================
-    uint64 SyscallHandler::sys_set_tid_address()
-    {
-        uint64 tidptr;
-        if (_arg_addr(0, tidptr) < 0)
-        {
-            printfRed("[SyscallHandler::sys_set_tid_address] Error fetching tidptr argument\n");
-            return -1;
-        }
-        return proc::k_pm.set_tid_address(tidptr); // 调用进程管理器的 set_tid_address 函数
-    }
-    uint64 SyscallHandler::sys_getuid()
-    {
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        return p->_uid; // 返回真实用户ID
-    }
-    uint64 SyscallHandler::sys_getgid()
-    {
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        return p->_gid; // 返回真实组ID
-    }
-    uint64 SyscallHandler::sys_setgid()
-    {
-        int gid_raw;
-        if (_arg_int(0, gid_raw) < 0 || gid_raw < 0)
-            return -EINVAL;
-        uint32_t gid = (uint32_t)gid_raw;
-
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-
-        if (p->_euid == 0)
-        {
-            // Linux setgid(): 特权进程一次性更新 real/effective/saved/fs gid。
-            p->_gid = gid;
-            p->_egid = gid;
-            p->_sgid = gid;
-            p->_fsgid = gid;
-            return 0;
-        }
-
-        // 非特权进程只能把 effective gid 切换到 real/effective/saved gid 之一。
-        if (gid != p->_gid && gid != p->_egid && gid != p->_sgid)
-            return -EPERM;
-
-        p->_egid = gid;
-        p->_fsgid = gid;
-        return 0;
-    }
-    uint64 SyscallHandler::sys_setuid()
-    {
-        int uid_raw;
-        if (_arg_int(0, uid_raw) < 0 || uid_raw < 0)
-            return -EINVAL;
-        uint32_t uid = (uint32_t)uid_raw;
-
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-
-        // 根据POSIX标准的setuid实现
-        if (p->_euid == 0)
-        {
-            // 特权用户可以设置所有三个UID为任意值
-            p->_uid = uid;
-            p->_euid = uid;
-            p->_suid = uid; // 设置saved UID
-            p->_fsuid = uid;
-        }
-        else
-        {
-            // 非特权用户只能把 effective uid 切换到 real/effective/saved uid 之一。
-            if (uid != p->_uid && uid != p->_euid && uid != p->_suid)
-                return -EPERM;
-
-            // 只设置effective UID，real UID和saved UID保持不变
-            p->_euid = uid;
-            p->_fsuid = uid;
-        }
-
-        return 0;
-    }
     uint64 SyscallHandler::sys_fstatat()
     {
         eastl::string proc_name = proc::k_pm.get_cur_pcb()->_name;
@@ -7142,34 +7145,9 @@ namespace syscall
 
     uint64 SyscallHandler::sys_set_robust_list()
     {
-        ulong addr;
-        proc::robust_list_head *head;
-        size_t len;
-        if (_arg_addr(0, addr) < 0 || _arg_addr(1, len) < 0)
-        {
-            printfRed("[SyscallHandler::sys_set_robust_list] Error fetching arguments\n");
-            return -1;
-        }
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        mem::PageTable *pt = p->get_pagetable();
-#ifdef RISCV
-        head = (proc::robust_list_head *)pt->walk_addr(addr);
-#elif defined(LOONGARCH)
-        head = (proc::robust_list_head *)to_vir((ulong)pt->walk_addr(addr));
-#endif
-        if (head == nullptr)
-            return -10;
-
-        int ret = proc::k_pm.set_robust_list(head, len); // 调用进程管理器的 set_robust_list 函数
-        if (ret == 0)
-        {
-            p->_robust_list_user_addr = addr;
-        }
-        return ret;
-    }
-    uint64 SyscallHandler::sys_gettid()
-    {
-        return proc::k_pm.get_cur_pcb()->get_tid();
+        uint64 user_head_addr = _arg_raw(0);
+        size_t len = static_cast<size_t>(_arg_raw(1));
+        return proc::k_pm.set_robust_list(user_head_addr, len);
     }
     uint64 SyscallHandler::sys_writev()
     {
@@ -7200,11 +7178,7 @@ namespace syscall
         {
             return SYS_EBADF;
         }
-        if (f->lwext4_file_struct.flags & O_DIRECT)
-        {
-            return SYS_EINVAL;
-        }
-        if (!file_descriptor_allows_write(f))
+        if (!fs::FileDescriptorAccess::allows_write(f))
         {
             return SYS_EBADF;
         }
@@ -7237,53 +7211,73 @@ namespace syscall
             return copy_ret;
         }
 
-        return write_from_user_iovecs(f, *pt, iovecs.data(), iovcnt, nullptr);
+        long direct_offset = f->get_file_offset();
+        for (int i = 0; i < iovcnt; ++i)
+        {
+            const KernelIovec &iov = iovecs.data()[i];
+            int direct_result = fs::FileDescriptorAccess::validate_direct_io_request(
+                f, *pt, iov.base, iov.len, direct_offset, false);
+            if (direct_result < 0)
+            {
+                return direct_result;
+            }
+            direct_offset += static_cast<long>(iov.len);
+        }
+
+        long result = write_from_user_iovecs(f, *pt, iovecs.data(), iovcnt, nullptr);
+        if (result > 0 && !f->_suppress_fanotify)
+        {
+            notify_fanotify_event(f,
+                                  f->backing_path(),
+                                  kFanModify,
+                                  f->_attrs.filetype == fs::FileTypes::FT_DIRECT);
+        }
+        return result;
     }
     uint64 SyscallHandler::SyscallHandler::sys_prlimit64()
     {
         int pid;
         if (_arg_int(0, pid) < 0)
-        {
-            printfRed("[SyscallHandler::sys_prlimit64] Error fetching pid argument\n");
-            return -1;
-        }
+            return SYS_EINVAL;
+
         int rsrc;
         if (_arg_int(1, rsrc) < 0)
+            return SYS_EINVAL;
+
+        uint64 new_limit_addr;
+        uint64 old_limit_addr;
+        if (_arg_addr(2, new_limit_addr) < 0 ||
+            _arg_addr(3, old_limit_addr) < 0)
+            return SYS_EFAULT;
+
+        proc::Pcb *current = proc::k_pm.get_cur_pcb();
+        if (current == nullptr || current->get_pagetable() == nullptr)
+            return SYS_ESRCH;
+
+        proc::rlimit64 new_limit{};
+        proc::rlimit64 old_limit{};
+        proc::rlimit64 *new_limit_ptr = nullptr;
+        proc::rlimit64 *old_limit_ptr = old_limit_addr == 0 ? nullptr : &old_limit;
+        if (new_limit_addr != 0)
         {
-            printfRed("[SyscallHandler::sys_prlimit64] Error fetching resource argument\n");
-            return -2;
-        }
-        u64 new_limit;
-        u64 old_limit;
-        if (_arg_addr(2, new_limit) < 0)
-        {
-            printfRed("[SyscallHandler::sys_prlimit64] Error fetching new limit address\n");
-            return -3;
-        }
-        if (_arg_addr(3, old_limit) < 0)
-        {
-            printfRed("[SyscallHandler::sys_prlimit64] Error fetching old limit address\n");
-            return -4;
+            if (mem::k_vmm.copy_in(*current->get_pagetable(),
+                                   &new_limit,
+                                   new_limit_addr,
+                                   sizeof(new_limit)) < 0)
+                return SYS_EFAULT;
+            new_limit_ptr = &new_limit;
         }
 
-        proc::rlimit64 *nlim = nullptr, *olim = nullptr;
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        mem::PageTable *pt = p->get_pagetable();
-#ifdef RISCV
-        if (new_limit != 0)
-            nlim = (proc::rlimit64 *)pt->walk_addr(new_limit);
-        if (old_limit != 0)
-            olim = (proc::rlimit64 *)pt->walk_addr(old_limit);
-
-#elif defined(LOONGARCH)
-        if (new_limit != 0)
-            nlim = (proc::rlimit64 *)to_vir((ulong)pt->walk_addr(new_limit));
-        if (old_limit != 0)
-            olim = (proc::rlimit64 *)to_vir((ulong)pt->walk_addr(old_limit));
-#endif
-
-        return proc::k_pm.prlimit64(pid, rsrc, nlim, olim);
-        ;
+        int ret = proc::k_pm.prlimit64(pid, rsrc, new_limit_ptr, old_limit_ptr);
+        if (ret < 0)
+            return ret;
+        if (old_limit_addr != 0 &&
+            mem::k_vmm.copy_out(*current->get_pagetable(),
+                                old_limit_addr,
+                                &old_limit,
+                                sizeof(old_limit)) < 0)
+            return SYS_EFAULT;
+        return 0;
     }
     uint64 SyscallHandler::sys_readlinkat()
     {
@@ -7860,9 +7854,6 @@ namespace syscall
         cmd = cmd;
 
         ulong arg = _arg_raw(2);
-        printfCyan("[SyscallHandler::sys_ioctl] fd: %d, cmd: 0x%X, arg: %p\n",
-                   fd, cmd, (void *)arg);
-        /// @todo not implement
 
         if (f->_attrs.filetype == fs::FileTypes::FT_SOCKET)
         {
@@ -7871,7 +7862,7 @@ namespace syscall
 
             switch (cmd & 0xFFFF)
             {
-            case k_siocatmark:
+            case net::SocketIoctlCompat::k_siocatmark:
             {
                 if (socket_f->get_type() != fs::SocketType::TCP)
                 {
@@ -7889,23 +7880,23 @@ namespace syscall
                 return 0;
             }
 
-            case k_siocgifconf:
+            case net::SocketIoctlCompat::k_siocgifconf:
             {
                 if (arg == 0)
                 {
                     return SYS_EFAULT;
                 }
 
-                socket_ifconf ifc{};
+                abi::SocketIfconf ifc{};
                 if (mem::k_vmm.copy_in(*pt, &ifc, arg, sizeof(ifc)) < 0)
                 {
                     return SYS_EFAULT;
                 }
 
-                if (ifc.ifc_len >= static_cast<int>(sizeof(socket_ifreq)) && ifc.ifc_buf != 0)
+                if (ifc.ifc_len >= static_cast<int>(sizeof(abi::SocketIfreq)) && ifc.ifc_buf != 0)
                 {
-                    socket_ifreq req{};
-                    fill_loopback_ifreq(req);
+                    abi::SocketIfreq req{};
+                    net::SocketIoctlCompat::fill_loopback_ifreq(req);
                     if (mem::k_vmm.copy_out(*pt, ifc.ifc_buf, &req, sizeof(req)) < 0)
                     {
                         return SYS_EFAULT;
@@ -7924,24 +7915,24 @@ namespace syscall
                 return 0;
             }
 
-            case k_siocgifflags:
+            case net::SocketIoctlCompat::k_siocgifflags:
             {
                 if (arg == 0)
                 {
                     return SYS_EFAULT;
                 }
 
-                socket_ifreq req{};
+                abi::SocketIfreq req{};
                 if (mem::k_vmm.copy_in(*pt, &req, arg, sizeof(req)) < 0)
                 {
                     return SYS_EFAULT;
                 }
-                if (!is_loopback_ifname(req.ifr_name))
+                if (!net::SocketIoctlCompat::is_loopback_ifname(req.ifr_name))
                 {
                     return SYS_ENODEV;
                 }
 
-                req.ifr_flags = k_iff_up | k_iff_loopback | k_iff_running;
+                req.ifr_flags = net::SocketIoctlCompat::k_loopback_flags;
                 if (mem::k_vmm.copy_out(*pt, arg, &req, sizeof(req)) < 0)
                 {
                     return SYS_EFAULT;
@@ -7949,19 +7940,19 @@ namespace syscall
                 return 0;
             }
 
-            case k_siocsifflags:
+            case net::SocketIoctlCompat::k_siocsifflags:
             {
                 if (arg == 0)
                 {
                     return SYS_EFAULT;
                 }
 
-                socket_ifreq req{};
+                abi::SocketIfreq req{};
                 if (mem::k_vmm.copy_in(*pt, &req, arg, sizeof(req)) < 0)
                 {
                     return SYS_EFAULT;
                 }
-                return is_loopback_ifname(req.ifr_name) ? 0 : SYS_ENODEV;
+                return net::SocketIoctlCompat::is_loopback_ifname(req.ifr_name) ? 0 : SYS_ENODEV;
             }
 
             default:
@@ -8028,7 +8019,7 @@ namespace syscall
             {
                 return SYS_EFAULT;
             }
-            KernelTermio tio = make_kernel_termio(g_console_termios);
+            abi::KernelTermio tio = dev::k_console_termios.legacy_snapshot();
             mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
             if (mem::k_vmm.copy_out(*pt, arg, &tio, sizeof(tio)) < 0)
             {
@@ -8049,7 +8040,7 @@ namespace syscall
             }
             // TCGETS 使用的是 Linux 内核 UAPI 的 asm-generic termios（36字节），
             // 不能把 libc 的 struct termios（RISC-V glibc 下为60字节）直接回写给用户栈。
-            KernelTermios ts = g_console_termios;
+            abi::KernelTermios ts = dev::k_console_termios.snapshot();
 
             mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
             if (mem::k_vmm.copy_out(*pt, arg, &ts, sizeof(ts)) < 0)
@@ -8072,14 +8063,13 @@ namespace syscall
             {
                 return SYS_EFAULT;
             }
-            KernelTermio tio{};
+            abi::KernelTermio tio{};
             mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
             if (mem::k_vmm.copy_in(*pt, &tio, arg, sizeof(tio)) < 0)
             {
                 return SYS_EFAULT;
             }
-            merge_kernel_termio(g_console_termios, tio);
-            sync_console_termios_to_line_discipline(g_console_termios);
+            dev::k_console_termios.apply_legacy(tio);
             return 0;
         }
 
@@ -8095,7 +8085,7 @@ namespace syscall
             {
                 return SYS_EFAULT;
             }
-            KernelTermios new_ts{};
+            abi::KernelTermios new_ts{};
             mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
             if (mem::k_vmm.copy_in(*pt, &new_ts, arg, sizeof(new_ts)) < 0)
             {
@@ -8105,8 +8095,7 @@ namespace syscall
             // 当前 console 先把 termios 状态保存下来，满足 busybox ash 等交互程序的
             // raw/cooked 模式切换探测。更完整的 tty line discipline 可以后续继续补，
             // 但至少不能再把用户态的 termios 视图一直固定成全 0。
-            g_console_termios = new_ts;
-            sync_console_termios_to_line_discipline(g_console_termios);
+            dev::k_console_termios.apply(new_ts);
             return 0;
         }
 
@@ -8558,7 +8547,7 @@ namespace syscall
             return SYS_ENOTTY;
         };
 
-        if ((cmd & 0xFFFF) == 0x1260) // BLKGETSIZE: 512-byte sectors
+        if ((cmd & 0xFFFF) == dev::BlockDeviceIoctlState::k_blkgetsize) // BLKGETSIZE: 512-byte sectors
         {
             if (arg == 0)
             {
@@ -8579,7 +8568,7 @@ namespace syscall
             return 0;
         }
 
-        if ((cmd & 0xFFFF) == 0x1272) // BLKGETSIZE64: bytes
+        if ((cmd & 0xFFFF) == dev::BlockDeviceIoctlState::k_blkgetsize64) // BLKGETSIZE64: bytes
         {
             if (arg == 0)
             {
@@ -8599,7 +8588,7 @@ namespace syscall
             return 0;
         }
 
-        if ((cmd & 0xFFFF) == 0x1263) // BLKRAGET
+        if ((cmd & 0xFFFF) == dev::BlockDeviceIoctlState::k_blkraget) // BLKRAGET
         {
             if (arg == 0)
             {
@@ -8612,15 +8601,16 @@ namespace syscall
                 return size_ret;
             }
             (void)device_size;
+            ulong read_ahead = dev::k_block_device_ioctl_state.read_ahead();
             mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
-            if (mem::k_vmm.copy_out(*pt, arg, &g_block_device_read_ahead, sizeof(g_block_device_read_ahead)) < 0)
+            if (mem::k_vmm.copy_out(*pt, arg, &read_ahead, sizeof(read_ahead)) < 0)
             {
                 return SYS_EFAULT;
             }
             return 0;
         }
 
-        if ((cmd & 0xFFFF) == 0x1262) // BLKRASET
+        if ((cmd & 0xFFFF) == dev::BlockDeviceIoctlState::k_blkraset) // BLKRASET
         {
             uint64 device_size = 0;
             int size_ret = block_device_size_for_ioctl(device_size);
@@ -8629,11 +8619,10 @@ namespace syscall
                 return size_ret;
             }
             (void)device_size;
-            g_block_device_read_ahead = static_cast<ulong>(arg);
+            dev::k_block_device_ioctl_state.set_read_ahead(static_cast<ulong>(arg));
             return 0;
         }
 
-        printfYellow("[SyscallHandler::sys_ioctl] cmd: 0x%X, arg: %u\n", (cmd & 0xFFFF), arg);
         // Handle individual loop device operations
         if ((cmd & 0xFF00) == 0x4C00) // Loop device ioctl commands
         {
@@ -8692,14 +8681,12 @@ namespace syscall
             case LOOP_SET_FD:
             {
                 int fd = (int)arg;
-                int result = loop_dev->set_fd(fd);
-                return (result == 0) ? 0 : SYS_EIO;
+                return loop_dev->set_fd(fd);
             }
 
             case LOOP_CLR_FD:
             {
-                int result = loop_dev->clear_fd();
-                return (result == 0) ? 0 : SYS_EIO;
+                return loop_dev->clear_fd();
             }
 
             case LOOP_SET_STATUS:
@@ -8797,113 +8784,6 @@ namespace syscall
             }
         }
 
-        if ((cmd & 0xFFFF) == 0x1272) // BLKGETSIZE64
-        {
-            // 获取块设备的大小（以字节为单位）
-            if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
-            {
-                printfRed("[SyscallHandler::sys_ioctl] BLKGETSIZE64 can only be used on block devices\n");
-                return SYS_ENOTTY;
-            }
-
-            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
-#ifdef RISCV
-            uint64 *size = (uint64 *)pt->walk_addr(arg);
-#elif defined(LOONGARCH)
-            uint64 *size = (uint64 *)to_vir((uint64)pt->walk_addr(arg));
-#endif
-            if (!size)
-            {
-                printfRed("[SyscallHandler::sys_ioctl] Error fetching size address\n");
-                return SYS_EFAULT;
-            }
-
-            // 获取块设备的大小
-            uint64 device_size = 0;
-
-            // 检查是否是 loop 设备
-            eastl::string path;
-            if (f->_attrs.filetype == fs::FileTypes::FT_DEVICE)
-            {
-                fs::device_file *df = (fs::device_file *)f;
-                path = df->_path_name;
-            }
-            else
-            {
-                printfRed("[SyscallHandler::sys_ioctl] Not a device file\n");
-                return SYS_ENOTTY;
-            }
-
-            if (path.find("/dev/loop") != eastl::string::npos)
-            {
-                // 解析 loop 设备编号
-                size_t pos = path.rfind("loop");
-                if (pos != eastl::string::npos)
-                {
-                    eastl::string number_part = path.substr(pos + 4);
-                    int loop_num = -1;
-                    bool valid_num = true;
-
-                    if (!number_part.empty())
-                    {
-                        // 手动解析数字
-                        loop_num = 0;
-                        for (char c : number_part)
-                        {
-                            if (c >= '0' && c <= '9')
-                            {
-                                loop_num = loop_num * 10 + (c - '0');
-                            }
-                            else
-                            {
-                                valid_num = false;
-                                break;
-                            }
-                        }
-                    }
-                    else
-                    {
-                        valid_num = false;
-                    }
-
-                    if (valid_num && loop_num >= 0)
-                    {
-                        dev::LoopDevice *loop_dev = dev::LoopControlDevice::get_loop_device(loop_num);
-                        if (loop_dev && loop_dev->is_bound())
-                        {
-                            device_size = loop_dev->get_size();
-                        }
-                        else
-                        {
-                            printfRed("[SyscallHandler::sys_ioctl] Loop device not bound\n");
-                            return SYS_ENXIO;
-                        }
-                    }
-                    else
-                    {
-                        printfRed("[SyscallHandler::sys_ioctl] Invalid loop device number\n");
-                        return SYS_ENODEV;
-                    }
-                }
-                else
-                {
-                    printfRed("[SyscallHandler::sys_ioctl] Invalid loop device path\n");
-                    return SYS_ENODEV;
-                }
-            }
-            else
-            {
-                // 不知道其他还有什么块设备，遇到再说
-                printfRed("[SyscallHandler::sys_ioctl] Block device size query not implemented for this device type\n");
-                return SYS_ENOTTY;
-            }
-
-            // 将设备大小写入用户空间
-            *size = device_size;
-            printf("[SyscallHandler::sys_ioctl] Block device size: %u bytes\n", device_size);
-            return 0;
-        }
-
         if ((cmd & 0xFFFF) == 0x6601) // FS_IOC_GETFLAGS)
         {
             // 获取文件标志
@@ -8952,7 +8832,6 @@ namespace syscall
             }
 
             *flags_ptr = inode_flags;
-            printf("[SyscallHandler::sys_ioctl] FS_IOC_GETFLAGS: file flags = 0x%X\n", inode_flags);
             return 0;
         }
         if ((cmd & 0xFFFF) == 0x6602) // FS_IOC_SETFLAGS)
@@ -8977,7 +8856,6 @@ namespace syscall
             }
 
             uint32_t new_flags = *flags_ptr;
-            printf("[SyscallHandler::sys_ioctl] FS_IOC_SETFLAGS: setting flags to 0x%X\n", new_flags);
 
             // 通过文件的 ext4_file 结构设置 inode 标志
             if (f->lwext4_file_struct.mp && f->lwext4_file_struct.inode > 0)
@@ -9144,13 +9022,130 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_open_tree()
     {
-        // 当前不实现新 mount API 的完整 tree fd，但返回值必须是可关闭的
-        // O_PATH 风格 fd；否则 LTP 的 tst_fd 迭代会把“裸 0”当 fd 清理。
-        return alloc_anonymous_non_socket_fd("anon_inode:[open_tree]", O_PATH | O_RDONLY);
+        constexpr uint32 open_tree_clone = 0x00000001;
+        constexpr uint32 open_tree_cloexec = O_CLOEXEC;
+        constexpr uint32 allowed_flags = open_tree_clone | open_tree_cloexec;
+
+        int dirfd = AT_FDCWD;
+        eastl::string pathname;
+        int flags = 0;
+        if (_arg_int(0, dirfd) < 0)
+            return SYS_EINVAL;
+        int path_ret = _arg_str(1, pathname, PATH_MAX);
+        if (path_ret < 0)
+            return path_ret;
+        if (_arg_int(2, flags) < 0)
+            return SYS_EINVAL;
+        if ((static_cast<uint32>(flags) & ~allowed_flags) != 0)
+            return SYS_EINVAL;
+        if (pathname.empty())
+            return SYS_ENOENT;
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (p == nullptr)
+            return SYS_ESRCH;
+
+        eastl::string absolute_path;
+        if (pathname[0] == '/')
+        {
+            absolute_path = normalize_path(pathname);
+        }
+        else if (dirfd == AT_FDCWD)
+        {
+            absolute_path = get_absolute_path(pathname.c_str(), p->_cwd_name.c_str());
+        }
+        else
+        {
+            if (dirfd < 0 || static_cast<uint>(dirfd) >= proc::max_open_files)
+                return SYS_EBADF;
+            fs::file *dir_file = p->get_open_file(dirfd);
+            if (dir_file == nullptr)
+                return SYS_EBADF;
+            if (dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
+                return SYS_ENOTDIR;
+            absolute_path = get_absolute_path(pathname.c_str(),
+                                              dir_file->backing_path().c_str());
+        }
+
+        fs::Kstat st{};
+        int stat_ret = vfs_path_stat(absolute_path.c_str(), &st, true);
+        if (stat_ret < 0)
+            return stat_ret;
+
+        // 当前 mount 模型没有独立 mount tree 对象，先提供具备正确生命周期和
+        // CLOEXEC 语义的 O_PATH 描述符；路径和参数错误仍严格按 Linux 返回。
+        int fd = alloc_anonymous_non_socket_fd("anon_inode:[open_tree]",
+                                                O_PATH | O_RDONLY);
+        if (fd >= 0 && (flags & open_tree_cloexec) != 0)
+        {
+            p->_ofile->_lock.acquire();
+            p->_ofile->_fl_cloexec[fd] = true;
+            p->_ofile->_lock.release();
+        }
+        return fd;
     }
     uint64 SyscallHandler::sys_fspick()
     {
-        return alloc_anonymous_non_socket_fd("anon_inode:[fspick]");
+        constexpr uint32 k_fspick_cloexec = 0x00000001;
+        constexpr uint32 k_fspick_symlink_nofollow = 0x00000002;
+        constexpr uint32 k_fspick_no_automount = 0x00000004;
+        constexpr uint32 k_fspick_empty_path = 0x00000008;
+        constexpr uint32 k_allowed_flags =
+            k_fspick_cloexec | k_fspick_symlink_nofollow |
+            k_fspick_no_automount | k_fspick_empty_path;
+
+        int dirfd = 0;
+        eastl::string pathname;
+        int flags = 0;
+        if (_arg_int(0, dirfd) < 0)
+            return SYS_EINVAL;
+        int path_ret = _arg_str(1, pathname, PATH_MAX);
+        if (path_ret < 0)
+            return path_ret;
+        if (_arg_int(2, flags) < 0)
+            return SYS_EINVAL;
+        if ((static_cast<uint32>(flags) & ~k_allowed_flags) != 0)
+            return SYS_EINVAL;
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (p == nullptr)
+            return SYS_ESRCH;
+
+        eastl::string absolute_path;
+        if (pathname.empty() && (flags & k_fspick_empty_path))
+        {
+            if (dirfd == AT_FDCWD)
+            {
+                absolute_path = p->_cwd_name;
+            }
+            else
+            {
+                fs::file *file = p->get_open_file(dirfd);
+                if (file == nullptr)
+                    return SYS_EBADF;
+                absolute_path = file->_path_name;
+            }
+        }
+        else
+        {
+            int resolve_ret = resolve_at_path(dirfd, pathname, absolute_path);
+            if (resolve_ret < 0)
+                return resolve_ret;
+        }
+
+        fs::Kstat st{};
+        int stat_ret = vfs_path_stat(absolute_path.c_str(), &st,
+                                     (flags & k_fspick_symlink_nofollow) == 0);
+        if (stat_ret < 0)
+            return stat_ret;
+
+        int fd = alloc_anonymous_non_socket_fd("anon_inode:[fspick]");
+        if (fd >= 0 && (flags & k_fspick_cloexec) != 0 &&
+            p->_ofile != nullptr && fd < static_cast<int>(proc::max_open_files))
+        {
+            p->_ofile->_fl_cloexec[fd] = true;
+        }
+        return fd;
     }
     uint64 SyscallHandler::sys_fsopen()
     {
@@ -9400,7 +9395,40 @@ namespace syscall
         {
             return -EINVAL;
         }
-        if ((flags & kFanReportPidfd) != 0 && (flags & kFanReportTid) != 0)
+
+        uint32 init_flags = static_cast<uint32>(flags);
+        constexpr uint32 allowed_init_flags =
+            kFanCloexec | kFanNonblock | kFanAllClassBits |
+            0x00000010 | 0x00000020 | 0x00000040 |
+            kFanReportPidfd | kFanReportTid | kFanReportFid |
+            kFanReportDirFid | kFanReportName | kFanReportTargetFid |
+            0x00002000;
+        if ((init_flags & ~allowed_init_flags) != 0)
+        {
+            return -EINVAL;
+        }
+        if ((init_flags & kFanAllClassBits) == kFanAllClassBits)
+        {
+            return -EINVAL;
+        }
+        if ((init_flags & kFanReportFid) != 0 &&
+            (init_flags & kFanAllClassBits) != 0)
+        {
+            return -EINVAL;
+        }
+        if ((init_flags & kFanReportName) != 0 &&
+            (init_flags & kFanReportDirFid) == 0)
+        {
+            return -EINVAL;
+        }
+        if ((init_flags & kFanReportTargetFid) != 0 &&
+            (init_flags & (kFanReportFid | kFanReportDirFid | kFanReportName)) !=
+                (kFanReportFid | kFanReportDirFid | kFanReportName))
+        {
+            return -EINVAL;
+        }
+        if ((init_flags & kFanReportPidfd) != 0 &&
+            (init_flags & kFanReportTid) != 0)
         {
             return -EINVAL;
         }
@@ -9411,7 +9439,10 @@ namespace syscall
             return -ESRCH;
         }
 
-        auto *fan_file = new FanotifyFile(static_cast<uint32>(flags), static_cast<uint32>(event_f_flags));
+        auto *fan_file = new FanotifyFile(init_flags,
+                                          static_cast<uint32>(event_f_flags),
+                                          static_cast<int32>(p->_tgid),
+                                          p->get_euid() != 0);
         if (fan_file == nullptr)
         {
             return -ENOMEM;
@@ -9444,9 +9475,7 @@ namespace syscall
             return -EINVAL;
         if (_arg_int(3, dirfd) < 0)
             return -EINVAL;
-        int path_ret = _arg_str(4, pathname, PGSIZE);
-        if (path_ret < 0)
-            return path_ret;
+        uint64 pathname_addr = _arg_raw(4);
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         if (p == nullptr)
@@ -9454,15 +9483,81 @@ namespace syscall
 
         fs::file *base_file = p->get_open_file(fanotify_fd);
         if (base_file == nullptr || !base_file->is_fanotify_file())
-            return -EINVAL;
+            return -EBADF;
         auto *fan_file = static_cast<FanotifyFile *>(base_file);
 
+        uint32 mark_flags = static_cast<uint32>(flags);
+        constexpr uint32 allowed_mark_flags =
+            kFanMarkAdd | kFanMarkRemove | kFanMarkDontFollow |
+            kFanMarkOnlydir | kFanMarkMount | kFanMarkIgnoredMask |
+            kFanMarkIgnoredSurvModify | kFanMarkFlush |
+            kFanMarkFilesystem | 0x00000200 | kFanMarkIgnore;
+        if ((mark_flags & ~allowed_mark_flags) != 0)
+            return -EINVAL;
+        int action_count = ((mark_flags & kFanMarkAdd) != 0) +
+                           ((mark_flags & kFanMarkRemove) != 0) +
+                           ((mark_flags & kFanMarkFlush) != 0);
+        if (action_count != 1)
+            return -EINVAL;
+        if ((mark_flags & kFanMarkScopeMask) == kFanMarkScopeMask)
+            return -EINVAL;
+        if ((mark_flags & kFanMarkIgnoredMask) != 0 &&
+            (mark_flags & kFanMarkIgnore) != 0)
+            return -EINVAL;
+        if ((mark_flags & kFanMarkFlush) != 0)
+        {
+            if (mask != 0 ||
+                (mark_flags & ~(kFanMarkFlush | kFanMarkScopeMask)) != 0)
+                return -EINVAL;
+            return fan_file->update_mark("", mark_flags, 0);
+        }
+
+        constexpr uint64 fid_event_mask =
+            kFanAttrib | kFanCreate | kFanDelete |
+            kFanMovedFrom | kFanMovedTo | kFanDeleteSelf |
+            kFanMoveSelf | kFanRename;
+        uint32 init_flags = fan_file->init_flags();
+        if ((mask & fid_event_mask) != 0 &&
+            (init_flags & (kFanReportFid | kFanReportDirFid)) == 0)
+            return -EINVAL;
+        if ((mark_flags & kFanMarkMount) != 0 &&
+            (mask & fid_event_mask) != 0)
+            return -EINVAL;
+        if ((mask & kFanRename) != 0 &&
+            (init_flags & kFanReportName) == 0)
+            return -EINVAL;
+        if ((mark_flags & kFanMarkIgnore) != 0 &&
+            (mark_flags & kFanMarkIgnoredSurvModify) == 0 &&
+            (mark_flags & kFanMarkScopeMask) != 0)
+            return -EINVAL;
+
+        bool has_pathname = pathname_addr != 0;
+        if (has_pathname)
+        {
+            int path_ret = _arg_str(4, pathname, PGSIZE);
+            if (path_ret < 0)
+                return path_ret;
+        }
+
         eastl::string abs_path;
-        if (pathname.empty())
+        fs::file *dir_file = nullptr;
+        if (!has_pathname)
+        {
+            if (dirfd == AT_FDCWD)
+                return -EFAULT;
+            dir_file = p->get_open_file(dirfd);
+            if (dir_file == nullptr)
+                return -EBADF;
+            if (dir_file->_attrs.filetype != fs::FileTypes::FT_NORMAL &&
+                dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
+                return -EINVAL;
+            abs_path = dir_file->backing_path();
+        }
+        else if (pathname.empty())
         {
             return -ENOENT;
         }
-        if (pathname[0] == '/')
+        else if (pathname[0] == '/')
         {
             abs_path = pathname;
         }
@@ -9472,7 +9567,7 @@ namespace syscall
         }
         else
         {
-            fs::file *dir_file = p->get_open_file(dirfd);
+            dir_file = p->get_open_file(dirfd);
             if (dir_file == nullptr)
                 return -EBADF;
             if (dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
@@ -9484,9 +9579,27 @@ namespace syscall
         int stat_ret = vfs_path_stat(abs_path.c_str(), &st, (flags & kFanMarkDontFollow) == 0);
         if (stat_ret < 0)
             return stat_ret;
-        if ((flags & kFanMarkOnlydir) != 0 && (st.mode & S_IFMT) != S_IFDIR)
+        bool is_dir = (st.mode & S_IFMT) == S_IFDIR;
+        if ((mark_flags & kFanMarkOnlydir) != 0 && !is_dir)
             return -ENOTDIR;
-        if ((flags & kFanMarkDontFollow) == 0)
+        uint64 directory_only_mask =
+            kFanCreate | kFanDelete | kFanMovedFrom |
+            kFanMovedTo | kFanRename | kFanOndir | kFanEventOnChild;
+        if (!is_dir &&
+            (mark_flags & kFanMarkScopeMask) == 0 &&
+            ((init_flags & kFanReportTargetFid) != 0 ||
+             (mark_flags & kFanMarkIgnore) != 0) &&
+            (mask & directory_only_mask) != 0)
+            return -ENOTDIR;
+        if (!is_dir && (mask & kFanRename) != 0 &&
+            (mark_flags & kFanMarkScopeMask) == 0)
+            return -ENOTDIR;
+        if (is_dir &&
+            (mark_flags & kFanMarkIgnore) != 0 &&
+            (mark_flags & kFanMarkIgnoredSurvModify) == 0)
+            return -EISDIR;
+
+        if ((mark_flags & kFanMarkDontFollow) == 0)
         {
             eastl::string resolved;
             int resolve_ret = vfs_resolve_path(abs_path, resolved);
@@ -9496,8 +9609,131 @@ namespace syscall
             }
         }
 
-        return fan_file->update_mark(abs_path, static_cast<uint32>(flags), mask);
+        return fan_file->update_mark(normalize_watch_path(abs_path), mark_flags, mask);
     }
+
+    uint64 SyscallHandler::sys_name_to_handle_at()
+    {
+        int dirfd = AT_FDCWD;
+        uint64 pathname_addr = 0;
+        uint64 handle_addr = 0;
+        uint64 mount_id_addr = 0;
+        int flags = 0;
+        if (_arg_int(0, dirfd) < 0 ||
+            _arg_addr(1, pathname_addr) < 0 ||
+            _arg_addr(2, handle_addr) < 0 ||
+            _arg_addr(3, mount_id_addr) < 0 ||
+            _arg_int(4, flags) < 0)
+        {
+            return -EINVAL;
+        }
+
+        constexpr int allowed_flags = AT_EMPTY_PATH | kAtHandleFid;
+        if ((flags & ~allowed_flags) != 0)
+        {
+            return -EINVAL;
+        }
+        if (pathname_addr == 0 || handle_addr == 0 || mount_id_addr == 0)
+        {
+            return -EFAULT;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (p == nullptr)
+        {
+            return -ESRCH;
+        }
+        mem::PageTable *pt = p->get_pagetable();
+
+        eastl::string pathname;
+        int copy_ret = mem::k_vmm.copy_str_in(*pt, pathname, pathname_addr, PATH_MAX);
+        if (copy_ret < 0)
+        {
+            return copy_ret;
+        }
+
+        eastl::string absolute_path;
+        if (pathname.empty())
+        {
+            if ((flags & AT_EMPTY_PATH) == 0)
+            {
+                return -ENOENT;
+            }
+            if (dirfd == AT_FDCWD)
+            {
+                absolute_path = p->_cwd_name;
+            }
+            else
+            {
+                fs::file *file = p->get_open_file(dirfd);
+                if (file == nullptr)
+                {
+                    return -EBADF;
+                }
+                absolute_path = file->backing_path();
+            }
+        }
+        else
+        {
+            int resolve_ret = resolve_at_path(dirfd, pathname, absolute_path);
+            if (resolve_ret < 0)
+            {
+                return resolve_ret;
+            }
+        }
+        absolute_path = normalize_watch_path(absolute_path);
+
+        fs::Kstat st{};
+        int stat_ret = vfs_path_stat(absolute_path.c_str(), &st, true);
+        if (stat_ret < 0)
+        {
+            return stat_ret;
+        }
+
+        KernelFileHandleHeader user_header{};
+        if (mem::k_vmm.copy_in(*pt,
+                               &user_header,
+                               handle_addr,
+                               sizeof(user_header)) < 0)
+        {
+            return -EFAULT;
+        }
+
+        KernelFileHandleHeader result_header{};
+        result_header.handle_bytes = kFanHandleBytes;
+        result_header.handle_type = kFanHandleType;
+        const int mount_id = 1;
+        if (mem::k_vmm.copy_out(*pt,
+                                mount_id_addr,
+                                &mount_id,
+                                sizeof(mount_id)) < 0 ||
+            mem::k_vmm.copy_out(*pt,
+                                handle_addr,
+                                &result_header,
+                                sizeof(result_header)) < 0)
+        {
+            return -EFAULT;
+        }
+
+        if (user_header.handle_bytes < kFanHandleBytes)
+        {
+            return -EOVERFLOW;
+        }
+
+        uint32 handle_data[2] = {
+            static_cast<uint32>(st.ino & 0xffffffffu),
+            static_cast<uint32>((st.ino >> 32) & 0xffffffffu),
+        };
+        if (mem::k_vmm.copy_out(*pt,
+                                handle_addr + sizeof(result_header),
+                                handle_data,
+                                sizeof(handle_data)) < 0)
+        {
+            return -EFAULT;
+        }
+        return 0;
+    }
+
     uint64 SyscallHandler::sys_pidfd_send_signal()
     {
         int pidfd = -1;
@@ -9516,7 +9752,7 @@ namespace syscall
             return SYS_EINVAL;
         if (flags != 0)
             return SYS_EINVAL;
-        if (!proc::ipc::signal::is_valid(sig))
+        if (sig != 0 && !proc::ipc::signal::is_valid(sig))
             return SYS_EINVAL;
 
         int target_pid = 0;
@@ -9556,11 +9792,101 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_signalfd4()
     {
-        return alloc_anonymous_non_socket_fd("anon_inode:[signalfd]");
+        int fd;
+        uint64 mask_addr;
+        int flags;
+        if (_arg_int(0, fd) < 0 ||
+            _arg_addr(1, mask_addr) < 0 ||
+            _arg_int(3, flags) < 0)
+        {
+            return SYS_EINVAL;
+        }
+        size_t sigset_size = static_cast<size_t>(_arg_raw(2));
+        if (sigset_size != sizeof(proc::ipc::signal::sigset_t))
+        {
+            return SYS_EINVAL;
+        }
+        if (mask_addr == 0)
+        {
+            return SYS_EFAULT;
+        }
+        if ((flags & ~(O_CLOEXEC | O_NONBLOCK)) != 0)
+        {
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *current = proc::k_pm.get_cur_pcb();
+        if (current == nullptr || current->get_pagetable() == nullptr)
+        {
+            return SYS_ESRCH;
+        }
+        proc::ipc::signal::sigset_t mask{};
+        if (mem::k_vmm.copy_in(*current->get_pagetable(),
+                               &mask,
+                               mask_addr,
+                               sizeof(mask)) < 0)
+        {
+            return SYS_EFAULT;
+        }
+
+        if (fd >= 0)
+        {
+            fs::file *existing = current->get_open_file(fd);
+            if (existing == nullptr)
+            {
+                return SYS_EBADF;
+            }
+            if (!existing->is_signalfd_file())
+            {
+                return SYS_EINVAL;
+            }
+            static_cast<SignalFdFile *>(existing)->set_mask(mask.sig[0]);
+            return fd;
+        }
+        if (fd != -1)
+        {
+            return SYS_EBADF;
+        }
+
+        auto *signal_file = new SignalFdFile(mask.sig[0], flags);
+        if (signal_file == nullptr)
+        {
+            return SYS_ENOMEM;
+        }
+        int new_fd = proc::k_pm.alloc_fd(current, signal_file);
+        if (new_fd < 0)
+        {
+            signal_file->free_file();
+            return new_fd;
+        }
+        if ((flags & O_CLOEXEC) != 0)
+        {
+            current->_ofile->_fl_cloexec[new_fd] = true;
+        }
+        return new_fd;
     }
     uint64 SyscallHandler::sys_timerfd_create()
     {
-        return alloc_anonymous_non_socket_fd("anon_inode:[timerfd]");
+        int clock_id;
+        int flags;
+        if (_arg_int(0, clock_id) < 0 || _arg_int(1, flags) < 0)
+            return SYS_EINVAL;
+        if (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC)
+            return SYS_EINVAL;
+        if ((flags & ~(O_CLOEXEC | O_NONBLOCK)) != 0)
+            return SYS_EINVAL;
+
+        int fd = alloc_anonymous_non_socket_fd("anon_inode:[timerfd]",
+                                                O_RDWR | (flags & O_NONBLOCK));
+        if (fd < 0)
+            return fd;
+
+        proc::Pcb *current = proc::k_pm.get_cur_pcb();
+        if (current == nullptr || current->_ofile == nullptr)
+            return SYS_ESRCH;
+        if ((flags & O_CLOEXEC) != 0)
+            current->_ofile->_fl_cloexec[fd] = true;
+        return fd;
     }
     uint64 SyscallHandler::sys_syslog()
     {
@@ -10014,7 +10340,7 @@ namespace syscall
 
             if (op == F_SETOWN_EX)
             {
-                KernelFOwnerEx owner_ex{};
+                abi::KernelFOwnerEx owner_ex{};
                 if (mem::k_vmm.copy_in(*p->get_pagetable(), &owner_ex, arg, sizeof(owner_ex)) < 0)
                 {
                     return SYS_EFAULT;
@@ -10022,13 +10348,13 @@ namespace syscall
 
                 switch (owner_ex.type)
                 {
-                case k_f_owner_tid:
+                case abi::k_f_owner_tid:
                     pipe->set_async_owner(proc::ipc::PIPE_ASYNC_OWNER_TID, owner_ex.pid);
                     break;
-                case k_f_owner_pid:
+                case abi::k_f_owner_pid:
                     pipe->set_async_owner(proc::ipc::PIPE_ASYNC_OWNER_PID, owner_ex.pid);
                     break;
-                case k_f_owner_pgrp:
+                case abi::k_f_owner_pgrp:
                     pipe->set_async_owner(proc::ipc::PIPE_ASYNC_OWNER_PGRP, owner_ex.pid);
                     break;
                 default:
@@ -10037,23 +10363,23 @@ namespace syscall
                 return 0;
             }
 
-            KernelFOwnerEx owner_ex{};
+            abi::KernelFOwnerEx owner_ex{};
             switch (pipe->get_async_owner_type())
             {
             case proc::ipc::PIPE_ASYNC_OWNER_TID:
-                owner_ex.type = k_f_owner_tid;
+                owner_ex.type = abi::k_f_owner_tid;
                 owner_ex.pid = pipe->get_async_owner_id();
                 break;
             case proc::ipc::PIPE_ASYNC_OWNER_PID:
-                owner_ex.type = k_f_owner_pid;
+                owner_ex.type = abi::k_f_owner_pid;
                 owner_ex.pid = pipe->get_async_owner_id();
                 break;
             case proc::ipc::PIPE_ASYNC_OWNER_PGRP:
-                owner_ex.type = k_f_owner_pgrp;
+                owner_ex.type = abi::k_f_owner_pgrp;
                 owner_ex.pid = pipe->get_async_owner_id();
                 break;
             default:
-                owner_ex.type = k_f_owner_pid;
+                owner_ex.type = abi::k_f_owner_pid;
                 owner_ex.pid = 0;
                 break;
             }
@@ -10130,7 +10456,7 @@ namespace syscall
 	                return 0;
 	            }
 
-            OpenDescriptionStats lease_stats = collect_open_description_stats(path, f);
+            fs::OpenDescriptionStats lease_stats = fs::FileDescriptorAccess::collect_open_description_stats(path, f);
             if (lease_stats.has_other_lease_owner)
             {
                 return SYS_EAGAIN;
@@ -10494,10 +10820,12 @@ namespace syscall
         uint64 sysinfoaddr;
         [[maybe_unused]] sysinfo sysinfo_;
 
-        if (_arg_addr(0, sysinfoaddr) < 0)
-            return -1;
+        if (_arg_addr(0, sysinfoaddr) < 0 || sysinfoaddr == 0)
+            return SYS_EFAULT;
 
         proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
+        if (cur_proc == nullptr || cur_proc->get_pagetable() == nullptr)
+            return SYS_ESRCH;
         mem::PageTable *pt = cur_proc->get_pagetable();
 
         memset(&sysinfo_, 0, sizeof(sysinfo_));
@@ -10519,7 +10847,7 @@ namespace syscall
 
         if (mem::k_vmm.copy_out(*pt, sysinfoaddr, &sysinfo_,
                                 sizeof(sysinfo_)) < 0)
-            return -1;
+            return SYS_EFAULT;
 
         return 0;
     }
@@ -10911,11 +11239,7 @@ namespace syscall
         {
             return SYS_EBADF;
         }
-        if (f->lwext4_file_struct.flags & O_DIRECT)
-        {
-            return SYS_EINVAL;
-        }
-        if (!file_descriptor_allows_read(f))
+        if (!fs::FileDescriptorAccess::allows_read(f))
         {
             return SYS_EBADF;
         }
@@ -10946,12 +11270,28 @@ namespace syscall
             return copy_ret;
         }
 
-        return read_to_user_iovecs(f, *pt, iovecs.data(), iovcnt, nullptr);
-    }
-    uint64 SyscallHandler::sys_geteuid()
-    {
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        return p->_euid; // 返回有效用户ID
+        long direct_offset = f->get_file_offset();
+        for (int i = 0; i < iovcnt; ++i)
+        {
+            const KernelIovec &iov = iovecs.data()[i];
+            int direct_result = fs::FileDescriptorAccess::validate_direct_io_request(
+                f, *pt, iov.base, iov.len, direct_offset, true);
+            if (direct_result < 0)
+            {
+                return direct_result;
+            }
+            direct_offset += static_cast<long>(iov.len);
+        }
+
+        long result = read_to_user_iovecs(f, *pt, iovecs.data(), iovcnt, nullptr);
+        if (result > 0 && !f->is_fanotify_file() && !f->_suppress_fanotify)
+        {
+            notify_fanotify_event(f,
+                                  f->backing_path(),
+                                  kFanAccess,
+                                  f->_attrs.filetype == fs::FileTypes::FT_DIRECT);
+        }
+        return result;
     }
     uint64 SyscallHandler::sys_madvise()
     {
@@ -11121,6 +11461,10 @@ namespace syscall
         if (_arg_int(3, flags) < 0)
             return -EINVAL;
 
+        const int allowed_flags = AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH;
+        if ((flags & ~allowed_flags) != 0)
+            return -EINVAL;
+
         proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = cur_proc->get_pagetable();
 
@@ -11142,6 +11486,9 @@ namespace syscall
         bool use_fd_only = false;
         if (pathaddr == 0)
         {
+            // pathname==NULL 是 Linux 的 futimens 扩展，此形式不接受路径 flags。
+            if (flags != 0)
+                return -EINVAL;
             use_fd_only = true;
         }
         else
@@ -11152,8 +11499,10 @@ namespace syscall
                 printfRed("[sys_utimensat] Error copying path from user space\n");
                 return cpres;
             }
-            if (pathname.empty() && (flags & AT_EMPTY_PATH))
+            if (pathname.empty())
             {
+                if ((flags & AT_EMPTY_PATH) == 0)
+                    return -ENOENT;
                 use_fd_only = true;
             }
         }
@@ -11181,15 +11530,37 @@ namespace syscall
         }
 
         eastl::string absolute_path;
-        int resolve_ret = resolve_utimens_path(dirfd, pathname, absolute_path);
+        int resolve_ret = resolve_at_path(dirfd, pathname, absolute_path);
         if (resolve_ret < 0)
         {
             return resolve_ret;
         }
 
-        if (fs::k_vfs.is_file_exist(absolute_path.c_str()) != 1)
+        fs::Kstat st{};
+        const bool follow_symlinks = (flags & AT_SYMLINK_NOFOLLOW) == 0;
+        int stat_ret = vfs_path_stat(absolute_path.c_str(), &st, follow_symlinks);
+        if (stat_ret < 0)
         {
-            return classify_utimens_path_error(absolute_path);
+            return stat_ret;
+        }
+
+        struct ext4_inode inode{};
+        uint32 inode_number = 0;
+        int inode_ret = ext4_raw_inode_fill(absolute_path.c_str(), &inode_number, &inode);
+        if (inode_ret != EOK)
+        {
+            return -inode_ret;
+        }
+
+        int constraint_ret = check_utimens_constraints(
+            cur_proc,
+            st,
+            ext4_inode_get_flags(&inode),
+            vfs_is_readonly_path(absolute_path),
+            times);
+        if (constraint_ret < 0 || utimens_is_noop(times))
+        {
+            return constraint_ret;
         }
 
         return vfs_ext_utimens(absolute_path.c_str(),
@@ -11197,69 +11568,66 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_renameat2()
     {
-        // panic("未实现");
-        // #ifdef FS_FIX_COMPLETELY
         int old_fd, new_fd, flags;
         uint64 old_path_addr, new_path_addr;
 
-        // TODO: 留待高人测试
         if (_arg_int(0, old_fd) < 0)
-            return -1;
+            return -EINVAL;
         if (_arg_addr(1, old_path_addr) < 0)
-            return -1;
+            return -EFAULT;
         if (_arg_int(2, new_fd) < 0)
-            return -1;
+            return -EINVAL;
         if (_arg_addr(3, new_path_addr) < 0)
-            return -1;
+            return -EFAULT;
         if (_arg_int(4, flags) < 0)
-            return -1;
+            return -EINVAL;
+        if (flags != 0)
+            return -EINVAL;
 
-        // 拷贝路径字符串
         eastl::string old_path, new_path;
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
         int cpres = mem::k_vmm.copy_str_in(*pt, old_path, old_path_addr, PATH_MAX);
         if (cpres < 0)
         {
-            printfRed("[sys_renameat2] Error copying old path from user space\n");
             return cpres;
         }
         cpres = mem::k_vmm.copy_str_in(*pt, new_path, new_path_addr, PATH_MAX);
         if (cpres < 0)
         {
-            printfRed("[sys_renameat2] Error copying new path from user space\n");
             return cpres;
         }
 
-        // 获取基础目录路径
-        eastl::string old_base_path = (old_fd == AT_FDCWD) ? p->_cwd_name : p->get_open_file(old_fd)->_path_name;
-        eastl::string new_base_path = (new_fd == AT_FDCWD) ? p->_cwd_name : p->get_open_file(new_fd)->_path_name;
+        eastl::string old_abs_path;
+        eastl::string new_abs_path;
+        int ret = resolve_at_path(old_fd, old_path, old_abs_path);
+        if (ret < 0)
+            return ret;
+        ret = resolve_at_path(new_fd, new_path, new_abs_path);
+        if (ret < 0)
+            return ret;
 
-        printf("[sys_renameat2] old_fd: %d, old_path: %s, new_fd: %d, new_path: %s, flags: %d\n",
-               old_fd, old_path.c_str(), new_fd, new_path.c_str(), flags);
-        printf("[sys_renameat2] old_base_path: %s, new_base_path: %s\n",
-               old_base_path.c_str(), new_base_path.c_str());
-        
-        // 构建绝对路径
-        eastl::string old_abs_path = get_absolute_path(old_path.c_str(), old_base_path.c_str());
-        eastl::string new_abs_path = get_absolute_path(new_path.c_str(), new_base_path.c_str());
-
-        printf("[sys_renameat2] old_abs_path: %s, new_abs_path: %s, flags: %d\n",
-               old_abs_path.c_str(), new_abs_path.c_str(), flags);
-        old_abs_path = normalize_watch_path(old_abs_path);
-        new_abs_path = normalize_watch_path(new_abs_path);
         bool moved_is_dir = false;
         fs::Kstat moved_stat{};
-        if (vfs_path_stat(old_abs_path.c_str(), &moved_stat, true) == 0)
+        if (vfs_path_stat(old_abs_path.c_str(), &moved_stat, false) == 0)
         {
             moved_is_dir = (moved_stat.mode & S_IFMT) == S_IFDIR;
         }
-        int ret = 0;
-        if ((ret = vfs_frename(old_abs_path.c_str(), new_abs_path.c_str())) < 0)
-        {
-            printfRed("[sys_renameat2] rename failed: %s -> %s, ret = %d\n", old_abs_path.c_str(), new_abs_path.c_str(), ret);
+        const eastl::string old_parent = parent_path_of(old_abs_path);
+        const eastl::string new_parent = parent_path_of(new_abs_path);
+        const uint64 old_parent_ino = fanotify_path_ino(old_parent);
+        const uint64 new_parent_ino = fanotify_path_ino(new_parent);
+        ret = vfs_frename(old_abs_path.c_str(), new_abs_path.c_str());
+        if (ret < 0)
             return ret;
-        }
+
+        notify_fanotify_rename(old_abs_path,
+                               new_abs_path,
+                               moved_is_dir,
+                               moved_stat.ino,
+                               old_parent_ino,
+                               new_parent_ino);
+        update_open_file_paths_after_rename(old_abs_path, new_abs_path);
         uint32 cookie = next_inotify_cookie();
         notify_inotify_rename(old_abs_path, new_abs_path, moved_is_dir, cookie);
         update_process_cwd_after_rename(old_abs_path, new_abs_path);
@@ -11308,7 +11676,7 @@ namespace syscall
         }
 
         int64_t requested_ns = 0;
-        if (!kernel_timespec_to_ns_checked(req_ts, requested_ns))
+        if (!tmm::k_timex.timespec_to_ns_checked(req_ts, requested_ns))
         {
             return SYS_EINVAL;
         }
@@ -11324,7 +11692,7 @@ namespace syscall
             }
 
             int64_t current_ns = 0;
-            if (!kernel_timespec_to_ns_checked(now_ts, current_ns))
+            if (!tmm::k_timex.timespec_to_ns_checked(now_ts, current_ns))
             {
                 return SYS_EINVAL;
             }
@@ -11400,7 +11768,8 @@ namespace syscall
         {
             return SYS_ESRCH;
         }
-        if (p->get_euid() != 0)
+        constexpr uint32 cap_sys_admin = 21;
+        if (!proc::k_capability.has_effective(p, cap_sys_admin))
         {
             return SYS_EPERM;
         }
@@ -11551,47 +11920,83 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_pread64()
     {
-        int fd;
-        uint64 buf;
-        uint64 count;
-        int offset;
-        if (_arg_fd(0, &fd, nullptr) < 0 || _arg_addr(1, buf) < 0 ||
-            _arg_addr(2, count) < 0 || _arg_int(3, offset) < 0)
-            return -EINVAL;
+        fs::file *f = nullptr;
+        uint64 buf = 0;
+        long offset = 0;
+        if (_arg_fd(0, nullptr, &f) < 0)
+            return SYS_EBADF;
+        if (_arg_addr(1, buf) < 0)
+            return SYS_EFAULT;
+        if (_arg_long(3, offset) < 0 || offset < 0)
+            return SYS_EINVAL;
+        size_t count = static_cast<size_t>(_arg_raw(2));
+        if (buf == 0 && count != 0)
+            return SYS_EFAULT;
 
+        if ((f->lwext4_file_struct.flags & O_PATH) != 0 ||
+            !fs::FileDescriptorAccess::allows_read(f))
+            return SYS_EBADF;
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        fs::file *f = p->get_open_file(fd);
-        if (!f)
-            return -EBADF; // Bad file descriptor
         if (f->_attrs.filetype == fs::FT_PIPE)
-            return -ESPIPE; // Illegal seek on a pipe
+            return -ESPIPE;
+        if (f->_attrs.filetype == fs::FT_DIRECT)
+            return -EISDIR;
+        int direct_result = fs::FileDescriptorAccess::validate_direct_io_request(
+            f, *p->get_pagetable(), buf, count, offset, true);
+        if (direct_result < 0)
+            return direct_result;
+
         long read_off = offset;
-        KernelIovec iovec = {buf, static_cast<size_t>(count)};
-        return read_to_user_iovecs(f, *p->get_pagetable(), &iovec, 1, &read_off);
+        KernelIovec iovec = {buf, count};
+        long result =
+            read_to_user_iovecs(f, *p->get_pagetable(), &iovec, 1, &read_off);
+        if (result > 0 && !f->is_fanotify_file() && !f->_suppress_fanotify)
+        {
+            notify_fanotify_event(f,
+                                  f->backing_path(),
+                                  kFanAccess,
+                                  f->_attrs.filetype == fs::FileTypes::FT_DIRECT);
+        }
+        return result;
     }
     uint64 SyscallHandler::sys_pwrite64()
     {
-        int fd;
-        uint64 buf;
-        uint64 count;
-        int offset;
-        if (_arg_fd(0, &fd, nullptr) < 0 ||
-            _arg_addr(1, buf) < 0 ||
-            _arg_addr(2, count) < 0 ||
-            _arg_int(3, offset) < 0)
-        {
-            return -EINVAL; // Invalid arguments
-        }
+        fs::file *f = nullptr;
+        uint64 buf = 0;
+        long offset = 0;
+        if (_arg_fd(0, nullptr, &f) < 0)
+            return SYS_EBADF;
+        if (_arg_addr(1, buf) < 0)
+            return SYS_EFAULT;
+        if (_arg_long(3, offset) < 0 || offset < 0)
+            return SYS_EINVAL;
+        size_t count = static_cast<size_t>(_arg_raw(2));
+        if (buf == 0 && count != 0)
+            return SYS_EFAULT;
+
+        if ((f->lwext4_file_struct.flags & O_PATH) != 0 ||
+            !fs::FileDescriptorAccess::allows_write(f))
+            return SYS_EBADF;
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        fs::file *f = p->get_open_file(fd);
-        if (!f)
-            return -EBADF;
         if (f->_attrs.filetype == fs::FT_PIPE)
             return -ESPIPE;
+        int direct_result = fs::FileDescriptorAccess::validate_direct_io_request(
+            f, *p->get_pagetable(), buf, count, offset, false);
+        if (direct_result < 0)
+            return direct_result;
 
         long write_off = offset;
-        KernelIovec iovec = {buf, static_cast<size_t>(count)};
-        return write_from_user_iovecs(f, *p->get_pagetable(), &iovec, 1, &write_off);
+        KernelIovec iovec = {buf, count};
+        long result =
+            write_from_user_iovecs(f, *p->get_pagetable(), &iovec, 1, &write_off);
+        if (result > 0 && !f->_suppress_fanotify)
+        {
+            notify_fanotify_event(f,
+                                  f->backing_path(),
+                                  kFanModify,
+                                  f->_attrs.filetype == fs::FileTypes::FT_DIRECT);
+        }
+        return result;
     }
     uint64 SyscallHandler::sys_pselect6()
     {
@@ -12193,14 +12598,27 @@ namespace syscall
         }
 
         proc::Pcb *current = proc::k_pm.get_cur_pcb();
+        if (current == nullptr)
+        {
+            return -ESRCH;
+        }
+
         proc::Pcb *target = nullptr;
-        if (pid == 0 || pid == static_cast<int>(current->get_tid()))
+        if (pid == 0)
         {
             target = current;
         }
         else
         {
-            return -ESRCH;
+            target = proc::k_capability.find_live_task_by_pid_or_tid(pid);
+            if (target == nullptr)
+            {
+                return -ESRCH;
+            }
+            if (!proc::k_capability.may_inspect(current, target))
+            {
+                return -EPERM;
+            }
         }
 
         uint64 head_addr = target->_robust_list_user_addr;
@@ -12248,7 +12666,7 @@ namespace syscall
             return SYS_EFAULT;
         }
 
-        KernelITimerValOld new_timer{};
+        abi::KernelITimerValOld new_timer{};
         if (mem::k_vmm.copy_in(*pt, &new_timer, new_value_addr, sizeof(new_timer)) < 0)
         {
             return SYS_EFAULT;
@@ -12268,7 +12686,7 @@ namespace syscall
 
         if (old_value_addr != 0)
         {
-            KernelITimerValOld old_timer_user{};
+            abi::KernelITimerValOld old_timer_user{};
             fill_itimerval_from_snapshot(old_timer, old_timer_user);
             if (mem::k_vmm.copy_out(*pt, old_value_addr, &old_timer_user, sizeof(old_timer_user)) < 0)
             {
@@ -12367,208 +12785,6 @@ namespace syscall
         // 成功时返回实际拷贝的字节数
         return sizeof(CpuMask);
     }
-    uint64 SyscallHandler::sys_setpgid()
-    {
-        int pid, pgid;
-
-        // 获取参数
-        if (_arg_int(0, pid) < 0)
-        {
-            printfRed("[SyscallHandler::sys_setpgid] Error fetching pid argument\n");
-            return SYS_EINVAL;
-        }
-
-        if (_arg_int(1, pgid) < 0)
-        {
-            printfRed("[SyscallHandler::sys_setpgid] Error fetching pgid argument\n");
-            return SYS_EINVAL;
-        }
-
-        printfCyan("[SyscallHandler::sys_setpgid] pid: %d, pgid: %d\n", pid, pgid);
-
-        // 获取当前进程
-        proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
-        if (current_proc == nullptr)
-        {
-            panic("[SyscallHandler::sys_setpgid] Current process is null\n");
-            return SYS_ESRCH;
-        }
-
-        // 确定目标进程
-        proc::Pcb *target_proc;
-        if (pid == 0)
-        {
-            // pid 为 0，使用当前进程
-            target_proc = current_proc;
-        }
-        else
-        {
-            // 根据 pid 查找对应的进程
-            target_proc = proc::k_pm.find_proc_by_pid(pid);
-            if (target_proc == nullptr)
-            {
-                printfRed("[SyscallHandler::sys_setpgid] Process with pid %d not found\n", pid);
-                return SYS_ESRCH; // 进程不存在
-            }
-
-            // 权限检查：目标进程必须是调用进程本身或调用进程的子进程
-            if (target_proc != current_proc && target_proc->get_parent() != current_proc)
-            {
-                printfRed("[SyscallHandler::sys_setpgid] Permission denied: process %d is not the calling process or its child\n", pid);
-                return SYS_ESRCH; // 权限不足，按POSIX标准返回ESRCH
-            }
-        }
-
-        // 确定要设置的进程组ID
-        uint32 set_pgid;
-        if (pgid == 0)
-        {
-            // pgid 为 0，使用目标进程的 PID 作为进程组ID
-            set_pgid = target_proc->get_pid();
-        }
-        else
-        {
-            // 使用指定的 pgid
-            set_pgid = (uint32)pgid;
-
-            // 检查 pgid 是否为负数
-            if (pgid < 0)
-            {
-                printfRed("[SyscallHandler::sys_setpgid] Invalid pgid: %d\n", pgid);
-                return SYS_EINVAL;
-            }
-
-            if ((uint)pgid >= proc::pid_max)
-            {
-                printfRed("[SyscallHandler::sys_setpgid] Invalid pgid: %d\n", pgid);
-                return SYS_EPERM;
-            }
-        }
-
-        // 设置进程组ID
-        target_proc->set_pgid(set_pgid);
-
-        printfGreen("[SyscallHandler::sys_setpgid] Successfully set pgid %u for process %d\n",
-                    set_pgid, target_proc->get_pid());
-
-        return 0;
-    }
-    uint64 SyscallHandler::sys_getpgid()
-    {
-        int pid;
-
-        // 获取参数
-        if (_arg_int(0, pid) < 0)
-        {
-            printfRed("[SyscallHandler::sys_getpgid] Error fetching pid argument\n");
-            return SYS_EINVAL;
-        }
-
-        printfCyan("[SyscallHandler::sys_getpgid] pid: %d\n", pid);
-
-        // 如果 pid 为 0，返回当前进程的进程组ID
-        if (pid == 0)
-        {
-            proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
-            if (current_proc == nullptr)
-            {
-                panic("[SyscallHandler::sys_getpgid] Current process is null\n");
-                return SYS_ESRCH;
-            }
-
-            // 假设 Pcb 中有 pgid 字段，如果没有，可能需要添加或使用其他方式获取
-            return current_proc->get_pgid();
-        }
-
-        // 根据 pid 查找对应的进程
-        proc::Pcb *target_proc = proc::k_pm.find_proc_by_pid(pid);
-        if (target_proc == nullptr)
-        {
-            printfRed("[SyscallHandler::sys_getpgid] Process with pid %d not found\n", pid);
-            return SYS_ESRCH; // 进程不存在
-        }
-
-        // 返回目标进程的进程组ID
-        return target_proc->get_pgid();
-    }
-    uint64 SyscallHandler::sys_setsid()
-    {
-        proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
-        if (current_proc == nullptr)
-        {
-            return SYS_ESRCH;
-        }
-
-        // Linux setsid(2) 的判定标准不是“当前 pgid 是否等于 pid”这么简单，
-        // 而是只要系统里仍然存在某个进程组，其 PGID 恰好等于调用者 PID，
-        // 本次调用就必须失败并返回 EPERM。
-        // 这样像 LTP setsid01 里“先 fork 出子进程留在旧进程组，再让父进程
-        // 试图创建新会话”的场景，才会和 Linux 保持一致。
-        for (proc::Pcb *target = proc::k_proc_pool; target < &proc::k_proc_pool[proc::num_process]; ++target)
-        {
-            if (target->_state == proc::ProcState::UNUSED)
-            {
-                continue;
-            }
-
-            if (target->get_pgid() == current_proc->get_pid())
-            {
-                return SYS_EPERM;
-            }
-        }
-
-        current_proc->set_sid(current_proc->get_pid());
-        current_proc->set_pgid(current_proc->get_pid());
-        return current_proc->get_sid();
-    }
-
-    uint64 SyscallHandler::sys_getsid()
-    {
-        int pid;
-
-        // 获取参数
-        if (_arg_int(0, pid) < 0)
-        {
-            printfRed("[SyscallHandler::sys_getsid] Error fetching pid argument\n");
-            return SYS_EINVAL;
-        }
-
-        printfCyan("[SyscallHandler::sys_getsid] pid: %d\n", pid);
-
-        // 如果 pid 为 0，返回当前进程的会话ID
-        if (pid == 0)
-        {
-            proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
-            if (current_proc == nullptr)
-            {
-                panic("[SyscallHandler::sys_getsid] Current process is null\n");
-                return SYS_ESRCH;
-            }
-
-            printfGreen("[SyscallHandler::sys_getsid] Returning session ID %d for current process\n", current_proc->get_sid());
-            return current_proc->get_sid();
-        }
-
-        // 根据 pid 查找对应的进程
-        proc::Pcb *target_proc = proc::k_pm.find_proc_by_pid(pid);
-        if (target_proc == nullptr)
-        {
-            printfRed("[SyscallHandler::sys_getsid] Process with pid %d not found\n", pid);
-            return SYS_ESRCH; // 进程不存在
-        }
-
-        // 根据Linux标准，只能查询同一会话中的进程的会话ID
-        // 如果不在同一会话中，返回错误
-        proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
-        if (current_proc != nullptr && current_proc->get_sid() != target_proc->get_sid())
-        {
-            printfRed("[SyscallHandler::sys_getsid] Permission denied: process %d is not in the same session\n", pid);
-            return SYS_EPERM;
-        }
-
-        printfGreen("[SyscallHandler::sys_getsid] Returning session ID %d for process %d\n", target_proc->get_sid(), pid);
-        return target_proc->get_sid();
-    }
     uint64 SyscallHandler::sys_getrusage()
     {
 
@@ -12665,11 +12881,6 @@ namespace syscall
         }
 
         return 0;
-    }
-    uint64 SyscallHandler::sys_getegid()
-    {
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        return p->_egid; // 返回有效组ID
     }
     uint64 SyscallHandler::sys_shmget()
     {
@@ -14228,7 +14439,7 @@ namespace syscall
         {
             return SYS_EFAULT;
         }
-        if (vlen_tmp < 0 || static_cast<uint>(vlen_tmp) > k_mmsg_max_vlen)
+        if (vlen_tmp < 0 || static_cast<uint>(vlen_tmp) > abi::k_mmsg_max_vlen)
         {
             return SYS_EINVAL;
         }
@@ -15089,8 +15300,6 @@ namespace syscall
             printfRed("[SyscallHandler::sys_fsetxattr] 获取标志参数失败\n");
             return -EINVAL;
         }
-        printfCyan("[SyscallHandler::sys_fsetxattr] fd: %d, name: %s, value_addr: %p, size: %ld, flags: %d\n",
-                   fd, name.c_str(), (void *)value_addr, isize, flags);
         size = isize;
 
         if (f == nullptr)
@@ -15113,18 +15322,17 @@ namespace syscall
         // 检查值大小是否合理
         if (size > 65536)
         { // 64KB limit
-            return -ERANGE;
+            return -E2BIG;
         }
 
         // 验证标志
-        if ((flags & ~(XATTR_CREATE | XATTR_REPLACE)) != 0 ||
-            flags == (XATTR_CREATE | XATTR_REPLACE))
+        if ((flags & ~(abi::k_xattr_create | abi::k_xattr_replace)) != 0 ||
+            flags == (abi::k_xattr_create | abi::k_xattr_replace))
         {
             printfRed("[SyscallHandler::sys_fsetxattr] 无效的标志参数: %d\n", flags);
             return -EINVAL;
         }
 
-        // Only support flags==0 for now; create/replace semantics can be handled in ext4 layer later
         // Copy value from user if provided
         void *kbuf = nullptr;
         if (size > 0)
@@ -15143,7 +15351,7 @@ namespace syscall
             }
         }
 
-        int r = vfs_fsetxattr(f, name.c_str(), kbuf, size);
+        int r = vfs_fsetxattr(f, name.c_str(), kbuf, size, flags);
         if (kbuf)
             mem::k_pmm.free_page(kbuf);
         return r;
@@ -15179,8 +15387,6 @@ namespace syscall
             return -EINVAL;
         }
         size = isize;
-        printfCyan("[SyscallHandler::sys_fgetxattr] fd: %d, name: %s, value_addr: %p, size: %ld\n",
-                   fd, name.c_str(), (void *)value_addr, isize);
         if (f == nullptr)
         {
             printfRed("[SyscallHandler::sys_fgetxattr] 文件指针为空\n");
@@ -15284,11 +15490,11 @@ namespace syscall
         // 检查值大小是否合理
         if (size > 65536)
         { // 64KB limit
-            return -ERANGE;
+            return -E2BIG;
         }
 
-        if ((flags & ~(XATTR_CREATE | XATTR_REPLACE)) != 0 ||
-            flags == (XATTR_CREATE | XATTR_REPLACE))
+        if ((flags & ~(abi::k_xattr_create | abi::k_xattr_replace)) != 0 ||
+            flags == (abi::k_xattr_create | abi::k_xattr_replace))
             return -EINVAL;
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
@@ -15309,7 +15515,8 @@ namespace syscall
 
         // Build absolute path
         eastl::string abs_path = get_absolute_path(path.c_str(), proc::k_pm.get_cur_pcb()->_cwd_name.c_str());
-        int r = vfs_setxattr(abs_path, name.c_str(), kbuf, size, /*follow_symlinks*/ true);
+        int r = vfs_setxattr(abs_path, name.c_str(), kbuf, size, flags,
+                             /*follow_symlinks*/ true);
         if (kbuf)
             mem::k_pmm.free_page(kbuf);
         return r;
@@ -15352,8 +15559,6 @@ namespace syscall
             printfRed("[SyscallHandler::sys_lsetxattr] 获取标志参数失败\n");
             return -EINVAL;
         }
-        printfCyan("[SyscallHandler::sys_lsetxattr] path: %s, name: %s, value_addr: %p, size: %ld, flags: %d\n",
-                   path.c_str(), name.c_str(), (void *)value_addr, isize, flags);
         size = isize;
 
         // 检查路径
@@ -15371,11 +15576,11 @@ namespace syscall
         // 检查值大小是否合理
         if (size > 65536)
         { // 64KB limit
-            return -ERANGE;
+            return -E2BIG;
         }
 
-        if ((flags & ~(XATTR_CREATE | XATTR_REPLACE)) != 0 ||
-            flags == (XATTR_CREATE | XATTR_REPLACE))
+        if ((flags & ~(abi::k_xattr_create | abi::k_xattr_replace)) != 0 ||
+            flags == (abi::k_xattr_create | abi::k_xattr_replace))
             return -EINVAL;
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
@@ -15394,7 +15599,8 @@ namespace syscall
             }
         }
         eastl::string abs_path = get_absolute_path(path.c_str(), p->_cwd_name.c_str());
-        int r = vfs_setxattr(abs_path, name.c_str(), kbuf, size, /*follow_symlinks*/ false);
+        int r = vfs_setxattr(abs_path, name.c_str(), kbuf, size, flags,
+                             /*follow_symlinks*/ false);
         if (kbuf)
             mem::k_pmm.free_page(kbuf);
         return r;
@@ -15431,8 +15637,6 @@ namespace syscall
             printfRed("[SyscallHandler::sys_getxattr] 获取大小参数失败\n");
             return -EINVAL;
         }
-        printfCyan("[SyscallHandler::sys_getxattr] path: %s, name: %s, value_addr: %p, size: %ld\n",
-                   path.c_str(), name.c_str(), (void *)value_addr, isize);
         size = isize;
 
         // 检查路径
@@ -15510,8 +15714,6 @@ namespace syscall
             printfRed("[SyscallHandler::sys_lgetxattr] 获取大小参数失败\n");
             return -EINVAL;
         }
-        printfCyan("[SyscallHandler::sys_lgetxattr] path: %s, name: %s, value_addr: %p, size: %ld\n",
-                   path.c_str(), name.c_str(), (void *)value_addr, isize);
         size = isize;
 
         // 检查路径
@@ -15579,8 +15781,6 @@ namespace syscall
         if (_arg_long(2, isize) < 0)
             return -EINVAL;
         size = isize;
-        printfCyan("[SyscallHandler::sys_listxattr] path: %s, list_addr: %p, size: %ld\n",
-                   path.c_str(), (void *)list_addr, isize);
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         if (!p)
             return -ESRCH;
@@ -15627,8 +15827,6 @@ namespace syscall
         if (_arg_long(2, isize) < 0)
             return -EINVAL;
         size = isize;
-        printfCyan("[SyscallHandler::sys_llistxattr] path: %s, list_addr: %p, size: %ld\n",
-                   path.c_str(), (void *)list_addr, isize);
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         if (!p)
             return -ESRCH;
@@ -15675,8 +15873,6 @@ namespace syscall
         if (_arg_long(2, isize) < 0)
             return -EINVAL;
         size = isize;
-        printfCyan("[SyscallHandler::sys_flistxattr] fd: %d, list_addr: %p, size: %ld\n",
-                   fd, (void *)list_addr, isize);
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         if (!p)
             return -ESRCH;
@@ -15725,7 +15921,6 @@ namespace syscall
             printfRed("[SyscallHandler::sys_removexattr] 获取属性名失败\n");
             return res;
         }
-        printfCyan("[SyscallHandler::sys_removexattr] path: %s, name: %s\n", path.c_str(), name.c_str());
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         if (!p)
             return -ESRCH;
@@ -15749,7 +15944,6 @@ namespace syscall
             printfRed("[SyscallHandler::sys_lremovexattr] 获取属性名失败\n");
             return res;
         }
-        printfCyan("[SyscallHandler::sys_lremovexattr] path: %s, name: %s\n", path.c_str(), name.c_str());
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         if (!p)
             return -ESRCH;
@@ -15766,8 +15960,7 @@ namespace syscall
             return -EBADF;
         int res = _arg_str(1, name, PATH_MAX);
         if (res < 0)
-            return -EINVAL;
-        printfCyan("[SyscallHandler::sys_fremovexattr] fd: %d, name: %s\n", fd, name.c_str());
+            return res;
         return vfs_fremovexattr(f, name.c_str());
     }
 
@@ -15777,11 +15970,11 @@ namespace syscall
         eastl::string pathname;
         int imode;
         long idev;
-        // 获取参数
         if (_arg_int(0, dirfd) < 0)
             return SYS_EFAULT;
-        if (_arg_str(1, pathname, MAXPATH) < 0)
-            return SYS_EFAULT;
+        int path_ret = _arg_str(1, pathname, PATH_MAX);
+        if (path_ret < 0)
+            return path_ret;
         if (_arg_int(2, imode) < 0)
             return SYS_EFAULT;
         if (_arg_long(3, idev) < 0)
@@ -15789,8 +15982,27 @@ namespace syscall
         mode_t mode = imode;
         dev_t dev = idev;
 
+        eastl::string event_path;
+        int resolve_ret = resolve_at_path(dirfd, pathname, event_path);
+        if (resolve_ret < 0)
+        {
+            return resolve_ret;
+        }
+        event_path = normalize_watch_path(event_path);
+
         // 调用进程管理器的 mknod 函数
         int result = proc::k_pm.mknod(dirfd, pathname, mode, dev);
+        if (result == 0)
+        {
+            const eastl::string parent_path = parent_path_of(event_path);
+            bool is_dir = (mode & S_IFMT) == S_IFDIR;
+            notify_fanotify_directory_event(parent_path,
+                                             event_path,
+                                             kFanCreate,
+                                             is_dir,
+                                             fanotify_path_ino(parent_path),
+                                             fanotify_path_ino(event_path));
+        }
         return result;
     }
 
@@ -15816,13 +16028,13 @@ namespace syscall
 
         // 从用户空间复制字符串
 
-        int cpres = mem::k_vmm.copy_str_in(*pt, target, target_addr, 256);
+        int cpres = mem::k_vmm.copy_str_in(*pt, target, target_addr, PATH_MAX);
         if (cpres < 0)
         {
             printfRed("[sys_symlinkat] Error copying path from user space\n");
             return cpres;
         }
-        cpres = mem::k_vmm.copy_str_in(*pt, linkpath, linkpath_addr, 256);
+        cpres = mem::k_vmm.copy_str_in(*pt, linkpath, linkpath_addr, PATH_MAX);
         if (cpres < 0)
         {
             printfRed("[sys_symlinkat] Error copying path from user space\n");
@@ -15879,12 +16091,17 @@ namespace syscall
             return prefix_perm_ret;
         }
 
-        // 检查linkpath是否已经存在
-        if (fs::k_vfs.is_file_exist(abs_linkpath))
+        // 最终组件必须使用 lstat 语义检查，否则悬空符号链接会被误判为不存在。
+        // 底层 ext4 创建仍使用 O_EXCL，负责消除检查与创建之间的竞态。
+        fs::Kstat existing_link{};
+        int existing_ret = vfs_path_stat(abs_linkpath.c_str(), &existing_link, false);
+        if (existing_ret == EOK)
         {
             printfRed("[sys_symlinkat] File already exists: %s\n", abs_linkpath.c_str());
             return SYS_EEXIST;
         }
+        if (existing_ret != -ENOENT)
+            return existing_ret;
 
         // 检查父目录是否存在
         eastl::string parent_dir;
@@ -16246,7 +16463,48 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_chroot()
     {
-        panic("未实现该系统调用");
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (p == nullptr)
+        {
+            return SYS_EFAULT;
+        }
+        if (p->get_euid() != 0)
+        {
+            return SYS_EPERM;
+        }
+
+        eastl::string path;
+        int path_ret = _arg_str(0, path, MAXPATH);
+        if (path_ret < 0)
+        {
+            return path_ret;
+        }
+
+        eastl::string absolute_path = get_absolute_path(path.c_str(), p->_cwd_name.c_str());
+        eastl::string resolved_path;
+        int resolve_ret = vfs_resolve_path(absolute_path, resolved_path);
+        if (resolve_ret < 0)
+        {
+            return resolve_ret;
+        }
+
+        fs::Kstat st;
+        int stat_ret = vfs_path_stat(resolved_path.c_str(), &st, true);
+        if (stat_ret < 0)
+        {
+            return stat_ret;
+        }
+        if ((st.mode & S_IFMT) != S_IFDIR)
+        {
+            return SYS_ENOTDIR;
+        }
+
+        p->_root_name = resolved_path;
+        if (p->_root_name.size() > 1 && p->_root_name.back() == '/')
+        {
+            p->_root_name.pop_back();
+        }
+        return 0;
     }
     uint64 SyscallHandler::sys_fchmod()
     {
@@ -16610,7 +16868,7 @@ namespace syscall
         {
             return -EINVAL;
         }
-        if (!file_descriptor_allows_read(f))
+        if (!fs::FileDescriptorAccess::allows_read(f))
         {
             return -EBADF;
         }
@@ -16632,7 +16890,16 @@ namespace syscall
         }
 
         long read_off = offset;
-        return read_to_user_iovecs(f, *p->get_pagetable(), iovecs.data(), iovcnt, &read_off);
+        long result =
+            read_to_user_iovecs(f, *p->get_pagetable(), iovecs.data(), iovcnt, &read_off);
+        if (result > 0 && !f->is_fanotify_file() && !f->_suppress_fanotify)
+        {
+            notify_fanotify_event(f,
+                                  f->backing_path(),
+                                  kFanAccess,
+                                  f->_attrs.filetype == fs::FileTypes::FT_DIRECT);
+        }
+        return result;
     }
     uint64 SyscallHandler::sys_pwritev()
     {
@@ -16672,7 +16939,7 @@ namespace syscall
         {
             return -EINVAL;
         }
-        if (!file_descriptor_allows_write(f))
+        if (!fs::FileDescriptorAccess::allows_write(f))
         {
             return -EBADF;
         }
@@ -16694,7 +16961,16 @@ namespace syscall
         }
 
         long write_off = offset;
-        return write_from_user_iovecs(f, *p->get_pagetable(), iovecs.data(), iovcnt, &write_off);
+        long result =
+            write_from_user_iovecs(f, *p->get_pagetable(), iovecs.data(), iovcnt, &write_off);
+        if (result > 0 && !f->_suppress_fanotify)
+        {
+            notify_fanotify_event(f,
+                                  f->backing_path(),
+                                  kFanModify,
+                                  f->_attrs.filetype == fs::FileTypes::FT_DIRECT);
+        }
+        return result;
     }
     uint64 SyscallHandler::sys_sync_file_range()
     {
@@ -16723,14 +16999,21 @@ namespace syscall
         }
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        if (p->get_euid() != 0)
-        {
-            return SYS_EPERM;
-        }
         tmm::timespec ts{};
         if (mem::k_vmm.copy_in(*p->get_pagetable(), &ts, tp_addr, sizeof(ts)) < 0)
         {
             return SYS_EFAULT;
+        }
+        int validate_ret =
+            tmm::k_tm.clock_settime_validate(static_cast<tmm::SystemClockId>(clock_id), &ts);
+        if (validate_ret < 0)
+        {
+            return validate_ret;
+        }
+        constexpr uint32 cap_sys_time = 25;
+        if (!proc::k_capability.has_effective(p, cap_sys_time))
+        {
+            return SYS_EPERM;
         }
 
         int ret = tmm::k_tm.clock_settime(static_cast<tmm::SystemClockId>(clock_id), &ts);
@@ -16839,15 +17122,119 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_sched_setscheduler()
     {
-        panic("未实现该系统调用");
+        struct SchedParam
+        {
+            int sched_priority;
+        };
+
+        constexpr int sched_other = 0;
+        constexpr int sched_fifo = 1;
+        constexpr int sched_rr = 2;
+        constexpr int sched_batch = 3;
+        constexpr int sched_idle = 5;
+        constexpr int sched_reset_on_fork = 0x40000000;
+        constexpr uint32 cap_sys_nice = 23;
+
+        int pid = 0;
+        int policy_with_flags = 0;
+        uint64 param_addr = 0;
+        if (_arg_int(0, pid) < 0 || _arg_int(1, policy_with_flags) < 0)
+            return SYS_EINVAL;
+        if (_arg_addr(2, param_addr) < 0 || param_addr == 0)
+            return SYS_EFAULT;
+        if (pid < 0)
+            return SYS_EINVAL;
+
+        proc::Pcb *current = proc::k_pm.get_cur_pcb();
+        if (current == nullptr || current->get_pagetable() == nullptr)
+            return SYS_ESRCH;
+
+        proc::Pcb *target = pid == 0 ? current : proc::k_pm.find_proc_by_pid(pid);
+        if (target == nullptr)
+            return SYS_ESRCH;
+
+        SchedParam param{};
+        if (mem::k_vmm.copy_in(*current->get_pagetable(),
+                               &param,
+                               param_addr,
+                               sizeof(param)) < 0)
+        {
+            return SYS_EFAULT;
+        }
+
+        bool reset_on_fork = (policy_with_flags & sched_reset_on_fork) != 0;
+        int policy = policy_with_flags & ~sched_reset_on_fork;
+        bool realtime = policy == sched_fifo || policy == sched_rr;
+        bool normal = policy == sched_other || policy == sched_batch || policy == sched_idle;
+        if (!realtime && !normal)
+            return SYS_EINVAL;
+        if ((realtime && (param.sched_priority < 1 || param.sched_priority > 99)) ||
+            (normal && param.sched_priority != 0))
+        {
+            return SYS_EINVAL;
+        }
+
+        bool same_owner = current->get_euid() == target->get_euid();
+        bool has_sys_nice = proc::k_capability.has_effective(current, cap_sys_nice);
+        if ((!same_owner || realtime) && !has_sys_nice)
+            return SYS_EPERM;
+
+        target->_lock.acquire();
+        target->_sched_policy = policy;
+        target->_sched_priority = param.sched_priority;
+        target->_sched_reset_on_fork = reset_on_fork;
+        target->_priority = realtime ? proc::highest_proc_prio : proc::default_proc_prio;
+        target->_lock.release();
+        proc::k_scheduler.note_priority_change(target->_priority);
+        return 0;
     }
     uint64 SyscallHandler::sys_sched_getscheduler()
     {
-        panic("未实现该系统调用");
+        int pid = 0;
+        if (_arg_int(0, pid) < 0 || pid < 0)
+            return SYS_EINVAL;
+
+        proc::Pcb *target = pid == 0
+                              ? proc::k_pm.get_cur_pcb()
+                              : proc::k_pm.find_proc_by_pid(pid);
+        if (target == nullptr)
+            return SYS_ESRCH;
+
+        target->_lock.acquire();
+        int policy = target->_sched_policy;
+        target->_lock.release();
+        return policy;
     }
     uint64 SyscallHandler::sys_sched_getparam()
     {
-        panic("未实现该系统调用");
+        struct SchedParam
+        {
+            int sched_priority;
+        };
+
+        int pid = 0;
+        uint64 param_addr = 0;
+        if (_arg_int(0, pid) < 0 || pid < 0)
+            return SYS_EINVAL;
+        if (_arg_addr(1, param_addr) < 0 || param_addr == 0)
+            return SYS_EFAULT;
+
+        proc::Pcb *current = proc::k_pm.get_cur_pcb();
+        proc::Pcb *target = pid == 0 ? current : proc::k_pm.find_proc_by_pid(pid);
+        if (current == nullptr || target == nullptr)
+            return SYS_ESRCH;
+
+        target->_lock.acquire();
+        SchedParam param{target->_sched_priority};
+        target->_lock.release();
+        if (mem::k_vmm.copy_out(*current->get_pagetable(),
+                                param_addr,
+                                &param,
+                                sizeof(param)) < 0)
+        {
+            return SYS_EFAULT;
+        }
+        return 0;
     }
     uint64 SyscallHandler::sys_sched_setaffinity()
     {
@@ -16856,17 +17243,17 @@ namespace syscall
     uint64 SyscallHandler::sys_sigaltstack()
     {
         uint64 ss_addr, old_ss_addr;
-        
+
         // 获取参数
         if (_arg_addr(0, ss_addr) < 0)
             return -1;
         if (_arg_addr(1, old_ss_addr) < 0)
             return -1;
-        
+
         proc::ipc::signal::signalstack ss, old_ss;
         proc::ipc::signal::signalstack *ss_ptr = nullptr;
         proc::ipc::signal::signalstack *old_ss_ptr = nullptr;
-        proc::Pcb* _cur_proc = proc::k_pm.get_cur_pcb();
+        proc::Pcb *_cur_proc = proc::k_pm.get_cur_pcb();
         // 从用户空间复制ss参数
         if (ss_addr != 0)
         {
@@ -16877,22 +17264,22 @@ namespace syscall
             }
             ss_ptr = &ss;
         }
-        
+
         // 准备old_ss指针
         if (old_ss_addr != 0)
         {
             old_ss_ptr = &old_ss;
         }
-        
+
         // 调用sigaltstack实现
         int result = proc::ipc::signal::sigaltstack(ss_ptr, old_ss_ptr);
-        
+
         // 如果有错误，返回错误码
         if (result != 0)
         {
             return result;
         }
-        
+
         // 将old_ss复制回用户空间
         if (old_ss_addr != 0)
         {
@@ -16902,7 +17289,7 @@ namespace syscall
                 return syscall::SYS_EFAULT;
             }
         }
-        
+
         return 0;
     }
     uint64 SyscallHandler::sys_rt_sigsuspend()
@@ -16941,584 +17328,40 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_rt_sigpending()
     {
-        panic("未实现该系统调用");
+        uint64 set_addr;
+        if (_arg_addr(0, set_addr) < 0)
+        {
+            return SYS_EFAULT;
+        }
+        size_t sigset_size = static_cast<size_t>(_arg_raw(1));
+        if (sigset_size != sizeof(proc::ipc::signal::sigset_t))
+        {
+            return SYS_EINVAL;
+        }
+        if (set_addr == 0)
+        {
+            return SYS_EFAULT;
+        }
+
+        proc::Pcb *current = proc::k_pm.get_cur_pcb();
+        if (current == nullptr || current->get_pagetable() == nullptr)
+        {
+            return SYS_ESRCH;
+        }
+        proc::ipc::signal::sigset_t pending{};
+        pending.sig[0] = current->_signal & current->_sigmask;
+        if (mem::k_vmm.copy_out(*current->get_pagetable(),
+                                set_addr,
+                                &pending,
+                                sizeof(pending)) < 0)
+        {
+            return SYS_EFAULT;
+        }
+        return 0;
     }
     uint64 SyscallHandler::sys_rt_sigqueueinfo()
     {
         panic("未实现该系统调用");
-    }
-    /**
-     * sys_setregrid() - 设置真实组ID和有效组ID
-     * @rgid: 新的真实组ID，-1 表示不改变
-     * @egid: 新的有效组ID，-1 表示不改变
-     *
-     * 该系统调用允许进程设置其真实组ID和有效组ID。
-     *
-     * POSIX权限规则：
-     * - 特权进程（euid == 0）可以设置任意值
-     * - 非特权进程的规则：
-     *   1. 如果 rgid != -1，只能设置为当前的 rgid 或 egid
-     *   2. 如果 egid != -1，只能设置为当前的 rgid、egid 或 sgid
-     *   3. 如果 rgid 发生改变，则 sgid 被设置为新的 egid
-     *
-     * 返回值：
-     * - 0: 成功
-     * - SYS_EINVAL: 参数无效
-     * - SYS_EPERM: 权限不足
-     * - SYS_EFAULT: 内部错误
-     */
-    uint64 SyscallHandler::sys_setregrid()
-    {
-        int rgid, egid;
-
-        // 获取参数
-        if (_arg_int(0, rgid) < 0 || _arg_int(1, egid) < 0)
-        {
-            printfRed("[SyscallHandler::sys_setregrid] 参数错误\n");
-            return SYS_EINVAL;
-        }
-
-        printfCyan("[SyscallHandler::sys_setregrid] rgid: %d, egid: %d\n", rgid, egid);
-
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        if (p == nullptr)
-        {
-            printfRed("[SyscallHandler::sys_setregrid] 无法获取当前进程\n");
-            return SYS_EFAULT;
-        }
-
-        // 获取当前的组ID
-        uint32 current_rgid = p->_gid;  // 当前真实组ID
-        uint32 current_egid = p->_egid; // 当前有效组ID
-        uint32 current_sgid = p->_sgid; // 当前保存的设置组ID
-
-        printfCyan("[SyscallHandler::sys_setregrid] 当前状态: rgid=%d, egid=%d, sgid=%d\n",
-                   current_rgid, current_egid, current_sgid);
-
-        // 如果两个参数都是 -1，这是无操作，直接返回成功
-        if (rgid == -1 && egid == -1)
-        {
-            printfCyan("[SyscallHandler::sys_setregrid] 无操作，直接返回成功\n");
-            return 0;
-        }
-
-        // 计算新的GID值
-        uint32 new_rgid = (rgid == -1) ? current_rgid : (uint32)rgid;
-        uint32 new_egid = (egid == -1) ? current_egid : (uint32)egid;
-
-        // 权限检查
-        if (p->_euid == 0)
-        {
-            // 特权进程可以设置任意值
-            printfCyan("[SyscallHandler::sys_setregrid] 特权进程，可以设置任意值\n");
-
-            // 检查 gid 的有效性（非负数）
-            if (rgid != -1 && rgid < 0)
-            {
-                printfRed("[SyscallHandler::sys_setregrid] 无效的 rgid: %d\n", rgid);
-                return SYS_EINVAL;
-            }
-            if (egid != -1 && egid < 0)
-            {
-                printfRed("[SyscallHandler::sys_setregrid] 无效的 egid: %d\n", egid);
-                return SYS_EINVAL;
-            }
-        }
-        else
-        {
-            // 非特权进程权限检查
-            printfCyan("[SyscallHandler::sys_setregrid] 非特权进程，检查权限\n");
-
-            // 检查 rgid 权限
-            if (rgid != -1)
-            {
-                if (rgid < 0 || (rgid != (int)current_rgid && rgid != (int)current_egid))
-                {
-                    printfRed("[SyscallHandler::sys_setregrid] 非特权进程无权设置 rgid: %d (允许: %d, %d)\n",
-                              rgid, current_rgid, current_egid);
-                    return SYS_EPERM;
-                }
-                printfCyan("[SyscallHandler::sys_setregrid] rgid权限检查通过: %d\n", rgid);
-            }
-
-            // 检查 egid 权限：可以设置为当前的 rgid、egid 或 sgid
-            if (egid != -1)
-            {
-                if (egid < 0 || (egid != (int)current_rgid && egid != (int)current_egid && egid != (int)current_sgid))
-                {
-                    printfRed("[SyscallHandler::sys_setregrid] 非特权进程无权设置 egid: %d (允许: %d, %d, %d)\n",
-                              egid, current_rgid, current_egid, current_sgid);
-                    return SYS_EPERM;
-                }
-                printfCyan("[SyscallHandler::sys_setregrid] egid权限检查通过: %d\n", egid);
-            }
-        }
-
-        // 更新GID值
-        p->_gid = new_rgid;
-        p->_egid = new_egid;
-
-        // Linux setregid(): 只要 real gid 发生显式设置，或 effective gid
-        // 被改成不同于旧 real gid 的值，saved gid 都同步为新的 effective gid。
-        if (rgid != -1 || (egid != -1 && new_egid != current_rgid))
-        {
-            p->_sgid = new_egid;
-            printfCyan("[SyscallHandler::sys_setregrid] 更新 sgid 为: %d\n", p->_sgid);
-        }
-
-        // 更新文件系统组ID
-        p->_fsgid = p->_egid;
-
-        printfCyan("[SyscallHandler::sys_setregrid] 成功设置组ID - rgid=%d, egid=%d, sgid=%d, fsgid=%d\n",
-                   p->_gid, p->_egid, p->_sgid, p->_fsgid);
-
-        return 0;
-    }
-    uint64 SyscallHandler::sys_setreuid()
-    {
-        int ruid, euid;
-
-        // 获取参数
-        if (_arg_int(0, ruid) < 0 || _arg_int(1, euid) < 0)
-        {
-            printfRed("[SyscallHandler::sys_setreuid] 参数错误\n");
-            return -EINVAL;
-        }
-
-        printfCyan("[SyscallHandler::sys_setreuid] ruid: %d, euid: %d\n", ruid, euid);
-
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-
-        // 获取当前的用户ID
-        uint32 old_ruid = p->get_uid();
-        uint32 old_euid = p->get_euid();
-        uint32 old_suid = p->get_suid();
-
-        printfCyan("[SyscallHandler::sys_setreuid] 当前状态: ruid=%u, euid=%u, suid=%u\n",
-                   old_ruid, old_euid, old_suid);
-
-        // 确定新的用户ID（-1表示不改变）
-        uint32 new_ruid = (ruid == -1) ? old_ruid : (uint32)ruid;
-        uint32 new_euid = (euid == -1) ? old_euid : (uint32)euid;
-
-        // 权限检查
-        // 特权用户（有效用户ID为0）可以设置任意值
-        if (old_euid != 0)
-        {
-            // 非特权用户只能设置为现有的三个UID值之一
-            if (ruid != -1 && new_ruid != old_ruid && new_ruid != old_euid && new_ruid != old_suid)
-            {
-                printfRed("[SyscallHandler::sys_setreuid] 权限不足：无法设置真实用户ID为 %u\n", new_ruid);
-                return -EPERM;
-            }
-
-            if (euid != -1 && new_euid != old_ruid && new_euid != old_euid && new_euid != old_suid)
-            {
-                printfRed("[SyscallHandler::sys_setreuid] 权限不足：无法设置有效用户ID为 %u\n", new_euid);
-                return -EPERM;
-            }
-        }
-
-        // 更新保存的用户ID (saved set-user-ID)
-        // 根据POSIX标准的正确规则：
-        uint32 new_suid = old_suid;
-
-        // saved UID 的更新规则：
-        // 1. 如果 real UID 被改变，saved UID 设置为新的 effective UID
-        // 2. 如果 effective UID 被设置为与新的 real UID 不同的值，saved UID 设置为新的 effective UID
-        // 3. 否则，saved UID 保持不变
-
-        if ((ruid != -1 && new_ruid != old_ruid) ||
-            (euid != -1 && new_euid != new_ruid))
-        {
-            new_suid = new_euid;
-        }
-
-        // 设置新的用户ID
-        p->set_uid(new_ruid);
-        p->set_euid(new_euid);
-        p->set_suid(new_suid);
-        p->set_fsuid(new_euid);
-
-        printfGreen("[SyscallHandler::sys_setreuid] 成功设置用户ID: ruid=%u, euid=%u, suid=%u\n",
-                    new_ruid, new_euid, new_suid);
-
-        return 0;
-    }
-    uint64 SyscallHandler::sys_setresuid()
-    {
-        int ruid, euid, suid;
-
-        // 获取参数
-        if (_arg_int(0, ruid) < 0 || _arg_int(1, euid) < 0 || _arg_int(2, suid) < 0)
-        {
-            printfRed("[SyscallHandler::sys_setresuid] 参数错误\n");
-            return SYS_EINVAL;
-        }
-
-        printfCyan("[SyscallHandler::sys_setresuid] ruid: %d, euid: %d, suid: %d\n", ruid, euid, suid);
-
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-
-        // 获取当前的用户ID
-        uint32 origin_uid = p->get_uid();
-        uint32 origin_euid = p->get_euid();
-        uint32 origin_suid = p->get_suid();
-
-        // 检查是否为特权进程（root用户，euid == 0）
-        if (p->get_euid() == 0)
-        {
-            printfCyan("[SyscallHandler::sys_setresuid] 特权进程，可以设置任意值\n");
-
-            // 特权进程可以设置任意值
-            if (ruid != -1)
-            {
-                p->set_uid(ruid);
-            }
-            if (euid != -1)
-            {
-                p->set_euid(euid);
-                p->set_fsuid(euid); // 同时设置文件系统用户ID
-            }
-            if (suid != -1)
-            {
-                p->set_suid(suid);
-            }
-        }
-        else
-        {
-            // 非特权进程，需要检查权限
-            if (ruid != -1)
-            {
-                if (ruid != (int)origin_uid && ruid != (int)origin_euid && ruid != (int)origin_suid)
-                {
-                    printfRed("[SyscallHandler::sys_setresuid] 非特权进程无权设置 ruid: %d\n", ruid);
-                    return SYS_EPERM;
-                }
-                printfCyan("[SyscallHandler::sys_setresuid] 非特权进程设置 ruid: %d\n", ruid);
-                p->set_uid(ruid);
-            }
-
-            if (euid != -1)
-            {
-                if (euid != (int)origin_uid && euid != (int)origin_euid && euid != (int)origin_suid)
-                {
-                    printfRed("[SyscallHandler::sys_setresuid] 非特权进程无权设置 euid: %d\n", euid);
-                    return SYS_EPERM;
-                }
-                printfCyan("[SyscallHandler::sys_setresuid] 非特权进程设置 euid: %d\n", euid);
-                p->set_euid(euid);
-                p->set_fsuid(euid); // 同时设置文件系统用户ID
-            }
-
-            if (suid != -1)
-            {
-                if (suid != (int)origin_uid && suid != (int)origin_euid && suid != (int)origin_suid)
-                {
-                    printfRed("[SyscallHandler::sys_setresuid] 非特权进程无权设置 suid: %d\n", suid);
-                    return SYS_EPERM;
-                }
-                printfCyan("[SyscallHandler::sys_setresuid] 非特权进程设置 suid: %d\n", suid);
-                p->set_suid(suid);
-            }
-        }
-
-        return 0;
-    }
-    uint64 SyscallHandler::sys_getresuid()
-    {
-        uint64 ruid_addr, euid_addr, suid_addr;
-
-        // 获取参数
-        if (_arg_addr(0, ruid_addr) < 0 || _arg_addr(1, euid_addr) < 0 || _arg_addr(2, suid_addr) < 0)
-        {
-            printfRed("[SyscallHandler::sys_getresuid] 参数错误\n");
-            return SYS_EINVAL;
-        }
-
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        mem::PageTable *pt = p->get_pagetable();
-
-        // 获取当前的用户ID
-        uint32 ruid = p->get_uid();
-        uint32 euid = p->get_euid();
-        uint32 suid = p->get_suid();
-
-        printfCyan("[SyscallHandler::sys_getresuid] ruid: %u, euid: %u, suid: %u\n", ruid, euid, suid);
-
-        // 将结果拷贝到用户空间
-        if (mem::k_vmm.copy_out(*pt, ruid_addr, &ruid, sizeof(ruid)) < 0 ||
-            mem::k_vmm.copy_out(*pt, euid_addr, &euid, sizeof(euid)) < 0 ||
-            mem::k_vmm.copy_out(*pt, suid_addr, &suid, sizeof(suid)) < 0)
-        {
-            printfRed("[SyscallHandler::sys_getresuid] 拷贝到用户空间失败\n");
-            return SYS_EFAULT;
-        }
-
-        return 0;
-    }
-    uint64 SyscallHandler::sys_setresgid()
-    {
-        int rgid, egid, sgid;
-
-        // 获取参数
-        if (_arg_int(0, rgid) < 0 || _arg_int(1, egid) < 0 || _arg_int(2, sgid) < 0)
-        {
-            printfRed("[SyscallHandler::sys_setresgid] 参数错误\n");
-            return SYS_EINVAL;
-        }
-
-        printfCyan("[SyscallHandler::sys_setresgid] rgid: %d, egid: %d, sgid: %d\n", rgid, egid, sgid);
-
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-
-        // 获取当前的组ID
-        uint32 origin_gid = p->get_gid();
-        uint32 origin_egid = p->get_egid();
-        uint32 origin_sgid = p->get_sgid();
-
-        // 检查是否为特权进程（root用户，euid == 0）
-        if (p->get_euid() == 0)
-        {
-            printfCyan("[SyscallHandler::sys_setresgid] 特权进程，可以设置任意值\n");
-
-            // 特权进程可以设置任意值
-            if (rgid != -1)
-            {
-                p->set_gid(rgid);
-            }
-            if (egid != -1)
-            {
-                p->set_egid(egid);
-                p->set_fsgid(egid); // 同时设置文件系统组ID
-            }
-            if (sgid != -1)
-            {
-                p->set_sgid(sgid);
-            }
-        }
-        else
-        {
-            // 非特权进程，需要检查权限
-            if (rgid != -1)
-            {
-                if (rgid != (int)origin_gid && rgid != (int)origin_egid && rgid != (int)origin_sgid)
-                {
-                    printfRed("[SyscallHandler::sys_setresgid] 非特权进程无权设置 rgid: %d\n", rgid);
-                    return SYS_EPERM;
-                }
-                printfCyan("[SyscallHandler::sys_setresgid] 非特权进程设置 rgid: %d\n", rgid);
-                p->set_gid(rgid);
-            }
-
-            if (egid != -1)
-            {
-                if (egid != (int)origin_gid && egid != (int)origin_egid && egid != (int)origin_sgid)
-                {
-                    printfRed("[SyscallHandler::sys_setresgid] 非特权进程无权设置 egid: %d\n", egid);
-                    return SYS_EPERM;
-                }
-                printfCyan("[SyscallHandler::sys_setresgid] 非特权进程设置 egid: %d\n", egid);
-                p->set_egid(egid);
-                p->set_fsgid(egid); // 同时设置文件系统组ID
-            }
-
-            if (sgid != -1)
-            {
-                if (sgid != (int)origin_gid && sgid != (int)origin_egid && sgid != (int)origin_sgid)
-                {
-                    printfRed("[SyscallHandler::sys_setresgid] 非特权进程无权设置 sgid: %d\n", sgid);
-                    return SYS_EPERM;
-                }
-                printfCyan("[SyscallHandler::sys_setresgid] 非特权进程设置 sgid: %d\n", sgid);
-                p->set_sgid(sgid);
-            }
-        }
-
-        return 0;
-    }
-    uint64 SyscallHandler::sys_getresgid()
-    {
-        uint64 rgid_addr, egid_addr, sgid_addr;
-
-        // 获取参数
-        if (_arg_addr(0, rgid_addr) < 0 || _arg_addr(1, egid_addr) < 0 || _arg_addr(2, sgid_addr) < 0)
-        {
-            printfRed("[SyscallHandler::sys_getresgid] 参数错误\n");
-            return SYS_EINVAL;
-        }
-
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        mem::PageTable *pt = p->get_pagetable();
-
-        // 获取当前的组ID
-        uint32 rgid = p->get_gid();
-        uint32 egid = p->get_egid();
-        uint32 sgid = p->get_sgid();
-
-        printfCyan("[SyscallHandler::sys_getresgid] 返回组ID: rgid=%u, egid=%u, sgid=%u\n",
-                   rgid, egid, sgid);
-
-        // 将结果拷贝到用户空间
-        if (mem::k_vmm.copy_out(*pt, rgid_addr, &rgid, sizeof(rgid)) < 0 ||
-            mem::k_vmm.copy_out(*pt, egid_addr, &egid, sizeof(egid)) < 0 ||
-            mem::k_vmm.copy_out(*pt, sgid_addr, &sgid, sizeof(sgid)) < 0)
-        {
-            printfRed("[SyscallHandler::sys_getresgid] 拷贝到用户空间失败\n");
-            return SYS_EFAULT;
-        }
-
-        return 0;
-    }
-    uint64 SyscallHandler::sys_setfsuid()
-    {
-        int fsuid_raw;
-        if (_arg_int(0, fsuid_raw) < 0)
-            return -EINVAL;
-
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        if (!p)
-            return -ESRCH;
-
-        uint32_t old_fsuid = p->_fsuid;
-
-        if (fsuid_raw == -1)
-        {
-            return old_fsuid;
-        }
-
-        uint32_t fsuid = (uint32_t)fsuid_raw;
-
-        // 根据 Linux 标准：
-        // 1. root 用户可以设置任意值
-        // 2. 非 root 用户只能设置为 real uid, effective uid 或 saved uid
-        if (p->_euid == 0 ||
-            fsuid == p->_uid ||
-            fsuid == p->_euid ||
-            fsuid == p->_suid)
-        {
-            p->_fsuid = fsuid;
-        }
-
-        // 返回之前的 fsuid
-        return old_fsuid;
-    }
-    uint64 SyscallHandler::sys_setfsgid()
-    {
-        int fsgid_raw;
-        if (_arg_int(0, fsgid_raw) < 0)
-            return -EINVAL;
-
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        if (!p)
-            return -ESRCH;
-
-        uint32_t old_fsgid = p->_fsgid;
-
-        if (fsgid_raw == -1)
-        {
-            return old_fsgid;
-        }
-
-        uint32_t fsgid = (uint32_t)fsgid_raw;
-
-        // 根据 Linux 标准：
-        // 1. root 用户可以设置任意值
-        // 2. 非 root 用户只能设置为 real gid, effective gid 或 saved gid
-        if (p->_euid == 0 ||
-            fsgid == p->_gid ||
-            fsgid == p->_egid ||
-            fsgid == p->_sgid)
-        {
-            p->_fsgid = fsgid;
-        }
-
-        // 返回之前的 fsgid
-        return old_fsgid;
-    }
-    uint64 SyscallHandler::sys_getgroups()
-    {
-        int size;
-        uint64 list_addr;
-        if (_arg_int(0, size) < 0 || _arg_addr(1, list_addr) < 0)
-        {
-            return SYS_EINVAL;
-        }
-        if (size < 0)
-        {
-            return SYS_EINVAL;
-        }
-        if (size > 0 && list_addr == 0)
-        {
-            return SYS_EFAULT;
-        }
-
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        if (p == nullptr)
-        {
-            return SYS_ESRCH;
-        }
-
-        int group_count = p->_supplementary_group_count;
-        if (size == 0)
-        {
-            return group_count;
-        }
-        if (size < group_count)
-        {
-            return SYS_EINVAL;
-        }
-        if (group_count > 0 &&
-            mem::k_vmm.copy_out(*p->get_pagetable(), list_addr,
-                                p->_supplementary_groups,
-                                group_count * sizeof(p->_supplementary_groups[0])) < 0)
-        {
-            return SYS_EFAULT;
-        }
-        return group_count;
-    }
-    uint64 SyscallHandler::sys_setgroups()
-    {
-        int size;
-        uint64 list_addr;
-        if (_arg_int(0, size) < 0 || _arg_addr(1, list_addr) < 0)
-        {
-            return SYS_EINVAL;
-        }
-        if (size < 0 || size > (int)proc::max_supplementary_groups)
-        {
-            return SYS_EINVAL;
-        }
-
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        if (p == nullptr)
-        {
-            return SYS_ESRCH;
-        }
-        if (p->get_euid() != 0)
-        {
-            return SYS_EPERM;
-        }
-        if (size > 0)
-        {
-            if (list_addr == 0)
-            {
-                return SYS_EFAULT;
-            }
-            if (mem::k_vmm.copy_in(*p->get_pagetable(),
-                                   p->_supplementary_groups,
-                                   list_addr,
-                                   size * sizeof(p->_supplementary_groups[0])) < 0)
-            {
-                return SYS_EFAULT;
-            }
-        }
-        else
-        {
-            memset(p->_supplementary_groups, 0, sizeof(p->_supplementary_groups));
-        }
-        p->_supplementary_group_count = size;
-        return 0;
     }
     uint64 SyscallHandler::sys_sethostname()
     {
@@ -17528,56 +17371,6 @@ namespace syscall
     {
         panic("未实现该系统调用");
     }
-    uint64 SyscallHandler::sys_umask()
-    {
-        // 获取新的 umask 值
-        int new_mask;
-        if (_arg_int(0, new_mask) < 0)
-            return -1;
-
-        // 只取低9位，确保是有效的权限位
-        mode_t new_umask = (mode_t)(new_mask & 0777);
-
-        // 获取当前进程
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        if (p == nullptr)
-            return -1;
-
-        // 获取旧的 umask 值
-        mode_t old_umask = p->_umask;
-
-        // 设置新的 umask 值
-        p->_umask = new_umask;
-
-        // 返回旧的 umask 值
-        return (uint64)old_umask;
-    }
-
-    uint64 SyscallHandler::sys_personality()
-    {
-        constexpr uint32 k_query_personality = 0xffffffffU;
-
-        proc::Pcb *current = proc::k_pm.get_cur_pcb();
-        if (current == nullptr)
-        {
-            return -ESRCH;
-        }
-
-        // personality(2) 在这里先实现 LTP 需要的核心语义：
-        // - 返回修改前的 personality
-        // - 0xffffffff 仅查询、不修改
-        // - 其余值原样保存为当前进程 personality
-        uint32 old_personality = current->get_personality();
-        uint32 new_personality = (uint32)(_arg_raw(0) & 0xffffffffU);
-
-        if (new_personality != k_query_personality)
-        {
-            current->set_personality(new_personality);
-        }
-
-        return old_personality;
-    }
-
     uint64 SyscallHandler::sys_adjtimex()
     {
         uint64 timex_addr;
@@ -17592,13 +17385,13 @@ namespace syscall
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
-        KernelTimexOld tx{};
+        abi::KernelTimexOld tx{};
         if (mem::k_vmm.copy_in(*pt, &tx, timex_addr, sizeof(tx)) < 0)
         {
             return SYS_EFAULT;
         }
 
-        int ret = apply_kernel_timex(tx, p->get_euid() == 0);
+        int ret = tmm::k_timex.apply(tx, p->get_euid() == 0);
         if (ret < 0)
         {
             return ret;
@@ -17739,7 +17532,7 @@ namespace syscall
         {
             return SYS_EFAULT;
         }
-        if (vlen_tmp < 0 || static_cast<uint>(vlen_tmp) > k_mmsg_max_vlen)
+        if (vlen_tmp < 0 || static_cast<uint>(vlen_tmp) > abi::k_mmsg_max_vlen)
         {
             return SYS_EINVAL;
         }
@@ -17762,7 +17555,7 @@ namespace syscall
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
-        int timeout_result = validate_recvmmsg_timeout(pt, timeout_ptr);
+        int timeout_result = net::SocketMessageCompat::validate_recvmmsg_timeout(pt, timeout_ptr);
         if (timeout_result < 0)
         {
             return timeout_result;
@@ -17950,185 +17743,302 @@ namespace syscall
         size_t length;
         int flags;
 
-        // 获取系统调用参数
         if (_arg_addr(0, addr) < 0 || _arg_addr(1, length) < 0 || _arg_int(2, flags) < 0)
         {
-            printfRed("[SyscallHandler::sys_msync] Error fetching msync arguments\n");
             return -EFAULT;
         }
-
-        // 参数验证
-        if (addr == 0 || length == 0)
+        if (addr == 0 || length == 0 || addr + length < addr)
         {
-            printfRed("[SyscallHandler::sys_msync] Invalid parameters: addr=%p, length=%zu\n", (void *)addr, length);
             return -EINVAL;
         }
-
-        // 地址必须页对齐
         if (addr % PGSIZE != 0)
         {
-            printfRed("[SyscallHandler::sys_msync] Address not page aligned: %p\n", (void *)addr);
             return -EINVAL;
         }
 
-        // 检查 flags 参数的有效性
-        int valid_flags = MS_ASYNC | MS_SYNC | MS_INVALIDATE;
+        constexpr int valid_flags = MS_ASYNC | MS_SYNC | MS_INVALIDATE;
         if ((flags & ~valid_flags) != 0)
         {
-            printfRed("[SyscallHandler::sys_msync] Invalid flags: 0x%x\n", flags);
             return -EINVAL;
         }
-        // lmbench 会密集调用 msync；保留错误日志即可，避免调试输出污染串口耗时。
-        // MS_ASYNC 和 MS_SYNC 不能同时设置，且必须设置其中一个
-        bool has_async = (flags & MS_ASYNC) != 0;
-        bool has_sync = (flags & MS_SYNC) != 0;
-
+        const bool has_async = (flags & MS_ASYNC) != 0;
+        const bool has_sync = (flags & MS_SYNC) != 0;
         if (has_async && has_sync)
         {
-            printfRed("[SyscallHandler::sys_msync] MS_ASYNC and MS_SYNC cannot be used together\n");
             return -EINVAL;
         }
 
-        bool invalidate = (flags & MS_INVALIDATE) != 0;
-        /*
-         * Linux 只有在 MS_INVALIDATE 覆盖到被 mlock 锁住的页面时才返回 EBUSY。
-         * 当前内核还没有实现有效的 mlock 状态，因此不能把所有 invalidate 请求
-         * 都拒掉；lmbench 的 lat_pagefault 会使用该路径并期望继续完成测量。
-         */
-        // printfCyan("[SyscallHandler::sys_msync] addr=%p, length=%u, flags=0x%x (async=%s, sync=%s, invalidate=%s)\n",
-        //            (void *)addr, length, flags,
-        //            has_async ? "true" : "false",
-        //            has_sync ? "true" : "false",
-        //            invalidate ? "true" : "false");
-
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        uint64 sync_start = addr;
-        uint64 sync_end = addr + length;
-        // uint64 aligned_length = PGROUNDUP(length);
+        if (p == nullptr || p->get_pagetable() == nullptr)
+        {
+            return -ESRCH;
+        }
 
-        // 查找覆盖此地址范围的所有VMA
+        const bool invalidate = (flags & MS_INVALIDATE) != 0;
+        // Linux 接受 flags=0，并把它视为无需等待的写回请求。
+        const bool writeback_requested = has_async || has_sync || !invalidate;
+        const uint64 sync_start = addr;
+        const uint64 sync_end = addr + length;
+
+        auto page_kernel_address = [&](const proc::vma &vm, uint64 page_va, uint64 &kernel_addr) -> bool
+        {
+            if (vm.backing_kind == proc::VMA_BACKING_SHM && vm.backing_shmid >= 0)
+            {
+                shm::shm_segment seg = shm::k_smm.get_seg_info(vm.backing_shmid);
+                if (seg.shmid < 0)
+                {
+                    return false;
+                }
+                uint64 backing_base = PGROUNDDOWN(vm.backing_base != 0
+                                                      ? vm.backing_base
+                                                      : vm.addr);
+                uint64 page_offset = page_va - backing_base;
+                if (page_offset >= seg.real_size)
+                {
+                    return false;
+                }
+                kernel_addr = seg.phy_addrs + page_offset;
+#ifdef LOONGARCH
+                kernel_addr = to_vir(kernel_addr);
+#endif
+                return true;
+            }
+
+            mem::Pte pte = p->get_pagetable()->walk(page_va, false);
+            if (pte.is_null() || !pte.is_valid())
+            {
+                return false;
+            }
+            kernel_addr = reinterpret_cast<uint64>(pte.pa());
+#ifdef LOONGARCH
+            kernel_addr = to_vir(kernel_addr);
+#endif
+            return true;
+        };
+
         bool found_mapping = false;
         for (int i = 0; i < proc::NVMA; ++i)
         {
-            if (!p->get_vma()->_vm[i].used)
+            proc::vma *vm = &p->get_vma()->_vm[i];
+            if (!vm->used)
                 continue;
 
-            struct proc::vma *vm = &p->get_vma()->_vm[i];
-            uint64 vma_start = vm->addr;
-            uint64 vma_end = vma_start + vm->len;
-
-            // 检查是否有重叠
+            const uint64 vma_start = vm->addr;
+            const uint64 vma_end = vma_start + static_cast<uint64>(vm->len);
             if (sync_end <= vma_start || sync_start >= vma_end)
             {
-                continue; // 没有重叠
+                continue;
             }
 
             found_mapping = true;
-            // printfCyan("[SyscallHandler::sys_msync] Found overlapping VMA %d: [%p, %p), prot=0x%x, flags=0x%x\n",
-            //            i, (void *)vma_start, (void *)vma_end, vm->prot, vm->flags);
-
-            // 计算重叠区域
-            uint64 overlap_start = MAX(sync_start, vma_start);
-            uint64 overlap_end = MIN(sync_end, vma_end);
-
-            // 处理MAP_SHARED文件映射的同步
-            if ((vm->flags & MAP_SHARED) && vm->vfile != nullptr)
+            const uint64 overlap_start = MAX(sync_start, vma_start);
+            const uint64 overlap_end = MIN(sync_end, vma_end);
+            if ((vm->flags & MAP_SHARED) == 0 || vm->vfile == nullptr)
             {
-                if ((vm->prot & PROT_WRITE) == 0)
+                continue;
+            }
+
+            fs::Kstat st{};
+            int stat_ret = fs::k_vfs.fstat(vm->vfile, &st);
+            if (stat_ret != EOK)
+            {
+                return stat_ret < 0 ? stat_ret : -stat_ret;
+            }
+
+            const uint64 page_start = PGROUNDDOWN(overlap_start);
+            const uint64 page_end = PGROUNDUP(overlap_end);
+            const bool write_this_vma =
+                writeback_requested && (vm->prot & PROT_WRITE) != 0;
+
+            if (write_this_vma)
+            {
+                for (uint64 page_va = page_start; page_va < page_end; page_va += PGSIZE)
                 {
-                    // 只读共享映射没有可写脏页。Linux 允许对它 msync/MS_INVALIDATE
-                    // 并返回成功，不能误走 file::write 造成 EIO。
+                    uint64 kernel_page = 0;
+                    if (!page_kernel_address(*vm, page_va, kernel_page))
+                    {
+                        continue;
+                    }
+
+                    const uint64 data_start = MAX(page_va, overlap_start);
+                    uint64 data_end = MIN(page_va + PGSIZE, overlap_end);
+                    uint64 file_offset =
+                        static_cast<uint64>(vm->offset) + (data_start - vma_start);
+                    if (file_offset >= st.size)
+                    {
+                        continue;
+                    }
+                    if (file_offset + (data_end - data_start) > st.size)
+                    {
+                        data_end = data_start + (st.size - file_offset);
+                    }
+
+                    const size_t data_len = static_cast<size_t>(data_end - data_start);
+                    const uint64 kernel_buf = kernel_page + (data_start - page_va);
+                    int write_ret = vm->vfile->write(kernel_buf,
+                                                     data_len,
+                                                     static_cast<long>(file_offset),
+                                                     false);
+                    if (write_ret < 0 || static_cast<size_t>(write_ret) != data_len)
+                    {
+                        return -EIO;
+                    }
+                }
+
+                int flush_ret = vm->vfile->flush_visibility_state();
+                if (flush_ret < 0)
+                {
+                    return flush_ret;
+                }
+            }
+
+            if (!invalidate)
+            {
+                continue;
+            }
+
+            // MS_INVALIDATE 以文件当前内容为权威。先提交同一 open file description
+            // 以及同一路径其它 fd 上尚未落盘的 write，再丢弃读取快照，
+            // 最后刷新已驻留的映射页。普通文件 VMA 使用独立 backing handle，
+            // 只刷新 vm->vfile 会遗漏 mmap 之后原 fd 的写合并缓存。
+            int path_flush_ret =
+                proc::k_pm.flush_open_files_for_path(vm->vfile->backing_path());
+            if (path_flush_ret < 0)
+            {
+                return path_flush_ret;
+            }
+            int flush_ret = vm->vfile->flush_visibility_state();
+            if (flush_ret < 0)
+            {
+                return flush_ret;
+            }
+            vm->vfile->invalidate_cached_file_data();
+
+            for (uint64 page_va = page_start; page_va < page_end; page_va += PGSIZE)
+            {
+                uint64 kernel_page = 0;
+                if (!page_kernel_address(*vm, page_va, kernel_page))
+                {
+                    // 非驻留普通文件页无需主动装入；后续缺页会读取最新文件内容。
                     continue;
                 }
 
-                // printfCyan("[SyscallHandler::sys_msync] Syncing MAP_SHARED file mapping: %s\n",
-                //            vm->vfile->_path_name.c_str());
-
-                // 遍历重叠区域内的所有页面
-                uint64 page_start = PGROUNDDOWN(overlap_start);
-                uint64 page_end = PGROUNDUP(overlap_end);
-
-                for (uint64 va = page_start; va < page_end; va += PGSIZE)
+                const uint64 data_start = MAX(page_va, overlap_start);
+                uint64 data_end = MIN(page_va + PGSIZE, overlap_end);
+                uint64 file_offset =
+                    static_cast<uint64>(vm->offset) + (data_start - vma_start);
+                if (file_offset >= st.size)
                 {
-                    // 检查页面是否已经分配（通过页表查询）
-                    mem::Pte pte = p->get_pagetable()->walk(va, 0);
-                    if (!pte.is_null() && pte.is_valid())
-                    {
-                        // 页面已分配，需要写回到文件
-                        uint64 kernel_buf = (uint64)pte.pa();
-#ifdef LOONGARCH
-                        kernel_buf = to_vir(kernel_buf);
-#endif
-                        uint64 file_offset = vm->offset + (va - vma_start);
-                        size_t write_len = PGSIZE;
-                        fs::Kstat st = {};
-                        if (fs::k_vfs.fstat(vm->vfile, &st) == EOK)
-                        {
-                            // EOF 后的尾页字节只属于映射内存，不应被 msync 扩展回文件。
-                            if (file_offset >= st.size)
-                            {
-                                continue;
-                            }
-                            if (file_offset + write_len > st.size)
-                            {
-                                write_len = static_cast<size_t>(st.size - file_offset);
-                            }
-                        }
-
-                        // printfCyan("[SyscallHandler::sys_msync] Writing back page at va=%p, file_offset=%d\n",
-                        //            (void *)va, file_offset);
-
-                        // 写回数据到文件
-                        int write_result = vm->vfile->write(kernel_buf, write_len, static_cast<long>(file_offset), false);
-                        if (write_result < 0 || static_cast<size_t>(write_result) != write_len)
-                        {
-                            printfRed("[SyscallHandler::sys_msync] Failed to write back page at va=%p\n", (void *)va);
-                            return -EIO;
-                        }
-
-                        // 如果是同步模式，确保数据已写入磁盘
-                        if (has_sync)
-                        {
-                            // TODO: 调用文件系统的 fsync 或 sync 操作
-                            // 目前简单地假设 write 操作是同步的
-                        }
-
-                        // 处理 MS_INVALIDATE 标志
-                        if (invalidate)
-                        {
-                            // TODO: 使其他进程的相同映射失效
-                            // 这需要系统级的页面缓存管理，目前先跳过
-                            printfYellow("[SyscallHandler::sys_msync] MS_INVALIDATE flag noted but not fully implemented\n");
-                        }
-                    }
+                    continue;
                 }
-            }
-            else if (vm->flags & MAP_SHARED)
-            {
-                // 匿名共享映射，目前不需要特殊处理
-                // printfCyan("[SyscallHandler::sys_msync] Anonymous shared mapping, no file sync needed\n");
-            }
-            else
-            {
-                // 私有映射不需要同步
-                // printfCyan("[SyscallHandler::sys_msync] Private mapping, no sync needed\n");
+                if (file_offset + (data_end - data_start) > st.size)
+                {
+                    data_end = data_start + (st.size - file_offset);
+                }
+
+                const size_t data_len = static_cast<size_t>(data_end - data_start);
+                const uint64 kernel_buf = kernel_page + (data_start - page_va);
+                int read_ret = vm->vfile->read(kernel_buf,
+                                               data_len,
+                                               static_cast<long>(file_offset),
+                                               false);
+                if (read_ret < 0 || static_cast<size_t>(read_ret) != data_len)
+                {
+                    return -EIO;
+                }
             }
         }
 
         if (!found_mapping)
         {
-            printfRed("[SyscallHandler::sys_msync] No memory mapping found for range [%p, %p)\n",
-                      (void *)sync_start, (void *)sync_end);
             return -ENOMEM;
         }
 
-        // printfGreen("[SyscallHandler::sys_msync] Successfully synced range [%p, %p)\n",
-        //             (void *)sync_start, (void *)sync_end);
         return 0;
     }
     uint64 SyscallHandler::sys_mlock()
     {
-        panic("未实现该系统调用");
+        uint64 addr = 0;
+        long len_raw = 0;
+        if (_arg_addr(0, addr) < 0 || _arg_long(1, len_raw) < 0)
+        {
+            return SYS_EINVAL;
+        }
+        if (len_raw < 0)
+        {
+            return SYS_EINVAL;
+        }
+        uint64 len = static_cast<uint64>(len_raw);
+        if (len == 0)
+        {
+            return 0;
+        }
+        if (addr >= MAXVA || addr + len < addr || addr + len > MAXVA)
+        {
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (p == nullptr || p->get_pagetable() == nullptr)
+        {
+            return SYS_ESRCH;
+        }
+
+        // F7LY 没有 swap，已映射用户页天然不会被换出。逐页读取一个字节同时完成
+        // mmap/heap 懒页驻留；任一页不属于可读用户映射时按 Linux 返回 ENOMEM。
+        char probe = 0;
+        uint64 start = PGROUNDDOWN(addr);
+        uint64 end = PGROUNDUP(addr + len);
+        for (uint64 page = start; page < end; page += PGSIZE)
+        {
+            uint64 probe_addr = page < addr ? addr : page;
+            if (mem::k_vmm.copy_in(*p->get_pagetable(), &probe, probe_addr, 1) < 0)
+            {
+                return -ENOMEM;
+            }
+        }
+        return 0;
+    }
+    uint64 SyscallHandler::sys_munlock()
+    {
+        uint64 addr = 0;
+        long len_raw = 0;
+        if (_arg_addr(0, addr) < 0 || _arg_long(1, len_raw) < 0)
+        {
+            return SYS_EINVAL;
+        }
+        if (len_raw < 0)
+        {
+            return SYS_EINVAL;
+        }
+        uint64 len = static_cast<uint64>(len_raw);
+        if (len == 0)
+        {
+            return 0;
+        }
+        if (addr >= MAXVA || addr + len < addr || addr + len > MAXVA)
+        {
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (p == nullptr || p->get_pagetable() == nullptr)
+        {
+            return SYS_ESRCH;
+        }
+
+        char probe = 0;
+        uint64 start = PGROUNDDOWN(addr);
+        uint64 end = PGROUNDUP(addr + len);
+        for (uint64 page = start; page < end; page += PGSIZE)
+        {
+            uint64 probe_addr = page < addr ? addr : page;
+            if (mem::k_vmm.copy_in(*p->get_pagetable(), &probe, probe_addr, 1) < 0)
+            {
+                return -ENOMEM;
+            }
+        }
+        return 0;
     }
     uint64 SyscallHandler::sys_get_mempolicy()
     {
@@ -18249,13 +18159,13 @@ namespace syscall
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
-        KernelTimexOld tx{};
+        abi::KernelTimexOld tx{};
         if (mem::k_vmm.copy_in(*pt, &tx, timex_addr, sizeof(tx)) < 0)
         {
             return SYS_EFAULT;
         }
 
-        int ret = apply_kernel_timex(tx, p->get_euid() == 0);
+        int ret = tmm::k_timex.apply(tx, p->get_euid() == 0);
         if (ret < 0)
         {
             return ret;
@@ -18268,230 +18178,170 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_copy_file_range()
     {
-        int fd_in, fd_out;
-        uint64 off_in_addr, off_out_addr;
-        size_t len;
-        unsigned int flags;
-        fs::file *f_in, *f_out;
+        int fd_in = -1;
+        int fd_out = -1;
+        fs::file *f_in = nullptr;
+        fs::file *f_out = nullptr;
+        if (_arg_fd(0, &fd_in, &f_in) < 0 ||
+            _arg_fd(2, &fd_out, &f_out) < 0)
+        {
+            return SYS_EBADF;
+        }
 
-        // 解析参数
-        if (_arg_fd(0, &fd_in, &f_in) < 0)
-        {
-            printfRed("[sys_copy_file_range] Invalid fd_in\n");
-            return -EBADF;
-        }
-        if (_arg_addr(1, off_in_addr) < 0)
-        {
-            printfRed("[sys_copy_file_range] Invalid off_in address\n");
-            return -EFAULT;
-        }
-        if (_arg_fd(2, &fd_out, &f_out) < 0)
-        {
-            printfRed("[sys_copy_file_range] Invalid fd_out\n");
-            return -EBADF;
-        }
-        if (_arg_addr(3, off_out_addr) < 0)
-        {
-            printfRed("[sys_copy_file_range] Invalid off_out address\n");
-            return -EFAULT;
-        }
-        if (_arg_addr(4, (uint64 &)len) < 0)
-        {
-            printfRed("[sys_copy_file_range] Invalid len\n");
-            return -EINVAL;
-        }
-        if (_arg_int(5, (int &)flags) < 0)
-        {
-            printfRed("[sys_copy_file_range] Invalid flags\n");
-            return -EINVAL;
-        }
-        printfBlue("[sys_copy_file_range] fd_in=%d, off_in_addr=%p, fd_out=%d, off_out_addr=%p, len=%zu, flags=%u\n",
-                   fd_in, (void *)off_in_addr, fd_out, (void *)off_out_addr, len, flags);
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        mem::PageTable *pt = p->get_pagetable();
-
-        // 检查 flags 参数，必须为 0
+        uint64 off_in_ptr = _arg_raw(1);
+        uint64 off_out_ptr = _arg_raw(3);
+        uint64 len_raw = _arg_raw(4);
+        uint32 flags = static_cast<uint32>(_arg_raw(5));
         if (flags != 0)
         {
-            printfRed("[sys_copy_file_range] flags must be 0\n");
-            return -EINVAL;
+            return SYS_EINVAL;
         }
-
-        // 检查文件描述符有效性
-        if (!f_in || !f_out)
+        if (len_raw == 0)
         {
-            printfRed("[sys_copy_file_range] Invalid file descriptors\n");
-            return -EBADF;
+            return 0;
         }
-
-        // 检查文件类型：必须是普通文件
-        if (f_in->_attrs.filetype != fs::FileTypes::FT_NORMAL ||
-            f_out->_attrs.filetype != fs::FileTypes::FT_NORMAL)
+        if ((f_in->lwext4_file_struct.flags & O_PATH) ||
+            (f_out->lwext4_file_struct.flags & O_PATH) ||
+            !fs::FileDescriptorAccess::allows_read(f_in) ||
+            !fs::FileDescriptorAccess::allows_write(f_out))
         {
-            printfRed("[sys_copy_file_range] Not regular files\n");
-            return -EINVAL;
+            return SYS_EBADF;
         }
-
-        // 检查是否是目录
         if (f_in->_attrs.filetype == fs::FileTypes::FT_DIRECT ||
             f_out->_attrs.filetype == fs::FileTypes::FT_DIRECT)
         {
-            printfRed("[sys_copy_file_range] Cannot copy from/to directory\n");
             return -EISDIR;
         }
-
-        // 检查文件访问权限
-        // fd_in 必须可读 (不能只是 O_WRONLY)
-        int access_mode_in = f_in->lwext4_file_struct.flags & 03; // 提取访问模式位
-        if (access_mode_in == O_WRONLY)
+        if (f_in->_attrs.filetype != fs::FileTypes::FT_NORMAL ||
+            f_out->_attrs.filetype != fs::FileTypes::FT_NORMAL)
         {
-            printfRed("[sys_copy_file_range] fd_in not open for reading\n");
-            return -EBADF;
+            return SYS_EINVAL;
+        }
+        if ((f_out->lwext4_file_struct.flags & O_APPEND) != 0)
+        {
+            return SYS_EBADF;
         }
 
-        // fd_out 必须可写 (不能是 O_RDONLY)
-        int access_mode_out = f_out->lwext4_file_struct.flags & 03; // 提取访问模式位
-        if (access_mode_out == O_RDONLY)
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (p == nullptr || p->get_pagetable() == nullptr)
         {
-            printfRed("[sys_copy_file_range] fd_out not open for writing\n");
-            return -EBADF;
+            return SYS_ESRCH;
         }
+        mem::PageTable *pt = p->get_pagetable();
 
-        // 检查 O_APPEND 标志
-        if (f_out->lwext4_file_struct.flags & O_APPEND)
+        off_t off_in = 0;
+        off_t off_out = 0;
+        const bool explicit_off_in = off_in_ptr != 0;
+        const bool explicit_off_out = off_out_ptr != 0;
+        if (explicit_off_in)
         {
-            printfRed("[sys_copy_file_range] fd_out has O_APPEND flag\n");
-            return -EBADF;
-        }
-
-        // 检查 O_PATH 标志
-        if ((f_in->lwext4_file_struct.flags & O_PATH) ||
-            (f_out->lwext4_file_struct.flags & O_PATH))
-        {
-            printfRed("[sys_copy_file_range] Cannot copy with O_PATH files\n");
-            return -EBADF;
-        }
-        if (len == 0)
-        {
-            printfOrange("[sys_copy_file_range] len is 0, nothing to copy\n");
-            return 0;
-        }
-        // 分配内核缓冲区 - 使用物理内存管理器
-        char *buf = (char *)mem::k_pmm.kmalloc(len);
-        if (!buf)
-        {
-            printfRed("[sys_copy_file_range] Failed to allocate buffer of size %zu\n", len);
-            return -ENOMEM;
-        }
-
-        // 初始化缓冲区以便调试
-        memset(buf, 0, len);
-
-        printfBlue("[sys_copy_file_range] Allocated buffer at %p, size %zu\n", buf, len);
-
-        ssize_t read_len = 0;
-        ssize_t ret = 0;
-
-        // 处理输入偏移
-        if (off_in_addr == 0) // NULL pointer
-        {
-            // 使用文件自身的偏移
-            printfBlue("[sys_copy_file_range] Reading from current file position\n");
-            read_len = f_in->read((uint64)buf, len, f_in->get_file_offset(), true);
-            //        int ret = f->read((uint64)k_buf, n, f->get_file_offset(), true);
-        }
-        else
-        {
-            // 从用户空间读取偏移值
-            off_t in_off;
-            if (mem::k_vmm.copy_in(*pt, &in_off, off_in_addr, sizeof(off_t)) < 0)
+            if (off_in_ptr >= MAXVA ||
+                mem::k_vmm.copy_in(*pt, &off_in, off_in_ptr, sizeof(off_in)) < 0)
             {
-                mem::k_pmm.free_page(buf);
-                return -EFAULT;
+                return SYS_EFAULT;
+            }
+            if (off_in < 0)
+            {
+                return SYS_EINVAL;
+            }
+        }
+        if (explicit_off_out)
+        {
+            if (off_out_ptr >= MAXVA ||
+                mem::k_vmm.copy_in(*pt, &off_out, off_out_ptr, sizeof(off_out)) < 0)
+            {
+                return SYS_EFAULT;
+            }
+            if (off_out < 0)
+            {
+                return SYS_EINVAL;
+            }
+        }
+
+        size_t len = len_raw > static_cast<uint64>(SIZE_MAX)
+                         ? SIZE_MAX
+                         : static_cast<size_t>(len_raw);
+        size_t chunk_size = min_size(len, k_syscall_io_chunk_size);
+        char *buffer = static_cast<char *>(alloc_syscall_temp_buffer(chunk_size));
+        if (buffer == nullptr)
+        {
+            return SYS_ENOMEM;
+        }
+
+        size_t remaining = len;
+        ssize_t total = 0;
+        long final_error = 0;
+        while (remaining > 0)
+        {
+            size_t want = min_size(remaining, chunk_size);
+            long read_count = f_in->read(
+                reinterpret_cast<uint64>(buffer),
+                want,
+                explicit_off_in ? off_in : -1,
+                !explicit_off_in);
+            if (read_count <= 0)
+            {
+                final_error = read_count;
+                break;
             }
 
-            printfBlue("[sys_copy_file_range] Reading from offset %ld\n", in_off);
-
-            // 检查偏移是否超过文件大小
-            if ((uint64)in_off > f_in->lwext4_file_struct.fsize)
+            size_t written = 0;
+            while (written < static_cast<size_t>(read_count))
             {
-                mem::k_pmm.free_page(buf);
-                return 0; // 偏移超过文件大小，直接返回0
-            }
-
-            // 从指定偏移读取，不更新文件指针
-            read_len = f_in->read((uint64)buf, len, in_off, false);
-            if (read_len > 0)
-            {
-                // 更新用户空间的偏移值
-                in_off += read_len;
-                if (mem::k_vmm.copy_out(*pt, off_in_addr, &in_off, sizeof(off_t)) < 0)
+                long write_count = f_out->write(
+                    reinterpret_cast<uint64>(buffer + written),
+                    static_cast<size_t>(read_count) - written,
+                    explicit_off_out ? off_out : -1,
+                    !explicit_off_out);
+                if (write_count <= 0)
                 {
-                    mem::k_pmm.free_page(buf);
-                    return -EFAULT;
+                    final_error = write_count;
+                    break;
+                }
+                written += static_cast<size_t>(write_count);
+                if (explicit_off_out)
+                {
+                    off_out += static_cast<off_t>(write_count);
                 }
             }
-        }
 
-        printfBlue("[sys_copy_file_range] Read %ld bytes\n", read_len);
-
-        if (read_len <= 0)
-        {
-            if (read_len < 0)
+            if (explicit_off_in)
             {
-                printfRed("[sys_copy_file_range] Read failed with error: %ld\n", read_len);
+                off_in += static_cast<off_t>(written);
             }
-            mem::k_pmm.free_page(buf);
-            return read_len < 0 ? read_len : 0;
-        }
-
-        // 添加数据验证 - 打印前几个字节用于调试
-        if (read_len > 0)
-        {
-            printfBlue("[sys_copy_file_range] First 16 bytes: ");
-            for (int i = 0; i < (read_len > 16 ? 16 : read_len); i++)
+            total += static_cast<ssize_t>(written);
+            remaining -= written;
+            if (written < static_cast<size_t>(read_count) || final_error < 0)
             {
-                printfBlue("%02x ", (unsigned char)buf[i]);
-            }
-            printfBlue("\n");
-        }
-
-        // 处理输出偏移
-        if (off_out_addr == 0) // NULL pointer
-        {
-            // 使用文件自身的偏移
-            printfBlue("[sys_copy_file_range] Writing to current file position\n");
-            ret = f_out->write((uint64)buf, read_len, f_out->get_file_offset(), true);
-        }
-        else
-        {
-            // 从用户空间读取偏移值
-            off_t out_off;
-            if (mem::k_vmm.copy_in(*pt, &out_off, off_out_addr, sizeof(off_t)) < 0)
-            {
-                mem::k_pmm.free_page(buf);
-                return -EFAULT;
-            }
-
-            printfBlue("[sys_copy_file_range] Writing to offset %ld\n", out_off);
-            // 从指定偏移写入，不更新文件指针
-            ret = f_out->write((uint64)buf, read_len, out_off, false);
-            if (ret > 0)
-            {
-                // 更新用户空间的偏移值
-                out_off += ret;
-                if (mem::k_vmm.copy_out(*pt, off_out_addr, &out_off, sizeof(off_t)) < 0)
-                {
-                    mem::k_pmm.free_page(buf);
-                    return -EFAULT;
-                }
+                break;
             }
         }
 
-        printfBlue("[sys_copy_file_range] Wrote %ld bytes\n", ret);
+        if (total > 0)
+        {
+            int flush_result = f_out->flush_visibility_state();
+            if (flush_result < 0)
+            {
+                final_error = flush_result;
+            }
+        }
+        free_syscall_temp_buffer(buffer);
 
-        mem::k_pmm.free_page(buf);
-        return ret;
+        if (total > 0 && explicit_off_in &&
+            mem::k_vmm.copy_out(*pt, off_in_ptr, &off_in, sizeof(off_in)) < 0)
+        {
+            return SYS_EFAULT;
+        }
+        if (total > 0 && explicit_off_out &&
+            mem::k_vmm.copy_out(*pt, off_out_ptr, &off_out, sizeof(off_out)) < 0)
+        {
+            return SYS_EFAULT;
+        }
+        if (total > 0)
+        {
+            return total;
+        }
+        return final_error < 0 ? final_error : 0;
     }
     uint64 SyscallHandler::sys_strerror()
     {
@@ -18503,7 +18353,83 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_close_range()
     {
-        panic("未实现该系统调用");
+        constexpr uint32 k_close_range_unshare = 1U << 1;
+        constexpr uint32 k_close_range_cloexec = 1U << 2;
+        constexpr uint32 k_supported_flags = k_close_range_unshare | k_close_range_cloexec;
+
+        uint32 first = static_cast<uint32>(_arg_raw(0));
+        uint32 last = static_cast<uint32>(_arg_raw(1));
+        uint32 flags = static_cast<uint32>(_arg_raw(2));
+        if (first > last || (flags & ~k_supported_flags) != 0)
+        {
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (p == nullptr || p->_ofile == nullptr)
+        {
+            return SYS_EBADF;
+        }
+
+        if ((flags & k_close_range_unshare) != 0 && p->_ofile->_shared_ref_cnt > 1)
+        {
+            proc::ofile *old_table = p->_ofile;
+            auto *new_table = new proc::ofile();
+            if (new_table == nullptr)
+            {
+                return SYS_ENOMEM;
+            }
+            new_table->init("close_range_ofile");
+
+            old_table->_lock.acquire();
+            for (uint fd = 0; fd < proc::max_open_files; ++fd)
+            {
+                fs::file *file_obj = old_table->_ofile_ptr[fd];
+                if (file_obj != nullptr)
+                {
+                    file_obj->dup();
+                    new_table->_ofile_ptr[fd] = file_obj;
+                }
+                new_table->_reserved[fd] = old_table->_reserved[fd];
+                new_table->_fl_cloexec[fd] = old_table->_fl_cloexec[fd];
+            }
+            old_table->_shared_ref_cnt--;
+            old_table->_lock.release();
+            p->_ofile = new_table;
+        }
+
+        if (first >= proc::max_open_files)
+        {
+            return 0;
+        }
+        uint32 bounded_last = last;
+        if (bounded_last >= proc::max_open_files)
+        {
+            bounded_last = proc::max_open_files - 1;
+        }
+
+        if ((flags & k_close_range_cloexec) != 0)
+        {
+            p->_ofile->_lock.acquire();
+            for (uint32 fd = first; fd <= bounded_last; ++fd)
+            {
+                if (p->_ofile->_ofile_ptr[fd] != nullptr)
+                {
+                    p->_ofile->_fl_cloexec[fd] = true;
+                }
+            }
+            p->_ofile->_lock.release();
+            return 0;
+        }
+
+        for (uint32 fd = first; fd <= bounded_last; ++fd)
+        {
+            if (p->get_open_file(static_cast<int>(fd)) != nullptr)
+            {
+                proc::k_pm.close(static_cast<int>(fd));
+            }
+        }
+        return 0;
     }
     uint64 SyscallHandler::sys_faccessat2()
     {
@@ -18823,7 +18749,7 @@ namespace syscall
                 shm::shm_segment seg = shm::k_smm.get_seg_info(vm.backing_shmid);
                 if (seg.shmid < 0 || (seg.mode & SHM_DEST))
                 {
-                    return -EIDRM;
+                    return -abi::k_eidrm;
                 }
                 return SYS_EINVAL;
             }
@@ -18882,6 +18808,11 @@ namespace syscall
         {
             return SYS_EINVAL;
         }
+        if (fd_in_is_pipe && static_cast<const fs::pipe_file *>(f_in)->allows_read_end() &&
+            !fd_out_is_pipe && (f_out->is_virtual || f_out->_attrs.filetype == fs::FileTypes::FT_DEVICE))
+        {
+            return SYS_EINVAL;
+        }
         if (fd_out_is_pipe && f_in->_attrs.filetype == fs::FileTypes::FT_SOCKET)
         {
             auto *socket_in = static_cast<fs::socket_file *>(f_in);
@@ -18890,7 +18821,7 @@ namespace syscall
                 return SYS_EINVAL;
             }
         }
-        if (!file_descriptor_allows_read(f_in) || !file_descriptor_allows_write(f_out))
+        if (!fs::FileDescriptorAccess::allows_read(f_in) || !fs::FileDescriptorAccess::allows_write(f_out))
         {
             return SYS_EBADF;
         }
@@ -19164,15 +19095,9 @@ namespace syscall
         
         case PR_SET_PDEATHSIG:
         {
-            // 设置父进程死亡信号
-            // 检查参数3,4,5是否为0
-            if (arg3 != 0 || arg4 != 0 || arg5 != 0)
-            {
-                return -EINVAL;
-            }
-            
-            // 检查信号值是否有效（0-64）
-            if (arg2 > 64)
+            // prctl 是可变参数接口；该选项只读取 arg2，不能校验未传入参数
+            // 对应的寄存器残值，否则标准的 prctl(PR_SET_PDEATHSIG, sig) 会失败。
+            if (arg2 > proc::ipc::signal::SIGRTMAX)
             {
                 return -EINVAL;
             }
@@ -19186,13 +19111,7 @@ namespace syscall
             // 获取父进程死亡信号
             if (!arg2)
             {
-                return -EINVAL;
-            }
-            
-            // 检查参数3,4,5是否为0
-            if (arg3 != 0 || arg4 != 0 || arg5 != 0)
-            {
-                return -EINVAL;
+                return -EFAULT;
             }
             
             mem::PageTable *pt = current->get_pagetable();
@@ -19249,7 +19168,8 @@ namespace syscall
                 return -EINVAL;
             }
             
-            if (arg2 != 0 && arg2 != 1)
+            // Linux 只支持 PR_TIMING_STATISTICAL(0)。
+            if (arg2 != 0)
             {
                 return -EINVAL;
             }
@@ -19269,6 +19189,42 @@ namespace syscall
             
             return current->_timing;
         }
+
+        case PR_GET_SECCOMP:
+        {
+            // prctl 是可变参数接口；该选项不读取后续参数，未传入的寄存器值不可校验。
+            return current->_seccomp_mode;
+        }
+
+        case PR_SET_SECCOMP:
+        {
+            constexpr uint64 seccomp_mode_strict = 1;
+            constexpr uint64 seccomp_mode_filter = 2;
+            constexpr uint32 cap_sys_admin = 21;
+
+            if (arg2 != seccomp_mode_strict && arg2 != seccomp_mode_filter)
+            {
+                return -EINVAL;
+            }
+            if (arg2 == seccomp_mode_filter)
+            {
+                if (arg3 == 0 ||
+                    mem::k_vmm.ensure_user_read_range(*current->get_pagetable(),
+                                                      arg3,
+                                                      sizeof(uint64) * 2) < 0)
+                {
+                    return -EFAULT;
+                }
+                if (current->_no_new_privs == 0 &&
+                    !proc::k_capability.has_effective(current, cap_sys_admin))
+                {
+                    return -EACCES;
+                }
+            }
+
+            // 过滤器执行器尚未接入 syscall dispatch，不能假装已经启用隔离。
+            return -ENOTSUP;
+        }
         
         case PR_SET_SECUREBITS:
         {
@@ -19279,6 +19235,11 @@ namespace syscall
                 return -EINVAL;
             }
             
+            constexpr uint32 cap_setpcap = 8;
+            if (!proc::k_capability.has_effective(current, cap_setpcap))
+            {
+                return -EPERM;
+            }
             current->_securebits = arg2;
             return 0;
         }
@@ -19329,18 +19290,11 @@ namespace syscall
                 return -EINVAL;
             }
             
-            if (arg2 != 0 && arg2 != 1)
+            if (arg2 != 1)
             {
                 return -EINVAL;
             }
-            
-            // no_new_privs只能从0设置为1，不能从1设置为0
-            if (current->_no_new_privs == 1 && arg2 == 0)
-            {
-                return -EINVAL;
-            }
-            
-            current->_no_new_privs = (int)arg2;
+            current->_no_new_privs = 1;
             return 0;
         }
         
@@ -19384,6 +19338,93 @@ namespace syscall
             }
             
             return current->_thp_disable;
+        }
+
+        case PR_CAPBSET_READ:
+        {
+            if (arg2 > proc::k_capability_max ||
+                arg3 != 0 || arg4 != 0 || arg5 != 0)
+            {
+                return -EINVAL;
+            }
+            return proc::k_capability.has_bit(current->_cap_bounding,
+                                              static_cast<uint32>(arg2));
+        }
+
+        case PR_CAPBSET_DROP:
+        {
+            constexpr uint32 cap_setpcap = 8;
+            if (arg2 > proc::k_capability_max)
+            {
+                return -EINVAL;
+            }
+            if (!proc::k_capability.has_effective(current, cap_setpcap))
+            {
+                return -EPERM;
+            }
+            current->_cap_bounding[arg2 / 32] &= ~(1U << (arg2 % 32));
+            return 0;
+        }
+
+        case PR_CAP_AMBIENT:
+        {
+            constexpr uint64 ambient_is_set = 1;
+            constexpr uint64 ambient_raise = 2;
+            constexpr uint64 ambient_lower = 3;
+            constexpr uint64 ambient_clear_all = 4;
+
+            if (arg4 != 0 || arg5 != 0)
+            {
+                return -EINVAL;
+            }
+            if (arg2 == ambient_clear_all)
+            {
+                if (arg3 != 0)
+                {
+                    return -EINVAL;
+                }
+                memset(current->_cap_ambient, 0, sizeof(current->_cap_ambient));
+                return 0;
+            }
+            if (arg2 != ambient_is_set &&
+                arg2 != ambient_raise &&
+                arg2 != ambient_lower)
+            {
+                return -EINVAL;
+            }
+            if (arg3 > proc::k_capability_max)
+            {
+                return -EINVAL;
+            }
+
+            uint32 word = static_cast<uint32>(arg3 / 32);
+            uint32 mask = 1U << (arg3 % 32);
+            if (arg2 == ambient_is_set)
+            {
+                return (current->_cap_ambient[word] & mask) != 0;
+            }
+            if (arg2 == ambient_lower)
+            {
+                current->_cap_ambient[word] &= ~mask;
+                return 0;
+            }
+            if ((current->_cap_permitted[word] & mask) == 0 ||
+                (current->_cap_inheritable[word] & mask) == 0)
+            {
+                return -EPERM;
+            }
+            current->_cap_ambient[word] |= mask;
+            return 0;
+        }
+
+        case PR_GET_SPECULATION_CTRL:
+        {
+            if (arg3 != 0 || arg4 != 0 || arg5 != 0)
+            {
+                return -EINVAL;
+            }
+            // 教学内核未暴露硬件推测执行控制，报告“不受影响”。
+            return 0;
         }
         
         default:
@@ -19512,7 +19553,65 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_waitid()
     {
-        panic("未实现该系统调用");
+        int idtype = 0;
+        int id = 0;
+        uint64 infop_addr = 0;
+        int options = 0;
+        if (_arg_int(0, idtype) < 0 ||
+            _arg_int(1, id) < 0 ||
+            _arg_addr(2, infop_addr) < 0 ||
+            _arg_int(3, options) < 0)
+        {
+            return SYS_EINVAL;
+        }
+
+        const int allowed_options =
+            WNOHANG | WSTOPPED | WEXITED | WCONTINUED | WNOWAIT |
+            __WNOTHREAD | __WALL | __WCLONE;
+        if ((options & ~allowed_options) != 0 ||
+            (options & (WSTOPPED | WEXITED | WCONTINUED)) == 0)
+        {
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *current = proc::k_pm.get_cur_pcb();
+        if (current == nullptr || current->get_pagetable() == nullptr)
+            return SYS_ESRCH;
+        if (infop_addr != 0 &&
+            mem::k_vmm.ensure_user_write_range(*current->get_pagetable(),
+                                               infop_addr,
+                                               sizeof(WaitIdSigInfo)) < 0)
+        {
+            return SYS_EFAULT;
+        }
+
+        proc::WaitIdResult wait_result{};
+        int wait_ret = proc::k_pm.waitid(idtype, id, options, wait_result);
+        if (wait_ret < 0)
+            return wait_ret;
+
+        if (infop_addr != 0)
+        {
+            WaitIdSigInfo info{};
+            if (wait_result.has_event)
+            {
+                info.si_signo = proc::ipc::signal::SIGCHLD;
+                info.si_code = wait_result.code;
+                info.si_pid = wait_result.pid;
+                info.si_uid = wait_result.uid;
+                info.si_status = wait_result.status;
+                info.si_utime = static_cast<int64>(wait_result.utime);
+                info.si_stime = static_cast<int64>(wait_result.stime);
+            }
+            if (mem::k_vmm.copy_out(*current->get_pagetable(),
+                                    infop_addr,
+                                    &info,
+                                    sizeof(info)) < 0)
+            {
+                return SYS_EFAULT;
+            }
+        }
+        return 0;
     }
     uint64 SyscallHandler::sys_memfd_create()
     {
@@ -19542,11 +19641,13 @@ namespace syscall
         mem::PageTable *pt = p->get_pagetable();
 
         // 拷贝并校验 name
-        eastl::string name;
-        if (mem::k_vmm.copy_str_in(*pt, name, name_addr, PATH_MAX) < 0)
+        if (name_addr == 0)
             return SYS_EFAULT;
-        // 非空、长度限制、不能包含 '/'
-        if (name.size() == 0 || name.size() > (size_t)MEMFD_NAME_MAX)
+        eastl::string name;
+        int name_ret = mem::k_vmm.copy_str_in(*pt, name, name_addr, MEMFD_NAME_MAX + 1);
+        if (name_ret == -EFAULT)
+            return SYS_EFAULT;
+        if (name_ret < 0 || name.size() > (size_t)MEMFD_NAME_MAX)
             return SYS_EINVAL;
         for (char c : name)
         {
@@ -19600,6 +19701,154 @@ namespace syscall
 
         // 返回 fd，密封语义由 fcntl F_*_SEALS 实现
         return fd;
+    }
+
+    uint64 SyscallHandler::sys_capget()
+    {
+        uint64 header_addr = 0;
+        uint64 data_addr = 0;
+        if (_arg_addr(0, header_addr) < 0 || _arg_addr(1, data_addr) < 0)
+        {
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *current = proc::k_pm.get_cur_pcb();
+        if (current == nullptr || current->get_pagetable() == nullptr)
+        {
+            return SYS_ESRCH;
+        }
+
+        proc::CapabilityUserHeader header{};
+        mem::PageTable *pt = current->get_pagetable();
+        if (header_addr == 0 ||
+            mem::k_vmm.copy_in(*pt, &header, header_addr, sizeof(header)) < 0)
+        {
+            return SYS_EFAULT;
+        }
+
+        int words = proc::k_capability.user_data_words(header.version);
+        if (words == 0)
+        {
+            header.version = proc::CapabilityManager::k_version_3;
+            if (mem::k_vmm.copy_out(*pt, header_addr, &header, sizeof(header)) < 0)
+            {
+                return SYS_EFAULT;
+            }
+            return SYS_EINVAL;
+        }
+        if (header.pid < 0)
+        {
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *target = header.pid == 0
+                              ? current
+                              : proc::k_capability.find_live_task_by_pid_or_tid(header.pid);
+        if (target == nullptr)
+        {
+            return SYS_ESRCH;
+        }
+        if (!proc::k_capability.may_inspect(current, target))
+        {
+            return SYS_EPERM;
+        }
+        if (data_addr == 0)
+        {
+            return SYS_EFAULT;
+        }
+
+        proc::CapabilityUserData data[proc::k_capability_word_count]{};
+        for (int i = 0; i < words; ++i)
+        {
+            data[i].effective = target->_cap_effective[i];
+            data[i].permitted = target->_cap_permitted[i];
+            data[i].inheritable = target->_cap_inheritable[i];
+        }
+        if (mem::k_vmm.copy_out(*pt, data_addr, data,
+                                static_cast<size_t>(words) * sizeof(data[0])) < 0)
+        {
+            return SYS_EFAULT;
+        }
+        return 0;
+    }
+
+    uint64 SyscallHandler::sys_capset()
+    {
+        uint64 header_addr = 0;
+        uint64 data_addr = 0;
+        if (_arg_addr(0, header_addr) < 0 || _arg_addr(1, data_addr) < 0)
+        {
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *current = proc::k_pm.get_cur_pcb();
+        if (current == nullptr || current->get_pagetable() == nullptr)
+        {
+            return SYS_ESRCH;
+        }
+
+        proc::CapabilityUserHeader header{};
+        mem::PageTable *pt = current->get_pagetable();
+        if (header_addr == 0 ||
+            mem::k_vmm.copy_in(*pt, &header, header_addr, sizeof(header)) < 0)
+        {
+            return SYS_EFAULT;
+        }
+
+        int words = proc::k_capability.user_data_words(header.version);
+        if (words == 0)
+        {
+            return SYS_EINVAL;
+        }
+        if (header.pid != 0 &&
+            header.pid != current->_pid &&
+            header.pid != current->_tid)
+        {
+            return SYS_EPERM;
+        }
+        if (data_addr == 0)
+        {
+            return SYS_EFAULT;
+        }
+
+        proc::CapabilityUserData data[proc::k_capability_word_count]{};
+        if (mem::k_vmm.copy_in(*pt, data, data_addr,
+                               static_cast<size_t>(words) * sizeof(data[0])) < 0)
+        {
+            return SYS_EFAULT;
+        }
+
+        for (int i = 0; i < words; ++i)
+        {
+            if ((data[i].effective & ~data[i].permitted) != 0)
+            {
+                return SYS_EINVAL;
+            }
+            if ((data[i].permitted & ~current->_cap_permitted[i]) != 0)
+            {
+                return SYS_EPERM;
+            }
+            uint32 allowed_inheritable =
+                current->_cap_inheritable[i] | data[i].permitted;
+            if ((data[i].inheritable & ~allowed_inheritable) != 0)
+            {
+                return SYS_EPERM;
+            }
+        }
+
+        for (int i = 0; i < words; ++i)
+        {
+            current->_cap_effective[i] = data[i].effective;
+            current->_cap_permitted[i] = data[i].permitted;
+            current->_cap_inheritable[i] = data[i].inheritable;
+        }
+        if (words == 1)
+        {
+            current->_cap_effective[1] = 0;
+            current->_cap_permitted[1] = 0;
+            current->_cap_inheritable[1] = 0;
+        }
+        return 0;
     }
     /**
      * @brief 创建 POSIX 每进程定时器
@@ -19701,7 +19950,7 @@ namespace syscall
             // 这里必须按 Linux 64-bit 用户 ABI 读取 sigevent。
             // 真实布局是 value/signo/notify/...，之前直接拿内核内部精简结构去 copy_in，
             // 会把 SIGEV_SIGNAL 读成脏 signal number，导致 clock_settime03 的 timer_create() 返回 EINVAL。
-            KernelSigeventCompat user_sev{};
+            abi::KernelSigeventCompat user_sev{};
             if (mem::k_vmm.copy_in(*pt, &user_sev, sevp_addr, sizeof(user_sev)) < 0)
             {
                 printfRed("[SyscallHandler::sys_timer_create] Error copying sigevent from user space\n");
@@ -20195,9 +20444,9 @@ namespace syscall
         }
 
         fs::epoll_file *epoll_obj = static_cast<fs::epoll_file *>(epoll_base);
-        KernelEpollEvent kev = {};
+        abi::KernelEpollEvent kev = {};
 
-        if (op != k_epoll_ctl_del)
+        if (op != abi::k_epoll_ctl_del)
         {
             if (event_addr == 0)
             {
@@ -20211,7 +20460,7 @@ namespace syscall
 
         switch (op)
         {
-        case k_epoll_ctl_add:
+        case abi::k_epoll_ctl_add:
             if (target_file->is_epoll_file())
             {
                 auto *target_epoll = static_cast<fs::epoll_file *>(target_file);
@@ -20225,9 +20474,9 @@ namespace syscall
                 }
             }
             return epoll_obj->add_watch(fd, kev.events, kev.data);
-        case k_epoll_ctl_mod:
+        case abi::k_epoll_ctl_mod:
             return epoll_obj->mod_watch(fd, kev.events, kev.data);
-        case k_epoll_ctl_del:
+        case abi::k_epoll_ctl_del:
             return epoll_obj->del_watch(fd);
         default:
             return SYS_EINVAL;
@@ -20253,7 +20502,7 @@ namespace syscall
         {
             return SYS_EFAULT;
         }
-        if (maxevents <= 0 || maxevents > INT_MAX / (int)sizeof(KernelEpollEvent))
+        if (maxevents <= 0 || maxevents > INT_MAX / (int)sizeof(abi::KernelEpollEvent))
         {
             return SYS_EINVAL;
         }
@@ -20279,8 +20528,8 @@ namespace syscall
             return SYS_EINVAL;
         }
 
-        size_t events_bytes = static_cast<size_t>(maxevents) * sizeof(KernelEpollEvent);
-        auto *kernel_events = static_cast<KernelEpollEvent *>(alloc_syscall_temp_buffer(events_bytes));
+        size_t events_bytes = static_cast<size_t>(maxevents) * sizeof(abi::KernelEpollEvent);
+        auto *kernel_events = static_cast<abi::KernelEpollEvent *>(alloc_syscall_temp_buffer(events_bytes));
         if (kernel_events == nullptr)
         {
             return SYS_ENOMEM;
@@ -20321,7 +20570,7 @@ namespace syscall
                                      maxevents,
                                      timeout_us);
         if (ret > 0 &&
-            mem::k_vmm.copy_out(*pt, events_addr, kernel_events, static_cast<size_t>(ret) * sizeof(KernelEpollEvent)) < 0)
+            mem::k_vmm.copy_out(*pt, events_addr, kernel_events, static_cast<size_t>(ret) * sizeof(abi::KernelEpollEvent)) < 0)
         {
             cleanup();
             return SYS_EFAULT;
@@ -20350,7 +20599,7 @@ namespace syscall
         {
             return SYS_EFAULT;
         }
-        if (maxevents <= 0 || maxevents > INT_MAX / (int)sizeof(KernelEpollEvent))
+        if (maxevents <= 0 || maxevents > INT_MAX / (int)sizeof(abi::KernelEpollEvent))
         {
             return SYS_EINVAL;
         }
@@ -20379,12 +20628,12 @@ namespace syscall
         int64 timeout_us = -1;
         if (timeout_addr != 0)
         {
-            UserTimespec64 user_timeout{};
+            abi::UserTimespec64 user_timeout{};
             if (mem::k_vmm.copy_in(*pt, &user_timeout, timeout_addr, sizeof(user_timeout)) < 0)
             {
                 return SYS_EFAULT;
             }
-            if (user_timeout.tv_sec < 0 || user_timeout.tv_nsec < 0 || user_timeout.tv_nsec >= k_nsec_per_sec)
+            if (user_timeout.tv_sec < 0 || user_timeout.tv_nsec < 0 || user_timeout.tv_nsec >= abi::k_nsec_per_sec)
             {
                 return SYS_EINVAL;
             }
@@ -20399,8 +20648,8 @@ namespace syscall
             }
         }
 
-        size_t events_bytes = static_cast<size_t>(maxevents) * sizeof(KernelEpollEvent);
-        auto *kernel_events = static_cast<KernelEpollEvent *>(alloc_syscall_temp_buffer(events_bytes));
+        size_t events_bytes = static_cast<size_t>(maxevents) * sizeof(abi::KernelEpollEvent);
+        auto *kernel_events = static_cast<abi::KernelEpollEvent *>(alloc_syscall_temp_buffer(events_bytes));
         if (kernel_events == nullptr)
         {
             return SYS_ENOMEM;
@@ -20440,7 +20689,7 @@ namespace syscall
                                      maxevents,
                                      timeout_us);
         if (ret > 0 &&
-            mem::k_vmm.copy_out(*pt, events_addr, kernel_events, static_cast<size_t>(ret) * sizeof(KernelEpollEvent)) < 0)
+            mem::k_vmm.copy_out(*pt, events_addr, kernel_events, static_cast<size_t>(ret) * sizeof(abi::KernelEpollEvent)) < 0)
         {
             cleanup();
             return SYS_EFAULT;
@@ -20456,16 +20705,34 @@ namespace syscall
         {
             return SYS_EINVAL;
         }
-        if ((flags & ~(O_CLOEXEC | O_NONBLOCK)) != 0)
+        constexpr int k_efd_semaphore = 1;
+        if ((flags & ~(O_CLOEXEC | O_NONBLOCK | k_efd_semaphore)) != 0)
         {
             return SYS_EINVAL;
         }
 
-        int fd = alloc_anonymous_non_socket_fd("anon_inode:[eventfd]", O_RDWR | (flags & O_NONBLOCK));
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        if (p == nullptr)
+        {
+            return SYS_EINVAL;
+        }
+
+        uint64 initial_value = static_cast<uint32>(_arg_raw(0));
+        auto *event_file = new EventFdFile(initial_value, flags);
+        if (event_file == nullptr)
+        {
+            return SYS_ENOMEM;
+        }
+
+        int fd = proc::k_pm.alloc_fd(p, event_file);
+        if (fd < 0)
+        {
+            event_file->free_file();
+            return fd;
+        }
         if (fd >= 0 && (flags & O_CLOEXEC) != 0)
         {
-            proc::Pcb *p = proc::k_pm.get_cur_pcb();
-            if (p != nullptr && p->_ofile != nullptr && fd < (int)proc::max_open_files)
+            if (p->_ofile != nullptr && fd < (int)proc::max_open_files)
             {
                 p->_ofile->_fl_cloexec[fd] = true;
             }
@@ -20668,7 +20935,7 @@ namespace syscall
         }
 
         proc::interval_timer_snapshot snapshot = proc::read_interval_timer(p, which);
-        KernelITimerValOld curr_timer{};
+        abi::KernelITimerValOld curr_timer{};
         fill_itimerval_from_snapshot(snapshot, curr_timer);
         if (mem::k_vmm.copy_out(*pt, curr_value_addr, &curr_timer, sizeof(curr_timer)) < 0)
         {

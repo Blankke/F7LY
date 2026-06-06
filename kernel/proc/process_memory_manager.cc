@@ -41,7 +41,10 @@ namespace proc
 #elif defined(LOONGARCH)
         constexpr uint64 k_min_kernel_object_ptr = PHYSBASE;
 #endif
-        constexpr uint32 k_max_reasonable_file_refcnt = num_process * max_open_files;
+        inline uint32 max_reasonable_file_refcnt()
+        {
+            return num_process * max_open_files;
+        }
 
         inline uint64 align_up_with_granularity(uint64 value, uint64 alignment)
         {
@@ -397,7 +400,7 @@ namespace proc
             }
 
             uint32 refcnt = file_obj->refcnt;
-            return refcnt > 0 && refcnt <= k_max_reasonable_file_refcnt;
+            return refcnt > 0 && refcnt <= max_reasonable_file_refcnt();
         }
 
         inline bool is_reasonable_user_vma(const vma &entry)

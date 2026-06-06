@@ -1,4 +1,5 @@
 #include "proc_manager.hh"
+#include "capability.hh"
 #include "futex.hh"  // 添加futex头文件，用于robust futex清理
 #include "hal/cpu.hh"
 #include "physical_memory_manager.hh"
@@ -68,7 +69,10 @@ namespace proc
 #elif defined(LOONGARCH)
         constexpr uint64 k_min_kernel_file_ptr = PHYSBASE;
 #endif
-        constexpr uint32 k_max_reasonable_file_refcnt = num_process * max_open_files;
+        inline uint32 max_reasonable_file_refcnt()
+        {
+            return num_process * max_open_files;
+        }
         constexpr size_t k_linux_path_max = 4096;
         constexpr size_t k_linux_name_max = 255;
 
@@ -239,7 +243,7 @@ namespace proc
             }
 
 	            uint32 refcnt = file_obj->refcnt;
-	            return refcnt > 0 && refcnt <= k_max_reasonable_file_refcnt;
+	            return refcnt > 0 && refcnt <= max_reasonable_file_refcnt();
 	        }
 
         class MemoryLockGuard
@@ -1041,6 +1045,7 @@ namespace proc
                 p->_fsgid = 0;      // 文件系统组ID（root）
                 memset(p->_supplementary_groups, 0, sizeof(p->_supplementary_groups));
                 p->_supplementary_group_count = 0;
+                k_capability.init_root(*p);
 
                 /****************************************************************************************
                  * 进程状态和调度信息初始化
@@ -1050,10 +1055,16 @@ namespace proc
                 p->_exiting = false; // 清除退出清理标记
                 p->_xstate = 0;     // 清除退出状态码
                 p->_parent_exit_signal = ipc::signal::SIGCHLD;
+                p->_stop_signal = 0;
+                p->_stop_reported = false;
+                p->_continued_pending = false;
 
                 // 设置调度相关字段：默认调度槽与优先级
                 p->_slot = default_proc_slot;
                 p->_priority = default_proc_prio;
+                p->_sched_policy = 0;
+                p->_sched_priority = 0;
+                p->_sched_reset_on_fork = false;
                 p->_io_priority_override = default_proc_prio;
                 p->_has_io_priority_override = false;
 
@@ -1096,6 +1107,7 @@ namespace proc
                  ****************************************************************************************/
                 p->_cwd = nullptr;    // 当前工作目录（在具体使用时设置）
                 p->_cwd_name.clear(); // 清空当前工作目录路径
+                p->_root_name = "/";
                 p->_personality = 0;  // 新进程默认使用 PER_LINUX
 
                 // 初始化文件描述符表
@@ -1279,6 +1291,7 @@ namespace proc
         p->_fsgid = 0; // 清除文件系统组ID
         memset(p->_supplementary_groups, 0, sizeof(p->_supplementary_groups));
         p->_supplementary_group_count = 0;
+        k_capability.clear_all(*p);
 
         /****************************************************************************************
          * 进程状态和调度信息清理
@@ -1288,10 +1301,16 @@ namespace proc
         p->_exiting = false;           // 清除退出清理标记
         p->_xstate = 0;                // 清除退出状态码
         p->_parent_exit_signal = ipc::signal::SIGCHLD;
+        p->_stop_signal = 0;
+        p->_stop_reported = false;
+        p->_continued_pending = false;
         p->_state = ProcState::UNUSED; // 标记进程控制块为未使用
 
         p->_slot = 0;                 // 重置时间片
                 p->_priority = default_proc_prio; // 重置 nice 值，避免 PCB 复用带出历史优先级
+                p->_sched_policy = 0;
+                p->_sched_priority = 0;
+                p->_sched_reset_on_fork = false;
                 p->_io_priority_override = default_proc_prio;
                 p->_has_io_priority_override = false;
 
@@ -1303,8 +1322,18 @@ namespace proc
          ****************************************************************************************/
         p->_cwd = nullptr;    // 清空当前工作目录
         p->_cwd_name.clear(); // 清空当前工作目录路径
+        p->_root_name = "/";
         p->_umask = 0022;     // 重置umask为默认值
         p->_personality = 0;  // 重置 personality，避免 PCB 复用带出历史状态
+        p->_dumpable = 1;
+        p->_pdeathsig = 0;
+        p->_keepcaps = 0;
+        p->_timing = 0;
+        p->_no_new_privs = 0;
+        p->_thp_disable = 0;
+        p->_seccomp_mode = 0;
+        p->_timer_slack_ns = 50000;
+        p->_securebits = 0;
 
 	        // 注意：文件描述符表已在exit_proc中清理，这里只重置指针
 	        if (p->_ofile != nullptr)
@@ -1484,6 +1513,7 @@ namespace proc
         p->_parent = p; // init进程是自己的父进程
         // safestrcpy(p->_cwd_name, "/", sizeof(p->_cwd_name));
         p->_cwd_name = "/";
+        p->_root_name = "/";
 
         // init进程的特殊属性（在alloc_proc中已设置）：
         // - PID = 1
@@ -1526,7 +1556,8 @@ namespace proc
                 // 若该进程当前在 sleep（通常是等待 I/O 或锁）
                 // 将其唤醒（设为 RUNNABLE），这样调度器会调度它运行，
                 // 让它可以检查 _killed 并自行退出。
-                if (p->_state == ProcState::SLEEPING)
+                if (p->_state == ProcState::SLEEPING ||
+                    p->_state == ProcState::STOPPED)
                 {
                     // 提前唤醒等待中的进程，
                     // 避免它永远睡着不被调度，也就永远无法响应 kill。
@@ -1546,13 +1577,24 @@ namespace proc
     {
         Pcb *p;
         int count = 0; // 记录发送信号的进程数量
-        printfCyan("kill_signal: pid=%d, sig=%d\n", pid, sig);
-        auto wake_if_signal_interruptible = [](Pcb *target) {
+        auto wake_if_signal_interruptible = [sig](Pcb *target) -> Pcb * {
+            if (target->_state == ProcState::STOPPED &&
+                (sig == ipc::signal::SIGCONT || sig == ipc::signal::SIGKILL))
+            {
+                target->_state = ProcState::RUNNABLE;
+                if (sig == ipc::signal::SIGCONT)
+                {
+                    target->_continued_pending = true;
+                    return target->_parent;
+                }
+                return nullptr;
+            }
             if (target->_state == ProcState::SLEEPING &&
                 proc::ipc::signal::has_unmasked_signal_pending(target))
             {
                 target->_state = ProcState::RUNNABLE;
             }
+            return nullptr;
         };
 
         if (pid > 0)
@@ -1563,9 +1605,15 @@ namespace proc
                 p->_lock.acquire();
                 if (p->_pid == pid && p->_state != ProcState::UNUSED)
                 {
-                    p->add_signal(sig, info);
-                    wake_if_signal_interruptible(p);
+                    Pcb *continued_parent = nullptr;
+                    if (sig != 0)
+                    {
+                        p->add_signal(sig, info);
+                        continued_parent = wake_if_signal_interruptible(p);
+                    }
                     p->_lock.release();
+                    if (continued_parent != nullptr)
+                        wakeup(continued_parent);
                     return 0;
                 }
                 p->_lock.release();
@@ -1585,9 +1633,17 @@ namespace proc
                 p->_lock.acquire();
                 if (p->_pgid == target_pgid && p->_state != ProcState::UNUSED)
                 {
-                    p->add_signal(sig, info);
-                    wake_if_signal_interruptible(p);
+                    Pcb *continued_parent = nullptr;
+                    if (sig != 0)
+                    {
+                        p->add_signal(sig, info);
+                        continued_parent = wake_if_signal_interruptible(p);
+                    }
                     count++;
+                    p->_lock.release();
+                    if (continued_parent != nullptr)
+                        wakeup(continued_parent);
+                    continue;
                 }
                 p->_lock.release();
             }
@@ -1607,9 +1663,17 @@ namespace proc
                 if (p->_pid > 1 && p->_state != ProcState::UNUSED &&    // 跳过init进程
                     (p->_uid == current->_euid || current->_euid == 0)) // 权限检查
                 {
-                    p->add_signal(sig, info);
-                    wake_if_signal_interruptible(p);
+                    Pcb *continued_parent = nullptr;
+                    if (sig != 0)
+                    {
+                        p->add_signal(sig, info);
+                        continued_parent = wake_if_signal_interruptible(p);
+                    }
                     count++;
+                    p->_lock.release();
+                    if (continued_parent != nullptr)
+                        wakeup(continued_parent);
+                    continue;
                 }
                 p->_lock.release();
             }
@@ -1629,9 +1693,17 @@ namespace proc
                 if (p->_pgid == target_pgid && p->_state != ProcState::UNUSED &&
                     (p->_uid == current->_euid || current->_euid == 0)) // 权限检查
                 {
-                    p->add_signal(sig, info);
-                    wake_if_signal_interruptible(p);
+                    Pcb *continued_parent = nullptr;
+                    if (sig != 0)
+                    {
+                        p->add_signal(sig, info);
+                        continued_parent = wake_if_signal_interruptible(p);
+                    }
                     count++;
+                    p->_lock.release();
+                    if (continued_parent != nullptr)
+                        wakeup(continued_parent);
+                    continue;
                 }
                 p->_lock.release();
             }
@@ -1641,53 +1713,113 @@ namespace proc
 
     int ProcessManager::tkill(int tid, int sig, const ipc::signal::LinuxSigInfo *info)
     {
+        Pcb *current = get_cur_pcb();
+        if (current == nullptr)
+            return -ESRCH;
+
         Pcb *p;
         for (p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
         {
             p->_lock.acquire();
-            if (p->_tid == tid)
+            if (p->_tid == tid && p->_state != ProcState::UNUSED)
             {
-                p->add_signal(sig, info);
+                bool permitted = current->_euid == 0 ||
+                                 current->_uid == p->_uid ||
+                                 current->_uid == p->_suid ||
+                                 current->_euid == p->_uid ||
+                                 current->_euid == p->_suid;
+                if (!permitted)
+                {
+                    p->_lock.release();
+                    return -EPERM;
+                }
+
+                if (sig != 0)
+                    p->add_signal(sig, info);
                 // 线程定向信号和 kill(2) 一样，都需要把“可被信号中断的睡眠”及时唤醒。
                 // pthread_cancel() 最终会走到 pthread_kill/tgkill/tkill；如果这里只是记账信号，
                 // 但不把卡在 futex/rt_sigsuspend 等等待里的目标线程改回 RUNNABLE，
                 // 取消请求就会永远堆在 _signal 里，表现成用户态 join/sem_wait 长时间卡死。
-                if (p->_state == ProcState::SLEEPING &&
-                    proc::ipc::signal::has_unmasked_signal_pending(p))
+                Pcb *continued_parent = nullptr;
+                if (sig != 0 &&
+                    ((p->_state == ProcState::SLEEPING &&
+                      proc::ipc::signal::has_unmasked_signal_pending(p)) ||
+                     (p->_state == ProcState::STOPPED &&
+                      (sig == ipc::signal::SIGCONT || sig == ipc::signal::SIGKILL))))
                 {
+                    const bool continued =
+                        p->_state == ProcState::STOPPED &&
+                        sig == ipc::signal::SIGCONT;
                     p->_state = ProcState::RUNNABLE;
+                    if (continued)
+                    {
+                        p->_continued_pending = true;
+                        continued_parent = p->_parent;
+                    }
                 }
                 p->_lock.release();
+                if (continued_parent != nullptr)
+                    wakeup(continued_parent);
                 return 0;
             }
             p->_lock.release();
         }
-        return -1;
+        return -ESRCH;
     }
 
     int ProcessManager::tgkill(int tgid, int tid, int sig, const ipc::signal::LinuxSigInfo *info)
     {
+        Pcb *current = get_cur_pcb();
+        if (current == nullptr)
+            return -ESRCH;
+
         Pcb *p;
         for (p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
         {
             p->_lock.acquire();
-            if (p->_tid == tid && p->_tgid == tgid)
+            if (p->_tid == tid && p->_tgid == tgid && p->_state != ProcState::UNUSED)
             {
-                p->add_signal(sig, info);
+                bool permitted = current->_euid == 0 ||
+                                 current->_uid == p->_uid ||
+                                 current->_uid == p->_suid ||
+                                 current->_euid == p->_uid ||
+                                 current->_euid == p->_suid;
+                if (!permitted)
+                {
+                    p->_lock.release();
+                    return -EPERM;
+                }
+
+                if (sig != 0)
+                    p->add_signal(sig, info);
                 // tgkill(2) 是线程取消/定向信号的核心路径。
                 // 保持和 kill_signal() 一致：只要目标线程当前睡眠且存在未屏蔽待处理信号，
                 // 就要把它唤醒，让阻塞中的系统调用有机会返回 EINTR。
-                if (p->_state == ProcState::SLEEPING &&
-                    proc::ipc::signal::has_unmasked_signal_pending(p))
+                Pcb *continued_parent = nullptr;
+                if (sig != 0 &&
+                    ((p->_state == ProcState::SLEEPING &&
+                      proc::ipc::signal::has_unmasked_signal_pending(p)) ||
+                     (p->_state == ProcState::STOPPED &&
+                      (sig == ipc::signal::SIGCONT || sig == ipc::signal::SIGKILL))))
                 {
+                    const bool continued =
+                        p->_state == ProcState::STOPPED &&
+                        sig == ipc::signal::SIGCONT;
                     p->_state = ProcState::RUNNABLE;
+                    if (continued)
+                    {
+                        p->_continued_pending = true;
+                        continued_parent = p->_parent;
+                    }
                 }
                 p->_lock.release();
+                if (continued_parent != nullptr)
+                    wakeup(continued_parent);
                 return 0;
             }
             p->_lock.release();
         }
-        return -1; // 未找到匹配的线程
+        return -ESRCH; // 未找到匹配的线程
     }
 
     Pcb *ProcessManager::find_proc_by_pid(int pid)
@@ -1739,12 +1871,13 @@ namespace proc
     // No lock to avoid wedging a stuck machine further.
     void ProcessManager::procdump()
     {
-        static const char *states[6] = {
+        static const char *states[7] = {
             "unused", // ProcState::UNUSED
             "used",   // ProcState::USED
             "sleep ", // ProcState::SLEEPING
             "runble", // ProcState::RUNNABLE
             "run   ", // ProcState::RUNNING
+            "stop  ", // ProcState::STOPPED
             "zombie"  // ProcState::ZOMBIE
         };
         Pcb *p;
@@ -1755,7 +1888,7 @@ namespace proc
         {
             if (p->_state == ProcState::UNUSED)
                 continue;
-            if ((int)p->_state >= 0 && (int)p->_state < 6 && states[(int)p->_state])
+            if ((int)p->_state >= 0 && (int)p->_state < 7 && states[(int)p->_state])
                 state = (char *)states[(int)p->_state];
             else
                 state = (char *)"???";
@@ -1776,7 +1909,7 @@ namespace proc
 
         fs::file *old_file = nullptr;
         p->_ofile->_lock.acquire();
-        if (p->_ofile->_ofile_ptr[fd] != nullptr && p->_ofile->_ofile_ptr[fd] != f)
+        if (p->_ofile->_ofile_ptr[fd] != nullptr)
         {
             old_file = p->_ofile->_ofile_ptr[fd];
         }
@@ -2007,9 +2140,19 @@ namespace proc
         // 继承文件系统相关属性
         np->_cwd = p->_cwd;           // 继承当前工作目录
         np->_cwd_name = p->_cwd_name; // 继承当前工作目录名称
+        np->_root_name = p->_root_name; // 继承 chroot 根目录
         np->exe = p->exe;             // 继承真实可执行文件路径，保持 /proc/self/exe 语义稳定
         np->_umask = p->_umask;       // 继承文件模式创建掩码
         np->_personality = p->_personality; // 继承 personality，保持与 Linux 一致
+        np->_dumpable = p->_dumpable;
+        np->_pdeathsig = p->_pdeathsig;
+        np->_keepcaps = p->_keepcaps;
+        np->_timing = p->_timing;
+        np->_no_new_privs = p->_no_new_privs;
+        np->_thp_disable = p->_thp_disable;
+        np->_seccomp_mode = p->_seccomp_mode;
+        np->_timer_slack_ns = p->_timer_slack_ns;
+        np->_securebits = p->_securebits;
 
         // ===== 身份信息和进程关系设置 =====
         // 继承父进程的身份信息
@@ -2024,6 +2167,22 @@ namespace proc
         np->_fsgid = p->_fsgid;
         memcpy(np->_supplementary_groups, p->_supplementary_groups, sizeof(np->_supplementary_groups));
         np->_supplementary_group_count = p->_supplementary_group_count;
+        memcpy(np->_cap_effective, p->_cap_effective, sizeof(np->_cap_effective));
+        memcpy(np->_cap_permitted, p->_cap_permitted, sizeof(np->_cap_permitted));
+        memcpy(np->_cap_inheritable, p->_cap_inheritable, sizeof(np->_cap_inheritable));
+        memcpy(np->_cap_ambient, p->_cap_ambient, sizeof(np->_cap_ambient));
+        memcpy(np->_cap_bounding, p->_cap_bounding, sizeof(np->_cap_bounding));
+        np->_priority = p->_priority;
+        np->_sched_policy = p->_sched_policy;
+        np->_sched_priority = p->_sched_priority;
+        np->_sched_reset_on_fork = p->_sched_reset_on_fork;
+        if (!(flags & syscall::CLONE_THREAD) && p->_sched_reset_on_fork)
+        {
+            np->_priority = default_proc_prio;
+            np->_sched_policy = 0;
+            np->_sched_priority = 0;
+            np->_sched_reset_on_fork = false;
+        }
         np->_parent_exit_signal = exit_signal >= 0
                                       ? exit_signal
                                       : static_cast<int>(flags & syscall::CSIGNAL);
@@ -2122,7 +2281,7 @@ namespace proc
         else
         {
             // 深拷贝文件描述符表
-            for (i = 0; i < (int)max_open_files; i++)
+            for (i = 0; i < static_cast<uint64>(max_open_files); i++)
             {
                 fs::file *parent_file = p->_ofile->_ofile_ptr[i];
                 if (parent_file)
@@ -2466,59 +2625,29 @@ namespace proc
     int ProcessManager::wait4(int child_pid, uint64 addr, int option)
     {
         Pcb *p = k_pm.get_cur_pcb();
-        printfBlue("[wait4] pid: %d child_pid: %d, addr: %p, option: %d\n",
-                   p->_pid, child_pid, (void *)addr, option);
 
         // 检查不支持的选项标志
         const int supported_options = syscall::WNOHANG | syscall::WUNTRACED |
-                                      syscall::__WNOTHREAD | syscall::__WALL |
+                                      syscall::WCONTINUED | syscall::__WNOTHREAD |
+                                      syscall::__WALL |
                                       syscall::__WCLONE;
         const int unsupported_options = option & ~supported_options;
         if (unsupported_options != 0)
         {
-            printf("[wait4] unsupported option flags: 0x%x, returning -EINVAL\n", unsupported_options);
             return syscall::SYS_EINVAL;
         }
 
-        // 对于特定PID情况，验证主线程的父子关系
-        if (child_pid > 0)
+        if (addr != 0 &&
+            mem::k_vmm.ensure_user_write_range(*p->get_pagetable(), addr, sizeof(int)) < 0)
         {
-            bool found_main_thread = false;
-            for (uint i = 0; i < num_process; i++)
-            {
-                Pcb *np = &k_proc_pool[i];
-                // 找到主线程（pid == tid == child_pid）
-                if (np->_pid == child_pid && np->_tid == child_pid)
-                {
-                    found_main_thread = true;
-                    // 检查主线程的父进程是否是当前进程
-                    if (np->_parent != p)
-                    {
-                        printf("[wait4] main thread pid %d parent is not current process, returning -ECHILD\n", child_pid);
-                        return -ECHILD;
-                    }
-                    break;
-                }
-            }
-
-            // 如果没有找到主线程，说明该PID不存在
-            if (!found_main_thread)
-            {
-                printf("[wait4] main thread with pid %d not found, returning -ECHILD\n", child_pid);
-                return -ECHILD;
-            }
+            return syscall::SYS_EFAULT;
         }
 
         _wait_lock.acquire();
-        bool have_group_status = false;
-        bool group_status_from_leader = false;
-        int group_status = 0;
 
         for (;;)
         {
             bool found_children = false;
-            bool collected_zombie = false;
-            int returned_pid = -1;
 
             // 遍历所有进程，寻找符合条件的子进程
             for (uint i = 0; i < num_process; i++)
@@ -2527,66 +2656,68 @@ namespace proc
                 // printf("[wait4] checking global_id: %d, pid: %d tid: %d state: %d\n", np->_global_id, np->_pid, np->_tid, (int)np->get_state());
 
                 // 检查是否是目标子进程
-                if (!is_target_child(np, p, child_pid))
+                if (!is_target_child(np, p, child_pid, option))
                     continue;
 
                 np->_lock.acquire();
                 found_children = true;
 
+                if (np->get_state() == ProcState::STOPPED &&
+                    (option & syscall::WUNTRACED) &&
+                    !np->_stop_reported)
+                {
+                    const int returned_pid = np->_pid;
+                    const int stopped_status = (np->_stop_signal << 8) | 0x7f;
+                    if (addr != 0 &&
+                        mem::k_vmm.copy_out(*p->get_pagetable(), addr,
+                                            &stopped_status, sizeof(stopped_status)) < 0)
+                    {
+                        np->_lock.release();
+                        _wait_lock.release();
+                        return syscall::SYS_EFAULT;
+                    }
+                    np->_stop_reported = true;
+                    np->_lock.release();
+                    _wait_lock.release();
+                    return returned_pid;
+                }
+
+                if (np->_continued_pending && (option & syscall::WCONTINUED))
+                {
+                    const int returned_pid = np->_pid;
+                    const int continued_status = 0xffff;
+                    if (addr != 0 &&
+                        mem::k_vmm.copy_out(*p->get_pagetable(), addr,
+                                            &continued_status, sizeof(continued_status)) < 0)
+                    {
+                        np->_lock.release();
+                        _wait_lock.release();
+                        return syscall::SYS_EFAULT;
+                    }
+                    np->_continued_pending = false;
+                    np->_lock.release();
+                    _wait_lock.release();
+                    return returned_pid;
+                }
+
                 // 如果是zombie，回收它
                 if (np->get_state() == ProcState::ZOMBIE)
                 {
-                    returned_pid = np->_pid;
-                    int zombie_xstate = np->_xstate;
-
-                    if (child_pid > 0)
+                    const int returned_pid = np->_pid;
+                    const int zombie_xstate = np->_xstate;
+                    if (addr != 0 &&
+                        mem::k_vmm.copy_out(*p->get_pagetable(), addr,
+                                            &zombie_xstate, sizeof(zombie_xstate)) < 0)
                     {
-                        // waitpid(leader_pid, ...) 等的是整个线程组完成后的“进程退出状态”。
-                        // 不能在回收每个线程时都覆盖一次状态，否则后面被 exit_group 杀掉的
-                        // 辅助线程（常见为 xstate=-1）会把组长原本正确的退出码冲掉。
-                        bool is_group_leader = np->_pid == np->_tid;
-                        if (!have_group_status || (is_group_leader && !group_status_from_leader))
-                        {
-                            group_status = zombie_xstate;
-                            have_group_status = true;
-                            group_status_from_leader = is_group_leader;
-                        }
+                        np->_lock.release();
+                        _wait_lock.release();
+                        return syscall::SYS_EFAULT;
                     }
 
-                    printfBlue("[wait4] freeproc child pid: %d tid: %d\n", np->_pid, np->_tid);
                     k_pm.freeproc(np);
                     np->_lock.release();
-
-                    // 对于特定PID，检查是否还有其他同PID的线程
-                    if (child_pid > 0)
-                    {
-                        if (!has_remaining_threads(p, child_pid))
-                        {
-                            _wait_lock.release();
-                            if (addr != 0 && have_group_status &&
-                                mem::k_vmm.copy_out(*p->get_pagetable(), addr,
-                                                    (const char *)&group_status, sizeof(group_status)) < 0)
-                            {
-                                return -1;
-                            }
-                            printfBlue("[wait4] all threads of pid %d have exited\n", child_pid);
-                            return returned_pid; // 所有线程都已回收
-                        }
-                        // 还有线程未退出，继续等待
-                        collected_zombie = true;
-                        // break;  // 重新开始扫描
-                    }
-                    else
-                    {
-                        _wait_lock.release();
-                        if (addr != 0 &&
-                            mem::k_vmm.copy_out(*p->get_pagetable(), addr,
-                                                (const char *)&zombie_xstate, sizeof(zombie_xstate)) < 0)
-                        {
-                            return -1;
-                        }
-                        return returned_pid; // 非特定PID情况，回收一个就返回
-                    }
+                    _wait_lock.release();
+                    return returned_pid;
                 }
                 else
                 {
@@ -2602,7 +2733,7 @@ namespace proc
             }
 
             // 如果设置了WNOHANG且没有可回收的zombie，立即返回
-            if ((option & syscall::WNOHANG) && !collected_zombie)
+            if (option & syscall::WNOHANG)
             {
                 _wait_lock.release();
                 return 0;
@@ -2614,42 +2745,160 @@ namespace proc
     }
 
     // 辅助函数：检查是否是目标子进程
-    bool ProcessManager::is_target_child(Pcb *child, Pcb *parent, int child_pid)
+    bool ProcessManager::is_target_child(Pcb *child, Pcb *parent, int child_pid, int option)
     {
-        if (child_pid > 0)
+        if (child == nullptr || parent == nullptr ||
+            child->_state == ProcState::UNUSED ||
+            child->_pid != child->_tid ||
+            child->_parent != parent)
         {
-            // 对于特定PID，只检查PID匹配，不检查parent（因为已在开头验证过主线程的parent）
-            return child->_pid == child_pid;
+            return false;
         }
-        else
-        {
-            // 对于非特定PID的情况，仍需检查parent关系
-            if (child->_parent != parent)
-                return false;
 
-            if (child_pid == 0)
-                return child->_pgid == parent->_pgid;
-            else if (child_pid < -1)
-                return child->_pgid == -child_pid;
-            else // child_pid == -1
-                return true;
-        }
-    }
-
-    // 辅助函数：检查特定PID是否还有剩余线程
-    bool ProcessManager::has_remaining_threads(Pcb *parent, int target_pid)
-    {
-        for (uint i = 0; i < num_process; i++)
+        // Linux 默认只等待以 SIGCHLD 通知父进程的普通子进程。
+        // __WCLONE 只等待使用其他退出信号的 clone 子进程，__WALL 则两者都等待。
+        if ((option & syscall::__WALL) == 0)
         {
-            Pcb *np = &k_proc_pool[i];
-            if (np->_pid == target_pid &&
-                ((np->get_state() != ProcState::UNUSED && np->_killed == 1) || np->get_state() == ProcState::ZOMBIE))
+            const bool clone_child =
+                child->_parent_exit_signal != ipc::signal::SIGCHLD;
+            if ((option & syscall::__WCLONE) != 0)
             {
-                printf("[wait4] found remaining thread with pid %d tid %d\n", np->_pid, np->_tid);
-                return true;
+                if (!clone_child)
+                    return false;
+            }
+            else if (clone_child)
+            {
+                return false;
             }
         }
-        return false;
+
+        if (child_pid > 0)
+            return child->_pid == child_pid;
+        if (child_pid == 0)
+            return child->_pgid == parent->_pgid;
+        if (child_pid < -1)
+            return child->_pgid == -child_pid;
+        return true; // child_pid == -1
+    }
+
+    int ProcessManager::waitid(int idtype, int id, int option, WaitIdResult &result)
+    {
+        Pcb *parent = get_cur_pcb();
+        int child_selector = -1;
+        switch (idtype)
+        {
+        case 0: // P_ALL
+            child_selector = -1;
+            break;
+        case 1: // P_PID
+            if (id <= 0)
+                return syscall::SYS_EINVAL;
+            child_selector = id;
+            break;
+        case 2: // P_PGID
+            if (id < 0)
+                return syscall::SYS_EINVAL;
+            child_selector = id == 0 ? 0 : -id;
+            break;
+        case 3: // P_PIDFD
+            return syscall::SYS_ENOSYS;
+        default:
+            return syscall::SYS_EINVAL;
+        }
+
+        result = {};
+        _wait_lock.acquire();
+        for (;;)
+        {
+            bool found_children = false;
+            for (uint i = 0; i < num_process; ++i)
+            {
+                Pcb *child = &k_proc_pool[i];
+                if (!is_target_child(child, parent, child_selector, option))
+                    continue;
+
+                found_children = true;
+                child->_lock.acquire();
+                if (child->_state == ProcState::STOPPED &&
+                    (option & syscall::WSTOPPED) &&
+                    (!child->_stop_reported || (option & syscall::WNOWAIT)))
+                {
+                    result.has_event = true;
+                    result.pid = child->_pid;
+                    result.uid = child->_uid;
+                    result.code = 5; // CLD_STOPPED
+                    result.status = child->_stop_signal;
+                    if ((option & syscall::WNOWAIT) == 0)
+                        child->_stop_reported = true;
+                    child->_lock.release();
+                    _wait_lock.release();
+                    return 0;
+                }
+
+                if (child->_continued_pending &&
+                    (option & syscall::WCONTINUED))
+                {
+                    result.has_event = true;
+                    result.pid = child->_pid;
+                    result.uid = child->_uid;
+                    result.code = 6; // CLD_CONTINUED
+                    result.status = ipc::signal::SIGCONT;
+                    if ((option & syscall::WNOWAIT) == 0)
+                        child->_continued_pending = false;
+                    child->_lock.release();
+                    _wait_lock.release();
+                    return 0;
+                }
+
+                if (child->_state != ProcState::ZOMBIE ||
+                    (option & syscall::WEXITED) == 0)
+                {
+                    child->_lock.release();
+                    continue;
+                }
+
+                const int wait_status = child->_xstate;
+                result.has_event = true;
+                result.pid = child->_pid;
+                result.uid = child->_uid;
+                result.utime = child->_user_ticks + child->_cutime;
+                result.stime = child->_stime + child->_cstime;
+                if ((wait_status & 0x7f) == 0)
+                {
+                    result.code = 1; // CLD_EXITED
+                    result.status = (wait_status >> 8) & 0xff;
+                }
+                else
+                {
+                    result.code = (wait_status & 0x80) != 0 ? 3 : 2; // CLD_DUMPED / CLD_KILLED
+                    result.status = wait_status & 0x7f;
+                }
+
+                if ((option & syscall::WNOWAIT) == 0)
+                    freeproc(child);
+                child->_lock.release();
+                _wait_lock.release();
+                return 0;
+            }
+
+            if (!found_children)
+            {
+                _wait_lock.release();
+                return syscall::SYS_ECHILD;
+            }
+            if (option & syscall::WNOHANG)
+            {
+                _wait_lock.release();
+                return 0;
+            }
+            if (parent->_killed)
+            {
+                _wait_lock.release();
+                return syscall::SYS_EINTR;
+            }
+
+            sleep(parent, &_wait_lock);
+        }
     }
 
     void ProcessManager::mark_thread_group_killed(Pcb *current, int fatal_signal)
@@ -2994,6 +3243,30 @@ namespace proc
         // 当前线程正常退出，其他线程会在调度时检查killed标志并自行退出
         do_exit(cp, status);
     }
+
+    void ProcessManager::stop_current(int signal_num)
+    {
+        Pcb *p = get_cur_pcb();
+        if (p == nullptr)
+            return;
+
+        _wait_lock.acquire();
+        p->_lock.acquire();
+        p->_stop_signal = signal_num;
+        p->_stop_reported = false;
+        p->_continued_pending = false;
+        p->_state = ProcState::STOPPED;
+
+        // waitpid(WUNTRACED)/waitid(WSTOPPED) 睡在父进程自身地址上。
+        // 在进入调度器前唤醒父进程，确保停止事件不会丢失。
+        if (p->_parent != nullptr)
+            wakeup(p->_parent);
+        _wait_lock.release();
+
+        k_scheduler.call_sched();
+        p->_lock.release();
+    }
+
     void ProcessManager::sleep(void *chan, SpinLock *lock)
     {
         Pcb *p = get_cur_pcb();
@@ -3335,51 +3608,38 @@ namespace proc
     int ProcessManager::mknod(int dir_fd, eastl::string path, mode_t mode, dev_t dev)
     {
         Pcb *p = get_cur_pcb();
-        [[maybe_unused]] fs::file *file = nullptr;
-
-        if (dir_fd != AT_FDCWD)
+        if (p == nullptr)
         {
-            // panic("mknod: dir_fd != AT_FDCWD not implemented");
-            file = p->get_open_file(dir_fd);
+            return -EFAULT;
+        }
+        if (path.empty())
+        {
+            return -ENOENT;
         }
 
-        const char *dirpath = (dir_fd == AT_FDCWD) ? p->_cwd_name.c_str() : p->_ofile->_ofile_ptr[dir_fd]->_path_name.c_str();
-        eastl::string absolute_path = get_absolute_path(path.c_str(), dirpath);
+        eastl::string base_path = p->_cwd_name;
+        if (path[0] != '/' && dir_fd != AT_FDCWD)
+        {
+            if (dir_fd < 0 || static_cast<uint>(dir_fd) >= max_open_files)
+            {
+                return -EBADF;
+            }
+            fs::file *dir_file = p->get_open_file(dir_fd);
+            if (dir_file == nullptr)
+            {
+                return -EBADF;
+            }
+            if (dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
+            {
+                return -ENOTDIR;
+            }
+            base_path = dir_file->backing_path();
+        }
 
-        // 将 mode 转换为内部文件类型
-        uint32 internal_mode;
-        mode_t file_type = mode & S_IFMT; // 提取文件类型部分
-
-        if (file_type == S_IFREG || file_type == 0)
-        {
-            printfMagenta("reg please\n");
-            internal_mode = T_FILE;
-        }
-        else if (file_type == S_IFCHR)
-        {
-            internal_mode = T_CHR;
-        }
-        else if (file_type == S_IFBLK)
-        {
-            internal_mode = T_BLK;
-        }
-        else if (file_type == S_IFIFO)
-        {
-            internal_mode = T_FIFO;
-        }
-        else if (file_type == S_IFSOCK)
-        {
-            internal_mode = T_SOCK;
-        }
-        else
-        {
-            // 不支持的文件类型
-            printfRed("[mknod] Unsupported file type: %o\n", file_type);
-            return -22; // SYS_EINVAL
-        }
-        printfCyan("[mknod] dir_fd: %d, path: %s, mode: 0%o, dev: %d\n", dir_fd, absolute_path.c_str(), mode, dev);
-        int result = vfs_ext_mknod(absolute_path.c_str(), internal_mode, dev);
-        return result;
+        eastl::string absolute_path = path[0] == '/'
+                                          ? normalize_path(path)
+                                          : get_absolute_path(path.c_str(), base_path.c_str());
+        return vfs_mknod(absolute_path, mode, dev);
     }
 
     /// @brief
@@ -3416,6 +3676,9 @@ namespace proc
             release_fd(p, fd);
             return -EMFILE;
         }
+        p->_ofile->_lock.acquire();
+        p->_ofile->_fl_cloexec[fd] = (flags & O_CLOEXEC) != 0;
+        p->_ofile->_lock.release();
         file->_lock.l_pid = p->_pid; // 设置文件描述符的锁定进程 ID
         return fd;                   // 返回分配的文件描述符
     }
@@ -3536,90 +3799,56 @@ namespace proc
     }
     int ProcessManager::chdir(eastl::string &path)
     {
-        // panic("未实现");
-        // #ifdef FS_FIX_COMPLETELY
         if (path.length() > MAXPATH)
         {
             printfRed("[chdir] path length exceeds MAXPATH\n");
             return -ENAMETOOLONG;
         }
         Pcb *p = get_cur_pcb();
-
-        // 解析符号链接前先把相对路径规整为绝对路径，避免固定栈缓冲承接长路径。
-        eastl::string resolved_path = get_absolute_path(path.c_str(), p->_cwd_name.c_str());
-        int symlink_depth = 0;
-        const int MAX_SYMLINK_DEPTH = 40; // 防止无限循环
-
-        while (symlink_depth < MAX_SYMLINK_DEPTH)
+        if (p == nullptr)
         {
-            // 检查当前路径是否是符号链接
-            if (!fs::k_vfs.is_file_exist(resolved_path))
+            return -EFAULT;
+        }
+
+        eastl::string absolute_path = get_absolute_path(path.c_str(), p->_cwd_name.c_str());
+        eastl::string resolved_path;
+        int resolve_ret = vfs_resolve_path(absolute_path, resolved_path);
+        if (resolve_ret < 0)
+        {
+            return resolve_ret;
+        }
+
+        fs::Kstat st;
+        int stat_ret = vfs_path_stat(resolved_path.c_str(), &st, true);
+        if (stat_ret < 0)
+        {
+            return stat_ret;
+        }
+        if ((st.mode & S_IFMT) != S_IFDIR)
+        {
+            return -ENOTDIR;
+        }
+
+        uint32 fsuid = p->get_fsuid();
+        if (fsuid != 0)
+        {
+            bool can_search = false;
+            if (fsuid == st.uid)
             {
-                printfRed("[chdir] Path does not exist: %s", resolved_path.c_str());
-                return -ENOENT;
+                can_search = (st.mode & S_IXUSR) != 0;
             }
-
-            int file_type = fs::k_vfs.path2filetype(resolved_path);
-            if (file_type != fs::FileTypes::FT_SYMLINK)
+            else if (p->get_fsgid() == st.gid)
             {
-                // 不是符号链接，检查是否是目录
-                if (file_type != fs::FileTypes::FT_DIRECT)
-                {
-                    printfRed("[chdir] Path is not a directory: %s", resolved_path.c_str());
-                    return -ENOTDIR;
-                }
-                break; // 找到最终目录
-            }
-
-            // 是符号链接，读取其目标
-            // 使用 ext4_readlink 直接读取符号链接内容
-            char link_target_buf[256];
-            size_t readbytes = 0;
-            int readlink_result = ext4_readlink(resolved_path.c_str(), link_target_buf, sizeof(link_target_buf) - 1, &readbytes);
-            if (readlink_result != EOK)
-            {
-                printfRed("[chdir] Failed to read symlink: %s, error: %d", resolved_path.c_str(), readlink_result);
-                return -EIO;
-            }
-
-            link_target_buf[readbytes] = '\0'; // 确保字符串结尾
-            eastl::string link_target = link_target_buf;
-
-            if (link_target.empty())
-            {
-                printfRed("[chdir] Empty symlink target: %s", resolved_path.c_str());
-                return -EIO;
-            }
-
-            // 解析符号链接目标路径
-            if (link_target[0] == '/')
-            {
-                // 绝对路径
-                resolved_path = link_target;
+                can_search = (st.mode & S_IXGRP) != 0;
             }
             else
             {
-                // 相对路径，相对于符号链接所在目录
-                size_t last_slash = resolved_path.find_last_of('/');
-                if (last_slash != eastl::string::npos)
-                {
-                    eastl::string symlink_dir = resolved_path.substr(0, last_slash + 1);
-                    resolved_path = get_absolute_path(link_target.c_str(), symlink_dir.c_str());
-                }
-                else
-                {
-                    // 不应该发生，因为 resolved_path 应该是绝对路径
-                    resolved_path = get_absolute_path(link_target.c_str(), p->_cwd_name.c_str());
-                }
+                can_search = (st.mode & S_IXOTH) != 0;
             }
-
-            symlink_depth++;
-        }
-
-        if (symlink_depth >= MAX_SYMLINK_DEPTH)
-        {
-            printfRed("[chdir] Too many symbolic links: %s", path.c_str());
-            return -ELOOP;
+            if (!can_search)
+            {
+                return -EACCES;
+            }
         }
 
         p->_cwd_name = resolved_path;
@@ -3630,7 +3859,6 @@ namespace proc
         }
 
         printfCyan("[chdir] Changed directory to: %s", p->_cwd_name.c_str());
-        // #endif
         return 0;
     }
     /// @brief 获取当前进程的工作目录路径。get current working directory
@@ -5321,42 +5549,83 @@ namespace proc
         return p->_tid;
     }
 
-    int ProcessManager::set_robust_list(robust_list_head *head, size_t len)
+    int ProcessManager::set_robust_list(uint64 user_head_addr, size_t len)
     {
-        if (len != sizeof(*head))
-            return -22;
+        if (len != sizeof(robust_list_head))
+            return -EINVAL;
 
         Pcb *p = get_cur_pcb();
-        p->_robust_list = head;
+        if (p == nullptr)
+            return -ESRCH;
 
+        // Linux 在注册时只保存用户地址，真正退出清理时再通过页表逐项读取。
+        // 因此这里不能提前解引用，也不能把用户地址永久翻译成易失的内核别名。
+        p->_robust_list_user_addr = user_head_addr;
+        p->_robust_list = reinterpret_cast<robust_list_head *>(user_head_addr);
         return 0;
     }
 
     int ProcessManager::prlimit64(int pid, int resource, rlimit64 *new_limit, rlimit64 *old_limit)
     {
-        Pcb *proc = nullptr;
+        if (resource < 0 || resource >= static_cast<int>(ResourceLimitId::RLIM_NLIMITS))
+            return -EINVAL;
+
+        Pcb *current = get_cur_pcb();
+        if (current == nullptr)
+            return -ESRCH;
+
+        Pcb *target = nullptr;
         if (pid == 0)
-            proc = get_cur_pcb();
+            target = current;
         else
             for (Pcb &p : k_proc_pool)
             {
-                if (p._pid == pid)
+                if (p._state != ProcState::UNUSED && p._pid == pid)
                 {
-                    proc = &p;
+                    target = &p;
                     break;
                 }
             }
-        if (proc == nullptr)
-            return -10;
+        if (target == nullptr)
+            return -ESRCH;
 
-        ResourceLimitId rsid = (ResourceLimitId)resource;
-        if (rsid >= ResourceLimitId::RLIM_NLIMITS)
-            return -11;
+        constexpr uint32 cap_sys_resource = 24;
+        const bool has_cap_sys_resource =
+            k_capability.has_effective(current, cap_sys_resource);
+        const bool same_identity =
+            current->_uid == target->_uid &&
+            current->_euid == target->_euid &&
+            current->_suid == target->_suid;
+        if (current != target && !same_identity && !has_cap_sys_resource)
+            return -EPERM;
 
+        ResourceLimitId rsid = static_cast<ResourceLimitId>(resource);
+        target->_lock.acquire();
+        rlimit64 previous = target->_rlim_vec[rsid];
         if (old_limit != nullptr)
-            *old_limit = proc->_rlim_vec[rsid];
+            *old_limit = previous;
         if (new_limit != nullptr)
-            proc->_rlim_vec[rsid] = *new_limit;
+        {
+            if (new_limit->rlim_cur > new_limit->rlim_max)
+            {
+                target->_lock.release();
+                return -EINVAL;
+            }
+            if (new_limit->rlim_max > previous.rlim_max && !has_cap_sys_resource)
+            {
+                target->_lock.release();
+                return -EPERM;
+            }
+            // 当前文件表容量是内核硬上限，不能接受一个实际上无法兑现的 NOFILE 上限。
+            if (rsid == ResourceLimitId::RLIMIT_NOFILE &&
+                new_limit->rlim_max > max_open_files)
+            {
+                target->_lock.release();
+                return -EPERM;
+            }
+            target->_rlim_vec[rsid] = *new_limit;
+        }
+        target->_lock.release();
 
         return 0;
     }

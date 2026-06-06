@@ -13,7 +13,7 @@ namespace proc
 {
 	// following code is from Linux (include/uapi/asm-generic/resource.h)
 
-	enum ResourceLimitId : uint
+	enum ResourceLimitId : uint64
 	{
 
 	/*
@@ -58,7 +58,7 @@ namespace proc
 		*
 		* Some architectures override this (for compatibility reasons):
 		*/
-		RLIM_INFINITY = ( ~0U ),
+		RLIM_INFINITY = (~0ULL),
 
 	}; // enum ResourceLimitId
 
@@ -69,4 +69,3 @@ namespace proc
 	};
 
 } // namespace pm
-

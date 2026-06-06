@@ -16,6 +16,7 @@
  */
 
 #include "proc.hh"
+#include "capability.hh"
 #include "proc_manager.hh"
 #include "process_memory_manager.hh"
 #include "klib.hh"
@@ -26,6 +27,8 @@
 
 namespace proc
 {
+    uint max_open_files = fd_table_capacity;
+
     namespace
     {
 #ifdef RISCV
@@ -33,7 +36,10 @@ namespace proc
 #elif defined(LOONGARCH)
         constexpr uint64 k_min_kernel_mm_ptr = PHYSBASE;
 #endif
-        constexpr uint32 k_max_reasonable_file_refcnt = num_process * max_open_files;
+        inline uint32 max_reasonable_file_refcnt()
+        {
+            return num_process * max_open_files;
+        }
 
         inline bool is_kernel_mapped_range(uint64 addr, uint64 size)
         {
@@ -79,7 +85,7 @@ namespace proc
             }
 
             uint32 refcnt = file_obj->refcnt;
-            return refcnt > 0 && refcnt <= k_max_reasonable_file_refcnt;
+            return refcnt > 0 && refcnt <= max_reasonable_file_refcnt();
         }
     }
 
@@ -112,6 +118,7 @@ namespace proc
         _fsgid = 0; // 文件系统组ID
         memset(_supplementary_groups, 0, sizeof(_supplementary_groups));
         _supplementary_group_count = 0;
+        k_capability.clear_all(*this);
 
         /****************************************************************************************
          * 进程状态和调度信息
@@ -126,6 +133,9 @@ namespace proc
         // 调度相关字段
         _slot = 0;                          // 时间片剩余量
         _priority = default_proc_prio;      // 默认 CPU 优先级
+        _sched_policy = 0;                  // SCHED_OTHER
+        _sched_priority = 0;
+        _sched_reset_on_fork = false;
         _io_priority_override = default_proc_prio; // 默认块层优先级覆盖值
         _has_io_priority_override = false;  // 默认让块层优先级跟随 CPU nice
         
@@ -146,6 +156,7 @@ namespace proc
          ****************************************************************************************/
         _cwd = nullptr;    // 当前工作目录的dentry指针
         _cwd_name.clear(); // 当前工作目录路径字符串
+        _root_name = "/";
         _ofile = nullptr;  // 打开文件描述符表
         _umask = 0022;     // 默认umask值 (octal 022)
         _personality = 0;  // 默认 personality 为 PER_LINUX
@@ -325,83 +336,30 @@ namespace proc
             // 减少打开文件表的引用计数
             _ofile->_shared_ref_cnt--;
 
-            // 如果引用计数降到0或以下，关闭所有打开的文件
+            // 如果引用计数降到0或以下，当前任务取得整张表的唯一销毁权。
             if (_ofile->_shared_ref_cnt <= 0)
             {
-                fs::file *unique_files[max_open_files];
-                int release_counts[max_open_files];
-                int unique_count = 0;
+                _ofile->_lock.release();
 
-                memset(unique_files, 0, sizeof(unique_files));
-                memset(release_counts, 0, sizeof(release_counts));
-
-                // 先按唯一 file* 聚合，避免同一文件对象在同一张表里被重复释放时出现过度减引用。
+                // 每个 fd 槽位各持有一个 file 引用，逐槽释放即可。不能在 8 KiB
+                // 内核栈上放置 1024 项临时数组，否则退出路径会直接踩穿栈。
                 for (uint64 i = 0; i < max_open_files; ++i)
                 {
                     fs::file *file_obj = _ofile->_ofile_ptr[i];
-                    if (file_obj != nullptr)
+                    _ofile->_ofile_ptr[i] = nullptr;
+                    _ofile->_reserved[i] = false;
+                    _ofile->_fl_cloexec[i] = false;
+                    if (file_obj == nullptr)
                     {
-                        if (!is_probably_live_file_object(file_obj))
-                        {
-                            printfRed("[cleanup_ofile] 检测到异常文件指针，直接丢弃: pcb=%p pid=%d fd=%d file=%p\n",
-                                      this, _pid, (int)i, file_obj);
-                            _ofile->_ofile_ptr[i] = nullptr;
-                            _ofile->_reserved[i] = false;
-                            _ofile->_fl_cloexec[i] = false;
-                            continue;
-                        }
-
-                        int slot = -1;
-                        for (int j = 0; j < unique_count; ++j)
-                        {
-                            if (unique_files[j] == file_obj)
-                            {
-                                slot = j;
-                                break;
-                            }
-                        }
-                        if (slot < 0)
-                        {
-                            unique_files[unique_count] = file_obj;
-                            release_counts[unique_count] = 1;
-                            unique_count++;
-                        }
-                        else
-                        {
-                            release_counts[slot]++;
-                        }
-
-                        _ofile->_ofile_ptr[i] = nullptr;
-                        _ofile->_reserved[i] = false;
-                        _ofile->_fl_cloexec[i] = false;
-                    }
-                }
-
-                _ofile->_lock.release();
-
-                for (int i = 0; i < unique_count; ++i)
-                {
-                    fs::file *file_obj = unique_files[i];
-                    if (!is_probably_live_file_object(file_obj))
-                    {
-                        printfRed("[cleanup_ofile] 聚合释放前再次发现异常文件对象，跳过: pcb=%p pid=%d file=%p\n",
-                                  this, _pid, file_obj);
                         continue;
                     }
-
-                    uint32 ref_before = file_obj->refcnt;
-                    int release_count = release_counts[i];
-                    if ((uint32)release_count > ref_before)
+                    if (!is_probably_live_file_object(file_obj))
                     {
-                        printfYellow("[cleanup_ofile] 文件引用计数异常，按当前 refcnt 截断释放: pcb=%p pid=%d file=%p release=%d ref=%d\n",
-                                     this, _pid, file_obj, release_count, (int)ref_before);
-                        release_count = (int)ref_before;
+                        printfRed("[cleanup_ofile] 检测到异常文件指针，直接丢弃: pcb=%p pid=%d fd=%d file=%p\n",
+                                  this, _pid, (int)i, file_obj);
+                        continue;
                     }
-
-                    for (int k = 0; k < release_count; ++k)
-                    {
-                        file_obj->free_file();
-                    }
+                    file_obj->free_file();
                 }
 
                 // 释放打开文件表结构本身

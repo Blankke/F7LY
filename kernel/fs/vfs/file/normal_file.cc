@@ -653,6 +653,35 @@ namespace fs
 			return flush_status;
 		}
 
+		// ext4 支持稀疏文件。扩大 inode size 即可形成逻辑零洞，不能为大偏移
+		// 逐字节写零，否则 openat(O_LARGEFILE) 一次 4GiB seek 就会耗尽整个镜像。
+		if (!_unlinked_from_dir &&
+			lwext4_file_struct.mp != nullptr &&
+			lwext4_file_struct.inode != 0)
+		{
+			const long logical_pos = _file_ptr;
+			int status = ext4_ftruncate(&lwext4_file_struct,
+									 static_cast<uint64_t>(target_off));
+			if (status != EOK)
+			{
+				return status;
+			}
+			lwext4_file_struct.fsize = static_cast<uint64_t>(target_off);
+			_stat.size = lwext4_file_struct.fsize;
+			_file_ptr = logical_pos;
+			if (logical_pos >= 0 &&
+				static_cast<uint64>(logical_pos) <= lwext4_file_struct.fsize)
+			{
+				status = ext4_fseek(&lwext4_file_struct, logical_pos, SEEK_SET);
+				if (status != EOK)
+				{
+					return status;
+				}
+			}
+			sync_memfd_size_from_file();
+			return EOK;
+		}
+
 		if (!ensure_write_combine_buffer_locked())
 		{
 			const long logical_pos = _file_ptr;

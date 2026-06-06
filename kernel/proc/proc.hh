@@ -46,6 +46,7 @@ namespace proc
         SLEEPING,
         RUNNABLE,
         RUNNING,
+        STOPPED,
         ZOMBIE
     };
 
@@ -53,28 +54,27 @@ namespace proc
     constexpr int default_proc_prio = 0;   // 默认 nice 值
     constexpr int lowest_proc_prio = 19;   // 最低优先级对应的 nice 值
     constexpr int highest_proc_prio = -20; // 最高优先级对应的 nice 值
-    constexpr uint max_open_files = 256;   // 每个进程最多可以打开的文件数量；lmbench lat_ctx 96 需要至少 192 个 pipe fd。
+    constexpr uint fd_table_capacity = 1024; // fd 表物理容量，覆盖 LTP 使用的 fd=1000 场景。
+    extern uint max_open_files;              // 运行时上限，避免编译器在各调用点展开 1024 次固定循环。
     constexpr uint max_supplementary_groups = 64; // LTP 当前只需要少量补充组，固定容量避免凭据路径动态分配。
     constexpr uint pid_max = 4194304;      // Linux 默认级别的 PID 上限，供 /proc/sys/kernel/pid_max 和范围校验使用
     constexpr int k_interval_timer_count = 3; // ITIMER_REAL / ITIMER_VIRTUAL / ITIMER_PROF
+
     struct ofile
     {
         SpinLock _lock;                         // 共享 fd 表锁，保护并发 open/close/dup
-        fs::file *_ofile_ptr[max_open_files]; // 进程打开的文件列表 (文件描述符 -> 文件结构)
-        bool _reserved[max_open_files];       // 预留槽位，避免并发 open 在文件真正创建前重复抢同一个 fd
+        fs::file *_ofile_ptr[fd_table_capacity]; // 进程打开的文件列表 (文件描述符 -> 文件结构)
+        bool _reserved[fd_table_capacity];       // 预留槽位，避免并发 open 在文件真正创建前重复抢同一个 fd
         int _shared_ref_cnt;
-        bool _fl_cloexec[max_open_files]; // 记录每个文件描述符的 close-on-exec 标志
+        bool _fl_cloexec[fd_table_capacity]; // 记录每个文件描述符的 close-on-exec 标志
 
         void init(const char *lock_name)
         {
             _lock.init(lock_name);
             _shared_ref_cnt = 1;
-            for (uint i = 0; i < max_open_files; ++i)
-            {
-                _ofile_ptr[i] = nullptr;
-                _reserved[i] = false;
-                _fl_cloexec[i] = false;
-            }
+            memset(_ofile_ptr, 0, sizeof(_ofile_ptr));
+            memset(_reserved, 0, sizeof(_reserved));
+            memset(_fl_cloexec, 0, sizeof(_fl_cloexec));
         }
     };
     struct sighand_struct
@@ -146,6 +146,12 @@ namespace proc
         uint32 _fsgid; // 文件系统组ID
         uint32 _supplementary_groups[max_supplementary_groups]; // setgroups/getgroups 使用的补充组列表
         int _supplementary_group_count;                         // 当前有效补充组数量
+        // Linux capability ABI 目前定义到 CAP_CHECKPOINT_RESTORE(40)，用两个 u32 保存三组能力集。
+        uint32 _cap_effective[2];
+        uint32 _cap_permitted[2];
+        uint32 _cap_inheritable[2];
+        uint32 _cap_ambient[2];
+        uint32 _cap_bounding[2];
 
         /****************************************************************************************
          * 进程状态和调度信息
@@ -156,10 +162,16 @@ namespace proc
         bool _exiting;         // 已进入退出清理流程，禁止 timer 抢占式 yield
         int _xstate;           // 进程退出状态码，供父进程通过wait()系统调用获取
         int _parent_exit_signal; // 非线程子任务退出时需要发送给父进程的信号，0 表示不发送
+        int _stop_signal;      // 最近一次使任务停止的 job-control 信号
+        bool _stop_reported;   // wait4/waitid 是否已经消费本次停止事件
+        bool _continued_pending; // SIGCONT 后等待父进程消费的继续事件
 
         // 调度相关字段
         int _slot;     // 当前时间片剩余量 @todo: 应使用更精确的时间单位
         int _priority; // CPU 调度使用的 nice 值，范围为 [-20, 19]，数值越小优先级越高
+        int _sched_policy;          // Linux sched_* ABI 策略，不包含 SCHED_RESET_ON_FORK 标志
+        int _sched_priority;        // 实时策略优先级；普通策略固定为 0
+        bool _sched_reset_on_fork;  // fork 后子进程是否恢复 SCHED_OTHER
         int _io_priority_override; // 研究/后续 ioprio 扩展使用的块层优先级覆盖值
         bool _has_io_priority_override; // false 时块层默认跟随 _priority，true 时使用覆盖值
 
@@ -186,6 +198,7 @@ namespace proc
          ****************************************************************************************/
         fs::dentry *_cwd;        // 当前工作目录的dentry指针
         eastl::string _cwd_name; // 当前工作目录的路径字符串 @todo: 与_cwd冗余，需要统一
+        eastl::string _root_name; // chroot 后的进程根目录，使用底层文件系统绝对路径保存
         ofile *_ofile;           // 打开文件描述符表，包含文件指针和close-on-exec标志
         mode_t _umask;           // 文件模式创建掩码，用于屏蔽新创建文件的权限位
         uint32 _personality;     // 当前进程的 Linux personality(2) 状态
@@ -238,6 +251,7 @@ namespace proc
         int _timing = 0;                // 进程定时模式，0=normal,1=statistical
         int _no_new_privs = 0;          // 禁止获得新权限标志
         int _thp_disable = 0;           // 禁用透明大页标志
+        int _seccomp_mode = 0;          // seccomp 当前模式；0 表示未启用
         uint64 _timer_slack_ns = 50000; // 定时器松弛时间(纳秒)
         uint64 _securebits = 0;         // 安全位
 

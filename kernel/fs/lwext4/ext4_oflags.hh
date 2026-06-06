@@ -36,6 +36,11 @@
 
 #ifndef O_APPEND
 #define O_APPEND 02000
+#endif
+
+#ifndef O_NOATIME
+#define O_NOATIME 01000000
+#endif
 
 /********************************FILE SEEK FLAGS*****************************/
 
@@ -49,7 +54,6 @@
 
 #ifndef SEEK_END
 #define SEEK_END 2
-#endif
 #endif
 
 

@@ -138,6 +138,7 @@ namespace syscall
         uint64 sys_inotify_rm_watch();
         uint64 sys_fanotify_init();
         uint64 sys_fanotify_mark();
+        uint64 sys_name_to_handle_at();
         uint64 sys_pidfd_send_signal();
         uint64 sys_pidfd_open();
         uint64 sys_vmsplice();
@@ -247,6 +248,7 @@ namespace syscall
         uint64 sys_fadvise64();
         uint64 sys_msync();
         uint64 sys_mlock();
+        uint64 sys_munlock();
         uint64 sys_get_mempolicy();
         uint64 sys_accept4();
         uint64 sys_clockadjtime();
@@ -272,6 +274,8 @@ namespace syscall
         uint64 sys_epoll_pwait();
         uint64 sys_epoll_pwait2();
         uint64 sys_eventfd2();
+        uint64 sys_capget();
+        uint64 sys_capset();
         uint64 sys_waitid();
         uint64 sys_memfd_create();
         uint64 sys_timer_gettime();

@@ -86,6 +86,8 @@ namespace syscall
         SYS_timerfd_create = 85,  // from rocket
         SYS_utimensat = 88,
         SYS_acct = 89, // from rocket
+        SYS_capget = 90,
+        SYS_capset = 91,
         SYS_personality = 92,
         SYS_exit = 93,
         SYS_exit_group = 94,
@@ -197,6 +199,7 @@ namespace syscall
         SYS_mprotect = 226,  // form tsh
         SYS_msync = 227,     // from rocket
         SYS_mlock = 228,     // from rocket
+        SYS_munlock = 229,
         SYS_madvise = 233,
         SYS_remap_file_pages = 234, // from rocket
         SYS_get_mempolicy = 236,    // from rocket
@@ -207,6 +210,7 @@ namespace syscall
         SYS_prlimit64 = 261,
         SYS_fanotify_init = 262,
         SYS_fanotify_mark = 263,
+        SYS_name_to_handle_at = 264,
         SYS_clockadjtime = 266, // from rocket
         SYS_setns = 268,
         SYS_sendmmsg = 269,
@@ -281,6 +285,8 @@ namespace syscall
         /* Bits in the third argument to `waitpid'.  */
         WNOHANG = 1,              /* Don't block waiting.  */
         WUNTRACED = 2,            /* Report status of stopped children.  */
+        WSTOPPED = WUNTRACED,     /* waitid() name for WUNTRACED. */
+        WEXITED = 4,               /* Report exited children. */
         WCONTINUED = 8,           /* Report status of continued children.  */
         WNOWAIT = 0x01000000,     /* Don't reap, just poll status.  */
         __WNOTHREAD = 0x20000000, /* Don't wait on children of other threads  */
@@ -367,6 +373,10 @@ namespace syscall
     constexpr int PR_GET_KEEPCAPS = 7;        // 获取keepcaps标志
     constexpr int PR_SET_TIMING = 13;         // 设置进程定时模式
     constexpr int PR_GET_TIMING = 14;         // 获取进程定时模式
+    constexpr int PR_GET_SECCOMP = 21;        // 获取 seccomp 模式
+    constexpr int PR_SET_SECCOMP = 22;        // 设置 seccomp 模式
+    constexpr int PR_CAPBSET_READ = 23;       // 查询 capability bounding set
+    constexpr int PR_CAPBSET_DROP = 24;       // 从 capability bounding set 删除能力
     constexpr int PR_SET_SECUREBITS = 28;     // 设置安全位
     constexpr int PR_GET_SECUREBITS = 27;     // 获取安全位
     constexpr int PR_SET_TIMERSLACK = 29;     // 设置定时器松弛时间
@@ -375,4 +385,6 @@ namespace syscall
     constexpr int PR_GET_NO_NEW_PRIVS = 39;   // 获取no_new_privs标志
     constexpr int PR_SET_THP_DISABLE = 41;    // 设置禁用透明大页
     constexpr int PR_GET_THP_DISABLE = 42;    // 获取透明大页禁用状态
+    constexpr int PR_CAP_AMBIENT = 47;        // 管理 ambient capability
+    constexpr int PR_GET_SPECULATION_CTRL = 52; // 查询推测执行缓解状态
 }
