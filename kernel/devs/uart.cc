@@ -2,7 +2,9 @@
 #include "printer.hh"
 #include "console.hh"
 #include"device_manager.hh"
-#include "sbi.hh"
+#ifdef RISCV
+#include "hal/riscv/sbi.hh"
+#endif
 namespace dev
 {
 	UartManager k_uart;

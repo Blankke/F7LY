@@ -20,8 +20,9 @@ namespace dev
 		ulong _read_tail = 0;
 
 	public:
-		UartManager() {}
+		UartManager() : _uart_base(0) {}
 		UartManager(uint64 reg_base) : _uart_base((u64)reg_base) {}
+		bool is_initialized() const { return _uart_base != 0; }
 		virtual bool read_ready() override { return !_read_buffer_empty() || (read_lsr() & UartLSR::rx_ready) != 0; }
 		virtual bool write_ready() override { return !_read_buffer_full(); }
 

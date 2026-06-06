@@ -1,10 +1,5 @@
 #include "console.hh"
 #include "proc_manager.hh"
-#ifdef RISCV
-#include "../mem/memlayout.hh"
-#include "../hal/riscv/sbi.hh"
-#endif
-#include "virtual_memory_manager.hh"
 namespace dev
 {
   Console kConsole; // 全局控制台对象
@@ -33,74 +28,18 @@ namespace dev
   {
     if (c == BACKSPACE)
     {
-#ifdef RISCV
-      sbi_console_putchar('\b');
-      sbi_console_putchar(' ');
-      sbi_console_putchar('\b');
-#elif defined(LOONGARCH)
       uart.put_char_sync('\b');
       uart.put_char_sync(' ');
       uart.put_char_sync('\b');
-#endif
     }
     else if (c == '\n' || c == '\r')
     {
-#ifdef RISCV
-      sbi_console_putchar('\n');
-#elif defined(LOONGARCH)
-      uart.put_char_sync('\n');
-#endif
+      uart.put_char('\n');
     }
     else
     {
-#ifdef RISCV
-      sbi_console_putchar(c);
-#elif defined(LOONGARCH)
       uart.put_char_sync(c);
-#endif
     }
-  }
-
-  int Console::console_write(uint64 src, int n)
-  {
-    for (int i = 0; i < n; i++)
-    {
-      char c;
-      if (mem::k_vmm.copy_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), &c, src + i, 1) == -1)
-      {
-        break;
-      }
-#ifdef RISCV
-      sbi_console_putchar(c);
-#elif defined(LOONGARCH)
-      uart.put_char_sync(c);
-#endif
-    }
-    return 0;
-  }
-
-  int Console::console_read(int user_dst, uint64 dst, int n)
-  {
-    (void)user_dst;
-    _lock.acquire();
-    int copied = 0;
-    while (copied < n && r_idx != w_idx)
-    {
-      char c = input_buf[r_idx++ % INPUT_BUF_SIZE];
-      if (mem::k_vmm.copy_out(*proc::k_pm.get_cur_pcb()->get_pagetable(),
-                              dst + copied, &c, 1) < 0)
-      {
-        _lock.release();
-        return copied > 0 ? copied : -1;
-      }
-      ++copied;
-      if (_canonical_mode && c == '\n')
-      {
-        break;
-      }
-    }
-    _lock.release();
-    return copied;
   }
 
   int Console::console_read_kernel(void *dst, int n)
@@ -182,7 +121,6 @@ namespace dev
 
   int Console::console_intr(int c)
   {
-    // TODO
     _lock.acquire();
 
     if (_map_cr_to_nl && c == '\r')
