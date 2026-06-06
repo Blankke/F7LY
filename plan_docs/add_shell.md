@@ -138,3 +138,12 @@ ash: ./ltp_testcode.sh: not found
 F7LY:/glibc$ 
 ```
 可以看到当前目录下的ltp_testcode.sh脚本无法执行，提示找不到文件，虽然文件确实存在。可以检查一下文件的权限和路径是否正确，看看是否有符号链接或者其他问题导致文件无法被正确地访问。另外，也可以检查一下shell的环境变量和路径设置，看看是否有遗漏或者错误的地方，导致shell无法正确地找到和执行这个脚本。原本其他文件，比如basic_testcode.sh是不能的，这一次提交cfdaf35a7f759e3fc6fe0154c4320525f8e5e670的后一次提交，使得basic_testcode.sh也可以直接执行了。不过这可能做的方法并不完全正确，可能是通过修改文件系统的权限或者路径设置来实现的，这样可能会有一些副作用或者安全隐患。
+
+# 目标更新 6.6 11：51
+-[x]
+我希望make shell r挂载rootfs而不是sdcard. 我已经在makefile中修改了挂载磁盘, 但是原先shell的逻辑还是基于sdcard的.请帮我适配到rootfs上.我已经把rootfs挂载到了/mnt/rootfs-riscv64上,请检查这个文件夹中的内容然后修改user/app/shell.cc
+```bash 
+ /mnt/rootfs-riscv64                                                                                                                                
+❯ ls
+bin  dev  etc  home  lib  lost+found  media  mnt  opt  proc  root  run  sbin  srv  sys  tmp  usr  var
+```
