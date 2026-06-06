@@ -31,12 +31,20 @@
 #define UART0 0x10000000L
 #define UART0_IRQ 10
 
-// virtio mmio interface
-
+// RISC-V virtio-mmio 传输页，QEMU virt 机器最多提供 8 个槽位。
+// 设备顺序由 QEMU 命令行决定，网卡不能固定假设一定在最后一个槽位。
 #define VIRTIO0 0x10001000
 #define VIRTIO1 0x10002000
+#define VIRTIO_NET 0x10008000
+#define VIRTIO_MMIO_FIRST VIRTIO0
+#define VIRTIO_MMIO_STRIDE 0x1000
+#define VIRTIO_MMIO_COUNT 8
+#define VIRTIO_MMIO_LAST (VIRTIO_MMIO_FIRST + (VIRTIO_MMIO_COUNT - 1) * VIRTIO_MMIO_STRIDE)
 #define VIRTIO0_IRQ 1
 #define VIRTIO1_IRQ 2
+#define VIRTIO_NET_IRQ 8
+#define VIRTIO_MMIO_IRQ_FIRST VIRTIO0_IRQ
+#define VIRTIO_MMIO_IRQ_LAST VIRTIO_NET_IRQ
 
 
 // core local interruptor (CLINT), which contains the timer.

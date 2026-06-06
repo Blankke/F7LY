@@ -1685,12 +1685,9 @@ namespace mem
         // printfGreen("[vmm] kvmmake uart0 success\n");
         // uint64 ppp = (uint64)pt.walk_addr(UART0);
         // printfGreen("va: %p, pa: %p\n", UART0, ppp);
-        // // virtio mmio disk interface
-        kvmmap(pt, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
-        // printfGreen("[vmm] kvmmake virtio0 success\n");
-        kvmmap(pt, VIRTIO1, VIRTIO1, PGSIZE, PTE_R | PTE_W);
-        kvmmap(pt, VIRTIO_NET_MMIO_BASE, VIRTIO_NET_MMIO_BASE, PGSIZE, PTE_R | PTE_W);
-        // printfGreen("[vmm] kvmmake virtio1 success\n");
+        // virtio-mmio 槽位由 QEMU 按设备顺序分配，整段映射后驱动可安全扫描。
+        kvmmap(pt, VIRTIO_MMIO_FIRST, VIRTIO_MMIO_FIRST,
+               VIRTIO_MMIO_COUNT * PGSIZE, PTE_R | PTE_W);
         // // CLINT
         kvmmap(pt, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
         // printfGreen("[vmm] kvmmake clint success\n");

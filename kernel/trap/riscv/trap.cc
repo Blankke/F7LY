@@ -23,6 +23,7 @@
 #include "timer_interface.hh"
 #include "timer_manager.hh"
 #include "fs/drivers/virtio_blk.hh"
+#include "net/drivers/virtio_net.hh"
 #include "trap/interrupt_stats.hh"
 #include "proc/posix_timers.hh"
 
@@ -95,9 +96,13 @@ int trap_manager::devintr()
     {
       virtio_disk_intr();
     }
+    else if (net::virtio_net_uses_irq(irq))
+    {
+      net::virtio_net_intr();
+    }
     else if (irq == VIRTIO1_IRQ)
     {
-      panic("virtio1 interrupt not handled yet");
+      virtio_disk_intr2();
     }
     else if (irq)
     {
