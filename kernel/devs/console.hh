@@ -30,8 +30,6 @@ class Console
         Console();
         void init();
         void console_putc(int c);
-        int console_write(uint64 src, int n);
-        int console_read(int user_dst, uint64 dst, int n);
         int console_read_kernel(void *dst, int n);
         int console_intr(int c);
         int buffered_input_size();

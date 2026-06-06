@@ -80,11 +80,13 @@ int trap_manager::devintr()
     // intr_stats::k_intr_stats.record_interrupt(irq);
     if (irq == UART0_IRQ)
     {
-      // 现在只写了接收中断, 没有发送中断
-      // printf("uart0 interrupt\n");
-      int c = sbi_console_getchar();
-      if (-1 != c)
+      while (true)
       {
+        int c = sbi_console_getchar();
+        if (c < 0)
+        {
+          break;
+        }
         dev::kConsole.console_intr(c);
       }
     }

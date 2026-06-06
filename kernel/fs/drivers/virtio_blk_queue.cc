@@ -254,19 +254,19 @@ namespace virtio_blk
         }
 
         priority_trace_.last_report_dispatch = priority_trace_.total_dispatches;
-        printf("[priority-borrow] TRACE seq=%lu pending=0x%x inflight=0x%x combined=0x%x choose=%d "
-               "pid=%u nice=%d bytes=%lu contended=%lu high_wins=%lu low_while_high=%lu\n",
-               (unsigned long)priority_trace_.total_dispatches,
-               pending_mask,
-               inflight_mask,
-               combined_mask,
-               selected_class,
-               request->submit_pid,
-               request->submit_nice,
-               (unsigned long)request->request_bytes,
-               (unsigned long)priority_trace_.contended_dispatches,
-               (unsigned long)priority_trace_.high_wins,
-               (unsigned long)priority_trace_.low_while_high_pending);
+        // printf("[priority-borrow] TRACE seq=%lu pending=0x%x inflight=0x%x combined=0x%x choose=%d "
+        //        "pid=%u nice=%d bytes=%lu contended=%lu high_wins=%lu low_while_high=%lu\n",
+        //        (unsigned long)priority_trace_.total_dispatches,
+        //        pending_mask,
+        //        inflight_mask,
+        //        combined_mask,
+        //        selected_class,
+        //        request->submit_pid,
+        //        request->submit_nice,
+        //        (unsigned long)request->request_bytes,
+        //        (unsigned long)priority_trace_.contended_dispatches,
+        //        (unsigned long)priority_trace_.high_wins,
+        //        (unsigned long)priority_trace_.low_while_high_pending);
     }
 
     void VirtioBlkQueue::record_completion_stats_locked(const IoRequest *request,

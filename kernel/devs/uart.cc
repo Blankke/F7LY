@@ -2,6 +2,9 @@
 #include "printer.hh"
 #include "console.hh"
 #include"device_manager.hh"
+#ifdef RISCV
+#include "hal/riscv/sbi.hh"
+#endif
 
 namespace dev
 {
@@ -73,11 +76,20 @@ namespace dev
 
 	int UartManager::get_char_sync(u8* c)
 	{
+#ifdef RISCV
+		// RISC-V 平台上的控制台输入统一走 SBI，避免直接碰 UART 寄存器。
+		int ch = sbi_console_getchar();
+		if (ch < 0)
+			return -1;
+		*c = static_cast<u8>(ch);
+		return 0;
+#else
 		volatile regLSR *lsr = (volatile regLSR *)(_uart_base + LSR);
 		while (lsr->data_ready == 0)
 			;
 		*c = _read_reg( UartReg::THR );
 		return 0;
+#endif
 	}
 
 	int UartManager::get_char(u8 *c)
