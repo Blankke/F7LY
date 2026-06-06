@@ -79,6 +79,9 @@ namespace fs
         bool _reuse_addr;
         bool _loopback_registered;
         bool _unix_registered;
+        bool _onps_active;
+        bool _onps_bound;
+        bool _onps_listening;
         bool _read_shutdown;
         bool _write_shutdown;
         bool _peer_closed;
@@ -141,6 +144,11 @@ namespace fs
     private:
         bool is_nonblocking_request(int flags) const;
         int ensure_loopback_bound_locked();
+        int ensure_onps_socket_locked();
+        int ensure_onps_raw_icmp_locked();
+        int bind_onps_locked(const struct sockaddr_in &addr);
+        int ensure_onps_udp_source_locked(uint32 dest_addr);
+        int configure_onps_recv_timeout_locked(int flags);
         int append_pending_send_locked(const uint8_t *data, size_t len,
                                        const struct sockaddr_in *dest_addr);
         bool pending_send_destination_matches_locked(const struct sockaddr_in *dest_addr) const;

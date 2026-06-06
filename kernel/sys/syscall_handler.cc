@@ -62,6 +62,7 @@
 
 #include "fs/lwext4/ext4_errno.hh"
 #include "fs/lwext4/ext4.hh"
+#include "net/f7ly_network.hh"
 #include "net/onpstack/include/onps.hh"
 #include "net/onpstack/include/onps_utils.hh"
 #include "fs/vfs/virtual_fs.hh"
@@ -13031,7 +13032,7 @@ namespace syscall
         }
 
         // 检查socket类型有效性。type 低三位是 socket 类型，高位是 CLOEXEC/NONBLOCK。
-        if (base_type != SOCK_STREAM && base_type != SOCK_DGRAM)
+        if (base_type != SOCK_STREAM && base_type != SOCK_DGRAM && base_type != SOCK_RAW)
         {
             printfRed("[SyscallHandler::sys_socket] 不支持的socket类型: %d\n", base_type);
             return SYS_EPROTONOSUPPORT;
@@ -13060,6 +13061,15 @@ namespace syscall
                 }
                 break;
 
+            case SOCK_RAW:
+                // 当前 raw socket 只接入 onps 的 IPv4 ICMP echo 能力，主要用于 ping。
+                if (domain != AF_INET || protocol != IPPROTO_ICMP)
+                {
+                    printfRed("[SyscallHandler::sys_socket] raw socket暂只支持IPv4 ICMP协议%d\n", protocol);
+                    return SYS_EPROTONOSUPPORT;
+                }
+                break;
+
             default:
                 // 其他类型暂不支持
                 printfRed("[SyscallHandler::sys_socket] AF_INET不支持socket类型%d\n", base_type);
@@ -13072,6 +13082,13 @@ namespace syscall
             {
                 return SYS_EPROTONOSUPPORT;
             }
+        }
+
+        if (domain == AF_INET && (base_type == SOCK_STREAM || base_type == SOCK_DGRAM || base_type == SOCK_RAW))
+        {
+            // 有些启动路径不会在首个用户进程返回前完成网络初始化；
+            // 第一次创建 IPv4 TCP/UDP/ICMP socket 时补一次，失败仍保留 loopback 能力。
+            net::init_network_stack();
         }
 
         // 创建socket文件对象
@@ -14023,7 +14040,9 @@ namespace syscall
         socklen_t orig_addrlen = addrlen;
 
         // 调用socket的recvfrom方法
-        bool copy_source_addr = src_addr_ptr != 0 && socket_f->get_type() == fs::SocketType::UDP;
+        bool copy_source_addr = src_addr_ptr != 0 &&
+                                (socket_f->get_type() == fs::SocketType::UDP ||
+                                 socket_f->get_type() == fs::SocketType::RAW);
         int result = socket_f->recvfrom(kernel_buf.data(), len, flags,
                                         copy_source_addr ? &src_addr : nullptr,
                                         copy_source_addr ? &addrlen : nullptr);

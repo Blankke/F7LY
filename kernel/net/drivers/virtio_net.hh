@@ -24,6 +24,7 @@
 #define VIRTIO_MMIO_INTERRUPT_STATUS 0x060 // read-only
 #define VIRTIO_MMIO_INTERRUPT_ACK 0x064    // write-only
 #define VIRTIO_MMIO_STATUS 0x070           // read/write
+#define VIRTIO_MMIO_CONFIG 0x100           // device-specific config space
 
 // Status register bits
 #define VIRTIO_CONFIG_S_ACKNOWLEDGE 1
@@ -103,7 +104,7 @@
 #endif
 
 // Common definitions for both architectures
-#define NUM_NET_DESC 8     // Number of descriptors per queue (must be power of 2)
+#define NUM_NET_DESC 32    // Number of descriptors per queue (must be power of 2)
 #define ETH_ALEN 6         // Ethernet address length
 #define ETH_FRAME_LEN 1514 // Maximum Ethernet frame size
 
@@ -182,6 +183,8 @@ namespace net
         // Book-keeping
         char rx_free[NUM_NET_DESC]; // is a RX descriptor free?
         char tx_free[NUM_NET_DESC]; // is a TX descriptor free?
+        uint8 rx_buf_index[NUM_NET_DESC];
+        uint8 tx_buf_index[NUM_NET_DESC];
         uint16 rx_used_idx;         // we've looked this far in rx_used
         uint16 tx_used_idx;         // we've looked this far in tx_used
 
@@ -193,6 +196,13 @@ namespace net
         uint8 mac_addr[ETH_ALEN];   // Device MAC address
         uint16 status;              // Link status
         uint16 max_virtqueue_pairs; // Number of supported queue pairs
+        uint64 features;            // negotiated feature set
+#ifdef RISCV
+        uint64 mmio_base;            // 扫描到的 virtio-mmio 槽位基址
+        int irq;                     // 该槽位对应的 PLIC 中断号
+#endif
+        bool initialized;
+        bool link_up;
 
         // Synchronization
         SpinLock net_lock;
@@ -206,7 +216,9 @@ namespace net
     };
 
     // Function declarations
-    void virtio_net_init(void);
+    bool virtio_net_init(void);
+    bool virtio_net_is_initialized(void);
+    void virtio_net_poll(void);
     int virtio_net_send(const void *data, uint32 len);
     int virtio_net_recv(void *data, uint32 *len);
     void virtio_net_intr(void);
@@ -220,12 +232,10 @@ namespace net
 
 // Architecture specific functions
 #ifdef RISCV
-#define VIRTIO_NET_MMIO_BASE 0x10008000
-#define R_NET(r) ((volatile uint32 *)(VIRTIO_NET_MMIO_BASE + (r)))
-
-    void virtio_net_init_mmio(void);
+    bool virtio_net_init_mmio(void);
+    bool virtio_net_uses_irq(int irq);
 #elif defined(LOONGARCH)
-    void virtio_net_init_pci(void);
+    bool virtio_net_init_pci(void);
     int virtio_net_probe_pci(void);
 #endif
 }
