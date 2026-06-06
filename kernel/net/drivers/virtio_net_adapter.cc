@@ -11,6 +11,7 @@
 #include "libs/klib.hh"
 #include "libs/printer.hh"
 #include "proc_manager.hh"
+#include "sys/syscall_defs.hh"
 
 // ONPS network stack includes
 #include "onps.hh"
@@ -19,20 +20,23 @@
 #include "mmu/buf_list.hh"
 #include "port/os_adapter.hh"
 
+extern "C" void kernel_thread_wrapper();
+
 namespace net
 {
     // Forward declarations
     static void start_recv_thread_wrapper(void *param);
+    extern void virtio_recv_thread(void *param);
     
     // Static variables for adapter state
     static bool adapter_initialized = false;
     static PST_NETIF onps_netif = nullptr;
     static bool recv_thread_running = false;
-    static uint64 recv_thread_id = 0;
     
-    // Buffer for packet processing
-    static uint8 packet_buffer[ETH_FRAME_LEN];
-    
+    // 收发路径可能并发执行，不能复用同一块临时帧缓存。
+    static uint8 tx_packet_buffer[ETH_FRAME_LEN];
+    static uint8 rx_packet_buffer[ETH_FRAME_LEN];
+
     // Initialize the adapter
     bool adapter_init()
     {
@@ -44,7 +48,10 @@ namespace net
         printf("[virtio_net_adapter] Initializing VirtIO Net to ONPS adapter\n");
         
         // Initialize virtio net driver first
-        net::virtio_net_init();
+        if (!net::virtio_net_init()) {
+            printf("[virtio_net_adapter] VirtIO Net driver init failed\n");
+            return false;
+        }
         
         // Get MAC address from virtio net
         uint8 mac_addr[ETH_ALEN];
@@ -58,12 +65,12 @@ namespace net
         ST_IPV4 ipv4_config;
         memset(&ipv4_config, 0, sizeof(ipv4_config));
         
-        // Set default IP configuration (you can modify these)
-        ipv4_config.unAddr = inet_addr_small("192.168.1.2");
-        ipv4_config.unSubnetMask = inet_addr_small("255.255.255.0");
-        ipv4_config.unGateway = inet_addr_small("192.168.1.1");
-        ipv4_config.unPrimaryDNS = inet_addr_small("8.8.8.8");
-        ipv4_config.unBroadcast = inet_addr_small("192.168.1.255");
+        // QEMU user-mode 网络默认拓扑：guest=10.0.2.15，gateway/DNS=10.0.2.2/10.0.2.3。
+        ipv4_config.unAddr = inet_addr("10.0.2.15");
+        ipv4_config.unSubnetMask = inet_addr("255.255.255.0");
+        ipv4_config.unGateway = inet_addr("10.0.2.2");
+        ipv4_config.unPrimaryDNS = inet_addr("10.0.2.3");
+        ipv4_config.unBroadcast = inet_addr("10.0.2.255");
 
         // Register ethernet interface with onps
         EN_ONPSERR error;
@@ -125,10 +132,10 @@ namespace net
         }
         
         // Merge buffer list into contiguous packet
-        buf_list_merge_packet(buf_list_head, packet_buffer);
+        buf_list_merge_packet(buf_list_head, tx_packet_buffer);
         
         // Send via virtio net
-        int result = net::virtio_net_send(packet_buffer, total_len);
+        int result = net::virtio_net_send(tx_packet_buffer, total_len);
         
         if (result != 0) {
             printf("[virtio_net_adapter] virtio_net_send failed: %d\n", result);
@@ -143,35 +150,33 @@ namespace net
     // Background thread for receiving packets
     void virtio_recv_thread(void *param)
     {
-        printf("[virtio_net_adapter] Receive thread started\n");
-        printfRed("未实现\n");
-        // PST_NETIF netif = (PST_NETIF)param;
-        // if (!netif) {
-        //     printf("[virtio_net_adapter] Invalid netif parameter\n");
-        //     return;
-        // }
+        PST_NETIF netif = static_cast<PST_NETIF>(param);
+        if (netif == nullptr) {
+            printf("[virtio_net_adapter] Receive thread got null netif\n");
+            return;
+        }
 
-        // recv_thread_running = true;
-        
-        // while (recv_thread_running) {
-        //     uint32 packet_len = sizeof(packet_buffer);
-            
-        //     // Try to receive a packet from virtio net
-        //     int result = net::virtio_net_recv(packet_buffer, &packet_len);
-            
-        //     if (result == 0 && packet_len > 0) {
-        //         // Successfully received a packet
-        //         printf("[virtio_net_adapter] Received packet of length %d\n", packet_len);
-                
-        //         // Forward to onps ethernet layer
-        //         ethernet_ii_recv(netif, packet_buffer, packet_len);
-        //     } else {
-        //         // No packet available, sleep briefly to avoid busy waiting
-        //         os_sleep_ms(1); // Sleep for 1ms
-        //     }
-        // }
-        
-        // printf("[virtio_net_adapter] Receive thread stopped\n");
+        recv_thread_running = true;
+        printf("[virtio_net_adapter] Receive thread started\n");
+        while (recv_thread_running) {
+            bool received_any = false;
+            for (;;) {
+                uint32 packet_len = sizeof(rx_packet_buffer);
+                int result = net::virtio_net_recv(rx_packet_buffer, &packet_len);
+                if (result != 0 || packet_len == 0) {
+                    break;
+                }
+
+                received_any = true;
+                ethernet_ii_recv(netif, rx_packet_buffer, static_cast<INT>(packet_len));
+            }
+
+            net::virtio_net_poll();
+            if (!received_any) {
+                os_sleep_ms(1);
+            }
+        }
+        printf("[virtio_net_adapter] Receive thread stopped\n");
     }
     
     // Start the receive thread  
@@ -192,14 +197,39 @@ namespace net
     void start_recv_thread_wrapper(void *param) 
     {
         printf("[virtio_net_adapter] Receive thread wrapper called\n");
-        PST_NETIF netif = (PST_NETIF)param;
-        if (netif) {
-            onps_netif = netif; // Update the netif pointer
+        PST_NETIF *netif_slot = static_cast<PST_NETIF *>(param);
+        PST_NETIF netif = netif_slot != nullptr ? *netif_slot : nullptr;
+        if (netif == nullptr) {
+            printf("[virtio_net_adapter] Receive thread wrapper got null netif\n");
+            return;
         }
-        start_recv_thread();
-        
-        // Start the actual receive loop
-        virtio_recv_thread(netif);
+        onps_netif = netif;
+        if (recv_thread_running) {
+            return;
+        }
+
+        proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+        if (current_proc == nullptr) {
+            printf("[virtio_net_adapter] No current process for receive thread\n");
+            return;
+        }
+
+        uint64 flags = syscall::CLONE_VM | syscall::CLONE_FILES |
+                       syscall::CLONE_SIGHAND | syscall::CLONE_THREAD;
+        proc::Pcb *thread_pcb = proc::k_pm.fork(current_proc, flags, 0, 0, false);
+        if (thread_pcb == nullptr) {
+            printf("[virtio_net_adapter] Failed to fork receive thread\n");
+            return;
+        }
+
+        thread_pcb->_context.ra = reinterpret_cast<uint64>(kernel_thread_wrapper);
+        thread_pcb->_context.s0 = reinterpret_cast<uint64>(virtio_recv_thread);
+        thread_pcb->_context.s1 = reinterpret_cast<uint64>(netif);
+        strncpy(thread_pcb->_name, "virtio-net-rx", sizeof(thread_pcb->_name) - 1);
+        thread_pcb->_name[sizeof(thread_pcb->_name) - 1] = '\0';
+
+        recv_thread_running = true;
+        thread_pcb->_lock.release();
     }
     
     // Stop the receive thread
@@ -215,7 +245,6 @@ namespace net
         // Give the thread time to exit
         os_sleep_ms(100);
         
-        recv_thread_id = 0;
     }
     
     // Get MAC address for onps registration

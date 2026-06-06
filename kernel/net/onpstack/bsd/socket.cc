@@ -344,8 +344,6 @@ INT connect_nb_ext(SOCKET socket, void *srv_ip, USHORT srv_port)
 #if SUPPORT_SACK
 INT send(SOCKET socket, UCHAR *pubData, INT nDataLen, INT nWaitAckTimeout)
 {
-//#warning when tcp sack support is enabled, the parameter nWaitAckTimeout of the send() function is invalid
-    printfRed("Warning: when tcp sack support is enabled, the parameter nWaitAckTimeout of the send() function is invalid.\n");
     nWaitAckTimeout = nWaitAckTimeout;
 
     //* 空数据没必要发送，这里并不返回-1以显式地告诉用户，仅记录这个错误即可，用户可以主动获取这个错误
@@ -585,9 +583,7 @@ INT send_nb(SOCKET socket, UCHAR *pubData, INT nDataLen)
 INT is_tcp_send_ok(SOCKET socket)
 {
 #if SUPPORT_SACK
-//#warning when tcp sack support is enabled, the is_tcp_send_ok() function is invalid
-    printfRed("Warning: when tcp sack support is enabled, the is_tcp_send_ok() function is invalid.\n");
-    return 1; 
+    return 1;
 #else
     EN_ONPSERR enErr;
     EN_TCPDATASNDSTATE enSndState;

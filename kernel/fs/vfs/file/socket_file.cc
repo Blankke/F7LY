@@ -8,6 +8,8 @@
 #include "tm/timer_manager.hh"
 #include <errno.h>
 #include "fs/vfs/virtual_fs.hh"
+#include "net/f7ly_network.hh"
+#include "onps.hh"
 
 namespace fs
 {
@@ -18,9 +20,12 @@ namespace fs
         constexpr uint16 k_ephemeral_port_start = 20000;
         constexpr uint16 k_ephemeral_port_end = 60999;
         constexpr int k_protocol_ip = 0;
+        constexpr int k_protocol_icmp = 1;
         constexpr int k_protocol_tcp = 6;
         constexpr int k_protocol_udp = 17;
         constexpr int k_protocol_ipv6 = 41;
+        constexpr uint8 k_default_ip_ttl = 64;
+        constexpr size_t k_ipv4_header_len = 20;
         constexpr int k_ip_recverr = 11;
         constexpr int k_tcp_nodelay = 1;
         constexpr int k_tcp_maxseg = 2;
@@ -407,6 +412,217 @@ namespace fs
             }
             return 0;
         }
+
+        bool can_use_onps_socket(SocketFamily family, SocketType type)
+        {
+            return family == SocketFamily::INET &&
+                   (type == SocketType::TCP || type == SocketType::UDP) &&
+                   net::is_network_stack_ready();
+        }
+
+        bool can_use_onps_raw_icmp(SocketFamily family, SocketType type, int protocol)
+        {
+            return family == SocketFamily::INET &&
+                   type == SocketType::RAW &&
+                   protocol == k_protocol_icmp &&
+                   net::is_network_stack_ready();
+        }
+
+        bool should_route_via_onps(SocketFamily family, SocketType type, uint32 addr)
+        {
+            return can_use_onps_socket(family, type) && !is_loopback_or_any(addr);
+        }
+
+        int onps_error_to_errno(EN_ONPSERR error)
+        {
+            switch (error)
+            {
+                case ERRNO:
+                    return 0;
+                case ERRNOFREEMEM:
+                case ERRNOPAGENODE:
+                case ERRNOBUFLISTNODE:
+                case ERRNEWARPCTLBLOCK:
+                case ERRNONETIFNODE:
+                case ERRNOROUTENODE:
+                case ERRNOSOCKET:
+                case ERRNOTCPLINKNODE:
+                case ERRNOUDPLINKNODE:
+                case ERRTCPSRVEMPTY:
+                case ERRTCPBACKLOGEMPTY:
+                case ERRTCPRCVQUEUEEMPTY:
+                    return -ENOBUFS;
+                case ERRPORTOCCUPIED:
+                    return -EADDRINUSE;
+                case ERRADDRESSING:
+                case ERRNETUNREACHABLE:
+                case ERRROUTEADDRMATCH:
+                case ERRNETIFNOTFOUND:
+                case ERRNONETIFFOUND:
+                    return -ENETUNREACH;
+                case ERRADDRFAMILIES:
+                case ERRUNSUPPORTEDFAMILY:
+                case ERRFAMILYINCONSISTENT:
+                    return -EAFNOSUPPORT;
+                case ERRSOCKETTYPE:
+                case ERRUNSUPPIPPROTO:
+                case ERRIPROTOMATCH:
+                case ERRTCPONLY:
+                    return -EOPNOTSUPP;
+                case ERRTCPCONNTIMEOUT:
+                case ERRTCPACKTIMEOUT:
+                case ERRWAITACKTIMEOUT:
+                    return -ETIMEDOUT;
+                case ERRTCPCONNRESET:
+                    return -ECONNRESET;
+                case ERRTCPCONNCLOSED:
+                    return -EPIPE;
+                case ERRTCPNOTCONNECTED:
+                case ERRNOTBINDADDR:
+                    return -ENOTCONN;
+                case ERRPACKETTOOLARGE:
+                    return -EMSGSIZE;
+                case ERRTCPBACKLOGFULL:
+                    return -EAGAIN;
+                case ERRDATAEMPTY:
+                case ERRSENDZEROBYTES:
+                case ERRPORTEMPTY:
+                    return -EINVAL;
+                default:
+                    return -EIO;
+            }
+        }
+
+        int onps_last_errno(SOCKET socket)
+        {
+            EN_ONPSERR error = socket_get_last_error_code(socket);
+            int result = onps_error_to_errno(error);
+            return result == 0 ? -EIO : result;
+        }
+
+        int onps_socket_type(SocketType type)
+        {
+            return type == SocketType::TCP ? SOCK_STREAM : SOCK_DGRAM;
+        }
+
+        void close_onps_handle(SocketType type, SOCKET socket)
+        {
+            if (socket == INVALID_SOCKET)
+            {
+                return;
+            }
+            if (type == SocketType::RAW)
+            {
+                onps_input_free(static_cast<INT>(socket));
+                return;
+            }
+            ::close(socket);
+        }
+
+        uint16 socket_port_to_host(uint16 net_port)
+        {
+            return to_network_u16(net_port);
+        }
+
+        uint16 socket_port_to_network(uint16 host_port)
+        {
+            return to_network_u16(host_port);
+        }
+
+        uint16 internet_checksum(const uint8_t *data, size_t len)
+        {
+            uint32 sum = 0;
+            for (size_t i = 0; i + 1 < len; i += 2)
+            {
+                sum += static_cast<uint16>((static_cast<uint16>(data[i]) << 8) | data[i + 1]);
+                sum = (sum & 0xffff) + (sum >> 16);
+            }
+            if ((len & 1) != 0)
+            {
+                sum += static_cast<uint16>(data[len - 1] << 8);
+                sum = (sum & 0xffff) + (sum >> 16);
+            }
+            while ((sum >> 16) != 0)
+            {
+                sum = (sum & 0xffff) + (sum >> 16);
+            }
+            return static_cast<uint16>(~sum);
+        }
+
+        struct raw_ipv4_header
+        {
+            uint8_t version_ihl;
+            uint8_t tos;
+            uint16_t total_len;
+            uint16_t id;
+            uint16_t frag_off;
+            uint8_t ttl;
+            uint8_t protocol;
+            uint16_t checksum;
+            uint32_t src;
+            uint32_t dst;
+        } __attribute__((packed));
+
+        void build_raw_ipv4_header(raw_ipv4_header &header, uint32_t src, uint32_t dst,
+                                   uint8_t ttl, uint16_t payload_len)
+        {
+            memset(&header, 0, sizeof(header));
+            header.version_ihl = 0x45;
+            header.total_len = socket_port_to_network(static_cast<uint16>(k_ipv4_header_len + payload_len));
+            header.ttl = ttl;
+            header.protocol = k_protocol_icmp;
+            header.src = src;
+            header.dst = dst;
+            header.checksum = socket_port_to_network(internet_checksum(reinterpret_cast<const uint8_t *>(&header),
+                                                                       sizeof(header)));
+        }
+
+        void ipv4_to_string(uint32 addr, char out[16])
+        {
+            const uint8_t *bytes = reinterpret_cast<const uint8_t *>(&addr);
+            snprintf(out, 16, "%d.%d.%d.%d", bytes[0], bytes[1], bytes[2], bytes[3]);
+        }
+
+        void refresh_onps_local_addr(SOCKET socket, struct sockaddr_in &local_addr)
+        {
+            EN_ONPSERR error = ERRNO;
+            PST_TCPUDP_HANDLE handle = nullptr;
+            if (!onps_input_get(static_cast<INT>(socket), IOPT_GETTCPUDPADDR, &handle, &error) ||
+                handle == nullptr)
+            {
+                return;
+            }
+
+            local_addr.sin_family = AF_INET;
+            local_addr.sin_port = socket_port_to_network(handle->stSockAddr.usPort);
+            local_addr.sin_addr = handle->stSockAddr.saddr_ipv4;
+            if (local_addr.sin_addr == 0)
+            {
+                local_addr.sin_addr = inet_addr("10.0.2.15");
+            }
+        }
+
+        CHAR onps_recv_timeout_seconds(bool nonblocking, long sec, long usec)
+        {
+            if (nonblocking)
+            {
+                return 0;
+            }
+            if (sec == 0 && usec == 0)
+            {
+                return -1;
+            }
+            long timeout = sec + (usec > 0 ? 1 : 0);
+            if (timeout <= 0)
+            {
+                return 0;
+            }
+            if (timeout > 126)
+            {
+                timeout = 126;
+            }
+            return static_cast<CHAR>(timeout);
+        }
     }
 
     socket_file::socket_file(int domain, int type, int protocol)
@@ -423,6 +639,9 @@ namespace fs
         , _reuse_addr(false)
         , _loopback_registered(false)
         , _unix_registered(false)
+        , _onps_active(false)
+        , _onps_bound(false)
+        , _onps_listening(false)
         , _read_shutdown(false)
         , _write_shutdown(false)
         , _peer_closed(false)
@@ -457,6 +676,9 @@ namespace fs
         , _reuse_addr(false)
         , _loopback_registered(false)
         , _unix_registered(false)
+        , _onps_active(false)
+        , _onps_bound(false)
+        , _onps_listening(false)
         , _read_shutdown(false)
         , _write_shutdown(false)
         , _peer_closed(false)
@@ -482,10 +704,20 @@ namespace fs
         _state = SocketState::CLOSED;
         _send_buffer.clear();
         _pending_send_has_addr = false;
+        SOCKET onps_socket = _onps_socket;
+        _onps_socket = INVALID_SOCKET;
+        _onps_active = false;
+        _onps_bound = false;
+        _onps_listening = false;
         proc::k_pm.wakeup(&_pending_connections);
         proc::k_pm.wakeup(&_recv_buffer);
         proc::k_pm.wakeup(&_datagram_queue);
         _lock.release();
+
+        if (onps_socket != INVALID_SOCKET)
+        {
+            close_onps_handle(_type, onps_socket);
+        }
 
         ensure_loopback_table();
         if (_loopback_registered)
@@ -545,6 +777,11 @@ namespace fs
         bool result;
         switch (_state) {
             case SocketState::CONNECTED:
+                if (_onps_active)
+                {
+                    result = !_read_shutdown;
+                    break;
+                }
                 if (_type == SocketType::UDP)
                 {
                     result = !_datagram_queue.empty();
@@ -555,10 +792,11 @@ namespace fs
                 }
                 break;
             case SocketState::LISTENING:
-                result = !_pending_connections.empty();
+                result = !_pending_connections.empty() || _onps_listening;
                 break;
             case SocketState::BOUND:
-                result = _type == SocketType::UDP && !_datagram_queue.empty();
+                result = _type == SocketType::UDP &&
+                         (!_datagram_queue.empty() || (_onps_bound && !_loopback_registered));
                 break;
             default:
                 result = false;
@@ -574,6 +812,12 @@ namespace fs
         bool result = false;
         if (_state == SocketState::CONNECTED)
         {
+            if (_onps_active)
+            {
+                result = !_write_shutdown;
+                _lock.release();
+                return result;
+            }
             if (_type == SocketType::TCP)
             {
                 socket_file *peer = _peer;
@@ -726,34 +970,54 @@ namespace fs
                 return -EAFNOSUPPORT;
             }
         }
-        if (!is_loopback_or_any(local_addr.sin_addr)) {
+        bool bind_loopback = is_loopback_or_any(local_addr.sin_addr);
+        bool bind_onps = can_use_onps_socket(_family, _type) &&
+                         (local_addr.sin_addr == 0 || !bind_loopback);
+        if (!bind_loopback && !bind_onps) {
             _lock.release();
             return -EADDRNOTAVAIL;
         }
 
-        ensure_loopback_table();
-        g_loopback_lock.acquire();
-
         if (local_addr.sin_port == 0) {
+            ensure_loopback_table();
+            g_loopback_lock.acquire();
             local_addr.sin_port = allocate_ephemeral_port(_type);
             if (local_addr.sin_port == 0) {
                 g_loopback_lock.release();
                 _lock.release();
                 return -EADDRINUSE;
             }
+            g_loopback_lock.release();
         }
 
-        int result = register_loopback_binding(_type, local_addr.sin_port, this);
-        if (result < 0) {
+        if (bind_loopback) {
+            ensure_loopback_table();
+            g_loopback_lock.acquire();
+            int result = register_loopback_binding(_type, local_addr.sin_port, this);
+            if (result < 0) {
+                g_loopback_lock.release();
+                _lock.release();
+                return result;
+            }
+            _loopback_registered = true;
             g_loopback_lock.release();
-            _lock.release();
-            return result;
         }
 
         _local_addr = local_addr;
-        _loopback_registered = true;
+        if (bind_onps) {
+            int onps_result = bind_onps_locked(local_addr);
+            if (onps_result < 0) {
+                if (_loopback_registered) {
+                    g_loopback_lock.acquire();
+                    unregister_loopback_binding(_type, _local_addr.sin_port, this);
+                    g_loopback_lock.release();
+                    _loopback_registered = false;
+                }
+                _lock.release();
+                return onps_result;
+            }
+        }
         _state = SocketState::BOUND;
-        g_loopback_lock.release();
         _lock.release();
         return 0;
     }
@@ -786,6 +1050,15 @@ namespace fs
         if (_backlog > k_loopback_somaxconn) {
             _backlog = k_loopback_somaxconn;
         }
+        if (_onps_bound && !_onps_listening) {
+            int onps_backlog = _backlog > TCPSRV_BACKLOG_NUM_MAX ? TCPSRV_BACKLOG_NUM_MAX : _backlog;
+            if (::listen(_onps_socket, static_cast<USHORT>(onps_backlog)) != 0) {
+                int result = onps_last_errno(_onps_socket);
+                _lock.release();
+                return result;
+            }
+            _onps_listening = true;
+        }
         _state = SocketState::LISTENING;
         _pending_connections.reserve(_backlog);
         
@@ -810,6 +1083,60 @@ namespace fs
         proc::Pcb *cur = proc::k_pm.get_cur_pcb();
         // 检查是否有待处理的连接
         while (_pending_connections.empty()) {
+            if (_onps_listening) {
+                SOCKET listen_socket = _onps_socket;
+                bool blocking = _blocking;
+                _lock.release();
+
+                UINT client_ip = 0;
+                USHORT client_port = 0;
+                EN_ONPSERR error = ERRNO;
+                SOCKET client = ::accept(listen_socket, &client_ip, &client_port,
+                                         blocking ? 1 : 0, &error);
+                if (client != INVALID_SOCKET) {
+                    socket_file *server_side = new socket_file(AF_INET, SOCK_STREAM, _protocol);
+                    if (server_side == nullptr) {
+                        ::close(client);
+                        return -ENOMEM;
+                    }
+
+                    server_side->_onps_socket = client;
+                    server_side->_onps_active = true;
+                    server_side->_onps_bound = true;
+                    server_side->_state = SocketState::CONNECTED;
+                    server_side->_local_addr = _local_addr;
+                    refresh_onps_local_addr(client, server_side->_local_addr);
+                    memset(&server_side->_remote_addr, 0, sizeof(server_side->_remote_addr));
+                    server_side->_remote_addr.sin_family = AF_INET;
+                    server_side->_remote_addr.sin_addr = client_ip;
+                    server_side->_remote_addr.sin_port = socket_port_to_network(client_port);
+
+                    if (addr && addrlen && *addrlen > 0) {
+                        socklen_t copy_len = eastl::min(*addrlen, static_cast<socklen_t>(sizeof(struct sockaddr_in)));
+                        memcpy(addr, &server_side->_remote_addr, copy_len);
+                        *addrlen = sizeof(struct sockaddr_in);
+                    }
+                    *accepted_socket = server_side;
+                    return 0;
+                }
+
+                if (!blocking) {
+                    return -EAGAIN;
+                }
+                if (error != ERRNO) {
+                    int mapped = onps_error_to_errno(error);
+                    if (mapped != -EIO) {
+                        return mapped;
+                    }
+                }
+
+                _lock.acquire();
+                if (_state != SocketState::LISTENING) {
+                    _lock.release();
+                    return -EINVAL;
+                }
+                continue;
+            }
             // accept(2) 是信号可中断的阻塞系统调用。netperf TCP_CRR 的
             // server 依赖 ITIMER_REAL/SIGALRM 打断这里的空队列等待后汇报结果。
             if (cur != nullptr && proc::ipc::signal::has_unmasked_signal_pending(cur)) {
@@ -972,8 +1299,51 @@ namespace fs
                 }
             }
             if (!is_loopback_or_any(remote_addr.sin_addr)) {
+                if (!should_route_via_onps(_family, _type, remote_addr.sin_addr)) {
+                    _lock.release();
+                    return -ENETUNREACH;
+                }
+
+                int ensure_result = ensure_onps_socket_locked();
+                if (ensure_result < 0) {
+                    _lock.release();
+                    return ensure_result;
+                }
+                if (_state == SocketState::BOUND && !_onps_bound) {
+                    int bind_result = bind_onps_locked(_local_addr);
+                    if (bind_result < 0) {
+                        _lock.release();
+                        return bind_result;
+                    }
+                }
+
+                SOCKET onps_socket = _onps_socket;
+                USHORT host_port = socket_port_to_host(remote_addr.sin_port);
+                bool nonblocking = is_nonblocking_request(0);
                 _lock.release();
-                return -ENETUNREACH;
+
+                int result;
+                if (_type == SocketType::TCP && nonblocking) {
+                    result = ::connect_nb_ext(onps_socket, &remote_addr.sin_addr, host_port);
+                    if (result == 1) {
+                        return -EINPROGRESS;
+                    }
+                } else {
+                    result = ::connect_ext(onps_socket, &remote_addr.sin_addr, host_port,
+                                           _type == SocketType::TCP ? TCP_CONN_TIMEOUT : 0);
+                }
+
+                if (result != 0) {
+                    return onps_last_errno(onps_socket);
+                }
+
+                _lock.acquire();
+                _remote_addr = remote_addr;
+                _onps_active = true;
+                _state = SocketState::CONNECTED;
+                refresh_onps_local_addr(_onps_socket, _local_addr);
+                _lock.release();
+                return 0;
             }
 
             if (_state == SocketState::CREATED) {
@@ -1090,6 +1460,36 @@ namespace fs
             if (_state != SocketState::CONNECTED) {
                 _lock.release();
                 return -ENOTCONN;
+            }
+            if (_onps_active) {
+                if (_write_shutdown) {
+                    _lock.release();
+                    return -EPIPE;
+                }
+                SOCKET onps_socket = _onps_socket;
+                bool nonblocking = is_nonblocking_request(flags);
+                _lock.release();
+
+                INT request_len = len > static_cast<size_t>(INT_MAX)
+                                      ? INT_MAX
+                                      : static_cast<INT>(len);
+                for (;;) {
+                    INT sent = ::send_nb(onps_socket, const_cast<UCHAR *>(data), request_len);
+                    if (sent > 0) {
+                        return sent;
+                    }
+                    if (sent < 0) {
+                        return onps_last_errno(onps_socket);
+                    }
+                    if (nonblocking) {
+                        return -EAGAIN;
+                    }
+                    proc::Pcb *cur = proc::k_pm.get_cur_pcb();
+                    if (cur != nullptr && proc::ipc::signal::has_unmasked_signal_pending(cur)) {
+                        return -EINTR;
+                    }
+                    os_sleep_ms(1);
+                }
             }
             if (_write_shutdown || _peer == nullptr || _peer_closed) {
                 _lock.release();
@@ -1214,6 +1614,33 @@ namespace fs
                 _lock.release();
                 return -ENOTCONN;
             }
+            if (_onps_active) {
+                if (_read_shutdown) {
+                    _lock.release();
+                    return 0;
+                }
+                int timeout_result = configure_onps_recv_timeout_locked(flags);
+                if (timeout_result < 0) {
+                    _lock.release();
+                    return timeout_result;
+                }
+                SOCKET onps_socket = _onps_socket;
+                bool nonblocking = is_nonblocking_request(flags);
+                bool has_timeout = _recv_timeout_sec != 0 || _recv_timeout_usec != 0;
+                _lock.release();
+
+                INT request_len = len > static_cast<size_t>(INT_MAX)
+                                      ? INT_MAX
+                                      : static_cast<INT>(len);
+                INT received = ::recv(onps_socket, data, request_len);
+                if (received > 0) {
+                    return received;
+                }
+                if (received == 0) {
+                    return (nonblocking || has_timeout) ? -EAGAIN : 0;
+                }
+                return onps_last_errno(onps_socket);
+            }
 
             proc::Pcb *cur = proc::k_pm.get_cur_pcb();
             uint64 timeout_us = 0;
@@ -1303,12 +1730,32 @@ namespace fs
                 dest = _remote_addr;
             }
 
-            if (!is_loopback_or_any(dest.sin_addr)) {
-                _lock.release();
-                return -ENETUNREACH;
+            bool route_onps = !is_loopback_or_any(dest.sin_addr);
+            if (route_onps) {
+                if (!should_route_via_onps(_family, _type, dest.sin_addr)) {
+                    _lock.release();
+                    return -ENETUNREACH;
+                }
+                int ensure_result = ensure_onps_socket_locked();
+                if (ensure_result < 0) {
+                    _lock.release();
+                    return ensure_result;
+                }
+                if (_state == SocketState::BOUND && !_onps_bound) {
+                    int bind_result = bind_onps_locked(_local_addr);
+                    if (bind_result < 0) {
+                        _lock.release();
+                        return bind_result;
+                    }
+                }
+                int source_result = ensure_onps_udp_source_locked(dest.sin_addr);
+                if (source_result < 0) {
+                    _lock.release();
+                    return source_result;
+                }
             }
 
-            if (_state == SocketState::CREATED) {
+            if (!route_onps && _state == SocketState::CREATED) {
                 int bind_result = ensure_loopback_bound_locked();
                 if (bind_result < 0) {
                     _lock.release();
@@ -1348,6 +1795,32 @@ namespace fs
                 _pending_send_has_addr = false;
                 send_data = flush_buffer.data();
                 send_len = flush_buffer.size();
+            }
+
+            if (route_onps) {
+                SOCKET onps_socket = _onps_socket;
+                char dest_ip[16];
+                ipv4_to_string(send_dest.sin_addr, dest_ip);
+                USHORT host_port = socket_port_to_host(send_dest.sin_port);
+                _lock.release();
+
+                INT sent = ::sendto(onps_socket, dest_ip, host_port,
+                                    const_cast<UCHAR *>(send_data),
+                                    send_len > static_cast<size_t>(INT_MAX)
+                                        ? INT_MAX
+                                        : static_cast<INT>(send_len));
+                if (sent < 0) {
+                    return onps_last_errno(onps_socket);
+                }
+
+                _lock.acquire();
+                _onps_active = true;
+                if (_state == SocketState::CREATED) {
+                    _state = SocketState::BOUND;
+                }
+                refresh_onps_local_addr(_onps_socket, _local_addr);
+                _lock.release();
+                return sent;
             }
 
             _lock.release();
@@ -1395,6 +1868,86 @@ namespace fs
                 target->_lock.release();
             }
             return static_cast<int>(len);
+        } else if (_type == SocketType::RAW) {
+            if (_family != SocketFamily::INET || _protocol != k_protocol_icmp) {
+                _lock.release();
+                return -EOPNOTSUPP;
+            }
+            if (len < sizeof(ST_ICMP_HDR) + sizeof(ST_ICMP_ECHO_HDR)) {
+                _lock.release();
+                return -EINVAL;
+            }
+
+            struct sockaddr_in dest;
+            if (dest_addr != nullptr) {
+                if (addrlen < sizeof(struct sockaddr_in)) {
+                    _lock.release();
+                    return -EINVAL;
+                }
+                memcpy(&dest, dest_addr, sizeof(dest));
+                if (dest.sin_family != AF_INET) {
+                    _lock.release();
+                    return -EAFNOSUPPORT;
+                }
+            } else {
+                if (_state != SocketState::CONNECTED) {
+                    _lock.release();
+                    return -EDESTADDRREQ;
+                }
+                dest = _remote_addr;
+            }
+
+            if (!can_use_onps_raw_icmp(_family, _type, _protocol) ||
+                is_loopback_or_any(dest.sin_addr)) {
+                _lock.release();
+                return -ENETUNREACH;
+            }
+
+            int ensure_result = ensure_onps_raw_icmp_locked();
+            if (ensure_result < 0) {
+                _lock.release();
+                return ensure_result;
+            }
+
+            const auto *icmp_hdr = reinterpret_cast<const ST_ICMP_HDR *>(data);
+            if (icmp_hdr->ubType != ICMP_ECHOREQ || icmp_hdr->ubCode != 0) {
+                _lock.release();
+                return -EOPNOTSUPP;
+            }
+            const auto *echo_hdr = reinterpret_cast<const ST_ICMP_ECHO_HDR *>(data + sizeof(ST_ICMP_HDR));
+            const UCHAR *payload = data + sizeof(ST_ICMP_HDR) + sizeof(ST_ICMP_ECHO_HDR);
+            size_t payload_len = len - sizeof(ST_ICMP_HDR) - sizeof(ST_ICMP_ECHO_HDR);
+            if (payload_len > UINT_MAX) {
+                _lock.release();
+                return -EMSGSIZE;
+            }
+
+            SOCKET onps_socket = _onps_socket;
+            USHORT identifier = socket_port_to_host(echo_hdr->usIdentifier);
+            USHORT sequence = socket_port_to_host(echo_hdr->usSeqNum);
+            UINT source_ip = route_get_netif_ip(dest.sin_addr);
+            if (source_ip == 0) {
+                _lock.release();
+                return -ENETUNREACH;
+            }
+            _local_addr.sin_family = AF_INET;
+            _local_addr.sin_addr = source_ip;
+            _remote_addr = dest;
+            _lock.release();
+
+            EN_ONPSERR error = ERRNO;
+            INT sent = icmp_send_echo_reqest(static_cast<INT>(onps_socket),
+                                             identifier,
+                                             sequence,
+                                             k_default_ip_ttl,
+                                             dest.sin_addr,
+                                             payload,
+                                             static_cast<UINT>(payload_len),
+                                             &error);
+            if (sent < 0) {
+                return onps_error_to_errno(error);
+            }
+            return static_cast<int>(len);
         } else if (_type == SocketType::TCP) {
             if (_state != SocketState::CONNECTED) {
                 _lock.release();
@@ -1432,6 +1985,41 @@ namespace fs
             if (_state != SocketState::BOUND && _state != SocketState::CONNECTED) {
                 _lock.release();
                 return -EINVAL;
+            }
+
+            if (_onps_active || (_onps_bound && !_loopback_registered)) {
+                int timeout_result = configure_onps_recv_timeout_locked(flags);
+                if (timeout_result < 0) {
+                    _lock.release();
+                    return timeout_result;
+                }
+                SOCKET onps_socket = _onps_socket;
+                bool nonblocking = is_nonblocking_request(flags);
+                bool has_timeout = _recv_timeout_sec != 0 || _recv_timeout_usec != 0;
+                _lock.release();
+
+                UINT from_ip = 0;
+                USHORT from_port = 0;
+                INT request_len = len > static_cast<size_t>(INT_MAX)
+                                      ? INT_MAX
+                                      : static_cast<INT>(len);
+                INT received = ::recvfrom(onps_socket, data, request_len, &from_ip, &from_port);
+                if (received > 0) {
+                    if (src_addr && addrlen && *addrlen > 0) {
+                        struct sockaddr_in from{};
+                        from.sin_family = AF_INET;
+                        from.sin_addr = from_ip;
+                        from.sin_port = socket_port_to_network(from_port);
+                        socklen_t copy_addr_len = eastl::min(*addrlen, static_cast<socklen_t>(sizeof(from)));
+                        memcpy(src_addr, &from, copy_addr_len);
+                        *addrlen = sizeof(from);
+                    }
+                    return received;
+                }
+                if (received == 0) {
+                    return (nonblocking || has_timeout) ? -EAGAIN : 0;
+                }
+                return onps_last_errno(onps_socket);
             }
 
             proc::Pcb *cur = proc::k_pm.get_cur_pcb();
@@ -1484,6 +2072,89 @@ namespace fs
             }
             _lock.release();
             return static_cast<int>(copy_len);
+        } else if (_type == SocketType::RAW) {
+            if (_family != SocketFamily::INET || _protocol != k_protocol_icmp) {
+                _lock.release();
+                return -EOPNOTSUPP;
+            }
+
+            int ensure_result = ensure_onps_raw_icmp_locked();
+            if (ensure_result < 0) {
+                _lock.release();
+                return ensure_result;
+            }
+
+            SOCKET onps_socket = _onps_socket;
+            bool nonblocking = is_nonblocking_request(flags);
+            uint64 timeout_us = 0;
+            bool has_timeout = socket_timeout_to_usec(_recv_timeout_sec, _recv_timeout_usec, timeout_us) &&
+                               timeout_us > 0;
+            INT wait_secs = 0;
+            if (nonblocking) {
+                // onps 的 0 表示永久阻塞，raw ICMP 暂用 1 秒轮询避免非阻塞调用卡死。
+                wait_secs = 1;
+            } else if (has_timeout) {
+                wait_secs = static_cast<INT>(_recv_timeout_sec + (_recv_timeout_usec > 0 ? 1 : 0));
+                if (wait_secs <= 0) {
+                    wait_secs = 1;
+                }
+            }
+            _lock.release();
+
+            UCHAR *icmp_packet = nullptr;
+            UINT from_ip = 0;
+            UCHAR ttl = k_default_ip_ttl;
+            UCHAR icmp_type = 0;
+            UCHAR icmp_code = 0;
+            EN_ONPSERR error = ERRNO;
+            INT received = onps_input_recv_icmp(static_cast<INT>(onps_socket),
+                                                &icmp_packet,
+                                                &from_ip,
+                                                &ttl,
+                                                &icmp_type,
+                                                &icmp_code,
+                                                wait_secs,
+                                                &error);
+            if (received == 0) {
+                return (nonblocking || has_timeout) ? -EAGAIN : 0;
+            }
+            if (received < 0 || icmp_packet == nullptr) {
+                int mapped = onps_error_to_errno(error);
+                return mapped == 0 ? -EIO : mapped;
+            }
+
+            UINT local_ip = route_get_netif_ip(from_ip);
+            if (local_ip == 0) {
+                local_ip = inet_addr("10.0.2.15");
+            }
+
+            raw_ipv4_header ip_header;
+            build_raw_ipv4_header(ip_header,
+                                  from_ip,
+                                  local_ip,
+                                  ttl,
+                                  static_cast<uint16_t>(received));
+
+            size_t total_len = sizeof(ip_header) + static_cast<size_t>(received);
+            size_t copy_len = eastl::min(len, total_len);
+            size_t header_copy = eastl::min(copy_len, sizeof(ip_header));
+            memcpy(data, &ip_header, header_copy);
+            if (copy_len > sizeof(ip_header)) {
+                memcpy(data + sizeof(ip_header),
+                       icmp_packet,
+                       copy_len - sizeof(ip_header));
+            }
+
+            if (src_addr && addrlen && *addrlen > 0) {
+                struct sockaddr_in from{};
+                from.sin_family = AF_INET;
+                from.sin_addr = from_ip;
+                from.sin_port = 0;
+                socklen_t copy_addr_len = eastl::min(*addrlen, static_cast<socklen_t>(sizeof(from)));
+                memcpy(src_addr, &from, copy_addr_len);
+                *addrlen = sizeof(from);
+            }
+            return static_cast<int>(copy_len);
         } else if (_type == SocketType::TCP) {
             struct sockaddr_in peer_addr = _remote_addr;
             struct sockaddr_un peer_unix_addr = _remote_unix_addr;
@@ -1517,6 +2188,7 @@ namespace fs
             return -ENOTCONN;
         }
 
+        SOCKET onps_close_socket = INVALID_SOCKET;
         // 在实际实现中，这里应该根据how参数关闭读/写/双向
         switch (how) {
             case 0: // SHUT_RD
@@ -1537,6 +2209,13 @@ namespace fs
                 _datagram_queue.clear();
                 _pending_send_has_addr = false;
                 _state = SocketState::CLOSED;
+                if (_onps_socket != INVALID_SOCKET) {
+                    onps_close_socket = _onps_socket;
+                    _onps_socket = INVALID_SOCKET;
+                    _onps_active = false;
+                    _onps_bound = false;
+                    _onps_listening = false;
+                }
                 break;
             default:
                 _lock.release();
@@ -1551,6 +2230,10 @@ namespace fs
         proc::k_pm.wakeup(&_recv_buffer);
         proc::k_pm.wakeup(&_datagram_queue);
         _lock.release();
+
+        if (onps_close_socket != INVALID_SOCKET) {
+            close_onps_handle(_type, onps_close_socket);
+        }
 
         if (peer != nullptr) {
             peer->_lock.acquire();
@@ -1886,6 +2569,13 @@ namespace fs
             _lock.release();
             return 0;
         }
+        if (_onps_socket != INVALID_SOCKET) {
+            bool keep_any_addr = _onps_bound && _loopback_registered && _local_addr.sin_addr == 0;
+            refresh_onps_local_addr(_onps_socket, _local_addr);
+            if (keep_any_addr) {
+                _local_addr.sin_addr = 0;
+            }
+        }
         int result = copy_sockaddr_to_user(addr, addrlen, &_local_addr);
         _lock.release();
         return result;
@@ -1942,6 +2632,146 @@ namespace fs
     bool socket_file::is_nonblocking_request(int flags) const
     {
         return !_blocking || (flags & MSG_DONTWAIT);
+    }
+
+    int socket_file::ensure_onps_socket_locked()
+    {
+        if (_onps_socket != INVALID_SOCKET)
+        {
+            return 0;
+        }
+        if (!can_use_onps_socket(_family, _type))
+        {
+            return -ENETUNREACH;
+        }
+
+        EN_ONPSERR error = ERRNO;
+        SOCKET socket = ::socket(AF_INET, onps_socket_type(_type), 0, &error);
+        if (socket == INVALID_SOCKET)
+        {
+            return onps_error_to_errno(error);
+        }
+        _onps_socket = socket;
+        return 0;
+    }
+
+    int socket_file::ensure_onps_raw_icmp_locked()
+    {
+        if (_onps_socket != INVALID_SOCKET)
+        {
+            return 0;
+        }
+        if (!can_use_onps_raw_icmp(_family, _type, _protocol))
+        {
+            return -ENETUNREACH;
+        }
+
+        EN_ONPSERR error = ERRNO;
+        INT input = onps_input_new(IPPROTO_ICMP, &error);
+        if (input < 0)
+        {
+            return onps_error_to_errno(error);
+        }
+
+        _onps_socket = static_cast<SOCKET>(input);
+        _onps_active = true;
+        _onps_bound = true;
+        if (_state == SocketState::CREATED)
+        {
+            _state = SocketState::BOUND;
+        }
+        return 0;
+    }
+
+    int socket_file::bind_onps_locked(const struct sockaddr_in &addr)
+    {
+        if (_onps_bound)
+        {
+            return 0;
+        }
+
+        int ensure_result = ensure_onps_socket_locked();
+        if (ensure_result < 0)
+        {
+            return ensure_result;
+        }
+
+        char ip[16];
+        const char *ip_arg = nullptr;
+        if (addr.sin_addr != 0)
+        {
+            ipv4_to_string(addr.sin_addr, ip);
+            ip_arg = ip;
+        }
+
+        USHORT host_port = socket_port_to_host(addr.sin_port);
+        if (::bind(_onps_socket, ip_arg, host_port) != 0)
+        {
+            return onps_last_errno(_onps_socket);
+        }
+
+        _onps_bound = true;
+        refresh_onps_local_addr(_onps_socket, _local_addr);
+        if (addr.sin_addr == 0)
+        {
+            _local_addr.sin_addr = 0;
+        }
+        return 0;
+    }
+
+    int socket_file::ensure_onps_udp_source_locked(uint32 dest_addr)
+    {
+        if (_type != SocketType::UDP || _onps_socket == INVALID_SOCKET)
+        {
+            return 0;
+        }
+
+        EN_ONPSERR error = ERRNO;
+        PST_TCPUDP_HANDLE handle = nullptr;
+        if (!onps_input_get(static_cast<INT>(_onps_socket), IOPT_GETTCPUDPADDR, &handle, &error) ||
+            handle == nullptr)
+        {
+            return onps_error_to_errno(error);
+        }
+
+        if (handle->stSockAddr.saddr_ipv4 != 0)
+        {
+            return 0;
+        }
+
+        // UDP bind(0.0.0.0:port) 后 ONPS 已有端口但没有源 IP；
+        // 发送到外部地址前必须按路由补齐源 IP，否则 IP 层会拒绝源地址不一致。
+        UINT source_ip = route_get_netif_ip(dest_addr);
+        if (source_ip == 0)
+        {
+            return -ENETUNREACH;
+        }
+
+        ST_TCPUDP_HANDLE updated = *handle;
+        updated.stSockAddr.saddr_ipv4 = source_ip;
+        if (!onps_input_set(static_cast<INT>(_onps_socket), IOPT_SETTCPUDPADDR, &updated, &error))
+        {
+            return onps_error_to_errno(error);
+        }
+        return 0;
+    }
+
+    int socket_file::configure_onps_recv_timeout_locked(int flags)
+    {
+        if (_onps_socket == INVALID_SOCKET)
+        {
+            return -ENOTCONN;
+        }
+
+        EN_ONPSERR error = ERRNO;
+        CHAR timeout = onps_recv_timeout_seconds(is_nonblocking_request(flags),
+                                                 _recv_timeout_sec,
+                                                 _recv_timeout_usec);
+        if (!socket_set_rcv_timeout(_onps_socket, timeout, &error))
+        {
+            return onps_error_to_errno(error);
+        }
+        return 0;
     }
 
     int socket_file::append_pending_send_locked(const uint8_t *data, size_t len,

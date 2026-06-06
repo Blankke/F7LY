@@ -14,7 +14,7 @@
 #ifndef SYS_CONFIG_H
 #define SYS_CONFIG_H
 
-#define SOCKET_NUM_MAX 16 //* 系统支持的最大SOCKET数量，如实际应用中超过这个数量则会导致用户层业务逻辑无法全部正常运行（icmp/tcp/udp业务均受此影响），其值应大于等于TCP_LINK_NUM_MAX值
+#define SOCKET_NUM_MAX 64 //* 系统支持的最大SOCKET数量，如实际应用中超过这个数量则会导致用户层业务逻辑无法全部正常运行（icmp/tcp/udp业务均受此影响），其值应大于等于TCP_LINK_NUM_MAX值
 #define IP_TTL_DEFAULT 64 //* 缺省TTL值
 
 //* 系统支持哪些功能模块由此配置
@@ -23,7 +23,7 @@
 #define SUPPORT_PRINTF 1 //* 是否支持调用printf()输出相关调试或系统信息
 #if SUPPORT_PRINTF
 #define PRINTF_THREAD_MUTEX 1 //* 是否支持使用printf线程互斥锁，确保不同线程的调试输出信息不被互相干扰，值为1则支持互斥锁
-#define DEBUG_LEVEL 4         //* 共5个调试级别：
+#define DEBUG_LEVEL 1         //* 共5个调试级别：
                               //* 0 输出协议栈底层严重错误
                               //* 1 输出所有系统错误（包括0级错误）
                               //* 2 输出协议栈重要的配置、运行信息，同时包括0、1级信息
@@ -83,7 +83,7 @@
 #define TCP_WINDOW_SCALE 0      //* 窗口扩大因子缺省值
 #define TCP_CONN_TIMEOUT 30     //* 缺省TCP连接超时时间
 #define TCP_ACK_TIMEOUT 3       //* 缺省TCP应答超时时间
-#define TCP_LINK_NUM_MAX 16     //* 系统支持最多建立多少路TCP链路（涵盖所有TCP客户端 + TCP服务器的并发连接数），超过这个数量将无法建立新的tcp链路，另外这个值最大为127，超过则系统无法正常运行
+#define TCP_LINK_NUM_MAX 32     //* 系统支持最多建立多少路TCP链路（涵盖所有TCP客户端 + TCP服务器的并发连接数），超过这个数量将无法建立新的tcp链路，另外这个值最大为127，超过则系统无法正常运行
 #define TCP_ACK_DELAY_MSECS 100 //* 延迟多少毫秒发送ack报文，这个值最小40毫秒，最大200毫秒
 // #define TCP_ENABLE_JUMBO_FRAME
 #ifdef TCP_ENABLE_JUMBO_FRAME
@@ -94,11 +94,11 @@
 
 #if SUPPORT_ETHERNET
 #define TCPSRV_BACKLOG_NUM_MAX 10 //* tcp服务器支持的最大请求队列数量，任意时刻所有已开启的tcp服务器的请求连接队列数量之和应小于该值，否则将会出现拒绝连接的情况
-#define TCPSRV_NUM_MAX 0          //* 系统能够同时建立的tcp服务器数量
+#define TCPSRV_NUM_MAX 4          //* 系统能够同时建立的tcp服务器数量
 #define TCPSRV_RECV_QUEUE_NUM 64  //* tcp服务器接收队列大小，所有已开启的tcp服务器共享该队列资源，如果单位时间内到达所有已开启tcp服务器的报文数量较大，应将该值调大
 #endif
 
-#define UDP_LINK_NUM_MAX 4 //* 调用connect()函数连接对端udp服务器的最大数量（一旦调用connect()函数，收到的非服务器报文将被直接丢弃）
+#define UDP_LINK_NUM_MAX 16 //* 调用connect()函数连接对端udp服务器的最大数量（一旦调用connect()函数，收到的非服务器报文将被直接丢弃）
 //* ===============================================================================================
 
 //* 网络工具配置项
@@ -106,7 +106,7 @@
 #define NETTOOLS_PING 1       //* 使能或禁止ping，置位使能，复位禁止，下同
 #define NETTOOLS_DNS_CLIENT 1 //* 使能或禁止dns查询客户端
 #define NETTOOLS_SNTP 1       //* 使能或禁止sntp客户端
-#define NETTOOLS_TELNETSRV 1  //* 使能或禁止telnet服务端，其值必须为0或1（禁止/使能），因为其还被用于tcp服务器资源分配统计（TCPSRV_NUM_MAX + NETTOOLS_TELNETSRV）
+#define NETTOOLS_TELNETSRV 0  //* 使能或禁止telnet服务端，其值必须为0或1（禁止/使能），因为其还被用于tcp服务器资源分配统计（TCPSRV_NUM_MAX + NETTOOLS_TELNETSRV）
 
 #if NETTOOLS_TELNETSRV
 #define NVTCMD_MEMUSAGE_EN 1 //* 使能或禁止nvt命令：memusage
@@ -149,10 +149,10 @@
 //* ===============================================================================================
 #define BUF_LIST_NUM 80    //* 缓存链表的节点数，最大不能超过2的15次方（32768）
 #define BUDDY_PAGE_SIZE 32 //* 系统能够分配的最小页面大小，其值必须是2的整数次幂
-#define BUDDY_ARER_COUNT 9 //* 指定buddy算法管理的内存块数组单元数量
+#define BUDDY_ARER_COUNT 11 //* 指定buddy算法管理的内存块数组单元数量
 
-#define BUDDY_MEM_SIZE 8192 //* buddy算法管理的内存总大小，其值由BUDDY_PAGE_SIZE、BUDDY_ARER_COUNT两个宏计算得到：
-                            //* 32 * (2 ^ (9 - 1))，即BUDDY_MEM_SIZE = BUDDY_PAGE_SIZE * (2 ^ (BUDDY_ARER_COUNT - 1))
+#define BUDDY_MEM_SIZE 32768 //* buddy算法管理的内存总大小，其值由BUDDY_PAGE_SIZE、BUDDY_ARER_COUNT两个宏计算得到：
+                            //* 32 * (2 ^ (11 - 1))，即BUDDY_MEM_SIZE = BUDDY_PAGE_SIZE * (2 ^ (BUDDY_ARER_COUNT - 1))
                             //* 之所以在此定义好要管理的内存大小，原因是buddy管理的内存其实就是一块提前分配好的静态存储
                             //* 时期的字节型一维数组，以确保协议栈不占用宝贵的堆空间
 //* ===============================================================================================

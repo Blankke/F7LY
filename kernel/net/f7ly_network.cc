@@ -49,6 +49,11 @@ namespace net
         
         return true;
     }
+
+    bool is_network_stack_ready()
+    {
+        return network_initialized;
+    }
     
     // Cleanup the network stack
     void cleanup_network_stack()
