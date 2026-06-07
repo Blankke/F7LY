@@ -755,6 +755,21 @@ void onps_input_sem_post(INT nInput)
     if (nInput < 0 || nInput > SOCKET_NUM_MAX - 1)
         return;
 
+    if (IPPROTO_TCP == (EN_IPPROTO)l_stcbaInput[nInput].ubIPProto)
+    {
+        static int debug_sem_post_count = 0;
+        if (debug_sem_post_count < 120)
+        {
+            PST_TCPLINK pstLink = (PST_TCPLINK)l_stcbaInput[nInput].pvAttach;
+            printf("[netdbg] input_sem_post input=%d state=%d rcved=%d wnd=%d timeout=%d\n",
+                   nInput, pstLink ? (int)pstLink->bState : -1,
+                   (int)l_stcbaInput[nInput].unRcvedBytes,
+                   pstLink ? (int)pstLink->stLocal.usWndSize : -1,
+                   (int)l_stcbaInput[nInput].bRcvTimeout);
+            debug_sem_post_count++;
+        }
+    }
+
     if (INVALID_HSEM != l_stcbaInput[nInput].hSem /* && l_stcbaInput[nInput].bRcvTimeout*/)
         os_thread_sem_post(l_stcbaInput[nInput].hSem);
 }
@@ -770,7 +785,34 @@ INT onps_input_sem_pend(INT nInput, INT nWaitSecs, EN_ONPSERR *penErr)
 
     if (INVALID_HSEM != l_stcbaInput[nInput].hSem && l_stcbaInput[nInput].bRcvTimeout)
     {
+        if (IPPROTO_TCP == (EN_IPPROTO)l_stcbaInput[nInput].ubIPProto)
+        {
+            static int debug_sem_pend_count = 0;
+            if (debug_sem_pend_count < 120)
+            {
+                PST_TCPLINK pstLink = (PST_TCPLINK)l_stcbaInput[nInput].pvAttach;
+                printf("[netdbg] input_sem_pend input=%d wait=%d state=%d rcved=%d wnd=%d timeout=%d\n",
+                       nInput, nWaitSecs, pstLink ? (int)pstLink->bState : -1,
+                       (int)l_stcbaInput[nInput].unRcvedBytes,
+                       pstLink ? (int)pstLink->stLocal.usWndSize : -1,
+                       (int)l_stcbaInput[nInput].bRcvTimeout);
+                debug_sem_pend_count++;
+            }
+        }
         INT nRtnVal = os_thread_sem_pend(l_stcbaInput[nInput].hSem, nWaitSecs);
+        if (IPPROTO_TCP == (EN_IPPROTO)l_stcbaInput[nInput].ubIPProto)
+        {
+            static int debug_sem_pend_ret_count = 0;
+            if (debug_sem_pend_ret_count < 120)
+            {
+                PST_TCPLINK pstLink = (PST_TCPLINK)l_stcbaInput[nInput].pvAttach;
+                printf("[netdbg] input_sem_pend_ret input=%d ret=%d state=%d rcved=%d wnd=%d\n",
+                       nInput, nRtnVal, pstLink ? (int)pstLink->bState : -1,
+                       (int)l_stcbaInput[nInput].unRcvedBytes,
+                       pstLink ? (int)pstLink->stLocal.usWndSize : -1);
+                debug_sem_pend_ret_count++;
+            }
+        }
         if (nRtnVal < 0)
         {
             if (penErr)
@@ -1092,6 +1134,16 @@ INT onps_input_tcp_recv(INT nInput, const UCHAR *pubData, INT nDataBytes, EN_ONP
     //* 本地已经关闭了发送，且到达的数据会被丢弃（主要是看着wireshark上的0窗口报警心烦）
     if (!pubData)
     {
+        static int debug_tcp_recv_null_count = 0;
+        if (debug_tcp_recv_null_count < 60)
+        {
+            PST_TCPLINK pstLink = (PST_TCPLINK)l_stcbaInput[nInput].pvAttach;
+            printf("[netdbg] input_tcp_recv_null input=%d state=%d rcved=%d wnd_before=%d\n",
+                   nInput, pstLink ? (int)pstLink->bState : -1,
+                   (int)l_stcbaInput[nInput].unRcvedBytes,
+                   pstLink ? (int)pstLink->stLocal.usWndSize : -1);
+            debug_tcp_recv_null_count++;
+        }
         ((PST_TCPLINK)l_stcbaInput[nInput].pvAttach)->stLocal.usWndSize = l_stcbaInput[nInput].unRcvBufSize;
         return 0;
     }
@@ -1133,6 +1185,18 @@ INT onps_input_tcp_recv(INT nInput, const UCHAR *pubData, INT nDataBytes, EN_ONP
             if (!((PST_TCPLINK)l_stcbaInput[nInput].pvAttach)->stLocal.usWndSize)
                 ((PST_TCPLINK)l_stcbaInput[nInput].pvAttach)->stLocal.bIsZeroWnd = TRUE;
 
+            static int debug_tcp_recv_count = 0;
+            if (debug_tcp_recv_count < 160)
+            {
+                PST_TCPLINK pstLink = (PST_TCPLINK)l_stcbaInput[nInput].pvAttach;
+                printf("[netdbg] input_tcp_recv input=%d packet=%d copied=%d rcved=%d wnd=%d state=%d\n",
+                       nInput, nDataBytes, (int)unCpyBytes,
+                       (int)l_stcbaInput[nInput].unRcvedBytes,
+                       pstLink ? (int)pstLink->stLocal.usWndSize : -1,
+                       pstLink ? (int)pstLink->bState : -1);
+                debug_tcp_recv_count++;
+            }
+
 #if SUPPORT_ETHERNET
             //* 如果接收队列不为NULL，则需要投递这个到达的数据到服务器接收队列
             if (pstRcvQueueNode)
@@ -1165,17 +1229,42 @@ INT onps_input_recv_upper(INT nInput, UCHAR *pubDataBuf, UINT unDataBufSize, voi
         return -1;
     }
 
-    //* tcp协议并且已经进入复位或处于关闭过程中则直接返回，不再搬运数据
+    //* TCP 已复位时直接报错；关闭态仍要先交付已缓存数据，缓存空了才向上报告 EOF。
     if (IPPROTO_TCP == (EN_IPPROTO)l_stcbaInput[nInput].ubIPProto)
     {
-        if (TLSRESET == (EN_TCPLINKSTATE)((PST_TCPLINK)l_stcbaInput[nInput].pvAttach)->bState)
+        PST_TCPLINK pstLink = (PST_TCPLINK)l_stcbaInput[nInput].pvAttach;
+        if (!pstLink)
+        {
+            if (penErr)
+                *penErr = ERRTCPLINKCBNULL;
+            return -1;
+        }
+
+        static int debug_upper_entry_count = 0;
+        if (debug_upper_entry_count < 160)
+        {
+            printf("[netdbg] input_recv_upper enter input=%d state=%d rcved=%d wnd=%d req=%d\n",
+                   nInput, (int)pstLink->bState,
+                   (int)l_stcbaInput[nInput].unRcvedBytes,
+                   (int)pstLink->stLocal.usWndSize,
+                   (int)unDataBufSize);
+            debug_upper_entry_count++;
+        }
+        EN_TCPLINKSTATE enState = (EN_TCPLINKSTATE)pstLink->bState;
+        if (TLSRESET == enState)
         {
             if (penErr)
                 *penErr = ERRTCPCONNRESET;
             return -1;
         }
-        else if (TLSTIMEWAIT == (EN_TCPLINKSTATE)((PST_TCPLINK)l_stcbaInput[nInput].pvAttach)->bState || TLSCLOSING == (EN_TCPLINKSTATE)((PST_TCPLINK)l_stcbaInput[nInput].pvAttach)->bState)
+        else if ((TLSTIMEWAIT == enState || TLSCLOSING == enState || TLSCLOSED == enState) &&
+                 !l_stcbaInput[nInput].unRcvedBytes)
         {
+            printf("[netdbg] input_recv_upper closed input=%d state=%d rcved=%d wnd=%d\n",
+                   nInput,
+                   (int)pstLink->bState,
+                   (int)l_stcbaInput[nInput].unRcvedBytes,
+                   (int)pstLink->stLocal.usWndSize);
             if (penErr)
                 *penErr = ERRTCPCONNCLOSED;
             return -1;
@@ -1203,6 +1292,17 @@ INT onps_input_recv_upper(INT nInput, UCHAR *pubDataBuf, UINT unDataBufSize, voi
 
             //* 如果当前input绑定的协议为tcp，则立即更新接收窗口大小
             ((PST_TCPLINK)l_stcbaInput[nInput].pvAttach)->stLocal.usWndSize = l_stcbaInput[nInput].unRcvBufSize - l_stcbaInput[nInput].unRcvedBytes;
+            static int debug_upper_copy_count = 0;
+            if (debug_upper_copy_count < 160)
+            {
+                PST_TCPLINK pstLink = (PST_TCPLINK)l_stcbaInput[nInput].pvAttach;
+                printf("[netdbg] input_recv_upper copy input=%d copy=%d remain=%d wnd=%d state=%d\n",
+                       nInput, (int)unCpyBytes,
+                       (int)l_stcbaInput[nInput].unRcvedBytes,
+                       pstLink ? (int)pstLink->stLocal.usWndSize : -1,
+                       pstLink ? (int)pstLink->bState : -1);
+                debug_upper_copy_count++;
+            }
             nRtnVal = (INT)unCpyBytes;
         }
         else if (IPPROTO_UDP == (EN_IPPROTO)l_stcbaInput[nInput].ubIPProto)
