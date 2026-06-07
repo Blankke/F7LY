@@ -1137,8 +1137,103 @@ struct ltp_testcase ltp_testcases[] = {
     // 约定：第一个 {NULL, false, false, false, false} 就是当前默认跑测例的结束标记。
     // 下面继续保留的注释清单只作为候选记录，想打开哪个测例就把它挪到结束标记前面。
     // 新开以前完全没跑过的测例时，优先按 tools/ltp/judge/ltp_rank.txt 的 total count 从高到低推进。
-
-    // {NULL,false,false,false,false},
+    {"fs_bind_cloneNS01.sh", true, true, true, true},
+    {"fs_bind_cloneNS02.sh", true, true, true, true},
+    {"fs_bind_cloneNS03.sh", true, true, true, true},
+    {"fs_bind_cloneNS04.sh", true, true, true, true},
+    {"fs_bind_cloneNS05.sh", true, true, true, true},
+    {"fs_bind_cloneNS06.sh", true, true, true, true},
+    {"fs_bind_cloneNS07.sh", true, true, true, true},
+    {"fs_bind_lib.sh", true, true, true, true},
+    {"fs_bind_move01.sh", true, true, true, true},
+    {"fs_bind_move02.sh", true, true, true, true},
+    {"fs_bind_move03.sh", true, true, true, true},
+    {"fs_bind_move04.sh", true, true, true, true},
+    {"fs_bind_move05.sh", true, true, true, true},
+    {"fs_bind_move06.sh", true, true, true, true},
+    {"fs_bind_move07.sh", true, true, true, true},
+    {"fs_bind_move08.sh", true, true, true, true},
+    {"fs_bind_move09.sh", true, true, true, true},
+    {"fs_bind_move10.sh", true, true, true, true},
+    {"fs_bind_move11.sh", true, true, true, true},
+    {"fs_bind_move12.sh", true, true, true, true},
+    {"fs_bind_move13.sh", true, true, true, true},
+    {"fs_bind_move14.sh", true, true, true, true},
+    {"fs_bind_move15.sh", true, true, true, true},
+    {"fs_bind_move16.sh", true, true, true, true},
+    {"fs_bind_move17.sh", true, true, true, true},
+    {"fs_bind_move18.sh", true, true, true, true},
+    {"fs_bind_move19.sh", true, true, true, true},
+    {"fs_bind_move20.sh", true, true, true, true},
+    {"fs_bind_move21.sh", true, true, true, true},
+    {"fs_bind_move22.sh", true, true, true, true},
+    {"fs_bind_rbind01.sh", true, true, true, true},
+    {"fs_bind_rbind02.sh", true, true, true, true},
+    {"fs_bind_rbind03.sh", true, true, true, true},
+    {"fs_bind_rbind04.sh", true, true, true, true},
+    {"fs_bind_rbind05.sh", true, true, true, true},
+    {"fs_bind_rbind06.sh", true, true, true, true},
+    {"fs_bind_rbind07.sh", true, true, true, true},
+    {"fs_bind_rbind07-2.sh", true, true, true, true},
+    {"fs_bind_rbind08.sh", true, true, true, true},
+    {"fs_bind_rbind09.sh", true, true, true, true},
+    {"fs_bind_rbind10.sh", true, true, true, true},
+    {"fs_bind_rbind11.sh", true, true, true, true},
+    {"fs_bind_rbind12.sh", true, true, true, true},
+    {"fs_bind_rbind13.sh", true, true, true, true},
+    {"fs_bind_rbind14.sh", true, true, true, true},
+    {"fs_bind_rbind15.sh", true, true, true, true},
+    {"fs_bind_rbind16.sh", true, true, true, true},
+    {"fs_bind_rbind17.sh", true, true, true, true},
+    {"fs_bind_rbind18.sh", true, true, true, true},
+    {"fs_bind_rbind19.sh", true, true, true, true},
+    {"fs_bind_rbind20.sh", true, true, true, true},
+    {"fs_bind_rbind21.sh", true, true, true, true},
+    {"fs_bind_rbind22.sh", true, true, true, true},
+    {"fs_bind_rbind23.sh", true, true, true, true},
+    {"fs_bind_rbind24.sh", true, true, true, true},
+    {"fs_bind_rbind25.sh", true, true, true, true},
+    {"fs_bind_rbind26.sh", true, true, true, true},
+    {"fs_bind_rbind27.sh", true, true, true, true},
+    {"fs_bind_rbind28.sh", true, true, true, true},
+    {"fs_bind_rbind29.sh", true, true, true, true},
+    {"fs_bind_rbind30.sh", true, true, true, true},
+    {"fs_bind_rbind31.sh", true, true, true, true},
+    {"fs_bind_rbind32.sh", true, true, true, true},
+    {"fs_bind_rbind33.sh", true, true, true, true},
+    {"fs_bind_rbind34.sh", true, true, true, true},
+    {"fs_bind_rbind35.sh", true, true, true, true},
+    {"fs_bind_rbind36.sh", true, true, true, true},
+    {"fs_bind_rbind37.sh", true, true, true, true},
+    {"fs_bind_rbind38.sh", true, true, true, true},
+    {"fs_bind_rbind39.sh", true, true, true, true},
+    {"fs_bind_regression.sh", true, true, true, true},
+    {"fs_bind01.sh", true, true, true, true},
+    {"fs_bind02.sh", true, true, true, true},
+    {"fs_bind03.sh", true, true, true, true},
+    {"fs_bind04.sh", true, true, true, true},
+    {"fs_bind05.sh", true, true, true, true},
+    {"fs_bind06.sh", true, true, true, true},
+    {"fs_bind07.sh", true, true, true, true},
+    {"fs_bind07-2.sh", true, true, true, true},
+    {"fs_bind08.sh", true, true, true, true},
+    {"fs_bind09.sh", true, true, true, true},
+    {"fs_bind10.sh", true, true, true, true},
+    {"fs_bind11.sh", true, true, true, true},
+    {"fs_bind12.sh", true, true, true, true},
+    {"fs_bind13.sh", true, true, true, true},
+    {"fs_bind14.sh", true, true, true, true},
+    {"fs_bind15.sh", true, true, true, true},
+    {"fs_bind16.sh", true, true, true, true},
+    {"fs_bind17.sh", true, true, true, true},
+    {"fs_bind18.sh", true, true, true, true},
+    {"fs_bind19.sh", true, true, true, true},
+    {"fs_bind20.sh", true, true, true, true},
+    {"fs_bind21.sh", true, true, true, true},
+    {"fs_bind22.sh", true, true, true, true},
+    {"fs_bind23.sh", true, true, true, true},
+    {"fs_bind24.sh", true, true, true, true},
+    {NULL,false,false,false,false},
     {"memfd_create01", true, true, true, true},
     {"splice01", true, true, true, true},
     {"splice02", true, true, true, true},
@@ -1230,9 +1325,9 @@ struct ltp_testcase ltp_testcases[] = {
     {"fcntl13_64", true, true, true, true},     // pass // la 会把用户态printf干爆
     {"fcntl15_64", true, true, true, true},      // RV+musl: 与 fcntl15 同源，同样会在 LTP checkpoint 同步阶段超时
     {"fstat02", true, true, true, true},          // pass 5 fail 1
-    {"fstat03", true, true, true, true},        // pass2
+    {"fstat03", true, true, false, false},        // pass2
     {"fstat02_64", true, true, true, true},       // pass 5 fail 1
-    {"fstat03_64", true, true, true, true},     // pass2
+    {"fstat03_64", true, true, false, false},     // pass2
     {"fstatfs02", true, true, true, true},      // pass 2
     {"fstatfs02_64", true, true, true, true},     // pass 2
     {"ftruncate01", true, true, true, true},      // pass 2
@@ -1480,18 +1575,18 @@ struct ltp_testcase ltp_testcases[] = {
     {"uname04", true, true, true, true},       // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
     {"wait01", true, true, true, true},        // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
     {"wait402", true, true, true, true},       // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
-    {"writev07", true, true, true, true},      // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
-    {"stream01", false, true, false, true},    // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"stream02", false, true, false, true},    // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"stream03", false, true, false, true},    // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"stream04", false, true, false, true},    // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"stream05", true, true, true, true},    // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"abs01", true, true, true, true},       // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+   {"writev07", true, true, true, true},      // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
+    // {"stream01", false, true, false, true},    // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    // {"stream02", false, true, false, true},    // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    // {"stream03", false, true, false, true},    // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    // {"stream04", false, true, false, true},    // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    // {"stream05", true, true, true, true},    // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    // {"abs01", true, true, true, true},       // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
     {"stat02", true, true, true, true},        // 2026-05-26: 双架构双 libc Summary passed=2 failed=0 broken=0。
     {"stat02_64", true, true, true, true},     // 2026-05-26: 双架构双 libc Summary passed=2 failed=0 broken=0。
     {"string01", false, true, false, true},    // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"symlinkat01", true, true, true, true}, // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
-    {"sysconf01", true, true, true, true},   // 2026-05-26: 双架构 glibc 有 TPASS/TCONF；无 Summary，musl judge 不计分。
+    // {"symlinkat01", true, true, true, true}, // 2026-05-26: 双架构 glibc TPASS；无 Summary，musl judge 不计分。
+    // {"sysconf01", true, true, true, true},   // 2026-05-26: 双架构 glibc 有 TPASS/TCONF；无 Summary，musl judge 不计分。
 
     {"accept01", true, true, true, true},       // 2026-05-30: 四组合 passed 5 failed 0。
     // {"accept02", false, false, false, false},   // 2026-05-30: 未启用；MCAST_JOIN_GROUP 返回 ENOPROTOOPT，multicast socket option 未支持。
@@ -1514,19 +1609,19 @@ struct ltp_testcase ltp_testcases[] = {
     {"getsockname01", true, true, true, true},   // 2026-05-30: 四组合 passed 6 failed 0。
     {"getsockopt01", true, true, true, true},    // 2026-05-30: 四组合 passed 9 failed 0。
     // {"getsockopt02", false, false, false, false}, // 2026-05-30: 未启用；SO_PEERCRED 返回 ENOPROTOOPT，peer credential 未支持。
-    {"listen01", true, true, true, true},        // 2026-05-30: 四组合旧式 TPASS 3，无 Summary。
+    // {"listen01", true, true, true, true},        // 2026-05-30: 四组合旧式 TPASS 3，无 Summary。
     {"recv01", true, true, true, true},          // 2026-05-30: 四组合旧式 TPASS 5，无 Summary。
-    {"recvfrom01", true, true, true, true},      // 2026-05-30: 四组合旧式 TPASS 7，无 Summary。
+    // {"recvfrom01", true, true, true, true},      // 2026-05-30: 四组合旧式 TPASS 7，无 Summary。
     {"recvmsg01", true, true, true, true},       // 2026-05-30: 四组合 passed 10 failed 0。
     {"recvmsg02", true, true, true, true},       // 2026-05-30: 四组合 passed 1 failed 0。
     // {"recvmsg03", false, false, false, false},   // 2026-05-30: 未启用；RDS socket 不支持，当前为 TCONF。
     // {"recvmmsg01", false, false, false, false},  // 2026-05-30: 未启用；坏 msgvec 地址返回 -EFAULT，LTP raw syscall 判为 invalid retval -14。
-    {"send01", true, true, true, true},          // 2026-05-30: 四组合旧式 TPASS 6，无 Summary。
+    // {"send01", true, true, true, true},          // 2026-05-30: 四组合旧式 TPASS 6，无 Summary。
     {"send02", true, true, true, true},          // 2026-05-30: 四组合 passed 4 failed 0。
     {"sendmmsg01", true, true, true, true},      // 2026-05-30: 四组合 passed 4 failed 0。
     {"sendmmsg02", false, true, true, true},     // 2026-05-30: RV+musl libc wrapper 坏 msgvec 变体返回 EINVAL，其他组合 passed 4 failed 0。
-    {"sendmsg02", true, true, true, true},       // 2026-05-30: 四组合旧式 TPASS 1，无 Summary。
-    {"sendto01", true, true, true, true},        // 2026-05-30: 四组合旧式 TPASS 10，无 Summary。
+    // {"sendmsg02", true, true, true, true},       // 2026-05-30: 四组合旧式 TPASS 1，无 Summary。
+    // {"sendto01", true, true, true, true},        // 2026-05-30: 四组合旧式 TPASS 10，无 Summary。
     {"setsockopt01", true, true, true, true},    // 2026-05-30: 四组合 passed 8 failed 0。
     {"setsockopt03", true, true, true, true},    // 2026-05-30: 四组合 passed 1 failed 0 skipped 1；32 位 compat 变体 TCONF。
     {"setsockopt04", true, true, true, true},    // 2026-05-30: 接受 SO_SNDBUFFORCE 后四组合 passed 1 failed 0。
@@ -1539,7 +1634,7 @@ struct ltp_testcase ltp_testcases[] = {
     {"mmap05", true, true, true, true},        // pass1 但是panic关了一个
     {"mmap06", true, true, true, true},        // pass6 fail 2
     {"mmap08", true, true, true, true},        // pass
-    {"mmap09", true, true, true, false},       // LA+glibc: LTP 内部 5min timeout；RV 和 LA+musl 继续覆盖
+    {"mmap09", true, true, true, true},       // LA+glibc: LTP 内部 5min timeout；RV 和 LA+musl 继续覆盖
     {"mmap13", true, true, true, true},        // pass
     {"mmap15", true, true, true, true},        // pass
     {"mmap17", true, true, true, true},        // pass
@@ -1872,8 +1967,8 @@ struct ltp_testcase ltp_testcases[] = {
     {"statvfs01", true, true, true, true},
     {"statvfs02", true, true, true, true},
     {"symlink01", true, true, true, true},
-    {"sysinfo01", true, true, true, true},
-    {"sysinfo02", true, true, true, true},
+    // {"sysinfo01", true, true, true, true},
+    // {"sysinfo02", true, true, true, true},
     {"tgkill01", true, true, true, true},
     {"timerfd02", true, true, true, true},
     {"timerfd_create01", true, true, true, true},

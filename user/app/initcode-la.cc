@@ -5,13 +5,13 @@ extern "C"
     __attribute__((section(".text.startup"))) int main()
     {
         init_env("/musl/");
+        ltp_test(true);
+        ltp_test(false);
         basic_test("/musl/");
         basic_test("/glibc/");
         lua_test("/musl/");
         lua_test("/glibc/");
         libc_test("/musl/");
-        ltp_test(true);
-        ltp_test(false);
         netperf_test("/musl/");
         netperf_test("/glibc/");
         iperf_test("/musl/");
