@@ -99,6 +99,9 @@ static int socket_tcp_connect(SOCKET socket, PST_TCPUDP_HANDLE pstHandle, HSEM h
 {
     EN_ONPSERR enErr = ERRNO;
 
+    printf("[netdbg] bsd_tcp_connect start sock=%d port=%d timeout=%d local_port=%d\n",
+           (int)socket, (int)srv_port, nConnTimeout,
+           pstHandle ? (int)pstHandle->stSockAddr.usPort : -1);
 #if SUPPORT_IPV6
     INT nRtnVal;
     if (AF_INET == pstHandle->bFamily)
@@ -113,6 +116,7 @@ static int socket_tcp_connect(SOCKET socket, PST_TCPUDP_HANDLE pstHandle, HSEM h
     {
     __lblWait:
         //* 等待信号到达：超时或者收到syn ack同时本地回馈的syn ack的ack发送成功
+        printf("[netdbg] bsd_tcp_connect wait sock=%d\n", (int)socket);
         if (os_thread_sem_pend(hSem, 0) < 0)
         {
             onps_set_last_error((INT)socket, ERRINVALIDSEM);
@@ -129,6 +133,8 @@ static int socket_tcp_connect(SOCKET socket, PST_TCPUDP_HANDLE pstHandle, HSEM h
         if (TLSSYNSENT == enLinkState)
             goto __lblWait;
 
+        printf("[netdbg] bsd_tcp_connect state sock=%d state=%d\n",
+               (int)socket, (int)enLinkState);
         switch (enLinkState)
         {
         case TLSCONNECTED:
@@ -151,7 +157,11 @@ static int socket_tcp_connect(SOCKET socket, PST_TCPUDP_HANDLE pstHandle, HSEM h
         }
     }
     else
+    {
+        printf("[netdbg] bsd_tcp_connect send_syn_failed sock=%d ret=%d err=%d\n",
+               (int)socket, nRtnVal, (int)enErr);
         return -1;
+    }
 }
 
 static int socket_tcp_connect_nb(SOCKET socket, PST_TCPUDP_HANDLE pstHandle, void *srv_ip, unsigned short srv_port, EN_TCPLINKSTATE enLinkState)
@@ -221,6 +231,8 @@ static int socket_connect(SOCKET socket, PST_TCPUDP_HANDLE pstHandleInput, void 
         EN_TCPLINKSTATE enLinkState;
         if (!onps_input_get((INT)socket, IOPT_GETTCPLINKSTATE, &enLinkState, &enErr))
             goto __lblErr;
+        printf("[netdbg] bsd_socket_connect tcp sock=%d state=%d port=%d timeout=%d\n",
+               (int)socket, (int)enLinkState, (int)srv_port, nConnTimeout);
 
         //* 无效，意味着当前TCP连接链路尚未申请一个tcp link节点，需要在这里申请
         if (TLSINVALID == enLinkState)
