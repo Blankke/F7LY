@@ -45,9 +45,7 @@ namespace dev
 		DeviceTableEntry &te = _device_table[tei];
 		te.device_ptr = dev;
 		te.device_name = name;
-		Info("\e[5m"
-			 "register device %s to No.%d\n",
-			 name, tei);
+		Info("register device %s to No.%d\n", name, tei);
 		return tei;
 	}
 

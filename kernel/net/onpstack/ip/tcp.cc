@@ -435,6 +435,9 @@ static void tcp_send_ack_of_syn_ack(INT nInput, PST_TCPLINK pstLink, void *pvNet
             onps_set_last_error(nInput, ERRSENDZEROBYTES);
     }
 
+    printf("[netdbg] tcp_synack_ack input=%d ret=%d state=%d err=%d timeout=%d\n",
+           nInput, nRtnVal, (int)pstLink->bState, (int)enErr,
+           (int)pstLink->stcbWaitAck.bRcvTimeout);
     if (pstLink->stcbWaitAck.bRcvTimeout)
         onps_input_sem_post(pstLink->stcbWaitAck.nInput);
 }
@@ -461,6 +464,8 @@ INT tcp_send_syn(INT nInput, in_addr_t unSrvAddr, USHORT usSrvPort, int nConnTim
 
     //* 先寻址，因为tcp校验和计算需要用到本地地址，同时当前tcp链路句柄也需要用此标识
     UINT unNetifIp = route_get_netif_ip(unSrvAddr);
+    printf("[netdbg] tcp_send_syn input=%d dst=%x:%d route_ip=%x timeout=%d\n",
+           nInput, (int)unSrvAddr, (int)usSrvPort, (int)unNetifIp, nConnTimeout);
     if (!unNetifIp)
     {
         onps_set_last_error(nInput, ERRADDRESSING);
@@ -503,6 +508,10 @@ INT tcp_send_syn(INT nInput, in_addr_t unSrvAddr, USHORT usSrvPort, int nConnTim
 #endif
     if (nRtnVal > 0)
     {
+        printf("[netdbg] tcp_send_syn sent input=%d local=%x:%d dst=%x:%d state=%d ret=%d\n",
+               nInput, (int)pstHandle->stSockAddr.saddr_ipv4,
+               (int)pstHandle->stSockAddr.usPort, (int)unSrvAddr,
+               (int)usSrvPort, (int)pstLink->bState, nRtnVal);
         //* 加入定时器队列
         /*
         pstLink->stcbWaitAck.bIsAcked = FALSE;
@@ -518,6 +527,8 @@ INT tcp_send_syn(INT nInput, in_addr_t unSrvAddr, USHORT usSrvPort, int nConnTim
     }
     else
     {
+        printf("[netdbg] tcp_send_syn failed input=%d ret=%d err=%d\n",
+               nInput, nRtnVal, (int)enErr);
         pstLink->bState = TLSINIT;
         one_shot_timer_safe_free(pstLink->stcbWaitAck.pstTimer);
 
@@ -1187,6 +1198,22 @@ void tcp_recv(void *pvSrcAddr, void *pvDstAddr, UCHAR *pubPacket, INT nPacketLen
 
     //* 先查找当前链路是否存在
     USHORT usDstPort = htons(pstHdr->usDstPort);
+#if defined(__riscv)
+    UINT unDebugSrcAddr = (UINT)unSrcAddr;
+    UINT unDebugDstAddr = (UINT)unDstAddr;
+#else
+    UINT unDebugSrcAddr = *((in_addr_t *)pvSrcAddr);
+    UINT unDebugDstAddr = *((in_addr_t *)pvDstAddr);
+#endif
+    static int debug_tcp_packet_count = 0;
+    if (debug_tcp_packet_count < 160)
+    {
+        printf("[netdbg] tcp_packet src_port=%d dst_port=%d flags=%x len=%d src=%x dst=%x\n",
+               (int)htons(pstHdr->usSrcPort), (int)usDstPort,
+               (int)pstHdr->usFlag, nPacketLen,
+               (int)unDebugSrcAddr, (int)unDebugDstAddr);
+        debug_tcp_packet_count++;
+    }
 #if SUPPORT_IPV6
     union
     {
@@ -1227,6 +1254,9 @@ void tcp_recv(void *pvSrcAddr, void *pvDstAddr, UCHAR *pubPacket, INT nPacketLen
 #endif
     if (nInput < 0)
     {
+        printf("[netdbg] tcp_packet_no_link dst_port=%d src_port=%d flags=%x src=%x dst=%x\n",
+               (int)usDstPort, (int)usCltPort, (int)pstHdr->usFlag,
+               (int)unCltIp, (int)unDebugDstAddr);
 #if SUPPORT_PRINTF && DEBUG_LEVEL > 3
         UCHAR *pubAddr = (UCHAR *)pvDstAddr;
 #if PRINTF_THREAD_MUTEX
@@ -1306,6 +1336,10 @@ void tcp_recv(void *pvSrcAddr, void *pvDstAddr, UCHAR *pubPacket, INT nPacketLen
         //* 连接请求的应答报文
         if (uniFlag.stb16.syn)
         {
+            printf("[netdbg] tcp_synack_candidate input=%d state=%d ack=%x local_seq=%x peer_seq=%x flags=%x\n",
+                   nInput, (int)pstLink->bState, (int)unSrcAckNum,
+                   (int)pstLink->stLocal.unSeqNum, (int)unPeerSeqNum,
+                   (int)pstHdr->usFlag);
             if (TLSSYNSENT == pstLink->bState && unSrcAckNum == pstLink->stLocal.unSeqNum + 1) //* 确定这是一个有效的syn ack报文才可进入下一个处理流程，否则报文将被直接抛弃
             {
                 pstLink->stcbWaitAck.bIsAcked = TRUE;
@@ -1355,6 +1389,15 @@ void tcp_recv(void *pvSrcAddr, void *pvDstAddr, UCHAR *pubPacket, INT nPacketLen
         }
         else if (uniFlag.stb16.fin)
         {
+            static int debug_fin_count = 0;
+            if (debug_fin_count < 80)
+            {
+                printf("[netdbg] tcp_fin input=%d state=%d data_send=%d rcved_timeout=%d peer_seq=%x pkt_len=%d hdr_len=%d\n",
+                       nInput, (int)pstLink->bState, (int)pstLink->stLocal.bDataSendState,
+                       (int)pstLink->stcbWaitAck.bRcvTimeout, (int)unPeerSeqNum,
+                       nPacketLen, nTcpHdrLen);
+                debug_fin_count++;
+            }
             if (pstLink->stLocal.bDataSendState == TDSSENDING)
             {
                 pstLink->stLocal.bDataSendState = TDSLINKCLOSED;
@@ -1400,6 +1443,8 @@ void tcp_recv(void *pvSrcAddr, void *pvDstAddr, UCHAR *pubPacket, INT nPacketLen
                     if (!pstLink->stcbWaitAck.pstTimer)
                         onps_set_last_error(pstLink->stcbWaitAck.nInput, ERRNOIDLETIMER);
                     onps_input_set_tcp_close_state(nInput, TLSTIMEWAIT); //* 等待对端的ACK，然后结束
+                    printf("[netdbg] tcp_fin state_after input=%d state=%d passive=%d\n",
+                           nInput, (int)pstLink->bState, (int)pstLink->bIsPassiveFin);
                 }
             }
             else if (TLSFINWAIT1 == (EN_TCPLINKSTATE)pstLink->bState)
@@ -1715,6 +1760,13 @@ INT tcp_recv_upper(INT nInput, UCHAR *pubDataBuf, UINT unDataBufSize, CHAR bRcvT
 
     //* 读取数据
     nRcvedBytes = onps_input_recv_upper(nInput, pubDataBuf, unDataBufSize, NULL, NULL, &enErr);
+    static int debug_tcp_upper_count = 0;
+    if (debug_tcp_upper_count < 160)
+    {
+        printf("[netdbg] tcp_recv_upper first input=%d ret=%d timeout=%d err=%d req=%d\n",
+               nInput, nRcvedBytes, (int)bRcvTimeout, (int)enErr, (int)unDataBufSize);
+        debug_tcp_upper_count++;
+    }
     if (nRcvedBytes > 0)
     {
         if (bRcvTimeout > 0)
@@ -1742,12 +1794,26 @@ INT tcp_recv_upper(INT nInput, UCHAR *pubDataBuf, UINT unDataBufSize, CHAR bRcvT
         }
         else
         {
+            static int debug_tcp_wait_forever_count = 0;
+            if (debug_tcp_wait_forever_count < 80)
+            {
+                printf("[netdbg] tcp_recv_upper wait_forever input=%d timeout=%d\n",
+                       nInput, (int)bRcvTimeout);
+                debug_tcp_wait_forever_count++;
+            }
             if (onps_input_sem_pend(nInput, 0, &enErr) < 0)
                 goto __lblErr;
         }
 
         //* 读取数据
         nRcvedBytes = onps_input_recv_upper(nInput, pubDataBuf, unDataBufSize, NULL, NULL, &enErr);
+        static int debug_tcp_upper_after_count = 0;
+        if (debug_tcp_upper_after_count < 160)
+        {
+            printf("[netdbg] tcp_recv_upper after_wait input=%d ret=%d err=%d wait_left=%d\n",
+                   nInput, nRcvedBytes, (int)enErr, (int)bWaitSecs);
+            debug_tcp_upper_after_count++;
+        }
         if (nRcvedBytes > 0)
             return nRcvedBytes;
         else
