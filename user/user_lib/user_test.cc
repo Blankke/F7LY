@@ -1218,8 +1218,8 @@ struct ltp_testcase ltp_testcases[] = {
     {"fcntl08", true, true, true, true},          // pass
     {"fcntl09", true, true, true, true},          // pass
     {"fcntl10", true, true, true, true},          // pass
-    {"fcntl13", true, true, false, false},        // pass // la 会把用户态printf干爆
-    {"fcntl15", false, true, true, true},         // RV+musl: LTP checkpoint/futex 同步稳定超时；glibc 和 LA 继续覆盖
+    {"fcntl13", true, true, true, true},        // pass // la 会把用户态printf干爆
+    {"fcntl15", true, true, true, true},         // RV+musl: LTP checkpoint/futex 同步稳定超时；glibc 和 LA 继续覆盖
     {"fcntl02_64", true, true, true, true},       // pass
     {"fcntl03_64", true, true, true, true},       // pass
     {"fcntl04_64", true, true, true, true},       // pass
@@ -1227,13 +1227,13 @@ struct ltp_testcase ltp_testcases[] = {
     {"fcntl08_64", true, true, true, true},       // pass
     {"fcntl09_64", true, true, true, true},       // pass
     {"fcntl10_64", true, true, true, true},       // pass
-    {"fcntl13_64", true, true, false, false},     // pass // la 会把用户态printf干爆
+    {"fcntl13_64", true, true, true, true},     // pass // la 会把用户态printf干爆
     {"fcntl15_64", true, true, true, true},      // RV+musl: 与 fcntl15 同源，同样会在 LTP checkpoint 同步阶段超时
     {"fstat02", true, true, true, true},          // pass 5 fail 1
-    {"fstat03", true, true, true, false},        // pass2
+    {"fstat03", true, true, true, true},        // pass2
     {"fstat02_64", true, true, true, true},       // pass 5 fail 1
-    {"fstat03_64", true, true, true, false},     // pass2
-    {"fstatfs02", true, true, false, false},      // pass 2
+    {"fstat03_64", true, true, true, true},     // pass2
+    {"fstatfs02", true, true, true, true},      // pass 2
     {"fstatfs02_64", true, true, true, true},     // pass 2
     {"ftruncate01", true, true, true, true},      // pass 2
     {"ftruncate01_64", true, true, true, true},   // pass 2
@@ -1251,7 +1251,7 @@ struct ltp_testcase ltp_testcases[] = {
     {"flistxattr02", true, true, true, true},     // pass 2
     {"flistxattr03", true, true, true, true},     // pass 2
     {"fpathconf01", true, true, true, true},      // pass
-    {"fsync02", true, true, false, false},        // pass
+    {"fsync02", true, true, true, true},        // pass
     {"fsync03", true, true, true, true},          // pass
     {"kill03", true, true, true, true},           // pass
     {"kill11", true, true, true, true},           // pass
@@ -1262,7 +1262,7 @@ struct ltp_testcase ltp_testcases[] = {
     {"waitpid09", true, true, true, true},       // RV+musl: LTP checkpoint/futex 同步稳定超时；glibc 和 LA 继续覆盖
     {"getcwd01", true, true, true, true},         // pass
     {"getcwd02", true, true, true, true},         // 完全PASS
-    {"getcwd03", true, true, false, false},       // pass
+    {"getcwd03", true, true, true, true},       // pass
     {"getpgid01", true, true, true, true},        // PASS
     {"getpgid02", true, true, true, true},        // PASS
     {"getpid02", true, true, true, true},         // PASS
@@ -1397,9 +1397,9 @@ struct ltp_testcase ltp_testcases[] = {
     {"stat01", true, true, true, true},        // passed   12
     {"stat03", true, true, true, true},        // pass4 fail2
     {"stat01_64", true, true, true, true},     // passed   12
-    {"stat03_64", true, true, false, false},   // pass4 fail2
-    {"statfs02", true, true, true, false},    // pass3fail3
-    {"statfs02_64", true, true, true, false}, // pass3fail3
+    {"stat03_64", true, true, true, true},   // pass4 fail2
+    {"statfs02", true, true, true, true},    // pass3fail3
+    {"statfs02_64", true, true, true, true}, // pass3fail3
     {"statx01", true, true, true, true},       // pass8 fail2
     {"statx02", true, true, true, true},       // pass4 fail1
     {"statx03", true, true, true, true},       // pass6 fail1
@@ -1414,28 +1414,28 @@ struct ltp_testcase ltp_testcases[] = {
     {"truncate03_64", true, true, true, true},
     {"uname01", true, true, true, true},      // 完全PASS
     {"uname02", true, true, true, true},      // 完全PASS
-    {"unlink05", true, true, true, false},   // pass
-    {"unlink07", true, true, true, false},   // pass
-    {"unlink08", true, true, true, false},   // pass2fail2
-    {"unlink09", true, true, false, false},   // pass
-    {"unlinkat01", true, true, true, false}, // passed   7
-    {"write01", true, true, true, false},    // 完全PASS
-    {"write02", true, true, true, false},    // pass
-    {"write03", true, true, true, false},    // 完全PASS
-    {"write04", true, true, false, false},
-    {"write05", true, true, true, false},  // passed   3
-    {"writev05", true, true, false, false}, // 完全PASS
-    {"writev06", true, true, false, false}, // 完全PASS
+    {"unlink05", true, true, true, true},   // pass
+    {"unlink07", true, true, true, true},   // pass
+    {"unlink08", true, true, true, true},   // pass2fail2
+    {"unlink09", true, true, true, true},   // pass
+    {"unlinkat01", true, true, true, true}, // passed   7
+    {"write01", true, true, true, true},    // 完全PASS
+    {"write02", true, true, true, true},    // pass
+    {"write03", true, true, true, true},    // 完全PASS
+    {"write04", true, true, true, true},
+    {"write05", true, true, true, true},  // passed   3
+    {"writev05", true, true, true, true}, // 完全PASS
+    {"writev06", true, true, true, true}, // 完全PASS
     {"execl01", true, true, true, true},    // PASS
     {"execle01", true, true, true, true},   // PASS
     {"execlp01", true, true, true, true},   // PASS
     {"execv01", true, true, true, true},    // PASS
     {"execve01", true, true, true, true},   // PASS
     {"execvp01", true, true, true, true},   // PASS
-    {"gettid01", true, true, true, false}, // PASS
-    {"set_tid_address01", true, true, true, false},
-    {"getpriority01", true, true, false, false},
-    {"getpriority02", true, true, false, false},
+    {"gettid01", true, true, true, true}, // PASS
+    {"set_tid_address01", true, true, true, true},
+    {"getpriority01", true, true, true, true},
+    {"getpriority02", true, true, true, true},
     {"setpriority02", true, true, false, false},
     {"alarm02", true, true, true, true},             // 2026-05-27: 扩展 probe 双架构验证，按 Summary/TPASS 规则开启通过组合。
     {"alarm03", true, false, true, false},           // 2026-05-27: musl Summary 通过；glibc 组合返回 TBROK，保持关闭。
@@ -1775,7 +1775,7 @@ struct ltp_testcase ltp_testcases[] = {
     {"inotify10", true, true, true, true},
     {"inotify11", true, true, true, true},
     {"inotify12", true, true, true, true},
-        {"abort01", true, true, true, true},
+    {"abort01", true, true, true, true},
     {"alarm05", true, true, true, true},
     {"alarm06", true, true, true, true},
     {"arping01.sh", false, false, false, false},  // 2026-05-30: 未纳入本轮复测；依赖 ARP/raw socket 与网络工具环境。
