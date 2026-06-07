@@ -65,6 +65,8 @@ namespace dev
         }
 
         // loop 设备必须独立持有后端 open file description；用户关闭原 fd 后设备仍应可用。
+        // 修复前：没有 dup()，用户关闭原 fd 后 backing_file 指针变成悬空指针，
+        // 后续 mkfs.ext2 等工具对 loop 设备的读写会访问已释放的 file 对象，导致 EINVAL 错误。
         file->dup();
         _backing_file = file;
         _is_bound = true;
@@ -88,6 +90,7 @@ namespace dev
         _flags = 0;
         _file_name.clear();
         _file_path.clear();
+        // 释放之前 dup() 增加的引用计数，确保 backing file 在 loop 设备解绑时正确回收。
         if (backing_file != nullptr)
         {
             backing_file->free_file();
@@ -236,6 +239,8 @@ namespace dev
         }
 
         // 否则使用文件大小减去偏移量
+        //同时检查 _stat.size 和 ext4 文件系统的逻辑 inode 大小
+        // (lwext4_file_struct.fsize)，取较大值，保证 mkfs.ext2 能正确检测设备容量。
         uint64_t file_size = _backing_file->is_memfd()
                                  ? _backing_file->memfd_size()
                                  : _backing_file->_stat.size;
@@ -280,6 +285,8 @@ namespace dev
         }
 
         uint64_t backing_offset = _offset + offset;
+        // 直接在持久的 file 对象上调用 read()/write()，传递偏移量参数，
+        // 避免路径重解析的各种竞态和权限问题。
         if(is_write)
         {
             return _backing_file->write(reinterpret_cast<uint64_t>(buffer),

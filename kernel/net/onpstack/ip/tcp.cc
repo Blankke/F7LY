@@ -1839,9 +1839,10 @@ static BOOL tcp_link_send_data(PST_TCPLINK pstLink)
 {
     //* 这一段代码能够成功运行的前提是tcp_link_ack_handler()函数必须与本函数放在同一个线程，且其在本函数之前，否则会出现因收到对应ack sequence num删除send timer导致系统宕机的问题
     //* 即使在这里加了tcp_send_timer_lock()线程锁，也无法保证得到的timer指针依然有效，所以必须同一线程且其在本函数之前执行
-    STCB_TCPSENDTIMER *pstcbSndTimerTemp = pstLink->stcbSend.pstcbSndTimer;
-    STCB_TCPSENDTIMER **ppstcbSndTimer = &pstcbSndTimerTemp;
     PSTCB_TCPSENDTIMER pstcbSndTimer = pstLink->stcbSend.pstcbSndTimer;
+    //这两行换到下面来就不会panic报错了。神秘小技巧，哈哈
+    void *pTempAddrInit = &pstLink->stcbSend.pstcbSndTimer;
+    STCB_TCPSENDTIMER **ppstcbSndTimer = (STCB_TCPSENDTIMER **)pTempAddrInit;
     CHAR i;
     for (i = 0; i < pstLink->stcbSend.bSendPacketNum; i++)
     {

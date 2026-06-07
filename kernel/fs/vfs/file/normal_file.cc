@@ -655,6 +655,13 @@ namespace fs
 
 		// ext4 支持稀疏文件。扩大 inode size 即可形成逻辑零洞，不能为大偏移
 		// 逐字节写零，否则 openat(O_LARGEFILE) 一次 4GiB seek 就会耗尽整个镜像。
+		//
+		// 修复前：没有此稀疏优化路径。当 mkfs.ext2 在 loop 设备后端文件上执行
+		// lseek + write 大偏移时，下面的 while 循环会逐 4K 页写零直到 target_off，
+		// 对于 seek 到 4GiB 这样的偏移量会瞬间耗尽磁盘空间，最终返回 ENOSPC 或
+		// 直接导致 write 失败，mkfs.ext2 报 "lseek(0, 2): Invalid argument"。
+		// 修复后：对 ext4 文件直接调用 ext4_ftruncate() 扩展 inode 逻辑大小，
+		// 利用稀疏文件特性在元数据层面形成零洞，无需实际写入任何数据。
 		if (!_unlinked_from_dir &&
 			lwext4_file_struct.mp != nullptr &&
 			lwext4_file_struct.inode != 0)

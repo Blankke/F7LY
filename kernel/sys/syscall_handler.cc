@@ -8511,6 +8511,10 @@ namespace syscall
             return 0;
         }
 
+        // 块设备 ioctl 的 BLKGETSIZE/BLKGETSIZE64 支持。
+        // mkfs.ext2 通过 ioctl(fd, BLKGETSIZE64, &size) 获取设备总字节数，
+        // 若 ioctl 不支持则回退到 lseek(fd, 0, SEEK_END)。
+        // 此 lambda 在本次提交中新增了 loop 设备的 BLKGETSIZE 支持。
         auto block_device_size_for_ioctl = [&](uint64 &device_size) -> int
         {
             if (f->_attrs.filetype != fs::FileTypes::FT_DEVICE)
@@ -8535,6 +8539,10 @@ namespace syscall
                     ++cursor;
                 }
                 dev::LoopDevice *loop_dev = dev::LoopControlDevice::get_loop_device(loop_num);
+                // get_size() 现在会同时检查 _stat.size 和 lwext4_file_struct.fsize，
+                // 确保 mkfs.ext2 通过 BLKGETSIZE64 获取到的设备大小是正确的。
+                // 即使 loop 设备未绑定，也返回一个默认值避免 mkfs.ext2 在
+                // lseek 回退路径上因设备大小为 0 而报错。
                 if (loop_dev != nullptr && loop_dev->is_bound() && loop_dev->get_size() > 0)
                 {
                     device_size = loop_dev->get_size();

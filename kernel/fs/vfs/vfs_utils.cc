@@ -2470,6 +2470,10 @@ int vfs_mknod(const eastl::string &path, mode_t mode, dev_t dev)
     case S_IFCHR:
     case S_IFBLK:
     {
+        // CAP_MKNOD(27) 检查：只有拥有该能力的进程才能创建块/字符设备节点。
+        // root 进程初始化时获得全部能力（包括 CAP_MKNOD），子进程 fork 时继承。
+        // LTP 测试框架以 root 身份运行，应具备 CAP_MKNOD；没有此检查前，
+        // loop 设备节点无法被正确创建，导致 mkfs.ext2 无法打开 /dev/loopN。
         constexpr uint32 cap_mknod = 27;
         bool has_cap_mknod =
             proc::k_capability.has_effective(current_proc, cap_mknod);
