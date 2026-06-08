@@ -4021,77 +4021,77 @@ struct ltp_testcase ltp_testcases[] = {
     // {"umount03", true, true, true, true},
     // {"umount2_01", true, true, true, true},
     // {"umount2_02", true, true, true, true},
-    // {"unshare01", true, true, true, true},
+    // {"unshare01", true, true, true, true},//fail3 TFAIL: unshare(CLONE_FILES) failed: ENOSYS (38)
     // {"unshare01.sh", true, true, true, true},
-    // {"unshare02", true, true, true, true},
+    // {"unshare02", true, true, true, true},//fail2 TFAIL: unshare(CLONE_NEWNS) expected EPERM: ENOSYS (38)
     // {"unzip01.sh", true, true, true, true},
-    // {"userfaultfd01", true, true, true, true},
-    // {"userns01", true, true, true, true},
-    // {"userns02", true, true, true, true},
-    // {"userns03", true, true, true, true},
-    // {"userns04", true, true, true, true},
-    // {"userns05", true, true, true, true},
-    // {"userns06", true, true, true, true},
-    // {"userns06_capcheck", true, true, true, true},
-    // {"userns07", true, true, true, true},
-    // {"userns08", true, true, true, true},
-    // {"ustat01", true, true, true, true},
-    // {"ustat02", true, true, true, true},
-    // {"utime05", true, true, true, true},
-    // {"utime06", true, true, true, true},
-    // {"utime07", true, true, true, true},
-    // {"utimes01", true, true, true, true},
-    // {"utsname01", true, true, true, true},
-    // {"utsname02", true, true, true, true},
-    // {"utsname03", true, true, true, true},
-    // {"utsname04", true, true, true, true},
-    // {"verify_caps_exec", true, true, true, true},
-    // {"vfork", true, true, true, true},
+    // {"userfaultfd01", true, true, true, true},//broken 1 TBROK: ioctl(3,((((2U|1U) << (((0+8)+8)+14)) | (((0xAA)) << (0+8)) | ((((0x3F))) << 0) | ((((sizeof(struct uffdio_api)))) << ((0+8)+8)))),...) failed: ENOTTY (25)
+    // {"userns01", true, true, true, true},//TCONF
+    // {"userns02", true, true, true, true},//TCONF
+    // {"userns03", true, true, true, true},//TCONF 
+    // {"userns04", true, true, true, true},//TCONF 
+    // {"userns05", true, true, true, true},//TCONF 
+    // {"userns06", true, true, true, true},//TCONF 
+    // {"userns06_capcheck", true, true, true, true},// TBROK: LTP_IPC_PATH is not defined
+    // {"userns07", true, true, true, true},//TCONF
+    // {"userns08", true, true, true, true},//TCONF
+    // {"ustat01", true, true, true, true},//TCONF
+    // {"ustat02", true, true, true, true},//TCONF
+    // {"utime05", true, true, true, true},//pass3
+    // {"utime06", true, true, true, true},//pass4
+    // {"utime07", true, true, true, true},//pass3 fail2
+    // {"utimes01", true, true, true, true},//pass6 fail1
+    // {"utsname01", true, true, true, true},//pass1
+    // {"utsname02", true, true, true, true},//panic: kernel/sys/syscall_handler.cc:17525: 未实现该系统调用
+    // {"utsname03", true, true, true, true},//panic: kernel/sys/syscall_handler.cc:17525: 未实现该系统调用
+    // {"utsname04", true, true, true, true},//pass2 fail2
+    // {"verify_caps_exec", true, true, true, true},//TCONF
+    // {"vfork", true, true, true, true},//TCONF
     // {"vfork_freeze.sh", true, true, true, true},
-    // {"vfork01", true, true, true, true},
-    // {"vfork02", true, true, true, true},
-    // {"vhangup01", true, true, true, true},
-    // {"vhangup02", true, true, true, true},
+    // {"vfork01", true, true, true, true},//TFAIL:Device/inode number of parent and childs '/'  don't match
+    // {"vfork02", true, true, true, true},//TPASS
+    // {"vhangup01", true, true, true, true},//TCONF: syscall(58) __NR_vhangup not supported on your arch
+    // {"vhangup02", true, true, true, true},//TCONF
     // {"virt_lib.sh", true, true, true, true},
-    // {"vma01", true, true, true, true}, //pass 没有summary
-    // {"vma02", true, true, true, true},
-    // {"vma03", true, true, true, true},
-    // {"vma04", true, true, true, true},
+    // {"vma01", true, true, true, true}, //TFAIL  :  vma01.c:190: A single 6*ps VMA found.
+    // {"vma02", true, true, true, true},//TCONF
+    // {"vma03", true, true, true, true},//TCONF
+    // {"vma04", true, true, true, true},//TCONF
     // {"vma05.sh", true, true, true, true},
-    // {"vma05_vdso", true, true, true, true},
-    // {"vmsplice01", true, true, true, true},
-    // {"vmsplice02", true, true, true, true},
-    // {"vmsplice03", true, true, true, true},
-    // {"vmsplice04", true, true, true, true},
+    // {"vma05_vdso", true, true, true, true},//fail
+    // {"vmsplice01", true, true, true, true},//TBROK: read(3,0x187970,131072) failed, returned 0: ENOENT (2)
+    // {"vmsplice02", true, true, true, true},//fail3
+    // {"vmsplice03", true, true, true, true},//fail1  TFAIL: vmsplice() didn't write anything
+    // {"vmsplice04", true, true, true, true},//fail2 
     // {"wait403", true, true, true, true}, // PASS
-    // {"waitid07", true, true, true, true},
-    // {"waitid08", true, true, true, true},
-    // {"waitid09", true, true, true, true},
-    // {"waitid10", true, true, true, true},
-    // {"waitpid10", true, true, true, true},
-    // {"waitpid11", true, true, true, true},
-    // {"waitpid12", true, true, true, true},
-    // {"waitpid13", true, true, true, true},
+    // {"waitid07", true, true, true, true},//PASS
+    // {"waitid08", true, true, true, true},//pass
+    // {"waitid09", true, true, true, true},//pass
+    // {"waitid10", true, true, true, true},//TBROK: Failed to open FILE '/proc/sys/kernel/core_pattern' for reading: ENOENT (2)
+    // {"waitpid10", true, true, true, true},//pass
+    // {"waitpid11", true, true, true, true},//pass
+    // {"waitpid12", true, true, true, true},//pass
+    // {"waitpid13", true, true, true, true},//pass
     // {"wc01.sh", true, true, true, true},
-    // {"which01.sh", true, true, true, true},
+    // {"which01.sh", true, true, true, true}, 
     // {"wireguard_lib.sh", true, true, true, true},
-    // {"wqueue01", true, true, true, true},
-    // {"wqueue02", true, true, true, true},
-    // {"wqueue03", true, true, true, true},
-    // {"wqueue04", true, true, true, true},
-    // {"wqueue05", true, true, true, true},
-    // {"wqueue06", true, true, true, true},
-    // {"wqueue07", true, true, true, true},
-    // {"wqueue08", true, true, true, true},
-    // {"wqueue09", true, true, true, true},
+    // {"wqueue01", true, true, true, true},//TCONF
+    // {"wqueue02", true, true, true, true},//TCONF
+    // {"wqueue03", true, true, true, true},//TCONF
+    // {"wqueue04", true, true, true, true},//TCONF
+    // {"wqueue05", true, true, true, true},//TCONF
+    // {"wqueue06", true, true, true, true},//TCONF
+    // {"wqueue07", true, true, true, true},//TCONF
+    // {"wqueue08", true, true, true, true},//TCONF
+    // {"wqueue09", true, true, true, true},//TCONF
     // {"write_freezing.sh", true, true, true, true},
-    // {"write06", true, true, true, true},
-    // {"writetest", true, true, true, true},
-    // {"writev03", true, true, true, true},
+    // {"write06", true, true, true, true},//pass
+    // {"writetest", true, true, true, true},//FAIL LTP CASE writetest: -11
+    // {"writev03", true, true, true, true},//TCONF
     // {"zram_lib.sh", true, true, true, true},
     // {"zram01.sh", true, true, true, true},
     // {"zram02.sh", true, true, true, true},
-    // {"zram03", true, true, true, true},
+    // {"zram03", true, true, true, true},//TCONF
 
 };
 int basic_musl_test(void)
