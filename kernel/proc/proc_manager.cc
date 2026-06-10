@@ -2016,7 +2016,9 @@ namespace proc
         Pcb *np = fork(p, flags, stack_ptr, ctid, is_clone3, exit_signal);
         if (np == nullptr)
         {
-            return -1; // EAGAIN: Out of memory
+            // fork 失败表示无可用 PCB 或内存不足，返回 EAGAIN 让用户态可重试。
+            // 注意：不要返回 -1，因为 -1 在 syscall 错误码约定中为 EPERM。
+            return syscall::SYS_EAGAIN;
         }
         int new_tid = np->_tid;
         uint64 new_pid = np->_pid;
@@ -2069,7 +2071,8 @@ namespace proc
             {
                 freeproc_creation_failed(np); // 使用专门的创建失败清理函数
                 np->_lock.release();
-                return -1; // EFAULT: Bad address
+                // 用户态传入的 parent_tid 地址不可写，返回 EFAULT。
+                return syscall::SYS_EFAULT;
             }
         }
         if (flags & syscall::CLONE_PARENT)
@@ -3139,12 +3142,61 @@ namespace proc
             p->_parent->_lock.acquire();
             p->_parent->_cutime += p->_user_ticks + p->_cutime;
             p->_parent->_cstime += p->_stime + p->_cstime;
+
+            // 判断父进程对该退出信号是否设置为 SIG_IGN 或 SA_NOCLDWAIT。
+            // Linux 语义：SIG_IGN 或 SA_NOCLDWAIT 下子进程应自动回收，不变成 zombie，
+            // 也不向父进程投递该信号。
+            bool auto_reap = false;
             if (p->_parent_exit_signal > 0)
             {
-                // 子任务退出必须生成 exit_signal；默认 SIGCHLD 的忽略/阻塞/handler 由信号层统一处理。
-                p->_parent->add_signal(p->_parent_exit_signal);
+                ipc::signal::sigaction *parent_act = nullptr;
+                if (p->_parent->_sigactions != nullptr)
+                {
+                    parent_act = p->_parent->_sigactions->actions[p->_parent_exit_signal];
+                }
+
+                if (parent_act != nullptr &&
+                    parent_act->sa_handler == reinterpret_cast<ipc::signal::__sighandler_t>(1))
+                {
+                    // 父进程将该信号设置为 SIG_IGN，自动回收子进程。
+                    auto_reap = true;
+                }
+                else if (p->_parent_exit_signal == ipc::signal::SIGCHLD &&
+                         parent_act != nullptr &&
+                         (parent_act->sa_flags & static_cast<uint64>(ipc::signal::SigActionFlags::NOCLDWAIT)) != 0)
+                {
+                    // 父进程设置了 SA_NOCLDWAIT，子进程自动回收。
+                    auto_reap = true;
+                }
+
+                if (!auto_reap)
+                {
+                    // 父进程需要接收退出信号；信号层会统一处理忽略/阻塞/handler。
+                    p->_parent->add_signal(p->_parent_exit_signal);
+                }
             }
             p->_parent->_lock.release();
+
+            if (auto_reap)
+            {
+                // 父进程已设置 SIG_IGN 或 SA_NOCLDWAIT，子进程应自动回收。
+                // 不走 zombie 等待流程，直接将 PCB 标记为 UNUSED 让调度器复用。
+                // 注意：进程内存、ofile、sighand 等已在前面阶段清理完毕。
+                p->_state = ProcState::UNUSED;
+                // 释放 trapframe 物理页，避免泄漏。
+                if (p->_trapframe != nullptr)
+                {
+                    mem::k_pmm.free_page(p->_trapframe);
+                    p->_trapframe = nullptr;
+                }
+                p->_parent->_lock.release();
+                _wait_lock.release();
+                Cpu::pop_intr_off();
+                // call_sched 要求持有当前进程锁，否则会触发断言。
+                p->_lock.acquire();
+                k_scheduler.call_sched();
+                panic("auto_reap exit: unreachable");
+            }
 
             // 唤醒父进程（可能在 wait() 中阻塞）
             wakeup(p->_parent);

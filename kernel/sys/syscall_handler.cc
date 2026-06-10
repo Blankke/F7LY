@@ -6216,7 +6216,7 @@ namespace syscall
         uint64 tms_addr;
 
         if (_arg_addr(0, tms_addr) < 0)
-            return -1;
+            return SYS_EFAULT;
 
         proc::k_pm.get_cur_proc_tms(&tms_val);
 
@@ -6224,7 +6224,7 @@ namespace syscall
         mem::PageTable *pt = p->get_pagetable();
         if (mem::k_vmm.copy_out(*pt, tms_addr, &tms_val, sizeof(tms_val)) <
             0)
-            return -1;
+            return SYS_EFAULT;
 
         return tmm::k_tm.get_ticks();
     }
