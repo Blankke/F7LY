@@ -121,6 +121,36 @@ namespace proc
             return 0;
         }
 
+        int read_elf_program_headers(const eastl::string &path,
+                                     const elf::elfhdr &header,
+                                     eastl::vector<elf::proghdr> &program_headers)
+        {
+            constexpr uint64 k_max_program_header_bytes = 64 * 1024;
+            if (header.phnum == 0 || header.phentsize != sizeof(elf::proghdr))
+            {
+                return -ENOEXEC;
+            }
+
+            uint64 table_size = static_cast<uint64>(header.phnum) * sizeof(elf::proghdr);
+            if (table_size > k_max_program_header_bytes ||
+                header.phoff > UINT64_MAX - table_size)
+            {
+                return -ENOEXEC;
+            }
+
+            /*
+             * 程序头属于同一张连续表。一次读入后供解释器发现、地址对齐和
+             * LOAD 段装载共同使用，避免 exec 对每个表项重复解析路径和打开 inode。
+             */
+            program_headers.resize(header.phnum);
+            uint read_count =
+                vfs_read_file(path.c_str(),
+                              reinterpret_cast<uint64>(program_headers.data()),
+                              header.phoff,
+                              static_cast<size_t>(table_size));
+            return read_count == table_size ? EOK : -EIO;
+        }
+
         int validate_execve_parent_components(const eastl::string &path)
         {
             if (path.empty() || path[0] != '/')
@@ -2989,10 +3019,36 @@ namespace proc
     /// @return 总是返回 0，失败情况下内部直接 panic。
     int ProcessManager::load_seg(mem::PageTable &pt, uint64 va, eastl::string &path, uint offset, uint size)
     { // 好像没有机会返回 -1, pa失败的话会panic，de的read也没有返回值
-        // panic("未实现");
-        // #ifdef FS_FIX_COMPLETELY
         uint i, n;
         uint64 pa;
+
+        /*
+         * ELF 段通常包含数百个页面。若逐页调用 vfs_read_file()，每一页都会
+         * 重新解析路径、打开 inode、seek 并关闭文件，进程频繁 exec 时开销会
+         * 被成倍放大。这里保持一个只读文件对象并顺序读取整个段。ELF 头和
+         * 程序头表已经通过普通读取更新过 atime，段数据不应再为每页重复提交。
+         */
+        fs::file *segment_file = nullptr;
+        int open_ret = vfs_openat(path, segment_file, O_RDONLY | O_NOATIME, 0);
+        if (open_ret < 0 || segment_file == nullptr)
+        {
+            return open_ret < 0 ? open_ret : -EIO;
+        }
+
+        auto close_segment_file = [&]()
+        {
+            if (segment_file != nullptr)
+            {
+                segment_file->free_file();
+                segment_file = nullptr;
+            }
+        };
+
+        if (segment_file->lseek(offset, SEEK_SET) < 0)
+        {
+            close_segment_file();
+            return -EIO;
+        }
 
         i = 0;
         if (!is_page_align(va)) // 如果va不是页对齐的，先读出开头不对齐的部分
@@ -3004,7 +3060,12 @@ namespace proc
             // printf("[load_seg] to vir pa: %p\n", pa);
 #endif
             n = PGROUNDUP(va) - va;
-            vfs_read_file(path.c_str(), pa, offset + i, n);
+            long read_count = segment_file->read(pa, n, -1, true);
+            if (read_count != static_cast<long>(n))
+            {
+                close_segment_file();
+                return -EIO;
+            }
 
             i += n;
         }
@@ -3029,9 +3090,15 @@ namespace proc
             pa = to_vir(pa);
 #endif
 
-            if (vfs_read_file(path.c_str(), pa, offset + i, n) != n) // 读取文件内容到物理内存
+            long read_count = segment_file->read(pa, n, -1, true);
+            if (read_count != static_cast<long>(n)) // 读取文件内容到物理内存
+            {
+                close_segment_file();
                 return -1;
+            }
         }
+
+        close_segment_file();
 
 #ifdef RISCV
         // 官方镜像不能原地修改；RISC-V musl 旧 clone() wrapper 在 NULL stack
@@ -5721,7 +5788,7 @@ namespace proc
         elf::elfhdr elf = {};  // ELF 文件头
         elf::proghdr ph = {};  // 程序头
         // fs::dentry *de;            // 目录项
-        int i, off; // 循环变量和偏移量
+        int i; // 循环变量
         int exec_error = -ENOEXEC;
 
         // 动态链接器相关
@@ -5923,21 +5990,21 @@ namespace proc
             bool load_bad = false; // 加载失败标志
 
             eastl::string interpreter_path;
+            eastl::vector<elf::proghdr> main_program_headers;
+            int main_ph_ret =
+                read_elf_program_headers(ab_path, elf, main_program_headers);
+            if (main_ph_ret < 0)
+            {
+                printfRed("execve: failed to read program header table for %s\n",
+                          ab_path.c_str());
+                CLEANUP_AND_RETURN(main_ph_ret);
+            }
             // fs::dentry *interp_de = nullptr;
 
             // 检查程序头中是否有PT_INTERP段
-            for (i = 0, off = elf.phoff; i < elf.phnum; i++, off += sizeof(ph))
+            for (i = 0; i < elf.phnum; ++i)
             {
-                // if (strcmp(ab_path.c_str(), "/mnt/musl/entry-dynamic.exe") != 0)
-                // {
-                //     printfCyan("execve: checking program header %d at offset %d\n", i, off);
-                //     break;
-                // }
-                if (vfs_read_file(ab_path.c_str(), reinterpret_cast<uint64>(&ph), off, sizeof(ph)) != sizeof(ph))
-                {
-                    printfRed("execve: failed to read program header %d for %s\n", i, ab_path.c_str());
-                    CLEANUP_AND_RETURN(-EIO);
-                }
+                ph = main_program_headers[i];
                 if (ph.type == elf::elfEnum::ELF_PROG_INTERP) // PT_INTERP = 3
                 {
                     // TODO, noderead在basic有时候乱码，故在下面设置interp_de = de;跳过动态链接
@@ -6050,18 +6117,9 @@ namespace proc
             {
                 uint64 main_load_align = PGSIZE;
                 uint64 main_min_vaddr = UINT64_MAX;
-                elf::proghdr load_align_ph;
-                for (int j = 0, load_off = elf.phoff;
-                     j < elf.phnum;
-                     ++j, load_off += sizeof(load_align_ph))
+                for (int j = 0; j < elf.phnum; ++j)
                 {
-                    if (vfs_read_file(ab_path.c_str(), reinterpret_cast<uint64>(&load_align_ph),
-                                      load_off, sizeof(load_align_ph)) != sizeof(load_align_ph))
-                    {
-                        printfRed("execve: failed to read PIE alignment header %d for %s\n",
-                                  j, ab_path.c_str());
-                        CLEANUP_AND_RETURN(-EIO);
-                    }
+                    const elf::proghdr &load_align_ph = main_program_headers[j];
                     if (load_align_ph.type != elf::elfEnum::ELF_PROG_LOAD)
                     {
                         continue;
@@ -6100,16 +6158,9 @@ namespace proc
             }
 
             // 遍历所有程序头，加载LOAD类型的段
-            for (i = 0, off = elf.phoff; i < elf.phnum; i++, off += sizeof(ph))
+            for (i = 0; i < elf.phnum; ++i)
             {
-                // 读取程序头
-                if (vfs_read_file(ab_path.c_str(), reinterpret_cast<uint64>(&ph), off, sizeof(ph)) != sizeof(ph))
-                {
-                    printfRed("execve: failed to read load header %d for %s\n", i, ab_path.c_str());
-                    exec_error = -EIO;
-                    load_bad = true;
-                    break;
-                }
+                ph = main_program_headers[i];
                 // printf("execve: loading segment %d, type: %d, vaddr: %p, memsz: %p, filesz: %p, flags: %d\n",
                 //        i, ph.type, (void *)ph.vaddr, (void *)ph.memsz, (void *)ph.filesz, ph.flags);
                 // 只处理LOAD类型的程序段
@@ -6309,21 +6360,28 @@ namespace proc
                 }
                 printfCyan("execve: dynamic linker ELF magic: %x\n", interp_elf.magic);
 
+                eastl::vector<elf::proghdr> interpreter_program_headers;
+                int interp_ph_ret =
+                    read_elf_program_headers(interpreter_path,
+                                             interp_elf,
+                                             interpreter_program_headers);
+                if (interp_ph_ret < 0)
+                {
+                    printfRed("execve: failed to read dynamic linker program header table: %s\n",
+                              interpreter_path.c_str());
+                    CLEANUP_AND_RETURN(interp_ph_ret);
+                }
+
                 // LoongArch 的 glibc 解释器要求按 ELF Program Header 的 p_align 装载。
                 // 之前直接按 4K 对齐塞到 highest_addr 之后，会把 16K 对齐的解释器放到错误基址，
                 // 导致动态链接器内部通过 load bias 推导出来的可写地址跑偏到只读段。
                 uint64 interp_load_align = PGSIZE;
                 uint64 interp_min_vaddr = UINT64_MAX;
 
-                elf::proghdr interp_align_ph;
-                for (int j = 0, interp_off = interp_elf.phoff; j < interp_elf.phnum; j++, interp_off += sizeof(interp_align_ph))
+                for (int j = 0; j < interp_elf.phnum; ++j)
                 {
-                    if (vfs_read_file(interpreter_path.c_str(), reinterpret_cast<uint64>(&interp_align_ph), interp_off, sizeof(interp_align_ph)) != sizeof(interp_align_ph))
-                    {
-                        printfRed("execve: failed to read dynamic linker align header %d: %s\n",
-                                  j, interpreter_path.c_str());
-                        CLEANUP_AND_RETURN(-EIO);
-                    }
+                    const elf::proghdr &interp_align_ph =
+                        interpreter_program_headers[j];
 
                     if (interp_align_ph.type != elf::elfEnum::ELF_PROG_LOAD)
                     {
@@ -6368,14 +6426,9 @@ namespace proc
                 elf::proghdr interp_ph;
                 uint64 linker_text_start = 0;
                 uint64 linker_text_end = 0;
-                for (int j = 0, interp_off = interp_elf.phoff; j < interp_elf.phnum; j++, interp_off += sizeof(interp_ph))
+                for (int j = 0; j < interp_elf.phnum; ++j)
                 {
-                    if (vfs_read_file(interpreter_path.c_str(), reinterpret_cast<uint64>(&interp_ph), interp_off, sizeof(interp_ph)) != sizeof(interp_ph))
-                    {
-                        printfRed("execve: failed to read dynamic linker header %d: %s\n",
-                                  j, interpreter_path.c_str());
-                        CLEANUP_AND_RETURN(-EIO);
-                    }
+                    interp_ph = interpreter_program_headers[j];
 
                     if (interp_ph.type != elf::elfEnum::ELF_PROG_LOAD)
                         continue;
