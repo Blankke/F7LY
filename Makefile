@@ -279,6 +279,10 @@ $(BUILD_DIR)/proc/proc_manager.o: CXXFLAGS += -Wno-error=uninitialized -Wno-unin
 # 继续做文件级豁免，避免把第三方模板假阳性扩散成全局降级。
 $(BUILD_DIR)/sys/syscall_handler.o: CXXFLAGS += -Wno-error=uninitialized -Wno-uninitialized
 
+# vfs_utils.cc 的路径规范化和挂载命名空间逻辑会组合 EASTL string/vector，
+# GCC 会在 EASTL vendor 模板内触发同类 uninitialized 误报，按编译单元局部豁免。
+$(BUILD_DIR)/fs/vfs/vfs_utils.o: CXXFLAGS += -Wno-error=uninitialized -Wno-uninitialized
+
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.cc
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@

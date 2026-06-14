@@ -159,7 +159,6 @@ int lua_test(const char *path);
 int basic_test(const char *path);
 int busybox_test(const char *path);
 int libc_test(const char *path);
-int libc_subset_test(const char *path, const char *const cases[]);
 int ltp_test(bool is_musl);
 int basic_subset_test(const char *path, const char *const cases[]);
 int ltp_subset_test(bool is_musl, const char *const cases[]);

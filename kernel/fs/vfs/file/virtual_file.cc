@@ -233,6 +233,7 @@ namespace fs
         // 之前这里写死成 /wcnmd，会让 df 等用户态工具去 stat 一个根本不存在的路径。
         append_mount_line(result, get_fs_by_mount_point("/"), "/dev/root");
         append_mount_line(result, get_fs_by_mount_point("/fat32"), "/dev/data");
+        vfs_append_mounts_snapshot(result);
         return result;
     }
 

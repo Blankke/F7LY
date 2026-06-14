@@ -52,11 +52,6 @@ static char **ltp_envp(bool is_musl)
     static char *musl_envp[] = {
         (char *)"PATH=/bin:/musl/ltp/testcases/bin",
         (char *)"LD_LIBRARY_PATH=/musl/lib",
-#ifdef LOONGARCH
-        // LoongArch QEMU 长回归里部分 LTP 用例会因为 fork/exec/shell 链路偏慢超过默认 30s。
-        // 外层 make run 仍有 timeout 兜底，这里只避免 LTP 自身过早 SIGKILL。
-        (char *)"LTP_TIMEOUT_MUL=10",
-#endif
         NULL};
     static char *glibc_envp[] = {
         (char *)"PATH=/bin:/glibc/ltp/testcases/bin",
@@ -109,6 +104,87 @@ static bool is_libctest_dynamic_case_available(const char *case_name)
     // 下面两个 case 只存在于 static entry；传给 dynamic entry 会返回 255，属于调度错误而不是测例失败。
     return strcmp(case_name, "tls_align") != 0 &&
            strcmp(case_name, "pthread_cancel_sem_wait") != 0;
+}
+
+static bool has_suffix(const char *text, const char *suffix)
+{
+    if (text == NULL || suffix == NULL)
+    {
+        return false;
+    }
+    size_t text_len = strlen(text);
+    size_t suffix_len = strlen(suffix);
+    if (suffix_len > text_len)
+    {
+        return false;
+    }
+    return strcmp(text + text_len - suffix_len, suffix) == 0;
+}
+
+static int run_ltp_case(const char *case_name, char *envp[])
+{
+    if (has_suffix(case_name, ".sh"))
+    {
+        /*
+         * 两个镜像对 /bin/sh 选择的 BusyBox shell 不一致，而 LTP 框架依赖 ash
+         * 支持的函数局部变量和间接展开语义。显式选择 ash 可保证脚本行为跨架构一致。
+         */
+        char *shell_argv[3] = {
+            (char *)"ash",
+            (char *)case_name,
+            NULL,
+        };
+        return run_test("/bin/ash", shell_argv, envp);
+    }
+
+    char *argv[2] = {
+        (char *)case_name,
+        NULL,
+    };
+    return run_test(case_name, argv, envp);
+}
+
+static int run_ltp_shell_batch(const char *const case_names[], int case_count, char *envp[])
+{
+    constexpr int max_batch_cases = 24;
+    if (case_names == NULL || case_count <= 0 || case_count > max_batch_cases)
+    {
+        return -1;
+    }
+
+    /*
+     * 每个脚本仍在独立子 shell 中运行，避免 trap、局部变量和工作目录互相污染；
+     * 外层 ash 只负责复用已经装载的解释器映像，减少连续脚本重复 exec 的开销。
+     */
+    static const char batch_command[] =
+        "failed=0; "
+        "for test; do "
+        "echo \"RUN LTP CASE $test\"; "
+        "( "
+        "TST_ID=${test%.sh}; "
+        "TST_TEST_PATH=\"$PWD/$test\"; "
+        "export TST_ID TST_TEST_PATH; "
+        "set --; "
+        ". \"./$test\" "
+        "); "
+        "result=$?; "
+        "echo \"FAIL LTP CASE $test: $result\"; "
+        "[ \"$result\" -ne 0 ] && failed=1; "
+        "done; "
+        "exit \"$failed\"";
+
+    char *argv[max_batch_cases + 5];
+    argv[0] = (char *)"ash";
+    argv[1] = (char *)"-c";
+    argv[2] = (char *)batch_command;
+    argv[3] = (char *)"ltp-shell-batch";
+    for (int i = 0; i < case_count; ++i)
+    {
+        argv[i + 4] = (char *)case_names[i];
+    }
+    argv[case_count + 4] = NULL;
+
+    return run_test("/bin/ash", argv, envp);
 }
 
 static bool ltp_case_enabled_for_current_combo(const ltp_testcase &testcase, bool is_musl)
@@ -299,6 +375,22 @@ static int run_case_list_in_dir(const char *dir, const char *group_name, const c
 
     int fail_count = 0;
     char *argv[2] = {0};
+    constexpr int max_shell_batch_cases = 24;
+    const char *shell_batch[max_shell_batch_cases];
+    int shell_batch_count = 0;
+    auto flush_shell_batch = [&]()
+    {
+        if (shell_batch_count == 0)
+        {
+            return;
+        }
+        if (run_ltp_shell_batch(shell_batch, shell_batch_count, envp) != 0)
+        {
+            fail_count++;
+        }
+        shell_batch_count = 0;
+    };
+
     if (group_name != 0)
     {
         printf("#### OS COMP TEST GROUP START %s ####\n", group_name);
@@ -310,17 +402,31 @@ static int run_case_list_in_dir(const char *dir, const char *group_name, const c
             HARNESS_PRINTF("SKIP LTP CASE %s (disabled for current LTP combo)\n", cases[i]);
             continue;
         }
-        argv[0] = (char *)cases[i];
+        if (filter_ltp_combo && has_suffix(cases[i], ".sh"))
+        {
+            shell_batch[shell_batch_count++] = cases[i];
+            if (shell_batch_count == max_shell_batch_cases)
+            {
+                flush_shell_batch();
+            }
+            continue;
+        }
+
+        flush_shell_batch();
         // 子集回归通常用于定向修复，必须稳定打印每个 case 的入口和返回值，
         // 避免非 debug 构建里 exec/等待失败被静默吞掉，导致日志只剩分组边界。
+        argv[0] = (char *)cases[i];
         printf("RUN CASE %s\n", cases[i]);
-        int result = run_test(cases[i], argv, envp);
+        int result = filter_ltp_combo
+                         ? run_ltp_case(cases[i], envp)
+                         : run_test(cases[i], argv, envp);
         printf("CASE RESULT %s: %d\n", cases[i], result);
         if (result != 0)
         {
             fail_count++;
         }
     }
+    flush_shell_batch();
     if (group_name != 0)
     {
         HARNESS_PRINTF("#### OS COMP TEST GROUP END %s (fail=%d) ####\n", group_name, fail_count);
@@ -869,9 +975,20 @@ int ltp_test(bool is_musl)
         return -1;
     }
     printf("#### OS COMP TEST GROUP START ltp-%s ####\n", is_musl ? "musl" : "glibc");
-    char *bb_sh[8] = {0};
     char **envp = ltp_envp(is_musl);
     int result = 0;
+    constexpr int max_shell_batch_cases = 24;
+    const char *shell_batch[max_shell_batch_cases];
+    int shell_batch_count = 0;
+    auto flush_shell_batch = [&]()
+    {
+        if (shell_batch_count == 0)
+        {
+            return;
+        }
+        result = run_ltp_shell_batch(shell_batch, shell_batch_count, envp);
+        shell_batch_count = 0;
+    };
 
     for (int i = 0; ltp_testcases[i].name != NULL; i++)
     {
@@ -880,13 +997,23 @@ int ltp_test(bool is_musl)
             printf("SKIP LTP CASE %s (disabled for current LTP combo)\n", ltp_testcases[i].name);
             continue;
         }
+        if (has_suffix(ltp_testcases[i].name, ".sh"))
+        {
+            shell_batch[shell_batch_count++] = ltp_testcases[i].name;
+            if (shell_batch_count == max_shell_batch_cases)
+            {
+                flush_shell_batch();
+            }
+            continue;
+        }
 
+        flush_shell_batch();
         printf("RUN LTP CASE %s\n", ltp_testcases[i].name);
-        bb_sh[0] = (char *)ltp_testcases[i].name;
-        result = run_test(ltp_testcases[i].name, bb_sh, envp);
+        result = run_ltp_case(ltp_testcases[i].name, envp);
         // oscomp glibc judge 依赖 FAIL LTP CASE 收束当前 case；ret=0 是正常结束。
         printf("FAIL LTP CASE %s: %d\n", ltp_testcases[i].name, result);
     }
+    flush_shell_batch();
     printf("#### OS COMP TEST GROUP END ltp-%s ####\n", is_musl ? "musl" : "glibc");
     return 0;
 }
@@ -1144,7 +1271,7 @@ struct ltp_testcase ltp_testcases[] = {
     {"fs_bind_cloneNS05.sh", true, true, true, true},
     {"fs_bind_cloneNS06.sh", true, true, true, true},
     {"fs_bind_cloneNS07.sh", true, true, true, true},
-    {"fs_bind_lib.sh", true, true, true, true},
+    // {"fs_bind_lib.sh", true, true, true, true},
     {"fs_bind_move01.sh", true, true, true, true},
     {"fs_bind_move02.sh", true, true, true, true},
     {"fs_bind_move03.sh", true, true, true, true},
@@ -1325,9 +1452,9 @@ struct ltp_testcase ltp_testcases[] = {
     {"fcntl13_64", true, true, true, true},     // pass // la 会把用户态printf干爆
     {"fcntl15_64", true, true, true, true},      // RV+musl: 与 fcntl15 同源，同样会在 LTP checkpoint 同步阶段超时
     {"fstat02", true, true, true, true},          // pass 5 fail 1
-    {"fstat03", true, true, false, false},        // pass2
+    {"fstat03", true, true, true, true},          // ET_DYN 主程序使用非零装载基址，空指针保持不可访问
     {"fstat02_64", true, true, true, true},       // pass 5 fail 1
-    {"fstat03_64", true, true, false, false},     // pass2
+    {"fstat03_64", true, true, true, true},       // ET_DYN 主程序使用非零装载基址，空指针保持不可访问
     {"fstatfs02", true, true, true, true},      // pass 2
     {"fstatfs02_64", true, true, true, true},     // pass 2
     {"ftruncate01", true, true, true, true},      // pass 2
