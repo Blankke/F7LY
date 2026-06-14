@@ -153,6 +153,7 @@ namespace fs
         bool remove_virtual_file(const eastl::string& path);
         bool is_virtual_path(const eastl::string& path) const;
         vfile_tree_node* get_virtual_node(const eastl::string& path) const;
+        int dynamic_file_type(const eastl::string& path) const;
         
         void list_virtual_files(const eastl::string& dir_path, 
                                eastl::vector<eastl::string>& file_list) const;
@@ -160,8 +161,11 @@ namespace fs
         bool is_file_exist(const eastl::string &path) const
         {
             vfile_tree_node *node = find_node_by_path(path);
+            int dynamic_type = dynamic_file_type(path);
 
-            return (node != nullptr && node->file_type != 0) || vfs_is_file_exist(path.c_str()); // 0表示不存在或不是文件
+            return (node != nullptr && node->file_type != 0) ||
+                   dynamic_type != 0 ||
+                   vfs_is_file_exist(path.c_str()); // 0表示不存在或不是文件
         }
         int path2filetype(eastl::string &absolute_path) const
         {
@@ -169,6 +173,11 @@ namespace fs
             if (node)
             {
                 return node->file_type;
+            }
+            int dynamic_type = dynamic_file_type(absolute_path);
+            if (dynamic_type != 0)
+            {
+                return dynamic_type;
             }
             else
             {

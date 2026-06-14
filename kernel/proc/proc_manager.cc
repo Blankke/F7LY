@@ -75,6 +75,7 @@ namespace proc
         }
         constexpr size_t k_linux_path_max = 4096;
         constexpr size_t k_linux_name_max = 255;
+        constexpr uint64 k_pie_load_base = 0x10000ULL;
 
         inline uint64 align_up_pow2(uint64 value, uint64 alignment)
         {
@@ -1176,6 +1177,8 @@ namespace proc
                 p->_timens_current = {};
                 p->_timens_children = {};
                 p->_ipc_ns_id = k_initial_ipc_namespace_id;
+                p->_mnt_ns_id = k_initial_mount_namespace_id;
+                vfs_hold_mount_namespace(p->_mnt_ns_id);
                 reset_interval_timers(p);      // interval timer 不能把上一个进程残留到复用的 PCB 上
 
                 // 更新上次分配的位置，轮转分配策略
@@ -1397,6 +1400,8 @@ namespace proc
         p->_timens_current = {};
         p->_timens_children = {};
         p->_netns = {};
+        vfs_put_mount_namespace(p->_mnt_ns_id);
+        p->_mnt_ns_id = k_initial_mount_namespace_id;
         reset_interval_timers(p);  // 清空 interval timer，避免 PCB 复用时带出历史状态
 
         /****************************************************************************************
@@ -2210,6 +2215,20 @@ namespace proc
         if (flags & syscall::CLONE_NEWIPC)
         {
             np->_ipc_ns_id = alloc_ipc_namespace_id();
+        }
+        /*
+         * mount namespace 保存的是挂载表视图。普通 fork/clone 共享同一视图，
+         * CLONE_NEWNS 则复制父进程当前视图，之后的 mount/umount 相互隔离。
+         */
+        vfs_put_mount_namespace(np->_mnt_ns_id);
+        if (flags & syscall::CLONE_NEWNS)
+        {
+            np->_mnt_ns_id = vfs_clone_mount_namespace(p->_mnt_ns_id);
+        }
+        else
+        {
+            np->_mnt_ns_id = p->_mnt_ns_id;
+            vfs_hold_mount_namespace(np->_mnt_ns_id);
         }
         if (flags & syscall::CLONE_NEWNET)
         {
@@ -3179,21 +3198,12 @@ namespace proc
 
             if (auto_reap)
             {
-                // 父进程已设置 SIG_IGN 或 SA_NOCLDWAIT，子进程应自动回收。
-                // 不走 zombie 等待流程，直接将 PCB 标记为 UNUSED 让调度器复用。
-                // 注意：进程内存、ofile、sighand 等已在前面阶段清理完毕。
-                p->_state = ProcState::UNUSED;
-                // 释放 trapframe 物理页，避免泄漏。
-                if (p->_trapframe != nullptr)
-                {
-                    mem::k_pmm.free_page(p->_trapframe);
-                    p->_trapframe = nullptr;
-                }
-                p->_parent->_lock.release();
+                // 父进程声明不保留退出状态时，当前任务仍需按统一 PCB 回收流程清理。
+                // freeproc() 会释放 trapframe 并重置所有可复用字段；这里不能半手工清理，
+                // 否则锁状态和文件/信号字段会和 wait4() 回收路径分叉。
+                freeproc(p);
                 _wait_lock.release();
                 Cpu::pop_intr_off();
-                // call_sched 要求持有当前进程锁，否则会触发断言。
-                p->_lock.acquire();
                 k_scheduler.call_sched();
                 panic("auto_reap exit: unreachable");
             }
@@ -5712,6 +5722,7 @@ namespace proc
         // 动态链接器相关
         elf::elfhdr interp_elf;
         uint64 interp_base = 0;
+        uint64 main_load_bias = 0;
         uint64 highest_addr = 0; // 记录最高地址，用于堆初始化
         uint64 user_page_granule = PGSIZE; // 记录用户态 ABI 期待的页粒度，供 auxv/动态链接器使用
         // ========== 第一阶段：路径解析和文件查找 ==========
@@ -6023,6 +6034,66 @@ namespace proc
                 }
             }
             // printfPink("checkpoint 1\n");
+            if (elf.type != elf::elfEnum::ELF_TYPE_EXEC &&
+                elf.type != elf::elfEnum::ELF_TYPE_DYN)
+            {
+                printfRed("execve: unsupported ELF type=%d for %s\n", elf.type, ab_path.c_str());
+                CLEANUP_AND_RETURN(-ENOEXEC);
+            }
+
+            if (elf.type == elf::elfEnum::ELF_TYPE_DYN)
+            {
+                uint64 main_load_align = PGSIZE;
+                uint64 main_min_vaddr = UINT64_MAX;
+                elf::proghdr load_align_ph;
+                for (int j = 0, load_off = elf.phoff;
+                     j < elf.phnum;
+                     ++j, load_off += sizeof(load_align_ph))
+                {
+                    if (vfs_read_file(ab_path.c_str(), reinterpret_cast<uint64>(&load_align_ph),
+                                      load_off, sizeof(load_align_ph)) != sizeof(load_align_ph))
+                    {
+                        printfRed("execve: failed to read PIE alignment header %d for %s\n",
+                                  j, ab_path.c_str());
+                        CLEANUP_AND_RETURN(-EIO);
+                    }
+                    if (load_align_ph.type != elf::elfEnum::ELF_PROG_LOAD)
+                    {
+                        continue;
+                    }
+
+                    uint64 segment_align = load_align_ph.align;
+                    if (segment_align < PGSIZE)
+                    {
+                        segment_align = PGSIZE;
+                    }
+                    if (segment_align > main_load_align)
+                    {
+                        main_load_align = segment_align;
+                    }
+
+                    uint64 aligned_vaddr = align_down_pow2(load_align_ph.vaddr, segment_align);
+                    if (aligned_vaddr < main_min_vaddr)
+                    {
+                        main_min_vaddr = aligned_vaddr;
+                    }
+                }
+
+                if (main_min_vaddr == UINT64_MAX || main_min_vaddr > k_pie_load_base)
+                {
+                    printfRed("execve: invalid PIE load range for %s\n", ab_path.c_str());
+                    CLEANUP_AND_RETURN(-ENOEXEC);
+                }
+
+                /*
+                 * ET_DYN 主程序的 p_vaddr 是相对地址，不能像 ET_EXEC 一样直接映射。
+                 * 固定但按最大 p_align 对齐的 load bias 同时保留零页保护，并让动态
+                 * 链接器可以通过 AT_PHDR/AT_ENTRY 正确恢复主程序的运行时基址。
+                 */
+                main_load_bias =
+                    align_up_pow2(k_pie_load_base - main_min_vaddr, main_load_align);
+            }
+
             // 遍历所有程序头，加载LOAD类型的段
             for (i = 0, off = elf.phoff; i < elf.phnum; i++, off += sizeof(ph))
             {
@@ -6039,7 +6110,7 @@ namespace proc
                 // 只处理LOAD类型的程序段
                 if (ph.type == elf::elfEnum::ELF_PROG_PHDR)
                 {
-                    phdr = ph.vaddr; // 记录程序头的虚拟地址
+                    phdr = main_load_bias + ph.vaddr; // 记录程序头的运行时虚拟地址
                 }
                 if (ph.type != elf::elfEnum::ELF_PROG_LOAD)
                     continue;
@@ -6092,9 +6163,19 @@ namespace proc
                 {
                     segment_align = PGSIZE;
                 }
-                uint64 segment_start = align_down_pow2(ph.vaddr, segment_align);
-                uint64 segment_end = align_up_pow2(ph.vaddr + ph.memsz, segment_align);
-                uint64 segment_prefix = ph.vaddr - segment_start;
+                uint64 file_segment_start = align_down_pow2(ph.vaddr, segment_align);
+                uint64 file_segment_end = align_up_pow2(ph.vaddr + ph.memsz, segment_align);
+                uint64 segment_start = main_load_bias + file_segment_start;
+                uint64 segment_end = main_load_bias + file_segment_end;
+                uint64 segment_prefix = ph.vaddr - file_segment_start;
+                if (segment_start < PGSIZE)
+                {
+                    // 用户零页必须始终保持未映射，空指针访问才能稳定触发 EFAULT/SIGSEGV。
+                    printfRed("execve: ELF segment overlaps null guard page\n");
+                    exec_error = -ENOEXEC;
+                    load_bad = true;
+                    break;
+                }
                 if (ph.off < segment_prefix)
                 {
                     printfRed("execve: invalid ELF segment, file offset underflow\n");
@@ -6657,7 +6738,7 @@ namespace proc
                 ADD_AUXV(AT_PHNUM, elf.phnum); // 程序头表项数量 // 这个有问题
             }
             ADD_AUXV(AT_BASE, interp_base); // 动态链接器基地址（保留）
-            ADD_AUXV(AT_ENTRY, elf.entry);  // 程序入口点地址
+            ADD_AUXV(AT_ENTRY, main_load_bias + elf.entry);  // 主程序运行时入口地址
             // ADD_AUXV(AT_SYSINFO_EHDR, 0); // 系统调用信息头（保留）
             // ADD_AUXV(AT_UID, 0);               // 用户ID
             // ADD_AUXV(AT_EUID, 0);              // 有效用户ID
@@ -6820,7 +6901,7 @@ namespace proc
         }
         else
         {
-            entry_point = elf.entry; // 静态链接时直接从程序入口开始
+            entry_point = main_load_bias + elf.entry; // 静态 PIE 同样需要应用 load bias
             printfCyan("execve: starting from program entry: %p\n", (void *)entry_point);
         }
 

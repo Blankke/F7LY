@@ -111,6 +111,44 @@ namespace syscall
             return 0;
         }
 
+        bool parse_proc_mount_namespace_path(const eastl::string &path, int &pid)
+        {
+            const char *prefix = "/proc/";
+            const char *suffix = "/ns/mnt";
+            size_t prefix_len = strlen(prefix);
+            size_t suffix_len = strlen(suffix);
+            if (path.length() <= prefix_len + suffix_len ||
+                path.compare(0, prefix_len, prefix) != 0 ||
+                path.compare(path.length() - suffix_len, suffix_len, suffix) != 0)
+            {
+                return false;
+            }
+
+            eastl::string id_part = path.substr(prefix_len, path.length() - prefix_len - suffix_len);
+            if (id_part == "self")
+            {
+                proc::Pcb *current = proc::k_pm.get_cur_pcb();
+                if (current == nullptr)
+                {
+                    return false;
+                }
+                pid = current->get_pid();
+                return true;
+            }
+
+            int parsed = 0;
+            for (char ch : id_part)
+            {
+                if (ch < '0' || ch > '9')
+                {
+                    return false;
+                }
+                parsed = parsed * 10 + (ch - '0');
+            }
+            pid = parsed;
+            return true;
+        }
+
 #ifdef LOONGARCH
         struct UserStatLayout
         {
@@ -5939,8 +5977,6 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_umount2()
     {
-        // panic("未实现");
-        // #ifdef FS_FIX_COMPLETELY
         uint64 specialaddr;
         eastl::string special;
         int flags;
@@ -5961,8 +5997,17 @@ namespace syscall
         }
 
         eastl::string abs_path = get_absolute_path(special.c_str(), cur->_cwd_name.c_str());
-        vfs_unregister_mount(abs_path);
-        return 0; // 未实现
+        constexpr int k_supported_umount_flags = 0x1 | 0x2 | 0x8; // FORCE、DETACH、NOFOLLOW
+        if ((flags & ~k_supported_umount_flags) != 0)
+        {
+            return -EINVAL;
+        }
+
+        /*
+         * VFS 负责弹出当前可见的挂载层并执行传播。必须把失败原样返回，
+         * 否则调用方会把未卸载的挂载误认为已经清理，最终形成无限重试。
+         */
+        return vfs_unregister_mount(abs_path);
     }
     uint64 SyscallHandler::sys_mount()
     {
@@ -5992,7 +6037,7 @@ namespace syscall
         int cpres = 0;
         if (dev_addr != 0)
         {
-            cpres = mem::k_vmm.copy_str_in(*pt, dev, dev_addr, 100);
+            cpres = mem::k_vmm.copy_str_in(*pt, dev, dev_addr, PATH_MAX);
             if (cpres < 0)
             {
                 printfRed("[sys_mount] Error copying source path from user space\n");
@@ -6001,7 +6046,7 @@ namespace syscall
         }
         if (mnt_addr == 0)
             return -EFAULT;
-        cpres = mem::k_vmm.copy_str_in(*pt, mnt, mnt_addr, 100);
+        cpres = mem::k_vmm.copy_str_in(*pt, mnt, mnt_addr, PATH_MAX);
         if (cpres < 0)
         {
             printfRed("[sys_mount] Error copying mount path from user space\n");
@@ -6009,7 +6054,7 @@ namespace syscall
         }
         if (fstype_addr != 0)
         {
-            cpres = mem::k_vmm.copy_str_in(*pt, fstype, fstype_addr, 100);
+            cpres = mem::k_vmm.copy_str_in(*pt, fstype, fstype_addr, 64);
             if (cpres < 0)
             {
                 printfRed("[sys_mount] Error copying filesystem type from user space\n");
@@ -6042,6 +6087,54 @@ namespace syscall
             return -ENOTDIR;
 
         bool read_only = (flags & MS_RDONLY) != 0;
+        const bool recursive = (flags & MS_REC) != 0;
+
+        if (flags & MS_BIND)
+        {
+            if (dev.empty())
+            {
+                return -EINVAL;
+            }
+            eastl::string abs_source = get_absolute_path(dev.c_str(), p->_cwd_name.c_str());
+            if (fs::k_vfs.is_file_exist(abs_source.c_str()) != 1)
+            {
+                return -ENOENT;
+            }
+            if (fs::k_vfs.path2filetype(abs_source) != fs::FileTypes::FT_DIRECT)
+            {
+                return -ENOTDIR;
+            }
+            return vfs_register_bind_mount(abs_source, abs_path, read_only, recursive);
+        }
+
+        if ((flags & (MS_SHARED | MS_PRIVATE | MS_SLAVE | MS_UNBINDABLE)) != 0)
+        {
+            VfsMountPropagation propagation = VFS_MOUNT_PRIVATE;
+            if (flags & MS_SHARED)
+                propagation = VFS_MOUNT_SHARED;
+            else if (flags & MS_SLAVE)
+                propagation = VFS_MOUNT_SLAVE;
+            else if (flags & MS_UNBINDABLE)
+                propagation = VFS_MOUNT_UNBINDABLE;
+
+            /*
+             * mount(2) 对动作标志按 bind、传播属性、move 的顺序判定。
+             * BusyBox 会组合 --bind 与 --make-*；此时应执行 bind 动作，
+             * 不能因传播位存在而跳过源路径绑定。
+             */
+            return vfs_set_mount_propagation(abs_path, propagation, recursive);
+        }
+
+        if (flags & MS_MOVE)
+        {
+            if (dev.empty())
+            {
+                return -EINVAL;
+            }
+            eastl::string abs_source = get_absolute_path(dev.c_str(), p->_cwd_name.c_str());
+            return vfs_move_mount(abs_source, abs_path);
+        }
+
         vfs_register_mount(abs_path, read_only);
 
         // int ret = fs_mount(TMPDEV, EXT4, (char*)abs_path.c_str(), flags, (void*)data); //< 挂载
@@ -11757,7 +11850,7 @@ namespace syscall
             return 0;
         }
 
-        constexpr int supported_unshare_flags = CLONE_NEWTIME | CLONE_NEWIPC;
+        constexpr int supported_unshare_flags = CLONE_NEWTIME | CLONE_NEWIPC | CLONE_NEWNS;
         if ((flags & ~supported_unshare_flags) != 0)
         {
             return SYS_ENOSYS;
@@ -11786,6 +11879,12 @@ namespace syscall
         if (flags & CLONE_NEWIPC)
         {
             proc::k_pm.unshare_ipc_namespace(p);
+        }
+        if (flags & CLONE_NEWNS)
+        {
+            uint64 new_mnt_ns = vfs_clone_mount_namespace(p->_mnt_ns_id);
+            vfs_put_mount_namespace(p->_mnt_ns_id);
+            p->_mnt_ns_id = new_mnt_ns;
         }
         return 0;
     }
@@ -15113,9 +15212,15 @@ namespace syscall
 
         fs::time_namespace_snapshot time_ns_snapshot{};
         bool has_time_ns_snapshot = f->get_time_namespace_snapshot(time_ns_snapshot);
+        int target_mnt_ns_pid = -1;
+        bool has_mount_ns_snapshot = parse_proc_mount_namespace_path(f->_path_name, target_mnt_ns_pid);
         if (nstype == 0 && has_time_ns_snapshot)
         {
             nstype = CLONE_NEWTIME;
+        }
+        if (nstype == 0 && has_mount_ns_snapshot)
+        {
+            nstype = CLONE_NEWNS;
         }
 
         // 验证 nstype 参数
@@ -15199,6 +15304,24 @@ namespace syscall
 
         case CLONE_NEWNS:
             printfCyan("[SyscallHandler::sys_setns] Joining mount namespace\n");
+            if (!has_mount_ns_snapshot)
+            {
+                return SYS_EINVAL;
+            }
+            {
+                proc::Pcb *target = proc::k_pm.find_proc_by_pid(target_mnt_ns_pid);
+                if (target == nullptr || !vfs_mount_namespace_exists(target->_mnt_ns_id))
+                {
+                    return SYS_ENOENT;
+                }
+                if (target->_mnt_ns_id != p->_mnt_ns_id)
+                {
+                    uint64 old_ns = p->_mnt_ns_id;
+                    vfs_hold_mount_namespace(target->_mnt_ns_id);
+                    p->_mnt_ns_id = target->_mnt_ns_id;
+                    vfs_put_mount_namespace(old_ns);
+                }
+            }
             break;
 
         case CLONE_NEWPID:

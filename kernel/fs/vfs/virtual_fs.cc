@@ -587,6 +587,25 @@ namespace fs
             return 0;
         }
 
+        int dynamic_type = dynamic_file_type(absolute_path);
+        if (!node && dynamic_type != 0)
+        {
+            fs::FileAttrs attrs;
+            attrs.filetype = static_cast<fs::FileTypes>(dynamic_type);
+            attrs._value = dynamic_type == fs::FileTypes::FT_DIRECT ? 0555 : 0444;
+
+            eastl::unique_ptr<VirtualContentProvider> provider = nullptr;
+            if (absolute_path.find("/ns/mnt") != eastl::string::npos)
+            {
+                // namespace 文件在当前内核中作为稳定句柄使用；setns() 根据路径和类型完成校验。
+                provider = eastl::make_unique<StaticContentProvider>("mnt:[1]\n");
+            }
+
+            file = new virtual_file(attrs, absolute_path, eastl::move(provider));
+            file->lwext4_file_struct.flags = flags;
+            return 0;
+        }
+
         if (node)
         {
             printfCyan("[open] using virtual file system for path: %s\n", absolute_path.c_str());
@@ -749,6 +768,61 @@ namespace fs
         }
 
         return pid > 0;
+    }
+
+    int VirtualFileSystem::dynamic_file_type(const eastl::string &path) const
+    {
+        eastl::vector<eastl::string> parts = path_split(path);
+        if (parts.empty() || parts[0] != "proc")
+        {
+            return 0;
+        }
+
+        int pid = -1;
+        if (parts.size() >= 2)
+        {
+            if (parts[1] == "self")
+            {
+                proc::Pcb *cur = proc::k_pm.get_cur_pcb();
+                if (cur == nullptr)
+                {
+                    return 0;
+                }
+                pid = cur->_pid;
+            }
+            else
+            {
+                pid = 0;
+                for (char c : parts[1])
+                {
+                    if (c < '0' || c > '9')
+                    {
+                        return 0;
+                    }
+                    pid = pid * 10 + (c - '0');
+                }
+            }
+        }
+
+        if (pid <= 0 || proc::k_pm.find_proc_by_pid(pid) == nullptr)
+        {
+            return 0;
+        }
+
+        if (parts.size() == 2)
+        {
+            return fs::FileTypes::FT_DIRECT;
+        }
+        if (parts.size() == 3 && parts[2] == "ns")
+        {
+            return fs::FileTypes::FT_DIRECT;
+        }
+        if (parts.size() == 4 && parts[2] == "ns" && parts[3] == "mnt")
+        {
+            return fs::FileTypes::FT_NORMAL;
+        }
+
+        return 0;
     }
 
     int VirtualFileSystem::fstat(fs::file *f, fs::Kstat *st)

@@ -6,6 +6,8 @@ namespace elf
 	enum elfEnum
 	{
 		ELF_MAGIC = 0x464C457FU, // "\x7FELF" in little endian
+		ELF_TYPE_EXEC = 2,
+		ELF_TYPE_DYN = 3,
 		ELF_PROG_LOAD = 1,
 		ELF_PROG_DYNAMIC = 2,
 		ELF_PROG_INTERP = 3,

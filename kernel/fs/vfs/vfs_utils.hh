@@ -29,9 +29,27 @@ int vfs_link(const char *oldpath, const char *newpath);
 int vfs_unlink_path(const char *path, bool remove_dir);
 int vfs_truncate(fs::file *f, size_t length);
 int vfs_chmod(eastl::string pathname, mode_t mode);
+enum VfsMountPropagation
+{
+    VFS_MOUNT_PRIVATE = 0,
+    VFS_MOUNT_SHARED = 1,
+    VFS_MOUNT_SLAVE = 2,
+    VFS_MOUNT_UNBINDABLE = 3,
+};
+
 int vfs_register_mount(const eastl::string &mount_path, bool read_only);
+int vfs_register_bind_mount(const eastl::string &source_path, const eastl::string &mount_path,
+                            bool read_only, bool recursive);
+int vfs_move_mount(const eastl::string &source_path, const eastl::string &target_path);
+int vfs_set_mount_propagation(const eastl::string &mount_path, VfsMountPropagation propagation,
+                              bool recursive);
 int vfs_unregister_mount(const eastl::string &mount_path);
 bool vfs_is_readonly_path(const eastl::string &path);
+void vfs_append_mounts_snapshot(eastl::string &result);
+uint64 vfs_clone_mount_namespace(uint64 source_ns_id);
+void vfs_hold_mount_namespace(uint64 ns_id);
+void vfs_put_mount_namespace(uint64 ns_id);
+bool vfs_mount_namespace_exists(uint64 ns_id);
 // Change owner/group for a path. If follow_symlinks is true, operate on the target of symlink
 // else operate on the link itself (lchown-like). Returns 0 on success, negative errno on error.
 int vfs_chown(const eastl::string &pathname, int owner, int group, bool follow_symlinks);

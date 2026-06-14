@@ -113,6 +113,7 @@ namespace proc
     };
 
     constexpr uint64 k_initial_ipc_namespace_id = 1;
+    constexpr uint64 k_initial_mount_namespace_id = 1;
 
     class Pcb
     {
@@ -275,6 +276,7 @@ namespace proc
         time_namespace_offsets _timens_children; // fork/clone 后子任务应继承的 time namespace 偏移
         net_namespace_state _netns; // 最小网络 namespace 视图（当前只覆盖 clone09 所需 sysctl）
         uint64 _ipc_ns_id = k_initial_ipc_namespace_id; // SysV IPC namespace，隔离 shmget key 空间
+        uint64 _mnt_ns_id = k_initial_mount_namespace_id; // mount namespace，隔离 bind/move/umount 视图
 
     public:
         Pcb();
