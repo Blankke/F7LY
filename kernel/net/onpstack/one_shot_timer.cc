@@ -272,36 +272,47 @@ void thread_one_shot_timer_count(void *pvParam)
 #endif
 
 #if 1
-        //* 延迟tcp ack处理
-        tcp_link_lock();
+        //* 延迟tcp ack处理。发送 ACK 可能进入网卡发送路径，不能持有 tcp_link 全局锁执行。
+        pstNextLink = NULL;
+        do
         {
-            do
+            PST_TCPLINK pstAckLink = NULL;
+            INT nWalkCount = 0;
+            tcp_link_lock();
             {
-                pstNextLink = tcp_link_list_used_get_next(pstNextLink);
-                if (pstNextLink)
+                while ((pstNextLink = tcp_link_list_used_get_next(pstNextLink)) != NULL)
                 {
-                    if (pstNextLink->bState == TLSCONNECTED)
+                    if (++nWalkCount > TCP_LINK_NUM_MAX)
                     {
-                        if (!pstNextLink->uniFlags.stb16.no_delay_ack && pstNextLink->stPeer.bIsNotAcked)
-                        {
-                            if (os_get_system_msecs() - pstNextLink->stPeer.unStartMSecs > unDelayAckTimeout)
-                            {
-#if SUPPORT_IPV6
-                                if (AF_INET == pstNextLink->stLocal.pstHandle->bFamily)
-                                    tcp_send_ack(pstNextLink, pstNextLink->stLocal.pstHandle->stSockAddr.saddr_ipv4, pstNextLink->stLocal.pstHandle->stSockAddr.usPort, pstNextLink->stPeer.stSockAddr.saddr_ipv4, pstNextLink->stPeer.stSockAddr.usPort);
-                                else
-                                    tcpv6_send_ack(pstNextLink, pstNextLink->stLocal.pstHandle->stSockAddr.saddr_ipv6, pstNextLink->stLocal.pstHandle->stSockAddr.usPort, pstNextLink->stPeer.stSockAddr.saddr_ipv6, pstNextLink->stPeer.stSockAddr.usPort);
-#else
-                                tcp_send_ack(pstNextLink, pstNextLink->stLocal.pstHandle->stSockAddr.saddr_ipv4, pstNextLink->stLocal.pstHandle->stSockAddr.usPort, pstNextLink->stPeer.stSockAddr.saddr_ipv4, pstNextLink->stPeer.stSockAddr.usPort);
-#endif
-                                pstNextLink->stPeer.bIsNotAcked = FALSE;
-                            }
-                        }
+                        pstNextLink = NULL;
+                        break;
+                    }
+
+                    if (pstNextLink->bState == TLSCONNECTED &&
+                        !pstNextLink->uniFlags.stb16.no_delay_ack &&
+                        pstNextLink->stPeer.bIsNotAcked &&
+                        os_get_system_msecs() - pstNextLink->stPeer.unStartMSecs > unDelayAckTimeout)
+                    {
+                        pstNextLink->stPeer.bIsNotAcked = FALSE;
+                        pstAckLink = pstNextLink;
+                        break;
                     }
                 }
-            } while (pstNextLink);
-        }
-        tcp_link_unlock();
+            }
+            tcp_link_unlock();
+
+            if (!pstAckLink)
+                break;
+
+#if SUPPORT_IPV6
+            if (AF_INET == pstAckLink->stLocal.pstHandle->bFamily)
+                tcp_send_ack(pstAckLink, pstAckLink->stLocal.pstHandle->stSockAddr.saddr_ipv4, pstAckLink->stLocal.pstHandle->stSockAddr.usPort, pstAckLink->stPeer.stSockAddr.saddr_ipv4, pstAckLink->stPeer.stSockAddr.usPort);
+            else
+                tcpv6_send_ack(pstAckLink, pstAckLink->stLocal.pstHandle->stSockAddr.saddr_ipv6, pstAckLink->stLocal.pstHandle->stSockAddr.usPort, pstAckLink->stPeer.stSockAddr.saddr_ipv6, pstAckLink->stPeer.stSockAddr.usPort);
+#else
+            tcp_send_ack(pstAckLink, pstAckLink->stLocal.pstHandle->stSockAddr.saddr_ipv4, pstAckLink->stLocal.pstHandle->stSockAddr.usPort, pstAckLink->stPeer.stSockAddr.saddr_ipv4, pstAckLink->stPeer.stSockAddr.usPort);
+#endif
+        } while (pstNextLink);
 
         if (usTimeCount++ > 999)
         {

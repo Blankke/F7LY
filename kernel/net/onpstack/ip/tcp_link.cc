@@ -226,9 +226,55 @@ PST_TCPLINK tcp_link_get(EN_ONPSERR *penErr)
 
 void tcp_link_free(PST_TCPLINK pstTcpLink)
 {
+    if (!pstTcpLink)
+        return;
+
+    BOOL blFoundInUsedList = FALSE;
+    os_thread_mutex_lock(l_hMtxTcpLinkList);
+    {
+        //* 只有确认节点仍在 used 链表中，才允许继续释放，避免重复释放污染 free/used 链表。
+        PST_TCPLINK pstNextNode = l_pstUsedTcpLinkList;
+        PST_TCPLINK pstPrevNode = NULL;
+        INT nWalkCount = 0;
+        while (pstNextNode && nWalkCount++ < TCP_LINK_NUM_MAX)
+        {
+            if (pstTcpLink == pstNextNode)
+            {
+                if (pstPrevNode)
+                    pstPrevNode->bNext = pstTcpLink->bNext;
+                else
+                {
+                    if (pstTcpLink->bNext >= 0)
+                        l_pstUsedTcpLinkList = &l_staTcpLinkNode[(UCHAR)pstTcpLink->bNext];
+                    else //* 这即是第一个节点也是最后一个节点
+                        l_pstUsedTcpLinkList = NULL;
+                }
+
+                blFoundInUsedList = TRUE;
+                break;
+            }
+
+            pstPrevNode = pstNextNode;
+            if (pstNextNode->bNext < 0)
+                break;
+            pstNextNode = &l_staTcpLinkNode[(UCHAR)pstNextNode->bNext];
+        }
+
+        if (!blFoundInUsedList)
+        {
+            os_thread_mutex_unlock(l_hMtxTcpLinkList);
+            return;
+        }
+
+    }
+    os_thread_mutex_unlock(l_hMtxTcpLinkList);
+
 #if SUPPORT_SACK
     if (pstTcpLink->stcbSend.pubSndBuf)
+    {
         buddy_free(pstTcpLink->stcbSend.pubSndBuf);
+        pstTcpLink->stcbSend.pubSndBuf = NULL;
+    }
 
     //* 释放占用的send timer
     tcp_send_timer_lock();
@@ -252,32 +298,6 @@ void tcp_link_free(PST_TCPLINK pstTcpLink)
 
     os_thread_mutex_lock(l_hMtxTcpLinkList);
     {
-        //* 先从使用队列中摘除
-        PST_TCPLINK pstNextNode = l_pstUsedTcpLinkList;
-        PST_TCPLINK pstPrevNode = NULL;
-        while (pstNextNode)
-        {
-            if (pstTcpLink == pstNextNode)
-            {
-                if (pstPrevNode)
-                    pstPrevNode->bNext = pstTcpLink->bNext;
-                else
-                {
-                    if (pstTcpLink->bNext >= 0)
-                        l_pstUsedTcpLinkList = &l_staTcpLinkNode[(UCHAR)pstTcpLink->bNext];
-                    else //* 这即是第一个节点也是最后一个节点
-                        l_pstUsedTcpLinkList = NULL;
-                }
-
-                break;
-            }
-
-            pstPrevNode = pstNextNode;
-            if (pstNextNode->bNext < 0) //* 理论上不会出现小于0的情况在这之前应该能找到
-                break;
-            pstNextNode = &l_staTcpLinkNode[(UCHAR)pstNextNode->bNext];
-        }
-
         if (l_pstFreeTcpLinkList)
             pstTcpLink->bNext = l_pstFreeTcpLinkList->bIdx;
         else
@@ -522,7 +542,8 @@ void tcp_link_for_send_data_del(PST_TCPLINK pstTcpLink)
         {
             PST_TCPLINK pstNext = l_pstSndDataLink;
             PST_TCPLINK pstPrev = NULL;
-            while (pstNext)
+            INT nWalkCount = 0;
+            while (pstNext && nWalkCount++ < TCP_LINK_NUM_MAX)
             {
                 if (pstNext == pstTcpLink)
                 {

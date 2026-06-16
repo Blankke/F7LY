@@ -514,7 +514,9 @@ namespace fs
                 return false;
             }
 
-            return state == TLSCLOSED || state == TLSTIMEWAIT || state == TLSCLOSING;
+            return state == TLSFINWAIT1 || state == TLSFINWAIT2 ||
+                   state == TLSCLOSING || state == TLSTIMEWAIT ||
+                   state == TLSCLOSED;
         }
 
         int onps_socket_type(SocketType type)
@@ -768,7 +770,7 @@ namespace fs
             _peer->_lock.release();
             _peer = nullptr;
         }
-        
+
         // 清理待处理的连接
         for (auto* pending : _pending_connections) {
             if (pending) {
@@ -1337,12 +1339,6 @@ namespace fs
                 SOCKET onps_socket = _onps_socket;
                 USHORT host_port = socket_port_to_host(remote_addr.sin_port);
                 bool nonblocking = is_nonblocking_request(0);
-                const uint8_t *remote_bytes = reinterpret_cast<const uint8_t *>(&remote_addr.sin_addr);
-                printf("[netdbg] socket_file::connect onps sock=%d dst=%d.%d.%d.%d:%d nonblock=%d type=%d\n",
-                       static_cast<int>(onps_socket),
-                       remote_bytes[0], remote_bytes[1], remote_bytes[2], remote_bytes[3],
-                       static_cast<int>(host_port), nonblocking ? 1 : 0,
-                       static_cast<int>(_type));
                 _lock.release();
 
                 int result;
@@ -1355,10 +1351,6 @@ namespace fs
                     result = ::connect_ext(onps_socket, &remote_addr.sin_addr, host_port,
                                            _type == SocketType::TCP ? TCP_CONN_TIMEOUT : 0);
                 }
-                EN_ONPSERR connect_error = socket_get_last_error_code(onps_socket);
-                printf("[netdbg] socket_file::connect onps_ret sock=%d ret=%d err=%d\n",
-                       static_cast<int>(onps_socket), result, static_cast<int>(connect_error));
-
                 if (result != 0) {
                     return onps_last_errno(onps_socket);
                 }
@@ -1658,22 +1650,7 @@ namespace fs
                 INT request_len = len > static_cast<size_t>(INT_MAX)
                                       ? INT_MAX
                                       : static_cast<INT>(len);
-                static int debug_recv_call_count = 0;
-                if (debug_recv_call_count < 80) {
-                    printf("[netdbg] socket_file::recv enter sock=%d req=%d nonblock=%d timeout=%d\n",
-                           static_cast<int>(onps_socket), static_cast<int>(request_len),
-                           nonblocking ? 1 : 0, has_timeout ? 1 : 0);
-                    debug_recv_call_count++;
-                }
                 INT received = ::recv(onps_socket, data, request_len);
-                EN_ONPSERR recv_error = socket_get_last_error_code(onps_socket);
-                static int debug_recv_ret_count = 0;
-                if (debug_recv_ret_count < 120) {
-                    printf("[netdbg] socket_file::recv leave sock=%d ret=%d err=%d\n",
-                           static_cast<int>(onps_socket), static_cast<int>(received),
-                           static_cast<int>(recv_error));
-                    debug_recv_ret_count++;
-                }
                 if (received > 0) {
                     return received;
                 }

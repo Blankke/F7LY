@@ -89,7 +89,15 @@ void close(SOCKET socket)
             return;
         }
 
-        if (TLSFINWAIT1 == enLinkState || TLSFINWAIT2 == enLinkState || TLSCLOSING == enLinkState || TLSTIMEWAIT == enLinkState || TLSCLOSED == enLinkState)
+        /*
+         * FIN/CLOSED 仍可能被 onps 定时器线程扫描。这里不能同步释放
+         * tcp_link，否则用户 close 路径会和定时器线程争用 tcp_link 全局锁，
+         * 表现为 wget 打印完 body 后卡死。实际回收交给 TCP close timer，
+         * 用户 fd close 只负责从 VFS 层脱钩。
+         */
+        if (TLSFINWAIT1 == enLinkState || TLSFINWAIT2 == enLinkState ||
+            TLSCLOSING == enLinkState || TLSTIMEWAIT == enLinkState ||
+            TLSCLOSED == enLinkState)
             return;
     }
     onps_input_free((INT)socket);
@@ -99,9 +107,6 @@ static int socket_tcp_connect(SOCKET socket, PST_TCPUDP_HANDLE pstHandle, HSEM h
 {
     EN_ONPSERR enErr = ERRNO;
 
-    printf("[netdbg] bsd_tcp_connect start sock=%d port=%d timeout=%d local_port=%d\n",
-           (int)socket, (int)srv_port, nConnTimeout,
-           pstHandle ? (int)pstHandle->stSockAddr.usPort : -1);
 #if SUPPORT_IPV6
     INT nRtnVal;
     if (AF_INET == pstHandle->bFamily)
@@ -116,10 +121,22 @@ static int socket_tcp_connect(SOCKET socket, PST_TCPUDP_HANDLE pstHandle, HSEM h
     {
     __lblWait:
         //* 等待信号到达：超时或者收到syn ack同时本地回馈的syn ack的ack发送成功
-        printf("[netdbg] bsd_tcp_connect wait sock=%d\n", (int)socket);
-        if (os_thread_sem_pend(hSem, 0) < 0)
+        /*
+         * F7LY 的 onps 信号量适配层里，nWaitSecs == 0 表示永久等待。
+         * TCP 握手依赖网卡中断、协议栈接收线程和 one-shot 定时器共同推进；
+         * 任一环节丢唤醒时，永久等待会把用户态 connect 卡死在 D/S 状态。
+         * 这里使用连接超时做兜底，让上层能拿到 ETIMEDOUT 并释放 socket/input，
+         * 后续 wget 等短生命周期客户端才不会在第二次访问时悬挂。
+         */
+        INT wait_result = os_thread_sem_pend(hSem, nConnTimeout);
+        if (wait_result < 0)
         {
             onps_set_last_error((INT)socket, ERRINVALIDSEM);
+            return -1;
+        }
+        if (wait_result > 0)
+        {
+            onps_set_last_error((INT)socket, ERRTCPCONNTIMEOUT);
             return -1;
         }
 
@@ -133,8 +150,6 @@ static int socket_tcp_connect(SOCKET socket, PST_TCPUDP_HANDLE pstHandle, HSEM h
         if (TLSSYNSENT == enLinkState)
             goto __lblWait;
 
-        printf("[netdbg] bsd_tcp_connect state sock=%d state=%d\n",
-               (int)socket, (int)enLinkState);
         switch (enLinkState)
         {
         case TLSCONNECTED:
@@ -158,8 +173,6 @@ static int socket_tcp_connect(SOCKET socket, PST_TCPUDP_HANDLE pstHandle, HSEM h
     }
     else
     {
-        printf("[netdbg] bsd_tcp_connect send_syn_failed sock=%d ret=%d err=%d\n",
-               (int)socket, nRtnVal, (int)enErr);
         return -1;
     }
 }
@@ -231,8 +244,6 @@ static int socket_connect(SOCKET socket, PST_TCPUDP_HANDLE pstHandleInput, void 
         EN_TCPLINKSTATE enLinkState;
         if (!onps_input_get((INT)socket, IOPT_GETTCPLINKSTATE, &enLinkState, &enErr))
             goto __lblErr;
-        printf("[netdbg] bsd_socket_connect tcp sock=%d state=%d port=%d timeout=%d\n",
-               (int)socket, (int)enLinkState, (int)srv_port, nConnTimeout);
 
         //* 无效，意味着当前TCP连接链路尚未申请一个tcp link节点，需要在这里申请
         if (TLSINVALID == enLinkState)
