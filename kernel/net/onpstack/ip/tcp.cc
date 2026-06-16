@@ -1839,8 +1839,10 @@ static BOOL tcp_link_send_data(PST_TCPLINK pstLink)
 {
     //* 这一段代码能够成功运行的前提是tcp_link_ack_handler()函数必须与本函数放在同一个线程，且其在本函数之前，否则会出现因收到对应ack sequence num删除send timer导致系统宕机的问题
     //* 即使在这里加了tcp_send_timer_lock()线程锁，也无法保证得到的timer指针依然有效，所以必须同一线程且其在本函数之前执行
-    STCB_TCPSENDTIMER *pstcbSndTimerTemp = pstLink->stcbSend.pstcbSndTimer;
-    STCB_TCPSENDTIMER **ppstcbSndTimer = &pstcbSndTimerTemp;
+    // 必须指向真实链表头字段，后续 *ppstcbSndTimer 才能把新节点挂回发送定时器链。
+    auto *send_timer_head = reinterpret_cast<UCHAR *>(pstLink) +
+                            __builtin_offsetof(ST_TCPLINK, stcbSend.pstcbSndTimer);
+    STCB_TCPSENDTIMER **ppstcbSndTimer = reinterpret_cast<STCB_TCPSENDTIMER **>(send_timer_head);
     PSTCB_TCPSENDTIMER pstcbSndTimer = pstLink->stcbSend.pstcbSndTimer;
     CHAR i;
     for (i = 0; i < pstLink->stcbSend.bSendPacketNum; i++)
