@@ -10958,6 +10958,10 @@ namespace syscall
         int timeout_ms = -1;  // 超时时间（毫秒），-1表示无限等待
         int ret = 0;
         bool have_events = false;
+        constexpr int64 k_nsec_per_sec = 1000000000LL;
+        constexpr int64 k_msec_per_sec = 1000LL;
+        constexpr int64 k_usec_per_msec = 1000LL;
+        constexpr uint64 k_usec_per_sec = 1000000ULL;
 
         proc::Pcb *proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = proc->get_pagetable();
@@ -11010,20 +11014,20 @@ namespace syscall
             }
             
             // 检查timespec是否有效
-            if (tm.tv_sec < 0 || tm.tv_nsec < 0 || tm.tv_nsec >= 1000000000)
+            if (tm.tv_sec < 0 || tm.tv_nsec < 0 || tm.tv_nsec >= k_nsec_per_sec)
             {
                 free_syscall_temp_buffer(fds);
                 return -EINVAL;
             }
             
             // 转换为毫秒，检查溢出
-            if (tm.tv_sec > INT_MAX / 1000)
+            if (tm.tv_sec > INT_MAX / k_msec_per_sec)
             {
                 timeout_ms = -1; // 太大，设为无限等待
             }
             else
             {
-                timeout_ms = tm.tv_sec * 1000 + tm.tv_nsec / 1000000;
+                timeout_ms = tm.tv_sec * k_msec_per_sec + tm.tv_nsec / k_usec_per_sec;
             }
         }
 
@@ -11049,7 +11053,7 @@ namespace syscall
         if (nfds == 0)
         {
             int wait_ret = wait_timeout_or_signal(proc,
-                                                  timeout_ms < 0 ? -1 : static_cast<int64>(timeout_ms) * 1000LL);
+                                                  timeout_ms < 0 ? -1 : static_cast<int64>(timeout_ms) * k_usec_per_msec);
             if (sigmask_changed)
             {
                 proc->_sigmask = old_sigmask.sig[0];
@@ -11061,10 +11065,12 @@ namespace syscall
             return 0;
         }
 
-        // 轮询循环
-        uint64 start_time = tmm::k_tm.get_ticks();
-        uint64 timeout_ticks = (timeout_ms == -1) ? UINT64_MAX : 
-                               (timeout_ms * CLOCKS_PER_SEC) / 1000;
+        // ppoll 的 timeout 是相对时间。这里用真实微秒时间做 deadline，
+        // 不能用 libc 的 CLOCKS_PER_SEC 去换算内核 tick，否则会把 1s
+        // resolver 超时放大成极长等待，域名 ping/wget 会像卡死一样。
+        tmm::timeval start_time = tmm::k_tm.get_time_val();
+        uint64 start_us = start_time.tv_sec * k_usec_per_sec + start_time.tv_usec;
+        int64 timeout_us = timeout_ms < 0 ? -1 : static_cast<int64>(timeout_ms) * k_usec_per_msec;
 
         while (true)
         {
@@ -11140,8 +11146,9 @@ namespace syscall
             }
             else if (timeout_ms > 0)
             {
-                uint64 current_time = tmm::k_tm.get_ticks();
-                if (current_time - start_time >= timeout_ticks)
+                tmm::timeval current_time = tmm::k_tm.get_time_val();
+                uint64 current_us = current_time.tv_sec * k_usec_per_sec + current_time.tv_usec;
+                if (current_us - start_us >= static_cast<uint64>(timeout_us))
                 {
                     // 超时
                     break;
@@ -11155,8 +11162,8 @@ namespace syscall
                 break;
             }
 
-            // 当前实现还没有通用的 fd 级等待队列，这里先保守地让出 CPU。
-            // 对 iozone 这类 nfds==0 的纯超时路径，上面的快速分支已经避免了忙轮询。
+            // 当前实现还没有通用的 fd 级等待队列，这里先让出 CPU 后复查；
+            // timeout 使用真实 deadline 控制，避免错误 tick 换算导致无限等待。
             proc::k_scheduler.yield();
         }
 
@@ -13187,7 +13194,10 @@ namespace syscall
         {
             // 有些启动路径不会在首个用户进程返回前完成网络初始化；
             // 第一次创建 IPv4 TCP/UDP/ICMP socket 时补一次，失败仍保留 loopback 能力。
-            net::init_network_stack();
+            if (!net::is_network_stack_ready())
+            {
+                net::init_network_stack();
+            }
         }
 
         // 创建socket文件对象
