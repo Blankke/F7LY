@@ -1303,6 +1303,14 @@ INT onps_input_recv_icmp(INT nInput, UCHAR **ppubPacket, void *pvSrcAddr, UCHAR 
             return 0;
     }
 
+    /*
+     * ICMP 接收缓冲是固定数组，不像 UDP 那样按包摘链释放。一次 echo reply
+     * 被上层读走后必须标记为已消费，否则下一次 sem 唤醒可能再次返回同一
+     * 个 seq，BusyBox ping 会把它识别成 DUP。
+     */
+    if (!l_stcbaInput[nInput].unRcvedBytes)
+        return 0;
+
     //* 报文继续上报给上层调用者
     UCHAR usIpHdrLen;
 #if SUPPORT_IPV6
@@ -1359,7 +1367,9 @@ INT onps_input_recv_icmp(INT nInput, UCHAR **ppubPacket, void *pvSrcAddr, UCHAR 
         *pubTTL = pstHdr->ubTTL;
 #endif
     *ppubPacket = l_stcbaInput[nInput].pubRcvBuf + usIpHdrLen;
-    return (INT)l_stcbaInput[nInput].unRcvedBytes - usIpHdrLen;
+    nRtnVal = (INT)l_stcbaInput[nInput].unRcvedBytes - usIpHdrLen;
+    l_stcbaInput[nInput].unRcvedBytes = 0;
+    return nRtnVal;
 }
 
 const CHAR *onps_get_last_error(INT nInput, EN_ONPSERR *penErr)
