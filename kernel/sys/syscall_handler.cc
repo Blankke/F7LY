@@ -6081,9 +6081,20 @@ namespace syscall
             return SYS_ENODEV; // 这个错误码实际上是不对的，只是为了偷loop相关测例
         }
         eastl::string abs_path = get_absolute_path(mnt.c_str(), p->_cwd_name.c_str()); //< 获取绝对路径
-        if (fs::k_vfs.is_file_exist(abs_path.c_str()) != 1)
+        eastl::string resolved_mount_path;
+        int mount_resolve_ret = vfs_resolve_path(abs_path, resolved_mount_path);
+        if (mount_resolve_ret < 0)
+            return mount_resolve_ret;
+        /*
+         * mount 热路径只需要“目标存在且是目录”这个结论。
+         * 这里把过去的 is_file_exist() + path2filetype() 两次查询，
+         * 收敛成“解析一次符号链接 + 查询一次类型”，减少 fs_bind 中
+         * 高频 mount/umount 的固定路径成本。
+         */
+        int mount_type = fs::k_vfs.path2filetype(resolved_mount_path);
+        if (mount_type < 0)
             return -ENOENT;
-        if (fs::k_vfs.path2filetype(abs_path) != fs::FileTypes::FT_DIRECT)
+        if (mount_type != fs::FileTypes::FT_DIRECT)
             return -ENOTDIR;
 
         bool read_only = (flags & MS_RDONLY) != 0;
@@ -6096,11 +6107,18 @@ namespace syscall
                 return -EINVAL;
             }
             eastl::string abs_source = get_absolute_path(dev.c_str(), p->_cwd_name.c_str());
-            if (fs::k_vfs.is_file_exist(abs_source.c_str()) != 1)
+            eastl::string resolved_source_path;
+            int source_resolve_ret = vfs_resolve_path(abs_source, resolved_source_path);
+            if (source_resolve_ret < 0)
+            {
+                return source_resolve_ret;
+            }
+            int source_type = fs::k_vfs.path2filetype(resolved_source_path);
+            if (source_type < 0)
             {
                 return -ENOENT;
             }
-            if (fs::k_vfs.path2filetype(abs_source) != fs::FileTypes::FT_DIRECT)
+            if (source_type != fs::FileTypes::FT_DIRECT)
             {
                 return -ENOTDIR;
             }

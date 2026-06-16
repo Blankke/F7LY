@@ -5,9 +5,10 @@ extern "C"
     __attribute__((section(".text.startup"))) int main()
     {
         init_env("/musl/");
-        libc_test("/musl/");
+        // 先把 LTP 前置，便于性能回归时优先观察 fs_bind/ltp 脚本段推进速度。
         ltp_test(false);
         ltp_test(true);
+        libc_test("/musl/");
         basic_test("/musl/");
         basic_test("/glibc/");
         lua_test("/musl/");

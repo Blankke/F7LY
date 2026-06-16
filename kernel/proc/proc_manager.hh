@@ -80,7 +80,8 @@ namespace proc
         // ==================== 进程生命周期 ====================
         int exec(eastl::string path, eastl::vector<eastl::string> argv);
         int execve(eastl::string path, eastl::vector<eastl::string> argv, eastl::vector<eastl::string> envs);
-        int load_seg(mem::PageTable &pt, uint64 va, eastl::string &path, uint offset, uint size);
+        int load_seg(mem::PageTable &pt, uint64 va, fs::file *segment_file,
+                     const eastl::string &path, uint offset, uint size);
         int clone(uint64 flags, uint64 stack_ptr, uint64 ptid, uint64 tls, uint64 ctid,
                   bool is_clone3 = false, int exit_signal = -1);
         Pcb *fork(Pcb *p, uint64 flags, uint64 stack_ptr, uint64 ctid,
