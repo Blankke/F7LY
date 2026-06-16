@@ -16,8 +16,8 @@
 #endif //* SYMBOL_GLOBALS
 
 typedef struct _ST_UDPLINK_ {
-    CHAR bIdx;
-    CHAR bNext;
+    signed char bIdx;
+    signed char bNext;
 
 #if SUPPORT_IPV6
 	ST_SOCKADDR stPeerAddr;

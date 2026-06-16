@@ -148,7 +148,7 @@ typedef struct _ST_TCPLINK_ {
 
 #if SUPPORT_SACK
     struct {
-        CHAR bNext; //* 链接下一个要发送数据的tcp link
+        signed char bNext; //* 链接下一个要发送数据的tcp link
         CHAR bSendPacketNum; 
         CHAR bIsPutted : 1; 
         CHAR bIsWndSizeUpdated : 1; 
@@ -172,8 +172,8 @@ typedef struct _ST_TCPLINK_ {
     CHAR bState;        //* 当前链路状态
     CHAR bIsPassiveFin; //* 是被动FIN操作
 
-    CHAR bIdx;
-    CHAR bNext;
+    signed char bIdx;
+    signed char bNext;
 } PACKED ST_TCPLINK, *PST_TCPLINK;
 PACKED_END
 

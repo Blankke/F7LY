@@ -15,6 +15,13 @@ git log -5 --pretty=fuller --stat
 
 如果用户或其他 agent 已经有未提交改动，不要覆盖；如果同一文件需要继续修改，先读 diff 理解现状。
 
+## 调试输出按钮
+调试输出默认关闭，全局打开按钮在`printer.cc`中的
+```
+bool disable_printf_flag = true;
+```
+如果需要调试输出请打开该开关。
+
 ## 构建命令
 
 常用命令：
