@@ -429,6 +429,15 @@ namespace fs
         return result;
     }
 
+    eastl::string EtcResolvConfProvider::generate_content()
+    {
+        eastl::string result;
+        // QEMU user-mode 网络默认 DNS 服务器，供 musl/glibc resolver 查询域名。
+        result += "nameserver 10.0.2.3\n";
+        result += "options timeout:1 attempts:1\n";
+        return result;
+    }
+
     eastl::string EtcProtocolsProvider::generate_content()
     {
         eastl::string result;
