@@ -299,6 +299,16 @@ namespace fs
         }
     };
 
+    // /etc/resolv.conf 内容提供者
+    class EtcResolvConfProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<EtcResolvConfProvider>();
+        }
+    };
+
     // /etc/protocols 内容提供者
     class EtcProtocolsProvider : public VirtualContentProvider
     {

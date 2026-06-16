@@ -398,9 +398,11 @@ namespace fs
         add_virtual_file("/etc/group", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<EtcGroupProvider>());
 
-        // /etc/hosts 与 /etc/protocols：支撑 libc 的本机名解析和协议名查询。
+        // /etc/hosts、/etc/resolv.conf 与 /etc/protocols：支撑 libc resolver 和协议名查询。
         add_virtual_file("/etc/hosts", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<EtcHostsProvider>());
+        add_virtual_file("/etc/resolv.conf", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<EtcResolvConfProvider>());
         add_virtual_file("/etc/protocols", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<EtcProtocolsProvider>());
 
