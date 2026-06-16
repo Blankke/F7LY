@@ -1,5 +1,5 @@
 ## 无法二次连接
-情况描述
+### 情况描述
 在host机器上使用
 ```sh
 cd ~/project/temp 
@@ -90,7 +90,7 @@ debug方式：（必须先阅读agent_docs/development_debugging.md，了解调�
 2. 针对性的添加注释，逐渐排查问题
 3. 按照调试范式运行代码
 
-## 修复小结
+### 修复小结
 
 - 现象：第一次 `wget` 打印完 body 后不返回 shell。  
   原因：收到 FIN 后未可靠唤醒阻塞 `recv`，且 `tcp_recv_upper()` 会额外 `pend` 吃掉 EOF 唤醒。  
@@ -111,7 +111,7 @@ debug方式：（必须先阅读agent_docs/development_debugging.md，了解调�
 - 验证：`make build ARCH=riscv`、`make build ARCH=loongarch` 通过；RISC-V guest 连续两次 `wget -O - http://10.0.2.2:18081/` 均输出 `written to stdout` 并返回 shell。
 
 ## 长网页connection closed
-情况描述
+### 情况描述
 在host机器上使用
 ```sh
 cd /tmp
@@ -276,7 +276,7 @@ debug方式：（必须先阅读agent_docs/development_debugging.md，了解调�
 参考实现：
 1. ref/rocketos（往届作品第一名）
 
-## 长网页修复小结
+### 长网页修复小结
 
 - 现象：长页面 `wget` 约 30% 后报 `connection closed prematurely`。  
   原因：TCP `FIN` 包可能同时携带最后一段 payload，旧逻辑先处理 FIN，导致尾部数据未交付就 EOF。  
@@ -289,3 +289,37 @@ debug方式：（必须先阅读agent_docs/development_debugging.md，了解调�
 - 现象：接收窗口满时不能完整接收 `payload+FIN`。  
   原因：若提前 ACK FIN，会把未缓存数据误确认。  
   解决方案：只 ACK 已缓存字节；窗口恢复后等待对端重传剩余 payload+FIN。
+
+## ping发生dup
+### 情况描述
+使用ping指令ping ip时（无论哪个ip都一样，以下给出ping 10.0.2.2时的情况），发生dup！提示
+```sh
+F7LY:~$ ping 10.0.2.2
+PING 10.0.2.2 (10.0.2.2): 56 data bytes
+64 bytes from 10.0.2.2: seq=0 ttl=255 time=22.163 ms
+64 bytes from 10.0.2.2: seq=0 ttl=255 time=1006.451 ms (DUP!)
+64 bytes from 10.0.2.2: seq=1 ttl=255 time=9.593 ms
+64 bytes from 10.0.2.2: seq=1 ttl=255 time=1005.141 ms (DUP!)
+64 bytes from 10.0.2.2: seq=2 ttl=255 time=10.287 ms
+64 bytes from 10.0.2.2: seq=2 ttl=255 time=1005.468 ms (DUP!)
+64 bytes from 10.0.2.2: seq=3 ttl=255 time=10.277 ms
+64 bytes from 10.0.2.2: seq=3 ttl=255 time=1004.614 ms (DUP!)
+64 bytes from 10.0.2.2: seq=4 ttl=255 time=10.307 ms
+64 bytes from 10.0.2.2: seq=4 ttl=255 time=1005.861 ms (DUP!)
+```
+怀疑raw mode实现有问题
+请在网络pipeline中添加注释，排查该问题。
+debug方式：（必须先阅读agent_docs/development_debugging.md，了解调试范式）
+1. 先进行静态代码阅读，确定可能的问题点
+2. 针对性的添加注释，逐渐排查问题
+3. 按照调试范式运行代码
+
+参考实现：
+1. ref/rocketos（往届作品第一名）
+
+### ping DUP 修复小结
+
+- 现象：`ping` 每个 seq 约 1 秒后重复显示 `(DUP!)`。
+  原因：ICMP 固定接收缓冲读出后未标记消费，下一次唤醒再次返回旧 echo reply。
+  解决方案：`onps_input_recv_icmp()` 返回前清 `unRcvedBytes`，空缓冲唤醒直接返回无数据。
+
