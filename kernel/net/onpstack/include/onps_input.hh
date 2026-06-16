@@ -164,6 +164,9 @@ ONPSINPUT_EXT INT onps_input_tcp_recv(INT nInput, const UCHAR *pubData, INT nDat
 //* 将收到的数据推送给用户层
 ONPSINPUT_EXT INT onps_input_recv_upper(INT nInput, UCHAR *pubDataBuf, UINT unDataBufSize, void *pvFromIP, USHORT *pusFromPort, EN_ONPSERR *penErr);
 
+//* 查询 input 是否已有可读数据，供 poll/select 判断真实读就绪
+ONPSINPUT_EXT BOOL onps_input_has_pending_data(INT nInput);
+
 //* 等待接收icmp层对端发送的数据
 ONPSINPUT_EXT INT onps_input_recv_icmp(INT nInput, UCHAR **ppubPacket, void *pvSrcAddr, UCHAR *pubTTL, UCHAR *pubType, UCHAR *pubCode, INT nWaitSecs, EN_ONPSERR *penErr);
 

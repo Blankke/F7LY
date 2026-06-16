@@ -798,7 +798,25 @@ namespace fs
             case SocketState::CONNECTED:
                 if (_onps_active)
                 {
-                    result = !_read_shutdown;
+                    if (_read_shutdown)
+                    {
+                        result = true;
+                        break;
+                    }
+                    if (_type == SocketType::UDP)
+                    {
+                        result = _onps_socket != INVALID_SOCKET &&
+                                 onps_input_has_pending_data(static_cast<INT>(_onps_socket));
+                        break;
+                    }
+                    if (_type == SocketType::TCP)
+                    {
+                        result = _onps_socket != INVALID_SOCKET &&
+                                 (onps_input_has_pending_data(static_cast<INT>(_onps_socket)) ||
+                                  onps_tcp_recv_reached_eof(_onps_socket));
+                        break;
+                    }
+                    result = false;
                     break;
                 }
                 if (_type == SocketType::UDP)
@@ -814,8 +832,15 @@ namespace fs
                 result = !_pending_connections.empty() || _onps_listening;
                 break;
             case SocketState::BOUND:
-                result = _type == SocketType::UDP &&
-                         (!_datagram_queue.empty() || (_onps_bound && !_loopback_registered));
+                if (_type == SocketType::UDP && _onps_bound && !_loopback_registered)
+                {
+                    result = _onps_socket != INVALID_SOCKET &&
+                             onps_input_has_pending_data(static_cast<INT>(_onps_socket));
+                }
+                else
+                {
+                    result = _type == SocketType::UDP && !_datagram_queue.empty();
+                }
                 break;
             default:
                 result = false;

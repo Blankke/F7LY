@@ -323,3 +323,51 @@ debug方式：（必须先阅读agent_docs/development_debugging.md，了解调�
   原因：ICMP 固定接收缓冲读出后未标记消费，下一次唤醒再次返回旧 echo reply。
   解决方案：`onps_input_recv_icmp()` 返回前清 `unRcvedBytes`，空缓冲唤醒直接返回无数据。
 
+
+## dns解析时大量resource temporarily unavailable
+### 情况描述
+在进行dns解析测试的时候会出现大量`nslookup: read: Resource temporarily unavailable`，然后拿到dns解析结果
+```sh
+F7LY:~$ nslookup example.com 10.0.2.3
+nslookup: read: Resource temporarily unavailable
+nslookup: read: Resource temporarily unavailable
+nslookup: read: Resource temporarily unavailable
+nslookup: read: Resource temporarily unavailable
+nslookup: read: Resource temporarily unavailable
+...(省略大量nslookup: read: Resource temporarily unavailable)
+nslookup: read: Resource temporarily unavailable
+nslookup: read: Resource temporarily unavailable
+nslookup: read: Resource temporarily unavailable
+nslookup: read: Resource temporarily unavailable
+nslookup: read: Resource temporarily unavailable
+Server:         10.0.2.3
+Address:        10.0.2.3:53
+
+Non-authoritative answer:
+Name:   example.com
+Address: 172.66.147.243
+Name:   example.com
+Address: 104.20.23.154
+
+Non-authoritative answer:
+Name:   example.com
+Address: 2606:4700:10::6814:179a
+Name:   example.com
+Address: 2606:4700:10::ac42:93f3
+```
+怀疑系统调用不是标准行为/dns解析pipeline存在问题
+请在网络pipeline中添加注释，排查该问题。
+debug方式：（必须先阅读agent_docs/development_debugging.md，了解调试范式）
+1. 先进行静态代码阅读，确定可能的问题点
+2. 针对性的添加注释，逐渐排查问题
+3. 按照调试范式运行代码
+
+参考实现：
+1. ref/rocketos（往届作品第一名）
+2. 
+### DNS EAGAIN 修复小结
+
+- 现象：`nslookup` 解析成功前大量打印 `Resource temporarily unavailable`。
+  原因：ONPS UDP socket 无报文时也被 `poll/select` 判为可读，非阻塞 `read/recvfrom` 被空唤醒后返回 `EAGAIN`。
+  解决方案：新增 `onps_input_has_pending_data()`；ONPS UDP 仅在接收队列有报文时读就绪，TCP 保留数据/EOF 就绪语义。
+  验证：`nslookup example.com 10.0.2.3` 返回 A/AAAA，未再出现 `Resource temporarily unavailable`。
