@@ -1280,6 +1280,31 @@ INT onps_input_recv_upper(INT nInput, UCHAR *pubDataBuf, UINT unDataBufSize, voi
     return nRtnVal;
 }
 
+BOOL onps_input_has_pending_data(INT nInput)
+{
+    if (nInput < 0 || nInput > SOCKET_NUM_MAX - 1)
+        return FALSE;
+
+    BOOL blHasData = FALSE;
+    os_thread_mutex_lock(l_hMtxInput);
+    {
+        EN_IPPROTO enProto = (EN_IPPROTO)l_stcbaInput[nInput].ubIPProto;
+        if (IPPROTO_TCP == enProto)
+            blHasData = l_stcbaInput[nInput].unRcvedBytes > 0;
+        else if (IPPROTO_UDP == enProto)
+            blHasData = l_stcbaInput[nInput].pubRcvBuf != NULL;
+        else if (IPPROTO_ICMP == enProto
+#if SUPPORT_IPV6
+                 || IPPROTO_ICMPv6 == enProto
+#endif
+        )
+            blHasData = l_stcbaInput[nInput].unRcvedBytes > 0;
+    }
+    os_thread_mutex_unlock(l_hMtxInput);
+
+    return blHasData;
+}
+
 INT onps_input_recv_icmp(INT nInput, UCHAR **ppubPacket, void *pvSrcAddr, UCHAR *pubTTL, UCHAR *pubType, UCHAR *pubCode, INT nWaitSecs, EN_ONPSERR *penErr)
 {
     if (nInput < 0 || nInput > SOCKET_NUM_MAX - 1)
