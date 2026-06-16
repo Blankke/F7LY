@@ -1363,8 +1363,72 @@ void tcp_recv(void *pvSrcAddr, void *pvDstAddr, UCHAR *pubPacket, INT nPacketLen
                     onps_input_sem_post(pstLink->stcbWaitAck.nInput);
             }
 
+            /*
+             * TCP 的 FIN 会占用一个序号，但它也可以和最后一段数据放在同一个包里。
+             * 必须先接收 payload，再确认 FIN；否则 HTTP 这类按 Content-Length
+             * 校验长度的程序会提前看到 EOF，表现为 connection closed prematurely。
+             */
+            INT nDataLen = nPacketLen - nTcpHdrLen;
+            if (nDataLen)
+            {
+                if (!uint_after(unPeerSeqNum, pstLink->stPeer.unSeqNum) &&
+                    uint_after(unPeerSeqNum + nDataLen, pstLink->stPeer.unSeqNum))
+                {
+                    INT nAcceptedBytes = onps_input_tcp_recv(
+                        nInput,
+                        (const UCHAR *)(pubPacket + nTcpHdrLen),
+                        (UINT)(unPeerSeqNum + (UINT)nDataLen - pstLink->stPeer.unSeqNum),
+                        &enErr);
+                    if (nAcceptedBytes < 0)
+                    {
+#if SUPPORT_PRINTF && DEBUG_LEVEL
+#if PRINTF_THREAD_MUTEX
+                        os_thread_mutex_lock(o_hMtxPrintf);
+#endif
+                        printf("onps_input_tcp_recv() failed, %s, the tcp packet will be dropped\r\n", onps_error(enErr));
+#if PRINTF_THREAD_MUTEX
+                        os_thread_mutex_unlock(o_hMtxPrintf);
+#endif
+#endif
+                        return;
+                    }
+
+                    pstLink->stPeer.unSeqNum += nAcceptedBytes;
+                    if (nAcceptedBytes < nDataLen)
+                    {
+                        /*
+                         * 接收窗口已满时只能 ACK 已缓存的数据，不能提前 ACK FIN。
+                         * 上层读出数据后会发送窗口更新，对端随后重传剩余 payload+FIN。
+                         */
+#if SUPPORT_IPV6
+                        if (IPV4 == enProtocol)
+                        {
+#if defined(__riscv)
+                            tcp_send_ack(pstLink, unDstAddr, usDstPort, uniCltIp.unVal, usCltPort);
+#else
+                            tcp_send_ack(pstLink, *((in_addr_t *)pvDstAddr), usDstPort, uniCltIp.unVal, usCltPort);
+#endif
+                        }
+                        else
+                            tcpv6_send_ack(pstLink, (UCHAR *)pvDstAddr, usDstPort, uniCltIp.pubVal, usCltPort);
+#else
+#if defined(__riscv)
+                        tcp_send_ack(pstLink, unDstAddr, usDstPort, unCltIp, usCltPort);
+#else
+                        tcp_send_ack(pstLink, *((in_addr_t *)pvDstAddr), usDstPort, unCltIp, usCltPort);
+#endif
+#endif
+                        return;
+                    }
+                }
+                else
+                {
+                    return;
+                }
+            }
+
             //* 发送ack
-            pstLink->stPeer.unSeqNum = /*pstLink->stPeer.unNextSeqNum = */ unPeerSeqNum + 1;
+            pstLink->stPeer.unSeqNum = /*pstLink->stPeer.unNextSeqNum = */ pstLink->stPeer.unSeqNum + 1;
 #if SUPPORT_IPV6
             if (IPV4 == enProtocol)
             {
@@ -1716,6 +1780,43 @@ void tcp_recv(void *pvSrcAddr, void *pvDstAddr, UCHAR *pubPacket, INT nPacketLen
 #endif
 }
 
+static void tcp_send_window_update_if_needed(INT nInput)
+{
+    EN_ONPSERR enErr = ERRNO;
+    PST_TCPLINK pstLink = NULL;
+    if (!onps_input_get(nInput, IOPT_GETTCPUDPLINK, &pstLink, &enErr) || !pstLink)
+        return;
+
+    /*
+     * 应用读走数据后，本地接收窗口会变大。必须主动 ACK 一次把新窗口
+     * 告诉对端，否则大响应跨过 TCPRCVBUF_SIZE 后，对端仍可能认为窗口
+     * 很小或为 0，后续数据/FIN 无法按正常节奏推进。
+     */
+    if (TLSCONNECTED != (EN_TCPLINKSTATE)pstLink->bState)
+        return;
+
+#if SUPPORT_IPV6
+    if (AF_INET == pstLink->stLocal.pstHandle->bFamily)
+        tcp_send_ack(pstLink,
+                     pstLink->stLocal.pstHandle->stSockAddr.saddr_ipv4,
+                     pstLink->stLocal.pstHandle->stSockAddr.usPort,
+                     pstLink->stPeer.stSockAddr.saddr_ipv4,
+                     pstLink->stPeer.stSockAddr.usPort);
+    else
+        tcpv6_send_ack(pstLink,
+                       pstLink->stLocal.pstHandle->stSockAddr.saddr_ipv6,
+                       pstLink->stLocal.pstHandle->stSockAddr.usPort,
+                       pstLink->stPeer.stSockAddr.saddr_ipv6,
+                       pstLink->stPeer.stSockAddr.usPort);
+#else
+    tcp_send_ack(pstLink,
+                 pstLink->stLocal.pstHandle->stSockAddr.saddr_ipv4,
+                 pstLink->stLocal.pstHandle->stSockAddr.usPort,
+                 pstLink->stPeer.stSockAddr.saddr_ipv4,
+                 pstLink->stPeer.stSockAddr.usPort);
+#endif
+}
+
 INT tcp_recv_upper(INT nInput, UCHAR *pubDataBuf, UINT unDataBufSize, CHAR bRcvTimeout)
 {
     EN_ONPSERR enErr;
@@ -1726,6 +1827,7 @@ INT tcp_recv_upper(INT nInput, UCHAR *pubDataBuf, UINT unDataBufSize, CHAR bRcvT
     nRcvedBytes = onps_input_recv_upper(nInput, pubDataBuf, unDataBufSize, NULL, NULL, &enErr);
     if (nRcvedBytes > 0)
     {
+        tcp_send_window_update_if_needed(nInput);
         /*
          * 不能在这里额外 pend 一次来“消耗”信号量。数据和 FIN 可能连续到达，
          * FIN 投递的 EOF 唤醒会被这次 pend 吃掉，下一轮 recv 就会重新进入
@@ -1767,7 +1869,10 @@ INT tcp_recv_upper(INT nInput, UCHAR *pubDataBuf, UINT unDataBufSize, CHAR bRcvT
         //* 读取数据
         nRcvedBytes = onps_input_recv_upper(nInput, pubDataBuf, unDataBufSize, NULL, NULL, &enErr);
         if (nRcvedBytes > 0)
+        {
+            tcp_send_window_update_if_needed(nInput);
             return nRcvedBytes;
+        }
         else
         {
             if (nRcvedBytes < 0)
