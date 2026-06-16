@@ -805,8 +805,7 @@ namespace fs
                     }
                     if (_type == SocketType::UDP)
                     {
-                        result = _onps_socket != INVALID_SOCKET &&
-                                 onps_input_has_pending_data(static_cast<INT>(_onps_socket));
+                        result = udp_read_ready_locked();
                         break;
                     }
                     if (_type == SocketType::TCP)
@@ -832,14 +831,13 @@ namespace fs
                 result = !_pending_connections.empty() || _onps_listening;
                 break;
             case SocketState::BOUND:
-                if (_type == SocketType::UDP && _onps_bound && !_loopback_registered)
+                if (_type == SocketType::UDP)
                 {
-                    result = _onps_socket != INVALID_SOCKET &&
-                             onps_input_has_pending_data(static_cast<INT>(_onps_socket));
+                    result = udp_read_ready_locked();
                 }
                 else
                 {
-                    result = _type == SocketType::UDP && !_datagram_queue.empty();
+                    result = false;
                 }
                 break;
             default:
@@ -1864,6 +1862,10 @@ namespace fs
 
                 _lock.acquire();
                 _onps_active = true;
+                // ONPS udp_sendto() 会为未显式 bind 的 UDP input 自动分配本地端口。
+                // socket 层必须同步标记已绑定，否则 poll/select 会走 loopback 队列，
+                // 看不到 DNS 回包所在的 ONPS 接收队列。
+                _onps_bound = true;
                 if (_state == SocketState::CREATED) {
                     _state = SocketState::BOUND;
                 }
@@ -2036,7 +2038,10 @@ namespace fs
                 return -EINVAL;
             }
 
-            if (_onps_active || (_onps_bound && !_loopback_registered)) {
+            bool onps_ready = onps_udp_read_ready_locked();
+            bool has_loopback_data = !_datagram_queue.empty();
+            bool onps_only = _onps_bound && !_loopback_registered;
+            if (onps_ready || (onps_only && !has_loopback_data)) {
                 int timeout_result = configure_onps_recv_timeout_locked(flags);
                 if (timeout_result < 0) {
                     _lock.release();
@@ -2681,6 +2686,22 @@ namespace fs
     bool socket_file::is_nonblocking_request(int flags) const
     {
         return !_blocking || (flags & MSG_DONTWAIT);
+    }
+
+    bool socket_file::onps_udp_read_ready_locked() const
+    {
+        return _type == SocketType::UDP &&
+               _onps_bound &&
+               _onps_socket != INVALID_SOCKET &&
+               onps_input_has_pending_data(static_cast<INT>(_onps_socket));
+    }
+
+    bool socket_file::udp_read_ready_locked() const
+    {
+        // INADDR_ANY UDP socket 会同时注册 loopback 和 ONPS。
+        // read_ready 必须同时检查两条接收队列，避免 DNS 等外网回包
+        // 已进入 ONPS input 后仍被 poll 判定为不可读。
+        return onps_udp_read_ready_locked() || !_datagram_queue.empty();
     }
 
     int socket_file::ensure_onps_socket_locked()

@@ -364,10 +364,61 @@ debug方式：（必须先阅读agent_docs/development_debugging.md，了解调�
 
 参考实现：
 1. ref/rocketos（往届作品第一名）
-2. 
+
 ### DNS EAGAIN 修复小结
 
 - 现象：`nslookup` 解析成功前大量打印 `Resource temporarily unavailable`。
   原因：ONPS UDP socket 无报文时也被 `poll/select` 判为可读，非阻塞 `read/recvfrom` 被空唤醒后返回 `EAGAIN`。
   解决方案：新增 `onps_input_has_pending_data()`；ONPS UDP 仅在接收队列有报文时读就绪，TCP 保留数据/EOF 就绪语义。
   验证：`nslookup example.com 10.0.2.3` 返回 A/AAAA，未再出现 `Resource temporarily unavailable`。
+
+
+## dns解析正常，但无法直接ping
+### 情况描述
+以百度作为实验对象，发现dns解析正常，直接ping解析出来的ip也能正常返回，但是直接使用ping baidu.com则会直接卡死
+```sh
+nslookup baidu.com 10.0.2.3
+Server:         10.0.2.3
+Address:        10.0.2.3:53
+
+Non-authoritative answer:
+Name:   baidu.com
+Address: 124.237.177.164
+Name:   baidu.com
+Address: 110.242.74.102
+Name:   baidu.com
+Address: 111.63.65.247
+Name:   baidu.com
+Address: 111.63.65.103
+
+Non-authoritative answer:
+
+F7LY:~$ ping 124.237.177.164
+PING 124.237.177.164 (124.237.177.164): 56 data bytes
+64 bytes from 124.237.177.164: seq=0 ttl=255 time=29.683 ms
+64 bytes from 124.237.177.164: seq=1 ttl=255 time=31.024 ms
+64 bytes from 124.237.177.164: seq=2 ttl=255 time=30.810 ms
+64 bytes from 124.237.177.164: seq=3 ttl=255 time=30.730 ms
+（因为当前终端对信号输入的处理有问题，因此杀掉原终端后新开了一个，这个可以暂时不修）
+
+F7LY:~$ ping baidu.com
+(卡死)
+
+```
+
+怀疑系统调用不是标准行为/dns->ip pipeline存在问题
+请在网络pipeline中添加注释，排查该问题。
+debug方式：（必须先阅读agent_docs/development_debugging.md，了解调试范式）
+1. 先进行静态代码阅读，确定可能的问题点
+2. 针对性的添加注释，逐渐排查问题
+3. 按照调试范式运行代码
+
+参考实现：
+1. ref/rocketos（往届作品第一名）
+
+### 域名 ping修复小结
+
+- 现象：`ping/wget baidu.com` 从卡死变为 `bad address`，直接 IP 正常。原因：`ppoll` 用 `CLOCKS_PER_SEC` 换算内核 tick，resolver 超时被放大。解决方案：`ppoll` 改用真实微秒 deadline。
+
+- 现象：DNS 回包已进 ONPS UDP input，但 `poll/recv` 看不到。原因：INADDR_ANY UDP 同时注册 loopback/ONPS，旧逻辑只查 loopback 队列。解决方案：UDP 就绪同时检查 loopback 和 ONPS；ONPS 有数据时优先读取。
+- 现象：未显式 bind 的 DNS UDP socket 收不到回包。原因：ONPS `udp_sendto()` 自动分配端口后，socket 层未同步 `_onps_bound`。解决方案：ONPS UDP 外发成功后同步 `_onps_bound` 和本地地址。

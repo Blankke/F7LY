@@ -143,6 +143,8 @@ namespace fs
         // 内部辅助函数
     private:
         bool is_nonblocking_request(int flags) const;
+        bool onps_udp_read_ready_locked() const;
+        bool udp_read_ready_locked() const;
         int ensure_loopback_bound_locked();
         int ensure_onps_socket_locked();
         int ensure_onps_raw_icmp_locked();
