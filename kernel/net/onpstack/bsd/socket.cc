@@ -86,6 +86,12 @@ void close(SOCKET socket)
         if (TLSCONNECTED == enLinkState)
         {
             tcp_disconnect((INT)socket);
+            /*
+             * 用户 fd 已经关闭，后续只需要保留 tcp_link/input 做 FIN 状态收尾。
+             * 收/发用户缓冲若继续等 close timer 回收，短连接快速复测会耗尽
+             * ONPS 的 32KB buddy 池，表现为下一次 connect 返回 ENOBUFS。
+             */
+            onps_input_release_tcp_user_buffers((INT)socket);
             return;
         }
 
