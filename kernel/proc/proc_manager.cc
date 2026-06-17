@@ -4839,6 +4839,7 @@ namespace proc
         vm->advice_state = VmAdviceState::None;
         vm->guard_pages = (flags & MAP_GROWSDOWN) ? 1 : 0;
         vm->zero_fill_past_file = false;
+        vm->file_backed_bytes = 0;
         vm->debug_name = is_anonymous ? "mmap-anon" : "mmap-file";
 
         // 设置扩展属性
@@ -4886,6 +4887,22 @@ namespace proc
             }
             else if (vfile != nullptr)
             {
+                fs::Kstat st;
+                int size_result = fs::k_vfs.fstat(vfile, &st);
+                if (size_result != EOK)
+                {
+                    printfRed("[mmap] Failed to get file size for vm object setup: %d\n", size_result);
+                    memset(vm, 0, sizeof(*vm));
+                    vm->backing_kind = VMA_BACKING_NONE;
+                    vm->backing_shmid = -1;
+                    vm->backing_base = 0;
+                    return fail_mmap(size_result < 0 ? -size_result : size_result);
+                }
+                if (static_cast<uint64>(offset) < st.size)
+                {
+                    uint64 bytes_left = st.size - static_cast<uint64>(offset);
+                    vm->file_backed_bytes = bytes_left > aligned_length ? aligned_length : bytes_left;
+                }
                 vm->object = new FileVmObject(vfile,
                                               (flags & MAP_SHARED) != 0,
                                               false,
@@ -5985,7 +6002,69 @@ namespace proc
         return retval;             \
     } while (0)
 
-        // 注意：现在直接使用 ProcessMemoryManager 的程序段管理功能，不再使用临时数组
+        auto register_lazy_file_area =
+            [&](fs::file *backing_file,
+                const eastl::string &backing_path,
+                uint64 segment_start,
+                uint64 segment_end,
+                uint64 segment_file_offset,
+                uint64 segment_file_size,
+                int segment_prot,
+                VmAreaKind area_kind,
+                const char *legacy_section_name,
+                const char *debug_name) -> bool
+        {
+            if (segment_end <= segment_start)
+            {
+                return false;
+            }
+
+            auto *object = new FileVmObject(backing_file, false, true, backing_path);
+            if (object == nullptr)
+            {
+                return false;
+            }
+
+            vma *area = new_mm->get_vm_space().create_area(segment_start,
+                                                           segment_end - segment_start,
+                                                           segment_prot,
+                                                           MAP_PRIVATE,
+                                                           object,
+                                                           segment_file_offset,
+                                                           area_kind,
+                                                           VmGrowPolicy::None,
+                                                           0,
+                                                           debug_name);
+            if (area == nullptr)
+            {
+                if (object->put())
+                {
+                    delete object;
+                }
+                return false;
+            }
+
+            area->zero_fill_past_file = true;
+            area->file_backed_bytes = segment_file_size;
+            area->debug_name = debug_name;
+
+            if (!new_mm->ensure_user_pagetable_hierarchy(segment_start, segment_end - segment_start))
+            {
+                new_mm->get_vm_space().destroy_area(area);
+                return false;
+            }
+
+            // 先保留一份 legacy program section 镜像，供现有清理/调试/clone 兼容路径继续使用。
+            // 真正的页源和缺页语义已经切到 VMASpace + FileVmObject。
+            if (new_mm->add_program_section((void *)segment_start,
+                                            segment_end - segment_start,
+                                            legacy_section_name) < 0)
+            {
+                new_mm->get_vm_space().destroy_area(area);
+                return false;
+            }
+            return true;
+        };
 
         printfBlue("execve: initialized program section tracking for %s\n", ab_path.c_str());
 
@@ -6202,26 +6281,19 @@ namespace proc
                     load_bad = true;
                     break;
                 }
-                // 分配虚拟内存空间 - 只为当前段分配内存
-                uint64 seg_flag = PTE_U; // User可访问标志
-#ifdef RISCV
-                if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC)
-                    seg_flag |= riscv::PteEnum::pte_executable_m;
-                if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
-                    seg_flag |= riscv::PteEnum::pte_writable_m;
+                int segment_prot = 0;
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ)
-                    seg_flag |= riscv::PteEnum::pte_readable_m;
-#elif defined(LOONGARCH)
-                seg_flag |= PTE_P | PTE_D | PTE_PLV | PTE_MAT; // PTE_P: Present bit, segment is present in memory
-                // PTE_D: Dirty bit, segment is dirty (modified)
-                if (!(ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC))
-                    seg_flag |= PTE_NX; // not executable
+                {
+                    segment_prot |= PROT_READ;
+                }
                 if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
-                    seg_flag |= PTE_W;
-                if (!(ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ))
-                    seg_flag |= PTE_NR; // not readable
-#endif
-                // printfRed("execve: loading segment %d, type: %d, startva: %p, endva: %p, memsz: %p, filesz: %p, flags: %d\n", i, ph.type, (void *)ph.vaddr, (void *)(ph.vaddr + ph.memsz), (void *)ph.memsz, (void *)ph.filesz, ph.flags);
+                {
+                    segment_prot |= PROT_WRITE;
+                }
+                if (ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC)
+                {
+                    segment_prot |= PROT_EXEC;
+                }
 
                 // 为当前段分配虚拟内存空间。LoongArch 用户态镜像存在 16K 对齐的 LOAD 段，
                 // 这里必须尊重 ELF 自带的 p_align，不能强行退化成 4K。
@@ -6259,44 +6331,11 @@ namespace proc
                     load_bad = true;
                     break;
                 }
-                // printfCyan("segment_start: %p, segment_end: %p\n", segment_start, segment_end);
-                // printfPink("checkpoint 2.1 %d\n", i);
-
-                if (mem::k_vmm.uvmalloc(new_pt, segment_start, segment_end, seg_flag) == 0)
-                {
-                    printfRed("execve: vmalloc failed for segment at %p-%p\n",
-                              (void *)segment_start, (void *)segment_end);
-                    exec_error = -ENOMEM;
-                    load_bad = true;
-                    break;
-                }
 
                 // 更新最高地址，用于后续堆初始化
                 if (segment_end > highest_addr)
                 {
                     highest_addr = segment_end;
-                }
-                // }
-
-                // 从文件加载段内容到内存
-                if (load_seg(new_pt, segment_start, main_exec_file, ab_path,
-                             segment_file_offset, segment_file_size) < 0)
-                {
-                    printfRed("execve: load segment data failed\n");
-                    exec_error = -EIO;
-                    load_bad = true;
-                    break;
-                }
-
-                // printfPink("checkpoint 2.2 %d\n", i);
-
-                // **新增：记录加载的程序段信息**
-                if (new_mm->prog_section_count >= max_program_section_num)
-                {
-                    printfRed("execve: too many program sections\n");
-                    exec_error = -ENOEXEC;
-                    load_bad = true;
-                    break;
                 }
 
                 // 直接添加段信息到 ProcessMemoryManager，确保页对齐
@@ -6325,21 +6364,30 @@ namespace proc
                     section_name = "unknown"; // 未知段类型
                 }
 
-                // 直接添加到 ProcessMemoryManager
-                int section_index = new_mm->add_program_section((void *)aligned_start,
-                                                                aligned_end - aligned_start,
-                                                                section_name);
-                if (section_index < 0)
+                if (!register_lazy_file_area(main_exec_file,
+                                             ab_path,
+                                             aligned_start,
+                                             aligned_end,
+                                             segment_file_offset,
+                                             segment_file_size,
+                                             segment_prot,
+                                             VmAreaKind::ElfLoad,
+                                             section_name,
+                                             section_name))
                 {
-                    printfRed("execve: failed to add program section\n");
-                    CLEANUP_AND_RETURN(-ENOMEM);
+                    printfRed("execve: failed to register lazy file segment %s at %p-%p\n",
+                              section_name,
+                              (void *)aligned_start,
+                              (void *)aligned_end);
+                    exec_error = -ENOMEM;
+                    load_bad = true;
+                    break;
                 }
 
-                printfGreen("execve: added program section[%d]: %s at %p, size %p (page-aligned from %p, %p)\n",
-                            section_index, section_name,
+                printfGreen("execve: registered lazy program segment %s at %p, size %p (page-aligned from %p, %p)\n",
+                            section_name,
                             (void *)aligned_start, (void *)(aligned_end - aligned_start),
                             (void *)ph.vaddr, (void *)ph.memsz);
-                // printfPink("checkpoint 2.4 %d\n", i);
             }
             // 如果加载过程中出错，清理已分配的资源
             if (load_bad)
@@ -6463,25 +6511,19 @@ namespace proc
                         continue;
 
                     uint64 load_addr = interp_base + interp_ph.vaddr;
-                    uint64 seg_flag = PTE_U;
-
-#ifdef RISCV
-                    /// 放开动态链接器权限
-                    if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC)
-                        seg_flag |= riscv::PteEnum::pte_executable_m;
-                    if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
-                        seg_flag |= riscv::PteEnum::pte_writable_m;
+                    int segment_prot = 0;
                     if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ)
-                        seg_flag |= riscv::PteEnum::pte_readable_m;
-#elif defined(LOONGARCH)
-                    seg_flag |= PTE_P | PTE_D | PTE_PLV | PTE_MAT;
-                    if (!(interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC))
-                        seg_flag |= PTE_NX;
+                    {
+                        segment_prot |= PROT_READ;
+                    }
                     if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_WRITE)
-                        seg_flag |= PTE_W;
-                    if (!(interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_READ))
-                        seg_flag |= PTE_NR;
-#endif
+                    {
+                        segment_prot |= PROT_WRITE;
+                    }
+                    if (interp_ph.flags & elf::elfEnum::ELF_PROG_FLAG_EXEC)
+                    {
+                        segment_prot |= PROT_EXEC;
+                    }
 
                     // 解释器的 LOAD 段也必须按 p_align 对齐到运行时地址，否则 RW LOAD 会整体错位。
                     uint64 linker_segment_align = interp_ph.align;
@@ -6510,27 +6552,10 @@ namespace proc
                     uint64 linker_segment_start = interp_base + linker_file_segment_start;
                     uint64 linker_segment_end = interp_base + linker_file_segment_end;
 
-                    if (mem::k_vmm.vmalloc(new_pt, linker_segment_start, linker_segment_end, seg_flag) == 0)
-                    {
-                        printfRed("execve: load dynamic linker failed at %p-%p\n",
-                                  (void *)linker_segment_start, (void *)linker_segment_end);
-                        CLEANUP_AND_RETURN(-ENOMEM);
-                    }
-
                     // 更新最高地址
                     if (linker_segment_end > highest_addr)
                     {
                         highest_addr = linker_segment_end;
-                    }
-
-                    // 加载动态链接器段内容
-                    printfCyan("execve: loading dynamic linker segment %d, vaddr: %p, memsz: %p, offset: %p\n",
-                               j, (void *)interp_ph.vaddr, (void *)interp_ph.memsz, (void *)interp_ph.off);
-                    if (load_seg(new_pt, linker_segment_start, interpreter_exec_file,
-                                 interpreter_path, linker_file_offset, linker_file_size) < 0)
-                    {
-                        printfRed("execve: load dynamic linker segment failed\n");
-                        CLEANUP_AND_RETURN(-EIO);
                     }
 
                     // **新增：记录动态链接器段信息**
@@ -6555,18 +6580,26 @@ namespace proc
                         linker_section_name = "linker_rodata";
                     }
 
-                    // 直接添加到 ProcessMemoryManager
-                    int linker_section_index = new_mm->add_program_section((void *)linker_aligned_start,
-                                                                           linker_aligned_end - linker_aligned_start,
-                                                                           linker_section_name);
-                    if (linker_section_index < 0)
+                    if (!register_lazy_file_area(interpreter_exec_file,
+                                                 interpreter_path,
+                                                 linker_aligned_start,
+                                                 linker_aligned_end,
+                                                 linker_file_offset,
+                                                 linker_file_size,
+                                                 segment_prot,
+                                                 VmAreaKind::InterpreterLoad,
+                                                 linker_section_name,
+                                                 linker_section_name))
                     {
-                        printfRed("execve: failed to add linker program section\n");
+                        printfRed("execve: failed to register lazy linker segment %s at %p-%p\n",
+                                  linker_section_name,
+                                  (void *)linker_aligned_start,
+                                  (void *)linker_aligned_end);
                         CLEANUP_AND_RETURN(-ENOMEM);
                     }
 
-                    printfGreen("execve: added linker section[%d]: %s at %p, size %p (page-aligned from %p, %p)\n",
-                                linker_section_index, linker_section_name,
+                    printfGreen("execve: registered lazy linker segment %s at %p, size %p (page-aligned from %p, %p)\n",
+                                linker_section_name,
                                 (void *)linker_aligned_start, (void *)(linker_aligned_end - linker_aligned_start),
                                 (void *)load_addr, (void *)interp_ph.memsz);
                 }
@@ -6631,46 +6664,54 @@ namespace proc
             // libcbench 的正则搜索和部分递归/线程库路径会触达比 256KiB 更深的用户栈。
             // 这里保守提高默认栈到 1MiB；run_bench 的 fork 开销不计入子测计时窗口。
             int stack_pgnum = 256;
-            uint64 stack_start = PGROUNDUP(highest_addr); // 在最高地址之上分配栈
-            uint64 stack_end = stack_start + stack_pgnum * PGSIZE;
+            uint64 stack_guard = PGROUNDUP(highest_addr);
+            uint64 stack_start = stack_guard + PGSIZE;
+            uint64 stack_end = stack_guard + stack_pgnum * PGSIZE;
+            uint64 stack_size = stack_end - stack_start;
 
-#ifdef RISCV
-            if (mem::k_vmm.uvmalloc(new_pt, stack_start, stack_end, PTE_W | PTE_X | PTE_R | PTE_U) == 0)
+            vma *stack_area = new_mm->get_vm_space().create_area(stack_start,
+                                                                 stack_size,
+                                                                 PROT_READ | PROT_WRITE,
+                                                                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_GROWSDOWN | MAP_STACK,
+                                                                 new AnonVmObject(false, "exec-user-stack"),
+                                                                 0,
+                                                                 VmAreaKind::UserStack,
+                                                                 VmGrowPolicy::Down,
+                                                                 1,
+                                                                 "exec-user-stack");
+            if (stack_area == nullptr)
             {
-                printfRed("execve: load user stack failed at %p-%p\n",
+                printfRed("execve: create user stack VMA failed at %p-%p\n",
                           (void *)stack_start, (void *)stack_end);
                 CLEANUP_AND_RETURN(-ENOMEM);
             }
-#elif defined(LOONGARCH)
-            if (mem::k_vmm.uvmalloc(new_pt, stack_start, stack_end, PTE_P | PTE_W | PTE_PLV | PTE_MAT | PTE_D) == 0)
+            stack_area->max_len = stack_size;
+            stack_area->file_backed_bytes = 0;
+            stack_area->zero_fill_past_file = true;
+            if (!new_mm->ensure_user_pagetable_hierarchy(stack_start, stack_size))
             {
-                printfRed("execve: load user stack failed at %p-%p\n",
-                          (void *)stack_start, (void *)stack_end);
+                printfRed("execve: prebuild user stack pagetable hierarchy failed\n");
                 CLEANUP_AND_RETURN(-ENOMEM);
             }
-#endif
+            if (new_mm->add_program_section((void *)stack_guard,
+                                            stack_end - stack_guard,
+                                            "user_stack") < 0)
+            {
+                printfRed("execve: failed to mirror user stack section\n");
+                CLEANUP_AND_RETURN(-ENOMEM);
+            }
 
             // 更新最高地址
             highest_addr = stack_end;
 
-            mem::k_vmm.uvmclear(new_pt, stack_start); // 设置guardpage
             sp = stack_end;                           // 栈指针从顶部开始
-            // stackbase = stack_start + PGSIZE;         // 计算栈底地址(跳过guard page)
-            stackbase = stack_start; // 计算栈底地址(跳过guard page) -> 不能跳过, 因为free的时候要用
+            stackbase = stack_guard; // 保留首个 guard page，下面的边界检查仍以 stackbase + PGSIZE 为准
             sp -= sizeof(uint64);    // 为返回地址预留空间
 
-            // 添加用户栈段信息到 ProcessMemoryManager
-            int stack_section_index = new_mm->add_program_section((void *)stackbase,
-                                                                  stack_end - stackbase,
-                                                                  "user_stack");
-            if (stack_section_index < 0)
-            {
-                printfRed("execve: failed to add user stack section\n");
-                CLEANUP_AND_RETURN(-ENOMEM);
-            }
-
-            printfGreen("execve: added user stack section[%d] at %p, size %p\n",
-                        stack_section_index, (void *)stackbase, (void *)(stack_end - stackbase));
+            printfGreen("execve: registered lazy user stack at %p, size %p with guard page %p\n",
+                        (void *)stack_start,
+                        (void *)(stack_end - stack_start),
+                        (void *)stack_guard);
         }
 
         // ========== 第六阶段：准备glibc所需的用户栈数据 ==========

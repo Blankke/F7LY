@@ -378,41 +378,6 @@ namespace proc
             return true;
         }
 
-#ifdef LOONGARCH
-        bool ensure_user_pagetable_hierarchy(mem::PageTable &pt, uint64 start, uint64 size)
-        {
-            if (size == 0)
-            {
-                return true;
-            }
-
-            uint64 range_start = PGROUNDDOWN(start);
-            uint64 range_end = PGROUNDUP(start + size);
-            if (range_end < range_start || range_start >= TRAPFRAME || range_end > TRAPFRAME)
-            {
-                printfRed("[clone_for_fork] invalid hierarchy-prebuild range [%p, %p)\n",
-                          (void *)range_start, (void *)range_end);
-                return false;
-            }
-
-            // LoongArch 的 tlbr refill 入口要求页表中间层级已经存在。
-            // fork/clone 只复制“已驻留页”时，像 guarded stack 这种合法但尚未驻留的页
-            // 会在子进程第一次触达时直接踩进架构相关异常，而不是走正常懒缺页。
-            for (uint64 va = range_start; va < range_end; va += PGSIZE)
-            {
-                mem::Pte pte_slot = pt.walk(va, true);
-                if (pte_slot.is_null())
-                {
-                    printfRed("[clone_for_fork] prebuild pagetable hierarchy failed for va=%p\n",
-                              (void *)va);
-                    return false;
-                }
-            }
-
-            return true;
-        }
-#endif
-
         inline bool is_probably_kernel_object_ptr(const void *ptr)
         {
             return (uint64)ptr >= k_min_kernel_object_ptr;
@@ -825,7 +790,7 @@ namespace proc
         {
             uint64 start = (uint64)new_mgr->prog_sections[i]._sec_start;
             uint64 size = new_mgr->prog_sections[i]._sec_size;
-            if (!ensure_user_pagetable_hierarchy(new_mgr->pagetable, start, size))
+            if (!new_mgr->ensure_user_pagetable_hierarchy(start, size))
             {
                 delete new_mgr;
                 return nullptr;
@@ -837,9 +802,8 @@ namespace proc
             uint64 heap_copy_start = PGROUNDDOWN(new_mgr->heap_start);
             uint64 heap_copy_end = PGROUNDUP(new_mgr->heap_end);
             if (heap_copy_end > heap_copy_start &&
-                !ensure_user_pagetable_hierarchy(new_mgr->pagetable,
-                                                 heap_copy_start,
-                                                 heap_copy_end - heap_copy_start))
+                !new_mgr->ensure_user_pagetable_hierarchy(heap_copy_start,
+                                                          heap_copy_end - heap_copy_start))
             {
                 delete new_mgr;
                 return nullptr;
@@ -923,9 +887,8 @@ namespace proc
             new_mgr->vma_data._vm[i].owner_mm = new_mgr;
 
 #ifdef LOONGARCH
-            if (!ensure_user_pagetable_hierarchy(new_mgr->pagetable,
-                                                 new_mgr->vma_data._vm[i].addr,
-                                                 new_mgr->vma_data._vm[i].len))
+            if (!new_mgr->ensure_user_pagetable_hierarchy(new_mgr->vma_data._vm[i].addr,
+                                                          new_mgr->vma_data._vm[i].len))
             {
                 delete new_mgr;
                 return nullptr;
@@ -1310,6 +1273,42 @@ namespace proc
 
         printfRed("ProcessMemoryManager: no available mmap region for size=%p\n", (void *)aligned_size);
         return 0;
+    }
+
+    bool ProcessMemoryManager::ensure_user_pagetable_hierarchy(uint64 start, uint64 size)
+    {
+#ifdef LOONGARCH
+        if (size == 0)
+        {
+            return true;
+        }
+
+        uint64 range_start = PGROUNDDOWN(start);
+        uint64 range_end = PGROUNDUP(start + size);
+        if (range_end < range_start || range_start >= TRAPFRAME || range_end > TRAPFRAME)
+        {
+            printfRed("ProcessMemoryManager: ensure_user_pagetable_hierarchy invalid range [%p, %p)\n",
+                      (void *)range_start, (void *)range_end);
+            return false;
+        }
+
+        // LoongArch 的 tlbr refill 入口要求中间层级先存在。
+        // 这里不建立叶子映射，只把后续懒缺页需要的页表骨架补齐。
+        for (uint64 va = range_start; va < range_end; va += PGSIZE)
+        {
+            mem::Pte pte_slot = pagetable.walk(va, true);
+            if (pte_slot.is_null())
+            {
+                printfRed("ProcessMemoryManager: ensure_user_pagetable_hierarchy failed for va=%p\n",
+                          (void *)va);
+                return false;
+            }
+        }
+#else
+        (void)start;
+        (void)size;
+#endif
+        return true;
     }
 
     uint64 ProcessMemoryManager::grow_heap(uint64 new_end)

@@ -274,6 +274,8 @@ namespace proc
 
         uint64 object_page_index = (area.page_offset / PGSIZE) + page_index;
         uint64 file_offset = area.page_offset + page_index * PGSIZE;
+        uint64 page_offset_in_area = page_index * PGSIZE;
+        uint64 file_backed_bytes = area.file_backed_bytes;
         uint64 source_pa = 0;
         {
             SpinLockGuard guard(object_lock_);
@@ -286,28 +288,32 @@ namespace proc
                 return -1;
             }
 
-            fs::Kstat st;
-            int stat_ret = fs::k_vfs.fstat(file_, &st);
-            if (stat_ret != EOK)
+            if (file_backed_bytes != 0 && page_offset_in_area < file_backed_bytes)
             {
-                return stat_ret;
-            }
-
-            if (file_offset >= st.size)
-            {
-                if (!zero_fill_past_file_ && !area.zero_fill_past_file)
-                {
-                    return signal_sigbus_for_current_task();
-                }
-
+                uint64 bytes_remaining = file_backed_bytes - page_offset_in_area;
+                size_t bytes_to_read = bytes_remaining > PGSIZE ? PGSIZE : static_cast<size_t>(bytes_remaining);
                 void *page = mem::PhysicalMemoryManager::alloc_page();
                 if (page == nullptr)
                 {
                     return -1;
                 }
                 fill_zero_page(page);
-                uint64 candidate_pa = reinterpret_cast<uint64>(page);
+                long readbytes = file_->read(reinterpret_cast<uint64>(page),
+                                             bytes_to_read,
+                                             static_cast<long>(file_offset),
+                                             false);
+                if (readbytes < 0)
+                {
+                    mem::k_pmm.free_page(page);
+                    return static_cast<int>(readbytes);
+                }
+                if (static_cast<size_t>(readbytes) < bytes_to_read)
+                {
+                    mem::k_pmm.free_page(page);
+                    return -EIO;
+                }
 
+                uint64 candidate_pa = reinterpret_cast<uint64>(page);
                 SpinLockGuard guard(object_lock_);
                 source_pa = find_source_page(object_page_index);
                 if (source_pa == 0)
@@ -323,24 +329,19 @@ namespace proc
             }
             else
             {
+                if (!zero_fill_past_file_ && !area.zero_fill_past_file)
+                {
+                    return signal_sigbus_for_current_task();
+                }
+
                 void *page = mem::PhysicalMemoryManager::alloc_page();
                 if (page == nullptr)
                 {
                     return -1;
                 }
                 fill_zero_page(page);
-                long readbytes = file_->read(reinterpret_cast<uint64>(page), PGSIZE, static_cast<long>(file_offset), false);
-                if (readbytes < 0)
-                {
-                    mem::k_pmm.free_page(page);
-                    return static_cast<int>(readbytes);
-                }
-                if (readbytes < PGSIZE)
-                {
-                    memset(reinterpret_cast<char *>(page) + readbytes, 0, PGSIZE - readbytes);
-                }
-
                 uint64 candidate_pa = reinterpret_cast<uint64>(page);
+
                 SpinLockGuard guard(object_lock_);
                 source_pa = find_source_page(object_page_index);
                 if (source_pa == 0)
