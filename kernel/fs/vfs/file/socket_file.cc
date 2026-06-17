@@ -664,6 +664,7 @@ namespace fs
         , _read_shutdown(false)
         , _write_shutdown(false)
         , _peer_closed(false)
+        , _peer_write_shutdown(false)
         , _pending_send_has_addr(false)
         , _recv_timeout_sec(0)
         , _recv_timeout_usec(0)
@@ -701,6 +702,7 @@ namespace fs
         , _read_shutdown(false)
         , _write_shutdown(false)
         , _peer_closed(false)
+        , _peer_write_shutdown(false)
         , _pending_send_has_addr(false)
         , _recv_timeout_sec(0)
         , _recv_timeout_usec(0)
@@ -765,6 +767,7 @@ namespace fs
                 _peer->_peer = nullptr;
             }
             _peer->_peer_closed = true;
+            _peer->_peer_write_shutdown = true;
             proc::k_pm.wakeup(&_peer->_recv_buffer);
             proc::k_pm.wakeup(&_peer->_datagram_queue);
             _peer->_lock.release();
@@ -824,7 +827,8 @@ namespace fs
                 }
                 else
                 {
-                    result = !_recv_buffer.empty() || _peer_closed || _read_shutdown;
+                    result = !_recv_buffer.empty() || _peer_closed ||
+                             _peer_write_shutdown || _read_shutdown;
                 }
                 break;
             case SocketState::LISTENING:
@@ -894,11 +898,11 @@ namespace fs
         self->_lock.acquire();
         // EPOLLRDHUP 只对面向连接的字节流语义有意义：
         // 1. 本端 shutdown(SHUT_RD) 后，读半边已经挂起；
-        // 2. 对端关闭写半边/连接后，本端会看到 peer closed。
+        // 2. 对端 shutdown(SHUT_WR) 或 close 后，本端会读到 EOF。
         // LTP epoll_wait05 就依赖这两类状态都能被 epoll 观察到。
         bool ready = _state == SocketState::CONNECTED &&
                      _type == SocketType::TCP &&
-                     (_read_shutdown || _peer_closed);
+                     (_read_shutdown || _peer_write_shutdown || _peer_closed);
         self->_lock.release();
         return ready;
     }
@@ -1296,6 +1300,7 @@ namespace fs
 
             _peer = server_side;
             _peer_closed = false;
+            _peer_write_shutdown = false;
             _state = SocketState::CONNECTED;
             listener->add_to_pending_queue(server_side);
             proc::k_pm.wakeup(&listener->_pending_connections);
@@ -1469,6 +1474,7 @@ namespace fs
 
             _peer = server_side;
             _peer_closed = false;
+            _peer_write_shutdown = false;
             _state = SocketState::CONNECTED;
             listener->add_to_pending_queue(server_side);
             proc::k_pm.wakeup(&listener->_pending_connections);
@@ -1694,7 +1700,8 @@ namespace fs
             bool has_timeout = socket_timeout_to_usec(_recv_timeout_sec, _recv_timeout_usec, timeout_us) &&
                                timeout_us > 0;
             uint64 deadline_us = has_timeout ? socket_now_usec() + timeout_us : 0;
-            while (_recv_buffer.empty() && !_peer_closed && !_read_shutdown) {
+            while (_recv_buffer.empty() && !_peer_closed &&
+                   !_peer_write_shutdown && !_read_shutdown) {
                 if (cur != nullptr && proc::ipc::signal::has_unmasked_signal_pending(cur)) {
                     _lock.release();
                     return -EINTR;
@@ -2291,7 +2298,8 @@ namespace fs
 
         if (peer != nullptr) {
             peer->_lock.acquire();
-            peer->_peer_closed = true;
+            // shutdown(SHUT_WR) 是半关闭：只表示本端不会再写，不能阻止对端继续写回。
+            peer->_peer_write_shutdown = true;
             proc::k_pm.wakeup(&peer->_recv_buffer);
             proc::k_pm.wakeup(&peer->_datagram_queue);
             peer->_lock.release();
@@ -3029,6 +3037,7 @@ namespace fs
         _lock.acquire();
         _peer = peer;
         _peer_closed = peer == nullptr;
+        _peer_write_shutdown = peer == nullptr;
         _state = peer == nullptr ? SocketState::CLOSED : SocketState::CONNECTED;
         _lock.release();
     }
