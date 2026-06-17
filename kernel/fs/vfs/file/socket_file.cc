@@ -762,14 +762,7 @@ namespace fs
         if (_peer != nullptr)
         {
             _peer->_lock.acquire();
-            if (_peer->_peer == this)
-            {
-                _peer->_peer = nullptr;
-            }
-            _peer->_peer_closed = true;
-            _peer->_peer_write_shutdown = true;
-            proc::k_pm.wakeup(&_peer->_recv_buffer);
-            proc::k_pm.wakeup(&_peer->_datagram_queue);
+            _peer->mark_stream_peer_closed_locked(this);
             _peer->_lock.release();
             _peer = nullptr;
         }
@@ -827,8 +820,7 @@ namespace fs
                 }
                 else
                 {
-                    result = !_recv_buffer.empty() || _peer_closed ||
-                             _peer_write_shutdown || _read_shutdown;
+                    result = stream_read_ready_locked();
                 }
                 break;
             case SocketState::LISTENING:
@@ -867,7 +859,7 @@ namespace fs
             if (_type == SocketType::TCP)
             {
                 socket_file *peer = _peer;
-                bool local_ready = !_write_shutdown && !_peer_closed && peer != nullptr;
+                bool local_ready = stream_write_open_locked();
                 _lock.release();
                 if (!local_ready)
                 {
@@ -877,7 +869,7 @@ namespace fs
                 peer->_lock.acquire();
                 // TCP 写就绪必须反映对端接收队列空间；否则 poll/select 会在队列已满时
                 // 继续驱动写入，iperf 这类吞吐工具会把内核堆推到无限扩容。
-                result = peer->_read_shutdown || peer->_state == SocketState::CLOSED ||
+                result = !peer->stream_receive_open_locked() ||
                          peer->_recv_buffer.size() < k_tcp_recv_buffer_max_bytes;
                 peer->_lock.release();
                 return result;
@@ -902,7 +894,7 @@ namespace fs
         // LTP epoll_wait05 就依赖这两类状态都能被 epoll 观察到。
         bool ready = _state == SocketState::CONNECTED &&
                      _type == SocketType::TCP &&
-                     (_read_shutdown || _peer_write_shutdown || _peer_closed);
+                     stream_read_eof_locked();
         self->_lock.release();
         return ready;
     }
@@ -1538,7 +1530,7 @@ namespace fs
                     os_sleep_ms(1);
                 }
             }
-            if (_write_shutdown || _peer == nullptr || _peer_closed) {
+            if (!stream_write_open_locked()) {
                 _lock.release();
                 return -EPIPE;
             }
@@ -1570,7 +1562,7 @@ namespace fs
             if (had_pending && nonblocking)
             {
                 peer->_lock.acquire();
-                bool peer_broken = peer->_read_shutdown || peer->_state == SocketState::CLOSED;
+                bool peer_broken = !peer->stream_receive_open_locked();
                 size_t used = peer->_recv_buffer.size();
                 bool can_flush_now = !peer_broken && used <= k_tcp_recv_buffer_max_bytes &&
                                      send_len <= k_tcp_recv_buffer_max_bytes - used;
@@ -1700,8 +1692,7 @@ namespace fs
             bool has_timeout = socket_timeout_to_usec(_recv_timeout_sec, _recv_timeout_usec, timeout_us) &&
                                timeout_us > 0;
             uint64 deadline_us = has_timeout ? socket_now_usec() + timeout_us : 0;
-            while (_recv_buffer.empty() && !_peer_closed &&
-                   !_peer_write_shutdown && !_read_shutdown) {
+            while (_recv_buffer.empty() && !stream_read_eof_locked()) {
                 if (cur != nullptr && proc::ipc::signal::has_unmasked_signal_pending(cur)) {
                     _lock.release();
                     return -EINTR;
@@ -2298,10 +2289,7 @@ namespace fs
 
         if (peer != nullptr) {
             peer->_lock.acquire();
-            // shutdown(SHUT_WR) 是半关闭：只表示本端不会再写，不能阻止对端继续写回。
-            peer->_peer_write_shutdown = true;
-            proc::k_pm.wakeup(&peer->_recv_buffer);
-            proc::k_pm.wakeup(&peer->_datagram_queue);
+            peer->mark_stream_peer_write_shutdown_locked();
             peer->_lock.release();
         }
         return 0;
@@ -2944,7 +2932,7 @@ namespace fs
         {
             peer->_lock.acquire();
             while (peer->_recv_buffer.size() >= k_tcp_recv_buffer_max_bytes &&
-                   !peer->_read_shutdown && peer->_state != SocketState::CLOSED)
+                   peer->stream_receive_open_locked())
             {
                 if (nonblocking)
                 {
@@ -2954,7 +2942,7 @@ namespace fs
                 proc::k_pm.sleep(&peer->_recv_buffer, &peer->_lock);
             }
 
-            if (peer->_read_shutdown || peer->_state == SocketState::CLOSED)
+            if (!peer->stream_receive_open_locked())
             {
                 peer->_lock.release();
                 return queued > 0 ? static_cast<int>(queued) : -EPIPE;
@@ -2991,7 +2979,7 @@ namespace fs
 
     int socket_file::enqueue_stream_data(const uint8_t *data, size_t len)
     {
-        if (_peer == nullptr || _peer_closed)
+        if (!stream_write_open_locked())
         {
             return -EPIPE;
         }
@@ -3040,6 +3028,47 @@ namespace fs
         _peer_write_shutdown = peer == nullptr;
         _state = peer == nullptr ? SocketState::CLOSED : SocketState::CONNECTED;
         _lock.release();
+    }
+
+    bool socket_file::stream_read_eof_locked() const
+    {
+        // 本端关闭读半边、对端关闭写半边或对端彻底关闭，都会让本地 stream 读到 EOF。
+        return _read_shutdown || _peer_write_shutdown || _peer_closed;
+    }
+
+    bool socket_file::stream_read_ready_locked() const
+    {
+        return !_recv_buffer.empty() || stream_read_eof_locked();
+    }
+
+    bool socket_file::stream_write_open_locked() const
+    {
+        return !_write_shutdown && !_peer_closed && _peer != nullptr;
+    }
+
+    bool socket_file::stream_receive_open_locked() const
+    {
+        return !_read_shutdown && _state != SocketState::CLOSED;
+    }
+
+    void socket_file::mark_stream_peer_closed_locked(socket_file *peer)
+    {
+        if (_peer == peer)
+        {
+            _peer = nullptr;
+        }
+        _peer_closed = true;
+        _peer_write_shutdown = true;
+        proc::k_pm.wakeup(&_recv_buffer);
+        proc::k_pm.wakeup(&_datagram_queue);
+    }
+
+    void socket_file::mark_stream_peer_write_shutdown_locked()
+    {
+        // shutdown(SHUT_WR) 是半关闭：只表示对端不会再写，不能阻止本端继续写回。
+        _peer_write_shutdown = true;
+        proc::k_pm.wakeup(&_recv_buffer);
+        proc::k_pm.wakeup(&_datagram_queue);
     }
 
     bool socket_file::is_valid_address(const struct sockaddr *addr, socklen_t addrlen)

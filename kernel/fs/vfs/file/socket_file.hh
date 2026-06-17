@@ -94,6 +94,13 @@ namespace fs
         
         SpinLock _lock;
 
+        bool stream_read_eof_locked() const;
+        bool stream_read_ready_locked() const;
+        bool stream_write_open_locked() const;
+        bool stream_receive_open_locked() const;
+        void mark_stream_peer_closed_locked(socket_file *peer);
+        void mark_stream_peer_write_shutdown_locked();
+
     public:
         socket_file(int domain, int type, int protocol);
         socket_file(FileAttrs attrs, int domain, int type, int protocol);
