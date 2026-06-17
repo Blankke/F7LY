@@ -471,6 +471,35 @@ void onps_input_free(INT nInput)
         os_thread_sem_uninit(hSemToFree);
 }
 
+void onps_input_release_tcp_user_buffers(INT nInput)
+{
+    if (nInput < 0 || nInput > SOCKET_NUM_MAX - 1)
+        return;
+
+    UCHAR *pubRcvBufToFree = NULL;
+    PST_TCPLINK pstLink = NULL;
+    os_thread_mutex_lock(l_hMtxInput);
+    {
+        PSTCB_ONPS_INPUT pstcbInput = &l_stcbaInput[nInput];
+        if (IPPROTO_TCP == (EN_IPPROTO)pstcbInput->ubIPProto &&
+            TCP_TYPE_SERVER != pstcbInput->uniHandle.stTcpUdp.bType)
+        {
+            pstLink = (PST_TCPLINK)pstcbInput->pvAttach;
+            pubRcvBufToFree = pstcbInput->pubRcvBuf;
+            pstcbInput->pubRcvBuf = NULL;
+            pstcbInput->unRcvBufSize = 0;
+            pstcbInput->unRcvedBytes = 0;
+        }
+    }
+    os_thread_mutex_unlock(l_hMtxInput);
+
+    if (pubRcvBufToFree)
+        buddy_free(pubRcvBufToFree);
+
+    if (pstLink)
+        tcp_link_release_send_resources(pstLink);
+}
+
 BOOL onps_input_set(INT nInput, ONPSIOPT enInputOpt, void *pvVal, EN_ONPSERR *penErr)
 {
     if (nInput < 0 || nInput > SOCKET_NUM_MAX - 1)

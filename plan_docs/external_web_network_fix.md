@@ -422,3 +422,18 @@ debug方式：（必须先阅读agent_docs/development_debugging.md，了解调�
 
 - 现象：DNS 回包已进 ONPS UDP input，但 `poll/recv` 看不到。原因：INADDR_ANY UDP 同时注册 loopback/ONPS，旧逻辑只查 loopback 队列。解决方案：UDP 就绪同时检查 loopback 和 ONPS；ONPS 有数据时优先读取。
 - 现象：未显式 bind 的 DNS UDP socket 收不到回包。原因：ONPS `udp_sendto()` 自动分配端口后，socket 层未同步 `_onps_bound`。解决方案：ONPS UDP 外发成功后同步 `_onps_bound` 和本地地址。
+
+## 网络buffer异常耗尽(优化)
+### 情况描述
+在多次成功`wget`后,会出现如下输出:
+```sh
+...(成功 wget 3次)
+F7LY:~$ wget -O - http://httpbin.org
+Connecting to httpbin.org (35.153.186.200:80)
+wget: can't connect to remote host (35.153.186.200): No buffer space available
+```
+请确定该输出是否符合标准实现.
+
+### 修复小结
+
+- 现象：快速多次 `wget` 后 `No buffer space available`。原因：TCP 关闭态连接仍保留 2KB 接收缓冲 + 4KB SACK 发送缓冲，32KB ONPS buddy 池短时耗尽。解决方案：用户 fd close 后，FIN/TIMEWAIT/CLOSED 只保留 TCP link/timer，提前释放收发大缓冲。

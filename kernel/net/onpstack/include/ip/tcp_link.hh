@@ -206,10 +206,11 @@ typedef struct _ST_INPUTATTACH_TCPSRV_ {
 //* tcp服务器数据接收队列节点定义
 typedef ST_SLINKEDLIST_NODE ST_TCPSRV_RCVQUEUE_NODE, *PST_TCPSRV_RCVQUEUE_NODE; 
 
-TCP_LINK_EXT BOOL tcp_link_init(EN_ONPSERR *penErr); 
-TCP_LINK_EXT void tcp_link_uninit(void); 
+TCP_LINK_EXT BOOL tcp_link_init(EN_ONPSERR *penErr);
+TCP_LINK_EXT void tcp_link_uninit(void);
 TCP_LINK_EXT PST_TCPLINK tcp_link_get(EN_ONPSERR *penErr);
-TCP_LINK_EXT void tcp_link_free(PST_TCPLINK pstTcpLink); 
+TCP_LINK_EXT void tcp_link_release_send_resources(PST_TCPLINK pstTcpLink);
+TCP_LINK_EXT void tcp_link_free(PST_TCPLINK pstTcpLink);
 TCP_LINK_EXT void tcp_link_list_used_put(PST_TCPLINK pstTcpLink);
 TCP_LINK_EXT PST_TCPLINK tcp_link_list_used_get_next(PST_TCPLINK pstTcpLink);
 TCP_LINK_EXT void tcp_link_lock(void); 

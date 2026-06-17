@@ -123,7 +123,9 @@ ONPSINPUT_EXT INT onps_input_new_tcp_remote_client(INT nInputSrv, USHORT usSrvPo
 #endif
 
 //* 释放一个输入控制块
-ONPSINPUT_EXT void onps_input_free(INT nInput); 
+ONPSINPUT_EXT void onps_input_free(INT nInput);
+//* 用户fd已关闭但TCP关闭定时器仍需保留link时，提前释放不再需要的大块收发缓存
+ONPSINPUT_EXT void onps_input_release_tcp_user_buffers(INT nInput);
 
 //* 设置/获取相关配置项
 ONPSINPUT_EXT BOOL onps_input_set(INT nInput, ONPSIOPT enInputOpt, void *pvVal, EN_ONPSERR *penErr);
