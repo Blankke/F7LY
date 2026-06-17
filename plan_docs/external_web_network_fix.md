@@ -437,3 +437,83 @@ wget: can't connect to remote host (35.153.186.200): No buffer space available
 ### 修复小结
 
 - 现象：快速多次 `wget` 后 `No buffer space available`。原因：TCP 关闭态连接仍保留 2KB 接收缓冲 + 4KB SACK 发送缓冲，32KB ONPS buddy 池短时耗尽。解决方案：用户 fd close 后，FIN/TIMEWAIT/CLOSED 只保留 TCP link/timer，提前释放收发大缓冲。
+
+
+## wget invalid argument(无法复现,暂时搁置)
+### 情况描述
+我找了一个http协议的公网网页(http://httpbin.org), 使用wget进行多次实验
+```sh
+F7LY:~$ wget -O - http://httpbin.org
+Connecting to httpbin.org (35.153.186.200:80)
+writing to stdout
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>httpbin.org</title>
+    <link href="https://fonts.googleapis.com/css?family=Open+Sans:400,700|Source+Code+Pro:300,600|Titillium+Web:400,600,700"
+        rel="stylesheet">
+    <link rel="stylesheet" type="text/css" href="/flasgger_static/swagger-ui.css">
+    <link rel="icon" type="image/png" href="/static/favicon.ico" sizes="64x64 32x32 16x16" />
+    <style>
+        html {
+
+...(中间省略)
+                <br />
+            </div>
+        </section>
+    </div>
+</div>
+</body>
+
+-                    100% |********************************|  9593  0:00:00 ETA
+written to stdout
+F7LY:~$ wget -O - http://httpbin.org
+Connecting to httpbin.org (35.153.186.200:80)
+wget: error getting response: Invalid argument
+
+```
+宿主机执行效果
+```sh
+~/project/F7LY global-net ⇡1 *1 !1
+❯ wget -O - http://httpbin.org
+--2026-06-17 00:00:31--  http://httpbin.org/
+正在解析主机 httpbin.org (httpbin.org)... 44.208.196.123, 44.217.243.132, 35.153.186.200, ...
+正在连接 httpbin.org (httpbin.org)|44.208.196.123|:80... 已连接。
+已发出 HTTP 请求，正在等待回应... 200 OK
+长度：9593 (9.4K) [text/html]
+正在保存至: “STDOUT”
+
+-                          0%[                                  ]       0  --.-KB/s               <!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>httpbin.org</title>
+    <link href="https://fonts.googleapis.com/css?family=Open+Sans:400,700|Source+Code+Pro:300,600|Titillium+Web:400,600,700"
+        rel="stylesheet">
+    <link rel="stylesheet" type="text/css" href="/flasgger_static/swagger-ui.css">
+    <link rel="icon" type="image/png" href="/static/favicon.ico" sizes="64x64 32x32 16x16" />
+    <style>
+...(中间省略)
+                <br />
+                <br />
+            </div>
+        </section>
+    </div>
+</div>
+</body>
+
+-                        100%[=================================>]   9.37K  --.-KB/s  用时 0s
+
+2026-06-17 00:00:33 (332 MB/s) - 已写入至标准输出 [9593/9593]
+
+```
+发现os在执行网络请求中出现了偶发性的不一致现象. `wget: error getting response: Invalid argument`. 请通过在链路上打印调试输出,定位这个问题出现的原因,按照下面的步骤
+debug方式：（必须先阅读agent_docs/development_debugging.md，了解调试范式）
+1. 先进行静态代码阅读，确定可能的问题点
+2. 针对性的添加注释，逐渐排查问题
+3. 按照调试范式运行代码
+参考实现：
+1. ref/rocketos（往届作品第一名）
