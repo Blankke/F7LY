@@ -517,3 +517,137 @@ debug方式：（必须先阅读agent_docs/development_debugging.md，了解调�
 3. 按照调试范式运行代码
 参考实现：
 1. ref/rocketos（往届作品第一名）
+
+
+## https协议未适配
+### 情况描述
+对于同一公网测试网站:"httpbin.org",使用http协议和https协议连接得到结果不同.
+```sh
+F7LY:~$ wget -O - https://httpbin.org
+Connecting to httpbin.org (44.217.243.132:443)
+ssl_client: write: Broken pipe
+wget: error getting response: Invalid argument
+F7LY:~$ wget -O - https://httpbin.org
+Connecting to httpbin.org (32.196.248.58:443)
+ssl_client: write: Broken pipe
+wget: error getting response: Resource temporarily unavailable
+F7LY:~$ wget -O - http://httpbin.org
+Connecting to httpbin.org (44.217.243.132:80)
+writing to stdout
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>httpbin.org</title>
+    <link href="https://fonts.googleapis.com/css?family=Open+Sans:400,700|Source+Code+Pro:300,600|Titillium+Web:400,600,700"
+        rel="stylesheet">
+...(中间部分省略)
+    </div>
+</div>
+</body>
+
+-                    100% |********************************|  9593  0:00:00 ETA
+written to stdout
+```
+host上连接结果如下:
+```sh
+❯ wget -O - http://httpbin.org
+--2026-06-17 10:25:19--  http://httpbin.org/
+正在解析主机 httpbin.org (httpbin.org)... 98.84.2.93, 35.153.186.200, 52.202.201.157, ...
+正在连接 httpbin.org (httpbin.org)|98.84.2.93|:80... 已连接。
+已发出 HTTP 请求，正在等待回应... 200 OK
+长度：9593 (9.4K) [text/html]
+正在保存至: “STDOUT”
+
+-                                                    0%[                                                                                                               ]       0  --.-KB/s               <!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>httpbin.org</title>
+...(中间部分省略)
+    </div>
+</div>
+</body>
+
+-                                                  100%[==============================================================================================================>]   9.37K  --.-KB/s  用时 0s      
+
+2026-06-17 10:25:19 (375 MB/s) - 已写入至标准输出 [9593/9593]
+
+
+~                                                                                                                                                                                                        
+❯ wget -O - https://httpbin.org
+--2026-06-17 10:25:25--  https://httpbin.org/
+正在解析主机 httpbin.org (httpbin.org)... 98.84.2.93, 35.153.186.200, 52.202.201.157, ...
+正在连接 httpbin.org (httpbin.org)|98.84.2.93|:443... 已连接。
+已发出 HTTP 请求，正在等待回应... 200 OK
+长度：9593 (9.4K) [text/html]
+正在保存至: “STDOUT”
+
+-                                                    0%[                                                                                                               ]       0  --.-KB/s               <!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>httpbin.org</title>
+...(中间部分省略)    
+    </div>
+</div>
+</body>
+
+-                                                  100%[==============================================================================================================>]   9.37K  --.-KB/s  用时 0s      
+
+2026-06-17 10:25:26 (195 MB/s) - 已写入至标准输出 [9593/9593]
+```
+我在host中搭建了一个https server，方法如下：
+```sh
+~/project/temp
+❯ mkdir -p /tmp/f7ly_https                                 
+
+openssl req -x509 -newkey rsa:2048 \
+  -keyout /tmp/f7ly_https/key.pem \
+  -out /tmp/f7ly_https/cert.pem \
+  -days 1 -nodes \
+  -subj "/CN=localhost"
+
+openssl s_server \
+  -quiet -WWW \
+  -accept 18443 \
+  -cert /tmp/f7ly_https/cert.pem \
+  -key /tmp/f7ly_https/key.pem
+```
+~/project/temp中已经创建了一个index.html,在host中使用wget访问结果如下：
+```sh
+~ 
+❯ wget --no-check-certificate -O - https://127.0.0.1:18443/index.html
+--2026-06-17 11:06:39--  https://127.0.0.1:18443/index.html
+正在连接 127.0.0.1:18443... 已连接。
+警告: “127.0.0.1” 的证书不可信。
+警告: “127.0.0.1” 的证书颁发者未知。
+证书所有者与主机名 “127.0.0.1” 不符
+已发出 HTTP 请求，正在等待回应... 200 ok
+长度：未指定 [text/html]
+正在保存至: “STDOUT”
+
+-                                                      [<=>                                                                                                            ]       0  --.-KB/s               hello https
+-                                                      [ <=>                                                                                                           ]      12  --.-KB/s  用时 0s      
+
+2026-06-17 11:06:39 (5.85 MB/s) - 已写入标准输出 [12]
+
+```
+你可以使用这台server进行调试
+
+怀疑是协议栈未适配https(ssl)协议.请通过在链路上打印调试输出,定位这个问题出现的原因,按照下面的步骤
+debug方式：（必须先阅读agent_docs/development_debugging.md，了解调试范式）
+1. 先进行静态代码阅读，确定可能的问题点
+2. 针对性的添加注释，逐渐排查问题
+3. 按照调试范式运行代码
+参考实现：
+1. ref/rocketos（往届作品第一名）
+
+### 修复小结
+
+- 现象：HTTPS `wget` 报 `ssl_client: write: Broken pipe`。  
+  原因：`wget` 对本地 `socketpair` 执行 `shutdown(SHUT_WR)` 后，内核误标记对端已关闭。  
+  解决方案：拆分 `_peer_closed` 与 `_peer_write_shutdown`；半关闭只让读端 EOF，不阻止对端写回响应。

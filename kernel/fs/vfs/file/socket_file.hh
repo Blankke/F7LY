@@ -85,6 +85,7 @@ namespace fs
         bool _read_shutdown;
         bool _write_shutdown;
         bool _peer_closed;
+        bool _peer_write_shutdown;
         bool _pending_send_has_addr;
         long _recv_timeout_sec;
         long _recv_timeout_usec;
