@@ -286,6 +286,7 @@ namespace proc
         const vma *find_prev_vma(uint64 start_addr) const;
         vma *find_next_vma(const vma *entry);
         const vma *find_next_vma(const vma *entry) const;
+        int fault_page(uint64 va, int access_type);
         bool reindex_vma_slot(vma &entry, uint64 old_addr);
         bool insert_vma_slot(vma &entry);
         void erase_vma_slot(vma &entry, uint64 old_addr);
@@ -548,6 +549,7 @@ namespace proc
                                      uint64 max_addr,
                                      uint64 size,
                                      uint64 alignment) const;
+        bool clone_private_vm_space_for_fork(ProcessMemoryManager &dst);
         bool clone_vm_space_metadata_from(const ProcessMemoryManager &src);
         
         /**

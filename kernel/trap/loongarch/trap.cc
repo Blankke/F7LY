@@ -743,79 +743,22 @@ int mmap_handler(uint64 va, int cause)
 {
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
   proc::ProcessMemoryManager *mm = p != nullptr ? p->get_memory_manager() : nullptr;
-  uint64 fault_page = PGROUNDDOWN(va);
 
-  if ((cause == 2 || cause == 4) &&
-      mem::k_vmm.resolve_cow_page(*p->get_pagetable(), fault_page) == 0)
-  {
-    return 0;
-  }
-
-  proc::vma *vm = mm != nullptr ? mm->find_vma_covering(va) : nullptr;
-  if (vm == nullptr)
-  {
-    uint64 user_sp = p->get_trapframe() != nullptr ? p->get_trapframe()->sp : 0;
-    proc::vma *candidate = mm != nullptr ? mm->find_first_vma_at_or_after(fault_page + 1) : nullptr;
-    if (candidate != nullptr)
-    {
-      if ((candidate->flags & MAP_GROWSDOWN) == 0 ||
-          fault_page >= candidate->addr ||
-          !(user_sp >= fault_page && user_sp < candidate->addr + PGSIZE))
-      {
-        candidate = nullptr;
-      }
-    }
-
-    if (candidate == nullptr)
-    {
-      printfRed("mmap_handler: no VMA found for va %p\n", va);
-      return -1;
-    }
-
-    uint64 grow_len = candidate->addr - fault_page;
-    uint64 new_len = static_cast<uint64>(candidate->len) + grow_len;
-    if (!candidate->is_expandable || new_len > candidate->max_len || new_len > 0x7fffffffULL)
-    {
-      return -1;
-    }
-
-    proc::vma *prev = mm->find_prev_vma(candidate->addr);
-    constexpr uint64 growdown_guard_gap = 256 * PGSIZE;
-    if (prev != nullptr)
-    {
-      uint64 prev_end = prev->end_addr();
-      if ((prev_end <= candidate->addr && prev_end + growdown_guard_gap > prev_end &&
-           fault_page < prev_end + growdown_guard_gap) ||
-          fault_page < prev_end)
-      {
-        return -1;
-      }
-    }
-
-    uint64 old_addr = candidate->addr;
-    candidate->addr = fault_page;
-    candidate->len = static_cast<int>(new_len);
-    if (!mm->reindex_vma_slot(*candidate, old_addr))
-    {
-      candidate->addr = old_addr;
-      candidate->len = static_cast<int>(new_len - grow_len);
-      return -1;
-    }
-    vm = candidate;
-  }
-
-  // 确定访问类型 (LoongArch的异常码)
+  // 确定访问类型 (LoongArch 的异常码)
   int access_type = 0; // 默认读取
   if (cause == 2 || cause == 4)
   {                  // Store page fault
     access_type = 1; // 写入
   }
-  else if (cause == 8||cause == 3)
+  else if (cause == 8 || cause == 3)
   {                  // Instruction page fault
     access_type = 2; // 执行
   }
 
-  // 使用统一的VMA页面分配函数
-  return mem::k_vmm.allocate_vma_page(*p->get_pagetable(), va, vm, access_type);
+  if (mm == nullptr)
+  {
+    return -1;
+  }
+  return mm->fault_page(va, access_type);
 }
 #endif

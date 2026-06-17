@@ -2498,7 +2498,11 @@ namespace proc
                 // 对非 CLONE_VM 的 fork/clone，父子页表已经分离，写父页表会让子进程
                 // 看到未初始化的 tid 字段，进而破坏 glibc/pthread 的运行时状态。
                 int child_tid = np->_tid;
-                if (mem::k_vmm.copy_out(*np->get_pagetable(), ctid, &child_tid, sizeof(child_tid)) < 0)
+                if (mem::k_vmm.copy_out(*np->get_pagetable(),
+                                        ctid,
+                                        &child_tid,
+                                        sizeof(child_tid),
+                                        np->get_memory_manager()) < 0)
                 {
                     freeproc_creation_failed(np); // 使用专门的创建失败清理函数
                     np->_lock.release();
@@ -6729,7 +6733,7 @@ namespace proc
 
         sp -= 32;
         uint64_t random[4] = {0x0, -0x114514FF114514UL, 0x2UL << 60, 0x3UL << 60};
-        if (sp < stackbase || mem::k_vmm.copy_out(new_pt, sp, (char *)random, 32) < 0)
+        if (sp < stackbase || mem::k_vmm.copy_out(new_pt, sp, (char *)random, 32, new_mm) < 0)
         {
             printfRed("execve: copy random data failed\n");
             CLEANUP_AND_RETURN(-EFAULT);
@@ -6755,7 +6759,7 @@ namespace proc
                 printfRed("execve: stack overflow while copying envs\n");
                 CLEANUP_AND_RETURN(-E2BIG);
             }
-            if (mem::k_vmm.copy_out(new_pt, sp, envs[envc].c_str(), envs[envc].size() + 1) < 0)
+            if (mem::k_vmm.copy_out(new_pt, sp, envs[envc].c_str(), envs[envc].size() + 1, new_mm) < 0)
             {
                 printfRed("execve: copy envs failed\n");
                 CLEANUP_AND_RETURN(-EFAULT);
@@ -6780,7 +6784,7 @@ namespace proc
             {
                 return -E2BIG;
             }
-            if (mem::k_vmm.copy_out(new_pt, sp, arg_text, arg_len + 1) < 0)
+            if (mem::k_vmm.copy_out(new_pt, sp, arg_text, arg_len + 1, new_mm) < 0)
             {
                 return -EFAULT;
             }
@@ -6878,7 +6882,7 @@ namespace proc
 
             // 将辅助向量复制到栈上
             sp -= k_auxv_scratch_bytes;
-            if (mem::k_vmm.copy_out(new_pt, sp, (char *)aux, k_auxv_scratch_bytes) < 0)
+            if (mem::k_vmm.copy_out(new_pt, sp, (char *)aux, k_auxv_scratch_bytes, new_mm) < 0)
             {
                 printfRed("execve: copy auxv failed\n");
                 CLEANUP_AND_RETURN(-EFAULT);
@@ -6894,7 +6898,7 @@ namespace proc
                 printfRed("execve: stack overflow while copying envp\n");
                 CLEANUP_AND_RETURN(-E2BIG);
             }
-            if (mem::k_vmm.copy_out(new_pt, sp, uenvp, (envc + 1) * sizeof(uint64)) < 0)
+            if (mem::k_vmm.copy_out(new_pt, sp, uenvp, (envc + 1) * sizeof(uint64), new_mm) < 0)
             {
                 printfRed("execve: copy envp failed\n");
                 CLEANUP_AND_RETURN(-EFAULT);
@@ -6912,7 +6916,7 @@ namespace proc
                 printfRed("execve: stack overflow while copying argv\n");
                 CLEANUP_AND_RETURN(-E2BIG);
             }
-            if (mem::k_vmm.copy_out(new_pt, sp, uargv, (argc + 1) * sizeof(uint64)) < 0)
+            if (mem::k_vmm.copy_out(new_pt, sp, uargv, (argc + 1) * sizeof(uint64), new_mm) < 0)
             {
                 printfRed("execve: copy argv failed\n");
                 CLEANUP_AND_RETURN(-EFAULT);
@@ -6929,7 +6933,7 @@ namespace proc
         // 7. 压入参数个数（argc）
         sp -= sizeof(uint64);
         // printfGreen("execve: argc: %d, sp: %p\n", argc, (void *)sp);
-        if (mem::k_vmm.copy_out(new_pt, sp, (char *)&argc, sizeof(uint64)) < 0)
+        if (mem::k_vmm.copy_out(new_pt, sp, (char *)&argc, sizeof(uint64), new_mm) < 0)
         {
             printfRed("execve: copy argc failed\n");
             CLEANUP_AND_RETURN(-EFAULT);

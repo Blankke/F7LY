@@ -91,7 +91,30 @@
 - `feat(mm): 引入 vmaspace 与 vmobject 骨架`
 - 第 2 提交待落地：`feat(mm): 将 execve 段与用户栈迁移到 vmaspace`
 
+## 第 3 提交增量
+- 情况要求：
+  - trap 缺页、`copy_in/copy_out`、`fork()` 私有页复制仍然各自分散处理，`execve()` 往新页表写入用户栈时还会误借“当前进程旧地址空间”找 VMA。
+  - 第 2 提交把 `PT_LOAD`/用户栈迁到懒注册后，这类“按当前进程猜测目标 mm”的旧路径已经不再可靠，需要统一收束到 `ProcessMemoryManager::fault_page()`。
+- 解决方法：
+  - `ProcessMemoryManager` 新增 `fault_page()`，统一接住写时复制、普通缺页、`MAP_GROWSDOWN` 栈扩展和最终 `allocate_vma_page()` 安装。
+  - RISC-V / LoongArch 两套 trap `mmap_handler()` 改成只负责解析 fault 类型，再统一委托给 `mm->fault_page()`。
+  - `VirtualMemoryManager::copy_in()` / `copy_out()` / `copy_str_in()` / `ensure_user_*_range()` 增加显式 `target_mm` 解析逻辑，不再默认把“当前正在运行的进程”误当成目标页表所属地址空间。
+  - `execve()` 往 `new_pt` 写随机栈数据、argv/envp/auxv/argc，以及 `CLONE_CHILD_SETTID` 往子页表写 tid，全部改成显式传入目标 `ProcessMemoryManager`。
+  - `clone_for_fork()` 新增 `clone_private_vm_space_for_fork()`，把已经迁入 `VMASpace` 的私有区域（`PT_LOAD`、解释器段、堆、用户栈）统一走页级 COW 复制，不再依赖 `prog_sections[]/heap` 的分散特判。
+- 验证方式：
+  - `make build ARCH=riscv`
+  - `make build ARCH=loongarch`
+  - `timeout 60s make run r QEMU_MEM=1G`
+  - `timeout 60s make run l QEMU_MEM=1G`
+- 验证结果：
+  - 两个架构重新构建均通过。
+  - 两个架构的 60s smoke 都自然结束，`exit_code=0`，没有出现新的 panic、页故障死循环、`copy_out(new_pt, ...)` 失败或 fork 后写时复制异常。
+  - 本轮 smoke 日志：
+    - RISC-V：`logs/output_r_20260617-214118_vmaspace-cow-smoke_timeout-60s.txt`
+    - LoongArch：`logs/output_l_20260617-214118_vmaspace-cow-smoke_timeout-60s.txt`
+
 ## 状态
 - 第 1 提交已完成待验收：骨架、兼容层、双架构构建和 60s smoke 已闭环。
 - 第 2 提交已完成待验收：`execve` 主程序段、解释器段、用户栈已切到 `VMASpace + VmObject` 懒注册路径，双架构构建和 60s smoke 已闭环。
-- 整体计划仍进行中：后续继续推进第 3 提交起的统一 fault/COW、`mmap/shm` 全量迁移，以及 `mmap3/libcbench/shm*` 定向回归和 wrapper 判定口径核对。
+- 第 3 提交已完成待验收：统一 fault、`copy_in/copy_out` 目标地址空间感知，以及 `VMASpace` 私有区域 fork COW 已闭环。
+- 整体计划仍进行中：后续继续推进第 4 提交起的 `mmap/shm` 全量迁移、旧 VMA/SHM 旁路清理，以及 `mmap3/libcbench/shm*` 定向回归和 wrapper 判定口径核对。

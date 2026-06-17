@@ -11,6 +11,11 @@
 
 #endif
 
+namespace proc
+{
+	class ProcessMemoryManager;
+}
+
 namespace mem
 {
 	class VirtualMemoryManager
@@ -61,7 +66,7 @@ void pci_map(int bus, int dev, int func, void *pages);
 		// uint64 allocshm( PageTable &pt, uint64 oldshm, uint64 newshm, uint64 sz, void *phyaddr[ pm::MAX_SHM_PGNUM ] );
 		
 
-		int copy_in( PageTable &pt, void *dst, uint64 src_va, uint64 len );
+		int copy_in( PageTable &pt, void *dst, uint64 src_va, uint64 len, proc::ProcessMemoryManager *target_mm = nullptr );
 		// 只确认用户读范围可访问，并按需补齐合法 VMA 页面；不搬运数据。
 		int ensure_user_read_range( PageTable &pt, uint64 src_va, uint64 len );
 		// 只确认用户写范围可访问，必要时完成懒分配/COW；不改写用户数据。
@@ -96,7 +101,7 @@ void pci_map(int bus, int dev, int func, void *pages);
 		/// @param p source address
 		/// @param len length
 		/// @return 0 if success, -1 if failed
-		int copy_out( PageTable &pt, uint64 va, const void *p, uint64 len );
+		int copy_out( PageTable &pt, uint64 va, const void *p, uint64 len, proc::ProcessMemoryManager *target_mm = nullptr );
 
 		/// @brief 处理 fork COW 写时复制页。
 		/// @return 成功拆页/恢复写权限返回0；不是 COW 页或失败返回-1。

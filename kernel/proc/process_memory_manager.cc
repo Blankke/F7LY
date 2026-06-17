@@ -688,6 +688,79 @@ namespace proc
                vm_space.has_conflict(start_addr, end_addr, ignore);
     }
 
+    int ProcessMemoryManager::fault_page(uint64 va, int access_type)
+    {
+        uint64 page_va = PGROUNDDOWN(va);
+        if (access_type == 1 && mem::k_vmm.resolve_cow_page(pagetable, page_va) == 0)
+        {
+            return 0;
+        }
+
+        vma *vm = find_vma_covering(va);
+        if (vm == nullptr)
+        {
+            Pcb *cur = k_pm.get_cur_pcb();
+            uint64 user_sp = 0;
+            if (cur != nullptr &&
+                cur->get_memory_manager() == this &&
+                cur->get_trapframe() != nullptr)
+            {
+                user_sp = cur->get_trapframe()->sp;
+            }
+
+            vma *candidate = find_first_vma_at_or_after(page_va + 1);
+            if (candidate != nullptr)
+            {
+                if ((candidate->flags & MAP_GROWSDOWN) == 0 ||
+                    page_va >= candidate->addr ||
+                    !(user_sp >= page_va && user_sp < candidate->addr + PGSIZE))
+                {
+                    candidate = nullptr;
+                }
+            }
+
+            if (candidate == nullptr)
+            {
+                printfRed("ProcessMemoryManager: no VMA found for fault va=%p access=%d\n",
+                          (void *)va, access_type);
+                return -1;
+            }
+
+            uint64 grow_len = candidate->addr - page_va;
+            uint64 new_len = static_cast<uint64>(candidate->len) + grow_len;
+            if (!candidate->is_expandable || new_len > candidate->max_len || new_len > 0x7fffffffULL)
+            {
+                return -1;
+            }
+
+            vma *prev = find_prev_vma(candidate->addr);
+            constexpr uint64 growdown_guard_gap = 256 * PGSIZE;
+            if (prev != nullptr)
+            {
+                uint64 prev_end = prev->end_addr();
+                if ((prev_end <= candidate->addr && prev_end + growdown_guard_gap > prev_end &&
+                     page_va < prev_end + growdown_guard_gap) ||
+                    page_va < prev_end)
+                {
+                    return -1;
+                }
+            }
+
+            uint64 old_addr = candidate->addr;
+            candidate->addr = page_va;
+            candidate->len = static_cast<int>(new_len);
+            if (!reindex_vma_slot(*candidate, old_addr))
+            {
+                candidate->addr = old_addr;
+                candidate->len = static_cast<int>(new_len - grow_len);
+                return -1;
+            }
+            vm = candidate;
+        }
+
+        return mem::k_vmm.allocate_vma_page(pagetable, va, vm, access_type);
+    }
+
     uint64 ProcessMemoryManager::find_gap_in_vma_index(uint64 start_hint,
                                                        uint64 min_addr,
                                                        uint64 max_addr,
@@ -732,6 +805,55 @@ namespace proc
         {
             return vm_space.clone_area_from(entry) != nullptr;
         });
+    }
+
+    bool ProcessMemoryManager::clone_private_vm_space_for_fork(ProcessMemoryManager &dst)
+    {
+        bool copy_ok = true;
+        if (!get_vm_space().for_each([&](const vma &entry) -> bool
+        {
+            if (!entry.valid_range())
+            {
+                return true;
+            }
+
+#ifdef LOONGARCH
+            if (!dst.ensure_user_pagetable_hierarchy(entry.addr, static_cast<uint64>(entry.len)))
+            {
+                copy_ok = false;
+                return false;
+            }
+#endif
+
+            // 这一步只处理已经迁入 VMASpace 的“私有用户映射”：
+            // ELF/PT_LOAD、解释器段、brk 堆、用户栈。
+            // 共享映射留给对象后端或后续 mmap/shm 提交继续统一。
+            if (!entry.is_private_mapping())
+            {
+                return true;
+            }
+
+            if (mem::k_vmm.vm_copy(pagetable, dst.pagetable, entry.addr, static_cast<uint64>(entry.len)) < 0)
+            {
+                printfRed("[clone_private_vm_space_for_fork] copy area failed kind=%d addr=%p len=%d name=%s\n",
+                          static_cast<int>(entry.area_kind),
+                          (void *)entry.addr,
+                          entry.len,
+                          entry.debug_name != nullptr ? entry.debug_name : "(null)");
+                copy_ok = false;
+                return false;
+            }
+
+            if (entry.wipe_on_fork)
+            {
+                wipe_child_vma_pages(dst.pagetable, entry.addr, static_cast<uint64>(entry.len));
+            }
+            return true;
+        }))
+        {
+            return false;
+        }
+        return copy_ok;
     }
 
     ProcessMemoryManager *ProcessMemoryManager::share_for_thread()
@@ -783,70 +905,20 @@ namespace proc
         // fork操作不共享虚拟内存，设置为false
         new_mgr->shared_vm = false;
 
-#ifdef LOONGARCH
-        // 先把子进程合法用户区间的页表层级补齐，但不提前建立叶子映射。
-        // 这样 LoongArch 的 tlbr refill 能稳定落到懒缺页路径，同时不破坏 lazy allocation。
-        for (int i = 0; i < new_mgr->prog_section_count; ++i)
+        if (!new_mgr->clone_vm_space_metadata_from(*this))
         {
-            uint64 start = (uint64)new_mgr->prog_sections[i]._sec_start;
-            uint64 size = new_mgr->prog_sections[i]._sec_size;
-            if (!new_mgr->ensure_user_pagetable_hierarchy(start, size))
-            {
-                delete new_mgr;
-                return nullptr;
-            }
+            printfRed("[clone_for_fork] clone VMASpace metadata failed\n");
+            new_mgr->emergency_cleanup();
+            delete new_mgr;
+            return nullptr;
         }
 
-        if (new_mgr->heap_end > new_mgr->heap_start)
-        {
-            uint64 heap_copy_start = PGROUNDDOWN(new_mgr->heap_start);
-            uint64 heap_copy_end = PGROUNDUP(new_mgr->heap_end);
-            if (heap_copy_end > heap_copy_start &&
-                !new_mgr->ensure_user_pagetable_hierarchy(heap_copy_start,
-                                                          heap_copy_end - heap_copy_start))
-            {
-                delete new_mgr;
-                return nullptr;
-            }
-        }
-#endif
-
-        // 复制进程的所有内存段
+        // 先按新的 VMASpace 私有区域复制已驻留页，并统一降级到页级 COW。
+        // 这样 execve 新迁入的 PT_LOAD/堆/用户栈不再依赖 prog_sections/heap 特判。
         bool copy_success = true;
-
-
-        // 复制程序段
-        for (int i = 0; i < prog_section_count && i < max_program_section_num; i++)
+        if (!clone_private_vm_space_for_fork(*new_mgr))
         {
-            if (!is_reasonable_program_section(prog_sections[i]))
-            {
-                continue;
-            }
-            uint64 start = (uint64)prog_sections[i]._sec_start;
-            uint64 size = prog_sections[i]._sec_size;
-
-            if (mem::k_vmm.vm_copy(pagetable, new_mgr->pagetable, start, size) < 0)
-            {
-                copy_success = false;
-                break;
-            }
-        }
-
-        // 复制堆
-        if (copy_success && (heap_end > heap_start))
-        {
-            uint64 heap_copy_start = PGROUNDDOWN(heap_start);
-            uint64 heap_copy_end = PGROUNDUP(heap_end);
-            if (heap_copy_end <= heap_copy_start || heap_copy_end > TRAPFRAME)
-            {
-                printfRed("[clone_for_fork] skip invalid heap range start=%p end=%p\n",
-                          (void *)heap_start, (void *)heap_end);
-            }
-            else if (mem::k_vmm.vm_copy(pagetable, new_mgr->pagetable,
-                                        heap_copy_start, heap_copy_end - heap_copy_start) < 0)
-            {
-                copy_success = false;
-            }
+            copy_success = false;
         }
 
         if (!copy_success)
@@ -937,14 +1009,6 @@ namespace proc
         }
 
         new_mgr->rebuild_vma_index();
-
-        if (!new_mgr->clone_vm_space_metadata_from(*this))
-        {
-            printfRed("[clone_for_fork] clone VMASpace metadata failed\n");
-            new_mgr->emergency_cleanup();
-            delete new_mgr;
-            return nullptr;
-        }
 
         return new_mgr;
     }
