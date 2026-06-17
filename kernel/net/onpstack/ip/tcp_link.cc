@@ -224,6 +224,44 @@ PST_TCPLINK tcp_link_get(EN_ONPSERR *penErr)
     return pstFreeNode;
 }
 
+void tcp_link_release_send_resources(PST_TCPLINK pstTcpLink)
+{
+    if (!pstTcpLink)
+        return;
+
+#if SUPPORT_SACK
+    if (pstTcpLink->stcbSend.pubSndBuf)
+    {
+        buddy_free(pstTcpLink->stcbSend.pubSndBuf);
+        pstTcpLink->stcbSend.pubSndBuf = NULL;
+    }
+
+    //* 释放占用的send timer
+    tcp_send_timer_lock();
+    {
+        PSTCB_TCPSENDTIMER pstNextSendTimer = pstTcpLink->stcbSend.pstcbSndTimer;
+        PSTCB_TCPSENDTIMER pstSendTimer;
+        while (pstNextSendTimer)
+        {
+            pstSendTimer = pstNextSendTimer;
+            pstNextSendTimer = pstNextSendTimer->pstcbNextForLink; //* 继续取出下一个节点
+            tcp_send_timer_node_del_unsafe(pstSendTimer);          //* 从定时器队列中删除当前节点
+            tcp_send_timer_node_free_unsafe(pstSendTimer);         //* 归还当前节点
+        }
+    }
+    pstTcpLink->stcbSend.pstcbSndTimer = NULL;
+    tcp_send_timer_unlock();
+
+    //* 数据发送队列删除
+    tcp_link_for_send_data_del(pstTcpLink);
+    pstTcpLink->stcbSend.bSendPacketNum = 0;
+    pstTcpLink->stcbSend.unWriteBytes = 0;
+    pstTcpLink->stcbSend.unWndSize = 0;
+    pstTcpLink->stcbSend.bIsZeroWnd = FALSE;
+    pstTcpLink->stcbSend.unLastSndZeroWndPktMSecs = 0;
+#endif
+}
+
 void tcp_link_free(PST_TCPLINK pstTcpLink)
 {
     if (!pstTcpLink)
@@ -269,32 +307,7 @@ void tcp_link_free(PST_TCPLINK pstTcpLink)
     }
     os_thread_mutex_unlock(l_hMtxTcpLinkList);
 
-#if SUPPORT_SACK
-    if (pstTcpLink->stcbSend.pubSndBuf)
-    {
-        buddy_free(pstTcpLink->stcbSend.pubSndBuf);
-        pstTcpLink->stcbSend.pubSndBuf = NULL;
-    }
-
-    //* 释放占用的send timer
-    tcp_send_timer_lock();
-    {
-        PSTCB_TCPSENDTIMER pstNextSendTimer = pstTcpLink->stcbSend.pstcbSndTimer;
-        PSTCB_TCPSENDTIMER pstSendTimer;
-        while (pstNextSendTimer)
-        {
-            pstSendTimer = pstNextSendTimer;
-            pstNextSendTimer = pstNextSendTimer->pstcbNextForLink; //* 继续取出下一个节点
-            tcp_send_timer_node_del_unsafe(pstSendTimer);          //* 从定时器队列中删除当前节点
-            tcp_send_timer_node_free_unsafe(pstSendTimer);         //* 归还当前节点
-        }
-    }
-    pstTcpLink->stcbSend.pstcbSndTimer = NULL;
-    tcp_send_timer_unlock();
-
-    //* 数据发送队列删除
-    tcp_link_for_send_data_del(pstTcpLink);
-#endif
+    tcp_link_release_send_resources(pstTcpLink);
 
     os_thread_mutex_lock(l_hMtxTcpLinkList);
     {

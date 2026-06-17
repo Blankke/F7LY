@@ -98,7 +98,10 @@ void close(SOCKET socket)
         if (TLSFINWAIT1 == enLinkState || TLSFINWAIT2 == enLinkState ||
             TLSCLOSING == enLinkState || TLSTIMEWAIT == enLinkState ||
             TLSCLOSED == enLinkState)
+        {
+            onps_input_release_tcp_user_buffers((INT)socket);
             return;
+        }
     }
     onps_input_free((INT)socket);
 }
