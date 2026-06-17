@@ -651,3 +651,86 @@ debug方式：（必须先阅读agent_docs/development_debugging.md，了解调�
 - 现象：HTTPS `wget` 报 `ssl_client: write: Broken pipe`。  
   原因：`wget` 对本地 `socketpair` 执行 `shutdown(SHUT_WR)` 后，内核误标记对端已关闭。  
   解决方案：拆分 `_peer_closed` 与 `_peer_write_shutdown`；半关闭只让读端 EOF，不阻止对端写回响应。
+
+## 多次复测https连接后产生异常
+### 情况描述
+多次使用`wget --no-check-certificate -O - https://10.0.2.2:18443/index.html`获取主机上的index.html，发现出现如下报错：
+```sh
+F7LY:~$ wget --no-check-certificate -O - https://10.0.2.2:18443/index.html
+Connecting to 10.0.2.2:18443 (10.0.2.2:18443)
+writing to stdout
+hello https
+-                    100% |********************************|    12  0:00:00 ETA
+written to stdout
+F7LY:~$ wget --no-check-certificate -O - https://10.0.2.2:18443/index.html
+Connecting to 10.0.2.2:18443 (10.0.2.2:18443)
+writing to stdout
+hello https
+-                    100% |********************************|    12  0:00:00 ETA
+written to stdout
+F7LY:~$ wget --no-check-certificate -O - https://10.0.2.2:18443/index.html
+Connecting to 10.0.2.2:18443 (10.0.2.2:18443)
+wget: error getting response
+F7LY:~$ wget --no-check-certificate -O - https://10.0.2.2:18443/index.html
+Connecting to 10.0.2.2:18443 (10.0.2.2:18443)
+writing to stdout
+hello https
+-                    100% |********************************|    12  0:00:00 ETA
+written to stdout
+F7LY:~$ wget --no-check-certificate -O - https://10.0.2.2:18443/index.html
+Connecting to 10.0.2.2:18443 (10.0.2.2:18443)
+writing to stdout
+hello https
+-                    100% |********************************|    12  0:00:00 ETA
+written to stdout
+F7LY:~$ wget --no-check-certificate -O - https://10.0.2.2:18443/index.html
+Connecting to 10.0.2.2:18443 (10.0.2.2:18443)
+D0BC0E0000000000:error:0A000126:SSL routines::unexpected eof while reading:ssl/record/rec_layer_s3.c:698:
+ssl_client: SSL_connect
+wget: error getting response
+F7LY:~$ wget --no-check-certificate -O - https://10.0.2.2:18443/index.html
+Connecting to 10.0.2.2:18443 (10.0.2.2:18443)
+wget: can't connect to remote host (10.0.2.2): No buffer space available
+F7LY:~$ wget --no-check-certificate -O - https://10.0.2.2:18443/index.html
+Connecting to 10.0.2.2:18443 (10.0.2.2:18443)
+wget: can't connect to remote host (10.0.2.2): No buffer space available
+F7LY:~$ wget --no-check-certificate -O - https://10.0.2.2:18443/index.html
+Connecting to 10.0.2.2:18443 (10.0.2.2:18443)
+wget: can't connect to remote host (10.0.2.2): No buffer space available
+
+```
+
+报错分为以下几种：
+1. wget: error getting response。无法稳定复现，但是在多次测试时是有发生
+2. D0BC0E0000000000:error:0A000126:SSL routines::unexpected eof while reading:ssl/record/rec_layer_s3.c:698:ssl_client: SSL_connect 多次测试后常出现
+3. No buffer space available。2报错出现后必定出现，且经过一段时候后依然无法回复，怀疑buffer泄漏
+
+我保证host上已经拉起https server, 拉起指令如下：
+```sh
+cd ~/project/temp
+mkdir -p /tmp/f7ly_https
+
+openssl req -x509 -newkey rsa:2048 \
+  -keyout /tmp/f7ly_https/key.pem \
+  -out /tmp/f7ly_https/cert.pem \
+  -days 1 -nodes \
+  -subj "/CN=localhost"
+
+openssl s_server \
+  -quiet -WWW \
+  -accept 18443 \
+  -cert /tmp/f7ly_https/cert.pem \
+  -key /tmp/f7ly_https/key.pem
+```
+
+请借助这个server，并通过在链路上打印调试输出,定位这个问题出现的原因,按照下面的步骤
+debug方式：（必须先阅读agent_docs/development_debugging.md，了解调试范式）
+1. 先进行静态代码阅读，确定可能的问题点
+2. 针对性的添加注释，逐渐排查问题
+3. 按照调试范式运行代码
+参考实现：
+1. ref/rocketos（往届作品第一名）
+
+### 修复小结
+
+- 现象：HTTPS 短连接多次后 `No buffer space available`。原因：TCP `TLSCONNECTED` close 只发 FIN，未提前释放收/发用户缓冲，ONPS 32KB buddy 池被短连接占满。解决方案：主动 close 后立即 `onps_input_release_tcp_user_buffers()`，保留 input/link 给 FIN timer 收尾。
