@@ -65,9 +65,33 @@
   - 退出仍然是外层 `timeout` 的 `124`，不是内核主动崩溃。
 - 当前验证覆盖的是“结构接线 + 双架构编译面 + 旧 overlay 崩溃链消失 + 调度断言消失”，还没有在本轮继续跑 `mmap3/libcbench/shm*` 定向回归。
 
+## 第 2 提交增量
+- 情况要求：
+  - `execve()` 仍然沿用“预装 PT_LOAD/解释器段 + 立即映射用户栈”的旧路径，和 `VMASpace + VmObject` 的懒页后端没有真正接上。
+  - `FileVmObject` 还缺少“只读文件有效字节 + 其后零填充”的精确语义，无法正确承载 ELF `BSS` 尾页。
+- 解决方法：
+  - `ProcessManager::execve()` 新增 `register_lazy_file_area()`，把主程序 `PT_LOAD`、解释器 `PT_LOAD` 都注册为 `VMASpace + FileVmObject` 私有文件映射，不再在 `execve()` 里预读整段页表。
+  - 用户栈改为 `VmAreaKind::UserStack + AnonVmObject` 的 grow-down 懒映射，并把 guard page 语义记录进 `guard_pages`。
+  - `ProcessMemoryManager::ensure_user_pagetable_hierarchy()` 提供 LoongArch 通用页表骨架预建，保证 tlbr refill 能稳定落回懒缺页路径。
+  - `FileVmObject::prepare_page()` 改为尊重 `file_backed_bytes/zero_fill_past_file`，精确处理 `filesz < memsz` 的尾页和 BSS 区。
+  - `ProcessManager::mmap()` 为普通文件映射补齐 `file_backed_bytes` 元数据，避免文件后端页源语义只对 `execve` 生效。
+- 验证方式：
+  - `make build ARCH=riscv`
+  - `make build ARCH=loongarch`
+  - `timeout 60s make run r QEMU_MEM=1G`
+  - `timeout 60s make run l QEMU_MEM=1G`
+- 验证结果：
+  - 两个架构重新构建均通过。
+  - 两个架构的 60s smoke 都自然结束，`exit_code=0`，没有出现新的 panic、调度断言、`execve` 崩溃或页故障死循环。
+  - 本轮 smoke 日志：
+    - RISC-V：`logs/output_r_20260617-212857_vmaspace-execve-smoke_timeout-60s.txt`
+    - LoongArch：`logs/output_l_20260617-212857_vmaspace-execve-smoke_timeout-60s.txt`
+
 ## 对应提交
-- 待用户确认后提交
+- `feat(mm): 引入 vmaspace 与 vmobject 骨架`
+- 第 2 提交待落地：`feat(mm): 将 execve 段与用户栈迁移到 vmaspace`
 
 ## 状态
 - 第 1 提交已完成待验收：骨架、兼容层、双架构构建和 60s smoke 已闭环。
-- 整体计划仍进行中：后续继续推进第 2 提交起的 `ELF/PT_LOAD + brk + 用户栈` 迁移，以及 `mmap3/libcbench/shm*` 定向回归和 wrapper 判定口径核对。
+- 第 2 提交已完成待验收：`execve` 主程序段、解释器段、用户栈已切到 `VMASpace + VmObject` 懒注册路径，双架构构建和 60s smoke 已闭环。
+- 整体计划仍进行中：后续继续推进第 3 提交起的统一 fault/COW、`mmap/shm` 全量迁移，以及 `mmap3/libcbench/shm*` 定向回归和 wrapper 判定口径核对。

@@ -208,6 +208,7 @@ namespace proc
         void init_heap(uint64 start_addr);
         void reset_mmap_cursor(uint64 minimum_start);
         uint64 reserve_mmap_region(uint64 size, uint64 alignment = PGSIZE);
+        bool ensure_user_pagetable_hierarchy(uint64 start, uint64 size);
 
         /**
          * @brief 扩展堆内存
