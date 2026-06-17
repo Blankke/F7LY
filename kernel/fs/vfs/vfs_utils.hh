@@ -21,6 +21,7 @@ uint vfs_read_file(const char *path, uint64 buffer_addr, size_t offset, size_t s
 int vfs_write_file(const char *path, uint64 buffer_addr, size_t offset, size_t size);
 int vfs_fstat(fs::file *f, fs::Kstat *st);
 int vfs_path_stat(const char *path, fs::Kstat *st, bool follow_symlinks = true);
+int vfs_path_stat_noflush(const char *path, fs::Kstat *st, bool follow_symlinks = true);
 int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count);
 int vfs_mkdir(const char *path, uint64_t mode);
 int vfs_mknod(const eastl::string &path, mode_t mode, dev_t dev);

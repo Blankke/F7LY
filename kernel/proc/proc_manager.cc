@@ -121,7 +121,19 @@ namespace proc
             return 0;
         }
 
-        int read_elf_program_headers(const eastl::string &path,
+        long read_open_file_at(fs::file *file,
+                               uint64 buffer_addr,
+                               size_t offset,
+                               size_t size)
+        {
+            if (file == nullptr)
+            {
+                return -EBADF;
+            }
+            return file->read(buffer_addr, size, static_cast<long>(offset), false);
+        }
+
+        int read_elf_program_headers(fs::file *file,
                                      const elf::elfhdr &header,
                                      eastl::vector<elf::proghdr> &program_headers)
         {
@@ -143,45 +155,16 @@ namespace proc
              * LOAD 段装载共同使用，避免 exec 对每个表项重复解析路径和打开 inode。
              */
             program_headers.resize(header.phnum);
-            uint read_count =
-                vfs_read_file(path.c_str(),
-                              reinterpret_cast<uint64>(program_headers.data()),
-                              header.phoff,
-                              static_cast<size_t>(table_size));
-            return read_count == table_size ? EOK : -EIO;
-        }
-
-        int validate_execve_parent_components(const eastl::string &path)
-        {
-            if (path.empty() || path[0] != '/')
+            long read_count =
+                read_open_file_at(file,
+                                  reinterpret_cast<uint64>(program_headers.data()),
+                                  header.phoff,
+                                  static_cast<size_t>(table_size));
+            if (read_count < 0)
             {
-                return 0;
+                return static_cast<int>(read_count);
             }
-
-            size_t last_slash = path.find_last_of('/');
-            if (last_slash == eastl::string::npos || last_slash == 0)
-            {
-                return 0;
-            }
-
-            for (size_t end = path.find('/', 1);
-                 end != eastl::string::npos && end <= last_slash;
-                 end = path.find('/', end + 1))
-            {
-                eastl::string parent = path.substr(0, end);
-                fs::Kstat parent_st;
-                int parent_ret = vfs_path_stat(parent.c_str(), &parent_st, true);
-                if (parent_ret < 0)
-                {
-                    return parent_ret;
-                }
-                if ((parent_st.mode & S_IFMT) != S_IFDIR)
-                {
-                    return -ENOTDIR;
-                }
-            }
-
-            return 0;
+            return static_cast<uint64>(read_count) == table_size ? EOK : -EIO;
         }
 
         int validate_execve_target_permissions(const eastl::string &path, Pcb *proc)
@@ -191,14 +174,13 @@ namespace proc
                 return -ENOENT;
             }
 
-            int parent_ret = validate_execve_parent_components(path);
-            if (parent_ret < 0)
-            {
-                return parent_ret;
-            }
-
             fs::Kstat st;
-            int stat_ret = vfs_path_stat(path.c_str(), &st, true);
+            /*
+             * vfs_path_stat() 自身已经会解析前缀符号链接、校验父目录可遍历性，
+             * 并在遇到非目录前缀时返回 ENOTDIR。这里再按父链逐级 stat 一遍，
+             * 会把 shell + mount/umount 高频 exec 的固定成本放大很多。
+             */
+            int stat_ret = vfs_path_stat_noflush(path.c_str(), &st, true);
             if (stat_ret < 0)
             {
                 return stat_ret;
@@ -3012,36 +2994,23 @@ namespace proc
     /// @param offset 文件中读取的起始偏移。
     /// @param size 要读取的总字节数。
     /// @return 总是返回 0，失败情况下内部直接 panic。
-    int ProcessManager::load_seg(mem::PageTable &pt, uint64 va, eastl::string &path, uint offset, uint size)
+    int ProcessManager::load_seg(mem::PageTable &pt, uint64 va, fs::file *segment_file,
+                                 const eastl::string &path, uint offset, uint size)
     { // 好像没有机会返回 -1, pa失败的话会panic，de的read也没有返回值
         uint i, n;
         uint64 pa;
 
         /*
-         * ELF 段通常包含数百个页面。若逐页调用 vfs_read_file()，每一页都会
-         * 重新解析路径、打开 inode、seek 并关闭文件，进程频繁 exec 时开销会
-         * 被成倍放大。这里保持一个只读文件对象并顺序读取整个段。ELF 头和
-         * 程序头表已经通过普通读取更新过 atime，段数据不应再为每页重复提交。
+         * 调用方已经为同一个 ELF 打开了只读 file 对象。这里直接复用该对象，
+         * 避免主程序/解释器的每个段再次走 open + seek + close。
          */
-        fs::file *segment_file = nullptr;
-        int open_ret = vfs_openat(path, segment_file, O_RDONLY | O_NOATIME, 0);
-        if (open_ret < 0 || segment_file == nullptr)
+        if (segment_file == nullptr)
         {
-            return open_ret < 0 ? open_ret : -EIO;
+            return -EBADF;
         }
-
-        auto close_segment_file = [&]()
-        {
-            if (segment_file != nullptr)
-            {
-                segment_file->free_file();
-                segment_file = nullptr;
-            }
-        };
 
         if (segment_file->lseek(offset, SEEK_SET) < 0)
         {
-            close_segment_file();
             return -EIO;
         }
 
@@ -3058,7 +3027,6 @@ namespace proc
             long read_count = segment_file->read(pa, n, -1, true);
             if (read_count != static_cast<long>(n))
             {
-                close_segment_file();
                 return -EIO;
             }
 
@@ -3088,12 +3056,9 @@ namespace proc
             long read_count = segment_file->read(pa, n, -1, true);
             if (read_count != static_cast<long>(n)) // 读取文件内容到物理内存
             {
-                close_segment_file();
                 return -1;
             }
         }
-
-        close_segment_file();
 
 #ifdef RISCV
         // 官方镜像不能原地修改；RISC-V musl 旧 clone() wrapper 在 NULL stack
@@ -5792,6 +5757,16 @@ namespace proc
         uint64 main_load_bias = 0;
         uint64 highest_addr = 0; // 记录最高地址，用于堆初始化
         uint64 user_page_granule = PGSIZE; // 记录用户态 ABI 期待的页粒度，供 auxv/动态链接器使用
+        fs::file *main_exec_file = nullptr;
+        fs::file *interpreter_exec_file = nullptr;
+        auto close_exec_file = [](fs::file *&opened_file)
+        {
+            if (opened_file != nullptr)
+            {
+                opened_file->free_file();
+                opened_file = nullptr;
+            }
+        };
         // ========== 第一阶段：路径解析和文件查找 ==========
 
         // 构建绝对路径
@@ -5856,19 +5831,40 @@ namespace proc
                 return syscall::SYS_ETXTBSY;
             }
 
-            char exec_head[256] = {};
-            int head_len = vfs_read_file(resolved_exec_path.c_str(), reinterpret_cast<uint64>(exec_head), 0, sizeof(exec_head) - 1);
-            if (head_len < 0)
+            fs::file *candidate_exec_file = nullptr;
+            int open_exec_ret =
+                vfs_openat(resolved_exec_path, candidate_exec_file,
+                           O_RDONLY | O_NOATIME, 0);
+            if (open_exec_ret < 0 || candidate_exec_file == nullptr)
             {
-                printfRed("execve: failed to read executable header for %s\n", resolved_exec_path.c_str());
-                return -EIO;
+                close_exec_file(candidate_exec_file);
+                printfRed("execve: failed to open executable %s, error=%d\n",
+                          resolved_exec_path.c_str(),
+                          open_exec_ret < 0 ? open_exec_ret : -EIO);
+                return open_exec_ret < 0 ? open_exec_ret : -EIO;
             }
 
-            if (head_len >= (int)sizeof(elf))
+            char exec_head[256] = {};
+            long head_len =
+                read_open_file_at(candidate_exec_file,
+                                  reinterpret_cast<uint64>(exec_head),
+                                  0,
+                                  sizeof(exec_head) - 1);
+            if (head_len < 0)
+            {
+                close_exec_file(candidate_exec_file);
+                printfRed("execve: failed to read executable header for %s\n", resolved_exec_path.c_str());
+                return static_cast<int>(head_len);
+            }
+
+            if (head_len >= static_cast<long>(sizeof(elf)))
             {
                 memmove(&elf, exec_head, sizeof(elf));
                 if (elf.magic == elf::elfEnum::ELF_MAGIC)
                 {
+                    close_exec_file(main_exec_file);
+                    main_exec_file = candidate_exec_file;
+                    candidate_exec_file = nullptr;
                     ab_path = resolved_exec_path;
                     break;
                 }
@@ -5882,6 +5878,7 @@ namespace proc
                 {
                     if (has_lmbench_wrapper_redirect)
                     {
+                        close_exec_file(candidate_exec_file);
                         printfRed("execve: lmbench wrapper redirect loop for %s\n", ab_path.c_str());
                         return -ELOOP;
                     }
@@ -5898,24 +5895,29 @@ namespace proc
                     argv = rewritten_argv;
                     ab_path = "/code/lmbench_src/bin/build/lmbench_all";
                     has_lmbench_wrapper_redirect = true;
+                    close_exec_file(candidate_exec_file);
                     continue;
                 }
 
+                close_exec_file(candidate_exec_file);
                 printfRed("execve: invalid ELF magic=%x path=%s\n", elf.magic, ab_path.c_str());
                 return -ENOEXEC;
             }
             if (has_shebang)
             {
+                close_exec_file(candidate_exec_file);
                 printfRed("execve: too many shebang redirects for %s\n", ab_path.c_str());
                 return -ELOOP;
             }
             if (shebang_interpreter[0] != '/')
             {
+                close_exec_file(candidate_exec_file);
                 printfRed("execve: shebang interpreter must be absolute, got %s\n", shebang_interpreter);
                 return -ENOEXEC;
             }
             if (ab_path.length() >= sizeof(shebang_script_path))
             {
+                close_exec_file(candidate_exec_file);
                 printfRed("execve: shebang script path too long: %s\n", ab_path.c_str());
                 return -ENAMETOOLONG;
             }
@@ -5923,6 +5925,7 @@ namespace proc
             printfCyan("execve: shebang %s -> %s\n", resolved_exec_path.c_str(), shebang_interpreter);
             has_shebang = true;
             ab_path = shebang_interpreter;
+            close_exec_file(candidate_exec_file);
         }
         // printf("execve: ELF file magic: %x\n", elf.magic);
         // **新增：检查是否需要动态链接**
@@ -5958,6 +5961,7 @@ namespace proc
         {
             printfRed("execve: create_pagetable failed\n");
             delete new_mm;
+            close_exec_file(main_exec_file);
             return -ENOMEM;
         }
         new_pt = new_mm->pagetable;
@@ -5969,6 +5973,8 @@ namespace proc
 #define CLEANUP_AND_RETURN(retval) \
     do                             \
     {                              \
+        close_exec_file(main_exec_file);        \
+        close_exec_file(interpreter_exec_file); \
         free_execve_scratch();     \
         new_mm->free_all_memory(); \
         delete new_mm;             \
@@ -5987,7 +5993,8 @@ namespace proc
             eastl::string interpreter_path;
             eastl::vector<elf::proghdr> main_program_headers;
             int main_ph_ret =
-                read_elf_program_headers(ab_path, elf, main_program_headers);
+                read_elf_program_headers(main_exec_file, elf,
+                                         main_program_headers);
             if (main_ph_ret < 0)
             {
                 printfRed("execve: failed to read program header table for %s\n",
@@ -6012,7 +6019,12 @@ namespace proc
                                   (void *)ph.filesz, ab_path.c_str());
                         CLEANUP_AND_RETURN(-ENOEXEC);
                     }
-                    if (vfs_read_file(ab_path.c_str(), reinterpret_cast<uint64>(interp_buf), ph.off, ph.filesz) != ph.filesz)
+                    long interp_read =
+                        read_open_file_at(main_exec_file,
+                                          reinterpret_cast<uint64>(interp_buf),
+                                          ph.off,
+                                          ph.filesz);
+                    if (interp_read != static_cast<long>(ph.filesz))
                     {
                         printfRed("execve: failed to read PT_INTERP for %s\n", ab_path.c_str());
                         CLEANUP_AND_RETURN(-EIO);
@@ -6088,7 +6100,7 @@ namespace proc
                         if (vfs_is_file_exist("/glibc/lib/ld-linux-loongarch-lp64d.so.1") != 1)
                         {
                             printfRed("execve: failed to find loongarch64 dynamic linker for /lib64 path\n");
-                            return -1;
+                            CLEANUP_AND_RETURN(-ENOENT);
                         }
                         interpreter_path = "/glibc/lib/ld-linux-loongarch-lp64d.so.1";
                     }
@@ -6263,7 +6275,8 @@ namespace proc
                 // }
 
                 // 从文件加载段内容到内存
-                if (load_seg(new_pt, segment_start, ab_path, segment_file_offset, segment_file_size) < 0)
+                if (load_seg(new_pt, segment_start, main_exec_file, ab_path,
+                             segment_file_offset, segment_file_size) < 0)
                 {
                     printfRed("execve: load segment data failed\n");
                     exec_error = -EIO;
@@ -6331,6 +6344,8 @@ namespace proc
                 CLEANUP_AND_RETURN(exec_error);
             }
 
+            close_exec_file(main_exec_file);
+
             // printfPink("checkpoint 3\n");
 
             if (is_dynamic)
@@ -6342,7 +6357,22 @@ namespace proc
                 }
 
                 // 读取动态链接器的ELF头
-                if (vfs_read_file(interpreter_path.c_str(), reinterpret_cast<uint64>(&interp_elf), 0, sizeof(interp_elf)) != sizeof(interp_elf))
+                int interp_open_ret =
+                    vfs_openat(interpreter_path, interpreter_exec_file,
+                               O_RDONLY | O_NOATIME, 0);
+                if (interp_open_ret < 0 || interpreter_exec_file == nullptr)
+                {
+                    printfRed("execve: failed to open interpreter %s, error=%d\n",
+                              interpreter_path.c_str(),
+                              interp_open_ret < 0 ? interp_open_ret : -EIO);
+                    CLEANUP_AND_RETURN(interp_open_ret < 0 ? interp_open_ret : -EIO);
+                }
+                long interp_header_read =
+                    read_open_file_at(interpreter_exec_file,
+                                      reinterpret_cast<uint64>(&interp_elf),
+                                      0,
+                                      sizeof(interp_elf));
+                if (interp_header_read != static_cast<long>(sizeof(interp_elf)))
                 {
                     printfRed("execve: failed to read interpreter ELF header: %s\n", interpreter_path.c_str());
                     CLEANUP_AND_RETURN(-EIO);
@@ -6357,7 +6387,7 @@ namespace proc
 
                 eastl::vector<elf::proghdr> interpreter_program_headers;
                 int interp_ph_ret =
-                    read_elf_program_headers(interpreter_path,
+                    read_elf_program_headers(interpreter_exec_file,
                                              interp_elf,
                                              interpreter_program_headers);
                 if (interp_ph_ret < 0)
@@ -6492,7 +6522,8 @@ namespace proc
                     // 加载动态链接器段内容
                     printfCyan("execve: loading dynamic linker segment %d, vaddr: %p, memsz: %p, offset: %p\n",
                                j, (void *)interp_ph.vaddr, (void *)interp_ph.memsz, (void *)interp_ph.off);
-                    if (load_seg(new_pt, linker_segment_start, interpreter_path, linker_file_offset, linker_file_size) < 0)
+                    if (load_seg(new_pt, linker_segment_start, interpreter_exec_file,
+                                 interpreter_path, linker_file_offset, linker_file_size) < 0)
                     {
                         printfRed("execve: load dynamic linker segment failed\n");
                         CLEANUP_AND_RETURN(-EIO);
@@ -6566,6 +6597,8 @@ namespace proc
                                missing_linker_text_pages);
                 }
 #endif
+
+                close_exec_file(interpreter_exec_file);
             }
 
             // **新增：段加载完成后的统计信息**
