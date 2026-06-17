@@ -1,3 +1,5 @@
+#pragma once
+
 #include "types.hh"
 typedef unsigned long shmatt_t;
 /*

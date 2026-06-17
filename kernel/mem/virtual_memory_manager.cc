@@ -14,6 +14,7 @@
 #include "fs/vfs/vfs_ext4_ext.hh" // 添加vfs_ext_get_filesize函数
 #include "proc/signal.hh"         // 添加信号处理
 #include "proc/process_memory_manager.hh"
+#include "proc/vm_object.hh"
 #include "proc/proc_manager.hh"   // 添加进程管理
 #include "fs/lwext4/ext4_errno.hh"
 #include "proc/proc.hh"
@@ -98,21 +99,11 @@ namespace mem
 
         proc::vma *find_vma_covering_va(proc::Pcb *proc, uint64 va)
         {
-            if (proc == nullptr || proc->get_vma() == nullptr)
+            if (proc == nullptr || proc->get_memory_manager() == nullptr)
             {
                 return nullptr;
             }
-
-            for (int i = 0; i < proc::NVMA; ++i)
-            {
-                proc::vma *vm = &proc->get_vma()->_vm[i];
-                if (vm->used && va >= vm->addr && va < vm->addr + vm->len)
-                {
-                    return vm;
-                }
-            }
-
-            return nullptr;
+            return proc->get_memory_manager()->find_vma_covering(va);
         }
 
         bool pte_allows_user_read(Pte &pte)
@@ -887,6 +878,61 @@ namespace mem
         // 共享段后端在 MAP_SHARED / fork 后的缺页场景下，不应该重新分配私有物理页，
         // 否则会把“共享映射”错误降级成私有页，还会在 unlink 后继续依赖原始文件路径。
         // 正确做法是直接把共享段已经分配好的物理页重新映射进当前页表。
+        if (vm->object != nullptr)
+        {
+            proc::VmPageView view = {};
+            int prepare_result = vm->object->prepare_page(*vm, vm->page_index_for_va(page_va), access_type, view);
+            if (prepare_result != 0 || view.pa == 0)
+            {
+                printfRed("[allocate_vma_page] vm object prepare failed va=%p object=%p ret=%d\n",
+                          (void *)page_va, vm->object, prepare_result);
+                return -1;
+            }
+
+            uint64 object_pte_flags = pte_flags;
+#ifdef RISCV
+            if (view.mark_cow)
+            {
+                object_pte_flags &= ~riscv::PteEnum::pte_writable_m;
+                object_pte_flags |= k_riscv_pte_cow;
+            }
+#elif defined(LOONGARCH)
+            if (view.mark_cow)
+            {
+                object_pte_flags &= ~(PTE_W | PTE_D);
+                object_pte_flags |= PTE_COW;
+            }
+#endif
+            if (view.writable)
+            {
+#ifdef RISCV
+                object_pte_flags |= riscv::PteEnum::pte_writable_m | riscv::PteEnum::pte_readable_m;
+#elif defined(LOONGARCH)
+                object_pte_flags |= PTE_W | PTE_D;
+#endif
+            }
+
+            if (reuse_existing_mapping_if_ready())
+            {
+                k_pmm.free_page(page_pa_to_kernel_ptr(view.pa));
+                vm->has_resident_pages = true;
+                return 0;
+            }
+
+            if (!this->map_pages(pt, page_va, PGSIZE, view.pa, object_pte_flags))
+            {
+                k_pmm.free_page(page_pa_to_kernel_ptr(view.pa));
+                printfRed("[allocate_vma_page] map vm object page failed va=%p pa=%p flags=0x%x\n",
+                          (void *)page_va, (void *)view.pa, (uint32)object_pte_flags);
+                return -1;
+            }
+            vm->has_resident_pages = true;
+#ifdef LOONGARCH
+            invalidate_loongarch_user_page_pair(page_va);
+#endif
+            return 0;
+        }
+
         if (vm->backing_kind == proc::VMA_BACKING_SHM && vm->backing_shmid >= 0)
         {
             shm::shm_segment seg = shm::k_smm.get_seg_info(vm->backing_shmid);
@@ -1260,6 +1306,26 @@ namespace mem
     {
         uint64 page_va = PGROUNDDOWN(va);
         Pte pte = pt.walk(page_va, false);
+        proc::Pcb *cur = proc::k_pm.get_cur_pcb();
+        proc::vma *cow_vm = nullptr;
+        uint64 cow_page_index = 0;
+        bool object_private_mapping = false;
+        bool overlay_owned_by_area = false;
+
+        if (cur != nullptr &&
+            cur->get_memory_manager() != nullptr &&
+            cur->get_pagetable() != nullptr &&
+            cur->get_pagetable()->get_base() == pt.get_base())
+        {
+            cow_vm = cur->get_memory_manager()->find_vma_covering(page_va);
+            if (cow_vm != nullptr &&
+                cow_vm->object != nullptr &&
+                cow_vm->is_private_mapping())
+            {
+                object_private_mapping = true;
+                cow_page_index = cow_vm->page_index_for_va(page_va);
+            }
+        }
 #ifdef RISCV
         if (pte.is_null() || !pte.is_valid() || !pte.is_user() || !pte_is_cow(pte))
         {
@@ -1280,7 +1346,16 @@ namespace mem
             return -1;
         }
 
-        if (refcount == 1)
+        if (object_private_mapping &&
+            cow_vm->private_page_overlay != nullptr)
+        {
+            auto overlay = cow_vm->private_page_overlay->find(cow_page_index);
+            overlay_owned_by_area = overlay != cow_vm->private_page_overlay->end() &&
+                                    overlay->second == old_pa;
+        }
+
+        if ((!object_private_mapping && refcount == 1) ||
+            (object_private_mapping && overlay_owned_by_area && refcount <= 2))
         {
             pte.set_data(PA2PTE(PGROUNDDOWN(old_pa)) |
                          new_flags |
@@ -1295,6 +1370,35 @@ namespace mem
             return -1;
         }
         memmove(new_page, old_page, PGSIZE);
+
+        if (object_private_mapping)
+        {
+            if (cow_vm->private_page_overlay == nullptr)
+            {
+                cow_vm->private_page_overlay = new proc::VmPrivateOverlayMap();
+                if (cow_vm->private_page_overlay == nullptr)
+                {
+                    k_pmm.free_page(new_page);
+                    return -1;
+                }
+            }
+
+            if (!k_pmm.retain_page(new_page))
+            {
+                k_pmm.free_page(new_page);
+                return -1;
+            }
+
+            if (overlay_owned_by_area)
+            {
+                // 当前 VMA 原本就持有这张 overlay 页的 owner 引用；
+                // COW 之后条目改指向新页，旧页上的 owner 引用也要一并放掉。
+                k_pmm.free_page(old_page);
+            }
+            (*cow_vm->private_page_overlay)[cow_page_index] =
+                riscv::virt_to_phy_address(reinterpret_cast<uint64>(new_page));
+        }
+
         pte.set_data(PA2PTE(PGROUNDDOWN(riscv::virt_to_phy_address(reinterpret_cast<uint64>(new_page)))) |
                      new_flags |
                      riscv::PteEnum::pte_valid_m);
@@ -1321,7 +1425,16 @@ namespace mem
             return -1;
         }
 
-        if (refcount == 1)
+        if (object_private_mapping &&
+            cow_vm->private_page_overlay != nullptr)
+        {
+            auto overlay = cow_vm->private_page_overlay->find(cow_page_index);
+            overlay_owned_by_area = overlay != cow_vm->private_page_overlay->end() &&
+                                    overlay->second == old_pa;
+        }
+
+        if ((!object_private_mapping && refcount == 1) ||
+            (object_private_mapping && overlay_owned_by_area && refcount <= 2))
         {
             pte.set_data(PA2PTE(PGROUNDDOWN(old_pa)) |
                          new_flags |
@@ -1336,6 +1449,33 @@ namespace mem
             return -1;
         }
         memmove(new_page, old_page, PGSIZE);
+
+        if (object_private_mapping)
+        {
+            if (cow_vm->private_page_overlay == nullptr)
+            {
+                cow_vm->private_page_overlay = new proc::VmPrivateOverlayMap();
+                if (cow_vm->private_page_overlay == nullptr)
+                {
+                    k_pmm.free_page(new_page);
+                    return -1;
+                }
+            }
+
+            if (!k_pmm.retain_page(new_page))
+            {
+                k_pmm.free_page(new_page);
+                return -1;
+            }
+
+            if (overlay_owned_by_area)
+            {
+                k_pmm.free_page(old_page);
+            }
+            (*cow_vm->private_page_overlay)[cow_page_index] =
+                to_phy(reinterpret_cast<uint64>(new_page));
+        }
+
         pte.set_data(PA2PTE(PGROUNDDOWN(to_phy(reinterpret_cast<uint64>(new_page)))) |
                      new_flags |
                      PTE_V);

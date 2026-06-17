@@ -363,110 +363,36 @@ namespace proc
         void set_kstack(uint64 kstack) { _kstack = kstack; }
 
         // 页表访问：通过ProcessMemoryManager
-        mem::PageTable *get_pagetable() 
-        { 
-            return _memory_manager ? &_memory_manager->pagetable : nullptr;
-        }
-        const mem::PageTable *get_pagetable() const 
-        { 
-            return _memory_manager ? &_memory_manager->pagetable : nullptr;
-        }
-        void set_pagetable(const mem::PageTable &pt) 
-        { 
-            if (_memory_manager) {
-                _memory_manager->pagetable = pt;
-            }
-        }
+        mem::PageTable *get_pagetable();
+        const mem::PageTable *get_pagetable() const;
+        void set_pagetable(const mem::PageTable &pt);
 
         // 共享VM标志：通过ProcessMemoryManager
-        bool get_shared_vm() const 
-        { 
-            return _memory_manager ? _memory_manager->shared_vm : false;
-        }
-        void set_shared_vm(bool shared) 
-        { 
-            if (_memory_manager) {
-                _memory_manager->shared_vm = shared;
-            }
-        }
+        bool get_shared_vm() const;
+        void set_shared_vm(bool shared);
 
         // VMA访问：通过ProcessMemoryManager
-        VMA *get_vma() 
-        { 
-            return _memory_manager ? &_memory_manager->vma_data : nullptr;
-        }
-        const VMA *get_vma() const 
-        { 
-            return _memory_manager ? &_memory_manager->vma_data : nullptr;
-        }
-        void set_vma(VMA *vma) 
-        { 
-            if (vma && _memory_manager) {
-                _memory_manager->vma_data = *vma;
-            }
-        }
+        VMA *get_vma();
+        const VMA *get_vma() const;
+        void set_vma(VMA *vma);
 
         // 程序段访问方法：通过ProcessMemoryManager
-        int get_prog_section_count() const 
-        { 
-            return _memory_manager ? _memory_manager->prog_section_count : 0;
-        }
-        const program_section_desc *get_prog_sections() const 
-        { 
-            return _memory_manager ? _memory_manager->prog_sections : nullptr;
-        }
-        program_section_desc *get_prog_sections() 
-        { 
-            return _memory_manager ? _memory_manager->prog_sections : nullptr;
-        }
-        void set_prog_section_count(int count) 
-        { 
-            if (_memory_manager) {
-                _memory_manager->prog_section_count = count;
-            }
-        }
+        int get_prog_section_count() const;
+        const program_section_desc *get_prog_sections() const;
+        program_section_desc *get_prog_sections();
+        void set_prog_section_count(int count);
 
         // 堆内存访问方法：通过ProcessMemoryManager
-        uint64 get_heap_start() const 
-        { 
-            return _memory_manager ? _memory_manager->heap_start : 0;
-        }
-        uint64 get_heap_end() const 
-        { 
-            return _memory_manager ? _memory_manager->heap_end : 0;
-        }
-        uint64 get_heap_size() const 
-        { 
-            return _memory_manager ? (_memory_manager->heap_end - _memory_manager->heap_start) : 0;
-        }
-        uint64 get_mmap_cursor() const
-        {
-            return _memory_manager ? _memory_manager->mmap_cursor : 0;
-        }
-        void set_heap_start(uint64 start_addr) 
-        { 
-            if (_memory_manager) {
-                _memory_manager->heap_start = start_addr;
-            }
-        }
-        void set_heap_end(uint64 end_addr) 
-        { 
-            if (_memory_manager) {
-                _memory_manager->heap_end = end_addr;
-            }
-        }
-        void set_mmap_cursor(uint64 next_addr)
-        {
-            if (_memory_manager) {
-                _memory_manager->mmap_cursor = next_addr;
-            }
-        }
+        uint64 get_heap_start() const;
+        uint64 get_heap_end() const;
+        uint64 get_heap_size() const;
+        uint64 get_mmap_cursor() const;
+        void set_heap_start(uint64 start_addr);
+        void set_heap_end(uint64 end_addr);
+        void set_mmap_cursor(uint64 next_addr);
 
         // 内存大小访问方法：通过ProcessMemoryManager
-        uint64 get_size() const 
-        { 
-            return _memory_manager ? _memory_manager->get_total_memory_usage() : 0;
-        }
+        uint64 get_size() const;
 
         ProcState get_state() const { return _state; }
         char *get_name() { return _name; }

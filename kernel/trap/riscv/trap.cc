@@ -448,8 +448,8 @@ void trap_manager::usertrapret()
  */
 int mmap_handler(uint64 va, int cause)
 {
-  int i;
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
+  proc::ProcessMemoryManager *mm = p != nullptr ? p->get_memory_manager() : nullptr;
   uint64 fault_page = PGROUNDDOWN(va);
 
   if (cause == 15 && mem::k_vmm.resolve_cow_page(*p->get_pagetable(), fault_page) == 0)
@@ -457,80 +457,58 @@ int mmap_handler(uint64 va, int cause)
     return 0;
   }
 
-  // 根据地址查找属于哪一个VMA
-  for (i = 0; i < proc::NVMA; ++i)
-  {
-    if (p->get_vma()->_vm[i].used)
-    {
-      // 检查是否在当前VMA范围内
-      if (va >= p->get_vma()->_vm[i].addr && va < p->get_vma()->_vm[i].addr + p->get_vma()->_vm[i].len)
-      {
-        break; // 在当前VMA范围内
-      }
-    }
-  }
-
-  if (i == proc::NVMA)
+  proc::vma *vm = mm != nullptr ? mm->find_vma_covering(va) : nullptr;
+  if (vm == nullptr)
   {
     uint64 user_sp = p->get_trapframe() != nullptr ? p->get_trapframe()->sp : 0;
-    for (i = 0; i < proc::NVMA; ++i)
+    proc::vma *candidate = mm != nullptr ? mm->find_first_vma_at_or_after(fault_page + 1) : nullptr;
+    if (candidate != nullptr)
     {
-      proc::vma &candidate = p->get_vma()->_vm[i];
-      if (!candidate.used || (candidate.flags & MAP_GROWSDOWN) == 0)
+      if ((candidate->flags & MAP_GROWSDOWN) == 0 ||
+          fault_page >= candidate->addr ||
+          !(user_sp >= fault_page && user_sp < candidate->addr + PGSIZE))
       {
-        continue;
+        candidate = nullptr;
       }
-      if (fault_page >= candidate.addr)
-      {
-        continue;
-      }
-      if (!(user_sp >= fault_page && user_sp < candidate.addr + PGSIZE))
-      {
-        continue;
-      }
-
-      uint64 grow_len = candidate.addr - fault_page;
-      uint64 new_len = static_cast<uint64>(candidate.len) + grow_len;
-      if (!candidate.is_expandable || new_len > candidate.max_len || new_len > 0x7fffffffULL)
-      {
-        return -1;
-      }
-
-      for (int j = 0; j < proc::NVMA; ++j)
-      {
-        if (j == i || !p->get_vma()->_vm[j].used)
-        {
-          continue;
-        }
-        uint64 other_start = p->get_vma()->_vm[j].addr;
-        uint64 other_end = other_start + p->get_vma()->_vm[j].len;
-        constexpr uint64 growdown_guard_gap = 256 * PGSIZE;
-        if (other_end <= candidate.addr && other_end + growdown_guard_gap > other_end &&
-            fault_page < other_end + growdown_guard_gap)
-        {
-          return -1;
-        }
-        if (fault_page < other_end && candidate.addr > other_start)
-        {
-          return -1;
-        }
-      }
-
-      // grow-down VMA 的权限和 backing 不变，只把描述区间向低地址扩展；
-      // 真正物理页仍交给 allocate_vma_page 按 fault page 懒分配。
-      candidate.addr = fault_page;
-      candidate.len = static_cast<int>(new_len);
-      break;
     }
-    if (i == proc::NVMA)
+
+    if (candidate == nullptr)
     {
       printfRed("mmap_handler: no VMA found for va %p\n", va);
       return -1;
     }
-  }
 
-  // 获取VMA结构
-  struct proc::vma *vm = &p->get_vma()->_vm[i];
+    uint64 grow_len = candidate->addr - fault_page;
+    uint64 new_len = static_cast<uint64>(candidate->len) + grow_len;
+    if (!candidate->is_expandable || new_len > candidate->max_len || new_len > 0x7fffffffULL)
+    {
+      return -1;
+    }
+
+    proc::vma *prev = mm->find_prev_vma(candidate->addr);
+    constexpr uint64 growdown_guard_gap = 256 * PGSIZE;
+    if (prev != nullptr)
+    {
+      uint64 prev_end = prev->end_addr();
+      if ((prev_end <= candidate->addr && prev_end + growdown_guard_gap > prev_end &&
+           fault_page < prev_end + growdown_guard_gap) ||
+          fault_page < prev_end)
+      {
+        return -1;
+      }
+    }
+
+    uint64 old_addr = candidate->addr;
+    candidate->addr = fault_page;
+    candidate->len = static_cast<int>(new_len);
+    if (!mm->reindex_vma_slot(*candidate, old_addr))
+    {
+      candidate->addr = old_addr;
+      candidate->len = static_cast<int>(new_len - grow_len);
+      return -1;
+    }
+    vm = candidate;
+  }
 
   // 确定访问类型
   int access_type = 0; // 默认读取

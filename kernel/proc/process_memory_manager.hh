@@ -16,8 +16,10 @@
 #pragma once
 
 #include "types.hh"
-#include "proc.hh"
 #include "mem.hh" // 为MAP_SHARED、PROT_WRITE等常量
+#include "vm_area.hh"
+#include "vma_maple_tree.hh"
+#include "vma_space.hh"
 #include "sleeplock.hh"
 #include <EASTL/atomic.h>
 #ifdef RISCV
@@ -83,6 +85,8 @@ namespace proc
 
         // VMA管理（移除分散的引用计数）
         VMA vma_data;
+        VmaMapleTree vma_index;
+        VMASpace vm_space;
 
         // 共享标志
         bool shared_vm;
@@ -266,6 +270,29 @@ namespace proc
         void free_all_vma();
 
         /**
+         * @brief 重建 VMA Maple Tree 索引。
+         *
+         * 当复杂路径（例如 mprotect/mremap）批量修改多个槽位后，
+         * 统一调用此接口把数组槽位重新灌入树索引，避免局部更新漏同步。
+         */
+        void rebuild_vma_index();
+
+        vma *find_vma_covering(uint64 addr);
+        const vma *find_vma_covering(uint64 addr) const;
+        vma *find_first_vma_at_or_after(uint64 addr);
+        const vma *find_first_vma_at_or_after(uint64 addr) const;
+        vma *find_prev_vma(uint64 start_addr);
+        const vma *find_prev_vma(uint64 start_addr) const;
+        vma *find_next_vma(const vma *entry);
+        const vma *find_next_vma(const vma *entry) const;
+        bool reindex_vma_slot(vma &entry, uint64 old_addr);
+        bool insert_vma_slot(vma &entry);
+        void erase_vma_slot(vma &entry, uint64 old_addr);
+        bool has_vma_conflict(uint64 start_addr, uint64 end_addr, const vma *ignore = nullptr) const;
+        VMASpace &get_vm_space() { return vm_space; }
+        const VMASpace &get_vm_space() const { return vm_space; }
+
+        /**
          * @brief 取消指定地址范围的内存映射（支持munmap系统调用）
          * @param addr 起始地址
          * @param length 长度
@@ -426,6 +453,30 @@ namespace proc
          */
         bool check_memory_leaks() const;
 
+        template <typename Fn>
+        bool for_each_vma(Fn &&fn)
+        {
+            return vma_index.for_each(static_cast<Fn &&>(fn));
+        }
+
+        template <typename Fn>
+        bool for_each_vma(Fn &&fn) const
+        {
+            return vma_index.for_each(static_cast<Fn &&>(fn));
+        }
+
+        template <typename Fn>
+        bool for_each_vma_in_range(uint64 start, uint64 end, Fn &&fn)
+        {
+            return vma_index.for_each_in_range(start, end, static_cast<Fn &&>(fn));
+        }
+
+        template <typename Fn>
+        bool for_each_vma_in_range(uint64 start, uint64 end, Fn &&fn) const
+        {
+            return vma_index.for_each_in_range(start, end, static_cast<Fn &&>(fn));
+        }
+
         /****************************************************************************************
          * 内存大小计算和一致性检查接口
          *
@@ -490,6 +541,13 @@ namespace proc
          */
         bool is_page_mapped(uint64 va);
         bool range_overlaps_used_vma(uint64 start_addr, uint64 end_addr) const;
+        int vma_slot_index(const vma *entry) const;
+        uint64 find_gap_in_vma_index(uint64 start_hint,
+                                     uint64 min_addr,
+                                     uint64 max_addr,
+                                     uint64 size,
+                                     uint64 alignment) const;
+        bool clone_vm_space_metadata_from(const ProcessMemoryManager &src);
         
         /**
          * @brief 写回文件映射的数据

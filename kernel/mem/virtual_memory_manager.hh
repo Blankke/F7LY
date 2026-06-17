@@ -1,6 +1,7 @@
 #pragma once 
 
 #include "spinlock.hh"
+#include "proc/vm_area.hh"
 #include <EASTL/string.h>
 // 根据不同架构包含不同的页表实现
 #ifdef RISCV
@@ -9,11 +10,6 @@
 #include "loongarch/pagetable.hh"
 
 #endif
-
-// 前向声明
-namespace proc {
-    struct vma;
-}
 
 namespace mem
 {
@@ -112,7 +108,7 @@ void pci_map(int bus, int dev, int func, void *pages);
 		/// @param vm VMA结构指针
 		/// @param access_type 访问类型：0=读取, 1=写入, 2=执行
 		/// @return 成功返回0，失败返回-1
-		int allocate_vma_page(PageTable &pt, uint64 va, struct proc::vma *vm, int access_type);
+		int allocate_vma_page(PageTable &pt, uint64 va, proc::vma *vm, int access_type);
 
 		/// @brief mark a PTE invalid for user access
 		/// @param pt 
