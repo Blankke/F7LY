@@ -97,13 +97,30 @@ namespace mem
         // 热路径会高频经过这里，默认关闭这段诊断检查，保留权限和 COW 校验。
         constexpr bool k_enable_copy_out_alias_guard = false;
 
-        proc::vma *find_vma_covering_va(proc::Pcb *proc, uint64 va)
+        proc::Pcb *active_proc_for_pt(PageTable &pt)
         {
-            if (proc == nullptr || proc->get_memory_manager() == nullptr)
+            proc::Pcb *proc = proc::k_pm.get_cur_pcb();
+            if (proc == nullptr || proc->get_pagetable() == nullptr)
             {
                 return nullptr;
             }
-            return proc->get_memory_manager()->find_vma_covering(va);
+            if (proc->get_pagetable()->get_base() != pt.get_base())
+            {
+                return nullptr;
+            }
+            return proc;
+        }
+
+        proc::ProcessMemoryManager *resolve_target_mm(PageTable &pt,
+                                                      proc::ProcessMemoryManager *target_mm)
+        {
+            if (target_mm != nullptr)
+            {
+                return target_mm;
+            }
+
+            proc::Pcb *proc = active_proc_for_pt(pt);
+            return proc != nullptr ? proc->get_memory_manager() : nullptr;
         }
 
         bool pte_allows_user_read(Pte &pte)
@@ -165,25 +182,20 @@ namespace mem
         }
 #endif
 
-        int resolve_user_read_pa(PageTable &pt, proc::Pcb *proc, uint64 user_va, uint64 &out_pa)
+        int resolve_user_read_pa(PageTable &pt,
+                                 proc::ProcessMemoryManager *target_mm,
+                                 proc::Pcb *proc,
+                                 uint64 user_va,
+                                 uint64 &out_pa)
         {
             uint64 page_va = PGROUNDDOWN(user_va);
             Pte pte = pt.walk(page_va, false);
 
             if (pte.is_null() || pte.get_data() == 0)
             {
-                proc::vma *target_vm = find_vma_covering_va(proc, user_va);
-                if (target_vm == nullptr)
+                if (target_mm == nullptr || target_mm->fault_page(user_va, 0) != 0)
                 {
                     printfRed("[resolve_user_read_pa] walk failed for va: %p\n", user_va);
-                    return -1;
-                }
-
-                // 读取用户空间时，允许对合法 VMA 做一次按需补页，
-                // 但补页后仍必须检查用户态读权限，不能把 PROT_NONE 之类的映射误当成可读。
-                if (k_vmm.allocate_vma_page(pt, user_va, target_vm, 0) != 0)
-                {
-                    printfRed("[resolve_user_read_pa] allocate_vma_page failed for va: %p\n", user_va);
                     return -1;
                 }
                 pte = pt.walk(page_va, false);
@@ -219,15 +231,17 @@ namespace mem
             return 0;
         }
 
-        int resolve_user_write_pa(PageTable &pt, proc::Pcb *proc, uint64 user_va, uint64 &out_pa)
+        int resolve_user_write_pa(PageTable &pt,
+                                  proc::ProcessMemoryManager *target_mm,
+                                  proc::Pcb *proc,
+                                  uint64 user_va,
+                                  uint64 &out_pa)
         {
             uint64 page_va = PGROUNDDOWN(user_va);
             Pte pte = pt.walk(page_va, false);
             if (pte.is_null() || pte.get_data() == 0)
             {
-                proc::vma *target_vm = find_vma_covering_va(proc, user_va);
-                if (target_vm == nullptr ||
-                    k_vmm.allocate_vma_page(pt, user_va, target_vm, 1) != 0)
+                if (target_mm == nullptr || target_mm->fault_page(user_va, 1) != 0)
                 {
                     return -1;
                 }
@@ -242,7 +256,7 @@ namespace mem
             if (!pte.is_null() && pte.is_valid() && user_page &&
                 !pte.is_writable() && pte_is_cow(pte))
             {
-                if (k_vmm.resolve_cow_page(pt, page_va) != 0)
+                if (target_mm == nullptr || target_mm->fault_page(user_va, 1) != 0)
                 {
                     return -1;
                 }
@@ -476,16 +490,25 @@ namespace mem
     /// @param src_va 源地址（用户虚拟地址），从这个地址读取数据。
     /// @param len 拷贝的数据长度（字节数）。
     /// @return 成功返回0，失败返回-1（如页表无法转换用户虚拟地址）。
-    int VirtualMemoryManager::copy_in(PageTable &pt, void *dst, uint64 src_va, uint64 len)
+    int VirtualMemoryManager::copy_in(PageTable &pt,
+                                      void *dst,
+                                      uint64 src_va,
+                                      uint64 len,
+                                      proc::ProcessMemoryManager *target_mm)
     {
         uint64 n, va, pa;
         char *p_dst = (char *)dst;
-        proc::Pcb *proc = proc::k_pm.get_cur_pcb();
+        proc::Pcb *proc = active_proc_for_pt(pt);
+        target_mm = resolve_target_mm(pt, target_mm);
+        if (target_mm == nullptr)
+        {
+            return -1;
+        }
 
         while (len > 0)
         {
             va = PGROUNDDOWN(src_va);
-            if (resolve_user_read_pa(pt, proc, src_va, pa) != 0)
+            if (resolve_user_read_pa(pt, target_mm, proc, src_va, pa) != 0)
                 return -1;
             n = PGSIZE - (src_va - va);
             if (n > len)
@@ -510,14 +533,19 @@ namespace mem
             return -1;
         }
 
-        proc::Pcb *proc = proc::k_pm.get_cur_pcb();
+        proc::Pcb *proc = active_proc_for_pt(pt);
+        proc::ProcessMemoryManager *target_mm = resolve_target_mm(pt, nullptr);
+        if (target_mm == nullptr)
+        {
+            return -1;
+        }
         uint64 cursor = src_va;
         uint64 remaining = len;
         while (remaining > 0)
         {
             uint64 page_va = PGROUNDDOWN(cursor);
             uint64 ignored_pa = 0;
-            if (resolve_user_read_pa(pt, proc, cursor, ignored_pa) != 0)
+            if (resolve_user_read_pa(pt, target_mm, proc, cursor, ignored_pa) != 0)
             {
                 return -1;
             }
@@ -544,14 +572,19 @@ namespace mem
             return -1;
         }
 
-        proc::Pcb *proc = proc::k_pm.get_cur_pcb();
+        proc::Pcb *proc = active_proc_for_pt(pt);
+        proc::ProcessMemoryManager *target_mm = resolve_target_mm(pt, nullptr);
+        if (target_mm == nullptr)
+        {
+            return -1;
+        }
         uint64 cursor = dst_va;
         uint64 remaining = len;
         while (remaining > 0)
         {
             uint64 page_va = PGROUNDDOWN(cursor);
             uint64 ignored_pa = 0;
-            if (resolve_user_write_pa(pt, proc, cursor, ignored_pa) != 0)
+            if (resolve_user_write_pa(pt, target_mm, proc, cursor, ignored_pa) != 0)
             {
                 return -1;
             }
@@ -569,9 +602,11 @@ namespace mem
 
     int VirtualMemoryManager::user_read_kernel_address(PageTable &pt, uint64 src_va, uint64 &kernel_addr)
     {
-        proc::Pcb *proc = proc::k_pm.get_cur_pcb();
+        proc::Pcb *proc = active_proc_for_pt(pt);
+        proc::ProcessMemoryManager *target_mm = resolve_target_mm(pt, nullptr);
         uint64 page_addr = 0;
-        if (resolve_user_read_pa(pt, proc, src_va, page_addr) != 0)
+        if (target_mm == nullptr ||
+            resolve_user_read_pa(pt, target_mm, proc, src_va, page_addr) != 0)
         {
             return -1;
         }
@@ -585,12 +620,17 @@ namespace mem
         uint64 n, va, pa;
         int got_null = 0;
         char *p_dst = (char *)dst;
-        proc::Pcb *proc = proc::k_pm.get_cur_pcb();
+        proc::Pcb *proc = active_proc_for_pt(pt);
+        proc::ProcessMemoryManager *target_mm = resolve_target_mm(pt, nullptr);
+        if (target_mm == nullptr)
+        {
+            return -1;
+        }
 
         while (got_null == 0 && max > 0)
         {
             va = PGROUNDDOWN(src_va);
-            if (resolve_user_read_pa(pt, proc, src_va, pa) != 0)
+            if (resolve_user_read_pa(pt, target_mm, proc, src_va, pa) != 0)
                 return -1;
             n = PGSIZE - (src_va - va);
             if (n > max)
@@ -633,12 +673,17 @@ namespace mem
         // printfCyan("[copy_str_in] src_va: %p, max: %d\n", src_va, max);
         uint64 n, va, pa;
         int got_null = 0;
-        proc::Pcb *proc = proc::k_pm.get_cur_pcb();
+        proc::Pcb *proc = active_proc_for_pt(pt);
+        proc::ProcessMemoryManager *target_mm = resolve_target_mm(pt, nullptr);
+        if (target_mm == nullptr)
+        {
+            return -EFAULT;
+        }
 
         while (got_null == 0 && max > 0)
         {
             va = PGROUNDDOWN(src_va);
-            if (resolve_user_read_pa(pt, proc, src_va, pa) != 0)
+            if (resolve_user_read_pa(pt, target_mm, proc, src_va, pa) != 0)
                 return -EFAULT;
             n = PGSIZE - (src_va - va);
             if (n > max)
@@ -1096,16 +1141,20 @@ namespace mem
     /// @param p   拷贝的源地址（内核空间指针）。
     /// @param len 拷贝的字节数。
     /// @return 成功返回 0；若任意一页无效或未映射，返回 -1。
-    int VirtualMemoryManager::copy_out(PageTable &pt, uint64 va, const void *p, uint64 len)
+    int VirtualMemoryManager::copy_out(PageTable &pt,
+                                       uint64 va,
+                                       const void *p,
+                                       uint64 len,
+                                       proc::ProcessMemoryManager *target_mm)
     {
 #ifdef RISCV
         uint64 n, a, pa;
-        proc::Pcb *proc = proc::k_pm.get_cur_pcb();
+        proc::Pcb *proc = active_proc_for_pt(pt);
+        target_mm = resolve_target_mm(pt, target_mm);
 
-        // 之前vma如果被free了这里会直接炸, 添加一个判断
-        if (!proc || !proc->get_vma())
+        if (target_mm == nullptr)
         {
-            printfRed("[copy_out] VMA not present, skip copy\n");
+            printfRed("[copy_out] target mm not present, skip copy\n");
             return -1;
         }
 
@@ -1115,22 +1164,11 @@ namespace mem
             Pte pte = pt.walk(a, 0);
             if (pte.is_null() || pte.get_data() == 0)
             {
-                proc::vma *target_vm = find_vma_covering_va(proc, va);
-                if (target_vm == nullptr)
+                if (target_mm->fault_page(va, 1) != 0)
                 {
-                    // 如果页表项无效且不在VMA范围内，则返回错误
                     printfRed("[copy_out] walk failed for va: %p\n", va);
                     return -1;
                 }
-
-                // 如果页表项无效且在VMA范围内，使用统一的页面分配逻辑
-                // copy_out 是写操作，需要写权限
-                if (allocate_vma_page(pt, va, target_vm, 1) != 0)
-                {
-                    printfRed("[copy_out] allocate_vma_page failed for va: %p\n", va);
-                    return -1;
-                }
-                // 重新获取页表项
                 pte = pt.walk(a, 0);
             }
 
@@ -1138,7 +1176,7 @@ namespace mem
             // 甚至误写到被错误映射的内核页上，最终把当前进程元数据一并带坏。
             if (pte.is_valid() && pte.is_user() && !pte.is_writable() && pte_is_cow(pte))
             {
-                if (resolve_cow_page(pt, a) != 0)
+                if (target_mm->fault_page(a, 1) != 0)
                 {
                     return -1;
                 }
@@ -1202,12 +1240,12 @@ namespace mem
         return 0;
 #elif defined(LOONGARCH)
         uint64 n, a, pa;
-        proc::Pcb *proc = proc::k_pm.get_cur_pcb();
+        proc::Pcb *proc = active_proc_for_pt(pt);
+        target_mm = resolve_target_mm(pt, target_mm);
 
-        // 之前vma如果被free了这里会直接炸, 添加一个判断
-        if (!proc || !proc->get_vma())
+        if (target_mm == nullptr)
         {
-            printfRed("[copy_out] VMA not present, skip copy\n");
+            printfRed("[copy_out] target mm not present, skip copy\n");
             return -1;
         }
 
@@ -1217,22 +1255,11 @@ namespace mem
             Pte pte = pt.walk(a, 0);
             if (pte.is_null() || pte.get_data() == 0)
             {
-                proc::vma *target_vm = find_vma_covering_va(proc, va);
-                if (target_vm == nullptr)
+                if (target_mm->fault_page(va, 1) != 0)
                 {
-                    // 如果页表项无效且不在VMA范围内，则返回错误
                     printfRed("[copy_out] walk failed for va: %p (not in any VMA)\n", va);
                     return -1;
                 }
-
-                // 如果页表项无效且在VMA范围内，使用统一的页面分配逻辑
-                // copy_out 是写操作，需要写权限
-                if (allocate_vma_page(pt, va, target_vm, 1) != 0)
-                {
-                    printfRed("[copy_out] allocate_vma_page failed for va: %p\n", va);
-                    return -1;
-                }
-                // 重新获取页表项
                 pte = pt.walk(a, 0);
             }
 
@@ -1240,7 +1267,7 @@ namespace mem
             // 内核 copy_out 写用户缓冲时需要先拆页，否则会把合法写入误判成权限错误。
             if (pte.is_valid() && pte.is_user_plv() && !pte.is_writable() && pte_is_cow(pte))
             {
-                if (resolve_cow_page(pt, a) != 0)
+                if (target_mm->fault_page(a, 1) != 0)
                 {
                     return -1;
                 }
