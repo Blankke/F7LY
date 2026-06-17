@@ -59,6 +59,8 @@
 #include "fs/fs_defs.hh"
 #include "fs/fcntl.hh"
 #include "proc/posix_timers.hh"
+#include "proc/vma_metadata_utils.hh"
+#include "proc/vm_object.hh"
 
 #include "fs/lwext4/ext4_errno.hh"
 #include "fs/lwext4/ext4.hh"
@@ -14734,24 +14736,15 @@ namespace syscall
         uint64 aligned_len = PGROUNDUP(len);
         uint64 end_addr = addr + aligned_len;
 
-        // 查找包含该地址的VMA
+        // 用 Maple Tree 做首跳命中，避免每次 mprotect 都线性扫整个 VMA 表。
         int vma_index = -1;
-        for (int i = 0; i < proc::NVMA; i++)
+        proc::vma *vm = pcb->get_memory_manager()->find_vma_covering(addr);
+        if (vm != nullptr && end_addr <= vm->end_addr())
         {
-            if (pcb->get_vma()->_vm[i].used)
-            {
-                uint64 vma_start = pcb->get_vma()->_vm[i].addr;
-                uint64 vma_end = vma_start + pcb->get_vma()->_vm[i].len;
-
-                // 检查地址范围是否完全在VMA内
-                if (addr >= vma_start && end_addr <= vma_end)
-                {
-                    vma_index = i;
-                    printfGreen("[sys_mprotect] Found VMA[%d]: [%p, %p) for range [%p, %p)\n",
-                                i, (void *)vma_start, (void *)vma_end, (void *)addr, (void *)end_addr);
-                    break;
-                }
-            }
+            proc::vma *base = &pcb->get_vma()->_vm[0];
+            vma_index = static_cast<int>(vm - base);
+            printfGreen("[sys_mprotect] Found VMA[%d]: [%p, %p) for range [%p, %p)\n",
+                        vma_index, (void *)vm->addr, (void *)vm->end_addr(), (void *)addr, (void *)end_addr);
         }
 
         if (vma_index == -1)
@@ -14781,7 +14774,7 @@ namespace syscall
         }
 
         // 找到了对应的VMA，现在需要处理权限修改
-        proc::vma *vm = &pcb->get_vma()->_vm[vma_index];
+        vm = &pcb->get_vma()->_vm[vma_index];
         uint64 vma_start = vm->addr;
         uint64 vma_end = vma_start + vm->len;
         int old_prot = vm->prot;
@@ -14817,8 +14810,11 @@ namespace syscall
                 }
             }
         }
-        // 保存原始VMA状态用于回滚
-        proc::vma original_vma = *vm;
+        // 保存原始 VMA 快照用于 rollback。
+        // 这里不能再直接做平凡拷贝了，因为 VMA 里已经带上了 object/overlay 等非 POD 元数据。
+        proc::vma original_vma = {};
+        proc::vma source_view = {};
+        bool has_snapshot = false;
 
         // 记录我们创建的新VMA索引，用于失败时清理
         int created_vma_indices[2] = {-1, -1}; // 最多创建2个新VMA（前段用原VMA，中段和后段用新VMA）
@@ -14862,13 +14858,32 @@ namespace syscall
                 return syscall::SYS_ENOMEM;
             }
 
+            if (!proc::vma_meta::clone_snapshot(original_vma, *vm))
+            {
+                printfRed("[sys_mprotect] Failed to snapshot original VMA metadata\n");
+                return syscall::SYS_ENOMEM;
+            }
+            source_view = *vm;
+            has_snapshot = true;
+
             int next_free_idx = 0;
+            const uint64 total_pages = PGROUNDUP(static_cast<uint64>(source_view.len)) / PGSIZE;
+            const uint64 front_pages = (addr - vma_start) / PGSIZE;
+            const uint64 middle_pages = aligned_len / PGSIZE;
+            const uint64 back_start_page = (end_addr - vma_start) / PGSIZE;
+            const uint64 back_pages = total_pages - back_start_page;
+            proc::VmPrivateOverlayMap *source_overlay = source_view.private_page_overlay;
 
             // 如果有前段（addr > vma_start），保留原VMA作为前段
             if (addr > vma_start)
             {
                 // 原VMA变成前段
+                proc::VmPrivateOverlayMap *front_overlay =
+                    proc::vma_meta::clone_overlay_subset(source_view, 0, front_pages, false);
+                vm->private_page_overlay = front_overlay;
                 vm->len = addr - vma_start;
+                vm->page_offset = source_view.page_offset;
+                vm->offset = source_view.offset;
                 printfGreen("[sys_mprotect] Created front segment: VMA[%d] [%p, %p) prot=%d\n",
                             vma_index, (void *)vm->addr, (void *)(vm->addr + vm->len), vm->prot);
             }
@@ -14892,20 +14907,31 @@ namespace syscall
             }
 
             proc::vma *middle_vm = &pcb->get_vma()->_vm[middle_vma_idx];
-            *middle_vm = original_vma; // 复制原VMA的所有属性
+            proc::VmPrivateOverlayMap *middle_overlay =
+                proc::vma_meta::clone_overlay_subset(source_view, front_pages, middle_pages, false);
+            *middle_vm = source_view;
+            if (middle_vma_idx != vma_index)
+            {
+                if (middle_vm->object != nullptr)
+                {
+                    middle_vm->object->get();
+                }
+                if (middle_vm->vfile != nullptr)
+                {
+                    middle_vm->vfile->dup();
+                }
+            }
             middle_vm->used = 1;
             middle_vm->addr = addr;
             middle_vm->len = aligned_len;
             middle_vm->prot = prot;
+            middle_vm->private_page_overlay = middle_overlay;
+            middle_vm->page_offset = source_view.page_offset + (addr - vma_start);
 
             // 调整文件偏移（如果是文件映射）
             if (middle_vm->vfile != nullptr)
             {
-                middle_vm->offset += (addr - vma_start);
-                if (middle_vma_idx != vma_index) // 只有在创建新VMA时才增加引用计数
-                {
-                    middle_vm->vfile->dup(); // 增加引用计数
-                }
+                middle_vm->offset = source_view.offset + (addr - vma_start);
             }
 
             printfGreen("[sys_mprotect] Created middle segment: VMA[%d] [%p, %p) prot=%d\n",
@@ -14918,21 +14944,37 @@ namespace syscall
                 created_vma_indices[created_vma_count++] = back_vma_idx;
 
                 proc::vma *back_vm = &pcb->get_vma()->_vm[back_vma_idx];
-                *back_vm = original_vma; // 复制原VMA的所有属性
+                proc::VmPrivateOverlayMap *back_overlay =
+                    proc::vma_meta::clone_overlay_subset(source_view, back_start_page, back_pages, false);
+                *back_vm = source_view;
+                if (back_vm->object != nullptr)
+                {
+                    back_vm->object->get();
+                }
+                if (back_vm->vfile != nullptr)
+                {
+                    back_vm->vfile->dup();
+                }
                 back_vm->used = 1;
                 back_vm->addr = end_addr;
                 back_vm->len = vma_end - end_addr;
                 back_vm->prot = old_prot; // 保持原来的权限
+                back_vm->private_page_overlay = back_overlay;
+                back_vm->page_offset = source_view.page_offset + (end_addr - vma_start);
 
                 // 调整文件偏移（如果是文件映射）
                 if (back_vm->vfile != nullptr)
                 {
-                    back_vm->offset += (end_addr - vma_start);
-                    back_vm->vfile->dup(); // 增加引用计数
+                    back_vm->offset = source_view.offset + (end_addr - vma_start);
                 }
 
                 printfGreen("[sys_mprotect] Created back segment: VMA[%d] [%p, %p) prot=%d\n",
                             back_vma_idx, (void *)back_vm->addr, (void *)(back_vm->addr + back_vm->len), back_vm->prot);
+            }
+
+            if (source_overlay != nullptr)
+            {
+                delete source_overlay;
             }
         }
 
@@ -14942,9 +14984,17 @@ namespace syscall
             printfRed("[sys_mprotect] protectpages failed for range [%p, %p), rolling back VMA changes\n",
                       (void *)addr, (void *)end_addr);
 
-            // 恢复VMA状态
-            // 1. 恢复原始VMA
-            *vm = original_vma;
+            if (!has_snapshot)
+            {
+                vm->prot = old_prot;
+                pcb->get_memory_manager()->rebuild_vma_index();
+                return syscall::SYS_EFAULT;
+            }
+
+            // 恢复 VMA 状态：
+            // 1. 先释放当前拆分出来的 live 元数据；
+            // 2. 再把快照转回原 VMA。
+            proc::vma_meta::release_metadata(*vm);
 
             // 2. 清理我们创建的新VMA
             for (int i = 0; i < created_vma_count; i++)
@@ -14953,14 +15003,7 @@ namespace syscall
                 if (idx >= 0 && idx < proc::NVMA)
                 {
                     proc::vma *cleanup_vm = &pcb->get_vma()->_vm[idx];
-
-                    // 释放文件引用（如果有）
-                    if (cleanup_vm->vfile != nullptr)
-                    {
-                        cleanup_vm->vfile->free_file();
-                    }
-
-                    // 清零VMA结构
+                    proc::vma_meta::release_metadata(*cleanup_vm);
                     memset(cleanup_vm, 0, sizeof(proc::vma));
                     cleanup_vm->backing_kind = proc::VMA_BACKING_NONE;
                     cleanup_vm->backing_shmid = -1;
@@ -14970,7 +15013,13 @@ namespace syscall
                 }
             }
 
+            *vm = original_vma;
+            original_vma.vfile = nullptr;
+            original_vma.object = nullptr;
+            original_vma.private_page_overlay = nullptr;
+
             printfYellow("[sys_mprotect] VMA state successfully rolled back\n");
+            pcb->get_memory_manager()->rebuild_vma_index();
             return syscall::SYS_EFAULT;
         }
 
@@ -14981,8 +15030,14 @@ namespace syscall
         asm volatile("invtlb 0x0,$zero,$zero");
 #endif
 
+        if (has_snapshot)
+        {
+            proc::vma_meta::release_metadata(original_vma);
+        }
+
         printfGreen("[sys_mprotect] Success: changed protection for range [%p, %p) to %d\n",
                     (void *)addr, (void *)end_addr, prot);
+        pcb->get_memory_manager()->rebuild_vma_index();
 
         return 0;
     }

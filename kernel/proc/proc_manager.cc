@@ -16,6 +16,7 @@
 #include "devs/device_manager.hh"
 #include "fs/lwext4/ext4_errno.hh"
 #include "process_memory_manager.hh" // 新增：进程内存管理器
+#include "vm_object.hh"
 #include "shm_manager.hh"
 #ifdef RISCV
 // #include "devs/riscv/disk_driver.hh"
@@ -4507,21 +4508,14 @@ namespace proc
             if (flags & MAP_FIXED_NOREPLACE)
             {
                 // MAP_FIXED_NOREPLACE: 如果地址范围与现有映射冲突则失败
-                for (int i = 0; i < NVMA; ++i)
+                if (p->get_memory_manager()->has_vma_conflict(map_addr,
+                                                              map_addr + aligned_length,
+                                                              nullptr))
                 {
-                    if (p->get_vma()->_vm[i].used)
-                    {
-                        uint64 existing_start = p->get_vma()->_vm[i].addr;
-                        uint64 existing_end = existing_start + p->get_vma()->_vm[i].len;
-                        uint64 new_end = map_addr + aligned_length;
-
-                        if (!(new_end <= existing_start || map_addr >= existing_end))
-                        {
-                            printfRed("[mmap] MAP_FIXED_NOREPLACE: address range [%p, %p) conflicts with existing [%p, %p)\n",
-                                      (void *)map_addr, (void *)new_end, (void *)existing_start, (void *)existing_end);
-                            return fail_mmap(EEXIST);
-                        }
-                    }
+                    printfRed("[mmap] MAP_FIXED_NOREPLACE: address range [%p, %p) conflicts with existing mapping\n",
+                              (void *)map_addr,
+                              (void *)(map_addr + aligned_length));
+                    return fail_mmap(EEXIST);
                 }
             }
             else if (flags & MAP_FIXED)
@@ -4771,34 +4765,19 @@ namespace proc
             (flags & MAP_PRIVATE) != 0 &&
             (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) == 0)
         {
-            for (int i = 0; i < NVMA; ++i)
+            vma *existing = p->get_memory_manager()->find_prev_vma(map_addr + 1);
+            if (existing != nullptr &&
+                existing->addr + (uint64)existing->len == map_addr &&
+                existing->prot == prot &&
+                existing->flags == flags &&
+                existing->vfd == -1 &&
+                existing->vfile == nullptr &&
+                existing->backing_kind == VMA_BACKING_NONE)
             {
-                vma &existing = p->get_vma()->_vm[i];
-                if (!existing.used)
+                existing->len += static_cast<int>(aligned_length);
+                if (existing->max_len < static_cast<uint64>(existing->len))
                 {
-                    continue;
-                }
-                if (existing.addr + (uint64)existing.len != map_addr)
-                {
-                    continue;
-                }
-                if (existing.prot != prot || existing.flags != flags)
-                {
-                    continue;
-                }
-                if (existing.vfd != -1 || existing.vfile != nullptr)
-                {
-                    continue;
-                }
-                if (existing.backing_kind != VMA_BACKING_NONE)
-                {
-                    continue;
-                }
-
-                existing.len += static_cast<int>(aligned_length);
-                if (existing.max_len < static_cast<uint64>(existing.len))
-                {
-                    existing.max_len = static_cast<uint64>(existing.len);
+                    existing->max_len = static_cast<uint64>(existing->len);
                 }
                 return (void *)map_addr;
             }
@@ -4839,7 +4818,7 @@ namespace proc
         }
 
         // 初始化VMA
-        struct vma *vm = &p->get_vma()->_vm[vma_idx];
+        vma *vm = &p->get_vma()->_vm[vma_idx];
         vm->used = 1;
         vm->addr = map_addr;
         vm->len = aligned_length;
@@ -4852,6 +4831,15 @@ namespace proc
         vm->backing_shmid = -1;
         vm->backing_base = 0;
         vm->has_resident_pages = populated_mapping_pages;
+        vm->owner_mm = p->get_memory_manager();
+        vm->object = nullptr;
+        vm->page_offset = static_cast<uint64>(offset);
+        vm->area_kind = (flags & MAP_GROWSDOWN) ? VmAreaKind::UserStack : VmAreaKind::Mmap;
+        vm->grow_policy = (flags & MAP_GROWSDOWN) ? VmGrowPolicy::Down : VmGrowPolicy::None;
+        vm->advice_state = VmAdviceState::None;
+        vm->guard_pages = (flags & MAP_GROWSDOWN) ? 1 : 0;
+        vm->zero_fill_past_file = false;
+        vm->debug_name = is_anonymous ? "mmap-anon" : "mmap-file";
 
         // 设置扩展属性
         if (is_anonymous)
@@ -4890,6 +4878,21 @@ namespace proc
             vm->backing_kind = VMA_BACKING_FILE;
         }
 
+        if (!needs_shared_backing_segment)
+        {
+            if (is_anonymous)
+            {
+                vm->object = new AnonVmObject((flags & MAP_SHARED) != 0, vm->debug_name);
+            }
+            else if (vfile != nullptr)
+            {
+                vm->object = new FileVmObject(vfile,
+                                              (flags & MAP_SHARED) != 0,
+                                              false,
+                                              vfile->backing_path());
+            }
+        }
+
         // VMA内存映射不计入_sz，因为_sz现在只管理程序段和堆
         // VMA有独立的内存管理生命周期
 
@@ -4902,6 +4905,24 @@ namespace proc
         if (flags & MAP_LOCKED)
         {
             // TODO: 锁定页面在内存中
+        }
+
+        if (!p->get_memory_manager()->insert_vma_slot(*vm))
+        {
+            if (vm->object != nullptr)
+            {
+                delete vm->object;
+                vm->object = nullptr;
+            }
+            if (vm->vfile != nullptr)
+            {
+                vm->vfile->free_file();
+            }
+            memset(vm, 0, sizeof(*vm));
+            vm->backing_kind = VMA_BACKING_NONE;
+            vm->backing_shmid = -1;
+            vm->backing_base = 0;
+            return fail_mmap(ENOMEM);
         }
         return (void *)map_addr;
     }
@@ -5131,26 +5152,15 @@ namespace proc
                      (void *)old_start, (void *)old_end, old_size);
 
         printfYellow("[mremap] NVMA=%d, pcb=%p, pcb->get_vma()=%p\n", NVMA, pcb, pcb->get_vma());
-
-        for (int i = 0; i < NVMA; i++)
+        proc::vma *found_vma = pcb->get_memory_manager()->find_vma_covering(old_start);
+        if (found_vma != nullptr && old_end <= found_vma->end_addr())
         {
-            // printfYellow("[mremap] Checking VMA[%d]: used=%d\n", i, pcb->_vma->_vm[i].used);
-
-            if (!pcb->get_vma()->_vm[i].used)
-                continue;
-
-            uint64 vma_start = pcb->get_vma()->_vm[i].addr;
-            uint64 vma_end = vma_start + pcb->get_vma()->_vm[i].len;
-
-            // printfYellow("[mremap] VMA[%d]: [%p, %p), len=%d, used=%d\n",
-            //              i, (void *)vma_start, (void *)vma_end, pcb->_vma->_vm[i].len, pcb->_vma->_vm[i].used);
-
-            if (old_start >= vma_start && old_end <= vma_end)
-            {
-                vma_index = i;
-                printfGreen("[mremap] Found matching VMA[%d]: [%p, %p)\n", i, (void *)vma_start, (void *)vma_end);
-                break;
-            }
+            proc::vma *base = &pcb->get_vma()->_vm[0];
+            vma_index = static_cast<int>(found_vma - base);
+            printfGreen("[mremap] Found matching VMA[%d]: [%p, %p)\n",
+                        vma_index,
+                        (void *)found_vma->addr,
+                        (void *)found_vma->end_addr());
         }
 
         // EFAULT: 地址范围未映射或无效
@@ -5228,20 +5238,9 @@ namespace proc
             if (!(flags & MREMAP_MAYMOVE))
             {
                 // 检查扩展区域是否可用
-                for (int i = 0; i < NVMA; i++)
-                {
-                    if (i == vma_index || !pcb->get_vma()->_vm[i].used)
-                        continue;
-
-                    uint64 other_start = pcb->get_vma()->_vm[i].addr;
-                    uint64 other_end = other_start + pcb->get_vma()->_vm[i].len;
-
-                    if (!(expand_start >= other_end || expand_start + additional_size <= other_start))
-                    {
-                        can_expand_in_place = false;
-                        break;
-                    }
-                }
+                can_expand_in_place = !pcb->get_memory_manager()->has_vma_conflict(expand_start,
+                                                                                    expand_start + additional_size,
+                                                                                    &vma);
 
                 // ENOMEM: 不能就地扩展且未指定MREMAP_MAYMOVE
                 if (!can_expand_in_place)

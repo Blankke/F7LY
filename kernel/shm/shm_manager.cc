@@ -313,19 +313,21 @@ namespace shm
             return true;
         }
         
-        // 检查是否与现有VMA冲突
-        if (proc->get_vma() != nullptr) {
-            for (int i = 0; i < proc::NVMA; i++) {
-                if (proc->get_vma()->_vm[i].used) {
-                    uint64 vma_start = proc->get_vma()->_vm[i].addr;
-                    uint64 vma_end = vma_start + proc->get_vma()->_vm[i].len;
-                    
-                    if (addr < vma_end && end_addr > vma_start) {
-                        printfRed("[ShmManager] Address range [0x%x, 0x%x] conflicts with VMA %d [0x%x, 0x%x]\n",
-                                 addr, end_addr, i, vma_start, vma_end);
-                        return true;
-                    }
+        // 用 VMA Maple Tree 做冲突判定，避免固定地址 shmat 再做全表扫描。
+        if (proc->get_vma() != nullptr && proc->get_memory_manager() != nullptr) {
+            if (proc->get_memory_manager()->has_vma_conflict(addr, end_addr)) {
+                const proc::vma *conflict = proc->get_memory_manager()->find_vma_covering(addr);
+                if (conflict == nullptr) {
+                    conflict = proc->get_memory_manager()->find_first_vma_at_or_after(addr);
                 }
+
+                if (conflict != nullptr && conflict->addr < end_addr) {
+                    const proc::vma *base = &proc->get_vma()->_vm[0];
+                    int vma_index = static_cast<int>(conflict - base);
+                    printfRed("[ShmManager] Address range [0x%x, 0x%x] conflicts with VMA %d [0x%x, 0x%x]\n",
+                             addr, end_addr, vma_index, conflict->addr, conflict->end_addr());
+                }
+                return true;
             }
         }
         

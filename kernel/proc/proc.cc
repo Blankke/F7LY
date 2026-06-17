@@ -249,6 +249,128 @@ namespace proc
         _memory_manager = nullptr;
     }
 
+    mem::PageTable *Pcb::get_pagetable()
+    {
+        return _memory_manager ? &_memory_manager->pagetable : nullptr;
+    }
+
+    const mem::PageTable *Pcb::get_pagetable() const
+    {
+        return _memory_manager ? &_memory_manager->pagetable : nullptr;
+    }
+
+    void Pcb::set_pagetable(const mem::PageTable &pt)
+    {
+        if (_memory_manager != nullptr)
+        {
+            _memory_manager->pagetable = pt;
+        }
+    }
+
+    bool Pcb::get_shared_vm() const
+    {
+        return _memory_manager ? _memory_manager->shared_vm : false;
+    }
+
+    void Pcb::set_shared_vm(bool shared)
+    {
+        if (_memory_manager != nullptr)
+        {
+            _memory_manager->shared_vm = shared;
+        }
+    }
+
+    VMA *Pcb::get_vma()
+    {
+        return _memory_manager ? &_memory_manager->vma_data : nullptr;
+    }
+
+    const VMA *Pcb::get_vma() const
+    {
+        return _memory_manager ? &_memory_manager->vma_data : nullptr;
+    }
+
+    void Pcb::set_vma(VMA *vma)
+    {
+        if (vma != nullptr && _memory_manager != nullptr)
+        {
+            _memory_manager->vma_data = *vma;
+            _memory_manager->rebuild_vma_index();
+        }
+    }
+
+    int Pcb::get_prog_section_count() const
+    {
+        return _memory_manager ? _memory_manager->prog_section_count : 0;
+    }
+
+    const program_section_desc *Pcb::get_prog_sections() const
+    {
+        return _memory_manager ? _memory_manager->prog_sections : nullptr;
+    }
+
+    program_section_desc *Pcb::get_prog_sections()
+    {
+        return _memory_manager ? _memory_manager->prog_sections : nullptr;
+    }
+
+    void Pcb::set_prog_section_count(int count)
+    {
+        if (_memory_manager != nullptr)
+        {
+            _memory_manager->prog_section_count = count;
+        }
+    }
+
+    uint64 Pcb::get_heap_start() const
+    {
+        return _memory_manager ? _memory_manager->heap_start : 0;
+    }
+
+    uint64 Pcb::get_heap_end() const
+    {
+        return _memory_manager ? _memory_manager->heap_end : 0;
+    }
+
+    uint64 Pcb::get_heap_size() const
+    {
+        return _memory_manager ? (_memory_manager->heap_end - _memory_manager->heap_start) : 0;
+    }
+
+    uint64 Pcb::get_mmap_cursor() const
+    {
+        return _memory_manager ? _memory_manager->mmap_cursor : 0;
+    }
+
+    void Pcb::set_heap_start(uint64 start_addr)
+    {
+        if (_memory_manager != nullptr)
+        {
+            _memory_manager->heap_start = start_addr;
+        }
+    }
+
+    void Pcb::set_heap_end(uint64 end_addr)
+    {
+        if (_memory_manager != nullptr)
+        {
+            _memory_manager->heap_end = end_addr;
+        }
+    }
+
+    void Pcb::set_mmap_cursor(uint64 next_addr)
+    {
+        if (_memory_manager != nullptr)
+        {
+            _memory_manager->mmap_cursor = next_addr;
+        }
+    }
+
+    uint64 Pcb::get_size() const
+    {
+        return _memory_manager ? _memory_manager->get_total_memory_usage() : 0;
+    }
+
     void Pcb::cleanup_sighand()
     {
         if (_sigactions != nullptr)

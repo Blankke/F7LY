@@ -18,12 +18,14 @@
 #include "physical_memory_manager.hh"
 #include "klib.hh"
 #include "printer.hh"
+#include "vm_object.hh"
 #include "platform.hh" // 为MAX/MIN宏
 #include "memlayout.hh"
 #include "fs/vfs/file/normal_file.hh"
 #include "fs/vfs/vfs_utils.hh"
 #include "fs/vfs/virtual_fs.hh"
 #include "shm/shm_manager.hh"
+#include "vma_metadata_utils.hh"
 
 // 外部符号声明
 extern char trampoline[];     // trampoline.S
@@ -121,6 +123,58 @@ namespace proc
         inline bool is_shared_backed_vma(const vma &entry)
         {
             return entry.used && entry.backing_kind == VMA_BACKING_SHM && entry.backing_shmid >= 0;
+        }
+
+        inline vma *pick_lower_addr_vma(vma *lhs, vma *rhs)
+        {
+            if (lhs == nullptr)
+            {
+                return rhs;
+            }
+            if (rhs == nullptr)
+            {
+                return lhs;
+            }
+            return lhs->addr <= rhs->addr ? lhs : rhs;
+        }
+
+        inline const vma *pick_lower_addr_vma(const vma *lhs, const vma *rhs)
+        {
+            if (lhs == nullptr)
+            {
+                return rhs;
+            }
+            if (rhs == nullptr)
+            {
+                return lhs;
+            }
+            return lhs->addr <= rhs->addr ? lhs : rhs;
+        }
+
+        inline vma *pick_higher_addr_vma(vma *lhs, vma *rhs)
+        {
+            if (lhs == nullptr)
+            {
+                return rhs;
+            }
+            if (rhs == nullptr)
+            {
+                return lhs;
+            }
+            return lhs->addr >= rhs->addr ? lhs : rhs;
+        }
+
+        inline const vma *pick_higher_addr_vma(const vma *lhs, const vma *rhs)
+        {
+            if (lhs == nullptr)
+            {
+                return rhs;
+            }
+            if (rhs == nullptr)
+            {
+                return lhs;
+            }
+            return lhs->addr >= rhs->addr ? lhs : rhs;
         }
 
         inline uint64 pte_data_kernel_addr(mem::Pte &pte)
@@ -480,6 +534,8 @@ namespace proc
         {
             reset_vma_entry(vma_data._vm[i]);
         }
+        vma_index.clear();
+        vm_space.init(this);
     }
 
     ProcessMemoryManager::~ProcessMemoryManager()
@@ -517,6 +573,200 @@ namespace proc
     void ProcessMemoryManager::unlock_memory()
     {
         memory_lock.release();
+    }
+
+    void ProcessMemoryManager::rebuild_vma_index()
+    {
+        vma_index.clear();
+        for (int i = 0; i < NVMA; ++i)
+        {
+            vma &entry = vma_data._vm[i];
+            if (!entry.used)
+            {
+                continue;
+            }
+
+            if (!entry.valid_range())
+            {
+                printfRed("ProcessMemoryManager: rebuild_vma_index skip invalid slot=%d addr=%p len=%d used=%d\n",
+                          i, (void *)entry.addr, entry.len, entry.used);
+                continue;
+            }
+
+            if (!vma_index.insert(&entry))
+            {
+                printfRed("ProcessMemoryManager: rebuild_vma_index conflict slot=%d range=[%p,%p)\n",
+                          i, (void *)entry.addr, (void *)entry.end_addr());
+            }
+        }
+    }
+
+    vma *ProcessMemoryManager::find_vma_covering(uint64 addr)
+    {
+        vma *legacy_vm = vma_index.find(addr);
+        if (legacy_vm != nullptr)
+        {
+            return legacy_vm;
+        }
+        return vm_space.find_vma_covering(addr);
+    }
+
+    const vma *ProcessMemoryManager::find_vma_covering(uint64 addr) const
+    {
+        const vma *legacy_vm = vma_index.find(addr);
+        if (legacy_vm != nullptr)
+        {
+            return legacy_vm;
+        }
+        return vm_space.find_vma_covering(addr);
+    }
+
+    vma *ProcessMemoryManager::find_first_vma_at_or_after(uint64 addr)
+    {
+        return pick_lower_addr_vma(vma_index.lower_bound(addr), vm_space.find_first_vma_at_or_after(addr));
+    }
+
+    const vma *ProcessMemoryManager::find_first_vma_at_or_after(uint64 addr) const
+    {
+        return pick_lower_addr_vma(vma_index.lower_bound(addr), vm_space.find_first_vma_at_or_after(addr));
+    }
+
+    vma *ProcessMemoryManager::find_prev_vma(uint64 start_addr)
+    {
+        return pick_higher_addr_vma(vma_index.prev_by_start(start_addr), vm_space.find_prev_vma(start_addr));
+    }
+
+    const vma *ProcessMemoryManager::find_prev_vma(uint64 start_addr) const
+    {
+        return pick_higher_addr_vma(vma_index.prev_by_start(start_addr), vm_space.find_prev_vma(start_addr));
+    }
+
+    vma *ProcessMemoryManager::find_next_vma(const vma *entry)
+    {
+        if (entry == nullptr)
+        {
+            return nullptr;
+        }
+        return find_first_vma_at_or_after(entry->end_addr());
+    }
+
+    const vma *ProcessMemoryManager::find_next_vma(const vma *entry) const
+    {
+        if (entry == nullptr)
+        {
+            return nullptr;
+        }
+        return find_first_vma_at_or_after(entry->end_addr());
+    }
+
+    bool ProcessMemoryManager::insert_vma_slot(vma &entry)
+    {
+        if (!entry.used || !entry.valid_range())
+        {
+            return false;
+        }
+        return vma_slot_index(&entry) >= 0 ? vma_index.insert(&entry) : vm_space.insert_area(entry);
+    }
+
+    void ProcessMemoryManager::erase_vma_slot(vma &entry, uint64 old_addr)
+    {
+        if (vma_slot_index(&entry) >= 0)
+        {
+            vma_index.erase(&entry, old_addr);
+            return;
+        }
+        vm_space.erase_area(entry, old_addr);
+    }
+
+    bool ProcessMemoryManager::reindex_vma_slot(vma &entry, uint64 old_addr)
+    {
+        if (!entry.used)
+        {
+            return false;
+        }
+        if (vma_slot_index(&entry) >= 0)
+        {
+            vma_index.erase(&entry, old_addr);
+            if (!entry.valid_range())
+            {
+                return false;
+            }
+            if (vma_index.insert(&entry))
+            {
+                return true;
+            }
+
+            // 发生冲突时回退到全量重建，确保索引不会停留在半更新状态。
+            rebuild_vma_index();
+            return false;
+        }
+        return entry.valid_range() && vm_space.reindex_area(entry, old_addr);
+    }
+
+    int ProcessMemoryManager::vma_slot_index(const vma *entry) const
+    {
+        if (entry == nullptr)
+        {
+            return -1;
+        }
+        const vma *base = &vma_data._vm[0];
+        if (entry < base || entry >= base + NVMA)
+        {
+            return -1;
+        }
+        return static_cast<int>(entry - base);
+    }
+
+    bool ProcessMemoryManager::has_vma_conflict(uint64 start_addr, uint64 end_addr, const vma *ignore) const
+    {
+        return vma_index.has_conflict(start_addr, end_addr, ignore) ||
+               vm_space.has_conflict(start_addr, end_addr, ignore);
+    }
+
+    uint64 ProcessMemoryManager::find_gap_in_vma_index(uint64 start_hint,
+                                                       uint64 min_addr,
+                                                       uint64 max_addr,
+                                                       uint64 size,
+                                                       uint64 alignment) const
+    {
+        if (size == 0 || max_addr <= min_addr)
+        {
+            return 0;
+        }
+
+        uint64 candidate = start_hint < min_addr ? min_addr : start_hint;
+        candidate = align_up_with_granularity(candidate, alignment);
+        while (candidate < max_addr)
+        {
+            if (candidate + size < candidate || candidate + size > max_addr)
+            {
+                return 0;
+            }
+
+            const vma *covering = find_vma_covering(candidate);
+            if (covering != nullptr)
+            {
+                candidate = align_up_with_granularity(covering->end_addr(), alignment);
+                continue;
+            }
+
+            const vma *next = find_first_vma_at_or_after(candidate);
+            if (next == nullptr || candidate + size <= next->addr)
+            {
+                return candidate;
+            }
+
+            candidate = align_up_with_granularity(next->end_addr(), alignment);
+        }
+        return 0;
+    }
+
+    bool ProcessMemoryManager::clone_vm_space_metadata_from(const ProcessMemoryManager &src)
+    {
+        return src.get_vm_space().for_each([&](const vma &entry) -> bool
+        {
+            return vm_space.clone_area_from(entry) != nullptr;
+        });
     }
 
     ProcessMemoryManager *ProcessMemoryManager::share_for_thread()
@@ -665,7 +915,12 @@ namespace proc
                 continue;
             }
 
-            new_mgr->vma_data._vm[i] = vma_data._vm[i];
+            if (!vma_meta::clone_snapshot(new_mgr->vma_data._vm[i], vma_data._vm[i]))
+            {
+                delete new_mgr;
+                return nullptr;
+            }
+            new_mgr->vma_data._vm[i].owner_mm = new_mgr;
 
 #ifdef LOONGARCH
             if (!ensure_user_pagetable_hierarchy(new_mgr->pagetable,
@@ -676,12 +931,6 @@ namespace proc
                 return nullptr;
             }
 #endif
-
-            // 只对文件映射增加引用计数
-            if (vma_data._vm[i].vfile != nullptr)
-            {
-                vma_data._vm[i].vfile->dup(); // 增加引用计数
-            }
 
             // fork 必须保留父进程已经驻留的私有 VMA 页。
             // 动态链接器会在 MAP_PRIVATE 的 libc/ld.so GOT 页上写入重定位结果；
@@ -722,6 +971,16 @@ namespace proc
                                          static_cast<uint64>(vma_data._vm[i].len));
                 }
             }
+        }
+
+        new_mgr->rebuild_vma_index();
+
+        if (!new_mgr->clone_vm_space_metadata_from(*this))
+        {
+            printfRed("[clone_for_fork] clone VMASpace metadata failed\n");
+            new_mgr->emergency_cleanup();
+            delete new_mgr;
+            return nullptr;
         }
 
         return new_mgr;
@@ -810,6 +1069,9 @@ namespace proc
         {
             reset_vma_entry(vma_data._vm[i]);
         }
+        vma_index.clear();
+        vm_space.clear();
+        vm_space.init(this);
 
         // 重置堆信息
         heap_start = 0;
@@ -956,6 +1218,11 @@ namespace proc
         heap_end = start_addr;
         reset_mmap_cursor(start_addr + k_mmap_guard_gap);
 
+        if (vma *heap_area = vm_space.find_heap_area(); heap_area != nullptr)
+        {
+            vm_space.destroy_area(heap_area);
+        }
+
         printfGreen("ProcessMemoryManager: heap initialized successfully\n");
     }
 
@@ -974,22 +1241,7 @@ namespace proc
 
     bool ProcessMemoryManager::range_overlaps_used_vma(uint64 start_addr, uint64 end_addr) const
     {
-        for (int i = 0; i < NVMA; ++i)
-        {
-            const vma &vm_entry = vma_data._vm[i];
-            if (!vm_entry.used)
-            {
-                continue;
-            }
-
-            uint64 vma_start = vm_entry.addr;
-            uint64 vma_end = vma_start + vm_entry.len;
-            if (start_addr < vma_end && end_addr > vma_start)
-            {
-                return true;
-            }
-        }
-        return false;
+        return has_vma_conflict(start_addr, end_addr, nullptr);
     }
 
     uint64 ProcessMemoryManager::reserve_mmap_region(uint64 size, uint64 alignment)
@@ -1019,8 +1271,12 @@ namespace proc
         }
         upper_bound = PGROUNDDOWN(upper_bound);
 
-        uint64 candidate = align_up_with_granularity(mmap_cursor, alignment);
-        while (candidate < upper_bound)
+        uint64 candidate = find_gap_in_vma_index(mmap_cursor,
+                                                 minimum_start,
+                                                 upper_bound,
+                                                 aligned_size,
+                                                 alignment);
+        while (candidate != 0 && candidate < upper_bound)
         {
             uint64 candidate_end = candidate + aligned_size;
             if (candidate_end < candidate || candidate_end > upper_bound)
@@ -1028,34 +1284,28 @@ namespace proc
                 break;
             }
 
-            bool conflict = range_overlaps_used_vma(candidate, candidate_end);
-
-            if (!conflict)
+            bool overlaps_program_section = false;
+            for (int i = 0; i < prog_section_count; ++i)
             {
-                for (int i = 0; i < prog_section_count; ++i)
+                uint64 sec_start = PGROUNDDOWN((uint64)prog_sections[i]._sec_start);
+                uint64 sec_end = PGROUNDUP((uint64)prog_sections[i]._sec_start + prog_sections[i]._sec_size);
+                if (candidate < sec_end && candidate_end > sec_start)
                 {
-                    uint64 sec_start = PGROUNDDOWN((uint64)prog_sections[i]._sec_start);
-                    uint64 sec_end = PGROUNDUP((uint64)prog_sections[i]._sec_start + prog_sections[i]._sec_size);
-                    if (candidate < sec_end && candidate_end > sec_start)
-                    {
-                        conflict = true;
-                        candidate = align_up_with_granularity(sec_end + PGSIZE, alignment);
-                        break;
-                    }
+                    overlaps_program_section = true;
+                    candidate = find_gap_in_vma_index(align_up_with_granularity(sec_end + PGSIZE, alignment),
+                                                      minimum_start,
+                                                      upper_bound,
+                                                      aligned_size,
+                                                      alignment);
+                    break;
                 }
             }
 
-            if (!conflict)
+            if (!overlaps_program_section)
             {
                 mmap_cursor = candidate_end;
                 return candidate;
             }
-
-            if (candidate < minimum_start)
-            {
-                candidate = minimum_start;
-            }
-            candidate = align_up_with_granularity(candidate + PGSIZE, alignment);
         }
 
         printfRed("ProcessMemoryManager: no available mmap region for size=%p\n", (void *)aligned_size);
@@ -1178,6 +1428,35 @@ namespace proc
             }
         }
 
+        vma *heap_area = vm_space.find_heap_area();
+        if (heap_area == nullptr)
+        {
+            heap_area = vm_space.create_area(heap_start,
+                                             new_end - heap_start,
+                                             PROT_READ | PROT_WRITE,
+                                             MAP_PRIVATE | MAP_ANONYMOUS,
+                                             new AnonVmObject(false, "brk-heap"),
+                                             0,
+                                             VmAreaKind::Heap,
+                                             VmGrowPolicy::Up,
+                                             0,
+                                             "brk-heap");
+            if (heap_area == nullptr)
+            {
+                printfRed("ProcessMemoryManager: create heap VMASpace area failed\n");
+                rollback_heap_pages(PGROUNDUP(new_end));
+                return current_end;
+            }
+        }
+        heap_area->len = static_cast<int>(new_end - heap_start);
+        heap_area->prot = PROT_READ | PROT_WRITE;
+        heap_area->flags = MAP_PRIVATE | MAP_ANONYMOUS;
+        heap_area->area_kind = VmAreaKind::Heap;
+        heap_area->grow_policy = VmGrowPolicy::Up;
+        heap_area->is_expandable = true;
+        heap_area->max_len = heap_limit > heap_start ? (heap_limit - heap_start) : 0;
+        heap_area->debug_name = "brk-heap";
+
         // 更新ProcessMemoryManager中的堆结束地址
         heap_end = new_end;
         reset_mmap_cursor(heap_end + k_mmap_guard_gap);
@@ -1222,6 +1501,18 @@ namespace proc
             }
         }
 
+        if (vma *heap_area = vm_space.find_heap_area(); heap_area != nullptr)
+        {
+            if (new_end <= heap_start)
+            {
+                vm_space.destroy_area(heap_area);
+            }
+            else
+            {
+                heap_area->len = static_cast<int>(new_end - heap_start);
+            }
+        }
+
         // 更新ProcessMemoryManager中的堆结束地址
         heap_end = new_end;
 
@@ -1262,12 +1553,15 @@ namespace proc
         }
 
         vma &vm_entry = vma_data._vm[vma_index];
+        uint64 old_addr = vm_entry.addr;
 
         if (!is_reasonable_user_vma(vm_entry))
         {
             printfRed("ProcessMemoryManager: VMA %d 元数据异常，跳过页表释放并直接丢弃该条目\n",
                       vma_index);
+            vma_meta::release_metadata(vm_entry);
             reset_vma_entry(vm_entry);
+            erase_vma_slot(vm_entry, old_addr);
             return;
         }
 
@@ -1285,22 +1579,6 @@ namespace proc
         // 退出路径只负责撤销映射与回收引用；显式 msync/munmap 已覆盖文件写回。
         // 这里继续碰可能已经悬空的 vfile，收益远小于把内核直接打死的风险。
 
-        // 释放文件引用
-        if (vm_entry.vfile != nullptr)
-        {
-            if (!is_probably_live_file_object(vm_entry.vfile))
-            {
-                printfRed("[free_single_vma] 检测到异常 vfile 指针，直接丢弃: vma=%d file=%p\n",
-                          vma_index, vm_entry.vfile);
-                vm_entry.vfile = nullptr;
-            }
-            else
-            {
-                vm_entry.vfile->free_file();
-                vm_entry.vfile = nullptr;
-            }
-        }
-
         if (is_shared_backed_vma(vm_entry))
         {
             release_shared_backed_vma(*this, vma_index, vm_entry, true, "free_single_vma");
@@ -1315,7 +1593,10 @@ namespace proc
             }
         }
 
+        vma_meta::release_metadata(vm_entry);
+
         reset_vma_entry(vm_entry);
+        erase_vma_slot(vm_entry, old_addr);
     }
 
     void ProcessMemoryManager::free_all_vma()
@@ -1430,19 +1711,16 @@ namespace proc
             {
                 // 完全取消映射
                 // printfCyan("ProcessMemoryManager: completely unmapping VMA %d\n", vma_idx);
-                if (vm_entry.vfile)
+                uint64 old_vma_addr = vm_entry.addr;
+                if (vm_entry.vfile != nullptr && !is_probably_live_file_object(vm_entry.vfile))
                 {
-                    if (!is_probably_live_file_object(vm_entry.vfile))
-                    {
-                        printfRed("ProcessMemoryManager: VMA %d 的 vfile 指针异常，直接丢弃: %p\n",
-                                  vma_idx, vm_entry.vfile);
-                    }
-                    else
-                    {
-                        vm_entry.vfile->free_file();
-                    }
+                    printfRed("ProcessMemoryManager: VMA %d 的 vfile 指针异常，直接丢弃: %p\n",
+                              vma_idx, vm_entry.vfile);
+                    vm_entry.vfile = nullptr;
                 }
+                vma_meta::release_metadata(vm_entry);
                 reset_vma_entry(vm_entry);
+                erase_vma_slot(vm_entry, old_vma_addr);
             }
             else
             {
@@ -1482,35 +1760,21 @@ namespace proc
             return false;
         }
 
+        if (has_vma_conflict(aligned_addr, end_addr, nullptr))
+        {
+            printfRed("ProcessMemoryManager: 共享附件 VMA 与现有区间冲突 [%p, %p)\n",
+                      (void *)aligned_addr,
+                      (void *)end_addr);
+            return false;
+        }
+
         int free_idx = -1;
         for (int i = 0; i < NVMA; ++i)
         {
-            vma &entry = vma_data._vm[i];
-            if (!entry.used)
+            if (!vma_data._vm[i].used)
             {
-                if (free_idx < 0)
-                {
-                    free_idx = i;
-                }
-                continue;
-            }
-
-            uint64 vm_start = entry.addr;
-            uint64 vm_end = entry.addr + (uint64)entry.len;
-            if (vm_end <= vm_start)
-            {
-                continue;
-            }
-
-            if (aligned_addr < vm_end && end_addr > vm_start)
-            {
-                printfRed("ProcessMemoryManager: 共享附件 VMA 与现有 VMA 冲突 idx=%d [%p, %p) vs [%p, %p)\n",
-                          i,
-                          (void *)aligned_addr,
-                          (void *)end_addr,
-                          (void *)vm_start,
-                          (void *)vm_end);
-                return false;
+                free_idx = i;
+                break;
             }
         }
 
@@ -1536,6 +1800,13 @@ namespace proc
         vm.backing_kind = VMA_BACKING_SHM;
         vm.backing_shmid = shmid;
         vm.backing_base = backing_base;
+        if (!insert_vma_slot(vm))
+        {
+            reset_vma_entry(vm);
+            printfRed("ProcessMemoryManager: register_shared_attachment_vma 树索引插入失败 [%p, %p)\n",
+                      (void *)aligned_addr, (void *)end_addr);
+            return false;
+        }
         return true;
     }
 
@@ -1554,7 +1825,9 @@ namespace proc
                 continue;
             }
 
+            uint64 old_addr = entry.addr;
             reset_vma_entry(entry);
+            erase_vma_slot(entry, old_addr);
             ++cleared;
         }
         return cleared;
@@ -1576,20 +1849,15 @@ namespace proc
         }
 
         int count = 0;
-        for (int i = 0; i < NVMA && count < max_count; i++)
+        for_each_vma_in_range(start_addr, end_addr, [&](const vma &entry) -> bool
         {
-            if (vma_data._vm[i].used)
+            int slot = vma_slot_index(&entry);
+            if (slot >= 0 && count < max_count)
             {
-                uint64 vma_start = vma_data._vm[i].addr;
-                uint64 vma_end = vma_start + vma_data._vm[i].len;
-
-                // 检查是否有重叠
-                if (start_addr < vma_end && end_addr > vma_start)
-                {
-                    overlapping_vmas[count++] = i;
-                }
+                overlapping_vmas[count++] = slot;
             }
-        }
+            return count < max_count;
+        });
 
         return count;
     }
@@ -1604,23 +1872,44 @@ namespace proc
         vma &vm_entry = vma_data._vm[vma_index];
         uint64 vma_start = vm_entry.addr;
         uint64 vma_end = vm_entry.addr + vm_entry.len;
+        uint64 total_pages = PGROUNDUP(static_cast<uint64>(vm_entry.len)) / PGSIZE;
 
         if (unmap_start == vma_start && unmap_end < vma_end)
         {
             // 从VMA开始处取消映射
             // printfCyan("ProcessMemoryManager: unmapping from start of VMA %d\n", vma_index);
+            uint64 old_addr = vm_entry.addr;
+            uint64 removed_bytes = unmap_end - vma_start;
+            uint64 removed_pages = removed_bytes / PGSIZE;
+            VmPrivateOverlayMap *remaining_overlay =
+                vma_meta::clone_overlay_subset(vm_entry, removed_pages, total_pages - removed_pages, false);
+
+            vma_meta::release_overlay_pages_in_range(vm_entry, 0, removed_pages);
+            vma_meta::discard_overlay_container(vm_entry);
+            vm_entry.private_page_overlay = remaining_overlay;
             vm_entry.addr = unmap_end;
             vm_entry.len = vma_end - unmap_end;
             if (vm_entry.vfile)
             {
-                vm_entry.offset += (unmap_end - vma_start);
+                vm_entry.offset += removed_bytes;
             }
-            return true;
+            if (vm_entry.object != nullptr)
+            {
+                vm_entry.page_offset += removed_bytes;
+            }
+            return reindex_vma_slot(vm_entry, old_addr);
         }
         else if (unmap_start > vma_start && unmap_end == vma_end)
         {
             // 从VMA末尾取消映射
             // printfCyan("ProcessMemoryManager: unmapping from end of VMA %d\n", vma_index);
+            uint64 keep_pages = (unmap_start - vma_start) / PGSIZE;
+            VmPrivateOverlayMap *remaining_overlay =
+                vma_meta::clone_overlay_subset(vm_entry, 0, keep_pages, false);
+
+            vma_meta::release_overlay_pages_in_range(vm_entry, keep_pages, total_pages - keep_pages);
+            vma_meta::discard_overlay_container(vm_entry);
+            vm_entry.private_page_overlay = remaining_overlay;
             vm_entry.len = unmap_start - vma_start;
             return true;
         }
@@ -1645,13 +1934,33 @@ namespace proc
                 printfRed("ProcessMemoryManager: no free VMA slot for split\n");
                 return false;
             }
-            
+
+            const uint64 front_pages = (unmap_start - vma_start) / PGSIZE;
+            const uint64 back_start_page = (unmap_end - vma_start) / PGSIZE;
+            const uint64 back_pages = total_pages - back_start_page;
+            const uint64 removed_pages = back_start_page - front_pages;
+
+            proc::vma source_view = vm_entry;
+            VmPrivateOverlayMap *front_overlay =
+                vma_meta::clone_overlay_subset(source_view, 0, front_pages, false);
+            VmPrivateOverlayMap *back_overlay =
+                vma_meta::clone_overlay_subset(source_view, back_start_page, back_pages, false);
+
+            // 中间被打洞的页已经完成页表拆除，这里补回 overlay owner 引用。
+            vma_meta::release_overlay_pages_in_range(source_view, front_pages, removed_pages);
+
             // 创建后半部分的VMA，保留同一后端元数据，避免 split 后生命周期丢失
             vma &new_vm = vma_data._vm[new_vma_idx];
-            new_vm = vm_entry;
+            new_vm = source_view;
             new_vm.used = 1;
             new_vm.addr = unmap_end;
             new_vm.len = vma_end - unmap_end;
+            new_vm.private_page_overlay = back_overlay;
+            if (new_vm.object != nullptr)
+            {
+                new_vm.object->get();
+                new_vm.page_offset = source_view.page_offset + (unmap_end - vma_start);
+            }
             if (vm_entry.vfile)
             {
                 new_vm.offset = vm_entry.offset + (unmap_end - vma_start);
@@ -1659,16 +1968,26 @@ namespace proc
             }
             else
             {
-                new_vm.offset = 0;
+                new_vm.offset = source_view.offset;
             }
-            
+
+            vma_meta::discard_overlay_container(vm_entry);
+            vm_entry.private_page_overlay = front_overlay;
+
             // 修改原VMA为前半部分
             vm_entry.len = unmap_start - vma_start;
-            
+
             printfCyan("ProcessMemoryManager: split VMA %d into [%p, %p) and VMA %d [%p, %p)\n",
                        vma_index, (void *)vm_entry.addr, (void *)(vm_entry.addr + vm_entry.len),
                        new_vma_idx, (void *)new_vm.addr, (void *)(new_vm.addr + new_vm.len));
-            
+
+            if (!insert_vma_slot(new_vm))
+            {
+                vma_meta::release_metadata(new_vm);
+                reset_vma_entry(new_vm);
+                return false;
+            }
+
             return true;
         }
 
@@ -1893,19 +2212,14 @@ namespace proc
         {
             if (vma_data._vm[i].used)
             {
-                // 只释放文件引用，不写回
-                if (vma_data._vm[i].vfile != nullptr)
+                if (vma_data._vm[i].vfile != nullptr &&
+                    !is_probably_live_file_object(vma_data._vm[i].vfile))
                 {
-                    if (!is_probably_live_file_object(vma_data._vm[i].vfile))
-                    {
-                        printfRed("ProcessMemoryManager: emergency cleanup 发现异常 vfile 指针，直接丢弃: vma=%d file=%p\n",
-                                  i, vma_data._vm[i].vfile);
-                    }
-                    else
-                    {
-                        vma_data._vm[i].vfile->free_file();
-                    }
+                    printfRed("ProcessMemoryManager: emergency cleanup 发现异常 vfile 指针，直接丢弃: vma=%d file=%p\n",
+                              i, vma_data._vm[i].vfile);
+                    vma_data._vm[i].vfile = nullptr;
                 }
+                vma_meta::release_metadata(vma_data._vm[i]);
 
                 // 取消映射
                 uint64 va_start = PGROUNDDOWN(vma_data._vm[i].addr);
@@ -1922,6 +2236,7 @@ namespace proc
                 reset_vma_entry(vma_data._vm[i]);
             }
         }
+        vma_index.clear();
         shared_vm = false;
 
         // 2. 释放其他内存资源
