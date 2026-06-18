@@ -118,3 +118,27 @@
 - 第 2 提交已完成待验收：`execve` 主程序段、解释器段、用户栈已切到 `VMASpace + VmObject` 懒注册路径，双架构构建和 60s smoke 已闭环。
 - 第 3 提交已完成待验收：统一 fault、`copy_in/copy_out` 目标地址空间感知，以及 `VMASpace` 私有区域 fork COW 已闭环。
 - 整体计划仍进行中：后续继续推进第 4 提交起的 `mmap/shm` 全量迁移、旧 VMA/SHM 旁路清理，以及 `mmap3/libcbench/shm*` 定向回归和 wrapper 判定口径核对。
+
+## 第 4 提交增量
+- 情况要求：
+  - `mmap/munmap/mprotect/mremap/msync/madvise/shm*` 的主路径仍大量假定映射一定落在旧 `NVMA` 静态槽位里，新的动态 `VMASpace` 区域虽然已经能承载 `execve`/栈/COW，但运行态 `mmap`、`shmat`、`/proc/self/maps`、memfd seal 检查等接口还看不全。
+  - 共享文件映射和 SysV SHM 的对象后端已经存在，但旧代码里仍混着“扫描 `vma_data._vm[]`”“`register_shared_attachment_vma()` 兼容桥”“共享映射单独旁路页表”的残留判断。
+- 解决方法：
+  - `ProcessManager::mmap()` 改为直接向 `VMASpace` 创建匿名映射、私有文件映射和共享文件映射对应的 `VmArea`，补齐 `object/page_offset/file_backed_bytes/area_kind/grow_policy` 元数据，并把 `MAP_POPULATE` 失败清理收口到统一 `unmap_memory_range()`。
+  - `ProcessManager::munmap()`、`mremap()` 改为基于 `ProcessMemoryManager::find_vma_covering()` 和统一 `unmap_memory_range()` 处理，不再要求目标映射必须来自旧 `NVMA` 槽位。
+  - `sys_mprotect()`、`sys_msync()`、`sys_madvise()`、`sys_remap_file_pages()`、`sys_fcntl(F_SEAL_WRITE)` 等运行时接口改为通过 `for_each_vma()` / `for_each_vma_in_range()` 覆盖动态 `VMASpace` 区域；`sys_mprotect()` 的拆分/回滚同步补齐动态 `VmArea` 的 overlay 元数据复制。
+  - `/proc/self/maps`、`/proc/self/pagemap`、`/proc/self/status` 改为遍历统一地址空间视图，避免动态 `mmap/shmat` 对用户态可见性缺页。
+  - `ShmManager` 继续承担 SysV IPC 元数据，但共享文件对象缓存、对象全局索引、SysV SHM 对象获取已经全部通过统一对象管理接口承载；`shmat` 注册的共享附件 VMA 也转成 `VMASpace + SysvShmVmObject`。
+- 验证方式：
+  - `make build ARCH=riscv`
+  - `make build ARCH=loongarch`
+- 验证结果：
+  - 两个架构重新构建均通过。
+  - 当前阶段验证覆盖的是“动态 `mmap/shm` 元数据路径是否还能双架构编译收口”；`mmap3/libcbench/shm*` 定向回归留到第 5 提交统一验收。
+
+## 当前状态
+- 第 1 提交已完成待验收：骨架、兼容层、双架构构建和 60s smoke 已闭环。
+- 第 2 提交已完成待验收：`execve` 主程序段、解释器段、用户栈已切到 `VMASpace + VmObject` 懒注册路径，双架构构建和 60s smoke 已闭环。
+- 第 3 提交已完成待验收：统一 fault、`copy_in/copy_out` 目标地址空间感知，以及 `VMASpace` 私有区域 fork COW 已闭环。
+- 第 4 提交已完成待验收：动态 `mmap/shm` 的主路径已经能遍历统一地址空间模型，双架构重新构建通过。
+- 第 5 提交待落地：继续清掉共享映射旧接口和假后端残留，补架构文档并做定向验收。

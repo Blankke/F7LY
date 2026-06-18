@@ -344,6 +344,7 @@ namespace proc
          * @return true 成功，false 失败
          */
         bool partial_unmap_vma(int vma_index, uint64 unmap_start, uint64 unmap_end);
+        bool partial_unmap_area(vma *entry, uint64 unmap_start, uint64 unmap_end);
 
         /****************************************************************************************
          * 页表管理接口
@@ -458,25 +459,83 @@ namespace proc
         template <typename Fn>
         bool for_each_vma(Fn &&fn)
         {
-            return vma_index.for_each(static_cast<Fn &&>(fn));
+            vma *entry = find_first_vma_at_or_after(0);
+            while (entry != nullptr)
+            {
+                vma *next = find_next_vma(entry);
+                if (!fn(*entry))
+                {
+                    return false;
+                }
+                entry = next;
+            }
+            return true;
         }
 
         template <typename Fn>
         bool for_each_vma(Fn &&fn) const
         {
-            return vma_index.for_each(static_cast<Fn &&>(fn));
+            const vma *entry = find_first_vma_at_or_after(0);
+            while (entry != nullptr)
+            {
+                const vma *next = find_next_vma(entry);
+                if (!fn(*entry))
+                {
+                    return false;
+                }
+                entry = next;
+            }
+            return true;
         }
 
         template <typename Fn>
         bool for_each_vma_in_range(uint64 start, uint64 end, Fn &&fn)
         {
-            return vma_index.for_each_in_range(start, end, static_cast<Fn &&>(fn));
+            if (start >= end)
+            {
+                return true;
+            }
+
+            vma *entry = find_vma_covering(start);
+            if (entry == nullptr)
+            {
+                entry = find_first_vma_at_or_after(start);
+            }
+            while (entry != nullptr && entry->addr < end)
+            {
+                vma *next = find_next_vma(entry);
+                if (entry->overlaps(start, end) && !fn(*entry))
+                {
+                    return false;
+                }
+                entry = next;
+            }
+            return true;
         }
 
         template <typename Fn>
         bool for_each_vma_in_range(uint64 start, uint64 end, Fn &&fn) const
         {
-            return vma_index.for_each_in_range(start, end, static_cast<Fn &&>(fn));
+            if (start >= end)
+            {
+                return true;
+            }
+
+            const vma *entry = find_vma_covering(start);
+            if (entry == nullptr)
+            {
+                entry = find_first_vma_at_or_after(start);
+            }
+            while (entry != nullptr && entry->addr < end)
+            {
+                const vma *next = find_next_vma(entry);
+                if (entry->overlaps(start, end) && !fn(*entry))
+                {
+                    return false;
+                }
+                entry = next;
+            }
+            return true;
         }
 
         /****************************************************************************************
@@ -542,6 +601,8 @@ namespace proc
          * @return true 已映射，false 未映射
          */
         bool is_page_mapped(uint64 va);
+        void free_vma_entry(vma *entry, bool check_validity);
+        void unmap_vma_pages(const vma &entry, uint64 va_start, uint64 va_end, bool check_validity);
         bool range_overlaps_used_vma(uint64 start_addr, uint64 end_addr) const;
         int vma_slot_index(const vma *entry) const;
         uint64 find_gap_in_vma_index(uint64 start_hint,

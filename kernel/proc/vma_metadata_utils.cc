@@ -4,6 +4,7 @@
 #include "platform.hh"
 #include "vm_object.hh"
 #include "fs/vfs/file/file.hh"
+#include "shm/shm_manager.hh"
 
 namespace proc::vma_meta
 {
@@ -67,6 +68,7 @@ namespace proc::vma_meta
         if (entry.object != nullptr)
         {
             entry.object->on_area_destroy(entry);
+            shm::k_smm.release_shared_file_object_if_unused(entry.object);
             if (entry.object->put())
             {
                 delete entry.object;
