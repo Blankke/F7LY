@@ -4216,11 +4216,7 @@ namespace syscall
             return SYS_ESRCH;
         }
 
-        // printf("[SyscallHandler::sys_wait4] pid: %d, wstatus_addr: %p, option: %d\n",
-        //    pid, wstatus_addr, option);
-        int waitret = proc::k_pm.wait4(pid, wstatus_addr, option);
-        // printf("[SyscallHandler::sys_wait4] waitret: %d\n",waitret);
-        return waitret;
+        return proc::k_pm.wait4(pid, wstatus_addr, option);
     }
     uint64 SyscallHandler::sys_pipe2()
     {
@@ -4457,8 +4453,6 @@ namespace syscall
                 if (uarg == 0)
                     break;
 
-                // printfCyan( "execve get arga[%d] = %p\n", i, uarg );
-
                 argv.emplace_back(eastl::string());
                 int arg_ret = _fetch_str(uarg, argv[i], PGSIZE);
                 if (arg_ret < 0)
@@ -4467,7 +4461,6 @@ namespace syscall
                               i, (void *)uarg, arg_ret);
                     return arg_ret;
                 }
-                // printfCyan("execve get arga[%d] = %s\n", i, argv[i].c_str());
             }
         }
 
@@ -4501,7 +4494,6 @@ namespace syscall
                               (int)i, (void *)uenv, env_ret);
                     return env_ret;
                 }
-                // printfCyan("execve get envp[%d] = %s\n", i, envp[i].c_str());
             }
         }
 
@@ -6433,7 +6425,6 @@ namespace syscall
             printfRed("暂时不支持tz参数");
         }
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        // p->print_detailed_memory_info();
         mem::PageTable *pt = p->get_pagetable();
         if (mem::k_vmm.copy_out(*pt, tv_addr, (const void *)&tv,
                                 sizeof(tv)) < 0)
@@ -12879,8 +12870,6 @@ namespace syscall
         proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = current_proc->get_pagetable();
 
-        // current_proc->print_detailed_memory_info();
-
         // Linux 会清空用户提供的 cpuset 缓冲区中内核未使用的部分。
         // LTP 的 tst_ncpus_available() 直接对 CPU_ALLOC() 的未初始化缓冲区调用本系统调用；
         // 如果只写入前 sizeof(CpuMask) 字节，后面的随机位会让它误判为多核，
@@ -13059,7 +13048,7 @@ namespace syscall
 
             proc::Pcb *p = proc::k_pm.get_cur_pcb();
             mem::PageTable *pt = p->get_pagetable();
-            if (mem::k_vmm.copy_in(*pt, &buf, buf_addr, sizeof(buf)) < 0)
+            if (mem::k_vmm.copy_in(*pt, &buf, buf_addr, sizeof(buf), p->get_memory_manager()) < 0)
             {
                 printfRed("[SyscallHandler::sys_shmctl] 拷贝 shmid_ds 结构体失败\n");
                 return SYS_EFAULT; // 拷贝失败
@@ -14772,22 +14761,12 @@ namespace syscall
             {
                 is_legacy_vm = true;
                 vma_index = static_cast<int>(vm - base);
-                printfGreen("[sys_mprotect] Found legacy VMA[%d]: [%p, %p) for range [%p, %p)\n",
-                            vma_index, (void *)vm->addr, (void *)vm->end_addr(), (void *)addr, (void *)end_addr);
-            }
-            else
-            {
-                printfGreen("[sys_mprotect] Found dynamic VMA [%p, %p) for range [%p, %p)\n",
-                            (void *)vm->addr, (void *)vm->end_addr(), (void *)addr, (void *)end_addr);
             }
         }
 
         if (vm == nullptr || end_addr > vm->end_addr())
         {
             // 地址不在任何VMA中，直接调用protectpages修改页表权限
-            printfYellow("[sys_mprotect] Address range [%p, %p) not found in any VMA, using protectpages\n",
-                         (void *)addr, (void *)end_addr);
-
             // 直接调用 protectpages() 按 POSIX prot 翻译页表权限（非 VMA 上下文）。
             if (mem::k_vmm.protectpages(*pcb->get_pagetable(), addr, aligned_len, prot, false) < 0)
             {
@@ -14803,24 +14782,12 @@ namespace syscall
             asm volatile("invtlb 0x0,$zero,$zero");
 #endif
 
-            printfGreen("[sys_mprotect] Success: changed protection for range [%p, %p) to %d using protectpages\n",
-                        (void *)addr, (void *)end_addr, prot);
             return 0;
         }
 
         uint64 vma_start = vm->addr;
         uint64 vma_end = vma_start + vm->len;
         int old_prot = vm->prot;
-
-        printfYellow("[sys_mprotect] %sVMA%s covers range [%p, %p), target range [%p, %p), prot: %d -> %d\n",
-                     is_legacy_vm ? "[" : "",
-                     is_legacy_vm ? "]" : "",
-                     (void *)vma_start,
-                     (void *)vma_end,
-                     (void *)addr,
-                     (void *)end_addr,
-                     old_prot,
-                     prot);
 
         // 检查权限兼容性：对于文件映射，不能添加原始mmap时没有的写权限
         if (vm->vfile != nullptr && vm->vfd != -1)
@@ -14885,7 +14852,6 @@ namespace syscall
                         cleanup_vm->backing_shmid = -1;
                         cleanup_vm->backing_base = 0;
 
-                        printfYellow("[sys_mprotect] Cleaned up VMA[%d] during rollback\n", idx);
                     }
                 }
             }
@@ -14906,7 +14872,6 @@ namespace syscall
             original_vma.object = nullptr;
             original_vma.private_page_overlay = nullptr;
 
-            printfYellow("[sys_mprotect] VMA state successfully rolled back\n");
             mm->rebuild_vma_index();
             return errnum;
         };
@@ -14914,14 +14879,11 @@ namespace syscall
         // 如果要修改的范围与整个VMA完全一致，直接修改VMA权限
         if (addr == vma_start && end_addr == vma_end)
         {
-            printfCyan("[sys_mprotect] Exact VMA match, updating protection directly\n");
             vm->prot = prot;
         }
         else
         {
             // 需要拆分VMA
-            printfCyan("[sys_mprotect] Need to split VMA for partial protection change\n");
-
             if (!proc::vma_meta::clone_snapshot(original_vma, *vm))
             {
                 printfRed("[sys_mprotect] Failed to snapshot original VMA metadata\n");
@@ -15055,8 +15017,6 @@ namespace syscall
                     vm->len = addr - vma_start;
                     vm->page_offset = source_view.page_offset;
                     vm->offset = source_view.offset;
-                    printfGreen("[sys_mprotect] Created front segment: VMA[%d] [%p, %p) prot=%d\n",
-                                vma_index, (void *)vm->addr, (void *)(vm->addr + vm->len), vm->prot);
                 }
 
                 int middle_vma_idx;
@@ -15096,9 +15056,6 @@ namespace syscall
                     middle_vm->offset = source_view.offset + (addr - vma_start);
                 }
 
-                printfGreen("[sys_mprotect] Created middle segment: VMA[%d] [%p, %p) prot=%d\n",
-                            middle_vma_idx, (void *)middle_vm->addr, (void *)(middle_vm->addr + middle_vm->len), middle_vm->prot);
-
                 if (end_addr < vma_end)
                 {
                     int back_vma_idx = free_vma_indices[next_free_idx++];
@@ -15127,8 +15084,6 @@ namespace syscall
                         back_vm->offset = source_view.offset + (end_addr - vma_start);
                     }
 
-                    printfGreen("[sys_mprotect] Created back segment: VMA[%d] [%p, %p) prot=%d\n",
-                                back_vma_idx, (void *)back_vm->addr, (void *)(back_vm->addr + back_vm->len), back_vm->prot);
                 }
 
                 if (source_view.private_page_overlay != nullptr)
@@ -15210,8 +15165,6 @@ namespace syscall
             proc::vma_meta::release_metadata(original_vma);
         }
 
-        printfGreen("[sys_mprotect] Success: changed protection for range [%p, %p) to %d\n",
-                    (void *)addr, (void *)end_addr, prot);
         mm->rebuild_vma_index();
 
         return 0;
@@ -18158,28 +18111,6 @@ namespace syscall
 
         auto page_kernel_address = [&](const proc::vma &vm, uint64 page_va, uint64 &kernel_addr) -> bool
         {
-            if (vm.backing_kind == proc::VMA_BACKING_SHM && vm.backing_shmid >= 0)
-            {
-                shm::shm_segment seg = shm::k_smm.get_seg_info(vm.backing_shmid);
-                if (seg.shmid < 0)
-                {
-                    return false;
-                }
-                uint64 backing_base = PGROUNDDOWN(vm.backing_base != 0
-                                                      ? vm.backing_base
-                                                      : vm.addr);
-                uint64 page_offset = page_va - backing_base;
-                if (page_offset >= seg.real_size)
-                {
-                    return false;
-                }
-                kernel_addr = seg.phy_addrs + page_offset;
-#ifdef LOONGARCH
-                kernel_addr = to_vir(kernel_addr);
-#endif
-                return true;
-            }
-
             mem::Pte pte = p->get_pagetable()->walk(page_va, false);
             if (pte.is_null() || !pte.is_valid())
             {

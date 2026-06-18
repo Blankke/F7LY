@@ -76,27 +76,6 @@ namespace mem
         }
 #endif
 
-        inline bool ranges_overlap(uint64 lhs_addr, uint64 lhs_size, uint64 rhs_addr, uint64 rhs_size)
-        {
-            if (lhs_size == 0 || rhs_size == 0)
-            {
-                return false;
-            }
-
-            uint64 lhs_end = lhs_addr + lhs_size;
-            uint64 rhs_end = rhs_addr + rhs_size;
-            if (lhs_end <= lhs_addr || rhs_end <= rhs_addr)
-            {
-                return false;
-            }
-
-            return lhs_addr < rhs_end && rhs_addr < lhs_end;
-        }
-
-        // copy_out 的内核对象重叠检测只用于排查页表错误；lmbench 的 read/pipe
-        // 热路径会高频经过这里，默认关闭这段诊断检查，保留权限和 COW 校验。
-        constexpr bool k_enable_copy_out_alias_guard = false;
-
         proc::Pcb *active_proc_for_pt(PageTable &pt)
         {
             proc::Pcb *proc = proc::k_pm.get_cur_pcb();
@@ -114,11 +93,15 @@ namespace mem
         proc::ProcessMemoryManager *resolve_target_mm(PageTable &pt,
                                                       proc::ProcessMemoryManager *target_mm)
         {
+            // 用户页表只是硬件地址转换结构；懒分配、栈增长和 COW 拆页还需要同一地址空间的
+            // VMASpace 元数据。调用者显式给出 target_mm 时，以该 mm 作为唯一语义归属。
             if (target_mm != nullptr)
             {
                 return target_mm;
             }
 
+            // 没有显式 target_mm 时，只能在页表确实属于当前运行进程时推导 mm。
+            // 这样 copy_in/copy_out 的缺页处理始终作用在页表所属的地址空间内。
             proc::Pcb *proc = active_proc_for_pt(pt);
             return proc != nullptr ? proc->get_memory_manager() : nullptr;
         }
@@ -927,10 +910,20 @@ namespace mem
         {
             proc::VmPageView view = {};
             int prepare_result = vm->object->prepare_page(*vm, vm->page_index_for_va(page_va), access_type, view);
-            if (prepare_result != 0 || view.pa == 0)
+            if (prepare_result != 0)
             {
                 printfRed("[allocate_vma_page] vm object prepare failed va=%p object=%p ret=%d\n",
                           (void *)page_va, vm->object, prepare_result);
+                return -1;
+            }
+            if (view.signal_delivered)
+            {
+                return 0;
+            }
+            if (view.pa == 0)
+            {
+                printfRed("[allocate_vma_page] vm object returned empty page va=%p object=%p\n",
+                          (void *)page_va, vm->object);
                 return -1;
             }
 
@@ -975,65 +968,6 @@ namespace mem
 #ifdef LOONGARCH
             invalidate_loongarch_user_page_pair(page_va);
 #endif
-            return 0;
-        }
-
-        if (vm->backing_kind == proc::VMA_BACKING_SHM && vm->backing_shmid >= 0)
-        {
-            shm::shm_segment seg = shm::k_smm.get_seg_info(vm->backing_shmid);
-            if (seg.shmid < 0)
-            {
-                printfRed("[allocate_vma_page] invalid shared backing shmid=%d for va=%p\n",
-                          vm->backing_shmid, va);
-                return -1;
-            }
-
-            uint64 backing_start = PGROUNDDOWN(vm->backing_base != 0 ? vm->backing_base : vm->addr);
-            uint64 page_offset = page_va - backing_start;
-            if (vm->vfile != nullptr)
-            {
-                fs::Kstat st;
-                int size_result = fs::k_vfs.fstat(vm->vfile, &st);
-                if (size_result != EOK)
-                {
-                    printfRed("[allocate_vma_page] failed to get shared file size for %s\n",
-                              vm->vfile->_path_name.c_str());
-                    return size_result;
-                }
-
-                uint64 file_offset = static_cast<uint64>(vm->offset) + (page_va - vm->addr);
-                if (file_offset >= st.size)
-                {
-                    proc::Pcb *p = proc::k_pm.get_cur_pcb();
-                    proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGBUS);
-                    return 0;
-                }
-            }
-            if (page_offset >= seg.real_size)
-            {
-                if (vm->vfile != nullptr)
-                {
-                    proc::Pcb *p = proc::k_pm.get_cur_pcb();
-                    proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGBUS);
-                    return 0;
-                }
-                printfRed("[allocate_vma_page] shared page offset out of range: shmid=%d va=%p offset=%p real_size=%p\n",
-                          vm->backing_shmid, (void *)va, (void *)page_offset, (void *)seg.real_size);
-                return -1;
-            }
-
-            uint64 shared_pa = seg.phy_addrs + page_offset;
-            if (reuse_existing_mapping_if_ready())
-            {
-                return 0;
-            }
-            if (!this->map_pages(pt, page_va, PGSIZE, shared_pa, pte_flags))
-            {
-                printfRed("[allocate_vma_page] map shared page failed: shmid=%d va=%p pa=%p\n",
-                          vm->backing_shmid, (void *)page_va, (void *)shared_pa);
-                return -1;
-            }
-            vm->has_resident_pages = true;
             return 0;
         }
 
@@ -1208,29 +1142,6 @@ namespace mem
             if (n > len)
                 n = len;
 
-            if constexpr (k_enable_copy_out_alias_guard)
-            {
-                if (proc != nullptr)
-                {
-                    proc::ProcessMemoryManager *mm = proc->get_memory_manager();
-                    uint64 write_start = pa + (va - a);
-                    if ((mm != nullptr && ranges_overlap(write_start, n, (uint64)mm, sizeof(proc::ProcessMemoryManager))) ||
-                        ranges_overlap(write_start, n, (uint64)proc, sizeof(proc::Pcb)) ||
-                        ranges_overlap(write_start, n, (uint64)proc->get_trapframe(), sizeof(TrapFrame)) ||
-                        ranges_overlap(write_start, n, pt.get_base(), PGSIZE))
-                    {
-                        panic("[copy_out] user buffer aliases kernel object va=%p pa=%p len=%p pid=%d tid=%d mm=%p pt_base=%p trapframe=%p",
-                              (void *)va,
-                              (void *)write_start,
-                              (void *)n,
-                              proc->_pid,
-                              proc->_tid,
-                              mm,
-                              (void *)pt.get_base(),
-                              proc->get_trapframe());
-                    }
-                }
-            }
             memmove((void *)(pa + (va - a)), p, n);
 
             len -= n;
@@ -1296,29 +1207,6 @@ namespace mem
                 n = len;
             pa = to_vir(pa);
 
-            if constexpr (k_enable_copy_out_alias_guard)
-            {
-                if (proc != nullptr)
-                {
-                    proc::ProcessMemoryManager *mm = proc->get_memory_manager();
-                    uint64 write_start = pa + (va - a);
-                    if ((mm != nullptr && ranges_overlap(write_start, n, (uint64)mm, sizeof(proc::ProcessMemoryManager))) ||
-                        ranges_overlap(write_start, n, (uint64)proc, sizeof(proc::Pcb)) ||
-                        ranges_overlap(write_start, n, (uint64)proc->get_trapframe(), sizeof(TrapFrame)) ||
-                        ranges_overlap(write_start, n, to_vir(pt.get_base()), PGSIZE))
-                    {
-                        panic("[copy_out] user buffer aliases kernel object va=%p pa=%p len=%p pid=%d tid=%d mm=%p pt_base=%p trapframe=%p",
-                              (void *)va,
-                              (void *)write_start,
-                              (void *)n,
-                              proc->_pid,
-                              proc->_tid,
-                              mm,
-                              (void *)pt.get_base(),
-                              proc->get_trapframe());
-                    }
-                }
-            }
             memmove((void *)((pa + (va - a))), p, n);
 
             len -= n;

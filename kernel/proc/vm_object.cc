@@ -55,7 +55,7 @@ namespace proc
             mem::k_pmm.clear_page(page);
         }
 
-        inline int signal_sigbus_for_current_task()
+        inline int signal_sigbus_for_current_task(VmPageView &view)
         {
             Pcb *p = proc::k_pm.get_cur_pcb();
             if (p == nullptr)
@@ -63,6 +63,7 @@ namespace proc
                 return -1;
             }
             proc::ipc::signal::add_signal(p, proc::ipc::signal::SIGBUS);
+            view.signal_delivered = true;
             return 0;
         }
     }
@@ -315,11 +316,8 @@ namespace proc
                     mem::k_pmm.free_page(page);
                     return static_cast<int>(readbytes);
                 }
-                if (static_cast<size_t>(readbytes) < bytes_to_read)
-                {
-                    mem::k_pmm.free_page(page);
-                    return -EIO;
-                }
+                // 文件映射的页先清零再读取；普通文件被 ftruncate 扩展出的稀疏洞
+                // 允许底层 read 返回短读，未覆盖的部分按文件洞语义保持为 0。
 
                 uint64 candidate_pa = reinterpret_cast<uint64>(page);
                 SpinLockGuard guard(object_lock_);
@@ -339,7 +337,7 @@ namespace proc
             {
                 if (!zero_fill_past_file_ && !area.zero_fill_past_file)
                 {
-                    return signal_sigbus_for_current_task();
+                    return signal_sigbus_for_current_task(view);
                 }
 
                 void *page = mem::PhysicalMemoryManager::alloc_page();

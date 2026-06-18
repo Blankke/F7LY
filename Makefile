@@ -480,4 +480,7 @@ clean:
 	rm -f kernel-la kernel-rv kernel-la.bin kernel-rv.bin
 	rm -f kernel-la-shell kernel-rv-shell kernel-la-shell.bin kernel-rv-shell.bin
 
+cleanlog:
+	rm -rf logs/
+
 -include $(DEPS)

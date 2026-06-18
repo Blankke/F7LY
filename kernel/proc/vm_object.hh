@@ -29,6 +29,8 @@ namespace proc
         bool writable = false;
         bool mark_cow = false;
         bool private_overlay = false;
+        // 缺页已经按文件/对象语义投递同步信号，调用方不应继续安装页表。
+        bool signal_delivered = false;
     };
 
     class VmObject

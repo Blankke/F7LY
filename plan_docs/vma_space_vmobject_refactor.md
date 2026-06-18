@@ -1,4 +1,89 @@
 # VMASpace + VmObject + COW 重构记录
+## 计划描述
+### VMASpace + VmObject + 全量 COW 重构计划
+
+#### Summary
+- 这次把 `ELF/PT_LOAD`、`brk`、用户栈、`mmap/shm` 全部并入新的 `VMASpace`，不再保留“程序段数组 + heap 特例 + VMA 数组 + SHM 旁路”四套模型。
+- `ShmManager` 直接升级为通用 `VmObjectManager`；它只负责对象注册、SysV IPC 元数据、全局对象索引和对象生命周期，不再直接分配预留物理区，也不再直接改页表。
+- 新的缺页处理统一走 `ProcessMemoryManager::fault_page() -> VMASpace -> VmArea -> VmObject`。trap、`copy_in/copy_out`、`MAP_POPULATE`、`exec` 后首次访问、`fork` 后 COW 写 fault 都走这一条链。
+- 新的 COW 覆盖全部私有用户映射：`ELF/PT_LOAD`、`MAP_PRIVATE` 文件映射、匿名映射、`brk` 堆、用户栈。目标是同时解决结构清晰度和 `fork/pthread/libcbench/mmap3` 的性能与正确性问题。
+
+#### 核心设计
+- 删除 `prog_sections[]`、`heap_start/heap_end` 的主数据职责、`NVMA` 固定数组、`VMA vma_data`、`register_shared_attachment_vma()`、`clear_shared_attachment_vmas()` 等过渡接口。
+- 新增 `VmArea`：
+  - 字段固定为 `start/end/prot/flags/object/page_offset/area_kind/grow_policy/advice_state/guard_pages`。
+  - `area_kind` 固定区分 `ElfLoad`、`InterpreterLoad`、`Heap`、`UserStack`、`Mmap`、`SysvShm`。
+- 新增 `VMASpace`：
+  - 内部使用 `eastl::list<VmArea>` 持有真实对象，`VmaMapleTree` 索引 `VmArea*`。
+  - 提供 `map/unmap/protect/remap/advise/sync/find/find_gap/clone_for_fork/fault_page/merge/split`。
+  - `brk/sbrk` 变成对 `Heap` 类型 `VmArea` 的扩缩边界操作，不再单独扫描 heap/VMA 冲突。
+- 新增 `VmObject` 体系：
+  - `FileVmObject`：服务 `PT_LOAD`、解释器段、普通文件映射。
+  - `AnonVmObject`：服务匿名 `mmap`、`brk` 堆、用户栈。
+  - `SysvShmVmObject`：服务 `shmget/shmat/shmdt/shmctl`。
+  - `SharedFileVmObject` / `SharedAnonVmObject` 作为共享映射语义实例，仍复用统一对象接口。
+- `VmObjectManager`：
+  - 维护 `object_id -> VmObject`、`shmid/key -> SysvShmVmObject`、`file backing key -> FileVmObject` 的全局索引。
+  - SysV SHM 只是它暴露的一组 IPC 入口，不再作为 `MAP_SHARED` 的假后端。
+- 私有映射 COW 方案：
+  - `VmObject` 持有“源页/共享页缓存”。
+  - `VmArea` 持有自己的 `private_page_overlay`，记录已私有化页。
+  - fault 时优先看 overlay，再看 object 源页。
+  - fork 时父子 `VmArea` 共享 overlay 页并降为只读+COW；写 fault 时只复制单页并替换当前 `VmArea` 的 overlay。
+  - 这样 `ELF` 私有段、`brk`、栈、匿名私有映射都能统一走页级 COW，而不是靠旧的“整段 copy + 少量页表 COW 特判”。
+
+#### 关键行为
+- `execve()` 改为只创建 `PT_LOAD`/解释器 `VmArea`，默认采用“懒文件 VMA”：
+  - 不再在 `execve` 中把整个段预装入页表。
+  - `BSS` 通过 `FileVmObject + 零填充尾页` 语义处理。
+  - `Heap` VMA 从 `highest_addr` 后创建为 growable `AnonVmObject`。
+  - 用户栈创建为 grow-down `AnonVmObject`，guard page 语义写进 `VmArea`。
+- `fork()` 改为 `VMASpace::clone_for_fork()`：
+  - 共享映射直接共享同一 `VmObject`。
+  - 私有映射复制 `VmArea` 元数据并共享 overlay/source 页，统一降级为只读 COW。
+  - 删除当前 `clone` 路径里针对程序段、heap、VMA、child_stack 的分散补丁式复制逻辑。
+- `mmap/munmap/mremap/mprotect/msync/madvise/shmat/shmdt` 全部只操作 `VMASpace`，不再直接碰页表或 `VmObjectManager` 以外的后端。
+- `VirtualMemoryManager::allocate_vma_page()` 下沉为通用页表安装 helper；文件/SHM/匿名的决策逻辑全部迁入 `VMASpace::fault_page()`。
+- 锁顺序固定为：
+  - `ProcessMemoryManager::memory_lock`
+  - `VMASpace` 内部结构锁
+  - `VmObjectManager` 注册表锁
+  - `VmObject` 页槽锁
+  - 禁止反向获取，避免 `mmap3`/`munmap`/`msync` 并发死锁。
+
+#### 落地顺序
+- 第 1 提交：引入 `VmArea`、`VMASpace`、`VmObject`、`VmObjectManager` 骨架；把 `MapleTree` 从“数组索引器”改成“对象索引器”；先保留旧路径适配层，确保双架构可编译。
+- 第 2 提交：迁移 `ELF/PT_LOAD`、解释器段、`brk`、用户栈到 `VMASpace`；删除 `prog_sections[]` 主路径和 heap 特例。
+- 第 3 提交：接入统一 fault 与全量私有映射 COW；迁移 `fork/copy_in/copy_out/signal frame` 到新模型。
+- 第 4 提交：迁移 `mmap/munmap/mremap/mprotect/msync/madvise/shm*` 到 `VMASpace + VmObjectManager`；删除 `ShmManager` 预留物理区设计和所有旧旁路。
+- 第 5 提交：清理旧接口、补架构文档与开发日志，完成长回归验证。
+- 文档同步：
+  - 在 `plan_docs/` 新增本任务记录，固定按“情况要求 -> 解决方法”写，每次提交同步补一条“验证方式/对应 commit”。
+  - 同步更新 `agent_docs/project_architecture.md` 里“内存与地址空间”“共享内存”两节。
+
+#### Test Plan
+- 构建：`make build ARCH=riscv`、`make build ARCH=loongarch`。
+- 定向功能：
+  - SHM：`shm_comm`、`shmnstest`、`shmem_2nstest`、`shmctl04/05`、`shmget02/03`、`shmt09`。
+  - mmap/VMA：`basic/test_mmap`、`mmap01/04/10/14/18`、`mmap3`、`mmapstress03`、`mmap-corruption01`。
+  - fork/COW：`libcbench`、`pthread` 相关、`iozone`、`clone`/`fork` 高频测例。
+- 语义专项：
+  - `execve + 动态链接器 + PT_LOAD 懒载入`
+  - `brk/sbrk` 扩缩与 `Heap VMA` 冲突处理
+  - `mprotect/madvise/msync/mremap` 的 split/merge 后一致性
+  - `copy_out`、signal frame、内核写用户页场景下的 COW 拆页
+- 完整功能：整套libctest不出错
+- 最终验收继续按现有口径汇报：
+  - 功能点是否修好
+  - 当前集合是否无新增 `TFAIL/TBROK`
+  - 整轮是否自然结束；若只是 timeout/cleanup 噪声单列说明
+
+#### Assumptions
+- 这轮直接统一升级，不保留长期兼容的旧 `VMA/NVMA/ShmManager` 双轨逻辑。
+- `ELF/PT_LOAD` 采用懒 fault 方案，不再维持当前 `execve` 预装整段的主路径。
+- 私有映射性能收益主要来自“懒载入 + 页级 COW + 删除 child_stack/heap/program section 特判复制”，不是靠跳过验证或缩减测例。
+
+
 
 ## 情况要求
 - 旧地址空间模型同时维护 `prog_sections[]`、`heap_start/heap_end`、`NVMA` 固定数组和 `ShmManager` 旁路映射，缺页、`fork`、`mmap/shm`、退出回收各走各的路径，结构割裂。
@@ -141,4 +226,23 @@
 - 第 2 提交已完成待验收：`execve` 主程序段、解释器段、用户栈已切到 `VMASpace + VmObject` 懒注册路径，双架构构建和 60s smoke 已闭环。
 - 第 3 提交已完成待验收：统一 fault、`copy_in/copy_out` 目标地址空间感知，以及 `VMASpace` 私有区域 fork COW 已闭环。
 - 第 4 提交已完成待验收：动态 `mmap/shm` 的主路径已经能遍历统一地址空间模型，双架构重新构建通过。
-- 第 5 提交待落地：继续清掉共享映射旧接口和假后端残留，补架构文档并做定向验收。
+- 第 5 提交待落地：继续清掉共享映射旧接口和假后端残留，补架构文档并做定向验收；本轮验证收尾已完成，临时调试入口已清理并复验通过。
+
+## 验证收尾
+- 情况要求：
+  - 这轮验证阶段临时加过 `sys_brk` 轨迹打印，并把 `initcode` 缩成了子集，便于快速确认 `VMASpace + VmObject` 的主路径是否还会崩。
+  - 在确认编译面和 60s smoke 都稳定后，需要把这些调试入口收回，恢复正式回归入口，再做一次干净复验。
+- 解决方法：
+  - 删除 `kernel/sys/syscall_handler.cc` 里 `sys_brk` 的临时 `brk:trace` 打印。
+  - 恢复 `user/app/initcode-rv.cc` 和 `user/app/initcode-la.cc` 为完整回归顺序，不再只跑局部子集。
+- 验证方式：
+  - `make build ARCH=riscv`
+  - `make build ARCH=loongarch`
+  - `timeout 60s make run r QEMU_MEM=1G`
+  - `timeout 60s make run l QEMU_MEM=1G`
+- 验证结果：
+  - 两个架构均构建通过。
+  - 两个架构的 60s smoke 都没有出现新的 panic、断言或 `object_lock_` 相关睡眠错误。
+  - 日志里的 LTP 子脚本 `Summary` 仍然是 `passed 19 / failed 0 / broken 0 / skipped 0 / warnings 0`，外层依旧会打印 `FAIL LTP CASE fs_bind_cloneNS0x.sh: 0`，`exit_code` 为 `124`，这和之前一致，属于现有 wrapper 口径问题，不是新增内核崩溃。
+  - RISC-V 日志：`logs/output_r_20260618-165517_vmaspace-cleanup-smoke_timeout-60s.txt`
+  - LoongArch 日志：`logs/output_l_20260618-165517_vmaspace-cleanup-smoke_timeout-60s.txt`

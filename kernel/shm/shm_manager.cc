@@ -1,9 +1,9 @@
 #include "shm_manager.hh"
 #include "platform.hh"
 #include "proc_manager.hh"
+#include "process_memory_manager.hh"
 #include "klib.hh"
 #include "printer.hh"
-#include <EASTL/sort.h>
 #include <EASTL/algorithm.h>
 #include "virtual_memory_manager.hh"
 #include "memlayout.hh" // 为了获取PGSIZE等定义
@@ -37,6 +37,32 @@ namespace shm
             SpinLock &lock_;
         };
 
+        class MemoryLockGuard
+        {
+        public:
+            explicit MemoryLockGuard(proc::ProcessMemoryManager *mm) : mm_(mm)
+            {
+                if (mm_ != nullptr)
+                {
+                    mm_->lock_memory();
+                }
+            }
+
+            ~MemoryLockGuard()
+            {
+                if (mm_ != nullptr)
+                {
+                    mm_->unlock_memory();
+                }
+            }
+
+            MemoryLockGuard(const MemoryLockGuard &) = delete;
+            MemoryLockGuard &operator=(const MemoryLockGuard &) = delete;
+
+        private:
+            proc::ProcessMemoryManager *mm_;
+        };
+
         inline bool is_vma_backed_shared_attachment(proc::Pcb *proc, uint64 addr)
         {
             if (proc == nullptr || proc->get_memory_manager() == nullptr)
@@ -65,100 +91,22 @@ namespace shm
 
         inline bool segment_visible_in_current_namespace(const shm_segment &seg)
         {
-            return seg.ipc_ns_id == k_mmap_backing_ipc_namespace_id ||
-                   seg.ipc_ns_id == current_ipc_namespace_id();
+            return seg.ipc_ns_id == current_ipc_namespace_id();
         }
     } // namespace
 
     void ShmManager::init(uint64 base, uint64 size)
     {
         shm_lock_.init("shm_manager");
-        shm_base = base;
+        (void)base;
         shm_size = size;
         next_shmid = 1; // shmid从1开始
         shmmax_limit = 32 * 1024 * 1024; // Linux sysctl shmmax，默认与现有 IPC_INFO 保持一致
         shmmni_limit = 4096;             // Linux sysctl shmmni，LTP 会读取该值做 ENOSPC 压测
 
-        // 初始化时整个内存区域都是空闲的
-        free_blocks.clear();
-        free_blocks.push_back({base, size});
         segments = new eastl::unordered_map<int, shm_segment>();
         shared_file_objects = new eastl::unordered_map<eastl::string, proc::FileVmObject *>();
         registered_objects = new eastl::unordered_map<uint64, proc::VmObject *>();
-    }
-
-    uint64 ShmManager::allocate_memory(size_t size)
-    {
-        // 按页对齐
-        size_t aligned_size = PGROUNDUP(size);
-
-        // 遍历空闲块，找到第一个足够大的块（First Fit策略）
-        for (auto it = free_blocks.begin(); it != free_blocks.end(); ++it)
-        {
-            if (it->size >= aligned_size)
-            {
-                uint64 allocated_addr = it->addr;
-
-                // 如果空闲块正好等于需要的大小，直接移除
-                if (it->size == aligned_size)
-                {
-                    free_blocks.erase(it);
-                }
-                else
-                {
-                    // 否则缩小空闲块
-                    it->addr += aligned_size;
-                    it->size -= aligned_size;
-                }
-
-                return allocated_addr;
-            }
-        }
-
-        // 没有找到足够大的空闲块
-        return 0;
-    }
-
-    void ShmManager::deallocate_memory(uint64 addr, size_t size)
-    {
-        size_t aligned_size = PGROUNDUP(size);
-
-        // 添加新的空闲块
-        free_blocks.push_back({addr, aligned_size});
-
-        // 按地址排序
-        eastl::sort(free_blocks.begin(), free_blocks.end());
-
-        // 合并相邻的空闲块
-        merge_adjacent_blocks();
-    }
-
-    void ShmManager::merge_adjacent_blocks()
-    {
-        if (free_blocks.size() <= 1)
-            return;
-
-        auto write_it = free_blocks.begin();
-        auto read_it = free_blocks.begin();
-
-        while (read_it != free_blocks.end())
-        {
-            *write_it = *read_it;
-            ++read_it;
-
-            // 尝试与后续相邻块合并
-            while (read_it != free_blocks.end() &&
-                   write_it->addr + write_it->size == read_it->addr)
-            {
-                write_it->size += read_it->size;
-                ++read_it;
-            }
-
-            ++write_it;
-        }
-
-        // 调整vector大小
-        free_blocks.resize(write_it - free_blocks.begin());
     }
 
     eastl::unordered_map<int, shm_segment>::iterator ShmManager::find_segment_by_key_locked(key_t key, uint64 ipc_ns_id)
@@ -286,31 +234,8 @@ namespace shm
     bool ShmManager::has_address_conflict(proc::Pcb* proc, uint64 addr, size_t size)
     {
         uint64 end_addr = addr + size;
-        
-        // 检查是否与程序段冲突
-        for (int i = 0; i < proc->get_prog_section_count(); i++) {
-            const auto* sections = proc->get_prog_sections();
-            uint64 section_start = (uint64)sections[i]._sec_start;
-            uint64 section_end = section_start + sections[i]._sec_size;
-            
-            if (addr < section_end && end_addr > section_start) {
-                printfRed("[ShmManager] Address range [0x%x, 0x%x] conflicts with program section %d [0x%x, 0x%x]\n",
-                         addr, end_addr, i, section_start, section_end);
-                return true;
-            }
-        }
-        
-        // 指定地址 shmat 不能覆盖当前 brk 堆区。之前这里只依赖页表映射失败，
-        // 会让错误路径过晚触发；显式检查更接近 Linux ABI，也覆盖 shmt09。
-        uint64 heap_start = proc->get_heap_start();
-        uint64 heap_end = proc->get_heap_end();
-        if (heap_start < heap_end && addr < heap_end && end_addr > heap_start) {
-            printfRed("[ShmManager] Address range [0x%x, 0x%x] conflicts with heap [0x%x, 0x%x]\n",
-                     addr, end_addr, heap_start, heap_end);
-            return true;
-        }
-        
-        // 用 VMA Maple Tree 做冲突判定，避免固定地址 shmat 再做全表扫描。
+
+        // 指定地址 shmat 只能看统一 VMA 视图；ELF、堆、栈、mmap/shm 都已经在这里建模。
         if (proc->get_vma() != nullptr && proc->get_memory_manager() != nullptr) {
             if (proc->get_memory_manager()->has_vma_conflict(addr, end_addr)) {
                 const proc::vma *conflict = proc->get_memory_manager()->find_vma_covering(addr);
@@ -433,28 +358,6 @@ namespace shm
         }
     }
     
-    int ShmManager::find_seg_by_key(key_t key)
-    {
-        return find_seg_by_key_in_namespace(key, current_ipc_namespace_id());
-    }
-
-    int ShmManager::find_seg_by_key_in_namespace(key_t key, uint64 ipc_ns_id)
-    {
-        SpinLockGuard guard(shm_lock_);
-
-        if (key == IPC_PRIVATE || segments == nullptr || segments->empty())
-        {
-            return -1;
-        }
-
-        auto it = find_segment_by_key_locked(key, ipc_ns_id);
-        if (it == segments->end())
-        {
-            return -1;
-        }
-        return it->second.shmid;
-    }
-
     int ShmManager::create_new_segment_locked(key_t key, size_t size, int shmflg, uint64 ipc_ns_id)
     {
         // SysV SHM 的 ABI 下，新建段必须满足 SHMMIN<=size<=shmmax。
@@ -483,10 +386,7 @@ namespace shm
             }
         }
 
-        // shmmni 限制 SysV IPC namespace 内的段数量。mmap(MAP_SHARED) 使用的内部后端
-        // 放在 k_mmap_backing_ipc_namespace_id，不能挤占用户可见 SysV SHM 的配额。
-        if (ipc_ns_id != k_mmap_backing_ipc_namespace_id &&
-            namespace_segment_count >= shmmni_limit) {
+        if (namespace_segment_count >= shmmni_limit) {
             printfRed("[ShmManager] Maximum number of namespace segments reached (%d)\n", shmmni_limit);
             return -ENOSPC;
         }
@@ -499,7 +399,6 @@ namespace shm
         new_seg.size = size;                      // 保存用户请求的原始大小
         new_seg.real_size = PGROUNDUP(size);      // 页对齐的实际分配大小
         new_seg.shmflg = shmflg;
-        new_seg.phy_addrs = 0;
         new_seg.attached_addrs.clear();          // 初始化附加地址列表为空
         
         // 初始化时间信息 (按照标准)
@@ -592,7 +491,6 @@ namespace shm
             return nullptr;
         }
 
-        SpinLockGuard guard(shm_lock_);
         const eastl::string &cache_key = file_obj->backing_path();
         if (cache_key.empty())
         {
@@ -600,21 +498,46 @@ namespace shm
             // 不能硬塞进同一个空 key 缓存，否则不同映射会被错误共享。
             return new proc::FileVmObject(file_obj, true, false, {});
         }
-        auto existing = shared_file_objects->find(cache_key);
-        if (existing != shared_file_objects->end() && existing->second != nullptr)
+
         {
-            existing->second->get();
-            return existing->second;
+            SpinLockGuard guard(shm_lock_);
+            auto existing = shared_file_objects->find(cache_key);
+            if (existing != shared_file_objects->end() && existing->second != nullptr)
+            {
+                existing->second->get();
+                return existing->second;
+            }
         }
 
+        // FileVmObject 构造会登记到全局对象表，登记过程也需要 shm_lock_。
+        // 因此对象构造必须放在缓存锁外，避免 MAP_SHARED 文件映射触发锁重入 panic。
         proc::FileVmObject *object = new proc::FileVmObject(file_obj, true, false, cache_key);
         if (object == nullptr)
         {
             return nullptr;
         }
 
-        (*shared_file_objects)[cache_key] = object;
-        object->get(); // 额外给调用方一份引用；缓存自己保留一份
+        proc::FileVmObject *duplicate_to_drop = nullptr;
+        {
+            SpinLockGuard guard(shm_lock_);
+            auto existing = shared_file_objects->find(cache_key);
+            if (existing != shared_file_objects->end() && existing->second != nullptr)
+            {
+                existing->second->get();
+                duplicate_to_drop = object;
+                object = existing->second;
+            }
+            else
+            {
+                (*shared_file_objects)[cache_key] = object;
+                object->get(); // 额外给调用方一份引用；缓存自己保留一份
+            }
+        }
+
+        if (duplicate_to_drop != nullptr && duplicate_to_drop->put())
+        {
+            delete duplicate_to_drop;
+        }
         return object;
     }
 
@@ -638,6 +561,12 @@ namespace shm
             return;
         }
 
+        if (shm_lock_.is_held())
+        {
+            (*registered_objects)[object->object_id()] = object;
+            return;
+        }
+
         SpinLockGuard guard(shm_lock_);
         (*registered_objects)[object->object_id()] = object;
     }
@@ -646,6 +575,24 @@ namespace shm
     {
         if (object == nullptr || registered_objects == nullptr)
         {
+            return;
+        }
+
+        if (shm_lock_.is_held())
+        {
+            registered_objects->erase(object->object_id());
+
+            const eastl::string *cache_key = object->shared_cache_key();
+            if (cache_key == nullptr || shared_file_objects == nullptr)
+            {
+                return;
+            }
+
+            auto it = shared_file_objects->find(*cache_key);
+            if (it != shared_file_objects->end() && it->second == object)
+            {
+                shared_file_objects->erase(it);
+            }
             return;
         }
 
@@ -698,93 +645,71 @@ namespace shm
             delete object;
         }
     }
-    void *ShmManager::attach_seg(int shmid, void *shmaddr, int shmflg, bool register_vma)
+    void ShmManager::remove_attachment_record_locked(shm_segment &seg, uint tid, pid_t pid, void *addr)
     {
-        SpinLockGuard guard(shm_lock_);
-
-        // 查找共享内存段
-        auto it = segments->find(shmid);
-        if (it == segments->end())
+        auto addr_it = eastl::find_if(seg.attached_addrs.begin(), seg.attached_addrs.end(), [&](const attached_entry &entry)
         {
-            printfRed("[ShmManager] Segment with shmid=%d not found\n", shmid);
-            return (void *)-EINVAL; // 无效的共享内存标识符
+            return entry.addr == addr && (entry.tid == tid || entry.pid == pid);
+        });
+        if (addr_it == seg.attached_addrs.end())
+        {
+            return;
         }
 
-        shm_segment &seg = it->second;
-        if (!segment_visible_in_current_namespace(seg))
+        seg.attached_addrs.erase(addr_it);
+        seg.dtime = tmm::k_tm.clock_gettime_sec(tmm::CLOCK_REALTIME);
+        if (seg.nattch > 0)
         {
-            printfRed("[ShmManager] shmid=%d belongs to another IPC namespace\n", shmid);
-            return (void *)-EINVAL;
+            seg.nattch--;
         }
+        if (proc::Pcb *current_proc = proc::k_pm.get_cur_pcb(); current_proc != nullptr)
+        {
+            seg.last_pid = current_proc->_pid;
+        }
+    }
+
+    bool ShmManager::lookup_attachment_locked(uint tid, pid_t pid, void *addr, int *shmid, size_t *real_size)
+    {
+        for (auto &pair : *segments)
+        {
+            shm_segment &seg = pair.second;
+            auto addr_it = eastl::find_if(seg.attached_addrs.begin(), seg.attached_addrs.end(), [&](const attached_entry &entry)
+            {
+                return entry.addr == addr && (entry.tid == tid || entry.pid == pid);
+            });
+            if (addr_it == seg.attached_addrs.end())
+            {
+                continue;
+            }
+
+            if (shmid != nullptr)
+            {
+                *shmid = seg.shmid;
+            }
+            if (real_size != nullptr)
+            {
+                *real_size = seg.real_size;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    void *ShmManager::attach_seg(int shmid, void *shmaddr, int shmflg)
+    {
         proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
-
-        // 权限检查
-        bool need_write = !(shmflg & SHM_RDONLY);
-        if (!check_segment_attach_permission(seg, current_proc->_uid, current_proc->_gid, need_write)) {
-            printfRed("[ShmManager] Permission denied for shmid=%d (uid=%d, need_write=%d)\n", 
-                     shmid, current_proc->_uid, need_write);
-            return (void *)-EACCES;
-        }
-
-        // 检查进程附加段数量限制
-        const int SHMSEG_MAX = 500;  // 每个进程最大附加段数量
-        int current_attachments = 0;
-        for (const auto& pair : *segments) {
-            current_attachments += pair.second.attached_addrs.size();  // 统计所有附加地址
-        }
-        if (current_attachments >= SHMSEG_MAX) {
-            printfRed("[ShmManager] Process attachment limit exceeded (%d/%d)\n", 
-                     current_attachments, SHMSEG_MAX);
-            return (void *)-EMFILE;
-        }
-
-        // 确定映射地址
-        uint64 attach_addr = 0;
-
-        if (shmaddr == nullptr)
+        if (current_proc == nullptr)
         {
-            // 情况1：shmaddr为NULL，系统选择第一个可用地址
-            // 在进程的堆区域后面分配，确保不与现有内存重叠
-            attach_addr = find_available_address(current_proc, seg.real_size);
-            if (attach_addr == 0) {
-                printfRed("[ShmManager] No available address space for segment size=0x%x\n", seg.size);
-                return (void *)-ENOMEM;
-            }
+            return (void *)-ESRCH;
         }
-        else
+
+        proc::ProcessMemoryManager *current_mm = current_proc->get_memory_manager();
+        if (current_mm == nullptr)
         {
-            // 情况2和3：shmaddr不为NULL
-            uint64 requested_addr = (uint64)shmaddr;
-
-            if (shmflg & SHM_RND)
-            {
-                // 情况2：设置了SHM_RND标记，向下调整到SHMLBA的整数倍
-                attach_addr = requested_addr - (requested_addr % SHMLBA);
-            }
-            else
-            {
-                // 情况3：使用指定的地址，必须精确匹配
-                attach_addr = requested_addr;
-            }
-
-            // 验证地址的合法性 - 使用实际映射大小
-            if (!is_valid_attach_address(attach_addr, seg.real_size, shmflg & SHM_RND)) {
-                printfRed("[ShmManager] Illegal address 0x%x for attaching shared memory\n", attach_addr);
-                return (void *)-EINVAL;
-            }
-
-            // 检查地址是否与现有映射冲突 - 使用实际映射大小
-            if (has_address_conflict(current_proc, attach_addr, seg.real_size)) {
-                printfRed("[ShmManager] Address 0x%x conflicts with existing mappings\n", attach_addr);
-                return (void *)-EINVAL;
-            }
+            return (void *)-ENOMEM;
         }
+        MemoryLockGuard mm_guard(current_mm);
 
-        /*
-         * 现在 shmat 只登记共享对象元数据，把真实页安装延后到统一缺页路径。
-         * 这样 SysV SHM、MAP_SHARED 文件映射、匿名共享页都能走同一套页源语义，
-         * 而不是继续在这里直接改页表。
-         */
         int prot = PROT_NONE;
         if (shmflg & SHM_RDONLY)
         {
@@ -795,121 +720,189 @@ namespace shm
             prot = PROT_READ | PROT_WRITE;
         }
 
-        proc::ProcessMemoryManager *current_mm = current_proc->get_memory_manager();
-        if (register_vma &&
-            (current_mm == nullptr ||
-             !current_mm->register_shared_attachment_vma(attach_addr,
-                                                         seg.real_size,
-                                                         prot,
-                                                         MAP_SHARED,
-                                                         shmid,
-                                                         attach_addr)))
+        uint64 attach_addr = 0;
+        size_t real_size = 0;
+        proc::SysvShmVmObject *object = nullptr;
         {
-            printfRed("[ShmManager] Failed to register shared VMA for shmid=%d at addr=0x%x\n",
-                      shmid, attach_addr);
+            SpinLockGuard guard(shm_lock_);
+            auto it = segments->find(shmid);
+            if (it == segments->end())
+            {
+                printfRed("[ShmManager] Segment with shmid=%d not found\n", shmid);
+                return (void *)-EINVAL;
+            }
+
+            shm_segment &seg = it->second;
+            if (!segment_visible_in_current_namespace(seg))
+            {
+                printfRed("[ShmManager] shmid=%d belongs to another IPC namespace\n", shmid);
+                return (void *)-EINVAL;
+            }
+
+            bool need_write = !(shmflg & SHM_RDONLY);
+            if (!check_segment_attach_permission(seg, current_proc->_uid, current_proc->_gid, need_write))
+            {
+                printfRed("[ShmManager] Permission denied for shmid=%d (uid=%d, need_write=%d)\n",
+                          shmid, current_proc->_uid, need_write);
+                return (void *)-EACCES;
+            }
+
+            const int SHMSEG_MAX = 500;
+            int current_attachments = 0;
+            for (const auto &pair : *segments)
+            {
+                current_attachments += pair.second.attached_addrs.size();
+            }
+            if (current_attachments >= SHMSEG_MAX)
+            {
+                printfRed("[ShmManager] Process attachment limit exceeded (%d/%d)\n",
+                          current_attachments, SHMSEG_MAX);
+                return (void *)-EMFILE;
+            }
+
+            real_size = seg.real_size;
+            if (shmaddr == nullptr)
+            {
+                attach_addr = find_available_address(current_proc, real_size);
+                if (attach_addr == 0)
+                {
+                    printfRed("[ShmManager] No available address space for segment size=0x%x\n", seg.size);
+                    return (void *)-ENOMEM;
+                }
+            }
+            else
+            {
+                uint64 requested_addr = (uint64)shmaddr;
+                attach_addr = (shmflg & SHM_RND) ? (requested_addr - (requested_addr % SHMLBA))
+                                                 : requested_addr;
+                if (!is_valid_attach_address(attach_addr, real_size, (shmflg & SHM_RND) != 0))
+                {
+                    printfRed("[ShmManager] Illegal address 0x%x for attaching shared memory\n", attach_addr);
+                    return (void *)-EINVAL;
+                }
+                if (has_address_conflict(current_proc, attach_addr, real_size))
+                {
+                    printfRed("[ShmManager] Address 0x%x conflicts with existing mappings\n", attach_addr);
+                    return (void *)-EINVAL;
+                }
+            }
+
+            if (seg.object == nullptr)
+            {
+                return (void *)-EINVAL;
+            }
+
+            object = seg.object;
+            object->get();
+            seg.attached_addrs.push_back(attached_entry{current_proc->get_tid(), current_proc->_pid, (void *)attach_addr});
+            seg.atime = tmm::k_tm.clock_gettime_sec(tmm::CLOCK_REALTIME);
+            seg.last_pid = current_proc->_pid;
+            seg.nattch++;
+        }
+
+        if (!current_mm->ensure_user_pagetable_hierarchy(attach_addr, real_size))
+        {
+            (void)detach_vma_attachment(shmid, (void *)attach_addr, current_proc->get_tid());
+            if (object != nullptr && object->put())
+            {
+                delete object;
+            }
             return (void *)-ENOMEM;
         }
 
-        // 按标准更新段信息
-        seg.attached_addrs.push_back(attached_entry{current_proc->get_tid(), (void *)attach_addr}); // 记录映射的虚拟地址（带tid）
-        seg.atime = tmm::k_tm.clock_gettime_sec(tmm::CLOCK_REALTIME); // 设置shm_atime为当前时间
-        seg.last_pid = current_proc->_pid;     // 更新最后操作进程ID (shm_lpid)
-        seg.nattch++;                          // 增加附加计数 (shm_nattch)
+        proc::vma *vm = current_mm->get_vm_space().create_area(attach_addr,
+                                                               real_size,
+                                                               prot,
+                                                               MAP_SHARED,
+                                                               object,
+                                                               0,
+                                                               proc::VmAreaKind::SysvShm,
+                                                               proc::VmGrowPolicy::None,
+                                                               0,
+                                                               "sysv-shm");
+        if (vm == nullptr)
+        {
+            (void)detach_vma_attachment(shmid, (void *)attach_addr, current_proc->get_tid());
+            // create_area() 接管 object 引用；失败时它已经完成引用归还。
+            return (void *)-ENOMEM;
+        }
 
-        // 注意：在新的内存管理体系中，共享内存不直接计入进程的_sz
-        // _sz现在由程序段和堆的总和自动计算，共享内存有独立的生命周期管理
-        // 如果需要更新总内存大小，应该调用进程的update_total_memory_size()方法
-            // printfCyan("[ShmManager::detach_seg] Attached addresses: ");
-            // for (void* attached_addr : seg.attached_addrs) {
-            //     printfCyan("%p ", attached_addr);
-            // }
-        return (void *)attach_addr; // 返回段的起始地址
+        vm->vfd = -1;
+        vm->vfile = nullptr;
+        vm->offset = 0;
+        vm->max_len = real_size;
+        vm->is_expandable = false;
+        vm->backing_kind = proc::VMA_BACKING_SHM;
+        vm->backing_shmid = shmid;
+        vm->backing_base = attach_addr;
+        vm->owner_mm = current_mm;
+        vm->page_offset = 0;
+        vm->area_kind = proc::VmAreaKind::SysvShm;
+        vm->grow_policy = proc::VmGrowPolicy::None;
+        vm->guard_pages = 0;
+        vm->debug_name = "sysv-shm";
+        vm->file_backed_bytes = 0;
+        vm->zero_fill_past_file = false;
+        return (void *)attach_addr;
+    }
+
+    int ShmManager::detach_vma_attachment(int shmid, void *addr, uint tid)
+    {
+        SpinLockGuard guard(shm_lock_);
+        auto it = segments->find(shmid);
+        if (it == segments->end())
+        {
+            return -EINVAL;
+        }
+
+        shm_segment &seg = it->second;
+        size_t before = seg.attached_addrs.size();
+        proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+        pid_t pid = current_proc != nullptr ? current_proc->_pid : -1;
+        remove_attachment_record_locked(seg, tid, pid, addr);
+        if (seg.attached_addrs.size() == before)
+        {
+            return -EINVAL;
+        }
+
+        if (((seg.mode & SHM_DEST) || seg.auto_destroy_on_last_detach) && seg.nattch == 0)
+        {
+            return delete_seg_locked(shmid);
+        }
+        return 0;
     }
 
     int ShmManager::detach_seg(void *addr)
     {
-        SpinLockGuard guard(shm_lock_);
+        if (addr == nullptr)
+        {
+            return -EINVAL;
+        }
 
-        auto it = segments->begin();
-    // 查找包含该地址的共享内存段（限定当前线程）
-        for (; it != segments->end(); ++it)
-        {
-            shm_segment &seg = it->second;
-            // printfCyan("[ShmManager::detach_seg] Checking segment shmid=%d\n", seg.shmid);
-            // //打印地址列表
-            // printfCyan("[ShmManager::detach_seg] Attached addresses: ");
-            // for (void* attached_addr : seg.attached_addrs) {
-            //     printfCyan("%p ", attached_addr);
-            // }
-            // printfCyan("\n");
-            // 在附加地址列表中查找（tid + 地址匹配）
-            uint cur_tid = proc::k_pm.get_cur_pcb()->get_tid();
-            auto addr_it = eastl::find_if(seg.attached_addrs.begin(), seg.attached_addrs.end(), [&](const attached_entry& e){
-                return e.tid == cur_tid && e.addr == addr;
-            });
-            if (addr_it != seg.attached_addrs.end()) {
-                // printfCyan("[ShmManager::detach_seg] Found address in segment shmid=%d\n", seg.shmid);
-                break;
-            }
-        }
-        
-        if (it == segments->end())
-        {
-            printfRed("[ShmManager] Segment with address %p not found\n", addr);
-            printfYellow("[ShmManager] Available segments:\n");
-            for (const auto& pair : *segments) {
-                printfYellow("  shmid=%d, attachments: ", pair.second.shmid);
-                for (const auto &ent : pair.second.attached_addrs) {
-                    printfYellow("(tid=%d, addr=%p) ", ent.tid, ent.addr);
-                }
-                printfYellow("\n");
-            }
-            return -EINVAL; // 地址无效
-        }
-        
-        shm_segment &seg = it->second;
         proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
-        
-        // 从附加地址列表中移除这个地址（仅当前线程）
+        if (current_proc == nullptr)
         {
-            uint cur_tid = current_proc->get_tid();
-            auto it2 = eastl::find_if(seg.attached_addrs.begin(), seg.attached_addrs.end(), [&](const attached_entry& e){
-                return e.tid == cur_tid && e.addr == addr;
-            });
-            if (it2 != seg.attached_addrs.end()) {
-                seg.attached_addrs.erase(it2);
-            }
-        }
-        
-        // 先把这条共享段对应的全部 VMA 片段清掉，避免 shmdt 成功后 exit/free_all_vma 再次重复 detach。
-        if (current_proc->get_memory_manager() != nullptr)
-        {
-            current_proc->get_memory_manager()->clear_shared_attachment_vmas(seg.shmid, (uint64)addr);
+            return -ESRCH;
         }
 
-        // 解除映射 - 使用实际分配的页对齐大小
-        mem::k_vmm.vmunmap(
-            *current_proc->get_pagetable(),               // 当前进程页表
-            (uint64)addr,                    // 虚拟地址
-            seg.real_size / PGSIZE,          // 页数（使用实际分配大小）
-            0                                // 不释放物理页
-        );
-        
-        // 按标准更新段信息
-        seg.dtime = tmm::k_tm.clock_gettime_sec(tmm::CLOCK_REALTIME);                    // 设置shm_dtime为当前时间
-        seg.last_pid = current_proc->_pid;       // 更新最后操作进程ID (shm_lpid)
-        seg.nattch--;                            // 减少附加计数 (shm_nattch)
+        proc::ProcessMemoryManager *current_mm = current_proc->get_memory_manager();
+        if (current_mm == nullptr)
+        {
+            return -EINVAL;
+        }
+        MemoryLockGuard mm_guard(current_mm);
 
-        // 检查段是否被标记为删除且无进程附加
-        if (((seg.mode & SHM_DEST) || seg.auto_destroy_on_last_detach) && seg.nattch == 0) {
-            int shmid = seg.shmid;  // 保存shmid用于日志
-            int result = delete_seg_locked(shmid);
-            if (result != 0) {
-                printfRed("[ShmManager] Failed to auto-destroy marked segment shmid=%d\n", shmid);
+        size_t real_size = 0;
+        {
+            SpinLockGuard guard(shm_lock_);
+            if (!lookup_attachment_locked(current_proc->get_tid(), current_proc->_pid, addr, nullptr, &real_size))
+            {
+                printfRed("[ShmManager] Segment with address %p not found\n", addr);
+                return -EINVAL;
             }
         }
 
-        return 0;
+        return current_mm->unmap_memory_range(addr, real_size);
     }
 
     bool ShmManager::is_shared_memory_address(void *addr)
@@ -920,13 +913,15 @@ namespace shm
             return false;
         }
 
-        uint cur_tid = proc::k_pm.get_cur_pcb()->get_tid();
+        proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+        uint cur_tid = current_proc != nullptr ? current_proc->get_tid() : 0;
+        pid_t cur_pid = current_proc != nullptr ? current_proc->_pid : -1;
         // 遍历所有共享内存段，仅匹配当前线程的记录
         for (auto it = segments->begin(); it != segments->end(); ++it)
         {
             shm_segment &seg = it->second;
             auto addr_it = eastl::find_if(seg.attached_addrs.begin(), seg.attached_addrs.end(), [&](const attached_entry& e){
-                return e.tid == cur_tid && e.addr == addr;
+                return e.addr == addr && (e.tid == cur_tid || e.pid == cur_pid);
             });
             if (addr_it != seg.attached_addrs.end()) {
                 return true;
@@ -945,7 +940,9 @@ namespace shm
 
         uint64 target_addr = (uint64)addr;
 
-        uint cur_tid = proc::k_pm.get_cur_pcb()->get_tid();
+        proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+        uint cur_tid = current_proc != nullptr ? current_proc->get_tid() : 0;
+        pid_t cur_pid = current_proc != nullptr ? current_proc->_pid : -1;
         // printf("[ShmManager] Finding shared memory segment for address: %p (tid=%d)\n", addr, cur_tid);
         // 遍历所有共享内存段（只看当前线程）
         for (auto it = segments->begin(); it != segments->end(); ++it)
@@ -954,7 +951,7 @@ namespace shm
             
             // 检查每个附加地址及其范围
             for (const auto& e : seg.attached_addrs) {
-                if (e.tid != cur_tid) continue;
+                if (e.tid != cur_tid && e.pid != cur_pid) continue;
                 uint64 seg_start = (uint64)e.addr;
                 uint64 seg_end = seg_start + seg.real_size;
                 
@@ -982,7 +979,9 @@ namespace shm
             return false;
         }
 
-        uint cur_tid = proc::k_pm.get_cur_pcb()->get_tid();
+        proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+        uint cur_tid = current_proc != nullptr ? current_proc->get_tid() : 0;
+        pid_t cur_pid = current_proc != nullptr ? current_proc->_pid : -1;
         // 遍历所有共享内存段，找到包含该地址的段（限定当前线程）
         for (auto it = segments->begin(); it != segments->end(); ++it)
         {
@@ -990,7 +989,7 @@ namespace shm
             
             // 在附加地址列表中查找
             auto addr_it = eastl::find_if(seg.attached_addrs.begin(), seg.attached_addrs.end(), [&](const attached_entry& e){
-                return e.tid == cur_tid && e.addr == addr;
+                return e.addr == addr && (e.tid == cur_tid || e.pid == cur_pid);
             });
             if (addr_it != seg.attached_addrs.end()) {
                 // 找到了包含该地址的共享内存段，增加引用计数
@@ -1094,7 +1093,11 @@ namespace shm
                 kernel_buf.shm_nattch = seg.nattch;
 
                 // 复制到用户空间
-                if (mem::k_vmm.copy_out(*current_proc->get_pagetable(), buf_addr, &kernel_buf, sizeof(kernel_buf)) < 0) {
+                if (mem::k_vmm.copy_out(*current_proc->get_pagetable(),
+                                        buf_addr,
+                                        &kernel_buf,
+                                        sizeof(kernel_buf),
+                                        current_proc->get_memory_manager()) < 0) {
                     printfRed("[ShmManager] Failed to copy shmid_ds to user space\n");
                     return -EFAULT;
                 }
@@ -1134,7 +1137,11 @@ namespace shm
 
                 // 从用户空间复制数据
                 struct shmid_ds user_buf;
-                if (mem::k_vmm.copy_in(*current_proc->get_pagetable(), &user_buf, buf_addr, sizeof(user_buf)) < 0) {
+                if (mem::k_vmm.copy_in(*current_proc->get_pagetable(),
+                                       &user_buf,
+                                       buf_addr,
+                                       sizeof(user_buf),
+                                       current_proc->get_memory_manager()) < 0) {
                     printfRed("[ShmManager] Failed to copy shmid_ds from user space\n");
                     return -EFAULT;
                 }
@@ -1205,7 +1212,11 @@ namespace shm
                 sys_info.shmall = (shm_size / PGSIZE); // 系统总页数
 
                 // 复制到用户空间
-                if (mem::k_vmm.copy_out(*current_proc->get_pagetable(), buf_addr, &sys_info, sizeof(sys_info)) < 0) {
+                if (mem::k_vmm.copy_out(*current_proc->get_pagetable(),
+                                        buf_addr,
+                                        &sys_info,
+                                        sizeof(sys_info),
+                                        current_proc->get_memory_manager()) < 0) {
                     printfRed("[ShmManager] Failed to copy shminfo to user space\n");
                     return -EFAULT;
                 }
@@ -1250,7 +1261,11 @@ namespace shm
                 usage_info.swap_successes = 0;     // 未使用
 
                 // 复制到用户空间
-                if (mem::k_vmm.copy_out(*current_proc->get_pagetable(), buf_addr, &usage_info, sizeof(usage_info)) < 0) {
+                if (mem::k_vmm.copy_out(*current_proc->get_pagetable(),
+                                        buf_addr,
+                                        &usage_info,
+                                        sizeof(usage_info),
+                                        current_proc->get_memory_manager()) < 0) {
                     printfRed("[ShmManager] Failed to copy shm_info to user space\n");
                     return -EFAULT;
                 }
@@ -1418,64 +1433,54 @@ namespace shm
         printfYellow("[ShmManager] Memory Status:\n");
         printfYellow("  Total memory: 0x%x bytes\n", shm_size);
         printfYellow("  Active segments: %u\n", segments->size());
-        printfYellow("  Free blocks: %u\n", free_blocks.size());
-
-        size_t total_free = 0;
-        for (const auto &block : free_blocks)
+        size_t total_used = 0;
+        for (const auto &pair : *segments)
         {
-            printfYellow("    Free block: addr=0x%x, size=0x%x\n", block.addr, block.size);
-            total_free += block.size;
+            total_used += pair.second.real_size;
         }
+        size_t total_free = shm_size > total_used ? (shm_size - total_used) : 0;
         printfYellow("  Total free memory: 0x%x bytes\n", total_free);
         printfYellow("  Memory utilization: %.1f%%\n",
-                     (double)(shm_size - total_free) * 100.0 / shm_size);
+                     shm_size == 0 ? 0.0 : (double)total_used * 100.0 / shm_size);
     }
 
     size_t ShmManager::get_total_free_memory() const
     {
         SpinLockGuard guard(shm_lock_);
 
-        size_t total_free = 0;
-        for (const auto &block : free_blocks)
+        size_t total_used = 0;
+        for (const auto &pair : *segments)
         {
-            total_free += block.size;
+            total_used += pair.second.real_size;
         }
-        return total_free;
+        return shm_size > total_used ? (shm_size - total_used) : 0;
     }
 
     size_t ShmManager::get_largest_free_block() const
     {
-        SpinLockGuard guard(shm_lock_);
-
-        size_t largest = 0;
-        for (const auto &block : free_blocks)
-        {
-            if (block.size > largest)
-            {
-                largest = block.size;
-            }
-        }
-        return largest;
+        return get_total_free_memory();
     }
 }
 
 namespace shm {
-    bool ShmManager::duplicate_attachments_for_fork(uint parent_tid, uint child_tid)
+    bool ShmManager::duplicate_attachments_for_fork(uint parent_tid, uint child_tid, pid_t child_pid)
     {
         SpinLockGuard guard(shm_lock_);
 
+        proc::Pcb *parent = proc::k_pm.get_cur_pcb();
+        pid_t parent_pid = parent != nullptr ? parent->_pid : -1;
         bool duplicated = false;
         for (auto &pair : *segments) {
             shm_segment &seg = pair.second;
             eastl::vector<void *> copied_addrs;
             for (const auto &e : seg.attached_addrs) {
-                if (e.tid == parent_tid) {
+                if (e.tid == parent_tid || e.pid == parent_pid) {
                     copied_addrs.push_back(e.addr);
                 }
             }
             for (void *addr : copied_addrs)
             {
-                seg.attached_addrs.push_back(attached_entry{child_tid, addr});
+                seg.attached_addrs.push_back(attached_entry{child_tid, child_pid, addr});
                 seg.nattch++;
                 duplicated = true;
             }
@@ -1492,8 +1497,8 @@ namespace shm {
             return 0;
         }
 
-        mem::PageTable *pt = proc->get_pagetable();
         const uint target_tid = proc->get_tid();
+        const pid_t target_pid = proc->_pid;
         int detached_count = 0;
         eastl::vector<int> pending_delete;
 
@@ -1502,42 +1507,35 @@ namespace shm {
             shm_segment &seg = pair.second;
             for (auto it = seg.attached_addrs.begin(); it != seg.attached_addrs.end();)
             {
+                bool entry_belongs_to_proc = it->tid == target_tid || it->pid == target_pid;
+                if (!entry_belongs_to_proc)
+                {
+                    ++it;
+                    continue;
+                }
+
                 bool vma_backed_attachment = is_vma_backed_shared_attachment(proc, (uint64)it->addr);
 
-                // VMA 管理的共享映射交给 mmap/munmap/free_all_vma 的生命周期统一收口。
-                // 这里专门清理 shmat 一类“没有 VMA 托管”的附件，避免 exit 路径双重 detach。
+                // VMA 托管的附件会在 free_all_vma()/munmap()/shmdt() 里统一收口。
+                // 这里兜底清理的是“元数据还留着，但地址空间里已经没有对应 VMA”的残留记录。
                 if (vma_backed_attachment)
                 {
                     ++it;
                     continue;
                 }
 
-                bool owned_by_process = false;
-                if (it->tid == target_tid)
-                {
-                    owned_by_process = true;
-                }
-                else if (!match_tid_only && pt != nullptr)
-                {
-                    mem::Pte pte = pt->walk((uint64)it->addr, 0);
-                    if (!pte.is_null() && pte.is_valid() && (uint64)pte.pa() == seg.phy_addrs)
-                    {
-                        owned_by_process = true;
-                    }
-                }
-
-                if (!owned_by_process)
+                if (it->tid != target_tid && match_tid_only)
                 {
                     ++it;
                     continue;
                 }
 
-                if (unmap_pages && pt != nullptr)
+                if (unmap_pages && proc->get_pagetable() != nullptr)
                 {
-                    mem::Pte pte = pt->walk((uint64)it->addr, 0);
+                    mem::Pte pte = proc->get_pagetable()->walk((uint64)it->addr, 0);
                     if (!pte.is_null() && pte.is_valid())
                     {
-                        mem::k_vmm.vmunmap(*pt, (uint64)it->addr, seg.real_size / PGSIZE, 0);
+                        mem::k_vmm.vmunmap(*proc->get_pagetable(), (uint64)it->addr, seg.real_size / PGSIZE, 0);
                     }
                 }
 

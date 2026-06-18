@@ -320,7 +320,6 @@ namespace proc
         // 其他内存管理接口
         void emergency_memory_cleanup();         // 紧急内存清理
         bool check_memory_leaks() const;         // 检查内存泄漏
-        void print_detailed_memory_info() const; // 打印详细内存信息
 
     public:
         Context *get_context() { return &_context; }
