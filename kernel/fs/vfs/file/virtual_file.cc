@@ -1650,19 +1650,15 @@ namespace fs
     eastl::string ProcSelfMapsProvider::generate_content()
     {
         proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
-        if (!pcb || !pcb->get_vma()) {
+        if (!pcb || pcb->get_memory_manager() == nullptr) {
             return "";
         }
 
         eastl::string result;
         
         // 遍历所有VMA区域
-        for (int i = 0; i < proc::NVMA; i++) {
-            proc::vma &vm = pcb->get_vma()->_vm[i];
-            if (!vm.used) {
-                continue;
-            }
-
+        pcb->get_memory_manager()->for_each_vma([&](proc::vma &vm) -> bool
+        {
             // 格式：address perms offset dev inode pathname
             // 例如：00400000-0040c000 r-xp 00000000 08:01 1234567 /bin/cat
             
@@ -1720,7 +1716,8 @@ namespace fs
             }
             
             result += "\n";
-        }
+            return true;
+        });
 
         return result;
     }
@@ -1741,8 +1738,8 @@ namespace fs
         }
 
         mem::PageTable *pt_ptr = pcb->get_pagetable();
-        proc::VMA *vma_data = pcb->get_vma();
-        if (pt_ptr == nullptr || !pt_ptr->get_base() || vma_data == nullptr)
+        proc::ProcessMemoryManager *memory_mgr = pcb->get_memory_manager();
+        if (pt_ptr == nullptr || !pt_ptr->get_base() || memory_mgr == nullptr)
         {
             return 0;
         }
@@ -1764,21 +1761,17 @@ namespace fs
             uint64 pagemap_entry = 0;
 
             proc::vma *covering_vm = nullptr;
-            for (int i = 0; i < proc::NVMA; ++i)
+            memory_mgr->for_each_vma_in_range(va, va + PGSIZE, [&](proc::vma &vm) -> bool
             {
-                proc::vma &vm = vma_data->_vm[i];
-                if (!vm.used)
-                {
-                    continue;
-                }
                 uint64 vm_start = PGROUNDDOWN(vm.addr);
                 uint64 vm_end = PGROUNDUP(vm.addr + vm.len);
                 if (va >= vm_start && va < vm_end)
                 {
                     covering_vm = &vm;
-                    break;
+                    return false;
                 }
-            }
+                return true;
+            });
 
             mem::Pte pte = pt_ptr->walk(va, false);
             if (covering_vm != nullptr && !pte.is_null() && pte.is_valid())
@@ -1893,22 +1886,18 @@ namespace fs
         // VmPeak, VmSize: 虚拟内存大小（KB）
         uint64 vm_size_kb = pcb->get_size() / 1024;
         uint64 vm_locked_kb = 0;
-        proc::VMA *vma_data = pcb->get_vma();
-        if (vma_data != nullptr)
+        proc::ProcessMemoryManager *memory_mgr = pcb->get_memory_manager();
+        if (memory_mgr != nullptr)
         {
-            for (int i = 0; i < proc::NVMA; ++i)
+            memory_mgr->for_each_vma([&](proc::vma &vm) -> bool
             {
-                proc::vma &vm = vma_data->_vm[i];
-                if (!vm.used)
-                {
-                    continue;
-                }
                 vm_size_kb += static_cast<uint64>(PGROUNDUP(vm.len)) / 1024;
                 if (vm.flags & MAP_LOCKED)
                 {
                     vm_locked_kb += static_cast<uint64>(PGROUNDUP(vm.len)) / 1024;
                 }
-            }
+                return true;
+            });
         }
         result += "VmPeak:\t" + int_to_string(vm_size_kb) + " kB\n";
         result += "VmSize:\t" + int_to_string(vm_size_kb) + " kB\n";

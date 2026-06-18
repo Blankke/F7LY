@@ -42,6 +42,7 @@ namespace proc
 
         void get();
         bool put();
+        int ref_count_for_debug() const;
 
         VmObjectKind kind() const { return object_kind_; }
         uint64 object_id() const { return object_id_; }
@@ -53,6 +54,7 @@ namespace proc
 
         virtual fs::file *backing_file() const { return nullptr; }
         virtual int shmid() const { return -1; }
+        virtual const eastl::string *shared_cache_key() const { return nullptr; }
 
     protected:
         uint64 ensure_source_page(uint64 key, bool zero_fill);
@@ -92,6 +94,10 @@ namespace proc
         int sync_area_range(const VmArea &area, uint64 start, uint64 end) override;
         fs::file *backing_file() const override { return file_; }
         const eastl::string &cache_key() const { return cache_key_; }
+        const eastl::string *shared_cache_key() const override
+        {
+            return shared_mapping() && !cache_key_.empty() ? &cache_key_ : nullptr;
+        }
 
     private:
         fs::file *file_;

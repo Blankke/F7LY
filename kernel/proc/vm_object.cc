@@ -8,6 +8,7 @@
 #include "printer.hh"
 #include "proc/signal.hh"
 #include "proc_manager.hh"
+#include "shm/shm_manager.hh"
 
 namespace proc
 {
@@ -73,11 +74,13 @@ namespace proc
           ref_count_(1)
     {
         object_lock_.init("vm_object");
+        shm::k_smm.note_object_created(this);
     }
 
     VmObject::~VmObject()
     {
         release_source_pages();
+        shm::k_smm.note_object_destroying(this);
     }
 
     void VmObject::get()
@@ -88,6 +91,11 @@ namespace proc
     bool VmObject::put()
     {
         return ref_count_.fetch_sub(1, eastl::memory_order_acq_rel) == 1;
+    }
+
+    int VmObject::ref_count_for_debug() const
+    {
+        return ref_count_.load(eastl::memory_order_acquire);
     }
 
     uint64 VmObject::ensure_source_page(uint64 key, bool zero_fill)

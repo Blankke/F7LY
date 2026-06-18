@@ -21,15 +21,7 @@ namespace proc
     {
         for (auto &area : areas_)
         {
-            if (area.object != nullptr)
-            {
-                area.object->on_area_destroy(area);
-                if (area.object->put())
-                {
-                    delete area.object;
-                }
-                area.object = nullptr;
-            }
+            vma_meta::release_metadata(area);
         }
         areas_.clear();
         index_.clear();
@@ -116,15 +108,7 @@ namespace proc
             {
                 continue;
             }
-            if (it->object != nullptr)
-            {
-                it->object->on_area_destroy(*it);
-                if (it->object->put())
-                {
-                    delete it->object;
-                }
-                it->object = nullptr;
-            }
+            vma_meta::release_metadata(*it);
             areas_.erase(it);
             return;
         }

@@ -10668,15 +10668,23 @@ namespace syscall
                 if (pcb && pcb->get_vma())
                 {
                     fs::normal_file *nf = static_cast<fs::normal_file *>(f);
-                    for (int i = 0; i < proc::NVMA; ++i)
+                    proc::ProcessMemoryManager *mm = pcb->get_memory_manager();
+                    bool has_busy_shared_writer = false;
+                    if (mm != nullptr)
                     {
-                        auto &vm = pcb->get_vma()->_vm[i];
-                        if (!vm.used)
-                            continue;
-                        if (vm.vfile == nf && (vm.flags & MAP_SHARED) && (vm.prot & PROT_WRITE))
+                        mm->for_each_vma([&](proc::vma &vm) -> bool
                         {
-                            return SYS_EBUSY;
-                        }
+                            if (vm.vfile == nf && (vm.flags & MAP_SHARED) && (vm.prot & PROT_WRITE))
+                            {
+                                has_busy_shared_writer = true;
+                                return false;
+                            }
+                            return true;
+                        });
+                    }
+                    if (has_busy_shared_writer)
+                    {
+                        return SYS_EBUSY;
                     }
                 }
             }
@@ -11448,26 +11456,21 @@ namespace syscall
             return SYS_EINVAL;
         }
 
-        for (int i = 0; i < proc::NVMA; ++i)
+        proc::ProcessMemoryManager *mm = p->get_memory_manager();
+        if (mm == nullptr)
         {
-            proc::vma &vm = p->get_vma()->_vm[i];
-            if (!vm.used)
-            {
-                continue;
-            }
+            return SYS_EINVAL;
+        }
 
-            uint64 vm_end = vm.addr + static_cast<uint64>(vm.len);
-            if (vm_end <= addr || vm.addr >= end)
-            {
-                continue;
-            }
-
+        mm->for_each_vma_in_range(addr, end, [&](proc::vma &vm) -> bool
+        {
             // LTP 覆盖的是私有匿名映射；其他映射保持旧的宽松返回策略。
             if ((vm.flags & MAP_ANONYMOUS) && (vm.flags & MAP_PRIVATE))
             {
                 vm.wipe_on_fork = (advice == MADV_WIPEONFORK);
             }
-        }
+            return true;
+        });
 
         return 0;
     }
@@ -14736,18 +14739,50 @@ namespace syscall
         uint64 aligned_len = PGROUNDUP(len);
         uint64 end_addr = addr + aligned_len;
 
+        proc::ProcessMemoryManager *mm = pcb->get_memory_manager();
+        if (mm == nullptr)
+        {
+            panic("[sys_mprotect] Current process memory manager is null");
+        }
+
+        auto segment_file_backed_bytes = [](const proc::vma &source,
+                                            uint64 segment_offset,
+                                            uint64 segment_len) -> uint64
+        {
+            if (source.file_backed_bytes == 0 || segment_len == 0)
+            {
+                return 0;
+            }
+            if (segment_offset >= source.file_backed_bytes)
+            {
+                return 0;
+            }
+            uint64 remaining = source.file_backed_bytes - segment_offset;
+            return remaining > segment_len ? segment_len : remaining;
+        };
+
         // 用 Maple Tree 做首跳命中，避免每次 mprotect 都线性扫整个 VMA 表。
         int vma_index = -1;
-        proc::vma *vm = pcb->get_memory_manager()->find_vma_covering(addr);
+        bool is_legacy_vm = false;
+        proc::vma *vm = mm->find_vma_covering(addr);
         if (vm != nullptr && end_addr <= vm->end_addr())
         {
             proc::vma *base = &pcb->get_vma()->_vm[0];
-            vma_index = static_cast<int>(vm - base);
-            printfGreen("[sys_mprotect] Found VMA[%d]: [%p, %p) for range [%p, %p)\n",
-                        vma_index, (void *)vm->addr, (void *)vm->end_addr(), (void *)addr, (void *)end_addr);
+            if (vm >= base && vm < base + proc::NVMA)
+            {
+                is_legacy_vm = true;
+                vma_index = static_cast<int>(vm - base);
+                printfGreen("[sys_mprotect] Found legacy VMA[%d]: [%p, %p) for range [%p, %p)\n",
+                            vma_index, (void *)vm->addr, (void *)vm->end_addr(), (void *)addr, (void *)end_addr);
+            }
+            else
+            {
+                printfGreen("[sys_mprotect] Found dynamic VMA [%p, %p) for range [%p, %p)\n",
+                            (void *)vm->addr, (void *)vm->end_addr(), (void *)addr, (void *)end_addr);
+            }
         }
 
-        if (vma_index == -1)
+        if (vm == nullptr || end_addr > vm->end_addr())
         {
             // 地址不在任何VMA中，直接调用protectpages修改页表权限
             printfYellow("[sys_mprotect] Address range [%p, %p) not found in any VMA, using protectpages\n",
@@ -14773,14 +14808,19 @@ namespace syscall
             return 0;
         }
 
-        // 找到了对应的VMA，现在需要处理权限修改
-        vm = &pcb->get_vma()->_vm[vma_index];
         uint64 vma_start = vm->addr;
         uint64 vma_end = vma_start + vm->len;
         int old_prot = vm->prot;
 
-        printfYellow("[sys_mprotect] VMA[%d] covers range [%p, %p), target range [%p, %p), prot: %d -> %d\n",
-                     vma_index, (void *)vma_start, (void *)vma_end, (void *)addr, (void *)end_addr, old_prot, prot);
+        printfYellow("[sys_mprotect] %sVMA%s covers range [%p, %p), target range [%p, %p), prot: %d -> %d\n",
+                     is_legacy_vm ? "[" : "",
+                     is_legacy_vm ? "]" : "",
+                     (void *)vma_start,
+                     (void *)vma_end,
+                     (void *)addr,
+                     (void *)end_addr,
+                     old_prot,
+                     prot);
 
         // 检查权限兼容性：对于文件映射，不能添加原始mmap时没有的写权限
         if (vm->vfile != nullptr && vm->vfd != -1)
@@ -14819,6 +14859,57 @@ namespace syscall
         // 记录我们创建的新VMA索引，用于失败时清理
         int created_vma_indices[2] = {-1, -1}; // 最多创建2个新VMA（前段用原VMA，中段和后段用新VMA）
         int created_vma_count = 0;
+        proc::vma *created_dynamic_vmas[2] = {nullptr, nullptr};
+        int created_dynamic_count = 0;
+        auto rollback_split_state = [&](uint64 errnum) -> uint64
+        {
+            if (!has_snapshot)
+            {
+                vm->prot = old_prot;
+                mm->rebuild_vma_index();
+                return errnum;
+            }
+
+            if (is_legacy_vm)
+            {
+                proc::vma_meta::release_metadata(*vm);
+                for (int i = 0; i < created_vma_count; i++)
+                {
+                    int idx = created_vma_indices[i];
+                    if (idx >= 0 && idx < proc::NVMA)
+                    {
+                        proc::vma *cleanup_vm = &pcb->get_vma()->_vm[idx];
+                        proc::vma_meta::release_metadata(*cleanup_vm);
+                        memset(cleanup_vm, 0, sizeof(proc::vma));
+                        cleanup_vm->backing_kind = proc::VMA_BACKING_NONE;
+                        cleanup_vm->backing_shmid = -1;
+                        cleanup_vm->backing_base = 0;
+
+                        printfYellow("[sys_mprotect] Cleaned up VMA[%d] during rollback\n", idx);
+                    }
+                }
+            }
+            else
+            {
+                proc::vma_meta::release_metadata(*vm);
+                for (int i = 0; i < created_dynamic_count; ++i)
+                {
+                    if (created_dynamic_vmas[i] != nullptr)
+                    {
+                        mm->get_vm_space().destroy_area(created_dynamic_vmas[i]);
+                    }
+                }
+            }
+
+            *vm = original_vma;
+            original_vma.vfile = nullptr;
+            original_vma.object = nullptr;
+            original_vma.private_page_overlay = nullptr;
+
+            printfYellow("[sys_mprotect] VMA state successfully rolled back\n");
+            mm->rebuild_vma_index();
+            return errnum;
+        };
 
         // 如果要修改的范围与整个VMA完全一致，直接修改VMA权限
         if (addr == vma_start && end_addr == vma_end)
@@ -14831,33 +14922,6 @@ namespace syscall
             // 需要拆分VMA
             printfCyan("[sys_mprotect] Need to split VMA for partial protection change\n");
 
-            // 查找空闲的VMA槽位
-            int free_vma_count = 0;
-            int free_vma_indices[3]; // 最多需要3个新的VMA（前、中、后）
-
-            for (int i = 0; i < proc::NVMA; i++)
-            {
-                if (!pcb->get_vma()->_vm[i].used && free_vma_count < 3)
-                {
-                    free_vma_indices[free_vma_count++] = i;
-                }
-            }
-
-            // 计算需要多少个VMA分段
-            int segments_needed = 0;
-            if (addr > vma_start)
-                segments_needed++; // 前段
-            segments_needed++;     // 中段（要修改权限的部分）
-            if (end_addr < vma_end)
-                segments_needed++; // 后段
-
-            if (free_vma_count < segments_needed - 1)
-            {
-                printfRed("[sys_mprotect] Not enough free VMA slots for splitting (need %d, have %d)\n",
-                          segments_needed - 1, free_vma_count);
-                return syscall::SYS_ENOMEM;
-            }
-
             if (!proc::vma_meta::clone_snapshot(original_vma, *vm))
             {
                 printfRed("[sys_mprotect] Failed to snapshot original VMA metadata\n");
@@ -14866,115 +14930,263 @@ namespace syscall
             source_view = *vm;
             has_snapshot = true;
 
-            int next_free_idx = 0;
             const uint64 total_pages = PGROUNDUP(static_cast<uint64>(source_view.len)) / PGSIZE;
             const uint64 front_pages = (addr - vma_start) / PGSIZE;
             const uint64 middle_pages = aligned_len / PGSIZE;
             const uint64 back_start_page = (end_addr - vma_start) / PGSIZE;
             const uint64 back_pages = total_pages - back_start_page;
-            proc::VmPrivateOverlayMap *source_overlay = source_view.private_page_overlay;
+            auto apply_existing_segment = [&](proc::vma &target,
+                                              uint64 new_addr,
+                                              uint64 new_len,
+                                              int new_prot,
+                                              uint64 delta,
+                                              proc::VmPrivateOverlayMap *overlay)
+            {
+                proc::vma_meta::discard_overlay_container(target);
+                target.addr = new_addr;
+                target.len = static_cast<int>(new_len);
+                target.prot = new_prot;
+                target.page_offset = source_view.page_offset + delta;
+                target.offset = source_view.offset + static_cast<int>(delta);
+                target.file_backed_bytes = segment_file_backed_bytes(source_view, delta, new_len);
+                target.private_page_overlay = overlay;
+                target.owner_mm = mm;
+                target.advice_state = source_view.advice_state;
+                target.guard_pages = source_view.guard_pages;
+                target.zero_fill_past_file = source_view.zero_fill_past_file;
+                target.area_kind = source_view.area_kind;
+                target.grow_policy = source_view.grow_policy;
+                target.backing_kind = source_view.backing_kind;
+                target.backing_shmid = source_view.backing_shmid;
+                target.backing_base = source_view.backing_base;
+            };
 
-            // 如果有前段（addr > vma_start），保留原VMA作为前段
-            if (addr > vma_start)
+            auto create_dynamic_split_area = [&](uint64 new_addr,
+                                                 uint64 new_len,
+                                                 int new_prot,
+                                                 uint64 delta,
+                                                 proc::VmPrivateOverlayMap *overlay) -> proc::vma *
             {
-                // 原VMA变成前段
-                proc::VmPrivateOverlayMap *front_overlay =
-                    proc::vma_meta::clone_overlay_subset(source_view, 0, front_pages, false);
-                vm->private_page_overlay = front_overlay;
-                vm->len = addr - vma_start;
-                vm->page_offset = source_view.page_offset;
-                vm->offset = source_view.offset;
-                printfGreen("[sys_mprotect] Created front segment: VMA[%d] [%p, %p) prot=%d\n",
-                            vma_index, (void *)vm->addr, (void *)(vm->addr + vm->len), vm->prot);
-            }
-            else
-            {
-                // 没有前段，原VMA将被重用作为中段或后段
-            }
-
-            // 创建中段（要修改权限的部分）
-            int middle_vma_idx;
-            if (addr > vma_start)
-            {
-                // 有前段，需要新VMA作为中段
-                middle_vma_idx = free_vma_indices[next_free_idx++];
-                created_vma_indices[created_vma_count++] = middle_vma_idx;
-            }
-            else
-            {
-                // 没有前段，重用原VMA作为中段
-                middle_vma_idx = vma_index;
-            }
-
-            proc::vma *middle_vm = &pcb->get_vma()->_vm[middle_vma_idx];
-            proc::VmPrivateOverlayMap *middle_overlay =
-                proc::vma_meta::clone_overlay_subset(source_view, front_pages, middle_pages, false);
-            *middle_vm = source_view;
-            if (middle_vma_idx != vma_index)
-            {
-                if (middle_vm->object != nullptr)
+                proc::VmObject *new_object = source_view.object;
+                if (new_object != nullptr)
                 {
-                    middle_vm->object->get();
+                    new_object->get();
                 }
+                proc::vma *new_vm = mm->get_vm_space().create_area(new_addr,
+                                                                   new_len,
+                                                                   new_prot,
+                                                                   source_view.flags,
+                                                                   new_object,
+                                                                   source_view.page_offset + delta,
+                                                                   source_view.area_kind,
+                                                                   source_view.grow_policy,
+                                                                   source_view.guard_pages,
+                                                                   source_view.debug_name);
+                if (new_vm == nullptr)
+                {
+                    if (new_object != nullptr && new_object->put())
+                    {
+                        delete new_object;
+                    }
+                    return nullptr;
+                }
+
+                new_vm->vfd = source_view.vfd;
+                if (source_view.vfile != nullptr)
+                {
+                    source_view.vfile->dup();
+                    new_vm->vfile = source_view.vfile;
+                }
+                else
+                {
+                    new_vm->vfile = nullptr;
+                }
+                new_vm->offset = source_view.offset + static_cast<int>(delta);
+                new_vm->max_len = source_view.max_len;
+                new_vm->is_expandable = source_view.is_expandable;
+                new_vm->backing_kind = source_view.backing_kind;
+                new_vm->backing_shmid = source_view.backing_shmid;
+                new_vm->backing_base = source_view.backing_base;
+                new_vm->has_resident_pages = source_view.has_resident_pages;
+                new_vm->wipe_on_fork = source_view.wipe_on_fork;
+                new_vm->advice_state = source_view.advice_state;
+                new_vm->zero_fill_past_file = source_view.zero_fill_past_file;
+                new_vm->file_backed_bytes = segment_file_backed_bytes(source_view, delta, new_len);
+                new_vm->private_page_overlay = overlay;
+                return new_vm;
+            };
+
+            if (is_legacy_vm)
+            {
+                // 查找空闲的VMA槽位
+                int free_vma_count = 0;
+                int free_vma_indices[3]; // 最多需要3个新的VMA（前、中、后）
+
+                for (int i = 0; i < proc::NVMA; i++)
+                {
+                    if (!pcb->get_vma()->_vm[i].used && free_vma_count < 3)
+                    {
+                        free_vma_indices[free_vma_count++] = i;
+                    }
+                }
+
+                // 计算需要多少个VMA分段
+                int segments_needed = 0;
+                if (addr > vma_start)
+                    segments_needed++; // 前段
+                segments_needed++;     // 中段（要修改权限的部分）
+                if (end_addr < vma_end)
+                    segments_needed++; // 后段
+
+                if (free_vma_count < segments_needed - 1)
+                {
+                    printfRed("[sys_mprotect] Not enough free VMA slots for splitting (need %d, have %d)\n",
+                              segments_needed - 1, free_vma_count);
+                    return syscall::SYS_ENOMEM;
+                }
+
+                int next_free_idx = 0;
+
+                if (addr > vma_start)
+                {
+                    proc::VmPrivateOverlayMap *front_overlay =
+                        proc::vma_meta::clone_overlay_subset(source_view, 0, front_pages, false);
+                    vm->private_page_overlay = front_overlay;
+                    vm->len = addr - vma_start;
+                    vm->page_offset = source_view.page_offset;
+                    vm->offset = source_view.offset;
+                    printfGreen("[sys_mprotect] Created front segment: VMA[%d] [%p, %p) prot=%d\n",
+                                vma_index, (void *)vm->addr, (void *)(vm->addr + vm->len), vm->prot);
+                }
+
+                int middle_vma_idx;
+                if (addr > vma_start)
+                {
+                    middle_vma_idx = free_vma_indices[next_free_idx++];
+                    created_vma_indices[created_vma_count++] = middle_vma_idx;
+                }
+                else
+                {
+                    middle_vma_idx = vma_index;
+                }
+
+                proc::vma *middle_vm = &pcb->get_vma()->_vm[middle_vma_idx];
+                proc::VmPrivateOverlayMap *middle_overlay =
+                    proc::vma_meta::clone_overlay_subset(source_view, front_pages, middle_pages, false);
+                *middle_vm = source_view;
+                if (middle_vma_idx != vma_index)
+                {
+                    if (middle_vm->object != nullptr)
+                    {
+                        middle_vm->object->get();
+                    }
+                    if (middle_vm->vfile != nullptr)
+                    {
+                        middle_vm->vfile->dup();
+                    }
+                }
+                middle_vm->used = 1;
+                middle_vm->addr = addr;
+                middle_vm->len = aligned_len;
+                middle_vm->prot = prot;
+                middle_vm->private_page_overlay = middle_overlay;
+                middle_vm->page_offset = source_view.page_offset + (addr - vma_start);
                 if (middle_vm->vfile != nullptr)
                 {
-                    middle_vm->vfile->dup();
+                    middle_vm->offset = source_view.offset + (addr - vma_start);
+                }
+
+                printfGreen("[sys_mprotect] Created middle segment: VMA[%d] [%p, %p) prot=%d\n",
+                            middle_vma_idx, (void *)middle_vm->addr, (void *)(middle_vm->addr + middle_vm->len), middle_vm->prot);
+
+                if (end_addr < vma_end)
+                {
+                    int back_vma_idx = free_vma_indices[next_free_idx++];
+                    created_vma_indices[created_vma_count++] = back_vma_idx;
+
+                    proc::vma *back_vm = &pcb->get_vma()->_vm[back_vma_idx];
+                    proc::VmPrivateOverlayMap *back_overlay =
+                        proc::vma_meta::clone_overlay_subset(source_view, back_start_page, back_pages, false);
+                    *back_vm = source_view;
+                    if (back_vm->object != nullptr)
+                    {
+                        back_vm->object->get();
+                    }
+                    if (back_vm->vfile != nullptr)
+                    {
+                        back_vm->vfile->dup();
+                    }
+                    back_vm->used = 1;
+                    back_vm->addr = end_addr;
+                    back_vm->len = vma_end - end_addr;
+                    back_vm->prot = old_prot;
+                    back_vm->private_page_overlay = back_overlay;
+                    back_vm->page_offset = source_view.page_offset + (end_addr - vma_start);
+                    if (back_vm->vfile != nullptr)
+                    {
+                        back_vm->offset = source_view.offset + (end_addr - vma_start);
+                    }
+
+                    printfGreen("[sys_mprotect] Created back segment: VMA[%d] [%p, %p) prot=%d\n",
+                                back_vma_idx, (void *)back_vm->addr, (void *)(back_vm->addr + back_vm->len), back_vm->prot);
+                }
+
+                if (source_view.private_page_overlay != nullptr)
+                {
+                    delete source_view.private_page_overlay;
                 }
             }
-            middle_vm->used = 1;
-            middle_vm->addr = addr;
-            middle_vm->len = aligned_len;
-            middle_vm->prot = prot;
-            middle_vm->private_page_overlay = middle_overlay;
-            middle_vm->page_offset = source_view.page_offset + (addr - vma_start);
-
-            // 调整文件偏移（如果是文件映射）
-            if (middle_vm->vfile != nullptr)
+            else
             {
-                middle_vm->offset = source_view.offset + (addr - vma_start);
-            }
-
-            printfGreen("[sys_mprotect] Created middle segment: VMA[%d] [%p, %p) prot=%d\n",
-                        middle_vma_idx, (void *)middle_vm->addr, (void *)(middle_vm->addr + middle_vm->len), middle_vm->prot);
-
-            // 如果有后段（end_addr < vma_end），创建后段
-            if (end_addr < vma_end)
-            {
-                int back_vma_idx = free_vma_indices[next_free_idx++];
-                created_vma_indices[created_vma_count++] = back_vma_idx;
-
-                proc::vma *back_vm = &pcb->get_vma()->_vm[back_vma_idx];
+                proc::VmPrivateOverlayMap *front_overlay =
+                    addr > vma_start ? proc::vma_meta::clone_overlay_subset(source_view, 0, front_pages, false) : nullptr;
+                proc::VmPrivateOverlayMap *middle_overlay =
+                    proc::vma_meta::clone_overlay_subset(source_view, front_pages, middle_pages, false);
                 proc::VmPrivateOverlayMap *back_overlay =
-                    proc::vma_meta::clone_overlay_subset(source_view, back_start_page, back_pages, false);
-                *back_vm = source_view;
-                if (back_vm->object != nullptr)
-                {
-                    back_vm->object->get();
-                }
-                if (back_vm->vfile != nullptr)
-                {
-                    back_vm->vfile->dup();
-                }
-                back_vm->used = 1;
-                back_vm->addr = end_addr;
-                back_vm->len = vma_end - end_addr;
-                back_vm->prot = old_prot; // 保持原来的权限
-                back_vm->private_page_overlay = back_overlay;
-                back_vm->page_offset = source_view.page_offset + (end_addr - vma_start);
+                    end_addr < vma_end ? proc::vma_meta::clone_overlay_subset(source_view, back_start_page, back_pages, false) : nullptr;
 
-                // 调整文件偏移（如果是文件映射）
-                if (back_vm->vfile != nullptr)
+                if (addr > vma_start)
                 {
-                    back_vm->offset = source_view.offset + (end_addr - vma_start);
+                    apply_existing_segment(*vm,
+                                           vma_start,
+                                           addr - vma_start,
+                                           old_prot,
+                                           0,
+                                           front_overlay);
+                    created_dynamic_vmas[created_dynamic_count++] =
+                        create_dynamic_split_area(addr,
+                                                  aligned_len,
+                                                  prot,
+                                                  addr - vma_start,
+                                                  middle_overlay);
+                    if (created_dynamic_vmas[created_dynamic_count - 1] == nullptr)
+                    {
+                        return rollback_split_state(syscall::SYS_ENOMEM);
+                    }
+                }
+                else
+                {
+                    apply_existing_segment(*vm,
+                                           vma_start,
+                                           aligned_len,
+                                           prot,
+                                           0,
+                                           middle_overlay);
                 }
 
-                printfGreen("[sys_mprotect] Created back segment: VMA[%d] [%p, %p) prot=%d\n",
-                            back_vma_idx, (void *)back_vm->addr, (void *)(back_vm->addr + back_vm->len), back_vm->prot);
-            }
-
-            if (source_overlay != nullptr)
-            {
-                delete source_overlay;
+                if (end_addr < vma_end)
+                {
+                    proc::vma *back_vm = create_dynamic_split_area(end_addr,
+                                                                   vma_end - end_addr,
+                                                                   old_prot,
+                                                                   end_addr - vma_start,
+                                                                   back_overlay);
+                    if (back_vm == nullptr)
+                    {
+                        return rollback_split_state(syscall::SYS_ENOMEM);
+                    }
+                    created_dynamic_vmas[created_dynamic_count++] = back_vm;
+                }
             }
         }
 
@@ -14983,44 +15195,7 @@ namespace syscall
         {
             printfRed("[sys_mprotect] protectpages failed for range [%p, %p), rolling back VMA changes\n",
                       (void *)addr, (void *)end_addr);
-
-            if (!has_snapshot)
-            {
-                vm->prot = old_prot;
-                pcb->get_memory_manager()->rebuild_vma_index();
-                return syscall::SYS_EFAULT;
-            }
-
-            // 恢复 VMA 状态：
-            // 1. 先释放当前拆分出来的 live 元数据；
-            // 2. 再把快照转回原 VMA。
-            proc::vma_meta::release_metadata(*vm);
-
-            // 2. 清理我们创建的新VMA
-            for (int i = 0; i < created_vma_count; i++)
-            {
-                int idx = created_vma_indices[i];
-                if (idx >= 0 && idx < proc::NVMA)
-                {
-                    proc::vma *cleanup_vm = &pcb->get_vma()->_vm[idx];
-                    proc::vma_meta::release_metadata(*cleanup_vm);
-                    memset(cleanup_vm, 0, sizeof(proc::vma));
-                    cleanup_vm->backing_kind = proc::VMA_BACKING_NONE;
-                    cleanup_vm->backing_shmid = -1;
-                    cleanup_vm->backing_base = 0;
-
-                    printfYellow("[sys_mprotect] Cleaned up VMA[%d] during rollback\n", idx);
-                }
-            }
-
-            *vm = original_vma;
-            original_vma.vfile = nullptr;
-            original_vma.object = nullptr;
-            original_vma.private_page_overlay = nullptr;
-
-            printfYellow("[sys_mprotect] VMA state successfully rolled back\n");
-            pcb->get_memory_manager()->rebuild_vma_index();
-            return syscall::SYS_EFAULT;
+            return rollback_split_state(syscall::SYS_EFAULT);
         }
 
         // 刷新TLB以确保权限更改生效
@@ -15037,7 +15212,7 @@ namespace syscall
 
         printfGreen("[sys_mprotect] Success: changed protection for range [%p, %p) to %d\n",
                     (void *)addr, (void *)end_addr, prot);
-        pcb->get_memory_manager()->rebuild_vma_index();
+        mm->rebuild_vma_index();
 
         return 0;
     }
@@ -18018,45 +18193,44 @@ namespace syscall
         };
 
         bool found_mapping = false;
-        for (int i = 0; i < proc::NVMA; ++i)
+        int iterate_result = 0;
+        proc::ProcessMemoryManager *mm = p->get_memory_manager();
+        if (mm == nullptr)
         {
-            proc::vma *vm = &p->get_vma()->_vm[i];
-            if (!vm->used)
-                continue;
+            return -ESRCH;
+        }
 
-            const uint64 vma_start = vm->addr;
-            const uint64 vma_end = vma_start + static_cast<uint64>(vm->len);
-            if (sync_end <= vma_start || sync_start >= vma_end)
-            {
-                continue;
-            }
-
+        mm->for_each_vma_in_range(sync_start, sync_end, [&](proc::vma &vm) -> bool
+        {
             found_mapping = true;
+            const uint64 vma_start = vm.addr;
+            const uint64 vma_end = vma_start + static_cast<uint64>(vm.len);
             const uint64 overlap_start = MAX(sync_start, vma_start);
             const uint64 overlap_end = MIN(sync_end, vma_end);
-            if ((vm->flags & MAP_SHARED) == 0 || vm->vfile == nullptr)
+            if ((vm.flags & MAP_SHARED) == 0 || vm.vfile == nullptr)
             {
-                continue;
+                return true;
             }
 
             fs::Kstat st{};
-            int stat_ret = fs::k_vfs.fstat(vm->vfile, &st);
+            int stat_ret = fs::k_vfs.fstat(vm.vfile, &st);
             if (stat_ret != EOK)
             {
-                return stat_ret < 0 ? stat_ret : -stat_ret;
+                iterate_result = stat_ret < 0 ? stat_ret : -stat_ret;
+                return false;
             }
 
             const uint64 page_start = PGROUNDDOWN(overlap_start);
             const uint64 page_end = PGROUNDUP(overlap_end);
             const bool write_this_vma =
-                writeback_requested && (vm->prot & PROT_WRITE) != 0;
+                writeback_requested && (vm.prot & PROT_WRITE) != 0;
 
             if (write_this_vma)
             {
                 for (uint64 page_va = page_start; page_va < page_end; page_va += PGSIZE)
                 {
                     uint64 kernel_page = 0;
-                    if (!page_kernel_address(*vm, page_va, kernel_page))
+                    if (!page_kernel_address(vm, page_va, kernel_page))
                     {
                         continue;
                     }
@@ -18064,7 +18238,7 @@ namespace syscall
                     const uint64 data_start = MAX(page_va, overlap_start);
                     uint64 data_end = MIN(page_va + PGSIZE, overlap_end);
                     uint64 file_offset =
-                        static_cast<uint64>(vm->offset) + (data_start - vma_start);
+                        static_cast<uint64>(vm.offset) + (data_start - vma_start);
                     if (file_offset >= st.size)
                     {
                         continue;
@@ -18076,49 +18250,53 @@ namespace syscall
 
                     const size_t data_len = static_cast<size_t>(data_end - data_start);
                     const uint64 kernel_buf = kernel_page + (data_start - page_va);
-                    int write_ret = vm->vfile->write(kernel_buf,
-                                                     data_len,
-                                                     static_cast<long>(file_offset),
-                                                     false);
+                    int write_ret = vm.vfile->write(kernel_buf,
+                                                    data_len,
+                                                    static_cast<long>(file_offset),
+                                                    false);
                     if (write_ret < 0 || static_cast<size_t>(write_ret) != data_len)
                     {
-                        return -EIO;
+                        iterate_result = -EIO;
+                        return false;
                     }
                 }
 
-                int flush_ret = vm->vfile->flush_visibility_state();
+                int flush_ret = vm.vfile->flush_visibility_state();
                 if (flush_ret < 0)
                 {
-                    return flush_ret;
+                    iterate_result = flush_ret;
+                    return false;
                 }
             }
 
             if (!invalidate)
             {
-                continue;
+                return true;
             }
 
             // MS_INVALIDATE 以文件当前内容为权威。先提交同一 open file description
             // 以及同一路径其它 fd 上尚未落盘的 write，再丢弃读取快照，
             // 最后刷新已驻留的映射页。普通文件 VMA 使用独立 backing handle，
-            // 只刷新 vm->vfile 会遗漏 mmap 之后原 fd 的写合并缓存。
+            // 只刷新 vm.vfile 会遗漏 mmap 之后原 fd 的写合并缓存。
             int path_flush_ret =
-                proc::k_pm.flush_open_files_for_path(vm->vfile->backing_path());
+                proc::k_pm.flush_open_files_for_path(vm.vfile->backing_path());
             if (path_flush_ret < 0)
             {
-                return path_flush_ret;
+                iterate_result = path_flush_ret;
+                return false;
             }
-            int flush_ret = vm->vfile->flush_visibility_state();
+            int flush_ret = vm.vfile->flush_visibility_state();
             if (flush_ret < 0)
             {
-                return flush_ret;
+                iterate_result = flush_ret;
+                return false;
             }
-            vm->vfile->invalidate_cached_file_data();
+            vm.vfile->invalidate_cached_file_data();
 
             for (uint64 page_va = page_start; page_va < page_end; page_va += PGSIZE)
             {
                 uint64 kernel_page = 0;
-                if (!page_kernel_address(*vm, page_va, kernel_page))
+                if (!page_kernel_address(vm, page_va, kernel_page))
                 {
                     // 非驻留普通文件页无需主动装入；后续缺页会读取最新文件内容。
                     continue;
@@ -18127,7 +18305,7 @@ namespace syscall
                 const uint64 data_start = MAX(page_va, overlap_start);
                 uint64 data_end = MIN(page_va + PGSIZE, overlap_end);
                 uint64 file_offset =
-                    static_cast<uint64>(vm->offset) + (data_start - vma_start);
+                    static_cast<uint64>(vm.offset) + (data_start - vma_start);
                 if (file_offset >= st.size)
                 {
                     continue;
@@ -18139,15 +18317,21 @@ namespace syscall
 
                 const size_t data_len = static_cast<size_t>(data_end - data_start);
                 const uint64 kernel_buf = kernel_page + (data_start - page_va);
-                int read_ret = vm->vfile->read(kernel_buf,
-                                               data_len,
-                                               static_cast<long>(file_offset),
-                                               false);
+                int read_ret = vm.vfile->read(kernel_buf,
+                                              data_len,
+                                              static_cast<long>(file_offset),
+                                              false);
                 if (read_ret < 0 || static_cast<size_t>(read_ret) != data_len)
                 {
-                    return -EIO;
+                    iterate_result = -EIO;
+                    return false;
                 }
             }
+            return true;
+        });
+        if (iterate_result != 0)
+        {
+            return iterate_result;
         }
 
         if (!found_mapping)
@@ -18925,19 +19109,18 @@ namespace syscall
             return SYS_ESRCH;
         }
 
-        for (int i = 0; i < proc::NVMA; ++i)
+        proc::ProcessMemoryManager *mm = pcb->get_memory_manager();
+        if (mm == nullptr)
         {
-            proc::vma &vm = pcb->get_vma()->_vm[i];
-            if (!vm.used)
-            {
-                continue;
-            }
+            return SYS_ESRCH;
+        }
 
-            uint64 vm_start = vm.addr;
-            uint64 vm_end = vm_start + static_cast<uint64>(vm.len);
-            if (start < vm_start || end > vm_end)
+        int iterate_result = SYS_EINVAL;
+        mm->for_each_vma_in_range(start, end, [&](proc::vma &vm) -> bool
+        {
+            if (start < vm.addr || end > vm.addr + static_cast<uint64>(vm.len))
             {
-                continue;
+                return true;
             }
 
             /*
@@ -18948,16 +19131,15 @@ namespace syscall
             if (vm.backing_kind == proc::VMA_BACKING_SHM && vm.backing_shmid >= 0)
             {
                 shm::shm_segment seg = shm::k_smm.get_seg_info(vm.backing_shmid);
-                if (seg.shmid < 0 || (seg.mode & SHM_DEST))
-                {
-                    return -abi::k_eidrm;
-                }
-                return SYS_EINVAL;
+                iterate_result = (seg.shmid < 0 || (seg.mode & SHM_DEST)) ? -abi::k_eidrm : SYS_EINVAL;
+                return false;
             }
-            return 0;
-        }
 
-        return SYS_EINVAL;
+            iterate_result = 0;
+            return false;
+        });
+
+        return iterate_result;
     }
     uint64 SyscallHandler::sys_splice()
     {

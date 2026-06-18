@@ -4,6 +4,18 @@
 #include <EASTL/string.h>
 #include "devs/spinlock.hh"
 #include "proc.hh"
+
+namespace fs
+{
+    class file;
+}
+
+namespace proc
+{
+    class FileVmObject;
+    class SysvShmVmObject;
+    class VmObject;
+}
 namespace shm
 {
     constexpr uint64 k_mmap_backing_ipc_namespace_id = 0;
@@ -40,7 +52,8 @@ namespace shm
 		}__attribute__((__packed__));
     // 每次附加记录为 (tid, addr)，避免跨进程/线程的地址混淆
     eastl::vector<attached_entry> attached_addrs;
-        uint64 phy_addrs;  // 物理地址
+        uint64 phy_addrs;  // 旧实现的预留物理地址；对象化后端下保持为0，仅保留给兼容查询
+        proc::SysvShmVmObject *object = nullptr; // SysV SHM 统一对象后端，由管理器持有生命周期
         
         // 时间信息（POSIX标准：自Unix纪元以来的秒数）
         time_t atime;      // 最后访问时间 (shmat) - 使用timer_manager获取REALTIME
@@ -92,6 +105,8 @@ namespace shm
         uint64 shm_base;
         uint64 shm_size;
         mutable SpinLock shm_lock_; // 保护共享段容器、附加记录与空闲块元数据
+        eastl::unordered_map<eastl::string, proc::FileVmObject *> *shared_file_objects;
+        eastl::unordered_map<uint64, proc::VmObject *> *registered_objects;
         
         // 空闲内存块管理 - 使用vector来存储空闲块，保持按地址排序
         eastl::vector<free_block> free_blocks;
@@ -184,7 +199,17 @@ namespace shm
         void print_memory_status() const;  // 打印内存使用状况
         size_t get_total_free_memory() const;  // 获取总空闲内存
         size_t get_largest_free_block() const;  // 获取最大空闲块大小
+
+        // 通用对象管理接口：
+        // 共享文件映射从这里拿可复用对象，SysV SHM/普通对象析构也统一回这里做索引回收。
+        proc::FileVmObject *acquire_shared_file_object(fs::file *file_obj);
+        proc::SysvShmVmObject *acquire_sysv_object(int shmid);
+        void note_object_created(proc::VmObject *object);
+        void note_object_destroying(const proc::VmObject *object);
+        void release_shared_file_object_if_unused(proc::VmObject *object);
     };
+
+    using VmObjectManager = ShmManager;
 
     extern ShmManager k_smm; // 全局共享内存管理器实例
 }

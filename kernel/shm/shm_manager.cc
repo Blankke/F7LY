@@ -10,6 +10,7 @@
 #include "mem.hh"
 #include "fs/lwext4/ext4_errno.hh"  // 为了获取错误码定义
 #include "tm/timer_manager.hh"
+#include "proc/vm_object.hh"
 namespace shm
 {
     ShmManager k_smm; // 全局共享内存管理器实例
@@ -38,24 +39,22 @@ namespace shm
 
         inline bool is_vma_backed_shared_attachment(proc::Pcb *proc, uint64 addr)
         {
-            if (proc == nullptr || proc->get_vma() == nullptr)
+            if (proc == nullptr || proc->get_memory_manager() == nullptr)
             {
                 return false;
             }
 
-            for (int i = 0; i < proc::NVMA; ++i)
+            bool matched = false;
+            proc->get_memory_manager()->for_each_vma([&](const proc::vma &vm) -> bool
             {
-                const proc::vma &vm = proc->get_vma()->_vm[i];
-                if (!vm.used || vm.backing_kind != proc::VMA_BACKING_SHM)
+                if (vm.backing_kind == proc::VMA_BACKING_SHM && vm.backing_base == addr)
                 {
-                    continue;
+                    matched = true;
+                    return false;
                 }
-                if (vm.backing_base == addr)
-                {
-                    return true;
-                }
-            }
-            return false;
+                return true;
+            });
+            return matched;
         }
 
         inline uint64 current_ipc_namespace_id()
@@ -83,11 +82,9 @@ namespace shm
         // 初始化时整个内存区域都是空闲的
         free_blocks.clear();
         free_blocks.push_back({base, size});
-        segments =new eastl::unordered_map<int, shm_segment>();
-        // 显式初始化 segments 容器
-
-        // 注意：不进行预分配，避免在内核环境中的内存分配问题
-         
+        segments = new eastl::unordered_map<int, shm_segment>();
+        shared_file_objects = new eastl::unordered_map<eastl::string, proc::FileVmObject *>();
+        registered_objects = new eastl::unordered_map<uint64, proc::VmObject *>();
     }
 
     uint64 ShmManager::allocate_memory(size_t size)
@@ -322,10 +319,8 @@ namespace shm
                 }
 
                 if (conflict != nullptr && conflict->addr < end_addr) {
-                    const proc::vma *base = &proc->get_vma()->_vm[0];
-                    int vma_index = static_cast<int>(conflict - base);
-                    printfRed("[ShmManager] Address range [0x%x, 0x%x] conflicts with VMA %d [0x%x, 0x%x]\n",
-                             addr, end_addr, vma_index, conflict->addr, conflict->end_addr());
+                    printfRed("[ShmManager] Address range [0x%x, 0x%x] conflicts with VMA [%p, %p]\n",
+                             addr, end_addr, (void *)conflict->addr, (void *)conflict->end_addr());
                 }
                 return true;
             }
@@ -496,13 +491,6 @@ namespace shm
             return -ENOSPC;
         }
         
-        // 使用新的内存分配方法
-        uint64 allocated_addr = allocate_memory(size);
-        if (allocated_addr == 0) {
-            printfRed("[ShmManager] Failed to allocate memory for size=0x%x\n", size);
-            return -ENOMEM; // 内存不足
-        }
-
         // 创建新的共享内存段
         shm_segment new_seg = {};
         new_seg.shmid = next_shmid++;
@@ -511,7 +499,7 @@ namespace shm
         new_seg.size = size;                      // 保存用户请求的原始大小
         new_seg.real_size = PGROUNDUP(size);      // 页对齐的实际分配大小
         new_seg.shmflg = shmflg;
-        new_seg.phy_addrs = allocated_addr;       // 设置分配得到的物理地址
+        new_seg.phy_addrs = 0;
         new_seg.attached_addrs.clear();          // 初始化附加地址列表为空
         
         // 初始化时间信息 (按照标准)
@@ -535,9 +523,32 @@ namespace shm
         new_seg.nattch = 0;                           // shm_nattch 设为 0
         new_seg.auto_destroy_on_last_detach = false; // 默认遵循 SysV SHM 生命周期
         new_seg.seq = 0;                              // 初始序列号
-        
-        // 清零段内容 (按照标准要求) - 使用实际分配的大小
-        memset((void *)allocated_addr, 0, new_seg.real_size); // 清零物理内存
+
+        proc::SysvShmMetadata meta = {};
+        meta.shmid = new_seg.shmid;
+        meta.ipc_ns_id = new_seg.ipc_ns_id;
+        meta.key = new_seg.key;
+        meta.size = new_seg.size;
+        meta.real_size = new_seg.real_size;
+        meta.shmflg = new_seg.shmflg;
+        meta.atime = new_seg.atime;
+        meta.dtime = new_seg.dtime;
+        meta.ctime = new_seg.ctime;
+        meta.creator_pid = new_seg.creator_pid;
+        meta.last_pid = new_seg.last_pid;
+        meta.owner_uid = new_seg.owner_uid;
+        meta.owner_gid = new_seg.owner_gid;
+        meta.creator_uid = new_seg.creator_uid;
+        meta.creator_gid = new_seg.creator_gid;
+        meta.mode = new_seg.mode;
+        meta.nattch = new_seg.nattch;
+        meta.auto_destroy_on_last_detach = new_seg.auto_destroy_on_last_detach;
+        meta.seq = new_seg.seq;
+        new_seg.object = new proc::SysvShmVmObject(meta);
+        if (new_seg.object == nullptr)
+        {
+            return -ENOMEM;
+        }
 
         segments->insert({new_seg.shmid, new_seg});
         
@@ -560,14 +571,132 @@ namespace shm
 
         shm_segment &seg = it->second;
 
-        // 回收内存到空闲块 - 使用实际分配的大小
-        deallocate_memory(seg.phy_addrs, seg.real_size);
-
-        // printfYellow("[ShmManager] Deleted segment shmid=%d, freed addr=0x%x, size=0x%x\n",
-        //             shmid, seg.phy_addrs, seg.size);
+        if (seg.object != nullptr)
+        {
+            proc::SysvShmVmObject *obj = seg.object;
+            seg.object = nullptr;
+            if (obj->put())
+            {
+                delete obj;
+            }
+        }
 
         segments->erase(it); // 从容器中删除共享内存段
         return 0;
+    }
+
+    proc::FileVmObject *ShmManager::acquire_shared_file_object(fs::file *file_obj)
+    {
+        if (file_obj == nullptr)
+        {
+            return nullptr;
+        }
+
+        SpinLockGuard guard(shm_lock_);
+        const eastl::string &cache_key = file_obj->backing_path();
+        if (cache_key.empty())
+        {
+            // 没有稳定 backing key 的文件对象（例如部分匿名后端/临时句柄）
+            // 不能硬塞进同一个空 key 缓存，否则不同映射会被错误共享。
+            return new proc::FileVmObject(file_obj, true, false, {});
+        }
+        auto existing = shared_file_objects->find(cache_key);
+        if (existing != shared_file_objects->end() && existing->second != nullptr)
+        {
+            existing->second->get();
+            return existing->second;
+        }
+
+        proc::FileVmObject *object = new proc::FileVmObject(file_obj, true, false, cache_key);
+        if (object == nullptr)
+        {
+            return nullptr;
+        }
+
+        (*shared_file_objects)[cache_key] = object;
+        object->get(); // 额外给调用方一份引用；缓存自己保留一份
+        return object;
+    }
+
+    proc::SysvShmVmObject *ShmManager::acquire_sysv_object(int shmid)
+    {
+        SpinLockGuard guard(shm_lock_);
+        auto it = segments->find(shmid);
+        if (it == segments->end() || it->second.object == nullptr)
+        {
+            return nullptr;
+        }
+
+        it->second.object->get();
+        return it->second.object;
+    }
+
+    void ShmManager::note_object_created(proc::VmObject *object)
+    {
+        if (object == nullptr || registered_objects == nullptr)
+        {
+            return;
+        }
+
+        SpinLockGuard guard(shm_lock_);
+        (*registered_objects)[object->object_id()] = object;
+    }
+
+    void ShmManager::note_object_destroying(const proc::VmObject *object)
+    {
+        if (object == nullptr || registered_objects == nullptr)
+        {
+            return;
+        }
+
+        SpinLockGuard guard(shm_lock_);
+        registered_objects->erase(object->object_id());
+
+        const eastl::string *cache_key = object->shared_cache_key();
+        if (cache_key == nullptr || shared_file_objects == nullptr)
+        {
+            return;
+        }
+
+        auto it = shared_file_objects->find(*cache_key);
+        if (it != shared_file_objects->end() && it->second == object)
+        {
+            shared_file_objects->erase(it);
+        }
+    }
+
+    void ShmManager::release_shared_file_object_if_unused(proc::VmObject *object)
+    {
+        if (object == nullptr || shared_file_objects == nullptr)
+        {
+            return;
+        }
+
+        const eastl::string *cache_key = object->shared_cache_key();
+        if (cache_key == nullptr)
+        {
+            return;
+        }
+
+        SpinLockGuard guard(shm_lock_);
+        auto it = shared_file_objects->find(*cache_key);
+        if (it == shared_file_objects->end() || it->second != object)
+        {
+            return;
+        }
+
+        // 当前只有“缓存引用 + 本次 area 引用”时，才把缓存主动撤掉，
+        // 避免临时文件/短生命周期共享映射把对象一直留在全局索引里。
+        if (object->ref_count_for_debug() != 2)
+        {
+            return;
+        }
+
+        shared_file_objects->erase(it);
+        if (object->put())
+        {
+            delete object;
+        }
     }
     void *ShmManager::attach_seg(int shmid, void *shmaddr, int shmflg, bool register_vma)
     {
@@ -651,51 +780,10 @@ namespace shm
             }
         }
 
-        // 设置页表权限标志
-        int flags = 0;
-#ifdef RISCV
-        flags |= PTE_U; // 用户可访问
-#elif defined(LOONGARCH)
-        flags |= PTE_MAT | PTE_PLV | PTE_P; // 用户可访问，dirty 只授予可写映射
-#endif
-
-        // 根据shmflg和权限设置读写权限
-        if (shmflg & SHM_RDONLY)
-        {
-            flags |= PTE_R; // 只读权限
-        }
-        else if(shmflg & SHM_NONE)
-        {
-            flags =0;
-        }
-        else
-        {
-            flags |= PTE_R | PTE_W; // 读写权限
-#ifdef LOONGARCH
-            flags |= PTE_D;
-#endif
-        }
-
-        // 建立物理内存和虚拟内存的映射 - 使用实际分配的页对齐大小
-        bool map_result = mem::k_vmm.map_pages(
-            *current_proc->get_pagetable(),     // 当前进程页表
-            attach_addr,           // 虚拟地址
-            seg.real_size,         // 映射大小（页对齐）
-            seg.phy_addrs,         // 物理地址
-            flags                  // 权限标志
-        );
-
-        if (!map_result)
-        {
-            printfRed("[ShmManager] Failed to map pages for shmid=%d at addr=0x%x\n", shmid, attach_addr);
-            return (void *)-ENOMEM;  // 数据空间不足
-        }
-
         /*
-         * SysV SHM 过去只改页表，不登记 VMA。
-         * 这样 fork() 后 clone_for_fork() 无法感知这段共享映射，子进程会丢失实际映射，
-         * 像 iozone throughput 这种依赖 fork 后共享状态区的程序就会永久卡在 READY/BEGIN 协议里。
-         * 这里统一把 shmat 也纳入共享 VMA 生命周期，让 fork/exit/shmdt 走同一套模型。
+         * 现在 shmat 只登记共享对象元数据，把真实页安装延后到统一缺页路径。
+         * 这样 SysV SHM、MAP_SHARED 文件映射、匿名共享页都能走同一套页源语义，
+         * 而不是继续在这里直接改页表。
          */
         int prot = PROT_NONE;
         if (shmflg & SHM_RDONLY)
@@ -717,10 +805,6 @@ namespace shm
                                                          shmid,
                                                          attach_addr)))
         {
-            mem::k_vmm.vmunmap(*current_proc->get_pagetable(),
-                               attach_addr,
-                               seg.real_size / PGSIZE,
-                               0);
             printfRed("[ShmManager] Failed to register shared VMA for shmid=%d at addr=0x%x\n",
                       shmid, attach_addr);
             return (void *)-ENOMEM;

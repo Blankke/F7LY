@@ -17,6 +17,7 @@
 #include "fs/lwext4/ext4_errno.hh"
 #include "process_memory_manager.hh" // 新增：进程内存管理器
 #include "vm_object.hh"
+#include "vma_metadata_utils.hh"
 #include "shm_manager.hh"
 #ifdef RISCV
 // #include "devs/riscv/disk_driver.hh"
@@ -4205,6 +4206,14 @@ namespace proc
             }
         };
 
+        auto prepare_mmap_shared_segment = [&](int, size_t) -> int
+        {
+            // 共享 mmap 已经切到 VmObject 后端；这里保留一个显式兜底，
+            // 防止半迁移期间还有隐藏分支误回到旧的“借 SysV SHM 预灌页”模型。
+            printfRed("[mmap] legacy shared-backing segment path should be unreachable\n");
+            return EIO;
+        };
+
         auto fail_mmap = [&](int errnum) -> void *
         {
             cleanup_shared_backing();
@@ -4214,74 +4223,6 @@ namespace proc
                 *errno = errnum;
             }
             return MAP_FAILED;
-        };
-
-        auto shared_backing_kernel_addr = [](uint64 pa) -> uint64
-        {
-#ifdef LOONGARCH
-            return to_vir(pa);
-#else
-            return pa;
-#endif
-        };
-
-        auto prepare_mmap_shared_segment = [&](int shmid, size_t bytes_to_copy) -> int
-        {
-            shm::shm_segment seg_info = shm::k_smm.get_seg_info(shmid);
-            if (seg_info.shmid < 0)
-            {
-                printfRed("[mmap] Failed to query shared backing shmid=%d\n", shmid);
-                return EINVAL;
-            }
-
-            // mmap 借道共享段实现，但它的生命周期应当跟最后一个映射一起结束。
-            if (!seg_info.auto_destroy_on_last_detach)
-            {
-                seg_info.auto_destroy_on_last_detach = true;
-                if (shm::k_smm.set_seg_info(shmid, seg_info) != 0)
-                {
-                    printfRed("[mmap] Failed to mark shared backing shmid=%d as auto-destroy\n", shmid);
-                    return EIO;
-                }
-            }
-
-            if (vfile == nullptr || bytes_to_copy == 0 || !created_new_shared_backing)
-            {
-                return 0;
-            }
-
-            // 新建出来的 mmap 共享后端需要先按文件内容灌满整段；否则只有第一页被初始化，
-            // 其余页会一直保持 0，后续多页文件映射会读到错误数据。
-            uint64 kernel_addr = shared_backing_kernel_addr(seg_info.phy_addrs);
-            memset(reinterpret_cast<void *>(kernel_addr), 0, seg_info.real_size);
-
-            size_t copied = 0;
-            while (copied < bytes_to_copy)
-            {
-                size_t chunk = bytes_to_copy - copied;
-                if (chunk > 64 * 1024)
-                {
-                    chunk = 64 * 1024;
-                }
-
-                int readbytes = vfile->read(kernel_addr + copied,
-                                            chunk,
-                                            offset + static_cast<int>(copied),
-                                            false);
-                if (readbytes < 0)
-                {
-                    printfRed("[mmap] Failed to prefill shared file mapping, shmid=%d off=%d ret=%d\n",
-                              shmid, offset + static_cast<int>(copied), readbytes);
-                    return EIO;
-                }
-                if (readbytes == 0)
-                {
-                    break;
-                }
-                copied += static_cast<size_t>(readbytes);
-            }
-
-            return 0;
         };
 
         if (!is_anonymous)
@@ -4445,17 +4386,6 @@ namespace proc
         //     return MAP_FAILED;
         // }
 
-        // 先记住一个空闲 VMA 槽位；如果后面能和相邻匿名映射合并，就不再消耗新槽位。
-        int free_vma_idx = -1;
-        for (int i = 0; i < NVMA; ++i)
-        {
-            if (!p->get_vma()->_vm[i].used)
-            {
-                free_vma_idx = i;
-                break;
-            }
-        }
-
         uint restore_length = length;
         if (vfile != nullptr)
         {
@@ -4481,8 +4411,8 @@ namespace proc
             }
         }
 
-        const bool needs_shared_backing_segment =
-            ((flags & MAP_SHARED) != 0) && (is_anonymous || (prot & PROT_WRITE) != 0);
+        // 共享映射已经切到 object-backed 统一后端，不再借道 SysV SHM 预留物理区。
+        const bool needs_shared_backing_segment = false;
 
         // 确定映射地址
         if ((flags & MAP_FIXED) || (flags & MAP_FIXED_NOREPLACE))
@@ -4572,76 +4502,6 @@ namespace proc
                 }
             }
 
-            if (needs_shared_backing_segment)
-            {
-                SharedBackingSelection shared_backing = select_shared_backing(vfile, is_anonymous);
-                if (shared_backing.key == -1)
-                {
-                    printfRed("[mmap] Failed to generate key for shared memory\n");
-                    return fail_mmap(EINVAL);
-                }
-
-                created_new_shared_backing = shared_backing.always_new_segment ||
-                                             shm::k_smm.find_seg_by_key_in_namespace(shared_backing.key, shm::k_mmap_backing_ipc_namespace_id) < 0;
-                shared_backing_shmid = shm::k_smm.create_seg_in_namespace(shared_backing.key,
-                                                                          restore_length,
-                                                                          IPC_CREAT,
-                                                                          shm::k_mmap_backing_ipc_namespace_id);
-                if (shared_backing_shmid < 0)
-                {
-                    printfRed("[mmap] Failed to create shared memory segment\n");
-                    created_new_shared_backing = false;
-                    return fail_mmap(-shared_backing_shmid);
-                }
-
-                int shmflg = 0;
-                if ((prot & PROT_READ) && !(prot & PROT_WRITE))
-                {
-                    shmflg = SHM_RDONLY;
-                }
-                if (prot == PROT_NONE)
-                {
-                    shmflg = SHM_NONE;
-                }
-
-                size_t shared_copy_bytes = 0;
-                if (vfile != nullptr)
-                {
-                    fs::Kstat st;
-                    int size_result = fs::k_vfs.fstat(vfile, &st);
-                    if (size_result != EOK)
-                    {
-                        printfRed("[mmap] Failed to get file size for %s, error: %d\n", vfile->_path_name.c_str(), size_result);
-                        return fail_mmap(size_result < 0 ? -size_result : size_result);
-                    }
-
-                    if (static_cast<uint64>(offset) < st.size)
-                    {
-                        shared_copy_bytes = st.size - static_cast<uint64>(offset);
-                        if (shared_copy_bytes > aligned_length)
-                        {
-                            shared_copy_bytes = aligned_length;
-                        }
-                    }
-                }
-
-                int shared_prepare_ret = prepare_mmap_shared_segment(shared_backing_shmid, shared_copy_bytes);
-                if (shared_prepare_ret != 0)
-                {
-                    return fail_mmap(shared_prepare_ret);
-                }
-
-                void *attach_result = shm::k_smm.attach_seg(shared_backing_shmid, (void *)map_addr, shmflg, false);
-                if ((long)attach_result < 0)
-                {
-                    printfRed("[mmap] Failed to attach shared memory segment, shmid=%d ret=%ld\n",
-                              shared_backing_shmid, (long)attach_result);
-                    return fail_mmap(-(long)attach_result);
-                }
-
-                map_addr = (uint64)attach_result;
-                shared_mapping_attached = true;
-            }
         }
 
         if (needs_shared_backing_segment && shared_backing_shmid < 0)
@@ -4732,36 +4592,12 @@ namespace proc
 #endif
 
         bool populated_mapping_pages = false;
-        if ((flags & (MAP_POPULATE | MAP_LOCKED)) != 0 && prot != PROT_NONE)
+        ProcessMemoryManager *memory_mgr = p->get_memory_manager();
+        if (memory_mgr == nullptr)
         {
-            vma populate_vm = {};
-            populate_vm.used = 1;
-            populate_vm.addr = map_addr;
-            populate_vm.len = aligned_length;
-            populate_vm.prot = prot;
-            populate_vm.flags = flags;
-            populate_vm.vfd = is_anonymous ? -1 : fd;
-            populate_vm.vfile = vfile;
-            populate_vm.offset = offset;
-            populate_vm.backing_kind = needs_shared_backing_segment ? VMA_BACKING_SHM :
-                                       (vfile != nullptr ? VMA_BACKING_FILE : VMA_BACKING_NONE);
-            populate_vm.backing_shmid = needs_shared_backing_segment ? shared_backing_shmid : -1;
-            populate_vm.backing_base = needs_shared_backing_segment ? map_addr : 0;
-
-            int populate_access = (prot & PROT_READ) ? 0 : ((prot & PROT_WRITE) ? 1 : 2);
-            for (uint64 va = map_addr; va < map_addr + aligned_length; va += PGSIZE)
-            {
-                if (mem::k_vmm.allocate_vma_page(*p->get_pagetable(), va, &populate_vm, populate_access) != 0)
-                {
-                    printfRed("[mmap] Failed to pre-populate mapping va=%p len=%p flags=0x%x\n",
-                              (void *)va, (void *)aligned_length, flags);
-                    return fail_mmap(EFAULT);
-                }
-            }
-            populated_mapping_pages = true;
+            return fail_mmap(ENOMEM);
         }
 
-        int vma_idx = -1;
         // musl 的 malloc 在 LoongArch 上会连续申请一串同属性匿名私有映射。
         // 如果这里每次都硬占一个新 VMA 槽位，很快就会因为 NVMA 太小而失败。
         // 对于首尾相接、权限/标志完全一致、且无共享/文件后端的匿名映射，直接并入前一段。
@@ -4769,7 +4605,7 @@ namespace proc
             (flags & MAP_PRIVATE) != 0 &&
             (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) == 0)
         {
-            vma *existing = p->get_memory_manager()->find_prev_vma(map_addr + 1);
+            vma *existing = memory_mgr->find_prev_vma(map_addr + 1);
             if (existing != nullptr &&
                 existing->addr + (uint64)existing->len == map_addr &&
                 existing->prot == prot &&
@@ -4787,66 +4623,86 @@ namespace proc
             }
         }
 
-        vma_idx = free_vma_idx;
-        if (vma_idx == -1)
+        const VmAreaKind area_kind = (flags & MAP_GROWSDOWN) ? VmAreaKind::UserStack : VmAreaKind::Mmap;
+        const VmGrowPolicy grow_policy = (flags & MAP_GROWSDOWN) ? VmGrowPolicy::Down : VmGrowPolicy::None;
+        const uint32 guard_pages = (flags & MAP_GROWSDOWN) ? 1 : 0;
+        const char *debug_name = is_anonymous ? "mmap-anon" : "mmap-file";
+
+        VmObject *mapping_object = nullptr;
+        uint64 file_backed_bytes = 0;
+        if (!needs_shared_backing_segment)
         {
-            printfRed("[mmap] No available VMA slots\n");
-            if (p != nullptr && strcmp(p->_name, "libc-bench-child") == 0)
+            if (is_anonymous)
             {
-                printfYellow("[mmap][libc-bench-child] slot exhaustion req_len=%p prot=0x%x flags=0x%x heap=[%p,%p)\n",
-                             (void *)aligned_length,
-                             prot,
-                             flags,
-                             (void *)p->get_heap_start(),
-                             (void *)p->get_heap_end());
-                for (int i = 0; i < NVMA; ++i)
+                mapping_object = new AnonVmObject((flags & MAP_SHARED) != 0, debug_name);
+            }
+            else if (vfile != nullptr)
+            {
+                fs::Kstat st;
+                int size_result = fs::k_vfs.fstat(vfile, &st);
+                if (size_result != EOK)
                 {
-                    const vma &dbg_vm = p->get_vma()->_vm[i];
-                    if (!dbg_vm.used)
-                    {
-                        continue;
-                    }
-                    printfYellow("[mmap][libc-bench-child] vma[%d]=[%p,%p) len=%d prot=0x%x flags=0x%x fd=%d expandable=%d backing=%d\n",
-                                 i,
-                                 (void *)dbg_vm.addr,
-                                 (void *)(dbg_vm.addr + (uint64)dbg_vm.len),
-                                 dbg_vm.len,
-                                 dbg_vm.prot,
-                                 dbg_vm.flags,
-                                 dbg_vm.vfd,
-                                 dbg_vm.is_expandable,
-                                 dbg_vm.backing_kind);
+                    printfRed("[mmap] Failed to get file size for vm object setup: %d\n", size_result);
+                    return fail_mmap(size_result < 0 ? -size_result : size_result);
+                }
+                if (static_cast<uint64>(offset) < st.size)
+                {
+                    uint64 bytes_left = st.size - static_cast<uint64>(offset);
+                    file_backed_bytes = bytes_left > aligned_length ? aligned_length : bytes_left;
+                }
+                if ((flags & MAP_SHARED) != 0)
+                {
+                    mapping_object = shm::k_smm.acquire_shared_file_object(vfile);
+                }
+                else
+                {
+                    mapping_object = new FileVmObject(vfile,
+                                                      false,
+                                                      false,
+                                                      vfile->backing_path());
                 }
             }
+        }
+
+        if (vfile != nullptr && mapping_object == nullptr)
+        {
+            printfRed("[mmap] Failed to create file-backed vm object\n");
             return fail_mmap(ENOMEM);
         }
 
-        // 初始化VMA
-        vma *vm = &p->get_vma()->_vm[vma_idx];
-        vm->used = 1;
-        vm->addr = map_addr;
-        vm->len = aligned_length;
-        vm->prot = prot;
-        vm->flags = flags;
+        vma *vm = memory_mgr->get_vm_space().create_area(map_addr,
+                                                         aligned_length,
+                                                         prot,
+                                                         flags,
+                                                         mapping_object,
+                                                         static_cast<uint64>(offset),
+                                                         area_kind,
+                                                         grow_policy,
+                                                         guard_pages,
+                                                         debug_name);
+        if (vm == nullptr)
+        {
+            return fail_mmap(ENOMEM);
+        }
+
         vm->vfd = is_anonymous ? -1 : fd;
         vm->vfile = vfile;
+        if (vma_owns_dedicated_file)
+        {
+            // 成功挂到 VMA 后，专用 backing file 的所有权转交给地址空间元数据。
+            vma_owns_dedicated_file = false;
+        }
         vm->offset = offset;
         vm->backing_kind = VMA_BACKING_NONE;
         vm->backing_shmid = -1;
         vm->backing_base = 0;
-        vm->has_resident_pages = populated_mapping_pages;
-        vm->owner_mm = p->get_memory_manager();
-        vm->object = nullptr;
+        vm->has_resident_pages = false;
+        vm->owner_mm = memory_mgr;
         vm->page_offset = static_cast<uint64>(offset);
-        vm->area_kind = (flags & MAP_GROWSDOWN) ? VmAreaKind::UserStack : VmAreaKind::Mmap;
-        vm->grow_policy = (flags & MAP_GROWSDOWN) ? VmGrowPolicy::Down : VmGrowPolicy::None;
         vm->advice_state = VmAdviceState::None;
-        vm->guard_pages = (flags & MAP_GROWSDOWN) ? 1 : 0;
         vm->zero_fill_past_file = false;
-        vm->file_backed_bytes = 0;
-        vm->debug_name = is_anonymous ? "mmap-anon" : "mmap-file";
+        vm->file_backed_bytes = file_backed_bytes;
 
-        // 设置扩展属性
         if (is_anonymous)
         {
             if (flags & MAP_GROWSDOWN)
@@ -4883,35 +4739,21 @@ namespace proc
             vm->backing_kind = VMA_BACKING_FILE;
         }
 
-        if (!needs_shared_backing_segment)
+        if ((flags & (MAP_POPULATE | MAP_LOCKED)) != 0 && prot != PROT_NONE)
         {
-            if (is_anonymous)
+            int populate_access = (prot & PROT_READ) ? 0 : ((prot & PROT_WRITE) ? 1 : 2);
+            for (uint64 va = map_addr; va < map_addr + aligned_length; va += PGSIZE)
             {
-                vm->object = new AnonVmObject((flags & MAP_SHARED) != 0, vm->debug_name);
-            }
-            else if (vfile != nullptr)
-            {
-                fs::Kstat st;
-                int size_result = fs::k_vfs.fstat(vfile, &st);
-                if (size_result != EOK)
+                if (mem::k_vmm.allocate_vma_page(*p->get_pagetable(), va, vm, populate_access) != 0)
                 {
-                    printfRed("[mmap] Failed to get file size for vm object setup: %d\n", size_result);
-                    memset(vm, 0, sizeof(*vm));
-                    vm->backing_kind = VMA_BACKING_NONE;
-                    vm->backing_shmid = -1;
-                    vm->backing_base = 0;
-                    return fail_mmap(size_result < 0 ? -size_result : size_result);
+                    printfRed("[mmap] Failed to pre-populate mapping va=%p len=%p flags=0x%x\n",
+                              (void *)va, (void *)aligned_length, flags);
+                    memory_mgr->unmap_memory_range((void *)map_addr, aligned_length);
+                    return fail_mmap(EFAULT);
                 }
-                if (static_cast<uint64>(offset) < st.size)
-                {
-                    uint64 bytes_left = st.size - static_cast<uint64>(offset);
-                    vm->file_backed_bytes = bytes_left > aligned_length ? aligned_length : bytes_left;
-                }
-                vm->object = new FileVmObject(vfile,
-                                              (flags & MAP_SHARED) != 0,
-                                              false,
-                                              vfile->backing_path());
             }
+            populated_mapping_pages = true;
+            vm->has_resident_pages = true;
         }
 
         // VMA内存映射不计入_sz，因为_sz现在只管理程序段和堆
@@ -4928,23 +4770,6 @@ namespace proc
             // TODO: 锁定页面在内存中
         }
 
-        if (!p->get_memory_manager()->insert_vma_slot(*vm))
-        {
-            if (vm->object != nullptr)
-            {
-                delete vm->object;
-                vm->object = nullptr;
-            }
-            if (vm->vfile != nullptr)
-            {
-                vm->vfile->free_file();
-            }
-            memset(vm, 0, sizeof(*vm));
-            vm->backing_kind = VMA_BACKING_NONE;
-            vm->backing_shmid = -1;
-            vm->backing_base = 0;
-            return fail_mmap(ENOMEM);
-        }
         return (void *)map_addr;
     }
     /// @brief 取消内存映射，符合POSIX标准的munmap实现
@@ -5163,83 +4988,84 @@ namespace proc
             return 0;
         };
 
-        uint64 old_start = (uint64)old_address;
-        uint64 old_end = old_start + old_size;
-        [[maybe_unused]] uint64 new_len = new_size;
-
-        // EFAULT: 查找包含旧地址的VMA
-        int vma_index = -1;
-        printfYellow("[mremap] Searching for VMA containing range [%p, %p), size=%u\n",
-                     (void *)old_start, (void *)old_end, old_size);
-
-        printfYellow("[mremap] NVMA=%d, pcb=%p, pcb->get_vma()=%p\n", NVMA, pcb, pcb->get_vma());
-        proc::vma *found_vma = pcb->get_memory_manager()->find_vma_covering(old_start);
-        if (found_vma != nullptr && old_end <= found_vma->end_addr())
+        auto aligned_mapping_size = [](size_t size) -> uint64
         {
-            proc::vma *base = &pcb->get_vma()->_vm[0];
-            vma_index = static_cast<int>(found_vma - base);
-            printfGreen("[mremap] Found matching VMA[%d]: [%p, %p)\n",
-                        vma_index,
-                        (void *)found_vma->addr,
-                        (void *)found_vma->end_addr());
-        }
-
-        // EFAULT: 地址范围未映射或无效
-        if (vma_index == -1)
+            return PGROUNDUP(static_cast<uint64>(size));
+        };
+        auto recompute_file_backed_bytes = [](proc::vma &entry)
         {
-            // 检查是否是共享内存映射
-            if (shm::k_smm.is_shared_memory_address(old_address))
+            if (entry.vfile == nullptr)
             {
-                printfYellow("[mremap] Found shared memory mapping at %p\n", old_address);
-
-                // 对于共享内存，我们需要检查是否能扩展
-                // 由于当前的共享内存实现比较简单，我们认为共享内存无法就地扩展
-                // 如果没有设置 MREMAP_MAYMOVE，则返回 ENOMEM
-                if (!(flags & MREMAP_MAYMOVE))
-                {
-                    printfRed("[mremap] ENOMEM: Shared memory cannot be expanded in place and MREMAP_MAYMOVE not set\n");
-                    return syscall::SYS_ENOMEM;
-                }
+                entry.file_backed_bytes = 0;
+                return;
+            }
+            fs::Kstat st{};
+            if (fs::k_vfs.fstat(entry.vfile, &st) != EOK || static_cast<uint64>(entry.offset) >= st.size)
+            {
+                entry.file_backed_bytes = 0;
+                return;
+            }
+            uint64 bytes_left = st.size - static_cast<uint64>(entry.offset);
+            uint64 mapped_len = static_cast<uint64>(entry.len);
+            entry.file_backed_bytes = bytes_left > mapped_len ? mapped_len : bytes_left;
+        };
+        uint64 aligned_old_size = aligned_mapping_size(old_size);
+        uint64 aligned_new_size = aligned_mapping_size(new_size);
+        uint64 old_start = (uint64)old_address;
+        uint64 old_end = old_start + aligned_old_size;
+        auto move_mapping = [&](void *target_addr) -> int
+        {
+            const size_t copy_len = old_size < new_size ? old_size : new_size;
+            int copy_ret = copy_mapping_in_chunks(old_start, (uint64)target_addr, copy_len);
+            if (copy_ret != 0)
+            {
+                munmap(target_addr, new_size);
+                return copy_ret;
             }
 
+            if (!(flags & MREMAP_DONTUNMAP))
+            {
+                munmap(old_address, old_size);
+            }
+
+            *result_addr = target_addr;
+            return 0;
+        };
+
+        printfYellow("[mremap] Searching for VMA containing range [%p, %p), old_size=%u new_size=%u\n",
+                     (void *)old_start, (void *)old_end, old_size, new_size);
+
+        proc::ProcessMemoryManager *mm = pcb->get_memory_manager();
+        if (mm == nullptr)
+        {
+            return syscall::SYS_EFAULT;
+        }
+
+        proc::vma *vm = mm->find_vma_covering(old_start);
+        if (vm == nullptr || old_end > vm->end_addr())
+        {
             printfRed("[mremap] EFAULT: Address range [%p, %p) not found in valid mappings\n",
                       (void *)old_start, (void *)old_end);
             return syscall::SYS_EFAULT;
         }
 
-        proc::vma &vma = pcb->get_vma()->_vm[vma_index];
-        printfCyan("[mremap] Found VMA[%d]: addr=%p, len=%d, prot=%d, flags=%d\n",
-                   vma_index, (void *)vma.addr, vma.len, vma.prot, vma.flags);
+        const bool full_mapping_selected = (old_start == vm->addr && old_end == vm->end_addr());
+        printfCyan("[mremap] Found VMA: addr=%p len=%d prot=%d flags=%d full=%d\n",
+                   (void *)vm->addr, vm->len, vm->prot, vm->flags, full_mapping_selected ? 1 : 0);
 
-        // EINVAL: 检查MREMAP_DONTUNMAP的限制（只能用于私有匿名映射）
-        if (flags & MREMAP_DONTUNMAP)
+        if ((flags & MREMAP_DONTUNMAP) &&
+            (((vm->flags & MAP_ANONYMOUS) == 0) || (vm->flags & MAP_SHARED) != 0))
         {
-            if (!(vma.flags & MAP_ANONYMOUS) || (vma.flags & MAP_SHARED))
-            {
-                printfRed("[mremap] EINVAL: MREMAP_DONTUNMAP can only be used with private anonymous mappings\n");
-                return syscall::SYS_EINVAL;
-            }
+            printfRed("[mremap] EINVAL: MREMAP_DONTUNMAP can only be used with private anonymous mappings\n");
+            return syscall::SYS_EINVAL;
         }
 
-        // 情况1：缩小映射
-        if (new_size < old_size)
+        if (aligned_new_size < aligned_old_size)
         {
-            // 释放多余的页面
-            uint64 pages_to_unmap = (old_size - new_size + PGSIZE - 1) / PGSIZE;
-            uint64 unmap_start = old_start + new_size;
-
-            mem::k_vmm.vmunmap(*pcb->get_pagetable(), unmap_start, pages_to_unmap, 1);
-
-            // 更新VMA大小
-            if (old_start == vma.addr && (int)old_size == vma.len)
+            uint64 unmap_start = old_start + aligned_new_size;
+            if (mm->unmap_memory_range((void *)unmap_start, aligned_old_size - aligned_new_size) != 0)
             {
-                // 整个VMA被调整
-                vma.len = new_size;
-            }
-            else
-            {
-                // 部分调整，这里简化处理
-                printfYellow("[mremap] Partial VMA resize not fully supported\n");
+                return syscall::SYS_EFAULT;
             }
 
             printfGreen("[mremap] Shrunk mapping from %u to %u bytes at %p\n",
@@ -5248,89 +5074,30 @@ namespace proc
             return 0;
         }
 
-        // 情况2：扩大映射
-        if (new_size > old_size)
+        if (aligned_new_size > aligned_old_size)
         {
-            uint64 additional_size = new_size - old_size;
-            uint64 expand_start = old_start + old_size;
+            uint64 expand_start = old_start + aligned_old_size;
+            uint64 expand_end = old_start + aligned_new_size;
+            bool can_expand_in_place = full_mapping_selected &&
+                                       !mm->has_vma_conflict(expand_start, expand_end, vm);
 
-            // 检查是否可以就地扩展
-            bool can_expand_in_place = true;
-            if (!(flags & MREMAP_MAYMOVE))
-            {
-                // 检查扩展区域是否可用
-                can_expand_in_place = !pcb->get_memory_manager()->has_vma_conflict(expand_start,
-                                                                                    expand_start + additional_size,
-                                                                                    &vma);
-
-                // ENOMEM: 不能就地扩展且未指定MREMAP_MAYMOVE
-                if (!can_expand_in_place)
-                {
-                    printfRed("[mremap] ENOMEM: Cannot expand in place and MREMAP_MAYMOVE not set\n");
-                    return syscall::SYS_ENOMEM;
-                }
-            }
-
-            // 如果可以就地扩展
             if (can_expand_in_place && !(flags & MREMAP_FIXED))
             {
-                // 分配新的页面
-                uint64 prot_flags = 0;
-                if (vma.prot & PROT_READ)
-                    prot_flags |= PTE_R;
-                if (vma.prot & PROT_WRITE)
-                    prot_flags |= PTE_W;
-                if (vma.prot & PROT_EXEC)
-                    prot_flags |= PTE_X;
-                prot_flags |= PTE_U;
-
-                uint64 result = mem::k_vmm.uvmalloc(*pcb->get_pagetable(),
-                                                    old_start + old_size,
-                                                    old_start + new_size,
-                                                    prot_flags);
-                if (result != old_start + new_size)
+                if (!mm->ensure_user_pagetable_hierarchy(expand_start, aligned_new_size - aligned_old_size))
                 {
-                    // ENOMEM: 内存分配失败
-                    printfRed("[mremap] ENOMEM: Failed to allocate additional memory\n");
+                    return syscall::SYS_ENOMEM;
+                }
+                if (aligned_new_size > 0x7fffffffULL)
+                {
                     return syscall::SYS_ENOMEM;
                 }
 
-                // 更新VMA - 确保类型安全
-                if (old_start == vma.addr)
+                vm->len = static_cast<int>(aligned_new_size);
+                if (vm->max_len < aligned_new_size)
                 {
-                    // 总是更新VMA长度，因为我们已经成功分配了内存
-                    int old_vma_len = vma.len;
-
-                    // 检查new_size是否超出int范围 (2^31 - 1 = 2147483647)
-                    if (new_size > 2147483647U)
-                    {
-                        printfRed("[mremap] ERROR: new_size %u exceeds INT_MAX, cannot store in VMA.len\n", (uint)new_size);
-                        return syscall::SYS_ENOMEM;
-                    }
-
-                    vma.len = (int)new_size;
-                    printfCyan("[mremap] Updated VMA[%d] length from %d to %d (old_size=%u)\n",
-                               vma_index, old_vma_len, vma.len, (uint)old_size);
+                    vm->max_len = aligned_new_size;
                 }
-                else
-                {
-                    // 即使是部分VMA扩展，我们也需要更新VMA长度
-                    int old_vma_len = vma.len; // 确保在修改前保存
-                    printfYellow("[mremap] DEBUG: Before update - VMA[%d].len=%d, new_size=%u\n",
-                                 vma_index, old_vma_len, (uint)new_size);
-
-                    // 检查new_size是否超出int范围 (2^31 - 1 = 2147483647)
-                    if (new_size > 2147483647U)
-                    {
-                        printfRed("[mremap] ERROR: new_size %u exceeds INT_MAX, cannot store in VMA.len\n", (uint)new_size);
-                        return syscall::SYS_ENOMEM;
-                    }
-
-                    vma.len = (int)new_size;
-                    printfYellow("[mremap] Partial VMA expansion: Updated VMA[%d] length from %d to %d\n",
-                                 vma_index, old_vma_len, vma.len);
-                    printfYellow("[mremap] DEBUG: After update - VMA[%d].len=%d\n", vma_index, vma.len);
-                }
+                recompute_file_backed_bytes(*vm);
 
                 printfGreen("[mremap] Expanded mapping from %u to %u bytes at %p\n",
                             old_size, new_size, old_address);
@@ -5338,100 +5105,74 @@ namespace proc
                 return 0;
             }
 
-            // 需要移动映射
-            if (flags & MREMAP_MAYMOVE)
+            if (!(flags & MREMAP_MAYMOVE))
             {
-                void *target_addr = new_address;
-
-                if (!(flags & MREMAP_FIXED))
-                {
-                    // 寻找合适的地址
-                    int mmap_errno = 0;
-                    target_addr = mmap(nullptr, new_size, vma.prot, vma.flags, vma.vfd, vma.offset, &mmap_errno);
-                    if (target_addr == MAP_FAILED)
-                    {
-                        // ENOMEM: 找不到合适的地址
-                        printfRed("[mremap] ENOMEM: Failed to find suitable address for new mapping\n");
-                        return syscall::SYS_ENOMEM;
-                    }
-                }
-                else
-                {
-                    // 使用指定的地址
-                    // 先取消映射目标区域（如果已映射）
-                    munmap(target_addr, new_size);
-
-                    // 在指定地址创建新映射
-                    int mmap_errno2 = 0;
-                    void *mapped_addr = mmap(target_addr, new_size, vma.prot,
-                                             vma.flags | MAP_FIXED, vma.vfd, vma.offset, &mmap_errno2);
-                    if (mapped_addr != target_addr)
-                    {
-                        // ENOMEM: 无法在指定地址映射
-                        printfRed("[mremap] ENOMEM: Failed to map at fixed address %p\n", target_addr);
-                        return syscall::SYS_ENOMEM;
-                    }
-                }
-
-                int copy_ret = copy_mapping_in_chunks(old_start, (uint64)target_addr, old_size);
-                if (copy_ret != 0)
-                {
-                    munmap(target_addr, new_size);
-                    return copy_ret;
-                }
-
-                // 如果不是 MREMAP_DONTUNMAP，则释放旧映射
-                if (!(flags & MREMAP_DONTUNMAP))
-                {
-                    munmap(old_address, old_size);
-                }
-
-                printfGreen("[mremap] Moved and resized mapping from %p (%u bytes) to %p (%u bytes)\n",
-                            old_address, old_size, target_addr, new_size);
-                *result_addr = target_addr;
-                return 0;
+                printfRed("[mremap] ENOMEM: Cannot expand in place and MREMAP_MAYMOVE not set\n");
+                return syscall::SYS_ENOMEM;
             }
-        }
 
-        // 情况3：大小不变
-        if (new_size == old_size)
-        {
-            if (flags & MREMAP_FIXED)
+            void *target_addr = new_address;
+            if (!(flags & MREMAP_FIXED))
             {
-                // 移动到新地址
-                if (flags & MREMAP_MAYMOVE)
+                int mmap_errno = 0;
+                target_addr = mmap(nullptr, new_size, vm->prot, vm->flags, vm->vfd, vm->offset, &mmap_errno);
+                if (target_addr == MAP_FAILED)
                 {
-                    // 类似上面的移动逻辑
-                    munmap(new_address, new_size);
-                    int mmap_errno3 = 0;
-                    void *mapped_addr = mmap(new_address, new_size, vma.prot,
-                                             vma.flags | MAP_FIXED, vma.vfd, vma.offset, &mmap_errno3);
-                    if (mapped_addr != new_address)
-                    {
-                        // ENOMEM: 无法在指定地址映射
-                        return syscall::SYS_ENOMEM;
-                    }
-                    int copy_ret = copy_mapping_in_chunks(old_start, (uint64)new_address, old_size);
-                    if (copy_ret != 0)
-                    {
-                        munmap(new_address, new_size);
-                        return copy_ret;
-                    }
-
-                    if (!(flags & MREMAP_DONTUNMAP))
-                    {
-                        munmap(old_address, old_size);
-                    }
-
-                    *result_addr = new_address;
-                    return 0;
+                    printfRed("[mremap] ENOMEM: Failed to find suitable address for new mapping\n");
+                    return syscall::SYS_ENOMEM;
+                }
+            }
+            else
+            {
+                munmap(target_addr, new_size);
+                int mmap_errno = 0;
+                void *mapped_addr = mmap(target_addr, new_size, vm->prot,
+                                         vm->flags | MAP_FIXED, vm->vfd, vm->offset, &mmap_errno);
+                if (mapped_addr != target_addr)
+                {
+                    printfRed("[mremap] ENOMEM: Failed to map at fixed address %p\n", target_addr);
+                    return syscall::SYS_ENOMEM;
                 }
             }
 
-            // 大小不变且无需移动
-            *result_addr = old_address;
+            int move_ret = move_mapping(target_addr);
+            if (move_ret != 0)
+            {
+                return move_ret;
+            }
+
+            printfGreen("[mremap] Moved and resized mapping from %p (%u bytes) to %p (%u bytes)\n",
+                        old_address, old_size, target_addr, new_size);
             return 0;
         }
+
+        if (flags & MREMAP_FIXED)
+        {
+            if (!(flags & MREMAP_MAYMOVE))
+            {
+                return syscall::SYS_EINVAL;
+            }
+
+            munmap(new_address, new_size);
+            int mmap_errno = 0;
+            void *mapped_addr = mmap(new_address, new_size, vm->prot,
+                                     vm->flags | MAP_FIXED, vm->vfd, vm->offset, &mmap_errno);
+            if (mapped_addr != new_address)
+            {
+                return syscall::SYS_ENOMEM;
+            }
+
+            int move_ret = move_mapping(new_address);
+            if (move_ret != 0)
+            {
+                return move_ret;
+            }
+
+            return 0;
+        }
+
+        *result_addr = old_address;
+        return 0;
 
         printfRed("[mremap] Unexpected condition\n");
         return syscall::SYS_EINVAL;
