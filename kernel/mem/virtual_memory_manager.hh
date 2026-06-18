@@ -65,7 +65,8 @@ void pci_map(int bus, int dev, int func, void *pages);
 		/// @return newshm if success
 		// uint64 allocshm( PageTable &pt, uint64 oldshm, uint64 newshm, uint64 sz, void *phyaddr[ pm::MAX_SHM_PGNUM ] );
 		
-
+		// target_mm 表示 pt 所属的用户地址空间；copy 期间需要用它处理懒分配、栈增长和 COW。
+		// 传空时只允许从当前运行进程且页表基址一致的场景推导。
 		int copy_in( PageTable &pt, void *dst, uint64 src_va, uint64 len, proc::ProcessMemoryManager *target_mm = nullptr );
 		// 只确认用户读范围可访问，并按需补齐合法 VMA 页面；不搬运数据。
 		int ensure_user_read_range( PageTable &pt, uint64 src_va, uint64 len );
@@ -101,6 +102,7 @@ void pci_map(int bus, int dev, int func, void *pages);
 		/// @param p source address
 		/// @param len length
 		/// @return 0 if success, -1 if failed
+		// 写用户页可能触发目标地址空间的缺页或 COW 拆页，target_mm 必须和 pt 指向同一个 mm。
 		int copy_out( PageTable &pt, uint64 va, const void *p, uint64 len, proc::ProcessMemoryManager *target_mm = nullptr );
 
 		/// @brief 处理 fork COW 写时复制页。

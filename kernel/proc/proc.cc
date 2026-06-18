@@ -736,19 +736,4 @@ namespace proc
         return false;
     }
 
-    void Pcb::print_detailed_memory_info() const
-    {
-        if (_memory_manager)
-        {
-            _memory_manager->print_memory_usage();
-        }
-        else
-        {
-            printfCyan("=== PCB Memory Information ===\n");
-            printfCyan("Process: %s (PID: %d)\n", _name, _pid);
-            printfCyan("ProcessMemoryManager: not present\n");
-            printfCyan("=== End PCB Memory Information ===\n");
-        }
-    }
-
 }
