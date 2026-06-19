@@ -128,7 +128,6 @@ echo "$log"
 
 常用入口：
 
-- 回归总入口：`user/user_lib/user_test.cc` 的 `regression_suite_4d1444()`
 - basic 测例列表：`basic_testcases[]`
 - LTP 列表：`ltp_testcases[]`
 - subset 工具：`basic_subset_test()`、`ltp_subset_test()`
