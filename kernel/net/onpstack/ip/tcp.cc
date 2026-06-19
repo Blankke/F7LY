@@ -1861,6 +1861,8 @@ INT tcp_recv_upper(INT nInput, UCHAR *pubDataBuf, UINT unDataBufSize, CHAR bRcvT
              * 状态迁移由独立内核线程推进，永久 sem_p 一旦错过关闭态唤醒，
              * wget 会在已经打印完 body 后卡在下一次 recv。这里用 1 秒
              * 周期等待保持阻塞行为，同时让循环能重新检查 TLS* 关闭态并返回 EOF。
+             * 这个 1 秒轮询只是内部兜底，不能对上层表现为 recv() 返回 0；
+             * 否则 TLS 会把“暂时没数据”误判为对端 EOF。
              */
             if (onps_input_sem_pend(nInput, 1, &enErr) < 0)
                 goto __lblErr;
@@ -1878,7 +1880,7 @@ INT tcp_recv_upper(INT nInput, UCHAR *pubDataBuf, UINT unDataBufSize, CHAR bRcvT
             if (nRcvedBytes < 0)
                 goto __lblErr;
 
-            if (bWaitSecs <= 0)
+            if (signed_timeout > 0 && bWaitSecs <= 0)
                 return 0;
             goto __lblWaitRecv;
         }
