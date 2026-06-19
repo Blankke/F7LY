@@ -8,7 +8,9 @@ namespace syscall
 {
     constexpr uint max_syscall_funcs_num = 2048;
     constexpr uint max_path_len = 128;
-    constexpr uint max_arg_num = 32;
+    // Linux 用户态工具链会在 posix_spawn/execve 中传入较多 argv/envp。
+    // 这里表示允许的实际字符串数量，不包含末尾 NULL 指针。
+    constexpr uint max_arg_num = 256;
 
     class SyscallHandler
     {
