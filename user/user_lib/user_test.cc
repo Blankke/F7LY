@@ -458,309 +458,15 @@ int basic_subset_test(const char *path, const char *const cases[])
     return run_case_list_in_dir(".", group_name, cases, 0);
 }
 
-static int expect_equal_bytes(const char *label, const char *actual, const char *expected, int len)
+int ltp_subset_test(bool is_musl, const char *const cases[])
 {
-    for (int i = 0; i < len; ++i)
-    {
-        if (actual[i] != expected[i])
-        {
-            printf("[FAIL] %s: payload mismatch at %d, got=%d expected=%d\n",
-                   label, i, actual[i], expected[i]);
-            return -1;
-        }
-    }
-    return 0;
-}
-
-static sockaddr_in loopback_addr(unsigned short port)
-{
-    sockaddr_in addr;
-    addr.sin_family = AF_INET;
-    addr.sin_port = port;
-    addr.sin_addr = 0x0100007f;
-    for (int i = 0; i < 8; ++i)
-    {
-        addr.sin_zero[i] = 0;
-    }
-    return addr;
-}
-
-static constexpr int k_user_ipproto_tcp = 6;
-static constexpr int k_user_tcp_maxseg = 2;
-static constexpr int k_user_tcp_info = 11;
-
-static int network_loopback_tcp_smoke(void)
-{
-    const char payload[] = "f7ly-loopback-tcp";
-    char recv_buf[sizeof(payload)] = {};
-    sockaddr_in bind_addr = loopback_addr(0);
-    sockaddr_in server_addr;
-    socklen_t server_len = sizeof(server_addr);
-
-    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    int client_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd < 0 || client_fd < 0)
-    {
-        printf("[FAIL] loopback tcp: socket failed server=%d client=%d\n", server_fd, client_fd);
-        return -1;
-    }
-
-    if (bind(server_fd, (sockaddr *)&bind_addr, sizeof(bind_addr)) < 0 ||
-        listen(server_fd, 4) < 0 ||
-        getsockname(server_fd, (sockaddr *)&server_addr, &server_len) < 0)
-    {
-        printf("[FAIL] loopback tcp: bind/listen/getsockname failed\n");
-        close(server_fd);
-        close(client_fd);
-        return -1;
-    }
-
-    server_addr.sin_addr = 0x0100007f;
-    if (connect(client_fd, (sockaddr *)&server_addr, sizeof(server_addr)) < 0)
-    {
-        printf("[FAIL] loopback tcp: connect failed\n");
-        close(server_fd);
-        close(client_fd);
-        return -1;
-    }
-
-    sockaddr_in peer_addr;
-    socklen_t peer_len = sizeof(peer_addr);
-    int accepted_fd = accept(server_fd, (sockaddr *)&peer_addr, &peer_len);
-    if (accepted_fd < 0)
-    {
-        printf("[FAIL] loopback tcp: accept failed ret=%d\n", accepted_fd);
-        close(server_fd);
-        close(client_fd);
-        return -1;
-    }
-
-    int sent = write(client_fd, payload, sizeof(payload));
-    int received = read(accepted_fd, recv_buf, sizeof(recv_buf));
-    if (sent != (int)sizeof(payload) || received != (int)sizeof(payload) ||
-        expect_equal_bytes("loopback tcp", recv_buf, payload, sizeof(payload)) != 0)
-    {
-        printf("[FAIL] loopback tcp: sent=%d received=%d\n", sent, received);
-        close(accepted_fd);
-        close(server_fd);
-        close(client_fd);
-        return -1;
-    }
-
-    int maxseg = 0;
-    socklen_t maxseg_len = sizeof(maxseg);
-    if (getsockopt(client_fd, k_user_ipproto_tcp, k_user_tcp_maxseg, &maxseg, &maxseg_len) < 0 ||
-        maxseg_len != sizeof(maxseg) || maxseg <= 0)
-    {
-        printf("[FAIL] loopback tcp: TCP_MAXSEG maxseg=%d len=%u\n", maxseg, maxseg_len);
-        close(accepted_fd);
-        close(server_fd);
-        close(client_fd);
-        return -1;
-    }
-
-    unsigned char tcp_info[32] = {};
-    socklen_t tcp_info_len = sizeof(tcp_info);
-    if (getsockopt(client_fd, k_user_ipproto_tcp, k_user_tcp_info, tcp_info, &tcp_info_len) < 0 ||
-        tcp_info_len == 0 || tcp_info[0] != 1)
-    {
-        printf("[FAIL] loopback tcp: TCP_INFO state=%u len=%u\n", tcp_info[0], tcp_info_len);
-        close(accepted_fd);
-        close(server_fd);
-        close(client_fd);
-        return -1;
-    }
-
-    close(accepted_fd);
-    close(server_fd);
-    close(client_fd);
-    printf("[PASS] loopback tcp payload\n");
-    return 0;
-}
-
-static int network_loopback_udp_smoke(void)
-{
-    const char payload[] = "f7ly-loopback-udp";
-    char recv_buf[sizeof(payload)] = {};
-    sockaddr_in server_addr = loopback_addr(0);
-    sockaddr_in actual_server_addr;
-    sockaddr_in src_addr;
-    socklen_t actual_server_len = sizeof(actual_server_addr);
-    socklen_t src_len = sizeof(src_addr);
-
-    int server_fd = socket(AF_INET, SOCK_DGRAM, 0);
-    int client_fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (server_fd < 0 || client_fd < 0)
-    {
-        printf("[FAIL] loopback udp: socket failed server=%d client=%d\n", server_fd, client_fd);
-        return -1;
-    }
-
-    if (bind(server_fd, (sockaddr *)&server_addr, sizeof(server_addr)) < 0 ||
-        getsockname(server_fd, (sockaddr *)&actual_server_addr, &actual_server_len) < 0)
-    {
-        printf("[FAIL] loopback udp: bind/getsockname failed\n");
-        close(server_fd);
-        close(client_fd);
-        return -1;
-    }
-
-    actual_server_addr.sin_addr = 0x0100007f;
-    int sent = sendto(client_fd, payload, sizeof(payload), 0,
-                      (sockaddr *)&actual_server_addr, sizeof(actual_server_addr));
-    int received = recvfrom(server_fd, recv_buf, sizeof(recv_buf), 0,
-                            (sockaddr *)&src_addr, &src_len);
-    if (sent != (int)sizeof(payload) || received != (int)sizeof(payload) ||
-        src_len != sizeof(sockaddr_in) || src_addr.sin_port == 0 ||
-        expect_equal_bytes("loopback udp", recv_buf, payload, sizeof(payload)) != 0)
-    {
-        printf("[FAIL] loopback udp: sent=%d received=%d src_len=%u src_port=%u\n",
-               sent, received, src_len, src_addr.sin_port);
-        close(server_fd);
-        close(client_fd);
-        return -1;
-    }
-
-    close(server_fd);
-    close(client_fd);
-    printf("[PASS] loopback udp payload\n");
-    return 0;
-}
-
-static int network_loopback_udp_zero_datagram_smoke(void)
-{
-    char dummy = 'z';
-    char recv_buf[1] = {};
-    sockaddr_in server_addr = loopback_addr(0);
-    sockaddr_in actual_server_addr;
-    sockaddr_in src_addr;
-    socklen_t actual_server_len = sizeof(actual_server_addr);
-    socklen_t src_len = sizeof(src_addr);
-
-    int server_fd = socket(AF_INET, SOCK_DGRAM, 0);
-    int client_fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (server_fd < 0 || client_fd < 0)
-    {
-        printf("[FAIL] loopback udp zero: socket failed server=%d client=%d\n", server_fd, client_fd);
-        return -1;
-    }
-
-    if (bind(server_fd, (sockaddr *)&server_addr, sizeof(server_addr)) < 0 ||
-        getsockname(server_fd, (sockaddr *)&actual_server_addr, &actual_server_len) < 0)
-    {
-        printf("[FAIL] loopback udp zero: bind/getsockname failed\n");
-        close(server_fd);
-        close(client_fd);
-        return -1;
-    }
-
-    actual_server_addr.sin_addr = 0x0100007f;
-    int sent = sendto(client_fd, &dummy, 0, 0,
-                      (sockaddr *)&actual_server_addr, sizeof(actual_server_addr));
-    if (sent != 0)
-    {
-        printf("[FAIL] loopback udp zero: sendto returned %d\n", sent);
-        close(server_fd);
-        close(client_fd);
-        return -1;
-    }
-
-    // 零长度 UDP datagram 仍应唤醒接收端；用非阻塞接收避免回归失败时卡死。
-    int received = recvfrom(server_fd, recv_buf, sizeof(recv_buf), MSG_DONTWAIT,
-                            (sockaddr *)&src_addr, &src_len);
-    if (sent != 0 || received != 0 || src_len != sizeof(sockaddr_in) || src_addr.sin_port == 0)
-    {
-        printf("[FAIL] loopback udp zero: sent=%d received=%d src_len=%u src_port=%u\n",
-               sent, received, src_len, src_addr.sin_port);
-        close(server_fd);
-        close(client_fd);
-        return -1;
-    }
-
-    close(server_fd);
-    close(client_fd);
-    printf("[PASS] loopback udp zero datagram\n");
-    return 0;
-}
-
-int network_loopback_smoke(void)
-{
-    int fail_count = 0;
-    printf("#### NETWORK LOOPBACK SMOKE START ####\n");
-    if (network_loopback_tcp_smoke() != 0)
-    {
-        fail_count++;
-    }
-    if (network_loopback_udp_smoke() != 0)
-    {
-        fail_count++;
-    }
-    if (network_loopback_udp_zero_datagram_smoke() != 0)
-    {
-        fail_count++;
-    }
-    printf("#### NETWORK LOOPBACK SMOKE END fail=%d ####\n", fail_count);
-    return fail_count == 0 ? 0 : -1;
-}
-
-int network_ltp_socket_subset(void)
-{
-    static const char *const socket_cases[] = {
-        "socket01",
-        "socket02",
-        "accept01",
-        "accept03",
-        "accept4_01",
-        "bind01",
-        "listen01",
-        "connect01",
-        "sendto01",
-        "recvfrom01",
-        "recvmsg01",
-        "socketpair02",
-        NULL,
-    };
-
-    printf("#### NETWORK LTP SOCKET SUBSET START ####\n");
-    init_env("/musl/");
-    int fail_count = ltp_subset_test(true, socket_cases);
-    printf("#### NETWORK LTP SOCKET SUBSET END fail=%d ####\n", fail_count);
-    return fail_count == 0 ? 0 : -1;
-}
-
-int network_ltp_socket_abi_subset(void)
-{
-    static const char *const socket_abi_cases[] = {
-        "recv01",
-        "send01",
-        "getsockname01",
-        "getsockopt01",
-        "setsockopt01",
-        "sockioctl01",
-        "socketpair01",
-        NULL,
-    };
-
-    printf("#### NETWORK LTP SOCKET ABI SUBSET START ####\n");
-    init_env("/musl/");
-    int fail_count = ltp_subset_test(true, socket_abi_cases);
-    printf("#### NETWORK LTP SOCKET ABI SUBSET END fail=%d ####\n", fail_count);
-    return fail_count == 0 ? 0 : -1;
-}
-
-int network_ltp_socket_batch_subset(void)
-{
-    static const char *const socket_batch_cases[] = {
-        "sendmmsg01",
-        "send02",
-        NULL,
-    };
-
-    printf("#### NETWORK LTP SOCKET BATCH SUBSET START ####\n");
-    init_env("/musl/");
-    int fail_count = ltp_subset_test(true, socket_batch_cases);
-    printf("#### NETWORK LTP SOCKET BATCH SUBSET END fail=%d ####\n", fail_count);
-    return fail_count == 0 ? 0 : -1;
+    return run_case_list_in_dir(
+        is_musl ? "/musl/ltp/testcases/bin" : "/glibc/ltp/testcases/bin",
+        is_musl ? "ltp-subset-musl" : "ltp-subset-glibc",
+        cases,
+        ltp_envp(is_musl),
+        true,
+        is_musl);
 }
 
 int busybox_test(const char *path = musl_dir)
@@ -968,6 +674,22 @@ int lmbench_test(const char *path = musl_dir)
     return 0;
 }
 
+int cyclictest_test(const char *path = musl_dir)
+{
+    if (change_dir_checked(path) != 0)
+    {
+        return -1;
+    }
+    // 镜像内的 cyclictest_testcode.sh 会先跑无压力延迟测试，再启动 hackbench
+    // 制造调度压力后重复测试；hackbench 可能是动态链接程序，需要继承 libc 搜索路径。
+    char **envp = ltp_envp(is_musl_test_root(path));
+    char *bb_sh[8] = {0};
+    bb_sh[0] = (char *)"busybox";
+    bb_sh[1] = (char *)"sh";
+    bb_sh[2] = (char *)"cyclictest_testcode.sh";
+    return run_test("busybox", bb_sh, envp);
+}
+
 int ltp_test(bool is_musl)
 {
     if (change_dir_checked(is_musl ? "/musl/ltp/testcases/bin" : "/glibc/ltp/testcases/bin") != 0)
@@ -1015,68 +737,6 @@ int ltp_test(bool is_musl)
     }
     flush_shell_batch();
     printf("#### OS COMP TEST GROUP END ltp-%s ####\n", is_musl ? "musl" : "glibc");
-    return 0;
-}
-
-int ltp_subset_test(bool is_musl, const char *const cases[])
-{
-    return run_case_list_in_dir(
-        is_musl ? "/musl/ltp/testcases/bin" : "/glibc/ltp/testcases/bin",
-        is_musl ? "ltp-subset-musl" : "ltp-subset-glibc",
-        cases,
-        ltp_envp(is_musl),
-        true,
-        is_musl);
-}
-
-int priority_ltp_regression_riscv(void)
-{
-    static const char *const priority_cases[] = {
-        "getpriority01",
-        "getpriority02",
-        "setpriority02",
-        NULL,
-    };
-
-    printf("#### PRIORITY REGRESSION START riscv ####\n");
-    init_env("/musl/");
-    ltp_subset_test(true, priority_cases);
-    ltp_subset_test(false, priority_cases);
-    printf("#### PRIORITY REGRESSION END riscv ####\n");
-    return 0;
-}
-
-int regression_suite_4d1444(void)
-{
-    printf("#### REGRESSION START commit-4d1444b-riscv ####\n");
-    init_env("/musl/");
-    basic_test("/musl/");
-    basic_test("/glibc/");
-    iozone_test("/musl");
-    iozone_test("/glibc");
-    libc_test("/musl/");
-    lua_test("/musl/");
-    lua_test("/glibc/");
-    libcbench_test("/musl");
-    libcbench_test("/glibc");
-    ltp_test(true);
-    ltp_test(false);
-    busybox_test("/musl/");
-    busybox_test("/glibc/");
-    printf("#### REGRESSION END commit-4d1444b-riscv ####\n");
-    return 0;
-}
-
-int bench_refine_suite(void)
-{
-    // 专用入口只保留 iozone 与 libcbench 四组合，缩短单轮验证时间。
-    printf("#### BENCH REFINE SUITE START ####\n");
-    init_env("/musl/");
-    iozone_test("/musl");
-    iozone_test("/glibc");
-    libcbench_test("/musl");
-    libcbench_test("/glibc");
-    printf("#### BENCH REFINE SUITE END ####\n");
     return 0;
 }
 

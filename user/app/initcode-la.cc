@@ -26,6 +26,8 @@ extern "C"
         iozone_test("/musl");
         lmbench_test("/musl/");
         lmbench_test("/glibc/");
+        cyclictest_test("/musl/");
+        cyclictest_test("/glibc/");
         shutdown();
         return 0;
     }

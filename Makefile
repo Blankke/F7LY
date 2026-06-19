@@ -223,12 +223,8 @@ FUCKYOU_OBJ := build/$(OUTPUT_PREFIX)/fuckyou.o
 
 USER_TEST_SRC := user/user_lib/user_test.cc 
 USER_TEST_OBJ := build/$(OUTPUT_PREFIX)/user_test.o
-IOZONE_REPRO_SRC := user/research/iozone/iozone_research.cc
-IOZONE_REPRO_OBJ := build/$(OUTPUT_PREFIX)/iozone_research.o
-MCLOCK_RESEARCH_SRC := user/research/mclock_research.cc
-MCLOCK_RESEARCH_OBJ := build/$(OUTPUT_PREFIX)/mclock_research.o
 ifeq ($(INITCODE_MODE),evaluation)
-  INITCODE_EXTRA_OBJS := $(USER_TEST_OBJ) $(IOZONE_REPRO_OBJ) $(MCLOCK_RESEARCH_OBJ)
+  INITCODE_EXTRA_OBJS := $(USER_TEST_OBJ)
 else
   INITCODE_EXTRA_OBJS :=
 endif
@@ -440,16 +436,6 @@ $(FUCKYOU_OBJ): $(FUCKYOU_SRC)
 
 # 编译 user_test.o
 $(USER_TEST_OBJ): $(USER_TEST_SRC)
-	@mkdir -p $(dir $@)
-	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
-
-# 编译 iozone 最小复现入口
-$(IOZONE_REPRO_OBJ): $(IOZONE_REPRO_SRC)
-	@mkdir -p $(dir $@)
-	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
-
-# 编译 mClock 手写长时 IO 研究入口
-$(MCLOCK_RESEARCH_OBJ): $(MCLOCK_RESEARCH_SRC)
 	@mkdir -p $(dir $@)
 	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
 
