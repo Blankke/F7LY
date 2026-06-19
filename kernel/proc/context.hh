@@ -1,22 +1,9 @@
 #pragma once
 
 #include "types.hh"
-namespace fs
-{
-    class dentry;
-    class file;
-    class normal_file;
-} // namespace fs
 
 namespace proc
 {
-    enum VmaBackingKind : int
-    {
-        VMA_BACKING_NONE = 0,
-        VMA_BACKING_FILE = 1,
-        VMA_BACKING_SHM = 2,
-    };
-
     struct Context
     {
 #ifdef RISCV
@@ -53,24 +40,4 @@ namespace proc
         uint64 fp;
 #endif
     };
-
-    struct vma
-    {
-        int used;    // 是否已被使用
-        uint64 addr; // 起始地址
-        int len;     // 长度
-        int prot;    // 权限
-        int flags;   // 标志位
-        int vfd;     // 对应的文件描述符
-        // 保存与映射关联的文件指针
-        fs::file *vfile; //  对应文件
-        int offset;             // 文件偏移
-        uint64 max_len;         // 新增：最大可扩展长度
-        bool is_expandable;     // 新增：是否可扩展
-        int backing_kind;       // 映射后端类型：普通/文件/共享段
-        int backing_shmid;      // 共享段映射时记录真实 shmid，私有映射固定为 -1
-        uint64 backing_base;    // 共享段映射时记录原始 attach 基址
-        bool has_resident_pages; // 是否已经通过缺页/MAP_POPULATE 建立过叶子 PTE
-        bool wipe_on_fork;      // MADV_WIPEONFORK：fork 后子进程对应页清零
-    };
-}
+} // namespace proc

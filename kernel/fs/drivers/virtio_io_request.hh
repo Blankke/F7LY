@@ -42,6 +42,10 @@ namespace virtio_blk
         int io_status;
 
         int service_class;
+        uint64 enqueue_us;
+        uint64 r_tag_us;
+        uint64 w_tag_us;
+        uint64 l_tag_us;
         IoRequest *flow_next;
     };
 } // namespace virtio_blk

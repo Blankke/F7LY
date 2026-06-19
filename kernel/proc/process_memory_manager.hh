@@ -16,8 +16,10 @@
 #pragma once
 
 #include "types.hh"
-#include "proc.hh"
 #include "mem.hh" // 为MAP_SHARED、PROT_WRITE等常量
+#include "vm_area.hh"
+#include "vma_maple_tree.hh"
+#include "vma_space.hh"
 #include "sleeplock.hh"
 #include <EASTL/atomic.h>
 #ifdef RISCV
@@ -83,6 +85,8 @@ namespace proc
 
         // VMA管理（移除分散的引用计数）
         VMA vma_data;
+        VmaMapleTree vma_index;
+        VMASpace vm_space;
 
         // 共享标志
         bool shared_vm;
@@ -204,6 +208,7 @@ namespace proc
         void init_heap(uint64 start_addr);
         void reset_mmap_cursor(uint64 minimum_start);
         uint64 reserve_mmap_region(uint64 size, uint64 alignment = PGSIZE);
+        bool ensure_user_pagetable_hierarchy(uint64 start, uint64 size);
 
         /**
          * @brief 扩展堆内存
@@ -266,6 +271,30 @@ namespace proc
         void free_all_vma();
 
         /**
+         * @brief 重建 VMA Maple Tree 索引。
+         *
+         * 当复杂路径（例如 mprotect/mremap）批量修改多个槽位后，
+         * 统一调用此接口把数组槽位重新灌入树索引，避免局部更新漏同步。
+         */
+        void rebuild_vma_index();
+
+        vma *find_vma_covering(uint64 addr);
+        const vma *find_vma_covering(uint64 addr) const;
+        vma *find_first_vma_at_or_after(uint64 addr);
+        const vma *find_first_vma_at_or_after(uint64 addr) const;
+        vma *find_prev_vma(uint64 start_addr);
+        const vma *find_prev_vma(uint64 start_addr) const;
+        vma *find_next_vma(const vma *entry);
+        const vma *find_next_vma(const vma *entry) const;
+        int fault_page(uint64 va, int access_type);
+        bool reindex_vma_slot(vma &entry, uint64 old_addr);
+        bool insert_vma_slot(vma &entry);
+        void erase_vma_slot(vma &entry, uint64 old_addr);
+        bool has_vma_conflict(uint64 start_addr, uint64 end_addr, const vma *ignore = nullptr) const;
+        VMASpace &get_vm_space() { return vm_space; }
+        const VMASpace &get_vm_space() const { return vm_space; }
+
+        /**
          * @brief 取消指定地址范围的内存映射（支持munmap系统调用）
          * @param addr 起始地址
          * @param length 长度
@@ -273,31 +302,6 @@ namespace proc
          */
         int unmap_memory_range(void *addr, size_t length);
         int unmap_memory_range_fix(void *addr, size_t length);
-
-        /**
-         * @brief 为 SysV SHM / 其他外部共享后端登记共享 VMA。
-         *
-         * 这类映射不是通过 mmap() 进入的，但它们同样需要：
-         * 1. 在 fork() 时被 clone_for_fork() 正确继承；
-         * 2. 在 exit()/free_all_vma() 时走统一的共享段回收逻辑；
-         * 3. 避免 shmat 路径在页表里“裸映射”却没有任何元数据。
-         */
-        bool register_shared_attachment_vma(uint64 addr,
-                                            size_t length,
-                                            int prot,
-                                            int flags,
-                                            int shmid,
-                                            uint64 backing_base);
-
-        /**
-         * @brief 清理与指定共享段附件匹配的全部 VMA 片段。
-         *
-         * shmdt() 语义是按 attach 基址整段拆除共享映射；如果此前发生过 split/trim，
-         * 同一段共享内存可能已经在 VMA 表里分裂成多个片段，这里统一一次性清掉。
-         *
-         * @return 实际清理掉的 VMA 片段数量
-         */
-        int clear_shared_attachment_vmas(int shmid, uint64 backing_base);
         /**
          * @brief 查找覆盖指定地址范围的VMA
          * @param start_addr 起始地址
@@ -315,6 +319,7 @@ namespace proc
          * @return true 成功，false 失败
          */
         bool partial_unmap_vma(int vma_index, uint64 unmap_start, uint64 unmap_end);
+        bool partial_unmap_area(vma *entry, uint64 unmap_start, uint64 unmap_end);
 
         /****************************************************************************************
          * 页表管理接口
@@ -426,6 +431,88 @@ namespace proc
          */
         bool check_memory_leaks() const;
 
+        template <typename Fn>
+        bool for_each_vma(Fn &&fn)
+        {
+            vma *entry = find_first_vma_at_or_after(0);
+            while (entry != nullptr)
+            {
+                vma *next = find_next_vma(entry);
+                if (!fn(*entry))
+                {
+                    return false;
+                }
+                entry = next;
+            }
+            return true;
+        }
+
+        template <typename Fn>
+        bool for_each_vma(Fn &&fn) const
+        {
+            const vma *entry = find_first_vma_at_or_after(0);
+            while (entry != nullptr)
+            {
+                const vma *next = find_next_vma(entry);
+                if (!fn(*entry))
+                {
+                    return false;
+                }
+                entry = next;
+            }
+            return true;
+        }
+
+        template <typename Fn>
+        bool for_each_vma_in_range(uint64 start, uint64 end, Fn &&fn)
+        {
+            if (start >= end)
+            {
+                return true;
+            }
+
+            vma *entry = find_vma_covering(start);
+            if (entry == nullptr)
+            {
+                entry = find_first_vma_at_or_after(start);
+            }
+            while (entry != nullptr && entry->addr < end)
+            {
+                vma *next = find_next_vma(entry);
+                if (entry->overlaps(start, end) && !fn(*entry))
+                {
+                    return false;
+                }
+                entry = next;
+            }
+            return true;
+        }
+
+        template <typename Fn>
+        bool for_each_vma_in_range(uint64 start, uint64 end, Fn &&fn) const
+        {
+            if (start >= end)
+            {
+                return true;
+            }
+
+            const vma *entry = find_vma_covering(start);
+            if (entry == nullptr)
+            {
+                entry = find_first_vma_at_or_after(start);
+            }
+            while (entry != nullptr && entry->addr < end)
+            {
+                const vma *next = find_next_vma(entry);
+                if (entry->overlaps(start, end) && !fn(*entry))
+                {
+                    return false;
+                }
+                entry = next;
+            }
+            return true;
+        }
+
         /****************************************************************************************
          * 内存大小计算和一致性检查接口
          *
@@ -489,7 +576,17 @@ namespace proc
          * @return true 已映射，false 未映射
          */
         bool is_page_mapped(uint64 va);
+        void free_vma_entry(vma *entry, bool check_validity);
+        void unmap_vma_pages(const vma &entry, uint64 va_start, uint64 va_end, bool check_validity);
         bool range_overlaps_used_vma(uint64 start_addr, uint64 end_addr) const;
+        int vma_slot_index(const vma *entry) const;
+        uint64 find_gap_in_vma_index(uint64 start_hint,
+                                     uint64 min_addr,
+                                     uint64 max_addr,
+                                     uint64 size,
+                                     uint64 alignment) const;
+        bool clone_private_vm_space_for_fork(ProcessMemoryManager &dst);
+        bool clone_vm_space_metadata_from(const ProcessMemoryManager &src);
         
         /**
          * @brief 写回文件映射的数据

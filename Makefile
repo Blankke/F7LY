@@ -223,12 +223,8 @@ FUCKYOU_OBJ := build/$(OUTPUT_PREFIX)/fuckyou.o
 
 USER_TEST_SRC := user/user_lib/user_test.cc 
 USER_TEST_OBJ := build/$(OUTPUT_PREFIX)/user_test.o
-IOZONE_REPRO_SRC := user/research/iozone/iozone_research.cc
-IOZONE_REPRO_OBJ := build/$(OUTPUT_PREFIX)/iozone_research.o
-PRIORITY_BORROW_RESEARCH_SRC := user/research/priority_borrow_research.cc
-PRIORITY_BORROW_RESEARCH_OBJ := build/$(OUTPUT_PREFIX)/priority_borrow_research.o
 ifeq ($(INITCODE_MODE),evaluation)
-  INITCODE_EXTRA_OBJS := $(USER_TEST_OBJ) $(IOZONE_REPRO_OBJ) $(PRIORITY_BORROW_RESEARCH_OBJ)
+  INITCODE_EXTRA_OBJS := $(USER_TEST_OBJ)
 else
   INITCODE_EXTRA_OBJS :=
 endif
@@ -443,16 +439,6 @@ $(USER_TEST_OBJ): $(USER_TEST_SRC)
 	@mkdir -p $(dir $@)
 	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
 
-# 编译 iozone 最小复现入口
-$(IOZONE_REPRO_OBJ): $(IOZONE_REPRO_SRC)
-	@mkdir -p $(dir $@)
-	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
-
-# 编译 priority-borrow 手写长时 IO 研究入口
-$(PRIORITY_BORROW_RESEARCH_OBJ): $(PRIORITY_BORROW_RESEARCH_SRC)
-	@mkdir -p $(dir $@)
-	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
-
 # 链接生成 initcode.elf
 $(INITCODE_ELF): $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(FUCKYOU_OBJ) $(INITCODE_EXTRA_OBJS) $(INITCODE_LINK_SCRIPT)
 	$(LD) $(INITCODE_LDFLAGS) -o $@ $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(FUCKYOU_OBJ)	 $(INITCODE_EXTRA_OBJS)
@@ -479,5 +465,8 @@ clean:
 	rm -f $(KERNEL_ELF) $(KERNEL_BIN)
 	rm -f kernel-la kernel-rv kernel-la.bin kernel-rv.bin
 	rm -f kernel-la-shell kernel-rv-shell kernel-la-shell.bin kernel-rv-shell.bin
+
+cleanlog:
+	rm -rf logs/
 
 -include $(DEPS)

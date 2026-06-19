@@ -166,6 +166,7 @@ namespace proc
         int _stop_signal;      // 最近一次使任务停止的 job-control 信号
         bool _stop_reported;   // wait4/waitid 是否已经消费本次停止事件
         bool _continued_pending; // SIGCONT 后等待父进程消费的继续事件
+        bool _has_child_tasks;  // 是否创建过普通子进程；无子线程退出时可跳过 reparent 全表扫描
 
         // 调度相关字段
         int _slot;     // 当前时间片剩余量 @todo: 应使用更精确的时间单位
@@ -184,6 +185,7 @@ namespace proc
          ****************************************************************************************/
         uint64 _kstack = 0;    // 内核栈的虚拟地址
         TrapFrame *_trapframe; // 用户态寄存器保存区，用于系统调用和异常处理, 在usertrapret时映射
+        bool _used_fpu;        // LoongArch 懒 FPU：线程第一次触发浮点禁用异常后才保存/恢复 FPU 现场
     private:
         // 阶段1：统一内存管理器（替代分散的内存字段）
         class ProcessMemoryManager* _memory_manager;
@@ -281,6 +283,8 @@ namespace proc
     public:
         Pcb();
         void init(const char *lock_name, uint gid);
+        ofile *ensure_ofile(); // 按需创建文件描述符表
+        sighand_struct *ensure_sighand(); // 按需创建信号处理表
         void cleanup_ofile();   // 释放ofile资源的方法
         void cleanup_sighand(); // 释放sighand_struct资源的方法
         void cleanup_memory_manager(); // 释放ProcessMemoryManager资源
@@ -320,7 +324,6 @@ namespace proc
         // 其他内存管理接口
         void emergency_memory_cleanup();         // 紧急内存清理
         bool check_memory_leaks() const;         // 检查内存泄漏
-        void print_detailed_memory_info() const; // 打印详细内存信息
 
     public:
         Context *get_context() { return &_context; }
@@ -363,110 +366,36 @@ namespace proc
         void set_kstack(uint64 kstack) { _kstack = kstack; }
 
         // 页表访问：通过ProcessMemoryManager
-        mem::PageTable *get_pagetable() 
-        { 
-            return _memory_manager ? &_memory_manager->pagetable : nullptr;
-        }
-        const mem::PageTable *get_pagetable() const 
-        { 
-            return _memory_manager ? &_memory_manager->pagetable : nullptr;
-        }
-        void set_pagetable(const mem::PageTable &pt) 
-        { 
-            if (_memory_manager) {
-                _memory_manager->pagetable = pt;
-            }
-        }
+        mem::PageTable *get_pagetable();
+        const mem::PageTable *get_pagetable() const;
+        void set_pagetable(const mem::PageTable &pt);
 
         // 共享VM标志：通过ProcessMemoryManager
-        bool get_shared_vm() const 
-        { 
-            return _memory_manager ? _memory_manager->shared_vm : false;
-        }
-        void set_shared_vm(bool shared) 
-        { 
-            if (_memory_manager) {
-                _memory_manager->shared_vm = shared;
-            }
-        }
+        bool get_shared_vm() const;
+        void set_shared_vm(bool shared);
 
         // VMA访问：通过ProcessMemoryManager
-        VMA *get_vma() 
-        { 
-            return _memory_manager ? &_memory_manager->vma_data : nullptr;
-        }
-        const VMA *get_vma() const 
-        { 
-            return _memory_manager ? &_memory_manager->vma_data : nullptr;
-        }
-        void set_vma(VMA *vma) 
-        { 
-            if (vma && _memory_manager) {
-                _memory_manager->vma_data = *vma;
-            }
-        }
+        VMA *get_vma();
+        const VMA *get_vma() const;
+        void set_vma(VMA *vma);
 
         // 程序段访问方法：通过ProcessMemoryManager
-        int get_prog_section_count() const 
-        { 
-            return _memory_manager ? _memory_manager->prog_section_count : 0;
-        }
-        const program_section_desc *get_prog_sections() const 
-        { 
-            return _memory_manager ? _memory_manager->prog_sections : nullptr;
-        }
-        program_section_desc *get_prog_sections() 
-        { 
-            return _memory_manager ? _memory_manager->prog_sections : nullptr;
-        }
-        void set_prog_section_count(int count) 
-        { 
-            if (_memory_manager) {
-                _memory_manager->prog_section_count = count;
-            }
-        }
+        int get_prog_section_count() const;
+        const program_section_desc *get_prog_sections() const;
+        program_section_desc *get_prog_sections();
+        void set_prog_section_count(int count);
 
         // 堆内存访问方法：通过ProcessMemoryManager
-        uint64 get_heap_start() const 
-        { 
-            return _memory_manager ? _memory_manager->heap_start : 0;
-        }
-        uint64 get_heap_end() const 
-        { 
-            return _memory_manager ? _memory_manager->heap_end : 0;
-        }
-        uint64 get_heap_size() const 
-        { 
-            return _memory_manager ? (_memory_manager->heap_end - _memory_manager->heap_start) : 0;
-        }
-        uint64 get_mmap_cursor() const
-        {
-            return _memory_manager ? _memory_manager->mmap_cursor : 0;
-        }
-        void set_heap_start(uint64 start_addr) 
-        { 
-            if (_memory_manager) {
-                _memory_manager->heap_start = start_addr;
-            }
-        }
-        void set_heap_end(uint64 end_addr) 
-        { 
-            if (_memory_manager) {
-                _memory_manager->heap_end = end_addr;
-            }
-        }
-        void set_mmap_cursor(uint64 next_addr)
-        {
-            if (_memory_manager) {
-                _memory_manager->mmap_cursor = next_addr;
-            }
-        }
+        uint64 get_heap_start() const;
+        uint64 get_heap_end() const;
+        uint64 get_heap_size() const;
+        uint64 get_mmap_cursor() const;
+        void set_heap_start(uint64 start_addr);
+        void set_heap_end(uint64 end_addr);
+        void set_mmap_cursor(uint64 next_addr);
 
         // 内存大小访问方法：通过ProcessMemoryManager
-        uint64 get_size() const 
-        { 
-            return _memory_manager ? _memory_manager->get_total_memory_usage() : 0;
-        }
+        uint64 get_size() const;
 
         ProcState get_state() const { return _state; }
         char *get_name() { return _name; }

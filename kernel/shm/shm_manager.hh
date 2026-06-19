@@ -4,14 +4,25 @@
 #include <EASTL/string.h>
 #include "devs/spinlock.hh"
 #include "proc.hh"
+
+namespace fs
+{
+    class file;
+}
+
+namespace proc
+{
+    class FileVmObject;
+    class SysvShmVmObject;
+    class VmObject;
+}
 namespace shm
 {
-    constexpr uint64 k_mmap_backing_ipc_namespace_id = 0;
-
     struct attached_entry
     {
-        uint tid;     // 线程ID（全局唯一标识线程）
-        void *addr;   // 该线程在其地址空间中映射的虚拟起始地址
+        uint tid;     // 创建附件记录时的线程 ID，用于线程级清理路径
+        pid_t pid;    // 进程 ID；SysV SHM 的 attach/detach 归属以进程地址空间为准
+        void *addr;   // 该地址空间中映射的虚拟起始地址
     };
 
     struct shm_segment
@@ -38,9 +49,10 @@ namespace shm
 				u16 _rsv : 7;
 			}__attribute__((__packed__));
 		}__attribute__((__packed__));
-    // 每次附加记录为 (tid, addr)，避免跨进程/线程的地址混淆
+    // 每次附加记录为 (tid, pid, addr)，既能支持线程级失败清理，也能表达 SysV SHM
+    // “按进程地址空间 detach”的语义，避免同一进程不同线程路径找不到自己的映射。
     eastl::vector<attached_entry> attached_addrs;
-        uint64 phy_addrs;  // 物理地址
+        proc::SysvShmVmObject *object = nullptr; // SysV SHM 统一对象后端，由管理器持有生命周期
         
         // 时间信息（POSIX标准：自Unix纪元以来的秒数）
         time_t atime;      // 最后访问时间 (shmat) - 使用timer_manager获取REALTIME
@@ -70,18 +82,6 @@ namespace shm
     };
 
 
-    // 空闲内存块结构
-    struct free_block
-    {
-        uint64 addr;   // 空闲块起始地址
-        size_t size;   // 空闲块大小
-        
-        // 用于排序，按地址排序便于合并相邻块
-        bool operator<(const free_block& other) const {
-            return addr < other.addr;
-        }
-    };
-
     class ShmManager
     {
     private:
@@ -89,20 +89,13 @@ namespace shm
         // 使用unordered_map来存储共享内存段信息，key为shmid
         eastl::unordered_map<int, shm_segment>* segments;
         int next_shmid; // 下一个可用的shmid,分配后更新这个值
-        uint64 shm_base;
         uint64 shm_size;
         mutable SpinLock shm_lock_; // 保护共享段容器、附加记录与空闲块元数据
-        
-        // 空闲内存块管理 - 使用vector来存储空闲块，保持按地址排序
-        eastl::vector<free_block> free_blocks;
+        eastl::unordered_map<eastl::string, proc::FileVmObject *> *shared_file_objects;
+        eastl::unordered_map<uint64, proc::VmObject *> *registered_objects;
         size_t shmmax_limit; // /proc/sys/kernel/shmmax，可由 LTP save_restore 临时调整
         int shmmni_limit;    // /proc/sys/kernel/shmmni，限制系统共享段数量
-        
-        // 私有内存管理方法
-        uint64 allocate_memory(size_t size);  // 从空闲块中分配内存
-        void deallocate_memory(uint64 addr, size_t size);  // 回收内存到空闲块
-        void merge_adjacent_blocks();  // 合并相邻的空闲块
-        
+
         // 私有辅助方法
         int create_new_segment_locked(key_t key, size_t size, int shmflg, uint64 ipc_ns_id);  // 需要在持锁状态下创建共享段
         int delete_seg_locked(int shmid);  // 需要在持锁状态下删除共享段
@@ -113,6 +106,8 @@ namespace shm
         uint64 find_available_address(proc::Pcb* proc, size_t size);  // 查找可用地址
         bool is_valid_attach_address(uint64 addr, size_t size, bool rounded);  // 验证地址合法性
         bool has_address_conflict(proc::Pcb* proc, uint64 addr, size_t size);  // 检查地址冲突
+        void remove_attachment_record_locked(shm_segment &seg, uint tid, pid_t pid, void *addr);
+        bool lookup_attachment_locked(uint tid, pid_t pid, void *addr, int *shmid, size_t *real_size);
         
     public:
         void init(uint64 base, uint64 size) ;
@@ -120,12 +115,6 @@ namespace shm
         // 创建共享内存段
         int create_seg(key_t key, size_t size, int shmflg);
         int create_seg_in_namespace(key_t key, size_t size, int shmflg, uint64 ipc_ns_id);
-
-        // 通过 key 查询现有共享段。
-        // 这里专门给 mmap(MAP_SHARED) 的失败清理路径使用，
-        // 用来区分“当前调用新建的段”和“复用了历史段”，避免误删其他映射正在使用的后端。
-        int find_seg_by_key(key_t key);
-        int find_seg_by_key_in_namespace(key_t key, uint64 ipc_ns_id);
 
         // 删除共享内存段
         int delete_seg(int shmid);
@@ -136,10 +125,13 @@ namespace shm
         //   char* shmaddr = (char*)attach_seg(shmid, (void*)0x1000, 0);  // 指定地址
         //   char* shmaddr = (char*)attach_seg(shmid, (void*)0x1234, SHM_RND); // 地址向下对齐
         //   char* shmaddr = (char*)attach_seg(shmid, nullptr, SHM_RDONLY);    // 只读映射
-        void *attach_seg(int shmid, void *shmaddr = nullptr, int shmflg = 0, bool register_vma = true);
+        void *attach_seg(int shmid, void *shmaddr = nullptr, int shmflg = 0);
 
         // 解除映射共享内存段
         int detach_seg(void *addr);
+
+        // 仅移除 SysV SHM 的附件记录，不直接碰页表；供 VMASpace 释放路径调用。
+        int detach_vma_attachment(int shmid, void *addr, uint tid);
 
         // 检查地址是否属于共享内存区域
         bool is_shared_memory_address(void *addr);
@@ -152,7 +144,7 @@ namespace shm
 
     // 在 fork 结束时，把父线程 tid 的所有附加记录复制一份给子线程 tid
     // 返回是否有任何记录被复制
-        bool duplicate_attachments_for_fork(uint parent_tid, uint child_tid);
+        bool duplicate_attachments_for_fork(uint parent_tid, uint child_tid, pid_t child_pid);
 
         // 按进程清理共享内存附加记录。
         // match_tid_only=true 时只按 tid 删除，适合创建失败的僵尸子进程清理。
@@ -184,7 +176,17 @@ namespace shm
         void print_memory_status() const;  // 打印内存使用状况
         size_t get_total_free_memory() const;  // 获取总空闲内存
         size_t get_largest_free_block() const;  // 获取最大空闲块大小
+
+        // 通用对象管理接口：
+        // 共享文件映射从这里拿可复用对象，SysV SHM/普通对象析构也统一回这里做索引回收。
+        proc::FileVmObject *acquire_shared_file_object(fs::file *file_obj);
+        proc::SysvShmVmObject *acquire_sysv_object(int shmid);
+        void note_object_created(proc::VmObject *object);
+        void note_object_destroying(const proc::VmObject *object);
+        void release_shared_file_object_if_unused(proc::VmObject *object);
     };
+
+    using VmObjectManager = ShmManager;
 
     extern ShmManager k_smm; // 全局共享内存管理器实例
 }

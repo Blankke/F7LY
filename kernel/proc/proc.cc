@@ -147,6 +147,7 @@ namespace proc
          ****************************************************************************************/
         _kstack = 0;          // 内核栈虚拟地址
         _trapframe = nullptr; // 用户态寄存器保存区
+        _used_fpu = false;    // 默认按整数任务处理，第一次浮点指令异常后再启用 FPU 现场
         
         // 阶段1：创建统一内存管理器
         _memory_manager = nullptr; // 延迟到init()中创建，避免在构造函数中panic
@@ -249,6 +250,218 @@ namespace proc
         // 注意：不在init中创建ProcessMemoryManager
         // ProcessMemoryManager的创建延迟到具体需要时（fork、user_init、execve等）
         _memory_manager = nullptr;
+    }
+
+    mem::PageTable *Pcb::get_pagetable()
+    {
+        return _memory_manager ? &_memory_manager->pagetable : nullptr;
+    }
+
+    const mem::PageTable *Pcb::get_pagetable() const
+    {
+        return _memory_manager ? &_memory_manager->pagetable : nullptr;
+    }
+
+    void Pcb::set_pagetable(const mem::PageTable &pt)
+    {
+        if (_memory_manager != nullptr)
+        {
+            _memory_manager->pagetable = pt;
+        }
+    }
+
+    bool Pcb::get_shared_vm() const
+    {
+        return _memory_manager ? _memory_manager->shared_vm : false;
+    }
+
+    void Pcb::set_shared_vm(bool shared)
+    {
+        if (_memory_manager != nullptr)
+        {
+            _memory_manager->shared_vm = shared;
+        }
+    }
+
+    VMA *Pcb::get_vma()
+    {
+        return _memory_manager ? &_memory_manager->vma_data : nullptr;
+    }
+
+    const VMA *Pcb::get_vma() const
+    {
+        return _memory_manager ? &_memory_manager->vma_data : nullptr;
+    }
+
+    void Pcb::set_vma(VMA *vma)
+    {
+        if (vma != nullptr && _memory_manager != nullptr)
+        {
+            _memory_manager->vma_data = *vma;
+            _memory_manager->rebuild_vma_index();
+        }
+    }
+
+    int Pcb::get_prog_section_count() const
+    {
+        return _memory_manager ? _memory_manager->prog_section_count : 0;
+    }
+
+    const program_section_desc *Pcb::get_prog_sections() const
+    {
+        return _memory_manager ? _memory_manager->prog_sections : nullptr;
+    }
+
+    program_section_desc *Pcb::get_prog_sections()
+    {
+        return _memory_manager ? _memory_manager->prog_sections : nullptr;
+    }
+
+    void Pcb::set_prog_section_count(int count)
+    {
+        if (_memory_manager != nullptr)
+        {
+            _memory_manager->prog_section_count = count;
+        }
+    }
+
+    uint64 Pcb::get_heap_start() const
+    {
+        return _memory_manager ? _memory_manager->heap_start : 0;
+    }
+
+    uint64 Pcb::get_heap_end() const
+    {
+        return _memory_manager ? _memory_manager->heap_end : 0;
+    }
+
+    uint64 Pcb::get_heap_size() const
+    {
+        return _memory_manager ? (_memory_manager->heap_end - _memory_manager->heap_start) : 0;
+    }
+
+    uint64 Pcb::get_mmap_cursor() const
+    {
+        return _memory_manager ? _memory_manager->mmap_cursor : 0;
+    }
+
+    void Pcb::set_heap_start(uint64 start_addr)
+    {
+        if (_memory_manager != nullptr)
+        {
+            _memory_manager->heap_start = start_addr;
+        }
+    }
+
+    void Pcb::set_heap_end(uint64 end_addr)
+    {
+        if (_memory_manager != nullptr)
+        {
+            _memory_manager->heap_end = end_addr;
+        }
+    }
+
+    void Pcb::set_mmap_cursor(uint64 next_addr)
+    {
+        if (_memory_manager != nullptr)
+        {
+            _memory_manager->mmap_cursor = next_addr;
+        }
+    }
+
+    uint64 Pcb::get_size() const
+    {
+        return _memory_manager ? _memory_manager->get_total_memory_usage() : 0;
+    }
+
+    ofile *Pcb::ensure_ofile()
+    {
+        if (_ofile != nullptr)
+        {
+            return _ofile;
+        }
+
+        ofile *candidate = new ofile();
+        if (candidate == nullptr)
+        {
+            return nullptr;
+        }
+        candidate->init("ofile");
+
+        ofile *result = nullptr;
+        if (_lock.is_held())
+        {
+            // alloc_proc()/user_init()/fork 子进程初始化阶段已经持有 PCB 锁，
+            // 这里不能再次 acquire；否则会在单核上直接自锁 panic。
+            if (_ofile == nullptr)
+            {
+                _ofile = candidate;
+                candidate = nullptr;
+            }
+            result = _ofile;
+        }
+        else
+        {
+            _lock.acquire();
+            if (_ofile == nullptr)
+            {
+                _ofile = candidate;
+                candidate = nullptr;
+            }
+            result = _ofile;
+            _lock.release();
+        }
+
+        if (candidate != nullptr)
+        {
+            delete candidate;
+        }
+        return result;
+    }
+
+    sighand_struct *Pcb::ensure_sighand()
+    {
+        if (_sigactions != nullptr)
+        {
+            return _sigactions;
+        }
+
+        sighand_struct *candidate = new sighand_struct();
+        if (candidate == nullptr)
+        {
+            return nullptr;
+        }
+        candidate->refcnt = 1;
+        memset(candidate->actions, 0, sizeof(candidate->actions));
+
+        sighand_struct *result = nullptr;
+        if (_lock.is_held())
+        {
+            // 创建/复制 PCB 的调用点已经持有 PCB 锁，避免懒初始化再次抢同一把锁。
+            if (_sigactions == nullptr)
+            {
+                _sigactions = candidate;
+                candidate = nullptr;
+            }
+            result = _sigactions;
+        }
+        else
+        {
+            _lock.acquire();
+            if (_sigactions == nullptr)
+            {
+                _sigactions = candidate;
+                candidate = nullptr;
+            }
+            result = _sigactions;
+            _lock.release();
+        }
+
+        if (candidate != nullptr)
+        {
+            delete candidate;
+        }
+        return result;
     }
 
     void Pcb::cleanup_sighand()
@@ -612,21 +825,6 @@ namespace proc
             return _memory_manager->check_memory_leaks();
         }
         return false;
-    }
-
-    void Pcb::print_detailed_memory_info() const
-    {
-        if (_memory_manager)
-        {
-            _memory_manager->print_memory_usage();
-        }
-        else
-        {
-            printfCyan("=== PCB Memory Information ===\n");
-            printfCyan("Process: %s (PID: %d)\n", _name, _pid);
-            printfCyan("ProcessMemoryManager: not present\n");
-            printfCyan("=== End PCB Memory Information ===\n");
-        }
     }
 
 }
