@@ -371,6 +371,96 @@ namespace proc
         return _memory_manager ? _memory_manager->get_total_memory_usage() : 0;
     }
 
+    ofile *Pcb::ensure_ofile()
+    {
+        if (_ofile != nullptr)
+        {
+            return _ofile;
+        }
+
+        ofile *candidate = new ofile();
+        if (candidate == nullptr)
+        {
+            return nullptr;
+        }
+        candidate->init("ofile");
+
+        ofile *result = nullptr;
+        if (_lock.is_held())
+        {
+            // alloc_proc()/user_init()/fork 子进程初始化阶段已经持有 PCB 锁，
+            // 这里不能再次 acquire；否则会在单核上直接自锁 panic。
+            if (_ofile == nullptr)
+            {
+                _ofile = candidate;
+                candidate = nullptr;
+            }
+            result = _ofile;
+        }
+        else
+        {
+            _lock.acquire();
+            if (_ofile == nullptr)
+            {
+                _ofile = candidate;
+                candidate = nullptr;
+            }
+            result = _ofile;
+            _lock.release();
+        }
+
+        if (candidate != nullptr)
+        {
+            delete candidate;
+        }
+        return result;
+    }
+
+    sighand_struct *Pcb::ensure_sighand()
+    {
+        if (_sigactions != nullptr)
+        {
+            return _sigactions;
+        }
+
+        sighand_struct *candidate = new sighand_struct();
+        if (candidate == nullptr)
+        {
+            return nullptr;
+        }
+        candidate->refcnt = 1;
+        memset(candidate->actions, 0, sizeof(candidate->actions));
+
+        sighand_struct *result = nullptr;
+        if (_lock.is_held())
+        {
+            // 创建/复制 PCB 的调用点已经持有 PCB 锁，避免懒初始化再次抢同一把锁。
+            if (_sigactions == nullptr)
+            {
+                _sigactions = candidate;
+                candidate = nullptr;
+            }
+            result = _sigactions;
+        }
+        else
+        {
+            _lock.acquire();
+            if (_sigactions == nullptr)
+            {
+                _sigactions = candidate;
+                candidate = nullptr;
+            }
+            result = _sigactions;
+            _lock.release();
+        }
+
+        if (candidate != nullptr)
+        {
+            delete candidate;
+        }
+        return result;
+    }
+
     void Pcb::cleanup_sighand()
     {
         if (_sigactions != nullptr)

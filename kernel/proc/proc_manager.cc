@@ -1052,6 +1052,7 @@ namespace proc
                 p->_stop_signal = 0;
                 p->_stop_reported = false;
                 p->_continued_pending = false;
+                p->_has_child_tasks = false;
 
                 // 设置调度相关字段：默认调度槽与优先级
                 p->_slot = default_proc_slot;
@@ -1104,10 +1105,6 @@ namespace proc
                 p->_root_name = "/";
                 p->_personality = 0;  // 新进程默认使用 PER_LINUX
 
-                // 初始化文件描述符表
-                p->_ofile = new ofile();
-                p->_ofile->init("ofile");
-
                 /****************************************************************************************
                  * 线程和同步原语初始化
                  ****************************************************************************************/
@@ -1120,14 +1117,6 @@ namespace proc
                 /****************************************************************************************
                  * 信号处理初始化
                  ****************************************************************************************/
-                // 初始化信号处理结构体
-                p->_sigactions = new sighand_struct();
-                p->_sigactions->refcnt = 1;
-                for (int i = 0; i <= ipc::signal::SIGRTMAX; ++i)
-                {
-                    p->_sigactions->actions[i] = nullptr;
-                }
-
                 p->_sigmask = 0;        // 清空信号屏蔽掩码
                 p->_signal = 0;         // 清空待处理信号掩码
                 p->_siginfo_mask = 0;   // 清空附带 siginfo 的 pending signal 标记
@@ -1300,6 +1289,7 @@ namespace proc
         p->_stop_signal = 0;
         p->_stop_reported = false;
         p->_continued_pending = false;
+        p->_has_child_tasks = false;
         p->_state = ProcState::UNUSED; // 标记进程控制块为未使用
 
         p->_slot = 0;                 // 重置时间片
@@ -1414,6 +1404,11 @@ namespace proc
 
         printf("[freeproc_creation_failed] Cleaning up failed process creation for pid %d\n", p->_pid);
 
+        // 失败回滚阶段也可能已经懒创建了 fd 表/信号表，必须先收回，
+        // 否则 freeproc() 会把它们当成泄漏直接判异常。
+        p->cleanup_ofile();
+        p->cleanup_sighand();
+
         // 如果已经分配了trapframe，需要释放
         if (p->get_trapframe() != nullptr)
         {
@@ -1484,6 +1479,13 @@ namespace proc
 
         // 绑定到当前PCB
         p->set_memory_manager(init_mm);
+
+        if (p->ensure_ofile() == nullptr)
+        {
+            freeproc_creation_failed(p);
+            panic("user_init: failed to create fd table for init process");
+            return;
+        }
 
         // 传入initcode的地址
         printfCyan("initcode pagetable: %p\n", p->get_pagetable()->get_base());
@@ -1943,20 +1945,29 @@ namespace proc
     /// @return
     int ProcessManager::alloc_fd(Pcb *p, fs::file *f, int fd)
     {
-        int fd_limit = effective_fd_limit(p);
-        if (fd < 0 || fd >= fd_limit || f == nullptr || p->_ofile == nullptr)
+        if (p == nullptr || f == nullptr)
             return -1;
 
-        fs::file *old_file = nullptr;
-        p->_ofile->_lock.acquire();
-        if (p->_ofile->_ofile_ptr[fd] != nullptr)
+        int fd_limit = effective_fd_limit(p);
+        if (fd < 0 || fd >= fd_limit)
+            return -1;
+
+        ofile *fd_table = p->ensure_ofile();
+        if (fd_table == nullptr)
         {
-            old_file = p->_ofile->_ofile_ptr[fd];
+            return -1;
         }
-        p->_ofile->_ofile_ptr[fd] = f;
-        p->_ofile->_reserved[fd] = false;
-        p->_ofile->_fl_cloexec[fd] = false; // 默认不设置 CLOEXEC
-        p->_ofile->_lock.release();
+
+        fs::file *old_file = nullptr;
+        fd_table->_lock.acquire();
+        if (fd_table->_ofile_ptr[fd] != nullptr)
+        {
+            old_file = fd_table->_ofile_ptr[fd];
+        }
+        fd_table->_ofile_ptr[fd] = f;
+        fd_table->_reserved[fd] = false;
+        fd_table->_fl_cloexec[fd] = false; // 默认不设置 CLOEXEC
+        fd_table->_lock.release();
 
         if (old_file != nullptr)
         {
@@ -1987,46 +1998,58 @@ namespace proc
     {
         int fd;
 
-        if (p->_ofile == nullptr || f == nullptr)
+        if (p == nullptr || f == nullptr)
             return -1;
 
+        ofile *fd_table = p->ensure_ofile();
+        if (fd_table == nullptr)
+        {
+            return -1;
+        }
+
         int fd_limit = effective_fd_limit(p);
-        p->_ofile->_lock.acquire();
+        fd_table->_lock.acquire();
         for (fd = 0; fd < fd_limit; fd++)
         {
-            if (p->_ofile->_ofile_ptr[fd] == nullptr && !p->_ofile->_reserved[fd])
+            if (fd_table->_ofile_ptr[fd] == nullptr && !fd_table->_reserved[fd])
             {
-                p->_ofile->_ofile_ptr[fd] = f;
-                p->_ofile->_reserved[fd] = false;
-                p->_ofile->_fl_cloexec[fd] = false; // 默认不设置 CLOEXEC
-                p->_ofile->_lock.release();
+                fd_table->_ofile_ptr[fd] = f;
+                fd_table->_reserved[fd] = false;
+                fd_table->_fl_cloexec[fd] = false; // 默认不设置 CLOEXEC
+                fd_table->_lock.release();
                 return fd;
             }
         }
-        p->_ofile->_lock.release();
+        fd_table->_lock.release();
         return syscall::SYS_EMFILE;
     }
 
     int ProcessManager::reserve_fd(Pcb *p)
     {
-        if (p == nullptr || p->_ofile == nullptr)
+        if (p == nullptr)
+        {
+            return -1;
+        }
+
+        ofile *fd_table = p->ensure_ofile();
+        if (fd_table == nullptr)
         {
             return -1;
         }
 
         int fd_limit = effective_fd_limit(p);
-        p->_ofile->_lock.acquire();
+        fd_table->_lock.acquire();
         for (int fd = 0; fd < fd_limit; ++fd)
         {
-            if (p->_ofile->_ofile_ptr[fd] == nullptr && !p->_ofile->_reserved[fd])
+            if (fd_table->_ofile_ptr[fd] == nullptr && !fd_table->_reserved[fd])
             {
-                p->_ofile->_reserved[fd] = true;
-                p->_ofile->_fl_cloexec[fd] = false;
-                p->_ofile->_lock.release();
+                fd_table->_reserved[fd] = true;
+                fd_table->_fl_cloexec[fd] = false;
+                fd_table->_lock.release();
                 return fd;
             }
         }
-        p->_ofile->_lock.release();
+        fd_table->_lock.release();
         return syscall::SYS_EMFILE;
     }
 
@@ -2330,6 +2353,11 @@ namespace proc
 
         if (flags & syscall::CLONE_FILES)
         {
+            if (p->_ofile == nullptr && p->ensure_ofile() == nullptr)
+            {
+                freeproc_creation_failed(np);
+                return nullptr;
+            }
             // 共享文件描述符表
             np->cleanup_ofile();
             np->_ofile = p->_ofile;
@@ -2338,24 +2366,33 @@ namespace proc
         else
         {
             // 深拷贝文件描述符表
-            for (i = 0; i < static_cast<uint64>(max_open_files); i++)
+            if (p->_ofile != nullptr)
             {
-                fs::file *parent_file = p->_ofile->_ofile_ptr[i];
-                if (parent_file)
+                if (np->_ofile == nullptr && np->ensure_ofile() == nullptr)
                 {
-                    if (!is_probably_live_file_object(parent_file))
-                    {
-                        printfRed("[fork] 检测到异常文件描述符条目，直接清理: parent pid=%d child pid=%d fd=%d file=%p\n",
-                                  p->_pid, np->_pid, i, parent_file);
-                        p->_ofile->_ofile_ptr[i] = nullptr;
-                        p->_ofile->_fl_cloexec[i] = false;
-                        continue;
-                    }
+                    freeproc_creation_failed(np);
+                    return nullptr;
+                }
 
-                    // fs::k_file_table.dup( p->_ofile[ i ] );
-                    parent_file->dup();
-                    np->_ofile->_ofile_ptr[i] = parent_file;
-                    np->_ofile->_fl_cloexec[i] = p->_ofile->_fl_cloexec[i]; // 继承 CLOEXEC 标志
+                for (i = 0; i < static_cast<uint64>(max_open_files); i++)
+                {
+                    fs::file *parent_file = p->_ofile->_ofile_ptr[i];
+                    if (parent_file)
+                    {
+                        if (!is_probably_live_file_object(parent_file))
+                        {
+                            printfRed("[fork] 检测到异常文件描述符条目，直接清理: parent pid=%d child pid=%d fd=%d file=%p\n",
+                                      p->_pid, np->_pid, i, parent_file);
+                            p->_ofile->_ofile_ptr[i] = nullptr;
+                            p->_ofile->_fl_cloexec[i] = false;
+                            continue;
+                        }
+
+                        // fs::k_file_table.dup( p->_ofile[ i ] );
+                        parent_file->dup();
+                        np->_ofile->_ofile_ptr[i] = parent_file;
+                        np->_ofile->_fl_cloexec[i] = p->_ofile->_fl_cloexec[i]; // 继承 CLOEXEC 标志
+                    }
                 }
             }
         }
@@ -2400,6 +2437,11 @@ namespace proc
         // ===== 信号处理 =====
         if (flags & syscall::CLONE_SIGHAND)
         {
+            if (p->_sigactions == nullptr && p->ensure_sighand() == nullptr)
+            {
+                freeproc_creation_failed(np);
+                return nullptr;
+            }
             // 共享信号处理结构
             np->cleanup_sighand(); // 使用cleanup方法来正确处理引用计数
             // 共享父进程的信号处理结构
@@ -2412,8 +2454,14 @@ namespace proc
         else
         {
             // 不共享信号处理结构，需要深拷贝
-            if (p->_sigactions != nullptr && np->_sigactions != nullptr)
+            if (p->_sigactions != nullptr)
             {
+                if (np->_sigactions == nullptr && np->ensure_sighand() == nullptr)
+                {
+                    freeproc_creation_failed(np);
+                    return nullptr;
+                }
+
                 for (int i = 0; i <= ipc::signal::SIGRTMAX; ++i)
                 {
                     if (p->_sigactions->actions[i] != nullptr)
@@ -2540,6 +2588,13 @@ namespace proc
         {
             // 如果设置了 CLONE_CHILD_CLEARTID，则在子进程退出时清除线程 ID
             np->_clear_tid_addr = ctid;
+        }
+
+        if ((flags & syscall::CLONE_THREAD) == 0 && np->_parent != nullptr)
+        {
+            // 只有普通子进程需要参与父进程 reparent/wait 语义；线程不进入 wait4 子进程集合。
+            // 记录这个轻量事实后，pthread 这类无子线程退出时不用每次扫完整进程池。
+            np->_parent->_has_child_tasks = true;
         }
 
         np->_state = ProcState::RUNNABLE;
@@ -3106,7 +3161,6 @@ namespace proc
             panic("init exiting"); // 保护机制：init 进程不能退出
 
 	        printfBlue("[exit_proc] proc %s pid %d exiting\n", p->_name, p->_pid);
-	        printfYellow("[exit-mm] pcb=%p pid=%d tid=%d mm=%p\n", p, p->_pid, p->_tid, p->get_memory_manager());
 
         // 退出清理期间可能会触发文件回写/块设备 I/O，这些路径允许 sleep。
         // 因此不能长时间手工关中断；改用 _exiting 禁止 timer 抢占式 yield，
@@ -3122,7 +3176,10 @@ namespace proc
         // leader 退出就无条件向同组进程广播 SIGHUP/SIGCONT；旧逻辑会把 mmap10
         // 里仍在 munmap 的 fork 子进程误杀成 TBROK。
 
-        reparent(p); // 将 p 的所有子进程交给 init 进程收养
+        if (p->_has_child_tasks)
+        {
+            reparent(p); // 将 p 的所有子进程交给 init 进程收养
+        }
 
         // 处理线程退出时的清理地址
         if (p->_clear_tid_addr)
@@ -3322,6 +3379,7 @@ namespace proc
     void ProcessManager::reparent(Pcb *p)
     {
         Pcb *pp;
+        bool moved_child = false;
         _wait_lock.acquire();
         for (uint i = 0; i < num_process; i++)
         {
@@ -3331,7 +3389,13 @@ namespace proc
                 pp->_lock.acquire();
                 pp->_parent = _init_proc;
                 pp->_lock.release();
+                moved_child = true;
             }
+        }
+        p->_has_child_tasks = false;
+        if (moved_child && _init_proc != nullptr)
+        {
+            _init_proc->_has_child_tasks = true;
         }
         _wait_lock.release();
     }
@@ -3447,6 +3511,14 @@ namespace proc
         for (uint i = 0; i < num_process; ++i)
         {
             Pcb *p = &k_proc_pool[i];
+            // futex_wakeup() 调用本函数时已经持有全局 futex wait lock。
+            // 因此新的 waiter 不会在扫描过程中把 _futex_key 从 0 改成目标 key；
+            // 先用无锁 key 过滤掉绝大多数 PCB，可避免每次 clear_child_tid wake
+            // 都抢完整进程池的 PCB 锁。命中后仍在 PCB 锁内复核状态，保持唤醒语义。
+            if (p->_futex_key != futex_key)
+            {
+                continue;
+            }
             p->_lock.acquire();
             bool is_futex_waiter = p->_futex_key == futex_key &&
                                    (p->_state == SLEEPING || p->_state == RUNNABLE);
@@ -4529,7 +4601,11 @@ namespace proc
         uint64 file_backed_bytes = 0;
         if (is_anonymous)
         {
-            mapping_object = new AnonVmObject((flags & MAP_SHARED) != 0, debug_name);
+            if ((flags & MAP_SHARED) != 0)
+            {
+                // 只有共享匿名映射才需要对象后端；私有匿名映射直接走轻量页分配路径。
+                mapping_object = new AnonVmObject(true, debug_name);
+            }
         }
         else if (vfile != nullptr)
         {

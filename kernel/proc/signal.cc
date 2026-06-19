@@ -588,14 +588,13 @@ namespace proc
                 }
                 
                 proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
-                if (cur_proc->_sigactions == nullptr)
+                if (cur_proc == nullptr)
                 {
-                    panic("[sigAction] _sigactions is null");
-                    return -1;
+                    return syscall::SYS_ESRCH;
                 }
                 if (oldact != nullptr)
                 {
-                    if (cur_proc->_sigactions->actions[flag])
+                    if (cur_proc->_sigactions != nullptr && cur_proc->_sigactions->actions[flag])
                         *oldact = *(cur_proc->_sigactions->actions[flag]);
                     else
                         *oldact = {SIG_DFL, 0, {{0}}}; // 正确初始化所有字段，包括 sa_mask
@@ -613,13 +612,24 @@ namespace proc
                     {
                         // 恢复默认处理
                         printfLightCyan("[sigAction] Setting default handler for signal %d\n", flag);
-                        if (cur_proc->_sigactions->actions[flag])
+                        if (cur_proc->_sigactions != nullptr && cur_proc->_sigactions->actions[flag])
                         {
                             delete cur_proc->_sigactions->actions[flag];
                             cur_proc->_sigactions->actions[flag] = nullptr;
                         }
+                        return 0;
                     }
-                    else if (newact->sa_handler == SIG_IGN)
+
+                    if (cur_proc->_sigactions == nullptr)
+                    {
+                        cur_proc->_sigactions = cur_proc->ensure_sighand();
+                        if (cur_proc->_sigactions == nullptr)
+                        {
+                            return syscall::SYS_ENOMEM;
+                        }
+                    }
+
+                    if (newact->sa_handler == SIG_IGN)
                     {
                         // 忽略信号 - 设置一个特殊的处理函数
                         printfLightCyan("[sigAction] Setting ignore handler for signal %d\n", flag);
