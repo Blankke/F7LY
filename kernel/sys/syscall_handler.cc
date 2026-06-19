@@ -5241,11 +5241,9 @@ namespace syscall
             return direct_result;
         }
 
-        if (is_bad_addr(p))
-        {
-            printfRed("[SyscallHandler::sys_write] Invalid address: %p\n", (void *)p);
-            return SYS_EFAULT;
-        }
+        // 不在这里用 is_bad_addr() 预检用户缓冲区：它只看当前 PTE，不会按 VMA
+        // 懒分配补页。静态/动态 ELF 的只读字符串页第一次通过 write() 被读取时，
+        // 必须交给后面的 copy_in() 按 VMA 权限完成缺页处理；否则会把合法地址误报 EFAULT。
 
         // 检查文件锁是否允许写操作
         if (!check_file_lock_access(f->_lock, f->get_file_offset(), n, true))
@@ -15160,7 +15158,14 @@ namespace syscall
             proc::vma_meta::release_metadata(original_vma);
         }
 
-        mm->rebuild_vma_index();
+        if (is_legacy_vm)
+        {
+            // legacy 静态 VMA 表在拆分时会复用/新增数组槽位，需要重建索引。
+            // VMASpace 动态区域的拆分已经由 create_area()/destroy_area() 增量维护
+            // MapleTree；若每次 mprotect 后全量 rebuild，会把 pthread 栈保护页路径
+            // 放大成 O(n^2)。
+            mm->rebuild_vma_index();
+        }
 
         return 0;
     }

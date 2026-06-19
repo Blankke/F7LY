@@ -1045,9 +1045,58 @@ namespace mem
             return 0;
         }
 
+        const bool track_private_resident_page =
+            vm->object == nullptr && vm->is_private_mapping();
+        const uint64 private_page_index =
+            track_private_resident_page ? vm->page_index_for_va(page_va) : 0;
+        bool private_overlay_created = false;
+        bool private_overlay_retained = false;
+
+        if (track_private_resident_page)
+        {
+            // 私有非对象映射如果不单独记住已驻留页，线程栈和大块匿名区在退出/munmap 时
+            // 只能按整段 VMA 扫页。overlay 保存“页号 -> 物理页”索引，并额外持有一份
+            // 元数据 owner 引用；页表映射释放一份，VMA 元数据销毁再释放这份 owner 引用。
+            if (vm->private_page_overlay == nullptr)
+            {
+                vm->private_page_overlay = new proc::VmPrivateOverlayMap();
+                if (vm->private_page_overlay == nullptr)
+                {
+                    k_pmm.free_page(pa);
+                    return -1;
+                }
+                private_overlay_created = true;
+            }
+
+            if (!k_pmm.retain_page(page_pa_to_kernel_ptr(reinterpret_cast<uint64>(pa))))
+            {
+                if (private_overlay_created && vm->private_page_overlay != nullptr &&
+                    vm->private_page_overlay->empty())
+                {
+                    delete vm->private_page_overlay;
+                    vm->private_page_overlay = nullptr;
+                }
+                k_pmm.free_page(pa);
+                return -1;
+            }
+
+            private_overlay_retained = true;
+            (*vm->private_page_overlay)[private_page_index] = reinterpret_cast<uint64>(pa);
+        }
+
         // 添加页面映射
         if (!this->map_pages(pt, page_va, PGSIZE, (uint64)pa, pte_flags))
         {
+            if (private_overlay_retained && vm->private_page_overlay != nullptr)
+            {
+                vm->private_page_overlay->erase(private_page_index);
+                if (private_overlay_created && vm->private_page_overlay->empty())
+                {
+                    delete vm->private_page_overlay;
+                    vm->private_page_overlay = nullptr;
+                }
+                k_pmm.free_page(pa);
+            }
             printfRed("[allocate_vma_page] map_pages failed\n");
             k_pmm.free_page(pa);
             return -1;
@@ -1921,9 +1970,17 @@ namespace mem
 
         for (a = PGROUNDDOWN(va); a != last + PGSIZE; a += PGSIZE)
         {
-            pte = pt.walk(a, 1);
+            // VMA 上下文中 mprotect() 已经更新了 VMA 元数据；尚未 fault 的懒分配页
+            // 不需要为了改权限提前创建页表层级，后续缺页会按新的 prot 建立 PTE。
+            pte = pt.walk(a, is_vma ? 0 : 1);
             if (pte.is_null())
+            {
+                if (is_vma)
+                {
+                    continue;
+                }
                 return -1;
+            }
 
             // 如果页表项为空
             if (pte.get_data() == 0)

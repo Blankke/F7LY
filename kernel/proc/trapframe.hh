@@ -80,5 +80,13 @@ struct TrapFrame {
   /* 264 */ uint64 era;           // saved user program counter
   /* 272 */ uint64 kernel_hartid; // saved kernel tp
   /* 280 */ uint64 kernel_pgdl;   // saved kernel pagetable
+  /*
+   * LoongArch 浮点寄存器由用户态 ABI 直接用于传参和保存中间结果。
+   * 系统调用、缺页和 timer trap 都可能打断 libm/musl 动态链接器路径；
+   * 不保存 FPU 状态会让不同进程/线程或内核路径相互污染浮点现场。
+   */
+  /* 288 */ uint64 f[32];
+  /* 544 */ uint64 fcsr;
+  /* 552 */ uint64 fcc[8];
 };
 #endif

@@ -166,6 +166,7 @@ namespace proc
         int _stop_signal;      // 最近一次使任务停止的 job-control 信号
         bool _stop_reported;   // wait4/waitid 是否已经消费本次停止事件
         bool _continued_pending; // SIGCONT 后等待父进程消费的继续事件
+        bool _has_child_tasks;  // 是否创建过普通子进程；无子线程退出时可跳过 reparent 全表扫描
 
         // 调度相关字段
         int _slot;     // 当前时间片剩余量 @todo: 应使用更精确的时间单位
@@ -281,6 +282,8 @@ namespace proc
     public:
         Pcb();
         void init(const char *lock_name, uint gid);
+        ofile *ensure_ofile(); // 按需创建文件描述符表
+        sighand_struct *ensure_sighand(); // 按需创建信号处理表
         void cleanup_ofile();   // 释放ofile资源的方法
         void cleanup_sighand(); // 释放sighand_struct资源的方法
         void cleanup_memory_manager(); // 释放ProcessMemoryManager资源

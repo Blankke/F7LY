@@ -75,13 +75,21 @@ namespace proc
           ref_count_(1)
     {
         object_lock_.init("vm_object");
-        shm::k_smm.note_object_created(this);
+        // 只对共享对象做全局登记，私有匿名对象/普通私有映射不必占用这把全局锁。
+        // 线程栈和大多数 mmap 私有映射都落在这里，避免每次创建都去碰共享对象表。
+        if (shared_mapping_)
+        {
+            shm::k_smm.note_object_created(this);
+        }
     }
 
     VmObject::~VmObject()
     {
         release_source_pages();
-        shm::k_smm.note_object_destroying(this);
+        if (shared_mapping_)
+        {
+            shm::k_smm.note_object_destroying(this);
+        }
     }
 
     void VmObject::get()

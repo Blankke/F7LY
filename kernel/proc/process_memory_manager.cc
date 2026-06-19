@@ -63,6 +63,23 @@ namespace proc
             return value + (alignment - remainder);
         }
 
+        inline bool prefer_vm_space_lookup(const ProcessMemoryManager &mm, uint64 addr)
+        {
+            // 动态 mmap/线程栈都分配在 heap 之后的高地址区间，而这部分现在统一由
+            // VMASpace 承载。低地址仍保留 legacy program/heap 镜像，因此可以按地址
+            // 做一次轻量分流，避免每次都把两套索引同时扫一遍。
+            uint64 dynamic_base = mm.heap_end;
+            if (dynamic_base > UINT64_MAX - k_mmap_guard_gap)
+            {
+                dynamic_base = UINT64_MAX;
+            }
+            else
+            {
+                dynamic_base += k_mmap_guard_gap;
+            }
+            return addr >= dynamic_base;
+        }
+
         inline void reset_vma_entry(vma &entry)
         {
             memset(&entry, 0, sizeof(vma));
@@ -587,41 +604,73 @@ namespace proc
 
     vma *ProcessMemoryManager::find_vma_covering(uint64 addr)
     {
-        vma *legacy_vm = vma_index.find(addr);
-        if (legacy_vm != nullptr)
+        vma *space_vm = vm_space.find_vma_covering(addr);
+        if (space_vm != nullptr || vma_index.empty())
         {
-            return legacy_vm;
+            return space_vm;
         }
-        return vm_space.find_vma_covering(addr);
+        return vma_index.find(addr);
     }
 
     const vma *ProcessMemoryManager::find_vma_covering(uint64 addr) const
     {
-        const vma *legacy_vm = vma_index.find(addr);
-        if (legacy_vm != nullptr)
+        const vma *space_vm = vm_space.find_vma_covering(addr);
+        if (space_vm != nullptr || vma_index.empty())
         {
-            return legacy_vm;
+            return space_vm;
         }
-        return vm_space.find_vma_covering(addr);
+        return vma_index.find(addr);
     }
 
     vma *ProcessMemoryManager::find_first_vma_at_or_after(uint64 addr)
     {
+        if (prefer_vm_space_lookup(*this, addr))
+        {
+            return vm_space.find_first_vma_at_or_after(addr);
+        }
+        if (vma_index.empty())
+        {
+            return vm_space.find_first_vma_at_or_after(addr);
+        }
         return pick_lower_addr_vma(vma_index.lower_bound(addr), vm_space.find_first_vma_at_or_after(addr));
     }
 
     const vma *ProcessMemoryManager::find_first_vma_at_or_after(uint64 addr) const
     {
+        if (prefer_vm_space_lookup(*this, addr))
+        {
+            return vm_space.find_first_vma_at_or_after(addr);
+        }
+        if (vma_index.empty())
+        {
+            return vm_space.find_first_vma_at_or_after(addr);
+        }
         return pick_lower_addr_vma(vma_index.lower_bound(addr), vm_space.find_first_vma_at_or_after(addr));
     }
 
     vma *ProcessMemoryManager::find_prev_vma(uint64 start_addr)
     {
+        if (prefer_vm_space_lookup(*this, start_addr))
+        {
+            return vm_space.find_prev_vma(start_addr);
+        }
+        if (vma_index.empty())
+        {
+            return vm_space.find_prev_vma(start_addr);
+        }
         return pick_higher_addr_vma(vma_index.prev_by_start(start_addr), vm_space.find_prev_vma(start_addr));
     }
 
     const vma *ProcessMemoryManager::find_prev_vma(uint64 start_addr) const
     {
+        if (prefer_vm_space_lookup(*this, start_addr))
+        {
+            return vm_space.find_prev_vma(start_addr);
+        }
+        if (vma_index.empty())
+        {
+            return vm_space.find_prev_vma(start_addr);
+        }
         return pick_higher_addr_vma(vma_index.prev_by_start(start_addr), vm_space.find_prev_vma(start_addr));
     }
 
@@ -703,6 +752,10 @@ namespace proc
 
     bool ProcessMemoryManager::has_vma_conflict(uint64 start_addr, uint64 end_addr, const vma *ignore) const
     {
+        if (vma_index.empty())
+        {
+            return vm_space.has_conflict(start_addr, end_addr, ignore);
+        }
         return vma_index.has_conflict(start_addr, end_addr, ignore) ||
                vm_space.has_conflict(start_addr, end_addr, ignore);
     }
@@ -816,6 +869,16 @@ namespace proc
                                                        uint64 size,
                                                        uint64 alignment) const
     {
+        if (prefer_vm_space_lookup(*this, start_hint))
+        {
+            return vm_space.find_gap(start_hint, min_addr, max_addr, size, alignment);
+        }
+
+        if (vma_index.empty())
+        {
+            return vm_space.find_gap(start_hint, min_addr, max_addr, size, alignment);
+        }
+
         if (size == 0 || max_addr <= min_addr)
         {
             return 0;
@@ -1549,7 +1612,7 @@ namespace proc
                                              new_end - heap_start,
                                              PROT_READ | PROT_WRITE,
                                              MAP_PRIVATE | MAP_ANONYMOUS,
-                                             new AnonVmObject(false, "brk-heap"),
+                                             nullptr,
                                              0,
                                              VmAreaKind::Heap,
                                              VmGrowPolicy::Up,
@@ -2282,6 +2345,43 @@ namespace proc
         if (va_end > TRAPFRAME)
         {
             va_end = TRAPFRAME;
+        }
+
+        // 匿名私有映射如果已经有 resident overlay，就只拆真正 fault 过的页；
+        // 不再像传统做法那样把整个 VMA 范围从头扫到尾。
+        if (entry.object == nullptr &&
+            entry.private_page_overlay != nullptr &&
+            entry.is_private_mapping())
+        {
+            uint64 base = PGROUNDDOWN(entry.addr);
+            uint64 request_start = PGROUNDDOWN(va_start);
+            uint64 request_end = PGROUNDUP(va_end);
+            for (const auto &overlay_entry : *entry.private_page_overlay)
+            {
+                if (overlay_entry.second == 0)
+                {
+                    continue;
+                }
+
+                uint64 va = base + overlay_entry.first * PGSIZE;
+                if (va < base || va >= entry.end_addr() || va >= TRAPFRAME ||
+                    va < request_start || va >= request_end)
+                {
+                    continue;
+                }
+
+                if (check_validity)
+                {
+                    mem::Pte pte = pagetable.walk(va, 0);
+                    if (pte.is_null() || !pte.is_valid())
+                    {
+                        continue;
+                    }
+                }
+
+                mem::k_vmm.vmunmap(pagetable, va, 1, 1);
+            }
+            return;
         }
 
         const bool do_free = mapping_pages_should_be_freed_on_unmap(entry);
