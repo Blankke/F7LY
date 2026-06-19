@@ -359,6 +359,19 @@ namespace fs
             return eastl::make_unique<DevLoopControlProvider>();
         }
     };
+
+    // /dev/cpu_dma_latency 内容提供者
+    class DevCpuDmaLatencyProvider : public VirtualContentProvider
+    {
+    public:
+        virtual eastl::string generate_content() override;
+        virtual bool is_dynamic() const override { return true; }
+        virtual bool is_writable() const override { return true; }
+        virtual long handle_write(uint64 buf, size_t len, long off) override;
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<DevCpuDmaLatencyProvider>();
+        }
+    };
     
     // /proc/sys/fs/pipe-user-pages-soft 内容提供者
     class ProcSysFsPipeUserPagesSoftProvider : public VirtualContentProvider

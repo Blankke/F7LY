@@ -183,7 +183,7 @@ namespace fs
     bool VirtualFileSystem::is_virtual_path(const eastl::string &path) const
     {
         vfile_tree_node *node = find_node_by_path(path);
-        return node && node->provider != nullptr;
+        return node != nullptr || dynamic_file_type(path) != 0;
     }
 
     // 获取虚拟节点
@@ -309,6 +309,9 @@ namespace fs
                          eastl::make_unique<EtcLdSoPreloadProvider>());
         add_virtual_file("/etc/ld.so.cache", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<EtcLdSoCacheProvider>());
+        // libc 会探测 /etc/localtime；当前内核不维护时区数据库，空文件表示走默认 UTC/本地回退。
+        add_virtual_file("/etc/localtime", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<StaticContentProvider>(""));
 
         // /proc/mounts
         add_virtual_file("/proc/mounts", fs::FileTypes::FT_NORMAL,
@@ -346,6 +349,31 @@ namespace fs
                          eastl::make_unique<StaticContentProvider>("0\n"));
         add_virtual_file("/sys/devices/system/cpu/cpu0/online", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<StaticContentProvider>("1\n"));
+
+        // NUMA 兼容视图：当前内核没有真实非一致访问内存拓扑，这里暴露一个退化实现。
+        // 用户态只会看到 node0，且 node0 只包含 CPU0；CPU、memory、distance 均固定到这个单节点。
+        // 这只用于兼容 rt-tests/libnuma 一类 Linux 用户态探测，不代表真实硬件拓扑。
+        add_virtual_file("/sys/devices/system/node", fs::FileTypes::FT_DIRECT, nullptr);
+        add_virtual_file("/sys/devices/system/node/online", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<StaticContentProvider>("0\n"));
+        add_virtual_file("/sys/devices/system/node/possible", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<StaticContentProvider>("0\n"));
+        add_virtual_file("/sys/devices/system/node/has_cpu", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<StaticContentProvider>("0\n"));
+        add_virtual_file("/sys/devices/system/node/has_memory", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<StaticContentProvider>("0\n"));
+        add_virtual_file("/sys/devices/system/node/node0", fs::FileTypes::FT_DIRECT, nullptr);
+        add_virtual_file("/sys/devices/system/node/node0/cpulist", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<StaticContentProvider>("0\n"));
+        add_virtual_file("/sys/devices/system/node/node0/cpumap", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<StaticContentProvider>("1\n"));
+        add_virtual_file("/sys/devices/system/node/node0/distance", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<StaticContentProvider>("10\n"));
+        add_virtual_file("/sys/devices/system/node/node0/meminfo", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<StaticContentProvider>(
+                             "Node 0 MemTotal:       1048576 kB\n"
+                             "Node 0 MemFree:         524288 kB\n"
+                             "Node 0 MemUsed:         524288 kB\n"));
 
         // 添加 /proc/self/stat 文件及其提供者 (使用新的统一provider)
         add_virtual_file("/proc/self/stat", fs::FileTypes::FT_NORMAL,
@@ -439,6 +467,10 @@ namespace fs
         // /dev/urandom (非阻塞伪随机字节设备)
         add_virtual_file("/dev/urandom", fs::FileTypes::FT_DEVICE,
                          eastl::make_unique<DevUrandomProvider>());
+
+        // cyclictest 会向该节点写入 4 字节 latency target；当前实现只保存 ABI 状态。
+        add_virtual_file("/dev/cpu_dma_latency", fs::FileTypes::FT_DEVICE,
+                         eastl::make_unique<DevCpuDmaLatencyProvider>());
 
         // 最小伪终端节点，支撑 libc openpty()/ptsname() 的探测路径。
         add_virtual_file("/dev/ptmx", fs::FileTypes::FT_DEVICE, nullptr);
