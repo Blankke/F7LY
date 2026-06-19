@@ -17,6 +17,7 @@ namespace fs
     {
         CREATED,    // 已创建
         BOUND,      // 已绑定
+        CONNECTING, // 非阻塞 TCP connect 正在等待握手完成
         LISTENING,  // 监听中
         CONNECTED,  // 已连接
         CLOSED      // 已关闭

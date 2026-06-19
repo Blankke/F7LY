@@ -5252,33 +5252,31 @@ namespace proc
         {
             uint64 additional_size = new_size - old_size;
             uint64 expand_start = old_start + old_size;
+            uint64 expand_end = expand_start + additional_size;
 
-            // 检查是否可以就地扩展
+            // 无论是否允许移动，都必须先检查原地址后方是否真的空闲。
+            // MREMAP_MAYMOVE 的含义是“原地不行时可以搬走”，不是跳过冲突检查强行原地扩容。
             bool can_expand_in_place = true;
-            if (!(flags & MREMAP_MAYMOVE))
+            for (int i = 0; i < NVMA; i++)
             {
-                // 检查扩展区域是否可用
-                for (int i = 0; i < NVMA; i++)
+                if (i == vma_index || !pcb->get_vma()->_vm[i].used)
+                    continue;
+
+                uint64 other_start = pcb->get_vma()->_vm[i].addr;
+                uint64 other_end = other_start + pcb->get_vma()->_vm[i].len;
+
+                if (!(expand_end <= other_start || expand_start >= other_end))
                 {
-                    if (i == vma_index || !pcb->get_vma()->_vm[i].used)
-                        continue;
-
-                    uint64 other_start = pcb->get_vma()->_vm[i].addr;
-                    uint64 other_end = other_start + pcb->get_vma()->_vm[i].len;
-
-                    if (!(expand_start >= other_end || expand_start + additional_size <= other_start))
-                    {
-                        can_expand_in_place = false;
-                        break;
-                    }
+                    can_expand_in_place = false;
+                    break;
                 }
+            }
 
-                // ENOMEM: 不能就地扩展且未指定MREMAP_MAYMOVE
-                if (!can_expand_in_place)
-                {
-                    printfRed("[mremap] ENOMEM: Cannot expand in place and MREMAP_MAYMOVE not set\n");
-                    return syscall::SYS_ENOMEM;
-                }
+            // ENOMEM: 不能就地扩展且未指定MREMAP_MAYMOVE
+            if (!can_expand_in_place && !(flags & MREMAP_MAYMOVE))
+            {
+                printfRed("[mremap] ENOMEM: Cannot expand in place and MREMAP_MAYMOVE not set\n");
+                return syscall::SYS_ENOMEM;
             }
 
             // 如果可以就地扩展
@@ -5300,52 +5298,58 @@ namespace proc
                                                     prot_flags);
                 if (result != old_start + new_size)
                 {
-                    // ENOMEM: 内存分配失败
-                    printfRed("[mremap] ENOMEM: Failed to allocate additional memory\n");
-                    return syscall::SYS_ENOMEM;
-                }
-
-                // 更新VMA - 确保类型安全
-                if (old_start == vma.addr)
-                {
-                    // 总是更新VMA长度，因为我们已经成功分配了内存
-                    int old_vma_len = vma.len;
-
-                    // 检查new_size是否超出int范围 (2^31 - 1 = 2147483647)
-                    if (new_size > 2147483647U)
+                    printfRed("[mremap] Failed to expand in place\n");
+                    if (!(flags & MREMAP_MAYMOVE))
                     {
-                        printfRed("[mremap] ERROR: new_size %u exceeds INT_MAX, cannot store in VMA.len\n", (uint)new_size);
+                        // ENOMEM: 内存分配失败，且用户态不允许移动映射。
                         return syscall::SYS_ENOMEM;
                     }
-
-                    vma.len = (int)new_size;
-                    printfCyan("[mremap] Updated VMA[%d] length from %d to %d (old_size=%u)\n",
-                               vma_index, old_vma_len, vma.len, (uint)old_size);
+                    can_expand_in_place = false;
                 }
                 else
                 {
-                    // 即使是部分VMA扩展，我们也需要更新VMA长度
-                    int old_vma_len = vma.len; // 确保在修改前保存
-                    printfYellow("[mremap] DEBUG: Before update - VMA[%d].len=%d, new_size=%u\n",
-                                 vma_index, old_vma_len, (uint)new_size);
-
-                    // 检查new_size是否超出int范围 (2^31 - 1 = 2147483647)
-                    if (new_size > 2147483647U)
+                    // 更新VMA - 确保类型安全
+                    if (old_start == vma.addr)
                     {
-                        printfRed("[mremap] ERROR: new_size %u exceeds INT_MAX, cannot store in VMA.len\n", (uint)new_size);
-                        return syscall::SYS_ENOMEM;
+                        // 总是更新VMA长度，因为我们已经成功分配了内存
+                        int old_vma_len = vma.len;
+
+                        // 检查new_size是否超出int范围 (2^31 - 1 = 2147483647)
+                        if (new_size > 2147483647U)
+                        {
+                            printfRed("[mremap] ERROR: new_size %u exceeds INT_MAX, cannot store in VMA.len\n", (uint)new_size);
+                            return syscall::SYS_ENOMEM;
+                        }
+
+                        vma.len = (int)new_size;
+                        printfCyan("[mremap] Updated VMA[%d] length from %d to %d (old_size=%u)\n",
+                                   vma_index, old_vma_len, vma.len, (uint)old_size);
+                    }
+                    else
+                    {
+                        // 即使是部分VMA扩展，我们也需要更新VMA长度
+                        int old_vma_len = vma.len; // 确保在修改前保存
+                        printfYellow("[mremap] DEBUG: Before update - VMA[%d].len=%d, new_size=%u\n",
+                                     vma_index, old_vma_len, (uint)new_size);
+
+                        // 检查new_size是否超出int范围 (2^31 - 1 = 2147483647)
+                        if (new_size > 2147483647U)
+                        {
+                            printfRed("[mremap] ERROR: new_size %u exceeds INT_MAX, cannot store in VMA.len\n", (uint)new_size);
+                            return syscall::SYS_ENOMEM;
+                        }
+
+                        vma.len = (int)new_size;
+                        printfYellow("[mremap] Partial VMA expansion: Updated VMA[%d] length from %d to %d\n",
+                                     vma_index, old_vma_len, vma.len);
+                        printfYellow("[mremap] DEBUG: After update - VMA[%d].len=%d\n", vma_index, vma.len);
                     }
 
-                    vma.len = (int)new_size;
-                    printfYellow("[mremap] Partial VMA expansion: Updated VMA[%d] length from %d to %d\n",
-                                 vma_index, old_vma_len, vma.len);
-                    printfYellow("[mremap] DEBUG: After update - VMA[%d].len=%d\n", vma_index, vma.len);
+                    printfGreen("[mremap] Expanded mapping from %u to %u bytes at %p\n",
+                                old_size, new_size, old_address);
+                    *result_addr = old_address;
+                    return 0;
                 }
-
-                printfGreen("[mremap] Expanded mapping from %u to %u bytes at %p\n",
-                            old_size, new_size, old_address);
-                *result_addr = old_address;
-                return 0;
             }
 
             // 需要移动映射

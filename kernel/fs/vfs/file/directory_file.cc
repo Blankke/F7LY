@@ -1,6 +1,7 @@
 #include "fs/vfs/file/directory_file.hh"
 #include "fs/lwext4/ext4_errno.hh"
 #include "fs/lwext4/ext4.hh"
+#include "fs/lwext4/ext4_dir.hh"
 #include "fs/vfs/vfs_ext4_ext.hh"
 #include "mem/userspace_stream.hh"
 #include "fs/vfs/vfs_utils.hh"
@@ -106,13 +107,20 @@ namespace fs
 			printfRed("directory_file::lseek: invalid whence %d", whence);
 			return -EINVAL;
 		}
-		panic("不知道哪里有ext4_dir_lseek, 下面用fseek感觉不对");
-		// int seek_status = ext4_fseek(&lwext4_file_struct, _file_ptr, SEEK_SET);
-		// if (seek_status != EOK)
-		// {
-		// 	printfRed("normal_file::read: ext4_fseek failed with status %d", seek_status);
-		// 	return -1;
-		// }
+		// ext4 getdents64 实际以 lwext4_dir_struct.next_off 作为目录流偏移。
+		// apk 会对目录 fd 执行 lseek(dirfd, 0, SEEK_SET) 来重新扫描目录；
+		// 这里同步 lwext4 的目录游标，否则用户态重扫目录时仍会停在旧位置。
+		if (lwext4_dir_struct.f.mp != nullptr)
+		{
+			if (_file_ptr == 0)
+			{
+				ext4_dir_entry_rewind(&lwext4_dir_struct);
+			}
+			else
+			{
+				lwext4_dir_struct.next_off = static_cast<uint64_t>(_file_ptr);
+			}
+		}
 		return _file_ptr;
 	}
 

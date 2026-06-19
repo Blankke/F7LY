@@ -518,7 +518,6 @@ debug方式：（必须先阅读agent_docs/development_debugging.md，了解调�
 参考实现：
 1. ref/rocketos（往届作品第一名）
 
-
 ## https协议未适配
 ### 情况描述
 对于同一公网测试网站:"httpbin.org",使用http协议和https协议连接得到结果不同.
@@ -774,3 +773,40 @@ debug方式：（必须先阅读agent_docs/development_debugging.md，了解调�
 - 现象：HTTPS 已连上 `199.232.114.132:443`，TLS 握手报 `unexpected eof while reading`，随后 `wget` 显示 `Address family not supported by protocol`。
 - 原因：`tcp_recv_upper()` 把 `bRcvTimeout=-1` 的 1 秒内部轮询误当成超时；无 FIN/RST、只是暂时无数据时向上返回 0，导致 OpenSSL 误判 EOF。
 - 解决方案：只有 `signed_timeout > 0 && bWaitSecs <= 0` 才返回 0；永久等待继续循环复查关闭态。验证：`wget` 成功，双架构 build 通过。
+
+## 适配rootfs apk命令网络请求
+```sh
+F7LY:~$ wget https://dl-cdn.alpinelinux.org/alpine/v3.23/main/riscv64/APKINDEX.t
+ar.gz
+Connecting to dl-cdn.alpinelinux.org (199.232.114.132:443)
+saving to 'APKINDEX.tar.gz'
+APKINDEX.tar.gz      100% |********************************|  505k  0:00:00 ETA
+'APKINDEX.tar.gz' saved
+F7LY:~$ apk update
+WARNING: updating and opening https://dl-cdn.alpinelinux.org/alpine/v3.23/main/riscv64/APKINDEX.tar.gz: Operation timed out
+WARNING: updating and opening https://dl-cdn.alpinelinux.org/alpine/v3.23/community/riscv64/APKINDEX.tar.gz: Operation timed out
+2 unavailable, 0 stale; 16 distinct packages available
+```
+在使用apk update时，发现无法访问远端`APKINDEX`，但是直接使用wget可以正常访问下载。请帮我查明原因并修复。
+apk包管理器源码在`ref/apk-tools`中，rootfs默认镜像不可用，每次启动`make shell`时必须要先运行
+```sh
+cat > /etc/apk/repositories <<'EOF'
+https://dl-cdn.alpinelinux.org/alpine/v3.23/main
+https://dl-cdn.alpinelinux.org/alpine/v3.23/community
+EOF
+```
+替换镜像源
+
+请通过在链路上打印调试输出,定位这个问题出现的原因,按照下面的步骤
+debug方式：（必须先阅读agent_docs/development_debugging.md，了解调试范式）
+1. 先进行静态代码阅读，确定可能的问题点
+2. 针对性的添加注释，逐渐排查问题
+3. 按照调试范式运行代码
+参考实现：
+1. ref/rocketos（往届作品第一名）
+
+### 修复小结
+
+- 现象：`wget` 可下载 APKINDEX，`apk update` 先超时，后续暴露目录 `lseek` panic 和 fetch 后段错误。
+- 原因：缺 TCP 非阻塞 `CONNECTING/poll/SO_ERROR` 状态；目录 fd `lseek(0)` 未同步 ext4 游标；`mremap(MAYMOVE)` 原地扩容冲突时未搬迁。
+- 解决方案：补齐 TCP 连接中状态和 `SO_ERROR`；目录 `lseek` 同步 `next_off`；修正 `mremap` 原地检查与可搬迁分支。验证：RV `apk update` 成功，RV/LA build 通过。
