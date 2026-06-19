@@ -519,6 +519,44 @@ namespace fs
                    state == TLSCLOSED;
         }
 
+        bool onps_tcp_link_state(SOCKET socket, EN_TCPLINKSTATE &state)
+        {
+            EN_ONPSERR error = ERRNO;
+            return onps_input_get(static_cast<INT>(socket), IOPT_GETTCPLINKSTATE, &state, &error);
+        }
+
+        bool onps_tcp_connect_pending(EN_TCPLINKSTATE state)
+        {
+            return state == TLSSYNSENT || state == TLSRCVEDSYNACK;
+        }
+
+        int onps_tcp_connect_so_error(SOCKET socket)
+        {
+            EN_TCPLINKSTATE state = TLSINVALID;
+            if (!onps_tcp_link_state(socket, state))
+            {
+                return -onps_last_errno(socket);
+            }
+
+            switch (state)
+            {
+            case TLSCONNECTED:
+                return 0;
+            case TLSINIT:
+            case TLSSYNSENT:
+            case TLSRCVEDSYNACK:
+                return EINPROGRESS;
+            case TLSACKTIMEOUT:
+                return ETIMEDOUT;
+            case TLSRESET:
+                return ECONNRESET;
+            case TLSSYNACKACKSENTFAILED:
+                return EIO;
+            default:
+                return -onps_last_errno(socket);
+            }
+        }
+
         int onps_socket_type(SocketType type)
         {
             return type == SocketType::TCP ? SOCK_STREAM : SOCK_DGRAM;
@@ -823,6 +861,9 @@ namespace fs
                     result = stream_read_ready_locked();
                 }
                 break;
+            case SocketState::CONNECTING:
+                result = false;
+                break;
             case SocketState::LISTENING:
                 result = !_pending_connections.empty() || _onps_listening;
                 break;
@@ -848,7 +889,28 @@ namespace fs
     {
         _lock.acquire();
         bool result = false;
-        if (_state == SocketState::CONNECTED)
+        if (_state == SocketState::CONNECTING)
+        {
+            if (_onps_active && _type == SocketType::TCP && _onps_socket != INVALID_SOCKET)
+            {
+                EN_TCPLINKSTATE link_state = TLSINVALID;
+                if (onps_tcp_link_state(_onps_socket, link_state))
+                {
+                    if (link_state == TLSCONNECTED)
+                    {
+                        // 非阻塞 connect 的完成由 poll(POLLOUT) 观察；这里同步 socket_file 状态。
+                        _state = SocketState::CONNECTED;
+                        result = !_write_shutdown;
+                    }
+                    else if (!onps_tcp_connect_pending(link_state))
+                    {
+                        // 连接失败也要唤醒 poll，用户态随后通过 SO_ERROR 读取具体错误。
+                        result = true;
+                    }
+                }
+            }
+        }
+        else if (_state == SocketState::CONNECTED)
         {
             if (_onps_active)
             {
@@ -1365,6 +1427,12 @@ namespace fs
                 if (_type == SocketType::TCP && nonblocking) {
                     result = ::connect_nb_ext(onps_socket, &remote_addr.sin_addr, host_port);
                     if (result == 1) {
+                        _lock.acquire();
+                        _remote_addr = remote_addr;
+                        _onps_active = true;
+                        _state = SocketState::CONNECTING;
+                        refresh_onps_local_addr(_onps_socket, _local_addr);
+                        _lock.release();
                         return -EINPROGRESS;
                     }
                 } else {
@@ -2449,7 +2517,19 @@ namespace fs
                     return 0;
 
                 case SO_ERROR:
-                    *static_cast<int*>(optval) = 0;
+                    if (_onps_active && _type == SocketType::TCP && _onps_socket != INVALID_SOCKET)
+                    {
+                        int connect_error = onps_tcp_connect_so_error(_onps_socket);
+                        if (connect_error == 0 && _state == SocketState::CONNECTING)
+                        {
+                            _state = SocketState::CONNECTED;
+                        }
+                        *static_cast<int*>(optval) = connect_error;
+                    }
+                    else
+                    {
+                        *static_cast<int*>(optval) = 0;
+                    }
                     *optlen = sizeof(int);
                     _lock.release();
                     return 0;
