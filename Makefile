@@ -225,10 +225,10 @@ USER_TEST_SRC := user/user_lib/user_test.cc
 USER_TEST_OBJ := build/$(OUTPUT_PREFIX)/user_test.o
 IOZONE_REPRO_SRC := user/research/iozone/iozone_research.cc
 IOZONE_REPRO_OBJ := build/$(OUTPUT_PREFIX)/iozone_research.o
-PRIORITY_BORROW_RESEARCH_SRC := user/research/priority_borrow_research.cc
-PRIORITY_BORROW_RESEARCH_OBJ := build/$(OUTPUT_PREFIX)/priority_borrow_research.o
+MCLOCK_RESEARCH_SRC := user/research/mclock_research.cc
+MCLOCK_RESEARCH_OBJ := build/$(OUTPUT_PREFIX)/mclock_research.o
 ifeq ($(INITCODE_MODE),evaluation)
-  INITCODE_EXTRA_OBJS := $(USER_TEST_OBJ) $(IOZONE_REPRO_OBJ) $(PRIORITY_BORROW_RESEARCH_OBJ)
+  INITCODE_EXTRA_OBJS := $(USER_TEST_OBJ) $(IOZONE_REPRO_OBJ) $(MCLOCK_RESEARCH_OBJ)
 else
   INITCODE_EXTRA_OBJS :=
 endif
@@ -448,8 +448,8 @@ $(IOZONE_REPRO_OBJ): $(IOZONE_REPRO_SRC)
 	@mkdir -p $(dir $@)
 	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
 
-# 编译 priority-borrow 手写长时 IO 研究入口
-$(PRIORITY_BORROW_RESEARCH_OBJ): $(PRIORITY_BORROW_RESEARCH_SRC)
+# 编译 mClock 手写长时 IO 研究入口
+$(MCLOCK_RESEARCH_OBJ): $(MCLOCK_RESEARCH_SRC)
 	@mkdir -p $(dir $@)
 	$(CXX) $(INITCODE_CFLAGS) -c $< -o $@
 

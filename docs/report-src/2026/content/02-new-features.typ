@@ -12,17 +12,17 @@
 
 // 正文待补：VirtioBlkDevice、VirtioBlkQueue、IoRequest 与双架构截图。
 
-== 优先级调度与空闲带宽借用
+== 预算公平调度与空闲带宽借用
 
 === 需求与目标
 
 === Service Class 与 Per-Process Flow
 
-=== 优先调度、同级轮转与带宽借用
+=== 权重预算、同级轮转与带宽借用
 
 === 研究入口、代码示例与实验结果
 
-// 正文待补：priority-borrow 队列图、A/B 吞吐曲线和统计输出。
+// 正文待补：budget-fair 队列图、A/B 吞吐曲线和统计输出。
 
 == 真实 Loopback TCP/UDP
 

@@ -31,13 +31,15 @@ extern "C" void kernelvec();
 extern "C" void uservec();
 extern "C" void handle_tlbr();
 extern "C" void handle_merr();
-extern "C" void userret(uint64, uint64);
+extern "C" void userret(uint64, uint64, uint64);
 int mmap_handler(uint64 va, int cause);
 // 创建一个静态对象
 trap_manager trap_mgr;
 
 namespace
 {
+  constexpr uint32 k_loongarch_ecode_fpu_disabled = 0xf;
+
   // LoongArch 异常信息拆分：一级编码在 ESTAT[21:16]，二级编码在 ESTAT[30:22]。
   // 之前把 ecode=8 直接当成缺页，会把 ADEM（访存地址错误）误送进 mmap 懒分配路径。
   inline uint32 loongarch_exception_code(uint32 estat)
@@ -424,6 +426,13 @@ void trap_manager::usertrap()
 
     syscall::k_syscall_handler.invoke_syscaller();
   }
+  else if (ecode == k_loongarch_ecode_fpu_disabled)
+  {
+    // 懒 FPU：整数/内存类程序不应该在每次 syscall/page fault 都保存 32 个 FPR。
+    // 用户第一次执行浮点指令时硬件打 FPD 异常；这里只标记当前线程需要 FPU，
+    // 不推进 era，让 userret 恢复该线程保存的 FPU 现场后重试原指令。
+    p->_used_fpu = true;
+  }
 
   else if (is_loongarch_page_fault_code(ecode))
   {
@@ -677,7 +686,7 @@ void trap_manager::usertrapret(void)
   // jump to uservec.S at the top of memory, which
   // switches to the user page table, restores user registers,
   // and switches to user mode with ertn.
-  userret(TRAPFRAME, pgdl);
+  userret(TRAPFRAME, pgdl, p->_used_fpu ? 1 : 0);
 }
 void trap_manager::machine_trap()
 {

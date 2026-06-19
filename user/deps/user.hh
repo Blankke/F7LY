@@ -168,7 +168,7 @@ int network_loopback_smoke(void);
 int network_ltp_socket_subset(void);
 int network_ltp_socket_abi_subset(void);
 int network_ltp_socket_batch_subset(void);
-int priority_borrow_research(void);
+int mclock_research(void);
 int iozone_glibc_random_read_repro(void);
 int final_test_musl(void);
 int final_test_glibc(void);

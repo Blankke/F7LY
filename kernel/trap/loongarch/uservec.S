@@ -57,8 +57,12 @@ uservec:
         st.d   $s7, $a0, 232
         st.d   $s8, $a0, 240
 
-        # 保存用户浮点现场。LoongArch ABI 使用 FPR 传递/返回浮点参数；
-        # trap 不保存它会破坏 libm、动态链接器和线程切换中的浮点中间值。
+        # 懒 FPU：只有当前线程已经启用 EUEN.FPE 时才保存浮点现场。
+        # 纯整数/内存类程序频繁 syscall/page fault 时不能为 32 个 FPR 付固定成本。
+        csrrd  $t0, LOONGARCH_CSR_EUEN
+        andi   $t0, $t0, 0x1
+        beqz   $t0, 1f
+
         fst.d  $f0,  $a0, 288
         fst.d  $f1,  $a0, 296
         fst.d  $f2,  $a0, 304
@@ -109,6 +113,12 @@ uservec:
         st.d   $t0, $a0, 600
         movcf2gr $t0, $fcc7
         st.d   $t0, $a0, 608
+1:
+        # 从这里开始要运行内核 C/C++ 代码。内核以 lp64d ABI 编译，不能把 FPE
+        # 长期保持为用户态的禁用状态；否则 syscall 路径里的浮点指令会在内核态 FPD。
+        csrrd  $t0, LOONGARCH_CSR_EUEN
+        ori    $t0, $t0, 0x1
+        csrwr  $t0, LOONGARCH_CSR_EUEN
 
 	# save the user a0 in p->trapframe->a0
         csrrd  $t0, LOONGARCH_CSR_SAVE0
@@ -145,15 +155,28 @@ DBG_BREAK_READ_ESTAT:
 
 .globl userret
 userret:
-        # userret(TRAPFRAME, pagetable)
+        # userret(TRAPFRAME, pagetable, used_fpu)
         # switch from kernel to user.
         # usertrapret() calls here.
         # a0: TRAPFRAME, in user page table.
         # a1: user page table, for pgdl.
+        # a2: whether this thread has enabled user FPU state.
 
         # switch to the user page table.
         csrwr  $a1, LOONGARCH_CSR_PGDL
         invtlb 0x0,$zero,$zero
+
+        # 内核态始终保留 FPE 可用；临近 ertn 时才按当前线程状态设置
+        # 用户可见的 EUEN.FPE。未使用浮点的线程让第一条浮点指令触发 FPD。
+        csrrd  $t0, LOONGARCH_CSR_EUEN
+        beqz   $a2, 3f
+        ori    $t0, $t0, 0x1
+        b      4f
+3:
+        li.w   $t1, -2
+        and    $t0, $t0, $t1
+4:
+        csrwr  $t0, LOONGARCH_CSR_EUEN
 
         # put the saved user a0 in SAVE0, so we
         # can swap it with our a0 (TRAPFRAME) in the last step.
@@ -192,7 +215,12 @@ userret:
         ld.d   $s7, $a0, 232
         ld.d   $s8, $a0, 240
 
-        # 恢复用户浮点现场，必须在 ertn 前完成。
+        # 懒 FPU：usertrapret() 已经按当前线程的 _used_fpu 设置 EUEN.FPE。
+        # 没用过浮点的线程直接跳过恢复，让首次浮点指令触发 FPD 异常后再启用。
+        csrrd  $t0, LOONGARCH_CSR_EUEN
+        andi   $t0, $t0, 0x1
+        beqz   $t0, 2f
+
         fld.d  $f0,  $a0, 288
         fld.d  $f1,  $a0, 296
         fld.d  $f2,  $a0, 304
@@ -243,7 +271,9 @@ userret:
         movgr2cf $fcc6, $t0
         ld.d   $t0, $a0, 608
         movgr2cf $fcc7, $t0
-        # 上面的 FCSR/FCC 恢复使用了 $t0 作为 scratch；返回前必须还原用户 $t0。
+2:
+        # 上面的 EUEN 检查和 FCSR/FCC 恢复使用了 $t0 作为 scratch；
+        # 返回前必须还原用户 $t0。
         ld.d   $t0, $a0, 88
 
 	# restore user a0, and save TRAPFRAME in SAVE0
