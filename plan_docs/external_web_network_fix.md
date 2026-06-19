@@ -734,3 +734,43 @@ debug方式：（必须先阅读agent_docs/development_debugging.md，了解调�
 ### 修复小结
 
 - 现象：HTTPS 短连接多次后 `No buffer space available`。原因：TCP `TLSCONNECTED` close 只发 FIN，未提前释放收/发用户缓冲，ONPS 32KB buddy 池被短连接占满。解决方案：主动 close 后立即 `onps_input_release_tcp_user_buffers()`，保留 input/link 给 FIN timer 收尾。
+
+## 连接https://dl-cdn.alpinelinux.org报错
+### 情况描述
+在shell中尝试连接`dl-cdn.alpinelinux.org`页面，返回`Address family not supported by protocol`
+```sh
+F7LY:~$ wget -O - https://dl-cdn.alpinelinux.org
+Connecting to dl-cdn.alpinelinux.org (199.232.114.132:443)
+D0BC0E0000000000:error:0A000126:SSL routines::unexpected eof while reading:ssl/record/rec_layer_s3.c:698:
+ssl_client: SSL_connect
+wget: error getting response: Address family not supported by protocol
+
+F7LY:~$ nslookup dl-cdn.alpinelinux.org 10.0.2.3
+Server:         10.0.2.3
+Address:        10.0.2.3:53
+
+Non-authoritative answer:
+dl-cdn.alpinelinux.org  canonical name = dualstack.j.sni.global.fastly.net
+Name:   dualstack.j.sni.global.fastly.net
+Address: 2a04:4e42:5c::644
+
+Non-authoritative answer:
+dl-cdn.alpinelinux.org  canonical name = dualstack.j.sni.global.fastly.net
+Name:   dualstack.j.sni.global.fastly.net
+Address: 199.232.114.132
+
+```
+请通过在链路上打印调试输出,定位这个问题出现的原因,按照下面的步骤
+debug方式：（必须先阅读agent_docs/development_debugging.md，了解调试范式）
+1. 先进行静态代码阅读，确定可能的问题点
+2. 针对性的添加注释，逐渐排查问题
+3. 按照调试范式运行代码
+参考实现：
+1. ref/rocketos（往届作品第一名）
+
+
+### 修复小结
+
+- 现象：HTTPS 已连上 `199.232.114.132:443`，TLS 握手报 `unexpected eof while reading`，随后 `wget` 显示 `Address family not supported by protocol`。
+- 原因：`tcp_recv_upper()` 把 `bRcvTimeout=-1` 的 1 秒内部轮询误当成超时；无 FIN/RST、只是暂时无数据时向上返回 0，导致 OpenSSL 误判 EOF。
+- 解决方案：只有 `signed_timeout > 0 && bWaitSecs <= 0` 才返回 0；永久等待继续循环复查关闭态。验证：`wget` 成功，双架构 build 通过。
