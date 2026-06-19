@@ -9,7 +9,7 @@
  *
  * 说明：
  * - 这里仅保留 iozone 自身的最小复现入口。
- * - priority-borrow 的手写长时 IO 实验已经迁移到 `user/research/priority_borrow_research.cc`。
+ * - mClock 的手写长时 IO 实验已经迁移到 `user/research/mclock_research.cc`。
  */
 
 #include "user.hh"

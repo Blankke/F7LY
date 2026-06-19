@@ -1045,8 +1045,10 @@ namespace mem
             return 0;
         }
 
-        const bool track_private_resident_page =
-            vm->object == nullptr && vm->is_private_mapping();
+        // 对象映射的私有页由 VmObject::prepare_page() 自己维护 overlay；
+        // 这里处理的是普通匿名私有映射，页表已经是驻留页权威，munmap/退出时扫描页表即可。
+        // 若每次匿名缺页都插入 unordered_map，musl malloc 的 4K 压力会被放大到秒级。
+        const bool track_private_resident_page = false;
         const uint64 private_page_index =
             track_private_resident_page ? vm->page_index_for_va(page_va) : 0;
         bool private_overlay_created = false;

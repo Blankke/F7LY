@@ -1080,6 +1080,7 @@ namespace proc
                     p->_lock.release();
                     return nullptr;
                 }
+                p->_used_fpu = false;
 
                 // 注意：不再在alloc_proc中创建ProcessMemoryManager
                 // ProcessMemoryManager的创建延迟到fork函数中，对于user_init和execve则在相应函数中创建
@@ -1299,6 +1300,7 @@ namespace proc
                 p->_sched_reset_on_fork = false;
                 p->_io_priority_override = default_proc_prio;
                 p->_has_io_priority_override = false;
+                p->_used_fpu = false;
 
         // 重新初始化CPU亲和性掩码：默认可以在任何CPU上运行
         p->_cpu_mask.fill();
@@ -2198,6 +2200,7 @@ namespace proc
 
         // 拷贝父进程的陷阱帧，而不是直接指向，后面有可能会修改
         *np->_trapframe = *p->_trapframe;
+        np->_used_fpu = p->_used_fpu;
 
         // 设置父子进程关系
         np->_parent = p;
@@ -6676,6 +6679,10 @@ namespace proc
         proc->get_trapframe()->epc = entry_point;
 #elif defined(LOONGARCH)
         proc->get_trapframe()->era = entry_point;
+        proc->_used_fpu = false;
+        memset(proc->get_trapframe()->f, 0, sizeof(proc->get_trapframe()->f));
+        proc->get_trapframe()->fcsr = 0;
+        memset(proc->get_trapframe()->fcc, 0, sizeof(proc->get_trapframe()->fcc));
 #endif
         proc->get_trapframe()->sp = sp; // 设置栈指针
 

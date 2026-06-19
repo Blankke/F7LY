@@ -920,6 +920,8 @@ Read a file和searched code
 
 当前已经从你给的 7.6/8.6 秒降到 6.1/7.3 秒，但还不够。pthread 已经很快，说明这次慢点集中在 4K malloc 触发的页级路径。为了回答“是不是 cache”，我再跑 glibc 对照；如果 glibc 仍快很多，就更像 allocator 策略差异叠加内核 brk/缺页慢路径。
 
+[已完成，待验收] 2026-06-19：LA musl b_malloc_sparse/bubble 回退根因是普通匿名私有 VMA 缺页也逐页维护 private_page_overlay；改为匿名私有页以页表为驻留权威、对象映射仍由 VmObject 维护 overlay。最终日志 logs/output_l_20260619-121309_libcbench-musl-final-vma-fpu_timeout-8m.txt 为 0.740794290s/0.666336270s，libctest-musl 日志 logs/output_l_20260619-121156_libctest-musl-lazy-fpu-no-anon-overlay_timeout-4m.txt 无 FAIL。
+
 
 
 

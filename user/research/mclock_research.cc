@@ -1,9 +1,9 @@
 /**
- * @file priority_borrow_research.cc
- * @brief priority-borrow 调度实验入口：使用手写长时块设备 worker 验证优先级压制与带宽借用
+ * @file mclock_research.cc
+ * @brief mClock 调度实验入口：使用手写长时块设备 worker 验证保底、权重共享和空闲带宽回收
  *
  * 使用示例：
- * 1. 在 `user/app/initcode-rv.cc` 中启用 `priority_borrow_research();`
+ * 1. 在 `user/app/initcode-rv.cc` 中启用 `mclock_research();`
  * 2. 构建：`make build ARCH=riscv`
  * 3. 运行：`make run r QEMU_MEM=1G`
  *
@@ -389,7 +389,8 @@ namespace
         }
 
         int applied_io_nice = userdebug5(ctx.job.nice_value);
-        if (applied_io_nice < 0)
+        if ((ctx.job.nice_value >= 0 && applied_io_nice < 0) ||
+            (ctx.job.nice_value < 0 && applied_io_nice != ctx.job.nice_value))
         {
             report.status_code = -10;
             report.sys_errno = errno;
@@ -677,7 +678,7 @@ namespace
     {
         /*
          * 同步 read/write worker 每个进程一次只会挂一个块层请求。
-         * 为了稳定复现“高优先级 backlog 存在时低优先级被压制”，先让 A 组预热出
+         * 为了稳定复现“高权重 backlog 存在时低权重只获得比例份额”，先让 A 组预热出
          * 一批 pending 请求，再放行 B 组。两个组的运行窗口仍然长时间重叠，
          * 吞吐统计按各自 worker 的真实开始/结束时间计算。
          */
@@ -699,7 +700,7 @@ namespace
                             wait_result == 0;
             if (!ok)
             {
-                printf("[priority-borrow] 场景=%s worker=%s pid=%d io(req=%d got=%d) cpu=%d bytes=%dMiB report=%d errno=%d wait=0x%x\n",
+                printf("[mclock] 场景=%s worker=%s pid=%d io(req=%d got=%d) cpu=%d bytes=%dMiB report=%d errno=%d wait=0x%x\n",
                        scenario_name,
                        worker.job.tag,
                        worker.pid,
@@ -791,7 +792,7 @@ namespace
 
     void print_group_result(const char *scenario_name, const io_group_job &job, const io_group_report &report)
     {
-        printf("[priority-borrow] 场景=%s group=%s op=%s workers=%d runtime=%ds io(req=%d got=%d..%d) cpu=%d..%d 成功=%d/%d 总IO=%dMiB 吞吐=",
+        printf("[mclock] 场景=%s group=%s op=%s workers=%d runtime=%ds io(req=%d got=%d..%d) cpu=%d..%d 成功=%d/%d 总IO=%dMiB 吞吐=",
                scenario_name,
                job.tag,
                job.write_request ? "write" : "read",
@@ -815,13 +816,13 @@ namespace
     {
         if (a_report.status_code != 0 || b_report.status_code != 0)
         {
-            printf("[priority-borrow] 场景=%s 无法生成组汇总：至少一个作业组失败\n", scenario_name);
+            printf("[mclock] 场景=%s 无法生成组汇总：至少一个作业组失败\n", scenario_name);
             return;
         }
 
         const unsigned long long a_speed = group_throughput_x100(a_report);
         const unsigned long long b_speed = group_throughput_x100(b_report);
-        printf("[priority-borrow] 场景=%s 组吞吐 A/B=", scenario_name);
+        printf("[mclock] 场景=%s 组吞吐 A/B=", scenario_name);
         print_x100(ratio_x100(a_speed, b_speed));
         printf("\n");
     }
@@ -830,18 +831,18 @@ namespace
                                   const io_group_job &job,
                                   io_group_report &report_out)
     {
-        printf("==== PRIORITY BORROW 场景：%s ====\n", scenario_name);
+        printf("==== MCLOCK 场景：%s ====\n", scenario_name);
 
         group_ctx ctx;
         init_group_ctx(ctx, job);
         if (spawn_group(ctx) != 0)
         {
-            printf("[priority-borrow] 启动作业组失败：%s\n", scenario_name);
+            printf("[mclock] 启动作业组失败：%s\n", scenario_name);
             return -1;
         }
         if (wait_group_ready(ctx) != 0)
         {
-            printf("[priority-borrow] 作业组未能全部进入 ready：%s\n", scenario_name);
+            printf("[mclock] 作业组未能全部进入 ready：%s\n", scenario_name);
             stop_group_before_go(ctx);
             (void)collect_group(ctx, report_out);
             print_group_result(scenario_name, job, report_out);
@@ -871,7 +872,7 @@ namespace
                                 io_group_report &report_a,
                                 io_group_report &report_b)
     {
-        printf("==== PRIORITY BORROW 场景：%s ====\n", scenario_name);
+        printf("==== MCLOCK 场景：%s ====\n", scenario_name);
 
         group_ctx a_ctx;
         group_ctx b_ctx;
@@ -879,12 +880,12 @@ namespace
         init_group_ctx(b_ctx, job_b);
         if (spawn_group(a_ctx) != 0 || spawn_group(b_ctx) != 0)
         {
-            printf("[priority-borrow] 启动作业组失败：%s\n", scenario_name);
+            printf("[mclock] 启动作业组失败：%s\n", scenario_name);
             return -1;
         }
         if (wait_group_ready(a_ctx) != 0 || wait_group_ready(b_ctx) != 0)
         {
-            printf("[priority-borrow] 作业组未能全部进入 ready：%s\n", scenario_name);
+            printf("[mclock] 作业组未能全部进入 ready：%s\n", scenario_name);
             stop_group_before_go(a_ctx);
             stop_group_before_go(b_ctx);
             (void)collect_group(a_ctx, report_a);
@@ -940,8 +941,8 @@ namespace
         const unsigned long long a_short_x100 = group_throughput_x100(a_short);
         const unsigned long long b_after_x100 = group_throughput_x100(b_after);
 
-        printf("==== PRIORITY BORROW 最终结论 ====\n");
-        printf("[priority-borrow][目标1] A/B 满载并发：A 组=");
+        printf("==== MCLOCK 最终结论 ====\n");
+        printf("[mclock][目标1] A/B 满载并发：A 组=");
         print_x100(a_contended_x100);
         printf("MiB/s, B 组=");
         print_x100(b_contended_x100);
@@ -949,7 +950,7 @@ namespace
         print_x100(ratio_x100(a_contended_x100, b_contended_x100));
         printf("\n");
 
-        printf("[priority-borrow][目标2] A 轻载时：A 组=");
+        printf("[mclock][目标2] A 轻载时：A 组=");
         print_x100(a_light_x100);
         printf("MiB/s, B 组=");
         print_x100(b_borrow_x100);
@@ -957,7 +958,7 @@ namespace
         print_x100(ratio_x100(b_borrow_x100, b_alone_x100));
         printf("\n");
 
-        printf("[priority-borrow][目标3] A 先结束后：A 组=");
+        printf("[mclock][目标3] A 先结束后：A 组=");
         print_x100(a_short_x100);
         printf("MiB/s, B 组=");
         print_x100(b_after_x100);
@@ -965,7 +966,7 @@ namespace
         print_x100(ratio_x100(b_after_x100, b_alone_x100));
         printf("\n");
 
-        printf("[priority-borrow][基线] A 单独=");
+        printf("[mclock][基线] A 单独=");
         print_x100(a_alone_x100);
         printf("MiB/s, B 单独=");
         print_x100(b_alone_x100);
@@ -985,7 +986,7 @@ namespace
         const bool goal1_pass = full_pressure_ratio >= 150ULL;
         const bool goal2_pass = borrow_vs_contended >= 150ULL && borrow_vs_alone >= 50ULL;
         const bool goal3_pass = after_vs_alone >= 70ULL;
-        printf("[priority-borrow][验收] 目标1=%s 目标2=%s 目标3=%s borrow/contended=",
+        printf("[mclock][验收] 目标1=%s 目标2=%s 目标3=%s idle_share/contended=",
                goal1_pass ? "PASS" : "FAIL",
                goal2_pass ? "PASS" : "FAIL",
                goal3_pass ? "PASS" : "FAIL");
@@ -996,7 +997,7 @@ namespace
     }
 } // namespace
 
-int priority_borrow_research(void)
+int mclock_research(void)
 {
     init_env("/musl/");
     mkdir("/tmp", 0777);
@@ -1020,12 +1021,12 @@ int priority_borrow_research(void)
      * @brief 采用“固定时长”而不是“固定总 IO 量”。
      *
      * 这样 A/B 会在同一时间窗口内持续争抢设备，B 不会在 A 提前跑完后再把吞吐补回来，
-     * 更利于观察题目要求的“压制”“借用”“独占”三种行为。
+     * 更利于观察“比例分配”“空闲带宽借用”“独占恢复”三种行为。
      */
     const io_group_job a_alone_job = {
         "A-alone", "/dev/block/8:0", k_workers, true, false,
         k_raw_device_a_base, k_worker_stride_bytes, k_worker_region_bytes,
-        k_long_runtime_usec, 0, 0, 'A'};
+        k_long_runtime_usec, -20, 0, 'A'};
     const io_group_job b_alone_job = {
         "B-alone", "/dev/block/8:0", k_workers, true, false,
         k_raw_device_b_base, k_worker_stride_bytes, k_worker_region_bytes,
@@ -1033,7 +1034,7 @@ int priority_borrow_research(void)
     const io_group_job a_contended_job = {
         "A-high", "/dev/block/8:0", k_workers, true, false,
         k_raw_device_a_base, k_worker_stride_bytes, k_worker_region_bytes,
-        k_long_runtime_usec, 0, 0, 'q'};
+        k_long_runtime_usec, -20, 0, 'q'};
     const io_group_job b_contended_job = {
         "B-low", "/dev/block/8:0", k_workers, true, false,
         k_raw_device_b_base, k_worker_stride_bytes, k_worker_region_bytes,
@@ -1041,7 +1042,7 @@ int priority_borrow_research(void)
     const io_group_job a_light_job = {
         "A-light", "/dev/block/8:0", 2, true, false,
         k_raw_device_a_base, k_worker_stride_bytes, k_worker_region_bytes,
-        k_long_runtime_usec, 0, 8000, 'g'};
+        k_long_runtime_usec, -20, 8000, 'g'};
     const io_group_job b_borrow_job = {
         "B-borrow", "/dev/block/8:0", k_workers, true, false,
         k_raw_device_b_base, k_worker_stride_bytes, k_worker_region_bytes,
@@ -1049,7 +1050,7 @@ int priority_borrow_research(void)
     const io_group_job a_short_job = {
         "A-short", "/dev/block/8:0", k_workers, true, false,
         k_raw_device_a_base, k_worker_stride_bytes, k_worker_region_bytes,
-        k_short_runtime_usec, 0, 0, 'm'};
+        k_short_runtime_usec, -20, 0, 'm'};
     const io_group_job b_after_job = {
         "B-after", "/dev/block/8:0", k_workers, true, false,
         k_raw_device_b_base, k_worker_stride_bytes, k_worker_region_bytes,

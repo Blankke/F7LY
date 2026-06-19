@@ -21065,9 +21065,8 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_userdebug2()
     {
-        // 只打开普通 printf，便于研究场景按需采集 plain trace，
+        // 只打开普通 printf，便于按需采集用户态诊断输出，
         // 又不会把 info/warn 分组里的大量彩色调试输出一起放出来。
-        virtio_blk::set_priority_borrow_experiment_mode(true);
         enable_printf();
         return 0;
     }
@@ -21080,7 +21079,6 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_userdebug4()
     {
-        virtio_blk::set_priority_borrow_experiment_mode(false);
         Printer::disable_info_group();
         Printer::disable_warn_group();
         disable_printf();
