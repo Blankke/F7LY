@@ -4433,7 +4433,7 @@ namespace syscall
         {
             for (uint64 i = 0, puarg = uargv;; i++, puarg += sizeof(char *))
             {
-                if (i >= max_arg_num)
+                if (i > max_arg_num)
                 {
                     printfRed("[sys_execve] argv 数量超限\n");
                     return -E2BIG;
@@ -4466,7 +4466,7 @@ namespace syscall
         {
             for (ulong i = 0, puenv = uenvp;; i++, puenv += sizeof(char *))
             {
-                if (i >= max_arg_num)
+                if (i > max_arg_num)
                 {
                     printfRed("[sys_execve] envp 数量超限\n");
                     return -E2BIG;
@@ -4539,7 +4539,7 @@ namespace syscall
         {
             for (uint64 i = 0, puarg = uargv;; i++, puarg += sizeof(char *))
             {
-                if (i >= max_arg_num)
+                if (i > max_arg_num)
                     return -E2BIG;
                 if (_fetch_addr(puarg, uarg) < 0)
                     return -EFAULT;
@@ -4558,7 +4558,7 @@ namespace syscall
         {
             for (uint64 i = 0, puenv = uenvp;; i++, puenv += sizeof(char *))
             {
-                if (i >= max_arg_num)
+                if (i > max_arg_num)
                     return -E2BIG;
                 if (_fetch_addr(puenv, uenv) < 0)
                     return -EFAULT;

@@ -6369,7 +6369,7 @@ namespace proc
         // 为了兼容glibc，需要在用户栈中按照特定顺序压入：
         // 栈顶 -> 栈底：argc, argv[], envp[], auxv[], 字符串数据, 随机数据
 
-        constexpr size_t k_ptr_scratch_bytes = sizeof(uint64) * MAXARG;
+        constexpr size_t k_ptr_scratch_bytes = sizeof(uint64) * (MAXARG + 1);
         constexpr size_t k_auxv_scratch_bytes = sizeof(uint64) * elf::AuxvEntryType::MAX_AT * 2;
         uenvp_scratch = static_cast<uint64 *>(mem::k_pmm.kmalloc(k_ptr_scratch_bytes));
         uargv_scratch = static_cast<uint64 *>(mem::k_pmm.kmalloc(k_ptr_scratch_bytes));
