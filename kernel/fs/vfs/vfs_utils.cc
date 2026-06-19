@@ -4642,6 +4642,94 @@ int vfs_free_file(fs::file *file)
     return 0;
 }
 
+static int resolve_metadata_target_path(const eastl::string &pathname, bool follow_symlinks,
+                                        eastl::string &target_path)
+{
+    if (pathname.empty())
+    {
+        return -ENOENT;
+    }
+
+    int length_ret = validate_linux_path_length(pathname);
+    if (length_ret != EOK)
+    {
+        return length_ret;
+    }
+
+    if (follow_symlinks)
+    {
+        int r = resolve_symlinks(pathname, target_path);
+        if (r < 0)
+        {
+            return r;
+        }
+    }
+    else
+    {
+        // lchown/fchownat(AT_SYMLINK_NOFOLLOW) 只保留最终 symlink 本体；
+        // 路径前缀里的 symlink 仍按普通路径查找规则解析。
+        size_t last_slash = pathname.find_last_of('/');
+        eastl::string parent_dir;
+        eastl::string filename;
+
+        if (last_slash == eastl::string::npos)
+        {
+            parent_dir = ".";
+            filename = pathname;
+        }
+        else if (last_slash == 0)
+        {
+            parent_dir = "/";
+            if (pathname.length() > 1)
+            {
+                filename = pathname.substr(1);
+            }
+        }
+        else
+        {
+            parent_dir = pathname.substr(0, last_slash);
+            filename = pathname.substr(last_slash + 1);
+        }
+
+        eastl::string resolved_parent;
+        int r = resolve_symlinks(parent_dir, resolved_parent);
+        if (r < 0)
+        {
+            return r;
+        }
+
+        target_path = resolved_parent;
+        if (!filename.empty())
+        {
+            if (target_path.empty())
+            {
+                target_path = ".";
+            }
+            if (target_path.back() != '/')
+            {
+                target_path += "/";
+            }
+            target_path += filename;
+        }
+    }
+
+    length_ret = validate_linux_path_length(target_path);
+    if (length_ret != EOK)
+    {
+        return length_ret;
+    }
+
+    select_effective_backing_path(target_path, target_path, false);
+
+    fs::Kstat st;
+    int stat_ret = raw_vfs_path_stat(target_path, &st);
+    if (stat_ret < 0)
+    {
+        return stat_ret;
+    }
+    return 0;
+}
+
 int vfs_chown(const eastl::string &pathname, int owner, int group, bool follow_symlinks)
 {
     if (vfs_is_readonly_path(pathname))
@@ -4649,29 +4737,11 @@ int vfs_chown(const eastl::string &pathname, int owner, int group, bool follow_s
         return -EROFS;
     }
 
-    // Basic existence check
-    if (vfs_is_file_exist(pathname.c_str()) != 1)
+    eastl::string target_path;
+    int resolve_ret = resolve_metadata_target_path(pathname, follow_symlinks, target_path);
+    if (resolve_ret < 0)
     {
-        return -ENOENT;
-    }
-
-    // Symlink handling: if not following, ensure the path is a symlink and operate on it directly.
-    // Our ext4_owner_set operates on the path's inode. vfs_openat already has a resolver,
-    // here we emulate lchown by avoiding resolving final symlink.
-    eastl::string target_path = pathname;
-    if (follow_symlinks)
-    {
-        // Resolve symlinks to the final target
-        eastl::string resolved;
-        int r = resolve_symlinks(pathname, resolved);
-        if (r == 0 && !resolved.empty())
-        {
-            target_path = resolved;
-        }
-        else if (r < 0)
-        {
-            return r; // e.g., -ELOOP
-        }
+        return resolve_ret;
     }
 
     // Handle "-1 means unchanged" per POSIX: read current owner/group if needed
@@ -4701,19 +4771,13 @@ int vfs_chown(const eastl::string &pathname, int owner, int group, bool follow_s
 
 int vfs_owner_get(const eastl::string &pathname, uint32_t &uid, uint32_t &gid, bool follow_symlinks)
 {
-    if (vfs_is_file_exist(pathname.c_str()) != 1)
-        return -ENOENT;
-
-    eastl::string target_path = pathname;
-    if (follow_symlinks)
+    eastl::string target_path;
+    int resolve_ret = resolve_metadata_target_path(pathname, follow_symlinks, target_path);
+    if (resolve_ret < 0)
     {
-        eastl::string resolved;
-        int r = resolve_symlinks(pathname, resolved);
-        if (r == 0 && !resolved.empty())
-            target_path = resolved;
-        else if (r < 0)
-            return r;
+        return resolve_ret;
     }
+
     uint32_t u = 0, g = 0;
     int s = ext4_owner_get(target_path.c_str(), &u, &g);
     if (s != EOK)
@@ -4729,18 +4793,13 @@ int vfs_owner_get(const eastl::string &pathname, uint32_t &uid, uint32_t &gid, b
 
 int vfs_mode_get(const eastl::string &pathname, uint32_t &mode, bool follow_symlinks)
 {
-    if (vfs_is_file_exist(pathname.c_str()) != 1)
-        return -ENOENT;
-    eastl::string target_path = pathname;
-    if (follow_symlinks)
+    eastl::string target_path;
+    int resolve_ret = resolve_metadata_target_path(pathname, follow_symlinks, target_path);
+    if (resolve_ret < 0)
     {
-        eastl::string resolved;
-        int r = resolve_symlinks(pathname, resolved);
-        if (r == 0 && !resolved.empty())
-            target_path = resolved;
-        else if (r < 0)
-            return r;
+        return resolve_ret;
     }
+
     uint32_t m = 0;
     int s = ext4_mode_get(target_path.c_str(), &m);
     if (s != EOK)
@@ -4757,18 +4816,14 @@ int vfs_mode_set(const eastl::string &pathname, uint32_t mode, bool follow_symli
 {
     if (vfs_is_readonly_path(pathname))
         return -EROFS;
-    if (vfs_is_file_exist(pathname.c_str()) != 1)
-        return -ENOENT;
-    eastl::string target_path = pathname;
-    if (follow_symlinks)
+
+    eastl::string target_path;
+    int resolve_ret = resolve_metadata_target_path(pathname, follow_symlinks, target_path);
+    if (resolve_ret < 0)
     {
-        eastl::string resolved;
-        int r = resolve_symlinks(pathname, resolved);
-        if (r == 0 && !resolved.empty())
-            target_path = resolved;
-        else if (r < 0)
-            return r;
+        return resolve_ret;
     }
+
     int s = ext4_mode_set(target_path.c_str(), mode);
     if (s != EOK)
     {

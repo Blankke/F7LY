@@ -810,3 +810,38 @@ debug方式：（必须先阅读agent_docs/development_debugging.md，了解调�
 - 现象：`wget` 可下载 APKINDEX，`apk update` 先超时，后续暴露目录 `lseek` panic 和 fetch 后段错误。
 - 原因：缺 TCP 非阻塞 `CONNECTING/poll/SO_ERROR` 状态；目录 fd `lseek(0)` 未同步 ext4 游标；`mremap(MAYMOVE)` 原地扩容冲突时未搬迁。
 - 解决方案：补齐 TCP 连接中状态和 `SO_ERROR`；目录 `lseek` 同步 `next_off`；修正 `mremap` 原地检查与可搬迁分支。验证：RV `apk update` 成功，RV/LA build 通过。
+
+## apk add gcc发生段错误
+在`apk update`后，执行`apk add gcc`发生段错误：
+```
+F7LY:~$ cat > /etc/apk/repositories <<'EOF'
+> https://dl-cdn.alpinelinux.org/alpine/v3.23/main
+> https://dl-cdn.alpinelinux.org/alpine/v3.23/community
+> EOF
+
+F7LY:~$ apk update
+v3.23.4-379-gc5fad784ab4 [https://dl-cdn.alpinelinux.org/alpine/v3.23/main]
+v3.23.4-377-gcb206250bc6 [https://dl-cdn.alpinelinux.org/alpine/v3.23/community]
+OK: 25759 distinct packages available
+
+F7LY:~$ apk add gcc
+Segmentation fault (core dumped)
+```
+
+请先阅读上一个任务，仿照上一个任务先进行镜像替换，并执行`apk update`更新`index`。
+然后执行`apk add gcc`。
+
+请通过在链路上打印调试输出,定位这个问题出现的原因,按照下面的步骤进行修复。
+debug方式：（必须先阅读agent_docs/development_debugging.md，了解调试范式）
+1. 先进行静态代码阅读，确定可能的问题点
+2. 针对性的添加注释，逐渐排查问题
+3. 按照调试范式运行代码
+参考实现：
+1. ref/rocketos（往届作品第一名）
+
+
+### 修复小结
+
+- 现象：`apk update` 后 `apk add gcc` 先段错误；合入 main 内存重构后不崩溃，但 symlink owner 保留失败。
+- `fchownat(AT_SYMLINK_NOFOLLOW)` 被 VFS 存在性检查误追最终 symlink。
+- 解决方案：VFS 元数据路径按 follow/nofollow 解析最终组件。
