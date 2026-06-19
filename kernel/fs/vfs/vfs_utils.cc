@@ -20,6 +20,9 @@
 #include "physical_memory_manager.hh"
 #include <EASTL/vector.h>
 #include <EASTL/algorithm.h>
+#include <EASTL/sort.h>
+#include <EASTL/unordered_set.h>
+#include <EASTL/unordered_map.h>
 #include <libs/string.hh>
 
 namespace
@@ -126,6 +129,11 @@ namespace
     {
         uint64 id = proc::k_initial_mount_namespace_id;
         eastl::vector<MountOverride> mounts;
+        mutable eastl::unordered_map<uint64, size_t> mount_index_by_id;
+        mutable bool mount_index_by_id_dirty = true;
+        eastl::unordered_map<eastl::string, eastl::vector<uint64>> mount_ids_by_path;
+        mutable eastl::string mounts_snapshot_cache;
+        mutable bool mounts_snapshot_dirty = true;
         int next_peer_group = 1;
         int refcnt = 0;
 
@@ -133,6 +141,11 @@ namespace
         MountNamespaceState(const MountNamespaceState &other)
             : id(other.id),
               mounts(other.mounts),
+              mount_index_by_id(other.mount_index_by_id),
+              mount_index_by_id_dirty(other.mount_index_by_id_dirty),
+              mount_ids_by_path(other.mount_ids_by_path),
+              mounts_snapshot_cache(other.mounts_snapshot_cache),
+              mounts_snapshot_dirty(other.mounts_snapshot_dirty),
               next_peer_group(other.next_peer_group),
               refcnt(other.refcnt)
         {
@@ -146,6 +159,11 @@ namespace
             }
             id = other.id;
             mounts = other.mounts;
+            mount_index_by_id = other.mount_index_by_id;
+            mount_index_by_id_dirty = other.mount_index_by_id_dirty;
+            mount_ids_by_path = other.mount_ids_by_path;
+            mounts_snapshot_cache = other.mounts_snapshot_cache;
+            mounts_snapshot_dirty = other.mounts_snapshot_dirty;
             next_peer_group = other.next_peer_group;
             refcnt = other.refcnt;
             return *this;
@@ -163,6 +181,8 @@ namespace
     uint64 g_next_mount_id = 1;
     int g_next_mount_peer_group = 1;
 
+    int ensure_shared_peer_group(MountOverride &entry);
+    eastl::string get_parent_path(const eastl::string &path);
     void resolve_bind_mount_path(const eastl::string &path, eastl::string &resolved_path);
     bool select_effective_backing_path(const eastl::string &requested_path,
                                        eastl::string &selected_path,
@@ -208,9 +228,101 @@ namespace
         return ensure_mount_namespace_state(current_mount_namespace_id());
     }
 
-    eastl::vector<MountOverride> &mount_overrides()
+    void mark_mount_state_dirty(MountNamespaceState &ns)
     {
-        return current_mount_namespace_state().mounts;
+        ns.mount_index_by_id_dirty = true;
+        ns.mounts_snapshot_dirty = true;
+    }
+
+    void ensure_mount_index_by_id_cache(const MountNamespaceState &ns)
+    {
+        if (!ns.mount_index_by_id_dirty)
+        {
+            return;
+        }
+
+        ns.mount_index_by_id.clear();
+        ns.mount_index_by_id.reserve(ns.mounts.size());
+        for (size_t i = 0; i < ns.mounts.size(); ++i)
+        {
+            ns.mount_index_by_id[ns.mounts[i].mount_id] = i;
+        }
+        ns.mount_index_by_id_dirty = false;
+    }
+
+    void append_mount_id_to_path_cache(MountNamespaceState &ns,
+                                       const eastl::string &path,
+                                       uint64 mount_id)
+    {
+        ns.mount_ids_by_path[path].push_back(mount_id);
+    }
+
+    void remove_mount_id_from_path_cache(MountNamespaceState &ns,
+                                         const eastl::string &path,
+                                         uint64 mount_id)
+    {
+        auto it = ns.mount_ids_by_path.find(path);
+        if (it == ns.mount_ids_by_path.end())
+        {
+            return;
+        }
+
+        eastl::vector<uint64> &mount_ids = it->second;
+        for (size_t i = mount_ids.size(); i > 0; --i)
+        {
+            if (mount_ids[i - 1] == mount_id)
+            {
+                mount_ids.erase(mount_ids.begin() + (i - 1));
+                break;
+            }
+        }
+        if (mount_ids.empty())
+        {
+            ns.mount_ids_by_path.erase(it);
+        }
+    }
+
+    void build_mounts_snapshot_cache(const MountNamespaceState &ns)
+    {
+        if (!ns.mounts_snapshot_dirty)
+        {
+            return;
+        }
+
+        eastl::string snapshot;
+        snapshot.reserve(ns.mounts.size() * 48);
+        for (const auto &entry : ns.mounts)
+        {
+            if (entry.source.empty())
+            {
+                continue;
+            }
+
+            /*
+             * /proc/mounts 会被 fs_bind_lib.sh 高频读取。把整表字符串拼接缓存到
+             * “挂载状态变化时”再重建，能避免每次 shell grep/cat 都重新扫表。
+             */
+            filesystem_t *backing_fs = get_fs_from_path(entry.source.c_str());
+            bool is_fat32 = backing_fs != nullptr && backing_fs->type == FAT32;
+            snapshot += is_fat32 ? "/dev/data" : "/dev/root";
+            snapshot += " ";
+            snapshot += entry.path;
+            snapshot += is_fat32 ? " vfat " : " ext4 ";
+            snapshot += entry.read_only ? "ro,bind" : "rw,bind";
+            if (entry.propagation == VFS_MOUNT_SHARED)
+                snapshot += ",shared";
+            else if (entry.propagation == VFS_MOUNT_SLAVE)
+                snapshot += ",slave";
+            else if (entry.propagation == VFS_MOUNT_UNBINDABLE)
+                snapshot += ",unbindable";
+            if (entry.master_peer_group != 0 &&
+                entry.propagation == VFS_MOUNT_SHARED)
+                snapshot += ",slave";
+            snapshot += " 0 0\n";
+        }
+
+        ns.mounts_snapshot_cache = eastl::move(snapshot);
+        ns.mounts_snapshot_dirty = false;
     }
 
     bool dirent_exists(const eastl::vector<DirentSnapshot> &entries, const eastl::string &name)
@@ -368,6 +480,40 @@ namespace
                                      size_t limit)
     {
         size_t end = eastl::min(limit, ns.mounts.size());
+        if (end == ns.mounts.size())
+        {
+            if (path.empty())
+            {
+                return -1;
+            }
+
+            eastl::string current = path;
+            while (!current.empty())
+            {
+                auto it = ns.mount_ids_by_path.find(current);
+                if (it != ns.mount_ids_by_path.end())
+                {
+                    ensure_mount_index_by_id_cache(ns);
+                    for (size_t i = it->second.size(); i > 0; --i)
+                    {
+                        auto index_it =
+                            ns.mount_index_by_id.find(it->second[i - 1]);
+                        if (index_it != ns.mount_index_by_id.end())
+                        {
+                            return static_cast<int>(index_it->second);
+                        }
+                    }
+                }
+
+                if (current == "/" || current == ".")
+                {
+                    break;
+                }
+                current = get_parent_path(current);
+            }
+            return -1;
+        }
+
         for (size_t i = end; i > 0; --i)
         {
             if (path_matches_mount_prefix(path, ns.mounts[i - 1].path))
@@ -394,23 +540,43 @@ namespace
     MountOverride *find_exact_mount_override(const eastl::string &path)
     {
         MountNamespaceState &ns = current_mount_namespace_state();
-        int index = find_covering_mount_index_in(ns, path);
-        if (index < 0 || ns.mounts[static_cast<size_t>(index)].path != path)
+        auto it = ns.mount_ids_by_path.find(path);
+        if (it == ns.mount_ids_by_path.end())
         {
             return nullptr;
         }
-        return &ns.mounts[static_cast<size_t>(index)];
+
+        ensure_mount_index_by_id_cache(ns);
+        for (size_t i = it->second.size(); i > 0; --i)
+        {
+            auto index_it = ns.mount_index_by_id.find(it->second[i - 1]);
+            if (index_it != ns.mount_index_by_id.end())
+            {
+                return &ns.mounts[index_it->second];
+            }
+        }
+        return nullptr;
     }
 
     int find_exact_mount_index_in(const MountNamespaceState &ns,
                                   const eastl::string &path)
     {
-        int index = find_covering_mount_index_in(ns, path);
-        if (index < 0 || ns.mounts[static_cast<size_t>(index)].path != path)
+        auto it = ns.mount_ids_by_path.find(path);
+        if (it == ns.mount_ids_by_path.end())
         {
             return -1;
         }
-        return index;
+
+        ensure_mount_index_by_id_cache(ns);
+        for (size_t i = it->second.size(); i > 0; --i)
+        {
+            auto index_it = ns.mount_index_by_id.find(it->second[i - 1]);
+            if (index_it != ns.mount_index_by_id.end())
+            {
+                return static_cast<int>(index_it->second);
+            }
+        }
+        return -1;
     }
 
     int find_mount_index_by_id(const MountNamespaceState &ns, uint64 mount_id)
@@ -419,27 +585,39 @@ namespace
         {
             return -1;
         }
-        for (size_t i = 0; i < ns.mounts.size(); ++i)
+
+        ensure_mount_index_by_id_cache(ns);
+        auto it = ns.mount_index_by_id.find(mount_id);
+        if (it == ns.mount_index_by_id.end())
         {
-            if (ns.mounts[i].mount_id == mount_id)
-            {
-                return static_cast<int>(i);
-            }
+            return -1;
         }
-        return -1;
+        return static_cast<int>(it->second);
     }
 
     int find_exact_mount_index_with_parent(const MountNamespaceState &ns,
                                            const eastl::string &path,
                                            uint64 parent_mount_id)
     {
-        for (size_t i = ns.mounts.size(); i > 0; --i)
+        auto it = ns.mount_ids_by_path.find(path);
+        if (it == ns.mount_ids_by_path.end())
         {
-            const MountOverride &entry = ns.mounts[i - 1];
-            if (entry.path == path &&
-                entry.parent_mount_id == parent_mount_id)
+            return -1;
+        }
+
+        ensure_mount_index_by_id_cache(ns);
+        for (size_t i = it->second.size(); i > 0; --i)
+        {
+            auto index_it = ns.mount_index_by_id.find(it->second[i - 1]);
+            if (index_it == ns.mount_index_by_id.end())
             {
-                return static_cast<int>(i - 1);
+                continue;
+            }
+
+            const MountOverride &entry = ns.mounts[index_it->second];
+            if (entry.parent_mount_id == parent_mount_id)
+            {
+                return static_cast<int>(index_it->second);
             }
         }
         return -1;
@@ -467,14 +645,82 @@ namespace
         return false;
     }
 
-    bool is_visible_mount_in(const MountNamespaceState &ns, size_t index)
+    void collect_visible_mount_indices(const MountNamespaceState &ns,
+                                       const eastl::string &normalized_path,
+                                       bool recursive,
+                                       eastl::vector<size_t> &visible_indices)
     {
-        if (index >= ns.mounts.size())
+        if (!recursive)
         {
-            return false;
+            visible_indices.clear();
+            int exact_index = find_exact_mount_index_in(ns, normalized_path);
+            if (exact_index >= 0)
+            {
+                /*
+                 * 非递归 make-shared/private/slave/unbindable 只作用于当前
+                 * 路径上“调用方能看到的那一层挂载”，不会影响被覆盖的旧层。
+                 */
+                visible_indices.push_back(static_cast<size_t>(exact_index));
+            }
+            return;
         }
-        return find_covering_mount_index_in(ns, ns.mounts[index].path) ==
-               static_cast<int>(index);
+
+        eastl::unordered_set<eastl::string> visible_paths;
+        visible_paths.reserve(ns.mounts.size());
+        visible_indices.clear();
+        visible_indices.reserve(ns.mounts.size());
+
+        /*
+         * 同一路径上只有最后压入的一层挂载可见。从尾到头做一次判重，
+         * 就能把 make-rshared/private/slave 的可见层筛选从 O(n^2)
+         * 压成线性遍历。
+         */
+        for (size_t i = ns.mounts.size(); i > 0; --i)
+        {
+            size_t index = i - 1;
+            const eastl::string &path = ns.mounts[index].path;
+            if (!visible_paths.insert(path).second)
+            {
+                continue;
+            }
+
+            if ((recursive && path_matches_mount_prefix(path, normalized_path)) ||
+                (!recursive && path == normalized_path))
+            {
+                visible_indices.push_back(index);
+            }
+        }
+
+        eastl::reverse(visible_indices.begin(), visible_indices.end());
+    }
+
+    void apply_mount_propagation(MountOverride &entry,
+                                 VfsMountPropagation propagation)
+    {
+        entry.propagation = propagation;
+        if (propagation == VFS_MOUNT_SHARED)
+        {
+            ensure_shared_peer_group(entry);
+        }
+        else if (propagation == VFS_MOUNT_SLAVE)
+        {
+            /*
+             * shared 或 shared+slave 挂载离开 peer group 后，以刚离开的组
+             * 作为直接 master。保留更上游的旧 master 会跳过中间传播层，
+             * 破坏多级 slave 链。
+             */
+            if (entry.peer_group != 0)
+            {
+                entry.master_peer_group = entry.peer_group;
+            }
+            entry.peer_group = 0;
+        }
+        else if (propagation == VFS_MOUNT_PRIVATE ||
+                 propagation == VFS_MOUNT_UNBINDABLE)
+        {
+            entry.peer_group = 0;
+            entry.master_peer_group = 0;
+        }
     }
 
     int allocate_mount_peer_group()
@@ -597,6 +843,8 @@ namespace
         entry.peer_group = peer_group;
         entry.master_peer_group = master_peer_group;
         ns.mounts.push_back(entry);
+        append_mount_id_to_path_cache(ns, entry.path, entry.mount_id);
+        mark_mount_state_dirty(ns);
         if (created_mount_id != nullptr)
         {
             *created_mount_id = entry.mount_id;
@@ -631,25 +879,37 @@ namespace
          * 也可能属于另一个 propagation peer。沿父对象 ID 只收集真实后代，
          * 才能在卸载后正确露出栈中的其他挂载对象。
          */
-        eastl::vector<uint64> removed_ids;
-        removed_ids.push_back(ns.mounts[root_index].mount_id);
+        eastl::unordered_set<uint64> removed_ids;
+        removed_ids.reserve(ns.mounts.size() - root_index);
+        eastl::vector<size_t> removed_indices;
+        removed_indices.reserve(ns.mounts.size() - root_index);
+
+        removed_ids.insert(ns.mounts[root_index].mount_id);
+        removed_indices.push_back(root_index);
         for (size_t i = root_index + 1; i < ns.mounts.size(); ++i)
         {
-            if (eastl::find(removed_ids.begin(), removed_ids.end(),
-                            ns.mounts[i].parent_mount_id) != removed_ids.end())
+            if (removed_ids.find(ns.mounts[i].parent_mount_id) !=
+                removed_ids.end())
             {
-                removed_ids.push_back(ns.mounts[i].mount_id);
+                removed_ids.insert(ns.mounts[i].mount_id);
+                removed_indices.push_back(i);
             }
         }
 
-        for (size_t i = ns.mounts.size(); i > 0; --i)
+        /*
+         * fs_bind/rbind 会频繁拆卸中等大小挂载树。这里先线性标记整棵子树，
+         * 再逆序擦除命中的索引，避免每个节点都在线性表里重复查父 ID。
+         */
+        for (size_t index : removed_indices)
         {
-            if (eastl::find(removed_ids.begin(), removed_ids.end(),
-                            ns.mounts[i - 1].mount_id) != removed_ids.end())
-            {
-                ns.mounts.erase(ns.mounts.begin() + (i - 1));
-            }
+            const MountOverride &removed = ns.mounts[index];
+            remove_mount_id_from_path_cache(ns, removed.path, removed.mount_id);
         }
+        for (size_t i = removed_indices.size(); i > 0; --i)
+        {
+            ns.mounts.erase(ns.mounts.begin() + removed_indices[i - 1]);
+        }
+        mark_mount_state_dirty(ns);
         return true;
     }
 
@@ -705,7 +965,8 @@ namespace
                  * propagation peer。若只遍历可见层，卸载栈顶时就无法同步
                  * 弹出其他 peer 上对应的最近挂载层。
                  */
-                bool same_peer_group = is_shared_mount(peer) && peer.peer_group == origin_peer_group;
+                bool same_peer_group =
+                    is_shared_mount(peer) && peer.peer_group == origin_peer_group;
                 bool slave_receiver = peer.master_peer_group == origin_peer_group;
                 if (!same_peer_group && !slave_receiver)
                 {
@@ -780,19 +1041,22 @@ namespace
         }
 
         const MountOverride &tree_root = mounted_tree.front();
-        eastl::vector<PropagationReceiver> receivers;
+        eastl::vector<PropagationReceiver> collected_receivers;
+        const eastl::vector<PropagationReceiver> *receivers =
+            receiver_snapshot;
         if (receiver_snapshot != nullptr)
         {
-            receivers = *receiver_snapshot;
+            receivers = receiver_snapshot;
         }
         else
         {
             collect_propagation_receivers(origin_ns_id, origin_parent_path,
-                                          origin_peer_group, receivers,
+                                          origin_peer_group, collected_receivers,
                                           origin_parent_mount_id);
+            receivers = &collected_receivers;
         }
 
-        for (const auto &receiver : receivers)
+        for (const auto &receiver : *receivers)
         {
             eastl::string propagated_target;
             if (!translate_propagation_target(origin_parent_path, origin_parent_source,
@@ -858,8 +1122,8 @@ namespace
                                    &propagated_root_id);
 
             eastl::vector<MountOverride> propagated_tree;
-            eastl::vector<uint64> source_ids;
-            eastl::vector<uint64> propagated_ids;
+            eastl::unordered_map<uint64, uint64> source_to_propagated_id;
+            source_to_propagated_id.reserve(mounted_tree.size());
             MountOverride propagated_root = tree_root;
             propagated_root.mount_id = propagated_root_id;
             propagated_root.parent_mount_id = receiver.mount_id;
@@ -868,8 +1132,7 @@ namespace
             propagated_root.peer_group = propagated_peer_group;
             propagated_root.master_peer_group = propagated_master_group;
             propagated_tree.push_back(propagated_root);
-            source_ids.push_back(tree_root.mount_id);
-            propagated_ids.push_back(propagated_root_id);
+            source_to_propagated_id[tree_root.mount_id] = propagated_root_id;
 
             for (size_t i = 1; i < mounted_tree.size(); ++i)
             {
@@ -885,15 +1148,11 @@ namespace
                 append_mount_suffix(propagated_target, child_suffix,
                                     propagated_child.path);
                 uint64 propagated_parent_id = propagated_root_id;
-                for (size_t mapping_index = 0;
-                     mapping_index < source_ids.size();
-                     ++mapping_index)
+                auto parent_it =
+                    source_to_propagated_id.find(child.parent_mount_id);
+                if (parent_it != source_to_propagated_id.end())
                 {
-                    if (source_ids[mapping_index] == child.parent_mount_id)
-                    {
-                        propagated_parent_id = propagated_ids[mapping_index];
-                        break;
-                    }
+                    propagated_parent_id = parent_it->second;
                 }
                 if (receiver.via_slave)
                 {
@@ -926,8 +1185,7 @@ namespace
                 propagated_child.mount_id = propagated_child_id;
                 propagated_child.parent_mount_id = propagated_parent_id;
                 propagated_tree.push_back(propagated_child);
-                source_ids.push_back(child.mount_id);
-                propagated_ids.push_back(propagated_child_id);
+                source_to_propagated_id[child.mount_id] = propagated_child_id;
             }
 
             /*
@@ -1535,7 +1793,10 @@ namespace
             current = "/";
         }
 
-        const MountOverride *mount = find_mount_override(current);
+        MountNamespaceState &ns = current_mount_namespace_state();
+        int mount_index = find_covering_mount_index_in(ns, current);
+        const MountOverride *mount =
+            mount_index < 0 ? nullptr : &ns.mounts[static_cast<size_t>(mount_index)];
         if (mount == nullptr || mount->source.empty())
         {
             resolved_path = current;
@@ -3818,7 +4079,9 @@ int vfs_frename(const char *oldpath, const char *newpath)
     return -status;
 }
 
-int vfs_path_stat(const char *path, fs::Kstat *st, bool follow_symlinks)
+static int do_vfs_path_stat(const char *path, fs::Kstat *st,
+                            bool follow_symlinks,
+                            bool flush_open_writers)
 {
     if (path == nullptr || st == nullptr)
     {
@@ -3911,12 +4174,15 @@ int vfs_path_stat(const char *path, fs::Kstat *st, bool follow_symlinks)
 
     select_effective_backing_path(effective_path, effective_path, false);
 
-    // path-based stat 必须看见当前进程/其他进程已经写入但仍留在写合并缓冲里的数据。
-    // 典型场景是 LTP mmap01：write(fd) 后立刻 stat(path)，若不刷新会把 st_size 误报为 0。
-    int flush_ret = proc::k_pm.flush_open_files_for_path(effective_path);
-    if (flush_ret < 0)
+    if (flush_open_writers)
     {
-        return flush_ret;
+        // path-based stat 必须看见当前进程/其他进程已经写入但仍留在写合并缓冲里的数据。
+        // 典型场景是 LTP mmap01：write(fd) 后立刻 stat(path)，若不刷新会把 st_size 误报为 0。
+        int flush_ret = proc::k_pm.flush_open_files_for_path(effective_path);
+        if (flush_ret < 0)
+        {
+            return flush_ret;
+        }
     }
 
     int status = raw_vfs_path_stat(effective_path, st);
@@ -3930,6 +4196,21 @@ int vfs_path_stat(const char *path, fs::Kstat *st, bool follow_symlinks)
                effective_path.c_str(), st->mode, st->size, follow_symlinks ? "true" : "false");
 
     return EOK;
+}
+
+int vfs_path_stat(const char *path, fs::Kstat *st, bool follow_symlinks)
+{
+    return do_vfs_path_stat(path, st, follow_symlinks, true);
+}
+
+int vfs_path_stat_noflush(const char *path, fs::Kstat *st, bool follow_symlinks)
+{
+    /*
+     * execve/mount 这类热点只关心存在性、类型和权限元数据，
+     * 不依赖 st_size 观察写缓冲中的最新内容，跳过 flush 能显著降低
+     * shell + mount/umount 高频系统调用的固定成本。
+     */
+    return do_vfs_path_stat(path, st, follow_symlinks, false);
 }
 
 int vfs_link(const char *oldpath, const char *newpath)
@@ -4535,15 +4816,66 @@ int vfs_register_bind_mount(const eastl::string &source_path, const eastl::strin
     if (normalized_target.empty())
         normalized_target = "/";
 
-    MountNamespaceState source_snapshot = current_mount_namespace_state();
-    int source_mount_index = find_covering_mount_index_in(source_snapshot, normalized_source);
-    const MountOverride *source_mount =
-        source_mount_index < 0 ? nullptr :
-        &source_snapshot.mounts[static_cast<size_t>(source_mount_index)];
+    /*
+     * 普通 bind 只需要源挂载点元数据；rbind 也只需要在写入前抓一份子树快照。
+     * 这里过去会直接深拷贝整个 mount namespace，fs_bind 连续叠挂后，
+     * 每次 mount --bind 都会把热路径退化成整表字符串复制。
+     */
+    const MountNamespaceState &source_ns = current_mount_namespace_state();
+    MountOverride source_mount_copy;
+    int source_mount_index =
+        find_covering_mount_index_in(source_ns, normalized_source);
+    const MountOverride *source_mount = nullptr;
+    if (source_mount_index >= 0)
+    {
+        source_mount_copy =
+            source_ns.mounts[static_cast<size_t>(source_mount_index)];
+        source_mount = &source_mount_copy;
+    }
     if (source_mount != nullptr && source_mount->propagation == VFS_MOUNT_UNBINDABLE)
     {
         // unbindable 挂载不能成为 bind/rbind 的根，避免创建无法保持传播约束的克隆。
         return -EINVAL;
+    }
+
+    eastl::vector<MountOverride> recursive_descendants;
+    if (recursive)
+    {
+        eastl::vector<eastl::string> unbindable_prefixes;
+        recursive_descendants.reserve(source_ns.mounts.size());
+
+        for (size_t i = 0; i < source_ns.mounts.size(); ++i)
+        {
+            const MountOverride &entry = source_ns.mounts[i];
+            if (!path_matches_mount_prefix(entry.path, normalized_source) ||
+                entry.path == normalized_source)
+            {
+                continue;
+            }
+
+            bool below_unbindable = false;
+            for (const auto &unbindable_path : unbindable_prefixes)
+            {
+                if (path_matches_mount_prefix(entry.path, unbindable_path))
+                {
+                    below_unbindable = true;
+                    break;
+                }
+            }
+
+            if (below_unbindable)
+            {
+                continue;
+            }
+
+            if (entry.propagation == VFS_MOUNT_UNBINDABLE)
+            {
+                unbindable_prefixes.push_back(entry.path);
+                continue;
+            }
+
+            recursive_descendants.push_back(entry);
+        }
     }
 
     eastl::string backing_source;
@@ -4616,8 +4948,8 @@ int vfs_register_bind_mount(const eastl::string &source_path, const eastl::strin
     }
 
     eastl::vector<MountOverride> mounted_tree;
-    eastl::vector<uint64> source_ids;
-    eastl::vector<uint64> mounted_ids;
+    eastl::unordered_map<uint64, uint64> source_to_mounted_id;
+    source_to_mounted_id.reserve(recursive_descendants.size() + 1);
     MountOverride mounted_root;
     mounted_root.mount_id = mounted_root_id;
     mounted_root.parent_mount_id =
@@ -4631,50 +4963,16 @@ int vfs_register_bind_mount(const eastl::string &source_path, const eastl::strin
     mounted_tree.push_back(mounted_root);
     if (source_mount != nullptr)
     {
-        source_ids.push_back(source_mount->mount_id);
-        mounted_ids.push_back(mounted_root_id);
+        source_to_mounted_id[source_mount->mount_id] = mounted_root_id;
     }
 
     if (recursive)
     {
-        eastl::vector<MountOverride> descendants;
-        for (size_t i = 0; i < source_snapshot.mounts.size(); ++i)
-        {
-            const MountOverride &entry = source_snapshot.mounts[i];
-            if (!path_matches_mount_prefix(entry.path, normalized_source) ||
-                entry.path == normalized_source)
-            {
-                continue;
-            }
-
-            bool below_unbindable = false;
-            for (size_t parent_index = 0;
-                 parent_index < source_snapshot.mounts.size();
-                 ++parent_index)
-            {
-                const MountOverride &candidate = source_snapshot.mounts[parent_index];
-                if (candidate.propagation != VFS_MOUNT_UNBINDABLE ||
-                    !path_matches_mount_prefix(candidate.path, normalized_source))
-                {
-                    continue;
-                }
-                if (path_matches_mount_prefix(entry.path, candidate.path))
-                {
-                    below_unbindable = true;
-                    break;
-                }
-            }
-            if (!below_unbindable)
-            {
-                descendants.push_back(entry);
-            }
-        }
-
         /*
          * mounts 按父层先于子层、下层先于栈顶的顺序记录。保持该顺序复制，
          * 才能让同一路径的多层挂载在目标处维持相同的父子和弹栈关系。
          */
-        for (const auto &entry : descendants)
+        for (const auto &entry : recursive_descendants)
         {
             eastl::string suffix;
             suffix_after_mount_prefix(entry.path, normalized_source, suffix);
@@ -4689,15 +4987,11 @@ int vfs_register_bind_mount(const eastl::string &source_path, const eastl::strin
             MountOverride mounted_child = entry;
             mounted_child.path = target_child;
             uint64 mounted_parent_id = mounted_root_id;
-            for (size_t mapping_index = 0;
-                 mapping_index < source_ids.size();
-                 ++mapping_index)
+            auto parent_it =
+                source_to_mounted_id.find(entry.parent_mount_id);
+            if (parent_it != source_to_mounted_id.end())
             {
-                if (source_ids[mapping_index] == entry.parent_mount_id)
-                {
-                    mounted_parent_id = mounted_ids[mapping_index];
-                    break;
-                }
+                mounted_parent_id = parent_it->second;
             }
             if (propagate_from_target_parent)
             {
@@ -4722,8 +5016,7 @@ int vfs_register_bind_mount(const eastl::string &source_path, const eastl::strin
             mounted_child.mount_id = mounted_child_id;
             mounted_child.parent_mount_id = mounted_parent_id;
             mounted_tree.push_back(mounted_child);
-            source_ids.push_back(entry.mount_id);
-            mounted_ids.push_back(mounted_child_id);
+            source_to_mounted_id[entry.mount_id] = mounted_child_id;
         }
     }
 
@@ -4807,21 +5100,22 @@ int vfs_move_mount(const eastl::string &source_path, const eastl::string &target
 
     if (propagate_from_target_parent)
     {
-        eastl::vector<uint64> checked_ids;
-        checked_ids.push_back(source_root.mount_id);
+        eastl::unordered_set<uint64> checked_ids;
+        checked_ids.reserve(ns.mounts.size() -
+                            static_cast<size_t>(source_root_index));
+        checked_ids.insert(source_root.mount_id);
         for (size_t i = static_cast<size_t>(source_root_index);
              i < ns.mounts.size(); ++i)
         {
             const MountOverride &entry = ns.mounts[i];
             bool in_moved_tree =
                 entry.mount_id == source_root.mount_id ||
-                eastl::find(checked_ids.begin(), checked_ids.end(),
-                            entry.parent_mount_id) != checked_ids.end();
+                checked_ids.find(entry.parent_mount_id) != checked_ids.end();
             if (!in_moved_tree)
             {
                 continue;
             }
-            checked_ids.push_back(entry.mount_id);
+            checked_ids.insert(entry.mount_id);
             if (entry.propagation == VFS_MOUNT_UNBINDABLE)
             {
                 return -EINVAL;
@@ -4835,23 +5129,23 @@ int vfs_move_mount(const eastl::string &source_path, const eastl::string &target
     }
 
     eastl::vector<MountOverride> moved_tree;
-    eastl::vector<uint64> moved_ids;
-    moved_ids.push_back(source_root.mount_id);
+    eastl::unordered_set<uint64> moved_ids;
+    moved_ids.reserve(ns.mounts.size() - static_cast<size_t>(source_root_index));
+    moved_ids.insert(source_root.mount_id);
     for (size_t i = static_cast<size_t>(source_root_index);
          i < ns.mounts.size(); ++i)
     {
         const MountOverride &entry = ns.mounts[i];
         bool in_moved_tree =
             entry.mount_id == source_root.mount_id ||
-            eastl::find(moved_ids.begin(), moved_ids.end(),
-                        entry.parent_mount_id) != moved_ids.end();
+            moved_ids.find(entry.parent_mount_id) != moved_ids.end();
         if (!in_moved_tree)
         {
             continue;
         }
         if (entry.mount_id != source_root.mount_id)
         {
-            moved_ids.push_back(entry.mount_id);
+            moved_ids.insert(entry.mount_id);
         }
 
         MountOverride moved_entry = entry;
@@ -4885,8 +5179,7 @@ int vfs_move_mount(const eastl::string &source_path, const eastl::string &target
         for (auto &receiver : target_parent_receivers)
         {
             if (receiver.ns_id != origin_ns_id ||
-                eastl::find(moved_ids.begin(), moved_ids.end(),
-                            receiver.mount_id) == moved_ids.end())
+                moved_ids.find(receiver.mount_id) == moved_ids.end())
             {
                 continue;
             }
@@ -4907,16 +5200,19 @@ int vfs_move_mount(const eastl::string &source_path, const eastl::string &target
     for (size_t i = ns.mounts.size(); i > static_cast<size_t>(source_root_index); --i)
     {
         size_t index = i - 1;
-        if (eastl::find(moved_ids.begin(), moved_ids.end(),
-                        ns.mounts[index].mount_id) != moved_ids.end())
+        if (moved_ids.find(ns.mounts[index].mount_id) != moved_ids.end())
         {
+            remove_mount_id_from_path_cache(ns, ns.mounts[index].path,
+                                            ns.mounts[index].mount_id);
             ns.mounts.erase(ns.mounts.begin() + index);
         }
     }
     for (const auto &entry : moved_tree)
     {
         ns.mounts.push_back(entry);
+        append_mount_id_to_path_cache(ns, entry.path, entry.mount_id);
     }
+    mark_mount_state_dirty(ns);
 
     if (propagate_from_target_parent)
     {
@@ -4947,50 +5243,20 @@ int vfs_set_mount_propagation(const eastl::string &mount_path, VfsMountPropagati
 
     MountNamespaceState &ns = current_mount_namespace_state();
     eastl::vector<size_t> visible_indices;
-    for (size_t i = 0; i < ns.mounts.size(); ++i)
-    {
-        if (!is_visible_mount_in(ns, i))
-        {
-            continue;
-        }
-        if ((recursive && path_matches_mount_prefix(ns.mounts[i].path, normalized_path)) ||
-            (!recursive && ns.mounts[i].path == normalized_path))
-        {
-            visible_indices.push_back(i);
-        }
-    }
+    collect_visible_mount_indices(ns, normalized_path, recursive,
+                                  visible_indices);
 
     bool changed = false;
     for (size_t index : visible_indices)
     {
-        MountOverride &entry = ns.mounts[index];
-        entry.propagation = propagation;
-        if (propagation == VFS_MOUNT_SHARED)
-        {
-            ensure_shared_peer_group(entry);
-        }
-        else if (propagation == VFS_MOUNT_SLAVE)
-        {
-            /*
-             * shared 或 shared+slave 挂载离开 peer group 后，以刚离开的组
-             * 作为直接 master。保留更上游的旧 master 会跳过中间传播层，
-             * 破坏多级 slave 链。
-             */
-            if (entry.peer_group != 0)
-            {
-                entry.master_peer_group = entry.peer_group;
-            }
-            entry.peer_group = 0;
-        }
-        else if (propagation == VFS_MOUNT_PRIVATE ||
-                 propagation == VFS_MOUNT_UNBINDABLE)
-        {
-            entry.peer_group = 0;
-            entry.master_peer_group = 0;
-        }
+        apply_mount_propagation(ns.mounts[index], propagation);
         changed = true;
     }
 
+    if (changed)
+    {
+        mark_mount_state_dirty(ns);
+    }
     return changed ? 0 : -ENOENT;
 }
 
@@ -5063,37 +5329,9 @@ bool vfs_is_readonly_path(const eastl::string &path)
 
 void vfs_append_mounts_snapshot(eastl::string &result)
 {
-    for (const auto &entry : mount_overrides())
-    {
-        if (entry.source.empty())
-        {
-            continue;
-        }
-
-        /*
-         * bind 的 backing 目录不是块设备名。若把目录写入首列，umount 等
-         * 工具会按“设备”匹配所有等价 peer，导致一次命令卸载多个挂载。
-         */
-        filesystem_t *backing_fs = get_fs_from_path(entry.source.c_str());
-        if (backing_fs != nullptr && backing_fs->type == FAT32)
-            result += "/dev/data";
-        else
-            result += "/dev/root";
-        result += " ";
-        result += entry.path;
-        result += ((backing_fs != nullptr && backing_fs->type == FAT32) ?
-                   " vfat " : " ext4 ");
-        result += entry.read_only ? "ro,bind" : "rw,bind";
-        if (entry.propagation == VFS_MOUNT_SHARED)
-            result += ",shared";
-        else if (entry.propagation == VFS_MOUNT_SLAVE)
-            result += ",slave";
-        else if (entry.propagation == VFS_MOUNT_UNBINDABLE)
-            result += ",unbindable";
-        if (entry.master_peer_group != 0 && entry.propagation == VFS_MOUNT_SHARED)
-            result += ",slave";
-        result += " 0 0\n";
-    }
+    const MountNamespaceState &ns = current_mount_namespace_state();
+    build_mounts_snapshot_cache(ns);
+    result += ns.mounts_snapshot_cache;
 }
 
 uint64 vfs_clone_mount_namespace(uint64 source_ns_id)
@@ -5104,15 +5342,13 @@ uint64 vfs_clone_mount_namespace(uint64 source_ns_id)
     MountNamespaceState clone;
     clone.id = g_next_mount_namespace_id++;
     clone.mounts = source.mounts;
-    eastl::vector<uint64> source_mount_ids;
-    eastl::vector<uint64> clone_mount_ids;
-    source_mount_ids.reserve(clone.mounts.size());
-    clone_mount_ids.reserve(clone.mounts.size());
+    eastl::unordered_map<uint64, uint64> source_to_clone_mount_id;
+    source_to_clone_mount_id.reserve(clone.mounts.size());
     for (auto &entry : clone.mounts)
     {
-        source_mount_ids.push_back(entry.mount_id);
+        uint64 source_mount_id = entry.mount_id;
         entry.mount_id = allocate_mount_id();
-        clone_mount_ids.push_back(entry.mount_id);
+        source_to_clone_mount_id[source_mount_id] = entry.mount_id;
     }
     for (auto &entry : clone.mounts)
     {
@@ -5120,17 +5356,21 @@ uint64 vfs_clone_mount_namespace(uint64 source_ns_id)
         {
             continue;
         }
-        for (size_t i = 0; i < source_mount_ids.size(); ++i)
+        auto parent_it =
+            source_to_clone_mount_id.find(entry.parent_mount_id);
+        if (parent_it != source_to_clone_mount_id.end())
         {
-            if (source_mount_ids[i] == entry.parent_mount_id)
-            {
-                entry.parent_mount_id = clone_mount_ids[i];
-                break;
-            }
+            entry.parent_mount_id = parent_it->second;
         }
+    }
+    for (const auto &entry : clone.mounts)
+    {
+        append_mount_id_to_path_cache(clone, entry.path, entry.mount_id);
     }
     clone.next_peer_group = source.next_peer_group;
     clone.refcnt = 1;
+    clone.mount_index_by_id_dirty = true;
+    clone.mounts_snapshot_dirty = true;
     g_mount_namespaces.push_back(clone);
     return clone.id;
 }

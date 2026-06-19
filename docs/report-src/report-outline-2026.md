@@ -65,7 +65,7 @@
 | C++ 运行环境 | 旧文档宣称支持异常 | C++23 freestanding，禁用异常/RTTI | 纠正 |
 | 内存发现 | 固定布局为主 | DTB + 动态物理内存区间 | 改进 |
 | 用户地址空间 | 初步进程内存管理器 | 统一 VMA/mm 生命周期 | 改进 |
-| 块 I/O | 架构独立驱动 | 统一队列与 priority-borrow | 新增/替换 |
+| 块 I/O | 架构独立驱动 | 统一队列与 budget-fair | 新增/替换 |
 | 网络 | BSD socket/协议栈框架 | 真实 loopback、批量消息、吞吐测试 | 改进 |
 | 用户入口 | 自动回归 | 自动回归 + 交互式 shell | 新增 |
 | 评测 | 分散日志 | 四组合 scoreboard 与流水线 | 新增 |
@@ -99,27 +99,27 @@
 - 双架构设备初始化日志。
 - iozone 四组合结果或官方 judge 摘要。
 
-#### 2.2 优先级调度与空闲带宽借用
+#### 2.2 预算公平调度与空闲带宽借用
 
 ##### 2.2.1 功能目标
 
-- A、B 同时发起 I/O 时优先服务高优先级 A。
+- A、B 同时发起 I/O 时按 IO nice 映射的权重分配设备带宽。
 - A 未用满时允许 B 借用空闲带宽。
 - A 停止后 B 可使用全部设备带宽。
-- 同一优先级内按进程 flow 轮转，避免同级饥饿。
+- 同一权重层内按进程 flow 轮转，避免同级饥饿。
 
 ##### 2.2.2 原理
 
-- nice 值映射为多个 service class。
-- 每个 class 下维护 per-process flow 队列。
-- 调度时优先选择最高非空 class；同 class 使用 round-robin。
-- 实验模式限制 dispatch window，并对低优先级提交做节流，形成可观察的优先级差异。
+- nice 值映射为多个 service class 和权重。
+- 调度器维护 per-process flow 队列。
+- 调度时按 flow 权重累积预算，预算足够后派发请求。
+- 实验模式限制 dispatch window，便于观察预算公平分配，不再对低优先级提交做旧式 borrow 节流。
 - 说明 mClock 中间实现为何删除：实现复杂且实验结果不稳定，最终只保留一套权威调度器。
 
 ##### 2.2.3 使用与示例
 
-- 运行 `priority_borrow_research()`。
-- 示例代码：class 映射、enqueue/dequeue 和带宽借用判断。
+- 运行 `budget_fair_research()`。
+- 示例代码：nice 权重映射、enqueue/dequeue 和预算消耗判断。
 - 给出三种负载阶段的预期输出。
 
 ##### 2.2.4 截图
@@ -246,7 +246,7 @@ make shell l
 - `ltp_testcases[]` 四开关。
 - `scoreboard/` 分组合状态。
 - runner -> raw log -> parser -> ranker -> scoreboard。
-- iozone/libcbench/priority-borrow 研究入口。
+- iozone/libcbench/budget-fair 研究入口。
 
 ##### 2.8.3 截图
 
@@ -351,7 +351,7 @@ make shell l
 明确列出：
 
 1. 删除 RISC-V 旧 `virtio2.hh`，替换为统一 virtio-blk。
-2. 删除 mClock 调度器，替换为 priority-borrow。
+2. 删除 mClock 调度器，先替换为 priority-borrow，后续升级为 budget-fair。
 3. 删除递归符号链接解析，替换为受限迭代。
 4. 删除根目录旧 mount/GDB/日志入口，迁移到标准目录。
 5. 删除误提交运行日志和旧 LTP raw 文件。
@@ -380,7 +380,7 @@ make shell l
 - iozone。
 - libcbench。
 - iperf/netperf。
-- priority-borrow 三阶段实验。
+- budget-fair 三阶段实验。
 - 测例启动耗时优化。
 
 #### 4.5 局限与后续工作
@@ -419,7 +419,7 @@ make shell l
 | S6 | iperf/netperf 成功结果 | 网络吞吐与并发 | 对应回归日志 |
 | S7 | iozone 官方 judge 汇总 | I/O 性能 | 四组合结果 |
 | S8 | libcbench 官方 judge 汇总 | 线程/内存性能 | 四组合结果 |
-| S9 | priority-borrow A/B 吞吐曲线 | 调度策略效果 | 研究入口输出转图 |
+| S9 | budget-fair A/B 吞吐曲线 | 调度策略效果 | 研究入口输出转图 |
 | S10 | mount/bind mount 前后目录 | VFS 改进 | shell 或 LTP |
 | S11 | epoll/fanotify/splice 代表测例 PASS | 新 ABI | 小集合日志 |
 | S12 | scoreboard 顶层汇总 | 评测工程 | `scoreboard/README.md` |
@@ -437,7 +437,7 @@ make shell l
 | --- | --- |
 | VMA/mm | `kernel/proc/process_memory_manager.hh/.cc`、`kernel/proc/context.hh` |
 | exec/shebang | `kernel/proc/proc_manager.cc` |
-| priority-borrow | `kernel/fs/drivers/virtio_priority_borrow_scheduler.*` |
+| budget-fair | `kernel/fs/drivers/virtio_budget_fair_scheduler.*` |
 | virtio queue | `kernel/fs/drivers/virtio_blk_queue.*` |
 | loopback socket | `kernel/fs/vfs/file/socket_file.cc` |
 | epoll | `kernel/fs/vfs/file/epoll_file.hh`、`kernel/sys/syscall_handler.cc` |
@@ -465,8 +465,8 @@ make shell l
 4. **统一 virtio-blk 架构图**
    展示 ext4/bio -> device -> queue/scheduler -> transport -> RISC-V MMIO 或 LoongArch PCI。
 
-5. **priority-borrow 队列组织图**
-   展示 service class、per-process flow、同级轮转、高优先级优先和低优先级借用空闲带宽。
+5. **budget-fair 队列组织图**
+   展示 nice 权重、per-process flow、预算累积、同级轮转和空闲带宽借用。
 
 6. **VFS 与 mount/bind 路径解析图**
    展示进程 cwd/root、挂载视图、虚拟文件树、ext4/FAT32、file 派生对象和 fd 表。
@@ -498,4 +498,3 @@ make shell l
 4. 按第二章功能逐节补原理、用法、代码和截图。
 5. 按第三章解释改动动机、删除项和改进效果。
 6. 最后生成 syscall 附录、验证矩阵和引用索引。
-

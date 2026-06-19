@@ -68,7 +68,7 @@ F7LY OS 是一个基于 xv6 思路扩展的教学/比赛用内核。主线目标
 - 回归调度逻辑：`user/user_lib/user_test.cc`
 - 系统调用定义：`kernel/sys/syscall_defs.hh`
 - 系统调用实现与分发：`kernel/sys/syscall_handler.cc`
-- LTP 参考源码：`ref/ltp/`或系统中`testsuits-for-oskernel/ltp-full-20240524/`目录
+- LTP 参考源码：`ref/ltp/`或系统中`~/testsuits-for-oskernel/ltp-full-20240524/`目录
 - scoreboard 入口：`scoreboard/README.md`
 
 ## Agent 工作流程建议

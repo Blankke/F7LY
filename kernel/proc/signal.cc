@@ -86,139 +86,118 @@ namespace
 
     proc::vma *find_vma_covering(proc::Pcb *p, uint64 addr, int *out_idx = nullptr)
     {
-        if (p == nullptr || p->get_vma() == nullptr)
+        if (p == nullptr || p->get_memory_manager() == nullptr || p->get_vma() == nullptr)
         {
             return nullptr;
         }
 
-        for (int i = 0; i < proc::NVMA; ++i)
+        proc::vma *vm = p->get_memory_manager()->find_vma_covering(addr);
+        if (vm != nullptr && out_idx != nullptr)
         {
-            proc::vma &vm = p->get_vma()->_vm[i];
-            if (!vm.used)
+            proc::vma *base = &p->get_vma()->_vm[0];
+            if (vm >= base && vm < base + proc::NVMA)
             {
-                continue;
-            }
-            uint64 vm_start = vm.addr;
-            uint64 vm_end = vm.addr + (uint64)vm.len;
-            if (addr >= vm_start && addr < vm_end)
-            {
-                if (out_idx != nullptr)
-                {
-                    *out_idx = i;
-                }
-                return &vm;
+                *out_idx = static_cast<int>(vm - base);
             }
         }
-        return nullptr;
+        return vm;
     }
 
     bool expand_writable_stack_vma_for_signal(proc::Pcb *p, uint64 frame_start, uint64 frame_end)
     {
-        if (p == nullptr || p->get_vma() == nullptr || frame_start >= frame_end)
+        if (p == nullptr || p->get_memory_manager() == nullptr || p->get_vma() == nullptr || frame_start >= frame_end)
         {
             return false;
         }
 
         uint64 aligned_start = PGROUNDDOWN(frame_start);
         uint64 aligned_end = PGROUNDUP(frame_end);
-
-        for (int i = 0; i < proc::NVMA; ++i)
+        proc::vma *vm = find_vma_covering(p, aligned_end - 1);
+        if (vm == nullptr || !signal_vma_can_receive_frame(p, *vm))
         {
-            proc::vma &vm = p->get_vma()->_vm[i];
-            if (!signal_vma_can_receive_frame(p, vm))
+            return false;
+        }
+
+        uint64 vm_start = vm->addr;
+        uint64 vm_end = vm->addr + (uint64)vm->len;
+        if (aligned_end > vm_end || aligned_end <= vm_start || aligned_start >= vm_start)
+        {
+            return false;
+        }
+
+        proc::vma *prev_vm = p->get_memory_manager()->find_prev_vma(vm_start);
+        if (prev_vm != nullptr && aligned_start < prev_vm->end_addr())
+        {
+            return false;
+        }
+
+        // 信号帧只允许把当前用户栈向下补齐少量页面，避免把真正的 guard/其他映射吞掉。
+        uint64 grow_size = vm_start - aligned_start;
+        if (grow_size > 8 * PGSIZE)
+        {
+            return false;
+        }
+
+        uint64 old_addr = vm->addr;
+        vm->addr = aligned_start;
+        vm->len += (int)grow_size;
+        if (!p->get_memory_manager()->reindex_vma_slot(*vm, old_addr))
+        {
+            vm->addr = old_addr;
+            vm->len -= (int)grow_size;
+            return false;
+        }
+
+        // 扩展区里可能已经存在由 uvmclear() 留下的 guard PTE。
+        // copy_out 只会为“空 PTE”按需补页，遇到这种已有但不可用户写的 PTE
+        // 会直接失败；信号帧属于受控栈增长，因此这里把旧 guard 页提升成
+        // 与该栈 VMA 一致的用户可写页。
+        for (uint64 page_va = aligned_start; page_va < vm_start; page_va += PGSIZE)
+        {
+            mem::Pte pte = p->get_pagetable()->walk(page_va, 0);
+            if (pte.is_null() || pte.get_data() == 0 || !pte.is_valid())
             {
                 continue;
             }
 
-            uint64 vm_start = vm.addr;
-            uint64 vm_end = vm.addr + (uint64)vm.len;
-            if (aligned_end > vm_end || aligned_end <= vm_start || aligned_start >= vm_start)
+            // fork 后用户栈页可能仍与子进程以 COW 方式共享。信号帧写入前必须先拆页，
+            // 不能仅把父进程 PTE 提升为可写，否则会直接覆盖子进程的返回栈。
+            if (!pte.is_writable() &&
+                mem::k_vmm.resolve_cow_page(*p->get_pagetable(), page_va) == 0)
             {
-                continue;
-            }
-
-            bool overlaps_other_vma = false;
-            for (int j = 0; j < proc::NVMA; ++j)
-            {
-                if (i == j || !p->get_vma()->_vm[j].used)
-                {
-                    continue;
-                }
-                const proc::vma &other = p->get_vma()->_vm[j];
-                uint64 other_start = other.addr;
-                uint64 other_end = other.addr + (uint64)other.len;
-                if (aligned_start < other_end && vm_start > other_start)
-                {
-                    overlaps_other_vma = true;
-                    break;
-                }
-            }
-            if (overlaps_other_vma)
-            {
-                return false;
-            }
-
-            // 信号帧只允许把当前用户栈向下补齐少量页面，避免把真正的 guard/其他映射吞掉。
-            uint64 grow_size = vm_start - aligned_start;
-            if (grow_size > 8 * PGSIZE)
-            {
-                return false;
-            }
-            vm.addr = aligned_start;
-            vm.len += (int)grow_size;
-
-            // 扩展区里可能已经存在由 uvmclear() 留下的 guard PTE。
-            // copy_out 只会为“空 PTE”按需补页，遇到这种已有但不可用户写的 PTE
-            // 会直接失败；信号帧属于受控栈增长，因此这里把旧 guard 页提升成
-            // 与该栈 VMA 一致的用户可写页。
-            for (uint64 page_va = aligned_start; page_va < vm_start; page_va += PGSIZE)
-            {
-                mem::Pte pte = p->get_pagetable()->walk(page_va, 0);
+                pte = p->get_pagetable()->walk(page_va, 0);
                 if (pte.is_null() || pte.get_data() == 0 || !pte.is_valid())
                 {
                     continue;
                 }
-
-                // fork 后用户栈页可能仍与子进程以 COW 方式共享。信号帧写入前必须先拆页，
-                // 不能仅把父进程 PTE 提升为可写，否则会直接覆盖子进程的返回栈。
-                if (!pte.is_writable() &&
-                    mem::k_vmm.resolve_cow_page(*p->get_pagetable(), page_va) == 0)
-                {
-                    pte = p->get_pagetable()->walk(page_va, 0);
-                    if (pte.is_null() || pte.get_data() == 0 || !pte.is_valid())
-                    {
-                        continue;
-                    }
-                }
-
-                uint64 pte_data = pte.get_data();
-#ifdef RISCV
-                pte_data |= PTE_V | PTE_U | PTE_R | PTE_W;
-                if (vm.prot & PROT_EXEC)
-                {
-                    pte_data |= PTE_X;
-                }
-                pte.set_data(pte_data);
-                asm volatile("sfence.vma %0, zero" : : "r"(page_va) : "memory");
-#elif defined(LOONGARCH)
-                pte_data |= PTE_V | PTE_U | PTE_W | PTE_D | PTE_P | PTE_MAT;
-                if (vm.prot & PROT_READ)
-                {
-                    pte_data &= ~PTE_NR;
-                }
-                pte.set_data(pte_data);
-                uint64 pair_base = page_va & ~((PGSIZE << 1) - 1);
-                asm volatile("invtlb 0x6, $zero, %0" : : "r"(pair_base) : "memory");
-#endif
             }
-            return true;
+
+            uint64 pte_data = pte.get_data();
+#ifdef RISCV
+            pte_data |= PTE_V | PTE_U | PTE_R | PTE_W;
+            if (vm->prot & PROT_EXEC)
+            {
+                pte_data |= PTE_X;
+            }
+            pte.set_data(pte_data);
+            asm volatile("sfence.vma %0, zero" : : "r"(page_va) : "memory");
+#elif defined(LOONGARCH)
+            pte_data |= PTE_V | PTE_U | PTE_W | PTE_D | PTE_P | PTE_MAT;
+            if (vm->prot & PROT_READ)
+            {
+                pte_data &= ~PTE_NR;
+            }
+            pte.set_data(pte_data);
+            uint64 pair_base = page_va & ~((PGSIZE << 1) - 1);
+            asm volatile("invtlb 0x6, $zero, %0" : : "r"(pair_base) : "memory");
+#endif
         }
-        return false;
+        return true;
     }
 
     uint64 clamp_signal_stack_top_to_writable_vma(proc::Pcb *p, uint64 stack_sp, uint64 frame_bytes)
     {
-        if (p == nullptr || p->get_vma() == nullptr)
+        if (p == nullptr || p->get_vma() == nullptr || p->get_memory_manager() == nullptr)
         {
             return stack_sp;
         }
@@ -232,35 +211,28 @@ namespace
             return frame_start >= vm_start && frame_start < vm_end;
         };
 
-        // 优先使用真正包含当前 sp 的可写 VMA，但必须保证整个信号帧都能放进去。
-        for (int i = 0; i < proc::NVMA; ++i)
+        // 先走树索引的“命中当前 sp 的 VMA”快路径。
+        if (stack_sp > 0)
         {
-            proc::vma &vm = p->get_vma()->_vm[i];
-            if (!signal_vma_can_receive_frame(p, vm))
+            proc::vma *covering = p->get_memory_manager()->find_vma_covering(stack_sp - 1);
+            if (covering != nullptr && signal_vma_can_receive_frame(p, *covering))
             {
-                continue;
-            }
-
-            uint64 vm_start = vm.addr;
-            uint64 vm_end = vm.addr + (uint64)vm.len;
-            if (stack_sp > vm_start && stack_sp <= vm_end &&
-                frame_fits(stack_sp, vm_start, vm_end, frame_bytes))
-            {
-                return stack_sp;
+                uint64 vm_start = covering->addr;
+                uint64 vm_end = covering->addr + (uint64)covering->len;
+                if (stack_sp > vm_start && stack_sp <= vm_end &&
+                    frame_fits(stack_sp, vm_start, vm_end, frame_bytes))
+                {
+                    return stack_sp;
+                }
             }
         }
 
-        for (int i = 0; i < proc::NVMA; ++i)
+        // 如果当前 sp 已经落在 VMA 顶部外侧，直接检查它前面的最近一个 VMA。
+        proc::vma *prev = p->get_memory_manager()->find_prev_vma(stack_sp + 1);
+        if (prev != nullptr && prev->used && (prev->prot & PROT_WRITE))
         {
-            proc::vma &vm = p->get_vma()->_vm[i];
-            if (!vm.used || !(vm.prot & PROT_WRITE))
-            {
-                continue;
-            }
-
-            uint64 vm_start = vm.addr;
-            uint64 vm_end = vm.addr + (uint64)vm.len;
-
+            uint64 vm_start = prev->addr;
+            uint64 vm_end = prev->addr + (uint64)prev->len;
             // musl/glibc 线程栈有时把当前 sp 放在栈 VMA 顶部外侧的红区/临时窗口。
             // 信号帧必须完整落回可写栈 VMA 内，否则 ucontext 会跨到未映射页。
             if (stack_sp > vm_end && stack_sp - vm_end <= PGSIZE &&
@@ -616,14 +588,13 @@ namespace proc
                 }
                 
                 proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
-                if (cur_proc->_sigactions == nullptr)
+                if (cur_proc == nullptr)
                 {
-                    panic("[sigAction] _sigactions is null");
-                    return -1;
+                    return syscall::SYS_ESRCH;
                 }
                 if (oldact != nullptr)
                 {
-                    if (cur_proc->_sigactions->actions[flag])
+                    if (cur_proc->_sigactions != nullptr && cur_proc->_sigactions->actions[flag])
                         *oldact = *(cur_proc->_sigactions->actions[flag]);
                     else
                         *oldact = {SIG_DFL, 0, {{0}}}; // 正确初始化所有字段，包括 sa_mask
@@ -641,13 +612,24 @@ namespace proc
                     {
                         // 恢复默认处理
                         printfLightCyan("[sigAction] Setting default handler for signal %d\n", flag);
-                        if (cur_proc->_sigactions->actions[flag])
+                        if (cur_proc->_sigactions != nullptr && cur_proc->_sigactions->actions[flag])
                         {
                             delete cur_proc->_sigactions->actions[flag];
                             cur_proc->_sigactions->actions[flag] = nullptr;
                         }
+                        return 0;
                     }
-                    else if (newact->sa_handler == SIG_IGN)
+
+                    if (cur_proc->_sigactions == nullptr)
+                    {
+                        cur_proc->_sigactions = cur_proc->ensure_sighand();
+                        if (cur_proc->_sigactions == nullptr)
+                        {
+                            return syscall::SYS_ENOMEM;
+                        }
+                    }
+
+                    if (newact->sa_handler == SIG_IGN)
                     {
                         // 忽略信号 - 设置一个特殊的处理函数
                         printfLightCyan("[sigAction] Setting ignore handler for signal %d\n", flag);

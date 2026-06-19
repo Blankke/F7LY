@@ -1,6 +1,7 @@
 #pragma once 
 
 #include "spinlock.hh"
+#include "proc/vm_area.hh"
 #include <EASTL/string.h>
 // 根据不同架构包含不同的页表实现
 #ifdef RISCV
@@ -10,9 +11,9 @@
 
 #endif
 
-// 前向声明
-namespace proc {
-    struct vma;
+namespace proc
+{
+	class ProcessMemoryManager;
 }
 
 namespace mem
@@ -64,8 +65,9 @@ void pci_map(int bus, int dev, int func, void *pages);
 		/// @return newshm if success
 		// uint64 allocshm( PageTable &pt, uint64 oldshm, uint64 newshm, uint64 sz, void *phyaddr[ pm::MAX_SHM_PGNUM ] );
 		
-
-		int copy_in( PageTable &pt, void *dst, uint64 src_va, uint64 len );
+		// target_mm 表示 pt 所属的用户地址空间；copy 期间需要用它处理懒分配、栈增长和 COW。
+		// 传空时只允许从当前运行进程且页表基址一致的场景推导。
+		int copy_in( PageTable &pt, void *dst, uint64 src_va, uint64 len, proc::ProcessMemoryManager *target_mm = nullptr );
 		// 只确认用户读范围可访问，并按需补齐合法 VMA 页面；不搬运数据。
 		int ensure_user_read_range( PageTable &pt, uint64 src_va, uint64 len );
 		// 只确认用户写范围可访问，必要时完成懒分配/COW；不改写用户数据。
@@ -100,7 +102,8 @@ void pci_map(int bus, int dev, int func, void *pages);
 		/// @param p source address
 		/// @param len length
 		/// @return 0 if success, -1 if failed
-		int copy_out( PageTable &pt, uint64 va, const void *p, uint64 len );
+		// 写用户页可能触发目标地址空间的缺页或 COW 拆页，target_mm 必须和 pt 指向同一个 mm。
+		int copy_out( PageTable &pt, uint64 va, const void *p, uint64 len, proc::ProcessMemoryManager *target_mm = nullptr );
 
 		/// @brief 处理 fork COW 写时复制页。
 		/// @return 成功拆页/恢复写权限返回0；不是 COW 页或失败返回-1。
@@ -112,7 +115,7 @@ void pci_map(int bus, int dev, int func, void *pages);
 		/// @param vm VMA结构指针
 		/// @param access_type 访问类型：0=读取, 1=写入, 2=执行
 		/// @return 成功返回0，失败返回-1
-		int allocate_vma_page(PageTable &pt, uint64 va, struct proc::vma *vm, int access_type);
+		int allocate_vma_page(PageTable &pt, uint64 va, proc::vma *vm, int access_type);
 
 		/// @brief mark a PTE invalid for user access
 		/// @param pt 

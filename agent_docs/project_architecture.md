@@ -61,16 +61,34 @@ LoongArch 的敏感点是高地址内核映射、TLB refill、trapframe 动态�
 - 内核堆：`kernel/mem/heap_memory_manager.*`
 - 页表与映射：`kernel/mem/virtual_memory_manager.*` 和架构页表目录
 - 用户地址空间：`kernel/proc/process_memory_manager.*`
-- mmap 元数据：`kernel/proc/context.hh` 的 `struct vma`
-- 共享内存：`kernel/shm/shm_manager.*`
+- VMA/地址空间对象：`kernel/proc/vm_area.hh`、`kernel/proc/vma_space.*`、`kernel/proc/vma_maple_tree.*`
+- VMA 元数据辅助层：`kernel/proc/vma_metadata_utils.*`
+- 页后端对象：`kernel/proc/vm_object.*`
+- 共享内存与 IPC 入口：`kernel/shm/shm_manager.*`
 
 关键思路：
 
 - PMM 用 buddy 管理页级物理页。
 - HMM 在 PMM 切出的 heap 区域上做细粒度分配，全局 `new/delete` 走这里。
 - `ProcessMemoryManager` 是用户地址空间权威所有者，统一管理 ELF 段、heap、mmap VMA、用户页表和引用计数。
+- `VmArea` 是统一的虚拟区间元数据，旧 `vma/NVMA` 仍在兼容路径里存在，但新的权威后端字段已经放到 `object/page_offset/private_page_overlay` 上。
+- `VMASpace` 用 `eastl::list<VmArea>` 持有区间对象，用 `VmaMapleTree` 做按地址索引，后续 `find/gap/split/merge/fault` 都应朝这层收口。
+- `VmObject` 负责匿名页、文件页、共享页的实际后端；`VirtualMemoryManager::allocate_vma_page()` 现在已经支持优先走 `VmObject::prepare_page()` 安装页表。
+- `vma_metadata_utils.*` 负责兼容旧 `NVMA` 槽位模型时的 snapshot / split / rollback / overlay owner 管理，当前 `fork`、`munmap`、`mprotect` 都依赖它避免把 `VmArea` 里的非平凡成员按 POD 处理。
 - `CLONE_VM` 共享 mm；普通 fork 深拷贝 mm；exec 成功后替换 mm。
-- `allocate_vma_page()` 是 mmap 懒分配统一入口，修改 mmap/munmap/mremap 时必须同时检查 trap 缺页、`copy_in/copy_out` 懒分配和退出释放。
+- `allocate_vma_page()` 是当前缺页/惰性补页统一入口，修改 mmap/munmap/mremap 时必须同时检查 trap 缺页、`copy_in/copy_out`、fork COW 和退出释放。
+
+## 共享内存与对象后端
+
+核心模块：
+
+- SysV SHM 管理与系统调用入口：`kernel/shm/shm_manager.*`
+- 统一页后端：`kernel/proc/vm_object.*`
+
+关键思路：
+
+- `ShmManager` 目前仍保留 SysV IPC 元数据和附件管理职责，但新的页后端抽象已经迁到 `VmObject` 体系，后续目标是不再让共享内存逻辑直接决定普通文件/匿名映射的物理页安装。
+- 文件映射、匿名映射、共享映射最终都应收束为“`VmArea` 描述区间，`VmObject` 提供页源，页表层统一安装”的模型；排查共享内存 bug 时不要只看 `shm_manager.cc`，也要同时看 `allocate_vma_page()`、`clone_for_fork()` 和 `free_single_vma()`。
 
 ## 进程、线程与调度
 

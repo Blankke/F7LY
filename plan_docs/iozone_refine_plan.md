@@ -90,3 +90,55 @@ iozone 四组合均已完整跑完，官方 judge 脚本可解析子项 80/80，
 ## 已完成，待验收（2026-06-01 补充）
 
 当前工作区使用 RISC-V 完整 initcode（iozone 位于长回归最前）重新验证，iozone-musl 与 iozone-glibc 各 20 项共 40/40 均逐项超过 baseline。当前 60 分钟长回归日志中的最低裕量为 musl `pwritev/preadv 4 initial writers` 3798.02 > 3609.25，glibc `random-read 4 random writers` 8214.41 > 7140.81。
+
+## 块 I/O 调度器升级：priority-borrow -> budget-fair（2026-06-19）
+
+### 检索结论
+
+priority-borrow 不是现代 Linux 内核常见的标准块 I/O 带宽分配算法。它更像 F7LY 自己实现的“严格 service class 优先 + 同级 flow 轮转 + 低优先级空窗借用”策略。
+
+现代 Linux 块层主流调度器是 `mq-deadline`、`bfq`、`kyber`、`none`。其中：
+
+- BFQ 明确是 proportional-share I/O scheduler，核心是“分配带宽而不是只分配时间”，更贴近本项目想做的块设备带宽分配。
+- Kyber 更偏目标延迟控制，通过 read/sync write 目标延迟对请求做节流。
+- mq-deadline 更偏 deadline/批处理和读写饥饿控制。
+- none 适合多队列高速设备，直接绕过调度器降低开销。
+
+参考资料：
+
+- Linux BFQ 文档：https://docs.kernel.org/block/bfq-iosched.html
+- Linux Kyber 文档：https://docs.kernel.org/block/kyber-iosched.html
+- Linux blk-mq 文档：https://www.kernel.org/doc/html/v6.0/block/blk-mq.html
+- Linux 切换调度器文档：https://www.kernel.org/doc/html/v5.8/block/switching-sched.html
+
+### 迁移目标
+
+本轮选择迁移 BFQ 思路，而不是完整移植 Linux BFQ：
+
+- F7LY 当前 virtio-blk 还是单 virtqueue，同步提交路径为主，完整 B-WF2Q+、cgroup、低延迟启发式和多队列支持暂时过重。
+- 先实现适合当前内核的简化 budget-fair：按进程 flow 建队列，按 IO nice 映射权重，用 weighted deficit round-robin 累积预算并派发请求。
+- 这样能替代旧 priority-borrow 的“硬优先级压制”，让低优先级在高优先级持续活跃时仍获得比例份额，高优先级空闲时低优先级自然借用全部带宽。
+
+### 完成情况
+
+已完成，待验收：
+
+- 删除 `kernel/fs/drivers/virtio_priority_borrow_scheduler.*`。
+- 新增 `kernel/fs/drivers/virtio_budget_fair_scheduler.*`：
+  - `nice -> service class -> weight` 映射；
+  - per-process flow 队列；
+  - 按权重计算 quantum；
+  - 用 deficit budget 决定每个 flow 是否可以派发当前请求；
+  - 极端大请求补 fallback，避免调度器因预算不足卡死。
+- `VirtioBlkQueue` 改为接入 `BudgetFairScheduler`。
+- 删除旧 priority-borrow 的低优先级提交节流、借用时间窗、trace 统计和注释掉的调试 printf。
+- 研究入口改名为 `budget_fair_research()`，输出前缀改为 `[budget-fair]`。
+- 当前报告提纲里的活跃引用从 priority-borrow 更新为 budget-fair。
+
+### 后续可提升空间
+
+- 将当前 O(N) flow 扫描升级为堆或增强树，靠近 BFQ/B-WF2Q+ 的 O(logN) 选择复杂度。
+- 增加真实 `ioprio` / cgroup 权重入口，不再借用 nice。
+- 增加 read/write/sync write 分类和目标延迟控制，吸收 Kyber 的队列深度节流思想。
+- 接入请求合并、顺序性识别和设备吞吐估计，避免纯公平策略损失顺序吞吐。
+- 补充 `budget_fair_research()` A/B 实验日志和 iozone 守门验证，确认公平性与吞吐没有回退。
