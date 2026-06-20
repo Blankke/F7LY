@@ -110,6 +110,7 @@ namespace syscall
         SYS_clock_nanosleep = 115,
         SYS_syslog = 116,
         SYS_ptrace = 117,             // from rocket
+        SYS_sched_setparam = 118,     // Linux sched_setparam(pid, struct sched_param *)
         SYS_sched_setscheduler = 119, // from rocket
         SYS_sched_getscheduler = 120, // from rocket
         SYS_sched_getparam = 121,     // from rocket

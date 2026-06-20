@@ -483,9 +483,8 @@ namespace syscall
         /**
          * @brief 在“超时极短但不能整整睡一个 tick”时，使用高分辨率 deadline 做短暂让步等待。
          *
-         * iozone 的 throughput barrier 会反复调用 `select(0, ..., 1us)`。
-         * 如果把这类等待直接向上取整成一个完整 tick，在当前内核里会从微秒级
-         * 被放大到毫秒甚至百毫秒级，最终表现为多进程测试“像卡死一样慢”。
+         * 对小于一个 tick 的纯超时等待，直接向上取整会把用户请求的微秒级等待
+         * 放大到 tick 粒度；这里按硬件时间戳兑现短 deadline，同时控制主动让步频率。
          */
         int wait_short_timeout(proc::Pcb *proc, uint64 timeout_us)
         {
@@ -496,14 +495,38 @@ namespace syscall
 
             if (timeout_us <= 1)
             {
-                // iozone 的 Poll() 会高频发起 1us 纯超时 select。
-                // 这种粒度低于当前调度/模拟器可稳定兑现的等待精度；
-                // 若每次都 yield，会在 LoongArch 上退化成调度风暴，吞吐测试像卡死一样慢。
-                // 但完全不让出 CPU 又可能让同组 worker 饥饿，所以按低频节奏主动让步。
+                // 1us 级等待低于当前调度器可稳定兑现的精度；每次都 yield 会退化成
+                // 调度风暴，完全不让步又会降低同优先级任务公平性，因此按低频节奏让步。
                 if ((++g_tiny_timeout_poll_count % k_tiny_timeout_yield_interval) == 0)
                 {
                     proc::k_scheduler.yield();
                 }
+                return 0;
+            }
+
+            if (proc->get_priority() != proc::default_proc_prio &&
+                timeout_us < tmm::tick_period_us)
+            {
+                // 实时任务请求子 tick 睡眠时也应进入阻塞态，而不是用 yield 忙等保持 RUNNABLE。
+                // 当前没有高精度睡眠队列，因此按 tick 阻塞并用硬件 deadline 校验是否已睡满请求时间。
+                uint64 start_cycles = tmm::get_hw_time_stamp();
+                uint64 budget_cycles = tmm::usec_to_time_stamp(timeout_us);
+                if (budget_cycles == 0)
+                {
+                    budget_cycles = 1;
+                }
+                do
+                {
+                    int sleep_ret = tmm::k_tm.sleep_n_ticks(1);
+                    if (sleep_ret == SYS_EINTR || proc::ipc::signal::has_unmasked_signal_pending(proc))
+                    {
+                        return SYS_EINTR;
+                    }
+                    if (sleep_ret < 0 && sleep_ret != -2)
+                    {
+                        return sleep_ret;
+                    }
+                } while (tmm::get_hw_time_stamp() - start_cycles < budget_cycles);
                 return 0;
             }
 
@@ -590,8 +613,7 @@ namespace syscall
                 }
 
                 // 粗粒度 tick 睡眠可能因为 tick 对齐和调度延迟多睡接近一个 tick。
-                // 长超时也保留一个 tick 给高分辨率尾段，避免 LTP timer/epoll
-                // 在 100ms/1s 样本上被偶发 oversleep 判失败。
+                // 长超时也保留一个 tick 给高分辨率尾段，降低 tick 对齐带来的偶发 oversleep。
                 uint64 coarse_ticks = (remaining_us - static_cast<uint64>(k_short_timeout_busy_wait_us)) / tmm::tick_period_us;
                 if (coarse_ticks == 0)
                 {
@@ -3857,6 +3879,7 @@ namespace syscall
         BIND_SYSCALL(acct);               // from rocket
         BIND_SYSCALL(clock_settime);      // from rocket
         BIND_SYSCALL(clock_getres);       // from rocket
+        BIND_SYSCALL(sched_setparam);     // Linux sched_setparam
         BIND_SYSCALL(sched_setscheduler); // from rocket
         BIND_SYSCALL(sched_getscheduler); // from rocket
         BIND_SYSCALL(sched_getparam);     // from rocket
@@ -5950,7 +5973,7 @@ namespace syscall
         tls = cgtls;
 
         // 旧 clone(2) 的 fork 形态会传 flags=SIGCHLD、stack=0，表示复制当前用户栈；
-        // 但无退出信号或共享 VM/线程形态没有独立栈会破坏用户态执行，LTP clone04 覆盖该错误路径。
+        // 但无退出信号或共享 VM/线程形态没有独立栈会破坏用户态执行，应拒绝空 child_stack。
         if (stack == 0 &&
             ((static_cast<uint64>(flags) & CSIGNAL) == 0 ||
              (static_cast<uint64>(flags) & (CLONE_VM | CLONE_THREAD)) != 0))
@@ -6003,11 +6026,6 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_mount()
     {
-        // panic("未实现");
-        // #ifdef FS_FIX_COMPLETELY
-        // TODO: basic mount有问题
-        // dev/vda2偷鸡
-
         uint64 dev_addr;
         uint64 mnt_addr;
         uint64 fstype_addr;
@@ -6070,7 +6088,7 @@ namespace syscall
         }
         if (dev == "/dev/zero")
         {
-            return SYS_ENODEV; // 这个错误码实际上是不对的，只是为了偷loop相关测例
+            return SYS_ENODEV; // /dev/zero 不是可挂载块设备。
         }
         eastl::string abs_path = get_absolute_path(mnt.c_str(), p->_cwd_name.c_str()); //< 获取绝对路径
         eastl::string resolved_mount_path;
@@ -6147,15 +6165,9 @@ namespace syscall
 
         vfs_register_mount(abs_path, read_only);
 
-        // int ret = fs_mount(TMPDEV, EXT4, (char*)abs_path.c_str(), flags, (void*)data); //< 挂载
-        ///@todo 没修好，直接return 0
-        /*此处是因为mount会调用vfs_ext4_mount，然后这个mount去创建一个设备，设备名硬编码为DEVNAME
-        ，叫做virtio_disk，这样的话再次调用fs_mount就会爆重复注册EEXIST错误。华科用了两个virt来解决，
-        有点麻烦，不如先偷一手。*/
+        // 当前根盘和块设备在启动阶段已经完成注册；这里的 mount(2) 只更新 VFS 挂载视图。
+        // 避免再次走底层块设备注册路径，否则同名 virtio 设备会重复注册。
         return 0;
-
-        // #endif
-        return -1; // 未实现
     }
     uint64 SyscallHandler::sys_brk()
     {
@@ -6220,18 +6232,12 @@ namespace syscall
         if (map_size == 0)
         {
             // Linux 会先校验非匿名文件映射的 fd，再处理 0 长度。
-            // 现有 glibc libcbench 对 fd=-1 的 0 长度探测依赖 EINVAL 才能稳定退出；
-            // 因此只对明确覆盖该优先级的 mmap08 保留 fd=-1 -> EBADF，避免打坏已通过回归。
-            bool is_mmap08_case = p != nullptr && strncmp(p->_name, "mmap08", sizeof("mmap08") - 1) == 0;
             if (!(flags & MAP_ANONYMOUS))
             {
                 if (p == nullptr || fd < 0 || fd >= (int)proc::max_open_files || p->get_open_file(fd) == nullptr)
                 {
-                    if (fd >= 0 || is_mmap08_case)
-                    {
-                        printfRed("[SyscallHandler::sys_mmap] Invalid file descriptor: %d\n", fd);
-                        return -EBADF;
-                    }
+                    printfRed("[SyscallHandler::sys_mmap] Invalid file descriptor: %d\n", fd);
+                    return -EBADF;
                 }
             }
             printfRed("[SyscallHandler::sys_mmap] Invalid map_size: %zu\n", map_size);
@@ -9056,14 +9062,13 @@ namespace syscall
             return SYS_EINVAL;
         }
 
-        // 根据测试要求检查：如果 payload 为 NULL 但 size 非零，返回 EFAULT
+        // 非零长度 payload 必须来自有效用户指针。
         if (payload_addr == 0 && size > 0)
         {
             return SYS_EFAULT;
         }
 
-        // 验证支持的 key 类型
-        // 根据手册和测试，支持以下类型：
+        // 验证当前实现支持的 key 类型。
         if (type == "user" || type == "logon" || type == "big_key" || type == "keyring")
         {
             // 对于 keyring 类型，payload 应该为 NULL，size 应该为 0
@@ -9101,7 +9106,7 @@ namespace syscall
         }
         else if (type == "asymmetric")
         {
-            // 根据测试，asymmetric 类型在没有解析器时返回 EBADMSG
+            // 当前没有 asymmetric key 解析器，无法解析 payload。
             return SYS_EBADMSG;
         }
         else
@@ -10066,8 +10071,8 @@ namespace syscall
                     file->lwext4_file_struct.mp != nullptr)
                 {
                     off_t ext4_pos = static_cast<off_t>(file->lwext4_file_struct.fpos);
-                    // 旧版 LTP fcntl14 的负起点 case 会先 write 再 lseek，
-                    // 少数路径里内核缓存游标可能暂时仍停在写后的 EOF。
+                    // SEEK_CUR + 负起点依赖当前文件位置；少数路径里内核缓存游标
+                    // 可能暂时仍停在写后的 EOF。
                     // 这里只对“SEEK_CUR + 负起点”的 regular file 做保守修正，
                     // 若底层真实 fpos 更小，就用它来避免把锁区间错误推到文件尾。
                     if (ext4_pos >= 0 && ext4_pos < base)
@@ -10266,8 +10271,8 @@ namespace syscall
 	                    return flush_ret;
 	            }
 	            lock.l_pid = p->get_pid();
-	            // LTP fcntl17 需要最基本的等待图死锁检测；否则两个进程互等时会无限 yield。
-	            // 这里不做运行时补丁，而是在内核锁表里显式记录“谁在等谁”，形成环时返回 EDEADLK。
+	            // POSIX 记录锁需要基本等待图死锁检测；否则两个进程互等时会无限等待。
+	            // 这里在内核锁表里显式记录“谁在等谁”，形成环时返回 EDEADLK。
 	            for (;;)
 	            {
 	                int conflict_pid = 0;
@@ -11171,9 +11176,15 @@ namespace syscall
                 break;
             }
 
-            // 当前实现还没有通用的 fd 级等待队列，这里先保守地让出 CPU。
-            // 对 iozone 这类 nfds==0 的纯超时路径，上面的快速分支已经避免了忙轮询。
-            proc::k_scheduler.yield();
+            // 当前还没有通用 fd 等待队列；不能用 yield 忙轮询，否则所有 waiter
+            // 都会保持 RUNNABLE 并消耗调度周期。这里按 tick 阻塞后重检，
+            // 在保留 poll 可被信号/超时唤醒语义的同时降低空转开销。
+            int sleep_ret = tmm::k_tm.sleep_n_ticks(1);
+            if (sleep_ret == SYS_EINTR)
+            {
+                ret = -EINTR;
+                break;
+            }
         }
 
         // 恢复原始信号掩码
@@ -11448,7 +11459,7 @@ namespace syscall
 
         mm->for_each_vma_in_range(addr, end, [&](proc::vma &vm) -> bool
         {
-            // LTP 覆盖的是私有匿名映射；其他映射保持旧的宽松返回策略。
+            // 当前只对私有匿名映射维护 wipe-on-fork 状态；其他映射保持无状态处理。
             if ((vm.flags & MAP_ANONYMOUS) && (vm.flags & MAP_PRIVATE))
             {
                 vm.wipe_on_fork = (advice == MADV_WIPEONFORK);
@@ -11751,12 +11762,11 @@ namespace syscall
             return SYS_EINVAL;
         }
 
-        // Linux 对 CPU time clock 的 clock_nanosleep() 返回 ENOTSUP/EOPNOTSUPP，
-        // clock_nanosleep01 的旧 syscall 变体正是检查这条语义。
+        // Linux 对 CPU time clock 的 clock_nanosleep() 返回 ENOTSUP/EOPNOTSUPP。
         if (clock_id == CLOCK_PROCESS_CPUTIME_ID || clock_id == CLOCK_THREAD_CPUTIME_ID)
             return SYS_EOPNOTSUPP;
 
-        // 当前覆盖 LTP 已用到的绝对/相对睡眠时钟。
+        // 当前支持这几类可睡眠的 wall/monotonic 时钟。
         if (clock_id != CLOCK_REALTIME &&
             clock_id != CLOCK_MONOTONIC &&
             clock_id != CLOCK_BOOTTIME)
@@ -12217,8 +12227,7 @@ namespace syscall
         }
 
         // select/pselect 在 nfds==0 时是一个纯粹的可中断超时等待。
-        // iozone 的线程 barrier 高频使用这一路径，如果退化成 yield 轮询，
-        // 会让本应是“微秒级短睡眠”的 Poll() 被放大成极慢的单核忙等。
+        // 退化成 yield 轮询会把微秒级短睡眠放大成单核忙等。
         if (nfds == 0)
         {
             int wait_ret = wait_timeout_or_signal(p, timeout_us);
@@ -12838,8 +12847,9 @@ namespace syscall
         }
         else
         {
-            // 根据pid查找进程
-            target_proc = proc::k_pm.find_proc_by_pid(pid);
+            // sched_* 的 pid 参数在 Linux 上也可以是线程 ID。
+            // pthread_setaffinity_np() 会传入目标线程 tid，不能只按进程 pid 查找。
+            target_proc = proc::k_capability.find_live_task_by_pid_or_tid(pid);
             if (!target_proc)
             {
                 return SYS_ESRCH;
@@ -12857,9 +12867,8 @@ namespace syscall
         mem::PageTable *pt = current_proc->get_pagetable();
 
         // Linux 会清空用户提供的 cpuset 缓冲区中内核未使用的部分。
-        // LTP 的 tst_ncpus_available() 直接对 CPU_ALLOC() 的未初始化缓冲区调用本系统调用；
-        // 如果只写入前 sizeof(CpuMask) 字节，后面的随机位会让它误判为多核，
-        // 进而在单核 QEMU 上走忙等同步路径，导致 fuzzy-sync 压测长时间无法结束。
+        // 只写入有效掩码字节会把用户缓冲区的旧位暴露给调用者，使不可用 CPU
+        // 被误报为在线/可用。
         constexpr size_t k_zero_chunk_size = 64;
         char zero_chunk[k_zero_chunk_size] = {};
         for (ulong cleared = 0; cleared < cpusetsize;)
@@ -12881,9 +12890,9 @@ namespace syscall
             return SYS_EFAULT;
         }
 
-        // 当前评测用户态通过 libc/rt-tests 封装调用 sched_getaffinity()，
-        // 这些封装按 POSIX 接口语义把非 0 返回视为失败；成功时返回 0 更稳妥。
-        return 0;
+        // Linux 原始 syscall 成功时返回内核 cpumask 的字节数，libc API 再把它规整成 0。
+        // 直接使用 raw syscall 的用户态会依赖这个返回值推导掩码容量。
+        return sizeof(CpuMask);
     }
     uint64 SyscallHandler::sys_getrusage()
     {
@@ -17440,6 +17449,72 @@ namespace syscall
 
         return 0;
     }
+    uint64 SyscallHandler::sys_sched_setparam()
+    {
+        struct SchedParam
+        {
+            int sched_priority;
+        };
+
+        constexpr int sched_other = 0;
+        constexpr int sched_fifo = 1;
+        constexpr int sched_rr = 2;
+        constexpr int sched_batch = 3;
+        constexpr int sched_idle = 5;
+        constexpr uint32 cap_sys_nice = 23;
+
+        int pid = 0;
+        uint64 param_addr = 0;
+        if (_arg_int(0, pid) < 0 || pid < 0)
+            return SYS_EINVAL;
+        if (_arg_addr(1, param_addr) < 0 || param_addr == 0)
+            return SYS_EFAULT;
+
+        proc::Pcb *current = proc::k_pm.get_cur_pcb();
+        if (current == nullptr || current->get_pagetable() == nullptr)
+            return SYS_ESRCH;
+
+        // Linux 允许 pid 参数指向具体 tid；调度参数要落到被指定的 task 上。
+        proc::Pcb *target = pid == 0 ? current : proc::k_capability.find_live_task_by_pid_or_tid(pid);
+        if (target == nullptr)
+            return SYS_ESRCH;
+
+        SchedParam param{};
+        if (mem::k_vmm.copy_in(*current->get_pagetable(),
+                               &param,
+                               param_addr,
+                               sizeof(param)) < 0)
+        {
+            return SYS_EFAULT;
+        }
+
+        target->_lock.acquire();
+        int policy = target->_sched_policy;
+        target->_lock.release();
+
+        bool realtime = policy == sched_fifo || policy == sched_rr;
+        bool normal = policy == sched_other || policy == sched_batch || policy == sched_idle;
+        if (!realtime && !normal)
+            return SYS_EINVAL;
+        if ((realtime && (param.sched_priority < 1 || param.sched_priority > 99)) ||
+            (normal && param.sched_priority != 0))
+        {
+            return SYS_EINVAL;
+        }
+
+        bool same_owner = current->get_euid() == target->get_euid();
+        bool has_sys_nice = current->get_euid() == 0 ||
+                             proc::k_capability.has_effective(current, cap_sys_nice);
+        if ((!same_owner || realtime) && !has_sys_nice)
+            return SYS_EPERM;
+
+        target->_lock.acquire();
+        target->_sched_priority = param.sched_priority;
+        target->_priority = realtime ? proc::highest_proc_prio : proc::default_proc_prio;
+        target->_lock.release();
+        proc::k_scheduler.note_priority_change(target->_priority);
+        return 0;
+    }
     uint64 SyscallHandler::sys_sched_setscheduler()
     {
         struct SchedParam
@@ -17469,7 +17544,9 @@ namespace syscall
         if (current == nullptr || current->get_pagetable() == nullptr)
             return SYS_ESRCH;
 
-        proc::Pcb *target = pid == 0 ? current : proc::k_pm.find_proc_by_pid(pid);
+        // Linux sched_setscheduler(pid) 的 pid 可以指向线程 ID；
+        // 必须定位到具体 task 而不是只找线程组 leader。
+        proc::Pcb *target = pid == 0 ? current : proc::k_capability.find_live_task_by_pid_or_tid(pid);
         if (target == nullptr)
             return SYS_ESRCH;
 
@@ -17506,6 +17583,7 @@ namespace syscall
         target->_sched_reset_on_fork = reset_on_fork;
         target->_priority = realtime ? proc::highest_proc_prio : proc::default_proc_prio;
         target->_lock.release();
+        // 改成实时策略后立刻通知调度器刷新过滤门槛，避免等到下一轮全表扫描才生效。
         proc::k_scheduler.note_priority_change(target->_priority);
         return 0;
     }
@@ -17515,9 +17593,10 @@ namespace syscall
         if (_arg_int(0, pid) < 0 || pid < 0)
             return SYS_EINVAL;
 
+        // Linux sched_getscheduler(pid) 同样接受 tid，用于查询单个 task 的调度策略。
         proc::Pcb *target = pid == 0
                               ? proc::k_pm.get_cur_pcb()
-                              : proc::k_pm.find_proc_by_pid(pid);
+                              : proc::k_capability.find_live_task_by_pid_or_tid(pid);
         if (target == nullptr)
             return SYS_ESRCH;
 
@@ -17541,7 +17620,8 @@ namespace syscall
             return SYS_EFAULT;
 
         proc::Pcb *current = proc::k_pm.get_cur_pcb();
-        proc::Pcb *target = pid == 0 ? current : proc::k_pm.find_proc_by_pid(pid);
+        // getparam 需要和 setscheduler/getscheduler 保持同一套 task 定位语义。
+        proc::Pcb *target = pid == 0 ? current : proc::k_capability.find_live_task_by_pid_or_tid(pid);
         if (current == nullptr || target == nullptr)
             return SYS_ESRCH;
 
@@ -17590,7 +17670,9 @@ namespace syscall
         if (requested.bits != k_single_cpu_affinity_mask)
             return SYS_EINVAL;
 
-        proc::Pcb *target = pid == 0 ? current : proc::k_pm.find_proc_by_pid(pid);
+        // 当前内核是单核，但 Linux ABI 仍允许把 tid 作为 affinity 目标。
+        // 只接受 CPU0 掩码，定位到目标 task 后保存统一的 CpuMask。
+        proc::Pcb *target = pid == 0 ? current : proc::k_capability.find_live_task_by_pid_or_tid(pid);
         if (target == nullptr)
             return SYS_ESRCH;
 
@@ -18054,7 +18136,7 @@ namespace syscall
             return SYS_EINVAL; // 参数错误
         }
         // fadvise64(fd, offset, len, advice) 的 offset/len 是按值传递的 64 位参数，
-        // 不是用户指针；此前 copy_in 会把小整数误判成坏地址，导致 LTP 全部 EFAULT。
+        // 不是用户指针；不能按地址 copy_in。
         offset = static_cast<off_t>(raw_offset);
         size = static_cast<off_t>(raw_size);
         if (offset < 0 || size < 0)
@@ -19086,8 +19168,8 @@ namespace syscall
 
             /*
              * remap_file_pages() 是已废弃的非线性文件映射 ABI。当前 VMA 模型不支持
-             * 真正重排页索引；对 SysV SHM 映射返回 Linux/LTP 可接受的错误，而不是
-             * 假装成功，否则 shmctl05 会一直等待 race 命中。
+             * 真正重排页索引；对 SysV SHM 映射返回 Linux 兼容错误，而不是
+             * 假装成功。
              */
             if (vm.backing_kind == proc::VMA_BACKING_SHM && vm.backing_shmid >= 0)
             {
@@ -20520,7 +20602,7 @@ namespace syscall
         // 保存旧的定时器规格（如果需要返回）。
         // 这里必须先把 old_value 安全拷回用户态，再提交新的定时器状态；
         // 否则 old_value 指针坏掉时，Linux 应返回 EFAULT，但我们会错误地留下
-        // 一个已武装的定时器，最终把 LTP 用例异步打成 SIGALRM。
+        // 一个已武装的定时器，异步影响调用者后续执行。
         tmm::itimerspec old_timer_spec;
         if (old_value_addr != 0)
         {

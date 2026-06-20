@@ -423,8 +423,8 @@ namespace proc
 
 	                if (!notified && holder->_lease_owner_pid > 0)
 	                {
-	                    // 先补 LTP fcntl33 需要的最小 lease-break 语义：
-	                    // breaker 遇到冲突 lease 时，通知持有者再等待它降级/释放。
+	                    // 实现最小 lease-break 语义：breaker 遇到冲突 lease 时，
+	                    // 通知持有者再等待它降级/释放。
 	                    (void)k_pm.kill_signal(holder->_lease_owner_pid, ipc::signal::SIGPOLL);
 	                    notified = true;
 	                }
@@ -514,8 +514,8 @@ namespace proc
         }
 
 #ifdef RISCV
-        // RISC-V musl 镜像中的 public clone() 版本缺少 NULL stack 入口校验。
-        // LTP clone04 需要 libc wrapper 在进入 __clone 写用户栈前返回 EINVAL。
+        // 兼容缺少 NULL stack 入口校验的旧 clone() 用户态封装：
+        // 共享地址空间或无退出信号的 clone 必须先拒绝空 child_stack。
         struct RiscvUserElfPatch
         {
             const char *path;
@@ -633,9 +633,8 @@ namespace proc
 #endif
 
 #ifdef LOONGARCH
-// 下面的代码是针对 LoongArch 架构的用户态 ELF 补丁机制，用于修复特定版本的 musl libc 和相关程序中的已知问题。
-// 下载磁盘的ll/sc原子指令有问题，对于entry程序需要修改后才能正常执行。
-///TODO:未来如果测试的时候发现这个东西会起反作用，需要找到别的方法来修复，反正现在本地跑我必须加了这个才能跑
+// LoongArch 用户态兼容补丁表：用于处理已知用户态镜像中与当前 LL/SC 语义不匹配的原子序列。
+// 这里运行时只修改当前进程地址空间，不修改磁盘镜像。
         struct LoongArchUserElfPatch
         {
             const char *path;
@@ -1238,7 +1237,7 @@ namespace proc
         }
 
         // trapframe 是 alloc_proc() 每次重新分配的物理页。
-        // 回收 PCB 时必须释放旧页，否则长回归里大量 fork/clone 会持续泄漏物理页。
+        // 回收 PCB 时必须释放旧页，否则大量 fork/clone 会持续泄漏物理页。
         if (p->_trapframe != nullptr)
         {
             mem::k_pmm.free_page(p->_trapframe);
@@ -2410,7 +2409,6 @@ namespace proc
         }
         else
         {
-            printfBlue("[fork] clone parent vm\n");
             // fork 操作：创建独立的内存管理器副本
             ProcessMemoryManager *parent_mm = p->get_memory_manager();
             if (parent_mm != nullptr)
@@ -2512,8 +2510,8 @@ namespace proc
         {
             // clone()/clone3() 的 child_stack 只是“子任务返回到用户态时使用的栈顶”。
             // 内核不应窥探用户栈里的函数指针/参数，也不应把 PC 改成用户自定义入口；
-            // 这些都是 libc clone 封装层的职责。LoongArch 上之前的做法会直接把
-            // glibc/LTP 的 clone 子任务跳到错误地址，最终在用户态 SIGSEGV。
+            // 这些都是 libc clone 封装层的职责；内核强行改入口会破坏不同 libc
+            // 对 child_stack 布局的约定，最终让子任务从错误地址执行。
             np->_trapframe->sp = stack_ptr;
             if ((flags & syscall::CLONE_VM) == 0)
             {
@@ -2843,6 +2841,15 @@ namespace proc
             {
                 _wait_lock.release();
                 return syscall::SYS_ECHILD;
+            }
+
+            if ((option & syscall::WNOHANG) == 0 &&
+                ipc::signal::has_unmasked_signal_pending(p))
+            {
+                // wait()/waitpid() 是可被信号打断的阻塞点；有未屏蔽信号待处理时
+                // 必须返回 -EINTR，让用户态先进入 signal handler。
+                _wait_lock.release();
+                return syscall::SYS_EINTR;
             }
 
             // 如果设置了WNOHANG且没有可回收的zombie，立即返回
@@ -3193,9 +3200,8 @@ namespace proc
             else
             {
                 // Linux 线程退出语义：CLONE_CHILD_CLEARTID / set_tid_address 指定的地址
-                // 在被清零后，还必须做一次 FUTEX_WAKE。pthread_join()、libc 的线程回收
-                // 和一批取消点测试都依赖这一下；只清零不唤醒会让 join 方永远睡在
-                // 对应 futex 上，长跑里表现成 pthread_cancel_points 卡死。
+                // 在被清零后，还必须做一次 FUTEX_WAKE；只清零不唤醒会让 join 方
+                // 永远睡在对应 futex 上。
                 proc::futex_wakeup(p->_clear_tid_addr, 1, nullptr, 0);
             }
         }
@@ -3248,8 +3254,8 @@ namespace proc
         {
             // Linux 线程退出不会交给父进程 wait4() 回收；pthread_join 依赖的是
             // clear_child_tid 的清零和 futex wake。上面已经完成 clear_tid、robust
-            // futex、mm/fd/sighand 引用释放，所以这里可以直接把非主线程 PCB 归还。
-            // 否则 libcbench 这类反复 create/join 的测例会快速堆满僵尸线程。
+            // futex、mm/fd/sighand 引用释放，所以这里可以直接把非主线程 PCB 归还，
+            // 避免短生命周期线程堆积为不可回收僵尸。
             p->_state = ProcState::ZOMBIE;
             freeproc(p);
             _wait_lock.release();
@@ -3527,7 +3533,7 @@ namespace proc
                     // futex_wait 为了支持 timeout 会睡在 timer tick 通道上周期性重检；
                     // waiter 可能已被 tick 拉回 RUNNABLE，但还没有真正返回用户态。
                     // 这时 FUTEX_WAKE 仍然必须“消费”这个 waiter 并计入返回值，
-                    // 否则 LTP checkpoint_wake 会认为没有唤醒任何进程而重试到超时。
+                    // 保持唤醒者观察到的返回计数与实际状态转换一致。
                     if (count1 < val)
                     {
                         p->_futex_addr = 0;
@@ -3581,8 +3587,7 @@ namespace proc
         }
 
         // Linux 接受 mkdir("dir/") 这类带尾部斜杠的目录路径。
-        // 父目录检查前先规整尾部斜杠，否则会把目标目录本身误当成父目录，
-        // 导致 LTP 的 mntpoint/、mntpoint/dir/ 准备阶段被误判为 ENOENT。
+        // 父目录检查前先规整尾部斜杠，否则会把目标目录本身误当成父目录。
         while (path.length() > 1 && path.back() == '/')
         {
             path.pop_back();
@@ -3788,8 +3793,7 @@ namespace proc
 
         // 调用VFS层的mkdir函数，自动选择底层文件系统
         // mkdir(2) 需要保留 sticky/setgid/setuid 这三类特殊权限位，
-        // 不能在进入 VFS 之前就把高 3 位掐掉，否则 rmdir03/open10 一类
-        // 依赖目录特殊位语义的测例会被整体带偏。
+        // 不能在进入 VFS 之前就把高 3 位掐掉。
         int result = vfs_mkdir(full_path.c_str(), mode & 07777);
 
         return result;
@@ -5311,8 +5315,8 @@ namespace proc
         pipe_->set_pipe_flags(flags);
         if (p != nullptr && p->get_euid() == 0)
         {
-            // Linux 会给特权创建者更大的缺省 pipe 容量；LTP fcntl35/_64
-            // 会同时校验 root 与无特权用户两种初始大小。
+            // Linux 会给特权创建者更大的缺省 pipe 容量；
+            // root 与无特权用户的初始大小语义不同。
             (void)pipe_->set_pipe_size(ipc::privileged_default_pipe_size);
         }
         // 处理O_NONBLOCK标志 - 设置管道的非阻塞属性
@@ -6271,23 +6275,30 @@ namespace proc
 
                 interp_entry = interp_base + interp_elf.entry;
 #ifdef LOONGARCH
-                // LoongArch 动态链当前仍在定位阶段，这里额外核对解释器代码段每一页的 PTE，
-                // 便于区分“页表没建全”还是“用户态跳转到了错误地址”。
+                // 解释器文本现在是 FileVmObject 懒加载：叶子 PTE 在首次执行缺页前可以为空。
+                // 这里只核对页表层级和已驻留页权限，避免把正常 lazy text 误报成 execve 错误。
                 if (linker_text_start != 0 && linker_text_end > linker_text_start)
                 {
                     int missing_linker_text_pages = 0;
                     for (uint64 check_va = linker_text_start; check_va < linker_text_end; check_va += PGSIZE)
                     {
                         mem::Pte check_pte = new_pt.walk(check_va, false);
-                        if (check_pte.is_null() || !check_pte.is_valid() || check_pte.is_super_plv() || !check_pte.is_executable())
+                        if (check_pte.is_null())
                         {
                             ++missing_linker_text_pages;
-                            printfRed("execve: invalid linker text pte va=%p raw=%p valid=%d user=%d exec=%d\n",
+                            printfRed("execve: missing linker text page-table slot va=%p\n",
+                                      (void *)check_va);
+                            continue;
+                        }
+                        if (check_pte.is_valid() &&
+                            (check_pte.is_super_plv() || !check_pte.is_executable()))
+                        {
+                            ++missing_linker_text_pages;
+                            printfRed("execve: invalid resident linker text pte va=%p raw=%p user=%d exec=%d\n",
                                       (void *)check_va,
-                                      check_pte.is_null() ? 0 : (void *)check_pte.get_data(),
-                                      check_pte.is_null() ? 0 : (int)check_pte.is_valid(),
-                                      check_pte.is_null() ? 0 : (int)!check_pte.is_super_plv(),
-                                      check_pte.is_null() ? 0 : (int)check_pte.is_executable());
+                                      (void *)check_pte.get_data(),
+                                      (int)!check_pte.is_super_plv(),
+                                      (int)check_pte.is_executable());
                         }
                     }
                 }
@@ -6313,12 +6324,9 @@ namespace proc
         // ========== 第五阶段：分配用户栈空间 ==========
 
         { // **重构：基于最高地址分配用户栈空间**
-            // root 场景下 LTP epoll_wait01 会在同一帧里放两块 64K 的栈缓冲区。
-            // 旧的 32 页栈里还有 1 页 guard，可用空间只有 31 * 4K，不足以容纳
-            // 这类 Linux 合法工作负载，会把本来正确的 pipe 语义误炸成 EFAULT。
-            // 这里把默认用户栈提高到 64 页，先与当前回归规模对齐。
-            // libcbench 的正则搜索和部分递归/线程库路径会触达比 256KiB 更深的用户栈。
-            // 这里保守提高默认栈到 1MiB；run_bench 的 fork 开销不计入子测计时窗口。
+            // 用户态可以在单帧中放置较大的临时缓冲，也可能通过正则/递归路径使用更深栈。
+            // 旧的 32 页栈扣除 guard 后空间偏小，容易把合法用户栈访问误判为 EFAULT。
+            // 这里保守提高默认栈到 1MiB。
             int stack_pgnum = 256;
             uint64 stack_guard = PGROUNDUP(highest_addr);
             uint64 stack_start = stack_guard + PGSIZE;

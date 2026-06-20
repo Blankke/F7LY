@@ -4,6 +4,7 @@
 #include "mem/virtual_memory_manager.hh"
 #include "proc/proc.hh"
 #include "proc/proc_manager.hh"
+#include "proc/scheduler.hh"
 #include "proc/signal.hh"
 #include "tm/timer_manager.hh"
 #include <errno.h>
@@ -41,6 +42,9 @@ namespace fs
         constexpr size_t k_tcp_recv_buffer_max_bytes = 512 * 1024;
         constexpr size_t k_udp_queue_max_bytes = 256 * 1024;
         constexpr size_t k_udp_queue_max_packets = 256;
+        // 小块流式传输通常对应请求/响应协议；成功唤醒对端后主动交接一次 CPU。
+        // 大块传输保持吞吐优先，避免每次 write/read 都额外切换。
+        constexpr size_t k_stream_handoff_max_bytes = 4096;
         constexpr socklen_t k_max_user_sockaddr_len = 4096;
         constexpr int k_loopback_somaxconn = 4096;
         constexpr uint64 k_tcp_connect_listener_wait_ticks = 100;
@@ -130,6 +134,16 @@ namespace fs
         {
             tmm::timeval tv = tmm::k_tm.get_time_val();
             return tv.tv_sec * k_socket_usec_per_sec + tv.tv_usec;
+        }
+
+        void yield_after_small_stream_transfer(size_t bytes)
+        {
+            if (bytes > 0 && bytes <= k_stream_handoff_max_bytes)
+            {
+                // AF_UNIX/TCP 小消息常见于同步协议。完成一次传输后让对端尽快运行，
+                // 防止单个发送/接收方在一个 tick 内连续占用过多 syscall 机会。
+                proc::k_scheduler.yield();
+            }
         }
 
         int copy_socket_timeval_option(void *optval, socklen_t *optlen, long sec, long usec)
@@ -586,7 +600,7 @@ namespace fs
 
                 peer->_lock.acquire();
                 // TCP 写就绪必须反映对端接收队列空间；否则 poll/select 会在队列已满时
-                // 继续驱动写入，iperf 这类吞吐工具会把内核堆推到无限扩容。
+                // 继续驱动写入，把接收缓存推向无限扩容。
                 result = peer->_read_shutdown || peer->_state == SocketState::CLOSED ||
                          peer->_recv_buffer.size() < k_tcp_recv_buffer_max_bytes;
                 peer->_lock.release();
@@ -609,7 +623,7 @@ namespace fs
         // EPOLLRDHUP 只对面向连接的字节流语义有意义：
         // 1. 本端 shutdown(SHUT_RD) 后，读半边已经挂起；
         // 2. 对端关闭写半边/连接后，本端会看到 peer closed。
-        // LTP epoll_wait05 就依赖这两类状态都能被 epoll 观察到。
+        // 这两类状态都应被 epoll 作为读半关闭事件观察到。
         bool ready = _state == SocketState::CONNECTED &&
                      _type == SocketType::TCP &&
                      (_read_shutdown || _peer_closed);
@@ -1154,15 +1168,19 @@ namespace fs
             }
             if (!had_pending)
             {
+                yield_after_small_stream_transfer(static_cast<size_t>(queued));
                 return queued;
             }
             if (static_cast<size_t>(queued) >= send_len)
             {
+                yield_after_small_stream_transfer(len);
                 return static_cast<int>(len);
             }
             if (static_cast<size_t>(queued) > pending_len)
             {
-                return static_cast<int>(static_cast<size_t>(queued) - pending_len);
+                size_t written = static_cast<size_t>(queued) - pending_len;
+                yield_after_small_stream_transfer(written);
+                return static_cast<int>(written);
             }
             return -EPIPE;
         } else if (_type == SocketType::UDP) {
@@ -1254,6 +1272,7 @@ namespace fs
                 proc::k_pm.wakeup(&_recv_buffer);
             }
             _lock.release();
+            yield_after_small_stream_transfer(copy_len);
             return static_cast<int>(copy_len);
         } else if (_type == SocketType::UDP) {
             _lock.release();
@@ -1588,8 +1607,8 @@ namespace fs
                     return -EDOM;
                 }
 
-                // 64 位 Linux 上 musl/glibc 仍会使用 OLD 编号 20/21；
-                // 同时接受 NEW 编号，避免后续 time64 ABI 测例再落到 ENOPROTOOPT。
+                // 64 位 Linux 上 libc 可能使用 OLD 编号 20/21；
+                // 同时接受 NEW 编号，保持 time64 ABI 选项兼容。
                 if (is_receive_timeout_option(optname)) {
                     _recv_timeout_sec = timeout.tv_sec;
                     _recv_timeout_usec = timeout.tv_usec;
@@ -1621,7 +1640,7 @@ namespace fs
                 case SO_SNDBUFFORCE:
                 case SO_RCVBUFFORCE:
                     // loopback 初版没有真实网卡缓存和带外数据；常见调优项接受为 no-op，
-                    // 避免 iperf/netperf 在初始化阶段因非核心选项失败而退出。
+                    // 避免用户态网络程序因非核心选项失败而退出。
                     if (optlen < sizeof(int)) {
                         _lock.release();
                         return -EINVAL;

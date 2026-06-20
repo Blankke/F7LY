@@ -38,6 +38,8 @@ trap_manager trap_mgr;
 
 namespace
 {
+  // 单核调度使用固定 tick 时间片，确保长时间运行的用户/内核态任务都能被周期性抢占。
+  constexpr int k_default_time_slice_ticks = 1;
   constexpr uint32 k_loongarch_ecode_fpu_disabled = 0xf;
 
   // LoongArch 异常信息拆分：一级编码在 ESTAT[21:16]，二级编码在 ESTAT[30:22]。
@@ -259,8 +261,8 @@ void trap_manager::inithart()
 {
   uint32 ecfg = (0U << CSR_ECFG_VS_SHIFT) | HWI_VEC | TI_VEC;
   // LoongArch 的 timer CSR 直接按周期数编程。这里必须与 tmm::cycles_per_tick()
-  // 保持一致，否则 sleep()/CPU 计时/interval timer 会共同漂移，LTP 的
-  // setitimer01 就会从毫秒级拖成几十秒。
+  // 保持一致，否则 sleep()/CPU 计时/interval timer 会共同漂移，
+  // 用户可见的定时器精度会被放大到错误量级。
   uint64 tcfg = tmm::cycles_per_tick() | CSR_TCFG_EN | CSR_TCFG_PER;
 
   w_csr_ecfg(ecfg);
@@ -603,8 +605,8 @@ void trap_manager::usertrap()
   // give up the CPU if this is a timer interrupt.
   if (which_dev == 2)
   {
-    timeslice++; // 让一个进程连续执行若干时间片，printf线程不安全
-    if (timeslice >= 10)
+    timeslice++; // 到达固定时间片后抢占当前用户态任务。
+    if (timeslice >= k_default_time_slice_ticks)
     {
       timeslice = 0;
       // printf("yield in usertrap\n");
@@ -720,8 +722,8 @@ void trap_manager::kerneltrap()
       Cpu::get_cpu()->get_cur_proc()->_state == proc::RUNNING &&
       !Cpu::get_cpu()->get_cur_proc()->_exiting)
   {
-    timeslice++; // 让一个进程连续执行若干时间片，printf线程不安全
-    if (timeslice >= 5)
+    timeslice++; // 到达固定时间片后抢占当前内核态任务。
+    if (timeslice >= k_default_time_slice_ticks)
     {
       timeslice = 0;
       proc::k_scheduler.yield();

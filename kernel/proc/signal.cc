@@ -1,5 +1,6 @@
 #include "signal.hh"
 #include "proc_manager.hh"
+#include "scheduler.hh"
 #include "physical_memory_manager.hh"
 #include "virtual_memory_manager.hh"
 #include "devs/spinlock.hh"
@@ -26,9 +27,9 @@ namespace
             return true;
         }
 
-        // libctest 的静态 pthread_cancel 会把 altstack 栈顶报到匿名 VMA 顶端之外；
+        // 静态链接线程库可能把 altstack 栈顶报到匿名 VMA 顶端之外；
         // 该 VMA 元信息有时缺少 PROT_WRITE，但信号帧仍必须落回这段匿名栈空间，
-        // 否则 guard/ucontext 会写到未映射页并中断整条回归。
+        // 否则 guard/ucontext 会写到未映射页并终止当前任务。
         return is_entry_static_task(p) &&
                vm.backing_kind == proc::VMA_BACKING_NONE &&
                vm.vfile == nullptr;
@@ -1204,6 +1205,9 @@ namespace proc
                 //     return;
                 // }
                 p->_signal |= (1UL << (sig - 1));
+                // 信号递送后调度器需要重新关注最高优先级；否则目标线程可能被大运行队列
+                // 延后很久，用户态 handler 不能及时执行。
+                proc::k_scheduler.note_priority_change(proc::highest_proc_prio);
                 if (info != nullptr)
                 {
                     p->_queued_siginfo[sig] = *info;
@@ -1625,9 +1629,9 @@ namespace proc
                     p->_sigmask = sanitize_signal_mask(uctx.sigmask.sig[0]);
                     restore_riscv_trapframe_from_ucontext(*p->_trapframe, uctx);
 #elif LOONGARCH
-                    // 某些取消/条件变量压力测里，如果用户态栈上的 ucontext 已经被破坏，
+                    // 如果用户态栈上的 ucontext 已经被破坏，
                     // 这里继续照抄一个 pc=0 的上下文只会把线程立刻送去地址 0 再次 fault。
-                    // 为了保持内核与后续回归链的鲁棒性，显式识别这类“明显非法”的恢复目标，
+                    // 为了保持信号返回路径的鲁棒性，显式识别这类“明显非法”的恢复目标，
                     // 并回退到内核在送信号前保存的 trapframe。
                     if (uctx.mcontext.pc == 0 || uctx.mcontext.gregs[3] == 0)
                     {
