@@ -50,13 +50,13 @@ namespace proc
         ZOMBIE
     };
 
-    constexpr uint num_process = 128;      // 系统中允许的最大进程数量；lmbench lat_ctx 需要至少 96 个子进程槽位。
+    constexpr uint num_process = NPROC;    // 系统中允许的最大进程数量；与旧 param.h 宏保持单一权威。
     constexpr int default_proc_prio = 0;   // 默认 nice 值
     constexpr int lowest_proc_prio = 19;   // 最低优先级对应的 nice 值
     constexpr int highest_proc_prio = -20; // 最高优先级对应的 nice 值
-    constexpr uint fd_table_capacity = 1024; // fd 表物理容量，覆盖 LTP 使用的 fd=1000 场景。
+    constexpr uint fd_table_capacity = 1024; // fd 表物理容量，支持高编号 fd 并与运行时上限解耦。
     extern uint max_open_files;              // 运行时上限，避免编译器在各调用点展开 1024 次固定循环。
-    constexpr uint max_supplementary_groups = 64; // LTP 当前只需要少量补充组，固定容量避免凭据路径动态分配。
+    constexpr uint max_supplementary_groups = 64; // 固定补充组容量，避免凭据路径动态分配。
     constexpr uint pid_max = 4194304;      // Linux 默认级别的 PID 上限，供 /proc/sys/kernel/pid_max 和范围校验使用
     constexpr int k_interval_timer_count = 3; // ITIMER_REAL / ITIMER_VIRTUAL / ITIMER_PROF
 
@@ -106,7 +106,7 @@ namespace proc
 
     struct net_namespace_state
     {
-        // 当前仅补 LTP clone09 依赖的最小 /proc/sys/net/ipv4/conf/*/tag 语义。
+        // 维护网络命名空间内 /proc/sys/net/ipv4/conf/*/tag 的最小状态。
         // default/tag 代表新 netns 初始化模板，lo/tag 是当前 namespace 的 loopback 参数。
         int ipv4_conf_default_tag = 0;
         int ipv4_conf_lo_tag = 0;
