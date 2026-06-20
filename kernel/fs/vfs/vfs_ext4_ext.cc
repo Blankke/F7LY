@@ -143,6 +143,7 @@ int vfs_ext_mount(struct filesystem *fs, uint64_t rwflag, void *data) {
         if (r != EOK) {
             goto out;
         }
+        fs->fs_data = vbdev;
         //获得ext4文件系统的超级块
         // ext4_get_sblock(fs->path, (struct ext4_sblock **)(&(fs->fs_data)));
     }
@@ -172,6 +173,7 @@ int vfs_ext_mount2(struct filesystem *fs, uint64_t rwflag, void *data) {
         if (r != EOK) {
             goto out;
         }
+        fs->fs_data = vbdev;
         //获得ext4文件系统的超级块
         // ext4_get_sblock(fs->path, (struct ext4_sblock **)(&(fs->fs_data)));
     }
@@ -212,6 +214,7 @@ struct filesystem_op ext4_fs_op = {
     .mount = vfs_ext_mount,
     .umount = vfs_ext_umount,
     .statfs = vfs_ext_statfs,
+    .sync = vfs_ext_flush,
 };
 
 
@@ -224,12 +227,13 @@ int vfs_ext_umount(struct filesystem *fs) {
         return r;
     }
 
-    ext4_umount(fs->path);
+    r = ext4_umount(fs->path);
     if (r != EOK) {
         return r;
     }
 
     vfs_ext4_blockdev_destroy(vbdev);
+    fs->fs_data = nullptr;
     return EOK;
 }
 

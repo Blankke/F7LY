@@ -3965,6 +3965,59 @@ namespace proc
         return 0;
     }
 
+    int ProcessManager::flush_all_open_files()
+    {
+        eastl::vector<fs::file *> flushed_files;
+        flushed_files.reserve(num_process);
+
+        for (uint i = 0; i < num_process; ++i)
+        {
+            Pcb *pcb = &k_proc_pool[i];
+            if (pcb->_state == ProcState::UNUSED || pcb->_ofile == nullptr)
+            {
+                continue;
+            }
+
+            for (uint fd = 0; fd < max_open_files; ++fd)
+            {
+                fs::file *file_obj = pcb->_ofile->_ofile_ptr[fd];
+                if (file_obj == nullptr)
+                {
+                    continue;
+                }
+
+                bool already_flushed = false;
+                for (fs::file *seen_file : flushed_files)
+                {
+                    if (seen_file == file_obj)
+                    {
+                        already_flushed = true;
+                        break;
+                    }
+                }
+                if (already_flushed)
+                {
+                    continue;
+                }
+
+                // sync/shutdown 需要覆盖所有仍打开的 file object；
+                // 否则 normal_file 的写合并缓存可能尚未进入 lwext4。
+                int flush_ret = file_obj->flush_visibility_state();
+                if (flush_ret < 0)
+                {
+                    return flush_ret;
+                }
+                if (flush_ret > 0)
+                {
+                    return -flush_ret;
+                }
+                flushed_files.push_back(file_obj);
+            }
+        }
+
+        return 0;
+    }
+
     /// @brief 获取指定文件描述符对应文件的状态信息。
     /// @details 此函数会从当前进程的打开文件表中查找给定文件描述符 `fd`，
     /// 如果合法且已打开，则将其对应的文件状态信息拷贝到 `buf` 指向的结构中。

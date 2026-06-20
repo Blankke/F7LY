@@ -439,6 +439,11 @@ int shutdown(){
     return syscall(syscall::SYS_shutdown);
 }
 
+int sync()
+{
+    return syscall(syscall::SYS_sync);
+}
+
 int fsync(int fd)
 {
     return syscall(syscall::SYS_fsync, fd);

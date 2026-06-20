@@ -108,6 +108,7 @@ namespace proc
         int close(int fd);
         int fstat(int fd, fs::Kstat *buf);
         int flush_open_files_for_path(const eastl::string &path);
+        int flush_all_open_files();
         int mkdir(int dir_fd, eastl::string path, uint mode);
         int mknod(int dir_fd, eastl::string path, mode_t mode, dev_t dev);
         int unlink(int fd, eastl::string path, int flags);

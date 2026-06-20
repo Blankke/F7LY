@@ -403,6 +403,7 @@ void fs_register(int dev, fs_t fs_type, char *path)
     fs->type = fs_type;
     fs->path = path; /* path should be a string literal */
     fs->fs_op = fs_ops_table[fs_type];
+    fs->fs_data = nullptr;
     fs_table_lock.release();
 }
 
@@ -410,6 +411,50 @@ void fs_register(int dev, fs_t fs_type, char *path)
  * TODO: not implemented yet
  */
 int fs_umount(filesystem_t *fs) { return 0; }
+
+int fs_sync(filesystem_t *fs)
+{
+    if (fs == nullptr || fs->fs_op == nullptr || fs->fs_op->sync == nullptr)
+    {
+        return 0;
+    }
+
+    return fs->fs_op->sync(fs);
+}
+
+int vfs_sync_all(void)
+{
+    int ret = proc::k_pm.flush_all_open_files();
+    if (ret < 0)
+    {
+        return ret;
+    }
+
+    filesystem_t *mounted_fs[VFS_MAX_FS] = {};
+    int mounted_count = 0;
+
+    fs_table_lock.acquire();
+    for (int i = 0; i < VFS_MAX_FS; ++i)
+    {
+        filesystem_t *fs = fs_table[i];
+        if (fs != nullptr && fs->path != nullptr && fs->fs_op != nullptr)
+        {
+            mounted_fs[mounted_count++] = fs;
+        }
+    }
+    fs_table_lock.release();
+
+    for (int i = 0; i < mounted_count; ++i)
+    {
+        ret = fs_sync(mounted_fs[i]);
+        if (ret < 0)
+        {
+            return ret;
+        }
+    }
+
+    return 0;
+}
 
 filesystem_t *get_fs_by_type(fs_t type)
 {

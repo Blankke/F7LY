@@ -125,6 +125,7 @@ int shutdown();
 int sleep(unsigned int seconds);
 
 // sync functions
+int sync();
 int fsync(int fd);
 int fdatasync(int fd);
 

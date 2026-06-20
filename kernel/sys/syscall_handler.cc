@@ -6626,9 +6626,12 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_shutdown()
     {
+        int sync_ret = vfs_sync_all();
+        if (sync_ret < 0)
+        {
+            printfRed("[sys_shutdown] sync before shutdown failed: %d\n", sync_ret);
+        }
 #ifdef RISCV
-        TODO(struct filesystem *fs = get_fs_from_path("/");
-             vfs_ext_umount(fs);)
         sbi_shutdown();
         printfYellow("sys_shutdown\n");
         sbi_shutdown();
@@ -12456,7 +12459,8 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_sync()
     {
-        return 0; // copy from 唐老师
+        int ret = vfs_sync_all();
+        return ret < 0 ? ret : 0;
     }
     uint64 SyscallHandler::sys_fsync()
     {
@@ -12508,10 +12512,10 @@ namespace syscall
             struct filesystem *fs = get_fs_from_path(f->_path_name.c_str());
             if (fs != nullptr)
             {
-                int result = vfs_ext_flush(fs);
+                int result = fs_sync(fs);
                 if (result != 0)
                 {
-                    printfRed("[SyscallHandler::sys_fsync] vfs_ext_flush failed with error: %d\n", result);
+                    printfRed("[SyscallHandler::sys_fsync] fs sync failed with error: %d\n", result);
                     return SYS_EIO;
                 }
                 printfGreen("[SyscallHandler::sys_fsync] Successfully synced file fd=%d\n", fd);
@@ -12519,16 +12523,14 @@ namespace syscall
             }
             else
             {
-                // 如果无法获取文件系统对象，尝试使用全局缓存刷新
-                printfYellow("[SyscallHandler::sys_fsync] No filesystem object, attempting global cache flush\n");
-                // 对于扩展文件系统，尝试直接刷新缓存
-                int result = ext4_cache_flush("/");
-                if (result != EOK)
+                printfYellow("[SyscallHandler::sys_fsync] No filesystem object, attempting global sync\n");
+                int result = vfs_sync_all();
+                if (result < 0)
                 {
-                    printfRed("[SyscallHandler::sys_fsync] ext4_cache_flush failed with error: %d\n", result);
+                    printfRed("[SyscallHandler::sys_fsync] global sync failed with error: %d\n", result);
                     return SYS_EIO;
                 }
-                printfGreen("[SyscallHandler::sys_fsync] Successfully synced global cache for fd=%d\n", fd);
+                printfGreen("[SyscallHandler::sys_fsync] Successfully synced globally for fd=%d\n", fd);
                 return 0;
             }
         }
@@ -12579,16 +12581,21 @@ namespace syscall
         // fdatasync 只需要同步数据和必要的元数据，不需要同步访问时间等非关键元数据
         if (f->_attrs.filetype == fs::FileTypes::FT_NORMAL)
         {
+            int visibility_ret = f->flush_visibility_state();
+            if (visibility_ret < 0)
+            {
+                return visibility_ret;
+            }
             // 首先尝试获取文件系统对象
             struct filesystem *fs = get_fs_from_path(f->_path_name.c_str());
             if (fs != nullptr)
             {
                 // 对于fdatasync，我们同样使用文件系统级别的刷新
                 // 在实际实现中，这里可以优化为只刷新数据块，不刷新所有元数据
-                int result = vfs_ext_flush(fs);
+                int result = fs_sync(fs);
                 if (result != 0)
                 {
-                    printfRed("[SyscallHandler::sys_fdatasync] vfs_ext_flush failed with error: %d\n", result);
+                    printfRed("[SyscallHandler::sys_fdatasync] fs sync failed with error: %d\n", result);
                     return SYS_EIO;
                 }
                 printfGreen("[SyscallHandler::sys_fdatasync] Successfully synced data for fd=%d\n", fd);
@@ -12596,16 +12603,14 @@ namespace syscall
             }
             else
             {
-                // 如果无法获取文件系统对象，尝试使用全局缓存刷新
-                printfYellow("[SyscallHandler::sys_fdatasync] No filesystem object, attempting global cache flush\n");
-                // 对于扩展文件系统，尝试直接刷新缓存
-                int result = ext4_cache_flush("/");
-                if (result != EOK)
+                printfYellow("[SyscallHandler::sys_fdatasync] No filesystem object, attempting global sync\n");
+                int result = vfs_sync_all();
+                if (result < 0)
                 {
-                    printfRed("[SyscallHandler::sys_fdatasync] ext4_cache_flush failed with error: %d\n", result);
+                    printfRed("[SyscallHandler::sys_fdatasync] global sync failed with error: %d\n", result);
                     return SYS_EIO;
                 }
-                printfGreen("[SyscallHandler::sys_fdatasync] Successfully synced global cache for fd=%d\n", fd);
+                printfGreen("[SyscallHandler::sys_fdatasync] Successfully synced globally for fd=%d\n", fd);
                 return 0;
             }
         }

@@ -21,6 +21,7 @@ struct filesystem_op {
     int (*mount)(struct filesystem *fs, unsigned long rwflag, void *data);
     int (*umount)(struct filesystem *fs);
     int (*statfs)(struct filesystem *fs, struct statfs *buf);
+    int (*sync)(struct filesystem *fs);
 };
 
 typedef struct filesystem_op filesystem_op_t;
@@ -52,6 +53,8 @@ filesystem_t *get_fs_from_path(const char *path);
 int fs_mount(int dev, fs_t fs_type, char *path, uint64 rwflag, void *data);
 void fs_register(int dev, fs_t fs_type, char *path);
 int fs_umount(filesystem_t *fs);
+int fs_sync(filesystem_t *fs);
+int vfs_sync_all(void);
 filesystem_t *get_fs_by_type(fs_t type);
 filesystem_t *get_fs_by_mount_point(const char *path);
 void dir_init(void);
