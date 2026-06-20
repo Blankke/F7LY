@@ -34,6 +34,7 @@ namespace fs
         int g_proc_sys_fs_inotify_max_queued_events = 15;
         int g_proc_sys_fs_inotify_max_user_instances = 1024;
         int g_proc_sys_kernel_random_entropy_avail = 256;
+        int g_dev_cpu_dma_latency_us = 0;
         eastl::string g_proc_sys_kernel_domainname = "(none-domain)";
 
         const char *mount_fs_name(fs_t type)
@@ -627,6 +628,41 @@ namespace fs
         return result;
     }
 
+    eastl::string DevCpuDmaLatencyProvider::generate_content()
+    {
+        return int_to_string_line(g_dev_cpu_dma_latency_us);
+    }
+
+    long DevCpuDmaLatencyProvider::handle_write(uint64 buf, size_t len, long off)
+    {
+        (void)off;
+        if (buf == 0)
+        {
+            return -EINVAL;
+        }
+        if (len == 0)
+        {
+            return 0;
+        }
+
+        int value = 0;
+        long text_ret = parse_single_int_from_user(buf, len, 0, &value);
+        if (text_ret < 0)
+        {
+            if (len < sizeof(value))
+            {
+                return text_ret;
+            }
+            memcpy(&value, reinterpret_cast<const void *>(buf), sizeof(value));
+        }
+        if (value < 0)
+        {
+            value = 0;
+        }
+        g_dev_cpu_dma_latency_us = value;
+        return static_cast<long>(len);
+    }
+
     // ======================== virtual_file 实现 ========================
 
     void virtual_file::ensure_content_cached()
@@ -643,7 +679,11 @@ namespace fs
 
     bool virtual_file::is_virtual_path(const eastl::string& path)
     {
-        return path.find("/proc/") == 0;
+        return path == "/proc" || path.find("/proc/") == 0 ||
+               path == "/sys" || path.find("/sys/") == 0 ||
+               path == "/dev" || path.find("/dev/") == 0 ||
+               path == "/etc" || path.find("/etc/") == 0 ||
+               path == "/boot" || path.find("/boot/") == 0;
     }
 
     long virtual_file::read(uint64 buf, size_t len, long off, bool upgrade)
@@ -733,8 +773,7 @@ namespace fs
         // 检查偏移量是否有效
         if (off >= (long)_cached_content.size()) 
         {
-            printfRed("virtual_file::read: off=%d is out of bounds, size=%u\n", off, _cached_content.size());
-            return 0; // EOF
+            return 0; // 正常 EOF
         }
 
         // 计算实际要读取的字节数

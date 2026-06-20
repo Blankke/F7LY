@@ -35,6 +35,8 @@ namespace
     constexpr size_t k_linux_path_max = 4096;
     constexpr size_t k_linux_name_max = 255;
 
+    int raw_vfs_is_file_exist(const eastl::string &path);
+
     struct MountOverride
     {
         uint64 mount_id = 0;
@@ -376,6 +378,14 @@ namespace
     int collect_real_directory_entries(const eastl::string &path,
                                        eastl::vector<DirentSnapshot> &entries)
     {
+        // 虚拟树中的纯虚拟目录没有真实 ext4 对应项；先探测真实文件是否存在，
+        // 避免为了合并目录项而把正常的 ENOENT 打成误导性的缺失日志。
+        if (fs::k_vfs.get_virtual_node(path) != nullptr &&
+            raw_vfs_is_file_exist(path) != 1)
+        {
+            return 0;
+        }
+
         fs::file *real_dir = nullptr;
         int open_ret = vfs_openat(path, real_dir, O_RDONLY, 0);
         if (open_ret != EOK)

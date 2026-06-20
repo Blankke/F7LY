@@ -1,7 +1,9 @@
 #pragma once
 
 #define NUMCPU 1
-#define NPROC        64  // maximum number of processes
+// 进程池需要覆盖较大的并发进程/线程集合；容量过小会让合法 fork()/clone()
+// 负载过早得到 EAGAIN，破坏用户态按 Linux 语义创建任务的预期。
+#define NPROC       512  // maximum number of processes
 #define NCPU          1  // maximum number of CPUs
 #define NOFILE      128  // open files per process
 #define NFILE       100  // open files per system
@@ -12,8 +14,8 @@
 #define MAXENV        8  // max exec environment
 #define MAXOPBLOCKS  20  // max # of blocks any FS op writes
 #define LOGSIZE      (MAXOPBLOCKS*3)  // max data blocks in on-disk log
-// iozone 的 1KiB 并发读写会把 512B 块缓存打得非常碎，缓存过浅会导致
-// buffer cache 与块层来回抖动。这里直接把缓存深度提升到工程上可用的量级。
+// 块缓存过浅会让小块并发读写在 buffer cache 与块层之间频繁抖动；
+// 这里把缓存深度提升到更适合通用文件系统负载的量级。
 #define NBUF         1024  // size of disk block cache
 #define FSSIZE       2000  // size of file system in blocks
 #define MAXPATH      260   // maximum file path name

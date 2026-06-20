@@ -223,6 +223,7 @@ namespace syscall
         uint64 sys_acct();
         uint64 sys_clock_settime();
         uint64 sys_clock_getres();
+        uint64 sys_sched_setparam();
         uint64 sys_sched_setscheduler();
         uint64 sys_sched_getscheduler();
         uint64 sys_sched_getparam();
