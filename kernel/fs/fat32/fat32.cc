@@ -1387,8 +1387,14 @@ int fat32_fs_statfs(filesystem_t *fs, struct statfs *buf) {
     return 0;
 }
 
+int fat32_fs_sync(filesystem_t *fs) {
+    // FAT32 当前写路径直接同步到底层块设备；保留 sync hook 便于后续接入缓存。
+    return 0;
+}
+
 filesystem_op_t fat32_fs_op = {
     .mount = fat32_fs_mount,
     .umount = fat32_fs_umount,
-    .statfs = fat32_fs_statfs
+    .statfs = fat32_fs_statfs,
+    .sync = fat32_fs_sync
 };

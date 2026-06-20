@@ -28,8 +28,10 @@ INITCODE_MODE ?= evaluation
 DIS_PRINTF ?= 0
 QEMU_MEM ?= 1G
 QEMU_DEBUG_MEM ?= 1G
-# 默认使用 QEMU 临时写入层运行评测，避免污染官方原始磁盘镜像。
-QEMU_SNAPSHOT ?= -snapshot
+# 默认允许 QEMU 直接写回镜像，便于验证 FAT32/ext4 持久化。
+# 临时评测不希望污染镜像时，显式传入 QEMU_SNAPSHOT=-snapshot。
+QEMU_SNAPSHOT ?=
+# QEMU_SNAPSHOT ?= -snapshot
 
 # 检查是否通过目标名称指定架构
 ifneq (,$(filter l loongarch,$(MAKECMDGOALS)))
