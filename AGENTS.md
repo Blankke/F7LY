@@ -77,6 +77,8 @@ F7LY OS 是一个基于 xv6 思路扩展的教学/比赛用内核。主线目标
 - 了解历史决策优先看 Git commit；必要时再看 README、`docs/dev-notes/` 和源码。
 - 调试测例时先缩小到单条或小集合，不要一上来跑完整长回归。
 - QEMU 长输出必须写入 `logs/run/output_*.txt` 日志文件，不要直接刷进聊天。
+- 如果 `make run` 使用默认 `-snapshot` 时因为 `/var/tmp` 只读报 `Could not open temporary file '/var/tmp/vl.*'`，可以复制目标镜像到 `/tmp` 作为临时运行副本，运行时清空 `QEMU_SNAPSHOT` 并覆盖对应镜像变量；这种方式只允许改写临时副本，禁止改写或回写 `images/` 下的原始镜像。例如：
+  `cp images/sdcard-rv.img /tmp/f7ly-rv-test.img && timeout 8m make run r QEMU_MEM=1G QEMU_SNAPSHOT= RISCV_EVAL_IMAGE=/tmp/f7ly-rv-test.img`。
 - 修改评测通过状态时，优先更新 scoreboard 对应小分文件的 `状态` 列，再重新生成顶层汇总。
 - 维护 LTP 默认回归清单时，统一使用 `ltp_testcase` 表项中的四组合开关
   `{测例名, RV+musl, RV+glibc, LA+musl, LA+glibc}` 控制是否运行；不要在表外新增隐藏黑名单函数。

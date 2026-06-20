@@ -30,6 +30,13 @@
 // in kernelvec.S, calls kerneltrap().
 extern "C" void kernelvec();
 extern char trampoline[], uservec[], userret[];
+
+namespace
+{
+  // 单核调度使用固定 tick 时间片，确保长时间运行的用户/内核态任务都能被周期性抢占。
+  constexpr int k_default_time_slice_ticks = 1;
+}
+
 // 创建一个静态对象
 trap_manager trap_mgr;
 
@@ -201,9 +208,9 @@ void trap_manager::kerneltrap()
       Cpu::get_cpu()->get_cur_proc()->_state == proc::RUNNING &&
       !Cpu::get_cpu()->get_cur_proc()->_exiting)
   {
-    timeslice++; // 让一个进程连续执行若干时间片，printf线程不安全
+    timeslice++; // 到达固定时间片后抢占当前内核态任务。
     // printf("timeslice: %d\n", timeslice);
-    if (timeslice >= 5)
+    if (timeslice >= k_default_time_slice_ticks)
     {
       proc::k_scheduler.yield();
       timeslice = 0;
@@ -332,8 +339,8 @@ void trap_manager::usertrap()
   // give up the CPU if this is a timer interrupt.
   if (which_dev == 2 && !p->_exiting)
   {
-    timeslice++; // 让一个进程连续执行若干时间片，printf线程不安全
-    if (timeslice >= 5)
+    timeslice++; // 到达固定时间片后抢占当前用户态任务。
+    if (timeslice >= k_default_time_slice_ticks)
     {
       timeslice = 0;
       // proc::ipc::signal::handle_signal();
