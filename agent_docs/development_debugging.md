@@ -190,6 +190,8 @@ QEMU 运行参数由 Makefile 管理：
 - LoongArch：`qemu-system-loongarch64 -machine virt -cpu la464-loongarch-cpu -kernel build/loongarch/kernel-la -drive file=images/sdcard-la.img ... -initrd images/initrd.img`
 - 默认内存：`QEMU_MEM ?= 1G`
 - 调试内存：`QEMU_DEBUG_MEM ?= 1G`
+- `make run r/l` 默认传入 `QEMU_RUN_SNAPSHOT ?= -snapshot`，防止自动回归污染评测 sdcard 镜像；如需写回可显式传 `QEMU_RUN_SNAPSHOT=`。
+- `make shell r/l` 默认传入空的 `QEMU_SHELL_SNAPSHOT`，会写回独立 shell rootfs 镜像；如需临时 shell 可显式传 `QEMU_SHELL_SNAPSHOT=-snapshot`。
 
 GDB：
 

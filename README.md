@@ -208,3 +208,10 @@ which python
 - 调试单条测例时，优先缩小到一个架构、一个 libc 目录、一个测试大类和一个小测例。
 
 更多协作规则见 `AGENTS.md`。
+
+## rootfs下载地址
+https://github.com/Starry-OS/rootfs/releases/download/20260214/rootfs-riscv64.img.xz
+
+## 镜像源替换
+在使用make shell的交互式rootfs
+sed -i 's|https://mirrors.cernet.edu.cn/alpine|https://dl-cdn.alpinelinux.org/alpine|g' /etc/apk/repositories
