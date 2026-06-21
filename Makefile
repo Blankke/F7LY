@@ -28,10 +28,12 @@ INITCODE_MODE ?= evaluation
 DIS_PRINTF ?= 0
 QEMU_MEM ?= 1G
 QEMU_DEBUG_MEM ?= 1G
-# 默认允许 QEMU 直接写回镜像，便于验证 FAT32/ext4 持久化。
-# 临时评测不希望污染镜像时，显式传入 QEMU_SNAPSHOT=-snapshot。
+# QEMU_SNAPSHOT 是最终传给 QEMU 的底层实参；高层目标用下面两个变量区分用途。
+# make run 默认启用 snapshot，避免自动回归写回污染评测 sdcard 镜像。
+# make shell 默认不启用 snapshot，允许交互式 shell 镜像持久化写回。
+QEMU_RUN_SNAPSHOT ?= -snapshot
+QEMU_SHELL_SNAPSHOT ?=
 QEMU_SNAPSHOT ?=
-# QEMU_SNAPSHOT ?= -snapshot
 
 # 检查是否通过目标名称指定架构
 ifneq (,$(filter l loongarch,$(MAKECMDGOALS)))
@@ -321,9 +323,9 @@ run:
 	@$(MAKE) -j$(NPROC) ARCH=$(ARCH) INITCODE_MODE=$(INITCODE_MODE) build
 	@if [ -f $(ROOTFS_BACKUP) ]; then cp $(ROOTFS_BACKUP) $(INITRD_IMAGE); fi
 ifeq ($(ARCH),riscv)
-	$(MAKE) run-riscv ARCH=$(ARCH)
+	$(MAKE) run-riscv ARCH=$(ARCH) QEMU_SNAPSHOT="$(QEMU_RUN_SNAPSHOT)"
 else ifeq ($(ARCH),loongarch)
-	$(MAKE) run-loongarch ARCH=$(ARCH)
+	$(MAKE) run-loongarch ARCH=$(ARCH) QEMU_SNAPSHOT="$(QEMU_RUN_SNAPSHOT)"
 else
 	$(error Unsupported ARCH=$(ARCH))
 endif
@@ -332,9 +334,9 @@ shell:
 	@$(MAKE) -j$(NPROC) ARCH=$(ARCH) INITCODE_MODE=shell build
 	@if [ -f $(ROOTFS_BACKUP) ]; then cp $(ROOTFS_BACKUP) $(INITRD_IMAGE); fi
 ifeq ($(ARCH),riscv)
-	$(MAKE) ARCH=$(ARCH) INITCODE_MODE=shell run-riscv
+	$(MAKE) ARCH=$(ARCH) INITCODE_MODE=shell QEMU_SNAPSHOT="$(QEMU_SHELL_SNAPSHOT)" run-riscv
 else ifeq ($(ARCH),loongarch)
-	$(MAKE) ARCH=$(ARCH) INITCODE_MODE=shell run-loongarch
+	$(MAKE) ARCH=$(ARCH) INITCODE_MODE=shell QEMU_SNAPSHOT="$(QEMU_SHELL_SNAPSHOT)" run-loongarch
 else
 	$(error Unsupported ARCH=$(ARCH))
 endif
