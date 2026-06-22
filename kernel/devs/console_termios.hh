@@ -6,6 +6,13 @@ namespace dev
 {
     namespace abi = syscall::abi;
 
+    struct ConsoleReadSettings
+    {
+        bool canonical = true;
+        unsigned char min_bytes = 1;
+        unsigned char timeout_deciseconds = 0;
+    };
+
     class ConsoleTermiosController
     {
     public:
@@ -15,6 +22,7 @@ namespace dev
 
         abi::KernelTermios snapshot() const;
         abi::KernelTermio legacy_snapshot() const;
+        ConsoleReadSettings read_settings() const;
         void apply(const abi::KernelTermios &termios);
         void apply_legacy(const abi::KernelTermio &termio);
 

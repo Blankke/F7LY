@@ -28,7 +28,7 @@ namespace dev
 		virtual int handle_intr() override;
 
 		virtual long write( void * src, long n_bytes ) = 0;
-		virtual long read( void * dst, long n_bytes ) = 0;
+		virtual long read( void * dst, long n_bytes, bool nonblocking ) = 0;
 		
 		/// @brief 获取输入缓冲区中的字节数
 		/// @return 输入缓冲区字节数，失败返回-1

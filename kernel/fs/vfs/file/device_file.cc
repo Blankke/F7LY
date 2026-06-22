@@ -6,6 +6,7 @@
 #include "virtual_memory_manager.hh"
 #include "proc_manager.hh"
 
+#include <fcntl.h>
 #include <termios.h>
 
 namespace fs
@@ -45,7 +46,8 @@ namespace fs
 		// VFS 层的 read() 约定和普通文件一致：buf 指向的是内核临时缓冲区，
 		// 最终再由 syscall 层统一 copy_out 到用户地址。设备文件这里不能再
 		// 把它误当成用户地址二次 copy_out，否则 stdin 一有数据就会返回 -EFAULT。
-		ret = stream_device->read(reinterpret_cast<void *>(buf), len);
+		bool nonblocking = (lwext4_file_struct.flags & O_NONBLOCK) != 0;
+		ret = stream_device->read(reinterpret_cast<void *>(buf), len, nonblocking);
 		if (ret < 0) {
 			printfRed("device_file::read: device read failed with error %d\n", ret);
 			return ret;

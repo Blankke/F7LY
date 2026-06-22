@@ -24,6 +24,15 @@ namespace dev
         return to_legacy(_termios);
     }
 
+    ConsoleReadSettings ConsoleTermiosController::read_settings() const
+    {
+        ConsoleReadSettings settings{};
+        settings.canonical = (_termios.c_lflag & ICANON) != 0;
+        settings.min_bytes = _termios.c_cc[VMIN];
+        settings.timeout_deciseconds = _termios.c_cc[VTIME];
+        return settings;
+    }
+
     void ConsoleTermiosController::apply(const abi::KernelTermios &termios)
     {
         _termios = termios;

@@ -8,10 +8,13 @@
 
 #include "console1.hh"
 #include "console.hh"
+#include "console_termios.hh"
 #include "printer.hh"
 #include "scheduler.hh"
 #include "signal.hh"
 #include "proc_manager.hh"
+#include "tm/time.hh"
+#include "tm/timer_interface.hh"
 
 namespace dev
 {
@@ -23,42 +26,131 @@ namespace dev
 		return -1;
 	}
 
-	long ConsoleStdin::read( void * dst, long nbytes )
+	namespace
+	{
+		uint64 console_vtime_to_ticks(unsigned char deciseconds)
+		{
+			if (deciseconds == 0)
+			{
+				return 0;
+			}
+			const uint64 timeout_us = static_cast<uint64>(deciseconds) * 100 * 1000;
+			return (timeout_us + tmm::tick_period_us - 1) / tmm::tick_period_us;
+		}
+
+		bool console_deadline_reached(uint64 now, uint64 deadline)
+		{
+			return now >= deadline;
+		}
+	}
+
+	long ConsoleStdin::read_available( void * dst, long nbytes )
+	{
+		long copied = kConsole.console_read_kernel(dst, nbytes);
+		if (copied > 0)
+		{
+			return copied;
+		}
+
+		// 某些平台/后端上串口 RX 中断可能晚到甚至丢掉一次唤醒；
+		// 如果硬件自己已经声明“有字节可读”，就主动拉一个字节走
+		// console 行规程，再尝试从行规程缓冲中取数。
+		if (_stream != nullptr && _stream->read_ready())
+		{
+			u8 c = 0;
+			if (_stream->get_char(&c) == 0 || _stream->get_char_sync(&c) == 0)
+			{
+				kConsole.console_intr(c);
+				copied = kConsole.console_read_kernel(dst, nbytes);
+				if (copied > 0)
+				{
+					return copied;
+				}
+			}
+		}
+
+		return 0;
+	}
+
+	bool ConsoleStdin::has_pending_signal()
+	{
+		proc::Pcb * cur = proc::k_pm.get_cur_pcb();
+		return cur != nullptr && proc::ipc::signal::has_unmasked_signal_pending( cur );
+	}
+
+	long ConsoleStdin::read( void * dst, long nbytes, bool nonblocking )
 	{
 		if ( dst == nullptr || nbytes <= 0 )
 		{
 			return 0;
 		}
 
-		proc::Pcb * cur = proc::k_pm.get_cur_pcb();
+		ConsoleReadSettings settings = k_console_termios.read_settings();
+		char *out = reinterpret_cast<char *>(dst);
+		long total = 0;
+		const uint64 timeout_ticks = console_vtime_to_ticks(settings.timeout_deciseconds);
+		uint64 deadline = tmm::get_ticks() + timeout_ticks;
+		long target_bytes = settings.min_bytes;
+		if (target_bytes <= 0)
+		{
+			target_bytes = 1;
+		}
+		if (target_bytes > nbytes)
+		{
+			target_bytes = nbytes;
+		}
 
-		// stdin 走 console 的行规程缓冲，而不是直接读 UART 原始字节。
-		// 这样 canonical 模式下回车才能真正提交一整行，raw 模式下也能靠
-		// console_intr() 的 w_idx 推进按字节唤醒用户态。
+		// stdin 走 console 行规程缓冲：canonical 模式只在整行提交后返回；
+		// non-canonical 模式额外遵循 VMIN/VTIME，并让 O_NONBLOCK 空读返回 EAGAIN。
 		while ( true )
 		{
-			long copied = kConsole.console_read_kernel(dst, nbytes);
+			long copied = read_available(out + total, nbytes - total);
 			if (copied > 0)
 			{
-				return copied;
-			}
-
-			// 某些平台/后端上串口 RX 中断可能晚到甚至丢掉一次唤醒；
-			// 如果硬件自己已经声明“有字节可读”，就主动拉一个字节走
-			// console 行规程，保证 poll/read 不会永远卡在空缓冲上。
-			if (_stream != nullptr && _stream->read_ready())
-			{
-				u8 c = 0;
-				if (_stream->get_char(&c) == 0 || _stream->get_char_sync(&c) == 0)
+				total += copied;
+				if (settings.canonical)
 				{
-					kConsole.console_intr(c);
-					continue;
+					return total;
+				}
+				if (nonblocking || settings.min_bytes == 0 || total >= target_bytes || total == nbytes)
+				{
+					return total;
+				}
+				if (timeout_ticks > 0)
+				{
+					// MIN>0/TIME>0 使用 inter-byte timer；每次读到新字节后重置。
+					deadline = tmm::get_ticks() + timeout_ticks;
 				}
 			}
 
-			if ( cur != nullptr && proc::ipc::signal::has_unmasked_signal_pending( cur ) )
+			if (nonblocking)
 			{
-				return -EINTR;
+				return total > 0 ? total : -EAGAIN;
+			}
+
+			if (!settings.canonical)
+			{
+				if (settings.min_bytes == 0)
+				{
+					if (timeout_ticks == 0)
+					{
+						return total;
+					}
+					if (console_deadline_reached(tmm::get_ticks(), deadline))
+					{
+						return total;
+					}
+				}
+				else if (timeout_ticks > 0 && total > 0 &&
+				         console_deadline_reached(tmm::get_ticks(), deadline))
+				{
+					return total;
+				}
+			}
+
+			if ( has_pending_signal() )
+			{
+				return total > 0 ? total : -EINTR;
 			}
 
 			proc::k_scheduler.yield();
@@ -113,7 +205,7 @@ namespace dev
 		return nbytes;
 	}
 
-	long ConsoleStdout::read( void *, long )
+	long ConsoleStdout::read( void *, long, bool )
 	{
 		printfYellow( "try to read stdout device" );
 		return -1;
@@ -137,7 +229,7 @@ namespace dev
 		return nbytes;
 	}
 
-	long ConsoleStderr::read( void *, long )
+	long ConsoleStderr::read( void *, long, bool )
 	{
 		printfYellow( "try to read stdout device" );
 		return -1;
