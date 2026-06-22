@@ -15,9 +15,13 @@ namespace dev
 {
 	class ConsoleStdin : public StreamDevice
 	{
+	private:
+		long read_available( void * dst, long n_bytes );
+		bool has_pending_signal();
+
 	public:
 		virtual long write( void * src, long n_bytes ) override;
-		virtual long read( void * dst, long n_bytes ) override;
+		virtual long read( void * dst, long n_bytes, bool nonblocking ) override;
 		virtual int get_input_buffer_size() override;
 		virtual int flush_buffer(int queue) override;
 		virtual bool read_ready() override
@@ -31,7 +35,7 @@ namespace dev
 	{
 	public:
 		virtual long write( void * src, long n_bytes ) override;
-		virtual long read( void * dst, long n_bytes ) override;
+		virtual long read( void * dst, long n_bytes, bool nonblocking ) override;
 		virtual bool write_ready() override
 		{
 			if ( _stream == nullptr )
@@ -45,7 +49,7 @@ namespace dev
 	{
 	public:
 		virtual long write( void * src, long n_bytes ) override;
-		virtual long read( void * dst, long n_bytes ) override;
+		virtual long read( void * dst, long n_bytes, bool nonblocking ) override;
 		virtual bool write_ready() override
 		{
 			if ( _stream == nullptr )
