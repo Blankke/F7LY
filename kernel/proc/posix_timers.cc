@@ -1,8 +1,10 @@
 #include "proc/posix_timers.hh"
+#include "proc/capability.hh"
 #include "proc/proc.hh"
 #include "proc/proc_manager.hh"
 #include "proc/signal.hh"
 #include "printer.hh"
+#include "syscall_abi.hh"
 
 // 全局静态定时器数组的定义
 extended_posix_timer g_timers[32];
@@ -130,6 +132,90 @@ void maybe_fire_interval_timer(proc::Pcb *p, int which, uint64 now_us)
     timer.expiry_us += timer.interval_us;
   } while (timer.expiry_us <= now_us);
 }
+
+bool should_deliver_posix_timer_signal(int notify)
+{
+  return notify == syscall::abi::k_sigev_signal ||
+         notify == syscall::abi::k_sigev_thread_id;
+}
+
+proc::Pcb *find_posix_timer_signal_target(const extended_posix_timer &timer)
+{
+  proc::Pcb *owner = timer.owner;
+  if (owner == nullptr || owner->_state == proc::ProcState::UNUSED)
+  {
+    return nullptr;
+  }
+
+  if (timer.event.sigev_notify != syscall::abi::k_sigev_thread_id)
+  {
+    return owner;
+  }
+
+  proc::Pcb *target =
+      proc::k_capability.find_live_task_by_pid_or_tid(timer.event.sigev_notify_thread_id);
+  if (target == nullptr || target->_tgid != owner->_tgid)
+  {
+    return nullptr;
+  }
+  return target;
+}
+
+void wake_if_signal_interruptible(proc::Pcb *target, int sig)
+{
+  if (target == nullptr)
+  {
+    return;
+  }
+
+  if (target->_state == proc::ProcState::SLEEPING &&
+      proc::ipc::signal::has_unmasked_signal_pending(target))
+  {
+    target->_state = proc::ProcState::RUNNABLE;
+    return;
+  }
+
+  if (target->_state == proc::ProcState::STOPPED &&
+      (sig == proc::ipc::signal::SIGCONT || sig == proc::ipc::signal::SIGKILL))
+  {
+    target->_state = proc::ProcState::RUNNABLE;
+    if (sig == proc::ipc::signal::SIGCONT)
+    {
+      target->_continued_pending = true;
+    }
+  }
+}
+
+void deliver_posix_timer_signal(const extended_posix_timer &timer)
+{
+  if (!should_deliver_posix_timer_signal(timer.event.sigev_notify))
+  {
+    return;
+  }
+
+  int signo = timer.event.sigev_signo;
+  if (signo <= 0 || signo > proc::ipc::signal::SIGRTMAX)
+  {
+    return;
+  }
+
+  proc::Pcb *target = find_posix_timer_signal_target(timer);
+  if (target == nullptr)
+  {
+    return;
+  }
+
+  proc::ipc::signal::LinuxSigInfo info{};
+  info.si_signo = signo;
+  info.si_errno = 0;
+  info.si_code = syscall::abi::k_si_timer;
+  info.si_pid = 0;
+  info.si_uid = 0;
+  info.si_value.sival_ptr = reinterpret_cast<uint64>(timer.event.sigev_value.sival_ptr);
+
+  proc::ipc::signal::add_signal(target, signo, &info);
+  wake_if_signal_interruptible(target, signo);
+}
 } // namespace
 
 namespace proc
@@ -246,16 +332,9 @@ void check_expired_timers()
     }
     
     if (timespec_less_or_equal(g_timers[i].expiry_time, current_time)) {
-      printfCyan("[TIMER] Timer %d expired, sending signal %d\n", 
-                 g_timers[i].timer_id, g_timers[i].event.sigev_signo);
-      
-      // POSIX timer 必须把通知投递回创建它的那个进程，而不是“当前恰好正在运行的进程”。
-      // 否则一旦 owner 在线程/进程睡眠期间让出 CPU，信号就会丢给 idle/别的任务，
-      // clock_settime03 这类 sigwait() 场景就会永远等不到定时器信号。
-      proc::Pcb *owner = g_timers[i].owner;
-      if (owner != nullptr && owner->_state != proc::ProcState::UNUSED) {
-        proc::ipc::signal::add_signal(owner, g_timers[i].event.sigev_signo);
-      }
+      // POSIX timer 通知不能固定投给当前进程：SIGEV_SIGNAL 投给 owner，
+      // SIGEV_THREAD_ID 投给用户态指定的线程，SIGEV_NONE 则只更新定时器状态。
+      deliver_posix_timer_signal(g_timers[i]);
       
       // Handle periodic timers
       if (g_timers[i].spec.it_interval.tv_sec > 0 || g_timers[i].spec.it_interval.tv_nsec > 0) {
@@ -264,14 +343,9 @@ void check_expired_timers()
           g_timers[i].expiry_time = timespec_add(g_timers[i].expiry_time, g_timers[i].spec.it_interval);
         } while (timespec_less_or_equal(g_timers[i].expiry_time, current_time));
         
-        printfCyan("[TIMER] Timer %d rearmed for next interval at %ld.%09ld\n", 
-                   g_timers[i].timer_id, 
-                   g_timers[i].expiry_time.tv_sec, 
-                   g_timers[i].expiry_time.tv_nsec);
       } else {
         // One-shot timer: disarm it
         g_timers[i].armed = false;
-        printfCyan("[TIMER] One-shot timer %d disarmed\n", g_timers[i].timer_id);
       }
     }
   }
@@ -297,7 +371,8 @@ void cleanup_posix_timers_for_owner(proc::Pcb *owner)
     g_timers[i].owner = nullptr;
     g_timers[i].event.sigev_notify = 0;
     g_timers[i].event.sigev_signo = 0;
-    g_timers[i].event.sigev_value.sival_int = 0;
+    g_timers[i].event.sigev_value.sival_ptr = nullptr;
+    g_timers[i].event.sigev_notify_thread_id = 0;
     g_timers[i].spec.it_value.tv_sec = 0;
     g_timers[i].spec.it_value.tv_nsec = 0;
     g_timers[i].spec.it_interval.tv_sec = 0;

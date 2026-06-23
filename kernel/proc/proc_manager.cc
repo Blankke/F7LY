@@ -5369,21 +5369,20 @@ namespace proc
         Pcb *p = get_cur_pcb();
 
         ipc::Pipe *pipe_ = new ipc::Pipe();
-        pipe_->set_pipe_flags(flags);
         if (p != nullptr && p->get_euid() == 0)
         {
             // Linux 会给特权创建者更大的缺省 pipe 容量；
             // root 与无特权用户的初始大小语义不同。
             (void)pipe_->set_pipe_size(ipc::privileged_default_pipe_size);
         }
-        // 处理O_NONBLOCK标志 - 设置管道的非阻塞属性
-        if (flags & O_NONBLOCK)
-        {
-            pipe_->set_nonblock(true);
-        }
-
         if (pipe_->alloc(rf, wf) < 0)
             return syscall::SYS_ENOMEM;
+
+        // O_NONBLOCK 是每个 open file description 的状态。pipe2(O_NONBLOCK)
+        // 需要同时初始化读端和写端，但之后 fcntl(F_SETFL) 只能影响当前 fd。
+        const int pipe_status_flags = flags & (O_NONBLOCK | O_DIRECT);
+        rf->set_pipe_flags(O_RDONLY | pipe_status_flags);
+        wf->set_pipe_flags(O_WRONLY | pipe_status_flags);
 
         // 处理O_DIRECT标志 - 设置文件的直接I/O标志
         if (flags & O_DIRECT)

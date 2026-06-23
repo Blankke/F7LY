@@ -32,6 +32,12 @@ namespace syscall::abi
     constexpr int k_f_owner_pid = 1;
     constexpr int k_f_owner_pgrp = 2;
 
+    constexpr int k_sigev_signal = 0;
+    constexpr int k_sigev_none = 1;
+    constexpr int k_sigev_thread = 2;
+    constexpr int k_sigev_thread_id = 4;
+    constexpr int k_si_timer = -2;
+
     constexpr int k_ifnamsiz = 16;
 
     struct SocketIfreq

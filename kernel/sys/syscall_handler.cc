@@ -707,6 +707,42 @@ namespace syscall
 
             return wait_short_timeout(proc, static_cast<uint64>(timeout_us));
         }
+
+        /**
+         * @brief 匿名 fd 在缺少专用等待队列时的保守阻塞等待。
+         *
+         * signalfd/eventfd/inotify/fanotify 这类对象当前没有独立 wait queue，
+         * 但阻塞读写不能用裸 yield 忙轮询：yield 会让任务保持 RUNNABLE，
+         * 如果调用链上还有关中断/锁深度，还会破坏 scheduler 的 noff 不变量。
+         * 这里按一个 tick 真正睡眠，醒来后由调用方重新检查 fd 事件条件。
+         */
+        int wait_fd_event_tick_or_signal(proc::Pcb *proc)
+        {
+            if (proc == nullptr || proc->is_killed())
+            {
+                return SYS_EINTR;
+            }
+            if (proc::ipc::signal::has_unmasked_signal_pending(proc))
+            {
+                return SYS_EINTR;
+            }
+
+            int sleep_ret = tmm::k_tm.sleep_n_ticks(1);
+            if (sleep_ret == SYS_EINTR ||
+                proc::ipc::signal::has_unmasked_signal_pending(proc))
+            {
+                return SYS_EINTR;
+            }
+            if (sleep_ret == -2)
+            {
+                return SYS_EINTR;
+            }
+            if (sleep_ret < 0)
+            {
+                return sleep_ret;
+            }
+            return 0;
+        }
         constexpr int k_linux_nice_min = proc::highest_proc_prio;
         constexpr int k_linux_nice_max = proc::lowest_proc_prio;
 
@@ -1438,12 +1474,11 @@ namespace syscall
                         return -EAGAIN;
                     }
                     proc::Pcb *cur = proc::k_pm.get_cur_pcb();
-                    if (cur == nullptr || cur->is_killed() ||
-                        proc::ipc::signal::has_unmasked_signal_pending(cur))
+                    int wait_ret = wait_fd_event_tick_or_signal(cur);
+                    if (wait_ret < 0)
                     {
-                        return -EINTR;
+                        return wait_ret;
                     }
-                    proc::k_scheduler.yield();
                 }
 
                 size_t copied = 0;
@@ -2243,12 +2278,11 @@ namespace syscall
 
                     // inotify 的阻塞读必须等待后续文件事件，不能把空队列伪装成 EOF。
                     proc::Pcb *cur = proc::k_pm.get_cur_pcb();
-                    if (cur == nullptr || cur->is_killed() ||
-                        proc::ipc::signal::has_unmasked_signal_pending(cur))
+                    int wait_ret = wait_fd_event_tick_or_signal(cur);
+                    if (wait_ret < 0)
                     {
-                        return -EINTR;
+                        return wait_ret;
                     }
-                    proc::k_scheduler.yield();
                 }
 
                 size_t copied = 0;
@@ -2861,12 +2895,11 @@ namespace syscall
                         return -EAGAIN;
                     }
                     proc::Pcb *current = proc::k_pm.get_cur_pcb();
-                    if (current == nullptr || current->is_killed() ||
-                        proc::ipc::signal::has_unmasked_signal_pending(current))
+                    int wait_ret = wait_fd_event_tick_or_signal(current);
+                    if (wait_ret < 0)
                     {
-                        return -EINTR;
+                        return wait_ret;
                     }
-                    proc::k_scheduler.yield();
                 }
             }
 
@@ -2900,12 +2933,11 @@ namespace syscall
                         return -EAGAIN;
                     }
                     proc::Pcb *current = proc::k_pm.get_cur_pcb();
-                    if (current == nullptr || current->is_killed() ||
-                        proc::ipc::signal::has_unmasked_signal_pending(current))
+                    int wait_ret = wait_fd_event_tick_or_signal(current);
+                    if (wait_ret < 0)
                     {
-                        return -EINTR;
+                        return wait_ret;
                     }
-                    proc::k_scheduler.yield();
                 }
             }
 
@@ -3060,7 +3092,11 @@ namespace syscall
                     {
                         return -EINTR;
                     }
-                    proc::k_scheduler.yield();
+                    int wait_ret = wait_fd_event_tick_or_signal(current);
+                    if (wait_ret < 0)
+                    {
+                        return wait_ret;
+                    }
                 }
             }
 
@@ -7972,6 +8008,52 @@ namespace syscall
 
         ulong arg = _arg_raw(2);
 
+        if ((cmd & 0xFFFF) == FIOCLEX || (cmd & 0xFFFF) == FIONCLEX)
+        {
+            proc::Pcb *current = proc::k_pm.get_cur_pcb();
+            if (current == nullptr || current->_ofile == nullptr || fd < 0 || fd >= (int)proc::max_open_files)
+            {
+                return SYS_EBADF;
+            }
+            current->_ofile->_fl_cloexec[fd] = ((cmd & 0xFFFF) == FIOCLEX);
+            return 0;
+        }
+
+        if ((cmd & 0xFFFF) == FIONBIO)
+        {
+            if (arg == 0)
+            {
+                return SYS_EFAULT;
+            }
+
+            int enable_nonblock = 0;
+            mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
+            if (mem::k_vmm.copy_in(*pt, &enable_nonblock, arg, sizeof(enable_nonblock)) < 0)
+            {
+                return SYS_EFAULT;
+            }
+
+            bool nonblock = enable_nonblock != 0;
+            if (f->_attrs.filetype == fs::FileTypes::FT_PIPE)
+            {
+                static_cast<fs::pipe_file *>(f)->set_nonblock(nonblock);
+            }
+            else if (f->_attrs.filetype == fs::FileTypes::FT_SOCKET)
+            {
+                static_cast<fs::socket_file *>(f)->set_nonblock(nonblock);
+            }
+
+            if (nonblock)
+            {
+                f->lwext4_file_struct.flags |= O_NONBLOCK;
+            }
+            else
+            {
+                f->lwext4_file_struct.flags &= ~O_NONBLOCK;
+            }
+            return 0;
+        }
+
         if (f->_attrs.filetype == fs::FileTypes::FT_SOCKET)
         {
             mem::PageTable *pt = proc::k_pm.get_cur_pcb()->get_pagetable();
@@ -10990,6 +11072,7 @@ namespace syscall
         bool have_events = false;
         constexpr int64 k_nsec_per_sec = 1000000000LL;
         constexpr int64 k_msec_per_sec = 1000LL;
+        constexpr int64 k_nsec_per_msec = 1000000LL;
         constexpr int64 k_usec_per_msec = 1000LL;
         constexpr uint64 k_usec_per_sec = 1000000ULL;
 
@@ -11057,7 +11140,7 @@ namespace syscall
             }
             else
             {
-                timeout_ms = tm.tv_sec * k_msec_per_sec + tm.tv_nsec / k_usec_per_sec;
+                timeout_ms = tm.tv_sec * k_msec_per_sec + tm.tv_nsec / k_nsec_per_msec;
             }
         }
 
@@ -12433,9 +12516,14 @@ namespace syscall
                 return SYS_EINTR;
             }
 
-            // 当前缺少通用 fd 事件等待队列，这里先保守地让出 CPU。
-            // 高频纯超时等待已在上面的 nfds==0 快路径中转成真正睡眠。
-            proc::k_scheduler.yield();
+            // 当前缺少通用 fd 事件等待队列；按 tick 阻塞后重检，
+            // 避免 select/pselect 在无事件时保持 RUNNABLE 空转。
+            int wait_ret = wait_fd_event_tick_or_signal(p);
+            if (wait_ret < 0)
+            {
+                p->_sigmask = orig_sigmask;
+                return wait_ret;
+            }
         }
 
         // 恢复原始信号掩码
@@ -13158,7 +13246,8 @@ namespace syscall
         }
 
         // 检查socket类型有效性。type 低三位是 socket 类型，高位是 CLOEXEC/NONBLOCK。
-        if (base_type != SOCK_STREAM && base_type != SOCK_DGRAM && base_type != SOCK_RAW)
+        const bool unix_seqpacket = (domain == AF_UNIX || domain == AF_LOCAL) && base_type == SOCK_SEQPACKET;
+        if (base_type != SOCK_STREAM && base_type != SOCK_DGRAM && base_type != SOCK_RAW && !unix_seqpacket)
         {
             printfRed("[SyscallHandler::sys_socket] 不支持的socket类型: %d\n", base_type);
             return SYS_EPROTONOSUPPORT;
@@ -13221,7 +13310,10 @@ namespace syscall
         }
 
         // 创建socket文件对象
-        fs::socket_file *socket_f = new fs::socket_file(domain, base_type, protocol);
+        // AF_UNIX SOCK_SEQPACKET 在这里复用已有本地 stream 队列：它对 rustc/posix_spawn
+        // 这类 exec 错误回传通道需要的是可靠、有序、双向的本地 IPC。
+        const int internal_type = unix_seqpacket ? SOCK_STREAM : base_type;
+        fs::socket_file *socket_f = new fs::socket_file(domain, internal_type, protocol);
         if (!socket_f)
         {
             printfRed("[SyscallHandler::sys_socket] 创建socket_file失败\n");
@@ -13265,7 +13357,7 @@ namespace syscall
         {
             return SYS_EINVAL;
         }
-        if (base_type != SOCK_STREAM && base_type != SOCK_DGRAM && base_type != SOCK_RAW)
+        if (base_type != SOCK_STREAM && base_type != SOCK_DGRAM && base_type != SOCK_RAW && base_type != SOCK_SEQPACKET)
         {
             return SYS_EPROTONOSUPPORT;
         }
@@ -13300,8 +13392,9 @@ namespace syscall
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
-        fs::socket_file *left = new fs::socket_file(AF_UNIX, base_type, protocol);
-        fs::socket_file *right = new fs::socket_file(AF_UNIX, base_type, protocol);
+        const int internal_type = base_type == SOCK_SEQPACKET ? SOCK_STREAM : base_type;
+        fs::socket_file *left = new fs::socket_file(AF_UNIX, internal_type, protocol);
+        fs::socket_file *right = new fs::socket_file(AF_UNIX, internal_type, protocol);
         if (left == nullptr || right == nullptr)
         {
             if (left)
@@ -20394,11 +20487,6 @@ namespace syscall
 
         mem::PageTable *pt = p->get_pagetable();
 
-        // SIGEV_* 常量定义
-        constexpr int SIGEV_NONE = 1;
-        constexpr int SIGEV_SIGNAL = 0;
-        constexpr int SIGEV_THREAD = 2;
-
         // 使用全局定义的 sigevent 结构体
         extended_posix_timer::sigevent sev;
 
@@ -20406,9 +20494,10 @@ namespace syscall
         if (sevp_addr == 0)
         {
             // sevp 为 NULL，使用默认值
-            sev.sigev_notify = SIGEV_SIGNAL;
+            sev.sigev_notify = abi::k_sigev_signal;
             sev.sigev_signo = signal::SIGALRM;
             sev.sigev_value.sival_int = 0; // 将在分配 timer ID 后设置
+            sev.sigev_notify_thread_id = 0;
         }
         else
         {
@@ -20424,23 +20513,43 @@ namespace syscall
 
             sev.sigev_notify = user_sev.sigev_notify;
             sev.sigev_signo = user_sev.sigev_signo;
-            sev.sigev_value.sival_int = user_sev.sigev_value.sival_int;
+            sev.sigev_value.sival_ptr =
+                reinterpret_cast<void *>(user_sev.sigev_value.sival_ptr);
+            sev.sigev_notify_thread_id = 0;
 
             // 验证 sigev_notify 字段
-            if (sev.sigev_notify != SIGEV_NONE &&
-                sev.sigev_notify != SIGEV_SIGNAL &&
-                sev.sigev_notify != SIGEV_THREAD)
+            if (sev.sigev_notify != abi::k_sigev_none &&
+                sev.sigev_notify != abi::k_sigev_signal &&
+                sev.sigev_notify != abi::k_sigev_thread &&
+                sev.sigev_notify != abi::k_sigev_thread_id)
             {
                 printfRed("[SyscallHandler::sys_timer_create] Invalid sigev_notify: %d\n", sev.sigev_notify);
                 return SYS_EINVAL;
             }
 
-            // 如果是信号通知，验证信号编号
-            if (sev.sigev_notify == SIGEV_SIGNAL)
+            // Linux/glibc 的 SIGEV_THREAD 由用户态包装成 SIGEV_THREAD_ID 进入内核；
+            // Vim 等程序会依赖这个定向信号通知来实现 timeout。
+            if (sev.sigev_notify == abi::k_sigev_signal ||
+                sev.sigev_notify == abi::k_sigev_thread_id)
             {
                 if (sev.sigev_signo < 1 || sev.sigev_signo > 64)
                 {
                     printfRed("[SyscallHandler::sys_timer_create] Invalid signal number: %d\n", sev.sigev_signo);
+                    return SYS_EINVAL;
+                }
+            }
+
+            if (sev.sigev_notify == abi::k_sigev_thread_id)
+            {
+                sev.sigev_notify_thread_id = user_sev.__sev_fields.sigev_notify_thread_id;
+                proc::Pcb *target =
+                    proc::k_capability.find_live_task_by_pid_or_tid(sev.sigev_notify_thread_id);
+                if (sev.sigev_notify_thread_id <= 0 ||
+                    target == nullptr ||
+                    target->_tgid != p->_tgid)
+                {
+                    printfRed("[SyscallHandler::sys_timer_create] Invalid SIGEV_THREAD_ID target: %d\n",
+                              sev.sigev_notify_thread_id);
                     return SYS_EINVAL;
                 }
             }
@@ -20461,7 +20570,8 @@ namespace syscall
                 g_timers[i].owner = nullptr;
                 g_timers[i].event.sigev_notify = 0;
                 g_timers[i].event.sigev_signo = 0;
-                g_timers[i].event.sigev_value.sival_int = 0;
+                g_timers[i].event.sigev_value.sival_ptr = nullptr;
+                g_timers[i].event.sigev_notify_thread_id = 0;
                 g_timers[i].spec.it_value.tv_sec = 0;
                 g_timers[i].spec.it_value.tv_nsec = 0;
                 g_timers[i].spec.it_interval.tv_sec = 0;
@@ -20520,9 +20630,6 @@ namespace syscall
             printfRed("[SyscallHandler::sys_timer_create] Error copying timer ID to user space\n");
             return SYS_EFAULT;
         }
-
-        printfCyan("[SyscallHandler::sys_timer_create] Created timer ID: %d, clockid: %d, notify: %d\n",
-                   timer_id, clockid, sev.sigev_notify);
 
         return 0;
     }
@@ -20668,7 +20775,6 @@ namespace syscall
         if (new_timer_spec.it_value.tv_sec == 0 && new_timer_spec.it_value.tv_nsec == 0)
         {
             g_timers[timer_slot].armed = false;
-            printfCyan("[SyscallHandler::sys_timer_settime] Timer %d disarmed\n", timerid);
         }
         else
         {
@@ -20697,12 +20803,7 @@ namespace syscall
                 }
             }
 
-            printfCyan("[SyscallHandler::sys_timer_settime] Timer %d armed, expires at %ld.%09ld\n",
-                       timerid, g_timers[timer_slot].expiry_time.tv_sec,
-                       g_timers[timer_slot].expiry_time.tv_nsec);
         }
-
-        printfCyan("[SyscallHandler::sys_timer_settime] Timer %d settime completed, flags: %d\n", timerid, flags);
 
         return 0;
     }
@@ -20772,7 +20873,8 @@ namespace syscall
         g_timers[timer_slot].owner = nullptr;
         g_timers[timer_slot].event.sigev_notify = 0;
         g_timers[timer_slot].event.sigev_signo = 0;
-        g_timers[timer_slot].event.sigev_value.sival_int = 0;
+        g_timers[timer_slot].event.sigev_value.sival_ptr = nullptr;
+        g_timers[timer_slot].event.sigev_notify_thread_id = 0;
 
         // 清零定时器规格
         g_timers[timer_slot].spec.it_value.tv_sec = 0;
@@ -20784,8 +20886,7 @@ namespace syscall
         g_timers[timer_slot].expiry_time.tv_sec = 0;
         g_timers[timer_slot].expiry_time.tv_nsec = 0;
 
-        printfCyan("[SyscallHandler::sys_timer_delete] Timer %d deleted successfully (was %s)\n",
-                   timerid, was_armed ? "armed" : "disarmed");
+        (void)was_armed;
 
         // 注意：根据 POSIX 标准，对于由被删除定时器产生的任何挂起信号的处理是未指定的
         // 在我们的简化实现中，我们不需要特殊处理挂起的信号
