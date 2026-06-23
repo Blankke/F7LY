@@ -16,23 +16,29 @@ namespace fs
 		bool _close_read_end = true;
 		bool _close_write_end = false;
 		eastl::string _fifo_path; // 用于 FIFO 文件的路径跟踪
-		int _pipe_flags = 0; // 管道标志，默认为0
+		int _pipe_flags = O_RDONLY; // 每个 open file description 独立维护状态标志
 	public:
 		pipe_file(FileAttrs attrs, Pipe *pipe_, bool is_write, const eastl::string& fifo_path = "") : 
 			file(attrs), _pipe(pipe_), _can_read(!is_write), _can_write(is_write),
 			_close_read_end(!is_write), _close_write_end(is_write), _fifo_path(fifo_path)
 		{
+			_pipe_flags = is_write ? O_WRONLY : O_RDONLY;
+			lwext4_file_struct.flags = _pipe_flags;
 			new (&_stat) Kstat(_pipe);
 			// 设置正确的文件模式：FIFO 类型 + 权限位
 			_stat.mode = S_IFIFO | (attrs._value & 0777);
 			dup();
 		}
 		pipe_file( FileAttrs attrs, Pipe *pipe_ ) : file( attrs ), _pipe( pipe_ ) { 
+			_pipe_flags = O_RDONLY;
+			lwext4_file_struct.flags = _pipe_flags;
 			new ( &_stat ) Kstat( _pipe ); 
 			_stat.mode = S_IFIFO | (attrs._value & 0777);
 			dup(); 
 		}
 		pipe_file( Pipe *pipe_ ) : file( FileAttrs( FileTypes::FT_PIPE, 0777 ) ), _pipe( pipe_ ) { 
+			_pipe_flags = O_RDONLY;
+			lwext4_file_struct.flags = _pipe_flags;
 			new ( &_stat ) Kstat( _pipe ); 
 			_stat.mode = S_IFIFO | 0777;
 			dup(); 
@@ -50,7 +56,7 @@ namespace fs
 			{
 				return syscall::SYS_EBADF;
 			}
-			return _pipe->read(buf, len);
+			return _pipe->read(buf, len, get_nonblock());
 		};
 		long read_to_user(mem::PageTable &pt, uint64 user_buf, size_t len, long off, bool upgrade) override
 		{
@@ -58,7 +64,7 @@ namespace fs
 			{
 				return syscall::SYS_EBADF;
 			}
-			return _pipe->read_to_user(pt, user_buf, static_cast<int>(len));
+			return _pipe->read_to_user(pt, user_buf, static_cast<int>(len), get_nonblock());
 		}
 
 		/// @note pipe write 没有偏移的概念
@@ -68,7 +74,7 @@ namespace fs
 			{
 				return syscall::SYS_EBADF;
 			}
-			return _pipe->write_in_kernel(buf, len); 
+			return _pipe->write_in_kernel(buf, len, get_nonblock());
 		};
 		long write_from_user(mem::PageTable &pt, uint64 user_buf, size_t len, long off, bool upgrade) override
 		{
@@ -76,7 +82,7 @@ namespace fs
 			{
 				return syscall::SYS_EBADF;
 			}
-			return _pipe->write_from_user(pt, user_buf, static_cast<int>(len));
+			return _pipe->write_from_user(pt, user_buf, static_cast<int>(len), get_nonblock());
 		}
 
 		int write_in_kernel(uint64 buf, size_t len) 
@@ -85,7 +91,7 @@ namespace fs
 			{
 				return syscall::SYS_EBADF;
 			}
-			return _pipe->write_in_kernel(buf, len); 
+			return _pipe->write_in_kernel(buf, len, get_nonblock());
 		}
 
 		virtual bool read_ready() override
@@ -119,12 +125,32 @@ namespace fs
 		// 获取管道中可读的字节数
 		uint32 get_available_bytes() const { return _pipe->size(); }
 		
-		// 设置和获取非阻塞模式
-		void set_nonblock(bool nonblock) { _pipe->set_nonblock(nonblock); }
-		bool get_nonblock() const { return _pipe->get_nonblock(); }
+		// O_NONBLOCK 属于 open file description。pipe 两端共享缓冲区，但不共享这个状态。
+		void set_nonblock(bool nonblock)
+		{
+			if (nonblock)
+			{
+				_pipe_flags |= O_NONBLOCK;
+			}
+			else
+			{
+				_pipe_flags &= ~O_NONBLOCK;
+			}
+			lwext4_file_struct.flags = _pipe_flags;
+		}
+		bool get_nonblock() const { return (_pipe_flags & O_NONBLOCK) != 0; }
 		
-		int get_pipe_flags() const { return _pipe->get_pipe_flags(); }
-		void set_pipe_flags(int flags) { _pipe->set_pipe_flags(flags); }
+		int get_pipe_flags() const { return _pipe_flags; }
+		void set_pipe_flags(int flags)
+		{
+			_pipe_flags = flags;
+			lwext4_file_struct.flags = _pipe_flags;
+			if (_pipe != nullptr && _can_read)
+			{
+				// 当前异步 SIGIO 通知仍由 Pipe 聚合维护；这里只同步读端订阅状态。
+				_pipe->set_pipe_flags(flags);
+			}
+		}
 		proc::ipc::Pipe *get_pipe() const { return _pipe; }
 		// 设置管道大小，返回实际设置的大小，失败返回-1
 		int set_pipe_size(uint32 new_size) { return _pipe->set_pipe_size(new_size); }
@@ -139,6 +165,8 @@ namespace fs
 			_can_write = is_write_;
 			_close_read_end = !is_write_;
 			_close_write_end = is_write_;
+			_pipe_flags = (_pipe_flags & ~O_ACCMODE) | (is_write_ ? O_WRONLY : O_RDONLY);
+			lwext4_file_struct.flags = _pipe_flags;
 		}
 
 		// FIFO 以 O_RDWR 打开时，一个文件描述符同时代表读端和写端。
@@ -148,6 +176,8 @@ namespace fs
 			_can_write = true;
 			_close_read_end = true;
 			_close_write_end = true;
+			_pipe_flags = (_pipe_flags & ~O_ACCMODE) | O_RDWR;
+			lwext4_file_struct.flags = _pipe_flags;
 		}
 		
 		/// @brief 手动关闭管道，用于在文件描述符关闭时调用

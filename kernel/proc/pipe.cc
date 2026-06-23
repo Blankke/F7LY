@@ -110,7 +110,7 @@ namespace proc
 			return true;
 		}
 
-		int Pipe::write(uint64 addr, int n)
+		int Pipe::write(uint64 addr, int n, bool nonblock)
 		{
 			int i = 0;
 			Pcb *pr = k_pm.get_cur_pcb();
@@ -132,7 +132,7 @@ namespace proc
 
 				if (_count >= _pipe_size)
 				{
-					if (_nonblock)
+					if (nonblock)
 					{
 						_lock.release();
 						return i > 0 ? i : syscall::SYS_EAGAIN;
@@ -173,7 +173,7 @@ namespace proc
 
 			return i;
 		}
-		int Pipe::write_in_kernel(uint64 addr, int n)
+		int Pipe::write_in_kernel(uint64 addr, int n, bool nonblock)
 		{
 			int i = 0;
 			Pcb *pr = k_pm.get_cur_pcb();
@@ -206,7 +206,7 @@ namespace proc
 						return i > 0 ? i : syscall::SYS_EINTR;
 					}
 
-					if (_nonblock)
+					if (nonblock)
 					{
 						_lock.release();
 						if (i > 0)
@@ -256,14 +256,14 @@ namespace proc
 			return i;
 		}
 
-		int Pipe::write_from_user(mem::PageTable &pt, uint64 addr, int n)
+		int Pipe::write_from_user(mem::PageTable &pt, uint64 addr, int n, bool nonblock)
 		{
 			int i = 0;
 			Pcb *pr = k_pm.get_cur_pcb();
 
 			_lock.acquire();
 			printf("[pipe-debug] write-enter pid=%d n=%d count=%u size=%u read_open=%d write_open=%d nonblock=%d\n",
-			       pr->_pid, n, _count, _pipe_size, _read_is_open, _write_is_open, _nonblock);
+			       pr->_pid, n, _count, _pipe_size, _read_is_open, _write_is_open, nonblock);
 
 			while (i < n)
 			{
@@ -290,7 +290,7 @@ namespace proc
 						return i > 0 ? i : syscall::SYS_EINTR;
 					}
 
-					if (_nonblock)
+					if (nonblock)
 					{
 						printf("[pipe-debug] write-eagain pid=%d done=%d count=%u\n",
 						       pr->_pid, i, _count);
@@ -314,6 +314,34 @@ namespace proc
 				uint32 remaining = static_cast<uint32>(n - i);
 				uint32 chunk = remaining < writable ? remaining : writable;
 				uint32 tail_room = _pipe_size - _tail;
+				if (chunk > tail_room)
+				{
+					chunk = tail_room;
+				}
+				// 用户页缺页可能回源到文件系统并睡眠，不能在 pipe 自旋锁内触发。
+				// 先在锁外补齐/校验本次要读的用户范围，回到锁内后 copy_in 应只剩内存搬运。
+				_lock.release();
+				if (mem::k_vmm.ensure_user_read_range(pt, addr + i, chunk) < 0)
+				{
+					if (i > 0)
+					{
+						_lock.acquire();
+						wake_waiters_locked(true);
+						notify_async_reader_locked();
+						_lock.release();
+						return i;
+					}
+					return syscall::SYS_EFAULT;
+				}
+				_lock.acquire();
+				if (!_read_is_open || pr->is_killed() || _count >= _pipe_size)
+				{
+					continue;
+				}
+				writable = _pipe_size - _count;
+				remaining = static_cast<uint32>(n - i);
+				chunk = remaining < writable ? remaining : writable;
+				tail_room = _pipe_size - _tail;
 				if (chunk > tail_room)
 				{
 					chunk = tail_room;
@@ -348,7 +376,7 @@ namespace proc
 			return i;
 		}
 
-		int Pipe::read(uint64 addr, int n)
+		int Pipe::read(uint64 addr, int n, bool nonblock)
 		{
 			int i;
 			Pcb *pr = k_pm.get_cur_pcb();
@@ -363,7 +391,7 @@ namespace proc
 					return -1;
 				}
 				
-				if (_nonblock)
+				if (nonblock)
 				{
 					_lock.release();
 					return syscall::SYS_EAGAIN;
@@ -408,14 +436,14 @@ namespace proc
 			return i;
 		}
 
-		int Pipe::read_to_user(mem::PageTable &pt, uint64 addr, int n)
+		int Pipe::read_to_user(mem::PageTable &pt, uint64 addr, int n, bool nonblock)
 		{
 			int i;
 			Pcb *pr = k_pm.get_cur_pcb();
 
 			_lock.acquire();
 			printf("[pipe-debug] read-enter pid=%d n=%d count=%u size=%u read_open=%d write_open=%d nonblock=%d\n",
-			       pr->_pid, n, _count, _pipe_size, _read_is_open, _write_is_open, _nonblock);
+			       pr->_pid, n, _count, _pipe_size, _read_is_open, _write_is_open, nonblock);
 
 			while (_count == 0 && _write_is_open)
 			{
@@ -426,7 +454,7 @@ namespace proc
 					return -1;
 				}
 
-				if (_nonblock)
+				if (nonblock)
 				{
 					printf("[pipe-debug] read-eagain pid=%d count=%u\n", pr->_pid, _count);
 					_lock.release();
@@ -454,6 +482,26 @@ namespace proc
 				uint32 remaining = static_cast<uint32>(n - i);
 				uint32 chunk = remaining < readable ? remaining : readable;
 				uint32 head_room = _pipe_size - _head;
+				if (chunk > head_room)
+				{
+					chunk = head_room;
+				}
+				// 和写端同理，先在锁外保证用户目标页可写，避免 copy_out 在
+				// pipe 自旋锁内触发懒分配/COW/文件回源。
+				_lock.release();
+				if (mem::k_vmm.ensure_user_write_range(pt, addr + i, chunk) < 0)
+				{
+					return i > 0 ? i : syscall::SYS_EFAULT;
+				}
+				_lock.acquire();
+				if (_count == 0)
+				{
+					continue;
+				}
+				readable = _count;
+				remaining = static_cast<uint32>(n - i);
+				chunk = remaining < readable ? remaining : readable;
+				head_room = _pipe_size - _head;
 				if (chunk > head_room)
 				{
 					chunk = head_room;

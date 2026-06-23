@@ -2882,11 +2882,6 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
 
         // 对于 FIFO，使用全局管理器获取或创建 Pipe 对象
         proc::ipc::Pipe *pipe = fs::k_fifo_manager.get_or_create_fifo(absolute_path);
-        if (flags & O_NONBLOCK)
-        {
-            pipe->set_nonblock(true);
-            printfYellow("vfs_openat: O_NONBLOCK set for FIFO %s\n", absolute_path.c_str());
-        }
         bool is_write_end = false;
         if (access_mode == O_WRONLY)
         {
@@ -2905,6 +2900,13 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
 
         // 创建带有路径信息的 pipe_file
         fs::pipe_file *temp_file = new fs::pipe_file(attrs, pipe, is_write_end, absolute_path);
+        const int fifo_status_flags =
+            access_mode | (flags & (O_NONBLOCK | O_APPEND | O_ASYNC | O_DIRECT | O_NOATIME));
+        temp_file->set_pipe_flags(fifo_status_flags);
+        if (flags & O_NONBLOCK)
+        {
+            printfYellow("vfs_openat: O_NONBLOCK set for FIFO %s\n", absolute_path.c_str());
+        }
 
         // 注册到全局管理器
         if (access_mode == O_RDWR)

@@ -59,7 +59,6 @@ namespace proc
 			uint32 _count; // 当前数据量
 			bool _read_is_open;
 			bool _write_is_open;
-			bool _nonblock; // 非阻塞模式标志
 			uint8 _read_sleep;
 			uint8 _write_sleep;
 			Pcb *_read_waiter;
@@ -80,7 +79,6 @@ namespace proc
 				, _count(0)
 				, _read_is_open( false )
 				, _write_is_open( false )
-				, _nonblock( false )
 				, _read_waiter( nullptr )
 				, _write_waiter( nullptr )
 				, _read_waiter_count( 0 )
@@ -109,9 +107,6 @@ namespace proc
 			bool can_write_without_blocking();
 			bool can_write_for_epollet();
 
-			// 设置和获取非阻塞模式
-			void set_nonblock(bool nonblock) { _nonblock = nonblock; }
-			bool get_nonblock() const { return _nonblock; }
 			int get_pipe_flags() const { return pipe_flags; }
 			void set_pipe_flags(int flags) { pipe_flags = flags; }
 			void set_async_owner(int type, int id) { _async_owner_type = type; _async_owner_id = id; }
@@ -123,12 +118,12 @@ namespace proc
 			// 设置管道大小，返回实际设置的大小，失败返回-1
 			int set_pipe_size(uint32 new_size);
 
-			int write( uint64 addr, int n );
-			int write_in_kernel( uint64 addr, int n );
-			int write_from_user(mem::PageTable &pt, uint64 addr, int n);
+			int write( uint64 addr, int n, bool nonblock );
+			int write_in_kernel( uint64 addr, int n, bool nonblock );
+			int write_from_user(mem::PageTable &pt, uint64 addr, int n, bool nonblock);
 
-			int read( uint64 addr, int n );
-			int read_to_user(mem::PageTable &pt, uint64 addr, int n);
+			int read( uint64 addr, int n, bool nonblock );
+			int read_to_user(mem::PageTable &pt, uint64 addr, int n, bool nonblock);
 
 			int alloc( fs::pipe_file * &f0, fs::pipe_file * &f1);
 

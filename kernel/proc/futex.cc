@@ -125,15 +125,17 @@ namespace proc
 
         // futex WAIT 的“比较值”和“入睡”必须与 FUTEX_WAKE 串行化，
         // 否则 wake 可能刚好发生在两者之间，最终把等待线程永远丢在睡眠队列里。
-        p->_chan = chan;
         p->_futex_addr = futex_addr;
         p->_futex_key = futex_key;
-        p->_state = SLEEPING;
 
+        // 进入调度器必须只持有当前进程锁。这里复用统一 sleep 原语，
+        // 它会在持有 p->_lock 后释放 futex interlock，避免手写 call_sched()
+        // 时把额外锁深度带进 scheduler。
+        p->_lock.release();
+        k_pm.sleep(chan, &interlock);
         interlock.release();
-        k_scheduler.call_sched();
 
-        p->_chan = 0;
+        p->_lock.acquire();
         if (ipc::signal::has_fatal_signal_pending(p) || ipc::signal::has_unmasked_signal_pending(p))
         {
             p->_futex_addr = 0;

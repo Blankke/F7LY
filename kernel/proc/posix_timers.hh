@@ -36,6 +36,7 @@ struct extended_posix_timer
             int sival_int;
             void *sival_ptr;
         } sigev_value;
+        int sigev_notify_thread_id; // SIGEV_THREAD_ID 的目标 TID，其他通知方式为 0
     } event;                    // 事件配置
     bool active;                // 是否激活
     bool armed;                 // 是否武装（设置了过期时间）

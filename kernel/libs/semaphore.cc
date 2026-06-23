@@ -4,6 +4,26 @@
 #include "scheduler.hh"
 #include "proc.hh"
 
+namespace
+{
+    proc::Pcb *sem_pop_waiter_locked(sem *s)
+    {
+        if (s->top <= 0)
+        {
+            return nullptr;
+        }
+
+        proc::Pcb *waiter = s->wait_list[0];
+        for (int i = 0; i < s->top - 1; i++)
+        {
+            s->wait_list[i] = s->wait_list[i + 1];
+        }
+        s->top--;
+        s->wait_list[s->top] = nullptr;
+        return waiter;
+    }
+}
+
 void sem_init(sem *s, int value, char *name)
 {
     s->value = value;
@@ -38,18 +58,22 @@ void sem_p(sem *s)
     s->value--; // 先减少计数器
     if (s->value < 0)
     {
-        // 需要等待
+        // 需要等待。等待队列由信号量锁保护，真正入睡交给统一 sleep 原语，
+        // 由它维护 p->_lock / p->_chan / scheduler 的锁深度不变量。
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        p->_lock.acquire();
+        if (s->top >= NPROC)
+        {
+            s->lock.release();
+            panic("sem_p: wait list overflow");
+        }
         s->wait_list[s->top++] = p;
-        p->_state = proc::SLEEPING;
-        s->lock.release();
-        proc::k_scheduler.call_sched();
-        p->_lock.release();
+        proc::k_pm.sleep(s, &s->lock);
         if (p->_killed)
         {
+            s->lock.release();
             proc::k_pm.exit(-1);
         }
+        s->lock.release();
     }
     else
     {
@@ -68,16 +92,12 @@ void sem_v(sem *s)
     
     if (s->top > 0) // 如果有等待的进程，优先唤醒
     {
-        // 唤醒一个等待的进程，不增加value（因为进程会消费这个信号量）
-        s->wait_list[0]->_state = proc::RUNNABLE;
-        
-        // 将等待队列向前移动
-        for (int i = 0; i < s->top - 1; i++)
-        {
-            s->wait_list[i] = s->wait_list[i + 1];
-        }
-        s->top--;
+        proc::Pcb *waiter = sem_pop_waiter_locked(s);
         s->value++; // 从负数恢复到正确的值
+        if (waiter != nullptr)
+        {
+            proc::k_pm.wakeup_one(waiter, s);
+        }
     }
     else
     {
@@ -120,16 +140,12 @@ bool sem_try_v(sem *s)
     
     if (s->top > 0) // 如果有等待的进程，优先唤醒
     {
-        // 唤醒一个等待的进程，不增加value（因为进程会消费这个信号量）
-        s->wait_list[0]->_state = proc::RUNNABLE;
-        
-        // 将等待队列向前移动
-        for (int i = 0; i < s->top - 1; i++)
-        {
-            s->wait_list[i] = s->wait_list[i + 1];
-        }
-        s->top--;
+        proc::Pcb *waiter = sem_pop_waiter_locked(s);
         s->value++; // 从负数恢复到正确的值
+        if (waiter != nullptr)
+        {
+            proc::k_pm.wakeup_one(waiter, s);
+        }
         s->lock.release();
         return true;
     }
