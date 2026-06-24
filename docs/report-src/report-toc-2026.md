@@ -19,6 +19,59 @@
 
 ### 1.3　整体架构与项目结构
 图1-1：F7LY-OS 整体架构图
+> user变成shell和initcode区域
+> 网络的部分扩写
+> 添加设备树DTB，fs部分扩写
+> SHM添加了VMobject需要扩写
+
+
+  - boot 系统启动模块 — 负责内核的启动流程，包含 RISC-V 和 LoongArch
+  两种架构的启动代码，实现从 bootloader（OpenSBI / 直接启动）到内核 main()
+  函数的跳转，完成栈设置、页表初始化、硬件环境配置等早期初始化工作。
+  - hal 硬件抽象层 — 提供跨架构的硬件抽象，封装 CPU 相关操作（CSR
+  寄存器读写、页表操作）和上下文切换（swtch.S），为上层模块屏蔽 RISC-V 和 LoongArch
+  的底层差异，包括 SBI ecall 接口（RISC-V）、DMWIN
+  窗口配置（LoongArch）、中断控制器抽象等。
+  - libs 内核库模块 — 提供内核所需的基础库函数，包括格式化打印输出（Printer
+  类，支持日志级别/颜色/分组过滤）、字符串操作、C++ ABI
+  运行时支持（__cxx_abi）、模板算法、排序、EASTL 适配器、全局 operator new/delete
+  等，为内核其他模块提供 freestanding 环境下的基础服务。
+  - mem 内存管理模块 — 实现完整的内存管理体系，包含物理内存管理器（伙伴系统 Buddy System
+  算法，alloc_page/free_page）、虚拟内存管理器（SV39 / LA64
+  页表管理，地址空间映射）、堆内存管理器（kmalloc/kfree）、SLAB
+  分配器（小对象高效分配），以及 COW（Copy-on-Write）fork 的页引用计数机制。
+  - trap 中断与异常处理模块 — 处理硬件中断、异常和系统调用，实现中断向量表设置（kernelvec
+  .S/uservec.S）、异常分发流程、时钟中断管理，支持 RISC-V PLIC 和 LoongArch APIC + ExtIOI
+  双架构的不同中断机制，包含 TLB refill 异常处理（LoongArch 软件走表）。
+  - proc 进程管理模块 — 实现进程创建、调度、同步等核心功能，包含进程管理器（fork/exec/exi
+  t/wait4/clone3）、调度器（Round-Robin + 优先级）、POSIX
+  信号处理（sigaction/sigprocmask/sigreturn）、Futex
+  快速用户态互斥锁、管道通信（pipe/FIFO）、POSIX 定时器、进程组/会话管理、VMA（Maple Tree
+  虚拟内存区管理）等，支持多进程并发执行。
+  - sys 系统调用模块 — 实现 ~800 个 Linux ABI
+  兼容系统调用，提供用户态程序与内核的交互接口，包含 2048 槽的系统调用分发表、参数传递与
+  校验、权限检查等功能，覆盖文件操作、进程控制、内存管理、信号、socket
+  网络、定时器、共享内存等全部 Linux asm-generic 调用约定。
+  - fs 文件系统模块 — 实现 VFS（虚拟文件系统）层，支持多种文件系统包括
+  ext4（lwext4，含日志/扩展树/xattr/目录索引）、FAT32、ramfs/initrd
+  等，提供统一的文件操作接口（file 抽象类），包含缓冲区缓存（bio）、目录项缓存、inode
+  管理、路径解析、挂载管理（bind mount），以及 /proc
+  虚拟文件系统和设备文件、管道文件、socket 文件等多种文件类型。
+  - devs 设备管理模块 — 实现统一的设备抽象层，包含字符设备（CharDevice）、块设备（BlockDe
+  vice）、流设备（StreamDevice）等抽象类，提供设备管理器（256
+  槽设备表）进行设备注册和按名查找，支持 UART 串口、Console
+  控制台（stdin/stdout/stderr，含 termios 行规程）、VirtIO 磁盘、ramdisk、loop
+  设备等硬件/虚拟设备。
+  - shm 共享内存模块 — 实现 SysV
+  进程间共享内存机制（shmget/shmat/shmdt/shmctl），支持匿名共享内存和有名共享内存，提供高
+  效的跨进程数据交换能力，包含共享内存分配、映射、同步等功能。
+  - tm 时间管理模块 — 提供时间和定时器相关服务，实现定时器管理器（tick 时钟、sleep
+  睡眠、alarm 闹钟）、时间接口（gettimeofday/clock_gettime）、NTP
+  时间调整（adjtimex），为进程调度（时间片）和系统调用（超时阻塞）提供时间基础服务。
+  - net 网络模块 — 实现网络协议栈的基础框架，包含 ONPS（Open-NPStack）轻量级 TCP/IP
+  协议栈集成（Ethernet/ARP/IPv4/ICMP/TCP/UDP/BSD Socket API）、VirtIO Net 网络驱动（支持
+  RISC-V MMIO 和 LoongArch PCI 两种后端）、VFS socket 文件抽象（AF_INET + AF_UNIX + 本地
+  loopback 快速路径），以及 socket 兼容层（Linux ioctl 兼容，SIOCGIFCONF 等）。
 #### 1.3.1　分层架构与模块职责
 
 **2026 年改为六层分层图：**
@@ -68,6 +121,8 @@
 > 旧报告对应位置：旧 §2.1（启动流程）+ 旧 §2.2（中断与异常管理）的前半部分。
 > 最大变化：LA 从 ACPI → DTB；新增 DTB 解析器独立成节；新增 LA trap/TLB 独立成节。
 
+> 重绘，添加DTB的注册等我们新增的逻辑。说明启动的时候初始化的东西，如trap_mgr.inithart()等
+
 ### 2.1　RISC-V 启动流程
 
  2.1.1 entry.S
@@ -75,8 +130,7 @@
   - OpenSBI 传入 hartid (a0) + DTB 地址 (a1)，跳转 _entry
   - 多核栈分配：sp = stack0 + 4096 × (hartid + 1)，每核 8KB
   - 跳转 start()
-  - 变化：无实质变化，但 DTB 地址在 2026 年从"传入但不用"变为"被 PMM
-  真正利用"（ac2b88d）
+  - 变化：无实质变化，但 DTB 地址在 2026 年从"传入但不用"变为"被 PMM真正利用"（ac2b88d）
 
   2.1.2 start.cc
 
@@ -90,7 +144,8 @@
   控制台输入改为全走 SBI，不再直读 MMIO UART    内核 → ecall 调用 SBI → OpenSBI → 操作 UART 硬件     好处是内核不再依赖具体 UART 硬件型号，移植性更好             5727aaa 
   
 
-  2.1.3 主线：main() 四阶段
+  2.1.3 主线：main() 四阶段  
+ > 简单的流程图，说明main初始化的阶段，包括main.cc里面和forkret之后的fs_init，net_init等。 
 
   阶段一 —— 打印 / trap / 中断：初始化的是最基础的服务
   - DtbManager::init(dtb_addr) 地址规范化（新增）
@@ -280,7 +335,7 @@
 
  ## 第五章 进程与线程管理
 
-  > 旧报告对应：旧 §2.4（进程控制）、旧 §2.6.1（信号）、旧§2.6.2（futex）。
+  > 旧报告对应：旧 §2.4（进程控制）
   > 旧 §2.4.3（进程内存管理）移入第四章 §4.2.4。
 
   ### 5.1 进程控制块（PCB）
@@ -312,21 +367,7 @@
   语义对齐（31eea18）
   - 线程：clone(CLONE_VM|CLONE_THREAD)，TGID/TID 区分，TLS → tp。LA pthread——LL/SC、TLB 并发修复（a74491f、3c0be3c、3890255）
 
-  ### 5.4 信号（含 POSIX Timer）
 
-  - 数据结构：signal_frame + sigaction + pending 信号集
-  - 投递：usertrap 返回前 handle_signal() → 按 sigaction 分发 → sigreturn
-  恢复
-  - 默认处理：terminate / coredump / ignore
-  - POSIX Timer：timer_create/settime/gettime/delete + ITIMER →到期发信号（1b894aa、b8e52a7）
-  - 变化：SIGCHLD 彻底重构（5f21ad6）、libctest 信号路径优化（5f21ad6）
-
-  ### 5.5 futex
-> 图 5-3 futex 工作机制
-  - wait：值不匹配 → EAGAIN，匹配 → SLEEPING
-  - wakeup：取 n 个等待者 → RUNNABLE
-  - Robust list：线程退出自动遍历解锁，配合 CLONE_CHILD_CLEARTID 每个线程把自己正在等的 futex 登记在链表中，知道前主人死了，自己接管。
-  - 变化：LA pthread futex 并发修复（0cbf984、979ac9b），FUTEX_REQUEUE支持
 
 
 ## 第六章　文件系统
@@ -410,7 +451,7 @@
 
 ## 第七章　进程间通信
   > 旧报告对应位置：旧 §2.6.3（内存共享）、旧 §2.6.4（memfd）、旧§2.6.5（管道）。
-  > 旧 §2.6.1（信号）和旧 §2.6.2（futex）移入第五章。
+  > 旧 §2.6.1（信号）和旧 §2.6.2（futex）
   > mmap/MAP_SHARED 的缺页与 VMA 细节移入第四章 §4.2.5。
   > 管道作为 VFS file 派生类的注册、open/close 流程在第六章 §6.2。
   > 本章聚焦 IPC 机制的 API 语义、内部数据结构与跨进程协作流程。
@@ -418,9 +459,25 @@
 
   进程之间怎么传数据、怎么知道数据来了
 
-  ### 7.1　管道
-  > 图 7-1 管道基本实现
-  > 图 7-2 管道管理器
+  ### 7.1 信号（含 POSIX Timer）
+
+  - 数据结构：signal_frame + sigaction + pending 信号集
+  - 投递：usertrap 返回前 handle_signal() → 按 sigaction 分发 → sigreturn
+  恢复
+  - 默认处理：terminate / coredump / ignore
+  - POSIX Timer：timer_create/settime/gettime/delete + ITIMER →到期发信号（1b894aa、b8e52a7）
+  - 变化：SIGCHLD 彻底重构（5f21ad6）、libctest 信号路径优化（5f21ad6）
+
+  ### 7.2 futex
+> 图 7-1 futex 工作机制
+  - wait：值不匹配 → EAGAIN，匹配 → SLEEPING
+  - wakeup：取 n 个等待者 → RUNNABLE
+  - Robust list：线程退出自动遍历解锁，配合 CLONE_CHILD_CLEARTID 每个线程把自己正在等的 futex 登记在链表中，知道前主人死了，自己接管。
+  - 变化：LA pthread futex 并发修复（0cbf984、979ac9b），FUTEX_REQUEUE支持
+
+  ### 7.3　管道
+  > 图 7-2 管道基本实现
+  > 图 7-3 管道管理器
 
   内核中转
   - pipe/pipe2 创建、fork 后 fd 继承
@@ -429,8 +486,8 @@
   - FifoManager：路径→Pipe 映射，open 时 rendezvous
   - 变化：O_ASYNC 标志位修正 [→ bfa0e73]、pipe sleep bug [→ c40a7aa]
 
-  ### 7.2　共享内存
-  > 图 7-3 共享内存
+  ### 7.4　共享内存
+  > 图 7-4 共享内存
   绕过内核直接访问
   SysV 共享内存：通过 key 找段
   - shm_segment
@@ -447,7 +504,7 @@
   - 通过 fd 传递实现跨进程共享
   - [→ f8ea061]
 
-  ### 7.3　就绪通知
+  ### 7.5　就绪通知
 
   epoll：
   - epoll_file 结构，eastl::vector<epoll_watch_entry> 关注列表
@@ -516,6 +573,7 @@
 ## 第九章　网络系统模块
 > 旧报告对应位置：旧第四章（网络系统模块）。
 > 最大变化：从「ONPS 框架 + BSD Socket 占位」→「真实 loopback TCP/UDP数据面」；iperf/netperf 验证通过。
+> onps少讲，重点放在virtio <-> onps 兼容层设计和 socket <-> onps 兼容层设计上
 
 ### 9.1　网络系统架构概述
 > 图 9-1 网络模块架构示意图
@@ -641,6 +699,9 @@
 
   - /dev/loop0~7，将普通文件映射为块设备
   - ISO 镜像挂载、文件系统测试等场景
+
+## 第十一章 logging系统
+
 
 ## 第十一章 总结与展望
  ### 11.1工作总结
