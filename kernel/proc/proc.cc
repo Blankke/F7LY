@@ -533,33 +533,47 @@ namespace proc
     void Pcb::cleanup_ofile()
     {
         fs::release_posix_record_locks_for_pid(_pid);
-        if (_ofile != nullptr)
+
+        ofile *fd_table = nullptr;
+        const bool lock_already_held = _lock.is_held();
+        if (!lock_already_held)
         {
-            if (!is_kernel_mapped_range((uint64)_ofile, sizeof(ofile)))
+            _lock.acquire();
+        }
+        fd_table = _ofile;
+        _ofile = nullptr;
+        if (!lock_already_held)
+        {
+            _lock.release();
+        }
+
+        if (fd_table != nullptr)
+        {
+            if (!is_kernel_mapped_range((uint64)fd_table, sizeof(ofile)))
             {
                 printfRed("[cleanup_ofile] 检测到异常 ofile 指针，直接丢弃: pcb=%p pid=%d ofile=%p\n",
-                          this, _pid, _ofile);
-                _ofile = nullptr;
+                          this, _pid, fd_table);
                 return;
             }
 
-            _ofile->_lock.acquire();
+            fd_table->_lock.acquire();
             // 减少打开文件表的引用计数
-            _ofile->_shared_ref_cnt--;
+            fd_table->_shared_ref_cnt--;
 
             // 如果引用计数降到0或以下，当前任务取得整张表的唯一销毁权。
-            if (_ofile->_shared_ref_cnt <= 0)
+            if (fd_table->_shared_ref_cnt <= 0)
             {
-                _ofile->_lock.release();
+                fd_table->_lock.release();
 
                 // 每个 fd 槽位各持有一个 file 引用，逐槽释放即可。不能在 8 KiB
                 // 内核栈上放置 1024 项临时数组，否则退出路径会直接踩穿栈。
-                for (uint64 i = 0; i < max_open_files; ++i)
+                uint fd_scan_limit = fd_table->_highest_fd_plus_one;
+                for (uint64 i = 0; i < fd_scan_limit; ++i)
                 {
-                    fs::file *file_obj = _ofile->_ofile_ptr[i];
-                    _ofile->_ofile_ptr[i] = nullptr;
-                    _ofile->_reserved[i] = false;
-                    _ofile->_fl_cloexec[i] = false;
+                    fs::file *file_obj = fd_table->_ofile_ptr[i];
+                    fd_table->_ofile_ptr[i] = nullptr;
+                    fd_table->_reserved[i] = false;
+                    fd_table->_fl_cloexec[i] = false;
                     if (file_obj == nullptr)
                     {
                         continue;
@@ -572,16 +586,15 @@ namespace proc
                     }
                     file_obj->free_file();
                 }
+                fd_table->_highest_fd_plus_one = 0;
 
                 // 释放打开文件表结构本身
-                delete _ofile;
+                delete fd_table;
             }
             else
             {
-                _ofile->_lock.release();
+                fd_table->_lock.release();
             }
-            // 清空当前进程的文件表指针
-            _ofile = nullptr;
         }
     }
 

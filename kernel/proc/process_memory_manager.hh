@@ -578,6 +578,10 @@ namespace proc
         bool is_page_mapped(uint64 va);
         void free_vma_entry(vma *entry, bool check_validity);
         void unmap_vma_pages(const vma &entry, uint64 va_start, uint64 va_end, bool check_validity);
+        void unmap_heap_pages_in_range(const vma &entry, uint64 start, uint64 end);
+        bool heap_growth_crosses_shared_mapping(uint64 start, uint64 end) const;
+        bool ensure_heap_metadata_for_range(uint64 start, uint64 end);
+        void trim_heap_metadata_to_end(uint64 new_end, bool unmap_pages);
         bool range_overlaps_used_vma(uint64 start_addr, uint64 end_addr) const;
         int vma_slot_index(const vma *entry) const;
         uint64 find_gap_in_vma_index(uint64 start_hint,

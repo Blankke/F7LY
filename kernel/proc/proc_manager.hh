@@ -148,6 +148,9 @@ namespace proc
         void mark_thread_group_killed(Pcb *current, int fatal_signal = 0);
     };
 
+    bool has_active_file_leases();
+    void note_file_lease_change(short old_type, short new_type);
+
     extern ProcessManager k_pm; // 全局进程管理器实例
 
 }

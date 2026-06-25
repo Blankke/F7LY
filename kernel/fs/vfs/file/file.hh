@@ -149,6 +149,7 @@ namespace fs
 	int apply_ofd_record_lock(file *owner, const struct flock &lock);
 	int query_ofd_record_lock(file *owner, struct flock &lock);
 	void release_posix_record_locks_for_path(const eastl::string &path, int pid);
+	void release_posix_record_locks_for_file(file *owner, int pid);
 	void release_posix_record_locks_for_pid(int pid);
 	void release_ofd_record_locks_for_owner(file *owner);
 

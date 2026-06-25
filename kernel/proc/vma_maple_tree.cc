@@ -51,59 +51,83 @@ namespace proc
 
     int VmaMapleTree::find_entry_slot(const LeafNode *leaf, uint64 key)
     {
-        int left = 0;
-        int right = leaf != nullptr ? leaf->count : 0;
-        while (left < right)
+        if (leaf == nullptr)
         {
-            int mid = left + (right - left) / 2;
-            if (leaf->entries[mid]->addr < key)
+            return 0;
+        }
+
+        for (int i = 0; i < leaf->count; ++i)
+        {
+            const vma *entry = leaf->entries[i];
+            if (entry == nullptr)
             {
-                left = mid + 1;
+                continue;
             }
-            else
+            if (entry->addr >= key)
             {
-                right = mid;
+                return i;
             }
         }
-        return left;
+        return leaf->count;
     }
 
     int VmaMapleTree::upper_bound_slot(const LeafNode *leaf, uint64 key)
     {
-        int left = 0;
-        int right = leaf != nullptr ? leaf->count : 0;
-        while (left < right)
+        if (leaf == nullptr)
         {
-            int mid = left + (right - left) / 2;
-            if (leaf->entries[mid]->addr <= key)
+            return 0;
+        }
+
+        for (int i = 0; i < leaf->count; ++i)
+        {
+            const vma *entry = leaf->entries[i];
+            if (entry == nullptr)
             {
-                left = mid + 1;
+                continue;
             }
-            else
+            if (entry->addr > key)
             {
-                right = mid;
+                return i;
             }
         }
-        return left;
+        return leaf->count;
     }
 
     int VmaMapleTree::child_slot(const InternalNode *node, uint64 key)
     {
-        int left = 0;
-        int right = node != nullptr ? node->count : 0;
-        while (left + 1 < right)
+        if (node == nullptr || node->count <= 0)
         {
-            int mid = left + (right - left) / 2;
-            if (node->keys[mid] <= key)
+            return 0;
+        }
+
+        int best = -1;
+        for (int i = 0; i < node->count; ++i)
+        {
+            if (node->children[i] == nullptr)
             {
-                left = mid;
+                continue;
+            }
+            if (node->keys[i] <= key)
+            {
+                best = i;
             }
             else
             {
-                right = mid;
+                break;
             }
         }
-        return left;
+        if (best >= 0)
+        {
+            return best;
+        }
+        for (int i = 0; i < node->count; ++i)
+        {
+            if (node->children[i] != nullptr)
+            {
+                return i;
+            }
+        }
+        return 0;
     }
 
     int VmaMapleTree::find_child_index(const InternalNode *node, const Node *child)
@@ -133,11 +157,25 @@ namespace proc
         if (node->is_leaf())
         {
             const LeafNode *leaf = static_cast<const LeafNode *>(node);
-            return leaf->entries[0]->addr;
+            for (int i = 0; i < leaf->count; ++i)
+            {
+                if (leaf->entries[i] != nullptr)
+                {
+                    return leaf->entries[i]->addr;
+                }
+            }
+            return 0;
         }
 
         const InternalNode *internal = static_cast<const InternalNode *>(node);
-        return internal->keys[0];
+        for (int i = 0; i < internal->count; ++i)
+        {
+            if (internal->children[i] != nullptr)
+            {
+                return first_key(internal->children[i]);
+            }
+        }
+        return 0;
     }
 
     vma *VmaMapleTree::last_entry_mut(LeafNode *leaf)
@@ -146,7 +184,14 @@ namespace proc
         {
             return nullptr;
         }
-        return leaf->entries[leaf->count - 1];
+        for (int i = leaf->count - 1; i >= 0; --i)
+        {
+            if (leaf->entries[i] != nullptr)
+            {
+                return leaf->entries[i];
+            }
+        }
+        return nullptr;
     }
 
     const vma *VmaMapleTree::last_entry(const LeafNode *leaf)
@@ -155,7 +200,47 @@ namespace proc
         {
             return nullptr;
         }
-        return leaf->entries[leaf->count - 1];
+        for (int i = leaf->count - 1; i >= 0; --i)
+        {
+            if (leaf->entries[i] != nullptr)
+            {
+                return leaf->entries[i];
+            }
+        }
+        return nullptr;
+    }
+
+    void VmaMapleTree::compact_leaf(LeafNode *leaf)
+    {
+        if (leaf == nullptr || leaf->count <= 0)
+        {
+            return;
+        }
+
+        int write = 0;
+        for (int read = 0; read < leaf->count; ++read)
+        {
+            vma *entry = leaf->entries[read];
+            if (entry == nullptr)
+            {
+                continue;
+            }
+            leaf->entries[write++] = entry;
+        }
+        for (int i = write; i < k_leaf_capacity + 1; ++i)
+        {
+            leaf->entries[i] = nullptr;
+        }
+        if (write < leaf->count)
+        {
+            size_ -= (leaf->count - write);
+            if (size_ < 0)
+            {
+                size_ = 0;
+            }
+            leaf->count = write;
+            refresh_ancestors(leaf);
+        }
     }
 
     VmaMapleTree::LeafNode *VmaMapleTree::find_leaf(uint64 key)
@@ -174,7 +259,12 @@ namespace proc
         while (!node->is_leaf())
         {
             const InternalNode *internal = static_cast<const InternalNode *>(node);
-            node = internal->children[child_slot(internal, key)];
+            int slot = child_slot(internal, key);
+            node = (slot >= 0 && slot < internal->count) ? internal->children[slot] : nullptr;
+            if (node == nullptr)
+            {
+                return nullptr;
+            }
         }
         return static_cast<const LeafNode *>(node);
     }
@@ -199,16 +289,15 @@ namespace proc
 
         for (const LeafNode *candidate = leaf; candidate != nullptr; candidate = candidate->next)
         {
-            int slot = find_entry_slot(candidate, key_hint);
-            if (slot > 0 && candidate->entries[slot - 1] == entry)
+            for (int i = 0; i < candidate->count; ++i)
             {
-                return candidate;
+                if (candidate->entries[i] == entry)
+                {
+                    return candidate;
+                }
             }
-            if (slot < candidate->count && candidate->entries[slot] == entry)
-            {
-                return candidate;
-            }
-            if (candidate->count == 0 || candidate->entries[0]->addr > key_hint)
+            uint64 first = first_key(candidate);
+            if (candidate->count == 0 || (first != 0 && first > key_hint))
             {
                 break;
             }
@@ -220,7 +309,8 @@ namespace proc
             {
                 continue;
             }
-            if (candidate->entries[candidate->count - 1]->addr < key_hint)
+            const vma *last = last_entry(candidate);
+            if (last != nullptr && last->addr < key_hint)
             {
                 break;
             }
@@ -281,6 +371,7 @@ namespace proc
         {
             return false;
         }
+        compact_leaf(leaf);
 
         int slot = find_entry_slot(leaf, entry->addr);
         const vma *prev_entry = nullptr;
@@ -300,7 +391,14 @@ namespace proc
         }
         else if (leaf->next != nullptr && leaf->next->count > 0)
         {
-            next_entry = leaf->next->entries[0];
+            for (int i = 0; i < leaf->next->count; ++i)
+            {
+                if (leaf->next->entries[i] != nullptr)
+                {
+                    next_entry = leaf->next->entries[i];
+                    break;
+                }
+            }
         }
 
         if ((prev_entry != nullptr && prev_entry->overlaps(*entry)) ||
@@ -330,6 +428,7 @@ namespace proc
 
     void VmaMapleTree::split_leaf(LeafNode *leaf)
     {
+        compact_leaf(leaf);
         LeafNode *right = new LeafNode();
         int left_count = leaf->count / 2;
         int right_count = leaf->count - left_count;
@@ -441,6 +540,7 @@ namespace proc
         {
             return;
         }
+        compact_leaf(leaf);
 
         int slot = -1;
         for (int i = 0; i < leaf->count; ++i)
@@ -603,10 +703,10 @@ namespace proc
         }
 
         int slot = upper_bound_slot(leaf, addr) - 1;
-        if (slot >= 0)
+        for (int i = slot; i >= 0; --i)
         {
-            const vma *entry = leaf->entries[slot];
-            if (entry->covers(addr))
+            const vma *entry = leaf->entries[i];
+            if (entry != nullptr && entry->covers(addr))
             {
                 return entry;
             }
@@ -638,13 +738,22 @@ namespace proc
         }
 
         int slot = find_entry_slot(leaf, start);
-        if (slot < leaf->count)
+        for (int i = slot; i < leaf->count; ++i)
         {
-            return leaf->entries[slot];
+            if (leaf->entries[i] != nullptr)
+            {
+                return leaf->entries[i];
+            }
         }
         if (leaf->next != nullptr && leaf->next->count > 0)
         {
-            return leaf->next->entries[0];
+            for (int i = 0; i < leaf->next->count; ++i)
+            {
+                if (leaf->next->entries[i] != nullptr)
+                {
+                    return leaf->next->entries[i];
+                }
+            }
         }
         return nullptr;
     }
@@ -663,9 +772,12 @@ namespace proc
         }
 
         int slot = find_entry_slot(leaf, start) - 1;
-        if (slot >= 0)
+        for (int i = slot; i >= 0; --i)
         {
-            return leaf->entries[slot];
+            if (leaf->entries[i] != nullptr)
+            {
+                return leaf->entries[i];
+            }
         }
         return last_entry(leaf->prev);
     }
@@ -696,9 +808,25 @@ namespace proc
             }
             if (i + 1 < leaf->count)
             {
-                return leaf->entries[i + 1];
+                for (int j = i + 1; j < leaf->count; ++j)
+                {
+                    if (leaf->entries[j] != nullptr)
+                    {
+                        return leaf->entries[j];
+                    }
+                }
             }
-            return leaf->next != nullptr && leaf->next->count > 0 ? leaf->next->entries[0] : nullptr;
+            if (leaf->next != nullptr && leaf->next->count > 0)
+            {
+                for (int j = 0; j < leaf->next->count; ++j)
+                {
+                    if (leaf->next->entries[j] != nullptr)
+                    {
+                        return leaf->next->entries[j];
+                    }
+                }
+            }
+            return nullptr;
         }
         return nullptr;
     }
@@ -729,7 +857,13 @@ namespace proc
             }
             if (i > 0)
             {
-                return leaf->entries[i - 1];
+                for (int j = i - 1; j >= 0; --j)
+                {
+                    if (leaf->entries[j] != nullptr)
+                    {
+                        return leaf->entries[j];
+                    }
+                }
             }
             return last_entry(leaf->prev);
         }

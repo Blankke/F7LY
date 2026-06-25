@@ -239,11 +239,11 @@ namespace proc
                    mem::k_pagetable.kwalk_addr(end) != 0;
         }
 
-	        inline bool is_probably_live_file_object(fs::file *file_obj)
-	        {
-	            if (file_obj == nullptr)
-	            {
-	                return false;
+        inline bool is_probably_live_file_object(fs::file *file_obj)
+        {
+            if (file_obj == nullptr)
+            {
+                return false;
             }
 
             if (!is_kernel_mapped_file_range((uint64)file_obj, sizeof(fs::file)))
@@ -257,9 +257,83 @@ namespace proc
                 return false;
             }
 
-	            uint32 refcnt = file_obj->refcnt;
-	            return refcnt > 0 && refcnt <= max_reasonable_file_refcnt();
-	        }
+            uint32 refcnt = file_obj->refcnt;
+            return refcnt > 0 && refcnt <= max_reasonable_file_refcnt();
+        }
+
+        SpinLock g_file_lease_lock;
+        int g_active_file_lease_count = 0;
+
+        bool file_ref_seen(const eastl::vector<fs::file *> &files, fs::file *target)
+        {
+            for (fs::file *existing : files)
+            {
+                if (existing == target)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        void release_file_refs(eastl::vector<fs::file *> &files)
+        {
+            for (fs::file *file_obj : files)
+            {
+                if (file_obj != nullptr)
+                {
+                    file_obj->free_file();
+                }
+            }
+            files.clear();
+        }
+
+        void collect_open_file_refs(Pcb *pcb, eastl::vector<fs::file *> &out)
+        {
+            if (pcb == nullptr)
+            {
+                return;
+            }
+
+            const bool lock_already_held = pcb->_lock.is_held();
+            if (!lock_already_held)
+            {
+                pcb->_lock.acquire();
+            }
+
+            if (pcb->_state == ProcState::UNUSED || pcb->_ofile == nullptr ||
+                !is_kernel_mapped_file_range(reinterpret_cast<uint64>(pcb->_ofile), sizeof(ofile)))
+            {
+                if (!lock_already_held)
+                {
+                    pcb->_lock.release();
+                }
+                return;
+            }
+
+            ofile *fd_table = pcb->_ofile;
+            fd_table->_lock.acquire();
+            if (!lock_already_held)
+            {
+                pcb->_lock.release();
+            }
+
+            uint fd_scan_limit = fd_table->_highest_fd_plus_one;
+            for (uint fd = 0; fd < fd_scan_limit; ++fd)
+            {
+                fs::file *candidate = fd_table->_ofile_ptr[fd];
+                if (candidate == nullptr ||
+                    !is_probably_live_file_object(candidate) ||
+                    file_ref_seen(out, candidate))
+                {
+                    continue;
+                }
+                candidate->dup();
+                out.push_back(candidate);
+            }
+
+            fd_table->_lock.release();
+        }
 
         class MemoryLockGuard
         {
@@ -305,83 +379,73 @@ namespace proc
 
 	        fs::file *find_conflicting_lease_holder(const eastl::string &path, uint flags)
 	        {
-	            eastl::vector<fs::file *> seen;
-	            seen.reserve(num_process);
+	            eastl::vector<fs::file *> candidates;
+	            candidates.reserve(num_process);
 
 	            for (uint i = 0; i < num_process; ++i)
 	            {
-	                Pcb *pcb = &k_proc_pool[i];
-	                if (pcb->_state == ProcState::UNUSED || pcb->_ofile == nullptr)
+	                collect_open_file_refs(&k_proc_pool[i], candidates);
+	            }
+
+	            for (fs::file *candidate : candidates)
+	            {
+	                if (candidate->backing_path() != path ||
+	                    candidate->_lease_type == F_UNLCK ||
+	                    !lease_conflicts_with_open(candidate->_lease_type, flags))
 	                {
 	                    continue;
 	                }
 
-	                for (uint fd = 0; fd < max_open_files; ++fd)
+	                for (fs::file *other : candidates)
 	                {
-	                    fs::file *candidate = pcb->_ofile->_ofile_ptr[fd];
-	                    if (candidate == nullptr || candidate->backing_path() != path)
+	                    if (other != candidate)
 	                    {
-	                        continue;
-	                    }
-
-	                    bool already_seen = false;
-	                    for (fs::file *existing : seen)
-	                    {
-	                        if (existing == candidate)
-	                        {
-	                            already_seen = true;
-	                            break;
-	                        }
-	                    }
-	                    if (already_seen)
-	                    {
-	                        continue;
-	                    }
-	                    seen.push_back(candidate);
-
-	                    if (candidate->_lease_type != F_UNLCK &&
-	                        lease_conflicts_with_open(candidate->_lease_type, flags))
-	                    {
-	                        return candidate;
+	                        other->free_file();
 	                    }
 	                }
+	                candidates.clear();
+	                return candidate;
 	            }
 
+	            release_file_refs(candidates);
 	            return nullptr;
 	        }
 
 	        bool has_write_open_file_for_path(const eastl::string &path)
 	        {
+	            eastl::vector<fs::file *> candidates;
+	            candidates.reserve(num_process);
+
 	            for (uint i = 0; i < num_process; ++i)
 	            {
-	                Pcb *pcb = &k_proc_pool[i];
-	                if (pcb->_state == ProcState::UNUSED || pcb->_ofile == nullptr)
-	                {
-	                    continue;
-	                }
+	                collect_open_file_refs(&k_proc_pool[i], candidates);
+	            }
 
-	                for (uint fd = 0; fd < max_open_files; ++fd)
+	            bool found = false;
+	            for (fs::file *candidate : candidates)
+	            {
+	                if ((candidate->backing_path() == path || candidate->_path_name == path) &&
+	                    open_request_has_write(candidate->lwext4_file_struct.flags))
 	                {
-	                    fs::file *candidate = pcb->_ofile->_ofile_ptr[fd];
-	                    if (candidate == nullptr)
-	                    {
-	                        continue;
-	                    }
-	                    if (candidate->backing_path() != path && candidate->_path_name != path)
-	                    {
-	                        continue;
-	                    }
-	                    if (open_request_has_write(candidate->lwext4_file_struct.flags))
-	                    {
-	                        return true;
-	                    }
+	                    found = true;
+	                    break;
 	                }
+	            }
+	            release_file_refs(candidates);
+	            if (found)
+	            {
+	                return true;
 	            }
 	            return false;
 	        }
 
 	        int wait_for_conflicting_lease(const eastl::string &path, uint flags)
 	        {
+	            if (!has_active_file_leases())
+	            {
+	                return 0;
+	            }
+
 	            bool notified = false;
 	            bool writer_waiter = open_request_has_write(flags);
 	            fs::file *registered_holder = nullptr;
@@ -389,6 +453,10 @@ namespace proc
 	            {
 	                if (registered_holder == new_holder)
 	                {
+	                    if (new_holder != nullptr)
+	                    {
+	                        new_holder->free_file();
+	                    }
 	                    return;
 	                }
 
@@ -400,6 +468,7 @@ namespace proc
 	                    {
 	                        old_counter--;
 	                    }
+	                    registered_holder->free_file();
 	                }
 
 	                registered_holder = new_holder;
@@ -791,6 +860,36 @@ namespace proc
             return static_cast<int>(limit);
         }
 
+        inline void note_fd_slot_used_locked(ofile *fd_table, int fd)
+        {
+            if (fd_table == nullptr || fd < 0)
+            {
+                return;
+            }
+            uint next = static_cast<uint>(fd) + 1;
+            if (next > fd_table->_highest_fd_plus_one)
+            {
+                fd_table->_highest_fd_plus_one = next;
+            }
+        }
+
+        inline void shrink_fd_high_water_locked(ofile *fd_table)
+        {
+            if (fd_table == nullptr)
+            {
+                return;
+            }
+            while (fd_table->_highest_fd_plus_one > 0)
+            {
+                uint fd = fd_table->_highest_fd_plus_one - 1;
+                if (fd_table->_ofile_ptr[fd] != nullptr || fd_table->_reserved[fd])
+                {
+                    break;
+                }
+                fd_table->_highest_fd_plus_one--;
+            }
+        }
+
         inline bool is_exec_whitespace(char ch)
         {
             return ch == ' ' || ch == '\t';
@@ -890,6 +989,32 @@ namespace proc
     __attribute__((aligned(512)))
     ProcessManager k_pm;
 
+    bool has_active_file_leases()
+    {
+        return g_active_file_lease_count > 0;
+    }
+
+    void note_file_lease_change(short old_type, short new_type)
+    {
+        const bool old_active = old_type != F_UNLCK;
+        const bool new_active = new_type != F_UNLCK;
+        if (old_active == new_active)
+        {
+            return;
+        }
+
+        g_file_lease_lock.acquire();
+        if (new_active)
+        {
+            ++g_active_file_lease_count;
+        }
+        else if (g_active_file_lease_count > 0)
+        {
+            --g_active_file_lease_count;
+        }
+        g_file_lease_lock.release();
+    }
+
     void ProcessManager::init(const char *pid_lock_name, const char *tid_lock_name, const char *wait_lock_name)
     {
         // initialize the proc table.
@@ -897,6 +1022,8 @@ namespace proc
         _tid_lock.init(tid_lock_name);
         _wait_lock.init(wait_lock_name);
         _ns_lock.init("namespace");
+        g_file_lease_lock.init("file_lease");
+        g_active_file_lease_count = 0;
         for (uint i = 0; i < num_process; ++i)
         {
             Pcb &p = k_proc_pool[i];
@@ -1207,6 +1334,7 @@ namespace proc
             proc->_ofile->_ofile_ptr[0] = f_in;
             proc->_ofile->_ofile_ptr[1] = f_out;
             proc->_ofile->_ofile_ptr[2] = f_err;
+            proc->_ofile->_highest_fd_plus_one = 3;
             /// 你好
             /// 这是重定向uart的代码
             /// commented out by @gkq
@@ -1968,6 +2096,7 @@ namespace proc
         fd_table->_ofile_ptr[fd] = f;
         fd_table->_reserved[fd] = false;
         fd_table->_fl_cloexec[fd] = false; // 默认不设置 CLOEXEC
+        note_fd_slot_used_locked(fd_table, fd);
         fd_table->_lock.release();
 
         if (old_file != nullptr)
@@ -2017,6 +2146,7 @@ namespace proc
                 fd_table->_ofile_ptr[fd] = f;
                 fd_table->_reserved[fd] = false;
                 fd_table->_fl_cloexec[fd] = false; // 默认不设置 CLOEXEC
+                note_fd_slot_used_locked(fd_table, fd);
                 fd_table->_lock.release();
                 return fd;
             }
@@ -2046,6 +2176,7 @@ namespace proc
             {
                 fd_table->_reserved[fd] = true;
                 fd_table->_fl_cloexec[fd] = false;
+                note_fd_slot_used_locked(fd_table, fd);
                 fd_table->_lock.release();
                 return fd;
             }
@@ -2070,6 +2201,7 @@ namespace proc
         p->_ofile->_ofile_ptr[fd] = nullptr;
         p->_ofile->_reserved[fd] = false;
         p->_ofile->_fl_cloexec[fd] = false;
+        shrink_fd_high_water_locked(p->_ofile);
         p->_ofile->_lock.release();
     }
 
@@ -2376,7 +2508,10 @@ namespace proc
                     return nullptr;
                 }
 
-                for (i = 0; i < static_cast<uint64>(max_open_files); i++)
+                p->_ofile->_lock.acquire();
+                uint fd_scan_limit = p->_ofile->_highest_fd_plus_one;
+                np->_ofile->_highest_fd_plus_one = fd_scan_limit;
+                for (i = 0; i < static_cast<uint64>(fd_scan_limit); i++)
                 {
                     fs::file *parent_file = p->_ofile->_ofile_ptr[i];
                     if (parent_file)
@@ -2395,7 +2530,10 @@ namespace proc
                         np->_ofile->_ofile_ptr[i] = parent_file;
                         np->_ofile->_fl_cloexec[i] = p->_ofile->_fl_cloexec[i]; // 继承 CLOEXEC 标志
                     }
+                    np->_ofile->_reserved[i] = p->_ofile->_reserved[i];
                 }
+                p->_ofile->_lock.release();
+                shrink_fd_high_water_locked(np->_ofile);
             }
         }
 
@@ -2849,10 +2987,11 @@ namespace proc
             }
 
             if ((option & syscall::WNOHANG) == 0 &&
-                ipc::signal::has_unmasked_signal_pending(p))
+                ipc::signal::should_interrupt_blocking_syscall(p))
             {
-                // wait()/waitpid() 是可被信号打断的阻塞点；有未屏蔽信号待处理时
-                // 必须返回 -EINTR，让用户态先进入 signal handler。
+                // wait()/waitpid() 是可被信号打断的阻塞点；但 SA_RESTART 的 handler
+                // 不能在这里直接暴露 EINTR，否则 LTP 的 SAFE_WAITPID 会把正常子进程
+                // 退出误判成 TBROK。真正不可重启的 pending signal 才返回 EINTR。
                 _wait_lock.release();
                 return syscall::SYS_EINTR;
             }
@@ -3476,6 +3615,13 @@ namespace proc
         // go to sleep
         p->_chan = chan;
         p->_state = ProcState::SLEEPING;
+        // 信号可能恰好在调用方检查 pending 之后、真正挂起之前到达。
+        // 这里在持有 p->_lock 且已经登记 sleep channel 后再补一次检查，
+        // 避免 SIGALRM/pthread_cancel 等可中断等待丢掉唯一一次唤醒。
+        if (ipc::signal::should_interrupt_blocking_syscall(p))
+        {
+            p->_state = ProcState::RUNNABLE;
+        }
         k_scheduler.call_sched();
         p->_chan = 0;
 
@@ -3895,6 +4041,7 @@ namespace proc
         p->_ofile->_ofile_ptr[fd] = nullptr;
         p->_ofile->_reserved[fd] = false;
         p->_ofile->_fl_cloexec[fd] = false;
+        shrink_fd_high_water_locked(p->_ofile);
         p->_ofile->_lock.release();
 
         if (f == nullptr)
@@ -3907,7 +4054,7 @@ namespace proc
                       p->_pid, fd, f);
             return 0;
         }
-        fs::release_posix_record_locks_for_path(f->backing_path(), p->_pid);
+        fs::release_posix_record_locks_for_file(f, p->_pid);
         f->free_file();
         return 0;
     }
@@ -3923,107 +4070,73 @@ namespace proc
             return 0;
         }
 
-        eastl::vector<fs::file *> flushed_files;
-        flushed_files.reserve(num_process);
+        eastl::vector<fs::file *> open_files;
+        open_files.reserve(num_process);
 
         for (uint i = 0; i < num_process; ++i)
         {
-            Pcb *pcb = &k_proc_pool[i];
-            if (pcb->_state == ProcState::UNUSED || pcb->_ofile == nullptr)
+            collect_open_file_refs(&k_proc_pool[i], open_files);
+        }
+
+        for (fs::file *file_obj : open_files)
+        {
+            if (file_obj == nullptr || file_obj->backing_path() != path)
             {
                 continue;
             }
 
-            for (uint fd = 0; fd < max_open_files; ++fd)
+            // path-based stat/open 会绕过当前 fd；先把同一路径的写合并缓冲刷入 inode，
+            // 保证另一个 open file description 能看到刚写入的大小和内容。
+            int flush_ret = file_obj->flush_visibility_state();
+            if (flush_ret < 0)
             {
-                fs::file *file_obj = pcb->_ofile->_ofile_ptr[fd];
-                if (file_obj == nullptr || file_obj->backing_path() != path)
-                {
-                    continue;
-                }
-
-                bool already_flushed = false;
-                for (fs::file *seen_file : flushed_files)
-                {
-                    if (seen_file == file_obj)
-                    {
-                        already_flushed = true;
-                        break;
-                    }
-                }
-                if (already_flushed)
-                {
-                    continue;
-                }
-
-                // path-based stat/open 会绕过当前 fd；先把同一路径的写合并缓冲刷入 inode，
-                // 保证另一个 open file description 能看到刚写入的大小和内容。
-                int flush_ret = file_obj->flush_visibility_state();
-                if (flush_ret < 0)
-                {
-                    return flush_ret;
-                }
-                if (flush_ret > 0)
-                {
-                    return -flush_ret;
-                }
-                flushed_files.push_back(file_obj);
+                release_file_refs(open_files);
+                return flush_ret;
+            }
+            if (flush_ret > 0)
+            {
+                release_file_refs(open_files);
+                return -flush_ret;
             }
         }
 
+        release_file_refs(open_files);
         return 0;
     }
 
     int ProcessManager::flush_all_open_files()
     {
-        eastl::vector<fs::file *> flushed_files;
-        flushed_files.reserve(num_process);
+        eastl::vector<fs::file *> open_files;
+        open_files.reserve(num_process);
 
         for (uint i = 0; i < num_process; ++i)
         {
-            Pcb *pcb = &k_proc_pool[i];
-            if (pcb->_state == ProcState::UNUSED || pcb->_ofile == nullptr)
+            collect_open_file_refs(&k_proc_pool[i], open_files);
+        }
+
+        for (fs::file *file_obj : open_files)
+        {
+            if (file_obj == nullptr)
             {
                 continue;
             }
 
-            for (uint fd = 0; fd < max_open_files; ++fd)
+            // sync/shutdown 需要覆盖所有仍打开的 file object；
+            // 否则 normal_file 的写合并缓存可能尚未进入 lwext4。
+            int flush_ret = file_obj->flush_visibility_state();
+            if (flush_ret < 0)
             {
-                fs::file *file_obj = pcb->_ofile->_ofile_ptr[fd];
-                if (file_obj == nullptr)
-                {
-                    continue;
-                }
-
-                bool already_flushed = false;
-                for (fs::file *seen_file : flushed_files)
-                {
-                    if (seen_file == file_obj)
-                    {
-                        already_flushed = true;
-                        break;
-                    }
-                }
-                if (already_flushed)
-                {
-                    continue;
-                }
-
-                // sync/shutdown 需要覆盖所有仍打开的 file object；
-                // 否则 normal_file 的写合并缓存可能尚未进入 lwext4。
-                int flush_ret = file_obj->flush_visibility_state();
-                if (flush_ret < 0)
-                {
-                    return flush_ret;
-                }
-                if (flush_ret > 0)
-                {
-                    return -flush_ret;
-                }
-                flushed_files.push_back(file_obj);
+                release_file_refs(open_files);
+                return flush_ret;
+            }
+            if (flush_ret > 0)
+            {
+                release_file_refs(open_files);
+                return -flush_ret;
             }
         }
 
+        release_file_refs(open_files);
         return 0;
     }
 
@@ -4652,10 +4765,14 @@ namespace proc
             }
         }
 
-        const VmAreaKind area_kind = (flags & MAP_GROWSDOWN) ? VmAreaKind::UserStack : VmAreaKind::Mmap;
+        // MAP_STACK 不要求内核自动向下增长，但它仍然表示 pthread/sigaltstack
+        // 这类栈用途匿名映射。把它标成 UserStack，后续信号帧落栈和调试输出
+        // 才能按“栈 VMA”处理，而不是误当普通 mmap。
+        const bool stack_mapping = (flags & (MAP_GROWSDOWN | MAP_STACK)) != 0;
+        const VmAreaKind area_kind = stack_mapping ? VmAreaKind::UserStack : VmAreaKind::Mmap;
         const VmGrowPolicy grow_policy = (flags & MAP_GROWSDOWN) ? VmGrowPolicy::Down : VmGrowPolicy::None;
         const uint32 guard_pages = (flags & MAP_GROWSDOWN) ? 1 : 0;
-        const char *debug_name = is_anonymous ? "mmap-anon" : "mmap-file";
+        const char *debug_name = stack_mapping ? "mmap-stack" : (is_anonymous ? "mmap-anon" : "mmap-file");
 
         VmObject *mapping_object = nullptr;
         uint64 file_backed_bytes = 0;
@@ -4722,6 +4839,7 @@ namespace proc
 
         vm->vfd = is_anonymous ? -1 : fd;
         vm->vfile = vfile;
+        const bool dedicated_file_transferred = vma_owns_dedicated_file;
         if (vma_owns_dedicated_file)
         {
             // 成功挂到 VMA 后，专用 backing file 的所有权转交给地址空间元数据。
@@ -4757,7 +4875,7 @@ namespace proc
         {
             vm->is_expandable = false;
             vm->max_len = aligned_length;
-            if (!vma_owns_dedicated_file)
+            if (!dedicated_file_transferred)
             {
                 vfile->dup(); // 兼容 memfd/虚拟文件等仍共享 file 对象的场景
             }
@@ -5393,7 +5511,10 @@ namespace proc
         if (((fd0 = alloc_fd(p, rf)) < 0) || (fd1 = alloc_fd(p, wf)) < 0)
         {
             if (fd0 >= 0)
+            {
                 p->_ofile->_ofile_ptr[fd0] = nullptr;
+                shrink_fd_high_water_locked(p->_ofile);
+            }
             // fs::k_file_table.free_file( rf );
             // fs::k_file_table.free_file( wf );
             rf->free_file();
@@ -5408,9 +5529,6 @@ namespace proc
             p->_ofile->_fl_cloexec[fd1] = true; // 写端设置CLOEXEC
         }
 
-        // 其实alloc_fd已经设置了_ofile_ptr，这里不需要再次设置了，但是再设一下无伤大雅
-        p->_ofile->_ofile_ptr[fd0] = rf;
-        p->_ofile->_ofile_ptr[fd1] = wf;
         fd[0] = fd0;
         fd[1] = fd1;
         return 0;
@@ -6680,7 +6798,8 @@ namespace proc
             proc->_rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_max = sp - stackbase;
         // 处理F_DUPFD_CLOEXEC标志位，关闭设置了该标志的文件描述符
         // 注意：这里直接访问_ofile结构是因为这是execve的特定操作
-        for (int i = 0; i < (int)max_open_files; i++)
+        uint exec_fd_scan_limit = proc->_ofile != nullptr ? proc->_ofile->_highest_fd_plus_one : 0;
+        for (int i = 0; i < (int)exec_fd_scan_limit; i++)
         {
             if (proc->_ofile != nullptr && proc->_ofile->_ofile_ptr[i] != nullptr && proc->_ofile->_fl_cloexec[i])
             {
@@ -6697,6 +6816,10 @@ namespace proc
                 proc->_ofile->_ofile_ptr[i] = nullptr;
                 proc->_ofile->_fl_cloexec[i] = false;
             }
+        }
+        if (proc->_ofile != nullptr)
+        {
+            shrink_fd_high_water_locked(proc->_ofile);
         }
 
         // ========== 第八阶段：替换进程映像 ==========

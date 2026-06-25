@@ -89,6 +89,7 @@ namespace shm
         // 使用unordered_map来存储共享内存段信息，key为shmid
         eastl::unordered_map<int, shm_segment>* segments;
         int next_shmid; // 下一个可用的shmid,分配后更新这个值
+        int requested_next_shmid; // /proc/sys/kernel/shm_next_id，-1 表示使用普通分配
         uint64 shm_size;
         mutable SpinLock shm_lock_; // 保护共享段容器、附加记录与空闲块元数据
         eastl::unordered_map<eastl::string, proc::FileVmObject *> *shared_file_objects;
@@ -170,6 +171,8 @@ namespace shm
         int set_shmmax_limit(size_t value);
         int get_shmmni_limit() const;
         uint64 get_shmall_pages() const;
+        int get_shm_next_id() const;
+        int set_shm_next_id(int value);
         eastl::string format_proc_sysvipc_shm() const;
         
         // 调试和监控方法

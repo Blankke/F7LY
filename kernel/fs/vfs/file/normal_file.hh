@@ -10,6 +10,10 @@ namespace mem
 namespace fs
 {
 	bool normal_file_has_delayed_visibility_state(const eastl::string &path);
+	bool normal_file_peek_delayed_visibility_size(const eastl::string &path, uint64 *size);
+	int normal_file_flush_delayed_visibility_path(const eastl::string &path);
+	int normal_file_flush_all_delayed_visibility();
+	void normal_file_invalidate_delayed_visibility_path(const eastl::string &path);
 
 	class normal_file : public file
 	{
@@ -35,14 +39,17 @@ namespace fs
 
 		bool ensure_write_combine_buffer_locked();
 		bool ensure_read_snapshot_buffer_locked();
-		uint64 logical_file_size_locked() const;
-		void refresh_ext4_file_size_locked();
-		void reset_write_combine_locked();
+			uint64 logical_file_size_locked() const;
+			void refresh_ext4_file_size_locked();
+			void refresh_append_target_size_locked();
+			bool has_multiple_links_locked() const;
+			void reset_write_combine_locked();
 		void mark_write_combine_dirty_locked();
 		void invalidate_read_snapshot_locked();
 		void release_clean_write_combine_buffer_locked();
 		bool can_use_read_snapshot_locked(long off) const;
 		bool populate_read_snapshot_locked();
+		bool populate_read_snapshot_from_delayed_cache_locked();
 		bool can_cache_small_write_locked(long off, size_t len) const;
 		int prepare_small_write_cache_locked(long off, size_t len);
 		int flush_write_combine_locked(bool preserve_offset = true);

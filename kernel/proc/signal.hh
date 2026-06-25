@@ -265,8 +265,10 @@ namespace proc
             void add_signal(proc::Pcb *p, int sig, const LinuxSigInfo *info = nullptr);
             void do_handle(proc::Pcb *p, int signum, sigaction *act);
             void sig_return();
+            bool has_signal_pending(Pcb *p, int sig);
             bool has_fatal_signal_pending(Pcb *p);
             bool has_unmasked_signal_pending(Pcb *p);
+            bool should_interrupt_blocking_syscall(Pcb *p);
 
             // tool
             bool is_valid(int sig);

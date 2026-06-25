@@ -66,12 +66,14 @@ namespace proc
         fs::file *_ofile_ptr[fd_table_capacity]; // 进程打开的文件列表 (文件描述符 -> 文件结构)
         bool _reserved[fd_table_capacity];       // 预留槽位，避免并发 open 在文件真正创建前重复抢同一个 fd
         int _shared_ref_cnt;
+        uint _highest_fd_plus_one; // 当前 fd 表需要扫描的上界，避免高频路径固定扫完整容量
         bool _fl_cloexec[fd_table_capacity]; // 记录每个文件描述符的 close-on-exec 标志
 
         void init(const char *lock_name)
         {
             _lock.init(lock_name);
             _shared_ref_cnt = 1;
+            _highest_fd_plus_one = 0;
             memset(_ofile_ptr, 0, sizeof(_ofile_ptr));
             memset(_reserved, 0, sizeof(_reserved));
             memset(_fl_cloexec, 0, sizeof(_fl_cloexec));
