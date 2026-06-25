@@ -32,11 +32,6 @@ _entry:
 
 === 2.1.2 start.cc
 
-// 正文待补：satp = 0 关 MMU；stvec = trap_loop 兜底；tp = hartid；
-// 调用 main(hartid, dtb_entry)；
-// 变化：sie 早期初始化注释掉，统一交给 trap_mgr.inithart()；
-// dtb_entry 被 PMM 用于安全上限截断；
-// 控制台输入改为全走 SBI。
 关键寄存器处理：
 - `a0`：存储硬件线程编号`hartid`。
 - `a1`：设备树地址信息dtb_entry  。
@@ -105,37 +100,71 @@ proc::k_scheduler.start_schedule();
 
 === 2.2.1 入口：entry.S
 
-// 正文待补：QEMU/EDK2 固件将 DTB 物理地址放在 $a1，跳转 _entry；
-// move $s0, $a1 保存 DTB 地址；
-// 设置 DMWIN0/DMWIN1；
-// CSR 初始化：CRMD、PRMD、EUEN；
-// 栈分配：sp = boot_stack + 4096 × (CPUID + 1)；
-// hartid 从 CSR_CPUID 动态读取；
-// tp = CPUID；bl main 直接跳转（LA 没有 start() 薄层）。
+LoongArch 将 `start.cc` 阶段合并到 `entry.S` 中，在其中完成设置设备操作空间（DMWIN0）、设置指令数据访问空间（DMWIN1），CSR 寄存器的初始化，以及栈空间的设定，并开启 FPU 浮点数指令。保存 `$a1` 传入的 DTB地址，hartid 使用 CSR_CPUID 动态读取。完成设置后直接 `bl main`。
 
-=== 2.2.2 main() 四阶段（仅标注 LA 与 RISC-V 的差异）
+```cpp
+        # entry只对每个CPU设定自己的栈空间，然后跳转到main函数
 
-// 正文待补：仅列出与 RISC-V 的差异点。
+        li.d        $t0, 0x8000000000000001
+        csrwr       $t0, LOONGARCH_CSR_DMWIN0   # 设置设备操作空间
+        li.d        $t0, (0x9000000000000001 | 1 << 4)
+        csrwr       $t0, LOONGARCH_CSR_DMWIN1   # 设置指令数据访问空间
+        csrwr       $t0, LOONGARCH_CSR_TLBRENTRY   # 关闭TLB，其他两个窗口不用管
 
-==== 阶段一差异
+        li.w	    $t0, 0xb0		      # PLV=0, IE=0, PG=1
+	csrwr	    $t0, LOONGARCH_CSR_CRMD
+        li.w        $t0, 0x00                 # PPLV=0, PIE=0, PWE=0
+        csrwr       $t0, LOONGARCH_CSR_PRMD
+        li.w        $t0, 0x01                 # FPE=1, SXE=0, ASXE=0, BTE=0
+        csrwr       $t0, LOONGARCH_CSR_EUEN
+```
 
-// 正文待补：find_dtb_and_initrd() 暴力搜索 DTB + initrd；
-// apic_init() + extioi_init() 两级中断控制器。
+=== 2.2.2 main() 四阶段
 
-==== 阶段二差异
+系统初始化同样分为四个阶段，仅以下三处与 RISC-V 不同：
 
-// 正文待补：split heap —— DTB 多段内存时，低端做 buddy，高端整段做 heap+shm。
+- 阶段一：`find_dtb_and_initrd()` 暴力搜索 DTB 与 initrd（RISC-V 由
+  OpenSBI 传入，无需搜索）；中断控制器为 `apic_init()` + `extioi_init()`
+  两级架构（RISC-V 为 PLIC 单级）。
+- 阶段二：split heap —— DTB 包含多段内存时，低端区域做 buddy，高端区
+  域整段做 heap + shm。
+- 阶段三：`virtio_probe()` 先进行 PCI 总线枚举（RISC-V 走 MMIO 不需要）。
+- 阶段四：与 RISC-V 一致。
 
-==== 阶段三差异
+```cpp
+extern "C" void main(uint64 hartid, uint64 dtb_addr)
+{
+    k_printer.init();
+    printfYellow("Hello, World!\n");
 
-// 正文待补：virtio_probe() 先做 PCI 枚举。
+    // Initialize DTB and scan Initrd if necessary
+    uint64 kernel_end_phys = ((uint64)end) & 0x0FFFFFFFFFFFFFFFUL;
+    DtbManager::find_dtb_and_initrd(dtb_addr, kernel_end_phys);
+    
+    printfMagenta("[main] Using hartid=%lu, k_dtb_addr=0x%lx\n", hartid, k_dtb_addr);
 
-==== 阶段四
+    apic_init();
+    extioi_init();
 
-// 正文待补：和 RISC-V 完全一致。
-
+    // ... 与 RISC-V 阶段一至阶段三相同的初始化 ...
+    virtio_probe();            
+    virtio_disk_init();       
+    // ...
+```
 == 2.3 双架构支持特色
+
+- *统一的抽象层*：通过HAL(硬件抽象层)实现跨架构代码复用。
+- *架构特定优化*：针对不同架构的特性进行专门优化。
+- *模块化设计*：核心模块与架构相关代码分离，便于维护和扩展。
+- *现代化实现*：采用C++面向对象设计，提供类型安全和更好的代码组织。
 
 === 2.3.1 启动完成标志
 
-// 正文待补：双架构启动完成标志的设计与实现。
+```cpp
+╦ ╦╔═╗╦  ╔═╗╔═╗╔╦╗╔═╗
+║║║║╣ ║  ║  ║ ║║║║║╣
+╚╩╝╚═╝╩═╝╚═╝╚═╝╩ ╩╚═╝
+
+=== SYSTEM BOOT COMPLETE ===
+Kernel space successfully initialized
+```
