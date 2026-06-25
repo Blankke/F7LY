@@ -1240,26 +1240,52 @@ namespace syscall
 
         void mark_open_files_unlinked_from_dir(const eastl::string &path)
         {
+            auto mark_file_if_matches = [&](fs::file *candidate)
+            {
+                if (candidate != nullptr &&
+                    normalize_watch_path(candidate->backing_path()) == path)
+                {
+                    candidate->_unlinked_from_dir = true;
+                }
+            };
+
             for (uint i = 0; i < proc::num_process; ++i)
             {
                 proc::Pcb *pcb = &proc::k_proc_pool[i];
-                if (pcb->_state == proc::ProcState::UNUSED || pcb->_ofile == nullptr)
+                if (pcb->_state == proc::ProcState::UNUSED)
                 {
                     continue;
                 }
 
-                // close/dup 会在同一把锁下替换 fd 槽位；遍历期间固定槽位中的 file 指针。
-                pcb->_ofile->_lock.acquire();
-                for (uint fd = 0; fd < proc::max_open_files; ++fd)
+                if (pcb->_ofile != nullptr)
                 {
-                    fs::file *candidate = pcb->_ofile->_ofile_ptr[fd];
-                    if (candidate != nullptr &&
-                        normalize_watch_path(candidate->backing_path()) == path)
+                    // close/dup 会在同一把锁下替换 fd 槽位；遍历期间固定槽位中的 file 指针。
+                    pcb->_ofile->_lock.acquire();
+                    uint fd_scan_limit = pcb->_ofile->_highest_fd_plus_one;
+                    for (uint fd = 0; fd < fd_scan_limit; ++fd)
                     {
-                        candidate->_unlinked_from_dir = true;
+                        mark_file_if_matches(pcb->_ofile->_ofile_ptr[fd]);
                     }
+                    pcb->_ofile->_lock.release();
                 }
-                pcb->_ofile->_lock.release();
+
+                proc::ProcessMemoryManager *mm = pcb->get_memory_manager();
+                if (mm == nullptr)
+                {
+                    continue;
+                }
+
+                mm->lock_memory();
+                mm->for_each_vma([&](proc::vma &vm) -> bool
+                {
+                    mark_file_if_matches(vm.vfile);
+                    if (vm.object != nullptr)
+                    {
+                        mark_file_if_matches(vm.object->backing_file());
+                    }
+                    return true;
+                });
+                mm->unlock_memory();
             }
         }
 
@@ -1284,6 +1310,16 @@ namespace syscall
             return vfs_path_stat(path.c_str(), &st, false) == 0 ? st.ino : 0;
         }
 
+        eastl::string fanotify_visible_path_for_file(const fs::file *source,
+                                                     const eastl::string &fallback)
+        {
+            const eastl::string &path =
+                (source != nullptr && !source->_path_name.empty())
+                    ? source->_path_name
+                    : fallback;
+            return normalize_watch_path(path);
+        }
+
         size_t align_fanotify_record(size_t len)
         {
             return (len + 7) & ~static_cast<size_t>(7);
@@ -1292,6 +1328,27 @@ namespace syscall
         eastl::vector<fs::file *> g_fanotify_files;
         eastl::vector<fs::file *> g_inotify_files;
         SpinLock g_notify_registry_lock;
+
+        bool notify_registry_has_entries(eastl::vector<fs::file *> &registry)
+        {
+            bool has_entries = false;
+            g_notify_registry_lock.acquire();
+            for (fs::file *file : registry)
+            {
+                if (file != nullptr && file->refcnt > 0)
+                {
+                    has_entries = true;
+                    break;
+                }
+            }
+            g_notify_registry_lock.release();
+            return has_entries;
+        }
+
+        bool has_fanotify_watchers()
+        {
+            return notify_registry_has_entries(g_fanotify_files);
+        }
 
         void register_notify_file_locked(eastl::vector<fs::file *> &registry, fs::file *file)
         {
@@ -2379,6 +2436,22 @@ namespace syscall
                 return -EINVAL;
             }
 
+            bool has_mark_mask(uint32 mask)
+            {
+                bool matched = false;
+                _state_lock.acquire();
+                for (const InotifyMark &mark : _marks)
+                {
+                    if ((mark.mask & mask) != 0)
+                    {
+                        matched = true;
+                        break;
+                    }
+                }
+                _state_lock.release();
+                return matched;
+            }
+
             void queue_path_event(const eastl::string &raw_path,
                                   uint32 event_mask,
                                   bool is_dir,
@@ -2569,13 +2642,41 @@ namespace syscall
             }
         };
 
+        bool any_inotify_mark_uses(uint32 mask)
+        {
+            if (mask == 0 || !notify_registry_has_entries(g_inotify_files))
+            {
+                return false;
+            }
+
+            bool matched = false;
+            eastl::vector<fs::file *> pinned = pin_notify_files(g_inotify_files);
+            for (fs::file *candidate : pinned)
+            {
+                if (!matched && candidate != nullptr && candidate->is_inotify_file())
+                {
+                    matched = static_cast<InotifyFile *>(candidate)->has_mark_mask(mask);
+                }
+                if (candidate != nullptr)
+                {
+                    candidate->free_file();
+                }
+            }
+            return matched;
+        }
+
         void notify_fanotify_event(const fs::file *source, const eastl::string &path, uint64 event_mask, bool is_dir)
         {
+            if (!has_fanotify_watchers())
+            {
+                return;
+            }
             if (source != nullptr && source->_suppress_fanotify)
             {
                 return;
             }
-            if (path.empty())
+            eastl::string event_path = fanotify_visible_path_for_file(source, path);
+            if (event_path.empty())
             {
                 return;
             }
@@ -2585,7 +2686,7 @@ namespace syscall
             {
                 if (candidate != nullptr && candidate->is_fanotify_file())
                 {
-                    static_cast<FanotifyFile *>(candidate)->queue_event_for_path(path, event_mask, is_dir);
+                    static_cast<FanotifyFile *>(candidate)->queue_event_for_path(event_path, event_mask, is_dir);
                 }
                 candidate->free_file();
             }
@@ -2598,6 +2699,10 @@ namespace syscall
                                              uint64 directory_ino,
                                              uint64 subject_ino)
         {
+            if (!has_fanotify_watchers())
+            {
+                return;
+            }
             if (directory_path.empty() || subject_path.empty())
             {
                 return;
@@ -2627,6 +2732,10 @@ namespace syscall
                                         bool is_dir,
                                         uint64 ino)
         {
+            if (!has_fanotify_watchers())
+            {
+                return;
+            }
             if (path.empty())
             {
                 return;
@@ -2651,6 +2760,10 @@ namespace syscall
                                     uint64 old_parent_ino,
                                     uint64 new_parent_ino)
         {
+            if (!has_fanotify_watchers())
+            {
+                return;
+            }
             if (old_path.empty() || new_path.empty())
             {
                 return;
@@ -2686,7 +2799,8 @@ namespace syscall
                 }
 
                 pcb->_ofile->_lock.acquire();
-                for (uint fd = 0; fd < proc::max_open_files; ++fd)
+                uint fd_scan_limit = pcb->_ofile->_highest_fd_plus_one;
+                for (uint fd = 0; fd < fd_scan_limit; ++fd)
                 {
                     fs::file *candidate = pcb->_ofile->_ofile_ptr[fd];
                     if (candidate == nullptr ||
@@ -2722,6 +2836,10 @@ namespace syscall
                                        InotifyMatchMode mode = InotifyMatchMode::ExactAndParent,
                                        bool source_unlinked = false)
         {
+            if (!any_inotify_mark_uses(event_mask & kInAllEvents))
+            {
+                return;
+            }
             if (path.empty())
             {
                 return;
@@ -2746,6 +2864,10 @@ namespace syscall
 
         void notify_inotify_delete_self(const eastl::string &path, bool is_dir)
         {
+            if (!any_inotify_mark_uses(kInDeleteSelf))
+            {
+                return;
+            }
             if (path.empty())
             {
                 return;
@@ -2781,6 +2903,10 @@ namespace syscall
                                    bool is_dir,
                                    uint32 cookie)
         {
+            if (!any_inotify_mark_uses(kInMovedFrom | kInMovedTo | kInMoveSelf))
+            {
+                return;
+            }
             if (old_path.empty() || new_path.empty())
             {
                 return;
@@ -4182,6 +4308,16 @@ namespace syscall
             {
                 p->_ofile->_ofile_ptr[fd] = nullptr;
                 p->_ofile->_fl_cloexec[fd] = false;
+                while (p->_ofile->_highest_fd_plus_one > 0)
+                {
+                    uint top_fd = p->_ofile->_highest_fd_plus_one - 1;
+                    if (p->_ofile->_ofile_ptr[top_fd] != nullptr ||
+                        p->_ofile->_reserved[top_fd])
+                    {
+                        break;
+                    }
+                    p->_ofile->_highest_fd_plus_one--;
+                }
             }
             return SYS_EBADF;
         }
@@ -5192,7 +5328,8 @@ namespace syscall
             }
         }
 
-        bool existed_before_open = fs::k_vfs.is_file_exist(abs_pathname.c_str()) == 1;
+        bool creating_path = (flags & O_CREAT) != 0;
+        bool existed_before_open = creating_path ? fs::k_vfs.is_file_exist(abs_pathname.c_str()) == 1 : true;
 
         // 不知道什么套娃设计，这个b函数套了两层
         int opened_fd = proc::k_pm.open(dir_fd, abs_pathname, flags, mode);
@@ -5201,10 +5338,10 @@ namespace syscall
             fs::file *opened_file = p->get_open_file(opened_fd);
             if (opened_file != nullptr)
             {
-                const eastl::string &event_path = opened_file->backing_path().empty()
-                                                      ? abs_pathname
-                                                      : opened_file->backing_path();
-                if ((flags & O_CREAT) != 0 && !existed_before_open)
+                const eastl::string event_path =
+                    fanotify_visible_path_for_file(opened_file, abs_pathname);
+                bool fanotify_watchers = has_fanotify_watchers();
+                if (fanotify_watchers && creating_path && !existed_before_open)
                 {
                     const eastl::string parent_path = parent_path_of(event_path);
                     notify_fanotify_directory_event(
@@ -5215,11 +5352,14 @@ namespace syscall
                         fanotify_path_ino(parent_path),
                         fanotify_path_ino(event_path));
                 }
-                notify_fanotify_event(opened_file,
-                                      event_path,
-                                      kFanOpen,
-                                      opened_file->_attrs.filetype == fs::FileTypes::FT_DIRECT);
-                if ((flags & O_CREAT) != 0 && !existed_before_open)
+                if (fanotify_watchers)
+                {
+                    notify_fanotify_event(opened_file,
+                                          event_path,
+                                          kFanOpen,
+                                          opened_file->_attrs.filetype == fs::FileTypes::FT_DIRECT);
+                }
+                if (creating_path && !existed_before_open)
                 {
                     notify_inotify_path_event(event_path,
                                               kInCreate,
@@ -5376,9 +5516,12 @@ namespace syscall
             abs_path = normalize_watch_path(abs_path);
         }
 
+        bool fanotify_watchers = has_fanotify_watchers();
         bool is_dir = (flags & AT_REMOVEDIR) != 0;
         fs::Kstat removed_stat{};
-        if (!abs_path.empty() && vfs_path_stat(abs_path.c_str(), &removed_stat, true) == 0)
+        if (fanotify_watchers &&
+            !abs_path.empty() &&
+            vfs_path_stat(abs_path.c_str(), &removed_stat, true) == 0)
         {
             is_dir = (removed_stat.mode & S_IFMT) == S_IFDIR;
         }
@@ -5393,18 +5536,24 @@ namespace syscall
         int res = proc::k_pm.unlink(fd, path, flags);
         if (res == 0 && !abs_path.empty())
         {
-            const eastl::string parent_path = parent_path_of(abs_path);
-            notify_fanotify_directory_event(parent_path,
-                                             abs_path,
-                                             kFanDelete,
-                                             is_dir,
-                                             fanotify_path_ino(parent_path),
-                                             removed_stat.ino);
-            notify_fanotify_self_event(abs_path,
-                                       kFanDeleteSelf,
-                                       is_dir,
-                                       removed_stat.ino);
-            mark_open_files_unlinked_from_dir(abs_path);
+            if (fanotify_watchers)
+            {
+                const eastl::string parent_path = parent_path_of(abs_path);
+                notify_fanotify_directory_event(parent_path,
+                                                abs_path,
+                                                kFanDelete,
+                                                is_dir,
+                                                fanotify_path_ino(parent_path),
+                                                removed_stat.ino);
+                notify_fanotify_self_event(abs_path,
+                                           kFanDeleteSelf,
+                                           is_dir,
+                                           removed_stat.ino);
+            }
+            if (any_inotify_mark_uses(kInExclUnlink))
+            {
+                mark_open_files_unlinked_from_dir(abs_path);
+            }
             notify_inotify_path_event(abs_path,
                                       kInDelete,
                                       is_dir,
@@ -5903,7 +6052,7 @@ namespace syscall
         event_path = normalize_watch_path(event_path);
 
         int res = proc::k_pm.mkdir(dir_fd, path, mode);
-        if (res == 0)
+        if (res == 0 && has_fanotify_watchers())
         {
             const eastl::string parent_path = parent_path_of(event_path);
             notify_fanotify_directory_event(parent_path,
@@ -5929,7 +6078,8 @@ namespace syscall
         bool suppress_fanotify = true;
         if (closing_file != nullptr)
         {
-            event_path = closing_file->backing_path();
+            event_path = fanotify_visible_path_for_file(closing_file,
+                                                        closing_file->backing_path());
             is_dir = closing_file->_attrs.filetype == fs::FileTypes::FT_DIRECT;
             was_write_open = fs::FileDescriptorAccess::access_mode_has_write(closing_file->lwext4_file_struct.flags);
             suppress_fanotify = closing_file->_suppress_fanotify;
@@ -5975,7 +6125,7 @@ namespace syscall
         event_path = normalize_watch_path(event_path);
 
         int result = proc::k_pm.mknod(AT_FDCWD, pathname, mode, dev);
-        if (result == 0)
+        if (result == 0 && has_fanotify_watchers())
         {
             const eastl::string parent_path = parent_path_of(event_path);
             bool is_dir = (mode & S_IFMT) == S_IFDIR;
@@ -9744,7 +9894,8 @@ namespace syscall
             if (dir_file->_attrs.filetype != fs::FileTypes::FT_NORMAL &&
                 dir_file->_attrs.filetype != fs::FileTypes::FT_DIRECT)
                 return -EINVAL;
-            abs_path = dir_file->backing_path();
+            abs_path = fanotify_visible_path_for_file(dir_file,
+                                                      dir_file->backing_path());
         }
         else if (pathname.empty())
         {
@@ -10141,34 +10292,20 @@ namespace syscall
             return SYS_EINVAL;
 
         printfYellow("file fd: %d, op: %d\n", fd, op);
-        auto normalize_record_lock = [](fs::file *file, struct flock &lock) -> int
-        {
-            if (lock.l_type != F_RDLCK && lock.l_type != F_WRLCK && lock.l_type != F_UNLCK)
-                return SYS_EINVAL;
+	        auto normalize_record_lock = [](fs::file *file, struct flock &lock) -> int
+	        {
+	            if (lock.l_type != F_RDLCK && lock.l_type != F_WRLCK && lock.l_type != F_UNLCK)
+	                return SYS_EINVAL;
             if (lock.l_whence != SEEK_SET && lock.l_whence != SEEK_CUR && lock.l_whence != SEEK_END)
                 return SYS_EINVAL;
 
-            off_t base = 0;
-            if (lock.l_whence == SEEK_CUR)
-            {
-                base = file->get_file_offset();
-                if (lock.l_start < 0 &&
-                    (file->_attrs.filetype == fs::FT_NORMAL || file->_attrs.filetype == fs::FT_DIRECT) &&
-                    file->lwext4_file_struct.mp != nullptr)
-                {
-                    off_t ext4_pos = static_cast<off_t>(file->lwext4_file_struct.fpos);
-                    // SEEK_CUR + 负起点依赖当前文件位置；少数路径里内核缓存游标
-                    // 可能暂时仍停在写后的 EOF。
-                    // 这里只对“SEEK_CUR + 负起点”的 regular file 做保守修正，
-                    // 若底层真实 fpos 更小，就用它来避免把锁区间错误推到文件尾。
-                    if (ext4_pos >= 0 && ext4_pos < base)
-                    {
-                        base = ext4_pos;
-                    }
-                }
-            }
-            else if (lock.l_whence == SEEK_END)
-                base = static_cast<off_t>(file->memfd_size());
+	            off_t base = 0;
+	            if (lock.l_whence == SEEK_CUR)
+	            {
+	                base = file->get_file_offset();
+	            }
+	            else if (lock.l_whence == SEEK_END)
+	                base = static_cast<off_t>(file->memfd_size());
 
             lock.l_start += base;
             if (lock.l_len < 0)
@@ -10180,10 +10317,25 @@ namespace syscall
                 return SYS_EINVAL;
 
             // 内部锁表统一使用 SEEK_SET 绝对区间，返回给用户时再按语义决定是否保留原字段。
-            lock.l_whence = SEEK_SET;
-            return 0;
-        };
-        switch (op)
+	            lock.l_whence = SEEK_SET;
+	            return 0;
+	        };
+	        auto flush_record_lock_visibility = [](fs::file *file) -> int
+	        {
+	            if (file == nullptr)
+	                return SYS_EBADF;
+	            int flush_ret = file->flush_visibility_state();
+	            if (flush_ret < 0)
+	                return flush_ret;
+		            int delayed_ret = fs::normal_file_flush_delayed_visibility_path(file->backing_path());
+		            if (delayed_ret < 0)
+		                return delayed_ret;
+		            flush_ret = file->flush_visibility_state();
+		            if (flush_ret < 0)
+		                return flush_ret;
+		            return 0;
+		        };
+	        switch (op)
         {
             //   Duplicating a file descriptor (已支持)
         case F_DUPFD:
@@ -10199,6 +10351,11 @@ namespace syscall
                 {
                     p->_ofile->_ofile_ptr[i] = f;
                     p->_ofile->_fl_cloexec[i] = false; // 新的文件描述符默认不设置 CLOEXEC
+                    uint next_fd = static_cast<uint>(i) + 1;
+                    if (next_fd > p->_ofile->_highest_fd_plus_one)
+                    {
+                        p->_ofile->_highest_fd_plus_one = next_fd;
+                    }
                     f->refcnt++;
                     retfd = i;
                     printf("[SyscallHandler::sys_fcntl] Duplicating file descriptor %d to %d\n", fd, retfd);
@@ -10223,6 +10380,11 @@ namespace syscall
                 {
                     p->_ofile->_ofile_ptr[i] = f;
                     p->_ofile->_fl_cloexec[i] = true; // 设置 CLOEXEC 标志
+                    uint next_fd = static_cast<uint>(i) + 1;
+                    if (next_fd > p->_ofile->_highest_fd_plus_one)
+                    {
+                        p->_ofile->_highest_fd_plus_one = next_fd;
+                    }
                     f->refcnt++;
                     retfd = i;
                     break;
@@ -10328,17 +10490,14 @@ namespace syscall
             if (mem::k_vmm.copy_in(*p->get_pagetable(), &lock, arg, sizeof(lock)) < 0)
                 return SYS_EFAULT;
             int norm_ret = normalize_record_lock(f, lock);
-            if (norm_ret < 0)
-                return norm_ret;
-            if (lock.l_type == F_UNLCK)
-            {
-                int flush_ret = f->flush_visibility_state();
-                if (flush_ret < 0)
-                    return flush_ret;
-            }
-            lock.l_pid = p->get_pid();
-            return fs::apply_posix_record_lock(f, p->get_pid(), lock, nullptr);
-        }
+	            if (norm_ret < 0)
+	                return norm_ret;
+	            int flush_ret = flush_record_lock_visibility(f);
+	            if (flush_ret < 0)
+	                return flush_ret;
+	            lock.l_pid = p->get_pid();
+	            return fs::apply_posix_record_lock(f, p->get_pid(), lock, nullptr);
+	        }
 
 	        case F_SETLKW:
 	        {
@@ -10347,16 +10506,13 @@ namespace syscall
 	            struct flock lock;
             if (mem::k_vmm.copy_in(*p->get_pagetable(), &lock, arg, sizeof(lock)) < 0)
                 return SYS_EFAULT;
-	            int norm_ret = normalize_record_lock(f, lock);
-	            if (norm_ret < 0)
-	                return norm_ret;
-	            if (lock.l_type == F_UNLCK)
-	            {
-	                int flush_ret = f->flush_visibility_state();
-	                if (flush_ret < 0)
-	                    return flush_ret;
-	            }
-	            lock.l_pid = p->get_pid();
+		            int norm_ret = normalize_record_lock(f, lock);
+		            if (norm_ret < 0)
+		                return norm_ret;
+		            int flush_ret = flush_record_lock_visibility(f);
+		            if (flush_ret < 0)
+		                return flush_ret;
+		            lock.l_pid = p->get_pid();
 	            // POSIX 记录锁需要基本等待图死锁检测；否则两个进程互等时会无限等待。
 	            // 这里在内核锁表里显式记录“谁在等谁”，形成环时返回 EDEADLK。
 	            for (;;)
@@ -10414,17 +10570,14 @@ namespace syscall
 	            struct flock lock;
 	            if (mem::k_vmm.copy_in(*p->get_pagetable(), &lock, arg, sizeof(lock)) < 0)
 	                return SYS_EFAULT;
-	            int norm_ret = normalize_record_lock(f, lock);
-	            if (norm_ret < 0)
-	                return norm_ret;
-	            if (lock.l_type == F_UNLCK)
-	            {
-	                int flush_ret = f->flush_visibility_state();
-	                if (flush_ret < 0)
-	                    return flush_ret;
-	            }
-	            lock.l_pid = 0;
-	            return fs::apply_ofd_record_lock(f, lock);
+		            int norm_ret = normalize_record_lock(f, lock);
+		            if (norm_ret < 0)
+		                return norm_ret;
+		            int flush_ret = flush_record_lock_visibility(f);
+		            if (flush_ret < 0)
+		                return flush_ret;
+		            lock.l_pid = 0;
+		            return fs::apply_ofd_record_lock(f, lock);
 	        }
 
 	        case F_OFD_SETLKW:
@@ -10434,16 +10587,13 @@ namespace syscall
 	            struct flock lock;
 	            if (mem::k_vmm.copy_in(*p->get_pagetable(), &lock, arg, sizeof(lock)) < 0)
 	                return SYS_EFAULT;
-	            int norm_ret = normalize_record_lock(f, lock);
-	            if (norm_ret < 0)
-	                return norm_ret;
-	            if (lock.l_type == F_UNLCK)
-	            {
-	                int flush_ret = f->flush_visibility_state();
-	                if (flush_ret < 0)
-	                    return flush_ret;
-	            }
-	            lock.l_pid = 0;
+		            int norm_ret = normalize_record_lock(f, lock);
+		            if (norm_ret < 0)
+		                return norm_ret;
+		            int flush_ret = flush_record_lock_visibility(f);
+		            if (flush_ret < 0)
+		                return flush_ret;
+		            lock.l_pid = 0;
 	            for (;;)
 	            {
 	                int lock_ret = fs::apply_ofd_record_lock(f, lock);
@@ -10642,12 +10792,13 @@ namespace syscall
                 return SYS_EINVAL;
             }
 
-	            if (lease_type == F_UNLCK)
-	            {
-	                f->_lease_type = F_UNLCK;
-	                f->_lease_owner_pid = 0;
-	                return 0;
-	            }
+		            if (lease_type == F_UNLCK)
+		            {
+		                proc::note_file_lease_change(f->_lease_type, F_UNLCK);
+		                f->_lease_type = F_UNLCK;
+		                f->_lease_owner_pid = 0;
+		                return 0;
+		            }
 
             fs::OpenDescriptionStats lease_stats = fs::FileDescriptorAccess::collect_open_description_stats(path, f);
             if (lease_stats.has_other_lease_owner)
@@ -10676,10 +10827,11 @@ namespace syscall
                 return SYS_EAGAIN;
             }
 
-	            f->_lease_type = static_cast<short>(lease_type);
-	            f->_lease_owner_pid = p->get_pid();
-	            return 0;
-	        }
+		            proc::note_file_lease_change(f->_lease_type, static_cast<short>(lease_type));
+		            f->_lease_type = static_cast<short>(lease_type);
+		            f->_lease_owner_pid = p->get_pid();
+		            return 0;
+		        }
 
         case F_GETLEASE:
             return f->_lease_type;
@@ -11746,6 +11898,38 @@ namespace syscall
             return resolve_ret;
         }
 
+        if (fs::k_vfs.is_filepath_virtual(absolute_path))
+        {
+            fs::file *vf = nullptr;
+            int open_ret = fs::k_vfs.openat(absolute_path, vf, O_RDONLY, 0);
+            if (open_ret < 0)
+            {
+                return open_ret;
+            }
+            if (vf == nullptr)
+            {
+                return -ENOENT;
+            }
+
+            fs::Kstat vst{};
+            int stat_ret = fs::k_vfs.fstat(vf, &vst);
+            vf->free_file();
+            if (stat_ret < 0)
+            {
+                return stat_ret;
+            }
+
+            // 虚拟文件没有 ext4 inode 可写时间戳；对已存在的伪文件接受 utimensat
+            // 作为 no-op，匹配 proc/sysfs 一类节点“可访问但时间戳不持久”的语义。
+            int constraint_ret = check_utimens_constraints(
+                cur_proc,
+                vst,
+                0,
+                false,
+                times);
+            return constraint_ret < 0 ? constraint_ret : 0;
+        }
+
         fs::Kstat st{};
         const bool follow_symlinks = (flags & AT_SYMLINK_NOFOLLOW) == 0;
         int stat_ret = vfs_path_stat(absolute_path.c_str(), &st, follow_symlinks);
@@ -11823,20 +12007,31 @@ namespace syscall
         {
             moved_is_dir = (moved_stat.mode & S_IFMT) == S_IFDIR;
         }
-        const eastl::string old_parent = parent_path_of(old_abs_path);
-        const eastl::string new_parent = parent_path_of(new_abs_path);
-        const uint64 old_parent_ino = fanotify_path_ino(old_parent);
-        const uint64 new_parent_ino = fanotify_path_ino(new_parent);
+        bool fanotify_watchers = has_fanotify_watchers();
+        eastl::string old_parent;
+        eastl::string new_parent;
+        uint64 old_parent_ino = 0;
+        uint64 new_parent_ino = 0;
+        if (fanotify_watchers)
+        {
+            old_parent = parent_path_of(old_abs_path);
+            new_parent = parent_path_of(new_abs_path);
+            old_parent_ino = fanotify_path_ino(old_parent);
+            new_parent_ino = fanotify_path_ino(new_parent);
+        }
         ret = vfs_frename(old_abs_path.c_str(), new_abs_path.c_str());
         if (ret < 0)
             return ret;
 
-        notify_fanotify_rename(old_abs_path,
-                               new_abs_path,
-                               moved_is_dir,
-                               moved_stat.ino,
-                               old_parent_ino,
-                               new_parent_ino);
+        if (fanotify_watchers)
+        {
+            notify_fanotify_rename(old_abs_path,
+                                   new_abs_path,
+                                   moved_is_dir,
+                                   moved_stat.ino,
+                                   old_parent_ino,
+                                   new_parent_ino);
+        }
         update_open_file_paths_after_rename(old_abs_path, new_abs_path);
         uint32 cookie = next_inotify_cookie();
         notify_inotify_rename(old_abs_path, new_abs_path, moved_is_dir, cookie);
@@ -14884,6 +15079,72 @@ namespace syscall
             }
         }
 
+        if (vm != nullptr && end_addr > vm->end_addr())
+        {
+            proc::vma *span_vmas[16] = {};
+            int old_span_prots[16] = {};
+            int span_count = 0;
+            bool can_update_whole_vmas = true;
+            uint64 cursor = addr;
+            while (cursor < end_addr)
+            {
+                proc::vma *seg = mm->find_vma_covering(cursor);
+                if (seg == nullptr || cursor != seg->addr || span_count >= 16)
+                {
+                    can_update_whole_vmas = false;
+                    break;
+                }
+                uint64 seg_end = seg->end_addr();
+                if (seg_end > end_addr && seg_end != end_addr)
+                {
+                    can_update_whole_vmas = false;
+                    break;
+                }
+                if (seg->vfile != nullptr && seg->vfd != -1 &&
+                    !(seg->prot & PROT_WRITE) && (prot & PROT_WRITE))
+                {
+                    if (seg->vfile->is_memfd())
+                    {
+                        fs::file *file = proc::k_pm.get_cur_pcb()->get_open_file(seg->vfd);
+                        if (file && (file->memfd_seals() & F_SEAL_WRITE))
+                        {
+                            return syscall::SYS_EPERM;
+                        }
+                    }
+                    else if (!seg->vfile->_attrs.u_write)
+                    {
+                        return syscall::SYS_EACCES;
+                    }
+                }
+                span_vmas[span_count] = seg;
+                old_span_prots[span_count] = seg->prot;
+                ++span_count;
+                cursor = seg_end;
+            }
+
+            if (can_update_whole_vmas && cursor == end_addr && span_count > 0)
+            {
+                for (int i = 0; i < span_count; ++i)
+                {
+                    span_vmas[i]->prot = prot;
+                }
+                if (mem::k_vmm.protectpages(*pcb->get_pagetable(), addr, aligned_len, prot, true) < 0)
+                {
+                    for (int i = 0; i < span_count; ++i)
+                    {
+                        span_vmas[i]->prot = old_span_prots[i];
+                    }
+                    return syscall::SYS_EFAULT;
+                }
+#ifdef RISCV
+                sfence_vma();
+#elif defined(LOONGARCH)
+                asm volatile("invtlb 0x0,$zero,$zero");
+#endif
+                return 0;
+            }
+        }
+
         if (vm == nullptr || end_addr > vm->end_addr())
         {
             // 地址不在任何VMA中，直接调用protectpages修改页表权限
@@ -16448,7 +16709,7 @@ namespace syscall
 
         // 调用进程管理器的 mknod 函数
         int result = proc::k_pm.mknod(dirfd, pathname, mode, dev);
-        if (result == 0)
+        if (result == 0 && has_fanotify_watchers())
         {
             const eastl::string parent_path = parent_path_of(event_path);
             bool is_dir = (mode & S_IFMT) == S_IFDIR;
@@ -18937,7 +19198,9 @@ namespace syscall
             new_table->init("close_range_ofile");
 
             old_table->_lock.acquire();
-            for (uint fd = 0; fd < proc::max_open_files; ++fd)
+            uint fd_scan_limit = old_table->_highest_fd_plus_one;
+            new_table->_highest_fd_plus_one = fd_scan_limit;
+            for (uint fd = 0; fd < fd_scan_limit; ++fd)
             {
                 fs::file *file_obj = old_table->_ofile_ptr[fd];
                 if (file_obj != nullptr)
@@ -19361,11 +19624,6 @@ namespace syscall
         {
             return SYS_EINVAL;
         }
-        if (fd_in_is_pipe && static_cast<const fs::pipe_file *>(f_in)->allows_read_end() &&
-            !fd_out_is_pipe && (f_out->is_virtual || f_out->_attrs.filetype == fs::FileTypes::FT_DEVICE))
-        {
-            return SYS_EINVAL;
-        }
         if (fd_out_is_pipe && f_in->_attrs.filetype == fs::FileTypes::FT_SOCKET)
         {
             auto *socket_in = static_cast<fs::socket_file *>(f_in);
@@ -19377,6 +19635,23 @@ namespace syscall
         if (!fs::FileDescriptorAccess::allows_read(f_in) || !fs::FileDescriptorAccess::allows_write(f_out))
         {
             return SYS_EBADF;
+        }
+        auto is_anon_inode_fd = [](fs::file *target) -> bool
+        {
+            const eastl::string &name = target->_path_name.empty()
+                                            ? target->backing_path()
+                                            : target->_path_name;
+            return name.find("anon_inode:") == 0;
+        };
+        /*
+         * eventfd/signalfd/timerfd/pidfd/epoll 等匿名内核 fd 没有 splice 语义。
+         * 如果这里先去读一个空 pipe，就会在返回 EINVAL/EBADF 前阻塞，splice07 会卡死。
+         * 普通文件、memfd、/dev/null、/dev/zero 和 /proc/sys 子树仍沿用下面的读写路径。
+         */
+        if ((fd_in_is_pipe && !fd_out_is_pipe && is_anon_inode_fd(f_out)) ||
+            (!fd_in_is_pipe && fd_out_is_pipe && is_anon_inode_fd(f_in)))
+        {
+            return SYS_EINVAL;
         }
         if (!fd_out_is_pipe && (f_out->lwext4_file_struct.flags & O_APPEND))
         {

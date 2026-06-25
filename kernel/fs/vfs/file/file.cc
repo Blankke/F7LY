@@ -66,6 +66,7 @@ namespace fs
 	        {
 	            bool used = false;
 	            eastl::string path;
+	            file *identity = nullptr;
 	            int pid = 0;
 	            struct flock lock = {};
 	        };
@@ -74,6 +75,7 @@ namespace fs
 	        {
 	            bool used = false;
 	            eastl::string path;
+	            file *identity = nullptr;
 	            int waiter_pid = 0;
 	            int blocked_by_pid = 0;
 	            struct flock lock = {};
@@ -83,6 +85,7 @@ namespace fs
 	        {
 	            bool used = false;
 	            eastl::string path;
+	            file *identity = nullptr;
 	            file *owner = nullptr;
 	            struct flock lock = {};
 	        };
@@ -190,6 +193,39 @@ namespace fs
 	            return existing_start < new_end && new_start < existing_end;
 	        }
 
+	        bool record_lock_keys_match(const eastl::string &entry_path, file *entry_identity,
+	                                    const eastl::string &key_path, file *key_identity)
+	        {
+	            if (!entry_path.empty() && !key_path.empty())
+	            {
+	                return entry_path == key_path;
+	            }
+	            return entry_identity != nullptr && entry_identity == key_identity;
+	        }
+
+	        bool record_lock_matches_owner(const eastl::string &entry_path, file *entry_identity,
+	                                       file *owner)
+	        {
+	            if (owner == nullptr)
+	            {
+	                return false;
+	            }
+	            return record_lock_keys_match(entry_path, entry_identity, owner->backing_path(), owner);
+	        }
+
+	        bool record_lock_types_conflict(const struct flock &existing_lock, const struct flock &new_lock)
+	        {
+	            if (existing_lock.l_type == F_UNLCK || new_lock.l_type == F_UNLCK)
+	            {
+	                return false;
+	            }
+	            if (!posix_lock_ranges_overlap(existing_lock, new_lock))
+	            {
+	                return false;
+	            }
+	            return existing_lock.l_type == F_WRLCK || new_lock.l_type == F_WRLCK;
+	        }
+
 	        off_t record_lock_end(const struct flock &lock)
 	        {
 	            if (lock.l_len == 0)
@@ -226,6 +262,7 @@ namespace fs
 	        template <typename Entry, typename MatchFn, typename AllocFn, typename ClearFn, typename RestoreFn>
 	        void replace_same_owner_record_locks_locked(Entry *entries, int entry_count,
 	                                                    const eastl::string &path,
+	                                                    file *identity,
 	                                                    const struct flock &request,
 	                                                    MatchFn match_same_owner,
 	                                                    AllocFn alloc_slot,
@@ -239,11 +276,13 @@ namespace fs
 	            off_t request_end = record_lock_end(request);
 	            for (int i = 0; i < entry_count; ++i)
 	            {
-	                Entry &entry = entries[i];
-	                if (!entry.used || entry.path != path || !match_same_owner(entry))
-	                {
-	                    continue;
-	                }
+		                Entry &entry = entries[i];
+		                if (!entry.used ||
+		                    !record_lock_keys_match(entry.path, entry.identity, path, identity) ||
+		                    !match_same_owner(entry))
+		                {
+		                    continue;
+		                }
 	                if (!posix_lock_ranges_overlap(entry.lock, request))
 	                {
 	                    continue;
@@ -273,16 +312,18 @@ namespace fs
 	                {
 	                    continue;
 	                }
-	                slot->used = true;
-	                slot->path = path;
-	                restore_identity(*slot);
-	                slot->lock = slice;
-	            }
+		                slot->used = true;
+		                slot->path = path;
+		                slot->identity = identity;
+		                restore_identity(*slot);
+		                slot->lock = slice;
+		            }
 	        }
 
 	        template <typename Entry, typename SameOwnerFn, typename ClearFn>
 	        void merge_same_owner_record_locks_locked(Entry *entries, int entry_count,
 	                                                  const eastl::string &path,
+	                                                  file *identity,
 	                                                  SameOwnerFn same_owner,
 	                                                  ClearFn clear_entry)
 	        {
@@ -290,20 +331,23 @@ namespace fs
 	            while (changed)
 	            {
 	                changed = false;
-	                for (int i = 0; i < entry_count && !changed; ++i)
-	                {
-	                    Entry &lhs = entries[i];
-	                    if (!lhs.used || lhs.path != path)
-	                    {
-	                        continue;
-	                    }
-	                    for (int j = i + 1; j < entry_count; ++j)
-	                    {
-	                        Entry &rhs = entries[j];
-	                        if (!rhs.used || rhs.path != path || !same_owner(lhs, rhs))
-	                        {
-	                            continue;
-	                        }
+		                for (int i = 0; i < entry_count && !changed; ++i)
+		                {
+		                    Entry &lhs = entries[i];
+		                    if (!lhs.used ||
+		                        !record_lock_keys_match(lhs.path, lhs.identity, path, identity))
+		                    {
+		                        continue;
+		                    }
+		                    for (int j = i + 1; j < entry_count; ++j)
+		                    {
+		                        Entry &rhs = entries[j];
+		                        if (!rhs.used ||
+		                            !record_lock_keys_match(rhs.path, rhs.identity, path, identity) ||
+		                            !same_owner(lhs, rhs))
+		                        {
+		                            continue;
+		                        }
 	                        if (!record_lock_can_merge(lhs.lock, rhs.lock))
 	                        {
 	                            continue;
@@ -323,42 +367,41 @@ namespace fs
 	        }
 
         bool posix_lock_conflicts(const struct flock &existing_lock, int existing_pid,
-                                  const struct flock &new_lock, int new_pid)
+                                  const struct flock &new_lock, int new_pid,
+                                  bool skip_same_pid)
         {
-            if (existing_lock.l_type == F_UNLCK || new_lock.l_type == F_UNLCK)
+            if (skip_same_pid && existing_pid == new_pid)
                 return false;
-            if (existing_pid == new_pid)
-                return false;
-            if (!posix_lock_ranges_overlap(existing_lock, new_lock))
-                return false;
-
-            return existing_lock.l_type == F_WRLCK || new_lock.l_type == F_WRLCK;
+            return record_lock_types_conflict(existing_lock, new_lock);
         }
 
-	        void clear_posix_record_lock(PosixRecordLockEntry &entry)
-	        {
-	            entry.used = false;
-	            entry.path.clear();
-	            entry.pid = 0;
-	            memset(&entry.lock, 0, sizeof(entry.lock));
+		        void clear_posix_record_lock(PosixRecordLockEntry &entry)
+		        {
+		            entry.used = false;
+		            entry.path.clear();
+		            entry.identity = nullptr;
+		            entry.pid = 0;
+		            memset(&entry.lock, 0, sizeof(entry.lock));
+		        }
+
+		        void clear_posix_record_lock_wait(PosixRecordLockWaitEntry &entry)
+		        {
+		            entry.used = false;
+		            entry.path.clear();
+		            entry.identity = nullptr;
+		            entry.waiter_pid = 0;
+		            entry.blocked_by_pid = 0;
+		            memset(&entry.lock, 0, sizeof(entry.lock));
 	        }
 
-	        void clear_posix_record_lock_wait(PosixRecordLockWaitEntry &entry)
-	        {
-	            entry.used = false;
-	            entry.path.clear();
-	            entry.waiter_pid = 0;
-	            entry.blocked_by_pid = 0;
-	            memset(&entry.lock, 0, sizeof(entry.lock));
-	        }
-
-	        void clear_ofd_record_lock(OfdRecordLockEntry &entry)
-	        {
-	            entry.used = false;
-	            entry.path.clear();
-	            entry.owner = nullptr;
-	            memset(&entry.lock, 0, sizeof(entry.lock));
-	        }
+		        void clear_ofd_record_lock(OfdRecordLockEntry &entry)
+		        {
+		            entry.used = false;
+		            entry.path.clear();
+		            entry.identity = nullptr;
+		            entry.owner = nullptr;
+		            memset(&entry.lock, 0, sizeof(entry.lock));
+		        }
 
 	        PosixRecordLockEntry *alloc_posix_record_lock_slot()
 	        {
@@ -417,27 +460,53 @@ namespace fs
 	            }
 	        }
 
-	        const PosixRecordLockEntry *find_conflicting_posix_record_lock_locked(
-	            const eastl::string &path, int pid, const struct flock &lock)
-	        {
-	            const PosixRecordLockEntry *best = nullptr;
-	            for (const auto &entry : g_posix_record_locks)
-	            {
-	                if (!entry.used || entry.path != path)
-	                {
-	                    continue;
-	                }
-	                if (!posix_lock_conflicts(entry.lock, entry.pid, lock, pid))
-	                {
-	                    continue;
-	                }
+		        const PosixRecordLockEntry *find_conflicting_posix_record_lock_locked(
+		            file *owner, int pid, const struct flock &lock, bool skip_same_pid)
+		        {
+		            const PosixRecordLockEntry *best = nullptr;
+		            for (const auto &entry : g_posix_record_locks)
+		            {
+		                if (!entry.used || !record_lock_matches_owner(entry.path, entry.identity, owner))
+		                {
+		                    continue;
+		                }
+		                if (!posix_lock_conflicts(entry.lock, entry.pid, lock, pid, skip_same_pid))
+		                {
+		                    continue;
+		                }
 	                if (best == nullptr || entry.lock.l_start < best->lock.l_start)
 	                {
 	                    best = &entry;
 	                }
 	            }
-	            return best;
-	        }
+		            return best;
+		        }
+
+		        const OfdRecordLockEntry *find_conflicting_ofd_record_lock_locked(
+		            file *owner, const struct flock &lock, file *skip_owner)
+		        {
+		            const OfdRecordLockEntry *best = nullptr;
+		            for (const auto &entry : g_ofd_record_locks)
+		            {
+		                if (!entry.used || !record_lock_matches_owner(entry.path, entry.identity, owner))
+		                {
+		                    continue;
+		                }
+		                if (skip_owner != nullptr && entry.owner == skip_owner)
+		                {
+		                    continue;
+		                }
+		                if (!record_lock_types_conflict(entry.lock, lock))
+		                {
+		                    continue;
+		                }
+		                if (best == nullptr || entry.lock.l_start < best->lock.l_start)
+		                {
+		                    best = &entry;
+		                }
+		            }
+		            return best;
+		        }
 
 	        bool posix_record_lock_wait_cycle_locked(int waiter_pid, int blocked_by_pid)
 	        {
@@ -574,7 +643,8 @@ namespace fs
             return syscall::SYS_EBADF;
 
 	        const eastl::string &path = owner->backing_path();
-	        if (path.empty())
+	        file *identity = owner;
+	        if (path.empty() && identity == nullptr)
 	            return 0;
 
 	        g_posix_record_lock.acquire();
@@ -584,7 +654,7 @@ namespace fs
 	            clear_posix_record_lock_wait_for_pid_locked(pid);
 	            // POSIX record lock 对同一 pid 的部分解锁需要做区间裁剪，不能整条直接丢掉。
 	            replace_same_owner_record_locks_locked(
-	                g_posix_record_locks, kMaxPosixRecordLocks, path, lock,
+	                g_posix_record_locks, kMaxPosixRecordLocks, path, identity, lock,
 	                [pid](const PosixRecordLockEntry &entry)
 	                { return entry.pid == pid; },
 	                []() -> PosixRecordLockEntry *
@@ -597,7 +667,8 @@ namespace fs
 	            return 0;
 	        }
 
-	        const PosixRecordLockEntry *conflict = find_conflicting_posix_record_lock_locked(path, pid, lock);
+	        const PosixRecordLockEntry *conflict =
+	            find_conflicting_posix_record_lock_locked(owner, pid, lock, true);
 	        if (conflict != nullptr)
 	        {
 	            if (conflict_pid != nullptr)
@@ -607,10 +678,21 @@ namespace fs
 	            g_posix_record_lock.release();
 	            return syscall::SYS_EAGAIN;
 	        }
+	        const OfdRecordLockEntry *ofd_conflict =
+	            find_conflicting_ofd_record_lock_locked(owner, lock, nullptr);
+	        if (ofd_conflict != nullptr)
+	        {
+	            if (conflict_pid != nullptr)
+	            {
+	                *conflict_pid = 0;
+	            }
+	            g_posix_record_lock.release();
+	            return syscall::SYS_EAGAIN;
+	        }
 
 	        // POSIX record lock 归属进程而不是 fd；同 pid 的重叠部分按 Linux 语义拆分/覆盖。
 	        replace_same_owner_record_locks_locked(
-	            g_posix_record_locks, kMaxPosixRecordLocks, path, lock,
+	            g_posix_record_locks, kMaxPosixRecordLocks, path, identity, lock,
 	            [pid](const PosixRecordLockEntry &entry)
 	            { return entry.pid == pid; },
 	            []() -> PosixRecordLockEntry *
@@ -625,12 +707,13 @@ namespace fs
 	        {
 	            slot->used = true;
 	            slot->path = path;
+	            slot->identity = identity;
 	            slot->pid = pid;
 	            slot->lock = lock;
 	            // 锁真正拿到以后，清掉上一次阻塞尝试残留的等待边。
 	            clear_posix_record_lock_wait_for_pid_locked(pid);
 	            merge_same_owner_record_locks_locked(
-	                g_posix_record_locks, kMaxPosixRecordLocks, path,
+	                g_posix_record_locks, kMaxPosixRecordLocks, path, identity,
 	                [](const PosixRecordLockEntry &lhs, const PosixRecordLockEntry &rhs)
 	                { return lhs.pid == rhs.pid; },
 	                [](PosixRecordLockEntry &entry)
@@ -651,24 +734,44 @@ namespace fs
 	            return syscall::SYS_EBADF;
 
 	        const eastl::string &path = owner->backing_path();
-	        if (path.empty())
+	        file *identity = owner;
+	        if (path.empty() && identity == nullptr)
 	        {
 	            lock.l_type = F_UNLCK;
 	            return 0;
 	        }
 
 	        g_posix_record_lock.acquire();
-	        const PosixRecordLockEntry *best = find_conflicting_posix_record_lock_locked(path, pid, lock);
+	        bool found = false;
+	        struct flock found_lock = {};
+	        int found_pid = 0;
+	        const PosixRecordLockEntry *best =
+	            find_conflicting_posix_record_lock_locked(owner, pid, lock, true);
+	        if (best != nullptr)
+	        {
+	            found = true;
+	            found_lock = best->lock;
+	            found_pid = best->pid;
+	        }
+	        const OfdRecordLockEntry *ofd_best =
+	            find_conflicting_ofd_record_lock_locked(owner, lock, nullptr);
+	        if (ofd_best != nullptr &&
+	            (!found || ofd_best->lock.l_start < found_lock.l_start))
+	        {
+	            found = true;
+	            found_lock = ofd_best->lock;
+	            found_pid = -1;
+	        }
 	        g_posix_record_lock.release();
 
-	        if (best == nullptr)
+	        if (!found)
 	        {
 	            lock.l_type = F_UNLCK;
 	            return 0;
 	        }
 
-	        lock = best->lock;
-	        lock.l_pid = best->pid;
+	        lock = found_lock;
+	        lock.l_pid = found_pid;
 	        return 0;
 	    }
 
@@ -684,7 +787,8 @@ namespace fs
 	        }
 
 	        const eastl::string &path = owner->backing_path();
-	        if (path.empty())
+	        file *identity = owner;
+	        if (path.empty() && identity == nullptr)
 	        {
 	            return 0;
 	        }
@@ -709,6 +813,7 @@ namespace fs
 
 	        entry->used = true;
 	        entry->path = path;
+	        entry->identity = identity;
 	        entry->waiter_pid = pid;
 	        entry->blocked_by_pid = blocked_by_pid;
 	        entry->lock = lock;
@@ -730,6 +835,33 @@ namespace fs
         }
         g_posix_record_lock.release();
     }
+
+	    void release_posix_record_locks_for_file(file *owner, int pid)
+	    {
+	        if (!g_bsd_flock_ready || owner == nullptr)
+	            return;
+
+	        const eastl::string &path = owner->backing_path();
+	        g_posix_record_lock.acquire();
+	        clear_posix_record_lock_wait_for_pid_locked(pid);
+	        for (auto &entry : g_posix_record_locks)
+	        {
+	            if (entry.used && entry.pid == pid &&
+	                record_lock_matches_owner(entry.path, entry.identity, owner))
+	            {
+	                clear_posix_record_lock(entry);
+	            }
+	        }
+	        for (auto &entry : g_posix_record_lock_waiters)
+	        {
+	            if (entry.used && entry.waiter_pid == pid &&
+	                record_lock_keys_match(entry.path, entry.identity, path, owner))
+	            {
+	                clear_posix_record_lock_wait(entry);
+	            }
+	        }
+	        g_posix_record_lock.release();
+	    }
 
 	    void release_posix_record_locks_for_pid(int pid)
 	    {
@@ -758,7 +890,8 @@ namespace fs
 	        }
 
 	        const eastl::string &path = owner->backing_path();
-	        if (path.empty())
+	        file *identity = owner;
+	        if (path.empty() && identity == nullptr)
 	        {
 	            return 0;
 	        }
@@ -767,7 +900,7 @@ namespace fs
 	        if (lock.l_type == F_UNLCK)
 	        {
 	            replace_same_owner_record_locks_locked(
-	                g_ofd_record_locks, kMaxOfdRecordLocks, path, lock,
+	                g_ofd_record_locks, kMaxOfdRecordLocks, path, identity, lock,
 	                [owner](const OfdRecordLockEntry &entry)
 	                { return entry.owner == owner; },
 	                []() -> OfdRecordLockEntry *
@@ -780,29 +913,23 @@ namespace fs
 	            return 0;
 	        }
 
-	        for (const auto &entry : g_ofd_record_locks)
+	        const OfdRecordLockEntry *ofd_conflict =
+	            find_conflicting_ofd_record_lock_locked(owner, lock, owner);
+	        if (ofd_conflict != nullptr)
 	        {
-	            if (!entry.used || entry.path != path)
-	            {
-	                continue;
-	            }
-	            if (entry.owner == owner)
-	            {
-	                continue;
-	            }
-	            if (!posix_lock_ranges_overlap(entry.lock, lock))
-	            {
-	                continue;
-	            }
-	            if (entry.lock.l_type == F_WRLCK || lock.l_type == F_WRLCK)
-	            {
-	                g_posix_record_lock.release();
-	                return syscall::SYS_EAGAIN;
-	            }
+	            g_posix_record_lock.release();
+	            return syscall::SYS_EAGAIN;
+	        }
+	        const PosixRecordLockEntry *posix_conflict =
+	            find_conflicting_posix_record_lock_locked(owner, 0, lock, false);
+	        if (posix_conflict != nullptr)
+	        {
+	            g_posix_record_lock.release();
+	            return syscall::SYS_EAGAIN;
 	        }
 
 	        replace_same_owner_record_locks_locked(
-	            g_ofd_record_locks, kMaxOfdRecordLocks, path, lock,
+	            g_ofd_record_locks, kMaxOfdRecordLocks, path, identity, lock,
 	            [owner](const OfdRecordLockEntry &entry)
 	            { return entry.owner == owner; },
 	            []() -> OfdRecordLockEntry *
@@ -817,10 +944,11 @@ namespace fs
 	        {
 	            slot->used = true;
 	            slot->path = path;
+	            slot->identity = identity;
 	            slot->owner = owner;
 	            slot->lock = lock;
 	            merge_same_owner_record_locks_locked(
-	                g_ofd_record_locks, kMaxOfdRecordLocks, path,
+	                g_ofd_record_locks, kMaxOfdRecordLocks, path, identity,
 	                [](const OfdRecordLockEntry &lhs, const OfdRecordLockEntry &rhs)
 	                { return lhs.owner == rhs.owner; },
 	                [](OfdRecordLockEntry &entry)
@@ -845,43 +973,44 @@ namespace fs
 	        }
 
 	        const eastl::string &path = owner->backing_path();
-	        if (path.empty())
+	        file *identity = owner;
+	        if (path.empty() && identity == nullptr)
 	        {
 	            lock.l_type = F_UNLCK;
 	            return 0;
 	        }
 
 	        g_posix_record_lock.acquire();
-	        const OfdRecordLockEntry *best = nullptr;
-	        for (const auto &entry : g_ofd_record_locks)
+	        bool found = false;
+	        struct flock found_lock = {};
+	        int found_pid = 0;
+	        const OfdRecordLockEntry *best =
+	            find_conflicting_ofd_record_lock_locked(owner, lock, owner);
+	        if (best != nullptr)
 	        {
-	            if (!entry.used || entry.path != path || entry.owner == owner)
-	            {
-	                continue;
-	            }
-	            if (!posix_lock_ranges_overlap(entry.lock, lock))
-	            {
-	                continue;
-	            }
-	            if (entry.lock.l_type != F_WRLCK && lock.l_type != F_WRLCK)
-	            {
-	                continue;
-	            }
-	            if (best == nullptr || entry.lock.l_start < best->lock.l_start)
-	            {
-	                best = &entry;
-	            }
+	            found = true;
+	            found_lock = best->lock;
+	            found_pid = -1;
+	        }
+	        const PosixRecordLockEntry *posix_best =
+	            find_conflicting_posix_record_lock_locked(owner, 0, lock, false);
+	        if (posix_best != nullptr &&
+	            (!found || posix_best->lock.l_start < found_lock.l_start))
+	        {
+	            found = true;
+	            found_lock = posix_best->lock;
+	            found_pid = posix_best->pid;
 	        }
 	        g_posix_record_lock.release();
 
-	        if (best == nullptr)
+	        if (!found)
 	        {
 	            lock.l_type = F_UNLCK;
 	            return 0;
 	        }
 
-	        lock = best->lock;
-	        lock.l_pid = -1;
+	        lock = found_lock;
+	        lock.l_pid = found_pid;
 	        return 0;
 	    }
 

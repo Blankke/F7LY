@@ -9,6 +9,7 @@
 #include "memlayout.hh" // 为了获取PGSIZE等定义
 #include "mem.hh"
 #include "fs/lwext4/ext4_errno.hh"  // 为了获取错误码定义
+#include "fs/vfs/virtual_fs.hh"
 #include "tm/timer_manager.hh"
 #include "proc/vm_object.hh"
 namespace shm
@@ -83,6 +84,31 @@ namespace shm
             return matched;
         }
 
+        eastl::string build_shared_file_cache_key(fs::file *file_obj)
+        {
+            if (file_obj == nullptr)
+            {
+                return {};
+            }
+
+            fs::Kstat st{};
+            if (fs::k_vfs.fstat(file_obj, &st) != EOK || st.ino == 0)
+            {
+                return {};
+            }
+
+            char identity[96];
+            snprintf(identity,
+                     sizeof(identity),
+                     "file:dev=%p:ino=%p:path=",
+                     reinterpret_cast<void *>(static_cast<uint64>(st.dev)),
+                     reinterpret_cast<void *>(st.ino));
+
+            eastl::string key(identity);
+            key += file_obj->backing_path();
+            return key;
+        }
+
         inline uint64 current_ipc_namespace_id()
         {
             proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
@@ -101,6 +127,7 @@ namespace shm
         (void)base;
         shm_size = size;
         next_shmid = 1; // shmid从1开始
+        requested_next_shmid = -1;
         shmmax_limit = 32 * 1024 * 1024; // Linux sysctl shmmax，默认与现有 IPC_INFO 保持一致
         shmmni_limit = 4096;             // Linux sysctl shmmni，LTP 会读取该值做 ENOSPC 压测
 
@@ -391,9 +418,31 @@ namespace shm
             return -ENOSPC;
         }
         
+        int allocated_shmid = -1;
+        if (requested_next_shmid >= 0 &&
+            segments->find(requested_next_shmid) == segments->end())
+        {
+            allocated_shmid = requested_next_shmid;
+        }
+        else
+        {
+            while (segments->find(next_shmid) != segments->end())
+            {
+                ++next_shmid;
+            }
+            allocated_shmid = next_shmid++;
+        }
+
+        // Linux 的 shm_next_id 是一次性请求：下一次成功分配 IPC 对象后恢复为 -1。
+        requested_next_shmid = -1;
+        if (allocated_shmid >= next_shmid)
+        {
+            next_shmid = allocated_shmid + 1;
+        }
+
         // 创建新的共享内存段
         shm_segment new_seg = {};
-        new_seg.shmid = next_shmid++;
+        new_seg.shmid = allocated_shmid;
         new_seg.ipc_ns_id = ipc_ns_id;
         new_seg.key = key;
         new_seg.size = size;                      // 保存用户请求的原始大小
@@ -491,11 +540,11 @@ namespace shm
             return nullptr;
         }
 
-        const eastl::string &cache_key = file_obj->backing_path();
+        eastl::string cache_key = build_shared_file_cache_key(file_obj);
         if (cache_key.empty())
         {
-            // 没有稳定 backing key 的文件对象（例如部分匿名后端/临时句柄）
-            // 不能硬塞进同一个空 key 缓存，否则不同映射会被错误共享。
+            // 没有稳定 inode 身份的文件对象（例如部分匿名后端/临时句柄）
+            // 不能硬塞进路径缓存，否则 unlink/recreate 或伪文件会被错误共享。
             return new proc::FileVmObject(file_obj, true, false, {});
         }
 
@@ -1342,6 +1391,24 @@ namespace shm
     {
         SpinLockGuard guard(shm_lock_);
         return shm_size / PGSIZE;
+    }
+
+    int ShmManager::get_shm_next_id() const
+    {
+        SpinLockGuard guard(shm_lock_);
+        return requested_next_shmid;
+    }
+
+    int ShmManager::set_shm_next_id(int value)
+    {
+        if (value < -1)
+        {
+            return -EINVAL;
+        }
+
+        SpinLockGuard guard(shm_lock_);
+        requested_next_shmid = value;
+        return 0;
     }
 
     eastl::string ShmManager::format_proc_sysvipc_shm() const

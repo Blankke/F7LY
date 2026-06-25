@@ -71,7 +71,7 @@ namespace proc
             {
                 for (int i = 0; i < leaf->count; ++i)
                 {
-                    if (!fn(*leaf->entries[i]))
+                    if (leaf->entries[i] != nullptr && !fn(*leaf->entries[i]))
                     {
                         return false;
                     }
@@ -166,6 +166,7 @@ namespace proc
         static uint64 first_key(const Node *node);
         static vma *last_entry_mut(LeafNode *leaf);
         static const vma *last_entry(const LeafNode *leaf);
+        void compact_leaf(LeafNode *leaf);
 
         LeafNode *find_leaf(uint64 key);
         const LeafNode *find_leaf(uint64 key) const;

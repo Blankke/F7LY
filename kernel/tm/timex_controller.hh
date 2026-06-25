@@ -75,11 +75,13 @@ namespace tmm
         static constexpr long k_timex_tick_max = 1100000L / k_clock_hz;
 
         static State make_default_state();
+        void ensure_initialized();
         int state_result_code() const;
         int populate_time_field(abi::KernelTimexOld &timex) const;
         int apply_delta_to_realtime(const abi::KernelTimexOld &timex);
 
         State _state = make_default_state();
+        bool _initialized = false;
     };
 
     extern KernelTimexController k_timex;

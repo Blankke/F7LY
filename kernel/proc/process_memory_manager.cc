@@ -763,12 +763,19 @@ namespace proc
     int ProcessMemoryManager::fault_page(uint64 va, int access_type)
     {
         uint64 page_va = PGROUNDDOWN(va);
-        if (access_type == 1 && mem::k_vmm.resolve_cow_page(pagetable, page_va) == 0)
+        vma *vm = find_vma_covering(va);
+        if (vm != nullptr && access_type == 1)
         {
-            return 0;
+            if ((vm->prot & PROT_WRITE) == 0)
+            {
+                return -1;
+            }
+            if (mem::k_vmm.resolve_cow_page(pagetable, page_va) == 0)
+            {
+                return 0;
+            }
         }
 
-        vma *vm = find_vma_covering(va);
         if (vm == nullptr)
         {
             Pcb *cur = k_pm.get_cur_pcb();
@@ -1489,6 +1496,220 @@ namespace proc
         return true;
     }
 
+    void ProcessMemoryManager::unmap_heap_pages_in_range(const vma &entry, uint64 start, uint64 end)
+    {
+        if (start >= end || !pagetable.get_base())
+        {
+            return;
+        }
+
+        uint64 va_start = start <= entry.addr ? PGROUNDDOWN(entry.addr) : PGROUNDUP(start);
+        uint64 va_end = PGROUNDUP(end);
+        if (va_start >= va_end)
+        {
+            return;
+        }
+
+        for (uint64 va = va_start; va < va_end && va < TRAPFRAME; va += PGSIZE)
+        {
+            uint64 probe = va < entry.addr ? entry.addr : va;
+            if (probe >= entry.end_addr())
+            {
+                continue;
+            }
+
+            const vma *owner = find_vma_covering(probe);
+            if (owner != &entry)
+            {
+                continue;
+            }
+
+            if (is_page_mapped(va))
+            {
+                mem::k_vmm.vmunmap(pagetable, va, 1, 1);
+            }
+        }
+    }
+
+    bool ProcessMemoryManager::heap_growth_crosses_shared_mapping(uint64 start, uint64 end) const
+    {
+        if (start >= end)
+        {
+            return false;
+        }
+
+        uint64 cursor = start;
+        while (cursor < end)
+        {
+            const vma *entry = find_vma_covering(cursor);
+            if (entry == nullptr)
+            {
+                entry = find_first_vma_at_or_after(cursor);
+            }
+
+            if (entry == nullptr || entry->addr >= end)
+            {
+                return false;
+            }
+
+            if (entry->end_addr() <= cursor)
+            {
+                cursor += PGSIZE;
+                continue;
+            }
+
+            if (entry->overlaps(start, end) &&
+                (is_shared_backed_vma(*entry) || entry->is_shared_mapping()))
+            {
+                return true;
+            }
+
+            cursor = entry->end_addr() < end ? entry->end_addr() : end;
+        }
+
+        return false;
+    }
+
+    bool ProcessMemoryManager::ensure_heap_metadata_for_range(uint64 start, uint64 end)
+    {
+        if (start >= end)
+        {
+            return true;
+        }
+
+        uint64 cursor = start;
+        while (cursor < end)
+        {
+            vma *covering = find_vma_covering(cursor);
+            if (covering != nullptr)
+            {
+                if (covering->area_kind == VmAreaKind::Heap)
+                {
+                    covering->prot = PROT_READ | PROT_WRITE;
+                    covering->flags = MAP_PRIVATE | MAP_ANONYMOUS;
+                    covering->grow_policy = VmGrowPolicy::Up;
+                    covering->is_expandable = true;
+                    covering->debug_name = "brk-heap";
+                }
+                cursor = covering->end_addr() < end ? covering->end_addr() : end;
+                continue;
+            }
+
+            vma *next = find_first_vma_at_or_after(cursor);
+            uint64 run_end = (next != nullptr && next->addr < end) ? next->addr : end;
+            if (run_end <= cursor)
+            {
+                cursor += PGSIZE;
+                continue;
+            }
+
+            vma *prev = find_prev_vma(cursor);
+            if (prev != nullptr &&
+                prev->area_kind == VmAreaKind::Heap &&
+                prev->end_addr() == cursor)
+            {
+                uint64 new_len = static_cast<uint64>(prev->len) + (run_end - cursor);
+                if (new_len > 0x7fffffffULL)
+                {
+                    return false;
+                }
+                prev->len = static_cast<int>(new_len);
+                prev->prot = PROT_READ | PROT_WRITE;
+                prev->flags = MAP_PRIVATE | MAP_ANONYMOUS;
+                prev->grow_policy = VmGrowPolicy::Up;
+                prev->is_expandable = true;
+                prev->max_len = prev->max_len < new_len ? new_len : prev->max_len;
+                prev->debug_name = "brk-heap";
+                prev->has_resident_pages = true;
+            }
+            else
+            {
+                uint64 run_len = run_end - cursor;
+                if (run_len > 0x7fffffffULL)
+                {
+                    return false;
+                }
+
+                vma *heap_area = vm_space.create_area(cursor,
+                                                       run_len,
+                                                       PROT_READ | PROT_WRITE,
+                                                       MAP_PRIVATE | MAP_ANONYMOUS,
+                                                       nullptr,
+                                                       0,
+                                                       VmAreaKind::Heap,
+                                                       VmGrowPolicy::Up,
+                                                       0,
+                                                       "brk-heap");
+                if (heap_area == nullptr)
+                {
+                    return false;
+                }
+                heap_area->is_expandable = true;
+                heap_area->max_len = run_len;
+                heap_area->has_resident_pages = true;
+            }
+
+            cursor = run_end;
+        }
+
+        return true;
+    }
+
+    void ProcessMemoryManager::trim_heap_metadata_to_end(uint64 new_end, bool unmap_pages)
+    {
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+            vma *entry = find_first_vma_at_or_after(0);
+            while (entry != nullptr)
+            {
+                vma *next = find_next_vma(entry);
+                if (entry->area_kind != VmAreaKind::Heap)
+                {
+                    entry = next;
+                    continue;
+                }
+
+                uint64 entry_end = entry->end_addr();
+                if (entry_end <= new_end)
+                {
+                    entry = next;
+                    continue;
+                }
+
+                if (unmap_pages)
+                {
+                    uint64 remove_start = entry->addr >= new_end ? entry->addr : new_end;
+                    unmap_heap_pages_in_range(*entry, remove_start, entry_end);
+                }
+
+                if (entry->addr >= new_end)
+                {
+                    uint64 old_addr = entry->addr;
+                    if (vma_slot_index(entry) >= 0)
+                    {
+                        vma_meta::release_metadata(*entry);
+                        reset_vma_entry(*entry);
+                        erase_vma_slot(*entry, old_addr);
+                    }
+                    else
+                    {
+                        vm_space.destroy_area(entry);
+                    }
+                }
+                else
+                {
+                    entry->len = static_cast<int>(new_end - entry->addr);
+                    entry->has_resident_pages = true;
+                }
+
+                changed = true;
+                break;
+            }
+        }
+    }
+
     uint64 ProcessMemoryManager::grow_heap(uint64 new_end)
     {
         // 直接使用ProcessMemoryManager中的堆地址
@@ -1508,26 +1729,6 @@ namespace proc
             printfRed("ProcessMemoryManager: heap grow exceeds user space limit, new_end=%p\n", (void *)new_end);
             return current_end;
         }
-
-        auto vma_covering_page = [&](uint64 page_va) -> const vma *
-        {
-            for (int i = 0; i < NVMA; ++i)
-            {
-                const vma &vm_entry = vma_data._vm[i];
-                if (!vm_entry.used)
-                {
-                    continue;
-                }
-
-                uint64 vma_start = PGROUNDDOWN(vm_entry.addr);
-                uint64 vma_end = PGROUNDUP(vm_entry.addr + vm_entry.len);
-                if (page_va >= vma_start && page_va < vma_end)
-                {
-                    return &vm_entry;
-                }
-            }
-            return nullptr;
-        };
 
         auto map_heap_page = [&](uint64 page_va) -> bool
         {
@@ -1556,6 +1757,22 @@ namespace proc
             return true;
         };
 
+        if (heap_growth_crosses_shared_mapping(current_end, new_end))
+        {
+            printfRed("ProcessMemoryManager: heap grow would cross shared mapping, range=[%p, %p)\n",
+                      (void *)current_end,
+                      (void *)new_end);
+            return current_end;
+        }
+
+        if (!ensure_heap_metadata_for_range(current_end, new_end))
+        {
+            printfRed("ProcessMemoryManager: failed to extend heap VMA metadata to %p\n",
+                      (void *)new_end);
+            trim_heap_metadata_to_end(current_end, false);
+            return current_end;
+        }
+
         uint64 first_page = PGROUNDDOWN(current_end);
         if (first_page < current_end)
         {
@@ -1565,7 +1782,8 @@ namespace proc
         {
             for (uint64 rollback_va = first_page; rollback_va < rollback_end; rollback_va += PGSIZE)
             {
-                if (vma_covering_page(rollback_va) != nullptr)
+                const vma *covering_vm = find_vma_covering(rollback_va);
+                if (covering_vm != nullptr && covering_vm->area_kind != VmAreaKind::Heap)
                 {
                     continue;
                 }
@@ -1578,21 +1796,24 @@ namespace proc
 
         for (uint64 va = first_page; va < PGROUNDUP(new_end); va += PGSIZE)
         {
-            const vma *covering_vm = vma_covering_page(va);
+            const vma *covering_vm = find_vma_covering(va);
             if (covering_vm != nullptr)
             {
-                if (covering_vm->backing_kind == VMA_BACKING_SHM)
+                if (is_shared_backed_vma(*covering_vm) || covering_vm->is_shared_mapping())
                 {
                     printfRed("ProcessMemoryManager: heap grow would cross shared VMA [%p, %p)\n",
                               (void *)covering_vm->addr,
                               (void *)(covering_vm->addr + (uint64)covering_vm->len));
                     rollback_heap_pages(va);
+                    trim_heap_metadata_to_end(current_end, false);
                     return current_end;
                 }
-                // brk 可以把“堆顶”推进到已有 MAP_FIXED 私有映射之后；这类页仍归 VMA 管，
-                // 堆只更新边界，不抢占页表映射。mmapstress03 专门覆盖这种带洞 brk 形态。
-                // SysV SHM 共享映射已在上面拦截，shmt09 要求 brk 不能越过它。
-                continue;
+                if (covering_vm->area_kind != VmAreaKind::Heap)
+                {
+                    // brk 可以把堆顶推进到已有 MAP_FIXED 私有映射之后；这类页仍归
+                    // 原 VMA 管，堆边界只记录逻辑 program break。
+                    continue;
+                }
             }
 
             if (!map_heap_page(va))
@@ -1601,38 +1822,10 @@ namespace proc
                 // 内核栈只有 8KB，不能在这里维护一个“已分配页数组”。失败时重新遍历
                 // 本次扩展过的区间，释放非 VMA 覆盖的 heap 页即可。
                 rollback_heap_pages(va);
+                trim_heap_metadata_to_end(current_end, false);
                 return current_end;
             }
         }
-
-        vma *heap_area = vm_space.find_heap_area();
-        if (heap_area == nullptr)
-        {
-            heap_area = vm_space.create_area(heap_start,
-                                             new_end - heap_start,
-                                             PROT_READ | PROT_WRITE,
-                                             MAP_PRIVATE | MAP_ANONYMOUS,
-                                             nullptr,
-                                             0,
-                                             VmAreaKind::Heap,
-                                             VmGrowPolicy::Up,
-                                             0,
-                                             "brk-heap");
-            if (heap_area == nullptr)
-            {
-                printfRed("ProcessMemoryManager: create heap VMASpace area failed\n");
-                rollback_heap_pages(PGROUNDUP(new_end));
-                return current_end;
-            }
-        }
-        heap_area->len = static_cast<int>(new_end - heap_start);
-        heap_area->prot = PROT_READ | PROT_WRITE;
-        heap_area->flags = MAP_PRIVATE | MAP_ANONYMOUS;
-        heap_area->area_kind = VmAreaKind::Heap;
-        heap_area->grow_policy = VmGrowPolicy::Up;
-        heap_area->is_expandable = true;
-        heap_area->max_len = heap_limit > heap_start ? (heap_limit - heap_start) : 0;
-        heap_area->debug_name = "brk-heap";
 
         // 更新ProcessMemoryManager中的堆结束地址
         heap_end = new_end;
@@ -1653,38 +1846,9 @@ namespace proc
             return current_end; // 无效的收缩请求
         }
 
-        // 释放多余的堆内存
-        uint64 va_start = PGROUNDUP(new_end);
-        uint64 va_end = PGROUNDUP(current_end);
-
-        for (uint64 va = va_start; va < va_end; va += PGSIZE)
-        {
-            if (is_page_mapped(va))
-            {
-                const vma *covering_vm = find_vma_covering(va);
-                if (covering_vm != nullptr && is_shared_backed_vma(*covering_vm))
-                {
-                    printfRed("[shrink_heap] heap range unexpectedly overlaps shared mapping at %p\n",
-                              (void *)covering_vm->addr);
-                    return current_end;
-                }
-
-                // 对于普通内存，直接使用vmunmap
-                mem::k_vmm.vmunmap(pagetable, va, 1, 1);
-            }
-        }
-
-        if (vma *heap_area = vm_space.find_heap_area(); heap_area != nullptr)
-        {
-            if (new_end <= heap_start)
-            {
-                vm_space.destroy_area(heap_area);
-            }
-            else
-            {
-                heap_area->len = static_cast<int>(new_end - heap_start);
-            }
-        }
+        // brk 收缩只回收 Heap 自己拥有的片段。MAP_FIXED/mmap 在 brk 区间里
+        // 打出来的洞是独立 VMA，不能因为 program break 降低就被顺手拆掉。
+        trim_heap_metadata_to_end(new_end, true);
 
         // 更新ProcessMemoryManager中的堆结束地址
         heap_end = new_end;
@@ -1787,7 +1951,7 @@ namespace proc
         {
             uint64 va_start = PGROUNDDOWN(vm_entry.addr);
             uint64 va_end = PGROUNDUP(vm_entry.addr + vm_entry.len);
-            if (vm_entry.has_resident_pages)
+            if (vm_entry.has_resident_pages || vm_entry.area_kind == VmAreaKind::Heap)
             {
                 unmap_vma_pages(vm_entry, va_start, va_end, check_validity);
             }
@@ -1918,7 +2082,7 @@ namespace proc
                 }
                 else
                 {
-                    if (vm_entry.has_resident_pages)
+                    if (vm_entry.has_resident_pages || vm_entry.area_kind == VmAreaKind::Heap)
                     {
                         unmap_vma_pages(vm_entry, unmap_start, unmap_end, true);
                     }
@@ -1926,7 +2090,7 @@ namespace proc
             }
             else
             {
-                if (vm_entry.has_resident_pages)
+                if (vm_entry.has_resident_pages || vm_entry.area_kind == VmAreaKind::Heap)
                 {
                     unmap_vma_pages(vm_entry, unmap_start, unmap_end, true);
                 }

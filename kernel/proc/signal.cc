@@ -10,10 +10,35 @@
 namespace
 {
     constexpr uint64 k_signal_stack_align = 16;
+    constexpr uint64 k_signal_stack_top_slop = PGSIZE;
+    constexpr int k_signal_stack_prev_scan_limit = 4;
 
     bool is_entry_static_task(const proc::Pcb *p)
     {
         return p != nullptr && strncmp(p->_name, "entry-static.exe", sizeof("entry-static.exe") - 1) == 0;
+    }
+
+    bool is_thread_group_member_task(const proc::Pcb *p)
+    {
+        return p != nullptr &&
+               p->_tid > 0 &&
+               p->_tgid > 0 &&
+               p->_tid != p->_tgid;
+    }
+
+    bool signal_vma_is_anonymous_private(const proc::vma &vm)
+    {
+        return vm.backing_kind == proc::VMA_BACKING_NONE &&
+               vm.vfile == nullptr &&
+               (vm.flags & MAP_PRIVATE) != 0 &&
+               (vm.flags & MAP_ANONYMOUS) != 0;
+    }
+
+    bool signal_vma_is_stack_like(const proc::vma &vm)
+    {
+        return vm.area_kind == proc::VmAreaKind::UserStack ||
+               vm.grows_down() ||
+               (vm.flags & MAP_STACK) != 0;
     }
 
     bool signal_vma_can_receive_frame(proc::Pcb *p, const proc::vma &vm)
@@ -27,12 +52,20 @@ namespace
             return true;
         }
 
-        // 静态链接线程库可能把 altstack 栈顶报到匿名 VMA 顶端之外；
-        // 该 VMA 元信息有时缺少 PROT_WRITE，但信号帧仍必须落回这段匿名栈空间，
-        // 否则 guard/ucontext 会写到未映射页并终止当前任务。
-        return is_entry_static_task(p) &&
-               vm.backing_kind == proc::VMA_BACKING_NONE &&
-               vm.vfile == nullptr;
+        // pthread 栈通常来自匿名私有 mmap，并由 mprotect() 把 guard/工作区拆开。
+        // 某些 libc 会把取消信号打在线程栈顶极小窗口内，此时 VMA 可能已经被标为
+        // MAP_STACK/UserStack，但权限元数据还没覆盖到栈顶边界页。信号帧只允许在
+        // 这种栈形态的匿名映射里补页，不能把普通只读/文件映射提升为可写。
+        if (signal_vma_is_stack_like(vm) && signal_vma_is_anonymous_private(vm))
+        {
+            return true;
+        }
+
+        // pthread 栈在不同 libc/评测镜像中不一定保留 MAP_STACK/GROWSDOWN 标记；
+        // 但线程的工作栈仍是匿名私有映射。只对非主线程或静态入口放开这类 VMA，
+        // 让取消信号/异步信号帧能落回真实线程栈，普通文件映射和共享映射仍不会被提升。
+        return (is_thread_group_member_task(p) || is_entry_static_task(p)) &&
+               signal_vma_is_anonymous_private(vm);
     }
 
     uint64 align_down(uint64 value, uint64 align)
@@ -114,6 +147,18 @@ namespace
         uint64 aligned_start = PGROUNDDOWN(frame_start);
         uint64 aligned_end = PGROUNDUP(frame_end);
         proc::vma *vm = find_vma_covering(p, aligned_end - 1);
+        if (vm == nullptr)
+        {
+            proc::vma *next_vm = p->get_memory_manager()->find_first_vma_at_or_after(aligned_end);
+            if (next_vm != nullptr &&
+                next_vm->used &&
+                aligned_end <= next_vm->addr &&
+                next_vm->addr - aligned_end <= k_signal_stack_top_slop &&
+                signal_vma_can_receive_frame(p, *next_vm))
+            {
+                vm = next_vm;
+            }
+        }
         if (vm == nullptr || !signal_vma_can_receive_frame(p, *vm))
         {
             return false;
@@ -121,7 +166,12 @@ namespace
 
         uint64 vm_start = vm->addr;
         uint64 vm_end = vm->addr + (uint64)vm->len;
-        if (aligned_end > vm_end || aligned_end <= vm_start || aligned_start >= vm_start)
+        if (aligned_end > vm_end || aligned_start >= vm_start)
+        {
+            return false;
+        }
+
+        if (aligned_end < vm_start && vm_start - aligned_end > k_signal_stack_top_slop)
         {
             return false;
         }
@@ -134,7 +184,8 @@ namespace
 
         // 信号帧只允许把当前用户栈向下补齐少量页面，避免把真正的 guard/其他映射吞掉。
         uint64 grow_size = vm_start - aligned_start;
-        if (grow_size > 8 * PGSIZE)
+        if (grow_size > 8 * PGSIZE ||
+            (uint64)vm->len + grow_size > 0x7fffffffULL)
         {
             return false;
         }
@@ -228,19 +279,53 @@ namespace
             }
         }
 
-        // 如果当前 sp 已经落在 VMA 顶部外侧，直接检查它前面的最近一个 VMA。
-        proc::vma *prev = p->get_memory_manager()->find_prev_vma(stack_sp + 1);
-        if (prev != nullptr && prev->used && (prev->prot & PROT_WRITE))
+        if (stack_sp >= frame_bytes)
         {
+            uint64 original_frame_start = align_down(stack_sp - frame_bytes, k_signal_stack_align);
+            proc::vma *frame_vm = p->get_memory_manager()->find_vma_covering(original_frame_start);
+            if (frame_vm != nullptr && signal_vma_can_receive_frame(p, *frame_vm))
+            {
+                uint64 vm_start = frame_vm->addr;
+                uint64 vm_end = frame_vm->addr + (uint64)frame_vm->len;
+                if (stack_sp >= vm_end &&
+                    stack_sp - vm_end <= k_signal_stack_top_slop &&
+                    frame_fits(vm_end, vm_start, vm_end, frame_bytes))
+                {
+                    return vm_end;
+                }
+            }
+        }
+
+        // 如果当前 sp 已经落在 VMA 顶部外侧，或落在栈顶 guard/临时窗口中，
+        // 需要继续向下找真实可写线程栈。pthread_cancel 的取消信号可能在
+        // libc 的栈顶小窗口内到达，sigframe 仍必须完整放回下方的栈 VMA。
+        proc::vma *prev = p->get_memory_manager()->find_prev_vma(stack_sp + 1);
+        int checked_prev_count = 0;
+        uint64 search_ceiling = stack_sp > UINT64_MAX - k_signal_stack_top_slop
+                                    ? UINT64_MAX
+                                    : stack_sp + k_signal_stack_top_slop;
+        while (prev != nullptr && checked_prev_count < k_signal_stack_prev_scan_limit)
+        {
+            ++checked_prev_count;
             uint64 vm_start = prev->addr;
             uint64 vm_end = prev->addr + (uint64)prev->len;
+            if (vm_end > search_ceiling)
+            {
+                break;
+            }
+
             // musl/glibc 线程栈有时把当前 sp 放在栈 VMA 顶部外侧的红区/临时窗口。
             // 信号帧必须完整落回可写栈 VMA 内，否则 ucontext 会跨到未映射页。
-            if (stack_sp > vm_end && stack_sp - vm_end <= PGSIZE &&
+            if (prev->used &&
+                signal_vma_can_receive_frame(p, *prev) &&
+                stack_sp >= vm_end &&
+                stack_sp - vm_end <= k_signal_stack_top_slop &&
                 frame_fits(vm_end, vm_start, vm_end, frame_bytes))
             {
                 return vm_end;
             }
+
+            prev = p->get_memory_manager()->find_prev_vma(prev->addr);
         }
 
         return stack_sp;
@@ -399,16 +484,6 @@ namespace
         }
 
         return prepared_all;
-    }
-
-    uint64 safe_pte_data(mem::Pte pte)
-    {
-        return pte.is_null() ? 0 : pte.get_data();
-    }
-
-    int safe_pte_valid(mem::Pte pte)
-    {
-        return pte.is_null() ? 0 : pte.is_valid();
     }
 
 #ifdef RISCV
@@ -834,6 +909,15 @@ namespace proc
                        (p->_signal & (1ULL << (SIGSTOP - 1))) != 0;
             }
 
+            bool has_signal_pending(Pcb *p, int sig)
+            {
+                if (p == nullptr || sig <= 0 || sig > signal::SIGRTMAX)
+                {
+                    return false;
+                }
+                return (p->_signal & (1ULL << (sig - 1))) != 0;
+            }
+
             bool signal_is_ignored_for_interrupt(Pcb *p, int signum)
             {
                 if (p == nullptr)
@@ -892,6 +976,59 @@ namespace proc
                     if ((p->_sigmask & bit) != 0)
                     {
                         continue;
+                    }
+
+                    if (!signal_is_ignored_for_interrupt(p, signum))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            bool should_interrupt_blocking_syscall(Pcb *p)
+            {
+                if (p == nullptr || p->_signal == 0)
+                {
+                    return false;
+                }
+
+                for (int signum = 1; signum <= signal::SIGRTMAX; ++signum)
+                {
+                    uint64 bit = 1ULL << (signum - 1);
+                    if ((p->_signal & bit) == 0)
+                    {
+                        continue;
+                    }
+
+                    if (signum == signal::SIGCANCEL ||
+                        signum == signal::SIGKILL ||
+                        signum == signal::SIGSTOP)
+                    {
+                        return true;
+                    }
+
+                    if ((p->_sigmask & bit) != 0)
+                    {
+                        continue;
+                    }
+
+                    if (p->_sigactions != nullptr && p->_sigactions->actions[signum] != nullptr)
+                    {
+                        sigaction *act = p->_sigactions->actions[signum];
+                        if (act->sa_handler == SIG_IGN)
+                        {
+                            continue;
+                        }
+                        if (act->sa_handler != nullptr && act->sa_handler != SIG_DFL)
+                        {
+                            if ((act->sa_flags & (uint64)SigActionFlags::RESTART) != 0)
+                            {
+                                continue;
+                            }
+                            return true;
+                        }
                     }
 
                     if (!signal_is_ignored_for_interrupt(p, signum))
@@ -1205,6 +1342,13 @@ namespace proc
                 //     return;
                 // }
                 p->_signal |= (1UL << (sig - 1));
+                if (sig == SIGKILL)
+                {
+                    // SIGKILL 是不可屏蔽终止请求。同步设置 _killed，
+                    // 让仍停在内核等待/长路径里的代码也能尽快中断，
+                    // 最终退出状态仍由 trap 返回前的信号处理路径设置。
+                    p->_killed = 1;
+                }
                 // 信号递送后调度器需要重新关注最高优先级；否则目标线程可能被大运行队列
                 // 延后很久，用户态 handler 不能及时执行。
                 proc::k_scheduler.note_priority_change(proc::highest_proc_prio);
@@ -1296,22 +1440,6 @@ namespace proc
                     return;
                 }
                 frame->tf = *(p->_trapframe);
-                if (is_entry_static_task(p))
-                {
-#ifdef RISCV
-                    void *saved_pc = (void *)frame->tf.epc;
-#elif defined(LOONGARCH)
-                    void *saved_pc = (void *)frame->tf.era;
-#endif
-                    printfYellow("[do_handle] entry-static signal: pid=%d tid=%d sig=%d handler=%p flags=%p saved_pc=%p saved_sp=%p\n",
-                                 p->_pid,
-                                 p->_tid,
-                                 signum,
-                                 act->sa_handler,
-                                 (void *)act->sa_flags,
-                                 saved_pc,
-                                 (void *)frame->tf.sp);
-                }
 #ifdef RISCV
                 p->_trapframe->ra = (uint64)(SIG_TRAMPOLINE + ((uint64)sig_handler - (uint64)sig_trampoline));
 #elif LOONGARCH
@@ -1323,14 +1451,6 @@ namespace proc
                 // 检查是否需要三参数信号处理 (SA_SIGINFO)
                 if (act->sa_flags & (uint64)SigActionFlags::SIGINFO)
                 {
-                    printf("[do_handle] Using SA_SIGINFO for signal %d\n", signum);
-                    uint64 va, a, pa;
-                    va = p->_trapframe->sp;
-                    a = PGROUNDDOWN(va);
-                    mem::Pte pte = p->get_pagetable()->walk(a, 0);
-                    pa = reinterpret_cast<uint64>(pte.pa());
-                    printf("[copy_out] va: %p, pte: %p, pa: %p\n", va, pte.get_data(), pa);
-
                     // 决定使用哪个栈：信号栈或正常栈
                     uint64 stack_sp;
                     uint64 sig_size;
@@ -1370,7 +1490,11 @@ namespace proc
                     uint64 linuxinfo_sp = has_siginfo_sp + sizeof(uint64);
                     uint64 usercontext_sp = linuxinfo_sp + sizeof(LinuxSigInfo);
                     expand_writable_stack_vma_for_signal(p, guard_sp, frame_stack_sp);
-                    prepare_signal_frame_pages(p, guard_sp, frame_stack_sp);
+                    if (!prepare_signal_frame_pages(p, guard_sp, frame_stack_sp))
+                    {
+                        p->_killed = true;
+                        return;
+                    }
 
                     // 构造 ustack 结构
                     usercontext uctx;
@@ -1405,43 +1529,16 @@ namespace proc
                         siginfo.si_uid = 0;
                         siginfo.si_value.sival_ptr = 0;
                     }
-                    printf("[do_handle] LinuxSigInfo constructed: sp: %p usercontext_sp=%p, linuxinfo_sp=%p\n",
-                           p->_trapframe->sp, usercontext_sp, linuxinfo_sp);
                     // 将结构写入用户空间
                     if (mem::k_vmm.copy_out(*p->get_pagetable(), usercontext_sp, &uctx, sizeof(usercontext)) < 0)
                     {
-                        int frame_vma_idx = -1;
-                        int uctx_vma_idx = -1;
-                        proc::vma *frame_vm = find_vma_covering(p, frame_sp, &frame_vma_idx);
-                        proc::vma *uctx_vm = find_vma_covering(p, usercontext_sp, &uctx_vma_idx);
-                        mem::Pte frame_pte = p->get_pagetable()->walk(PGROUNDDOWN(frame_sp), 0);
-                        mem::Pte uctx_pte = p->get_pagetable()->walk(PGROUNDDOWN(usercontext_sp), 0);
-                        panic("[do_handle] Failed to copy ustack: sig=%d pid=%d tid=%d old_sp=%p stack_sp=%p frame_sp=%p uctx_sp=%p frame_bytes=%p uctx_size=%p frame_vma=%d[%p,%p) uctx_vma=%d[%p,%p) frame_pte=%p frame_valid=%d uctx_pte=%p uctx_valid=%d",
-                              signum,
-                              p->_pid,
-                              p->_tid,
-                              (void *)p->_trapframe->sp,
-                              (void *)stack_sp,
-                              (void *)frame_sp,
-                              (void *)usercontext_sp,
-                              (void *)frame_bytes,
-                              (void *)sizeof(usercontext),
-                              frame_vma_idx,
-                              frame_vm ? (void *)frame_vm->addr : nullptr,
-                              frame_vm ? (void *)(frame_vm->addr + (uint64)frame_vm->len) : nullptr,
-                              uctx_vma_idx,
-                              uctx_vm ? (void *)uctx_vm->addr : nullptr,
-                              uctx_vm ? (void *)(uctx_vm->addr + (uint64)uctx_vm->len) : nullptr,
-                              (void *)safe_pte_data(frame_pte),
-                              safe_pte_valid(frame_pte),
-                              (void *)safe_pte_data(uctx_pte),
-                              safe_pte_valid(uctx_pte));
+                        p->_killed = true;
                         return;
                     }
 
                     if (mem::k_vmm.copy_out(*p->get_pagetable(), linuxinfo_sp, &siginfo, sizeof(LinuxSigInfo)) < 0)
                     {
-                        panic("[do_handle] Failed to copy LinuxSigInfo to user space");
+                        p->_killed = true;
                         return;
                     }
 
@@ -1455,33 +1552,17 @@ namespace proc
 
                     if (mem::k_vmm.copy_out(*p->get_pagetable(), guard_sp, &guard, sizeof(uint64)) < 0)
                     {
-                        int guard_vma_idx = -1;
-                        proc::vma *guard_vm = find_vma_covering(p, guard_sp, &guard_vma_idx);
-                        mem::Pte guard_pte = p->get_pagetable()->walk(PGROUNDDOWN(guard_sp), 0);
-                        panic("[do_handle] Failed to write sigframe guard: sig=%d pid=%d tid=%d old_sp=%p guard_sp=%p frame_bytes=%p guard_vma=%d[%p,%p) guard_pte=%p guard_valid=%d",
-                              signum,
-                              p->_pid,
-                              p->_tid,
-                              (void *)stack_sp,
-                              (void *)guard_sp,
-                              (void *)frame_bytes,
-                              guard_vma_idx,
-                              guard_vm ? (void *)guard_vm->addr : nullptr,
-                              guard_vm ? (void *)(guard_vm->addr + (uint64)guard_vm->len) : nullptr,
-                              (void *)safe_pte_data(guard_pte),
-                              safe_pte_valid(guard_pte));
+                        p->_killed = true;
                         return;
                     }
 
                     uint64 has_siginfo = UINT64_MAX;
                     if (mem::k_vmm.copy_out(*p->get_pagetable(), has_siginfo_sp, &has_siginfo, sizeof(uint64)) < 0)
                     {
-                        panic("[do_handle] Failed to write has_siginfo marker");
+                        p->_killed = true;
                         return;
                     }
 
-                    printf("[do_handle] SA_SIGINFO setup complete: sp=%p, a1=%p, a2=%p\n",
-                           p->_trapframe->sp, linuxinfo_sp, usercontext_sp);
                     sigframe_already_finalized = true;
                 }
                 else
@@ -1515,14 +1596,18 @@ namespace proc
                     uint64 frame_stack_sp = clamp_signal_stack_top_to_writable_vma(p, stack_sp, sizeof(uint64) * 2);
                     uint64 marker_sp = frame_stack_sp - sizeof(uint64);
                     expand_writable_stack_vma_for_signal(p, marker_sp - sizeof(uint64), frame_stack_sp);
-                    prepare_signal_frame_pages(p, marker_sp - sizeof(uint64), frame_stack_sp);
+                    if (!prepare_signal_frame_pages(p, marker_sp - sizeof(uint64), frame_stack_sp))
+                    {
+                        p->_killed = true;
+                        return;
+                    }
                     p->_trapframe->sp = marker_sp;
                     
                     // 在栈顶写入返回地址标记
                     uint64 ret_marker = 0;
                     if (mem::k_vmm.copy_out(*p->get_pagetable(), p->get_trapframe()->sp, &ret_marker, sizeof(uint64)) < 0)
                     {
-                        panic("[do_handle] Failed to write return marker to user stack");
+                        p->_killed = true;
                         return;
                     }
                     p->_trapframe->a0 = signum;
@@ -1544,7 +1629,7 @@ namespace proc
 
                     if (mem::k_vmm.copy_out(*p->get_pagetable(), guard_sp, &guard, sizeof(guard)) < 0)
                     {
-                        panic("[do_handle] Failed to write return marker to user stack");
+                        p->_killed = true;
                         return;
                     }
                 }
@@ -1644,16 +1729,6 @@ namespace proc
                                   (void *)p->_trapframe->sp,
                                   (void *)user_sp);
                         return;
-                    }
-                    if (is_entry_static_task(p))
-                    {
-                        printfYellow("[sig_return] entry-static restore: pid=%d tid=%d pc=%p sp=%p sigmask=%p cur_user_sp=%p\n",
-                                     p->_pid,
-                                     p->_tid,
-                                     (void *)uctx.mcontext.pc,
-                                     (void *)uctx.mcontext.gregs[3],
-                                     (void *)uctx.sigmask.sig[0],
-                                     (void *)user_sp);
                     }
                     p->_sigmask = sanitize_signal_mask(uctx.sigmask.sig[0]);
                     restore_loongarch_trapframe_from_ucontext(*p->_trapframe, uctx);

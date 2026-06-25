@@ -261,6 +261,12 @@ void trap_manager::usertrap()
 
   if (cause == 8)
   {
+    if (proc::ipc::signal::has_signal_pending(p, proc::ipc::signal::SIGKILL))
+    {
+      // SIGKILL 不应再让目标任务继续执行下一次系统调用；这能打断
+      // 大量文件操作/压力任务在 kill 后继续消耗时间的情况。
+      proc::k_pm.do_signal_exit(p, proc::ipc::signal::SIGKILL);
+    }
     if (p->is_killed())
       proc::k_pm.exit(-1);
     // printfYellow("p->_trapframe->epc: %p\n", p->_trapframe->epc);
@@ -338,6 +344,8 @@ void trap_manager::usertrap()
     p->_kernel_entry_tick = tmm::get_ticks();
   }
 
+  if (proc::ipc::signal::has_signal_pending(p, proc::ipc::signal::SIGKILL))
+    proc::k_pm.do_signal_exit(p, proc::ipc::signal::SIGKILL);
   if (p->is_killed())
     proc::k_pm.exit(-1);
 

@@ -12,6 +12,7 @@
 #include "net/f7ly_network.hh"
 #include "onps.hh"
 #include "ip/tcp_link.hh"
+#include "netif/netif.hh"
 
 namespace fs
 {
@@ -174,6 +175,15 @@ namespace fs
         bool is_loopback_or_any(uint32 addr)
         {
             return addr == 0 || addr == k_loopback_addr || addr == 0x7f000001;
+        }
+
+        bool is_valid_inet_bind_addr(uint32 addr)
+        {
+            if (is_loopback_or_any(addr))
+            {
+                return true;
+            }
+            return net::is_network_stack_ready() && netif_get_by_ip(addr, FALSE) != nullptr;
         }
 
         bool is_ipv6_any(const struct in6_addr &addr)
@@ -355,11 +365,49 @@ namespace fs
             return path;
         }
 
+        eastl::string abstract_unix_key_from_sockaddr(const struct sockaddr_un &addr, socklen_t addrlen)
+        {
+            constexpr socklen_t prefix_len =
+                static_cast<socklen_t>(offsetof(struct sockaddr_un, sun_path));
+            static constexpr char hex[] = "0123456789abcdef";
+            eastl::string key = "abstract:";
+            socklen_t path_len = addrlen > prefix_len ? addrlen - prefix_len : 0;
+            if (path_len > sizeof(addr.sun_path))
+            {
+                path_len = sizeof(addr.sun_path);
+            }
+            for (socklen_t i = 0; i < path_len; ++i)
+            {
+                uint8 byte = static_cast<uint8>(addr.sun_path[i]);
+                key += hex[(byte >> 4) & 0xf];
+                key += hex[byte & 0xf];
+            }
+            return key;
+        }
+
         eastl::string absolute_unix_path(const eastl::string &path)
         {
             proc::Pcb *p = proc::k_pm.get_cur_pcb();
             const char *cwd = p != nullptr ? p->_cwd_name.c_str() : "/";
             return get_absolute_path(path.c_str(), cwd);
+        }
+
+        eastl::string unix_binding_key_from_sockaddr(const struct sockaddr_un &addr,
+                                                     socklen_t addrlen,
+                                                     bool &is_abstract)
+        {
+            is_abstract = addr.sun_path[0] == '\0';
+            if (is_abstract)
+            {
+                return abstract_unix_key_from_sockaddr(addr, addrlen);
+            }
+
+            eastl::string relative_path = unix_path_from_sockaddr(addr);
+            if (relative_path.empty())
+            {
+                return {};
+            }
+            return absolute_unix_path(relative_path);
         }
 
         unix_binding *find_unix_binding(const eastl::string &path)
@@ -1022,32 +1070,39 @@ namespace fs
                 return -EAFNOSUPPORT;
             }
 
-            eastl::string relative_path = unix_path_from_sockaddr(local_unix_addr);
-            if (relative_path.empty()) {
+            bool abstract_addr = false;
+            eastl::string binding_key = unix_binding_key_from_sockaddr(local_unix_addr, addrlen, abstract_addr);
+            if (binding_key.empty()) {
                 _lock.release();
                 return -EINVAL;
             }
-            eastl::string absolute_path = absolute_unix_path(relative_path);
             _lock.release();
 
-            int prefix_error = unix_path_prefix_error(absolute_path);
-            if (prefix_error < 0) {
-                return prefix_error;
-            }
+            eastl::string relative_path;
+            if (!abstract_addr) {
+                relative_path = unix_path_from_sockaddr(local_unix_addr);
+                int prefix_error = unix_path_prefix_error(binding_key);
+                if (prefix_error < 0) {
+                    return prefix_error;
+                }
 
-            // pathname AF_UNIX bind 在文件系统中有可 unlink 的 socket 节点；
-            // recvmsg01 的 cleanup 依赖这个节点真实存在。
-            int node_result = proc::k_pm.mknod(k_at_fdcwd, relative_path, S_IFSOCK | 0777, 0);
-            if (node_result < 0) {
-                return node_result == -EEXIST ? -EADDRINUSE : node_result;
+                // pathname AF_UNIX bind 在文件系统中有可 unlink 的 socket 节点；
+                // recvmsg01 的 cleanup 依赖这个节点真实存在。abstract socket 属于
+                // 内核命名空间，不落盘，也不参与路径前缀检查。
+                int node_result = proc::k_pm.mknod(k_at_fdcwd, relative_path, S_IFSOCK | 0777, 0);
+                if (node_result < 0) {
+                    return node_result == -EEXIST ? -EADDRINUSE : node_result;
+                }
             }
 
             ensure_unix_table();
             g_unix_lock.acquire();
-            int register_result = register_unix_binding(absolute_path, this);
+            int register_result = register_unix_binding(binding_key, this);
             g_unix_lock.release();
             if (register_result < 0) {
-                proc::k_pm.unlink(k_at_fdcwd, relative_path, 0);
+                if (!abstract_addr) {
+                    proc::k_pm.unlink(k_at_fdcwd, relative_path, 0);
+                }
                 return register_result;
             }
 
@@ -1055,13 +1110,15 @@ namespace fs
             if (_state != SocketState::CREATED) {
                 _lock.release();
                 g_unix_lock.acquire();
-                unregister_unix_binding(absolute_path, this);
+                unregister_unix_binding(binding_key, this);
                 g_unix_lock.release();
-                proc::k_pm.unlink(k_at_fdcwd, relative_path, 0);
+                if (!abstract_addr) {
+                    proc::k_pm.unlink(k_at_fdcwd, relative_path, 0);
+                }
                 return -EINVAL;
             }
             _local_unix_addr = local_unix_addr;
-            _unix_path = absolute_path;
+            _unix_path = binding_key;
             _unix_registered = true;
             _state = SocketState::BOUND;
             _lock.release();
@@ -1084,6 +1141,11 @@ namespace fs
                 return -EAFNOSUPPORT;
             }
         }
+        if (!is_valid_inet_bind_addr(local_addr.sin_addr)) {
+            _lock.release();
+            return -EADDRNOTAVAIL;
+        }
+
         bool bind_loopback = is_loopback_or_any(local_addr.sin_addr);
         bool bind_onps = can_use_onps_socket(_family, _type) &&
                          (local_addr.sin_addr == 0 || !bind_loopback);
@@ -1197,6 +1259,14 @@ namespace fs
         proc::Pcb *cur = proc::k_pm.get_cur_pcb();
         // 检查是否有待处理的连接
         while (_pending_connections.empty()) {
+            // accept(2) 是信号可中断的阻塞系统调用。监听 INADDR_ANY 时同一个
+            // socket 可能同时启用 ONPS 和 loopback，必须在选择后端前检查信号；
+            // 否则空队列会反复进入 ONPS accept，netperf TCP_CRR 的 SIGALRM
+            // 无法打断等待并回传最终统计。
+            if (cur != nullptr && proc::ipc::signal::has_unmasked_signal_pending(cur)) {
+                _lock.release();
+                return -EINTR;
+            }
             if (_onps_listening) {
                 SOCKET listen_socket = _onps_socket;
                 bool blocking = _blocking;
@@ -1250,12 +1320,6 @@ namespace fs
                     return -EINVAL;
                 }
                 continue;
-            }
-            // accept(2) 是信号可中断的阻塞系统调用。netperf TCP_CRR 的
-            // server 依赖 ITIMER_REAL/SIGALRM 打断这里的空队列等待后汇报结果。
-            if (cur != nullptr && proc::ipc::signal::has_unmasked_signal_pending(cur)) {
-                _lock.release();
-                return -EINTR;
             }
             if (!_blocking) {
                 _lock.release();
@@ -1325,16 +1389,17 @@ namespace fs
                 return -EAFNOSUPPORT;
             }
 
-            eastl::string relative_path = unix_path_from_sockaddr(remote_unix_addr);
-            if (relative_path.empty()) {
+            bool abstract_addr = false;
+            eastl::string binding_key = unix_binding_key_from_sockaddr(remote_unix_addr, addrlen, abstract_addr);
+            (void)abstract_addr;
+            if (binding_key.empty()) {
                 _lock.release();
                 return -EINVAL;
             }
-            eastl::string absolute_path = absolute_unix_path(relative_path);
 
             ensure_unix_table();
             g_unix_lock.acquire();
-            unix_binding *binding = find_unix_binding(absolute_path);
+            unix_binding *binding = find_unix_binding(binding_key);
             socket_file *listener = binding ? binding->socket : nullptr;
             if (listener == nullptr) {
                 g_unix_lock.release();

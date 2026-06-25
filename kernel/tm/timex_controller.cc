@@ -16,6 +16,20 @@ namespace tmm
         return state;
     }
 
+    void KernelTimexController::ensure_initialized()
+    {
+        if (_initialized)
+        {
+            return;
+        }
+
+        // freestanding 内核不保证普通 C++ 全局对象构造器都按宿主 ABI 执行。
+        // 因此 timex 状态第一次被系统调用访问时显式建默认值，避免 BSS 全 0
+        // 把 tick/status/tolerance 暴露给 LTP 和用户态。
+        _state = make_default_state();
+        _initialized = true;
+    }
+
     bool KernelTimexController::timespec_to_ns_checked(const tmm::timespec &ts,
                                                        int64_t &ns) const
     {
@@ -67,6 +81,7 @@ namespace tmm
 
     int KernelTimexController::snapshot(abi::KernelTimexOld &tx)
     {
+        ensure_initialized();
         tx.modes = (_state.status & k_sta_nano) ? k_adj_nano : k_adj_micro;
         tx.offset = _state.offset;
         tx.freq = _state.freq;
@@ -118,6 +133,7 @@ namespace tmm
 
     int KernelTimexController::apply(abi::KernelTimexOld &tx, bool has_privilege)
     {
+        ensure_initialized();
         const unsigned int modes = tx.modes;
         const bool is_special_offset_mode =
             modes == k_adj_offset_singleshot || modes == k_adj_offset_ss_read;

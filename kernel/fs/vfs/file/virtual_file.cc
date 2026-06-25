@@ -37,6 +37,19 @@ namespace fs
         int g_dev_cpu_dma_latency_us = 0;
         eastl::string g_proc_sys_kernel_domainname = "(none-domain)";
 
+        static void fill_urandom_bytes(char *dst, size_t len, uint64 &seed)
+        {
+            for (size_t i = 0; i < len; ++i)
+            {
+                seed += 0x9E37'79B9'7F4A'7C15UL;
+                uint64 mixed = seed;
+                mixed = (mixed ^ (mixed >> 30)) * 0xBF58'476D'1CE4'E5B9UL;
+                mixed = (mixed ^ (mixed >> 27)) * 0x94D0'49BB'1331'11EBUL;
+                mixed ^= mixed >> 31;
+                dst[i] = static_cast<char>(mixed & 0xff);
+            }
+        }
+
         const char *mount_fs_name(fs_t type)
         {
             switch (type)
@@ -223,7 +236,8 @@ namespace fs
     {
         // 只声明内核已经提供完整用户可见语义的配置，避免 LTP 因虚假能力声明误判。
         return "CONFIG_TIME_NS=y\n"
-               "CONFIG_EVENTFD=y\n";
+               "CONFIG_EVENTFD=y\n"
+               "CONFIG_CHECKPOINT_RESTORE=y\n";
     }
 
     eastl::string ProcMountsProvider::generate_content()
@@ -824,6 +838,53 @@ namespace fs
                 _file_ptr = off;
             }
             return 0;
+        }
+
+        if (provider_type == VirtualProviderType::DEV_URANDOM)
+        {
+            if (off < 0)
+            {
+                off = _file_ptr;
+            }
+
+            proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
+            uint64 seed = 0x9E37'79B9'7F4A'7C15UL ^ reinterpret_cast<uint64>(this) ^ user_buf;
+            if (off > 0)
+            {
+                seed ^= static_cast<uint64>(off) * 0xBF58'476D'1CE4'E5B9UL;
+            }
+            if (pcb != nullptr)
+            {
+                seed ^= static_cast<uint64>(pcb->get_pid()) << 32;
+                seed ^= static_cast<uint64>(pcb->get_tid());
+            }
+
+            char random_chunk[256];
+            size_t copied = 0;
+            while (copied < len)
+            {
+                size_t chunk = len - copied;
+                if (chunk > sizeof(random_chunk))
+                {
+                    chunk = sizeof(random_chunk);
+                }
+                fill_urandom_bytes(random_chunk, chunk, seed);
+                if (mem::k_vmm.copy_out(pt, user_buf + copied, random_chunk, chunk) < 0)
+                {
+                    if (copied > 0 && upgrade)
+                    {
+                        _file_ptr = off + static_cast<long>(copied);
+                    }
+                    return copied > 0 ? static_cast<long>(copied) : -EFAULT;
+                }
+                copied += chunk;
+            }
+
+            if (upgrade)
+            {
+                _file_ptr = off + static_cast<long>(len);
+            }
+            return static_cast<long>(len);
         }
 
         if (provider_type != VirtualProviderType::DEV_ZERO &&
@@ -2034,6 +2095,26 @@ namespace fs
             return ret;
         }
         int set_ret = shm::k_smm.set_shmmax_limit(static_cast<size_t>(value));
+        return set_ret < 0 ? set_ret : ret;
+    }
+
+    eastl::string ProcSysKernelShmNextIdProvider::generate_content()
+    {
+        char buffer[32];
+        snprintf(buffer, sizeof(buffer), "%d\n", shm::k_smm.get_shm_next_id());
+        return eastl::string(buffer);
+    }
+
+    long ProcSysKernelShmNextIdProvider::handle_write(uint64 buf, size_t len, long off)
+    {
+        int value = -1;
+        long ret = parse_single_int_from_user(buf, len, off, &value);
+        if (ret < 0)
+        {
+            return ret;
+        }
+
+        int set_ret = shm::k_smm.set_shm_next_id(value);
         return set_ret < 0 ? set_ret : ret;
     }
 

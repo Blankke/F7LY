@@ -293,6 +293,27 @@ namespace proc
         uint64 file_offset = area.page_offset + page_index * PGSIZE;
         uint64 page_offset_in_area = page_index * PGSIZE;
         uint64 file_backed_bytes = area.file_backed_bytes;
+        if (file_ != nullptr &&
+            area.area_kind == VmAreaKind::Mmap &&
+            !area.zero_fill_past_file)
+        {
+            fs::Kstat st = {};
+            int stat_ret = fs::k_vfs.fstat(file_, &st);
+            if (stat_ret == EOK)
+            {
+                uint64 area_len = static_cast<uint64>(area.len);
+                if (area.page_offset < st.size)
+                {
+                    uint64 bytes_left = st.size - area.page_offset;
+                    file_backed_bytes = bytes_left > area_len ? area_len : bytes_left;
+                }
+                else
+                {
+                    file_backed_bytes = 0;
+                }
+                area.file_backed_bytes = file_backed_bytes;
+            }
+        }
         uint64 source_pa = 0;
         {
             SpinLockGuard guard(object_lock_);

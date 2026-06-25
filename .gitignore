@@ -69,3 +69,4 @@ logs/tmp/
 !logs/legacy/output_la.txt
 !logs/legacy/output_rv.txt
 .venv/
+logs/*.txt

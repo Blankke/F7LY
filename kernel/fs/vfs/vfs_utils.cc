@@ -34,8 +34,65 @@ namespace
 #endif
     constexpr size_t k_linux_path_max = 4096;
     constexpr size_t k_linux_name_max = 255;
+    constexpr size_t k_truncate_zero_fill_limit = PGSIZE;
+    uint8 k_truncate_zero_page[PGSIZE] = {};
 
     int raw_vfs_is_file_exist(const eastl::string &path);
+
+    int zero_small_truncate_extension(fs::file *f, uint64 old_size, uint64 new_size)
+    {
+        if (f == nullptr || new_size <= old_size)
+        {
+            return EOK;
+        }
+
+        uint64 zero_len = new_size - old_size;
+        if (zero_len > k_truncate_zero_fill_limit ||
+            f->lwext4_file_struct.mp == nullptr ||
+            f->lwext4_file_struct.inode == 0)
+        {
+            return EOK;
+        }
+
+        long saved_pos = static_cast<long>(f->lwext4_file_struct.fpos);
+        uint64 cursor = old_size;
+        while (cursor < new_size)
+        {
+            size_t chunk = static_cast<size_t>(new_size - cursor);
+            if (chunk > sizeof(k_truncate_zero_page))
+            {
+                chunk = sizeof(k_truncate_zero_page);
+            }
+
+            int seek_status = ext4_fseek(&f->lwext4_file_struct, cursor, SEEK_SET);
+            if (seek_status != EOK)
+            {
+                return seek_status;
+            }
+
+            size_t written = 0;
+            int write_status = ext4_fwrite(&f->lwext4_file_struct,
+                                           k_truncate_zero_page,
+                                           chunk,
+                                           &written);
+            if (write_status != EOK)
+            {
+                return write_status;
+            }
+            if (written != chunk)
+            {
+                return EIO;
+            }
+            cursor += chunk;
+        }
+
+        uint64 restore_pos = saved_pos < 0 ? 0 : static_cast<uint64>(saved_pos);
+        if (restore_pos > new_size)
+        {
+            restore_pos = new_size;
+        }
+        return ext4_fseek(&f->lwext4_file_struct, restore_pos, SEEK_SET);
+    }
 
     struct MountOverride
     {
@@ -1841,10 +1898,56 @@ namespace
     }
 }
 
+static bool path_needs_normalization(const eastl::string &path)
+{
+    if (path.empty())
+    {
+        return false;
+    }
+
+    bool previous_was_slash = false;
+    size_t component_start = 0;
+    for (size_t i = 0; i <= path.size(); ++i)
+    {
+        const bool at_end = i == path.size();
+        const bool at_slash = !at_end && path[i] == '/';
+        if (!at_end && at_slash && previous_was_slash)
+        {
+            return true;
+        }
+
+        if (at_slash || at_end)
+        {
+            const size_t component_len = i - component_start;
+            if (component_len == 1 && path[component_start] == '.')
+            {
+                return true;
+            }
+            if (component_len == 2 &&
+                path[component_start] == '.' &&
+                path[component_start + 1] == '.')
+            {
+                return true;
+            }
+            if (at_end && component_len == 0 && path.size() > 1)
+            {
+                return true;
+            }
+            component_start = i + 1;
+        }
+
+        previous_was_slash = at_slash;
+    }
+
+    return false;
+}
+
 // 路径规范化函数：处理 . 和 ..
 eastl::string normalize_path(const eastl::string &path)
 {
     if (path.empty())
+        return path;
+    if (!path_needs_normalization(path))
         return path;
 
     eastl::vector<eastl::string> components;
@@ -2324,16 +2427,6 @@ static int validate_lookup_prefix_permissions(const eastl::string &absolute_path
             continue;
         }
 
-        int exists = raw_vfs_is_file_exist(lookup_current);
-        if (exists < 0)
-        {
-            return exists;
-        }
-        if (exists == 0)
-        {
-            return -ENOENT;
-        }
-
         fs::Kstat st;
         int stat_ret = raw_vfs_path_stat(lookup_current, &st);
         if (stat_ret < 0)
@@ -2728,8 +2821,8 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
 
     int status = -100;
 
-    if (type == fs::FileTypes::FT_NORMAL || (flags & O_CREAT) != 0)
-    {
+	    if (type == fs::FileTypes::FT_NORMAL || (flags & O_CREAT) != 0)
+	    {
         // 根据flags和文件类型确定适当的权限
         // 专门重写了个函数来确定这个权限
         mode_t file_mode = determine_file_mode(flags, fs::FileTypes::FT_NORMAL, file_exists, mode);
@@ -2739,12 +2832,19 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
         attrs.filetype = fs::FileTypes::FT_NORMAL;
         attrs._value = file_mode;
 
-        fs::normal_file *temp_file = new fs::normal_file(attrs, actual_path);
-        // printfYellow("vfs_openat: flags: %o, mode: 0%o, actual_path: %s\n", flags, temp_file->_attrs.transMode(), actual_path.c_str());
+	        fs::normal_file *temp_file = new fs::normal_file(attrs, actual_path);
+	        // printfYellow("vfs_openat: flags: %o, mode: 0%o, actual_path: %s\n", flags, temp_file->_attrs.transMode(), actual_path.c_str());
 
-        // ext4库会自动处理 O_TRUNC, O_RDONLY, O_WRONLY, O_RDWR 等标志
-        // 真是前人栽树，后人乘凉啊！
-        status = ext4_fopen2(&temp_file->lwext4_file_struct, actual_path.c_str(), flags);
+	        if ((!file_exists && (flags & O_CREAT)) || (flags & O_TRUNC))
+	        {
+	            // 新 inode 或截断会改变路径对应的权威内容；全局小文件缓存按路径索引，
+	            // 必须先失效，避免 mmap/read 复用同名旧临时文件的缓存页。
+	            fs::normal_file_invalidate_delayed_visibility_path(actual_path);
+	        }
+
+	        // ext4库会自动处理 O_TRUNC, O_RDONLY, O_WRONLY, O_RDWR 等标志
+	        // 真是前人栽树，后人乘凉啊！
+	        status = ext4_fopen2(&temp_file->lwext4_file_struct, actual_path.c_str(), flags);
         if (status != EOK)
         {
             delete temp_file;
@@ -2754,14 +2854,19 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
 
         // 如果是新创建的文件，设置文件权限到 ext4 inode
         bool is_newly_created = !file_exists && (flags & O_CREAT);
-        if (is_newly_created)
-        {
+	        if (is_newly_created)
+	        {
             status = ext4_mode_set(actual_path.c_str(), inode_mode);
             if (status != EOK)
             {
                 printfRed("ext4_mode_set failed for %s, status: %d\n", actual_path.c_str(), status);
                 // 不返回错误，因为文件已经创建成功了
-            }
+	        }
+
+	        if ((!file_exists && (flags & O_CREAT)) || (flags & O_TRUNC))
+	        {
+	            fs::normal_file_invalidate_delayed_visibility_path(actual_path);
+	        }
             else
             {
                 printfGreen("ext4_mode_set success for %s, mode: 0%o\n", actual_path.c_str(), file_mode);
@@ -3869,6 +3974,15 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
             {
                 st->size = f->_stat.size;
             }
+            uint64 delayed_size = 0;
+            if (!f->_unlinked_from_dir &&
+                fs::normal_file_peek_delayed_visibility_size(f->backing_path(), &delayed_size) &&
+                delayed_size > st->size)
+            {
+                // 另一个 open/close 生命周期可能把短文件写入留在延迟可见缓存中。
+                // fstat(fd) 必须看到同一路径最新逻辑大小，不能只看当前 fd 的旧 fsize。
+                st->size = delayed_size;
+            }
             st->blksize = 4096;
 
             if (st->size == 0)
@@ -4195,6 +4309,14 @@ static int do_vfs_path_stat(const char *path, fs::Kstat *st,
         {
             return flush_ret;
         }
+        if (fs::normal_file_has_delayed_visibility_state(effective_path))
+        {
+            int delayed_flush_ret = fs::normal_file_flush_delayed_visibility_path(effective_path);
+            if (delayed_flush_ret < 0)
+            {
+                return delayed_flush_ret;
+            }
+        }
     }
 
     int status = raw_vfs_path_stat(effective_path, st);
@@ -4246,6 +4368,15 @@ int vfs_link(const char *oldpath, const char *newpath)
     }
 
     eastl::string new_parent_path = get_parent_path(new_path_str);
+    const MountOverride *source_mount = find_mount_override(old_path_str);
+    const MountOverride *target_mount = find_mount_override(new_parent_path);
+    uint64 source_mount_id = source_mount == nullptr ? 0 : source_mount->mount_id;
+    uint64 target_mount_id = target_mount == nullptr ? 0 : target_mount->mount_id;
+    if (source_mount_id != target_mount_id)
+    {
+        return -EXDEV;
+    }
+
     filesystem_t *source_fs = get_fs_from_path(oldpath);
     filesystem_t *target_fs = get_fs_from_path(new_parent_path.c_str());
     if (source_fs == nullptr || target_fs == nullptr)
@@ -4304,6 +4435,13 @@ int vfs_link(const char *oldpath, const char *newpath)
     {
         return new_parent_ret;
     }
+
+    int flush_ret = fs::normal_file_flush_delayed_visibility_path(old_path_str);
+    if (flush_ret < 0)
+    {
+        return flush_ret;
+    }
+    fs::normal_file_invalidate_delayed_visibility_path(new_path_str);
 
     // 使用 ext4_flink 创建硬链接
     int status = ext4_flink(oldpath, newpath);
@@ -4384,15 +4522,19 @@ int vfs_unlink_path(const char *path, bool remove_dir)
         return parent_perm_ret;
     }
 
-    if ((parent_st.mode & S_ISVTX) != 0 && current_proc->get_fsuid() != 0 &&
-        current_proc->get_fsuid() != parent_st.uid &&
-        current_proc->get_fsuid() != target_st.uid)
-    {
-        return -EPERM;
-    }
+	    if ((parent_st.mode & S_ISVTX) != 0 && current_proc->get_fsuid() != 0 &&
+	        current_proc->get_fsuid() != parent_st.uid &&
+	        current_proc->get_fsuid() != target_st.uid)
+	    {
+	        return -EPERM;
+	    }
 
-    struct filesystem *fs = get_fs_from_path(path);
-    if (fs && fs->type == FAT32)
+	    eastl::string cache_path = absolute_path;
+	    select_effective_backing_path(cache_path, cache_path, false);
+	    fs::normal_file_invalidate_delayed_visibility_path(cache_path);
+
+	    struct filesystem *fs = get_fs_from_path(path);
+	    if (fs && fs->type == FAT32)
     {
         const char *rel_path = path;
         if (strcmp(fs->path, "/") != 0)
@@ -4470,12 +4612,22 @@ int vfs_unlink_path(const char *path, bool remove_dir)
         return 0;
     }
 
-    if (remove_dir)
-    {
-        return vfs_ext_rmdir(path);
-    }
-    return vfs_ext_unlink(path);
-}
+	    if (remove_dir)
+	    {
+	        int ret = vfs_ext_rmdir(path);
+	        if (ret != EOK)
+	        {
+	            ::fs::normal_file_invalidate_delayed_visibility_path(cache_path);
+	        }
+	        return ret;
+	    }
+	    int ret = vfs_ext_unlink(path);
+	    if (ret != EOK)
+	    {
+	        ::fs::normal_file_invalidate_delayed_visibility_path(cache_path);
+	    }
+	    return ret;
+	}
 
 int vfs_truncate(fs::file *f, size_t length)
 {
@@ -4493,6 +4645,12 @@ int vfs_truncate(fs::file *f, size_t length)
     {
         return visibility_status;
     }
+    int delayed_flush_status = fs::normal_file_flush_delayed_visibility_path(f->backing_path());
+    if (delayed_flush_status < 0)
+    {
+        return delayed_flush_status;
+    }
+    fs::normal_file_invalidate_delayed_visibility_path(f->backing_path());
     f->sync_file_size_from_memfd();
 
     // 获取当前文件大小。这里不能只信 file object 里的 fsize 缓存：
@@ -4515,13 +4673,14 @@ int vfs_truncate(fs::file *f, size_t length)
     }
 
     // 如果新大小等于当前大小，无需操作
-    if (length == current_size)
-    {
-        f->_stat.size = current_size;
-        f->invalidate_cached_file_data();
-        f->sync_memfd_size_from_file();
-        return EOK;
-    }
+	    if (length == current_size)
+	    {
+	        f->_stat.size = current_size;
+	        f->invalidate_cached_file_data();
+	        fs::normal_file_invalidate_delayed_visibility_path(f->backing_path());
+	        f->sync_memfd_size_from_file();
+	        return EOK;
+	    }
 
     /*
      * 普通文件 truncate 的权威语义交给 lwext4：
@@ -4533,6 +4692,7 @@ int vfs_truncate(fs::file *f, size_t length)
      */
     if (length != current_size)
     {
+        uint64 old_size = current_size;
         int status = ext4_ftruncate(&f->lwext4_file_struct, length);
         if (status != EOK)
         {
@@ -4540,12 +4700,20 @@ int vfs_truncate(fs::file *f, size_t length)
                       f->_path_name.c_str(), length, status);
             return -status;
         }
-        f->_stat.size = length;
-        f->lwext4_file_struct.fsize = length;
-        f->invalidate_cached_file_data();
-        f->sync_memfd_size_from_file();
-        return EOK;
-    }
+        status = zero_small_truncate_extension(f, old_size, length);
+        if (status != EOK)
+        {
+            printfRed("vfs_truncate: failed to zero extension for %s old=%p new=%p, error: %d\n",
+                      f->_path_name.c_str(), (void *)old_size, (void *)length, status);
+            return -status;
+        }
+	        f->_stat.size = length;
+	        f->lwext4_file_struct.fsize = length;
+	        f->invalidate_cached_file_data();
+	        fs::normal_file_invalidate_delayed_visibility_path(f->backing_path());
+	        f->sync_memfd_size_from_file();
+	        return EOK;
+	    }
     return EOK;
 }
 int vfs_chmod(eastl::string pathname, mode_t mode)

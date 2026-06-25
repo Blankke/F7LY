@@ -24,6 +24,15 @@ namespace proc
 	{
 		namespace
 		{
+#ifndef PIPE_TRACE_DEBUG
+#define PIPE_TRACE_DEBUG 0
+#endif
+#if PIPE_TRACE_DEBUG
+#define PIPE_TRACEF(...) printf(__VA_ARGS__)
+#else
+#define PIPE_TRACEF(...) ((void)0)
+#endif
+
 			// Linux asm-generic fcntl 把 O_ASYNC 定义成八进制 020000（十六进制 0x2000）。
 			// 之前这里写成 0x4000，会让 fcntl(F_SETFL, O_ASYNC) 后的异步通知分支永远进不来。
 			constexpr int k_pipe_async_flag = 0x2000;
@@ -262,15 +271,15 @@ namespace proc
 			Pcb *pr = k_pm.get_cur_pcb();
 
 			_lock.acquire();
-			printf("[pipe-debug] write-enter pid=%d n=%d count=%u size=%u read_open=%d write_open=%d nonblock=%d\n",
-			       pr->_pid, n, _count, _pipe_size, _read_is_open, _write_is_open, nonblock);
+			PIPE_TRACEF("[pipe-debug] write-enter pid=%d n=%d count=%u size=%u read_open=%d write_open=%d nonblock=%d\n",
+			            pr->_pid, n, _count, _pipe_size, _read_is_open, _write_is_open, nonblock);
 
 			while (i < n)
 			{
 				if (!_read_is_open || pr->is_killed())
 				{
-					printf("[pipe-debug] write-stop pid=%d done=%d read_open=%d killed=%d\n",
-					       pr->_pid, i, _read_is_open, pr->is_killed());
+					PIPE_TRACEF("[pipe-debug] write-stop pid=%d done=%d read_open=%d killed=%d\n",
+					            pr->_pid, i, _read_is_open, pr->is_killed());
 					_lock.release();
 					if (!_read_is_open && !pr->is_killed())
 					{
@@ -284,26 +293,26 @@ namespace proc
 				{
 					if (proc::ipc::signal::has_unmasked_signal_pending(pr))
 					{
-						printf("[pipe-debug] write-interrupted pid=%d done=%d count=%u\n",
-						       pr->_pid, i, _count);
+						PIPE_TRACEF("[pipe-debug] write-interrupted pid=%d done=%d count=%u\n",
+						            pr->_pid, i, _count);
 						_lock.release();
 						return i > 0 ? i : syscall::SYS_EINTR;
 					}
 
 					if (nonblock)
 					{
-						printf("[pipe-debug] write-eagain pid=%d done=%d count=%u\n",
-						       pr->_pid, i, _count);
+						PIPE_TRACEF("[pipe-debug] write-eagain pid=%d done=%d count=%u\n",
+						            pr->_pid, i, _count);
 						_lock.release();
 						return i > 0 ? i : syscall::SYS_EAGAIN;
 					}
 					wake_waiters_locked(true);
 					note_waiter_locked(false, pr);
-					printf("[pipe-debug] write-sleep pid=%d done=%d count=%u size=%u\n",
-					       pr->_pid, i, _count, _pipe_size);
+					PIPE_TRACEF("[pipe-debug] write-sleep pid=%d done=%d count=%u size=%u\n",
+					            pr->_pid, i, _count, _pipe_size);
 					k_pm.sleep(&_write_sleep, &_lock);
-					printf("[pipe-debug] write-wakeup pid=%d done=%d count=%u size=%u\n",
-					       pr->_pid, i, _count, _pipe_size);
+					PIPE_TRACEF("[pipe-debug] write-wakeup pid=%d done=%d count=%u size=%u\n",
+					            pr->_pid, i, _count, _pipe_size);
 					forget_waiter_locked(false, pr);
 					continue;
 				}
@@ -348,8 +357,8 @@ namespace proc
 				}
 				if (mem::k_vmm.copy_in(pt, _buffer + _tail, addr + i, chunk) < 0)
 				{
-					printf("[pipe-debug] write-copyin-fail pid=%d done=%d chunk=%u\n",
-					       pr->_pid, i, chunk);
+					PIPE_TRACEF("[pipe-debug] write-copyin-fail pid=%d done=%d chunk=%u\n",
+					            pr->_pid, i, chunk);
 					_lock.release();
 					return i > 0 ? i : syscall::SYS_EFAULT;
 				}
@@ -365,8 +374,8 @@ namespace proc
 			{
 				notify_async_reader_locked();
 			}
-			printf("[pipe-debug] write-return pid=%d ret=%d count=%u handoff=%d\n",
-			       pr->_pid, i, _count, should_handoff_reader);
+			PIPE_TRACEF("[pipe-debug] write-return pid=%d ret=%d count=%u handoff=%d\n",
+			            pr->_pid, i, _count, should_handoff_reader);
 			_lock.release();
 			if (i > 0 && should_handoff_reader)
 			{
@@ -442,36 +451,36 @@ namespace proc
 			Pcb *pr = k_pm.get_cur_pcb();
 
 			_lock.acquire();
-			printf("[pipe-debug] read-enter pid=%d n=%d count=%u size=%u read_open=%d write_open=%d nonblock=%d\n",
-			       pr->_pid, n, _count, _pipe_size, _read_is_open, _write_is_open, nonblock);
+			PIPE_TRACEF("[pipe-debug] read-enter pid=%d n=%d count=%u size=%u read_open=%d write_open=%d nonblock=%d\n",
+			            pr->_pid, n, _count, _pipe_size, _read_is_open, _write_is_open, nonblock);
 
 			while (_count == 0 && _write_is_open)
 			{
 				if (pr->is_killed())
 				{
-					printf("[pipe-debug] read-killed pid=%d\n", pr->_pid);
+					PIPE_TRACEF("[pipe-debug] read-killed pid=%d\n", pr->_pid);
 					_lock.release();
 					return -1;
 				}
 
 				if (nonblock)
 				{
-					printf("[pipe-debug] read-eagain pid=%d count=%u\n", pr->_pid, _count);
+					PIPE_TRACEF("[pipe-debug] read-eagain pid=%d count=%u\n", pr->_pid, _count);
 					_lock.release();
 					return syscall::SYS_EAGAIN;
 				}
 				if (proc::ipc::signal::has_unmasked_signal_pending(pr))
 				{
-					printf("[pipe-debug] read-interrupted pid=%d count=%u\n", pr->_pid, _count);
+					PIPE_TRACEF("[pipe-debug] read-interrupted pid=%d count=%u\n", pr->_pid, _count);
 					_lock.release();
 					return syscall::SYS_EINTR;
 				}
 				note_waiter_locked(true, pr);
-				printf("[pipe-debug] read-sleep pid=%d count=%u write_open=%d\n",
-				       pr->_pid, _count, _write_is_open);
+				PIPE_TRACEF("[pipe-debug] read-sleep pid=%d count=%u write_open=%d\n",
+				            pr->_pid, _count, _write_is_open);
 				k_pm.sleep(&_read_sleep, &_lock);
-				printf("[pipe-debug] read-wakeup pid=%d count=%u write_open=%d\n",
-				       pr->_pid, _count, _write_is_open);
+				PIPE_TRACEF("[pipe-debug] read-wakeup pid=%d count=%u write_open=%d\n",
+				            pr->_pid, _count, _write_is_open);
 				forget_waiter_locked(true, pr);
 			}
 
@@ -508,8 +517,8 @@ namespace proc
 				}
 				if (mem::k_vmm.copy_out(pt, addr + i, _buffer + _head, chunk) < 0)
 				{
-					printf("[pipe-debug] read-copyout-fail pid=%d done=%d chunk=%u\n",
-					       pr->_pid, i, chunk);
+					PIPE_TRACEF("[pipe-debug] read-copyout-fail pid=%d done=%d chunk=%u\n",
+					            pr->_pid, i, chunk);
 					_lock.release();
 					return i > 0 ? i : syscall::SYS_EFAULT;
 				}
@@ -519,8 +528,8 @@ namespace proc
 			}
 
 			wake_waiters_locked(false);
-			printf("[pipe-debug] read-return pid=%d ret=%d count=%u write_open=%d\n",
-			       pr->_pid, i, _count, _write_is_open);
+			PIPE_TRACEF("[pipe-debug] read-return pid=%d ret=%d count=%u write_open=%d\n",
+			            pr->_pid, i, _count, _write_is_open);
 			_lock.release();
 
 			return i;
@@ -598,10 +607,12 @@ namespace proc
 
 		void Pipe::close(bool is_write)
 		{
+#if PIPE_TRACE_DEBUG
 			Pcb *pr = k_pm.get_cur_pcb();
+#endif
 			_lock.acquire();
-			printf("[pipe-debug] close-enter pid=%d is_write=%d count=%u read_open=%d write_open=%d\n",
-			       pr->_pid, is_write, _count, _read_is_open, _write_is_open);
+			PIPE_TRACEF("[pipe-debug] close-enter pid=%d is_write=%d count=%u read_open=%d write_open=%d\n",
+			            pr->_pid, is_write, _count, _read_is_open, _write_is_open);
 			if (is_write)
 			{
 				_write_is_open = false;
@@ -615,15 +626,15 @@ namespace proc
 
 			if (!_read_is_open && !_write_is_open)
 			{
-				printf("[pipe-debug] close-delete pid=%d is_write=%d count=%u\n",
-				       pr->_pid, is_write, _count);
+				PIPE_TRACEF("[pipe-debug] close-delete pid=%d is_write=%d count=%u\n",
+				            pr->_pid, is_write, _count);
 				_lock.release();
 				delete this;
 			}
 			else
 			{
-				printf("[pipe-debug] close-return pid=%d is_write=%d count=%u read_open=%d write_open=%d\n",
-				       pr->_pid, is_write, _count, _read_is_open, _write_is_open);
+				PIPE_TRACEF("[pipe-debug] close-return pid=%d is_write=%d count=%u read_open=%d write_open=%d\n",
+				            pr->_pid, is_write, _count, _read_is_open, _write_is_open);
 				_lock.release();
 			}
 		}

@@ -117,6 +117,77 @@ namespace mem
 #endif
         }
 
+        proc::vma *active_vma_for_page(PageTable &pt, uint64 va)
+        {
+            proc::Pcb *proc = active_proc_for_pt(pt);
+            if (proc == nullptr || proc->get_memory_manager() == nullptr)
+            {
+                return nullptr;
+            }
+            return proc->get_memory_manager()->find_vma_covering(PGROUNDDOWN(va));
+        }
+
+        bool vma_has_shared_write_semantics(const proc::vma *vm)
+        {
+            if (vm == nullptr)
+            {
+                return false;
+            }
+            if (vm->object != nullptr && vm->object->shared_mapping())
+            {
+                return true;
+            }
+            return vm->is_shared_mapping();
+        }
+
+        bool vma_has_private_cow_semantics(const proc::vma *vm)
+        {
+            if (vm == nullptr)
+            {
+                return false;
+            }
+            if (vma_has_shared_write_semantics(vm))
+            {
+                return false;
+            }
+            return vm->is_private_mapping() ||
+                   (vm->object != nullptr && !vm->object->shared_mapping());
+        }
+
+        bool should_preserve_cow_without_write(PageTable &pt, uint64 va, Pte &pte, bool is_vma)
+        {
+            if (!is_vma || !pte_is_cow(pte))
+            {
+                return false;
+            }
+            return vma_has_private_cow_semantics(active_vma_for_page(pt, va));
+        }
+
+        bool should_write_protect_as_cow(PageTable &pt, uint64 va, Pte &pte, bool is_vma)
+        {
+            void *page = page_pa_to_kernel_ptr(reinterpret_cast<uint64>(pte.pa()));
+            if (!k_pmm.is_managed_page(page))
+            {
+                return false;
+            }
+
+            if (!is_vma)
+            {
+                return k_pmm.page_ref_count(page) > 1;
+            }
+
+            proc::vma *vm = active_vma_for_page(pt, va);
+            if (vma_has_shared_write_semantics(vm))
+            {
+                return false;
+            }
+            if (vma_has_private_cow_semantics(vm))
+            {
+                return pte_is_cow(pte) || k_pmm.page_ref_count(page) > 1;
+            }
+            return k_pmm.page_ref_count(page) > 1;
+        }
+
 #ifdef LOONGARCH
         uint64 loongarch_empty_pgdh_base = 0;
 
@@ -2004,16 +2075,19 @@ namespace mem
                 uint64 new_data = old_data &
                                   ~(riscv::PteEnum::pte_readable_m |
                                     riscv::PteEnum::pte_writable_m |
-                                    riscv::PteEnum::pte_executable_m |
-                                    k_riscv_pte_cow);
+                                    riscv::PteEnum::pte_executable_m);
+                if (!should_preserve_cow_without_write(pt, a, pte, is_vma))
+                {
+                    new_data &= ~k_riscv_pte_cow;
+                }
                 if (prot & PROT_READ)
                     new_data |= riscv::PteEnum::pte_readable_m;
                 if (prot & PROT_WRITE)
                 {
-                    void *page = page_pa_to_kernel_ptr(reinterpret_cast<uint64>(pte.pa()));
-                    if (k_pmm.is_managed_page(page) && k_pmm.page_ref_count(page) > 1)
+                    new_data &= ~k_riscv_pte_cow;
+                    if (should_write_protect_as_cow(pt, a, pte, is_vma))
                     {
-                        // 共享页不能被 mprotect 直接改成可写，否则会绕过 COW。
+                        // 只有私有 VMA 的共享物理页需要保留 COW；MAP_SHARED 必须恢复真实写权限。
                         new_data |= k_riscv_pte_cow;
                     }
                     else
@@ -2027,14 +2101,18 @@ namespace mem
 #elif defined(LOONGARCH)
                 // LoongArch 的读/执行权限是“禁止位”(NR/NX)，而不是正向的 R/X 位。
                 // mprotect(PROT_NONE) / 取消执行权限都必须显式写回 NR/NX。
-                uint64 new_data = old_data & ~(PTE_W | PTE_D | PTE_NR | PTE_NX | PTE_PLV | PTE_COW);
+                uint64 new_data = old_data & ~(PTE_W | PTE_D | PTE_NR | PTE_NX | PTE_PLV);
+                if (!should_preserve_cow_without_write(pt, a, pte, is_vma))
+                {
+                    new_data &= ~PTE_COW;
+                }
                 new_data |= PTE_V | PTE_U;
                 if (prot & PROT_WRITE)
                 {
-                    void *page = page_pa_to_kernel_ptr(reinterpret_cast<uint64>(pte.pa()));
-                    if (k_pmm.is_managed_page(page) && k_pmm.page_ref_count(page) > 1)
+                    new_data &= ~PTE_COW;
+                    if (should_write_protect_as_cow(pt, a, pte, is_vma))
                     {
-                        // 共享页不能直接恢复写权限，否则会绕过 fork COW。
+                        // 只有私有 VMA 的共享物理页需要保留 COW；MAP_SHARED 必须恢复真实写权限。
                         new_data |= PTE_COW;
                     }
                     else
