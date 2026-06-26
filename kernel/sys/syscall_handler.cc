@@ -4600,13 +4600,25 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_kill()
     {
-        int pid;
-        if (_arg_int(0, pid) < 0)
+        int pid, sig;
+        if (_arg_int(0, pid) < 0 || _arg_int(1, sig) < 0)
         {
-            printfRed("[SyscallHandler::sys_wait] Error fetching arguments\n");
-            return -1;
+            printfRed("[SyscallHandler::sys_kill] Error fetching arguments\n");
+            return SYS_EINVAL;
         }
-        return proc::k_pm.kill_proc(pid);
+        if (sig < 0 || sig > proc::ipc::signal::SIGRTMAX)
+        {
+            return SYS_EINVAL;
+        }
+        if (pid == INT_MIN)
+        {
+            return SYS_ESRCH;
+        }
+
+        // kill(2) 必须投递真实的 pending signal。只设置 _killed 会让
+        // select/futex/pipe 等可中断等待醒来后看不到信号，随后又睡回去。
+        int result = proc::k_pm.kill_signal(pid, sig);
+        return result < 0 ? SYS_ESRCH : result;
     }
     uint64 SyscallHandler::sys_execve()
     {

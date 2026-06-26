@@ -592,6 +592,24 @@ namespace fs
             return state == TLSSYNSENT || state == TLSRCVEDSYNACK;
         }
 
+        bool onps_tcp_listener_has_pending(SOCKET socket)
+        {
+            if (socket == INVALID_SOCKET)
+            {
+                return false;
+            }
+
+            EN_ONPSERR error = ERRNO;
+            PST_INPUTATTACH_TCPSRV attach = nullptr;
+            if (!onps_input_get(static_cast<INT>(socket), IOPT_GETATTACH, &attach, &error) ||
+                attach == nullptr)
+            {
+                return false;
+            }
+
+            return attach->usBacklogCnt > 0;
+        }
+
         int onps_tcp_connect_so_error(SOCKET socket)
         {
             EN_TCPLINKSTATE state = TLSINVALID;
@@ -927,7 +945,8 @@ namespace fs
                 result = false;
                 break;
             case SocketState::LISTENING:
-                result = !_pending_connections.empty() || _onps_listening;
+                result = !_pending_connections.empty() ||
+                         (_onps_listening && onps_tcp_listener_has_pending(_onps_socket));
                 break;
             case SocketState::BOUND:
                 if (_type == SocketType::UDP)

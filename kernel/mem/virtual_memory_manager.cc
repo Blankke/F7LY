@@ -1538,14 +1538,20 @@ namespace mem
 #ifdef RISCV
             bool is_reserved_page = (a == TRAMPOLINE || a == SIG_TRAMPOLINE ||
                                      (a == TRAPFRAME && !(va == TRAPFRAME && npages == 1 && do_free == 0)));
+            bool explicit_reserved_cleanup =
+                ((a == TRAMPOLINE && va == TRAMPOLINE && npages == 1 && do_free == 0) ||
+                 (a == SIG_TRAMPOLINE && va == SIG_TRAMPOLINE && npages == 1 && do_free == 0));
 #elif defined(LOONGARCH)
             bool is_reserved_page = (a == SIG_TRAMPOLINE ||
                                      (a == TRAPFRAME && !(va == TRAPFRAME && npages == 1 && do_free == 0)));
+            bool explicit_reserved_cleanup =
+                (a == SIG_TRAMPOLINE && va == SIG_TRAMPOLINE && npages == 1 && do_free == 0);
 #endif
-            if (is_reserved_page)
+            if (is_reserved_page && !explicit_reserved_cleanup)
             {
-                // 这些保留页由专门路径管理。
-                // 统一清理流程允许调用者把它们一起带进来，但这属于正常退出场景，不应反复打印告警。
+                // 这些保留页由页表创建/释放路径专门管理；普通区间回滚不能顺手清掉，
+                // 否则下一次 usertrapret 会发现 TRAMPOLINE/SIG_TRAMPOLINE 缺失。
+                continue;
             }
             if ((pte = pt.walk(a, 0)).is_null())
                 continue;

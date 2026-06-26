@@ -644,6 +644,24 @@ void trap_manager::usertrapret(void)
   // 记录进入用户态的时间点
   p->_last_user_tick = cur_tick;
 
+  if (p == nullptr || p->get_memory_manager() == nullptr ||
+      p->get_pagetable() == nullptr || !p->get_pagetable()->get_base())
+  {
+    panic("usertrapret: invalid current address space pid=%d tid=%d state=%d exiting=%d",
+          p ? p->_pid : -1,
+          p ? p->_tid : -1,
+          p ? (int)p->_state : -1,
+          p ? (int)p->_exiting : -1);
+  }
+  if (!p->get_memory_manager()->ensure_special_mappings())
+  {
+    panic("usertrapret: failed to ensure special mappings pid=%d tid=%d state=%d pt=%p",
+          p->_pid,
+          p->_tid,
+          (int)p->_state,
+          (void *)p->get_pagetable()->get_base());
+  }
+
   // TRAPFRAME 在 LoongArch 线程模型里是“每线程独立物理页 + 同地址空间共享用户页表”。
   // 下面这段“先拆旧映射、再映当前线程 trapframe”的窗口里如果还允许时钟中断介入，
   // 调度器就可能切到同地址空间的另一个线程，把共享页表里的 TRAPFRAME 先改成它自己的页。
