@@ -333,6 +333,7 @@ namespace proc
          * 创建包含trampoline、trapframe等基础映射的页表
          */
         bool create_pagetable();
+        bool ensure_special_mappings();
 
         /**
          * @brief 释放进程页表

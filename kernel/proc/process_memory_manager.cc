@@ -2411,6 +2411,65 @@ namespace proc
         return true;
     }
 
+    bool ProcessMemoryManager::ensure_special_mappings()
+    {
+        if (!pagetable.get_base())
+        {
+            return false;
+        }
+
+#ifdef RISCV
+        mem::Pte trampoline_pte = pagetable.walk(TRAMPOLINE, false);
+        if (trampoline_pte.is_null() || !trampoline_pte.is_valid())
+        {
+            if (!mem::k_vmm.map_pages(pagetable,
+                                      TRAMPOLINE,
+                                      PGSIZE,
+                                      (uint64)trampoline,
+                                      riscv::PteEnum::pte_readable_m | riscv::pte_executable_m))
+            {
+                printfRed("ProcessMemoryManager: repair trampoline mapping failed, pt=%p\n",
+                          (void *)pagetable.get_base());
+                return false;
+            }
+        }
+
+        mem::Pte sig_trampoline_pte = pagetable.walk(SIG_TRAMPOLINE, false);
+        if (sig_trampoline_pte.is_null() || !sig_trampoline_pte.is_valid())
+        {
+            if (!mem::k_vmm.map_pages(pagetable,
+                                      SIG_TRAMPOLINE,
+                                      PGSIZE,
+                                      (uint64)sig_trampoline,
+                                      riscv::PteEnum::pte_readable_m |
+                                          riscv::pte_executable_m |
+                                          riscv::PteEnum::pte_user_m))
+            {
+                printfRed("ProcessMemoryManager: repair sig trampoline mapping failed, pt=%p\n",
+                          (void *)pagetable.get_base());
+                return false;
+            }
+        }
+#elif defined(LOONGARCH)
+        mem::Pte sig_trampoline_pte = pagetable.walk(SIG_TRAMPOLINE, false);
+        if (sig_trampoline_pte.is_null() || !sig_trampoline_pte.is_valid())
+        {
+            if (!mem::k_vmm.map_pages(pagetable,
+                                      SIG_TRAMPOLINE,
+                                      PGSIZE,
+                                      (uint64)sig_trampoline,
+                                      PTE_P | PTE_MAT | PTE_D | PTE_U))
+            {
+                printfRed("ProcessMemoryManager: repair sig trampoline mapping failed, pt=%p\n",
+                          (void *)pagetable.get_base());
+                return false;
+            }
+        }
+#endif
+
+        return true;
+    }
+
     void ProcessMemoryManager::free_pagetable()
     {
         if (!pagetable.get_base())

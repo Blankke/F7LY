@@ -6839,6 +6839,11 @@ namespace proc
 
         // 在所有已分配的内存区域之后初始化堆
         new_mm->init_heap(PGROUNDUP(highest_addr));
+        if (!new_mm->ensure_special_mappings())
+        {
+            printfRed("execve: special user pagetable mappings missing after image build\n");
+            CLEANUP_AND_RETURN(-ENOMEM);
+        }
 
         // 完成新内存管理器的设置后，绑定到当前PCB
         proc->set_memory_manager(new_mm);
