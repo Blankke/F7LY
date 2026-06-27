@@ -279,6 +279,10 @@ namespace tmm
 			{
 				// 获取当前进程的CPU使用时间
 				proc::Pcb *p = proc::k_pm.get_cur_pcb();
+				if (p == nullptr)
+				{
+					return -22;
+				}
 				uint64 user_ticks = p->get_user_ticks(); // 用户态tick数
 				uint64 stime = p->get_stime(); // 系统态时间（微秒）
 				

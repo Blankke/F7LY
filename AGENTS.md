@@ -84,6 +84,19 @@ F7LY OS 是一个基于 xv6 思路扩展的教学/比赛用内核。主线目标
   `{测例名, RV+musl, RV+glibc, LA+musl, LA+glibc}` 控制是否运行；不要在表外新增隐藏黑名单函数。
   若某组合暂不运行，直接把对应开关置为 `false`，并在该表项注释中写清原因和覆盖关系。
 
+## Docker 模拟评测 workflow
+- 如果本地build下下载了官方 Docker 镜像，可以在本地复现官方评测机的并发测试。
+- 本地复现官方 Docker 并发评测时，使用：
+  `bash build/oscomp-eval-20260624-232828/scripts/run_docker_autotest.sh`
+- 脚本默认把当前 F7LY 工作树同步到 `build/oscomp-eval-20260624-232828/submit/`，会排除 `.git/`、`.venv/`、`build/`、`logs/` 和本地大镜像；若只想复用现有 `submit/`，加 `--no-sync`。
+- 当前用户没有 Docker 权限时使用：
+  `DOCKER_BIN="sudo docker" bash build/oscomp-eval-20260624-232828/scripts/run_docker_autotest.sh`
+- Docker 内部使用 `autotest-for-oskernel/kernel.zip`，执行 `make all` 后并发启动 RISC-V 与 LoongArch QEMU；超时和内存等参数来自 `build/oscomp-eval-20260624-232828/testdata/config.json`。
+- 日志输出目录为：
+  `build/oscomp-eval-20260624-232828/logs/<run_id>/`
+  其中 `docker_stdout.log` 是 Docker 主输出，`console_log` 是 `/mnt/cghook` 汇总，`os_serial_out_rv.txt` 与 `os_serial_out_la.txt` 是两架构串口日志副本，`run.env` 记录镜像、提交和退出码。
+- agent 修复评测机并发问题后不要主动跑这个全量 workflow；完成构建或窄验证后通知用户，由用户决定何时执行。
+
 # 测例入口
 sdcard下载地址为https://github.com/oscomp/testsuits-for-oskernel/releases/download/pre-20250615/sdcard-la.img.xz
 若认为本地磁盘运行的行为与远端评测机不符，请重新下载并使用该镜像进行测试。注意解压后镜像文件较大，所以请不要经常做此操作，仓库中请只保留一份位于images文件下

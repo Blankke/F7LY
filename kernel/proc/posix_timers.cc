@@ -50,6 +50,55 @@ uint64 realtime_now_usec()
   return tmm::time_stamp_to_usec(tmm::get_hw_time_stamp());
 }
 
+bool is_cpu_clock(tmm::SystemClockId clockid)
+{
+  return clockid == tmm::CLOCK_PROCESS_CPUTIME_ID ||
+         clockid == tmm::CLOCK_THREAD_CPUTIME_ID;
+}
+
+bool read_task_cpu_clock(proc::Pcb *p, tmm::timespec *tp)
+{
+  if (p == nullptr || tp == nullptr || p->_state == proc::ProcState::UNUSED)
+  {
+    return false;
+  }
+
+  uint64 cpt = tmm::cycles_per_tick();
+  uint64 freq = tmm::get_main_frequence();
+  uint64 user_time_cycles = p->get_user_ticks() * cpt;
+  uint64 user_time_sec = user_time_cycles / freq;
+  uint64 user_time_nsec = ((user_time_cycles % freq) * 1000000000L) / freq;
+  uint64 stime = p->get_stime();
+  uint64 total_sec = user_time_sec + (stime / 1000000);
+  uint64 total_nsec = user_time_nsec + ((stime % 1000000) * 1000);
+
+  if (total_nsec >= 1000000000L)
+  {
+    total_sec += total_nsec / 1000000000L;
+    total_nsec %= 1000000000L;
+  }
+  if (total_sec == 0 && total_nsec == 0)
+  {
+    total_nsec = 1;
+  }
+
+  tp->tv_sec = static_cast<long>(total_sec);
+  tp->tv_nsec = static_cast<long>(total_nsec);
+  return true;
+}
+
+bool read_posix_timer_clock(const extended_posix_timer &timer, tmm::timespec *current_time)
+{
+  tmm::SystemClockId clockid = static_cast<tmm::SystemClockId>(timer.clockid);
+  if (is_cpu_clock(clockid))
+  {
+    // POSIX CPU timer 属于创建它的进程/线程，不能在时钟中断里偷用“当前 PCB”。
+    // RISC-V 评测机 panic 的 no-current-proc 就是这里被异步扫描命中的。
+    return read_task_cpu_clock(timer.owner, current_time);
+  }
+  return tmm::k_tm.clock_gettime(clockid, current_time) == 0;
+}
+
 int timer_signal_for_kind(int which)
 {
   switch (which)
@@ -326,8 +375,7 @@ void check_expired_timers()
     }
 
     tmm::timespec current_time;
-    tmm::SystemClockId clockid = static_cast<tmm::SystemClockId>(g_timers[i].clockid);
-    if (tmm::k_tm.clock_gettime(clockid, &current_time) != 0) {
+    if (!read_posix_timer_clock(g_timers[i], &current_time)) {
       continue;  // 当前时钟不可读时不要误触发别的时钟域定时器。
     }
     

@@ -78,6 +78,15 @@ namespace mem
 			return ptr;
 		}
 
+	void *HeapMemoryManager::try_allocate(uint64 size)
+	{
+		if (size == 0)
+		{
+			size = 1;
+		}
+		return _k_allocator_fine.malloc(size);
+	}
+
 	void HeapMemoryManager::free( void *p )
 	{
 		if (p == nullptr)

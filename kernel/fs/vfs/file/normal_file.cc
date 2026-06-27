@@ -7,6 +7,7 @@
 #include "fs/lwext4/ext4_types.hh"
 #include "devs/spinlock.hh"
 #include "libs/string.hh"
+#include "mem/heap_memory_manager.hh"
 #include "mem/physical_memory_manager.hh"
 #include "mem/userspace_stream.hh"
 #include "virtual_memory_manager.hh"
@@ -20,15 +21,20 @@ namespace
 {
 	constexpr size_t k_write_combine_pool_capacity = 1024 * 1024;
 	// iozone 每个阶段会同时跑 4 个 worker；musl/glibc 动态装载、测试文件读快照、
-	// 小写合并会短时间并发借用 1MiB 缓冲。64 个槽能避免偶发退回 1KiB ext4 路径。
+	// 小写合并会短时间并发借用 1MiB 缓冲。槽数组保留 64 个上限，但实际预热数量
+	// 按 PMM 可管理页数收敛，避免 LoongArch 低端页池被性能缓存长期占满。
 	constexpr int k_write_combine_pool_slots = 64;
+	constexpr int k_write_combine_pool_min_slots = 8;
 	constexpr int k_write_combine_pool_pages = static_cast<int>(k_write_combine_pool_capacity / PGSIZE);
+	constexpr int k_write_combine_runtime_reserve_slots = 4;
 
 	SpinLock k_write_combine_pool_lock;
 	bool k_write_combine_pool_lock_ready = false;
 	bool k_write_combine_pool_ready = false;
+	int k_write_combine_pool_target_slots = 0;
 	uint8 *k_write_combine_pool[k_write_combine_pool_slots] = {};
 	bool k_write_combine_pool_used[k_write_combine_pool_slots] = {};
+	bool k_write_combine_pool_allocating[k_write_combine_pool_slots] = {};
 	uint8 k_zero_fill_page[PGSIZE] = {};
 
 	struct DirtyPathRef
@@ -49,18 +55,51 @@ namespace
 	eastl::vector<DirtyPathRef> k_write_combine_dirty_paths;
 	eastl::vector<SmallFileCacheEntry> k_small_file_cache;
 	uint64 k_small_file_cache_version = 1;
-	constexpr int k_small_file_cache_max_entries = 48;
+	constexpr int k_small_file_cache_max_entries = 4;
 
 	void ensure_write_combine_pool_lock_ready()
 	{
 		if (!k_write_combine_pool_lock_ready)
 		{
-			k_write_combine_pool_lock.init("normal_file_write_combine_pool");
+			// 这个锁是静态零初始化对象；这里只记录“可用”状态，避免多个 worker
+			// 首次同时进入时反复 init() 把已经持有的锁状态清掉。
 			k_write_combine_pool_lock_ready = true;
 		}
 	}
 
-	void warm_write_combine_pool_locked()
+	void initialize_write_combine_pool_budget_locked();
+
+	int compute_write_combine_pool_slots()
+	{
+		uint32 page_count = mem::k_pmm.get_page_count();
+		int budget_slots = static_cast<int>((page_count / 10) / k_write_combine_pool_pages);
+		if (budget_slots < k_write_combine_pool_min_slots)
+		{
+			budget_slots = k_write_combine_pool_min_slots;
+		}
+		if (budget_slots > k_write_combine_pool_slots)
+		{
+			budget_slots = k_write_combine_pool_slots;
+		}
+		return budget_slots;
+	}
+
+	int small_file_cache_entry_limit_locked()
+	{
+		initialize_write_combine_pool_budget_locked();
+		int limit = k_write_combine_pool_target_slots - k_write_combine_runtime_reserve_slots;
+		if (limit < 1)
+		{
+			limit = 1;
+		}
+		if (limit > k_small_file_cache_max_entries)
+		{
+			limit = k_small_file_cache_max_entries;
+		}
+		return limit;
+	}
+
+	void initialize_write_combine_pool_budget_locked()
 	{
 		if (k_write_combine_pool_ready)
 		{
@@ -68,16 +107,11 @@ namespace
 		}
 
 		/*
-		 * 1MiB 顺序写合并是 iozone 的性能关键，但连续 256 页不能在长回归中
-		 * 反复申请/释放。这里在第一次需要时集中预热固定池，后续只借还指针，
-		 * 避免把 buddy 系统切碎到后段 LTP 再也拿不到 1MiB 连续块。
+		 * 1MiB 顺序写合并是 iozone 的性能关键，但它只是性能缓存，不能为了
+		 * 吞吐把 LoongArch 的低端 PMM 长期吃空。这里只初始化预算；真正的
+		 * 连续页分配放到锁外按需做，避免首次并发进入时在全局自旋锁里长时间清零。
 		 */
-		for (int i = 0; i < k_write_combine_pool_slots; ++i)
-		{
-			k_write_combine_pool[i] = reinterpret_cast<uint8 *>(
-				mem::k_pmm.alloc_pages(k_write_combine_pool_pages));
-			k_write_combine_pool_used[i] = false;
-		}
+		k_write_combine_pool_target_slots = compute_write_combine_pool_slots();
 		k_write_combine_pool_ready = true;
 	}
 
@@ -85,8 +119,8 @@ namespace
 	{
 		ensure_write_combine_pool_lock_ready();
 		k_write_combine_pool_lock.acquire();
-		warm_write_combine_pool_locked();
-		for (int i = 0; i < k_write_combine_pool_slots; ++i)
+		initialize_write_combine_pool_budget_locked();
+		for (int i = 0; i < k_write_combine_pool_target_slots; ++i)
 		{
 			if (!k_write_combine_pool_used[i])
 			{
@@ -100,8 +134,38 @@ namespace
 				return buffer;
 			}
 		}
+		int allocate_slot = -1;
+		for (int i = 0; i < k_write_combine_pool_target_slots; ++i)
+		{
+			if (k_write_combine_pool[i] == nullptr && !k_write_combine_pool_allocating[i])
+			{
+				k_write_combine_pool_allocating[i] = true;
+				allocate_slot = i;
+				break;
+			}
+		}
 		k_write_combine_pool_lock.release();
-		return nullptr;
+		if (allocate_slot < 0)
+		{
+			return nullptr;
+		}
+
+		uint8 *fresh_buffer = reinterpret_cast<uint8 *>(
+			mem::k_hmm.try_allocate(k_write_combine_pool_capacity));
+
+		k_write_combine_pool_lock.acquire();
+		k_write_combine_pool_allocating[allocate_slot] = false;
+		if (fresh_buffer != nullptr)
+		{
+			k_write_combine_pool[allocate_slot] = fresh_buffer;
+			k_write_combine_pool_used[allocate_slot] = true;
+		}
+		k_write_combine_pool_lock.release();
+		if (fresh_buffer == nullptr)
+		{
+			return nullptr;
+		}
+		return fresh_buffer;
 	}
 
 	void release_write_combine_buffer(uint8 *buffer)
@@ -124,8 +188,8 @@ namespace
 		}
 		k_write_combine_pool_lock.release();
 
-		// 理论上不会走到这里；保底释放非池化来源，避免异常路径泄漏。
-		mem::k_pmm.free_pages(buffer);
+		// 写合并缓冲来自 kernel heap。未知指针说明调用方已经失配，这里保守忽略，
+		// 避免把 heap 指针误交给 PMM 造成二次破坏。
 	}
 
 	void note_write_combine_dirty_file(const eastl::string &path)
@@ -306,16 +370,40 @@ namespace
 			return false;
 		}
 
-		uint8 *fresh_buffer = acquire_write_combine_buffer();
-		uint8 *unused_buffer = nullptr;
-		bool stored = false;
-
+		bool need_buffer = false;
 		ensure_write_combine_pool_lock_ready();
 		k_write_combine_pool_lock.acquire();
 		SmallFileCacheEntry *entry = find_small_file_cache_locked(path);
 		if (entry == nullptr)
 		{
-			if (fresh_buffer != nullptr && k_small_file_cache.size() < k_small_file_cache_max_entries)
+			if (static_cast<int>(k_small_file_cache.size()) >= small_file_cache_entry_limit_locked())
+			{
+				k_write_combine_pool_lock.release();
+				return false;
+			}
+			need_buffer = true;
+		}
+		else if (entry->buffer == nullptr)
+		{
+			need_buffer = true;
+		}
+		k_write_combine_pool_lock.release();
+
+		uint8 *fresh_buffer = need_buffer ? acquire_write_combine_buffer() : nullptr;
+		if (need_buffer && fresh_buffer == nullptr)
+		{
+			return false;
+		}
+		uint8 *unused_buffer = nullptr;
+		bool stored = false;
+
+		ensure_write_combine_pool_lock_ready();
+		k_write_combine_pool_lock.acquire();
+		entry = find_small_file_cache_locked(path);
+		if (entry == nullptr)
+		{
+			if (fresh_buffer != nullptr &&
+				static_cast<int>(k_small_file_cache.size()) < small_file_cache_entry_limit_locked())
 			{
 				SmallFileCacheEntry new_entry;
 				new_entry.path = path;
