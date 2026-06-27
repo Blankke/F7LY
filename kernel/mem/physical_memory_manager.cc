@@ -279,19 +279,23 @@ namespace mem
 
     void *PhysicalMemoryManager::alloc_pages(int count)
     {
-        if (count <= 0)
-        {
-            return nullptr;
-        }
-
-        void *pa = _buddy->alloc_pages(count);
+        void *pa = try_alloc_pages(count);
         if (pa == nullptr)
         {
             panic("[pmm] alloc_pages failed, count=%d", count);
         }
 
-        memset(pa, 0, static_cast<size_t>(count) * PGSIZE);
         return pa;
+    }
+
+    void *PhysicalMemoryManager::try_alloc_pages(int count)
+    {
+        if (count <= 0)
+        {
+            return nullptr;
+        }
+
+        return _buddy->alloc_pages(count);
     }
 
     void PhysicalMemoryManager::free_page1(void *pa, uint64 size)

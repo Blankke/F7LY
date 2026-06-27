@@ -21,6 +21,7 @@ namespace mem
         static void init();
         static void *alloc_page(); // 分配单个物理页
         static void *alloc_pages(int count); // 分配连续多个物理页
+        static void *try_alloc_pages(int count); // 尝试分配连续页，失败时返回空指针
         static void free_page(void *pa); // 释放单个物理页
         static void free_pages(void *pa); // 释放连续多个物理页
         static bool retain_page(void *pa); // 增加单页引用计数，用于 fork COW 共享
