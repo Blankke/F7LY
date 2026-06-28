@@ -2,7 +2,7 @@
 
 == 进程控制块（PCB）
 
-进程控制块（Process Control Block，PCB）是内核管理进程与线程的核心数据结构。F7LY 内核在 `kernel/proc/proc.hh` 中定义 `proc::Pcb` 类，将一个任务的全部状态集中存储在一个对象中，涵盖标识、状态与调度、地址空间、文件系统、信号处理、同步原语、资源限制和时间统计等信息。
+进程控制块（Process Control Block，PCB）是内核管理进程与线程的核心数据结构。F7LY 以 `Pcb` 统一描述一个任务的全部内核态状态，将标识、调度、地址空间、文件系统、信号处理、同步原语、资源限制和时间统计等信息收拢到同一个对象中。
 
 
 进程与线程在 F7LY 中统一用 `Pcb` 表示，区别仅在于若干标志位的配置：线程通过 `clone(CLONE_VM | CLONE_THREAD)` 创建，共享地址空间和线程组 ID，但拥有独立的内核栈、TrapFrame 和线程 ID。主线程满足 `_tid == _tgid`，`is_process()` 据此判断调用者是否为进程的主线程。以下两小节分别展开 PCB 的字段组成和进程状态机。
@@ -10,7 +10,7 @@
 #figure(
   image("fig/PCB结构.png", width: 100%),
   caption: [PCB结构示意图],
-) <fig:syscall>
+) <fig:proc-pcb-structure>
 
 
 === 组成
@@ -54,7 +54,7 @@ enum ProcState {
     [`ZOMBIE`], [进程已终止，但 PCB 保留退出状态等待父进程回收。],
   ),
   caption: [进程七状态说明],
-) <tab:proc-states>
+) <tab:proc-state-overview>
 
 进程状态的切换如下：
 

@@ -5,7 +5,7 @@
 
 == 附录A　PCB 字段总表 <sec:appendix-pcb-fields>
 
-`proc::Pcb` 定义于 `kernel/proc/proc.hh`。所有 PCB 存放在全局进程池 `k_proc_pool[NPROC]` 中，每个 `Pcb` 对象承载一个进程或线程的全部内核态元数据。
+`proc::Pcb` 是 F7LY 用来承载进程与线程全部内核态元数据的统一对象。系统中的所有任务都以 PCB 形式存在于全局进程池中，由调度、信号、文件系统和地址空间等子系统共同引用。
 
 #figure(
   table(
@@ -60,7 +60,7 @@
     [`_rlim_vec[16]`], [16 类 rlimit（CPU / FSIZE / NOFILE / NPROC 等），`prlimit64` 系统调用读写],
   ),
   caption: [PCB 字段总表]
-) <tab:pcb-fields>
+) <tab:appendix-pcb-fields>
 
 
 
