@@ -7,6 +7,12 @@
 
 进程与线程在 F7LY 中统一用 `Pcb` 表示，区别仅在于若干标志位的配置：线程通过 `clone(CLONE_VM | CLONE_THREAD)` 创建，共享地址空间和线程组 ID，但拥有独立的内核栈、TrapFrame 和线程 ID。主线程满足 `_tid == _tgid`，`is_process()` 据此判断调用者是否为进程的主线程。以下两小节分别展开 PCB 的字段组成和进程状态机。
 
+#figure(
+  image("fig/PCB结构.png", width: 100%),
+  caption: [PCB结构示意图],
+) <fig:syscall>
+
+
 === 组成
 
 ```cpp

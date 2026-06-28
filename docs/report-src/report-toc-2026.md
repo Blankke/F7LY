@@ -336,7 +336,7 @@
  ## 第五章 进程与线程管理
 
   > 旧报告对应：旧 §2.4（进程控制）
-  > 旧 §2.4.3（进程内存管理）移入第四章 §4.2.4。
+
 
   ### 5.1 进程控制块（PCB）
 
@@ -351,6 +351,7 @@
   - 上下文切换：swtch.S 保存/恢复 callee-saved 寄存器，swtch(&old, &new)
   - 轮转调度：Scheduler 遍历 PCB 找 RUNNABLE → swtch 切入 → 时间片到 →
   yield
+  - 优先级调度
   - 变化：setpriority/getpriority 同时作用于 CPU nice 和 I/O
   分类（87b9eec）
 
@@ -371,25 +372,60 @@
 
 
 ## 第六章　文件系统
-  > 旧报告对应：旧 §2.5（文件系统架构）+ 旧 §4.2（VirtIO）+ 旧§4.3（块设备）。
-  > 叙述逻辑：自底向上——先讲磁盘怎么读写，再讲内核怎么抽象，最后讲用户看到什么。 用户读写文件 → VFS → ext4 → Buffer → virtio-blk → 磁盘
-### 6.1 块设备驱动与 I/O 调度
+  > 旧报告对应：旧 §2.5（文件系统架构）+ 旧 §4.2（VirtIO）+ 旧 §4.3（块设备）+ 旧第五章（设备管理）。
+  > 叙述逻辑：自底向上——先讲设备抽象，再讲磁盘怎么读写，然后讲内核怎么抽象，最后讲用户看到什么。
+  > 用户读写文件 → VFS → ext4 → Buffer → virtio-blk → 磁盘
+  > 2026 年设备管理不再独立成章，VirtualDevice 体系作为设备抽象层归入文件系统章，与 virtio-blk 形成「抽象 → 实现」的叙述递进。
 
-  #### 6.1.1 统一 virtio-blk 框架
+### 6.1 设备抽象层
+
+  #### 6.1.1 虚拟设备基类的设计理念
+
+  - VirtualDevice 四个纯虚接口：type() / handle_intr() / read_ready() / write_ready()
+  - 为上层 VFS 和 epoll 提供统一的设备就绪判断入口
+  - 旧报告单文件实现 → 2026 年按 RISC-V/LA 拆分，接口定义不变
+
+  #### 6.1.2 字符设备的特性与应用
+
+  - CharDevice 继承 VirtualDevice，增加字符级读写接口（get_char / put_char）
+  - support_stream() 判断是否支持流式操作
+  - 控制台输入输出、串口通信等逐字符交互的场景
+
+  #### 6.1.3 块设备的架构与优化
+
+  - BlockDevice 继承 VirtualDevice，BufferDescriptor 描述缓冲区
+  - read_blocks / write_blocks 支持同步/异步、scatter-gather
+  - 旧架构专用磁盘驱动 → 统一 virtio-blk 替代（详见 §6.2）
+  - BlockDeviceIoctlState：2026 年从 syscall_handler 抽离 [→ 5319d08]
+
+  #### 6.1.4 流设备的高级功能
+
+  - StreamDevice 继承 CharDevice，封装字节流 read/write
+  - redirect_stream 支持 I/O 重定向
+  - 缓冲区管理和线路状态查询
+
+  #### 6.1.5 Loop 设备
+
+  - /dev/loop0~7，将普通文件映射为块设备
+  - ISO 镜像挂载、文件系统测试等场景
+
+### 6.2 块设备驱动与 I/O 调度
+
+  #### 6.2.1 统一 virtio-blk 框架
 
   - 旧：RISC-V 和 LA 各一套独立驱动（virtio2.hh / virtio_disk.cc）
   - 新：三层统一——Transport（隔离 MMIO/PCI）→ Device（块设备抽象）→Queue（请求排队、descriptor 管理、完成回收）底层是 Transport（屏蔽 MMIO 和 PCI 的硬件差异），中间是Queue（管请求排队和 descriptor），上层是 Device（对上只提供一个submit_and_wait 接口）。ext4 要读磁盘，只管发请求，不关心下面是 RISC-V还是 LA。
   - IoRequest 携带块号、读写方向、进程 PID/nice
   - 验证：双架构 iozone 通过（6bdca8c）
 
-  #### 6.1.2 priority-borrow I/O 调度
+  #### 6.2.2 priority-borrow I/O 调度
 
 
   - 新：nice 值映射 service class，每 class 内 per-process flow轮转，高优先先走、低优先借空闲带宽
   - 验证：A/B 吞吐对比实验（4099546）、iozone 四组合得分
   89.703（dde2ae4）
 
-  ### 6.2 虚拟文件系统（VFS）
+  ### 6.3 系统文件
 
   - VFS 的角色：对上提供统一的文件操作接口，对下对接 ext4/FAT32/虚拟文件
   - VFS 架构：文件打开流程（路径解析 → 找到 inode → 创建 file 对象 → 返回
@@ -398,39 +434,40 @@
 
 > 图 6-1 虚拟文件系统架构
 
-  ### 6.3 VFS 核心元数据
+  ### 6.4 VFS 核心元数据
 
-  #### 6.3.1 Buffer 层
+  #### 6.4.1 Buffer 层
  >图 6-2 Buffer 缓冲区管理
+ 读磁盘有缓冲的优化，问前面几次提交关于让iozone能够运行，做了什么优化。写一个小节，就是你说了ext4 cache 优化，批量读写路径提
+速（dde2ae4）优化了批量读写，相邻块合并提交，减少和磁盘的来回次数
+
   - Buffer/Block 缓存，LRU 淘汰
   - 变化：ext4 cache 优化，批量读写路径提速（dde2ae4）优化了批量读写，相邻块合并提交，减少和磁盘的来回次数
 
-  #### 6.3.2 SuperBlock
+  #### 6.4.2 SuperBlock 和 Inode
     记录磁盘是什么文件系统
   - 通用 superblock 结构 + ext4 专用 ext4_sblock
   - super_operations 函数表、dirty inode 链表
 
-  #### 6.3.3 Inode
-
   - VFS inode + inode_operations 函数表 + ext4特有信息（vfs_ext4_inode_info）  记录文件大小、权限、数据块在哪
   - 变化：操作表扩展，补充 splice、xattr 相关回调（1b6de72）
 
-  ### 6.4 ext4 与 FAT32
+  ### 6.5 ext4 与 FAT32
 
   - ext4：主力根文件系统，SuperBlock → Inode → 数据块，I/O 走统一virtio-blk 队列
   - FAT32：数据盘（/data）或回退挂载，纠正旧报告「对等根文件系统」的表述
   - 变化：两套文件系统不再直调架构专用驱动，统一走 virtio-blk（6bdca8c）
 
-  ### 6.5 文件操作
+  ### 6.6 文件操作
 
-   其他操作
+   其他操作   一点点变化，提一下就好
   - fcntl：F_DUPFD / CLOEXEC / O_NONBLOCK /文件锁（F_SETLK/SETLKW/GETLK）/ F_SETPIPE_SZ / F_ADD_SEALS，  
 > 图 6-3 文件控制调用
   - ioctl：2026年按设备 类型 拆分——BlockDeviceIoctlState、SocketIoctlCompat（5319d08）
-  - xattr：setxattr / getxattr / listxattr 及 inodeflags（FS_IOC_GETFLAGS/SETFLAGS）在文件上挂键值对
+  - xattr：setxattr / getxattr / listxattr 及 inodeflags （FS_IOC_GETFLAGS/SETFLAGS）在文件上挂键值对
   - 变化：splice 数据搬运（1b6de72）、fanotify监控文件访问（4f5ac77）、memfd sealing修复（f8ea061）
 
-  ### 6.6 挂载与路径解析
+  ### 6.7 挂载与路径解析
     多个磁盘 -> 目录树
   - 旧报告未深入，2026 年独立成节
   - mount / umount / bind mount 完整实现（3803a69）
@@ -438,7 +475,7 @@
   - 符号链接解析：递归 → 有深度上限的迭代（47829cc）
   - mount 路径处理优化（2e6a369）
 
-  ### 6.7 虚拟文件与特殊设备
+  ### 6.8 虚拟文件与特殊设备
 
   - /proc/：meminfo、cpuinfo、version、mounts、self/maps、self/stat、uptime
   等
@@ -446,14 +483,13 @@
   - /etc/：passwd、ld.so.preload
   - /dev/：null、zero、loop-control、loop0~7
   - loop 设备：ISO 镜像挂载、I/O 转发
-
 ---
 
 ## 第七章　进程间通信
   > 旧报告对应位置：旧 §2.6.3（内存共享）、旧 §2.6.4（memfd）、旧§2.6.5（管道）。
   > 旧 §2.6.1（信号）和旧 §2.6.2（futex）
   > mmap/MAP_SHARED 的缺页与 VMA 细节移入第四章 §4.2.5。
-  > 管道作为 VFS file 派生类的注册、open/close 流程在第六章 §6.2。
+  > 管道作为 VFS file 派生类的注册、open/close 流程在第六章 §6.3。
   > 本章聚焦 IPC 机制的 API 语义、内部数据结构与跨进程协作流程。
   > **2026 年新增：epoll 事件通知、eventfd 事件计数。**
 
@@ -489,6 +525,7 @@
   ### 7.4　共享内存
   > 图 7-4 共享内存
   绕过内核直接访问
+  
   SysV 共享内存：通过 key 找段
   - shm_segment
   结构（key/size/权限/附加列表/auto_destroy_on_last_detach）
@@ -588,7 +625,8 @@
 
   - VirtIO-Net 驱动：MAC 地址读写、virtqueue 管理
   - 可访问 host 服务，QEMU 网关 ICMP 已跑通 [→ fac082d]
-  - 与统一 virtio-blk 共用 transport 层（第六章§6.1.1），但网络数据路径独立
+  - 与统一 virtio-blk 共用 transport 层（第六章 §6.2.1），但网络数据路径独立
+
 
   ### 9.3　核心网络协议栈
 
@@ -632,73 +670,6 @@
   - [→ 62eff70, eb73966]
 
 
-## 第十章 设备管理
-> 旧报告对应位置：旧第五章。Disk 设备已被统一 virtio-blk替代（详见第六章 §6.1），
-> Network 设备归入第九章 §9.2。新增 BlockDeviceIoctlState 和 ConsoleTermios 两个抽离模块。
-### 10.1　设备管理架构概述
-
-  #### 10.1.1　虚拟设备基类的设计理念
-
-  - VirtualDevice 四个纯虚接口：type() / handle_intr() / read_ready() / write_ready()
-  - 为上层 VFS 和 epoll 提供统一的设备就绪判断入口
-  - 旧报告单文件 → 2026 年按 RISC-V/LA 拆分，接口定义不变
-
-  #### 10.1.2　字符设备的特性与应用
-
-  - CharDevice 继承 VirtualDevice，增加字符级读写接口（get_char /put_char）
-  - support_stream() 判断是否支持流式操作
-  - 控制台输入输出、串口通信等逐字符交互的场景
-
-  #### 10.1.3　块设备的架构与优化
-
-  - BlockDevice 继承 VirtualDevice，BufferDescriptor 描述缓冲区
-  - read_blocks / write_blocks 支持同步/异步、scatter-gather
-  - 旧架构专用磁盘驱动 → 统一 virtio-blk 替代（第六章 §6.1）
-  - BlockDeviceIoctlState：2026 年从 syscall_handler 抽离 [→ 5319d08]
-
-  #### 10.1.4　流设备的高级功能
-
-  - StreamDevice 继承 CharDevice，封装字节流 read/write
-  - redirect_stream 支持 I/O 重定向
-  - 缓冲区管理和线路状态查询
-
-  ### 10.2　设备管理器实现
-
-  #### 10.2.1　设备表的数据结构设计
-
-  - DeviceTableEntry：{VirtualDevice 指针, 设备名称}
-  - _device_table[DEV_TBL_LEN] 固定数组，线性扫描找空位
-  - 前三个槽位保留给 stdin/stdout/stderr
-
-  #### 10.2.2　核心管理功能
-
-  - register_device / search_device / get_device：按名称注册和查找
-  - remove_device：按指针遍历移除
-  - traversal_dev_table：遍历供 /proc/devices 查询
-  - 全局实例 k_devm，main() 阶段三初始化
-
-  ### 10.3　具体设备实现
-
-  #### 10.3.1　UART 设备
-
-  - Console 类继承 StreamDevice，对接 UART 硬件
-  - k_stdin / k_stdout / k_stderr 三个全局实例
-  - RISC-V 控制台输入改走 SBI [→ 5727aaa]
-  - ConsoleTermios：2026 年从 syscall_handler 抽离 [→ 5319d08]
-
-  #### 10.3.2　Disk 设备
-
-  - 旧架构专用磁盘驱动已删除
-  - 统一 virtio-blk 框架接管（详见第六章 §6.1）
-
-  #### 10.3.3　Network 设备
-
-  - VirtIO-Net 适配器（详见第九章 §9.2）
-
-  #### 10.3.4　Loop 设备
-
-  - /dev/loop0~7，将普通文件映射为块设备
-  - ISO 镜像挂载、文件系统测试等场景
 
 ## 第十一章 logging系统
 
