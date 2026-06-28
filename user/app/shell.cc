@@ -120,7 +120,7 @@ extern "C"
         // rootfs 沿用标准 /bin/busybox 布局，交互式 shell 直接从这里进入。
         int shell_ret = run_foreground("/bin/busybox", shell_argv, envp, "/root");
         printfMagenta("#### F7LY INTERACTIVE SHELL END ret=%d ####\n", shell_ret);
-        print_fuckyou();
+        print_goodbye();
 
         shutdown();
         return 0;

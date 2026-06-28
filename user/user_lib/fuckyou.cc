@@ -71,3 +71,31 @@ void print_f7ly() {
     printfWhite("%s",Y_L6);
     printfWhite("\n");
 }
+
+void print_goodbye() {
+    // G O O D B Y E
+    const char* L1[] = {G_L1, O_L1, O_L1, D_L1, B_L1, Y_L1, E_L1};
+    const char* L2[] = {G_L2, O_L2, O_L2, D_L2, B_L2, Y_L2, E_L2};
+    const char* L3[] = {G_L3, O_L3, O_L3, D_L3, B_L3, Y_L3, E_L3};
+    const char* L4[] = {G_L4, O_L4, O_L4, D_L4, B_L4, Y_L4, E_L4};
+    const char* L5[] = {G_L5, O_L5, O_L5, D_L5, B_L5, Y_L5, E_L5};
+    const char* L6[] = {G_L6, O_L6, O_L6, D_L6, B_L6, Y_L6, E_L6};
+
+    for (int row = 0; row < 6; ++row) {
+        switch (row) {
+            case 0:
+                printfRed("%s",L1[0]); printfRed("%s",L1[1]); printfRed("%s",L1[2]); printfRed("%s",L1[3]); printfRed("%s",L1[4]); printfRed("%s",L1[5]); printfRed("%s",L1[6]); break;
+            case 1:
+                printfMagenta("%s",L2[0]); printfMagenta("%s",L2[1]); printfMagenta("%s",L2[2]); printfMagenta("%s",L2[3]); printfMagenta("%s",L2[4]); printfMagenta("%s",L2[5]); printfMagenta("%s",L2[6]); break;
+            case 2:
+                printfYellow("%s",L3[0]); printfYellow("%s",L3[1]); printfYellow("%s",L3[2]); printfYellow("%s",L3[3]); printfYellow("%s",L3[4]); printfYellow("%s",L3[5]); printfYellow("%s",L3[6]); break;
+            case 3:
+                printfGreen("%s",L4[0]); printfGreen("%s",L4[1]); printfGreen("%s",L4[2]); printfGreen("%s",L4[3]); printfGreen("%s",L4[4]); printfGreen("%s",L4[5]); printfGreen("%s",L4[6]); break;
+            case 4:
+                printfCyan("%s",L5[0]); printfCyan("%s",L5[1]); printfCyan("%s",L5[2]); printfCyan("%s",L5[3]); printfCyan("%s",L5[4]); printfCyan("%s",L5[5]); printfCyan("%s",L5[6]); break;
+            case 5:
+                printfBlue("%s",L6[0]); printfBlue("%s",L6[1]); printfBlue("%s",L6[2]); printfBlue("%s",L6[3]); printfBlue("%s",L6[4]); printfBlue("%s",L6[5]); printfBlue("%s",L6[6]); break;
+        }
+        printf("\n");
+    }
+}

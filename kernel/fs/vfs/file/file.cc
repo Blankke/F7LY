@@ -96,7 +96,9 @@ namespace fs
 	        PosixRecordLockEntry g_posix_record_locks[kMaxPosixRecordLocks];
 	        PosixRecordLockWaitEntry g_posix_record_lock_waiters[kMaxPosixRecordLockWaiters];
 	        OfdRecordLockEntry g_ofd_record_locks[kMaxOfdRecordLocks];
+	        SpinLock g_file_ref_lock;
 	        bool g_bsd_flock_ready = false;
+	        bool g_file_ref_lock_ready = false;
 
 	        off_t record_lock_end(const struct flock &lock);
 
@@ -529,9 +531,10 @@ namespace fs
 	        }
 	    }
 
-    void init_bsd_flock_table()
-    {
-        g_bsd_flock_lock.init("bsd_flock_table");
+	    void init_bsd_flock_table()
+	    {
+	        init_file_runtime_locks();
+	        g_bsd_flock_lock.init("bsd_flock_table");
         for (auto &entry : g_bsd_flock_entries)
         {
             entry.used = false;
@@ -550,6 +553,50 @@ namespace fs
 	            clear_ofd_record_lock(entry);
 	        g_bsd_flock_ready = true;
 	    }
+
+	    void init_file_runtime_locks()
+	    {
+	        if (g_file_ref_lock_ready)
+	            return;
+	        g_file_ref_lock.init("file_ref");
+	        g_file_ref_lock_ready = true;
+	    }
+
+	    void file_ref_dup(file *f)
+	    {
+	        if (f == nullptr)
+	            return;
+	        if (!g_file_ref_lock_ready)
+	            init_file_runtime_locks();
+
+	        g_file_ref_lock.acquire();
+               // refcnt==0 是构造后首次引用，属于正常路径（如 normal_file 构造函数调用 dup()）。
+               // 允许 0→1 的过渡。
+               ++f->refcnt;
+               g_file_ref_lock.release();
+           }
+
+           bool file_ref_put_is_last(file *f)
+           {
+               if (f == nullptr)
+                   return false;
+               if (!g_file_ref_lock_ready)
+                   init_file_runtime_locks();
+
+               bool last = false;
+               g_file_ref_lock.acquire();
+               if (f->refcnt == 0)
+               {
+                   printfRed("[file_ref_put] double free file=%p path=%s\n",
+                             f, f->_path_name.c_str());
+                   g_file_ref_lock.release();
+                   return false;
+               }
+               --f->refcnt;
+               last = (f->refcnt == 0);
+               g_file_ref_lock.release();
+               return last;
+           }
 
     int apply_bsd_flock(file *owner, int operation)
     {
