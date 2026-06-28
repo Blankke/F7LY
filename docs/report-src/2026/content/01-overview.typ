@@ -20,7 +20,8 @@ F7LY-OS 是 C++ 编写的支持 RISC-V 与 LoongArch 双架构的宏内核模块
 #figure(
   image("fig/f7ly-2026-architecture.png", width: 100%),
   caption: [F7LY-OS 2026 年整体架构图],
-) <fig:2026-architecture>
+) <fig:overview-architecture>
+
 
 == 当前系统能力总览
 
@@ -112,7 +113,7 @@ F7LY-OS 在开发过程中参考和移植了以下开源项目与第三方库：
 
 == 我们的工作
 
-2026 年度工作由独立开发者完成，在 2025 年基线之上进行了大量重构和新增功能。截至 2026 年 6 月，第二阶段集中开发共 96 个提交，改动 388 个文件（内核 146 个文件），系统调用绑定由 224 个增至 243 个。主要工作包括：
+2026 年度工作由三个队员共同开发完成，在 2025 年基线之上进行了大量重构和新增功能。截至 2026 年 6 月，第二阶段集中开发共 96 个提交，改动 388 个文件（内核 146 个文件），系统调用绑定由 224 个增至 243 个。主要工作包括：
 
 - *VMA 与进程地址空间重构*——引入 `VmArea` 描述符、`VmaMapleTree` B+Tree 索引和 `VmObject` 后端对象三层架构，统一管理 ELF 段、堆、栈、mmap 区和共享内存附加。将缺页处理、COW、惰性分配的路径收敛到统一的 `fault_page` 入口。
 
@@ -212,4 +213,4 @@ F7LY-OS 在开发过程中参考和移植了以下开源项目与第三方库：
     [硬件平台], [QEMU virt], [QEMU virt + VisionFive 2 实机 + LS3A5000/LS2k1000 启动验证], [新增],
   ),
   caption: [2025 与 2026 能力对照表],
-) <tab:capability-comparison>
+) <tab:overview-capability-comparison>

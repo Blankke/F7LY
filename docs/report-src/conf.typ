@@ -60,7 +60,8 @@
   }
 
 
-  set par(first-line-indent: 2em, leading: 1em, justify: true)
+  // 让图、表等块元素后的首段也保持首行缩进，避免正文节奏断开。
+  set par(first-line-indent: (amount: 2em, all: true), leading: 1em, justify: true)
 
   set text(font: 字体.宋体, size: 字号.小四)
 
@@ -78,8 +79,6 @@
   ])
 
   counter(page).update(1)
-
-  set par(justify: false)
 
   set heading(numbering: heading-numbering)
 
@@ -147,6 +146,8 @@
   show link: it => {
     underline(text(blue)[#it])
   }
+
+  // 正文章节同样统一启用“所有段落可缩进”，避免图片后的首段丢失缩进。
+  set par(first-line-indent: (amount: 2em, all: true), leading: 1em, justify: true)
   content
 }
-

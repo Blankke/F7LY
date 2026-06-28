@@ -1,6 +1,6 @@
 = 机器启动
 
-F7LY-OS 支持双架构启动，机器启动的源文件分别在 `kernel/boot/riscv/` 和`kernel/boot/loongarch/` 目录下。
+F7LY-OS 支持 RISC-V 与 LoongArch 两条启动链路。两种架构共享统一的内核入口约定，但在固件交接方式、设备发现和中断控制器初始化等方面各自遵循本架构的硬件模型。
 
 整个 kernel 可执行文件的入口点统一为 `_entry`，在各自架构的 `entry.S` 中定义，通过链接脚本 `kernel/link/<arch>/kernel.ld` 的 `ENTRY(_entry)` 指定。
 
@@ -37,7 +37,7 @@ _entry:
 - `a1`：设备树地址信息dtb_entry  。
 - `sp`：已在entry.S中设置完成。
 
-#text()[#h(2em)]主要工作：
+主要工作如下：
 - 关闭分页机制，使用物理地址访问
 - 设置临时trap处理函数为死循环
 - 将hartid保存到tp寄存器供后续使用

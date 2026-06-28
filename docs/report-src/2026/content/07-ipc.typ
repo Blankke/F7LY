@@ -2,11 +2,11 @@
 
 进程间通信（Inter-Process Communication，IPC）是操作系统向用户态程序提供的跨进程数据交换与事件通知机制。F7LY-OS 实现了五类 IPC 机制，按照“谁负责传递数据”“如何知道数据到达”两条线索组织：信号与 POSIX Timer 提供异步事件通知，futex 支撑用户态快速互斥与同步，管道以内核缓冲区中转字节流，共享内存绕过内核直接读写数据，epoll 与 eventfd 则统一解决“数据就绪的”通知问题。
 
-== 7.1 信号
+== 信号
 
-信号是 Unix 传统的异步通知机制，内核可向进程投递信号以告知事件发生，进程通过注册处函数或依赖默认行为作出响应。F7LY 在 `kernel/proc/signal.hh` 与 `signal.cc` 中实现完整的 POSIX 信号子系统。
+信号是 Unix 传统的异步通知机制，内核可向进程投递信号以告知事件发生，进程通过注册处理函数或依赖默认行为作出响应。F7LY 提供了完整的 POSIX 信号子系统，覆盖投递、排队、处理与恢复等关键语义。
 
-=== 7.1.1 信号数据结构
+=== 信号数据结构
 
 ```cpp
 namespace signal
@@ -46,7 +46,7 @@ namespace signal
 
 这些结构体与 POSIX 标准中的 `siginfo_t`、`sigaction`、`ucontext_t` 等语义接近，增强了对标准接口的兼容性。
 
-=== 7.1.2 信号投递与处理
+=== 信号投递与处理
 
 信号的完整处理路径分为产生、投递和恢复三个阶段。
 
@@ -55,7 +55,7 @@ namespace signal
 进程每次从内核态返回用户态之前，`handle_signal()` 扫描 pending 位图，找出所有未被阻塞的信号，按编号从小到大依次处理。处理方式取决于该信号的注册动作：若用户态注册了 handler，内核在用户栈上构造信号帧（保存被中断的上下文，压入信号编号和返回 trampoline 地址），然后修改 trapframe 使进程返回用户态时直接跳转到 handler；handler 执行完毕后通过 trampoline 发起 `rt_sigreturn`，内核恢复原始上下文使进程继续执行。若信号动作为默认处理（`SIG_DFL`）或忽略（`SIG_IGN`），则由内核直接执行终止、停止或忽略等操作，不进入用户态 handler。
 
 
-=== 7.1.3 默认处理动作
+=== 默认处理动作
 
 当信号到达时，若进程未注册 handler 或 handler 被显式设为 `SIG_DFL`，则走默认处理路径 `default_handle()`。
 
@@ -88,7 +88,7 @@ void default_handle(proc::Pcb *p, int signum)
 - *忽略信号*：若 `terminate == false`（`SIGCHLD`、`SIGURG`、`SIGWINCH` 等），函数不做任何操作直接返回，该信号在之后被 `handle_signal()` 清除。
 
 
-=== 7.1.4 POSIX Timer
+=== POSIX Timer
 
 F7LY 实现了两套定时器：一套是经典的 interval timer，由 `setitimer` 配置，嵌入在 PCB 中；另一套是 POSIX timer，通过 `timer_create` 创建，从全局定时器池中分配。两者的工作机制一致：用户设置到期时间和通知参数，内核在时钟中断路径上检查是否到期，到期后向目标进程发送信号。
 
@@ -102,13 +102,13 @@ POSIX timer 通过 `timer_create` 从全局数组 `g_timers[32]` 分配，比 in
 
 两套定时器都在 `handle_signal()` 之前完成检查，产生的信号与其他 pending 信号一同在返回用户态时处理。
 
-== 7.2 futex
+== futex
 
 futex 是 Linux 提供的一种轻量级同步原语。它的核心思想是：将互斥锁的大部分操作放在用户态完成——线程在无竞争时仅通过一次原子比较交换就能获取或释放锁，完全不需要陷入内核。只有在线程需要等待（锁已被别人持有）或需要唤醒等待者时，才通过 `futex` 系统调用进入内核。这种设计使得 futex 在低竞争场景下几乎等同于纯用户态的原子操作，同时又能处理复杂的阻塞与唤醒逻辑。
 
 F7LY 实现了 futex 的核心语义，包括 `FUTEX_WAIT` 与 `FUTEX_WAKE` 的基本 wait/wakeup、健壮链表（robust list）的退出自动解锁，以及 `FUTEX_REQUEUE` 的等待者迁移。
 
-=== 7.2.1 wait 与 wakeup
+=== wait 与 wakeup
 
 futex 的核心接口是两个函数：
 
@@ -121,7 +121,7 @@ int futex_wakeup(uint64 uaddr, int val, void *uaddr2, int val2);
 #figure(
   image("fig/futex.png", width: 70%),
   caption: [futex 工作机制],
-) <fig:syscall>
+) <fig:ipc-futex-mechanism>
 `futex_wait` 的流程是：内核从用户态地址读出当前值，与调用者传入的期望值比较。如果两者不相等，说明在进入内核之前锁的状态已经发生了变化（可能已被其他线程释放），此时直接返回 `EAGAIN`，调用者回到用户态重新尝试获取锁。如果值匹配，表明锁仍被持有、等待是有意义的，内核将当前进程置为 `SLEEPING`，挂到与该 futex 地址对应的等待队列上。
 
 futex 的匹配键不是裸的用户虚拟地址，而是该地址在当前页表中映射到的物理地址。这样做的原因是，多个进程可能通过 `mmap MAP_SHARED` 共享同一段物理内存，各自看到的虚拟地址完全不同，但操作的其实是同一个 futex。用物理地址作为键，`futex_wakeup` 就能正确唤醒所有共享该物理页的等待者。
@@ -130,21 +130,21 @@ futex 的匹配键不是裸的用户虚拟地址，而是该地址在当前页�
 
 无超时的 `futex_wait` 在睡眠中会周期性被时钟中断唤醒以重检用户态值，避免因竞态导致 `futex_wakeup` 遗漏而永久挂死。带超时的版本支持相对时间和绝对时间两种模式，超时后返回 `ETIMEDOUT`。两种情况下，如果进程在等待期间收到未被阻塞的信号，均返回 `EINTR`，将控制权交还给用户态信号处理路径。
 
-=== 7.2.2 Robust List
+=== Robust List
 
 当线程持有 futex 但未释放就退出时，等待该锁的线程将永久阻塞。Robust list 解决此问题：用户态 pthread 库在获取锁后将其登记到线程的 `robust_list_head` 链表中，释放时摘除；线程退出时内核调用 `futex_cleanup_robust_list()` 遍历链表，对每个属于该线程的 futex 写入 `FUTEX_OWNER_DIED` 标记，并在有等待者时唤醒它们。被唤醒的线程看到 `OWNER_DIED` 后自行调用 `pthread_mutex_consistent` 修复锁状态。
 
-=== 7.2.3 FUTEX_REQUEUE
+=== FUTEX_REQUEUE
 
 条件变量的典型场景中，多个线程阻塞在 futex A 上等待信号，收到信号后需要获取互斥锁 futex B 才能继续执行。若全部唤醒，只有一个线程能成功获取 B，其余线程醒来后发现锁已被占用、立即重新阻塞在 B 上，产生大量无意义的上下文切换。
 
 `FUTEX_REQUEUE` 将唤醒少量线程和转移剩余等待者合并为一个原子操作：从 A 的等待队列中唤醒最多 `val` 个线程，其余等待者不唤醒，直接迁移到 B 的等待队列上。如此只需一次系统调用即可完成条件变量到互斥锁的等待者交接。F7LY 在 `futex_wakeup` 中通过 `uaddr2` 和 `val2` 参数支持该语义。
 
-== 7.3 管道
+== 管道
 
-管道（Pipe）是操作系统提供的一种进程间通信（IPC）机制，允许一个进程的输出直接作为另一个进程的输入。F7LY内核实现了符合POSIX标准的管道机制，支持匿名管道和命名管道（FIFO）。
+管道（Pipe）是操作系统提供的一种进程间通信（IPC）机制，允许一个进程的输出直接作为另一个进程的输入。F7LY 实现了符合 POSIX 语义的管道机制，支持匿名管道和命名管道（FIFO）。
 ==== 管道的基本实现
-F7LY的管道实现基于虚拟文件系统（VFS），通过`pipe_file`类来管理管道的读写操作。管道的核心数据结构包括：
+F7LY 的管道实现基于虚拟文件系统（VFS），通过 `pipe_file` 管理管道端点的读写操作。管道的核心数据结构包括：
 ```cpp
 class pipe_file : public file
 {
@@ -229,8 +229,7 @@ public:
 `get_or_create_fifo` 在路径首次打开时创建 `Pipe` 并登记到 map 中，后续打开同一路径时直接返回已有管道。`open_fifo` 和 `close_fifo` 分别递增/递减读者或写者计数，当读写两端计数均归零时管道被自动清理。`has_readers` / `has_writers` 用于打开时判断是否需要等待对端——FIFO 的语义要求读写两端都至少有一方打开才能完成打开操作。
 
 
-#text()[#h(2em)]在 `pipe_file`类中有一个`_fifo_path`字段，用于跟踪有名管道的路径。通过该路径，F7LY能够在文件系统中创建和管理有名管道。
-`FifoManager`类提供了以下关键方法：
+`pipe_file` 中的 `_fifo_path` 字段用于跟踪命名管道对应的文件系统路径，使同一路径的多次打开能够准确复用同一个 FIFO 实例。`FifoManager` 提供的关键方法如下：
 ```cpp
     proc::ipc::Pipe* get_or_create_fifo(const eastl::string& path);
     bool open_fifo(const eastl::string& path, bool is_writer);
@@ -243,15 +242,15 @@ public:
 #figure(
   image("fig/fifomanager.png", width: 80%),
   caption: [fifomanager],
-) <fig:syscall>
+) <fig:ipc-fifo-manager>
 
-`get_or_create_fifo` 在首次打开某路径时创建管道并登记，后续打开同一路径时直接复用已有管道。`open_fifo` 和 `close_fifo` 管理读写端计数，两端均归零后自动销毁管道。通过这种方式，F7LY 能够管理管道的打开和关闭操作，并维护读者和写者计数。
+`get_or_create_fifo` 在首次打开某路径时创建管道并登记，后续打开同一路径时直接复用已有管道。`open_fifo` 和 `close_fifo` 管理读写端计数，两端均归零后自动销毁管道。这样，命名管道既保留了“以路径标识通信端点”的 Unix 语义，又避免了重复创建底层缓冲区。
 
-== 7.4 共享内存
+== 共享内存
 
 共享内存允许多个进程将同一段物理内存映射到各自的地址空间中，任一进程的写入可直接被其他进程看到，无需内核中转，是数据量最大、速度最快的 IPC 方式。F7LY 同时支持 SysV 共享内存（通过 key 查找段）和 memfd（通过 fd 传递）两种使用模型。共享内存与 VMA、mmap MAP_SHARED 的协作细节已在第四章展开，本节聚焦 IPC 视角的 API 语义与内部数据结构。
 
-=== 7.4.1 SysV 共享内存
+=== SysV 共享内存
 
 SysV 共享内存的思路是：内核维护一组命名的共享内存段，进程通过一个整数 key 找到目标段，将它映射到自己的地址空间，之后直接通过指针读写，数据全程走物理内存，内核不参与搬运。
 
@@ -283,7 +282,7 @@ SysV 共享内存的思路是：内核维护一组命名的共享内存段，进
 
 `shmctl` 发 `IPC_RMID` 给段打上“待删除”标记，但不会立刻销毁——如果还有进程挂着，就等最后一个 `shmdt` 离开后再清理。fork 的时候子进程自动继承父进程已经挂上的所有段。进程退出时也会自动清理自己挂着的段，不会泄漏。
 
-=== 7.4.2 memfd
+=== memfd
 
 memfd 是一种基于文件描述符的共享内存机制。发送方进程调用 `memfd_create` 创建一个匿名内存文件，拿到 fd 后通过 `mmap MAP_SHARED` 映射到地址空间，写入数据，再将 fd 经 Unix domain socket 发送给接收方——接收方以同样方式映射后，双方即共享同一段物理内存。整个过程不需要全局 key，生命周期也由 fd 的引用计数自然管理，最后一个 fd 关闭后自动回收。
 
@@ -293,11 +292,11 @@ memfd 是一种基于文件描述符的共享内存机制。发送方进程调�
 
 *密封支持* `fcntl F_ADD_SEALS` 仅对路径以 `memfd:` 开头的文件生效。若 `sealing_allowed` 为 false 则禁止添加新密封，返回 `EPERM`。`F_SEAL_WRITE` 在生效前会检查当前进程是否已将该 memfd 以 `MAP_SHARED | PROT_WRITE` 映射，若有则返回 `EBUSY`。密封一旦写入便不可撤销，后续系统调用路径上设有强制检查点：`mmap` 拒绝为带 `F_SEAL_WRITE` 的 memfd 创建写共享映射，`ftruncate`/`fallocate` 分别检查 `F_SEAL_SHRINK` 和 `F_SEAL_GROW`，`write` 在写入前检查 `F_SEAL_WRITE` 并被封印时返回 `EPERM`。这些检查点覆盖了所有修改路径，保证密封语义在全局范围内得到执行。
 
-== 7.5 就绪通知
+== 就绪通知
 
 多路复用与事件通知是高性能 I/O 的基础设施。F7LY 实现了 epoll（Linux 的主流 I/O 多路复用接口）和 eventfd（轻量级事件计数器），二者协同工作，使进程能够高效地同时等待多个 fd 上的读写就绪事件。
 
-=== 7.5.1 epoll
+=== epoll
 
 epoll 是 Linux 的高性能 I/O 多路复用接口，解决的核心问题是：一个进程如何在大量 fd 上同时等待 I/O 事件而不消耗线性增长的 CPU 开销。`select`/`poll` 每次调用都需要将全部 fd 集合从用户态复制到内核，就绪后还需要遍历全部 fd 来找出哪些就绪，在数万个并发连接时开销不可接受。epoll 将“注册关注 fd”（`epoll_ctl`）与“等待就绪”（`epoll_pwait`）分离：fd 只在关注列表变化时才通过系统调用更新，等待时内核只扫描关注列表、无需每次从用户态传入。
 
@@ -307,11 +306,10 @@ epoll 不针对每种 fd 类型编写专用轮询代码，而是通过 `file` �
 
 epoll 支持水平触发（LT）和边沿触发（ET）两种模式。LT 下只要 fd 处于就绪态就持续通知，编程简单；ET 下仅在就绪态从无到有时通知一次，要求用户一次性读写直到 `EAGAIN`，编程更复杂但可减少重复通知。管道的 ET 写就绪额外要求空闲空间至少达到 `PIPE_BUF`，避免逐字节消费触发大量边沿事件。`EPOLLONESHOT` 让一个条目触发一次后自动禁用，直到用户通过 `epoll_ctl MOD` 重新激活，适合多线程环境下防止同一 fd 被多个线程同时处理。epoll 还支持嵌套——一个 epoll fd 可被另一个 epoll 关注，内核通过 DFS 循环检测和最大深度限制（5 层）防止死循环和性能退化。
 
-=== 7.5.2 eventfd
+=== eventfd
 
 eventfd 是一个轻量级的事件通知机制，内核中表现为一个 64 位计数器。它解决的是一个简单但常见的问题：如何让一个线程通知另一个线程“有事情要做”。信号也能做到这点，但信号是进程级别的、编号有限、传递信息量极小。eventfd 作为一个 fd 存在，可以被 `read`/`write`，可以被 epoll 监控，使用方式和普通文件描述符一致，编程模型统一。
 
 F7LY 的 eventfd 由 `EventFdFile` 类实现，继承自 `file` 基类。其核心是一个 `SpinLock` 保护的 `uint64 _counter`。`write` 向计数器累加一个值，`read` 读出当前值并清零——这种“写累加、读清零”的对称语义使其天然适合生产者-消费者场景。`EFD_SEMAPHORE` 标志将读行为改为每次固定返回 1 并减 1，模拟信号量的 wait/post 语义。
 
 eventfd 的关键价值在于与 epoll 的集成：`read_ready()` 在 `_counter != 0` 时返回 `true`，`write_ready()` 在计数器未达上限时返回 `true`。这意味着一个线程在 eventfd 上 `write` 后，正在 `epoll_pwait` 上等待该 fd 的另一个线程会被唤醒，从而将“计数器变化”转化为“I/O 就绪事件”。这种组合使得 eventfd 成为 epoll 的“可编程唤醒源”，广泛用于异步 I/O 框架中的任务调度和事件循环通知。
-

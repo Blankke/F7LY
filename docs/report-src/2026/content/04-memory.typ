@@ -16,7 +16,7 @@ LoongArch 通过 DMWIN（Direct Mapping Window）实现物理地址的直接访�
 #figure(
   image("fig/内核地址空间.png", width: 70%),
   caption: [内核地址空间示意图],
-) <fig:syscall>
+) <fig:mem-kernel-address-space>
 
 
 === 内核内存分配器
@@ -25,20 +25,20 @@ LoongArch 通过 DMWIN（Direct Mapping Window）实现物理地址的直接访�
 #figure(
   image("fig/buddy-allocator.png", width: 70%),
   caption: [buddy-allocator],
-) <fig:syscall>
+) <fig:mem-buddy-allocator>
 
 中间层 `PhysicalMemoryManager`（`k_pmm`）封装 Buddy，从内核 `end` 符号处启动，预留元数据后初始化页池，对外提供 `alloc_page` / `free_page` 接口。全局数组记录每个物理页的 16 位引用计数——`alloc_page` 初始设为 1，`fork` 时 `retain_page` 递增，`free_page` 递减到零才归还 Buddy，这是 COW 的基础。
 #figure(
   image("fig/物理内存管理.png", width: 70%),
   caption: [物理内存管理示意图],
-) <fig:syscall>
+) <fig:mem-physical-memory-manager>
 
 上层 `HeapMemoryManager`（`k_hmm`）解决 Buddy 只能按页分配的问题。它在内核堆区域上叠加两层架构：粗粒度层用 Buddy 申请 32 页大块，细粒度层用 liballoc 算法在块内做任意大小的 `malloc` / `free`。内核所有 `new` / `delete` 经重载统一路由到 `k_hmm`。
 
 #figure(
   image("fig/堆空间管理.png", width: 70%),
   caption: [堆空间管理示意图],
-) <fig:syscall>
+) <fig:mem-heap-memory-manager>
 
 
 此外，`SlabAllocator` 为 16~256 字节的高频固定大小对象提供 O(1) 缓存，维护空闲、部分满、全满三个链表，作为可选优化保留。
@@ -60,7 +60,7 @@ F7LY-OS 的用户进程地址空间从低地址到高地址依次排布，所有
 #figure(
   image("fig/用户地址空间.png", width: 70%),
   caption: [用户地址空间示意图],
-) <fig:syscall>
+) <fig:mem-user-address-space>
 
 *NULL guard*:低 64KB（地址 `0x0 ~ 0x10000`）保持未映射状态，用于捕获空指针和 NULL 偏移解引用，触发缺页异常后向进程投递 `SIGSEGV`。
 
@@ -86,7 +86,7 @@ F7LY-OS 的用户进程地址空间从低地址到高地址依次排布，所有
 
 === 进程内存管理器（ProcessMemoryManager）
 
-`ProcessMemoryManager`（以下简称 `mm`）是一个进程全部用户态内存资源的管家。每个 `Pcb` 持有一个 `mm` 指针，`mm` 内部管理着：进程的页表、256 个 VMA 槽位（描述地址空间中每一段映射）、`brk` 堆的起止地址（`heap_start` / `heap_end`），以及 mmap 自动选址用的 `mmap_cursor` 游标。
+`ProcessMemoryManager`（以下简称 `mm`）是一个进程全部用户态内存资源的管家。每个 `Pcb` 持有一个 `mm` 指针，`mm` 内部维护进程页表、程序段描述、`brk` 堆的起止地址（`heap_start` / `heap_end`）、mmap 自动选址用的 `mmap_cursor`，并将全部 VMA 的生命周期统一交给 `VMASpace` 管理。
 
 ```cpp
 class ProcessMemoryManager
@@ -105,9 +105,7 @@ class ProcessMemoryManager
         // 页表管理
         mem::PageTable pagetable;
 
-        // VMA管理
-        VMA vma_data;
-        VmaMapleTree vma_index;
+        // 地址空间元数据
         VMASpace vm_space;
 
         // 共享标志
@@ -126,14 +124,14 @@ class ProcessMemoryManager
 
 VMA 和堆的元数据操作受 `SleepLock`（`memory_lock`）保护。之所以用睡眠锁而非自旋锁，是因为 `munmap` 等操作可能触发文件映射脏页写回，进而进入 ext4 和 virtio 的磁盘 I/O 路径——自旋锁在此期间会导致死锁。
 
-=== VMA 新架构
+=== VMA 组织
 
-VMA（Virtual Memory Area）是 Linux 描述进程地址空间的核心抽象——一段连续的虚拟地址区间，拥有统一的权限和同一个数据来源。F7LY-OS 在 2026 年对 VMA 子系统做了整体重构，形成了“描述符 → 容器与索引 → 后端对象”的三层架构。
+VMA（Virtual Memory Area）是 Linux 描述进程地址空间的核心抽象——一段连续的虚拟地址区间，拥有统一的权限和同一个数据来源。F7LY 采用“描述符 → 容器与索引 → 后端对象”的三层组织方式来管理 VMA。
 
 #figure(
   image("fig/vma.png", width: 70%),
   caption: [vma示意图],
-) <fig:syscall>
+) <fig:mem-vma-architecture>
 
 
 ==== VMA 描述符（VmArea）
@@ -144,17 +142,17 @@ VMA 按来源分为六种类型：ELF 装载的程序段、动态链接器段、
 
 VMA 记录了读/写/执行权限以及映射方式是私有还是共享。私有映射的写入触发 COW 拆页，只影响当前进程；共享映射的写入会最终写回文件或对其他进程可见。
 
-VMA 不自己分配物理页，而是指向一个后端对象。匿名映射的后端在产品中自动产生全零页，文件映射的后端在缺页时读磁盘，共享内存的后端从共享段取页。这样同一个文件可以被多个进程各自建立一份 VMA，而底层共享同一个文件缓存对象。
+VMA 不自己分配物理页，而是指向一个后端对象。匿名映射的后端在访问时按需产生全零页，文件映射的后端在缺页时读磁盘，共享内存的后端从共享段取页。这样同一个文件可以被多个进程各自建立一份 VMA，而底层共享同一个文件缓存对象。
 
 对私有文件映射或 `fork` 后的共享页，一旦某个页面被写入，COW 机制会分配一个新物理页存放私有副本。VMA 内部记录这些已拆页的页号，后续访问直接使用私有副本，不再触发缺页。
 
 ==== VMASpace 与 Maple Tree 索引
 
-`VMASpace` 是 VMA 的集中管理容器，内部同时维护两份数据：一份 `eastl::list` 链表持有所有 VMA 对象本身，另一份 `VmaMapleTree` B+Tree 按地址对它们做索引。两者各自解决不同问题——链表用于全量遍历（如 `free_all_memory` 清理、`/proc/self/maps` 导出），树索引用于按地址的精确查找和区间搜索。
+`VMASpace` 是 VMA 的集中管理容器，内部同时维护两份数据：一份 `eastl::list` 链表持有所有 VMA 对象本身，另一份 `VmaMapleTree` B+Tree 按地址对它们做索引。链表用于全量遍历，例如 `free_all_memory` 清理和 `/proc/self/maps` 导出；树索引用于按地址的精确查找和区间搜索。
 
-`VmaMapleTree` 的设计参考了 Linux 的 Maple Tree。它是一棵纯索引树——树节点只存 VMA 的指针和排序键（`addr`），不拥有数据的所有权。叶子节点最多容纳 12 个 VMA 指针，内部节点最多持有 12 个子节点引用，足够的宽度使树高在 256 个 VMA 时不超过三层。叶子节点之间通过双向链表连接，使得给定一个地址，找出覆盖它的 VMA只需 O(log N) 从根走到叶，而从当前位置向后遍历所有 VMA则直接沿叶节点链表顺序走，不需要回溯。
+`VmaMapleTree` 的设计参考了 Linux 的 Maple Tree。它是一棵纯索引树——树节点只存 VMA 的指针和排序键（`addr`），不拥有数据的所有权。叶子节点之间通过双向链表连接，使得给定一个地址时，既可以通过树快速定位覆盖它的 VMA，也可以从当前位置沿叶链顺序遍历后续区间，而无需回溯整棵树。
 
-快速区间索引对 `mmap` 同样关键。`mmap` 需要在两个已有 VMA 之间找到足够大的空隙。`VmaMapleTree` 沿叶子链表顺序扫描相邻 VMA 之间的间隔，在 O(有效 VMA 数量) 时间内给出第一个满足对齐和大小要求的空闲区间。树索引只需遍历实际使用的 VMA，槽位越少越快。
+快速区间索引对 `mmap` 同样关键。`mmap` 需要在两个已有 VMA 之间找到足够大的空隙。`VmaMapleTree` 沿叶子链表顺序扫描相邻 VMA 之间的间隔，给出第一个满足对齐和大小要求的空闲区间；整个过程只遍历实际存在的 VMA 条目，不会被稀疏地址空间中的空洞拖慢。
 
 插入和删除时，树索引与链表双写。`mprotect` 等操作可能将一个 VMA 拆成两段或三段，`munmap` 可能从中间打洞，此时 `VMASpace` 先更新链表中的 VMA 对象，再同步更新树索引。部分批量操作后会调用 `rebuild_vma_index()` 从链表全量重建树索引，用一次性重建替代多次碎片化更新带来的平衡开销。
 
