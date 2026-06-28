@@ -13393,20 +13393,27 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_socket()
     {
+        // socket(2) 是网络链路的第一个内核入口：
+        // 用户态传入 domain/type/protocol，内核校验后创建一个 fs::socket_file，
+        // 再把这个 socket_file 挂到当前进程 fd 表中，最后返回 fd 给用户态。
         int domain, type, protocol;
 
+        // 第 0 个 syscall 参数是协议族，例如 AF_INET/AF_UNIX/AF_INET6。
         if (_arg_int(0, domain) < 0)
         {
             printfRed("[SyscallHandler::sys_socket] 参数错误: domain\n");
             return SYS_EINVAL;
         }
 
+        // 第 1 个 syscall 参数同时包含 socket 类型和高位标志：
+        // 低位是 SOCK_STREAM/SOCK_DGRAM/SOCK_RAW，高位可能带 SOCK_NONBLOCK/SOCK_CLOEXEC。
         if (_arg_int(1, type) < 0)
         {
             printfRed("[SyscallHandler::sys_socket] 参数错误: type\n");
             return SYS_EINVAL;
         }
 
+        // 第 2 个 syscall 参数是具体协议；大多数程序传 0，表示让内核按 type 选择默认协议。
         if (_arg_int(2, protocol) < 0)
         {
             printfRed("[SyscallHandler::sys_socket] 参数错误: protocol\n");
@@ -13416,8 +13423,11 @@ namespace syscall
         printfCyan("[SyscallHandler::sys_socket] 创建socket: domain=%d, type=%d, protocol=%d\n",
                    domain, type, protocol);
 
+        // Linux ABI 允许把 SOCK_CLOEXEC/SOCK_NONBLOCK 混在 type 里传入。
+        // socket_flags 保存这些“文件描述符行为”标志；base_type 才是真正的 socket 类型。
         const int socket_flags = type & (O_CLOEXEC | O_NONBLOCK);
         const int base_type = type & ~(O_CLOEXEC | O_NONBLOCK);
+        // 除了已支持的 flag 和低三位类型位之外，出现其它位就说明用户参数非法。
         if ((type & ~(O_CLOEXEC | O_NONBLOCK | 0b111)) != 0)
         {
             return SYS_EINVAL;
@@ -13512,6 +13522,8 @@ namespace syscall
             // 第一次创建 IPv4 TCP/UDP/ICMP socket 时补一次，失败仍保留 loopback 能力。
             if (!net::is_network_stack_ready())
             {
+                // 这里的初始化只影响“非 loopback 的真实网络”；
+                // 即使初始化失败，127.0.0.1 这类内核内 loopback 仍可继续使用。
                 net::init_network_stack();
             }
         }
@@ -13526,20 +13538,25 @@ namespace syscall
             printfRed("[SyscallHandler::sys_socket] 创建socket_file失败\n");
             return SYS_ENOMEM;
         }
+        // socket_file 也是 file 子类，所以这里设置普通 fd 层能看懂的读写/flag 信息。
         socket_f->lwext4_file_struct.flags = O_RDWR | socket_flags;
+        // O_NONBLOCK 需要落到 socket_file 内部状态，后续 recv/connect/accept 才知道是否阻塞。
         socket_f->set_nonblock((socket_flags & O_NONBLOCK) != 0);
 
         // 分配文件描述符
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        // alloc_fd 把 socket_file 放进当前进程打开文件表；之后用户态只通过 fd 引用它。
         int fd = proc::k_pm.alloc_fd(p, socket_f);
         if (fd < 0)
         {
+            // fd 分配失败时要释放刚创建的 socket_file，避免内核对象泄漏。
             socket_f->free_file();
             printfRed("[SyscallHandler::sys_socket] 分配文件描述符失败\n");
             return SYS_EMFILE;
         }
         if (p->_ofile != nullptr && (socket_flags & O_CLOEXEC))
         {
+            // CLOEXEC 不是 socket 协议语义，而是 execve 时自动关闭该 fd 的进程 fd 表属性。
             p->_ofile->_fl_cloexec[fd] = true;
         }
 
@@ -13550,14 +13567,18 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_socketpair()
     {
+        // socketpair(2) 创建两个已经互连的本地 socket，常用于父子进程 IPC。
+        // 当前实现只支持 AF_UNIX/AF_LOCAL，本质是在两个 socket_file 之间互设 peer。
         int domain, type, protocol;
         uint64 sv_addr;
+        // sv_addr 是用户态 int sv[2] 的地址，成功后要把两个 fd copy_out 回去。
         if (_arg_int(0, domain) < 0 || _arg_int(1, type) < 0 ||
             _arg_int(2, protocol) < 0 || _arg_addr(3, sv_addr) < 0)
         {
             return SYS_EINVAL;
         }
 
+        // 同 socket(2)，type 里可能混有 CLOEXEC/NONBLOCK，需要拆开处理。
         const int socket_flags = type & (O_CLOEXEC | O_NONBLOCK);
         const int base_type = type & ~(O_CLOEXEC | O_NONBLOCK);
         if ((type & ~(O_CLOEXEC | O_NONBLOCK | 0b111)) != 0)
@@ -13600,6 +13621,7 @@ namespace syscall
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
         const int internal_type = base_type == SOCK_SEQPACKET ? SOCK_STREAM : base_type;
+        // 创建左右两个端点；二者都是普通 socket_file，只是后面直接互连。
         fs::socket_file *left = new fs::socket_file(AF_UNIX, internal_type, protocol);
         fs::socket_file *right = new fs::socket_file(AF_UNIX, internal_type, protocol);
         if (left == nullptr || right == nullptr)
@@ -13612,12 +13634,15 @@ namespace syscall
         }
         left->lwext4_file_struct.flags = O_RDWR | socket_flags;
         right->lwext4_file_struct.flags = O_RDWR | socket_flags;
+        // 两端继承同一组阻塞/非阻塞标志，符合 Linux socketpair 行为。
         left->set_nonblock((socket_flags & O_NONBLOCK) != 0);
         right->set_nonblock((socket_flags & O_NONBLOCK) != 0);
+        // attach_loopback_peer 会把端点状态置为 CONNECTED，并记录对端指针。
         left->attach_loopback_peer(right);
         right->attach_loopback_peer(left);
 
         int fds[2] = {-1, -1};
+        // 先给左端点分配 fd。
         fds[0] = proc::k_pm.alloc_fd(p, left);
         if (fds[0] < 0)
         {
@@ -13625,6 +13650,7 @@ namespace syscall
             right->free_file();
             return SYS_EMFILE;
         }
+        // 再给右端点分配 fd；如果第二个失败，需要关闭第一个，避免半成功状态。
         fds[1] = proc::k_pm.alloc_fd(p, right);
         if (fds[1] < 0)
         {
@@ -13634,9 +13660,11 @@ namespace syscall
         }
         if (socket_flags & O_CLOEXEC)
         {
+            // 两个 fd 都要设置 close-on-exec。
             p->_ofile->_fl_cloexec[fds[0]] = true;
             p->_ofile->_fl_cloexec[fds[1]] = true;
         }
+        // 最后把 fd 数组写回用户空间；copy_out 失败时也要关闭两个 fd 回滚。
         if (mem::k_vmm.copy_out(*pt, sv_addr, fds, sizeof(fds)) < 0)
         {
             proc::k_pm.close(fds[0]);
@@ -13647,22 +13675,28 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_bind()
     {
+        // bind(2) 把 socket 和本地地址绑定起来：
+        // AF_UNIX 会绑定路径；AF_INET/AF_INET6 会绑定 IP:port。
+        // syscall 层只负责从用户空间安全拷贝地址并做基础校验，真正注册端口/路径在 socket_file::bind。
         int sockfd;
         uint64 addr;
         int addrlen;
 
+        // 第 0 个参数是用户态持有的 socket fd。
         if (_arg_int(0, sockfd) < 0)
         {
             printfRed("[SyscallHandler::sys_bind] 参数错误: sockfd\n");
             return SYS_EINVAL;
         }
 
+        // 第 1 个参数是用户态 sockaddr 指针，不能直接解引用，必须 copy_in。
         if (_arg_addr(1, addr) < 0)
         {
             printfRed("[SyscallHandler::sys_bind] 参数错误: addr\n");
             return SYS_EINVAL;
         }
 
+        // 第 2 个参数告诉内核用户传入的地址结构有多长。
         if (_arg_int(2, addrlen) < 0)
         {
             printfRed("[SyscallHandler::sys_bind] 参数错误: addrlen\n");
@@ -13674,6 +13708,7 @@ namespace syscall
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
+        // 通过当前进程 fd 表拿到内核 file 对象。
         fs::file *f = p->get_open_file(sockfd);
         if (!f)
         {
@@ -13692,12 +13727,14 @@ namespace syscall
 
         if (socket_f->get_family() == fs::SocketFamily::UNIX)
         {
+            // AF_UNIX 使用 sockaddr_un，里面最重要的是 sun_path。
             if ((socklen_t)addrlen < sizeof(struct sockaddr_un))
             {
                 return SYS_EINVAL;
             }
 
             struct sockaddr_un unix_addr;
+            // 从用户页表 copy 进内核栈变量，避免内核直接访问用户指针。
             if (mem::k_vmm.copy_in(*pt, &unix_addr, addr, sizeof(unix_addr)) < 0)
             {
                 return SYS_EFAULT;
@@ -13718,6 +13755,7 @@ namespace syscall
 
         if (socket_f->get_family() == fs::SocketFamily::INET6)
         {
+            // 当前 IPv6 主要用于双栈/loopback 兼容，因此先按完整 sockaddr_in6 拷贝。
             if ((socklen_t)addrlen < sizeof(struct sockaddr_in6))
             {
                 printfRed("[SyscallHandler::sys_bind] IPv6地址长度不足: %d\n", addrlen);
@@ -13760,6 +13798,7 @@ namespace syscall
 
         // 从用户空间复制sockaddr结构体
         struct sockaddr_in sock_addr;
+        // IPv4 bind 需要完整 sockaddr_in，否则端口/IP 会丢失。
         if (mem::k_vmm.copy_in(*pt, &sock_addr, addr, sizeof(struct sockaddr_in)) < 0)
         {
             printfRed("[SyscallHandler::sys_bind] 复制sockaddr失败\n");
@@ -13797,15 +13836,19 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_listen()
     {
+        // listen(2) 把一个已绑定的 TCP socket 变成“被动监听”状态。
+        // 它不会产生新 fd；新连接要等 accept(2) 再取出来。
         int sockfd;
         int backlog;
 
+        // 监听哪个 socket。
         if (_arg_int(0, sockfd) < 0)
         {
             printfRed("[SyscallHandler::sys_listen] 参数错误: sockfd\n");
             return SYS_EINVAL;
         }
 
+        // backlog 是等待 accept 的连接队列长度，后端会做上限截断。
         if (_arg_int(1, backlog) < 0)
         {
             printfRed("[SyscallHandler::sys_listen] 参数错误: backlog\n");
@@ -13816,6 +13859,7 @@ namespace syscall
                    sockfd, backlog);
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        // listen 操作仍然从 fd 表取 socket_file，证明 socket 是 VFS file 的一种。
         fs::file *f = p->get_open_file(sockfd);
         if (!f)
         {
@@ -13840,6 +13884,7 @@ namespace syscall
         }
 
         // 更新socket_file的状态
+        // 真正的状态转换 CREATED/BOUND -> LISTENING 在 socket_file::listen 中完成。
         int socket_file_result = socket_f->listen(backlog);
         if (socket_file_result < 0)
         {
@@ -13853,22 +13898,27 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_accept()
     {
+        // accept(2) 从监听队列取出一个已经建立的连接，并为这个连接分配新的 fd。
+        // listener fd 继续保留 LISTENING 状态；返回的新 fd 才用于和该客户端通信。
         int sockfd;
         uint64 addr;
         uint64 addrlen_ptr;
 
+        // 第 0 个参数是监听 socket fd。
         if (_arg_int(0, sockfd) < 0)
         {
             printfRed("[SyscallHandler::sys_accept] 参数错误: sockfd\n");
             return SYS_EINVAL;
         }
 
+        // 第 1 个参数是用户可选的输出地址缓冲区；为 0 表示用户不关心 peer 地址。
         if (_arg_addr(1, addr) < 0)
         {
             printfRed("[SyscallHandler::sys_accept] 参数错误: addr\n");
             return SYS_EINVAL;
         }
 
+        // 第 2 个参数是 socklen_t*，既输入用户缓冲区大小，也输出实际地址长度。
         if (_arg_addr(2, addrlen_ptr) < 0)
         {
             printfRed("[SyscallHandler::sys_accept] 参数错误: addrlen\n");
@@ -13879,6 +13929,7 @@ namespace syscall
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
+        // accept 先校验 listener fd 是否有效。
         fs::file *f = p->get_open_file(sockfd);
         if (!f)
         {
@@ -13899,11 +13950,13 @@ namespace syscall
 
         fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
 
+        // 当前 accept 只适用于面向连接的 stream socket，也就是内部 SocketType::TCP。
         if (socket_f->get_type() != fs::SocketType::TCP)
         {
             return SYS_EOPNOTSUPP;
         }
 
+        // 必须先 listen，不能对 CREATED/BOUND/CONNECTED socket 调 accept。
         if (socket_f->get_state() != fs::SocketState::LISTENING)
         {
             return SYS_EINVAL;
@@ -13913,6 +13966,7 @@ namespace syscall
         socklen_t user_addrlen = 0;
         if (addr != 0 && addrlen_ptr != 0)
         {
+            // 用户传入的 addrlen 是“我的 addr 缓冲区有多大”，内核必须先读出来避免越界写。
             if (mem::k_vmm.copy_in(*pt, &user_addrlen, addrlen_ptr, sizeof(socklen_t)) < 0)
             {
                 printfRed("[SyscallHandler::sys_accept] 读取地址长度失败\n");
@@ -13920,10 +13974,12 @@ namespace syscall
             }
         }
 
+        // 用 sockaddr_un 大小做临时缓冲，因为它比 sockaddr_in 大，足够容纳当前支持的地址族。
         uint8_t client_addr_storage[sizeof(struct sockaddr_un)];
         memset(client_addr_storage, 0, sizeof(client_addr_storage));
         socklen_t kernel_addrlen = sizeof(client_addr_storage);
         fs::socket_file *client_socket_f = nullptr;
+        // socket_file::accept 返回的是“已经连接的 socket_file 对象”，还不是用户 fd。
         int accept_result = socket_f->accept(
             addr != 0 ? reinterpret_cast<struct sockaddr *>(client_addr_storage) : nullptr,
             (addr != 0 && addrlen_ptr != 0) ? &kernel_addrlen : nullptr,
@@ -13934,6 +13990,7 @@ namespace syscall
         }
 
         // 为新的客户端socket分配文件描述符
+        // 只有分配 fd 后，用户态才能通过返回值继续 read/write/send/recv。
         int client_fd = proc::k_pm.alloc_fd(p, client_socket_f);
         if (client_fd < 0)
         {
@@ -13946,6 +14003,7 @@ namespace syscall
         if (addr != 0 && user_addrlen > 0)
         {
             // 确定要复制的大小
+            // 用户缓冲区可能比实际地址结构小，Linux 语义是尽量复制，并回写实际长度。
             socklen_t copy_len = eastl::min(user_addrlen, kernel_addrlen);
 
             // 复制地址到用户空间
@@ -13971,6 +14029,8 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_connect()
     {
+        // connect(2) 把 socket 主动连接到远端：
+        // AF_UNIX 查路径监听表；loopback IPv4 查本机端口表；外部 IPv4 走 ONPS。
         int sockfd;
         uint64 addr;
         int addrlen;
@@ -13998,6 +14058,7 @@ namespace syscall
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
+        // 先通过 fd 表拿到 socket_file。后续不在 syscall 层直接碰协议栈。
         fs::file *f = p->get_open_file(sockfd);
         if (!f)
         {
@@ -14015,6 +14076,7 @@ namespace syscall
         fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
 
         // 检查地址长度 - 至少要有sockaddr的基本大小
+        // 先要能读出 sa_family，才知道后面该按 sockaddr_in 还是 sockaddr_un 解释。
         if ((socklen_t)addrlen < sizeof(struct sockaddr))
         {
             printfRed("[SyscallHandler::sys_connect] 地址长度不足: %d\n", addrlen);
@@ -14023,6 +14085,7 @@ namespace syscall
 
         // 首先读取通用的sockaddr结构来检查地址族
         struct sockaddr generic_addr;
+        // 只 copy 通用头，避免在还不知道地址族前按错误结构读取用户内存。
         if (mem::k_vmm.copy_in(*pt, &generic_addr, addr, sizeof(struct sockaddr)) < 0)
         {
             printfRed("[SyscallHandler::sys_connect] 复制sockaddr失败\n");
@@ -14045,6 +14108,7 @@ namespace syscall
 
             // 从用户空间复制sockaddr_in结构体
             struct sockaddr_in sock_addr_in;
+            // IPv4 connect 需要完整 IP 和端口，所以这里 copy sockaddr_in 全体。
             if (mem::k_vmm.copy_in(*pt, &sock_addr_in, addr, sizeof(struct sockaddr_in)) < 0)
             {
                 printfRed("[SyscallHandler::sys_connect] 复制sockaddr_in失败\n");
@@ -14071,6 +14135,7 @@ namespace syscall
             // }
 
             // 真实 loopback 连接由 socket_file 统一处理。这里不再提前检查 ONPS 句柄。
+            // syscall 层不判断目标是否 127.0.0.1；分流策略由 socket_file::connect 统一维护。
             int socket_file_result = socket_f->connect((const struct sockaddr *)&sock_addr_in, addrlen);
             if (socket_file_result < 0)
             {
@@ -14114,6 +14179,7 @@ namespace syscall
             printfCyan("[SyscallHandler::sys_connect] Unix域套接字路径: %s\n", sock_addr_un.sun_path);
 
             // 更新socket_file的状态
+            // AF_UNIX 的路径查找、peer 建立、pending 队列入队都在 socket_file::connect。
             int socket_file_result = socket_f->connect((const struct sockaddr *)&sock_addr_un, addrlen);
             if (socket_file_result < 0)
             {
@@ -14135,6 +14201,7 @@ namespace syscall
             }
 
             struct sockaddr_in6 sock_addr6;
+            // IPv6 当前主要用于 loopback/IPv4-mapped 兼容，具体映射在 socket_file 内完成。
             if (mem::k_vmm.copy_in(*pt, &sock_addr6, addr, sizeof(sock_addr6)) < 0)
             {
                 printfRed("[SyscallHandler::sys_connect] 复制sockaddr_in6失败\n");
@@ -14165,6 +14232,8 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_getsockname()
     {
+        // getsockname(2) 查询本端地址，例如本地 bind 到哪个 IP:port。
+        // 注意这里 addr/addrlen 是用户指针，socket_file 内部会负责 copy_in/copy_out。
         int sockfd;
         uint64 addr;
         uint64 addrlen_ptr;
@@ -14188,6 +14257,7 @@ namespace syscall
         }
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        // 通过 fd 表确认这是一个 socket；普通文件不能调用 getsockname。
         fs::file *f = p->get_open_file(sockfd);
         if (!f)
         {
@@ -14203,6 +14273,7 @@ namespace syscall
         }
 
         fs::socket_file *socket_f = static_cast<fs::socket_file *>(f);
+        // 这里直接把用户虚拟地址转成指针传下去；socket_file::getsockname 会再按当前页表 copy。
         int result = socket_f->getsockname(reinterpret_cast<struct sockaddr *>(addr),
                                            reinterpret_cast<socklen_t *>(addrlen_ptr));
         if (result < 0)
@@ -14215,6 +14286,7 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_getpeername()
     {
+        // getpeername(2) 查询对端地址；只有 CONNECTED socket 才有明确 peer。
         int sockfd;
         uint64 addr;
         uint64 addrlen_ptr;
@@ -14238,6 +14310,7 @@ namespace syscall
         }
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        // 先找 fd 对应的内核 file 对象。
         fs::file *f = p->get_open_file(sockfd);
         if (!f)
         {
@@ -14253,6 +14326,7 @@ namespace syscall
             return SYS_ENOTSOCK;
         }
 
+        // socket_file 内部会根据 AF_UNIX/AF_INET 选择对应地址结构并 copy_out。
         int result = socket_f->getpeername((struct sockaddr *)addr, (socklen_t *)addrlen_ptr);
         if (result < 0)
         {
@@ -14266,6 +14340,9 @@ namespace syscall
     uint64 SyscallHandler::sys_sendto()
     {
         // https://www.man7.org/linux/man-pages/man3/sendto.3p.html
+        // sendto(2) 是“把用户缓冲区的数据发到 socket”的 syscall 入口。
+        // syscall 层先把用户 buffer 和可选目标地址复制到内核临时对象，
+        // 再交给 socket_file 决定是 loopback 入队、ONPS 发送还是报错。
         int sockfd;
         uint64 buf_ptr;
         size_t len;
@@ -14273,30 +14350,35 @@ namespace syscall
         uint64 dest_addr_ptr;
         socklen_t addrlen;
 
+        // 第 0 个参数是 socket fd。
         if (_arg_int(0, sockfd) < 0)
         {
             printfRed("[SyscallHandler::sys_sendto] 参数错误: sockfd\n");
             return SYS_EINVAL;
         }
 
+        // 第 1 个参数是用户数据缓冲区地址；len>0 时必须可读。
         if (_arg_addr(1, buf_ptr) < 0)
         {
             printfRed("[SyscallHandler::sys_sendto] 参数错误: buf\n");
             return SYS_EFAULT;
         }
 
+        // 第 2 个参数是要发送的字节数。
         if (_arg_addr(2, len) < 0)
         {
             printfRed("[SyscallHandler::sys_sendto] 参数错误: len\n");
             return SYS_EINVAL;
         }
 
+        // 第 3 个参数是 MSG_DONTWAIT/MSG_MORE 等发送标志。
         if (_arg_int(3, flags) < 0)
         {
             printfRed("[SyscallHandler::sys_sendto] 参数错误: flags\n");
             return SYS_EINVAL;
         }
 
+        // 第 4 个参数是可选目标地址；connected socket 的 send() 会传 0。
         if (_arg_addr(4, dest_addr_ptr) < 0)
         {
             printfRed("[SyscallHandler::sys_sendto] 参数错误: dest_addr\n");
@@ -14304,6 +14386,7 @@ namespace syscall
         }
 
         int addrlen_tmp;
+        // 第 5 个参数是目标地址长度。这里先用 int 接收，方便判断负数。
         if (_arg_int(5, addrlen_tmp) < 0)
         {
             printfRed("[SyscallHandler::sys_sendto] 参数错误: addrlen\n");
@@ -14316,6 +14399,7 @@ namespace syscall
         }
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        // 查 fd；socket 的 send 路径仍从 VFS fd 表进入。
         fs::file *f = p->get_open_file(sockfd);
         if (!f)
         {
@@ -14334,13 +14418,16 @@ namespace syscall
 
         if (buf_ptr == 0 && len > 0)
         {
+            // 零长度发送可以没有有效 buffer；非零长度必须有可读用户地址。
             return SYS_EFAULT;
         }
 
         // 零长度 sendto 合法，且 UDP 仍需要生成一枚零长度 datagram。
         // 因此只在 len>0 时读取用户缓冲，避免空 vector 的 data() 被误判为坏地址。
+        // vector 至少分配 1 字节，是为了后面统一传 data()，但实际发送长度仍是 len。
         eastl::vector<uint8_t> kernel_buf(len > 0 ? len : 1);
         mem::PageTable *pt = p->get_pagetable();
+        // 用户 buffer 只在 syscall 边界 copy 一次，后端不会继续持有用户指针。
         if (len > 0 && mem::k_vmm.copy_in(*pt, kernel_buf.data(), buf_ptr, len) < 0)
         {
             printfRed("[SyscallHandler::sys_sendto] 复制数据失败\n");
@@ -14351,6 +14438,7 @@ namespace syscall
         struct sockaddr_in dest_addr;
         if (dest_addr_ptr && addrlen > 0)
         {
+            // 当前 sendto 的显式目标地址只支持 IPv4 sockaddr_in 这条路径。
             if (addrlen < sizeof(struct sockaddr_in))
             {
                 return SYS_EINVAL;
@@ -14367,6 +14455,7 @@ namespace syscall
         int result;
         if (dest_addr_ptr && addrlen > 0)
         {
+            // 未连接 UDP 常走这里：用户每次 sendto 都带一个目标地址。
             result = socket_f->sendto(kernel_buf.data(), len, flags,
                                       reinterpret_cast<struct sockaddr *>(&dest_addr),
                                       sizeof(dest_addr));
@@ -14374,6 +14463,7 @@ namespace syscall
         else
         {
             // 如果没有目标地址，等同于send
+            // TCP 和已 connect 的 UDP 常走这里。
             result = socket_f->send(kernel_buf.data(), len, flags);
         }
 
@@ -14389,6 +14479,8 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_recvfrom()
     {
+        // recvfrom(2) 是“从 socket 收数据到用户缓冲区”的 syscall 入口。
+        // socket_file 先把数据放到内核临时缓冲，syscall 层再 copy_out 给用户。
         int sockfd;
         uint64 buf_ptr;
         size_t len;
@@ -14396,34 +14488,40 @@ namespace syscall
         uint64 src_addr_ptr;
         uint64 addrlen_ptr;
 
+        // 第 0 个参数是 socket fd。
         if (_arg_int(0, sockfd) < 0)
         {
             printfRed("[SyscallHandler::sys_recvfrom] 参数错误: sockfd\n");
             return SYS_EINVAL;
         }
 
+        // 第 1 个参数是用户接收缓冲区；len>0 时必须可写。
         if (_arg_addr(1, buf_ptr) < 0)
         {
             printfRed("[SyscallHandler::sys_recvfrom] 参数错误: buf\n");
             return SYS_EFAULT;
         }
 
+        // 第 2 个参数是用户缓冲区容量。
         if (_arg_addr(2, len) < 0)
         {
             printfRed("[SyscallHandler::sys_recvfrom] 参数错误: len\n");
             return SYS_EINVAL;
         }
 
+        // 第 3 个参数是 MSG_DONTWAIT/MSG_PEEK 等接收标志。
         if (_arg_int(3, flags) < 0)
         {
             printfRed("[SyscallHandler::sys_recvfrom] 参数错误: flags\n");
             return SYS_EINVAL;
         }
 
+        // src_addr/addrlen 都是可选输出参数，允许为 0，所以用 _arg_raw 保留原值。
         src_addr_ptr = _arg_raw(4);
         addrlen_ptr = _arg_raw(5);
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        // 从当前进程 fd 表找到 socket_file。
         fs::file *f = p->get_open_file(sockfd);
         if (!f)
         {
@@ -14442,10 +14540,12 @@ namespace syscall
 
         if (buf_ptr == 0 && len > 0)
         {
+            // 非零长度接收必须给出有效用户缓冲区。
             return SYS_EFAULT;
         }
 
         // 零长度 recvfrom 不读取用户缓冲，但仍可能消费一枚零长度 datagram。
+        // 因此内核临时缓冲也至少留 1 字节，方便统一调用后端接口。
         eastl::vector<uint8_t> kernel_buf(len > 0 ? len : 1);
         mem::PageTable *pt = p->get_pagetable();
 
@@ -14453,6 +14553,7 @@ namespace syscall
         socklen_t addrlen = 0;
         if (addrlen_ptr)
         {
+            // 如果用户要求返回源地址，addrlen_ptr 先作为输入表示 src_addr 缓冲区大小。
             if (mem::k_vmm.copy_in(*pt, &addrlen, addrlen_ptr, sizeof(socklen_t)) < 0)
             {
                 printfRed("[SyscallHandler::sys_recvfrom] 复制addrlen失败\n");
@@ -14469,6 +14570,7 @@ namespace syscall
         socklen_t orig_addrlen = addrlen;
 
         // 调用socket的recvfrom方法
+        // TCP 是面向连接字节流，recvfrom 通常不需要源地址；UDP/RAW 才复制来源地址。
         bool copy_source_addr = src_addr_ptr != 0 &&
                                 (socket_f->get_type() == fs::SocketType::UDP ||
                                  socket_f->get_type() == fs::SocketType::RAW);
@@ -14483,6 +14585,7 @@ namespace syscall
         }
 
         // 复制数据到用户空间
+        // 后端返回 result 表示实际收到的字节数，只 copy 这部分。
         if (result > 0 && mem::k_vmm.copy_out(*pt, buf_ptr, kernel_buf.data(), result) < 0)
         {
             printfRed("[SyscallHandler::sys_recvfrom] 复制数据到用户空间失败\n");
@@ -14492,6 +14595,7 @@ namespace syscall
         // 复制源地址到用户空间（如果请求了）
         if (copy_source_addr && addrlen > 0)
         {
+            // copy_len 不能超过用户原始缓冲区长度，避免内核越界写用户空间。
             size_t copy_len = eastl::min((size_t)addrlen, (size_t)orig_addrlen);
             if (mem::k_vmm.copy_out(*pt, src_addr_ptr, &src_addr, copy_len) < 0)
             {
@@ -14500,6 +14604,7 @@ namespace syscall
             }
 
             // 更新地址长度
+            // Linux 语义要求回写“实际地址结构长度”，即使用户缓冲区较小。
             if (mem::k_vmm.copy_out(*pt, addrlen_ptr, &addrlen, sizeof(socklen_t)) < 0)
             {
                 printfRed("[SyscallHandler::sys_recvfrom] 复制addrlen失败\n");
@@ -14513,6 +14618,8 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_setsockopt()
     {
+        // setsockopt(2) 设置 socket 选项。syscall 层负责复制 optval，
+        // socket_file 负责解释 SOL_SOCKET/TCP/IP/IPV6 等 level/optname。
         int sockfd;
         int level;
         int optname;
@@ -14537,6 +14644,7 @@ namespace syscall
             return SYS_EINVAL;
         }
 
+        // optval 是用户输入缓冲区，必须 copy_in 到内核缓冲后才能使用。
         if (_arg_addr(3, optval_ptr) < 0)
         {
             printfRed("[SyscallHandler::sys_setsockopt] 参数错误: optval\n");
@@ -14544,9 +14652,11 @@ namespace syscall
         }
         if (optval_ptr == 0)
         {
+            // setsockopt 需要实际选项值，空指针是 EFAULT。
             return SYS_EFAULT;
         }
 
+        // optlen 是选项值长度；必须大于 0。
         if (_arg_int(4, optlen_tmp) < 0)
         {
             printfRed("[SyscallHandler::sys_setsockopt] 参数错误: optlen\n");
@@ -14564,6 +14674,7 @@ namespace syscall
         socklen_t optlen = (socklen_t)optlen_tmp;
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        // 先确认 fd 有效且是 socket。
         fs::file *f = p->get_open_file(sockfd);
         if (!f)
         {
@@ -14581,6 +14692,7 @@ namespace syscall
         }
 
         // 分配内核缓冲区并复制选项值
+        // 选项结构可能是 int，也可能是 timeval；统一按字节复制给 socket_file 解析。
         eastl::vector<uint8_t> optval_buf(optlen);
         mem::PageTable *pt = p->get_pagetable();
         if (mem::k_vmm.copy_in(*pt, optval_buf.data(), optval_ptr, optlen) < 0)
@@ -14590,6 +14702,7 @@ namespace syscall
         }
 
         // 调用socket的setsockopt方法
+        // 这里之后的错误码应保持 Linux 风格，例如 -ENOPROTOOPT/-EINVAL。
         int result = socket_f->setsockopt(level, optname, optval_buf.data(), optlen);
         if (result < 0)
         {
@@ -14603,6 +14716,8 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_getsockopt()
     {
+        // getsockopt(2) 查询 socket 选项。它既有输入参数 optlen，
+        // 又要把 optval 和更新后的 optlen 写回用户空间。
         int sockfd;
         int level;
         int optname;
@@ -14640,10 +14755,12 @@ namespace syscall
         }
         if (optval_ptr == 0 || optlen_ptr == 0)
         {
+            // 两个输出指针都必须有效：optval 接值，optlen 接实际长度。
             return SYS_EFAULT;
         }
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        // 查 fd，并确认它是 socket。
         fs::file *f = p->get_open_file(sockfd);
         if (!f)
         {
@@ -14663,6 +14780,7 @@ namespace syscall
         // 获取选项长度
         socklen_t optlen;
         mem::PageTable *pt = p->get_pagetable();
+        // 用户传入的 optlen 表示 optval 缓冲区容量，必须先读出来。
         if (mem::k_vmm.copy_in(*pt, &optlen, optlen_ptr, sizeof(socklen_t)) < 0)
         {
             printfRed("[SyscallHandler::sys_getsockopt] 复制optlen失败\n");
@@ -14674,9 +14792,11 @@ namespace syscall
         }
 
         // 分配内核缓冲区
+        // 后端先把查询结果写进内核缓冲，再由 syscall 层 copy_out。
         eastl::vector<uint8_t> optval_buf(optlen);
 
         // 调用socket的getsockopt方法
+        // socket_file 可能会缩短 optlen，例如只返回 sizeof(int)。
         int result = socket_f->getsockopt(level, optname, optval_buf.data(), &optlen);
         if (result < 0)
         {
@@ -14685,6 +14805,7 @@ namespace syscall
         }
 
         // 复制选项值到用户空间
+        // 注意使用后端更新后的 optlen，而不是用户原始长度。
         if (mem::k_vmm.copy_out(*pt, optval_ptr, optval_buf.data(), optlen) < 0)
         {
             printfRed("[SyscallHandler::sys_getsockopt] 复制optval到用户空间失败\n");
@@ -14692,6 +14813,7 @@ namespace syscall
         }
 
         // 复制更新后的长度到用户空间
+        // 用户态靠这个长度判断实际拿到了多少字节。
         if (mem::k_vmm.copy_out(*pt, optlen_ptr, &optlen, sizeof(socklen_t)) < 0)
         {
             printfRed("[SyscallHandler::sys_getsockopt] 复制optlen到用户空间失败\n");
@@ -14704,6 +14826,8 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_shutdown_socket()
     {
+        // shutdown(2) 只关闭连接的读半边/写半边，不等同于 close(fd)。
+        // close 会释放 fd 引用；shutdown 只是改变 socket 状态并通知对端。
         int sockfd;
         int how;
 
@@ -14713,6 +14837,7 @@ namespace syscall
             return SYS_EINVAL;
         }
 
+        // how: SHUT_RD=0, SHUT_WR=1, SHUT_RDWR=2。
         if (_arg_int(1, how) < 0)
         {
             printfRed("[SyscallHandler::sys_shutdown_socket] 参数错误: how\n");
@@ -14720,6 +14845,7 @@ namespace syscall
         }
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        // shutdown 仍然基于 fd 找到 socket_file。
         fs::file *f = p->get_open_file(sockfd);
         if (!f)
         {
@@ -14737,6 +14863,7 @@ namespace syscall
         }
 
         // 调用socket的shutdown方法
+        // 具体的半关闭标志、缓冲清理、peer 唤醒都在 socket_file::shutdown。
         int result = socket_f->shutdown(how);
         if (result < 0)
         {
