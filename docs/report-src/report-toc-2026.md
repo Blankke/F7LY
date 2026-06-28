@@ -558,8 +558,7 @@
 
 ## 第八章　系统调用
 
-> 旧报告对应位置：旧第三章（系统调用框架 + 实现 + 兼容性）。
-> 最大变化：巨型 syscall_handler 拆分为多领域模块；新增 capability 和 timex；绑定数 224 → 243。
+
 
 
   ### 8.1　系统调用概述
@@ -568,7 +567,7 @@
   - 用户态→内核态的唯一入口：ecall 触发 trap，usertrap() 识别syscall，返回走 usertrapret()
   - 调用号通过 a7 传递，返回值写入 trapframe 的 a0
   - 旧报告 224 个绑定 → 2026 年 243 个，表项默认 ENOSYS 再显式覆盖
-  - 新增和补齐的 syscall 按附录 A.6 列出
+  - 新增和补齐的 syscall 按附录 B 列出
 
   ### 8.2　系统调用流程
 
@@ -581,12 +580,13 @@
 
   参数获取：
   - 六个参数从 a0–a5 取，超出部分按架构 ABI 走寄存器或栈
+  - _arg_raw/int/long/addr/str/fd 六级提取体系，_arg_fd 含 stale pointer 防御性检测
   - copy_in/copy_out：用户态指针经页表校验和权限检查后才可读写
   - 参数结构体（stat、timespec 等）跨 RISC-V/LA 的对齐处理 [→ 5319d08]
 
   系统调用表：
   - syscall_defs.hh 定义 SYS_xxx 常量，syscall_handler.hh 声明处理函数
-  - BIND_SYSCALL 宏注册调用号与函数指针，表大小 512 项，未绑定返回 ENOSYS
+  - BIND_SYSCALL 宏注册调用号与函数指针，表大小 2048 项，未绑定返回 ENOSYS
 
   分发器：
   - invoke_syscaller 查表取函数指针，调用后收集负 errno
@@ -596,9 +596,13 @@
 
   - 旧报告基于单一巨型 syscall_handler.cc
   - 2026 年拆分为三分模块 [→ 5319d08]：
-    - syscall_abi：参数层，隔离 RISC-V/LA 的 ABI 差异
-    - sysio：I/O 类（文件、socket、设备 ioctl）
-    - sysproc：进程类（fork/clone/exec/exit/wait/signal）
+    - syscall_abi：Linux ABI 结构体定义层，统一用户态可见的数据布局（epoll_event、
+    termios、sigevent、timex 等跨架构结构体）
+    - sysio：I/O 基础设施层，提供栈/堆双路径缓冲区管理（ScopedSyscallBuffer、
+    ScopedKernelIovecArray）、64KB 分块读写、用户态内存直拷快路径
+    - sysproc：进程属性与凭据管理层（uid/gid 系列、supplementary groups、
+    session/pgid、umask、personality），核心进程生命周期 syscall（fork/clone/
+    exec/exit/wait）仍保留在主 handler 中
   - 领域管理类：FileDescriptorAccess（统一 fd
   查找）、SocketIoctlCompat（socket ioctl
   兼容）、BlockDeviceIoctlState（块设备 ioctl）
@@ -671,7 +675,7 @@
 
 
 
-## 第十一章 logging系统
+## 第十章 logging系统
 
 
 ## 第十一章 总结与展望
