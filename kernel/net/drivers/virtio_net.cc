@@ -258,15 +258,20 @@ namespace net
 
     bool virtio_net_init(void)
     {
+        // 底层 VirtIO 网卡初始化入口。上层 adapter_init 会先调用这里，
+        // 成功后 ONPS 才能通过 virtio_net_send/recv 发送和接收以太网帧。
         if (g_net.initialized)
         {
             return true;
         }
 
+        // 初始化通用内存布局、descriptor/ring 指针、空闲表和默认 MAC 等状态。
         prepare_common_state();
 #ifdef RISCV
+        // RISC-V virt 机器使用 virtio-mmio 设备。
         bool ok = virtio_net_init_mmio();
 #elif defined(LOONGARCH)
+        // LoongArch 当前使用 PCI 形式的 VirtIO 设备。
         bool ok = virtio_net_init_pci();
 #else
         bool ok = false;
@@ -291,6 +296,7 @@ namespace net
 #ifdef RISCV
     bool virtio_net_init_mmio(void)
     {
+        // 扫描 QEMU virtio-mmio 槽位，找到 device_id=1 的网络设备。
         uint64 base = 0;
         int irq = 0;
         if (!find_net_mmio_device(&base, &irq))
@@ -303,16 +309,21 @@ namespace net
         g_net.irq = irq;
 
         uint32 status = 0;
+        // VirtIO 初始化第一步：清空设备状态，开始一次新的驱动协商。
         mmio_write(VIRTIO_MMIO_STATUS, 0);
 
+        // ACKNOWLEDGE 表示 guest 发现设备。
         status |= VIRTIO_CONFIG_S_ACKNOWLEDGE;
         mmio_write(VIRTIO_MMIO_STATUS, status);
+        // DRIVER 表示 guest 知道如何驱动这个设备。
         status |= VIRTIO_CONFIG_S_DRIVER;
         mmio_write(VIRTIO_MMIO_STATUS, status);
 
+        // 读取设备支持的 feature，选择本驱动能处理的一小部分写回。
         uint64 features = negotiate_features(mmio_read(VIRTIO_MMIO_DEVICE_FEATURES));
         mmio_write(VIRTIO_MMIO_DRIVER_FEATURES, static_cast<uint32>(features));
 
+        // FEATURES_OK 表示 feature 协商完成；设备可能拒绝不合法组合。
         status |= VIRTIO_CONFIG_S_FEATURES_OK;
         mmio_write(VIRTIO_MMIO_STATUS, status);
         if ((mmio_read(VIRTIO_MMIO_STATUS) & VIRTIO_CONFIG_S_FEATURES_OK) == 0)
@@ -321,8 +332,10 @@ namespace net
             return false;
         }
 
+        // legacy MMIO 设备用 guest page size 和 PFN 告诉设备 ring 在物理内存哪里。
         mmio_write(VIRTIO_MMIO_GUEST_PAGE_SIZE, PGSIZE);
 
+        // 配置 RX queue：设备收到包后，会把数据写进我们提供的 RX descriptor buffer。
         mmio_write(VIRTIO_MMIO_QUEUE_SEL, VIRTIO_NET_RX_QUEUE_IDX);
         uint32 max_rx = mmio_read(VIRTIO_MMIO_QUEUE_NUM_MAX);
         if (max_rx < NUM_NET_DESC)
@@ -334,6 +347,7 @@ namespace net
         mmio_write(VIRTIO_MMIO_QUEUE_ALIGN, PGSIZE);
         mmio_write(VIRTIO_MMIO_QUEUE_PFN, static_cast<uint32>(dma_addr(g_net.rx_desc) >> PGSHIFT));
 
+        // 配置 TX queue：我们要发送包时，把 TX descriptor 放进这个队列给设备读。
         mmio_write(VIRTIO_MMIO_QUEUE_SEL, VIRTIO_NET_TX_QUEUE_IDX);
         uint32 max_tx = mmio_read(VIRTIO_MMIO_QUEUE_NUM_MAX);
         if (max_tx < NUM_NET_DESC)
@@ -347,6 +361,7 @@ namespace net
 
         if ((features & (1ULL << VIRTIO_NET_F_MAC)) != 0)
         {
+            // 如果设备提供 MAC feature，就从设备配置空间读取真实 MAC。
             volatile uint8 *config = reinterpret_cast<volatile uint8 *>(g_net.mmio_base + VIRTIO_MMIO_CONFIG);
             for (int i = 0; i < ETH_ALEN; ++i)
             {
@@ -357,11 +372,14 @@ namespace net
         g_net.link_up = true;
 
         g_net.net_lock.acquire();
+        // RX 队列必须先投递一批可写 buffer，否则设备即使收到包也没地方 DMA。
         post_all_rx_desc_locked();
         g_net.net_lock.release();
 
+        // DRIVER_OK 表示驱动准备完毕，设备可以开始收发。
         status |= VIRTIO_CONFIG_S_DRIVER_OK;
         mmio_write(VIRTIO_MMIO_STATUS, status);
+        // 通知设备 RX queue 已经有可用 buffer。
         notify_queue(VIRTIO_NET_RX_QUEUE_IDX);
         g_net.initialized = true;
         printf("virtio net: mmio base=%p irq=%d\n", g_net.mmio_base, g_net.irq);
@@ -377,6 +395,7 @@ namespace net
 #ifdef LOONGARCH
     bool virtio_net_init_pci(void)
     {
+        // PCI 路径和 MMIO 路径做同一件事：找到设备、协商 feature、配置 RX/TX queue。
         uint64 pci_base = pci_device_probe(VIRTIO_NET_VENDOR_ID, VIRTIO_NET_DEVICE_ID);
         if (pci_base == 0)
         {
@@ -397,12 +416,14 @@ namespace net
 
         virtio_pci_set_status(&g_net.virtio_net_hw, 0);
         uint8 status = 0;
+        // VirtIO 标准状态机：ACKNOWLEDGE -> DRIVER -> FEATURES_OK -> DRIVER_OK。
         status |= VIRTIO_CONFIG_S_ACKNOWLEDGE;
         virtio_pci_set_status(&g_net.virtio_net_hw, status);
         status |= VIRTIO_CONFIG_S_DRIVER;
         virtio_pci_set_status(&g_net.virtio_net_hw, status);
 
         uint64 features = negotiate_features(virtio_pci_get_device_features(&g_net.virtio_net_hw));
+        // 写回驱动选择的 feature 集合。
         virtio_pci_set_driver_features(&g_net.virtio_net_hw, features);
 
         status |= VIRTIO_CONFIG_S_FEATURES_OK;
@@ -428,6 +449,7 @@ namespace net
             return false;
         }
 
+        // PCI modern 设备用 capability 暴露 queue 配置寄存器，这里分别配置 RX/TX queue 地址。
         virtio_pci_set_queue_size(&g_net.virtio_net_hw, VIRTIO_NET_RX_QUEUE_IDX, NUM_NET_DESC);
         virtio_pci_set_queue_addr2(&g_net.virtio_net_hw, VIRTIO_NET_RX_QUEUE_IDX,
                                    g_net.rx_desc, g_net.rx_avail, g_net.rx_used);
@@ -450,9 +472,11 @@ namespace net
         g_net.features = features;
         g_net.link_up = true;
         g_net.net_lock.acquire();
+        // 和 MMIO 一样，先把所有 RX descriptor 投递给设备。
         post_all_rx_desc_locked();
         g_net.net_lock.release();
 
+        // 最后 DRIVER_OK，设备开始工作。
         status |= VIRTIO_CONFIG_S_DRIVER_OK;
         virtio_pci_set_status(&g_net.virtio_net_hw, status);
         notify_queue(VIRTIO_NET_RX_QUEUE_IDX);
@@ -468,6 +492,8 @@ namespace net
 
     void virtio_net_poll(void)
     {
+        // poll 用于主动回收已经发送完成的 TX descriptor。
+        // 接收线程每轮都会调用它，避免 TX descriptor 长期不释放。
         if (!g_net.initialized)
         {
             return;
@@ -479,17 +505,20 @@ namespace net
 
     int virtio_net_send(const void *data, uint32 len)
     {
+        // 发送一个完整以太网帧。上层 adapter 已经把 ONPS buf_list 合并成连续内存。
         if (!g_net.initialized || data == nullptr || len == 0 || len > ETH_FRAME_LEN)
         {
             return -1;
         }
 
         g_net.net_lock.acquire();
+        // 发送前先回收已完成的 TX descriptor，尽量腾出空位。
         process_tx_used_locked();
 
         int desc_idx = -1;
         for (int i = 0; i < NUM_NET_DESC; ++i)
         {
+            // 找一个空闲 TX descriptor。
             if (g_net.tx_free[i])
             {
                 desc_idx = i;
@@ -507,20 +536,27 @@ namespace net
         g_net.tx_buf_index[desc_idx] = static_cast<uint8>(buf_idx);
         g_net.tx_buffers[buf_idx].in_use = true;
 
+        // VirtIO net 要求每个包前面有 virtio_net_hdr；当前不使用校验和/GSO，所以全清零。
         virtio_net_hdr *hdr = reinterpret_cast<virtio_net_hdr *>(g_net.tx_buffers[buf_idx].data);
         memset(hdr, 0, sizeof(*hdr));
+        // 把以太网帧放在 virtio_net_hdr 后面。
         memcpy(g_net.tx_buffers[buf_idx].data + k_net_header_len, data, len);
         g_net.tx_buffers[buf_idx].len = len + k_net_header_len;
 
+        // 填 descriptor，告诉设备这段物理内存在哪里、长度多少。
         g_net.tx_desc[desc_idx].addr = dma_addr(g_net.tx_buffers[buf_idx].data);
         g_net.tx_desc[desc_idx].len = g_net.tx_buffers[buf_idx].len;
+        // flags=0 表示设备只读这段 buffer，用于发送。
         g_net.tx_desc[desc_idx].flags = 0;
         g_net.tx_desc[desc_idx].next = 0;
 
+        // 把 descriptor index 放进 avail ring，表示“驱动有一个包要你发送”。
         uint16 idx = avail_idx(g_net.tx_avail);
         g_net.tx_avail[2 + (idx % NUM_NET_DESC)] = static_cast<uint16>(desc_idx);
+        // 内存屏障保证 descriptor 内容先写完，再更新 avail idx 给设备看。
         __sync_synchronize();
         set_avail_idx(g_net.tx_avail, idx + 1);
+        // 敲门通知设备处理 TX queue。
         notify_queue(VIRTIO_NET_TX_QUEUE_IDX);
         g_net.net_lock.release();
         return 0;
@@ -528,19 +564,23 @@ namespace net
 
     int virtio_net_recv(void *data, uint32 *len)
     {
+        // 接收一个完整以太网帧。adapter 的接收线程循环调用这里。
         if (!g_net.initialized || data == nullptr || len == nullptr || *len == 0)
         {
             return -1;
         }
 
         g_net.net_lock.acquire();
+        // 先同步设备写入的 used ring。
         __sync_synchronize();
         if (g_net.rx_used_idx == g_net.rx_used->idx)
         {
+            // used_idx 追上设备 idx，表示当前没有新包。
             g_net.net_lock.release();
             return -1;
         }
 
+        // 设备把已经写好数据的 RX descriptor 放到 used ring。
         VRingUsedElem *elem = &g_net.rx_used->ring[g_net.rx_used_idx % NUM_NET_DESC];
         uint32 desc_idx = elem->id;
         uint32 used_len = elem->len;
@@ -548,6 +588,7 @@ namespace net
 
         if (desc_idx >= NUM_NET_DESC || used_len <= k_net_header_len)
         {
+            // 异常包也要尽量回收 descriptor 并重新投递给 RX queue。
             if (desc_idx < NUM_NET_DESC)
             {
                 g_net.rx_free[desc_idx] = 1;
@@ -560,15 +601,18 @@ namespace net
         }
 
         uint8 buf_idx = g_net.rx_buf_index[desc_idx];
+        // 设备写入的数据包含 virtio_net_hdr，真正的以太网帧在其后。
         uint32 data_len = used_len - k_net_header_len;
         uint32 copy_len = data_len > *len ? *len : data_len;
         memcpy(data, g_net.rx_buffers[buf_idx].data + k_net_header_len, copy_len);
         *len = copy_len;
 
+        // 当前 descriptor 的数据已经复制给上层，可以重新作为 RX buffer 投递给设备。
         g_net.rx_buffers[buf_idx].in_use = false;
         g_net.rx_buffers[buf_idx].len = 0;
         g_net.rx_free[desc_idx] = 1;
         post_rx_desc_locked(desc_idx);
+        // 通知设备 RX queue 又有可写 buffer。
         notify_queue(VIRTIO_NET_RX_QUEUE_IDX);
         g_net.net_lock.release();
         return 0;
@@ -585,11 +629,14 @@ namespace net
             return;
         }
 #ifdef LOONGARCH
+        // LoongArch PCI 路径也需要确认设备中断。
         ack_interrupt();
 #endif
         g_net.net_lock.acquire();
+        // 当前中断处理只回收 TX 完成项；RX 由接收线程轮询 virtio_net_recv 拉取。
         process_tx_used_locked();
         g_net.net_lock.release();
+        // 唤醒可能等待 TX descriptor 空闲的路径。
         proc::k_pm.wakeup(&g_net.tx_free[0]);
     }
 
@@ -600,6 +647,7 @@ namespace net
 
     void virtio_net_get_mac(uint8 mac[ETH_ALEN])
     {
+        // 返回初始化时缓存的 MAC 地址。
         if (mac == nullptr)
         {
             return;
@@ -619,6 +667,7 @@ namespace net
 
     void virtio_net_debug_status(void)
     {
+        // 简单状态输出，方便确认网卡是否初始化、link 是否 up、ring 消费进度。
         printf("virtio net: ready=%d link=%d features=%lx rx_used=%d tx_used=%d\n",
                g_net.initialized ? 1 : 0,
                g_net.link_up ? 1 : 0,

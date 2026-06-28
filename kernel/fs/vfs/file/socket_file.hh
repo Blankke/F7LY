@@ -42,57 +42,76 @@ namespace fs
     class socket_file : public file
     {
     private:
+        // loopback UDP 的一枚报文。UDP 是“报文”语义，不能像 TCP 一样把所有数据拼成字节流。
         struct loopback_datagram
         {
             struct sockaddr_in src_addr;
             eastl::vector<uint8_t> data;
         };
 
+        // socket_file 是 syscall 层和网络后端之间的核心状态对象。
+        // 一个用户态 fd 会引用一个 socket_file；fork/dup 后可能有多个 fd 引用同一个对象。
         SocketState _state;
         SocketType _type;
         SocketFamily _family;
         int _protocol;
         
         // onps socket句柄
+        // 非 loopback IPv4 TCP/UDP/ICMP 才会使用它；loopback/AF_UNIX 只用内核内队列。
         SOCKET _onps_socket;
         
         // 地址信息
+        // AF_INET/AF_INET6 兼容路径使用 sockaddr_in；AF_INET6 loopback 会被映射成 IPv4。
         struct sockaddr_in _local_addr;
         struct sockaddr_in _remote_addr;
+        // AF_UNIX 使用路径地址，单独保存，避免和 IPv4 地址结构混在一起。
         struct sockaddr_un _local_unix_addr;
         struct sockaddr_un _remote_unix_addr;
         eastl::string _unix_path;
         
         // TCP连接队列
+        // LISTENING socket 的 accept 队列：connect 成功后创建的 server-side socket 会放进这里。
         eastl::vector<socket_file*> _pending_connections;
         int _backlog;
+        // loopback TCP/AF_UNIX socket 的直连对端；真实外网 ONPS socket 不用这个指针。
         socket_file *_peer;
         
         // 数据缓冲区
+        // TCP/AF_UNIX stream 接收缓冲：对端 send 会把字节追加到这里。
         eastl::vector<uint8_t> _recv_buffer;
+        // MSG_MORE 暂存的待发送数据，等下一次非 MSG_MORE 发送时一起 flush。
         eastl::vector<uint8_t> _send_buffer;
         struct sockaddr_in _pending_send_addr;
+        // UDP loopback 接收队列：每个元素都是一枚完整 datagram。
         eastl::vector<loopback_datagram> _datagram_queue;
         size_t _datagram_queue_bytes;
         
         // 标志位
+        // _blocking=false 表示 fd 是 O_NONBLOCK，阻塞操作要返回 -EAGAIN。
         bool _blocking;
         bool _reuse_addr;
+        // 是否已经登记到 loopback 端口表；用于析构时反注册。
         bool _loopback_registered;
+        // 是否已经登记到 AF_UNIX 路径表；用于析构时反注册。
         bool _unix_registered;
+        // ONPS 相关状态：active 表示已经实际使用 ONPS，bound/listening 对应协议栈状态。
         bool _onps_active;
         bool _onps_bound;
         bool _onps_listening;
+        // 半关闭状态，shutdown(SHUT_RD/SHUT_WR) 和 close/EOF 都依赖这些标志。
         bool _read_shutdown;
         bool _write_shutdown;
         bool _peer_closed;
         bool _peer_write_shutdown;
+        // MSG_MORE 对 UDP 需要记住目标地址，防止分片暂存期间目标变化。
         bool _pending_send_has_addr;
+        // SO_RCVTIMEO/SO_SNDTIMEO 保存为秒+微秒，loopback 和 ONPS 接收路径都会参考。
         long _recv_timeout_sec;
         long _recv_timeout_usec;
         long _send_timeout_sec;
         long _send_timeout_usec;
         
+        // 保护当前 socket_file 的状态、缓冲区、peer 标志。
         SpinLock _lock;
 
         bool stream_read_eof_locked() const;
