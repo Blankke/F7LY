@@ -25,8 +25,8 @@
 #show: main
 
 #include "content/01-overview.typ"
-#include "content/02-new-features.typ"
-#include "content/03-improvements.typ"
-#include "content/04-validation.typ"
-#include "content/05-summary.typ"
+#include "content/02-boot.typ"
+#include "content/03-trap.typ"
+#include "content/04-memory.typ"
+#include "content/05-process.typ"
 #include "content/appendix.typ"
