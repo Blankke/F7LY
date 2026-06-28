@@ -1,6 +1,6 @@
-= 第三章　中断管理器
+= 中断管理器
 
-== 3.1 整体设计
+== 整体设计
 从用户态到内核态的切换需要中断和异常的频繁处理，此处F7LY在xv6的trap框架基础上选择了对象化中断管理器类TrapManager，并实例化全局对象trap_mgr。
 
 ```cpp
@@ -25,15 +25,15 @@ private:
 
 F7LY 在其底层根据 RISC-V 和 loongarch 的不同硬件设备使用而封装了不同的中断处理器，在不同文件夹下实现了 PLIC、EXTIOI、APIC 的驱动、中断统计管理器和统一的包装函数层并应用在中断处理之中。
 
-== 3.2 RISC-V 中断处理路径
+== RISC-V 中断处理路径
 
 *RISC-V* 使用 `PLIC` 单层中断控制器。用户态异常从 `uservec.S` 入口，保存寄存器与 `FPU` 现场后切换内核页表，进入`usertrap()` 统一分发；内核态异常走 `kernelvec.S` 进入 `kerneltrap()` 处理设备中断和时钟抢占。返回时由`usertrapret()` 设置 `trapframe`，跳转 `userret` 恢复寄存器后 `sret` 返回用户态。控制台输入走`SBI`，`uservec` 新增 `FPU` 现场保存。
 
-== 3.3 LoongArch 中断处理路径
+== LoongArch 中断处理路径
 
 *LoongArch* 使用 `APIC` + `ExtIOI` 两级中断控制器。三个异常入口`kernelvec`、`handle_tlbr`、`handle_merr` 分别由 `eentry`/`tlbrentry`/`merrentry` 三个 CSR 指定。用户态和内核态异常均从 `kernelvec.S` 入口，保存寄存器后从 `CSR_CPUID` 重取 `hartid`，进入 `usertrap()` 按`ecode` + `esubcode` 二级编码分发；返回时由 `usertrapret()` 原子重映射trapframe，经 `ertn` 回到用户态。与 RISC-V 关键差异在于它的两级中断控制器、时钟中断 `TICLR` 直接写清除位、TLB 软件走表。
 
-== 3.4 陷阱分发逻辑
+== 陷阱分发逻辑
 
 `usertrap()` 进入后首先检查是否来自用户态，然后读取异常编码区分陷阱类型：
 

@@ -1,4 +1,4 @@
-= 第二章　机器启动
+= 机器启动
 
 F7LY-OS 支持双架构启动，机器启动的源文件分别在 `kernel/boot/riscv/` 和`kernel/boot/loongarch/` 目录下。
 
@@ -10,9 +10,9 @@ F7LY-OS 支持双架构启动，机器启动的源文件分别在 `kernel/boot/r
 *LoongArch 架构*：
 启动流程：`QEMU/EDK2` → `entry.S` → `main()`（无 `start.cc` 薄层）。采用LoongArch 原生启动方式，通过 DTB 进行硬件发现与初始化。
 
-== 2.1　RISC-V 启动流程
+== RISC-V 启动流程
 
-=== 2.1.1 entry.S
+=== entry.S
 
 
 - 负责设置操作系统的栈指针`sp`到合适位置，为后续C++代码执行做准备。
@@ -30,7 +30,7 @@ _entry:
     call start             # jump to start func
 ```
 
-=== 2.1.2 start.cc
+=== start.cc
 
 关键寄存器处理：
 - `a0`：存储硬件线程编号`hartid`。
@@ -52,7 +52,7 @@ void start(uint64 hartid, uint64 dtb_entry)
     main(hartid, dtb_entry);
 }
 ```
-=== 2.1.3 主线：main() 四阶段
+=== 主线：main() 四阶段
 
 系统初始化分为四个主要阶段：
 
@@ -96,9 +96,9 @@ proc::k_scheduler.start_schedule();
 
 
 
-== 2.2　LoongArch 启动流程
+== LoongArch 启动流程
 
-=== 2.2.1 入口：entry.S
+=== 入口：entry.S
 
 LoongArch 将 `start.cc` 阶段合并到 `entry.S` 中，在其中完成设置设备操作空间（DMWIN0）、设置指令数据访问空间（DMWIN1），CSR 寄存器的初始化，以及栈空间的设定，并开启 FPU 浮点数指令。保存 `$a1` 传入的 DTB地址，hartid 使用 CSR_CPUID 动态读取。完成设置后直接 `bl main`。
 
@@ -119,7 +119,7 @@ LoongArch 将 `start.cc` 阶段合并到 `entry.S` 中，在其中完成设置�
         csrwr       $t0, LOONGARCH_CSR_EUEN
 ```
 
-=== 2.2.2 main() 四阶段
+=== main() 四阶段
 
 系统初始化同样分为四个阶段，仅以下三处与 RISC-V 不同：
 
@@ -151,14 +151,14 @@ extern "C" void main(uint64 hartid, uint64 dtb_addr)
     virtio_disk_init();       
     // ...
 ```
-== 2.3 双架构支持特色
+== 双架构支持特色
 
 - *统一的抽象层*：通过HAL(硬件抽象层)实现跨架构代码复用。
 - *架构特定优化*：针对不同架构的特性进行专门优化。
 - *模块化设计*：核心模块与架构相关代码分离，便于维护和扩展。
 - *现代化实现*：采用C++面向对象设计，提供类型安全和更好的代码组织。
 
-=== 2.3.1 启动完成标志
+=== 启动完成标志
 
 ```cpp
 ╦ ╦╔═╗╦  ╔═╗╔═╗╔╦╗╔═╗

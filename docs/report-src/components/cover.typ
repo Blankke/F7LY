@@ -27,7 +27,7 @@
         gutter: 字号.小三 * 0.8,
         align: center,
         [#text(size: 字号.三号, font: 字体.宋体)[队伍名称：#box(width: 12em, stroke: (bottom: 0.5pt), inset: (bottom: 3pt))[#align(center)[F7LY]]]],
-        [#text(size: 字号.三号, font: 字体.宋体)[队伍成员：#box(width: 12em, stroke: (bottom: 0.5pt), inset: (bottom: 3pt))[#align(center)[曹子宸、郑喆宇、官恺祺]]]],
+        [#text(size: 字号.三号, font: 字体.宋体)[队伍成员：#box(width: 12em, stroke: (bottom: 0.5pt), inset: (bottom: 3pt))[#align(center)[曹子宸、郑喆宇、何佳怡]]]],
         [#text(size: 字号.三号, font: 字体.宋体)[指导老师：#box(width: 12em, stroke: (bottom: 0.5pt), inset: (bottom: 3pt))[#align(center)[蔡朝晖]]]]
       )
     ]

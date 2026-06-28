@@ -79,6 +79,8 @@
 
   counter(page).update(1)
 
+  set par(justify: false)
+
   set heading(numbering: heading-numbering)
 
   show heading: it => {
