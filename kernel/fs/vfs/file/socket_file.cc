@@ -1294,8 +1294,12 @@ namespace fs
                 UINT client_ip = 0;
                 USHORT client_port = 0;
                 EN_ONPSERR error = ERRNO;
+                // ONPS 的阻塞 accept 无法被内核信号路径可靠打断。netserver
+                // 后台退出时如果卡在这里，shell 清理阶段就可能永远等不到它退出。
+                // 统一用非阻塞探测 + 内核 sleep 轮询，让 SIGTERM/SIGALRM/close
+                // 都能回到本层检查点。
                 SOCKET client = ::accept(listen_socket, &client_ip, &client_port,
-                                         blocking ? 1 : 0, &error);
+                                         0, &error);
                 if (client != INVALID_SOCKET) {
                     socket_file *server_side = new socket_file(AF_INET, SOCK_STREAM, _protocol);
                     if (server_side == nullptr) {
@@ -1326,14 +1330,31 @@ namespace fs
                 if (!blocking) {
                     return -EAGAIN;
                 }
+                // 非阻塞探测无连接时，ONPS 可能设 ERRNO/ERRTCPRCVQUEUEEMPTY 等。
+                // 只有真正的硬错误（reset/timeout/not-connected）才应立即返回；
+                // 队列空、服务空闲这类"暂无连接"状态应继续 sleep 轮询。
                 if (error != ERRNO) {
-                    int mapped = onps_error_to_errno(error);
-                    if (mapped != -EIO) {
-                        return mapped;
+                    switch (error) {
+                    case ERRTCPRCVQUEUEEMPTY:
+                    case ERRTCPSRVEMPTY:
+                    case ERRTCPBACKLOGEMPTY:
+                        // 暂无可用连接，继续 sleep 轮询
+                        break;
+                    default: {
+                        int mapped = onps_error_to_errno(error);
+                        if (mapped != -EIO && mapped != -ENOBUFS) {
+                            return mapped;
+                        }
+                    }
                     }
                 }
 
                 _lock.acquire();
+                if (_state != SocketState::LISTENING) {
+                    _lock.release();
+                    return -EINVAL;
+                }
+                proc::k_pm.sleep(tmm::k_tm.get_tick_wait_channel(), &_lock);
                 if (_state != SocketState::LISTENING) {
                     _lock.release();
                     return -EINVAL;

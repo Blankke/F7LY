@@ -174,7 +174,7 @@ namespace mem
                 if (!alloc)
                     return Pte(nullptr);
 
-                uint64 new_base = (uint64)k_pmm.alloc_page();
+                uint64 new_base = (uint64)k_pmm.try_alloc_page();
                 if (new_base == 0)
                     return Pte(nullptr);
 

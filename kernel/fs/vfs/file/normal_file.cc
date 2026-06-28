@@ -579,6 +579,70 @@ namespace fs
 		}
 	}
 
+	void normal_file_drop_all_runtime_caches()
+	{
+		ensure_write_combine_pool_lock_ready();
+
+		uint8 *buffers_to_free[k_write_combine_pool_slots] = {};
+		int buffer_count = 0;
+
+		k_write_combine_pool_lock.acquire();
+
+		for (auto &entry : k_small_file_cache)
+		{
+			if (entry.buffer == nullptr)
+			{
+				continue;
+			}
+
+			for (int i = 0; i < k_write_combine_pool_slots; ++i)
+			{
+				if (k_write_combine_pool[i] == entry.buffer)
+				{
+					k_write_combine_pool[i] = nullptr;
+					k_write_combine_pool_used[i] = false;
+					k_write_combine_pool_allocating[i] = false;
+					break;
+				}
+			}
+
+			if (buffer_count < k_write_combine_pool_slots)
+			{
+				buffers_to_free[buffer_count++] = entry.buffer;
+			}
+			entry.buffer = nullptr;
+		}
+		k_small_file_cache.clear();
+		k_write_combine_dirty_paths.clear();
+
+		for (int i = 0; i < k_write_combine_pool_slots; ++i)
+		{
+			if (k_write_combine_pool[i] == nullptr ||
+				k_write_combine_pool_used[i] ||
+				k_write_combine_pool_allocating[i])
+			{
+				continue;
+			}
+
+			if (buffer_count < k_write_combine_pool_slots)
+			{
+				buffers_to_free[buffer_count++] = k_write_combine_pool[i];
+			}
+			k_write_combine_pool[i] = nullptr;
+			k_write_combine_pool_used[i] = false;
+		}
+
+		k_write_combine_pool_lock.release();
+
+		for (int i = 0; i < buffer_count; ++i)
+		{
+			if (buffers_to_free[i] != nullptr)
+			{
+				mem::k_hmm.free(buffers_to_free[i]);
+			}
+		}
+	}
+
 	void normal_file_invalidate_delayed_visibility_path(const eastl::string &path)
 	{
 		invalidate_small_file_cache(path);

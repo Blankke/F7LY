@@ -399,7 +399,7 @@ namespace
 
     bool map_anonymous_signal_stack_page(proc::Pcb *p, uint64 page_va, const proc::vma *vm)
     {
-        void *pa = mem::k_pmm.alloc_page();
+        void *pa = mem::k_pmm.try_alloc_page();
         if (pa == nullptr)
         {
             return false;
@@ -1358,13 +1358,15 @@ namespace proc
                     p->_siginfo_mask |= (1ULL << (sig - 1));
                 }
                 
-                // 如果进程正在sigsuspend中等待，并且这个信号没有被阻塞，则唤醒它
+                // 未阻塞信号应当能打断任意可中断睡眠（如 accept/read/pipe），
+                // 否则 netperf 的 SIGKILL/SIGALRM 会在 tick 通道上多等待一个周期，
+                // 甚至因调度时机延迟让 shell 的 wait 永远等不到目标退出。
                 uint64 sig_mask = (1UL << (sig - 1));
-                if ((p->_sigmask & sig_mask) == 0 || sig == signal::SIGCANCEL) {
-                    // 使用特殊的sigsuspend睡眠通道来唤醒等待中的进程
-                    void *sigsuspend_chan = (void*)((uint64)p + 0x1000);
-                    // 检查进程是否正在特定的sigsuspend通道上睡眠
-                    if (p->_state == ProcState::SLEEPING && p->_chan == sigsuspend_chan) {
+                bool signal_unblocked = (p->_sigmask & sig_mask) == 0 || sig == signal::SIGCANCEL;
+                if (signal_unblocked && !signal_is_ignored_for_interrupt(p, sig))
+                {
+                    if (p->_state == ProcState::SLEEPING)
+                    {
                         // 直接设置为可运行状态，避免调用wakeup造成的死锁
                         // 这是安全的，因为调用者已经持有了进程锁
                         p->_state = ProcState::RUNNABLE;
@@ -1409,10 +1411,12 @@ namespace proc
                 // printf("[do_handle] Handling signal %d with handler %p\n", signum, act->sa_handler);
 
                 signal_frame *frame;
-                frame = (signal_frame *)mem::k_pmm.alloc_page();
+                frame = (signal_frame *)mem::k_pmm.try_alloc_page();
                 if (frame == nullptr)
                 {
-                    panic("[do_handle] Failed to allocate memory for signal frame");
+                    // 信号帧属于用户进程上下文资源；内存耗尽时终止当前任务，
+                    // 不能把压力测试升级成内核 panic。
+                    p->_killed = true;
                     return;
                 }
                 uint64 restore_sigmask = consume_signal_restore_mask(p);
@@ -1434,11 +1438,6 @@ namespace proc
                 // printf("[do_handle] Signal mask updated: old=0x%x, new=0x%x, sa_mask=0x%x\n",
                 //        old_sigmask, p->_sigmask, act->sa_mask.sig[0]);
 
-                if (frame == nullptr)
-                {
-                    panic("[do_handle] Failed to allocate memory for signal frame");
-                    return;
-                }
                 frame->tf = *(p->_trapframe);
 #ifdef RISCV
                 p->_trapframe->ra = (uint64)(SIG_TRAMPOLINE + ((uint64)sig_handler - (uint64)sig_trampoline));

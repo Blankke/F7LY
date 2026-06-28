@@ -13,6 +13,7 @@ namespace fs
 	bool normal_file_peek_delayed_visibility_size(const eastl::string &path, uint64 *size);
 	int normal_file_flush_delayed_visibility_path(const eastl::string &path);
 	int normal_file_flush_all_delayed_visibility();
+	void normal_file_drop_all_runtime_caches();
 	void normal_file_invalidate_delayed_visibility_path(const eastl::string &path);
 
 	class normal_file : public file

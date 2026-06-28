@@ -475,7 +475,7 @@ namespace
             return 0;
         }
 
-        char *kernel_buf = reinterpret_cast<char *>(mem::k_pmm.alloc_page());
+        char *kernel_buf = reinterpret_cast<char *>(mem::k_pmm.try_alloc_page());
         if (kernel_buf == nullptr)
         {
             cleanup_real_dir();

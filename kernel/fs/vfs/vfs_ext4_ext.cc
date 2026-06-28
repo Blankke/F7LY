@@ -267,23 +267,27 @@ int vfs_ext_read(struct file *f, int user_addr, const uint64 addr, int n) {
     if (file == NULL) {
         panic("vfs_ext_read: cannot get ext4 file\n");
     }
+    if (n < 0) {
+        return -EINVAL;
+    }
     int r = 0;
     if (user_addr) {
-        char *buf = (char*)mem::k_pmm.kmalloc(n + 1);
+        size_t buf_size = static_cast<size_t>(n) + 1;
+        char *buf = (char*)mem::k_pmm.kmalloc(buf_size);
         [[maybe_unused]] uint64 mread = 0;
         if (buf == NULL) {
-            panic("vfs_ext_read: kalloc failed\n");
+            return -ENOMEM;
         }
         r = ext4_fread(file, buf, n, &byteread);
         if (r != EOK) {
-            mem::k_pmm.free_page(buf);
+            mem::k_pmm.free_page1(buf, buf_size);
             return 0;
         }
         if (mem::k_vmm.copy_out(*proc::k_pm.get_cur_pcb()->get_pagetable(), addr, buf, byteread) != 0) {
-            mem::k_pmm.free_page(buf);
+            mem::k_pmm.free_page1(buf, buf_size);
             return 0;
         }
-        mem::k_pmm.free_page(buf);
+        mem::k_pmm.free_page1(buf, buf_size);
     } else {
         char *kbuf = (char *) addr;
         r = ext4_fread(file, kbuf, n, &byteread);
@@ -303,26 +307,30 @@ int vfs_ext_readat(struct file *f, int user_addr, const uint64 addr, int n, int 
     if (file == NULL) {
         panic("vfs_ext_read: cannot get ext4 file\n");
     }
+    if (n < 0) {
+        return -EINVAL;
+    }
     int r = ext4_fseek(file, offset, SEEK_SET);
     if (r != EOK) {
         return -1;
     }
     if (user_addr) {
-        char *buf =(char*) mem::k_pmm.kmalloc(n + 1);
+        size_t buf_size = static_cast<size_t>(n) + 1;
+        char *buf =(char*) mem::k_pmm.kmalloc(buf_size);
         [[maybe_unused]] uint64 mread = 0;
         if (buf == NULL) {
-            panic("vfs_ext_read: kalloc failed\n");
+            return -ENOMEM;
         }
         r = ext4_fread(file, buf, n, &byteread);
         if (r != EOK) {
-            mem::k_pmm.free_page(buf);
+            mem::k_pmm.free_page1(buf, buf_size);
             return 0;
         }
         if (mem::k_vmm.copy_out(*proc::k_pm.get_cur_pcb()->get_pagetable(), addr, buf, byteread) != 0) {
-            mem::k_pmm.free_page(buf);
+            mem::k_pmm.free_page1(buf, buf_size);
             return 0;
         }
-        mem::k_pmm.free_page(buf);
+        mem::k_pmm.free_page1(buf, buf_size);
     } else {
         char *kbuf = (char *) addr;
         r = ext4_fread(file, kbuf, n, &byteread);
@@ -344,23 +352,27 @@ int vfs_ext_write(struct file *f, int user_addr, const uint64 addr, int n) {
     if (file == NULL) {
         panic("vfs_ext_write: cannot get ext4 file\n");
     }
+    if (n < 0) {
+        return -EINVAL;
+    }
     int r = 0;
     if (user_addr) {
-        char *buf = (char*)mem::k_pmm.kmalloc(n + 1);
+        size_t buf_size = static_cast<size_t>(n) + 1;
+        char *buf = (char*)mem::k_pmm.kmalloc(buf_size);
         [[maybe_unused]] uint64 mwrite = 0;
         if (buf == NULL) {
-            panic("vfs_ext_read: kalloc failed\n");
+            return -ENOMEM;
         }
         if (mem::k_vmm.copy_in(*proc::k_pm.get_cur_pcb()->get_pagetable(), buf, addr, n) != 0) {
-            mem::k_pmm.free_page(buf);
+            mem::k_pmm.free_page1(buf, buf_size);
             return 0;
         }
         int r = ext4_fwrite(file, buf, n, &bytewrite);
         if (r != EOK) {
-            mem::k_pmm.free_page(buf);
+            mem::k_pmm.free_page1(buf, buf_size);
             return 0;
         }
-        mem::k_pmm.free_page(buf);
+        mem::k_pmm.free_page1(buf, buf_size);
     } else {
         char *kbuf = (char *) addr;
         r = ext4_fwrite(file, kbuf, n, &bytewrite);
@@ -1051,6 +1063,10 @@ ssize_t vfs_ext_readi(struct inode *self, int user_addr, uint64 addr, uint off, 
     if (r != EOK) {
         return -r;
     }
+    if (n < 0) {
+        ext4_fclose(&file);
+        return -EINVAL;
+    }
 
     uint64_t oldoff = file.fpos;
     r = ext4_fseek(&file, off, SEEK_SET);
@@ -1060,23 +1076,24 @@ ssize_t vfs_ext_readi(struct inode *self, int user_addr, uint64 addr, uint off, 
     }
     
     if (user_addr) {
-        char *buf = (char*) mem::k_pmm.kmalloc(n + 1);
+        size_t buf_size = static_cast<size_t>(n) + 1;
+        char *buf = (char*) mem::k_pmm.kmalloc(buf_size);
         if (buf == NULL) {
             ext4_fclose(&file);
-            panic("vfs_ext_readi: kalloc failed\n");
+            return -ENOMEM;
         }
         r = ext4_fread(&file, buf, n, &bytesread);
         if (r != EOK) {
-            mem::k_pmm.free_page(buf);
+            mem::k_pmm.free_page1(buf, buf_size);
             ext4_fclose(&file);
             return 0;
         }
         if (mem::k_vmm.copy_out(*proc::k_pm.get_cur_pcb()->get_pagetable(), addr, buf, bytesread) != 0) {
-            mem::k_pmm.free_page(buf);
+            mem::k_pmm.free_page1(buf, buf_size);
             ext4_fclose(&file);
             return 0;
         }
-        mem::k_pmm.free_page(buf);
+        mem::k_pmm.free_page1(buf, buf_size);
         byteread = bytesread;
     } else {
         char *kbuf = (char *) addr;

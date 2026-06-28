@@ -8,6 +8,7 @@
 #include "proc_manager.hh"
 #include "fs/vfs/ops.hh"
 #include "fs/vfs/vfs_utils.hh"
+#include "fs/vfs/file/normal_file.hh"
 #include "fs/lwext4/ext4.hh"
 #include "fs/lwext4/ext4_errno.hh"
 #include "proc/meminfo.hh"
@@ -453,6 +454,52 @@ int vfs_sync_all(void)
         }
     }
 
+    return 0;
+}
+
+int vfs_reclaim_global_caches_for_soft_reset(void)
+{
+    int ret = fs::normal_file_flush_all_delayed_visibility();
+    if (ret < 0)
+    {
+        return ret;
+    }
+
+    ret = vfs_sync_all();
+    if (ret < 0)
+    {
+        return ret;
+    }
+
+    filesystem_t *mounted_fs[VFS_MAX_FS] = {};
+    int mounted_count = 0;
+
+    fs_table_lock.acquire();
+    for (int i = 0; i < VFS_MAX_FS; ++i)
+    {
+        filesystem_t *fs = fs_table[i];
+        if (fs != nullptr && fs->path != nullptr && fs->fs_op != nullptr)
+        {
+            mounted_fs[mounted_count++] = fs;
+        }
+    }
+    fs_table_lock.release();
+
+    for (int i = 0; i < mounted_count; ++i)
+    {
+        if (mounted_fs[i]->type != EXT4)
+        {
+            continue;
+        }
+
+        int drop_ret = ext4_cache_drop_all(mounted_fs[i]->path);
+        if (drop_ret != EOK)
+        {
+            return -drop_ret;
+        }
+    }
+
+    fs::normal_file_drop_all_runtime_caches();
     return 0;
 }
 

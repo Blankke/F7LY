@@ -82,6 +82,7 @@ namespace syscall
         uint64 sys_getcwd();
         uint64 sys_getdents64();
         uint64 sys_shutdown();
+        uint64 sys_soft_reboot_phase();
         // For signal
         uint64 sys_kill_signal();
         uint64 sys_tkill();

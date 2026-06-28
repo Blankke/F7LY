@@ -257,6 +257,13 @@ int ext4_cache_write_back(const char *path, bool on);
  * @return  Standard error code. */
 int ext4_cache_flush(const char *path);
 
+/**@brief   Flush and drop all block cache entries for a mount point.
+ *
+ * @param   path Mount point.
+ *
+ * @return  Standard error code. */
+int ext4_cache_drop_all(const char *path);
+
 /********************************FILE OPERATIONS*****************************/
 
 /**@brief   Remove file by path.

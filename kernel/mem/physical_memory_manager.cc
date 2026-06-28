@@ -261,18 +261,26 @@ namespace mem
 
     void *PhysicalMemoryManager::alloc_page()
     {
-
-        int x = _buddy->Alloc(0);
-
-        if (x == -1)
+        void *pa = try_alloc_page();
+        if (pa == nullptr)
         {
             panic("[pmm] alloc_page failed");
         }
+        return pa;
+    }
+
+    void *PhysicalMemoryManager::try_alloc_page()
+    {
+        int x = _buddy->Alloc(0);
+        if (x == -1)
+        {
+            return nullptr;
+        }
+
         void *pa = pgnm2pa(x);
         memlock.acquire();
         k_page_refcounts[x] = 1;
         memlock.release();
-        // printfCyan("分配物理页:  %p\n", pa);
         memset(pa, 0, PGSIZE);
         return pa;
     }

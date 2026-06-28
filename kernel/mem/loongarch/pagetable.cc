@@ -273,7 +273,7 @@ namespace mem
 				// printfRed("try to walk to next level but next level page table is not alloced.\n");
 				return false;
 			}
-			void *page_addr = k_pmm.alloc_page();
+			void *page_addr = k_pmm.try_alloc_page();
 			if (page_addr == 0)
 			{
 				Info_R("physical page alloc failed.");

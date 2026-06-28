@@ -472,7 +472,7 @@ namespace mem
         old_sz = PGROUNDUP(old_sz);
         for (uint64 a = old_sz; a < new_sz; a += PGSIZE)
         {
-            mem = PhysicalMemoryManager::alloc_page();
+            mem = PhysicalMemoryManager::try_alloc_page();
             if (mem == nullptr)
             {
                 vmdealloc(pt, a, old_sz);
@@ -497,7 +497,7 @@ namespace mem
         old_sz = PGROUNDUP(old_sz);
         for (uint64 a = old_sz; a < new_sz; a += PGSIZE)
         {
-            mem = PhysicalMemoryManager::alloc_page();
+            mem = PhysicalMemoryManager::try_alloc_page();
             if (mem == nullptr)
             {
                 printfRed("vmalloc: alloc_page failed\n");
@@ -1043,7 +1043,7 @@ namespace mem
         }
 
         // 分配物理页面
-        void *pa = k_pmm.alloc_page();
+        void *pa = k_pmm.try_alloc_page();
         if (pa == nullptr)
         {
             printfRed("[allocate_vma_page] alloc_page failed for va: %p\n", va);
@@ -1401,7 +1401,7 @@ namespace mem
             return 0;
         }
 
-        void *new_page = k_pmm.alloc_page();
+        void *new_page = k_pmm.try_alloc_page();
         if (new_page == nullptr)
         {
             return -1;
@@ -1480,7 +1480,7 @@ namespace mem
             return 0;
         }
 
-        void *new_page = k_pmm.alloc_page();
+        void *new_page = k_pmm.try_alloc_page();
         if (new_page == nullptr)
         {
             return -1;
@@ -1581,9 +1581,9 @@ namespace mem
         PageTable pt;
         pt.set_global();
 
-        uint64 addr = (uint64)PhysicalMemoryManager::alloc_page();
+        uint64 addr = (uint64)PhysicalMemoryManager::try_alloc_page();
         if (addr == 0)
-            panic("vmm: no mem to crate vm space.");
+            return pt;
         k_pmm.clear_page((void *)addr);
         pt.set_base(addr);
 
@@ -1709,7 +1709,7 @@ namespace mem
                 }
 #endif
                 // 对于普通内存，分配新页面并复制内容
-                if ((mem = mem::PhysicalMemoryManager::alloc_page()) == nullptr)
+                if ((mem = mem::PhysicalMemoryManager::try_alloc_page()) == nullptr)
                 {
                     vmunmap(new_pt, 0, va / PGSIZE, 1);
                     return -1;
@@ -1763,7 +1763,7 @@ namespace mem
         // printfBlue("[vmalloc]  another page :%p,walk:%p\n",a,pt.walk(a,0).get_data());
         for (; a < newsz; a += PGSIZE)
         {
-            pa = (uint64)k_pmm.alloc_page();
+            pa = (uint64)k_pmm.try_alloc_page();
             // printfCyan("[vmalloc] alloc page: %p\n", pa);
             if (pa == 0)
             {
@@ -1790,7 +1790,7 @@ namespace mem
         oldsz = PGROUNDUP(oldsz);
         for (a = oldsz; a < newsz; a += PGSIZE)
         {
-            mem = k_pmm.alloc_page();
+            mem = k_pmm.try_alloc_page();
             if (mem == 0)
             {
                 // printfCyan("[vmalloc] alloc page failed, oldsz: %p, newsz: %p\n", oldsz, newsz);

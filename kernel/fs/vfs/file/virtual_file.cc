@@ -1154,7 +1154,7 @@ namespace fs
             capacity = PGSIZE;
         }
 
-        char *kernel_buf = reinterpret_cast<char *>(mem::k_pmm.alloc_page());
+        char *kernel_buf = reinterpret_cast<char *>(mem::k_pmm.try_alloc_page());
         if (kernel_buf == nullptr)
         {
             printfRed("virtual_file::read_sub_dir: 为 %s 分配目录缓冲区失败，size=%p\n",

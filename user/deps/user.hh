@@ -120,6 +120,7 @@ off_t lseek(int fd, off_t offset, int whence);
 
 // proc
 int shutdown();
+int soft_reboot_phase();
 
 // add
 int sleep(unsigned int seconds);
