@@ -111,6 +111,11 @@ Loop 设备的核心思想是：把文件当磁盘用——将一个普通文件
 
 旧架构中 RISC-V 和 LoongArch 各自维护一套完整的 virtio 磁盘驱动，从硬件寄存器操作到请求排队再到完成回收，代码互不共享。2026 年，F7LY 将两套驱动重构为统一的三层框架，使块设备 I/O 的核心逻辑跨架构复用。
 
+#figure(
+  image("fig/块设备驱动与IO调度.png", width: 100%),
+  caption: [块设备驱动与IO调度],
+) <fig:syscall>
+
 三层框架自底向上依次为传输层、队列层和设备层。传输层（`VirtioBlkTransport`）是唯一与架构相关的部分，封装了 DMA 地址翻译、队列通知和中断确认——RISC-V 走 MMIO，LoongArch 走 PCI，对上暴露完全一致的接口。队列层（`VirtioBlkQueue`）负责 virtqueue 描述符的分配与回收、请求的调度排序以及 in-flight 请求的完成回收，它的所有逻辑与传输方式无关。设备层（`VirtioBlkDevice`）将传输层和队列层聚合在一起，对上暴露 `submit_and_wait` 和 `submit_transfer_and_wait` 两个同步提交接口：前者走 buffer cache 路径，后者支持任意扇区范围的直接读写，ext4 文件系统只需要传入缓冲区、起始扇区和读写方向，阻塞等待完成即可。
 
 三层之间的数据载体是统一的 `IoRequest` 结构，它携带扇区号、数据缓冲区、读写方向和提交进程的 PID 与 nice 值。nice 值随请求传入队列层的 mClock 调度器，由调度器决定请求的发出顺序，从而将进程优先级从 CPU 调度延伸到磁盘 I/O。
