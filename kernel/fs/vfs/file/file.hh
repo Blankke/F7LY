@@ -140,6 +140,9 @@ namespace fs
 	extern file_pool k_file_table;
 
 	class file;
+	void init_file_runtime_locks();
+	void file_ref_dup(file *f);
+	bool file_ref_put_is_last(file *f);
 	void init_bsd_flock_table();
 	int apply_bsd_flock(file *owner, int operation);
 	void release_bsd_flock(file *owner);
@@ -298,15 +301,14 @@ namespace fs
 		}
 		virtual void free_file()
 		{
-				refcnt--;
-				// printfGreen("[file::free_file] refcnt decreased to %d\n", refcnt);
-				if (refcnt == 0) {
-					// printfGreen("[file::free_file] refcnt is 0, calling delete this\n");
-					release_bsd_flock(this);
-					release_ofd_record_locks_for_owner(this);
-					delete this;
-				}
-			};
+			if (file_ref_put_is_last(this))
+			{
+				// 析构可能触发文件回写或网络关闭，不能放在引用计数自旋锁里执行。
+				release_bsd_flock(this);
+				release_ofd_record_locks_for_owner(this);
+				delete this;
+			}
+		};
 		virtual long read(uint64 buf, size_t len, long off, bool upgrade_off) = 0;
 		virtual long read_to_user(mem::PageTable &, uint64, size_t, long, bool)
 		{
@@ -317,7 +319,7 @@ namespace fs
 		{
 			return -38; // ENOSYS：该文件类型未实现直接从用户缓冲写入，syscall 层回退旧路径。
 		}
-		virtual void dup() { refcnt++; }; // 增加引用计数
+		virtual void dup() { file_ref_dup(this); }; // 增加引用计数
 		virtual bool read_ready() = 0;
 		virtual bool write_ready() = 0;
 		virtual off_t lseek(off_t offset, int whence) = 0;

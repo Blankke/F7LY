@@ -64,6 +64,38 @@
 #define S7_L5 "   ██║   "
 #define S7_L6 "   ╚═╝   "
 
+// G
+#define G_L1 "  ██████╗ "
+#define G_L2 " ██╔════╝ "
+#define G_L3 " ██║  ███╗"
+#define G_L4 " ██║   ██║"
+#define G_L5 " ╚██████╔╝"
+#define G_L6 "  ╚═════╝ "
+
+// D
+#define D_L1 "██████╗  "
+#define D_L2 "██╔══██╗ "
+#define D_L3 "██║  ██║ "
+#define D_L4 "██║  ██║ "
+#define D_L5 "██████╔╝ "
+#define D_L6 "╚═════╝  "
+
+// B
+#define B_L1 "██████╗  "
+#define B_L2 "██╔══██╗ "
+#define B_L3 "██████╔╝ "
+#define B_L4 "██╔══██╗ "
+#define B_L5 "██████╔╝ "
+#define B_L6 "╚═════╝  "
+
+// E
+#define E_L1 "███████╗"
+#define E_L2 "██╔════╝"
+#define E_L3 "█████╗  "
+#define E_L4 "██╔══╝  "
+#define E_L5 "███████╗"
+#define E_L6 "╚══════╝"
+
 
 #define __PRINTF_WARN_COLOR(color, format, ...) \
     do {                                        \
@@ -110,3 +142,4 @@
 
 void print_fuckyou();
 void print_f7ly();
+void print_goodbye();
