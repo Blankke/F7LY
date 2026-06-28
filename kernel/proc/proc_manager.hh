@@ -45,6 +45,7 @@ namespace proc
         // ==================== 初始化 ====================
         void init(const char *pid_lock_name, const char *tid_lock_name, const char *wait_lock_name);
         void user_init();
+        int soft_reboot_phase();
 
         // ==================== 进程基础管理 ====================
         Pcb *get_cur_pcb();

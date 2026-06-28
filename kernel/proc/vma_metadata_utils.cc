@@ -114,11 +114,22 @@ namespace proc::vma_meta
                 continue;
             }
 
-            (*subset)[overlay_entry.first - start_page] = overlay_entry.second;
             if (retain_pages && overlay_entry.second != 0)
             {
-                mem::k_pmm.retain_page(page_pa_to_kernel_ptr(overlay_entry.second));
+                if (!mem::k_pmm.retain_page(page_pa_to_kernel_ptr(overlay_entry.second)))
+                {
+                    for (const auto &retained_entry : *subset)
+                    {
+                        if (retained_entry.second != 0)
+                        {
+                            mem::k_pmm.free_page(page_pa_to_kernel_ptr(retained_entry.second));
+                        }
+                    }
+                    delete subset;
+                    return nullptr;
+                }
             }
+            (*subset)[overlay_entry.first - start_page] = overlay_entry.second;
         }
 
         if (subset->empty())

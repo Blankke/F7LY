@@ -55,6 +55,7 @@ void fs_register(int dev, fs_t fs_type, char *path);
 int fs_umount(filesystem_t *fs);
 int fs_sync(filesystem_t *fs);
 int vfs_sync_all(void);
+int vfs_reclaim_global_caches_for_soft_reset(void);
 filesystem_t *get_fs_by_type(fs_t type);
 filesystem_t *get_fs_by_mount_point(const char *path);
 void dir_init(void);

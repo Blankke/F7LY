@@ -20,12 +20,12 @@ extern "C"
         libcbench_test("/glibc");
         iozone_test("/glibc");
         iozone_test("/musl");
-        lmbench_test("/musl/");
-        lmbench_test("/glibc/");
         cyclictest_test("/musl/");
         cyclictest_test("/glibc/");
         ltp_test(false);
         ltp_test(true);
+        lmbench_test("/musl/");
+        lmbench_test("/glibc/");
         shutdown();
         return 0;
     }

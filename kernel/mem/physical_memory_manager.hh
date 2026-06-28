@@ -19,7 +19,8 @@ namespace mem
         };
 
         static void init();
-        static void *alloc_page(); // 分配单个物理页
+        static void *alloc_page(); // 分配单个物理页，失败表示内核不可恢复并 panic
+        static void *try_alloc_page(); // 尝试分配单个物理页，失败时返回空指针
         static void *alloc_pages(int count); // 分配连续多个物理页
         static void *try_alloc_pages(int count); // 尝试分配连续页，失败时返回空指针
         static void free_page(void *pa); // 释放单个物理页

@@ -145,18 +145,11 @@ namespace proc
 
         inline bool mapping_pages_should_be_freed_on_unmap(const vma &entry)
         {
-            if (is_shared_backed_vma(entry))
-            {
-                return false;
-            }
-            if (entry.object != nullptr && entry.object->shared_mapping())
-            {
-                return false;
-            }
-            if (entry.is_shared_mapping())
-            {
-                return false;
-            }
+            (void)entry;
+            // 这里的 do_free 表示释放“当前页表映射引用”，不是释放共享后端的
+            // owner 引用。VmObject::prepare_page()/fork remap 都会 retain 一份
+            // mapping 引用；MAP_SHARED/SysV SHM 退出时同样必须 drop，否则对象析构
+            // 只会释放 source owner，剩余 mapping 引用会让 PMM 页永久驻留。
             return true;
         }
 
@@ -478,7 +471,7 @@ namespace proc
             uint64 va_start = PGROUNDDOWN(vm_entry.addr);
             uint64 va_end = PGROUNDUP(vm_entry.addr + vm_entry.len);
 
-            // 共享映射的物理页由共享段后端持有，这里只撤销当前片段的页表映射。
+            // 共享后端仍持有 owner 引用；safe_vmunmap 释放的是当前页表映射引用。
             mm.safe_vmunmap(va_start, va_end, check_validity);
 
             // 同一条共享段经过 split/trim 之后可能散成多个 VMA 片段。
@@ -993,10 +986,14 @@ namespace proc
         // 为新进程创建页表
         if (!new_mgr->create_pagetable())
         {
-            panic("[clone for fork] create_pagetable faol");
             delete new_mgr;
             return nullptr;
         }
+        auto cleanup_failed_clone = [&]()
+        {
+            new_mgr->emergency_cleanup();
+            delete new_mgr;
+        };
         // printf("[clone_for_fork] start clone prog_section\n");
 
         // 复制程序段描述时顺便做一层元数据清洗，避免损坏的高地址保留页再次被克隆。
@@ -1029,8 +1026,7 @@ namespace proc
         if (!new_mgr->clone_vm_space_metadata_from(*this))
         {
             printfRed("[clone_for_fork] clone VMASpace metadata failed\n");
-            new_mgr->emergency_cleanup();
-            delete new_mgr;
+            cleanup_failed_clone();
             return nullptr;
         }
 
@@ -1044,8 +1040,8 @@ namespace proc
 
         if (!copy_success)
         {
-            panic("[clone_from_fork] copy failed");
-            delete new_mgr;
+            printfRed("[clone_for_fork] copy VMASpace pages failed\n");
+            cleanup_failed_clone();
             return nullptr;
         }
 
@@ -1074,7 +1070,7 @@ namespace proc
 
             if (!vma_meta::clone_snapshot(new_mgr->vma_data._vm[i], vma_data._vm[i]))
             {
-                delete new_mgr;
+                cleanup_failed_clone();
                 return nullptr;
             }
             new_mgr->vma_data._vm[i].owner_mm = new_mgr;
@@ -1083,7 +1079,7 @@ namespace proc
             if (!new_mgr->ensure_user_pagetable_hierarchy(new_mgr->vma_data._vm[i].addr,
                                                           new_mgr->vma_data._vm[i].len))
             {
-                delete new_mgr;
+                cleanup_failed_clone();
                 return nullptr;
             }
 #endif
@@ -1097,7 +1093,7 @@ namespace proc
             {
                 if (!remap_shared_object_vma(*new_mgr, pagetable, vma_data._vm[i]))
                 {
-                    delete new_mgr;
+                    cleanup_failed_clone();
                     return nullptr;
                 }
             }
@@ -1116,7 +1112,7 @@ namespace proc
                 {
                     printfRed("[clone_for_fork] copy VMA %d failed addr=%p len=%d\n",
                               i, (void *)vma_data._vm[i].addr, vma_data._vm[i].len);
-                    delete new_mgr;
+                    cleanup_failed_clone();
                     return nullptr;
                 }
 
@@ -1737,7 +1733,7 @@ namespace proc
                 return true;
             }
 
-            void *mem = mem::PhysicalMemoryManager::alloc_page();
+            void *mem = mem::PhysicalMemoryManager::try_alloc_page();
             if (mem == nullptr)
             {
                 return false;
@@ -1973,18 +1969,13 @@ namespace proc
         while (true)
         {
             vma *entry = find_first_vma_at_or_after(0);
-            while (entry != nullptr &&
-                   (entry->area_kind == VmAreaKind::ElfLoad ||
-                    entry->area_kind == VmAreaKind::InterpreterLoad ||
-                    entry->area_kind == VmAreaKind::Heap))
-            {
-                entry = find_next_vma(entry);
-            }
-
             if (entry == nullptr)
             {
                 break;
             }
+            // VMA 重构后 ElfLoad/InterpreterLoad/Heap 的物理页也可能由
+            // VmObject 与 private overlay 持有，必须先按 VMA 所有权释放。
+            // program_sections 只作为旧式页表映射兜底，不能再跳过这些元数据。
             free_vma_entry(entry, true);
         }
 
@@ -2688,18 +2679,12 @@ namespace proc
         while (true)
         {
             vma *entry = find_first_vma_at_or_after(0);
-            while (entry != nullptr &&
-                   (entry->area_kind == VmAreaKind::ElfLoad ||
-                    entry->area_kind == VmAreaKind::InterpreterLoad ||
-                    entry->area_kind == VmAreaKind::Heap))
-            {
-                entry = find_next_vma(entry);
-            }
-
             if (entry == nullptr)
             {
                 break;
             }
+            // 紧急清理同样不能留下程序段/堆 VMA；否则页表会被 freewalk 丢掉，
+            // VmObject 持有的页引用却不会和映射引用成对回收。
             free_vma_entry(entry, false);
         }
         vma_index.clear();

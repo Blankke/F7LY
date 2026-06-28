@@ -1194,8 +1194,8 @@ namespace proc
 
 	                // 为该进程分配一页 trapframe 空间（用于中断时保存用户上下文）
 	                // printfYellow("[user pgtbl]==>alloc trapframe for proc %d\n", p->_global_id);
-	                if ((p->_trapframe = (TrapFrame *)mem::k_pmm.alloc_page()) == nullptr)
-	                {
+                if ((p->_trapframe = (TrapFrame *)mem::k_pmm.try_alloc_page()) == nullptr)
+                {
                     freeproc_creation_failed(p); // 使用专门的创建失败清理函数
                     p->_lock.release();
                     return nullptr;
@@ -2557,10 +2557,8 @@ namespace proc
                 ProcessMemoryManager *cloned_mm = parent_mm->clone_for_fork();
                 if (cloned_mm == nullptr)
                 {
-                    panic("[fork] clone failed");
                     freeproc_creation_failed(np); // 使用专门的创建失败清理函数
                     np->_lock.release();
-                    panic("fork failed: memory copy failed");
                     return nullptr;
                 }
                 np->set_memory_manager(cloned_mm);

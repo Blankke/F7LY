@@ -3896,6 +3896,7 @@ namespace syscall
         BIND_SYSCALL(mknod);
         BIND_SYSCALL(getcwd);
         BIND_SYSCALL(shutdown);
+        BIND_SYSCALL(soft_reboot_phase);
         BIND_SYSCALL(dup);
         BIND_SYSCALL(dup3);
         BIND_SYSCALL(fcntl);
@@ -6777,7 +6778,7 @@ namespace syscall
             buf_len = max_buf_size;
         }
 
-        char *kernel_buf = reinterpret_cast<char *>(mem::k_pmm.alloc_page());
+        char *kernel_buf = reinterpret_cast<char *>(mem::k_pmm.try_alloc_page());
         if (kernel_buf == nullptr) {
             printfRed("[sys_getdents64] FAILED - Cannot allocate kernel buffer, len=%lu\n", buf_len);
             return -ENOMEM;
@@ -6844,6 +6845,10 @@ namespace syscall
 // while (1);
 #endif
         return 0;
+    }
+    uint64 SyscallHandler::sys_soft_reboot_phase()
+    {
+        return proc::k_pm.soft_reboot_phase();
     }
 
     //====================================signal===================================================

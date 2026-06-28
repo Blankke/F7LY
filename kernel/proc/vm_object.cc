@@ -115,7 +115,7 @@ namespace proc
             return found->second;
         }
 
-        void *page = mem::PhysicalMemoryManager::alloc_page();
+        void *page = mem::PhysicalMemoryManager::try_alloc_page();
         if (page == nullptr)
         {
             return 0;
@@ -140,7 +140,7 @@ namespace proc
                                                    size_t copy_bytes,
                                                    bool zero_fill_tail)
     {
-        void *page = mem::PhysicalMemoryManager::alloc_page();
+        void *page = mem::PhysicalMemoryManager::try_alloc_page();
         if (page == nullptr)
         {
             return 0;
@@ -330,7 +330,7 @@ namespace proc
             {
                 uint64 bytes_remaining = file_backed_bytes - page_offset_in_area;
                 size_t bytes_to_read = bytes_remaining > PGSIZE ? PGSIZE : static_cast<size_t>(bytes_remaining);
-                void *page = mem::PhysicalMemoryManager::alloc_page();
+                void *page = mem::PhysicalMemoryManager::try_alloc_page();
                 if (page == nullptr)
                 {
                     return -1;
@@ -369,7 +369,7 @@ namespace proc
                     return signal_sigbus_for_current_task(view);
                 }
 
-                void *page = mem::PhysicalMemoryManager::alloc_page();
+                void *page = mem::PhysicalMemoryManager::try_alloc_page();
                 if (page == nullptr)
                 {
                     return -1;

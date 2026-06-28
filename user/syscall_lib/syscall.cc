@@ -439,6 +439,11 @@ int shutdown(){
     return syscall(syscall::SYS_shutdown);
 }
 
+int soft_reboot_phase()
+{
+    return syscall(syscall::SYS_soft_reboot_phase);
+}
+
 int sync()
 {
     return syscall(syscall::SYS_sync);
