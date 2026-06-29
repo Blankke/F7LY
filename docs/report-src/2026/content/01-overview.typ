@@ -138,53 +138,29 @@ F7LY-OS 在开发过程中参考和移植了以下开源项目与第三方库：
 == 项目目录结构
 
 #figure(
-  block(
-    width: 100%,
-    inset: 10pt,
-    stroke: 0.5pt,
-    radius: 4pt,
-  )[
+  block(width: 100%, inset: 6pt, stroke: 0.5pt, radius: 4pt)[
+    #set par(justify: false)
+    #show raw.where(block: true): text.with(size: 7.2pt)
     ```text
     F7LY-OS
-    ├── Makefile                        // 顶层构建入口
-    ├── AGENTS.md                       // Agent 协作入口与全局规则
-    ├── agent_docs/                     // 架构、调试、评测协作文档
-    ├── scoreboard/                     // 四组合 LTP 评测结果与生成器
-    ├── plan_docs/                      // 功能计划与任务文档
-    ├── docs/                           // 文档与报告
-    │   ├── report-src/                 // Typst 报告源码
-    │   ├── dev-notes/                  // 开发笔记
-    │   └── archive/                    // 历史文档归档
-    ├── kernel/                         // 内核源码
-    │   ├── boot/                       // 启动流程（含 RISC-V 与 LoongArch 入口）
-    │   ├── hal/                        // 硬件抽象层（架构特定寄存器与操作）
-    │   ├── devs/                       // 设备管理（UART、控制台、virtio 等）
-    │   ├── mem/                        // 内存管理（Buddy、PMM、VMM、VMA、Heap）
-    │   ├── proc/                       // 进程管理（PCB、调度器、信号、futex、管道）
-    │   ├── shm/                        // System V 共享内存
-    │   ├── fs/                         // 文件系统
-    │   │   ├── vfs/                    // 虚拟文件系统与 File 抽象
-    │   │   ├── lwext4/                 // ext4 文件系统
-    │   │   └── fat32/                  // FAT32 文件系统
-    │   ├── sys/                        // 系统调用层（sysio / sysproc / sysfile）
-    │   ├── net/                        // 网络（ONPS 协议栈 + VirtIO-Net 驱动）
-    │   ├── tm/                         // 时间与定时器管理
-    │   ├── trap/                       // 中断与异常处理
-    │   ├── libs/                       // 内核基础库（printf、EASTL、liballoc 等）
-    │   └── link/                       // 链接脚本
-    ├── user/                           // 用户态程序
-    │   ├── app/                        // initcode（连续测例 / shell 入口）
-    │   ├── user_lib/                   // 用户态测试调度与辅助库
-    │   ├── syscall_lib/                // 系统调用封装
-    │   └── deps/                       // 依赖（musl/glibc 工具链）
-    ├── images/                         // QEMU 磁盘镜像与 rootfs
-    ├── busybox/                        // 双架构 BusyBox 编译产物
-    ├── build/                          // 编译中间产物
-    ├── logs/                           // 运行日志输出
-    ├── scripts/                        // 辅助脚本
-    ├── tools/                          // 工具集
-    └── thirdparty/                     // 第三方库
-        └── EASTL/                      // EASTL 标准模板库
+    ├── Makefile                         构建入口
+    ├── AGENTS.md / agent_docs/           Agent 规则、架构与调试文档
+    ├── scoreboard/ / plan_docs/          评测进度与任务计划
+    ├── docs/report-src/                  Typst 报告源码
+    ├── kernel/
+    │   ├── boot/ hal/ trap/              启动、硬件抽象与异常处理
+    │   ├── devs/                         UART、控制台、virtio 等设备
+    │   ├── mem/ proc/ shm/ tm/           内存、进程、共享内存、时间
+    │   ├── fs/vfs/ lwext4/ fat32/        VFS、ext4、FAT32
+    │   ├── net/                          loopback + ONPS/VirtIO-Net
+    │   ├── sys/                          Linux ABI 系统调用层
+    │   └── libs/ link/                   基础库与链接脚本
+    ├── user/app/ user_lib/ syscall_lib/  用户态入口、测试调度与 syscall 封装
+    ├── user/deps/                        musl/glibc 工具链依赖
+    ├── images/ busybox/                  QEMU 镜像与 BusyBox 产物
+    ├── build/ logs/                      构建产物与运行日志
+    ├── scripts/ tools/                   辅助脚本与工具
+    └── thirdparty/EASTL/                 内核容器库
     ```
   ],
   caption: [F7LY-OS 项目目录结构],
@@ -193,24 +169,27 @@ F7LY-OS 在开发过程中参考和移植了以下开源项目与第三方库：
 == 2025 与 2026 能力对照
 
 #figure(
-  table(
-    columns: (2.5cm, 4cm, 4cm, 2cm),
+  text(size: 8.8pt)[
+  #set par(justify: false)
+  #table(
+    columns: (1.8cm, 3.0cm, 6.2cm, 1.5cm),
     align: (left, left, left, left),
     table.header(
       [*领域*], [*2025 文档状态*], [*2026 当前状态*], [*变化类型*]
     ),
-    [C++ 运行环境], [宣称支持 C++ 异常], [C++23 freestanding，显式禁用异常与 RTTI], [纠正],
-    [内存发现], [固定内存布局为主], [DTB 动态物理内存区间探测，双架构 Split Heap], [改进],
-    [用户地址空间], [初步进程内存管理器], [三层 VMA 架构（VmArea + Maple Tree + VmObject），统一 mm/mmap/shm/brk/栈生命周期], [重构/新增],
-    [块 I/O], [架构独立驱动], [双架构统一 virtio-blk 队列 + priority-borrow I/O 调度器], [新增/替换],
-    [网络], [BSD socket 协议栈框架], [真实 loopback TCP/UDP/AF_UNIX 数据面 + ONPS/VirtIO-Net 出网路径 + iperf/netperf 验证], [改进],
-    [进程管理], [基础 fork/clone/exec/wait], [完整线程支持（futex、robust futex、CLEARTID）+ clone3 + POSIX timer + epoll], [改进],
-    [文件系统], [C++ 文件系统 + FAT32], [lwext4 ext4 根文件系统 + VFS 统一接口 + FAT32 数据盘 + bind mount + loop 设备], [新增/替换],
-    [系统调用数量], [约 60 个], [243 个，含 clone3、fanotify、memfd、splice 等], [新增],
-    [用户入口], [自动连续测例 initcode], [自动连续测例 + 交互式 BusyBox ash shell + apk 包管理器], [新增],
-    [评测体系], [分散日志], [四组合 scoreboard + LTP runner/parser/ranker 工具链 + 可复现实验], [新增],
-    [双架构状态], [RISC-V 为主，LoongArch 基础], [双架构对等，LoongArch 可运行 pthread/libcbench/lmbench], [改进],
-    [硬件平台], [QEMU virt], [QEMU virt + VisionFive 2 实机 + LS3A5000/LS2k1000 启动验证], [新增],
-  ),
+    [C++ 环境], [宣称支持 C++ 异常], [C++23 freestanding；禁用异常与 RTTI], [纠正],
+    [内存发现], [固定内存布局为主], [DTB 动态物理内存探测；双架构 Split Heap], [改进],
+    [用户地址空间], [初步进程内存管理器], [三层 VMA 架构；统一 mmap、shm、brk、栈生命周期], [重构],
+    [块 I/O], [架构独立驱动], [统一 virtio-blk 队列；priority-borrow I/O 调度], [新增],
+    [网络], [BSD socket 协议栈框架], [loopback TCP/UDP/AF_UNIX 数据面；ONPS/VirtIO-Net 出网；iperf/netperf 验证], [改进],
+    [进程管理], [基础 fork/clone/exec/wait], [线程支持；futex、robust futex、CLEARTID；clone3；POSIX timer；epoll], [改进],
+    [文件系统], [C++ 文件系统 + FAT32], [lwext4 ext4 根文件系统；VFS 统一接口；FAT32 数据盘；bind mount；loop 设备], [新增],
+    [系统调用], [约 60 个], [243 个；含 clone3、fanotify、memfd、splice 等], [新增],
+    [用户入口], [自动连续测例 initcode], [自动连续测例；BusyBox ash shell；apk 包管理器], [新增],
+    [评测体系], [分散日志], [四组合 scoreboard；LTP runner/parser/ranker；可复现实验], [新增],
+    [双架构], [RISC-V 为主，LoongArch 基础], [双架构对等；LoongArch 可运行 pthread、libcbench、lmbench], [改进],
+    [硬件平台], [QEMU virt], [QEMU virt；VisionFive 2；LS3A5000/LS2k1000 启动验证], [新增],
+  )
+  ],
   caption: [2025 与 2026 能力对照表],
 ) <tab:overview-capability-comparison>
