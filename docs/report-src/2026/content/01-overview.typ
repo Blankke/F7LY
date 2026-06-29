@@ -7,7 +7,7 @@ F7LY-OS 是 C++ 编写的支持 RISC-V 与 LoongArch 双架构的宏内核模块
 2026 年的主线目标是在双架构一致性、Linux ABI 正确性、长连续测例稳定性和 I/O 与线程性能四个方向上取得实质进展。相比于 2025 年的"可启动、可运行基础测例"，2026 年的内核已具备：
 
 - 完整的动态 ELF 装载链，支持 musl / glibc 双 C 运行库和 `#!` 脚本解释器递归；
-- 真实可用的 loopback TCP/UDP 协议栈，通过 iperf / netperf 吞吐验证；
+- 真实可用的网络协议栈，通过 iperf / netperf 吞吐验证, 可正常访问web服务；
 - 双架构统一 virtio-blk 框架与优先级带宽借用 I/O 调度器；
 - 交互式 BusyBox ash 终端，支持控制台输入、文件浏览和脚本执行；
 - 四组合（RV+musl、RV+glibc、LA+musl、LA+glibc）scoreboard 评测体系，覆盖 LTP、libcbench、iozone、lmbench、cyclictest、iperf、netperf、unixbench、lua、BusyBox、libctest 连续测例。
@@ -35,7 +35,7 @@ F7LY-OS 是 C++ 编写的支持 RISC-V 与 LoongArch 双架构的宏内核模块
 
 *文件系统*——VFS 统一文件操作接口，支持 ext4（根文件系统，基于 lwext4）和 FAT32（数据盘）。`File` 抽象类通过 C++ 多态支持普通文件、管道、socket、虚拟文件（`/proc`）和 epoll 文件。支持 `ioctl`、`fcntl`、`flock` 文件锁、`splice`/`sendfile` 零拷贝搬运、`fanotify` 通知、loop 设备、ramdisk 等。
 
-*网络*——基于 ONPS 网络栈 + VirtIO-Net 驱动的框架，loopback 接口支持真实可用的 TCP/UDP 通信。TCP 支持 bind/listen/connect/accept、backlog、双向流、close/shutdown 半关闭；UDP 支持 bind、datagram 消息边界、sendto/recvfrom。支持阻塞/非阻塞、`MSG_MORE` 延迟发送、sendmmsg/recvmmsg、常用 socket option 以及 poll/epoll 就绪通知。iperf 和 netperf 在双架构均可运行。
+*网络*——支持本机loopback及网络web访问。loopback 路径由 `socket_file` 直接实现，不经过 VirtIO 网卡和 Ethernet/IP 层：TCP 通过端口表查找 listener、创建 server-side socket、互设 peer，并以 `_recv_buffer` 完成双向字节流传输；UDP 以 `loopback_datagram` 队列保持消息边界和源地址回填；AF_UNIX 复用本地可靠 stream 队列。非 loopback IPv4 流量在网络栈初始化成功后交给 ONPS，再经 `virtio0` 适配层和 VirtIO-Net 驱动收发完整以太网帧。BSD Socket ABI 支持 socket/socketpair、bind/listen/connect/accept、send/recv/sendmsg、sendmmsg/recvmmsg、常用 socket option、socket ioctl 兼容视图，以及 poll/epoll 就绪通知。iperf 和 netperf 在双架构均可运行。
 
 *用户态*——支持 musl 和 glibc 两种 C 运行库的动态链接程序。用户态入口包括自动连续测例 initcode 和交互式 BusyBox ash，后者使用独立 ext4 rootfs 镜像，支持命令行浏览、脚本执行和正常退出。支持通过 `apk` 包管理器安装 Alpine Linux 软件包。
 
@@ -119,7 +119,7 @@ F7LY-OS 在开发过程中参考和移植了以下开源项目与第三方库：
 
 - *双架构统一 virtio-blk 框架*——将 RISC-V MMIO 和 LoongArch PCI 的 virtio-blk 传输差异封装为 transport 适配层，通用层统一管理 request、descriptor、completion 和 buffer 回写。在此基础上建立了多优先级、按进程 flow 轮转的 priority-borrow I/O 调度器，nice 值同时影响 CPU 和磁盘带宽分配。
 
-- *真实 loopback TCP/UDP*——从零构建本地 TCP/UDP 协议栈，支持 TCP 连接配对、backlog、双向流、半关闭、数据确认，UDP datagram 消息边界、源地址回填。支持阻塞/非阻塞、`MSG_MORE`、sendmmsg/recvmmsg、poll/epoll 就绪，以及信号中断。iperf 和 netperf 四组合均可运行。
+- *网络数据面与 Socket ABI 完善*——从零构建 TCP/UDP 协议栈，支持本机 loopback 及网络 web 访问。打通“socket -> onps协议栈 -> VirtIO-Net”完整链路。iperf 和 netperf 四组合均可运行，可正常访问 web 服务。
 
 - *交互式 BusyBox ash*——新增 `make shell r/l` 入口，使用独立 ext4 rootfs 镜像进入 BusyBox ash 交互终端。打通了 UART→控制台行规程→device_file→fd 0→BusyBox 的完整输入链路，支持 `pwd`、`ls`、`cat`、脚本执行和正常 `exit`。
 
@@ -203,7 +203,7 @@ F7LY-OS 在开发过程中参考和移植了以下开源项目与第三方库：
     [内存发现], [固定内存布局为主], [DTB 动态物理内存区间探测，双架构 Split Heap], [改进],
     [用户地址空间], [初步进程内存管理器], [三层 VMA 架构（VmArea + Maple Tree + VmObject），统一 mm/mmap/shm/brk/栈生命周期], [重构/新增],
     [块 I/O], [架构独立驱动], [双架构统一 virtio-blk 队列 + priority-borrow I/O 调度器], [新增/替换],
-    [网络], [BSD socket 协议栈框架], [真实 loopback TCP/UDP + iperf/netperf 验证], [改进],
+    [网络], [BSD socket 协议栈框架], [真实 loopback TCP/UDP/AF_UNIX 数据面 + ONPS/VirtIO-Net 出网路径 + iperf/netperf 验证], [改进],
     [进程管理], [基础 fork/clone/exec/wait], [完整线程支持（futex、robust futex、CLEARTID）+ clone3 + POSIX timer + epoll], [改进],
     [文件系统], [C++ 文件系统 + FAT32], [lwext4 ext4 根文件系统 + VFS 统一接口 + FAT32 数据盘 + bind mount + loop 设备], [新增/替换],
     [系统调用数量], [约 60 个], [243 个，含 clone3、fanotify、memfd、splice 等], [新增],
