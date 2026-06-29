@@ -7,6 +7,7 @@
 #include "mem/riscv/pagetable.hh"
 #elif defined(LOONGARCH)
 #include "mem/loongarch/pagetable.hh"
+#include "mem/loongarch/tlb.hh"
 #endif
 #include "memlayout.hh"
 #include "platform.hh"
@@ -32,7 +33,7 @@ extern uint64 k_dtb_addr; // Defined in main.cc
 #ifdef LOONGARCH
 void tlbinit(void)
 {
-    asm volatile("invtlb  0x0,$zero,$zero");
+    mem::loongarch::tlb_flush_all();
     w_csr_stlbps(0xcU);
     w_csr_asid(0x0U);
     w_csr_tlbrehi(0xcU);
@@ -190,12 +191,6 @@ namespace mem
 
 #ifdef LOONGARCH
         uint64 loongarch_empty_pgdh_base = 0;
-
-        inline void invalidate_loongarch_user_page_pair(uint64 va)
-        {
-            uint64 pair_base = va & ~((PGSIZE << 1) - 1);
-            asm volatile("invtlb 0x6, $zero, %0" : : "r"(pair_base) : "memory");
-        }
 
         void install_loongarch_empty_high_user_pagetable()
         {
@@ -363,7 +358,8 @@ namespace mem
         }
 #ifdef RISCV
         // 设置satp，对应龙芯应该设置pgdl，pgdh，stlbps，asid，tlbrehi，pwcl，pwch,
-        // 并且invtlb 0x0,$zero,$zero;
+        // 并且 tlb_flush_all
+        // mem::loongarch::tlb_flush_all();
         // question: 为什么xv6的MAKE_SATP没有设置asid
 
         sfence_vma();
@@ -444,7 +440,7 @@ namespace mem
 #elif defined(LOONGARCH)
             pte.set_data(PA2PTE(PGROUNDDOWN(pa)) |
                          flags |
-                         loongarch::pte_valid_m);
+                         ::loongarch::pte_valid_m);
             // printfBlue("pa: %p, pte2pa: %p\n", pa, pte.pa());
 #endif
             // printfMagenta("由map_page设置的第三级pte: %p,pte_addr:%p，应该是：%p\n", pte.get_data(), pte.get_data_addr(), riscv::virt_to_phy_address(pa));
@@ -889,7 +885,7 @@ namespace mem
                 if (need_repair)
                 {
                     existing_pte.set_data(repaired_pte);
-                    invalidate_loongarch_user_page_pair(page_va);
+                    mem::loongarch::tlb_flush_user_page_pair(page_va);
                 }
 #endif
                 return true;
@@ -1037,7 +1033,7 @@ namespace mem
             }
             vm->has_resident_pages = true;
 #ifdef LOONGARCH
-            invalidate_loongarch_user_page_pair(page_va);
+            mem::loongarch::tlb_flush_user_page_pair(page_va);
 #endif
             return 0;
         }
@@ -1179,7 +1175,7 @@ namespace mem
 #ifdef LOONGARCH
         // LoongArch 的 TLB 可能保留着这页先前 fault 下来的无效表项。
         // 新页表项补好后立刻按对失效一次，避免用户态回去后还在原指令上反复 fault。
-        invalidate_loongarch_user_page_pair(page_va);
+        mem::loongarch::tlb_flush_user_page_pair(page_va);
 #endif
 
         printfGreen("[allocate_vma_page] successfully mapped page at va=%p, pa=%p, pte_flags=0x%x\n",
@@ -1476,7 +1472,7 @@ namespace mem
             pte.set_data(PA2PTE(PGROUNDDOWN(old_pa)) |
                          new_flags |
                          PTE_V);
-            invalidate_loongarch_user_page_pair(page_va);
+            mem::loongarch::tlb_flush_user_page_pair(page_va);
             return 0;
         }
 
@@ -1517,7 +1513,7 @@ namespace mem
                      new_flags |
                      PTE_V);
         k_pmm.free_page(old_page);
-        invalidate_loongarch_user_page_pair(page_va);
+        mem::loongarch::tlb_flush_user_page_pair(page_va);
         return 0;
 #else
         return -1;
@@ -1571,7 +1567,7 @@ namespace mem
             // printfMagenta("vmunmap: unmap va: %p, pa: %p\n", a, pte.pa());
             pte.clear_data();
 #ifdef LOONGARCH
-            invalidate_loongarch_user_page_pair(a);
+            mem::loongarch::tlb_flush_user_page_pair(a);
 #endif
         }
     }
@@ -1692,7 +1688,7 @@ namespace mem
                         {
                             // 父子页表都降为只读 COW，之后由写异常拆页。
                             pte.set_data((original_data & ~(PTE_W | PTE_D)) | PTE_COW);
-                            invalidate_loongarch_user_page_pair(va);
+                            mem::loongarch::tlb_flush_user_page_pair(va);
                             parent_cow_changed = true;
                         }
                     }
@@ -1701,7 +1697,7 @@ namespace mem
                     {
                         k_pmm.free_page(old_page);
                         pte.set_data(original_data);
-                        invalidate_loongarch_user_page_pair(va);
+                        mem::loongarch::tlb_flush_user_page_pair(va);
                         vmunmap(new_pt, 0, va / PGSIZE, 1);
                         return -1;
                     }
@@ -1732,7 +1728,7 @@ namespace mem
 #elif defined(LOONGARCH)
         if (parent_cow_changed)
         {
-            asm volatile("invtlb 0x0, $zero, $zero" : : : "memory");
+            mem::loongarch::tlb_flush_all();
         }
 #endif
         return 0;
@@ -1746,7 +1742,7 @@ namespace mem
             pte.set_data(pte.get_data() & ~riscv::PteEnum::pte_user_m);
 #elif defined(LOONGARCH)
         if (pte.is_valid())
-            pte.set_data(pte.get_data() & ~loongarch::PteEnum::pte_plv_m); // PTE_U
+            pte.set_data(pte.get_data() & ~::loongarch::PteEnum::pte_plv_m); // PTE_U
 #endif
     }
 

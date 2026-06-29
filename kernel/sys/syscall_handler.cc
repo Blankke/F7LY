@@ -11,6 +11,9 @@
 #include "proc_manager.hh"
 #include "proc/capability.hh"
 #include "virtual_memory_manager.hh"
+#ifdef LOONGARCH
+#include "mem/loongarch/tlb.hh"
+#endif
 #include "physical_memory_manager.hh"
 #include "userspace_stream.hh"
 #include "klib.hh"
@@ -15285,7 +15288,7 @@ namespace syscall
 #ifdef RISCV
                 sfence_vma();
 #elif defined(LOONGARCH)
-                asm volatile("invtlb 0x0,$zero,$zero");
+                mem::loongarch::tlb_flush_all();
 #endif
                 return 0;
             }
@@ -15306,7 +15309,7 @@ namespace syscall
 #ifdef RISCV
             sfence_vma();
 #elif defined(LOONGARCH)
-            asm volatile("invtlb 0x0,$zero,$zero");
+            mem::loongarch::tlb_flush_all();
 #endif
 
             return 0;
@@ -15684,7 +15687,7 @@ namespace syscall
 #ifdef RISCV
         sfence_vma();
 #elif defined(LOONGARCH)
-        asm volatile("invtlb 0x0,$zero,$zero");
+        mem::loongarch::tlb_flush_all();
 #endif
 
         if (has_snapshot)

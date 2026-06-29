@@ -74,7 +74,9 @@ namespace
 
         bool polling_wait() const override
         {
-            return true;
+            // LA 的 virtio-pci 中断已由 PCIE_IRQ 分发到块设备，
+            // 这里和 RV 一样进入 sleep 等待，避免每次 exec 读盘时在内核轮询。
+            return false;
         }
 
         virtio_pci_hw_t &hardware()
@@ -283,12 +285,33 @@ int virtio_disk_rw_sectors(int dev, void *buf, uint64 start_sector, uint32 secto
 
 void virtio_disk_intr(void)
 {
-    g_primary_device->handle_interrupt();
+    if (g_primary_device != nullptr)
+    {
+        g_primary_device->handle_interrupt();
+    }
 }
 
 void virtio_disk_intr2()
 {
-    g_secondary_device->handle_interrupt();
+    if (g_secondary_device != nullptr)
+    {
+        g_secondary_device->handle_interrupt();
+    }
+}
+
+// PCIE 中断分发入口：只处理已初始化的 virtio-blk 设备。
+// 设备未初始化（g_primary_device/g_secondary_device 为空）时直接返回，
+// 避免 spurious IRQ 访问空对象。
+void virtio_disk_handle_pcie_irq()
+{
+    if (g_primary_device != nullptr)
+    {
+        g_primary_device->handle_interrupt();
+    }
+    if (g_secondary_device != nullptr)
+    {
+        g_secondary_device->handle_interrupt();
+    }
 }
 
 #endif

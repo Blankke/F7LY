@@ -53,4 +53,5 @@ void virtio_disk_intr2(void);
 
 #ifdef LOONGARCH
 void virtio_probe();
+void virtio_disk_handle_pcie_irq();
 #endif

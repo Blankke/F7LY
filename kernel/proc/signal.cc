@@ -6,6 +6,9 @@
 #include "devs/spinlock.hh"
 #include "sys/syscall_defs.hh"
 #include "klib.hh"
+#ifdef LOONGARCH
+#include "mem/loongarch/tlb.hh"
+#endif
 
 namespace
 {
@@ -240,8 +243,7 @@ namespace
                 pte_data &= ~PTE_NR;
             }
             pte.set_data(pte_data);
-            uint64 pair_base = page_va & ~((PGSIZE << 1) - 1);
-            asm volatile("invtlb 0x6, $zero, %0" : : "r"(pair_base) : "memory");
+            mem::loongarch::tlb_flush_user_page_pair(page_va);
 #endif
         }
         return true;
@@ -372,8 +374,7 @@ namespace
 #ifdef RISCV
         asm volatile("sfence.vma %0, zero" : : "r"(page_va) : "memory");
 #elif defined(LOONGARCH)
-        uint64 pair_base = page_va & ~((PGSIZE << 1) - 1);
-        asm volatile("invtlb 0x6, $zero, %0" : : "r"(pair_base) : "memory");
+        mem::loongarch::tlb_flush_user_page_pair(page_va);
 #else
         (void)page_va;
 #endif

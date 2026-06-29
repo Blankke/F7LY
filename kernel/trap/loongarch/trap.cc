@@ -26,6 +26,9 @@
 #include "timer_interface.hh"
 #include "proc/posix_timers.hh"
 #include "asm.hh"
+#include "fs/drivers/virtio_blk.hh"
+#include "net/drivers/virtio_net.hh"
+#include "mem/loongarch/tlb.hh"
 // in kernelvec.S, calls kerneltrap().
 extern "C" void kernelvec();
 extern "C" void uservec();
@@ -59,13 +62,10 @@ namespace
     return ecode >= 0x1 && ecode <= 0x7;
   }
 
+  // P1 收口：loongarch_invalidate_user_tlb_page 内部逻辑已在 mem::loongarch::tlb_flush_user_page_pair 统一实现。
   inline void loongarch_invalidate_user_tlb_page(uint64 va)
   {
-    // LoongArch 一个普通 TLB 表项覆盖相邻两页，Linux 也会按 8KB 对齐做单页失效。
-    // 这里对“PTE 已合法存在、只是 TLB 内部残着无效项”的场景做最小失效，
-    // 避免把它误判成 mmap 懒分配失败后直接送 SIGSEGV。
-    uint64 pair_base = va & ~((PGSIZE << 1) - 1);
-    asm volatile("invtlb 0x6, $zero, %0" : : "r"(pair_base) : "memory");
+    mem::loongarch::tlb_flush_user_page_pair(va);
   }
 
   inline void loongarch_ack_timer_interrupt()
@@ -277,8 +277,6 @@ void trap_manager::inithart()
 // 处理外部中断和软件中断
 int trap_manager::devintr()
 {
-  static bool pcie_irq_warned = false;
-
   uint32 estat = r_csr_estat();
   uint32 ecfg = r_csr_ecfg();
   uint32 ecode = loongarch_exception_code(estat);
@@ -314,18 +312,13 @@ int trap_manager::devintr()
 
     if (irq & (1UL << PCIE_IRQ))
     {
-      // TODO
-      // intr_stats::k_intr_stats.record_interrupt(PCIE_IRQ);
-      // loongarch::qemu::disk_driver.handle_intr();
-            if (!pcie_irq_warned)
-      {
-        pcie_irq_warned = true;
-        printfYellow("[trap] PCIE 中断当前未走内核分发路径，先确认并放行\n");
-      }
+      // PCIE 中断同时服务于 virtio-blk 和 virtio-net 设备。
+      // handler 内部对未初始化设备直接返回，避免 spurious IRQ 访问空对象。
+      virtio_disk_handle_pcie_irq();
+      net::virtio_net_intr();
       handled_irq_mask |= (1UL << PCIE_IRQ);
       apic_complete(1UL << PCIE_IRQ);
       extioi_complete(1UL << PCIE_IRQ);
-      printfYellow("未实现PCIE_IRQ中断处理,不过好像跟riscv不一样，跟蒙老师也不一样，现在好像不用这个\n");
     }
 
     uint64 remaining_irq = irq & ~handled_irq_mask;
