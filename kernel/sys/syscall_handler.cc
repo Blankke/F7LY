@@ -11812,12 +11812,14 @@ namespace syscall
             return -EINVAL;
         printfCyan("[SyscallHandler::sys_lseek] fd: %d, offset: %ld, whence: %d\n", fd, offset, whence);
         proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
-        fs::file *f = cur_proc->get_open_file(fd);
+        fs::file *f = proc::k_pm.get_open_file_ref(cur_proc, fd);
 
         if (f == nullptr)
             return -EBADF;
 
-        return f->lseek(offset, whence);
+        off_t result = f->lseek(offset, whence);
+        f->free_file();
+        return result;
     }
     uint64 SyscallHandler::sys_utimensat()
     {
