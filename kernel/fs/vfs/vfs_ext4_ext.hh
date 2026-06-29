@@ -13,6 +13,17 @@ struct linux_dirent64 {
     char d_name[0];
 };
 
+// linux_dirent64.d_type 对外必须使用 Linux DT_* ABI 值，不能复用内核内部 T_*。
+// 例如内核 T_FILE 当前为 2，而 Linux DT_REG 为 8；直接透传会让 Git 误判文件类型。
+#define LINUX_DT_UNKNOWN 0
+#define LINUX_DT_FIFO    1
+#define LINUX_DT_CHR     2
+#define LINUX_DT_DIR     4
+#define LINUX_DT_BLK     6
+#define LINUX_DT_REG     8
+#define LINUX_DT_LNK     10
+#define LINUX_DT_SOCK    12
+
 int vfs_ext4_init(void);
 
 

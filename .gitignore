@@ -70,3 +70,5 @@ logs/tmp/
 !logs/legacy/output_rv.txt
 .venv/
 logs/*.txt
+*.mp4
+*.mkv
