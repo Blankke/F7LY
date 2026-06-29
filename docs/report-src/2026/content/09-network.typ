@@ -1,6 +1,6 @@
-= 第九章　网络系统模块
+= 网络系统模块
 
-== 9.1　网络系统架构概述
+== 网络系统架构概述
 
 网络系统是用户程序与外部主机进行通信的重要基础设施，允许用户程序通过 Socket 接口完成数据发送、接收、连接建立、端口监听、事件等待等操作。F7LY 实现了与 Linux ABI 兼容的网络系统调用接口，并在 2026 年进一步完善本机 TCP/UDP 数据面能力，使网络子系统从早期的协议栈框架与 Socket 接口占位，推进到能够真实传递 payload 的可用阶段。目前，F7LY 已支持 `send`/`recv`、`sendto`/`recvfrom`、`poll`/`epoll` 等关键接口，能够支撑 `iperf`、`netperf`、BusyBox 网络工具以及部分 LTP 网络用例完成真实的数据传输与就绪通知验证。
 
@@ -15,7 +15,7 @@
   caption: [网络模块架构示意图],
 ) <fig:net-architecture>
 
-图 @fig:net-architecture 展示了这一分层关系。需要特别说明的是，F7LY 采用本机 loopback 与 ONPS/VirtIO-Net 双路径框架，是基于实现边界清晰和功能验证稳定性的考虑。这样的划分避免了两个问题：一方面，localhost 通信不必受真实网卡、QEMU user 网络、ARP 或外部路由状态影响；另一方面，外部网络仍然保留了从协议栈到 VirtIO 设备的完整接入点，后续可以继续扩展。
+@fig:net-architecture 展示了这一分层关系。需要特别说明的是，F7LY 采用本机 loopback 与 ONPS/VirtIO-Net 双路径框架，是基于实现边界清晰和功能验证稳定性的考虑。这样的划分避免了两个问题：一方面，localhost 通信不必受真实网卡、QEMU user 网络、ARP 或外部路由状态影响；另一方面，外部网络仍然保留了从协议栈到 VirtIO 设备的完整接入点，后续可以继续扩展。
 
 网络栈初始化采用懒加载方式。第一次创建 IPv4 TCP/UDP/ICMP socket 时，`sys_socket()` 会尝试调用 `net::init_network_stack()`。
 
@@ -43,7 +43,7 @@ bool init_network_stack()
 
 这段初始化顺序体现了网络模块的两个边界。`open_npstack_load()` 只负责启动 ONPS 协议栈核心，包括 buddy、buf_list、定时器、输入线程、网络接口表和路由表等基础结构；`adapter_init()` 才负责把底层 VirtIO-Net 设备注册成 ONPS 可见的以太网接口。Socket 层在转发前通过 `should_route_via_onps()` 判断目标地址是否为 loopback，从而决定走内核内路径还是 ONPS 后端路径。
 
-== 9.2　核心网络协议栈与 loopback 数据面
+== 核心网络协议栈与 loopback 数据面
 
 本节重点分析F7LY的 loopback实现。当前loopback实现方式为内核内部的 socket_file 层直接处理本机通信，绕过 VirtIO 网卡和完整的 Ethernet/IP 层。这种实现是基于性能和实现复杂度的考虑。实现时保留了 ONPS 的loopback模块, 以确保后续能够无缝切换到 ONPS 后端。
 
@@ -358,7 +358,7 @@ int virtio_emac_send(short buf_list_head, unsigned char *error)
 
 适配层的价值在于隔离两种模型：ONPS 仍然按照自己的网卡回调、buf_list 和 `ethernet_ii_recv()` 工作；F7LY 驱动层仍然按照 VirtIO queue 和连续 DMA buffer 工作。二者之间没有互相侵入，也没有把 ONPS 的内部结构扩散到设备驱动中。
 
-== 9.4　BSD Socket 接口与系统调用集成
+== BSD Socket 接口与系统调用集成
 
 网络模块对用户态暴露的是 Linux 风格 BSD Socket ABI。F7LY 没有为 socket 建立一套独立于文件系统的对象体系，而是让 `socket_file` 继承 VFS 的 `file` 基类。这一点非常关键：socket 一旦成为普通 fd，就可以自然参与 `read`/`write`、`close`、`dup`、`fcntl`、`poll`、`select`、`epoll`、`fork` 后 fd 继承等通用路径。
 
@@ -481,7 +481,7 @@ void SocketIoctlCompat::fill_loopback_ifreq(abi::SocketIfreq &req)
 
 AF_UNIX stream 和 seqpacket 当前复用可靠本地 stream 队列，与 TCP loopback 使用相似的 `_peer`、`_recv_buffer`、阻塞等待和半关闭机制。这样做减少了本地可靠字节流的重复实现，也让 `socketpair()` 可以自然参与 `poll`、`epoll` 和非阻塞 I/O。
 
-== 9.5　小结
+== 小结
 
 F7LY 网络模块当前形成了清晰的“双路径”结构：loopback TCP/UDP/AF_UNIX 是已经落地并用于评测的内核内数据面，负责 localhost 场景下的真实 payload、阻塞/非阻塞、超时、信号中断和就绪通知；ONPS + VirtIO-Net 是外部 IPv4 网络后端，负责把协议栈与真实 VirtIO 网卡连接起来。
 
