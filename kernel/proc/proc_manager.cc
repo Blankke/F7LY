@@ -2205,6 +2205,37 @@ namespace proc
         p->_ofile->_lock.release();
     }
 
+    fs::file *ProcessManager::get_open_file_ref(Pcb *p, int fd)
+    {
+        if (p == nullptr || p->_ofile == nullptr || fd < 0 || fd >= (int)max_open_files)
+        {
+            return nullptr;
+        }
+
+        ofile *fd_table = p->_ofile;
+        fd_table->_lock.acquire();
+
+        fs::file *f = fd_table->_ofile_ptr[fd];
+        if (f == nullptr || !is_probably_live_file_object(f))
+        {
+            // 如果 fd 表里残留了已经不可用的文件对象，顺手摘掉槽位，避免后续再次踩到悬空指针。
+            if (f != nullptr)
+            {
+                fd_table->_ofile_ptr[fd] = nullptr;
+                fd_table->_reserved[fd] = false;
+                fd_table->_fl_cloexec[fd] = false;
+                shrink_fd_high_water_locked(fd_table);
+            }
+            fd_table->_lock.release();
+            return nullptr;
+        }
+
+        // 在 fd 表锁内固定引用，防止共享 fd 表的另一个线程 close 掉最后一个引用。
+        f->dup();
+        fd_table->_lock.release();
+        return f;
+    }
+
     int ProcessManager::clone(uint64 flags, uint64 stack_ptr, uint64 ptid, uint64 tls,
                               uint64 ctid, bool is_clone3, int exit_signal)
     {
@@ -4150,15 +4181,13 @@ namespace proc
             return -EBADF;
 
         Pcb *p = get_cur_pcb();
-        if (p->_ofile == nullptr || p->_ofile->_ofile_ptr[fd] == nullptr)
+        fs::file *f = get_open_file_ref(p, fd);
+        if (f == nullptr)
             return -EBADF; // Bad file descriptor
-        fs::file *f = p->_ofile->_ofile_ptr[fd];
-        if (!is_probably_live_file_object(f))
-        {
-            return -EBADF;
-        }
 
-        return fs::k_vfs.fstat(f, buf);
+        int result = fs::k_vfs.fstat(f, buf);
+        f->free_file();
+        return result;
     }
     int ProcessManager::chdir(eastl::string &path)
     {

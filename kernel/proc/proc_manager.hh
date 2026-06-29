@@ -107,6 +107,7 @@ namespace proc
         // ==================== 文件系统相关 ====================
         int open(int dir_fd, eastl::string path, uint flags, int mode = 0644);
         int close(int fd);
+        fs::file *get_open_file_ref(Pcb *p, int fd);
         int fstat(int fd, fs::Kstat *buf);
         int flush_open_files_for_path(const eastl::string &path);
         int flush_all_open_files();
