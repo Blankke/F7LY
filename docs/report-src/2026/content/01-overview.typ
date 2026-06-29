@@ -35,7 +35,7 @@ F7LY-OS 是 C++ 编写的支持 RISC-V 与 LoongArch 双架构的宏内核模块
 
 *文件系统*——VFS 统一文件操作接口，支持 ext4（根文件系统，基于 lwext4）和 FAT32（数据盘）。`File` 抽象类通过 C++ 多态支持普通文件、管道、socket、虚拟文件（`/proc`）和 epoll 文件。支持 `ioctl`、`fcntl`、`flock` 文件锁、`splice`/`sendfile` 零拷贝搬运、`fanotify` 通知、loop 设备、ramdisk 等。
 
-*网络*——支持本机loopback及网络web访问。loopback 路径由 `socket_file` 直接实现，不经过 VirtIO 网卡和 Ethernet/IP 层：TCP 通过端口表查找 listener、创建 server-side socket、互设 peer，并以 `_recv_buffer` 完成双向字节流传输；UDP 以 `loopback_datagram` 队列保持消息边界和源地址回填；AF_UNIX 复用本地可靠 stream 队列。非 loopback IPv4 流量在网络栈初始化成功后交给 ONPS，再经 `virtio0` 适配层和 VirtIO-Net 驱动收发完整以太网帧。BSD Socket ABI 支持 socket/socketpair、bind/listen/connect/accept、send/recv/sendmsg、sendmmsg/recvmmsg、常用 socket option、socket ioctl 兼容视图，以及 poll/epoll 就绪通知。iperf 和 netperf 在双架构均可运行。
+*网络*——支持本机loopback及网络web访问。loopback 路径由 `socket_file` 直接实现，不经过 VirtIO 网卡和 Ethernet/IP 层。非 loopback IPv4 流量在网络栈初始化成功后交给 ONPS，再经 `virtio0` 适配层和 VirtIO-Net 驱动收发完整以太网帧。BSD Socket ABI 支持 socket/socketpair、bind/listen/connect/accept、send/recv/sendmsg、sendmmsg/recvmmsg、常用 socket option、socket ioctl 兼容视图，以及 poll/epoll 就绪通知。iperf 和 netperf 在双架构均可运行。
 
 *用户态*——支持 musl 和 glibc 两种 C 运行库的动态链接程序。用户态入口包括自动连续测例 initcode 和交互式 BusyBox ash，后者使用独立 ext4 rootfs 镜像，支持命令行浏览、脚本执行和正常退出。支持通过 `apk` 包管理器安装 Alpine Linux 软件包。
 
