@@ -232,7 +232,7 @@ namespace
     struct DirentSnapshot
     {
         eastl::string name;
-        unsigned char type = T_UNKNOWN;
+        unsigned char type = LINUX_DT_UNKNOWN;
     };
 
     eastl::vector<MountNamespaceState> g_mount_namespaces;
@@ -402,6 +402,50 @@ namespace
             return;
         }
         entries.push_back({name, type});
+    }
+
+    unsigned char linux_dirent_type_from_vfs_filetype(int type)
+    {
+        switch (type)
+        {
+        case fs::FileTypes::FT_DIRECT:
+            return LINUX_DT_DIR;
+        case fs::FileTypes::FT_NORMAL:
+            return LINUX_DT_REG;
+        case fs::FileTypes::FT_SYMLINK:
+            return LINUX_DT_LNK;
+        case fs::FileTypes::FT_PIPE:
+            return LINUX_DT_FIFO;
+        case fs::FileTypes::FT_DEVICE:
+            return LINUX_DT_CHR;
+        case fs::FileTypes::FT_SOCKET:
+            return LINUX_DT_SOCK;
+        default:
+            return LINUX_DT_UNKNOWN;
+        }
+    }
+
+    unsigned char linux_dirent_type_from_ext4_entry(uint8 inode_type)
+    {
+        switch (inode_type)
+        {
+        case EXT4_DE_DIR:
+            return LINUX_DT_DIR;
+        case EXT4_DE_REG_FILE:
+            return LINUX_DT_REG;
+        case EXT4_DE_SYMLINK:
+            return LINUX_DT_LNK;
+        case EXT4_DE_CHRDEV:
+            return LINUX_DT_CHR;
+        case EXT4_DE_BLKDEV:
+            return LINUX_DT_BLK;
+        case EXT4_DE_FIFO:
+            return LINUX_DT_FIFO;
+        case EXT4_DE_SOCK:
+            return LINUX_DT_SOCK;
+        default:
+            return LINUX_DT_UNKNOWN;
+        }
     }
 
     int read_symlink_target_for_path(const eastl::string &path, eastl::string &target_path)
@@ -3276,8 +3320,8 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
     if (file && file->is_virtual && file->_attrs.filetype == fs::FileTypes::FT_DIRECT)
     {
         eastl::vector<DirentSnapshot> entries;
-        append_dirent_snapshot(entries, ".", T_DIR);
-        append_dirent_snapshot(entries, "..", T_DIR);
+        append_dirent_snapshot(entries, ".", LINUX_DT_DIR);
+        append_dirent_snapshot(entries, "..", LINUX_DT_DIR);
 
         eastl::vector<eastl::string> virtual_children;
         fs::k_vfs.list_virtual_files(file->_path_name, virtual_children);
@@ -3288,10 +3332,10 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
                 child_path += "/";
             child_path += name;
 
-            unsigned char dtype = T_FILE;
+            unsigned char dtype = LINUX_DT_REG;
             fs::vfile_tree_node *node = fs::k_vfs.get_virtual_node(child_path);
-            if (node && node->file_type == fs::FileTypes::FT_DIRECT)
-                dtype = T_DIR;
+            if (node)
+                dtype = linux_dirent_type_from_vfs_filetype(node->file_type);
             append_dirent_snapshot(entries, name, dtype);
         }
 
@@ -3305,7 +3349,7 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
 
                 char pid_buf[16];
                 snprintf(pid_buf, sizeof(pid_buf), "%d", pcb._pid);
-                append_dirent_snapshot(entries, eastl::string(pid_buf), T_DIR);
+                append_dirent_snapshot(entries, eastl::string(pid_buf), LINUX_DT_DIR);
             }
         }
 
@@ -3396,8 +3440,8 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
                   d->d_off = off;
                   d->d_reclen = reclen;
                   
-                  if (ep->attribute & ATTR_DIRECTORY) d->d_type = T_DIR;
-                  else d->d_type = T_FILE;
+                  if (ep->attribute & ATTR_DIRECTORY) d->d_type = LINUX_DT_DIR;
+                  else d->d_type = LINUX_DT_REG;
                   
                   totlen += reclen;
                   d = (struct linux_dirent64 *)((char *)d + reclen);
@@ -3476,22 +3520,7 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
 
         memcpy(d->d_name, name, copy_len + 1);
 
-        if (rentry->inode_type == EXT4_DE_DIR)
-        {
-            d->d_type = T_DIR;
-        }
-        else if (rentry->inode_type == EXT4_DE_REG_FILE)
-        {
-            d->d_type = T_FILE;
-        }
-        else if (rentry->inode_type == EXT4_DE_CHRDEV)
-        {
-            d->d_type = T_CHR;
-        }
-        else
-        {
-            d->d_type = T_UNKNOWN;
-        }
+        d->d_type = linux_dirent_type_from_ext4_entry(rentry->inode_type);
         d->d_ino = rentry->inode;
         d->d_off = current_offset + reclen; // start from 1
         d->d_reclen = reclen;

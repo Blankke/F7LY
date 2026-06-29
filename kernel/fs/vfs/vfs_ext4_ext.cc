@@ -45,6 +45,29 @@ static int extlock_depth = 0;
 [[maybe_unused]] static uint vfs_ext4_filetype(uint filetype);
 static int vfs_ext4_finish_mount(const char *mount_path, struct vfs_ext4_blockdev *vbdev);
 
+static unsigned char linux_dirent_type_from_ext4_entry(uint8 inode_type)
+{
+    switch (inode_type)
+    {
+    case EXT4_DE_DIR:
+        return LINUX_DT_DIR;
+    case EXT4_DE_REG_FILE:
+        return LINUX_DT_REG;
+    case EXT4_DE_SYMLINK:
+        return LINUX_DT_LNK;
+    case EXT4_DE_CHRDEV:
+        return LINUX_DT_CHR;
+    case EXT4_DE_BLKDEV:
+        return LINUX_DT_BLK;
+    case EXT4_DE_FIFO:
+        return LINUX_DT_FIFO;
+    case EXT4_DE_SOCK:
+        return LINUX_DT_SOCK;
+    default:
+        return LINUX_DT_UNKNOWN;
+    }
+}
+
 static uint64_t vfs_ext_realtime_seconds()
 {
     tmm::timespec now{};
@@ -806,15 +829,7 @@ int vfs_ext_getdents(struct file *f, struct linux_dirent64 *dirp, int count) {
         const size_t copy_len = namelen < MAXPATH - 1 ? (size_t)namelen : (size_t)(MAXPATH - 1);
         memcpy(d->d_name, rentry->name, copy_len);
         d->d_name[copy_len] = '\0';
-        if (rentry->inode_type == EXT4_DE_DIR) {
-            d->d_type = T_DIR;
-        } else if (rentry->inode_type == EXT4_DE_REG_FILE) {
-            d->d_type = T_FILE;
-        } else if (rentry->inode_type == EXT4_DE_CHRDEV) {
-            d->d_type = T_CHR;
-        } else {
-            d->d_type = T_UNKNOWN;
-        }
+        d->d_type = linux_dirent_type_from_ext4_entry(rentry->inode_type);
         d->d_ino = rentry->inode;
         d->d_off = index + 1; // start from 1
         d->d_reclen = reclen;
