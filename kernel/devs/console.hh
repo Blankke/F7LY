@@ -3,7 +3,7 @@
 
 #include "spinlock.hh"
 #include "uart.hh"
-#define INPUT_BUF_SIZE 128
+#define INPUT_BUF_SIZE 4096
 #define BACKSPACE 0x100
 #define CTRL_(x) ((x) - '@')
 namespace dev
