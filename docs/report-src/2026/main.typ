@@ -31,4 +31,6 @@
 #include "content/05-process.typ"
 #include "content/06-filesystem.typ"
 #include "content/07-ipc.typ"
+#include "content/08-syscall.typ"
+#include "content/10-summary&review.typ"
 #include "content/appendix.typ"

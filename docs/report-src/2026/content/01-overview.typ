@@ -2,15 +2,15 @@
 
 == 项目目标与 2026 年演进方向
 
-F7LY-OS 是 C++ 编写的支持 RISC-V 与 LoongArch 双架构的宏内核模块化操作系统，面向教学、比赛、Linux ABI 兼容与回归评测。项目从零参考 xv6 构建，持续演进至可运行动态链接的用户程序、BusyBox 交互式 Shell 及大规模 LTP 回归测试。
+F7LY-OS 是 C++ 编写的支持 RISC-V 与 LoongArch 双架构的宏内核模块化操作系统，面向教学、比赛、Linux ABI 兼容与连续测例评测。项目从零参考 xv6 构建，持续演进至可运行动态链接的用户程序、BusyBox 交互式 Shell 及大规模 LTP 连续测例。
 
-2026 年的主线目标是在双架构一致性、Linux ABI 正确性、长回归稳定性和 I/O 与线程性能四个方向上取得实质进展。相比于 2025 年的"可启动、可运行基础测例"，2026 年的内核已具备：
+2026 年的主线目标是在双架构一致性、Linux ABI 正确性、长连续测例稳定性和 I/O 与线程性能四个方向上取得实质进展。相比于 2025 年的"可启动、可运行基础测例"，2026 年的内核已具备：
 
 - 完整的动态 ELF 装载链，支持 musl / glibc 双 C 运行库和 `#!` 脚本解释器递归；
 - 真实可用的 loopback TCP/UDP 协议栈，通过 iperf / netperf 吞吐验证；
 - 双架构统一 virtio-blk 框架与优先级带宽借用 I/O 调度器；
 - 交互式 BusyBox ash 终端，支持控制台输入、文件浏览和脚本执行；
-- 四组合（RV+musl、RV+glibc、LA+musl、LA+glibc）scoreboard 评测体系，覆盖 LTP、libcbench、iozone、lmbench 等回归。
+- 四组合（RV+musl、RV+glibc、LA+musl、LA+glibc）scoreboard 评测体系，覆盖 LTP、libcbench、iozone、lmbench、cyclictest、iperf、netperf、unixbench、lua、BusyBox、libctest 连续测例。
 
 内核当前为 C++23 freestanding 环境，显式禁用异常和 RTTI（`-fno-exceptions`、`-fno-rtti`），以 GCC 工具链编译。系统调用严格遵循 Linux raw syscall 规范，累计实现并验证超过 240 个系统调用。
 
@@ -37,7 +37,7 @@ F7LY-OS 是 C++ 编写的支持 RISC-V 与 LoongArch 双架构的宏内核模块
 
 *网络*——基于 ONPS 网络栈 + VirtIO-Net 驱动的框架，loopback 接口支持真实可用的 TCP/UDP 通信。TCP 支持 bind/listen/connect/accept、backlog、双向流、close/shutdown 半关闭；UDP 支持 bind、datagram 消息边界、sendto/recvfrom。支持阻塞/非阻塞、`MSG_MORE` 延迟发送、sendmmsg/recvmmsg、常用 socket option 以及 poll/epoll 就绪通知。iperf 和 netperf 在双架构均可运行。
 
-*用户态*——支持 musl 和 glibc 两种 C 运行库的动态链接程序。用户态入口包括自动回归 initcode 和交互式 BusyBox ash，后者使用独立 ext4 rootfs 镜像，支持命令行浏览、脚本执行和正常退出。支持通过 `apk` 包管理器安装 Alpine Linux 软件包。
+*用户态*——支持 musl 和 glibc 两种 C 运行库的动态链接程序。用户态入口包括自动连续测例 initcode 和交互式 BusyBox ash，后者使用独立 ext4 rootfs 镜像，支持命令行浏览、脚本执行和正常退出。支持通过 `apk` 包管理器安装 Alpine Linux 软件包。
 
 *工程体系*——四组合 scoreboard 追踪 LTP 评测进度，日志保存到 `logs/run/`，提供 LTP runner/parser/ranker 工具链实现可重复的批量分析流程。
 
@@ -47,7 +47,7 @@ F7LY-OS 的新架构图按数据流和依赖关系分为六层，自上而下为
 
 === 用户态层
 
-最顶层，运行在 U-Mode。包括 BusyBox ash 交互式 Shell、自动回归测试（LTP、libcbench、iozone、lmbench 等）和通用用户程序。三者共享同一套 Linux ABI，但 Shell 模式使用独立 rootfs 镜像以避免污染评测环境。
+最顶层，运行在 U-Mode。包括 BusyBox ash 交互式 Shell、自动连续测例（LTP、libcbench、iozone、lmbench、cyclictest、iperf、netperf、unixbench、lua、BusyBox、libctest）和通用用户程序。三者共享同一套 Linux ABI，但 Shell 模式使用独立 rootfs 镜像以避免污染评测环境。
 
 === 系统调用层 / Linux ABI
 
@@ -173,7 +173,7 @@ F7LY-OS 在开发过程中参考和移植了以下开源项目与第三方库：
     │   ├── libs/                       // 内核基础库（printf、EASTL、liballoc 等）
     │   └── link/                       // 链接脚本
     ├── user/                           // 用户态程序
-    │   ├── app/                        // initcode（自动回归 / shell 入口）
+    │   ├── app/                        // initcode（连续测例 / shell 入口）
     │   ├── user_lib/                   // 用户态测试调度与辅助库
     │   ├── syscall_lib/                // 系统调用封装
     │   └── deps/                       // 依赖（musl/glibc 工具链）
@@ -207,7 +207,7 @@ F7LY-OS 在开发过程中参考和移植了以下开源项目与第三方库：
     [进程管理], [基础 fork/clone/exec/wait], [完整线程支持（futex、robust futex、CLEARTID）+ clone3 + POSIX timer + epoll], [改进],
     [文件系统], [C++ 文件系统 + FAT32], [lwext4 ext4 根文件系统 + VFS 统一接口 + FAT32 数据盘 + bind mount + loop 设备], [新增/替换],
     [系统调用数量], [约 60 个], [243 个，含 clone3、fanotify、memfd、splice 等], [新增],
-    [用户入口], [自动回归 initcode], [自动回归 + 交互式 BusyBox ash shell + apk 包管理器], [新增],
+    [用户入口], [自动连续测例 initcode], [自动连续测例 + 交互式 BusyBox ash shell + apk 包管理器], [新增],
     [评测体系], [分散日志], [四组合 scoreboard + LTP runner/parser/ranker 工具链 + 可复现实验], [新增],
     [双架构状态], [RISC-V 为主，LoongArch 基础], [双架构对等，LoongArch 可运行 pthread/libcbench/lmbench], [改进],
     [硬件平台], [QEMU virt], [QEMU virt + VisionFive 2 实机 + LS3A5000/LS2k1000 启动验证], [新增],
