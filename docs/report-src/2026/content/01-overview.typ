@@ -4,15 +4,15 @@
 
 F7LY-OS 是 C++ 编写的支持 RISC-V 与 LoongArch 双架构的宏内核模块化操作系统，面向教学、比赛、Linux ABI 兼容与连续测例评测。项目从零参考 xv6 构建，持续演进至可运行动态链接的用户程序、BusyBox 交互式 Shell 及大规模 LTP 连续测例。
 
-2026 年的主线目标是在双架构一致性、Linux ABI 正确性、长连续测例稳定性和 I/O 与线程性能四个方向上取得实质进展。相比于 2025 年的"可启动、可运行基础测例"，2026 年的内核已具备：
+2026 年的主线目标是在双架构一致性、Linux ABI 正确性、长时间运行稳定性和 I/O 与线程性能四个方向上取得实质进展。相比于 2025 年的基础版本，2026 年的内核已具备：
 
 - 完整的动态 ELF 装载链，支持 musl / glibc 双 C 运行库和 `#!` 脚本解释器递归；
-- 真实可用的网络协议栈，通过 iperf / netperf 吞吐验证, 可正常访问web服务；
-- 双架构统一 virtio-blk 框架与优先级带宽借用 I/O 调度器；
+- 真实可用的网络协议栈，支持 loopback 与外部 IPv4 数据传输，可正常访问 web 服务；
+- 双架构统一 virtio-blk 框架与 mClock 风格 I/O 调度器；
 - 交互式 BusyBox ash 终端，支持控制台输入、文件浏览和脚本执行；
-- 四组合（RV+musl、RV+glibc、LA+musl、LA+glibc）scoreboard 评测体系，覆盖 LTP、libcbench、iozone、lmbench、cyclictest、iperf、netperf、unixbench、lua、BusyBox、libctest 连续测例。
+- 双架构、双 C 运行库的一致运行环境，覆盖常见系统工具、脚本解释器、网络程序和 C 运行库程序。
 
-内核当前为 C++23 freestanding 环境，显式禁用异常和 RTTI（`-fno-exceptions`、`-fno-rtti`），以 GCC 工具链编译。系统调用严格遵循 Linux raw syscall 规范，累计实现并验证超过 240 个系统调用。
+内核当前为 C++23 freestanding 环境，显式禁用异常和 RTTI（`-fno-exceptions`、`-fno-rtti`），以 GCC 工具链编译。系统调用严格遵循 Linux raw syscall 规范，累计实现超过 240 个系统调用。
 
 // TODO: 从 draw.io 导出 f7ly-2026-architecture.drawio → f7ly-2026-architecture.png
 // 当前 PNG 未生成，架构图暂以 drawio 源文件描述，见 fig/ 目录
@@ -35,11 +35,11 @@ F7LY-OS 是 C++ 编写的支持 RISC-V 与 LoongArch 双架构的宏内核模块
 
 *文件系统*——VFS 统一文件操作接口，支持 ext4（根文件系统，基于 lwext4）和 FAT32（数据盘）。`File` 抽象类通过 C++ 多态支持普通文件、管道、socket、虚拟文件（`/proc`）和 epoll 文件。支持 `ioctl`、`fcntl`、`flock` 文件锁、`splice`/`sendfile` 零拷贝搬运、`fanotify` 通知、loop 设备、ramdisk 等。
 
-*网络*——支持本机loopback及网络web访问。loopback 路径由 `socket_file` 直接实现，不经过 VirtIO 网卡和 Ethernet/IP 层。非 loopback IPv4 流量在网络栈初始化成功后交给 ONPS，再经 `virtio0` 适配层和 VirtIO-Net 驱动收发完整以太网帧。BSD Socket ABI 支持 socket/socketpair、bind/listen/connect/accept、send/recv/sendmsg、sendmmsg/recvmmsg、常用 socket option、socket ioctl 兼容视图，以及 poll/epoll 就绪通知。iperf 和 netperf 在双架构均可运行。
+*网络*——支持本机 loopback 及外部 IPv4 访问。loopback 路径由 `socket_file` 直接实现，不经过 VirtIO 网卡和 Ethernet/IP 层。非 loopback IPv4 流量在网络栈初始化成功后交给 ONPS，再经 `virtio0` 适配层和 VirtIO-Net 驱动收发完整以太网帧。BSD Socket ABI 支持 socket/socketpair、bind/listen/connect/accept、send/recv/sendmsg、sendmmsg/recvmmsg、常用 socket option、socket ioctl 兼容视图，以及 poll/epoll 就绪通知。
 
-*用户态*——支持 musl 和 glibc 两种 C 运行库的动态链接程序。用户态入口包括自动连续测例 initcode 和交互式 BusyBox ash，后者使用独立 ext4 rootfs 镜像，支持命令行浏览、脚本执行和正常退出。支持通过 `apk` 包管理器安装 Alpine Linux 软件包。
+*用户态*——支持 musl 和 glibc 两种 C 运行库的动态链接程序。用户态入口包括自动启动入口和交互式 BusyBox ash，后者使用独立 ext4 rootfs 镜像，支持命令行浏览、脚本执行和正常退出。支持通过 `apk` 包管理器安装 Alpine Linux 软件包。
 
-*工程体系*——四组合 scoreboard 追踪 LTP 评测进度，日志保存到 `logs/run/`，提供 LTP runner/parser/ranker 工具链实现可重复的批量分析流程。
+*工程体系*——提供双架构构建、日志保存、任务计划和能力追踪流程，使功能开发、运行验证和文档更新可复现、可回溯。
 
 == 2026 年整体分层架构
 
@@ -47,7 +47,7 @@ F7LY-OS 的新架构图按数据流和依赖关系分为六层，自上而下为
 
 === 用户态层
 
-最顶层，运行在 U-Mode。包括 BusyBox ash 交互式 Shell、自动连续测例（LTP、libcbench、iozone、lmbench、cyclictest、iperf、netperf、unixbench、lua、BusyBox、libctest）和通用用户程序。三者共享同一套 Linux ABI，但 Shell 模式使用独立 rootfs 镜像以避免污染评测环境。
+最顶层，运行在 U-Mode。包括 BusyBox ash 交互式 Shell、自动连续测例（LTP、libcbench、iozone、lmbench、cyclictest、iperf、netperf、unixbench、lua、BusyBox、libctest）和通用用户程序。三者共享同一套 Linux ABI，但 Shell 模式使用独立 rootfs 镜像隔离交互式运行评测环境。
 
 === 系统调用层 / Linux ABI
 
@@ -117,9 +117,9 @@ F7LY-OS 在开发过程中参考和移植了以下开源项目与第三方库：
 
 - *VMA 与进程地址空间重构*——引入 `VmArea` 描述符、`VmaMapleTree` B+Tree 索引和 `VmObject` 后端对象三层架构，统一管理 ELF 段、堆、栈、mmap 区和共享内存附加。将缺页处理、COW、惰性分配的路径收敛到统一的 `fault_page` 入口。
 
-- *双架构统一 virtio-blk 框架*——将 RISC-V MMIO 和 LoongArch PCI 的 virtio-blk 传输差异封装为 transport 适配层，通用层统一管理 request、descriptor、completion 和 buffer 回写。在此基础上建立了多优先级、按进程 flow 轮转的 priority-borrow I/O 调度器，nice 值同时影响 CPU 和磁盘带宽分配。
+- *双架构统一 virtio-blk 框架*——将 RISC-V MMIO 和 LoongArch PCI 的 virtio-blk 传输差异封装为 transport 适配层，通用层统一管理 request、descriptor、completion 和 buffer 回写。在此基础上建立了 mClock 风格 I/O 调度器，按 nice 值划分服务类，并在同类内按进程 flow 轮转。
 
-- *网络数据面与 Socket ABI 完善*——从零构建 TCP/UDP 协议栈，支持本机 loopback 及网络 web 访问。打通“socket -> onps协议栈 -> VirtIO-Net”完整链路。iperf 和 netperf 四组合均可运行，可正常访问 web 服务。
+- *网络数据面与 Socket ABI 完善*——从零构建 TCP/UDP 协议栈，支持本机 loopback 及外部 IPv4 访问。打通“socket -> onps协议栈 -> VirtIO-Net”完整链路，使 socket 层具备真实 payload 传输能力。
 
 - *交互式 BusyBox ash*——新增 `make shell r/l` 入口，使用独立 ext4 rootfs 镜像进入 BusyBox ash 交互终端。打通了 UART→控制台行规程→device_file→fd 0→BusyBox 的完整输入链路，支持 `pwd`、`ls`、`cat`、脚本执行和正常 `exit`。
 
@@ -129,11 +129,11 @@ F7LY-OS 在开发过程中参考和移植了以下开源项目与第三方库：
 
 - *文件系统增强*——实现 bind mount、open_tree 挂载视图、虚拟文件 `/proc` 增强、`splice`/`sendfile` 零拷贝数据搬运、`fcntl` 文件锁修复、flock 完善以及 loop 设备支持。
 
-- *LoongArch 稳定性提升*——修复 ECODE 中断判定、TLB 管理、LL/SC 原子操作、trapframe 映射和用户态返回窗口寄存器恢复，使 LoongArch 侧可运行 pthread 多线程程序、libcbench 性能测试和 lmbench 微基准。
+- *LoongArch 稳定性提升*——修复 ECODE 中断判定、TLB 管理、LL/SC 原子操作、trapframe 映射和用户态返回窗口寄存器恢复，使 LoongArch 侧可以稳定运行 pthread 多线程程序和常见用户态工作负载。
 
 - *评测与工程体系*——建立四组合 scoreboard，提供 LTP runner/parser/ranker 工具链，日志统一输出到 `logs/run/`。所有评测结果可追踪、可复现。
 
-- *内存与启动优化*——128 MiB 低内存适配、DTB 动态物理内存探测、LoongArch Split Heap 设计、execve 装载路径缓存优化，显著提升批量测例的启动速度。
+- *内存与启动优化*——128 MiB 低内存适配、DTB 动态物理内存探测、LoongArch Split Heap 设计、execve 装载路径缓存优化，显著提升批量用户程序的启动速度。
 
 == 项目目录结构
 
@@ -180,14 +180,14 @@ F7LY-OS 在开发过程中参考和移植了以下开源项目与第三方库：
     [C++ 环境], [宣称支持 C++ 异常], [C++23 freestanding；禁用异常与 RTTI], [纠正],
     [内存发现], [固定内存布局为主], [DTB 动态物理内存探测；双架构 Split Heap], [改进],
     [用户地址空间], [初步进程内存管理器], [三层 VMA 架构；统一 mmap、shm、brk、栈生命周期], [重构],
-    [块 I/O], [架构独立驱动], [统一 virtio-blk 队列；priority-borrow I/O 调度], [新增],
-    [网络], [BSD socket 协议栈框架], [loopback TCP/UDP/AF_UNIX 数据面；ONPS/VirtIO-Net 出网；iperf/netperf 验证], [改进],
+    [块 I/O], [架构独立驱动], [统一 virtio-blk 队列；mClock 风格 I/O 调度], [新增],
+    [网络], [BSD socket 协议栈框架], [loopback TCP/UDP/AF_UNIX 数据面；ONPS/VirtIO-Net 出网], [改进],
     [进程管理], [基础 fork/clone/exec/wait], [线程支持；futex、robust futex、CLEARTID；clone3；POSIX timer；epoll], [改进],
     [文件系统], [C++ 文件系统 + FAT32], [lwext4 ext4 根文件系统；VFS 统一接口；FAT32 数据盘；bind mount；loop 设备], [新增],
     [系统调用], [约 60 个], [243 个；含 clone3、fanotify、memfd、splice 等], [新增],
-    [用户入口], [自动连续测例 initcode], [自动连续测例；BusyBox ash shell；apk 包管理器], [新增],
-    [评测体系], [分散日志], [四组合 scoreboard；LTP runner/parser/ranker；可复现实验], [新增],
-    [双架构], [RISC-V 为主，LoongArch 基础], [双架构对等；LoongArch 可运行 pthread、libcbench、lmbench], [改进],
+    [用户入口], [自动启动入口], [自动启动入口；BusyBox ash shell；apk 包管理器], [新增],
+    [工程体系], [分散日志], [能力追踪；结构化日志；可复现运行流程], [新增],
+    [双架构], [RISC-V 为主，LoongArch 基础], [双架构对等；LoongArch 可运行多线程和复杂用户程序], [改进],
     [硬件平台], [QEMU virt], [QEMU virt；VisionFive 2；LS3A5000/LS2k1000 启动验证], [新增],
   )
   ],

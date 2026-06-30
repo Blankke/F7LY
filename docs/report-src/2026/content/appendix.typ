@@ -520,3 +520,113 @@
   caption: [B.14 其他高级接口]
 )
 
+
+== 附录C　虚拟文件与特殊设备节点 <sec:appendix-virtual-files>
+
+F7LY 的虚拟文件由 VFS 初始化阶段注册到内存目录树中。多数节点在 `open` 时创建 `virtual_file`，读取时由对应 provider 动态生成内容；少数 `/dev` 节点表现为设备文件，读写或 `ioctl` 会转入对应设备逻辑。正文只介绍目录职责，本附录列出当前内核暴露的代表性节点。
+
+#figure(
+  table(
+    columns: (2.8cm, 5.8cm, 5.6cm),
+    align: (left, left, left),
+    table.header(
+      [*目录*], [*代表节点*], [*职责*]
+    ),
+    [`/proc/self`],
+    [`exe`、`cmdline`、`stat`、`status`、`maps`、`pagemap`],
+    [暴露当前进程的可执行文件、命令行、状态统计、地址空间布局和页映射信息。],
+
+    [`/proc/self/ns`],
+    [`time`、`time_for_children`、`timens_offsets`],
+    [提供时间命名空间句柄和偏移视图，使用户态可以按 Linux ABI 查询或调整相关状态。],
+
+    [`/proc/<pid>`],
+    [`<pid>/stat`、`<pid>/fdinfo/<fd>`、`<pid>/ns/mnt`],
+    [按路径动态识别目标进程，生成进程状态、fd 信息和 mount namespace 句柄。],
+
+    [`/proc`],
+    [`meminfo`、`cpuinfo`、`version`、`uptime`、`stat`、`interrupts`、`mounts`、`self/mounts`],
+    [提供系统内存、CPU、版本、运行时间、中断和挂载表等运行状态。],
+
+    [`/proc/sys/kernel`],
+    [`pid_max`、`shmmax`、`shmmni`、`shmall`、`shm_next_id`、`tainted`、`domainname`、`random/entropy_avail`],
+    [暴露进程号、System V 共享内存、内核状态、域名和随机熵等可查询或可写参数。],
+
+    [`/proc/sys/fs`],
+    [`pipe-user-pages-soft`、`pipe-max-size`、`lease-break-time`、`inotify/max_queued_events`、`inotify/max_user_instances`],
+    [提供管道容量、文件 lease 和 inotify 限制等文件系统相关参数。],
+
+    [`/proc/sys/net`],
+    [`ipv4/conf/default/tag`、`ipv4/conf/lo/tag`],
+    [提供 IPv4 配置视图中的标签节点。],
+
+    [`/proc/sysvipc`],
+    [`shm`],
+    [导出当前 IPC namespace 可见的 System V 共享内存段表。],
+  ),
+  caption: [C.1 procfs 与 sysctl 虚拟节点]
+)
+
+#figure(
+  table(
+    columns: (2.8cm, 5.8cm, 5.6cm),
+    align: (left, left, left),
+    table.header(
+      [*目录*], [*代表节点*], [*职责*]
+    ),
+    [`/sys/devices/system/cpu`],
+    [`online`、`present`、`possible`、`kernel_max`、`cpu0/online`],
+    [提供单核视图下的 CPU 在线、存在和可用范围信息。],
+
+    [`/sys/devices/system/node`],
+    [`online`、`possible`、`has_cpu`、`has_memory`、`node0/cpulist`、`node0/cpumap`、`node0/distance`、`node0/meminfo`],
+    [提供退化到 node0 的 NUMA 兼容视图，供用户态库查询拓扑。],
+
+    [`/etc`],
+    [`passwd`、`group`、`hosts`、`resolv.conf`、`protocols`、`ld.so.preload`、`ld.so.cache`、`localtime`],
+    [以内核内置内容补齐基础运行环境，支撑用户、组、解析器、协议名、动态链接器和时区探测。],
+
+    [`/boot`],
+    [`config-6.17.0`、`config-5.15.0-F7LY`],
+    [提供内核配置视图，使用户态工具能够读取当前内核能力。],
+  ),
+  caption: [C.2 sysfs 与内置配置文件节点]
+)
+
+#figure(
+  table(
+    columns: (2.8cm, 5.8cm, 5.6cm),
+    align: (left, left, left),
+    table.header(
+      [*目录*], [*代表节点*], [*职责*]
+    ),
+    [`/dev`],
+    [`null`、`zero`、`full`、`urandom`],
+    [提供空设备、零页设备、写满错误设备和非阻塞伪随机字节设备。],
+
+    [`/dev`],
+    [`loop-control`、`loop0`～`loop63`],
+    [提供 loop 设备控制面和数据面；控制节点管理实例，数据节点把块语义转发到后端文件。],
+
+    [`/dev/block`],
+    [`8:0`],
+    [提供块设备兼容入口，供用户态按 Linux 风格路径识别块设备。],
+
+    [`/dev`],
+    [`ptmx`、`pts/0`],
+    [提供最小伪终端节点，支撑终端库对 pty 路径的探测和打开。],
+
+    [`/dev/net`],
+    [`tun`；另有 `/dev/tun`],
+    [提供 TUN 设备兼容节点，支持网络隧道相关 ioctl 探测。],
+
+    [`/dev`],
+    [`rtc`、`rtc0`、`misc/rtc`],
+    [提供实时时钟兼容路径。],
+
+    [`/dev`],
+    [`cpu_dma_latency`],
+    [保存 CPU DMA latency 目标值，作为设备控制类 ABI 状态。],
+  ),
+  caption: [C.3 特殊设备节点]
+)
