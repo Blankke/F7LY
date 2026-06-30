@@ -2,7 +2,7 @@
 
 F7LY-OS 支持 RISC-V 与 LoongArch 两条启动链路。两种架构共享统一的内核入口约定，但在固件交接方式、设备发现和中断控制器初始化等方面各自遵循本架构的硬件模型。
 
-整个 kernel 可执行文件的入口点统一为 `_entry`，在各自架构的 `entry.S` 中定义，通过链接脚本 `kernel/link/<arch>/kernel.ld` 的 `ENTRY(_entry)` 指定。
+整个 kernel 可执行文件的入口点统一为 `_entry`，由链接脚本指定到对应架构的早期汇编入口。汇编入口只负责建立最小可运行环境，随后尽快进入 C++ 主初始化流程。
 
 *RISC-V 架构*：
 启动流程：`OpenSBI`（M-mode）→ `entry.S` → `start.cc` → `main()`。基于SBI（Supervisor Binary Interface）规范，Bootloader 工作在 M-mode，内核代码从 `entry.S` 开始运行在 S-mode。
@@ -14,44 +14,12 @@ F7LY-OS 支持 RISC-V 与 LoongArch 两条启动链路。两种架构共享统�
 
 === entry.S
 
-
-- 负责设置操作系统的栈指针`sp`到合适位置，为后续C++代码执行做准备。
-- 每个CPU核心分配4KB独立栈空间，通过`hartid`进行区分。
-- 完成栈设置后跳转到`start()`函数。
-
-```c
-_entry:
-    la sp, stack0          # Load base addr of stack
-    li t0, 1024*4          # 4KB space per stack
-    mv t1, a0              # gain hartid
-    addi t1, t1, 1
-    mul t0, t0, t1         # cal current offset of stack
-    add sp, sp, t0         # set stack pointer
-    call start             # jump to start func
-```
+RISC-V 入口阶段只做三件事：根据 hartid 选择每个 CPU 独立的早期栈，保留固件传入的设备树地址，然后跳转到 `start()`。这一层不做复杂初始化，目的是尽快离开汇编环境，避免架构细节扩散到主流程。
 
 === start.cc
 
-关键寄存器处理：
-- `a0`：存储硬件线程编号`hartid`。
-- `a1`：设备树地址信息dtb_entry  。
-- `sp`：已在entry.S中设置完成。
+`start.cc` 是 RISC-V 在启动链中为过渡作用。它关闭早期分页、安装临时 trap 兜底入口、记录当前 hartid，并把设备树地址交给 `main()`。从这一点开始，RISC-V 与 LoongArch 尽量共享同一套内核初始化顺序。
 
-主要工作如下：
-- 关闭分页机制，使用物理地址访问
-- 设置临时trap处理函数为死循环
-- 将hartid保存到tp寄存器供后续使用
-- 调用main()函数进行系统初始化
-
-```c
-void start(uint64 hartid, uint64 dtb_entry)
-{
-    riscv::csr::_write_csr_(riscv::csr::satp, 0);
-    riscv::csr::_write_csr_(riscv::csr::stvec, (uint64)trap_loop);
-    riscv::w_tp(hartid);
-    main(hartid, dtb_entry);
-}
-```
 === 主线：main() 四阶段
 
 系统初始化分为四个主要阶段：
@@ -77,19 +45,28 @@ shm::k_smm.init();
 mem::SlabAllocator::init();
 ```
 
-*3. 设备与文件系统初始化*
+*3. 初始进程、设备与文件系统初始化*
 ```cpp
 k_devm.register_stdin();
 k_devm.register_stdout();
 k_devm.register_stderr();
 tmm::k_tm.init();
 syscall::k_syscall_handler.init();
+proc::k_pm.user_init();
 virtio_disk_init();
+init_fs_table();
+binit();
+fileinit();
+inodeinit();
+fs::k_file_table.init();
+vfs_ext4_init();
+fs::k_vfs.dir_init();
+fs::k_fifo_manager.init();
+dev::LoopControlDevice::init_loop_control();
 ```
 
-*4. 启动用户进程和调度器*
+*4. 启动调度器*
 ```cpp
-proc::k_pm.user_init();
 proc::k_scheduler.init();
 proc::k_scheduler.start_schedule();
 ```
@@ -101,23 +78,6 @@ proc::k_scheduler.start_schedule();
 === 入口：entry.S
 
 LoongArch 将 `start.cc` 阶段合并到 `entry.S` 中，在其中完成设置设备操作空间（DMWIN0）、设置指令数据访问空间（DMWIN1），CSR 寄存器的初始化，以及栈空间的设定，并开启 FPU 浮点数指令。保存 `$a1` 传入的 DTB地址，hartid 使用 CSR_CPUID 动态读取。完成设置后直接 `bl main`。
-
-```cpp
-        # entry只对每个CPU设定自己的栈空间，然后跳转到main函数
-
-        li.d        $t0, 0x8000000000000001
-        csrwr       $t0, LOONGARCH_CSR_DMWIN0   # 设置设备操作空间
-        li.d        $t0, (0x9000000000000001 | 1 << 4)
-        csrwr       $t0, LOONGARCH_CSR_DMWIN1   # 设置指令数据访问空间
-        csrwr       $t0, LOONGARCH_CSR_TLBRENTRY   # 关闭TLB，其他两个窗口不用管
-
-        li.w	    $t0, 0xb0		      # PLV=0, IE=0, PG=1
-	csrwr	    $t0, LOONGARCH_CSR_CRMD
-        li.w        $t0, 0x00                 # PPLV=0, PIE=0, PWE=0
-        csrwr       $t0, LOONGARCH_CSR_PRMD
-        li.w        $t0, 0x01                 # FPE=1, SXE=0, ASXE=0, BTE=0
-        csrwr       $t0, LOONGARCH_CSR_EUEN
-```
 
 === main() 四阶段
 

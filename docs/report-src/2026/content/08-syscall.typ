@@ -2,14 +2,14 @@
 
 == 系统调用概述
 
-系统调用是用户程序与操作系统内核之间的接口，允许用户程序请求内核提供服务，如文件操作、进程管理、内存分配等。F7LY 实现了与 Linux ABI 兼容的系统调用接口，当前已绑定超过 240 个系统调用（完整列表见附录 B），覆盖进程管理、内存管理、文件系统、信号、时间与定时器、Futex、事件通知、网络、权限、系统信息等十个功能类别。
+系统调用是用户程序进入内核服务的统一入口。F7LY 实现了与 Linux raw syscall 约定兼容的接口，覆盖进程管理、内存管理、文件系统、信号、时间、futex、事件通知、网络、权限和系统信息等功能类别。完整实现列表放在附录，本章只说明系统调用层如何分发请求、搬运参数并连接内核子系统。
 
 #figure(
   image("fig/系统调用.png", width: 70%),
   caption: [系统调用执行流程],
 ) <fig:syscall>
 
-当用户态程序需要申请内核资源或执行特权操作时，通过 `ecall` 指令触发硬件陷入，`usertrap()` 根据异常原因码进行判断，并通过 `SyscallHandler` 分发到对应的处理函数。
+用户态程序把系统调用号和参数放入约定寄存器后执行陷入指令。架构 trap 入口保存现场并识别这是系统调用，再交给统一分发器处理。分发器根据调用号找到处理逻辑，执行完成后把返回值写回用户态返回寄存器。内核侧统一返回 Linux 风格错误码；表内未实现调用会落到默认处理并返回 `-ENOSYS`，调用号越界或表项异常时当前分发器兜底返回 `-1`。
 
 系统调用的管理由 `SyscallHandler` 类完成，在内核启动的 `main()` 函数中统一完成系统调用表的初始化绑定。其核心结构示例如下：
 
@@ -48,192 +48,48 @@ private:
 extern SyscallHandler k_syscall_handler;
 ```
 
+== 执行流程
 
-== 系统调用流程
+系统调用的一次执行可以分为四步：
 
-=== 系统调用执行流程
+1. *用户态陷入*：用户程序按照 ABI 放置调用号和最多六个参数，执行陷入指令进入内核。
+2. *trap 分发*：架构入口判断异常类型，推进返回地址，打开允许的中断窗口，并转入系统调用分发器。
+3. *查表执行*：分发器检查调用号范围和绑定状态，调用对应处理逻辑；处理逻辑只通过安全参数接口访问用户态地址和 fd。
+4. *返回用户态*：返回值写回陷阱帧，随后内核处理待投递信号、调度抢占和用户态现场恢复。
 
-1. 用户态陷入：用户程序将调用号和参数放入约定寄存器后，执行 `ecall` 指令。硬件将 CPU 从用户模式切换到内核模式，保存当前寄存器现场，跳转到内核的陷阱处理入口。
-2. 陷阱分发：内核陷阱处理函数根据硬件传递的异常原因码，判断这是一次系统调用请求，然后交给系统调用分发器处理。
-3. 查表与执行：分发器根据调用号在系统调用表中查找对应的处理函数，从用户寄存器中取出参数传入，执行具体的服务逻辑，最后将返回值写回寄存器。若调用号未绑定处理函数，则返回 `-ENOSYS`，表示该调用未实现。
-4. 返回用户态：内核检查是否有待投递的信号，随后恢复用户程序的寄存器现场，切换回用户页表，通过硬件返回指令回到用户态继续执行。
+这个流程把架构差异限制在 trap 入口和寄存器约定中，系统调用实现本身尽量复用同一套 C++ 逻辑。
 
-===  参数获取机制
+== 分发表设计
 
-F7LY 内核提供了一套完整的参数获取机制，通过 `SyscallHandler` 类的私有方法实现。最底层从寄存器中直接读取六个参数的原始值，之上分层提供整数、地址、字符串和文件描述符的类型化提取。其中地址和字符串参数不直接解引用用户态指针，而是经由页表校验和 `copy_in`/`copy_out` 完成数据搬运，防止非法指针导致内核崩溃。文件描述符提取则额外包含悬空指针检测，发现失效条目时自动清理。
+F7LY 使用固定容量的系统调用表作为分发核心。初始化时，表中所有槽位先指向默认未实现处理；随后按系统调用号绑定已实现入口。调用名称也随绑定记录下来，用于诊断输出和日志定位。
 
-```cpp
-// _fetch_str — 通过页表将用户态字符串拷入内核缓冲区
-int SyscallHandler::_fetch_str(uint64 addr, eastl::string &buf, uint64 max)
-{
-    proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
-    mem::PageTable *pt = p->get_pagetable();
-    int err = mem::k_vmm.copy_str_in(*pt, buf, addr, max);
-    if (err < 0)
-        return err;
-    return buf.size();
-}
+这种设计有三个好处。第一，表内未实现调用有统一兜底，不会落入空指针。第二，新增系统调用只需要同步编号、声明、实现和绑定位置，入口路径保持一致。第三，RISC-V 与 LoongArch 共用同一张逻辑表，保证两架构看到的 Linux ABI 编号一致。
 
-// _arg_raw — 从陷阱帧寄存器中读取第 arg_n 个参数的原始值
-uint64 SyscallHandler::_arg_raw(int arg_n)
-{
-    proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
-    switch (arg_n)
-    {
-    case 0: return p->get_trapframe()->a0;
-    case 1: return p->get_trapframe()->a1;
-    case 2: return p->get_trapframe()->a2;
-    case 3: return p->get_trapframe()->a3;
-    case 4: return p->get_trapframe()->a4;
-    case 5: return p->get_trapframe()->a5;
-    }
-    panic("arg_n is out of range");
-    return -1;
-}
+分发器本身只做边界检查、入口调用、返回值写回和少量一致性检查。具体语义放在各系统调用处理逻辑或内核子系统中，避免把 VFS、进程、内存、网络等细节堆在分发层。
 
-// _arg_int / _arg_long — 在 _arg_raw 基础上做范围检查，窄化为目标类型
-int SyscallHandler::_arg_int(int arg_n, int &out_int)
-{
-    int raw_val = _arg_raw(arg_n);
-    if (raw_val < INT_MIN || raw_val > INT_MAX) // 范围校验
-        return -1;
-    out_int = (int)raw_val;
-    return 0;
-}
-int SyscallHandler::_arg_long(int arg_n, long &out_int)
-{
-    // 结构同 _arg_int，校验上下界为 LONG_MIN / LONG_MAX
-    // ...
-}
+== 参数与用户内存
 
-// _arg_addr — 取出用户态地址，校验不超过最大虚拟地址
-int SyscallHandler::_arg_addr(int arg_n, uint64 &out_addr)
-{
-    uint64 raw_val = _arg_raw(arg_n);
-    if (raw_val >= MAXVA)
-        return -EFAULT;
-    out_addr = raw_val;
-    return 0;
-}
+系统调用参数先按原始寄存器值读取，再根据目标类型进行解释。整数参数按目标类型提取，地址参数只作为用户虚拟地址保存，字符串和结构体必须通过页表感知的拷贝函数搬入内核，输出数据则通过对称的拷出函数写回用户态。内核不会直接解引用用户指针。
 
-// _arg_str — 先取地址，再调用 _fetch_str 将用户态字符串拷贝到内核
-int SyscallHandler::_arg_str(int arg_n, eastl::string &buf, int max)
-{
-    uint64 addr;
-    if (_arg_addr(arg_n, addr) < 0 || addr == 0)
-        return -EFAULT;
-    return _fetch_str(addr, buf, max);
-}
+文件描述符参数需要额外经过 fd 表校验。内核先检查 fd 编号范围，再取得当前进程的文件对象，并确认对象仍然有效。这样系统调用处理逻辑拿到的是已经验证过的 `file` 抽象，可以直接转交 VFS、socket、pipe、eventfd 或设备后端。
 
-// _arg_fd — 取出 fd 编号，查进程 fd 表获取 file*，含悬空指针检测
-int SyscallHandler::_arg_fd(int arg_n, int *out_fd, fs::file **out_f)
-{
-    int fd;
-    fs::file *f;
-    if (_arg_int(arg_n, fd) < 0)
-        return -1;
-    if (fd < 0 || (uint)fd >= proc::max_open_files)
-        return SYS_EBADF;
+这一层的核心原则是“先校验边界，再进入子系统”。无效地址返回 `-EFAULT`，非法 fd 返回 `-EBADF`，参数不符合语义返回对应 Linux errno。错误码在系统调用层保持负值，用户态 C 库再按约定转换成 `errno`。
 
-    proc::Pcb *p = (proc::Pcb *)Cpu::get_cpu()->get_cur_proc();
-    f = p->get_open_file(fd);
-    if (f == nullptr)
-        return SYS_EBADF;
+== 实现分层
 
-    // 悬空指针检测：若文件对象已失效，自动清理 fd 槽位
-    if (!is_probably_live_file_object(f))
-    {
-        // 将 fd 槽位置空并清除 close-on-exec 标志
-        // ...
-        return SYS_EBADF;
-    }
-    if (out_fd)
-        *out_fd = fd;
-    if (out_f)
-        *out_f = f;
-    return 0;
-}
-```
-=== 系统调用表初始化
+系统调用实现不是按文件简单堆叠，而是围绕几类职责拆分：
 
-系统调用表是一个以调用号为索引的函数指针数组，容量为 2048 项，每个槽位指向一个系统调用处理函数。初始化时，所有槽位先填入默认处理函数（直接返回 `-ENOSYS`，表示未实现），随后通过 `BIND_SYSCALL` 宏将已实现的调用号逐一绑定到对应的处理函数上。绑定借助 C++ 的符号拼接机制，自动将系统调用号常量与同名处理函数关联，同时将调用名称存入并行数组供调试诊断使用。整个初始化过程在内核启动的 `main()` 函数中完成。
+- *ABI 数据结构*：定义用户态可见结构体的布局、对齐和大小，保证 RISC-V 与 LoongArch 下 `copy_in` / `copy_out` 解释一致。
+- *进程与凭据*：处理 pid/tid、会话、进程组、uid/gid、capability、资源限制和 personality 等进程属性。
+- *内存接口*：把 `brk`、`mmap`、`munmap`、`mprotect`、共享内存和 memfd 请求转交地址空间与页后端对象。
+- *文件与 I/O*：把 open/read/write/stat/mount/ioctl/fcntl/xattr 等请求转交 VFS、文件对象和设备控制层。
+- *信号、时间与同步*：连接信号处理表、POSIX timer、futex、epoll、eventfd 和等待唤醒机制。
+- *网络与设备控制*：socket 系列系统调用进入网络子系统，块设备、终端和 socket 的 ioctl 按设备类型分发。
 
-```cpp
-void SyscallHandler::init()
-{
-    fs::init_bsd_flock_table();
-    g_notify_registry_lock.init("notify registry");
-    for (auto &func : _syscall_funcs)
-    {
-        // 默认实现
-        func = &SyscallHandler::_default_syscall_impl;
-    }
-    // 初始化系统调用名称
-    for (auto &name : _syscall_name)
-    {
-        name = nullptr;
-    }
-    BIND_SYSCALL(fork);
-    BIND_SYSCALL(wait);
-    BIND_SYSCALL(kill);
-    BIND_SYSCALL(sleep);
-    BIND_SYSCALL(uptime);
-    //……
-}
-```
+系统调用处理函数在这一分层中扮演“ABI 边界适配器”的角色：它负责把用户态参数转换成内核对象和安全缓冲区，再调用真正持有状态的子系统。这样修改某个子系统的内部实现时，不需要改变所有系统调用入口。
 
-=== 系统调用分发器
+== 新增系统调用的约束
 
-系统调用分发器 `invoke_syscaller()` 是串联整个执行路径的中枢。它从当前进程的陷阱帧中读出调用号，以调用号为索引在 `_syscall_funcs[]` 中查找处理函数并调用，执行完毕后将返回值写入陷阱帧的 `a0` 位置。返回前还会校验进程页表基址的合法性，若发现页表损坏则立即触发内核 panic，防止内存错误扩散。
+新增系统调用时需要同步四类信息：Linux ABI 编号、内核侧声明、处理逻辑和分发表绑定。若用户态封装或自动入口需要调用它，还要同步用户态 wrapper。实现时应优先复用已有的参数获取、fd 校验、用户拷贝和 errno 风格，避免每个系统调用各自实现一套边界检查。
 
-```cpp
-void SyscallHandler::invoke_syscaller()
-{
-    proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
-    uint64 sys_num = p->get_trapframe()->a7;      // 从陷阱帧取调用号
-
-    // 调用号越界或未绑定：打印错误并返回 -1
-    if (sys_num >= max_syscall_funcs_num || sys_num < 0 ||
-        _syscall_funcs[sys_num] == nullptr)
-    {
-        // ... 错误日志输出
-        p->_trapframe->a0 = -1;
-    }
-    else
-    {
-        uint64 ret = (this->*_syscall_funcs[sys_num])();  // 通过函数指针调用
-        // 校验页表基址，防止内存损坏扩散
-        mem::PageTable *pt = p->get_pagetable();
-        if (pt != nullptr && !is_sane_user_pagetable_base(pt->get_base()))
-        {
-            panic("pagetable base corrupted after syscall %s(%d), ...",
-                  _syscall_name[sys_num], sys_num);
-        }
-        p->_trapframe->a0 = ret;                   // 返回值写入陷阱帧
-    }
-}
-```
-
-== 系统调用实现
-
-F7LY 的系统调用实现覆盖了进程管理、内存管理、文件系统、信号、时间与定时器、Futex、事件通知、网络、权限、系统信息等十个功能类别。按照功能层次，实现代码分为接口数据定义、I/O 数据搬运、进程凭据管理三个部分，同时将设备控制与内核子系统逻辑独立出来，形成清晰的模块边界。
-
-=== 接口数据定义
-
-内核与用户态之间传递的结构体必须保持布局一致，否则 `copy_in`/`copy_out` 会导致数据错位。这一层集中定义了 Linux ABI 中用户态可见的数据结构，包括 `epoll_event`（16 字节，含 4 字节对齐空洞）、`termios`（36 字节，含控制字符数组）、`sigevent`（64 字节，含信号/线程通知联合体）、`timex`（208 字节，含时间校准参数）等，确保跨 RISC-V 和 LoongArch 架构的兼容性。
-
-=== I/O 数据搬运
-
-大量系统调用（如 `readv`、`writev`、`sendfile`、`splice`）涉及内核与用户态之间的数据往返。这一层提供了栈/堆双路径的临时缓冲区（小数据用栈上内联数组避免堆分配，大数据动态分配合并释放），vectored I/O 的散聚读写支持，以及优先尝试文件直拷快路径、失败时回退到内核中转的双策略。
-
-=== 进程凭据管理
-
-进程的 uid/gid 系列、supplementary groups、session/pgid、umask 和 personality 等属性修改都集中在这一层，包含完整的 POSIX 权限检查逻辑（特权进程可任意设置，非特权进程只能切换到 real/effective/saved 身份之一）和 capability 联动更新。
-
-=== 设备控制逻辑
-
-文件描述符的读写权限判定与 O_DIRECT 对齐校验、socket ioctl 的兼容接口模拟（如 SIOCGIFCONF 返回 loopback 接口视图）、块设备预读窗口大小的查询与设置，这些跨领域的设备控制逻辑被抽离为独立的管理类，不再嵌入系统调用处理函数中。
-
-=== 内核子系统
-
-三个功能完整的子系统——POSIX capability 管理（effective/permitted/inheritable 三集合的获取与设置）、内核时间校准（adjtimex/clock_adjtime 的状态机）、终端配置（termios 的获取/设置与线路规程同步）——各自维护独立的内部状态，系统调用处理函数仅作为入口将用户请求转发到子系统方法。
+对于已经有子系统承载的能力，系统调用层只做入口适配，不在分发文件里重写业务逻辑。例如文件路径解析交给 VFS，页映射交给地址空间管理，事件等待交给 epoll/file 就绪判断，设备命令交给对应 ioctl 模块。这是保持系统调用层可维护的主要原则。

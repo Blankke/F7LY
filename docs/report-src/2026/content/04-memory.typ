@@ -55,7 +55,7 @@ LoongArch 通过 DMWIN（Direct Mapping Window）实现物理地址的直接访�
 
 === 用户地址空间布局
 
-F7LY-OS 的用户进程地址空间从低地址到高地址依次排布，所有区域均以 VMA 描述，记录在 `ProcessMemoryManager` 的 `VMASpace` 中。
+F7LY-OS 的用户进程地址空间从低地址到高地址依次排布，所有区域均以 VMA 描述，并由进程内存管理器统一维护。
 
 #figure(
   image("fig/用户地址空间.png", width: 70%),
@@ -64,15 +64,15 @@ F7LY-OS 的用户进程地址空间从低地址到高地址依次排布，所有
 
 *NULL guard*:低 64KB（地址 `0x0 ~ 0x10000`）保持未映射状态，用于捕获空指针和 NULL 偏移解引用，触发缺页异常后向进程投递 `SIGSEGV`。
 
-*ELF 程序段*:静态链接或主可执行文件的 `PT_LOAD` 段按 ELF 声明的 `p_vaddr` 装载。对于 PIE（位置无关可执行文件），内核在首个 `PT_LOAD` 的基址上加载各段，段权限严格按 `p_flags` 中的 R/W/X 映射。每个段注册为一个 `VmAreaKind::ElfLoad` 类型的 VMA。
+*ELF 程序段*:静态链接或主可执行文件的装载段按 ELF 声明的位置和权限映射。位置无关程序由内核选择装载基址，各段仍保持 ELF 头中的读、写、执行权限约束。
 
-*动态链接器段*:若 ELF 包含 `PT_INTERP` 头（如 `/lib/ld-musl-riscv64-sf.so.1`），内核额外加载解释器 ELF 的各 `PT_LOAD` 段。解释器的装载基址由 `highest_addr - interp_min_vaddr` 按 `p_align` 对齐计算——LoongArch 的 glibc 解释器要求 16KB 对齐，RISC-V 的 musl 解释器使用 4KB 对齐。解释器各段注册为 `VmAreaKind::InterpreterLoad` 类型。
+*动态链接器段*:若 ELF 声明了解释器，内核会额外装载动态链接器，并按目标架构要求对齐。主程序和解释器共同组成最终用户态入口。
 
-*用户栈*:`execve` 在主程序和解释器的所有段装载完毕后，紧接最高已用地址上方放置用户栈：先留 1 页 guard page，再分配 256 页（1 MB）栈空间，权限 `R | W`，`MAP_GROWSDOWN` 标志允许栈在缺页时自动向下扩展。栈 VMA 类型为 `VmAreaKind::UserStack`，增长策略为 `VmGrowPolicy::Down`。线程栈则由 `clone` / `mmap` 在 mmap 区域另行分配，不与此主栈共享 VMA。
+*用户栈*:主程序和解释器装载完成后，内核在其上方建立用户栈，并在边界处保留保护页。栈支持按需向下扩展，线程栈则由线程库通过映射区单独创建。
 
-*堆*:`brk` 堆初始化在用户栈之上（`PGROUNDUP(highest_addr)`），类型 `VmAreaKind::Heap`，增长策略 `VmGrowPolicy::Up`。`sbrk` / `brk` 系统调用通过 `grow_heap()` 向上扩展堆，上限为 `TRAPFRAME - 64KB`，防止堆无限增长冲入内核区。
+*堆*:堆由 `brk` 系列接口向高地址增长。内核为堆和顶端保留区之间设置边界，避免用户堆无限扩张破坏特殊映射。
 
-*mmap 区域*:堆上方预留 64KB 保护间隔（`k_mmap_guard_gap`）后为 mmap 分配区，最小基址为 `0x10000000`（`k_mmap_min_base`）。`mmap_cursor` 从此处向上搜索空闲虚拟地址区间，通过 `VmaMapleTree::find_gap` 在 O(log N) 内定位合适位置。此区域承载匿名映射（`MAP_ANONYMOUS`）、文件映射（`MAP_FILE`）、共享内存附加（`SysvShm`）以及线程栈。
+*mmap 区域*:堆上方是通用映射区，承载匿名映射、文件映射、共享内存附加以及线程栈。地址选择由 VMA 索引辅助完成，避免线性扫描整个稀疏地址空间。
 
 *顶端特殊页*:
 
@@ -120,7 +120,7 @@ class ProcessMemoryManager
     }
 ```
 
-`mm` 用原子引用计数区分“共享”和“独立”两种地址空间模型。创建一个进程时，`fork` 走 `clone_for_fork()`——把父进程的页表和 VMA 完整拷贝一份，物理页降级为 COW，父子从此各自独立，一方的 `mmap` 或 `brk` 不影响另一方。创建一个线程时，`clone` 带 `CLONE_VM` 标志走 `share_for_thread()`——只把 `mm` 的引用计数 $+1$，指针直接共享，任何线程调用 `brk` 或 `mmap` 其他线程都能看到。`execve` 则是彻底换掉地址空间：创建一个全新的 `mm`，装好新 ELF 后原子替换旧的，旧 `mm` 引用计数减 $1$。进程退出时，`exit` 调用 `put()` 递减引用计数，当计数归零时由最后一个退出的线程执行 `free_all_memory()`，按 VMA $→$ 程序段 $→$ 堆 $→$ 页表的顺序释放所有内存。
+`mm` 用引用计数区分“共享”和“独立”两种地址空间模型。`fork` 创建独立副本，并把已有物理页转为写时复制；带共享地址空间标志的 `clone` 只增加引用计数，使多个线程看到同一份堆和映射区；`execve` 则创建全新的地址空间并原子替换旧空间。最后一个引用退出时，内核按 VMA、程序段、堆和页表的顺序释放资源。
 
 VMA 和堆的元数据操作受 `SleepLock`（`memory_lock`）保护。之所以用睡眠锁而非自旋锁，是因为 `munmap` 等操作可能触发文件映射脏页写回，进而进入 ext4 和 virtio 的磁盘 I/O 路径——自旋锁在此期间会导致死锁。
 
@@ -150,7 +150,7 @@ VMA 不自己分配物理页，而是指向一个后端对象。匿名映射的�
 
 `VMASpace` 是 VMA 的集中管理容器，内部同时维护两份数据：一份 `eastl::list` 链表持有所有 VMA 对象本身，另一份 `VmaMapleTree` B+Tree 按地址对它们做索引。链表用于全量遍历，例如 `free_all_memory` 清理和 `/proc/self/maps` 导出；树索引用于按地址的精确查找和区间搜索。
 
-`VmaMapleTree` 的设计参考了 Linux 的 Maple Tree。它是一棵纯索引树——树节点只存 VMA 的指针和排序键（`addr`），不拥有数据的所有权。叶子节点之间通过双向链表连接，使得给定一个地址时，既可以通过树快速定位覆盖它的 VMA，也可以从当前位置沿叶链顺序遍历后续区间，而无需回溯整棵树。
+`VmaMapleTree` 的设计参考了 Linux 的 Maple Tree。它是一棵纯索引树，只保存 VMA 的地址顺序，不拥有 VMA 本身。给定一个地址时，内核可以快速定位覆盖它的区间，也可以顺序遍历相邻区间。
 
 快速区间索引对 `mmap` 同样关键。`mmap` 需要在两个已有 VMA 之间找到足够大的空隙。`VmaMapleTree` 沿叶子链表顺序扫描相邻 VMA 之间的间隔，给出第一个满足对齐和大小要求的空闲区间；整个过程只遍历实际存在的 VMA 条目，不会被稀疏地址空间中的空洞拖慢。
 
@@ -168,7 +168,7 @@ VMA 不自己分配物理页，而是指向一个后端对象。匿名映射的�
 
 *SysV 共享内存对象（SysvShmVmObject）*：用于 `shmat` 附加的共享内存段。内部持有段的元数据（key、大小、权限、创建者等），`prepare_page` 从共享段的物理页数组中取页。与文件对象类似，多个进程附加同一段时共享同一个对象实例。
 
-`VmObject` 内部维护一个 `source_pages_` 缓存——从逻辑页序号到物理页地址的映射。这个缓存的意义在于 `fork`：当父进程通过 `VmObject` 分配了一系列物理页后，`fork` 创建的子进程通过 COW 共享这些页，但子进程的 VMA 指向同一个 `VmObject` 实例（对象引用计数 $+1$）。子进程首次读缺页时，`VmObject` 直接从 `source_pages_` 命中已有物理页，不必重新分配，只需在页表中安装 COW 映射。
+`VmObject` 会缓存已经准备好的源页。这样在 `fork` 后，子进程首次读取共享区域时可以复用父进程已经生成的物理页，只在写入时通过 COW 分离。
 
 对象的生命周期由原子引用计数管理。VMA 创建时 `get()`，销毁时 `put()`。当所有引用释放后，匿名对象和 SysV 对象直接释放缓存的物理页，文件对象则先写回脏页再释放。
 

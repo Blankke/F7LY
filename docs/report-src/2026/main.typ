@@ -4,9 +4,9 @@
 //
 // 本文件只提供 2026 年 OSCOMP 设计文档骨架，不包含正文。
 
-#import "../conf.typ": doc, preface, main
-#import "../components/cover.typ": cover
-#import "../components/outline.typ": outline-page
+#import "conf.typ": doc, preface, main
+#import "components/cover.typ": cover
+#import "components/outline.typ": outline-page
 
 #show: doc
 
