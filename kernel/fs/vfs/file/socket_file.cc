@@ -34,6 +34,7 @@ namespace fs
         constexpr int k_protocol_ipv6 = 41;
         constexpr uint8 k_default_ip_ttl = 64;
         constexpr size_t k_ipv4_header_len = 20;
+        constexpr int k_ip_tos = 1;
         constexpr int k_ip_recverr = 11;
         constexpr int k_tcp_nodelay = 1;
         constexpr int k_tcp_maxseg = 2;
@@ -823,6 +824,7 @@ namespace fs
         , _recv_timeout_usec(0)
         , _send_timeout_sec(0)
         , _send_timeout_usec(0)
+        , _ip_tos(0)
     {
         // socket_file 是一个 VFS file，因此 stat 类型也要标成 socket，fstat 才能看到 S_IFSOCK。
         new(&_stat) Kstat(FT_SOCKET);
@@ -866,6 +868,7 @@ namespace fs
         , _recv_timeout_usec(0)
         , _send_timeout_sec(0)
         , _send_timeout_usec(0)
+        , _ip_tos(0)
     {
         new(&_stat) Kstat(FT_SOCKET);
         memset(&_local_addr, 0, sizeof(_local_addr));
@@ -2758,6 +2761,22 @@ namespace fs
             return 0;
         }
         else if (level == k_protocol_ip) {
+            if (optname == k_ip_tos) {
+                // OpenSSH 会在连接前后设置 IP_TOS/IPQoS。F7LY 暂不把 TOS 写入真实 IPv4 包头，
+                // 但接受并保存这个 8 bit 值，避免兼容程序因非关键 QoS 选项失败而报警。
+                if (optlen < sizeof(int)) {
+                    _lock.release();
+                    return -EINVAL;
+                }
+                int tos = *static_cast<const int*>(optval);
+                if (tos < 0 || tos > 0xff) {
+                    _lock.release();
+                    return -EINVAL;
+                }
+                _ip_tos = tos;
+                _lock.release();
+                return 0;
+            }
             // IP_RECVERR 只影响真实 IP 错误队列；当前 loopback 后端没有异步
             // ICMP 错误来源，按 no-op 接受可兼容 netperf 的初始化路径。
             if (optname == k_ip_recverr && optlen >= sizeof(int)) {
@@ -2964,6 +2983,11 @@ namespace fs
             return result;
         }
         else if (level == k_protocol_ip) {
+            if (optname == k_ip_tos) {
+                int result = copy_socket_int_option(optval, optlen, _ip_tos);
+                _lock.release();
+                return result;
+            }
             _lock.release();
             return -ENOPROTOOPT;
         }

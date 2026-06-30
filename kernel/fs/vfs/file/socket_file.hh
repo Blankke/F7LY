@@ -110,6 +110,8 @@ namespace fs
         long _recv_timeout_usec;
         long _send_timeout_sec;
         long _send_timeout_usec;
+        // IP_TOS 是 IPv4 QoS/DSCP 调优项；当前网络栈不真正调度 QoS，但需要按 Linux ABI 记住用户态设置。
+        int _ip_tos;
         
         // 保护当前 socket_file 的状态、缓冲区、peer 标志。
         SpinLock _lock;
