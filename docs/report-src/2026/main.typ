@@ -13,7 +13,7 @@
 #set text(lang: "zh", region: "cn")
 
 #cover(
-  title: "2026 年 OSCOMP 设计文档",
+  title: "OSCOMP 设计文档",
   year: 2026,
   month: 6,
 )
