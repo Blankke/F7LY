@@ -361,31 +361,40 @@ namespace mem
         {
             pcb.map_kstack(k_pagetable);
         }
-#ifdef RISCV
-        // 设置satp，对应龙芯应该设置pgdl，pgdh，stlbps，asid，tlbrehi，pwcl，pwch,
-        // 并且invtlb 0x0,$zero,$zero;
-        // question: 为什么xv6的MAKE_SATP没有设置asid
 
+        activate_kernel_pagetable();
+
+        printfGreen("[vmm] Virtual Memory Manager Init\n");
+    }
+
+    void VirtualMemoryManager::activate_kernel_pagetable()
+    {
+#ifdef RISCV
+        // satp 是每个 hart 的寄存器。主核建表后和次核上线时都要各自刷新
+        // 本地 TLB，不能把“写过一次 satp”误当成全局状态。
         sfence_vma();
-        // printfYellow("sfence\n");
         w_satp(MAKE_SATP(k_pagetable.get_base()));
-        // printfYellow("sfence\n");
         sfence_vma();
 #elif defined(LOONGARCH)
-
-        // the "pgdl" is corresponding to "satp" in riscv
+        // PGDL/PGDH、页表遍历参数和 TLB 同样属于每个 CPU。空 PGDH 已由
+        // 主核在 init() 中分配；次核此处只复用它，不再并发分配页表页。
         w_csr_pgdl((uint64)k_pagetable.get_base());
         install_loongarch_empty_high_user_pagetable();
-        // flush the tlb(tlbinit)
         tlbinit();
 
         w_csr_pwcl((PTEWIDTH << 30) | (DIR2WIDTH << 25) | (DIR2BASE << 20) | (DIR1WIDTH << 15) | (DIR1BASE << 10) | (PTWIDTH << 5) | (PTBASE << 0));
         w_csr_pwch((DIR4WIDTH << 18) | (DIR3WIDTH << 6) | (DIR3BASE << 0) | (PWCH_HPTW_EN << 24));
-
-        [[maybe_unused]] uint64 crmd = r_csr_crmd();
-
 #endif
-        printfGreen("[vmm] Virtual Memory Manager Init\n");
+    }
+
+    void VirtualMemoryManager::lock_page_table_updates()
+    {
+        _virt_mem_lock.acquire();
+    }
+
+    void VirtualMemoryManager::unlock_page_table_updates()
+    {
+        _virt_mem_lock.release();
     }
 
     // 根据传入的 flags 标志，生成对应的页表权限（perm）值
@@ -422,7 +431,7 @@ namespace mem
             if (pte.is_valid())
             {
                 bool is_kernel_pt = !k_pagetable.is_null() && pt.get_base() == k_pagetable.get_base();
-                bool is_user_va = a < TRAPFRAME;
+                bool is_user_va = a < USER_MEMORY_TOP;
                 if (!is_kernel_pt && is_user_va)
                 {
                     proc::Pcb *cur = proc::k_pm.get_cur_pcb();
@@ -1536,17 +1545,16 @@ namespace mem
         for (a = va; a < va + npages * PGSIZE; a += PGSIZE)
         {
 #ifdef RISCV
-            bool is_reserved_page = (a == TRAMPOLINE || a == SIG_TRAMPOLINE ||
-                                     (a == TRAPFRAME && !(va == TRAPFRAME && npages == 1 && do_free == 0)));
-            bool explicit_reserved_cleanup =
-                ((a == TRAMPOLINE && va == TRAMPOLINE && npages == 1 && do_free == 0) ||
-                 (a == SIG_TRAMPOLINE && va == SIG_TRAMPOLINE && npages == 1 && do_free == 0));
+            bool is_fixed_special_page = (a == TRAMPOLINE || a == SIG_TRAMPOLINE || a == TRAPFRAME);
 #elif defined(LOONGARCH)
-            bool is_reserved_page = (a == SIG_TRAMPOLINE ||
-                                     (a == TRAPFRAME && !(va == TRAPFRAME && npages == 1 && do_free == 0)));
-            bool explicit_reserved_cleanup =
-                (a == SIG_TRAMPOLINE && va == SIG_TRAMPOLINE && npages == 1 && do_free == 0);
+            bool is_fixed_special_page = (a == SIG_TRAMPOLINE || a == TRAPFRAME);
 #endif
+            bool is_user_trapframe_page = a >= USER_TRAPFRAME_BASE && a < USER_TRAPFRAME_TOP;
+            bool is_reserved_page = is_fixed_special_page || is_user_trapframe_page;
+            // 特殊页只允许由它们的专用生命周期路径按单页、无物理页释放地拆除。
+            // usertrapret 会在 PCB 槽位复用时替换对应 trapframe；free_pagetable 则会遍历全部槽位。
+            bool explicit_reserved_cleanup = npages == 1 && do_free == 0 &&
+                                             (is_fixed_special_page || is_user_trapframe_page);
             if (is_reserved_page && !explicit_reserved_cleanup)
             {
                 // 这些保留页由页表创建/释放路径专门管理；普通区间回滚不能顺手清掉，

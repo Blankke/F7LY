@@ -3,7 +3,7 @@
 
 // 机器启动流程：open-sbi(M-mode) -> entry.S(S-mode) -> start.c -> main.c
 
-// 操作系统启动时的栈空间(每个核心占4KB)
+// 操作系统启动时的栈空间；entry.S 使用同一个 8KB 常量计算每个 hart 的槽位。
 __attribute__ ((aligned (16))) char stack0[NCPU][4096 * 2];
 
 extern "C" void main(uint64 hartid, uint64 dtb_entry);
@@ -17,6 +17,12 @@ void trap_loop()
 extern "C"
 void start(uint64 hartid, uint64 dtb_entry)
 {
+    // 汇编入口已提前检查，这里保留 C 侧保护，避免未来替换入口时破坏 CPU 数组边界。
+    if (hartid >= NCPU)
+    {
+        trap_loop();
+    }
+
     // 不进行分页(使用物理内存)
     riscv::csr::_write_csr_(riscv::csr::satp, 0);
         

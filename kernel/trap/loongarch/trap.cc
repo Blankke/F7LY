@@ -31,7 +31,9 @@ extern "C" void kernelvec();
 extern "C" void uservec();
 extern "C" void handle_tlbr();
 extern "C" void handle_merr();
-extern "C" void userret(uint64, uint64, uint64);
+// userret 在切到用户 PGDL 后仍处于内核特权级。第四个参数保留当前 PCB
+// trapframe 的内核直映地址，使寄存器恢复不依赖共享用户页表中的高地址映射。
+extern "C" void userret(uint64, uint64, uint64, uint64);
 int mmap_handler(uint64 va, int cause);
 // 创建一个静态对象
 trap_manager trap_mgr;
@@ -251,7 +253,6 @@ namespace
 void trap_manager::init()
 {
   ticks = 0;
-  timeslice = 0;
   tickslock.init("tickslock");
   printfGreen("[trap] Trap Manager Init\n");
 }
@@ -346,10 +347,12 @@ int trap_manager::devintr()
     // 时又把这同一个 pending timer 误当成“新的时钟中断”。
     loongarch_ack_timer_interrupt();
 
-    if (proc::k_pm.get_cur_cpuid() == 0)
+    const bool is_timekeeper = Cpu::is_bootstrap_cpu();
+    if (is_timekeeper)
     {
       timertick();
     }
+    proc::check_interval_timers(Cpu::get_cpu()->get_cur_proc(), is_timekeeper);
 
     return 2;
   }
@@ -369,9 +372,9 @@ void trap_manager::timertick()
 
   proc::k_pm.wakeup(&ticks);
 
-  // Check for expired POSIX timers and send signals
+  // POSIX realtime timer 的全局扫描只由 CPU0 执行，其他 CPU 在 devintr() 中
+  // 单独推进自己的 VIRTUAL/PROF timer。
   check_expired_timers();
-  proc::check_interval_timers(proc::k_pm.get_cur_pcb());
 }
 
 // !!写完进程后修改
@@ -393,6 +396,23 @@ void trap_manager::usertrap()
   w_csr_eentry((uint64)kernelvec);
 
   proc::Pcb *p = proc::k_pm.get_cur_pcb();
+  // uservec 通过当前线程的用户 trapframe 恢复内核栈。CLONE_VM 多线程若
+  // 错把别的槽位的 trapframe 带进来，最早且最可靠的信号就是当前 SP 不再
+  // 落在 CPU 所记录 PCB 的内核栈内；立刻终止而不是继续用错现场执行系统调用。
+  const uint64 current_kernel_sp = Cpu::read_sp();
+  const uint64 expected_kstack_bottom = p->get_kstack();
+  const uint64 expected_kstack_top = expected_kstack_bottom + KSTACK_SIZE;
+  if (current_kernel_sp < expected_kstack_bottom || current_kernel_sp > expected_kstack_top)
+  {
+    panic("usertrap: trapframe/kernel stack mismatch cpu=%lu pid=%d tid=%d gid=%d sp=%p expected=[%p,%p)",
+          Cpu::current_cpu_id(),
+          p->_pid,
+          p->_tid,
+          p->_global_id,
+          (void *)current_kernel_sp,
+          (void *)expected_kstack_bottom,
+          (void *)expected_kstack_top);
+  }
   // 时间统计：从用户态切换到内核态
   uint64 cur_tick = tmm::get_ticks();
   if (p->_last_user_tick > 0)
@@ -431,8 +451,8 @@ void trap_manager::usertrap()
     // an interrupt will change crmd & prmd registers,
     // so don't enable until done with those registers.
     intr_on();
-
     syscall::k_syscall_handler.invoke_syscaller();
+    intr_off();
   }
   else if (ecode == k_loongarch_ecode_fpu_disabled)
   {
@@ -613,11 +633,8 @@ void trap_manager::usertrap()
   // give up the CPU if this is a timer interrupt.
   if (which_dev == 2)
   {
-    timeslice++; // 到达固定时间片后抢占当前用户态任务。
-    if (timeslice >= k_default_time_slice_ticks)
+    if (Cpu::get_cpu()->advance_time_slice(k_default_time_slice_ticks))
     {
-      timeslice = 0;
-      // printf("yield in usertrap\n");
       proc::k_scheduler.yield();
     }
   }
@@ -662,25 +679,51 @@ void trap_manager::usertrapret(void)
           (void *)p->get_pagetable()->get_base());
   }
 
-  // TRAPFRAME 在 LoongArch 线程模型里是“每线程独立物理页 + 同地址空间共享用户页表”。
-  // 下面这段“先拆旧映射、再映当前线程 trapframe”的窗口里如果还允许时钟中断介入，
-  // 调度器就可能切到同地址空间的另一个线程，把共享页表里的 TRAPFRAME 先改成它自己的页。
-  // 等当前线程回来继续 map_pages() 时，就会撞上一次真正的 remap panic。
-  // 这里先关中断，把这段切换做成原子操作。
+  // CLONE_VM 线程共享 PGDL，但每个 PCB 有独立 trapframe 物理页。固定复用
+  // TRAPFRAME 会让两个核并发返回用户态时覆盖同一 PTE；使用 PCB 槽位专属 VA，
+  // 并将这个地址传给 userret/SAVE0 后即可让各线程完全隔离。
   intr_off();
+  const uint64 user_trapframe_va = USER_TRAPFRAME(p->get_global_id());
 
-  // LoongArch 下同一地址空间内线程共享 PGDL，但每个线程都有独立的 trapframe 物理页。
-  // 长跑里的 pthread_cond_smasher 已经证明，只改叶子 PTE 的优化版本有概率把共享页表里的
-  // TRAPFRAME 留在“别的线程页”上，下一次 uservec 再入内核时就会把 kernel_trap/kernel_pgdl
-  // 从旧 trapframe 里读出来，最终直接在 kernel 态跳到 0。
-  // 这里优先保证“每次返回用户态前，TRAPFRAME 一定明确指向当前线程”，哪怕代价是多一次 remap。
-  mem::k_vmm.vmunmap(*p->get_pagetable(), TRAPFRAME, 1, 0);
-  if (!mem::k_vmm.map_pages(*p->get_pagetable(), TRAPFRAME, PGSIZE, (uint64)p->get_trapframe(),
-                            PTE_V | PTE_NX | PTE_P | PTE_W | PTE_R | PTE_MAT | PTE_D))
+  // 同一线程的大多数 syscall 不应反复拆装自己的 trapframe PTE；这不仅浪费
+  // TLB，也会让多个 CLONE_VM 线程在第一次并发返回时竞争页表层级创建。仅在
+  // PCB 槽位复用后物理页变化时替换映射，并以全局页表更新锁保护“检查+建表”。
+  mem::PageTable *user_pt = p->get_pagetable();
+  const uint64 expected_trapframe_pa =
+      PGROUNDDOWN(to_phy(reinterpret_cast<uint64>(p->get_trapframe())));
+  mem::Pte trapframe_pte = user_pt->walk(user_trapframe_va, false);
+  bool trapframe_mapping_matches =
+      !trapframe_pte.is_null() && trapframe_pte.is_valid() &&
+      reinterpret_cast<uint64>(trapframe_pte.pa()) == expected_trapframe_pa;
+
+  if (!trapframe_mapping_matches)
   {
-    panic("usertrapret: failed to remap trapframe");
+    mem::k_vmm.lock_page_table_updates();
+    trapframe_pte = user_pt->walk(user_trapframe_va, false);
+    trapframe_mapping_matches =
+        !trapframe_pte.is_null() && trapframe_pte.is_valid() &&
+        reinterpret_cast<uint64>(trapframe_pte.pa()) == expected_trapframe_pa;
+    bool mapped = true;
+    if (!trapframe_mapping_matches)
+    {
+      // PCB 槽位复用时可能仍留有历史映射；锁内仅替换当前槽位，其他线程的
+      // trapframe PTE 不会被触碰。
+      mem::k_vmm.vmunmap(*user_pt, user_trapframe_va, 1, 0);
+      mapped = mem::k_vmm.map_pages(*user_pt,
+                                    user_trapframe_va,
+                                    PGSIZE,
+                                    (uint64)p->get_trapframe(),
+                                    PTE_V | PTE_NX | PTE_P | PTE_W | PTE_R | PTE_MAT | PTE_D);
+    }
+    mem::k_vmm.unlock_page_table_updates();
+    if (!mapped)
+    {
+      panic("usertrapret: failed to map trapframe");
+    }
   }
-  loongarch_invalidate_user_tlb_page(TRAPFRAME);
+  // TLB 是每核私有的。即使 PTE 已经存在，也要在当前 CPU 上失效该槽位，
+  // 防止 PCB 槽位复用后继续命中本核残留的旧 trapframe 翻译。
+  loongarch_invalidate_user_tlb_page(user_trapframe_va);
 
   // send syscalls, interrupts, and exceptions to uservec.S
   w_csr_eentry((uint64)uservec); // maybe todo
@@ -714,7 +757,10 @@ void trap_manager::usertrapret(void)
   // jump to uservec.S at the top of memory, which
   // switches to the user page table, restores user registers,
   // and switches to user mode with ertn.
-  userret(TRAPFRAME, pgdl, p->_used_fpu ? 1 : 0);
+  userret(user_trapframe_va,
+          pgdl,
+          p->_used_fpu ? 1 : 0,
+          reinterpret_cast<uint64>(p->get_trapframe()));
 }
 void trap_manager::machine_trap()
 {
@@ -744,14 +790,14 @@ void trap_manager::kerneltrap()
 
   ///@todo!! 写完进程后修改
   // give up the CPU if this is a timer interrupt.
+  // 内核态长时间执行系统调用或缺页处理时也必须参与抢占；每 CPU 使用独立
+  // time-slice 计数，避免一个核的 timer tick 影响其它核正在运行的任务。
   if (which_dev == 2 && Cpu::get_cpu()->get_cur_proc() != nullptr &&
       Cpu::get_cpu()->get_cur_proc()->_state == proc::RUNNING &&
       !Cpu::get_cpu()->get_cur_proc()->_exiting)
   {
-    timeslice++; // 到达固定时间片后抢占当前内核态任务。
-    if (timeslice >= k_default_time_slice_ticks)
+    if (Cpu::get_cpu()->advance_time_slice(k_default_time_slice_ticks))
     {
-      timeslice = 0;
       proc::k_scheduler.yield();
     }
   }

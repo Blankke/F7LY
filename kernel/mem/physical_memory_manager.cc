@@ -271,14 +271,23 @@ namespace mem
 
     void *PhysicalMemoryManager::try_alloc_page()
     {
+        // Buddy 的树和页引用计数描述的是同一批页面。单核时期仅保护引用计数
+        // 不会出问题，但 SMP 下两个 CPU 同时递归修改 Buddy 树会把页号算坏，
+        // 最终可能把 0x1000 之类非 RAM 地址交给调用方。
+        memlock.acquire();
         int x = _buddy->Alloc(0);
         if (x == -1)
         {
+            memlock.release();
             return nullptr;
+        }
+        if (!page_index_in_range(static_cast<uint64>(x)))
+        {
+            memlock.release();
+            panic("[pmm] buddy returned invalid page index=%d pages=%d", x, page_count);
         }
 
         void *pa = pgnm2pa(x);
-        memlock.acquire();
         k_page_refcounts[x] = 1;
         memlock.release();
         memset(pa, 0, PGSIZE);
@@ -303,7 +312,23 @@ namespace mem
             return nullptr;
         }
 
-        return _buddy->alloc_pages(count);
+        // 连续页接口由 free_pages() 对应释放，不维护单页引用计数；但 Buddy
+        // 元数据仍必须与单页路径使用同一把锁。
+        memlock.acquire();
+        int page_index = _buddy->Alloc(count);
+        memlock.release();
+        if (page_index < 0)
+        {
+            return nullptr;
+        }
+        if (!page_index_in_range(static_cast<uint64>(page_index)))
+        {
+            panic("[pmm] buddy returned invalid contiguous page index=%d pages=%d", page_index, page_count);
+        }
+
+        void *pa = pgnm2pa(page_index);
+        memset(pa, 0, static_cast<uint64>(count) * PGSIZE);
+        return pa;
     }
 
     void PhysicalMemoryManager::free_page1(void *pa, uint64 size)
@@ -317,7 +342,9 @@ namespace mem
 
             return;
         }
+        memlock.acquire();
         _buddy->Free(pa2pgnm(pa));
+        memlock.release();
     }
 
     void PhysicalMemoryManager::free_page(void *pa)
@@ -342,12 +369,11 @@ namespace mem
         {
             k_page_refcounts[page_index] = 0;
         }
-        memlock.release();
-
         if (should_free)
         {
             _buddy->Free(page_index);
         }
+        memlock.release();
     }
 
     void PhysicalMemoryManager::free_pages(void *pa)
@@ -363,7 +389,9 @@ namespace mem
             panic("[pmm] free_pages requires page-aligned address: %p", pa);
         }
 
+        memlock.acquire();
         _buddy->free_pages(pa);
+        memlock.release();
     }
 
     bool PhysicalMemoryManager::retain_page(void *pa)
@@ -431,7 +459,9 @@ namespace mem
             return 0;
         }
         
+        memlock.acquire();
         int x = _buddy->Alloc(page_num);
+        memlock.release();
         // printfCyan("kmalloc: buddy返回的页号 x = %d\n", x);
         
         if (x == -1)
@@ -511,7 +541,9 @@ namespace mem
 
         info.managed = true;
         info.page_offset = (managed_addr - pa_start) / PGSIZE;
+        memlock.acquire();
         info.buddy = _buddy->query_page(static_cast<uint32>(info.page_offset));
+        memlock.release();
         return info;
     }
 

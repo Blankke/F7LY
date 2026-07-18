@@ -1,10 +1,13 @@
 #pragma once
 
-#define NUMCPU 1
+// 内核静态分配 8 个 CPU 槽位，运行时再按 DTB/QEMU 实际提供的 hart 上线。
+// 这样同一份内核可用 QEMU_SMP=1/2/4/8 启动，而不会因编译期数组容量不同产生
+// 不可复现的二进制差异。
+#define NCPU          8  // maximum number of CPUs supported by this kernel image
+#define NUMCPU        NCPU
 // 进程池需要覆盖较大的并发进程/线程集合；容量过小会让合法 fork()/clone()
 // 负载过早得到 EAGAIN，破坏用户态按 Linux 语义创建任务的预期。
 #define NPROC       512  // maximum number of processes
-#define NCPU          1  // maximum number of CPUs
 #define NOFILE      128  // open files per process
 #define NFILE       100  // open files per system
 #define NINODE       50  // maximum number of active i-nodes

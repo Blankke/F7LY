@@ -21,14 +21,14 @@ uservec:
         # user page table.
         #
         # sscratch points to where the process's p->trapframe is
-        # mapped into user space, at TRAPFRAME.
+        # mapped into user space. usertrapret passes the per-thread VA via sscratch.
         #
 
 	# swap a0 and sscratch
-        # so that a0 is TRAPFRAME
+        # so that a0 is the current thread's trapframe VA
         csrrw a0, sscratch, a0
 
-        # save the user registers in TRAPFRAME
+        # save the user registers in the current thread's trapframe
         sd ra, 40(a0)
         sd sp, 48(a0)
         sd gp, 56(a0)
@@ -89,10 +89,10 @@ uservec:
 
 .globl userret
 userret:
-        # userret(TRAPFRAME, pagetable)
+        # userret(trapframe_va, pagetable)
         # switch from kernel to user.
         # usertrapret() calls here.
-        # a0: TRAPFRAME, in user page table.
+        # a0: current thread's trapframe VA, in user page table.
         # a1: user page table, for satp.
 
         # switch to the user page table.
@@ -104,11 +104,11 @@ userret:
         sfence.vma zero, zero
 
         # put the saved user a0 in sscratch, so we
-        # can swap it with our a0 (TRAPFRAME) in the last step.
+        # can swap it with our a0 (trapframe VA) in the last step.
         ld t0, 112(a0)
         csrw sscratch, t0
 
-        # restore all but a0 from TRAPFRAME
+        # restore all but a0 from the current thread's trapframe
         ld ra, 40(a0)
         ld sp, 48(a0)
         ld gp, 56(a0)
@@ -140,7 +140,7 @@ userret:
         ld t5, 272(a0)
         ld t6, 280(a0)
 
-	# restore user a0, and save TRAPFRAME in sscratch
+	# restore user a0, and save the trapframe VA in sscratch
         csrrw a0, sscratch, a0
 
         # return to user mode and user pc.

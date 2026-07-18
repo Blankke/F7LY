@@ -48,7 +48,6 @@ int mmap_handler(uint64 va, int cause);
 void trap_manager::init()
 {
   ticks = 0;
-  timeslice = 0;
   tickslock.init("tickslock");
   printfGreen("[trap] Trap Manager Init\n");
 }
@@ -130,7 +129,15 @@ int trap_manager::devintr()
     // TODO, 这个5是瞎写的
     // 假设5是时钟中断
     // intr_stats::k_intr_stats.record_interrupt(5);
-    timertick();
+    // 每个 hart 都必须重设自己的 one-shot timer；全局 tick、sleep 唤醒和
+    // POSIX 实时时钟只由 CPU0 推进，避免 SMP 下系统时间按核数加速。
+    set_next_timeout();
+    const bool is_timekeeper = Cpu::is_bootstrap_cpu();
+    if (is_timekeeper)
+    {
+      timertick();
+    }
+    proc::check_interval_timers(Cpu::get_cpu()->get_cur_proc(), is_timekeeper);
 
     /// TODO: riscv可以用sbi的tick来实现时钟
     /// 但是loongarch只能使用tmm，在所有用了tick、timeslice的地方都要改
@@ -147,23 +154,14 @@ int trap_manager::devintr()
 
 void trap_manager::timertick()
 {
-  // acquire the lock to protect ticks
+  // tickslock 只保护全局 tick 计数；唤醒和定时器扫描在锁外完成，避免时钟中断
+  // 与其它 CPU 的进程锁路径形成长时间嵌套。
   tickslock.acquire();
-
-  // increment the ticks count
   ticks++;
-  proc::k_pm.wakeup(&ticks);
-
-  // Check for expired POSIX timers and send signals
-  check_expired_timers();
-  proc::check_interval_timers(proc::k_pm.get_cur_pcb());
-
-  // printfCyan("[tm]  timertick here,p->addr:%x \n",Cpu::get_cpu()->get_cur_proc());
-  // release the lock
   tickslock.release();
 
-  // set the next timeout
-  set_next_timeout();
+  proc::k_pm.wakeup(&ticks);
+  check_expired_timers();
 }
 
 // 处理内核态的中断
@@ -213,12 +211,9 @@ void trap_manager::kerneltrap()
       Cpu::get_cpu()->get_cur_proc()->_state == proc::RUNNING &&
       !Cpu::get_cpu()->get_cur_proc()->_exiting)
   {
-    timeslice++; // 到达固定时间片后抢占当前内核态任务。
-    // printf("timeslice: %d\n", timeslice);
-    if (timeslice >= k_default_time_slice_ticks)
+    if (Cpu::get_cpu()->advance_time_slice(k_default_time_slice_ticks))
     {
       proc::k_scheduler.yield();
-      timeslice = 0;
       // print_fuckyou();
     }
   }
@@ -352,10 +347,8 @@ void trap_manager::usertrap()
   // give up the CPU if this is a timer interrupt.
   if (which_dev == 2 && !p->_exiting)
   {
-    timeslice++; // 到达固定时间片后抢占当前用户态任务。
-    if (timeslice >= k_default_time_slice_ticks)
+    if (Cpu::get_cpu()->advance_time_slice(k_default_time_slice_ticks))
     {
-      timeslice = 0;
       // proc::ipc::signal::handle_signal();
       // printf("yield in usertrap\n");
       proc::k_scheduler.yield();
@@ -407,21 +400,46 @@ void trap_manager::usertrapret()
           (void *)p->get_pagetable()->get_base());
   }
 
-  // TRAPFRAME 是“每线程独立物理页 + 同地址空间共享用户页表”。
-  // 线程并发返回用户态时，如果先拆旧映射、再映当前线程 trapframe 的窗口里被时钟中断切走，
-  // 另一个线程可能先把共享页表里的 TRAPFRAME 改成它自己的页，当前线程恢复后就会 remap panic。
-  // 这里和 LoongArch 保持一致：返回用户态前先关中断，把 TRAPFRAME 切换做成原子操作。
+  // CLONE_VM 线程共享用户页表，但每个 PCB 有自己的 trapframe 物理页。
+  // 固定复用 TRAPFRAME 会让两个核同时返回用户态时互相拆掉对方的映射。
+  // 因此按 PCB 槽位分配独立的高地址页，并把实际地址传给 trampoline。
   intr_off();
+  const uint64 user_trapframe_va = USER_TRAPFRAME(p->get_global_id());
 
-  // 统一在usertrapret时动态映射trapframe
-  // 取消当前trapframe的映射(有可能原来没映射, 但是无所谓)
-  mem::k_vmm.vmunmap(*p->get_pagetable(), TRAPFRAME, 1, 0);
+  // 同一线程的 trapframe PTE 在生命周期内保持不变；只有 PCB 槽位复用时
+  // 才需要替换。首次多个 CLONE_VM 线程同时返回时，页表层级创建必须串行化，
+  // 否则两个 CPU 可能互相覆盖同一个父级 PTE。
+  mem::PageTable *user_pt = p->get_pagetable();
+  const uint64 expected_trapframe_pa = PGROUNDDOWN(
+      riscv::virt_to_phy_address(reinterpret_cast<uint64>(p->get_trapframe())));
+  mem::Pte trapframe_pte = user_pt->walk(user_trapframe_va, false);
+  bool trapframe_mapping_matches =
+      !trapframe_pte.is_null() && trapframe_pte.is_valid() &&
+      reinterpret_cast<uint64>(trapframe_pte.pa()) == expected_trapframe_pa;
 
-  // 重新映射当前进程的trapframe
-  if (mem::k_vmm.map_pages(*p->get_pagetable(), TRAPFRAME, PGSIZE, (uint64)(p->get_trapframe()),
-                           riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_writable_m) == 0)
+  if (!trapframe_mapping_matches)
   {
-    panic("usertrapret: failed to dynamically map trapframe");
+    mem::k_vmm.lock_page_table_updates();
+    trapframe_pte = user_pt->walk(user_trapframe_va, false);
+    trapframe_mapping_matches =
+        !trapframe_pte.is_null() && trapframe_pte.is_valid() &&
+        reinterpret_cast<uint64>(trapframe_pte.pa()) == expected_trapframe_pa;
+    bool mapped = true;
+    if (!trapframe_mapping_matches)
+    {
+      mem::k_vmm.vmunmap(*user_pt, user_trapframe_va, 1, 0);
+      mapped = mem::k_vmm.map_pages(*user_pt,
+                                    user_trapframe_va,
+                                    PGSIZE,
+                                    (uint64)p->get_trapframe(),
+                                    riscv::PteEnum::pte_readable_m |
+                                        riscv::PteEnum::pte_writable_m);
+    }
+    mem::k_vmm.unlock_page_table_updates();
+    if (!mapped)
+    {
+      panic("usertrapret: failed to map trapframe");
+    }
   }
   mem::Pte pte = p->get_pagetable()->walk(TRAMPOLINE, 0);
   if (pte.is_null() || pte.is_valid() == 0)
@@ -473,9 +491,7 @@ void trap_manager::usertrapret()
   //   printf("trapframe->epc: %p\n", p->_trapframe->epc);
   //   printf("[usertrapret] trapframe->a0: %p\n", p->_trapframe->a0);
 
-  ((void (*)(uint64, uint64))fn)(TRAPFRAME, satp);
-  // !! 这个地方应该是固定值, 如果上多核的时候出错的话, 就改回下面
-  // ((void (*)(uint64, uint64))fn)(TRAPFRAME + proc::k_pm.get_cur_cpuid() * sizeof(TrapFrame), satp);
+  ((void (*)(uint64, uint64))fn)(user_trapframe_va, satp);
 }
 
 /**

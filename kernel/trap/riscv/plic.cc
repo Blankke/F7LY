@@ -21,9 +21,7 @@ void plic_manager::init()
 
 void plic_manager::inithart()
 {
-    // !!后续修改
-    // int hart = cpuid();
-    int hart = 0;
+    const int hart = static_cast<int>(Cpu::current_cpu_id());
   
     // 打开所有 virtio-mmio 槽位中断，具体设备由 trap 分发到块设备或网卡。
     uint32 enable_mask = (1 << UART0_IRQ);
@@ -39,9 +37,7 @@ void plic_manager::inithart()
 
 int plic_manager::claim()
 {
-    // !!后续修改
-    // int hart = cpuid();
-    int hart =r_tp();
+    const int hart = static_cast<int>(Cpu::current_cpu_id());
 
     int irq = *(uint32*)PLIC_SCLAIM(hart);
     return irq;
@@ -49,9 +45,7 @@ int plic_manager::claim()
 
 void plic_manager::complete(int irq)
 {
-    // !!后续修改
-    // int hart = cpuid();
-    int hart = 0;
+    const int hart = static_cast<int>(Cpu::current_cpu_id());
 
     *(uint32*)PLIC_SCLAIM(hart) = irq;
 }

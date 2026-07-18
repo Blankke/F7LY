@@ -19,6 +19,7 @@
 #include "loop_device.hh"
 #include "tm/time.hh"
 #include "shm/shm_manager.hh"
+#include "hal/cpu.hh"
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
 namespace fs
@@ -36,6 +37,68 @@ namespace fs
         int g_proc_sys_kernel_random_entropy_avail = 256;
         int g_dev_cpu_dma_latency_us = 0;
         eastl::string g_proc_sys_kernel_domainname = "(none-domain)";
+
+        void append_unsigned_decimal(eastl::string &result, uint64 value)
+        {
+            char digits[32];
+            int length = 0;
+            do
+            {
+                digits[length++] = static_cast<char>('0' + value % 10);
+                value /= 10;
+            } while (value != 0);
+
+            while (length > 0)
+            {
+                result += digits[--length];
+            }
+        }
+
+        eastl::string format_cpu_list(uint64 mask)
+        {
+            eastl::string result;
+            bool first_range = true;
+
+            for (uint64 cpu_id = 0; cpu_id < NCPU;)
+            {
+                if ((mask & (1ULL << cpu_id)) == 0)
+                {
+                    ++cpu_id;
+                    continue;
+                }
+
+                const uint64 range_begin = cpu_id;
+                while (cpu_id + 1 < NCPU && (mask & (1ULL << (cpu_id + 1))) != 0)
+                {
+                    ++cpu_id;
+                }
+                const uint64 range_end = cpu_id;
+
+                if (!first_range)
+                {
+                    result += ",";
+                }
+                append_unsigned_decimal(result, range_begin);
+                if (range_end != range_begin)
+                {
+                    result += "-";
+                    append_unsigned_decimal(result, range_end);
+                }
+                first_range = false;
+                ++cpu_id;
+            }
+
+            result += "\n";
+            return result;
+        }
+
+        eastl::string format_cpu_mask_hex(uint64 mask)
+        {
+            char buffer[32];
+            // Linux 的 cpumap/Cpus_allowed 以最低 CPU 位对应最低十六进制位的方式输出。
+            snprintf(buffer, sizeof(buffer), "%08lx\n", static_cast<unsigned long>(mask));
+            return eastl::string(buffer);
+        }
 
         static void fill_urandom_bytes(char *dst, size_t len, uint64 &seed)
         {
@@ -225,6 +288,34 @@ namespace fs
         // panic("TODO");
         // return 0;
         return get_cpuinfo();
+    }
+
+    eastl::string CpuTopologyProvider::generate_content()
+    {
+        switch (_content)
+        {
+        case CpuTopologyContent::OnlineList:
+        case CpuTopologyContent::NodeCpuList:
+            return format_cpu_list(Cpu::online_cpu_mask());
+        case CpuTopologyContent::PossibleList:
+            return format_cpu_list(Cpu::possible_cpu_mask());
+        case CpuTopologyContent::KernelMax:
+        {
+            eastl::string result;
+            append_unsigned_decimal(result, NCPU - 1);
+            result += "\n";
+            return result;
+        }
+        case CpuTopologyContent::PerCpuOnline:
+            return (Cpu::is_valid_cpu_id(_cpu_id) &&
+                    (Cpu::online_cpu_mask() & (1ULL << _cpu_id)) != 0)
+                       ? "1\n"
+                       : "0\n";
+        case CpuTopologyContent::NodeCpuMap:
+            return format_cpu_mask_hex(Cpu::online_cpu_mask());
+        }
+
+        return "";
     }
 
     eastl::string ProcVersionProvider::generate_content()
@@ -1605,7 +1696,7 @@ namespace fs
         result += "17 ";  // SIGCHLD
         
         // 39. processor (最后运行的处理器号)
-        result += int_to_string(0) + " ";
+        result += int_to_string(pcb->_last_cpu) + " ";
         
         // 40. rt_priority (实时优先级)
         result += "0 ";
@@ -2059,10 +2150,12 @@ namespace fs
         // Speculation_Store_Bypass: 推测执行相关
         result += "Speculation_Store_Bypass:\tnot vulnerable\n";
         
-        // Cpus_allowed: 当前 QEMU 默认以 -smp 1 运行，只暴露 CPU0。
-        // 这里必须和 sched_getaffinity()/sysfs CPU 视图保持一致，避免 libc/LTP 误判多核。
-        result += "Cpus_allowed:\t00000001\n";
-        result += "Cpus_allowed_list:\t0\n";
+        // 必须和 sched_getaffinity()/sysfs CPU 视图保持一致。进程亲和性可在
+        // 次核刚启动时暂含 possible CPU，因此导出时取 online 交集，避免用户态
+        // 把尚未完成本地初始化的 CPU 当成可立即调度的 CPU。
+        const uint64 allowed_mask = pcb->get_cpu_mask().bits & Cpu::online_cpu_mask();
+        result += "Cpus_allowed:\t" + format_cpu_mask_hex(allowed_mask);
+        result += "Cpus_allowed_list:\t" + format_cpu_list(allowed_mask);
         
         // Mems_allowed: 允许的内存节点
         result += "Mems_allowed:\t1\n";
@@ -2187,14 +2280,33 @@ namespace fs
     {
         eastl::string result;
         
-        // CPU统计行：cpu user nice system idle iowait irq softirq steal guest guest_nice
-        // 简化实现，提供基本的CPU统计信息
-        // 格式：cpu <user> <nice> <system> <idle> <iowait> <irq> <softirq> <steal> <guest> <guest_nice>
-        // 这里使用一些合理的默认值
-        result += "cpu  10000 0 5000 900000 100 0 50 0 0 0\n";
-        
-        // 单个CPU核心统计（简化为单核）
-        result += "cpu0 10000 0 5000 900000 100 0 50 0 0 0\n";
+        // CPU统计行：cpu user nice system idle iowait irq softirq steal guest guest_nice。
+        // 当前尚未维护逐 tick 会计账本，但必须按实际 online CPU 集合列出 cpuN，
+        // 否则 libc/sysbench 会把 -smp N 错判为单核。聚合行按核心数求和，单核行
+        // 保持固定的兼容性基准值。
+        const uint64 online_mask = Cpu::online_cpu_mask();
+        const uint64 online_count = static_cast<uint64>(Cpu::online_cpu_count());
+        char cpu_line[128];
+        snprintf(cpu_line, sizeof(cpu_line),
+                 "cpu  %lu 0 %lu %lu %lu 0 %lu 0 0 0\n",
+                 static_cast<unsigned long>(10000 * online_count),
+                 static_cast<unsigned long>(5000 * online_count),
+                 static_cast<unsigned long>(900000 * online_count),
+                 static_cast<unsigned long>(100 * online_count),
+                 static_cast<unsigned long>(50 * online_count));
+        result += cpu_line;
+
+        for (uint64 cpu_id = 0; cpu_id < NCPU; ++cpu_id)
+        {
+            if ((online_mask & (1ULL << cpu_id)) == 0)
+            {
+                continue;
+            }
+            snprintf(cpu_line, sizeof(cpu_line),
+                     "cpu%lu 10000 0 5000 900000 100 0 50 0 0 0\n",
+                     static_cast<unsigned long>(cpu_id));
+            result += cpu_line;
+        }
         
         // 中断统计行：intr <total> <per-irq counts...>
         // 简化实现，只提供总中断数

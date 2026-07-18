@@ -28,6 +28,9 @@ INITCODE_MODE ?= evaluation
 DIS_PRINTF ?= 0
 QEMU_MEM ?= 1G
 QEMU_DEBUG_MEM ?= 1G
+# 同一份内核静态支持最多 8 个 CPU 槽位；运行时用该变量选择 QEMU 实际启动的核数。
+# 示例：make run r QEMU_SMP=4
+QEMU_SMP ?= 4
 # QEMU_SNAPSHOT 是最终传给 QEMU 的底层实参；高层目标用下面两个变量区分用途。
 # make run 默认启用 snapshot，避免自动回归写回污染评测 sdcard 镜像。
 # make shell 默认不启用 snapshot，允许交互式 shell 镜像持久化写回。
@@ -347,7 +350,7 @@ run-riscv:
 		-kernel $(KERNEL_ELF) \
 		-m $(QEMU_MEM) \
 		$(QEMU_CONSOLE_ARGS) \
-		-smp 1 \
+		-smp $(QEMU_SMP) \
 		-bios default \
 		$(QEMU_SNAPSHOT) \
 		$(QEMU_STORAGE_ARGS) \
@@ -364,7 +367,7 @@ run-loongarch:
 	    -kernel $(KERNEL_ELF) \
 		-m $(QEMU_MEM) \
 		$(QEMU_CONSOLE_ARGS) \
-		-smp 1 \
+		-smp $(QEMU_SMP) \
 		$(QEMU_SNAPSHOT) \
 		$(QEMU_STORAGE_ARGS) \
 		-netdev user,id=net \
@@ -389,7 +392,7 @@ debug-riscv:
 		-kernel $(KERNEL_ELF) \
 		-m $(QEMU_DEBUG_MEM) \
 		-nographic \
-		-smp 1 \
+		-smp $(QEMU_SMP) \
 		-bios default \
 		$(QEMU_SNAPSHOT) \
 		$(QEMU_STORAGE_ARGS) \
@@ -405,7 +408,7 @@ debug-loongarch:
 	    -kernel $(KERNEL_ELF) \
 	    -m $(QEMU_DEBUG_MEM) \
 	    -nographic \
-	    -smp 1 \
+	    -smp $(QEMU_SMP) \
 		$(QEMU_SNAPSHOT) \
 		$(QEMU_STORAGE_ARGS) \
 		-no-reboot \

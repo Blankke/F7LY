@@ -55,7 +55,10 @@ kernelvec:
 
         // restore register
         ld.d $ra, $sp, 0
-        // not this, in case we moved CPUs: ld.d $tp, $sp, 8
+        // 必须恢复被中断现场的 tp。内核处理阶段已经通过 CSR_CPUID 获取当前
+        // CPU，返回用户态时 tp 则可能是 TLS 指针；若遗漏恢复，userret 尾部
+        // 被中断后会把 CPU 编号错误带回用户态，破坏 libc 的线程局部状态。
+        ld.d $tp, $sp, 8
         ld.d $sp, $sp, 16
         ld.d $a0, $sp, 24
         ld.d $a1, $sp, 32

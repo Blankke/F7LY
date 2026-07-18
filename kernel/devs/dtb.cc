@@ -339,6 +339,149 @@ int DtbManager::get_memory_regions(DtbMemoryRegion *regions, int max_regions)
     return stored;
 }
 
+int DtbManager::get_cpu_hartids(uint64 *hartids, int max_harts)
+{
+    if (hartids == nullptr || max_harts <= 0)
+    {
+        return 0;
+    }
+
+    FdtCursor cursor{};
+    if (!load_fdt_cursor(_dtb_addr, cursor))
+    {
+        return 0;
+    }
+
+    char *p = cursor.struct_base;
+    char *struct_end = cursor.struct_base + cursor.struct_size;
+    int depth = 0;
+    int cpus_depth = -1;
+    int cpus_addr_cells = 1;
+    int cpu_depth = -1;
+    bool cpu_name_matches = false;
+    bool cpu_device_type_matches = false;
+    bool cpu_enabled = true;
+    bool cpu_hartid_valid = false;
+    uint64 cpu_hartid = 0;
+    int found = 0;
+
+    while (p < struct_end)
+    {
+        while (((uint64)p % 4) != 0)
+        {
+            ++p;
+        }
+
+        const uint32 token = read_fdt_u32(p);
+        p += 4;
+        if (token == FDT_END)
+        {
+            break;
+        }
+
+        if (token == FDT_BEGIN_NODE)
+        {
+            char *name = p;
+            p += strlen(name) + 1;
+
+            if (depth == 1 && strcmp(name, "cpus") == 0)
+            {
+                cpus_depth = depth;
+                cpus_addr_cells = 1;
+            }
+            else if (cpus_depth >= 0 && depth == cpus_depth + 1)
+            {
+                cpu_depth = depth;
+                cpu_name_matches = strncmp(name, "cpu@", 4) == 0;
+                cpu_device_type_matches = false;
+                cpu_enabled = true;
+                cpu_hartid_valid = false;
+                cpu_hartid = 0;
+            }
+
+            ++depth;
+            continue;
+        }
+
+        if (token == FDT_END_NODE)
+        {
+            --depth;
+            if (cpu_depth == depth)
+            {
+                if ((cpu_name_matches || cpu_device_type_matches) && cpu_enabled && cpu_hartid_valid)
+                {
+                    bool duplicate = false;
+                    for (int index = 0; index < found && index < max_harts; ++index)
+                    {
+                        if (hartids[index] == cpu_hartid)
+                        {
+                            duplicate = true;
+                            break;
+                        }
+                    }
+                    if (!duplicate && found < max_harts)
+                    {
+                        hartids[found++] = cpu_hartid;
+                    }
+                }
+                cpu_depth = -1;
+            }
+            if (cpus_depth == depth)
+            {
+                cpus_depth = -1;
+            }
+            continue;
+        }
+
+        if (token == FDT_NOP)
+        {
+            continue;
+        }
+        if (token != FDT_PROP)
+        {
+            break;
+        }
+
+        const uint32 len = read_fdt_u32(p);
+        p += 4;
+        const uint32 nameoff = read_fdt_u32(p);
+        p += 4;
+        char *prop_name = cursor.strings_base + nameoff;
+        char *prop_val = p;
+        p += len;
+
+        // /cpus 节点本身的地址单元数决定子 cpu@ 节点 reg 的编码宽度。
+        if (cpus_depth >= 0 && depth == cpus_depth + 1 &&
+            strcmp(prop_name, "#address-cells") == 0 && len >= 4)
+        {
+            cpus_addr_cells = static_cast<int>(read_fdt_u32(prop_val));
+            continue;
+        }
+
+        if (cpu_depth < 0 || depth != cpu_depth + 1)
+        {
+            continue;
+        }
+
+        if (strcmp(prop_name, "device_type") == 0)
+        {
+            cpu_device_type_matches = len >= 3 && strncmp(prop_val, "cpu", 3) == 0;
+        }
+        else if (strcmp(prop_name, "status") == 0)
+        {
+            cpu_enabled = (len >= 2 && strncmp(prop_val, "ok", 2) == 0);
+        }
+        else if (strcmp(prop_name, "reg") == 0 && cpus_addr_cells > 0 &&
+                 len >= static_cast<uint32>(cpus_addr_cells * 4))
+        {
+            cpu_hartid = read_fdt_cells(prop_val, cpus_addr_cells);
+            cpu_hartid_valid = true;
+        }
+    }
+
+    return found;
+}
+
 bool DtbManager::get_initrd(uint64& start, uint64& end) {
     if (!_dtb_addr) {
         // printfRed("[DTB] Not initialized!\n");

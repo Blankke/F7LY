@@ -3965,6 +3965,7 @@ namespace syscall
         BIND_SYSCALL(getsid);  // 新增: get session id
         BIND_SYSCALL(uname);
         BIND_SYSCALL(getrusage); // todo
+        BIND_SYSCALL(getcpu);
         BIND_SYSCALL(gettimeofday);
         BIND_SYSCALL(getpid);
         BIND_SYSCALL(getppid);
@@ -4156,7 +4157,7 @@ namespace syscall
         }
         else
         {
-            // 调用对应的系统调用函数
+            // 调用对应的系统调用函数。
             uint64 ret = (this->*_syscall_funcs[sys_num])();
             mem::PageTable *pt = p->get_pagetable();
             if (pt != nullptr && !is_sane_user_pagetable_base(pt->get_base()))
@@ -13171,15 +13172,19 @@ namespace syscall
             }
         }
 
-        // 获取CPU亲和性掩码
-        const CpuMask &cpu_mask = target_proc->get_cpu_mask();
-
-        // printfCyan("[sys_sched_getaffinity] cpu_mask bits: %lx\n", cpu_mask.bits);
-        // printfCyan("[sys_sched_getaffinity] sizeof(CpuMask): %lu\n", sizeof(CpuMask));
-
         // 将CPU掩码拷贝到用户空间
         proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
+        if (current_proc == nullptr || current_proc->get_pagetable() == nullptr)
+        {
+            return SYS_ESRCH;
+        }
         mem::PageTable *pt = current_proc->get_pagetable();
+
+        // affinity 可能被另一线程同时修改，读取时与 setaffinity 使用同一把 PCB 锁。
+        // 对用户态只导出已经完成本地初始化的 CPU，和 /sys/.../online 保持一致。
+        target_proc->_lock.acquire();
+        CpuMask cpu_mask{target_proc->get_cpu_mask().bits & Cpu::online_cpu_mask()};
+        target_proc->_lock.release();
 
         // Linux 会清空用户提供的 cpuset 缓冲区中内核未使用的部分。
         // 只写入有效掩码字节会把用户缓冲区的旧位暴露给调用者，使不可用 CPU
@@ -13208,6 +13213,43 @@ namespace syscall
         // Linux 原始 syscall 成功时返回内核 cpumask 的字节数，libc API 再把它规整成 0。
         // 直接使用 raw syscall 的用户态会依赖这个返回值推导掩码容量。
         return sizeof(CpuMask);
+    }
+    uint64 SyscallHandler::sys_getcpu()
+    {
+        uint64 cpu_addr = 0;
+        uint64 node_addr = 0;
+        uint64 cache_addr = 0;
+        if (_arg_addr(0, cpu_addr) < 0 || _arg_addr(1, node_addr) < 0 ||
+            _arg_addr(2, cache_addr) < 0)
+        {
+            return SYS_EFAULT;
+        }
+        if (cpu_addr == 0)
+        {
+            // Linux ABI 的第一个参数是必填输出指针；NUMA node 与缓存描述符
+            // 可以为 NULL。本内核当前只有单 NUMA node，cache 参数无需写入。
+            return SYS_EFAULT;
+        }
+
+        proc::Pcb *current = proc::k_pm.get_cur_pcb();
+        if (current == nullptr || current->get_pagetable() == nullptr)
+        {
+            return SYS_ESRCH;
+        }
+
+        const uint32 cpu_id = static_cast<uint32>(Cpu::current_cpu_id());
+        const uint32 node_id = 0;
+        mem::PageTable *pt = current->get_pagetable();
+        if (mem::k_vmm.copy_out(*pt, cpu_addr, &cpu_id, sizeof(cpu_id)) < 0)
+        {
+            return SYS_EFAULT;
+        }
+        if (node_addr != 0 && mem::k_vmm.copy_out(*pt, node_addr, &node_id, sizeof(node_id)) < 0)
+        {
+            return SYS_EFAULT;
+        }
+        (void)cache_addr;
+        return 0;
     }
     uint64 SyscallHandler::sys_getrusage()
     {
@@ -18200,19 +18242,32 @@ namespace syscall
             return SYS_EFAULT;
         }
 
-        constexpr uint64 k_single_cpu_affinity_mask = 0x1;
-        if (requested.bits != k_single_cpu_affinity_mask)
+        // 允许绑定到本次启动中 DTB 声明的任意 CPU。这里使用 possible 而不是
+        // online，是为了覆盖主核已经开始运行用户态、次核仍处于启动 gate 的极短
+        // 窗口：任务可以先完成绑定，次核宣布 online 后由调度器接手运行。
+        const uint64 possible_mask = Cpu::possible_cpu_mask();
+        const uint64 effective_mask = requested.bits & possible_mask;
+        if (effective_mask == 0)
             return SYS_EINVAL;
 
-        // 当前内核是单核，但 Linux ABI 仍允许把 tid 作为 affinity 目标。
-        // 只接受 CPU0 掩码，定位到目标 task 后保存统一的 CpuMask。
+        // Linux ABI 允许把 tid 作为 affinity 目标；pthread_setaffinity_np() 正是
+        // 通过这个路径给不同工作线程分配不同 CPU。
         proc::Pcb *target = pid == 0 ? current : proc::k_capability.find_live_task_by_pid_or_tid(pid);
         if (target == nullptr)
             return SYS_ESRCH;
 
         target->_lock.acquire();
-        target->set_cpu_mask(CpuMask{k_single_cpu_affinity_mask});
+        target->set_cpu_mask(CpuMask{effective_mask});
         target->_lock.release();
+
+        // 当前任务若刚被排除出正在执行的 CPU，不能等下一个 tick 才迁移；
+        // sched_setaffinity(0, ...) 成功返回后，用户态马上调用 getcpu() 时
+        // 必须已经落在新掩码允许的 CPU 上。远端运行任务仍会由其下一次时钟
+        // 抢占重新入队；本核任务则在这里同步让出并由亲和性筛选后的调度器接管。
+        if (target == current && (effective_mask & (1ULL << Cpu::current_cpu_id())) == 0)
+        {
+            proc::k_scheduler.yield();
+        }
         return 0;
     }
     uint64 SyscallHandler::sys_sigaltstack()

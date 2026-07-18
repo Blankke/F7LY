@@ -152,6 +152,36 @@ namespace fs
         }
     };
 
+    // /sys/devices/system/cpu 与 node0/cpu* 需要随次核实际上线而变化，不能在
+    // VFS 初始化时固化成单核文本。所有内容均由 Cpu 的 possible/online 掩码派生，
+    // 保证用户态看到的拓扑和调度器使用的是同一份事实来源。
+    enum class CpuTopologyContent
+    {
+        OnlineList,
+        PossibleList,
+        KernelMax,
+        PerCpuOnline,
+        NodeCpuList,
+        NodeCpuMap,
+    };
+
+    class CpuTopologyProvider : public VirtualContentProvider
+    {
+    private:
+        CpuTopologyContent _content;
+        uint64 _cpu_id;
+
+    public:
+        explicit CpuTopologyProvider(CpuTopologyContent content, uint64 cpu_id = 0)
+            : _content(content), _cpu_id(cpu_id) {}
+
+        virtual eastl::string generate_content() override;
+        virtual bool is_dynamic() const override { return true; }
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<CpuTopologyProvider>(_content, _cpu_id);
+        }
+    };
+
     // /proc/meminfo 内容提供者
     class ProcMeminfoProvider : public VirtualContentProvider
     {
@@ -168,6 +198,7 @@ namespace fs
     {
     public:
         virtual eastl::string generate_content() override;
+        virtual bool is_dynamic() const override { return true; }
         virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
             return eastl::make_unique<ProcCpuinfoProvider>();
         }

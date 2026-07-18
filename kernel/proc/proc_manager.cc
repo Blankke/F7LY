@@ -1183,8 +1183,12 @@ namespace proc
                 p->_io_priority_override = default_proc_prio;
                 p->_has_io_priority_override = false;
 
-                // 初始化CPU亲和性掩码：默认可以在任何CPU上运行
-                p->_cpu_mask.fill();
+                // 新任务默认可在本次启动中 DTB 声明的全部 CPU 上运行，而不是
+                // 编译期 NCPU 容量中的虚构 CPU。次核尚在启动 gate 时也允许预先
+                // 绑定，待其 online 后即可被调度。
+                const uint64 possible_mask = Cpu::possible_cpu_mask();
+                p->_cpu_mask = CpuMask{possible_mask != 0 ? possible_mask : 1};
+                p->_last_cpu = 0;
 
 	                /****************************************************************************************
 	                 * 内存管理初始化
@@ -1423,8 +1427,10 @@ namespace proc
                 p->_has_io_priority_override = false;
                 p->_used_fpu = false;
 
-        // 重新初始化CPU亲和性掩码：默认可以在任何CPU上运行
-        p->_cpu_mask.fill();
+        // PCB 复用后重新收敛到当前启动拓扑，避免历史任务把不存在的 CPU 位带给新任务。
+        const uint64 possible_mask = Cpu::possible_cpu_mask();
+        p->_cpu_mask = CpuMask{possible_mask != 0 ? possible_mask : 1};
+        p->_last_cpu = 0;
 
         /****************************************************************************************
          * 文件系统和I/O管理清理
@@ -2398,6 +2404,14 @@ namespace proc
         memcpy(np->_cap_ambient, p->_cap_ambient, sizeof(np->_cap_ambient));
         memcpy(np->_cap_bounding, p->_cap_bounding, sizeof(np->_cap_bounding));
         np->_priority = p->_priority;
+        // Linux fork()/clone() 继承父任务的 CPU affinity；线程库会在此基础上
+        // 再通过 sched_setaffinity() 给工作线程做显式分配。虽然可运行掩码
+        // 必须继承，但新任务还没有最近运行核，不能把它一律塞回父线程所在
+        // CPU：pthread 批量创建时会先在同一核堆积，直到子线程有机会调用
+        // setaffinity 才扩散。这里用 scheduler 的轮转初始放置为其分配 home
+        // CPU，随后常规粘附策略保持缓存/页表局部性。
+        np->_cpu_mask = p->_cpu_mask;
+        np->_last_cpu = k_scheduler.select_initial_cpu(np->_cpu_mask, p->_last_cpu);
         np->_sched_policy = p->_sched_policy;
         np->_sched_priority = p->_sched_priority;
         np->_sched_reset_on_fork = p->_sched_reset_on_fork;

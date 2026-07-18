@@ -1,6 +1,11 @@
 #include "user.hh"
 #include "fuckyou.hh"
 
+// 标准 Alpine rootfs 使用 /bin/busybox；评测 sdcard 则把 BusyBox 放在
+// /musl/busybox。shell 调试入口同时兼容两种只读根文件系统，避免为了单测
+// 多核路径而改写评测镜像。
+static const char *g_shell_binary = "/bin/busybox";
+
 static bool path_exists(const char *path)
 {
     int fd = openat(AT_FDCWD, path, O_RDONLY);
@@ -71,9 +76,17 @@ static bool init_shell_environment()
 {
     // shell 模式现在直接挂载 rootfs，不能再假设 /musl /glibc /fat32 这些评测盘目录存在。
     // 这里在进入 shell 前做最小存在性校验，便于快速判断镜像是否挂对。
-    if (!path_exists("/bin/busybox"))
+    if (path_exists("/bin/busybox"))
     {
-        printf("[shell] 缺少 /bin/busybox，当前根文件系统不像是可交互 rootfs\n");
+        g_shell_binary = "/bin/busybox";
+    }
+    else if (path_exists("/musl/busybox"))
+    {
+        g_shell_binary = "/musl/busybox";
+    }
+    else
+    {
+        printf("[shell] 缺少 /bin/busybox 和 /musl/busybox，当前根文件系统不像是可交互 rootfs\n");
         return false;
     }
     enter_shell_workdir();
@@ -86,7 +99,7 @@ extern "C"
     {
         char *envp[] = {
             // rootfs 使用标准 FHS 目录，PATH/库路径也按常规 Linux 布局设置。
-            (char *)"PATH=/bin:/sbin:/usr/bin:/usr/sbin",
+            (char *)"PATH=/bin:/sbin:/usr/bin:/usr/sbin:/musl",
             (char *)"LD_LIBRARY_PATH=/lib:/usr/lib",
             (char *)"HOME=/root",
             (char *)"PWD=/root",
@@ -117,8 +130,9 @@ extern "C"
             (char *)"-i",
             0,
         };
-        // rootfs 沿用标准 /bin/busybox 布局，交互式 shell 直接从这里进入。
-        int shell_ret = run_foreground("/bin/busybox", shell_argv, envp, "/root");
+        // init_shell_environment() 已经选择了 /root 或 / 作为当前目录；子进程直接
+        // 继承即可。评测 sdcard 没有 /root，不能在这里再次强制 chdir("/root")。
+        int shell_ret = run_foreground(g_shell_binary, shell_argv, envp);
         printfMagenta("#### F7LY INTERACTIVE SHELL END ret=%d ####\n", shell_ret);
         print_goodbye();
 

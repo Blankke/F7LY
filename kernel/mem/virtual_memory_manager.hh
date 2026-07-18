@@ -29,6 +29,15 @@ namespace mem
 	public:
 		VirtualMemoryManager() {};
 		void init( const char *lock_name );
+		// 内核页表由引导核一次性建立，但地址翻译寄存器属于每个 CPU。
+		// 次核放行后必须调用此函数，才能安全访问内核高地址栈、用户陷阱页和
+		// 其它通过内核页表映射的全局对象。
+		void activate_kernel_pagetable();
+		// 页表层级的创建和保留高地址映射会修改共享页表。SMP 下 CLONE_VM
+		// 线程可同时从 trap 返回，调用方需用这把自旋锁串行化“检查后建表”的
+		// 临界区，避免两个 CPU 各自分配下级页表后互相覆盖父级 PTE。
+		void lock_page_table_updates();
+		void unlock_page_table_updates();
 		/// @brief map va to pa through pt 
 		/// @param pt pagetable to use 
 		/// @param va virtual address 

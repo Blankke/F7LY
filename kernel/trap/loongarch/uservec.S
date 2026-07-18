@@ -18,14 +18,14 @@ uservec:
         # user page table.
         #
         # CSR.SAVE points to where the process's p->trapframe is
-        # mapped into user space, at TRAPFRAME.
+        # mapped into user space at a per-thread virtual address.
         #
 
 	# swap a0 and SAVE
-        # so that a0 is TRAPFRAME
+        # so that a0 is the current thread's trapframe address
         csrwr  $a0, LOONGARCH_CSR_SAVE0
 
-        # save the user registers in TRAPFRAME
+        # save the user registers in the current thread's trapframe
         st.d   $ra, $a0, 0
         st.d   $tp, $a0, 8
         st.d   $sp, $a0, 16
@@ -139,28 +139,24 @@ uservec:
         invtlb 0x0,$zero,$zero
 	    li.d   $fp, 0
 
-DBG_BREAK_READ_ESTAT:
-	    # csrrd  $a0, 0x5		# read estat 
-
-            # 正常用户态 trap 一旦成功落到 uservec，就把返回窗口残留的 scratch CSR 清掉。
-            # 后面如果还在 kernelvec 上炸，并且 SAVE1/SAVE2 仍然不是 0，
-            # 就说明这次根本没经过 uservec。
-            li.d   $t1, 0
-            li.d   $t2, 0
-            csrwr  $t1, LOONGARCH_CSR_SAVE1
-            csrwr  $t2, LOONGARCH_CSR_SAVE2
-
 	    # jump to usertrap(), which does not return
 	    jirl   $zero ,$t0, 0
 
 .globl userret
 userret:
-        # userret(TRAPFRAME, pagetable, used_fpu)
+        # userret(trapframe_va, pagetable, used_fpu, kernel_trapframe)
         # switch from kernel to user.
         # usertrapret() calls here.
-        # a0: TRAPFRAME, in user page table.
+        # a0: current thread's trapframe VA, in user page table.
         # a1: user page table, for pgdl.
         # a2: whether this thread has enabled user FPU state.
+        # a3: current thread trapframe's kernel direct-map address.
+        #
+        # CLONE_VM 线程共享用户 PGDL。即便每个线程有专属 trapframe VA，
+        # 在切换 PGDL 与 TLB refill 的极窄窗口里，也不应让“恢复用户寄存器”
+        # 依赖这个用户虚拟翻译：一旦命中历史翻译，a0/s 寄存器会一起恢复为
+        # 另一个现场。a0 仍只用于保存下一次 uservec 所需的专属 VA；所有实际
+        # trapframe 读取均通过 a3 的内核直映地址完成。
 
         # switch to the user page table.
         csrwr  $a1, LOONGARCH_CSR_PGDL
@@ -178,42 +174,49 @@ userret:
 4:
         csrwr  $t0, LOONGARCH_CSR_EUEN
 
-        # put the saved user a0 in SAVE0, so we
-        # can swap it with our a0 (TRAPFRAME) in the last step.
-        ld.d   $t0, $a0, 24
-        csrwr  $t0, LOONGARCH_CSR_SAVE0
+        # a0 进入时是本线程的 user trapframe VA。下一次从用户态陷入时，
+        # uservec 需要在 SAVE0 中拿到这个地址；但系统调用返回值不能再绕经
+        # SAVE0 暂存：调度期间该 CSR 会被同核其它任务用于自己的 trap 入口，
+        # 读取旧值再交换回来会把不属于当前线程的 a0 带回用户态。
+        #
+        # 先从当前 trapframe 读取用户 a0 到 t0，再把 VA 写入 SAVE0，随后把
+        # a0 直接恢复为 t0。t0 保留到所有其它寄存器恢复完成后才还原，因此
+        # 这里不依赖 SAVE0 先前保存的任何值。
+        ld.d   $t0, $a3, 24
+        csrwr  $a0, LOONGARCH_CSR_SAVE0
+        addi.d $a0, $t0, 0
 
-        # restore all but a0 from TRAPFRAME
-        ld.d   $ra, $a0, 0
-        ld.d   $tp, $a0, 8
-        ld.d   $sp, $a0, 16
-        ld.d   $a1, $a0, 32
-        ld.d   $a2, $a0, 40
-        ld.d   $a3, $a0, 48
-        ld.d   $a4, $a0, 56
-        ld.d   $a5, $a0, 64
-        ld.d   $a6, $a0, 72
-        ld.d   $a7, $a0, 80
-        ld.d   $t0, $a0, 88
-        ld.d   $t1, $a0, 96
-        ld.d   $t2, $a0, 104
-        ld.d   $t3, $a0, 112
-        ld.d   $t4, $a0, 120
-        ld.d   $t5, $a0, 128
-        ld.d   $t6, $a0, 136
-        ld.d   $t7, $a0, 144
-        ld.d   $t8, $a0, 152
-        ld.d   $r21, $a0,160
-        ld.d   $fp, $a0, 168
-        ld.d   $s0, $a0, 176
-        ld.d   $s1, $a0, 184
-        ld.d   $s2, $a0, 192
-        ld.d   $s3, $a0, 200
-        ld.d   $s4, $a0, 208
-        ld.d   $s5, $a0, 216
-        ld.d   $s6, $a0, 224
-        ld.d   $s7, $a0, 232
-        ld.d   $s8, $a0, 240
+        # restore all but a0 from the current thread's trapframe
+        ld.d   $ra, $a3, 0
+        ld.d   $tp, $a3, 8
+        ld.d   $sp, $a3, 16
+        ld.d   $a1, $a3, 32
+        ld.d   $a2, $a3, 40
+        # a3 同时是内核直映 trapframe 基址，必须最后恢复用户 a3。
+        ld.d   $a4, $a3, 56
+        ld.d   $a5, $a3, 64
+        ld.d   $a6, $a3, 72
+        ld.d   $a7, $a3, 80
+        ld.d   $t0, $a3, 88
+        ld.d   $t1, $a3, 96
+        ld.d   $t2, $a3, 104
+        ld.d   $t3, $a3, 112
+        ld.d   $t4, $a3, 120
+        ld.d   $t5, $a3, 128
+        ld.d   $t6, $a3, 136
+        ld.d   $t7, $a3, 144
+        ld.d   $t8, $a3, 152
+        ld.d   $r21, $a3,160
+        ld.d   $fp, $a3, 168
+        ld.d   $s0, $a3, 176
+        ld.d   $s1, $a3, 184
+        ld.d   $s2, $a3, 192
+        ld.d   $s3, $a3, 200
+        ld.d   $s4, $a3, 208
+        ld.d   $s5, $a3, 216
+        ld.d   $s6, $a3, 224
+        ld.d   $s7, $a3, 232
+        ld.d   $s8, $a3, 240
 
         # 懒 FPU：usertrapret() 已经按当前线程的 _used_fpu 设置 EUEN.FPE。
         # 没用过浮点的线程直接跳过恢复，让首次浮点指令触发 FPD 异常后再启用。
@@ -221,63 +224,63 @@ userret:
         andi   $t0, $t0, 0x1
         beqz   $t0, 2f
 
-        fld.d  $f0,  $a0, 288
-        fld.d  $f1,  $a0, 296
-        fld.d  $f2,  $a0, 304
-        fld.d  $f3,  $a0, 312
-        fld.d  $f4,  $a0, 320
-        fld.d  $f5,  $a0, 328
-        fld.d  $f6,  $a0, 336
-        fld.d  $f7,  $a0, 344
-        fld.d  $f8,  $a0, 352
-        fld.d  $f9,  $a0, 360
-        fld.d  $f10, $a0, 368
-        fld.d  $f11, $a0, 376
-        fld.d  $f12, $a0, 384
-        fld.d  $f13, $a0, 392
-        fld.d  $f14, $a0, 400
-        fld.d  $f15, $a0, 408
-        fld.d  $f16, $a0, 416
-        fld.d  $f17, $a0, 424
-        fld.d  $f18, $a0, 432
-        fld.d  $f19, $a0, 440
-        fld.d  $f20, $a0, 448
-        fld.d  $f21, $a0, 456
-        fld.d  $f22, $a0, 464
-        fld.d  $f23, $a0, 472
-        fld.d  $f24, $a0, 480
-        fld.d  $f25, $a0, 488
-        fld.d  $f26, $a0, 496
-        fld.d  $f27, $a0, 504
-        fld.d  $f28, $a0, 512
-        fld.d  $f29, $a0, 520
-        fld.d  $f30, $a0, 528
-        fld.d  $f31, $a0, 536
-        ld.d   $t0, $a0, 544
+        fld.d  $f0,  $a3, 288
+        fld.d  $f1,  $a3, 296
+        fld.d  $f2,  $a3, 304
+        fld.d  $f3,  $a3, 312
+        fld.d  $f4,  $a3, 320
+        fld.d  $f5,  $a3, 328
+        fld.d  $f6,  $a3, 336
+        fld.d  $f7,  $a3, 344
+        fld.d  $f8,  $a3, 352
+        fld.d  $f9,  $a3, 360
+        fld.d  $f10, $a3, 368
+        fld.d  $f11, $a3, 376
+        fld.d  $f12, $a3, 384
+        fld.d  $f13, $a3, 392
+        fld.d  $f14, $a3, 400
+        fld.d  $f15, $a3, 408
+        fld.d  $f16, $a3, 416
+        fld.d  $f17, $a3, 424
+        fld.d  $f18, $a3, 432
+        fld.d  $f19, $a3, 440
+        fld.d  $f20, $a3, 448
+        fld.d  $f21, $a3, 456
+        fld.d  $f22, $a3, 464
+        fld.d  $f23, $a3, 472
+        fld.d  $f24, $a3, 480
+        fld.d  $f25, $a3, 488
+        fld.d  $f26, $a3, 496
+        fld.d  $f27, $a3, 504
+        fld.d  $f28, $a3, 512
+        fld.d  $f29, $a3, 520
+        fld.d  $f30, $a3, 528
+        fld.d  $f31, $a3, 536
+        ld.d   $t0, $a3, 544
         movgr2fcsr $fcsr0, $t0
-        ld.d   $t0, $a0, 552
+        ld.d   $t0, $a3, 552
         movgr2cf $fcc0, $t0
-        ld.d   $t0, $a0, 560
+        ld.d   $t0, $a3, 560
         movgr2cf $fcc1, $t0
-        ld.d   $t0, $a0, 568
+        ld.d   $t0, $a3, 568
         movgr2cf $fcc2, $t0
-        ld.d   $t0, $a0, 576
+        ld.d   $t0, $a3, 576
         movgr2cf $fcc3, $t0
-        ld.d   $t0, $a0, 584
+        ld.d   $t0, $a3, 584
         movgr2cf $fcc4, $t0
-        ld.d   $t0, $a0, 592
+        ld.d   $t0, $a3, 592
         movgr2cf $fcc5, $t0
-        ld.d   $t0, $a0, 600
+        ld.d   $t0, $a3, 600
         movgr2cf $fcc6, $t0
-        ld.d   $t0, $a0, 608
+        ld.d   $t0, $a3, 608
         movgr2cf $fcc7, $t0
 2:
         # 上面的 EUEN 检查和 FCSR/FCC 恢复使用了 $t0 作为 scratch；
         # 返回前必须还原用户 $t0。
-        ld.d   $t0, $a0, 88
+        ld.d   $t0, $a3, 88
 
-	# restore user a0, and save TRAPFRAME in SAVE0
-        csrwr  $a0, LOONGARCH_CSR_SAVE0
+        # 最后才恢复用户 a3，之后不再需要内核直映 trapframe 基址。
+        ld.d   $a3, $a3, 48
 
         # return to user mode and user pc.
         # usertrapret() set up prmd and era.

@@ -18,7 +18,9 @@ namespace proc
     interval_timer_snapshot read_interval_timer(Pcb *p, int which);
     void set_interval_timer(Pcb *p, int which, uint64 value_us, uint64 interval_us,
                             interval_timer_snapshot *old_timer);
-    void check_interval_timers(Pcb *current_proc);
+    // 真实时间定时器必须只由全局 timekeeper CPU 扫描；每个 CPU 则独立推进
+    // 当前任务的 VIRTUAL/PROF 定时器，避免 SMP 下重复投递或漏算远端线程。
+    void check_interval_timers(Pcb *current_proc, bool check_realtime = true);
 } // namespace proc
 
 // 扩展的定时器结构体定义

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <EASTL/string.h>
+#include "hal/cpu.hh"
 
 struct cpuinfo
 {
@@ -35,10 +36,26 @@ struct cpuinfo
     eastl::string power_management = "";
 };
 
-inline eastl::string get_cpuinfo()
+inline eastl::string cpuinfo_unsigned_decimal(uint64 value)
 {
-    cpuinfo info;
     eastl::string result;
+    char digits[32];
+    int length = 0;
+    do
+    {
+        digits[length++] = static_cast<char>('0' + value % 10);
+        value /= 10;
+    } while (value != 0);
+
+    while (length > 0)
+    {
+        result += digits[--length];
+    }
+    return result;
+}
+
+inline void append_cpuinfo_entry(eastl::string &result, const cpuinfo &info)
+{
 
     result += "processor: " + info.processor + "\n";
     result += "vendor_id: " + info.vendor_id + "\n";
@@ -67,6 +84,47 @@ inline eastl::string get_cpuinfo()
     result += "cache_alignment: " + info.cache_alignment + "\n";
     result += "address sizes: " + info.address_sizes + "\n";
     result += "power management: " + info.power_management + "\n";
+}
+
+inline eastl::string get_cpuinfo()
+{
+    eastl::string result;
+    uint64 visible_mask = Cpu::online_cpu_mask();
+    if (visible_mask == 0)
+    {
+        // 仅在极早期启动窗口兜底；正常用户态运行时必须只报告已经 online 的 CPU。
+        visible_mask = Cpu::possible_cpu_mask();
+    }
+
+    int visible_count = 0;
+    for (uint64 cpu_id = 0; cpu_id < NCPU; ++cpu_id)
+    {
+        if ((visible_mask & (1ULL << cpu_id)) != 0)
+        {
+            ++visible_count;
+        }
+    }
+
+    for (uint64 cpu_id = 0; cpu_id < NCPU; ++cpu_id)
+    {
+        if ((visible_mask & (1ULL << cpu_id)) == 0)
+        {
+            continue;
+        }
+
+        cpuinfo info;
+        const eastl::string cpu_id_text = cpuinfo_unsigned_decimal(cpu_id);
+        const eastl::string cpu_count_text = cpuinfo_unsigned_decimal(visible_count);
+        info.processor = cpu_id_text;
+        info.siblings = cpu_count_text;
+        info.core_id = cpu_id_text;
+        info.cpu_cores = cpu_count_text;
+        info.apicid = cpu_id_text;
+        info.initial_apicid = cpu_id_text;
+
+        append_cpuinfo_entry(result, info);
+        result += "\n";
+    }
 
     return result;
 }

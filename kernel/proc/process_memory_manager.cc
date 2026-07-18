@@ -388,7 +388,7 @@ namespace proc
             {
                 return false;
             }
-            if (start >= TRAPFRAME || end > TRAPFRAME)
+            if (start >= USER_MEMORY_TOP || end > USER_MEMORY_TOP)
             {
                 return false;
             }
@@ -455,7 +455,7 @@ namespace proc
             {
                 return false;
             }
-            if (start >= MAXVA || end > MAXVA)
+            if (start >= USER_MEMORY_TOP || end > USER_MEMORY_TOP)
             {
                 return false;
             }
@@ -1408,7 +1408,7 @@ namespace proc
         }
         reset_mmap_cursor(minimum_start);
 
-        uint64 upper_bound = TRAPFRAME;
+        uint64 upper_bound = USER_MEMORY_TOP;
         if (upper_bound > k_mmap_upper_guard)
         {
             upper_bound -= k_mmap_upper_guard;
@@ -1466,7 +1466,7 @@ namespace proc
 
         uint64 range_start = PGROUNDDOWN(start);
         uint64 range_end = PGROUNDUP(start + size);
-        if (range_end < range_start || range_start >= TRAPFRAME || range_end > TRAPFRAME)
+        if (range_end < range_start || range_start >= USER_MEMORY_TOP || range_end > USER_MEMORY_TOP)
         {
             printfRed("ProcessMemoryManager: ensure_user_pagetable_hierarchy invalid range [%p, %p)\n",
                       (void *)range_start, (void *)range_end);
@@ -1506,7 +1506,7 @@ namespace proc
             return;
         }
 
-        for (uint64 va = va_start; va < va_end && va < TRAPFRAME; va += PGSIZE)
+        for (uint64 va = va_start; va < va_end && va < USER_MEMORY_TOP; va += PGSIZE)
         {
             uint64 probe = va < entry.addr ? entry.addr : va;
             if (probe >= entry.end_addr())
@@ -1715,7 +1715,7 @@ namespace proc
             return current_end; // 无需扩展
         }
 
-        uint64 heap_limit = TRAPFRAME;
+        uint64 heap_limit = USER_MEMORY_TOP;
         if (heap_limit > k_mmap_guard_gap)
         {
             heap_limit -= k_mmap_guard_gap;
@@ -2476,7 +2476,12 @@ namespace proc
 #ifdef RISCV
         mem::k_vmm.vmunmap(pt, TRAMPOLINE, 1, 0);
 #endif
-        mem::k_vmm.vmunmap(pt, TRAPFRAME, 1, 0); // 有可能没有映射
+        // 每个 PCB 槽位在共享地址空间中都有一页独立 trapframe 映射。
+        // 页表即将释放，逐个拆掉可避免 freewalk 遗留叶子映射。
+        for (uint gid = 0; gid < num_process; ++gid)
+        {
+            mem::k_vmm.vmunmap(pt, USER_TRAPFRAME(gid), 1, 0);
+        }
         mem::k_vmm.vmunmap(pt, SIG_TRAMPOLINE, 1, 0);
 
         pt.freewalk();
@@ -2496,20 +2501,20 @@ namespace proc
         va_start = PGROUNDDOWN(va_start);
         va_end = PGROUNDUP(va_end);
 
-        // 用户态普通映射绝不能触碰 trapframe / signal trampoline / trampoline 这段保留区。
+        // 用户态普通映射绝不能触碰每线程 trapframe / signal trampoline / trampoline 保留区。
         // 如果上层把长度、VMA 或堆边界算错了，这里至少要把错误限制在普通用户区，
         // 不能因为一次错误的 munmap 把整个进程返回用户态所依赖的固定映射拆掉。
-        if (va_start >= TRAPFRAME)
+        if (va_start >= USER_MEMORY_TOP)
         {
             printf("\33[1;31mProcessMemoryManager: safe_vmunmap 请求进入保留区，已拒绝 start=%p end=%p\33[0m\n",
                    (void *)va_start, (void *)va_end);
             return;
         }
-        if (va_end > TRAPFRAME)
+        if (va_end > USER_MEMORY_TOP)
         {
             printf("\33[1;31mProcessMemoryManager: safe_vmunmap 请求跨越保留区，自动截断 start=%p end=%p -> %p\33[0m\n",
-                   (void *)va_start, (void *)va_end, (void *)TRAPFRAME);
-            va_end = TRAPFRAME;
+                   (void *)va_start, (void *)va_end, (void *)USER_MEMORY_TOP);
+            va_end = USER_MEMORY_TOP;
         }
         if (va_start >= va_end)
         {
@@ -2552,13 +2557,13 @@ namespace proc
             return;
         }
 
-        if (va_start >= TRAPFRAME)
+        if (va_start >= USER_MEMORY_TOP)
         {
             return;
         }
-        if (va_end > TRAPFRAME)
+        if (va_end > USER_MEMORY_TOP)
         {
-            va_end = TRAPFRAME;
+            va_end = USER_MEMORY_TOP;
         }
 
         // 匿名私有映射如果已经有 resident overlay，就只拆真正 fault 过的页；
@@ -2578,7 +2583,7 @@ namespace proc
                 }
 
                 uint64 va = base + overlay_entry.first * PGSIZE;
-                if (va < base || va >= entry.end_addr() || va >= TRAPFRAME ||
+                if (va < base || va >= entry.end_addr() || va >= USER_MEMORY_TOP ||
                     va < request_start || va >= request_end)
                 {
                     continue;
@@ -2743,7 +2748,12 @@ namespace proc
 #ifdef RISCV
         mem::k_vmm.vmunmap(pagetable, TRAMPOLINE, 1, 0);
 #endif
-        // 注意：trapframe映射由usertrapret管理，这里不需要显式取消映射
+        // 失败的 exec 加载也可能已经让共享页表中的线程返回过用户态；
+        // 清理所有固定槽位，避免 freewalk 留下 trapframe 叶子映射。
+        for (uint gid = 0; gid < num_process; ++gid)
+        {
+            mem::k_vmm.vmunmap(pagetable, USER_TRAPFRAME(gid), 1, 0);
+        }
         mem::k_vmm.vmunmap(pagetable, SIG_TRAMPOLINE, 1, 0);
 
         // 阶段1：不再使用分散的引用计数

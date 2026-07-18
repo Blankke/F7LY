@@ -3,6 +3,7 @@
 #include "fs/vfs/vfs_utils.hh"
 #include "proc/proc.hh"
 #include "proc/proc_manager.hh"
+#include "hal/cpu.hh"
 namespace fs
 {
     namespace
@@ -337,21 +338,34 @@ namespace fs
                          eastl::make_unique<ProcStatProvider>());
         add_virtual_file("/proc/uptime", fs::FileTypes::FT_NORMAL, nullptr);
 
-        // 当前默认 QEMU 启动参数是 -smp 1。sysconf()/LTP 会读取这些 sysfs 节点推断
-        // online/present/max CPU，必须和 sched_getaffinity()、/proc/self/status 保持单核一致。
+        // sysconf()/LTP/sysbench 会读取这些 sysfs 节点推断可用 CPU 数。它们必须
+        // 动态反映 Cpu 的 possible/online 掩码，并与 sched_getaffinity()、
+        // /proc/self/status 保持一致；不能把 QEMU -smp N 固化成单核视图。
         add_virtual_file("/sys/devices/system/cpu/online", fs::FileTypes::FT_NORMAL,
-                         eastl::make_unique<StaticContentProvider>("0\n"));
+                         eastl::make_unique<CpuTopologyProvider>(CpuTopologyContent::OnlineList));
         add_virtual_file("/sys/devices/system/cpu/present", fs::FileTypes::FT_NORMAL,
-                         eastl::make_unique<StaticContentProvider>("0\n"));
+                         eastl::make_unique<CpuTopologyProvider>(CpuTopologyContent::PossibleList));
         add_virtual_file("/sys/devices/system/cpu/possible", fs::FileTypes::FT_NORMAL,
-                         eastl::make_unique<StaticContentProvider>("0\n"));
+                         eastl::make_unique<CpuTopologyProvider>(CpuTopologyContent::PossibleList));
         add_virtual_file("/sys/devices/system/cpu/kernel_max", fs::FileTypes::FT_NORMAL,
-                         eastl::make_unique<StaticContentProvider>("0\n"));
-        add_virtual_file("/sys/devices/system/cpu/cpu0/online", fs::FileTypes::FT_NORMAL,
-                         eastl::make_unique<StaticContentProvider>("1\n"));
+                         eastl::make_unique<CpuTopologyProvider>(CpuTopologyContent::KernelMax));
+        for (uint64 cpu_id = 0; cpu_id < NCPU; ++cpu_id)
+        {
+            if (!Cpu::is_possible_cpu(cpu_id))
+            {
+                continue;
+            }
+            char cpu_online_path[64];
+            snprintf(cpu_online_path, sizeof(cpu_online_path),
+                     "/sys/devices/system/cpu/cpu%lu/online",
+                     static_cast<unsigned long>(cpu_id));
+            add_virtual_file(cpu_online_path, fs::FileTypes::FT_NORMAL,
+                             eastl::make_unique<CpuTopologyProvider>(
+                                 CpuTopologyContent::PerCpuOnline, cpu_id));
+        }
 
         // NUMA 兼容视图：当前内核没有真实非一致访问内存拓扑，这里暴露一个退化实现。
-        // 用户态只会看到 node0，且 node0 只包含 CPU0；CPU、memory、distance 均固定到这个单节点。
+        // 用户态只会看到 node0；所有 online CPU 属于该单节点，memory、distance 固定。
         // 这只用于兼容 rt-tests/libnuma 一类 Linux 用户态探测，不代表真实硬件拓扑。
         add_virtual_file("/sys/devices/system/node", fs::FileTypes::FT_DIRECT, nullptr);
         add_virtual_file("/sys/devices/system/node/online", fs::FileTypes::FT_NORMAL,
@@ -364,9 +378,9 @@ namespace fs
                          eastl::make_unique<StaticContentProvider>("0\n"));
         add_virtual_file("/sys/devices/system/node/node0", fs::FileTypes::FT_DIRECT, nullptr);
         add_virtual_file("/sys/devices/system/node/node0/cpulist", fs::FileTypes::FT_NORMAL,
-                         eastl::make_unique<StaticContentProvider>("0\n"));
+                         eastl::make_unique<CpuTopologyProvider>(CpuTopologyContent::NodeCpuList));
         add_virtual_file("/sys/devices/system/node/node0/cpumap", fs::FileTypes::FT_NORMAL,
-                         eastl::make_unique<StaticContentProvider>("1\n"));
+                         eastl::make_unique<CpuTopologyProvider>(CpuTopologyContent::NodeCpuMap));
         add_virtual_file("/sys/devices/system/node/node0/distance", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<StaticContentProvider>("10\n"));
         add_virtual_file("/sys/devices/system/node/node0/meminfo", fs::FileTypes::FT_NORMAL,

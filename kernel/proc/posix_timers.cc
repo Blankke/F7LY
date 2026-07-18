@@ -335,19 +335,23 @@ void set_interval_timer(Pcb *p, int which, uint64 value_us, uint64 interval_us,
   timer.expiry_us = interval_timer_now_usec(p, which) + value_us;
 }
 
-void check_interval_timers(Pcb *current_proc)
+void check_interval_timers(Pcb *current_proc, bool check_realtime)
 {
-  uint64 real_now_us = realtime_now_usec();
-
-  // ITIMER_REAL 基于真实时间，哪怕进程暂时没在 CPU 上跑，也应该持续倒计时。
-  for (uint i = 0; i < num_process; ++i)
+  if (check_realtime)
   {
-    Pcb &candidate = k_proc_pool[i];
-    if (candidate._state == ProcState::UNUSED)
+    const uint64 real_now_us = realtime_now_usec();
+
+    // ITIMER_REAL 基于真实时间，哪怕进程暂时没在 CPU 上跑，也应该持续倒计时。
+    // 该全表扫描只能由 timekeeper CPU 执行，否则同一个 timer 可能并发重复触发。
+    for (uint i = 0; i < num_process; ++i)
     {
-      continue;
+      Pcb &candidate = k_proc_pool[i];
+      if (candidate._state == ProcState::UNUSED)
+      {
+        continue;
+      }
+      maybe_fire_interval_timer(&candidate, k_interval_timer_real, real_now_us);
     }
-    maybe_fire_interval_timer(&candidate, k_interval_timer_real, real_now_us);
   }
 
   // CPU 时间定时器只对当前正在执行的进程推进即可，避免把别的进程的 CPU 时间偷算进去。

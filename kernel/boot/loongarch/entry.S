@@ -1,4 +1,5 @@
 #include "asm.hh"
+#include "param.h"
 
 .section .text
 .global _entry
@@ -28,17 +29,20 @@ _entry:
 
         // invtlb      0x0,$zero,$zero # 清除所有页表项
 	# set up a stack for C.
-        # boot_stack_top is declared in start.c,
-        # with a 4096-byte stack per CPU.
-        # sp = boot_stack_top + (hartid * 4096)
+        # 每个 CPU 使用独立的 8KB 启动栈。先检查 CPUID，避免超过 NCPU 时
+        # 在进入 C 代码前已经越界写 boot_stack。
+
+        csrrd       $a1, LOONGARCH_CSR_CPUID
+        andi        $a1, $a1, 0x1ff
+        li.d        $t2, NCPU
+        bgeu        $a1, $t2, spin
 
         la.global   $sp, boot_stack
-        li.d        $a0, 1024*4
-	csrrd       $a1, LOONGARCH_CSR_CPUID    # 获取CPUID
+        li.d        $a0, 4096*2
         addi.d      $tp, $a1, 0                 # tp = CPUID
         addi.d      $a1, $a1, 1                 # a1 = CPUID + 1
-        mul.d       $a0, $a0, $a1               # a0 = 4096 * (CPUID + 1)
-        add.d       $sp, $sp, $a0               # sp = boot_stack_top + 4096 * (CPUID + 1)
+        mul.d       $a0, $a0, $a1               # a0 = 8192 * (CPUID + 1)
+        add.d       $sp, $sp, $a0               # sp = boot_stack + 8192 * (CPUID + 1)
 	# jump to main in main.c
         li.d        $t0, 0x1
         cpucfg      $t1, $t0                    # read the CFG
@@ -55,6 +59,6 @@ spin:
     .align 12
     .globl boot_stack
 boot_stack:
-    .space 4096 * 4 * 4  # 最多支持16核？
+    .space 4096 * 2 * NCPU
     .globl boot_stack_top
 boot_stack_top:

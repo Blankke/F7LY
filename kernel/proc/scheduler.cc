@@ -24,6 +24,47 @@ namespace proc
 
     namespace
     {
+        bool can_schedule_on_cpu(const Pcb &p, int cpu_id)
+        {
+            if (cpu_id < 0 || !Cpu::is_valid_cpu_id(static_cast<uint64>(cpu_id)) ||
+                !p._cpu_mask.is_set(cpu_id))
+            {
+                return false;
+            }
+
+            // 进程池是全局的，但不能因此让每个空闲核都任意“偷取”一个未绑核
+            // 任务。那会让同一控制线程在相邻时间片中无必要地跨核迁移；对于
+            // 共享地址空间线程，这种迁移会放大 trapframe/TLB/内核栈切换窗口，
+            // 也会破坏缓存局部性。
+            //
+            // 这里采用与 Starry 最近 SMP 调度调整一致的 sticky placement：
+            // - 单核 affinity 任务只能在指定核运行；
+            // - 多核 affinity 任务优先且仅在最近一次实际运行的、仍允许的 CPU
+            //   上继续运行；
+            // - affinity 变更将旧 CPU 排除后，才允许其它可用 CPU 接手，并在
+            //   成功认领时更新 _last_cpu。
+            //
+            // 这不是对 Linux sched_setaffinity ABI 的额外限制：用户可见的
+            // affinity 仍完整保存在 _cpu_mask 中；它只是调度器的默认放置策略。
+            const uint64 eligible_mask = p._cpu_mask.bits & Cpu::online_cpu_mask();
+            if ((eligible_mask & (1ULL << cpu_id)) == 0)
+            {
+                return false;
+            }
+            if ((eligible_mask & (eligible_mask - 1)) == 0)
+            {
+                return true;
+            }
+
+            const int last_cpu = p._last_cpu;
+            if (last_cpu >= 0 && Cpu::is_valid_cpu_id(static_cast<uint64>(last_cpu)) &&
+                (eligible_mask & (1ULL << last_cpu)) != 0)
+            {
+                return cpu_id == last_cpu;
+            }
+            return true;
+        }
+
         int effective_schedule_priority(Pcb &p)
         {
             // 单核大运行队列下，显式信号目标必须尽快获得 CPU 进入用户态处理信号。
@@ -40,6 +81,11 @@ namespace proc
     {
         _sche_lock.init(name);
         _has_non_default_priority = false;
+        _next_initial_cpu = -1;
+        for (uint cpu_id = 0; cpu_id < NUMCPU; ++cpu_id)
+        {
+            _next_scan_global_id[cpu_id] = 0;
+        }
     }
 
     void Scheduler::note_priority_change(int priority)
@@ -53,7 +99,56 @@ namespace proc
         _sche_lock.release();
     }
 
-    int Scheduler::get_highest_priority()
+    int Scheduler::select_initial_cpu(const CpuMask &mask, int parent_cpu)
+    {
+        // 所有用户任务进入 scheduler 前，主核会等待 possible CPU 全部 online；
+        // 仍保留 possible mask 的兜底，以免未来早期内核线程复用该接口时因
+        // online 发布窗口得到空集合。
+        uint64 eligible_mask = mask.bits & Cpu::online_cpu_mask();
+        if (eligible_mask == 0)
+        {
+            eligible_mask = mask.bits & Cpu::possible_cpu_mask();
+        }
+        if (eligible_mask == 0)
+        {
+            return parent_cpu;
+        }
+
+        _sche_lock.acquire();
+        int first_cpu = _next_initial_cpu;
+        if (first_cpu < 0 || !Cpu::is_valid_cpu_id(static_cast<uint64>(first_cpu)) ||
+            (eligible_mask & (1ULL << first_cpu)) == 0)
+        {
+            // 第一个子任务先沿用父线程当前 home CPU，之后才按 CPU 编号轮转。
+            // 这样 fork 的局部性和 pthread 批量创建时的铺核能力能够同时成立。
+            first_cpu = parent_cpu;
+            if (first_cpu < 0 || !Cpu::is_valid_cpu_id(static_cast<uint64>(first_cpu)) ||
+                (eligible_mask & (1ULL << first_cpu)) == 0)
+            {
+                first_cpu = 0;
+                while ((eligible_mask & (1ULL << first_cpu)) == 0)
+                {
+                    ++first_cpu;
+                }
+            }
+        }
+
+        int selected_cpu = first_cpu;
+        for (int offset = 0; offset < NUMCPU; ++offset)
+        {
+            const int candidate = (first_cpu + offset) % NUMCPU;
+            if ((eligible_mask & (1ULL << candidate)) != 0)
+            {
+                selected_cpu = candidate;
+                _next_initial_cpu = (candidate + 1) % NUMCPU;
+                break;
+            }
+        }
+        _sche_lock.release();
+        return selected_cpu;
+    }
+
+    int Scheduler::get_highest_priority(int cpu_id)
     {
         _sche_lock.acquire();
         if (!_has_non_default_priority)
@@ -75,7 +170,8 @@ namespace proc
             }
             // pending signal 使用临时 effective priority 参与比较，让信号目标尽快返回用户态。
             int effective_priority = effective_schedule_priority(p);
-            if (effective_priority < prio && p._state == ProcState::RUNNABLE)
+            if (effective_priority < prio && p._state == ProcState::RUNNABLE &&
+                can_schedule_on_cpu(p, cpu_id))
             {
                 prio = effective_priority;
             }
@@ -92,6 +188,7 @@ namespace proc
     {
         Pcb *p;
         Cpu *cpu = Cpu::get_cpu();
+        const int cpu_id = static_cast<int>(Cpu::current_cpu_id());
         int priority;
 
         cpu->set_cur_proc(nullptr);
@@ -103,21 +200,47 @@ namespace proc
 
             cpu->interrupt_on();
 
-            priority = get_highest_priority();
+            priority = get_highest_priority(cpu_id);
 
-            for (p = k_proc_pool; p < &k_proc_pool[num_process]; p++)
+            // 使用本 CPU 的轮转扫描起点。PCB 锁仍是“任务只能同时运行在一个
+            // CPU”的最终仲裁；try_acquire 失败则继续找下一项，等价于从其它核
+            // 正在执行的任务旁边偷取可运行工作。
+            const uint scan_begin = _next_scan_global_id[cpu_id] % num_process;
+            for (uint offset = 0; offset < num_process; ++offset)
             {
+                p = &k_proc_pool[(scan_begin + offset) % num_process];
                 // printfBlue("[sche]  start_schedule here,p->addr:%p \n", p);
                 if (p->_state != ProcState::RUNNABLE ||
+                    !can_schedule_on_cpu(*p, cpu_id) ||
                     effective_schedule_priority(*p) > priority)
                 {
                     // printf("p.global_id: %d, p.state: %d, p.name:%s not runnable or priority too high \n", p->_global_id, p->_state, p->_name);
                     continue;
                 }
                 // printf("p.global_id: %d, p.state: %d, p.name:%s \n", p->_global_id, p->_state, p->_name);
-                p->_lock.acquire();
-                if (p->get_state() == ProcState::RUNNABLE)
+                // 运行中的任务会一直持有 PCB 锁直到主动让出 CPU。多核下若在这里
+                // 自旋等待该锁，空闲核可能永远卡在进程池首项，无法挑选后续 runnable
+                // 任务；因此失败时直接继续扫描，实现无全局队列的 work-stealing。
+                if (!p->_lock.try_acquire())
                 {
+                    continue;
+                }
+                if (p->get_state() == ProcState::RUNNABLE && can_schedule_on_cpu(*p, cpu_id))
+                {
+                    // PCB 锁已经串行化了 RUNNABLE -> RUNNING 转换；再用显式
+                    // owner 字段把这个 SMP 不变量固化下来。若这里失败，说明有
+                    // 路径在任务尚未真正切出时错误地重新标记为了 RUNNABLE。
+                    assert(p->_running_cpu == -1,
+                           "scheduler: double-run pid=%d tid=%d gid=%d owner=%d claimant=%d state=%d",
+                           p->_pid,
+                           p->_tid,
+                           p->_global_id,
+                           p->_running_cpu,
+                           cpu_id,
+                           (int)p->_state);
+                    _next_scan_global_id[cpu_id] = (p->_global_id + 1) % num_process;
+                    p->_last_cpu = cpu_id;
+                    p->_running_cpu = cpu_id;
                     p->_state = ProcState::RUNNING;
                     cpu->set_cur_proc(p);
                     proc::Context *cur_context = cpu->get_context();
@@ -134,7 +257,7 @@ namespace proc
                     }
                     swtch(cur_context, &p->_context);
                     // printf( "return from %d, name: %s\n", p->_global_id, p->_name );
-                    int refreshed_priority = get_highest_priority();
+                    int refreshed_priority = get_highest_priority(cpu_id);
                     if (!(priority == default_proc_prio && p->_priority < priority))
                     {
                         // 若本轮调度期间出现更高优先级的可运行任务，后续扫描应立即收窄过滤门槛。
@@ -184,6 +307,7 @@ namespace proc
         Pcb *p = Cpu::get_cpu()->get_cur_proc();
         Cpu::get_cpu()->pop_intr_off();
 
+        assert(p != nullptr, "sched: no current process");
         assert(p->_lock.is_held(), "sched: proc lock not held");
         assert(cpu->get_num_off() == 1,
                "sched: proc locks num_off=%d intr=%d intena=%d pid=%d tid=%d state=%d chan=%p name=%s",
@@ -197,6 +321,19 @@ namespace proc
                p != nullptr ? p->_name : "(null)");
         assert(p->_state != ProcState::RUNNING, "sched: proc is running");
         assert(cpu->get_intr_stat() == false, "sched: interruptible");
+
+        // 任务仍持有自己的 PCB 锁时释放执行权。随后 swtch() 返回调度器，
+        // 调度器才会释放该锁；因此其它 CPU 最早也只能在本 CPU 已经不再执行
+        // 此任务之后看到 _running_cpu == -1 并重新认领它。
+        assert(p->_running_cpu == static_cast<int>(Cpu::current_cpu_id()),
+               "sched: owner mismatch pid=%d tid=%d gid=%d owner=%d cpu=%lu state=%d",
+               p->_pid,
+               p->_tid,
+               p->_global_id,
+               p->_running_cpu,
+               Cpu::current_cpu_id(),
+               (int)p->_state);
+        p->_running_cpu = -1;
 
         intena = cpu->get_int_ena();
         swtch(&p->_context, cpu->get_context());

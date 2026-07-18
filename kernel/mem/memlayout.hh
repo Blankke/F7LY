@@ -1,8 +1,13 @@
 #pragma once
 
+#include "param.h"
+
 // Kernel stack configuration
 // 内核栈配置常量
-#define KSTACK_PAGES 2          // 内核栈使用的页面数 (8KB)
+// SMP 下时钟中断、调度切换和深层 VFS/syscall 调用会叠加在同一任务的内核栈上。
+// 8KiB 在 -smp 8 压力中已触及 guard page；统一扩为 16KiB，给两架构保留足够
+// 的 trap frame 与 C++ 调用深度，同时仍只额外占用约 4MiB 的常驻物理页。
+#define KSTACK_PAGES 4          // 内核栈使用的页面数 (16KB)
 #define KSTACK_SIZE (KSTACK_PAGES * PGSIZE)  // 内核栈总大小
 #define KSTACK_GUARD_PAGES 1    // guard page 数量
 #define KSTACK_TOTAL_PAGES (KSTACK_PAGES + KSTACK_GUARD_PAGES)  // 总分配页面数
@@ -84,10 +89,20 @@
 //   fixed-size stack
 //   expandable heap
 //   ...
-//   TRAPFRAME (p->trapframe, used by the trampoline)
+//   每个线程一页 USER_TRAPFRAME(gid)（供 trampoline 保存寄存器）
 //   TRAMPOLINE (the same page as in the kernel)
 #define SIG_TRAMPOLINE   (TRAMPOLINE - PGSIZE)
 #define TRAPFRAME (SIG_TRAMPOLINE - PGSIZE)
+// 内核栈和用户页表在切换时共用 ASID=0；即使通常会刷新 TLB，也不能让
+// CLONE_VM 线程的 trapframe 与任一内核栈使用相同虚拟页。否则在 refill/
+// 切表窗口可能把内核栈翻译错误复用于 uservec，直接损坏用户寄存器现场。
+// 因此先完整预留 NPROC 个内核栈（含 guard）所在的高地址区域，再把每线程
+// trapframe 放在它的下方。该区只消耗虚拟地址，不增加物理页占用。
+#define KSTACK_REGION_BOTTOM (TRAPFRAME - ((NPROC * KSTACK_TOTAL_PAGES - KSTACK_GUARD_PAGES) * PGSIZE))
+#define USER_TRAPFRAME_TOP KSTACK_REGION_BOTTOM
+#define USER_TRAPFRAME_BASE (USER_TRAPFRAME_TOP - (NPROC * PGSIZE))
+#define USER_TRAPFRAME(global_id) (USER_TRAPFRAME_TOP - (((global_id) + 1) * PGSIZE))
+#define USER_MEMORY_TOP USER_TRAPFRAME_BASE
 #define KSTACK(p) (TRAPFRAME - (((p)+1)* KSTACK_TOTAL_PAGES - KSTACK_GUARD_PAGES )*PGSIZE) // 内核栈栈底
 #elif defined(LOONGARCH)
 // Physical memory layout
@@ -131,6 +146,15 @@
 // map kernel stacks beneath the trampframe,
 // each surrounded by invalid guard pages.
 #define SIG_TRAMPOLINE   (TRAPFRAME - PGSIZE)
+// LoongArch 的 SIG_TRAMPOLINE 位于 TRAPFRAME 下方。与 RISC-V 一样，用户
+// trapframe 不能再落进内核栈虚拟区：所有 CPU 复用 ASID=0 时，两个页表中
+// 相同 VA 的残留 TLB/reload 会把 uservec 的寄存器现场带到错误物理页。
+// 先跨过整个 NPROC 内核栈区域，再向下安排每线程 trapframe。
+#define KSTACK_REGION_BOTTOM (SIG_TRAMPOLINE - ((NPROC * KSTACK_TOTAL_PAGES - KSTACK_GUARD_PAGES) * PGSIZE))
+#define USER_TRAPFRAME_TOP KSTACK_REGION_BOTTOM
+#define USER_TRAPFRAME_BASE (USER_TRAPFRAME_TOP - (NPROC * PGSIZE))
+#define USER_TRAPFRAME(global_id) (USER_TRAPFRAME_TOP - (((global_id) + 1) * PGSIZE))
+#define USER_MEMORY_TOP USER_TRAPFRAME_BASE
 #define KSTACK(p) (SIG_TRAMPOLINE - (((p)+1)* KSTACK_TOTAL_PAGES - KSTACK_GUARD_PAGES )*PGSIZE)
 #define PA2VA(pa) ((pa) & (~(DMWIN_MASK)))
 

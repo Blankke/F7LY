@@ -141,6 +141,8 @@ namespace proc
         
         // CPU亲和性初始化：默认可以在任何CPU上运行
         _cpu_mask.fill(); // 设置所有可用CPU位
+        _last_cpu = 0;
+        _running_cpu = -1;
 
         /****************************************************************************************
          * 内存管理
@@ -246,6 +248,13 @@ namespace proc
         _state = ProcState::UNUSED;
         _global_id = gid;
         _kstack = mem::VirtualMemoryManager::kstack_vm_from_global_id(_global_id);
+
+        // 全局对象构造期无法依赖 Cpu 拓扑；进程池正式初始化发生在主核解析
+        // DTB 之后，此处把默认亲和性收敛为本次启动真正可用的 CPU 集合。
+        const uint64 possible_mask = Cpu::possible_cpu_mask();
+        _cpu_mask = CpuMask{possible_mask != 0 ? possible_mask : 1};
+        _last_cpu = 0;
+        _running_cpu = -1;
         
         // 注意：不在init中创建ProcessMemoryManager
         // ProcessMemoryManager的创建延迟到具体需要时（fork、user_init、execve等）

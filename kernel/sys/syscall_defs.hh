@@ -154,6 +154,8 @@ namespace syscall
         SYS_getrusage = 165,     // form tsh
         SYS_umask = 166,         // from rocket
         SYS_prctl = 167,         // from rocket
+        // 供用户态 CPU 亲和性/压测工具读取当前实际运行核。
+        SYS_getcpu = 168,
         SYS_gettimeofday = 169,
         SYS_adjtimex = 171, // from rocket
         SYS_getpid = 172,

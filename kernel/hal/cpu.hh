@@ -3,6 +3,7 @@
 #include "proc/proc.hh"
 #include "printer.hh"
 #include "param.h"
+#include <EASTL/atomic.h>
 #ifdef RISCV
 #include "riscv/rv_csr.hh"
 #elif defined(LOONGARCH)
@@ -16,6 +17,7 @@ private:
         proc::Context _context; // 进程上下文
         int _num_off;           // 关闭中断层数
         int _int_ena;           // 关中断前中断开关状态
+        uint32 _timeslice_ticks; // 当前 CPU 的本地时间片计数，不能在多核间共享
         
 public:
         proc::Context *get_context() { return &_context; }
@@ -63,6 +65,36 @@ public:
         /// @brief get current cpu info
         /// @return cpu info
         static Cpu *get_cpu();
+
+        // SMP 拓扑与启动状态。CPU 槽位上限由 NCPU 决定，possible/online 则由
+        // 主核从 DTB 和实际次核启动结果中维护，用户态只能看到 online 集合。
+        static bool is_valid_cpu_id(uint64 cpu_id);
+        static uint64 current_cpu_id();
+        static void initialize_current();
+        static bool try_claim_bootstrap();
+        static void bootstrap_begin();
+        static void configure_topology(const uint64 *hartids, int hart_count);
+        static void publish_bootstrap_ready();
+        static void wait_for_bootstrap_ready();
+        static bool is_bootstrap_ready();
+        // 全局对象就绪后，仍要等每个 possible CPU 完成本地 CSR/trap 初始化；
+        // 只有主核确认全员 online 后才统一放行 scheduler，避免用户任务落在
+        // “拓扑已声明、但次核尚未可调度”的窗口内。
+        static void wait_for_all_possible_cpus_online();
+        static void publish_scheduler_ready();
+        static void wait_for_scheduler_ready();
+        static uint64 bootstrap_cpu_id();
+        static bool is_bootstrap_cpu();
+        static bool is_possible_cpu(uint64 cpu_id);
+        static void mark_current_online();
+        static uint64 possible_cpu_mask();
+        static uint64 online_cpu_mask();
+        static int possible_cpu_count();
+        static int online_cpu_count();
+
+        // 时钟中断在各 CPU 上独立到达；抢占决策也必须是每核独立的，避免一个
+        // CPU 的 tick 误清空另一个 CPU 正在运行任务的时间片。
+        bool advance_time_slice(uint32 limit);
 
         static inline int get_intr_stat()
         {
