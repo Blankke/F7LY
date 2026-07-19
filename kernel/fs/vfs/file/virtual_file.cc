@@ -16,6 +16,9 @@
 #include "fs/vfs/fs.hh"
 #include "fs/vfs/vfs_utils.hh"
 #include "fs/drivers/virtio_blk.hh"
+#ifdef RISCV
+#include "fs/drivers/riscv/disk.hh"
+#endif
 #include "loop_device.hh"
 #include "tm/time.hh"
 #include "shm/shm_manager.hh"
@@ -529,7 +532,12 @@ namespace fs
 
         uint64 start_sector = static_cast<uint64>(off) / BSIZE;
         uint32 sector_count = static_cast<uint32>(bytes / BSIZE);
-        int rc = virtio_disk_rw_sectors(0, reinterpret_cast<void *>(buf), start_sector, sector_count, 0);
+        int rc =
+#ifdef RISCV
+            disk_rw_sectors(0, reinterpret_cast<void *>(buf), start_sector, sector_count, false);
+#else
+            virtio_disk_rw_sectors(0, reinterpret_cast<void *>(buf), start_sector, sector_count, 0);
+#endif
         return rc == 0 ? static_cast<long>(bytes) : -EIO;
     }
 
@@ -568,7 +576,12 @@ namespace fs
 
         uint64 start_sector = static_cast<uint64>(off) / BSIZE;
         uint32 sector_count = static_cast<uint32>(bytes / BSIZE);
-        int rc = virtio_disk_rw_sectors(0, reinterpret_cast<void *>(buf), start_sector, sector_count, 1);
+        int rc =
+#ifdef RISCV
+            disk_rw_sectors(0, reinterpret_cast<void *>(buf), start_sector, sector_count, true);
+#else
+            virtio_disk_rw_sectors(0, reinterpret_cast<void *>(buf), start_sector, sector_count, 1);
+#endif
         return rc == 0 ? static_cast<long>(bytes) : -EIO;
     }
 

@@ -47,8 +47,14 @@ extern uint64 k_dtb_addr;
 // 注意华科的main函数可能有问题, 注意多核初始化
 extern "C" void main(uint64 hartid, uint64 dtb_addr)
 {
+#ifdef VISIONFIVE2
+    // VF2 本阶段采用固定板级地址，不解析 U-Boot 传入的 DTB。
+    (void)dtb_addr;
+    k_dtb_addr = 0;
+#else
     k_dtb_addr = dtb_addr;
     DtbManager::init(dtb_addr);
+#endif
     // riscv::r_mstatus();
 
     k_printer.init(); // 这里也初始化了console和uart
@@ -60,7 +66,7 @@ extern "C" void main(uint64 hartid, uint64 dtb_addr)
     trap_mgr.inithart(); // 初始化每个核上的csr
 
     // 初始化中断统计管理器
-    // intr_stats::k_intr_stats.init();
+    intr_stats::k_intr_stats.init();
 
     plic_mgr.init();     // plic初始化
     plic_mgr.inithart(); // 初始化每个核上的csr
@@ -97,8 +103,8 @@ extern "C" void main(uint64 hartid, uint64 dtb_addr)
     // virtio_disk_init2(); // 初始化 rootfs的块设备
 
     proc::k_pm.user_init(); // 初始化用户进程
-    disk_init();  // emulated hard disk ps:如果使用SDCard需要修改
-
+    // 由板级磁盘适配层选择 QEMU virtio 或 VisionFive2 SD 卡。
+    disk_init();
     printfGreen("disk_init done\n");
     init_fs_table();     // fs_table init
     printfGreen("init_fs_table done\n");

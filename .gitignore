@@ -50,6 +50,7 @@ kernel-rv
 kernel-la
 kernel-rv-shell
 kernel-la-shell
+kernel-rv-visionfive2*
 output-more.txt
 output*.txt
 output
@@ -68,7 +69,6 @@ logs/tmp/
 !logs/legacy/
 !logs/legacy/output_la.txt
 !logs/legacy/output_rv.txt
-.venv/
 logs/*.txt
 *.mp4
 *.mkv

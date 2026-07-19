@@ -22,6 +22,9 @@
 
 #include "fs/vfs/fs.hh"
 #include "fs/buf.hh"
+#ifdef RISCV
+#include "fs/drivers/riscv/disk.hh"
+#endif
 #include "devs/device_manager.hh"
 #include "devs/block_device.hh"
 #include "fs/drivers/virtio_blk.hh"

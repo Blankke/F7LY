@@ -8,6 +8,7 @@ RISCV_EVAL_IMAGE := $(IMAGE_DIR)/sdcard-rv.img
 LOONGARCH_EVAL_IMAGE := $(IMAGE_DIR)/sdcard-la.img
 RISCV_SHELL_IMAGE := $(IMAGE_DIR)/rootfs-riscv64.img
 LOONGARCH_SHELL_IMAGE := $(IMAGE_DIR)/rootfs-loongarch64.img
+KERNEL_DIR := kernel
 
 # ===== 并行编译配置 =====
 # 默认使用所有可用 CPU 核心进行并行编译
@@ -15,7 +16,7 @@ NPROC := $(shell nproc)
 # 交互式 QEMU 运行目标需要独占宿主机 stdin；如果顶层 make 全局强制 -j，
 # GNU make 可能会把配方的标准输入重定向掉，导致 shell 模式下 guest 完全收不到按键。
 # 因此只对纯构建目标启用并行，run/shell/debug 自己在子 make 中显式并行编译。
-PARALLEL_BUILD_GOALS := all build build-la riscv loongarch clean dirs initcode
+PARALLEL_BUILD_GOALS := all build build-la riscv loongarch vf2 clean dirs initcode
 ifeq ($(strip $(MAKECMDGOALS)),)
   MAKEFLAGS += -j$(NPROC)
 else ifneq ($(filter $(PARALLEL_BUILD_GOALS),$(MAKECMDGOALS)),)
@@ -25,6 +26,7 @@ endif
 # ===== 架构选择 =====
 ARCH ?= riscv
 INITCODE_MODE ?= evaluation
+BOARD ?= qemu
 DIS_PRINTF ?= 0
 QEMU_MEM ?= 1G
 QEMU_DEBUG_MEM ?= 1G
@@ -41,6 +43,18 @@ ifneq (,$(filter l loongarch,$(MAKECMDGOALS)))
 endif
 ifneq (,$(filter r riscv,$(MAKECMDGOALS)))
   ARCH := riscv
+endif
+
+# VF2 是独立的 RISC-V 板级构建目标，不改变默认 make/all 的 QEMU 产物。
+# 通过目标名选择用户入口：make vf2 run 生成回归入口，make vf2 shell 生成 shell 入口。
+ifneq (,$(filter vf2,$(MAKECMDGOALS)))
+  BOARD := visionfive2
+  ARCH := riscv
+  ifneq (,$(filter shell,$(MAKECMDGOALS)))
+    INITCODE_MODE := shell
+  else
+    INITCODE_MODE := evaluation
+  endif
 endif
 
 # 架构别名目标（这些目标不执行任何操作，仅用于设置 ARCH 变量）
@@ -64,6 +78,20 @@ else ifeq ($(ARCH),loongarch)
   QEMU_BLOCK_DEVICE_ARGS := -device virtio-blk-pci,drive=x0
 else
   $(error 不支持的架构: $(ARCH)，请使用 make riscv 或 make loongarch)
+endif
+
+ifeq ($(BOARD),visionfive2)
+  ifneq ($(ARCH),riscv)
+    $(error VisionFive2 只支持 RISC-V 构建)
+  endif
+  ARCH_CFLAGS += -DVISIONFIVE2
+  OUTPUT_PREFIX := visionfive2
+  LINK_SCRIPT := $(KERNEL_DIR)/link/riscv/visionfive2.ld
+else ifeq ($(BOARD),qemu)
+  # 现有磁盘和页表代码用 QEMU 宏选择 virtio/MMIO 路径；显式定义，避免依赖外部环境。
+  ARCH_CFLAGS += -DQEMU
+else
+  $(error 不支持的板级目标: $(BOARD)，请使用默认 QEMU 或 make vf2)
 endif
 
 ifeq ($(INITCODE_MODE),shell)
@@ -97,7 +125,6 @@ SIZE    := $(CROSS_COMPILE)size
 OBJDUMP := $(CROSS_COMPILE)objdump
 
 # ===== 路径定义 =====
-KERNEL_DIR := kernel
 BUILD_DIR := $(shell pwd)/build/$(OUTPUT_PREFIX)
 # 有架构特定子目录的文件夹
 ARCH_DIRS := boot/$(ARCH) hal/$(ARCH) link/$(ARCH) mem/$(ARCH) proc/$(ARCH) trap/$(ARCH) devs/$(ARCH)
@@ -105,7 +132,9 @@ ARCH_DIRS := boot/$(ARCH) hal/$(ARCH) link/$(ARCH) mem/$(ARCH) proc/$(ARCH) trap
 COMMON_DIRS := libs tm sys shm
 SUBDIRS := $(ARCH_DIRS) $(COMMON_DIRS)
 
-LINK_SCRIPT := $(KERNEL_DIR)/link/$(ARCH)/kernel.ld
+ifeq ($(BOARD),qemu)
+  LINK_SCRIPT := $(KERNEL_DIR)/link/$(ARCH)/kernel.ld
+endif
 
 CFLAGS := -Wall -Werror -ffreestanding -O2 -fno-builtin -g -fno-stack-protector $(ARCH_CFLAGS)
 ifeq ($(ARCH),riscv)
@@ -157,6 +186,11 @@ SRCS += $(shell find $(KERNEL_DIR)/fs -type f \
 SRCS += $(shell find $(KERNEL_DIR)/fs/drivers/$(ARCH) -type f \
         \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
 
+ifeq ($(BOARD),visionfive2)
+# VisionFive2 使用物理板上的 SD 卡，不把依赖外部镜像文件的内嵌 ramdisk 对象编入内核。
+  SRCS := $(filter-out %/fs/drivers/riscv/sddata.S %/fs/drivers/riscv/ramdisk.cc,$(SRCS))
+endif
+
 # 收集 net 目录中的所有文件（net 没有架构特定子目录）
 SRCS += $(shell find $(KERNEL_DIR)/net -type f \
         \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
@@ -177,7 +211,10 @@ OBJS_NO_ENTRY := $(filter-out $(ENTRY_OBJ), $(OBJS))
 DEPS := $(OBJS:.o=.d)
 
 # ===== 输出目标 =====
-ifeq ($(ARCH),riscv)
+ifeq ($(BOARD),visionfive2)
+  KERNEL_ELF := kernel-rv-visionfive2$(KERNEL_NAME_SUFFIX)
+  KERNEL_BIN := kernel-rv-visionfive2$(KERNEL_NAME_SUFFIX).bin
+else ifeq ($(ARCH),riscv)
   KERNEL_ELF := kernel-rv$(KERNEL_NAME_SUFFIX)
   KERNEL_BIN := kernel-rv$(KERNEL_NAME_SUFFIX).bin
 else ifeq ($(ARCH),loongarch)
@@ -242,7 +279,7 @@ INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dy
 else ifeq ($(ARCH),loongarch)
 INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dynamic-linker,-T,$(INITCODE_LINK_SCRIPT)
 endif
-.PHONY: all clean dirs build riscv loongarch run shell debug initcode build-la
+.PHONY: all clean dirs build build-la riscv loongarch vf2 run shell debug initcode
 
 
 all: 
@@ -255,6 +292,10 @@ riscv:
 
 loongarch:
 	@$(MAKE) ARCH=loongarch build-la
+
+# 只在显式请求 vf2 时构建 VisionFive2 产物；直接 make 仍然只构建 QEMU/LoongArch。
+vf2: build
+	@echo "VisionFive2 内核已生成: $(KERNEL_ELF) 和 $(KERNEL_BIN)"
 
 build: initcode dirs $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a $(KERNEL_BIN)
 build-la: initcode dirs $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a $(KERNEL_BIN)
@@ -319,6 +360,19 @@ $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a:
 	@$(MAKE) -C $(EASTL_DIR) CROSS_COMPILE=$(CROSS_COMPILE) -j$(NPROC)
 
 
+ifeq ($(BOARD),visionfive2)
+
+# 物理板没有由 Makefile 管理的 QEMU 存储镜像；run/shell 在这里仅负责构建对应入口。
+run shell: build
+
+run:
+	@echo "VisionFive2 run 入口已生成: $(KERNEL_ELF) 和 $(KERNEL_BIN)"
+
+shell:
+	@echo "VisionFive2 shell 入口已生成: $(KERNEL_ELF) 和 $(KERNEL_BIN)"
+
+else
+
 run:
 	@$(MAKE) -j$(NPROC) ARCH=$(ARCH) INITCODE_MODE=$(INITCODE_MODE) build
 	@if [ -f $(ROOTFS_BACKUP) ]; then cp $(ROOTFS_BACKUP) $(INITRD_IMAGE); fi
@@ -339,6 +393,8 @@ else ifeq ($(ARCH),loongarch)
 	$(MAKE) ARCH=$(ARCH) INITCODE_MODE=shell QEMU_SNAPSHOT="$(QEMU_SHELL_SNAPSHOT)" run-loongarch
 else
 	$(error Unsupported ARCH=$(ARCH))
+endif
+
 endif
 
 run-riscv:
@@ -469,6 +525,8 @@ clean:
 	rm -f $(KERNEL_ELF) $(KERNEL_BIN)
 	rm -f kernel-la kernel-rv kernel-la.bin kernel-rv.bin
 	rm -f kernel-la-shell kernel-rv-shell kernel-la-shell.bin kernel-rv-shell.bin
+	rm -f kernel-rv-visionfive2 kernel-rv-visionfive2.bin
+	rm -f kernel-rv-visionfive2-shell kernel-rv-visionfive2-shell.bin
 
 cleanlog:
 	rm -rf logs/

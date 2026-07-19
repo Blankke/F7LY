@@ -22,6 +22,7 @@
 #include "virtual_memory_manager.hh"
 #include "timer_interface.hh"
 #include "timer_manager.hh"
+#include "fs/drivers/riscv/disk.hh"
 #include "fs/drivers/virtio_blk.hh"
 #include "net/drivers/virtio_net.hh"
 #include "trap/interrupt_stats.hh"

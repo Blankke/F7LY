@@ -8,6 +8,45 @@
 #define KSTACK_TOTAL_PAGES (KSTACK_PAGES + KSTACK_GUARD_PAGES)  // 总分配页面数
 
 #ifdef RISCV
+#ifdef VISIONFIVE2
+// VisionFive2/JH7110 的固定板级地址。当前 VF2 目标暂不从 DTB 动态读取这些值。
+#define UART0 0x10000000L
+#define UART0_IRQ 32
+#define VIRT_OFFSET 0x3F00000000L
+#define SD_BASE 0x16020000L
+#define SD_BASE_V (SD_BASE + VIRT_OFFSET)
+#define VIRTIO0 0x10001000
+#define VIRTIO1 0x10002000
+#define VIRTIO_NET 0x10008000
+#define VIRTIO_MMIO_FIRST VIRTIO0
+#define VIRTIO_MMIO_STRIDE 0x1000
+#define VIRTIO_MMIO_COUNT 8
+#define VIRTIO_MMIO_LAST (VIRTIO_MMIO_FIRST + (VIRTIO_MMIO_COUNT - 1) * VIRTIO_MMIO_STRIDE)
+#define VIRTIO0_IRQ 1
+#define VIRTIO1_IRQ 2
+#define VIRTIO_NET_IRQ 8
+#define VIRTIO_MMIO_IRQ_FIRST VIRTIO0_IRQ
+#define VIRTIO_MMIO_IRQ_LAST VIRTIO_NET_IRQ
+#define CLINT 0x02000000L
+#define CLINT_MTIMECMP(hartid) (CLINT + 0x4000 + 8*(hartid))
+#define CLINT_MTIME (CLINT + 0xBFF8)
+#define CLINT_INTERVAL 1000000
+#define PLIC 0x0c000000L
+#define PLIC_PRIORITY (PLIC + 0x0)
+#define PLIC_PENDING (PLIC + 0x1000)
+#define PLIC_MENABLE(hart) (PLIC + 0x2000 + (hart)*0x100)
+#define PLIC_SENABLE(hart) (PLIC + 0x2080 + (hart)*0x100)
+#define PLIC_MPRIORITY(hart) (PLIC + 0x200000 + (hart)*0x2000)
+#define PLIC_SPRIORITY(hart) (PLIC + 0x201000 + (hart)*0x2000)
+#define PLIC_MCLAIM(hart) (PLIC + 0x200004 + (hart)*0x2000)
+#define PLIC_SCLAIM(hart) (PLIC + 0x201004 + (hart)*0x2000)
+
+// JH7110 的 DDR 从 0x40000000 开始，VF2 U-Boot 约定内核基址为 0x40200000。
+#define KERNBASE 0x40200000
+// 暂不解析 DTB，先固定使用 [0x40000000, 0x80000000) 的 1 GiB 窗口；
+// 若要使用 2/4/8 GiB 板载内存，还需同步扩大 PMM 元数据上限。
+#define PHYSTOP 0x80000000
+#else
 // Physical memory layout
 
 // qemu -machine virt is set up like this,
@@ -36,13 +75,8 @@
 #define SD_BASE            0x16020000
 #define SD_BASE_V               (SD_BASE + VIRT_OFFSET)
 
-
 // RISC-V virtio-mmio 传输页，QEMU virt 机器最多提供 8 个槽位。
 // 设备顺序由 QEMU 命令行决定，网卡不能固定假设一定在最后一个槽位。
-#define VIRT_OFFSET 0x3F00000000L
-#define SD_BASE 0x16020000L
-#define SD_BASE_V (SD_BASE + VIRT_OFFSET)
-
 #define VIRTIO0 0x10001000
 #define VIRTIO1 0x10002000
 #define VIRTIO_NET 0x10008000
@@ -79,6 +113,7 @@
 // from physical address 0x80000000 to PHYSTOP.
 #define KERNBASE 0x80200000
 #define PHYSTOP 0xaf000000
+#endif
 
 // map the trampoline page to the highest address,
 // in both user and kernel space.
