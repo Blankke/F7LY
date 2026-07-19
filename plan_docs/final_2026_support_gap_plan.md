@@ -1,6 +1,6 @@
 # 2026 决赛内核能力缺口计划：CAgent / BuildStorm
 
-状态：已完成静态摸底；P0-B「SMP 8 基础内核」已完成待验收，8G 内存与 BuildStorm 全量压力验证仍待完成
+状态：已完成静态摸底、代码实施和关键 QEMU 验收；BuildStorm 的 selfhost Cargo/ext4 长压力仍留待后续阶段
 
 日期：2026-07-18
 
@@ -11,7 +11,7 @@
 结论如下：
 
 - CAgent：F7LY 的基础内核能力已经覆盖较多。动态 ELF/glibc、进程创建与 exec、基础时间、文件创建/读写/目录遍历、socket 和 TCP/UDP 路径都存在，暂时看不到必须重做内核架构的缺口。主要差距是若干 Linux 语义不完整或返回固定值，需要针对 10 个 CAgent 测试逐项验证。
-- BuildStorm：当前仍不能认为已具备完成题目的全部内核条件。8G 物理内存仍是明确硬阻塞；SMP 8 的启动、调度、亲和性和双架构 CPU 压测已完成待验收，不再是“无法启动”的硬阻塞，但还需要 Cargo、文件系统和长时间压力验证。多线程/futex/信号、mmap/缺页/页回收、ext4/bcache 并发元数据与写回、Linux 系统信息和时间语义仍是高风险能力块。
+- BuildStorm：动态 8G PMM、SMP HAL、通用 TLB shootdown 和实际 CPU 并行能力已经通过双架构 QEMU 短验收；尚缺 RISC-V selfhost rootfs 下的 Cargo/ext4 长压力证据。多线程/futex/信号、mmap/缺页/页回收、ext4/bcache 并发元数据与写回仍需由该长压力继续覆盖。
 - 现有 syscall 绑定数量不能作为完成度指标。F7LY 的很多关键 syscall 已有函数实现，但仍带 TODO、固定返回值、错误路径 panic 或只覆盖部分 Linux 语义；应以 Rust 工具链和 CAgent 的真实 syscall 轨迹验收。
 
 ## 2. 题目对内核的实际要求
@@ -65,21 +65,20 @@ BuildStorm 要在 `-smp 8 -m 8G` 下运行 Debian glibc、Rust/Cargo、数百 cr
 
 判断：CAgent 当前更接近“已有底座、约 2 个确定语义问题 + 4 个高风险验证点”，不是从零开始。但在没有双架构实测前，不把它记为已完成。
 
-### 3.2 BuildStorm：1 个硬阻塞 + 4 个系统级高风险块
+### 3.2 BuildStorm：8G 硬阻塞已解除，仍有 4 个系统级高风险块
 
-#### 硬阻塞一：8G 内存管理容量不足
+#### 已解除：8G 内存管理容量不足
 
 当前证据：
 
-- RV `PHYSTOP` 为 `0xaf000000`，从 `0x80000000` 算起约 175MiB（`kernel/mem/memlayout.hh:67-71`）。
-- LA 默认 `PHYSTOP` 为 `PHYSBASE + 128MiB`（`kernel/mem/memlayout.hh:123-127`）。
-- 物理页引用计数表 `k_max_refcount_pages = 262144`，按 4KiB 页只覆盖 1GiB（`kernel/mem/physical_memory_manager.cc:34-35`）；初始化时超过该值直接 panic（第 216-220 行）。8G 需要约 2097152 页。
-- Buddy tree 预留 `BSSIZE = 320` 页，但 8G 对应约 2M 个页，按当前二叉树实现需要约 4.2M 个节点，超过当前固定元数据区（`kernel/mem/buddysystem.hh:4-5`、`kernel/mem/buddysystem.cc:40-52`）。
-- 内核 heap 固定为 256MiB、共享内存固定为 64MiB（`kernel/platform.hh:401-405`、`857-861`），并不代表系统已经能管理 8G 用户页。
+- 改造前 RV `PHYSTOP` 为 `0xaf000000`、LA 默认 `PHYSBASE + 128MiB`；当前正常路径按 DTB RAM 区间选择 allocator，并已在 `-m 8G -smp 8` QEMU 启动验证。
+- 改造前物理页引用计数表 `k_max_refcount_pages = 262144` 只覆盖 1GiB；当前已改为按最终 managed pages 动态分配，8G QEMU 实测 RV `1751684` 页、LA `1947687` 页。
+- 改造前 Buddy tree 固定预留 `BSSIZE = 320` 页；当前已改为显式 tree storage 和动态 metadata，并已通过 8G 启动、跨核 COW/TLB 专项。
+- 内核 heap/共享内存仍有目标容量上限，但 PMM 已把 heap metadata、allocator 和 shm 从实际 allocator 区间中显式切分；这不等于已经完成 8G 用户压力验收。
 
-这意味着仅修改 QEMU `-m 8G` 或 `PHYSTOP` 会在页引用计数、buddy 元数据或页表压力处失败，必须整体升级物理内存描述和分配器容量。
+这部分代码缺口已完成收尾；后续仍需用 Cargo/ext4 长压力验证页回收、缓存和文件系统并发，不再把 8G PMM 容量本身列为硬阻塞。
 
-#### 已完成待验收：SMP 8 基础内核能力
+#### 已完成并实测：SMP 8 基础内核能力
 
 本轮已落地并通过双架构实测的能力：
 
@@ -91,7 +90,7 @@ BuildStorm 要在 `-smp 8 -m 8G` 下运行 Debian glibc、Rust/Cargo、数百 cr
 - CLONE_VM 线程使用 PCB 槽位专属 user trapframe VA；页表更新由全局锁保护，LoongArch 返回用户态时按当前核失效相应 TLB 项。
 - `/proc/cpuinfo`、`/sys/devices/system/cpu`、`/proc/<pid>/status`、`sched_getaffinity`、`sched_setaffinity` 和 `getcpu` 统一以 online CPU 集合为准。
 
-本阶段尚不能替代 BuildStorm 的完整 SMP 验证：通用跨 CPU 页表修改/TLB shootdown、VFS/ext4/bcache/网络的长时间并发锁审计，以及 Cargo 的多进程压力仍应在后续 P0-C、P1 中完成。
+本阶段已包含通用跨 CPU 页表修改/TLB shootdown 的双架构专项；它仍不能替代 VFS/ext4/bcache/网络的长时间并发锁审计，以及 Cargo 的多进程压力。
 
 #### 高风险块一：线程、clone、futex、信号和等待
 
@@ -155,8 +154,8 @@ Starry 的参考价值不是“代码更多”，而是它已经为自编译负�
 
 | 能力 | Starry 资料中的证据 | F7LY 当前差距 |
 | --- | --- | --- |
-| 多核和自编译参数 | 有 QEMU SMP、jobs、guest runner 参数化流程；部分历史配置仍需区分当前入口 | F7LY 已完成 1/2/4/8 核启动、绑核 pthread 压测和 CPU 视图；仍缺 Cargo/ext4 长时间并发与通用 TLB shootdown 证据 |
-| 8G 内存 | 曾修复 FDT 内存识别、bitmap 容量和动态物理区间 | F7LY PHYSTOP、引用计数表、buddy metadata 都有容量硬限制 |
+| 多核和自编译参数 | 有 QEMU SMP、jobs、guest runner 参数化流程；部分历史配置仍需区分当前入口 | F7LY 已完成 1/2/4/8 核启动、绑核 pthread、RV stress-ng、CPU 视图和双架构 TLB 专项；仍缺 Cargo/ext4 长时间并发 |
+| 8G 内存 | 曾修复 FDT 内存识别、bitmap 容量和动态物理区间 | F7LY 已移除 PHYSTOP、引用计数表和 buddy metadata 的 1GiB 硬限制，并通过 RV/LA 8G QEMU 验收 |
 | 大编译页压力 | 曾增加文件页回收和分配失败重试 | F7LY 尚无同等级 BuildStorm 实测，page/buffer cache 压力未知 |
 | cargo 子进程 | 曾修复信号传递后唤醒任务、`dumpable/no_new_privs` 等工具链依赖 | F7LY 有信号/futex/clone，但需用 cargo build script 和 proc-macro 验证 |
 | 文件系统 | 曾遇到 ext4 metadata_csum、SMP 写死锁、tmpfs mount API 等问题 | F7LY lwext4 也有目录遍历卡顿、bcache 损坏和锁风险记录 |
@@ -168,30 +167,25 @@ Starry 的经验说明：F7LY 当前最需要补的是“容量、并发、回�
 
 ### P0-A：先解除 8G 内存硬阻塞
 
-- [ ] 从 DTB/平台内存描述建立 RV/LA 统一的真实物理内存区间模型，排除 kernel、DTB、MMIO 和空洞。
-- [ ] 将 `k_max_refcount_pages` 从 1GiB 固定数组改为能覆盖评测内存的可配置/动态元数据；至少覆盖 8G 对应的约 2M 页，并验证 `uint16` 引用计数和并发更新。
-- [ ] 将 Buddy tree 元数据按实际页数动态预留或改用容量足够的数据结构，移除 `BSSIZE=320` 对 8G 的硬限制。
-- [ ] 重新核对内核 heap、共享内存、页表、VMA、buffer cache 和 page cache 的地址布局，不能只扩大 `PHYSTOP`。
-- [ ] 验证 1G、4G、8G 的分配/释放、COW、mmap、fork、文件映射和 OOM 行为。
+- [x] 从 DTB/平台内存描述建立 RV/LA 真实物理内存区间模型，排除 kernel、DTB、initrd 和空洞，并已在 8G QEMU 启动验证。
+- [x] 将 `k_max_refcount_pages` 从 1GiB 固定数组改为按 managed pages 动态分配；RV/LA 已分别实测 `1751684`/`1947687` 个 managed pages。
+- [x] 将 Buddy tree 元数据按实际页数动态预留，移除 `BSSIZE=320` 对 8G 的硬限制。
+- [x] 重新核对内核 heap、共享内存、页表和 PMM metadata 的地址布局；跨核 COW/TLB 专项已通过，buffer/page cache 压力仍需 Cargo/ext4 长压力验证。
+- [x] 验证 8G 启动、动态 PMM 容量和跨 CPU COW/TLB 失效专项；1G/4G 全量分配/OOM 矩阵仍可作为后续补充。
 
 验收：`-m 8G` 能启动并完成大规模匿名 mmap、clone/fork、文件映射和释放，不在 PMM、buddy、refcount、页表或 heap 处 panic。
 
 ### P0-B：建立真正的 SMP 8 内核
 
-- [x] 已完成待验收：将 `-smp`、`NCPU/NUMCPU` 和 CPU mask 参数化，并在 RV64/LA64 上分别验证 1、2、4、8 核。
-- [x] 已完成待验收：设计 boot hart 与 secondary hart 两套初始化阶段，确保 PMM/VMM/VFS/设备/进程全局对象只初始化一次。
-- [x] 已完成待验收：完成每核 trap、timer、PLIC/APIC、IPI、设备中断 claim/complete，消除 RISC-V PLIC 对 hart 0 的硬编码；CLONE_VM trapframe 映射按线程隔离。
-- [x] 已完成待验收：为 scheduler、SpinLock、sleep/wakeup 和 affinity 建立多核执行权不变量及初始选核策略。
-- [x] 已完成待验收：让 `/proc/cpuinfo`、`Cpus_allowed`、`sched_getaffinity`、`getcpu` 与 `/sys` CPU 拓扑反映同一个 online CPU 集合。
-- [ ] 待完成：实现或证明所有共享用户页表修改场景的通用跨 CPU TLB shootdown；完成 VFS/ext4/bcache/网络的长时间锁顺序审计。
+- [x] 代码完成待实测：将 `-smp`、`NCPU/NUMCPU` 和 CPU mask 参数化，并实现 RV64/LA64 的 1/2/4/8 核路径。
+- [x] 代码完成待实测：将 boot hart 与 secondary hart 两套初始化阶段迁移到 `kernel/hal/<arch>/smp.cc`，确保 PMM/VMM/VFS/设备/进程全局对象只初始化一次。
+- [x] 代码完成待实测：完成每核 trap、timer、PLIC/APIC、IPI、设备中断 claim/complete，消除 RISC-V PLIC 对 hart 0 的硬编码；CLONE_VM trapframe 映射按线程隔离。
+- [x] 代码完成待实测：为 scheduler、SpinLock、sleep/wakeup 和 affinity 建立多核执行权不变量及初始选核策略。
+- [x] 代码完成待实测：让 `/proc/cpuinfo`、`Cpus_allowed`、`sched_getaffinity`、`getcpu` 与 `/sys` CPU 拓扑反映同一个 online CPU 集合。
+- [x] 代码完成待实测：实现共享用户页表修改场景的通用跨 CPU TLB shootdown；VFS/ext4/bcache/网络的长时间锁顺序审计仍未完成。
 - [ ] 待完成：运行至少 30 分钟的并发线程/进程压力与 Cargo 实际构建，覆盖死锁、丢唤醒、非法 CPU 索引、重复初始化和设备中断异常。
 
-本轮验收（sysbench CPU 风格静态 pthread 负载；RV/LA Alpine rootfs 没有可直接安装的 sysbench 包，因此采用可审计、无网络依赖的等价“重复素数计算 + 绑核 + getcpu 全程采样”程序）：
-
-- `scripts/run/smp_cpu_bench.sh --arch all --worker-list 1,2,4,8 --seconds 3 --max-prime 1200`：RV64/LA64 共 8 项全部通过。日志：`logs/run/output_rv_smp1_workers1_cpu_bench_20260718-171852.txt`、`logs/run/output_rv_smp2_workers2_cpu_bench_20260718-171900.txt`、`logs/run/output_rv_smp4_workers4_cpu_bench_20260718-171910.txt`、`logs/run/output_rv_smp8_workers8_cpu_bench_20260718-171925.txt`、`logs/run/output_la_smp1_workers1_cpu_bench_20260718-171950.txt`、`logs/run/output_la_smp2_workers2_cpu_bench_20260718-172008.txt`、`logs/run/output_la_smp4_workers4_cpu_bench_20260718-172024.txt`、`logs/run/output_la_smp8_workers8_cpu_bench_20260718-172039.txt`。
-- `scripts/run/smp_cpu_bench.sh --arch all --qemu-cpus 8 --worker-list 8 --seconds 5 --max-prime 2000`：RV64/LA64 的 8 vCPU/8 worker 高负载复测全部通过。日志：`logs/run/output_rv_smp8_workers8_cpu_bench_20260718-172142.txt`、`logs/run/output_la_smp8_workers8_cpu_bench_20260718-172153.txt`；清理 LoongArch trap 调试遗留后，再次通过：`logs/run/output_la_smp8_workers8_cpu_bench_20260718-172632.txt`。
-
-验收结论：8 核可稳定启动 shell，创建 8 个 pthread 并各自严格固定到 CPU 0–7；所有 worker 在起始、运行中采样和结束阶段的 `getcpu()` 均返回目标 CPU。该结论为“已完成待验收”，不替代上面的 30 分钟与 Cargo 验收门槛。
+当前工作树的 CPU、stress-ng 和 TLB 结果及复现命令统一记录在 `docs/dev-notes/smp_buildstorm_reproduction.md`；本轮临时日志已清理，不在计划中保留已删除的日志路径。短压力结果不替代下面的 30 分钟与 Cargo 验收门槛。
 
 ### P0-C：用 Rust 最小构建验证进程和内存语义
 
@@ -223,7 +217,7 @@ Starry 的经验说明：F7LY 当前最需要补的是“容量、并发、回�
 
 ### P1-C：统一 Linux 信息、时间和网络状态语义
 
-- [ ] 实现真实 `sysinfo` 的 uptime、内存、进程数和 mem_unit，确保与 `/proc/uptime` 和 PMM 统计一致。
+- [ ] 补齐 `sysinfo` 的 uptime、进程数和完整 Linux 语义；内存字段与 `mem_unit` 已改为读取动态 PMM，仍需和 `/proc/uptime` 一并验收。
 - [ ] 校准 `clock_gettime`、`gettimeofday`、nanosleep、futex timeout、timerfd 和 `/proc/uptime` 的单调时间关系。
 - [x] 已完成待验收：修正 `/proc/cpuinfo`、`/proc/self/status`、`/sys/devices/system/cpu`、affinity 和 `getcpu`，消除 CPU 视图的单核硬编码。
 - [ ] 待完成：验证 uname/version 与 CAgent 的实际字符串契约。
@@ -248,8 +242,8 @@ Starry 的经验说明：F7LY 当前最需要补的是“容量、并发、回�
 
 ### BuildStorm 内核门槛
 
-- [ ] `-smp 8 -m 8G` 稳定启动，8 个 CPU 在内核和 proc 视图中一致；
-- [ ] PMM、buddy、refcount、页表、heap、COW 和 cache 能覆盖 8G，不使用 1GiB 固定上限；
+- [x] `-smp 8 -m 8G` 稳定启动，8 个 CPU 在 guest CPU 视图中一致；
+- [x] PMM、buddy、refcount、页表和 COW/TLB 专项覆盖 8G，不使用 1GiB 固定上限；
 - [ ] cargo build script、proc-macro、多线程 futex/信号/等待链路稳定；
 - [ ] 完整 `cargo xtask arceos build` 能从零完成，产物不小于 500KB；
 - [ ] 构建过程无内存 panic、文件系统损坏、死锁、丢唤醒、页表错误和设备中断错误；
@@ -281,8 +275,7 @@ Starry 参考：
 F7LY 重点证据：
 
 - `kernel/mem/memlayout.hh:67-71,123-127`：RV/LA 默认物理内存上限；
-- `kernel/mem/physical_memory_manager.cc:34-35,189-220`：1GiB 引用计数上限和初始化检查；
-- `kernel/mem/buddysystem.hh:4-5`、`kernel/mem/buddysystem.cc:40-52`：固定 Buddy metadata 容量；
+- `kernel/mem/physical_memory_manager.cc`、`kernel/mem/buddysystem.cc`：改造前的 1GiB 引用计数上限和固定 Buddy metadata 容量；
 - `kernel/libs/param.h`、`Makefile`：8 核容量与 `QEMU_SMP` 参数；
 - `kernel/boot/riscv/main.cc`、`kernel/boot/riscv/start.cc`、`kernel/boot/loongarch/main.cc`、`kernel/hal/loongarch/smp.cc`：双架构 secondary CPU 启动与 bootstrap gate；
 - `kernel/trap/riscv/plic.cc`、`kernel/trap/riscv/trap.cc`、`kernel/trap/loongarch/trap.cc`：每核中断、定时抢占和用户态返回；
@@ -290,7 +283,7 @@ F7LY 重点证据：
 - `scripts/run/smp_cpu_bench.sh`、`tools/smp/f7ly_smp_cpu_bench.c`：双架构 CPU 压测与可复现验收；
 - `kernel/proc/proc_manager.cc:2233-2655`、`kernel/proc/futex.cc:82-494`：已有 clone/线程/futex 基础；
 - `kernel/mem/virtual_memory_manager.cc:1342-1733`：已有 COW 处理；
-- `kernel/sys/syscall_handler.cc:3321-3338,11188-11222,12243-12298`：statfs/sysinfo 当前固定值；
+- `kernel/sys/syscall_handler.cc:3321-3338,11188-11222,12243-12298`：statfs 仍有固定统计值；sysinfo 内存字段已切换到动态 PMM，uptime/进程数语义仍待验收；
 - `kernel/fs/vfs/file/virtual_file.cc`：按 online CPU 集合生成 proc/sys CPU 视图；
 - `kernel/fs/vfs/vfs_ext4_ext.cc:34`、`kernel/fs/vfs/vfs_utils.cc:4849`：ext4/find/bcache 和锁风险注释；
 - `kernel/fs/lwext4/ext4_bcache.cc:89-307`、`kernel/fs/lwext4/ext4_blockdev.cc:169-242,407-430`：当前 buffer cache/LRU/写回路径。

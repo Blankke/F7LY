@@ -151,6 +151,27 @@ void DtbManager::init(uint64 dtb_addr) {
     _dtb_addr = normalize_dtb_addr_for_kernel(dtb_addr);
 }
 
+uint64 DtbManager::get_dtb_size()
+{
+    if (_dtb_addr == 0)
+    {
+        return 0;
+    }
+
+    const fdt_header *header = reinterpret_cast<const fdt_header *>(_dtb_addr);
+    if (bswap32(header->magic) != FDT_MAGIC)
+    {
+        return 0;
+    }
+
+    const uint64 total_size = bswap32(header->totalsize);
+    if (total_size < sizeof(fdt_header))
+    {
+        return 0;
+    }
+    return total_size;
+}
+
 int DtbManager::get_memory_regions(DtbMemoryRegion *regions, int max_regions)
 {
     if (regions == nullptr || max_regions <= 0)
@@ -295,13 +316,19 @@ int DtbManager::get_memory_regions(DtbMemoryRegion *regions, int max_regions)
             // 但 reg 高 32 位会带一个并不参与当前内核物理寻址的标记值。
             // 如果直接把 64-bit 拼接值当地址，会得到与实际执行完全不一致的假地址，
             // 从而误判内存不连续。这里在“节点名地址”和 reg 低 32 位一致时，
-            // 退回到节点名给出的真实物理基址，并同样按低 32 位读取 size。
+            // 退回到节点名给出的真实物理基址。size 仍可能合法地超过 4 GiB，
+            // 不能无条件截成低 32 位；只有 size 携带与 base 完全相同的高位
+            // 标记时才去掉该标记。
             if (memory_node_addr_valid &&
                 base > 0xFFFFFFFFULL &&
                 (base & 0xFFFFFFFFULL) == memory_node_addr)
             {
+                const uint64 address_marker = base & 0xFFFFFFFF00000000ULL;
                 base = memory_node_addr;
-                size = size & 0xFFFFFFFFULL;
+                if ((size & 0xFFFFFFFF00000000ULL) == address_marker)
+                {
+                    size &= 0xFFFFFFFFULL;
+                }
             }
 
             if (base == 0 && memory_node_addr_valid && memory_node_addr != 0)

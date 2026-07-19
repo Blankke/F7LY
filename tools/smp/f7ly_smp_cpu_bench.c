@@ -57,6 +57,7 @@ struct WorkerResult
     int error_number;
     int error_stage;
     uint64_t events;
+    uint64_t elapsed_ns;
     uint64_t observed_cpu_mask;
 };
 
@@ -342,6 +343,14 @@ static void *worker_main(void *opaque)
         return NULL;
     }
 
+    const uint64_t end_ns = timespec_to_ns(&now);
+    if (end_ns < start_ns)
+    {
+        record_error(result, k_error_end_clock, EIO);
+        return NULL;
+    }
+    result->elapsed_ns = end_ns - start_ns;
+
     struct GetcpuTrace end_trace = {};
     if (read_current_cpu(&result->end_cpu, &error_number, &end_trace) != 0 && result->error_number == 0)
     {
@@ -469,6 +478,8 @@ int main(int argc, char **argv)
     int created_workers = 0;
     int completed_workers = 0;
     int failed = 0;
+    uint64_t total_events = 0;
+    uint64_t maximum_elapsed_ns = 0;
 
     atomic_init(&g_ready_workers, 0);
     atomic_init(&g_start_gate, 0);
@@ -539,7 +550,8 @@ int main(int argc, char **argv)
                "start_getcpu_return=%ld start_getcpu_raw_cpu=%d "
                "end_getcpu_return=%ld end_getcpu_raw_cpu=%d "
                "observed_cpu_mask=0x%llx exit_code=%d error_stage=%s "
-               "errno_low4=0x%x affinity_failure_bits=0x%x events=%llu status=%s\n",
+               "errno_low4=0x%x affinity_failure_bits=0x%x events=%llu "
+               "elapsed_ns=%llu status=%s\n",
                worker,
                worker,
                result->start_cpu,
@@ -554,16 +566,40 @@ int main(int argc, char **argv)
                errno_low4,
                affinity_failure_bits,
                (unsigned long long)result->events,
+               (unsigned long long)result->elapsed_ns,
                worker_passed ? "PASS" : "FAIL");
         if (!worker_passed)
         {
             failed = 1;
+        }
+        else
+        {
+            total_events += result->events;
+            if (result->elapsed_ns > maximum_elapsed_ns)
+            {
+                maximum_elapsed_ns = result->elapsed_ns;
+            }
         }
     }
 
     printf("F7LY_SMP_CPU_RESULT workers=%d completed_workers=%d mode=pthread\n",
            workers,
            completed_workers);
+    if (maximum_elapsed_ns != 0)
+    {
+        // 以最后结束的 worker 作为整轮墙钟时间，避免把各线程耗时相加后
+        // 错算成串行吞吐；这个定义与 sysbench CPU 的 events/sec 口径一致。
+        const double elapsed_seconds = (double)maximum_elapsed_ns / 1000000000.0;
+        const double events_per_second =
+            (double)total_events / elapsed_seconds;
+        printf("F7LY_SMP_CPU_METRICS workers=%d events=%llu "
+               "elapsed_seconds=%.6f events_per_second=%.3f status=%s\n",
+               workers,
+               (unsigned long long)total_events,
+               elapsed_seconds,
+               events_per_second,
+               failed ? "FAIL" : "PASS");
+    }
     printf("F7LY_SMP_CPU_%s\n", failed ? "FAIL" : "PASS");
     return failed ? 1 : 0;
 }

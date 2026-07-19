@@ -2,6 +2,7 @@
 #include "proc_manager.hh"
 #include "scheduler.hh"
 #include "physical_memory_manager.hh"
+#include "hal/tlb_shootdown.hh"
 #include "virtual_memory_manager.hh"
 #include "devs/spinlock.hh"
 #include "sys/syscall_defs.hh"
@@ -232,7 +233,6 @@ namespace
                 pte_data |= PTE_X;
             }
             pte.set_data(pte_data);
-            asm volatile("sfence.vma %0, zero" : : "r"(page_va) : "memory");
 #elif defined(LOONGARCH)
             pte_data |= PTE_V | PTE_U | PTE_W | PTE_D | PTE_P | PTE_MAT;
             if (vm->prot & PROT_READ)
@@ -240,9 +240,8 @@ namespace
                 pte_data &= ~PTE_NR;
             }
             pte.set_data(pte_data);
-            uint64 pair_base = page_va & ~((PGSIZE << 1) - 1);
-            asm volatile("invtlb 0x6, $zero, %0" : : "r"(pair_base) : "memory");
 #endif
+            hal::tlb::flush_range_all_cpus(page_va, PGSIZE);
         }
         return true;
     }
@@ -369,14 +368,7 @@ namespace
 
     void flush_signal_stack_page_tlb(uint64 page_va)
     {
-#ifdef RISCV
-        asm volatile("sfence.vma %0, zero" : : "r"(page_va) : "memory");
-#elif defined(LOONGARCH)
-        uint64 pair_base = page_va & ~((PGSIZE << 1) - 1);
-        asm volatile("invtlb 0x6, $zero, %0" : : "r"(pair_base) : "memory");
-#else
-        (void)page_va;
-#endif
+        hal::tlb::flush_range_all_cpus(PGROUNDDOWN(page_va), PGSIZE);
     }
 
     bool promote_existing_signal_stack_page(mem::Pte pte, const proc::vma *vm, uint64 page_va)

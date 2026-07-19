@@ -12,6 +12,8 @@ extern "C" char end[]; // 来自链接脚本
 #ifdef RISCV
 extern uint64 k_dtb_addr;
 #endif
+extern uint64 k_initrd_start;
+extern uint64 k_initrd_end;
 
 namespace mem
 {
@@ -31,8 +33,223 @@ namespace mem
 
     namespace
     {
-        constexpr uint32 k_max_refcount_pages = 262144; // 覆盖 1GiB/4KiB 的页数上限。
-        uint16 k_page_refcounts[k_max_refcount_pages] = {};
+        uint16 *k_page_refcounts = nullptr;
+        uint64 k_page_refcount_bytes = 0;
+
+        constexpr uint64 align_up(uint64 value, uint64 alignment)
+        {
+            return (value + alignment - 1) & ~(alignment - 1);
+        }
+
+        bool checked_region_top(uint64 base, uint64 size, uint64 &top)
+        {
+            if (size == 0 || base > ~0ULL - size)
+            {
+                return false;
+            }
+            top = base + size;
+            return true;
+        }
+
+        struct ReservedRange
+        {
+            uint64 start = 0;
+            uint64 end = 0;
+        };
+
+        struct UsableInterval
+        {
+            uint64 start = 0;
+            uint64 top = 0;
+
+            uint64 bytes() const
+            {
+                return top > start ? top - start : 0;
+            }
+        };
+
+        UsableInterval largest_usable_interval(uint64 raw_start, uint64 raw_top,
+                                               const ReservedRange *reserved,
+                                               int reserved_count)
+        {
+            const uint64 start = PGROUNDUP(raw_start);
+            const uint64 top = PGROUNDDOWN(raw_top);
+            if (top <= start)
+            {
+                return {};
+            }
+
+            // 当前启动协议只需要排除 DTB 与 initrd。复制后排序，避免依赖
+            // 固件放置二者的先后顺序；重叠区间也会在 cursor 推进时自然合并。
+            ReservedRange sorted[2]{};
+            int count = reserved_count > 2 ? 2 : reserved_count;
+            for (int index = 0; index < count; ++index)
+            {
+                sorted[index] = reserved[index];
+            }
+            if (count == 2 && sorted[1].start < sorted[0].start)
+            {
+                ReservedRange temporary = sorted[0];
+                sorted[0] = sorted[1];
+                sorted[1] = temporary;
+            }
+
+            UsableInterval best{};
+            uint64 cursor = start;
+            auto consider = [&](uint64 gap_start, uint64 gap_top) {
+                gap_start = PGROUNDUP(gap_start);
+                gap_top = PGROUNDDOWN(gap_top);
+                if (gap_top > gap_start && gap_top - gap_start > best.bytes())
+                {
+                    best.start = gap_start;
+                    best.top = gap_top;
+                }
+            };
+
+            for (int index = 0; index < count; ++index)
+            {
+                if (sorted[index].end <= cursor || sorted[index].start >= top)
+                {
+                    continue;
+                }
+
+                const uint64 reserved_start = PGROUNDDOWN(sorted[index].start);
+                const uint64 reserved_end = PGROUNDUP(sorted[index].end);
+                if (reserved_start > cursor)
+                {
+                    consider(cursor, reserved_start < top ? reserved_start : top);
+                }
+                if (reserved_end > cursor)
+                {
+                    cursor = reserved_end;
+                }
+                if (cursor >= top)
+                {
+                    break;
+                }
+            }
+            consider(cursor, top);
+            return best;
+        }
+
+        struct PmmMetadataLayout
+        {
+            uint64 metadata_start = 0;
+            uint64 metadata_end = 0;
+            uint64 tree_start = 0;
+            uint64 tree_bytes = 0;
+            uint64 refcount_start = 0;
+            uint64 refcount_bytes = 0;
+            uint64 managed_start = 0;
+            uint32 managed_pages = 0;
+        };
+
+        PmmMetadataLayout calculate_pmm_layout(uint64 metadata_start, uint64 managed_limit)
+        {
+            if (managed_limit <= metadata_start + PGSIZE * 16)
+            {
+                panic("[pmm] region too small for dynamic metadata");
+            }
+
+            uint64 candidate_pages = (managed_limit - metadata_start) / PGSIZE;
+            if (candidate_pages > UINT32_MAX)
+            {
+                panic("[pmm] region has too many pages for 32-bit buddy offsets: %lu",
+                      candidate_pages);
+            }
+
+            PmmMetadataLayout layout{};
+            layout.metadata_start = metadata_start;
+            uint32 managed_pages = static_cast<uint32>(candidate_pages);
+
+            // refcount 数量依赖最终 managed pages，而 metadata 页又会减少 managed
+            // pages。迭代到固定点，通常两轮即可收敛。
+            for (int iteration = 0; iteration < 16; ++iteration)
+            {
+                layout.tree_start = align_up(metadata_start + sizeof(BuddySystem), alignof(uint64));
+                layout.tree_bytes = BuddySystem::required_tree_bytes(managed_pages);
+                layout.refcount_start = align_up(layout.tree_start + layout.tree_bytes, alignof(uint16));
+                layout.refcount_bytes = static_cast<uint64>(managed_pages) * sizeof(uint16);
+                if (layout.refcount_start > ~0ULL - layout.refcount_bytes)
+                {
+                    panic("[pmm] metadata address overflow");
+                }
+                layout.metadata_end = PGROUNDUP(layout.refcount_start + layout.refcount_bytes);
+                if (layout.metadata_end >= managed_limit)
+                {
+                    panic("[pmm] metadata consumes allocator region: start=%p end=%p limit=%p",
+                          metadata_start, layout.metadata_end, managed_limit);
+                }
+
+                uint64 next_pages64 = (managed_limit - layout.metadata_end) / PGSIZE;
+                if (next_pages64 > UINT32_MAX)
+                {
+                    panic("[pmm] managed page count overflow: %lu", next_pages64);
+                }
+                uint32 next_pages = static_cast<uint32>(next_pages64);
+                if (next_pages == managed_pages)
+                {
+                    layout.managed_start = layout.metadata_end;
+                    layout.managed_pages = managed_pages;
+                    return layout;
+                }
+                managed_pages = next_pages;
+            }
+
+            panic("[pmm] dynamic metadata layout did not converge");
+        }
+
+        struct HeapLayout
+        {
+            uint64 metadata_bytes = 0;
+            uint64 allocator_bytes = 0;
+            uint64 shm_bytes = 0;
+            uint32 allocator_pages = 0;
+        };
+
+        HeapLayout calculate_heap_layout(uint64 area_bytes)
+        {
+            HeapLayout layout{};
+            uint64 desired_shm = area_bytes / 3;
+            if (desired_shm > SHM_SIZE)
+            {
+                desired_shm = SHM_SIZE;
+            }
+            desired_shm = PGROUNDDOWN(desired_shm);
+
+            const uint32 maximum_heap_pages = static_cast<uint32>(vm_kernel_heap_size / PGSIZE);
+            uint64 heap_budget = area_bytes > desired_shm ? area_bytes - desired_shm : 0;
+            uint32 heap_pages = static_cast<uint32>(heap_budget / PGSIZE);
+            if (heap_pages > maximum_heap_pages)
+            {
+                heap_pages = maximum_heap_pages;
+            }
+
+            for (int iteration = 0; iteration < 16; ++iteration)
+            {
+                uint64 metadata_bytes = PGROUNDUP(BuddySystem::required_storage_bytes(heap_pages));
+                uint64 next_pages64 = heap_budget > metadata_bytes
+                                          ? (heap_budget - metadata_bytes) / PGSIZE
+                                          : 0;
+                if (next_pages64 > maximum_heap_pages)
+                {
+                    next_pages64 = maximum_heap_pages;
+                }
+                uint32 next_pages = static_cast<uint32>(next_pages64);
+                if (next_pages == heap_pages)
+                {
+                    layout.metadata_bytes = metadata_bytes;
+                    layout.allocator_pages = heap_pages;
+                    layout.allocator_bytes = static_cast<uint64>(heap_pages) * PGSIZE;
+                    uint64 remaining = area_bytes - metadata_bytes - layout.allocator_bytes;
+                    layout.shm_bytes = PGROUNDDOWN(remaining > SHM_SIZE ? SHM_SIZE : remaining);
+                    return layout;
+                }
+                heap_pages = next_pages;
+            }
+
+            panic("[pmm] heap metadata layout did not converge");
+        }
 
         inline uint64 normalize_managed_page_addr(uint64 addr)
         {
@@ -51,7 +268,7 @@ namespace mem
         inline bool page_index_in_range(uint64 page_index)
         {
             return page_index < PhysicalMemoryManager::get_page_count() &&
-                   page_index < k_max_refcount_pages;
+                   k_page_refcounts != nullptr;
         }
     } // namespace
 
@@ -77,186 +294,226 @@ namespace mem
 
     void PhysicalMemoryManager::init()
     {
-        // 多核情况下应该加锁
         memlock.init("memlock");
-        // 把原本Buddy的初始化放在这里，Buddy变成pmm的一个成员
-
-        /*pa_start是buddy系统在物理内存中的起始地址,加上一个Sizeof(BuddySystem)后后面存的东西是tree,
-        然后tree存完了之后才是buddy系统管理的那块内存。加上的BSSIZE是预留来放BuddySystem的大小和tree的大小，
-        在这之后才是buddy系统管理的那块内存，这时pa_start指向的就是buddy系统管理的那块内存的开始地址，
-        再被初始化为buddy的基址。*/
-        pa_start = reinterpret_cast<uint64_t>(end);
-        pa_start = (pa_start + PGSIZE - 1) & ~(PGSIZE - 1); // 将pa_start向高地址对齐到PGSIZE的整数倍
-        _buddy = reinterpret_cast<BuddySystem *>(pa_start);
-        pa_start += BSSIZE * PGSIZE;
-        memset(_buddy, 0, BSSIZE * PGSIZE);
-        uint64 heap_meta_bytes = BSSIZE * PGSIZE;
-        uint64 min_heap_region = heap_meta_bytes + (_1M * 8);
-        uint64 max_heap_region = heap_meta_bytes + vm_kernel_heap_size + SHM_SIZE;
-        uint64 usable_top = PHYSTOP;
-        bool use_split_heap_region = false;
-#ifdef RISCV
-        // 计算可用物理内存的上界，优先使用 dtb 位置作为上限以避免踩到 dtb
-        if (k_dtb_addr && k_dtb_addr < usable_top)
+        uint64 initrd_start = k_initrd_start;
+        uint64 initrd_end = k_initrd_end;
+        if (initrd_start == 0 || initrd_end <= initrd_start)
         {
-            usable_top = PGROUNDDOWN(k_dtb_addr);
+            // RISC-V 启动路径不会预先扫描 initrd；在扩大到 DTB 全量内存后必须
+            // 显式保留它，否则 PMM 会在文件系统挂载前覆盖 initrd 内容。
+            DtbManager::get_initrd(initrd_start, initrd_end);
         }
-#elif defined(LOONGARCH)
-        uint64 kernel_end_phys = VIRT2PHY(reinterpret_cast<uint64>(end));
+        if (initrd_start != 0 && initrd_end > initrd_start)
+        {
+            // 后续 VMM 与文件系统都要使用同一组物理边界。get_initrd() 只通过
+            // 引用返回结果，不会替调用方更新这两个全局值，因此在 PMM 选区前
+            // 统一发布，避免“已从 allocator 排除、分页后却没有映射”的裂缝。
+            k_initrd_start = initrd_start;
+            k_initrd_end = initrd_end;
+        }
+
+        ReservedRange reserved_ranges[2]{};
+        int reserved_count = 0;
+        uint64 dtb_size = DtbManager::get_dtb_size();
+        if (k_dtb_addr != 0)
+        {
+            // DTB header 异常时保守沿用旧实现的 2 MiB 保护窗；正常路径只
+            // 排除 totalsize 覆盖的页面，不再把 DTB 后面的全部 RAM 丢掉。
+            if (dtb_size == 0)
+            {
+                dtb_size = _1M * 2;
+            }
+            uint64 dtb_end = 0;
+            if (!checked_region_top(k_dtb_addr, dtb_size, dtb_end))
+            {
+                panic("[pmm] invalid DTB reserved range: start=%p size=%p",
+                      k_dtb_addr, dtb_size);
+            }
+            reserved_ranges[reserved_count++] = {k_dtb_addr, dtb_end};
+        }
+        if (initrd_start != 0 && initrd_end > initrd_start)
+        {
+            reserved_ranges[reserved_count++] = {initrd_start, initrd_end};
+        }
+
         DtbMemoryRegion regions[DtbManager::k_max_memory_regions]{};
         int region_count = DtbManager::get_memory_regions(regions, DtbManager::k_max_memory_regions);
-        int kernel_region_index = -1;
-        int heap_region_index = -1;
+        uint64 allocator_start = 0;
+        uint64 allocator_top = 0;
 
+#ifdef RISCV
+        const uint64 kernel_end_phys = PGROUNDUP(reinterpret_cast<uint64>(end));
+        int kernel_region_index = -1;
+        uint64 kernel_region_top = 0;
+        uint64 selected_region_top = 0;
+        UsableInterval best_interval{};
         for (int i = 0; i < region_count; ++i)
         {
-            uint64 region_base = regions[i].base;
-            uint64 region_top = region_base + regions[i].size;
-            printfGreen("[pmm] dtb memory region[%d]: base=%p size=%p top=%p\n",
-                        i, region_base, regions[i].size, region_top);
-            if (kernel_region_index < 0 &&
-                kernel_end_phys >= region_base &&
-                kernel_end_phys < region_top)
+            uint64 region_top = 0;
+            if (!checked_region_top(regions[i].base, regions[i].size, region_top))
+            {
+                printfYellow("[pmm] ignoring invalid dtb memory region[%d]\n", i);
+                continue;
+            }
+            const bool contains_kernel =
+                kernel_end_phys > regions[i].base && kernel_end_phys <= region_top;
+            if (contains_kernel)
             {
                 kernel_region_index = i;
+                kernel_region_top = PGROUNDDOWN(region_top);
+            }
+
+            const uint64 candidate_start = contains_kernel
+                                               ? kernel_end_phys
+                                               : regions[i].base;
+            UsableInterval candidate = largest_usable_interval(
+                candidate_start, region_top, reserved_ranges, reserved_count);
+            if (candidate.bytes() > best_interval.bytes())
+            {
+                best_interval = candidate;
+                selected_region_top = PGROUNDDOWN(region_top);
             }
         }
 
-        if (kernel_region_index >= 0)
+        if (kernel_region_index < 0 || best_interval.bytes() == 0)
         {
-            kernel_linear_top = to_vir(regions[kernel_region_index].base + regions[kernel_region_index].size);
-            usable_top = PGROUNDDOWN(kernel_linear_top);
+            // 没有可解析 DTB 时保留原有启动边界，避免把未知地址当作 RAM。
+            best_interval = largest_usable_interval(
+                kernel_end_phys, PHYSTOP, reserved_ranges, reserved_count);
+            if (best_interval.bytes() == 0)
+            {
+                panic("[pmm] fallback RAM has no usable interval");
+            }
+            kernel_region_top = PGROUNDDOWN(PHYSTOP);
+            selected_region_top = kernel_region_top;
+            printfYellow("[pmm] incomplete DTB RAM description, fallback top=%p\n",
+                         kernel_region_top);
         }
-        else
+        allocator_start = best_interval.start;
+        allocator_top = best_interval.top;
+        // RISC-V 没有 DMWIN，页表必须同时覆盖内核所在 RAM 与最终选中的
+        // allocator RAM。即使 DTB/initrd 位于二者之间，也只映射而不分配。
+        kernel_linear_top = kernel_region_top > selected_region_top
+                                ? kernel_region_top
+                                : selected_region_top;
+
+#elif defined(LOONGARCH)
+        const uint64 kernel_end_phys = PGROUNDUP(VIRT2PHY(reinterpret_cast<uint64>(end)));
+        int kernel_region_index = -1;
+        for (int i = 0; i < region_count; ++i)
         {
-            kernel_linear_top = PGROUNDDOWN(PHYSTOP);
+            uint64 region_top = 0;
+            if (!checked_region_top(regions[i].base, regions[i].size, region_top))
+            {
+                printfYellow("[pmm] ignoring invalid dtb memory region[%d]\n", i);
+                continue;
+            }
+            if (kernel_end_phys > regions[i].base && kernel_end_phys <= region_top)
+            {
+                kernel_region_index = i;
+                kernel_linear_top = to_vir(PGROUNDDOWN(region_top));
+            }
         }
 
-        // LoongArch virt 的 1G 内存通常被拆成低端 RAM + 0x90000000 以上的高端 RAM。
-        // 以前内核把整个物理空间强行当成一段连续区间，只能退化为 128MB 低端内存。
-        // 这里保持页分配器继续使用“包含内核镜像的低端连续区”，
-        // 同时把高端连续区整段拿来做 kernel heap/shm，避免把 PCI/内存空洞错误纳入 buddy。
-        for (int i = region_count - 1; i >= 0; --i)
+        UsableInterval best_interval{};
+        for (int i = 0; i < region_count; ++i)
         {
-            if (i == kernel_region_index)
+            uint64 region_top = 0;
+            if (!checked_region_top(regions[i].base, regions[i].size, region_top))
             {
                 continue;
             }
-            if (regions[i].size >= min_heap_region)
+            const uint64 region_start = i == kernel_region_index
+                                            ? kernel_end_phys
+                                            : regions[i].base;
+            UsableInterval candidate = largest_usable_interval(
+                region_start, region_top, reserved_ranges, reserved_count);
+            if (candidate.bytes() > best_interval.bytes())
             {
-                heap_region_index = i;
-                break;
+                best_interval = candidate;
             }
         }
 
-        if (heap_region_index >= 0)
+        if (best_interval.bytes() == 0)
         {
-            uint64 heap_region_phys_base = PGROUNDUP(regions[heap_region_index].base);
-            uint64 heap_region_skip = heap_region_phys_base - regions[heap_region_index].base;
-            if (regions[heap_region_index].size <= heap_region_skip)
+            best_interval = largest_usable_interval(
+                kernel_end_phys, VIRT2PHY(PHYSTOP),
+                reserved_ranges, reserved_count);
+            if (best_interval.bytes() == 0)
             {
-                panic("[pmm] split heap region alignment overflow");
+                panic("[pmm] LoongArch fallback RAM has no usable interval");
             }
-            uint64 heap_region_size = PGROUNDDOWN(regions[heap_region_index].size - heap_region_skip);
-            if (heap_region_size > max_heap_region)
-            {
-                heap_region_size = max_heap_region;
-            }
-            if (heap_region_size < min_heap_region)
-            {
-                panic("[pmm] split heap region too small: %p", heap_region_size);
-            }
-
-            heap_area_start = to_vir(heap_region_phys_base);
-            heap_area_size = heap_region_size;
-            use_split_heap_region = true;
-            printfGreen("[pmm] using split heap region: base=%p size=%p\n",
-                        heap_area_start, heap_area_size);
+            allocator_start = to_vir(best_interval.start);
+            allocator_top = to_vir(best_interval.top);
+            kernel_linear_top = PGROUNDDOWN(PHYSTOP);
+            printfYellow("[pmm] no usable DTB memory region, fallback=%p-%p\n",
+                         allocator_start, allocator_top);
+        }
+        else
+        {
+            // DMWIN 对所有 RAM 提供直映；因此页分配器应使用最大连续 RAM 区，
+            // 而不是永远困在包含内核的 128/256 MiB 低端区。
+            allocator_start = to_vir(best_interval.start);
+            allocator_top = to_vir(best_interval.top);
+        }
+        if (kernel_linear_top == 0)
+        {
+            kernel_linear_top = PGROUNDDOWN(PHYSTOP);
         }
 #endif
 
-        phys_top = usable_top;
-        if (kernel_linear_top == 0)
+        allocator_start = PGROUNDUP(allocator_start);
+        allocator_top = PGROUNDDOWN(allocator_top);
+        if (allocator_top <= allocator_start + PGSIZE * 64)
         {
-            kernel_linear_top = usable_top;
+            panic("[pmm] insufficient allocator region: start=%p top=%p",
+                  allocator_start, allocator_top);
         }
+        phys_top = allocator_top;
 
-        if (usable_top <= pa_start + PGSIZE * 4)
-        {
-            panic("[pmm] insufficient memory: usable_top=%p, pa_start=%p", usable_top, pa_start);
-        }
+        const uint32 max_heap_pages = static_cast<uint32>(vm_kernel_heap_size / PGSIZE);
+        const uint64 max_heap_metadata = PGROUNDUP(BuddySystem::required_storage_bytes(max_heap_pages));
+        const uint64 max_heap_region = max_heap_metadata + vm_kernel_heap_size + SHM_SIZE;
+        const uint32 min_heap_pages = static_cast<uint32>((_1M * 8) / PGSIZE);
+        const uint64 min_heap_metadata = PGROUNDUP(BuddySystem::required_storage_bytes(min_heap_pages));
+        const uint64 min_heap_region = min_heap_metadata + _1M * 8 + _1M * 2;
 
-        uint64 available_bytes = usable_top - pa_start;
-        if (available_bytes < PGSIZE * 16)
-        {
-            panic("[pmm] insufficient low memory for page allocator: %p", available_bytes);
-        }
+        uint64 available_bytes = allocator_top - allocator_start;
+        uint64 heap_region_bytes = available_bytes / 3;
+        if (heap_region_bytes < min_heap_region)
+            heap_region_bytes = min_heap_region;
+        if (heap_region_bytes > max_heap_region)
+            heap_region_bytes = max_heap_region;
+        if (heap_region_bytes + PGSIZE * 64 > available_bytes)
+            heap_region_bytes = available_bytes / 3;
 
-        if (!use_split_heap_region)
-        {
-            // 为堆和共享内存预留一部分空间，这里按 1/3 留给堆/共享内存，2/3 留给物理页分配
-            uint64 heap_region_bytes = available_bytes / 3;
-            if (heap_region_bytes < min_heap_region)
-                heap_region_bytes = min_heap_region;
-            if (heap_region_bytes > max_heap_region)
-                heap_region_bytes = max_heap_region;
-            if (heap_region_bytes + PGSIZE * 16 > available_bytes)
-                heap_region_bytes = available_bytes > PGSIZE * 32 ? available_bytes - PGSIZE * 16 : available_bytes / 2;
+        heap_area_start = PGROUNDDOWN(allocator_top - heap_region_bytes);
+        heap_area_size = allocator_top - heap_area_start;
+        PmmMetadataLayout pmm_layout = calculate_pmm_layout(allocator_start, heap_area_start);
+        _buddy = reinterpret_cast<BuddySystem *>(pmm_layout.metadata_start);
+        pa_start = pmm_layout.managed_start;
+        page_count = pmm_layout.managed_pages;
+        k_page_refcounts = reinterpret_cast<uint16 *>(pmm_layout.refcount_start);
+        k_page_refcount_bytes = pmm_layout.refcount_bytes;
+        memset(reinterpret_cast<void *>(pmm_layout.metadata_start), 0,
+               pmm_layout.metadata_end - pmm_layout.metadata_start);
 
-            heap_area_start = PGROUNDDOWN(usable_top - heap_region_bytes);
-            heap_area_size = usable_top - heap_area_start;
-        }
-
-        uint64 pmm_bytes = use_split_heap_region ? (usable_top - pa_start) : (heap_area_start - pa_start);
-        if (pmm_bytes < PGSIZE * 16)
-        {
-            panic("[pmm] not enough space for page allocator: %p bytes", pmm_bytes);
-        }
-
-        page_count = pmm_bytes / PGSIZE;
-        if (page_count > k_max_refcount_pages)
-        {
-            panic("[pmm] page refcount table too small: pages=%d max=%d",
-                  page_count, k_max_refcount_pages);
-        }
-
-        // 拆分堆区域：metadata + 普通堆 + 共享内存
-        if (heap_area_size <= heap_meta_bytes)
-        {
-            panic("[pmm] heap region too small");
-        }
-        uint64 usable_heap_bytes = heap_area_size - heap_meta_bytes;
-        uint64 tmp_shm_size = usable_heap_bytes / 3;
-        if (tmp_shm_size > SHM_SIZE)
-            tmp_shm_size = SHM_SIZE;
-        heap_allocator_size = usable_heap_bytes - tmp_shm_size;
-        if (heap_allocator_size > vm_kernel_heap_size)
-        {
-            heap_allocator_size = vm_kernel_heap_size;
-            tmp_shm_size = usable_heap_bytes - heap_allocator_size;
-        }
-        heap_allocator_size = PGROUNDDOWN(heap_allocator_size);
-        shm_size = PGROUNDDOWN(tmp_shm_size);
-        if (heap_allocator_size + shm_size > usable_heap_bytes)
-        {
-            shm_size = usable_heap_bytes > heap_allocator_size ? usable_heap_bytes - heap_allocator_size : 0;
-            shm_size = PGROUNDDOWN(shm_size);
-        }
-        shm_start = heap_area_start + heap_meta_bytes + heap_allocator_size;
-        heap_page_count = heap_allocator_size / PGSIZE;
+        HeapLayout heap_layout = calculate_heap_layout(heap_area_size);
+        heap_allocator_size = heap_layout.allocator_bytes;
+        heap_page_count = heap_layout.allocator_pages;
+        shm_start = heap_area_start + heap_layout.metadata_bytes + heap_allocator_size;
+        shm_size = heap_layout.shm_bytes;
+        heap_area_size = heap_layout.metadata_bytes + heap_allocator_size + shm_size;
 
         if (heap_page_count == 0 || shm_size == 0)
         {
-            panic("[pmm] heap/shm space too small (heap pages=%d, shm=%p)", heap_page_count, shm_size);
+            panic("[pmm] heap/shm space too small (heap pages=%d, shm=%p)",
+                  heap_page_count, shm_size);
         }
 
-        _buddy->Initialize(pa_start, page_count);
-        printfGreen("[pmm] buddy system initialized, pa_start: %p, phys_top: %p, pages: %d\n",
-                    pa_start, phys_top, page_count);
-        printfGreen("[pmm] kernel linear top: %p\n", kernel_linear_top);
-        printfGreen("[pmm] heap region: start=%p size=%p (usable=%p), heap_pages=%d\n",
-                    heap_area_start, heap_area_size, heap_allocator_size, heap_page_count);
-        printfGreen("[pmm] shm region: start=%p size=%p\n", shm_start, shm_size);
+        _buddy->Initialize(pa_start, page_count,
+                           reinterpret_cast<void *>(pmm_layout.tree_start),
+                           pmm_layout.tree_bytes);
     }
 
     void *PhysicalMemoryManager::alloc_page()
@@ -267,6 +524,14 @@ namespace mem
             panic("[pmm] alloc_page failed");
         }
         return pa;
+    }
+
+    uint64 PhysicalMemoryManager::get_free_page_count()
+    {
+        memlock.acquire();
+        const uint64 free_pages = _buddy == nullptr ? 0 : _buddy->get_free_page_count();
+        memlock.release();
+        return free_pages;
     }
 
     void *PhysicalMemoryManager::try_alloc_page()
@@ -438,7 +703,7 @@ namespace mem
         {
             return false;
         }
-        return ((addr - pa_start) / PGSIZE) < k_max_refcount_pages;
+        return ((addr - pa_start) / PGSIZE) < page_count && k_page_refcounts != nullptr;
     }
     void PhysicalMemoryManager::clear_page(void *pa)
     {
@@ -534,7 +799,9 @@ namespace mem
         }
 #endif
 
-        if (managed_addr < pa_start || managed_addr >= phys_top)
+        const uint64 managed_top =
+            pa_start + static_cast<uint64>(page_count) * PGSIZE;
+        if (managed_addr < pa_start || managed_addr >= managed_top)
         {
             return info;
         }

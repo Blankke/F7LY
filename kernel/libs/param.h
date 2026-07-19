@@ -8,9 +8,12 @@
 // 进程池需要覆盖较大的并发进程/线程集合；容量过小会让合法 fork()/clone()
 // 负载过早得到 EAGAIN，破坏用户态按 Linux 语义创建任务的预期。
 #define NPROC       512  // maximum number of processes
-#define NOFILE      128  // open files per process
-#define NFILE       100  // open files per system
-#define NINODE       50  // maximum number of active i-nodes
+// Cargo/rustc 的并行子进程会同时持有大量源码、metadata、pipe 和目录句柄。
+// per-process fd 表的权威容量已是 proc::fd_table_capacity=1024；这里把旧式
+// VFS 全局对象池同步提升，避免 8 jobs 在内存仍充足时先误报 EMFILE/ENFILE。
+#define NOFILE     1024  // legacy per-process open-file capacity
+#define NFILE      1024  // open files/ext4 handles per system
+#define NINODE     1024  // maximum number of active inodes
 #define NDEV         10  // maximum major device number
 #define ROOTDEV       0  // device number of file system root disk
 #define MAXARG       256 // max exec arguments

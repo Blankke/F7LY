@@ -41,6 +41,7 @@ namespace mem
         static uint64 get_shm_start() { return shm_start; }
         static uint64 get_shm_size() { return shm_size; }
         static uint32 get_page_count() { return page_count; }
+        static uint64 get_free_page_count();
         static uint32 get_heap_page_count() { return heap_page_count; }
 
     private:

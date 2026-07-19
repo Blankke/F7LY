@@ -3,6 +3,7 @@
 #include "spinlock.hh"
 #include "cpu.hh"
 #include "printer.hh"
+#include "hal/tlb_shootdown.hh"
 
 
 	SpinLock::SpinLock()
@@ -30,8 +31,17 @@
 		eastl::atomic_thread_fence( eastl::memory_order_acq_rel );
 
 		Cpu * expected = nullptr;
+		uint32 spin_count = 0;
 		while ( _locked.compare_exchange_strong( expected, cpu, eastl::memory_order_acq_rel ) == false )
+		{
 			expected = nullptr;
+			// 等锁时本地中断已经关闭；周期性轮询 TLB IPI，防止锁持有者
+			// 正在同步等待本 CPU 的 shootdown acknowledgement。
+			if ((++spin_count & 0xffU) == 0)
+			{
+				hal::tlb::poll_pending();
+			}
+		}
 	}
 
 	bool SpinLock::try_acquire()

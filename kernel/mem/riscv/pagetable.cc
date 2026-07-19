@@ -15,7 +15,8 @@ namespace mem
     {
         bool is_sane_pagetable_base(uint64 base)
         {
-            return base >= KERNBASE && base < PHYSTOP && is_page_align(base);
+            return is_page_align(base) &&
+                   k_pmm.is_managed_page(reinterpret_cast<void *>(base));
         }
     }
 

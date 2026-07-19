@@ -26,48 +26,61 @@ namespace mem
         return x + 1;
     }
 
-    void BuddySystem::Initialize(uint64 baseptr, uint32 total_pages)
+    uint32 BuddySystem::capacity_pages_for(uint32 total_pages)
     {
-        // 初始化buddy系统，baseptr是buddy系统的起始地址
-        // 原本的buddy是用来管理物理内存的，所以并没有初始化它管理的内存的操作
-        // 这里解耦合，buddy同时用于管理pm和hm，这里的buddy初始化时不用初始化内存
+        return NextPowerOfTwo(total_pages ? total_pages : 1);
+    }
+
+    uint64 BuddySystem::required_tree_bytes(uint32 total_pages)
+    {
+        const uint64 capacity = capacity_pages_for(total_pages);
+        // 满二叉树包含 2*leaf_count-1 个节点，每个节点恰好占一个 uint8。
+        return capacity * 2 - 1;
+    }
+
+    uint64 BuddySystem::required_storage_bytes(uint32 total_pages)
+    {
+        return sizeof(BuddySystem) + required_tree_bytes(total_pages);
+    }
+
+    void BuddySystem::Initialize(uint64 baseptr, uint32 total_pages,
+                                 void *tree_storage, uint64 tree_storage_bytes)
+    {
+        // baseptr 只表示受管页面起点；树由调用方放在独立 metadata 区域。
         base_ptr = reinterpret_cast<uint8 *>(baseptr);
         page_count = total_pages ? total_pages : 1;
         printfGreen("[mem] Buddy System Init\n");
-        //  printfBlue("[BuddySystem] base_ptr: %p\n", base_ptr);
-        tree = base_ptr - BSSIZE * PGSIZE + sizeof(BuddySystem);
+        tree = reinterpret_cast<uint8 *>(tree_storage);
         level = 0;
-        capacity_pages = NextPowerOfTwo(page_count);
+        capacity_pages = capacity_pages_for(page_count);
         while ((1u << level) < capacity_pages)
             level++;
-        // 计算所需的树节点数量
-        int max_nodes = (1 << (level + 1)) - 1;
-        int available_bytes = BSSIZE * PGSIZE - sizeof(BuddySystem);
+        const uint64 max_nodes = required_tree_bytes(page_count);
 
-         printfBlue("[BuddySystem] level=%d, max_nodes=%d, available_bytes=%d\n",
-               level, max_nodes, available_bytes);
+        printfBlue("[BuddySystem] level=%d, max_nodes=%lu, available_bytes=%lu\n",
+                   level, max_nodes, tree_storage_bytes);
 
-        if (max_nodes > available_bytes)
+        if (tree == nullptr || max_nodes > tree_storage_bytes)
         {
-            panic("[BuddySystem] Tree size (%d bytes) exceeds available space (%d bytes)\n",
-                  max_nodes, available_bytes);
+            panic("[BuddySystem] Tree size (%lu bytes) exceeds available space (%lu bytes)\n",
+                  max_nodes, tree_storage_bytes);
         }
 
         // 初始化树数组
-        for (int i = 0; i < max_nodes; i++)
+        for (uint64 i = 0; i < max_nodes; i++)
         {
             tree[i] = NODE_UNUSED;
         }
 
         // 计算并打印实际管辖的内存区域
         uint64 managed_start = reinterpret_cast<uint64>(base_ptr);
-        uint64 managed_end = managed_start + (static_cast<uint64>(capacity_pages) * PGSIZE);
-        uint64 managed_size_mb = (static_cast<uint64>(capacity_pages) * PGSIZE) / (1024 * 1024);
+        uint64 managed_end = managed_start + (static_cast<uint64>(page_count) * PGSIZE);
+        uint64 managed_size_mb = (static_cast<uint64>(page_count) * PGSIZE) / (1024 * 1024);
         
-         printfBlue("[BuddySystem] Managed memory region: 0x%lx - 0x%lx (%lu MB, %d pages)\n",
-               managed_start, managed_end, managed_size_mb, page_count);
-         printfBlue("[BuddySystem] Tree structure location: %p (size: %d bytes)\n", 
-               tree, max_nodes);
+        printfBlue("[BuddySystem] Managed memory region: 0x%lx - 0x%lx (%lu MB, %d pages)\n",
+                   managed_start, managed_end, managed_size_mb, page_count);
+        printfBlue("[BuddySystem] Tree structure location: %p (size: %lu bytes)\n",
+                   tree, max_nodes);
 
         mark_unusable_leaves();
         rebuild_parent_states();

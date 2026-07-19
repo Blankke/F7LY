@@ -5,6 +5,7 @@
 #include "virtio_pci.hh"
 #include "proc_manager.hh"
 #include "scheduler.hh"
+#include "mem/memlayout.hh"
 #include "virtual_memory_manager.hh"
 #include "fs/drivers/virtio_blk.hh"
 #include "fs/drivers/virtio_blk_device.hh"
@@ -48,7 +49,22 @@ namespace
 
         uint64 dma_addr(const void *ptr) const override
         {
-            uint64 pa = mem::k_pagetable.kwalk_addr(reinterpret_cast<uint64>(ptr));
+            const uint64 va = reinterpret_cast<uint64>(ptr);
+
+            // LoongArch 的 PMM/HMM 返回 DMWIN 直映地址（0x9xxx...）。这类
+            // 地址不经过内核页表，直接去掉 DMWIN 高位即可得到 DMA 物理地址；
+            // 只有普通内核虚拟地址才需要通过 k_pagetable 做页表翻译。
+            // 动态高端内存启用后，virtio 队列和块缓冲区主要来自 DMWIN，
+            // 继续无条件 walk 会把合法的直映地址误判成未映射。
+            uint64 pa = 0;
+            if ((va & VIRT_DMWIN_MASK) == DMWIN_MASK)
+            {
+                pa = VIRT2PHY(va);
+            }
+            else
+            {
+                pa = mem::k_pagetable.kwalk_addr(va);
+            }
             if (pa == 0)
             {
                 panic("loongarch virtio blk: dma addr translate failed");

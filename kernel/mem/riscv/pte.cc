@@ -1,4 +1,5 @@
 #include "pte.hh"
+#include "physical_memory_manager.hh"
 #include "printer.hh"
 
 namespace mem
@@ -18,7 +19,8 @@ namespace mem
                 return false;
             }
 
-            return raw >= KERNBASE && raw < PHYSTOP;
+            return k_pmm.is_managed_page(
+                reinterpret_cast<void *>(PGROUNDDOWN(raw)));
         }
     }
 

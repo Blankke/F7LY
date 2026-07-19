@@ -12,6 +12,7 @@
 #include "proc/capability.hh"
 #include "virtual_memory_manager.hh"
 #include "physical_memory_manager.hh"
+#include "hal/tlb_shootdown.hh"
 #include "userspace_stream.hh"
 #include "klib.hh"
 #include "list.hh"
@@ -3414,7 +3415,8 @@ namespace syscall
         inline bool is_sane_user_pagetable_base(uint64 base)
         {
             return base != 0 && is_page_align(base) &&
-                   base >= k_min_user_pagetable_base && base < mem::k_pmm.get_phys_top();
+                   base >= k_min_user_pagetable_base &&
+                   mem::k_pmm.is_managed_page(reinterpret_cast<void *>(base));
         }
 
         inline bool is_probably_live_file_object(fs::file *file_obj)
@@ -11204,8 +11206,11 @@ namespace syscall
         sysinfo_.loads[0] = 0; // 负载均值  1min 5min 15min
         sysinfo_.loads[1] = 0;
         sysinfo_.loads[2] = 0;
-        sysinfo_.totalram = 0; // 总内存
-        sysinfo_.freeram = 0;
+        // sysinfo 的 totalram/freeram 使用 mem_unit 作为单位。PMM 已经根据
+        // DTB 动态布局完成实际可管理页数计算，这里不能继续返回全零占位，
+        // 否则 glibc/Cargo/stress-ng 等程序无法判断 guest 的真实容量。
+        sysinfo_.totalram = mem::k_pmm.get_page_count();
+        sysinfo_.freeram = mem::k_pmm.get_free_page_count();
         sysinfo_.sharedram = 0;
         sysinfo_.bufferram = 0;
         sysinfo_.totalswap = 0;
@@ -11214,7 +11219,7 @@ namespace syscall
         sysinfo_.pad = 0;
         sysinfo_.totalhigh = 0;
         sysinfo_.freehigh = 0;
-        sysinfo_.mem_unit = 1; // 内存单位为 1 字节
+        sysinfo_.mem_unit = PGSIZE; // totalram/freeram 的单位为页大小
 
         if (mem::k_vmm.copy_out(*pt, sysinfoaddr, &sysinfo_,
                                 sizeof(sysinfo_)) < 0)
@@ -15324,11 +15329,7 @@ namespace syscall
                     }
                     return syscall::SYS_EFAULT;
                 }
-#ifdef RISCV
-                sfence_vma();
-#elif defined(LOONGARCH)
-                asm volatile("invtlb 0x0,$zero,$zero");
-#endif
+                hal::tlb::flush_range_all_cpus(addr, aligned_len);
                 return 0;
             }
         }
@@ -15344,12 +15345,8 @@ namespace syscall
                 return syscall::SYS_EFAULT;
             }
 
-            // 刷新TLB以确保权限更改生效
-#ifdef RISCV
-            sfence_vma();
-#elif defined(LOONGARCH)
-            asm volatile("invtlb 0x0,$zero,$zero");
-#endif
+            // 权限撤销必须同步到共享同一 CLONE_VM 地址空间的其它 CPU。
+            hal::tlb::flush_range_all_cpus(addr, aligned_len);
 
             return 0;
         }
@@ -15722,12 +15719,8 @@ namespace syscall
             return rollback_split_state(syscall::SYS_EFAULT);
         }
 
-        // 刷新TLB以确保权限更改生效
-#ifdef RISCV
-        sfence_vma();
-#elif defined(LOONGARCH)
-        asm volatile("invtlb 0x0,$zero,$zero");
-#endif
+        // 权限撤销必须同步到共享同一 CLONE_VM 地址空间的其它 CPU。
+        hal::tlb::flush_range_all_cpus(addr, aligned_len);
 
         if (has_snapshot)
         {

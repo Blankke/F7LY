@@ -12,6 +12,9 @@ public:
     static constexpr int k_max_memory_regions = 8;
 
     static void init(uint64 dtb_addr);
+    // 返回 FDT header 中声明的完整 blob 大小；DTB 无效时返回 0。
+    // PMM 用它精确排除 DTB 所占页面，避免为保护低端 DTB 而丢弃其后的 RAM。
+    static uint64 get_dtb_size();
     static bool get_initrd(uint64& start, uint64& end);
     static void find_dtb_and_initrd(uint64 passed_dtb_addr, uint64 kernel_end_phys);
     static int get_memory_regions(DtbMemoryRegion *regions, int max_regions);

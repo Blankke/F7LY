@@ -505,6 +505,7 @@ r_csr_estat()
 #define CSR_ECFG_LIE_TI_SHIFT 11
 #define HWI_VEC 0x3fcU
 #define TI_VEC (0x1 << CSR_ECFG_LIE_TI_SHIFT)
+#define IPI_VEC (0x1 << 12)
 
 static inline uint32
 r_csr_ecfg()

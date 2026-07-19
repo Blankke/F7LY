@@ -24,10 +24,14 @@
 #include "net/drivers/virtio_net.hh"
 #include "fs/vfs/vfs_utils.hh"
 #include "fs/vfs/virtual_fs.hh"
+#include "hal/tlb_shootdown.hh"
+#include "devs/dtb.hh"
 extern char etext[]; // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 extern uint64 k_dtb_addr; // Defined in main.cc
+extern uint64 k_initrd_start;
+extern uint64 k_initrd_end;
 
 #ifdef LOONGARCH
 void tlbinit(void)
@@ -65,7 +69,7 @@ namespace mem
 
         inline void flush_riscv_user_page(uint64 va)
         {
-            asm volatile("sfence.vma %0, zero" : : "r"(PGROUNDDOWN(va)) : "memory");
+            hal::tlb::flush_range_all_cpus(PGROUNDDOWN(va), PGSIZE);
         }
 #elif defined(LOONGARCH)
         inline bool pte_is_cow(Pte &pte)
@@ -193,8 +197,8 @@ namespace mem
 
         inline void invalidate_loongarch_user_page_pair(uint64 va)
         {
-            uint64 pair_base = va & ~((PGSIZE << 1) - 1);
-            asm volatile("invtlb 0x6, $zero, %0" : : "r"(pair_base) : "memory");
+            hal::tlb::flush_range_all_cpus(
+                va & ~((PGSIZE << 1) - 1), PGSIZE << 1);
         }
 
         void install_loongarch_empty_high_user_pagetable()
@@ -1448,8 +1452,8 @@ namespace mem
         pte.set_data(PA2PTE(PGROUNDDOWN(riscv::virt_to_phy_address(reinterpret_cast<uint64>(new_page)))) |
                      new_flags |
                      riscv::PteEnum::pte_valid_m);
-        k_pmm.free_page(old_page);
         flush_riscv_user_page(page_va);
+        k_pmm.free_page(old_page);
         return 0;
 #elif defined(LOONGARCH)
         if (pte.is_null() || !pte.is_valid() || !pte.is_user_plv() || !pte_is_cow(pte))
@@ -1525,8 +1529,8 @@ namespace mem
         pte.set_data(PA2PTE(PGROUNDDOWN(to_phy(reinterpret_cast<uint64>(new_page)))) |
                      new_flags |
                      PTE_V);
-        k_pmm.free_page(old_page);
         invalidate_loongarch_user_page_pair(page_va);
+        k_pmm.free_page(old_page);
         return 0;
 #else
         return -1;
@@ -1538,6 +1542,34 @@ namespace mem
         // printfCyan("vmunmap: va: %p, npages: %d, do_free: %d\n", va, npages, do_free);
         uint64 a;
         Pte pte;
+
+        struct PendingUnmap
+        {
+            void *page = nullptr;
+        };
+        constexpr int k_unmap_batch_pages = 64;
+        PendingUnmap pending[k_unmap_batch_pages]{};
+        int pending_count = 0;
+        uint64 pending_start = 0;
+        uint64 pending_end = 0;
+
+        auto flush_pending = [&]() {
+            if (pending_count == 0)
+            {
+                return;
+            }
+            // PTE 已全部撤销；同步等待每个 online CPU 失效后，才允许这些
+            // 物理页回到 buddy 并被其它地址空间复用。
+            hal::tlb::flush_range_all_cpus(pending_start, pending_end - pending_start);
+            for (int index = 0; index < pending_count; ++index)
+            {
+                if (pending[index].page != nullptr)
+                {
+                    k_pmm.free_page(pending[index].page);
+                }
+            }
+            pending_count = 0;
+        };
 
         if ((va % PGSIZE) != 0)
             panic("vmunmap: not aligned");
@@ -1571,17 +1603,23 @@ namespace mem
             // panic("vmunmap: not mapped");
             // if (!pte.is_leaf())
             //     panic("vmunmap: not a leaf");  //目前没搞懂为什么共享内存那一片free会爆这个，先关掉试试。
-            if (do_free)
-            {
-                // printfMagenta("vmunmap: free va: %p, pa: %p\n", a, pte.pa());
-                k_pmm.free_page(page_pa_to_kernel_ptr(reinterpret_cast<uint64>(pte.pa())));
-            }
-            // printfMagenta("vmunmap: unmap va: %p, pa: %p\n", a, pte.pa());
+            void *old_page = do_free
+                                 ? page_pa_to_kernel_ptr(reinterpret_cast<uint64>(pte.pa()))
+                                 : nullptr;
             pte.clear_data();
-#ifdef LOONGARCH
-            invalidate_loongarch_user_page_pair(a);
-#endif
+
+            if (pending_count == 0)
+            {
+                pending_start = a;
+            }
+            pending_end = a + PGSIZE;
+            pending[pending_count++].page = old_page;
+            if (pending_count == k_unmap_batch_pages)
+            {
+                flush_pending();
+            }
         }
+        flush_pending();
     }
 
     PageTable VirtualMemoryManager::vm_create()
@@ -1700,7 +1738,6 @@ namespace mem
                         {
                             // 父子页表都降为只读 COW，之后由写异常拆页。
                             pte.set_data((original_data & ~(PTE_W | PTE_D)) | PTE_COW);
-                            invalidate_loongarch_user_page_pair(va);
                             parent_cow_changed = true;
                         }
                     }
@@ -1709,7 +1746,6 @@ namespace mem
                     {
                         k_pmm.free_page(old_page);
                         pte.set_data(original_data);
-                        invalidate_loongarch_user_page_pair(va);
                         vmunmap(new_pt, 0, va / PGSIZE, 1);
                         return -1;
                     }
@@ -1732,17 +1768,10 @@ namespace mem
                 }
             }
         }
-#ifdef RISCV
         if (parent_cow_changed)
         {
-            sfence_vma();
+            hal::tlb::flush_all_cpus();
         }
-#elif defined(LOONGARCH)
-        if (parent_cow_changed)
-        {
-            asm volatile("invtlb 0x0, $zero, $zero" : : : "memory");
-        }
-#endif
         return 0;
     }
 
@@ -1756,6 +1785,7 @@ namespace mem
         if (pte.is_valid())
             pte.set_data(pte.get_data() & ~loongarch::PteEnum::pte_plv_m); // PTE_U
 #endif
+        hal::tlb::flush_range_all_cpus(PGROUNDDOWN(va), PGSIZE);
     }
 
     uint64 VirtualMemoryManager::uvmalloc(PageTable &pt, uint64 oldsz, uint64 newsz, uint64 flags)
@@ -1889,20 +1919,67 @@ namespace mem
         kvmmap(pt, KERNBASE, KERNBASE, (uint64)etext - KERNBASE, PTE_R | PTE_X);
         // printfGreen("[vmm] kvmmake kernel text success\n");
         // map kernel data and the physical RAM we'll make use of.
-        uint64 phys_top = k_pmm.get_phys_top();
-        if (phys_top <= (uint64)etext)
+        const uint64 linear_top = k_pmm.get_kernel_linear_top();
+        if (linear_top <= (uint64)etext)
         {
-            panic("[vmm] invalid phys_top %p vs etext %p", phys_top, etext);
+            panic("[vmm] invalid kernel linear top %p vs etext %p", linear_top, etext);
         }
-        kvmmap(pt, (uint64)etext, (uint64)etext, phys_top - (uint64)etext, PTE_R | PTE_W);
+        kvmmap(pt, (uint64)etext, (uint64)etext,
+               linear_top - (uint64)etext, PTE_R | PTE_W);
         // printfRed("[vmm] kvmmake kernel data success\n");
 
-        // Map DTB if it exists
-        if (k_dtb_addr != 0) {
-             // Map a reasonable size for DTB (e.g. 2MB to be safe and cover crossing page boundaries)
-             // We map to identity address
-             kvmmap(pt, k_dtb_addr, k_dtb_addr, 0x200000, PTE_R | PTE_W);
-             // printfGreen("[vmm] mapped DTB at %p\n", k_dtb_addr);
+        // 正常情况下 linear mapping 已覆盖完整 RAM（包括只映射、不分配的
+        // DTB/initrd 页面）。若固件把 blob 放在 RAM 描述之外，只补映射位于
+        // 线性区两端之外的页面，避免与已有 PTE 重叠。
+        auto map_reserved_identity = [&](uint64 raw_start, uint64 raw_end,
+                                         const char *name) {
+            if (raw_start == 0 || raw_end <= raw_start)
+            {
+                return;
+            }
+            const uint64 map_start = PGROUNDDOWN(raw_start);
+            const uint64 map_end = PGROUNDUP(raw_end);
+            if (map_start < KERNBASE)
+            {
+                const uint64 prefix_end = map_end < KERNBASE ? map_end : KERNBASE;
+                if (prefix_end > map_start)
+                {
+                    kvmmap(pt, map_start, map_start,
+                           prefix_end - map_start, PTE_R | PTE_W);
+                }
+            }
+            if (map_end > linear_top)
+            {
+                const uint64 suffix_start = map_start > linear_top
+                                                ? map_start
+                                                : linear_top;
+                if (map_end > suffix_start)
+                {
+                    kvmmap(pt, suffix_start, suffix_start,
+                           map_end - suffix_start, PTE_R | PTE_W);
+                }
+            }
+            printfGreen("[vmm] reserved %s mapped/covered at %p-%p\n",
+                        name, map_start, map_end);
+        };
+
+        if (k_initrd_start != 0 && k_initrd_end > k_initrd_start)
+        {
+            map_reserved_identity(k_initrd_start, k_initrd_end, "initrd");
+        }
+
+        if (k_dtb_addr != 0)
+        {
+            uint64 dtb_size = DtbManager::get_dtb_size();
+            if (dtb_size == 0)
+            {
+                dtb_size = _1M * 2;
+            }
+            if (k_dtb_addr > ~0ULL - dtb_size)
+            {
+                panic("[vmm] DTB mapping overflow");
+            }
+            map_reserved_identity(k_dtb_addr, k_dtb_addr + dtb_size, "dtb");
         }
 
         // // map the trampoline for trap entry/exit to
@@ -1949,7 +2026,12 @@ namespace mem
         
         // Map DTB if it exists
         if (k_dtb_addr != 0) {
-            uint64 dtb_size = PGROUNDUP(0x10000); // Assume 64KB for DTB
+            uint64 dtb_size = DtbManager::get_dtb_size();
+            if (dtb_size == 0)
+            {
+                dtb_size = 0x10000;
+            }
+            dtb_size = PGROUNDUP(dtb_size);
             uint64 dtb_va = k_dtb_addr & (~(DMWIN_MASK));
             kvmmap(pt, dtb_va, k_dtb_addr, dtb_size, PTE_R | PTE_W);
             printfGreen("[vmm] Mapped DTB at va=%p pa=%p, size=%p\n", dtb_va, k_dtb_addr, dtb_size);

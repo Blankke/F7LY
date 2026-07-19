@@ -26,6 +26,7 @@
 #include "timer_interface.hh"
 #include "proc/posix_timers.hh"
 #include "asm.hh"
+#include "hal/tlb_shootdown.hh"
 // in kernelvec.S, calls kerneltrap().
 extern "C" void kernelvec();
 extern "C" void uservec();
@@ -260,7 +261,7 @@ void trap_manager::init()
 // 架构相关, 设置csr
 void trap_manager::inithart()
 {
-  uint32 ecfg = (0U << CSR_ECFG_VS_SHIFT) | HWI_VEC | TI_VEC;
+  uint32 ecfg = (0U << CSR_ECFG_VS_SHIFT) | HWI_VEC | TI_VEC | IPI_VEC;
   // LoongArch 的 timer CSR 直接按周期数编程。这里必须与 tmm::cycles_per_tick()
   // 保持一致，否则 sleep()/CPU 计时/interval timer 会共同漂移，
   // 用户可见的定时器精度会被放大到错误量级。
@@ -292,6 +293,14 @@ int trap_manager::devintr()
   if (ecode != 0)
   {
     return 0;
+  }
+
+  if (estat & ecfg & IPI_VEC)
+  {
+    if (hal::tlb::handle_ipi())
+    {
+      return 3;
+    }
   }
 
   if (estat & ecfg & HWI_VEC)

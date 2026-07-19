@@ -1,10 +1,11 @@
 #include "user.hh"
 #include "fuckyou.hh"
 
-// 标准 Alpine rootfs 使用 /bin/busybox；评测 sdcard 则把 BusyBox 放在
-// /musl/busybox。shell 调试入口同时兼容两种只读根文件系统，避免为了单测
-// 多核路径而改写评测镜像。
+// Alpine rootfs 使用 /bin/busybox，评测 sdcard 把 BusyBox 放在
+// /musl/busybox，而 selfhost Debian 只提供 bash/dash。shell 调试入口必须
+// 同时支持这三类镜像，才能直接启动真实 stress-ng 与 Cargo 环境。
 static const char *g_shell_binary = "/bin/busybox";
+static const char *g_shell_argv0 = "sh";
 
 static bool path_exists(const char *path)
 {
@@ -84,9 +85,19 @@ static bool init_shell_environment()
     {
         g_shell_binary = "/musl/busybox";
     }
+    else if (path_exists("/bin/bash"))
+    {
+        g_shell_binary = "/bin/bash";
+        g_shell_argv0 = "bash";
+    }
+    else if (path_exists("/bin/sh"))
+    {
+        g_shell_binary = "/bin/sh";
+        g_shell_argv0 = "sh";
+    }
     else
     {
-        printf("[shell] 缺少 /bin/busybox 和 /musl/busybox，当前根文件系统不像是可交互 rootfs\n");
+        printf("[shell] 缺少 BusyBox、/bin/bash 和 /bin/sh，当前根文件系统无法交互\n");
         return false;
     }
     enter_shell_workdir();
@@ -126,7 +137,7 @@ extern "C"
         printfMagenta("#### F7LY INTERACTIVE SHELL START ####\n");
         printfMagenta("type \"exit\" to quit\n");
         char *shell_argv[] = {
-            (char *)"sh",
+            (char *)g_shell_argv0,
             (char *)"-i",
             0,
         };

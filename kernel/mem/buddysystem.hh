@@ -2,7 +2,6 @@
 #include "types.hh"
 
 #define PAGE_ORDER 10
-#define BSSIZE 320 
 
 namespace mem {
 
@@ -25,7 +24,13 @@ public:
         uint32 block_offset;
     };
 
-    void Initialize(uint64 baseptr, uint32 total_pages);
+    // BuddySystem 对象、tree 和受管内存彼此解耦。调用方必须显式提供 tree
+    // 存储，避免内存容量增长后仍依赖固定的“base 前 320 页”隐式布局。
+    static uint32 capacity_pages_for(uint32 total_pages);
+    static uint64 required_tree_bytes(uint32 total_pages);
+    static uint64 required_storage_bytes(uint32 total_pages);
+    void Initialize(uint64 baseptr, uint32 total_pages,
+                    void *tree_storage, uint64 tree_storage_bytes);
     int Alloc(int size);
     void Free(int offset);
     void* alloc_pages(int count);
@@ -38,7 +43,7 @@ public:
 private:
 
     BuddySystem() = default;
-    uint32 NextPowerOfTwo(uint32 x);
+    static uint32 NextPowerOfTwo(uint32 x);
     PageQueryResult query_page_from_node(int index, int level, uint32 block_offset,
                                          uint32 block_pages, uint32 page_offset) const;
 
