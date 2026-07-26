@@ -17,7 +17,11 @@ namespace
     constexpr uint32 k_ipi_tlb_vector = 1;
     constexpr uint32 k_ipi_tlb_mask = 1U << k_ipi_tlb_vector;
     constexpr uint32 k_ipi_target_cpu_shift = 16;
-    constexpr uint64 k_shootdown_spin_limit = 100000000ULL;
+    constexpr uint32 k_iocsr_send_blocking = 1U << 31;
+    // LoongArch QEMU virt 的稳定计时器为 100 MHz。重发是协议的一部分：
+    // IOCSR IPI 状态是可合并位，不能把一次边沿当作可靠消息队列。
+    constexpr uint64 k_ipi_retry_cycles = 100000ULL;
+    constexpr uint64 k_shootdown_timeout_cycles = 1000000000ULL;
 
     eastl::atomic<uint64> g_generation{0};
     eastl::atomic<uint64> g_requested_generation[NCPU]{};
@@ -37,9 +41,14 @@ namespace
 
     inline void send_tlb_ipi(uint64 cpu_id)
     {
-        const uint32 value = static_cast<uint32>((cpu_id << k_ipi_target_cpu_shift) |
+        // 与 Linux LoongArch 的 ipi_write_action() 一致，使用 BLOCKING 保证
+        // 这次跨核 IOCSR 写已经到达中断控制器后再继续等待 acknowledgement。
+        asm volatile("dbar 0" ::: "memory");
+        const uint32 value = static_cast<uint32>(k_iocsr_send_blocking |
+                                                  (cpu_id << k_ipi_target_cpu_shift) |
                                                   k_ipi_tlb_vector);
         write_iocsr_word(k_iocsr_ipi_send, value);
+        asm volatile("dbar 0" ::: "memory");
     }
 
     void publish_request(uint64 cpu_id, uint64 generation)
@@ -90,19 +99,35 @@ void flush_local_range(uint64 start, uint64 size)
 bool handle_ipi()
 {
     const uint32 status = read_iocsr_word(k_iocsr_ipi_status);
-    if ((status & k_ipi_tlb_mask) == 0)
+    const uint64 cpu_id = Cpu::current_cpu_id();
+    const uint64 requested =
+        g_requested_generation[cpu_id].load(eastl::memory_order_acquire);
+    const uint64 acknowledged =
+        g_acknowledged_generation[cpu_id].load(eastl::memory_order_acquire);
+    const bool has_tlb_status = (status & k_ipi_tlb_mask) != 0;
+
+    // poll_pending() 在关中断自旋路径调用。即使硬件的可合并状态位已经被
+    // 另一代请求清除，只要内存邮箱仍显示未确认请求，本核也必须完成它。
+    if (!has_tlb_status && requested <= acknowledged)
     {
         return false;
     }
 
-    // 先清状态再读取请求。若新请求在清除后到达，硬件会再次置位；若它在
-    // 清除前已合并，release/acquire 使本次处理直接看到最新 generation。
-    write_iocsr_word(k_iocsr_ipi_clear, k_ipi_tlb_mask);
-    const uint64 cpu_id = Cpu::current_cpu_id();
+    if (has_tlb_status)
+    {
+        // 先清状态再重新读取请求。若新请求在清除后到达，硬件会再次置位；
+        // 若它在清除前已合并，本次处理会直接确认最新 generation。
+        write_iocsr_word(k_iocsr_ipi_clear, k_ipi_tlb_mask);
+        asm volatile("dbar 0" ::: "memory");
+    }
     const uint64 generation =
         g_requested_generation[cpu_id].load(eastl::memory_order_acquire);
-    flush_local_range(0, 0);
-    g_acknowledged_generation[cpu_id].store(generation, eastl::memory_order_release);
+    if (generation >
+        g_acknowledged_generation[cpu_id].load(eastl::memory_order_acquire))
+    {
+        flush_local_range(0, 0);
+        g_acknowledged_generation[cpu_id].store(generation, eastl::memory_order_release);
+    }
     return true;
 }
 
@@ -144,17 +169,31 @@ void flush_range_all_cpus(uint64 start, uint64 size)
         {
             continue;
         }
-        uint64 spins = 0;
+        const uint64 wait_start = Cpu::get_cpu()->get_time();
+        uint64 next_retry = wait_start + k_ipi_retry_cycles;
+        uint32 probe_spins = 0;
         while (g_acknowledged_generation[cpu_id].load(eastl::memory_order_acquire) < generation)
         {
             asm volatile("nop");
             // shootdown 常从 trap/系统调用路径发起，此时本核中断可能关闭。
             // 主动处理对端同时发来的请求，避免 A 等 B、B 等 A 的环形等待。
-            if ((spins & 0xffU) == 0)
+            // IOCSR 是设备访问，不能在每次 nop 后读取；固定间隔探测既保留
+            // 环形等待的前进保证，也避免 mmap 密集负载被 MMIO 轮询拖垮。
+            if ((++probe_spins & 0xffU) != 0)
             {
-                poll_pending();
+                continue;
             }
-            if (++spins == k_shootdown_spin_limit)
+            poll_pending();
+
+            const uint64 now = Cpu::get_cpu()->get_time();
+            if (static_cast<int64>(now - next_retry) >= 0)
+            {
+                // request generation 单调递增，因此重复置同一 IPI 位完全幂等；
+                // 周期性重发可从状态位合并或 vCPU 暂停窗口中可靠恢复。
+                send_tlb_ipi(cpu_id);
+                next_retry = now + k_ipi_retry_cycles;
+            }
+            if (now - wait_start >= k_shootdown_timeout_cycles)
             {
                 panic("[tlb] LoongArch shootdown timeout sender=%lu target=%lu generation=%lu ack=%lu",
                       current_cpu, cpu_id, generation,

@@ -143,7 +143,8 @@ int ext4_block_flush_buf(struct ext4_blockdev *bdev, struct ext4_buf *buf) {
             return r;
         }
 
-        ext4_bcache_remove_dirty_node(bc, buf);
+        if (buf->on_dirty_list)
+            ext4_bcache_remove_dirty_node(bc, buf);
         ext4_bcache_clear_flag(buf, BC_DIRTY);
         if (buf->end_write) {
             bc->dont_shake = true;
@@ -405,9 +406,9 @@ int ext4_block_readbytes(struct ext4_blockdev *bdev, uint64_t off, void *buf, ui
 }
 
 int ext4_block_cache_flush(struct ext4_blockdev *bdev) {
-    while (!SLIST_EMPTY(&bdev->bc->dirty_list)) {
+    while (!TAILQ_EMPTY(&bdev->bc->dirty_list)) {
         int r;
-        struct ext4_buf *buf = SLIST_FIRST(&bdev->bc->dirty_list);
+        struct ext4_buf *buf = TAILQ_FIRST(&bdev->bc->dirty_list);
         ext4_assert(buf);
         r = ext4_block_flush_buf(bdev, buf);
         if (r != EOK)

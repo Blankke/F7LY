@@ -18,6 +18,7 @@
 #include "fs/drivers/virtio_blk.hh"
 #include "loop_device.hh"
 #include "tm/time.hh"
+#include "tm/timer_manager.hh"
 #include "shm/shm_manager.hh"
 #include "hal/cpu.hh"
 #define min(a, b) ((a) < (b) ? (a) : (b))
@@ -274,6 +275,30 @@ namespace fs
         // /proc/self/exe 必须指向当前进程真实装载的可执行文件，
         // 这样 ash 在 ENOEXEC 回退时才能重新 exec 自己来解释脚本。
         return pcb->exe;
+    }
+
+    eastl::string ProcSelfCmdlineProvider::generate_content()
+    {
+        proc::Pcb *pcb = proc::k_pm.get_cur_pcb();
+        return pcb == nullptr ? eastl::string() : pcb->_cmdline;
+    }
+
+    eastl::string ProcUptimeProvider::generate_content()
+    {
+        tmm::timespec now{};
+        if (tmm::k_tm.clock_gettime(tmm::CLOCK_BOOTTIME, &now) < 0)
+        {
+            return "0.00 0.00\n";
+        }
+
+        const uint64 sec = now.tv_sec < 0 ? 0 : static_cast<uint64>(now.tv_sec);
+        const uint64 centisec =
+            now.tv_nsec < 0 ? 0 : static_cast<uint64>(now.tv_nsec) / 10000000ULL;
+        char content[64];
+        snprintf(content, sizeof(content), "%lu.%02lu 0.00\n",
+                 static_cast<unsigned long>(sec),
+                 static_cast<unsigned long>(centisec));
+        return content;
     }
 
     eastl::string ProcMeminfoProvider::generate_content()
@@ -2241,38 +2266,6 @@ namespace fs
         // 返回内核污染状态
         // 0 表示内核未被污染（无专有模块或其他问题）
         return "0\n";
-    }
-
-    // ======================== /etc/ld.so.preload 提供者实现 ========================
-    // glibc 动态加载器在启动时会尝试读取该文件，列出需要强制预加载的共享库路径。
-    // 多数系统上它不存在或为空，我们返回空内容即可，表示不预加载任何库。
-    // 简易实现：维护一个静态的预加载列表（文本，每行一个so路径）。
-    // 写入时覆盖整个内容（忽略off），读取时返回完整内容。
-    static eastl::string g_ld_preload_content;
-
-    eastl::string EtcLdSoPreloadProvider::generate_content()
-    {
-    // /etc/ld.so.preload 按行列出需要强制预加载的共享库路径。
-    // 默认返回空内容，避免干扰动态链接器（若需要可在运行时写入）。
-    return "";
-    }
-
-    long EtcLdSoPreloadProvider::handle_write(uint64 buf, size_t len, long off)
-    {
-        (void)off; // 简化：总是当作覆盖写
-        // 将用户缓冲区复制成字符串；这里直接按内核态视角复制
-        char* p = (char*)buf;
-        g_ld_preload_content.assign(p, p + len);
-        return (long)len;
-    }
-
-    // ======================== /etc/ld.so.cache 提供者实现 ========================
-    // 真实系统上该文件是二进制缓存，用于加速查找。为了兼容性，我们返回空内容，
-    // 让动态链接器回退到按目录扫描（如 /lib, /lib64, /lib/riscv64-linux-gnu 等）。
-    // 若未来需要更强兼容，可伪造一个最小头部，但通常空文件即可让 glibc 继续按路径搜索。
-    eastl::string EtcLdSoCacheProvider::generate_content()
-    {
-        return ""; // 空文件，触发回退逻辑
     }
 
     // ======================== /proc/stat 系统统计信息提供者实现 ========================

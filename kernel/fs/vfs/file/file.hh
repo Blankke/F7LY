@@ -177,6 +177,9 @@ namespace fs
 		eastl::string _backing_path; // 底层真实路径；memfd 对外名字与真实路径分离时使用
 		bool _suppress_fanotify = false; // fanotify 事件 fd 自身不应再次产生 fanotify 事件
 		bool _unlinked_from_dir = false; // 文件仍由 fd 持有，但对应目录项已被 unlink。
+		// lwext4 尚不维护“已 unlink 但仍打开”的 inode 生命周期。O_TMPFILE 因此先使用
+		// 内核隐藏目录项承载真实数据，并在最后一个 file 引用关闭时删除该目录项。
+		bool _delete_backing_on_close = false;
 		struct ext4_file lwext4_file_struct;
 			struct ext4_dir lwext4_dir_struct;
 			flock _lock; // file lock, used for flock

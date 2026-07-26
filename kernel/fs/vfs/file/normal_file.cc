@@ -5,6 +5,7 @@
 #include "fs/lwext4/ext4_fs.hh"
 #include "fs/lwext4/ext4_inode.hh"
 #include "fs/lwext4/ext4_types.hh"
+#include "fs/vfs/vfs_ext4_ext.hh"
 #include "devs/spinlock.hh"
 #include "libs/string.hh"
 #include "mem/heap_memory_manager.hh"
@@ -707,19 +708,12 @@ namespace fs
 		}
 
 		ext4_inode_ref inode_ref;
-		if (mp->os_locks)
-		{
-			mp->os_locks->lock();
-		}
+		Ext4MountGuard mount_guard(mp);
 		int status = ext4_fs_get_inode_ref(&mp->fs,
 									   lwext4_file_struct.inode,
 									   &inode_ref);
 		if (status != EOK)
 		{
-			if (mp->os_locks)
-			{
-				mp->os_locks->unlock();
-			}
 			return;
 		}
 
@@ -727,10 +721,6 @@ namespace fs
 		lwext4_file_struct.fsize = inode_size;
 		_stat.size = inode_size;
 		(void)ext4_fs_put_inode_ref(&inode_ref);
-		if (mp->os_locks)
-		{
-			mp->os_locks->unlock();
-		}
 	}
 
 	void normal_file::refresh_append_target_size_locked()
@@ -758,10 +748,7 @@ namespace fs
 
 		ext4_mountpoint *mp = lwext4_file_struct.mp;
 		bool multiple_links = false;
-		if (mp->os_locks)
-		{
-			mp->os_locks->lock();
-		}
+		Ext4MountGuard mount_guard(mp);
 		ext4_inode_ref inode_ref;
 		int status = ext4_fs_get_inode_ref(&mp->fs,
 										   lwext4_file_struct.inode,
@@ -770,10 +757,6 @@ namespace fs
 		{
 			multiple_links = ext4_inode_get_links_cnt(inode_ref.inode) > 1;
 			(void)ext4_fs_put_inode_ref(&inode_ref);
-		}
-		if (mp->os_locks)
-		{
-			mp->os_locks->unlock();
 		}
 		return multiple_links;
 	}
@@ -1065,8 +1048,12 @@ namespace fs
 	normal_file::~normal_file()
 	{
 		_file_lock.acquire();
+		const bool delete_backing_on_close = _delete_backing_on_close;
+		const eastl::string close_backing_path =
+			delete_backing_on_close ? backing_path() : eastl::string();
 		int flush_status = EOK;
 		if (!_unlinked_from_dir &&
+			!delete_backing_on_close &&
 			!has_multiple_links_locked() &&
 			_write_combine_dirty &&
 			_write_combine_buffer != nullptr &&
@@ -1090,6 +1077,17 @@ namespace fs
 		if (lwext4_file_struct.mp != nullptr)
 		{
 			(void)ext4_fclose(&lwext4_file_struct);
+		}
+		if (delete_backing_on_close && !close_backing_path.empty())
+		{
+			normal_file_invalidate_delayed_visibility_path(close_backing_path);
+			const int remove_status = ext4_fremove(close_backing_path.c_str());
+			if (remove_status != EOK && remove_status != ENOENT)
+			{
+				printfRed("normal_file: 删除 O_TMPFILE 后备目录项失败: %s, error=%d\n",
+						  close_backing_path.c_str(),
+						  remove_status);
+			}
 		}
 		release_write_combine_buffer(_write_combine_buffer);
 		_write_combine_buffer = nullptr;
@@ -1815,10 +1813,7 @@ namespace fs
 		{
 			struct ext4_inode_ref inode_ref;
 			int write_flag_error = EOK;
-			if (mp->os_locks)
-			{
-				mp->os_locks->lock();
-			}
+			Ext4MountGuard mount_guard(mp);
 			int result = ext4_fs_get_inode_ref(&mp->fs,
 											   lwext4_file_struct.inode,
 											   &inode_ref);
@@ -1836,10 +1831,6 @@ namespace fs
 				{
 					write_flag_error = EPERM;
 				}
-			}
-			if (mp->os_locks)
-			{
-				mp->os_locks->unlock();
 			}
 			if (write_flag_error != EOK)
 			{
@@ -1995,10 +1986,7 @@ namespace fs
 			int write_flag_error = EOK;
 			// inode flags 属于 ext4 元数据，必须跟其它 ext4 路径一样在挂载锁下读取；
 			// 否则长回归中并发 open/close/write 可能读到不稳定状态，把普通追加写误判成 EPERM。
-			if (mp->os_locks)
-			{
-				mp->os_locks->lock();
-			}
+			Ext4MountGuard mount_guard(mp);
 			int result = ext4_fs_get_inode_ref(&mp->fs,
 											   lwext4_file_struct.inode,
 											   &inode_ref);
@@ -2016,10 +2004,6 @@ namespace fs
 				{
 					write_flag_error = EPERM;
 				}
-			}
-			if (mp->os_locks)
-			{
-				mp->os_locks->unlock();
 			}
 			if (write_flag_error != EOK)
 			{

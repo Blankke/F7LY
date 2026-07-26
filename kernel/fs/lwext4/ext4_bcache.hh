@@ -18,6 +18,7 @@ struct ext4_buf;
 // LBA 查询仍使用红黑树；LRU 回收改为双向队列，避免维护第二棵树带来的复杂状态。
 RB_HEAD(ext4_buf_lba_tree, ext4_buf);
 TAILQ_HEAD(ext4_buf_lru_list, ext4_buf);
+TAILQ_HEAD(ext4_buf_dirty_list, ext4_buf);
 
 #define EXT4_BLOCK_ZERO() {.lb_id = 0, .data = 0}
 
@@ -68,7 +69,7 @@ struct ext4_buf {
     TAILQ_ENTRY(ext4_buf) lru_link;
 
     /**@brief   Dirty list node*/
-    SLIST_ENTRY(ext4_buf) dirty_node;
+    TAILQ_ENTRY(ext4_buf) dirty_node;
 
     /**@brief   Callback routine after a disk-write operation.
      * @param   bc block cache descriptor
@@ -109,8 +110,8 @@ struct ext4_bcache {
     /**@brief   A list holding unreferenced bufs in LRU order（头最老，尾最新）*/
     struct ext4_buf_lru_list lru_list;
 
-    /**@brief   A singly-linked list holding dirty buffers*/
-    SLIST_HEAD(ext4_buf_dirty, ext4_buf) dirty_list;
+    /**@brief   A doubly-linked list holding dirty buffers*/
+    struct ext4_buf_dirty_list dirty_list;
 };
 
 /**@brief buffer state bits
@@ -146,25 +147,11 @@ static inline void ext4_bcache_clear_dirty(struct ext4_buf *buf) {
 /**@brief   Decrement reference counter of buf by 1.*/
 #define ext4_bcache_dec_ref(buf) ((buf)->refctr--)
 
-/**@brief   Insert buffer to dirty cache list
- * @param   bc block cache descriptor
- * @param   buf buffer descriptor */
-static inline void ext4_bcache_insert_dirty_node(struct ext4_bcache *bc, struct ext4_buf *buf) {
-    if (!buf->on_dirty_list) {
-        SLIST_INSERT_HEAD(&bc->dirty_list, buf, dirty_node);
-        buf->on_dirty_list = true;
-    }
-}
+/**@brief   Insert buffer to dirty cache list in O(1). */
+void ext4_bcache_insert_dirty_node(struct ext4_bcache *bc, struct ext4_buf *buf);
 
-/**@brief   Remove buffer to dirty cache list
- * @param   bc block cache descriptor
- * @param   buf buffer descriptor */
-static inline void ext4_bcache_remove_dirty_node(struct ext4_bcache *bc, struct ext4_buf *buf) {
-    if (buf->on_dirty_list) {
-        SLIST_REMOVE(&bc->dirty_list, buf, ext4_buf, dirty_node);
-        buf->on_dirty_list = false;
-    }
-}
+/**@brief   Remove buffer from dirty cache list in O(1). */
+void ext4_bcache_remove_dirty_node(struct ext4_bcache *bc, struct ext4_buf *buf);
 
 
 /**@brief   Dynamic initialization of block cache.

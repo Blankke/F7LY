@@ -28,15 +28,88 @@
 #include "virtual_memory_manager.hh"
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
-// 这里使用一个全局的可重入 ext4 挂载锁。
-// lwext4 自身允许上层注入 mount 级别的串行化，但当前工程里之前一直没真正接上，
-// 长跑时多个进程交错做 open/stat/readdir/link/unlink，会把同一个 mount 的缓存状态
-// 和目录迭代状态同时揉在一起，最终表现成 RV 上 find 长时间卡住、LA 上 bcache 树损坏。
-// 另外，部分 ext4 公共接口之间存在有限的同进程嵌套调用，因此这里不能直接用裸信号量，
-// 否则同一进程递归进入 ext4 会把自己锁死。
-struct semaphore extlock;
-static proc::Pcb *extlock_owner = nullptr;
-static int extlock_depth = 0;
+/**
+ * lwext4 的全局挂载锁。
+ *
+ * 每个首次进入者领取单调递增的 ticket，只有 serving ticket 可以获得锁；等待者通过
+ * scheduler sleep 休眠，解锁时统一唤醒并由 ticket 保证严格 FIFO。state_lock 保护全部
+ * 状态，owner 使用线程 PCB，而不是进程 pid，因此同一进程的不同线程不会被误判为递归。
+ */
+class Ext4RecursiveFifoLock
+{
+public:
+    void init()
+    {
+        _state_lock.init("ext4_state");
+        _owner = nullptr;
+        _depth = 0;
+        _held = false;
+        _next_ticket = 0;
+        _serving_ticket = 0;
+    }
+
+    void lock()
+    {
+        proc::Pcb *current = proc::k_pm.get_cur_pcb();
+
+        _state_lock.acquire();
+        if (_held && current != nullptr && _owner == current)
+        {
+            ++_depth;
+            _state_lock.release();
+            return;
+        }
+
+        const uint64 ticket = _next_ticket++;
+        while (ticket != _serving_ticket)
+        {
+            proc::k_pm.sleep(this, &_state_lock);
+        }
+        if (_held)
+        {
+            _state_lock.release();
+            panic("ext4 lock: ticket admitted multiple owners");
+        }
+        _held = true;
+        _owner = current;
+        _depth = 1;
+        _state_lock.release();
+    }
+
+    void unlock()
+    {
+        proc::Pcb *current = proc::k_pm.get_cur_pcb();
+
+        _state_lock.acquire();
+        if (!_held || _depth == 0 || _owner != current)
+        {
+            _state_lock.release();
+            panic("ext4 lock: unlock by non-owner");
+        }
+        if (_depth > 1)
+        {
+            --_depth;
+            _state_lock.release();
+            return;
+        }
+        _held = false;
+        _owner = nullptr;
+        _depth = 0;
+        ++_serving_ticket;
+        proc::k_pm.wakeup(this);
+        _state_lock.release();
+    }
+
+private:
+    SpinLock _state_lock;
+    proc::Pcb *_owner = nullptr;
+    uint32 _depth = 0;
+    bool _held = false;
+    uint64 _next_ticket = 0;
+    uint64 _serving_ticket = 0;
+};
+
+static Ext4RecursiveFifoLock extlock;
 [[maybe_unused]] static void ext4_lock(void);
 [[maybe_unused]] static void ext4_unlock(void);
 
@@ -77,34 +150,18 @@ static uint64_t vfs_ext_realtime_seconds()
 }
 
 int vfs_ext4_init(void) {
-    sem_init(&extlock, 1, const_cast<char*>("ext4_sem"));
+    extlock.init();
     ext4_device_unregister_all();
     ext4_init_mountpoints();
     return 0;
 }
 
 static void ext4_lock() {
-    proc::Pcb *current = proc::k_pm.get_cur_pcb();
-    if (extlock_owner == current && current != nullptr) {
-        extlock_depth++;
-        return;
-    }
-
-    sem_p(&extlock);
-    extlock_owner = current;
-    extlock_depth = 1;
+    extlock.lock();
 }
 
 static void ext4_unlock() {
-    proc::Pcb *current = proc::k_pm.get_cur_pcb();
-    if (extlock_owner == current && extlock_depth > 1) {
-        extlock_depth--;
-        return;
-    }
-
-    extlock_owner = nullptr;
-    extlock_depth = 0;
-    sem_v(&extlock);
+    extlock.unlock();
 }
 
 [[maybe_unused]] static uint vfs_ext4_filetype(uint filetype) {
@@ -122,9 +179,8 @@ static void ext4_unlock() {
 
 static int vfs_ext4_finish_mount(const char *mount_path, struct vfs_ext4_blockdev *vbdev)
 {
-    // 默认开启 lwext4 的块缓存 write-back，避免 iozone 这类小块密集写场景
-    // 被同步刷盘完全拖垮；这也是 iozone 分支里已经验证过的关键优化。
-    int r = ext4_cache_write_back(mount_path, true);
+    // 必须先安装锁，再开启 write-back。后者会立即进入 bcache，不能留下无保护窗口。
+    int r = ext4_mount_setup_locks(mount_path, &ext4_lock_ops);
     if (r != EOK)
     {
         ext4_umount(mount_path);
@@ -132,9 +188,8 @@ static int vfs_ext4_finish_mount(const char *mount_path, struct vfs_ext4_blockde
         return r;
     }
 
-    // 同时接入 mount 级锁，避免多个进程并发进入 lwext4 内部缓存路径时
-    // 破坏引用计数和目录迭代状态。
-    r = ext4_mount_setup_locks(mount_path, &ext4_lock_ops);
+    // 开启 write-back，避免小块密集写被同步刷盘完全拖垮。
+    r = ext4_cache_write_back(mount_path, true);
     if (r != EOK)
     {
         ext4_umount(mount_path);
@@ -734,6 +789,7 @@ int vfs_ext_fstat(struct file *f, struct kstat *st) {
     if (file == NULL) {
         panic("vfs_ext_fstat: cannot get ext4 file\n");
     }
+    Ext4MountGuard mount_guard(file->mp);
     int r = ext4_fs_get_inode_ref(&file->mp->fs, file->inode, &ref);
     if (r != EOK) {
         return -r;
@@ -753,6 +809,7 @@ int vfs_ext_fstat(struct file *f, struct kstat *st) {
     st->st_atime_sec = ext4_inode_get_access_time(ref.inode);
     st->st_ctime_sec = ext4_inode_get_change_inode_time(ref.inode);
     st->st_mtime_sec = ext4_inode_get_modif_time(ref.inode);
+    (void)ext4_fs_put_inode_ref(&ref);
     #endif
     return EOK;
 }
@@ -763,6 +820,7 @@ int vfs_ext_statx(struct file *f, struct statx *st) {
     if (file == NULL) {
         panic("vfs_ext_fstat: cannot get ext4 file\n");
     }
+    Ext4MountGuard mount_guard(file->mp);
     int r = ext4_fs_get_inode_ref(&file->mp->fs, file->inode, &ref);
     if (r != EOK) {
         return -r;
@@ -782,6 +840,10 @@ int vfs_ext_statx(struct file *f, struct statx *st) {
     st->stx_atime.tv_sec = ext4_inode_get_access_time(ref.inode);
     st->stx_ctime.tv_sec = ext4_inode_get_change_inode_time(ref.inode);
     st->stx_mtime.tv_sec = ext4_inode_get_modif_time(ref.inode);
+    r = ext4_fs_put_inode_ref(&ref);
+    if (r != EOK) {
+        return -r;
+    }
     return EOK;
 }
 

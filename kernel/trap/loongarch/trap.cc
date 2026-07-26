@@ -44,6 +44,7 @@ namespace
   // 单核调度使用固定 tick 时间片，确保长时间运行的用户/内核态任务都能被周期性抢占。
   constexpr int k_default_time_slice_ticks = 1;
   constexpr uint32 k_loongarch_ecode_fpu_disabled = 0xf;
+  constexpr uint32 k_loongarch_ecode_lsx_disabled = 0x10;
 
   // LoongArch 异常信息拆分：一级编码在 ESTAT[21:16]，二级编码在 ESTAT[30:22]。
   // 之前把 ecode=8 直接当成缺页，会把 ADEM（访存地址错误）误送进 mmap 懒分配路径。
@@ -470,6 +471,24 @@ void trap_manager::usertrap()
     // 不推进 era，让 userret 恢复该线程保存的 FPU 现场后重试原指令。
     p->_used_fpu = true;
   }
+  else if (ecode == k_loongarch_ecode_lsx_disabled)
+  {
+    /*
+     * LSX 与标量 FPR 共享每个向量寄存器的低 64 位。线程第一次触发
+     * SXD 时，uservec 已经保存了标量 FPR；把它们迁入完整向量镜像，
+     * 高 64 位按体系结构初始状态清零，然后重试原指令。
+     */
+    if (!p->_used_lsx)
+    {
+      for (int index = 0; index < 32; ++index)
+      {
+        p->_trapframe->lsx[index][0] = p->_trapframe->f[index];
+        p->_trapframe->lsx[index][1] = 0;
+      }
+    }
+    p->_used_fpu = true;
+    p->_used_lsx = true;
+  }
 
   else if (is_loongarch_page_fault_code(ecode))
   {
@@ -768,7 +787,7 @@ void trap_manager::usertrapret(void)
   // and switches to user mode with ertn.
   userret(user_trapframe_va,
           pgdl,
-          p->_used_fpu ? 1 : 0,
+          (p->_used_fpu ? 1 : 0) | (p->_used_lsx ? 2 : 0),
           reinterpret_cast<uint64>(p->get_trapframe()));
 }
 void trap_manager::machine_trap()
@@ -851,6 +870,11 @@ int mmap_handler(uint64 va, int cause)
   {
     return -1;
   }
-  return mm->fault_page(va, access_type);
+  // 用户缺页与同一 CLONE_VM 地址空间中的 mmap/munmap/mprotect 串行，
+  // 保证 VMA 查找和 PTE 安装基于同一代元数据。
+  mm->lock_memory();
+  int result = mm->fault_page(va, access_type);
+  mm->unlock_memory();
+  return result;
 }
 #endif

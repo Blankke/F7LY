@@ -48,6 +48,8 @@ void virtio_disk_init2(void);
 void virtio_disk_rw(struct buf *b, int write);
 void virtio_disk_rw2(struct buf *b, int write);
 int virtio_disk_rw_sectors(int dev, void *buf, uint64 start_sector, uint32 sector_count, int write);
+// 返回 virtio-blk 配置空间公布的真实容量（字节），设备未初始化时返回 0。
+uint64 virtio_disk_capacity_bytes(int dev);
 void virtio_disk_intr(void);
 void virtio_disk_intr2(void);
 

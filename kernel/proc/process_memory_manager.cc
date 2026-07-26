@@ -557,11 +557,27 @@ namespace proc
 
     void ProcessMemoryManager::lock_memory()
     {
+        if (memory_lock.is_holding())
+        {
+            ++memory_lock_depth;
+            return;
+        }
         memory_lock.acquire();
+        memory_lock_depth = 1;
     }
 
     void ProcessMemoryManager::unlock_memory()
     {
+        if (!memory_lock.is_holding() || memory_lock_depth == 0)
+        {
+            panic("ProcessMemoryManager::unlock_memory without ownership");
+        }
+        if (memory_lock_depth > 1)
+        {
+            --memory_lock_depth;
+            return;
+        }
+        memory_lock_depth = 0;
         memory_lock.release();
     }
 
@@ -1527,7 +1543,7 @@ namespace proc
         }
     }
 
-    bool ProcessMemoryManager::heap_growth_crosses_shared_mapping(uint64 start, uint64 end) const
+    bool ProcessMemoryManager::heap_growth_conflicts_with_mapping(uint64 start, uint64 end) const
     {
         if (start >= end)
         {
@@ -1554,8 +1570,13 @@ namespace proc
                 continue;
             }
 
+            /*
+             * Linux 的 brk 只能扩展到下一段既有映射之前。文件私有映射同样
+             * 是硬边界，不能因为它不是 MAP_SHARED 就让逻辑 program break
+             * 穿过去；否则 malloc 会把共享库的只读段当成堆写坏。
+             */
             if (entry->overlaps(start, end) &&
-                (is_shared_backed_vma(*entry) || entry->is_shared_mapping()))
+                entry->area_kind != VmAreaKind::Heap)
             {
                 return true;
             }
@@ -1753,9 +1774,9 @@ namespace proc
             return true;
         };
 
-        if (heap_growth_crosses_shared_mapping(current_end, new_end))
+        if (heap_growth_conflicts_with_mapping(current_end, new_end))
         {
-            printfRed("ProcessMemoryManager: heap grow would cross shared mapping, range=[%p, %p)\n",
+            printfRed("ProcessMemoryManager: heap grow would cross an existing mapping, range=[%p, %p)\n",
                       (void *)current_end,
                       (void *)new_end);
             return current_end;
@@ -1795,20 +1816,15 @@ namespace proc
             const vma *covering_vm = find_vma_covering(va);
             if (covering_vm != nullptr)
             {
-                if (is_shared_backed_vma(*covering_vm) || covering_vm->is_shared_mapping())
+                if (covering_vm->area_kind != VmAreaKind::Heap)
                 {
-                    printfRed("ProcessMemoryManager: heap grow would cross shared VMA [%p, %p)\n",
+                    printfRed("ProcessMemoryManager: heap grow would cross VMA [%p, %p), kind=%d\n",
                               (void *)covering_vm->addr,
-                              (void *)(covering_vm->addr + (uint64)covering_vm->len));
+                              (void *)(covering_vm->addr + (uint64)covering_vm->len),
+                              static_cast<int>(covering_vm->area_kind));
                     rollback_heap_pages(va);
                     trim_heap_metadata_to_end(current_end, false);
                     return current_end;
-                }
-                if (covering_vm->area_kind != VmAreaKind::Heap)
-                {
-                    // brk 可以把堆顶推进到已有 MAP_FIXED 私有映射之后；这类页仍归
-                    // 原 VMA 管，堆边界只记录逻辑 program break。
-                    continue;
                 }
             }
 

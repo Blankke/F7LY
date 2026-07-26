@@ -4,6 +4,40 @@
 #include "fs/vfs/file.hh"
 #include "fs/vfs/fs.hh"
 #include "fs/vfs/inode.hh"
+#include "fs/lwext4/ext4.hh"
+
+/**
+ * 对直接访问 lwext4 低层 inode/cache 接口的 VFS 路径提供统一保护。
+ *
+ * lwext4 的公开路径会自行调用 mount 的 os_locks，但 ext4_fs_* 低层接口不会。
+ * 该 guard 使用同一把可重入挂载锁，因此允许受保护代码再进入公开 lwext4 接口。
+ */
+class Ext4MountGuard
+{
+public:
+    explicit Ext4MountGuard(struct ext4_mountpoint *mountpoint)
+        : _mountpoint(mountpoint)
+    {
+        if (_mountpoint != nullptr && _mountpoint->os_locks != nullptr)
+        {
+            _mountpoint->os_locks->lock();
+        }
+    }
+
+    ~Ext4MountGuard()
+    {
+        if (_mountpoint != nullptr && _mountpoint->os_locks != nullptr)
+        {
+            _mountpoint->os_locks->unlock();
+        }
+    }
+
+    Ext4MountGuard(const Ext4MountGuard &) = delete;
+    Ext4MountGuard &operator=(const Ext4MountGuard &) = delete;
+
+private:
+    struct ext4_mountpoint *_mountpoint;
+};
 
 struct linux_dirent64 {
     uint64 d_ino;

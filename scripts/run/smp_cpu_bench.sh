@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# F7LY 双架构 SMP CPU 压测与亲和性验证脚本。
+# F7LY 双架构 KVM SMP CPU 压测与亲和性验证脚本。
 #
 # 用法示例：
-#   scripts/run/smp_cpu_bench.sh
-#   scripts/run/smp_cpu_bench.sh --arch rv --worker-list 1,2 --seconds 5 --max-prime 2000
+#   # 分别在 riscv64 与 loongarch64 原生宿主机执行：
+#   scripts/run/smp_cpu_bench.sh --arch rv
+#   scripts/run/smp_cpu_bench.sh --arch la
+#   scripts/run/smp_cpu_bench.sh --arch rv --worker-list 1,2 --runs 3 --seconds 5
 #   scripts/run/smp_cpu_bench.sh --arch all --worker-list 1,2 --seconds 10
 #
 # 脚本为 RISC-V 和 LoongArch 分别静态编译 tools/smp/f7ly_smp_cpu_bench.c，
@@ -24,11 +26,14 @@ arch_selection="all"
 worker_list="1,2,4,8"
 seconds=3
 max_prime=2000
-qemu_mem="1G"
+runs=3
+min_parallel_speedup="1.10"
+qemu_mem="8G"
 # 缩放比较必须在同一台多核虚拟机上完成；默认固定 8 vCPU，不能让基线
 # worker=1 同时退化成 QEMU 单核而把 CPU 数变化混入吞吐结果。
 qemu_cpus=8
 temporary_images=()
+declare -A prepared_images=()
 
 die() {
     echo "错误：$*" >&2
@@ -57,11 +62,17 @@ usage() {
 选项：
   --arch rv|la|all          要验证的架构，默认 all
   --worker-list 1,2,4,8     逗号分隔的 worker 数量，默认 1,2,4,8
+  --runs N                   每种 worker 配置运行次数，默认 3
   --seconds N               每个 worker 的持续时间，默认 3
   --max-prime N             每轮计算的最大素数，默认 2000
   --qemu-cpus N             QEMU vCPU 数；默认 8，最大 8
-  --qemu-mem SIZE           QEMU 内存，默认 1G
+  --min-speedup X           4/8 worker 中位吞吐相对 1 worker 的门槛，默认 1.10
+  --qemu-mem SIZE           QEMU 内存，默认 8G
   -h, --help                显示本说明
+
+说明：
+  性能缩放验收禁止回退到 TCG。rv 必须在 riscv64 KVM 宿主运行，la 必须在
+  loongarch64 KVM 宿主运行；官方跨架构 QEMU 回归与本脚本的硬件并行验收分开执行。
 EOF
 }
 
@@ -82,6 +93,11 @@ while (($# > 0)); do
             seconds="$2"
             shift 2
             ;;
+        --runs)
+            (($# >= 2)) || die "--runs 缺少参数"
+            runs="$2"
+            shift 2
+            ;;
         --max-prime)
             (($# >= 2)) || die "--max-prime 缺少参数"
             max_prime="$2"
@@ -95,6 +111,11 @@ while (($# > 0)); do
         --qemu-mem)
             (($# >= 2)) || die "--qemu-mem 缺少参数"
             qemu_mem="$2"
+            shift 2
+            ;;
+        --min-speedup)
+            (($# >= 2)) || die "--min-speedup 缺少参数"
+            min_parallel_speedup="$2"
             shift 2
             ;;
         -h|--help)
@@ -112,7 +133,10 @@ case "${arch_selection}" in
     *) die "--arch 只能是 rv、la 或 all" ;;
 esac
 is_positive_integer "${seconds}" || die "--seconds 必须是正整数"
+is_positive_integer "${runs}" || die "--runs 必须是正整数"
 is_positive_integer "${max_prime}" || die "--max-prime 必须是正整数"
+[[ "${min_parallel_speedup}" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
+    die "--min-speedup 必须是非负数"
 is_positive_integer "${qemu_cpus}" || die "--qemu-cpus 必须是正整数"
 ((qemu_cpus >= 2)) || die "SMP 缩放验证要求 --qemu-cpus 至少为 2"
 ((qemu_cpus <= 8)) || die "--qemu-cpus 不能超过内核 NCPU=8：${qemu_cpus}"
@@ -134,19 +158,63 @@ done
 ((has_baseline == 1)) || die "--worker-list 必须包含 1，才能计算 speedup"
 ((has_parallel == 1)) || die "--worker-list 至少要包含一个大于 1 的 worker 数"
 
-command -v debugfs >/dev/null || die "缺少 debugfs（通常由 e2fsprogs 提供）"
+for command_name in debugfs lscpu rg uname; do
+    command -v "${command_name}" >/dev/null ||
+        die "缺少命令：${command_name}"
+done
+host_physical_cores="$(lscpu -p=CORE,SOCKET |
+    awk -F, '!/^#/ { key=$1 FS $2; seen[key]=1 } END { print length(seen) }')"
+((host_physical_cores >= qemu_cpus)) ||
+    die "决赛要求至少 ${qemu_cpus} 个物理核，当前仅探测到 ${host_physical_cores} 个"
+
+preflight_kvm_arch() {
+    local arch="$1"
+    local required_host_arch qemu_bin
+
+    case "${arch}" in
+        rv)
+            required_host_arch="riscv64"
+            qemu_bin="qemu-system-riscv64"
+            ;;
+        la)
+            required_host_arch="loongarch64"
+            qemu_bin="qemu-system-loongarch64"
+            ;;
+        *)
+            die "内部错误：未知架构 ${arch}"
+            ;;
+    esac
+
+    command -v "${qemu_bin}" >/dev/null || die "缺少 QEMU：${qemu_bin}"
+    [[ "$(uname -m)" == "${required_host_arch}" ]] ||
+        die "${arch} SMP 性能验收必须在 ${required_host_arch} 原生宿主使用 KVM；当前宿主为 $(uname -m)"
+    [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]] ||
+        die "${arch} SMP 性能验收需要当前用户可读写 /dev/kvm"
+    "${qemu_bin}" -accel help 2>&1 |
+        rg -q '(^|[[:space:]])kvm($|[[:space:]])' ||
+        die "${qemu_bin} 未提供 KVM accelerator"
+}
+
+if [[ "${arch_selection}" == rv || "${arch_selection}" == all ]]; then
+    preflight_kvm_arch rv
+fi
+if [[ "${arch_selection}" == la || "${arch_selection}" == all ]]; then
+    preflight_kvm_arch la
+fi
+
 mkdir -p "${BENCH_DIR}" "${LOG_DIR}"
 run_timestamp="$(date +%Y%m%d-%H%M%S)"
 result_dir="${LOG_DIR}/smp-cpu-${arch_selection}-smp${qemu_cpus}-${run_timestamp}"
 metrics_tsv="${result_dir}/metrics.tsv"
 summary_tsv="${result_dir}/summary.tsv"
 mkdir -p "${result_dir}"
-printf 'arch\tworkers\tevents\telapsed_seconds\tevents_per_second\tstatus\tlog_file\n' >"${metrics_tsv}"
+printf 'arch\tworkers\trun\tevents\telapsed_seconds\tevents_per_second\tstatus\tlog_file\n' >"${metrics_tsv}"
 
 build_and_run_case() {
     local arch="$1"
     local workers="$2"
     local qemu_cpu_count="$3"
+    local run_index="$4"
     local compiler kernel_arch kernel_image rootfs_image qemu_bin benchmark_binary
     local timestamp temporary_rootfs log_file command_line timeout_seconds qemu_exit_code
     local metric_line metric_workers metric_events metric_elapsed metric_rate metric_status
@@ -156,8 +224,7 @@ build_and_run_case() {
             compiler="riscv64-linux-gnu-gcc"
             kernel_arch="riscv"
             kernel_image="${PROJECT_ROOT}/kernel-rv-shell"
-            # 与 Makefile 的 shell 入口保持同一 rootfs；该镜像同时含真实 stress-ng。
-            rootfs_image="${PROJECT_ROOT}/images/rootfs-riscv64.img"
+            rootfs_image="${PROJECT_ROOT}/images/sdcard-rv-pub.img"
             qemu_bin="qemu-system-riscv64"
             benchmark_binary="${BENCH_DIR}/f7ly_smp_cpu_bench-rv"
             ;;
@@ -165,9 +232,7 @@ build_and_run_case() {
             compiler="loongarch64-linux-gnu-gcc"
             kernel_arch="loongarch"
             kernel_image="${PROJECT_ROOT}/kernel-la-shell"
-            # 当前仓库没有 LoongArch stress-ng rootfs，静态基准仍使用评测盘验证
-            # LA 的 pthread、affinity 和 getcpu 内核路径。
-            rootfs_image="${PROJECT_ROOT}/images/sdcard-la.img"
+            rootfs_image="${PROJECT_ROOT}/images/sdcard-la-pub.img"
             qemu_bin="qemu-system-loongarch64"
             benchmark_binary="${BENCH_DIR}/f7ly_smp_cpu_bench-la"
             ;;
@@ -181,40 +246,47 @@ build_and_run_case() {
     [[ -f "${rootfs_image}" ]] || die "缺少 rootfs：${rootfs_image}"
     [[ -f "${BENCH_SOURCE}" ]] || die "缺少压测源码：${BENCH_SOURCE}"
 
-    echo "[SMP] 构建 ${arch} shell 内核和静态压测器"
-    if ! make -C "${PROJECT_ROOT}" build ARCH="${kernel_arch}" INITCODE_MODE=shell; then
-        return 1
+    if [[ -z "${prepared_images[${arch}]:-}" ]]; then
+        echo "[SMP] 构建 ${arch} shell 内核和静态压测器"
+        if ! make -C "${PROJECT_ROOT}" build ARCH="${kernel_arch}" INITCODE_MODE=shell; then
+            return 1
+        fi
+        if ! "${compiler}" -std=c11 -O2 -Wall -Wextra -Werror -static -pthread \
+            "${BENCH_SOURCE}" -o "${benchmark_binary}"; then
+            return 1
+        fi
+
+        if ! temporary_rootfs="$(mktemp /tmp/f7ly-smp-cpu-${arch}-XXXXXX.img)"; then
+            return 1
+        fi
+        temporary_images+=("${temporary_rootfs}")
+        if ! cp --reflink=auto --sparse=always "${rootfs_image}" "${temporary_rootfs}"; then
+            return 1
+        fi
+        debugfs -w -R 'rm /f7ly_smp_cpu_bench' "${temporary_rootfs}" >/dev/null 2>&1 || true
+        if ! debugfs -w -R "write ${benchmark_binary} /f7ly_smp_cpu_bench" "${temporary_rootfs}" >/dev/null; then
+            return 1
+        fi
+        debugfs -w -R 'set_inode_field /f7ly_smp_cpu_bench mode 0100755' \
+            "${temporary_rootfs}" >/dev/null
+        prepared_images["${arch}"]="${temporary_rootfs}"
     fi
-    if ! "${compiler}" -std=c11 -O2 -Wall -Wextra -Werror -static -pthread "${BENCH_SOURCE}" -o "${benchmark_binary}"; then
-        return 1
-    fi
+    temporary_rootfs="${prepared_images[${arch}]}"
 
     timestamp="$(date +%Y%m%d-%H%M%S)"
-    if ! temporary_rootfs="$(mktemp /tmp/f7ly-smp-cpu-${arch}-XXXXXX.img)"; then
-        return 1
-    fi
-    temporary_images+=("${temporary_rootfs}")
-    if ! cp --reflink=auto "${rootfs_image}" "${temporary_rootfs}"; then
-        return 1
-    fi
-    # fresh copy 上理论上不存在该文件；先删除使脚本能重复用于曾被人工注入的镜像。
-    debugfs -w -R 'rm /f7ly_smp_cpu_bench' "${temporary_rootfs}" >/dev/null 2>&1 || true
-    if ! debugfs -w -R "write ${benchmark_binary} /f7ly_smp_cpu_bench" "${temporary_rootfs}" >/dev/null; then
-        return 1
-    fi
-
-    log_file="${result_dir}/output_${arch}_smp${qemu_cpu_count}_workers${workers}_cpu_bench_${timestamp}.txt"
+    log_file="${result_dir}/output_${arch}_smp${qemu_cpu_count}_workers${workers}_run${run_index}_cpu_bench_${timestamp}.txt"
     command_line="/f7ly_smp_cpu_bench --workers ${workers} --seconds ${seconds} --max-prime ${max_prime}"
     timeout_seconds=$((seconds + 90))
-    echo "[SMP] 运行 ${arch}，vCPU=${qemu_cpu_count}，workers=${workers}，日志：${log_file}"
+    echo "[SMP] 运行 ${arch}，vCPU=${qemu_cpu_count}，workers=${workers}，第 ${run_index}/${runs} 轮，日志：${log_file}"
 
     set +e
     if [[ "${arch}" == "rv" ]]; then
         { sleep 3; printf '%s\n' "${command_line}" 'exit'; } |
             timeout "${timeout_seconds}s" "${qemu_bin}" \
-                -machine virt -kernel "${kernel_image}" -m "${qemu_mem}" \
+                -machine virt -accel kvm -kernel "${kernel_image}" -m "${qemu_mem}" \
                 -display none -chardev stdio,id=shell_stdio,signal=off \
                 -serial chardev:shell_stdio -monitor none -smp "${qemu_cpu_count}" -bios default \
+                -snapshot \
                 -drive file="${temporary_rootfs}",if=none,format=raw,id=x0 \
                 -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 \
                 -device virtio-net-device,netdev=net -netdev user,id=net \
@@ -223,9 +295,10 @@ build_and_run_case() {
     else
         { sleep 3; printf '%s\n' "${command_line}" 'exit'; } |
             timeout "${timeout_seconds}s" "${qemu_bin}" \
-                -machine virt -kernel "${kernel_image}" -m "${qemu_mem}" \
+                -machine virt -accel kvm -kernel "${kernel_image}" -m "${qemu_mem}" \
                 -display none -chardev stdio,id=shell_stdio,signal=off \
                 -serial chardev:shell_stdio -monitor none -smp "${qemu_cpu_count}" \
+                -snapshot \
                 -drive file="${temporary_rootfs}",if=none,format=raw,id=x0 \
                 -device virtio-blk-pci,drive=x0 \
                 -netdev user,id=net -device virtio-net-pci,netdev=net \
@@ -277,9 +350,9 @@ build_and_run_case() {
         echo "[SMP] ${arch} workers=${workers} 的 guest 吞吐指标无效：${metric_line}" >&2
         return 1
     fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "${arch}" "${metric_workers}" "${metric_events}" "${metric_elapsed}" \
-        "${metric_rate}" "${metric_status}" "${log_file}" >>"${metrics_tsv}"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "${arch}" "${metric_workers}" "${run_index}" "${metric_events}" \
+        "${metric_elapsed}" "${metric_rate}" "${metric_status}" "${log_file}" >>"${metrics_tsv}"
 
     echo "[SMP] PASS ${arch} vCPU=${qemu_cpu_count} workers=${workers}：${log_file}"
 }
@@ -294,22 +367,44 @@ esac
 failed=0
 for arch in "${selected_arches[@]}"; do
     for worker_count in "${worker_counts[@]}"; do
-        if ! build_and_run_case "${arch}" "${worker_count}" "${qemu_cpus}"; then
-            failed=1
-        fi
+        for ((run_index = 1; run_index <= runs; ++run_index)); do
+            if ! build_and_run_case "${arch}" "${worker_count}" "${qemu_cpus}" "${run_index}"; then
+                failed=1
+            fi
+        done
     done
 done
 
-# 生成与 tgoskits sysbench-cpu.sh 对齐的吞吐、加速比和并行效率汇总。
+# 以三轮中位数计算吞吐、加速比和并行效率，避免单轮宿主负载抖动左右结论。
 awk -F '\t' -v OFS='\t' -v worker_order="${worker_list}" -v arch_order="${arch_selection}" '
 NR == 1 { next }
-$6 == "PASS" {
+$7 == "PASS" {
     key = $1 SUBSEP $2
     count[key]++
-    sum[key] += $5 + 0
+    rate[key SUBSEP count[key]] = $6 + 0
+}
+function median(key, count_value, values, i, j, current) {
+    for (i = 1; i <= count_value; ++i)
+        values[i] = rate[key SUBSEP i]
+    for (i = 2; i <= count_value; ++i) {
+        current = values[i]
+        j = i - 1
+        while (j >= 1 && values[j] > current) {
+            values[j + 1] = values[j]
+            --j
+        }
+        values[j + 1] = current
+    }
+    if (count_value % 2 == 1)
+        current = values[(count_value + 1) / 2]
+    else
+        current = (values[count_value / 2] + values[count_value / 2 + 1]) / 2
+    for (i = 1; i <= count_value; ++i)
+        delete values[i]
+    return current
 }
 END {
-    print "arch", "workers", "successful_runs", "events_per_second", "speedup", "efficiency_percent"
+    print "arch", "workers", "successful_runs", "median_events_per_second", "speedup", "efficiency_percent"
     if (arch_order == "all") {
         arch_count = split("rv,la", arches, ",")
     } else {
@@ -318,15 +413,16 @@ END {
     worker_count = split(worker_order, workers, ",")
     for (a = 1; a <= arch_count; ++a) {
         arch = arches[a]
-        baseline = count[arch SUBSEP 1] ? sum[arch SUBSEP 1] / count[arch SUBSEP 1] : 0
+        baseline_key = arch SUBSEP 1
+        baseline = count[baseline_key] ? median(baseline_key, count[baseline_key]) : 0
         for (w = 1; w <= worker_count; ++w) {
             worker = workers[w]
             key = arch SUBSEP worker
-            average = count[key] ? sum[key] / count[key] : 0
-            speedup = baseline > 0 ? average / baseline : 0
+            middle = count[key] ? median(key, count[key]) : 0
+            speedup = baseline > 0 ? middle / baseline : 0
             efficiency = worker > 0 ? speedup / worker * 100 : 0
             printf "%s\t%d\t%d\t%.3f\t%.3f\t%.2f\n", \
-                   arch, worker, count[key] + 0, average, speedup, efficiency
+                   arch, worker, count[key] + 0, middle, speedup, efficiency
         }
     }
 }
@@ -338,8 +434,8 @@ column -t -s $'\t' "${summary_tsv}" 2>/dev/null || cat "${summary_tsv}"
 
 for arch in "${selected_arches[@]}"; do
     baseline_count="$(awk -F '\t' -v arch="${arch}" '$1 == arch && $2 == 1 { print $3; exit }' "${summary_tsv}")"
-    if [[ "${baseline_count:-0}" -lt 1 ]]; then
-        echo "[SMP] ${arch} 缺少 worker=1 基线指标" >&2
+    if [[ "${baseline_count:-0}" -lt "${runs}" ]]; then
+        echo "[SMP] ${arch} worker=1 有效轮次不足：${baseline_count:-0}/${runs}" >&2
         failed=1
     fi
     largest_parallel_worker=0
@@ -357,9 +453,10 @@ for arch in "${selected_arches[@]}"; do
     fi
     for worker_count in "${trend_workers[@]}"; do
         if ! awk -F '\t' -v arch="${arch}" -v worker="${worker_count}" \
-            '$1 == arch && $2 == worker && $3 >= 1 && ($5 + 0) > 1.0 { pass = 1 }
+            -v threshold="${min_parallel_speedup}" -v required_runs="${runs}" \
+            '$1 == arch && $2 == worker && $3 >= required_runs && ($5 + 0) >= threshold { pass = 1 }
              END { exit !pass }' "${summary_tsv}"; then
-            echo "[SMP] ${arch} workers=${worker_count} 未证明相对单 worker 的正加速" >&2
+            echo "[SMP] ${arch} workers=${worker_count} 中位吞吐未达到 ${min_parallel_speedup} 倍门槛" >&2
             failed=1
         fi
     done

@@ -351,6 +351,7 @@ namespace syscall
                 return -EINVAL;
             }
 
+            Ext4MountGuard mount_guard(f->lwext4_file_struct.mp);
             struct ext4_inode_ref inode_ref;
             int result = ext4_fs_get_inode_ref(&f->lwext4_file_struct.mp->fs,
                                                f->lwext4_file_struct.inode,
@@ -835,11 +836,18 @@ namespace syscall
                 return true;
             }
 
-            for (const auto &entry : start->watch_list())
+            auto snapshot = start->snapshot_watches();
+            bool reaches_target = false;
+            for (const auto &entry : snapshot)
             {
-                fs::file *child = proc->get_open_file(entry.fd);
-                if (child == nullptr || !child->is_epoll_file())
+                fs::file *child = proc::k_pm.get_open_file_ref(proc, entry.fd);
+                if (child == nullptr || child != entry.target_identity ||
+                    !child->is_epoll_file())
                 {
+                    if (child != nullptr)
+                    {
+                        child->free_file();
+                    }
                     continue;
                 }
                 if (epoll_reaches_target(proc,
@@ -847,11 +855,18 @@ namespace syscall
                                          target,
                                          depth + 1))
                 {
-                    return true;
+                    reaches_target = true;
                 }
+                child->free_file();
+                if (reaches_target)
+                    break;
             }
 
-            return false;
+            for (auto &entry : snapshot)
+            {
+                entry.target_identity->free_file();
+            }
+            return reaches_target;
         }
 
         int epoll_nesting_depth(proc::Pcb *proc, fs::file *file_obj, int depth = 0)
@@ -863,14 +878,27 @@ namespace syscall
 
             int max_child_depth = 0;
             auto *epoll_obj = static_cast<fs::epoll_file *>(file_obj);
-            for (const auto &entry : epoll_obj->watch_list())
+            auto snapshot = epoll_obj->snapshot_watches();
+            for (const auto &entry : snapshot)
             {
-                fs::file *child = proc->get_open_file(entry.fd);
-                int child_depth = epoll_nesting_depth(proc, child, depth + 1);
+                fs::file *child = proc::k_pm.get_open_file_ref(proc, entry.fd);
+                int child_depth = 0;
+                if (child != nullptr && child == entry.target_identity)
+                {
+                    child_depth = epoll_nesting_depth(proc, child, depth + 1);
+                }
                 if (child_depth > max_child_depth)
                 {
                     max_child_depth = child_depth;
                 }
+                if (child != nullptr)
+                {
+                    child->free_file();
+                }
+            }
+            for (auto &entry : snapshot)
+            {
+                entry.target_identity->free_file();
             }
 
             return 1 + max_child_depth;
@@ -887,16 +915,23 @@ namespace syscall
             }
 
             int ready_count = 0;
+            epoll_obj->lock_watches();
             for (auto &entry : epoll_obj->watch_list())
             {
-                fs::file *target = proc->get_open_file(entry.fd);
-                if (target == nullptr || entry.oneshot_disabled)
+                fs::file *target = proc::k_pm.get_open_file_ref(proc, entry.fd);
+                if (target == nullptr || target != entry.target_identity ||
+                    entry.oneshot_disabled)
                 {
+                    if (target != nullptr)
+                    {
+                        target->free_file();
+                    }
                     entry.last_ready_events = 0;
                     continue;
                 }
 
                 uint32 current_ready = query_epoll_ready_events(target, entry.events);
+                target->free_file();
                 uint32 deliver_ready = current_ready;
                 if ((entry.events & abi::k_epollet) != 0)
                 {
@@ -921,6 +956,7 @@ namespace syscall
                     }
                 }
             }
+            epoll_obj->unlock_watches();
 
             return ready_count;
         }
@@ -6553,7 +6589,13 @@ namespace syscall
     static const char _SYSINFO_nodename[] = "(none-node)";
     static const char _SYSINFO_release[] = "6.17.0";
     static const char _SYSINFO_version[] = "6.17.0";
+#if defined(RISCV)
     static const char _SYSINFO_machine[] = "riscv64";
+#elif defined(LOONGARCH)
+    static const char _SYSINFO_machine[] = "loongarch64";
+#else
+#error "sys_uname: unsupported architecture"
+#endif
     static const char _SYSINFO_domainname[] = "(none-domain)";
     uint64 SyscallHandler::sys_uname()
     {
@@ -9173,6 +9215,7 @@ namespace syscall
             uint32_t inode_flags = 0;
             if (f->lwext4_file_struct.mp && f->lwext4_file_struct.inode > 0)
             {
+                Ext4MountGuard mount_guard(f->lwext4_file_struct.mp);
                 // 从 ext4_file 获取标志
                 struct ext4_inode_ref inode_ref;
                 int result = ext4_fs_get_inode_ref(&f->lwext4_file_struct.mp->fs,
@@ -9224,6 +9267,7 @@ namespace syscall
             // 通过文件的 ext4_file 结构设置 inode 标志
             if (f->lwext4_file_struct.mp && f->lwext4_file_struct.inode > 0)
             {
+                Ext4MountGuard mount_guard(f->lwext4_file_struct.mp);
                 // 从 ext4_file 设置标志
                 struct ext4_inode_ref inode_ref;
                 int result = ext4_fs_get_inode_ref(&f->lwext4_file_struct.mp->fs,
@@ -11202,7 +11246,11 @@ namespace syscall
         mem::PageTable *pt = cur_proc->get_pagetable();
 
         memset(&sysinfo_, 0, sizeof(sysinfo_));
-        sysinfo_.uptime = 0;
+        tmm::timespec boottime{};
+        constexpr auto k_clock_boottime = static_cast<tmm::SystemClockId>(7);
+        if (tmm::k_tm.clock_gettime(k_clock_boottime, &boottime) < 0)
+            return SYS_EINVAL;
+        sysinfo_.uptime = boottime.tv_sec < 0 ? 0 : boottime.tv_sec;
         sysinfo_.loads[0] = 0; // 负载均值  1min 5min 15min
         sysinfo_.loads[1] = 0;
         sysinfo_.loads[2] = 0;
@@ -15241,6 +15289,18 @@ namespace syscall
         {
             panic("[sys_mprotect] Current process memory manager is null");
         }
+        struct MemoryUnlockGuard
+        {
+            proc::ProcessMemoryManager *manager;
+            ~MemoryUnlockGuard()
+            {
+                manager->unlock_memory();
+            }
+        };
+        // CLONE_VM 线程会并发 mmap/mprotect 同一棵 VMA 索引；查找、拆分、
+        // 页表权限更新和回滚必须属于同一个可睡眠临界区。
+        mm->lock_memory();
+        MemoryUnlockGuard memory_unlock_guard{mm};
 
         auto segment_file_backed_bytes = [](const proc::vma &source,
                                             uint64 segment_offset,
@@ -21449,27 +21509,35 @@ namespace syscall
             return SYS_EFAULT;
         }
 
-        fs::file *epoll_base = p->get_open_file(epfd);
+        fs::file *epoll_base = proc::k_pm.get_open_file_ref(p, epfd);
         if (epoll_base == nullptr)
         {
             return SYS_EBADF;
         }
         if (!epoll_base->is_epoll_file())
         {
+            epoll_base->free_file();
             return SYS_EINVAL;
         }
 
-        fs::file *target_file = p->get_open_file(fd);
+        fs::file *target_file = proc::k_pm.get_open_file_ref(p, fd);
         if (target_file == nullptr)
         {
+            epoll_base->free_file();
             return SYS_EBADF;
         }
+        auto release_ctl_refs = [&]() {
+            target_file->free_file();
+            epoll_base->free_file();
+        };
         if (epfd == fd)
         {
+            release_ctl_refs();
             return SYS_EINVAL;
         }
         if (!is_epoll_supported_target(target_file))
         {
+            release_ctl_refs();
             return SYS_EPERM;
         }
 
@@ -21480,14 +21548,17 @@ namespace syscall
         {
             if (event_addr == 0)
             {
+                release_ctl_refs();
                 return SYS_EFAULT;
             }
             if (mem::k_vmm.copy_in(*pt, &kev, event_addr, sizeof(kev)) < 0)
             {
+                release_ctl_refs();
                 return SYS_EFAULT;
             }
         }
 
+        int ctl_result = SYS_EINVAL;
         switch (op)
         {
         case abi::k_epoll_ctl_add:
@@ -21496,21 +21567,29 @@ namespace syscall
                 auto *target_epoll = static_cast<fs::epoll_file *>(target_file);
                 if (epoll_reaches_target(p, target_epoll, epoll_obj))
                 {
-                    return SYS_ELOOP;
+                    ctl_result = SYS_ELOOP;
+                    break;
                 }
                 if (epoll_nesting_depth(p, target_file) >= 5)
                 {
-                    return SYS_EINVAL;
+                    ctl_result = SYS_EINVAL;
+                    break;
                 }
             }
-            return epoll_obj->add_watch(fd, kev.events, kev.data);
+            ctl_result = epoll_obj->add_watch(fd, target_file, kev.events, kev.data);
+            break;
         case abi::k_epoll_ctl_mod:
-            return epoll_obj->mod_watch(fd, kev.events, kev.data);
+            ctl_result = epoll_obj->mod_watch(fd, target_file, kev.events, kev.data);
+            break;
         case abi::k_epoll_ctl_del:
-            return epoll_obj->del_watch(fd);
+            ctl_result = epoll_obj->del_watch(fd, target_file);
+            break;
         default:
-            return SYS_EINVAL;
+            ctl_result = SYS_EINVAL;
+            break;
         }
+        release_ctl_refs();
+        return ctl_result;
     }
 
     uint64 SyscallHandler::sys_epoll_pwait()
@@ -21548,13 +21627,14 @@ namespace syscall
             return SYS_EFAULT;
         }
 
-        fs::file *epoll_base = p->get_open_file(epfd);
+        fs::file *epoll_base = proc::k_pm.get_open_file_ref(p, epfd);
         if (epoll_base == nullptr)
         {
             return SYS_EBADF;
         }
         if (!epoll_base->is_epoll_file())
         {
+            epoll_base->free_file();
             return SYS_EINVAL;
         }
 
@@ -21562,6 +21642,7 @@ namespace syscall
         auto *kernel_events = static_cast<abi::KernelEpollEvent *>(alloc_syscall_temp_buffer(events_bytes));
         if (kernel_events == nullptr)
         {
+            epoll_base->free_file();
             return SYS_ENOMEM;
         }
 
@@ -21573,6 +21654,7 @@ namespace syscall
                 p->_sigmask = orig_sigmask;
             }
             free_syscall_temp_buffer(kernel_events);
+            epoll_base->free_file();
         };
 
         if (sigmask_addr != 0)
@@ -21645,13 +21727,14 @@ namespace syscall
             return SYS_EFAULT;
         }
 
-        fs::file *epoll_base = p->get_open_file(epfd);
+        fs::file *epoll_base = proc::k_pm.get_open_file_ref(p, epfd);
         if (epoll_base == nullptr)
         {
             return SYS_EBADF;
         }
         if (!epoll_base->is_epoll_file())
         {
+            epoll_base->free_file();
             return SYS_EINVAL;
         }
 
@@ -21661,10 +21744,12 @@ namespace syscall
             abi::UserTimespec64 user_timeout{};
             if (mem::k_vmm.copy_in(*pt, &user_timeout, timeout_addr, sizeof(user_timeout)) < 0)
             {
+                epoll_base->free_file();
                 return SYS_EFAULT;
             }
             if (user_timeout.tv_sec < 0 || user_timeout.tv_nsec < 0 || user_timeout.tv_nsec >= abi::k_nsec_per_sec)
             {
+                epoll_base->free_file();
                 return SYS_EINVAL;
             }
 
@@ -21682,6 +21767,7 @@ namespace syscall
         auto *kernel_events = static_cast<abi::KernelEpollEvent *>(alloc_syscall_temp_buffer(events_bytes));
         if (kernel_events == nullptr)
         {
+            epoll_base->free_file();
             return SYS_ENOMEM;
         }
 
@@ -21693,6 +21779,7 @@ namespace syscall
                 p->_sigmask = orig_sigmask;
             }
             free_syscall_temp_buffer(kernel_events);
+            epoll_base->free_file();
         };
 
         if (sigmask_addr != 0)

@@ -132,6 +132,7 @@ namespace proc
         Pcb *_parent;      // 父进程的PCB指针
         char _name[30];    // 进程名称，用于调试和识别
         eastl::string exe; // 可执行文件的绝对路径
+        eastl::string _cmdline; // 最近一次成功 execve 的 NUL 分隔 argv
 
         // 新增：标准Linux进程标识符
         int _ppid; // 父进程PID，用于快速访问，避免通过_parent指针获取
@@ -196,6 +197,7 @@ namespace proc
         uint64 _kstack = 0;    // 内核栈的虚拟地址
         TrapFrame *_trapframe; // 用户态寄存器保存区，用于系统调用和异常处理, 在usertrapret时映射
         bool _used_fpu;        // LoongArch 懒 FPU：线程第一次触发浮点禁用异常后才保存/恢复 FPU 现场
+        bool _used_lsx;        // LoongArch 懒 LSX：启用后必须保存完整 128 位向量现场
     private:
         // 阶段1：统一内存管理器（替代分散的内存字段）
         class ProcessMemoryManager* _memory_manager;

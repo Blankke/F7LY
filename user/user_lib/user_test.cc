@@ -334,10 +334,11 @@ int buildstorm_test(void)
     }
 
     char *argv[] = {
-        (char *)"buildstorm_testcode.sh",
+        (char *)"sh",
+        (char *)"/glibc/buildstorm_testcode.sh",
         NULL,
     };
-    return run_test("/glibc/buildstorm_testcode.sh", argv, final_2026_glibc_envp());
+    return run_test("/bin/sh", argv, final_2026_glibc_envp());
 }
 
 int basic_test(const char *path = musl_dir)

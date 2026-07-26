@@ -88,5 +88,10 @@ struct TrapFrame {
   /* 288 */ uint64 f[32];
   /* 544 */ uint64 fcsr;
   /* 552 */ uint64 fcc[8];
+  /*
+   * LSX 的 128 位向量寄存器与 FPR 共享低 64 位。保留上面的 f[] 供现有
+   * signal ABI 使用，同时以 16 字节对齐的完整镜像保存可抢占的 LSX 现场。
+   */
+  /* 624 */ alignas(16) uint64 lsx[32][2];
 };
 #endif

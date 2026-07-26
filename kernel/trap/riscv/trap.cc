@@ -520,6 +520,11 @@ int mmap_handler(uint64 va, int cause)
   {
     return -1;
   }
-  return mm->fault_page(va, access_type);
+  // 用户缺页与同一 CLONE_VM 地址空间中的 mmap/munmap/mprotect 串行，
+  // 保证 VMA 查找和 PTE 安装基于同一代元数据。
+  mm->lock_memory();
+  int result = mm->fault_page(va, access_type);
+  mm->unlock_memory();
+  return result;
 }
 #endif

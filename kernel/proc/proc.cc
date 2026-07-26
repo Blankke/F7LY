@@ -102,6 +102,7 @@ namespace proc
         _parent = nullptr;               // 父进程指针
         memset(_name, 0, sizeof(_name)); // 进程名称
         exe.clear();                     // 可执行文件路径
+        _cmdline.clear();                // NUL 分隔命令行
 
         // Linux标准进程标识符
         _ppid = 0;  // 父进程PID
@@ -150,6 +151,7 @@ namespace proc
         _kstack = 0;          // 内核栈虚拟地址
         _trapframe = nullptr; // 用户态寄存器保存区
         _used_fpu = false;    // 默认按整数任务处理，第一次浮点指令异常后再启用 FPU 现场
+        _used_lsx = false;    // LSX 与 FPR 共享低位，单独跟踪完整向量现场
         
         // 阶段1：创建统一内存管理器
         _memory_manager = nullptr; // 延迟到init()中创建，避免在构造函数中panic

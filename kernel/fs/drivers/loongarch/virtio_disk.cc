@@ -297,6 +297,28 @@ int virtio_disk_rw_sectors(int dev, void *buf, uint64 start_sector, uint32 secto
     return device->submit_transfer_and_wait(buf, sector_count * BSIZE, start_sector, write != 0);
 }
 
+uint64 virtio_disk_capacity_bytes(int dev)
+{
+    PciVirtioBlkTransport *transport = nullptr;
+    if (dev == 0)
+    {
+        transport = g_primary_transport;
+    }
+    else if (dev == 1)
+    {
+        transport = g_secondary_transport;
+    }
+    if (transport == nullptr || transport->hardware().device_cfg == nullptr)
+    {
+        return 0;
+    }
+
+    // Virtio-blk 设备配置的首字段是以 512 字节 sector 计数的 capacity。
+    volatile uint64 *capacity =
+        reinterpret_cast<volatile uint64 *>(transport->hardware().device_cfg);
+    return *capacity * static_cast<uint64>(BSIZE);
+}
+
 void virtio_disk_intr(void)
 {
     g_primary_device->handle_interrupt();

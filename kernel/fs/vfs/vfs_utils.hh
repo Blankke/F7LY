@@ -15,6 +15,12 @@ int vfs_openat(eastl::string absolute_path, fs::file* &file, uint flags, int mod
 int vfs_is_dir(eastl::string &absolute_path);
 int vfs_path2filetype(eastl::string &absolute_path);
 int vfs_resolve_path(const eastl::string &input_path, eastl::string &resolved_path);
+// 只检查镜像/挂载点中的真实 backing，不经过虚拟文件树。
+// 用于实现“真实文件优先、缺失时才使用虚拟后备”的统一判定。
+bool vfs_backing_path_exists(const eastl::string &path);
+// 解析 ELF PT_INTERP。真实路径优先，仅在其缺失时使用旧评测盘兼容别名。
+int vfs_resolve_runtime_interpreter(const eastl::string &requested_path,
+                                    eastl::string &resolved_path);
 int create_and_write_file(const char *path, const char *data);
 int vfs_is_file_exist(const char *path);
 uint vfs_read_file(const char *path, uint64 buffer_addr, size_t offset, size_t size);

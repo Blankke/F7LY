@@ -1143,6 +1143,7 @@ namespace proc
                 p->_parent = nullptr;
                 p->_name[0] = '\0'; // 清空进程名称
                 p->exe.clear();     // 清空可执行文件路径
+                p->_cmdline.clear();// 清空上一次使用留下的命令行
 
                 // 初始化标准Linux进程标识符
                 p->_ppid = 0;       // 父进程PID（在fork时设置）
@@ -1204,7 +1205,9 @@ namespace proc
                     p->_lock.release();
                     return nullptr;
                 }
+                memset(p->_trapframe, 0, sizeof(*p->_trapframe));
                 p->_used_fpu = false;
+                p->_used_lsx = false;
 
                 // 注意：不再在alloc_proc中创建ProcessMemoryManager
                 // ProcessMemoryManager的创建延迟到fork函数中，对于user_init和execve则在相应函数中创建
@@ -1386,6 +1389,7 @@ namespace proc
         p->_parent = nullptr; // 清除父进程指针
         p->_name[0] = '\0';   // 清空进程名称
         p->exe.clear();       // 清空可执行文件路径
+        p->_cmdline.clear();  // 清空 NUL 分隔命令行
 
         // 清除标准Linux进程标识符
         p->_ppid = 0; // 清除父进程PID
@@ -1426,6 +1430,7 @@ namespace proc
                 p->_io_priority_override = default_proc_prio;
                 p->_has_io_priority_override = false;
                 p->_used_fpu = false;
+                p->_used_lsx = false;
 
         // PCB 复用后重新收敛到当前启动拓扑，避免历史任务把不存在的 CPU 位带给新任务。
         const uint64 possible_mask = Cpu::possible_cpu_mask();
@@ -2363,6 +2368,7 @@ namespace proc
         // 拷贝父进程的陷阱帧，而不是直接指向，后面有可能会修改
         *np->_trapframe = *p->_trapframe;
         np->_used_fpu = p->_used_fpu;
+        np->_used_lsx = p->_used_lsx;
 
         // 设置父子进程关系
         np->_parent = p;
@@ -2373,6 +2379,7 @@ namespace proc
         np->_cwd_name = p->_cwd_name; // 继承当前工作目录名称
         np->_root_name = p->_root_name; // 继承 chroot 根目录
         np->exe = p->exe;             // 继承真实可执行文件路径，保持 /proc/self/exe 语义稳定
+        np->_cmdline = p->_cmdline;    // fork/clone 继承当前进程可见的命令行
         np->_umask = p->_umask;       // 继承文件模式创建掩码
         np->_personality = p->_personality; // 继承 personality，保持与 Linux 一致
         np->_dumpable = p->_dumpable;
@@ -4445,9 +4452,12 @@ namespace proc
 
         // 检查是否为匿名映射
         bool is_anonymous = (flags & MAP_ANONYMOUS) || (fd == -1);
-        // glibc malloc/pthread 会在同一地址空间内并发申请匿名私有映射。
-        // VMA 表和 mmap_cursor 共享在 ProcessMemoryManager 中，必须串行更新。
-        MemoryLockGuard anonymous_memory_guard(is_anonymous ? p->get_memory_manager() : nullptr);
+        /*
+         * CLONE_VM 线程不仅会并发申请匿名栈/堆，也会同时映射和卸载动态库、
+         * 编译器产物。VMA 表、Maple Tree 与 mmap_cursor 属于同一地址空间，
+         * 因而所有映射类型都必须在同一把可睡眠锁下完成元数据事务。
+         */
+        MemoryLockGuard memory_guard(p != nullptr ? p->get_memory_manager() : nullptr);
 
         // 匿名映射验证
         if (is_anonymous)
@@ -4792,10 +4802,25 @@ namespace proc
                 existing->vfile == nullptr &&
                 existing->backing_kind == VMA_BACKING_NONE)
             {
+                const int old_len = existing->len;
+                const uint64 old_max_len = existing->max_len;
                 existing->len += static_cast<int>(aligned_length);
                 if (existing->max_len < static_cast<uint64>(existing->len))
                 {
                     existing->max_len = static_cast<uint64>(existing->len);
+                }
+                /*
+                 * Maple Tree 节点缓存了区间终点。只改 vma::len 会让新增尾部
+                 * 无法被 find_vma_covering() 找到，紧随 mmap 的
+                 * mprotect(PROT_NONE) 就会把合法 guard page 误报成 EFAULT。
+                 * 这里做单节点 O(log n) 重索引，不退回全表 rebuild。
+                 */
+                if (!memory_mgr->reindex_vma_slot(*existing, existing->addr))
+                {
+                    existing->len = old_len;
+                    existing->max_len = old_max_len;
+                    memory_mgr->reindex_vma_slot(*existing, existing->addr);
+                    return fail_mmap(ENOMEM);
                 }
                 return (void *)map_addr;
             }
@@ -5386,12 +5411,12 @@ namespace proc
         }
         // 处理dirfd参数
         eastl::string base_dir;
-        if (path[0] == '.')
+        if (path[0] == '/')
         {
-            base_dir = p->_cwd_name;
-            path = path.substr(2); // 去掉"./"前缀
+            // 绝对路径按 Linux 语义忽略 dirfd。
+            base_dir = "/";
         }
-        if (dirfd == AT_FDCWD)
+        else if (dirfd == AT_FDCWD)
         {
             base_dir = p->_cwd_name;
             if (path == "nosuchdir/testdir2")
@@ -5422,29 +5447,10 @@ namespace proc
             base_dir = file->_path_name;
         }
 
-        // 构造完整路径
-        eastl::string full_path;
-        if (path[0] == '/')
-        {
-            // 绝对路径，忽略base_dir
-            full_path = path;
-        }
-        else
-        {
-            // 相对路径
-            full_path = base_dir;
-            if (full_path.back() != '/')
-            {
-                full_path += "/";
-            }
-            full_path += path;
-        }
-
-        // 规范化路径（处理 "./" 前缀）
-        if (full_path.length() >= 2 && full_path[0] == '.' && full_path[1] == '/')
-        {
-            full_path = full_path.substr(2);
-        }
+        // 统一按路径组件规范化 "." 和 ".."。不能仅凭首字符为 '.' 就裁掉两个
+        // 字节，否则 unlinkat(dirfd, ".cargo-lock", 0) 会误删成 "argo-lock"。
+        const eastl::string full_path =
+            get_absolute_path(path.c_str(), base_dir.c_str());
 
         // 8. 检查符号链接循环 -> ELOOP
         // 检测路径中是否存在过多的重复目录组件，这通常表明符号链接循环
@@ -5503,6 +5509,7 @@ namespace proc
             printfRed("sys_unlinkat: Cannot unlink\n");
             return -EBUSY;
         }
+
         // 调用VFS层的相应函数
         int result = vfs_unlink_path(full_path.c_str(), flags & AT_REMOVEDIR);
 
@@ -6019,74 +6026,16 @@ namespace proc
                     }
                     // de->getNode()->nodeRead(reinterpret_cast<uint64>(interp_buf), ph.off, ph.filesz);
                     interp_buf[ph.filesz] = '\0';
-                    interpreter_path = interp_buf;
-                    // interp_de = de;
-                    // 优先尊重 ELF 里原始的解释器路径。
-                    // 这样标准 rootfs 中自带的 /lib/ld-*.so 可以直接工作；
-                    // 只有旧评测盘布局缺失该路径时，才回退到 /musl 或 /glibc 的兼容映射。
-                    if (vfs_is_file_exist(interpreter_path.c_str()) == 1)
+                    eastl::string requested_interpreter = interp_buf;
+                    int interpreter_ret =
+                        vfs_resolve_runtime_interpreter(requested_interpreter,
+                                                        interpreter_path);
+                    if (interpreter_ret < 0)
                     {
-                    }
-                    else if (strcmp(interpreter_path.c_str(), "/lib/ld-linux-riscv64-lp64d.so.1") == 0)
-                    {
-                        if (vfs_is_file_exist("/glibc/lib/ld-linux-riscv64-lp64d.so.1") != 1)
-                        {
-                            printfRed("execve: failed to find riscv64 dynamic linker\n");
-                            CLEANUP_AND_RETURN(-ENOENT);
-                        }
-                        interpreter_path = "/glibc/lib/ld-linux-riscv64-lp64d.so.1";
-                    }
-                    else if (strcmp(interpreter_path.c_str(), "/lib/ld-linux-loongarch64.so.1") == 0)
-                    {
-                        if (vfs_is_file_exist("/glibc/lib/ld-linux-loongarch-lp64d.so.1") != 1)
-                        {
-                            printfRed("execve: failed to find loongarch64 dynamic linker\n");
-                            CLEANUP_AND_RETURN(-ENOENT);
-                        }
-                        interpreter_path = "/glibc/lib/ld-linux-loongarch-lp64d.so.1";
-                    }
-                    else if (strcmp(interpreter_path.c_str(), "/lib64/ld-musl-loongarch-lp64d.so.1") == 0)
-                    {
-                        if (vfs_is_file_exist("/musl/lib/libc.so") != 1)
-                        {
-                            printfRed("execve: failed to find loongarch musl linker\n");
-                            CLEANUP_AND_RETURN(-ENOENT);
-                        }
-                        interpreter_path = "/musl/lib/libc.so";
-                    }
-                    else if (strcmp(interpreter_path.c_str(), "/lib/ld-musl-riscv64-sf.so.1") == 0)
-                    {
-                        if (vfs_is_file_exist("/musl/lib/libc.so") != 1)
-                        {
-                            printfRed("execve: failed to find riscv64 musl linker\n");
-                            CLEANUP_AND_RETURN(-ENOENT);
-                        }
-                        interpreter_path = "/musl/lib/libc.so";
-                    }
-                    else if (strcmp(interpreter_path.c_str(), "/lib/ld-musl-riscv64.so.1") == 0)
-                    {
-                        // musl 在 RISC-V 上会把动态加载器路径编码成 /lib/ld-musl-riscv64.so.1，
-                        // 但镜像实际只放了 /musl/lib/libc.so，需要在 execve 里做一致化映射。
-                        if (vfs_is_file_exist("/musl/lib/libc.so") != 1)
-                        {
-                            printfRed("execve: failed to find riscv64 musl linker\n");
-                            CLEANUP_AND_RETURN(-ENOENT);
-                        }
-                        interpreter_path = "/musl/lib/libc.so";
-                    }
-                    else if (strcmp(interpreter_path.c_str(), "/lib64/ld-linux-loongarch-lp64d.so.1") == 0)
-                    {
-                        if (vfs_is_file_exist("/glibc/lib/ld-linux-loongarch-lp64d.so.1") != 1)
-                        {
-                            printfRed("execve: failed to find loongarch64 dynamic linker for /lib64 path\n");
-                            CLEANUP_AND_RETURN(-ENOENT);
-                        }
-                        interpreter_path = "/glibc/lib/ld-linux-loongarch-lp64d.so.1";
-                    }
-                    else
-                    {
-                        // panic("execve: unknown dynamic linker: %s\n", interpreter_path.c_str());
-                        // return -1; // 不支持的动态链接器
+                        printfRed("execve: failed to resolve PT_INTERP %s for %s, error=%d\n",
+                                  requested_interpreter.c_str(), ab_path.c_str(),
+                                  interpreter_ret);
+                        CLEANUP_AND_RETURN(interpreter_ret);
                     }
                     break;
                 }
@@ -6191,13 +6140,13 @@ namespace proc
                     segment_prot |= PROT_EXEC;
                 }
 
-                // 为当前段分配虚拟内存空间。LoongArch 用户态镜像存在 16K 对齐的 LOAD 段，
-                // 这里必须尊重 ELF 自带的 p_align，不能强行退化成 4K。
-                uint64 segment_align = ph.align;
-                if (segment_align < PGSIZE)
-                {
-                    segment_align = PGSIZE;
-                }
+                /*
+                 * p_align 约束的是整个映像的 load bias；真正 mmap 的首尾仍按
+                 * 内核页大小取整。若用 64K p_align 扩大每个 LOAD，本应为空的
+                 * 段间隙会被前后段以不同权限映射，新版 LoongArch glibc 的
+                 * 自重定位阶段会因此看到错误的装载布局。
+                 */
+                uint64 segment_align = PGSIZE;
                 uint64 file_segment_start = align_down_pow2(ph.vaddr, segment_align);
                 uint64 file_segment_end = align_up_pow2(ph.vaddr + ph.memsz, segment_align);
                 uint64 segment_start = main_load_bias + file_segment_start;
@@ -6286,6 +6235,32 @@ namespace proc
             {
                 printfRed("execve: load segment failed, cleaning up allocated memory\n");
                 CLEANUP_AND_RETURN(exec_error);
+            }
+
+            if (phdr == 0)
+            {
+                /*
+                 * Linux 即使面对没有 PT_PHDR 的 ET_DYN（动态加载器自身通常如此），
+                 * 也会在程序头表落入某个 PT_LOAD 时计算出 AT_PHDR。新版 glibc
+                 * 会依赖它定位自身动态信息，不能把缺失的 PT_PHDR 等同于地址 0。
+                 */
+                uint64 phdr_table_size =
+                    static_cast<uint64>(elf.phnum) * static_cast<uint64>(elf.phentsize);
+                for (const auto &load_ph : main_program_headers)
+                {
+                    if (load_ph.type != elf::elfEnum::ELF_PROG_LOAD ||
+                        elf.phoff < load_ph.off)
+                    {
+                        continue;
+                    }
+                    uint64 offset_in_segment = elf.phoff - load_ph.off;
+                    if (offset_in_segment <= load_ph.filesz &&
+                        phdr_table_size <= load_ph.filesz - offset_in_segment)
+                    {
+                        phdr = main_load_bias + load_ph.vaddr + offset_in_segment;
+                        break;
+                    }
+                }
             }
 
             close_exec_file(main_exec_file);
@@ -6410,12 +6385,8 @@ namespace proc
                         segment_prot |= PROT_EXEC;
                     }
 
-                    // 解释器的 LOAD 段也必须按 p_align 对齐到运行时地址，否则 RW LOAD 会整体错位。
-                    uint64 linker_segment_align = interp_ph.align;
-                    if (linker_segment_align < PGSIZE)
-                    {
-                        linker_segment_align = PGSIZE;
-                    }
+                    // load bias 已满足 p_align；每个 LOAD 的映射边界按真实页大小取整。
+                    uint64 linker_segment_align = PGSIZE;
                     uint64 linker_file_segment_start = align_down_pow2(interp_ph.vaddr, linker_segment_align);
                     uint64 linker_file_segment_end = align_up_pow2(interp_ph.vaddr + interp_ph.memsz, linker_segment_align);
                     uint64 linker_segment_prefix = interp_ph.vaddr - linker_file_segment_start;
@@ -6643,6 +6614,7 @@ namespace proc
         // 3. 压入命令行参数字符串
         uint64 *uargv = uargv_scratch; // 命令行参数指针数组
         uint64 argc = 0;      // 命令行参数数量
+        eastl::string exec_cmdline;
         auto copy_exec_arg = [&](const char *arg_text) -> int
         {
             if (argc >= MAXARG)
@@ -6661,6 +6633,10 @@ namespace proc
                 return -EFAULT;
             }
             uargv[argc++] = sp;
+            // 与真正压入用户栈的 argv 使用同一条路径，避免 shebang/空 argv
+            // 在 /proc/self/cmdline 与进程实际参数之间产生分歧。
+            exec_cmdline.append(arg_text, arg_len);
+            exec_cmdline.push_back('\0');
             return 0;
         };
 
@@ -6720,6 +6696,34 @@ namespace proc
         }
         uargv[argc] = 0; // argv数组以NULL结尾
 
+        // auxv 中的字符串必须和 argv/envp 一样驻留在新进程栈中。
+        sp -= ab_path.size() + 1;
+        sp -= sp % 16;
+        if (sp < stackbase + PGSIZE ||
+            mem::k_vmm.copy_out(new_pt, sp, ab_path.c_str(),
+                                ab_path.size() + 1, new_mm) < 0)
+        {
+            printfRed("execve: copy AT_EXECFN failed\n");
+            CLEANUP_AND_RETURN(-EFAULT);
+        }
+        uint64 execfn_pos = sp;
+
+#ifdef LOONGARCH
+        static constexpr char platform_name[] = "loongarch64";
+#else
+        static constexpr char platform_name[] = "riscv64";
+#endif
+        sp -= sizeof(platform_name);
+        sp -= sp % 16;
+        if (sp < stackbase + PGSIZE ||
+            mem::k_vmm.copy_out(new_pt, sp, platform_name,
+                                sizeof(platform_name), new_mm) < 0)
+        {
+            printfRed("execve: copy AT_PLATFORM failed\n");
+            CLEANUP_AND_RETURN(-EFAULT);
+        }
+        uint64 platform_pos = sp;
+
         // 4. 压入辅助向量（auxv），供动态链接器使用
         {
             // 在括号里面开命名空间防止变量名冲突
@@ -6727,7 +6731,9 @@ namespace proc
             uint64 *aux = auxv_scratch;
             [[maybe_unused]] int index = 0;
 
-            ADD_AUXV(AT_HWCAP, 0);             // 硬件功能标志
+            ADD_AUXV(AT_HWCAP, 0);             // 尚未公布可选 ISA 扩展
+            ADD_AUXV(AT_HWCAP2, 0);
+            ADD_AUXV(AT_PLATFORM, platform_pos);
             // AT_PAGESZ 必须反映内核真实页大小，而不是 ELF 的 p_align / common page size。
             // LoongArch glibc 会同时处理“运行时页大小”和“共享对象最大对齐”这两件事；
             // 如果把 16K p_align 冒充成 AT_PAGESZ，会把 mmap/PHDR 计算一起带偏。
@@ -6735,12 +6741,21 @@ namespace proc
             ADD_AUXV(AT_RANDOM, rd_pos);       // 随机数地址
             ADD_AUXV(AT_PHDR, phdr);           // 程序头表偏移
             ADD_AUXV(AT_PHENT, elf.phentsize); // 程序头表项大小
-            if (is_dynamic)
-            {
-                ADD_AUXV(AT_PHNUM, elf.phnum); // 程序头表项数量 // 这个有问题
-            }
+            ADD_AUXV(AT_PHNUM, elf.phnum);
             ADD_AUXV(AT_BASE, interp_base); // 动态链接器基地址（保留）
             ADD_AUXV(AT_ENTRY, main_load_bias + elf.entry);  // 主程序运行时入口地址
+            ADD_AUXV(AT_FLAGS, 0);
+            ADD_AUXV(AT_UID, proc->get_uid());
+            ADD_AUXV(AT_EUID, proc->get_euid());
+            ADD_AUXV(AT_GID, proc->get_gid());
+            ADD_AUXV(AT_EGID, proc->get_egid());
+            ADD_AUXV(AT_CLKTCK, 100);
+            ADD_AUXV(AT_SECURE,
+                     proc->get_uid() != proc->get_euid() ||
+                             proc->get_gid() != proc->get_egid()
+                         ? 1
+                         : 0);
+            ADD_AUXV(AT_EXECFN, execfn_pos);
             // ADD_AUXV(AT_SYSINFO_EHDR, 0); // 系统调用信息头（保留）
             // ADD_AUXV(AT_UID, 0);               // 用户ID
             // ADD_AUXV(AT_EUID, 0);              // 有效用户ID
@@ -6888,6 +6903,8 @@ namespace proc
 
         // 完成新内存管理器的设置后，绑定到当前PCB
         proc->set_memory_manager(new_mm);
+        // 只有执行映像已经成功替换后才提交，失败的 execve 不覆盖旧值。
+        proc->_cmdline = exec_cmdline;
 
         uint64 entry_point;
         if (is_dynamic)
@@ -6904,9 +6921,11 @@ namespace proc
 #elif defined(LOONGARCH)
         proc->get_trapframe()->era = entry_point;
         proc->_used_fpu = false;
+        proc->_used_lsx = false;
         memset(proc->get_trapframe()->f, 0, sizeof(proc->get_trapframe()->f));
         proc->get_trapframe()->fcsr = 0;
         memset(proc->get_trapframe()->fcc, 0, sizeof(proc->get_trapframe()->fcc));
+        memset(proc->get_trapframe()->lsx, 0, sizeof(proc->get_trapframe()->lsx));
 #endif
         proc->get_trapframe()->sp = sp; // 设置栈指针
 

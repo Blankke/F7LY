@@ -98,10 +98,16 @@ static int vfs_ext4_blockdev_init_common(struct vfs_ext4_blockdev *vbdev,
 
 static int vfs_ext4_blockdev_init(struct vfs_ext4_blockdev *vbdev, int dev)
 {
+    uint64 capacity = virtio_disk_capacity_bytes(dev);
+    if (capacity == 0)
+    {
+        printf("virtio block device %d did not report a capacity\n", dev);
+        return -ENODEV;
+    }
     return vfs_ext4_blockdev_init_common(vbdev,
                                          dev,
                                          &biface,
-                                         512ull * 8ull * 1024ull * 1024ull,
+                                         capacity,
                                          blockdev_read,
                                          blockdev_write,
                                          const_cast<char *>("ext4_bdev_io"));

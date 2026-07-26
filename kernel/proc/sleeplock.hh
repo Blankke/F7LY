@@ -19,7 +19,8 @@ namespace proc
 	private:
 		bool _locked = false;
 		SpinLock _lock;
-		uint _pid;
+		// 线程组内多个 PCB 共享 pid；睡眠锁所有者必须按 tid 区分。
+		uint _owner_tid;
 		// for debugging 
 		const char *_name;
 	public:

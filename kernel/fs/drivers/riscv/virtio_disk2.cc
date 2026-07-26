@@ -33,6 +33,8 @@ namespace
     constexpr uint32 k_mmio_interrupt_status = 0x060;
     constexpr uint32 k_mmio_interrupt_ack = 0x064;
     constexpr uint32 k_mmio_status = 0x070;
+    constexpr uint32 k_mmio_config_capacity_low = 0x100;
+    constexpr uint32 k_mmio_config_capacity_high = 0x104;
 
     constexpr uint32 k_status_acknowledge = 1;
     constexpr uint32 k_status_driver = 2;
@@ -230,6 +232,29 @@ int virtio_disk_rw_sectors(int dev, void *buf, uint64 start_sector, uint32 secto
     }
 
     return device->submit_transfer_and_wait(buf, sector_count * BSIZE, start_sector, write != 0);
+}
+
+uint64 virtio_disk_capacity_bytes(int dev)
+{
+    uintptr_t base = 0;
+    if (dev == 0)
+    {
+        base = VIRTIO0;
+    }
+    else if (dev == 1)
+    {
+        base = VIRTIO1;
+    }
+    else
+    {
+        return 0;
+    }
+
+    // Virtio-blk 的 capacity 以 512 字节 sector 为单位，配置字段按低高
+    // 32 位读取，避免对 legacy MMIO 配置空间发出未对齐的 64 位访问。
+    uint64 sectors = *mmio_reg(base, k_mmio_config_capacity_low);
+    sectors |= static_cast<uint64>(*mmio_reg(base, k_mmio_config_capacity_high)) << 32;
+    return sectors * static_cast<uint64>(BSIZE);
 }
 
 void virtio_disk_intr()

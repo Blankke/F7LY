@@ -57,12 +57,50 @@ uservec:
         st.d   $s7, $a0, 232
         st.d   $s8, $a0, 240
 
-        # 懒 FPU：只有当前线程已经启用 EUEN.FPE 时才保存浮点现场。
-        # 纯整数/内存类程序频繁 syscall/page fault 时不能为 32 个 FPR 付固定成本。
+        # 懒保存扩展现场。SXE 置位时先保存完整 128 位 LSX 寄存器；
+        # 随后仍镜像低 64 位到 f[]，供现有 signal ABI 使用。
         csrrd  $t0, LOONGARCH_CSR_EUEN
+        andi   $t1, $t0, 0x2
+        bnez   $t1, .Lsave_lsx_state
         andi   $t0, $t0, 0x1
-        beqz   $t0, 1f
+        beqz   $t0, .Lsave_extension_done
+        b      .Lsave_scalar_fpu_state
 
+.Lsave_lsx_state:
+        vst    $vr0,  $a0, 624
+        vst    $vr1,  $a0, 640
+        vst    $vr2,  $a0, 656
+        vst    $vr3,  $a0, 672
+        vst    $vr4,  $a0, 688
+        vst    $vr5,  $a0, 704
+        vst    $vr6,  $a0, 720
+        vst    $vr7,  $a0, 736
+        vst    $vr8,  $a0, 752
+        vst    $vr9,  $a0, 768
+        vst    $vr10, $a0, 784
+        vst    $vr11, $a0, 800
+        vst    $vr12, $a0, 816
+        vst    $vr13, $a0, 832
+        vst    $vr14, $a0, 848
+        vst    $vr15, $a0, 864
+        vst    $vr16, $a0, 880
+        vst    $vr17, $a0, 896
+        vst    $vr18, $a0, 912
+        vst    $vr19, $a0, 928
+        vst    $vr20, $a0, 944
+        vst    $vr21, $a0, 960
+        vst    $vr22, $a0, 976
+        vst    $vr23, $a0, 992
+        vst    $vr24, $a0, 1008
+        vst    $vr25, $a0, 1024
+        vst    $vr26, $a0, 1040
+        vst    $vr27, $a0, 1056
+        vst    $vr28, $a0, 1072
+        vst    $vr29, $a0, 1088
+        vst    $vr30, $a0, 1104
+        vst    $vr31, $a0, 1120
+
+.Lsave_scalar_fpu_state:
         fst.d  $f0,  $a0, 288
         fst.d  $f1,  $a0, 296
         fst.d  $f2,  $a0, 304
@@ -113,10 +151,12 @@ uservec:
         st.d   $t0, $a0, 600
         movcf2gr $t0, $fcc7
         st.d   $t0, $a0, 608
-1:
-        # 从这里开始要运行内核 C/C++ 代码。内核以 lp64d ABI 编译，不能把 FPE
-        # 长期保持为用户态的禁用状态；否则 syscall 路径里的浮点指令会在内核态 FPD。
+.Lsave_extension_done:
+        # 内核只按 lp64d 编译：保留 FPE，关闭用户 LSX，避免内核路径意外污染
+        # 尚未交还给用户的向量现场。
         csrrd  $t0, LOONGARCH_CSR_EUEN
+        li.w   $t1, -3
+        and    $t0, $t0, $t1
         ori    $t0, $t0, 0x1
         csrwr  $t0, LOONGARCH_CSR_EUEN
 
@@ -162,16 +202,12 @@ userret:
         csrwr  $a1, LOONGARCH_CSR_PGDL
         invtlb 0x0,$zero,$zero
 
-        # 内核态始终保留 FPE 可用；临近 ertn 时才按当前线程状态设置
-        # 用户可见的 EUEN.FPE。未使用浮点的线程让第一条浮点指令触发 FPD。
+        # a2 的低两位分别表示 FPE/SXE。load bias 和调度迁核都不影响这份
+        # 每线程状态；临近 ertn 时才把对应扩展单元交还给用户。
         csrrd  $t0, LOONGARCH_CSR_EUEN
-        beqz   $a2, 3f
-        ori    $t0, $t0, 0x1
-        b      4f
-3:
-        li.w   $t1, -2
+        li.w   $t1, -4
         and    $t0, $t0, $t1
-4:
+        or     $t0, $t0, $a2
         csrwr  $t0, LOONGARCH_CSR_EUEN
 
         # a0 进入时是本线程的 user trapframe VA。下一次从用户态陷入时，
@@ -218,12 +254,50 @@ userret:
         ld.d   $s7, $a3, 232
         ld.d   $s8, $a3, 240
 
-        # 懒 FPU：usertrapret() 已经按当前线程的 _used_fpu 设置 EUEN.FPE。
-        # 没用过浮点的线程直接跳过恢复，让首次浮点指令触发 FPD 异常后再启用。
+        # SXE 线程恢复完整向量现场；标量 FPU 线程只恢复 f[]。
         csrrd  $t0, LOONGARCH_CSR_EUEN
+        andi   $t1, $t0, 0x2
+        bnez   $t1, .Lrestore_lsx_state
         andi   $t0, $t0, 0x1
-        beqz   $t0, 2f
+        beqz   $t0, .Lrestore_extension_done
+        b      .Lrestore_scalar_fpu_state
 
+.Lrestore_lsx_state:
+        vld    $vr0,  $a3, 624
+        vld    $vr1,  $a3, 640
+        vld    $vr2,  $a3, 656
+        vld    $vr3,  $a3, 672
+        vld    $vr4,  $a3, 688
+        vld    $vr5,  $a3, 704
+        vld    $vr6,  $a3, 720
+        vld    $vr7,  $a3, 736
+        vld    $vr8,  $a3, 752
+        vld    $vr9,  $a3, 768
+        vld    $vr10, $a3, 784
+        vld    $vr11, $a3, 800
+        vld    $vr12, $a3, 816
+        vld    $vr13, $a3, 832
+        vld    $vr14, $a3, 848
+        vld    $vr15, $a3, 864
+        vld    $vr16, $a3, 880
+        vld    $vr17, $a3, 896
+        vld    $vr18, $a3, 912
+        vld    $vr19, $a3, 928
+        vld    $vr20, $a3, 944
+        vld    $vr21, $a3, 960
+        vld    $vr22, $a3, 976
+        vld    $vr23, $a3, 992
+        vld    $vr24, $a3, 1008
+        vld    $vr25, $a3, 1024
+        vld    $vr26, $a3, 1040
+        vld    $vr27, $a3, 1056
+        vld    $vr28, $a3, 1072
+        vld    $vr29, $a3, 1088
+        vld    $vr30, $a3, 1104
+        vld    $vr31, $a3, 1120
+        b      .Lrestore_fp_control
+
+.Lrestore_scalar_fpu_state:
         fld.d  $f0,  $a3, 288
         fld.d  $f1,  $a3, 296
         fld.d  $f2,  $a3, 304
@@ -256,6 +330,7 @@ userret:
         fld.d  $f29, $a3, 520
         fld.d  $f30, $a3, 528
         fld.d  $f31, $a3, 536
+.Lrestore_fp_control:
         ld.d   $t0, $a3, 544
         movgr2fcsr $fcsr0, $t0
         ld.d   $t0, $a3, 552
@@ -274,10 +349,10 @@ userret:
         movgr2cf $fcc6, $t0
         ld.d   $t0, $a3, 608
         movgr2cf $fcc7, $t0
-2:
-        # 上面的 EUEN 检查和 FCSR/FCC 恢复使用了 $t0 作为 scratch；
-        # 返回前必须还原用户 $t0。
+.Lrestore_extension_done:
+        # 上面的扩展检查使用了 t0/t1，返回前恢复两者。
         ld.d   $t0, $a3, 88
+        ld.d   $t1, $a3, 96
 
         # 最后才恢复用户 a3，之后不再需要内核直映 trapframe 基址。
         ld.d   $a3, $a3, 48

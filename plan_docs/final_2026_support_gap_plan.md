@@ -1,8 +1,8 @@
 # 2026 决赛内核能力缺口计划：CAgent / BuildStorm
 
-状态：已完成静态摸底、代码实施和关键 QEMU 验收；BuildStorm 的 selfhost Cargo/ext4 长压力仍留待后续阶段
+状态：已完成静态摸底、8G/SMP 基础、final-2026 小门槛代码收尾、ext4/bcache 首轮并发修复和 schedbench 工具接入；官方双架构长压、CAgent/BuildStorm 完整回归和性能验收仍待完成
 
-日期：2026-07-18
+日期：2026-07-26
 
 ## 1. 范围和结论
 
@@ -14,6 +14,8 @@
 - BuildStorm：动态 8G PMM、SMP HAL、通用 TLB shootdown 和实际 CPU 并行能力已经通过双架构 QEMU 短验收；尚缺 RISC-V selfhost rootfs 下的 Cargo/ext4 长压力证据。多线程/futex/信号、mmap/缺页/页回收、ext4/bcache 并发元数据与写回仍需由该长压力继续覆盖。
 - 现有 syscall 绑定数量不能作为完成度指标。F7LY 的很多关键 syscall 已有函数实现，但仍带 TODO、固定返回值、错误路径 panic 或只覆盖部分 Linux 语义；应以 Rust 工具链和 CAgent 的真实 syscall 轨迹验收。
 - [x] 2026-07-26：官方 `final2.1` 双架构镜像、8 核/8 GiB QEMU 参数和两道 glibc runner 已接入，代码完成待验收。首次实测已暴露 RV ext4 bcache 并发损坏，以及 LA 动态库搜索和 `/work/tgoskits` 访问失败，尚未达到赛题通过门槛。
+- [x] 2026-07-26 收尾：移除内核中面向 Cargo/BuildStorm 的临时串口跟踪；LoongArch initcode 恢复为 CAgent + BuildStorm 双题入口；BuildStorm runner 保留 `/bin/sh /glibc/buildstorm_testcode.sh` 调用但去掉 `sh -x` 跟踪，避免污染官方日志。
+- [ ] 2026-07-26 待验收：当前工作机为 `x86_64`，不能按新增脚本要求在 RISC-V/LoongArch 原生 KVM 上运行 schedbench 与 CPU 性能验收；双架构 QEMU 构建、final 小门槛、ext4 并发和官方两题完整回归仍需继续执行。
 
 ## 2. 题目对内核的实际要求
 
@@ -166,6 +168,18 @@ Starry 的经验说明：F7LY 当前最需要补的是“容量、并发、回�
 
 ## 5. 内核专项实施计划
 
+### P0-0：final-2026 小门槛兼容收尾
+
+- [x] 代码完成待验收：移除会遮挡真实文件的空 `/etc/ld.so.cache`、`/etc/ld.so.preload`、`/etc/localtime` 虚拟实现。
+- [x] 代码完成待验收：`/etc/passwd`、`/etc/group`、`/etc/hosts`、`/etc/resolv.conf`、`/etc/protocols` 改为真实 backing 优先；虚拟节点只在镜像缺失真实文件时作为后备。
+- [x] 代码完成待验收：新增 `vfs_backing_path_exists()` 和 `vfs_resolve_runtime_interpreter()`，`execve` 只解析 ELF `PT_INTERP` 并通过统一路径解析器定位真实动态链接器；旧 `/glibc`、`/musl` 兼容别名只在真实标准路径缺失时启用。
+- [x] 代码完成待验收：实现动态 `/proc/uptime`，`sysinfo.uptime` 同步来自 `CLOCK_BOOTTIME`；未做时间缩放或伪造。
+- [x] 代码完成待验收：PCB 保存最近一次成功 `execve` 的 NUL 分隔 argv，`/proc/self/cmdline` 动态读取该状态，fork/clone 继承，失败 exec 不覆盖旧值。
+- [x] 代码完成待验收：`uname.machine` 按编译架构返回 `riscv64` 或 `loongarch64`。
+- [x] 已收尾：清除 `CARGO_SYSCALL_*`、`BUILDSTORM_EXEC_*`、`BUILDSTORM_CLONE_*`、`BUILDSTORM_FIRST_*` 临时串口诊断输出；这些输出原本用于定位 Cargo/BuildStorm 在 exec、clone、首次调度和阻塞 syscall 上的卡点，定位完成前若还需要，应改为短期局部补丁，不应留在最终回归路径。
+- [x] 已收尾：删除开发过程中的 final 小门槛烟测入口，不在 `user/user_lib/user_test.cc` 和 `user/deps/user.hh` 中保留临时测试代码。
+- [ ] 待完成：运行小门槛烟测并记录双架构结果：`uname -m`、真实 `ld.so.cache` 大小非零、`/etc/localtime` 符号链接、`/bin/bash -c true`、`rustc --version`、`cargo --version`、最小 Cargo 项目构建运行、`/proc/uptime` 两次读取严格递增。
+
 ### P0-A：先解除 8G 内存硬阻塞
 
 - [x] 从 DTB/平台内存描述建立 RV/LA 真实物理内存区间模型，排除 kernel、DTB、initrd 和空洞，并已在 8G QEMU 启动验证。
@@ -190,6 +204,7 @@ Starry 的经验说明：F7LY 当前最需要补的是“容量、并发、回�
 
 ### P0-C：用 Rust 最小构建验证进程和内存语义
 
+- [ ] 待完成：使用官方 runner 或一次性手工命令确认 Rust/glibc 小项目能在官方镜像真实文件布局下构建运行；该检查只证明工具链基础可启动，不代表 BuildStorm 长压力通过，不能把临时测试入口写入 `user_test`。
 - [ ] 验证 `clone/clone3` 的 Rust/Cargo 实际 flags，包括 `CLONE_VM`、`CLONE_FS`、`CLONE_FILES`、`CLONE_SIGHAND`、`CLONE_SETTLS`、`CLONE_CHILD_CLEARTID` 和 `CLONE_PARENT_SETTID`。
 - [ ] 验证线程 tid/tgid、TLS、clear_tid、线程退出、wait、robust futex、信号中断和父子回收。
 - [ ] 验证 cargo build script、proc-macro、并发 rustc 子进程不会因 wakeup、管道、epoll 或 futex 丢失而挂死。
@@ -197,8 +212,21 @@ Starry 的经验说明：F7LY 当前最需要补的是“容量、并发、回�
 
 验收：glibc Rust 工具链可完成 `cargo new`、`cargo build` 和 Hello World，多次运行结果稳定。
 
+### P0-D：schedbench 与 SMP 性能验证
+
+- [x] 代码完成待验收：`tools/smp/schedbench.c` 已作为专项调度基准加入 `tools/smp/`；保留其原始 wake、broadcast、independent、wave 校验逻辑和 `SCHEDBENCH_*` 输出标记。
+- [x] 脚本完成待运行：新增 `scripts/run/schedbench.sh`，静态交叉编译双架构 bench，只向 `/tmp/f7ly-schedbench-*` 可丢弃镜像副本注入 `/schedbench`，运行前后校验 `images/` 下官方镜像 SHA-256 未变化，退出时清理临时镜像和二进制。
+- [x] 脚本完成待运行：`scripts/run/smp_cpu_bench.sh` 改为 native KVM 性能验收入口，默认 8 GiB、8 vCPU、1/2/4/8 worker、每组 3 轮，用中位吞吐计算 4/8 worker 至少 1.10 倍的门槛。
+- [ ] 待完成：在 riscv64 原生 KVM 宿主运行 `scripts/run/schedbench.sh --arch rv`，正式参数为 `workers=8 cpus=8 warmup=256 rounds=4096 migration-pattern=both working-set-kib=256 runs=3`。
+- [ ] 待完成：在 loongarch64 原生 KVM 宿主运行 `scripts/run/schedbench.sh --arch la`，同样连续 3 轮。
+- [ ] 待完成：确认 fanout、broadcast、independent、wave 全部出现 `SCHEDBENCH_CASE_PASSED`，最终出现 `SCHEDBENCH_PASSED`，错误字段均为 0，8 个 CPU 均被观测到。
+- [ ] 待完成：在两类原生宿主分别运行 `scripts/run/smp_cpu_bench.sh --arch rv` 和 `scripts/run/smp_cpu_bench.sh --arch la`，确认 4/8 worker 中位吞吐达到 1.10 倍；当前 `x86_64` 工作机不能执行该 KVM 验收。
+
 ### P1-A：补强 VM、缺页、COW 和回收
 
+- [x] 代码完成待验收：同一 `CLONE_VM` 地址空间的 `mmap`、`mprotect` 和用户缺页路径已统一进入可睡眠内存锁；内存锁支持同线程重入，避免 copyin/copyout 懒补页重入死锁。
+- [x] 代码完成待验收：匿名私有 mmap 合并后会重建 Maple Tree 索引，避免扩展尾部无法被后续 `mprotect`/缺页查到。
+- [x] 代码完成待验收：`brk` 扩展不再穿过任意已有 VMA，防止堆覆盖动态库或文件私有映射。
 - [ ] 验证匿名/文件 mmap、懒分配、写时复制、mprotect 权限变化、mremap、madvise、brk 和 `munmap` 的组合行为。
 - [ ] 在大内存编译压力下增加或验证干净文件页回收、分配失败重试和 cache 驱逐，防止 rustc 因 page cache 吞噬可用内存而失败。
 - [ ] 检查 VMA 数量上限、地址空间碎片、页表回收、引用计数和多核 TLB 一致性。
@@ -208,6 +236,10 @@ Starry 的经验说明：F7LY 当前最需要补的是“容量、并发、回�
 
 ### P1-B：补强 ext4/bcache 并发稳定性
 
+- [x] 代码完成待验收：lwext4 挂载锁已替换为线程 PCB 所有权的可重入 FIFO 睡眠锁，且 mount lock 先安装、write-back cache 后开启。
+- [x] 代码完成待验收：新增 `Ext4MountGuard`，已覆盖 `fstat/statx/truncate/utimens/ioctl inode flags/normal_file` 等直接调用 `ext4_fs_get_inode_ref()` 的 VFS 低层路径。
+- [x] 代码完成待验收：bcache dirty list 改为双向 TAILQ，插入/删除为 O(1)，重复释放、活引用回收、链表指针损坏改为现场断言，不再吞掉 dirty-list 或引用计数错误。
+- [x] 代码完成待验收：virtio-blk 容量改为读取设备真实 capacity，不再固定 4 GiB；`getdents64` 使用文件系统目录 cookie 更新 `_file_ptr`；`O_TMPFILE` 后备隐藏目录项在最后关闭时删除。
 - [ ] 用 CAgent 的创建、读写、目录、搜索用例验证基础 ext4 语义，重点检查 close/reopen、目录项刷新、文件偏移和缓存可见性。
 - [ ] 用并发 Cargo 构建验证 inode、目录、extent、journal、dirty buffer、LRU、flush/writeback 和 block device 的锁顺序。
 - [ ] 优先处理已记录的 RV `find` 卡顿、LA bcache 树损坏和 VFS 锁 TODO；每个问题保留最小复现和回归测试。
@@ -218,10 +250,12 @@ Starry 的经验说明：F7LY 当前最需要补的是“容量、并发、回�
 
 ### P1-C：统一 Linux 信息、时间和网络状态语义
 
-- [ ] 补齐 `sysinfo` 的 uptime、进程数和完整 Linux 语义；内存字段与 `mem_unit` 已改为读取动态 PMM，仍需和 `/proc/uptime` 一并验收。
-- [ ] 校准 `clock_gettime`、`gettimeofday`、nanosleep、futex timeout、timerfd 和 `/proc/uptime` 的单调时间关系。
+- [x] 代码完成待验收：`/proc/uptime` 和 `sysinfo.uptime` 已来自 `CLOCK_BOOTTIME`。
+- [ ] 补齐 `sysinfo` 的进程数、负载和更完整 Linux 语义；内存字段与 `mem_unit` 已改为读取动态 PMM，仍需和 `/proc/uptime` 一并验收。
+- [ ] 校准 `clock_gettime`、`gettimeofday`、nanosleep、futex timeout、timerfd 和 `/proc/uptime` 的单调时间关系，并确认 BuildStorm 用真实时间计分。
 - [x] 已完成待验收：修正 `/proc/cpuinfo`、`/proc/self/status`、`/sys/devices/system/cpu`、affinity 和 `getcpu`，消除 CPU 视图的单核硬编码。
-- [ ] 待完成：验证 uname/version 与 CAgent 的实际字符串契约。
+- [x] 代码完成待验收：`uname.machine` 按编译架构返回 `riscv64`/`loongarch64`。
+- [ ] 待完成：验证 uname/version 与 CAgent 的实际字符串契约，尤其是 kernel/version 测试是否读取 `/proc/version` 或其它节点。
 - [ ] 使用 CAgent 实际依赖的 glibc 工具确认 TCP 连接数的查询路径；若依赖 `/proc/net/tcp`，补齐真实 socket 状态 provider。
 
 验收：CAgent 的 date、cpu、kernel、network、fs-usage 均不依赖固定伪造值，且不会破坏 BuildStorm 的真实 guest 计时。

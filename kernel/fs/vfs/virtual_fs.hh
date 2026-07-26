@@ -9,6 +9,12 @@
 
 namespace fs
 {
+    enum class VirtualBackingPolicy
+    {
+        AlwaysVirtual,
+        BackingFirst,
+    };
+
     struct vfile_msg
     {
         bool is_virtual;
@@ -23,6 +29,7 @@ namespace fs
         eastl::string name;
         int file_type;  // FileTypes 枚举值
         eastl::unique_ptr<VirtualContentProvider> provider;
+        VirtualBackingPolicy backing_policy;
         
         // 树形结构相关
         vfile_tree_node* parent;
@@ -30,10 +37,11 @@ namespace fs
         int children_count;
         
         // 构造函数
-        vfile_tree_node(const eastl::string &name, int file_type = 0, 
-                       eastl::unique_ptr<VirtualContentProvider> provider = nullptr)
+        vfile_tree_node(const eastl::string &name, int file_type = 0,
+                       eastl::unique_ptr<VirtualContentProvider> provider = nullptr,
+                       VirtualBackingPolicy backing_policy = VirtualBackingPolicy::AlwaysVirtual)
             : name(name), file_type(file_type), provider(std::move(provider)), 
-              parent(nullptr), children_count(0) 
+              backing_policy(backing_policy), parent(nullptr), children_count(0)
         {
             for (int i = 0; i < MAX_CHILDREN_NUM; i++) {
                 children[i] = nullptr;
@@ -122,6 +130,8 @@ namespace fs
         vfile_tree_node* root;  // 根节点
         
         vfile_tree_node* find_node_by_path(const eastl::string& path) const;
+        bool should_use_backing(const eastl::string& path,
+                                const vfile_tree_node* node) const;
         vfile_tree_node* create_path_nodes(const eastl::string& path);
         void destroy_tree(vfile_tree_node* node);
         
@@ -149,7 +159,9 @@ namespace fs
         eastl::vector<eastl::string> path_split(const eastl::string &path) const;
         
         bool add_virtual_file(const eastl::string& path, int file_type, 
-                             eastl::unique_ptr<VirtualContentProvider> provider);
+                             eastl::unique_ptr<VirtualContentProvider> provider,
+                             VirtualBackingPolicy backing_policy =
+                                 VirtualBackingPolicy::AlwaysVirtual);
         bool remove_virtual_file(const eastl::string& path);
         bool is_virtual_path(const eastl::string& path) const;
         vfile_tree_node* get_virtual_node(const eastl::string& path) const;
@@ -163,14 +175,15 @@ namespace fs
             vfile_tree_node *node = find_node_by_path(path);
             int dynamic_type = dynamic_file_type(path);
 
-            return (node != nullptr && node->file_type != 0) ||
+            return (node != nullptr && node->file_type != 0 &&
+                    !should_use_backing(path, node)) ||
                    dynamic_type != 0 ||
                    vfs_is_file_exist(path.c_str()); // 0表示不存在或不是文件
         }
         int path2filetype(eastl::string &absolute_path) const
         {
             vfile_tree_node *node = find_node_by_path(absolute_path);
-            if (node)
+            if (node && !should_use_backing(absolute_path, node))
             {
                 return node->file_type;
             }

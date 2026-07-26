@@ -62,5 +62,5 @@ namespace mem
         static void *pgnm2pa(int pgnm);
         static int size_to_page_num(uint64 size);
     };
-extern PhysicalMemoryManager k_pmm;
+    extern PhysicalMemoryManager k_pmm;
 }

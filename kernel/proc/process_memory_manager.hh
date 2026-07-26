@@ -565,6 +565,9 @@ namespace proc
         // VMA/堆元数据路径会在 munmap/MAP_FIXED 时触发文件映射写回和文件引用释放，
         // 这些后端可能进入 ext4/virtio 并睡眠；因此这里必须使用睡眠锁，不能用自旋锁。
         SleepLock memory_lock;        // 内存操作锁，保护并发访问
+        // copyin/copyout 可能在已经持锁的 mmap/exec 路径中补齐惰性页。
+        // 深度只由当前锁所有者访问，SleepLock 负责不同线程之间的可见性。
+        uint memory_lock_depth = 0;
 
     private:
         /****************************************************************************************
@@ -580,7 +583,7 @@ namespace proc
         void free_vma_entry(vma *entry, bool check_validity);
         void unmap_vma_pages(const vma &entry, uint64 va_start, uint64 va_end, bool check_validity);
         void unmap_heap_pages_in_range(const vma &entry, uint64 start, uint64 end);
-        bool heap_growth_crosses_shared_mapping(uint64 start, uint64 end) const;
+        bool heap_growth_conflicts_with_mapping(uint64 start, uint64 end) const;
         bool ensure_heap_metadata_for_range(uint64 start, uint64 end);
         void trim_heap_metadata_to_end(uint64 new_end, bool unmap_pages);
         bool range_overlaps_used_vma(uint64 start_addr, uint64 end_addr) const;

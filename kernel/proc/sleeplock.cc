@@ -10,7 +10,7 @@ namespace proc
 		_lock.init( lock_name );
 		_name = name;
 		_locked = false;
-		_pid = 0;
+		_owner_tid = 0;
 	}
 
 	void SleepLock::acquire()
@@ -19,7 +19,7 @@ namespace proc
 		while ( _locked )
 			proc::k_pm.sleep(this, &_lock);
 		_locked = true;
-		_pid = k_pm.get_cur_pcb()->get_pid();
+		_owner_tid = k_pm.get_cur_pcb()->_tid;
 		_lock.release();
 	}
 
@@ -27,7 +27,7 @@ namespace proc
 	{
 		_lock.acquire();
 		_locked = 0;
-		_pid = 0;
+		_owner_tid = 0;
 		proc::k_pm.wakeup(this);
 		_lock.release();
 	}
@@ -36,7 +36,9 @@ namespace proc
 	{
 		bool held;
 		_lock.acquire();
-		held = _locked && ( _pid == k_pm.get_cur_pcb()->get_pid() );
+		Pcb *current = k_pm.get_cur_pcb();
+		held = _locked && current != nullptr &&
+		       (_owner_tid == static_cast<uint>(current->_tid));
 		_lock.release();
 		return held;
 	}

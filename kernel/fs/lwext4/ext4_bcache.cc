@@ -61,7 +61,7 @@ int ext4_bcache_init_dynamic(struct ext4_bcache *bc, uint32_t cnt, uint32_t item
     memset(bc, 0, sizeof(struct ext4_bcache));
     RB_INIT(&bc->lba_root);
     TAILQ_INIT(&bc->lru_list);
-    SLIST_INIT(&bc->dirty_list);
+    TAILQ_INIT(&bc->dirty_list);
 
     bc->cnt = cnt;
     bc->itemsize = itemsize;
@@ -139,15 +139,48 @@ static struct ext4_buf *ext4_buf_lookup(struct ext4_bcache *bc, uint64_t lba) {
 
 struct ext4_buf *ext4_buf_lowest_lru(struct ext4_bcache *bc) { return TAILQ_FIRST(&bc->lru_list); }
 
+void ext4_bcache_insert_dirty_node(struct ext4_bcache *bc, struct ext4_buf *buf)
+{
+    ext4_assert(bc && buf && buf->bc == bc);
+    ext4_assert(buf->refctr == 0);
+    ext4_assert(ext4_bcache_test_flag(buf, BC_DIRTY));
+    ext4_assert(ext4_bcache_test_flag(buf, BC_UPTODATE));
+    ext4_assert(!buf->on_dirty_list);
+
+    TAILQ_INSERT_TAIL(&bc->dirty_list, buf, dirty_node);
+    buf->on_dirty_list = true;
+}
+
+void ext4_bcache_remove_dirty_node(struct ext4_bcache *bc, struct ext4_buf *buf)
+{
+    ext4_assert(bc && buf && buf->bc == bc);
+    ext4_assert(buf->on_dirty_list);
+    ext4_assert(buf->dirty_node.tqe_prev != nullptr);
+    ext4_assert(*buf->dirty_node.tqe_prev == buf);
+    if (buf->dirty_node.tqe_next != nullptr)
+    {
+        ext4_assert(buf->dirty_node.tqe_next->dirty_node.tqe_prev ==
+                    &buf->dirty_node.tqe_next);
+    }
+
+    TAILQ_REMOVE(&bc->dirty_list, buf, dirty_node);
+    buf->dirty_node.tqe_next = nullptr;
+    buf->dirty_node.tqe_prev = nullptr;
+    buf->on_dirty_list = false;
+}
+
 void ext4_bcache_drop_buf(struct ext4_bcache *bc, struct ext4_buf *buf) {
-    /* Warn on dropping any referenced buffers.*/
-    if (buf->refctr) {
-        ext4_dbg(DEBUG_BCACHE,
-                 DBG_WARN "Buffer is still referenced. "
-                          "lba: %" PRIu64 ", refctr: %" PRIu32 "\n",
-                 buf->lba, buf->refctr);
-    } else if (buf->on_lru_list) {
+    ext4_assert(bc && buf && buf->bc == bc);
+    ext4_assert(buf->refctr == 0);
+    ext4_assert(buf->on_lba_tree);
+    ext4_assert(bc->ref_blocks > 0);
+
+    if (buf->on_lru_list) {
+        ext4_assert(buf->lru_link.tqe_prev != nullptr);
+        ext4_assert(*buf->lru_link.tqe_prev == buf);
         TAILQ_REMOVE(&bc->lru_list, buf, lru_link);
+        buf->lru_link.tqe_next = nullptr;
+        buf->lru_link.tqe_prev = nullptr;
         buf->on_lru_list = false;
     }
 
@@ -157,7 +190,7 @@ void ext4_bcache_drop_buf(struct ext4_bcache *bc, struct ext4_buf *buf) {
     }
 
     /*Forcibly drop dirty buffer.*/
-    if (ext4_bcache_test_flag(buf, BC_DIRTY))
+    if (buf->on_dirty_list)
         ext4_bcache_remove_dirty_node(bc, buf);
 
     ext4_buf_free(buf);
@@ -169,7 +202,7 @@ void ext4_bcache_invalidate_buf(struct ext4_bcache *bc, struct ext4_buf *buf) {
     buf->end_write_arg = NULL;
 
     /* Clear both dirty and up-to-date flags. */
-    if (ext4_bcache_test_flag(buf, BC_DIRTY))
+    if (buf->on_dirty_list)
         ext4_bcache_remove_dirty_node(bc, buf);
 
     ext4_bcache_clear_dirty(buf);
@@ -189,14 +222,24 @@ void ext4_bcache_invalidate_lba(struct ext4_bcache *bc, uint64_t from, uint32_t 
 struct ext4_buf *ext4_bcache_find_get(struct ext4_bcache *bc, struct ext4_block *b, uint64_t lba) {
     struct ext4_buf *buf = ext4_buf_lookup(bc, lba);
     if (buf) {
+        ext4_assert(buf->bc == bc);
+        ext4_assert(buf->on_lba_tree);
         /* If buffer is not referenced. */
         if (!buf->refctr) {
+            ext4_assert(buf->on_lru_list);
             if (buf->on_lru_list) {
+                ext4_assert(buf->lru_link.tqe_prev != nullptr);
+                ext4_assert(*buf->lru_link.tqe_prev == buf);
                 TAILQ_REMOVE(&bc->lru_list, buf, lru_link);
+                buf->lru_link.tqe_next = nullptr;
+                buf->lru_link.tqe_prev = nullptr;
                 buf->on_lru_list = false;
             }
-            if (ext4_bcache_test_flag(buf, BC_DIRTY))
+            if (buf->on_dirty_list)
                 ext4_bcache_remove_dirty_node(bc, buf);
+        } else {
+            ext4_assert(!buf->on_lru_list);
+            ext4_assert(!buf->on_dirty_list);
         }
 
         ext4_bcache_inc_ref(buf);
@@ -254,19 +297,11 @@ int ext4_bcache_free(struct ext4_bcache *bc, struct ext4_block *b) {
 
     /*Block should have a valid pointer to ext4_buf.*/
     ext4_assert(buf);
+    ext4_assert(buf->bc == bc);
+    ext4_assert(buf->lba == b->lb_id);
 
-    /*
-     * 上层错误回滚/清理路径可能重复释放同一个 ext4_block 句柄。
-     * refctr 已经为 0 时说明该引用已经归还，继续递减只会下溢并破坏 bcache。
-     * 这里把释放做成幂等操作，同时清空句柄，避免长回归在 iozone 并发读写后
-     * 因旧 lb_id/buf 被二次清理而 panic。
-     */
-    if (!buf->refctr) {
-        b->lb_id = 0;
-        b->buf = nullptr;
-        b->data = nullptr;
-        return EOK;
-    }
+    // 重复释放会直接破坏引用计数；必须在第一现场失败，不能静默吞掉。
+    ext4_assert(buf->refctr > 0);
 
     /*Just decrease reference counter*/
     ext4_bcache_dec_ref(buf);

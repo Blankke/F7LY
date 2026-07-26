@@ -72,12 +72,9 @@ namespace fs
 		
 		// 调用底层的getdents实现
 		int result = vfs_getdents(this, dirp, count);
-		
-		if (result > 0) {
-			// 更新文件指针
-			_file_ptr += result;
-		}
-		
+
+		// vfs_getdents 已把 _file_ptr 更新为文件系统目录 cookie。目录位置不是
+		// 返回缓冲区的字节数，不能再次按 result 累加。
 		return result;
 	}
 

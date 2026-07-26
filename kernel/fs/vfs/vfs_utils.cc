@@ -23,6 +23,7 @@
 #include <EASTL/sort.h>
 #include <EASTL/unordered_set.h>
 #include <EASTL/unordered_map.h>
+#include <EASTL/atomic.h>
 #include <libs/string.hh>
 
 namespace
@@ -1549,7 +1550,7 @@ namespace
         return path.length() == prefix_len || path[prefix_len] == '/';
     }
 
-    bool remap_glibc_runtime_path(const eastl::string &path, eastl::string &remapped_path)
+    bool remap_runtime_compat_path(const eastl::string &path, eastl::string &remapped_path)
     {
         if (path == "/code/lmbench_src/bin/build/lmbench_all")
         {
@@ -1588,8 +1589,12 @@ namespace
         static const PrefixAlias k_exact_aliases[] = {
             {"/lib/ld-linux-riscv64-lp64d.so.1", "/glibc/lib/ld-linux-riscv64-lp64d.so.1"},
             {"/lib64/ld-linux-riscv64-lp64d.so.1", "/glibc/lib/ld-linux-riscv64-lp64d.so.1"},
+            {"/lib/ld-linux-loongarch64.so.1", "/glibc/lib/ld-linux-loongarch-lp64d.so.1"},
             {"/lib/ld-linux-loongarch-lp64d.so.1", "/glibc/lib/ld-linux-loongarch-lp64d.so.1"},
             {"/lib64/ld-linux-loongarch-lp64d.so.1", "/glibc/lib/ld-linux-loongarch-lp64d.so.1"},
+            {"/lib/ld-musl-riscv64.so.1", "/musl/lib/libc.so"},
+            {"/lib/ld-musl-riscv64-sf.so.1", "/musl/lib/libc.so"},
+            {"/lib64/ld-musl-loongarch-lp64d.so.1", "/musl/lib/libc.so"},
         };
 
         for (const auto &alias : k_exact_aliases)
@@ -1863,7 +1868,7 @@ namespace
         selected_path = requested_path;
 
         eastl::string remapped_path;
-        if (!remap_glibc_runtime_path(requested_path, remapped_path) || remapped_path == requested_path)
+        if (!remap_runtime_compat_path(requested_path, remapped_path) || remapped_path == requested_path)
         {
             return false;
         }
@@ -1940,6 +1945,18 @@ namespace
         selected_path = mounted_path;
         return select_runtime_alias_path(mounted_path, selected_path, allow_parent_fallback);
     }
+}
+
+bool vfs_backing_path_exists(const eastl::string &path)
+{
+    if (path.empty())
+    {
+        return false;
+    }
+
+    eastl::string backing_path;
+    select_effective_backing_path(path, backing_path, false);
+    return raw_vfs_is_file_exist(backing_path) == 1;
 }
 
 static bool path_needs_normalization(const eastl::string &path)
@@ -2195,6 +2212,42 @@ static int resolve_symlinks(const eastl::string &input_path, eastl::string &reso
 int vfs_resolve_path(const eastl::string &input_path, eastl::string &resolved_path)
 {
     return resolve_symlinks(input_path, resolved_path);
+}
+
+int vfs_resolve_runtime_interpreter(const eastl::string &requested_path,
+                                    eastl::string &resolved_path)
+{
+    if (requested_path.empty() || requested_path[0] != '/')
+    {
+        return -ENOEXEC;
+    }
+
+    // 先解析标准布局中的 /lib、/lib64 等真实符号链接。直接对原路径做
+    // raw 查询无法穿过中间 symlink，会把存在的系统解释器误判成缺失。
+    eastl::string standard_path;
+    int standard_resolve_ret = resolve_symlinks(requested_path, standard_path);
+    if (standard_resolve_ret == EOK &&
+        raw_vfs_is_file_exist(standard_path) == 1)
+    {
+        resolved_path = standard_path;
+        return EOK;
+    }
+
+    // 兼容映射只用于旧评测盘；目标本身也必须真实存在。
+    eastl::string compatible_path;
+    if (!select_runtime_alias_path(requested_path, compatible_path, false) ||
+        compatible_path == requested_path ||
+        raw_vfs_is_file_exist(compatible_path) != 1)
+    {
+        return -ENOENT;
+    }
+
+    int resolve_ret = resolve_symlinks(compatible_path, resolved_path);
+    if (resolve_ret < 0)
+    {
+        return resolve_ret;
+    }
+    return raw_vfs_is_file_exist(resolved_path) == 1 ? EOK : -ENOENT;
 }
 
 // 将flags转换为可读的字符串表示
@@ -2724,16 +2777,18 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
             // O_TMPFILE | O_RDWR/O_WRONLY：创建匿名临时文件
             printfGreen("vfs_openat: O_TMPFILE with write access - creating anonymous temporary file\n");
 
-            // 创建匿名临时文件 - 使用静态计数器和进程地址生成唯一路径
-            static uint64_t tmp_counter = 0;
-            proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
-            uint64_t unique_id = ++tmp_counter + (uint64_t)current_proc;
-
-            char tmp_name[256];
-            snprintf(tmp_name, sizeof(tmp_name), "%s/.tmpfile_%x",
-                     dir_path.c_str(), unique_id);
-
-            eastl::string tmp_path(tmp_name);
+            // 目录项仅作为 lwext4 的数据后备；全局原子序号避免多核并发创建时重名。
+            static eastl::atomic<uint64_t> tmp_counter{0};
+            const uint64_t unique_id =
+                tmp_counter.fetch_add(1, eastl::memory_order_relaxed) + 1;
+            char tmp_suffix[40];
+            snprintf(tmp_suffix, sizeof(tmp_suffix), "/.tmpfile_%lx", unique_id);
+            eastl::string tmp_path = dir_path;
+            tmp_path += tmp_suffix;
+            if (tmp_path.size() >= k_linux_path_max)
+            {
+                return -ENAMETOOLONG;
+            }
 
             // 创建临时文件（移除 O_DIRECTORY 和 O_TMPFILE 标志）
             uint temp_flags = flags & ~(O_DIRECTORY | O_TMPFILE);
@@ -2759,15 +2814,9 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
 
             // 重要：恢复 O_TMPFILE 标志，以便权限检查时能识别这是一个临时文件
             temp_file->lwext4_file_struct.flags |= O_TMPFILE;
-
-            // // 立即从目录中删除文件条目，使其成为匿名文件
-            // // 这样文件就只能通过文件描述符访问，实现真正的O_TMPFILE语义
-            // int unlink_status = ext4_fremove(tmp_path.c_str());
-            // if (unlink_status != EOK)
-            // {
-            //     printfRed("vfs_openat: warning - failed to unlink O_TMPFILE: %d\n", unlink_status);
-            //     // 不返回错误，因为文件已经创建成功
-            // }
+            // lwext4 不能在保持打开句柄有效的同时释放最后一个目录链接；由 file
+            // 的最后引用在完成数据写回和 fclose 后删除隐藏后备项，避免永久泄漏。
+            temp_file->_delete_backing_on_close = true;
 
             // 设置文件权限
             status = ext4_mode_set(tmp_path.c_str(), inode_mode);
@@ -3211,7 +3260,7 @@ int vfs_is_file_exist(const char *path)
 
     eastl::string remapped_path;
     if (exists == 0 &&
-        remap_glibc_runtime_path(lookup_path, remapped_path) &&
+        remap_runtime_compat_path(lookup_path, remapped_path) &&
         remapped_path != lookup_path)
     {
         exists = raw_vfs_is_file_exist(remapped_path);
@@ -3454,11 +3503,10 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
         }
     }
 
-    int index = 0;
     struct linux_dirent64 *d;
     const ext4_direntry *rentry;
     int totlen = 0;
-    uint64 current_offset = 0;
+    uint64 last_cookie = static_cast<uint64>(file ? file->_file_ptr : 0);
 
     /* make integer count */
     if (count == 0)
@@ -3522,14 +3570,22 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
 
         d->d_type = linux_dirent_type_from_ext4_entry(rentry->inode_type);
         d->d_ino = rentry->inode;
-        d->d_off = current_offset + reclen; // start from 1
+        /*
+         * d_off 是下一条目录项的 seek cookie，不是本次用户缓冲中的字节数。
+         * getdents64 分批读取时若每批都从 0 重新编号，glibc/rm 在 seekdir 后会
+         * 跳过真实目录项，最终把尚有子项的目录误留给 rmdir。
+         */
+        const uint64 next_offset = file->lwext4_dir_struct.next_off;
+        d->d_off = next_offset == UINT64_MAX
+                       ? entry_offset + rentry->entry_length
+                       : next_offset;
+        last_cookie = d->d_off;
         d->d_reclen = reclen;
-        ++index;
         totlen += d->d_reclen;
-        current_offset += reclen;
         d = (struct linux_dirent64 *)((char *)d + d->d_reclen);
     }
 
+    file->_file_ptr = static_cast<long>(last_cookie);
     return totlen;
 }
 
@@ -3973,6 +4029,7 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
     // 优先使用打开时保存的 ext4 inode 句柄，这样匿名临时文件和 O_TMPFILE 都能正确 fstat。
     if (f->lwext4_file_struct.mp != nullptr && f->lwext4_file_struct.inode > 0)
     {
+        Ext4MountGuard mount_guard(f->lwext4_file_struct.mp);
         struct ext4_inode_ref inode_ref;
         int result = ext4_fs_get_inode_ref(&f->lwext4_file_struct.mp->fs,
                                            f->lwext4_file_struct.inode,
@@ -4688,6 +4745,7 @@ int vfs_truncate(fs::file *f, size_t length)
     uint64_t current_size = ext4_fsize(&f->lwext4_file_struct);
     if (f->lwext4_file_struct.mp != nullptr && f->lwext4_file_struct.inode > 0)
     {
+        Ext4MountGuard mount_guard(f->lwext4_file_struct.mp);
         struct ext4_inode_ref inode_ref;
         int result = ext4_fs_get_inode_ref(&f->lwext4_file_struct.mp->fs,
                                            f->lwext4_file_struct.inode,

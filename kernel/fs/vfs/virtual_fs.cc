@@ -84,6 +84,14 @@ namespace fs
         return current;
     }
 
+    bool VirtualFileSystem::should_use_backing(const eastl::string &path,
+                                               const vfile_tree_node *node) const
+    {
+        return node != nullptr &&
+               node->backing_policy == VirtualBackingPolicy::BackingFirst &&
+               vfs_backing_path_exists(path);
+    }
+
     // 创建路径上的所有节点
     vfile_tree_node *VirtualFileSystem::create_path_nodes(const eastl::string &path)
     {
@@ -134,7 +142,8 @@ namespace fs
 
     // 添加虚拟文件
     bool VirtualFileSystem::add_virtual_file(const eastl::string &path, int file_type,
-                                             eastl::unique_ptr<VirtualContentProvider> provider)
+                                             eastl::unique_ptr<VirtualContentProvider> provider,
+                                             VirtualBackingPolicy backing_policy)
     {
         // printf("Adding virtual file: %s\n", path.c_str());
         vfile_tree_node *node = create_path_nodes(path);
@@ -145,6 +154,7 @@ namespace fs
 
         node->file_type = file_type;
         node->provider = eastl::move(provider);
+        node->backing_policy = backing_policy;
         return true;
     }
 
@@ -184,13 +194,15 @@ namespace fs
     bool VirtualFileSystem::is_virtual_path(const eastl::string &path) const
     {
         vfile_tree_node *node = find_node_by_path(path);
-        return node != nullptr || dynamic_file_type(path) != 0;
+        return (node != nullptr && !should_use_backing(path, node)) ||
+               dynamic_file_type(path) != 0;
     }
 
     // 获取虚拟节点
     vfile_tree_node *VirtualFileSystem::get_virtual_node(const eastl::string &path) const
     {
-        return find_node_by_path(path);
+        vfile_tree_node *node = find_node_by_path(path);
+        return should_use_backing(path, node) ? nullptr : node;
     }
 
     // 列出目录下的虚拟文件
@@ -304,16 +316,6 @@ namespace fs
         add_virtual_file("/boot/config-5.15.0-F7LY", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<KernelConfigProvider>());
 
-        // 兼容 glibc 动态链接器：/etc/ld.so.preload 与 /etc/ld.so.cache
-        // 两者常被访问；前者通常为空表示不预加载库，后者若不可用则回退到目录扫描。
-        add_virtual_file("/etc/ld.so.preload", fs::FileTypes::FT_NORMAL,
-                         eastl::make_unique<EtcLdSoPreloadProvider>());
-        add_virtual_file("/etc/ld.so.cache", fs::FileTypes::FT_NORMAL,
-                         eastl::make_unique<EtcLdSoCacheProvider>());
-        // libc 会探测 /etc/localtime；当前内核不维护时区数据库，空文件表示走默认 UTC/本地回退。
-        add_virtual_file("/etc/localtime", fs::FileTypes::FT_NORMAL,
-                         eastl::make_unique<StaticContentProvider>(""));
-
         // /proc/mounts
         add_virtual_file("/proc/mounts", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcMountsProvider>());
@@ -331,12 +333,12 @@ namespace fs
         add_virtual_file("/proc/sys/kernel/random/entropy_avail", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcSysKernelRandomEntropyAvailProvider>());
 
-        // 注意：/proc/self/cmdline, /proc/stat, /proc/uptime 等需要相应的 Provider 实现
-        // 这里先创建节点，但 provider 为 nullptr，可以后续添加
-        add_virtual_file("/proc/self/cmdline", fs::FileTypes::FT_NORMAL, nullptr);
+        add_virtual_file("/proc/self/cmdline", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcSelfCmdlineProvider>());
         add_virtual_file("/proc/stat", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcStatProvider>());
-        add_virtual_file("/proc/uptime", fs::FileTypes::FT_NORMAL, nullptr);
+        add_virtual_file("/proc/uptime", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcUptimeProvider>());
 
         // sysconf()/LTP/sysbench 会读取这些 sysfs 节点推断可用 CPU 数。它们必须
         // 动态反映 Cpu 的 possible/online 掩码，并与 sched_getaffinity()、
@@ -434,19 +436,24 @@ namespace fs
 
         // /etc/passwd
         add_virtual_file("/etc/passwd", fs::FileTypes::FT_NORMAL,
-                         eastl::make_unique<EtcPasswdProvider>());
+                         eastl::make_unique<EtcPasswdProvider>(),
+                         VirtualBackingPolicy::BackingFirst);
 
         // /etc/group
         add_virtual_file("/etc/group", fs::FileTypes::FT_NORMAL,
-                         eastl::make_unique<EtcGroupProvider>());
+                         eastl::make_unique<EtcGroupProvider>(),
+                         VirtualBackingPolicy::BackingFirst);
 
         // /etc/hosts、/etc/resolv.conf 与 /etc/protocols：支撑 libc resolver 和协议名查询。
         add_virtual_file("/etc/hosts", fs::FileTypes::FT_NORMAL,
-                         eastl::make_unique<EtcHostsProvider>());
+                         eastl::make_unique<EtcHostsProvider>(),
+                         VirtualBackingPolicy::BackingFirst);
         add_virtual_file("/etc/resolv.conf", fs::FileTypes::FT_NORMAL,
-                         eastl::make_unique<EtcResolvConfProvider>());
+                         eastl::make_unique<EtcResolvConfProvider>(),
+                         VirtualBackingPolicy::BackingFirst);
         add_virtual_file("/etc/protocols", fs::FileTypes::FT_NORMAL,
-                         eastl::make_unique<EtcProtocolsProvider>());
+                         eastl::make_unique<EtcProtocolsProvider>(),
+                         VirtualBackingPolicy::BackingFirst);
 
         // /proc/sys/fs/pipe-user-pages-soft
         add_virtual_file("/proc/sys/fs/pipe-user-pages-soft", fs::FileTypes::FT_NORMAL,
@@ -536,7 +543,7 @@ namespace fs
         result.provider = nullptr;
 
         // 首先尝试从树形结构中查找
-        vfile_tree_node *node = find_node_by_path(absolute_path);
+        vfile_tree_node *node = get_virtual_node(absolute_path);
         if (node)
         {
             result.is_virtual = true;
@@ -552,7 +559,7 @@ namespace fs
     int VirtualFileSystem::openat(eastl::string absolute_path, fs::file *&file, uint flags, int mode)
     {
         int err;
-        vfile_tree_node *node = find_node_by_path(absolute_path);
+        vfile_tree_node *node = get_virtual_node(absolute_path);
 
         if (absolute_path == "/proc/self/ns/time" ||
             absolute_path == "/proc/self/ns/time_for_children")

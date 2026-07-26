@@ -553,6 +553,14 @@ namespace mem
         }
 
         void *pa = pgnm2pa(x);
+        if (k_page_refcounts[x] != 0)
+        {
+            panic("[pmm] buddy allocated page with live refcount: page=%p index=%d ref=%u caller=%p",
+                  pa,
+                  x,
+                  k_page_refcounts[x],
+                  __builtin_return_address(0));
+        }
         k_page_refcounts[x] = 1;
         memlock.release();
         memset(pa, 0, PGSIZE);
@@ -577,10 +585,34 @@ namespace mem
             return nullptr;
         }
 
-        // 连续页接口由 free_pages() 对应释放，不维护单页引用计数；但 Buddy
-        // 元数据仍必须与单页路径使用同一把锁。
+        // 连续页接口由 free_pages() 成块释放；块内每页都记录 owner 引用，
+        // 且 Buddy 元数据必须与单页路径使用同一把锁更新。
         memlock.acquire();
         int page_index = _buddy->Alloc(count);
+        if (page_index >= 0)
+        {
+            BuddySystem::PageQueryResult block =
+                _buddy->query_page(static_cast<uint32>(page_index));
+            if (!block.in_range || block.is_free ||
+                block.block_offset != static_cast<uint32>(page_index))
+            {
+                memlock.release();
+                panic("[pmm] invalid contiguous allocation metadata index=%d", page_index);
+            }
+            for (uint32 offset = 0; offset < block.block_pages; ++offset)
+            {
+                const uint32 index = static_cast<uint32>(page_index) + offset;
+                if (index >= page_count || k_page_refcounts[index] != 0)
+                {
+                    memlock.release();
+                    panic("[pmm] contiguous allocation overlaps live page index=%u ref=%u",
+                          index,
+                          index < page_count ? k_page_refcounts[index] : 0);
+                }
+                // 连续内核缓冲的每一页都持有一份块 owner 引用。
+                k_page_refcounts[index] = 1;
+            }
+        }
         memlock.release();
         if (page_index < 0)
         {
@@ -607,8 +639,30 @@ namespace mem
 
             return;
         }
+        const uint64 page_index = pa2pgnm(pa);
         memlock.acquire();
-        _buddy->Free(pa2pgnm(pa));
+        BuddySystem::PageQueryResult block =
+            _buddy->query_page(static_cast<uint32>(page_index));
+        if (!block.in_range || block.is_free || block.block_offset != page_index)
+        {
+            memlock.release();
+            panic("[pmm] free_page1 requires allocation start pa=%p index=%lu size=%lu",
+                  pa, page_index, size);
+        }
+        for (uint32 offset = 0; offset < block.block_pages; ++offset)
+        {
+            const uint32 index = static_cast<uint32>(page_index) + offset;
+            if (index >= page_count || k_page_refcounts[index] != 1)
+            {
+                memlock.release();
+                panic("[pmm] free_page1 block still shared index=%u ref=%u size=%lu",
+                      index,
+                      index < page_count ? k_page_refcounts[index] : 0,
+                      size);
+            }
+            k_page_refcounts[index] = 0;
+        }
+        _buddy->Free(static_cast<int>(page_index));
         memlock.release();
     }
 
@@ -625,6 +679,38 @@ namespace mem
 
         bool should_free = true;
         memlock.acquire();
+        BuddySystem::PageQueryResult block =
+            _buddy->query_page(static_cast<uint32>(page_index));
+        if (!block.in_range || block.is_free)
+        {
+            memlock.release();
+            panic("[pmm] free_page on unallocated buddy page pa=%p index=%lu",
+                  pa, page_index);
+        }
+        if (block.block_pages > 1)
+        {
+            if (block.block_offset != page_index)
+            {
+                memlock.release();
+                panic("[pmm] free_page requires block start pa=%p index=%lu block=%u+%u",
+                      pa, page_index, block.block_offset, block.block_pages);
+            }
+            for (uint32 offset = 0; offset < block.block_pages; ++offset)
+            {
+                const uint32 index = static_cast<uint32>(page_index) + offset;
+                if (index >= page_count || k_page_refcounts[index] != 1)
+                {
+                    memlock.release();
+                    panic("[pmm] kernel block still shared index=%u ref=%u",
+                          index,
+                          index < page_count ? k_page_refcounts[index] : 0);
+                }
+                k_page_refcounts[index] = 0;
+            }
+            _buddy->Free(static_cast<int>(page_index));
+            memlock.release();
+            return;
+        }
         if (k_page_refcounts[page_index] > 1)
         {
             --k_page_refcounts[page_index];
@@ -654,8 +740,29 @@ namespace mem
             panic("[pmm] free_pages requires page-aligned address: %p", pa);
         }
 
+        const uint64 page_index = pa2pgnm(pa);
         memlock.acquire();
-        _buddy->free_pages(pa);
+        BuddySystem::PageQueryResult block =
+            _buddy->query_page(static_cast<uint32>(page_index));
+        if (!block.in_range || block.is_free || block.block_offset != page_index)
+        {
+            memlock.release();
+            panic("[pmm] free_pages requires allocation start pa=%p index=%lu",
+                  pa, page_index);
+        }
+        for (uint32 offset = 0; offset < block.block_pages; ++offset)
+        {
+            const uint32 index = static_cast<uint32>(page_index) + offset;
+            if (index >= page_count || k_page_refcounts[index] != 1)
+            {
+                memlock.release();
+                panic("[pmm] free_pages block still shared index=%u ref=%u",
+                      index,
+                      index < page_count ? k_page_refcounts[index] : 0);
+            }
+            k_page_refcounts[index] = 0;
+        }
+        _buddy->Free(static_cast<int>(page_index));
         memlock.release();
     }
 
@@ -726,6 +833,29 @@ namespace mem
         
         memlock.acquire();
         int x = _buddy->Alloc(page_num);
+        if (x >= 0)
+        {
+            BuddySystem::PageQueryResult block =
+                _buddy->query_page(static_cast<uint32>(x));
+            if (!block.in_range || block.is_free ||
+                block.block_offset != static_cast<uint32>(x))
+            {
+                memlock.release();
+                panic("[pmm] invalid kmalloc block metadata index=%d", x);
+            }
+            for (uint32 offset = 0; offset < block.block_pages; ++offset)
+            {
+                const uint32 index = static_cast<uint32>(x) + offset;
+                if (index >= page_count || k_page_refcounts[index] != 0)
+                {
+                    memlock.release();
+                    panic("[pmm] kmalloc overlaps live page index=%u ref=%u",
+                          index,
+                          index < page_count ? k_page_refcounts[index] : 0);
+                }
+                k_page_refcounts[index] = 1;
+            }
+        }
         memlock.release();
         // printfCyan("kmalloc: buddy返回的页号 x = %d\n", x);
         

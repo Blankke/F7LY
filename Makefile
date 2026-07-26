@@ -31,6 +31,10 @@ QEMU_DEBUG_MEM ?= 8G
 # 2026 决赛 BuildStorm 明确要求使用 8 vCPU 和 8 GiB 内存。
 # 定向调试时仍可通过命令行覆盖，例如：make run r QEMU_SMP=1 QEMU_MEM=1G
 QEMU_SMP ?= 8
+# 决赛在跨架构 QEMU 上评测，x86_64 评测机不能用 KVM 运行 RISC-V/LoongArch。
+# 显式启用 MTTCG，使每个 vCPU 使用独立宿主线程；原生同架构开发机仍可覆盖为
+# QEMU_ACCEL="-accel kvm"。
+QEMU_ACCEL ?= -accel tcg,thread=multi
 # QEMU_SNAPSHOT 是最终传给 QEMU 的底层实参；高层目标用下面两个变量区分用途。
 # make run 默认启用 snapshot，避免自动回归写回污染评测 sdcard 镜像。
 # make shell 默认不启用 snapshot，允许交互式 shell 镜像持久化写回。
@@ -349,6 +353,7 @@ run-riscv:
 		-machine virt \
 		-kernel $(KERNEL_ELF) \
 		-m $(QEMU_MEM) \
+		$(QEMU_ACCEL) \
 		$(QEMU_CONSOLE_ARGS) \
 		-smp $(QEMU_SMP) \
 		-bios default \
@@ -366,6 +371,7 @@ run-loongarch:
 	    -machine virt \
 	    -kernel $(KERNEL_ELF) \
 		-m $(QEMU_MEM) \
+		$(QEMU_ACCEL) \
 		$(QEMU_CONSOLE_ARGS) \
 		-smp $(QEMU_SMP) \
 		$(QEMU_SNAPSHOT) \
@@ -391,6 +397,7 @@ debug-riscv:
 		-machine virt \
 		-kernel $(KERNEL_ELF) \
 		-m $(QEMU_DEBUG_MEM) \
+		$(QEMU_ACCEL) \
 		-nographic \
 		-smp $(QEMU_SMP) \
 		-bios default \
@@ -407,6 +414,7 @@ debug-loongarch:
 	    -machine virt \
 	    -kernel $(KERNEL_ELF) \
 	    -m $(QEMU_DEBUG_MEM) \
+	    $(QEMU_ACCEL) \
 	    -nographic \
 	    -smp $(QEMU_SMP) \
 		$(QEMU_SNAPSHOT) \
