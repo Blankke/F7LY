@@ -4,8 +4,8 @@ IMAGE_DIR := $(PROJECT_ROOT)/images
 ROOTFS_BACKUP := $(IMAGE_DIR)/rootfs.img.back
 ROOTFS_IMAGE := $(IMAGE_DIR)/rootfs.img
 INITRD_IMAGE := $(IMAGE_DIR)/initrd.img
-RISCV_EVAL_IMAGE := $(IMAGE_DIR)/sdcard-rv.img
-LOONGARCH_EVAL_IMAGE := $(IMAGE_DIR)/sdcard-la.img
+RISCV_EVAL_IMAGE := $(IMAGE_DIR)/sdcard-rv-pub.img
+LOONGARCH_EVAL_IMAGE := $(IMAGE_DIR)/sdcard-la-pub.img
 RISCV_SHELL_IMAGE := $(IMAGE_DIR)/rootfs-riscv64.img
 LOONGARCH_SHELL_IMAGE := $(IMAGE_DIR)/rootfs-loongarch64.img
 
@@ -26,11 +26,11 @@ endif
 ARCH ?= riscv
 INITCODE_MODE ?= evaluation
 DIS_PRINTF ?= 0
-QEMU_MEM ?= 1G
-QEMU_DEBUG_MEM ?= 1G
-# 同一份内核静态支持最多 8 个 CPU 槽位；运行时用该变量选择 QEMU 实际启动的核数。
-# 示例：make run r QEMU_SMP=4
-QEMU_SMP ?= 4
+QEMU_MEM ?= 8G
+QEMU_DEBUG_MEM ?= 8G
+# 2026 决赛 BuildStorm 明确要求使用 8 vCPU 和 8 GiB 内存。
+# 定向调试时仍可通过命令行覆盖，例如：make run r QEMU_SMP=1 QEMU_MEM=1G
+QEMU_SMP ?= 8
 # QEMU_SNAPSHOT 是最终传给 QEMU 的底层实参；高层目标用下面两个变量区分用途。
 # make run 默认启用 snapshot，避免自动回归写回污染评测 sdcard 镜像。
 # make shell 默认不启用 snapshot，允许交互式 shell 镜像持久化写回。

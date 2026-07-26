@@ -4,28 +4,9 @@ extern "C"
 {
     __attribute__((section(".text.startup"))) int main()
     {
-        init_env("/musl/");
-        libc_test("/musl/");
-        basic_test("/musl/");
-        basic_test("/glibc/");
-        lua_test("/musl/");
-        lua_test("/glibc/");
-        netperf_test("/musl/");
-        netperf_test("/glibc/");
-        iperf_test("/musl/");
-        iperf_test("/glibc/");
-        busybox_test("/musl/");
-        busybox_test("/glibc/");
-        libcbench_test("/musl");
-        libcbench_test("/glibc");
-        iozone_test("/glibc");
-        iozone_test("/musl");
-        cyclictest_test("/musl/");
-        cyclictest_test("/glibc/");
-        ltp_test(false);
-        ltp_test(true);
-        lmbench_test("/musl/");
-        lmbench_test("/glibc/");
+        // 2026 决赛两题均只使用 glibc，镜像内入口统一位于 /glibc。
+        cagent_test();
+        buildstorm_test();
         shutdown();
         return 0;
     }

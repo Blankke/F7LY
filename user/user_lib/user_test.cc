@@ -297,6 +297,49 @@ void init_env(const char *path = musl_dir)
     run_test("busybox", bb_install, 0);
 }
 
+static char **final_2026_glibc_envp()
+{
+    // 决赛两题只测试 glibc。CAgent 会从 PATH 中调用系统工具，
+    // BuildStorm 则需要固定的 HOME 和离线 Cargo 环境。不能沿用初赛
+    // /glibc/lib 的 LD_LIBRARY_PATH，否则会覆盖 Debian 根文件系统自身的新版 glibc。
+    static char *envp[] = {
+        (char *)"PATH=/root/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin",
+        (char *)"HOME=/root",
+        (char *)"RUSTUP_HOME=/root/.rustup",
+        (char *)"CARGO_HOME=/root/.cargo",
+        (char *)"CARGO_NET_OFFLINE=true",
+        NULL};
+    return envp;
+}
+
+int cagent_test(void)
+{
+    if (change_dir_checked(glibc_dir) != 0)
+    {
+        return -1;
+    }
+
+    char *argv[] = {
+        (char *)"cagent_testcode.sh",
+        NULL,
+    };
+    return run_test("/glibc/cagent_testcode.sh", argv, final_2026_glibc_envp());
+}
+
+int buildstorm_test(void)
+{
+    if (change_dir_checked(glibc_dir) != 0)
+    {
+        return -1;
+    }
+
+    char *argv[] = {
+        (char *)"buildstorm_testcode.sh",
+        NULL,
+    };
+    return run_test("/glibc/buildstorm_testcode.sh", argv, final_2026_glibc_envp());
+}
+
 int basic_test(const char *path = musl_dir)
 {
     [[maybe_unused]] int pid;

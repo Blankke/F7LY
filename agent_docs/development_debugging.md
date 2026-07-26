@@ -87,22 +87,22 @@ which python
 
 ## QEMU 运行与日志保存
 
-不要把 QEMU 长输出直接刷进聊天。所有运行输出写入 `logs/output_*.txt`，不要直接写到项目根目录；模板会先创建 `logs/`，这些输出文件已被 `.gitignore` 覆盖。
+不要把 QEMU 长输出直接刷进聊天。所有运行输出写入 `logs/run/output_*.txt`，不要直接写到项目根目录；模板会先创建 `logs/run/`，这些输出文件已被 `.gitignore` 覆盖。
 
 完整 RISC-V 回归日志：
 
 ```bash
 ts=$(date +%Y%m%d-%H%M%S)
-mkdir -p logs
-log="logs/output_r_${ts}_make-run-r_QEMU_MEM-1G_timeout-40m.txt"
+mkdir -p logs/run
+log="logs/run/output_r_${ts}_final-2026_QEMU_MEM-8G_QEMU_SMP-8_timeout-40m.txt"
 {
   echo "run_at=${ts}"
   echo "arch=riscv"
-  echo "cmd=timeout 40m make run r QEMU_MEM=1G"
+  echo "cmd=timeout 40m make run r QEMU_MEM=8G QEMU_SMP=8"
   echo "git_branch=$(git branch --show-current 2>/dev/null || true)"
   echo "git_head=$(git rev-parse --short HEAD 2>/dev/null || true)"
   echo "---- output ----"
-  timeout 40m make run r QEMU_MEM=1G
+  timeout 40m make run r QEMU_MEM=8G QEMU_SMP=8
   echo "exit_code=$?"
 } > "$log" 2>&1
 echo "$log"
@@ -112,16 +112,16 @@ echo "$log"
 
 ```bash
 ts=$(date +%Y%m%d-%H%M%S)
-mkdir -p logs
-log="logs/output_l_${ts}_make-run-l_QEMU_MEM-1G_timeout-40m.txt"
+mkdir -p logs/run
+log="logs/run/output_l_${ts}_final-2026_QEMU_MEM-8G_QEMU_SMP-8_timeout-40m.txt"
 {
   echo "run_at=${ts}"
   echo "arch=loongarch"
-  echo "cmd=timeout 40m make run l QEMU_MEM=1G"
+  echo "cmd=timeout 40m make run l QEMU_MEM=8G QEMU_SMP=8"
   echo "git_branch=$(git branch --show-current 2>/dev/null || true)"
   echo "git_head=$(git rev-parse --short HEAD 2>/dev/null || true)"
   echo "---- output ----"
-  timeout 40m make run l QEMU_MEM=1G
+  timeout 40m make run l QEMU_MEM=8G QEMU_SMP=8
   echo "exit_code=$?"
 } > "$log" 2>&1
 echo "$log"
@@ -144,17 +144,17 @@ RISC-V 单测日志模板：
 
 ```bash
 ts=$(date +%Y%m%d-%H%M%S)
-mkdir -p logs
-log="logs/output_r_${ts}_single-target_QEMU_MEM-1G_timeout-5m.txt"
+mkdir -p logs/run
+log="logs/run/output_r_${ts}_single-target_QEMU_MEM-8G_QEMU_SMP-8_timeout-5m.txt"
 {
   echo "run_at=${ts}"
   echo "arch=riscv"
   echo "scope=single-target"
-  echo "cmd=timeout 5m make run r QEMU_MEM=1G"
+  echo "cmd=timeout 5m make run r QEMU_MEM=8G QEMU_SMP=8"
   echo "git_branch=$(git branch --show-current 2>/dev/null || true)"
   echo "git_head=$(git rev-parse --short HEAD 2>/dev/null || true)"
   echo "---- output ----"
-  timeout 5m make run r QEMU_MEM=1G
+  timeout 5m make run r QEMU_MEM=8G QEMU_SMP=8
   echo "exit_code=$?"
 } > "$log" 2>&1
 echo "$log"
@@ -164,17 +164,17 @@ LoongArch 单测日志模板：
 
 ```bash
 ts=$(date +%Y%m%d-%H%M%S)
-mkdir -p logs
-log="logs/output_l_${ts}_single-target_QEMU_MEM-1G_timeout-5m.txt"
+mkdir -p logs/run
+log="logs/run/output_l_${ts}_single-target_QEMU_MEM-8G_QEMU_SMP-8_timeout-5m.txt"
 {
   echo "run_at=${ts}"
   echo "arch=loongarch"
   echo "scope=single-target"
-  echo "cmd=timeout 5m make run l QEMU_MEM=1G"
+  echo "cmd=timeout 5m make run l QEMU_MEM=8G QEMU_SMP=8"
   echo "git_branch=$(git branch --show-current 2>/dev/null || true)"
   echo "git_head=$(git rev-parse --short HEAD 2>/dev/null || true)"
   echo "---- output ----"
-  timeout 5m make run l QEMU_MEM=1G
+  timeout 5m make run l QEMU_MEM=8G QEMU_SMP=8
   echo "exit_code=$?"
 } > "$log" 2>&1
 echo "$log"
@@ -186,10 +186,11 @@ echo "$log"
 
 QEMU 运行参数由 Makefile 管理：
 
-- RISC-V：`qemu-system-riscv64 -machine virt -kernel build/riscv/kernel-qemu -drive file=images/sdcard-rv.img ... -initrd images/initrd.img`
-- LoongArch：`qemu-system-loongarch64 -machine virt -cpu la464-loongarch-cpu -kernel build/loongarch/kernel-la -drive file=images/sdcard-la.img ... -initrd images/initrd.img`
-- 默认内存：`QEMU_MEM ?= 1G`
-- 调试内存：`QEMU_DEBUG_MEM ?= 1G`
+- RISC-V：`qemu-system-riscv64 -machine virt -kernel kernel-rv -drive file=images/sdcard-rv-pub.img ... -initrd images/initrd.img`
+- LoongArch：`qemu-system-loongarch64 -machine virt -kernel kernel-la -drive file=images/sdcard-la-pub.img ... -initrd images/initrd.img`
+- 默认内存：`QEMU_MEM ?= 8G`
+- 调试内存：`QEMU_DEBUG_MEM ?= 8G`
+- 默认 CPU：`QEMU_SMP ?= 8`
 - `make run r/l` 默认传入 `QEMU_RUN_SNAPSHOT ?= -snapshot`，防止自动回归污染评测 sdcard 镜像；如需写回可显式传 `QEMU_RUN_SNAPSHOT=`。
 - `make shell r/l` 默认传入空的 `QEMU_SHELL_SNAPSHOT`，会写回独立 shell rootfs 镜像；如需临时 shell 可显式传 `QEMU_SHELL_SNAPSHOT=-snapshot`。
 

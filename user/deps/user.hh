@@ -166,6 +166,8 @@ int basic_subset_test(const char *path, const char *const cases[]);
 int ltp_subset_test(bool is_musl, const char *const cases[]);
 int final_test_musl(void);
 int final_test_glibc(void);
+int cagent_test(void);
+int buildstorm_test(void);
 int git_test(const char *path);
 int vim_h();
 int gcc_test();

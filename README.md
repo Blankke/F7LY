@@ -32,12 +32,12 @@ F7LY OS 是一个面向教学、比赛和 Linux ABI 兼容性评测的双架构�
 
 镜像文件位于 `images/`：
 
-- `images/sdcard-rv.img`
-- `images/sdcard-la.img`
+- `images/sdcard-rv-pub.img`
+- `images/sdcard-la-pub.img`
 - `images/initrd.img`
-- `images/rootfs.img.back`
+- `images/rootfs-riscv64.img`、`images/rootfs-loongarch64.img`（交互式 shell）
 
-这些镜像通常很大，默认不应作为日常代码改动提交。
+`make run r/l` 默认使用 2026 决赛公开镜像，以 8 vCPU、8 GiB 内存和 snapshot 模式运行；旧 `sdcard-rv.img`、`sdcard-la.img` 仅供既有初赛专项脚本使用。这些镜像通常很大，默认不应作为日常代码改动提交。
 
 ## 快速开始
 
@@ -118,15 +118,16 @@ loongarch64-linux-gnu-gdb -x debug/gdb/loongarch.gdb
 
 ```bash
 ts=$(date +%Y%m%d-%H%M%S)
-log="output_r_${ts}_make-run-r_QEMU_MEM-1G_timeout-40m.txt"
+mkdir -p logs/run
+log="logs/run/output_r_${ts}_final-2026_QEMU_MEM-8G_QEMU_SMP-8_timeout-40m.txt"
 {
   echo "run_at=${ts}"
   echo "arch=riscv"
-  echo "cmd=timeout 40m make run r QEMU_MEM=1G"
+  echo "cmd=timeout 40m make run r QEMU_MEM=8G QEMU_SMP=8"
   echo "git_branch=$(git branch --show-current 2>/dev/null || true)"
   echo "git_head=$(git rev-parse --short HEAD 2>/dev/null || true)"
   echo "---- output ----"
-  timeout 40m make run r QEMU_MEM=1G
+  timeout 40m make run r QEMU_MEM=8G QEMU_SMP=8
   echo "exit_code=$?"
 } > "$log" 2>&1
 echo "$log"
