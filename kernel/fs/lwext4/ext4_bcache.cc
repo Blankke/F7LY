@@ -43,6 +43,97 @@
 
 #include <stdlib.h>
 #include "libs/string.hh"
+#include "devs/spinlock.hh"
+#include "mem/physical_memory_manager.hh"
+
+namespace
+{
+    /*
+     * ext4_buf 是固定大小的小对象，但 lwext4 的 ext4_calloc/ext4_free 在
+     * F7LY 中按整张 4 KiB 页分配。较深块缓存若继续“一描述符一页”，会让
+     * 8192 个缓存项额外浪费约 31 MiB，并在回收时反复争用 buddy 锁。
+     *
+     * 数据页仍由原有 ext4_malloc 管理；描述符页切成等长槽，释放后回收到
+     * 池内。池只保留达到过的高水位，不改变 ext4_buf 的所有权或 bcache LRU。
+    */
+    SpinLock g_ext4_buf_pool_lock;
+    eastl::atomic<uint32> g_ext4_buf_pool_state{0};
+    ext4_buf *g_ext4_buf_free_list = nullptr;
+
+    void ext4_buf_pool_init()
+    {
+        constexpr uint32 k_uninitialized = 0;
+        constexpr uint32 k_initializing = 1;
+        constexpr uint32 k_ready = 2;
+
+        uint32 state = g_ext4_buf_pool_state.load(eastl::memory_order_acquire);
+        if (state == k_ready)
+        {
+            return;
+        }
+
+        uint32 expected = k_uninitialized;
+        if (g_ext4_buf_pool_state.compare_exchange_strong(
+                expected, k_initializing, eastl::memory_order_acq_rel))
+        {
+            g_ext4_buf_pool_lock.init("ext4_buf_pool");
+            g_ext4_buf_pool_state.store(k_ready, eastl::memory_order_release);
+            return;
+        }
+
+        // 首次挂载通常只有一个调用者；仍把初始化协议做成 SMP 安全，避免
+        // 未来并发挂载/mkfs 在锁对象尚未就绪时进入描述符分配。
+        while (g_ext4_buf_pool_state.load(eastl::memory_order_acquire) != k_ready)
+        {
+            asm volatile("nop");
+        }
+    }
+
+    ext4_buf *ext4_buf_pool_alloc()
+    {
+        ext4_buf_pool_init();
+        g_ext4_buf_pool_lock.acquire();
+        if (g_ext4_buf_free_list == nullptr)
+        {
+            void *page = mem::k_pmm.try_alloc_page_uninitialized();
+            if (page == nullptr)
+            {
+                g_ext4_buf_pool_lock.release();
+                return nullptr;
+            }
+
+            constexpr size_t slots_per_page = PGSIZE / sizeof(ext4_buf);
+            static_assert(slots_per_page > 0);
+            static_assert(PGSIZE % alignof(ext4_buf) == 0);
+            auto *slots = static_cast<ext4_buf *>(page);
+            for (size_t index = 0; index < slots_per_page; ++index)
+            {
+                // 空闲槽复用 data 保存链指针；取出后会整体清零。
+                slots[index].data =
+                    reinterpret_cast<uint8_t *>(g_ext4_buf_free_list);
+                g_ext4_buf_free_list = &slots[index];
+            }
+        }
+
+        ext4_buf *buf = g_ext4_buf_free_list;
+        g_ext4_buf_free_list = reinterpret_cast<ext4_buf *>(buf->data);
+        g_ext4_buf_pool_lock.release();
+        memset(buf, 0, sizeof(*buf));
+        return buf;
+    }
+
+    void ext4_buf_pool_free(ext4_buf *buf)
+    {
+        if (buf == nullptr)
+        {
+            return;
+        }
+        g_ext4_buf_pool_lock.acquire();
+        buf->data = reinterpret_cast<uint8_t *>(g_ext4_buf_free_list);
+        g_ext4_buf_free_list = buf;
+        g_ext4_buf_pool_lock.release();
+    }
+}
 
 int ext4_bcache_lba_compare(struct ext4_buf *a, struct ext4_buf *b) {
     if (a->lba > b->lba)
@@ -111,7 +202,7 @@ static struct ext4_buf *ext4_buf_alloc(struct ext4_bcache *bc, uint64_t lba) {
     if (!data)
         return NULL;
 
-    buf = (struct ext4_buf *)ext4_calloc(1, sizeof(struct ext4_buf));
+    buf = ext4_buf_pool_alloc();
     if (!buf) {
         ext4_free(data, bc->itemsize);
         return NULL;
@@ -128,7 +219,7 @@ static struct ext4_buf *ext4_buf_alloc(struct ext4_bcache *bc, uint64_t lba) {
 
 static void ext4_buf_free(struct ext4_buf *buf) {
     ext4_free(buf->data, buf->bc->itemsize);
-    ext4_free(buf, sizeof(struct ext4_buf));
+    ext4_buf_pool_free(buf);
 }
 
 static struct ext4_buf *ext4_buf_lookup(struct ext4_bcache *bc, uint64_t lba) {

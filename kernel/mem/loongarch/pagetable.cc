@@ -279,7 +279,7 @@ namespace mem
 				Info_R("physical page alloc failed.");
 				return false;
 			}
-			k_pmm.clear_page(page_addr);
+			// try_alloc_page() 已保证新页表页为全零。
 			pt.set_base((uint64)page_addr);
 			pte.set_data(page_round_down(to_phy((ulong)page_addr)) |
 						 Pte::map_dir_page_flags());

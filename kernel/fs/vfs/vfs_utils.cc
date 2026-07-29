@@ -2495,6 +2495,16 @@ static int validate_lookup_prefix_permissions(const eastl::string &absolute_path
     {
         return -EFAULT;
     }
+    if (current_proc->get_fsuid() == 0)
+    {
+        /*
+         * ext4_fopen()/ext4_dir_open() 与前面的 resolve_symlinks() 都会完整
+         * 遍历路径并验证中间组件类型。root 不需要逐级执行权限位检查；
+         * 旧逻辑却对每个前缀再次 resolve+stat，令深层 Cargo registry 路径
+         * 退化成 O(depth²) 次目录遍历。
+         */
+        return EOK;
+    }
 
     eastl::string parent_path = absolute_path.substr(0, last_slash);
 
@@ -2712,7 +2722,13 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
         return prefix_permission_ret;
     }
 
-    bool file_exists = (raw_vfs_is_file_exist(lookup_path) == 1);
+    /*
+     * raw_vfs_is_file_exist() 与 raw_vfs_path2filetype() 原先各自做一次完整
+     * ext4 inode 路径遍历。类型查询本身已经同时给出存在性，合并后每次
+     * open 至少少走一遍深路径。
+     */
+    int type = raw_vfs_path2filetype(lookup_path);
+    bool file_exists = type >= 0;
 
     if (open_wants_write_access(flags) && vfs_is_readonly_path(lookup_path))
     {
@@ -2842,13 +2858,7 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
 
     // 确定要使用的实际路径和文件类型
     eastl::string actual_path = lookup_path;
-    int type = -1;
-
-    if (file_exists)
-    {
-        type = raw_vfs_path2filetype(actual_path);
-    }
-    else
+    if (!file_exists)
     {
         type = fs::FileTypes::FT_NORMAL; // 新文件默认为普通文件
     }

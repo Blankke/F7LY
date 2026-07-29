@@ -20,7 +20,21 @@ namespace mem
 
         static void init();
         static void *alloc_page(); // 分配单个物理页，失败表示内核不可恢复并 panic
-        static void *try_alloc_page(); // 尝试分配单个物理页，失败时返回空指针
+        /**
+         * @brief 分配一张已经清零的物理页，失败时返回空指针。
+         *
+         * 用户可见的匿名页、页表以及临时缓冲区都依赖这个清零契约；
+         * 调用方不应再次 memset/clear_page，避免在缺页热路径重复刷 4 KiB。
+         */
+        static void *try_alloc_page();
+
+        /**
+         * @brief 分配一张未清零物理页，失败时返回空指针。
+         *
+         * 仅允许用于随后必定整页覆盖的路径，例如 COW 整页复制和完整文件页读入。
+         * 在内容写满以前不得映射到用户空间，也不得把内容拷贝给用户。
+         */
+        static void *try_alloc_page_uninitialized();
         static void *alloc_pages(int count); // 分配连续多个物理页
         static void *try_alloc_pages(int count); // 尝试分配连续页，失败时返回空指针
         static void free_page(void *pa); // 释放单个物理页
@@ -30,6 +44,13 @@ namespace mem
         static bool is_managed_page(void *pa); // 判断地址是否属于单页分配器管理范围
         static void free_page1(void *pa, uint64 size); // 释放单个物理页
         static void *kmalloc(size_t size); // 分配任意大小的内存块
+        /**
+         * @brief 分配未清零的连续内核缓冲区。
+         *
+         * 仅允许用于随后完整覆盖有效区间的 read/copy_in 临时缓冲；调用方
+         * 必须只向用户复制实际完成的字节，不能暴露未初始化的页尾。
+         */
+        static void *kmalloc_uninitialized(size_t size);
         static void *kcalloc(uint n, size_t size);
         void clear_page(void *pa);
         static PageDebugInfo debug_query_page(void *pa);
@@ -60,6 +81,8 @@ namespace mem
 
         static uint64 pa2pgnm(void *pa);
         static void *pgnm2pa(int pgnm);
+        static void *try_alloc_page_impl(bool clear);
+        static void *kmalloc_impl(size_t size, bool clear);
         static int size_to_page_num(uint64 size);
     };
     extern PhysicalMemoryManager k_pmm;

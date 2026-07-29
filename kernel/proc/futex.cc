@@ -300,9 +300,16 @@ namespace proc
                 return load_ret;
             }
 
-            // 无超时等待也走 tick 通道周期性重检，避免用户态值已经变化、
-            // 但由于历史库实现或竞态没有显式 FUTEX_WAKE 时永久挂死。
-            futex_sleep_with_interlock(tmm::k_tm.get_tick_wait_channel(),
+            /*
+             * 无超时 FUTEX_WAIT 必须只由匹配的 FUTEX_WAKE、信号或线程组退出
+             * 唤醒。旧实现把它挂到全局 tick 通道，导致所有 rustc/Cargo
+             * parking waiter 每 10ms 一起变成 RUNNABLE、重读用户页再睡回去，
+             * 在 8 核下形成持续的惊群。
+             *
+             * wakeup2() 按物理 futex key 直接定位并唤醒 PCB，因此等待通道只
+             * 需要是稳定的非 tick 值；使用 key 也便于调试时辨认等待对象。
+             */
+            futex_sleep_with_interlock(reinterpret_cast<void *>(futex_key),
                                        (void *)uaddr,
                                        futex_key,
                                        g_futex_wait_lock);

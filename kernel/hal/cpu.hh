@@ -95,6 +95,7 @@ public:
         // 时钟中断在各 CPU 上独立到达；抢占决策也必须是每核独立的，避免一个
         // CPU 的 tick 误清空另一个 CPU 正在运行任务的时间片。
         bool advance_time_slice(uint32 limit);
+        void reset_time_slice() { _timeslice_ticks = 0; }
 
         static inline int get_intr_stat()
         {
@@ -130,6 +131,15 @@ public:
         static inline void interrupt_on() { _intr_on(); }
 
         static inline void interrupt_off() { _intr_off(); }
+
+        static inline void idle_until_interrupt()
+        {
+#ifdef RISCV
+                asm volatile("wfi");
+#elif defined(LOONGARCH)
+                asm volatile("idle 0");
+#endif
+        }
 
         proc::Pcb *get_cur_proc() { return _cur_proc; }
 

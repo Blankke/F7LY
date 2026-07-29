@@ -4,6 +4,7 @@
 #include "prlimit.hh"
 #include "futex.hh"
 #include "fs/vfs/file/normal_file.hh"
+#include <EASTL/atomic.h>
 
 namespace tmm
 {
@@ -28,6 +29,7 @@ namespace proc
     class ProcessManager
     {
     private:
+        static constexpr uint k_active_slot_word_count = (num_process + 63) / 64;
         // 核心成员变量
         SpinLock _pid_lock;        // 进程ID锁
         SpinLock _tid_lock;        // 线程ID锁
@@ -38,6 +40,12 @@ namespace proc
         uint64 _next_ipc_ns_id;    // 下一个 SysV IPC namespace ID
         Pcb *_init_proc;           // 用户init进程
         uint _last_alloc_proc_gid; // 上次分配的进程组ID
+        // 调度器只需查看当前非 UNUSED 的 PCB。位图把每次 dispatch 的
+        // 512 个大对象跨页扫描收敛为少量活跃槽位，同时 PCB 锁仍负责最终仲裁。
+        eastl::atomic<uint64> _active_slot_words[k_active_slot_word_count]{};
+
+        void mark_slot_active(uint global_id);
+        void mark_slot_inactive(uint global_id);
 
     public:
         ProcessManager() = default;
@@ -49,6 +57,7 @@ namespace proc
 
         // ==================== 进程基础管理 ====================
         Pcb *get_cur_pcb();
+        uint64 active_slot_word(uint word_index) const;
         bool change_state(Pcb *p, ProcState state);
         void alloc_pid(Pcb *p);
         void alloc_tid(Pcb *p);

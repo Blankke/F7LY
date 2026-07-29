@@ -42,7 +42,8 @@ trap_manager trap_mgr;
 namespace
 {
   // 单核调度使用固定 tick 时间片，确保长时间运行的用户/内核态任务都能被周期性抢占。
-  constexpr int k_default_time_slice_ticks = 1;
+  // 与 RISC-V 保持同一调度语义；减少 rustc CPU 密集阶段的强制切换成本。
+  constexpr int k_default_time_slice_ticks = 4;
   constexpr uint32 k_loongarch_ecode_fpu_disabled = 0xf;
   constexpr uint32 k_loongarch_ecode_lsx_disabled = 0x10;
   constexpr uint32 k_loongarch_asid_bits = 10;

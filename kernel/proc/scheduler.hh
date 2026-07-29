@@ -1,6 +1,7 @@
 #pragma once
 #include "spinlock.hh"
 #include "proc.hh"
+#include <EASTL/atomic.h>
 
 namespace proc
 {
@@ -9,7 +10,11 @@ namespace proc
 	{
 	private:
 		SpinLock _sche_lock;
-		bool _has_non_default_priority = false;
+		// 普通 BuildStorm 负载没有实时优先级任务。这个标志若使用普通 bool，
+		// 每个空闲 CPU 仍会在每轮 512 项扫描前争用全局调度锁。
+		// 原子快路径让默认优先级场景完全绕开这把锁；慢路径仍由 _sche_lock
+		// 串行扫描和清理标志。
+		eastl::atomic<uint32> _has_non_default_priority{0};
 		// F7LY 当前采用全局进程池而非 per-CPU run queue。每核维护独立的扫描
 		// 游标，避免所有空闲核总从 slot 0 竞争；任务筛选再结合 _last_cpu 的
 		// 粘附放置，形成与 Starry run-queue locality 等价的默认不迁移语义。

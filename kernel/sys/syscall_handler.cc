@@ -11741,12 +11741,9 @@ namespace syscall
             return SYS_EINVAL;
         }
 
+        constexpr int MADV_DONTNEED = 4;
         constexpr int MADV_WIPEONFORK = 18;
         constexpr int MADV_KEEPONFORK = 19;
-        if (advice != MADV_WIPEONFORK && advice != MADV_KEEPONFORK)
-        {
-            return 0;
-        }
         if (len == 0)
         {
             return 0;
@@ -11768,13 +11765,80 @@ namespace syscall
             return SYS_EINVAL;
         }
 
+        uint64 aligned_end = PGROUNDUP(end);
+        if (aligned_end < end || aligned_end > MAXVA)
+        {
+            return SYS_EINVAL;
+        }
+
         proc::ProcessMemoryManager *mm = p->get_memory_manager();
         if (mm == nullptr)
         {
             return SYS_EINVAL;
         }
 
-        mm->for_each_vma_in_range(addr, end, [&](proc::vma &vm) -> bool
+        struct MemoryUnlockGuard
+        {
+            proc::ProcessMemoryManager *manager;
+            ~MemoryUnlockGuard()
+            {
+                manager->unlock_memory();
+            }
+        };
+        mm->lock_memory();
+        MemoryUnlockGuard memory_unlock_guard{mm};
+
+        if (advice == MADV_DONTNEED)
+        {
+            mm->for_each_vma_in_range(addr, aligned_end, [&](proc::vma &vm) -> bool
+            {
+                /*
+                 * BuildStorm 中 jemalloc 用 MADV_DONTNEED 归还匿名 arena。
+                 * 旧实现对所有未知 advice 直接返回成功，却保留原 PTE 和内容，
+                 * jemalloc 探测后只能退化成同步 memset。普通私有匿名映射没有
+                 * VmObject/overlay 所有权，撤销驻留 PTE 后保留 VMA，下一次访问
+                 * 会按匿名缺页语义重新得到全零页。
+                 *
+                 * 共享、文件和带对象/overlay 的映射涉及页缓存或额外引用所有权，
+                 * 目前将 advice 当作提示忽略，不能错误释放它们的后端页面。
+                 */
+                if (!vm.is_private_mapping() ||
+                    (vm.flags & MAP_ANONYMOUS) == 0 ||
+                    vm.is_shared_mapping() ||
+                    vm.vfile != nullptr ||
+                    vm.object != nullptr ||
+                    vm.private_page_overlay != nullptr)
+                {
+                    return true;
+                }
+
+                uint64 discard_start = addr > vm.addr ? addr : vm.addr;
+                uint64 discard_end = aligned_end < vm.end_addr() ? aligned_end : vm.end_addr();
+                if (discard_start >= discard_end)
+                {
+                    return true;
+                }
+
+                mem::k_vmm.vmunmap(mm->pagetable,
+                                   discard_start,
+                                   (discard_end - discard_start) / PGSIZE,
+                                   1);
+                if (discard_start == vm.addr && discard_end == vm.end_addr())
+                {
+                    vm.has_resident_pages = false;
+                }
+                return true;
+            });
+            return 0;
+        }
+
+        if (advice != MADV_WIPEONFORK && advice != MADV_KEEPONFORK)
+        {
+            // madvise 是提示接口；尚未实现的提示保持成功 no-op。
+            return 0;
+        }
+
+        mm->for_each_vma_in_range(addr, aligned_end, [&](proc::vma &vm) -> bool
         {
             // 当前只对私有匿名映射维护 wipe-on-fork 状态；其他映射保持无状态处理。
             if ((vm.flags & MAP_ANONYMOUS) && (vm.flags & MAP_PRIVATE))

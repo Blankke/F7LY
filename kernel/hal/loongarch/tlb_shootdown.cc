@@ -207,4 +207,21 @@ void flush_all_cpus()
 {
     flush_range_all_cpus(0, 0);
 }
+
+void kick_cpu(uint64 cpu_id)
+{
+    if (!Cpu::is_valid_cpu_id(cpu_id) ||
+        cpu_id == Cpu::current_cpu_id() ||
+        (Cpu::online_cpu_mask() & (1ULL << cpu_id)) == 0)
+    {
+        return;
+    }
+
+    /*
+     * 复用已启用的 TLB runtime vector。没有发布新的 generation 时，
+     * handle_ipi() 只清 pending 位而不会失效 TLB；中断本身足以让
+     * idle 指令返回并重新扫描运行队列。
+     */
+    send_tlb_ipi(cpu_id);
+}
 }

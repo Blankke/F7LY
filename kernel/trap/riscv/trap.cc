@@ -35,7 +35,9 @@ extern char trampoline[], uservec[], userret[];
 namespace
 {
   // 单核调度使用固定 tick 时间片，确保长时间运行的用户/内核态任务都能被周期性抢占。
-  constexpr int k_default_time_slice_ticks = 1;
+  // CPU 密集型 rustc worker 通常能独占自己的 home CPU。40ms 时间片把无意义
+  // 的 timer 强制切换降到原来的 1/4，同时仍保留足够的交互和等待唤醒响应。
+  constexpr int k_default_time_slice_ticks = 4;
   constexpr uint32 k_riscv_user_asid_count = 1U << 10;
   static_assert(proc::num_process < k_riscv_user_asid_count,
                 "RISC-V 用户 ASID 数量必须覆盖全部 PCB 槽位");
@@ -89,6 +91,14 @@ void trap_manager::set_next_timeout()
 int trap_manager::devintr()
 {
   uint64 scause = r_scause();
+
+  if (scause == 0x8000000000000001L)
+  {
+    // 调度唤醒 IPI：清除 SSIP 后返回 scheduler；若本核正在运行用户任务，
+    // 只把它当作一次无害中断，不额外抢占当前时间片。
+    sbi_clear_ipi();
+    return 3;
+  }
 
   if ((scause & 0x8000000000000000L) &&
       (scause & 0xff) == 9)

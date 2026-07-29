@@ -177,6 +177,62 @@ namespace proc
         constexpr size_t k_linux_name_max = 255;
         constexpr uint64 k_pie_load_base = 0x10000ULL;
 
+        uint active_slot_bit_index(uint64 value)
+        {
+            // freestanding 环境不能依赖 libgcc 的 64 位 ctz helper。
+            uint count = 0;
+            if ((value & 0xffffffffULL) == 0)
+            {
+                count += 32;
+                value >>= 32;
+            }
+            if ((value & 0xffffULL) == 0)
+            {
+                count += 16;
+                value >>= 16;
+            }
+            if ((value & 0xffULL) == 0)
+            {
+                count += 8;
+                value >>= 8;
+            }
+            if ((value & 0xfULL) == 0)
+            {
+                count += 4;
+                value >>= 4;
+            }
+            if ((value & 0x3ULL) == 0)
+            {
+                count += 2;
+                value >>= 2;
+            }
+            if ((value & 1ULL) == 0)
+            {
+                ++count;
+            }
+            return count;
+        }
+
+        template <typename Visitor>
+        void for_each_active_pcb(ProcessManager &manager, Visitor &&visitor)
+        {
+            constexpr uint word_count = (num_process + 63) / 64;
+            for (uint word_index = 0; word_index < word_count; ++word_index)
+            {
+                uint64 active_bits = manager.active_slot_word(word_index);
+                while (active_bits != 0)
+                {
+                    const uint bit = active_slot_bit_index(active_bits);
+                    active_bits &= active_bits - 1;
+                    const uint global_id = word_index * 64 + bit;
+                    if (global_id < num_process && !visitor(k_proc_pool[global_id]))
+                    {
+                        return;
+                    }
+                }
+            }
+        }
+
         inline uint64 align_up_pow2(uint64 value, uint64 alignment)
         {
             if (alignment == 0)
@@ -1136,6 +1192,10 @@ namespace proc
             Pcb &p = k_proc_pool[i];
             p.init("pcb", i);
         }
+        for (uint word = 0; word < k_active_slot_word_count; ++word)
+        {
+            _active_slot_words[word].store(0, eastl::memory_order_release);
+        }
         _cur_pid = 1;
         _cur_tid = 1;
         _next_ipc_ns_id = k_initial_ipc_namespace_id + 1;
@@ -1190,6 +1250,35 @@ namespace proc
         // if (pcb == nullptr)
         //     panic("get_cur_pcb: no current process");
         return pcb;
+    }
+
+    uint64 ProcessManager::active_slot_word(uint word_index) const
+    {
+        if (word_index >= k_active_slot_word_count)
+        {
+            return 0;
+        }
+        return _active_slot_words[word_index].load(eastl::memory_order_acquire);
+    }
+
+    void ProcessManager::mark_slot_active(uint global_id)
+    {
+        if (global_id >= num_process)
+        {
+            panic("mark_slot_active: invalid gid=%u", global_id);
+        }
+        _active_slot_words[global_id / 64].fetch_or(
+            1ULL << (global_id % 64), eastl::memory_order_release);
+    }
+
+    void ProcessManager::mark_slot_inactive(uint global_id)
+    {
+        if (global_id >= num_process)
+        {
+            panic("mark_slot_inactive: invalid gid=%u", global_id);
+        }
+        _active_slot_words[global_id / 64].fetch_and(
+            ~(1ULL << (global_id % 64)), eastl::memory_order_release);
     }
 
     void ProcessManager::alloc_pid(Pcb *p)
@@ -1403,6 +1492,7 @@ namespace proc
 
                 // 更新上次分配的位置，轮转分配策略
                 _last_alloc_proc_gid = p->_global_id;
+                mark_slot_active(p->_global_id);
 
                 return p;
             }
@@ -1541,6 +1631,7 @@ namespace proc
         p->_continued_pending = false;
         p->_has_child_tasks = false;
         p->_state = ProcState::UNUSED; // 标记进程控制块为未使用
+        mark_slot_inactive(p->_global_id);
 
         p->_slot = 0;                 // 重置时间片
                 p->_priority = default_proc_prio; // 重置 nice 值，避免 PCB 复用带出历史优先级
@@ -3948,19 +4039,26 @@ namespace proc
     }
     void ProcessManager::wakeup(void *chan)
     {
-        for (uint i = 0; i < num_process; ++i)
+        for_each_active_pcb(*this, [&](Pcb &entry)
         {
-            Pcb *p = &k_proc_pool[i];
-            if (p != k_pm.get_cur_pcb() && p->_state != ProcState::UNUSED)
+            Pcb *p = &entry;
+            if (p != k_pm.get_cur_pcb())
             {
                 p->_lock.acquire();
+                int wake_cpu = -1;
                 if (p->_state == ProcState::SLEEPING && p->_chan == chan)
                 {
                     p->_state = ProcState::RUNNABLE;
+                    wake_cpu = p->_last_cpu;
                 }
                 p->_lock.release();
+                if (wake_cpu >= 0)
+                {
+                    hal::tlb::kick_cpu(static_cast<uint64>(wake_cpu));
+                }
             }
-        }
+            return true;
+        });
     }
 
     void ProcessManager::wakeup_one(Pcb *target, void *chan)
@@ -3971,11 +4069,17 @@ namespace proc
         }
 
         target->_lock.acquire();
+        int wake_cpu = -1;
         if (target->_state == ProcState::SLEEPING && target->_chan == chan)
         {
             target->_state = ProcState::RUNNABLE;
+            wake_cpu = target->_last_cpu;
         }
         target->_lock.release();
+        if (wake_cpu >= 0)
+        {
+            hal::tlb::kick_cpu(static_cast<uint64>(wake_cpu));
+        }
     }
 
     void ProcessManager::wakeup_child_waiters(Pcb *parent)
@@ -3986,13 +4090,12 @@ namespace proc
         }
 
         const int parent_tgid = parent->_tgid;
-        for (uint i = 0; i < num_process; ++i)
+        for_each_active_pcb(*this, [&](Pcb &entry)
         {
-            Pcb *waiter = &k_proc_pool[i];
-            if (waiter->_state == ProcState::UNUSED ||
-                waiter->_tgid != parent_tgid)
+            Pcb *waiter = &entry;
+            if (waiter->_tgid != parent_tgid)
             {
-                continue;
+                return true;
             }
 
             /*
@@ -4001,24 +4104,26 @@ namespace proc
              * 带 __WNOTHREAD 的等待者也在其中；它醒来后会按选项重新筛选。
              */
             wakeup_one(waiter, waiter);
-        }
+            return true;
+        });
     }
 
     int ProcessManager::wakeup2(uint64 uaddr, uint64 futex_key, int val, void *uaddr2, uint64 futex_key2, int val2)
     {
         int count1 = 0, count2 = 0;
-        for (uint i = 0; i < num_process; ++i)
+        for_each_active_pcb(*this, [&](Pcb &entry)
         {
-            Pcb *p = &k_proc_pool[i];
+            Pcb *p = &entry;
             // futex_wakeup() 调用本函数时已经持有全局 futex wait lock。
             // 因此新的 waiter 不会在扫描过程中把 _futex_key 从 0 改成目标 key；
             // 先用无锁 key 过滤掉绝大多数 PCB，可避免每次 clear_child_tid wake
             // 都抢完整进程池的 PCB 锁。命中后仍在 PCB 锁内复核状态，保持唤醒语义。
             if (p->_futex_key != futex_key)
             {
-                continue;
+                return true;
             }
             p->_lock.acquire();
+            int wake_cpu = -1;
             bool is_futex_waiter = p->_futex_key == futex_key &&
                                    (p->_state == SLEEPING || p->_state == RUNNABLE);
             if (is_futex_waiter)
@@ -4045,6 +4150,7 @@ namespace proc
                 else if (count1 < val)
                 {
                     p->_state = RUNNABLE;
+                    wake_cpu = p->_last_cpu;
                     p->_futex_addr = 0;
                     p->_futex_key = 0;
                     count1++;
@@ -4057,13 +4163,18 @@ namespace proc
                 }
             }
             p->_lock.release();
+            if (wake_cpu >= 0)
+            {
+                hal::tlb::kick_cpu(static_cast<uint64>(wake_cpu));
+            }
 
             // 检查是否已经完成所需的唤醒和重排队操作
             if (count1 >= val && (!uaddr2 || count2 >= val2))
             {
-                break;
+                return false;
             }
-        }
+            return true;
+        });
         return count1;
     }
     int ProcessManager::mkdir(int dir_fd, eastl::string path, uint mode)

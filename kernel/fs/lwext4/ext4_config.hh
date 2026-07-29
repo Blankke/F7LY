@@ -59,11 +59,10 @@
 
 /**@brief   Cache size of block device.*/
 #ifndef CONFIG_BLOCK_DEV_CACHE_SIZE
-/* 并发小块 IO 对 block cache 深度非常敏感。256 个 4KiB 缓存页在
- * iozone 的多进程 1KiB 吞吐场景下很容易被 metadata/data 混合流量打穿，
- * 导致 ext4 bcache 频繁回收和重复回源。这里提升到 1024，给并发读写
- * 留出更稳妥的缓存工作集。 */
-#define CONFIG_BLOCK_DEV_CACHE_SIZE 1024
+/* BuildStorm 会并发读取大量源码、crate 元数据和目录块。8192 个 4 KiB
+ * 缓存项最多占约 32 MiB 数据页；ext4_buf 描述符由小对象池承载，不再额外
+ * 浪费一页/项。相对 1024 项可显著减少依赖解析阶段的缓存抖动。 */
+#define CONFIG_BLOCK_DEV_CACHE_SIZE 8192
 #endif
 
 

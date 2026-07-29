@@ -79,6 +79,19 @@ void flush_all_cpus()
     flush_range_all_cpus(0, 0);
 }
 
+void kick_cpu(uint64 cpu_id)
+{
+    if (!Cpu::is_valid_cpu_id(cpu_id) ||
+        cpu_id == Cpu::current_cpu_id() ||
+        (Cpu::online_cpu_mask() & (1ULL << cpu_id)) == 0)
+    {
+        return;
+    }
+
+    unsigned long hart_mask = 1UL << cpu_id;
+    sbi_send_ipi(&hart_mask);
+}
+
 void poll_pending()
 {
     // OpenSBI 在 M-mode 完成 remote fence，不依赖 S-mode 软件 IPI 分发。

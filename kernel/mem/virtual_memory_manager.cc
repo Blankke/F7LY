@@ -214,11 +214,6 @@ namespace mem
                     panic("[vmm] alloc empty LoongArch PGDH failed");
                 }
 
-                k_pmm.clear_page(pgdh);
-                k_pmm.clear_page(pud);
-                k_pmm.clear_page(pmd);
-                k_pmm.clear_page(pte_page);
-
                 // 用户态访问 0xffff... 这类高半区坏地址时会走 PGDH。
                 // 这里让 TLBR refill 至少能抵达一个全零叶子页，随后转成普通页无效异常，
                 // 避免在缺少页表层级时无限重试同一条访存指令。
@@ -491,7 +486,6 @@ namespace mem
                 vmdealloc(pt, a, old_sz);
                 return 0;
             }
-            k_pmm.clear_page(mem);
             if (map_pages(pt, a, PGSIZE, (uint64)mem,
                           riscv::PteEnum::pte_readable_m | flags) == false)
             {
@@ -517,7 +511,6 @@ namespace mem
                 vmdealloc(pt, a, old_sz);
                 return 0;
             }
-            k_pmm.clear_page(mem);
             // LoongArch 用户态普通页默认应保持可缓存，避免 ELF/堆/BSS 上的
             // ll/sc 原子在数据页上长期失败，表现成 pthread 类用例卡在用户态自旋。
             uint64 pte_flags = PTE_R | PTE_U | PTE_MAT | flags;
@@ -1055,7 +1048,9 @@ namespace mem
             return 0;
         }
 
-        // 分配物理页面
+        fs::file *vf = vm->vfile;
+        // ELF/动态库读取存在跨层短读路径；在所有读入分支都能证明完整覆盖前，
+        // 文件映射仍从零页开始，避免未初始化字节进入动态链接器元数据。
         void *pa = k_pmm.try_alloc_page();
         if (pa == nullptr)
         {
@@ -1064,7 +1059,6 @@ namespace mem
         }
 
         // 检查是否为文件映射
-        fs::file *vf = vm->vfile;
         if (vf != nullptr && vm->vfd != -1)
         {
             // 文件映射：需要检查是否访问超出文件大小的区域
@@ -1114,9 +1108,7 @@ namespace mem
         }
         else
         {
-            // 匿名映射仍然需要提供全零页面。
-            k_pmm.clear_page(pa);
-
+            // try_alloc_page() 已保证匿名页为全零，禁止在缺页热路径重复清零。
             printfCyan("[allocate_vma_page] handling anonymous mapping at %p\n", va);
         }
 
@@ -1414,7 +1406,7 @@ namespace mem
             return 0;
         }
 
-        void *new_page = k_pmm.try_alloc_page();
+        void *new_page = k_pmm.try_alloc_page_uninitialized();
         if (new_page == nullptr)
         {
             return -1;
@@ -1493,7 +1485,7 @@ namespace mem
             return 0;
         }
 
-        void *new_page = k_pmm.try_alloc_page();
+        void *new_page = k_pmm.try_alloc_page_uninitialized();
         if (new_page == nullptr)
         {
             return -1;
@@ -1547,7 +1539,14 @@ namespace mem
         {
             void *page = nullptr;
         };
-        constexpr int k_unmap_batch_pages = 64;
+        /*
+         * 单次保留 256 个待释放物理页只占 2 KiB 内核栈，仍明显低于 16 KiB
+         * 进程内核栈上限。RISC-V 超过 64 页时本地已退化为一次全 TLB
+         * sfence，LoongArch 对任意范围也都会全量失效；扩大批次不会增加
+         * 单次硬件失效成本，却能让 jemalloc 大 arena 的 MADV_DONTNEED
+         * 少做最多四分之三的跨核 IPI 与确认等待。
+         */
+        constexpr int k_unmap_batch_pages = 256;
         PendingUnmap pending[k_unmap_batch_pages]{};
         int pending_count = 0;
         uint64 pending_start = 0;
@@ -1630,7 +1629,6 @@ namespace mem
         uint64 addr = (uint64)PhysicalMemoryManager::try_alloc_page();
         if (addr == 0)
             return pt;
-        k_pmm.clear_page((void *)addr);
         pt.set_base(addr);
 
         return pt;
@@ -1753,7 +1751,7 @@ namespace mem
                 }
 #endif
                 // 对于普通内存，分配新页面并复制内容
-                if ((mem = mem::PhysicalMemoryManager::try_alloc_page()) == nullptr)
+                if ((mem = mem::PhysicalMemoryManager::try_alloc_page_uninitialized()) == nullptr)
                 {
                     vmunmap(new_pt, 0, va / PGSIZE, 1);
                     return -1;
@@ -1808,7 +1806,6 @@ namespace mem
                 uvmdealloc(pt, a, oldsz);
                 return 0;
             }
-            k_pmm.clear_page((void *)pa);
             if (!map_pages(pt, a, PGSIZE, pa, riscv::PteEnum::pte_readable_m | riscv::PteEnum::pte_user_m | flags))
             {
                 k_pmm.free_page((void *)pa);
@@ -1835,7 +1832,6 @@ namespace mem
                 uvmdealloc(pt, a, oldsz);
                 return 0;
             }
-            memset(mem, 0, PGSIZE);
             // 统一补齐 MAT，避免调用方漏传时只有 LA 的 exec/brk 数据页不可缓存。
             uint64 pte_flags = flags | PTE_U | PTE_D | PTE_MAT;
             if (map_pages(pt, a, PGSIZE, (uint64)mem, pte_flags) == 0)

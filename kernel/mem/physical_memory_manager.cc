@@ -534,7 +534,7 @@ namespace mem
         return free_pages;
     }
 
-    void *PhysicalMemoryManager::try_alloc_page()
+    void *PhysicalMemoryManager::try_alloc_page_impl(bool clear)
     {
         // Buddy 的树和页引用计数描述的是同一批页面。单核时期仅保护引用计数
         // 不会出问题，但 SMP 下两个 CPU 同时递归修改 Buddy 树会把页号算坏，
@@ -563,8 +563,21 @@ namespace mem
         }
         k_page_refcounts[x] = 1;
         memlock.release();
-        memset(pa, 0, PGSIZE);
+        if (clear)
+        {
+            memset(pa, 0, PGSIZE);
+        }
         return pa;
+    }
+
+    void *PhysicalMemoryManager::try_alloc_page()
+    {
+        return try_alloc_page_impl(true);
+    }
+
+    void *PhysicalMemoryManager::try_alloc_page_uninitialized()
+    {
+        return try_alloc_page_impl(false);
     }
 
     void *PhysicalMemoryManager::alloc_pages(int count)
@@ -820,7 +833,7 @@ namespace mem
             p[i] = 0;
     }
 
-    void *PhysicalMemoryManager::kmalloc(size_t size)
+    void *PhysicalMemoryManager::kmalloc_impl(size_t size, bool clear)
     {
         int page_num = size_to_page_num(size);
         // printfCyan("kmalloc: size = %lu, page_num = %d\n", size, page_num);
@@ -873,9 +886,12 @@ namespace mem
             }
             
             void *pa = pgnm2pa(x);
-            // kmalloc() 可能一次拿到多页；这里需要把整段临时缓冲区都清零，
-            // 否则后续按“已初始化内核缓冲”使用时会把旧数据带进系统调用语义里。
-            memset(pa, 0, (size_t)page_num * PGSIZE);
+            if (clear)
+            {
+                // 默认 kmalloc() 维持零初始化契约；只有明确整段覆盖的 IO
+                // 临时缓冲才允许跳过这次预清零。
+                memset(pa, 0, (size_t)page_num * PGSIZE);
+            }
             return pa;
         }
         // }
@@ -891,6 +907,16 @@ namespace mem
         // }
     }
 
+    void *PhysicalMemoryManager::kmalloc(size_t size)
+    {
+        return kmalloc_impl(size, true);
+    }
+
+    void *PhysicalMemoryManager::kmalloc_uninitialized(size_t size)
+    {
+        return kmalloc_impl(size, false);
+    }
+
     void *PhysicalMemoryManager::kcalloc(uint n, size_t size)
     {
         void *pa = kmalloc(n * size);
@@ -898,7 +924,6 @@ namespace mem
         {
             return nullptr;
         }
-        memset(pa, 0, n * size);
         return pa;
     }
 

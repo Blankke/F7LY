@@ -46,6 +46,7 @@ public:
         _held = false;
         _next_ticket = 0;
         _serving_ticket = 0;
+        memset(_waiters, 0, sizeof(_waiters));
     }
 
     void lock()
@@ -61,9 +62,32 @@ public:
         }
 
         const uint64 ticket = _next_ticket++;
+        if (ticket != _serving_ticket)
+        {
+            if (ticket - _serving_ticket >= proc::num_process)
+            {
+                _state_lock.release();
+                panic("ext4 lock: waiter ring overflow");
+            }
+            proc::Pcb *&slot = _waiters[ticket % proc::num_process];
+            if (slot != nullptr)
+            {
+                _state_lock.release();
+                panic("ext4 lock: waiter slot reused");
+            }
+            slot = current;
+        }
         while (ticket != _serving_ticket)
         {
             proc::k_pm.sleep(this, &_state_lock);
+        }
+        if (ticket != 0)
+        {
+            proc::Pcb *&slot = _waiters[ticket % proc::num_process];
+            if (slot == current)
+            {
+                slot = nullptr;
+            }
         }
         if (_held)
         {
@@ -96,7 +120,17 @@ public:
         _owner = nullptr;
         _depth = 0;
         ++_serving_ticket;
-        proc::k_pm.wakeup(this);
+        // ticket 锁每次只会放行下一位；精确唤醒避免每个 4KiB ext4 操作
+        // 都扫描 512 个 PCB 并制造等待者惊群。
+        proc::Pcb *next_waiter = nullptr;
+        if (_serving_ticket < _next_ticket)
+        {
+            next_waiter = _waiters[_serving_ticket % proc::num_process];
+        }
+        if (next_waiter != nullptr)
+        {
+            proc::k_pm.wakeup_one(next_waiter, this);
+        }
         _state_lock.release();
     }
 
@@ -107,6 +141,7 @@ private:
     bool _held = false;
     uint64 _next_ticket = 0;
     uint64 _serving_ticket = 0;
+    proc::Pcb *_waiters[proc::num_process]{};
 };
 
 static Ext4RecursiveFifoLock extlock;
@@ -353,10 +388,15 @@ int vfs_ext_read(struct file *f, int user_addr, const uint64 addr, int n) {
     if (n < 0) {
         return -EINVAL;
     }
+    if (n == 0) {
+        return 0;
+    }
     int r = 0;
     if (user_addr) {
-        size_t buf_size = static_cast<size_t>(n) + 1;
-        char *buf = (char*)mem::k_pmm.kmalloc(buf_size);
+        // ext4_fread 只把 byteread 字节交给 copy_out，无需预清零；同时避免
+        // n 恰为页整数倍时因历史上的“+1”多分配一整页。
+        size_t buf_size = static_cast<size_t>(n);
+        char *buf = (char*)mem::k_pmm.kmalloc_uninitialized(buf_size);
         [[maybe_unused]] uint64 mread = 0;
         if (buf == NULL) {
             return -ENOMEM;
@@ -393,13 +433,16 @@ int vfs_ext_readat(struct file *f, int user_addr, const uint64 addr, int n, int 
     if (n < 0) {
         return -EINVAL;
     }
+    if (n == 0) {
+        return 0;
+    }
     int r = ext4_fseek(file, offset, SEEK_SET);
     if (r != EOK) {
         return -1;
     }
     if (user_addr) {
-        size_t buf_size = static_cast<size_t>(n) + 1;
-        char *buf =(char*) mem::k_pmm.kmalloc(buf_size);
+        size_t buf_size = static_cast<size_t>(n);
+        char *buf =(char*) mem::k_pmm.kmalloc_uninitialized(buf_size);
         [[maybe_unused]] uint64 mread = 0;
         if (buf == NULL) {
             return -ENOMEM;
@@ -438,10 +481,13 @@ int vfs_ext_write(struct file *f, int user_addr, const uint64 addr, int n) {
     if (n < 0) {
         return -EINVAL;
     }
+    if (n == 0) {
+        return 0;
+    }
     int r = 0;
     if (user_addr) {
-        size_t buf_size = static_cast<size_t>(n) + 1;
-        char *buf = (char*)mem::k_pmm.kmalloc(buf_size);
+        size_t buf_size = static_cast<size_t>(n);
+        char *buf = (char*)mem::k_pmm.kmalloc_uninitialized(buf_size);
         [[maybe_unused]] uint64 mwrite = 0;
         if (buf == NULL) {
             return -ENOMEM;
@@ -1149,6 +1195,10 @@ ssize_t vfs_ext_readi(struct inode *self, int user_addr, uint64 addr, uint off, 
         ext4_fclose(&file);
         return -EINVAL;
     }
+    if (n == 0) {
+        ext4_fclose(&file);
+        return 0;
+    }
 
     uint64_t oldoff = file.fpos;
     r = ext4_fseek(&file, off, SEEK_SET);
@@ -1158,8 +1208,8 @@ ssize_t vfs_ext_readi(struct inode *self, int user_addr, uint64 addr, uint off, 
     }
     
     if (user_addr) {
-        size_t buf_size = static_cast<size_t>(n) + 1;
-        char *buf = (char*) mem::k_pmm.kmalloc(buf_size);
+        size_t buf_size = static_cast<size_t>(n);
+        char *buf = (char*) mem::k_pmm.kmalloc_uninitialized(buf_size);
         if (buf == NULL) {
             ext4_fclose(&file);
             return -ENOMEM;

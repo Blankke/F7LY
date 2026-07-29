@@ -179,10 +179,9 @@ namespace mem
                 if (new_base == 0)
                     return Pte(nullptr);
 
-                // 初始化新页表
+                // try_alloc_page() 的接口契约已经保证新页表页为全零。
                 PageTable new_pt;
                 new_pt.set_base(new_base);
-                memset((void *)new_base, 0, PGSIZE);
                 // printfBlue("下一级页表基地址：%p\n", new_base);
 
                 // 将新页表地址写入当前PTE（注意原子操作）

@@ -75,12 +75,49 @@ namespace proc
             }
             return p._priority;
         }
+
+        uint trailing_zero_count_nonzero(uint64 value)
+        {
+            // freestanding 链接不能依赖 libgcc 的 __ctzdi2；按 32/16/... 二分，
+            // 固定六步得到最低置位下标。
+            uint count = 0;
+            if ((value & 0xffffffffULL) == 0)
+            {
+                count += 32;
+                value >>= 32;
+            }
+            if ((value & 0xffffULL) == 0)
+            {
+                count += 16;
+                value >>= 16;
+            }
+            if ((value & 0xffULL) == 0)
+            {
+                count += 8;
+                value >>= 8;
+            }
+            if ((value & 0xfULL) == 0)
+            {
+                count += 4;
+                value >>= 4;
+            }
+            if ((value & 0x3ULL) == 0)
+            {
+                count += 2;
+                value >>= 2;
+            }
+            if ((value & 0x1ULL) == 0)
+            {
+                ++count;
+            }
+            return count;
+        }
     }
 
     void Scheduler::init(const char *name)
     {
         _sche_lock.init(name);
-        _has_non_default_priority = false;
+        _has_non_default_priority.store(0, eastl::memory_order_release);
         _next_initial_cpu = -1;
         for (uint cpu_id = 0; cpu_id < NUMCPU; ++cpu_id)
         {
@@ -95,7 +132,7 @@ namespace proc
             return;
         }
         _sche_lock.acquire();
-        _has_non_default_priority = true;
+        _has_non_default_priority.store(1, eastl::memory_order_release);
         _sche_lock.release();
     }
 
@@ -150,8 +187,15 @@ namespace proc
 
     int Scheduler::get_highest_priority(int cpu_id)
     {
+        // Cargo/rustc 的常规任务全部使用默认优先级。先做无锁判断，避免
+        // 8 个 scheduler（尤其是暂时无任务的 CPU）持续争用 _sche_lock。
+        if (_has_non_default_priority.load(eastl::memory_order_acquire) == 0)
+        {
+            return default_proc_prio;
+        }
+
         _sche_lock.acquire();
-        if (!_has_non_default_priority)
+        if (_has_non_default_priority.load(eastl::memory_order_relaxed) == 0)
         {
             _sche_lock.release();
             return default_proc_prio;
@@ -178,7 +222,7 @@ namespace proc
         }
         if (!has_live_non_default_priority)
         {
-            _has_non_default_priority = false;
+            _has_non_default_priority.store(0, eastl::memory_order_release);
         }
         _sche_lock.release();
         return prio;
@@ -201,85 +245,96 @@ namespace proc
             cpu->interrupt_on();
 
             priority = get_highest_priority(cpu_id);
+            bool ran_task = false;
 
             // 使用本 CPU 的轮转扫描起点。PCB 锁仍是“任务只能同时运行在一个
             // CPU”的最终仲裁；try_acquire 失败则继续找下一项，等价于从其它核
             // 正在执行的任务旁边偷取可运行工作。
             const uint scan_begin = _next_scan_global_id[cpu_id] % num_process;
-            for (uint offset = 0; offset < num_process; ++offset)
+            auto scan_active_range = [&](uint begin, uint end)
             {
-                p = &k_proc_pool[(scan_begin + offset) % num_process];
-                // printfBlue("[sche]  start_schedule here,p->addr:%p \n", p);
-                if (p->_state != ProcState::RUNNABLE ||
-                    !can_schedule_on_cpu(*p, cpu_id) ||
-                    effective_schedule_priority(*p) > priority)
+                if (begin >= end)
                 {
-                    // printf("p.global_id: %d, p.state: %d, p.name:%s not runnable or priority too high \n", p->_global_id, p->_state, p->_name);
-                    continue;
+                    return;
                 }
-                // printf("p.global_id: %d, p.state: %d, p.name:%s \n", p->_global_id, p->_state, p->_name);
-                // 运行中的任务会一直持有 PCB 锁直到主动让出 CPU。多核下若在这里
-                // 自旋等待该锁，空闲核可能永远卡在进程池首项，无法挑选后续 runnable
-                // 任务；因此失败时直接继续扫描，实现无全局队列的 work-stealing。
-                if (!p->_lock.try_acquire())
+                const uint first_word = begin / 64;
+                const uint last_word = (end - 1) / 64;
+                for (uint word_index = first_word; word_index <= last_word; ++word_index)
                 {
-                    continue;
+                    uint64 active_bits = k_pm.active_slot_word(word_index);
+                    if (word_index == first_word)
+                    {
+                        active_bits &= ~0ULL << (begin % 64);
+                    }
+                    if (word_index == last_word && (end % 64) != 0)
+                    {
+                        active_bits &= (1ULL << (end % 64)) - 1;
+                    }
+                    while (active_bits != 0)
+                    {
+                        const uint bit = trailing_zero_count_nonzero(active_bits);
+                        active_bits &= active_bits - 1;
+                        const uint global_id = word_index * 64 + bit;
+                        p = &k_proc_pool[global_id];
+                        if (p->_state != ProcState::RUNNABLE ||
+                            !can_schedule_on_cpu(*p, cpu_id) ||
+                            effective_schedule_priority(*p) > priority)
+                        {
+                            continue;
+                        }
+                        // 运行中的任务会一直持有 PCB 锁直到主动让出 CPU。失败时
+                        // 直接看下一个活跃槽位，避免在其它 CPU 的任务上自旋。
+                        if (!p->_lock.try_acquire())
+                        {
+                            continue;
+                        }
+                        if (p->get_state() == ProcState::RUNNABLE &&
+                            can_schedule_on_cpu(*p, cpu_id))
+                        {
+                            assert(p->_running_cpu == -1,
+                                   "scheduler: double-run pid=%d tid=%d gid=%d owner=%d claimant=%d state=%d",
+                                   p->_pid,
+                                   p->_tid,
+                                   p->_global_id,
+                                   p->_running_cpu,
+                                   cpu_id,
+                                   (int)p->_state);
+                            _next_scan_global_id[cpu_id] = (p->_global_id + 1) % num_process;
+                            p->_last_cpu = cpu_id;
+                            p->_running_cpu = cpu_id;
+                            p->_state = ProcState::RUNNING;
+                            cpu->set_cur_proc(p);
+                            cpu->reset_time_slice();
+                            proc::Context *cur_context = cpu->get_context();
+                            if(last_global_id != p->_global_id)
+                            {
+                                last_global_id = p->_global_id;
+                            }
+                            swtch(cur_context, &p->_context);
+                            ran_task = true;
+                            int refreshed_priority = get_highest_priority(cpu_id);
+                            if (!(priority == default_proc_prio && p->_priority < priority))
+                            {
+                                priority = refreshed_priority;
+                            }
+                            cpu->set_cur_proc(nullptr);
+                        }
+                        p->_lock.release();
+                    }
                 }
-                if (p->get_state() == ProcState::RUNNABLE && can_schedule_on_cpu(*p, cpu_id))
-                {
-                    // PCB 锁已经串行化了 RUNNABLE -> RUNNING 转换；再用显式
-                    // owner 字段把这个 SMP 不变量固化下来。若这里失败，说明有
-                    // 路径在任务尚未真正切出时错误地重新标记为了 RUNNABLE。
-                    assert(p->_running_cpu == -1,
-                           "scheduler: double-run pid=%d tid=%d gid=%d owner=%d claimant=%d state=%d",
-                           p->_pid,
-                           p->_tid,
-                           p->_global_id,
-                           p->_running_cpu,
-                           cpu_id,
-                           (int)p->_state);
-                    _next_scan_global_id[cpu_id] = (p->_global_id + 1) % num_process;
-                    p->_last_cpu = cpu_id;
-                    p->_running_cpu = cpu_id;
-                    p->_state = ProcState::RUNNING;
-                    cpu->set_cur_proc(p);
-                    proc::Context *cur_context = cpu->get_context();
+            };
+            // 保持原来的 round-robin 顺序：先扫描游标到表尾，再从表头回绕。
+            scan_active_range(scan_begin, num_process);
+            scan_active_range(0, scan_begin);
 
-                    // Debug
-                    //  uint64 sp = p->get_context()->sp; // 0x0000001ffffbf000;
-                    //  uint64 pa = (uint64)PTE2PA(mem::k_pagetable.kwalkaddr(sp).get_data());
-                    //  printf("sp: %p, kstack: %p,pa:%p\n", sp, p->_kstack,pa);
-                    //  printfCyan("[sche]  start_schedule here,p->addr:%x \n",Cpu::get_cpu()->get_cur_proc());
-                    if(last_global_id != p->_global_id)
-                    {
-                        last_global_id = p->_global_id;
-                        // printfRed("[sche]  switch to proc global_id: %d pid: %d tid: %d tgid: %d, name: %s\n", p->_global_id, p->_pid, p->_tid, p->_tgid, p->_name);
-                    }
-                    swtch(cur_context, &p->_context);
-                    // printf( "return from %d, name: %s\n", p->_global_id, p->_name );
-                    int refreshed_priority = get_highest_priority(cpu_id);
-                    if (!(priority == default_proc_prio && p->_priority < priority))
-                    {
-                        // 若本轮调度期间出现更高优先级的可运行任务，后续扫描应立即收窄过滤门槛。
-                        // 但当前任务刚从普通优先级提升到实时优先级时，保留本轮其它任务的运行机会，
-                        // 避免批量初始化阶段被第一个自提升任务独占。
-                        priority = refreshed_priority;
-                    }
-                    // bool flag = false;
-                    // for (Pcb *np = k_proc_pool; np < &k_proc_pool[num_process]; np++)
-                    // {
-                    //     if(np->_state == ProcState::UNUSED){
-                    //         flag = true;
-                    //         break;
-                    //     }
-                    //     // printf("[sche]  proc global_id: [%d], pid: [%d], parent: [%d], state: %d, name: %s\n", np->_global_id, np->_pid,  np->get_ppid(), (int)np->_state, np->_name);
-                    // }
-                    // if(flag == false){
-                    //     panic("no unused proc in pool, please check your code");
-                    // }
-                    cpu->set_cur_proc(nullptr);
-                }
-                p->_lock.release();
+            if (!ran_task)
+            {
+                /*
+                 * 没有本 CPU 可运行任务时，不再无休止扫描全局 PCB 表。
+                 * 定时器每 10ms 都会唤醒 CPU；任务在扫描与 idle 之间变为
+                 * RUNNABLE 的最坏调度延迟仍不超过一个 tick。
+                 */
+                Cpu::idle_until_interrupt();
             }
         }
     }
