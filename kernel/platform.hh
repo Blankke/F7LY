@@ -206,8 +206,12 @@ w_pmpaddr0(uint64 x)
 
 // use riscv's sv39 page table scheme.
 #define SATP_SV39 (8L << 60)
+#define SATP_ASID_SHIFT 44
+#define SATP_ASID_MASK 0xffffULL
 
 #define MAKE_SATP(pagetable) (SATP_SV39 | (((uint64)pagetable) >> 12))
+#define MAKE_SATP_ASID(pagetable, asid) \
+  (MAKE_SATP(pagetable) | ((((uint64)(asid)) & SATP_ASID_MASK) << SATP_ASID_SHIFT))
 
 // supervisor address translation and protection;
 // holds the address of the page table.

@@ -102,6 +102,7 @@ namespace proc
         void sleep(void *chan, SpinLock *lock);
         void wakeup(void *chan);
         void wakeup_one(Pcb *target, void *chan);
+        void wakeup_child_waiters(Pcb *parent);
         int wakeup2(uint64 uaddr, uint64 futex_key, int val, void *uaddr2, uint64 futex_key2, int val2);
 
         // ==================== 文件系统相关 ====================
@@ -148,6 +149,7 @@ namespace proc
         // 私有辅助函数
         bool is_target_child(Pcb *child, Pcb *parent, int child_pid, int option);
         void mark_thread_group_killed(Pcb *current, int fatal_signal = 0);
+        void terminate_exec_sibling_threads(Pcb *current);
     };
 
     bool has_active_file_leases();

@@ -33,8 +33,8 @@ extern "C" void uservec();
 extern "C" void handle_tlbr();
 extern "C" void handle_merr();
 // userret 在切到用户 PGDL 后仍处于内核特权级。第四个参数保留当前 PCB
-// trapframe 的内核直映地址，使寄存器恢复不依赖共享用户页表中的高地址映射。
-extern "C" void userret(uint64, uint64, uint64, uint64);
+// trapframe 的内核直映地址，第五个参数传入当前任务分配到的用户 ASID。
+extern "C" void userret(uint64, uint64, uint64, uint64, uint64);
 int mmap_handler(uint64 va, int cause);
 // 创建一个静态对象
 trap_manager trap_mgr;
@@ -45,6 +45,21 @@ namespace
   constexpr int k_default_time_slice_ticks = 1;
   constexpr uint32 k_loongarch_ecode_fpu_disabled = 0xf;
   constexpr uint32 k_loongarch_ecode_lsx_disabled = 0x10;
+  constexpr uint32 k_loongarch_asid_bits = 10;
+  constexpr uint32 k_loongarch_kernel_asid = 0;
+  static_assert(proc::num_process < (1U << k_loongarch_asid_bits),
+                "LoongArch 用户 ASID 数量必须覆盖全部 PCB 槽位");
+
+  inline uint32 loongarch_user_asid(const proc::Pcb *p)
+  {
+    const uint32 asid = p->_user_asid;
+    if (asid == k_loongarch_kernel_asid || asid >= (1U << k_loongarch_asid_bits))
+    {
+      panic("invalid LoongArch user ASID pid=%d tid=%d asid=%u",
+            p->_pid, p->_tid, asid);
+    }
+    return asid;
+  }
 
   // LoongArch 异常信息拆分：一级编码在 ESTAT[21:16]，二级编码在 ESTAT[30:22]。
   // 之前把 ecode=8 直接当成缺页，会把 ADEM（访存地址错误）误送进 mmap 懒分配路径。
@@ -63,13 +78,13 @@ namespace
     return ecode >= 0x1 && ecode <= 0x7;
   }
 
-  inline void loongarch_invalidate_user_tlb_page(uint64 va)
+  inline void loongarch_invalidate_user_tlb_page(uint32 asid, uint64 va)
   {
     // LoongArch 一个普通 TLB 表项覆盖相邻两页，Linux 也会按 8KB 对齐做单页失效。
     // 这里对“PTE 已合法存在、只是 TLB 内部残着无效项”的场景做最小失效，
     // 避免把它误判成 mmap 懒分配失败后直接送 SIGSEGV。
     uint64 pair_base = va & ~((PGSIZE << 1) - 1);
-    asm volatile("invtlb 0x6, $zero, %0" : : "r"(pair_base) : "memory");
+    asm volatile("invtlb 0x6, %0, %1" : : "r"(static_cast<uint64>(asid)), "r"(pair_base) : "memory");
   }
 
   inline void loongarch_ack_timer_interrupt()
@@ -542,7 +557,7 @@ void trap_manager::usertrap()
       {
         fault_pte.set_data(fault_pte.get_data() | loongarch::pte_dirty_m);
       }
-      loongarch_invalidate_user_tlb_page(badv);
+      loongarch_invalidate_user_tlb_page(loongarch_user_asid(p), badv);
       goto usertrap_page_fault_done;
     }
 
@@ -749,9 +764,11 @@ void trap_manager::usertrapret(void)
       panic("usertrapret: failed to map trapframe");
     }
   }
-  // TLB 是每核私有的。即使 PTE 已经存在，也要在当前 CPU 上失效该槽位，
-  // 防止 PCB 槽位复用后继续命中本核残留的旧 trapframe 翻译。
-  loongarch_invalidate_user_tlb_page(user_trapframe_va);
+  // trapframe 是 trap 入口切换回内核页表前唯一需要读取的用户页表映射。
+  // 保留 ASID+VA 精确失效作为 PCB/页表复用边界的最后一道保护；它不会像
+  // 旧的 invtlb op0 那样清空本 CPU 的全部用户翻译。
+  const uint32 user_asid = loongarch_user_asid(p);
+  loongarch_invalidate_user_tlb_page(user_asid, user_trapframe_va);
 
   // send syscalls, interrupts, and exceptions to uservec.S
   w_csr_eentry((uint64)uservec); // maybe todo
@@ -788,7 +805,8 @@ void trap_manager::usertrapret(void)
   userret(user_trapframe_va,
           pgdl,
           (p->_used_fpu ? 1 : 0) | (p->_used_lsx ? 2 : 0),
-          reinterpret_cast<uint64>(p->get_trapframe()));
+          reinterpret_cast<uint64>(p->get_trapframe()),
+          user_asid);
 }
 void trap_manager::machine_trap()
 {

@@ -89,8 +89,8 @@ void flush_local_range(uint64 start, uint64 size)
 {
     (void)start;
     (void)size;
-    // 首版以跨地址空间正确性优先。F7LY 当前统一使用 ASID=0，保守清空
-    // 本 CPU 全 TLB 可避免相邻双页项及 PGDL 切换窗口遗漏。
+    // 跨核页表更新和 PCB/ASID 槽位回收仍以正确性优先，保守清空本 CPU
+    // 全 TLB，避免相邻双页项以及任意用户 ASID 的历史翻译遗漏。
     asm volatile("dbar 0" ::: "memory");
     asm volatile("invtlb 0x0, $zero, $zero" ::: "memory");
     asm volatile("dbar 0" ::: "memory");

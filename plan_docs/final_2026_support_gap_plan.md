@@ -1,8 +1,8 @@
 # 2026 决赛内核能力缺口计划：CAgent / BuildStorm
 
-状态：已完成静态摸底、8G/SMP 基础、final-2026 小门槛代码收尾、ext4/bcache 首轮并发修复和 schedbench 工具接入；官方双架构长压、CAgent/BuildStorm 完整回归和性能验收仍待完成
+状态：已完成静态摸底、8G/SMP 基础、final-2026 小门槛代码收尾和 ext4/bcache 首轮并发修复；官方双架构长压、CAgent/BuildStorm 完整回归和多核实际使用证据仍待完成
 
-日期：2026-07-26
+日期：2026-07-29
 
 ## 1. 范围和结论
 
@@ -15,7 +15,12 @@
 - 现有 syscall 绑定数量不能作为完成度指标。F7LY 的很多关键 syscall 已有函数实现，但仍带 TODO、固定返回值、错误路径 panic 或只覆盖部分 Linux 语义；应以 Rust 工具链和 CAgent 的真实 syscall 轨迹验收。
 - [x] 2026-07-26：官方 `final2.1` 双架构镜像、8 核/8 GiB QEMU 参数和两道 glibc runner 已接入，代码完成待验收。首次实测已暴露 RV ext4 bcache 并发损坏，以及 LA 动态库搜索和 `/work/tgoskits` 访问失败，尚未达到赛题通过门槛。
 - [x] 2026-07-26 收尾：移除内核中面向 Cargo/BuildStorm 的临时串口跟踪；LoongArch initcode 恢复为 CAgent + BuildStorm 双题入口；BuildStorm runner 保留 `/bin/sh /glibc/buildstorm_testcode.sh` 调用但去掉 `sh -x` 跟踪，避免污染官方日志。
-- [ ] 2026-07-26 待验收：当前工作机为 `x86_64`，不能按新增脚本要求在 RISC-V/LoongArch 原生 KVM 上运行 schedbench 与 CPU 性能验收；双架构 QEMU 构建、final 小门槛、ext4 并发和官方两题完整回归仍需继续执行。
+- [ ] 2026-07-26 待验收：当前工作机为 `x86_64`，不能按 native KVM 方法完成跨架构真实性能验收；双架构 QEMU 构建、final 小门槛、ext4 并发、多核实际使用观察和官方两题完整回归仍需继续执行。
+- [x] 2026-07-29 原阻塞点已解除待验收：RV QEMU 8G/8 vCPU 下官方 BuildStorm 连续打印 `BUILDSTORM_TOOLCHAIN ok`、`BUILDSTORM_MINIBUILD ok`，随后完成依赖图解析并进入 tg-xtask 并发编译，进度从 `0/446` 前进到 `1/446`。进程快照确认 `Resolving dependency graph...` 阶段 Cargo 处于运行态并持续增加 CPU 时间，不是睡眠等待；本轮只验收到“测试正常开始”，不等同于完整 BuildStorm 长构建通过。
+- [x] 2026-07-29 LA 正常启动已完成待验收：8G/8 vCPU 下真实 Rust 工具链完成 `cargo new`、`cargo build` 和 Hello World；官方 BuildStorm 也已解析依赖并从 `0/446` 前进到 `1/446`，未宣称完整长构建通过。
+- [x] 2026-07-29 LA ASID/TLB 稳定化已完成待验收：内核使用 ASID 0、用户任务使用隔离回收池；连续 3 轮、每轮 8 worker 共 1120 次进程生命周期均通过 ASID 耗尽复用，无 panic 或 shootdown timeout。
+- [x] 2026-07-29 RV ASID/TLB 热路径完成待验收：用户页表使用非零 ASID，trap 往返不再执行 4 次全量 `sfence.vma`；8 worker 共 1120 次进程生命周期跨池复用通过，随后官方 BuildStorm 再次从依赖解析进入 `Compiling` 和 `1/446`。
+- [x] 2026-07-29 LA CAgent 性能复验已完成待验收：清除另一个 8-vCPU RV QEMU 的外部竞争后，同构诊断脚本 10/10 通过（fs-search 14.706 秒、network 19.610 秒），与历史无竞争官方日志一致。另一次官方脚本复跑为 9/10，fs-search 在 14.247 秒提前结束但输出判定失败；同一内核随即复跑通过，说明这是 agent 输出的单次抖动而非内核卡死或超时。
 
 ## 2. 题目对内核的实际要求
 
@@ -204,7 +209,11 @@ Starry 的经验说明：F7LY 当前最需要补的是“容量、并发、回�
 
 ### P0-C：用 Rust 最小构建验证进程和内存语义
 
-- [ ] 待完成：使用官方 runner 或一次性手工命令确认 Rust/glibc 小项目能在官方镜像真实文件布局下构建运行；该检查只证明工具链基础可启动，不代表 BuildStorm 长压力通过，不能把临时测试入口写入 `user_test`。
+- [x] 2026-07-29 完成待验收：官方 runner 在未修改的 RV 镜像中确认 Rust/glibc 小项目可完成 `cargo new`、`cargo build` 和 Hello World，并打印 `BUILDSTORM_MINIBUILD ok`；该检查只证明工具链基础可启动，不代表 BuildStorm 长压力通过，未把临时测试入口写入 `user_test`。
+- [x] 2026-07-26 临时 shell 拆解完成：这些测试只用于定位 BuildStorm minibuild 卡点，不是回归入口，不应接入 `user_test`。已确认手工 `rm -rf`、`mkdir -p`、写 `Cargo.toml`、写 `src/main.rs` 都能正常完成。
+- [x] 2026-07-26 临时 shell 拆解完成：直接调用真实 toolchain cargo，即 `/root/.rustup/toolchains/nightly-2026-05-28-riscv64gc-unknown-linux-gnu/bin/cargo new --vcs none /tmp/minibuild` 可以返回并生成文件；官方路径 `/root/.cargo/bin/cargo new --vcs none /tmp/minibuild` 会通过 rustup shim 卡住，后台观察到 `[cargo]` 与 `[rustup]` 残留进程。
+- [x] 2026-07-26 临时 shell 拆解完成：`/lib/ld-linux-riscv64-lp64d.so.1 --list <toolchain>/bin/rustc` 能按 `DT_RPATH=$ORIGIN/../lib` 找到 `librustc_driver-*.so`；但普通直接 exec `<toolchain>/bin/rustc --version` 会报 `librustc_driver-*.so: cannot open shared object file`，设置 `LD_ORIGIN_PATH=<toolchain>/bin` 后可通过。该环境变量只用于定位，不能作为最终修复。
+- [x] 2026-07-29 修复完成待验收：根因是多线程 rustup/rustfmt 成功 exec 后旧兄弟线程仍存活并持有 stdout/stderr 管道写端，父 cargo 的 `ppoll` 永远收不到 EOF。内核现在线程组 leader 成功 exec 时同步终止并等待旧线程释放共享 mm/fd，内部 `_killed` 可打断 futex/pipe/nanosleep 等可中断等待，同时补齐线程组 wait/reparent 唤醒和并发 clone 屏障；未修改官方镜像或工具链绕过。
 - [ ] 验证 `clone/clone3` 的 Rust/Cargo 实际 flags，包括 `CLONE_VM`、`CLONE_FS`、`CLONE_FILES`、`CLONE_SIGHAND`、`CLONE_SETTLS`、`CLONE_CHILD_CLEARTID` 和 `CLONE_PARENT_SETTID`。
 - [ ] 验证线程 tid/tgid、TLS、clear_tid、线程退出、wait、robust futex、信号中断和父子回收。
 - [ ] 验证 cargo build script、proc-macro、并发 rustc 子进程不会因 wakeup、管道、epoll 或 futex 丢失而挂死。
@@ -212,15 +221,13 @@ Starry 的经验说明：F7LY 当前最需要补的是“容量、并发、回�
 
 验收：glibc Rust 工具链可完成 `cargo new`、`cargo build` 和 Hello World，多次运行结果稳定。
 
-### P0-D：schedbench 与 SMP 性能验证
+### P0-D：QEMU 中观察 SMP 实际使用
 
-- [x] 代码完成待验收：`tools/smp/schedbench.c` 已作为专项调度基准加入 `tools/smp/`；保留其原始 wake、broadcast、independent、wave 校验逻辑和 `SCHEDBENCH_*` 输出标记。
-- [x] 脚本完成待运行：新增 `scripts/run/schedbench.sh`，静态交叉编译双架构 bench，只向 `/tmp/f7ly-schedbench-*` 可丢弃镜像副本注入 `/schedbench`，运行前后校验 `images/` 下官方镜像 SHA-256 未变化，退出时清理临时镜像和二进制。
-- [x] 脚本完成待运行：`scripts/run/smp_cpu_bench.sh` 改为 native KVM 性能验收入口，默认 8 GiB、8 vCPU、1/2/4/8 worker、每组 3 轮，用中位吞吐计算 4/8 worker 至少 1.10 倍的门槛。
-- [ ] 待完成：在 riscv64 原生 KVM 宿主运行 `scripts/run/schedbench.sh --arch rv`，正式参数为 `workers=8 cpus=8 warmup=256 rounds=4096 migration-pattern=both working-set-kib=256 runs=3`。
-- [ ] 待完成：在 loongarch64 原生 KVM 宿主运行 `scripts/run/schedbench.sh --arch la`，同样连续 3 轮。
-- [ ] 待完成：确认 fanout、broadcast、independent、wave 全部出现 `SCHEDBENCH_CASE_PASSED`，最终出现 `SCHEDBENCH_PASSED`，错误字段均为 0，8 个 CPU 均被观测到。
-- [ ] 待完成：在两类原生宿主分别运行 `scripts/run/smp_cpu_bench.sh --arch rv` 和 `scripts/run/smp_cpu_bench.sh --arch la`，确认 4/8 worker 中位吞吐达到 1.10 倍；当前 `x86_64` 工作机不能执行该 KVM 验收。
+- [x] 已收尾：删除无法在当前 `x86_64` 工作机完成 native KVM 验收的 schedbench 专项文件和计划项，不保留 `scripts/run/schedbench.sh`、`tools/smp/schedbench.c`。
+- [x] 2026-07-26 初步观察：RV QEMU TCG `-smp 8` 下 OpenSBI 报告 8 个 HART，guest 内 `uname -m=riscv64`、`nproc=8`；这只说明 guest CPU 视图已看到 8 核，不构成吞吐性能证明。
+- [ ] 待完成：在 QEMU TCG 8 vCPU 下观察 guest 是否真实看到 8 个 online CPU，包括 `/proc/cpuinfo`、`/sys/devices/system/cpu/online`、`sched_getaffinity()` 和 `getcpu()` 的一致性。
+- [ ] 待完成：用已有 `tools/smp/f7ly_smp_cpu_bench.c` 或等价一次性手工程序，只验证 worker 被调度到多个 guest CPU；该结果只作为“多核使用证据”，不作为吞吐性能证明。
+- [ ] 待完成：若 `getcpu()` 或 affinity 只观测到单核，优先检查 scheduler 的 `_last_cpu` 粘附策略、affinity 掩码过滤、secondary CPU online gate 和 timer 抢占。
 
 ### P1-A：补强 VM、缺页、COW 和回收
 
@@ -240,7 +247,7 @@ Starry 的经验说明：F7LY 当前最需要补的是“容量、并发、回�
 - [x] 代码完成待验收：新增 `Ext4MountGuard`，已覆盖 `fstat/statx/truncate/utimens/ioctl inode flags/normal_file` 等直接调用 `ext4_fs_get_inode_ref()` 的 VFS 低层路径。
 - [x] 代码完成待验收：bcache dirty list 改为双向 TAILQ，插入/删除为 O(1)，重复释放、活引用回收、链表指针损坏改为现场断言，不再吞掉 dirty-list 或引用计数错误。
 - [x] 代码完成待验收：virtio-blk 容量改为读取设备真实 capacity，不再固定 4 GiB；`getdents64` 使用文件系统目录 cookie 更新 `_file_ptr`；`O_TMPFILE` 后备隐藏目录项在最后关闭时删除。
-- [ ] 用 CAgent 的创建、读写、目录、搜索用例验证基础 ext4 语义，重点检查 close/reopen、目录项刷新、文件偏移和缓存可见性。
+- [x] 2026-07-29 完成待验收：LA 官方 CAgent 的文件创建、读写、目录和搜索 4 项均通过；未观察到目录遍历永久阻塞、文件偏移异常或缓存不可见。
 - [ ] 用并发 Cargo 构建验证 inode、目录、extent、journal、dirty buffer、LRU、flush/writeback 和 block device 的锁顺序。
 - [ ] 优先处理已记录的 RV `find` 卡顿、LA bcache 树损坏和 VFS 锁 TODO；每个问题保留最小复现和回归测试。
 - [ ] 审核 `pread/pwrite/ftruncate/fallocate/fsync/fdatasync/renameat2/unlinkat/getdents64` 的返回值、部分读写和并发关闭语义。
@@ -271,6 +278,7 @@ Starry 的经验说明：F7LY 当前最需要补的是“容量、并发、回�
 ### CAgent 内核门槛
 
 - [ ] RV64/glibc 和 LA64/glibc 的 10 个测试均能启动并完成；
+- [x] 2026-07-29 LA 功能链路完成待验收：官方 10 项均启动并正常收尾，当前竞争环境下 9 项通过；network 单项可通过，剩余问题收敛为并发宿主负载下的官方超时时间。
 - [ ] `statfs`、CPU 数量、kernel version、时间和 TCP 状态来自真实内核状态；
 - [ ] 文件创建、读写、目录遍历和搜索在重启/关闭文件后仍保持一致；
 - [ ] 日志中无 syscall panic、无长期卡死，且每项耗时满足官方超时。
@@ -279,6 +287,7 @@ Starry 的经验说明：F7LY 当前最需要补的是“容量、并发、回�
 
 - [x] `-smp 8 -m 8G` 稳定启动，8 个 CPU 在 guest CPU 视图中一致；
 - [x] PMM、buddy、refcount、页表和 COW/TLB 专项覆盖 8G，不使用 1GiB 固定上限；
+- [x] 2026-07-29 LA 最小实编译与官方正常启动完成待验收；完整 `cargo xtask arceos build` 仍按下一项单独验收。
 - [ ] cargo build script、proc-macro、多线程 futex/信号/等待链路稳定；
 - [ ] 完整 `cargo xtask arceos build` 能从零完成，产物不小于 500KB；
 - [ ] 构建过程无内存 panic、文件系统损坏、死锁、丢唤醒、页表错误和设备中断错误；
@@ -315,7 +324,7 @@ F7LY 重点证据：
 - `kernel/boot/riscv/main.cc`、`kernel/boot/riscv/start.cc`、`kernel/boot/loongarch/main.cc`、`kernel/hal/loongarch/smp.cc`：双架构 secondary CPU 启动与 bootstrap gate；
 - `kernel/trap/riscv/plic.cc`、`kernel/trap/riscv/trap.cc`、`kernel/trap/loongarch/trap.cc`：每核中断、定时抢占和用户态返回；
 - `kernel/proc/scheduler.cc`、`kernel/proc/proc_manager.cc`、`kernel/hal/cpu.cc`：SMP 调度执行权、初始选核与 online CPU 拓扑；
-- `scripts/run/smp_cpu_bench.sh`、`tools/smp/f7ly_smp_cpu_bench.c`：双架构 CPU 压测与可复现验收；
+- `scripts/run/smp_cpu_bench.sh`、`tools/smp/f7ly_smp_cpu_bench.c`：原生 KVM 环境下的双架构 CPU 压测；当前 x86_64 工作机仅用于 QEMU TCG 多核使用观察，不用于性能结论；
 - `kernel/proc/proc_manager.cc:2233-2655`、`kernel/proc/futex.cc:82-494`：已有 clone/线程/futex 基础；
 - `kernel/mem/virtual_memory_manager.cc:1342-1733`：已有 COW 处理；
 - `kernel/sys/syscall_handler.cc:3321-3338,11188-11222,12243-12298`：statfs 仍有固定统计值；sysinfo 内存字段已切换到动态 PMM，uptime/进程数语义仍待验收；

@@ -146,9 +146,9 @@
 // map kernel stacks beneath the trampframe,
 // each surrounded by invalid guard pages.
 #define SIG_TRAMPOLINE   (TRAPFRAME - PGSIZE)
-// LoongArch 的 SIG_TRAMPOLINE 位于 TRAPFRAME 下方。与 RISC-V 一样，用户
-// trapframe 不能再落进内核栈虚拟区：所有 CPU 复用 ASID=0 时，两个页表中
-// 相同 VA 的残留 TLB/reload 会把 uservec 的寄存器现场带到错误物理页。
+// LoongArch 的 SIG_TRAMPOLINE 位于 TRAPFRAME 下方。用户页表使用独立 ASID，
+// 但 trap 入口在切换到内核 ASID/PGDL 前仍需访问当前线程 trapframe；继续让
+// trapframe 避开内核栈虚拟区，可保持这个极窄窗口的地址契约清晰且可审计。
 // 先跨过整个 NPROC 内核栈区域，再向下安排每线程 trapframe。
 #define KSTACK_REGION_BOTTOM (SIG_TRAMPOLINE - ((NPROC * KSTACK_TOTAL_PAGES - KSTACK_GUARD_PAGES) * PGSIZE))
 #define USER_TRAPFRAME_TOP KSTACK_REGION_BOTTOM

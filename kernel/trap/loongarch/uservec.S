@@ -175,8 +175,10 @@ uservec:
 
         # restore kernel page table from p->trapframe->kernel_pgdl
         ld.d   $t1, $a0, 280
+        # 用户翻译使用非零 ASID；进入内核后切回保留的 ASID 0。内核映射
+        # 的一致性由页表更新路径的 shootdown 保证，无需每次 trap 清空全 TLB。
+        csrwr  $zero, LOONGARCH_CSR_ASID
         csrwr  $t1, LOONGARCH_CSR_PGDL
-        invtlb 0x0,$zero,$zero
 	    li.d   $fp, 0
 
 	    # jump to usertrap(), which does not return
@@ -184,13 +186,14 @@ uservec:
 
 .globl userret
 userret:
-        # userret(trapframe_va, pagetable, used_fpu, kernel_trapframe)
+        # userret(trapframe_va, pagetable, used_fpu, kernel_trapframe, user_asid)
         # switch from kernel to user.
         # usertrapret() calls here.
         # a0: current thread's trapframe VA, in user page table.
         # a1: user page table, for pgdl.
         # a2: whether this thread has enabled user FPU state.
         # a3: current thread trapframe's kernel direct-map address.
+        # a4: user ASID allocated for the current task.
         #
         # CLONE_VM 线程共享用户 PGDL。即便每个线程有专属 trapframe VA，
         # 在切换 PGDL 与 TLB refill 的极窄窗口里，也不应让“恢复用户寄存器”
@@ -198,9 +201,10 @@ userret:
         # 另一个现场。a0 仍只用于保存下一次 uservec 所需的专属 VA；所有实际
         # trapframe 读取均通过 a3 的内核直映地址完成。
 
-        # switch to the user page table.
+        # 先安装用户 ASID，再切用户页表。userret 位于 DMW 直映地址，切换
+        # 过程中不依赖任何 TLB 翻译；旧地址空间翻译由 ASID 隔离。
+        csrwr  $a4, LOONGARCH_CSR_ASID
         csrwr  $a1, LOONGARCH_CSR_PGDL
-        invtlb 0x0,$zero,$zero
 
         # a2 的低两位分别表示 FPE/SXE。load bias 和调度迁核都不影响这份
         # 每线程状态；临近 ertn 时才把对应扩展单元交还给用户。

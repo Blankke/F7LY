@@ -144,6 +144,9 @@ namespace proc
         _cpu_mask.fill(); // 设置所有可用CPU位
         _last_cpu = 0;
         _running_cpu = -1;
+#if defined(RISCV) || defined(LOONGARCH)
+        _user_asid = 0;
+#endif
 
         /****************************************************************************************
          * 内存管理
@@ -257,6 +260,9 @@ namespace proc
         _cpu_mask = CpuMask{possible_mask != 0 ? possible_mask : 1};
         _last_cpu = 0;
         _running_cpu = -1;
+#if defined(RISCV) || defined(LOONGARCH)
+        _user_asid = 0;
+#endif
         
         // 注意：不在init中创建ProcessMemoryManager
         // ProcessMemoryManager的创建延迟到具体需要时（fork、user_init、execve等）

@@ -2,6 +2,7 @@
 #include "capability.hh"
 #include "futex.hh"  // 添加futex头文件，用于robust futex清理
 #include "hal/cpu.hh"
+#include "hal/tlb_shootdown.hh"
 #include "physical_memory_manager.hh"
 #include "klib.hh"
 #include "virtual_memory_manager.hh"
@@ -66,6 +67,103 @@ namespace proc
 {
     namespace
     {
+#if defined(RISCV) || defined(LOONGARCH)
+        // 两个评测架构都至少使用 10 位用户 ASID；0 永久保留给内核页表。
+        constexpr uint32 k_user_asid_count = 1U << 10;
+        constexpr uint32 k_first_user_asid = 1;
+        static_assert(num_process < k_user_asid_count,
+                      "用户 ASID 数量必须覆盖全部 PCB 槽位");
+        SpinLock g_user_asid_lock;
+        bool g_user_asid_active[k_user_asid_count]{};
+        bool g_user_asid_retired[k_user_asid_count]{};
+        uint64 g_user_asid_retired_epoch[k_user_asid_count]{};
+        uint64 g_user_asid_retirement_epoch = 0;
+        bool g_user_asid_reclaiming = false;
+        uint32 g_next_user_asid = k_first_user_asid;
+
+        uint32 allocate_user_asid()
+        {
+            for (;;)
+            {
+                g_user_asid_lock.acquire();
+                for (uint32 offset = 0; offset < k_user_asid_count - 1; ++offset)
+                {
+                    const uint32 asid =
+                        k_first_user_asid +
+                        ((g_next_user_asid - k_first_user_asid + offset) %
+                         (k_user_asid_count - 1));
+                    if (g_user_asid_active[asid] || g_user_asid_retired[asid])
+                    {
+                        continue;
+                    }
+
+                    g_user_asid_active[asid] = true;
+                    g_next_user_asid =
+                        asid + 1 < k_user_asid_count
+                            ? asid + 1
+                            : k_first_user_asid;
+                    g_user_asid_lock.release();
+                    return asid;
+                }
+
+                /*
+                 * 最多同时存在 NPROC(512) 个 PCB，而硬件提供 1023 个用户
+                 * ASID。没有干净 ASID 时，说明隔离队列已积累了大量已退出
+                 * 地址空间。全核失效不能持有 ASID 锁：远端 CPU 可能正在
+                 * freeproc() 中等待同一把锁，进而无法确认 shootdown。
+                 *
+                 * retirement epoch 把回收划成两个阶段。失效前已经退休的
+                 * ASID 可在失效完成后复用；失效期间刚退休的 ASID epoch
+                 * 更大，必须继续隔离到下一轮，避免清掉其退出后残留的翻译。
+                 */
+                if (g_user_asid_reclaiming)
+                {
+                    g_user_asid_lock.release();
+                    // 调用方仍持有 PCB 锁、处于关中断状态，主动服务对端 IPI，
+                    // 让正在进行的全核失效能够完成。
+                    hal::tlb::poll_pending();
+                    asm volatile("nop");
+                    continue;
+                }
+
+                g_user_asid_reclaiming = true;
+                const uint64 reclaim_epoch = g_user_asid_retirement_epoch;
+                g_user_asid_lock.release();
+
+                hal::tlb::flush_all_cpus();
+
+                g_user_asid_lock.acquire();
+                for (uint32 asid = k_first_user_asid;
+                     asid < k_user_asid_count; ++asid)
+                {
+                    if (!g_user_asid_active[asid] &&
+                        g_user_asid_retired[asid] &&
+                        g_user_asid_retired_epoch[asid] <= reclaim_epoch)
+                    {
+                        g_user_asid_retired[asid] = false;
+                        g_user_asid_retired_epoch[asid] = 0;
+                    }
+                }
+                g_user_asid_reclaiming = false;
+                g_user_asid_lock.release();
+            }
+        }
+
+        void retire_user_asid(uint32 asid)
+        {
+            if (asid < k_first_user_asid || asid >= k_user_asid_count)
+            {
+                return;
+            }
+
+            g_user_asid_lock.acquire();
+            g_user_asid_active[asid] = false;
+            g_user_asid_retired[asid] = true;
+            g_user_asid_retired_epoch[asid] = ++g_user_asid_retirement_epoch;
+            g_user_asid_lock.release();
+        }
+#endif
+
 #ifdef RISCV
         constexpr uint64 k_min_kernel_file_ptr = KERNBASE;
 #elif defined(LOONGARCH)
@@ -1024,6 +1122,15 @@ namespace proc
         _ns_lock.init("namespace");
         g_file_lease_lock.init("file_lease");
         g_active_file_lease_count = 0;
+#if defined(RISCV) || defined(LOONGARCH)
+        g_user_asid_lock.init("user_asid");
+        memset(g_user_asid_active, 0, sizeof(g_user_asid_active));
+        memset(g_user_asid_retired, 0, sizeof(g_user_asid_retired));
+        memset(g_user_asid_retired_epoch, 0, sizeof(g_user_asid_retired_epoch));
+        g_user_asid_retirement_epoch = 0;
+        g_user_asid_reclaiming = false;
+        g_next_user_asid = k_first_user_asid;
+#endif
         for (uint i = 0; i < num_process; ++i)
         {
             Pcb &p = k_proc_pool[i];
@@ -1135,6 +1242,9 @@ namespace proc
                 /****************************************************************************************
                  * 基本进程标识和状态管理初始化
                  ****************************************************************************************/
+#if defined(RISCV) || defined(LOONGARCH)
+                p->_user_asid = allocate_user_asid();
+#endif
                 k_pm.alloc_pid(p);           // 分配全局唯一的进程ID
                 k_pm.alloc_tid(p);           // 分配线程ID（单线程进程中等于PID）
                 p->_state = ProcState::USED; // 标记进程控制块为已使用
@@ -1378,6 +1488,16 @@ namespace proc
             mem::k_pmm.free_page(p->_trapframe);
             p->_trapframe = nullptr;
         }
+
+#if defined(RISCV) || defined(LOONGARCH)
+        /*
+         * 已退出任务不会再以这个 ASID 返回用户态。先放入隔离队列，等池耗尽
+         * 后统一全核失效再复用；因此这里可以安全释放 trapframe，而无需让
+         * 每个短进程退出都发起一次昂贵且可能并发的 shootdown。
+         */
+        retire_user_asid(p->_user_asid);
+        p->_user_asid = 0;
+#endif
 
         // printf("[freeproc] Reclaiming PCB for process %s pid %d\n", p->_name, p->_pid);
 
@@ -2245,6 +2365,15 @@ namespace proc
                               uint64 ctid, bool is_clone3, int exit_signal)
     {
         Pcb *p = get_cur_pcb();
+        if (p == nullptr || p->_killed || p->_exiting)
+        {
+            /*
+             * exit_group/exec 正在终止线程组时，不允许当前成员再派生新任务。
+             * 否则新线程可能在终止扫描之后才进入进程池，继续持有旧 mm/fd。
+             */
+            return syscall::SYS_EAGAIN;
+        }
+
         Pcb *np = fork(p, flags, stack_ptr, ctid, is_clone3, exit_signal);
         if (np == nullptr)
         {
@@ -2363,6 +2492,17 @@ namespace proc
         if ((np = alloc_proc()) == nullptr)
         {
             return nullptr;
+        }
+
+        /*
+         * CLONE_THREAD 的组身份必须在 PCB 对其它 CPU 可见后尽早登记。
+         * exec 的线程组收尾会按 tgid 扫描进程池；若等到 fork 尾部才填写，
+         * 并发 clone 可能暂时伪装成独立进程并逃过终止屏障。
+         */
+        if (flags & syscall::CLONE_THREAD)
+        {
+            np->_tgid = p->_tgid;
+            np->_pid = p->_pid;
         }
 
         // 拷贝父进程的陷阱帧，而不是直接指向，后面有可能会修改
@@ -2773,6 +2913,18 @@ namespace proc
             np->_clear_tid_addr = ctid;
         }
 
+        if (p->_killed || p->_exiting)
+        {
+            /*
+             * 终止请求可能在 clone 入口检查之后到达。发布新任务前再做一次检查，
+             * 让 exit_group 的单次扫描和 exec 的循环屏障都不会漏掉尚未 RUNNABLE
+             * 的并发创建任务。
+             */
+            freeproc_creation_failed(np);
+            np->_lock.release();
+            return nullptr;
+        }
+
         if ((flags & syscall::CLONE_THREAD) == 0 && np->_parent != nullptr)
         {
             // 只有普通子进程需要参与父进程 reparent/wait 语义；线程不进入 wait4 子进程集合。
@@ -2956,7 +3108,9 @@ namespace proc
 
                 // 检查是否是目标子进程
                 if (!is_target_child(np, p, child_pid, option))
+                {
                     continue;
+                }
 
                 np->_lock.acquire();
                 found_children = true;
@@ -3058,10 +3212,26 @@ namespace proc
     {
         if (child == nullptr || parent == nullptr ||
             child->_state == ProcState::UNUSED ||
-            child->_pid != child->_tid ||
-            child->_parent != parent)
+            child->_pid != child->_tid)
         {
             return false;
+        }
+
+        /*
+         * Linux 默认允许线程组内任意线程等待本线程组其它线程创建的子进程；
+         * 只有 __WNOTHREAD 才收窄为“必须是当前线程本人创建的子进程”。
+         * Rust/Cargo 这类多线程运行时会在线程池与子进程管理之间切换，不能把
+         * wait 集合硬绑到单个 PCB。
+         */
+        if ((option & syscall::__WNOTHREAD) != 0)
+        {
+            if (child->_parent != parent)
+                return false;
+        }
+        else
+        {
+            if (child->_parent == nullptr || child->_parent->_tgid != parent->_tgid)
+                return false;
         }
 
         // Linux 默认只等待以 SIGCHLD 通知父进程的普通子进程。
@@ -3124,7 +3294,9 @@ namespace proc
             {
                 Pcb *child = &k_proc_pool[i];
                 if (!is_target_child(child, parent, child_selector, option))
+                {
                     continue;
+                }
 
                 found_children = true;
                 child->_lock.acquire();
@@ -3246,7 +3418,8 @@ namespace proc
                 // 必须打断这个等待状态，否则 pthread_join 一类路径可能被唤醒后又睡回去。
                 p->_futex_addr = nullptr;
                 p->_futex_key = 0;
-                if (p->_state == ProcState::SLEEPING)
+                if (p->_state == ProcState::SLEEPING ||
+                    p->_state == ProcState::STOPPED)
                 {
                     p->_state = ProcState::RUNNABLE;
                 }
@@ -3256,6 +3429,71 @@ namespace proc
 
         _wait_lock.release();
     }
+
+    void ProcessManager::terminate_exec_sibling_threads(Pcb *current)
+    {
+        if (current == nullptr || current->_pid != current->_tid)
+        {
+            /*
+             * 当前 PCB 模型尚未实现 Linux de_thread() 的 leader 身份迁移。
+             * 非 leader exec 沿用现状；不能在这里等待旧 leader，否则它会按
+             * 普通进程进入 ZOMBIE 而无法由本线程回收，形成内核死锁。
+             */
+            return;
+        }
+
+        const int tgid = current->_tgid;
+        while (true)
+        {
+            bool has_sibling = false;
+            _wait_lock.acquire();
+
+            for (uint i = 0; i < num_process; ++i)
+            {
+                Pcb *sibling = &k_proc_pool[i];
+                if (sibling == current ||
+                    sibling->_state == ProcState::UNUSED ||
+                    sibling->_tgid != tgid)
+                {
+                    continue;
+                }
+
+                sibling->_lock.acquire();
+                if (sibling->_state != ProcState::UNUSED &&
+                    sibling->_tgid == tgid)
+                {
+                    has_sibling = true;
+                    if (sibling->_state != ProcState::ZOMBIE)
+                    {
+                        sibling->_killed = 1;
+                        sibling->_futex_addr = nullptr;
+                        sibling->_futex_key = 0;
+                        if (sibling->_state == ProcState::SLEEPING ||
+                            sibling->_state == ProcState::STOPPED)
+                        {
+                            sibling->_state = ProcState::RUNNABLE;
+                        }
+                    }
+                }
+                sibling->_lock.release();
+            }
+
+            if (!has_sibling)
+            {
+                _wait_lock.release();
+                return;
+            }
+
+            /*
+             * 旧线程与当前线程仍共享 mm/fd。必须等非 leader 线程走完
+             * exit_proc() 并自动回收 PCB，才能关闭 CLOEXEC fd 和替换地址空间。
+             * 扫描与 sleep 都受 _wait_lock 保护，退出方不会在两者之间丢唤醒。
+             */
+            sleep(current, &_wait_lock);
+            _wait_lock.release();
+        }
+    }
+
     /// @brief 将指定文件中的一段内容加载到页表映射的虚拟内存中。
     ///
     /// 此函数用于将文件 `de` 中从 `offset` 开始的 `size` 字节数据，
@@ -3446,6 +3684,8 @@ namespace proc
             // futex、mm/fd/sighand 引用释放，所以这里可以直接把非主线程 PCB 归还，
             // 避免短生命周期线程堆积为不可回收僵尸。
             p->_state = ProcState::ZOMBIE;
+            // exec leader 可能正在等待本线程释放共享 mm/fd，回收前按 tgid 唤醒它。
+            wakeup_child_waiters(p);
             freeproc(p);
             _wait_lock.release();
             Cpu::pop_intr_off();
@@ -3516,8 +3756,13 @@ namespace proc
                 panic("auto_reap exit: unreachable");
             }
 
-            // 唤醒父进程（可能在 wait() 中阻塞）
-            wakeup(p->_parent);
+            /*
+             * wait4()/waitid() 默认允许线程组内任意线程收割同组线程创建的子进程。
+             * 因此退出事件不能只唤醒 child->_parent 指向的创建线程；真正调用 wait
+             * 的可能是同组另一线程。所有等待者都睡在各自 PCB 地址上，这里统一唤醒
+             * 父线程组的 child-wait 等待者，避免 cargo 等多线程运行时漏掉 zombie。
+             */
+            wakeup_child_waiters(p->_parent);
         }
 
         _wait_lock.release();
@@ -3566,31 +3811,60 @@ namespace proc
         exit_proc(p);
     }
 
-    /// @brief Pass p's abandoned children to init.
-    /// @param p The parent process whose children are to be reparented.
-    /// p是即将去世的父亲，他的儿子们马上要成为孤儿，我们要让init来收养他们。
+    /// @brief 转交即将退出任务的子进程。
+    /// @param p 即将退出的父任务。
     void ProcessManager::reparent(Pcb *p)
     {
-        Pcb *pp;
+        Pcb *new_parent = _init_proc;
         bool moved_child = false;
+
         _wait_lock.acquire();
+
+        /*
+         * Linux 的子进程等待语义属于整个线程组。创建子进程的工作线程退出时，
+         * 应优先把子进程交给同线程组仍存活的线程，而不是直接交给 init；
+         * 否则同组的 wait4()/waitid() 会突然得到 ECHILD。
+         */
+        for (uint i = 0; i < num_process; ++i)
+        {
+            Pcb *candidate = &k_proc_pool[i];
+            if (candidate == p ||
+                candidate->_tgid != p->_tgid ||
+                candidate->_state == ProcState::UNUSED ||
+                candidate->_state == ProcState::ZOMBIE ||
+                candidate->_exiting)
+            {
+                continue;
+            }
+
+            new_parent = candidate;
+            if (candidate->_tid == candidate->_tgid)
+                break;
+        }
+
         for (uint i = 0; i < num_process; i++)
         {
-            pp = &k_proc_pool[(_last_alloc_proc_gid + i) % num_process];
+            Pcb *pp = &k_proc_pool[(_last_alloc_proc_gid + i) % num_process];
             if (pp->_parent == p)
             {
                 pp->_lock.acquire();
-                pp->_parent = _init_proc;
+                pp->_parent = new_parent;
+                pp->_ppid = new_parent != nullptr ? new_parent->_pid : 0;
                 pp->_lock.release();
                 moved_child = true;
             }
         }
         p->_has_child_tasks = false;
-        if (moved_child && _init_proc != nullptr)
+        if (moved_child && new_parent != nullptr)
         {
-            _init_proc->_has_child_tasks = true;
+            new_parent->_has_child_tasks = true;
         }
         _wait_lock.release();
+
+        if (moved_child && new_parent != nullptr)
+        {
+            wakeup_child_waiters(new_parent);
+        }
     }
     /// @brief 当前进程或线程退出（只退出自己）
     /// @param state   调用 do_exit 处理退出逻辑
@@ -3614,7 +3888,6 @@ namespace proc
         //        cp->_tgid, cp->_pid, status);
 
         mark_thread_group_killed(cp);
-
         // printf("[exit_group] Current thread pid %d exiting normally\n", cp->_pid);
 
         // 当前线程正常退出，其他线程会在调度时检查killed标志并自行退出
@@ -3703,6 +3976,32 @@ namespace proc
             target->_state = ProcState::RUNNABLE;
         }
         target->_lock.release();
+    }
+
+    void ProcessManager::wakeup_child_waiters(Pcb *parent)
+    {
+        if (parent == nullptr)
+        {
+            return;
+        }
+
+        const int parent_tgid = parent->_tgid;
+        for (uint i = 0; i < num_process; ++i)
+        {
+            Pcb *waiter = &k_proc_pool[i];
+            if (waiter->_state == ProcState::UNUSED ||
+                waiter->_tgid != parent_tgid)
+            {
+                continue;
+            }
+
+            /*
+             * wait4()/waitid() 以当前线程自己的 PCB 作为 sleep channel。
+             * 同组线程共享可等待子进程集合，但不共享 PCB，因此逐个唤醒。
+             * 带 __WNOTHREAD 的等待者也在其中；它醒来后会按选项重新筛选。
+             */
+            wakeup_one(waiter, waiter);
+        }
     }
 
     int ProcessManager::wakeup2(uint64 uaddr, uint64 futex_key, int val, void *uaddr2, uint64 futex_key2, int val2)
@@ -6820,13 +7119,7 @@ namespace proc
             CLEANUP_AND_RETURN(-EFAULT);
         }
 
-        if (!reset_signal_state_for_exec(proc))
-        {
-            CLEANUP_AND_RETURN(-ENOMEM);
-        }
-
-        // 步骤13: 保存程序名用于调试
-        // 从路径中提取文件名
+        // 提前准备提交阶段使用的程序名，避免终止旧线程后再做字符串切分。
         size_t last_slash = ab_path.find_last_of('/');
         eastl::string filename;
         if (last_slash != eastl::string::npos)
@@ -6838,18 +7131,46 @@ namespace proc
             filename = ab_path; // 如果没有'/'，整个路径就是文件名
         }
 
-        // 使用safestrcpy将文件名安全地拷贝到进程名称中
-        // 注意：由于Pcb类没有提供set_name()函数，这里直接访问_name成员
+        // 检查是否有段被记录
+        if (new_mm->prog_section_count == 0)
+        {
+            printfYellow("execve: warning - no program sections were recorded\n");
+            // 为兼容性添加一个总段，使用highest_addr作为大小参考
+            new_mm->add_program_section((void *)0, PGROUNDUP(highest_addr), "fallback_program");
+        }
+
+        // 在所有已分配的内存区域之后初始化堆
+        new_mm->init_heap(PGROUNDUP(highest_addr));
+        if (!new_mm->ensure_special_mappings())
+        {
+            printfRed("execve: special user pagetable mappings missing after image build\n");
+            CLEANUP_AND_RETURN(-ENOMEM);
+        }
+
+        /*
+         * 至此新 ELF、用户栈、堆和特殊映射都已完整建立。信号表私有化是最后一个
+         * 可能返回失败的步骤；只有它也成功，才进入不可回滚的线程组提交阶段。
+         */
+        if (!reset_signal_state_for_exec(proc))
+        {
+            CLEANUP_AND_RETURN(-ENOMEM);
+        }
+
+        /*
+         * Linux exec 会销毁同线程组的其它线程。旧线程可能仍持有共享 fd 表中的
+         * 管道写端；若只置 killed 后立刻提交，新程序的父进程会永远等不到 EOF。
+         */
+        terminate_exec_sibling_threads(proc);
+
+        // 步骤13: 提交程序名和可见可执行路径。
         safestrcpy(proc->_name, filename.c_str(), sizeof(proc->_name));
         proc->exe = ab_path;
 
         // ========== 第七阶段：配置进程资源限制 ==========
-        // 设置栈大小限制
-        // 注意：由于Pcb类没有提供通用的set_rlimit()函数，这里直接访问_rlim_vec
         proc->_rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_cur =
             proc->_rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_max = sp - stackbase;
-        // 处理F_DUPFD_CLOEXEC标志位，关闭设置了该标志的文件描述符
-        // 注意：这里直接访问_ofile结构是因为这是execve的特定操作
+
+        // 旧线程已全部退出，现在可以安全提交 FD_CLOEXEC，避免共享 fd 表竞态。
         uint exec_fd_scan_limit = proc->_ofile != nullptr ? proc->_ofile->_highest_fd_plus_one : 0;
         for (int i = 0; i < (int)exec_fd_scan_limit; i++)
         {
@@ -6875,8 +7196,7 @@ namespace proc
         }
 
         // ========== 第八阶段：替换进程映像 ==========
-        // 注意：execve保持进程的身份信息不变，包括PID、PGID、SID、UID/GID等
-        // 这符合POSIX标准：execve只替换进程的内存映像，不改变进程的身份标识
+        // execve保持PID、PGID、SID、UID/GID等进程身份，只替换内存映像。
 
         // 使用PCB的cleanup_memory_manager进行完整的内存清理
         // 这会正确处理引用计数并释放ProcessMemoryManager对象
@@ -6884,22 +7204,6 @@ namespace proc
 
         // 注意：new_mm已经在第二阶段创建，这里直接使用
         // new_pt已经设置在new_mm->pagetable中
-
-        // 检查是否有段被记录
-        if (new_mm->prog_section_count == 0)
-        {
-            printfYellow("execve: warning - no program sections were recorded\n");
-            // 为兼容性添加一个总段，使用highest_addr作为大小参考
-            new_mm->add_program_section((void *)0, PGROUNDUP(highest_addr), "fallback_program");
-        }
-
-        // 在所有已分配的内存区域之后初始化堆
-        new_mm->init_heap(PGROUNDUP(highest_addr));
-        if (!new_mm->ensure_special_mappings())
-        {
-            printfRed("execve: special user pagetable mappings missing after image build\n");
-            CLEANUP_AND_RETURN(-ENOMEM);
-        }
 
         // 完成新内存管理器的设置后，绑定到当前PCB
         proc->set_memory_manager(new_mm);

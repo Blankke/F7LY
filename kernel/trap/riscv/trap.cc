@@ -36,6 +36,20 @@ namespace
 {
   // 单核调度使用固定 tick 时间片，确保长时间运行的用户/内核态任务都能被周期性抢占。
   constexpr int k_default_time_slice_ticks = 1;
+  constexpr uint32 k_riscv_user_asid_count = 1U << 10;
+  static_assert(proc::num_process < k_riscv_user_asid_count,
+                "RISC-V 用户 ASID 数量必须覆盖全部 PCB 槽位");
+
+  inline uint32 riscv_user_asid(const proc::Pcb *p)
+  {
+    const uint32 asid = p->_user_asid;
+    if (asid == 0 || asid >= k_riscv_user_asid_count)
+    {
+      panic("invalid RISC-V user ASID pid=%d tid=%d asid=%u",
+            p->_pid, p->_tid, asid);
+    }
+    return asid;
+  }
 }
 
 // 创建一个静态对象
@@ -483,7 +497,9 @@ void trap_manager::usertrapret()
   // debug
   // printfYellow("[usertrapret]user pagetable addr: %p\n", p->_pt.get_base());
 
-  uint64 satp = MAKE_SATP(p->get_pagetable()->get_base());
+  // ASID 0 保留给内核；用户地址空间在回收池完成全核 flush 前不会复用
+  // 非零 ASID，因此 trap 热路径只需切换 satp，无需每次清空本 hart 全 TLB。
+  uint64 satp = MAKE_SATP_ASID(p->get_pagetable()->get_base(), riscv_user_asid(p));
   // debug
 
   uint64 fn = TRAMPOLINE + (userret - trampoline);

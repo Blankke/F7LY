@@ -892,7 +892,15 @@ namespace proc
 
             bool has_fatal_signal_pending(Pcb *p)
             {
-                if (p == nullptr || p->_signal == 0)
+                if (p == nullptr)
+                {
+                    return false;
+                }
+                if (p->_killed)
+                {
+                    return true;
+                }
+                if (p->_signal == 0)
                 {
                     return false;
                 }
@@ -947,7 +955,20 @@ namespace proc
 
             bool has_unmasked_signal_pending(Pcb *p)
             {
-                if (p == nullptr || p->_signal == 0)
+                if (p == nullptr)
+                {
+                    return false;
+                }
+                /*
+                 * _killed 是内核内部的不可屏蔽终止请求。即使没有对应的用户可见
+                 * pending signal，也必须打断 futex/nanosleep/pipe 等可中断等待，
+                 * 让任务返回 trap 统一完成退出。
+                 */
+                if (p->_killed)
+                {
+                    return true;
+                }
+                if (p->_signal == 0)
                 {
                     return false;
                 }
@@ -981,7 +1002,15 @@ namespace proc
 
             bool should_interrupt_blocking_syscall(Pcb *p)
             {
-                if (p == nullptr || p->_signal == 0)
+                if (p == nullptr)
+                {
+                    return false;
+                }
+                if (p->_killed)
+                {
+                    return true;
+                }
+                if (p->_signal == 0)
                 {
                     return false;
                 }

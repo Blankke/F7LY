@@ -190,6 +190,11 @@ namespace proc
         // 该字段只在持有 _lock 时读写，是 SMP 调度状态机的硬性不变量：一个
         // PCB 绝不能同时在两个 CPU 上运行，否则 trapframe 与内核栈会被并发覆盖。
         int _running_cpu;
+#if defined(RISCV) || defined(LOONGARCH)
+        // ASID 0 保留给内核。RV/LA 用户任务共用相同的隔离回收契约：
+        // 全核 TLB flush 完成前绝不复用，避免 PCB 槽位继承旧地址空间翻译。
+        uint32 _user_asid;
+#endif
 
         /****************************************************************************************
          * 内存管理

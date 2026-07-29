@@ -75,11 +75,10 @@ uservec:
 
         # restore kernel page table from p->trapframe->kernel_satp
         ld t1, 0(a0)
-        sfence.vma zero, zero
+        # 用户页表使用隔离的非零 ASID，内核页表固定使用 ASID 0。
+        # 地址空间复用前由 ASID 回收池执行全核 sfence，无需在每次 trap
+        # 往返时清空本 hart 全部 TLB。
         csrw satp, t1
-
-        # sfence.vma zero, zero
-        sfence.vma zero, zero
 
         # a0 is no longer valid, since the kernel page
         # table does not specially map p->tf.
@@ -95,13 +94,8 @@ userret:
         # a0: current thread's trapframe VA, in user page table.
         # a1: user page table, for satp.
 
-        # switch to the user page table.
-
-        sfence.vma zero, zero
+        # switch to the user page table and its isolated non-zero ASID.
         csrw satp, a1
-
-        # sfence.vma zero, zero
-        sfence.vma zero, zero
 
         # put the saved user a0 in sscratch, so we
         # can swap it with our a0 (trapframe VA) in the last step.
