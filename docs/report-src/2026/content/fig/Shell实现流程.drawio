@@ -1,0 +1,53 @@
+<mxfile host="Electron">
+  <diagram id="shell-workflow" name="Shell 实现流程">
+    <mxGraphModel dx="1212" dy="772" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1200" pageHeight="650" background="#ffffff" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="kernel" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=18;fillColor=#f8cecc;strokeColor=#b85450;strokeWidth=2;shadow=1;" value="F7LY&amp;nbsp;&lt;b&gt;挂载&lt;/b&gt;" vertex="1">
+          <mxGeometry height="85" width="170" x="485" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="rootfs" parent="1" style="swimlane;startSize=40;rounded=1;whiteSpace=wrap;html=1;dashed=1;dashPattern=8 8;fontFamily=Comic Sans MS;fontSize=19;fontStyle=1;fillColor=#fff2cc;strokeColor=#d6b656;container=1;pointerEvents=0;labelBorderColor=none;textShadow=0;gradientColor=none;opacity=90;swimlaneFillColor=#FFFDF2;" value="rootfs 镜像" vertex="1">
+          <mxGeometry height="300" width="400" x="370" y="150" as="geometry" />
+        </mxCell>
+        <mxCell id="busybox" parent="rootfs" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=18;fillColor=#ffe6cc;strokeColor=#d79b00;strokeWidth=2;shadow=1;" value="📦&#xa;&lt;b&gt;/bin/busybox&lt;/b&gt;&#xa;sh -i" vertex="1">
+          <mxGeometry height="90" width="210" x="95" y="65" as="geometry" />
+        </mxCell>
+        <mxCell id="tools" parent="rootfs" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontFamily=Comic Sans MS;fontSize=15;fontStyle=1;fontColor=#555555;" value="可直接使用的工具" vertex="1">
+          <mxGeometry height="30" width="180" x="110" y="175" as="geometry" />
+        </mxCell>
+        <mxCell id="ls" parent="rootfs" style="ellipse;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=16;fillColor=#d5e8d4;strokeColor=#82b366;shadow=1;" value="ls" vertex="1">
+          <mxGeometry height="45" width="70" x="35" y="220" as="geometry" />
+        </mxCell>
+        <mxCell id="cat" parent="rootfs" style="ellipse;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=16;fillColor=#d5e8d4;strokeColor=#82b366;shadow=1;" value="cat" vertex="1">
+          <mxGeometry height="45" width="70" x="125" y="220" as="geometry" />
+        </mxCell>
+        <mxCell id="mount" parent="rootfs" style="ellipse;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=15;fillColor=#d5e8d4;strokeColor=#82b366;shadow=1;" value="mount" vertex="1">
+          <mxGeometry height="45" width="75" x="215" y="220" as="geometry" />
+        </mxCell>
+        <mxCell id="more" parent="rootfs" style="ellipse;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=20;fillColor=#d5e8d4;strokeColor=#82b366;shadow=1;" value="…" vertex="1">
+          <mxGeometry height="45" width="55" x="310" y="220" as="geometry" />
+        </mxCell>
+        <mxCell id="shell" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=19;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=3;shadow=1;" value="💻&#xa;&lt;b&gt;交互式 Shell&lt;/b&gt;&#xa;F7LY:/root$" vertex="1">
+          <mxGeometry height="130" width="250" x="800" y="235" as="geometry" />
+        </mxCell>
+        <mxCell id="mount-edge" edge="1" parent="1" source="kernel" style="shape=flexArrow;endArrow=classic;html=1;rounded=0;fillColor=#d6b656;strokeColor=#d6b656;fontFamily=Comic Sans MS;fontSize=14;" target="rootfs" value="">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="shell-edge" edge="1" parent="1" source="busybox" style="shape=flexArrow;endArrow=classic;html=1;rounded=0;fillColor=#6c8ebf;strokeColor=#6c8ebf;fontFamily=Comic Sans MS;fontSize=14;" target="shell" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="path-edge" edge="1" parent="1" source="shell" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;strokeColor=#82b366;fontFamily=Comic Sans MS;fontSize=13;exitX=0.5;exitY=1;entryX=0.5;entryY=1;" target="tools" value="查找并执行">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="995" y="490" />
+              <mxPoint x="570" y="490" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
