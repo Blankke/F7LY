@@ -35,6 +35,8 @@
  */
 #include <fs/lwext4/ext4_config.hh>
 
+#include "printer.hh"
+
 #include <fs/lwext4/ext4_errno.hh>
 #include <fs/lwext4/ext4_misc.hh>
 #include <fs/lwext4/ext4_oflags.hh>
@@ -373,6 +375,8 @@ int ext4_mount(const char *dev_name, const char *mount_point, bool read_only)
     struct ext4_mountpoint *mp = 0;
 
     ext4_assert(mount_point && dev_name);
+    printfMagenta("[ext4_mount] begin dev=%s mp=%s ro=%d\n",
+                  dev_name, mount_point, read_only ? 1 : 0);
 
     size_t mp_len = strlen(mount_point);
 
@@ -393,6 +397,7 @@ int ext4_mount(const char *dev_name, const char *mount_point, bool read_only)
 
     if (!bd)
         return ENODEV;
+    printfMagenta("[ext4_mount] blockdev found dev=%s\n", dev_name);
 
     for (size_t i = 0; i < CONFIG_EXT4_MOUNTPOINTS_COUNT; ++i)
     {
@@ -410,11 +415,15 @@ int ext4_mount(const char *dev_name, const char *mount_point, bool read_only)
     if (!mp)
         return ENOMEM;
 
+    printfMagenta("[ext4_mount] before ext4_block_init\n");
     r = ext4_block_init(bd);
+    printfMagenta("[ext4_mount] after ext4_block_init r=%d\n", r);
     if (r != EOK)
         return r;
 
+    printfMagenta("[ext4_mount] before ext4_fs_init\n");
     r = ext4_fs_init(&mp->fs, bd, read_only);
+    printfMagenta("[ext4_mount] after ext4_fs_init r=%d\n", r);
     if (r != EOK)
     {
         ext4_block_fini(bd);
@@ -425,7 +434,9 @@ int ext4_mount(const char *dev_name, const char *mount_point, bool read_only)
     ext4_block_set_lb_size(bd, bsize);
     bc = &mp->bc;
 
+    printfMagenta("[ext4_mount] before bcache init bsize=%u\n", bsize);
     r = ext4_bcache_init_dynamic(bc, CONFIG_BLOCK_DEV_CACHE_SIZE, bsize);
+    printfMagenta("[ext4_mount] after bcache init r=%d\n", r);
     if (r != EOK)
     {
         ext4_block_fini(bd);
@@ -436,7 +447,9 @@ int ext4_mount(const char *dev_name, const char *mount_point, bool read_only)
         return ENOTSUP;
 
     /*Bind block cache to block device*/
+    printfMagenta("[ext4_mount] before bind bcache\n");
     r = ext4_block_bind_bcache(bd, bc);
+    printfMagenta("[ext4_mount] after bind bcache r=%d\n", r);
     if (r != EOK)
     {
         ext4_bcache_cleanup(bc);
@@ -2509,12 +2522,23 @@ int ext4_raw_inode_fill(const char *path, uint32_t *ret_ino, struct ext4_inode *
     ext4_file f;
     struct ext4_inode_ref inode_ref;
     struct ext4_mountpoint *mp = ext4_get_mount(path);
+    bool trace_musl = path != nullptr && strcmp(path, "/musl") == 0;
 
     if (!mp)
+    {
+        if (trace_musl)
+        {
+            printfMagenta("[ext4_raw_inode_fill] /musl mount not found ret=%d\n", ENOENT);
+        }
         return ENOENT;
+    }
 
     EXT4_MP_LOCK(mp);
     r = ext4_generic_open2(&f, path, O_RDONLY, EXT4_DE_UNKNOWN, NULL, NULL);
+    if (trace_musl)
+    {
+        printfMagenta("[ext4_raw_inode_fill] /musl generic_open2 ret=%d inode=%u\n", r, f.inode);
+    }
     if (r != EOK)
     {
         EXT4_MP_UNLOCK(mp);
@@ -2523,6 +2547,10 @@ int ext4_raw_inode_fill(const char *path, uint32_t *ret_ino, struct ext4_inode *
 
     /*Load parent*/
     r = ext4_fs_get_inode_ref(&mp->fs, f.inode, &inode_ref);
+    if (trace_musl)
+    {
+        printfMagenta("[ext4_raw_inode_fill] /musl get_inode_ref ret=%d\n", r);
+    }
     if (r != EOK)
     {
         EXT4_MP_UNLOCK(mp);

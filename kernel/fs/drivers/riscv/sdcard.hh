@@ -155,6 +155,8 @@ typedef struct {				/*!< SDMMC Structure        */
 
 /** @brief SDIO status register definess
  */
+#define MCI_STS_FIFO_FULL       (1 << 3)
+#define MCI_STS_DATA_BUSY       (1 << 9)
 #define MCI_STS_GET_FCNT(x)     (((x) >> 17) & 0x1FF)
 
 /** @brief SDIO FIFO threshold defines

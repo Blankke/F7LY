@@ -14,7 +14,6 @@ namespace fs
 
 	long device_file::read( uint64 buf, size_t len, long off, bool upgrade )
 	{
-		printfMagenta("[file] it is a device file\n");
 		int ret;
 
 		if ( _attrs.u_read != 1 )

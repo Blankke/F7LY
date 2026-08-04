@@ -44,9 +44,22 @@
 
 extern uint64 k_dtb_addr;
 
+#ifdef VISIONFIVE2
+static void vf2_early_puts(const char *s)
+{
+    while (*s)
+    {
+        sbi_console_putchar(*s++);
+    }
+}
+#endif
+
 // 注意华科的main函数可能有问题, 注意多核初始化
 extern "C" void main(uint64 hartid, uint64 dtb_addr)
 {
+#ifdef VISIONFIVE2
+    vf2_early_puts("M0\n");
+#endif
 #ifdef VISIONFIVE2
     // VF2 本阶段采用固定板级地址，不解析 U-Boot 传入的 DTB。
     (void)dtb_addr;
@@ -104,19 +117,20 @@ extern "C" void main(uint64 hartid, uint64 dtb_addr)
 
     proc::k_pm.user_init(); // 初始化用户进程
     // 由板级磁盘适配层选择 QEMU virtio 或 VisionFive2 SD 卡。
+    printfMagenta("[main] before disk_init\n");
     disk_init();
-    printfGreen("disk_init done\n");
+    printfGreen("[main] disk_init done\n");
     init_fs_table();     // fs_table init
-    printfGreen("init_fs_table done\n");
+    printfGreen("[main] init_fs_table done\n");
     binit();             // buffer cache
-    printfGreen("binit done\n");
+    printfGreen("[main] binit done\n");
     fileinit();          // file table
-    printfGreen("fileinit done\n");
+    printfGreen("[main] fileinit done\n");
     inodeinit();         // inode table
-    printfGreen("inodeinit done\n");
+    printfGreen("[main] inodeinit done\n");
     fs::k_file_table.init(); // 初始化文件池
     vfs_ext4_init();      // 初始化lwext4
-    printfGreen("vfs_ext4_init done\n");
+    printfGreen("[main] vfs_ext4_init done\n");
     fs::k_vfs.dir_init(); // 初始化虚拟文件系统目录
     fs::k_fifo_manager.init(); // 初始化 FIFO 管理器
     // 初始化 loop 设备控制器

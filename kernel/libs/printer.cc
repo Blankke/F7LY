@@ -11,6 +11,16 @@ Printer k_printer;
 namespace
 {
 
+#ifdef VISIONFIVE2
+void vf2_early_puts(const char *s)
+{
+	while (*s)
+	{
+		sbi_console_putchar(*s++);
+	}
+}
+#endif
+
 bool disable_printf_flag = true;
 bool warn_group_flag = false;
 bool info_group_flag = false;
@@ -246,13 +256,24 @@ char Printer::_upper_digits[] = "0123456789ABCDEF";
 
 void Printer::init()
 {
+#ifdef VISIONFIVE2
+	vf2_early_puts("P0\n");
+#endif
 	_lock.init("printer");
 	_locking = 1;
 
 	// 初始化控制台并关联
+#ifndef VISIONFIVE2
 	dev::kConsole.init();
+#endif
 	_console = &dev::kConsole;
 	_type = out_type::console;
+#ifdef VISIONFIVE2
+	disable_printf_flag = false;
+	warn_group_flag = true;
+	info_group_flag = true;
+	vf2_early_puts("P1\n");
+#endif
 	printf("Printer::init end\n");
 }
 

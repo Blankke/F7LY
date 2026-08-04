@@ -4148,11 +4148,13 @@ namespace syscall
         // intr_stats::k_intr_stats.record_interrupt(666);
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
         uint64 sys_num = p->get_trapframe()->a7; // 获取系统调用号
+#ifndef VISIONFIVE2
         if (!(sys_num == 64 && p->_trapframe->a0 == 1) && !(sys_num == 66 && p->_trapframe->a0 == 1))
         {
             // printfMagenta("[Pcb::get_open_file] pid: %d\n", p->_pid);
             printfGreen("[invoke_syscaller]sys_num: %d sys_name: \t%s\n", sys_num, _syscall_name[sys_num]);
         }
+#endif
         if (sys_num >= max_syscall_funcs_num || sys_num < 0 || _syscall_funcs[sys_num] == nullptr)
         {
             printfRed("[SyscallHandler::invoke_syscaller]sys_num is out of range\n");
@@ -5399,7 +5401,6 @@ namespace syscall
 
     uint64 SyscallHandler::sys_write()
     {
-
         fs::file *f;
         int n;
         uint64 p;
@@ -5432,7 +5433,6 @@ namespace syscall
         // 检查文件是否以 O_PATH 标志打开，O_PATH 文件不允许读取
         if (f->lwext4_file_struct.flags & O_PATH)
             return SYS_EBADF;
-
         // TODO: 文件描述符的flags检查，只读就不能写，返回SYS_EBADF
         // 我用的是lwext4的文件描述符结构体，flags是lwext4_file_struct.flags
         // 好像不太对这样，因为有的文件这个结构体没用到，也没初始化
@@ -5441,7 +5441,6 @@ namespace syscall
             printfRed("[SyscallHandler::sys_write] File descriptor %d is read-only\n", fd);
             return SYS_EBADF;
         }
-
         // /dev/null 和 /dev/zero 写入不读取用户缓冲区，权限确认后可以直接丢弃。
         // lmbench 的 Simple write 会高频写 1 字节到 /dev/null，这里避免一次页表查询。
         if (f->is_virtual &&
@@ -5449,7 +5448,6 @@ namespace syscall
         {
             return n;
         }
-
         proc::Pcb *proc = Cpu::get_cpu()->get_cur_proc();
         mem::PageTable *pt = proc->get_pagetable();
         int direct_result = fs::FileDescriptorAccess::validate_direct_io_request(
@@ -5468,7 +5466,6 @@ namespace syscall
         {
             return SYS_EAGAIN; // 操作被文件锁阻止
         }
-
         KernelIovec iovec = {p, static_cast<size_t>(n)};
         long result = write_from_user_iovecs(f, *pt, &iovec, 1, nullptr);
         if (result > 0 && !f->_suppress_fanotify)
@@ -11815,7 +11812,6 @@ namespace syscall
 
         if (_arg_int(2, whence) < 0)
             return -EINVAL;
-        printfCyan("[SyscallHandler::sys_lseek] fd: %d, offset: %ld, whence: %d\n", fd, offset, whence);
         proc::Pcb *cur_proc = proc::k_pm.get_cur_pcb();
         fs::file *f = proc::k_pm.get_open_file_ref(cur_proc, fd);
 

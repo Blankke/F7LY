@@ -16,6 +16,7 @@
 
 #include "types.hh"
 #include "param.h"
+#include "printer.hh"
 #include "spinlock.hh"
 #include "sleeplock.hh"
 #include "platform.hh"
@@ -28,9 +29,6 @@
 #include "devs/device_manager.hh"
 #include "devs/block_device.hh"
 #include "fs/drivers/virtio_blk.hh"
-#ifdef RISCV
-#include "fs/drivers/riscv/disk.hh"
-#endif
 struct {
   SpinLock lock;
   struct buf buf[NBUF];
@@ -119,7 +117,9 @@ bread(uint dev, uint blockno)
 
     if (!handled) {
 #ifdef VISIONFIVE2
-      disk_rw(b, false);
+      if (disk_rw_sectors(dev, b->data, blockno, 1, false) != 0) {
+        printfRed("[bio] VF2 read failed: dev=%u block=%u\n", dev, blockno);
+      }
 #else
       if (dev == 0) {
         virtio_disk_rw(b, 0);
@@ -155,7 +155,9 @@ bwrite(struct buf *b)
 
   if (!handled) {
 #ifdef VISIONFIVE2
-    disk_rw(b, true);
+    if (disk_rw_sectors(b->dev, b->data, b->blockno, 1, true) != 0) {
+      printfRed("[bio] VF2 write failed: dev=%u block=%u\n", b->dev, b->blockno);
+    }
 #else
     if (b->dev == 0) {
       virtio_disk_rw(b, 1);

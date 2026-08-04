@@ -2787,7 +2787,6 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
     // 如果文件不存在且没有O_CREAT标志，返回错误
     if (!file_exists && (flags & O_CREAT) == 0)
     {
-        printfRed("vfs_openat: file %s does not exist, flags: %d\n", lookup_path.c_str(), flags);
         return -ENOENT; // 文件不存在
     }
 
@@ -2911,20 +2910,12 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
 	        {
 	            fs::normal_file_invalidate_delayed_visibility_path(actual_path);
 	        }
-            else
-            {
-                printfGreen("ext4_mode_set success for %s, mode: 0%o\n", actual_path.c_str(), file_mode);
-            }
 
             // 设置文件所有者和组
             status = set_created_inode_owner_from_current_proc(actual_path.c_str());
             if (status != EOK)
             {
                 printfRed("ext4_owner_set failed for %s, status: %d\n", actual_path.c_str(), status);
-            }
-            else
-            {
-                printfGreen("ext4_owner_set success for %s\n", actual_path.c_str());
             }
         }
 
@@ -3223,7 +3214,6 @@ int vfs_is_file_exist(const char *path)
 
     if (exists == 0)
     {
-        printfRed("vfs_is_file_exist: file not found: %s\n", path);
         return 0;
     }
 

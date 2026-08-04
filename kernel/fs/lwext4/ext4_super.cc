@@ -129,17 +129,11 @@ int ext4_sb_read(struct ext4_blockdev *bdev, struct ext4_sblock *s)
 
 bool ext4_sb_check(struct ext4_sblock *s)
 {
-    // Hexdump the ext4_sblock structure for debugging
-    const unsigned char *data = reinterpret_cast<const unsigned char *>(s);
-    printf("ext4_sblock hexdump:\n");
-    for (size_t i = 0; i < sizeof(struct ext4_sblock); ++i)
-    {
-        printf("%02x ", data[i]);
-        if ((i + 1) % 16 == 0)
-            printf("\n");
-    }
-    if (sizeof(struct ext4_sblock) % 16 != 0)
-        printf("\n");
+    printf("[ext4_sb_check] begin magic=0x%x inodes=%u blocks=%lu block_size=%u\n",
+           ext4_get16(s, magic),
+           ext4_get32(s, inodes_count),
+           ext4_sb_get_blocks_cnt(s),
+           ext4_sb_get_block_size(s));
     if (ext4_get16(s, magic) != EXT4_SUPERBLOCK_MAGIC)
     {
         printfRed("ext4_sb_check: magic is not EXT4_SUPERBLOCK_MAGIC\n");
@@ -190,6 +184,7 @@ bool ext4_sb_check(struct ext4_sblock *s)
         printfRed("ext4_sb_check: checksum verification failed\n");
         return false;
     }
+    printf("[ext4_sb_check] ok\n");
     return true;
 }
 

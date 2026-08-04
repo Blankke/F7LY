@@ -1,5 +1,16 @@
 #include"param.h"
 #include "../hal/riscv/rv_csr.hh"
+#include "hal/riscv/sbi.hh"
+
+#ifdef VISIONFIVE2
+static void vf2_early_puts(const char *s)
+{
+    while (*s)
+    {
+        sbi_console_putchar(*s++);
+    }
+}
+#endif
 
 // 机器启动流程：open-sbi(M-mode) -> entry.S(S-mode) -> start.c -> main.c
 
@@ -17,6 +28,9 @@ void trap_loop()
 extern "C"
 void start(uint64 hartid, uint64 dtb_entry)
 {
+#ifdef VISIONFIVE2
+    vf2_early_puts("S0\n");
+#endif
     // 不进行分页(使用物理内存)
     riscv::csr::_write_csr_(riscv::csr::satp, 0);
         
@@ -30,6 +44,9 @@ void start(uint64 hartid, uint64 dtb_entry)
 
     // 使用tp保存hartid以方便在S态查看
     riscv::w_tp(hartid);
+#ifdef VISIONFIVE2
+    vf2_early_puts("S1\n");
+#endif
     // 进入main函数完成一系列初始化
     main(hartid, dtb_entry);
 }

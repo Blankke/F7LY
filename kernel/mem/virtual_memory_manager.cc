@@ -1080,9 +1080,6 @@ namespace mem
             }
 
             // 从文件读取数据
-            printfCyan("[allocate_vma_page] reading from file %s at offset %d (file_size=%lu)\n",
-                       vf->_path_name.c_str(), offset, file_size);
-
             int readbytes = vf->read((uint64)pa, PGSIZE, offset, false);
             if (readbytes < 0)
             {
@@ -1096,7 +1093,6 @@ namespace mem
                 // 文件短页必须按 mmap 语义补零；完整文件页不需要预先清零，
                 // 否则 lmbench 的 pagefault/mmap 会在每次缺页上多刷一遍 4K。
                 memset((char *)pa + readbytes, 0, PGSIZE - readbytes);
-                printfYellow("[allocate_vma_page] partial page read (%d bytes)\n", readbytes);
             }
         }
         else
@@ -1104,7 +1100,6 @@ namespace mem
             // 匿名映射仍然需要提供全零页面。
             k_pmm.clear_page(pa);
 
-            printfCyan("[allocate_vma_page] handling anonymous mapping at %p\n", va);
         }
 
         // 在本线程分配/读盘期间，另一个线程可能已经把同一页补好了。
@@ -1182,8 +1177,6 @@ namespace mem
         invalidate_loongarch_user_page_pair(page_va);
 #endif
 
-        printfGreen("[allocate_vma_page] successfully mapped page at va=%p, pa=%p, pte_flags=0x%x\n",
-                    page_va, pa, pte_flags);
         return 0;
     }
 

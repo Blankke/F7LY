@@ -40,6 +40,8 @@
 
 #include <fs/lwext4/ext4_config.hh>
 
+#include "printer.hh"
+
 #include <fs/lwext4/ext4_errno.hh>
 #include <fs/lwext4/ext4_misc.hh>
 #include <fs/lwext4/ext4_types.hh>
@@ -65,30 +67,38 @@ int ext4_fs_init(struct ext4_fs *fs, struct ext4_blockdev *bdev, bool read_only)
     uint32_t bsize;
 
     ext4_assert(fs && bdev);
+    bool requested_read_only = read_only;
+    printfMagenta("[ext4_fs_init] begin read_only=%d\n", requested_read_only ? 1 : 0);
 
     fs->bdev = bdev;
 
     fs->read_only = read_only;
 
+    printfMagenta("[ext4_fs_init] before ext4_sb_read\n");
     r = ext4_sb_read(fs->bdev, &fs->sb);
+    printfMagenta("[ext4_fs_init] after ext4_sb_read r=%d\n", r);
     if (r != EOK)
         return r;
 
+    printfMagenta("[ext4_fs_init] before ext4_sb_check\n");
     if (!ext4_sb_check(&fs->sb))
         return ENOTSUP;
+    printfMagenta("[ext4_fs_init] after ext4_sb_check\n");
 
     bsize = ext4_sb_get_block_size(&fs->sb);
     if (bsize > EXT4_MAX_BLOCK_SIZE)
         return ENXIO;
 
+    printfMagenta("[ext4_fs_init] before feature check\n");
     r = ext4_fs_check_features(fs, &read_only);
+    printfMagenta("[ext4_fs_init] after feature check r=%d read_only=%d\n", r, read_only ? 1 : 0);
     if (r != EOK)
     {
         printfRed("ext4_fs_init: unsupported features\n");
         return r;
     }
-    if (read_only)
-        fs->read_only = read_only;
+    fs->read_only = requested_read_only || read_only;
+    printfMagenta("[ext4_fs_init] effective read_only=%d\n", fs->read_only ? 1 : 0);
 
     /* Compute limits for indirect block levels */
     uint32_t blocks_id = bsize / sizeof(uint32_t);
@@ -110,8 +120,10 @@ int ext4_fs_init(struct ext4_fs *fs, struct ext4_blockdev *bdev, bool read_only)
     if (!fs->read_only)
     {
         /* Mark system as mounted */
+        printfMagenta("[ext4_fs_init] before ext4_sb_write state\n");
         ext4_set16(&fs->sb, state, EXT4_SUPERBLOCK_STATE_ERROR_FS);
         r = ext4_sb_write(fs->bdev, &fs->sb);
+        printfMagenta("[ext4_fs_init] after ext4_sb_write state r=%d\n", r);
         if (r != EOK)
         {
             printfRed("ext4_fs_init: cannot write superblock, r=%d\n", r);
@@ -121,6 +133,7 @@ int ext4_fs_init(struct ext4_fs *fs, struct ext4_blockdev *bdev, bool read_only)
         ext4_set16(&fs->sb, mount_count, ext4_get16(&fs->sb, mount_count) + 1);
     }
 
+    printfMagenta("[ext4_fs_init] done r=%d\n", r);
     return r;
 }
 

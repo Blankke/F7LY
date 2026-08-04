@@ -1318,7 +1318,9 @@ namespace proc
 
             // 文件系统初始化必须在常规进程的上下文中运行（例如，因为它会调用 sleep），
             // 因此不能从 main() 中运行。(copy form xv6)
+            printfMagenta("[fork_ret] before filesystem_init\n");
             filesystem_init(); // <-- This calls fs.cc:filesystem_init
+            printfMagenta("[fork_ret] filesystem_init done\n");
 
             // filesystem2_init(); // 这个滚蛋
             fs::FileAttrs fAttrsin = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0666);
@@ -1341,7 +1343,13 @@ namespace proc
             new (&dev::k_uart) dev::UartManager(UART0);
             dev::register_debug_uart(&dev::k_uart);
 
+#ifdef VISIONFIVE2
+            // VF2 当前没有 VirtIO 网卡。初始化失败后的 ONPS TCP 线程不会退出，
+            // 且卸载流程会释放其仍在等待的信号量，因此先跳过该后端以隔离调度卡死。
+            printf("[vf2] skip VirtIO network initialization\n");
+#else
             net::init_network_stack();
+#endif
         }
 
         // 设置进程开始运行的时间点
@@ -4041,7 +4049,6 @@ namespace proc
         if (err < 0)
         {
             release_fd(p, fd);
-            printfRed("[open] failed for path: %s,err:%d\n", path.c_str(), err);
             return err; // 文件不存在或打开失败
         }
         if (install_fd(p, file, fd) < 0)
@@ -4210,8 +4217,9 @@ namespace proc
             return resolve_ret;
         }
 
-        fs::Kstat st;
-        int stat_ret = vfs_path_stat(resolved_path.c_str(), &st, true);
+        fs::Kstat st{};
+        // chdir 只读取目录元数据，不应为此刷新所有打开文件的写缓冲。
+        int stat_ret = vfs_path_stat_noflush(resolved_path.c_str(), &st, true);
         if (stat_ret < 0)
         {
             return stat_ret;
@@ -4250,7 +4258,6 @@ namespace proc
             p->_cwd_name += "/";
         }
 
-        printfCyan("[chdir] Changed directory to: %s", p->_cwd_name.c_str());
         return 0;
     }
     /// @brief 获取当前进程的工作目录路径。get current working directory
@@ -4991,12 +4998,7 @@ namespace proc
         MemoryLockGuard memory_guard(memory_mgr);
         int result = memory_mgr->unmap_memory_range(addr, length);
 
-        if (result == 0)
-        {
-            printfGreen("[munmap] Successfully unmapped range [%p, %p)\n",
-                        addr, (void *)((uint64)addr + PGROUNDUP(length)));
-        }
-        else
+        if (result != 0)
         {
             printfRed("[munmap] Failed to unmap range [%p, %p)\n",
                       addr, (void *)((uint64)addr + PGROUNDUP(length)));

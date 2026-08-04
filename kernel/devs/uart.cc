@@ -31,6 +31,25 @@ namespace dev
 		_wr_idx = _rd_idx = 0;
 	}
 
+	bool UartManager::read_ready()
+	{
+		if (!_read_buffer_empty())
+			return true;
+
+#ifdef QEMU
+		return (read_lsr() & UartLSR::rx_ready) != 0;
+#else
+		// SBI getchar 是非阻塞但会消费字符；先存入本地缓冲，供后续 read() 读取。
+		int ch = sbi_console_getchar();
+		if (ch < 0)
+			return false;
+		if (_read_buffer_full())
+			return true;
+		_read_buffer_put(static_cast<u8>(ch));
+		return true;
+#endif
+	}
+
 	int UartManager::put_char_sync(u8 c)
 	{
 #ifdef QEMU
@@ -88,6 +107,11 @@ namespace dev
 			;
 		*c = _read_reg( UartReg::THR );
 	#else
+		if (!_read_buffer_empty())
+		{
+			*c = static_cast<u8>(_read_buffer_get());
+			return 0;
+		}
 		int ch = sbi_console_getchar();
 		if (ch == -1)
 			return -1;
@@ -107,6 +131,11 @@ namespace dev
 			return 0;
 		}
 	#else
+		if (!_read_buffer_empty())
+		{
+			*c = static_cast<u8>(_read_buffer_get());
+			return 0;
+		}
 		int ch = sbi_console_getchar();
 		if (ch == -1)
 			return -1;

@@ -14,6 +14,9 @@
 #include "proc/meminfo.hh"
 #include "proc/cpuinfo.hh"
 #include "fs/fat32/fat32.hh"
+#ifdef VISIONFIVE2
+#include "fs/drivers/riscv/disk.hh"
+#endif
 
 #include "devs/ramdisk.hh"
 #include "devs/dtb.hh"
@@ -126,23 +129,94 @@ const char *block_fs_kind_name(block_fs_kind kind)
  * 启动阶段先轻量探测块设备格式，再决定走哪条挂载路径。
  * 这样 FAT32 识别失败时就不会再把整个启动流程直接 panic 掉。
  */
+#ifdef VISIONFIVE2
+constexpr int k_vf2_root_partition_dev = 1;
+
+uint32 read_le32(const uint8 *data)
+{
+    return static_cast<uint32>(data[0]) |
+           (static_cast<uint32>(data[1]) << 8) |
+           (static_cast<uint32>(data[2]) << 16) |
+           (static_cast<uint32>(data[3]) << 24);
+}
+
+int vf2_configure_root_partition_from_mbr()
+{
+    printfMagenta("[fs] VF2 before read MBR\n");
+    struct buf *mbr = bread(ROOTDEV, 0);
+    if (mbr == NULL)
+    {
+        printfRed("[fs] VF2 read MBR returned null\n");
+        return -1;
+    }
+    printfMagenta("[fs] VF2 after read MBR\n");
+
+    if (mbr->data[510] != 0x55 || mbr->data[511] != 0xaa)
+    {
+        brelse(mbr);
+        printfRed("[fs] VF2 invalid MBR signature, cannot parse root partition\n");
+        return -1;
+    }
+
+    int selected = -1;
+    uint32 selected_start = 0;
+    uint32 selected_sectors = 0;
+
+    for (int i = 0; i < 4; ++i)
+    {
+        const uint8 *entry = reinterpret_cast<const uint8 *>(mbr->data + 446 + i * 16);
+        uint8 type = entry[4];
+        uint32 start_lba = read_le32(entry + 8);
+        uint32 sectors = read_le32(entry + 12);
+        printfBlue("[fs] VF2 MBR part%d type=0x%x start=%u sectors=%u\n",
+                   i + 1, type, start_lba, sectors);
+
+        if (type == 0x83 && start_lba != 0 && sectors != 0 && selected < 0)
+        {
+            selected = i + 1;
+            selected_start = start_lba;
+            selected_sectors = sectors;
+        }
+    }
+
+    brelse(mbr);
+
+    if (selected < 0)
+    {
+        printfRed("[fs] VF2 no Linux/ext4 root partition found\n");
+        return -1;
+    }
+
+    disk_set_partition_offset(k_vf2_root_partition_dev, selected_start);
+    printfGreen("[fs] VF2 root uses mmc1:%d, internal dev=%d, start=%u sectors=%u\n",
+                selected, k_vf2_root_partition_dev, selected_start, selected_sectors);
+    return k_vf2_root_partition_dev;
+}
+#endif
+
 block_fs_kind probe_block_fs_kind(int dev)
 {
+    printfMagenta("[fs] probe dev %d begin\n", dev);
     if (dev < 0)
     {
+        printfMagenta("[fs] probe dev %d -> unknown (negative)\n", dev);
         return block_fs_kind::unknown;
     }
 
     if (fat32_probe_device(dev) == 0)
     {
+        printfMagenta("[fs] probe dev %d -> FAT32\n", dev);
         return block_fs_kind::fat32;
     }
 
+    printfMagenta("[fs] probe dev %d before ext4 super read\n", dev);
     struct buf *super = bread(dev, 2);
     if (super == NULL)
     {
+        printfMagenta("[fs] probe dev %d -> unknown (super null)\n", dev);
         return block_fs_kind::unknown;
     }
+    printfMagenta("[fs] probe dev %d after ext4 super read\n", dev);
 
     uint16 ext4_magic = 0;
     memmove(&ext4_magic, super->data + 56, sizeof(ext4_magic));
@@ -150,9 +224,11 @@ block_fs_kind probe_block_fs_kind(int dev)
 
     if (ext4_magic == 0xEF53)
     {
+        printfMagenta("[fs] probe dev %d -> EXT4\n", dev);
         return block_fs_kind::ext4;
     }
 
+    printfMagenta("[fs] probe dev %d -> unknown magic=0x%x\n", dev, ext4_magic);
     return block_fs_kind::unknown;
 }
 
@@ -204,6 +280,7 @@ extern uint64 k_initrd_end;
 
 void filesystem_init(void)
 {
+    printfMagenta("[fs] filesystem_init begin\n");
     // Try to init DTB
     if (k_dtb_addr) {
         DtbManager::init(k_dtb_addr);
@@ -258,7 +335,26 @@ void filesystem_init(void)
     fs_t root_fs_type = EXT4;
     int fat32_data_dev = -1;
 
-    if (primary_dev_kind == block_fs_kind::ext4)
+#ifdef VISIONFIVE2
+    int vf2_root_dev = vf2_configure_root_partition_from_mbr();
+    block_fs_kind vf2_root_kind = probe_block_fs_kind(vf2_root_dev);
+    if (vf2_root_dev >= 0)
+    {
+        printfBlue("[fs] VF2 root dev %d detected as %s\n",
+                   vf2_root_dev, block_fs_kind_name(vf2_root_kind));
+    }
+    if (vf2_root_kind == block_fs_kind::ext4)
+    {
+        root_dev_id = vf2_root_dev;
+        printfGreen("[fs] use VF2 SD Linux partition as EXT4 root filesystem\n");
+    }
+#endif
+
+    if (root_dev_id >= 0)
+    {
+        // VF2 root was selected from the MBR partition table.
+    }
+    else if (primary_dev_kind == block_fs_kind::ext4)
     {
         root_dev_id = ROOTDEV;
         printfGreen("[fs] 使用设备 %d 上的 EXT4 作为根文件系统\n", root_dev_id);
@@ -299,7 +395,9 @@ void filesystem_init(void)
     }
     printfGreen("[fs] 根文件系统已挂载到 %s (dev=%d, type=%s)\n",
                 root_path, root_dev_id, block_fs_kind_name(block_fs_kind::ext4));
+    printfMagenta("[fs] before dir_init\n");
     dir_init();
+    printfMagenta("[fs] after dir_init\n");
     
     if (fat32_data_dev >= 0)
     {
@@ -330,44 +428,87 @@ void dir_init(void)
 {
     struct inode *ip;
 
-    // /dev/misc 需要作为目录存在，/dev/misc/rtc 本身应该是设备节点，
-    // 不能再被误建成目录，否则用户态会把 RTC 当成目录打开。
-    if ((ip = namei((char *)"/dev/misc")) == NULL)
-        vfs_ext_mkdir((char *)"/dev/misc", 0777);
-    else
-        free_inode(ip);
+    printfMagenta("[fs] dir_init begin\n");
 
-    // POSIX shm_open/sem_open 约定走 /dev/shm。
-    // 没有这个目录时，musl 会在打开共享内存对象前就直接 ENOENT，
-    // pthread_cancel_points 里的 shm_open 场景也会因此被异常路径干扰。
-    if ((ip = namei((char *)"/dev/shm")) == NULL)
-        vfs_ext_mkdir((char *)"/dev/shm", 0777);
-    else
-        free_inode(ip);
-
-    int shm_clear_ret = clear_ephemeral_directory("/dev/shm");
-    if (shm_clear_ret < 0)
+    printfMagenta("[fs] dir_init before namei /dev/misc\n");
+    ip = namei((char *)"/dev/misc");
+    printfMagenta("[fs] dir_init after namei /dev/misc ip=%p\n", ip);
+    if (ip == NULL)
     {
-        printfRed("[fs] 清空 /dev/shm 失败: %d\n", shm_clear_ret);
+        printfMagenta("[fs] dir_init mkdir /dev/misc\n");
+        vfs_ext_mkdir((char *)"/dev/misc", 0777);
+        printfMagenta("[fs] dir_init mkdir /dev/misc done\n");
+    }
+    else
+    {
+        free_inode(ip);
     }
 
+    printfMagenta("[fs] dir_init before namei /dev/shm\n");
+    ip = namei((char *)"/dev/shm");
+    printfMagenta("[fs] dir_init after namei /dev/shm ip=%p\n", ip);
+    if (ip == NULL)
+    {
+        printfMagenta("[fs] dir_init mkdir /dev/shm\n");
+        vfs_ext_mkdir((char *)"/dev/shm", 0777);
+        printfMagenta("[fs] dir_init mkdir /dev/shm done\n");
+    }
+    else
+    {
+        free_inode(ip);
+    }
 
-    // libc 的 tmpfile/mkstemp 等接口默认依赖 /tmp。
-    // 官方评测镜像必须原样使用，启动时只能补齐运行环境，不能删除镜像内已有目录。
-    if ((ip = namei((char *)"/tmp")) == NULL)
+    printfMagenta("[fs] dir_init before clear /dev/shm\n");
+    int shm_clear_ret = clear_ephemeral_directory("/dev/shm");
+    printfMagenta("[fs] dir_init after clear /dev/shm ret=%d\n", shm_clear_ret);
+    if (shm_clear_ret < 0)
+    {
+        printfRed("[fs] clear /dev/shm failed: %d\n", shm_clear_ret);
+    }
+
+    printfMagenta("[fs] dir_init before namei /tmp\n");
+    ip = namei((char *)"/tmp");
+    printfMagenta("[fs] dir_init after namei /tmp ip=%p\n", ip);
+    if (ip == NULL)
+    {
+        printfMagenta("[fs] dir_init mkdir /tmp\n");
         vfs_ext_mkdir((char *)"/tmp", 01777);
+        printfMagenta("[fs] dir_init mkdir /tmp done\n");
+    }
     else
+    {
         free_inode(ip);
+    }
 
-    if ((ip = namei((char *)"/usr")) == NULL)
+    printfMagenta("[fs] dir_init before namei /usr\n");
+    ip = namei((char *)"/usr");
+    printfMagenta("[fs] dir_init after namei /usr ip=%p\n", ip);
+    if (ip == NULL)
+    {
+        printfMagenta("[fs] dir_init mkdir /usr\n");
         vfs_ext_mkdir((char *)"/usr", 0777);
+        printfMagenta("[fs] dir_init mkdir /usr done\n");
+    }
     else
+    {
         free_inode(ip);
+    }
 
-    if ((ip = namei((char *)"/usr/lib")) == NULL)
+    printfMagenta("[fs] dir_init before namei /usr/lib\n");
+    ip = namei((char *)"/usr/lib");
+    printfMagenta("[fs] dir_init after namei /usr/lib ip=%p\n", ip);
+    if (ip == NULL)
+    {
+        printfMagenta("[fs] dir_init mkdir /usr/lib\n");
         vfs_ext_mkdir((char *)"/usr/lib", 0777);
+        printfMagenta("[fs] dir_init mkdir /usr/lib done\n");
+    }
     else
+    {
         free_inode(ip);
+    }
+
+    printfMagenta("[fs] dir_init done\n");
 }
 
 void filesystem2_init(void)

@@ -687,7 +687,6 @@ namespace proc
                     if (newact->sa_handler == SIG_DFL)
                     {
                         // 恢复默认处理
-                        printfLightCyan("[sigAction] Setting default handler for signal %d\n", flag);
                         if (cur_proc->_sigactions != nullptr && cur_proc->_sigactions->actions[flag])
                         {
                             delete cur_proc->_sigactions->actions[flag];
@@ -708,7 +707,6 @@ namespace proc
                     if (newact->sa_handler == SIG_IGN)
                     {
                         // 忽略信号 - 设置一个特殊的处理函数
-                        printfLightCyan("[sigAction] Setting ignore handler for signal %d\n", flag);
                         if (!cur_proc->_sigactions->actions[flag])
                         {
                             cur_proc->_sigactions->actions[flag] = new sigaction;
@@ -742,7 +740,6 @@ namespace proc
                             if (cur_proc->_sigactions->actions[flag] == nullptr)
                                 return syscall::SYS_ENOMEM; // 内存分配失败
                         }
-                        printfLightCyan("[sigAction] Setting handler for signal %d: enter %p flags: %p mask: %p\n", flag, newact->sa_handler, newact->sa_flags, newact->sa_mask.sig[0]);
                         *(cur_proc->_sigactions->actions[flag]) = *newact;
                     }
                 }

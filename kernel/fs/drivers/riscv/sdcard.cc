@@ -237,28 +237,117 @@ void SD_IRQHandler(SDMMC_T *pSDMMC)
   pSDMMC->RINTSTS = iclr;
 }
 
+static constexpr uint32 SD_CMD_ERROR_BITS =
+    MCI_INT_EBE | MCI_INT_SBE | MCI_INT_HLE | MCI_INT_RTO | MCI_INT_RCRC | MCI_INT_RESP_ERR;
+static constexpr uint32 SD_DATA_ERROR_BITS =
+    MCI_INT_FRUN | MCI_INT_HTO | MCI_INT_DTO | MCI_INT_DCRC;
+static constexpr int SD_BLOCK_SIZE = 512;
+static constexpr int SD_WORDS_PER_BLOCK = SD_BLOCK_SIZE / sizeof(uint32);
+static constexpr int SD_POLL_TIMEOUT = 10000000;
+
+static void SD_ResetFifo(SDMMC_T *pSDMMC)
+{
+  pSDMMC->CTRL |= MCI_CTRL_FIFO_RESET;
+  int timeout = 1000000;
+  while ((pSDMMC->CTRL & MCI_CTRL_FIFO_RESET) && --timeout > 0)
+    ;
+  if (timeout == 0)
+  {
+    printfRed("[sd] fifo reset timeout CTRL=%p RINTSTS=%p STATUS=%p\n",
+              pSDMMC->CTRL, pSDMMC->RINTSTS, pSDMMC->STATUS);
+  }
+}
+
+static void SD_ClearStatus(SDMMC_T *pSDMMC)
+{
+  pSDMMC->RINTSTS = 0xFFFFFFFF;
+}
+
+static uint32 SD_WaitCommandDone(SDMMC_T *pSDMMC);
+
 /**
  * @brief 等待SDIO中断发生并处理
  *
- * 轮询原始中断状态寄存器(RINTSTS)，直到检测到中断，然后调用中断处理函数
- * 0xffff0004 = 命令完成中断(bit 2) + 其他错误中断掩码
+ * 轮询原始中断状态寄存器，等待命令完成或错误，并带超时保护。
  *
  * @param pSDMMC SDMMC控制器指针
- * @return 始终返回0
+ * @return 0 表示命令完成，非 0 表示超时或控制器错误
  */
 uint32 wait_for_sdio_irq(SDMMC_T *pSDMMC)
 {
-  uint32 rintst;
-  while (1)
+  return SD_WaitCommandDone(pSDMMC);
+}
+
+static uint32 SD_WaitCommandDone(SDMMC_T *pSDMMC)
+{
+  int timeout = 10000000;
+  while (timeout-- > 0)
   {
-    rintst = pSDMMC->RINTSTS; // 读取原始中断状态寄存器
-    // printf("rintst: %p\n", rintst);
-    if (rintst & 0xffff0004)
-    { // 检查是否有命令完成或错误中断
-      break;
+    uint32 rintst = pSDMMC->RINTSTS;
+    if (rintst & (SD_CMD_ERROR_BITS | SD_DATA_ERROR_BITS))
+    {
+      printfRed("[sd] irq error RINTSTS=%p STATUS=%p CMD=%p CMDARG=%p\n",
+                rintst, pSDMMC->STATUS, pSDMMC->CMD, pSDMMC->CMDARG);
+      pSDMMC->RINTSTS = rintst;
+      return 1;
+    }
+    if (rintst & MCI_INT_CMD_DONE)
+    {
+      pSDMMC->RINTSTS = MCI_INT_CMD_DONE;
+      return 0;
     }
   }
-  SD_IRQHandler(pSDMMC); // 处理中断
+
+  printfRed("[sd] wait irq timeout RINTSTS=%p STATUS=%p CMD=%p CMDARG=%p\n",
+            pSDMMC->RINTSTS, pSDMMC->STATUS, pSDMMC->CMD, pSDMMC->CMDARG);
+  return 1;
+}
+
+static uint32 SD_Send_Command_Clean(SDMMC_T *pSDMMC, uint32 cmd, uint32 arg)
+{
+  uint32 imsk = pSDMMC->INTMASK;
+  uint32 mask = SDIO_CMD_INT_MSK;
+  bool data_cmd = (cmd & SDIO_CMD_DATA) != 0;
+
+  if (data_cmd)
+  {
+    mask |= SDIO_DATA_INT_MSK;
+    SD_ResetFifo(pSDMMC);
+  }
+
+  SD_ClearStatus(pSDMMC);
+  SD_SetIntMask(pSDMMC, mask);
+
+  uint32 ret = SD_SendCmd(pSDMMC, cmd, arg);
+  if (ret)
+  {
+    printfRed("[sd] send cmd accept timeout cmd=%p arg=%p RINTSTS=%p STATUS=%p\n",
+              cmd, arg, pSDMMC->RINTSTS, pSDMMC->STATUS);
+    if (data_cmd)
+    {
+      SD_ResetFifo(pSDMMC);
+    }
+    SD_ClearStatus(pSDMMC);
+    SD_SetIntMask(pSDMMC, imsk);
+    return ret;
+  }
+
+  ret = SD_WaitCommandDone(pSDMMC);
+  if (ret)
+  {
+    printfRed("[sd] command failed cmd=%p arg=%p RINTSTS=%p STATUS=%p\n",
+              cmd, arg, pSDMMC->RINTSTS, pSDMMC->STATUS);
+    if (data_cmd)
+    {
+      SD_ResetFifo(pSDMMC);
+    }
+    SD_ClearStatus(pSDMMC);
+    SD_SetIntMask(pSDMMC, imsk);
+    return ret;
+  }
+
+  SD_GetResponse(pSDMMC, &sdioif->response[0]);
+  SD_SetIntMask(pSDMMC, imsk);
   return 0;
 }
 
@@ -279,31 +368,7 @@ uint32 wait_for_sdio_irq(SDMMC_T *pSDMMC)
  */
 uint32 SD_Send_Command(SDMMC_T *pSDMMC, uint32 cmd, uint32 arg)
 {
-  uint32 ret = 0, ival;
-  uint32 imsk = pSDMMC->INTMASK;
-  // ret = sdioif->wait_evt(pSDMMC, SDIO_START_COMMAND, (cmd & 0x3F));
-  // ival = SDIO_CMD_INT_MSK & ~ret;
-  ival = SDIO_CMD_INT_MSK; // 0xA146: 命令相关中断掩码
-
-  /* 如果是数据传输命令，则启用数据传输中断 */
-  if (cmd & SDIO_CMD_DATA)
-  {                            // 检查命令是否包含数据传输
-    ival |= SDIO_DATA_INT_MSK; // 0xBE88: 添加数据传输中断掩码
-    imsk |= SDIO_DATA_INT_MSK;
-  }
-
-  SD_SetIntMask(pSDMMC, ival);  // 设置中断掩码寄存器
-  SD_SendCmd(pSDMMC, cmd, arg); // 发送命令到SD卡
-  // ret = sdioif->wait_evt(pSDMMC, SDIO_WAIT_COMMAND, 0);
-  wait_for_sdio_irq(pSDMMC);    // 等待命令完成中断
-  pSDMMC->RINTSTS = 0xFFFFFFFF; // 清除所有中断状态
-  // if (!ret && (cmd & SDIO_CMD_RESP_R1)) {
-  // 	Chip_SDIF_GetResponse(pSDMMC, &sdioif->response[0]);
-  // }
-
-  SD_GetResponse(pSDMMC, &sdioif->response[0]); // 读取SD卡响应
-  SD_SetIntMask(pSDMMC, imsk);                  // 恢复原始中断掩码
-  return ret;
+  return SD_Send_Command_Clean(pSDMMC, cmd, arg);
 }
 
 /**
@@ -581,57 +646,193 @@ void SDIO_Setup_Callback(SDMMC_T *pSDMMC,
  * 使用CMD24(单块写入)向指定扇区写入数据：
  * 1. 计算需要写入的块数(每块512字节)
  * 2. 对每个块：设置块大小和字节计数，发送CMD24
- * 3. 轮询TXDR中断(bit4)，向FIFO写入数据
- * 4. 处理中断，等待写入完成
+ * 3. 等待 TXDR，并在 FIFO 未满时写满当前 512 字节块
+ * 4. 等待 DATA_OVER 和卡 busy 结束
  *
  * @param dat 要写入的数据指针
  * @param size 数据大小(以32位字为单位)
  * @param addr 起始扇区地址
- * @return 始终返回0
+ * @return 0 表示全部块写入完成，非 0 表示命令、数据或读回验证失败
  */
 uint32 sd_write(uint32 *dat, int size, int addr)
 {
-  int blk;
-  int tt = 0;
-  // 计算需要的块数，每块512字节=128个32位字
-  if ((size * 4) % 512)
+  if (dat == nullptr || size <= 0 || addr < 0)
   {
-    blk = size * 4 / 512 + 1; // 不足一块的向上取整
-  }
-  else
-  {
-    blk = size * 4 / 512; // 恰好整数块
-  }
-  // printf("size %d, blk:%d\n", size, blk);
-  for (int i = 0; i < blk; i++)
-  { // 逐块写入
-    tt = 0;
-    [[maybe_unused]] int ss = 1;
-    SDMMC->BLKSIZ = 512;                     // 设置块大小为512字节
-    SDMMC->BYTCNT = 512;                     // 设置传输字节数为512
-    SD_Send_Command(SDMMC, CMD24, addr + i); // CMD24: 单块写入，参数为扇区地址
-    while (SDMMC->RINTSTS & 0x10)
-    { // 轮询TXDR中断(bit4)，表示需要发送数据
-      if (tt < size)
-      {
-        *(volatile uint32 *)(SD_BASE_V + 0x200) = dat[tt]; // 向FIFO(偏移0x200)写入数据
-      }
-      else
-        *(volatile uint32 *)(SD_BASE_V + 0x200) = 0; // 不足部分填0
-      tt++;
-      // printf("rintst: %p\n", LPC_SDMMC->RINTSTS);
-      // printf("data %d: %d\n", i, temp_data);
-      for (int j = 0; j < 100000; j++)
-      { // 延时等待
-        /* code */
-      }
-      SD_IRQHandler(SDMMC); // 处理中断
-    }
-    // printf("tt: %d\n", tt);
-    // tt = 10;
-    // ss = tt;
+    printfRed("[sd_write] invalid args dat=%p size_words=%d addr=%d\n", dat, size, addr);
+    return 1;
   }
 
+  int block_count = (size + SD_WORDS_PER_BLOCK - 1) / SD_WORDS_PER_BLOCK;
+#ifdef VISIONFIVE2
+  // 只验证首次真实写请求；读回的是刚写入的相同扇区，不触碰额外位置。
+  static bool verify_first_write = true;
+  bool verify_this_write = verify_first_write;
+#endif
+
+  printfMagenta("[sd_write] begin addr=%d size_words=%d blocks=%d\n",
+                addr, size, block_count);
+
+  for (int i = 0; i < block_count; i++)
+  {
+    int words_written = 0;
+    int sector = addr + i;
+    int source_base = i * SD_WORDS_PER_BLOCK;
+
+    SDMMC->BLKSIZ = SD_BLOCK_SIZE;
+    SDMMC->BYTCNT = SD_BLOCK_SIZE;
+
+    uint32 cmd_ret = SD_Send_Command(SDMMC, CMD24, sector);
+    if (cmd_ret != 0)
+    {
+      printfRed("[sd_write] CMD24 failed sector=%d ret=%u RINTSTS=%p STATUS=%p CMD=%p CMDARG=%p\n",
+                sector, cmd_ret, SDMMC->RINTSTS, SDMMC->STATUS,
+                SDMMC->CMD, SDMMC->CMDARG);
+      return cmd_ret;
+    }
+
+    int wait_budget = SD_POLL_TIMEOUT;
+    while (!(SDMMC->RINTSTS &
+             (MCI_INT_TXDR | MCI_INT_DATA_OVER | SD_CMD_ERROR_BITS | SD_DATA_ERROR_BITS)))
+    {
+      if (--wait_budget == 0)
+      {
+        printfRed("[sd_write] TXDR timeout sector=%d words=%d RINTSTS=%p STATUS=%p CMD=%p CMDARG=%p\n",
+                  sector, words_written, SDMMC->RINTSTS, SDMMC->STATUS,
+                  SDMMC->CMD, SDMMC->CMDARG);
+        SD_ResetFifo(SDMMC);
+        SD_ClearStatus(SDMMC);
+        return 1;
+      }
+    }
+
+    wait_budget = SD_POLL_TIMEOUT;
+    while (words_written < SD_WORDS_PER_BLOCK)
+    {
+      uint32 rintst = SDMMC->RINTSTS;
+      uint32 status = SDMMC->STATUS;
+
+      if (rintst & (SD_CMD_ERROR_BITS | SD_DATA_ERROR_BITS))
+      {
+        printfRed("[sd_write] FIFO error sector=%d words=%d RINTSTS=%p STATUS=%p CMD=%p CMDARG=%p\n",
+                  sector, words_written, rintst, status,
+                  SDMMC->CMD, SDMMC->CMDARG);
+        SD_ResetFifo(SDMMC);
+        SD_ClearStatus(SDMMC);
+        return 1;
+      }
+      if (rintst & MCI_INT_DATA_OVER)
+      {
+        printfRed("[sd_write] premature DATA_OVER sector=%d words=%d RINTSTS=%p STATUS=%p\n",
+                  sector, words_written, rintst, status);
+        SD_ResetFifo(SDMMC);
+        SD_ClearStatus(SDMMC);
+        return 1;
+      }
+
+      if (status & MCI_STS_FIFO_FULL)
+      {
+        if (rintst & MCI_INT_TXDR)
+        {
+          SDMMC->RINTSTS = MCI_INT_TXDR;
+        }
+        if (--wait_budget == 0)
+        {
+          printfRed("[sd_write] FIFO space timeout sector=%d words=%d RINTSTS=%p STATUS=%p fifo_count=%u\n",
+                    sector, words_written, rintst, status,
+                    MCI_STS_GET_FCNT(status));
+          SD_ResetFifo(SDMMC);
+          SD_ClearStatus(SDMMC);
+          return 1;
+        }
+        continue;
+      }
+
+      int source_index = source_base + words_written;
+      uint32 value = source_index < size ? dat[source_index] : 0;
+      *(volatile uint32 *)(SD_BASE_V + 0x200) = value;
+      words_written++;
+      wait_budget = SD_POLL_TIMEOUT;
+    }
+
+    SDMMC->RINTSTS = MCI_INT_TXDR;
+    int data_over_timeout = SD_POLL_TIMEOUT;
+    while (!(SDMMC->RINTSTS & (MCI_INT_DATA_OVER | SD_CMD_ERROR_BITS | SD_DATA_ERROR_BITS)))
+    {
+      if (--data_over_timeout == 0)
+      {
+        printfRed("[sd_write] DATA_OVER timeout sector=%d words=%d RINTSTS=%p STATUS=%p CMD=%p CMDARG=%p\n",
+                  sector, words_written, SDMMC->RINTSTS, SDMMC->STATUS,
+                  SDMMC->CMD, SDMMC->CMDARG);
+        SD_ResetFifo(SDMMC);
+        SD_ClearStatus(SDMMC);
+        return 1;
+      }
+    }
+
+    uint32 final_status = SDMMC->RINTSTS;
+    if (final_status & (SD_CMD_ERROR_BITS | SD_DATA_ERROR_BITS))
+    {
+      printfRed("[sd_write] data error sector=%d words=%d RINTSTS=%p STATUS=%p CMD=%p CMDARG=%p\n",
+                sector, words_written, final_status, SDMMC->STATUS,
+                SDMMC->CMD, SDMMC->CMDARG);
+      SD_ResetFifo(SDMMC);
+      SD_ClearStatus(SDMMC);
+      return 1;
+    }
+
+    SDMMC->RINTSTS = MCI_INT_DATA_OVER | MCI_INT_TXDR;
+
+    int busy_timeout = SD_POLL_TIMEOUT;
+    while (SDMMC->STATUS & MCI_STS_DATA_BUSY)
+    {
+      if (--busy_timeout == 0)
+      {
+        printfRed("[sd_write] card busy timeout sector=%d RINTSTS=%p STATUS=%p\n",
+                  sector, SDMMC->RINTSTS, SDMMC->STATUS);
+        SD_ResetFifo(SDMMC);
+        SD_ClearStatus(SDMMC);
+        return 1;
+      }
+    }
+
+#ifdef VISIONFIVE2
+    if (verify_this_write)
+    {
+      uint32 readback[SD_WORDS_PER_BLOCK] = {};
+      uint32 read_ret = sd_read(readback, SD_WORDS_PER_BLOCK, sector);
+      if (read_ret != 0)
+      {
+        printfRed("[sd_write] readback failed sector=%d ret=%u\n", sector, read_ret);
+        return read_ret;
+      }
+
+      for (int word = 0; word < SD_WORDS_PER_BLOCK; ++word)
+      {
+        int source_index = source_base + word;
+        uint32 expected = source_index < size ? dat[source_index] : 0;
+        if (readback[word] != expected)
+        {
+          printfRed("[sd_write] readback mismatch sector=%d word=%d expected=%p actual=%p\n",
+                    sector, word, expected, readback[word]);
+          return 1;
+        }
+      }
+      printfGreen("[sd_write] readback verified sector=%d words=%d\n",
+                  sector, SD_WORDS_PER_BLOCK);
+    }
+#endif
+  }
+
+#ifdef VISIONFIVE2
+  if (verify_this_write)
+  {
+    verify_first_write = false;
+    printfGreen("[sd_write] first write readback verified addr=%d blocks=%d\n",
+                addr, block_count);
+  }
+#endif
+  printfMagenta("[sd_write] done addr=%d size_words=%d blocks=%d\n",
+                addr, size, block_count);
   return 0;
 }
 
@@ -667,7 +868,11 @@ uint32 sd_read(uint32 *dat, int size, int addr)
   { // 逐块读取
     SDMMC->BLKSIZ = 512;                     // 设置块大小为512字节
     SDMMC->BYTCNT = 512;                     // 设置传输字节数为512
-    SD_Send_Command(SDMMC, CMD17, addr + i); // CMD17: 单块读取，参数为扇区地址
+    uint32 cmd_ret = SD_Send_Command(SDMMC, CMD17, addr + i); // CMD17: 单块读取，参数为扇区地址
+    if (cmd_ret)
+    {
+      return cmd_ret;
+    }
 
     // 读取一个块（128个32位字）。等待FIFO有数据再读，避免空读
     int words_left = 128;
@@ -676,22 +881,24 @@ uint32 sd_read(uint32 *dat, int size, int addr)
     {
       // 等待FIFO计数>0或数据完成/错误
       while ((MCI_STS_GET_FCNT(SDMMC->STATUS) == 0) &&
-             !(SDMMC->RINTSTS & (MCI_INT_RXDR | MCI_INT_DATA_OVER | MCI_INT_DTO | MCI_INT_DCRC | MCI_INT_FRUN)))
+             !(SDMMC->RINTSTS & (MCI_INT_RXDR | MCI_INT_DATA_OVER | SD_CMD_ERROR_BITS | SD_DATA_ERROR_BITS)))
       {
         if (--safety_tries == 0)
         {
-          printfRed("sd_read timeout waiting FIFO/data, RINTSTS=%p STATUS=%p\n", SDMMC->RINTSTS, SDMMC->STATUS);
+          printfRed("[sd_read] timeout waiting FIFO/data sector=%d words_left=%d RINTSTS=%p STATUS=%p\n",
+                    addr + i, words_left, SDMMC->RINTSTS, SDMMC->STATUS);
           return 1;
         }
       }
 
       // 错误检查：数据超时/CRC/溢出
       uint32 rints = SDMMC->RINTSTS;
-      if (rints & (MCI_INT_DTO | MCI_INT_DCRC | MCI_INT_FRUN))
+      if (rints & (SD_CMD_ERROR_BITS | SD_DATA_ERROR_BITS))
       {
-        printfRed("sd_read error, RINTSTS=%p\n", rints);
+        printfRed("[sd_read] error sector=%d RINTSTS=%p STATUS=%p\n", addr + i, rints, SDMMC->STATUS);
         // 清错误位
-        SDMMC->RINTSTS = (rints & (MCI_INT_DTO | MCI_INT_DCRC | MCI_INT_FRUN));
+        SDMMC->RINTSTS = rints;
+        SD_ResetFifo(SDMMC);
         return 1;
       }
 
@@ -700,7 +907,7 @@ uint32 sd_read(uint32 *dat, int size, int addr)
       if (avail == 0 && (rints & MCI_INT_DATA_OVER))
       {
         // 传输完成但words_left>0，尽量退出避免死循环
-        printfRed("sd_read data over with words_left=%d\n", words_left);
+        printfRed("[sd_read] data over sector=%d words_left=%d\n", addr + i, words_left);
         SDMMC->RINTSTS = MCI_INT_DATA_OVER;
         break;
       }

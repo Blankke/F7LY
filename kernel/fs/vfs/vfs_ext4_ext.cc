@@ -171,7 +171,14 @@ int vfs_ext_mount2(struct filesystem *fs, uint64_t rwflag, void *data) {
     }
 
     bdev = &vbdev->bd;
+#ifdef VISIONFIVE2
+    printfMagenta("[vfs_ext_mount2] before ext4_mount root_fs ro=1\n");
+    r = ext4_mount("root_fs", fs->path, true);
+#else
+    printfMagenta("[vfs_ext_mount2] before ext4_mount root_fs ro=0\n");
     r = ext4_mount("root_fs", fs->path, false);
+#endif
+    printfMagenta("[vfs_ext_mount2] after ext4_mount root_fs r=%d\n", r);
 
     if (r != EOK) {
         vfs_ext4_blockdev_destroy(vbdev);
@@ -1044,13 +1051,17 @@ struct inode *vfs_ext_namei(const char *name) {
     struct ext4_inode *ext4_i = NULL;
     uint32_t ino;
 
+    printfMagenta("[vfs_ext_namei] begin path=%s\n", name);
     inode = get_inode();
     if (inode == NULL) {
+        printfRed("[vfs_ext_namei] get_inode failed path=%s\n", name);
         return NULL;
     }
 
     ext4_i = (struct ext4_inode *)(&(inode->i_info));
+    printfMagenta("[vfs_ext_namei] before ext4_raw_inode_fill path=%s\n", name);
     int r = ext4_raw_inode_fill(name, &ino, ext4_i);
+    printfMagenta("[vfs_ext_namei] after ext4_raw_inode_fill path=%s ret=%d ino=%u\n", name, r, ino);
     if (r != EOK) {
         // printf("ext4_raw_inode_fill failed\n");
         free_inode(inode);
