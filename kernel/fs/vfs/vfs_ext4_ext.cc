@@ -22,6 +22,7 @@
 #include "fs/lwext4/ext4.hh"
 #include "fs/ioctl.hh"
 #include "libs/string.hh"
+#include <asm-generic/statfs.h>
 
 #include "physical_memory_manager.hh"
 #include "proc_manager.hh"
@@ -295,31 +296,44 @@ int vfs_ext_mount2(struct filesystem *fs, uint64_t rwflag, void *data) {
 }
 
 int vfs_ext_statfs(struct filesystem *fs, struct statfs *buf) {
-    panic("未实现");
-#ifdef FS_FIX_COMPLETELY
-    struct ext4_sblock *sb = NULL;
-    int err = EOK;
+    if (fs == nullptr || fs->path == nullptr || buf == nullptr) {
+        return EINVAL;
+    }
 
-    err = ext4_get_sblock(fs->path, &sb);
+    struct ext4_mount_stats stats{};
+    int err = ext4_mount_point_stats(fs->path, &stats);
     if (err != EOK) {
         return err;
     }
 
-    buf->f_bsize = ext4_sb_get_block_size(sb);
-    buf->f_blocks = ext4_sb_get_blocks_cnt(sb);
-    buf->f_bfree = ext4_sb_get_free_blocks_cnt(sb);
-    buf->f_bavail = ext4_sb_get_free_blocks_cnt(sb);
-    buf->f_type = sb->magic;
-    buf->f_files = sb->inodes_count;
-    buf->f_ffree = sb->free_inodes_count;
-    buf->f_frsize = ext4_sb_get_block_size(sb);
-    buf->f_bavail = sb->free_inodes_count;
-    buf->f_fsid.val[0] = 2; /* why 2? */
-    buf->f_flags = 0;
-    buf->f_namelen = 32;
-    return err;
-    #endif
-    return -1;
+    memset(buf, 0, sizeof(*buf));
+    buf->f_type = 0xEF53; /* EXT4_SUPER_MAGIC */
+    buf->f_bsize = stats.block_size;
+    buf->f_blocks = stats.blocks_count;
+    buf->f_bfree = stats.free_blocks_count;
+    buf->f_bavail = stats.available_blocks_count;
+    buf->f_files = stats.inodes_count;
+    buf->f_ffree = stats.free_inodes_count;
+    buf->f_namelen = 255;
+    buf->f_frsize = stats.block_size;
+    constexpr uint64_t ST_RDONLY = 1;
+    constexpr uint64_t ST_RELATIME = 4096;
+    buf->f_flags = ST_RELATIME | (stats.read_only ? ST_RDONLY : 0);
+
+    // statfs 只暴露 64 位 fsid；从 ext4 超级块真实 UUID 的四个 32 位字
+    // 折叠得到稳定标识，避免卷标相同的两个文件系统被误认为同一实例。
+    uint32_t uuid_words[4]{};
+    memcpy(uuid_words, stats.uuid, sizeof(uuid_words));
+    uint32_t fsid_lo = uuid_words[0] ^ uuid_words[2];
+    uint32_t fsid_hi = uuid_words[1] ^ uuid_words[3];
+    if ((fsid_lo | fsid_hi) == 0) {
+        // 极旧/未初始化镜像可能没有 UUID；此时才退回设备号。
+        fsid_lo = static_cast<uint32_t>(fs->dev);
+        fsid_hi = fsid_lo ^ 0xF7A14E53U;
+    }
+    buf->f_fsid.val[0] = static_cast<int>(fsid_lo);
+    buf->f_fsid.val[1] = static_cast<int>(fsid_hi);
+    return EOK;
 }
 
 

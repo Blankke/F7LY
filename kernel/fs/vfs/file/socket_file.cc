@@ -55,9 +55,6 @@ namespace fs
         constexpr size_t k_tcp_recv_buffer_max_bytes = 512 * 1024;
         constexpr size_t k_udp_queue_max_bytes = 256 * 1024;
         constexpr size_t k_udp_queue_max_packets = 256;
-        // 小块流式传输通常对应请求/响应协议；成功唤醒对端后主动交接一次 CPU。
-        // 大块传输保持吞吐优先，避免每次 write/read 都额外切换。
-        constexpr size_t k_stream_handoff_max_bytes = 4096;
         constexpr socklen_t k_max_user_sockaddr_len = 4096;
         constexpr int k_loopback_somaxconn = 4096;
         constexpr uint64 k_tcp_connect_listener_wait_ticks = 100;
@@ -98,6 +95,10 @@ namespace fs
         SpinLock g_unix_lock;
         bool g_unix_ready = false;
         unix_binding g_unix_bindings[k_unix_binding_max];
+
+        SpinLock g_socket_registry_lock;
+        eastl::atomic<uint32> g_socket_registry_state{0};
+        socket_file *g_socket_registry_head = nullptr;
 
         uint16 to_network_u16(uint16 value)
         {
@@ -155,16 +156,6 @@ namespace fs
             // 统一从内核时间管理器取当前时间，供 SO_RCVTIMEO 计算 deadline。
             tmm::timeval tv = tmm::k_tm.get_time_val();
             return tv.tv_sec * k_socket_usec_per_sec + tv.tv_usec;
-        }
-
-        void yield_after_small_stream_transfer(size_t bytes)
-        {
-            if (bytes > 0 && bytes <= k_stream_handoff_max_bytes)
-            {
-                // AF_UNIX/TCP 小消息常见于同步协议。完成一次传输后让对端尽快运行，
-                // 防止单个发送/接收方在一个 tick 内连续占用过多 syscall 机会。
-                proc::k_scheduler.yield();
-            }
         }
 
         int copy_socket_timeval_option(void *optval, socklen_t *optlen, long sec, long usec)
@@ -840,6 +831,11 @@ namespace fs
         _lock.init("socket_lock");
         // file 基类用引用计数管理生命周期；创建后持有一个引用。
         dup();
+        initialize_proc_registry();
+        g_socket_registry_lock.acquire();
+        _proc_registry_next = g_socket_registry_head;
+        g_socket_registry_head = this;
+        g_socket_registry_lock.release();
     }
 
     socket_file::socket_file(FileAttrs attrs, int domain, int type, int protocol)
@@ -878,10 +874,29 @@ namespace fs
         lwext4_file_struct.flags = O_RDWR;
         _lock.init("socket_lock");
         dup();
+        initialize_proc_registry();
+        g_socket_registry_lock.acquire();
+        _proc_registry_next = g_socket_registry_head;
+        g_socket_registry_head = this;
+        g_socket_registry_lock.release();
     }
 
     socket_file::~socket_file()
     {
+        // 必须先从快照登记表摘除，再取得对象锁；快照使用“登记锁 -> 对象锁”
+        // 的固定顺序，这样析构和 /proc/net/tcp 并发时不会死锁或悬空。
+        g_socket_registry_lock.acquire();
+        socket_file **link = &g_socket_registry_head;
+        while (*link != nullptr && *link != this)
+        {
+            link = &(*link)->_proc_registry_next;
+        }
+        if (*link == this)
+        {
+            *link = _proc_registry_next;
+        }
+        _proc_registry_next = nullptr;
+        g_socket_registry_lock.release();
         // 析构时要先把自身状态切到 CLOSED，并唤醒所有可能睡在这个 socket 上的线程。
         _lock.acquire();
         _state = SocketState::CLOSED;
@@ -941,6 +956,160 @@ namespace fs
             }
         }
         _pending_connections.clear();
+    }
+
+    void socket_file::initialize_proc_registry()
+    {
+        constexpr uint32 k_uninitialized = 0;
+        constexpr uint32 k_initializing = 1;
+        constexpr uint32 k_ready = 2;
+        if (g_socket_registry_state.load(eastl::memory_order_acquire) == k_ready)
+        {
+            return;
+        }
+
+        uint32 expected = k_uninitialized;
+        if (g_socket_registry_state.compare_exchange_strong(
+                expected, k_initializing, eastl::memory_order_acq_rel))
+        {
+            g_socket_registry_lock.init("socket_proc_registry");
+            g_socket_registry_head = nullptr;
+            g_socket_registry_state.store(k_ready, eastl::memory_order_release);
+            return;
+        }
+        while (g_socket_registry_state.load(eastl::memory_order_acquire) != k_ready)
+        {
+            asm volatile("nop");
+        }
+    }
+
+    eastl::string socket_file::generate_tcp_proc_snapshot(bool ipv6)
+    {
+        initialize_proc_registry();
+        eastl::string result =
+            "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n";
+        int slot = 0;
+
+        g_socket_registry_lock.acquire();
+        for (socket_file *socket = g_socket_registry_head;
+             socket != nullptr;
+             socket = socket->_proc_registry_next)
+        {
+            if (socket == nullptr)
+            {
+                continue;
+            }
+
+            socket->_lock.acquire();
+            const bool family_matches = ipv6
+                                            ? socket->_family == SocketFamily::INET6
+                                            : socket->_family == SocketFamily::INET;
+            if (!family_matches || socket->_type != SocketType::TCP ||
+                socket->_state == SocketState::CREATED ||
+                socket->_state == SocketState::CLOSED)
+            {
+                socket->_lock.release();
+                continue;
+            }
+
+            uint state = 0x07; // TCP_CLOSE：已 bind 但尚未 listen/connect。
+            if (socket->_state == SocketState::LISTENING)
+            {
+                state = 0x0a;
+            }
+            else if (socket->_state == SocketState::CONNECTING)
+            {
+                state = 0x02;
+            }
+            else if (socket->_state == SocketState::CONNECTED)
+            {
+                state = 0x01;
+            }
+
+            // 非阻塞 connect 的用户态状态会保持 CONNECTING，直到 poll/getsockopt
+            // 消费完成事件；proc 快照应直接读取协议栈，避免已经握手成功仍报告 SYN_SENT。
+            if (socket->_onps_socket != INVALID_SOCKET &&
+                socket->_state != SocketState::LISTENING)
+            {
+                EN_TCPLINKSTATE link_state = TLSINVALID;
+                if (onps_tcp_link_state(socket->_onps_socket, link_state))
+                {
+                    switch (link_state)
+                    {
+                    case TLSCONNECTED:
+                        state = 0x01; // TCP_ESTABLISHED
+                        break;
+                    case TLSSYNSENT:
+                    case TLSRCVEDSYNACK:
+                        state = 0x02; // TCP_SYN_SENT
+                        break;
+                    case TLSRCVEDSYN:
+                    case TLSSYNACKSENT:
+                        state = 0x03; // TCP_SYN_RECV
+                        break;
+                    case TLSFINWAIT1:
+                        state = 0x04;
+                        break;
+                    case TLSFINWAIT2:
+                        state = 0x05;
+                        break;
+                    case TLSTIMEWAIT:
+                        state = 0x06;
+                        break;
+                    case TLSCLOSING:
+                        state = 0x0b;
+                        break;
+                    default:
+                        break;
+                    }
+                }
+            }
+
+            const uint16 local_port = to_network_u16(socket->_local_addr.sin_port);
+            const uint16 remote_port = to_network_u16(socket->_remote_addr.sin_port);
+            char line[256];
+            if (ipv6)
+            {
+                // socket 后端目前把 ::/::1/IPv4-mapped IPv6 统一映射为内部 IPv4
+                // endpoint；proc 视图以 IPv4-mapped IPv6 形式无损公开端口和地址。
+                char local_address[33];
+                char remote_address[33];
+                if (socket->_local_addr.sin_addr == 0)
+                {
+                    snprintf(local_address, sizeof(local_address), "%032x", 0);
+                }
+                else
+                {
+                    snprintf(local_address, sizeof(local_address),
+                             "0000000000000000FFFF0000%08X", socket->_local_addr.sin_addr);
+                }
+                if (socket->_remote_addr.sin_addr == 0)
+                {
+                    snprintf(remote_address, sizeof(remote_address), "%032x", 0);
+                }
+                else
+                {
+                    snprintf(remote_address, sizeof(remote_address),
+                             "0000000000000000FFFF0000%08X", socket->_remote_addr.sin_addr);
+                }
+                snprintf(line, sizeof(line),
+                         "%4d: %s:%04X %s:%04X %02X 00000000:00000000 00:00000000 00000000 0 0 %lu\n",
+                         slot++, local_address, local_port, remote_address, remote_port,
+                         state, reinterpret_cast<unsigned long>(socket));
+            }
+            else
+            {
+                snprintf(line, sizeof(line),
+                         "%4d: %08X:%04X %08X:%04X %02X 00000000:00000000 00:00000000 00000000 0 0 %lu\n",
+                         slot++, socket->_local_addr.sin_addr, local_port,
+                         socket->_remote_addr.sin_addr, remote_port, state,
+                         reinterpret_cast<unsigned long>(socket));
+            }
+            result += line;
+            socket->_lock.release();
+        }
+        g_socket_registry_lock.release();
+        return result;
     }
 
     long socket_file::read(uint64 buf, size_t len, long off, bool upgrade)
@@ -1902,18 +2071,15 @@ namespace fs
             }
             if (!had_pending)
             {
-                yield_after_small_stream_transfer(static_cast<size_t>(queued));
                 return queued;
             }
             if (static_cast<size_t>(queued) >= send_len)
             {
-                yield_after_small_stream_transfer(len);
                 return static_cast<int>(len);
             }
             if (static_cast<size_t>(queued) > pending_len)
             {
                 size_t written = static_cast<size_t>(queued) - pending_len;
-                yield_after_small_stream_transfer(written);
                 return static_cast<int>(written);
             }
             return -EPIPE;
@@ -2054,7 +2220,6 @@ namespace fs
                 proc::k_pm.wakeup(&_recv_buffer);
             }
             _lock.release();
-            yield_after_small_stream_transfer(copy_len);
             return static_cast<int>(copy_len);
         } else if (_type == SocketType::UDP) {
             _lock.release();

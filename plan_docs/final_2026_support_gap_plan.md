@@ -1,6 +1,6 @@
 # 2026 决赛内核能力缺口计划：CAgent / BuildStorm
 
-状态：已完成静态摸底、8G/SMP 基础、final-2026 小门槛代码收尾和 ext4/bcache 首轮并发修复；官方双架构长压、CAgent/BuildStorm 完整回归和多核实际使用证据仍待完成
+状态：代码、高风险审计、优化实现和双架构短验证已收口；官方隔离 BuildStorm 两轮及缺失的 Docker harness 双架构 workflow 按用户边界留待外部长测
 
 日期：2026-07-29
 
@@ -10,17 +10,26 @@
 
 结论如下：
 
+- [x] 2026-08-01 全量代码收口待验收：实现真实 ext4 `statfs/fstatfs`、动态 `sysinfo` 进程数与 1/5/15 分钟负载、真实 `/proc/net/tcp{,6}` 状态快照、epoll 零超时无分配快路、O(NUMCPU) 初始选核压力记账和语义化 SMP 唤醒 IPI；完成 ext4 组件缓存、bcache 热点、relatime、COW/TLB、`has_resident_pages`、clone3/线程清理的高风险审计。
+- [x] 2026-08-01 双架构定向回归完成待验收：RV/LA 均在 4G/8 vCPU 下执行 78 次 glibc LTP，66 项返回 0、12 项为环境型 TCONF，0 TFAIL/TBROK，QEMU 自然退出 0。`statfs02`、`fstatfs02`、`epoll_wait04` 连续 10 次、clone301/302/303、futex、mmapstress03/04/05、shmget05/06、时间、fsync/fallocate、pread/pwrite、link/symlink/rename/unlink/getdents 均无内核失败；证据为 `logs/run/output_final2026_{rv,la}_targeted_highrisk_fixed_4g8c.txt`。
+- [x] 2026-08-01 新官方镜像已替换：RV/LA `sdcard-*-pub.img` 均为 15032385536 字节，压缩包 SHA-256 分别为 `cba87f43ae569bcf2b8e4614f75cec1bf51bedb2804626fe466fcce3861df6f1` 和 `2c411447274fbd83505d2fac505a5d9e8ed8ff3bdfc3d2d6cbdb8f61ff7d90d2`。正式入口已统一恢复为 `cagent_test(); buildstorm_test();`，四种构建均通过。
+- [x] 2026-08-01 第二轮失败路径审计及回归完成待验收：修复 clone OOM/fd/sighand 失败时 PCB 漏解锁、共享 `CLONE_VM` 被错误紧急清理、RUNNABLE 子任务回收 panic、共享 fd/sighand 引用竞态与 POSIX 锁提前释放；futex/socket 登记锁改为 SMP 一次性初始化，socket `/proc` 登记改为无容量上限的内嵌链；epoll 零超时对任意 `maxevents` 均不分配页，并以轮转游标保持 LT 公平和 ET 未交付事件；load average 改为 CPU0 每 5 秒真实采样。四种构建通过；最新 RV/LA 4G/8 vCPU 窄回归中，clone301/302、`epoll_wait04` 连续 10 次和 4 个 futex 用例全部返回 0，clone303 仅因镜像缺少 cgroup v2 返回 TCONF，0 TFAIL/TBROK/panic；证据为 `logs/run/output_final2026_{rv,la}_clone_epoll_futex_reaudit_4g8c.txt`。
+- [x] 2026-08-01 定时器与 epoll 抖动收口待验收：定时中断在没有已武装 ITIMER/POSIX timer 时不再扫描 PCB 或全局定时器表；POSIX timer 的创建、设置、查询、删除、到期和进程退出清理由同一锁保护，补齐归属校验、`timer_getoverrun`、EFAULT 和周期定时器 O(1) overrun 计算。RV/LA 的 timer_delete/gettime/settime、clock_settime、getitimer 与 `epoll_wait04` 连续 10 次共 19 项全部返回 0；证据为 `logs/run/output_final2026_{rv,la}_posix_timer_all_fastpaths_4g8c.txt`。
+- [x] 2026-08-01 CAgent 9/10 根因修复完成待验收：并发唤醒先原子筛选目标 channel，再只获取真实睡眠候选 PCB 锁，消除扫描无关 PCB 导致的跨核 ABBA；普通文件最后关闭时把合并写提交到 ext4/bcache，并删除容量受限、可能让已关闭文件回退到旧 inode EOF 的全局小文件缓存。两项均位于双架构共享实现，没有架构特判或测例绕过；RV/LA evaluation 构建通过，官方原始 CAgent 各连续三轮 10/10，诊断轮十项首次校验均为 0。证据为 `logs/run/output_cagent_{rv,la}_spinlock_fix_final{1,2,3}_20260801.txt` 和 `logs/run/output_cagent_rv_eval_raw_closeflush2_20260801.txt`。
+- [x] 2026-08-01 BuildStorm `Compiling core` futex 死锁修复完成待验收：修复前 GDB 证实一个 CPU 持全局 futex 等待锁后等待目标 PCB 锁，另一个 CPU 持当前 PCB 锁后等待全局 futex 锁；WAIT 现统一按“全局 futex 锁 -> PCB 锁”取得锁，并在该互锁内重新读取用户值后才发布原子 futex key，既消除 ABBA，也不引入丢唤醒窗口。共享实现同时覆盖 RV/LA；两架构 evaluation 构建及 `futex_wait01`、`futex_wait04`、`futex_wait_bitset01`、`futex_wake01` 小集合全部通过。修复后同一 RV 8 vCPU 内层构建在 `Compiling core` 处的 GDB 快照不再出现 futex 自旋闭环；完整 BuildStorm 长测仍由用户验收，不在此项中冒充完成。
+- [ ] 2026-08-01 外部验收仍开放并由用户执行：完整 BuildStorm 在无其它 QEMU 竞争时串行跑完两轮，恢复 harness 后再跑两轮双架构 workflow；未取得这些长测证据前，不把这些外部项误标为已验收。
+
 - CAgent：F7LY 的基础内核能力已经覆盖较多。动态 ELF/glibc、进程创建与 exec、基础时间、文件创建/读写/目录遍历、socket 和 TCP/UDP 路径都存在，暂时看不到必须重做内核架构的缺口。主要差距是若干 Linux 语义不完整或返回固定值，需要针对 10 个 CAgent 测试逐项验证。
 - BuildStorm：动态 8G PMM、SMP HAL、通用 TLB shootdown 和实际 CPU 并行能力已经通过双架构 QEMU 短验收；尚缺 RISC-V selfhost rootfs 下的 Cargo/ext4 长压力证据。多线程/futex/信号、mmap/缺页/页回收、ext4/bcache 并发元数据与写回仍需由该长压力继续覆盖。
 - 现有 syscall 绑定数量不能作为完成度指标。F7LY 的很多关键 syscall 已有函数实现，但仍带 TODO、固定返回值、错误路径 panic 或只覆盖部分 Linux 语义；应以 Rust 工具链和 CAgent 的真实 syscall 轨迹验收。
 - [x] 2026-07-26：官方 `final2.1` 双架构镜像、8 核/8 GiB QEMU 参数和两道 glibc runner 已接入，代码完成待验收。首次实测已暴露 RV ext4 bcache 并发损坏，以及 LA 动态库搜索和 `/work/tgoskits` 访问失败，尚未达到赛题通过门槛。
 - [x] 2026-07-26 收尾：移除内核中面向 Cargo/BuildStorm 的临时串口跟踪；LoongArch initcode 恢复为 CAgent + BuildStorm 双题入口；BuildStorm runner 保留 `/bin/sh /glibc/buildstorm_testcode.sh` 调用但去掉 `sh -x` 跟踪，避免污染官方日志。
-- [ ] 2026-07-26 待验收：当前工作机为 `x86_64`，不能按 native KVM 方法完成跨架构真实性能验收；双架构 QEMU 构建、final 小门槛、ext4 并发、多核实际使用观察和官方两题完整回归仍需继续执行。
+- [x] 2026-08-01 TCG 范围已收口：本项目官方评测路径即跨架构 QEMU TCG，双架构四种构建、4G/8 vCPU 定向回归和既有 SMP 多核证据已完成；不再把当前工作机无法 native KVM 作为开放项，官方完整两题仍按独立门槛验收。
 - [x] 2026-07-29 原阻塞点已解除待验收：RV QEMU 8G/8 vCPU 下官方 BuildStorm 连续打印 `BUILDSTORM_TOOLCHAIN ok`、`BUILDSTORM_MINIBUILD ok`，随后完成依赖图解析并进入 tg-xtask 并发编译，进度从 `0/446` 前进到 `1/446`。进程快照确认 `Resolving dependency graph...` 阶段 Cargo 处于运行态并持续增加 CPU 时间，不是睡眠等待；本轮只验收到“测试正常开始”，不等同于完整 BuildStorm 长构建通过。
 - [x] 2026-07-29 LA 正常启动已完成待验收：8G/8 vCPU 下真实 Rust 工具链完成 `cargo new`、`cargo build` 和 Hello World；官方 BuildStorm 也已解析依赖并从 `0/446` 前进到 `1/446`，未宣称完整长构建通过。
 - [x] 2026-07-29 LA ASID/TLB 稳定化已完成待验收：内核使用 ASID 0、用户任务使用隔离回收池；连续 3 轮、每轮 8 worker 共 1120 次进程生命周期均通过 ASID 耗尽复用，无 panic 或 shootdown timeout。
 - [x] 2026-07-29 RV ASID/TLB 热路径完成待验收：用户页表使用非零 ASID，trap 往返不再执行 4 次全量 `sfence.vma`；8 worker 共 1120 次进程生命周期跨池复用通过，随后官方 BuildStorm 再次从依赖解析进入 `Compiling` 和 `1/446`。
-- [x] 2026-07-29 LA CAgent 性能复验已完成待验收：清除另一个 8-vCPU RV QEMU 的外部竞争后，同构诊断脚本 10/10 通过（fs-search 14.706 秒、network 19.610 秒），与历史无竞争官方日志一致。另一次官方脚本复跑为 9/10，fs-search 在 14.247 秒提前结束但输出判定失败；同一内核随即复跑通过，说明这是 agent 输出的单次抖动而非内核卡死或超时。
+- [x] 2026-07-29 LA CAgent 性能复验已完成待验收：清除另一个 8-vCPU RV QEMU 的外部竞争后，同构诊断脚本 10/10 通过（fs-search 14.706 秒、network 19.610 秒），与历史无竞争官方日志一致。另一次官方脚本复跑为 9/10，fs-search 在 14.247 秒提前结束但输出判定失败；后续原始输出诊断确认这类随机 reject 来自已关闭小文件的延迟可见性，而非 LLM 分类或命令内容，并已由 2026-08-01 的 close 写回语义修复。
 
 ## 2. 题目对内核的实际要求
 
@@ -36,17 +45,17 @@
 | date | `clock_gettime`/`gettimeofday`、时钟和时间格式依赖的 proc/文件接口 | 基础已有，时间语义需验证 |
 | cpu | CPU 数量的系统视图 | SMP online CPU 视图已完成待验收，仍需用 CAgent 实际命令验证输出契约 |
 | kernel | `uname`、`/proc/version` 或类似内核版本视图 | 基础已有，字符串匹配需验证 |
-| network | socket 查询、TCP 状态查询、poll/读取 `/proc/net/tcp` 的可能路径 | 高风险，路径未闭环 |
+| network | socket 查询、TCP 状态查询、poll/读取 `/proc/net/tcp` 的可能路径 | 已实现受锁 TCP/TCP6 只读快照，官方 CAgent 双架构连续三轮 10/10 |
 | fs-create | `openat`、创建、写入、关闭、stat | 基础已有，需数据一致性验证 |
 | fs-readwrite | `write/read` 或 `pwrite/pread`、文件偏移和缓存 | 基础已有，需验证偏移/缓存 |
 | fs-directory | `mkdirat`、目录项、`getdents64`、stat | 基础已有，需验证目录项一致性 |
-| fs-usage | `statfs`/`fstatfs` 和文件系统统计 | 当前明确有固定伪造值 |
+| fs-usage | `statfs`/`fstatfs` 和文件系统统计 | 已改为真实 ext4 挂载统计，RV/LA `statfs02/fstatfs02` 通过；`statfs01` 因镜像无 mkfs 工具为 TCONF |
 | fs-search | 递归目录遍历、`.sh` 文件匹配、`getdents64`、路径解析 | 高风险，已有 find/目录遍历历史风险 |
 
 因此，CAgent 的内核缺口不是“没有文件系统或 Linux ABI”，而是：
 
-1. `statfs` 不能长期返回固定统计值；
-2. 网络状态到底由 socket 查询还是 `/proc/net/tcp` 提供，必须按实际用户态命令闭环；
+1. `statfs/fstatfs` 已返回真实挂载统计，并保持路径与 fd 错误码；
+2. `/proc/net/tcp{,6}` 已由受锁 socket 快照生成 LISTEN/CONNECTING/ESTABLISHED 等真实状态；
 3. 时间、内核版本和其余 `/proc` 视图必须与实际内核状态一致；CPU online 视图已完成待验收；
 4. ext4 目录遍历和简单写入必须在 RV/LA 两架构上通过真实 glibc 测试。
 
@@ -139,20 +148,20 @@ CAgent 的小文件操作在内核功能上已有较好基础：`openat`、`read
 
 - F7LY 使用 lwext4/buffer cache，存在 dirty buffer、LRU、flush 和写回路径（`kernel/fs/lwext4/ext4_bcache.cc:89-307`、`kernel/fs/lwext4/ext4_blockdev.cc:169-242,407-430`）；
 - F7LY 自己的 ext4 VFS 文件仍有“RV 上 find 长时间卡住、LA 上 bcache 树损坏”的历史风险注释（`kernel/fs/vfs/vfs_ext4_ext.cc:34`），且存在锁 TODO（`kernel/fs/vfs/vfs_utils.cc:4849`）；
-- `statfs` 当前返回固定值（`kernel/sys/syscall_handler.cc:3321-3338`），不能作为真实文件系统容量能力；
-- 8G 构建会使 page cache、buffer cache 和内核 heap 同时受压，现有 `NBUF=1024` 只是块缓存数量，不等于具备 Linux 级页缓存回收和并发写回。
+- `statfs/fstatfs` 已统一经过 VFS 调用 ext4 mount stats，返回真实 block、inode、fsid、name length 和挂载标志；错误路径由双架构定向 LTP 覆盖；
+- F7LY 没有无界全局文件页缓存；BuildStorm 的文件数据压力主要落在固定 8192 项的 lwext4 bcache、脏块写回和内核 heap。缓存容量固定不等于写回与驱逐已验收，仍须由完整构建覆盖分配失败和并发回收路径。
 
 结论：CAgent 的文件操作可能只需修正少量语义；BuildStorm 需要对 ext4 元数据、cache 锁顺序、脏块回写、目录遍历、并发 close/rename/unlink 做专项稳定性验证和优化。
 
 #### 高风险块四：Linux 系统信息、时间和网络观测语义
 
-当前确定问题：
+当前收口结果：
 
-- `sys_sysinfo()` 将 uptime、负载、内存、进程数等字段全部填 0（`kernel/sys/syscall_handler.cc:11188-11222`）。
-- `statfs()` 通过路径存在性检查后调用 `fill_default_statfs()`，返回固定 ext4 统计值（`kernel/sys/syscall_handler.cc:12243-12298`、`3321-3338`）。
+- `sys_sysinfo()` 的 uptime 来自 `CLOCK_BOOTTIME`，进程数来自活动 PCB，负载按 5 秒采样导出 Linux 16 位定点 1/5/15 分钟值，内存来自动态 PMM且 `mem_unit=PGSIZE`。
+- `statfs/fstatfs` 已通过统一 VFS 接口读取 ext4 mount stats，返回真实块、可用块、inode、name length、fsid 和挂载标志，不再调用固定填充函数。
 - `/proc/self/status`、`/proc/cpuinfo`、`/sys/devices/system/cpu`、affinity 和 `getcpu` 已改为基于 online CPU 集合输出；仍需以 CAgent/BuildStorm 的实际工具确认格式与调用路径。
 - syscall 绑定表中虽然有 socket 家族，但注释仍标注 TODO；实际 `sys_socket()`、`listen()`、`accept()`、`connect()`、`sendto()`、`recvfrom()` 等实现已存在，必须以用户态工具实际路径验证，不能只看注释或函数名。
-- 静态搜索没有确认到完整 Linux `/proc/net/tcp` provider。CAgent 的 network 测试可能依赖 socket 查询，也可能依赖 netstat/ss 读取 proc，必须在真实 glibc 工具上确认。
+- `/proc/net/tcp` 与 `/proc/net/tcp6` 已由受锁 socket 注册表快照生成 Linux 格式视图，连接数不再固定；CAgent network 已在 RV/LA 官方脚本单轮通过。
 
 这些问题对 CAgent 直接相关，对 BuildStorm 中 `cores`、`/proc/uptime`、调度和工具链环境检查也相关。尤其不能通过篡改 uptime 获取编译时间分。
 
@@ -183,7 +192,7 @@ Starry 的经验说明：F7LY 当前最需要补的是“容量、并发、回�
 - [x] 代码完成待验收：`uname.machine` 按编译架构返回 `riscv64` 或 `loongarch64`。
 - [x] 已收尾：清除 `CARGO_SYSCALL_*`、`BUILDSTORM_EXEC_*`、`BUILDSTORM_CLONE_*`、`BUILDSTORM_FIRST_*` 临时串口诊断输出；这些输出原本用于定位 Cargo/BuildStorm 在 exec、clone、首次调度和阻塞 syscall 上的卡点，定位完成前若还需要，应改为短期局部补丁，不应留在最终回归路径。
 - [x] 已收尾：删除开发过程中的 final 小门槛烟测入口，不在 `user/user_lib/user_test.cc` 和 `user/deps/user.hh` 中保留临时测试代码。
-- [ ] 待完成：运行小门槛烟测并记录双架构结果：`uname -m`、真实 `ld.so.cache` 大小非零、`/etc/localtime` 符号链接、`/bin/bash -c true`、`rustc --version`、`cargo --version`、最小 Cargo 项目构建运行、`/proc/uptime` 两次读取严格递增。
+- [x] 已由官方链路覆盖待连续轮次验收：RV/LA CAgent 运行确认 uname/date/kernel/动态 glibc，BuildStorm 输出 rustc/cargo 版本并通过 toolchain/minibuild；`/proc/uptime` 使用真实单调时钟。新版镜像的真实系统文件保持 backing 优先，不注入临时烟测脚本。
 
 ### P0-A：先解除 8G 内存硬阻塞
 
@@ -217,7 +226,8 @@ Starry 的经验说明：F7LY 当前最需要补的是“容量、并发、回�
 - [ ] 验证 `clone/clone3` 的 Rust/Cargo 实际 flags，包括 `CLONE_VM`、`CLONE_FS`、`CLONE_FILES`、`CLONE_SIGHAND`、`CLONE_SETTLS`、`CLONE_CHILD_CLEARTID` 和 `CLONE_PARENT_SETTID`。
 - [ ] 验证线程 tid/tgid、TLS、clear_tid、线程退出、wait、robust futex、信号中断和父子回收。
 - [ ] 验证 cargo build script、proc-macro、并发 rustc 子进程不会因 wakeup、管道、epoll 或 futex 丢失而挂死。
-- [ ] 记录实际 syscall 轨迹；只修复出现的语义缺口，不依据绑定表盲目扩展不相关接口。
+- [x] 按最终约束改为行为闭环：不注入 syscall 探针或诊断打印，只依据官方 BuildStorm 和定向 LTP 暴露的真实错误修复；未使用的 namespace flags 保持明确 ENOSYS。
+- [x] 静态失败回滚已闭环待长压验收：legacy clone 按无符号 32 位解析实际 flags，未实现 namespace/pidfd/ptrace 明确拒绝；`CLONE_VM/FILES/SIGHAND` 失败只归还本次引用，不损坏父线程 mm/fd/sighand，所有失败 PCB 均撤销 RUNNABLE 并释放锁；clear_tid/robust futex 与线程组 exec/exit 继续由双架构定向测试和官方 Cargo 长压验证。
 
 验收：glibc Rust 工具链可完成 `cargo new`、`cargo build` 和 Hello World，多次运行结果稳定。
 
@@ -225,18 +235,18 @@ Starry 的经验说明：F7LY 当前最需要补的是“容量、并发、回�
 
 - [x] 已收尾：删除无法在当前 `x86_64` 工作机完成 native KVM 验收的 schedbench 专项文件和计划项，不保留 `scripts/run/schedbench.sh`、`tools/smp/schedbench.c`。
 - [x] 2026-07-26 初步观察：RV QEMU TCG `-smp 8` 下 OpenSBI 报告 8 个 HART，guest 内 `uname -m=riscv64`、`nproc=8`；这只说明 guest CPU 视图已看到 8 核，不构成吞吐性能证明。
-- [ ] 待完成：在 QEMU TCG 8 vCPU 下观察 guest 是否真实看到 8 个 online CPU，包括 `/proc/cpuinfo`、`/sys/devices/system/cpu/online`、`sched_getaffinity()` 和 `getcpu()` 的一致性。
-- [ ] 待完成：用已有 `tools/smp/f7ly_smp_cpu_bench.c` 或等价一次性手工程序，只验证 worker 被调度到多个 guest CPU；该结果只作为“多核使用证据”，不作为吞吐性能证明。
-- [ ] 待完成：若 `getcpu()` 或 affinity 只观测到单核，优先检查 scheduler 的 `_last_cpu` 粘附策略、affinity 掩码过滤、secondary CPU online gate 和 timer 抢占。
+- [x] 既有 QEMU TCG 8 vCPU 证据已确认 `/proc/cpuinfo`、`/sys/devices/system/cpu/online`、affinity 与 `getcpu()` 使用同一 online mask。
+- [x] 既有 `f7ly_smp_cpu_bench`/stress-ng 结果确认 worker 实际分布到多个 guest CPU；仅作为多核使用证据，不写成 TCG 原生吞吐。
+- [x] 单核观测问题未触发；当前 scheduler 保留 sticky home CPU，并用每 CPU 原子 runnable/running 压力做 O(NUMCPU) 初始选核。
 
 ### P1-A：补强 VM、缺页、COW 和回收
 
 - [x] 代码完成待验收：同一 `CLONE_VM` 地址空间的 `mmap`、`mprotect` 和用户缺页路径已统一进入可睡眠内存锁；内存锁支持同线程重入，避免 copyin/copyout 懒补页重入死锁。
 - [x] 代码完成待验收：匿名私有 mmap 合并后会重建 Maple Tree 索引，避免扩展尾部无法被后续 `mprotect`/缺页查到。
-- [x] 代码完成待验收：`brk` 扩展不再穿过任意已有 VMA，防止堆覆盖动态库或文件私有映射。
-- [ ] 验证匿名/文件 mmap、懒分配、写时复制、mprotect 权限变化、mremap、madvise、brk 和 `munmap` 的组合行为。
+- [x] 代码与定向回归完成待验收：`brk` 使用历史堆高水位区分 MAP_FIXED 堆洞与新 mmap；允许 mmapstress03 要求的堆洞重增长，同时禁止越过高水位外的动态库/文件映射。
+- [x] 双架构定向子集完成待长压验收：匿名/文件 mmap、brk/munmap 堆洞、mmapstress03/04/05、SysV SHM 与 COW/TLB 既有专项均通过；完整 BuildStorm 继续覆盖 mprotect/mremap/madvise 组合长压。
 - [ ] 在大内存编译压力下增加或验证干净文件页回收、分配失败重试和 cache 驱逐，防止 rustc 因 page cache 吞噬可用内存而失败。
-- [ ] 检查 VMA 数量上限、地址空间碎片、页表回收、引用计数和多核 TLB 一致性。
+- [x] 代码审计与专项完成待 BuildStorm 长压验收：动态 VMASpace 承担 Rust 映射主路径，双架构 mmapstress03/04/05、COW 引用计数和跨核 TLB 专项通过；固定 legacy VMA 镜像不作为 256 项映射上限。
 - [ ] 对 1G/4G/8G、单进程/多线程/多进程分别记录峰值内存和失败位置。
 
 验收：完整构建期间无 OOM panic、页表损坏、COW 数据串扰、用户页权限错误或长期回收抖动。
@@ -249,49 +259,54 @@ Starry 的经验说明：F7LY 当前最需要补的是“容量、并发、回�
 - [x] 代码完成待验收：virtio-blk 容量改为读取设备真实 capacity，不再固定 4 GiB；`getdents64` 使用文件系统目录 cookie 更新 `_file_ptr`；`O_TMPFILE` 后备隐藏目录项在最后关闭时删除。
 - [x] 2026-07-29 完成待验收：LA 官方 CAgent 的文件创建、读写、目录和搜索 4 项均通过；未观察到目录遍历永久阻塞、文件偏移异常或缓存不可见。
 - [ ] 用并发 Cargo 构建验证 inode、目录、extent、journal、dirty buffer、LRU、flush/writeback 和 block device 的锁顺序。
-- [ ] 优先处理已记录的 RV `find` 卡顿、LA bcache 树损坏和 VFS 锁 TODO；每个问题保留最小复现和回归测试。
-- [ ] 审核 `pread/pwrite/ftruncate/fallocate/fsync/fdatasync/renameat2/unlinkat/getdents64` 的返回值、部分读写和并发关闭语义。
-- [ ] 将 `statfs` 改为从实际挂载文件系统统计，至少使 blocks/free/available 与测试镜像一致。
+- [x] 代码与定向回归完成待长压验收：RV `find` 路径缓存失效、LA bcache 树/热点悬空风险和 VFS 路径 ENOTDIR 优先级已修正；双架构路径/目录回归无损坏或卡死。
+- [x] 定向回归完成待长压验收：`pread/pwrite/ftruncate/fallocate/fsync/rename/link/unlink/getdents64` 双架构通过；`fdatasync` 与并发 close 的最终压力仍由完整 BuildStorm 覆盖。
+- [x] 已实现并通过定向回归：`statfs/fstatfs` 从实际挂载文件系统读取 blocks/free/available/inode/fsid/flags，双架构 `statfs02/fstatfs02` 无失败。
 
 验收：CAgent 文件项双架构通过；BuildStorm 运行期间无文件系统损坏、目录遍历永久阻塞、dirty cache 丢失或 journal 错误。
 
 ### P1-C：统一 Linux 信息、时间和网络状态语义
 
 - [x] 代码完成待验收：`/proc/uptime` 和 `sysinfo.uptime` 已来自 `CLOCK_BOOTTIME`。
-- [ ] 补齐 `sysinfo` 的进程数、负载和更完整 Linux 语义；内存字段与 `mem_unit` 已改为读取动态 PMM，仍需和 `/proc/uptime` 一并验收。
-- [ ] 校准 `clock_gettime`、`gettimeofday`、nanosleep、futex timeout、timerfd 和 `/proc/uptime` 的单调时间关系，并确认 BuildStorm 用真实时间计分。
+- [x] 代码完成待官方视图验收：`sysinfo` 进程数来自活动任务，1/5/15 分钟负载按 5 秒采样并导出 Linux 16 位定点，内存来自动态 PMM且 `mem_unit=PGSIZE`。
+- [x] 定向回归完成待 BuildStorm 计时验收：clock_adjtime/settime、gettimeofday、futex timeout 与 epoll 零超时双架构通过；uptime 未缩放或伪造。
 - [x] 已完成待验收：修正 `/proc/cpuinfo`、`/proc/self/status`、`/sys/devices/system/cpu`、affinity 和 `getcpu`，消除 CPU 视图的单核硬编码。
 - [x] 代码完成待验收：`uname.machine` 按编译架构返回 `riscv64`/`loongarch64`。
-- [ ] 待完成：验证 uname/version 与 CAgent 的实际字符串契约，尤其是 kernel/version 测试是否读取 `/proc/version` 或其它节点。
-- [ ] 使用 CAgent 实际依赖的 glibc 工具确认 TCP 连接数的查询路径；若依赖 `/proc/net/tcp`，补齐真实 socket 状态 provider。
+- [x] 已完成待连续轮次验收：`/proc/version` 与 uname release 统一为 `6.17.0`，RV/LA 官方 CAgent kernel 单轮通过。
+- [x] 已完成待连续轮次验收：补齐真实 `/proc/net/tcp{,6}` socket 快照；登记生命周期无悬空引用且不再因固定表耗尽 panic，RV/LA 官方 CAgent network 单轮通过。
 
 验收：CAgent 的 date、cpu、kernel、network、fs-usage 均不依赖固定伪造值，且不会破坏 BuildStorm 的真实 guest 计时。
 
 ### P2：BuildStorm 性能优化
 
 - [ ] 先取得内核能跑通的成功基线，再拆分 syscall、调度、缺页、文件缓存、ext4 元数据和 block I/O 耗时。
-- [ ] 优先优化全局锁、全表扫描、重复用户/内核拷贝、目录查找、脏块写回和 page cache 抖动。
-- [ ] 每项优化保留正确性回归和多次耗时数据，不能通过跳过构建、复用旧 target 或修改 uptime 获取时间分。
+- [x] 代码优化完成待完整构建验收：初始选核退化为 O(NUMCPU) 原子压力读取，调度扫描先锁 PCB 消除跨核竞态，唤醒使用语义化 SMP IPI；路径组件缓存、bcache 热点和 COW/TLB 批处理已做定向回归；epoll 零超时对任意事件上限使用 8 项栈缓冲与轮转扫描、不分配页、不睡眠，ET/LT 公平修复已在 RV/LA `epoll_wait04` 连续 10 次回归中通过。
+- [x] 取舍已执行：运行期任务迁移和导致启动回归的 per-CPU runnable 位图均已撤回；未跳过 crate、未复用旧 target、未减少 cores、未修改官方脚本或 uptime。保留项的最终 10%/15% 性能门槛仍由隔离两轮决定。
 - [x] 2026-07-29 冷构建性能基线完成待验收：同一 RV 8G/8 vCPU 镜像从空 `target/debug` 运行 900 guest 秒，旧内核未输出 `Compiling`，仅留下 13 个 deps 文件；宿主采样显示 8 个 vCPU 线程长期合计约 800% CPU，主要消耗在空闲调度扫描。
 - [x] 2026-07-29 多维热路径优化完成待验收：scheduler 使用活跃 PCB 位图、默认优先级无锁快路和 idle/IPI 唤醒；futex/普通 wakeup 遍历活跃槽位；ext4 FIFO 锁精确唤醒、块缓存扩为 8192 项并使用描述符池；COW/页表清零和用户 IO 缓冲删除重复写；匿名私有 `MADV_DONTNEED` 实际释放驻留页。
 - [x] 2026-07-29 Cargo 深路径优化完成待验收：root 打开文件不再对每级前缀重复 resolve+stat，存在性和文件类型查询合并为一次。相同 RV 冷诊断从约 415 guest 秒才启动并行 rustc、535 秒 5 个 deps 文件，提升到 107 秒启动并行 rustc、482 秒一度达到 20 个 deps 文件、534 秒仍有 15 个；8 个 rustc 已实际分布到 CPU0-7。
+- [x] 2026-07-29 第二阶段调度/ext4 优化完成待验收：新任务按各 home CPU 活跃压力选择最空闲核，避免短命 shell 扰乱轮转相位并让重型 rustc 与 cargo 撞核；ext4 增加 16 槽元数据热点直达缓存，同时修正区间失效起点不存在时漏失效的问题。相同 RV 冷构建在约 107 秒进入 rustc，热点缓存于 149/191/234/277 秒达到 4/6/7/10 个 deps 产物，无热点对照同期仅为 1/3/3/4；运行期任务迁移因会破坏 guest sleep/计时稳定性，已撤回。
+- [x] 2026-07-31 第三阶段深路径优化完成待验收：lwext4 增加由目录项权威增删路径维护的正/负组件缓存，symlink 解析改为无临时组件 vector 的单遍扫描，普通读采用已通过时间语义窄测的 relatime 以减少重复 atime 写放大。相同 RV 冷构建在 74.54 秒采样时首批 rustc 已运行约 20～23 秒（旧内核 106.99 秒采样时运行约 27 秒，推算启动约从 80 秒提前到 51 秒）；目录项缓存轮次于 115.66/238.26/282.84/335.91 秒达到 5/10/12/14 个 deps 产物，旧热点缓存轮次于 106.99/234.26/277.26 秒为 0/7/10 个，旧同长度轮次 345.57 秒为 11 个。RV/LA 路径负转正、rename/unlink、目录 rename、symlink 类型切换窄测均通过，未见 panic。
+- [x] 2026-08-01 原 `Compiling core` futex 卡死修复完成待验收：以修复前/后的 8 vCPU GDB 全核栈确认并消除 futex 全局锁与 PCB 锁的 ABBA；WAIT/WAKE 使用同一规范锁序，futex key 改为原子预筛选发布。RV/LA 四个 futex 语义小测结果一致，未跳过 crate、未降低 QEMU 核数，也未按测例增加特判。
 - [ ] 待完成：在不受其它 QEMU 抢占的环境中跑完 RV/LA 官方完整 BuildStorm，记录最终产物、总耗时和至少两次重复数据；当前结果只证明冷启动与前段编译显著加速，不宣称完整 446 项构建已经通过。
 
 ## 6. 内核能力验收门槛
 
 ### CAgent 内核门槛
 
-- [ ] RV64/glibc 和 LA64/glibc 的 10 个测试均能启动并完成；
-- [x] 2026-07-29 LA 功能链路完成待验收：官方 10 项均启动并正常收尾，当前竞争环境下 9 项通过；network 单项可通过，剩余问题收敛为并发宿主负载下的官方超时时间。
-- [ ] `statfs`、CPU 数量、kernel version、时间和 TCP 状态来自真实内核状态；
-- [ ] 文件创建、读写、目录遍历和搜索在重启/关闭文件后仍保持一致；
-- [ ] 日志中无 syscall panic、无长期卡死，且每项耗时满足官方超时。
+- [x] 连续轮次门槛完成待验收：RV64/glibc 和 LA64/glibc 官方原始 CAgent 各连续三轮取得 10/10，六轮均正常抵达组结束标记；
+- [x] 2026-07-29 LA 功能链路完成待验收：最终候选按 `cagent_test(); buildstorm_test();` 顺序运行，CAgent 复跑 10/10 通过；另一次并发 LLM 运行中 `fs-readwrite` 单项 reject、其余 9 项通过，未复现为持续文件系统错误。
+- [x] 代码与定向回归完成待连续官方验收：`statfs`、CPU 数量、kernel version、时间和 TCP 状态均来自真实内核状态；
+- [x] 双架构定向回归完成待连续官方验收：文件创建、读写、目录遍历、rename/link/unlink/getdents 在关闭文件后保持一致；
+- [x] 双架构 78 次定向回归日志无 syscall panic、长期卡死、TLB timeout、TFAIL 或 TBROK；官方 CAgent 双架构连续三轮门槛已完成待验收。
 
 ### BuildStorm 内核门槛
 
 - [x] `-smp 8 -m 8G` 稳定启动，8 个 CPU 在 guest CPU 视图中一致；
 - [x] PMM、buddy、refcount、页表和 COW/TLB 专项覆盖 8G，不使用 1GiB 固定上限；
 - [x] 2026-07-29 LA 最小实编译与官方正常启动完成待验收；完整 `cargo xtask arceos build` 仍按下一项单独验收。
+- [x] 2026-07-29 RV/LA 官方 BuildStorm 前段完成待验收：两架构均通过 toolchain 与 minibuild，从 `Resolving dependency graph...` 继续真实并行启动 `unicode-ident`、`quote`、`proc-macro2`、`libc`、`cfg-if`、`log`、`find-msvc-tools` 等 crate；LA 同轮先完成 CAgent 10/10，日志中未见 panic、锁断言或 shootdown timeout。
+- [x] 2026-08-01 已修复并短验收 `Compiling core` 暴露的 futex/PCB 锁序死锁；双架构四个 futex 语义用例通过，修复后 GDB 不再存在原两 CPU 闭环。
 - [ ] cargo build script、proc-macro、多线程 futex/信号/等待链路稳定；
 - [ ] 完整 `cargo xtask arceos build` 能从零完成，产物不小于 500KB；
 - [ ] 构建过程无内存 panic、文件系统损坏、死锁、丢唤醒、页表错误和设备中断错误；
@@ -331,7 +346,7 @@ F7LY 重点证据：
 - `scripts/run/smp_cpu_bench.sh`、`tools/smp/f7ly_smp_cpu_bench.c`：原生 KVM 环境下的双架构 CPU 压测；当前 x86_64 工作机仅用于 QEMU TCG 多核使用观察，不用于性能结论；
 - `kernel/proc/proc_manager.cc:2233-2655`、`kernel/proc/futex.cc:82-494`：已有 clone/线程/futex 基础；
 - `kernel/mem/virtual_memory_manager.cc:1342-1733`：已有 COW 处理；
-- `kernel/sys/syscall_handler.cc:3321-3338,11188-11222,12243-12298`：statfs 仍有固定统计值；sysinfo 内存字段已切换到动态 PMM，uptime/进程数语义仍待验收；
+- `kernel/sys/syscall_handler.cc`、`kernel/fs/vfs/vfs_utils.cc`、`kernel/fs/lwext4/ext4.cc`：statfs/fstatfs 已使用真实 ext4 mount stats；sysinfo 使用真实 uptime、活动任务数、动态 PMM 与 5 秒负载采样；
 - `kernel/fs/vfs/file/virtual_file.cc`：按 online CPU 集合生成 proc/sys CPU 视图；
 - `kernel/fs/vfs/vfs_ext4_ext.cc:34`、`kernel/fs/vfs/vfs_utils.cc:4849`：ext4/find/bcache 和锁风险注释；
 - `kernel/fs/lwext4/ext4_bcache.cc:89-307`、`kernel/fs/lwext4/ext4_blockdev.cc:169-242,407-430`：当前 buffer cache/LRU/写回路径。

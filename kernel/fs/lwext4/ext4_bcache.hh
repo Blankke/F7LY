@@ -20,6 +20,14 @@ RB_HEAD(ext4_buf_lba_tree, ext4_buf);
 TAILQ_HEAD(ext4_buf_lru_list, ext4_buf);
 TAILQ_HEAD(ext4_buf_dirty_list, ext4_buf);
 
+// 只保存少量最近按槽命中的元数据块；RB-tree 仍是缓存内容的唯一权威索引。
+// 16 槽可覆盖 superblock、inode table、extent/目录等高频工作集，又不会像
+// 全量哈希表那样为 8192 个缓存项增加链维护和大面积冷内存访问。
+constexpr uint32_t EXT4_BCACHE_HOT_SLOT_COUNT = 16;
+static_assert((EXT4_BCACHE_HOT_SLOT_COUNT &
+               (EXT4_BCACHE_HOT_SLOT_COUNT - 1)) == 0,
+              "ext4 热点槽数量必须是 2 的幂");
+
 #define EXT4_BLOCK_ZERO() {.lb_id = 0, .data = 0}
 
 /**@brief   Single block descriptor*/
@@ -107,6 +115,9 @@ struct ext4_bcache {
     /**@brief   A tree holding all bufs*/
     struct ext4_buf_lba_tree lba_root;
 
+    /**@brief   小型直映热点索引；槽内只借用 RB-tree 节点指针，不拥有对象。*/
+    struct ext4_buf *hot_slots[EXT4_BCACHE_HOT_SLOT_COUNT];
+
     /**@brief   A list holding unreferenced bufs in LRU order（头最老，尾最新）*/
     struct ext4_buf_lru_list lru_list;
 
@@ -163,7 +174,13 @@ int ext4_bcache_init_dynamic(struct ext4_bcache *bc, uint32_t cnt, uint32_t item
 
 /**@brief   Do cleanup works on block cache.
  * @param   bc block cache descriptor.*/
-void ext4_bcache_cleanup(struct ext4_bcache *bc);
+/**
+ * @brief 写回并释放全部缓存项。
+ *
+ * 任一块写回失败时立即返回错误，并保留该块及后续节点，调用方可重试；
+ * 绝不能在 I/O 错误后继续 drop dirty buffer。
+ */
+int ext4_bcache_cleanup(struct ext4_bcache *bc);
 
 /**@brief   Dynamic de-initialization of block cache.
  * @param   bc block cache descriptor

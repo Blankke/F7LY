@@ -610,14 +610,12 @@ namespace shm
             return;
         }
 
-        if (shm_lock_.is_held())
-        {
-            (*registered_objects)[object->object_id()] = object;
-            return;
-        }
-
-        SpinLockGuard guard(shm_lock_);
+        const bool acquired_lock = shm_lock_.acquire_unless_held();
         (*registered_objects)[object->object_id()] = object;
+        if (acquired_lock)
+        {
+            shm_lock_.release();
+        }
     }
 
     void ShmManager::note_object_destroying(const proc::VmObject *object)
@@ -627,37 +625,21 @@ namespace shm
             return;
         }
 
-        if (shm_lock_.is_held())
+        const bool acquired_lock = shm_lock_.acquire_unless_held();
+        registered_objects->erase(object->object_id());
+
+        const eastl::string *cache_key = object->shared_cache_key();
+        if (cache_key != nullptr && shared_file_objects != nullptr)
         {
-            registered_objects->erase(object->object_id());
-
-            const eastl::string *cache_key = object->shared_cache_key();
-            if (cache_key == nullptr || shared_file_objects == nullptr)
-            {
-                return;
-            }
-
             auto it = shared_file_objects->find(*cache_key);
             if (it != shared_file_objects->end() && it->second == object)
             {
                 shared_file_objects->erase(it);
             }
-            return;
         }
-
-        SpinLockGuard guard(shm_lock_);
-        registered_objects->erase(object->object_id());
-
-        const eastl::string *cache_key = object->shared_cache_key();
-        if (cache_key == nullptr || shared_file_objects == nullptr)
+        if (acquired_lock)
         {
-            return;
-        }
-
-        auto it = shared_file_objects->find(*cache_key);
-        if (it != shared_file_objects->end() && it->second == object)
-        {
-            shared_file_objects->erase(it);
+            shm_lock_.release();
         }
     }
 

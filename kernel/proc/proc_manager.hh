@@ -58,7 +58,7 @@ namespace proc
         // ==================== 进程基础管理 ====================
         Pcb *get_cur_pcb();
         uint64 active_slot_word(uint word_index) const;
-        bool change_state(Pcb *p, ProcState state);
+        uint32 active_task_count() const;
         void alloc_pid(Pcb *p);
         void alloc_tid(Pcb *p);
         uint64 alloc_ipc_namespace_id();

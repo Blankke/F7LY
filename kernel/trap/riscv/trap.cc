@@ -182,7 +182,16 @@ void trap_manager::timertick()
   // 与其它 CPU 的进程锁路径形成长时间嵌套。
   tickslock.acquire();
   ticks++;
+  const uint current_ticks = ticks;
   tickslock.release();
+
+  constexpr uint k_load_sample_ticks = 5 * 1000 / tmm::ms_per_tick;
+  static_assert(k_load_sample_ticks > 0);
+  if ((current_ticks % k_load_sample_ticks) == 0)
+  {
+    proc::k_scheduler.sample_load_averages(
+        static_cast<uint64>(current_ticks) * tmm::ms_per_tick / 1000);
+  }
 
   proc::k_pm.wakeup(&ticks);
   check_expired_timers();
@@ -498,6 +507,9 @@ void trap_manager::usertrapret()
   uint64 x = r_sstatus();
   x &= ~riscv::csr::sstatus_spp_m;
   x |= riscv::csr::sstatus_spie_m;
+  // 用户和内核都会使用 FPU；保持 FS=Dirty，下一次 uservec 先保存用户现场，
+  // 返回前再恢复，隔离不同任务以及内核自身的浮点寄存器使用。
+  x |= 0x3ULL << 13;
   w_sstatus(x);
   w_sepc(p->_trapframe->epc);
 

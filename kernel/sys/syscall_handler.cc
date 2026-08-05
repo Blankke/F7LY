@@ -916,8 +916,22 @@ namespace syscall
 
             int ready_count = 0;
             epoll_obj->lock_watches();
-            for (auto &entry : epoll_obj->watch_list())
+            auto &watch_list = epoll_obj->watch_list();
+            const size_t watch_count = watch_list.size();
+            if (watch_count == 0)
             {
+                epoll_obj->scan_cursor() = 0;
+                epoll_obj->unlock_watches();
+                return 0;
+            }
+
+            const size_t scan_begin = epoll_obj->scan_cursor() % watch_count;
+            size_t next_cursor = scan_begin;
+            bool delivered_any = false;
+            for (size_t offset = 0; offset < watch_count; ++offset)
+            {
+                const size_t watch_index = (scan_begin + offset) % watch_count;
+                auto &entry = watch_list[watch_index];
                 fs::file *target = proc::k_pm.get_open_file_ref(proc, entry.fd);
                 if (target == nullptr || target != entry.target_identity ||
                     entry.oneshot_disabled)
@@ -937,24 +951,42 @@ namespace syscall
                 {
                     deliver_ready &= ~entry.last_ready_events;
                 }
-                entry.last_ready_events = current_ready;
 
                 if (deliver_ready == 0)
                 {
+                    // ready 清空时必须重置边沿历史；仍保持 ready 则表示这个边沿
+                    // 已经在前一次 wait 中交付。
+                    entry.last_ready_events = current_ready;
                     continue;
                 }
 
-                if (ready_count < maxevents)
+                if (ready_count >= maxevents)
                 {
-                    events[ready_count].events = deliver_ready;
-                    events[ready_count].data = entry.data;
-                    ready_count++;
-
-                    if ((entry.events & abi::k_epolloneshot) != 0)
-                    {
-                        entry.oneshot_disabled = true;
-                    }
+                    // 本次用户数组已满时不能消费尚未交付的 ET 边沿，否则该 fd
+                    // 会永远从后续 epoll_wait 中消失。保留 last_ready_events，
+                    // 下一次扫描仍能观察到这批新增 ready bit。
+                    continue;
                 }
+
+                events[ready_count].events = deliver_ready;
+                events[ready_count].data = entry.data;
+                ++ready_count;
+                entry.last_ready_events = current_ready;
+                delivered_any = true;
+                next_cursor = (watch_index + 1) % watch_count;
+
+                if ((entry.events & abi::k_epolloneshot) != 0)
+                {
+                    entry.oneshot_disabled = true;
+                }
+                if (ready_count == maxevents)
+                {
+                    break;
+                }
+            }
+            if (delivered_any)
+            {
+                epoll_obj->scan_cursor() = next_cursor;
             }
             epoll_obj->unlock_watches();
 
@@ -3355,25 +3387,6 @@ namespace syscall
             return fd;
         }
 
-        void fill_default_statfs(struct statfs &st)
-        {
-            memset(&st, 0, sizeof(st));
-
-            // 当前内核只挂了统一的 ext4 根文件系统，这里先返回稳定一致的基础属性。
-            st.f_type = 0xEF53;     // EXT4_SUPER_MAGIC
-            st.f_bsize = PGSIZE;    // 传输块大小
-            st.f_blocks = 1UL << 20;
-            st.f_bfree = 1UL << 19;
-            st.f_bavail = 1UL << 18;
-            st.f_files = 1UL << 16;
-            st.f_ffree = 1UL << 15;
-            st.f_fsid.val[0] = 0xF7;
-            st.f_fsid.val[1] = 0x1A;
-            st.f_namelen = 255;     // ext4 文件名上限
-            st.f_frsize = PGSIZE;   // 片段大小
-            st.f_flags = 0;
-        }
-
         bool timeval_to_usec_checked(const abi::KernelTimeValOld &tv, uint64 &total_us)
         {
             if (tv.tv_sec < 0 || tv.tv_usec < 0 || tv.tv_usec >= (long)k_usec_per_sec)
@@ -3418,6 +3431,15 @@ namespace syscall
                 return -EINVAL;
             }
             if ((flags & CLONE_FS) && (flags & CLONE_NEWNS))
+            {
+                return -EINVAL;
+            }
+            if ((flags & CLONE_SIGHAND) && (flags & CLONE_CLEAR_SIGHAND))
+            {
+                return -EINVAL;
+            }
+            if ((flags & CLONE_PIDFD) &&
+                (flags & (CLONE_THREAD | CLONE_DETACHED)))
             {
                 return -EINVAL;
             }
@@ -3915,6 +3937,7 @@ namespace syscall
     void SyscallHandler::init()
     {
         fs::init_bsd_flock_table();
+        init_posix_timers();
         g_notify_registry_lock.init("notify registry");
         for (auto &func : _syscall_funcs)
         {
@@ -3944,7 +3967,7 @@ namespace syscall
         BIND_SYSCALL(linkat);
         BIND_SYSCALL(umount2);
         BIND_SYSCALL(mount);
-        BIND_SYSCALL(statfs);    // todo
+        BIND_SYSCALL(statfs);
         BIND_SYSCALL(ftruncate); // tsh
         BIND_SYSCALL(faccessat); // tsh
         BIND_SYSCALL(chdir);
@@ -3977,9 +4000,9 @@ namespace syscall
         BIND_SYSCALL(exit_group);
         BIND_SYSCALL(set_tid_address);
         BIND_SYSCALL(unshare);
-        BIND_SYSCALL(futex); // todo
+        BIND_SYSCALL(futex);
         BIND_SYSCALL(set_robust_list);
-        BIND_SYSCALL(get_robust_list); // todo
+        BIND_SYSCALL(get_robust_list);
         BIND_SYSCALL(nanosleep);
         BIND_SYSCALL(setitimer); // todo
         BIND_SYSCALL(clock_gettime);
@@ -4049,7 +4072,7 @@ namespace syscall
         BIND_SYSCALL(renameat2);
         BIND_SYSCALL(getrandom);
         BIND_SYSCALL(statx);
-        BIND_SYSCALL(clone3); // todo
+        BIND_SYSCALL(clone3);
         BIND_SYSCALL(fchmodat2);
 
         // rocket syscalls
@@ -4128,6 +4151,7 @@ namespace syscall
         BIND_SYSCALL(getpriority);  // from rocket
         BIND_SYSCALL(reboot);       // from rocket
         BIND_SYSCALL(timer_create); // from rocket
+        BIND_SYSCALL(timer_getoverrun);
         BIND_SYSCALL(flock);        // from rocket
 
         // chronix
@@ -4397,12 +4421,10 @@ namespace syscall
     // ---------------- syscall functions ----------------
     uint64 SyscallHandler::sys_exec()
     {
-        printfRed("[SyscallHandler::sys_exec] sys_exec 未实现，返回 ENOSYS\n");
         return SYS_ENOSYS;
     }
     uint64 SyscallHandler::sys_fork()
     {
-        printfRed("[SyscallHandler::sys_fork] sys_fork 未实现，返回 ENOSYS\n");
         return SYS_ENOSYS;
     }
     uint64 SyscallHandler::sys_exit()
@@ -4497,8 +4519,6 @@ namespace syscall
         if (_arg_int(0, oldfd) < 0 || _arg_int(1, newfd) < 0 || _arg_int(2, flags) < 0)
             return -1;
 
-        printfCyan("[sys_dup3] oldfd: %d, newfd: %d, flags: %d", oldfd, newfd, flags);
-
         // 检查flags是否有效，只允许O_CLOEXEC标志
         if ((flags & ~O_CLOEXEC) != 0)
         {
@@ -4542,7 +4562,6 @@ namespace syscall
 
         p->_ofile->_fl_cloexec[newfd] = (flags & O_CLOEXEC) != 0;
 
-        printfCyan("[sys_dup3] Successfully duplicated fd %d to %d", oldfd, newfd);
         return newfd;
     }
     uint64 SyscallHandler::sys_read()
@@ -4579,7 +4598,6 @@ namespace syscall
         {
             if (n == 0)
             {
-                printfCyan("[SyscallHandler::sys_read] Read size is zero, returning 0\n");
                 return 0; // 如果读取大小为0，直接返回0
             }
             printfRed("[SyscallHandler::sys_read] Invalid read size: %d\n", n);
@@ -4663,14 +4681,10 @@ namespace syscall
         int path_ret = _arg_str(0, path, PGSIZE);
         if (path_ret < 0)
         {
-            printfRed("[sys_execve] 获取 path 失败: ret=%d user_path=%p\n",
-                      path_ret, (void *)_arg_raw(0));
             return path_ret;
         }
         if (_arg_addr(1, uargv) < 0 || _arg_addr(2, uenvp) < 0)
         {
-            printfRed("[sys_execve] 获取 argv/envp 地址失败: argv=%p envp=%p\n",
-                      (void *)_arg_raw(1), (void *)_arg_raw(2));
             return -EFAULT;
         }
 
@@ -4682,14 +4696,11 @@ namespace syscall
             {
                 if (i > max_arg_num)
                 {
-                    printfRed("[sys_execve] argv 数量超限\n");
                     return -E2BIG;
                 }
 
                 if (_fetch_addr(puarg, uarg) < 0)
                 {
-                    printfRed("[sys_execve] 获取 argv[%d] 指针失败: user_slot=%p\n",
-                              i, (void *)puarg);
                     return -EFAULT;
                 }
 
@@ -4700,8 +4711,6 @@ namespace syscall
                 int arg_ret = _fetch_str(uarg, argv[i], PGSIZE);
                 if (arg_ret < 0)
                 {
-                    printfRed("[sys_execve] 获取 argv[%d] 字符串失败: user_str=%p ret=%d\n",
-                              i, (void *)uarg, arg_ret);
                     return arg_ret;
                 }
             }
@@ -4715,14 +4724,11 @@ namespace syscall
             {
                 if (i > max_arg_num)
                 {
-                    printfRed("[sys_execve] envp 数量超限\n");
                     return -E2BIG;
                 }
 
                 if (_fetch_addr(puenv, uenv) < 0)
                 {
-                    printfRed("[sys_execve] 获取 envp[%d] 指针失败: user_slot=%p\n",
-                              (int)i, (void *)puenv);
                     return -EFAULT;
                 }
 
@@ -4733,8 +4739,6 @@ namespace syscall
                 int env_ret = _fetch_str(uenv, envp[i], PGSIZE);
                 if (env_ret < 0)
                 {
-                    printfRed("[sys_execve] 获取 envp[%d] 字符串失败: user_str=%p ret=%d\n",
-                              (int)i, (void *)uenv, env_ret);
                     return env_ret;
                 }
             }
@@ -4755,8 +4759,6 @@ namespace syscall
             notify_fanotify_event(nullptr, exec_event_path, kFanOpenExec, false);
         }
         return exec_ret;
-        TODO("sys_execve");
-        return 0;
     }
 
     uint64 SyscallHandler::sys_execveat()
@@ -5457,7 +5459,6 @@ namespace syscall
         {
             if (n == 0)
             {
-                printfYellow("[SyscallHandler::sys_write] Write size is zero, returning 0\n");
                 return 0;
             }
             return -EINVAL;
@@ -5545,7 +5546,6 @@ namespace syscall
             printfRed("[sys_unlinkat] Error copying path from user space\n");
             return cpres;
         }
-        printfCyan("[sys_unlinkat] : fd: %d, path: %s, flags: %d\n", fd, path.c_str(), flags);
         eastl::string abs_path;
         if (!path.empty())
         {
@@ -5678,9 +5678,6 @@ namespace syscall
             return -ENOENT;
         }
 
-        printfCyan("sys_linkat: olddirfd=%d, oldpath=%s, newdirfd=%d, newpath=%s, flags=0x%x\n",
-                   olddirfd, oldpath.c_str(), newdirfd, newpath.c_str(), flags);
-
         // 处理 AT_EMPTY_PATH 标志
         if (flags & AT_EMPTY_PATH)
         {
@@ -5720,7 +5717,6 @@ namespace syscall
 
             // 使用文件描述符对应的路径作为源路径
             oldpath = old_file->_path_name;
-            printfYellow("sys_linkat: AT_EMPTY_PATH resolved to %s\n", oldpath.c_str());
         }
 
         // 辅助函数：合并路径，避免双斜杠
@@ -5904,7 +5900,6 @@ namespace syscall
             // 对于 linkat，如果源文件以 O_PATH 打开，仍然可以创建硬链接
             // 这是 Linux 的行为
             abs_oldpath = target_file->_path_name;
-            printfYellow("sys_linkat: resolved /proc/self/fd/%d to %s\n", target_fd, abs_oldpath.c_str());
         }
 
         // 处理目标路径
@@ -5957,8 +5952,6 @@ namespace syscall
         abs_oldpath = normalize_path(abs_oldpath);
         abs_newpath = normalize_path(abs_newpath);
 
-        printfGreen("sys_linkat: final paths: %s -> %s\n", abs_oldpath.c_str(), abs_newpath.c_str());
-
         // 调用 VFS 层的链接函数
         int result = vfs_link(abs_oldpath.c_str(), abs_newpath.c_str());
 
@@ -5976,8 +5969,6 @@ namespace syscall
             return -EINVAL;
         if (_arg_int(2, mode) < 0) // 这是mode参数，不是flags
             return -EINVAL;
-
-        printfCyan("[SyscallHandler::sys_mkdirat] dir_fd: %d, path_addr: %p, mode: 0%o\n", dir_fd, (void *)path_addr, mode);
 
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         // 验证 dirfd 参数
@@ -6093,7 +6084,6 @@ namespace syscall
             return -EEXIST;
         }
 
-        printfMagenta("[SyscallHandler::sys_mkdirat] dir_fd: %d, path: %s, mode: 0%o\n", dir_fd, path.c_str(), mode);
 
         eastl::string event_path;
         int resolve_ret = resolve_at_path(dir_fd, path, event_path);
@@ -6211,22 +6201,49 @@ namespace syscall
         ctid = cgctid;
         tls = cgtls;
 
+        /*
+         * clone(2) 的 flags ABI 是无符号 32 位。直接把带最高位的 int 转成
+         * uint64 会符号扩展，并把不存在的高位标志一并传给 fork()。
+         */
+        const uint64 clone_flags = static_cast<uint32>(flags);
+        constexpr uint64 supported_clone_flags =
+            CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND |
+            CLONE_VFORK | CLONE_PARENT | CLONE_THREAD | CLONE_SYSVSEM |
+            CLONE_SETTLS | CLONE_PARENT_SETTID | CLONE_CHILD_CLEARTID |
+            CLONE_DETACHED | CLONE_UNTRACED | CLONE_CHILD_SETTID |
+            CLONE_IO | CSIGNAL;
+        constexpr uint64 unsupported_namespace_flags =
+            CLONE_NEWNS | CLONE_NEWCGROUP | CLONE_NEWUTS | CLONE_NEWIPC |
+            CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWTIME;
+
+        if ((clone_flags & unsupported_namespace_flags) != 0 ||
+            (clone_flags & (CLONE_PIDFD | CLONE_PTRACE)) != 0)
+        {
+            // 当前没有对应 namespace/pidfd/ptrace 权限与生命周期模型，明确
+            // 拒绝比创建一个语义错误的子任务更安全。
+            return SYS_ENOSYS;
+        }
+        if ((clone_flags & ~supported_clone_flags) != 0)
+        {
+            return SYS_EINVAL;
+        }
+
         // 旧 clone(2) 的 fork 形态会传 flags=SIGCHLD、stack=0，表示复制当前用户栈；
         // 但无退出信号或共享 VM/线程形态没有独立栈会破坏用户态执行，应拒绝空 child_stack。
         if (stack == 0 &&
-            ((static_cast<uint64>(flags) & CSIGNAL) == 0 ||
-             (static_cast<uint64>(flags) & (CLONE_VM | CLONE_THREAD)) != 0))
+            ((clone_flags & CSIGNAL) == 0 ||
+             (clone_flags & (CLONE_VM | CLONE_THREAD)) != 0))
         {
             return SYS_EINVAL;
         }
 
         uint64 clone_pid;
-        int flag_ret = validate_linux_clone_flags((uint64)flags);
+        int flag_ret = validate_linux_clone_flags(clone_flags);
         if (flag_ret < 0)
         {
             return flag_ret;
         }
-        clone_pid = proc::k_pm.clone(flags, stack, ptid, tls, ctid);
+        clone_pid = proc::k_pm.clone(clone_flags, stack, ptid, tls, ctid);
         return clone_pid;
     }
     uint64 SyscallHandler::sys_umount2()
@@ -6929,7 +6946,6 @@ namespace syscall
             return SYS_EINVAL;
         if (tid <= 0 || sig < 0 || sig > proc::ipc::signal::SIGRTMAX)
             return SYS_EINVAL;
-        printfCyan("[SyscallHandler::sys_tkill] tid: %d, sig: %d\n", tid, sig);
         return proc::k_pm.tkill(tid, sig);
     }
     uint64 SyscallHandler::sys_tgkill()
@@ -6942,7 +6958,6 @@ namespace syscall
         if (tgid <= 0 || tid <= 0 ||
             sig < 0 || sig > proc::ipc::signal::SIGRTMAX)
             return SYS_EINVAL;
-        printfCyan("[SyscallHandler::sys_tgkill] tgid: %d, tid: %d, sig: %d\n", tgid, tid, sig);
         return proc::k_pm.tgkill(tgid, tid, sig);
     }
     uint64 SyscallHandler::sys_rt_sigaction()
@@ -7731,10 +7746,8 @@ namespace syscall
                 return SYS_EFAULT;
             }
 
-            printfCyan("[sys_readlinkat] Successfully read proc fd symlink: /proc/self/fd/%d -> %s\n", target_fd, target_path.c_str());
             return target_path.length();
         }
-        printfCyan("[sys_readlinkat] fd: %d, path: %s, buf: %p, buf_size: %u\n", fd, path.c_str(), (void *)buf, buf_size);
         // 如果路径为空，获取dirfd对应的符号链接
         if (path.empty())
         {
@@ -7985,7 +7998,6 @@ namespace syscall
             return SYS_EFAULT;
         }
 
-        printfCyan("[sys_readlinkat] Successfully read symlink: %s -> %.*s\n", abs_path.c_str(), (int)readbytes, link_target_buf);
         return readbytes;
     }
     uint64 SyscallHandler::sys_getrandom()
@@ -8062,7 +8074,6 @@ namespace syscall
             generated += chunk;
         }
 
-        printfCyan("[sys_getrandom] Generated %d random bytes, flags=0x%x\n", buflen, flags);
         return buflen;
     }
     //     uint64 SyscallHandler::sys_clock_gettime()
@@ -10355,7 +10366,6 @@ namespace syscall
         if (_arg_int(1, op) < 0)
             return SYS_EINVAL;
 
-        printfYellow("file fd: %d, op: %d\n", fd, op);
 	        auto normalize_record_lock = [](fs::file *file, struct flock &lock) -> int
 	        {
 	            if (lock.l_type != F_RDLCK && lock.l_type != F_WRLCK && lock.l_type != F_UNLCK)
@@ -10391,12 +10401,6 @@ namespace syscall
 	            int flush_ret = file->flush_visibility_state();
 	            if (flush_ret < 0)
 	                return flush_ret;
-		            int delayed_ret = fs::normal_file_flush_delayed_visibility_path(file->backing_path());
-		            if (delayed_ret < 0)
-		                return delayed_ret;
-		            flush_ret = file->flush_visibility_state();
-		            if (flush_ret < 0)
-		                return flush_ret;
 		            return 0;
 		        };
 	        switch (op)
@@ -10422,8 +10426,6 @@ namespace syscall
                     }
                     f->refcnt++;
                     retfd = i;
-                    printf("[SyscallHandler::sys_fcntl] Duplicating file descriptor %d to %d\n", fd, retfd);
-                    printf("cur proc:%d\n", p->_pid);
                     break;
                 }
             }
@@ -10529,7 +10531,6 @@ namespace syscall
                 bool nonblock = (new_flags & O_NONBLOCK) != 0;
                 pf->set_nonblock(nonblock);
                 pf->set_pipe_flags(new_flags);
-                printfCyan("[F_SETFL] Set pipe nonblock mode: %s\n", nonblock ? "true" : "false");
             }
             else if (f->_attrs.filetype == fs::FileTypes::FT_SOCKET)
             {
@@ -11067,8 +11068,6 @@ namespace syscall
             }
         }
 
-        printfCyan("[SyscallHandler::sys_faccessat] 绝对路径: %s\n", abs_pathname.c_str());
-
         // 获取当前进程的用户信息（用于目录权限检查）
         proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
         uint32_t check_uid = current_proc->_uid; // 使用实际用户ID
@@ -11227,8 +11226,6 @@ namespace syscall
         }
 
         // F_OK 只检查文件是否存在，前面已经检查过了
-        printfGreen("[SyscallHandler::sys_faccessat] 权限检查通过: %s (file_uid=%u, file_gid=%u, current_uid=%u, current_gid=%u, mode=0%o, effective_perms=0%o)\n",
-                    abs_pathname.c_str(), file_uid, file_gid, current_uid, current_gid, file_mode, effective_perms);
         // #endif
         return 0;
     }
@@ -11251,9 +11248,7 @@ namespace syscall
         if (tmm::k_tm.clock_gettime(k_clock_boottime, &boottime) < 0)
             return SYS_EINVAL;
         sysinfo_.uptime = boottime.tv_sec < 0 ? 0 : boottime.tv_sec;
-        sysinfo_.loads[0] = 0; // 负载均值  1min 5min 15min
-        sysinfo_.loads[1] = 0;
-        sysinfo_.loads[2] = 0;
+        proc::k_scheduler.snapshot_load_averages(sysinfo_.loads);
         // sysinfo 的 totalram/freeram 使用 mem_unit 作为单位。PMM 已经根据
         // DTB 动态布局完成实际可管理页数计算，这里不能继续返回全零占位，
         // 否则 glibc/Cargo/stress-ng 等程序无法判断 guest 的真实容量。
@@ -11263,7 +11258,8 @@ namespace syscall
         sysinfo_.bufferram = 0;
         sysinfo_.totalswap = 0;
         sysinfo_.freeswap = 0;
-        sysinfo_.procs = 0;
+        const uint32 active_tasks = proc::k_pm.active_task_count();
+        sysinfo_.procs = active_tasks > 0xffffU ? 0xffffU : static_cast<uint16>(active_tasks);
         sysinfo_.pad = 0;
         sysinfo_.totalhigh = 0;
         sysinfo_.freehigh = 0;
@@ -11910,7 +11906,6 @@ namespace syscall
             return error_code; // 返回负的错误码
         }
 
-        printfGreen("[sys_mremap] Success: returned address %p\n", result_addr);
         return (uint64)result_addr;
     }
 
@@ -12406,7 +12401,11 @@ namespace syscall
         }
 
         struct statfs st{};
-        fill_default_statfs(st);
+        int statfs_ret = vfs_statfs(pathname.c_str(), &st);
+        if (statfs_ret < 0)
+        {
+            return statfs_ret;
+        }
         if (mem::k_vmm.copy_out(*pt, buf_addr, &st, sizeof(st)) < 0)
         {
             return SYS_EFAULT;
@@ -12460,7 +12459,6 @@ namespace syscall
             printfRed("[sys_ftruncate] 截断长度不能为负数: %d\n", length);
             return SYS_EINVAL; // 截断长度不能为负数
         }
-        printfGreen("[sys_ftruncate] fd: %d, length: %d,filetype:%d\n", fd, length, f->_attrs.filetype);
         int result = vfs_truncate(f, length); // 调用vfs_truncate函数进行截断操作
 
         return result; // 返回截断操作的结果
@@ -12925,7 +12923,6 @@ namespace syscall
         // 对于设备文件，不需要同步，直接返回成功
         if (f->_attrs.filetype == fs::FileTypes::FT_DEVICE)
         {
-            printfCyan("[SyscallHandler::sys_fsync] Device file, no sync needed\n");
             return 0;
         }
 
@@ -12947,24 +12944,20 @@ namespace syscall
                     printfRed("[SyscallHandler::sys_fsync] fs sync failed with error: %d\n", result);
                     return SYS_EIO;
                 }
-                printfGreen("[SyscallHandler::sys_fsync] Successfully synced file fd=%d\n", fd);
                 return 0;
             }
             else
             {
-                printfYellow("[SyscallHandler::sys_fsync] No filesystem object, attempting global sync\n");
                 int result = vfs_sync_all();
                 if (result < 0)
                 {
                     printfRed("[SyscallHandler::sys_fsync] global sync failed with error: %d\n", result);
                     return SYS_EIO;
                 }
-                printfGreen("[SyscallHandler::sys_fsync] Successfully synced globally for fd=%d\n", fd);
                 return 0;
             }
         }
 
-        printfYellow("[SyscallHandler::sys_fsync] File type %d, assuming sync successful\n", (int)f->_attrs.filetype);
         return 0;
     }
 
@@ -12979,7 +12972,6 @@ namespace syscall
             printfRed("[SyscallHandler::sys_fdatasync] Error fetching file descriptor\n");
             return SYS_EBADF;
         }
-        printfCyan("[SyscallHandler::sys_fdatasync] fd: %d\n", fd);
         if (f == nullptr)
         {
             printfRed("[SyscallHandler::sys_fdatasync] File descriptor %d is not open\n", fd);
@@ -13002,7 +12994,6 @@ namespace syscall
         // 对于设备文件，不需要同步，直接返回成功
         if (f->_attrs.filetype == fs::FileTypes::FT_DEVICE)
         {
-            printfCyan("[SyscallHandler::sys_fdatasync] Device file, no sync needed\n");
             return SYS_EINVAL;
         }
 
@@ -13027,24 +13018,20 @@ namespace syscall
                     printfRed("[SyscallHandler::sys_fdatasync] fs sync failed with error: %d\n", result);
                     return SYS_EIO;
                 }
-                printfGreen("[SyscallHandler::sys_fdatasync] Successfully synced data for fd=%d\n", fd);
                 return 0;
             }
             else
             {
-                printfYellow("[SyscallHandler::sys_fdatasync] No filesystem object, attempting global sync\n");
                 int result = vfs_sync_all();
                 if (result < 0)
                 {
                     printfRed("[SyscallHandler::sys_fdatasync] global sync failed with error: %d\n", result);
                     return SYS_EIO;
                 }
-                printfGreen("[SyscallHandler::sys_fdatasync] Successfully synced globally for fd=%d\n", fd);
                 return 0;
             }
         }
 
-        printfYellow("[SyscallHandler::sys_fdatasync] File type %d, assuming sync successful\n", (int)f->_attrs.filetype);
         return 0;
     }
     uint64 SyscallHandler::sys_futex()
@@ -15398,15 +15385,17 @@ namespace syscall
 
         if (vm != nullptr && end_addr > vm->end_addr())
         {
-            proc::vma *span_vmas[16] = {};
-            int old_span_prots[16] = {};
-            int span_count = 0;
+            // 大型 Rust 分配区会被并发 mprotect 拆成很多相邻片段。固定 16
+            // 项数组会在第 17 段退回“只改 PTE、不改 VMA”的错误路径，使
+            // 元数据权限永久失真；动态记录完整跨度并支持失败回滚。
+            eastl::vector<proc::vma *> span_vmas;
+            eastl::vector<int> old_span_prots;
             bool can_update_whole_vmas = true;
             uint64 cursor = addr;
             while (cursor < end_addr)
             {
                 proc::vma *seg = mm->find_vma_covering(cursor);
-                if (seg == nullptr || cursor != seg->addr || span_count >= 16)
+                if (seg == nullptr || cursor != seg->addr)
                 {
                     can_update_whole_vmas = false;
                     break;
@@ -15433,27 +15422,27 @@ namespace syscall
                         return syscall::SYS_EACCES;
                     }
                 }
-                span_vmas[span_count] = seg;
-                old_span_prots[span_count] = seg->prot;
-                ++span_count;
+                span_vmas.push_back(seg);
+                old_span_prots.push_back(seg->prot);
                 cursor = seg_end;
             }
 
-            if (can_update_whole_vmas && cursor == end_addr && span_count > 0)
+            if (can_update_whole_vmas && cursor == end_addr && !span_vmas.empty())
             {
-                for (int i = 0; i < span_count; ++i)
+                for (size_t i = 0; i < span_vmas.size(); ++i)
                 {
                     span_vmas[i]->prot = prot;
                 }
                 if (mem::k_vmm.protectpages(*pcb->get_pagetable(), addr, aligned_len, prot, true) < 0)
                 {
-                    for (int i = 0; i < span_count; ++i)
+                    for (size_t i = 0; i < span_vmas.size(); ++i)
                     {
                         span_vmas[i]->prot = old_span_prots[i];
                     }
                     return syscall::SYS_EFAULT;
                 }
                 hal::tlb::flush_range_all_cpus(addr, aligned_len);
+                mm->get_vm_space().coalesce_private_anonymous_range(addr, end_addr);
                 return 0;
             }
         }
@@ -15859,6 +15848,12 @@ namespace syscall
             // 放大成 O(n^2)。
             mm->rebuild_vma_index();
         }
+        else
+        {
+            // mprotect 拆分后的相邻匿名区必须及时回并。Rust/LLVM 会以页粒度
+            // 反复提交预留地址区；缺少这一步时 core 编译可膨胀到上万 VMA。
+            mm->get_vm_space().coalesce_private_anonymous_range(addr, end_addr);
+        }
 
         return 0;
     }
@@ -15946,9 +15941,6 @@ namespace syscall
 
     uint64 SyscallHandler::sys_clone3()
     {
-        // panic("未实现该系统调用");
-        TODO("TBF")
-
         uint64 args_addr;
         uint64 args_size;
         struct clone_args args;
@@ -15956,33 +15948,32 @@ namespace syscall
         // 获取参数：clone_args 结构体地址和大小
         if (_arg_addr(0, args_addr) < 0)
         {
-            printfRed("[SyscallHandler::sys_clone3] Error fetching clone_args address\n");
             return SYS_EFAULT;
         }
 
         if (_arg_addr(1, args_size) < 0)
         {
-            printfRed("[SyscallHandler::sys_clone3] Error fetching clone_args size\n");
             return SYS_EFAULT;
         }
-        printf("[SyscallHandler::sys_clone3] args_addr: %p, args_size: %lu\n", args_addr, args_size);
         proc::Pcb *cur = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = cur->get_pagetable();
 
         int copy_ret = copy_clone3_args_from_user(*pt, args_addr, args_size, args);
         if (copy_ret < 0)
         {
-            printfRed("[SyscallHandler::sys_clone3] Invalid clone_args from user space: size=%llu ret=%d\n",
-                      args_size, copy_ret);
             return copy_ret;
         }
 
-        printfCyan("[SyscallHandler::sys_clone3] flags: 0x%lx, stack: %p, child_tid: %p, parent_tid: %p, tls: %p\n",
-                   args.flags, (void *)args.stack, (void *)args.child_tid, (void *)args.parent_tid, (void *)args.tls);
-
         if (args.exit_signal > static_cast<uint64>(proc::ipc::signal::SIGRTMAX))
         {
-            printfRed("[SyscallHandler::sys_clone3] Invalid exit_signal: %llu\n", args.exit_signal);
+            return SYS_EINVAL;
+        }
+
+        // clone3 把退出信号放在独立字段中。flags 低 8 位只有与其重叠的
+        // CLONE_NEWTIME(0x80) 可能合法，不能把旧 clone 的 CSIGNAL 再接受一遍。
+        const uint64 clone3_low_flags = args.flags & CSIGNAL;
+        if (clone3_low_flags != 0 && clone3_low_flags != CLONE_NEWTIME)
+        {
             return SYS_EINVAL;
         }
 
@@ -15996,36 +15987,45 @@ namespace syscall
                            CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNET | CLONE_IO |
                            CLONE_NEWTIME | CLONE_PIDFD | CLONE_CLEAR_SIGHAND | CSIGNAL))
         {
-            printfRed("[SyscallHandler::sys_clone3] Invalid flags: 0x%lx\n", args.flags);
             return SYS_EINVAL;
         }
 
         int flag_ret = validate_linux_clone_flags(args.flags);
         if (flag_ret < 0)
         {
-            printfRed("[SyscallHandler::sys_clone3] Invalid flag combination: 0x%lx\n", args.flags);
             return flag_ret;
         }
 
         // 暂时不支持某些复杂特性
-        if (args.flags & (CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC |
+        if (args.flags & (CLONE_PTRACE | CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC |
                           CLONE_NEWUSER | CLONE_NEWNET | CLONE_NEWTIME |
                           CLONE_NEWCGROUP))
         {
-            printfRed("[SyscallHandler::sys_clone3] Unsupported flags: 0x%lx\n", args.flags);
             return SYS_ENOSYS; // 功能未实现
         }
 
-        if ((args.flags & CLONE_PIDFD) && args.pidfd == 0)
+        // set_tid/cgroup 需要 PID namespace 和 cgroup 权限模型。当前内核没有
+        // 这套语义，必须明确拒绝，不能创建子任务后静默忽略这些字段。
+        if (args.set_tid != 0 || args.set_tid_size != 0 || args.cgroup != 0)
         {
-            printfRed("[SyscallHandler::sys_clone3] CLONE_PIDFD set but pidfd pointer is null\n");
+            return SYS_ENOSYS;
+        }
+
+        if ((args.flags & CLONE_THREAD) && args.exit_signal != 0)
+        {
             return SYS_EINVAL;
+        }
+
+        if (args.flags & CLONE_PIDFD)
+        {
+            // pidfd 必须与子任务创建原子提交；当前后置分配失败时无法保证
+            // “返回错误且没有可见子任务”，因此在具备完整事务前明确拒绝。
+            return SYS_ENOSYS;
         }
 
         // 如果设置了 CLONE_SETTLS 但没有提供 TLS 地址，返回错误
         if ((args.flags & CLONE_SETTLS) && args.tls == 0)
         {
-            printfRed("[SyscallHandler::sys_clone3] CLONE_SETTLS set but tls is null\n");
             return SYS_EINVAL;
         }
 
@@ -16034,8 +16034,6 @@ namespace syscall
         uint64 child_stack = 0;
         if ((args.stack == 0) != (args.stack_size == 0))
         {
-            printfRed("[SyscallHandler::sys_clone3] Invalid stack pair: stack=%p stack_size=%llu\n",
-                      (void *)args.stack, args.stack_size);
             return SYS_EINVAL;
         }
         if (args.stack != 0)
@@ -16057,20 +16055,6 @@ namespace syscall
             return clone_pid;
         }
 
-        if (args.flags & CLONE_PIDFD)
-        {
-            int pidfd = alloc_pidfd_fd_for_pid(static_cast<int>(clone_pid));
-            if (pidfd < 0)
-            {
-                return pidfd;
-            }
-            if (mem::k_vmm.copy_out(*pt, args.pidfd, &pidfd, sizeof(pidfd)) < 0)
-            {
-                return SYS_EFAULT;
-            }
-        }
-
-        printfCyan("[SyscallHandler::sys_clone3] Created process with PID: %llu\n", clone_pid);
         return clone_pid;
     }
 
@@ -17197,7 +17181,6 @@ namespace syscall
             return result;
         }
 
-        printfCyan("[sys_symlinkat] Successfully created symlink: %s -> %s\n", abs_linkpath.c_str(), target.c_str());
         return 0;
     }
     uint64 SyscallHandler::sys_fstatfs()
@@ -17227,7 +17210,11 @@ namespace syscall
         }
 
         struct statfs st{};
-        fill_default_statfs(st);
+        int statfs_ret = vfs_fstatfs(f, &st);
+        if (statfs_ret < 0)
+        {
+            return statfs_ret;
+        }
         mem::PageTable *pt = p->get_pagetable();
         if (mem::k_vmm.copy_out(*pt, buf_addr, &st, sizeof(st)) < 0)
         {
@@ -17304,7 +17291,6 @@ namespace syscall
 
         // 获取绝对路径
         pathname = get_absolute_path(pathname.c_str(), p->_cwd_name.c_str());
-        printfCyan("[SyscallHandler::sys_truncate] pathname: %s, length: %ld\n", pathname.c_str(), length);
 
         int prefix_perm_ret = check_directory_search_permission(pathname);
         if (prefix_perm_ret < 0)
@@ -17387,7 +17373,6 @@ namespace syscall
         }
 
         // 执行截断操作
-        printfCyan("[SyscallHandler::sys_truncate] Truncating file %s to length %ld bytes\n", pathname.c_str(), length);
         int result = vfs_truncate(file, length);
 
         // 关闭文件描述符
@@ -17399,7 +17384,6 @@ namespace syscall
             return result;
         }
 
-        printfGreen("[SyscallHandler::sys_truncate] Successfully truncated %s to %ld bytes\n", pathname.c_str(), length);
         return 0;
     }
     uint64 SyscallHandler::sys_fallocate()
@@ -17422,8 +17406,6 @@ namespace syscall
             printfRed("[SyscallHandler::sys_fallocate] 无效的文件描述符: %d\n", fd);
             return SYS_EBADF; // 无效的文件描述符
         }
-        printfCyan("[SyscallHandler::sys_fallocate] fd=%d, mode=%d, offset=%d, len=%x\n", fd, mode, offset, len);
-        printf("[SyscallHandler::sys_fallocate] f.mode=%b\n", f->_attrs.transMode());
         if (!f || !f->_attrs.u_write)
         {
             printfRed("[SyscallHandler::sys_fallocate] 无效的文件描述符: %d\n", fd);
@@ -18203,9 +18185,10 @@ namespace syscall
 
         target->_lock.acquire();
         target->_sched_priority = param.sched_priority;
-        target->_priority = realtime ? proc::highest_proc_prio : proc::default_proc_prio;
+        proc::k_scheduler.set_task_priority(
+            *target,
+            realtime ? proc::highest_proc_prio : proc::default_proc_prio);
         target->_lock.release();
-        proc::k_scheduler.note_priority_change(target->_priority);
         return 0;
     }
     uint64 SyscallHandler::sys_sched_setscheduler()
@@ -18274,10 +18257,10 @@ namespace syscall
         target->_sched_policy = policy;
         target->_sched_priority = param.sched_priority;
         target->_sched_reset_on_fork = reset_on_fork;
-        target->_priority = realtime ? proc::highest_proc_prio : proc::default_proc_prio;
+        proc::k_scheduler.set_task_priority(
+            *target,
+            realtime ? proc::highest_proc_prio : proc::default_proc_prio);
         target->_lock.release();
-        // 改成实时策略后立刻通知调度器刷新过滤门槛，避免等到下一轮全表扫描才生效。
-        proc::k_scheduler.note_priority_change(target->_priority);
         return 0;
     }
     uint64 SyscallHandler::sys_sched_getscheduler()
@@ -18375,6 +18358,13 @@ namespace syscall
 
         target->_lock.acquire();
         target->set_cpu_mask(CpuMask{effective_mask});
+        if (target->_last_cpu < 0 ||
+            (effective_mask & (1ULL << target->_last_cpu)) == 0)
+        {
+            proc::k_scheduler.set_task_home_cpu(
+                *target,
+                proc::k_scheduler.select_initial_cpu(CpuMask{effective_mask}, -1));
+        }
         target->_lock.release();
 
         // 当前任务若刚被排除出正在执行的 CPU，不能等下一个 tick 才迁移；
@@ -21076,7 +21066,7 @@ namespace syscall
         mem::PageTable *pt = p->get_pagetable();
 
         // 使用全局定义的 sigevent 结构体
-        extended_posix_timer::sigevent sev;
+        extended_posix_timer::sigevent sev{};
 
         // 处理 sevp 参数
         if (sevp_addr == 0)
@@ -21146,31 +21136,8 @@ namespace syscall
         // 统一的扩展定时器结构体定义（在所有定时器函数之间共享）
         // 使用全局定时器数组（统一的定时器管理）
 
-        // 初始化定时器数组（第一次调用时）
-        if (!g_timers_initialized)
-        {
-            for (int i = 0; i < 32; i++)
-            {
-                g_timers[i].active = false;
-                g_timers[i].armed = false;
-                g_timers[i].timer_id = 0;
-                g_timers[i].clockid = 0;
-                g_timers[i].owner = nullptr;
-                g_timers[i].event.sigev_notify = 0;
-                g_timers[i].event.sigev_signo = 0;
-                g_timers[i].event.sigev_value.sival_ptr = nullptr;
-                g_timers[i].event.sigev_notify_thread_id = 0;
-                g_timers[i].spec.it_value.tv_sec = 0;
-                g_timers[i].spec.it_value.tv_nsec = 0;
-                g_timers[i].spec.it_interval.tv_sec = 0;
-                g_timers[i].spec.it_interval.tv_nsec = 0;
-                g_timers[i].expiry_time.tv_sec = 0;
-                g_timers[i].expiry_time.tv_nsec = 0;
-            }
-            g_timers_initialized = true;
-        }
-
-        // 查找空闲的定时器槽位
+        // 查找和发布必须处在同一个临界区，避免两个 CPU 复用同一空槽。
+        lock_posix_timers();
         int timer_slot = -1;
         for (int i = 0; i < 32; i++)
         {
@@ -21183,38 +21150,40 @@ namespace syscall
 
         if (timer_slot == -1)
         {
+            unlock_posix_timers();
             printfRed("[SyscallHandler::sys_timer_create] No available timer slots\n");
             return SYS_EAGAIN;
         }
 
         // 初始化定时器
-        g_timers[timer_slot].timer_id = g_next_timer_id++;
+        clear_posix_timer_locked(g_timers[timer_slot]);
+        const int timer_id = g_next_timer_id++;
+        g_timers[timer_slot].timer_id = timer_id;
         g_timers[timer_slot].clockid = clockid;
         g_timers[timer_slot].owner = p;
         g_timers[timer_slot].event = sev;
         g_timers[timer_slot].active = true;
-        g_timers[timer_slot].armed = false; // 新创建的定时器初始为未武装状态
-
-        // 初始化定时器规格为零（未武装状态）
-        g_timers[timer_slot].spec.it_value.tv_sec = 0;
-        g_timers[timer_slot].spec.it_value.tv_nsec = 0;
-        g_timers[timer_slot].spec.it_interval.tv_sec = 0;
-        g_timers[timer_slot].spec.it_interval.tv_nsec = 0;
-        g_timers[timer_slot].expiry_time.tv_sec = 0;
-        g_timers[timer_slot].expiry_time.tv_nsec = 0;
+        set_posix_timer_armed_locked(g_timers[timer_slot], false); // 新 timer 初始未武装
 
         // 如果 sevp 为 NULL，设置默认的 sival_int 为 timer_id
         if (sevp_addr == 0)
         {
-            g_timers[timer_slot].event.sigev_value.sival_int = g_timers[timer_slot].timer_id;
+            g_timers[timer_slot].event.sigev_value.sival_int = timer_id;
         }
+        unlock_posix_timers();
 
-        // 将 timer ID 拷贝到用户空间
-        int timer_id = g_timers[timer_slot].timer_id;
+        // 用户内存访问可能触发缺页，不能持有全局自旋锁。失败回滚时用
+        // timer_id+owner 再核对一次，不能误删已经复用的槽。
         if (mem::k_vmm.copy_out(*pt, timerid_addr, &timer_id, sizeof(timer_id)) < 0)
         {
-            // 失败时清理定时器
-            g_timers[timer_slot].active = false;
+            lock_posix_timers();
+            if (g_timers[timer_slot].active &&
+                g_timers[timer_slot].timer_id == timer_id &&
+                g_timers[timer_slot].owner == p)
+            {
+                clear_posix_timer_locked(g_timers[timer_slot]);
+            }
+            unlock_posix_timers();
             printfRed("[SyscallHandler::sys_timer_create] Error copying timer ID to user space\n");
             return SYS_EFAULT;
         }
@@ -21316,11 +21285,13 @@ namespace syscall
             return SYS_EINVAL;
         }
 
-        // 查找对应的定时器
+        // 先在锁内取得稳定快照，随后释放锁再访问用户内存。
+        lock_posix_timers();
         int timer_slot = -1;
         for (int i = 0; i < 32; i++)
         {
-            if (g_timers[i].active && g_timers[i].timer_id == timerid)
+            if (g_timers[i].timer_id == timerid &&
+                posix_timer_owned_by_locked(g_timers[i], p))
             {
                 timer_slot = i;
                 break;
@@ -21329,9 +21300,12 @@ namespace syscall
 
         if (timer_slot == -1)
         {
+            unlock_posix_timers();
             printfRed("[SyscallHandler::sys_timer_settime] Invalid timer ID: %d\n", timerid);
             return SYS_EINVAL;
         }
+        const extended_posix_timer timer_snapshot = g_timers[timer_slot];
+        unlock_posix_timers();
 
         // 保存旧的定时器规格（如果需要返回）。
         // 这里必须先把 old_value 安全拷回用户态，再提交新的定时器状态；
@@ -21340,10 +21314,10 @@ namespace syscall
         tmm::itimerspec old_timer_spec;
         if (old_value_addr != 0)
         {
-            old_timer_spec = g_timers[timer_slot].spec;
+            old_timer_spec = timer_snapshot.spec;
 
             // 如果定时器当前未武装，返回零值
-            if (!g_timers[timer_slot].armed)
+            if (!timer_snapshot.armed)
             {
                 old_timer_spec.it_value.tv_sec = 0;
                 old_timer_spec.it_value.tv_nsec = 0;
@@ -21357,19 +21331,14 @@ namespace syscall
             }
         }
 
-        // 只有所有用户态地址都验证通过后，才真正提交新的定时器状态。
-        g_timers[timer_slot].spec = new_timer_spec;
-
-        if (new_timer_spec.it_value.tv_sec == 0 && new_timer_spec.it_value.tv_nsec == 0)
+        // 在锁外先计算完整的新过期时间，任何失败都不能留下半武装状态。
+        const bool arm_timer =
+            new_timer_spec.it_value.tv_sec != 0 || new_timer_spec.it_value.tv_nsec != 0;
+        tmm::timespec new_expiry{};
+        if (arm_timer)
         {
-            g_timers[timer_slot].armed = false;
-        }
-        else
-        {
-            g_timers[timer_slot].armed = true;
-
-            tmm::timespec current_time;
-            int clockid = g_timers[timer_slot].clockid;
+            tmm::timespec current_time{};
+            int clockid = timer_snapshot.clockid;
             if (tmm::k_tm.clock_gettime(static_cast<tmm::SystemClockId>(clockid), &current_time) < 0)
             {
                 printfRed("[SyscallHandler::sys_timer_settime] Failed to get current time\n");
@@ -21378,20 +21347,43 @@ namespace syscall
 
             if (flags & TIMER_ABSTIME)
             {
-                g_timers[timer_slot].expiry_time = new_timer_spec.it_value;
+                new_expiry = new_timer_spec.it_value;
             }
             else
             {
-                g_timers[timer_slot].expiry_time.tv_sec = current_time.tv_sec + new_timer_spec.it_value.tv_sec;
-                g_timers[timer_slot].expiry_time.tv_nsec = current_time.tv_nsec + new_timer_spec.it_value.tv_nsec;
-                if (g_timers[timer_slot].expiry_time.tv_nsec >= 1000000000)
+                new_expiry.tv_sec = current_time.tv_sec + new_timer_spec.it_value.tv_sec;
+                new_expiry.tv_nsec = current_time.tv_nsec + new_timer_spec.it_value.tv_nsec;
+                if (new_expiry.tv_nsec >= 1000000000)
                 {
-                    g_timers[timer_slot].expiry_time.tv_sec++;
-                    g_timers[timer_slot].expiry_time.tv_nsec -= 1000000000;
+                    new_expiry.tv_sec++;
+                    new_expiry.tv_nsec -= 1000000000;
                 }
             }
-
         }
+
+        // 另一个线程可能在用户内存访问期间删除 timer；提交前按 ID 和
+        // 线程组所有权重新核对。并发 settime 采用最后提交者生效的语义。
+        lock_posix_timers();
+        timer_slot = -1;
+        for (int i = 0; i < 32; ++i)
+        {
+            if (g_timers[i].timer_id == timerid &&
+                posix_timer_owned_by_locked(g_timers[i], p))
+            {
+                timer_slot = i;
+                break;
+            }
+        }
+        if (timer_slot == -1)
+        {
+            unlock_posix_timers();
+            return SYS_EINVAL;
+        }
+        g_timers[timer_slot].spec = new_timer_spec;
+        set_posix_timer_armed_locked(g_timers[timer_slot], arm_timer);
+        g_timers[timer_slot].overrun = 0;
+        g_timers[timer_slot].expiry_time = arm_timer ? new_expiry : tmm::timespec{};
+        unlock_posix_timers();
 
         return 0;
     }
@@ -21431,11 +21423,13 @@ namespace syscall
             return SYS_EINVAL;
         }
 
-        // 查找对应的定时器
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        lock_posix_timers();
         int timer_slot = -1;
         for (int i = 0; i < 32; i++)
         {
-            if (g_timers[i].active && g_timers[i].timer_id == timerid)
+            if (g_timers[i].timer_id == timerid &&
+                posix_timer_owned_by_locked(g_timers[i], p))
             {
                 timer_slot = i;
                 break;
@@ -21444,37 +21438,13 @@ namespace syscall
 
         if (timer_slot == -1)
         {
+            unlock_posix_timers();
             printfRed("[SyscallHandler::sys_timer_delete] Invalid timer ID: %d\n", timerid);
             return SYS_EINVAL;
         }
 
-        // 检查定时器是否当前是武装状态
-        bool was_armed = g_timers[timer_slot].armed;
-
-        // 删除定时器：将其标记为非活动状态
-        g_timers[timer_slot].active = false;
-        g_timers[timer_slot].armed = false;
-
-        // 清理定时器数据（可选，为了安全）
-        g_timers[timer_slot].timer_id = 0;
-        g_timers[timer_slot].clockid = 0;
-        g_timers[timer_slot].owner = nullptr;
-        g_timers[timer_slot].event.sigev_notify = 0;
-        g_timers[timer_slot].event.sigev_signo = 0;
-        g_timers[timer_slot].event.sigev_value.sival_ptr = nullptr;
-        g_timers[timer_slot].event.sigev_notify_thread_id = 0;
-
-        // 清零定时器规格
-        g_timers[timer_slot].spec.it_value.tv_sec = 0;
-        g_timers[timer_slot].spec.it_value.tv_nsec = 0;
-        g_timers[timer_slot].spec.it_interval.tv_sec = 0;
-        g_timers[timer_slot].spec.it_interval.tv_nsec = 0;
-
-        // 清零过期时间
-        g_timers[timer_slot].expiry_time.tv_sec = 0;
-        g_timers[timer_slot].expiry_time.tv_nsec = 0;
-
-        (void)was_armed;
+        clear_posix_timer_locked(g_timers[timer_slot]);
+        unlock_posix_timers();
 
         // 注意：根据 POSIX 标准，对于由被删除定时器产生的任何挂起信号的处理是未指定的
         // 在我们的简化实现中，我们不需要特殊处理挂起的信号
@@ -21702,8 +21672,17 @@ namespace syscall
             return SYS_EINVAL;
         }
 
-        size_t events_bytes = static_cast<size_t>(maxevents) * sizeof(abi::KernelEpollEvent);
-        auto *kernel_events = static_cast<abi::KernelEpollEvent *>(alloc_syscall_temp_buffer(events_bytes));
+        constexpr int stack_event_capacity = 8;
+        abi::KernelEpollEvent stack_events[stack_event_capacity]{};
+        const int64 timeout_us = timeout_ms < 0 ? -1 : static_cast<int64>(timeout_ms) * 1000LL;
+        // timeout=0 只做一次轮转 readiness 扫描。即使用户给出很大的上限，
+        // 返回少于 maxevents 也符合 epoll ABI；固定 8 项栈缓冲可彻底避免页分配。
+        const int kernel_event_capacity =
+            timeout_us == 0 && maxevents > stack_event_capacity ? stack_event_capacity : maxevents;
+        size_t events_bytes = static_cast<size_t>(kernel_event_capacity) * sizeof(abi::KernelEpollEvent);
+        auto *kernel_events = kernel_event_capacity <= stack_event_capacity
+                                  ? stack_events
+                                  : static_cast<abi::KernelEpollEvent *>(alloc_syscall_temp_buffer(events_bytes));
         if (kernel_events == nullptr)
         {
             epoll_base->free_file();
@@ -21717,7 +21696,10 @@ namespace syscall
             {
                 p->_sigmask = orig_sigmask;
             }
-            free_syscall_temp_buffer(kernel_events);
+            if (kernel_events != stack_events)
+            {
+                free_syscall_temp_buffer(kernel_events);
+            }
             epoll_base->free_file();
         };
 
@@ -21739,11 +21721,10 @@ namespace syscall
             sigmask_changed = true;
         }
 
-        int64 timeout_us = timeout_ms < 0 ? -1 : static_cast<int64>(timeout_ms) * 1000LL;
         int ret = do_epoll_wait_loop(p,
                                      static_cast<fs::epoll_file *>(epoll_base),
                                      kernel_events,
-                                     maxevents,
+                                     kernel_event_capacity,
                                      timeout_us);
         if (ret > 0 &&
             mem::k_vmm.copy_out(*pt, events_addr, kernel_events, static_cast<size_t>(ret) * sizeof(abi::KernelEpollEvent)) < 0)
@@ -21827,8 +21808,14 @@ namespace syscall
             }
         }
 
-        size_t events_bytes = static_cast<size_t>(maxevents) * sizeof(abi::KernelEpollEvent);
-        auto *kernel_events = static_cast<abi::KernelEpollEvent *>(alloc_syscall_temp_buffer(events_bytes));
+        constexpr int stack_event_capacity = 8;
+        abi::KernelEpollEvent stack_events[stack_event_capacity]{};
+        const int kernel_event_capacity =
+            timeout_us == 0 && maxevents > stack_event_capacity ? stack_event_capacity : maxevents;
+        size_t events_bytes = static_cast<size_t>(kernel_event_capacity) * sizeof(abi::KernelEpollEvent);
+        auto *kernel_events = kernel_event_capacity <= stack_event_capacity
+                                  ? stack_events
+                                  : static_cast<abi::KernelEpollEvent *>(alloc_syscall_temp_buffer(events_bytes));
         if (kernel_events == nullptr)
         {
             epoll_base->free_file();
@@ -21842,7 +21829,10 @@ namespace syscall
             {
                 p->_sigmask = orig_sigmask;
             }
-            free_syscall_temp_buffer(kernel_events);
+            if (kernel_events != stack_events)
+            {
+                free_syscall_temp_buffer(kernel_events);
+            }
             epoll_base->free_file();
         };
 
@@ -21867,7 +21857,7 @@ namespace syscall
         int ret = do_epoll_wait_loop(p,
                                      static_cast<fs::epoll_file *>(epoll_base),
                                      kernel_events,
-                                     maxevents,
+                                     kernel_event_capacity,
                                      timeout_us);
         if (ret > 0 &&
             mem::k_vmm.copy_out(*pt, events_addr, kernel_events, static_cast<size_t>(ret) * sizeof(abi::KernelEpollEvent)) < 0)
@@ -21964,6 +21954,30 @@ namespace syscall
         return static_cast<uint64>(p->get_io_priority());
     }
 
+    uint64 SyscallHandler::sys_timer_getoverrun()
+    {
+        int timerid = -1;
+        if (_arg_int(0, timerid) < 0)
+        {
+            return SYS_EINVAL;
+        }
+
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        lock_posix_timers();
+        for (int i = 0; i < 32; ++i)
+        {
+            if (g_timers[i].timer_id == timerid &&
+                posix_timer_owned_by_locked(g_timers[i], p))
+            {
+                const int overrun = g_timers[i].overrun;
+                unlock_posix_timers();
+                return overrun;
+            }
+        }
+        unlock_posix_timers();
+        return SYS_EINVAL;
+    }
+
     uint64 SyscallHandler::sys_timer_gettime()
     {
         // https://www.man7.org/linux/man-pages/man2/timer_gettime.2.html
@@ -21986,7 +22000,7 @@ namespace syscall
         if (curr_value_addr == 0)
         {
             printfRed("[SyscallHandler::sys_timer_gettime] curr_value cannot be NULL\n");
-            return SYS_EINVAL;
+            return SYS_EFAULT;
         }
 
         // 确保定时器数组已初始化
@@ -21996,11 +22010,13 @@ namespace syscall
             return SYS_EINVAL;
         }
 
-        // 查找对应的定时器
+        proc::Pcb *p = proc::k_pm.get_cur_pcb();
+        lock_posix_timers();
         int timer_slot = -1;
         for (int i = 0; i < 32; i++)
         {
-            if (g_timers[i].active && g_timers[i].timer_id == timerid)
+            if (g_timers[i].timer_id == timerid &&
+                posix_timer_owned_by_locked(g_timers[i], p))
             {
                 timer_slot = i;
                 break;
@@ -22009,21 +22025,23 @@ namespace syscall
 
         if (timer_slot == -1)
         {
+            unlock_posix_timers();
             printfRed("[SyscallHandler::sys_timer_gettime] Invalid timer ID: %d\n", timerid);
             return SYS_EINVAL;
         }
+        const extended_posix_timer timer_snapshot = g_timers[timer_slot];
+        unlock_posix_timers();
 
-        proc::Pcb *p = proc::k_pm.get_cur_pcb();
         mem::PageTable *pt = p->get_pagetable();
 
         // 准备返回的定时器规格
         tmm::itimerspec current_spec;
 
         // 复制定时器间隔（总是保持不变）
-        current_spec.it_interval = g_timers[timer_slot].spec.it_interval;
+        current_spec.it_interval = timer_snapshot.spec.it_interval;
 
         // 如果定时器未武装，返回零值
-        if (!g_timers[timer_slot].armed)
+        if (!timer_snapshot.armed)
         {
             current_spec.it_value.tv_sec = 0;
             current_spec.it_value.tv_nsec = 0;
@@ -22033,7 +22051,7 @@ namespace syscall
             // 定时器已武装，需要计算剩余时间
             // 获取当前时间
             tmm::timespec current_time;
-            tmm::SystemClockId cid = (tmm::SystemClockId)g_timers[timer_slot].clockid;
+            tmm::SystemClockId cid = (tmm::SystemClockId)timer_snapshot.clockid;
 
             if (tmm::k_tm.clock_gettime(cid, &current_time) != 0)
             {
@@ -22042,8 +22060,8 @@ namespace syscall
             }
 
             // 计算剩余时间：过期时间 - 当前时间
-            long remaining_sec = g_timers[timer_slot].expiry_time.tv_sec - current_time.tv_sec;
-            long remaining_nsec = g_timers[timer_slot].expiry_time.tv_nsec - current_time.tv_nsec;
+            long remaining_sec = timer_snapshot.expiry_time.tv_sec - current_time.tv_sec;
+            long remaining_nsec = timer_snapshot.expiry_time.tv_nsec - current_time.tv_nsec;
 
             // 处理纳秒借位
             if (remaining_nsec < 0)
@@ -22071,12 +22089,6 @@ namespace syscall
             printfRed("[SyscallHandler::sys_timer_gettime] Error copying curr_value to user space\n");
             return SYS_EFAULT;
         }
-
-        printfCyan("[SyscallHandler::sys_timer_gettime] Timer %d: it_value=[%ld.%09ld], it_interval=[%ld.%09ld], armed=%s\n",
-                   timerid,
-                   current_spec.it_value.tv_sec, current_spec.it_value.tv_nsec,
-                   current_spec.it_interval.tv_sec, current_spec.it_interval.tv_nsec,
-                   g_timers[timer_slot].armed ? "yes" : "no");
 
         return 0; // 成功
     }

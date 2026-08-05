@@ -166,6 +166,7 @@ namespace fs
         bool is_virtual_path(const eastl::string& path) const;
         vfile_tree_node* get_virtual_node(const eastl::string& path) const;
         int dynamic_file_type(const eastl::string& path) const;
+        bool has_virtual_top_level_prefix(const eastl::string& path) const;
         
         void list_virtual_files(const eastl::string& dir_path, 
                                eastl::vector<eastl::string>& file_list) const;

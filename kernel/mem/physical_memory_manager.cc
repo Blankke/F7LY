@@ -798,6 +798,35 @@ namespace mem
         return true;
     }
 
+    uint64 PhysicalMemoryManager::retain_pages_batch(void *const *pages, uint32 count)
+    {
+        if (pages == nullptr || count == 0)
+        {
+            return 0;
+        }
+        if (count > 64)
+        {
+            panic("[pmm] retain_pages_batch count exceeds bitmap: %u", count);
+        }
+
+        uint64 retained_mask = 0;
+        memlock.acquire();
+        for (uint32 index = 0; index < count; ++index)
+        {
+            uint64 page_index = pa2pgnm(pages[index]);
+            if (!page_index_in_range(page_index) ||
+                k_page_refcounts[page_index] == 0 ||
+                k_page_refcounts[page_index] == UINT16_MAX)
+            {
+                continue;
+            }
+            ++k_page_refcounts[page_index];
+            retained_mask |= 1ULL << index;
+        }
+        memlock.release();
+        return retained_mask;
+    }
+
     uint16 PhysicalMemoryManager::page_ref_count(void *pa)
     {
         uint64 page_index = pa2pgnm(pa);

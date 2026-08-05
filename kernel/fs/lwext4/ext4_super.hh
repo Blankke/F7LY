@@ -37,6 +37,12 @@ static inline uint64_t ext4_sb_get_free_blocks_cnt(struct ext4_sblock *s) {
     return ((uint64_t) to_le32(s->free_blocks_count_hi) << 32) | to_le32(s->free_blocks_count_lo);
 }
 
+/**@brief 获取仅特权用户可使用的保留块数量。 */
+static inline uint64_t ext4_sb_get_reserved_blocks_cnt(struct ext4_sblock *s) {
+    return ((uint64_t)to_le32(s->reserved_blocks_count_hi) << 32) |
+           to_le32(s->reserved_blocks_count_lo);
+}
+
 /**@brief   Free blocks count set.
  * @param   s superblock descriptor
  * @param   cnt new value of free blocks*/

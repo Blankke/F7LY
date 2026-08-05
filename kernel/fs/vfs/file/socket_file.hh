@@ -115,6 +115,8 @@ namespace fs
         
         // 保护当前 socket_file 的状态、缓冲区、peer 标志。
         SpinLock _lock;
+        // /proc/net/tcp 只读登记链；不拥有对象，也不需要额外分配节点。
+        socket_file *_proc_registry_next = nullptr;
 
         bool stream_read_eof_locked() const;
         bool stream_read_ready_locked() const;
@@ -127,6 +129,11 @@ namespace fs
         socket_file(int domain, int type, int protocol);
         socket_file(FileAttrs attrs, int domain, int type, int protocol);
         virtual ~socket_file();
+
+        // /proc/net/tcp{,6} 使用的全局只读视图。登记表只保存存活对象指针，
+        // 快照期间持有登记锁，析构会先反注册，因此不会读取悬空 socket。
+        static void initialize_proc_registry();
+        static eastl::string generate_tcp_proc_snapshot(bool ipv6);
 
         // 设置onps socket句柄
         void set_onps_socket(SOCKET onps_socket) { _onps_socket = onps_socket; }

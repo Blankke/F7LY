@@ -42,6 +42,7 @@ struct extended_posix_timer
     } event;                    // 事件配置
     bool active;                // 是否激活
     bool armed;                 // 是否武装（设置了过期时间）
+    int overrun;                // 最近一次信号投递对应的超限次数，饱和到 INT_MAX
     tmm::itimerspec spec;       // 定时器规格
     tmm::timespec expiry_time;  // 绝对过期时间
 };
@@ -50,6 +51,15 @@ struct extended_posix_timer
 extern extended_posix_timer g_timers[32];
 extern int g_next_timer_id;
 extern bool g_timers_initialized;
+
+// POSIX timer 槽是跨进程、跨 CPU 的全局状态。所有直接访问 g_timers 的
+// 路径必须持有这把锁；初始化在本地中断开启前由 syscall 子系统完成。
+void init_posix_timers();
+void lock_posix_timers();
+void unlock_posix_timers();
+bool posix_timer_owned_by_locked(const extended_posix_timer &timer, const proc::Pcb *task);
+void set_posix_timer_armed_locked(extended_posix_timer &timer, bool armed);
+void clear_posix_timer_locked(extended_posix_timer &timer);
 
 // 检查全局 POSIX timer_create()/timer_settime() 定时器
 void check_expired_timers();

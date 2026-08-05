@@ -162,12 +162,15 @@ int ext4_bcache_init_dynamic(struct ext4_bcache *bc, uint32_t cnt, uint32_t item
     return EOK;
 }
 
-void ext4_bcache_cleanup(struct ext4_bcache *bc) {
+int ext4_bcache_cleanup(struct ext4_bcache *bc) {
     struct ext4_buf *buf, *tmp;
     RB_FOREACH_SAFE(buf, ext4_buf_lba_tree, &bc->lba_root, tmp) {
-        ext4_block_flush_buf(bc->bdev, buf);
+        int r = ext4_block_flush_buf(bc->bdev, buf);
+        if (r != EOK)
+            return r;
         ext4_bcache_drop_buf(bc, buf);
     }
+    return EOK;
 }
 
 int ext4_bcache_fini_dynamic(struct ext4_bcache *bc) {
@@ -222,10 +225,26 @@ static void ext4_buf_free(struct ext4_buf *buf) {
     ext4_buf_pool_free(buf);
 }
 
-static struct ext4_buf *ext4_buf_lookup(struct ext4_bcache *bc, uint64_t lba) {
-    struct ext4_buf tmp = {.lba = lba};
+static uint32_t ext4_bcache_hot_slot(uint64_t lba)
+{
+    // inode table、extent 与目录块常按 4KiB LBA 连续分布；混入高位可减少
+    // 相隔固定 stride 的元数据块在小型直映表中互相覆盖。
+    return static_cast<uint32_t>((lba ^ (lba >> 12)) &
+                                 (EXT4_BCACHE_HOT_SLOT_COUNT - 1));
+}
 
-    return RB_FIND(ext4_buf_lba_tree, &bc->lba_root, &tmp);
+static struct ext4_buf *ext4_buf_lookup(struct ext4_bcache *bc, uint64_t lba) {
+    const uint32_t hot_slot = ext4_bcache_hot_slot(lba);
+    struct ext4_buf *buf = bc->hot_slots[hot_slot];
+    if (buf != nullptr && buf->lba == lba)
+        return buf;
+
+    struct ext4_buf tmp = {.lba = lba};
+    buf = RB_FIND(ext4_buf_lba_tree, &bc->lba_root, &tmp);
+    if (buf != nullptr)
+        bc->hot_slots[hot_slot] = buf;
+
+    return buf;
 }
 
 struct ext4_buf *ext4_buf_lowest_lru(struct ext4_bcache *bc) { return TAILQ_FIRST(&bc->lru_list); }
@@ -279,6 +298,9 @@ void ext4_bcache_drop_buf(struct ext4_bcache *bc, struct ext4_buf *buf) {
         RB_REMOVE(ext4_buf_lba_tree, &bc->lba_root, buf);
         buf->on_lba_tree = false;
     }
+    const uint32_t hot_slot = ext4_bcache_hot_slot(buf->lba);
+    if (bc->hot_slots[hot_slot] == buf)
+        bc->hot_slots[hot_slot] = nullptr;
 
     /*Forcibly drop dirty buffer.*/
     if (buf->on_dirty_list)
@@ -300,8 +322,13 @@ void ext4_bcache_invalidate_buf(struct ext4_bcache *bc, struct ext4_buf *buf) {
 }
 
 void ext4_bcache_invalidate_lba(struct ext4_bcache *bc, uint64_t from, uint32_t cnt) {
+    if (cnt == 0)
+        return;
     uint64_t end = from + cnt - 1;
-    struct ext4_buf *tmp = ext4_buf_lookup(bc, from), *buf;
+    if (end < from)
+        end = UINT64_MAX;
+    struct ext4_buf key = {.lba = from};
+    struct ext4_buf *tmp = RB_NFIND(ext4_buf_lba_tree, &bc->lba_root, &key), *buf;
     RB_FOREACH_FROM(buf, ext4_buf_lba_tree, tmp) {
         if (buf->lba > end)
             break;
@@ -357,6 +384,7 @@ int ext4_bcache_alloc(struct ext4_bcache *bc, struct ext4_block *b, bool *is_new
 
     RB_INSERT(ext4_buf_lba_tree, &bc->lba_root, buf);
     buf->on_lba_tree = true;
+    bc->hot_slots[ext4_bcache_hot_slot(buf->lba)] = buf;
     /* One more buffer in bcache now. :-) */
     bc->ref_blocks++;
 

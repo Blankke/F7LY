@@ -23,6 +23,7 @@ namespace
     constexpr uint64 k_iocsr_target_cpu_shift = 16;
     constexpr uint64 k_iocsr_mailbox_shift = 2;
     constexpr uint64 k_iocsr_high_word_mask = 0xffffffff00000000ULL;
+    constexpr uint32 k_runtime_ipi_vector = 1;
 
     // QEMU 的 mailbox 传输寄存器一次只写目标 mailbox 的 32 位。BOX 的
     // 编码是 mailbox*2（低 32 位）或 mailbox*2+1（高 32 位）。
@@ -41,12 +42,13 @@ namespace
         asm volatile("iocsrwr.d %0, %1" : : "r"(low_word), "r"(k_iocsr_mailbox_send) : "memory");
     }
 
-    inline void send_boot_ipi(uint64 cpu_id)
+    inline void send_ipi(uint64 cpu_id, uint32 vector)
     {
-        // action/vector 0 是 QEMU slave boot ROM 使用的唤醒位。IOCSR_IPI_SEND
-        // 的控制位宽为 32 位，使用 iocsrwr.w 与设备寄存器宽度保持一致。
+        // IOCSR_IPI_SEND 的控制位宽为 32 位，使用 iocsrwr.w 与设备寄存器
+        // 宽度保持一致。vector 0 用于 slave boot，vector 1 用于 runtime。
         const uint32 value = static_cast<uint32>(k_iocsr_send_blocking |
-                                                  (cpu_id << k_iocsr_target_cpu_shift));
+                                                  (cpu_id << k_iocsr_target_cpu_shift) |
+                                                  vector);
         asm volatile("iocsrwr.w %0, %1" : : "r"(value), "r"(k_iocsr_ipi_send) : "memory");
     }
 }
@@ -63,7 +65,15 @@ void start_secondary_cpu(uint64 cpu_id, uint64 entry, uint64 argument)
     write_mailbox(cpu_id, 1, argument);
     write_mailbox(cpu_id, 0, cached_entry);
     asm volatile("dbar 0" ::: "memory");
-    send_boot_ipi(cpu_id);
+    send_ipi(cpu_id, 0);
+}
+
+void send_runtime_ipi(uint64 cpu_id)
+{
+    // runtime vector 与 TLB shootdown 共用硬件入口，但这里不发布 generation；
+    // 中断处理只清 pending 位，不执行无请求的 invtlb。
+    asm volatile("dbar 0" ::: "memory");
+    send_ipi(cpu_id, k_runtime_ipi_vector);
 }
 }
 
@@ -147,6 +157,17 @@ void start_secondaries(uint64 boot_argument)
     Cpu::publish_bootstrap_ready();
     Cpu::wait_for_all_possible_cpus_online();
     Cpu::publish_scheduler_ready();
+}
+
+void kick_cpu(uint64 cpu_id)
+{
+    if (!Cpu::is_valid_cpu_id(cpu_id) ||
+        cpu_id == Cpu::current_cpu_id() ||
+        (Cpu::online_cpu_mask() & (1ULL << cpu_id)) == 0)
+    {
+        return;
+    }
+    loongarch::smp::send_runtime_ipi(cpu_id);
 }
 
 [[noreturn]] void park_current_cpu()

@@ -1,5 +1,6 @@
 #include "virtual_fs.hh"
 #include "fs/vfs/file/virtual_file.hh"
+#include "fs/vfs/file/socket_file.hh"
 #include "fs/vfs/vfs_utils.hh"
 #include "proc/proc.hh"
 #include "proc/proc_manager.hh"
@@ -43,6 +44,7 @@ namespace fs
 
     // 构造函数
     VirtualFileSystem::VirtualFileSystem()
+        : root(nullptr)
     {
     }
 
@@ -205,6 +207,50 @@ namespace fs
         return should_use_backing(path, node) ? nullptr : node;
     }
 
+    bool VirtualFileSystem::has_virtual_top_level_prefix(const eastl::string &path) const
+    {
+        if (root == nullptr || path.empty())
+        {
+            return false;
+        }
+
+        size_t begin = 0;
+        while (begin < path.size() && path[begin] == '/')
+            ++begin;
+        if (begin == path.size())
+            return false;
+
+        size_t end = begin;
+        while (end < path.size() && path[end] != '/')
+            ++end;
+
+        /*
+         * 只要顶层名称属于虚拟树，就保守地走原有逐组件解析。这样 /proc、
+         * /sys、/dev 以及 BackingFirst 的 /etc 都不会被 ext4 快路径绕过；
+         * Cargo 常用的 /root、/tmp、/musl、/glibc 则不需要构造整棵路径。
+         */
+        const size_t top_level_length = end - begin;
+        for (int index = 0; index < root->children_count; ++index)
+        {
+            const vfile_tree_node *child = root->children[index];
+            if (child == nullptr || child->name.size() != top_level_length)
+                continue;
+
+            bool matches = true;
+            for (size_t offset = 0; offset < top_level_length; ++offset)
+            {
+                if (child->name[offset] != path[begin + offset])
+                {
+                    matches = false;
+                    break;
+                }
+            }
+            if (matches)
+                return true;
+        }
+        return false;
+    }
+
     // 列出目录下的虚拟文件
     void VirtualFileSystem::list_virtual_files(const eastl::string &dir_path,
                                                eastl::vector<eastl::string> &file_list) const
@@ -290,6 +336,7 @@ namespace fs
     void VirtualFileSystem::dir_init()
     {
         printf("Initializing virtual file system tree structure\n");
+        socket_file::initialize_proc_registry();
         root = new vfile_tree_node("");             // 根节点名称为空
         root->file_type = fs::FileTypes::FT_DIRECT; // 根节点是目录
         // 使用新的树形结构初始化虚拟文件
@@ -339,6 +386,10 @@ namespace fs
                          eastl::make_unique<ProcStatProvider>());
         add_virtual_file("/proc/uptime", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcUptimeProvider>());
+        add_virtual_file("/proc/net/tcp", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcNetTcpProvider>(false));
+        add_virtual_file("/proc/net/tcp6", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcNetTcpProvider>(true));
 
         // sysconf()/LTP/sysbench 会读取这些 sysfs 节点推断可用 CPU 数。它们必须
         // 动态反映 Cpu 的 possible/online 掩码，并与 sched_getaffinity()、

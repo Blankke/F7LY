@@ -22,6 +22,7 @@
 #include "vma_space.hh"
 #include "sleeplock.hh"
 #include <EASTL/atomic.h>
+#include <EASTL/vector.h>
 #ifdef RISCV
 #include "mem/riscv/pagetable.hh"
 #elif defined(LOONGARCH)
@@ -78,6 +79,9 @@ namespace proc
         // 堆内存管理
         uint64 heap_start;
         uint64 heap_end;
+        // program break 曾经到达过的最高地址。MAP_FIXED 可在堆中打洞，brk
+        // 收缩后允许重新跨过这些历史堆洞，但不能跨过新建于高水位之外的 mmap。
+        uint64 heap_high_watermark;
         uint64 mmap_cursor;
 
         // 页表管理（移除分散的引用计数）
@@ -593,7 +597,10 @@ namespace proc
                                      uint64 max_addr,
                                      uint64 size,
                                      uint64 alignment) const;
-        bool clone_private_vm_space_for_fork(ProcessMemoryManager &dst);
+        bool clone_private_vm_space_for_fork(ProcessMemoryManager &dst,
+                                             bool defer_parent_tlb_flush,
+                                             bool &parent_cow_changed,
+                                             eastl::vector<CowRollbackRange> &rollback_ranges);
         bool clone_vm_space_metadata_from(const ProcessMemoryManager &src);
         
         /**

@@ -1370,9 +1370,6 @@ namespace proc
                     // 最终退出状态仍由 trap 返回前的信号处理路径设置。
                     p->_killed = 1;
                 }
-                // 信号递送后调度器需要重新关注最高优先级；否则目标线程可能被大运行队列
-                // 延后很久，用户态 handler 不能及时执行。
-                proc::k_scheduler.note_priority_change(proc::highest_proc_prio);
                 if (info != nullptr)
                 {
                     p->_queued_siginfo[sig] = *info;
@@ -1390,8 +1387,8 @@ namespace proc
                     {
                         // 直接设置为可运行状态，避免调用wakeup造成的死锁
                         // 这是安全的，因为调用者已经持有了进程锁
-                        p->_state = ProcState::RUNNABLE;
-                        p->_chan = nullptr;
+                        k_scheduler.set_task_state(*p, ProcState::RUNNABLE);
+                        p->_chan.store(nullptr, eastl::memory_order_release);
                     }
                 }
             }
@@ -1429,6 +1426,28 @@ namespace proc
                     panic("[do_handle] Signal %d is ignored", signum);
                     return;
                 }
+
+                // 信号帧会查找/扩展 VMA、处理 COW 并安装用户页。CLONE_VM
+                // 线程可能同时 munmap/mprotect 同一地址空间，必须复用 mm 锁
+                // 与缺页及各 VM syscall 串行，避免页表和 has_resident_pages
+                // 元数据在帧构造中途被拆除。
+                proc::ProcessMemoryManager *signal_mm = p->get_memory_manager();
+                struct SignalMemoryLockGuard
+                {
+                    proc::ProcessMemoryManager *mm;
+                    explicit SignalMemoryLockGuard(proc::ProcessMemoryManager *manager)
+                        : mm(manager)
+                    {
+                        if (mm != nullptr)
+                            mm->lock_memory();
+                    }
+                    ~SignalMemoryLockGuard()
+                    {
+                        if (mm != nullptr)
+                            mm->unlock_memory();
+                    }
+                } signal_memory_guard(signal_mm);
+
                 // printf("[do_handle] Handling signal %d with handler %p\n", signum, act->sa_handler);
 
                 signal_frame *frame;

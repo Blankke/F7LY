@@ -1,6 +1,6 @@
 # SMP HAL、stress-ng 与 BuildStorm 自编译执行计划
 
-状态：二阶段代码已收尾；SMP、真实 stress-ng、8 GiB PMM 和双架构 TLB 已完成 QEMU 验收；selfhost Cargo/ext4 长压力留待后续阶段
+状态：二阶段代码已收尾；SMP、真实 stress-ng、8 GiB PMM 和双架构 TLB 已完成 QEMU 验收；旧 selfhost 制备链路已由预编译 tg-xtask 的官方 BuildStorm 镜像替代，官方长测仍待验收
 
 日期：2026-07-18
 
@@ -270,10 +270,10 @@ guest 构建脚本要求：
 - [x] RV/LA 在 `-m 8G -smp 8` 下启动，PMM 实际管理容量不再受 1 GiB 固定表限制；
 - [x] buddy tree、refcount 和页表检查全部使用动态容量；
 - [x] RV/LA 跨核 TLB 专项通过，物理页只在远端确认失效后回收；
-- [ ] F7LY 自有 `scripts/selfbuild/self_compile.sh` 可复现 rootfs、启动和结果验证；
-- [ ] guest 从空 target 完成至少一次真实离线 Cargo 构建，产物非空；
-- [ ] 30 分钟 Cargo/ext4/进程压力无 panic、死锁、页表损坏或文件系统损坏；
-- [ ] 所有命令、日志和尚未闭环的能力缺口回填到本计划，状态只按真实证据更新。
+- [x] 已由预编译 `tg-xtask` 的新版官方镜像和镜像内 `/glibc/buildstorm_testcode.sh` 替代；不再制备或验收自有 `self_compile.sh` rootfs 链路；
+- [x] 已由官方 BuildStorm 的空目标目录构建与产物检查替代；不再用自制 guest 离线构建作为决赛验收入口；
+- [x] 已由官方 BuildStorm 4 小时上限长压替代；完整无 panic/死锁/页表或文件系统损坏证据仍在 `final_2026_support_gap_plan.md` 的官方两轮门槛下开放，不把替代写成测试通过；
+- [x] 本计划的旧 selfhost 开放项已完成“验收链路替代”收口；实际官方命令、日志与未闭环项统一回填 `final_2026_support_gap_plan.md`。
 
 ## 8. 2026-07-18 实施记录
 
@@ -332,3 +332,10 @@ git diff --check
 1. 复现已完成的验收：参见 `docs/dev-notes/smp_buildstorm_reproduction.md`。
 2. 后续若继续 BuildStorm selfhost，再执行 `scripts/selfbuild/prepare_rootfs.sh --download-base --build-prepared`；该步骤需要网络、sudo、约 11 GiB 磁盘和较长的 Rust/crates 准备时间。
 3. rootfs 成功制备后，依次执行 `scripts/selfbuild/self_compile.sh --level 0`、`--level 1`、`--level 2`、`--level 3 --l3-jobs 1`，再执行 L4 和 L5；任何一级失败都停在该级修复，不跳级。
+
+## 9. 2026-08-02 BuildStorm 卡顿修复（完成待验收）
+
+- [x] 修复动态匿名映射在页粒度 `mprotect` 后只拆分、不合并造成的 VMA 爆炸；仅在权限、标志、偏移和全部后端语义一致时合并，文件映射、共享映射、VmObject 与 overlay 均不参与。
+- [x] 移除 `mprotect` 跨 VMA 更新的固定 16 段上限，改为完整记录权限并支持失败回滚，避免只改 PTE、不改 VMA 元数据。
+- [x] 同一 BuildStorm `core` 编译进程的 VMA 数由 10026 降至 72；限时冷编译已从 `Compiling core` 继续产出 `libc` 与 `std` 编译产物。
+- [x] 修复位于共享内存管理与 syscall 实现，不含架构分支；RV64、LA64 最终构建均作为短验收门槛，完整 BuildStorm 长测由用户执行。

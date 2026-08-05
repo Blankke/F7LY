@@ -12,10 +12,6 @@ void flush_local_range(uint64 start, uint64 size);
 void flush_range_all_cpus(uint64 start, uint64 size);
 void flush_all_cpus();
 
-// 精确唤醒落在 idle/WFI 中的目标 CPU。LoongArch 复用 runtime IPI
-// vector（没有 shootdown generation 时只清中断），RISC-V 使用 SBI IPI。
-void kick_cpu(uint64 cpu_id);
-
 // 自旋锁等待期间本地中断通常关闭。架构后端可在这里轮询并处理仅与 TLB
 // 相关的无锁 IPI，避免两个 CPU 分别持锁/等待 shootdown 时互相饿死。
 void poll_pending();

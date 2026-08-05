@@ -104,6 +104,18 @@ void start_secondaries(uint64 boot_argument)
     Cpu::publish_scheduler_ready();
 }
 
+void kick_cpu(uint64 cpu_id)
+{
+    if (!Cpu::is_valid_cpu_id(cpu_id) ||
+        cpu_id == Cpu::current_cpu_id() ||
+        (Cpu::online_cpu_mask() & (1ULL << cpu_id)) == 0)
+    {
+        return;
+    }
+    unsigned long hart_mask = 1UL << cpu_id;
+    sbi_send_ipi(&hart_mask);
+}
+
 [[noreturn]] void park_current_cpu()
 {
     for (;;)

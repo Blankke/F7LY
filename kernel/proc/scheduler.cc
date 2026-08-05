@@ -117,23 +117,135 @@ namespace proc
     void Scheduler::init(const char *name)
     {
         _sche_lock.init(name);
-        _has_non_default_priority.store(0, eastl::memory_order_release);
+        _non_default_schedulable.store(0, eastl::memory_order_release);
         _next_initial_cpu = -1;
+        _load_averages[0] = 0;
+        _load_averages[1] = 0;
+        _load_averages[2] = 0;
+        _load_last_sample_sec = 0;
+        _load_initialized = false;
         for (uint cpu_id = 0; cpu_id < NUMCPU; ++cpu_id)
         {
             _next_scan_global_id[cpu_id] = 0;
+            _pressure[cpu_id].schedulable.store(0, eastl::memory_order_relaxed);
         }
     }
 
-    void Scheduler::note_priority_change(int priority)
+    namespace
     {
-        if (priority == default_proc_prio)
+        bool valid_home_cpu(int cpu_id)
+        {
+            return cpu_id >= 0 && Cpu::is_valid_cpu_id(static_cast<uint64>(cpu_id));
+        }
+    }
+
+    void Scheduler::set_task_state(Pcb &task, ProcState state)
+    {
+        const ProcState old_state = task._state;
+        if (old_state == state)
         {
             return;
         }
-        _sche_lock.acquire();
-        _has_non_default_priority.store(1, eastl::memory_order_release);
-        _sche_lock.release();
+
+        if (state == ProcState::RUNNABLE && !valid_home_cpu(task._last_cpu))
+        {
+            // 所有 runnable 任务必须有唯一 home CPU，否则压力计数无法正确记账。
+            task._last_cpu = select_initial_cpu(task._cpu_mask, -1);
+        }
+
+        const bool old_schedulable =
+            old_state == ProcState::RUNNABLE || old_state == ProcState::RUNNING;
+        const bool new_schedulable =
+            state == ProcState::RUNNABLE || state == ProcState::RUNNING;
+        const int home_cpu = task._last_cpu;
+        if (valid_home_cpu(home_cpu) && old_schedulable != new_schedulable)
+        {
+            if (old_schedulable)
+            {
+                const uint32 previous =
+                    _pressure[home_cpu].schedulable.fetch_sub(1, eastl::memory_order_acq_rel);
+                assert(previous != 0,
+                       "scheduler: pressure underflow cpu=%d gid=%d",
+                       home_cpu,
+                       task._global_id);
+            }
+            else
+            {
+                _pressure[home_cpu].schedulable.fetch_add(1, eastl::memory_order_release);
+            }
+        }
+        if (task._priority != default_proc_prio && old_schedulable != new_schedulable)
+        {
+            if (old_schedulable)
+            {
+                const uint32 previous =
+                    _non_default_schedulable.fetch_sub(1, eastl::memory_order_acq_rel);
+                assert(previous != 0,
+                       "scheduler: priority pressure underflow gid=%d",
+                       task._global_id);
+            }
+            else
+            {
+                _non_default_schedulable.fetch_add(1, eastl::memory_order_release);
+            }
+        }
+        task._state = state;
+    }
+
+    void Scheduler::set_task_priority(Pcb &task, int priority)
+    {
+        const int old_priority = task._priority;
+        if (old_priority == priority)
+        {
+            return;
+        }
+
+        const bool schedulable =
+            task._state == ProcState::RUNNABLE || task._state == ProcState::RUNNING;
+        if (schedulable &&
+            (old_priority == default_proc_prio) != (priority == default_proc_prio))
+        {
+            if (old_priority != default_proc_prio)
+            {
+                const uint32 previous =
+                    _non_default_schedulable.fetch_sub(1, eastl::memory_order_acq_rel);
+                assert(previous != 0,
+                       "scheduler: priority change underflow gid=%d",
+                       task._global_id);
+            }
+            else
+            {
+                _non_default_schedulable.fetch_add(1, eastl::memory_order_release);
+            }
+        }
+        task._priority = priority;
+    }
+
+    void Scheduler::set_task_home_cpu(Pcb &task, int cpu_id)
+    {
+        const int old_cpu = task._last_cpu;
+        if (old_cpu == cpu_id)
+        {
+            return;
+        }
+
+        if (task._state == ProcState::RUNNABLE || task._state == ProcState::RUNNING)
+        {
+            if (valid_home_cpu(old_cpu))
+            {
+                const uint32 previous =
+                    _pressure[old_cpu].schedulable.fetch_sub(1, eastl::memory_order_acq_rel);
+                assert(previous != 0,
+                       "scheduler: home pressure underflow cpu=%d gid=%d",
+                       old_cpu,
+                       task._global_id);
+            }
+            if (valid_home_cpu(cpu_id))
+            {
+                _pressure[cpu_id].schedulable.fetch_add(1, eastl::memory_order_release);
+            }
+        }
+        task._last_cpu = cpu_id;
     }
 
     int Scheduler::select_initial_cpu(const CpuMask &mask, int parent_cpu)
@@ -171,58 +283,144 @@ namespace proc
         }
 
         int selected_cpu = first_cpu;
+        uint32 selected_pressure = ~static_cast<uint32>(0);
         for (int offset = 0; offset < NUMCPU; ++offset)
         {
             const int candidate = (first_cpu + offset) % NUMCPU;
-            if ((eligible_mask & (1ULL << candidate)) != 0)
+            if ((eligible_mask & (1ULL << candidate)) == 0)
+            {
+                continue;
+            }
+            const uint32 pressure =
+                _pressure[candidate].schedulable.load(eastl::memory_order_acquire);
+            if (pressure < selected_pressure)
             {
                 selected_cpu = candidate;
-                _next_initial_cpu = (candidate + 1) % NUMCPU;
-                break;
+                selected_pressure = pressure;
             }
         }
+        _next_initial_cpu = (selected_cpu + 1) % NUMCPU;
         _sche_lock.release();
         return selected_cpu;
+    }
+
+    uint32 Scheduler::runnable_task_count() const
+    {
+        uint32 total = 0;
+        const uint64 online_mask = Cpu::online_cpu_mask();
+        for (uint cpu_id = 0; cpu_id < NUMCPU; ++cpu_id)
+        {
+            if ((online_mask & (1ULL << cpu_id)) == 0)
+            {
+                continue;
+            }
+            total += _pressure[cpu_id].schedulable.load(eastl::memory_order_acquire);
+        }
+        return total;
+    }
+
+    void Scheduler::sample_load_averages(uint64 now_sec)
+    {
+        // Linux avenrun 内部使用 11 位小数并每 5 秒采样；sysinfo 再导出为
+        // 16 位小数。采样由 CPU0 的 5 秒时钟点驱动，不能在 sysinfo 读取时
+        // 用“当前负载”回填整段历史，否则长时间无人读取后结果会严重失真。
+        constexpr uint64 fixed_1 = 1ULL << 11;
+        constexpr uint64 exp_1 = 1884;
+        constexpr uint64 exp_5 = 2014;
+        constexpr uint64 exp_15 = 2037;
+        constexpr uint64 exps[3] = {exp_1, exp_5, exp_15};
+        const uint64 current = static_cast<uint64>(runnable_task_count()) * fixed_1;
+
+        _sche_lock.acquire();
+        if (!_load_initialized)
+        {
+            _load_averages[0] = 0;
+            _load_averages[1] = 0;
+            _load_averages[2] = 0;
+            _load_last_sample_sec = now_sec >= 5 ? now_sec - 5 : 0;
+            _load_initialized = true;
+        }
+        if (now_sec >= _load_last_sample_sec + 5)
+        {
+            uint64 samples = (now_sec - _load_last_sample_sec) / 5;
+            // 正常只有一个样本；暂停/调试后最多重放到已完全收敛，防止溢出。
+            if (samples > 2048)
+            {
+                samples = 2048;
+            }
+            for (uint64 sample = 0; sample < samples; ++sample)
+            {
+                for (uint i = 0; i < 3; ++i)
+                {
+                    _load_averages[i] =
+                        (_load_averages[i] * exps[i] + current * (fixed_1 - exps[i])) >> 11;
+                }
+            }
+            _load_last_sample_sec += samples * 5;
+        }
+        _sche_lock.release();
+    }
+
+    void Scheduler::snapshot_load_averages(uint64 loads[3])
+    {
+        _sche_lock.acquire();
+        for (uint i = 0; i < 3; ++i)
+        {
+            loads[i] = _load_averages[i] << 5;
+        }
+        _sche_lock.release();
     }
 
     int Scheduler::get_highest_priority(int cpu_id)
     {
         // Cargo/rustc 的常规任务全部使用默认优先级。先做无锁判断，避免
         // 8 个 scheduler（尤其是暂时无任务的 CPU）持续争用 _sche_lock。
-        if (_has_non_default_priority.load(eastl::memory_order_acquire) == 0)
+        if (_non_default_schedulable.load(eastl::memory_order_acquire) == 0)
         {
             return default_proc_prio;
         }
 
         _sche_lock.acquire();
-        if (_has_non_default_priority.load(eastl::memory_order_relaxed) == 0)
+        if (_non_default_schedulable.load(eastl::memory_order_relaxed) == 0)
         {
             _sche_lock.release();
             return default_proc_prio;
         }
         int prio = lowest_proc_prio;
-        // _has_non_default_priority 是调度快路径标记，进程退出或策略恢复默认后需要在全表扫描时
-        // 顺手清理，避免系统长期误以为存在实时任务而每轮都走优先级过滤。
-        bool has_live_non_default_priority = false;
-        for (Pcb &p : k_proc_pool)
+        // 非默认任务计数由状态/优先级入口精确维护；这里仅在计数非零时选择
+        // 当前 CPU 可见的最高优先级。远端正在运行的任务由其本核继续执行，
+        // 无需把“拿不到远端 PCB 锁”扩散成永久慢路径标志。
+        constexpr uint active_word_count = (num_process + 63) / 64;
+        for (uint word_index = 0; word_index < active_word_count; ++word_index)
         {
-            if (p._state != ProcState::UNUSED &&
-                p._state != ProcState::ZOMBIE &&
-                p._priority != default_proc_prio)
+            uint64 active_bits = k_pm.active_slot_word(word_index);
+            while (active_bits != 0)
             {
-                has_live_non_default_priority = true;
+                const uint bit = trailing_zero_count_nonzero(active_bits);
+                active_bits &= active_bits - 1;
+                const uint global_id = word_index * 64 + bit;
+                if (global_id >= num_process)
+                {
+                    break;
+                }
+
+                Pcb &p = k_proc_pool[global_id];
+                // 不在调度器中等待一个可能正在其它 CPU 上运行且长期持锁的任务。
+                // 本轮跳过后保留全局标志，下一轮会重新检查，不会错误清除慢路径。
+                // swtch 返回调度器时，当前 CPU 仍持有刚让出任务的 PCB 锁；
+                // try_acquire 会按设计把同核递归加锁判为 panic，因此必须先识别。
+                if (!p._lock.try_acquire_unless_held())
+                {
+                    continue;
+                }
+                const int effective_priority = effective_schedule_priority(p);
+                if (effective_priority < prio && p._state == ProcState::RUNNABLE &&
+                    can_schedule_on_cpu(p, cpu_id))
+                {
+                    prio = effective_priority;
+                }
+                p._lock.release();
             }
-            // pending signal 使用临时 effective priority 参与比较，让信号目标尽快返回用户态。
-            int effective_priority = effective_schedule_priority(p);
-            if (effective_priority < prio && p._state == ProcState::RUNNABLE &&
-                can_schedule_on_cpu(p, cpu_id))
-            {
-                prio = effective_priority;
-            }
-        }
-        if (!has_live_non_default_priority)
-        {
-            _has_non_default_priority.store(0, eastl::memory_order_release);
         }
         _sche_lock.release();
         return prio;
@@ -247,9 +445,8 @@ namespace proc
             priority = get_highest_priority(cpu_id);
             bool ran_task = false;
 
-            // 使用本 CPU 的轮转扫描起点。PCB 锁仍是“任务只能同时运行在一个
-            // CPU”的最终仲裁；try_acquire 失败则继续找下一项，等价于从其它核
-            // 正在执行的任务旁边偷取可运行工作。
+            // 使用全局活跃槽位和本 CPU 的轮转起点。先取得 PCB 锁再读取状态
+            // 与 home CPU，避免调度器对其它 CPU 正在更新的 PCB 作无锁读取。
             const uint scan_begin = _next_scan_global_id[cpu_id] % num_process;
             auto scan_active_range = [&](uint begin, uint end)
             {
@@ -276,12 +473,6 @@ namespace proc
                         active_bits &= active_bits - 1;
                         const uint global_id = word_index * 64 + bit;
                         p = &k_proc_pool[global_id];
-                        if (p->_state != ProcState::RUNNABLE ||
-                            !can_schedule_on_cpu(*p, cpu_id) ||
-                            effective_schedule_priority(*p) > priority)
-                        {
-                            continue;
-                        }
                         // 运行中的任务会一直持有 PCB 锁直到主动让出 CPU。失败时
                         // 直接看下一个活跃槽位，避免在其它 CPU 的任务上自旋。
                         if (!p->_lock.try_acquire())
@@ -289,7 +480,8 @@ namespace proc
                             continue;
                         }
                         if (p->get_state() == ProcState::RUNNABLE &&
-                            can_schedule_on_cpu(*p, cpu_id))
+                            can_schedule_on_cpu(*p, cpu_id) &&
+                            effective_schedule_priority(*p) <= priority)
                         {
                             assert(p->_running_cpu == -1,
                                    "scheduler: double-run pid=%d tid=%d gid=%d owner=%d claimant=%d state=%d",
@@ -300,9 +492,9 @@ namespace proc
                                    cpu_id,
                                    (int)p->_state);
                             _next_scan_global_id[cpu_id] = (p->_global_id + 1) % num_process;
-                            p->_last_cpu = cpu_id;
+                            set_task_home_cpu(*p, cpu_id);
                             p->_running_cpu = cpu_id;
-                            p->_state = ProcState::RUNNING;
+                            set_task_state(*p, ProcState::RUNNING);
                             cpu->set_cur_proc(p);
                             cpu->reset_time_slice();
                             proc::Context *cur_context = cpu->get_context();
@@ -348,7 +540,7 @@ namespace proc
         // printfCyan("[sche]  yield here,p->addr:%x \n",Cpu::get_cpu()->get_cur_proc());
         p->_lock.acquire();
         // printfCyan("[sche]  yield here \n");
-        p->_state = ProcState::RUNNABLE;
+        set_task_state(*p, ProcState::RUNNABLE);
         call_sched(); // 注意swtch的逻辑是函数调用, 所以重新调用就是视为从这个函数返回
         p->_lock.release();
     }
@@ -372,7 +564,7 @@ namespace proc
                p != nullptr ? p->_pid : -1,
                p != nullptr ? p->_tid : -1,
                p != nullptr ? (int)p->_state : -1,
-               p != nullptr ? p->_chan : nullptr,
+               p != nullptr ? p->_chan.load(eastl::memory_order_acquire) : nullptr,
                p != nullptr ? p->_name : "(null)");
         assert(p->_state != ProcState::RUNNING, "sched: proc is running");
         assert(cpu->get_intr_stat() == false, "sched: interruptible");

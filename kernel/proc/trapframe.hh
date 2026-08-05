@@ -41,6 +41,14 @@ struct TrapFrame
   /* 264 */ uint64 t4;
   /* 272 */ uint64 t5;
   /* 280 */ uint64 t6;
+  /*
+   * RISC-V 的 F/D 扩展寄存器属于线程上下文。用户态的 libm、CAgent
+   * 推理以及 rustc/LLVM 都会跨系统调用和时钟抢占保留浮点中间值；若只
+   * 保存整数寄存器，不同 CPU 上运行的任务会互相污染 f0-f31，严重时会
+   * 把收敛循环变成永久运行。保持 64 位槽位也同时覆盖单精度和双精度。
+   */
+  /* 288 */ uint64 f[32];
+  /* 544 */ uint64 fcsr;
 };
 #elif defined(LOONGARCH)
 struct TrapFrame {

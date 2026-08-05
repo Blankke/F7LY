@@ -53,6 +53,9 @@ extern "C" void main(uint64 hartid, uint64 dtb_addr)
     intr_stats::k_intr_stats.init();
 
     proc::k_pm.init("next pid", "next tid", "wait lock");
+    // user_init() 会发布第一个 RUNNABLE PCB，并由调度器完成 home CPU 与
+    // 压力记账；调度器必须先初始化，不能在发布后再把计数清零。
+    proc::k_scheduler.init("scheduler");
     mem::k_pmm.init();
 
     mem::k_vmm.init("virtual_memory_manager");
@@ -97,7 +100,6 @@ extern "C" void main(uint64 hartid, uint64 dtb_addr)
     dev::LoopControlDevice::init_loop_control();
     /************************* */
     printfMagenta("user init\n");
-    proc::k_scheduler.init("scheduler");
     // APIC/ExtIOI 是主核已完成的全局配置；次核在 bootstrap gate 后只开启
     // 自己的 timer/trap CSR，并在完整初始化后对调度器宣布 online。全部
     // possible CPU online 前不允许任意核开始调度用户任务。

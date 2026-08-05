@@ -3,6 +3,7 @@
 #include "spinlock.hh"
 #include "proc/vm_area.hh"
 #include <EASTL/string.h>
+#include <EASTL/vector.h>
 // 根据不同架构包含不同的页表实现
 #ifdef RISCV
 #include "riscv/pagetable.hh"
@@ -18,6 +19,11 @@ namespace proc
 
 namespace mem
 {
+#ifdef RISCV
+	// Sv39 的 RSW[0] 由硬件忽略，统一作为软件 COW 标志使用。
+	inline constexpr uint64 k_riscv_pte_cow = 1UL << 8;
+#endif
+
 	class VirtualMemoryManager
 	{
 	private:
@@ -63,7 +69,19 @@ void pci_map(int bus, int dev, int func, void *pages);
 
 		PageTable vm_create();
 
-		int vm_copy( PageTable &old_pt, PageTable &new_pt, uint64 start, uint64 size );
+		/**
+		 * @brief 把已驻留用户页复制到新页表，并把可写私有页降级为 COW。
+		 *
+		 * defer_parent_tlb_flush 只允许地址空间唯一持有者在 fork 批处理中使用：
+		 * 调用方必须在返回用户态前完成一次全核 TLB 失效。返回 1 表示父页表
+		 * 确实发生了 COW 权限降级，0 表示没有变化，失败返回 -1。
+		 */
+		int vm_copy(PageTable &old_pt,
+		            PageTable &new_pt,
+		            uint64 start,
+		            uint64 size,
+		            bool defer_parent_tlb_flush = false,
+		            eastl::vector<proc::CowRollbackRange> *rollback_ranges = nullptr);
 
 		/// @brief allocate shm
 		/// @param pt pagetable to use
@@ -116,7 +134,9 @@ void pci_map(int bus, int dev, int func, void *pages);
 
 		/// @brief 处理 fork COW 写时复制页。
 		/// @return 成功拆页/恢复写权限返回0；不是 COW 页或失败返回-1。
-		int resolve_cow_page(PageTable &pt, uint64 va);
+		int resolve_cow_page(PageTable &pt,
+		                     uint64 va,
+		                     proc::ProcessMemoryManager *target_mm = nullptr);
 
 		/// @brief 为VMA惰性分配页面，统一处理mmap的各种标志和权限
 		/// @param pt 页表

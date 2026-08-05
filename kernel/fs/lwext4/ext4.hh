@@ -179,12 +179,19 @@ struct ext4_mount_stats {
     uint32_t free_inodes_count;
     uint64_t blocks_count;
     uint64_t free_blocks_count;
+    /** 普通用户实际可用块数，已经扣除 ext4 保留块。 */
+    uint64_t available_blocks_count;
 
     uint32_t block_size;
     uint32_t block_group_count;
     uint32_t blocks_per_group;
     uint32_t inodes_per_group;
 
+    /** 挂载是否只读；statfs.f_flags 需要据此报告 ST_RDONLY。 */
+    bool read_only;
+
+    /** 超级块中的真实 128 位文件系统 UUID。 */
+    uint8_t uuid[16];
     char volume_name[16];
 };
 
@@ -515,6 +522,18 @@ int ext4_mknod(const char *path, int filetype, uint32_t dev);
  *
  * @return  Standard error code.*/
 int ext4_readlink(const char *path, char *buf, size_t bufsize, size_t *rcnt);
+
+/**@brief 查找路径中的第一个符号链接组件。
+ *
+ * 该接口只获取一次 mount 锁并遍历全部路径组件，不负责展开链接；调用方可把
+ * 返回的前缀交给 ext4_readlink()。遇到不存在或非目录的中间组件时按“未找到
+ * symlink”处理，最终 ENOENT/ENOTDIR 仍由真正的 open/stat 返回。
+ *
+ * @param path                  绝对路径。
+ * @param symlink_component_end 第一个 symlink 组件的尾后偏移；未找到时为 0。
+ *
+ * @return 标准错误码。*/
+int ext4_find_first_symlink(const char *path, size_t *symlink_component_end);
 
 /**@brief Set extended attribute.
  *

@@ -13,8 +13,12 @@ sudo mkdir -p \
     /mnt/sdcard-rv-final \
     /mnt/sdcard-la-final \
     /mnt/sdcard-rv-onsite \
-    /mnt/sdcard-la-onsite
+    /mnt/sdcard-la-onsite \
+    /mnt/sdcard-rv-pub \
+    /mnt/sdcard-la-pub
 
+sudo mount -o loop "$IMAGE_DIR/sdcard-rv-pub.img" /mnt/sdcard-rv-pub
+sudo mount -o loop "$IMAGE_DIR/sdcard-la-pub.img" /mnt/sdcard-la-pub
 sudo mount -o loop "$IMAGE_DIR/sdcard-rv.img" /mnt/sdcard-rv
 sudo mount -o loop "$IMAGE_DIR/sdcard-la.img" /mnt/sdcard-la
 sudo mount -o loop "$IMAGE_DIR/sdcard-rv-final.img" /mnt/sdcard-rv-final

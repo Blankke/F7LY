@@ -25,6 +25,7 @@
 #include <EASTL/unordered_map.h>
 #include <EASTL/atomic.h>
 #include <libs/string.hh>
+#include <asm-generic/statfs.h>
 
 namespace
 {
@@ -1947,6 +1948,45 @@ namespace
     }
 }
 
+int vfs_statfs(const char *path, struct statfs *st)
+{
+    if (path == nullptr || st == nullptr)
+    {
+        return -EFAULT;
+    }
+
+    // bind/rbind 只改变用户可见路径，statfs 必须报告实际 backing mount，
+    // 不能把目标目录所在文件系统误当成被绑定对象的文件系统。
+    eastl::string effective_path;
+    select_effective_backing_path(path, effective_path, false);
+    struct filesystem *mounted_fs = get_fs_from_path(effective_path.c_str());
+    if (mounted_fs == nullptr || mounted_fs->fs_op == nullptr ||
+        mounted_fs->fs_op->statfs == nullptr)
+    {
+        return -ENOSYS;
+    }
+
+    int result = mounted_fs->fs_op->statfs(mounted_fs, st);
+    return result > 0 ? -result : result;
+}
+
+int vfs_fstatfs(fs::file *f, struct statfs *st)
+{
+    if (f == nullptr)
+    {
+        return -EBADF;
+    }
+    if (st == nullptr)
+    {
+        return -EFAULT;
+    }
+
+    const eastl::string &backing = f->backing_path();
+    const char *path = !backing.empty() ? backing.c_str()
+                                        : (!f->_path_name.empty() ? f->_path_name.c_str() : "/");
+    return vfs_statfs(path, st);
+}
+
 bool vfs_backing_path_exists(const eastl::string &path)
 {
     if (path.empty())
@@ -2096,6 +2136,42 @@ eastl::string normalize_path(const eastl::string &path)
     return result;
 }
 
+static bool try_find_first_ext4_symlink(const eastl::string &path,
+                                        size_t &symlink_component_end,
+                                        int &lookup_result)
+{
+    symlink_component_end = 0;
+    lookup_result = EOK;
+    if (path.empty() || path[0] != '/' || path_needs_normalization(path) ||
+        fs::k_vfs.has_virtual_top_level_prefix(path))
+    {
+        return false;
+    }
+
+    /*
+     * bind mount/runtime alias 可能改变相对 symlink 的解析根。仅当逻辑路径
+     * 与底层 ext4 路径完全一致时启用批量扫描，其余情况保留逐前缀语义。
+     */
+    eastl::string backing_path;
+    select_effective_backing_path(path, backing_path, false);
+    if (backing_path != path)
+    {
+        return false;
+    }
+
+    struct filesystem *backing_fs = get_fs_from_path(path.c_str());
+    if (backing_fs == nullptr || backing_fs->type != EXT4)
+    {
+        return false;
+    }
+
+    const int result = ext4_find_first_symlink(path.c_str(), &symlink_component_end);
+    lookup_result = result == EOK ? EOK : -result;
+    // 满足快速扫描前提后，即使底层发现 ENOENT/ENOTDIR，也应把该结果直接
+    // 交给调用方；返回 false 会退回逐组件探测并丢失 ext4 的精确 errno。
+    return true;
+}
+
 // 解析符号链接路径
 static int resolve_symlinks(const eastl::string &input_path, eastl::string &resolved_path, int max_depth = 8)
 {
@@ -2114,96 +2190,125 @@ static int resolve_symlinks(const eastl::string &input_path, eastl::string &reso
     {
         resolved_path = pending_path;
 
-        // 按 '/' 分割路径
-        eastl::vector<eastl::string> path_parts;
-        eastl::string current_part;
-
-        for (size_t i = 0; i < pending_path.length(); i++)
-        {
-            if (pending_path[i] == '/')
-            {
-                if (!current_part.empty())
-                {
-                    path_parts.push_back(current_part);
-                    current_part.clear();
-                }
-            }
-            else
-            {
-                current_part += pending_path[i];
-            }
-        }
-        if (!current_part.empty())
-        {
-            path_parts.push_back(current_part);
-        }
-
-        // 重新构建路径，逐步检查每个组件是否为符号链接
+        /*
+         * 常见 open/stat 路径没有符号链接。旧实现仍会先构造
+         * vector<string> 并为每个组件分配临时字符串，Cargo 深路径会把
+         * 这部分放大成大量页级 kmalloc/free。这里直接在原字符串上扫描
+         * 组件；只有实际遇到符号链接时才构造并 normalize 新路径。
+         */
         eastl::string current_path = "/";
-        bool expanded_symlink = false;
+        bool found_symlink = false;
+        size_t cursor = 0;
 
-        for (size_t i = 0; i < path_parts.size(); i++)
+        size_t symlink_component_end = 0;
+        int fast_lookup_result = EOK;
+        if (try_find_first_ext4_symlink(pending_path,
+                                        symlink_component_end,
+                                        fast_lookup_result))
         {
-            if (current_path.back() != '/')
+            if (fast_lookup_result < 0)
             {
-                current_path += "/";
+                return fast_lookup_result;
             }
-            current_path += path_parts[i];
-
-            // 检查当前路径是否为符号链接
-            int type = fs::k_vfs.path2filetype(current_path);
-            if (type != fs::FileTypes::FT_SYMLINK)
+            if (symlink_component_end == 0)
             {
-                continue;
+                resolved_path = pending_path;
+                return 0;
             }
 
-            eastl::string link_path;
-            int r = read_symlink_target_for_path(current_path, link_path);
-            if (r != EOK)
+            current_path.assign(pending_path.c_str(), symlink_component_end);
+            cursor = symlink_component_end;
+            found_symlink = true;
+        }
+        else
+        {
+            while (cursor < pending_path.length())
             {
-                return r;
-            }
-            eastl::string new_path;
+                while (cursor < pending_path.length() && pending_path[cursor] == '/')
+                    ++cursor;
+                if (cursor == pending_path.length())
+                    break;
 
-            // 如果符号链接是绝对路径，重新开始
-            if (!link_path.empty() && link_path[0] == '/')
-            {
-                new_path = link_path;
-            }
-            else
-            {
-                // 相对路径：需要相对于当前组件的父目录
-                size_t last_slash = current_path.find_last_of('/');
-                if (last_slash == eastl::string::npos || last_slash == 0)
+                const size_t component_start = cursor;
+                while (cursor < pending_path.length() && pending_path[cursor] != '/')
+                    ++cursor;
+                const size_t component_length = cursor - component_start;
+
+                if (current_path.back() != '/')
+                    current_path += "/";
+                current_path.append(pending_path.c_str() + component_start, component_length);
+
+                // 虚拟文件、bind mount 和非 ext4 路径保留原有逐组件检查。
+                int type = fs::k_vfs.path2filetype(current_path);
+                if (type == fs::FileTypes::FT_SYMLINK)
                 {
-                    new_path = "/" + link_path;
+                    found_symlink = true;
+                    break;
                 }
-                else
+
+                size_t next_component = cursor;
+                while (next_component < pending_path.length() &&
+                       pending_path[next_component] == '/')
                 {
-                    new_path = current_path.substr(0, last_slash + 1) + link_path;
+                    ++next_component;
+                }
+                const bool has_more_components = next_component < pending_path.length();
+                if (has_more_components && type < 0)
+                {
+                    return -ENOENT;
+                }
+                if (has_more_components && type != fs::FileTypes::FT_DIRECT)
+                {
+                    return -ENOTDIR;
                 }
             }
-
-            // 添加剩余的路径组件
-            for (size_t j = i + 1; j < path_parts.size(); j++)
-            {
-                if (new_path.back() != '/')
-                {
-                    new_path += "/";
-                }
-                new_path += path_parts[j];
-            }
-
-            pending_path = normalize_path(new_path);
-            expanded_symlink = true;
-            break;
         }
 
-        if (!expanded_symlink)
+        if (!found_symlink)
         {
             resolved_path = current_path;
             return 0;
         }
+
+        eastl::string link_path;
+        int r = read_symlink_target_for_path(current_path, link_path);
+        if (r != EOK)
+        {
+            return r;
+        }
+        eastl::string new_path;
+
+        // 如果符号链接是绝对路径，重新开始
+        if (!link_path.empty() && link_path[0] == '/')
+        {
+            new_path = link_path;
+        }
+        else
+        {
+            // 相对路径：需要相对于当前组件的父目录
+            size_t last_slash = current_path.find_last_of('/');
+            if (last_slash == eastl::string::npos || last_slash == 0)
+            {
+                new_path = "/" + link_path;
+            }
+            else
+            {
+                new_path = current_path.substr(0, last_slash + 1) + link_path;
+            }
+        }
+
+        // 添加剩余的路径组件
+        while (cursor < pending_path.length() && pending_path[cursor] == '/')
+            ++cursor;
+        if (cursor < pending_path.length())
+        {
+            if (new_path.back() != '/')
+                new_path += "/";
+            new_path.append(pending_path.c_str() + cursor,
+                            pending_path.length() - cursor);
+        }
+
+        pending_path = normalize_path(new_path);
     }
 
     return -ELOOP;
@@ -2938,13 +3043,6 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
 	        fs::normal_file *temp_file = new fs::normal_file(attrs, actual_path);
 	        // printfYellow("vfs_openat: flags: %o, mode: 0%o, actual_path: %s\n", flags, temp_file->_attrs.transMode(), actual_path.c_str());
 
-	        if ((!file_exists && (flags & O_CREAT)) || (flags & O_TRUNC))
-	        {
-	            // 新 inode 或截断会改变路径对应的权威内容；全局小文件缓存按路径索引，
-	            // 必须先失效，避免 mmap/read 复用同名旧临时文件的缓存页。
-	            fs::normal_file_invalidate_delayed_visibility_path(actual_path);
-	        }
-
 	        // ext4库会自动处理 O_TRUNC, O_RDONLY, O_WRONLY, O_RDWR 等标志
 	        // 真是前人栽树，后人乘凉啊！
 	        status = ext4_fopen2(&temp_file->lwext4_file_struct, actual_path.c_str(), flags);
@@ -2957,22 +3055,13 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
 
         // 如果是新创建的文件，设置文件权限到 ext4 inode
         bool is_newly_created = !file_exists && (flags & O_CREAT);
-	        if (is_newly_created)
-	        {
+        if (is_newly_created)
+        {
             status = ext4_mode_set(actual_path.c_str(), inode_mode);
             if (status != EOK)
             {
                 printfRed("ext4_mode_set failed for %s, status: %d\n", actual_path.c_str(), status);
                 // 不返回错误，因为文件已经创建成功了
-	        }
-
-	        if ((!file_exists && (flags & O_CREAT)) || (flags & O_TRUNC))
-	        {
-	            fs::normal_file_invalidate_delayed_visibility_path(actual_path);
-	        }
-            else
-            {
-                printfGreen("ext4_mode_set success for %s, mode: 0%o\n", actual_path.c_str(), file_mode);
             }
 
             // 设置文件所有者和组
@@ -2981,12 +3070,7 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
             {
                 printfRed("ext4_owner_set failed for %s, status: %d\n", actual_path.c_str(), status);
             }
-            else
-            {
-                printfGreen("ext4_owner_set success for %s\n", actual_path.c_str());
-            }
         }
-
         // 处理 O_APPEND：将文件指针设置到文件末尾
         if (flags & O_APPEND)
         {
@@ -3177,7 +3261,6 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
         // 在文件对象上设置相应的标志
         // 这个标志会在exec系统调用时自动关闭文件描述符
         // 注意：这里需要在实际使用时在文件描述符表中设置FD_CLOEXEC
-        printfYellow("vfs_openat: O_CLOEXEC flag set for file %s\n", absolute_path.c_str());
     }
     return EOK;
 }
@@ -3190,7 +3273,6 @@ int vfs_is_dir(eastl::string &absolute_path)
     printfRed("dir: %p\n", dir);
 
     int status = ext4_dir_open(dir, absolute_path.c_str());
-    printfYellow("dir->f.mp->name: %s\n", dir->f.mp->name);
     if (status < 0)
     {
         return status;
@@ -3508,7 +3590,6 @@ int vfs_getdents(fs::file *const file, struct linux_dirent64 *dirp, uint count)
              
              file->_file_ptr = off; // Update file pointer
              eunlock(dp);
-             printfYellow("[vfs_getdents] returning totlen=%d, new off=%u\n", totlen, off);
              return totlen;
         }
     }
@@ -3605,7 +3686,6 @@ int vfs_mkdir(const char *path, uint64_t mode)
     eastl::string effective_path;
     resolve_bind_mount_path(normalized_path, effective_path);
     path = effective_path.c_str();
-    printfYellow("vfs_mkdir: creating directory: %s with mode: 0%o\n", path, mode);
     /* Check if the directory already exists */
     if (vfs_is_file_exist(path) == 1)
     {
@@ -3638,7 +3718,6 @@ int vfs_mkdir(const char *path, uint64_t mode)
          
          if (ep) {
              eput(ep);
-             printfGreen("vfs_mkdir: created FAT32 directory %s\n", path);
              return EOK;
          }
          printfRed("vfs_mkdir: failed to create FAT32 directory %s\n", path);
@@ -4070,15 +4149,6 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
             {
                 st->size = f->_stat.size;
             }
-            uint64 delayed_size = 0;
-            if (!f->_unlinked_from_dir &&
-                fs::normal_file_peek_delayed_visibility_size(f->backing_path(), &delayed_size) &&
-                delayed_size > st->size)
-            {
-                // 另一个 open/close 生命周期可能把短文件写入留在延迟可见缓存中。
-                // fstat(fd) 必须看到同一路径最新逻辑大小，不能只看当前 fd 的旧 fsize。
-                st->size = delayed_size;
-            }
             st->blksize = 4096;
 
             if (st->size == 0)
@@ -4366,6 +4436,21 @@ static int do_vfs_path_stat(const char *path, fs::Kstat *st,
             return resolve_ret;
         }
 
+        // lstat/fstatat(AT_SYMLINK_NOFOLLOW) 只不跟随最后组件；其父路径仍
+        // 必须是目录。否则 "regular/child" 会被底层查询降级成 ENOENT。
+        if (!filename.empty())
+        {
+            int parent_type = fs::k_vfs.path2filetype(resolved_parent);
+            if (parent_type < 0)
+            {
+                return -ENOENT;
+            }
+            if (parent_type != fs::FileTypes::FT_DIRECT)
+            {
+                return -ENOTDIR;
+            }
+        }
+
         if (filename.empty())
         {
             effective_path = resolved_parent;
@@ -4404,14 +4489,6 @@ static int do_vfs_path_stat(const char *path, fs::Kstat *st,
         if (flush_ret < 0)
         {
             return flush_ret;
-        }
-        if (fs::normal_file_has_delayed_visibility_state(effective_path))
-        {
-            int delayed_flush_ret = fs::normal_file_flush_delayed_visibility_path(effective_path);
-            if (delayed_flush_ret < 0)
-            {
-                return delayed_flush_ret;
-            }
         }
     }
 
@@ -4532,13 +4609,6 @@ int vfs_link(const char *oldpath, const char *newpath)
         return new_parent_ret;
     }
 
-    int flush_ret = fs::normal_file_flush_delayed_visibility_path(old_path_str);
-    if (flush_ret < 0)
-    {
-        return flush_ret;
-    }
-    fs::normal_file_invalidate_delayed_visibility_path(new_path_str);
-
     // 使用 ext4_flink 创建硬链接
     int status = ext4_flink(oldpath, newpath);
     if (status != EOK)
@@ -4548,7 +4618,6 @@ int vfs_link(const char *oldpath, const char *newpath)
         return -status;
     }
 
-    printfGreen("vfs_link: successfully created hard link %s -> %s\n", newpath, oldpath);
     return EOK;
 }
 
@@ -4624,10 +4693,6 @@ int vfs_unlink_path(const char *path, bool remove_dir)
 	    {
 	        return -EPERM;
 	    }
-
-	    eastl::string cache_path = absolute_path;
-	    select_effective_backing_path(cache_path, cache_path, false);
-	    fs::normal_file_invalidate_delayed_visibility_path(cache_path);
 
 	    struct filesystem *fs = get_fs_from_path(path);
 	    if (fs && fs->type == FAT32)
@@ -4710,19 +4775,9 @@ int vfs_unlink_path(const char *path, bool remove_dir)
 
 	    if (remove_dir)
 	    {
-	        int ret = vfs_ext_rmdir(path);
-	        if (ret != EOK)
-	        {
-	            ::fs::normal_file_invalidate_delayed_visibility_path(cache_path);
-	        }
-	        return ret;
+	        return vfs_ext_rmdir(path);
 	    }
-	    int ret = vfs_ext_unlink(path);
-	    if (ret != EOK)
-	    {
-	        ::fs::normal_file_invalidate_delayed_visibility_path(cache_path);
-	    }
-	    return ret;
+	    return vfs_ext_unlink(path);
 	}
 
 int vfs_truncate(fs::file *f, size_t length)
@@ -4741,12 +4796,6 @@ int vfs_truncate(fs::file *f, size_t length)
     {
         return visibility_status;
     }
-    int delayed_flush_status = fs::normal_file_flush_delayed_visibility_path(f->backing_path());
-    if (delayed_flush_status < 0)
-    {
-        return delayed_flush_status;
-    }
-    fs::normal_file_invalidate_delayed_visibility_path(f->backing_path());
     f->sync_file_size_from_memfd();
 
     // 获取当前文件大小。这里不能只信 file object 里的 fsize 缓存：
@@ -4774,7 +4823,6 @@ int vfs_truncate(fs::file *f, size_t length)
 	    {
 	        f->_stat.size = current_size;
 	        f->invalidate_cached_file_data();
-	        fs::normal_file_invalidate_delayed_visibility_path(f->backing_path());
 	        f->sync_memfd_size_from_file();
 	        return EOK;
 	    }
@@ -4807,7 +4855,6 @@ int vfs_truncate(fs::file *f, size_t length)
 	        f->_stat.size = length;
 	        f->lwext4_file_struct.fsize = length;
 	        f->invalidate_cached_file_data();
-	        fs::normal_file_invalidate_delayed_visibility_path(f->backing_path());
 	        f->sync_memfd_size_from_file();
 	        return EOK;
 	    }
@@ -4905,9 +4952,6 @@ int vfs_fallocate(fs::file *f, int mode, off_t offset, size_t length)
     // 更新文件大小信息
     f->_stat.size = target_size;
     f->sync_memfd_size_from_file();
-
-    printfGreen("vfs_fallocate: successfully allocated space for file %s, new size: %u\n",
-                f->_path_name.c_str(), target_size);
 
     return EOK;
 }

@@ -271,6 +271,7 @@ namespace syscall
         uint64 sys_getpriority();
         uint64 sys_reboot();
         uint64 sys_timer_create();
+        uint64 sys_timer_getoverrun();
         uint64 sys_timer_settime();
         uint64 sys_timer_delete();
         uint64 sys_flock();

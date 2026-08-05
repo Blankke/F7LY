@@ -3,6 +3,7 @@
 #include "physical_memory_manager.hh"
 #include "printer.hh"
 #include "proc/posix_timers.hh"
+#include "proc/scheduler.hh"
 #include "fs/vfs/fs.hh"
 #include "sys/syscall_defs.hh"
 
@@ -30,7 +31,7 @@ namespace proc
             victim->_parent_exit_signal = 0;
             victim->_has_child_tasks = false;
             victim->_vfork_parent = nullptr;
-            victim->_chan = nullptr;
+            victim->_chan.store(nullptr, eastl::memory_order_release);
 
             victim->cleanup_memory_manager();
             victim->cleanup_ofile();
@@ -38,11 +39,11 @@ namespace proc
             free_signal_frame_list(victim);
 
             victim->_futex_addr = nullptr;
-            victim->_futex_key = 0;
+            victim->_futex_key.store(0, eastl::memory_order_release);
             victim->_clear_tid_addr = 0;
             victim->_robust_list = nullptr;
             victim->_robust_list_user_addr = 0;
-            victim->_state = ProcState::ZOMBIE;
+            k_scheduler.set_task_state(*victim, ProcState::ZOMBIE);
             victim->_exiting = false;
         }
     }

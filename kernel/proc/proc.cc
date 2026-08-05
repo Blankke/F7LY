@@ -125,7 +125,7 @@ namespace proc
          * 进程状态和调度信息
          ****************************************************************************************/
         _state = UNUSED; // 进程状态初始化为未使用
-        _chan = nullptr; // 睡眠等待通道
+        _chan.store(nullptr, eastl::memory_order_relaxed); // 睡眠等待通道
         _killed = 0;     // 进程终止标志
         _exiting = false; // 尚未进入退出清理流程
         _xstate = 0;     // 进程退出状态码
@@ -173,7 +173,7 @@ namespace proc
          * 线程和同步原语
          ****************************************************************************************/
         _futex_addr = nullptr;  // futex等待地址
-        _futex_key = 0;         // futex匹配键
+        _futex_key.store(0, eastl::memory_order_relaxed); // futex匹配键
         _clear_tid_addr = 0;    // 线程退出时清除的地址
         _robust_list = nullptr; // 健壮futex链表头
         _robust_list_user_addr = 0; // 健壮futex链表头用户地址
@@ -406,26 +406,15 @@ namespace proc
         candidate->init("ofile");
 
         ofile *result = nullptr;
-        if (_lock.is_held())
+        const bool acquired_lock = _lock.acquire_unless_held();
+        if (_ofile == nullptr)
         {
-            // alloc_proc()/user_init()/fork 子进程初始化阶段已经持有 PCB 锁，
-            // 这里不能再次 acquire；否则会在单核上直接自锁 panic。
-            if (_ofile == nullptr)
-            {
-                _ofile = candidate;
-                candidate = nullptr;
-            }
-            result = _ofile;
+            _ofile = candidate;
+            candidate = nullptr;
         }
-        else
+        result = _ofile;
+        if (acquired_lock)
         {
-            _lock.acquire();
-            if (_ofile == nullptr)
-            {
-                _ofile = candidate;
-                candidate = nullptr;
-            }
-            result = _ofile;
             _lock.release();
         }
 
@@ -448,29 +437,19 @@ namespace proc
         {
             return nullptr;
         }
-        candidate->refcnt = 1;
+        candidate->refcnt.store(1, eastl::memory_order_relaxed);
         memset(candidate->actions, 0, sizeof(candidate->actions));
 
         sighand_struct *result = nullptr;
-        if (_lock.is_held())
+        const bool acquired_lock = _lock.acquire_unless_held();
+        if (_sigactions == nullptr)
         {
-            // 创建/复制 PCB 的调用点已经持有 PCB 锁，避免懒初始化再次抢同一把锁。
-            if (_sigactions == nullptr)
-            {
-                _sigactions = candidate;
-                candidate = nullptr;
-            }
-            result = _sigactions;
+            _sigactions = candidate;
+            candidate = nullptr;
         }
-        else
+        result = _sigactions;
+        if (acquired_lock)
         {
-            _lock.acquire();
-            if (_sigactions == nullptr)
-            {
-                _sigactions = candidate;
-                candidate = nullptr;
-            }
-            result = _sigactions;
             _lock.release();
         }
 
@@ -485,11 +464,12 @@ namespace proc
     {
         if (_sigactions != nullptr)
         {
-            // 减少信号处理结构的引用计数
-            _sigactions->refcnt--;
+            // fetch_sub 的旧值唯一决定销毁者，避免两个退出 CPU 同时 delete。
+            const int old_refcnt =
+                _sigactions->refcnt.fetch_sub(1, eastl::memory_order_acq_rel);
 
             // 如果引用计数降到0或以下，释放所有资源
-            if (_sigactions->refcnt <= 0)
+            if (old_refcnt <= 1)
             {
                 // 遍历所有信号，释放对应的处理函数
                 for (int i = 0; i <= ipc::signal::SIGRTMAX; ++i)
@@ -552,17 +532,11 @@ namespace proc
 
     void Pcb::cleanup_ofile()
     {
-        fs::release_posix_record_locks_for_pid(_pid);
-
         ofile *fd_table = nullptr;
-        const bool lock_already_held = _lock.is_held();
-        if (!lock_already_held)
-        {
-            _lock.acquire();
-        }
+        const bool acquired_lock = _lock.acquire_unless_held();
         fd_table = _ofile;
         _ofile = nullptr;
-        if (!lock_already_held)
+        if (acquired_lock)
         {
             _lock.release();
         }
@@ -584,6 +558,11 @@ namespace proc
             if (fd_table->_shared_ref_cnt <= 0)
             {
                 fd_table->_lock.release();
+
+                // CLONE_FILES 线程退出或失败回滚只归还一个表引用，并没有关闭
+                // 线程组的 fd。只有最后一个持有者销毁整张表时，才按进程退出
+                // 语义释放 POSIX record locks。
+                fs::release_posix_record_locks_for_pid(_pid);
 
                 // 每个 fd 槽位各持有一个 file 引用，逐槽释放即可。不能在 8 KiB
                 // 内核栈上放置 1024 项临时数组，否则退出路径会直接踩穿栈。

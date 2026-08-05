@@ -44,6 +44,14 @@ namespace proc
         vma *find_next_vma(const vma *entry);
         const vma *find_next_vma(const vma *entry) const;
 
+        /**
+         * @brief 合并范围内由 mprotect 拆出的相邻私有匿名 VMA。
+         *
+         * 仅合并没有文件、VmObject 和私有 overlay 的轻量匿名映射，避免
+         * 改变共享映射或文件偏移语义。调用方必须持有地址空间内存锁。
+         */
+        void coalesce_private_anonymous_range(uint64 start_addr, uint64 end_addr);
+
         bool has_conflict(uint64 start_addr, uint64 end_addr, const vma *ignore = nullptr) const;
         uint64 find_gap(uint64 start_hint, uint64 min_addr, uint64 max_addr, uint64 size, uint64 alignment) const;
 
@@ -82,6 +90,10 @@ namespace proc
         }
 
     private:
+        bool can_coalesce_private_anonymous(const vma &left, const vma &right) const;
+        bool merge_private_anonymous(vma &left, vma &right);
+        vma *coalesce_private_anonymous_around(vma *area);
+
         ProcessMemoryManager *owner_mm_;
         eastl::list<vma> areas_;
         VmaMapleTree index_;

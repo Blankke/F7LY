@@ -2,6 +2,7 @@
 #include "proc/capability.hh"
 #include "proc/proc.hh"
 #include "proc/proc_manager.hh"
+#include "proc/scheduler.hh"
 #include "proc/signal.hh"
 #include "printer.hh"
 #include "syscall_abi.hh"
@@ -10,6 +11,8 @@
 extended_posix_timer g_timers[32];
 int g_next_timer_id = 1;
 bool g_timers_initialized = false;
+SpinLock g_posix_timer_lock;
+eastl::atomic<uint32> g_armed_posix_timers{0};
 
 namespace
 {
@@ -17,21 +20,84 @@ constexpr int k_interval_timer_real = 0;
 constexpr int k_interval_timer_virtual = 1;
 constexpr int k_interval_timer_prof = 2;
 
+// CPU0 只在确实存在 ITIMER_REAL 时扫描 PCB 池。此前每个 tick 固定读取
+// 全部 1024 个 PCB，即使系统没有任何 timer，也会让零超时 epoll 偶发跨过
+// 1ms 的 LTP 上限。计数只跟随 armed 的 false/true 边沿变化，PCB 中的
+// atomic armed 仍是单个 timer 的权威状态。
+eastl::atomic<uint32> g_armed_realtime_interval_timers{0};
+
+void note_realtime_interval_timer_armed(int which)
+{
+  if (which == k_interval_timer_real)
+  {
+    g_armed_realtime_interval_timers.fetch_add(1, eastl::memory_order_release);
+  }
+}
+
+void note_realtime_interval_timer_disarmed(int which)
+{
+  if (which == k_interval_timer_real)
+  {
+    g_armed_realtime_interval_timers.fetch_sub(1, eastl::memory_order_acq_rel);
+  }
+}
+
 bool timespec_less_or_equal(const tmm::timespec &lhs, const tmm::timespec &rhs)
 {
   return lhs.tv_sec < rhs.tv_sec ||
          (lhs.tv_sec == rhs.tv_sec && lhs.tv_nsec <= rhs.tv_nsec);
 }
 
-tmm::timespec timespec_add(const tmm::timespec &base, const tmm::timespec &delta)
+uint64 timespec_delta_ns(const tmm::timespec &later, const tmm::timespec &earlier)
 {
-  tmm::timespec result{};
-  result.tv_sec = base.tv_sec + delta.tv_sec;
-  result.tv_nsec = base.tv_nsec + delta.tv_nsec;
+  if (!timespec_less_or_equal(earlier, later))
+  {
+    return 0;
+  }
+
+  uint64 seconds = static_cast<uint64>(later.tv_sec - earlier.tv_sec);
+  long nanoseconds = later.tv_nsec - earlier.tv_nsec;
+  if (nanoseconds < 0)
+  {
+    if (seconds == 0)
+    {
+      return 0;
+    }
+    --seconds;
+    nanoseconds += 1000000000L;
+  }
+  const uint64 nanos = static_cast<uint64>(nanoseconds);
+  if (seconds > (UINT64_MAX - nanos) / 1000000000ULL)
+  {
+    return UINT64_MAX;
+  }
+  return seconds * 1000000000ULL + nanos;
+}
+
+uint64 timespec_interval_ns(const tmm::timespec &interval)
+{
+  if (interval.tv_sec < 0 || interval.tv_nsec < 0)
+  {
+    return 0;
+  }
+  const uint64 seconds = static_cast<uint64>(interval.tv_sec);
+  const uint64 nanos = static_cast<uint64>(interval.tv_nsec);
+  if (seconds > (UINT64_MAX - nanos) / 1000000000ULL)
+  {
+    return UINT64_MAX;
+  }
+  return seconds * 1000000000ULL + nanos;
+}
+
+tmm::timespec timespec_add_ns(const tmm::timespec &base, uint64 nanoseconds)
+{
+  tmm::timespec result = base;
+  result.tv_sec += static_cast<long>(nanoseconds / 1000000000ULL);
+  result.tv_nsec += static_cast<long>(nanoseconds % 1000000000ULL);
   if (result.tv_nsec >= 1000000000L)
   {
-    result.tv_sec += result.tv_nsec / 1000000000L;
-    result.tv_nsec %= 1000000000L;
+    ++result.tv_sec;
+    result.tv_nsec -= 1000000000L;
   }
   return result;
 }
@@ -151,7 +217,7 @@ void maybe_fire_interval_timer(proc::Pcb *p, int which, uint64 now_us)
   }
 
   proc::interval_timer_state &timer = p->_itimer[which];
-  if (!timer.armed || now_us < timer.expiry_us)
+  if (!timer.armed.load(eastl::memory_order_acquire) || now_us < timer.expiry_us)
   {
     return;
   }
@@ -165,13 +231,14 @@ void maybe_fire_interval_timer(proc::Pcb *p, int which, uint64 now_us)
     if (proc::ipc::signal::has_unmasked_signal_pending(p) &&
         p->_state == proc::ProcState::SLEEPING)
     {
-      p->_state = proc::ProcState::RUNNABLE;
+      proc::k_scheduler.set_task_state(*p, proc::ProcState::RUNNABLE);
     }
   }
 
   if (timer.interval_us == 0)
   {
-    timer.armed = false;
+    note_realtime_interval_timer_disarmed(which);
+    timer.armed.store(false, eastl::memory_order_release);
     timer.expiry_us = 0;
     return;
   }
@@ -220,19 +287,34 @@ void wake_if_signal_interruptible(proc::Pcb *target, int sig)
   if (target->_state == proc::ProcState::SLEEPING &&
       proc::ipc::signal::has_unmasked_signal_pending(target))
   {
-    target->_state = proc::ProcState::RUNNABLE;
+    proc::k_scheduler.set_task_state(*target, proc::ProcState::RUNNABLE);
     return;
   }
 
   if (target->_state == proc::ProcState::STOPPED &&
       (sig == proc::ipc::signal::SIGCONT || sig == proc::ipc::signal::SIGKILL))
   {
-    target->_state = proc::ProcState::RUNNABLE;
+    proc::k_scheduler.set_task_state(*target, proc::ProcState::RUNNABLE);
     if (sig == proc::ipc::signal::SIGCONT)
     {
       target->_continued_pending = true;
     }
   }
+}
+
+proc::interval_timer_snapshot read_interval_timer_locked(proc::Pcb *p, int which)
+{
+  proc::interval_timer_snapshot snapshot{0, 0};
+  uint64 now_us = interval_timer_now_usec(p, which);
+  maybe_fire_interval_timer(p, which, now_us);
+
+  proc::interval_timer_state &timer = p->_itimer[which];
+  snapshot.interval_us = timer.interval_us;
+  if (timer.armed.load(eastl::memory_order_acquire) && timer.expiry_us > now_us)
+  {
+    snapshot.value_us = timer.expiry_us - now_us;
+  }
+  return snapshot;
 }
 
 void deliver_posix_timer_signal(const extended_posix_timer &timer)
@@ -254,6 +336,15 @@ void deliver_posix_timer_signal(const extended_posix_timer &timer)
     return;
   }
 
+  target->_lock.acquire();
+  if (target->_state == proc::ProcState::UNUSED ||
+      target->_state == proc::ProcState::ZOMBIE ||
+      target->_tgid != timer.owner->_tgid)
+  {
+    target->_lock.release();
+    return;
+  }
+
   proc::ipc::signal::LinuxSigInfo info{};
   info.si_signo = signo;
   info.si_errno = 0;
@@ -264,6 +355,7 @@ void deliver_posix_timer_signal(const extended_posix_timer &timer)
 
   proc::ipc::signal::add_signal(target, signo, &info);
   wake_if_signal_interruptible(target, signo);
+  target->_lock.release();
 }
 } // namespace
 
@@ -283,7 +375,11 @@ void reset_interval_timers(Pcb *p)
 
   for (int i = 0; i < k_interval_timer_count; ++i)
   {
-    p->_itimer[i].armed = false;
+    if (p->_itimer[i].armed.load(eastl::memory_order_acquire))
+    {
+      note_realtime_interval_timer_disarmed(i);
+    }
+    p->_itimer[i].armed.store(false, eastl::memory_order_release);
     p->_itimer[i].interval_us = 0;
     p->_itimer[i].expiry_us = 0;
   }
@@ -297,15 +393,9 @@ interval_timer_snapshot read_interval_timer(Pcb *p, int which)
     return snapshot;
   }
 
-  uint64 now_us = interval_timer_now_usec(p, which);
-  maybe_fire_interval_timer(p, which, now_us);
-
-  interval_timer_state &timer = p->_itimer[which];
-  snapshot.interval_us = timer.interval_us;
-  if (timer.armed && timer.expiry_us > now_us)
-  {
-    snapshot.value_us = timer.expiry_us - now_us;
-  }
+  p->_lock.acquire();
+  snapshot = read_interval_timer_locked(p, which);
+  p->_lock.release();
   return snapshot;
 }
 
@@ -317,27 +407,42 @@ void set_interval_timer(Pcb *p, int which, uint64 value_us, uint64 interval_us,
     return;
   }
 
+  p->_lock.acquire();
   if (old_timer != nullptr)
   {
-    *old_timer = read_interval_timer(p, which);
+    *old_timer = read_interval_timer_locked(p, which);
   }
 
   interval_timer_state &timer = p->_itimer[which];
+  const bool was_armed = timer.armed.load(eastl::memory_order_acquire);
   timer.interval_us = interval_us;
   if (value_us == 0)
   {
-    timer.armed = false;
+    if (was_armed)
+    {
+      note_realtime_interval_timer_disarmed(which);
+    }
+    timer.armed.store(false, eastl::memory_order_release);
     timer.expiry_us = 0;
+    p->_lock.release();
     return;
   }
 
-  timer.armed = true;
   timer.expiry_us = interval_timer_now_usec(p, which) + value_us;
+  // expiry/interval 先就绪，再用 release 发布 armed；时钟中断
+  // 的 acquire 提示因此不会看到半初始化状态。
+  timer.armed.store(true, eastl::memory_order_release);
+  if (!was_armed)
+  {
+    note_realtime_interval_timer_armed(which);
+  }
+  p->_lock.release();
 }
 
 void check_interval_timers(Pcb *current_proc, bool check_realtime)
 {
-  if (check_realtime)
+  if (check_realtime &&
+      g_armed_realtime_interval_timers.load(eastl::memory_order_acquire) != 0)
   {
     const uint64 real_now_us = realtime_now_usec();
 
@@ -346,24 +451,93 @@ void check_interval_timers(Pcb *current_proc, bool check_realtime)
     for (uint i = 0; i < num_process; ++i)
     {
       Pcb &candidate = k_proc_pool[i];
-      if (candidate._state == ProcState::UNUSED)
+      // BuildStorm 的进程数较多，但通常只有 timeout 监控
+      // 进程持有实时 interval timer。先用原子位过滤，避免
+      // CPU0 每个 tick 对整个 PCB 池逐项取锁。
+      if (!candidate._itimer[k_interval_timer_real].armed.load(eastl::memory_order_acquire))
       {
         continue;
       }
+      candidate._lock.acquire();
+      if (candidate._state == ProcState::UNUSED ||
+          candidate._state == ProcState::ZOMBIE)
+      {
+        candidate._lock.release();
+        continue;
+      }
       maybe_fire_interval_timer(&candidate, k_interval_timer_real, real_now_us);
+      candidate._lock.release();
     }
   }
 
   // CPU 时间定时器只对当前正在执行的进程推进即可，避免把别的进程的 CPU 时间偷算进去。
-  if (current_proc != nullptr)
+  if (current_proc != nullptr &&
+      (current_proc->_itimer[k_interval_timer_virtual].armed.load(eastl::memory_order_acquire) ||
+       current_proc->_itimer[k_interval_timer_prof].armed.load(eastl::memory_order_acquire)))
   {
+    current_proc->_lock.acquire();
     maybe_fire_interval_timer(current_proc, k_interval_timer_virtual,
                               interval_timer_now_usec(current_proc, k_interval_timer_virtual));
     maybe_fire_interval_timer(current_proc, k_interval_timer_prof,
                               interval_timer_now_usec(current_proc, k_interval_timer_prof));
+    current_proc->_lock.release();
   }
 }
 } // namespace proc
+
+void clear_posix_timer_locked(extended_posix_timer &timer)
+{
+  if (timer.armed)
+  {
+    g_armed_posix_timers.fetch_sub(1, eastl::memory_order_acq_rel);
+  }
+  timer = {};
+}
+
+void set_posix_timer_armed_locked(extended_posix_timer &timer, bool armed)
+{
+  if (timer.armed == armed)
+  {
+    return;
+  }
+  timer.armed = armed;
+  if (armed)
+  {
+    g_armed_posix_timers.fetch_add(1, eastl::memory_order_release);
+  }
+  else
+  {
+    g_armed_posix_timers.fetch_sub(1, eastl::memory_order_acq_rel);
+  }
+}
+
+bool posix_timer_owned_by_locked(const extended_posix_timer &timer, const proc::Pcb *task)
+{
+  return timer.active && timer.owner != nullptr && task != nullptr &&
+         timer.owner->_tgid == task->_tgid;
+}
+
+void init_posix_timers()
+{
+  g_posix_timer_lock.init("posix_timer");
+  g_armed_posix_timers.store(0, eastl::memory_order_relaxed);
+  for (auto &timer : g_timers)
+  {
+    clear_posix_timer_locked(timer);
+  }
+  g_next_timer_id = 1;
+  g_timers_initialized = true;
+}
+
+void lock_posix_timers()
+{
+  g_posix_timer_lock.acquire();
+}
+
+void unlock_posix_timers()
+{
+  g_posix_timer_lock.release();
+}
 
 // Check for expired POSIX timers and send appropriate signals
 void check_expired_timers()
@@ -371,7 +545,11 @@ void check_expired_timers()
   if (!g_timers_initialized) {
     return;  // No timers to check
   }
-  
+  if (g_armed_posix_timers.load(eastl::memory_order_acquire) == 0) {
+    return;
+  }
+
+  lock_posix_timers();
   // Check each timer for expiration
   for (int i = 0; i < 32; i++) {
     if (!g_timers[i].active || !g_timers[i].armed) {
@@ -384,23 +562,33 @@ void check_expired_timers()
     }
     
     if (timespec_less_or_equal(g_timers[i].expiry_time, current_time)) {
-      // POSIX timer 通知不能固定投给当前进程：SIGEV_SIGNAL 投给 owner，
-      // SIGEV_THREAD_ID 投给用户态指定的线程，SIGEV_NONE 则只更新定时器状态。
-      deliver_posix_timer_signal(g_timers[i]);
-      
       // Handle periodic timers
       if (g_timers[i].spec.it_interval.tv_sec > 0 || g_timers[i].spec.it_interval.tv_nsec > 0) {
-        // 周期 timer 沿用自己的时钟域递推，避免 BOOTTIME/REALTIME 混用导致 timer_gettime 返回异常剩余时间。
-        do {
-          g_timers[i].expiry_time = timespec_add(g_timers[i].expiry_time, g_timers[i].spec.it_interval);
-        } while (timespec_less_or_equal(g_timers[i].expiry_time, current_time));
-        
+        // 用除法一次算出 missed expiration。旧实现按 interval 逐次相加，
+        // 1ns 周期且绝对过期时间落后数秒时会在中断上下文循环数十亿次。
+        const uint64 interval_ns = timespec_interval_ns(g_timers[i].spec.it_interval);
+        const uint64 elapsed_ns = timespec_delta_ns(current_time, g_timers[i].expiry_time);
+        const uint64 missed = interval_ns == 0 ? 0 : elapsed_ns / interval_ns;
+        g_timers[i].overrun = missed > static_cast<uint64>(INT_MAX)
+                                  ? INT_MAX
+                                  : static_cast<int>(missed);
+        const uint64 until_next = interval_ns == 0
+                                      ? 1
+                                      : interval_ns - (elapsed_ns % interval_ns);
+        g_timers[i].expiry_time = timespec_add_ns(current_time, until_next);
       } else {
         // One-shot timer: disarm it
-        g_timers[i].armed = false;
+        g_timers[i].overrun = 0;
+        set_posix_timer_armed_locked(g_timers[i], false);
       }
+
+      // POSIX timer 通知不能固定投给当前进程：SIGEV_SIGNAL 投给 owner，
+      // SIGEV_THREAD_ID 投给用户态指定的线程，SIGEV_NONE 则只更新定时器状态。
+      // overrun 必须先发布，信号处理器里的 timer_getoverrun() 才能读到本次值。
+      deliver_posix_timer_signal(g_timers[i]);
     }
   }
+  unlock_posix_timers();
 }
 
 void cleanup_posix_timers_for_owner(proc::Pcb *owner)
@@ -409,6 +597,7 @@ void cleanup_posix_timers_for_owner(proc::Pcb *owner)
     return;
   }
 
+  lock_posix_timers();
   for (int i = 0; i < 32; i++) {
     if (!g_timers[i].active || g_timers[i].owner != owner) {
       continue;
@@ -416,20 +605,7 @@ void cleanup_posix_timers_for_owner(proc::Pcb *owner)
 
     // Linux 在进程退出时会删除该进程拥有的 POSIX timer。这里必须同时清掉 owner，
     // 否则全局 timer 槽里保存的 PCB 指针可能在后续测例复用后误投递信号。
-    g_timers[i].active = false;
-    g_timers[i].armed = false;
-    g_timers[i].timer_id = 0;
-    g_timers[i].clockid = 0;
-    g_timers[i].owner = nullptr;
-    g_timers[i].event.sigev_notify = 0;
-    g_timers[i].event.sigev_signo = 0;
-    g_timers[i].event.sigev_value.sival_ptr = nullptr;
-    g_timers[i].event.sigev_notify_thread_id = 0;
-    g_timers[i].spec.it_value.tv_sec = 0;
-    g_timers[i].spec.it_value.tv_nsec = 0;
-    g_timers[i].spec.it_interval.tv_sec = 0;
-    g_timers[i].spec.it_interval.tv_nsec = 0;
-    g_timers[i].expiry_time.tv_sec = 0;
-    g_timers[i].expiry_time.tv_nsec = 0;
+    clear_posix_timer_locked(g_timers[i]);
   }
+  unlock_posix_timers();
 }

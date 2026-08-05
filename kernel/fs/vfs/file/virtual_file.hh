@@ -160,6 +160,20 @@ namespace fs
         }
     };
 
+    class ProcNetTcpProvider : public VirtualContentProvider
+    {
+    private:
+        bool _ipv6;
+
+    public:
+        explicit ProcNetTcpProvider(bool ipv6) : _ipv6(ipv6) {}
+        virtual eastl::string generate_content() override;
+        virtual bool is_dynamic() const override { return true; }
+        virtual eastl::unique_ptr<VirtualContentProvider> clone() const override {
+            return eastl::make_unique<ProcNetTcpProvider>(_ipv6);
+        }
+    };
+
     // 固定内容文件提供者，用于 sysfs/procfs 中简单常量节点。
     class StaticContentProvider : public VirtualContentProvider
     {

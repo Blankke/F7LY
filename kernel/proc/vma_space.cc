@@ -191,6 +191,129 @@ namespace proc
         return index_.next(entry);
     }
 
+    bool VMASpace::can_coalesce_private_anonymous(const vma &left, const vma &right) const
+    {
+        if (!left.valid_range() || !right.valid_range() ||
+            left.end_addr() != right.addr ||
+            static_cast<uint64>(left.len) + static_cast<uint64>(right.len) > 0x7fffffffULL ||
+            left.owner_mm != owner_mm_ || right.owner_mm != owner_mm_)
+        {
+            return false;
+        }
+
+        /*
+         * Rust/LLVM 的分配器会先保留大块 PROT_NONE 区域，再以 4 KiB 粒度
+         * mprotect 为可读写。这里必须像 Linux 一样把权限相同的相邻片段
+         * 重新合并，否则一次 core 编译会制造上万个 VMA。共享、文件和
+         * overlay 映射具有额外的引用/偏移所有权，留给各自后端处理。
+         */
+        if ((left.flags & MAP_PRIVATE) == 0 || (left.flags & MAP_ANONYMOUS) == 0 ||
+            left.vfd != -1 || right.vfd != -1 ||
+            left.vfile != nullptr || right.vfile != nullptr ||
+            left.object != nullptr || right.object != nullptr ||
+            left.private_page_overlay != nullptr || right.private_page_overlay != nullptr ||
+            left.backing_kind != VMA_BACKING_NONE || right.backing_kind != VMA_BACKING_NONE)
+        {
+            return false;
+        }
+
+        return left.prot == right.prot &&
+               left.flags == right.flags &&
+               left.area_kind == right.area_kind &&
+               left.grow_policy == right.grow_policy &&
+               left.advice_state == right.advice_state &&
+               left.guard_pages == right.guard_pages &&
+               left.wipe_on_fork == right.wipe_on_fork &&
+               left.zero_fill_past_file == right.zero_fill_past_file &&
+               left.debug_name == right.debug_name &&
+               left.max_len == right.max_len &&
+               left.is_expandable == right.is_expandable &&
+               left.file_backed_bytes == 0 && right.file_backed_bytes == 0 &&
+               left.page_offset + static_cast<uint64>(left.len) == right.page_offset &&
+               static_cast<uint64>(left.offset) + static_cast<uint64>(left.len) ==
+                   static_cast<uint64>(right.offset);
+    }
+
+    bool VMASpace::merge_private_anonymous(vma &left, vma &right)
+    {
+        if (!can_coalesce_private_anonymous(left, right))
+        {
+            return false;
+        }
+
+        const int old_len = left.len;
+        const bool old_has_resident_pages = left.has_resident_pages;
+        erase_area(left, left.addr);
+        erase_area(right, right.addr);
+
+        left.len += right.len;
+        left.has_resident_pages = left.has_resident_pages || right.has_resident_pages;
+        if (!insert_area(left))
+        {
+            left.len = old_len;
+            left.has_resident_pages = old_has_resident_pages;
+            // 回滚时两段仍互不重叠；任一重插失败都表示索引已经不可恢复。
+            if (!insert_area(left) || !insert_area(right))
+            {
+                panic("VMASpace: failed to rollback anonymous VMA merge");
+            }
+            return false;
+        }
+
+        // 上面的严格条件保证 right 不持有需要转移的后端元数据。
+        destroy_area(&right);
+        return true;
+    }
+
+    vma *VMASpace::coalesce_private_anonymous_around(vma *area)
+    {
+        if (area == nullptr)
+        {
+            return nullptr;
+        }
+
+        vma *previous = find_prev_vma(area->addr);
+        if (previous != nullptr && merge_private_anonymous(*previous, *area))
+        {
+            area = previous;
+        }
+
+        while (true)
+        {
+            vma *next_area = find_next_vma(area);
+            if (next_area == nullptr || !merge_private_anonymous(*area, *next_area))
+            {
+                break;
+            }
+        }
+        return area;
+    }
+
+    void VMASpace::coalesce_private_anonymous_range(uint64 start_addr, uint64 end_addr)
+    {
+        if (end_addr <= start_addr)
+        {
+            return;
+        }
+
+        vma *area = find_vma_covering(start_addr);
+        if (area == nullptr)
+        {
+            area = find_first_vma_at_or_after(start_addr);
+        }
+
+        while (area != nullptr && area->addr < end_addr)
+        {
+            area = coalesce_private_anonymous_around(area);
+            vma *next_area = find_next_vma(area);
+            if (next_area == nullptr || next_area->addr >= end_addr)
+            {
+                break;
+            }
+            area = next_area;
+        }
+    }
+
     bool VMASpace::has_conflict(uint64 start_addr, uint64 end_addr, const vma *ignore) const
     {
         return index_.has_conflict(start_addr, end_addr, ignore);

@@ -2,6 +2,7 @@
 #include "capability.hh"
 #include "futex.hh"  // 添加futex头文件，用于robust futex清理
 #include "hal/cpu.hh"
+#include "hal/smp.hh"
 #include "hal/tlb_shootdown.hh"
 #include "physical_memory_manager.hh"
 #include "klib.hh"
@@ -449,16 +450,12 @@ namespace proc
                 return;
             }
 
-            const bool lock_already_held = pcb->_lock.is_held();
-            if (!lock_already_held)
-            {
-                pcb->_lock.acquire();
-            }
+            const bool acquired_lock = pcb->_lock.acquire_unless_held();
 
             if (pcb->_state == ProcState::UNUSED || pcb->_ofile == nullptr ||
                 !is_kernel_mapped_file_range(reinterpret_cast<uint64>(pcb->_ofile), sizeof(ofile)))
             {
-                if (!lock_already_held)
+                if (acquired_lock)
                 {
                     pcb->_lock.release();
                 }
@@ -467,7 +464,7 @@ namespace proc
 
             ofile *fd_table = pcb->_ofile;
             fd_table->_lock.acquire();
-            if (!lock_already_held)
+            if (acquired_lock)
             {
                 pcb->_lock.release();
             }
@@ -502,10 +499,17 @@ namespace proc
 
             ~MemoryLockGuard()
             {
-                if (_mm != nullptr)
+                unlock();
+            }
+
+            void unlock()
+            {
+                if (_mm == nullptr)
                 {
-                    _mm->unlock_memory();
+                    return;
                 }
+                _mm->unlock_memory();
+                _mm = nullptr;
             }
 
         private:
@@ -674,7 +678,7 @@ namespace proc
              * SIG_IGN 需要保留，信号 mask 和 pending signal 继续由原进程状态承载。
              * 若 sighand 被 CLONE_SIGHAND 共享，先私有化，避免 exec 当前任务时改坏其它共享者。
              */
-            if (proc->_sigactions->refcnt > 1)
+            if (proc->_sigactions->refcnt.load(eastl::memory_order_acquire) > 1)
             {
                 sighand_struct *old_actions = proc->_sigactions;
                 sighand_struct *new_actions = new sighand_struct();
@@ -682,7 +686,7 @@ namespace proc
                 {
                     return false;
                 }
-                new_actions->refcnt = 1;
+                new_actions->refcnt.store(1, eastl::memory_order_relaxed);
                 for (int sig = 0; sig <= ipc::signal::SIGRTMAX; ++sig)
                 {
                     new_actions->actions[sig] = nullptr;
@@ -710,7 +714,19 @@ namespace proc
                     *(new_actions->actions[sig]) = *act;
                 }
 
-                old_actions->refcnt--;
+                const int old_refcnt =
+                    old_actions->refcnt.fetch_sub(1, eastl::memory_order_acq_rel);
+                if (old_refcnt <= 1)
+                {
+                    // 另一个共享成员可能在复制期间退出，使当前 exec 成为旧表
+                    // 的最后持有者；此时由当前 CPU 完成唯一销毁，不能泄漏。
+                    for (int sig = 0; sig <= ipc::signal::SIGRTMAX; ++sig)
+                    {
+                        delete old_actions->actions[sig];
+                        old_actions->actions[sig] = nullptr;
+                    }
+                    delete old_actions;
+                }
                 proc->_sigactions = new_actions;
             }
             else
@@ -846,11 +862,8 @@ namespace proc
                 }
 
                 uint64 patch_va = va + (patch.offset - offset);
-                if (patch_loaded_riscv_user_bytes(pt, patch_va, patch.old_bytes, patch.new_bytes, patch.size))
-                {
-                    printfYellow("[execve] RISC-V runtime patch %s %s+0x%x\n",
-                                 path, patch.label, patch.offset);
-                }
+                (void)patch_loaded_riscv_user_bytes(
+                    pt, patch_va, patch.old_bytes, patch.new_bytes, patch.size);
             }
         }
 #endif
@@ -990,11 +1003,8 @@ namespace proc
                 }
 
                 uint64 patch_va = va + (patch.offset - offset);
-                if (patch_loaded_user_bytes(pt, patch_va, patch.old_bytes, patch.new_bytes, patch.size))
-                {
-                    printfYellow("[execve] LoongArch runtime patch %s %s+0x%x\n",
-                                 path, patch.label, patch.offset);
-                }
+                (void)patch_loaded_user_bytes(
+                    pt, patch_va, patch.old_bytes, patch.new_bytes, patch.size);
             }
         }
 #endif
@@ -1232,9 +1242,8 @@ namespace proc
         }
 
         p->_lock.acquire();
-        p->_priority = priority;
+        k_scheduler.set_task_priority(*p, priority);
         p->_lock.release();
-        k_scheduler.note_priority_change(priority);
     }
 
     Pcb *ProcessManager::get_cur_pcb()
@@ -1259,6 +1268,22 @@ namespace proc
             return 0;
         }
         return _active_slot_words[word_index].load(eastl::memory_order_acquire);
+    }
+
+    uint32 ProcessManager::active_task_count() const
+    {
+        uint32 count = 0;
+        for (uint word_index = 0; word_index < k_active_slot_word_count; ++word_index)
+        {
+            uint64 bits = _active_slot_words[word_index].load(eastl::memory_order_acquire);
+            // 避免 freestanding 链接依赖编译器的 64 位 popcount helper。
+            while (bits != 0)
+            {
+                bits &= bits - 1;
+                ++count;
+            }
+        }
+        return count;
     }
 
     void ProcessManager::mark_slot_active(uint global_id)
@@ -1336,7 +1361,7 @@ namespace proc
 #endif
                 k_pm.alloc_pid(p);           // 分配全局唯一的进程ID
                 k_pm.alloc_tid(p);           // 分配线程ID（单线程进程中等于PID）
-                p->_state = ProcState::USED; // 标记进程控制块为已使用
+                k_scheduler.set_task_state(*p, ProcState::USED); // 标记进程控制块为已使用
 
                 // 初始化父进程关系（在fork时会重新设置）
                 p->_parent = nullptr;
@@ -1364,7 +1389,7 @@ namespace proc
                 /****************************************************************************************
                  * 进程状态和调度信息初始化
                  ****************************************************************************************/
-                p->_chan = nullptr; // 清空睡眠等待通道
+                p->_chan.store(nullptr, eastl::memory_order_relaxed); // 清空睡眠等待通道
                 p->_killed = 0;     // 清除终止标志
                 p->_exiting = false; // 清除退出清理标记
                 p->_xstate = 0;     // 清除退出状态码
@@ -1388,7 +1413,7 @@ namespace proc
                 // 绑定，待其 online 后即可被调度。
                 const uint64 possible_mask = Cpu::possible_cpu_mask();
                 p->_cpu_mask = CpuMask{possible_mask != 0 ? possible_mask : 1};
-                p->_last_cpu = 0;
+                k_scheduler.set_task_home_cpu(*p, -1);
 
 	                /****************************************************************************************
 	                 * 内存管理初始化
@@ -1436,7 +1461,7 @@ namespace proc
                  * 线程和同步原语初始化
                  ****************************************************************************************/
                 p->_futex_addr = nullptr;  // 清空futex等待地址
-                p->_futex_key = 0;         // 清空futex匹配键
+                p->_futex_key.store(0, eastl::memory_order_relaxed); // 清空futex匹配键
                 p->_clear_tid_addr = 0;    // 清空线程退出时需要清理的地址
                 p->_robust_list = nullptr; // 清空健壮futex链表
                 p->_robust_list_user_addr = 0;
@@ -1559,8 +1584,6 @@ namespace proc
 
     void ProcessManager::freeproc(Pcb *p)
     {
-        printfBlue("[freeproc] PCB for process global_id %d pid %d  tid %d successfully reclaimed\n",
-                   p->_global_id, p->_pid, p->_tid);
         /****************************************************************************************
          内存资源已在 exit_proc() 中释放，这里只清理PCB字段
          ****************************************************************************************/
@@ -1621,7 +1644,7 @@ namespace proc
         /****************************************************************************************
          * 进程状态和调度信息清理
          ****************************************************************************************/
-        p->_chan = nullptr;            // 清空睡眠等待通道
+        p->_chan.store(nullptr, eastl::memory_order_release); // 清空睡眠等待通道
         p->_killed = 0;                // 清除终止标志
         p->_exiting = false;           // 清除退出清理标记
         p->_xstate = 0;                // 清除退出状态码
@@ -1630,7 +1653,7 @@ namespace proc
         p->_stop_reported = false;
         p->_continued_pending = false;
         p->_has_child_tasks = false;
-        p->_state = ProcState::UNUSED; // 标记进程控制块为未使用
+        k_scheduler.set_task_state(*p, ProcState::UNUSED); // 标记进程控制块为未使用
         mark_slot_inactive(p->_global_id);
 
         p->_slot = 0;                 // 重置时间片
@@ -1646,7 +1669,7 @@ namespace proc
         // PCB 复用后重新收敛到当前启动拓扑，避免历史任务把不存在的 CPU 位带给新任务。
         const uint64 possible_mask = Cpu::possible_cpu_mask();
         p->_cpu_mask = CpuMask{possible_mask != 0 ? possible_mask : 1};
-        p->_last_cpu = 0;
+        k_scheduler.set_task_home_cpu(*p, -1);
 
         /****************************************************************************************
          * 文件系统和I/O管理清理
@@ -1680,7 +1703,7 @@ namespace proc
          * 线程和同步原语清理
          ****************************************************************************************/
         p->_futex_addr = nullptr;  // 清空futex等待地址
-        p->_futex_key = 0;         // 清空futex匹配键
+        p->_futex_key.store(0, eastl::memory_order_release); // 清空futex匹配键
         p->_clear_tid_addr = 0;    // 清空线程退出时需要清理的地址
         p->_robust_list = nullptr; // 清空健壮futex链表
         p->_robust_list_user_addr = 0;
@@ -1737,7 +1760,6 @@ namespace proc
          ****************************************************************************************/
         memset(&p->_context, 0, sizeof(p->_context)); // 清空上下文信息
 
-        printfBlue("[freeproc] free proc complete\n");
     }
 
     void ProcessManager::freeproc_creation_failed(Pcb *p)
@@ -1747,7 +1769,6 @@ namespace proc
          * 此时进程可能已经分配了部分资源但还没有真正运行
          ****************************************************************************************/
 
-        printf("[freeproc_creation_failed] Cleaning up failed process creation for pid %d\n", p->_pid);
 
         // 失败回滚阶段也可能已经懒创建了 fd 表/信号表，必须先收回，
         // 否则 freeproc() 会把它们当成泄漏直接判异常。
@@ -1765,16 +1786,28 @@ namespace proc
         ProcessMemoryManager *mm = p->get_memory_manager();
         // 创建失败的子进程还没有真正切换运行，这里只按 tid 清理共享段附加记录，避免泄漏 nattch。
         shm::k_smm.detach_all_for_process(p, false, true);
-	        if (mm != nullptr)
-	        {
-	            mm->emergency_cleanup(); // 使用紧急清理，避免正常流程
-	            if (mm->get_ref_count() <= 1)
-	            {
-	                delete mm;
-	            }
-	            // 这里不能再走 set_memory_manager(nullptr)，否则会对刚删除的 mm 再做一次 cleanup。
-	            p->reset_memory_manager_ptr();
-	        }
+        if (mm != nullptr)
+        {
+            /*
+             * CLONE_VM 的失败任务与父线程共享同一个 mm。此前这里无条件调用
+             * emergency_cleanup()，会把父线程仍在执行的页表和 VMA 一并释放；
+             * 低内存下只要后续 fd/sighand 分配失败，就可能直接损坏整个线程组。
+             *
+             * 共享 mm 只归还本次 clone 增加的引用；仅当失败任务是唯一持有者
+             * 时，才允许走不写回的紧急清理。PCB 尚未发布为 RUNNABLE，因此
+             * 这里不需要为它保留任何地址空间内容。
+             */
+            if (mm->get_ref_count() > 1)
+            {
+                mm->free_all_memory();
+            }
+            else
+            {
+                mm->emergency_cleanup();
+                delete mm;
+            }
+            p->reset_memory_manager_ptr();
+        }
 
         // 调用标准的PCB清理
         freeproc(p);
@@ -1862,6 +1895,9 @@ namespace proc
         {
             panic("user_init: failed to register initcode text VMA");
         }
+        // uvmfirst() 在登记 VMASpace 前已经一次性映射了 initcode；维护
+        // has_resident_pages=false 的强不变量，供 fork 跳过纯惰性 VMA。
+        init_text_area->has_resident_pages = true;
 
         uint64 init_stack_size = allocated_sz - initcode_text_size;
         if (init_stack_size != 0)
@@ -1880,6 +1916,7 @@ namespace proc
             {
                 panic("user_init: failed to register initcode stack VMA");
             }
+            init_stack_area->has_resident_pages = true;
         }
 
         // 保留 legacy 镜像供旧统计/调试接口读取；实际 fork/缺页主路径走 VMASpace。
@@ -1908,7 +1945,7 @@ namespace proc
         // - SID = 1（成为会话1的领导者）
         // - 所有其他进程最终都成为init进程的子进程
 
-        p->_state = ProcState::RUNNABLE;
+        k_scheduler.set_task_state(*p, ProcState::RUNNABLE);
 
         p->_lock.release();
     }
@@ -1948,7 +1985,7 @@ namespace proc
                 {
                     // 提前唤醒等待中的进程，
                     // 避免它永远睡着不被调度，也就永远无法响应 kill。
-                    p->_state = ProcState::RUNNABLE;
+                    k_scheduler.set_task_state(*p, ProcState::RUNNABLE);
                 }
 
                 p->_lock.release();
@@ -1968,7 +2005,7 @@ namespace proc
             if (target->_state == ProcState::STOPPED &&
                 (sig == ipc::signal::SIGCONT || sig == ipc::signal::SIGKILL))
             {
-                target->_state = ProcState::RUNNABLE;
+                k_scheduler.set_task_state(*target, ProcState::RUNNABLE);
                 if (sig == ipc::signal::SIGCONT)
                 {
                     target->_continued_pending = true;
@@ -1979,7 +2016,7 @@ namespace proc
             if (target->_state == ProcState::SLEEPING &&
                 proc::ipc::signal::has_unmasked_signal_pending(target))
             {
-                target->_state = ProcState::RUNNABLE;
+                k_scheduler.set_task_state(*target, ProcState::RUNNABLE);
             }
             return nullptr;
         };
@@ -2137,7 +2174,7 @@ namespace proc
                     const bool continued =
                         p->_state == ProcState::STOPPED &&
                         sig == ipc::signal::SIGCONT;
-                    p->_state = ProcState::RUNNABLE;
+                    k_scheduler.set_task_state(*p, ProcState::RUNNABLE);
                     if (continued)
                     {
                         p->_continued_pending = true;
@@ -2192,7 +2229,7 @@ namespace proc
                     const bool continued =
                         p->_state == ProcState::STOPPED &&
                         sig == ipc::signal::SIGCONT;
-                    p->_state = ProcState::RUNNABLE;
+                    k_scheduler.set_task_state(*p, ProcState::RUNNABLE);
                     if (continued)
                     {
                         p->_continued_pending = true;
@@ -2464,6 +2501,20 @@ namespace proc
              */
             return syscall::SYS_EAGAIN;
         }
+        if ((flags & syscall::CLONE_PARENT) && p->_parent == nullptr)
+        {
+            // 线程组根任务没有可继承的父关系；必须在创建子 PCB 前拒绝，
+            // 不能等任务发布后再用 panic 处理用户参数。
+            return syscall::SYS_EINVAL;
+        }
+        if ((flags & syscall::CLONE_PARENT_SETTID) && ptid == 0)
+        {
+            return syscall::SYS_EFAULT;
+        }
+        if ((flags & syscall::CLONE_CHILD_SETTID) && ctid == 0)
+        {
+            return syscall::SYS_EFAULT;
+        }
 
         Pcb *np = fork(p, flags, stack_ptr, ctid, is_clone3, exit_signal);
         if (np == nullptr)
@@ -2475,42 +2526,6 @@ namespace proc
         int new_tid = np->_tid;
         uint64 new_pid = np->_pid;
 
-#ifdef LOONGARCH
-        if ((flags & syscall::CLONE_THREAD) && p->get_pagetable() != nullptr)
-        {
-            uint64 trapframe_pa = VIRT2PHY((uint64)np->_trapframe);
-            auto check_user_alias = [&](uint64 user_addr, const char *label) {
-                if (user_addr == 0)
-                {
-                    return;
-                }
-                mem::Pte user_pte = p->get_pagetable()->walk(PGROUNDDOWN(user_addr), false);
-                if (!user_pte.is_null() && user_pte.is_valid())
-                {
-                    uint64 user_pa = (uint64)user_pte.pa();
-                    if (user_pa == trapframe_pa)
-                    {
-                        panic("debug clone trapframe alias: parent pid=%d tid=%d child tid=%d label=%s user=%p user_pa=%p trapframe=%p trapframe_pa=%p stack=%p tls=%p ctid=%p",
-                              p->_pid,
-                              p->_tid,
-                              np->_tid,
-                              label,
-                              (void *)user_addr,
-                              (void *)user_pa,
-                              np->_trapframe,
-                              (void *)trapframe_pa,
-                              (void *)stack_ptr,
-                              (void *)tls,
-                              (void *)ctid);
-                    }
-                }
-            };
-            check_user_alias(stack_ptr, "stack");
-            check_user_alias(tls, "tls");
-            check_user_alias(ctid, "ctid");
-        }
-#endif
-
         if (flags & syscall::CLONE_SETTLS)
         {
             np->_trapframe->tp = tls; // 设置线程局部存储指针
@@ -2521,6 +2536,9 @@ namespace proc
             // 之前按 8 字节写会把线程库紧邻的状态字段一并覆盖掉。
             if (mem::k_vmm.copy_out(*p->get_pagetable(), ptid, &new_tid, sizeof(new_tid)) < 0)
             {
+                // fork() 已把子任务发布为 RUNNABLE；失败回收前先撤销调度可见性，
+                // 否则 freeproc() 会把可运行 PCB 当作生命周期损坏而 panic。
+                k_scheduler.set_task_state(*np, ProcState::USED);
                 freeproc_creation_failed(np); // 使用专门的创建失败清理函数
                 np->_lock.release();
                 // 用户态传入的 parent_tid 地址不可写，返回 EFAULT。
@@ -2529,14 +2547,7 @@ namespace proc
         }
         if (flags & syscall::CLONE_PARENT)
         {
-            if (p->_parent != nullptr)
-            {
-                np->_parent = p->_parent; // 继承父进程
-            }
-            else
-            {
-                panic("clone: parent process is null");
-            }
+            np->_parent = p->_parent; // 入口已经验证非空
         }
         if (flags & syscall::CLONE_VFORK)
         {
@@ -2545,7 +2556,19 @@ namespace proc
             // glibc posix_spawn/system 路径会随机在子进程栈上 SIGSEGV。
             np->_vfork_parent = p;
         }
+        const int child_home_cpu = np->_last_cpu;
         np->_lock.release();
+
+        /*
+         * 子任务已经以 RUNNABLE 状态发布。若它被初始放置到另一个正处于
+         * idle 的 CPU，仅靠周期时钟会让该核最多晚一个 tick 才重新扫描。
+         * Cargo/rustc 会密集创建短生命周期进程和工作线程，逐次延迟会直接
+         * 拉长关键路径；复用现有调度唤醒 IPI，让目标核立即离开 idle。
+         */
+        if (child_home_cpu >= 0)
+        {
+            hal::smp::kick_cpu(static_cast<uint64>(child_home_cpu));
+        }
 
         if (flags & syscall::CLONE_VFORK)
         {
@@ -2566,7 +2589,6 @@ namespace proc
     Pcb *ProcessManager::fork(Pcb *p, uint64 flags, uint64 stack_ptr,
                               uint64 ctid, bool is_clone3, int exit_signal)
     {
-        TODO("copy on write fork");
         (void)is_clone3;
 
         // ===== 基础验证和资源分配 =====
@@ -2575,6 +2597,20 @@ namespace proc
         {
             return nullptr;
         }
+
+        ProcessMemoryManager *parent_mm = p->get_memory_manager();
+        if (parent_mm == nullptr)
+        {
+            return nullptr;
+        }
+
+        /*
+         * mm 锁是可睡眠锁，必须在 alloc_proc() 返回“已持有子 PCB 锁”之前
+         * 获取。否则并发 mmap/fork 占锁时，当前任务会带着另一个 PCB 的
+         * 自旋锁进入 sleep/call_sched，破坏调度器只允许一把当前 PCB 锁的
+         * 不变量。锁覆盖到页表/VMA 共享或快照完成，随后立即释放。
+         */
+        MemoryLockGuard parent_memory_guard(parent_mm);
 
         uint64 i;
         Pcb *np; // new proc
@@ -2603,6 +2639,66 @@ namespace proc
 
         // 设置父子进程关系
         np->_parent = p;
+
+        // ===== 内存管理 =====
+        // mm 锁已在分配子 PCB 之前取得，内存共享/快照完成后立刻释放；
+        // 不让它跨越 mount namespace、fd 和 sighand 复制，避免与这些
+        // 独立资源锁形成无关的长临界区或锁顺序环。
+        if (flags & syscall::CLONE_VM)
+        {
+            // 与普通 fork 的页表/VMA 快照使用同一把 mm 锁。否则一个线程
+            // 可能在 fork 已判断“唯一 mm、可延后 TLB”之后并发发布新的
+            // CLONE_VM 持有者，破坏延后失效成立所需的唯一所有者前提。
+            np->set_memory_manager(parent_mm->share_for_thread());
+        }
+        else
+        {
+            // 继承共享内存附加记录：把父线程 tid 对应的附加项复制到子线程 tid。
+            shm::k_smm.duplicate_attachments_for_fork(p->get_tid(), np->get_tid(), np->_pid);
+            // Cargo 会从多线程父进程并发派生 rustc。VMA/PTE 快照必须与
+            // mmap/munmap/mremap/缺页以及另一轮 fork 串行。
+            ProcessMemoryManager *cloned_mm = parent_mm->clone_for_fork();
+            if (cloned_mm == nullptr)
+            {
+                freeproc_creation_failed(np);
+                np->_lock.release();
+                return nullptr;
+            }
+            np->set_memory_manager(cloned_mm);
+
+            /*
+             * 某些 libc clone 封装会把入口和参数临时压在 child_stack 顶部；
+             * 若这块旧式栈映射没有进入 VMA 元数据快照，至少复制相邻两页。
+             * 这一步必须仍在 parent mm 锁内完成，不能在后续 fd/sighand 复制后
+             * 带着子 PCB 自旋锁重新睡眠等待 mm 锁，也不能无锁读取父 PTE。
+             */
+            if (stack_ptr != 0)
+            {
+                const uint64 stack_copy_end = PGROUNDUP(stack_ptr + sizeof(uint64) * 2);
+                const uint64 stack_copy_start =
+                    PGROUNDDOWN(stack_ptr >= PGSIZE ? stack_ptr - PGSIZE : 0);
+                for (uint64 copy_va = stack_copy_start;
+                     copy_va < stack_copy_end;
+                     copy_va += PGSIZE)
+                {
+                    mem::Pte child_pte = np->get_pagetable()->walk(copy_va, false);
+                    if (!child_pte.is_null() && child_pte.is_valid())
+                    {
+                        continue;
+                    }
+                    if (mem::k_vmm.vm_copy(*p->get_pagetable(),
+                                           *np->get_pagetable(),
+                                           copy_va,
+                                           PGSIZE) < 0)
+                    {
+                        freeproc_creation_failed(np);
+                        np->_lock.release();
+                        return nullptr;
+                    }
+                }
+            }
+        }
+        parent_memory_guard.unlock();
 
         // ===== 基本属性复制 =====
         // 继承文件系统相关属性
@@ -2646,10 +2742,11 @@ namespace proc
         // 再通过 sched_setaffinity() 给工作线程做显式分配。虽然可运行掩码
         // 必须继承，但新任务还没有最近运行核，不能把它一律塞回父线程所在
         // CPU：pthread 批量创建时会先在同一核堆积，直到子线程有机会调用
-        // setaffinity 才扩散。这里用 scheduler 的轮转初始放置为其分配 home
-        // CPU，随后常规粘附策略保持缓存/页表局部性。
+        // setaffinity 才扩散。这里由 scheduler 按活跃负载为其分配 home CPU，
+        // 随后常规粘附策略保持缓存/页表局部性。调度器会忽略正在放置的 np，
+        // 防止它在 USED 创建窗口中给自己的候选 home CPU 增加负载。
         np->_cpu_mask = p->_cpu_mask;
-        np->_last_cpu = k_scheduler.select_initial_cpu(np->_cpu_mask, p->_last_cpu);
+        k_scheduler.set_task_home_cpu(*np, k_scheduler.select_initial_cpu(np->_cpu_mask, p->_last_cpu));
         np->_sched_policy = p->_sched_policy;
         np->_sched_priority = p->_sched_priority;
         np->_sched_reset_on_fork = p->_sched_reset_on_fork;
@@ -2767,12 +2864,15 @@ namespace proc
             if (p->_ofile == nullptr && p->ensure_ofile() == nullptr)
             {
                 freeproc_creation_failed(np);
+                np->_lock.release();
                 return nullptr;
             }
             // 共享文件描述符表
             np->cleanup_ofile();
             np->_ofile = p->_ofile;
-            np->_ofile->_shared_ref_cnt++; // 增加引用计数
+            np->_ofile->_lock.acquire();
+            ++np->_ofile->_shared_ref_cnt; // 与 exit/close_range 的减引用使用同一把锁
+            np->_ofile->_lock.release();
         }
         else
         {
@@ -2782,6 +2882,7 @@ namespace proc
                 if (np->_ofile == nullptr && np->ensure_ofile() == nullptr)
                 {
                     freeproc_creation_failed(np);
+                    np->_lock.release();
                     return nullptr;
                 }
 
@@ -2814,46 +2915,13 @@ namespace proc
             }
         }
 
-        // ===== 内存管理 =====
-        if (flags & syscall::CLONE_VM)
-        {
-            // 共享虚拟内存：新进程共享父进程的内存管理器
-            ProcessMemoryManager *parent_mm = p->get_memory_manager();
-            if (parent_mm != nullptr)
-            {
-                np->set_memory_manager(parent_mm->share_for_thread());
-            }
-            else
-            {
-                panic("[fork] parent memory_manager is null");
-            }
-        }
-        else
-        {
-            // fork 操作：创建独立的内存管理器副本
-            ProcessMemoryManager *parent_mm = p->get_memory_manager();
-            if (parent_mm != nullptr)
-            {
-                // 继承共享内存附加记录：把父线程tid对应的附加项复制到子线程tid
-                // 注意：此处 np->_tid 已在 alloc_proc() 中分配
-                shm::k_smm.duplicate_attachments_for_fork(p->get_tid(), np->get_tid(), np->_pid);
-                ProcessMemoryManager *cloned_mm = parent_mm->clone_for_fork();
-                if (cloned_mm == nullptr)
-                {
-                    freeproc_creation_failed(np); // 使用专门的创建失败清理函数
-                    np->_lock.release();
-                    return nullptr;
-                }
-                np->set_memory_manager(cloned_mm);
-            }
-        }
-
         // ===== 信号处理 =====
         if (flags & syscall::CLONE_SIGHAND)
         {
             if (p->_sigactions == nullptr && p->ensure_sighand() == nullptr)
             {
                 freeproc_creation_failed(np);
+                np->_lock.release();
                 return nullptr;
             }
             // 共享信号处理结构
@@ -2862,17 +2930,20 @@ namespace proc
             np->_sigactions = p->_sigactions;
             if (p->_sigactions != nullptr)
             {
-                p->_sigactions->refcnt++; // 增加引用计数
+                p->_sigactions->refcnt.fetch_add(1, eastl::memory_order_acq_rel);
             }
         }
         else
         {
             // 不共享信号处理结构，需要深拷贝
-            if (p->_sigactions != nullptr)
+            // CLONE_CLEAR_SIGHAND 要求 child 中所有 disposition 回到默认值。
+            // 新 PCB 默认没有 sighand 表，保留空表就是默认语义，避免无谓分配。
+            if (p->_sigactions != nullptr && !(flags & syscall::CLONE_CLEAR_SIGHAND))
             {
                 if (np->_sigactions == nullptr && np->ensure_sighand() == nullptr)
                 {
                     freeproc_creation_failed(np);
+                    np->_lock.release();
                     return nullptr;
                 }
 
@@ -2881,10 +2952,15 @@ namespace proc
                     if (p->_sigactions->actions[i] != nullptr)
                     {
                         np->_sigactions->actions[i] = new ipc::signal::sigaction;
-                        if (np->_sigactions->actions[i] != nullptr)
+                        if (np->_sigactions->actions[i] == nullptr)
                         {
-                            *(np->_sigactions->actions[i]) = *(p->_sigactions->actions[i]);
+                            // OOM 时不能让 child 带着缺失的 handler 继续运行；
+                            // cleanup_sighand() 会回收本轮已经复制的所有项。
+                            freeproc_creation_failed(np);
+                            np->_lock.release();
+                            return nullptr;
                         }
+                        *(np->_sigactions->actions[i]) = *(p->_sigactions->actions[i]);
                     }
                 }
             }
@@ -2906,16 +2982,19 @@ namespace proc
         }
         np->_on_sigstack = false;
 
+        // Linux 的每个任务都有独立 blocked mask；clone/fork 在创建瞬间复制
+        // 调用者的 mask，但 pending signal 与 sigsuspend 临时状态不继承。
+        np->_sigmask = p->_sigmask;
+        np->_sigsuspend_restore_pending = false;
+        np->_sigsuspend_saved_sigmask = 0;
+
         if (flags & syscall::CLONE_THREAD)
         {
-            // TODO: 清除信号掩码
             np->_tgid = p->_tgid; // 线程共享线程组 ID
             np->_pid = p->_pid;   // 线程共享 PID
-            // TODO: 共享定时器
         }
         else
         {
-            // TODO: 共享信号掩码
             np->_tgid = np->_pid; // 新进程的线程组 ID 等于自己的 PID
             // pid已经在 alloc_proc 中设置了
             // 定时器已经设置过了
@@ -2932,45 +3011,6 @@ namespace proc
             // 这些都是 libc clone 封装层的职责；内核强行改入口会破坏不同 libc
             // 对 child_stack 布局的约定，最终让子任务从错误地址执行。
             np->_trapframe->sp = stack_ptr;
-            if ((flags & syscall::CLONE_VM) == 0)
-            {
-                // glibc/musl 的 clone 封装都会把 fn/arg 压到 child_stack 顶部，
-                // 子任务返回用户态后立刻从这块新栈里取入口和参数。
-                // 仅靠“程序段/堆/VMA 元数据复制”有时会漏掉这块临时子栈的驻留页，
-                // 于是子任务会在第一条 ld.d / jirl 前就读到空页或旧内容而 SIGSEGV。
-                // 这里额外把 child_stack 顶部附近两页强制复制过去，保证 clone 子栈
-                // 的入口数据和最初几层调用栈在子进程里可见。
-                uint64 stack_copy_end = PGROUNDUP(stack_ptr + sizeof(uint64) * 2);
-                uint64 stack_copy_start = PGROUNDDOWN(stack_ptr >= PGSIZE ? stack_ptr - PGSIZE : 0);
-                if (stack_copy_end > stack_copy_start)
-                {
-                    bool stack_copy_ok = true;
-                    for (uint64 copy_va = stack_copy_start; copy_va < stack_copy_end; copy_va += PGSIZE)
-                    {
-                        mem::Pte child_pte = np->get_pagetable()->walk(copy_va, false);
-                        if (!child_pte.is_null() && child_pte.is_valid())
-                        {
-                            continue;
-                        }
-
-                        if (mem::k_vmm.vm_copy(*p->get_pagetable(),
-                                               *np->get_pagetable(),
-                                               copy_va,
-                                               PGSIZE) < 0)
-                        {
-                            stack_copy_ok = false;
-                            break;
-                        }
-                    }
-
-                    if (!stack_copy_ok)
-                    {
-                        freeproc_creation_failed(np);
-                        np->_lock.release();
-                        return nullptr;
-                    }
-                }
-            }
         }
 
         if (flags & syscall::CLONE_CHILD_SETTID)
@@ -2992,10 +3032,6 @@ namespace proc
                     np->_lock.release();
                     return nullptr; // EFAULT: Bad address
                 }
-            }
-            else
-            {
-                printfRed("fork: ctid is 0, CLONE_CHILD_SETTID will not set tid\n");
             }
         }
         if (flags & syscall::CLONE_CHILD_CLEARTID)
@@ -3023,7 +3059,7 @@ namespace proc
             np->_parent->_has_child_tasks = true;
         }
 
-        np->_state = ProcState::RUNNABLE;
+        k_scheduler.set_task_state(*np, ProcState::RUNNABLE);
 
         return np;
     }
@@ -3508,11 +3544,11 @@ namespace proc
                 // futex_wait 以 _futex_key 作为被唤醒/重试的判据。线程组正在终止时，
                 // 必须打断这个等待状态，否则 pthread_join 一类路径可能被唤醒后又睡回去。
                 p->_futex_addr = nullptr;
-                p->_futex_key = 0;
+                p->_futex_key.store(0, eastl::memory_order_release);
                 if (p->_state == ProcState::SLEEPING ||
                     p->_state == ProcState::STOPPED)
                 {
-                    p->_state = ProcState::RUNNABLE;
+                    k_scheduler.set_task_state(*p, ProcState::RUNNABLE);
                 }
             }
             p->_lock.release();
@@ -3558,11 +3594,11 @@ namespace proc
                     {
                         sibling->_killed = 1;
                         sibling->_futex_addr = nullptr;
-                        sibling->_futex_key = 0;
+                        sibling->_futex_key.store(0, eastl::memory_order_release);
                         if (sibling->_state == ProcState::SLEEPING ||
                             sibling->_state == ProcState::STOPPED)
                         {
-                            sibling->_state = ProcState::RUNNABLE;
+                            k_scheduler.set_task_state(*sibling, ProcState::RUNNABLE);
                         }
                     }
                 }
@@ -3683,7 +3719,6 @@ namespace proc
         if (p == _init_proc)
             panic("init exiting"); // 保护机制：init 进程不能退出
 
-	        printfBlue("[exit_proc] proc %s pid %d exiting\n", p->_name, p->_pid);
 
         // 退出清理期间可能会触发文件回写/块设备 I/O，这些路径允许 sleep。
         // 因此不能长时间手工关中断；改用 _exiting 禁止 timer 抢占式 yield，
@@ -3756,7 +3791,7 @@ namespace proc
 
         // 清理线程相关资源
         p->_futex_addr = nullptr;  // 清空futex等待地址
-        p->_futex_key = 0;         // 清空futex匹配键
+        p->_futex_key.store(0, eastl::memory_order_release); // 清空futex匹配键
         p->_robust_list = nullptr; // 清空健壮futex链表
         p->_robust_list_user_addr = 0;
 
@@ -3765,8 +3800,6 @@ namespace proc
         p->_lock.acquire();
 
         const bool is_thread_group_member = p->_pid != p->_tid;
-        const int exiting_pid = p->_pid;
-        const int exiting_tid = p->_tid;
 
         if (is_thread_group_member)
         {
@@ -3774,20 +3807,19 @@ namespace proc
             // clear_child_tid 的清零和 futex wake。上面已经完成 clear_tid、robust
             // futex、mm/fd/sighand 引用释放，所以这里可以直接把非主线程 PCB 归还，
             // 避免短生命周期线程堆积为不可回收僵尸。
-            p->_state = ProcState::ZOMBIE;
+            k_scheduler.set_task_state(*p, ProcState::ZOMBIE);
             // exec leader 可能正在等待本线程释放共享 mm/fd，回收前按 tgid 唤醒它。
             wakeup_child_waiters(p);
             freeproc(p);
             _wait_lock.release();
             Cpu::pop_intr_off();
 
-            printfYellow("[exit_proc] thread pid %d tid %d auto-reaped\n", exiting_pid, exiting_tid);
             k_scheduler.call_sched(); // jump to schedular, never return
             panic("zombie exit");
         }
 
         // 设置ZOMBIE状态（不设置xstate，由调用者负责）
-        p->_state = ProcState::ZOMBIE; // 标记为 zombie，等待父进程回收
+        k_scheduler.set_task_state(*p, ProcState::ZOMBIE); // 标记为 zombie，等待父进程回收
         if (p->_vfork_parent != nullptr)
         {
             p->_vfork_parent = nullptr;
@@ -3859,8 +3891,6 @@ namespace proc
         _wait_lock.release();
         Cpu::pop_intr_off();
 
-        printfYellow("[exit_proc] proc %s pid %d became zombie, memory freed\n", p->_name, p->_pid);
-
         k_scheduler.call_sched(); // jump to schedular, never return
         panic("zombie exit");
     }
@@ -3872,8 +3902,6 @@ namespace proc
     {
         // 设置正常退出状态
         p->_xstate = state << 8; // 存储退出状态（通常高字节存状态）
-
-        printfBlue("[do_exit] proc %s pid %d exiting with state %d\n", p->_name, p->_pid, state);
 
         // 调用底层退出逻辑
         exit_proc(p);
@@ -3892,9 +3920,6 @@ namespace proc
         {
             p->_xstate |= 0x80; // 第8位设置core dump标志
         }
-
-        printfBlue("[do_signal_exit] proc %s pid %d killed by signal %d (coredump=%s)\n",
-                   p->_name, p->_pid, signal_num, coredump ? "yes" : "no");
 
         mark_thread_group_killed(p, signal_num);
 
@@ -3963,8 +3988,6 @@ namespace proc
     void ProcessManager::exit(int state)
     {
         Pcb *p = get_cur_pcb();
-        printfBlue("[exit] proc %s pid %d tid %d exiting with state %d\n",
-                   p->_name, p->_pid, p->_tid, state);
         do_exit(p, state);
     }
 
@@ -3996,7 +4019,7 @@ namespace proc
         p->_stop_signal = signal_num;
         p->_stop_reported = false;
         p->_continued_pending = false;
-        p->_state = ProcState::STOPPED;
+        k_scheduler.set_task_state(*p, ProcState::STOPPED);
 
         // waitpid(WUNTRACED)/waitid(WSTOPPED) 睡在父进程自身地址上。
         // 在进入调度器前唤醒父进程，确保停止事件不会丢失。
@@ -4020,19 +4043,21 @@ namespace proc
         // printfCyan("[sleep]proc %s : sleep on chan: %p\n", p->_name, chan);
 
         p->_lock.acquire();
+        // 在释放条件锁前发布 channel。wakeup() 先按原子 channel 筛选候选者，
+        // 再阻塞获取候选 PCB 锁；这个顺序保留了 sleep/wakeup 的防丢唤醒契约，
+        // 同时避免唤醒端为无关的 RUNNING/USED PCB 建立跨锁依赖。
+        p->_chan.store(chan, eastl::memory_order_release);
+        k_scheduler.set_task_state(*p, ProcState::SLEEPING);
         lock->release();
-        // go to sleep
-        p->_chan = chan;
-        p->_state = ProcState::SLEEPING;
         // 信号可能恰好在调用方检查 pending 之后、真正挂起之前到达。
         // 这里在持有 p->_lock 且已经登记 sleep channel 后再补一次检查，
         // 避免 SIGALRM/pthread_cancel 等可中断等待丢掉唯一一次唤醒。
         if (ipc::signal::should_interrupt_blocking_syscall(p))
         {
-            p->_state = ProcState::RUNNABLE;
+            k_scheduler.set_task_state(*p, ProcState::RUNNABLE);
         }
         k_scheduler.call_sched();
-        p->_chan = 0;
+        p->_chan.store(nullptr, eastl::memory_order_release);
 
         p->_lock.release();
         lock->acquire();
@@ -4042,19 +4067,28 @@ namespace proc
         for_each_active_pcb(*this, [&](Pcb &entry)
         {
             Pcb *p = &entry;
-            if (p != k_pm.get_cur_pcb())
+            if (p != k_pm.get_cur_pcb() &&
+                p->_chan.load(eastl::memory_order_acquire) == chan)
             {
-                p->_lock.acquire();
+                // 只为已发布目标 channel 的任务取锁。睡眠者在释放条件锁前
+                // 已经发布 channel 且持有自身 PCB 锁，所以这里若撞上入睡窗口，
+                // 会等待其完成状态提交；不会丢唤醒。无关 PCB 完全不参与锁序，
+                // 避免多个 fork/mmap 线程各持一个子 PCB 时形成 ABBA 环。
+                const bool acquired_lock = p->_lock.acquire_unless_held();
                 int wake_cpu = -1;
-                if (p->_state == ProcState::SLEEPING && p->_chan == chan)
+                if (p->_state == ProcState::SLEEPING &&
+                    p->_chan.load(eastl::memory_order_relaxed) == chan)
                 {
-                    p->_state = ProcState::RUNNABLE;
+                    k_scheduler.set_task_state(*p, ProcState::RUNNABLE);
                     wake_cpu = p->_last_cpu;
                 }
-                p->_lock.release();
+                if (acquired_lock)
+                {
+                    p->_lock.release();
+                }
                 if (wake_cpu >= 0)
                 {
-                    hal::tlb::kick_cpu(static_cast<uint64>(wake_cpu));
+                    hal::smp::kick_cpu(static_cast<uint64>(wake_cpu));
                 }
             }
             return true;
@@ -4063,22 +4097,32 @@ namespace proc
 
     void ProcessManager::wakeup_one(Pcb *target, void *chan)
     {
-        if (target == nullptr || target == k_pm.get_cur_pcb() || target->_state == ProcState::UNUSED)
+        if (target == nullptr || target == k_pm.get_cur_pcb())
         {
             return;
         }
 
-        target->_lock.acquire();
-        int wake_cpu = -1;
-        if (target->_state == ProcState::SLEEPING && target->_chan == chan)
+        if (target->_chan.load(eastl::memory_order_acquire) != chan)
         {
-            target->_state = ProcState::RUNNABLE;
+            return;
+        }
+
+        const bool acquired_lock = target->_lock.acquire_unless_held();
+        int wake_cpu = -1;
+        if (target->_state != ProcState::UNUSED &&
+            target->_state == ProcState::SLEEPING &&
+            target->_chan.load(eastl::memory_order_relaxed) == chan)
+        {
+            k_scheduler.set_task_state(*target, ProcState::RUNNABLE);
             wake_cpu = target->_last_cpu;
         }
-        target->_lock.release();
+        if (acquired_lock)
+        {
+            target->_lock.release();
+        }
         if (wake_cpu >= 0)
         {
-            hal::tlb::kick_cpu(static_cast<uint64>(wake_cpu));
+            hal::smp::kick_cpu(static_cast<uint64>(wake_cpu));
         }
     }
 
@@ -4093,7 +4137,7 @@ namespace proc
         for_each_active_pcb(*this, [&](Pcb &entry)
         {
             Pcb *waiter = &entry;
-            if (waiter->_tgid != parent_tgid)
+            if (waiter == k_pm.get_cur_pcb())
             {
                 return true;
             }
@@ -4103,7 +4147,29 @@ namespace proc
              * 同组线程共享可等待子进程集合，但不共享 PCB，因此逐个唤醒。
              * 带 __WNOTHREAD 的等待者也在其中；它醒来后会按选项重新筛选。
              */
-            wakeup_one(waiter, waiter);
+            if (waiter->_chan.load(eastl::memory_order_acquire) != waiter)
+            {
+                return true;
+            }
+
+            const bool acquired_lock = waiter->_lock.acquire_unless_held();
+            int wake_cpu = -1;
+            if (waiter->_state != ProcState::UNUSED &&
+                waiter->_tgid == parent_tgid &&
+                waiter->_state == ProcState::SLEEPING &&
+                waiter->_chan.load(eastl::memory_order_relaxed) == waiter)
+            {
+                k_scheduler.set_task_state(*waiter, ProcState::RUNNABLE);
+                wake_cpu = waiter->_last_cpu;
+            }
+            if (acquired_lock)
+            {
+                waiter->_lock.release();
+            }
+            if (wake_cpu >= 0)
+            {
+                hal::smp::kick_cpu(static_cast<uint64>(wake_cpu));
+            }
             return true;
         });
     }
@@ -4114,17 +4180,17 @@ namespace proc
         for_each_active_pcb(*this, [&](Pcb &entry)
         {
             Pcb *p = &entry;
-            // futex_wakeup() 调用本函数时已经持有全局 futex wait lock。
-            // 因此新的 waiter 不会在扫描过程中把 _futex_key 从 0 改成目标 key；
-            // 先用无锁 key 过滤掉绝大多数 PCB，可避免每次 clear_child_tid wake
-            // 都抢完整进程池的 PCB 锁。命中后仍在 PCB 锁内复核状态，保持唤醒语义。
-            if (p->_futex_key != futex_key)
+            // futex_wakeup() 调用本函数时已经持有全局 futex wait lock，因此新的
+            // waiter 不能在扫描中完成“比较值并登记”。key 由等待者原子发布；
+            // 先用原子 key 过滤绝大多数 PCB，可避免每次 clear_child_tid wake 都
+            // 抢完整进程池的 PCB 锁。命中后仍在 PCB 锁内复核状态，保持唤醒语义。
+            if (p->_futex_key.load(eastl::memory_order_acquire) != futex_key)
             {
                 return true;
             }
-            p->_lock.acquire();
+            const bool acquired_lock = p->_lock.acquire_unless_held();
             int wake_cpu = -1;
-            bool is_futex_waiter = p->_futex_key == futex_key &&
+            bool is_futex_waiter = p->_futex_key.load(eastl::memory_order_relaxed) == futex_key &&
                                    (p->_state == SLEEPING || p->_state == RUNNABLE);
             if (is_futex_waiter)
             {
@@ -4137,35 +4203,38 @@ namespace proc
                     if (count1 < val)
                     {
                         p->_futex_addr = 0;
-                        p->_futex_key = 0;
+                        p->_futex_key.store(0, eastl::memory_order_release);
                         count1++;
                     }
                     else if (uaddr2 && count2 < val2)
                     {
                         p->_futex_addr = uaddr2;
-                        p->_futex_key = futex_key2;
+                        p->_futex_key.store(futex_key2, eastl::memory_order_release);
                         count2++;
                     }
                 }
                 else if (count1 < val)
                 {
-                    p->_state = RUNNABLE;
+                    k_scheduler.set_task_state(*p, RUNNABLE);
                     wake_cpu = p->_last_cpu;
                     p->_futex_addr = 0;
-                    p->_futex_key = 0;
+                    p->_futex_key.store(0, eastl::memory_order_release);
                     count1++;
                 }
                 else if (uaddr2 && count2 < val2)
                 {
                     p->_futex_addr = uaddr2;
-                    p->_futex_key = futex_key2;
+                    p->_futex_key.store(futex_key2, eastl::memory_order_release);
                     count2++;
                 }
             }
-            p->_lock.release();
+            if (acquired_lock)
+            {
+                p->_lock.release();
+            }
             if (wake_cpu >= 0)
             {
-                hal::tlb::kick_cpu(static_cast<uint64>(wake_cpu));
+                hal::smp::kick_cpu(static_cast<uint64>(wake_cpu));
             }
 
             // 检查是否已经完成所需的唤醒和重排队操作
@@ -4676,7 +4745,6 @@ namespace proc
             p->_cwd_name += "/";
         }
 
-        printfCyan("[chdir] Changed directory to: %s", p->_cwd_name.c_str());
         return 0;
     }
     /// @brief 获取当前进程的工作目录路径。get current working directory
@@ -5435,12 +5503,7 @@ namespace proc
         MemoryLockGuard memory_guard(memory_mgr);
         int result = memory_mgr->unmap_memory_range(addr, length);
 
-        if (result == 0)
-        {
-            printfGreen("[munmap] Successfully unmapped range [%p, %p)\n",
-                        addr, (void *)((uint64)addr + PGROUNDUP(length)));
-        }
-        else
+        if (result != 0)
         {
             printfRed("[munmap] Failed to unmap range [%p, %p)\n",
                       addr, (void *)((uint64)addr + PGROUNDUP(length)));
@@ -6121,7 +6184,7 @@ namespace proc
         // ========== 第一阶段：路径解析和文件查找 ==========
 
         // 构建绝对路径
-        // TODO: 这个解析路径写的太狗屎了，换一下
+        // 解析相对路径，并在每次 shebang/包装器重定向后重新规范化。
         if (path == "/usr/local/bin/open12_child")
         {
             path = "/musl/ltp/testcases/bin/open12_child";
@@ -6414,7 +6477,6 @@ namespace proc
                 ph = main_program_headers[i];
                 if (ph.type == elf::elfEnum::ELF_PROG_INTERP) // PT_INTERP = 3
                 {
-                    // TODO, noderead在basic有时候乱码，故在下面设置interp_de = de;跳过动态链接
                     is_dynamic = true;
                     // 读取解释器路径
                     char interp_buf[256];
@@ -6899,18 +6961,6 @@ namespace proc
                 close_exec_file(interpreter_exec_file);
             }
 
-            // **新增：段加载完成后的统计信息**
-            int total_sections = new_mm->prog_section_count;
-            // 使用ProcessMemoryManager的公有成员来打印段信息
-            for (int i = 0; i < total_sections; i++)
-            {
-                const program_section_desc *section = &new_mm->prog_sections[i];
-                printfCyan("  [%d] %s: %p - %p (size: %p)\n",
-                           i, section->_debug_name ? section->_debug_name : "unnamed",
-                           section->_sec_start,
-                           (void *)((uint64)section->_sec_start + section->_sec_size),
-                           (void *)section->_sec_size);
-            }
         }
         // printfPink("checkpoint 8\n");
         // ========== 第五阶段：分配用户栈空间 ==========
@@ -7175,8 +7225,6 @@ namespace proc
             ADD_AUXV(AT_NULL, 0); // 结束标记
 
             // printf("index: %d\n", index);
-            printfCyan("[execve] base: %p, phdr: %p\n", (void *)interp_base, (void *)phdr);
-
             // 将辅助向量复制到栈上
             sp -= k_auxv_scratch_bytes;
             if (mem::k_vmm.copy_out(new_pt, sp, (char *)aux, k_auxv_scratch_bytes, new_mm) < 0)
@@ -7333,6 +7381,9 @@ namespace proc
 
 #ifdef RISCV
         proc->get_trapframe()->epc = entry_point;
+        proc->_used_fpu = false;
+        memset(proc->get_trapframe()->f, 0, sizeof(proc->get_trapframe()->f));
+        proc->get_trapframe()->fcsr = 0;
 #elif defined(LOONGARCH)
         proc->get_trapframe()->era = entry_point;
         proc->_used_fpu = false;

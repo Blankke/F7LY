@@ -20,7 +20,6 @@
 #include "proc/proc.hh"
 #include "proc_manager.hh"
 #include "sys/syscall_defs.hh"
-#include "shm/shm_manager.hh"
 #include "net/drivers/virtio_net.hh"
 #include "fs/vfs/vfs_utils.hh"
 #include "fs/vfs/virtual_fs.hh"
@@ -58,8 +57,6 @@ namespace mem
         }
 
 #ifdef RISCV
-        constexpr uint64 k_riscv_pte_cow = 1UL << 8; // RSW bit 0，硬件忽略，软件用于 COW。
-
         inline bool pte_is_cow(Pte &pte)
         {
             return !pte.is_null() &&
@@ -1087,9 +1084,6 @@ namespace mem
             }
 
             // 从文件读取数据
-            printfCyan("[allocate_vma_page] reading from file %s at offset %d (file_size=%lu)\n",
-                       vf->_path_name.c_str(), offset, file_size);
-
             int readbytes = vf->read((uint64)pa, PGSIZE, offset, false);
             if (readbytes < 0)
             {
@@ -1103,13 +1097,7 @@ namespace mem
                 // 文件短页必须按 mmap 语义补零；完整文件页不需要预先清零，
                 // 否则 lmbench 的 pagefault/mmap 会在每次缺页上多刷一遍 4K。
                 memset((char *)pa + readbytes, 0, PGSIZE - readbytes);
-                printfYellow("[allocate_vma_page] partial page read (%d bytes)\n", readbytes);
             }
-        }
-        else
-        {
-            // try_alloc_page() 已保证匿名页为全零，禁止在缺页热路径重复清零。
-            printfCyan("[allocate_vma_page] handling anonymous mapping at %p\n", va);
         }
 
         // 在本线程分配/读盘期间，另一个线程可能已经把同一页补好了。
@@ -1187,8 +1175,6 @@ namespace mem
         invalidate_loongarch_user_page_pair(page_va);
 #endif
 
-        printfGreen("[allocate_vma_page] successfully mapped page at va=%p, pa=%p, pte_flags=0x%x\n",
-                    page_va, pa, pte_flags);
         return 0;
     }
 
@@ -1344,22 +1330,21 @@ namespace mem
 #endif
     }
 
-    int VirtualMemoryManager::resolve_cow_page(PageTable &pt, uint64 va)
+    int VirtualMemoryManager::resolve_cow_page(PageTable &pt,
+                                               uint64 va,
+                                               proc::ProcessMemoryManager *target_mm)
     {
         uint64 page_va = PGROUNDDOWN(va);
         Pte pte = pt.walk(page_va, false);
-        proc::Pcb *cur = proc::k_pm.get_cur_pcb();
         proc::vma *cow_vm = nullptr;
         uint64 cow_page_index = 0;
         bool object_private_mapping = false;
         bool overlay_owned_by_area = false;
 
-        if (cur != nullptr &&
-            cur->get_memory_manager() != nullptr &&
-            cur->get_pagetable() != nullptr &&
-            cur->get_pagetable()->get_base() == pt.get_base())
+        target_mm = resolve_target_mm(pt, target_mm);
+        if (target_mm != nullptr)
         {
-            cow_vm = cur->get_memory_manager()->find_vma_covering(page_va);
+            cow_vm = target_mm->find_vma_covering(page_va);
             if (cow_vm != nullptr &&
                 cow_vm->object != nullptr &&
                 cow_vm->is_private_mapping())
@@ -1634,13 +1619,14 @@ namespace mem
         return pt;
     }
 
-    int VirtualMemoryManager::vm_copy(PageTable &old_pt, PageTable &new_pt, uint64 start, uint64 size)
+    int VirtualMemoryManager::vm_copy(PageTable &old_pt,
+                                      PageTable &new_pt,
+                                      uint64 start,
+                                      uint64 size,
+                                      bool defer_parent_tlb_flush,
+                                      eastl::vector<proc::CowRollbackRange> *rollback_ranges)
     {
-        Pte pte;
-        uint64 pa, va;
         uint64 va_end;
-        uint64 flags;
-        void *mem;
 
         if (size == 0)
         {
@@ -1661,116 +1647,243 @@ namespace mem
                          (void *)start, (void *)size, (void *)copy_start, (void *)va_end);
         }
 
-#if defined(RISCV) || defined(LOONGARCH)
         bool parent_cow_changed = false;
-#endif
-
-        for (va = copy_start; va < va_end; va += PGSIZE)
+        eastl::vector<proc::CowRollbackRange> local_rollback_ranges;
+        auto record_parent_cow_change = [&](uint64 changed_va)
         {
-            if ((pte = old_pt.walk(va, false)).is_null())
+            auto append_range = [&](eastl::vector<proc::CowRollbackRange> &ranges)
             {
-                continue;
-            }
-            if (pte.is_valid() == 0)
-                continue;
-            ///@brief 这里的逻辑是，如果pte无效，则不需要释放物理页
-            /// TODO: 为了mmap的懒分配，所以确实可能出现了惰性页面调用
-            // panic("uvmcopy: page not valid");
-            pa = (uint64)pte.pa();
-            flags = pte.get_flags();
-
-            // 检查当前虚拟地址是否属于共享内存区域
-            void *shm_start_addr = nullptr;
-            size_t shm_size = 0;
-            int is_shared = shm::k_smm.find_shared_memory_segment((void *)va, &shm_start_addr, &shm_size);
-
-            if (is_shared >= 0)
-            {
-                // 对于共享内存，直接复用原物理地址，不分配新页面
-                printfCyan("[vm_copy] Sharing memory for VA=%p -> PA=%p (shared memory)\n", va, pa);
-                if (map_pages(new_pt, va, PGSIZE, pa, flags) == false)
+                if (!ranges.empty() && ranges.back().end == changed_va)
                 {
-                    vmunmap(new_pt, 0, va / PGSIZE, 1);
-                    return -1;
+                    ranges.back().end += PGSIZE;
+                    return;
                 }
+                ranges.push_back(proc::CowRollbackRange{
+                    .start = changed_va,
+                    .end = changed_va + PGSIZE,
+                });
+            };
+            append_range(local_rollback_ranges);
+            if (rollback_ranges != nullptr)
+            {
+                append_range(*rollback_ranges);
+            }
+        };
+        auto fail_copy = [&]() -> int
+        {
+            /*
+             * 子页表已经由各失败分支撤销。只恢复本次调用中“原本可写、随后被
+             * 降级为 COW”的父 PTE；不能用物理页引用计数推断权限，因为同一 mm
+             * 内的别名页本来就可能有多个映射引用。
+             */
+            bool restored = false;
+            for (const proc::CowRollbackRange &range : local_rollback_ranges)
+            {
+                for (uint64 rollback_va = range.start;
+                     rollback_va < range.end;
+                     rollback_va += PGSIZE)
+                {
+                    Pte rollback_pte = old_pt.walk(rollback_va, false);
+                    if (rollback_pte.is_null() || !rollback_pte.is_valid())
+                    {
+                        continue;
+                    }
+#ifdef RISCV
+                    const uint64 rollback_data = rollback_pte.get_data();
+                    if ((rollback_data & k_riscv_pte_cow) != 0)
+                    {
+                        rollback_pte.set_data(
+                            (rollback_data | riscv::PteEnum::pte_writable_m) &
+                            ~k_riscv_pte_cow);
+                        restored = true;
+                    }
+#elif defined(LOONGARCH)
+                    const uint64 rollback_data = rollback_pte.get_data();
+                    if ((rollback_data & PTE_COW) != 0)
+                    {
+                        rollback_pte.set_data(
+                            (rollback_data | PTE_W | PTE_D) & ~PTE_COW);
+                        restored = true;
+                    }
+#endif
+                }
+            }
+            // 即使调用方要求批量失效，失败也会立刻返回到清理路径；此时必须
+            // 先撤销父页表中可能仍被旧 TLB 视为可写的翻译，不能把责任留给调用方。
+            if (restored)
+            {
+                hal::tlb::flush_range_all_cpus(copy_start, va_end - copy_start);
+            }
+            return -1;
+        };
+
+        constexpr uint32 k_cow_retain_batch_pages = 32;
+        struct CowCopyCandidate
+        {
+            Pte pte;
+            uint64 va = 0;
+            uint64 pa = 0;
+            uint64 flags = 0;
+            void *old_page = nullptr;
+        };
+
+        for (uint64 batch_start = copy_start; batch_start < va_end;)
+        {
+            const uint64 pages_left = (va_end - batch_start) / PGSIZE;
+            const uint64 batch_pages = pages_left > k_cow_retain_batch_pages
+                                           ? k_cow_retain_batch_pages
+                                           : pages_left;
+            const uint64 batch_end = batch_start + batch_pages * PGSIZE;
+            CowCopyCandidate candidates[k_cow_retain_batch_pages];
+            void *pages_to_retain[k_cow_retain_batch_pages];
+            uint32 candidate_count = 0;
+
+            for (uint64 scan_va = batch_start; scan_va < batch_end; scan_va += PGSIZE)
+            {
+                Pte scan_pte = old_pt.walk(scan_va, false);
+                if (scan_pte.is_null() || !scan_pte.is_valid())
+                {
+                    continue;
+                }
+
+                CowCopyCandidate &candidate = candidates[candidate_count];
+                candidate.pte = scan_pte;
+                candidate.va = scan_va;
+                candidate.pa = reinterpret_cast<uint64>(scan_pte.pa());
+                candidate.flags = scan_pte.get_flags();
+                candidate.old_page = page_pa_to_kernel_ptr(candidate.pa);
+                pages_to_retain[candidate_count] = candidate.old_page;
+                ++candidate_count;
+            }
+
+            /*
+             * 共享映射已经由 ProcessMemoryManager 按 VMA/VmObject 整段处理。
+             * vm_copy 只覆盖私有页，并把同一小批页的 PMM 引用计数放在一次
+             * 临界区内完成。大进程 fork 不再为每个 4K 页竞争一次 PMM 锁。
+             */
+            uint64 retained_mask = 0;
+            if (defer_parent_tlb_flush)
+            {
+                // defer 只允许地址空间唯一持有者使用，此时这一批 PTE 在扫描和
+                // retain 之间不会被其他线程拆除，可以安全地缩短 PMM 锁次数。
+                retained_mask =
+                    k_pmm.retain_pages_batch(pages_to_retain, candidate_count);
             }
             else
             {
-#ifdef RISCV
-                void *old_page = page_pa_to_kernel_ptr(pa);
-                if (k_pmm.is_managed_page(old_page) && k_pmm.retain_page(old_page))
+                // 多线程共享 mm 的 fork 保持逐页 retain；现有即时 TLB 失效语义
+                // 同样保留，避免批量窗口放大与并发 munmap/page fault 的竞争。
+                for (uint32 index = 0; index < candidate_count; ++index)
+                {
+                    if (k_pmm.retain_page(pages_to_retain[index]))
+                    {
+                        retained_mask |= 1ULL << index;
+                    }
+                }
+            }
+            auto release_unconsumed_retains = [&](uint32 first)
+            {
+                for (uint32 pending = first; pending < candidate_count; ++pending)
+                {
+                    if ((retained_mask & (1ULL << pending)) != 0)
+                    {
+                        k_pmm.free_page(candidates[pending].old_page);
+                    }
+                }
+            };
+
+            for (uint32 index = 0; index < candidate_count; ++index)
+            {
+                CowCopyCandidate &candidate = candidates[index];
+                Pte pte = candidate.pte;
+                const uint64 va = candidate.va;
+                const uint64 pa = candidate.pa;
+                const uint64 flags = candidate.flags;
+                void *old_page = candidate.old_page;
+
+                if ((retained_mask & (1ULL << index)) != 0)
                 {
                     uint64 child_flags = flags;
                     uint64 original_data = pte.get_data();
+#ifdef RISCV
                     if ((flags & riscv::PteEnum::pte_writable_m) != 0 ||
                         (flags & k_riscv_pte_cow) != 0)
                     {
                         child_flags = (flags & ~riscv::PteEnum::pte_writable_m) | k_riscv_pte_cow;
                         if ((flags & riscv::PteEnum::pte_writable_m) != 0)
                         {
+                            record_parent_cow_change(va);
                             pte.set_data((original_data & ~riscv::PteEnum::pte_writable_m) |
                                          k_riscv_pte_cow);
                             parent_cow_changed = true;
+                            if (!defer_parent_tlb_flush)
+                            {
+                                hal::tlb::flush_range_all_cpus(va, PGSIZE);
+                            }
                         }
                     }
-
-                    if (map_pages(new_pt, va, PGSIZE, pa, child_flags) == false)
-                    {
-                        k_pmm.free_page(old_page);
-                        pte.set_data(original_data);
-                        vmunmap(new_pt, 0, va / PGSIZE, 1);
-                        return -1;
-                    }
-                    continue;
-                }
 #elif defined(LOONGARCH)
-                void *old_page = page_pa_to_kernel_ptr(pa);
-                if (k_pmm.is_managed_page(old_page) && k_pmm.retain_page(old_page))
-                {
-                    uint64 child_flags = flags;
-                    uint64 original_data = pte.get_data();
                     if ((flags & (PTE_W | PTE_D)) != 0 || (original_data & PTE_COW) != 0)
                     {
                         child_flags = (flags & ~(PTE_W | PTE_D)) | PTE_COW;
                         if ((flags & (PTE_W | PTE_D)) != 0)
                         {
                             // 父子页表都降为只读 COW，之后由写异常拆页。
+                            record_parent_cow_change(va);
                             pte.set_data((original_data & ~(PTE_W | PTE_D)) | PTE_COW);
                             parent_cow_changed = true;
+                            if (!defer_parent_tlb_flush)
+                            {
+                                hal::tlb::flush_range_all_cpus(va, PGSIZE);
+                            }
                         }
                     }
+#endif
 
-                    if (map_pages(new_pt, va, PGSIZE, pa, child_flags) == false)
+                    if (!map_pages(new_pt, va, PGSIZE, pa, child_flags))
                     {
                         k_pmm.free_page(old_page);
                         pte.set_data(original_data);
+                        release_unconsumed_retains(index + 1);
                         vmunmap(new_pt, 0, va / PGSIZE, 1);
-                        return -1;
+                        return fail_copy();
                     }
                     continue;
                 }
-#endif
-                // 对于普通内存，分配新页面并复制内容
-                if ((mem = mem::PhysicalMemoryManager::try_alloc_page_uninitialized()) == nullptr)
+
+                /*
+                 * 非 PMM 管理页无法引用计数，只能保留物理复制回退路径。
+                 * 受 PMM 管理的页若 retain 失败，则引用计数不是已经损坏为 0，
+                 * 就是到达 UINT16_MAX。此时逐映射复制会破坏父地址空间中的
+                 * 物理别名关系；fork 必须原子失败并由 fail_copy() 撤销父权限。
+                 */
+                if (k_pmm.is_managed_page(old_page))
                 {
+                    release_unconsumed_retains(index + 1);
                     vmunmap(new_pt, 0, va / PGSIZE, 1);
-                    return -1;
+                    return fail_copy();
                 }
-                memmove(mem, page_pa_to_kernel_ptr(pa), PGSIZE);
-                // printfYellow("[vm_copy] Copying memory for VA=%p -> new PA=%p (private memory)\n", va, (uint64)mem);
-                if (map_pages(new_pt, va, PGSIZE, (uint64)mem, flags) == false)
+
+                void *new_page = mem::PhysicalMemoryManager::try_alloc_page_uninitialized();
+                if (new_page == nullptr)
                 {
-                    k_pmm.free_page(mem);
+                    release_unconsumed_retains(index + 1);
                     vmunmap(new_pt, 0, va / PGSIZE, 1);
-                    return -1;
+                    return fail_copy();
+                }
+                memmove(new_page, old_page, PGSIZE);
+                if (!map_pages(new_pt, va, PGSIZE, reinterpret_cast<uint64>(new_page), flags))
+                {
+                    k_pmm.free_page(new_page);
+                    release_unconsumed_retains(index + 1);
+                    vmunmap(new_pt, 0, va / PGSIZE, 1);
+                    return fail_copy();
                 }
             }
+
+            batch_start = batch_end;
         }
-        if (parent_cow_changed)
-        {
-            hal::tlb::flush_all_cpus();
-        }
-        return 0;
+        return parent_cow_changed ? 1 : 0;
     }
 
     void VirtualMemoryManager::uvmclear(PageTable &pt, uint64 va)

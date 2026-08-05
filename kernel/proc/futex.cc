@@ -14,14 +14,32 @@ namespace
     constexpr long k_nsec_per_sec = 1000000000L;
     constexpr uint64 k_futex_key_invalid = 0;
     SpinLock g_futex_wait_lock;
-    bool g_futex_wait_lock_ready = false;
+    eastl::atomic<uint32> g_futex_wait_lock_state{0};
 
     void ensure_futex_wait_lock_ready()
     {
-        if (!g_futex_wait_lock_ready)
+        constexpr uint32 k_uninitialized = 0;
+        constexpr uint32 k_initializing = 1;
+        constexpr uint32 k_ready = 2;
+        if (g_futex_wait_lock_state.load(eastl::memory_order_acquire) == k_ready)
+        {
+            return;
+        }
+
+        uint32 expected = k_uninitialized;
+        if (g_futex_wait_lock_state.compare_exchange_strong(
+                expected, k_initializing, eastl::memory_order_acq_rel))
         {
             g_futex_wait_lock.init("futex_wait_lock");
-            g_futex_wait_lock_ready = true;
+            g_futex_wait_lock_state.store(k_ready, eastl::memory_order_release);
+            return;
+        }
+
+        // 多个 pthread 可能在不同 CPU 上同时发出进程内第一个 futex；只允许
+        // 一个 CPU 初始化锁对象，其余 CPU 等待发布，避免重复清零已持有的锁。
+        while (g_futex_wait_lock_state.load(eastl::memory_order_acquire) != k_ready)
+        {
+            asm volatile("nop");
         }
     }
 
@@ -104,19 +122,32 @@ namespace proc
     {
         Pcb *p = k_pm.get_cur_pcb();
 
-        p->_chan = chan;
+        p->_chan.store(chan, eastl::memory_order_release);
         p->_futex_addr = futex_addr;
-        p->_futex_key = futex_key;
-        p->_state = SLEEPING;
+        p->_futex_key.store(futex_key, eastl::memory_order_release);
+        proc::k_scheduler.set_task_state(*p, proc::SLEEPING);
 
         k_scheduler.call_sched();
 
-        p->_chan = 0;
+        p->_chan.store(nullptr, eastl::memory_order_release);
         if (ipc::signal::has_fatal_signal_pending(p) || ipc::signal::has_unmasked_signal_pending(p))
         {
             p->_futex_addr = 0;
-            p->_futex_key = 0;
+            p->_futex_key.store(0, eastl::memory_order_release);
         }
+    }
+
+    static void acquire_futex_wait_interlock(Pcb *p, SpinLock &interlock)
+    {
+        /*
+         * futex 队列锁与 PCB 锁统一采用 interlock -> p->_lock 的顺序。
+         * 调用者原本持有当前 PCB 锁；必须先释放它，再取得队列锁并重新
+         * 锁住 PCB。释放窗口内发生的 WAKE 不会丢失，因为当前线程尚未
+         * 发布 futex key，随后仍会在队列锁内重新读取用户值。
+         */
+        p->_lock.release();
+        interlock.acquire();
+        p->_lock.acquire();
     }
 
     static void futex_sleep_with_interlock(void *chan, void *futex_addr, uint64 futex_key, SpinLock &interlock)
@@ -126,7 +157,7 @@ namespace proc
         // futex WAIT 的“比较值”和“入睡”必须与 FUTEX_WAKE 串行化，
         // 否则 wake 可能刚好发生在两者之间，最终把等待线程永远丢在睡眠队列里。
         p->_futex_addr = futex_addr;
-        p->_futex_key = futex_key;
+        p->_futex_key.store(futex_key, eastl::memory_order_release);
 
         // 进入调度器必须只持有当前进程锁。这里复用统一 sleep 原语，
         // 它会在持有 p->_lock 后释放 futex interlock，避免手写 call_sched()
@@ -139,7 +170,7 @@ namespace proc
         if (ipc::signal::has_fatal_signal_pending(p) || ipc::signal::has_unmasked_signal_pending(p))
         {
             p->_futex_addr = 0;
-            p->_futex_key = 0;
+            p->_futex_key.store(0, eastl::memory_order_release);
         }
     }
 
@@ -156,7 +187,7 @@ namespace proc
 
         auto clear_wait_state = [&]() {
             p->_futex_addr = 0;
-            p->_futex_key = 0;
+            p->_futex_key.store(0, eastl::memory_order_release);
         };
 
         auto load_and_resolve = [&](uint64 &futex_key) -> int {
@@ -258,7 +289,7 @@ namespace proc
                     return syscall::SYS_ETIMEDOUT;
                 }
 
-                g_futex_wait_lock.acquire();
+                acquire_futex_wait_interlock(p, g_futex_wait_lock);
                 uint64 futex_key = 0;
                 int load_ret = load_and_resolve(futex_key);
                 if (load_ret != 0)
@@ -274,7 +305,7 @@ namespace proc
                                            g_futex_wait_lock);
                 has_slept = true;
 
-                if (p->_futex_key == 0)
+                if (p->_futex_key.load(eastl::memory_order_acquire) == 0)
                 {
                     if (ipc::signal::has_fatal_signal_pending(p) ||
                         ipc::signal::has_unmasked_signal_pending(p))
@@ -290,7 +321,7 @@ namespace proc
 
         while (true)
         {
-            g_futex_wait_lock.acquire();
+            acquire_futex_wait_interlock(p, g_futex_wait_lock);
             uint64 futex_key = 0;
             int load_ret = load_and_resolve(futex_key);
             if (load_ret != 0)
@@ -315,7 +346,7 @@ namespace proc
                                        g_futex_wait_lock);
             has_slept = true;
 
-            if (p->_futex_key == 0)
+            if (p->_futex_key.load(eastl::memory_order_acquire) == 0)
             {
                 if (ipc::signal::has_fatal_signal_pending(p) || ipc::signal::has_unmasked_signal_pending(p))
                 {
@@ -430,7 +461,6 @@ namespace proc
                                     reinterpret_cast<uint64>(entry) + __builtin_offsetof(robust_list, next),
                                     &next_entry,
                                     &next_pi)) {
-                printf("[futex_cleanup] Failed to read next robust_list entry\n");
                 break;
             }
 
@@ -453,14 +483,8 @@ namespace proc
                             if ((futex_val & FUTEX_WAITERS) && !pi) {
                                 futex_wakeup(futex_addr, 1, nullptr, 0);
                             }
-                            printf("[futex_cleanup] Cleaned robust futex at 0x%lx\n", futex_addr);
                         }
-                    } else {
-                        printf("[futex_cleanup] Futex at 0x%lx not owned by current thread (tid=%d, futex_val=0x%x)\n", 
-                               futex_addr, tid, futex_val);
                     }
-                } else {
-                    printf("[futex_cleanup] Failed to read futex value at 0x%lx\n", futex_addr);
                 }
             }
 
@@ -488,15 +512,8 @@ namespace proc
                     {
                         futex_wakeup(futex_addr, 1, nullptr, 0);
                     }
-                    printf("[futex_cleanup] Cleaned pending robust futex at 0x%lx\n", futex_addr);
                 }
             }
         }
-        
-        if (count >= MAX_ROBUST_ENTRIES) {
-            printf("[futex_cleanup] Warning: Reached maximum robust_list entries limit\n");
-        }
-        
-        printf("[futex_cleanup] Cleaned %d robust futex entries\n", count);
     }
 }

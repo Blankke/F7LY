@@ -25,6 +25,9 @@ namespace fs
         eastl::vector<epoll_watch_entry> _watch_list;
         int _create_flags = 0;
         SpinLock _watch_lock;
+        // readiness 扫描的轮转起点；即使零超时只使用小型栈缓冲，也不会让
+        // 长期 level-triggered 的前几个 fd 饿死后续 watch。
+        size_t _scan_cursor = 0;
 
     public:
         explicit epoll_file(int create_flags = 0)
@@ -118,6 +121,7 @@ namespace fs
         void lock_watches() { _watch_lock.acquire(); }
         void unlock_watches() { _watch_lock.release(); }
         eastl::vector<epoll_watch_entry> &watch_list() { return _watch_list; }
+        size_t &scan_cursor() { return _scan_cursor; }
 
         eastl::vector<epoll_watch_entry> snapshot_watches()
         {

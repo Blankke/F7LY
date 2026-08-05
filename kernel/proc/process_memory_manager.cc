@@ -25,6 +25,7 @@
 #include "fs/vfs/vfs_utils.hh"
 #include "fs/vfs/virtual_fs.hh"
 #include "shm/shm_manager.hh"
+#include "hal/tlb_shootdown.hh"
 #include "vma_metadata_utils.hh"
 #include <EASTL/vector.h>
 
@@ -99,43 +100,85 @@ namespace proc
 #endif
         }
 
-        void wipe_child_vma_pages(mem::PageTable &child_pt, uint64 start, uint64 len)
+        bool wipe_child_vma_pages(ProcessMemoryManager &child_mm, uint64 start, uint64 len)
         {
             if (len == 0)
             {
-                return;
+                return true;
             }
 
             uint64 begin = PGROUNDDOWN(start);
             uint64 end = PGROUNDUP(start + len);
             if (end < begin)
             {
-                return;
+                return false;
             }
 
             for (uint64 va = begin; va < end; va += PGSIZE)
             {
-                mem::Pte pte = child_pt.walk(va, false);
+                mem::Pte pte = child_mm.pagetable.walk(va, false);
                 if (pte.is_null() || !pte.is_valid())
                 {
                     continue;
                 }
-                if (!pte.is_writable())
+
+                /*
+                 * MADV_WIPEONFORK 同样允许作用于只读的私有匿名映射。fork
+                 * 后可写页已经带 COW 位，而只读页只是普通共享只读 PTE；后者
+                 * 也必须先临时标成 COW，才能让统一拆页路径正确更新对象 overlay
+                 * 和物理页引用计数。清零完成后再恢复原来的逻辑权限，绝不能
+                 * 因内核写零而把用户只读页意外提升成可写页。
+                 */
+                const uint64 original_data = pte.get_data();
+#ifdef RISCV
+                const bool logically_writable =
+                    (original_data & (riscv::PteEnum::pte_writable_m |
+                                      mem::k_riscv_pte_cow)) != 0;
+                if ((original_data & mem::k_riscv_pte_cow) == 0)
                 {
-                    // fork COW 后 child 的私有页可能暂时只读；清零前必须先拆页，
-                    // 否则会把父进程共享的物理页也一起擦掉。
-                    if (mem::k_vmm.resolve_cow_page(child_pt, va) != 0)
-                    {
-                        continue;
-                    }
-                    pte = child_pt.walk(va, false);
-                    if (pte.is_null() || !pte.is_valid())
-                    {
-                        continue;
-                    }
+                    pte.set_data(original_data | mem::k_riscv_pte_cow);
+                }
+#elif defined(LOONGARCH)
+                const bool logically_writable =
+                    (original_data & (PTE_W | PTE_COW)) != 0;
+                if ((original_data & PTE_COW) == 0)
+                {
+                    pte.set_data(original_data | PTE_COW);
+                }
+#endif
+
+                if (mem::k_vmm.resolve_cow_page(child_mm.pagetable, va, &child_mm) != 0)
+                {
+                    return false;
+                }
+                pte = child_mm.pagetable.walk(va, false);
+                if (pte.is_null() || !pte.is_valid())
+                {
+                    return false;
                 }
                 memset(user_page_kernel_ptr((uint64)pte.pa()), 0, PGSIZE);
+
+#ifdef RISCV
+                uint64 final_data = pte.get_data() & ~mem::k_riscv_pte_cow;
+                if (logically_writable)
+                    final_data |= riscv::PteEnum::pte_writable_m;
+                else
+                    final_data &= ~riscv::PteEnum::pte_writable_m;
+                pte.set_data(final_data);
+#elif defined(LOONGARCH)
+                uint64 final_data = pte.get_data() & ~PTE_COW;
+                if (logically_writable)
+                    final_data |= PTE_W | PTE_D;
+                else
+                    final_data &= ~PTE_W;
+                pte.set_data(final_data);
+#endif
             }
+
+            // PTE 地址没有改变，但权限可能从临时可写恢复为只读；返回父/子进程
+            // 前必须让所有可能运行该 child mm 的 CPU 丢掉旧权限翻译。
+            hal::tlb::flush_range_all_cpus(begin, end - begin);
+            return true;
         }
 
         inline bool is_shared_backed_vma(const vma &entry)
@@ -504,7 +547,8 @@ namespace proc
 
 
     ProcessMemoryManager::ProcessMemoryManager()
-        : prog_section_count(0), heap_start(0), heap_end(0), mmap_cursor(0), shared_vm(false),
+        : prog_section_count(0), heap_start(0), heap_end(0), heap_high_watermark(0),
+          mmap_cursor(0), shared_vm(false),
           total_memory_size(0), ref_count(1)
     {
         // 初始化内存锁
@@ -779,7 +823,7 @@ namespace proc
             {
                 return -1;
             }
-            if (mem::k_vmm.resolve_cow_page(pagetable, page_va) == 0)
+            if (mem::k_vmm.resolve_cow_page(pagetable, page_va, this) == 0)
             {
                 return 0;
             }
@@ -935,12 +979,23 @@ namespace proc
         });
     }
 
-    bool ProcessMemoryManager::clone_private_vm_space_for_fork(ProcessMemoryManager &dst)
+    bool ProcessMemoryManager::clone_private_vm_space_for_fork(ProcessMemoryManager &dst,
+                                                                bool defer_parent_tlb_flush,
+                                                                bool &parent_cow_changed,
+                                                                eastl::vector<CowRollbackRange> &rollback_ranges)
     {
         bool copy_ok = true;
         if (!get_vm_space().for_each([&](const vma &entry) -> bool
         {
             if (!entry.valid_range())
+            {
+                return true;
+            }
+
+            // has_resident_pages 的 false 是“整段没有叶子映射”的强保证。
+            // Rust/LLVM 会保留很大的惰性文件映射与匿名地址区；fork 无需为它们
+            // 逐页 walk，也无需在 LoongArch 子页表中提前建立空层级。
+            if (!entry.has_resident_pages)
             {
                 return true;
             }
@@ -963,7 +1018,13 @@ namespace proc
                 return true;
             }
 
-            if (mem::k_vmm.vm_copy(pagetable, dst.pagetable, entry.addr, static_cast<uint64>(entry.len)) < 0)
+            int copy_result = mem::k_vmm.vm_copy(pagetable,
+                                                 dst.pagetable,
+                                                 entry.addr,
+                                                 static_cast<uint64>(entry.len),
+                                                 defer_parent_tlb_flush,
+                                                 &rollback_ranges);
+            if (copy_result < 0)
             {
                 printfRed("[clone_private_vm_space_for_fork] copy area failed kind=%d addr=%p len=%d name=%s\n",
                           static_cast<int>(entry.area_kind),
@@ -973,10 +1034,15 @@ namespace proc
                 copy_ok = false;
                 return false;
             }
+            parent_cow_changed |= copy_result > 0;
 
             if (entry.wipe_on_fork)
             {
-                wipe_child_vma_pages(dst.pagetable, entry.addr, static_cast<uint64>(entry.len));
+                if (!wipe_child_vma_pages(dst, entry.addr, static_cast<uint64>(entry.len)))
+                {
+                    copy_ok = false;
+                    return false;
+                }
             }
             return true;
         }))
@@ -1005,9 +1071,63 @@ namespace proc
             delete new_mgr;
             return nullptr;
         }
+        // 唯一持有者不可能在另一颗 CPU 上同时执行用户态写入，因此可把多个
+        // VMA 的同步 shootdown 合并为一次。多线程共享 mm 时仍保持逐段即时失效。
+        const bool defer_parent_tlb_flush = get_ref_count() == 1;
+        bool parent_cow_changed = false;
+        eastl::vector<CowRollbackRange> cow_rollback_ranges;
+        auto flush_deferred_parent_tlb = [&]()
+        {
+            if (defer_parent_tlb_flush && parent_cow_changed)
+            {
+                hal::tlb::flush_all_cpus();
+                parent_cow_changed = false;
+            }
+        };
+        auto restore_failed_fork_permissions = [&]() -> bool
+        {
+            bool restored = false;
+            for (const CowRollbackRange &range : cow_rollback_ranges)
+            {
+                for (uint64 va = range.start; va < range.end; va += PGSIZE)
+                {
+                    mem::Pte pte = pagetable.walk(va, false);
+                    if (pte.is_null() || !pte.is_valid())
+                    {
+                        continue;
+                    }
+#ifdef RISCV
+                    const uint64 data = pte.get_data();
+                    if ((data & mem::k_riscv_pte_cow) != 0)
+                    {
+                        pte.set_data((data | riscv::PteEnum::pte_writable_m) &
+                                     ~mem::k_riscv_pte_cow);
+                        restored = true;
+                    }
+#elif defined(LOONGARCH)
+                    const uint64 data = pte.get_data();
+                    if ((data & PTE_COW) != 0)
+                    {
+                        pte.set_data((data | PTE_W | PTE_D) & ~PTE_COW);
+                        restored = true;
+                    }
+#endif
+                }
+            }
+            return restored;
+        };
         auto cleanup_failed_clone = [&]()
         {
+            // 先释放所有子 PTE/overlay 引用，再精确撤销本次 fork 改过的父权限。
             new_mgr->emergency_cleanup();
+            const bool restored_parent_permissions = restore_failed_fork_permissions();
+            // 失败路径既可能撤销 COW，也可能保留原本已有共享者的 COW；一次
+            // 全核失效同时覆盖两者，保证父线程恢复执行前权限与页表一致。
+            if (parent_cow_changed || restored_parent_permissions)
+            {
+                hal::tlb::flush_all_cpus();
+            }
+            parent_cow_changed = false;
             delete new_mgr;
         };
         // printf("[clone_for_fork] start clone prog_section\n");
@@ -1031,6 +1151,7 @@ namespace proc
         // 复制堆信息
         new_mgr->heap_start = heap_start;
         new_mgr->heap_end = heap_end;
+        new_mgr->heap_high_watermark = heap_high_watermark;
         new_mgr->mmap_cursor = mmap_cursor;
 
         // 复制总内存大小
@@ -1049,7 +1170,10 @@ namespace proc
         // 先按新的 VMASpace 私有区域复制已驻留页，并统一降级到页级 COW。
         // 这样 execve 新迁入的 PT_LOAD/堆/用户栈不再依赖 prog_sections/heap 特判。
         bool copy_success = true;
-        if (!clone_private_vm_space_for_fork(*new_mgr))
+        if (!clone_private_vm_space_for_fork(*new_mgr,
+                                             defer_parent_tlb_flush,
+                                             parent_cow_changed,
+                                             cow_rollback_ranges))
         {
             copy_success = false;
         }
@@ -1091,6 +1215,11 @@ namespace proc
             }
             new_mgr->vma_data._vm[i].owner_mm = new_mgr;
 
+            if (!vma_data._vm[i].has_resident_pages)
+            {
+                continue;
+            }
+
 #ifdef LOONGARCH
             if (!new_mgr->ensure_user_pagetable_hierarchy(new_mgr->vma_data._vm[i].addr,
                                                           new_mgr->vma_data._vm[i].len))
@@ -1124,23 +1253,35 @@ namespace proc
                     continue;
                 }
 
-                if (mem::k_vmm.vm_copy(pagetable, new_mgr->pagetable, vma_start, vma_end - vma_start) < 0)
+                int copy_result = mem::k_vmm.vm_copy(pagetable,
+                                                     new_mgr->pagetable,
+                                                     vma_start,
+                                                     vma_end - vma_start,
+                                                     defer_parent_tlb_flush,
+                                                     &cow_rollback_ranges);
+                if (copy_result < 0)
                 {
                     printfRed("[clone_for_fork] copy VMA %d failed addr=%p len=%d\n",
                               i, (void *)vma_data._vm[i].addr, vma_data._vm[i].len);
                     cleanup_failed_clone();
                     return nullptr;
                 }
+                parent_cow_changed |= copy_result > 0;
 
                 if (vma_data._vm[i].wipe_on_fork)
                 {
-                    wipe_child_vma_pages(new_mgr->pagetable,
-                                         vma_data._vm[i].addr,
-                                         static_cast<uint64>(vma_data._vm[i].len));
+                    if (!wipe_child_vma_pages(*new_mgr,
+                                              vma_data._vm[i].addr,
+                                              static_cast<uint64>(vma_data._vm[i].len)))
+                    {
+                        cleanup_failed_clone();
+                        return nullptr;
+                    }
                 }
             }
         }
 
+        flush_deferred_parent_tlb();
         new_mgr->rebuild_vma_index();
 
         return new_mgr;
@@ -1236,6 +1377,7 @@ namespace proc
         // 重置堆信息
         heap_start = 0;
         heap_end = 0;
+        heap_high_watermark = 0;
         mmap_cursor = 0;
 
         // 重置总内存大小
@@ -1376,6 +1518,7 @@ namespace proc
         // 设置ProcessMemoryManager中的堆地址
         heap_start = start_addr;
         heap_end = start_addr;
+        heap_high_watermark = start_addr;
         reset_mmap_cursor(start_addr + k_mmap_guard_gap);
 
         if (vma *heap_area = vm_space.find_heap_area(); heap_area != nullptr)
@@ -1383,7 +1526,6 @@ namespace proc
             vm_space.destroy_area(heap_area);
         }
 
-        printfGreen("ProcessMemoryManager: heap initialized successfully\n");
     }
 
     void ProcessMemoryManager::reset_mmap_cursor(uint64 minimum_start)
@@ -1576,7 +1718,8 @@ namespace proc
              * 穿过去；否则 malloc 会把共享库的只读段当成堆写坏。
              */
             if (entry->overlaps(start, end) &&
-                entry->area_kind != VmAreaKind::Heap)
+                entry->area_kind != VmAreaKind::Heap &&
+                entry->end_addr() > heap_high_watermark)
             {
                 return true;
             }
@@ -1818,13 +1961,19 @@ namespace proc
             {
                 if (covering_vm->area_kind != VmAreaKind::Heap)
                 {
-                    printfRed("ProcessMemoryManager: heap grow would cross VMA [%p, %p), kind=%d\n",
-                              (void *)covering_vm->addr,
-                              (void *)(covering_vm->addr + (uint64)covering_vm->len),
-                              static_cast<int>(covering_vm->area_kind));
-                    rollback_heap_pages(va);
-                    trim_heap_metadata_to_end(current_end, false);
-                    return current_end;
+                    if (covering_vm->end_addr() > heap_high_watermark)
+                    {
+                        printfRed("ProcessMemoryManager: heap grow would cross VMA [%p, %p), kind=%d\n",
+                                  (void *)covering_vm->addr,
+                                  (void *)(covering_vm->addr + (uint64)covering_vm->len),
+                                  static_cast<int>(covering_vm->area_kind));
+                        rollback_heap_pages(va);
+                        trim_heap_metadata_to_end(current_end, false);
+                        return current_end;
+                    }
+                    // MAP_FIXED 在历史 brk 区间中留下的映射保持原所有者；
+                    // program break 可以越过它，堆元数据只覆盖两侧空洞。
+                    continue;
                 }
             }
 
@@ -1841,9 +1990,12 @@ namespace proc
 
         // 更新ProcessMemoryManager中的堆结束地址
         heap_end = new_end;
+        if (heap_high_watermark < new_end)
+        {
+            heap_high_watermark = new_end;
+        }
         reset_mmap_cursor(heap_end + k_mmap_guard_gap);
 
-        printfGreen("ProcessMemoryManager: heap grown successfully to %p\n", (void *)new_end);
         return new_end;
     }
 
@@ -1865,7 +2017,6 @@ namespace proc
         // 更新ProcessMemoryManager中的堆结束地址
         heap_end = new_end;
 
-        printfGreen("ProcessMemoryManager: heap shrunk successfully to %p\n", (void *)new_end);
         return new_end;
     }
 
@@ -2070,7 +2221,6 @@ namespace proc
                 (vm_entry.flags & MAP_SHARED) &&
                 (vm_entry.prot & PROT_WRITE) != 0)
             {
-                printfCyan("ProcessMemoryManager: writing back shared file mapping\n");
                 if (!writeback_file_mapping(vm_entry))
                 {
                     return -1;
@@ -2503,7 +2653,6 @@ namespace proc
         pt.freewalk();
         pagetable.set_base(0);
 
-        printfGreen("ProcessMemoryManager: pagetable freed successfully\n");
     }
 
     void ProcessMemoryManager::safe_vmunmap(uint64 va_start, uint64 va_end, bool check_validity)
@@ -2722,7 +2871,6 @@ namespace proc
 
         reset_memory_sections();
 
-        printfRed("ProcessMemoryManager: emergency cleanup completed\n");
     }
 
     void ProcessMemoryManager::cleanup_execve_pagetable(mem::PageTable &pagetable,
@@ -2735,8 +2883,6 @@ namespace proc
             return;
         }
 
-        printfRed("cleanup_execve_pagetable: cleaning up %d allocated sections\n", section_count);
-
         // 遍历所有已记录的程序段，释放其占用的内存
         for (int i = 0; i < section_count; i++)
         {
@@ -2744,13 +2890,6 @@ namespace proc
             {
                 uint64 va_start = PGROUNDDOWN((uint64)section_descs[i]._sec_start);
                 uint64 va_end = PGROUNDUP((uint64)section_descs[i]._sec_start + section_descs[i]._sec_size);
-
-                printfRed("  Cleaning section %d (%s): %p - %p (%u bytes)\n",
-                          i,
-                          section_descs[i]._debug_name ? section_descs[i]._debug_name : "unnamed",
-                          (void *)va_start,
-                          (void *)va_end,
-                          section_descs[i]._sec_size);
 
                 // 直接使用vmunmap清理，不检查页面有效性以提高错误处理的鲁棒性
                 for (uint64 va = va_start; va < va_end; va += PGSIZE)
@@ -2775,7 +2914,6 @@ namespace proc
         // 阶段1：不再使用分散的引用计数
         // pagetable.dec_ref(); // 注释掉分散的引用计数操作
 
-        printfGreen("cleanup_execve_pagetable: cleanup completed\n");
     }
 
     /****************************************************************************************

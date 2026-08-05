@@ -102,6 +102,7 @@ namespace syscall
         SYS_setitimer = 103, // form tsh
         SYS_timer_create = 107,
         SYS_timer_gettime = 108,
+        SYS_timer_getoverrun = 109,
         SYS_timer_settime = 110,
         SYS_timer_delete = 111,
         SYS_clock_settime = 112, // from rocket

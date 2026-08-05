@@ -120,151 +120,6 @@ namespace
     }
   }
 
-  inline bool is_entry_static_thread(proc::Pcb *p)
-  {
-    return p != nullptr && strncmp(p->_name, "entry-static.exe", sizeof("entry-static.exe") - 1) == 0;
-  }
-
-  struct LoongarchTlbProbe
-  {
-    uint32 idx = 0;
-    uint64 tlbehi = 0;
-    uint64 tlbelo0 = 0;
-    uint64 tlbelo1 = 0;
-    bool hit = false;
-  };
-
-  inline LoongarchTlbProbe probe_loongarch_tlb(uint64 va)
-  {
-    LoongarchTlbProbe probe{};
-    uint64 old_tlbehi = 0;
-    uint32 old_asid = 0;
-    uint32 old_idx = 0;
-
-    asm volatile("csrrd %0, %1" : "=r"(old_tlbehi) : "i"(LOONGARCH_CSR_TLBEHI));
-    asm volatile("csrrd %0, %1" : "=r"(old_asid) : "i"(LOONGARCH_CSR_ASID));
-    asm volatile("csrrd %0, %1" : "=r"(old_idx) : "i"(LOONGARCH_CSR_TLBIDX));
-
-    // 仅用于调试：按当前 ASID + VA 做一次 tlbsrch/tlbrd，把硬件当前实际生效的
-    // TLB 表项读出来。这样可以区分“页表里的 PTE 是对的”和“refill/TLB 里被装歪了”。
-    asm volatile("csrwr %0, %1" : : "r"(va), "i"(LOONGARCH_CSR_TLBEHI));
-    asm volatile("tlbsrch");
-    asm volatile("csrrd %0, %1" : "=r"(probe.idx) : "i"(LOONGARCH_CSR_TLBIDX));
-
-    if ((probe.idx & (1U << 31)) == 0)
-    {
-      probe.hit = true;
-      asm volatile("tlbrd");
-      asm volatile("csrrd %0, %1" : "=r"(probe.tlbehi) : "i"(LOONGARCH_CSR_TLBEHI));
-      asm volatile("csrrd %0, %1" : "=r"(probe.tlbelo0) : "i"(LOONGARCH_CSR_TLBELO0));
-      asm volatile("csrrd %0, %1" : "=r"(probe.tlbelo1) : "i"(LOONGARCH_CSR_TLBELO1));
-    }
-
-    asm volatile("csrwr %0, %1" : : "r"(old_tlbehi), "i"(LOONGARCH_CSR_TLBEHI));
-    asm volatile("csrwr %0, %1" : : "r"(old_asid), "i"(LOONGARCH_CSR_ASID));
-    asm volatile("csrwr %0, %1" : : "r"(old_idx), "i"(LOONGARCH_CSR_TLBIDX));
-    return probe;
-  }
-
-  inline const char *find_mm_section_name(proc::ProcessMemoryManager *mm, uint64 va, int &section_index)
-  {
-    section_index = -1;
-    if (mm == nullptr)
-    {
-      return nullptr;
-    }
-
-    for (int i = 0; i < mm->prog_section_count && i < proc::max_program_section_num; ++i)
-    {
-      uint64 start = (uint64)mm->prog_sections[i]._sec_start;
-      uint64 end = start + mm->prog_sections[i]._sec_size;
-      if (va >= start && va < end)
-      {
-        section_index = i;
-        return mm->prog_sections[i]._debug_name;
-      }
-    }
-
-    return nullptr;
-  }
-
-  inline int count_pa_leaf_mappings_in_sections(proc::ProcessMemoryManager *mm,
-                                                mem::PageTable *pt,
-                                                uint64 target_pa)
-  {
-    if (mm == nullptr || pt == nullptr || target_pa == 0)
-    {
-      return 0;
-    }
-
-    int matches = 0;
-    for (int i = 0; i < mm->prog_section_count && i < proc::max_program_section_num; ++i)
-    {
-      uint64 start = PGROUNDDOWN((uint64)mm->prog_sections[i]._sec_start);
-      uint64 end = PGROUNDUP((uint64)mm->prog_sections[i]._sec_start + mm->prog_sections[i]._sec_size);
-      for (uint64 va = start; va < end; va += PGSIZE)
-      {
-        mem::Pte pte = pt->walk(va, false);
-        if (!pte.is_null() && pte.is_valid() && (uint64)pte.pa() == target_pa)
-        {
-          ++matches;
-        }
-      }
-    }
-    return matches;
-  }
-
-  inline int count_pa_as_pagetable_page(mem::PageTable pt, uint64 target_pa)
-  {
-    if (pt.get_base() == 0 || target_pa == 0)
-    {
-      return 0;
-    }
-
-    int matches = (to_phy(pt.get_base()) == target_pa) ? 1 : 0;
-    for (int i = 0; i < 512; ++i)
-    {
-      mem::Pte pte = pt.get_pte(i);
-      if (!pte.is_null() && pte.is_valid() && pte.is_dir_page())
-      {
-        mem::PageTable child;
-        child.set_base(to_vir((uint64)pte.pa()));
-        matches += count_pa_as_pagetable_page(child, target_pa);
-      }
-    }
-    return matches;
-  }
-
-  inline int count_pa_as_leaf_mapping(mem::PageTable pt, uint64 target_pa)
-  {
-    if (pt.get_base() == 0 || target_pa == 0)
-    {
-      return 0;
-    }
-
-    int matches = 0;
-    for (int i = 0; i < 512; ++i)
-    {
-      mem::Pte pte = pt.get_pte(i);
-      if (pte.is_null() || !pte.is_valid())
-      {
-        continue;
-      }
-      if (pte.is_dir_page())
-      {
-        mem::PageTable child;
-        child.set_base(to_vir((uint64)pte.pa()));
-        matches += count_pa_as_leaf_mapping(child, target_pa);
-        continue;
-      }
-      if ((uint64)pte.pa() == target_pa)
-      {
-        ++matches;
-      }
-    }
-    return matches;
-  }
-
 }
 
 // 初始化锁
@@ -394,7 +249,16 @@ void trap_manager::timertick()
   // 降低中断路径里持锁时间，也减少后续异常把现场糊成“递归拿 tickslock”的概率。
   tickslock.acquire();
   ticks++;
+  const uint current_ticks = ticks;
   tickslock.release();
+
+  constexpr uint k_load_sample_ticks = 5 * 1000 / tmm::ms_per_tick;
+  static_assert(k_load_sample_ticks > 0);
+  if ((current_ticks % k_load_sample_ticks) == 0)
+  {
+    proc::k_scheduler.sample_load_averages(
+        static_cast<uint64>(current_ticks) * tmm::ms_per_tick / 1000);
+  }
 
   proc::k_pm.wakeup(&ticks);
 
@@ -510,43 +374,9 @@ void trap_manager::usertrap()
   {
     uint64 badv = r_csr_badv();
     mem::Pte fault_pte = p->get_pagetable()->walk(badv, false);
-    uint64 fault_pte_raw = fault_pte.is_null() ? 0 : fault_pte.get_data();
-    if (is_entry_static_thread(p) &&
-        p->_trapframe != nullptr &&
-        p->_trapframe->era >= 0x1200354a8ULL &&
-        p->_trapframe->era <= 0x1200354c4ULL)
-    {
-      panic("debug entry-static llsc fault: pid=%d tid=%d tgid=%d ecode=%u esub=%u era=%p badv=%p pte=%p valid=%d present=%d write=%d user=%d dirty=%d tl_lock=%p t0=%p t1=%p t2=%p t3=%p sp=%p tp=%p",
-            p->_pid,
-            p->_tid,
-            p->_tgid,
-            ecode,
-            esubcode,
-            (void *)p->_trapframe->era,
-            (void *)badv,
-            (void *)fault_pte_raw,
-            (int)!fault_pte.is_null() && fault_pte.is_valid(),
-            (int)!fault_pte.is_null() && fault_pte.is_present(),
-            (int)!fault_pte.is_null() && fault_pte.is_writable(),
-            (int)!fault_pte.is_null() && !fault_pte.is_super_plv(),
-            (int)!fault_pte.is_null() && fault_pte.is_dirty(),
-            (void *)p->_trapframe->t2,
-            (void *)p->_trapframe->t0,
-            (void *)p->_trapframe->t1,
-            (void *)p->_trapframe->t2,
-            (void *)p->_trapframe->t3,
-            (void *)p->_trapframe->sp,
-            (void *)p->_trapframe->tp);
-    }
     if (fault_pte.is_null())
     {
       printfRed("usertrap(): badv=%p has null pte slot\n", badv);
-    }
-
-    if ((ecode == 0x2 || ecode == 0x4) &&
-        mem::k_vmm.resolve_cow_page(*p->get_pagetable(), badv) == 0)
-    {
-      goto usertrap_page_fault_done;
     }
 
     // LoongArch 的软件 TLB 路径里，已映射用户页也可能因为 TLB 里残着 V=0 /
@@ -564,27 +394,6 @@ void trap_manager::usertrap()
 
     if (mmap_handler(badv, ecode) != 0)
     {
-      if (is_entry_static_thread(p))
-      {
-        panic("debug entry-static pagefault-fail: pid=%d tid=%d tgid=%d ecode=%u esub=%u era=%p badv=%p pte_raw=%p pte_null=%d pt_base=%p sp=%p tp=%p s0=%p s1=%p a0=%p a1=%p a2=%p",
-              p->_pid,
-              p->_tid,
-              p->_tgid,
-              ecode,
-              esubcode,
-              (void *)p->_trapframe->era,
-              (void *)badv,
-              (void *)fault_pte_raw,
-              (int)fault_pte.is_null(),
-              (void *)p->get_pagetable()->get_base(),
-              (void *)p->_trapframe->sp,
-              (void *)p->_trapframe->tp,
-              (void *)p->_trapframe->s0,
-              (void *)p->_trapframe->s1,
-              (void *)p->_trapframe->a0,
-              (void *)p->_trapframe->a1,
-              (void *)p->_trapframe->a2);
-      }
       // 正常的惰性缺页不需要刷日志；只有补页失败时才展开上下文，方便定位真实异常。
       printfRed("usertrap(): page fault at %p, sending SIGSEGV to pid=%d\n", badv, p->_pid);
       printfYellow("usertrap(): fault pte=%p valid=%d present=%d user=%d read=%d write=%d exec=%d plv=%d\n",
@@ -667,12 +476,6 @@ void trap_manager::usertrap()
     proc::k_pm.do_signal_exit(p, proc::ipc::signal::SIGKILL);
   if (p->_killed)
     proc::k_pm.exit(-1);
-
-  if (which_dev == 2 && !p->_exiting)
-  {
-    // debug_pthread_exit_robust_loop(p);
-    // debug_entry_static_user_stall(p);
-  }
 
   // give up the CPU if this is a timer interrupt.
   if (which_dev == 2)

@@ -67,6 +67,55 @@
 		return false;
 	}
 
+	bool SpinLock::acquire_unless_held()
+	{
+		/*
+		 * 先关本地中断，再检查 owner，并在同一个不可抢占区间内进入 CAS。
+		 * 这样调用者无需把 is_held()/acquire() 分成两个有竞态的步骤。
+		 */
+		Cpu::push_intr_off();
+		Cpu *cpu = Cpu::get_cpu();
+		if (_locked.load(eastl::memory_order_acquire) == cpu)
+		{
+			Cpu::pop_intr_off();
+			return false;
+		}
+
+		Cpu *expected = nullptr;
+		uint32 spin_count = 0;
+		while (!_locked.compare_exchange_strong(expected,
+		                                        cpu,
+		                                        eastl::memory_order_acq_rel))
+		{
+			expected = nullptr;
+			if ((++spin_count & 0xffU) == 0)
+			{
+				hal::tlb::poll_pending();
+			}
+		}
+		return true;
+	}
+
+	bool SpinLock::try_acquire_unless_held()
+	{
+		Cpu::push_intr_off();
+		Cpu *cpu = Cpu::get_cpu();
+		if (_locked.load(eastl::memory_order_acquire) == cpu)
+		{
+			Cpu::pop_intr_off();
+			return false;
+		}
+
+		Cpu *expected = nullptr;
+		if (_locked.compare_exchange_strong(expected, cpu, eastl::memory_order_acq_rel))
+		{
+			return true;
+		}
+
+		Cpu::pop_intr_off();
+		return false;
+	}
+
 	void SpinLock::release()
 	{
 		if ( !is_held() ){

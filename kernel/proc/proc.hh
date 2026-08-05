@@ -8,6 +8,7 @@
 #include "trapframe.hh"
 #include "context.hh"
 #include "spinlock.hh"
+#include <EASTL/atomic.h>
 #include <EASTL/string.h>
 #include "signal.hh"
 #include "prlimit.hh"
@@ -82,7 +83,9 @@ namespace proc
     struct sighand_struct
     {
         proc::ipc::signal::sigaction *actions[proc::ipc::signal::SIGRTMAX + 1];
-        int refcnt;
+        // CLONE_SIGHAND 的成员可在不同 CPU 同时 clone/exit；引用计数必须原子，
+        // 否则普通 ++/-- 会丢更新并提前释放整张 handler 表。
+        eastl::atomic<int> refcnt{1};
     };
     struct rlimit
     {
@@ -95,7 +98,10 @@ namespace proc
     {
         // 这里统一用微秒保存状态，sys_setitimer()/sys_getitimer() 再做 sec/usec 转换，
         // 这样可以把 REAL/VIRTUAL/PROF 三种计时源收敛到同一套核心逻辑里。
-        bool armed = false;
+        // CPU0 的时钟中断会先无锁读取该位，只对真正武装了
+        // ITIMER_REAL 的 PCB 取锁。原子提示允许与 setitimer 并发：
+        // 错过一次新武装最多只延后一个 tick，但不会丢失定时器。
+        eastl::atomic<bool> armed{false};
         uint64 interval_us = 0;
         uint64 expiry_us = 0;
     };
@@ -161,7 +167,9 @@ namespace proc
          * 进程状态和调度信息
          ****************************************************************************************/
         enum ProcState _state; // 进程当前状态 (unused, used, sleeping, runnable, running, zombie)
-        void *_chan;           // 进程睡眠时等待的通道，指向等待的资源或事件
+        // 唤醒端先按 channel 无锁筛选，再只获取真正候选者的 PCB 锁。
+        // 因此 channel 必须原子发布；状态本身仍只允许在 _lock 下访问。
+        eastl::atomic<void *> _chan{nullptr};
         int _killed;           // 进程终止标志位，非零表示进程被标记为终止
         bool _exiting;         // 已进入退出清理流程，禁止 timer 抢占式 yield
         int _xstate;           // 进程退出状态码，供父进程通过wait()系统调用获取
@@ -227,7 +235,9 @@ namespace proc
          * 线程和同步原语
          ****************************************************************************************/
         void *_futex_addr;                        // futex等待地址，仅用于调试和错误诊断
-        uint64 _futex_key = 0;                   // futex匹配键，按当前映射到的物理地址计算
+        // 唤醒端在全局 futex 队列锁下先无锁筛选 key，再获取候选 PCB 锁；
+        // key 必须原子发布，PCB 状态与调试地址仍只允许在 _lock 下访问。
+        eastl::atomic<uint64> _futex_key{0};     // futex匹配键，按当前映射到的物理地址计算
         uint64 _clear_tid_addr = 0;               // 线程退出的时候清除该地址的值(8字节)
         robust_list_head *_robust_list = nullptr; // 健壮futex链表头，用于线程退出时清理
         uint64 _robust_list_user_addr = 0;        // 健壮futex链表头的原始用户虚拟地址，用于 get_robust_list ABI
@@ -354,7 +364,6 @@ namespace proc
             _lock.release();
         }
         Pcb *get_parent() const { return _parent; }
-        void set_state(ProcState state) { _state = state; }
         void set_xstate(int xstate) { _xstate = xstate; }
         // void set_chan(void *chan) { _chan = chan; }
         uint get_pid() const { return _pid; }

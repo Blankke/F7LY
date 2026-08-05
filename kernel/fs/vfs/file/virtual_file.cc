@@ -13,6 +13,7 @@
 #include "mem/userspace_stream.hh"
 #include "mem/virtual_memory_manager.hh"
 #include "fs/vfs/file/normal_file.hh"
+#include "fs/vfs/file/socket_file.hh"
 #include "fs/vfs/fs.hh"
 #include "fs/vfs/vfs_utils.hh"
 #include "fs/drivers/virtio_blk.hh"
@@ -301,6 +302,11 @@ namespace fs
         return content;
     }
 
+    eastl::string ProcNetTcpProvider::generate_content()
+    {
+        return socket_file::generate_tcp_proc_snapshot(_ipv6);
+    }
+
     eastl::string ProcMeminfoProvider::generate_content()
     {
         // panic("TODO");
@@ -345,7 +351,8 @@ namespace fs
 
     eastl::string ProcVersionProvider::generate_content()
     {
-        return "Linux version 5.15.0-F7LY (F7LY) (gcc version 11.2.0) #1 SMP PREEMPT\n";
+        // 与 sys_uname() 的 release 保持一致，避免同一内核暴露两套版本视图。
+        return "Linux version 6.17.0 (F7LY) (gcc version 11.2.0) #1 SMP PREEMPT\n";
     }
 
     eastl::string KernelConfigProvider::generate_content()

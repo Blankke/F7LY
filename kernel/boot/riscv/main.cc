@@ -68,6 +68,9 @@ extern "C" void main(uint64 hartid, uint64 dtb_addr)
     plic_mgr.init(); // PLIC IRQ 优先级是全局寄存器，只能由主核配置一次
 
     proc::k_pm.init("next pid", "next tid", "wait lock");
+    // user_init() 会发布第一个 RUNNABLE PCB，并由调度器完成 home CPU 与
+    // 压力记账；调度器必须先初始化，不能在发布后再把计数清零。
+    proc::k_scheduler.init("scheduler");
 
     mem::k_pmm.init();
 
@@ -127,7 +130,6 @@ extern "C" void main(uint64 hartid, uint64 dtb_addr)
                   "=== SYSTEM BOOT COMPLETE ===\n"
                   "Kernel space successfully initialized\n"); // ANSI Shadow 字体风格
 
-    proc::k_scheduler.init("scheduler");
     // 所有全局对象均已完成初始化后，才放行次核；主核本地中断已在
     // virtio 初始化前启用，次核只做自己的本地 trap/PLIC 配置。之后等待
     // 全部 possible CPU 报告 online，再让任何 CPU 开始调度用户任务。

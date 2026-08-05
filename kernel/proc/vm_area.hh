@@ -14,6 +14,14 @@ namespace proc
 {
     using VmPrivateOverlayMap = eastl::unordered_map<uint64, uint64>;
 
+    // fork 期间把父 PTE 从可写降为 COW 的连续区间。创建失败时只回滚这些
+    // 原本可写的页，既覆盖别名映射，也不会误提升原本只读的对象页。
+    struct CowRollbackRange
+    {
+        uint64 start = 0;
+        uint64 end = 0;
+    };
+
     class ProcessMemoryManager;
     class VmObject;
 
@@ -68,6 +76,8 @@ namespace proc
         int backing_kind = VMA_BACKING_NONE;
         int backing_shmid = -1;
         uint64 backing_base = 0;
+        // false 必须严格表示该 VMA 没有任何有效叶子映射；true 允许是保守值。
+        // fork 依赖这个单向不变量跳过大型惰性 VMA 的空页表扫描。
         bool has_resident_pages = false;
         bool wipe_on_fork = false;
 

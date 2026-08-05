@@ -15,6 +15,10 @@ namespace hal::smp
     // 等待它们完成本地初始化，再统一放行调度器。
     void start_secondaries(uint64 boot_argument);
 
+    // 向正在 idle 的目标 CPU 发送纯调度唤醒 IPI。该接口不发布 TLB
+    // shootdown 请求；LoongArch 即使复用同一硬件 vector，也只清中断状态。
+    void kick_cpu(uint64 cpu_id);
+
     // 停止不属于 possible 集合的 CPU，或承接调度器意外返回后的兜底路径。
     [[noreturn]] void park_current_cpu();
 }

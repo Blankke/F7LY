@@ -459,13 +459,7 @@ int vfs_sync_all(void)
 
 int vfs_reclaim_global_caches_for_soft_reset(void)
 {
-    int ret = fs::normal_file_flush_all_delayed_visibility();
-    if (ret < 0)
-    {
-        return ret;
-    }
-
-    ret = vfs_sync_all();
+    int ret = vfs_sync_all();
     if (ret < 0)
     {
         return ret;
