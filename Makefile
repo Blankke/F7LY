@@ -338,6 +338,12 @@ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.cc
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
+# 板级静态 IPv4 通过编译参数进入 platform_net_device.cc，而 Make 不会把
+# 命令行变量变化视作普通依赖。只强制重编这一小文件，避免改 IP 后复用旧对象。
+.PHONY: force-platform-net-config
+force-platform-net-config:
+$(BUILD_DIR)/net/drivers/platform_net_device.o: force-platform-net-config
+
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@

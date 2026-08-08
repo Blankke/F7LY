@@ -198,6 +198,24 @@ uint64 Cpu::online_cpu_mask()
     return g_online_cpu_mask.load(eastl::memory_order_acquire) & possible_cpu_mask();
 }
 
+uint64 Cpu::retain_online_cpus_only()
+{
+    const uint64 old_possible = possible_cpu_mask();
+    uint64 retained = g_online_cpu_mask.load(eastl::memory_order_acquire) &
+                      k_cpu_capacity_mask;
+    const uint64 bootstrap_cpu = bootstrap_cpu_id();
+    if (is_valid_cpu_id(bootstrap_cpu))
+    {
+        retained |= 1ULL << bootstrap_cpu;
+    }
+    if (retained == 0)
+    {
+        retained = 1;
+    }
+    g_possible_cpu_mask.store(retained, eastl::memory_order_release);
+    return old_possible & ~retained;
+}
+
 int Cpu::possible_cpu_count()
 {
     return count_cpu_bits(possible_cpu_mask());

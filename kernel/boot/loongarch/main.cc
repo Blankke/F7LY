@@ -50,7 +50,8 @@ extern "C" void main(uint64 hartid, uint64 fw_arg0, uint64 fw_arg1,
     printfGreen("[boot] platform=%s dtb=0x%lx\n", loongarch::board::k_name, dtb_addr);
 
     // Initialize DTB and scan Initrd if necessary
-    uint64 kernel_end_phys = ((uint64)end) & 0x0FFFFFFFFFFFFFFFUL;
+    uint64 kernel_end_phys = loongarch::board::physical_address(
+        reinterpret_cast<uint64>(end));
     DtbManager::find_dtb_and_initrd(dtb_addr, kernel_end_phys);
     hal::smp::configure_topology();
     

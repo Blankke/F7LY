@@ -58,9 +58,19 @@ namespace dev
 		if (_stream != nullptr && _stream->read_ready())
 		{
 			u8 c = 0;
-			if (_stream->get_char(&c) == 0 || _stream->get_char_sync(&c) == 0)
+			if (_stream->get_char(&c) == 0)
 			{
 				kConsole.console_intr(c);
+				copied = kConsole.console_read_kernel(dst, nbytes);
+				if (copied > 0)
+				{
+					return copied;
+				}
+			}
+			else
+			{
+				// read_ready 与 get_char 之间可能刚好由 RX 中断取走字符；
+				// 此时字符已经进入 Console 队列，只需重查，不能阻塞等下一个字符。
 				copied = kConsole.console_read_kernel(dst, nbytes);
 				if (copied > 0)
 				{

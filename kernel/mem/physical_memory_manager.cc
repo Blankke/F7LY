@@ -79,19 +79,28 @@ namespace mem
                 return {};
             }
 
-            // 当前启动协议只需要排除 DTB 与 initrd。复制后排序，避免依赖
-            // 固件放置二者的先后顺序；重叠区间也会在 cursor 推进时自然合并。
-            ReservedRange sorted[2]{};
-            int count = reserved_count > 2 ? 2 : reserved_count;
+            // 除 DTB 与 initrd 外，实机固件还会通过 reservation map 和
+            // /reserved-memory 声明显存、CMA、共享 DMA 等不可分配区域。
+            constexpr int k_max_reserved_ranges = DtbManager::k_max_reserved_regions + 2;
+            ReservedRange sorted[k_max_reserved_ranges]{};
+            int count = reserved_count > k_max_reserved_ranges
+                            ? k_max_reserved_ranges
+                            : reserved_count;
             for (int index = 0; index < count; ++index)
             {
                 sorted[index] = reserved[index];
             }
-            if (count == 2 && sorted[1].start < sorted[0].start)
+            for (int left = 0; left < count; ++left)
             {
-                ReservedRange temporary = sorted[0];
-                sorted[0] = sorted[1];
-                sorted[1] = temporary;
+                for (int right = left + 1; right < count; ++right)
+                {
+                    if (sorted[right].start < sorted[left].start)
+                    {
+                        const ReservedRange temporary = sorted[left];
+                        sorted[left] = sorted[right];
+                        sorted[right] = temporary;
+                    }
+                }
             }
 
             UsableInterval best{};
@@ -312,7 +321,8 @@ namespace mem
             k_initrd_end = initrd_end;
         }
 
-        ReservedRange reserved_ranges[2]{};
+        constexpr int k_max_reserved_ranges = DtbManager::k_max_reserved_regions + 2;
+        ReservedRange reserved_ranges[k_max_reserved_ranges]{};
         int reserved_count = 0;
         uint64 dtb_size = DtbManager::get_dtb_size();
         if (k_dtb_addr != 0)
@@ -335,6 +345,27 @@ namespace mem
         {
             reserved_ranges[reserved_count++] = {initrd_start, initrd_end};
         }
+
+        DtbMemoryRegion firmware_reserved[DtbManager::k_max_reserved_regions]{};
+        const int firmware_reserved_count = DtbManager::get_reserved_regions(
+            firmware_reserved, DtbManager::k_max_reserved_regions);
+        for (int index = 0;
+             index < firmware_reserved_count && reserved_count < k_max_reserved_ranges;
+             ++index)
+        {
+            uint64 reserved_end = 0;
+            if (!checked_region_top(firmware_reserved[index].base,
+                                    firmware_reserved[index].size,
+                                    reserved_end))
+            {
+                printfYellow("[pmm] ignoring invalid reserved region[%d]\n", index);
+                continue;
+            }
+            reserved_ranges[reserved_count++] = {
+                firmware_reserved[index].base, reserved_end};
+        }
+        printfGreen("[pmm] honored %d firmware reserved-memory ranges\n",
+                    firmware_reserved_count);
 
         DtbMemoryRegion regions[DtbManager::k_max_memory_regions]{};
         int region_count = DtbManager::get_memory_regions(regions, DtbManager::k_max_memory_regions);

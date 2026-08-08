@@ -5,8 +5,10 @@
 #include "devs/dtb.hh"
 #include "hal/loongarch/platform_board.hh"
 #include "libs/klib.hh"
+#include "platform.hh"
 #include "printer.hh"
 #include "spinlock.hh"
+#include "tm/time.hh"
 
 namespace loongarch::ls2k1000::gmac
 {
@@ -14,7 +16,8 @@ namespace
 {
 constexpr uint32 k_ring_size = 128;
 constexpr uint32 k_buffer_size = 2048;
-constexpr uint32 k_dma_reset_iterations = 1'000'000;
+constexpr uint32 k_ethernet_fcs_size = 4;
+constexpr uint64 k_dma_reset_timeout_us = 1'000'000;
 
 constexpr uint32 k_mac_config = 0x0000;
 constexpr uint32 k_mac_frame_filter = 0x0004;
@@ -117,7 +120,7 @@ SpinLock g_lock;
 bool g_initialized = false;
 uint32 g_tx_next = 0;
 uint32 g_rx_next = 0;
-uint8 g_mac[6] = {0x62, 0x19, 0x1a, 0x02, 0xa8, 0x91};
+uint8 g_mac[6]{};
 
 volatile uint32 *mac_register(uint32 offset)
 {
@@ -166,6 +169,42 @@ uint32 dma_address(const void *pointer)
 {
     const uint64 physical = board::physical_address(reinterpret_cast<uint64>(pointer));
     return physical <= 0xffffffffULL ? static_cast<uint32>(physical) : 0;
+}
+
+bool dma_range_is_32bit(const void *pointer, uint64 size)
+{
+    const uint64 physical = board::physical_address(reinterpret_cast<uint64>(pointer));
+    return size != 0 && physical <= 0xffffffffULL &&
+           size - 1 <= 0xffffffffULL - physical;
+}
+
+bool valid_mac(const uint8 mac[6])
+{
+    if (mac == nullptr || (mac[0] & 1U) != 0)
+    {
+        return false;
+    }
+    bool any_nonzero = false;
+    bool any_not_ff = false;
+    for (uint32 index = 0; index < 6; ++index)
+    {
+        any_nonzero = any_nonzero || mac[index] != 0;
+        any_not_ff = any_not_ff || mac[index] != 0xff;
+    }
+    return any_nonzero && any_not_ff;
+}
+
+bool read_firmware_mac(uint8 mac[6])
+{
+    const uint32 low = mac_read(k_mac_address_low);
+    const uint32 high = mac_read(k_mac_address_high);
+    mac[0] = static_cast<uint8>(low);
+    mac[1] = static_cast<uint8>(low >> 8);
+    mac[2] = static_cast<uint8>(low >> 16);
+    mac[3] = static_cast<uint8>(low >> 24);
+    mac[4] = static_cast<uint8>(high);
+    mac[5] = static_cast<uint8>(high >> 8);
+    return valid_mac(mac);
 }
 
 uint32 next_index(uint32 index)
@@ -219,7 +258,9 @@ void initialize_descriptors()
 bool reset_dma()
 {
     dma_write(k_dma_bus_mode, k_dma_reset);
-    for (uint32 iteration = 0; iteration < k_dma_reset_iterations; ++iteration)
+    const uint64 start = rdtime();
+    const uint64 timeout_cycles = tmm::qemu_fre_cal_cycles(k_dma_reset_timeout_us);
+    while (rdtime() - start < timeout_cycles)
     {
         if ((dma_read(k_dma_bus_mode) & k_dma_reset) == 0)
         {
@@ -259,7 +300,14 @@ bool initialize()
     g_initialized = false;
     g_tx_next = 0;
     g_rx_next = 0;
-    DtbManager::get_mac_address(board::k_gmac0_physical, g_mac);
+    // MAC 必须来自板级 DTB 或固件已编程寄存器。固定回退地址会让多块板产生
+    // 二层冲突；两处都没有有效地址时宁可禁用网卡并给出明确诊断。
+    if (!DtbManager::get_mac_address(board::k_gmac0_physical, g_mac) &&
+        !read_firmware_mac(g_mac))
+    {
+        printfRed("[gmac] no valid MAC in DTB or firmware registers\n");
+        return false;
+    }
 
     uint32 config = mac_read(k_mac_config);
     config &= ~(k_mac_rx | k_mac_tx);
@@ -272,13 +320,14 @@ bool initialize()
         return false;
     }
 
-    const uint32 tx_ring = dma_address(&g_ring_storage.tx[0]);
-    const uint32 rx_ring = dma_address(&g_ring_storage.rx[0]);
-    if (tx_ring == 0 || rx_ring == 0)
+    if (!dma_range_is_32bit(&g_ring_storage, sizeof(g_ring_storage)) ||
+        !dma_range_is_32bit(&g_buffer_storage, sizeof(g_buffer_storage)))
     {
-        printfRed("[gmac] descriptor ring is outside the 32-bit DMA window\n");
+        printfRed("[gmac] descriptor/buffer storage is outside the 32-bit DMA window\n");
         return false;
     }
+    const uint32 tx_ring = dma_address(&g_ring_storage.tx[0]);
+    const uint32 rx_ring = dma_address(&g_ring_storage.rx[0]);
     initialize_descriptors();
 
     dma_write(k_dma_bus_mode,
@@ -379,6 +428,16 @@ int receive(void *data, uint32 *length)
     const bool valid = (status & k_descriptor_error) == 0 &&
                        (status & k_rx_first) != 0 && (status & k_rx_last) != 0;
     if (!valid)
+    {
+        packet_length = 0;
+    }
+    else if (packet_length >= k_ethernet_fcs_size)
+    {
+        // Synopsys GMAC 接收描述符的 frame length 包含线路上的 4 字节 FCS，
+        // ONPS 只接收以太网头和载荷，不能把 FCS 当作协议数据继续上传。
+        packet_length -= k_ethernet_fcs_size;
+    }
+    else
     {
         packet_length = 0;
     }

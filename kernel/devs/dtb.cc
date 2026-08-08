@@ -28,11 +28,10 @@ struct fdt_header {
 #define FDT_NOP 0x4
 #define FDT_END 0x9
 
-static inline uint32 bswap32(uint32 x);
-static inline uint64 bswap64(uint64 x);
-
 namespace
 {
+    constexpr uint64 k_max_fdt_size = 16ULL * 1024 * 1024;
+
     // LoongArch 下 QEMU 传进来的 DTB 地址是物理地址；内核后续既可能在启用分页前访问，
     // 也可能在启用分页后再次解析 DTB。为了让这两种时机都能稳定访问，
     // 这里统一把 DTB 规范化为 DMWIN 直映地址保存到 _dtb_addr；
@@ -50,10 +49,38 @@ namespace
 
     struct FdtCursor
     {
-        char *struct_base = nullptr;
-        char *strings_base = nullptr;
+        const uint8 *blob_base = nullptr;
+        const uint8 *blob_end = nullptr;
+        const uint8 *struct_base = nullptr;
+        const uint8 *struct_end = nullptr;
+        const uint8 *strings_base = nullptr;
+        const uint8 *strings_end = nullptr;
+        const uint8 *reservation_map = nullptr;
+        uint32 total_size = 0;
         uint32 struct_size = 0;
+        uint32 strings_size = 0;
     };
+
+    uint32 read_be32(const void *data)
+    {
+        const auto *bytes = reinterpret_cast<const uint8 *>(data);
+        return (static_cast<uint32>(bytes[0]) << 24) |
+               (static_cast<uint32>(bytes[1]) << 16) |
+               (static_cast<uint32>(bytes[2]) << 8) |
+               static_cast<uint32>(bytes[3]);
+    }
+
+    uint64 read_be64(const void *data)
+    {
+        const auto *bytes = reinterpret_cast<const uint8 *>(data);
+        return (static_cast<uint64>(read_be32(bytes)) << 32) |
+               read_be32(bytes + 4);
+    }
+
+    bool blob_range_valid(uint32 total_size, uint32 offset, uint32 size)
+    {
+        return offset <= total_size && size <= total_size - offset;
+    }
 
     static bool load_fdt_cursor(uint64 dtb_addr, FdtCursor &cursor)
     {
@@ -62,34 +89,229 @@ namespace
             return false;
         }
 
-        fdt_header *hdr = (fdt_header *)dtb_addr;
-        if (bswap32(hdr->magic) != FDT_MAGIC)
+        const auto *header = reinterpret_cast<const fdt_header *>(dtb_addr);
+        if (read_be32(&header->magic) != FDT_MAGIC)
         {
             return false;
         }
 
-        uint32 off_struct = bswap32(hdr->off_dt_struct);
-        uint32 off_strings = bswap32(hdr->off_dt_strings);
+        const uint32 total_size = read_be32(&header->totalsize);
+        const uint32 off_struct = read_be32(&header->off_dt_struct);
+        const uint32 off_strings = read_be32(&header->off_dt_strings);
+        const uint32 off_reservation_map = read_be32(&header->off_mem_rsvmap);
+        const uint32 struct_size = read_be32(&header->size_dt_struct);
+        const uint32 strings_size = read_be32(&header->size_dt_strings);
+        const uint32 version = read_be32(&header->version);
+        const uint32 last_compatible_version = read_be32(&header->last_comp_version);
 
-        cursor.struct_base = (char *)dtb_addr + off_struct;
-        cursor.strings_base = (char *)dtb_addr + off_strings;
-        cursor.struct_size = bswap32(hdr->size_dt_struct);
+        // 本内核只接受包含 size_dt_struct/size_dt_strings 的现代 FDT。限制
+        // totalsize 还能阻止损坏头部把后续边界检查扩展到任意内存。
+        if (total_size < sizeof(fdt_header) || total_size > k_max_fdt_size ||
+            version < 17 || last_compatible_version > 17 ||
+            (off_struct & 3U) != 0 || (off_reservation_map & 7U) != 0 ||
+            !blob_range_valid(total_size, off_struct, struct_size) ||
+            !blob_range_valid(total_size, off_strings, strings_size) ||
+            !blob_range_valid(total_size, off_reservation_map, 16) ||
+            struct_size < sizeof(uint32))
+        {
+            return false;
+        }
+
+        const auto *blob = reinterpret_cast<const uint8 *>(dtb_addr);
+        cursor.blob_base = blob;
+        cursor.blob_end = blob + total_size;
+        cursor.struct_base = blob + off_struct;
+        cursor.struct_end = cursor.struct_base + struct_size;
+        cursor.strings_base = blob + off_strings;
+        cursor.strings_end = cursor.strings_base + strings_size;
+        cursor.reservation_map = blob + off_reservation_map;
+        cursor.total_size = total_size;
+        cursor.struct_size = struct_size;
+        cursor.strings_size = strings_size;
         return true;
     }
 
-    static uint32 read_fdt_u32(char *p)
+    const char *bounded_string(const uint8 *start, const uint8 *end)
     {
-        return bswap32(*(uint32 *)p);
+        if (start == nullptr || start >= end)
+        {
+            return nullptr;
+        }
+        for (const uint8 *cursor = start; cursor < end; ++cursor)
+        {
+            if (*cursor == 0)
+            {
+                return reinterpret_cast<const char *>(start);
+            }
+        }
+        return nullptr;
     }
 
-    static uint64 read_fdt_cells(const char *data, int cells)
+    const char *property_name(const FdtCursor &cursor, uint32 name_offset)
     {
-        uint64 value = 0;
+        if (name_offset >= cursor.strings_size)
+        {
+            return nullptr;
+        }
+        return bounded_string(cursor.strings_base + name_offset, cursor.strings_end);
+    }
+
+    static bool read_fdt_cells(const uint8 *data, int cells, uint64 &value)
+    {
+        if (data == nullptr || cells <= 0 || cells > 2)
+        {
+            return false;
+        }
+        value = 0;
         for (int i = 0; i < cells; ++i)
         {
-            value = (value << 32) | bswap32(*(const uint32 *)(data + i * 4));
+            value = (value << 32) | read_be32(data + i * 4);
         }
-        return value;
+        return true;
+    }
+
+    enum class FdtEventType
+    {
+        begin_node,
+        end_node,
+        property,
+    };
+
+    struct FdtEvent
+    {
+        FdtEventType type = FdtEventType::property;
+        int depth = -1; // 根节点深度为 0。
+        const char *name = nullptr;
+        const char *property = nullptr;
+        const uint8 *value = nullptr;
+        uint32 length = 0;
+    };
+
+    class FdtWalker
+    {
+    public:
+        explicit FdtWalker(const FdtCursor &cursor)
+            : _cursor(cursor), _position(cursor.struct_base)
+        {
+        }
+
+        bool next(FdtEvent &event)
+        {
+            while (_valid && !_finished)
+            {
+                const uint64 position = reinterpret_cast<uint64>(_position);
+                const uint64 aligned = (position + 3U) & ~3ULL;
+                if (aligned < position || aligned > reinterpret_cast<uint64>(_cursor.struct_end))
+                {
+                    _valid = false;
+                    break;
+                }
+                _position = reinterpret_cast<const uint8 *>(aligned);
+                if (static_cast<uint64>(_cursor.struct_end - _position) < sizeof(uint32))
+                {
+                    _valid = false;
+                    break;
+                }
+
+                const uint32 token = read_be32(_position);
+                _position += sizeof(uint32);
+                if (token == FDT_NOP)
+                {
+                    continue;
+                }
+                if (token == FDT_END)
+                {
+                    _finished = _depth == 0;
+                    _valid = _finished;
+                    break;
+                }
+                if (token == FDT_BEGIN_NODE)
+                {
+                    const char *name = bounded_string(_position, _cursor.struct_end);
+                    if (name == nullptr)
+                    {
+                        _valid = false;
+                        break;
+                    }
+                    const uint8 *name_end = _position;
+                    while (name_end < _cursor.struct_end && *name_end != 0)
+                    {
+                        ++name_end;
+                    }
+                    _position = name_end + 1;
+                    event = {};
+                    event.type = FdtEventType::begin_node;
+                    event.depth = _depth++;
+                    event.name = name;
+                    return true;
+                }
+                if (token == FDT_END_NODE)
+                {
+                    if (_depth <= 0)
+                    {
+                        _valid = false;
+                        break;
+                    }
+                    --_depth;
+                    event = {};
+                    event.type = FdtEventType::end_node;
+                    event.depth = _depth;
+                    return true;
+                }
+                if (token != FDT_PROP ||
+                    static_cast<uint64>(_cursor.struct_end - _position) < 8)
+                {
+                    _valid = false;
+                    break;
+                }
+
+                const uint32 length = read_be32(_position);
+                const uint32 name_offset = read_be32(_position + 4);
+                _position += 8;
+                const uint64 padded_length = (static_cast<uint64>(length) + 3U) & ~3ULL;
+                if (padded_length < length ||
+                    padded_length > static_cast<uint64>(_cursor.struct_end - _position))
+                {
+                    _valid = false;
+                    break;
+                }
+                const char *name = property_name(_cursor, name_offset);
+                if (name == nullptr || _depth <= 0)
+                {
+                    _valid = false;
+                    break;
+                }
+
+                event = {};
+                event.type = FdtEventType::property;
+                event.depth = _depth - 1;
+                event.property = name;
+                event.value = _position;
+                event.length = length;
+                _position += padded_length;
+                return true;
+            }
+            return false;
+        }
+
+        bool valid() const { return _valid && _finished; }
+
+    private:
+        const FdtCursor &_cursor;
+        const uint8 *_position = nullptr;
+        int _depth = 0;
+        bool _valid = true;
+        bool _finished = false;
+    };
+
+    bool validate_fdt_structure(const FdtCursor &cursor)
+    {
+        FdtWalker walker(cursor);
+        FdtEvent event{};
+        while (walker.next(event))
+        {
+        }
+        return walker.valid();
     }
 
     static bool parse_node_unit_address(const char *node_name, uint64 &addr)
@@ -126,6 +348,10 @@ namespace
             {
                 return false;
             }
+            if (value > (~0ULL >> 4))
+            {
+                return false;
+            }
             value = (value << 4) | digit;
         }
 
@@ -134,42 +360,14 @@ namespace
     }
 } // namespace
 
-static inline uint32 bswap32(uint32 x) {
-    return ((x << 24) & 0xff000000) |
-           ((x << 8) & 0x00ff0000) |
-           ((x >> 8) & 0x0000ff00) |
-           ((x >> 24) & 0x000000ff);
-}
-
-static inline uint64 bswap64(uint64 x) {
-    uint32 hi = x >> 32;
-    uint32 lo = x & 0xffffffff;
-    return ((uint64)bswap32(lo) << 32) | bswap32(hi);
-}
-
 void DtbManager::init(uint64 dtb_addr) {
     _dtb_addr = normalize_dtb_addr_for_kernel(dtb_addr);
 }
 
 uint64 DtbManager::get_dtb_size()
 {
-    if (_dtb_addr == 0)
-    {
-        return 0;
-    }
-
-    const fdt_header *header = reinterpret_cast<const fdt_header *>(_dtb_addr);
-    if (bswap32(header->magic) != FDT_MAGIC)
-    {
-        return 0;
-    }
-
-    const uint64 total_size = bswap32(header->totalsize);
-    if (total_size < sizeof(fdt_header))
-    {
-        return 0;
-    }
-    return total_size;
+    FdtCursor cursor{};
+    return load_fdt_cursor(_dtb_addr, cursor) ? cursor.total_size : 0;
 }
 
 int DtbManager::get_memory_regions(DtbMemoryRegion *regions, int max_regions)
@@ -185,142 +383,49 @@ int DtbManager::get_memory_regions(DtbMemoryRegion *regions, int max_regions)
         return 0;
     }
 
-    char *p = cursor.struct_base;
-    char *struct_end = cursor.struct_base + cursor.struct_size;
-    int depth = 0;
     int root_addr_cells = 2;
     int root_size_cells = 2;
     int region_count = 0;
 
-    bool in_memory_node = false;
     int memory_depth = -1;
-    bool memory_device_type_ok = false;
+    bool memory_name_matches = false;
+    bool memory_device_type_matches = false;
+    bool memory_enabled = true;
     uint64 memory_node_addr = 0;
     bool memory_node_addr_valid = false;
+    const uint8 *memory_reg = nullptr;
+    uint32 memory_reg_length = 0;
 
-    while (p < struct_end)
-    {
-        while (((uint64)p % 4) != 0)
+    auto store_memory_node = [&]() {
+        if ((!memory_name_matches && !memory_device_type_matches) || !memory_enabled ||
+            memory_reg == nullptr || root_addr_cells <= 0 || root_addr_cells > 2 ||
+            root_size_cells <= 0 || root_size_cells > 2)
         {
-            ++p;
+            return;
         }
 
-        uint32 token = read_fdt_u32(p);
-        p += 4;
-
-        if (token == FDT_END)
+        const int entry_cells = root_addr_cells + root_size_cells;
+        const int total_cells = static_cast<int>(memory_reg_length / 4);
+        if ((memory_reg_length & 3U) != 0 || total_cells < entry_cells)
         {
-            break;
+            return;
         }
 
-        if (token == FDT_BEGIN_NODE)
+        for (int cell_index = 0; cell_index + entry_cells <= total_cells;
+             cell_index += entry_cells)
         {
-            char *name = p;
-            p += strlen(name) + 1;
-
-            if (depth == 0)
+            uint64 base = 0;
+            uint64 size = 0;
+            if (!read_fdt_cells(memory_reg + cell_index * 4, root_addr_cells, base) ||
+                !read_fdt_cells(memory_reg + (cell_index + root_addr_cells) * 4,
+                                root_size_cells, size))
             {
-                in_memory_node = false;
-                memory_depth = -1;
-                memory_device_type_ok = false;
-                memory_node_addr = 0;
-                memory_node_addr_valid = false;
-            }
-            else if (depth == 1)
-            {
-                in_memory_node = strncmp(name, "memory", 6) == 0;
-                memory_depth = in_memory_node ? depth : -1;
-                memory_device_type_ok = !in_memory_node;
-                memory_node_addr = 0;
-                memory_node_addr_valid = parse_node_unit_address(name, memory_node_addr);
+                continue;
             }
 
-            ++depth;
-            continue;
-        }
-
-        if (token == FDT_END_NODE)
-        {
-            --depth;
-            if (memory_depth == depth)
-            {
-                in_memory_node = false;
-                memory_depth = -1;
-                memory_device_type_ok = false;
-                memory_node_addr = 0;
-                memory_node_addr_valid = false;
-            }
-            continue;
-        }
-
-        if (token == FDT_NOP)
-        {
-            continue;
-        }
-
-        if (token != FDT_PROP)
-        {
-            break;
-        }
-
-        uint32 len = read_fdt_u32(p);
-        p += 4;
-        uint32 nameoff = read_fdt_u32(p);
-        p += 4;
-
-        char *prop_name = cursor.strings_base + nameoff;
-        char *prop_val = p;
-        p += len;
-
-        if (depth == 1)
-        {
-            if (strcmp(prop_name, "#address-cells") == 0 && len >= 4)
-            {
-                root_addr_cells = (int)read_fdt_u32(prop_val);
-            }
-            else if (strcmp(prop_name, "#size-cells") == 0 && len >= 4)
-            {
-                root_size_cells = (int)read_fdt_u32(prop_val);
-            }
-        }
-
-        if (!in_memory_node)
-        {
-            continue;
-        }
-
-        if (strcmp(prop_name, "device_type") == 0)
-        {
-            memory_device_type_ok = strcmp(prop_val, "memory") == 0;
-            continue;
-        }
-
-        if (!memory_device_type_ok || strcmp(prop_name, "reg") != 0)
-        {
-            continue;
-        }
-
-        int entry_cells = root_addr_cells + root_size_cells;
-        int total_cells = (int)len / 4;
-        if (entry_cells <= 0 || total_cells < entry_cells)
-        {
-            continue;
-        }
-
-        for (int cell_index = 0; cell_index + entry_cells <= total_cells; cell_index += entry_cells)
-        {
-            uint64 base = read_fdt_cells(prop_val + cell_index * 4, root_addr_cells);
-            uint64 size = read_fdt_cells(prop_val + (cell_index + root_addr_cells) * 4, root_size_cells);
-
-            // QEMU LoongArch virt 的 memory 节点名称仍然使用真实的 32-bit 物理基址，
-            // 但 reg 高 32 位会带一个并不参与当前内核物理寻址的标记值。
-            // 如果直接把 64-bit 拼接值当地址，会得到与实际执行完全不一致的假地址，
-            // 从而误判内存不连续。这里在“节点名地址”和 reg 低 32 位一致时，
-            // 退回到节点名给出的真实物理基址。size 仍可能合法地超过 4 GiB，
-            // 不能无条件截成低 32 位；只有 size 携带与 base 完全相同的高位
-            // 标记时才去掉该标记。
-            if (memory_node_addr_valid &&
-                base > 0xFFFFFFFFULL &&
+            // 部分旧 LoongArch QEMU DTB 在 reg 高 32 位携带地址标记，而节点名
+            // 保留真实物理基址。仅在二者低位严格一致时修正该已知固件格式。
+            if (memory_node_addr_valid && base > 0xFFFFFFFFULL &&
                 (base & 0xFFFFFFFFULL) == memory_node_addr)
             {
                 const uint64 address_marker = base & 0xFFFFFFFF00000000ULL;
@@ -330,24 +435,85 @@ int DtbManager::get_memory_regions(DtbMemoryRegion *regions, int max_regions)
                     size &= 0xFFFFFFFFULL;
                 }
             }
-
             if (base == 0 && memory_node_addr_valid && memory_node_addr != 0)
             {
                 base = memory_node_addr;
             }
-
-            if (size == 0)
+            if (size == 0 || base > ~0ULL - size)
             {
                 continue;
             }
-
             if (region_count < max_regions)
             {
-                regions[region_count].base = base;
-                regions[region_count].size = size;
+                regions[region_count] = {base, size};
             }
             ++region_count;
         }
+    };
+
+    FdtWalker walker(cursor);
+    FdtEvent event{};
+    while (walker.next(event))
+    {
+        if (event.type == FdtEventType::begin_node)
+        {
+            if (event.depth == 1 && strncmp(event.name, "memory", 6) == 0)
+            {
+                memory_depth = event.depth;
+                memory_name_matches = event.name[6] == '\0' || event.name[6] == '@';
+                memory_device_type_matches = false;
+                memory_enabled = true;
+                memory_node_addr = 0;
+                memory_node_addr_valid = parse_node_unit_address(event.name, memory_node_addr);
+                memory_reg = nullptr;
+                memory_reg_length = 0;
+            }
+            continue;
+        }
+        if (event.type == FdtEventType::end_node)
+        {
+            if (event.depth == memory_depth)
+            {
+                store_memory_node();
+                memory_depth = -1;
+            }
+            continue;
+        }
+        if (event.depth == 0)
+        {
+            if (strcmp(event.property, "#address-cells") == 0 && event.length == 4)
+            {
+                root_addr_cells = static_cast<int>(read_be32(event.value));
+            }
+            else if (strcmp(event.property, "#size-cells") == 0 && event.length == 4)
+            {
+                root_size_cells = static_cast<int>(read_be32(event.value));
+            }
+            continue;
+        }
+        if (event.depth != memory_depth)
+        {
+            continue;
+        }
+        if (strcmp(event.property, "device_type") == 0)
+        {
+            memory_device_type_matches = event.length >= 7 &&
+                                         memcmp(event.value, "memory", 7) == 0;
+        }
+        else if (strcmp(event.property, "status") == 0)
+        {
+            memory_enabled = event.length >= 2 && memcmp(event.value, "ok", 2) == 0;
+        }
+        else if (strcmp(event.property, "reg") == 0)
+        {
+            memory_reg = event.value;
+            memory_reg_length = event.length;
+        }
+    }
+
+    if (!walker.valid())
+    {
+        return 0;
     }
 
     int stored = region_count < max_regions ? region_count : max_regions;
@@ -366,6 +532,180 @@ int DtbManager::get_memory_regions(DtbMemoryRegion *regions, int max_regions)
     return stored;
 }
 
+int DtbManager::get_reserved_regions(DtbMemoryRegion *regions, int max_regions)
+{
+    if (regions == nullptr || max_regions <= 0)
+    {
+        return 0;
+    }
+
+    FdtCursor cursor{};
+    if (!load_fdt_cursor(_dtb_addr, cursor))
+    {
+        return 0;
+    }
+
+    int count = 0;
+    auto append_region = [&](uint64 base, uint64 size) {
+        if (size == 0 || base > ~0ULL - size)
+        {
+            return;
+        }
+        if (count < max_regions)
+        {
+            regions[count] = {base, size};
+            ++count;
+        }
+    };
+
+    // FDT header 自带的 reservation map 是一组 big-endian (address,size)，
+    // 以 (0,0) 结束。它通常记录固件运行区等不一定出现在设备树节点中的内存。
+    const uint8 *reservation = cursor.reservation_map;
+    bool reservation_map_terminated = false;
+    while (reservation <= cursor.blob_end &&
+           static_cast<uint64>(cursor.blob_end - reservation) >= 16)
+    {
+        const uint64 base = read_be64(reservation);
+        const uint64 size = read_be64(reservation + 8);
+        reservation += 16;
+        if (base == 0 && size == 0)
+        {
+            reservation_map_terminated = true;
+            break;
+        }
+        append_region(base, size);
+    }
+    if (!reservation_map_terminated)
+    {
+        return 0;
+    }
+
+    int root_addr_cells = 2;
+    int root_size_cells = 2;
+    int reserved_memory_depth = -1;
+    int reserved_addr_cells = 2;
+    int reserved_size_cells = 2;
+    int child_depth = -1;
+    bool child_enabled = true;
+    const uint8 *child_reg = nullptr;
+    uint32 child_reg_length = 0;
+
+    auto store_child = [&]() {
+        if (!child_enabled || child_reg == nullptr || reserved_addr_cells <= 0 ||
+            reserved_addr_cells > 2 || reserved_size_cells <= 0 ||
+            reserved_size_cells > 2 || (child_reg_length & 3U) != 0)
+        {
+            return;
+        }
+        const int entry_cells = reserved_addr_cells + reserved_size_cells;
+        const int total_cells = static_cast<int>(child_reg_length / 4);
+        for (int cell = 0; cell + entry_cells <= total_cells; cell += entry_cells)
+        {
+            uint64 base = 0;
+            uint64 size = 0;
+            if (read_fdt_cells(child_reg + cell * 4, reserved_addr_cells, base) &&
+                read_fdt_cells(child_reg + (cell + reserved_addr_cells) * 4,
+                               reserved_size_cells, size))
+            {
+                append_region(base, size);
+            }
+        }
+    };
+
+    FdtWalker walker(cursor);
+    FdtEvent event{};
+    while (walker.next(event))
+    {
+        if (event.type == FdtEventType::begin_node)
+        {
+            if (event.depth == 1 && strcmp(event.name, "reserved-memory") == 0)
+            {
+                reserved_memory_depth = event.depth;
+                reserved_addr_cells = root_addr_cells;
+                reserved_size_cells = root_size_cells;
+            }
+            else if (reserved_memory_depth >= 0 &&
+                     event.depth == reserved_memory_depth + 1)
+            {
+                child_depth = event.depth;
+                child_enabled = true;
+                child_reg = nullptr;
+                child_reg_length = 0;
+            }
+            continue;
+        }
+        if (event.type == FdtEventType::end_node)
+        {
+            if (event.depth == child_depth)
+            {
+                store_child();
+                child_depth = -1;
+            }
+            if (event.depth == reserved_memory_depth)
+            {
+                reserved_memory_depth = -1;
+            }
+            continue;
+        }
+        if (event.depth == 0)
+        {
+            if (strcmp(event.property, "#address-cells") == 0 && event.length == 4)
+            {
+                root_addr_cells = static_cast<int>(read_be32(event.value));
+            }
+            else if (strcmp(event.property, "#size-cells") == 0 && event.length == 4)
+            {
+                root_size_cells = static_cast<int>(read_be32(event.value));
+            }
+            continue;
+        }
+        if (event.depth == reserved_memory_depth)
+        {
+            if (strcmp(event.property, "#address-cells") == 0 && event.length == 4)
+            {
+                reserved_addr_cells = static_cast<int>(read_be32(event.value));
+            }
+            else if (strcmp(event.property, "#size-cells") == 0 && event.length == 4)
+            {
+                reserved_size_cells = static_cast<int>(read_be32(event.value));
+            }
+            continue;
+        }
+        if (event.depth != child_depth)
+        {
+            continue;
+        }
+        if (strcmp(event.property, "status") == 0)
+        {
+            child_enabled = event.length >= 2 && memcmp(event.value, "ok", 2) == 0;
+        }
+        else if (strcmp(event.property, "reg") == 0)
+        {
+            child_reg = event.value;
+            child_reg_length = event.length;
+        }
+    }
+
+    if (!walker.valid())
+    {
+        return 0;
+    }
+
+    for (int left = 0; left < count; ++left)
+    {
+        for (int right = left + 1; right < count; ++right)
+        {
+            if (regions[right].base < regions[left].base)
+            {
+                const DtbMemoryRegion temporary = regions[left];
+                regions[left] = regions[right];
+                regions[right] = temporary;
+            }
+        }
+    }
+    return count;
+}
+
 int DtbManager::get_cpu_hartids(uint64 *hartids, int max_harts)
 {
     if (hartids == nullptr || max_harts <= 0)
@@ -379,134 +719,107 @@ int DtbManager::get_cpu_hartids(uint64 *hartids, int max_harts)
         return 0;
     }
 
-    char *p = cursor.struct_base;
-    char *struct_end = cursor.struct_base + cursor.struct_size;
-    int depth = 0;
     int cpus_depth = -1;
     int cpus_addr_cells = 1;
     int cpu_depth = -1;
     bool cpu_name_matches = false;
     bool cpu_device_type_matches = false;
     bool cpu_enabled = true;
-    bool cpu_hartid_valid = false;
-    uint64 cpu_hartid = 0;
+    const uint8 *cpu_reg = nullptr;
+    uint32 cpu_reg_length = 0;
     int found = 0;
 
-    while (p < struct_end)
-    {
-        while (((uint64)p % 4) != 0)
+    auto store_cpu = [&]() {
+        if ((!cpu_name_matches && !cpu_device_type_matches) || !cpu_enabled ||
+            cpu_reg == nullptr || cpus_addr_cells <= 0 || cpus_addr_cells > 2 ||
+            cpu_reg_length < static_cast<uint32>(cpus_addr_cells * 4))
         {
-            ++p;
+            return;
         }
-
-        const uint32 token = read_fdt_u32(p);
-        p += 4;
-        if (token == FDT_END)
+        uint64 cpu_hartid = 0;
+        if (!read_fdt_cells(cpu_reg, cpus_addr_cells, cpu_hartid))
         {
-            break;
+            return;
         }
-
-        if (token == FDT_BEGIN_NODE)
+        for (int index = 0; index < found; ++index)
         {
-            char *name = p;
-            p += strlen(name) + 1;
-
-            if (depth == 1 && strcmp(name, "cpus") == 0)
+            if (hartids[index] == cpu_hartid)
             {
-                cpus_depth = depth;
+                return;
+            }
+        }
+        if (found < max_harts)
+        {
+            hartids[found++] = cpu_hartid;
+        }
+    };
+
+    FdtWalker walker(cursor);
+    FdtEvent event{};
+    while (walker.next(event))
+    {
+        if (event.type == FdtEventType::begin_node)
+        {
+            if (event.depth == 1 && strcmp(event.name, "cpus") == 0)
+            {
+                cpus_depth = event.depth;
                 cpus_addr_cells = 1;
             }
-            else if (cpus_depth >= 0 && depth == cpus_depth + 1)
+            else if (cpus_depth >= 0 && event.depth == cpus_depth + 1)
             {
-                cpu_depth = depth;
-                cpu_name_matches = strncmp(name, "cpu@", 4) == 0;
+                cpu_depth = event.depth;
+                cpu_name_matches = strncmp(event.name, "cpu@", 4) == 0;
                 cpu_device_type_matches = false;
                 cpu_enabled = true;
-                cpu_hartid_valid = false;
-                cpu_hartid = 0;
+                cpu_reg = nullptr;
+                cpu_reg_length = 0;
             }
-
-            ++depth;
             continue;
         }
-
-        if (token == FDT_END_NODE)
+        if (event.type == FdtEventType::end_node)
         {
-            --depth;
-            if (cpu_depth == depth)
+            if (cpu_depth == event.depth)
             {
-                if ((cpu_name_matches || cpu_device_type_matches) && cpu_enabled && cpu_hartid_valid)
-                {
-                    bool duplicate = false;
-                    for (int index = 0; index < found && index < max_harts; ++index)
-                    {
-                        if (hartids[index] == cpu_hartid)
-                        {
-                            duplicate = true;
-                            break;
-                        }
-                    }
-                    if (!duplicate && found < max_harts)
-                    {
-                        hartids[found++] = cpu_hartid;
-                    }
-                }
+                store_cpu();
                 cpu_depth = -1;
             }
-            if (cpus_depth == depth)
+            if (cpus_depth == event.depth)
             {
                 cpus_depth = -1;
             }
             continue;
         }
 
-        if (token == FDT_NOP)
-        {
-            continue;
-        }
-        if (token != FDT_PROP)
-        {
-            break;
-        }
-
-        const uint32 len = read_fdt_u32(p);
-        p += 4;
-        const uint32 nameoff = read_fdt_u32(p);
-        p += 4;
-        char *prop_name = cursor.strings_base + nameoff;
-        char *prop_val = p;
-        p += len;
-
         // /cpus 节点本身的地址单元数决定子 cpu@ 节点 reg 的编码宽度。
-        if (cpus_depth >= 0 && depth == cpus_depth + 1 &&
-            strcmp(prop_name, "#address-cells") == 0 && len >= 4)
+        if (cpus_depth >= 0 && event.depth == cpus_depth &&
+            strcmp(event.property, "#address-cells") == 0 && event.length == 4)
         {
-            cpus_addr_cells = static_cast<int>(read_fdt_u32(prop_val));
+            cpus_addr_cells = static_cast<int>(read_be32(event.value));
             continue;
         }
 
-        if (cpu_depth < 0 || depth != cpu_depth + 1)
+        if (cpu_depth < 0 || event.depth != cpu_depth)
         {
             continue;
         }
 
-        if (strcmp(prop_name, "device_type") == 0)
+        if (strcmp(event.property, "device_type") == 0)
         {
-            cpu_device_type_matches = len >= 3 && strncmp(prop_val, "cpu", 3) == 0;
+            cpu_device_type_matches = event.length >= 3 &&
+                                      memcmp(event.value, "cpu", 3) == 0;
         }
-        else if (strcmp(prop_name, "status") == 0)
+        else if (strcmp(event.property, "status") == 0)
         {
-            cpu_enabled = (len >= 2 && strncmp(prop_val, "ok", 2) == 0);
+            cpu_enabled = event.length >= 2 && memcmp(event.value, "ok", 2) == 0;
         }
-        else if (strcmp(prop_name, "reg") == 0 && cpus_addr_cells > 0 &&
-                 len >= static_cast<uint32>(cpus_addr_cells * 4))
+        else if (strcmp(event.property, "reg") == 0)
         {
-            cpu_hartid = read_fdt_cells(prop_val, cpus_addr_cells);
-            cpu_hartid_valid = true;
+            cpu_reg = event.value;
+            cpu_reg_length = event.length;
         }
     }
 
-    return found;
+    return walker.valid() ? found : 0;
 }
 
 bool DtbManager::get_mac_address(uint64 device_address, uint8 mac[6])
@@ -522,47 +835,32 @@ bool DtbManager::get_mac_address(uint64 device_address, uint8 mac[6])
         return false;
     }
 
-    char *p = cursor.struct_base;
-    char *struct_end = cursor.struct_base + cursor.struct_size;
-    int depth = 0;
     int target_depth = -1;
     bool target_enabled = true;
     bool candidate_valid = false;
     bool candidate_is_local = false;
     uint8 candidate[6]{};
 
-    while (p < struct_end)
+    FdtWalker walker(cursor);
+    FdtEvent event{};
+    while (walker.next(event))
     {
-        while ((reinterpret_cast<uint64>(p) % 4) != 0)
+        if (event.type == FdtEventType::begin_node)
         {
-            ++p;
-        }
-
-        const uint32 token = read_fdt_u32(p);
-        p += 4;
-        if (token == FDT_END)
-        {
-            break;
-        }
-        if (token == FDT_BEGIN_NODE)
-        {
-            char *name = p;
-            p += strlen(name) + 1;
             uint64 unit_address = 0;
-            if (parse_node_unit_address(name, unit_address) && unit_address == device_address)
+            if (target_depth < 0 && parse_node_unit_address(event.name, unit_address) &&
+                unit_address == device_address)
             {
-                target_depth = depth;
+                target_depth = event.depth;
                 target_enabled = true;
                 candidate_valid = false;
                 candidate_is_local = false;
             }
-            ++depth;
             continue;
         }
-        if (token == FDT_END_NODE)
+        if (event.type == FdtEventType::end_node)
         {
-            --depth;
-            if (target_depth == depth)
+            if (target_depth == event.depth)
             {
                 if (target_enabled && candidate_valid)
                 {
@@ -573,38 +871,20 @@ bool DtbManager::get_mac_address(uint64 device_address, uint8 mac[6])
             }
             continue;
         }
-        if (token == FDT_NOP)
+        if (target_depth < 0 || event.depth != target_depth)
         {
             continue;
         }
-        if (token != FDT_PROP)
+        if (strcmp(event.property, "status") == 0)
         {
-            break;
+            target_enabled = event.length >= 2 && memcmp(event.value, "ok", 2) == 0;
         }
-
-        const uint32 len = read_fdt_u32(p);
-        p += 4;
-        const uint32 nameoff = read_fdt_u32(p);
-        p += 4;
-        char *prop_name = cursor.strings_base + nameoff;
-        char *prop_val = p;
-        p += len;
-
-        if (target_depth < 0 || depth != target_depth + 1)
-        {
-            continue;
-        }
-        if (strcmp(prop_name, "status") == 0)
-        {
-            target_enabled = len >= 2 &&
-                             (strncmp(prop_val, "ok", 2) == 0);
-        }
-        else if (len >= sizeof(candidate) &&
-                 (strcmp(prop_name, "local-mac-address") == 0 ||
-                  (!candidate_is_local && strcmp(prop_name, "mac-address") == 0)))
+        else if (event.length >= sizeof(candidate) &&
+                 (strcmp(event.property, "local-mac-address") == 0 ||
+                  (!candidate_is_local && strcmp(event.property, "mac-address") == 0)))
         {
             uint8 property_mac[6]{};
-            memmove(property_mac, prop_val, sizeof(property_mac));
+            memmove(property_mac, event.value, sizeof(property_mac));
             bool property_valid = property_mac[0] != 0xff &&
                                   (property_mac[0] & 1U) == 0;
             bool any_nonzero = false;
@@ -617,7 +897,7 @@ bool DtbManager::get_mac_address(uint64 device_address, uint8 mac[6])
             {
                 memmove(candidate, property_mac, sizeof(candidate));
                 candidate_valid = true;
-                candidate_is_local = strcmp(prop_name, "local-mac-address") == 0;
+                candidate_is_local = strcmp(event.property, "local-mac-address") == 0;
             }
         }
     }
@@ -625,89 +905,60 @@ bool DtbManager::get_mac_address(uint64 device_address, uint8 mac[6])
 }
 
 bool DtbManager::get_initrd(uint64& start, uint64& end) {
-    if (!_dtb_addr) {
-        // printfRed("[DTB] Not initialized!\n");
-        return false;
-    }
-    
-    fdt_header* hdr = (fdt_header*)_dtb_addr;
-    if (bswap32(hdr->magic) != FDT_MAGIC) {
-        printfRed("[DTB] Bad magic: %x\n", bswap32(hdr->magic));
-        return false;
-    }
-    printfYellow("DtbManager::get_initrd called\n");
-    
-    uint32 off_struct = bswap32(hdr->off_dt_struct);
-    uint32 off_strings = bswap32(hdr->off_dt_strings);
-    
-    char* struct_base = (char*)_dtb_addr + off_struct;
-    char* strings_base = (char*)_dtb_addr + off_strings;
-    
-    char* p = struct_base;
-    bool in_chosen = false;
-    
     start = 0;
     end = 0;
 
-    int depth = 0;
+    FdtCursor cursor{};
+    if (!load_fdt_cursor(_dtb_addr, cursor))
+    {
+        return false;
+    }
+
     int chosen_depth = -1;
-
-    while(true) {
-        // Alignment
-        while (((uint64)p % 4) != 0) p++;
-        
-        uint32 token = bswap32(*(uint32*)p);
-        p += 4;
-        
-        if (token == FDT_END) break;
-        
-        if (token == FDT_BEGIN_NODE) {
-            char* name = p;
-            p += strlen(name) + 1;
-            // printfWhite("Node: %s (depth %d)\n", name, depth);
-            if (depth == 1 && strcmp(name, "chosen") == 0) {
-                in_chosen = true;
-                chosen_depth = depth;
-                // printfYellow("[DTB] Found /chosen node\n");
-            } 
-            depth++;
-        } else if (token == FDT_END_NODE) {
-            depth--;
-            if (chosen_depth == depth) {
-                in_chosen = false;
-                chosen_depth = -1;
-            }
-        } else if (token == FDT_PROP) {
-            uint32 len = bswap32(*(uint32*)p);
-            p += 4;
-            uint32 nameoff = bswap32(*(uint32*)p);
-            p += 4;
-            
-            char* prop_name = strings_base + nameoff;
-            char* prop_val = p;
-            p += len;
-            
-            // printfWhite("  Prop: %s, len: %d\n", prop_name, len);
-
-            if (in_chosen) {
-                // printfWhite("[DTB] /chosen prop: %s, len: %d\n", prop_name, len);
-                if (strcmp(prop_name, "linux,initrd-start") == 0) {
-                    if (len == 4) start = bswap32(*(uint32*)prop_val);
-                    else if (len == 8) start = bswap64(*(uint64*)prop_val);
-                    // printfYellow("[DTB] initrd-start: 0x%lx\n", start);
-                } else if (strcmp(prop_name, "linux,initrd-end") == 0) {
-                    if (len == 4) end = bswap32(*(uint32*)prop_val);
-                    else if (len == 8) end = bswap64(*(uint64*)prop_val);
-                    // printfYellow("[DTB] initrd-end: 0x%lx\n", end);
-                }
-            }
-        } else if (token == FDT_NOP) {
+    FdtWalker walker(cursor);
+    FdtEvent event{};
+    while (walker.next(event))
+    {
+        if (event.type == FdtEventType::begin_node && event.depth == 1 &&
+            strcmp(event.name, "chosen") == 0)
+        {
+            chosen_depth = event.depth;
             continue;
         }
+        if (event.type == FdtEventType::end_node && event.depth == chosen_depth)
+        {
+            chosen_depth = -1;
+            continue;
+        }
+        if (event.type != FdtEventType::property || event.depth != chosen_depth)
+        {
+            continue;
+        }
+
+        uint64 value = 0;
+        if (event.length == 4)
+        {
+            value = read_be32(event.value);
+        }
+        else if (event.length == 8)
+        {
+            value = read_be64(event.value);
+        }
+        else
+        {
+            continue;
+        }
+        if (strcmp(event.property, "linux,initrd-start") == 0)
+        {
+            start = value;
+        }
+        else if (strcmp(event.property, "linux,initrd-end") == 0)
+        {
+            end = value;
+        }
     }
-    
-    if (start != 0 && end != 0) return true;
-    return false;
+
+    return walker.valid() && start != 0 && end > start;
 }
 
 void DtbManager::find_dtb_and_initrd(uint64 dtb_addr, uint64 kernel_end_phys) {
@@ -718,10 +969,13 @@ void DtbManager::find_dtb_and_initrd(uint64 dtb_addr, uint64 kernel_end_phys) {
     #endif
 
     auto check_dtb = [&](uint64 p) -> bool {
-        if (p % 8 != 0) return false;
-        volatile unsigned int *ptr = (volatile unsigned int *)(p | conv_base);
-        // FDT Magic 0xd00dfeed (Big Endian) -> 0xedfe0dd0 (Little Endian)
-        return *ptr == 0xedfe0dd0;
+        if (p == 0 || p % 8 != 0)
+        {
+            return false;
+        }
+        FdtCursor cursor{};
+        const uint64 kernel_address = p | conv_base;
+        return load_fdt_cursor(kernel_address, cursor) && validate_fdt_structure(cursor);
     };
     
     // helper to parse hex
@@ -744,6 +998,11 @@ void DtbManager::find_dtb_and_initrd(uint64 dtb_addr, uint64 kernel_end_phys) {
         printfMagenta("[DTB] Received Valid DTB at 0x%lx\n", dtb_addr);
         final_dtb = dtb_addr;
     } else {
+#ifdef BOARD_LS2K1000
+        // 实机地址空间包含大量 MMIO 空洞，不能像 QEMU 一样盲扫前 256MiB。
+        // 固件参数中的 DTB 不完整时立即终止，避免在错误地址上继续解析内存。
+        panic("[DTB] LS2K1000 firmware supplied an invalid DTB at 0x%lx", dtb_addr);
+#else
         printfMagenta("[DTB] Received Invalid DTB at 0x%lx (Magic wrong or align). Scanning RAM...\n", dtb_addr);
         // Scan 0 to 256MB
         for (uint64 p = 0; p < 0x10000000; p += 0x1000) { // 4KB steps
@@ -758,13 +1017,25 @@ void DtbManager::find_dtb_and_initrd(uint64 dtb_addr, uint64 kernel_end_phys) {
             // Try 0x200000 (standard load offset)?
             if (check_dtb(0x200000)) { final_dtb = 0x200000; printfYellow("[DTB] Found at 0x200000\n"); }
         }
+#endif
     }
 
     if (final_dtb != 0) {
+#ifdef LOONGARCH
+        // 对外统一保存物理地址。U-Boot/固件既可能传物理地址，也可能传
+        // cached DMW 别名；若把后者直接交给 PMM，DTB 页面将无法从物理
+        // RAM 区间中排除，随后可能被页分配器覆盖。
+        k_dtb_addr = VIRT2PHY(final_dtb);
+#else
         k_dtb_addr = final_dtb;
+#endif
         DtbManager::init(k_dtb_addr);
     } else {
+#ifdef LOONGARCH
+        k_dtb_addr = VIRT2PHY(dtb_addr);
+#else
         k_dtb_addr = dtb_addr; // Fallback
+#endif
         DtbManager::init(k_dtb_addr);
     }
 

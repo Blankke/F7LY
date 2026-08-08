@@ -10,6 +10,20 @@ _entry:
         move        $s1, $a1
         move        $s2, $a2
         move        $s3, $a3
+        li.d        $s4, 0                  # 主入口负责清理 BSS
+        b           entry_common
+
+.global _secondary_entry
+_secondary_entry:
+        # 次核由主核通过 IOCSR mailbox 唤醒，不应继承或重新解释主核的固件
+        # 参数，更不能再次清空全局 BSS。使用独立入口明确这两个启动契约。
+        move        $s0, $zero
+        move        $s1, $zero
+        move        $s2, $zero
+        move        $s3, $zero
+        li.d        $s4, 1
+
+entry_common:
 
         # entry只对每个CPU设定自己的栈空间，然后跳转到main函数
 
@@ -29,12 +43,9 @@ _entry:
         li.w        $t0, 0x01                 # FPE=1, SXE=0, ASXE=0, BTE=0
         csrwr       $t0, LOONGARCH_CSR_EUEN
 
-        # 只允许引导核清理普通 BSS。次核复用 _entry 时全局状态已经建立，
-        # 再次清零会破坏调度器、页表和设备状态。启动栈位于 sbss_clear 之前，
-        # 不在本清零区间内。
-        csrrd       $t4, LOONGARCH_CSR_CPUID
-        andi        $t4, $t4, 0x1ff
-        bnez        $t4, bss_clear_done
+        # 主入口无条件清理普通 BSS，因此引导核不再被错误限定为 CPU0；次核
+        # 从 _secondary_entry 到达并跳过本段。启动栈位于 sbss_clear 之前。
+        bnez        $s4, bss_clear_done
         la.global   $t0, sbss_clear
         la.global   $t1, ebss_clear
 bss_clear_loop:

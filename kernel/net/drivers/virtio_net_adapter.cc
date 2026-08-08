@@ -11,7 +11,9 @@
 #include "libs/klib.hh"
 #include "libs/printer.hh"
 #include "proc_manager.hh"
+#include "spinlock.hh"
 #include "sys/syscall_defs.hh"
+#include <EASTL/atomic.h>
 
 // ONPS network stack includes
 #include "onps.hh"
@@ -32,26 +34,33 @@ namespace net
     
     // Static variables for adapter state
     // adapter_initialized 表示 ONPS 和板级网卡之间的桥已经搭好。
-    static bool adapter_initialized = false;
+    static eastl::atomic<bool> adapter_initialized{false};
     // ONPS 里的网络接口对象，具体设备名由板级驱动提供。
     static PST_NETIF onps_netif = nullptr;
     // 接收线程运行标志，cleanup 时通过它让线程退出。
-    static bool recv_thread_running = false;
+    static eastl::atomic<bool> recv_thread_running{false};
     
     // 收发路径可能并发执行，不能复用同一块临时帧缓存。
     static uint8 tx_packet_buffer[platform_device::k_max_ethernet_frame];
     static uint8 rx_packet_buffer[platform_device::k_receive_buffer_size];
+    static SpinLock tx_buffer_lock;
+    static bool tx_buffer_lock_initialized = false;
 
     // Initialize the adapter
     bool adapter_init()
     {
         // 适配层也只初始化一次，重复调用直接成功。
-        if (adapter_initialized) {
+        if (adapter_initialized.load(eastl::memory_order_acquire)) {
             printf("[net_adapter] Already initialized\n");
             return true;
         }
         
         printf("[net_adapter] Initializing %s to ONPS adapter\n", platform_device::name());
+        if (!tx_buffer_lock_initialized)
+        {
+            tx_buffer_lock.init("network tx staging");
+            tx_buffer_lock_initialized = true;
+        }
         
         // 底层设备由 init_network_stack() 在启动 ONPS 工作线程前完成初始化；
         // 本层只负责把已经可用的设备注册给协议栈。
@@ -96,7 +105,7 @@ namespace net
         
         printf("[net_adapter] Successfully registered interface with onps\n");
         
-        adapter_initialized = true;
+        adapter_initialized.store(true, eastl::memory_order_release);
         return true;
     }
     
@@ -105,7 +114,7 @@ namespace net
     int platform_emac_send(short buf_list_head, unsigned char *error)
     {
         // ONPS 发包时给的是自己的 buf_list 链表，不是连续内存。
-        if (!adapter_initialized) {
+        if (!adapter_initialized.load(eastl::memory_order_acquire)) {
             if (error) *error = 1; // Generic error
             return -1;
         }
@@ -121,10 +130,13 @@ namespace net
         
         // Merge buffer list into contiguous packet
         // 板级驱动发送接口接收连续帧缓冲，所以先合并 ONPS 链式 buffer。
+        tx_buffer_lock.acquire();
         buf_list_merge_packet(buf_list_head, tx_packet_buffer);
-        
-        // 这里进入当前板级驱动的发送路径。
+
+        // staging buffer 与板级 send 必须处在同一临界区，否则另一个发送者
+        // 会在当前驱动复制完成前覆盖数据。
         int result = platform_device::send(tx_packet_buffer, total_len);
+        tx_buffer_lock.release();
         
         if (result != 0) {
             printf("[net_adapter] platform send failed: %d\n", result);
@@ -146,9 +158,9 @@ namespace net
             return;
         }
 
-        recv_thread_running = true;
+        recv_thread_running.store(true, eastl::memory_order_release);
         printf("[net_adapter] Receive thread started\n");
-        while (recv_thread_running) {
+        while (recv_thread_running.load(eastl::memory_order_acquire)) {
             bool received_any = false;
             for (;;) {
                 // 每轮尽量把设备中已经到达的包全部取完。
@@ -170,6 +182,7 @@ namespace net
                 os_sleep_ms(1);
             }
         }
+        recv_thread_running.store(false, eastl::memory_order_release);
         printf("[net_adapter] Receive thread stopped\n");
     }
     
@@ -185,7 +198,9 @@ namespace net
             return;
         }
         onps_netif = netif;
-        if (recv_thread_running) {
+        bool expected_stopped = false;
+        if (!recv_thread_running.compare_exchange_strong(
+                expected_stopped, true, eastl::memory_order_acq_rel)) {
             // 防止重复创建接收线程。
             return;
         }
@@ -193,6 +208,7 @@ namespace net
         proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
         if (current_proc == nullptr) {
             printf("[net_adapter] No current process for receive thread\n");
+            recv_thread_running.store(false, eastl::memory_order_release);
             return;
         }
 
@@ -203,6 +219,7 @@ namespace net
         proc::Pcb *thread_pcb = proc::k_pm.fork(current_proc, flags, 0, 0, false);
         if (thread_pcb == nullptr) {
             printf("[net_adapter] Failed to fork receive thread\n");
+            recv_thread_running.store(false, eastl::memory_order_release);
             return;
         }
 
@@ -214,7 +231,6 @@ namespace net
         thread_pcb->_name[sizeof(thread_pcb->_name) - 1] = '\0';
 
         // fork 返回的 thread_pcb 此时还持有锁；释放后调度器才能运行这个接收线程。
-        recv_thread_running = true;
         thread_pcb->_lock.release();
     }
     

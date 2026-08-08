@@ -89,6 +89,9 @@ public:
         static void mark_current_online();
         static uint64 possible_cpu_mask();
         static uint64 online_cpu_mask();
+        // 次核在固件/硬件启动超时后，将调度拓扑收缩到已经完成初始化的 CPU。
+        // 返回被移除的 CPU 位图，确保单个次核故障不会把整机永久卡死。
+        static uint64 retain_online_cpus_only();
         static int possible_cpu_count();
         static int online_cpu_count();
 

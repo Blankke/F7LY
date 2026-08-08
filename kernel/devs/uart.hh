@@ -15,16 +15,15 @@ namespace dev
 		char _buf[_buf_size];
 		ulong _wr_idx = 0;
 		ulong _rd_idx = 0;
-		char _read_buf[_buf_size];
-		ulong _read_front = 0;
-		ulong _read_tail = 0;
+		bool _pending_input_valid = false;
+		u8 _pending_input = 0;
 
 	public:
 		UartManager() : _uart_base(0) {}
 		UartManager(uint64 reg_base) : _uart_base((u64)reg_base) {}
 		bool is_initialized() const { return _uart_base != 0; }
-		virtual bool read_ready() override { return !_read_buffer_empty() || (read_lsr() & UartLSR::rx_ready) != 0; }
-		virtual bool write_ready() override { return !_read_buffer_full(); }
+		virtual bool read_ready() override;
+		virtual bool write_ready() override;
 
 		void init(uint64 u_addr);
 		virtual int put_char_sync(u8 c);
@@ -177,18 +176,7 @@ namespace dev
 	private:
 		void _write_reg(uint32 reg, uint8 data);
 		uint8 _read_reg(uint32 reg);
-		constexpr bool _read_buffer_full() { return _read_front == _read_tail + _buf_size; }
-		constexpr bool _read_buffer_empty() { return _read_front == _read_tail; }
-		constexpr void _read_buffer_put(char c)
-		{
-			_read_buf[_read_front % _buf_size] = c;
-			_read_front++;
-		}
-		constexpr char _read_buffer_get()
-		{
-			_read_tail++;
-			return _read_buf[(_read_tail - 1) % _buf_size];
-		}
+		constexpr bool _write_buffer_full() const { return _wr_idx - _rd_idx >= _buf_size; }
 	};
 	extern UartManager k_uart; // 全局的uart管理器
 }

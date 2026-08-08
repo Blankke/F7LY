@@ -745,7 +745,10 @@ constexpr uint64 LOONGARCH_IOCSR_EXTIOI_MAP_BASE = 0x14c0 | DMWIN1_MASK;
 constexpr uint64 LOONGARCH_IOCSR_EXTIOI_ROUTE_BASE = 0x1c00 | DMWIN1_MASK;
 constexpr uint64 LOONGARCH_IOCSR_EXRIOI_NODETYPE_BASE = 0x14a0 | DMWIN1_MASK;
 constexpr uint64 dmwin_mask = 0xFUL << 60;
-constexpr uint64 virt_to_phy_address(uint64 virt) { return virt & ~dmwin_mask; }
+constexpr uint64 virt_to_phy_address(uint64 virt)
+{
+  return loongarch::board::physical_address(virt);
+}
 inline void write_itr_cfg(uint64 itrReg, uint32 data)
 {
   *((volatile uint32 *)itrReg) = data;
@@ -781,10 +784,10 @@ constexpr uint64 iodma_win_base = 0x0UL << 60;
 constexpr uint64 iodma_win_mask = ~(0x0UL) << 32;
 
 
-inline ulong to_phy(ulong addr) { return addr & ~dmwin_mask; }
-inline ulong to_vir(ulong addr) { return to_phy(addr) | DMWIN_MASK; }
-inline ulong to_io(ulong addr) { return to_phy(addr) | DMWIN1_MASK; }
-inline ulong to_dma(ulong addr) { return to_phy(addr) | iodma_win_base; }
+inline ulong to_phy(ulong addr) { return loongarch::board::physical_address(addr); }
+inline ulong to_vir(ulong addr) { return loongarch::board::cached_address(addr); }
+inline ulong to_io(ulong addr) { return loongarch::board::mmio_address(addr); }
+inline ulong to_dma(ulong addr) { return loongarch::board::physical_address(addr) | iodma_win_base; }
 
 // enable device interrupts
 static inline void

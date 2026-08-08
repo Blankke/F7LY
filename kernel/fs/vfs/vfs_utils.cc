@@ -15,7 +15,7 @@
 #include "proc_manager.hh" // 用于访问当前进程的umask
 #include "fs/lwext4/ext4.hh"
 #include "fs/vfs/vfs_ext4_ext.hh" // 包含 NS_to_S 宏
-#include "tm/time.h"              // 包含 TIME2NS 宏
+#include "tm/time.hh"
 #include "mem/memlayout.hh"
 #include "physical_memory_manager.hh"
 #include <EASTL/vector.h>
@@ -3995,7 +3995,7 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
         st->blocks = (st->size + 511) / 512;    // 512字节块数
 
         // 设置时间戳（使用当前时间）
-        uint64 current_time = NS_to_S(TIME2NS(rdtime()));
+        uint64 current_time = tmm::cycles_to_seconds(rdtime());
         st->st_atime_sec = current_time;
         st->st_atime_nsec = 0;
         st->st_ctime_sec = current_time;
@@ -4030,7 +4030,7 @@ int vfs_fstat(fs::file *f, fs::Kstat *st)
         st->blocks = 0;                                     // 设备文件不占用块
         
         // 设置时间戳（使用当前时间）
-        uint64 current_time = NS_to_S(TIME2NS(rdtime()));
+        uint64 current_time = tmm::cycles_to_seconds(rdtime());
         st->st_atime_sec = current_time;
         st->st_atime_nsec = 0;
         st->st_ctime_sec = current_time;

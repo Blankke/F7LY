@@ -21,6 +21,7 @@
 #include "types.hh"
 #include "hal/cpu.hh"
 #include "proc/proc_manager.hh"
+#include <EASTL/atomic.h>
 
 /// @brief POSIX定时器绝对时间标志
 /// 用于timer_settime等函数，指示时间值为绝对时间而非相对时间
@@ -193,6 +194,14 @@ namespace tmm
 	 * @return 系统主时钟频率（Hz）
 	 */
 	inline ulong get_main_frequence() {
+		static eastl::atomic<ulong> cached_frequency{0};
+		const ulong cached = cached_frequency.load(eastl::memory_order_acquire);
+		if (cached != 0)
+		{
+			return cached;
+		}
+
+		ulong detected = qemu_fre;
 #if defined(LOONGARCH) && defined(BOARD_LS2K1000)
 		// LoongArch CPUCFG4/5 描述恒定计数器的基频和倍率。物理板不能沿用
 		// QEMU 的 100MHz 魔数，否则 sleep、futex 和所有 POSIX 时钟都会漂移。
@@ -204,13 +213,43 @@ namespace tmm
 		asm volatile("cpucfg %0, %1" : "=r"(ratio) : "r"(index));
 		const uint64 multiplier = ratio & 0xffffU;
 		const uint64 divisor = (ratio >> 16) & 0xffffU;
+		bool frequency_valid = false;
 		if (base != 0 && multiplier != 0 && divisor != 0)
 		{
-			return static_cast<ulong>((base * multiplier) / divisor);
+			const uint64 quotient = base / divisor;
+			const uint64 remainder = base % divisor;
+			if (quotient <= ~0ULL / multiplier)
+			{
+				detected = static_cast<ulong>(quotient * multiplier +
+				                              (remainder * multiplier) / divisor);
+				frequency_valid = detected >= _1M_dec && detected <= 10ULL * _1G_dec;
+			}
+		}
+		// 失真的恒定计数器频率会同时破坏中断、SATA 超时和 POSIX 时钟。
+		// 实机上拒绝静默回退到 QEMU 频率，让固件/CPUCFG 问题可被直接定位。
+		if (!frequency_valid)
+		{
+			panic("[time] invalid LS2K1000 constant timer frequency: base=%lu ratio=0x%lx",
+			      base, ratio);
 		}
 #endif
-		return qemu_fre;
+		ulong expected = 0;
+		cached_frequency.compare_exchange_strong(
+			expected, detected, eastl::memory_order_acq_rel);
+		return cached_frequency.load(eastl::memory_order_acquire);
 	}
+
+	inline uint64 cycles_to_units(uint64 cycles, uint64 units_per_second)
+	{
+		const uint64 frequency = get_main_frequence();
+		return (cycles / frequency) * units_per_second +
+		       ((cycles % frequency) * units_per_second) / frequency;
+	}
+
+	inline uint64 cycles_to_seconds(uint64 cycles) { return cycles_to_units(cycles, 1); }
+	inline uint64 cycles_to_milliseconds(uint64 cycles) { return cycles_to_units(cycles, _1K_dec); }
+	inline uint64 cycles_to_microseconds(uint64 cycles) { return cycles_to_units(cycles, _1M_dec); }
+	inline uint64 cycles_to_nanoseconds(uint64 cycles) { return cycles_to_units(cycles, _1G_dec); }
 
 	/**
 	 * @brief 获取当前硬件时间戳

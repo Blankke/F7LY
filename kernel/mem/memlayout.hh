@@ -120,7 +120,7 @@
 #define DMWIN1_MASK (0x8UL << 60)
 #define VIRT_DMWIN_MASK 0xf000000000000000
 
-#define VIRT2PHY(addr) ((addr) & ~VIRT_DMWIN_MASK)
+#define VIRT2PHY(addr) (loongarch::board::physical_address((addr)))
 
 // 设备寄存器统一经非缓存 DMW 访问；具体物理地址由板级契约集中选择。
 #define UART0 (loongarch::board::k_uart_mmio)

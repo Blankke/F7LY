@@ -4,8 +4,10 @@
 
 #include "hal/loongarch/platform_board.hh"
 #include "libs/klib.hh"
+#include "platform.hh"
 #include "printer.hh"
 #include "spinlock.hh"
+#include "tm/time.hh"
 
 namespace loongarch::ls2k1000::ahci
 {
@@ -14,7 +16,10 @@ namespace
     constexpr uint32 k_sector_size = 512;
     constexpr uint32 k_bounce_sectors = 128;
     constexpr uint32 k_bounce_bytes = k_bounce_sectors * k_sector_size;
-    constexpr uint32 k_wait_iterations = 20'000'000;
+    constexpr uint64 k_hba_timeout_us = 1'000'000;
+    constexpr uint64 k_link_timeout_us = 5'000'000;
+    constexpr uint64 k_command_timeout_us = 5'000'000;
+    constexpr uint64 k_comreset_hold_us = 1'000;
 
     constexpr uint64 k_hba_cap = 0x00;
     constexpr uint64 k_hba_ghc = 0x04;
@@ -50,7 +55,15 @@ namespace
     constexpr uint32 k_cmd_icc_active = 1U << 28;
     constexpr uint32 k_task_busy = 1U << 7;
     constexpr uint32 k_task_drq = 1U << 3;
-    constexpr uint32 k_port_irq_task_file_error = 1U << 30;
+    constexpr uint32 k_task_error = 1U << 0;
+    constexpr uint32 k_port_irq_error_mask =
+        (1U << 30) | // task file error
+        (1U << 29) | // host bus fatal error
+        (1U << 28) | // host bus data error
+        (1U << 27) | // interface fatal error
+        (1U << 26) | // interface non-fatal error
+        (1U << 24) | // overflow
+        (1U << 23);  // incorrect port multiplier status
     constexpr uint32 k_sata_signature = 0x00000101U;
 
     constexpr uint8 k_fis_register_h2d = 0x27;
@@ -157,9 +170,16 @@ namespace
         return board::physical_address(reinterpret_cast<uint64>(pointer));
     }
 
-    bool wait_clear(uint64 offset, uint32 mask)
+    bool timeout_reached(uint64 start, uint64 timeout_cycles)
     {
-        for (uint32 iteration = 0; iteration < k_wait_iterations; ++iteration)
+        return rdtime() - start >= timeout_cycles;
+    }
+
+    bool wait_clear(uint64 offset, uint32 mask, uint64 timeout_us)
+    {
+        const uint64 start = rdtime();
+        const uint64 timeout_cycles = tmm::qemu_fre_cal_cycles(timeout_us);
+        while (!timeout_reached(start, timeout_cycles))
         {
             if ((read32(offset) & mask) == 0)
             {
@@ -172,7 +192,9 @@ namespace
 
     bool wait_link_ready()
     {
-        for (uint32 iteration = 0; iteration < k_wait_iterations; ++iteration)
+        const uint64 start = rdtime();
+        const uint64 timeout_cycles = tmm::qemu_fre_cal_cycles(k_link_timeout_us);
+        while (!timeout_reached(start, timeout_cycles))
         {
             const uint32 status = read32(port_offset(k_port_ssts));
             const uint32 detect = status & 0xf;
@@ -191,14 +213,16 @@ namespace
     {
         uint32 command = read32(port_offset(k_port_cmd));
         write32(port_offset(k_port_cmd), command & ~k_cmd_start);
-        if (!wait_clear(port_offset(k_port_cmd), k_cmd_command_running))
+        if (!wait_clear(port_offset(k_port_cmd), k_cmd_command_running,
+                        k_hba_timeout_us))
         {
             return false;
         }
 
         command = read32(port_offset(k_port_cmd));
         write32(port_offset(k_port_cmd), command & ~k_cmd_fis_receive);
-        return wait_clear(port_offset(k_port_cmd), k_cmd_fis_running);
+        return wait_clear(port_offset(k_port_cmd), k_cmd_fis_running,
+                          k_hba_timeout_us);
     }
 
     void clear_dma_areas()
@@ -210,6 +234,13 @@ namespace
         asm volatile("dbar 0" ::: "memory");
     }
 
+    bool dma_range_is_32bit(const void *pointer, uint64 size)
+    {
+        const uint64 physical = dma_physical(pointer);
+        return size != 0 && physical <= 0xffffffffULL &&
+               size - 1 <= 0xffffffffULL - physical;
+    }
+
     bool program_port()
     {
         if (!stop_port_engine())
@@ -218,12 +249,16 @@ namespace
         }
 
         clear_dma_areas();
-        const uint64 command_list = dma_physical(g_command_list_storage);
-        const uint64 received_fis = dma_physical(g_received_fis_storage);
-        if ((command_list >> 32) != 0 || (received_fis >> 32) != 0)
+        if (!dma_range_is_32bit(g_command_list_storage, sizeof(g_command_list_storage)) ||
+            !dma_range_is_32bit(g_received_fis_storage, sizeof(g_received_fis_storage)) ||
+            !dma_range_is_32bit(g_command_table_storage, sizeof(g_command_table_storage)) ||
+            !dma_range_is_32bit(g_bounce_storage, sizeof(g_bounce_storage)))
         {
+            printfRed("[ahci] DMA storage is outside the LS2K1000 32-bit window\n");
             return false;
         }
+        const uint64 command_list = dma_physical(g_command_list_storage);
+        const uint64 received_fis = dma_physical(g_received_fis_storage);
 
         write32(port_offset(k_port_clb), static_cast<uint32>(command_list));
         write32(port_offset(k_port_clbu), 0);
@@ -247,7 +282,9 @@ namespace
         // 固件未拉起 SATA PHY 时补一次 COMRESET，然后重新等待链路。
         uint32 control = read32(port_offset(k_port_sctl));
         write32(port_offset(k_port_sctl), (control & ~0xfU) | 1U);
-        for (uint32 delay = 0; delay < 100'000; ++delay)
+        const uint64 reset_start = rdtime();
+        const uint64 reset_cycles = tmm::qemu_fre_cal_cycles(k_comreset_hold_us);
+        while (!timeout_reached(reset_start, reset_cycles))
         {
             asm volatile("nop");
         }
@@ -300,10 +337,13 @@ namespace
         asm volatile("dbar 0" ::: "memory");
     }
 
-    bool issue_slot_zero()
+    bool issue_slot_zero(uint32 expected_bytes)
     {
-        if (!wait_clear(port_offset(k_port_tfd), k_task_busy | k_task_drq))
+        if (!wait_clear(port_offset(k_port_tfd), k_task_busy | k_task_drq,
+                        k_command_timeout_us))
         {
+            printfRed("[ahci] port remained busy before command: tfd=0x%x\n",
+                      read32(port_offset(k_port_tfd)));
             return false;
         }
 
@@ -313,22 +353,42 @@ namespace
         asm volatile("dbar 0" ::: "memory");
         write32(port_offset(k_port_ci), 1U);
 
-        for (uint32 iteration = 0; iteration < k_wait_iterations; ++iteration)
+        const uint64 start = rdtime();
+        const uint64 timeout_cycles = tmm::qemu_fre_cal_cycles(k_command_timeout_us);
+        while (!timeout_reached(start, timeout_cycles))
         {
             const uint32 irq_status = read32(port_offset(k_port_is));
-            if ((irq_status & k_port_irq_task_file_error) != 0)
+            const uint32 task_status = read32(port_offset(k_port_tfd));
+            const uint32 sata_error = read32(port_offset(k_port_serr));
+            if ((irq_status & k_port_irq_error_mask) != 0 ||
+                (task_status & k_task_error) != 0 || sata_error != 0)
             {
                 write32(port_offset(k_port_is), irq_status);
+                write32(port_offset(k_port_serr), sata_error);
+                printfRed("[ahci] command error: is=0x%x tfd=0x%x serr=0x%x\n",
+                          irq_status, task_status, sata_error);
                 return false;
             }
             if ((read32(port_offset(k_port_ci)) & 1U) == 0)
             {
-                write32(port_offset(k_port_is), irq_status);
                 asm volatile("dbar 0" ::: "memory");
+                auto *headers = dma_alias(
+                    reinterpret_cast<CommandHeader *>(g_command_list_storage));
+                const uint32 transferred = headers[0].transferred_bytes;
+                write32(port_offset(k_port_is), irq_status);
+                if (transferred != expected_bytes)
+                {
+                    printfRed("[ahci] short DMA transfer: expected=%u actual=%u\n",
+                              expected_bytes, transferred);
+                    return false;
+                }
                 return true;
             }
             asm volatile("nop");
         }
+        printfRed("[ahci] command timeout: ci=0x%x is=0x%x tfd=0x%x serr=0x%x\n",
+                  read32(port_offset(k_port_ci)), read32(port_offset(k_port_is)),
+                  read32(port_offset(k_port_tfd)), read32(port_offset(k_port_serr)));
         return false;
     }
 
@@ -341,7 +401,7 @@ namespace
     bool identify_disk()
     {
         prepare_command(k_ata_identify, 0, 1, false, true);
-        if (!issue_slot_zero())
+        if (!issue_slot_zero(k_sector_size))
         {
             return false;
         }
@@ -385,8 +445,14 @@ namespace
                                       ? (write ? k_ata_write_dma_ext : k_ata_read_dma_ext)
                                       : (write ? k_ata_write_dma : k_ata_read_dma);
             prepare_command(command, sector, chunk, write, false);
-            if (!issue_slot_zero())
+            if (!issue_slot_zero(bytes))
             {
+                // 停止并重新建立端口 DMA 状态，避免下一次访问复用仍由控制器
+                // 持有的命令表。当前请求仍返回失败，不对写请求做隐式重放。
+                if (!program_port())
+                {
+                    printfRed("[ahci] port recovery failed after I/O error\n");
+                }
                 return -1;
             }
 
@@ -411,7 +477,7 @@ bool initialize()
 
     uint32 control = read32(k_hba_ghc);
     write32(k_hba_ghc, control | k_ghc_ahci_enable | k_ghc_reset);
-    if (!wait_clear(k_hba_ghc, k_ghc_reset))
+    if (!wait_clear(k_hba_ghc, k_ghc_reset, k_hba_timeout_us))
     {
         printfRed("[ahci] HBA reset timeout\n");
         return false;

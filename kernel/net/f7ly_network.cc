@@ -5,6 +5,8 @@
 #include "drivers/platform_net_device.hh"
 #include "libs/printer.hh"
 #include "onps.hh"
+#include "scheduler.hh"
+#include <EASTL/atomic.h>
 
 namespace net
 {
@@ -12,16 +14,41 @@ namespace net
     // ONPS 工作线程，不能再走“先启动线程、失败后立即释放其同步对象”的路径。
     static bool device_initialized = false;
     static bool core_initialized = false;
-    static bool network_initialized = false;
+    constexpr uint32 k_network_idle = 0;
+    constexpr uint32 k_network_initializing = 1;
+    constexpr uint32 k_network_ready = 2;
+    static eastl::atomic<uint32> network_state{k_network_idle};
     
     // Initialize the complete network stack
     bool init_network_stack()
     {
-        // 多个进程第一次创建 AF_INET socket 时都可能走到这里；已经完成就直接返回。
-        if (network_initialized) {
-            printf("[f7ly_network] Network stack already initialized\n");
-            return true;
+        // 多个进程可能同时创建第一个 AF_INET socket。只有 CAS 成功者执行
+        // 硬件/协议栈初始化，其余进程让出 CPU 并观察最终结果。
+        for (;;)
+        {
+            const uint32 state = network_state.load(eastl::memory_order_acquire);
+            if (state == k_network_ready)
+            {
+                return true;
+            }
+            if (state == k_network_idle)
+            {
+                uint32 expected = k_network_idle;
+                if (network_state.compare_exchange_strong(
+                        expected, k_network_initializing, eastl::memory_order_acq_rel))
+                {
+                    break;
+                }
+                continue;
+            }
+            proc::k_scheduler.yield();
         }
+
+        auto finish = [](bool success) {
+            network_state.store(success ? k_network_ready : k_network_idle,
+                                eastl::memory_order_release);
+            return success;
+        };
         
         printf("[f7ly_network] Initializing F7LY network stack\n");
 
@@ -29,7 +56,7 @@ namespace net
         if (!device_initialized) {
             if (!platform_device::initialize()) {
                 printf("[f7ly_network] Platform network driver init failed\n");
-                return false;
+                return finish(false);
             }
             device_initialized = true;
         }
@@ -40,7 +67,7 @@ namespace net
             EN_ONPSERR onps_error;
             if (!open_npstack_load(&onps_error)) {
                 printf("[f7ly_network] Failed to initialize ONPS stack: %d\n", onps_error);
-                return false;
+                return finish(false);
             }
             core_initialized = true;
             printf("[f7ly_network] ONPS core initialized successfully\n");
@@ -51,13 +78,13 @@ namespace net
             printf("[f7ly_network] Failed to initialize platform Net adapter\n");
             // ONPS 的历史 unload 路径没有先等待全部工作线程退出。这里保留已经
             // 成功初始化的 core，下次只重试接口注册，避免释放活线程仍在使用的锁。
-            return false;
+            return finish(false);
         }
         
         printf("[f7ly_network] Platform Net adapter initialized successfully\n");
         
-        network_initialized = true;
-        
+        finish(true);
+
         // Print initial status
 #ifdef RISCV
         print_network_status();
@@ -69,14 +96,14 @@ namespace net
     bool is_network_stack_ready()
     {
         // socket_file 用这个判断是否可以把非 loopback IPv4 流量交给 ONPS。
-        return network_initialized;
+        return network_state.load(eastl::memory_order_acquire) == k_network_ready;
     }
     
     // Print network interface status
     void print_network_status()
     {
         // 调试辅助函数只打印当前板级网卡状态，不改变网络栈行为。
-        if (!network_initialized) {
+        if (!is_network_stack_ready()) {
             printf("[f7ly_network] Network stack not initialized\n");
             return;
         }

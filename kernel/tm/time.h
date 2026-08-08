@@ -14,24 +14,9 @@
 
 #include "types.hh"
 
-// 注意：以下时钟频率定义可能已过时，请参考time.hh中的qemu_fre
-#define FREQUENCY 10000000L // qemu时钟频率12500000
-
-// 时间转换宏（建议使用time.hh中的内联函数替代）
-#define TIME2SEC(time) (time / FREQUENCY)
-#define TIME2MS(time) (time * 1000 / FREQUENCY)
-#define TIME2US(time) (time * 1000 * 1000 / FREQUENCY)
-#define TIME2NS(time) (time * 1000 * 1000 * 1000 / FREQUENCY)
-
 #define TIMESEPC2NS(sepc) (sepc.tv_nsec + sepc.tv_sec * 1000 * 1000 * 1000)
 #define TIMEVAL2NS(val) (val.tv_usec * 1000 + val.tv_sec * 1000000000)
 #define TIMESEPC2SEC(sepc) (sepc.tv_sec + sepc.tv_nsec / (1000 * 1000 * 1000))
-#define TIME2TIMESPEC(time)                                                                                            \
-(struct timespecc) { .tv_sec = TIME2SEC(time), .tv_nsec = TIME2NS(time) % (1000 * 1000 * 1000) }
-
-#define TIME2TIMEVAL(time)                                                                                             \
-(struct timevall) { .tv_sec = TIME2SEC(time), .tv_usec = TIME2US(time) % (1000 * 1000) }
-
 // 遗留的时间结构体定义（建议使用time.hh中的tmm::timespec）
 typedef struct timespecc {
     uint64 tv_sec; /* Seconds */
@@ -53,17 +38,54 @@ struct tms {
     long tms_cstime;
 };
 
-// 时钟ID宏定义（建议使用time.hh中的tmm::SystemClockId枚举）
-#define CLOCK_REALTIME			0
-#define CLOCK_MONOTONIC			1
-#define CLOCK_PROCESS_CPUTIME_ID	2
-#define CLOCK_THREAD_CPUTIME_ID		3
-#define CLOCK_MONOTONIC_RAW		4
-#define CLOCK_REALTIME_COARSE		5
-#define CLOCK_MONOTONIC_COARSE		6
-#define CLOCK_BOOTTIME			7
-#define CLOCK_REALTIME_ALARM		8
-#define CLOCK_BOOTTIME_ALARM		9
-#define CLOCK_TAI                      11
+// C++ 代码使用常量而不是宏，避免破坏 tmm::CLOCK_REALTIME 这类带命名空间的名称。
+// 仅保留 C 分支的宏形式，供遗留 C 编译单元使用。
+#ifdef __cplusplus
+#ifndef CLOCK_REALTIME
+inline constexpr int CLOCK_REALTIME = 0;
+#endif
+#ifndef CLOCK_MONOTONIC
+inline constexpr int CLOCK_MONOTONIC = 1;
+#endif
+#ifndef CLOCK_PROCESS_CPUTIME_ID
+inline constexpr int CLOCK_PROCESS_CPUTIME_ID = 2;
+#endif
+#ifndef CLOCK_THREAD_CPUTIME_ID
+inline constexpr int CLOCK_THREAD_CPUTIME_ID = 3;
+#endif
+#ifndef CLOCK_MONOTONIC_RAW
+inline constexpr int CLOCK_MONOTONIC_RAW = 4;
+#endif
+#ifndef CLOCK_REALTIME_COARSE
+inline constexpr int CLOCK_REALTIME_COARSE = 5;
+#endif
+#ifndef CLOCK_MONOTONIC_COARSE
+inline constexpr int CLOCK_MONOTONIC_COARSE = 6;
+#endif
+#ifndef CLOCK_BOOTTIME
+inline constexpr int CLOCK_BOOTTIME = 7;
+#endif
+#ifndef CLOCK_REALTIME_ALARM
+inline constexpr int CLOCK_REALTIME_ALARM = 8;
+#endif
+#ifndef CLOCK_BOOTTIME_ALARM
+inline constexpr int CLOCK_BOOTTIME_ALARM = 9;
+#endif
+#ifndef CLOCK_TAI
+inline constexpr int CLOCK_TAI = 11;
+#endif
+#else
+#define CLOCK_REALTIME 0
+#define CLOCK_MONOTONIC 1
+#define CLOCK_PROCESS_CPUTIME_ID 2
+#define CLOCK_THREAD_CPUTIME_ID 3
+#define CLOCK_MONOTONIC_RAW 4
+#define CLOCK_REALTIME_COARSE 5
+#define CLOCK_MONOTONIC_COARSE 6
+#define CLOCK_BOOTTIME 7
+#define CLOCK_REALTIME_ALARM 8
+#define CLOCK_BOOTTIME_ALARM 9
+#define CLOCK_TAI 11
+#endif
 
 #endif
