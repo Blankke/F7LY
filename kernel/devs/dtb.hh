@@ -17,7 +17,9 @@ public:
     // PMM 用它精确排除 DTB 所占页面，避免为保护低端 DTB 而丢弃其后的 RAM。
     static uint64 get_dtb_size();
     static bool get_initrd(uint64& start, uint64& end);
-    static void find_dtb_and_initrd(uint64 passed_dtb_addr, uint64 kernel_end_phys);
+    // 校验并初始化固件提供的 DTB，同时缓存 /chosen 中明确声明的 initrd。
+    // 不猜测扫描普通 RAM；没有声明 initrd 时由主块设备直接提供根文件系统。
+    static void initialize_boot_dtb(uint64 passed_dtb_addr);
     static int get_memory_regions(DtbMemoryRegion *regions, int max_regions);
     // 同时读取 FDT reservation map 与 /reserved-memory 子节点。返回的区域
     // 使用物理地址，PMM 必须在建立 buddy 前将它们从可分配 RAM 中排除。

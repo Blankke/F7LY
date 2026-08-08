@@ -3,7 +3,6 @@ PROJECT_ROOT := $(shell pwd)
 IMAGE_DIR := $(PROJECT_ROOT)/images
 ROOTFS_BACKUP := $(IMAGE_DIR)/rootfs.img.back
 ROOTFS_IMAGE := $(IMAGE_DIR)/rootfs.img
-INITRD_IMAGE := $(IMAGE_DIR)/initrd.img
 RISCV_EVAL_IMAGE := $(IMAGE_DIR)/sdcard-rv-pub.img
 LOONGARCH_EVAL_IMAGE := $(IMAGE_DIR)/sdcard-la-pub.img
 RISCV_SHELL_IMAGE := $(IMAGE_DIR)/rootfs-riscv64.img
@@ -379,7 +378,6 @@ $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a:
 run:
 	@if [ "$(BOARD)" != "qemu" ]; then echo "错误：BOARD=$(BOARD) 是物理板目标，禁止进入 QEMU run"; exit 2; fi
 	@$(MAKE) -j$(NPROC) ARCH=$(ARCH) INITCODE_MODE=$(INITCODE_MODE) build
-	@if [ -f $(ROOTFS_BACKUP) ]; then cp $(ROOTFS_BACKUP) $(INITRD_IMAGE); fi
 ifeq ($(ARCH),riscv)
 	$(MAKE) run-riscv ARCH=$(ARCH) QEMU_SNAPSHOT="$(QEMU_RUN_SNAPSHOT)"
 else ifeq ($(ARCH),loongarch)
@@ -391,7 +389,6 @@ endif
 shell:
 	@if [ "$(BOARD)" != "qemu" ]; then echo "错误：BOARD=$(BOARD) 是物理板目标，请只执行 make 2k1000"; exit 2; fi
 	@$(MAKE) -j$(NPROC) ARCH=$(ARCH) INITCODE_MODE=shell build
-	@if [ -f $(ROOTFS_BACKUP) ]; then cp $(ROOTFS_BACKUP) $(INITRD_IMAGE); fi
 ifeq ($(ARCH),riscv)
 	$(MAKE) ARCH=$(ARCH) INITCODE_MODE=shell QEMU_SNAPSHOT="$(QEMU_SHELL_SNAPSHOT)" run-riscv
 else ifeq ($(ARCH),loongarch)
@@ -414,8 +411,7 @@ run-riscv:
 		-no-reboot \
 		-device virtio-net-device,netdev=net \
 		-netdev user,id=net \
-		-rtc base=utc \
-		-initrd $(INITRD_IMAGE)
+		-rtc base=utc
 
 
 run-loongarch:
@@ -431,8 +427,7 @@ run-loongarch:
 		-netdev user,id=net \
 		-device virtio-net-pci,netdev=net \
 		-no-reboot \
-		-rtc base=utc \
-		-initrd $(INITRD_IMAGE)
+		-rtc base=utc
 
 
 

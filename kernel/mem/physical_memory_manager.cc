@@ -308,7 +308,7 @@ namespace mem
         uint64 initrd_end = k_initrd_end;
         if (initrd_start == 0 || initrd_end <= initrd_start)
         {
-            // RISC-V 启动路径不会预先扫描 initrd；在扩大到 DTB 全量内存后必须
+            // RISC-V 启动路径不会预先缓存 initrd；在扩大到 DTB 全量内存后必须
             // 显式保留它，否则 PMM 会在文件系统挂载前覆盖 initrd 内容。
             DtbManager::get_initrd(initrd_start, initrd_end);
         }
@@ -349,6 +349,7 @@ namespace mem
         DtbMemoryRegion firmware_reserved[DtbManager::k_max_reserved_regions]{};
         const int firmware_reserved_count = DtbManager::get_reserved_regions(
             firmware_reserved, DtbManager::k_max_reserved_regions);
+        int accepted_firmware_reserved_count = 0;
         for (int index = 0;
              index < firmware_reserved_count && reserved_count < k_max_reserved_ranges;
              ++index)
@@ -358,17 +359,41 @@ namespace mem
                                     firmware_reserved[index].size,
                                     reserved_end))
             {
+                boardPrintfWarn("[pmm] ignoring invalid reserved region[%d]\n", index);
                 printfYellow("[pmm] ignoring invalid reserved region[%d]\n", index);
                 continue;
             }
             reserved_ranges[reserved_count++] = {
                 firmware_reserved[index].base, reserved_end};
+            ++accepted_firmware_reserved_count;
         }
-        printfGreen("[pmm] honored %d firmware reserved-memory ranges\n",
-                    firmware_reserved_count);
 
         DtbMemoryRegion regions[DtbManager::k_max_memory_regions]{};
         int region_count = DtbManager::get_memory_regions(regions, DtbManager::k_max_memory_regions);
+#ifdef BOARD_LS2K1000
+        // 这些是 PMM 的硬件输入。逐项输出后，可以直接和 DTB 的 memory、
+        // memreserve、reserved-memory、chosen/initrd 节点进行对照。
+        boardPrintfInfo("[pmm] input: ram-regions=%d firmware-reserved=%d/%d "
+                        "combined-reserved=%d\n",
+                        region_count, accepted_firmware_reserved_count,
+                        firmware_reserved_count, reserved_count);
+        for (int index = 0; index < region_count; ++index)
+        {
+            boardPrintf("[pmm] input ram[%d]=0x%lx-0x%lx size=%lu KiB\n",
+                        index, regions[index].base,
+                        regions[index].base + regions[index].size,
+                        regions[index].size / 1024);
+        }
+        for (int index = 0; index < reserved_count; ++index)
+        {
+            boardPrintf("[pmm] input reserved[%d]=0x%lx-0x%lx\n",
+                        index, reserved_ranges[index].start,
+                        reserved_ranges[index].end);
+        }
+#else
+        printfGreen("[pmm] honored %d firmware reserved-memory ranges\n",
+                    accepted_firmware_reserved_count);
+#endif
         uint64 allocator_start = 0;
         uint64 allocator_top = 0;
 
@@ -383,6 +408,7 @@ namespace mem
             uint64 region_top = 0;
             if (!checked_region_top(regions[i].base, regions[i].size, region_top))
             {
+                boardPrintfWarn("[pmm] ignoring invalid DTB memory region[%d]\n", i);
                 printfYellow("[pmm] ignoring invalid dtb memory region[%d]\n", i);
                 continue;
             }
@@ -436,6 +462,7 @@ namespace mem
             uint64 region_top = 0;
             if (!checked_region_top(regions[i].base, regions[i].size, region_top))
             {
+                boardPrintfWarn("[pmm] ignoring invalid DTB memory region[%d]\n", i);
                 printfYellow("[pmm] ignoring invalid dtb memory region[%d]\n", i);
                 continue;
             }
@@ -477,6 +504,9 @@ namespace mem
             allocator_start = to_vir(best_interval.start);
             allocator_top = to_vir(best_interval.top);
             kernel_linear_top = PGROUNDDOWN(PHYSTOP);
+            boardPrintfWarn("[pmm] no usable DTB memory region; fallback-physical="
+                            "0x%lx-0x%lx\n",
+                            VIRT2PHY(allocator_start), VIRT2PHY(allocator_top));
             printfYellow("[pmm] no usable DTB memory region, fallback=%p-%p\n",
                          allocator_start, allocator_top);
         }
@@ -501,6 +531,11 @@ namespace mem
                   allocator_start, allocator_top);
         }
         phys_top = allocator_top;
+#ifdef BOARD_LS2K1000
+        boardPrintfInfo("[pmm] output: selected-ram=0x%lx-0x%lx size=%lu KiB\n",
+                        VIRT2PHY(allocator_start), VIRT2PHY(allocator_top),
+                        (allocator_top - allocator_start) / 1024);
+#endif
 
         const uint32 max_heap_pages = static_cast<uint32>(vm_kernel_heap_size / PGSIZE);
         const uint64 max_heap_metadata = PGROUNDUP(BuddySystem::required_storage_bytes(max_heap_pages));
@@ -545,6 +580,18 @@ namespace mem
         _buddy->Initialize(pa_start, page_count,
                            reinterpret_cast<void *>(pmm_layout.tree_start),
                            pmm_layout.tree_bytes);
+#ifdef BOARD_LS2K1000
+        // 输出的是物理地址而非 DMW 别名，便于与手册、U-Boot bdinfo 和 DTB
+        // 使用同一坐标系核对。区间均为左闭右开 [start,end)。
+        boardPrintfInfo("[pmm] output: buddy=0x%lx-0x%lx pages=%u "
+                        "heap=0x%lx-0x%lx shm=0x%lx-0x%lx\n",
+                        VIRT2PHY(pa_start),
+                        VIRT2PHY(pa_start + static_cast<uint64>(page_count) * PGSIZE),
+                        page_count,
+                        VIRT2PHY(heap_area_start),
+                        VIRT2PHY(heap_area_start + heap_allocator_size),
+                        VIRT2PHY(shm_start), VIRT2PHY(shm_start + shm_size));
+#endif
     }
 
     void *PhysicalMemoryManager::alloc_page()

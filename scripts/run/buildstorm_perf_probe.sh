@@ -145,8 +145,7 @@ timeout "${HOST_TIMEOUT}" make "${RUN_TARGET}" \
     QEMU_MEM=8G \
     QEMU_SMP=8 \
     QEMU_SNAPSHOT= \
-    "QEMU_STORAGE_IMAGE=${TEMP_IMAGE}" \
-    "INITRD_IMAGE=${REPO_ROOT}/images/initrd.img" >"${LOG_PATH}" 2>&1
+    "QEMU_STORAGE_IMAGE=${TEMP_IMAGE}" >"${LOG_PATH}" 2>&1
 RUN_STATUS=$?
 set -e
 kill "${SAMPLER_PID}" >/dev/null 2>&1 || true

@@ -132,7 +132,7 @@ run_arch() {
                 -drive file="${temporary_rootfs}",if=none,format=raw,id=x0 \
                 -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 \
                 -device virtio-net-device,netdev=net -netdev user,id=net \
-                -no-reboot -rtc base=utc -initrd "${PROJECT_ROOT}/images/initrd.img" >"${log}" 2>&1
+                -no-reboot -rtc base=utc >"${log}" 2>&1
         rc=${PIPESTATUS[1]}
     else
         { sleep 5; printf '/f7ly_tlb_shootdown_test --rounds %d\nexit\n' "${rounds}"; } |
@@ -143,7 +143,7 @@ run_arch() {
                 -drive file="${temporary_rootfs}",if=none,format=raw,id=x0 \
                 -device virtio-blk-pci,drive=x0 \
                 -netdev user,id=net -device virtio-net-pci,netdev=net \
-                -no-reboot -rtc base=utc -initrd "${PROJECT_ROOT}/images/initrd.img" >"${log}" 2>&1
+                -no-reboot -rtc base=utc >"${log}" 2>&1
         rc=${PIPESTATUS[1]}
     fi
     set -e

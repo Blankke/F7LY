@@ -11,7 +11,7 @@ F7LY OS 是一个面向教学、比赛和 Linux ABI 兼容性评测的双架构�
 - 双架构：RISC-V `virt` 与 LoongArch `virt` QEMU 环境。
 - 内核语言：C++23 freestanding，禁用异常、RTTI 和宿主 libc 依赖。
 - Linux ABI：使用 asm-generic 风格 syscall 编号，支持 BusyBox、musl/glibc 动态程序和大量 LTP 测例。
-- 文件系统：以 ext4 根文件系统为主，保留 FAT32 数据盘和 initrd/ramdisk 回退能力。
+- 文件系统：以 ext4 根文件系统为主，保留 FAT32 数据盘和固件 DTB initrd/ramdisk 回退能力。
 - 进程与线程：支持 `clone`、`clone3`、`fork`、`execve`、`wait4`、`exit_group`、futex、信号、POSIX timer 等接口。
 - 内存管理：页表、伙伴系统、内核堆、slab、brk、mmap、共享内存、mprotect、mremap 等。
 - I/O 与设备：UART、console、virtio block、loop、pipe/FIFO、eventfd、memfd、epoll 框架。
@@ -34,7 +34,6 @@ F7LY OS 是一个面向教学、比赛和 Linux ABI 兼容性评测的双架构�
 
 - `images/sdcard-rv-pub.img`
 - `images/sdcard-la-pub.img`
-- `images/initrd.img`
 - `images/rootfs-riscv64.img`、`images/rootfs-loongarch64.img`（交互式 shell）
 
 `make run r/l` 默认使用 2026 决赛公开镜像，以 8 vCPU、8 GiB 内存和 snapshot 模式运行；旧 `sdcard-rv.img`、`sdcard-la.img` 仅供既有初赛专项脚本使用。这些镜像通常很大，默认不应作为日常代码改动提交。
@@ -146,7 +145,7 @@ LoongArch 只需把日志名前缀和命令改成 `make run l`。单测调试建
 | `tools/` | 镜像补丁、LTP 分析和其他开发工具 |
 | `scripts/` | 挂载、镜像恢复、宿主机辅助运行脚本 |
 | `debug/gdb/` | GDB 调试配置 |
-| `images/` | 本地运行镜像、initrd 和 sdcard 备份 |
+| `images/` | 本地运行镜像和 sdcard 备份 |
 | `logs/legacy/` | 历史 QEMU 输出样例 |
 | `docs/archive/` | 历史设计文档、答辩材料和比赛总结 |
 | `docs/dev-notes/` | 历史排障记录和上下文材料 |

@@ -37,6 +37,7 @@ namespace dev
 		_wr_idx = _rd_idx = 0;
 		_pending_input_valid = false;
 		_pending_input = 0;
+		_reported_line_errors = 0;
 	}
 
 	bool UartManager::read_ready()
@@ -230,10 +231,19 @@ namespace dev
 		while (1)
 		{
 			_lock.acquire();
-			if ((_read_reg(UartReg::LSR) & UartLSR::rx_ready) == 0)
+			const uint8 line_status = _read_reg(UartReg::LSR);
+			const uint8 new_line_errors =
+				(line_status & UartLSR::line_error_mask) & ~_reported_line_errors;
+			_reported_line_errors |= new_line_errors;
+			if ((line_status & UartLSR::rx_ready) == 0)
 			{
 				start();
 				_lock.release();
+				if (new_line_errors != 0)
+				{
+					boardPrintfError("[uart] line error: lsr=0x%x new=0x%x\n",
+					                 line_status, new_line_errors);
+				}
 				break;
 			}
 
@@ -241,6 +251,11 @@ namespace dev
 			// 与回显路径形成 UART -> Console -> UART 的锁嵌套。
 			u8 c = _read_reg(UartReg::RHR);
 			_lock.release();
+			if (new_line_errors != 0)
+			{
+				boardPrintfError("[uart] line error: lsr=0x%x new=0x%x\n",
+				                 line_status, new_line_errors);
+			}
 			kConsole.console_intr(c);
 		}
 		return 0;

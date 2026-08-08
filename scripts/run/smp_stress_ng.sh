@@ -214,7 +214,7 @@ set +e
         -snapshot -drive file="${rootfs}",if=none,format=raw,id=x0 \
         -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 \
         -device virtio-net-device,netdev=net -netdev user,id=net \
-        -no-reboot -rtc base=utc -initrd "${PROJECT_ROOT}/images/initrd.img" \
+        -no-reboot -rtc base=utc \
         >"${console_log}" 2>&1
 qemu_exit_code=${PIPESTATUS[1]}
 set -e

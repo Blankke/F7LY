@@ -22,7 +22,7 @@ F7LY 可以按五层理解：
 - `user/`：用户态 initcode、系统调用封装、回归测试入口。
 - `thirdparty/EASTL/`：内核使用的 EASTL 容器库。
 - `busybox/`：预置 BusyBox 二进制，按架构和 libc 区分。
-- `images/`：本地运行镜像、initrd、sdcard 备份等大文件资产。
+- `images/`：本地运行镜像、sdcard 备份等大文件资产。
 - `scripts/`：挂载、镜像恢复、宿主机辅助脚本。
 - `debug/gdb/`：按架构拆分的 GDB 调试配置。
 - `tools/ltp/`：LTP 输出解析、排名、历史 scoreboard 工具。
@@ -157,7 +157,7 @@ LoongArch：
 
 关键思路：
 
-- 根文件系统优先使用主盘 ext4；若主盘 FAT32 且 initrd 是 ext4，则用 initrd 作为根，并把 FAT32 挂到 `/fat32`。
+- 根文件系统优先使用主盘 ext4；若主盘 FAT32 且固件通过 DTB 提供 ext4 initrd，则用 initrd 作为根，并把 FAT32 挂到 `/fat32`。
 - `filesystem_init()` 在第一个进程上下文中运行，因为挂载可能 sleep。
 - 新式 `fs::file` 是主要 file 对象抽象，派生类包括 normal、directory、device、pipe、socket、virtual、fat32、epoll。
 - old `struct file` 与 new `fs::file` 并存，修改 fd 路径前先确认实际对象类型。

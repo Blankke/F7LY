@@ -300,12 +300,20 @@ bool initialize()
     g_initialized = false;
     g_tx_next = 0;
     g_rx_next = 0;
+    boardPrintfInfo("[gmac] input: physical=0x%lx mmio=0x%lx irq=%u "
+                    "version=0x%x config=0x%x link=0x%x dma-bus=0x%x\n",
+                    board::k_gmac0_physical,
+                    board::mmio_address(board::k_gmac0_physical),
+                    board::k_gmac0_interrupt, mac_read(k_mac_version),
+                    mac_read(k_mac_config), mac_read(k_mac_rgsmii_status),
+                    dma_read(k_dma_bus_mode));
     // MAC 必须来自板级 DTB 或固件已编程寄存器。固定回退地址会让多块板产生
     // 二层冲突；两处都没有有效地址时宁可禁用网卡并给出明确诊断。
-    if (!DtbManager::get_mac_address(board::k_gmac0_physical, g_mac) &&
-        !read_firmware_mac(g_mac))
+    const bool mac_from_dtb =
+        DtbManager::get_mac_address(board::k_gmac0_physical, g_mac);
+    if (!mac_from_dtb && !read_firmware_mac(g_mac))
     {
-        printfRed("[gmac] no valid MAC in DTB or firmware registers\n");
+        boardPrintfError("[gmac] no valid MAC in DTB or firmware registers\n");
         return false;
     }
 
@@ -316,14 +324,15 @@ bool initialize()
     dma_write(k_dma_interrupt, 0);
     if (!reset_dma())
     {
-        printfRed("[gmac] DMA reset timeout\n");
+        boardPrintfError("[gmac] DMA reset timeout: bus-mode=0x%x status=0x%x\n",
+                         dma_read(k_dma_bus_mode), dma_read(k_dma_status));
         return false;
     }
 
     if (!dma_range_is_32bit(&g_ring_storage, sizeof(g_ring_storage)) ||
         !dma_range_is_32bit(&g_buffer_storage, sizeof(g_buffer_storage)))
     {
-        printfRed("[gmac] descriptor/buffer storage is outside the 32-bit DMA window\n");
+        boardPrintfError("[gmac] descriptor/buffer storage is outside the 32-bit DMA window\n");
         return false;
     }
     const uint32 tx_ring = dma_address(&g_ring_storage.tx[0]);
@@ -361,9 +370,12 @@ bool initialize()
 
     g_initialized = true;
     const uint32 link = mac_read(k_mac_rgsmii_status);
-    printfGreen("[gmac] GMAC0 ready: version=0x%x mac=%02x:%02x:%02x:%02x:%02x:%02x link=%s\n",
-                mac_read(k_mac_version), g_mac[0], g_mac[1], g_mac[2],
-                g_mac[3], g_mac[4], g_mac[5], (link & k_link_up) != 0 ? "up" : "down");
+    boardPrintfInfo("[gmac] output: ready mac=%02x:%02x:%02x:%02x:%02x:%02x "
+                    "source=%s link=%s raw-link=0x%x tx-ring=0x%x rx-ring=0x%x\n",
+                    g_mac[0], g_mac[1], g_mac[2], g_mac[3], g_mac[4], g_mac[5],
+                    mac_from_dtb ? "DTB" : "firmware-registers",
+                    (link & k_link_up) != 0 ? "up" : "down", link,
+                    tx_ring, rx_ring);
     return true;
 }
 
@@ -479,7 +491,7 @@ void poll()
         }
         if ((status & k_dma_fatal_bus_error) != 0)
         {
-            printfRed("[gmac] fatal DMA bus error: status=0x%x\n", status);
+            boardPrintfError("[gmac] fatal DMA bus error: status=0x%x\n", status);
         }
     }
     configure_link(mac_read(k_mac_rgsmii_status));
@@ -496,9 +508,10 @@ void get_mac(uint8 mac[6])
 
 void debug_status()
 {
-    printf("[gmac] mac_config=0x%x link=0x%x dma_status=0x%x dma_control=0x%x\n",
-           mac_read(k_mac_config), mac_read(k_mac_rgsmii_status),
-           dma_read(k_dma_status), dma_read(k_dma_control));
+    boardPrintf("[gmac] status: mac-config=0x%x link=0x%x dma-status=0x%x "
+                "dma-control=0x%x\n",
+                mac_read(k_mac_config), mac_read(k_mac_rgsmii_status),
+                dma_read(k_dma_status), dma_read(k_dma_control));
 }
 } // namespace loongarch::ls2k1000::gmac
 

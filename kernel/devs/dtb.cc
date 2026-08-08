@@ -82,17 +82,30 @@ namespace
         return offset <= total_size && size <= total_size - offset;
     }
 
-    static bool load_fdt_cursor(uint64 dtb_addr, FdtCursor &cursor)
+    static bool load_fdt_cursor(uint64 dtb_addr, FdtCursor &cursor,
+                                const char **failure_reason = nullptr)
     {
+        if (failure_reason != nullptr)
+        {
+            *failure_reason = nullptr;
+        }
+        auto fail = [&](const char *reason) {
+            if (failure_reason != nullptr)
+            {
+                *failure_reason = reason;
+            }
+            return false;
+        };
+
         if (dtb_addr == 0)
         {
-            return false;
+            return fail("address is zero");
         }
 
         const auto *header = reinterpret_cast<const fdt_header *>(dtb_addr);
         if (read_be32(&header->magic) != FDT_MAGIC)
         {
-            return false;
+            return fail("bad FDT magic");
         }
 
         const uint32 total_size = read_be32(&header->totalsize);
@@ -106,15 +119,34 @@ namespace
 
         // 本内核只接受包含 size_dt_struct/size_dt_strings 的现代 FDT。限制
         // totalsize 还能阻止损坏头部把后续边界检查扩展到任意内存。
-        if (total_size < sizeof(fdt_header) || total_size > k_max_fdt_size ||
-            version < 17 || last_compatible_version > 17 ||
-            (off_struct & 3U) != 0 || (off_reservation_map & 7U) != 0 ||
-            !blob_range_valid(total_size, off_struct, struct_size) ||
-            !blob_range_valid(total_size, off_strings, strings_size) ||
-            !blob_range_valid(total_size, off_reservation_map, 16) ||
-            struct_size < sizeof(uint32))
+        if (total_size < sizeof(fdt_header) || total_size > k_max_fdt_size)
         {
-            return false;
+            return fail("totalsize is outside 40B..16MiB");
+        }
+        if (version < 17 || last_compatible_version > 17)
+        {
+            return fail("unsupported FDT version");
+        }
+        if ((off_struct & 3U) != 0)
+        {
+            return fail("structure offset is not 4-byte aligned");
+        }
+        if ((off_reservation_map & 7U) != 0)
+        {
+            return fail("reservation-map offset is not 8-byte aligned");
+        }
+        if (struct_size < sizeof(uint32) ||
+            !blob_range_valid(total_size, off_struct, struct_size))
+        {
+            return fail("structure block is outside the blob");
+        }
+        if (!blob_range_valid(total_size, off_strings, strings_size))
+        {
+            return fail("strings block is outside the blob");
+        }
+        if (!blob_range_valid(total_size, off_reservation_map, 16))
+        {
+            return fail("reservation map is outside the blob");
         }
 
         const auto *blob = reinterpret_cast<const uint8 *>(dtb_addr);
@@ -577,6 +609,8 @@ int DtbManager::get_reserved_regions(DtbMemoryRegion *regions, int max_regions)
     }
     if (!reservation_map_terminated)
     {
+        boardPrintfError("[DTB] reservation map has no terminator inside totalsize\n");
+        printfRed("[DTB] reservation map has no terminator inside totalsize\n");
         return 0;
     }
 
@@ -688,6 +722,8 @@ int DtbManager::get_reserved_regions(DtbMemoryRegion *regions, int max_regions)
 
     if (!walker.valid())
     {
+        boardPrintfError("[DTB] reserved-memory traversal failed after initial validation\n");
+        printfRed("[DTB] reserved-memory traversal failed after initial validation\n");
         return 0;
     }
 
@@ -961,49 +997,67 @@ bool DtbManager::get_initrd(uint64& start, uint64& end) {
     return walker.valid() && start != 0 && end > start;
 }
 
-void DtbManager::find_dtb_and_initrd(uint64 dtb_addr, uint64 kernel_end_phys) {
+void DtbManager::initialize_boot_dtb(uint64 dtb_addr) {
     #ifdef LOONGARCH
     uint64 conv_base = 0x9000000000000000UL;
     #else
     uint64 conv_base = 0; // RISC-V usually direct map or identical or handled by VMM
     #endif
 
-    auto check_dtb = [&](uint64 p) -> bool {
-        if (p == 0 || p % 8 != 0)
+    auto check_dtb = [&](uint64 p, const char **failure_reason = nullptr) -> bool {
+        if (failure_reason != nullptr)
         {
+            *failure_reason = nullptr;
+        }
+        if (p == 0)
+        {
+            if (failure_reason != nullptr)
+            {
+                *failure_reason = "address is zero";
+            }
+            return false;
+        }
+        if (p % 8 != 0)
+        {
+            if (failure_reason != nullptr)
+            {
+                *failure_reason = "address is not 8-byte aligned";
+            }
             return false;
         }
         FdtCursor cursor{};
         const uint64 kernel_address = p | conv_base;
-        return load_fdt_cursor(kernel_address, cursor) && validate_fdt_structure(cursor);
-    };
-    
-    // helper to parse hex
-    auto parse_hex8 = [&](volatile char* p) -> uint64 {
-        uint64 v = 0;
-        for(int i=0; i<8; i++) {
-            char c = p[i];
-            int d = 0;
-            if(c>='0' && c<='9') d = c-'0';
-            else if(c>='a' && c<='f') d = c-'a'+10;
-            else if(c>='A' && c<='F') d = c-'A'+10;
-            v = (v << 4) | d;
+        if (!load_fdt_cursor(kernel_address, cursor, failure_reason))
+        {
+            return false;
         }
-        return v;
+        if (!validate_fdt_structure(cursor))
+        {
+            if (failure_reason != nullptr)
+            {
+                *failure_reason = "malformed structure tokens/nesting/property";
+            }
+            return false;
+        }
+        return true;
     };
-
     uint64 final_dtb = 0;
+    const char *dtb_failure_reason = nullptr;
 
-    if (check_dtb(dtb_addr)) {
-        printfMagenta("[DTB] Received Valid DTB at 0x%lx\n", dtb_addr);
+    if (check_dtb(dtb_addr, &dtb_failure_reason)) {
+        boardPrintfInfo("[DTB] firmware address valid: 0x%lx\n", dtb_addr);
         final_dtb = dtb_addr;
     } else {
 #ifdef BOARD_LS2K1000
         // 实机地址空间包含大量 MMIO 空洞，不能像 QEMU 一样盲扫前 256MiB。
         // 固件参数中的 DTB 不完整时立即终止，避免在错误地址上继续解析内存。
-        panic("[DTB] LS2K1000 firmware supplied an invalid DTB at 0x%lx", dtb_addr);
+        panic("[DTB] invalid LS2K1000 firmware DTB: address=0x%lx reason=%s",
+              dtb_addr,
+              dtb_failure_reason != nullptr ? dtb_failure_reason : "unknown");
 #else
-        printfMagenta("[DTB] Received Invalid DTB at 0x%lx (Magic wrong or align). Scanning RAM...\n", dtb_addr);
+        printfMagenta("[DTB] invalid firmware DTB at 0x%lx: %s; scanning RAM...\n",
+                      dtb_addr,
+                      dtb_failure_reason != nullptr ? dtb_failure_reason : "unknown");
         // Scan 0 to 256MB
         for (uint64 p = 0; p < 0x10000000; p += 0x1000) { // 4KB steps
             if (check_dtb(p)) {
@@ -1039,71 +1093,29 @@ void DtbManager::find_dtb_and_initrd(uint64 dtb_addr, uint64 kernel_end_phys) {
         DtbManager::init(k_dtb_addr);
     }
 
+    boardPrintfInfo("[DTB] blob ready: physical=0x%lx size=%lu bytes\n",
+                    k_dtb_addr, DtbManager::get_dtb_size());
+
     uint64 described_initrd_start = 0;
     uint64 described_initrd_end = 0;
     if (DtbManager::get_initrd(described_initrd_start, described_initrd_end))
     {
         k_initrd_start = described_initrd_start;
         k_initrd_end = described_initrd_end;
+        boardPrintfInfo("[DTB] firmware initrd: 0x%lx-0x%lx\n",
+                        k_initrd_start, k_initrd_end);
         printfMagenta("[DTB] Using firmware-described initrd 0x%lx-0x%lx\n",
                       k_initrd_start, k_initrd_end);
         return;
     }
 
-#ifdef BOARD_LS2K1000
-    // 实机内存布局必须以 DTB reserved-memory/chosen 为权威。扫描一段“看起来像
-    // RAM”的地址寻找 ext4 magic 既慢，也可能误认普通数据或触碰固件保留区。
+    // initrd 必须由固件通过 /chosen 明确声明。扫描普通 RAM 猜测 ext4/CPIO
+    // 既无法可靠确定镜像边界，也可能误认内核数据；缺省路径统一使用主块设备。
     k_initrd_start = 0;
     k_initrd_end = 0;
-    printfMagenta("[DTB] LS2K1000 DTB 未声明 initrd，使用 SATA 根文件系统\n");
-    return;
+#ifdef BOARD_LS2K1000
+    boardPrintfInfo("[DTB] no initrd in DTB; root device=SATA\n");
+#else
+    boardPrintfInfo("[DTB] no initrd in DTB; root device=VirtIO\n");
 #endif
-
-    // Align to 4K
-    if (kernel_end_phys % 0x1000) kernel_end_phys = (kernel_end_phys + 0x1000) & ~0xFFFUL;
-
-    if (kernel_end_phys < 0x200000) kernel_end_phys = 0x1000000; // safety
-
-    printfMagenta("[DTB] Scanning for Initrd (EXT4/CPIO) from 0x%lx...\n", kernel_end_phys);
-    bool found_initrd = false;
-    // Scan up to 128MB (0x08000000)
-    for (uint64 p = kernel_end_phys; p < 0x08000000; p += 0x1000) { 
-         uint64 v = p | conv_base;
-         
-         // Check EXT4: Magic 0xEF53 at offset 0x438 (1080)
-         // Superblock starts at 1024. Magic is at 1024 + 0x38 = 1080 = 0x438
-         volatile uint16 *ext4_magic = (volatile uint16 *)(v + 0x438);
-         if (*ext4_magic == 0xEF53) {
-             printfYellow("[DTB] Found EXT4 Initrd at 0x%lx\n", p);
-             volatile uint32 *s_log_block_size = (volatile uint32 *)(v + 1024 + 0x18);
-             volatile uint32 *s_blocks_count = (volatile uint32 *)(v + 1024 + 0x4);
-             
-             uint32 block_size = 1024 << (*s_log_block_size);
-             uint64 total_size = (uint64)(*s_blocks_count) * block_size;
-             
-             printfYellow("       Size: %ld bytes (Blocks: %d, BSize: %d)\n", total_size, *s_blocks_count, block_size);
-             
-             k_initrd_start = p;
-             k_initrd_end = p + total_size;
-             found_initrd = true;
-             break;
-         }
-         
-         // Check CPIO: "070701" at offset 0
-         volatile char *cpio = (volatile char*)(v);
-         if (cpio[0]=='0' && cpio[1]=='7' && cpio[2]=='0' && cpio[3]=='7' && cpio[4]=='0' && cpio[5]=='1') {
-             printfYellow("[DTB] Found CPIO Initrd at 0x%lx\n", p);
-             k_initrd_start = p;
-             // Try to parse parsing... hex at offset 54
-             uint64 filesize = parse_hex8(cpio + 54);
-             
-             if (filesize == 0) filesize = 32*1024*1024; // Fallback
-             k_initrd_end = p + filesize; 
-             found_initrd = true;
-             break;
-         }
-    }
-    if (!found_initrd) {
-        printfRed("[DTB] Initrd NOT FOUND in scanning.\n");
-    }
 }

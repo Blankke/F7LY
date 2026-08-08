@@ -58,8 +58,8 @@ void init(uint32 enabled_inputs)
     g_enabled_inputs = enabled_inputs;
     write32(k_enable_offset, enabled_inputs);
     asm volatile("dbar 0" ::: "memory");
-    printfGreen("[liointc] enabled=0x%x cascade=%u route=0x%x\n",
-                enabled_inputs, board::k_external_cpu_interrupt, route);
+    boardPrintfInfo("[liointc] output: enabled=0x%x cascade=%u route=0x%x\n",
+                    enabled_inputs, board::k_external_cpu_interrupt, route);
 }
 
 uint32 claim()

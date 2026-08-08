@@ -209,7 +209,7 @@ void filesystem_init(void)
         DtbManager::init(k_dtb_addr);
     }
     printfBlue("[fs] DTB 已初始化，地址=0x%lx\n", k_dtb_addr);
-    printfBlue("[fs] initrd 扫描结果：start=0x%lx end=0x%lx\n", k_initrd_start, k_initrd_end);
+    printfBlue("[fs] initrd 启动信息：start=0x%lx end=0x%lx\n", k_initrd_start, k_initrd_end);
     
     uint64 start = 0, end = 0;
     int ramdisk_dev_id = -1;
@@ -229,7 +229,8 @@ void filesystem_init(void)
              printfRed("[fs] RamDisk 分配失败\n");
         }
     } else if (k_initrd_start != 0 && k_initrd_end > k_initrd_start) {
-        printfYellow("[fs] DTB 未给出 initrd，回退到扫描结果：0x%lx - 0x%lx\n", k_initrd_start, k_initrd_end);
+        printfYellow("[fs] DTB 重新解析失败，使用启动期缓存的 initrd：0x%lx - 0x%lx\n",
+                     k_initrd_start, k_initrd_end);
         start = k_initrd_start;
         end = k_initrd_end;
         
@@ -240,7 +241,7 @@ void filesystem_init(void)
         dev::RamDisk* ramdisk = new dev::RamDisk(ramdisk_start, end - start);
         if (ramdisk) {
             ramdisk_dev_id = dev::k_devm.register_block_device(ramdisk, "ramdisk");
-            printfGreen("[fs] 扫描到的 initrd 已注册为块设备 %d\n", ramdisk_dev_id);
+            printfGreen("[fs] 缓存的 initrd 已注册为块设备 %d\n", ramdisk_dev_id);
         }
     } else {
         printfYellow("[fs] 未找到 initrd，将直接探测主块设备\n");

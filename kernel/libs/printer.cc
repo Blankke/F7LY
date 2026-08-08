@@ -255,7 +255,9 @@ void Printer::init()
 	dev::kConsole.init();
 	_console = &dev::kConsole;
 	_type = out_type::console;
-	printf("Printer::init end\n");
+
+	// 此时 UART、Console 和 Printer 锁均已就绪，后续板级诊断可以安全输出。
+	boardPrintfInfo("[boot] stage=console ready\n");
 }
 
 // printf 控制函数实现
@@ -347,6 +349,22 @@ void Printer::print(const char *fmt, ...)
 {
 	if (disable_printf_flag) return;
 	if (fmt == nullptr) k_panic(__FILE__, __LINE__, "null fmt");
+
+	const int tmp_locking = _locking;
+	if (tmp_locking) _lock.acquire();
+
+	va_list ap;
+	va_start(ap, fmt);
+	ConsoleWriter writer { _console };
+	vformat_to_writer(writer, fmt, ap);
+	va_end(ap);
+
+	if (tmp_locking) _lock.release();
+}
+
+void Printer::print_board_diagnostic(const char *fmt, ...)
+{
+	if (fmt == nullptr || _console == nullptr) return;
 
 	const int tmp_locking = _locking;
 	if (tmp_locking) _lock.acquire();

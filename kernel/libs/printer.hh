@@ -118,6 +118,9 @@ public:
 	static bool trace_group_enabled();
 
 	void print(const char *fmt, ...);
+	// 板级 bring-up 日志绕过用户态调试开关，但仍复用同一控制台和打印锁。
+	// 仅允许低频的启动阶段、硬件输入/输出和故障信息使用。
+	void print_board_diagnostic(const char *fmt, ...);
 	int snprint(char *buffer, size_t size, const char *fmt, ...);
 	void printint(int xx, int base, int sign);
 	void printbyte(uint8 x);
@@ -182,6 +185,30 @@ public:
 	
 };
 extern Printer k_printer;
+
+// 2K1000 实机的独立诊断通道。其它目标在编译期移除这些调用，因此不会改变
+// QEMU 评测输出，也不会为了看板级日志而放开整个内核的 info/warn 噪声。
+#ifdef BOARD_LS2K1000
+#define boardPrintf(format, args...) \
+	k_printer.print_board_diagnostic(format, ##args)
+#define boardPrintfInfo(format, args...) \
+	k_printer.print_board_diagnostic("\33[1;32m" format "\33[0m", ##args)
+#define boardPrintfWarn(format, args...) \
+	k_printer.print_board_diagnostic("\33[1;33m" format "\33[0m", ##args)
+#define boardPrintfError(format, args...) \
+	k_printer.print_board_diagnostic("\33[1;31m" format "\33[0m", ##args)
+#else
+// 保留不可达调用用于格式和参数类型检查，同时让仅用于诊断的局部变量仍被
+// 编译器视为已使用；优化后不会生成调用或字符串数据。
+#define boardPrintf(format, args...) \
+	do { if (false) k_printer.print_board_diagnostic(format, ##args); } while (0)
+#define boardPrintfInfo(format, args...) \
+	do { if (false) k_printer.print_board_diagnostic(format, ##args); } while (0)
+#define boardPrintfWarn(format, args...) \
+	do { if (false) k_printer.print_board_diagnostic(format, ##args); } while (0)
+#define boardPrintfError(format, args...) \
+	do { if (false) k_printer.print_board_diagnostic(format, ##args); } while (0)
+#endif
 
 // printf 控制宏定义（必须放在类定义之后以避免宏展开冲突）
 #define enable_printf() Printer::enable_printf()

@@ -99,6 +99,16 @@ namespace
         trap_mgr.inithart();
         hal::tlb::initialize_current_cpu();
         Cpu::mark_current_online();
+        if (Cpu::is_possible_cpu(cpu_id))
+        {
+            boardPrintfInfo("[smp] output: cpu=%lu online mask=0x%lx\n",
+                            cpu_id, Cpu::online_cpu_mask());
+        }
+        else
+        {
+            boardPrintfWarn("[smp] output: late cpu=%lu initialized after timeout; parking\n",
+                            cpu_id);
+        }
         Cpu::wait_for_scheduler_ready();
         // 主核可能因启动超时收缩了 possible mask。已经越过第一道检查但尚未
         // 发布 online 的迟到次核，在进入调度器前必须再次确认自己仍被接纳。
@@ -124,6 +134,10 @@ namespace
             }
 
             // 固件停驻代码从 mailbox0 读取入口，mailbox1 保留启动参数。
+            boardPrintf("[smp] request: cpu=%lu entry-physical=0x%lx "
+                        "entry-cached=0x%lx argument=0x%lx\n",
+                        cpu_id, loongarch::board::physical_address(entry),
+                        loongarch::board::cached_address(entry), boot_argument);
             loongarch::smp::start_secondary_cpu(cpu_id, entry, boot_argument);
         }
     }
@@ -150,11 +164,18 @@ void configure_topology()
     int cpu_count = DtbManager::get_cpu_hartids(cpu_ids, NCPU);
     if (cpu_count == 0)
     {
+        boardPrintfWarn("[smp] input: DTB has no usable CPU nodes; using boot CPU only\n");
         cpu_ids[0] = Cpu::bootstrap_cpu_id();
         cpu_count = 1;
     }
 
     Cpu::configure_topology(cpu_ids, cpu_count);
+    boardPrintfInfo("[smp] input: boot-cpu=%lu dtb-cpus=%d possible-mask=0x%lx\n",
+                    Cpu::bootstrap_cpu_id(), cpu_count, Cpu::possible_cpu_mask());
+    for (int index = 0; index < cpu_count; ++index)
+    {
+        boardPrintf("[smp] input cpu[%d]=%lu\n", index, cpu_ids[index]);
+    }
 }
 
 void start_secondaries(uint64 boot_argument)
@@ -162,6 +183,8 @@ void start_secondaries(uint64 boot_argument)
     // LoongArch 次核初始停在固件停驻代码；先发 mailbox/IPI，再发布
     // bootstrap gate，可保证次核无论先后到达都只能观察到完整全局状态。
     hal::tlb::initialize_current_cpu();
+    boardPrintfInfo("[smp] startup: possible=0x%lx already-online=0x%lx\n",
+                    Cpu::possible_cpu_mask(), Cpu::online_cpu_mask());
     request_secondary_start(boot_argument);
     Cpu::publish_bootstrap_ready();
 
@@ -174,12 +197,16 @@ void start_secondaries(uint64 boot_argument)
         if (rdtime() - wait_start >= wait_cycles)
         {
             const uint64 missing = Cpu::retain_online_cpus_only();
-            printfYellow("[smp] secondary startup timeout, disabled mask=0x%lx online=0x%lx\n",
-                         missing, Cpu::online_cpu_mask());
+            boardPrintfWarn("[smp] secondary startup timeout, disabled mask=0x%lx "
+                            "online=0x%lx\n",
+                            missing, Cpu::online_cpu_mask());
             break;
         }
         asm volatile("" ::: "memory");
     }
+    boardPrintfInfo("[smp] output: possible=0x%lx online=0x%lx cpus=%d\n",
+                    Cpu::possible_cpu_mask(), Cpu::online_cpu_mask(),
+                    Cpu::online_cpu_count());
     Cpu::publish_scheduler_ready();
 }
 

@@ -17,6 +17,8 @@ namespace dev
 		ulong _rd_idx = 0;
 		bool _pending_input_valid = false;
 		u8 _pending_input = 0;
+		// 每种线路错误只报告一次，既保留上板线索，也避免故障串口持续刷屏。
+		u8 _reported_line_errors = 0;
 
 	public:
 		UartManager() : _uart_base(0) {}
@@ -75,7 +77,14 @@ namespace dev
 		enum UartLSR
 		{
 			rx_ready = 0x1 << 0,
+			overrun_error = 0x1 << 1,
+			parity_error = 0x1 << 2,
+			framing_error = 0x1 << 3,
+			break_interrupt = 0x1 << 4,
 			tx_idle = 0x1 << 5,
+			fifo_error = 0x1 << 7,
+			line_error_mask = overrun_error | parity_error | framing_error |
+			                  break_interrupt | fifo_error,
 		};
 		enum UartBaud
 		{

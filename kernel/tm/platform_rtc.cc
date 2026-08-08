@@ -96,11 +96,11 @@ bool initialize_platform_realtime()
         timespec now{static_cast<long>(epoch), 0};
         if (k_tm.clock_settime(CLOCK_REALTIME, &now) == 0)
         {
-            printfGreen("[rtc] CLOCK_REALTIME initialized: epoch=%lu\n", epoch);
+            boardPrintfInfo("[rtc] output: CLOCK_REALTIME epoch=%lu\n", epoch);
             return true;
         }
     }
-    printfYellow("[rtc] invalid LS2K1000 TOY value, using fallback realtime base\n");
+    boardPrintfWarn("[rtc] invalid LS2K1000 TOY value; using fallback realtime base\n");
     return false;
 #else
     return true;

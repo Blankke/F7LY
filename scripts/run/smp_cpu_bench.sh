@@ -290,7 +290,7 @@ build_and_run_case() {
                 -drive file="${temporary_rootfs}",if=none,format=raw,id=x0 \
                 -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 \
                 -device virtio-net-device,netdev=net -netdev user,id=net \
-                -no-reboot -rtc base=utc -initrd "${PROJECT_ROOT}/images/initrd.img" >"${log_file}" 2>&1
+                -no-reboot -rtc base=utc >"${log_file}" 2>&1
         qemu_exit_code=${PIPESTATUS[1]}
     else
         { sleep 3; printf '%s\n' "${command_line}" 'exit'; } |
@@ -302,7 +302,7 @@ build_and_run_case() {
                 -drive file="${temporary_rootfs}",if=none,format=raw,id=x0 \
                 -device virtio-blk-pci,drive=x0 \
                 -netdev user,id=net -device virtio-net-pci,netdev=net \
-                -no-reboot -rtc base=utc -initrd "${PROJECT_ROOT}/images/initrd.img" >"${log_file}" 2>&1
+                -no-reboot -rtc base=utc >"${log_file}" 2>&1
         qemu_exit_code=${PIPESTATUS[1]}
     fi
     set -e

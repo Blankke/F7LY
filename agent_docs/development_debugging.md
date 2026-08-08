@@ -186,8 +186,9 @@ echo "$log"
 
 QEMU 运行参数由 Makefile 管理：
 
-- RISC-V：`qemu-system-riscv64 -machine virt -kernel kernel-rv -drive file=images/sdcard-rv-pub.img ... -initrd images/initrd.img`
-- LoongArch：`qemu-system-loongarch64 -machine virt -kernel kernel-la -drive file=images/sdcard-la-pub.img ... -initrd images/initrd.img`
+- RISC-V：`qemu-system-riscv64 -machine virt -kernel kernel-rv -drive file=images/sdcard-rv-pub.img ...`
+- LoongArch：`qemu-system-loongarch64 -machine virt -kernel kernel-la -drive file=images/sdcard-la-pub.img ...`
+- 默认 QEMU 运行直接使用 ext4 主盘，不再加载本地 `initrd.img`。固件若在 DTB `/chosen` 中明确声明 ext4 initrd，内核仍保留回退能力。
 - 默认内存：`QEMU_MEM ?= 8G`
 - 调试内存：`QEMU_DEBUG_MEM ?= 8G`
 - 默认 CPU：`QEMU_SMP ?= 8`

@@ -245,6 +245,8 @@ namespace
     {
         if (!stop_port_engine())
         {
+            boardPrintfError("[ahci] failed to stop port engine: cmd=0x%x\n",
+                             read32(port_offset(k_port_cmd)));
             return false;
         }
 
@@ -254,7 +256,7 @@ namespace
             !dma_range_is_32bit(g_command_table_storage, sizeof(g_command_table_storage)) ||
             !dma_range_is_32bit(g_bounce_storage, sizeof(g_bounce_storage)))
         {
-            printfRed("[ahci] DMA storage is outside the LS2K1000 32-bit window\n");
+            boardPrintfError("[ahci] DMA storage is outside the LS2K1000 32-bit window\n");
             return false;
         }
         const uint64 command_list = dma_physical(g_command_list_storage);
@@ -289,7 +291,17 @@ namespace
             asm volatile("nop");
         }
         write32(port_offset(k_port_sctl), control & ~0xfU);
-        return wait_link_ready();
+        if (!wait_link_ready())
+        {
+            boardPrintfError("[ahci] SATA link timeout after COMRESET: ssts=0x%x "
+                             "tfd=0x%x serr=0x%x sctl=0x%x\n",
+                             read32(port_offset(k_port_ssts)),
+                             read32(port_offset(k_port_tfd)),
+                             read32(port_offset(k_port_serr)),
+                             read32(port_offset(k_port_sctl)));
+            return false;
+        }
+        return true;
     }
 
     void prepare_command(uint8 command, uint64 lba, uint32 sectors, bool write, bool identify)
@@ -342,8 +354,8 @@ namespace
         if (!wait_clear(port_offset(k_port_tfd), k_task_busy | k_task_drq,
                         k_command_timeout_us))
         {
-            printfRed("[ahci] port remained busy before command: tfd=0x%x\n",
-                      read32(port_offset(k_port_tfd)));
+            boardPrintfError("[ahci] port remained busy before command: tfd=0x%x\n",
+                             read32(port_offset(k_port_tfd)));
             return false;
         }
 
@@ -365,8 +377,8 @@ namespace
             {
                 write32(port_offset(k_port_is), irq_status);
                 write32(port_offset(k_port_serr), sata_error);
-                printfRed("[ahci] command error: is=0x%x tfd=0x%x serr=0x%x\n",
-                          irq_status, task_status, sata_error);
+                boardPrintfError("[ahci] command error: is=0x%x tfd=0x%x serr=0x%x\n",
+                                 irq_status, task_status, sata_error);
                 return false;
             }
             if ((read32(port_offset(k_port_ci)) & 1U) == 0)
@@ -378,17 +390,18 @@ namespace
                 write32(port_offset(k_port_is), irq_status);
                 if (transferred != expected_bytes)
                 {
-                    printfRed("[ahci] short DMA transfer: expected=%u actual=%u\n",
-                              expected_bytes, transferred);
+                    boardPrintfError("[ahci] short DMA transfer: expected=%u actual=%u\n",
+                                     expected_bytes, transferred);
                     return false;
                 }
                 return true;
             }
             asm volatile("nop");
         }
-        printfRed("[ahci] command timeout: ci=0x%x is=0x%x tfd=0x%x serr=0x%x\n",
-                  read32(port_offset(k_port_ci)), read32(port_offset(k_port_is)),
-                  read32(port_offset(k_port_tfd)), read32(port_offset(k_port_serr)));
+        boardPrintfError("[ahci] command timeout: ci=0x%x is=0x%x tfd=0x%x "
+                         "serr=0x%x\n",
+                         read32(port_offset(k_port_ci)), read32(port_offset(k_port_is)),
+                         read32(port_offset(k_port_tfd)), read32(port_offset(k_port_serr)));
         return false;
     }
 
@@ -451,7 +464,7 @@ namespace
                 // 持有的命令表。当前请求仍返回失败，不对写请求做隐式重放。
                 if (!program_port())
                 {
-                    printfRed("[ahci] port recovery failed after I/O error\n");
+                    boardPrintfError("[ahci] port recovery failed after I/O error\n");
                 }
                 return -1;
             }
@@ -476,10 +489,16 @@ bool initialize()
     g_capacity_sectors = 0;
 
     uint32 control = read32(k_hba_ghc);
+    boardPrintfInfo("[ahci] input: physical=0x%lx mmio=0x%lx irq=%u "
+                    "ghc=0x%x cap=0x%x pi=0x%x\n",
+                    board::k_ahci_physical,
+                    board::mmio_address(board::k_ahci_physical),
+                    board::k_ahci_interrupt, control,
+                    read32(k_hba_cap), read32(k_hba_pi));
     write32(k_hba_ghc, control | k_ghc_ahci_enable | k_ghc_reset);
     if (!wait_clear(k_hba_ghc, k_ghc_reset, k_hba_timeout_us))
     {
-        printfRed("[ahci] HBA reset timeout\n");
+        boardPrintfError("[ahci] HBA reset timeout\n");
         return false;
     }
     write32(k_hba_ghc, (read32(k_hba_ghc) | k_ghc_ahci_enable) & ~k_ghc_interrupt_enable);
@@ -498,30 +517,34 @@ bool initialize()
     }
     if ((ports & 1U) == 0)
     {
-        printfRed("[ahci] LS2K1000 port0 is not implemented: PI=0x%x\n", ports);
+        boardPrintfError("[ahci] LS2K1000 port0 is not implemented: PI=0x%x\n",
+                         ports);
         return false;
     }
 
     if (!program_port())
     {
-        printfRed("[ahci] SATA port0 link/engine initialization failed\n");
+        boardPrintfError("[ahci] SATA port0 link/engine initialization failed\n");
         return false;
     }
     const uint32 signature = read32(port_offset(k_port_sig));
     if (signature != 0 && signature != k_sata_signature)
     {
-        printfRed("[ahci] unsupported SATA signature=0x%x\n", signature);
+        boardPrintfError("[ahci] unsupported SATA signature=0x%x\n", signature);
         return false;
     }
     if (!identify_disk())
     {
-        printfRed("[ahci] IDENTIFY DEVICE failed\n");
+        boardPrintfError("[ahci] IDENTIFY DEVICE failed\n");
         return false;
     }
 
     g_initialized = true;
-    printfGreen("[ahci] SATA disk ready: sectors=%lu lba48=%d\n",
-                g_capacity_sectors, static_cast<int>(g_lba48));
+    boardPrintfInfo("[ahci] output: SATA disk ready sectors=%lu lba48=%d "
+                    "ssts=0x%x sig=0x%x clb=0x%x fb=0x%x\n",
+                    g_capacity_sectors, static_cast<int>(g_lba48),
+                    read32(port_offset(k_port_ssts)), signature,
+                    read32(port_offset(k_port_clb)), read32(port_offset(k_port_fb)));
     return true;
 }
 
