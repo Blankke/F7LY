@@ -1,5 +1,6 @@
 #include "console.hh"
 #include "proc_manager.hh"
+#include "global_operator.hh"
 namespace dev
 {
   Console kConsole; // 全局控制台对象
@@ -21,8 +22,15 @@ namespace dev
   void Console::init()
   {
     _lock.init("console");
-    // 控制台、中断分发和 /dev/stdin 必须共享同一个 UART 实例，避免两套
-    // 环形缓冲和未初始化锁分别消费同一硬件 FIFO。
+
+    // 内核链接脚本不保留 .init_array，因此 C++ 全局对象不会自动执行
+    // 构造函数。UartManager 是多态类，若只调用 init()，其虚函数表指针
+    // 仍为空，将在 /dev/stdin 绑定时触发内核页故障。这里是全局 UART
+    // 的唯一初始化入口，必须先显式构造，再初始化硬件和锁。
+    new (&k_uart) UartManager();
+
+    // 控制台、中断分发和 /dev/stdin 共享同一个 UART 实例，避免两套
+    // 环形缓冲和锁分别消费同一硬件 FIFO。
     k_uart.init(UART0);
   }
 
