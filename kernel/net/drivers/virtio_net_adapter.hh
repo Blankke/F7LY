@@ -1,36 +1,24 @@
 //
-// VirtIO Net to ONPS Adapter Interface
-// This adapter bridges virtio_net driver with onps network stack
+// 板级网卡到 ONPS 的适配接口。文件名为历史遗留，接口本身不依赖 VirtIO。
 //
 
 #pragma once
 
 #include "types.hh"
 #include "platform.hh"
-#include "virtio_net.hh"
 
 namespace net
 {
-    // Adapter initialization - sets up virtio net and registers with onps
+    // 初始化当前板级网卡并注册到 ONPS。
     bool adapter_init();
-    
-    // Cleanup function
-    void adapter_cleanup();
     
     // Function to be called by onps ethernet layer for sending packets
     // This implements PFUN_EMAC_SEND interface expected by onps
-    int virtio_emac_send(short buf_list_head, unsigned char *error);
+    int platform_emac_send(short buf_list_head, unsigned char *error);
     
-    // Background thread function for receiving packets from virtio and 
-    // forwarding them to onps ethernet layer
-    void virtio_recv_thread(void *param);
+    // 从当前板级网卡收包并转交 ONPS 以太网层的后台线程。
+    void platform_recv_thread(void *param);
     
-    // Helper function to start the receive thread
-    void start_recv_thread();
-    
-    // Stop the receive thread
-    void stop_recv_thread();
-    
-    // Get virtio net MAC address for onps registration
+    // 获取当前板级网卡 MAC。
     void get_mac_address(unsigned char mac[6]);
 }

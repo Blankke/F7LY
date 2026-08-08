@@ -509,6 +509,121 @@ int DtbManager::get_cpu_hartids(uint64 *hartids, int max_harts)
     return found;
 }
 
+bool DtbManager::get_mac_address(uint64 device_address, uint8 mac[6])
+{
+    if (mac == nullptr)
+    {
+        return false;
+    }
+
+    FdtCursor cursor{};
+    if (!load_fdt_cursor(_dtb_addr, cursor))
+    {
+        return false;
+    }
+
+    char *p = cursor.struct_base;
+    char *struct_end = cursor.struct_base + cursor.struct_size;
+    int depth = 0;
+    int target_depth = -1;
+    bool target_enabled = true;
+    bool candidate_valid = false;
+    bool candidate_is_local = false;
+    uint8 candidate[6]{};
+
+    while (p < struct_end)
+    {
+        while ((reinterpret_cast<uint64>(p) % 4) != 0)
+        {
+            ++p;
+        }
+
+        const uint32 token = read_fdt_u32(p);
+        p += 4;
+        if (token == FDT_END)
+        {
+            break;
+        }
+        if (token == FDT_BEGIN_NODE)
+        {
+            char *name = p;
+            p += strlen(name) + 1;
+            uint64 unit_address = 0;
+            if (parse_node_unit_address(name, unit_address) && unit_address == device_address)
+            {
+                target_depth = depth;
+                target_enabled = true;
+                candidate_valid = false;
+                candidate_is_local = false;
+            }
+            ++depth;
+            continue;
+        }
+        if (token == FDT_END_NODE)
+        {
+            --depth;
+            if (target_depth == depth)
+            {
+                if (target_enabled && candidate_valid)
+                {
+                    memmove(mac, candidate, sizeof(candidate));
+                    return true;
+                }
+                target_depth = -1;
+            }
+            continue;
+        }
+        if (token == FDT_NOP)
+        {
+            continue;
+        }
+        if (token != FDT_PROP)
+        {
+            break;
+        }
+
+        const uint32 len = read_fdt_u32(p);
+        p += 4;
+        const uint32 nameoff = read_fdt_u32(p);
+        p += 4;
+        char *prop_name = cursor.strings_base + nameoff;
+        char *prop_val = p;
+        p += len;
+
+        if (target_depth < 0 || depth != target_depth + 1)
+        {
+            continue;
+        }
+        if (strcmp(prop_name, "status") == 0)
+        {
+            target_enabled = len >= 2 &&
+                             (strncmp(prop_val, "ok", 2) == 0);
+        }
+        else if (len >= sizeof(candidate) &&
+                 (strcmp(prop_name, "local-mac-address") == 0 ||
+                  (!candidate_is_local && strcmp(prop_name, "mac-address") == 0)))
+        {
+            uint8 property_mac[6]{};
+            memmove(property_mac, prop_val, sizeof(property_mac));
+            bool property_valid = property_mac[0] != 0xff &&
+                                  (property_mac[0] & 1U) == 0;
+            bool any_nonzero = false;
+            for (uint32 index = 0; index < sizeof(property_mac); ++index)
+            {
+                any_nonzero = any_nonzero || property_mac[index] != 0;
+            }
+            property_valid = property_valid && any_nonzero;
+            if (property_valid)
+            {
+                memmove(candidate, property_mac, sizeof(candidate));
+                candidate_valid = true;
+                candidate_is_local = strcmp(prop_name, "local-mac-address") == 0;
+            }
+        }
+    }
+    return false;
+}
+
 bool DtbManager::get_initrd(uint64& start, uint64& end) {
     if (!_dtb_addr) {
         // printfRed("[DTB] Not initialized!\n");
@@ -652,6 +767,26 @@ void DtbManager::find_dtb_and_initrd(uint64 dtb_addr, uint64 kernel_end_phys) {
         k_dtb_addr = dtb_addr; // Fallback
         DtbManager::init(k_dtb_addr);
     }
+
+    uint64 described_initrd_start = 0;
+    uint64 described_initrd_end = 0;
+    if (DtbManager::get_initrd(described_initrd_start, described_initrd_end))
+    {
+        k_initrd_start = described_initrd_start;
+        k_initrd_end = described_initrd_end;
+        printfMagenta("[DTB] Using firmware-described initrd 0x%lx-0x%lx\n",
+                      k_initrd_start, k_initrd_end);
+        return;
+    }
+
+#ifdef BOARD_LS2K1000
+    // 实机内存布局必须以 DTB reserved-memory/chosen 为权威。扫描一段“看起来像
+    // RAM”的地址寻找 ext4 magic 既慢，也可能误认普通数据或触碰固件保留区。
+    k_initrd_start = 0;
+    k_initrd_end = 0;
+    printfMagenta("[DTB] LS2K1000 DTB 未声明 initrd，使用 SATA 根文件系统\n");
+    return;
+#endif
 
     // Align to 4K
     if (kernel_end_phys % 0x1000) kernel_end_phys = (kernel_end_phys + 0x1000) & ~0xFFFUL;

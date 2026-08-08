@@ -105,6 +105,7 @@
 #define USER_MEMORY_TOP USER_TRAPFRAME_BASE
 #define KSTACK(p) (TRAPFRAME - (((p)+1)* KSTACK_TOTAL_PAGES - KSTACK_GUARD_PAGES )*PGSIZE) // 内核栈栈底
 #elif defined(LOONGARCH)
+#include "hal/loongarch/platform_board.hh"
 // Physical memory layout
 
 // 0x00200000 -- bios loads kernel here and jumps here
@@ -115,18 +116,18 @@
 // 0x90000000 -- RAM used by user pages
 
 
-#define DMWIN_MASK 0x9UL << 60
-#define DMWIN1_MASK 0x8UL << 60
+#define DMWIN_MASK (0x9UL << 60)
+#define DMWIN1_MASK (0x8UL << 60)
 #define VIRT_DMWIN_MASK 0xf000000000000000
 
 #define VIRT2PHY(addr) ((addr) & ~VIRT_DMWIN_MASK)
 
-// qemu puts UART registers here in virtual memory.
-#define UART0 (0x1fe001e0UL | DMWIN_MASK)
-#define UART0_IRQ 2
+// 设备寄存器统一经非缓存 DMW 访问；具体物理地址由板级契约集中选择。
+#define UART0 (loongarch::board::k_uart_mmio)
+#define UART0_IRQ (loongarch::board::k_uart_interrupt)
 
 /* ============== LS7A registers =============== */
-#define LS7A_PCH_REG_BASE		(0x10000000UL | DMWIN_MASK)
+#define LS7A_PCH_REG_BASE		(0x10000000UL | DMWIN1_MASK)
 
 #define LS7A_INT_MASK_REG		LS7A_PCH_REG_BASE + 0x020
 #define LS7A_INT_EDGE_REG		LS7A_PCH_REG_BASE + 0x060

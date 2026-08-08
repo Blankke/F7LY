@@ -16,7 +16,7 @@
 #include "fs/vfs/file/socket_file.hh"
 #include "fs/vfs/fs.hh"
 #include "fs/vfs/vfs_utils.hh"
-#include "fs/drivers/virtio_blk.hh"
+#include "fs/drivers/platform_block.hh"
 #include "loop_device.hh"
 #include "tm/time.hh"
 #include "tm/timer_manager.hh"
@@ -31,7 +31,6 @@ namespace fs
         constexpr int64 k_nsec_per_sec = 1000000000LL;
         constexpr int64 k_max_timens_offset_sec = 9223372036LL;
         constexpr int64 k_min_timens_offset_sec = -9223372036LL;
-        constexpr uint64 k_dev_block_8_0_size = 512ull * 8ull * 1024ull * 1024ull;
         int g_proc_sys_fs_pipe_max_size = proc::ipc::max_pipe_size;
         int g_proc_sys_fs_lease_break_time_sec = 45;
         int g_proc_sys_fs_inotify_max_queued_events = 15;
@@ -612,7 +611,7 @@ namespace fs
     {
         if (_major == 8 && _minor == 0)
         {
-            return k_dev_block_8_0_size;
+            return platform_block_capacity_bytes(0);
         }
         return 0;
     }
@@ -652,7 +651,7 @@ namespace fs
 
         uint64 start_sector = static_cast<uint64>(off) / BSIZE;
         uint32 sector_count = static_cast<uint32>(bytes / BSIZE);
-        int rc = virtio_disk_rw_sectors(0, reinterpret_cast<void *>(buf), start_sector, sector_count, 0);
+        int rc = platform_block_rw_sectors(0, reinterpret_cast<void *>(buf), start_sector, sector_count, 0);
         return rc == 0 ? static_cast<long>(bytes) : -EIO;
     }
 
@@ -691,7 +690,7 @@ namespace fs
 
         uint64 start_sector = static_cast<uint64>(off) / BSIZE;
         uint32 sector_count = static_cast<uint32>(bytes / BSIZE);
-        int rc = virtio_disk_rw_sectors(0, reinterpret_cast<void *>(buf), start_sector, sector_count, 1);
+        int rc = platform_block_rw_sectors(0, reinterpret_cast<void *>(buf), start_sector, sector_count, 1);
         return rc == 0 ? static_cast<long>(bytes) : -EIO;
     }
 

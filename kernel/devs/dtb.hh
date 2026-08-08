@@ -20,6 +20,8 @@ public:
     static int get_memory_regions(DtbMemoryRegion *regions, int max_regions);
     // 读取 /cpus 下可用 CPU 的 hartid。启动代码据此只拉起 QEMU 实际提供的次核。
     static int get_cpu_hartids(uint64 *hartids, int max_harts);
+    // 按设备节点的 MMIO 单元地址读取 MAC，供板载网卡避免硬编码固件配置。
+    static bool get_mac_address(uint64 device_address, uint8 mac[6]);
 private:
     static uint64 _dtb_addr;
 };

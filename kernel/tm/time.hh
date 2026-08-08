@@ -147,9 +147,12 @@ namespace tmm
 	 * qemu_fre。这里先拆成“整秒 + 余数”再相乘，避免长时间运行后
 	 * cycles * 1000000 发生 64 位溢出。
 	 */
-	constexpr inline uint64 qemu_fre_cal_usec( uint64 cycles ) {
-		return ( cycles / qemu_fre ) * _1M_dec +
-		       ( ( cycles % qemu_fre ) * _1M_dec ) / qemu_fre;
+	inline ulong get_main_frequence();
+
+	inline uint64 qemu_fre_cal_usec( uint64 cycles ) {
+		const uint64 frequency = get_main_frequence();
+		return ( cycles / frequency ) * _1M_dec +
+		       ( ( cycles % frequency ) * _1M_dec ) / frequency;
 	}
 	
 	/**
@@ -157,9 +160,10 @@ namespace tmm
 	 * @param usec 微秒数
 	 * @return 对应的硬件时钟周期数
 	 */
-	constexpr inline uint64 qemu_fre_cal_cycles( uint64 usec ) {
-		return ( usec / _1M_dec ) * qemu_fre +
-		       ( ( usec % _1M_dec ) * qemu_fre ) / _1M_dec;
+	inline uint64 qemu_fre_cal_cycles( uint64 usec ) {
+		const uint64 frequency = get_main_frequence();
+		return ( usec / _1M_dec ) * frequency +
+		       ( ( usec % _1M_dec ) * frequency ) / _1M_dec;
 	}
 
 	/**
@@ -178,8 +182,6 @@ namespace tmm
 	 * RISC-V 侧虽然最终不会直接使用 div_fre 写寄存器，但仍通过 cycles_per_tick()
 	 * 与其他共享代码保持同一套语义。
 	 */
-	constexpr uint div_fre = static_cast<uint>(qemu_fre_cal_cycles(tick_period_us) >> 2);
-	
 	/**
 	 * @brief 每个tick对应的毫秒数
 	 * 计算公式：(分频值 * 1000) / 时钟频率
@@ -190,8 +192,24 @@ namespace tmm
 	 * @brief 获取主时钟频率
 	 * @return 系统主时钟频率（Hz）
 	 */
-	inline ulong get_main_frequence() { 
-		return qemu_fre; 
+	inline ulong get_main_frequence() {
+#if defined(LOONGARCH) && defined(BOARD_LS2K1000)
+		// LoongArch CPUCFG4/5 描述恒定计数器的基频和倍率。物理板不能沿用
+		// QEMU 的 100MHz 魔数，否则 sleep、futex 和所有 POSIX 时钟都会漂移。
+		uint64 base = 0;
+		uint64 ratio = 0;
+		uint64 index = 4;
+		asm volatile("cpucfg %0, %1" : "=r"(base) : "r"(index));
+		index = 5;
+		asm volatile("cpucfg %0, %1" : "=r"(ratio) : "r"(index));
+		const uint64 multiplier = ratio & 0xffffU;
+		const uint64 divisor = (ratio >> 16) & 0xffffU;
+		if (base != 0 && multiplier != 0 && divisor != 0)
+		{
+			return static_cast<ulong>((base * multiplier) / divisor);
+		}
+#endif
+		return qemu_fre;
 	}
 
 	/**
@@ -227,7 +245,7 @@ namespace tmm
 	 * @note 低两位由硬件自动补齐，所以需要左移2位
 	 */
 	inline ulong cycles_per_tick() { 
-		return div_fre << 2; 
+		return (qemu_fre_cal_cycles(tick_period_us) >> 2) << 2;
 	}
 
 } // namespace tmm

@@ -21,9 +21,14 @@ namespace dev
 		_uart_base = u_addr;
 
 		_write_reg(UartReg::IER, 0x0);
+#ifndef BOARD_LS2K1000
+		// QEMU 的 UART 输入时钟固定，可使用历史 divisor=3。2K1000 的时钟来自
+		// 板级时钟树，启动 DTB 又没有把时钟计算接入本驱动，因此实机保留
+		// U-Boot 已配置好的 115200 divisor，避免用 QEMU 魔数破坏早期串口。
 		_write_reg(UartReg::LCR, UartLCR::access_baud);
 		_write_reg(UartBaud::low_8_bit, 0x03);
 		_write_reg(UartBaud::high_8_bit, 0x00);
+#endif
 		_write_reg(UartReg::LCR, UartLCR::use_8_bits);
 		_write_reg(UartReg::FCR, UartFCR::enable | UartFCR::clear);
 		_write_reg(UartReg::IER, UartIER::rx_en);

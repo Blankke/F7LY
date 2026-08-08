@@ -24,7 +24,7 @@
 #include "fs/buf.hh"
 #include "devs/device_manager.hh"
 #include "devs/block_device.hh"
-#include "fs/drivers/virtio_blk.hh"
+#include "fs/drivers/platform_block.hh"
 struct {
   SpinLock lock;
   struct buf buf[NBUF];
@@ -112,11 +112,7 @@ bread(uint dev, uint blockno)
     }
 
     if (!handled) {
-      if (dev == 0) {
-        virtio_disk_rw(b, 0);
-      } else {
-        virtio_disk_rw2(b, 0);
-      }
+      platform_block_rw(b, 0);
     }
 
     b->valid = 1;
@@ -144,11 +140,7 @@ bwrite(struct buf *b)
   }
 
   if (!handled) {
-    if (b->dev == 0) {
-      virtio_disk_rw(b, 1);
-    } else {
-      virtio_disk_rw2(b, 1);
-    }
+    platform_block_rw(b, 1);
   }
 }
 
@@ -190,4 +182,3 @@ bunpin(struct buf *b) {
   b->refcnt--;
   bcache.lock.release();
 }
-

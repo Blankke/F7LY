@@ -1,10 +1,10 @@
 //
-// VirtIO Net to ONPS Adapter Implementation
-// This adapter bridges virtio_net driver with onps network stack
+// 板级网卡到 ONPS 的适配层。文件名保留用于减少本次跨分支改名噪声，
+// 实现不再依赖具体 VirtIO 设备。
 //
 
 #include "virtio_net_adapter.hh"
-#include "virtio_net.hh"
+#include "platform_net_device.hh"
 #include "platform.hh"
 #include "mem/memlayout.hh"
 #include "libs/string.hh"
@@ -28,44 +28,38 @@ namespace net
     // ethernet_add 需要一个“启动接收线程”的回调，这里先前向声明。
     static void start_recv_thread_wrapper(void *param);
     // 真正循环收包的内核线程函数。
-    extern void virtio_recv_thread(void *param);
+    extern void platform_recv_thread(void *param);
     
     // Static variables for adapter state
-    // adapter_initialized 表示 ONPS 和 VirtIO 之间的桥已经搭好。
+    // adapter_initialized 表示 ONPS 和板级网卡之间的桥已经搭好。
     static bool adapter_initialized = false;
-    // ONPS 里的网络接口对象，代表 virtio0。
+    // ONPS 里的网络接口对象，具体设备名由板级驱动提供。
     static PST_NETIF onps_netif = nullptr;
     // 接收线程运行标志，cleanup 时通过它让线程退出。
     static bool recv_thread_running = false;
     
     // 收发路径可能并发执行，不能复用同一块临时帧缓存。
-    static uint8 tx_packet_buffer[ETH_FRAME_LEN];
-    static uint8 rx_packet_buffer[ETH_FRAME_LEN];
+    static uint8 tx_packet_buffer[platform_device::k_max_ethernet_frame];
+    static uint8 rx_packet_buffer[platform_device::k_receive_buffer_size];
 
     // Initialize the adapter
     bool adapter_init()
     {
         // 适配层也只初始化一次，重复调用直接成功。
         if (adapter_initialized) {
-            printf("[virtio_net_adapter] Already initialized\n");
+            printf("[net_adapter] Already initialized\n");
             return true;
         }
         
-        printf("[virtio_net_adapter] Initializing VirtIO Net to ONPS adapter\n");
+        printf("[net_adapter] Initializing %s to ONPS adapter\n", platform_device::name());
         
-        // Initialize virtio net driver first
-        // 先初始化底层 VirtIO 网卡，后面才能把它注册给 ONPS。
-        if (!net::virtio_net_init()) {
-            printf("[virtio_net_adapter] VirtIO Net driver init failed\n");
-            return false;
-        }
+        // 底层设备由 init_network_stack() 在启动 ONPS 工作线程前完成初始化；
+        // 本层只负责把已经可用的设备注册给协议栈。
+        // ONPS 注册以太网接口时需要 MAC 地址，由当前板级网卡提供。
+        uint8 mac_addr[platform_device::k_mac_address_length];
+        platform_device::get_mac(mac_addr);
         
-        // Get MAC address from virtio net
-        // ONPS 注册以太网接口时需要 MAC 地址，直接从 VirtIO 配置空间读取。
-        uint8 mac_addr[ETH_ALEN];
-        net::virtio_net_get_mac(mac_addr);
-        
-        printf("[virtio_net_adapter] VirtIO MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
+        printf("[net_adapter] MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
                mac_addr[0], mac_addr[1], mac_addr[2], 
                mac_addr[3], mac_addr[4], mac_addr[5]);
         
@@ -74,62 +68,41 @@ namespace net
         ST_IPV4 ipv4_config;
         memset(&ipv4_config, 0, sizeof(ipv4_config));
         
-        // QEMU user-mode 网络默认拓扑：guest=10.0.2.15，gateway/DNS=10.0.2.2/10.0.2.3。
-        ipv4_config.unAddr = inet_addr("10.0.2.15");
-        ipv4_config.unSubnetMask = inet_addr("255.255.255.0");
-        ipv4_config.unGateway = inet_addr("10.0.2.2");
-        ipv4_config.unPrimaryDNS = inet_addr("10.0.2.3");
-        ipv4_config.unBroadcast = inet_addr("10.0.2.255");
+        // ONPS 当前没有 DHCPv4 客户端，地址配置由板级门面提供；2K1000
+        // 可直接通过 make 变量覆盖，不把实验室网段写死在协议适配器中。
+        ipv4_config.unAddr = inet_addr(platform_device::ipv4_address());
+        ipv4_config.unSubnetMask = inet_addr(platform_device::ipv4_netmask());
+        ipv4_config.unGateway = inet_addr(platform_device::ipv4_gateway());
+        ipv4_config.unPrimaryDNS = inet_addr(platform_device::ipv4_dns());
+        ipv4_config.unBroadcast = inet_addr(platform_device::ipv4_broadcast());
 
         // Register ethernet interface with onps
         // 这一步是整条真实网络链路的关键：
-        // ONPS 之后要发以太网帧时，会调用 virtio_emac_send；
+        // ONPS 之后要发以太网帧时，会调用 platform_emac_send；
         // ONPS 需要收包时，会通过 start_recv_thread_wrapper 启动接收线程。
         EN_ONPSERR error;
-        onps_netif = ethernet_add("virtio0",              // Interface name
+        onps_netif = ethernet_add(platform_device::name(), // Interface name
                                   mac_addr,               // MAC address
                                   &ipv4_config,          // IPv4 config
-                                  virtio_emac_send,      // Send function
+                                  platform_emac_send,    // Send function
                                   start_recv_thread_wrapper, // Receive thread starter
                                   &onps_netif,           // Output netif pointer
                                   &error);               // Error output
         
         if (!onps_netif) {
-            printf("[virtio_net_adapter] Failed to add ethernet interface to onps: %d\n", error);
+            printf("[net_adapter] Failed to add ethernet interface to onps: %d\n", error);
             return false;
         }
         
-        printf("[virtio_net_adapter] Successfully registered interface with onps\n");
+        printf("[net_adapter] Successfully registered interface with onps\n");
         
         adapter_initialized = true;
         return true;
     }
     
-    // Cleanup function
-    void adapter_cleanup()
-    {
-        // 清理适配层主要是停接收线程，并忘掉 ONPS 接口指针。
-        if (!adapter_initialized) {
-            return;
-        }
-        
-        printf("[virtio_net_adapter] Cleaning up adapter\n");
-        
-        // Stop receive thread
-        stop_recv_thread();
-        
-        // Remove interface from onps (if function exists)
-        if (onps_netif) {
-            // netif_del_ext(onps_netif); // Uncomment if this function exists
-            onps_netif = nullptr;
-        }
-        
-        adapter_initialized = false;
-    }
-    
     // Implementation of PFUN_EMAC_SEND for onps
-    // This function receives data from onps and sends it via virtio net
-    int virtio_emac_send(short buf_list_head, unsigned char *error)
+    // 该回调接收 ONPS 的链式缓冲并交给当前板级网卡发送。
+    int platform_emac_send(short buf_list_head, unsigned char *error)
     {
         // ONPS 发包时给的是自己的 buf_list 链表，不是连续内存。
         if (!adapter_initialized) {
@@ -140,22 +113,21 @@ namespace net
         // Get total length of the packet
         // 以太网帧最大长度受 ETH_FRAME_LEN 限制，超长直接拒绝。
         UINT total_len = buf_list_get_len(buf_list_head);
-        if (total_len <= 0 || total_len > ETH_FRAME_LEN) {
-            printf("[virtio_net_adapter] Invalid packet length: %d\n", total_len);
+        if (total_len <= 0 || total_len > platform_device::k_max_ethernet_frame) {
+            printf("[net_adapter] Invalid packet length: %d\n", total_len);
             if (error) *error = 1;
             return -1;
         }
         
         // Merge buffer list into contiguous packet
-        // VirtIO 驱动当前发送接口需要连续帧缓冲，所以先把 ONPS 链式 buffer 合并。
+        // 板级驱动发送接口接收连续帧缓冲，所以先合并 ONPS 链式 buffer。
         buf_list_merge_packet(buf_list_head, tx_packet_buffer);
         
-        // Send via virtio net
-        // 这里进入底层 virtqueue 发送路径。
-        int result = net::virtio_net_send(tx_packet_buffer, total_len);
+        // 这里进入当前板级驱动的发送路径。
+        int result = platform_device::send(tx_packet_buffer, total_len);
         
         if (result != 0) {
-            printf("[virtio_net_adapter] virtio_net_send failed: %d\n", result);
+            printf("[net_adapter] platform send failed: %d\n", result);
             if (error) *error = 1;
             return -1;
         }
@@ -165,23 +137,23 @@ namespace net
     }
     
     // Background thread for receiving packets
-    void virtio_recv_thread(void *param)
+    void platform_recv_thread(void *param)
     {
         // param 是 ethernet_add 传下来的 ONPS 网络接口指针。
         PST_NETIF netif = static_cast<PST_NETIF>(param);
         if (netif == nullptr) {
-            printf("[virtio_net_adapter] Receive thread got null netif\n");
+            printf("[net_adapter] Receive thread got null netif\n");
             return;
         }
 
         recv_thread_running = true;
-        printf("[virtio_net_adapter] Receive thread started\n");
+        printf("[net_adapter] Receive thread started\n");
         while (recv_thread_running) {
             bool received_any = false;
             for (;;) {
-                // 每轮尽量把 VirtIO used ring 里已经到达的包全部取完。
+                // 每轮尽量把设备中已经到达的包全部取完。
                 uint32 packet_len = sizeof(rx_packet_buffer);
-                int result = net::virtio_net_recv(rx_packet_buffer, &packet_len);
+                int result = platform_device::receive(rx_packet_buffer, &packet_len);
                 if (result != 0 || packet_len == 0) {
                     break;
                 }
@@ -192,39 +164,24 @@ namespace net
             }
 
             // 顺手回收已经发送完成的 TX descriptor。
-            net::virtio_net_poll();
+            platform_device::poll();
             if (!received_any) {
                 // 没包时短睡，避免接收线程空转占满 CPU。
                 os_sleep_ms(1);
             }
         }
-        printf("[virtio_net_adapter] Receive thread stopped\n");
-    }
-    
-    // Start the receive thread  
-    void start_recv_thread()
-    {
-        // 这个函数只是设置状态；真正创建内核线程的是 start_recv_thread_wrapper。
-        if (recv_thread_running) {
-            return; // Already running
-        }
-        
-        printf("[virtio_net_adapter] Starting receive thread\n");
-        recv_thread_running = true;
-        
-        // For now, we'll just mark as running
-        // The actual thread will be created by the wrapper function
+        printf("[net_adapter] Receive thread stopped\n");
     }
     
     // Wrapper function for ethernet_add interface
     void start_recv_thread_wrapper(void *param) 
     {
         // ONPS 在 ethernet_add 期间调用这个回调，让驱动启动接收路径。
-        printf("[virtio_net_adapter] Receive thread wrapper called\n");
+        printf("[net_adapter] Receive thread wrapper called\n");
         PST_NETIF *netif_slot = static_cast<PST_NETIF *>(param);
         PST_NETIF netif = netif_slot != nullptr ? *netif_slot : nullptr;
         if (netif == nullptr) {
-            printf("[virtio_net_adapter] Receive thread wrapper got null netif\n");
+            printf("[net_adapter] Receive thread wrapper got null netif\n");
             return;
         }
         onps_netif = netif;
@@ -235,7 +192,7 @@ namespace net
 
         proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
         if (current_proc == nullptr) {
-            printf("[virtio_net_adapter] No current process for receive thread\n");
+            printf("[net_adapter] No current process for receive thread\n");
             return;
         }
 
@@ -245,15 +202,15 @@ namespace net
                        syscall::CLONE_SIGHAND | syscall::CLONE_THREAD;
         proc::Pcb *thread_pcb = proc::k_pm.fork(current_proc, flags, 0, 0, false);
         if (thread_pcb == nullptr) {
-            printf("[virtio_net_adapter] Failed to fork receive thread\n");
+            printf("[net_adapter] Failed to fork receive thread\n");
             return;
         }
 
         // kernel_thread_wrapper 会从 context.s0 取函数指针，从 context.s1 取参数。
         thread_pcb->_context.ra = reinterpret_cast<uint64>(kernel_thread_wrapper);
-        thread_pcb->_context.s0 = reinterpret_cast<uint64>(virtio_recv_thread);
+        thread_pcb->_context.s0 = reinterpret_cast<uint64>(platform_recv_thread);
         thread_pcb->_context.s1 = reinterpret_cast<uint64>(netif);
-        strncpy(thread_pcb->_name, "virtio-net-rx", sizeof(thread_pcb->_name) - 1);
+        strncpy(thread_pcb->_name, "platform-net-rx", sizeof(thread_pcb->_name) - 1);
         thread_pcb->_name[sizeof(thread_pcb->_name) - 1] = '\0';
 
         // fork 返回的 thread_pcb 此时还持有锁；释放后调度器才能运行这个接收线程。
@@ -261,27 +218,9 @@ namespace net
         thread_pcb->_lock.release();
     }
     
-    // Stop the receive thread
-    void stop_recv_thread()
-    {
-        // cleanup 时把运行标志清掉，接收线程下一轮循环会退出。
-        if (!recv_thread_running) {
-            return;
-        }
-        
-        printf("[virtio_net_adapter] Stopping receive thread\n");
-        recv_thread_running = false;
-        
-        // Give the thread time to exit
-        // 简单等待线程看到标志并退出。
-        os_sleep_ms(100);
-        
-    }
-    
     // Get MAC address for onps registration
     void get_mac_address(unsigned char mac[6])
     {
-        // 对外暴露 MAC 地址查询，内部仍从 VirtIO 驱动读取缓存值。
-        net::virtio_net_get_mac(mac);
+        platform_device::get_mac(mac);
     }
 }

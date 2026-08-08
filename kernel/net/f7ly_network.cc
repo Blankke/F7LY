@@ -1,17 +1,17 @@
-//
-// F7LY Network Stack Integration
-// Integrates VirtIO Net driver with ONPS network stack
-//
+// F7LY 网络栈集成：通过板级网卡门面连接 ONPS。
 
 #include "f7ly_network.hh"
 #include "drivers/virtio_net_adapter.hh"
+#include "drivers/platform_net_device.hh"
 #include "libs/printer.hh"
 #include "onps.hh"
 
 namespace net
 {
-    // 整个网络栈只需要初始化一次。loopback socket 不依赖这个标志；
-    // 只有外部 IPv4 TCP/UDP/ICMP 需要 ONPS + VirtIO 时才要求它为 true。
+    // 三阶段状态使失败可以在原阶段重试。尤其要保证网卡探测失败时尚未启动
+    // ONPS 工作线程，不能再走“先启动线程、失败后立即释放其同步对象”的路径。
+    static bool device_initialized = false;
+    static bool core_initialized = false;
     static bool network_initialized = false;
     
     // Initialize the complete network stack
@@ -23,28 +23,38 @@ namespace net
             return true;
         }
         
-        printf("[f7ly_network] Initializing F7LY network stack with VirtIO Net\n");
+        printf("[f7ly_network] Initializing F7LY network stack\n");
+
+        // 先确认硬件可用。这样 VirtIO/GMAC 探测失败不会留下 ONPS 后台线程。
+        if (!device_initialized) {
+            if (!platform_device::initialize()) {
+                printf("[f7ly_network] Platform network driver init failed\n");
+                return false;
+            }
+            device_initialized = true;
+        }
         
         // Step 1: Initialize ONPS network stack core
         // ONPS 是内核内的 TCP/IP 协议栈，负责 ARP/IP/ICMP/UDP/TCP 等协议逻辑。
-        EN_ONPSERR onps_error;
-        if (!open_npstack_load(&onps_error)) {
-            printf("[f7ly_network] Failed to initialize ONPS stack: %d\n", onps_error);
-            return false;
+        if (!core_initialized) {
+            EN_ONPSERR onps_error;
+            if (!open_npstack_load(&onps_error)) {
+                printf("[f7ly_network] Failed to initialize ONPS stack: %d\n", onps_error);
+                return false;
+            }
+            core_initialized = true;
+            printf("[f7ly_network] ONPS core initialized successfully\n");
         }
         
-        printf("[f7ly_network] ONPS core initialized successfully\n");
-        
-        // Step 2: Initialize VirtIO Net adapter (this will register with ONPS)
-        // adapter_init 会初始化 VirtIO 网卡驱动，并把 virtio0 作为以太网接口注册给 ONPS。
+        // Step 2: 初始化板级网卡适配器并注册到 ONPS。
         if (!net::adapter_init()) {
-            printf("[f7ly_network] Failed to initialize VirtIO Net adapter\n");
-            // ONPS 已经初始化成功，如果网卡适配层失败，需要回滚协议栈核心。
-            open_npstack_unload();
+            printf("[f7ly_network] Failed to initialize platform Net adapter\n");
+            // ONPS 的历史 unload 路径没有先等待全部工作线程退出。这里保留已经
+            // 成功初始化的 core，下次只重试接口注册，避免释放活线程仍在使用的锁。
             return false;
         }
         
-        printf("[f7ly_network] VirtIO Net adapter initialized successfully\n");
+        printf("[f7ly_network] Platform Net adapter initialized successfully\n");
         
         network_initialized = true;
         
@@ -62,27 +72,10 @@ namespace net
         return network_initialized;
     }
     
-    // Cleanup the network stack
-    void cleanup_network_stack()
-    {
-        if (!network_initialized) {
-            return;
-        }
-        
-        printf("[f7ly_network] Cleaning up network stack\n");
-        
-        // Cleanup in reverse order
-        // 先停网卡适配层，再卸载协议栈，顺序和初始化相反。
-        net::adapter_cleanup();
-        open_npstack_unload();
-        
-        network_initialized = false;
-    }
-    
     // Print network interface status
     void print_network_status()
     {
-        // 调试辅助函数，只打印当前网卡与 VirtIO 状态，不改变网络栈行为。
+        // 调试辅助函数只打印当前板级网卡状态，不改变网络栈行为。
         if (!network_initialized) {
             printf("[f7ly_network] Network stack not initialized\n");
             return;
@@ -96,8 +89,8 @@ namespace net
         printf("[f7ly_network] MAC Address: %02x:%02x:%02x:%02x:%02x:%02x\n",
                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
         
-        // Print VirtIO debug status
-        virtio_net_debug_status();
+        // 输出当前板级网卡状态。
+        platform_device::debug_status();
         
         printf("[f7ly_network] ===================================\n");
     }

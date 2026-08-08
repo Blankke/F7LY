@@ -26,7 +26,7 @@
 #elif defined(LOONGARCH)
 #include "devs/loongarch/disk_driver.hh"
 #endif
-#include "net/f7ly_network.hh"
+#include "net/platform_network.hh"
 
 // #include "fs/vfs/dentrycache.hh"
 // #include "fs/vfs/path.hh"
@@ -1536,10 +1536,9 @@ namespace proc
             /// 你好
             /// 这是重定向uart的代码
             /// commented out by @gkq
-            new (&dev::k_uart) dev::UartManager(UART0);
             dev::register_debug_uart(&dev::k_uart);
 
-            net::init_network_stack();
+            net::init_platform_network();
         }
 
         // 设置进程开始运行的时间点

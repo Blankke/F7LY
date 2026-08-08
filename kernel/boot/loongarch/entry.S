@@ -4,10 +4,12 @@
 .section .text
 .global _entry
 _entry:
-        # LoongArch QEMU 启动时寄存器约定：
-        # $a0 = EFI Boot Services Handle (通常为 0)
-        # $a1 = DTB (FDT) 物理地址
-        move        $s0, $a1                    # Save DTB pointer
+        # 固件入口存在多套 ABI：QEMU/UHI 常直接在 a1 传 DTB，U-Boot go
+        # 则传 argc/argv。先完整保存 a0-a3，进入 C++ 后统一解析。
+        move        $s0, $a0
+        move        $s1, $a1
+        move        $s2, $a2
+        move        $s3, $a3
 
         # entry只对每个CPU设定自己的栈空间，然后跳转到main函数
 
@@ -26,6 +28,22 @@ _entry:
         csrwr       $t0, LOONGARCH_CSR_PRMD
         li.w        $t0, 0x01                 # FPE=1, SXE=0, ASXE=0, BTE=0
         csrwr       $t0, LOONGARCH_CSR_EUEN
+
+        # 只允许引导核清理普通 BSS。次核复用 _entry 时全局状态已经建立，
+        # 再次清零会破坏调度器、页表和设备状态。启动栈位于 sbss_clear 之前，
+        # 不在本清零区间内。
+        csrrd       $t4, LOONGARCH_CSR_CPUID
+        andi        $t4, $t4, 0x1ff
+        bnez        $t4, bss_clear_done
+        la.global   $t0, sbss_clear
+        la.global   $t1, ebss_clear
+bss_clear_loop:
+        bgeu        $t0, $t1, bss_clear_done
+        st.d        $zero, $t0, 0
+        addi.d      $t0, $t0, 8
+        b           bss_clear_loop
+bss_clear_done:
+        dbar        0
 
         // invtlb      0x0,$zero,$zero # 清除所有页表项
 	# set up a stack for C.
@@ -47,10 +65,13 @@ _entry:
         li.d        $t0, 0x1
         cpucfg      $t1, $t0                    # read the CFG
         
-        # 准备调用 main(hartid, dtb_addr) 的参数：
+        # 准备调用 main(hartid, fw_arg0, fw_arg1, fw_arg2, fw_arg3)：
         csrrd       $a0, LOONGARCH_CSR_CPUID    # $a0 = hartid (从 CPUID CSR 读取)
         andi        $a0, $a0, 0x1ff             # 取低9位作为 Core ID
-        move        $a1, $s0                    # $a1 = dtb (从 $a2 保存的值)
+        move        $a1, $s0
+        move        $a2, $s1
+        move        $a3, $s2
+        move        $a4, $s3
         bl          main
 spin:
         b           spin

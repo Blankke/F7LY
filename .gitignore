@@ -49,6 +49,7 @@ sdcard-rv-onsite.img
 kernel-rv
 kernel-rv-*
 kernel-la
+kernel-la-*
 kernel-rv-shell
 kernel-la-shell
 output-more.txt

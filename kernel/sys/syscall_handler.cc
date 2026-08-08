@@ -66,6 +66,7 @@
 #include "fs/lwext4/ext4_errno.hh"
 #include "fs/lwext4/ext4.hh"
 #include "net/f7ly_network.hh"
+#include "net/platform_network.hh"
 #include "net/onpstack/include/onps.hh"
 #include "net/onpstack/include/onps_utils.hh"
 #include "fs/vfs/virtual_fs.hh"
@@ -13770,7 +13771,7 @@ namespace syscall
             {
                 // 这里的初始化只影响“非 loopback 的真实网络”；
                 // 即使初始化失败，127.0.0.1 这类内核内 loopback 仍可继续使用。
-                net::init_network_stack();
+                net::init_platform_network();
             }
         }
 

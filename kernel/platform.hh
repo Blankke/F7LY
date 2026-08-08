@@ -831,7 +831,13 @@ intr_off()
 #define PXSHIFT(level) (PGSHIFT + (9 * (level)))
 #define PX(level, va) ((((uint64)(va)) >> PXSHIFT(level)) & PXMASK)
 
+#ifdef BOARD_LS2K1000
+// LS2K1000 只实现 40 位虚拟地址。把用户特殊页区域压到 2^38 以下，
+// 与 StarryOS 的 low-va 布局保持同一安全边界，避免硬件先于页表产生 ADEM。
+#define MAXVA (1ULL << 39)
+#else
 #define MAXVA (1ULL << (9 + 9 + 9 + 9 + 12 - 2))
+#endif
 
 #define dsb() __sync_synchronize()       // For virtio-blk-pci
 

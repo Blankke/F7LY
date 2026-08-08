@@ -4,11 +4,13 @@
 
 #include "devs/block_device.hh"
 #include "devs/device_manager.hh"
-#include "fs/drivers/virtio_blk.hh"
+#include "fs/drivers/platform_block.hh"
+#include "fs/vfs/fs.hh"
 #include "fs/lwext4/ext4.hh"
 #include "fs/lwext4/ext4_blockdev.hh"
 #include "fs/lwext4/ext4_errno.hh"
 #include "libs/string.hh"
+#include "libs/klib.hh"
 #include "mem/physical_memory_manager.hh"
 
 namespace
@@ -98,10 +100,10 @@ static int vfs_ext4_blockdev_init_common(struct vfs_ext4_blockdev *vbdev,
 
 static int vfs_ext4_blockdev_init(struct vfs_ext4_blockdev *vbdev, int dev)
 {
-    uint64 capacity = virtio_disk_capacity_bytes(dev);
+    uint64 capacity = platform_block_capacity_bytes(dev);
     if (capacity == 0)
     {
-        printf("virtio block device %d did not report a capacity\n", dev);
+        printf("platform block device %d did not report a capacity\n", dev);
         return -ENODEV;
     }
     return vfs_ext4_blockdev_init_common(vbdev,
@@ -241,7 +243,7 @@ namespace
             return bd->read_blocks(start_sector, sector_count, &desc, 1);
         }
 
-        return virtio_disk_rw_sectors(dev, buf, start_sector, sector_count, write ? 1 : 0);
+        return platform_block_rw_sectors(dev, buf, start_sector, sector_count, write ? 1 : 0);
     }
 } // namespace
 

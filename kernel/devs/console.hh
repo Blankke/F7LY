@@ -16,7 +16,6 @@ class Console
         int r_idx;
         int w_idx;
         int e_idx; // 输入缓冲区中最后一个字符的索引
-        UartManager uart;
         bool _canonical_mode;
         bool _echo_enabled;
         bool _map_cr_to_nl;

@@ -12,9 +12,7 @@
 #include "proc/proc_manager.hh"
 #include "proc/scheduler.hh"
 #include "trap_func_wrapper.hh"
-#include "extioi.hh"
-#include "trap/loongarch/pci.h"
-#include "apic.hh"
+#include "platform_irq.hh"
 #include "syscall_handler.hh"
 #include "cpu.hh"
 #include "physical_memory_manager.hh"
@@ -151,7 +149,7 @@ void trap_manager::inithart()
 // 处理外部中断和软件中断
 int trap_manager::devintr()
 {
-  static bool pcie_irq_warned = false;
+  static bool block_irq_warned = false;
 
   uint32 estat = r_csr_estat();
   uint32 ecfg = r_csr_ecfg();
@@ -180,44 +178,37 @@ int trap_manager::devintr()
     // this is a hardware interrupt, via IOCR.
 
     // irq indicates which device interrupted.
-    uint64 irq = extioi_claim();
+    uint64 irq = loongarch::platform_irq::claim();
     // printf("%d\n", irq);
     // 处理串口中断
     uint64 handled_irq_mask = 0;
-    if (irq & (1UL << UART0_IRQ))
+    const uint64 uart_irq = loongarch::platform_irq::uart_source_mask();
+    const uint64 block_irq = loongarch::platform_irq::block_source_mask();
+    if (irq & uart_irq)
     {
       // 交互式 shell/stdin 依赖串口 RX 中断把字符推进 console 行规程；
       // 这里只做 ack 会导致输出正常、输入永远到不了 kConsole。
       dev::k_uart.handle_intr();
-      handled_irq_mask |= (1UL << UART0_IRQ);
-      apic_complete(1UL << UART0_IRQ);
-      extioi_complete(1UL << UART0_IRQ);
+      handled_irq_mask |= uart_irq;
     }
 
-    if (irq & (1UL << PCIE_IRQ))
+    if (irq & block_irq)
     {
-      // TODO
-      // intr_stats::k_intr_stats.record_interrupt(PCIE_IRQ);
-      // loongarch::qemu::disk_driver.handle_intr();
-            if (!pcie_irq_warned)
+      if (!block_irq_warned)
       {
-        pcie_irq_warned = true;
-        printfYellow("[trap] PCIE 中断当前未走内核分发路径，先确认并放行\n");
+        block_irq_warned = true;
+        printfYellow("[trap] 块设备中断当前未启用异步完成，已确认并放行\n");
       }
-      handled_irq_mask |= (1UL << PCIE_IRQ);
-      apic_complete(1UL << PCIE_IRQ);
-      extioi_complete(1UL << PCIE_IRQ);
-      printfYellow("未实现PCIE_IRQ中断处理,不过好像跟riscv不一样，跟蒙老师也不一样，现在好像不用这个\n");
+      handled_irq_mask |= block_irq;
     }
 
     uint64 remaining_irq = irq & ~handled_irq_mask;
     if (remaining_irq)
     {
-      printf("unexpected interrupt irq=%d\n", remaining_irq);
-
-      apic_complete(remaining_irq);
-      extioi_complete(remaining_irq);
+      printf("unexpected interrupt irq=0x%lx\n", remaining_irq);
     }
+
+    loongarch::platform_irq::complete(irq);
 
     return 1;
   }

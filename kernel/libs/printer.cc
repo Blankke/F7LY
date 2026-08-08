@@ -231,7 +231,9 @@ void log_with_prefix(const char *color, bool enabled, const char *tag, const cha
 #ifdef RISCV
 	sbi_shutdown();
 #elif defined(LOONGARCH)
+#ifndef BOARD_LS2K1000
 	*(volatile uint8 *)(0x8000000000000000 | 0x100E001C) = 0x34;
+#endif
 #endif
 
 	for (;;)

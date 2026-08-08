@@ -15,7 +15,7 @@ NPROC := $(shell nproc)
 # 交互式 QEMU 运行目标需要独占宿主机 stdin；如果顶层 make 全局强制 -j，
 # GNU make 可能会把配方的标准输入重定向掉，导致 shell 模式下 guest 完全收不到按键。
 # 因此只对纯构建目标启用并行，run/shell/debug 自己在子 make 中显式并行编译。
-PARALLEL_BUILD_GOALS := all build build-la riscv loongarch clean dirs initcode
+PARALLEL_BUILD_GOALS := all build build-la riscv loongarch 2k1000 clean dirs initcode
 ifeq ($(strip $(MAKECMDGOALS)),)
   MAKEFLAGS += -j$(NPROC)
 else ifneq ($(filter $(PARALLEL_BUILD_GOALS),$(MAKECMDGOALS)),)
@@ -24,6 +24,7 @@ endif
 
 # ===== 架构选择 =====
 ARCH ?= riscv
+BOARD ?= qemu
 INITCODE_MODE ?= evaluation
 DIS_PRINTF ?= 0
 QEMU_MEM ?= 8G
@@ -41,6 +42,11 @@ QEMU_ACCEL ?= -accel tcg,thread=multi
 QEMU_RUN_SNAPSHOT ?= -snapshot
 QEMU_SHELL_SNAPSHOT ?=
 QEMU_SNAPSHOT ?=
+LS2K1000_IPV4 ?= 192.168.1.2
+LS2K1000_NETMASK ?= 255.255.255.0
+LS2K1000_GATEWAY ?= 192.168.1.1
+LS2K1000_DNS ?= 192.168.1.1
+LS2K1000_BROADCAST ?= 192.168.1.255
 
 # 检查是否通过目标名称指定架构
 ifneq (,$(filter l loongarch,$(MAKECMDGOALS)))
@@ -48,6 +54,10 @@ ifneq (,$(filter l loongarch,$(MAKECMDGOALS)))
 endif
 ifneq (,$(filter r riscv,$(MAKECMDGOALS)))
   ARCH := riscv
+endif
+ifneq (,$(filter 2k1000,$(MAKECMDGOALS)))
+  ARCH := loongarch
+  BOARD := 2k1000
 endif
 
 # 架构别名目标（这些目标不执行任何操作，仅用于设置 ARCH 变量）
@@ -71,6 +81,26 @@ else ifeq ($(ARCH),loongarch)
   QEMU_BLOCK_DEVICE_ARGS := -device virtio-blk-pci,drive=x0
 else
   $(error 不支持的架构: $(ARCH)，请使用 make riscv 或 make loongarch)
+endif
+
+# 板级选择只影响硬件契约，不污染架构公共实现。QEMU 仍是默认目标；
+# LS2K1000 使用独立宏、构建目录和链接脚本，避免两类产物互相复用旧对象。
+ifeq ($(BOARD),qemu)
+  ARCH_CFLAGS += -DBOARD_QEMU
+else ifeq ($(BOARD),2k1000)
+  ifneq ($(ARCH),loongarch)
+    $(error LS2K1000 只支持 LoongArch 构建)
+  endif
+  ARCH_CFLAGS += -DBOARD_LS2K1000
+  ARCH_CFLAGS += -DLS2K1000_IPV4=\"$(LS2K1000_IPV4)\" \
+                 -DLS2K1000_NETMASK=\"$(LS2K1000_NETMASK)\" \
+                 -DLS2K1000_GATEWAY=\"$(LS2K1000_GATEWAY)\" \
+                 -DLS2K1000_DNS=\"$(LS2K1000_DNS)\" \
+                 -DLS2K1000_BROADCAST=\"$(LS2K1000_BROADCAST)\"
+  OUTPUT_PREFIX := loongarch-2k1000
+  BOARD_KERNEL_SUFFIX := -2k1000
+else
+  $(error 不支持的板级目标: $(BOARD)，请使用 qemu 或 2k1000)
 endif
 
 ifeq ($(INITCODE_MODE),shell)
@@ -112,7 +142,11 @@ ARCH_DIRS := boot/$(ARCH) hal/$(ARCH) link/$(ARCH) mem/$(ARCH) proc/$(ARCH) trap
 COMMON_DIRS := libs tm sys shm
 SUBDIRS := $(ARCH_DIRS) $(COMMON_DIRS)
 
-LINK_SCRIPT := $(KERNEL_DIR)/link/$(ARCH)/kernel.ld
+ifeq ($(BOARD),2k1000)
+  LINK_SCRIPT := $(KERNEL_DIR)/link/loongarch/2k1000.ld
+else
+  LINK_SCRIPT := $(KERNEL_DIR)/link/$(ARCH)/kernel.ld
+endif
 
 CFLAGS := -Wall -Werror -ffreestanding -O2 -fno-builtin -g -fno-stack-protector $(ARCH_CFLAGS)
 ifeq ($(ARCH),riscv)
@@ -164,9 +198,16 @@ SRCS += $(shell find $(KERNEL_DIR)/fs -type f \
 SRCS += $(shell find $(KERNEL_DIR)/fs/drivers/$(ARCH) -type f \
         \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
 
-# 收集 net 目录中的所有文件（net 没有架构特定子目录）
+# 收集 net 通用文件，并只纳入当前架构的网卡驱动，避免另一架构的空壳
+# 翻译单元进入产物并掩盖错误依赖。
 SRCS += $(shell find $(KERNEL_DIR)/net -type f \
+        ! -path "$(KERNEL_DIR)/net/drivers/riscv/*" \
+        ! -path "$(KERNEL_DIR)/net/drivers/loongarch/*" \
         \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
+ifneq ($(wildcard $(KERNEL_DIR)/net/drivers/$(ARCH)),)
+SRCS += $(shell find $(KERNEL_DIR)/net/drivers/$(ARCH) -type f \
+        \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.S" -o -name "*.s" \))
+endif
 
 ifeq ($(VERBOSE_SRCS),1)
 $(info === SRCS collected ===)
@@ -188,8 +229,8 @@ ifeq ($(ARCH),riscv)
   KERNEL_ELF := kernel-rv$(KERNEL_NAME_SUFFIX)
   KERNEL_BIN := kernel-rv$(KERNEL_NAME_SUFFIX).bin
 else ifeq ($(ARCH),loongarch)
-  KERNEL_ELF := kernel-la$(KERNEL_NAME_SUFFIX)
-  KERNEL_BIN := kernel-la$(KERNEL_NAME_SUFFIX).bin
+  KERNEL_ELF := kernel-la$(BOARD_KERNEL_SUFFIX)$(KERNEL_NAME_SUFFIX)
+  KERNEL_BIN := kernel-la$(BOARD_KERNEL_SUFFIX)$(KERNEL_NAME_SUFFIX).bin
 endif
 
 # ===== initcode 用户进程编译相关 =====
@@ -249,7 +290,7 @@ INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dy
 else ifeq ($(ARCH),loongarch)
 INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dynamic-linker,-T,$(INITCODE_LINK_SCRIPT)
 endif
-.PHONY: all clean dirs build riscv loongarch run shell debug initcode build-la
+.PHONY: all clean dirs build riscv loongarch 2k1000 run shell debug initcode build-la
 
 
 all: 
@@ -262,6 +303,9 @@ riscv:
 
 loongarch:
 	@$(MAKE) ARCH=loongarch build-la
+
+2k1000:
+	@$(MAKE) ARCH=loongarch BOARD=2k1000 build-la
 
 build: initcode dirs $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a $(KERNEL_BIN)
 build-la: initcode dirs $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a $(KERNEL_BIN)
@@ -327,6 +371,7 @@ $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a:
 
 
 run:
+	@if [ "$(BOARD)" != "qemu" ]; then echo "错误：BOARD=$(BOARD) 是物理板目标，禁止进入 QEMU run"; exit 2; fi
 	@$(MAKE) -j$(NPROC) ARCH=$(ARCH) INITCODE_MODE=$(INITCODE_MODE) build
 	@if [ -f $(ROOTFS_BACKUP) ]; then cp $(ROOTFS_BACKUP) $(INITRD_IMAGE); fi
 ifeq ($(ARCH),riscv)
@@ -338,6 +383,7 @@ else
 endif
 
 shell:
+	@if [ "$(BOARD)" != "qemu" ]; then echo "错误：BOARD=$(BOARD) 是物理板目标，请只执行 make 2k1000"; exit 2; fi
 	@$(MAKE) -j$(NPROC) ARCH=$(ARCH) INITCODE_MODE=shell build
 	@if [ -f $(ROOTFS_BACKUP) ]; then cp $(ROOTFS_BACKUP) $(INITRD_IMAGE); fi
 ifeq ($(ARCH),riscv)
@@ -385,6 +431,7 @@ run-loongarch:
 
 
 debug:
+	@if [ "$(BOARD)" != "qemu" ]; then echo "错误：BOARD=$(BOARD) 是物理板目标，禁止进入 QEMU debug"; exit 2; fi
 	@$(MAKE) -j$(NPROC) ARCH=$(ARCH) INITCODE_MODE=$(INITCODE_MODE) build
 	@if [ "$(ARCH)" = "riscv" ]; then \
 	$(MAKE) debug-riscv ARCH=$(ARCH);\
@@ -480,6 +527,7 @@ clean:
 	rm -f $(KERNEL_ELF) $(KERNEL_BIN)
 	rm -f kernel-la kernel-rv kernel-la.bin kernel-rv.bin
 	rm -f kernel-la-shell kernel-rv-shell kernel-la-shell.bin kernel-rv-shell.bin
+	rm -f kernel-la-2k1000 kernel-la-2k1000.bin kernel-la-2k1000-shell kernel-la-2k1000-shell.bin
 
 cleanlog:
 	rm -rf logs/

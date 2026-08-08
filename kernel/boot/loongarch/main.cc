@@ -1,10 +1,9 @@
 #include "devs/uart.hh"
 #include "printer.hh"
 #include "param.h"
-#include "apic.hh"
 #include "mem/memlayout.hh"
 #include "trap.hh"
-#include "extioi.hh"
+#include "trap/loongarch/platform_irq.hh"
 #include "proc/proc_manager.hh"
 #include "mem/physical_memory_manager.hh"
 #include "mem/virtual_memory_manager.hh"
@@ -15,27 +14,40 @@
 #include "devs/dtb.hh"
 #include "loongarch/disk_driver.hh"
 #include "tm/timer_manager.hh"
+#include "tm/platform_rtc.hh"
 #include "syscall_handler.hh"
 #include "scheduler.hh"
 #include "slab.hh"
 #include "trap/interrupt_stats.hh"
 #include "shm/shm_manager.hh"
-#include "fs/drivers/virtio_blk.hh"
+#include "fs/drivers/platform_block.hh"
+#include "fs/buf.hh"
 #include "fs/vfs/vfs_ext4_ext.hh"
 #include "fs/vfs/virtual_fs.hh"
 #include "loop_device.hh"
 #include "fs/vfs/fifo_manager.hh"
 #include "hal/smp.hh"
+#include "boot_args.hh"
+#include "hal/loongarch/platform_board.hh"
 #ifdef LOONGARCH
 
 extern char end[];
 
-extern "C" void main(uint64 hartid, uint64 dtb_addr)
+extern "C" void main(uint64 hartid, uint64 fw_arg0, uint64 fw_arg1,
+                     uint64 fw_arg2, uint64 fw_arg3)
 {
-    hal::smp::enter(hartid, dtb_addr);
+    // 次核会在 enter() 内进入专用初始化路径，不会继续解析引导核的固件参数。
+    hal::smp::enter(hartid, 0);
 
     k_printer.init();
     printfYellow("Hello, World!\n");
+
+    uint64 dtb_addr = loongarch::boot::resolve_dtb(fw_arg0, fw_arg1, fw_arg2, fw_arg3);
+    if (dtb_addr == 0)
+    {
+        panic("未从固件参数中找到有效 DTB；2K1000 请使用 U-Boot: go <kernel> <dtb>");
+    }
+    printfGreen("[boot] platform=%s dtb=0x%lx\n", loongarch::board::k_name, dtb_addr);
 
     // Initialize DTB and scan Initrd if necessary
     uint64 kernel_end_phys = ((uint64)end) & 0x0FFFFFFFFFFFFFFFUL;
@@ -44,8 +56,7 @@ extern "C" void main(uint64 hartid, uint64 dtb_addr)
     
     printfMagenta("[main] Using hartid=%lu, k_dtb_addr=0x%lx\n", hartid, k_dtb_addr);
 
-    apic_init();
-    extioi_init();
+    loongarch::platform_irq::init();
 
     trap_mgr.init();
 
@@ -75,19 +86,19 @@ extern "C" void main(uint64 hartid, uint64 dtb_addr)
     ///@todo: 这里的 disk_driver 有问题
     // new (&loongarch::qemu::disk_driver) loongarch::qemu::DiskDriver("Disk");
     tmm::k_tm.init("timer manager");
+    tmm::initialize_platform_realtime();
 
     syscall::k_syscall_handler.init(); // 初始化系统调用处理器
     proc::k_pm.user_init();            // 初始化用户进程
 
     /*********************8888 */
 
-    // virtio_probe()/virtio_disk_init() 会依赖块设备完成中断；这里在全局
-    // 进程、内存、时间对象都初始化完成后才开启主核本地 trap。
+    // 块设备初始化依赖完整内存与 trap 环境；板级门面会选择 QEMU VirtIO
+    // 或 LS2K1000 AHCI，并把根分区映射成统一的逻辑设备 0。
     trap_mgr.inithart();
 
-    // virtio_disk_init2(); // 初始化 rootfs的块设备
-    virtio_probe();             //曹老师漏了这个
-    virtio_disk_init();        // emulated hard disk ps:如果使用SDCard需要修改
+    if (!platform_block_init())
+        panic("platform block initialization failed");
     init_fs_table();           // fs_table init
     binit();                   // buffer cache
     fileinit();                // file table

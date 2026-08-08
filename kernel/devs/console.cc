@@ -21,24 +21,26 @@ namespace dev
   void Console::init()
   {
     _lock.init("console");
-    uart.init(UART0);
+    // 控制台、中断分发和 /dev/stdin 必须共享同一个 UART 实例，避免两套
+    // 环形缓冲和未初始化锁分别消费同一硬件 FIFO。
+    k_uart.init(UART0);
   }
 
   void Console::console_putc(int c)
   {
     if (c == BACKSPACE)
     {
-      uart.put_char_sync('\b');
-      uart.put_char_sync(' ');
-      uart.put_char_sync('\b');
+      k_uart.put_char_sync('\b');
+      k_uart.put_char_sync(' ');
+      k_uart.put_char_sync('\b');
     }
     else if (c == '\n' || c == '\r')
     {
-      uart.put_char('\n');
+      k_uart.put_char('\n');
     }
     else
     {
-      uart.put_char_sync(c);
+      k_uart.put_char_sync(c);
     }
   }
 
@@ -134,9 +136,9 @@ namespace dev
       int target_pgrp = _foreground_pgrp;
       if (_echo_enabled)
       {
-        uart.put_char_sync('^');
-        uart.put_char_sync('C');
-        uart.put_char_sync('\n');
+        k_uart.put_char_sync('^');
+        k_uart.put_char_sync('C');
+        k_uart.put_char_sync('\n');
       }
       r_idx = w_idx = e_idx = 0;
       _lock.release();
@@ -169,7 +171,7 @@ namespace dev
             e_idx--;
             if (_echo_enabled)
             {
-              uart.put_char_sync((u8)BACKSPACE);
+              k_uart.put_char_sync((u8)BACKSPACE);
             }
           }
           break;
@@ -181,7 +183,7 @@ namespace dev
             e_idx--;
             if (_echo_enabled)
             {
-              uart.put_char_sync((u8)BACKSPACE);
+              k_uart.put_char_sync((u8)BACKSPACE);
             }
           }
           break;
@@ -190,7 +192,7 @@ namespace dev
         {
           if (_echo_enabled)
           {
-            uart.put_char_sync(c);
+            k_uart.put_char_sync(c);
           }
           input_buf[e_idx++ % INPUT_BUF_SIZE] = c;
           if (c == '\n' || c == _eof_char || e_idx - r_idx == INPUT_BUF_SIZE)
@@ -207,7 +209,7 @@ namespace dev
       {
         if (_echo_enabled)
         {
-          uart.put_char_sync(c);
+          k_uart.put_char_sync(c);
         }
         input_buf[e_idx++ % INPUT_BUF_SIZE] = c;
         w_idx = e_idx;
