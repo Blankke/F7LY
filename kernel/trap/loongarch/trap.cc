@@ -25,6 +25,7 @@
 #include "trap/interrupt_stats.hh"
 #include "timer_interface.hh"
 #include "proc/posix_timers.hh"
+#include "proc/futex.hh"
 #include "asm.hh"
 #include "hal/tlb_shootdown.hh"
 // in kernelvec.S, calls kerneltrap().
@@ -51,13 +52,12 @@ namespace
   static_assert(proc::num_process < (1U << k_loongarch_asid_bits),
                 "LoongArch 用户 ASID 数量必须覆盖全部 PCB 槽位");
 
-  inline uint32 loongarch_user_asid(const proc::Pcb *p)
+  inline uint32 loongarch_user_asid(const proc::ProcessMemoryManager *mm)
   {
-    const uint32 asid = p->_user_asid;
+    const uint32 asid = mm != nullptr ? mm->user_asid : 0;
     if (asid == k_loongarch_kernel_asid || asid >= (1U << k_loongarch_asid_bits))
     {
-      panic("invalid LoongArch user ASID pid=%d tid=%d asid=%u",
-            p->_pid, p->_tid, asid);
+      panic("invalid LoongArch user ASID mm=%p asid=%u", mm, asid);
     }
     return asid;
   }
@@ -261,6 +261,7 @@ void trap_manager::timertick()
   }
 
   proc::k_pm.wakeup(&ticks);
+  proc::futex_check_timeouts(tmm::get_hw_time_stamp());
 
   // POSIX realtime timer 的全局扫描只由 CPU0 执行，其他 CPU 在 devintr() 中
   // 单独推进自己的 VIRTUAL/PROF timer。
@@ -388,7 +389,8 @@ void trap_manager::usertrap()
       {
         fault_pte.set_data(fault_pte.get_data() | loongarch::pte_dirty_m);
       }
-      loongarch_invalidate_user_tlb_page(loongarch_user_asid(p), badv);
+      loongarch_invalidate_user_tlb_page(
+          loongarch_user_asid(p->get_memory_manager()), badv);
       goto usertrap_page_fault_done;
     }
 
@@ -571,7 +573,8 @@ void trap_manager::usertrapret(void)
   // trapframe 是 trap 入口切换回内核页表前唯一需要读取的用户页表映射。
   // 保留 ASID+VA 精确失效作为 PCB/页表复用边界的最后一道保护；它不会像
   // 旧的 invtlb op0 那样清空本 CPU 的全部用户翻译。
-  const uint32 user_asid = loongarch_user_asid(p);
+  hal::tlb::enter_mm(*p->get_memory_manager());
+  const uint32 user_asid = loongarch_user_asid(p->get_memory_manager());
   loongarch_invalidate_user_tlb_page(user_asid, user_trapframe_va);
 
   // send syscalls, interrupts, and exceptions to uservec.S

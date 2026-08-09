@@ -30,6 +30,8 @@ namespace proc
     {
     private:
         static constexpr uint k_active_slot_word_count = (num_process + 63) / 64;
+        static constexpr uint k_wait_channel_bucket_count = 64;
+        static constexpr uint k_wait_channel_slot_word_count = (num_process + 63) / 64;
         // 核心成员变量
         SpinLock _pid_lock;        // 进程ID锁
         SpinLock _tid_lock;        // 线程ID锁
@@ -43,9 +45,14 @@ namespace proc
         // 调度器只需查看当前非 UNUSED 的 PCB。位图把每次 dispatch 的
         // 512 个大对象跨页扫描收敛为少量活跃槽位，同时 PCB 锁仍负责最终仲裁。
         eastl::atomic<uint64> _active_slot_words[k_active_slot_word_count]{};
+        // 通用 sleep/wakeup 按 channel 地址哈希到多个 bucket；每个 bucket
+        // 保存 PCB global id 位图，避免唤醒端再次遍历全部活动任务。
+        eastl::atomic<uint64> _wait_channel_slot_words
+            [k_wait_channel_bucket_count][k_wait_channel_slot_word_count]{};
 
         void mark_slot_active(uint global_id);
         void mark_slot_inactive(uint global_id);
+        uint wait_channel_bucket(void *chan) const;
 
     public:
         ProcessManager() = default;
@@ -111,8 +118,23 @@ namespace proc
         void sleep(void *chan, SpinLock *lock);
         void wakeup(void *chan);
         void wakeup_one(Pcb *target, void *chan);
+        // futex 的桶锁路径直接发布/迁移等待 channel；这些接口只做位图和
+        // 原子 channel 状态维护，不获取 PCB 锁，调用方负责外层锁序。
+        void register_wait_channel(Pcb *p, void *chan);
+        void unregister_wait_channel(Pcb *p);
         void wakeup_child_waiters(Pcb *parent);
-        int wakeup2(uint64 uaddr, uint64 futex_key, int val, void *uaddr2, uint64 futex_key2, int val2);
+        // 调用者必须持有 futex 源桶（以及可选目标桶）的锁；位图只包含
+        // 对应 key hash 的等待者，桶内再以完整 key 做精确匹配。
+        int wakeup2(const FutexKey &futex_key,
+                    int val,
+                    void *uaddr2,
+                    const FutexKey &futex_key2,
+                    int val2,
+                    uint64 *waiter_words,
+                    uint64 *requeue_words,
+                    uint waiter_word_count,
+                    uint target_bucket_index,
+                    bool include_requeued_in_result);
 
         // ==================== 文件系统相关 ====================
         int open(int dir_fd, eastl::string path, uint flags, int mode = 0644);
@@ -137,6 +159,9 @@ namespace proc
         int kill_signal(int pid, int sig, const ipc::signal::LinuxSigInfo *info = nullptr);
         int tkill(int tid, int sig, const ipc::signal::LinuxSigInfo *info = nullptr);
         int tgkill(int tgid, int tid, int sig, const ipc::signal::LinuxSigInfo *info = nullptr);
+        // 调用者须持有 target 的 PCB 锁。统一摘掉 futex/通用等待索引后再发布
+        // RUNNABLE，避免信号中断睡眠留下陈旧 futex bucket 或 wait-channel 位图。
+        bool interrupt_sleep_for_signal(Pcb *target);
         void kill_proc(Pcb *p) { p->_killed = 1; }
         int kill_proc(int pid);
 

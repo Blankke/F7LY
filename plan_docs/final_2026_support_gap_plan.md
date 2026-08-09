@@ -1,6 +1,6 @@
 # 2026 决赛内核能力缺口计划：CAgent / BuildStorm
 
-状态：代码、高风险审计、优化实现和双架构短验证已收口；官方隔离 BuildStorm 两轮及缺失的 Docker harness 双架构 workflow 按用户边界留待外部长测
+状态：BuildStorm `core` 阶段停顿根因已修复、待用户完整验收；代码、高风险审计、优化实现和双架构短验证已收口，官方隔离 BuildStorm 两轮及缺失的 Docker harness 双架构 workflow 按用户边界留待外部长测
 
 日期：2026-07-29
 
@@ -17,6 +17,9 @@
 - [x] 2026-08-01 定时器与 epoll 抖动收口待验收：定时中断在没有已武装 ITIMER/POSIX timer 时不再扫描 PCB 或全局定时器表；POSIX timer 的创建、设置、查询、删除、到期和进程退出清理由同一锁保护，补齐归属校验、`timer_getoverrun`、EFAULT 和周期定时器 O(1) overrun 计算。RV/LA 的 timer_delete/gettime/settime、clock_settime、getitimer 与 `epoll_wait04` 连续 10 次共 19 项全部返回 0；证据为 `logs/run/output_final2026_{rv,la}_posix_timer_all_fastpaths_4g8c.txt`。
 - [x] 2026-08-01 CAgent 9/10 根因修复完成待验收：并发唤醒先原子筛选目标 channel，再只获取真实睡眠候选 PCB 锁，消除扫描无关 PCB 导致的跨核 ABBA；普通文件最后关闭时把合并写提交到 ext4/bcache，并删除容量受限、可能让已关闭文件回退到旧 inode EOF 的全局小文件缓存。两项均位于双架构共享实现，没有架构特判或测例绕过；RV/LA evaluation 构建通过，官方原始 CAgent 各连续三轮 10/10，诊断轮十项首次校验均为 0。证据为 `logs/run/output_cagent_{rv,la}_spinlock_fix_final{1,2,3}_20260801.txt` 和 `logs/run/output_cagent_rv_eval_raw_closeflush2_20260801.txt`。
 - [x] 2026-08-01 BuildStorm `Compiling core` futex 死锁修复完成待验收：修复前 GDB 证实一个 CPU 持全局 futex 等待锁后等待目标 PCB 锁，另一个 CPU 持当前 PCB 锁后等待全局 futex 锁；WAIT 现统一按“全局 futex 锁 -> PCB 锁”取得锁，并在该互锁内重新读取用户值后才发布原子 futex key，既消除 ABBA，也不引入丢唤醒窗口。共享实现同时覆盖 RV/LA；两架构 evaluation 构建及 `futex_wait01`、`futex_wait04`、`futex_wait_bitset01`、`futex_wake01` 小集合全部通过。修复后同一 RV 8 vCPU 内层构建在 `Compiling core` 处的 GDB 快照不再出现 futex 自旋闭环；完整 BuildStorm 长测仍由用户验收，不在此项中冒充完成。
+- [x] 2026-08-08 BuildStorm `core` 阶段远端 TLB 等待根因修复完成待验收：修复前 8 vCPU 三份间隔 20 秒诊断快照显示远端 TLB shootdown 调用与累计等待持续增长，且 1 vCPU 不再触发远端调用；修复后 ASID 随 `ProcessMemoryManager` 生命周期管理，`CLONE_VM` 线程共享 mm/ASID，用户页表更新只同步活跃 mm CPU。RV/LA evaluation 与 shell 四种构建及 8 vCPU/8 GiB/20 轮 TLB/VMA 短测均通过；完整 BuildStorm 仍由用户执行，不在此项中冒充完成。
+- [x] 2026-08-08 BuildStorm `core` 阶段 ext4 剩余性能根因已完成代码修复待验收：诊断显示 ext4 ticket/owner 正常推进但全局挂载锁等待和累计周期占主要成本；读路径现使用共享挂载锁，bcache 单独串行化，完整块写入改为 write-back，直接块 I/O 移出全局排他临界区，并修复同 owner 嵌套 mount guard。双架构 8 vCPU/8 GiB 并发 `write/fsync/rename/read/unlink` 短测与临时镜像只读 `e2fsck` 均通过。
+- [x] 2026-08-09 有界官方进度探针已读取完整结果：最终受控日志 `logs/run/output_r_20260809-073601_buildstorm-perf.txt` 在 8 vCPU、8 GiB、guest 1200 秒内实际输出 `Compiling compiler_builtins` 与 `Compiling core v0.0.0`，产物计数曾达到 27，但未输出后续 `Compiling`，退出 `rc=124`；这证明“仅 Cargo/rustc 存活或产物增长”的证据不足，也明确保留完整 BuildStorm 外部验收门槛。
 - [ ] 2026-08-01 外部验收仍开放并由用户执行：完整 BuildStorm 在无其它 QEMU 竞争时串行跑完两轮，恢复 harness 后再跑两轮双架构 workflow；未取得这些长测证据前，不把这些外部项误标为已验收。
 
 - CAgent：F7LY 的基础内核能力已经覆盖较多。动态 ELF/glibc、进程创建与 exec、基础时间、文件创建/读写/目录遍历、socket 和 TCP/UDP 路径都存在，暂时看不到必须重做内核架构的缺口。主要差距是若干 Linux 语义不完整或返回固定值，需要针对 10 个 CAgent 测试逐项验证。
@@ -281,13 +284,15 @@ Starry 的经验说明：F7LY 当前最需要补的是“容量、并发、回�
 
 - [ ] 先取得内核能跑通的成功基线，再拆分 syscall、调度、缺页、文件缓存、ext4 元数据和 block I/O 耗时。
 - [x] 代码优化完成待完整构建验收：初始选核退化为 O(NUMCPU) 原子压力读取，调度扫描先锁 PCB 消除跨核竞态，唤醒使用语义化 SMP IPI；路径组件缓存、bcache 热点和 COW/TLB 批处理已做定向回归；epoll 零超时对任意事件上限使用 8 项栈缓冲与轮转扫描、不分配页、不睡眠，ET/LT 公平修复已在 RV/LA `epoll_wait04` 连续 10 次回归中通过。
-- [x] 取舍已执行：运行期任务迁移和导致启动回归的 per-CPU runnable 位图均已撤回；未跳过 crate、未复用旧 target、未减少 cores、未修改官方脚本或 uptime。保留项的最终 10%/15% 性能门槛仍由隔离两轮决定。
+- [x] 取舍已执行：未跳过 crate、未复用旧 target、未减少 QEMU 核数，也未修改官方脚本或 uptime。运行期任务迁移仍不启用；2026-08-09 针对 BuildStorm 停顿证据重新加入按 CPU 的 runnable 位图，仅改变调度候选扫描，不改变任务迁移契约，并已通过双架构强制构建和短测。
 - [x] 2026-07-29 冷构建性能基线完成待验收：同一 RV 8G/8 vCPU 镜像从空 `target/debug` 运行 900 guest 秒，旧内核未输出 `Compiling`，仅留下 13 个 deps 文件；宿主采样显示 8 个 vCPU 线程长期合计约 800% CPU，主要消耗在空闲调度扫描。
 - [x] 2026-07-29 多维热路径优化完成待验收：scheduler 使用活跃 PCB 位图、默认优先级无锁快路和 idle/IPI 唤醒；futex/普通 wakeup 遍历活跃槽位；ext4 FIFO 锁精确唤醒、块缓存扩为 8192 项并使用描述符池；COW/页表清零和用户 IO 缓冲删除重复写；匿名私有 `MADV_DONTNEED` 实际释放驻留页。
 - [x] 2026-07-29 Cargo 深路径优化完成待验收：root 打开文件不再对每级前缀重复 resolve+stat，存在性和文件类型查询合并为一次。相同 RV 冷诊断从约 415 guest 秒才启动并行 rustc、535 秒 5 个 deps 文件，提升到 107 秒启动并行 rustc、482 秒一度达到 20 个 deps 文件、534 秒仍有 15 个；8 个 rustc 已实际分布到 CPU0-7。
 - [x] 2026-07-29 第二阶段调度/ext4 优化完成待验收：新任务按各 home CPU 活跃压力选择最空闲核，避免短命 shell 扰乱轮转相位并让重型 rustc 与 cargo 撞核；ext4 增加 16 槽元数据热点直达缓存，同时修正区间失效起点不存在时漏失效的问题。相同 RV 冷构建在约 107 秒进入 rustc，热点缓存于 149/191/234/277 秒达到 4/6/7/10 个 deps 产物，无热点对照同期仅为 1/3/3/4；运行期任务迁移因会破坏 guest sleep/计时稳定性，已撤回。
 - [x] 2026-07-31 第三阶段深路径优化完成待验收：lwext4 增加由目录项权威增删路径维护的正/负组件缓存，symlink 解析改为无临时组件 vector 的单遍扫描，普通读采用已通过时间语义窄测的 relatime 以减少重复 atime 写放大。相同 RV 冷构建在 74.54 秒采样时首批 rustc 已运行约 20～23 秒（旧内核 106.99 秒采样时运行约 27 秒，推算启动约从 80 秒提前到 51 秒）；目录项缓存轮次于 115.66/238.26/282.84/335.91 秒达到 5/10/12/14 个 deps 产物，旧热点缓存轮次于 106.99/234.26/277.26 秒为 0/7/10 个，旧同长度轮次 345.57 秒为 11 个。RV/LA 路径负转正、rename/unlink、目录 rename、symlink 类型切换窄测均通过，未见 panic。
 - [x] 2026-08-01 原 `Compiling core` futex 卡死修复完成待验收：以修复前/后的 8 vCPU GDB 全核栈确认并消除 futex 全局锁与 PCB 锁的 ABBA；WAIT/WAKE 使用同一规范锁序，futex key 改为原子预筛选发布。RV/LA 四个 futex 语义小测结果一致，未跳过 crate、未降低 QEMU 核数，也未按测例增加特判。
+- [x] 2026-08-09 BuildStorm 停顿诊断与代码修复完成待完整验收：已完成当前 HEAD 8/1 vCPU 与 `a40074f6^` 独立 worktree 的有界对照、间隔 GDB/计数器快照；按证据完成地址空间定向 TLB、ext4/bcache、futex/普通 wait channel、调度候选扫描、特殊映射和退出回收链路修复，并保留默认关闭的诊断框架与宿主探针。
+- [x] 2026-08-09 修复后受控结果：官方进度探针在 `logs/run/output_r_20260809-073601_buildstorm-perf.txt` 中进入 `core v0.0.0` 并生成产物，但在 1200 秒窗口内仍未出现后续 `Compiling`；因此“根因链代码修复”与“完整 BuildStorm 成功”分开记录，后者继续待用户验收。
 - [ ] 待完成：在不受其它 QEMU 抢占的环境中跑完 RV/LA 官方完整 BuildStorm，记录最终产物、总耗时和至少两次重复数据；当前结果只证明冷启动与前段编译显著加速，不宣称完整 446 项构建已经通过。
 
 ## 6. 内核能力验收门槛

@@ -2,6 +2,7 @@
 
 #include "hal/cpu.hh"
 #include "mem/memlayout.hh"
+#include "proc/process_memory_manager.hh"
 #include "param.h"
 #include "printer.hh"
 #include <EASTL/atomic.h>
@@ -26,6 +27,37 @@ namespace
     eastl::atomic<uint64> g_generation{0};
     eastl::atomic<uint64> g_requested_generation[NCPU]{};
     eastl::atomic<uint64> g_acknowledged_generation[NCPU]{};
+    eastl::atomic<uint64> g_requested_start[NCPU]{};
+    eastl::atomic<uint64> g_requested_size[NCPU]{};
+    eastl::atomic<uint32> g_requested_asid[NCPU]{};
+    eastl::atomic<proc::ProcessMemoryManager *> g_requested_mm[NCPU]{};
+    SpinLock g_mm_flush_lock;
+    // 0=未初始化，1=某个 CPU 正在初始化，2=锁已可用。不能在调用
+    // SpinLock::init() 之前就发布“已初始化”，否则第二个 CPU 可能直接使用
+    // 尚未构造完成的锁。
+    eastl::atomic<uint32> g_mm_flush_lock_state{0};
+
+    void ensure_mm_flush_lock()
+    {
+        if (g_mm_flush_lock_state.load(eastl::memory_order_acquire) == 2)
+        {
+            return;
+        }
+
+        uint32 expected = 0;
+        if (g_mm_flush_lock_state.compare_exchange_strong(
+                expected, 1, eastl::memory_order_acq_rel))
+        {
+            g_mm_flush_lock.init("la_mm_tlb_flush");
+            g_mm_flush_lock_state.store(2, eastl::memory_order_release);
+            return;
+        }
+
+        while (g_mm_flush_lock_state.load(eastl::memory_order_acquire) != 2)
+        {
+            asm volatile("nop");
+        }
+    }
 
     inline uint32 read_iocsr_word(uint64 address)
     {
@@ -60,6 +92,31 @@ namespace
         {
         }
     }
+
+    void flush_local_range_asid(uint32 asid, uint64 start, uint64 size)
+    {
+        asm volatile("dbar 0" ::: "memory");
+        if (size == 0)
+        {
+            // 0x3 是当前 ASID 的全量失效；普通映射更新优先使用下面的
+            // 0x6 按 VA+ASID 失效，避免影响同一 CPU 上其它地址空间。
+            asm volatile("invtlb 0x3, $zero, $zero" ::: "memory");
+            asm volatile("dbar 0" ::: "memory");
+            return;
+        }
+
+        uint64 normalized_start = PGROUNDDOWN(start);
+        uint64 normalized_end = PGROUNDUP(start + size);
+        for (uint64 va = normalized_start; va < normalized_end; va += (PGSIZE << 1))
+        {
+            asm volatile("invtlb 0x6, %0, %1"
+                         :
+                         : "r"(static_cast<uint64>(asid)),
+                           "r"(va & ~((PGSIZE << 1) - 1))
+                         : "memory");
+        }
+        asm volatile("dbar 0" ::: "memory");
+    }
 }
 
 void initialize_current_cpu()
@@ -81,6 +138,10 @@ void initialize_current_cpu()
 
     const uint64 generation = g_generation.load(eastl::memory_order_acquire);
     g_requested_generation[cpu_id].store(generation, eastl::memory_order_release);
+    g_requested_start[cpu_id].store(0, eastl::memory_order_release);
+    g_requested_size[cpu_id].store(0, eastl::memory_order_release);
+    g_requested_asid[cpu_id].store(0, eastl::memory_order_release);
+    g_requested_mm[cpu_id].store(nullptr, eastl::memory_order_release);
     flush_local_range(0, 0);
     g_acknowledged_generation[cpu_id].store(generation, eastl::memory_order_release);
 }
@@ -125,7 +186,19 @@ bool handle_ipi()
     if (generation >
         g_acknowledged_generation[cpu_id].load(eastl::memory_order_acquire))
     {
-        flush_local_range(0, 0);
+        proc::ProcessMemoryManager *mm =
+            g_requested_mm[cpu_id].load(eastl::memory_order_acquire);
+        if (mm != nullptr)
+        {
+            flush_local_range_asid(
+                g_requested_asid[cpu_id].load(eastl::memory_order_acquire),
+                g_requested_start[cpu_id].load(eastl::memory_order_acquire),
+                g_requested_size[cpu_id].load(eastl::memory_order_acquire));
+        }
+        else
+        {
+            flush_local_range(0, 0);
+        }
         g_acknowledged_generation[cpu_id].store(generation, eastl::memory_order_release);
     }
     return true;
@@ -157,6 +230,10 @@ void flush_range_all_cpus(uint64 start, uint64 size)
         {
             continue;
         }
+        g_requested_mm[cpu_id].store(nullptr, eastl::memory_order_release);
+        g_requested_start[cpu_id].store(0, eastl::memory_order_release);
+        g_requested_size[cpu_id].store(0, eastl::memory_order_release);
+        g_requested_asid[cpu_id].store(0, eastl::memory_order_release);
         publish_request(cpu_id, generation);
         send_tlb_ipi(cpu_id);
     }
@@ -201,6 +278,128 @@ void flush_range_all_cpus(uint64 start, uint64 size)
             }
         }
     }
+}
+
+void enter_mm(proc::ProcessMemoryManager &mm)
+{
+    const uint64 cpu_id = Cpu::current_cpu_id();
+    if (!Cpu::is_valid_cpu_id(cpu_id))
+    {
+        return;
+    }
+    for (;;)
+    {
+        mm.tlb_state_lock.acquire();
+        mm.tlb_active_cpu_mask |= 1ULL << cpu_id;
+        const uint64 generation = mm.tlb_generation;
+        const uint64 seen = mm.tlb_seen_generation[cpu_id];
+        mm.tlb_state_lock.release();
+        if (seen >= generation)
+        {
+            return;
+        }
+        flush_local_range_asid(mm.user_asid, 0, 0);
+        mm.tlb_state_lock.acquire();
+        if (mm.tlb_seen_generation[cpu_id] < generation)
+        {
+            mm.tlb_seen_generation[cpu_id] = generation;
+        }
+        const bool caught_up = mm.tlb_seen_generation[cpu_id] >= mm.tlb_generation;
+        mm.tlb_state_lock.release();
+        if (caught_up)
+        {
+            return;
+        }
+    }
+}
+
+void leave_mm(proc::ProcessMemoryManager &mm)
+{
+    const uint64 cpu_id = Cpu::current_cpu_id();
+    if (!Cpu::is_valid_cpu_id(cpu_id))
+    {
+        return;
+    }
+    mm.tlb_state_lock.acquire();
+    mm.tlb_active_cpu_mask &= ~(1ULL << cpu_id);
+    mm.tlb_state_lock.release();
+}
+
+void flush_mm_range(proc::ProcessMemoryManager &mm, uint64 start, uint64 size)
+{
+    ensure_mm_flush_lock();
+    mm.tlb_flush_lock.acquire();
+    g_mm_flush_lock.acquire();
+    asm volatile("dbar 0" ::: "memory");
+
+    const uint64 current_cpu = Cpu::current_cpu_id();
+    const uint64 generation = g_generation.fetch_add(1, eastl::memory_order_acq_rel) + 1;
+    uint64 remote_mask = 0;
+    mm.tlb_state_lock.acquire();
+    ++mm.tlb_generation;
+    remote_mask = mm.tlb_active_cpu_mask;
+    if (Cpu::is_valid_cpu_id(current_cpu))
+    {
+        remote_mask &= ~(1ULL << current_cpu);
+    }
+    mm.tlb_state_lock.release();
+
+    flush_local_range_asid(mm.user_asid, start, size);
+    if (Cpu::is_valid_cpu_id(current_cpu))
+    {
+        mm.tlb_state_lock.acquire();
+        if (mm.tlb_seen_generation[current_cpu] < mm.tlb_generation)
+        {
+            mm.tlb_seen_generation[current_cpu] = mm.tlb_generation;
+        }
+        mm.tlb_state_lock.release();
+    }
+    for (uint64 cpu_id = 0; cpu_id < NCPU; ++cpu_id)
+    {
+        if ((remote_mask & (1ULL << cpu_id)) == 0)
+        {
+            continue;
+        }
+        g_requested_mm[cpu_id].store(&mm, eastl::memory_order_release);
+        g_requested_asid[cpu_id].store(mm.user_asid, eastl::memory_order_release);
+        g_requested_start[cpu_id].store(start, eastl::memory_order_release);
+        g_requested_size[cpu_id].store(size, eastl::memory_order_release);
+        publish_request(cpu_id, generation);
+        send_tlb_ipi(cpu_id);
+    }
+
+    for (uint64 cpu_id = 0; cpu_id < NCPU; ++cpu_id)
+    {
+        if ((remote_mask & (1ULL << cpu_id)) == 0)
+        {
+            continue;
+        }
+        const uint64 wait_start = Cpu::get_cpu()->get_time();
+        uint64 next_retry = wait_start + k_ipi_retry_cycles;
+        uint32 probe_spins = 0;
+        while (g_acknowledged_generation[cpu_id].load(eastl::memory_order_acquire) < generation)
+        {
+            if ((++probe_spins & 0xffU) != 0)
+            {
+                continue;
+            }
+            poll_pending();
+            const uint64 now = Cpu::get_cpu()->get_time();
+            if (static_cast<int64>(now - next_retry) >= 0)
+            {
+                send_tlb_ipi(cpu_id);
+                next_retry = now + k_ipi_retry_cycles;
+            }
+            if (now - wait_start >= k_shootdown_timeout_cycles)
+            {
+                panic("[tlb] LoongArch mm shootdown timeout sender=%lu target=%lu generation=%lu ack=%lu",
+                      current_cpu, cpu_id, generation,
+                      g_acknowledged_generation[cpu_id].load(eastl::memory_order_acquire));
+            }
+        }
+    }
+    g_mm_flush_lock.release();
+    mm.tlb_flush_lock.release();
 }
 
 void flush_all_cpus()

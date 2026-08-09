@@ -68,103 +68,6 @@ namespace proc
 {
     namespace
     {
-#if defined(RISCV) || defined(LOONGARCH)
-        // 两个评测架构都至少使用 10 位用户 ASID；0 永久保留给内核页表。
-        constexpr uint32 k_user_asid_count = 1U << 10;
-        constexpr uint32 k_first_user_asid = 1;
-        static_assert(num_process < k_user_asid_count,
-                      "用户 ASID 数量必须覆盖全部 PCB 槽位");
-        SpinLock g_user_asid_lock;
-        bool g_user_asid_active[k_user_asid_count]{};
-        bool g_user_asid_retired[k_user_asid_count]{};
-        uint64 g_user_asid_retired_epoch[k_user_asid_count]{};
-        uint64 g_user_asid_retirement_epoch = 0;
-        bool g_user_asid_reclaiming = false;
-        uint32 g_next_user_asid = k_first_user_asid;
-
-        uint32 allocate_user_asid()
-        {
-            for (;;)
-            {
-                g_user_asid_lock.acquire();
-                for (uint32 offset = 0; offset < k_user_asid_count - 1; ++offset)
-                {
-                    const uint32 asid =
-                        k_first_user_asid +
-                        ((g_next_user_asid - k_first_user_asid + offset) %
-                         (k_user_asid_count - 1));
-                    if (g_user_asid_active[asid] || g_user_asid_retired[asid])
-                    {
-                        continue;
-                    }
-
-                    g_user_asid_active[asid] = true;
-                    g_next_user_asid =
-                        asid + 1 < k_user_asid_count
-                            ? asid + 1
-                            : k_first_user_asid;
-                    g_user_asid_lock.release();
-                    return asid;
-                }
-
-                /*
-                 * 最多同时存在 NPROC(512) 个 PCB，而硬件提供 1023 个用户
-                 * ASID。没有干净 ASID 时，说明隔离队列已积累了大量已退出
-                 * 地址空间。全核失效不能持有 ASID 锁：远端 CPU 可能正在
-                 * freeproc() 中等待同一把锁，进而无法确认 shootdown。
-                 *
-                 * retirement epoch 把回收划成两个阶段。失效前已经退休的
-                 * ASID 可在失效完成后复用；失效期间刚退休的 ASID epoch
-                 * 更大，必须继续隔离到下一轮，避免清掉其退出后残留的翻译。
-                 */
-                if (g_user_asid_reclaiming)
-                {
-                    g_user_asid_lock.release();
-                    // 调用方仍持有 PCB 锁、处于关中断状态，主动服务对端 IPI，
-                    // 让正在进行的全核失效能够完成。
-                    hal::tlb::poll_pending();
-                    asm volatile("nop");
-                    continue;
-                }
-
-                g_user_asid_reclaiming = true;
-                const uint64 reclaim_epoch = g_user_asid_retirement_epoch;
-                g_user_asid_lock.release();
-
-                hal::tlb::flush_all_cpus();
-
-                g_user_asid_lock.acquire();
-                for (uint32 asid = k_first_user_asid;
-                     asid < k_user_asid_count; ++asid)
-                {
-                    if (!g_user_asid_active[asid] &&
-                        g_user_asid_retired[asid] &&
-                        g_user_asid_retired_epoch[asid] <= reclaim_epoch)
-                    {
-                        g_user_asid_retired[asid] = false;
-                        g_user_asid_retired_epoch[asid] = 0;
-                    }
-                }
-                g_user_asid_reclaiming = false;
-                g_user_asid_lock.release();
-            }
-        }
-
-        void retire_user_asid(uint32 asid)
-        {
-            if (asid < k_first_user_asid || asid >= k_user_asid_count)
-            {
-                return;
-            }
-
-            g_user_asid_lock.acquire();
-            g_user_asid_active[asid] = false;
-            g_user_asid_retired[asid] = true;
-            g_user_asid_retired_epoch[asid] = ++g_user_asid_retirement_epoch;
-            g_user_asid_lock.release();
-        }
-#endif
-
 #ifdef RISCV
         constexpr uint64 k_min_kernel_file_ptr = KERNBASE;
 #elif defined(LOONGARCH)
@@ -1188,15 +1091,7 @@ namespace proc
         _ns_lock.init("namespace");
         g_file_lease_lock.init("file_lease");
         g_active_file_lease_count = 0;
-#if defined(RISCV) || defined(LOONGARCH)
-        g_user_asid_lock.init("user_asid");
-        memset(g_user_asid_active, 0, sizeof(g_user_asid_active));
-        memset(g_user_asid_retired, 0, sizeof(g_user_asid_retired));
-        memset(g_user_asid_retired_epoch, 0, sizeof(g_user_asid_retired_epoch));
-        g_user_asid_retirement_epoch = 0;
-        g_user_asid_reclaiming = false;
-        g_next_user_asid = k_first_user_asid;
-#endif
+        initialize_user_asid_allocator();
         for (uint i = 0; i < num_process; ++i)
         {
             Pcb &p = k_proc_pool[i];
@@ -1205,6 +1100,14 @@ namespace proc
         for (uint word = 0; word < k_active_slot_word_count; ++word)
         {
             _active_slot_words[word].store(0, eastl::memory_order_release);
+        }
+        for (uint bucket = 0; bucket < k_wait_channel_bucket_count; ++bucket)
+        {
+            for (uint word = 0; word < k_wait_channel_slot_word_count; ++word)
+            {
+                _wait_channel_slot_words[bucket][word].store(
+                    0, eastl::memory_order_release);
+            }
         }
         _cur_pid = 1;
         _cur_tid = 1;
@@ -1306,6 +1209,70 @@ namespace proc
             ~(1ULL << (global_id % 64)), eastl::memory_order_release);
     }
 
+    uint ProcessManager::wait_channel_bucket(void *chan) const
+    {
+        // channel 通常是对齐指针；丢弃低三位后混合高位，避免同一类对象
+        // 因为相同的低位对齐全部集中到一个 bucket。
+        uint64 value = reinterpret_cast<uint64>(chan) >> 3;
+        value ^= value >> 17;
+        value ^= value >> 31;
+        return static_cast<uint>(value) & (k_wait_channel_bucket_count - 1);
+    }
+
+    void ProcessManager::register_wait_channel(Pcb *p, void *chan)
+    {
+        if (p == nullptr || chan == nullptr)
+        {
+            return;
+        }
+
+        const uint bucket = wait_channel_bucket(chan);
+
+        // 一个 PCB 在任意时刻只能属于一个通用等待 channel。futex 的
+        // requeue、信号唤醒和超时唤醒都可能在 sleep() 返回前再次进入
+        // 注册路径；若直接覆盖 bucket 字段，旧 bucket 的位会永久残留，
+        // 后续 wakeup 只能看到一份过期成员资格。
+        if (p->_wait_channel_registered)
+        {
+            const uint old_bucket = p->_wait_channel_bucket;
+            if (old_bucket == bucket &&
+                p->_chan.load(eastl::memory_order_relaxed) == chan)
+            {
+                return;
+            }
+            if (old_bucket < k_wait_channel_bucket_count)
+            {
+                _wait_channel_slot_words[old_bucket][p->_global_id / 64].fetch_and(
+                    ~(1ULL << (p->_global_id % 64)), eastl::memory_order_release);
+            }
+        }
+        p->_wait_channel_bucket = bucket;
+        p->_wait_channel_registered = true;
+        p->_chan.store(chan, eastl::memory_order_release);
+        _wait_channel_slot_words[bucket][p->_global_id / 64].fetch_or(
+            1ULL << (p->_global_id % 64), eastl::memory_order_release);
+    }
+
+    void ProcessManager::unregister_wait_channel(Pcb *p)
+    {
+        if (p == nullptr)
+        {
+            return;
+        }
+
+        if (p->_wait_channel_registered)
+        {
+            const uint bucket = p->_wait_channel_bucket;
+            if (bucket < k_wait_channel_bucket_count)
+            {
+                _wait_channel_slot_words[bucket][p->_global_id / 64].fetch_and(
+                    ~(1ULL << (p->_global_id % 64)), eastl::memory_order_release);
+            }
+            p->_wait_channel_registered = false;
+        }
+        p->_chan.store(nullptr, eastl::memory_order_release);
+    }
+
     void ProcessManager::alloc_pid(Pcb *p)
     {
         _pid_lock.acquire();
@@ -1356,9 +1323,6 @@ namespace proc
                 /****************************************************************************************
                  * 基本进程标识和状态管理初始化
                  ****************************************************************************************/
-#if defined(RISCV) || defined(LOONGARCH)
-                p->_user_asid = allocate_user_asid();
-#endif
                 k_pm.alloc_pid(p);           // 分配全局唯一的进程ID
                 k_pm.alloc_tid(p);           // 分配线程ID（单线程进程中等于PID）
                 k_scheduler.set_task_state(*p, ProcState::USED); // 标记进程控制块为已使用
@@ -1389,9 +1353,13 @@ namespace proc
                 /****************************************************************************************
                  * 进程状态和调度信息初始化
                  ****************************************************************************************/
+                unregister_wait_channel(p);
                 p->_chan.store(nullptr, eastl::memory_order_relaxed); // 清空睡眠等待通道
+                p->_wait_channel_bucket = 0;
+                p->_wait_channel_registered = false;
                 p->_killed = 0;     // 清除终止标志
                 p->_exiting = false; // 清除退出清理标记
+                p->_deferred_reap = false;
                 p->_xstate = 0;     // 清除退出状态码
                 p->_parent_exit_signal = ipc::signal::SIGCHLD;
                 p->_stop_signal = 0;
@@ -1462,6 +1430,10 @@ namespace proc
                  ****************************************************************************************/
                 p->_futex_addr = nullptr;  // 清空futex等待地址
                 p->_futex_key.store(0, eastl::memory_order_relaxed); // 清空futex匹配键
+                p->_futex_private = false;
+                p->_futex_bucket_index.store(0, eastl::memory_order_relaxed);
+                p->_futex_timeout_deadline.store(0, eastl::memory_order_relaxed);
+                p->_futex_wait_result = 0;
                 p->_clear_tid_addr = 0;    // 清空线程退出时需要清理的地址
                 p->_robust_list = nullptr; // 清空健壮futex链表
                 p->_robust_list_user_addr = 0;
@@ -1602,15 +1574,6 @@ namespace proc
             p->_trapframe = nullptr;
         }
 
-#if defined(RISCV) || defined(LOONGARCH)
-        /*
-         * 已退出任务不会再以这个 ASID 返回用户态。先放入隔离队列，等池耗尽
-         * 后统一全核失效再复用；因此这里可以安全释放 trapframe，而无需让
-         * 每个短进程退出都发起一次昂贵且可能并发的 shootdown。
-         */
-        retire_user_asid(p->_user_asid);
-        p->_user_asid = 0;
-#endif
 
         // printf("[freeproc] Reclaiming PCB for process %s pid %d\n", p->_name, p->_pid);
 
@@ -1644,9 +1607,22 @@ namespace proc
         /****************************************************************************************
          * 进程状态和调度信息清理
          ****************************************************************************************/
-        p->_chan.store(nullptr, eastl::memory_order_release); // 清空睡眠等待通道
+        // 在清空地址空间身份和 futex 字段前先摘掉可能残留的 bucket 位。
+        // 私有 futex 的完整 key 包含 mm 指针；先 reset_memory_manager_ptr()
+        // 会让这里无法定位旧桶，PCB 复用后可能把新任务误当成旧 waiter。
+        futex_remove_waiter(p);
+        unregister_wait_channel(p);
+        p->_futex_addr = nullptr;
+        p->_futex_private = false;
+        p->_futex_bucket_index.store(0, eastl::memory_order_relaxed);
+        p->_futex_key.store(0, eastl::memory_order_relaxed);
+        p->_futex_timeout_deadline.store(0, eastl::memory_order_relaxed);
+        p->_futex_wait_result = 0;
+        p->_wait_channel_bucket = 0;
+        p->_wait_channel_registered = false;
         p->_killed = 0;                // 清除终止标志
         p->_exiting = false;           // 清除退出清理标记
+        p->_deferred_reap = false;     // 清除上一个任务遗留的延后回收标记
         p->_xstate = 0;                // 清除退出状态码
         p->_parent_exit_signal = ipc::signal::SIGCHLD;
         p->_stop_signal = 0;
@@ -1702,8 +1678,6 @@ namespace proc
         /****************************************************************************************
          * 线程和同步原语清理
          ****************************************************************************************/
-        p->_futex_addr = nullptr;  // 清空futex等待地址
-        p->_futex_key.store(0, eastl::memory_order_release); // 清空futex匹配键
         p->_clear_tid_addr = 0;    // 清空线程退出时需要清理的地址
         p->_robust_list = nullptr; // 清空健壮futex链表
         p->_robust_list_user_addr = 0;
@@ -1959,6 +1933,30 @@ namespace proc
         p->_killed = 1;
         p->_lock.release();
     }
+
+    bool ProcessManager::interrupt_sleep_for_signal(Pcb *target)
+    {
+        assert(target != nullptr && target->_lock.is_held(),
+               "interrupt_sleep_for_signal: target PCB lock not held");
+        if (target == nullptr || target->_state != ProcState::SLEEPING ||
+            !ipc::signal::has_unmasked_signal_pending(target))
+        {
+            return false;
+        }
+
+        // futex_remove_waiter() 接受“调用方已持 PCB 锁”的场景：它会临时按
+        // futex bucket -> PCB 的唯一锁序重取锁，并在返回时恢复本函数的持锁
+        // 状态。对普通 sleep，它同样会撤销通用 wait-channel 登记。
+        futex_remove_waiter(target);
+        if (target->_state != ProcState::SLEEPING)
+        {
+            return false;
+        }
+
+        k_scheduler.set_task_state(*target, ProcState::RUNNABLE);
+        return true;
+    }
+
     // Kill the process with the given pid.
     // The victim won't exit until it tries to return
     // to user space (see usertrap() in trap.c).
@@ -1972,6 +1970,7 @@ namespace proc
             // 如果找到目标 pid 的进程
             if (p->_pid == pid)
             {
+                int wake_cpu = -1;
                 // 设置该进程的 killed 标志位为 1，
                 // 表示该进程已被请求终止。
                 // 被 kill 并不立即终止进程，而是在合适的时机由进程自行处理。
@@ -1980,15 +1979,28 @@ namespace proc
                 // 若该进程当前在 sleep（通常是等待 I/O 或锁）
                 // 将其唤醒（设为 RUNNABLE），这样调度器会调度它运行，
                 // 让它可以检查 _killed 并自行退出。
-                if (p->_state == ProcState::SLEEPING ||
-                    p->_state == ProcState::STOPPED)
+                if (p->_state == ProcState::SLEEPING)
                 {
-                    // 提前唤醒等待中的进程，
-                    // 避免它永远睡着不被调度，也就永远无法响应 kill。
+                    // kill 不一定有可见的 pending signal，不能复用信号助手的
+                    // 掩码检查；但仍必须先从 futex bucket/wait-channel 摘链。
+                    futex_remove_waiter(p);
+                    if (p->_state == ProcState::SLEEPING)
+                    {
+                        k_scheduler.set_task_state(*p, ProcState::RUNNABLE);
+                        wake_cpu = p->_last_cpu;
+                    }
+                }
+                else if (p->_state == ProcState::STOPPED)
+                {
                     k_scheduler.set_task_state(*p, ProcState::RUNNABLE);
+                    wake_cpu = p->_last_cpu;
                 }
 
                 p->_lock.release();
+                if (wake_cpu >= 0)
+                {
+                    hal::smp::kick_cpu(static_cast<uint64>(wake_cpu));
+                }
                 return 0;
             }
 
@@ -2001,11 +2013,12 @@ namespace proc
     {
         Pcb *p;
         int count = 0; // 记录发送信号的进程数量
-        auto wake_if_signal_interruptible = [sig](Pcb *target) -> Pcb * {
+        auto wake_if_signal_interruptible = [sig](Pcb *target, int *wake_cpu) -> Pcb * {
             if (target->_state == ProcState::STOPPED &&
                 (sig == ipc::signal::SIGCONT || sig == ipc::signal::SIGKILL))
             {
                 k_scheduler.set_task_state(*target, ProcState::RUNNABLE);
+                *wake_cpu = target->_last_cpu;
                 if (sig == ipc::signal::SIGCONT)
                 {
                     target->_continued_pending = true;
@@ -2013,10 +2026,9 @@ namespace proc
                 }
                 return nullptr;
             }
-            if (target->_state == ProcState::SLEEPING &&
-                proc::ipc::signal::has_unmasked_signal_pending(target))
+            if (k_pm.interrupt_sleep_for_signal(target))
             {
-                k_scheduler.set_task_state(*target, ProcState::RUNNABLE);
+                *wake_cpu = target->_last_cpu;
             }
             return nullptr;
         };
@@ -2030,12 +2042,15 @@ namespace proc
                 if (p->_pid == pid && p->_state != ProcState::UNUSED)
                 {
                     Pcb *continued_parent = nullptr;
+                    int wake_cpu = -1;
                     if (sig != 0)
                     {
                         p->add_signal(sig, info);
-                        continued_parent = wake_if_signal_interruptible(p);
+                        continued_parent = wake_if_signal_interruptible(p, &wake_cpu);
                     }
                     p->_lock.release();
+                    if (wake_cpu >= 0)
+                        hal::smp::kick_cpu(static_cast<uint64>(wake_cpu));
                     if (continued_parent != nullptr)
                         wakeup(continued_parent);
                     return 0;
@@ -2058,13 +2073,16 @@ namespace proc
                 if (p->_pgid == target_pgid && p->_state != ProcState::UNUSED)
                 {
                     Pcb *continued_parent = nullptr;
+                    int wake_cpu = -1;
                     if (sig != 0)
                     {
                         p->add_signal(sig, info);
-                        continued_parent = wake_if_signal_interruptible(p);
+                        continued_parent = wake_if_signal_interruptible(p, &wake_cpu);
                     }
                     count++;
                     p->_lock.release();
+                    if (wake_cpu >= 0)
+                        hal::smp::kick_cpu(static_cast<uint64>(wake_cpu));
                     if (continued_parent != nullptr)
                         wakeup(continued_parent);
                     continue;
@@ -2088,13 +2106,16 @@ namespace proc
                     (p->_uid == current->_euid || current->_euid == 0)) // 权限检查
                 {
                     Pcb *continued_parent = nullptr;
+                    int wake_cpu = -1;
                     if (sig != 0)
                     {
                         p->add_signal(sig, info);
-                        continued_parent = wake_if_signal_interruptible(p);
+                        continued_parent = wake_if_signal_interruptible(p, &wake_cpu);
                     }
                     count++;
                     p->_lock.release();
+                    if (wake_cpu >= 0)
+                        hal::smp::kick_cpu(static_cast<uint64>(wake_cpu));
                     if (continued_parent != nullptr)
                         wakeup(continued_parent);
                     continue;
@@ -2118,13 +2139,16 @@ namespace proc
                     (p->_uid == current->_euid || current->_euid == 0)) // 权限检查
                 {
                     Pcb *continued_parent = nullptr;
+                    int wake_cpu = -1;
                     if (sig != 0)
                     {
                         p->add_signal(sig, info);
-                        continued_parent = wake_if_signal_interruptible(p);
+                        continued_parent = wake_if_signal_interruptible(p, &wake_cpu);
                     }
                     count++;
                     p->_lock.release();
+                    if (wake_cpu >= 0)
+                        hal::smp::kick_cpu(static_cast<uint64>(wake_cpu));
                     if (continued_parent != nullptr)
                         wakeup(continued_parent);
                     continue;
@@ -2165,16 +2189,20 @@ namespace proc
                 // 但不把卡在 futex/rt_sigsuspend 等等待里的目标线程改回 RUNNABLE，
                 // 取消请求就会永远堆在 _signal 里，表现成用户态 join/sem_wait 长时间卡死。
                 Pcb *continued_parent = nullptr;
-                if (sig != 0 &&
-                    ((p->_state == ProcState::SLEEPING &&
-                      proc::ipc::signal::has_unmasked_signal_pending(p)) ||
-                     (p->_state == ProcState::STOPPED &&
-                      (sig == ipc::signal::SIGCONT || sig == ipc::signal::SIGKILL))))
+                int wake_cpu = -1;
+                if (sig != 0 && p->_state == ProcState::SLEEPING)
                 {
-                    const bool continued =
-                        p->_state == ProcState::STOPPED &&
-                        sig == ipc::signal::SIGCONT;
+                    if (interrupt_sleep_for_signal(p))
+                    {
+                        wake_cpu = p->_last_cpu;
+                    }
+                }
+                else if (sig != 0 && p->_state == ProcState::STOPPED &&
+                         (sig == ipc::signal::SIGCONT || sig == ipc::signal::SIGKILL))
+                {
+                    const bool continued = sig == ipc::signal::SIGCONT;
                     k_scheduler.set_task_state(*p, ProcState::RUNNABLE);
+                    wake_cpu = p->_last_cpu;
                     if (continued)
                     {
                         p->_continued_pending = true;
@@ -2182,6 +2210,8 @@ namespace proc
                     }
                 }
                 p->_lock.release();
+                if (wake_cpu >= 0)
+                    hal::smp::kick_cpu(static_cast<uint64>(wake_cpu));
                 if (continued_parent != nullptr)
                     wakeup(continued_parent);
                 return 0;
@@ -2220,16 +2250,20 @@ namespace proc
                 // 保持和 kill_signal() 一致：只要目标线程当前睡眠且存在未屏蔽待处理信号，
                 // 就要把它唤醒，让阻塞中的系统调用有机会返回 EINTR。
                 Pcb *continued_parent = nullptr;
-                if (sig != 0 &&
-                    ((p->_state == ProcState::SLEEPING &&
-                      proc::ipc::signal::has_unmasked_signal_pending(p)) ||
-                     (p->_state == ProcState::STOPPED &&
-                      (sig == ipc::signal::SIGCONT || sig == ipc::signal::SIGKILL))))
+                int wake_cpu = -1;
+                if (sig != 0 && p->_state == ProcState::SLEEPING)
                 {
-                    const bool continued =
-                        p->_state == ProcState::STOPPED &&
-                        sig == ipc::signal::SIGCONT;
+                    if (interrupt_sleep_for_signal(p))
+                    {
+                        wake_cpu = p->_last_cpu;
+                    }
+                }
+                else if (sig != 0 && p->_state == ProcState::STOPPED &&
+                         (sig == ipc::signal::SIGCONT || sig == ipc::signal::SIGKILL))
+                {
+                    const bool continued = sig == ipc::signal::SIGCONT;
                     k_scheduler.set_task_state(*p, ProcState::RUNNABLE);
+                    wake_cpu = p->_last_cpu;
                     if (continued)
                     {
                         p->_continued_pending = true;
@@ -2237,6 +2271,8 @@ namespace proc
                     }
                 }
                 p->_lock.release();
+                if (wake_cpu >= 0)
+                    hal::smp::kick_cpu(static_cast<uint64>(wake_cpu));
                 if (continued_parent != nullptr)
                     wakeup(continued_parent);
                 return 0;
@@ -2469,6 +2505,12 @@ namespace proc
         fd_table->_lock.acquire();
 
         fs::file *f = fd_table->_ofile_ptr[fd];
+        if (fd_table->_reserved[fd])
+        {
+            // close 正在锁外刷新 write-combine；fd 仍供 exec 扫描，但普通 I/O 不得再取得引用。
+            fd_table->_lock.release();
+            return nullptr;
+        }
         if (f == nullptr || !is_probably_live_file_object(f))
         {
             // 如果 fd 表里残留了已经不可用的文件对象，顺手摘掉槽位，避免后续再次踩到悬空指针。
@@ -2548,13 +2590,6 @@ namespace proc
         if (flags & syscall::CLONE_PARENT)
         {
             np->_parent = p->_parent; // 入口已经验证非空
-        }
-        if (flags & syscall::CLONE_VFORK)
-        {
-            // CLONE_VFORK 语义：父进程必须等到子进程 execve 或 exit 释放共享地址空间后
-            // 才能继续运行。否则父进程可能先 munmap 掉传给子进程的共享用户栈，
-            // glibc posix_spawn/system 路径会随机在子进程栈上 SIGSEGV。
-            np->_vfork_parent = p;
         }
         const int child_home_cpu = np->_last_cpu;
         np->_lock.release();
@@ -3059,6 +3094,16 @@ namespace proc
             np->_parent->_has_child_tasks = true;
         }
 
+        if (flags & syscall::CLONE_VFORK)
+        {
+            /*
+             * 必须在 RUNNABLE 发布前建立 vfork 父子关系。此前 clone() 在 child
+             * 已可调度后才写该字段：子进程若立即 execve/exit，会先清空并唤醒，
+             * 父进程随后写回旧指针再睡眠，造成永久错失唤醒。
+             */
+            np->_vfork_parent = p;
+        }
+
         k_scheduler.set_task_state(*np, ProcState::RUNNABLE);
 
         return np;
@@ -3543,8 +3588,7 @@ namespace proc
 
                 // futex_wait 以 _futex_key 作为被唤醒/重试的判据。线程组正在终止时，
                 // 必须打断这个等待状态，否则 pthread_join 一类路径可能被唤醒后又睡回去。
-                p->_futex_addr = nullptr;
-                p->_futex_key.store(0, eastl::memory_order_release);
+                futex_remove_waiter(p);
                 if (p->_state == ProcState::SLEEPING ||
                     p->_state == ProcState::STOPPED)
                 {
@@ -3593,8 +3637,7 @@ namespace proc
                     if (sibling->_state != ProcState::ZOMBIE)
                     {
                         sibling->_killed = 1;
-                        sibling->_futex_addr = nullptr;
-                        sibling->_futex_key.store(0, eastl::memory_order_release);
+                        futex_remove_waiter(sibling);
                         if (sibling->_state == ProcState::SLEEPING ||
                             sibling->_state == ProcState::STOPPED)
                         {
@@ -3739,6 +3782,15 @@ namespace proc
             reparent(p); // 将 p 的所有子进程交给 init 进程收养
         }
 
+        // robust list 必须先于 clear_child_tid 完成：后者是 pthread_join 可立即
+        // 观察到的“线程完全退出”通知。若先 WAKE，joiner 可能回收 TCB/TLS/栈，
+        // 随后的 robust-list copy_in/copy_out 就会访问已解除映射的用户内存，
+        // 漏掉 OWNER_DIED 和对应 waiter 的唤醒。
+        if (p->_robust_list != nullptr)
+        {
+            proc::futex_cleanup_robust_list(p->_robust_list);
+        }
+
         // 处理线程退出时的清理地址
         if (p->_clear_tid_addr)
         {
@@ -3755,15 +3807,12 @@ namespace proc
                 // Linux 线程退出语义：CLONE_CHILD_CLEARTID / set_tid_address 指定的地址
                 // 在被清零后，还必须做一次 FUTEX_WAKE；只清零不唤醒会让 join 方
                 // 永远睡在对应 futex 上。
-                proc::futex_wakeup(p->_clear_tid_addr, 1, nullptr, 0);
+                proc::futex_wakeup(p->_clear_tid_addr,
+                                   1,
+                                   nullptr,
+                                   0,
+                                   FutexKeyScope::Private);
             }
-        }
-
-        // detached/abnormal 线程退出时，robust mutex 的 owner-died 语义必须在地址空间释放前完成。
-        // 否则等待方只会一直超时，看起来就像 pthread_robust_detach 死锁。
-        if (p->_robust_list != nullptr)
-        {
-            proc::futex_cleanup_robust_list(p->_robust_list);
         }
 
         /****************************************************************************************
@@ -3790,8 +3839,7 @@ namespace proc
         p->_sigsuspend_saved_sigmask = 0;
 
         // 清理线程相关资源
-        p->_futex_addr = nullptr;  // 清空futex等待地址
-        p->_futex_key.store(0, eastl::memory_order_release); // 清空futex匹配键
+        futex_remove_waiter(p);
         p->_robust_list = nullptr; // 清空健壮futex链表
         p->_robust_list_user_addr = 0;
 
@@ -3810,7 +3858,9 @@ namespace proc
             k_scheduler.set_task_state(*p, ProcState::ZOMBIE);
             // exec leader 可能正在等待本线程释放共享 mm/fd，回收前按 tgid 唤醒它。
             wakeup_child_waiters(p);
-            freeproc(p);
+            // 当前任务仍在使用自己的 PCB、内核栈和上下文；必须等 scheduler
+            // 从 call_sched() 切回后再 freeproc()。
+            p->_deferred_reap = true;
             _wait_lock.release();
             Cpu::pop_intr_off();
 
@@ -3872,7 +3922,8 @@ namespace proc
                 // 父进程声明不保留退出状态时，当前任务仍需按统一 PCB 回收流程清理。
                 // freeproc() 会释放 trapframe 并重置所有可复用字段；这里不能半手工清理，
                 // 否则锁状态和文件/信号字段会和 wait4() 回收路径分叉。
-                freeproc(p);
+                // 当前任务必须在切回 scheduler 后再回收自己的 PCB。
+                p->_deferred_reap = true;
                 _wait_lock.release();
                 Cpu::pop_intr_off();
                 k_scheduler.call_sched();
@@ -4046,7 +4097,7 @@ namespace proc
         // 在释放条件锁前发布 channel。wakeup() 先按原子 channel 筛选候选者，
         // 再阻塞获取候选 PCB 锁；这个顺序保留了 sleep/wakeup 的防丢唤醒契约，
         // 同时避免唤醒端为无关的 RUNNING/USED PCB 建立跨锁依赖。
-        p->_chan.store(chan, eastl::memory_order_release);
+        register_wait_channel(p, chan);
         k_scheduler.set_task_state(*p, ProcState::SLEEPING);
         lock->release();
         // 信号可能恰好在调用方检查 pending 之后、真正挂起之前到达。
@@ -4057,30 +4108,61 @@ namespace proc
             k_scheduler.set_task_state(*p, ProcState::RUNNABLE);
         }
         k_scheduler.call_sched();
-        p->_chan.store(nullptr, eastl::memory_order_release);
+        unregister_wait_channel(p);
 
         p->_lock.release();
         lock->acquire();
     }
     void ProcessManager::wakeup(void *chan)
     {
-        for_each_active_pcb(*this, [&](Pcb &entry)
+        if (chan == nullptr)
         {
-            Pcb *p = &entry;
-            if (p != k_pm.get_cur_pcb() &&
-                p->_chan.load(eastl::memory_order_acquire) == chan)
+            return;
+        }
+
+        const uint bucket = wait_channel_bucket(chan);
+        for (uint word_index = 0; word_index < k_wait_channel_slot_word_count; ++word_index)
+        {
+            uint64 candidates = _wait_channel_slot_words[bucket][word_index].load(
+                eastl::memory_order_acquire);
+            while (candidates != 0)
             {
-                // 只为已发布目标 channel 的任务取锁。睡眠者在释放条件锁前
-                // 已经发布 channel 且持有自身 PCB 锁，所以这里若撞上入睡窗口，
-                // 会等待其完成状态提交；不会丢唤醒。无关 PCB 完全不参与锁序，
-                // 避免多个 fork/mmap 线程各持一个子 PCB 时形成 ABBA 环。
+                const uint bit = active_slot_bit_index(candidates);
+                candidates &= candidates - 1;
+                const uint global_id = word_index * 64 + bit;
+                if (global_id >= num_process)
+                {
+                    break;
+                }
+
+                Pcb *p = &k_proc_pool[global_id];
+                if (p == k_pm.get_cur_pcb() ||
+                    p->_chan.load(eastl::memory_order_acquire) != chan)
+                {
+                    continue;
+                }
+
+                // channel 已发布且睡眠者持有自身 PCB 锁；唤醒端只对命中
+                // 候选者取锁，锁序仍是 bucket 位图 -> PCB 锁的单向路径。
                 const bool acquired_lock = p->_lock.acquire_unless_held();
                 int wake_cpu = -1;
                 if (p->_state == ProcState::SLEEPING &&
                     p->_chan.load(eastl::memory_order_relaxed) == chan)
                 {
+                    unregister_wait_channel(p);
                     k_scheduler.set_task_state(*p, ProcState::RUNNABLE);
                     wake_cpu = p->_last_cpu;
+                }
+                else if (p->_wait_channel_registered &&
+                         p->_chan.load(eastl::memory_order_relaxed) == chan)
+                {
+                    // 只允许清理仍属于本次 chan 的陈旧登记。wakeup() 在
+                    // bitmap 预检后可能阻塞等待 PCB 锁；这段时间内目标任务
+                    // 已可能被别的 WAKE/信号唤醒、返回用户态并重新 sleep 到
+                    // 另一个 channel。若仅凭 _wait_channel_registered 清理，
+                    // 会把新 channel 的位图成员资格删掉，后续 wakeup(B) 永远
+                    // 找不到它，形成 SMP 漏唤醒。
+                    unregister_wait_channel(p);
                 }
                 if (acquired_lock)
                 {
@@ -4091,8 +4173,7 @@ namespace proc
                     hal::smp::kick_cpu(static_cast<uint64>(wake_cpu));
                 }
             }
-            return true;
-        });
+        }
     }
 
     void ProcessManager::wakeup_one(Pcb *target, void *chan)
@@ -4113,6 +4194,7 @@ namespace proc
             target->_state == ProcState::SLEEPING &&
             target->_chan.load(eastl::memory_order_relaxed) == chan)
         {
+            unregister_wait_channel(target);
             k_scheduler.set_task_state(*target, ProcState::RUNNABLE);
             wake_cpu = target->_last_cpu;
         }
@@ -4147,18 +4229,25 @@ namespace proc
              * 同组线程共享可等待子进程集合，但不共享 PCB，因此逐个唤醒。
              * 带 __WNOTHREAD 的等待者也在其中；它醒来后会按选项重新筛选。
              */
-            if (waiter->_chan.load(eastl::memory_order_acquire) != waiter)
+            const bool channel_match = waiter->_chan.load(eastl::memory_order_acquire) == waiter;
+            if (!channel_match)
             {
                 return true;
             }
 
             const bool acquired_lock = waiter->_lock.acquire_unless_held();
             int wake_cpu = -1;
+            const bool tgid_match = waiter->_tgid == parent_tgid;
+            const bool state_match = waiter->_state == ProcState::SLEEPING;
             if (waiter->_state != ProcState::UNUSED &&
-                waiter->_tgid == parent_tgid &&
-                waiter->_state == ProcState::SLEEPING &&
+                tgid_match &&
+                state_match &&
                 waiter->_chan.load(eastl::memory_order_relaxed) == waiter)
             {
+                // 退出事件直接发布 RUNNABLE，不能把通用 channel 的摘链
+                // 延后到 wait4() 的 sleep() 返回点，否则同一 PCB 会同时
+                // 出现在“已唤醒”和“仍在等待”两套索引中。
+                unregister_wait_channel(waiter);
                 k_scheduler.set_task_state(*waiter, ProcState::RUNNABLE);
                 wake_cpu = waiter->_last_cpu;
             }
@@ -4174,77 +4263,133 @@ namespace proc
         });
     }
 
-    int ProcessManager::wakeup2(uint64 uaddr, uint64 futex_key, int val, void *uaddr2, uint64 futex_key2, int val2)
+    int ProcessManager::wakeup2(const FutexKey &futex_key,
+                                 int val,
+                                 void *uaddr2,
+                                 const FutexKey &futex_key2,
+                                 int val2,
+                                 uint64 *waiter_words,
+                                 uint64 *requeue_words,
+                                 uint waiter_word_count,
+                                 uint target_bucket_index,
+                                 bool include_requeued_in_result)
     {
-        int count1 = 0, count2 = 0;
-        for_each_active_pcb(*this, [&](Pcb &entry)
+        const bool can_requeue =
+            uaddr2 != nullptr && requeue_words != nullptr && val2 > 0;
+        if (waiter_words == nullptr || waiter_word_count == 0 || val < 0 || val2 < 0 ||
+            (val == 0 && !can_requeue))
         {
-            Pcb *p = &entry;
-            // futex_wakeup() 调用本函数时已经持有全局 futex wait lock，因此新的
-            // waiter 不能在扫描中完成“比较值并登记”。key 由等待者原子发布；
-            // 先用原子 key 过滤绝大多数 PCB，可避免每次 clear_child_tid wake 都
-            // 抢完整进程池的 PCB 锁。命中后仍在 PCB 锁内复核状态，保持唤醒语义。
-            if (p->_futex_key.load(eastl::memory_order_acquire) != futex_key)
+            return 0;
+        }
+
+        int count1 = 0;
+        int count2 = 0;
+        for (uint word_index = 0; word_index < waiter_word_count; ++word_index)
+        {
+            uint64 bits = waiter_words[word_index];
+            while (bits != 0)
             {
-                return true;
-            }
-            const bool acquired_lock = p->_lock.acquire_unless_held();
-            int wake_cpu = -1;
-            bool is_futex_waiter = p->_futex_key.load(eastl::memory_order_relaxed) == futex_key &&
-                                   (p->_state == SLEEPING || p->_state == RUNNABLE);
-            if (is_futex_waiter)
-            {
-                if (p->_state == RUNNABLE)
+                uint bit = 0;
+                while ((bits & (1ULL << bit)) == 0)
                 {
-                    // futex_wait 为了支持 timeout 会睡在 timer tick 通道上周期性重检；
-                    // waiter 可能已被 tick 拉回 RUNNABLE，但还没有真正返回用户态。
-                    // 这时 FUTEX_WAKE 仍然必须“消费”这个 waiter 并计入返回值，
-                    // 保持唤醒者观察到的返回计数与实际状态转换一致。
+                    ++bit;
+                }
+                bits &= ~(1ULL << bit);
+                const uint global_id = word_index * 64 + bit;
+                if (global_id >= num_process)
+                {
+                    continue;
+                }
+
+                Pcb *p = &k_proc_pool[global_id];
+                const bool acquired_lock = p->_lock.acquire_unless_held();
+                int wake_cpu = -1;
+                const uint64 observed_key =
+                    p->_futex_key.load(eastl::memory_order_relaxed);
+                FutexKey observed_futex_key{};
+                observed_futex_key.value = observed_key;
+                observed_futex_key.is_private = p->_futex_private;
+                observed_futex_key.private_mm = observed_futex_key.is_private
+                                                    ? p->get_memory_manager()
+                                                    : nullptr;
+                const bool key_matches =
+                    observed_futex_key.valid() &&
+                    futex_keys_equal(observed_futex_key, futex_key);
+                const bool is_futex_waiter =
+                    key_matches &&
+                    (p->_state == SLEEPING || p->_state == RUNNABLE);
+                if (!key_matches)
+                {
+                    /*
+                     * 一个桶可能同时承载多个不同的完整 futex key。位图只
+                     * 记录 PCB 是否在桶中，不能把“不匹配”直接当成陈旧位
+                     * 清掉：这可能只是同一 PCB 已经换到了同桶的另一个 key，
+                     * 清位会让后续正确的 WAKE 永久找不到它。
+                     *
+                     * 只有等待者已经原子清空 key 后，位图位才确定不再代表
+                     * 任何活动等待；退出/信号/超时路径会通过
+                     * futex_remove_waiter() 完成同样的摘链。
+                     */
+                    if (observed_key == 0)
+                    {
+                        waiter_words[word_index] &= ~(1ULL << bit);
+                    }
+                }
+                else if (is_futex_waiter)
+                {
+                    // 匹配的等待者无论处于 SLEEPING 还是已经被其它路径发布
+                    // 为 RUNNABLE，都只能消费一次。原实现把“匹配等待者”分支
+                    // 放在这里之后，导致 SLEEPING 任务清 key 却没有切到
+                    // RUNNABLE，最终表现为 futex WAKE 后永久沉睡。
                     if (count1 < val)
                     {
-                        p->_futex_addr = 0;
+                        waiter_words[word_index] &= ~(1ULL << bit);
+                        if (p->_state == SLEEPING)
+                        {
+                            k_scheduler.set_task_state(*p, RUNNABLE);
+                            wake_cpu = p->_last_cpu;
+                        }
+                        p->_futex_addr = nullptr;
+                        p->_futex_private = false;
+                        p->_futex_bucket_index.store(0, eastl::memory_order_relaxed);
                         p->_futex_key.store(0, eastl::memory_order_release);
-                        count1++;
+                        p->_futex_timeout_deadline.store(0, eastl::memory_order_release);
+                        p->_futex_wait_result = 0;
+                        unregister_wait_channel(p);
+                        ++count1;
                     }
-                    else if (uaddr2 && count2 < val2)
+                    else if (p->_state == SLEEPING && can_requeue && count2 < val2)
                     {
+                        waiter_words[word_index] &= ~(1ULL << bit);
+                        requeue_words[global_id / 64] |= 1ULL << (global_id % 64);
+                        // requeue 后任务仍在睡眠，但通用 channel 也必须迁移到
+                        // 新 futex key；否则目标 WAKE 与 signal/exit 会看到两套
+                        // 不一致的等待位置。
+                        unregister_wait_channel(p);
                         p->_futex_addr = uaddr2;
-                        p->_futex_key.store(futex_key2, eastl::memory_order_release);
-                        count2++;
+                        p->_futex_private = futex_key2.is_private;
+                        p->_futex_bucket_index.store(target_bucket_index,
+                                                     eastl::memory_order_relaxed);
+                        p->_futex_key.store(futex_key2.value, eastl::memory_order_release);
+                        register_wait_channel(p, reinterpret_cast<void *>(futex_key2.value));
+                        ++count2;
                     }
                 }
-                else if (count1 < val)
+                if (acquired_lock)
                 {
-                    k_scheduler.set_task_state(*p, RUNNABLE);
-                    wake_cpu = p->_last_cpu;
-                    p->_futex_addr = 0;
-                    p->_futex_key.store(0, eastl::memory_order_release);
-                    count1++;
+                    p->_lock.release();
                 }
-                else if (uaddr2 && count2 < val2)
+                if (wake_cpu >= 0)
                 {
-                    p->_futex_addr = uaddr2;
-                    p->_futex_key.store(futex_key2, eastl::memory_order_release);
-                    count2++;
+                    hal::smp::kick_cpu(static_cast<uint64>(wake_cpu));
+                }
+                if (count1 >= val && (!can_requeue || count2 >= val2))
+                {
+                    return count1 + (include_requeued_in_result ? count2 : 0);
                 }
             }
-            if (acquired_lock)
-            {
-                p->_lock.release();
-            }
-            if (wake_cpu >= 0)
-            {
-                hal::smp::kick_cpu(static_cast<uint64>(wake_cpu));
-            }
-
-            // 检查是否已经完成所需的唤醒和重排队操作
-            if (count1 >= val && (!uaddr2 || count2 >= val2))
-            {
-                return false;
-            }
-            return true;
-        });
-        return count1;
+        }
+        return count1 + (include_requeued_in_result ? count2 : 0);
     }
     int ProcessManager::mkdir(int dir_fd, eastl::string path, uint mode)
     {
@@ -4560,25 +4705,80 @@ namespace proc
         if (p->_ofile == nullptr)
             return -EBADF;
 
-        p->_ofile->_lock.acquire();
-        fs::file *f = p->_ofile->_ofile_ptr[fd];
-        p->_ofile->_ofile_ptr[fd] = nullptr;
-        p->_ofile->_reserved[fd] = false;
-        p->_ofile->_fl_cloexec[fd] = false;
-        shrink_fd_high_water_locked(p->_ofile);
-        p->_ofile->_lock.release();
-
+        ofile *fd_table = p->_ofile;
+        fd_table->_lock.acquire();
+        fs::file *f = fd_table->_ofile_ptr[fd];
         if (f == nullptr)
         {
+            fd_table->_lock.release();
+            return -EBADF;
+        }
+        if (fd_table->_reserved[fd])
+        {
+            // close 进行中仍保留指针给 exec 检查，但普通 fd 操作不能跨过可见性边界。
+            fd_table->_lock.release();
             return -EBADF;
         }
         if (!is_probably_live_file_object(f))
         {
+            fd_table->_ofile_ptr[fd] = nullptr;
+            fd_table->_reserved[fd] = false;
+            fd_table->_fl_cloexec[fd] = false;
+            shrink_fd_high_water_locked(fd_table);
+            fd_table->_lock.release();
             printfRed("[close] 检测到异常文件指针，直接丢弃: pid=%d fd=%d file=%p\n",
                       p->_pid, fd, f);
             return 0;
         }
+
+        /*
+         * normal_file 的小写可能仍在 write-combine 缓冲中。不能先把 fd
+         * 从表中摘掉再等待最终 free_file() 析构回写：并发 exec/open 在这段
+         * 窗口扫描不到写者，会直接读取尚未刷新的旧 ELF。先在 fd 表锁内固定
+         * 临时引用，释放表锁后完成可睡眠的 ext4 回写；回写期间 fd 仍可被
+         * exec 的 ETXTBSY 检查看见。绝不能持有 ofile 自旋锁进入文件系统。
+         */
+        fd_table->_reserved[fd] = true;
+        f->dup();
+        fd_table->_lock.release();
+
+        if (f->_attrs.filetype == fs::FileTypes::FT_NORMAL)
+        {
+            int visibility_ret = f->flush_visibility_state();
+            if (visibility_ret != 0)
+            {
+                // 失败时保留原 fd，使写者仍对并发 exec/open 可见，并允许调用者重试 close。
+                fd_table->_lock.acquire();
+                if (fd_table->_ofile_ptr[fd] == f)
+                {
+                    fd_table->_reserved[fd] = false;
+                }
+                fd_table->_lock.release();
+                f->free_file();
+                return visibility_ret;
+            }
+        }
+
+        fd_table->_lock.acquire();
+        if (fd_table->_ofile_ptr[fd] != f || !fd_table->_reserved[fd])
+        {
+            /*
+             * 共享 fd 表中另一个线程已经完成了 close/dup2 等替换。当前临时
+             * 引用只用于保护本轮 flush；不应摘掉后来安装的新文件。
+             */
+            fd_table->_lock.release();
+            f->free_file();
+            return -EBADF;
+        }
+        fd_table->_ofile_ptr[fd] = nullptr;
+        fd_table->_reserved[fd] = false;
+        fd_table->_fl_cloexec[fd] = false;
+        shrink_fd_high_water_locked(fd_table);
+        fd_table->_lock.release();
+
         fs::release_posix_record_locks_for_file(f, p->_pid);
+        // 先放掉 fd 表的原始引用，再放掉保护 flush 期间生命周期的临时引用。
+        f->free_file();
         f->free_file();
         return 0;
     }

@@ -3,6 +3,7 @@
 #include "trap.hh"
 #include "platform.hh"
 #include "hal/riscv/sbi.hh"
+#include "hal/tlb_shootdown.hh"
 #include "param.h"
 #include "plic.hh"
 #include "mem/memlayout.hh"
@@ -26,6 +27,7 @@
 #include "net/drivers/virtio_net.hh"
 #include "trap/interrupt_stats.hh"
 #include "proc/posix_timers.hh"
+#include "proc/futex.hh"
 
 // #include "fuckyou.hh"
 // in kernelvec.S, calls kerneltrap().
@@ -42,13 +44,12 @@ namespace
   static_assert(proc::num_process < k_riscv_user_asid_count,
                 "RISC-V 用户 ASID 数量必须覆盖全部 PCB 槽位");
 
-  inline uint32 riscv_user_asid(const proc::Pcb *p)
+  inline uint32 riscv_user_asid(const proc::ProcessMemoryManager *mm)
   {
-    const uint32 asid = p->_user_asid;
+    const uint32 asid = mm != nullptr ? mm->user_asid : 0;
     if (asid == 0 || asid >= k_riscv_user_asid_count)
     {
-      panic("invalid RISC-V user ASID pid=%d tid=%d asid=%u",
-            p->_pid, p->_tid, asid);
+      panic("invalid RISC-V user ASID mm=%p asid=%u", mm, asid);
     }
     return asid;
   }
@@ -194,6 +195,7 @@ void trap_manager::timertick()
   }
 
   proc::k_pm.wakeup(&ticks);
+  proc::futex_check_timeouts(tmm::get_hw_time_stamp());
   check_expired_timers();
 }
 
@@ -521,7 +523,9 @@ void trap_manager::usertrapret()
 
   // ASID 0 保留给内核；用户地址空间在回收池完成全核 flush 前不会复用
   // 非零 ASID，因此 trap 热路径只需切换 satp，无需每次清空本 hart 全 TLB。
-  uint64 satp = MAKE_SATP_ASID(p->get_pagetable()->get_base(), riscv_user_asid(p));
+  hal::tlb::enter_mm(*p->get_memory_manager());
+  uint64 satp = MAKE_SATP_ASID(
+      p->get_pagetable()->get_base(), riscv_user_asid(p->get_memory_manager()));
   // debug
 
   uint64 fn = TRAMPOLINE + (userret - trampoline);

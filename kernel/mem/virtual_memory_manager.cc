@@ -47,6 +47,8 @@ namespace mem
 
     namespace
     {
+        void flush_user_pt_range(PageTable &pt, uint64 start, uint64 size);
+
         inline void *page_pa_to_kernel_ptr(uint64 pa)
         {
 #ifdef LOONGARCH
@@ -66,7 +68,16 @@ namespace mem
 
         inline void flush_riscv_user_page(uint64 va)
         {
-            hal::tlb::flush_range_all_cpus(PGROUNDDOWN(va), PGSIZE);
+            proc::Pcb *current = proc::k_pm.get_cur_pcb();
+            if (current != nullptr && current->get_memory_manager() != nullptr)
+            {
+                flush_user_pt_range(
+                    *current->get_pagetable(), PGROUNDDOWN(va), PGSIZE);
+            }
+            else
+            {
+                hal::tlb::flush_range_all_cpus(PGROUNDDOWN(va), PGSIZE);
+            }
         }
 #elif defined(LOONGARCH)
         inline bool pte_is_cow(Pte &pte)
@@ -105,6 +116,21 @@ namespace mem
             // 这样 copy_in/copy_out 的缺页处理始终作用在页表所属的地址空间内。
             proc::Pcb *proc = active_proc_for_pt(pt);
             return proc != nullptr ? proc->get_memory_manager() : nullptr;
+        }
+
+        void flush_user_pt_range(PageTable &pt, uint64 start, uint64 size)
+        {
+            proc::ProcessMemoryManager *mm = resolve_target_mm(pt, nullptr);
+            if (mm != nullptr)
+            {
+                hal::tlb::flush_mm_range(*mm, start, size);
+            }
+            else
+            {
+                // detached child 页表/内核初始化不属于任何活跃 mm，只能保留
+                // 全局后端作为生命周期边界；BuildStorm 热路径会命中上面的 mm。
+                hal::tlb::flush_range_all_cpus(start, size);
+            }
         }
 
         bool pte_allows_user_read(Pte &pte)
@@ -194,8 +220,17 @@ namespace mem
 
         inline void invalidate_loongarch_user_page_pair(uint64 va)
         {
-            hal::tlb::flush_range_all_cpus(
-                va & ~((PGSIZE << 1) - 1), PGSIZE << 1);
+            proc::Pcb *current = proc::k_pm.get_cur_pcb();
+            if (current != nullptr && current->get_memory_manager() != nullptr)
+            {
+                flush_user_pt_range(*current->get_pagetable(),
+                                    va & ~((PGSIZE << 1) - 1), PGSIZE << 1);
+            }
+            else
+            {
+                hal::tlb::flush_range_all_cpus(
+                    va & ~((PGSIZE << 1) - 1), PGSIZE << 1);
+            }
         }
 
         void install_loongarch_empty_high_user_pagetable()
@@ -1544,7 +1579,7 @@ namespace mem
             }
             // PTE 已全部撤销；同步等待每个 online CPU 失效后，才允许这些
             // 物理页回到 buddy 并被其它地址空间复用。
-            hal::tlb::flush_range_all_cpus(pending_start, pending_end - pending_start);
+            flush_user_pt_range(pt, pending_start, pending_end - pending_start);
             for (int index = 0; index < pending_count; ++index)
             {
                 if (pending[index].page != nullptr)
@@ -1712,7 +1747,7 @@ namespace mem
             // 先撤销父页表中可能仍被旧 TLB 视为可写的翻译，不能把责任留给调用方。
             if (restored)
             {
-                hal::tlb::flush_range_all_cpus(copy_start, va_end - copy_start);
+                flush_user_pt_range(old_pt, copy_start, va_end - copy_start);
             }
             return -1;
         };
@@ -1818,7 +1853,7 @@ namespace mem
                             parent_cow_changed = true;
                             if (!defer_parent_tlb_flush)
                             {
-                                hal::tlb::flush_range_all_cpus(va, PGSIZE);
+                                flush_user_pt_range(old_pt, va, PGSIZE);
                             }
                         }
                     }
@@ -1834,7 +1869,7 @@ namespace mem
                             parent_cow_changed = true;
                             if (!defer_parent_tlb_flush)
                             {
-                                hal::tlb::flush_range_all_cpus(va, PGSIZE);
+                                flush_user_pt_range(old_pt, va, PGSIZE);
                             }
                         }
                     }
@@ -1896,7 +1931,7 @@ namespace mem
         if (pte.is_valid())
             pte.set_data(pte.get_data() & ~loongarch::PteEnum::pte_plv_m); // PTE_U
 #endif
-        hal::tlb::flush_range_all_cpus(PGROUNDDOWN(va), PGSIZE);
+        flush_user_pt_range(pt, PGROUNDDOWN(va), PGSIZE);
     }
 
     uint64 VirtualMemoryManager::uvmalloc(PageTable &pt, uint64 oldsz, uint64 newsz, uint64 flags)
@@ -2234,10 +2269,20 @@ namespace mem
 #endif
     }
 
-    int VirtualMemoryManager::protectpages(PageTable &pt, uint64 va, uint64 size, int prot, bool is_vma)
+    int VirtualMemoryManager::protectpages(PageTable &pt,
+                                            uint64 va,
+                                            uint64 size,
+                                            int prot,
+                                            bool is_vma,
+                                            bool *pte_changed)
     {
         uint64 a, last;
         Pte pte;
+
+        if (pte_changed != nullptr)
+        {
+            *pte_changed = false;
+        }
 
         // printf("[protectpages] va: %p, size: %p, perm: %p, is_vma: %d\n", va, size, perm, is_vma);
 
@@ -2330,7 +2375,14 @@ namespace mem
                 if (!(prot & PROT_EXEC))
                     new_data |= PTE_NX;
 #endif
-                pte.set_data(new_data);
+                if (new_data != old_data)
+                {
+                    pte.set_data(new_data);
+                    if (pte_changed != nullptr)
+                    {
+                        *pte_changed = true;
+                    }
+                }
             }
             else
             {

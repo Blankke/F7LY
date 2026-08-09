@@ -62,18 +62,65 @@ static void ext4_bdif_unlock(struct ext4_blockdev *bdev) {
     ext4_assert(r == EOK);
 }
 
-static int ext4_bdif_bread(struct ext4_blockdev *bdev, void *buf, uint64_t blk_id, uint32_t blk_cnt) {
-    ext4_bdif_lock(bdev);
+/*
+ * 调用方已经持有 bdif 锁时使用。ph_bbuf 是同一块设备共享的 DMA/scratch
+ * 缓冲区；不能在完成 I/O 后先解锁、再由调用方读取或修改它，否则并发 I/O
+ * 会把刚读到的数据覆盖掉。
+ */
+static int ext4_bdif_bread_locked(struct ext4_blockdev *bdev, void *buf,
+                                  uint64_t blk_id, uint32_t blk_cnt) {
     int r = bdev->bdif->bread(bdev, buf, blk_id, blk_cnt);
     bdev->bdif->bread_ctr++;
+    return r;
+}
+
+static int ext4_bdif_bwrite_locked(struct ext4_blockdev *bdev, const void *buf,
+                                   uint64_t blk_id, uint32_t blk_cnt) {
+    int r = bdev->bdif->bwrite(bdev, buf, blk_id, blk_cnt);
+    bdev->bdif->bwrite_ctr++;
+    return r;
+}
+
+static int ext4_bdif_bread(struct ext4_blockdev *bdev, void *buf, uint64_t blk_id, uint32_t blk_cnt) {
+    ext4_bdif_lock(bdev);
+    int r = ext4_bdif_bread_locked(bdev, buf, blk_id, blk_cnt);
     ext4_bdif_unlock(bdev);
     return r;
 }
 
 static int ext4_bdif_bwrite(struct ext4_blockdev *bdev, const void *buf, uint64_t blk_id, uint32_t blk_cnt) {
     ext4_bdif_lock(bdev);
-    int r = bdev->bdif->bwrite(bdev, buf, blk_id, blk_cnt);
-    bdev->bdif->bwrite_ctr++;
+    int r = ext4_bdif_bwrite_locked(bdev, buf, blk_id, blk_cnt);
+    ext4_bdif_unlock(bdev);
+    return r;
+}
+
+/* 在持有设备锁的同一临界区内消费共享 scratch 缓冲区。 */
+static int ext4_bdif_read_scratch_bytes(struct ext4_blockdev *bdev,
+                                        uint64_t block_idx,
+                                        uint32_t scratch_offset,
+                                        void *dst,
+                                        uint32_t len) {
+    ext4_bdif_lock(bdev);
+    int r = ext4_bdif_bread_locked(bdev, bdev->bdif->ph_bbuf, block_idx, 1);
+    if (r == EOK)
+        memcpy(dst, bdev->bdif->ph_bbuf + scratch_offset, len);
+    ext4_bdif_unlock(bdev);
+    return r;
+}
+
+/* 在持有设备锁的同一临界区内完成 scratch 的读改写，避免丢失相邻字节。 */
+static int ext4_bdif_write_scratch_bytes(struct ext4_blockdev *bdev,
+                                         uint64_t block_idx,
+                                         uint32_t scratch_offset,
+                                         const void *src,
+                                         uint32_t len) {
+    ext4_bdif_lock(bdev);
+    int r = ext4_bdif_bread_locked(bdev, bdev->bdif->ph_bbuf, block_idx, 1);
+    if (r == EOK) {
+        memcpy(bdev->bdif->ph_bbuf + scratch_offset, src, len);
+        r = ext4_bdif_bwrite_locked(bdev, bdev->bdif->ph_bbuf, block_idx, 1);
+    }
     ext4_bdif_unlock(bdev);
     return r;
 }
@@ -278,6 +325,35 @@ int ext4_blocks_set_direct(struct ext4_blockdev *bdev, const void *buf, uint64_t
     return ext4_bdif_bwrite(bdev, buf, pba, pb_cnt * cnt);
 }
 
+int ext4_blocks_set_cached(struct ext4_blockdev *bdev, const void *buf,
+                           uint64_t lba, uint32_t cnt)
+{
+    ext4_assert(bdev && buf);
+
+    if (!bdev->bdif->ph_refctr)
+        return EIO;
+    if (cnt == 0 || lba >= bdev->lg_bcnt || cnt > bdev->lg_bcnt - lba)
+        return ENXIO;
+
+    const uint8_t *source = static_cast<const uint8_t *>(buf);
+    for (uint32_t index = 0; index < cnt; ++index)
+    {
+        struct ext4_block block{};
+        int r = ext4_block_get_noread(bdev, &block, lba + index);
+        if (r != EOK)
+            return r;
+
+        /* 完整覆盖不需要先读取旧块；此时缓存内容直接成为有效脏块。 */
+        memcpy(block.data, source + static_cast<size_t>(index) * bdev->lg_bsize,
+               bdev->lg_bsize);
+        ext4_bcache_set_dirty(block.buf);
+        r = ext4_block_set(bdev, &block);
+        if (r != EOK)
+            return r;
+    }
+    return EOK;
+}
+
 int ext4_block_writebytes(struct ext4_blockdev *bdev, uint64_t off, const void *buf, uint32_t len) {
     uint64_t block_idx;
     uint32_t blen;
@@ -302,12 +378,7 @@ int ext4_block_writebytes(struct ext4_blockdev *bdev, uint64_t off, const void *
 
         uint32_t wlen = (bdev->bdif->ph_bsize - unalg) > len ? len : (bdev->bdif->ph_bsize - unalg);
 
-        r = ext4_bdif_bread(bdev, bdev->bdif->ph_bbuf, block_idx, 1);
-        if (r != EOK)
-            return r;
-
-        memcpy(bdev->bdif->ph_bbuf + unalg, p, wlen);
-        r = ext4_bdif_bwrite(bdev, bdev->bdif->ph_bbuf, block_idx, 1);
+        r = ext4_bdif_write_scratch_bytes(bdev, block_idx, unalg, p, wlen);
         if (r != EOK)
             return r;
 
@@ -331,12 +402,7 @@ int ext4_block_writebytes(struct ext4_blockdev *bdev, uint64_t off, const void *
 
     /*Rest of the data*/
     if (len) {
-        r = ext4_bdif_bread(bdev, bdev->bdif->ph_bbuf, block_idx, 1);
-        if (r != EOK)
-            return r;
-
-        memcpy(bdev->bdif->ph_bbuf, p, len);
-        r = ext4_bdif_bwrite(bdev, bdev->bdif->ph_bbuf, block_idx, 1);
+        r = ext4_bdif_write_scratch_bytes(bdev, block_idx, 0, p, len);
         if (r != EOK)
             return r;
     }
@@ -368,11 +434,9 @@ int ext4_block_readbytes(struct ext4_blockdev *bdev, uint64_t off, void *buf, ui
 
         uint32_t rlen = (bdev->bdif->ph_bsize - unalg) > len ? len : (bdev->bdif->ph_bsize - unalg);
 
-        r = ext4_bdif_bread(bdev, bdev->bdif->ph_bbuf, block_idx, 1);
+        r = ext4_bdif_read_scratch_bytes(bdev, block_idx, unalg, p, rlen);
         if (r != EOK)
             return r;
-
-        memcpy(p, bdev->bdif->ph_bbuf + unalg, rlen);
 
         p += rlen;
         len -= rlen;
@@ -395,11 +459,9 @@ int ext4_block_readbytes(struct ext4_blockdev *bdev, uint64_t off, void *buf, ui
 
     /*Rest of the data*/
     if (len) {
-        r = ext4_bdif_bread(bdev, bdev->bdif->ph_bbuf, block_idx, 1);
+        r = ext4_bdif_read_scratch_bytes(bdev, block_idx, 0, p, len);
         if (r != EOK)
             return r;
-
-        memcpy(p, bdev->bdif->ph_bbuf, len);
     }
 
     return r;

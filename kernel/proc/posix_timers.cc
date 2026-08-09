@@ -4,6 +4,7 @@
 #include "proc/proc_manager.hh"
 #include "proc/scheduler.hh"
 #include "proc/signal.hh"
+#include "hal/smp.hh"
 #include "printer.hh"
 #include "syscall_abi.hh"
 
@@ -227,11 +228,16 @@ void maybe_fire_interval_timer(proc::Pcb *p, int which, uint64 now_us)
   {
     p->add_signal(signo);
     // ITIMER_REAL/SIGALRM 必须能打断 accept/read/select 等普通阻塞睡眠。
-    // 具体 syscall 醒来后会检查 pending signal 并返回 EINTR。
-    if (proc::ipc::signal::has_unmasked_signal_pending(p) &&
-        p->_state == proc::ProcState::SLEEPING)
+    // 具体 syscall 醒来后会检查 pending signal 并返回 EINTR。这里的所有
+    // 调用点均持有 p->_lock；必须先从 futex/wait-channel 索引摘链，再发布
+    // RUNNABLE，不能直接改任务状态。
+    if (proc::k_pm.interrupt_sleep_for_signal(p))
     {
-      proc::k_scheduler.set_task_state(*p, proc::ProcState::RUNNABLE);
+      const int wake_cpu = p->_last_cpu;
+      if (wake_cpu >= 0)
+      {
+        hal::smp::kick_cpu(static_cast<uint64>(wake_cpu));
+      }
     }
   }
 
@@ -284,10 +290,13 @@ void wake_if_signal_interruptible(proc::Pcb *target, int sig)
     return;
   }
 
-  if (target->_state == proc::ProcState::SLEEPING &&
-      proc::ipc::signal::has_unmasked_signal_pending(target))
+  if (proc::k_pm.interrupt_sleep_for_signal(target))
   {
-    proc::k_scheduler.set_task_state(*target, proc::ProcState::RUNNABLE);
+    const int wake_cpu = target->_last_cpu;
+    if (wake_cpu >= 0)
+    {
+      hal::smp::kick_cpu(static_cast<uint64>(wake_cpu));
+    }
     return;
   }
 
@@ -298,6 +307,11 @@ void wake_if_signal_interruptible(proc::Pcb *target, int sig)
     if (sig == proc::ipc::signal::SIGCONT)
     {
       target->_continued_pending = true;
+    }
+    const int wake_cpu = target->_last_cpu;
+    if (wake_cpu >= 0)
+    {
+      hal::smp::kick_cpu(static_cast<uint64>(wake_cpu));
     }
   }
 }

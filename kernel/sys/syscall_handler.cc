@@ -4533,8 +4533,9 @@ namespace syscall
             return SYS_EINVAL;
         }
 
-        // 检查oldfd是否有效
-        if (oldfd < 0 || oldfd >= (int)proc::max_open_files || !p->get_open_file(oldfd))
+        // 在共享 fd 表锁内固定源文件引用；不能先读裸指针再 dup，否则同组线程
+        // 并发 close 时可能把 jobserver 管道的最后一个引用提前释放。
+        if (oldfd < 0 || oldfd >= (int)proc::max_open_files)
         {
             printfRed("[sys_dup3] Invalid oldfd: %d", oldfd);
             return SYS_EBADF;
@@ -4547,12 +4548,16 @@ namespace syscall
             return SYS_EBADF;
         }
 
-        // 获取要复制的文件
-        fs::file *old_file = p->get_open_file(oldfd);
+        // get_open_file_ref 返回的引用由新 fd 消费；失败时由本函数归还。
+        fs::file *old_file = proc::k_pm.get_open_file_ref(p, oldfd);
+        if (old_file == nullptr)
+        {
+            printfRed("[sys_dup3] Invalid oldfd: %d", oldfd);
+            return SYS_EBADF;
+        }
 
-        // 先固定源 open file description；替换 newfd 时即使它与 oldfd 指向同一对象，
-        // 也必须完成一次 close + dup 的引用计数平衡。
-        old_file->dup();
+        // 替换 newfd 时即使它与 oldfd 指向同一对象，也必须完成一次 close + dup
+        // 的引用计数平衡。alloc_fd 会在 fd 表锁下摘掉旧槽位。
         if (proc::k_pm.alloc_fd(p, old_file, newfd) < 0)
         {
             old_file->free_file();
@@ -4560,7 +4565,9 @@ namespace syscall
             return SYS_EMFILE;
         }
 
+        p->_ofile->_lock.acquire();
         p->_ofile->_fl_cloexec[newfd] = (flags & O_CLOEXEC) != 0;
+        p->_ofile->_lock.release();
 
         return newfd;
     }
@@ -4675,76 +4682,100 @@ namespace syscall
     }
     uint64 SyscallHandler::sys_execve()
     {
-        uint64 uargv, uenvp;
-
         eastl::string path;
-        int path_ret = _arg_str(0, path, PGSIZE);
-        if (path_ret < 0)
-        {
-            return path_ret;
-        }
-        if (_arg_addr(1, uargv) < 0 || _arg_addr(2, uenvp) < 0)
+        eastl::vector<eastl::string> argv;
+        eastl::vector<eastl::string> envp;
+        proc::Pcb *current = proc::k_pm.get_cur_pcb();
+        proc::ProcessMemoryManager *mm = current != nullptr ? current->get_memory_manager() : nullptr;
+        if (mm == nullptr)
         {
             return -EFAULT;
         }
 
-        eastl::vector<eastl::string> argv;
-        uint64 uarg;
-        if (uargv != 0)
+        /*
+         * CLONE_VM 的其它线程可以同时撤销或替换 argv/envp 所在的映射。
+         * 必须将路径、指针数组和字符串一次性快照在同一 mm 临界区内；否则
+         * 一个被复用后的全零 argv 槽会被误当作末尾 NULL，导致 rustc 只收到
+         * argv[0]。锁只覆盖用户输入复制，绝不跨越后续 VFS/exec 提交。
+         */
+        struct MemoryUnlockGuard
         {
-            for (uint64 i = 0, puarg = uargv;; i++, puarg += sizeof(char *))
+            proc::ProcessMemoryManager *manager;
+            ~MemoryUnlockGuard()
             {
-                if (i > max_arg_num)
+                manager->unlock_memory();
+            }
+        };
+        {
+            mm->lock_memory();
+            MemoryUnlockGuard memory_unlock_guard{mm};
+
+            uint64 uargv, uenvp;
+            int path_ret = _arg_str(0, path, PGSIZE);
+            if (path_ret < 0)
+            {
+                return path_ret;
+            }
+            if (_arg_addr(1, uargv) < 0 || _arg_addr(2, uenvp) < 0)
+            {
+                return -EFAULT;
+            }
+
+            uint64 uarg;
+            if (uargv != 0)
+            {
+                for (uint64 i = 0, puarg = uargv;; i++, puarg += sizeof(char *))
                 {
-                    return -E2BIG;
+                    if (i > max_arg_num)
+                    {
+                        return -E2BIG;
+                    }
+
+                    if (_fetch_addr(puarg, uarg) < 0)
+                    {
+                        return -EFAULT;
+                    }
+
+                    if (uarg == 0)
+                        break;
+
+                    argv.emplace_back(eastl::string());
+                    int arg_ret = _fetch_str(uarg, argv[i], PGSIZE);
+                    if (arg_ret < 0)
+                    {
+                        return arg_ret;
+                    }
                 }
+            }
 
-                if (_fetch_addr(puarg, uarg) < 0)
+            ulong uenv;
+            if (uenvp != 0)
+            {
+                for (ulong i = 0, puenv = uenvp;; i++, puenv += sizeof(char *))
                 {
-                    return -EFAULT;
-                }
+                    if (i > max_arg_num)
+                    {
+                        return -E2BIG;
+                    }
 
-                if (uarg == 0)
-                    break;
+                    if (_fetch_addr(puenv, uenv) < 0)
+                    {
+                        return -EFAULT;
+                    }
 
-                argv.emplace_back(eastl::string());
-                int arg_ret = _fetch_str(uarg, argv[i], PGSIZE);
-                if (arg_ret < 0)
-                {
-                    return arg_ret;
+                    if (uenv == 0)
+                        break;
+
+                    envp.emplace_back(eastl::string());
+                    int env_ret = _fetch_str(uenv, envp[i], PGSIZE);
+                    if (env_ret < 0)
+                    {
+                        return env_ret;
+                    }
                 }
             }
         }
 
-        eastl::vector<eastl::string> envp;
-        ulong uenv;
-        if (uenvp != 0)
-        {
-            for (ulong i = 0, puenv = uenvp;; i++, puenv += sizeof(char *))
-            {
-                if (i > max_arg_num)
-                {
-                    return -E2BIG;
-                }
-
-                if (_fetch_addr(puenv, uenv) < 0)
-                {
-                    return -EFAULT;
-                }
-
-                if (uenv == 0)
-                    break;
-
-                envp.emplace_back(eastl::string());
-                int env_ret = _fetch_str(uenv, envp[i], PGSIZE);
-                if (env_ret < 0)
-                {
-                    return env_ret;
-                }
-            }
-        }
-
-        proc::Pcb *current = proc::k_pm.get_cur_pcb();
         eastl::string exec_event_path;
         if (current != nullptr)
         {
@@ -4764,17 +4795,11 @@ namespace syscall
     uint64 SyscallHandler::sys_execveat()
     {
         int dirfd;
-        uint64 uargv, uenvp;
         int flags;
         eastl::string pathname;
 
         if (_arg_int(0, dirfd) < 0)
             return -EINVAL;
-        int path_ret = _arg_str(1, pathname, PGSIZE);
-        if (path_ret < 0)
-            return path_ret;
-        if (_arg_addr(2, uargv) < 0 || _arg_addr(3, uenvp) < 0)
-            return -EFAULT;
         if (_arg_int(4, flags) < 0)
             return -EINVAL;
 
@@ -4783,46 +4808,71 @@ namespace syscall
             return -EINVAL;
 
         eastl::vector<eastl::string> argv;
-        uint64 uarg;
-        if (uargv != 0)
-        {
-            for (uint64 i = 0, puarg = uargv;; i++, puarg += sizeof(char *))
-            {
-                if (i > max_arg_num)
-                    return -E2BIG;
-                if (_fetch_addr(puarg, uarg) < 0)
-                    return -EFAULT;
-                if (uarg == 0)
-                    break;
-                argv.emplace_back(eastl::string());
-                int arg_ret = _fetch_str(uarg, argv[i], PGSIZE);
-                if (arg_ret < 0)
-                    return arg_ret;
-            }
-        }
-
         eastl::vector<eastl::string> envp;
-        uint64 uenv;
-        if (uenvp != 0)
-        {
-            for (uint64 i = 0, puenv = uenvp;; i++, puenv += sizeof(char *))
-            {
-                if (i > max_arg_num)
-                    return -E2BIG;
-                if (_fetch_addr(puenv, uenv) < 0)
-                    return -EFAULT;
-                if (uenv == 0)
-                    break;
-                envp.emplace_back(eastl::string());
-                int env_ret = _fetch_str(uenv, envp[i], PGSIZE);
-                if (env_ret < 0)
-                    return env_ret;
-            }
-        }
-
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
         if (p == nullptr)
             return -ESRCH;
+        proc::ProcessMemoryManager *mm = p->get_memory_manager();
+        if (mm == nullptr)
+            return -EFAULT;
+
+        struct MemoryUnlockGuard
+        {
+            proc::ProcessMemoryManager *manager;
+            ~MemoryUnlockGuard()
+            {
+                manager->unlock_memory();
+            }
+        };
+        {
+            // 与 execve 保持同一快照边界：CLONE_VM 的并发 VMA 修改不能让
+            // argv/envp 数组在逐项 copy_in 之间变成另一块物理页。
+            mm->lock_memory();
+            MemoryUnlockGuard memory_unlock_guard{mm};
+
+            uint64 uargv, uenvp;
+            int path_ret = _arg_str(1, pathname, PGSIZE);
+            if (path_ret < 0)
+                return path_ret;
+            if (_arg_addr(2, uargv) < 0 || _arg_addr(3, uenvp) < 0)
+                return -EFAULT;
+
+            uint64 uarg;
+            if (uargv != 0)
+            {
+                for (uint64 i = 0, puarg = uargv;; i++, puarg += sizeof(char *))
+                {
+                    if (i > max_arg_num)
+                        return -E2BIG;
+                    if (_fetch_addr(puarg, uarg) < 0)
+                        return -EFAULT;
+                    if (uarg == 0)
+                        break;
+                    argv.emplace_back(eastl::string());
+                    int arg_ret = _fetch_str(uarg, argv[i], PGSIZE);
+                    if (arg_ret < 0)
+                        return arg_ret;
+                }
+            }
+
+            uint64 uenv;
+            if (uenvp != 0)
+            {
+                for (uint64 i = 0, puenv = uenvp;; i++, puenv += sizeof(char *))
+                {
+                    if (i > max_arg_num)
+                        return -E2BIG;
+                    if (_fetch_addr(puenv, uenv) < 0)
+                        return -EFAULT;
+                    if (uenv == 0)
+                        break;
+                    envp.emplace_back(eastl::string());
+                    int env_ret = _fetch_str(uenv, envp[i], PGSIZE);
+                    if (env_ret < 0)
+                        return env_ret;
+                }
+            }
+        }
 
         eastl::string exec_path;
         if (pathname.empty())
@@ -5157,22 +5207,26 @@ namespace syscall
     uint64 SyscallHandler::sys_dup()
     {
         proc::Pcb *p = proc::k_pm.get_cur_pcb();
-        fs::file *f;
+        fs::file *f = nullptr;
         int fd;
         [[maybe_unused]] int oldfd = 0;
-        int ret = -100;
-        if ((ret = _arg_fd(0, &oldfd, &f)) < 0)
+        if (_arg_int(0, oldfd) < 0 || oldfd < 0 || oldfd >= (int)proc::max_open_files)
         {
             printfRed("[SyscallHandler::sys_dup] Error fetching file descriptor\n");
-            return ret;
+            return SYS_EBADF;
         }
+
+        // 这个引用直接转移给新 fd，避免“先安装裸指针、之后才增引用”的竞态。
+        f = proc::k_pm.get_open_file_ref(p, oldfd);
+        if (f == nullptr)
+            return SYS_EBADF;
+
         if ((fd = proc::k_pm.alloc_fd(p, f)) < 0)
         {
+            f->free_file();
             printfRed("[SyscallHandler::sys_dup] Error allocating fd\n");
             return SYS_EMFILE;
         }
-
-        f->dup();
         return fd;
     }
     uint64 SyscallHandler::sys_sleep()
@@ -10403,19 +10457,24 @@ namespace syscall
 	                return flush_ret;
 		            return 0;
 		        };
-	        switch (op)
+        switch (op)
         {
             //   Duplicating a file descriptor (已支持)
         case F_DUPFD:
-            if (_arg_addr(2, arg) < 0)
-                return SYS_EFAULT;
-            if (p->_ofile == nullptr)
-                return SYS_EBADF;
+            arg = _arg_raw(2);
             if ((int)arg < 0 || (int)arg >= (int)proc::max_open_files)
                 return SYS_EINVAL;
+
+            // 引用必须先在共享 fd 表锁内固定。旧实现直接写 fd 槽位并执行
+            // f->refcnt++，与同组 close/exec 并发时会丢引用更新，尤其会破坏
+            // Cargo jobserver 管道的 EOF/令牌生命周期。
+            f = proc::k_pm.get_open_file_ref(p, fd);
+            if (f == nullptr)
+                return SYS_EBADF;
+            p->_ofile->_lock.acquire();
             for (int i = (int)arg; i < (int)proc::max_open_files; ++i)
             {
-                if (p->_ofile->_ofile_ptr[i] == nullptr)
+                if (p->_ofile->_ofile_ptr[i] == nullptr && !p->_ofile->_reserved[i])
                 {
                     p->_ofile->_ofile_ptr[i] = f;
                     p->_ofile->_fl_cloexec[i] = false; // 新的文件描述符默认不设置 CLOEXEC
@@ -10424,25 +10483,31 @@ namespace syscall
                     {
                         p->_ofile->_highest_fd_plus_one = next_fd;
                     }
-                    f->refcnt++;
                     retfd = i;
                     break;
                 }
             }
+            p->_ofile->_lock.release();
             if (retfd < 0)
+            {
+                f->free_file();
                 return SYS_EMFILE; // 达到进程文件描述符限制
+            }
             return retfd;
 
         case F_DUPFD_CLOEXEC:
-            if (_arg_addr(2, arg) < 0)
-                return SYS_EFAULT;
-            if (p->_ofile == nullptr)
-                return SYS_EBADF;
+            arg = _arg_raw(2);
             if ((int)arg < 0 || (int)arg >= (int)proc::max_open_files)
                 return SYS_EINVAL;
+
+            // 与 F_DUPFD 保持同一套“fd 表锁 + 已固定引用”协议。
+            f = proc::k_pm.get_open_file_ref(p, fd);
+            if (f == nullptr)
+                return SYS_EBADF;
+            p->_ofile->_lock.acquire();
             for (int i = (int)arg; i < (int)proc::max_open_files; ++i)
             {
-                if (p->_ofile->_ofile_ptr[i] == nullptr)
+                if (p->_ofile->_ofile_ptr[i] == nullptr && !p->_ofile->_reserved[i])
                 {
                     p->_ofile->_ofile_ptr[i] = f;
                     p->_ofile->_fl_cloexec[i] = true; // 设置 CLOEXEC 标志
@@ -10451,13 +10516,16 @@ namespace syscall
                     {
                         p->_ofile->_highest_fd_plus_one = next_fd;
                     }
-                    f->refcnt++;
                     retfd = i;
                     break;
                 }
             }
+            p->_ofile->_lock.release();
             if (retfd == -1)
+            {
+                f->free_file();
                 return SYS_EMFILE; // 达到进程文件描述符限制
+            }
             return retfd;
 
             //   File descriptor flags (部分支持)
@@ -13041,6 +13109,7 @@ namespace syscall
         uint64 timeout_addr = 0;
         uint64 uaddr2 = 0;
         int val3 = 0;
+        uint32 wake_op_code = 0;
         int arg0_ret = _arg_addr(0, uaddr);
         int arg1_ret = _arg_int(1, op);
         int arg2_ret = _arg_int(2, val);
@@ -13048,7 +13117,13 @@ namespace syscall
         {
             return -EINVAL;
         }
-        op &= ~FUTEX_PRIVATE_FLAG;
+        // PRIVATE_FLAG 是 futex key 语义的一部分，不能在命令解码前丢弃。
+        // 私有 futex 要按 (mm, uaddr) 匹配，才能跨 fork 后的 COW 保持稳定；
+        // 共享映射才按底层共享页匹配。
+        const proc::FutexKeyScope futex_key_scope =
+            (op & FUTEX_PRIVATE_FLAG) != 0
+                ? proc::FutexKeyScope::Private
+                : proc::FutexKeyScope::Auto;
 
         tmm::timespec timeout;
         tmm::timespec *timeout_ptr = NULL;
@@ -13089,7 +13164,15 @@ namespace syscall
 
         if (cmd == FUTEX_CMP_REQUEUE || cmd == FUTEX_CMP_REQUEUE_PI || cmd == FUTEX_WAKE_OP)
         {
-            if (_arg_int(5, val3) < 0)
+            if (cmd == FUTEX_WAKE_OP)
+            {
+                // WAKE_OP 的 val3 是 32 位编码，不是有符号 int。最高位
+                // 可能用于“操作数为 1 << shift”，不能经过 _arg_int 的
+                // INT_MAX 检查，否则合法的编码会在进入 futex 实现前变成
+                // EINVAL。
+                wake_op_code = static_cast<uint32>(_arg_raw(5));
+            }
+            else if (_arg_int(5, val3) < 0)
             {
                 return -EINVAL;
             }
@@ -13098,31 +13181,29 @@ namespace syscall
         switch (cmd)
         {
         case FUTEX_WAIT:
-            return proc::futex_wait(uaddr, val, timeout_ptr);
+            return proc::futex_wait(uaddr, val, timeout_ptr,
+                                    false, false, futex_key_scope);
         case FUTEX_WAIT_BITSET:
             return proc::futex_wait(uaddr, val, timeout_ptr,
                                     true,
-                                    (op & FUTEX_CLOCK_REALTIME) != 0);
+                                    (op & FUTEX_CLOCK_REALTIME) != 0,
+                                    futex_key_scope);
         case FUTEX_WAKE:
         case FUTEX_WAKE_BITSET:
-            return proc::futex_wakeup(uaddr, val, NULL, 0);
+            return proc::futex_wakeup(uaddr, val, NULL, 0, futex_key_scope);
         case FUTEX_REQUEUE:
-            return proc::futex_wakeup(uaddr, val, (void *)uaddr2, val2);
+            return proc::futex_wakeup(uaddr, val, (void *)uaddr2, val2,
+                                       futex_key_scope);
         case FUTEX_CMP_REQUEUE:
         {
-            int current_val = 0;
-            proc::Pcb *cur = proc::k_pm.get_cur_pcb();
-            if (cur == nullptr ||
-                mem::k_vmm.copy_in(*cur->get_pagetable(), (char *)&current_val, uaddr, sizeof(current_val)) < 0)
-            {
-                return -EFAULT;
-            }
-            if (current_val != val3)
-            {
-                return -EAGAIN;
-            }
-            return proc::futex_wakeup(uaddr, val, (void *)uaddr2, val2);
+            // CMP_REQUEUE 与 REQUEUE 的返回 ABI 不同：前者要报告已唤醒和
+            // 已迁移的总数，后者只报告已唤醒数。
+            return proc::futex_wakeup(uaddr, val, (void *)uaddr2, val2,
+                                       futex_key_scope, true, &val3);
         }
+        case FUTEX_WAKE_OP:
+            return proc::futex_wake_op(uaddr, val, uaddr2, val2,
+                                       wake_op_code, futex_key_scope);
         default:
             return -ENOSYS;
         }
@@ -15287,9 +15368,6 @@ namespace syscall
         if (_arg_int(2, prot) < 0)
             return syscall::SYS_EFAULT;
 
-        printfBlue("[SyscallHandler::sys_mprotect] addr: %p, len: %p, prot: %d\n",
-                   (void *)addr, len, prot);
-
         // 参数验证
         if (len == 0)
         {
@@ -15375,6 +15453,21 @@ namespace syscall
         proc::vma *vm = mm->find_vma_covering(addr);
         if (vm != nullptr && end_addr <= vm->end_addr())
         {
+            // Rust/jemalloc 会对匿名私有 arena 的完整 VMA 重复提交同一权限。
+            // 这类调用不会改变 VMA 元数据，也不会改变任何叶子 PTE 的目标
+            // 权限；即使该 VMA 已经有驻留页，页表中的权限仍然来自同一个
+            // VMA，重复遍历只会制造 mprotect/页表锁/TLB 的热路径开销。
+            // 只接受“完整 VMA + 匿名私有映射 + 无对象后端”，避免把文件映射、
+            // 共享映射或带独立页缓存所有权的区域误判成 no-op。
+            if (addr == vm->addr && end_addr == vm->end_addr() &&
+                vm->prot == prot &&
+                (vm->flags & MAP_ANONYMOUS) != 0 &&
+                vm->is_private_mapping() && !vm->is_shared_mapping() &&
+                vm->vfile == nullptr && vm->object == nullptr)
+            {
+                return 0;
+            }
+
             proc::vma *base = &pcb->get_vma()->_vm[0];
             if (vm >= base && vm < base + proc::NVMA)
             {
@@ -15433,7 +15526,13 @@ namespace syscall
                 {
                     span_vmas[i]->prot = prot;
                 }
-                if (mem::k_vmm.protectpages(*pcb->get_pagetable(), addr, aligned_len, prot, true) < 0)
+                bool pte_changed = false;
+                if (mem::k_vmm.protectpages(*pcb->get_pagetable(),
+                                             addr,
+                                             aligned_len,
+                                             prot,
+                                             true,
+                                             &pte_changed) < 0)
                 {
                     for (size_t i = 0; i < span_vmas.size(); ++i)
                     {
@@ -15441,7 +15540,12 @@ namespace syscall
                     }
                     return syscall::SYS_EFAULT;
                 }
-                hal::tlb::flush_range_all_cpus(addr, aligned_len);
+                if (pte_changed)
+                {
+                    // 只有实际存在且权限发生变化的叶子 PTE 才需要失效
+                    // 翻译；整段仍是懒分配状态时不能为每次 mprotect 刷新 TLB。
+                    hal::tlb::flush_mm_range(*mm, addr, aligned_len);
+                }
                 mm->get_vm_space().coalesce_private_anonymous_range(addr, end_addr);
                 return 0;
             }
@@ -15451,7 +15555,13 @@ namespace syscall
         {
             // 地址不在任何VMA中，直接调用protectpages修改页表权限
             // 直接调用 protectpages() 按 POSIX prot 翻译页表权限（非 VMA 上下文）。
-            if (mem::k_vmm.protectpages(*pcb->get_pagetable(), addr, aligned_len, prot, false) < 0)
+            bool pte_changed = false;
+            if (mem::k_vmm.protectpages(*pcb->get_pagetable(),
+                                         addr,
+                                         aligned_len,
+                                         prot,
+                                         false,
+                                         &pte_changed) < 0)
             {
                 printfRed("[sys_mprotect] protectpages failed for range [%p, %p)\n",
                           (void *)addr, (void *)end_addr);
@@ -15459,7 +15569,10 @@ namespace syscall
             }
 
             // 权限撤销必须同步到共享同一 CLONE_VM 地址空间的其它 CPU。
-            hal::tlb::flush_range_all_cpus(addr, aligned_len);
+            if (pte_changed)
+            {
+                hal::tlb::flush_mm_range(*mm, addr, aligned_len);
+            }
 
             return 0;
         }
@@ -15825,7 +15938,13 @@ namespace syscall
         }
 
         // 更新页表权限（VMA上下文，考虑懒分配）
-        if (mem::k_vmm.protectpages(*pcb->get_pagetable(), addr, aligned_len, prot, true) < 0)
+        bool pte_changed = false;
+        if (mem::k_vmm.protectpages(*pcb->get_pagetable(),
+                                     addr,
+                                     aligned_len,
+                                     prot,
+                                     true,
+                                     &pte_changed) < 0)
         {
             printfRed("[sys_mprotect] protectpages failed for range [%p, %p), rolling back VMA changes\n",
                       (void *)addr, (void *)end_addr);
@@ -15833,7 +15952,10 @@ namespace syscall
         }
 
         // 权限撤销必须同步到共享同一 CLONE_VM 地址空间的其它 CPU。
-        hal::tlb::flush_range_all_cpus(addr, aligned_len);
+        if (pte_changed)
+        {
+            hal::tlb::flush_mm_range(*mm, addr, aligned_len);
+        }
 
         if (has_snapshot)
         {

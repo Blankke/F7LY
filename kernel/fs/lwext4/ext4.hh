@@ -55,6 +55,26 @@ struct ext4_lock {
 
     /**@brief   Unlock access to mount point.*/
     void (*unlock)(void);
+
+    /**
+     * 允许只读文件数据路径以共享方式进入挂载点。
+     *
+     * 这组回调只给不会改变 ext4 元数据的读路径使用；原有 lock/unlock
+     * 仍然是元数据、目录和事务路径的排他锁。
+     */
+    void (*read_lock)(void);
+
+    /**@brief   释放共享读锁。*/
+    void (*read_unlock)(void);
+
+    /**
+     * 保护 lwext4 bcache/间接块等非线程安全的内存结构。
+     * 直接数据块 I/O 不应持有该锁，避免把设备等待时间重新带回全局临界区。
+     */
+    void (*cache_lock)(void);
+
+    /**@brief   释放 bcache/间接块元数据锁。*/
+    void (*cache_unlock)(void);
 };
 
 /********************************FILE DESCRIPTOR*****************************/

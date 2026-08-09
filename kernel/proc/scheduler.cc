@@ -2,6 +2,8 @@
 #include "spinlock.hh"
 #include "scheduler.hh"
 #include "proc_manager.hh"
+#include "process_memory_manager.hh"
+#include "hal/tlb_shootdown.hh"
 #include "signal.hh"
 #include "printer.hh"
 #ifdef RISCV
@@ -128,6 +130,11 @@ namespace proc
         {
             _next_scan_global_id[cpu_id] = 0;
             _pressure[cpu_id].schedulable.store(0, eastl::memory_order_relaxed);
+            for (uint word_index = 0; word_index < k_runnable_slot_word_count; ++word_index)
+            {
+                _runnable_slot_words[cpu_id][word_index].store(
+                    0, eastl::memory_order_relaxed);
+            }
         }
     }
 
@@ -147,7 +154,18 @@ namespace proc
             return;
         }
 
-        if (state == ProcState::RUNNABLE && !valid_home_cpu(task._last_cpu))
+        const bool old_runnable = old_state == ProcState::RUNNABLE;
+        const bool new_runnable = state == ProcState::RUNNABLE;
+
+        // 先撤销旧队列成员资格，再改变状态。调度器即使读到一个短暂的
+        // 过期位，也会在 PCB 锁内重新检查状态；反向发布则必须先写状态、
+        // 再 release 发布位图，保证新唤醒任务不会被长期遗漏。
+        if (old_runnable && valid_home_cpu(task._last_cpu))
+        {
+            clear_runnable_slot(static_cast<uint>(task._last_cpu), task._global_id);
+        }
+
+        if (new_runnable && !valid_home_cpu(task._last_cpu))
         {
             // 所有 runnable 任务必须有唯一 home CPU，否则压力计数无法正确记账。
             task._last_cpu = select_initial_cpu(task._cpu_mask, -1);
@@ -190,6 +208,11 @@ namespace proc
             }
         }
         task._state = state;
+
+        if (new_runnable && valid_home_cpu(task._last_cpu))
+        {
+            mark_runnable_slot(static_cast<uint>(task._last_cpu), task._global_id);
+        }
     }
 
     void Scheduler::set_task_priority(Pcb &task, int priority)
@@ -231,6 +254,10 @@ namespace proc
 
         if (task._state == ProcState::RUNNABLE || task._state == ProcState::RUNNING)
         {
+            if (task._state == ProcState::RUNNABLE && valid_home_cpu(old_cpu))
+            {
+                clear_runnable_slot(static_cast<uint>(old_cpu), task._global_id);
+            }
             if (valid_home_cpu(old_cpu))
             {
                 const uint32 previous =
@@ -246,6 +273,40 @@ namespace proc
             }
         }
         task._last_cpu = cpu_id;
+        if (task._state == ProcState::RUNNABLE && valid_home_cpu(cpu_id))
+        {
+            mark_runnable_slot(static_cast<uint>(cpu_id), task._global_id);
+        }
+    }
+
+    void Scheduler::mark_runnable_slot(uint cpu_id, uint global_id)
+    {
+        if (cpu_id >= NUMCPU || global_id >= num_process)
+        {
+            return;
+        }
+        _runnable_slot_words[cpu_id][global_id / 64].fetch_or(
+            1ULL << (global_id % 64), eastl::memory_order_release);
+    }
+
+    void Scheduler::clear_runnable_slot(uint cpu_id, uint global_id)
+    {
+        if (cpu_id >= NUMCPU || global_id >= num_process)
+        {
+            return;
+        }
+        _runnable_slot_words[cpu_id][global_id / 64].fetch_and(
+            ~(1ULL << (global_id % 64)), eastl::memory_order_release);
+    }
+
+    uint64 Scheduler::runnable_slot_word(uint cpu_id, uint word_index) const
+    {
+        if (cpu_id >= NUMCPU || word_index >= k_runnable_slot_word_count)
+        {
+            return 0;
+        }
+        return _runnable_slot_words[cpu_id][word_index].load(
+            eastl::memory_order_acquire);
     }
 
     int Scheduler::select_initial_cpu(const CpuMask &mask, int parent_cpu)
@@ -387,17 +448,16 @@ namespace proc
             return default_proc_prio;
         }
         int prio = lowest_proc_prio;
-        // 非默认任务计数由状态/优先级入口精确维护；这里仅在计数非零时选择
-        // 当前 CPU 可见的最高优先级。远端正在运行的任务由其本核继续执行，
-        // 无需把“拿不到远端 PCB 锁”扩散成永久慢路径标志。
-        constexpr uint active_word_count = (num_process + 63) / 64;
-        for (uint word_index = 0; word_index < active_word_count; ++word_index)
+        // 非默认任务计数由状态/优先级入口精确维护；这里只扫描本 CPU 的
+        // runnable 位图。远端正在运行的任务由其本核继续执行，无需把“拿不
+        // 到远端 PCB 锁”扩散成全局慢路径。
+        for (uint word_index = 0; word_index < k_runnable_slot_word_count; ++word_index)
         {
-            uint64 active_bits = k_pm.active_slot_word(word_index);
-            while (active_bits != 0)
+            uint64 runnable_bits = runnable_slot_word(static_cast<uint>(cpu_id), word_index);
+            while (runnable_bits != 0)
             {
-                const uint bit = trailing_zero_count_nonzero(active_bits);
-                active_bits &= active_bits - 1;
+                const uint bit = trailing_zero_count_nonzero(runnable_bits);
+                runnable_bits &= runnable_bits - 1;
                 const uint global_id = word_index * 64 + bit;
                 if (global_id >= num_process)
                 {
@@ -445,10 +505,10 @@ namespace proc
             priority = get_highest_priority(cpu_id);
             bool ran_task = false;
 
-            // 使用全局活跃槽位和本 CPU 的轮转起点。先取得 PCB 锁再读取状态
+            // 使用本 CPU runnable 位图和轮转起点。先取得 PCB 锁再读取状态
             // 与 home CPU，避免调度器对其它 CPU 正在更新的 PCB 作无锁读取。
             const uint scan_begin = _next_scan_global_id[cpu_id] % num_process;
-            auto scan_active_range = [&](uint begin, uint end)
+            auto scan_runnable_range = [&](uint begin, uint end)
             {
                 if (begin >= end)
                 {
@@ -458,7 +518,7 @@ namespace proc
                 const uint last_word = (end - 1) / 64;
                 for (uint word_index = first_word; word_index <= last_word; ++word_index)
                 {
-                    uint64 active_bits = k_pm.active_slot_word(word_index);
+                    uint64 active_bits = runnable_slot_word(static_cast<uint>(cpu_id), word_index);
                     if (word_index == first_word)
                     {
                         active_bits &= ~0ULL << (begin % 64);
@@ -496,6 +556,10 @@ namespace proc
                             p->_running_cpu = cpu_id;
                             set_task_state(*p, ProcState::RUNNING);
                             cpu->set_cur_proc(p);
+                            if (p->get_memory_manager() != nullptr)
+                            {
+                                hal::tlb::enter_mm(*p->get_memory_manager());
+                            }
                             cpu->reset_time_slice();
                             proc::Context *cur_context = cpu->get_context();
                             if(last_global_id != p->_global_id)
@@ -504,20 +568,26 @@ namespace proc
                             }
                             swtch(cur_context, &p->_context);
                             ran_task = true;
+                            // 退出任务已经切回 scheduler，不再使用自己的内核
+                            // 栈/上下文；此时仍持有 PCB 锁，可以安全回收。
+                            cpu->set_cur_proc(nullptr);
+                            if (p->_state == ProcState::ZOMBIE && p->_deferred_reap)
+                            {
+                                k_pm.freeproc(p);
+                            }
                             int refreshed_priority = get_highest_priority(cpu_id);
                             if (!(priority == default_proc_prio && p->_priority < priority))
                             {
                                 priority = refreshed_priority;
                             }
-                            cpu->set_cur_proc(nullptr);
                         }
                         p->_lock.release();
                     }
                 }
             };
             // 保持原来的 round-robin 顺序：先扫描游标到表尾，再从表头回绕。
-            scan_active_range(scan_begin, num_process);
-            scan_active_range(0, scan_begin);
+            scan_runnable_range(scan_begin, num_process);
+            scan_runnable_range(0, scan_begin);
 
             if (!ran_task)
             {
@@ -581,6 +651,10 @@ namespace proc
                Cpu::current_cpu_id(),
                (int)p->_state);
         p->_running_cpu = -1;
+        if (p->get_memory_manager() != nullptr)
+        {
+            hal::tlb::leave_mm(*p->get_memory_manager());
+        }
 
         intena = cpu->get_int_ena();
         swtch(&p->_context, cpu->get_context());

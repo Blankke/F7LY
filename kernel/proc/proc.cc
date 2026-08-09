@@ -24,6 +24,7 @@
 #include "prlimit.hh"
 #include "shm_manager.hh"
 #include "memlayout.hh"
+#include "hal/tlb_shootdown.hh"
 
 namespace proc
 {
@@ -126,8 +127,11 @@ namespace proc
          ****************************************************************************************/
         _state = UNUSED; // 进程状态初始化为未使用
         _chan.store(nullptr, eastl::memory_order_relaxed); // 睡眠等待通道
+        _wait_channel_bucket = 0;
+        _wait_channel_registered = false;
         _killed = 0;     // 进程终止标志
         _exiting = false; // 尚未进入退出清理流程
+        _deferred_reap = false;
         _xstate = 0;     // 进程退出状态码
         _parent_exit_signal = proc::ipc::signal::SIGCHLD;
 
@@ -144,9 +148,6 @@ namespace proc
         _cpu_mask.fill(); // 设置所有可用CPU位
         _last_cpu = 0;
         _running_cpu = -1;
-#if defined(RISCV) || defined(LOONGARCH)
-        _user_asid = 0;
-#endif
 
         /****************************************************************************************
          * 内存管理
@@ -174,6 +175,10 @@ namespace proc
          ****************************************************************************************/
         _futex_addr = nullptr;  // futex等待地址
         _futex_key.store(0, eastl::memory_order_relaxed); // futex匹配键
+        _futex_private = false;
+        _futex_bucket_index.store(0, eastl::memory_order_relaxed);
+        _futex_timeout_deadline.store(0, eastl::memory_order_relaxed);
+        _futex_wait_result = 0;
         _clear_tid_addr = 0;    // 线程退出时清除的地址
         _robust_list = nullptr; // 健壮futex链表头
         _robust_list_user_addr = 0; // 健壮futex链表头用户地址
@@ -260,9 +265,6 @@ namespace proc
         _cpu_mask = CpuMask{possible_mask != 0 ? possible_mask : 1};
         _last_cpu = 0;
         _running_cpu = -1;
-#if defined(RISCV) || defined(LOONGARCH)
-        _user_asid = 0;
-#endif
         
         // 注意：不在init中创建ProcessMemoryManager
         // ProcessMemoryManager的创建延迟到具体需要时（fork、user_init、execve等）
@@ -493,6 +495,12 @@ namespace proc
     {
         if (_memory_manager != nullptr)
         {
+            // 当前任务切换/退出前撤销本 CPU 的 mm 活跃标记；其它仍运行同一
+            // CLONE_VM 地址空间的 CPU 继续保留在目标掩码中。
+            if (Cpu::get_cpu()->get_cur_proc() == this)
+            {
+                hal::tlb::leave_mm(*_memory_manager);
+            }
             if (!is_probably_live_mm_object(_memory_manager))
             {
                 printfRed("[cleanup_memory_manager] 检测到异常 mm 指针，直接丢弃: pcb=%p pid=%d tid=%d mm=%p\n",

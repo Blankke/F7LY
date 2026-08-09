@@ -1,6 +1,6 @@
 # SMP HAL、stress-ng 与 BuildStorm 自编译执行计划
 
-状态：二阶段代码已收尾；SMP、真实 stress-ng、8 GiB PMM 和双架构 TLB 已完成 QEMU 验收；旧 selfhost 制备链路已由预编译 tg-xtask 的官方 BuildStorm 镜像替代，官方长测仍待验收
+状态：BuildStorm `core` 阶段停顿根因已修复、待用户完整验收；SMP、8 GiB PMM 和双架构 TLB 短测已完成 QEMU 验收，官方长测仍由用户执行
 
 日期：2026-07-18
 
@@ -333,9 +333,21 @@ git diff --check
 2. 后续若继续 BuildStorm selfhost，再执行 `scripts/selfbuild/prepare_rootfs.sh --download-base --build-prepared`；该步骤需要网络、sudo、约 11 GiB 磁盘和较长的 Rust/crates 准备时间。
 3. rootfs 成功制备后，依次执行 `scripts/selfbuild/self_compile.sh --level 0`、`--level 1`、`--level 2`、`--level 3 --l3-jobs 1`，再执行 L4 和 L5；任何一级失败都停在该级修复，不跳级。
 
-## 9. 2026-08-02 BuildStorm 卡顿修复（完成待验收）
+## 9. 2026-08-08 BuildStorm `core` 阶段停顿根因修复（根因已修复、待用户完整验收）
 
 - [x] 修复动态匿名映射在页粒度 `mprotect` 后只拆分、不合并造成的 VMA 爆炸；仅在权限、标志、偏移和全部后端语义一致时合并，文件映射、共享映射、VmObject 与 overlay 均不参与。
 - [x] 移除 `mprotect` 跨 VMA 更新的固定 16 段上限，改为完整记录权限并支持失败回滚，避免只改 PTE、不改 VMA 元数据。
 - [x] 同一 BuildStorm `core` 编译进程的 VMA 数由 10026 降至 72；限时冷编译已从 `Compiling core` 继续产出 `libc` 与 `std` 编译产物。
 - [x] 修复位于共享内存管理与 syscall 实现，不含架构分支；RV64、LA64 最终构建均作为短验收门槛，完整 BuildStorm 长测由用户执行。
+- [x] 2026-08-08 完成停顿前同口径诊断：当前 HEAD 的 8/1 vCPU、`a40074f6^` 独立 worktree 的 8 vCPU 均在 8 分钟窗口内采样；当前 8 vCPU 的三份间隔 20 秒快照显示远端 TLB shootdown 累计等待持续增长且占主要内核等待路径，VMA 峰值稳定在 126；该阶段的 futex/ext4/scheduler 快照未形成同等明确的主阻塞环，后续又分别完成了这些链路的证据复核和必要修复。
+- [x] 2026-08-08 完成 TLB/ASID 修复：ASID 从 PCB 移到 `ProcessMemoryManager`，`CLONE_VM` 共享 mm/ASID；用户页表更新改为按活跃 CPU mask、mm generation 和 ASID 定向失效，RV 使用 ASID SBI shootdown，LA 使用 ASID/range IOCSR IPI。
+- [x] 2026-08-08 临时诊断曾覆盖官方命令进度、全 vCPU/PCB/锁快照；未改变官方 Cargo 命令、并行参数、uptime、crate 清单或 target 复用策略，后续已清理临时代码。
+- [x] 2026-08-08 修复后 RV/LA evaluation 与 shell 四种构建通过；双架构 8 vCPU、8 GiB、20 轮 TLB/VMA 短测通过，无 panic、TLB timeout 或专项失败。
+- [x] 2026-08-08 完成 ext4 分支根因收口：多轮 GDB/诊断快照显示 ext4 全局锁等待与累计周期成为主要剩余成本，但 ticket 持续推进、owner 会变化，未形成 ticket 丢失或永久死锁；因此没有猜测式修改 futex/scheduler。
+- [x] 2026-08-08 修复 ext4 热路径：读路径使用挂载级共享锁，bcache 使用独立锁，直接数据块 I/O 不再占用全局排他锁；完整块写入进入 write-back bcache，未对齐首尾块保留直接读改写；补齐嵌套 `Ext4MountGuard` 的同 owner 递归语义。
+- [x] 2026-08-08 双架构 ext4 并发短测通过：`scripts/run/ext4_concurrency_test.sh --arch all --qemu-cpus 8 --qemu-mem 8G` 覆盖 4 线程、每线程 16 轮 `write/fsync/rename/read/unlink`，临时镜像只读 `e2fsck` 通过；日志为 `logs/run/output_rv_ext4_concurrency_smp8_mem8G_20260808-233546.txt` 与 `logs/run/output_la_ext4_concurrency_smp8_mem8G_20260808-233623.txt`。
+- [x] 2026-08-09 完成最后一轮有界官方进度探针并读取完整尾部：`logs/run/output_r_20260809-073601_buildstorm-perf.txt` 在 8 vCPU、8 GiB、guest 1200 秒窗口内明确输出 `Compiling compiler_builtins`、`Compiling core v0.0.0`，产物计数曾达到 27；但 `core` 后没有任何新的 `Compiling` 行，最终由宿主超时停止。因此本轮没有把“出现产物”误判为完整 BuildStorm PASS，仍需用户长测确认。
+- [x] 2026-08-09 完成 TLB/ASID 后续链路收口：地址空间级 ASID、活跃 CPU mask、generation 和定向范围失效已接入 RV/LA；双架构强制 evaluation/shell 构建以及 20 轮、8 vCPU TLB/VMA 短测通过。
+- [x] 2026-08-09 完成有证据支持的剩余热路径修复：ext4 读写锁与 bcache 分离、futex 物理 key 分桶和统一摘链、普通 wait channel 分桶、FUTEX_WAKE_OP ABI 解码、per-CPU runnable 位图、特殊映射缓存、退出延迟回收和 allocator double-free 诊断；没有修改官方 Cargo 命令、并行参数、uptime、crate 清单或 target 复用策略。
+- [x] 2026-08-09 完成非 BuildStorm 验收：RV/LA ext4 并发短测及临时镜像只读 `e2fsck` 通过；四个基础 futex 小测双架构均 TPASS，额外 `futex_wait02/03/05` 双架构均 TPASS。`futex_wake02` 在 shell rootfs 缺少可用 `/proc/<pid>/task` 且无法挂载 proc 的环境下报告 TBROK，属于测试环境限制，未作为内核 PASS 证据。
+- [ ] 待用户在无其它 QEMU 竞争的环境中完整运行官方 BuildStorm，确认从零编译产物、总耗时和至少两次重复结果；本轮不把短测或构建通过写成完整 BuildStorm PASS。

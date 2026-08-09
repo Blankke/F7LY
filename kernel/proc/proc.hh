@@ -170,8 +170,14 @@ namespace proc
         // 唤醒端先按 channel 无锁筛选，再只获取真正候选者的 PCB 锁。
         // 因此 channel 必须原子发布；状态本身仍只允许在 _lock 下访问。
         eastl::atomic<void *> _chan{nullptr};
+        // 通用 sleep/wakeup 的等待通道位图成员资格。位图只做候选筛选，
+        // 最终 channel 与状态仍必须在 PCB 锁下复核。
+        uint _wait_channel_bucket = 0;
+        bool _wait_channel_registered = false;
         int _killed;           // 进程终止标志位，非零表示进程被标记为终止
         bool _exiting;         // 已进入退出清理流程，禁止 timer 抢占式 yield
+        // 退出任务由 scheduler 在切回后、仍持有 PCB 锁时完成回收。
+        bool _deferred_reap;
         int _xstate;           // 进程退出状态码，供父进程通过wait()系统调用获取
         int _parent_exit_signal; // 非线程子任务退出时需要发送给父进程的信号，0 表示不发送
         int _stop_signal;      // 最近一次使任务停止的 job-control 信号
@@ -198,11 +204,6 @@ namespace proc
         // 该字段只在持有 _lock 时读写，是 SMP 调度状态机的硬性不变量：一个
         // PCB 绝不能同时在两个 CPU 上运行，否则 trapframe 与内核栈会被并发覆盖。
         int _running_cpu;
-#if defined(RISCV) || defined(LOONGARCH)
-        // ASID 0 保留给内核。RV/LA 用户任务共用相同的隔离回收契约：
-        // 全核 TLB flush 完成前绝不复用，避免 PCB 槽位继承旧地址空间翻译。
-        uint32 _user_asid;
-#endif
 
         /****************************************************************************************
          * 内存管理
@@ -235,9 +236,19 @@ namespace proc
          * 线程和同步原语
          ****************************************************************************************/
         void *_futex_addr;                        // futex等待地址，仅用于调试和错误诊断
-        // 唤醒端在全局 futex 队列锁下先无锁筛选 key，再获取候选 PCB 锁；
-        // key 必须原子发布，PCB 状态与调试地址仍只允许在 _lock 下访问。
-        eastl::atomic<uint64> _futex_key{0};     // futex匹配键，按当前映射到的物理地址计算
+        // 共享 futex 的 value 是物理地址；私有 futex 的 value 是用户虚拟地址，
+        // 并由 _futex_private + 当前 ProcessMemoryManager 完成精确判等。这样 COW
+        // 改变私有页物理地址后，已经入队的等待者仍可被同一 mm 中的 WAKE 找到。
+        eastl::atomic<uint64> _futex_key{0};
+        bool _futex_private = false;
+        // timer 路径只能先无锁定位桶，再遵循桶锁 -> PCB 锁做复核；因此将入队
+        // 时计算出的桶号原子发布，避免在锁外读取私有 key 的非原子身份字段。
+        eastl::atomic<uint32> _futex_bucket_index{0};
+        // 定时 FUTEX_WAIT 的硬件截止时间。使用原子发布，定时器先读它选择
+        // 桶，再在桶锁和 PCB 锁下二次确认，避免与入队/唤醒并发时读到半个值。
+        eastl::atomic<uint64> _futex_timeout_deadline{0};
+        // 仅在 PCB 锁下访问：0 表示普通唤醒，SYS_ETIMEDOUT 表示定时器唤醒。
+        int _futex_wait_result = 0;
         uint64 _clear_tid_addr = 0;               // 线程退出的时候清除该地址的值(8字节)
         robust_list_head *_robust_list = nullptr; // 健壮futex链表头，用于线程退出时清理
         uint64 _robust_list_user_addr = 0;        // 健壮futex链表头的原始用户虚拟地址，用于 get_robust_list ABI

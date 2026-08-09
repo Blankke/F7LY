@@ -30,11 +30,14 @@
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
 /**
- * lwext4 的全局挂载锁。
+ * lwext4 的挂载点读写锁。
  *
- * 每个首次进入者领取单调递增的 ticket，只有 serving ticket 可以获得锁；等待者通过
- * scheduler sleep 休眠，解锁时统一唤醒并由 ticket 保证严格 FIFO。state_lock 保护全部
- * 状态，owner 使用线程 PCB，而不是进程 pid，因此同一进程的不同线程不会被误判为递归。
+ * 写者领取单调递增的 ticket，只有 serving ticket 且没有读者时可以获得排他锁；
+ * 写者一旦排队，新的读者也会让路，避免写事务无限期饥饿。读者之间共享挂载锁，
+ * 但进入 lwext4 bcache/间接块结构前还要取得独立的 cache 锁。这样直接数据块
+ * I/O 不再占用整个挂载点排他锁，同时不会让原本非线程安全的 bcache 并发访问。
+ * state_lock 保护全部状态，owner 使用线程 PCB，而不是进程 pid，因此同一进程的
+ * 不同线程不会被误判为递归。
  */
 class Ext4RecursiveFifoLock
 {
@@ -47,6 +50,9 @@ public:
         _held = false;
         _next_ticket = 0;
         _serving_ticket = 0;
+        _readers = 0;
+        _waiting_writers = 0;
+        _exclusive_read_depth = 0;
         memset(_waiters, 0, sizeof(_waiters));
     }
 
@@ -63,10 +69,13 @@ public:
         }
 
         const uint64 ticket = _next_ticket++;
-        if (ticket != _serving_ticket)
+        const bool must_wait = ticket != _serving_ticket || _readers != 0;
+        if (must_wait)
         {
+            ++_waiting_writers;
             if (ticket - _serving_ticket >= proc::num_process)
             {
+                --_waiting_writers;
                 _state_lock.release();
                 panic("ext4 lock: waiter ring overflow");
             }
@@ -78,11 +87,15 @@ public:
             }
             slot = current;
         }
-        while (ticket != _serving_ticket)
+        while (ticket != _serving_ticket || _readers != 0)
         {
             proc::k_pm.sleep(this, &_state_lock);
         }
-        if (ticket != 0)
+        if (must_wait)
+        {
+            --_waiting_writers;
+        }
+        if (must_wait)
         {
             proc::Pcb *&slot = _waiters[ticket % proc::num_process];
             if (slot == current)
@@ -121,16 +134,58 @@ public:
         _owner = nullptr;
         _depth = 0;
         ++_serving_ticket;
-        // ticket 锁每次只会放行下一位；精确唤醒避免每个 4KiB ext4 操作
-        // 都扫描 512 个 PCB 并制造等待者惊群。
-        proc::Pcb *next_waiter = nullptr;
-        if (_serving_ticket < _next_ticket)
+        // 读者和写者共用一个通道。唤醒后各自重新检查条件：最多只有下一个
+        // ticket 写者进入，所有没有写者排队的读者可以并行进入。
+        proc::k_pm.wakeup(this);
+        _state_lock.release();
+    }
+
+    void read_lock()
+    {
+        proc::Pcb *current = proc::k_pm.get_cur_pcb();
+
+        _state_lock.acquire();
+        /*
+         * 许多 VFS 辅助函数本身已经由 Ext4MountGuard 持有排他锁，随后
+         * 又会进入普通文件 read。读写锁必须把这个“排他持有者进入读路径”
+         * 视为递归，否则 owner 会把自己睡在 extlock 上形成确定性死锁。
+         */
+        if (_held && current != nullptr && _owner == current)
         {
-            next_waiter = _waiters[_serving_ticket % proc::num_process];
+            ++_depth;
+            ++_exclusive_read_depth;
+            _state_lock.release();
+            return;
         }
-        if (next_waiter != nullptr)
+        while (_held || _waiting_writers != 0 || _next_ticket != _serving_ticket)
         {
-            proc::k_pm.wakeup_one(next_waiter, this);
+            proc::k_pm.sleep(this, &_state_lock);
+        }
+        ++_readers;
+        _state_lock.release();
+
+    }
+
+    void read_unlock()
+    {
+        proc::Pcb *current = proc::k_pm.get_cur_pcb();
+        _state_lock.acquire();
+        if (_exclusive_read_depth != 0 && _held && _owner == current)
+        {
+            --_exclusive_read_depth;
+            --_depth;
+            _state_lock.release();
+            return;
+        }
+        if (_readers == 0)
+        {
+            _state_lock.release();
+            panic("ext4 lock: read unlock without reader");
+        }
+        --_readers;
+        if (_readers == 0)
+        {
+            proc::k_pm.wakeup(this);
         }
         _state_lock.release();
     }
@@ -142,14 +197,30 @@ private:
     bool _held = false;
     uint64 _next_ticket = 0;
     uint64 _serving_ticket = 0;
+    uint32 _readers = 0;
+    uint32 _waiting_writers = 0;
+    uint32 _exclusive_read_depth = 0;
     proc::Pcb *_waiters[proc::num_process]{};
 };
 
 static Ext4RecursiveFifoLock extlock;
+// 共享读者进入 lwext4 的 bcache/extent 查找时使用；直接块 I/O 不持有它。
+static Ext4RecursiveFifoLock extcachelock;
 [[maybe_unused]] static void ext4_lock(void);
 [[maybe_unused]] static void ext4_unlock(void);
+[[maybe_unused]] static void ext4_read_lock(void);
+[[maybe_unused]] static void ext4_read_unlock(void);
+[[maybe_unused]] static void ext4_cache_lock(void);
+[[maybe_unused]] static void ext4_cache_unlock(void);
 
-[[maybe_unused]] static struct ext4_lock ext4_lock_ops = {ext4_lock, ext4_unlock};
+[[maybe_unused]] static struct ext4_lock ext4_lock_ops = {
+    .lock = ext4_lock,
+    .unlock = ext4_unlock,
+    .read_lock = ext4_read_lock,
+    .read_unlock = ext4_read_unlock,
+    .cache_lock = ext4_cache_lock,
+    .cache_unlock = ext4_cache_unlock,
+};
 
 [[maybe_unused]] static uint vfs_ext4_filetype(uint filetype);
 static int vfs_ext4_finish_mount(const char *mount_path, struct vfs_ext4_blockdev *vbdev);
@@ -187,6 +258,7 @@ static uint64_t vfs_ext_realtime_seconds()
 
 int vfs_ext4_init(void) {
     extlock.init();
+    extcachelock.init();
     ext4_device_unregister_all();
     ext4_init_mountpoints();
     return 0;
@@ -198,6 +270,26 @@ static void ext4_lock() {
 
 static void ext4_unlock() {
     extlock.unlock();
+}
+
+static void ext4_read_lock()
+{
+    extlock.read_lock();
+}
+
+static void ext4_read_unlock()
+{
+    extlock.read_unlock();
+}
+
+static void ext4_cache_lock()
+{
+    extcachelock.lock();
+}
+
+static void ext4_cache_unlock()
+{
+    extcachelock.unlock();
 }
 
 [[maybe_unused]] static uint vfs_ext4_filetype(uint filetype) {
@@ -215,17 +307,8 @@ static void ext4_unlock() {
 
 static int vfs_ext4_finish_mount(const char *mount_path, struct vfs_ext4_blockdev *vbdev)
 {
-    // 必须先安装锁，再开启 write-back。后者会立即进入 bcache，不能留下无保护窗口。
+    // 必须先安装锁；后续每个 lwext4 操作在自己的排他临界区内配对管理 write-back。
     int r = ext4_mount_setup_locks(mount_path, &ext4_lock_ops);
-    if (r != EOK)
-    {
-        ext4_umount(mount_path);
-        vfs_ext4_blockdev_destroy(vbdev);
-        return r;
-    }
-
-    // 开启 write-back，避免小块密集写被同步刷盘完全拖垮。
-    r = ext4_cache_write_back(mount_path, true);
     if (r != EOK)
     {
         ext4_umount(mount_path);

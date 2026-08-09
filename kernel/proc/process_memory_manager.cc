@@ -177,7 +177,7 @@ namespace proc
 
             // PTE 地址没有改变，但权限可能从临时可写恢复为只读；返回父/子进程
             // 前必须让所有可能运行该 child mm 的 CPU 丢掉旧权限翻译。
-            hal::tlb::flush_range_all_cpus(begin, end - begin);
+            hal::tlb::flush_mm_range(child_mm, begin, end - begin);
             return true;
         }
 
@@ -551,6 +551,9 @@ namespace proc
           mmap_cursor(0), shared_vm(false),
           total_memory_size(0), ref_count(1)
     {
+        tlb_state_lock.init("mm_tlb_state");
+        tlb_flush_lock.init("mm_tlb_flush");
+        user_asid = allocate_user_asid();
         // 初始化内存锁
         memory_lock.init("process_memory_lock_guard", "process_memory_lock");
 
@@ -574,6 +577,8 @@ namespace proc
 
     ProcessMemoryManager::~ProcessMemoryManager()
     {
+        retire_user_asid(user_asid);
+        user_asid = 0;
         // 析构函数中不执行清理操作，避免双重释放
         // 清理应该通过显式调用free_all_memory()来完成
     }
@@ -1080,7 +1085,7 @@ namespace proc
         {
             if (defer_parent_tlb_flush && parent_cow_changed)
             {
-                hal::tlb::flush_all_cpus();
+                hal::tlb::flush_mm_range(*this, 0, 0);
                 parent_cow_changed = false;
             }
         };
@@ -1125,7 +1130,7 @@ namespace proc
             // 全核失效同时覆盖两者，保证父线程恢复执行前权限与页表一致。
             if (parent_cow_changed || restored_parent_permissions)
             {
-                hal::tlb::flush_all_cpus();
+                hal::tlb::flush_mm_range(*this, 0, 0);
             }
             parent_cow_changed = false;
             delete new_mgr;
@@ -2565,6 +2570,7 @@ namespace proc
 
         // 设置页表
         pagetable = pt;
+        special_mappings_ready = true;
         return true;
     }
 
@@ -2573,6 +2579,10 @@ namespace proc
         if (!pagetable.get_base())
         {
             return false;
+        }
+        if (special_mappings_ready)
+        {
+            return true;
         }
 
 #ifdef RISCV
@@ -2624,11 +2634,13 @@ namespace proc
         }
 #endif
 
+        special_mappings_ready = true;
         return true;
     }
 
     void ProcessMemoryManager::free_pagetable()
     {
+        special_mappings_ready = false;
         if (!pagetable.get_base())
         {
             printfYellow("ProcessMemoryManager: pagetable already released, skip free_pagetable\n");

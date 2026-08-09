@@ -185,6 +185,15 @@ int ext4_blocks_get_direct(struct ext4_blockdev *bdev, void *buf, uint64_t lba, 
  * @return  standard error code*/
 int ext4_blocks_set_direct(struct ext4_blockdev *bdev, const void *buf, uint64_t lba, uint32_t cnt);
 
+/**
+ * 将完整覆盖的数据块写入 bcache 并标记为 dirty。
+ *
+ * 调用方必须在同一高层操作内配对关闭 write-back；计数归零时会在释放
+ * 挂载排他锁前刷盘，避免 direct 读路径观察到未提交的数据。
+ */
+int ext4_blocks_set_cached(struct ext4_blockdev *bdev, const void *buf,
+                           uint64_t lba, uint32_t cnt);
+
 /**@brief   Write to block device (by direct address).
  * @param   bdev block device descriptor
  * @param   off byte offset in block device

@@ -1,4 +1,5 @@
 #include "proc_manager.hh"
+#include "futex.hh"
 
 #include "physical_memory_manager.hh"
 #include "printer.hh"
@@ -38,8 +39,7 @@ namespace proc
             victim->cleanup_sighand();
             free_signal_frame_list(victim);
 
-            victim->_futex_addr = nullptr;
-            victim->_futex_key.store(0, eastl::memory_order_release);
+            futex_remove_waiter(victim);
             victim->_clear_tid_addr = 0;
             victim->_robust_list = nullptr;
             victim->_robust_list_user_addr = 0;

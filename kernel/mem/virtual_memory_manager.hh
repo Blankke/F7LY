@@ -172,7 +172,19 @@ void pci_map(int bus, int dev, int func, void *pages);
 		/// @return total allocated virtual memory size
 		uint64 uvmfirst(PageTable &pt, uint64 src, uint64 sz);
 
-		int protectpages(PageTable &pt, uint64 va, uint64 size, int prot, bool is_vma = false);
+		/**
+		 * @brief 批量更新页表权限。
+		 *
+		 * pte_changed 用于告诉调用方本次是否真的写过叶子 PTE。VMA 的
+		 * 权限元数据即使发生变化，尚未驻留的懒分配页也不会产生 TLB
+		 * 翻译，因此不能为每个 mprotect 无条件执行一次 sfence。
+		 */
+		int protectpages(PageTable &pt,
+		                 uint64 va,
+		                 uint64 size,
+		                 int prot,
+		                 bool is_vma = false,
+		                 bool *pte_changed = nullptr);
 
 	private:
 	};

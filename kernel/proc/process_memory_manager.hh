@@ -21,6 +21,7 @@
 #include "vma_maple_tree.hh"
 #include "vma_space.hh"
 #include "sleeplock.hh"
+#include "param.h"
 #include <EASTL/atomic.h>
 #include <EASTL/vector.h>
 #ifdef RISCV
@@ -33,6 +34,12 @@
 namespace proc
 {
     class Pcb;
+
+    // ASID 分配器属于地址空间生命周期；声明放在内存管理器接口中，避免 PCB
+    // 重新分配时把同一个地址空间的线程误当成不同的 TLB 隔离对象。
+    void initialize_user_asid_allocator();
+    uint32 allocate_user_asid();
+    void retire_user_asid(uint32 asid);
     constexpr int max_program_section_num = 16; // 确保常量可用
 
     struct program_section_desc
@@ -94,6 +101,19 @@ namespace proc
 
         // 共享标志
         bool shared_vm;
+
+        // 地址空间级 TLB 状态。CLONE_VM 线程共享这些字段，因此一次 PTE 更新
+        // 只需要同步当前可能运行该 mm 的 CPU，而不是按 PCB/ASID 全核广播。
+        SpinLock tlb_state_lock;
+        SpinLock tlb_flush_lock;
+        uint32 user_asid = 0;
+        uint64 tlb_generation = 0;
+        uint64 tlb_active_cpu_mask = 0;
+        uint64 tlb_seen_generation[NUMCPU]{};
+        // 基础页表创建完成后，trampoline/sig-trampoline 在地址空间生命周期内
+        // 保持存在；usertrapret 只需在首次初始化/修复时检查，不能每次返回用户态
+        // 都重新 walk 固定高地址页表。
+        bool special_mappings_ready = false;
 
     private:
         // 内存大小

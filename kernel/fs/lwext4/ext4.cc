@@ -73,6 +73,48 @@
             (_m)->os_locks->unlock(); \
     } while (0)
 
+/**@brief 只读文件路径使用挂载点共享锁；旧的锁实现自动回退到排他锁。*/
+#define EXT4_MP_READ_LOCK(_m)             \
+    do                                    \
+    {                                     \
+        if ((_m)->os_locks)               \
+        {                                 \
+            if ((_m)->os_locks->read_lock) \
+                (_m)->os_locks->read_lock(); \
+            else                          \
+                (_m)->os_locks->lock();   \
+        }                                 \
+    } while (0)
+
+/**@brief 释放挂载点共享锁。*/
+#define EXT4_MP_READ_UNLOCK(_m)             \
+    do                                      \
+    {                                       \
+        if ((_m)->os_locks)                 \
+        {                                   \
+            if ((_m)->os_locks->read_unlock) \
+                (_m)->os_locks->read_unlock(); \
+            else                            \
+                (_m)->os_locks->unlock();  \
+        }                                   \
+    } while (0)
+
+/**@brief 串行化 lwext4 bcache/间接块访问，不覆盖直接数据 I/O。*/
+#define EXT4_MP_CACHE_LOCK(_m)              \
+    do                                      \
+    {                                       \
+        if ((_m)->os_locks && (_m)->os_locks->cache_lock) \
+            (_m)->os_locks->cache_lock();  \
+    } while (0)
+
+/**@brief 释放 lwext4 bcache/间接块锁。*/
+#define EXT4_MP_CACHE_UNLOCK(_m)            \
+    do                                      \
+    {                                       \
+        if ((_m)->os_locks && (_m)->os_locks->cache_unlock) \
+            (_m)->os_locks->cache_unlock(); \
+    } while (0)
+
 /**@brief   Block devices descriptor.*/
 struct ext4_block_devices
 {
@@ -160,7 +202,9 @@ bool ext4_path_cache_lookup(struct ext4_fs *fs,
                             uint32_t *inode_mode)
 {
     if (name_length == 0 || name_length >= k_ext4_path_cache_name_capacity)
+    {
         return false;
+    }
 
     g_ext4_path_cache_lock.acquire();
     Ext4PathCacheEntry &entry =
@@ -2308,14 +2352,17 @@ int ext4_fread(ext4_file *file, void *buf, size_t size, size_t *rcnt)
 
     uint8_t *u8_buf = (uint8_t *)buf;
     int r;
-    struct ext4_inode_ref ref;
+    struct ext4_inode_ref ref{};
 
     ext4_assert(file && file->mp);
 
     const uint64_t initial_fpos = file->fpos;
     const bool atime_updates_allowed =
         !file->mp->fs.read_only && (file->flags & O_NOATIME) == 0;
-    bool atime_transaction_started = false;
+    bool read_lock_held = false;
+    bool cache_lock_held = false;
+    bool inode_ref_loaded = false;
+    bool atime_update_needed = false;
     uint64_t pending_atime = 0;
 
     if (file->flags & O_WRONLY)
@@ -2324,7 +2371,16 @@ int ext4_fread(ext4_file *file, void *buf, size_t size, size_t *rcnt)
     if (!size)
         return EOK;
 
-    EXT4_MP_LOCK(file->mp);
+    /*
+     * 读者共享挂载点锁，写者仍然通过 EXT4_MP_LOCK 排他进入。这样在直接
+     * 数据块 I/O 期间不会有写者改变 inode 映射或回收块；同时 bcache 和
+     * extent 查找仍由独立 cache 锁串行化，避免并发修改 lwext4 的 RB-tree、
+     * LRU 和引用计数。
+     */
+    EXT4_MP_READ_LOCK(file->mp);
+    read_lock_held = true;
+    EXT4_MP_CACHE_LOCK(file->mp);
+    cache_lock_held = true;
 
     struct ext4_fs *const fs = &file->mp->fs;
     struct ext4_sblock *const sb = &file->mp->fs.sb;
@@ -2335,9 +2391,13 @@ int ext4_fread(ext4_file *file, void *buf, size_t size, size_t *rcnt)
     r = ext4_fs_get_inode_ref(fs, file->inode, &ref);
     if (r != EOK)
     {
-        EXT4_MP_UNLOCK(file->mp);
+        EXT4_MP_CACHE_UNLOCK(file->mp);
+        cache_lock_held = false;
+        EXT4_MP_READ_UNLOCK(file->mp);
+        read_lock_held = false;
         return r;
     }
+    inode_ref_loaded = true;
 
     /*Sync file size*/
     file->fsize = ext4_inode_get_size(sb, ref.inode);
@@ -2366,13 +2426,11 @@ int ext4_fread(ext4_file *file, void *buf, size_t size, size_t *rcnt)
                 current_time - old_atime >= k_relatime_interval_seconds;
             if (old_atime <= mtime || old_atime <= ctime || interval_elapsed)
             {
-                // 只在确实需要 relatime 写回时启动事务，并且必须在复制数据前
-                // 成功；这样事务失败不会留下“缓冲区已填、fpos 已前移却返回错”
-                // 的半成功读取。
-                r = ext4_trans_start(file->mp);
-                if (r != EOK)
-                    goto Finish;
-                atime_transaction_started = true;
+                // 共享读锁不能在数据读取期间修改 inode。先记录需要更新的
+                // relatime 条件，数据成功后再用一个很短的排他事务写回 atime。
+                // 这把设备 I/O 从全局排他临界区移出，同时保留 Linux 的
+                // relatime 可观察语义。
+                atime_update_needed = true;
                 pending_atime = current_time;
             }
         }
@@ -2418,7 +2476,11 @@ int ext4_fread(ext4_file *file, void *buf, size_t size, size_t *rcnt)
         if (fblock != 0)
         {
             uint64_t off = fblock * block_size + unalg;
+            EXT4_MP_CACHE_UNLOCK(file->mp);
+            cache_lock_held = false;
             r = ext4_block_readbytes(file->mp->fs.bdev, off, u8_buf, len);
+            EXT4_MP_CACHE_LOCK(file->mp);
+            cache_lock_held = true;
             if (r != EOK)
                 goto Finish;
         }
@@ -2472,7 +2534,11 @@ int ext4_fread(ext4_file *file, void *buf, size_t size, size_t *rcnt)
             fblock_count++;
         }
 
+        EXT4_MP_CACHE_UNLOCK(file->mp);
+        cache_lock_held = false;
         r = ext4_blocks_get_direct(file->mp->fs.bdev, u8_buf, fblock_start, fblock_count);
+        EXT4_MP_CACHE_LOCK(file->mp);
+        cache_lock_held = true;
         if (r != EOK)
             goto Finish;
 
@@ -2496,7 +2562,11 @@ int ext4_fread(ext4_file *file, void *buf, size_t size, size_t *rcnt)
         off = fblock * block_size;
         if (fblock != 0)
         {
+            EXT4_MP_CACHE_UNLOCK(file->mp);
+            cache_lock_held = false;
             r = ext4_block_readbytes(file->mp->fs.bdev, off, u8_buf, size);
+            EXT4_MP_CACHE_LOCK(file->mp);
+            cache_lock_held = true;
             if (r != EOK)
                 goto Finish;
         }
@@ -2512,24 +2582,71 @@ int ext4_fread(ext4_file *file, void *buf, size_t size, size_t *rcnt)
     }
 
 Finish:
-    if (r == EOK && atime_transaction_started && file->fpos > initial_fpos)
+    int put_inode_r = EOK;
+    if (inode_ref_loaded)
     {
-        ext4_inode_set_access_time(ref.inode, pending_atime);
-        ref.dirty = true;
+        if (!cache_lock_held)
+        {
+            EXT4_MP_CACHE_LOCK(file->mp);
+            cache_lock_held = true;
+        }
+        put_inode_r = ext4_fs_put_inode_ref(&ref);
+        inode_ref_loaded = false;
     }
-
-    int put_inode_r = ext4_fs_put_inode_ref(&ref);
-    if (r == EOK)
+    if (cache_lock_held)
+    {
+        EXT4_MP_CACHE_UNLOCK(file->mp);
+        cache_lock_held = false;
+    }
+    if (read_lock_held)
+    {
+        EXT4_MP_READ_UNLOCK(file->mp);
+        read_lock_held = false;
+    }
+    if (r == EOK && put_inode_r != EOK)
         r = put_inode_r;
 
-    if (atime_transaction_started)
+    if (r == EOK && atime_update_needed && file->fpos > initial_fpos)
     {
-        if (r != EOK)
+        /*
+         * atime 是读操作唯一需要写入的元数据。重新获取 inode 并重新检查
+         * relatime 条件，避免在共享读期间保存的旧 inode 指针或旧时间覆盖
+         * 其他线程已经完成的合法元数据更新。
+         */
+        int atime_r = EOK;
+        EXT4_MP_LOCK(file->mp);
+        EXT4_MP_CACHE_LOCK(file->mp);
+
+        atime_r = ext4_trans_start(file->mp);
+        struct ext4_inode_ref atime_ref{};
+        if (atime_r == EOK)
+        {
+            atime_r = ext4_fs_get_inode_ref(&file->mp->fs, file->inode, &atime_ref);
+            if (atime_r == EOK)
+            {
+                const uint64_t old_atime = ext4_inode_get_access_time(atime_ref.inode);
+                const uint64_t mtime = ext4_inode_get_modif_time(atime_ref.inode);
+                const uint64_t ctime = ext4_inode_get_change_inode_time(atime_ref.inode);
+                if (pending_atime >= old_atime &&
+                    (old_atime <= mtime || old_atime <= ctime ||
+                     pending_atime - old_atime >= 24 * 60 * 60))
+                {
+                    ext4_inode_set_access_time(atime_ref.inode, pending_atime);
+                    atime_ref.dirty = true;
+                }
+                atime_r = ext4_fs_put_inode_ref(&atime_ref);
+            }
+        }
+        if (atime_r != EOK)
             ext4_trans_abort(file->mp);
         else
-            r = ext4_trans_stop(file->mp);
+            atime_r = ext4_trans_stop(file->mp);
+
+        EXT4_MP_CACHE_UNLOCK(file->mp);
+        EXT4_MP_UNLOCK(file->mp);
+        if (atime_r != EOK)
+            r = atime_r;
     }
-    EXT4_MP_UNLOCK(file->mp);
     return r;
 }
 
@@ -2679,7 +2796,13 @@ int ext4_fwrite(ext4_file *file, const void *buf, size_t size, size_t *wcnt)
             goto Finish;
         }
 
-        r = ext4_blocks_set_direct(file->mp->fs.bdev, u8_buf, fblock_start, fblock_count);
+        /*
+         * 完整块写入不需要同步读改写。局部 write-back 只覆盖本次 fwrite：
+         * Finish 中在仍持有挂载排他锁时将引用计数降回 0 并刷盘，因此随后
+         * 的 direct 读路径不会绕过滞留的脏数据。
+         */
+        r = ext4_blocks_set_cached(file->mp->fs.bdev, u8_buf,
+                                   fblock_start, fblock_count);
         if (r != EOK)
             break;
 

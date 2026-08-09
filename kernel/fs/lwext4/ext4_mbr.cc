@@ -70,7 +70,7 @@ struct ext4_mbr {
 int ext4_mbr_scan(struct ext4_blockdev *parent, struct ext4_mbr_bdevs *bdevs) {
     int r;
     size_t i;
-    const struct ext4_mbr *mbr = NULL;
+    struct ext4_mbr mbr{};
 
     ext4_dbg(DEBUG_MBR, DBG_INFO "ext4_mbr_scan\n");
     memset(bdevs, 0, sizeof(struct ext4_mbr_bdevs));
@@ -78,33 +78,31 @@ int ext4_mbr_scan(struct ext4_blockdev *parent, struct ext4_mbr_bdevs *bdevs) {
     if (r != EOK)
         return r;
 
-    r = ext4_block_readbytes(parent, 0, parent->bdif->ph_bbuf, 512);
+    r = ext4_block_readbytes(parent, 0, &mbr, sizeof(mbr));
     if (r != EOK) {
         goto blockdev_fini;
     }
 
-    mbr = (const struct ext4_mbr *) parent->bdif->ph_bbuf;
-
-    if (to_le16(mbr->signature) != MBR_SIGNATURE) {
+    if (to_le16(mbr.signature) != MBR_SIGNATURE) {
         ext4_dbg(DEBUG_MBR,
                  DBG_ERROR "ext4_mbr_scan: unknown "
                            "signature: 0x%x\n",
-                 to_le16(mbr->signature));
+                 to_le16(mbr.signature));
         r = ENOENT;
         goto blockdev_fini;
     }
 
     /*Show bootstrap code*/
     ext4_dbg(DEBUG_MBR, "mbr_part: bootstrap:");
-    for (i = 0; i < sizeof(mbr->bootstrap); ++i) {
+    for (i = 0; i < sizeof(mbr.bootstrap); ++i) {
         if (!(i & 0xF))
             ext4_dbg(DEBUG_MBR | DEBUG_NOPREFIX, "\n");
-        ext4_dbg(DEBUG_MBR | DEBUG_NOPREFIX, "%02x, ", mbr->bootstrap[i]);
+        ext4_dbg(DEBUG_MBR | DEBUG_NOPREFIX, "%02x, ", mbr.bootstrap[i]);
     }
 
     ext4_dbg(DEBUG_MBR | DEBUG_NOPREFIX, "\n\n");
     for (i = 0; i < 4; ++i) {
-        const struct ext4_part_entry *pe = &mbr->part_entry[i];
+        const struct ext4_part_entry *pe = &mbr.part_entry[i];
         ext4_dbg(DEBUG_MBR, "mbr_part: %d\n", (int) i);
         ext4_dbg(DEBUG_MBR, "\tstatus: 0x%x\n", pe->status);
         ext4_dbg(DEBUG_MBR, "\ttype 0x%x:\n", pe->type);
@@ -153,11 +151,9 @@ int ext4_mbr_write(struct ext4_blockdev *parent, struct ext4_mbr_parts *parts, u
     const uint32_t cyl_size = 63 * k;
     const uint32_t cyl_count = disk_size / cyl_size;
 
-    // struct ext4_mbr *mbr = (void *) parent->bdif->ph_bbuf;
-    ext4_mbr *mbr = (ext4_mbr *) parent->bdif->ph_bbuf;
-    memset(mbr, 0, sizeof(struct ext4_mbr));
+    struct ext4_mbr mbr{};
 
-    mbr->disk_id = disk_id;
+    mbr.disk_id = disk_id;
 
     uint32_t cyl_it = 0;
     for (int i = 0; i < 4; ++i) {
@@ -175,24 +171,24 @@ int ext4_mbr_write(struct ext4_blockdev *parent, struct ext4_mbr_parts *parts, u
 
         uint32_t cyl_end = cyl_part + cyl_it - 1;
 
-        mbr->part_entry[i].status = 0;
-        mbr->part_entry[i].chs1[0] = i ? 0 : 1;
+        mbr.part_entry[i].status = 0;
+        mbr.part_entry[i].chs1[0] = i ? 0 : 1;
         ;
-        mbr->part_entry[i].chs1[1] = (cyl_it >> 2) + 1;
-        mbr->part_entry[i].chs1[2] = cyl_it;
-        mbr->part_entry[i].type = 0x83;
-        mbr->part_entry[i].chs2[0] = k - 1;
-        mbr->part_entry[i].chs2[1] = (cyl_end >> 2) + 63;
-        mbr->part_entry[i].chs2[2] = cyl_end;
+        mbr.part_entry[i].chs1[1] = (cyl_it >> 2) + 1;
+        mbr.part_entry[i].chs1[2] = cyl_it;
+        mbr.part_entry[i].type = 0x83;
+        mbr.part_entry[i].chs2[0] = k - 1;
+        mbr.part_entry[i].chs2[1] = (cyl_end >> 2) + 63;
+        mbr.part_entry[i].chs2[2] = cyl_end;
 
-        mbr->part_entry[i].first_lba = part_start;
-        mbr->part_entry[i].sectors = part_size / parent->bdif->ph_bsize;
+        mbr.part_entry[i].first_lba = part_start;
+        mbr.part_entry[i].sectors = part_size / parent->bdif->ph_bsize;
 
         cyl_it += cyl_part;
     }
 
-    mbr->signature = MBR_SIGNATURE;
-    r = ext4_block_writebytes(parent, 0, parent->bdif->ph_bbuf, 512);
+    mbr.signature = MBR_SIGNATURE;
+    r = ext4_block_writebytes(parent, 0, &mbr, sizeof(mbr));
     if (r != EOK)
         goto blockdev_fini;
 

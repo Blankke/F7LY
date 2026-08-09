@@ -25,8 +25,10 @@ namespace proc
 		// 安全清零：只要其它 CPU 正在运行默认任务，慢路径就拿不到其 PCB 锁，
 		// 最终让所有 scheduler 永久争用全局锁并扫描活跃任务。
 		eastl::atomic<uint32> _non_default_schedulable{0};
-		// PCB 生命周期和活跃槽位仍由全局进程池管理；每核游标只负责公平
-		// 轮转，任务通过 _last_cpu 保持默认不迁移语义。
+		// PCB 生命周期和诊断遍历仍由全局进程池管理；调度热路径只读取每核
+		// runnable 位图，避免每个空闲核反复扫描全局 active PCB 表。
+		static constexpr uint k_runnable_slot_word_count = (num_process + 63) / 64;
+		eastl::atomic<uint64> _runnable_slot_words[NUMCPU][k_runnable_slot_word_count]{};
 		uint _next_scan_global_id[NUMCPU] = {};
 		// 新建 runnable 任务在首次运行前没有“最近 CPU”。游标只负责相同
 		// 负载时的公平破局；实际 home CPU 会按当前活跃任务压力选择。
@@ -46,6 +48,7 @@ namespace proc
 		int select_initial_cpu(const CpuMask &mask, int parent_cpu);
 		void set_task_state(Pcb &task, ProcState state);
 		void set_task_home_cpu(Pcb &task, int cpu_id);
+		uint64 runnable_slot_word(uint cpu_id, uint word_index) const;
 		uint32 runnable_task_count() const;
 		// CPU0 每 5 秒从时钟中断采样一次，sysinfo 只读取已经形成的历史值。
 		void sample_load_averages(uint64 now_sec);
@@ -59,6 +62,10 @@ namespace proc
 
 		void yield();
 		void call_sched();
+
+	private:
+		void mark_runnable_slot(uint cpu_id, uint global_id);
+		void clear_runnable_slot(uint cpu_id, uint global_id);
 	};
 
 	extern Scheduler k_scheduler;

@@ -14,6 +14,37 @@ namespace tmm
 #include "types.hh"
 namespace proc
 {
+	class Pcb;
+	class ProcessMemoryManager;
+
+	// FUTEX_PRIVATE_FLAG 不能只靠“当前物理页”建键：fork 后私有页会 COW，
+	// 物理页会变化，但同一地址空间内等待者和唤醒者仍必须相互匹配。共享
+	// futex 则继续以共享物理页为身份。完整 key 只在桶内二次比较；hash
+	// 只用于选桶，不能承担身份判等职责。
+	enum class FutexKeyScope : uint8
+	{
+		Auto,
+		Private,
+	};
+
+	struct FutexKey
+	{
+		uint64 value = 0;
+		ProcessMemoryManager *private_mm = nullptr;
+		bool is_private = false;
+
+		bool valid() const { return value != 0; }
+	};
+
+	inline bool futex_keys_equal(const FutexKey &lhs, const FutexKey &rhs)
+	{
+		if (lhs.value != rhs.value || lhs.is_private != rhs.is_private)
+		{
+			return false;
+		}
+		return !lhs.is_private || lhs.private_mm == rhs.private_mm;
+	}
+
 	// following code is from linux (include/uapi/linux/futex.h)
 
 	/*
@@ -73,8 +104,21 @@ namespace proc
 
 	int futex_wait(uint64 uaddr, int val, tmm::timespec *timeout,
 	               bool timeout_is_absolute = false,
-	               bool use_realtime_clock = false);
-	int futex_wakeup(uint64 uaddr, int val, void *uaddr2, int val2);
+	               bool use_realtime_clock = false,
+	               FutexKeyScope key_scope = FutexKeyScope::Auto);
+	int futex_wakeup(uint64 uaddr, int val, void *uaddr2, int val2,
+	                 FutexKeyScope key_scope = FutexKeyScope::Auto,
+	                 bool include_requeued_in_result = false,
+	                 const int *expected_requeue_value = nullptr);
+	int futex_wake_op(uint64 uaddr1, int wake_count, uint64 uaddr2,
+	                  int second_wake_count, uint32 encoded_op,
+	                  FutexKeyScope key_scope = FutexKeyScope::Auto);
+	// 清理 PCB 在 futex 桶中的等待者登记。调用方可以持有 PCB 锁；函数返回时
+	// 保持调用前的 PCB 锁状态，供信号、退出和 PCB 回收路径统一摘链。
+	void futex_remove_waiter(Pcb *p);
+	// 由唯一的 timekeeper CPU 在每次 tick 中检查定时 futex；超时等待不再
+	// 挂到全局 ticks channel，避免每个 tick 唤醒所有 rustc/Cargo 等待者。
+	void futex_check_timeouts(uint64 now_cycles);
 	void futex_cleanup_robust_list(struct robust_list_head *head);
 
 } // namespace pm

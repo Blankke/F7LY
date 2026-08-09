@@ -61,6 +61,7 @@ namespace proc
         const vma *find_stack_area() const;
 
         uint64 mmap_cursor() const { return mmap_cursor_; }
+        int size() const { return index_.size(); }
         void set_mmap_cursor(uint64 cursor) { mmap_cursor_ = cursor; }
         ProcessMemoryManager *owner_mm() { return owner_mm_; }
         const ProcessMemoryManager *owner_mm() const { return owner_mm_; }

@@ -241,7 +241,7 @@ namespace
             }
             pte.set_data(pte_data);
 #endif
-            hal::tlb::flush_range_all_cpus(page_va, PGSIZE);
+            hal::tlb::flush_mm_range(*p->get_memory_manager(), page_va, PGSIZE);
         }
         return true;
     }
@@ -366,12 +366,24 @@ namespace
 #endif
     }
 
-    void flush_signal_stack_page_tlb(uint64 page_va)
+    void flush_signal_stack_page_tlb(proc::ProcessMemoryManager *mm, uint64 page_va)
     {
-        hal::tlb::flush_range_all_cpus(PGROUNDDOWN(page_va), PGSIZE);
+        if (mm != nullptr)
+        {
+            hal::tlb::flush_mm_range(*mm, PGROUNDDOWN(page_va), PGSIZE);
+        }
+        else
+        {
+            // 仅保留内核初始化或脱离地址空间的兜底路径；正常信号处理始终
+            // 传入当前 PCB 对应的 ProcessMemoryManager。
+            hal::tlb::flush_range_all_cpus(PGROUNDDOWN(page_va), PGSIZE);
+        }
     }
 
-    bool promote_existing_signal_stack_page(mem::Pte pte, const proc::vma *vm, uint64 page_va)
+    bool promote_existing_signal_stack_page(proc::ProcessMemoryManager *mm,
+                                             mem::Pte pte,
+                                             const proc::vma *vm,
+                                             uint64 page_va)
     {
         if (pte.is_null() || pte.get_data() == 0 || !pte.is_valid())
         {
@@ -385,7 +397,7 @@ namespace
         pte_data |= PTE_V;
 #endif
         pte.set_data(pte_data);
-        flush_signal_stack_page_tlb(page_va);
+        flush_signal_stack_page_tlb(mm, page_va);
         return true;
     }
 
@@ -406,7 +418,7 @@ namespace
             mem::k_pmm.free_page(pa);
             return false;
         }
-        flush_signal_stack_page_tlb(page_va);
+        flush_signal_stack_page_tlb(p->get_memory_manager(), page_va);
         return true;
     }
 
@@ -443,7 +455,10 @@ namespace
 
             int vm_idx = -1;
             proc::vma *vm = find_vma_covering(p, page_va, &vm_idx);
-            if (promote_existing_signal_stack_page(pte, vm, page_va))
+            if (promote_existing_signal_stack_page(p->get_memory_manager(),
+                                                   pte,
+                                                   vm,
+                                                   page_va))
             {
                 continue;
             }
@@ -1376,21 +1391,11 @@ namespace proc
                     p->_siginfo_mask |= (1ULL << (sig - 1));
                 }
                 
-                // 未阻塞信号应当能打断任意可中断睡眠（如 accept/read/pipe），
-                // 否则 netperf 的 SIGKILL/SIGALRM 会在 tick 通道上多等待一个周期，
-                // 甚至因调度时机延迟让 shell 的 wait 永远等不到目标退出。
-                uint64 sig_mask = (1UL << (sig - 1));
-                bool signal_unblocked = (p->_sigmask & sig_mask) == 0 || sig == signal::SIGCANCEL;
-                if (signal_unblocked && !signal_is_ignored_for_interrupt(p, sig))
-                {
-                    if (p->_state == ProcState::SLEEPING)
-                    {
-                        // 直接设置为可运行状态，避免调用wakeup造成的死锁
-                        // 这是安全的，因为调用者已经持有了进程锁
-                        k_scheduler.set_task_state(*p, ProcState::RUNNABLE);
-                        p->_chan.store(nullptr, eastl::memory_order_release);
-                    }
-                }
+                // 信号入队与“中断睡眠”分离：后者必须先从 futex bucket 和
+                // wait-channel 索引摘链，再发布 RUNNABLE。kill/tkill/定时器等
+                // 已持目标 PCB 锁的投递路径统一调用
+                // ProcessManager::interrupt_sleep_for_signal()；这里不能直接改
+                // _state/_chan，否则会留下陈旧 waiter，后续 WAKE 可能消费错对象。
             }
 
             void do_handle(proc::Pcb *p, int signum, sigaction *act)
