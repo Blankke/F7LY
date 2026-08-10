@@ -1913,6 +1913,16 @@ namespace mem
 #ifndef QEMU
         printfOrange("map sdcard range from %p to %p\n", SD_BASE_V, SD_BASE);
         kvmmap(pt,SD_BASE_V, SD_BASE, 0x10000, PTE_R | PTE_W | PTE_A | PTE_D);
+#ifdef VISIONFIVE2
+        // VF2 GMAC1 使用与 SD 控制器相同的高地址设备窗口，避免把低地址
+        // MMIO 区域误当作普通内核线性映射的一部分。
+        kvmmap(pt, VF2_GMAC1_BASE_V, VF2_GMAC1_BASE, 0x10000,
+               PTE_R | PTE_W | PTE_A | PTE_D);
+        kvmmap(pt, VF2_SYSCRG_BASE_V, VF2_SYSCRG_BASE, 0x10000,
+               PTE_R | PTE_W | PTE_A | PTE_D);
+        kvmmap(pt, VF2_SYS_SYSCON_BASE_V, VF2_SYS_SYSCON_BASE, 0x1000,
+               PTE_R | PTE_W | PTE_A | PTE_D);
+#endif
 #endif
         // 初始化堆内存
         kvmmap(pt, vm_kernel_heap_start, mem::k_pmm.get_heap_area_start(), mem::k_pmm.get_heap_area_size(), PTE_R | PTE_W);

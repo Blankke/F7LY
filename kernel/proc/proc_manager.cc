@@ -1343,13 +1343,8 @@ namespace proc
             new (&dev::k_uart) dev::UartManager(UART0);
             dev::register_debug_uart(&dev::k_uart);
 
-#ifdef VISIONFIVE2
-            // VF2 当前没有 VirtIO 网卡。初始化失败后的 ONPS TCP 线程不会退出，
-            // 且卸载流程会释放其仍在等待的信号量，因此先跳过该后端以隔离调度卡死。
-            printf("[vf2] skip VirtIO network initialization\n");
-#else
+            // 网络适配器根据当前编译目标在 f7ly_network.cc 中选择。
             net::init_network_stack();
-#endif
         }
 
         // 设置进程开始运行的时间点

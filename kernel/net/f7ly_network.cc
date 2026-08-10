@@ -1,10 +1,15 @@
 //
 // F7LY Network Stack Integration
-// Integrates VirtIO Net driver with ONPS network stack
+// Selects the target-specific Ethernet adapter and integrates it with ONPS.
 //
 
 #include "f7ly_network.hh"
+#ifdef VISIONFIVE2
+#include "drivers/vf2/vf2_gmac_adapter.hh"
+#else
 #include "drivers/virtio_net_adapter.hh"
+#include "drivers/virtio_net.hh"
+#endif
 #include "libs/printer.hh"
 #include "onps.hh"
 
@@ -23,7 +28,13 @@ namespace net
             return true;
         }
         
-        printf("[f7ly_network] Initializing F7LY network stack with VirtIO Net\n");
+        printf("[f7ly_network] Initializing F7LY network stack with %s\n",
+#ifdef VISIONFIVE2
+               "VF2 GMAC"
+#else
+               "VirtIO Net"
+#endif
+        );
         
         // Step 1: Initialize ONPS network stack core
         // ONPS 是内核内的 TCP/IP 协议栈，负责 ARP/IP/ICMP/UDP/TCP 等协议逻辑。
@@ -35,16 +46,20 @@ namespace net
         
         printf("[f7ly_network] ONPS core initialized successfully\n");
         
-        // Step 2: Initialize VirtIO Net adapter (this will register with ONPS)
-        // adapter_init 会初始化 VirtIO 网卡驱动，并把 virtio0 作为以太网接口注册给 ONPS。
+        // Step 2: Initialize the target-specific adapter and register it with ONPS.
+#ifdef VISIONFIVE2
+        if (!net::vf2_adapter_init()) {
+            printf("[f7ly_network] Failed to initialize VF2 GMAC adapter\n");
+#else
         if (!net::adapter_init()) {
             printf("[f7ly_network] Failed to initialize VirtIO Net adapter\n");
+#endif
             // ONPS 已经初始化成功，如果网卡适配层失败，需要回滚协议栈核心。
             open_npstack_unload();
             return false;
         }
         
-        printf("[f7ly_network] VirtIO Net adapter initialized successfully\n");
+        printf("[f7ly_network] Target network adapter initialized successfully\n");
         
         network_initialized = true;
         
@@ -73,7 +88,11 @@ namespace net
         
         // Cleanup in reverse order
         // 先停网卡适配层，再卸载协议栈，顺序和初始化相反。
+#ifdef VISIONFIVE2
+        net::vf2_adapter_cleanup();
+#else
         net::adapter_cleanup();
+#endif
         open_npstack_unload();
         
         network_initialized = false;
@@ -92,12 +111,19 @@ namespace net
         
         // Get and print MAC address
         uint8 mac[6];
+#ifdef VISIONFIVE2
+        vf2_get_mac_address(mac);
+#else
         get_mac_address(mac);
+#endif
         printf("[f7ly_network] MAC Address: %02x:%02x:%02x:%02x:%02x:%02x\n",
                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
         
-        // Print VirtIO debug status
+#ifdef VISIONFIVE2
+        vf2_adapter_debug_status();
+#else
         virtio_net_debug_status();
+#endif
         
         printf("[f7ly_network] ===================================\n");
     }
