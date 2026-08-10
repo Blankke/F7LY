@@ -4726,11 +4726,6 @@ namespace syscall
             {
                 for (uint64 i = 0, puarg = uargv;; i++, puarg += sizeof(char *))
                 {
-                    if (i > max_arg_num)
-                    {
-                        return -E2BIG;
-                    }
-
                     if (_fetch_addr(puarg, uarg) < 0)
                     {
                         return -EFAULT;
@@ -4738,6 +4733,11 @@ namespace syscall
 
                     if (uarg == 0)
                         break;
+
+                    if (i >= max_arg_num)
+                    {
+                        return -E2BIG;
+                    }
 
                     argv.emplace_back(eastl::string());
                     int arg_ret = _fetch_str(uarg, argv[i], PGSIZE);
@@ -4753,11 +4753,6 @@ namespace syscall
             {
                 for (ulong i = 0, puenv = uenvp;; i++, puenv += sizeof(char *))
                 {
-                    if (i > max_arg_num)
-                    {
-                        return -E2BIG;
-                    }
-
                     if (_fetch_addr(puenv, uenv) < 0)
                     {
                         return -EFAULT;
@@ -4765,6 +4760,11 @@ namespace syscall
 
                     if (uenv == 0)
                         break;
+
+                    if (i >= max_arg_num)
+                    {
+                        return -E2BIG;
+                    }
 
                     envp.emplace_back(eastl::string());
                     int env_ret = _fetch_str(uenv, envp[i], PGSIZE);
@@ -4842,12 +4842,12 @@ namespace syscall
             {
                 for (uint64 i = 0, puarg = uargv;; i++, puarg += sizeof(char *))
                 {
-                    if (i > max_arg_num)
-                        return -E2BIG;
                     if (_fetch_addr(puarg, uarg) < 0)
                         return -EFAULT;
                     if (uarg == 0)
                         break;
+                    if (i >= max_arg_num)
+                        return -E2BIG;
                     argv.emplace_back(eastl::string());
                     int arg_ret = _fetch_str(uarg, argv[i], PGSIZE);
                     if (arg_ret < 0)
@@ -4860,12 +4860,12 @@ namespace syscall
             {
                 for (uint64 i = 0, puenv = uenvp;; i++, puenv += sizeof(char *))
                 {
-                    if (i > max_arg_num)
-                        return -E2BIG;
                     if (_fetch_addr(puenv, uenv) < 0)
                         return -EFAULT;
                     if (uenv == 0)
                         break;
+                    if (i >= max_arg_num)
+                        return -E2BIG;
                     envp.emplace_back(eastl::string());
                     int env_ret = _fetch_str(uenv, envp[i], PGSIZE);
                     if (env_ret < 0)
@@ -10530,20 +10530,37 @@ namespace syscall
 
             //   File descriptor flags (部分支持)
         case F_GETFD:
+        {
             if (p->_ofile == nullptr)
                 return SYS_EBADF;
-            return p->_ofile->_fl_cloexec[fd] ? FD_CLOEXEC : 0;
+            // fd 标志和槽位属于同一张共享表；不能在不加锁的情况下读取，
+            // 否则 close/exec/fcntl 并发时可能把 rustc 的 jobserver 标志读成
+            // 半更新值。
+            p->_ofile->_lock.acquire();
+            const int getfd_flags = p->_ofile->_ofile_ptr[fd] != nullptr &&
+                                            !p->_ofile->_reserved[fd]
+                                        ? (p->_ofile->_fl_cloexec[fd] ? FD_CLOEXEC : 0)
+                                        : SYS_EBADF;
+            p->_ofile->_lock.release();
+            return getfd_flags;
+        }
 
         case F_SETFD:
+        {
             if (_arg_addr(2, arg) < 0)
                 return SYS_EFAULT;
             if (p->_ofile == nullptr)
                 return SYS_EBADF;
-            if (arg & FD_CLOEXEC)
-                p->_ofile->_fl_cloexec[fd] = true;
-            else
-                p->_ofile->_fl_cloexec[fd] = false;
+            p->_ofile->_lock.acquire();
+            if (p->_ofile->_ofile_ptr[fd] == nullptr || p->_ofile->_reserved[fd])
+            {
+                p->_ofile->_lock.release();
+                return SYS_EBADF;
+            }
+            p->_ofile->_fl_cloexec[fd] = (arg & FD_CLOEXEC) != 0;
+            p->_ofile->_lock.release();
             return 0;
+        }
 
         //   File status flags (已支持)
         case F_GETFL:

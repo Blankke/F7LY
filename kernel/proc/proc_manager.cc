@@ -2926,6 +2926,20 @@ namespace proc
                 np->_ofile->_highest_fd_plus_one = fd_scan_limit;
                 for (i = 0; i < static_cast<uint64>(fd_scan_limit); i++)
                 {
+                    /*
+                     * _reserved 只是 close() 在锁外刷新文件内容时使用的内核
+                     * 过渡态，不是 Linux fd 表的一部分。fork 与 close 竞态时
+                     * 选择“子进程未继承该 fd”的合法快照，不能把 reserved
+                     * 复制过去制造一个永久不可访问、也无法正常关闭的槽位。
+                     */
+                    if (p->_ofile->_reserved[i])
+                    {
+                        np->_ofile->_ofile_ptr[i] = nullptr;
+                        np->_ofile->_fl_cloexec[i] = false;
+                        np->_ofile->_reserved[i] = false;
+                        continue;
+                    }
+
                     fs::file *parent_file = p->_ofile->_ofile_ptr[i];
                     if (parent_file)
                     {
@@ -2943,7 +2957,7 @@ namespace proc
                         np->_ofile->_ofile_ptr[i] = parent_file;
                         np->_ofile->_fl_cloexec[i] = p->_ofile->_fl_cloexec[i]; // 继承 CLOEXEC 标志
                     }
-                    np->_ofile->_reserved[i] = p->_ofile->_reserved[i];
+                    np->_ofile->_reserved[i] = false;
                 }
                 p->_ofile->_lock.release();
                 shrink_fd_high_water_locked(np->_ofile);
@@ -3879,6 +3893,7 @@ namespace proc
         // 如果有父进程，将当前进程的时间累计到父进程中
         if (p->_parent != nullptr)
         {
+            int parent_signal_wake_cpu = -1;
             p->_parent->_lock.acquire();
             p->_parent->_cutime += p->_user_ticks + p->_cutime;
             p->_parent->_cstime += p->_stime + p->_cstime;
@@ -3913,9 +3928,26 @@ namespace proc
                 {
                     // 父进程需要接收退出信号；信号层会统一处理忽略/阻塞/handler。
                     p->_parent->add_signal(p->_parent_exit_signal);
+
+                    /*
+                     * timeout(1) 等程序会在 rt_sigsuspend() 中等待 SIGCHLD，
+                     * 其 sleep channel 不是 wait4() 使用的 PCB 地址。仅调用
+                     * wakeup_child_waiters() 会留下“子进程已是 ZOMBIE、父进程
+                     * 仍睡到超时”的死锁。信号已在父 PCB 锁内入队，此处沿用
+                     * kill/tgkill 的统一摘链路径唤醒未屏蔽信号等待者。
+                     */
+                    if (p->_parent->_state == ProcState::SLEEPING &&
+                        interrupt_sleep_for_signal(p->_parent))
+                    {
+                        parent_signal_wake_cpu = p->_parent->_last_cpu;
+                    }
                 }
             }
             p->_parent->_lock.release();
+            if (parent_signal_wake_cpu >= 0)
+            {
+                hal::smp::kick_cpu(static_cast<uint64>(parent_signal_wake_cpu));
+            }
 
             if (auto_reap)
             {
@@ -6224,26 +6256,71 @@ namespace proc
         {
             printfYellow("未实现O_DIRECT标志的处理\n");
         }
-        fd0 = -1;
-        if (((fd0 = alloc_fd(p, rf)) < 0) || (fd1 = alloc_fd(p, wf)) < 0)
+        if (p == nullptr)
         {
-            if (fd0 >= 0)
-            {
-                p->_ofile->_ofile_ptr[fd0] = nullptr;
-                shrink_fd_high_water_locked(p->_ofile);
-            }
-            // fs::k_file_table.free_file( rf );
-            // fs::k_file_table.free_file( wf );
             rf->free_file();
             wf->free_file();
             return syscall::SYS_EMFILE;
         }
 
-        // 处理O_CLOEXEC标志 - 设置文件描述符的close-on-exec属性
-        if (flags & O_CLOEXEC)
+        /*
+         * pipe2 是一个 fd 表原子操作。Cargo jobserver 会在多个线程中创建
+         * 管道并立刻 posix_spawn rustc；若像旧实现那样分别调用两次 alloc_fd，
+         * 子进程可能恰好复制到只有读端或只有写端的半成品表，最终把 jobserver
+         * 误判为 EOF。O_CLOEXEC 也必须随两个端点同时可见，不能在安装后补写。
+         */
+        ofile *fd_table = p->ensure_ofile();
+        if (fd_table == nullptr)
         {
-            p->_ofile->_fl_cloexec[fd0] = true; // 读端设置CLOEXEC
-            p->_ofile->_fl_cloexec[fd1] = true; // 写端设置CLOEXEC
+            rf->free_file();
+            wf->free_file();
+            return syscall::SYS_EMFILE;
+        }
+
+        fd0 = -1;
+        fd1 = -1;
+        const int fd_limit = effective_fd_limit(p);
+        fd_table->_lock.acquire();
+        for (int candidate = 0; candidate < fd_limit; ++candidate)
+        {
+            if (fd_table->_ofile_ptr[candidate] == nullptr &&
+                !fd_table->_reserved[candidate])
+            {
+                fd0 = candidate;
+                break;
+            }
+        }
+        if (fd0 >= 0)
+        {
+            for (int candidate = fd0 + 1; candidate < fd_limit; ++candidate)
+            {
+                if (fd_table->_ofile_ptr[candidate] == nullptr &&
+                    !fd_table->_reserved[candidate])
+                {
+                    fd1 = candidate;
+                    break;
+                }
+            }
+        }
+        if (fd0 >= 0 && fd1 >= 0)
+        {
+            const bool close_on_exec = (flags & O_CLOEXEC) != 0;
+            fd_table->_ofile_ptr[fd0] = rf;
+            fd_table->_ofile_ptr[fd1] = wf;
+            fd_table->_reserved[fd0] = false;
+            fd_table->_reserved[fd1] = false;
+            fd_table->_fl_cloexec[fd0] = close_on_exec;
+            fd_table->_fl_cloexec[fd1] = close_on_exec;
+            note_fd_slot_used_locked(fd_table, fd0);
+            note_fd_slot_used_locked(fd_table, fd1);
+        }
+        fd_table->_lock.release();
+
+        if (fd0 < 0 || fd1 < 0)
+        {
+            rf->free_file();
+            wf->free_file();
+            return syscall::SYS_EMFILE;
         }
 
         fd[0] = fd0;
@@ -7529,29 +7606,51 @@ namespace proc
         proc->_rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_cur =
             proc->_rlim_vec[ResourceLimitId::RLIMIT_STACK].rlim_max = sp - stackbase;
 
-        // 旧线程已全部退出，现在可以安全提交 FD_CLOEXEC，避免共享 fd 表竞态。
-        uint exec_fd_scan_limit = proc->_ofile != nullptr ? proc->_ofile->_highest_fd_plus_one : 0;
-        for (int i = 0; i < (int)exec_fd_scan_limit; i++)
+        // 旧线程已全部退出，现在提交 FD_CLOEXEC。共享 fd 表仍可能被其它
+        // CLONE_FILES 线程的 close/dup/fcntl 访问，因此必须先在表锁内摘除
+        // 槽位，再在锁外释放 file 引用；不能把析构/回写放进自旋锁。
+        eastl::vector<fs::file *> cloexec_files;
+        if (proc->_ofile != nullptr)
         {
-            if (proc->_ofile != nullptr && proc->_ofile->_ofile_ptr[i] != nullptr && proc->_ofile->_fl_cloexec[i])
+            ofile *fd_table = proc->_ofile;
+            fd_table->_lock.acquire();
+            uint exec_fd_scan_limit = fd_table->_highest_fd_plus_one;
+            for (uint i = 0; i < exec_fd_scan_limit; ++i)
             {
-                fs::file *file_obj = proc->_ofile->_ofile_ptr[i];
-                if (!is_probably_live_file_object(file_obj))
+                if (fd_table->_ofile_ptr[i] == nullptr ||
+                    !fd_table->_fl_cloexec[i])
                 {
-                    printfRed("[execve] 检测到异常 CLOEXEC 文件指针，直接丢弃: pid=%d fd=%d file=%p\n",
-                              proc->_pid, i, file_obj);
+                    continue;
+                }
+
+                // close() 在锁外刷写 normal_file 时会把槽位标为 reserved，
+                // 并持有临时引用。此时让 close 完成摘除，避免 exec 与 close
+                // 各自释放同一份 fd 引用。
+                if (fd_table->_reserved[i])
+                {
+                    continue;
+                }
+
+                fs::file *file_obj = fd_table->_ofile_ptr[i];
+                fd_table->_ofile_ptr[i] = nullptr;
+                fd_table->_reserved[i] = false;
+                fd_table->_fl_cloexec[i] = false;
+                if (is_probably_live_file_object(file_obj))
+                {
+                    cloexec_files.push_back(file_obj);
                 }
                 else
                 {
-                    file_obj->free_file();
+                    printfRed("[execve] 检测到异常 CLOEXEC 文件指针，直接丢弃: pid=%d fd=%d file=%p\n",
+                              proc->_pid, static_cast<int>(i), file_obj);
                 }
-                proc->_ofile->_ofile_ptr[i] = nullptr;
-                proc->_ofile->_fl_cloexec[i] = false;
             }
+            shrink_fd_high_water_locked(fd_table);
+            fd_table->_lock.release();
         }
-        if (proc->_ofile != nullptr)
+        for (fs::file *file_obj : cloexec_files)
         {
-            shrink_fd_high_water_locked(proc->_ofile);
+            file_obj->free_file();
         }
 
         // ========== 第八阶段：替换进程映像 ==========

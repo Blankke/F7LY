@@ -484,8 +484,45 @@ namespace proc
 				forget_waiter_locked(true, pr);
 			}
 
-			for (i = 0; i < n && _count > 0;)
+			for (i = 0; i < n;)
 			{
+				/*
+				 * ensure_user_write_range() 必须临时放开 pipe 锁。多个读者被同一
+				 * 次写入唤醒时，另一个读者可能在这段窗口内抢走全部数据。此时
+				 * write 端仍然打开，read(2) 绝不能返回 0（0 只表示 EOF）；否则
+				 * Cargo jobserver 会把竞争误报成 early EOF，并破坏后续编译调度。
+				 */
+				while (_count == 0 && _write_is_open)
+				{
+					// 已经读到数据时按 POSIX 短读返回，不继续等待下一次写入。
+					if (i > 0)
+					{
+						break;
+					}
+					if (pr->is_killed())
+					{
+						_lock.release();
+						return -1;
+					}
+					if (nonblock)
+					{
+						_lock.release();
+						return syscall::SYS_EAGAIN;
+					}
+					if (proc::ipc::signal::has_unmasked_signal_pending(pr))
+					{
+						_lock.release();
+						return syscall::SYS_EINTR;
+					}
+					note_waiter_locked(true, pr);
+					k_pm.sleep(&_read_sleep, &_lock);
+					forget_waiter_locked(true, pr);
+				}
+				if (_count == 0)
+				{
+					break;
+				}
+
 				// pipe 读也直接 copy_out 到用户缓冲，避免通用 read 路径的中转缓冲。
 				uint32 readable = _count;
 				uint32 remaining = static_cast<uint32>(n - i);
@@ -505,6 +542,8 @@ namespace proc
 				_lock.acquire();
 				if (_count == 0)
 				{
+					// 数据被其它读者抢走；回到上面的等待/EOF/EAGAIN 判定，
+					// 不能从这里以 0 冒充写端关闭。
 					continue;
 				}
 				readable = _count;

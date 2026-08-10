@@ -1,5 +1,6 @@
 #pragma once
 #include "types.hh"
+#include "param.h"
 #include "syscall_defs.hh"
 #include "printer.hh"
 #include "fs/vfs/file/file.hh"
@@ -8,9 +9,9 @@ namespace syscall
 {
     constexpr uint max_syscall_funcs_num = 2048;
     constexpr uint max_path_len = 128;
-    // Linux 用户态工具链会在 posix_spawn/execve 中传入较多 argv/envp。
-    // 这里表示允许的实际字符串数量，不包含末尾 NULL 指针。
-    constexpr uint max_arg_num = 256;
+    // Linux 用户态工具链会在 posix_spawn/execve 中传入数百个 argv/envp。
+    // 与 exec 栈暂存数组共用同一个权威上限，不包含末尾 NULL 指针。
+    constexpr uint max_arg_num = MAXARG;
 
     class SyscallHandler
     {

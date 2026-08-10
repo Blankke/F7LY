@@ -3031,6 +3031,22 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
 
 	    if (type == fs::FileTypes::FT_NORMAL || (flags & O_CREAT) != 0)
 	    {
+        if (file_exists && type == fs::FileTypes::FT_NORMAL)
+        {
+            /*
+             * 小文件写合并会把数据暂存在写入 fd 内；另一个 open file
+             * description 打开同一路径前，必须先让已返回的 write 对它可见。
+             * Cargo 的 E2BIG 回退会保持 @argfile 的写 fd 打开，同时让 rustc
+             * 重新 open 该文件读取参数。放在权限/类型/flag 检查之后，避免
+             * 本应失败的 open 提前触发回写或改变其标准 errno。
+             */
+            int visibility_ret = proc::k_pm.flush_open_files_for_path(actual_path);
+            if (visibility_ret < 0)
+            {
+                return visibility_ret;
+            }
+        }
+
         // 根据flags和文件类型确定适当的权限
         // 专门重写了个函数来确定这个权限
         mode_t file_mode = determine_file_mode(flags, fs::FileTypes::FT_NORMAL, file_exists, mode);
